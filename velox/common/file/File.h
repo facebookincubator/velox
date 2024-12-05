@@ -42,43 +42,44 @@
 
 namespace facebook::velox {
 
-// A read-only file.  All methods in this object should be thread safe.
+/// A read-only file.  All methods in this object should be thread safe.
 class ReadFile {
  public:
   virtual ~ReadFile() = default;
 
-  // Reads the data at [offset, offset + length) into the provided pre-allocated
-  // buffer 'buf'. The bytes are returned as a string_view pointing to 'buf'.
-  //
-  // This method should be thread safe.
+  /// Reads the data at [offset, offset + length) into the provided
+  /// pre-allocated buffer 'buf'. The bytes are returned as a string_view
+  /// pointing to 'buf'.
+  ///
+  /// This method should be thread safe.
   virtual std::string_view pread(uint64_t offset, uint64_t length, void* buf)
       const = 0;
 
-  // Same as above, but returns owned data directly.
-  //
-  // This method should be thread safe.
+  /// Same as above, but returns owned data directly.
+  ///
+  /// This method should be thread safe.
   virtual std::string pread(uint64_t offset, uint64_t length) const;
 
-  // Reads starting at 'offset' into the memory referenced by the
-  // Ranges in 'buffers'. The buffers are filled left to right. A
-  // buffer with nullptr data will cause its size worth of bytes to be skipped.
-  //
-  // This method should be thread safe.
+  /// Reads starting at 'offset' into the memory referenced by the
+  /// Ranges in 'buffers'. The buffers are filled left to right. A
+  /// buffer with nullptr data will cause its size worth of bytes to be skipped.
+  ///
+  /// This method should be thread safe.
   virtual uint64_t preadv(
       uint64_t /*offset*/,
       const std::vector<folly::Range<char*>>& /*buffers*/) const;
 
-  // Vectorized read API. Implementations can coalesce and parallelize.
-  // The offsets don't need to be sorted.
-  // `iobufs` is a range of IOBufs to store the read data. They
-  // will be stored in the same order as the input `regions` vector. So the
-  // array must be pre-allocated by the caller, with the same size as `regions`,
-  // but don't need to be initialized, since each iobuf will be copy-constructed
-  // by the preadv.
-  // Returns the total number of bytes read, which might be different than the
-  // sum of all buffer sizes (for example, if coalescing was used).
-  //
-  // This method should be thread safe.
+  /// Vectorized read API. Implementations can coalesce and parallelize.
+  /// The offsets don't need to be sorted.
+  /// `iobufs` is a range of IOBufs to store the read data. They
+  /// will be stored in the same order as the input `regions` vector. So the
+  /// array must be pre-allocated by the caller, with the same size as
+  /// `regions`, but don't need to be initialized, since each iobuf will be
+  /// copy-constructed by the preadv. Returns the total number of bytes read,
+  /// which might be different than the sum of all buffer sizes (for example, if
+  /// coalescing was used).
+  ///
+  /// This method should be thread safe.
   virtual uint64_t preadv(
       folly::Range<const common::Region*> regions,
       folly::Range<folly::IOBuf*> iobufs) const;
@@ -98,25 +99,25 @@ class ReadFile {
     }
   }
 
-  // Returns true if preadvAsync has a native implementation that is
-  // asynchronous. The default implementation is synchronous.
+  /// Returns true if preadvAsync has a native implementation that is
+  /// asynchronous. The default implementation is synchronous.
   virtual bool hasPreadvAsync() const {
     return false;
   }
 
-  // Whether preads should be coalesced where possible. E.g. remote disk would
-  // set to true, in-memory to false.
+  /// Whether preads should be coalesced where possible. E.g. remote disk would
+  /// set to true, in-memory to false.
   virtual bool shouldCoalesce() const = 0;
 
-  // Number of bytes in the file.
+  /// Number of bytes in the file.
   virtual uint64_t size() const = 0;
 
-  // An estimate for the total amount of memory *this uses.
+  /// An estimate for the total amount of memory *this uses.
   virtual uint64_t memoryUsage() const = 0;
 
-  // The total number of bytes *this had been used to read since creation or
-  // the last resetBytesRead. We sum all the |length| variables passed to
-  // preads, not the actual amount of bytes read (which might be less).
+  /// The total number of bytes *this had been used to read since creation or
+  /// the last resetBytesRead. We sum all the |length| variables passed to
+  /// preads, not the actual amount of bytes read (which might be less).
   virtual uint64_t bytesRead() const {
     return bytesRead_;
   }
@@ -135,8 +136,8 @@ class ReadFile {
   mutable std::atomic<uint64_t> bytesRead_ = 0;
 };
 
-// A write-only file. Nothing written to the file should be read back until it
-// is closed.
+/// A write-only file. Nothing written to the file should be read back until it
+/// is closed.
 class WriteFile {
  public:
   virtual ~WriteFile() = default;
@@ -193,14 +194,13 @@ class WriteFile {
   virtual uint64_t size() const = 0;
 };
 
-// We currently do a simple implementation for the in-memory files
-// that simply resizes a string as needed. If there ever gets used in
-// a performance sensitive path we'd probably want to move to a Cord-like
-// implementation for underlying storage.
-
-// We don't provide registration functions for the in-memory files, as they
-// aren't intended for any robust use needing a filesystem.
-
+/// We currently do a simple implementation for the in-memory files
+/// that simply resizes a string as needed. If there ever gets used in
+/// a performance sensitive path we'd probably want to move to a Cord-like
+/// implementation for underlying storage.
+///
+/// We don't provide registration functions for the in-memory files, as they
+/// aren't intended for any robust use needing a filesystem.
 class InMemoryReadFile : public ReadFile {
  public:
   explicit InMemoryReadFile(std::string_view file) : file_(file) {}
@@ -307,9 +307,9 @@ class LocalReadFile final : public ReadFile {
 class LocalWriteFile final : public WriteFile {
  public:
   struct Attributes {
-    // If set to true, the file will not be subject to copy-on-write updates.
-    // This flag has an effect only on filesystems that support copy-on-write
-    // semantics, such as Btrfs.
+    /// If set to true, the file will not be subject to copy-on-write updates.
+    /// This flag has an effect only on filesystems that support copy-on-write
+    /// semantics, such as Btrfs.
     static constexpr std::string_view kNoCow{"write-on-copy-disabled"};
     static constexpr bool kDefaultNoCow{false};
 
@@ -317,8 +317,8 @@ class LocalWriteFile final : public WriteFile {
         const std::unordered_map<std::string, std::string>& attrs);
   };
 
-  // An error is thrown is a file already exists at |path|,
-  // unless flag shouldThrowOnFileAlreadyExists is false
+  /// An error is thrown is a file already exists at |path|,
+  /// unless flag shouldThrowOnFileAlreadyExists is false
   explicit LocalWriteFile(
       std::string_view path,
       bool shouldCreateParentDirectories = false,

@@ -19,6 +19,7 @@
 #include <string>
 
 #include "velox/common/base/Counters.h"
+#include "velox/common/base/PrefixSortConfig.h"
 #include "velox/common/base/StatsReporter.h"
 #include "velox/common/file/FileSystems.h"
 #include "velox/common/testutil/TestValue.h"
@@ -159,6 +160,12 @@ std::string makeUuid() {
 // Returns true if an operator is a hash join operator given 'operatorType'.
 bool isHashJoinOperator(const std::string& operatorType) {
   return (operatorType == "HashBuild") || (operatorType == "HashProbe");
+}
+
+// Returns true if an operator is a partitioned output operator given
+// 'operatorType'.
+bool isPartitionedOutputOperator(const std::string& operatorType) {
+  return operatorType == "PartitionedOutput";
 }
 
 // Moves split promises from one vector to another.
@@ -509,6 +516,27 @@ velox::memory::MemoryPool* Task::getOrAddNodePool(
   return nodePool;
 }
 
+memory::MemoryPool* Task::getOrAddPartitionedOutputNodePool(
+    const core::PlanNodeId& planNodeId) {
+  if (nodePools_.count(planNodeId) == 1) {
+    return nodePools_[planNodeId];
+  }
+  for (auto& factory : driverFactories_) {
+    if (auto partitionedOutputNode = factory->needsPartitionedOutput()) {
+      VELOX_CHECK_EQ(partitionedOutputNode->id(), planNodeId);
+      childPools_.push_back(pool_->addAggregateChild(
+          fmt::format("node.{}", planNodeId), createNodeReclaimer([&]() {
+            return PartitionedOutputNodeReclaimer::create(
+                partitionedOutputNode->kind(), 2);
+          })));
+      auto* nodePool = childPools_.back().get();
+      nodePools_[planNodeId] = nodePool;
+      return nodePool;
+    }
+  }
+  VELOX_UNREACHABLE("No partitioned output node found.");
+}
+
 memory::MemoryPool* Task::getOrAddJoinNodePool(
     const core::PlanNodeId& planNodeId,
     uint32_t splitGroupId) {
@@ -548,6 +576,14 @@ std::unique_ptr<memory::MemoryReclaimer> Task::createExchangeClientReclaimer()
   return exec::MemoryReclaimer::create();
 }
 
+std::unique_ptr<memory::MemoryReclaimer> Task::createOutputBufferReclaimer()
+    const {
+  if (pool()->reclaimer() == nullptr) {
+    return nullptr;
+  }
+  return exec::MemoryReclaimer::create();
+}
+
 std::unique_ptr<memory::MemoryReclaimer> Task::createTaskReclaimer() {
   // We shall only create the task memory reclaimer once on task memory pool
   // creation.
@@ -568,6 +604,8 @@ velox::memory::MemoryPool* Task::addOperatorPool(
   velox::memory::MemoryPool* nodePool;
   if (isHashJoinOperator(operatorType)) {
     nodePool = getOrAddJoinNodePool(planNodeId, splitGroupId);
+  } else if (isPartitionedOutputOperator(operatorType)) {
+    nodePool = getOrAddPartitionedOutputNodePool(planNodeId);
   } else {
     nodePool = getOrAddNodePool(planNodeId);
   }
@@ -978,11 +1016,12 @@ void Task::initializePartitionOutput() {
   if (partitionedOutputNode != nullptr) {
     VELOX_CHECK(hasPartitionedOutput());
     VELOX_CHECK_GT(numOutputDrivers, 0);
-    bufferManager->initializeTask(
+    auto outputBuffer = bufferManager->initializeTask(
         shared_from_this(),
         partitionedOutputNode->kind(),
         partitionedOutputNode->numPartitions(),
-        numOutputDrivers);
+        numOutputDrivers,
+        memory::spillMemoryPool());
   }
 }
 
@@ -2291,7 +2330,7 @@ TaskStats Task::taskStats() const {
 
   auto bufferManager = bufferManager_.lock();
   taskStats.outputBufferUtilization = bufferManager->getUtilization(taskId_);
-  taskStats.outputBufferOverutilized = bufferManager->isOverutilized(taskId_);
+  taskStats.outputBufferOverutilized = bufferManager->isOverUtilized(taskId_);
   if (!taskStats.outputBufferStats.has_value()) {
     taskStats.outputBufferStats = bufferManager->stats(taskId_);
   }

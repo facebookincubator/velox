@@ -28,6 +28,7 @@
 #include "velox/exec/tests/utils/LocalExchangeSource.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
 #include "velox/exec/tests/utils/SerializedPageUtil.h"
+#include "velox/exec/tests/utils/TempDirectoryPath.h"
 
 using namespace facebook::velox::exec::test;
 
@@ -2823,6 +2824,66 @@ TEST_P(MultiFragmentTest, scaledTableScan) {
           0);
     }
   }
+}
+
+DEBUG_ONLY_TEST_P(MultiFragmentTest, partitionedOutputSpill) {
+  filesystems::registerLocalFileSystem();
+  std::shared_ptr<test::TempDirectoryPath> spillDirectory;
+  spillDirectory = exec::test::TempDirectoryPath::create();
+
+  const int numSplits = 20;
+  std::vector<std::shared_ptr<TempFilePath>> splitFiles;
+  std::vector<RowVectorPtr> splitVectors;
+  for (auto i = 0; i < numSplits; ++i) {
+    auto vectors = makeVectors(10, 1'000);
+    auto filePath = TempFilePath::create();
+    writeToFile(filePath->getPath(), vectors);
+    splitFiles.push_back(std::move(filePath));
+    splitVectors.insert(splitVectors.end(), vectors.begin(), vectors.end());
+  }
+
+  createDuckDbTable(splitVectors);
+
+  // Create a task with partitioned output.
+  configSettings_[core::QueryConfig::kSpillEnabled] = "true";
+  configSettings_[core::QueryConfig::kPartitionedOutputSpillEnabled] = "true";
+  core::PlanNodeId planNodeId;
+  auto partitionedOutputPlan =
+      PlanBuilder()
+          .tableScan(rowType_)
+          .partitionedOutput({}, 1, {}, GetParam().serdeKind)
+          .capturePlanNodeId(planNodeId)
+          .planNode();
+  auto partitionedOutputTaskId = makeTaskId("producer", 0);
+  auto partitionedOutputTask =
+      makeTask(partitionedOutputTaskId, partitionedOutputPlan, 0);
+  TestScopedSpillInjection scopedSpillInjection(100);
+  partitionedOutputTask->setSpillDirectory(spillDirectory->getPath());
+  partitionedOutputTask->start(1);
+  addHiveSplits(partitionedOutputTask, splitFiles);
+
+  // Create a task with an exchange consuming from the partitioned output.
+  auto exchangePlan =
+      PlanBuilder()
+          .exchange(partitionedOutputPlan->outputType(), GetParam().serdeKind)
+          .planNode();
+
+  test::AssertQueryBuilder(exchangePlan, duckDbQueryRunner_)
+      .split(remoteSplit(partitionedOutputTaskId))
+      .config(
+          core::QueryConfig::kShuffleCompressionKind,
+          common::compressionKindToString(GetParam().compressionKind))
+      .assertResults(
+          "SELECT c0, c1, c2, c3, c4, c5 FROM tmp");
+
+  ASSERT_TRUE(waitForTaskCompletion(partitionedOutputTask.get()));
+  auto taskStats = partitionedOutputTask->taskStats();
+  auto planStatsMap = exec::toPlanStats(taskStats);
+  auto& planStats = planStatsMap.at(planNodeId);
+  ASSERT_GT(taskStats.memoryReclaimCount, 0);
+  ASSERT_GT(taskStats.memoryReclaimMs, 0);
+  ASSERT_GT(planStats.spilledBytes, 0);
+  ASSERT_GT(planStats.spilledFiles, 0);
 }
 
 VELOX_INSTANTIATE_TEST_SUITE_P(

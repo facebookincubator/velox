@@ -29,11 +29,12 @@ class OutputBufferManager {
 
   explicit OutputBufferManager(Options /*unused*/) {}
 
-  void initializeTask(
+  std::shared_ptr<OutputBuffer> initializeTask(
       std::shared_ptr<Task> task,
       core::PartitionedOutputNode::Kind kind,
       int numDestinations,
-      int numDrivers);
+      int numDrivers,
+      memory::MemoryPool* pool = nullptr);
 
   /// Updates the number of buffers. Returns true if the buffer exists for a
   /// given taskId, else returns false.
@@ -122,7 +123,7 @@ class OutputBufferManager {
 
   // If the output buffer from a task of taskId is over-utilized and blocks its
   // producers. When the task of this taskId is not found, return false.
-  bool isOverutilized(const std::string& taskId);
+  bool isOverUtilized(const std::string& taskId);
 
   // Returns nullopt when the specified output buffer doesn't exist.
   std::optional<OutputBuffer::Stats> stats(const std::string& taskId);

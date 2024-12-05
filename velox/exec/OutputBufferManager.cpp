@@ -113,23 +113,31 @@ bool OutputBufferManager::getData(
   return false;
 }
 
-void OutputBufferManager::initializeTask(
+std::shared_ptr<OutputBuffer> OutputBufferManager::initializeTask(
     std::shared_ptr<Task> task,
     core::PartitionedOutputNode::Kind kind,
     int numDestinations,
-    int numDrivers) {
+    int numDrivers,
+    memory::MemoryPool* pool) {
   const auto& taskId = task->taskId();
 
+  std::shared_ptr<OutputBuffer> buffer;
   buffers_.withLock([&](auto& buffers) {
     auto it = buffers.find(taskId);
     if (it == buffers.end()) {
-      buffers[taskId] = std::make_shared<OutputBuffer>(
-          std::move(task), kind, numDestinations, numDrivers);
+      buffer = std::make_shared<OutputBuffer>(
+          std::move(task),
+          kind,
+          numDestinations,
+          numDrivers,
+          pool);
+      buffers[taskId] = buffer;
     } else {
       VELOX_FAIL(
           "Registering an output buffer for pre-existing taskId {}", taskId);
     }
   });
+  return buffer;
 }
 
 bool OutputBufferManager::updateOutputBuffers(
@@ -190,10 +198,10 @@ double OutputBufferManager::getUtilization(const std::string& taskId) {
   return 0;
 }
 
-bool OutputBufferManager::isOverutilized(const std::string& taskId) {
+bool OutputBufferManager::isOverUtilized(const std::string& taskId) {
   auto buffer = getBufferIfExists(taskId);
   if (buffer != nullptr) {
-    return buffer->isOverutilized();
+    return buffer->isOverUtilized();
   }
   return false;
 }

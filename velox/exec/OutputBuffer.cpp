@@ -80,6 +80,421 @@ std::string ArbitraryBuffer::toString() const {
       hasNoMoreData());
 }
 
+uint64_t DestinationBuffer::BufferedPages::PageSpiller::size() const {
+  return pageSizes_.size();
+}
+
+uint64_t DestinationBuffer::BufferedPages::PageSpiller::totalBytes() const {
+  return totalBytes_;
+}
+
+std::shared_ptr<SerializedPage>
+DestinationBuffer::BufferedPages::PageSpiller::at(uint64_t index) {
+  VELOX_CHECK_LT(index, pageSizes_.size());
+  const auto numBufferedPages = bufferedPages_.size();
+  if (index < numBufferedPages) {
+    return bufferedPages_[index];
+  }
+
+  const auto pagesToUnspill = index + 1 - numBufferedPages;
+  bufferedPages_.reserve(numBufferedPages + pagesToUnspill);
+  for (uint32_t i = 0; i < pagesToUnspill; ++i) {
+    bufferedPages_.push_back(unspillNextPage());
+  }
+  return bufferedPages_[index];
+}
+
+bool DestinationBuffer::BufferedPages::PageSpiller::isNullAt(
+    uint64_t index) const {
+  VELOX_CHECK_LT(index, pageSizes_.size());
+  return !pageSizes_[index].has_value();
+}
+
+uint64_t DestinationBuffer::BufferedPages::PageSpiller::sizeAt(
+    uint64_t index) const {
+  VELOX_CHECK_LT(index, pageSizes_.size());
+  const auto& pageSize = pageSizes_[index];
+  VELOX_CHECK(pageSize.has_value());
+  return pageSize.value();
+}
+
+void DestinationBuffer::BufferedPages::PageSpiller::deleteFront(
+    uint64_t numPages) {
+  VELOX_CHECK_LE(numPages, pageSizes_.size());
+  for (uint32_t i = 0; i < numPages; ++i) {
+    totalBytes_ -= pageSizes_[i].has_value() ? pageSizes_[i].value() : 0;
+  }
+  pageSizes_.erase(pageSizes_.begin(), pageSizes_.begin() + numPages);
+
+  const auto numBuffered = std::min(numPages, (uint64_t)bufferedPages_.size());
+  bufferedPages_.erase(
+      bufferedPages_.begin(), bufferedPages_.begin() + numBuffered);
+  numPages -= numBuffered;
+
+  for (; numPages > 0; --numPages) {
+    unspillNextPage();
+  }
+}
+
+std::vector<std::shared_ptr<SerializedPage>>
+DestinationBuffer::BufferedPages::PageSpiller::deleteAll() {
+  while (curFileStream_ != nullptr || !spillFilePaths_.empty()) {
+    bufferedPages_.push_back(unspillNextPage());
+  }
+  VELOX_CHECK(spillFilePaths_.empty());
+  VELOX_CHECK_NULL(curFileStream_);
+  auto deletedPages = std::move(bufferedPages_);
+  bufferedPages_.clear();
+  pageSizes_.clear();
+  totalBytes_ = 0;
+  return deletedPages;
+}
+
+std::tuple<std::string, std::unique_ptr<WriteFile>>
+DestinationBuffer::BufferedPages::PageSpiller::nextSpillWriteFile() {
+  std::string path = fmt::format("{}-{}", filePrefix_, nextFileId_++);
+  auto fs = filesystems::getFileSystem(path, nullptr);
+  return {
+      path,
+      fs->openFileForWrite(
+          path,
+          filesystems::FileOptions{
+              {{filesystems::FileOptions::kFileCreateConfig.toString(),
+                fileCreateConfig_}},
+              nullptr,
+              std::nullopt})};
+}
+
+namespace {
+// A wrapper around a write file that provides buffer capability.
+class BufferedWriteFile {
+ public:
+  BufferedWriteFile(
+      std::unique_ptr<WriteFile> writeFile,
+      uint64_t flushThresholdBytes,
+      memory::MemoryPool* pool)
+      : flushThresholdBytes_(flushThresholdBytes),
+        pool_(pool),
+        writeFile_(std::move(writeFile)),
+        bufferStream_(std::make_unique<IOBufOutputStream>(*pool_)) {}
+
+  ~BufferedWriteFile() {
+    close();
+  }
+
+  void append(char* payload, int64_t bytes) {
+    VELOX_CHECK_NOT_NULL(bufferStream_);
+    if (flushThresholdBytes_ == 0) {
+      // Bypass the copy if no buffer is intended.
+      writeFile_->append(std::string_view(payload, bytes));
+      return;
+    }
+    bufferStream_->write(payload, bytes);
+    bufferBytes_ += bytes;
+    checkFlush();
+  }
+
+  void append(std::unique_ptr<folly::IOBuf>&& iobuf) {
+    VELOX_CHECK_NOT_NULL(bufferStream_);
+    if (flushThresholdBytes_ == 0) {
+      // Bypass the copy if no buffer is intended.
+      writeFile_->append(std::move(iobuf));
+      return;
+    }
+    for (auto range = iobuf->begin(); range != iobuf->end(); range++) {
+      bufferStream_->write(
+          reinterpret_cast<const char*>(range->data()), range->size());
+    }
+    bufferBytes_ += iobuf->computeChainDataLength();
+    checkFlush();
+  }
+
+  void close() {
+    auto iobuf = bufferStream_->getIOBuf();
+    if (iobuf->computeChainDataLength() != 0) {
+      writeFile_->append(std::move(iobuf));
+    }
+    writeFile_->close();
+    bufferStream_.reset();
+  }
+
+ private:
+  void checkFlush() {
+    if (bufferBytes_ < flushThresholdBytes_) {
+      return;
+    }
+    writeFile_->append(bufferStream_->getIOBuf());
+    bufferStream_ = std::make_unique<IOBufOutputStream>(*pool_);
+    bufferBytes_ = 0;
+  }
+
+  const uint64_t flushThresholdBytes_;
+  memory::MemoryPool* const pool_;
+
+  std::unique_ptr<WriteFile> writeFile_;
+  std::unique_ptr<IOBufOutputStream> bufferStream_;
+  uint64_t bufferBytes_{0};
+};
+
+} // namespace
+
+void DestinationBuffer::BufferedPages::PageSpiller::spill() {
+  if (pages_->empty()) {
+    return;
+  }
+
+  auto [path, writeFile] = nextSpillWriteFile();
+  BufferedWriteFile bufferedWriteFile(
+      std::move(writeFile), writeBufferSize_, pool_);
+  spillFilePaths_.push_back(path);
+
+  // Spill file layout:
+  // --- Payload 0 ---
+  // (1B) is null page at 0
+  // [
+  //  (8B) payload size at 0
+  //  (1B) has num rows at 0
+  //  [(8B) num rows at 0]
+  //  (xB) payload at 0
+  // ]
+  // --- Payload 1 ---
+  //      ...
+  // --- Payload n ---
+
+  uint64_t spilledBytes{0};
+  uint64_t spillWriteTimeNanos{0};
+  const auto totalBytesBeforeSpill = totalBytes_;
+  pageSizes_.reserve(pageSizes_.size() + pages_->size());
+  {
+    NanosecondTimer timer(&spillWriteTimeNanos);
+    for (auto& page : *pages_) {
+      // Fill spilled page metadata to keep in memory.
+      if (page == nullptr) {
+        pageSizes_.push_back(std::nullopt);
+      } else {
+        const auto pageSize = page->size();
+        pageSizes_.push_back(pageSize);
+        totalBytes_ += pageSize;
+      }
+
+      // Spill payload headers.
+      uint8_t isNull = (page == nullptr) ? 1 : 0;
+      bufferedWriteFile.append(
+          reinterpret_cast<char*>(&isNull), sizeof(uint8_t));
+      if (page == nullptr) {
+        continue;
+      }
+
+      int64_t pageBytes = 0;
+      if (page != nullptr) {
+        pageBytes = page->size();
+      }
+      bufferedWriteFile.append(
+          reinterpret_cast<char*>(&pageBytes), sizeof(int64_t));
+
+      auto numRowsOpt = page->numRows();
+      uint8_t hasNumRows = numRowsOpt.has_value() ? 1 : 0;
+      bufferedWriteFile.append(reinterpret_cast<char*>(&hasNumRows), 1);
+      if (numRowsOpt.has_value()) {
+        int64_t numRows = numRowsOpt.value();
+        bufferedWriteFile.append(
+            reinterpret_cast<char*>(&numRows), sizeof(int64_t));
+      }
+
+      // Spill payload.
+      bufferedWriteFile.append(page->getIOBuf());
+      VELOX_CHECK_GE(totalBytes_, totalBytesBeforeSpill);
+      spilledBytes += totalBytes_ - totalBytesBeforeSpill;
+    }
+  }
+  auto spillStatsLocked = spillStats_->wlock();
+  spillStatsLocked->spilledBytes += spilledBytes;
+  spillStatsLocked->spilledFiles++;
+  spillStatsLocked->spillWriteTimeNanos += spillWriteTimeNanos;
+}
+
+bool DestinationBuffer::BufferedPages::PageSpiller::empty() const {
+  if (!bufferedPages_.empty()) {
+    return false;
+  }
+  return curFileStream_ == nullptr && spillFilePaths_.empty();
+}
+
+void DestinationBuffer::BufferedPages::PageSpiller::ensureFileStream() {
+  if (curFileStream_ != nullptr) {
+    return;
+  }
+  VELOX_CHECK(!spillFilePaths_.empty());
+  auto filePath = spillFilePaths_.front();
+  auto fs = filesystems::getFileSystem(filePath, nullptr);
+  auto file = fs->openFileForRead(filePath);
+  curFileStream_ = std::make_unique<common::FileInputStream>(
+      std::move(file), readBufferSize_, pool_);
+  spillFilePaths_.pop_front();
+}
+
+namespace {
+struct FreeData {
+  std::shared_ptr<memory::MemoryPool> pool;
+  int64_t bytesToFree;
+};
+
+void freeFunc(void* data, void* userData) {
+  auto* freeData = reinterpret_cast<FreeData*>(userData);
+  freeData->pool->free(data, freeData->bytesToFree);
+  delete freeData;
+}
+} // namespace
+
+std::shared_ptr<SerializedPage>
+DestinationBuffer::BufferedPages::PageSpiller::unspillNextPage() {
+  VELOX_CHECK(!empty());
+  ensureFileStream();
+
+  // Read payload headers
+  auto isNull = !!(curFileStream_->read<uint8_t>());
+  if (isNull) {
+    if (curFileStream_->atEnd()) {
+      curFileStream_.reset();
+    }
+    return nullptr;
+  }
+  auto iobufBytes = curFileStream_->read<int64_t>();
+  auto hasNumRows = curFileStream_->read<uint8_t>() == 0 ? false : true;
+  int64_t numRows{0};
+  if (hasNumRows) {
+    numRows = curFileStream_->read<int64_t>();
+  }
+
+  // Read payload
+  VELOX_CHECK_GE(curFileStream_->remainingSize(), iobufBytes);
+  void* rawBuf = pool_->allocate(iobufBytes);
+  curFileStream_->readBytes(reinterpret_cast<uint8_t*>(rawBuf), iobufBytes);
+  if (curFileStream_->atEnd()) {
+    curFileStream_.reset();
+  }
+
+  auto* userData = new FreeData();
+  userData->pool = pool_->shared_from_this();
+  userData->bytesToFree = iobufBytes;
+  auto iobuf =
+      folly::IOBuf::takeOwnership(rawBuf, iobufBytes, freeFunc, userData, true);
+
+  return std::make_shared<SerializedPage>(
+      std::move(iobuf),
+      nullptr,
+      hasNumRows ? std::optional(numRows) : std::nullopt);
+}
+
+void DestinationBuffer::setupSpiller(
+    memory::MemoryPool* pool,
+    const common::SpillConfig* spillConfig,
+    folly::Synchronized<common::SpillStats>* spillStats) {
+  data_.setupSpiller(pool, spillConfig, destinationIdx_, spillStats);
+}
+
+void DestinationBuffer::BufferedPages::setupSpiller(
+    memory::MemoryPool* pool,
+    const common::SpillConfig* spillConfig,
+    int32_t destinationIdx,
+    folly::Synchronized<common::SpillStats>* spillStats) {
+  auto spillDir = spillConfig->getSpillDirPathCb();
+  VELOX_CHECK(!spillDir.empty(), "Spill directory does not exist");
+
+  spiller_ = std::make_unique<DestinationBuffer::BufferedPages::PageSpiller>(
+      &pages_,
+      fmt::format(
+          "{}/{}-dest-{}-spill",
+          spillDir,
+          spillConfig->fileNamePrefix,
+          destinationIdx),
+      spillConfig->fileCreateConfig,
+      spillConfig->readBufferSize,
+      spillConfig->writeBufferSize,
+      pool,
+      spillStats);
+}
+
+uint64_t DestinationBuffer::BufferedPages::size() const {
+  return (spiller_ == nullptr ? 0 : spiller_->size()) + pages_.size();
+}
+
+std::shared_ptr<SerializedPage> DestinationBuffer::BufferedPages::at(
+    uint64_t index) {
+  VELOX_CHECK_LT(index, size());
+  if (spiller_ == nullptr) {
+    return pages_[index];
+  }
+  const auto numSpilledPages = spiller_->size();
+  if (index >= numSpilledPages) {
+    return pages_[index - numSpilledPages];
+  }
+  return spiller_->at(index);
+}
+
+bool DestinationBuffer::BufferedPages::isNullAt(uint64_t index) const {
+  VELOX_CHECK_LT(index, size());
+  if (spiller_ == nullptr) {
+    return pages_[index] == nullptr;
+  }
+  const auto numSpilledPages = spiller_->size();
+  if (index >= numSpilledPages) {
+    return pages_[index - numSpilledPages] == nullptr;
+  }
+  return spiller_->isNullAt(index);
+}
+
+uint64_t DestinationBuffer::BufferedPages::sizeAt(uint64_t index) const {
+  VELOX_CHECK_LT(index, size());
+  if (spiller_ == nullptr) {
+    VELOX_CHECK_NOT_NULL(pages_[index]);
+    return pages_[index]->size();
+  }
+  const auto numSpilledPages = spiller_->size();
+  if (index >= numSpilledPages) {
+    VELOX_CHECK_NOT_NULL(pages_[index - numSpilledPages]);
+    return pages_[index - numSpilledPages]->size();
+  }
+  return spiller_->sizeAt(index);
+}
+
+bool DestinationBuffer::BufferedPages::empty() const {
+  return (spiller_ == nullptr || spiller_->empty()) && pages_.empty();
+}
+
+void DestinationBuffer::spill() {
+  data_.spill();
+  stats_.bytesSpilled = data_.spilledBytes();
+}
+
+void DestinationBuffer::BufferedPages::spill() {
+  VELOX_CHECK_NOT_NULL(spiller_);
+  spiller_->spill();
+  pages_.clear();
+}
+
+uint64_t DestinationBuffer::BufferedPages::spilledBytes() const {
+  return spiller_ == nullptr ? 0 : spiller_->totalBytes();
+}
+
+void DestinationBuffer::BufferedPages::append(
+    std::shared_ptr<SerializedPage> page) {
+  pages_.push_back(std::move(page));
+}
+
+void DestinationBuffer::BufferedPages::deleteFront(uint64_t numPages) {
+  VELOX_CHECK_LE(numPages, size());
+  if (spiller_ != nullptr) {
+    const auto numSpillerPages = std::min(spiller_->size(), numPages);
+    spiller_->deleteFront(numSpillerPages);
+    numPages -= numSpillerPages;
+    if (numPages == 0) {
+      return;
+    }
+  }
+  pages_.erase(pages_.begin(), pages_.begin() + numPages);
+}
+
 void DestinationBuffer::Stats::recordEnqueue(const SerializedPage& data) {
   const auto numRows = data.numRows();
   VELOX_CHECK(numRows.has_value(), "SerializedPage's numRows must be valid");
@@ -119,15 +534,16 @@ DestinationBuffer::Data DestinationBuffer::getData(
     loadData(arbitraryBuffer, maxBytes);
   }
 
-  if (sequence - sequence_ >= data_.size()) {
-    if (sequence - sequence_ > data_.size()) {
+  const auto totalPages = data_.size();
+  if (sequence - sequence_ >= totalPages) {
+    if (sequence - sequence_ > totalPages) {
       VLOG(1) << this << " Out of order get: " << sequence << " over "
               << sequence_ << " Setting second notify " << notifySequence_
               << " / " << sequence;
     }
     if (maxBytes == 0) {
       std::vector<int64_t> remainingBytes;
-      if (arbitraryBuffer) {
+      if (arbitraryBuffer != nullptr) {
         arbitraryBuffer->getAvailablePageSizes(remainingBytes);
       }
       if (!remainingBytes.empty()) {
@@ -136,7 +552,7 @@ DestinationBuffer::Data DestinationBuffer::getData(
     }
     notify_ = std::move(notify);
     aliveCheck_ = std::move(activeCheck);
-    if (sequence - sequence_ > data_.size()) {
+    if (sequence - sequence_ > totalPages) {
       notifySequence_ = std::min(notifySequence_, sequence);
     } else {
       notifySequence_ = sequence;
@@ -149,15 +565,16 @@ DestinationBuffer::Data DestinationBuffer::getData(
   uint64_t resultBytes = 0;
   auto i = sequence - sequence_;
   if (maxBytes > 0) {
-    for (; i < data_.size(); ++i) {
+    for (; i < totalPages; ++i) {
       // nullptr is used as end marker
-      if (data_[i] == nullptr) {
-        VELOX_CHECK_EQ(i, data_.size() - 1, "null marker found in the middle");
+      auto page = data_.at(i);
+      if (page == nullptr) {
+        VELOX_CHECK_EQ(i, totalPages - 1, "null marker found in the middle");
         data.push_back(nullptr);
         break;
       }
-      data.push_back(data_[i]->getIOBuf());
-      resultBytes += data_[i]->size();
+      data.push_back(page->getIOBuf());
+      resultBytes += page->size();
       if (resultBytes >= maxBytes) {
         ++i;
         break;
@@ -166,16 +583,17 @@ DestinationBuffer::Data DestinationBuffer::getData(
   }
   bool atEnd = false;
   std::vector<int64_t> remainingBytes;
-  remainingBytes.reserve(data_.size() - i);
-  for (; i < data_.size(); ++i) {
-    if (data_[i] == nullptr) {
-      VELOX_CHECK_EQ(i, data_.size() - 1, "null marker found in the middle");
+  remainingBytes.reserve(totalPages - i);
+  for (; i < totalPages; ++i) {
+    const auto page = data_.at(i);
+    if (data_.isNullAt(i)) {
+      VELOX_CHECK_EQ(i, totalPages - 1, "null marker found in the middle");
       atEnd = true;
       break;
     }
-    remainingBytes.push_back(data_[i]->size());
+    remainingBytes.push_back(data_.sizeAt(i));
   }
-  if (!atEnd && arbitraryBuffer) {
+  if (!atEnd && arbitraryBuffer != nullptr) {
     arbitraryBuffer->getAvailablePageSizes(remainingBytes);
   }
   if (data.empty() && remainingBytes.empty() && atEnd) {
@@ -184,16 +602,19 @@ DestinationBuffer::Data DestinationBuffer::getData(
   return {std::move(data), std::move(remainingBytes), true};
 }
 
+DestinationBuffer::DestinationBuffer(int32_t destinationIdx)
+    : destinationIdx_(destinationIdx) {}
+
 void DestinationBuffer::enqueue(std::shared_ptr<SerializedPage> data) {
   // Drop duplicate end markers.
-  if (data == nullptr && !data_.empty() && data_.back() == nullptr) {
+  if (data == nullptr && !data_.empty() && data_.isNullAt(data_.size() - 1)) {
     return;
   }
 
   if (data != nullptr) {
     stats_.recordEnqueue(*data);
   }
-  data_.push_back(std::move(data));
+  data_.append(std::move(data));
 }
 
 DataAvailable DestinationBuffer::getAndClearNotify() {
@@ -265,34 +686,49 @@ std::vector<std::shared_ptr<SerializedPage>> DestinationBuffer::acknowledge(
     return {};
   }
 
+  const auto totalPages = data_.size();
   VELOX_CHECK_LE(
-      numDeleted, data_.size(), "Ack received for a not yet produced item");
+      numDeleted, totalPages, "Ack received for a not yet produced item");
   std::vector<std::shared_ptr<SerializedPage>> freed;
   for (auto i = 0; i < numDeleted; ++i) {
-    if (data_[i] == nullptr) {
-      VELOX_CHECK_EQ(i, data_.size() - 1, "null marker found in the middle");
+    const auto page = data_.at(i);
+    if (page == nullptr) {
+      VELOX_CHECK_EQ(i, totalPages - 1, "null marker found in the middle");
       break;
     }
-    stats_.recordAcknowledge(*data_[i]);
-    freed.push_back(std::move(data_[i]));
+    stats_.recordAcknowledge(*page);
+    freed.push_back(std::move(page));
   }
-  data_.erase(data_.begin(), data_.begin() + numDeleted);
+  data_.deleteFront(numDeleted);
+  stats_.bytesSpilled = data_.spilledBytes();
   sequence_ += numDeleted;
   return freed;
 }
 
 std::vector<std::shared_ptr<SerializedPage>>
-DestinationBuffer::deleteResults() {
+DestinationBuffer::BufferedPages::deleteAll() {
   std::vector<std::shared_ptr<SerializedPage>> freed;
-  for (auto i = 0; i < data_.size(); ++i) {
-    if (data_[i] == nullptr) {
-      VELOX_CHECK_EQ(i, data_.size() - 1, "null marker found in the middle");
+  if (spiller_ != nullptr) {
+    spiller_->deleteAll();
+  }
+  for (auto i = 0; i < pages_.size(); ++i) {
+    if (pages_[i] == nullptr) {
+      VELOX_CHECK_EQ(i, pages_.size() - 1, "null marker found in the middle");
       break;
     }
-    stats_.recordDelete(*data_[i]);
-    freed.push_back(std::move(data_[i]));
+    freed.push_back(std::move(pages_[i]));
   }
-  data_.clear();
+  pages_.clear();
+  return freed;
+}
+
+std::vector<std::shared_ptr<SerializedPage>>
+DestinationBuffer::deleteResults() {
+  std::vector<std::shared_ptr<SerializedPage>> freed = data_.deleteAll();
+  stats_.bytesSpilled = data_.spilledBytes();
+  for (const auto& page : freed) {
+    stats_.recordDelete(*page);
+  }
   return freed;
 }
 
@@ -321,23 +757,61 @@ void releaseAfterAcknowledge(
   }
 }
 
+bool isPartitionedOutputPool(const memory::MemoryPool& pool) {
+  return folly::StringPiece(pool.name()).endsWith("PartitionedOutput");
+}
 } // namespace
+
+PartitionedOutputNodeReclaimer::PartitionedOutputNodeReclaimer(
+    core::PartitionedOutputNode::Kind kind,
+    int32_t priority)
+    : MemoryReclaimer(priority), kind_(kind) {}
+
+bool PartitionedOutputNodeReclaimer::reclaimableBytes(
+    const memory::MemoryPool& pool,
+    uint64_t& reclaimableBytes) const {
+  reclaimableBytes = 0;
+  if (kind_ != core::PartitionedOutputNode::Kind::kPartitioned) {
+    return false;
+  }
+  reclaimableBytes = pool.reservedBytes();
+  return true;
+}
+
+uint64_t PartitionedOutputNodeReclaimer::reclaim(
+    memory::MemoryPool* pool,
+    uint64_t targetBytes,
+    uint64_t maxWaitMs,
+    memory::MemoryReclaimer::Stats& stats) {
+  const auto prevNodeReservedMemory = pool->reservedBytes();
+  pool->visitChildren([&](memory::MemoryPool* child) {
+    VELOX_CHECK_EQ(child->kind(), memory::MemoryPool::Kind::kLeaf);
+    if (isPartitionedOutputPool(*child)) {
+      child->reclaim(targetBytes, maxWaitMs, stats);
+      return false;
+    }
+    return true;
+  });
+  return prevNodeReservedMemory - pool->reservedBytes();
+}
 
 OutputBuffer::OutputBuffer(
     std::shared_ptr<Task> task,
     PartitionedOutputNode::Kind kind,
     int numDestinations,
-    uint32_t numDrivers)
+    uint32_t numDrivers,
+    memory::MemoryPool* pool)
     : task_(std::move(task)),
       kind_(kind),
       maxSize_(task_->queryCtx()->queryConfig().maxOutputBufferSize()),
       continueSize_((maxSize_ * kContinuePct) / 100),
       arbitraryBuffer_(
           isArbitrary() ? std::make_unique<ArbitraryBuffer>() : nullptr),
+      pool_(pool),
       numDrivers_(numDrivers) {
   buffers_.reserve(numDestinations);
   for (int i = 0; i < numDestinations; i++) {
-    buffers_.push_back(std::make_unique<DestinationBuffer>());
+    buffers_.push_back(createDestinationBuffer(i));
   }
   finishedBufferStats_.resize(numDestinations);
 }
@@ -389,12 +863,17 @@ void OutputBuffer::updateNumDrivers(uint32_t newNumDrivers) {
   }
 }
 
+std::unique_ptr<DestinationBuffer> OutputBuffer::createDestinationBuffer(
+    int32_t destinationIdx) const {
+  return std::make_unique<DestinationBuffer>(destinationIdx);
+}
+
 void OutputBuffer::addOutputBuffersLocked(int numBuffers) {
   VELOX_CHECK(!noMoreBuffers_);
   VELOX_CHECK(!isPartitioned());
   buffers_.reserve(numBuffers);
   for (int32_t i = buffers_.size(); i < numBuffers; ++i) {
-    auto buffer = std::make_unique<DestinationBuffer>();
+    auto buffer = createDestinationBuffer(i);
     if (isBroadcast()) {
       for (const auto& data : dataToBroadcast_) {
         buffer->enqueue(data);
@@ -472,6 +951,13 @@ bool OutputBuffer::enqueue(
         break;
       default:
         VELOX_UNREACHABLE(PartitionedOutputNode::kindString(kind_));
+    }
+
+    if (spilled_ && bufferedBytes_ >= maxSize_) {
+      reclaimLocked();
+      // Skip notifying data availability below if this output buffer is in
+      // spilled state.
+      return false;
     }
 
     if (bufferedBytes_ >= maxSize_ && future) {
@@ -597,6 +1083,9 @@ void OutputBuffer::checkIfDone(bool oneDriverFinished) {
           finished.push_back(buffer->getAndClearNotify());
         }
       }
+      if (spilled_) {
+        reclaimLocked();
+      }
     }
   }
 
@@ -717,6 +1206,12 @@ void OutputBuffer::getData(
   {
     std::lock_guard<std::mutex> l(mutex_);
 
+    if (spilled_ && !atEnd_) {
+      // If spilled, only start to respond with data when all output is produced
+      // and spilled. Otherwise, let the request timeout.-
+      return;
+    }
+
     if (!isPartitioned() && destination >= buffers_.size()) {
       addOutputBuffersLocked(destination + 1);
     }
@@ -738,6 +1233,127 @@ void OutputBuffer::getData(
   releaseAfterAcknowledge(freed, promises);
   if (data.immediate) {
     notify(std::move(data.data), sequence, std::move(data.remainingBytes));
+  }
+}
+
+void OutputBuffer::setupSpiller(
+    const common::SpillConfig* spillConfig,
+    folly::Synchronized<common::SpillStats>* spillStats) {
+  if (spillConfig_.has_value()) {
+    // Only need to be set once.
+    return;
+  }
+  // A copy needs to be stored in output buffer because it out-lives
+  // corresponding drivers, and hence the producing partitioned output
+  // operators.
+  spillConfig_ = *spillConfig;
+  std::lock_guard<std::mutex> l(mutex_);
+  for (auto& buffer : buffers_) {
+    if (buffer != nullptr) {
+      buffer->setupSpiller(pool_, spillConfig, spillStats);
+    }
+  }
+}
+
+bool OutputBuffer::canReclaim() const {
+  // We only enable spilling for partitioned mode.
+  return isPartitioned() && spillConfig_.has_value();
+}
+
+void OutputBuffer::reclaim() {
+  std::lock_guard<std::mutex> l(mutex_);
+  reclaimLocked();
+}
+
+void OutputBuffer::reclaimLocked() {
+  VELOX_CHECK(canReclaim());
+  VELOX_CHECK(isPartitioned());
+  VELOX_CHECK(spillConfig_.has_value());
+  spilled_ = true;
+
+  struct Candidate {
+    uint32_t destinationIdx;
+    int64_t reclaimableBytes;
+  };
+
+  // Make reclaim order based on buffers' in-memory size, from high to low.
+  std::vector<Candidate> candidates;
+  candidates.reserve(buffers_.size());
+  for (uint32_t i = 0; i < buffers_.size(); ++i) {
+    if (buffers_[i] == nullptr) {
+      continue;
+    }
+    const auto bufferStats = buffers_[i]->stats();
+    const auto spillableBytes =
+        bufferStats.bytesBuffered - bufferStats.bytesSpilled;
+    VELOX_CHECK_GE(spillableBytes, 0);
+    if (spillableBytes == 0) {
+      continue;
+    }
+    candidates.push_back({i, spillableBytes});
+  }
+  if (candidates.empty()) {
+    return;
+  }
+
+  std::sort(
+      candidates.begin(),
+      candidates.end(),
+      [&](auto& lhsCandidate, auto& rhsCandidate) {
+        return lhsCandidate.reclaimableBytes > rhsCandidate.reclaimableBytes;
+      });
+
+  struct SpillResult {
+    const std::exception_ptr error{nullptr};
+
+    explicit SpillResult(std::exception_ptr _error)
+        : error(std::move(_error)) {}
+  };
+
+  auto* spillExecutor = spillConfig_->executor;
+  std::vector<std::shared_ptr<AsyncSource<SpillResult>>> spillTasks;
+  spillTasks.reserve(candidates.size());
+  uint64_t spillBytes{0};
+  for (const auto candidate : candidates) {
+    if (candidate.reclaimableBytes == 0) {
+      break;
+    }
+    spillTasks.push_back(memory::createAsyncMemoryReclaimTask<SpillResult>(
+        [destinationIdx = candidate.destinationIdx,
+         buffer = buffers_[candidate.destinationIdx].get()]() {
+          try {
+            buffer->spill();
+            return std::make_unique<SpillResult>(nullptr);
+          } catch (const std::exception& e) {
+            LOG(ERROR) << "Reclaim from DestinationBuffer " << destinationIdx
+                       << " failed: " << e.what();
+            return std::make_unique<SpillResult>(std::current_exception());
+          }
+        }));
+    if ((spillTasks.size() > 1) && (spillExecutor != nullptr)) {
+      auto priority = spillExecutor->getNumPriorities();
+      spillExecutor->add([source = spillTasks.back()]() { source->prepare(); });
+    }
+    spillBytes += candidate.reclaimableBytes;
+  }
+
+  SCOPE_EXIT {
+    for (auto& spillTask : spillTasks) {
+      // We consume the result for the pending tasks. This is a cleanup in the
+      // guard and must not throw. The first error is already captured before
+      // this runs.
+      try {
+        spillTask->move();
+      } catch (const std::exception&) {
+      }
+    }
+  };
+
+  for (auto& spillTask : spillTasks) {
+    const auto result = spillTask->move();
+    if (result->error) {
+      std::rethrow_exception(result->error);
+    }
   }
 }
 
@@ -780,7 +1396,7 @@ double OutputBuffer::getUtilization() const {
   return bufferedBytes_ / static_cast<double>(maxSize_);
 }
 
-bool OutputBuffer::isOverutilized() const {
+bool OutputBuffer::isOverUtilized() const {
   return (bufferedBytes_ > (0.5 * maxSize_)) || atEnd_;
 }
 

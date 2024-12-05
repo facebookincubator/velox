@@ -812,10 +812,12 @@ class VectorTestBase {
   velox::test::VectorMaker vectorMaker_{pool_.get()};
   std::shared_ptr<folly::Executor> executor_{
       std::make_shared<folly::CPUThreadPoolExecutor>(
-          std::thread::hardware_concurrency())};
+          std::thread::hardware_concurrency(),
+          std::make_shared<folly::NamedThreadFactory>("Driver"))};
   std::shared_ptr<folly::Executor> spillExecutor_{
       std::make_shared<folly::CPUThreadPoolExecutor>(
-          std::thread::hardware_concurrency())};
+          std::thread::hardware_concurrency(),
+          std::make_shared<folly::NamedThreadFactory>("Spiller"))};
 };
 
 class TestRuntimeStatWriter : public BaseRuntimeStatWriter {

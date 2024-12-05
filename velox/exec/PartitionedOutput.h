@@ -55,7 +55,7 @@ class Destination {
   }
 
   /// Serializes row from 'output' till either 'maxBytes' have been serialized
-  /// or
+  /// or 'targetNumRows_' have been serialized.
   BlockingReason advance(
       uint64_t maxBytes,
       const std::vector<vector_size_t>& sizes,
@@ -71,6 +71,7 @@ class Destination {
   BlockingReason flush(
       OutputBufferManager& bufferManager,
       const std::function<void()>& bufferReleaseFn,
+      int64_t& bytesFlushed,
       ContinueFuture* future);
 
   bool isFinished() const {
@@ -173,17 +174,32 @@ class PartitionedOutput : public Operator {
   }
 
   BlockingReason isBlocked(ContinueFuture* future) override {
-    if (blockingReason_ != BlockingReason::kNotBlocked) {
+    if (blockingReason_ == BlockingReason::kWaitForSpill) {
+      if (!future_.valid()) {
+        // Last partitioned output operator fulfilled all futures. Proceed to
+        // finish this operator.
+        finished_ = true;
+        blockingReason_ = BlockingReason::kNotBlocked;
+        return BlockingReason::kNotBlocked;
+      } else {
+        *future = std::move(future_);
+        return blockingReason_;
+      }
+    } else if (blockingReason_ == BlockingReason::kWaitForConsumer) {
       *future = std::move(future_);
       blockingReason_ = BlockingReason::kNotBlocked;
       return BlockingReason::kWaitForConsumer;
     }
+    VELOX_CHECK_EQ(blockingReason_, BlockingReason::kNotBlocked);
     return BlockingReason::kNotBlocked;
   }
 
   bool isFinished() override;
 
   void close() override;
+
+  void reclaim(uint64_t targetBytes, memory::MemoryReclaimer::Stats& stats)
+      override;
 
   static void testingSetMinCompressionRatio(float ratio) {
     minCompressionRatio_ = ratio;
@@ -241,7 +257,7 @@ class PartitionedOutput : public Operator {
   // do it only once for an entire input processing across different
   // destinations.
   std::unique_ptr<row::CompactRow> outputCompactRow_;
-  // Simialr to 'outputcompactRow_' for unsafe row serde format.
+  // Similar to 'outputCompactRow_' for unsafe row serde format.
   std::unique_ptr<row::UnsafeRowFast> outputUnsafeRow_;
 
   // Reusable memory.

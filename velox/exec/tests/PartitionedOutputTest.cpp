@@ -20,13 +20,37 @@
 #include "velox/exec/Task.h"
 #include "velox/exec/tests/utils/OperatorTestBase.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
+#include "velox/exec/tests/utils/TempDirectoryPath.h"
 
 namespace facebook::velox::exec::test {
+namespace {
+template <typename T>
+struct PromiseHolder {
+  explicit PromiseHolder(folly::Promise<T> p) : promise(std::move(p)) {}
+  folly::Promise<T> promise;
+
+  void atDestruction(
+      std::function<void(folly::Promise<T> promise)> atDestruction) {
+    atDestruction_ = atDestruction;
+  }
+
+  ~PromiseHolder() {
+    if (atDestruction_ && !promise.isFulfilled()) {
+      atDestruction_(std::move(promise));
+    }
+  }
+
+ private:
+  std::function<void(folly::Promise<T> promise)> atDestruction_;
+};
+}
 
 class PartitionedOutputTest
     : public OperatorTestBase,
       public testing::WithParamInterface<VectorSerde::Kind> {
  public:
+  static constexpr int64_t kTimeoutSecond = 1;
+
   static std::vector<VectorSerde::Kind> getTestParams() {
     const std::vector<VectorSerde::Kind> kinds(
         {VectorSerde::Kind::kPresto,
@@ -39,29 +63,41 @@ class PartitionedOutputTest
   std::shared_ptr<core::QueryCtx> createQueryContext(
       std::unordered_map<std::string, std::string> config) {
     return core::QueryCtx::create(
-        executor_.get(), core::QueryConfig(std::move(config)));
+        executor_.get(),
+        core::QueryConfig(std::move(config)),
+        {},
+        cache::AsyncDataCache::getInstance(),
+        nullptr,
+        spillExecutor_.get());
   }
 
   std::vector<std::unique_ptr<folly::IOBuf>>
   getData(const std::string& taskId, int destination, int64_t sequence) {
     auto [promise, semiFuture] = folly::makePromiseContract<
         std::vector<std::unique_ptr<folly::IOBuf>>>();
-    VELOX_CHECK(bufferManager_->getData(
+    auto promiseHolder = std::make_shared<
+        PromiseHolder<std::vector<std::unique_ptr<folly::IOBuf>>>>(
+        std::move(promise));
+    promiseHolder->atDestruction(
+        [](folly::Promise<std::vector<std::unique_ptr<folly::IOBuf>>> p) {
+          p.setValue(std::vector<std::unique_ptr<folly::IOBuf>>());
+        });
+    EXPECT_TRUE(bufferManager_->getData(
         taskId,
         destination,
         PartitionedOutput::kMinDestinationSize,
         sequence,
-        [result = std::make_shared<
-             folly::Promise<std::vector<std::unique_ptr<folly::IOBuf>>>>(
-             std::move(promise))](
+        [promiseHolder](
             std::vector<std::unique_ptr<folly::IOBuf>> pages,
             int64_t /*inSequence*/,
             std::vector<int64_t> /*remainingBytes*/) {
-          result->setValue(std::move(pages));
+          promiseHolder->promise.setValue(std::move(pages));
         }));
     auto future = std::move(semiFuture).via(executor_.get());
-    future.wait(std::chrono::seconds{10});
-    VELOX_CHECK(future.isReady());
+    future.wait(std::chrono::seconds{kTimeoutSecond});
+    if (!future.isReady()) {
+      return {};
+    }
     return std::move(future).value();
   }
 
@@ -73,7 +109,7 @@ class PartitionedOutputTest
     bool done = false;
     while (!done) {
       attempts++;
-      VELOX_CHECK_LT(attempts, 100);
+      EXPECT_LT(attempts, 100);
       std::vector<std::unique_ptr<folly::IOBuf>> pages =
           getData(taskId, destination, result.size());
       for (auto& page : pages) {
@@ -87,6 +123,26 @@ class PartitionedOutputTest
       }
     }
     return result;
+  }
+
+  void consumeAllData(const std::string& taskId, int destination) {
+    int sequence = 0;
+    bool done = false;
+    while (!done) {
+      std::vector<std::unique_ptr<folly::IOBuf>> pages =
+          getData(taskId, destination, sequence);
+      if (pages.empty()) {
+        continue;
+      }
+      for (auto& page : pages) {
+        if (page == nullptr) {
+          bufferManager_->deleteResults(taskId, destination);
+          done = true;
+          break;
+        }
+      }
+      ++sequence;
+    }
   }
 
  private:
@@ -204,6 +260,91 @@ TEST_P(PartitionedOutputTest, keyChannelNotAtBeginningWithNulls) {
       std::chrono::duration_cast<std::chrono::microseconds>(
           std::chrono::seconds(10))
           .count()));
+}
+
+TEST_P(PartitionedOutputTest, spill) {
+  filesystems::registerLocalFileSystem();
+  const auto rowType = ROW({"c0", "c1"}, {BIGINT(), VARCHAR()});
+  VectorFuzzer::Options fuzzerOpt;
+  fuzzerOpt.stringLength = 200;
+  fuzzerOpt.vectorSize = 100;
+  auto input = createVectors(rowType, 5UL << 20, fuzzerOpt);
+
+  struct TestValue {
+    int32_t numDrivers;
+    int32_t numPartitions;
+    bool parallelConsumption;
+
+    std::string debugString() const {
+      return fmt::format(
+          "numDrivers {}, numPartitions {}, parallelConsumption {}",
+          numDrivers,
+          numPartitions,
+          parallelConsumption);
+    }
+  };
+
+  std::vector<TestValue> testValues{{1, 2, false}, {2, 2, false}, {2, 4, true}};
+  for (const auto& testValue : testValues) {
+    SCOPED_TRACE(testValue.debugString());
+    core::PlanNodeId planNodeId;
+    auto plan = PlanBuilder()
+                    .values({input}, true, 6)
+                    .partitionedOutput(
+                        {"c0"},
+                        testValue.numPartitions,
+                        true,
+                        std::vector<std::string>{"c1"},
+                        GetParam())
+                    .capturePlanNodeId(planNodeId)
+                    .planNode();
+
+    auto taskId = "local://test-partitioned-output-0";
+    auto task = Task::create(
+        taskId,
+        core::PlanFragment{plan},
+        0,
+        createQueryContext(
+            {{core::QueryConfig::kPartitionedOutputSpillEnabled, "true"},
+             {core::QueryConfig::kSpillEnabled, "true"}}),
+        Task::ExecutionMode::kParallel);
+
+    std::shared_ptr<test::TempDirectoryPath> spillDirectory;
+    spillDirectory = exec::test::TempDirectoryPath::create();
+    task->setSpillDirectory(spillDirectory->getPath());
+
+    TestScopedSpillInjection scopedSpillInjection(100);
+    task->start(testValue.numDrivers);
+
+    if (testValue.parallelConsumption) {
+      std::vector<std::thread> threads;
+      for (auto i = 0; i < testValue.numPartitions; ++i) {
+        threads.push_back(
+            std::thread([this, taskId, i]() { consumeAllData(taskId, i); }));
+      }
+      for (auto& t : threads) {
+        t.join();
+      }
+    } else {
+      for (auto i = 0; i < testValue.numPartitions; ++i) {
+        consumeAllData(taskId, i);
+      }
+    }
+
+    ASSERT_TRUE(waitForTaskCompletion(
+        task.get(),
+        std::chrono::duration_cast<std::chrono::microseconds>(
+            std::chrono::seconds(kTimeoutSecond))
+            .count()));
+
+    auto taskStats = task->taskStats();
+    auto planStatsMap = exec::toPlanStats(taskStats);
+    auto& planStats = planStatsMap.at(planNodeId);
+    ASSERT_GT(taskStats.memoryReclaimCount, 0);
+    ASSERT_GT(taskStats.memoryReclaimMs, 0);
+    ASSERT_GT(planStats.spilledBytes, 0);
+    ASSERT_GT(planStats.spilledFiles, 0);
+  }
 }
 
 VELOX_INSTANTIATE_TEST_SUITE_P(

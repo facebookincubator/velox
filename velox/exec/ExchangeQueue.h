@@ -60,7 +60,7 @@ class SerializedPage {
   // Buffers containing the serialized data. The memory is owned by 'iobuf_'.
   std::vector<ByteRange> ranges_;
 
-  // IOBuf holding the data in 'ranges_.
+  // IOBuf holding the data in 'ranges_'.
   std::unique_ptr<folly::IOBuf> iobuf_;
 
   // Number of payload bytes in 'iobuf_'.

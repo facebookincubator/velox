@@ -1371,6 +1371,10 @@ class PartitionedOutputNode : public PlanNode {
     return sources_;
   }
 
+  bool canSpill(const QueryConfig& queryConfig) const override {
+    return isPartitioned() && queryConfig.partitionedOutputSpillEnabled();
+  }
+
   const RowTypePtr& inputType() const {
     return sources_[0]->outputType();
   }

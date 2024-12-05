@@ -359,6 +359,9 @@ void ByteOutputStream::extend(int32_t bytes) {
       ranges_.size() == 1 ? nullptr : &ranges_[ranges_.size() - 2],
       current_);
   allocatedBytes_ += current_->size;
+  if (allocatedBytes_ <= 0) {
+    VELOX_CHECK_GT(allocatedBytes_, 0);
+  }
   VELOX_CHECK_GT(allocatedBytes_, 0);
   if (isBits_) {
     // size and position are in units of bits for a bits stream.

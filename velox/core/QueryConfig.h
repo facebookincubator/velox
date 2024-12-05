@@ -211,6 +211,11 @@ class QueryConfig {
   static constexpr const char* kTopNRowNumberSpillEnabled =
       "topn_row_number_spill_enabled";
 
+  /// PartitionedOutput spilling flag, only applies if "spill_enabled" flag is
+  /// set.
+  static constexpr const char* kPartitionedOutputSpillEnabled =
+      "partitioned_output_spill_enabled";
+
   /// The max row numbers to fill and spill for each spill run. This is used to
   /// cap the memory used for spilling. If it is zero, then there is no limit
   /// and spilling might run out of memory.
@@ -692,6 +697,10 @@ class QueryConfig {
 
   bool topNRowNumberSpillEnabled() const {
     return get<bool>(kTopNRowNumberSpillEnabled, true);
+  }
+
+  bool partitionedOutputSpillEnabled() const {
+    return get<bool>(kPartitionedOutputSpillEnabled, true);
   }
 
   int32_t maxSpillLevel() const {

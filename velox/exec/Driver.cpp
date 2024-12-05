@@ -108,7 +108,8 @@ velox::memory::MemoryPool* DriverCtx::addOperatorPool(
 
 std::optional<common::SpillConfig> DriverCtx::makeSpillConfig(
     int32_t operatorId) const {
-  const auto& queryConfig = task->queryCtx()->queryConfig();
+  const auto& queryCtx = task->queryCtx();
+  const auto& queryConfig = queryCtx->queryConfig();
   if (!queryConfig.spillEnabled()) {
     return std::nullopt;
   }
@@ -119,20 +120,18 @@ std::optional<common::SpillConfig> DriverCtx::makeSpillConfig(
       [this]() -> std::string_view {
     return task->getOrCreateSpillDirectory();
   };
-  const auto& spillFilePrefix =
-      fmt::format("{}_{}_{}", pipelineId, driverId, operatorId);
   common::UpdateAndCheckSpillLimitCB updateAndCheckSpillLimitCb =
-      [this](uint64_t bytes) {
-        task->queryCtx()->updateSpilledBytesAndCheckLimit(bytes);
+      [queryCtx](uint64_t bytes) {
+        queryCtx->updateSpilledBytesAndCheckLimit(bytes);
       };
   return common::SpillConfig(
       std::move(getSpillDirPathCb),
       std::move(updateAndCheckSpillLimitCb),
-      spillFilePrefix,
+      fmt::format("{}_{}_{}", pipelineId, driverId, operatorId),
       queryConfig.maxSpillFileSize(),
       queryConfig.spillWriteBufferSize(),
       queryConfig.spillReadBufferSize(),
-      task->queryCtx()->spillExecutor(),
+      queryCtx->spillExecutor(),
       queryConfig.minSpillableReservationPct(),
       queryConfig.spillableReservationGrowthPct(),
       queryConfig.spillStartPartitionBit(),
@@ -142,7 +141,10 @@ std::optional<common::SpillConfig> DriverCtx::makeSpillConfig(
       queryConfig.writerFlushThresholdBytes(),
       queryConfig.spillCompressionKind(),
       queryConfig.spillPrefixSortEnabled()
-          ? std::optional<common::PrefixSortConfig>(prefixSortConfig())
+          ? std::optional(common::PrefixSortConfig{
+                queryConfig.prefixSortNormalizedKeyMaxBytes(),
+                queryConfig.prefixSortMinRows(),
+                queryConfig.prefixSortMaxStringPrefixLength()})
           : std::nullopt,
       queryConfig.spillFileCreateConfig());
 }
@@ -1110,6 +1112,8 @@ std::string blockingReasonToString(BlockingReason reason) {
       return "kNotBlocked";
     case BlockingReason::kWaitForConsumer:
       return "kWaitForConsumer";
+    case BlockingReason::kWaitForSpill:
+      return "kWaitForSpill";
     case BlockingReason::kWaitForSplit:
       return "kWaitForSplit";
     case BlockingReason::kWaitForProducer:
