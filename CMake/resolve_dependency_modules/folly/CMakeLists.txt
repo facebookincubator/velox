@@ -61,7 +61,3 @@ set_target_properties(
 if(${gflags_SOURCE} STREQUAL "BUNDLED")
   add_dependencies(folly glog gflags_static fmt::fmt)
 endif()
-
-set(FOLLY_BENCHMARK_STATIC_LIB
-    ${folly_BINARY_DIR}/folly/libfollybenchmark${CMAKE_STATIC_LIBRARY_SUFFIX}
-    PARENT_SCOPE)
