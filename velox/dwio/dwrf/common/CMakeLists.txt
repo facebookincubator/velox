@@ -35,7 +35,6 @@ velox_link_libraries(
   velox_common_config
   velox_dwio_common
   velox_dwio_common_compression
-  velox_dwio_dwrf_proto
   velox_caching
   Snappy::snappy
   zstd::zstd
