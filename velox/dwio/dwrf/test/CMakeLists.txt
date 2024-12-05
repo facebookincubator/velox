@@ -16,7 +16,6 @@ add_subdirectory(utils)
 
 set(TEST_LINK_LIBS
     velox_dwio_common_test_utils
-    velox_dwio_dwrf_proto
     velox_dwio_dwrf_reader
     velox_dwio_dwrf_writer
     velox_row_fast
