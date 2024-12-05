@@ -413,7 +413,7 @@ void MemoryAllocator::useHugePages(
     const ContiguousAllocation& data,
     bool enable) {
 #ifdef linux
-  if (config::GlobalConfig().memoryUseHugepages) {
+  if (config::globalConfig.memoryUseHugepages) {
     return;
   }
   auto maybeRange = data.hugePageRange();

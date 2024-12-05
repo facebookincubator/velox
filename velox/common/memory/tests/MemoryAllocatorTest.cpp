@@ -54,7 +54,7 @@ class MemoryAllocatorTest : public testing::TestWithParam<int> {
  protected:
   static void SetUpTestCase() {
     TestValue::enable();
-    config::globalConfig().memoryLeakCheckEnabled = true;
+    config::globalConfig.memoryLeakCheckEnabled = true;
   }
 
   void SetUp() override {
@@ -649,7 +649,7 @@ TEST_P(MemoryAllocatorTest, stats) {
   }
 
   gflags::FlagSaver flagSaver;
-  config::globalConfig().timeAllocations = true;
+  config::globalConfig.timeAllocations = true;
   for (auto i = 0; i < sizes.size(); ++i) {
     std::unique_ptr<Allocation> allocation = std::make_unique<Allocation>();
     auto size = sizes[i];
@@ -668,7 +668,7 @@ TEST_P(MemoryAllocatorTest, singleAllocation) {
     return;
   }
   gflags::FlagSaver flagSaver;
-  config::globalConfig().timeAllocations = true;
+  config::globalConfig.timeAllocations = true;
   const std::vector<MachinePageCount>& sizes = instance_->sizeClasses();
   MachinePageCount capacity = kCapacityPages;
   for (auto i = 0; i < sizes.size(); ++i) {

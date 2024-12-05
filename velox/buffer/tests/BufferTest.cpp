@@ -18,14 +18,13 @@
 
 #include "folly/Range.h"
 #include "velox/common/base/tests/GTestUtils.h"
+#include "velox/common/config/GlobalConfig.h"
 #include "velox/common/testutil/TestValue.h"
 #include "velox/type/StringView.h"
 
 #include <glog/logging.h>
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
-
-DECLARE_bool(velox_enable_memory_usage_track_in_default_memory_pool);
 
 namespace facebook {
 namespace velox {
@@ -39,7 +38,7 @@ static_assert(!Buffer::is_pod_like_v<std::shared_ptr<int>>, "");
 class BufferTest : public testing::Test {
  protected:
   static void SetUpTestCase() {
-    FLAGS_velox_enable_memory_usage_track_in_default_memory_pool = true;
+    config::globalConfig.enableMemoryUsageTrackInDefaultMemoryPool = true;
   }
 
   void SetUp() override {

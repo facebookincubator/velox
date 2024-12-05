@@ -21,10 +21,7 @@
 
 namespace facebook::velox::config {
 
-GlobalConfig& globalConfig() {
-  static GlobalConfig config;
-  return config;
-}
+GlobalConfiguration globalConfig;
 
 double toBytesPerCapacityUnit(CapacityUnit unit) {
   switch (unit) {
