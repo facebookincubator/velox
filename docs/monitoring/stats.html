@@ -175,6 +175,20 @@ hash build operators. This stat is only reported by the HashBuild operator.</p><
 <td><p>bytes</p></td>
 <td><p>Number of bytes pre-maturely flushed from file writers because of memory reclaiming.</p></td>
 </tr>
+<tr class="row-odd"><td><p>rebalanceTriggers</p></td>
+<td></td>
+<td><p>The number of times that we triggers the rebalance of table partitions
+for a non-bucketed partition table.</p></td>
+</tr>
+<tr class="row-even"><td><p>scaledPartitions</p></td>
+<td></td>
+<td><p>The number of times that we scale a partition processing for a
+non-bucketed partition table.</p></td>
+</tr>
+<tr class="row-odd"><td><p>scaledWriters</p></td>
+<td></td>
+<td><p>The number of times that we scale writers for a non-partitioned table.</p></td>
+</tr>
 </tbody>
 </table>
 </section>
