@@ -22,7 +22,7 @@ namespace facebook::velox::config {
 
 struct GlobalConfiguration {
   /// Number of shared leaf memory pools per process.
-  int32_t memoryNumSharedLeafPoolsConfig{32};
+  int32_t memoryNumSharedLeafPools{32};
   /// If true, check fails on any memory leaks in memory pool and memory
   /// manager.
   bool memoryLeakCheckEnabled{false};
@@ -46,5 +46,7 @@ struct GlobalConfiguration {
 };
 
 extern GlobalConfiguration globalConfig;
+
+void translateFlagsToGlobalConfig();
 
 } // namespace facebook::velox::config

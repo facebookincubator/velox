@@ -44,6 +44,7 @@ class MemoryManagerTest : public testing::Test {
  protected:
   static void SetUpTestCase() {
     SharedArbitrator::registerFactory();
+    config::translateFlagsToGlobalConfig();
   }
 
   inline static const std::string arbitratorKind_{"SHARED"};
@@ -370,6 +371,7 @@ TEST_F(MemoryManagerTest, defaultMemoryUsageTracking) {
   for (bool trackDefaultMemoryUsage : {false, true}) {
     FLAGS_velox_enable_memory_usage_track_in_default_memory_pool =
         trackDefaultMemoryUsage;
+    config::translateFlagsToGlobalConfig();
     MemoryManager manager{};
     auto defaultPool = manager.addLeafPool("defaultMemoryUsageTracking");
     ASSERT_EQ(defaultPool->trackUsage(), trackDefaultMemoryUsage);

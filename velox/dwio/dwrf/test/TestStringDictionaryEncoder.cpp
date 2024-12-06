@@ -28,6 +28,7 @@ class TestStringDictionaryEncoder : public ::testing::Test {
  protected:
   static void SetUpTestCase() {
     FLAGS_velox_enable_memory_usage_track_in_default_memory_pool = true;
+    config::translateFlagsToGlobalConfig();
     memory::MemoryManager::testingSetInstance({});
   }
 };
