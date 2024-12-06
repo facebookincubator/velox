@@ -22,6 +22,7 @@
 #include "velox/common/memory/MmapArena.h"
 #include "velox/common/memory/SharedArbitrator.h"
 #include "velox/common/testutil/TestValue.h"
+#include "velox/flag_definitions/flags.h"
 
 #include <fmt/format.h>
 #include <folly/Random.h>
@@ -57,7 +58,7 @@ class MemoryAllocatorTest : public testing::TestWithParam<int> {
   static void SetUpTestCase() {
     TestValue::enable();
     FLAGS_velox_memory_leak_check_enabled = true;
-    config::translateFlagsToGlobalConfig();
+    translateFlagsToGlobalConfig();
   }
 
   void SetUp() override {
@@ -652,7 +653,7 @@ TEST_P(MemoryAllocatorTest, stats) {
   }
 
   FLAGS_velox_time_allocations = true;
-  config::translateFlagsToGlobalConfig();
+  translateFlagsToGlobalConfig();
   for (auto i = 0; i < sizes.size(); ++i) {
     std::unique_ptr<Allocation> allocation = std::make_unique<Allocation>();
     auto size = sizes[i];
@@ -665,7 +666,7 @@ TEST_P(MemoryAllocatorTest, stats) {
     ASSERT_GE(stats.sizes[i].numAllocations, 1);
   }
   FLAGS_velox_time_allocations = false;
-  config::translateFlagsToGlobalConfig();
+  translateFlagsToGlobalConfig();
 }
 
 TEST_P(MemoryAllocatorTest, singleAllocation) {
@@ -674,7 +675,7 @@ TEST_P(MemoryAllocatorTest, singleAllocation) {
   }
 
   FLAGS_velox_time_allocations = true;
-  config::translateFlagsToGlobalConfig();
+  translateFlagsToGlobalConfig();
   const std::vector<MachinePageCount>& sizes = instance_->sizeClasses();
   MachinePageCount capacity = kCapacityPages;
   for (auto i = 0; i < sizes.size(); ++i) {
@@ -722,7 +723,7 @@ TEST_P(MemoryAllocatorTest, singleAllocation) {
     ASSERT_TRUE(instance_->checkConsistency());
   }
   FLAGS_velox_time_allocations = false;
-  config::translateFlagsToGlobalConfig();
+  translateFlagsToGlobalConfig();
 }
 
 TEST_P(MemoryAllocatorTest, increasingSize) {

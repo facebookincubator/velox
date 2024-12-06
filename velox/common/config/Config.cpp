@@ -17,11 +17,8 @@
 #include <re2/re2.h>
 
 #include "velox/common/config/Config.h"
-#include "velox/common/config/GlobalConfig.h"
 
 namespace facebook::velox::config {
-
-GlobalConfiguration globalConfig;
 
 double toBytesPerCapacityUnit(CapacityUnit unit) {
   switch (unit) {

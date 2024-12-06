@@ -114,7 +114,7 @@ DEFINE_int32(
     80,
     "Minimum percentage of actual uses over references to a column for prefetching. No prefetch if > 100");
 
-namespace facebook::velox::config {
+namespace facebook::velox {
 void translateFlagsToGlobalConfig() {
   config::globalConfig.memoryNumSharedLeafPools =
       FLAGS_velox_memory_num_shared_leaf_pools;
@@ -130,5 +130,13 @@ void translateFlagsToGlobalConfig() {
       FLAGS_velox_suppress_memory_capacity_exceeding_error_message;
   config::globalConfig.memoryPoolCapacityTransferAcrossTasks =
       FLAGS_velox_memory_pool_capacity_transfer_across_tasks;
+  config::globalConfig.exceptionSystemStacktraceEnabled =
+      FLAGS_velox_exception_system_stacktrace_enabled;
+  config::globalConfig.exceptionSystemStacktraceRateLimitMs =
+      FLAGS_velox_exception_system_stacktrace_rate_limit_ms;
+  config::globalConfig.exceptionUserStacktraceEnabled =
+      FLAGS_velox_exception_user_stacktrace_enabled;
+  config::globalConfig.exceptionUserStacktraceRateLimitMs =
+      FLAGS_velox_exception_user_stacktrace_rate_limit_ms;
 }
-} // namespace facebook::velox::config
+} // namespace facebook::velox

@@ -43,10 +43,18 @@ struct GlobalConfiguration {
   /// Whether allow to memory capacity transfer between memory pools from
   /// different tasks, which might happen in use case like Spark-Gluten
   bool memoryPoolCapacityTransferAcrossTasks{false};
+  /// Enable the stacktrace for system type of VeloxException.
+  bool exceptionSystemStacktraceEnabled{true};
+  /// Enable the stacktrace for user type of VeloxException.
+  bool exceptionUserStacktraceEnabled{false};
+  /// Min time interval in milliseconds between stack traces captured in
+  /// user type of VeloxException; off when set to 0 (the default).
+  int32_t exceptionUserStacktraceRateLimitMs{0};
+  /// Min time interval in milliseconds between stack traces captured in
+  /// system type of VeloxException; off when set to 0 (the default).
+  int32_t exceptionSystemStacktraceRateLimitMs{0};
 };
 
 extern GlobalConfiguration globalConfig;
-
-void translateFlagsToGlobalConfig();
 
 } // namespace facebook::velox::config
