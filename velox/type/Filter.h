@@ -103,6 +103,10 @@ class Filter : public velox::ISerializable {
     return deterministic_;
   }
 
+  const bool nullAllowed() const {
+    return nullAllowed_;
+  }
+
   /**
    * When a filter applied to a nested column fails, the whole top-level
    * position should fail. To enable this functionality, the filter keeps track
@@ -1894,10 +1898,6 @@ class TimestampRange : public Filter {
     return upper_;
   }
 
-  const bool nullAllowed() const {
-    return nullAllowed_;
-  }
-
   bool testingEquals(const Filter& other) const final;
 
  private:
@@ -2166,55 +2166,6 @@ static inline bool applyFilter(TFilter& filter, StringView value) {
   return filter.testBytes(value.data(), value.size());
 }
 
-namespace detail {
-
-template <typename TInput, typename TOutput>
-TOutput rescale(
-    TInput value,
-    uint8_t fromPrecision,
-    uint8_t fromScale,
-    uint8_t toPrecision,
-    uint8_t toScale) {
-  TOutput rescaled;
-  const auto status = DecimalUtil::rescaleWithRoundUp<TInput, TOutput>(
-      value, fromPrecision, fromScale, toPrecision, toScale, rescaled);
-  VELOX_CHECK(status.ok(), status.message());
-  return rescaled;
-}
-
-} // namespace detail
-
-/// Helper for applying filters with type evolution. For decimal value, if the
-/// filter and value types are different, the value is rescaled to the filter
-/// type.
-template <typename TFilter, typename T>
-static inline bool applyTypeEvolutionFilter(
-    TFilter& filter,
-    T value,
-    const TypePtr& filterType,
-    const TypePtr& valueType) {
-  VELOX_CHECK(filterType && valueType);
-  if (filterType->equivalent(*valueType)) {
-    return applyFilter(filter, value);
-  }
-  if constexpr (std::is_same_v<T, int64_t> || std::is_same_v<T, int128_t>) {
-    const auto [fromPrecision, fromScale] =
-        getDecimalPrecisionScale(*valueType);
-    const auto [toPrecision, toScale] = getDecimalPrecisionScale(*filterType);
-
-    if (filterType->isLongDecimal()) {
-      int128_t rescaled = detail::rescale<T, int128_t>(
-          value, fromPrecision, fromScale, toPrecision, toScale);
-      return applyFilter<TFilter, int128_t>(filter, rescaled);
-    }
-
-    int64_t rescaled = detail::rescale<T, int64_t>(
-        value, fromPrecision, fromScale, toPrecision, toScale);
-    return applyFilter<TFilter, int64_t>(filter, rescaled);
-  }
-  return applyFilter(filter, value);
-}
-
 // Creates a hash or bitmap based IN filter depending on value distribution.
 std::unique_ptr<Filter> createBigintValues(
     const std::vector<int64_t>& values,
@@ -2228,5 +2179,11 @@ std::unique_ptr<Filter> createHugeintValues(
 std::unique_ptr<Filter> createNegatedBigintValues(
     const std::vector<int64_t>& values,
     bool nullAllowed);
+
+// Rescales the bounds and values of a decimal filter from one type to another.
+std::unique_ptr<Filter> rescaleDecimalFilter(
+    const Filter* filter,
+    const TypePtr& fromType,
+    const TypePtr& toType);
 
 } // namespace facebook::velox::common
