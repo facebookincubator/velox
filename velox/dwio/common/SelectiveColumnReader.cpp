@@ -298,24 +298,24 @@ void SelectiveColumnReader::getDecimalValues(
       auto convert = createConvertFunction<int64_t, int64_t>(
           fromPrecision, fromScale, toPrecision, toScale);
       getFlatValues<int64_t, int64_t>(
-          rows, result, requestedType, false /*isFinal*/, convert);
+          rows, result, requestedType, /*isFinal=*/false, convert);
     } else {
       auto convert = createConvertFunction<int64_t, int128_t>(
           fromPrecision, fromScale, toPrecision, toScale);
       getFlatValues<int64_t, int128_t>(
-          rows, result, requestedType, false /*isFinal*/, convert);
+          rows, result, requestedType, /*isFinal=*/false, convert);
     }
   } else {
     if (requestedType->isShortDecimal()) {
       auto convert = createConvertFunction<int128_t, int64_t>(
           fromPrecision, fromScale, toPrecision, toScale);
       getFlatValues<int128_t, int64_t>(
-          rows, result, requestedType, false /*isFinal*/, convert);
+          rows, result, requestedType, /*isFinal=*/false, convert);
     } else {
       auto convert = createConvertFunction<int128_t, int128_t>(
           fromPrecision, fromScale, toPrecision, toScale);
       getFlatValues<int128_t, int128_t>(
-          rows, result, requestedType, false /*isFinal*/, convert);
+          rows, result, requestedType, /*isFinal=*/false, convert);
     }
   }
 }

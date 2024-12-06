@@ -80,6 +80,12 @@ class IntegerColumnReader : public dwio::common::SelectiveIntegerColumnReader {
         offset,
         rows,
         nullptr);
+    velox::common::Filter* filter = scanSpec_->filter();
+    if (filter && fileType_->type()->isDecimal()) {
+      auto rescaledFilter = common::rescaleDecimalFilter(
+          filter, requestedType_, fileType_->type());
+      scanSpec_->setFilter(std::move(rescaledFilter));
+    }
     readCommon<IntegerColumnReader, true>(rows);
     readOffset_ += rows.back() + 1;
   }
