@@ -145,6 +145,7 @@ function install_velox_deps_from_apt {
     liblzo2-dev \
     libelf-dev \
     libdwarf-dev \
+    libgeos++-dev \
     bison \
     flex \
     libfl-dev \
