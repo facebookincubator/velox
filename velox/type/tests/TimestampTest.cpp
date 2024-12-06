@@ -155,6 +155,8 @@ TEST(TimestampTest, arithmeticOverflow) {
           0));
   ASSERT_NO_THROW(Timestamp::minMillis().toMillis());
   ASSERT_NO_THROW(Timestamp::maxMillis().toMillis());
+  ASSERT_NO_THROW(Timestamp::minMillis().toMicros());
+  ASSERT_NO_THROW(Timestamp::maxMillis().toMicros());
 }
 
 TEST(TimestampTest, toAppend) {
