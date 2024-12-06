@@ -199,6 +199,8 @@ struct GetJsonObjectFunction {
       return true;
     }
     // These chars can be prior to a valid ending char.
+    // See reference:
+    // https://github.com/simdjson/simdjson/blob/v3.9.0/dependencies/jsoncppdist/jsoncpp.cpp
     if (endingChar == ' ' || endingChar == '\r' || endingChar == '\n' ||
         endingChar == '\t') {
       return isValidEndingCharacter(++currentPos);
