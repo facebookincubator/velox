@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 #include "velox/functions/lib/RegistrationHelpers.h"
-#include "velox/functions/sparksql/JsonFunctions.h"
+#include "velox/functions/sparksql/GetJsonObject.h"
 #include "velox/functions/sparksql/JsonObjectKeys.h"
 
 namespace facebook::velox::functions::sparksql {

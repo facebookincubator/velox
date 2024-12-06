@@ -26,7 +26,7 @@ JSON Functions
     Valid ``path`` should start with '$' and then contain "[index]", "['field']" or ".field"
     to define a JSON path. Here are some examples: "$.a" "$.a.b", "$[0]['a'].b". Returns
     ``jsonString`` if ``path`` is "$". Returns NULL if ``jsonString`` or ``path`` is malformed.
-    Also returns NULL if ``path`` doesn't exist. ::
+    Returns NULL if ``path`` does not exist. ::
 
         SELECT get_json_object('{"a":"b"}', '$.a'); -- 'b'
         SELECT get_json_object('{"a":{"b":"c"}}', '$.a'); -- '{"b":"c"}'

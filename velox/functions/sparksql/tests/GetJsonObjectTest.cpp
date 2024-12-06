@@ -56,42 +56,42 @@ TEST_F(GetJsonObjectTest, basic) {
       "001");
   EXPECT_EQ(
       getJsonObject(
-          R"([{"my": {"param": {"name": "Alice", "age": "5", "id": "001"}}}, {"other": "v1"}])",
-          "$[0]['my']['param']['age']"),
+          R"([{"my": {"info": {"name": "Alice", "age": "5", "id": "001"}}}, {"other": "v1"}])",
+          "$[0]['my']['info']['age']"),
       "5");
   EXPECT_EQ(
       getJsonObject(
-          R"([{"my": {"param": {"name": "Alice", "age": "5", "id": "001"}}}, {"other": "v1"}])",
-          "$[0].my.param.age"),
+          R"([{"my": {"info": {"name": "Alice", "age": "5", "id": "001"}}}, {"other": "v1"}])",
+          "$[0].my.info.age"),
       "5");
 
   // Json object as result.
   EXPECT_EQ(
       getJsonObject(
-          R"({"my": {"param": {"name": "Alice", "age": "5", "id": "001"}}})",
-          "$.my.param"),
+          R"({"my": {"info": {"name": "Alice", "age": "5", "id": "001"}}})",
+          "$.my.info"),
       R"({"name": "Alice", "age": "5", "id": "001"})");
   EXPECT_EQ(
       getJsonObject(
-          R"({"my": {"param": {"name": "Alice", "age": "5", "id": "001"}}})",
-          "$['my']['param']"),
+          R"({"my": {"info": {"name": "Alice", "age": "5", "id": "001"}}})",
+          "$['my']['info']"),
       R"({"name": "Alice", "age": "5", "id": "001"})");
 
   // Array as result.
   EXPECT_EQ(
       getJsonObject(
-          R"([{"my": {"param": {"name": "Alice"}}}, {"other": ["v1", "v2"]}])",
+          R"([{"my": {"info": {"name": "Alice"}}}, {"other": ["v1", "v2"]}])",
           "$[1].other"),
       R"(["v1", "v2"])");
   // Array element as result.
   EXPECT_EQ(
       getJsonObject(
-          R"([{"my": {"param": {"name": "Alice"}}}, {"other": ["v1", "v2"]}])",
+          R"([{"my": {"info": {"name": "Alice"}}}, {"other": ["v1", "v2"]}])",
           "$[1].other[0]"),
       "v1");
   EXPECT_EQ(
       getJsonObject(
-          R"([{"my": {"param": {"name": "Alice"}}}, {"other": ["v1", "v2"]}])",
+          R"([{"my": {"info": {"name": "Alice"}}}, {"other": ["v1", "v2"]}])",
           "$[1].other[1]"),
       "v2");
 }
@@ -115,8 +115,8 @@ TEST_F(GetJsonObjectTest, nullResult) {
   // Invalid ending character.
   EXPECT_EQ(
       getJsonObject(
-          R"([{"my": {"param": {"name": "Alice"quoted""}}}, {"other": ["v1", "v2"]}])",
-          "$[0].my.param.name"),
+          R"([{"my": {"info": {"name": "Alice"quoted""}}}, {"other": ["v1", "v2"]}])",
+          "$[0].my.info.name"),
       std::nullopt);
 }
 

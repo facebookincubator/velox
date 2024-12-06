@@ -19,6 +19,9 @@
 
 namespace facebook::velox::functions::sparksql {
 
+/// Parses a JSON string and returns the value at the specified path.
+/// Simdjson On-Demand API is used to parse JSON string.
+/// get_json_object(jsonString, path) -> value
 template <typename T>
 struct GetJsonObjectFunction {
   VELOX_DEFINE_FUNCTION_TYPES(T);
@@ -28,13 +31,11 @@ struct GetJsonObjectFunction {
 
   FOLLY_ALWAYS_INLINE void initialize(
       const std::vector<TypePtr>& /*inputTypes*/,
-      const core::QueryConfig& config,
+      const core::QueryConfig& /*config*/,
       const arg_type<Varchar>* /*json*/,
       const arg_type<Varchar>* jsonPath) {
-    if (jsonPath != nullptr) {
-      if (checkJsonPath(*jsonPath)) {
-        jsonPath_ = removeSingleQuotes(*jsonPath);
-      }
+    if (jsonPath != nullptr && checkJsonPath(*jsonPath)) {
+      jsonPath_ = removeSingleQuotes(*jsonPath);
     }
   }
 
@@ -56,10 +57,11 @@ struct GetJsonObjectFunction {
     if (simdjsonParse(paddedJson).get(jsonDoc)) {
       return false;
     }
+    auto formattedJsonPath = jsonPath_.has_value()
+        ? jsonPath_.value()
+        : removeSingleQuotes(jsonPath);
     try {
-      auto rawResult = jsonPath_.has_value()
-          ? jsonDoc.at_path(jsonPath_.value().data())
-          : jsonDoc.at_path(removeSingleQuotes(jsonPath));
+      auto rawResult = jsonDoc.at_path(formattedJsonPath);
       if (rawResult.error()) {
         return false;
       }
@@ -108,7 +110,10 @@ struct GetJsonObjectFunction {
     return result;
   }
 
-  // Returns true if no error.
+  // Extracts a string representation from a simdjson result. Handles various
+  // JSON types including numbers, booleans, strings, objects, and arrays.
+  // Returns true if the conversion wes successful, false
+  // otherwise.
   bool extractStringResult(
       simdjson::simdjson_result<simdjson::ondemand::value> rawResult,
       out_type<Varchar>& result) {
@@ -179,17 +184,15 @@ struct GetJsonObjectFunction {
         result.append(ss.str());
         return true;
       }
-      default: {
+      default:
         return false;
-      }
     }
   }
 
-  // This is a simple validation by checking whether the obtained result is
-  // followed by valid char. Because ondemand parsing we are using ignores json
-  // format validation for characters following the current parsing position.
-  // As json doc is padded with NULL characters, it's safe to do recursively
-  // check.
+  // Checks whether the obtained result is followed by valid char. Because
+  // On-Demand API we are using ignores json format validation for characters
+  // following the current parsing position. As json doc is padded with NULL
+  // characters, it's safe to do recursively check.
   bool isValidEndingCharacter(const char* currentPos) {
     char endingChar = *currentPos;
     if (endingChar == ',' || endingChar == '}' || endingChar == ']') {
@@ -203,6 +206,7 @@ struct GetJsonObjectFunction {
     return false;
   }
 
+  // Used for constant json path.
   std::optional<std::string> jsonPath_;
 };
 
