@@ -523,6 +523,17 @@ if(VELOX_ENABLE_REMOTE_FUNCTIONS)
   find_package(FBThrift CONFIG REQUIRED)
 endif()
 
+if(VELOX_ENABLE_PRESTO_FUNCTIONS)
+  set_source(geos)
+  resolve_dependhhhency(geos)
+endif()
+
+if(DEFINED FOLLY_BENCHMARK_STATIC_LIB)
+  set(FOLLY_BENCHMARK ${FOLLY_BENCHMARK_STATIC_LIB})
+else()
+  set(FOLLY_BENCHMARK Folly::follybenchmark)
+endif()
+
 if(VELOX_ENABLE_GCS)
   velox_set_source(google_cloud_cpp_storage)
   velox_resolve_dependency(google_cloud_cpp_storage CONFIG 2.22.0 REQUIRED)
