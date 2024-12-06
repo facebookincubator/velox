@@ -32,8 +32,6 @@ permissions:
 jobs:
   upload:
     runs-on: ubuntu-latest
-    # Disabling workflow due to potential security sev
-    if: false
     steps:
 
     - name: 'Download artifacts'
