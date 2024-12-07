@@ -22,34 +22,19 @@
 
 namespace facebook::velox::functions {
 
-enum class GeometryType : int {
-  POINT = 0,
-  MULTI_POINT = 1,
-  LINE_STRING = 2,
-  MULTI_LINE_STRING = 3,
-  POLYGON = 4,
-  MULTI_POLYGON = 5,
-  GEOMETRY_COLLECTION = 6,
-  ENVELOPE = 7
-};
-
-template <typename Geometry>
-Geometry deserializeGeometry() {}
-
 template <typename T>
 struct StContainsFunction {
   VELOX_DEFINE_FUNCTION_TYPES(T);
 
-  FOLLY_ALWAYS_INLINE Status call(
+  FOLLY_ALWAYS_INLINE bool call(
       bool& result,
       const arg_type<Geometry>& left,
       const arg_type<Geometry>& right) {
-    auto leftType =
-        static_cast<GeometryType>(*reinterpret_cast<const int*>(left.data()));
-    auto rightType =
-        static_cast<GeometryType>(*reinterpret_cast<const int*>(right.data()));
+    auto leftGeometry = GeosGeometrySerde::deserialize(left);
+    auto rightGeometry = GeosGeometrySerde::deserialize(right);
+    result = leftGeometry->contains(rightGeometry.get());
 
-    // Deserialize based on types
+    return true;
   }
 };
 } // namespace facebook::velox::functions

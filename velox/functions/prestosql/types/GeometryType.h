@@ -16,6 +16,7 @@
 #pragma once
 
 #include "velox/expression/CastExpr.h"
+#include "velox/functions/prestosql/GeometryUtils.h"
 #include "velox/type/SimpleFunctionApi.h"
 #include "velox/type/Type.h"
 

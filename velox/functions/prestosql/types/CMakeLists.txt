@@ -23,6 +23,7 @@ velox_add_library(
 
 velox_link_libraries(
   velox_presto_types
+  GEOS::geos
   velox_memory
   velox_expression
   velox_functions_util
