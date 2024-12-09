@@ -59,7 +59,7 @@ class GeometryCastOperator : public exec::CastOperator {
       castFromVarbinary(input, context, rows, *result);
     } else {
       VELOX_UNSUPPORTED(
-          "Cast from {} to IPAddress not supported", resultType->toString());
+          "Cast from {} to Geometry not supported", resultType->toString());
     }
   }
 
@@ -77,7 +77,7 @@ class GeometryCastOperator : public exec::CastOperator {
       castToVarbinary(input, context, rows, *result);
     } else {
       VELOX_UNSUPPORTED(
-          "Cast from IPAddress to {} not supported", resultType->toString());
+          "Cast from Geometry to {} not supported", resultType->toString());
     }
   }
 
