@@ -293,7 +293,7 @@ FOLLY_ALWAYS_INLINE uint64_t IntDecoder<isSigned>::readVuLong() {
   }
 
   int64_t result = 0;
-  int64_t offset = 0;
+  uint32_t offset = 0;
   signed char ch;
   do {
     ch = readByte();
@@ -311,42 +311,44 @@ FOLLY_ALWAYS_INLINE int64_t IntDecoder<isSigned>::readVsLong() {
 template <bool isSigned>
 inline int64_t IntDecoder<isSigned>::readLongLE() {
   VELOX_DCHECK_EQ(pendingSkip_, 0);
-  int64_t result = 0;
-  if (bufferStart_ && bufferStart_ + sizeof(int64_t) <= bufferEnd_) {
+  if (bufferStart_ && bufferStart_ + numBytes_ <= bufferEnd_) {
     bufferStart_ += numBytes_;
     if (numBytes_ == 8) {
       return *reinterpret_cast<const int64_t*>(bufferStart_ - 8);
     }
-    if (numBytes_ == 4) {
-      if (isSigned) {
+
+    if constexpr (isSigned) {
+      if (numBytes_ == 4) {
         return *reinterpret_cast<const int32_t*>(bufferStart_ - 4);
       }
-      return *reinterpret_cast<const uint32_t*>(bufferStart_ - 4);
-    }
-    if (isSigned) {
       return *reinterpret_cast<const int16_t*>(bufferStart_ - 2);
+    } else {
+      if (numBytes_ == 4) {
+        return *reinterpret_cast<const uint32_t*>(bufferStart_ - 4);
+      }
+      return *reinterpret_cast<const uint16_t*>(bufferStart_ - 2);
     }
-    return *reinterpret_cast<const uint16_t*>(bufferStart_ - 2);
   }
 
-  char b;
-  int64_t offset = 0;
-  for (uint32_t i = 0; i < numBytes_; ++i) {
-    b = readByte();
+  int64_t result = 0;
+  for (uint32_t offset = 0; offset < numBytes_ * 8; offset += 8) {
+    const char b = readByte();
     result |= (b & BASE_256_MASK) << offset;
-    offset += 8;
   }
 
-  if (isSigned && numBytes_ < 8) {
-    if (numBytes_ == 2) {
-      return static_cast<int16_t>(result);
+  if constexpr (isSigned) {
+    if (numBytes_ >= 8) {
+      return result;
     }
     if (numBytes_ == 4) {
       return static_cast<int32_t>(result);
     }
-    VELOX_DCHECK(false, "Bad width for signed fixed width: {}", numBytes_);
+    VELOX_DCHECK(
+        numBytes_ == 2, "Bad width for signed fixed width: {}", numBytes_);
+    return static_cast<int16_t>(result);
+  } else {
+    return result;
   }
-  return result;
 }
 
 template <bool isSigned>
@@ -356,7 +358,7 @@ inline cppType IntDecoder<isSigned>::readLittleEndianFromBigEndian() {
 
   cppType bigEndianValue = 0;
   // Input is in Big Endian layout of size numBytes.
-  if (bufferStart_ && (bufferStart_ + sizeof(int64_t) <= bufferEnd_)) {
+  if (bufferStart_ && (bufferStart_ + numBytes_ <= bufferEnd_)) {
     bufferStart_ += numBytes_;
     const auto valueOffset = bufferStart_ - numBytes_;
     // Use first byte to initialize bigEndianValue.
@@ -376,18 +378,15 @@ inline cppType IntDecoder<isSigned>::readLittleEndianFromBigEndian() {
     }
   }
 
-  char b;
-  cppType offset = 0;
-  cppType numBytesBigEndian = 0;
   // Read numBytes input into numBytesBigEndian.
-  for (uint32_t i = 0; i < numBytes_; ++i) {
-    b = readByte();
+  cppType numBytesBigEndian = 0;
+  for (uint32_t offset = 0; offset < numBytes_ * 8; offset += 8) {
+    const char b = readByte();
     if constexpr (sizeof(cppType) == 16) {
       numBytesBigEndian |= (b & INT128_BASE_256_MASK) << offset;
     } else {
       numBytesBigEndian |= (b & BASE_256_MASK) << offset;
     }
-    offset += 8;
   }
   // Use first byte to initialize bigEndianValue.
   bigEndianValue =
@@ -415,19 +414,13 @@ inline uint128_t IntDecoder<isSigned>::readVuHugeInt() {
   VELOX_DCHECK_EQ(pendingSkip_, 0);
 
   uint128_t value = 0;
-  uint128_t work;
   uint32_t offset = 0;
   signed char ch;
-  while (true) {
+  do {
     ch = readByte();
-    work = ch & 0x7f;
-    work <<= offset;
-    value |= work;
+    value |= (ch & INT128_BASE_128_MASK) << offset;
     offset += 7;
-    if (!(ch & 0x80)) {
-      break;
-    }
-  }
+  } while (ch < 0);
   return value;
 }
 
@@ -439,27 +432,28 @@ inline T IntDecoder<isSigned>::readInt() {
   }
   if (bigEndian_) {
     return readLittleEndianFromBigEndian<T>();
-  } else {
-    if constexpr (std::is_same_v<T, int128_t>) {
-      if (numBytes_ == 8) {
-        return readLongLE();
-      }
-      if (numBytes_ == 12) {
-        VELOX_DCHECK(!useVInts_, "Int96 should not be VInt encoded.");
-        return readInt96();
-      }
-      VELOX_NYI();
+  }
+  if constexpr (std::is_same_v<T, int128_t>) {
+    if (numBytes_ == 8) {
+      return readLongLE();
     }
+    if (numBytes_ == 12) {
+      return readInt96();
+    }
+    VELOX_NYI();
+  } else {
     return readLongLE();
   }
 }
 
 template <bool isSigned>
 inline int128_t IntDecoder<isSigned>::readInt96() {
+  VELOX_DCHECK(!useVInts_, "Int96 should not be VInt encoded.");
+
   int128_t result = 0;
-  for (int i = 0; i < 12; ++i) {
-    auto ch = readByte();
-    result |= static_cast<uint128_t>(ch & BASE_256_MASK) << (i * 8);
+  for (uint32_t offset = 0; offset < 96; offset += 8) {
+    const auto ch = readByte();
+    result |= (ch & INT128_BASE_256_MASK) << offset;
   }
   return result;
 }
