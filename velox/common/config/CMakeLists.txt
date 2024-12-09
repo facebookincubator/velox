@@ -16,7 +16,7 @@ if(${VELOX_BUILD_TESTING})
   add_subdirectory(tests)
 endif()
 
-velox_add_library(velox_global_config OBJECT GlobalConfig.cpp)
+velox_add_library(velox_global_config GlobalConfig.cpp)
 
 velox_add_library(velox_common_config Config.cpp)
 velox_link_libraries(
