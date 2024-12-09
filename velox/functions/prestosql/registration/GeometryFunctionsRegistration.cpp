@@ -1,5 +1,5 @@
 /*
-* Copyright (c) Facebook, Inc. and its affiliates.
+ * Copyright (c) Facebook, Inc. and its affiliates.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -13,17 +13,18 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-
-#include "velox/functions/Registerer.h"
 #include "velox/functions/prestosql/GeometryFunctions.h"
+#include "velox/functions/Registerer.h"
 
 namespace facebook::velox::functions {
 void registerGeometryFunctions(const std::string& prefix) {
   registerGeometryType();
 
-  registerFunction<StContainsFunction, bool, Geometry, Geometry>({
-     {prefix + "ST_Contains"}
-  });
+  registerFunction<StContainsFunction, bool, Geometry, Geometry>(
+      {{prefix + "ST_Contains"}});
+
+  registerFunction<StPointFunction, Geometry, double, double>(
+      {{prefix + "ST_Point"}});
 }
 
 } // namespace facebook::velox::functions

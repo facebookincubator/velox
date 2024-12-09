@@ -13,7 +13,6 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-
 #pragma once
 
 #include "velox/functions/Macros.h"
@@ -30,11 +29,25 @@ struct StContainsFunction {
       bool& result,
       const arg_type<Geometry>& left,
       const arg_type<Geometry>& right) {
-    auto leftGeometry = GeosGeometrySerde::deserialize(left);
-    auto rightGeometry = GeosGeometrySerde::deserialize(right);
+    auto leftGeometry = GeometryUtils::deserialize(left);
+    auto rightGeometry = GeometryUtils::deserialize(right);
     result = leftGeometry->contains(rightGeometry.get());
 
     return true;
   }
 };
+
+template <typename T>
+struct StPointFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  FOLLY_ALWAYS_INLINE bool
+  call(out_type<Geometry>& result, double x, double y) {
+    auto geometry = GeometryUtils::createPoint(x, y);
+    GeometryUtils::serialize(geometry, result);
+
+    return true;
+  }
+};
+
 } // namespace facebook::velox::functions

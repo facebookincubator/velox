@@ -24,11 +24,11 @@
 
 namespace facebook::velox::functions {
 
-class GeosGeometrySerde {
+class GeometryUtils {
  public:
-  template<typename StringWriter>
+  template <typename StringWriter>
   static void serialize(
-      const geos::geom::Geometry* geometry,
+      const std::unique_ptr<geos::geom::Geometry>& geometry,
       StringWriter& stringWriter) {
     SliceOutput sliceOutput(stringWriter);
     switch (geometry->getGeometryTypeId()) {
@@ -70,6 +70,11 @@ class GeosGeometrySerde {
         break;
     }
     return nullptr;
+  }
+
+  static std::unique_ptr<geos::geom::Geometry> createPoint(double x, double y) {
+    return std::unique_ptr<geos::geom::Point>(
+        GEOMETRY_FACTORY->createPoint({x, y}));
   }
 
  private:
@@ -153,8 +158,7 @@ class GeosGeometrySerde {
   template <typename StringWriter>
   class SliceOutput {
    public:
-    SliceOutput(StringWriter& stringWriter)
-        : stringWriter_(stringWriter) {}
+    SliceOutput(StringWriter& stringWriter) : stringWriter_(stringWriter) {}
 
     SliceOutput() = delete;
 
@@ -192,9 +196,9 @@ class GeosGeometrySerde {
     StringWriter& stringWriter_;
   };
 
-  template<typename T>
+  template <typename T>
   static void writeEnvelope(
-      const geos::geom::Geometry* geometry,
+      const std::unique_ptr<geos::geom::Geometry>& geometry,
       SliceOutput<T>& output) {
     auto envelope = geometry->getEnvelopeInternal();
     output.writeDouble(envelope->getMinX());
@@ -203,9 +207,9 @@ class GeosGeometrySerde {
     output.writeDouble(envelope->getMaxY());
   }
 
-  template<typename T>
+  template <typename T>
   static void writeCoordinates(
-      const geos::geom::CoordinateSequence* coords,
+      const std::unique_ptr<geos::geom::CoordinateSequence>& coords,
       SliceOutput<T>& output) {
     for (size_t i = 0; i < coords->size(); ++i) {
       output.writeDouble(coords->getX(i));
@@ -213,34 +217,34 @@ class GeosGeometrySerde {
     }
   }
 
-  template<typename T>
+  template <typename T>
   static void writePoint(
-      const geos::geom::Geometry* point,
+      const std::unique_ptr<geos::geom::Geometry>& point,
       SliceOutput<T>& output) {
     output.writeByte(static_cast<uint8_t>(GeometrySerializationType::POINT));
     if (!point->isEmpty()) {
-      writeCoordinates(point->getCoordinates().get(), output);
+      writeCoordinates(point->getCoordinates(), output);
     } else {
       output.writeDouble(std::nan(""));
       output.writeDouble(std::nan(""));
     }
   }
 
-  template<typename T>
+  template <typename T>
   static void writeMultiPoint(
-      const geos::geom::Geometry* geometry,
+      const std::unique_ptr<geos::geom::Geometry>& geometry,
       SliceOutput<T>& output) {
     output.writeByte(
         static_cast<uint8_t>(GeometrySerializationType::MULTI_POINT));
     output.writeInt(static_cast<int32_t>(EsriShapeType::MULTI_POINT));
     writeEnvelope(geometry, output);
     output.writeInt(geometry->getNumPoints());
-    writeCoordinates(geometry->getCoordinates().get(), output);
+    writeCoordinates(geometry->getCoordinates(), output);
   }
 
-  template<typename T>
+  template <typename T>
   static void writePolyline(
-      const geos::geom::Geometry* geometry,
+      const std::unique_ptr<geos::geom::Geometry>& geometry,
       SliceOutput<T>& output,
       bool multiType) {
     int numParts;
@@ -272,10 +276,10 @@ class GeosGeometrySerde {
     if (multiType) {
       for (int i = 0; i < numParts; ++i) {
         const auto* part = geometry->getGeometryN(i);
-        writeCoordinates(part->getCoordinates().get(), output);
+        writeCoordinates(part->getCoordinates(), output);
       }
     } else {
-      writeCoordinates(geometry->getCoordinates().get(), output);
+      writeCoordinates(geometry->getCoordinates(), output);
     }
   }
 

@@ -93,7 +93,7 @@ class GeometryCastOperator : public exec::CastOperator {
 
     context.applyToSelectedNoThrow(rows, [&](auto row) {
       const auto geometry = geometries->valueAt(row);
-      auto geosGeometry = functions::GeosGeometrySerde::deserialize(geometry);
+      auto geosGeometry = functions::GeometryUtils::deserialize(geometry);
       exec::StringWriter<false> wktString(flatResult, row);
       wktString.append(writer.write(geosGeometry.get()));
       wktString.finalize();
@@ -113,7 +113,7 @@ class GeometryCastOperator : public exec::CastOperator {
       const auto wktString = geometryStrings->valueAt(row);
       auto geosGeometry = reader.read(wktString);
       exec::StringWriter<> geometry(flatResult, row);
-      functions::GeosGeometrySerde::serialize(geosGeometry.get(), geometry);
+      functions::GeometryUtils::serialize(geosGeometry, geometry);
       geometry.finalize();
     });
   }
@@ -129,7 +129,7 @@ class GeometryCastOperator : public exec::CastOperator {
 
     context.applyToSelectedNoThrow(rows, [&](auto row) {
       const auto geometry = geometries->valueAt(row);
-      auto geosGeometry = functions::GeosGeometrySerde::deserialize(geometry);
+      auto geosGeometry = functions::GeometryUtils::deserialize(geometry);
       std::ostringstream os;
       writer.write(*geosGeometry, os);
       exec::StringWriter<> wkbString(flatResult, row);
@@ -153,7 +153,7 @@ class GeometryCastOperator : public exec::CastOperator {
           reinterpret_cast<const unsigned char*>(wkbString.data()),
           wkbString.size());
       exec::StringWriter<> geometry(flatResult, row);
-      functions::GeosGeometrySerde::serialize(geosGeometry.get(), geometry);
+      functions::GeometryUtils::serialize(geosGeometry, geometry);
       geometry.finalize();
     });
   }
