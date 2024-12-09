@@ -55,7 +55,7 @@ class PrefixSortEncoder {
   /// zeros'. If `!ascending_`, the bits for both the content and padding zeros
   /// need to be inverted.
   FOLLY_ALWAYS_INLINE void encode(
-      std::optional<StringView> value,
+      const std::optional<StringView>& value,
       char* dest,
       uint32_t encodeSize) const {
     auto* destDataPtr = dest + 1;

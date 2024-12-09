@@ -175,15 +175,15 @@ class PrefixSort {
     std::vector<uint32_t> maxStringLengths;
     maxStringLengths.reserve(keyTypes.size());
     for (int i = 0; i < keyTypes.size(); ++i) {
-      auto maxPrefixLength = config.maxStringPrefixLength;
+      auto maxStringLength = UINT_MAX;
       if (keyTypes[i]->kind() == TypeKind::VARBINARY ||
           keyTypes[i]->kind() == TypeKind::VARCHAR) {
         const auto stats = rowContainer->columnStats(i);
-        maxPrefixLength = stats.has_value() && stats.value().maxBytes() > 0
+        maxStringLength = stats.has_value() && stats.value().maxBytes() > 0
             ? stats.value().maxBytes()
             : UINT_MAX;
       }
-      maxStringLengths.emplace_back(maxPrefixLength);
+      maxStringLengths.emplace_back(maxStringLength);
     }
     return PrefixSortLayout::makeSortLayout(
         keyTypes,

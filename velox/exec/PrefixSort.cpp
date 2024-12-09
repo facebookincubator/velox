@@ -208,7 +208,7 @@ void PrefixSortLayout::optimizeSortKeysOrder(
       rowType->size(), std::nullopt);
   for (const auto& projection : keyColumnProjections) {
     // Set stringPrefixLength to UINT_MAX - 1 to ensure VARCHAR columns are
-    // processed after all other types.
+    // processed after all other supported types.
     encodedKeySizes[projection.inputChannel] = PrefixSortEncoder::encodedSize(
         rowType->childAt(projection.inputChannel)->kind(), UINT_MAX - 1);
   }

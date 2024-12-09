@@ -40,7 +40,7 @@ struct PrefixSortConfig {
   /// with small datasets.
   uint32_t minNumRows{128};
 
-  /// Max number of bytes to be stored in prefix-sort buffer for a string
+  /// Maximum number of bytes to be stored in prefix-sort buffer for a string
   /// column.
   uint32_t maxStringPrefixLength{12};
 };
