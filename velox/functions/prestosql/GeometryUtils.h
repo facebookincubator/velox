@@ -26,9 +26,10 @@ namespace facebook::velox::functions {
 
 class GeosGeometrySerde {
  public:
+  template<typename StringWriter>
   static void serialize(
       const geos::geom::Geometry* geometry,
-      exec::StringWriter<>& stringWriter) {
+      StringWriter& stringWriter) {
     SliceOutput sliceOutput(stringWriter);
     switch (geometry->getGeometryTypeId()) {
       case geos::geom::GEOS_POINT:
@@ -149,9 +150,10 @@ class GeosGeometrySerde {
     size_t position_;
   };
 
+  template <typename StringWriter>
   class SliceOutput {
    public:
-    SliceOutput(exec::StringWriter<>& stringWriter)
+    SliceOutput(StringWriter& stringWriter)
         : stringWriter_(stringWriter) {}
 
     SliceOutput() = delete;
@@ -187,12 +189,13 @@ class GeosGeometrySerde {
           std::string_view(reinterpret_cast<const char*>(&value), sizeof(T)));
     }
 
-    exec::StringWriter<>& stringWriter_;
+    StringWriter& stringWriter_;
   };
 
+  template<typename T>
   static void writeEnvelope(
       const geos::geom::Geometry* geometry,
-      SliceOutput& output) {
+      SliceOutput<T>& output) {
     auto envelope = geometry->getEnvelopeInternal();
     output.writeDouble(envelope->getMinX());
     output.writeDouble(envelope->getMinY());
@@ -200,18 +203,20 @@ class GeosGeometrySerde {
     output.writeDouble(envelope->getMaxY());
   }
 
+  template<typename T>
   static void writeCoordinates(
       const geos::geom::CoordinateSequence* coords,
-      SliceOutput& output) {
+      SliceOutput<T>& output) {
     for (size_t i = 0; i < coords->size(); ++i) {
       output.writeDouble(coords->getX(i));
       output.writeDouble(coords->getY(i));
     }
   }
 
+  template<typename T>
   static void writePoint(
       const geos::geom::Geometry* point,
-      SliceOutput& output) {
+      SliceOutput<T>& output) {
     output.writeByte(static_cast<uint8_t>(GeometrySerializationType::POINT));
     if (!point->isEmpty()) {
       writeCoordinates(point->getCoordinates().get(), output);
@@ -221,9 +226,10 @@ class GeosGeometrySerde {
     }
   }
 
+  template<typename T>
   static void writeMultiPoint(
       const geos::geom::Geometry* geometry,
-      SliceOutput& output) {
+      SliceOutput<T>& output) {
     output.writeByte(
         static_cast<uint8_t>(GeometrySerializationType::MULTI_POINT));
     output.writeInt(static_cast<int32_t>(EsriShapeType::MULTI_POINT));
@@ -232,9 +238,10 @@ class GeosGeometrySerde {
     writeCoordinates(geometry->getCoordinates().get(), output);
   }
 
+  template<typename T>
   static void writePolyline(
       const geos::geom::Geometry* geometry,
-      SliceOutput& output,
+      SliceOutput<T>& output,
       bool multiType) {
     int numParts;
     int numPoints = geometry->getNumPoints();
