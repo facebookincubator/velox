@@ -57,10 +57,11 @@ struct GetJsonObjectFunction {
     if (simdjsonParse(paddedJson).get(jsonDoc)) {
       return false;
     }
-    auto formattedJsonPath = jsonPath_.has_value()
+    const auto formattedJsonPath = jsonPath_.has_value()
         ? jsonPath_.value()
         : removeSingleQuotes(jsonPath);
     try {
+      // Can return error result or throw exception possibly.
       auto rawResult = jsonDoc.at_path(formattedJsonPath);
       if (rawResult.error()) {
         return false;
@@ -81,7 +82,7 @@ struct GetJsonObjectFunction {
  private:
   FOLLY_ALWAYS_INLINE bool checkJsonPath(StringView jsonPath) {
     // Spark requires the first char in jsonPath is '$'.
-    if (jsonPath.size() < 1 || jsonPath.data()[0] != '$') {
+    if (jsonPath.empty() || jsonPath.data()[0] != '$') {
       return false;
     }
     return true;
@@ -89,7 +90,8 @@ struct GetJsonObjectFunction {
 
   // Spark's json path requires field name surrounded by single quotes if it is
   // specified in "[]". But simdjson lib requires not. This method just removes
-  // such single quotes, e.g., converts "['a']['b']" to "[a][b]".
+  // such single quotes to adapt to simdjson lib, e.g., converts "['a']['b']" to
+  // "[a][b]".
   std::string removeSingleQuotes(StringView jsonPath) {
     // Skip the initial "$".
     std::string result(jsonPath.data() + 1, jsonPath.size() - 1);
@@ -100,6 +102,7 @@ struct GetJsonObjectFunction {
         break;
       }
       pairEnd = result.find("]", pairBegin);
+      // If expected pattern, like ['a'], is not found.
       if (pairEnd == std::string::npos || result[pairEnd - 1] != '\'') {
         return "-1";
       }
@@ -112,8 +115,7 @@ struct GetJsonObjectFunction {
 
   // Extracts a string representation from a simdjson result. Handles various
   // JSON types including numbers, booleans, strings, objects, and arrays.
-  // Returns true if the conversion wes successful, false
-  // otherwise.
+  // Returns true if the conversion is successful. Otherwise, returns false.
   bool extractStringResult(
       simdjson::simdjson_result<simdjson::ondemand::value> rawResult,
       out_type<Varchar>& result) {
@@ -198,8 +200,7 @@ struct GetJsonObjectFunction {
     if (endingChar == ',' || endingChar == '}' || endingChar == ']') {
       return true;
     }
-    // These chars can be prior to a valid ending char.
-    // See reference:
+    // These chars can be prior to a valid ending char. See reference:
     // https://github.com/simdjson/simdjson/blob/v3.9.0/dependencies/jsoncppdist/jsoncpp.cpp
     if (endingChar == ' ' || endingChar == '\r' || endingChar == '\n' ||
         endingChar == '\t') {
