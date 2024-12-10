@@ -18,13 +18,14 @@ package velox.utils;
 
 
 import org.junit.jupiter.api.Test;
+import velox.jni.VeloxNative;
 
 public class NativeLibUtilTest {
 
 
   @Test
   public void testLoadLib() {
-    NativeLibUtil.loadLibrary("libjni.dylib");
+    NativeLibUtil.loadLibrary("libjni" + VeloxNative.getFileExtension());
   }
 
 }

@@ -167,7 +167,7 @@ jstring NativePlanBuilder::nativeBuilder(JNIEnv* env, jobject obj) {
   const std::shared_ptr<PlanBuilder> builder = as<PlanBuilder>(obj);
   return env->NewStringUTF(
       utils::JsonUtils::toSortedJson(builder->planNode()->serialize()).c_str());
-  JNI_METHOD_END(env->NewStringUTF("ERROR"))
+  JNI_METHOD_END(nullptr)
 }
 
 void NativePlanBuilder::nativeTestString(
