@@ -54,7 +54,7 @@ std::string formatDecimal(uint8_t scale, int128_t unscaledValue) {
 }
 } // namespace
 
-std::string DecimalUtil::toString(int128_t value, const TypePtr& type) {
+std::string DecimalUtil::toString(const int128_t& value, const TypePtr& type) {
   auto [precision, scale] = getDecimalPrecisionScale(*type);
   return formatDecimal(scale, value);
 }
@@ -74,7 +74,7 @@ int32_t DecimalUtil::getByteArrayLength(int128_t value) {
   return 1 + nbits / 8;
 }
 
-int32_t DecimalUtil::toByteArray(int128_t value, char* out) {
+int32_t DecimalUtil::toByteArray(const int128_t& value, char* out) {
   int32_t length = getByteArrayLength(value);
   auto lowBig = folly::Endian::big<int64_t>(value);
   uint8_t* lowAddr = reinterpret_cast<uint8_t*>(&lowBig);
@@ -91,7 +91,7 @@ int32_t DecimalUtil::toByteArray(int128_t value, char* out) {
 
 void DecimalUtil::computeAverage(
     int128_t& avg,
-    int128_t sum,
+    const int128_t& sum,
     int64_t count,
     int64_t overflow) {
   if (overflow == 0) {

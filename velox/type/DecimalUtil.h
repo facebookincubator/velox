@@ -86,7 +86,7 @@ class DecimalUtil {
   static constexpr uint64_t kInt64Mask = ~(static_cast<uint64_t>(1) << 63);
   static constexpr uint128_t kInt128Mask = (static_cast<uint128_t>(1) << 127);
 
-  FOLLY_ALWAYS_INLINE static void valueInRange(int128_t value) {
+  FOLLY_ALWAYS_INLINE static void valueInRange(const int128_t& value) {
     VELOX_USER_CHECK(
         (value >= kLongDecimalMin && value <= kLongDecimalMax),
         "Decimal overflow. Value '{}' is not in the range of Decimal Type",
@@ -96,13 +96,13 @@ class DecimalUtil {
   // Returns true if the precision can represent the value.
   template <typename T>
   FOLLY_ALWAYS_INLINE static bool valueInPrecisionRange(
-      T value,
+      const T& value,
       uint8_t precision) {
     return value < kPowersOfTen[precision] && value > -kPowersOfTen[precision];
   }
 
   /// Helper function to convert a decimal value to string.
-  static std::string toString(int128_t value, const TypePtr& type);
+  static std::string toString(const int128_t& value, const TypePtr& type);
 
   template <typename T>
   inline static void fillDecimals(
@@ -151,7 +151,7 @@ class DecimalUtil {
 
   template <typename TInput, typename TOutput>
   inline static Status rescaleWithRoundUp(
-      TInput inputValue,
+      const TInput& inputValue,
       int fromPrecision,
       int fromScale,
       int toPrecision,
@@ -190,7 +190,7 @@ class DecimalUtil {
 
   template <typename TInput, typename TOutput>
   inline static std::optional<TOutput>
-  rescaleInt(TInput inputValue, int toPrecision, int toScale) {
+  rescaleInt(const TInput& inputValue, int toPrecision, int toScale) {
     int128_t rescaledValue = static_cast<int128_t>(inputValue);
     bool isOverflow = __builtin_mul_overflow(
         rescaledValue, DecimalUtil::kPowersOfTen[toScale], &rescaledValue);
@@ -212,7 +212,7 @@ class DecimalUtil {
   /// @tparam TOutput Either int64_t or int128_t.
   template <typename TInput, typename TOutput>
   inline static Status rescaleFloatingPoint(
-      TInput value,
+      const TInput& value,
       int precision,
       int scale,
       TOutput& output) {
@@ -280,7 +280,7 @@ class DecimalUtil {
   template <typename R, typename A, typename B>
   inline static R divideWithRoundUp(
       R& r,
-      A a,
+      const A& a,
       B b,
       bool noRoundUp,
       uint8_t aRescale,
@@ -380,8 +380,8 @@ class DecimalUtil {
    */
   inline static int64_t addUnsignedValues(
       int128_t& sum,
-      int128_t lhs,
-      int128_t rhs,
+      const int128_t& lhs,
+      const int128_t& rhs,
       bool isResultNegative) {
     __uint128_t unsignedSum = (__uint128_t)lhs + (__uint128_t)rhs;
     // Ignore overflow value.
@@ -403,7 +403,7 @@ class DecimalUtil {
   /// overflow based on the signs of the inputs. The caller must sum up overflow
   /// values and call adjustSumForOverflow after processing all inputs.
   inline static int64_t
-  addWithOverflow(int128_t& result, int128_t lhs, int128_t rhs) {
+  addWithOverflow(int128_t& result, const int128_t& lhs, const int128_t& rhs) {
     bool isLhsNegative = lhs < 0;
     bool isRhsNegative = rhs < 0;
     int64_t overflow = 0;
@@ -436,7 +436,7 @@ class DecimalUtil {
   /// If an overflow indeed occurs and the result cannot be adjusted,
   /// it will return std::nullopt.
   inline static std::optional<int128_t> adjustSumForOverflow(
-      int128_t sum,
+      const int128_t& sum,
       int64_t overflow) {
     // Value is valid if the conditions below are true.
     if ((overflow == 1 && sum < 0) || (overflow == -1 && sum > 0)) {
@@ -452,8 +452,11 @@ class DecimalUtil {
   }
 
   /// avg = (sum + overflow * kOverflowMultiplier) / count
-  static void
-  computeAverage(int128_t& avg, int128_t sum, int64_t count, int64_t overflow);
+  static void computeAverage(
+      int128_t& avg,
+      const int128_t& sum,
+      int64_t count,
+      int64_t overflow);
 
   /// Origins from java side BigInteger#bitLength.
   ///
@@ -477,14 +480,14 @@ class DecimalUtil {
   /// at least one sign bit, which is (ceil((this.bitLength() + 1)/8)).
   ///
   /// @return The length of out.
-  static int32_t toByteArray(int128_t value, char* out);
+  static int32_t toByteArray(const int128_t& value, char* out);
 
   /// Reverse byte order of an int128_t if native byte-order is little endian.
   /// If native byte-order is big endian, the value will be unchanged. This
   /// is similar to folly::Endian::big(), which does not support int128_t.
   ///
   /// \return A value with reversed byte-order for little endian platforms.
-  inline static int128_t bigEndian(int128_t value) {
+  inline static int128_t bigEndian(const int128_t& value) {
     if (folly::kIsLittleEndian) {
       auto upper = folly::Endian::big(HugeInt::upper(value));
       auto lower = folly::Endian::big(HugeInt::lower(value));
