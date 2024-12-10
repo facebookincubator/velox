@@ -15,8 +15,8 @@
  */
 #pragma once
 
-#include "velox/functions/prestosql/types/IPAddressType.h"
-#include "velox/functions/prestosql/types/IPPrefixType.h"
+#include "velox/functions/prestosql/types/headers/IPAddressType.h"
+#include "velox/functions/prestosql/types/headers/IPPrefixType.h"
 
 namespace facebook::velox::functions {
 

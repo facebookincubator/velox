@@ -16,7 +16,7 @@
 #include <folly/small_vector.h>
 
 #include "velox/expression/CastExpr.h"
-#include "velox/functions/prestosql/types/IPPrefixType.h"
+#include "velox/functions/prestosql/types/headers/IPPrefixType.h"
 
 namespace facebook::velox {
 

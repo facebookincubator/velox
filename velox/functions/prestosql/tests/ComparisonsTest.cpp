@@ -19,9 +19,9 @@
 #include "velox/functions/Udf.h"
 #include "velox/functions/lib/RegistrationHelpers.h"
 #include "velox/functions/prestosql/tests/utils/FunctionBaseTest.h"
-#include "velox/functions/prestosql/types/IPAddressType.h"
-#include "velox/functions/prestosql/types/IPPrefixType.h"
 #include "velox/functions/prestosql/types/TimestampWithTimeZoneType.h"
+#include "velox/functions/prestosql/types/headers/IPAddressType.h"
+#include "velox/functions/prestosql/types/headers/IPPrefixType.h"
 #include "velox/type/tests/utils/CustomTypesForTesting.h"
 #include "velox/type/tz/TimeZoneMap.h"
 

@@ -13,11 +13,13 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
 #include <boost/algorithm/string.hpp>
 #include <boost/algorithm/string/trim.hpp>
 
 #include "velox/common/base/Exceptions.h"
 #include "velox/expression/FunctionSignature.h"
+#include "velox/functions/prestosql/types/headers/IPPrefixType.h"
 #include "velox/type/Type.h"
 
 namespace facebook::velox::exec {
@@ -120,7 +122,8 @@ void validateBaseTypeAndCollectTypeParams(
 
     if (!isPositiveInteger(typeName) &&
         !tryMapNameToTypeKind(typeName).has_value() &&
-        !isDecimalName(typeName) && !isDateName(typeName)) {
+        !isDecimalName(typeName) && !isDateName(typeName) &&
+        !isIPPrefixName(typeName)) {
       VELOX_USER_CHECK(hasType(typeName), "Type doesn't exist: '{}'", typeName);
     }
 

@@ -18,7 +18,7 @@
 #include <folly/small_vector.h>
 
 #include "velox/common/base/Status.h"
-#include "velox/functions/prestosql/types/IPAddressType.h"
+#include "velox/functions/prestosql/types/headers/IPAddressType.h"
 #include "velox/type/SimpleFunctionApi.h"
 #include "velox/type/Type.h"
 
@@ -137,6 +137,10 @@ class IPPrefixType : public RowType {
 FOLLY_ALWAYS_INLINE bool isIPPrefixType(const TypePtr& type) {
   // Pointer comparison works since this type is a singleton.
   return IPPrefixType::get() == type;
+}
+
+FOLLY_ALWAYS_INLINE bool isIPPrefixName(const std::string& name) {
+  return (name == IPPrefixType::get()->name());
 }
 
 FOLLY_ALWAYS_INLINE std::shared_ptr<const IPPrefixType> IPPREFIX() {
