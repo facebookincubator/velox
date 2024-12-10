@@ -55,7 +55,7 @@ static jint jniVersion = JNI_VERSION_1_8;
 struct SharedPtrHandle {
   static std::atomic<int> global_instance_count;
 
-  std::shared_ptr<void> plan_node;
+  std::shared_ptr<void> sharedPtr;
 
   SharedPtrHandle() {
 #ifdef VELOX_ENABLE_JNI_BINDINGS_REF_DEBUG
@@ -66,7 +66,7 @@ struct SharedPtrHandle {
 
   template <typename T>
   SharedPtrHandle(std::shared_ptr<T> node)
-      : plan_node(std::static_pointer_cast<void>(node)) {
+      : sharedPtr(std::static_pointer_cast<void>(node)) {
 #ifdef VELOX_ENABLE_JNI_BINDINGS_REF_DEBUG
     global_instance_count.fetch_add(1, std::memory_order_relaxed);
     print_instance_count("Constructor with node");
@@ -99,10 +99,10 @@ struct SharedPtrHandle {
 
   template <typename T>
   std::shared_ptr<T> as() const {
-    VELOX_CHECK_NOT_NULL(plan_node, "SharedPtrHandle does not hold an object.");
-    auto casted_ptr = std::static_pointer_cast<T>(plan_node);
-    VELOX_CHECK_NOT_NULL(casted_ptr, "Failed to cast to the requested type.");
-    return casted_ptr;
+    VELOX_CHECK_NOT_NULL(sharedPtr, "SharedPtrHandle does not hold an object.");
+    auto castedPtr = std::dynamic_pointer_cast<T>(sharedPtr);
+    VELOX_CHECK_NOT_NULL(castedPtr, "Failed to cast to the requested type.");
+    return castedPtr;
   }
 
   static void print_instance_count(const char* message) {
