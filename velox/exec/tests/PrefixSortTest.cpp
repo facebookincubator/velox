@@ -324,31 +324,32 @@ TEST_F(PrefixSortTest, checkMaxNormalizedKeySizeForMultipleKeys) {
   // The normalizedKeySize for BIGINT should be 8 + 1.
   std::vector<TypePtr> keyTypes = {BIGINT(), BIGINT()};
   std::vector<CompareFlags> compareFlags = {kAsc, kDesc};
-  std::vector<uint32_t> maxStringLengths = {9, 9};
-  auto sortLayout = PrefixSortLayout::makeSortLayout(
+  std::vector<std::optional<uint32_t>> maxStringLengths = {
+      std::nullopt, std::nullopt};
+  auto sortLayout = PrefixSortLayout::generate(
       keyTypes, compareFlags, 8, 9, maxStringLengths);
   ASSERT_FALSE(sortLayout.hasNormalizedKeys);
 
-  auto sortLayoutOneKey = PrefixSortLayout::makeSortLayout(
+  auto sortLayoutOneKey = PrefixSortLayout::generate(
       keyTypes, compareFlags, 9, 9, maxStringLengths);
   ASSERT_TRUE(sortLayoutOneKey.hasNormalizedKeys);
   ASSERT_TRUE(sortLayoutOneKey.hasNonNormalizedKey);
   ASSERT_EQ(sortLayoutOneKey.prefixOffsets.size(), 1);
   ASSERT_EQ(sortLayoutOneKey.prefixOffsets[0], 0);
 
-  auto sortLayoutOneKey1 = PrefixSortLayout::makeSortLayout(
+  auto sortLayoutOneKey1 = PrefixSortLayout::generate(
       keyTypes, compareFlags, 17, 12, maxStringLengths);
   ASSERT_TRUE(sortLayoutOneKey1.hasNormalizedKeys);
   ASSERT_TRUE(sortLayoutOneKey1.hasNonNormalizedKey);
   ASSERT_EQ(sortLayoutOneKey1.prefixOffsets.size(), 1);
   ASSERT_EQ(sortLayoutOneKey1.prefixOffsets[0], 0);
 
-  auto sortLayoutTwoKeys = PrefixSortLayout::makeSortLayout(
+  auto sortLayoutTwoKeys = PrefixSortLayout::generate(
       keyTypes, compareFlags, 18, 12, maxStringLengths);
   ASSERT_TRUE(sortLayoutTwoKeys.hasNormalizedKeys);
   ASSERT_FALSE(sortLayoutTwoKeys.hasNonNormalizedKey);
   ASSERT_FALSE(
-      sortLayoutTwoKeys.comparisonStartIndex <
+      sortLayoutTwoKeys.nonPrefixSortStartIndex <
       sortLayoutTwoKeys.numNormalizedKeys);
   ASSERT_EQ(sortLayoutTwoKeys.prefixOffsets.size(), 2);
   ASSERT_EQ(sortLayoutTwoKeys.prefixOffsets[0], 0);
@@ -404,24 +405,24 @@ TEST_F(PrefixSortTest, optimizeSortKeysOrder) {
 TEST_F(PrefixSortTest, makeSortLayoutForString) {
   std::vector<TypePtr> keyTypes = {VARCHAR(), BIGINT()};
   std::vector<CompareFlags> compareFlags = {kAsc, kDesc};
-  std::vector<uint32_t> maxStringLengths = {9, 9};
+  std::vector<std::optional<uint32_t>> maxStringLengths = {9, std::nullopt};
 
-  auto sortLayoutOneKey = PrefixSortLayout::makeSortLayout(
+  auto sortLayoutOneKey = PrefixSortLayout::generate(
       keyTypes, compareFlags, 24, 8, maxStringLengths);
   ASSERT_TRUE(sortLayoutOneKey.hasNormalizedKeys);
   ASSERT_TRUE(sortLayoutOneKey.hasNonNormalizedKey);
   ASSERT_TRUE(
-      sortLayoutOneKey.comparisonStartIndex <
+      sortLayoutOneKey.nonPrefixSortStartIndex <
       sortLayoutOneKey.numNormalizedKeys);
   ASSERT_EQ(sortLayoutOneKey.encodeSizes.size(), 1);
   ASSERT_EQ(sortLayoutOneKey.encodeSizes[0], 9);
 
-  auto sortLayoutTwoCompleteKeys = PrefixSortLayout::makeSortLayout(
+  auto sortLayoutTwoCompleteKeys = PrefixSortLayout::generate(
       keyTypes, compareFlags, 26, 9, maxStringLengths);
   ASSERT_TRUE(sortLayoutTwoCompleteKeys.hasNormalizedKeys);
   ASSERT_FALSE(sortLayoutTwoCompleteKeys.hasNonNormalizedKey);
   ASSERT_TRUE(
-      sortLayoutTwoCompleteKeys.comparisonStartIndex ==
+      sortLayoutTwoCompleteKeys.nonPrefixSortStartIndex ==
       sortLayoutTwoCompleteKeys.numNormalizedKeys);
   ASSERT_EQ(sortLayoutTwoCompleteKeys.encodeSizes.size(), 2);
   ASSERT_EQ(sortLayoutTwoCompleteKeys.encodeSizes[0], 10);
@@ -430,12 +431,13 @@ TEST_F(PrefixSortTest, makeSortLayoutForString) {
   // The last key type is VARBINARY, indicating that only partial data is
   // encoded in the prefix.
   std::vector<TypePtr> keyTypes1 = {BIGINT(), VARBINARY()};
-  auto sortLayoutTwoKeys = PrefixSortLayout::makeSortLayout(
+  maxStringLengths = {std::nullopt, 9};
+  auto sortLayoutTwoKeys = PrefixSortLayout::generate(
       keyTypes1, compareFlags, 26, 8, maxStringLengths);
   ASSERT_TRUE(sortLayoutTwoKeys.hasNormalizedKeys);
   ASSERT_FALSE(sortLayoutTwoKeys.hasNonNormalizedKey);
   ASSERT_TRUE(
-      sortLayoutTwoKeys.comparisonStartIndex <
+      sortLayoutTwoKeys.nonPrefixSortStartIndex <
       sortLayoutTwoKeys.numNormalizedKeys);
   ASSERT_EQ(sortLayoutTwoKeys.encodeSizes.size(), 2);
   ASSERT_EQ(sortLayoutTwoKeys.encodeSizes[0], 9);

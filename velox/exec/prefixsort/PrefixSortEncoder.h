@@ -40,64 +40,22 @@ class PrefixSortEncoder {
   ///     do not affect the comparison results at all.
   ///    -If value is not null, the result is set by calling encodeNoNulls.
   template <typename T>
-  FOLLY_ALWAYS_INLINE void encode(std::optional<T> value, char* dest) const {
+  FOLLY_ALWAYS_INLINE void
+  encode(const std::optional<T>& value, char* dest, uint32_t encodeSize) const {
     if (value.has_value()) {
       dest[0] = nullsFirst_ ? 1 : 0;
-      encodeNoNulls(value.value(), dest + 1);
+      encodeNoNulls(value.value(), dest + 1, encodeSize - 1);
     } else {
       dest[0] = nullsFirst_ ? 0 : 1;
-      simd::memset(dest + 1, 0, sizeof(T));
-    }
-  }
-
-  /// Encode String type.
-  /// The string prefix is formatted as 'null byte + string content + padding
-  /// zeros'. If `!ascending_`, the bits for both the content and padding zeros
-  /// need to be inverted.
-  FOLLY_ALWAYS_INLINE void encode(
-      const std::optional<StringView>& value,
-      char* dest,
-      uint32_t encodeSize) const {
-    auto* destDataPtr = dest + 1;
-    const auto stringPrefixSize = encodeSize - 1;
-    if (value.has_value()) {
-      dest[0] = nullsFirst_ ? 1 : 0;
-      auto data = value.value();
-      const uint32_t copySize =
-          std::min<uint32_t>(data.size(), stringPrefixSize);
-      if (data.isInline() ||
-          reinterpret_cast<const HashStringAllocator::Header*>(data.data())[-1]
-                  .size() >= data.size()) {
-        // The string is inline or all in one piece out of line.
-        std::memcpy(destDataPtr, data.data(), copySize);
-      } else {
-        // 'data' is stored in non-contiguous allocation pieces in the row
-        // container, we only read prefix size data out.
-        auto stream = HashStringAllocator::prepareRead(
-            HashStringAllocator::headerOf(data.data()));
-        stream->readBytes(destDataPtr, copySize);
-      }
-
-      if (data.size() < stringPrefixSize) {
-        std::memset(
-            destDataPtr + data.size(), 0, stringPrefixSize - data.size());
-      }
-
-      if (!ascending_) {
-        for (auto i = 1; i < encodeSize; ++i) {
-          dest[i] = ~dest[i];
-        }
-      }
-    } else {
-      dest[0] = nullsFirst_ ? 0 : 1;
-      std::memset(destDataPtr, 0, stringPrefixSize);
+      simd::memset(dest + 1, 0, encodeSize - 1);
     }
   }
 
   /// @tparam T Type of value. Supported type are: uint64_t, int64_t, uint32_t,
   /// int32_t, int16_t, uint16_t, float, double, Timestamp.
   template <typename T>
-  FOLLY_ALWAYS_INLINE void encodeNoNulls(T value, char* dest) const;
+  FOLLY_ALWAYS_INLINE void
+  encodeNoNulls(T value, char* dest, uint32_t encodeSize) const;
 
   bool isAscending() const {
     return ascending_;
@@ -111,7 +69,7 @@ class PrefixSortEncoder {
   ///         For not supported types, returns 'std::nullopt'.
   FOLLY_ALWAYS_INLINE static std::optional<uint32_t> encodedSize(
       TypeKind typeKind,
-      uint32_t stringPrefixLength) {
+      std::optional<uint32_t> stringPrefixLength) {
     // NOTE: one byte is reserved for nullable comparison.
     switch ((typeKind)) {
       case ::facebook::velox::TypeKind::SMALLINT: {
@@ -138,7 +96,14 @@ class PrefixSortEncoder {
       case ::facebook::velox::TypeKind::VARBINARY:
         [[fallthrough]];
       case ::facebook::velox::TypeKind::VARCHAR: {
-        return 1 + stringPrefixLength;
+        if (stringPrefixLength.has_value()) {
+          return 1 + stringPrefixLength.value();
+        } else {
+          // Return a big value to ensure VARCHAR columns are
+          // processed after all other supported types and before unsupported
+          // types.
+          return 256;
+        }
       }
       default:
         return std::nullopt;
@@ -161,7 +126,8 @@ class PrefixSortEncoder {
 template <>
 FOLLY_ALWAYS_INLINE void PrefixSortEncoder::encodeNoNulls(
     uint32_t value,
-    char* dest) const {
+    char* dest,
+    uint32_t /*encodeSize*/) const {
   auto& v = *reinterpret_cast<uint32_t*>(dest);
   v = __builtin_bswap32(value);
   if (!ascending_) {
@@ -178,15 +144,17 @@ FOLLY_ALWAYS_INLINE void PrefixSortEncoder::encodeNoNulls(
 template <>
 FOLLY_ALWAYS_INLINE void PrefixSortEncoder::encodeNoNulls(
     int32_t value,
-    char* dest) const {
-  encodeNoNulls((uint32_t)(value ^ (1u << 31)), dest);
+    char* dest,
+    uint32_t encodeSize) const {
+  encodeNoNulls((uint32_t)(value ^ (1u << 31)), dest, encodeSize);
 }
 
 /// Logic is as same as int32_t.
 template <>
 FOLLY_ALWAYS_INLINE void PrefixSortEncoder::encodeNoNulls(
     uint64_t value,
-    char* dest) const {
+    char* dest,
+    uint32_t /*encodeSize*/) const {
   auto& v = *reinterpret_cast<uint64_t*>(dest);
   v = __builtin_bswap64(value);
   if (!ascending_) {
@@ -197,15 +165,17 @@ FOLLY_ALWAYS_INLINE void PrefixSortEncoder::encodeNoNulls(
 template <>
 FOLLY_ALWAYS_INLINE void PrefixSortEncoder::encodeNoNulls(
     int64_t value,
-    char* dest) const {
-  encodeNoNulls((uint64_t)(value ^ (1ull << 63)), dest);
+    char* dest,
+    uint32_t encodeSize) const {
+  encodeNoNulls((uint64_t)(value ^ (1ull << 63)), dest, encodeSize);
 }
 
 /// Logic is as same as int32_t.
 template <>
 FOLLY_ALWAYS_INLINE void PrefixSortEncoder::encodeNoNulls(
     uint16_t value,
-    char* dest) const {
+    char* dest,
+    uint32_t /*encodeSize*/) const {
   auto& v = *reinterpret_cast<uint16_t*>(dest);
   v = __builtin_bswap16(value);
   if (!ascending_) {
@@ -216,16 +186,19 @@ FOLLY_ALWAYS_INLINE void PrefixSortEncoder::encodeNoNulls(
 template <>
 FOLLY_ALWAYS_INLINE void PrefixSortEncoder::encodeNoNulls(
     int16_t value,
-    char* dest) const {
-  encodeNoNulls(static_cast<uint16_t>(value ^ (1u << 15)), dest);
+    char* dest,
+    uint32_t encodeSize) const {
+  encodeNoNulls(static_cast<uint16_t>(value ^ (1u << 15)), dest, encodeSize);
 }
 
 template <>
 FOLLY_ALWAYS_INLINE void PrefixSortEncoder::encodeNoNulls(
     int128_t value,
-    char* dest) const {
-  encodeNoNulls<int64_t>(HugeInt::upper(value), dest);
-  encodeNoNulls<uint64_t>(HugeInt::lower(value), dest + sizeof(int64_t));
+    char* dest,
+    uint32_t encodeSize) const {
+  encodeNoNulls<int64_t>(HugeInt::upper(value), dest, encodeSize);
+  encodeNoNulls<uint64_t>(
+      HugeInt::lower(value), dest + sizeof(int64_t), encodeSize);
 }
 
 namespace detail {
@@ -288,15 +261,17 @@ static FOLLY_ALWAYS_INLINE uint32_t encodeFloat(float value) {
 template <>
 FOLLY_ALWAYS_INLINE void PrefixSortEncoder::encodeNoNulls(
     double value,
-    char* dest) const {
-  encodeNoNulls(detail::encodeDouble(value), dest);
+    char* dest,
+    uint32_t encodeSize) const {
+  encodeNoNulls(detail::encodeDouble(value), dest, encodeSize);
 }
 
 template <>
 FOLLY_ALWAYS_INLINE void PrefixSortEncoder::encodeNoNulls(
     float value,
-    char* dest) const {
-  encodeNoNulls(detail::encodeFloat(value), dest);
+    char* dest,
+    uint32_t encodeSize) const {
+  encodeNoNulls(detail::encodeFloat(value), dest, encodeSize);
 }
 
 /// When comparing Timestamp, first compare seconds and then compare nanos, so
@@ -304,16 +279,43 @@ FOLLY_ALWAYS_INLINE void PrefixSortEncoder::encodeNoNulls(
 template <>
 FOLLY_ALWAYS_INLINE void PrefixSortEncoder::encodeNoNulls(
     Timestamp value,
-    char* dest) const {
-  encodeNoNulls(value.getSeconds(), dest);
-  encodeNoNulls(value.getNanos(), dest + 8);
+    char* dest,
+    uint32_t encodeSize) const {
+  encodeNoNulls(value.getSeconds(), dest, encodeSize);
+  encodeNoNulls(value.getNanos(), dest + 8, encodeSize);
 }
 
+/// Encode String type.
+/// The string prefix is formatted as 'null byte + string content + padding
+/// zeros'. If `!ascending_`, the bits for both the content and padding zeros
+/// need to be inverted.
 template <>
 FOLLY_ALWAYS_INLINE void PrefixSortEncoder::encodeNoNulls(
     StringView value,
-    char* dest) const {
-  VELOX_UNREACHABLE();
+    char* dest,
+    uint32_t encodeSize) const {
+  const uint32_t copySize = std::min<uint32_t>(value.size(), encodeSize);
+  if (value.isInline() ||
+      HashStringAllocator::headerOf(value.data())->size() >= value.size()) {
+    // The string is inline or all in one piece out of line.
+    std::memcpy(dest, value.data(), copySize);
+  } else {
+    // 'data' is stored in non-contiguous allocation pieces in the row
+    // container, we only read prefix size data out.
+    auto stream = HashStringAllocator::prepareRead(
+        HashStringAllocator::headerOf(value.data()));
+    stream->readBytes(dest, copySize);
+  }
+
+  if (value.size() < encodeSize) {
+    std::memset(dest + value.size(), 0, encodeSize - value.size());
+  }
+
+  if (!ascending_) {
+    for (auto i = 0; i < encodeSize; ++i) {
+      dest[i] = ~dest[i];
+    }
+  }
 }
 
 } // namespace facebook::velox::exec::prefixsort

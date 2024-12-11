@@ -39,15 +39,10 @@ FOLLY_ALWAYS_INLINE void encodeRowColumn(
   } else {
     value = *(reinterpret_cast<T*>(row + rowColumn.offset()));
   }
-  if constexpr (std::is_same_v<T, StringView>) {
-    prefixSortLayout.encoders[index].encode(
-        value,
-        prefixBuffer + prefixSortLayout.prefixOffsets[index],
-        prefixSortLayout.encodeSizes[index]);
-  } else {
-    prefixSortLayout.encoders[index].encode(
-        value, prefixBuffer + prefixSortLayout.prefixOffsets[index]);
-  }
+  prefixSortLayout.encoders[index].encode(
+      value,
+      prefixBuffer + prefixSortLayout.prefixOffsets[index],
+      prefixSortLayout.encodeSizes[index]);
 }
 
 FOLLY_ALWAYS_INLINE void extractRowColumnToPrefix(
@@ -141,12 +136,12 @@ compareByWord(uint64_t* left, uint64_t* right, int32_t bytes) {
 } // namespace
 
 // static.
-PrefixSortLayout PrefixSortLayout::makeSortLayout(
+PrefixSortLayout PrefixSortLayout::generate(
     const std::vector<TypePtr>& types,
     const std::vector<CompareFlags>& compareFlags,
     uint32_t maxNormalizedKeySize,
     uint32_t maxStringPrefixLength,
-    const std::vector<uint32_t>& maxStringLengths) {
+    const std::vector<std::optional<uint32_t>>& maxStringLengths) {
   const uint32_t numKeys = types.size();
   std::vector<uint32_t> prefixOffsets;
   prefixOffsets.reserve(numKeys);
@@ -161,10 +156,13 @@ PrefixSortLayout PrefixSortLayout::makeSortLayout(
   uint32_t normalizedKeySize{0};
   uint32_t numNormalizedKeys{0};
 
-  bool lastKeyInPrefixIsPartial{false};
+  bool lastPrefixKeyPartial{false};
   for (auto i = 0; i < numKeys; ++i) {
     const std::optional<uint32_t> encodedSize = PrefixSortEncoder::encodedSize(
-        types[i]->kind(), std::min(maxStringLengths[i], maxStringPrefixLength));
+        types[i]->kind(),
+        maxStringLengths[i].has_value()
+            ? std::min(maxStringLengths[i].value(), maxStringPrefixLength)
+            : maxStringPrefixLength);
     if (!encodedSize.has_value() ||
         normalizedKeySize + encodedSize.value() > maxNormalizedKeySize) {
       break;
@@ -176,8 +174,9 @@ PrefixSortLayout PrefixSortLayout::makeSortLayout(
     ++numNormalizedKeys;
     if ((types[i]->kind() == TypeKind::VARCHAR ||
          types[i]->kind() == TypeKind::VARBINARY) &&
-        maxStringPrefixLength < maxStringLengths[i]) {
-      lastKeyInPrefixIsPartial = true;
+        (!maxStringLengths[i].has_value() ||
+         maxStringPrefixLength < maxStringLengths[i].value())) {
+      lastPrefixKeyPartial = true;
       break;
     }
   }
@@ -193,7 +192,8 @@ PrefixSortLayout PrefixSortLayout::makeSortLayout(
       compareFlags,
       numNormalizedKeys != 0,
       numNormalizedKeys < numKeys,
-      lastKeyInPrefixIsPartial ? numNormalizedKeys - 1 : numNormalizedKeys,
+      /* nonPrefixSortStartIndex */
+      lastPrefixKeyPartial ? numNormalizedKeys - 1 : numNormalizedKeys,
       std::move(prefixOffsets),
       std::move(encodeSizes),
       std::move(encoders),
@@ -207,10 +207,8 @@ void PrefixSortLayout::optimizeSortKeysOrder(
   std::vector<std::optional<uint32_t>> encodedKeySizes(
       rowType->size(), std::nullopt);
   for (const auto& projection : keyColumnProjections) {
-    // Set stringPrefixLength to UINT_MAX - 1 to ensure VARCHAR columns are
-    // processed after all other supported types.
     encodedKeySizes[projection.inputChannel] = PrefixSortEncoder::encodedSize(
-        rowType->childAt(projection.inputChannel)->kind(), UINT_MAX - 1);
+        rowType->childAt(projection.inputChannel)->kind(), std::nullopt);
   }
 
   std::sort(
@@ -254,7 +252,7 @@ int PrefixSort::comparePartNormalizedKeys(char* left, char* right) {
   // If prefixes are equal, compare the remaining sort keys with rowContainer.
   char* leftRow = getRowAddrFromPrefixBuffer(left);
   char* rightRow = getRowAddrFromPrefixBuffer(right);
-  for (auto i = sortLayout_.comparisonStartIndex; i < sortLayout_.numKeys;
+  for (auto i = sortLayout_.nonPrefixSortStartIndex; i < sortLayout_.numKeys;
        ++i) {
     result = rowContainer_->compare(
         leftRow, rightRow, i, sortLayout_.compareFlags[i]);
@@ -379,7 +377,7 @@ void PrefixSort::sortInternal(
               sortLayout_.numNormalizedKeys, RuntimeCounter::Unit::kNone));
     }
     if (sortLayout_.hasNonNormalizedKey ||
-        sortLayout_.comparisonStartIndex < sortLayout_.numNormalizedKeys) {
+        sortLayout_.nonPrefixSortStartIndex < sortLayout_.numNormalizedKeys) {
       sortRunner.quickSort(
           prefixBufferStart, prefixBufferEnd, [&](char* lhs, char* rhs) {
             return comparePartNormalizedKeys(lhs, rhs);

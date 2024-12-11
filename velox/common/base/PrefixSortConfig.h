@@ -42,6 +42,6 @@ struct PrefixSortConfig {
 
   /// Maximum number of bytes to be stored in prefix-sort buffer for a string
   /// column.
-  uint32_t maxStringPrefixLength{12};
+  uint32_t maxStringPrefixLength{16};
 };
 } // namespace facebook::velox::common

@@ -15,6 +15,8 @@
  */
 #pragma once
 
+#include <optional>
+
 #include "velox/common/base/PrefixSortConfig.h"
 #include "velox/exec/Operator.h"
 #include "velox/exec/RowContainer.h"
@@ -56,7 +58,7 @@ struct PrefixSortLayout {
   /// Indicates the starting index for key comparison.
   /// If the last key is only partially encoded in the prefix, start from
   /// numNormalizedKeys - 1. Otherwise, start from numNormalizedKeys.
-  const uint32_t comparisonStartIndex;
+  const uint32_t nonPrefixSortStartIndex;
 
   /// Offsets of normalized keys, used to find write locations when
   /// extracting columns
@@ -72,12 +74,12 @@ struct PrefixSortLayout {
   /// for fast long compare.
   const int32_t numPaddingBytes;
 
-  static PrefixSortLayout makeSortLayout(
+  static PrefixSortLayout generate(
       const std::vector<TypePtr>& types,
       const std::vector<CompareFlags>& compareFlags,
       uint32_t maxNormalizedKeySize,
       uint32_t maxStringPrefixLength,
-      const std::vector<uint32_t>& maxStringLengths);
+      const std::vector<std::optional<uint32_t>>& maxStringLengths);
 
   /// Optimizes the order of sort key columns to maximize the number of prefix
   /// sort keys for acceleration. This only applies for use case which doesn't
@@ -172,20 +174,21 @@ class PrefixSort {
       const velox::common::PrefixSortConfig& config) {
     const auto keyTypes = rowContainer->keyTypes();
     VELOX_CHECK_EQ(keyTypes.size(), compareFlags.size());
-    std::vector<uint32_t> maxStringLengths;
+    std::vector<std::optional<uint32_t>> maxStringLengths;
     maxStringLengths.reserve(keyTypes.size());
     for (int i = 0; i < keyTypes.size(); ++i) {
-      auto maxStringLength = UINT_MAX;
+      std::optional<uint32_t> maxStringLength = std::nullopt;
       if (keyTypes[i]->kind() == TypeKind::VARBINARY ||
           keyTypes[i]->kind() == TypeKind::VARCHAR) {
         const auto stats = rowContainer->columnStats(i);
-        maxStringLength = stats.has_value() && stats.value().maxBytes() > 0
-            ? stats.value().maxBytes()
-            : UINT_MAX;
+        if (stats.has_value()) {
+          // zhli ? stats.value().maxBytes() > 0
+          maxStringLength = stats.value().maxBytes();
+        }
       }
       maxStringLengths.emplace_back(maxStringLength);
     }
-    return PrefixSortLayout::makeSortLayout(
+    return PrefixSortLayout::generate(
         keyTypes,
         compareFlags,
         config.maxNormalizedKeyBytes,

@@ -380,8 +380,8 @@ class QueryConfig {
 
   /// Maximum number of bytes to be stored in prefix-sort buffer for a string
   /// key.
-  static constexpr const char* kPrefixSortMaxStringPrefixLength =
-      "prefixsort_max_string_prefix_length";
+  static constexpr const char* kPrefixSortMaxStringLength =
+      "prefixsort_max_string_length";
 
   /// Enable query tracing flag.
   static constexpr const char* kQueryTraceEnabled = "query_trace_enabled";
@@ -849,8 +849,8 @@ class QueryConfig {
     return get<uint32_t>(kPrefixSortMinRows, 128);
   }
 
-  uint32_t prefixSortMaxStringPrefixLength() const {
-    return get<uint32_t>(kPrefixSortMaxStringPrefixLength, 12);
+  uint32_t prefixSortMaxStringLength() const {
+    return get<uint32_t>(kPrefixSortMaxStringLength, 16);
   }
 
   double scaleWriterRebalanceMaxMemoryUsageRatio() const {
