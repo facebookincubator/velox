@@ -27,6 +27,7 @@
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/common/compression/Compression.h"
 #include "velox/common/compression/Lz4Compression.h"
+#include "velox/common/compression/ZlibCompression.h"
 
 namespace facebook::velox::common {
 
@@ -61,6 +62,23 @@ std::vector<TestParams> generateLz4TestParams() {
   }
   // Add default CodecOptions.
   params.emplace_back(CompressionKind_LZ4);
+  return params;
+}
+
+std::vector<TestParams> generateZlibTestParams() {
+  std::vector<TestParams> params;
+  for (auto format :
+       {ZlibFormat::kZlib, ZlibFormat::kDeflate, ZlibFormat::kGzip}) {
+    for (auto windowBits = kZlibMinWindowBits; windowBits <= kZlibMaxWindowBits;
+         ++windowBits) {
+      params.emplace_back(
+          CompressionKind::CompressionKind_ZLIB,
+          std::make_shared<ZlibCodecOptions>(
+              format, kDefaultCompressionLevel, windowBits));
+    }
+  }
+  // Add default CodecOptions.
+  params.emplace_back(CompressionKind_ZLIB);
   return params;
 }
 
@@ -512,6 +530,11 @@ INSTANTIATE_TEST_SUITE_P(
     CodecTest,
     ::testing::Values(TestParams{CompressionKind::CompressionKind_ZSTD}));
 
+INSTANTIATE_TEST_SUITE_P(
+    TestZlib,
+    CodecTest,
+    ::testing::ValuesIn(generateZlibTestParams()));
+
 TEST(CodecLZ4HadoopTest, compatibility) {
   // LZ4 Hadoop codec should be able to read back LZ4 raw blocks.
   auto c1 = Codec::create(
@@ -538,5 +561,21 @@ TEST(CodecTestInvalid, invalidKind) {
       fmt::format(
           "Support for codec '{}' is either not built or not implemented.",
           compressionKindToString(kind)));
+}
+
+TEST(CodecTestInvalid, invalidZlibWindowBit) {
+  for (auto invalidWindowBits :
+       {kZlibMinWindowBits - 1, kZlibMaxWindowBits + 1}) {
+    VELOX_ASSERT_ERROR_STATUS(
+        Codec::create(
+            CompressionKind_ZLIB,
+            ZlibCodecOptions{
+                ZlibFormat::kDeflate,
+                kDefaultCompressionLevel,
+                invalidWindowBits})
+            .error(),
+        StatusCode::kUserError,
+        "gzip window bits should be between 9 and 15");
+  }
 }
 } // namespace facebook::velox::common

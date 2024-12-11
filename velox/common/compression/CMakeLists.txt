@@ -36,3 +36,10 @@ if(VELOX_ENABLE_COMPRESSION_ZSTD)
   velox_compile_definitions(velox_common_compression
                             PRIVATE VELOX_ENABLE_COMPRESSION_ZSTD)
 endif()
+
+if(VELOX_ENABLE_COMPRESSION_ZLIB)
+  velox_sources(velox_common_compression PRIVATE ZlibCompression.cpp)
+  velox_link_libraries(velox_common_compression PUBLIC ZLIB::ZLIB)
+  velox_compile_definitions(velox_common_compression
+                            PRIVATE VELOX_ENABLE_COMPRESSION_ZLIB)
+endif()
