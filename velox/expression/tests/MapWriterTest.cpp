@@ -199,7 +199,7 @@ TEST_F(MapWriterTest, writeThenCommitNullNestedInRow) {
 
   {
     vectorWriter.setOffset(1);
-    auto& mapWriter = vectorWriter.current().get_writer_at<0>();
+    vectorWriter.current().get_writer_at<0>();
     vectorWriter.commit();
   }
   vectorWriter.finish();
