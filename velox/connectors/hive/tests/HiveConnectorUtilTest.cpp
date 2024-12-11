@@ -19,13 +19,9 @@
 #include "velox/connectors/hive/HiveConfig.h"
 #include "velox/connectors/hive/HiveConnectorSplit.h"
 #include "velox/connectors/hive/TableHandle.h"
-#include "velox/exec/tests/utils/HiveConnectorTestBase.h"
-
 #include "velox/dwio/dwrf/writer/Writer.h"
-
-#ifdef VELOX_ENABLE_PARQUET
 #include "velox/dwio/parquet/writer/Writer.h"
-#endif
+#include "velox/exec/tests/utils/HiveConnectorTestBase.h"
 
 namespace facebook::velox::connector {
 
@@ -403,7 +399,6 @@ TEST_F(
       "2");
 }
 
-#ifdef VELOX_ENABLE_PARQUET
 TEST_F(HiveConnectorUtilTest, updateWriterOptionsFromHiveConfigParquet) {
   auto fileFormat = dwio::common::FileFormat::PARQUET;
   std::unordered_map<std::string, std::string> connectorConfig = {
@@ -427,6 +422,5 @@ TEST_F(HiveConnectorUtilTest, updateWriterOptionsFromHiveConfigParquet) {
       parquetOptions->parquetWriteTimestampUnit.value(), TimestampUnit::kMilli);
   ASSERT_EQ(parquetOptions->parquetWriteTimestampTimeZone.value(), "UTC");
 }
-#endif
 
 } // namespace facebook::velox::connector

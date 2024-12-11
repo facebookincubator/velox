@@ -26,11 +26,7 @@
 #include "velox/dwio/common/Reader.h"
 #include "velox/dwio/dwrf/common/Config.h"
 #include "velox/dwio/dwrf/writer/Writer.h"
-
-#ifdef VELOX_ENABLE_PARQUET
 #include "velox/dwio/parquet/writer/Writer.h" // @manual
-#endif
-
 #include "velox/expression/Expr.h"
 #include "velox/expression/ExprToSubfieldFilter.h"
 #include "velox/type/TimestampConversion.h"
@@ -905,7 +901,6 @@ core::TypedExprPtr extractFiltersFromRemainingFilter(
 
 namespace {
 
-#ifdef VELOX_ENABLE_PARQUET
 std::optional<TimestampUnit> getTimestampUnit(
     const config::ConfigBase& config,
     const char* configKey) {
@@ -966,7 +961,6 @@ void updateParquetWriterOptions(
 
   writerOptions = std::move(parquetWriterOptions);
 }
-#endif
 
 void updateDWRFWriterOptions(
     const std::shared_ptr<const HiveConfig>& hiveConfig,
@@ -1038,9 +1032,7 @@ void updateWriterOptionsFromHiveConfig(
       updateDWRFWriterOptions(hiveConfig, sessionProperties, writerOptions);
       break;
     case dwio::common::FileFormat::PARQUET:
-#ifdef VELOX_ENABLE_PARQUET
       updateParquetWriterOptions(hiveConfig, sessionProperties, writerOptions);
-#endif
       break;
     case dwio::common::FileFormat::NIMBLE:
       // No-op for now.

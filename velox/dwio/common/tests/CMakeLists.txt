@@ -97,21 +97,19 @@ if(VELOX_ENABLE_BENCHMARKS)
     Folly::folly
     Folly::follybenchmark)
 
-  if(VELOX_ENABLE_ARROW)
-    add_subdirectory(Lemire/FastPFor)
-    add_executable(velox_dwio_common_bitpack_decoder_benchmark
-                   BitPackDecoderBenchmark.cpp)
+  add_subdirectory(Lemire/FastPFor)
+  add_executable(velox_dwio_common_bitpack_decoder_benchmark
+                 BitPackDecoderBenchmark.cpp)
 
-    target_compile_options(velox_dwio_common_bitpack_decoder_benchmark
-                           PRIVATE -Wno-deprecated-declarations)
+  target_compile_options(velox_dwio_common_bitpack_decoder_benchmark
+                         PRIVATE -Wno-deprecated-declarations)
 
-    target_link_libraries(
-      velox_dwio_common_bitpack_decoder_benchmark
-      velox_dwio_common
-      arrow
-      velox_fastpforlib
-      duckdb_static
-      Folly::folly
-      Folly::follybenchmark)
-  endif()
+  target_link_libraries(
+    velox_dwio_common_bitpack_decoder_benchmark
+    velox_dwio_common
+    arrow
+    velox_fastpforlib
+    duckdb_static
+    Folly::folly
+    Folly::follybenchmark)
 endif()

@@ -13,23 +13,16 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-
-#ifdef VELOX_ENABLE_PARQUET
 #include "velox/dwio/parquet/reader/ParquetReader.h" // @manual
-#endif
 
 namespace facebook::velox::parquet {
 
 void registerParquetReaderFactory() {
-#ifdef VELOX_ENABLE_PARQUET
   dwio::common::registerReaderFactory(std::make_shared<ParquetReaderFactory>());
-#endif
 }
 
 void unregisterParquetReaderFactory() {
-#ifdef VELOX_ENABLE_PARQUET
   dwio::common::unregisterReaderFactory(dwio::common::FileFormat::PARQUET);
-#endif
 }
 
 } // namespace facebook::velox::parquet

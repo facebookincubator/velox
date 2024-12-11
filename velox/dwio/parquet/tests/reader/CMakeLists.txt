@@ -97,18 +97,14 @@ target_link_libraries(
   velox_type_tz
   ${TEST_LINK_LIBS})
 
-if(${VELOX_ENABLE_ARROW})
-
-  add_executable(velox_dwio_parquet_rlebp_decoder_test RleBpDecoderTest.cpp)
-  add_test(
-    NAME velox_dwio_parquet_rlebp_decoder_test
-    COMMAND velox_dwio_parquet_rlebp_decoder_test
-    WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR})
-  target_link_libraries(
-    velox_dwio_parquet_rlebp_decoder_test
-    velox_dwio_native_parquet_reader
-    arrow
-    velox_link_libs
-    ${TEST_LINK_LIBS})
-
-endif()
+add_executable(velox_dwio_parquet_rlebp_decoder_test RleBpDecoderTest.cpp)
+add_test(
+  NAME velox_dwio_parquet_rlebp_decoder_test
+  COMMAND velox_dwio_parquet_rlebp_decoder_test
+  WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR})
+target_link_libraries(
+  velox_dwio_parquet_rlebp_decoder_test
+  velox_dwio_native_parquet_reader
+  arrow
+  velox_link_libs
+  ${TEST_LINK_LIBS})

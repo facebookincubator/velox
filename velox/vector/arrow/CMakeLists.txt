@@ -20,6 +20,6 @@ velox_link_libraries(
   velox_buffer
   velox_exception)
 
-if(VELOX_BUILD_TESTING AND VELOX_ENABLE_ARROW)
+if(VELOX_BUILD_TESTING)
   add_subdirectory(tests)
 endif()

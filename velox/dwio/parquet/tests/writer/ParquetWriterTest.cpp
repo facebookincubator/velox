@@ -203,7 +203,6 @@ TEST_F(ParquetWriterTest, parquetWriteTimestampTimeZoneWithDefault) {
   writer->close();
 };
 
-#ifdef VELOX_ENABLE_PARQUET
 DEBUG_ONLY_TEST_F(ParquetWriterTest, unitFromHiveConfig) {
   SCOPED_TESTVALUE_SET(
       "facebook::velox::parquet::Writer::write",
@@ -232,7 +231,6 @@ DEBUG_ONLY_TEST_F(ParquetWriterTest, unitFromHiveConfig) {
                         .planNode();
   AssertQueryBuilder(plan).copyResults(pool_.get());
 }
-#endif
 
 } // namespace
 

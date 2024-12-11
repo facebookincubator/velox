@@ -136,8 +136,6 @@ option(VELOX_ENABLE_S3 "Build S3 Connector" OFF)
 option(VELOX_ENABLE_GCS "Build GCS Connector" OFF)
 option(VELOX_ENABLE_ABFS "Build Abfs Connector" OFF)
 option(VELOX_ENABLE_HDFS "Build Hdfs Connector" OFF)
-option(VELOX_ENABLE_PARQUET "Enable Parquet support" OFF)
-option(VELOX_ENABLE_ARROW "Enable Arrow support" OFF)
 option(VELOX_ENABLE_REMOTE_FUNCTIONS "Enable remote function support" OFF)
 option(VELOX_ENABLE_CCACHE "Use ccache if installed." ON)
 
@@ -183,7 +181,6 @@ if(${VELOX_BUILD_TESTING})
   set(VELOX_ENABLE_TPCH_CONNECTOR ON)
   set(VELOX_ENABLE_SPARK_FUNCTIONS ON)
   set(VELOX_ENABLE_EXAMPLES ON)
-  set(VELOX_ENABLE_PARQUET ON)
 endif()
 
 if(${VELOX_ENABLE_BENCHMARKS})
@@ -280,14 +277,6 @@ endif()
 if(VELOX_ENABLE_HDFS)
   add_definitions(-DVELOX_ENABLE_HDFS)
   # JVM libhdfs requires arrow dependency.
-  set(VELOX_ENABLE_ARROW ON)
-endif()
-
-if(VELOX_ENABLE_PARQUET)
-  add_definitions(-DVELOX_ENABLE_PARQUET)
-  # Native Parquet reader requires Apache Thrift and Arrow Parquet writer, which
-  # are included in Arrow.
-  set(VELOX_ENABLE_ARROW ON)
 endif()
 
 # make buildPartitionBounds_ a vector int64 instead of int32 to avoid integer
@@ -633,9 +622,9 @@ if("${TREAT_WARNINGS_AS_ERRORS}")
   set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Werror")
 endif()
 
-if(VELOX_ENABLE_ARROW)
-  velox_set_source(Arrow)
-  velox_resolve_dependency(Arrow)
-endif()
+# Native Parquet reader requires Apache Thrift and Arrow Parquet writer, which
+# are included in Arrow.
+velox_set_source(Arrow)
+velox_resolve_dependency(Arrow)
 
 add_subdirectory(velox)

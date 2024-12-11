@@ -74,18 +74,16 @@ target_link_libraries(
   velox_vector_test_lib
   Folly::follybenchmark)
 
-if(${VELOX_ENABLE_PARQUET})
-  add_executable(velox_sort_benchmark RowContainerSortBenchmark.cpp)
+add_executable(velox_sort_benchmark RowContainerSortBenchmark.cpp)
 
-  target_link_libraries(
-    velox_sort_benchmark
-    velox_exec
-    velox_exec_test_lib
-    velox_vector_test_lib
-    Folly::follybenchmark
-    arrow
-    thrift)
-endif()
+target_link_libraries(
+  velox_sort_benchmark
+  velox_exec
+  velox_exec_test_lib
+  velox_vector_test_lib
+  Folly::follybenchmark
+  arrow
+  thrift)
 
 add_executable(velox_prefixsort_benchmark PrefixSortBenchmark.cpp)
 
