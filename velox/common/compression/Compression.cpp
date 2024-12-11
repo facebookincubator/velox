@@ -22,6 +22,9 @@
 #ifdef VELOX_ENABLE_COMPRESSION_ZSTD
 #include "velox/common/compression/ZstdCompression.h"
 #endif
+#ifdef VELOX_ENABLE_COMPRESSION_ZLIB
+#include "velox/common/compression/ZlibCompression.h"
+#endif
 
 #include <folly/Conv.h>
 
@@ -127,6 +130,11 @@ bool Codec::supportsCompressFixedLength(CompressionKind kind) {
     case CompressionKind::CompressionKind_ZSTD:
       return true;
 #endif
+#ifdef VELOX_ENABLE_COMPRESSION_ZLIB
+    case CompressionKind::CompressionKind_GZIP:
+    case CompressionKind::CompressionKind_ZLIB:
+      return true;
+#endif
     default:
       return false;
   }
@@ -166,9 +174,21 @@ Expected<std::unique_ptr<Codec>> Codec::create(
     } break;
 #endif
 #ifdef VELOX_ENABLE_COMPRESSION_ZSTD
-    case CompressionKind::CompressionKind_ZSTD:
+    case CompressionKind_ZSTD:
       codec = makeZstdCodec(compressionLevel);
       break;
+#endif
+#ifdef VELOX_ENABLE_COMPRESSION_ZLIB
+    case CompressionKind_GZIP:
+    case CompressionKind_ZLIB: {
+      if (auto options = dynamic_cast<const ZlibCodecOptions*>(&codecOptions)) {
+        codec = makeZlibCodec(
+            options->format, compressionLevel, options->windowBits);
+      } else {
+        // By default, create Zlib codec with Gzip format.
+        codec = makeZlibCodec(ZlibFormat::kGzip, compressionLevel);
+      }
+    } break;
 #endif
     default:
       break;
@@ -198,6 +218,11 @@ bool Codec::isAvailable(CompressionKind kind) {
 #endif
 #ifdef VELOX_ENABLE_COMPRESSION_ZSTD
     case CompressionKind::CompressionKind_ZSTD:
+      return true;
+#endif
+#ifdef VELOX_ENABLE_COMPRESSION_ZLIB
+    case CompressionKind_GZIP:
+    case CompressionKind_ZLIB:
       return true;
 #endif
     default:
