@@ -33,20 +33,31 @@ class SerializeBenchmark {
     auto data = makeData(rowType);
     suspender.dismiss();
 
+    const auto numRows = data->size();
+    std::vector<size_t> rowSize(numRows);
+    std::vector<size_t> offsets(numRows);
+
     UnsafeRowFast fast(data);
-    auto totalSize = computeTotalSize(fast, rowType, data->size());
+    auto totalSize =
+        computeTotalSize(fast, rowType, data->size(), rowSize, offsets);
     auto buffer = AlignedBuffer::allocate<char>(totalSize, pool());
-    auto serialized = serialize(fast, data->size(), buffer);
-    VELOX_CHECK_EQ(serialized.size(), data->size());
+    auto serialized = serialize(fast, numRows, rowSize, offsets, buffer);
+    VELOX_CHECK_EQ(serialized.size(), numRows);
   }
 
   void deserializeUnsafe(const RowTypePtr& rowType) {
     folly::BenchmarkSuspender suspender;
     auto data = makeData(rowType);
+
+    const auto numRows = data->size();
+    std::vector<size_t> rowSize(numRows);
+    std::vector<size_t> offsets(numRows);
+
     UnsafeRowFast fast(data);
-    auto totalSize = computeTotalSize(fast, rowType, data->size());
+    auto totalSize =
+        computeTotalSize(fast, rowType, data->size(), rowSize, offsets);
     auto buffer = AlignedBuffer::allocate<char>(totalSize, pool());
-    auto serialized = serialize(fast, data->size(), buffer);
+    auto serialized = serialize(fast, data->size(), rowSize, offsets, buffer);
     suspender.dismiss();
 
     auto copy = UnsafeRowDeserializer::deserialize(serialized, rowType, pool());
@@ -132,14 +143,21 @@ class SerializeBenchmark {
   size_t computeTotalSize(
       UnsafeRowFast& unsafeRow,
       const RowTypePtr& rowType,
-      vector_size_t numRows) {
+      vector_size_t numRows,
+      std::vector<size_t>& rowSize,
+      std::vector<size_t>& offsets) {
     size_t totalSize = 0;
     if (auto fixedRowSize = UnsafeRowFast::fixedRowSize(rowType)) {
       totalSize += fixedRowSize.value() * numRows;
+      for (auto i = 0; i < numRows; ++i) {
+        rowSize[i] = fixedRowSize.value();
+        offsets[i] = fixedRowSize.value() * i;
+      }
     } else {
       for (auto i = 0; i < numRows; ++i) {
-        auto rowSize = unsafeRow.rowSize(i);
-        totalSize += rowSize;
+        rowSize[i] = unsafeRow.rowSize(i);
+        offsets[i] = totalSize;
+        totalSize += rowSize[i];
       }
     }
     return totalSize;
@@ -148,18 +166,17 @@ class SerializeBenchmark {
   std::vector<std::optional<std::string_view>> serialize(
       UnsafeRowFast& unsafeRow,
       vector_size_t numRows,
+      const std::vector<size_t>& rowSize,
+      const std::vector<size_t>& offsets,
       BufferPtr& buffer) {
-    std::vector<std::optional<std::string_view>> serialized;
     auto rawBuffer = buffer->asMutable<char>();
+    unsafeRow.serialize(0, numRows, offsets.data(), rawBuffer);
 
-    size_t offset = 0;
+    std::vector<std::optional<std::string_view>> serialized;
     for (auto i = 0; i < numRows; ++i) {
-      auto rowSize = unsafeRow.serialize(i, rawBuffer + offset);
-      serialized.push_back(std::string_view(rawBuffer + offset, rowSize));
-      offset += rowSize;
+      serialized.push_back(
+          std::string_view(rawBuffer + offsets[i], rowSize[i]));
     }
-
-    VELOX_CHECK_EQ(buffer->size(), offset);
     return serialized;
   }
 

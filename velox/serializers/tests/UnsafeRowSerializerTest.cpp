@@ -51,9 +51,15 @@ class UnsafeRowSerializerTest : public ::testing::Test,
   void serialize(RowVectorPtr rowVector, std::ostream* output) {
     const auto numRows = rowVector->size();
 
-    std::vector<IndexRange> ranges(numRows);
-    for (int i = 0; i < numRows; i++) {
-      ranges[i] = IndexRange{i, 1};
+    // Serialize with different range size.
+    std::vector<IndexRange> ranges;
+    vector_size_t offset = 0;
+    vector_size_t rangeSize = 1;
+    while (offset < numRows) {
+      auto size = std::min<vector_size_t>(rangeSize, numRows - offset);
+      ranges.push_back(IndexRange{offset, size});
+      offset += size;
+      rangeSize = checkedMultiply<vector_size_t>(rangeSize, 2);
     }
 
     std::unique_ptr<row::UnsafeRowFast> unsafeRow;
@@ -80,7 +86,7 @@ class UnsafeRowSerializerTest : public ::testing::Test,
     } else {
       Scratch scratch;
       serializer->append(
-          rowVector, folly::Range(ranges.data(), numRows), scratch);
+          rowVector, folly::Range(ranges.data(), ranges.size()), scratch);
     }
 
     auto size = serializer->maxSerializedSize();

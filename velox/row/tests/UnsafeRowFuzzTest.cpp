@@ -95,6 +95,8 @@ class UnsafeRowFuzzTests : public ::testing::Test {
 
   std::shared_ptr<memory::MemoryPool> pool_ =
       memory::memoryManager()->addLeafPool();
+
+  BufferPtr buffer_;
 };
 
 TEST_F(UnsafeRowFuzzTests, fast) {
@@ -186,10 +188,53 @@ TEST_F(UnsafeRowFuzzTests, fast) {
     for (auto i = 0; i < data->size(); ++i) {
       auto rowSize = fast.serialize(i, buffers_[i]);
       VELOX_CHECK_LE(rowSize, kBufferSize);
-
       EXPECT_EQ(rowSize, fast.rowSize(i)) << i << ", " << data->toString(i);
-
       serialized.push_back(std::string_view(buffers_[i], rowSize));
+    }
+    return serialized;
+  });
+
+  doTest(rowType, [&](const RowVectorPtr& data) {
+    const auto numRows = data->size();
+    std::vector<std::optional<std::string_view>> serialized;
+    serialized.reserve(numRows);
+
+    UnsafeRowFast fast(data);
+
+    std::vector<vector_size_t> rows(numRows);
+    std::vector<size_t> rowSize(numRows);
+    std::vector<size_t> offsets(numRows);
+    size_t totalSize = 0;
+    if (auto fixedRowSize = UnsafeRowFast::fixedRowSize(rowType)) {
+      totalSize = fixedRowSize.value() * numRows;
+      for (auto i = 0; i < numRows; ++i) {
+        rowSize[i] = fixedRowSize.value();
+        offsets[i] = fixedRowSize.value() * i;
+      }
+    } else {
+      for (auto i = 0; i < numRows; ++i) {
+        rowSize[i] = fast.rowSize(i);
+        offsets[i] = totalSize;
+        totalSize += rowSize[i];
+      }
+    }
+
+    buffer_ = AlignedBuffer::allocate<char>(totalSize, pool_.get(), 0);
+    auto* rawBuffer = buffer_->asMutable<char>();
+
+    vector_size_t offset = 0;
+    vector_size_t rangeSize = 1;
+    // Serialize with different range size.
+    while (offset < numRows) {
+      auto size = std::min<vector_size_t>(rangeSize, numRows - offset);
+      fast.serialize(offset, size, offsets.data() + offset, rawBuffer);
+      offset += size;
+      rangeSize = checkedMultiply<vector_size_t>(rangeSize, 2);
+    }
+
+    for (auto i = 0; i < numRows; ++i) {
+      serialized.push_back(
+          std::string_view(rawBuffer + offsets[i], rowSize[i]));
     }
     return serialized;
   });

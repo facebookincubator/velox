@@ -17,6 +17,7 @@
 #include <folly/init/Init.h>
 
 #include "velox/serializers/CompactRowSerializer.h"
+#include "velox/serializers/UnsafeRowSerializer.h"
 #include "velox/vector/fuzzer/VectorFuzzer.h"
 
 namespace facebook::velox::test {
@@ -27,6 +28,14 @@ class RowSerializerBenchmark {
       const RowTypePtr& rowType,
       vector_size_t rangeSize) {
     serializer::CompactRowVectorSerde::registerVectorSerde();
+    serialize(rowType, rangeSize);
+    deregisterVectorSerde();
+  }
+
+  void unsafeRowVectorSerde(
+      const RowTypePtr& rowType,
+      vector_size_t rangeSize) {
+    serializer::spark::UnsafeRowVectorSerde::registerVectorSerde();
     serialize(rowType, rangeSize);
     deregisterVectorSerde();
   }
@@ -72,17 +81,33 @@ class RowSerializerBenchmark {
     RowSerializerBenchmark benchmark;                \
     benchmark.compactRowVectorSerde(rowType, 1);     \
   }                                                  \
+  BENCHMARK(unsafe_serialize_1_##name) {             \
+    RowSerializerBenchmark benchmark;                \
+    benchmark.unsafeRowVectorSerde(rowType, 1);      \
+  }                                                  \
   BENCHMARK(compact_serialize_10_##name) {           \
     RowSerializerBenchmark benchmark;                \
     benchmark.compactRowVectorSerde(rowType, 10);    \
+  }                                                  \
+  BENCHMARK(unsafe_serialize_10_##name) {            \
+    RowSerializerBenchmark benchmark;                \
+    benchmark.unsafeRowVectorSerde(rowType, 10);     \
   }                                                  \
   BENCHMARK(compact_serialize_100_##name) {          \
     RowSerializerBenchmark benchmark;                \
     benchmark.compactRowVectorSerde(rowType, 100);   \
   }                                                  \
+  BENCHMARK(unsafe_serialize_100_##name) {           \
+    RowSerializerBenchmark benchmark;                \
+    benchmark.unsafeRowVectorSerde(rowType, 100);    \
+  }                                                  \
   BENCHMARK(compact_serialize_1000_##name) {         \
     RowSerializerBenchmark benchmark;                \
     benchmark.compactRowVectorSerde(rowType, 1'000); \
+  }                                                  \
+  BENCHMARK(unsafe_serialize_1000_##name) {          \
+    RowSerializerBenchmark benchmark;                \
+    benchmark.unsafeRowVectorSerde(rowType, 1'000);  \
   }
 
 VECTOR_SERDE_BENCHMARKS(
