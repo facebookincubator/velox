@@ -42,6 +42,7 @@ USE_CLANG="${USE_CLANG:-false}"
 export INSTALL_PREFIX=${INSTALL_PREFIX:-"/usr/local"}
 DEPENDENCY_DIR=${DEPENDENCY_DIR:-$(pwd)/deps-download}
 VERSION=$(cat /etc/os-release | grep VERSION_ID)
+PYTHON_VENV=${PYTHON_VENV:-"${SCRIPTDIR}/../.venv"}
 
 # On Ubuntu 20.04 dependencies need to be built using gcc11.
 # On Ubuntu 22.04 gcc11 is already the system gcc installed.
@@ -93,7 +94,12 @@ function install_build_prerequisites {
     git \
     pkg-config \
     wget
-
+  
+  if [ ! -f ${PYTHON_VENV}/pyvenv.cfg ]; then
+    echo "Creating Python Virtual Environment at ${PYTHON_VENV}"
+    python3 -m venv ${PYTHON_VENV}
+  fi
+  source ${PYTHON_VENV}/bin/activate;   
   # Install to /usr/local to make it available to all users.
   ${SUDO} pip3 install cmake==3.28.3
 
