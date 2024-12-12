@@ -158,7 +158,7 @@ struct Timestamp {
   int64_t toMillis() const {
     // We use int128_t to make sure the computation does not overflow since
     // there are cases such that seconds*1000 does not fit in int64_t,
-    // but seconds*1000 + nanos does, an example is TimeStamp::minMillis().
+    // but seconds*1000 + nanos does, an example is Timestamp::minMillis().
 
     // If the final result does not fit in int64_t we throw.
     __int128_t result =
@@ -183,8 +183,9 @@ struct Timestamp {
   // Keep it in header for getting inlined.
   int64_t toMicros() const {
     // We use int128_t to make sure the computation does not overflows since
-    // there are cases such that seconds*1000000 does not fit in int64_t,
-    // but seconds*1000000 + nanos does, an example is TimeStamp::minMillis().
+    // there are cases such that a negative seconds*1000000 does not fit in
+    // int64_t, but seconds*1000000 + nanos does. An example is
+    // Timestamp(-9223372036855, 224'192'000).
 
     // If the final result does not fit in int64_t we throw.
     __int128_t result =
