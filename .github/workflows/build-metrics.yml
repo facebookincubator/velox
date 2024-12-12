@@ -156,6 +156,7 @@ jobs:
         with:
           name: report
           path: scripts/bm-report/report.html
+          retention-days: 5
 
       - name: Push Report
         # The report only uses conbench data from 'main'
