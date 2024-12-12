@@ -61,7 +61,7 @@ Window::Window(
         common::PrefixSortConfig{
             driverCtx->queryConfig().prefixSortNormalizedKeyMaxBytes(),
             driverCtx->queryConfig().prefixSortMinRows(),
-            driverCtx->queryConfig().prefixSortMaxStringLength()},
+            driverCtx->queryConfig().prefixSortMaxStringPrefixLength()},
         spillConfig,
         &nonReclaimableSection_,
         &spillStats_);
