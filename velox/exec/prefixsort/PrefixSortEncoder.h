@@ -69,7 +69,7 @@ class PrefixSortEncoder {
   ///         For not supported types, returns 'std::nullopt'.
   FOLLY_ALWAYS_INLINE static std::optional<uint32_t> encodedSize(
       TypeKind typeKind,
-      std::optional<uint32_t> stringPrefixLength) {
+      uint32_t maxStringPrefixLength) {
     // NOTE: one byte is reserved for nullable comparison.
     switch ((typeKind)) {
       case ::facebook::velox::TypeKind::SMALLINT: {
@@ -96,14 +96,7 @@ class PrefixSortEncoder {
       case ::facebook::velox::TypeKind::VARBINARY:
         [[fallthrough]];
       case ::facebook::velox::TypeKind::VARCHAR: {
-        if (stringPrefixLength.has_value()) {
-          return 1 + stringPrefixLength.value();
-        } else {
-          // Return a big value to ensure VARCHAR columns are
-          // processed after all other supported types and before unsupported
-          // types.
-          return 256;
-        }
+        return 1 + maxStringPrefixLength;
       }
       default:
         return std::nullopt;
