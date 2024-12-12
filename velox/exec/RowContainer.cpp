@@ -188,7 +188,6 @@ RowContainer::RowContainer(
     if (nullableKeys_) {
       ++nullOffset;
     }
-    columnHasNulls_.push_back(false);
   }
   // Make offset at least sizeof pointer so that there is space for a
   // free list next pointer below the bit at 'freeFlagOffset_'.
@@ -217,7 +216,6 @@ RowContainer::RowContainer(
     nullOffsets_.push_back(nullOffset);
     ++nullOffset;
     isVariableWidth |= !type->isFixedWidth();
-    columnHasNulls_.push_back(false);
   }
   if (hasProbedFlag) {
     nullOffsets_.push_back(nullOffset);
@@ -467,9 +465,6 @@ void RowContainer::freeRowsExtraMemory(
 }
 
 void RowContainer::invalidateColumnStats() {
-  if (rowColumnsStats_.empty()) {
-    return;
-  }
   rowColumnsStats_.clear();
 }
 
@@ -567,7 +562,8 @@ void RowContainer::store(
         decoded,
         rows,
         isKey,
-        offsets_[column]);
+        offsets_[column],
+        column);
   } else {
     const auto rowColumn = rowColumns_[column];
     VELOX_DYNAMIC_TYPE_DISPATCH_ALL(
@@ -815,7 +811,6 @@ void RowContainer::storeComplexType(
   if (decoded.isNullAt(index)) {
     VELOX_DCHECK(nullMask);
     row[nullByte] |= nullMask;
-    updateColumnHasNulls(column, true);
     return;
   }
   RowSizeTracker tracker(row[rowSizeOffset_], *stringAllocator_);

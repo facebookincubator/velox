@@ -823,7 +823,8 @@ class RowContainer {
 
   /// Returns true if specified column may have nulls, false otherwise.
   inline bool columnHasNulls(int32_t columnIndex) const {
-    return columnHasNulls_[columnIndex];
+    return columnStats(columnIndex).has_value() &&
+        columnStats(columnIndex)->nullCount() > 0;
   }
 
   const std::vector<Accumulator>& accumulators() const {
@@ -1015,7 +1016,6 @@ class RowContainer {
       // Do not leave an uninitialized value in the case of a
       // null. This is an error with valgrind/asan.
       *reinterpret_cast<T*>(row + offset) = T();
-      updateColumnHasNulls(columnIndex, true);
       return;
     }
     if constexpr (std::is_same_v<T, StringView>) {
@@ -1056,6 +1056,7 @@ class RowContainer {
     for (int32_t i = 0; i < rows.size(); ++i) {
       storeWithNulls<Kind>(
           decoded, i, isKey, rows[i], offset, nullByte, nullMask, column);
+      updateColumnStats(decoded, i, rows[i], column);
     }
   }
 
@@ -1064,9 +1065,11 @@ class RowContainer {
       const DecodedVector& decoded,
       folly::Range<char**> rows,
       bool isKey,
-      int32_t offset) {
+      int32_t offset,
+      int32_t column) {
     for (int32_t i = 0; i < rows.size(); ++i) {
       storeNoNulls<Kind>(decoded, i, isKey, rows[i], offset);
+      updateColumnStats(decoded, i, rows[i], column);
     }
   }
 
@@ -1467,12 +1470,6 @@ class RowContainer {
   // method is called whenever a row is erased.
   void invalidateColumnStats();
 
-  // Updates the specific column's columnHasNulls_ flag, if 'hasNulls' is true.
-  // columnHasNulls_ flag is false by default.
-  inline void updateColumnHasNulls(int32_t columnIndex, bool hasNulls) {
-    columnHasNulls_[columnIndex] = columnHasNulls_[columnIndex] || hasNulls;
-  }
-
   const std::vector<TypePtr> keyTypes_;
   const bool nullableKeys_;
   const bool isJoinBuild_;
@@ -1480,8 +1477,6 @@ class RowContainer {
   const bool hasNormalizedKeys_;
 
   const std::unique_ptr<HashStringAllocator> stringAllocator_;
-
-  std::vector<bool> columnHasNulls_;
 
   // Indicates if we can add new row to this row container. It is set to false
   // after user calls 'getRowPartitions()' to create 'rowPartitions' object for
@@ -1637,7 +1632,6 @@ inline void RowContainer::storeWithNulls<TypeKind::HUGEINT>(
   if (decoded.isNullAt(rowIndex)) {
     row[nullByte] |= nullMask;
     memset(row + offset, 0, sizeof(int128_t));
-    updateColumnHasNulls(columnIndex, true);
     return;
   }
   HugeInt::serialize(decoded.valueAt<int128_t>(rowIndex), row + offset);
