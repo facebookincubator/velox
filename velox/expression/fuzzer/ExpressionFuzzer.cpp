@@ -359,6 +359,15 @@ static void appendSpecialForms(
               /// them to fuzzer instead of hard-coding signatures here.
               getSignaturesForCast(),
           },
+          {
+              "factorial",
+              std::vector<facebook::velox::exec::FunctionSignaturePtr>{
+                  // Signature: factorial (integer) -> integer
+                  facebook::velox::exec::FunctionSignatureBuilder()
+                      .returnType("T")
+                      .argumentType("T")
+                      .build()},
+          },
       };
 
   auto specialFormNames = splitNames(specialForms);

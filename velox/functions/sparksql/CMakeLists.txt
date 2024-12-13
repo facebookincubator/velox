@@ -20,6 +20,7 @@ velox_add_library(
   Comparisons.cpp
   DecimalArithmetic.cpp
   DecimalCompare.cpp
+  Factorial.cpp
   Hash.cpp
   In.cpp
   LeastGreatest.cpp

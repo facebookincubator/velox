@@ -13,11 +13,13 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+#include "velox/expression/SpecialFormRegistry.h"
 #include "velox/functions/lib/RegistrationHelpers.h"
 #include "velox/functions/prestosql/Arithmetic.h"
 #include "velox/functions/sparksql/Arithmetic.h"
 #include "velox/functions/sparksql/DecimalArithmetic.h"
 #include "velox/functions/sparksql/Rand.h"
+#include "velox/functions/sparksql/Factorial.h"
 
 namespace facebook::velox::functions::sparksql {
 
@@ -120,6 +122,7 @@ void registerMathFunctions(const std::string& prefix) {
   registerBinaryNumeric<CheckedSubtractFunction>({prefix + "checked_subtract"});
   registerBinaryNumeric<CheckedMultiplyFunction>({prefix + "checked_multiply"});
   registerBinaryNumeric<CheckedDivideFunction>({prefix + "checked_divide"});
+  registerFunctionCallToSpecialForm("factorial",std::make_unique<FactorialCallToSpecialForm>());
 }
 
 } // namespace facebook::velox::functions::sparksql
