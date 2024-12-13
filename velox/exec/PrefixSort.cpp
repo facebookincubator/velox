@@ -192,7 +192,7 @@ PrefixSortLayout PrefixSortLayout::generate(
       compareFlags,
       numNormalizedKeys != 0,
       numNormalizedKeys < numKeys,
-      /* nonPrefixSortStartIndex */
+      /*nonPrefixSortStartIndex=*/
       lastPrefixKeyPartial ? numNormalizedKeys - 1 : numNormalizedKeys,
       std::move(prefixOffsets),
       std::move(encodeSizes),
