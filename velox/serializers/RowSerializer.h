@@ -26,8 +26,7 @@ using TRowSize = uint32_t;
 template <class Serializer>
 class RowSerializer : public IterativeVectorSerializer {
  public:
-  explicit RowSerializer(StreamArena* streamArena)
-      : pool_{streamArena->pool()} {}
+  explicit RowSerializer(memory::MemoryPool* pool) : pool_(pool) {}
 
   void append(
       const RowVectorPtr& vector,
@@ -118,15 +117,16 @@ class RowSerializer : public IterativeVectorSerializer {
 
  protected:
   virtual void serializeRanges(
-      const Serializer& row,
+      const Serializer& rowSerializer,
       const folly::Range<const IndexRange*>& ranges,
       char* rawBuffer,
       const std::vector<vector_size_t>& /*rowSize*/) {
     size_t offset = 0;
     for (auto& range : ranges) {
-      for (auto i = range.begin; i < range.begin + range.size; ++i) {
+      for (auto row = range.begin; row < range.begin + range.size; ++row) {
         // Write row data.
-        TRowSize size = row.serialize(i, rawBuffer + offset + sizeof(TRowSize));
+        TRowSize size =
+            rowSerializer.serialize(row, rawBuffer + offset + sizeof(TRowSize));
 
         // Write raw size. Needs to be in big endian order.
         *(TRowSize*)(rawBuffer + offset) = folly::Endian::big(size);

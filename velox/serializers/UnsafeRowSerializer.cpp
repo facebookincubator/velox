@@ -34,7 +34,8 @@ UnsafeRowVectorSerde::createIterativeSerializer(
     int32_t /* numRows */,
     StreamArena* streamArena,
     const Options* /* options */) {
-  return std::make_unique<RowSerializer<row::UnsafeRowFast>>(streamArena);
+  return std::make_unique<RowSerializer<row::UnsafeRowFast>>(
+      streamArena->pool());
 }
 
 void UnsafeRowVectorSerde::deserialize(

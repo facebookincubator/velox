@@ -26,8 +26,8 @@ using TRowSize = uint32_t;
 
 class CompactRowVectorSerializer : public RowSerializer<row::CompactRow> {
  public:
-  explicit CompactRowVectorSerializer(StreamArena* streamArena)
-      : RowSerializer<row::CompactRow>(streamArena) {}
+  explicit CompactRowVectorSerializer(memory::MemoryPool* pool)
+      : RowSerializer<row::CompactRow>(pool) {}
 
  private:
   void serializeRanges(
@@ -75,7 +75,7 @@ CompactRowVectorSerde::createIterativeSerializer(
     int32_t /* numRows */,
     StreamArena* streamArena,
     const Options* /* options */) {
-  return std::make_unique<CompactRowVectorSerializer>(streamArena);
+  return std::make_unique<CompactRowVectorSerializer>(streamArena->pool());
 }
 
 void CompactRowVectorSerde::deserialize(
