@@ -1112,7 +1112,10 @@ bool GroupingSet::prepareNextSpillPartitionOutput() {
   VELOX_CHECK_NE(outputSpillPartition_, it->first.partitionNumber());
   outputSpillPartition_ = it->first.partitionNumber();
   merge_ = it->second->createOrderedReader(
-      spillConfig_->readBufferSize, &pool_, spillStats_);
+      spillConfig_->readBufferSize,
+      spillConfig_->mergePrefixComparatorEnabled,
+      &pool_,
+      spillStats_);
   spillPartitionSet_.erase(it);
   return true;
 }

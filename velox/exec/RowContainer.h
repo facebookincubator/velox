@@ -19,7 +19,6 @@
 #include "velox/common/memory/MemoryAllocator.h"
 #include "velox/core/PlanNode.h"
 #include "velox/exec/ContainerRowSerde.h"
-#include "velox/exec/Spill.h"
 #include "velox/vector/FlatVector.h"
 #include "velox/vector/VectorTypeUtils.h"
 

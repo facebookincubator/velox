@@ -444,5 +444,71 @@ TEST_F(PrefixSortTest, makeSortLayoutForString) {
   ASSERT_EQ(sortLayoutTwoKeys.encodeSizes[1], 9);
 }
 
+class VectorPrefixEncoderTest : public exec::test::OperatorTestBase {
+ protected:
+  static constexpr CompareFlags kAsc{
+      true,
+      true,
+      false,
+      CompareFlags::NullHandlingMode::kNullAsValue};
+};
+
+TEST_F(VectorPrefixEncoderTest, encode) {
+  const std::vector<VectorPtr> testData = {
+      makeNullableFlatVector<int64_t>({7979, std::nullopt}),
+      makeFlatVector<int32_t>({5, 4}),
+      makeFlatVector<int16_t>({5, 4}),
+      makeFlatVector<int128_t>({5, HugeInt::parse("-12345678901234567890")}),
+      makeFlatVector<float>({5.5, 4.4}),
+      makeFlatVector<double>({5.5, 4.4}),
+      makeFlatVector<Timestamp>({Timestamp(5, 5), Timestamp(4, 4)}),
+      makeFlatVector<StringView>({"eee", "eee_is_not_inline"})};
+  const std::vector<std::vector<uint64_t>> expectedValues = {
+      {108086391056891935, 3098476543630901248, 0, 0},
+      {108086391140777984, 108086391124000768},
+      {108091888615030784, 108090789103403008},
+      {108086391056891904,
+       0,
+       360287970189639680,
+       108086391056891903,
+       18398518765501604085ull,
+       3314649325744685056},
+      {126294303612862464, 126255600806920192},
+      {126124978822184960, 0, 126120140971022745, 11096869481840902144ull},
+      {108086391056891904,
+       360287970189639680,
+       360287970189639680,
+       108086391056891904,
+       288230376151711744,
+       288230376151711744},
+      {100598051151806464,
+       0,
+       0,
+       100598052752552799,
+       7957707019726515305,
+       7926335344172072960}};
+  const auto numRows = testData[0]->size();
+  for (auto i = 0; i < testData.size(); ++i) {
+    std::vector<DecodedVector> decoded{1};
+    decoded[0].decode(*testData[i]);
+    const auto data = makeRowVector({testData[i]});
+    std::vector<CompareFlags> compareFlags = {kAsc};
+    const auto rowType = asRowType(data->type());
+    const std::vector<TypePtr> keyTypes = rowType->children();
+    std::vector<std::optional<uint32_t>> maxStringLengths = {std::nullopt};
+    auto sortLayout = PrefixSortLayout::generate(
+        keyTypes, compareFlags, 17, 16, maxStringLengths);
+    char rawPrefixBuffer[sortLayout.normalizedBufferSize * numRows];
+    VectorPrefixEncoder::encode(
+        sortLayout, keyTypes, decoded, numRows, rawPrefixBuffer);
+    auto encodedValue = reinterpret_cast<uint64_t*>(rawPrefixBuffer);
+
+    for (auto j = 0;
+         j < sortLayout.normalizedBufferSize * numRows / sizeof(uint64_t);
+         ++j) {
+      ASSERT_EQ(encodedValue[j], expectedValues[i][j]);
+    }
+  }
+}
 } // namespace
 } // namespace facebook::velox::exec::prefixsort::test

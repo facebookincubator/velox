@@ -18,7 +18,7 @@
 #include <optional>
 
 #include "velox/common/base/PrefixSortConfig.h"
-#include "velox/exec/Operator.h"
+#include "velox/exec/IdentityProjection.h"
 #include "velox/exec/RowContainer.h"
 #include "velox/exec/prefixsort/PrefixSortAlgorithm.h"
 #include "velox/exec/prefixsort/PrefixSortEncoder.h"
@@ -34,45 +34,45 @@ namespace facebook::velox::exec {
 struct PrefixSortLayout {
   /// Number of bytes to store a prefix, it equals to:
   /// normalizedKeySize_ + 8 (non-normalized-ptr) + 8(row address).
-  const uint64_t entrySize;
+  uint64_t entrySize;
 
   /// If a sort key supports normalization and can be added to the prefix
   /// sort buffer, it is called a normalized key.
-  const uint32_t normalizedBufferSize;
+  uint32_t normalizedBufferSize;
 
-  const uint32_t numNormalizedKeys;
+  uint32_t numNormalizedKeys;
 
   /// The num of sort keys include normalized and non-normalized.
-  const uint32_t numKeys;
+  uint32_t numKeys;
 
   /// CompareFlags of all sort keys.
-  const std::vector<CompareFlags> compareFlags;
+  std::vector<CompareFlags> compareFlags;
 
   /// Whether the sort keys contains normalized key.
   /// It equals to 'numNormalizedKeys != 0', a little faster.
-  const bool hasNormalizedKeys;
+  bool hasNormalizedKeys;
 
   /// Whether the sort keys contains non-normalized key.
-  const bool hasNonNormalizedKey;
+  bool hasNonNormalizedKey;
 
   /// Indicates the starting index for key comparison.
   /// If the last key is only partially encoded in the prefix, start from
   /// numNormalizedKeys - 1. Otherwise, start from numNormalizedKeys.
-  const uint32_t nonPrefixSortStartIndex;
+  uint32_t nonPrefixSortStartIndex;
 
   /// Offsets of normalized keys, used to find write locations when
   /// extracting columns
-  const std::vector<uint32_t> prefixOffsets;
+  std::vector<uint32_t> prefixOffsets;
 
   /// Sizes of normalized keys.
-  const std::vector<uint32_t> encodeSizes;
+  std::vector<uint32_t> encodeSizes;
 
   /// The encoders for normalized keys.
-  const std::vector<prefixsort::PrefixSortEncoder> encoders;
+  std::vector<prefixsort::PrefixSortEncoder> encoders;
 
   /// The number of padding bytes to align each prefix encoded row size to 8
   /// for fast long compare.
-  const int32_t numPaddingBytes;
+  int32_t numPaddingBytes;
 
   static PrefixSortLayout generate(
       const std::vector<TypePtr>& types,
@@ -91,6 +91,16 @@ struct PrefixSortLayout {
   static void optimizeSortKeysOrder(
       const RowTypePtr& rowType,
       std::vector<IdentityProjection>& keyColumnProjections);
+};
+
+class VectorPrefixEncoder {
+ public:
+  static void encode(
+      const PrefixSortLayout& sortLayout,
+      const std::vector<TypePtr>& keyTypes,
+      const std::vector<DecodedVector>& decoded,
+      vector_size_t numRows,
+      char* prefixBuffer);
 };
 
 class PrefixSort {

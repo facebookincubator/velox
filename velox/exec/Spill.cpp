@@ -24,6 +24,9 @@ using facebook::velox::common::testutil::TestValue;
 
 namespace facebook::velox::exec {
 namespace {
+
+static constexpr int32_t kAlignment = 8;
+
 // Returns the CompareFlags vector whose size is equal to numSortKeys. Fill in
 // with default CompareFlags() if 'compareFlags' is empty.
 const std::vector<CompareFlags> getCompareFlagsOrDefault(
@@ -34,6 +37,24 @@ const std::vector<CompareFlags> getCompareFlagsOrDefault(
     return compareFlags;
   }
   return std::vector<CompareFlags>(numSortKeys);
+}
+
+FOLLY_ALWAYS_INLINE int
+compareByWord(uint64_t* left, uint64_t* right, int32_t bytes) {
+  while (bytes != 0) {
+    if (*left == *right) {
+      ++left;
+      ++right;
+      bytes -= kAlignment;
+      continue;
+    }
+    if (*left > *right) {
+      return 1;
+    } else {
+      return -1;
+    }
+  }
+  return 0;
 }
 } // namespace
 
@@ -47,24 +68,27 @@ void SpillMergeStream::pop() {
 int32_t SpillMergeStream::compare(const MergeStream& other) const {
   VELOX_CHECK(!closed_);
   auto& otherStream = static_cast<const SpillMergeStream&>(other);
-  auto& children = rowVector_->children();
-  auto& otherChildren = otherStream.current().children();
-  int32_t key = 0;
-  if (sortCompareFlags().empty()) {
-    do {
-      auto result = children[key]
-                        ->compare(
-                            otherChildren[key].get(),
-                            index_,
-                            otherStream.index_,
-                            CompareFlags())
-                        .value();
-      if (result != 0) {
-        return result;
-      }
-    } while (++key < numSortKeys());
+  if (prefixComparatorEnabled_) {
+    VELOX_DCHECK(otherStream.prefixComparatorEnabled_);
+    VELOX_DCHECK_EQ(
+        sortLayout_.normalizedBufferSize,
+        otherStream.sortLayout_.normalizedBufferSize);
+    if (!sortLayout_.hasNonNormalizedKey) {
+      return compareAllNormalizedKeys(
+          rawPrefixBuffer_ + index_ * sortLayout_.normalizedBufferSize,
+          otherStream.rawPrefixBuffer_ +
+              otherStream.index_ * sortLayout_.normalizedBufferSize);
+    } else {
+      return comparePartNormalizedKeys(
+          rawPrefixBuffer_ + index_ * sortLayout_.normalizedBufferSize,
+          otherStream.rawPrefixBuffer_ +
+              otherStream.index_ * sortLayout_.normalizedBufferSize,
+          otherStream);
+    }
   } else {
-    do {
+    auto& children = rowVector_->children();
+    auto& otherChildren = otherStream.current().children();
+    for (auto key = 0; key < numSortKeys(); ++key) {
       auto result = children[key]
                         ->compare(
                             otherChildren[key].get(),
@@ -75,8 +99,9 @@ int32_t SpillMergeStream::compare(const MergeStream& other) const {
       if (result != 0) {
         return result;
       }
-    } while (++key < numSortKeys());
+    }
   }
+
   return 0;
 }
 
@@ -84,10 +109,46 @@ void SpillMergeStream::close() {
   VELOX_CHECK(!closed_);
   closed_ = true;
   rowVector_.reset();
+  prefixBuffer_.reset();
   decoded_.clear();
   rows_.resize(0);
   index_ = 0;
   size_ = 0;
+}
+
+FOLLY_ALWAYS_INLINE int SpillMergeStream::compareAllNormalizedKeys(
+    char* left,
+    char* right) const {
+  return compareByWord(
+      (uint64_t*)left, (uint64_t*)right, sortLayout_.normalizedBufferSize);
+}
+
+int SpillMergeStream::comparePartNormalizedKeys(
+    char* left,
+    char* right,
+    const SpillMergeStream& otherStream) const {
+  int result = compareAllNormalizedKeys(left, right);
+  if (result != 0) {
+    return result;
+  }
+
+  auto& children = rowVector_->children();
+  auto& otherChildren = otherStream.current().children();
+  // If prefixes are equal, compare the remaining sort keys with BaseVector.
+  for (auto i = sortLayout_.nonPrefixSortStartIndex; i < sortLayout_.numKeys;
+       ++i) {
+    auto result = children[i]
+                      ->compare(
+                          otherChildren[i].get(),
+                          index_,
+                          otherStream.index_,
+                          sortCompareFlags()[i])
+                      .value();
+    if (result != 0) {
+      return result;
+    }
+  }
+  return result;
 }
 
 SpillState::SpillState(
@@ -287,13 +348,16 @@ SpillPartition::createUnorderedReader(
 std::unique_ptr<TreeOfLosers<SpillMergeStream>>
 SpillPartition::createOrderedReader(
     uint64_t bufferSize,
+    bool prefixComparatorEnabled,
     memory::MemoryPool* pool,
     folly::Synchronized<common::SpillStats>* spillStats) {
   std::vector<std::unique_ptr<SpillMergeStream>> streams;
   streams.reserve(files_.size());
   for (auto& fileInfo : files_) {
     streams.push_back(FileSpillMergeStream::create(
-        SpillReadFile::create(fileInfo, bufferSize, pool, spillStats)));
+        SpillReadFile::create(fileInfo, bufferSize, pool, spillStats),
+        prefixComparatorEnabled,
+        pool));
   }
   files_.clear();
   // Check if the partition is empty or not.
@@ -303,9 +367,67 @@ SpillPartition::createOrderedReader(
   return std::make_unique<TreeOfLosers<SpillMergeStream>>(std::move(streams));
 }
 
+FileSpillMergeStream::FileSpillMergeStream(
+    std::unique_ptr<SpillReadFile> spillFile,
+    bool prefixComparatorEnabled,
+    memory::MemoryPool* pool)
+    : spillFile_(std::move(spillFile)), pool_(pool) {
+  VELOX_CHECK_NOT_NULL(spillFile_);
+  VELOX_CHECK_EQ(sortCompareFlags().size(), numSortKeys());
+  const auto sortTypes = std::vector<TypePtr>(
+      spillFile_->type()->children().begin(),
+      spillFile_->type()->children().begin() + numSortKeys());
+  std::vector<std::optional<uint32_t>> maxStringLengths;
+  maxStringLengths.resize(sortTypes.size());
+  // TODO: wait to add argument maxStringPrefixLength.
+  sortLayout_ = PrefixSortLayout::generate(
+      sortTypes, sortCompareFlags(), 128, 16, maxStringLengths);
+  if (sortLayout_.numNormalizedKeys < 2) {
+    prefixComparatorEnabled_ = false;
+  } else {
+    prefixComparatorEnabled_ = prefixComparatorEnabled;
+  }
+}
+
 uint32_t FileSpillMergeStream::id() const {
   VELOX_CHECK(!closed_);
   return spillFile_->id();
+}
+
+void FileSpillMergeStream::buildPrefixBuffer() {
+  // After close or no data, we should not build the prefix buffer.
+  if (size_ == 0 || !prefixComparatorEnabled_) {
+    return;
+  }
+
+  ensureRows();
+  if (decoded_.empty()) {
+    decoded_.resize(sortLayout_.numNormalizedKeys);
+  }
+  for (auto i = 0; i < decoded_.size(); ++i) {
+    decoded_[i].decode(*rowVector_->childAt(i), rows_);
+  }
+  // The small dataset also triggers the prefix buffer build process because
+  // usually spilled RowVector should be a big vector and we should compare with
+  // other Stream, make the both side of stream status consistent would be easy
+  // to understand.
+  if (prefixBuffer_ &&
+      prefixBuffer_->size() < size_ * sortLayout_.normalizedBufferSize) {
+    AlignedBuffer::reallocate<char>(
+        &prefixBuffer_, size_ * sortLayout_.normalizedBufferSize);
+    rawPrefixBuffer_ = prefixBuffer_->asMutable<char>();
+  } else {
+    prefixBuffer_ = AlignedBuffer::allocate<char>(
+        size_ * sortLayout_.normalizedBufferSize, pool_);
+    rawPrefixBuffer_ = prefixBuffer_->asMutable<char>();
+  }
+
+  VectorPrefixEncoder::encode(
+      sortLayout_,
+      spillFile_->type()->children(),
+      decoded_,
+      size_,
+      rawPrefixBuffer_);
 }
 
 void FileSpillMergeStream::nextBatch() {
@@ -317,6 +439,7 @@ void FileSpillMergeStream::nextBatch() {
     return;
   }
   size_ = rowVector_->size();
+  buildPrefixBuffer();
 }
 
 void FileSpillMergeStream::close() {

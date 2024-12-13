@@ -279,6 +279,20 @@ std::unique_ptr<SpillReadFile> SpillReadFile::create(
       stats));
 }
 
+namespace {
+// Returns the CompareFlags vector whose size is equal to numSortKeys. Fill in
+// with default CompareFlags() if 'compareFlags' is empty.
+const std::vector<CompareFlags> getCompareFlagsOrDefault(
+    const std::vector<CompareFlags>& compareFlags,
+    int32_t numSortKeys) {
+  VELOX_DCHECK(compareFlags.empty() || compareFlags.size() == numSortKeys);
+  if (compareFlags.size() == numSortKeys) {
+    return compareFlags;
+  }
+  return std::vector<CompareFlags>(numSortKeys);
+}
+} // namespace
+
 SpillReadFile::SpillReadFile(
     uint32_t id,
     const std::string& path,
@@ -295,7 +309,8 @@ SpillReadFile::SpillReadFile(
       size_(size),
       type_(type),
       numSortKeys_(numSortKeys),
-      sortCompareFlags_(sortCompareFlags),
+      sortCompareFlags_(
+          getCompareFlagsOrDefault(sortCompareFlags, numSortKeys)),
       compressionKind_(compressionKind),
       readOptions_{
           kDefaultUseLosslessTimestamp,

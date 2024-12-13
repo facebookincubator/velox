@@ -244,6 +244,13 @@ class QueryConfig {
   static constexpr const char* kSpillPrefixSortEnabled =
       "spill_prefixsort_enabled";
 
+  /// Enable the prefix comparator for the spill merge ordered reader. The more
+  /// the number of sort keys, the faster the prefix comparator. But it requires
+  /// the memory to build normalized prefix keys, which might have potential
+  /// risk of running out of server memory.
+  static constexpr const char* kSpillMergePrefixComparatorEnabled =
+      "spill_merge_prefix_comparator_enabled";
+
   /// Specifies spill write buffer size in bytes. The spiller tries to buffer
   /// serialized spill data up to the specified size before write to storage
   /// underneath for io efficiency. If it is set to zero, then spill write
@@ -701,6 +708,10 @@ class QueryConfig {
 
   bool spillPrefixSortEnabled() const {
     return get<bool>(kSpillPrefixSortEnabled, false);
+  }
+
+  bool spillMergePrefixComparatorEnabled() const {
+    return get<bool>(kSpillMergePrefixComparatorEnabled, true);
   }
 
   uint64_t spillWriteBufferSize() const {

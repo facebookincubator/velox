@@ -294,7 +294,10 @@ void TopNRowNumber::noMoreInput() {
     spiller_->finishSpill(spillPartitionSet);
     VELOX_CHECK_EQ(spillPartitionSet.size(), 1);
     merge_ = spillPartitionSet.begin()->second->createOrderedReader(
-        spillConfig_->readBufferSize, pool(), &spillStats_);
+        spillConfig_->readBufferSize,
+        spillConfig_->mergePrefixComparatorEnabled,
+        pool(),
+        &spillStats_);
   } else {
     outputRows_.resize(outputBatchSize_);
   }

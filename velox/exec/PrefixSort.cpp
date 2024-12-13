@@ -27,6 +27,70 @@ namespace {
 static constexpr int32_t kAlignment = 8;
 
 template <typename T>
+FOLLY_ALWAYS_INLINE void encodeColumn(
+    const PrefixSortLayout& prefixSortLayout,
+    const DecodedVector& decoded,
+    vector_size_t row,
+    column_index_t col,
+    char* prefixBuffer) {
+  std::optional<T> value;
+  if (!decoded.mayHaveNulls()) {
+    value = decoded.valueAt<T>(row);
+  } else {
+    if (decoded.isNullAt(row)) {
+      value = std::nullopt;
+    } else {
+      value = decoded.valueAt<T>(row);
+    }
+  }
+  prefixSortLayout.encoders[col].encode(
+      value,
+      prefixBuffer + prefixSortLayout.prefixOffsets[col],
+      prefixSortLayout.encodeSizes[col]);
+}
+
+FOLLY_ALWAYS_INLINE void extractColumnToPrefix(
+    TypeKind typeKind,
+    const PrefixSortLayout& prefixSortLayout,
+    const DecodedVector& decoded,
+    vector_size_t row,
+    column_index_t col,
+    char* prefixBuffer) {
+  switch (typeKind) {
+    case TypeKind::SMALLINT:
+      return encodeColumn<int16_t>(
+          prefixSortLayout, decoded, row, col, prefixBuffer);
+    case TypeKind::INTEGER:
+      return encodeColumn<int32_t>(
+          prefixSortLayout, decoded, row, col, prefixBuffer);
+    case TypeKind::BIGINT:
+      return encodeColumn<int64_t>(
+          prefixSortLayout, decoded, row, col, prefixBuffer);
+    case TypeKind::REAL:
+      return encodeColumn<float>(
+          prefixSortLayout, decoded, row, col, prefixBuffer);
+    case TypeKind::DOUBLE:
+      return encodeColumn<double>(
+          prefixSortLayout, decoded, row, col, prefixBuffer);
+    case TypeKind::TIMESTAMP:
+      return encodeColumn<Timestamp>(
+          prefixSortLayout, decoded, row, col, prefixBuffer);
+    case TypeKind::HUGEINT:
+      return encodeColumn<int128_t>(
+          prefixSortLayout, decoded, row, col, prefixBuffer);
+    case TypeKind::VARCHAR:
+      [[fallthrough]];
+    case TypeKind::VARBINARY:
+      return encodeColumn<StringView>(
+          prefixSortLayout, decoded, row, col, prefixBuffer);
+    default:
+      VELOX_UNSUPPORTED(
+          "prefix-sort does not support type kind: {}",
+          mapTypeKindToName(typeKind));
+  }
+}
+
+template <typename T>
 FOLLY_ALWAYS_INLINE void encodeRowColumn(
     const PrefixSortLayout& prefixSortLayout,
     column_index_t index,
@@ -236,6 +300,36 @@ void PrefixSortLayout::optimizeSortKeysOrder(
         // Tie breaks with the original key column order.
         return lhs.outputChannel < rhs.outputChannel;
       });
+}
+
+void VectorPrefixEncoder::encode(
+    const PrefixSortLayout& sortLayout,
+    const std::vector<TypePtr>& keyTypes,
+    const std::vector<DecodedVector>& decoded,
+    vector_size_t numRows,
+    char* prefixBuffer) {
+  VELOX_DCHECK_GE(keyTypes.size(), sortLayout.numNormalizedKeys);
+  VELOX_DCHECK_GE(decoded.size(), sortLayout.numNormalizedKeys);
+  for (auto i = 0; i < numRows; ++i) {
+    char* bufferForRow = prefixBuffer + i * sortLayout.normalizedBufferSize;
+    for (auto j = 0; j < sortLayout.numNormalizedKeys; ++j) {
+      extractColumnToPrefix(
+          keyTypes[j]->kind(), sortLayout, decoded[j], i, j, bufferForRow);
+    }
+    simd::memset(
+        bufferForRow + sortLayout.normalizedBufferSize -
+            sortLayout.numPaddingBytes,
+        0,
+        sortLayout.numPaddingBytes);
+
+    // When comparing in std::memcmp, each byte is compared. If it is changed to
+    // compare every 8 bytes, the number of comparisons will be reduced and the
+    // performance will be improved.
+    // Use uint64_t compare to implement the above-mentioned comparison of every
+    // 8 bytes, assuming the system is little-endian, need to reverse bytes for
+    // every 8 bytes.
+    bitsSwapByWord((uint64_t*)bufferForRow, sortLayout.normalizedBufferSize);
+  }
 }
 
 FOLLY_ALWAYS_INLINE int PrefixSort::compareAllNormalizedKeys(

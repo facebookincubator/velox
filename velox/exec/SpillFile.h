@@ -239,6 +239,10 @@ class SpillReadFile {
     return path_;
   }
 
+  const RowTypePtr& type() const {
+    return type_;
+  }
+
  private:
   SpillReadFile(
       uint32_t id,

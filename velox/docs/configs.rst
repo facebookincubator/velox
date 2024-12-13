@@ -362,6 +362,11 @@ Spilling
      - false
      - Enable the prefix sort or fallback to timsort in spill. The prefix sort is faster than std::sort but requires the
        memory to build normalized prefix keys, which might have potential risk of running out of server memory.
+   * - spill_merge_prefix_comparator_enabled
+     - bool
+     - true
+     - Enable the prefix comparator for the spill merge ordered reader. The more the number of sort keys, the faster the prefix comparator.
+       But it requires the memory to build normalized prefix keys, which might have potential risk of running out of server memory.
    * - spiller_start_partition_bit
      - integer
      - 29

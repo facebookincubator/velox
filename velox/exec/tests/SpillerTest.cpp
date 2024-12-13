@@ -58,6 +58,7 @@ struct TestParam {
   int poolSize;
   common::CompressionKind compressionKind;
   bool enablePrefixSort;
+  bool mergePrefixComparatorEnabled;
   core::JoinType joinType;
 
   TestParam(
@@ -65,20 +66,23 @@ struct TestParam {
       int _poolSize,
       common::CompressionKind _compressionKind,
       bool _enablePrefixSort,
+      bool _mergePrefixComparatorEnabled,
       core::JoinType _joinType)
       : type(_type),
         poolSize(_poolSize),
         compressionKind(_compressionKind),
         enablePrefixSort(_enablePrefixSort),
+        mergePrefixComparatorEnabled(_mergePrefixComparatorEnabled),
         joinType(_joinType) {}
 
   std::string toString() const {
     return fmt::format(
-        "{}|{}|{}|{}",
+        "{}|{}|{}|{}|{}",
         Spiller::typeName(type),
         poolSize,
         compressionKindToString(compressionKind),
         std::to_string(enablePrefixSort),
+        std::to_string(mergePrefixComparatorEnabled),
         joinTypeName(joinType));
   }
 };
@@ -98,6 +102,7 @@ struct TestParamsBuilder {
               poolSize,
               compressionKind,
               poolSize % 2,
+              poolSize % 3,
               core::JoinType::kRight);
           if (type == Spiller::Type::kHashJoinBuild) {
             params.emplace_back(
@@ -105,6 +110,7 @@ struct TestParamsBuilder {
                 poolSize,
                 compressionKind,
                 poolSize % 2,
+                poolSize % 3,
                 core::JoinType::kLeft);
           }
         }
@@ -658,11 +664,17 @@ class SpillerTest : public exec::test::RowContainerTestBase {
       // We make a merge reader that merges the spill files and the rows that
       // are still in the RowContainer.
       auto merge = spillPartition->createOrderedReader(
-          spillConfig_.readBufferSize, pool(), &spillStats_);
+          spillConfig_.readBufferSize,
+          spillConfig_.mergePrefixComparatorEnabled,
+          pool(),
+          &spillStats_);
       ASSERT_TRUE(merge != nullptr);
       ASSERT_TRUE(
           spillPartition->createOrderedReader(
-              spillConfig_.readBufferSize, pool(), &spillStats_) == nullptr);
+              spillConfig_.readBufferSize,
+              spillConfig_.mergePrefixComparatorEnabled,
+              pool(),
+              &spillStats_) == nullptr);
 
       // We read the spilled data back and check that it matches the sorted
       // order of the partition.
@@ -1473,7 +1485,10 @@ TEST_P(AggregationOutputOnly, basic) {
 
     const int expectedNumSpilledRows = numRows - numListedRows;
     auto merge = spillPartition->createOrderedReader(
-        spillConfig_.readBufferSize, pool(), &spillStats_);
+        spillConfig_.readBufferSize,
+        spillConfig_.mergePrefixComparatorEnabled,
+        pool(),
+        &spillStats_);
     if (expectedNumSpilledRows == 0) {
       ASSERT_TRUE(merge == nullptr);
     } else {
@@ -1584,7 +1599,10 @@ TEST_P(OrderByOutputOnly, basic) {
 
     const int expectedNumSpilledRows = numListedRows;
     auto merge = spillPartition->createOrderedReader(
-        spillConfig_.readBufferSize, pool(), &spillStats_);
+        spillConfig_.readBufferSize,
+        spillConfig_.mergePrefixComparatorEnabled,
+        pool(),
+        &spillStats_);
     if (expectedNumSpilledRows == 0) {
       ASSERT_TRUE(merge == nullptr);
     } else {
