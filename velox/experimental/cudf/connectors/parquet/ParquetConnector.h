@@ -18,7 +18,7 @@
 #include "velox/common/config/Config.h"
 #include "velox/connectors/Connector.h"
 #include "velox/experimental/cudf/connectors/parquet/ParquetDataSource.h"
-#include "velox/experimental/cudf/connectors/parquet/TableHandle.h"
+#include "velox/experimental/cudf/connectors/parquet/ParquetTableHandle.h"
 
 #include <cudf/io/parquet.hpp>
 #include <cudf/io/types.hpp>
@@ -27,26 +27,22 @@
 namespace facebook::velox::config {
 class ConfigBase;
 }
+
 namespace facebook::velox::cudf_velox::connector::parquet {
 
-class ParquetConfig {
-  bool isFileHandleCacheEnabled() const {
-    return false;
-  }
-
-  int32_t numCacheFileHandles() const {
-    return 0;
-  }
-
+class ParquetConfig : public cudf::io::parquet_reader_options {
+ public:
   ParquetConfig(std::shared_ptr<const config::ConfigBase> config) {
     VELOX_CHECK_NOT_NULL(
         config, "Config is null for parquetConfig initialization");
     config_ = std::move(config);
-    // TODO: add sanity check
   }
+
   const std::shared_ptr<const config::ConfigBase>& config() const {
     return config_;
   }
+
+  // [[nodiscard]] cudf::io::source_info const& get_source() const = delete;
 
  private:
   std::shared_ptr<const config::ConfigBase> config_;
@@ -67,25 +63,28 @@ class ParquetConnector final : public Connector {
           std::shared_ptr<connector::ColumnHandle>>& columnHandles,
       ConnectorQueryCtx* connectorQueryCtx) override final;
 
+  const std::shared_ptr<const config::ConfigBase>& connectorConfig()
+      const override {
+    return parquetConfig_->config();
+  }
+
   std::unique_ptr<DataSink> createDataSink(
       RowTypePtr /*inputType*/,
       std::shared_ptr<
           ConnectorInsertTableHandle> /*connectorInsertTableHandle*/,
       ConnectorQueryCtx* /*connectorQueryCtx*/,
       CommitStrategy /*commitStrategy*/) override final {
-    VELOX_NYI("ParquetConnector does not yet support data sink.");
+    // cudf::ParquetConnector::DataSink not yet implemented
+    VELOX_NYI("cudf::ParquetConnector does not yet support data sink.");
   }
 
-  /*folly::Executor* executor() const override {
+  folly::Executor* executor() const override {
     return executor_;
-  }*/
+  }
 
  protected:
   const std::shared_ptr<ParquetConfig> parquetConfig_;
-  // cudf::io::source_info;
-
-  /*FileHandleFactory fileHandleFactory_;*/
-  /*folly::Executor* executor_;*/
+  folly::Executor* executor_;
 };
 
 class ParquetConnectorFactory : public ConnectorFactory {
@@ -100,9 +99,7 @@ class ParquetConnectorFactory : public ConnectorFactory {
   std::shared_ptr<Connector> newConnector(
       const std::string& id,
       std::shared_ptr<const config::ConfigBase> config,
-      folly::Executor* executor = nullptr) override {
-    return std::make_shared<ParquetConnector>(id, config, executor);
-  }
+      folly::Executor* executor = nullptr) override;
 };
 
 } // namespace facebook::velox::cudf_velox::connector::parquet
