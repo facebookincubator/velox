@@ -108,8 +108,7 @@ class RowSerializer : public IterativeVectorSerializer {
 
   void flush(OutputStream* stream) override {
     for (const auto& buffer : buffers_) {
-      auto* rawBuffer = buffer->asMutable<char>();
-      stream->write(rawBuffer, buffer->size());
+      stream->write(buffer->template asMutable<char>(), buffer->size());
     }
     buffers_.clear();
   }
