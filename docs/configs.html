@@ -215,6 +215,11 @@ run on a thread before yield. If it is zero, then it no limit.</p></td>
 <td><p>128</p></td>
 <td><p>Minimum number of rows to use prefix-sort. The default value has been derived using micro-benchmarking.</p></td>
 </tr>
+<tr class="row-even"><td><p>prefixsort_max_string_prefix_length</p></td>
+<td><p>integer</p></td>
+<td><p>16</p></td>
+<td><p>Byte length of the string prefix stored in the prefix-sort buffer. This doesn’t include the null byte.</p></td>
+</tr>
 </tbody>
 </table>
 </section>
