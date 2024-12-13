@@ -107,6 +107,28 @@ TEST_F(PartitionIdGeneratorTest, multipleBoolKeys) {
       numPartitions - 1);
 }
 
+TEST_F(PartitionIdGeneratorTest, singleTimestampKeys) {
+  auto numPartitions = 100;
+
+  PartitionIdGenerator idGenerator(ROW({TIMESTAMP()}), {0}, 100, pool(), true);
+
+  auto input = makeRowVector({makeFlatVector<Timestamp>(
+      numPartitions,
+      [](vector_size_t row) {
+        return Timestamp(
+            row, (row % 1000) * Timestamp::kNanosecondsInMillisecond);
+      },
+      nullEvery(10))});
+
+  raw_vector<uint64_t> ids;
+  idGenerator.run(input, ids);
+
+  std::unordered_set<uint64_t> distinctIds(ids.begin(), ids.end());
+  EXPECT_EQ(distinctIds.size(), 91);
+  EXPECT_EQ(*std::min_element(distinctIds.begin(), distinctIds.end()), 0);
+  EXPECT_EQ(*std::max_element(distinctIds.begin(), distinctIds.end()), 90);
+}
+
 TEST_F(PartitionIdGeneratorTest, stableIdsSingleKey) {
   PartitionIdGenerator idGenerator(ROW({BIGINT()}), {0}, 100, pool(), true);
 
@@ -248,8 +270,9 @@ TEST_F(PartitionIdGeneratorTest, supportedPartitionKeyTypes) {
             SMALLINT(),
             INTEGER(),
             BIGINT(),
+            TIMESTAMP(),
         }),
-        {0, 1, 2, 3, 4, 5, 6},
+        {0, 1, 2, 3, 4, 5, 6, 7},
         100,
         pool(),
         true);
@@ -264,6 +287,10 @@ TEST_F(PartitionIdGeneratorTest, supportedPartitionKeyTypes) {
         makeNullableFlatVector<int16_t>({1, 2, std::nullopt}),
         makeNullableFlatVector<int32_t>({1, std::nullopt, 2}),
         makeNullableFlatVector<int64_t>({std::nullopt, 1, 2}),
+        makeNullableFlatVector<Timestamp>(
+            {std::nullopt,
+             Timestamp::fromMillis(1639426440000),
+             Timestamp::fromMillis(123456789)}),
     });
 
     raw_vector<uint64_t> ids;
@@ -279,7 +306,6 @@ TEST_F(PartitionIdGeneratorTest, supportedPartitionKeyTypes) {
     auto input = makeRowVector({
         makeConstant<float>(1.0, 1),
         makeConstant<double>(1.0, 1),
-        makeConstant<Timestamp>(Timestamp::fromMillis(1639426440000), 1),
         makeArrayVector<int32_t>({{1, 2, 3}}),
         makeMapVector<int16_t, int16_t>({{{1, 2}}}),
     });

@@ -35,6 +35,8 @@ class UniqueValue {
     data_ = value;
   }
 
+  explicit UniqueValue(Timestamp value) : UniqueValue(value.toNanos()) {}
+
   explicit UniqueValue(const char* value, uint32_t size) {
     size_ = size;
     data_ = 0;
@@ -293,6 +295,7 @@ class VectorHasher {
       case TypeKind::BIGINT:
       case TypeKind::VARCHAR:
       case TypeKind::VARBINARY:
+      case TypeKind::TIMESTAMP:
         return true;
       default:
         return false;
@@ -594,6 +597,14 @@ bool VectorHasher::makeValueIdsForRows<TypeKind::VARCHAR>(
     uint64_t* result);
 
 template <>
+inline int64_t VectorHasher::toInt64(Timestamp value) const {
+  return value.toNanos();
+}
+
+template <>
+void VectorHasher::analyzeValue(Timestamp value);
+
+template <>
 void VectorHasher::analyzeValue(StringView value);
 
 template <>
@@ -602,6 +613,11 @@ inline bool VectorHasher::tryMapToRange(
     const SelectivityVector& /*rows*/,
     uint64_t* /*result*/) {
   return false;
+}
+
+template <>
+inline uint64_t VectorHasher::valueId(Timestamp value) {
+  return valueId(value.toNanos());
 }
 
 template <>

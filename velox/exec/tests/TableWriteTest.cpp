@@ -135,6 +135,65 @@ RowTypePtr getNonPartitionsColumns(
   return ROW(std::move(dataColumnNames), std::move(dataColumnTypes));
 }
 
+std::string unescapePathName(const std::string& path) {
+  std::string result;
+  result.reserve(path.size());
+  for (size_t i = 0; i < path.size(); ++i) {
+    char c = path[i];
+    if (c == '%' && i + 2 < path.size()) {
+      int code = -1;
+      try {
+        code = std::stoi(path.substr(i + 1, 2), nullptr, 16);
+      } catch (const std::exception& e) {
+        code = -1;
+      }
+      if (code >= 0) {
+        result += static_cast<char>(code);
+        i += 2;
+        continue;
+      }
+    }
+    result += c;
+  }
+  return result;
+}
+
+std::vector<std::string> extractPartitionValues(
+    const std::string& partitionName) {
+  std::vector<std::string> values;
+  std::vector<std::string> keys;
+
+  bool inKey = true;
+  int valueStart = -1;
+  int keyStart = 0;
+  int keyEnd = -1;
+  for (int i = 0; i < partitionName.length(); ++i) {
+    char current = partitionName[i];
+    if (inKey) {
+      VELOX_CHECK(current != '/', "Invalid partition spec: {}", partitionName);
+      if (current == '=') {
+        inKey = false;
+        valueStart = i + 1;
+        keyEnd = i;
+      }
+    } else if (current == '/') {
+      VELOX_CHECK(
+          valueStart != -1, "Invalid partition spec: {}", partitionName);
+      values.push_back(unescapePathName(partitionName.substr(valueStart, i)));
+      keys.push_back(unescapePathName(partitionName.substr(keyStart, keyEnd)));
+      inKey = true;
+      valueStart = -1;
+      keyStart = i + 1;
+    }
+  }
+  VELOX_CHECK(!inKey, "Invalid partition spec: {}", partitionName);
+  values.push_back(unescapePathName(
+      partitionName.substr(valueStart, partitionName.length())));
+  keys.push_back(unescapePathName(partitionName.substr(keyStart, keyEnd)));
+
+  return values;
+}
+
 FOLLY_ALWAYS_INLINE std::ostream& operator<<(std::ostream& os, TestMode mode) {
   os << testModeString(mode);
   return os;
@@ -2365,6 +2424,79 @@ TEST_P(PartitionedWithoutBucketTableWriterTest, fromSinglePartitionToMultiple) {
       PlanBuilder().tableScan(newOutputType).planNode(),
       makeHiveConnectorSplits(outputDirectory),
       "SELECT c1 FROM tmp");
+}
+
+TEST_P(PartitionedWithoutBucketTableWriterTest, timestampPartition) {
+  auto rowType = ROW({"p0", "c1"}, {TIMESTAMP(), BIGINT()});
+  setDataTypes(rowType);
+  std::vector<std::string> partitionKeys = {"p0"};
+
+  std::vector<std::string> timestamps = {
+      "2024-12-10 01:12:13.001",
+      "2024-12-11 02:12:13.002",
+      "2024-12-12 03:12:13.003",
+      "2024-12-13 04:12:13.004"};
+
+  // Partition vector is constant vector.
+  std::vector<RowVectorPtr> vectors;
+  vectors.push_back(makeRowVector(
+      rowType->names(),
+      {makeFlatVector<Timestamp>(
+           1'000,
+           [&](auto row) {
+             auto timestamp = util::fromTimestampString(
+                                  StringView(timestamps[row % 4]),
+                                  util::TimestampParseMode::kLegacyCast)
+                                  .value();
+             timestamp.toGMT(Timestamp::defaultTimezone());
+             return timestamp;
+           }),
+       makeFlatVector<int64_t>(1'000, [&](auto row) { return row + 1; })}));
+  createDuckDbTable(vectors);
+
+  auto outputDirectory = TempDirectoryPath::create();
+  auto plan = createInsertPlan(
+      PlanBuilder().values(vectors),
+      rowType,
+      outputDirectory->getPath(),
+      partitionKeys,
+      nullptr,
+      compressionKind_,
+      numTableWriterCount_);
+
+  assertQueryWithWriterConfigs(plan, "SELECT count(*) FROM tmp");
+
+  auto newOutputType = getNonPartitionsColumns(partitionKeys, rowType);
+  assertQuery(
+      PlanBuilder().tableScan(newOutputType).planNode(),
+      makeHiveConnectorSplits(outputDirectory),
+      "SELECT c1 FROM tmp");
+
+  // Check timestamp partition
+  std::vector<std::string> partitionPaths;
+  for (auto& path :
+       fs::recursive_directory_iterator(outputDirectory->getPath())) {
+    if (path.is_directory()) {
+      partitionPaths.emplace_back(path.path().string());
+    }
+  }
+
+  // 4 partitions
+  ASSERT_EQ(partitionPaths.size(), 4);
+
+  std::vector<std::string> partitionValues;
+  for (const auto& name : partitionPaths) {
+    // name = /tmp/velox_test_Pga6zv/p0=2024-12-13 04%3A12%3A13.004
+    // partitionName = p0=2024-12-13 04%3A12%3A13.004
+    auto partitionName = name.substr(name.rfind("/") + 1);
+    // partitionValues = List("2024-12-13 04:12:13.004")
+    auto partitionValue = extractPartitionValues(partitionName);
+    ASSERT_EQ(partitionValue.size(), 1);
+    partitionValues.emplace_back(partitionValue[0]);
+  }
+
+  std::sort(partitionValues.begin(), partitionValues.end());
+  ASSERT_EQ(partitionValues, timestamps);
 }
 
 TEST_P(PartitionedTableWriterTest, maxPartitions) {

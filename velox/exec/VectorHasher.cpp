@@ -41,6 +41,9 @@ namespace facebook::velox::exec {
       case TypeKind::BIGINT: {                                           \
         return TEMPLATE_FUNC<TypeKind::BIGINT>(__VA_ARGS__);             \
       }                                                                  \
+      case TypeKind::TIMESTAMP: {                                        \
+        return TEMPLATE_FUNC<TypeKind::TIMESTAMP>(__VA_ARGS__);          \
+      }                                                                  \
       case TypeKind::VARCHAR:                                            \
       case TypeKind::VARBINARY: {                                        \
         return TEMPLATE_FUNC<TypeKind::VARCHAR>(__VA_ARGS__);            \
@@ -599,6 +602,11 @@ void VectorHasher::analyze(
 }
 
 template <>
+void VectorHasher::analyzeValue(Timestamp value) {
+  analyzeValue(value.toNanos());
+}
+
+template <>
 void VectorHasher::analyzeValue(StringView value) {
   int size = value.size();
   auto data = value.data();
@@ -717,7 +725,7 @@ void extendRange(
     int64_t& min,
     int64_t& max) {
   // The reserve is 2 + reservePct % of the range. Add 2 to make sure
-  // that a non-0 peercentage actually adds something for a small
+  // that a non-0 percentage actually adds something for a small
   // range.
   int64_t reserve =
       reservePct == 0 ? 0 : 2 + (max - min) * (reservePct / 100.0);
@@ -734,6 +742,7 @@ void extendRange(
       extendRange<int32_t>(reserve, min, max);
       break;
     case TypeKind::BIGINT:
+    case TypeKind::TIMESTAMP:
     case TypeKind::VARCHAR:
     case TypeKind::VARBINARY:
       extendRange<int64_t>(reserve, min, max);
