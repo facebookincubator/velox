@@ -31,56 +31,11 @@ std::string ParquetConnectorSplit::getFileName() const {
 std::shared_ptr<ParquetConnectorSplit> ParquetConnectorSplit::create(
     const folly::dynamic& obj) {
   const auto connectorId = obj["connectorId"].asString();
+  const auto splitWeight = obj["splitWeight"].asInt();
   const auto filePath = obj["filePath"].asString();
-  const auto fileFormat =
-      dwio::common::toFileFormat(obj["fileFormat"].asString());
-  const auto start = static_cast<uint64_t>(obj["start"].asInt());
-  const auto length = static_cast<uint64_t>(obj["length"].asInt());
-
-  std::unordered_map<std::string, std::optional<std::string>> partitionKeys;
-  for (const auto& [key, value] : obj["partitionKeys"].items()) {
-    partitionKeys[key.asString()] = value.isNull()
-        ? std::nullopt
-        : std::optional<std::string>(value.asString());
-  }
-
-  std::unordered_map<std::string, std::string> customSplitInfo;
-  for (const auto& [key, value] : obj["customSplitInfo"].items()) {
-    customSplitInfo[key.asString()] = value.asString();
-  }
-
-  std::shared_ptr<std::string> extraFileInfo = obj["extraFileInfo"].isNull()
-      ? nullptr
-      : std::make_shared<std::string>(obj["extraFileInfo"].asString());
-
-  std::unordered_map<std::string, std::string> infoColumns;
-  for (const auto& [key, value] : obj["infoColumns"].items()) {
-    infoColumns[key.asString()] = value.asString();
-  }
-
-  std::optional<FileProperties> properties = std::nullopt;
-  const auto& propertiesObj = obj.getDefault("properties", nullptr);
-  if (propertiesObj != nullptr) {
-    properties = FileProperties{
-        propertiesObj["fileSize"].isNull()
-            ? std::nullopt
-            : std::optional(propertiesObj["fileSize"].asInt()),
-        propertiesObj["modificationTime"].isNull()
-            ? std::nullopt
-            : std::optional(propertiesObj["modificationTime"].asInt())};
-  }
 
   return std::make_shared<ParquetConnectorSplit>(
-      connectorId,
-      filePath,
-      fileFormat,
-      start,
-      length,
-      customSplitInfo,
-      extraFileInfo,
-      splitWeight,
-      infoColumns,
-      properties);
+      connectorId, filePath, splitWeight);
 }
 
 } // namespace facebook::velox::cudf_velox::connector::parquet

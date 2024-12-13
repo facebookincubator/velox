@@ -21,7 +21,13 @@
 #include "velox/dwio/common/Statistics.h"
 #include "velox/exec/OperatorUtils.h"
 #include "velox/experimental/cudf/connectors/parquet/ParquetConnector.h"
+#include "velox/experimental/cudf/connectors/parquet/ParquetTableHandle.h"
 #include "velox/expression/Expr.h"
+
+#include <cudf/io/parquet.hpp>
+#include <cudf/io/types.hpp>
+#include <cudf/logger.hpp>
+#include <cudf/types.hpp>
 
 namespace facebook::velox::cudf_velox::connector::parquet {
 
@@ -33,18 +39,28 @@ class ParquetDataSource : public facebook::velox::connector::DataSource {
       const std::unordered_map<
           std::string,
           std::shared_ptr<connector::ColumnHandle>>& columnHandles,
-      velox::memory::MemoryPool* pool);
+      velox::memory::MemoryPool* pool,
+      const std::shared_ptr<parquetConfig>& parquetConfig);
 
   void addSplit(std::shared_ptr<ConnectorSplit> split) override;
 
   void addDynamicFilter(
       column_index_t /*outputChannel*/,
       const std::shared_ptr<common::Filter>& /*filter*/) override {
-    VELOX_NYI("Dynamic filters not supported by ParquetConnector.");
+    VELOX_NYI("Dynamic filters not yet implemented by cudf::ParquetConnector.");
+    // parquetConfig_->options().set_filter(filter);
   }
 
   std::optional<RowVectorPtr> next(uint64_t size, velox::ContinueFuture& future)
       override;
+  {
+    if (splitReader_->has_next()) {
+      auto [tbl, meta] = splitReader_->read_chunk();
+      return std::make_optional(to_velox_column(tbl->view(), pool_));
+    } else {
+      return std::nullopt;
+    }
+  }
 
   uint64_t getCompletedRows() override {
     return completedRows_;
@@ -62,7 +78,6 @@ class ParquetDataSource : public facebook::velox::connector::DataSource {
  protected:
   virtual std::unique_ptr<cudf::io::chunked_parquet_reader> createSplitReader();
 
-  FileHandleFactory* const fileHandleFactory_;
   folly::Executor* const executor_;
   const ConnectorQueryCtx* const connectorQueryCtx_;
   const std::shared_ptr<ParquetConfig> parquetConfig_;
@@ -82,9 +97,6 @@ class ParquetDataSource : public facebook::velox::connector::DataSource {
   std::shared_ptr<io::IoStatistics> ioStats_;
 
  private:
-  // RowVectorPtr projectOutputColumns(RowVectorPtr vector);
-
-  // velox::Parquet::Table ParquetTable_;
   size_t ParquetTableRowCount_{0};
   std::shared_ptr<ParquetConnectorSplit> currentSplit_;
 
@@ -92,12 +104,6 @@ class ParquetDataSource : public facebook::velox::connector::DataSource {
   size_t completedBytes_{0};
 
   void setupRowIdColumn();
-
-  // Evaluates remainingFilter_ on the specified vector. Returns number of rows
-  // passed. Populates filterEvalCtx_.selectedIndices and selectedBits if only
-  // some rows passed the filter. If none or all rows passed
-  // filterEvalCtx_.selectedIndices and selectedBits are not updated.
-  vector_size_t evaluateRemainingFilter(RowVectorPtr& rowVector);
 
   // Clear split_ after split has been fully processed.  Keep readers around to
   // hold adaptation.
@@ -113,18 +119,8 @@ class ParquetDataSource : public facebook::velox::connector::DataSource {
 
   // The row type for the data source output, not including filter-only columns
   const RowTypePtr outputType_;
-  core::ExpressionEvaluator* const expressionEvaluator_;
-
-  SubfieldFilters filters_;
-  std::shared_ptr<common::MetadataFilter> metadataFilter_;
-  std::unique_ptr<exec::ExprSet> remainingFilterExprSet_;
 
   dwio::common::RuntimeStatistics runtimeStats_;
-  std::atomic<uint64_t> totalRemainingFilterTime_{0};
-
-  // Field indices referenced in both remaining filter and output type. These
-  // columns need to be materialized eagerly to avoid missing values in output.
-  std::vector<column_index_t> multiReferencedFields_;
 
   std::shared_ptr<random::RandomSkipTracker> randomSkip_;
 };
