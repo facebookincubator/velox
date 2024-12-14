@@ -47,20 +47,13 @@ class ParquetDataSource : public facebook::velox::connector::DataSource {
   void addDynamicFilter(
       column_index_t /*outputChannel*/,
       const std::shared_ptr<common::Filter>& /*filter*/) override {
-    VELOX_NYI("Dynamic filters not yet implemented by cudf::ParquetConnector.");
     // parquetConfig_->options().set_filter(filter);
+    VELOX_NYI("Dynamic filters not yet implemented by cudf::ParquetConnector.");
   }
 
-  std::optional<RowVectorPtr> next(uint64_t size, velox::ContinueFuture& future)
-      override;
-  {
-    if (splitReader_->has_next()) {
-      auto [tbl, meta] = splitReader_->read_chunk();
-      return std::make_optional(to_velox_column(tbl->view(), pool_));
-    } else {
-      return std::nullopt;
-    }
-  }
+  std::optional<RowVectorPtr> next(
+      uint64_t /* size */,
+      velox::ContinueFuture& /* future */) override;
 
   uint64_t getCompletedRows() override {
     return completedRows_;
@@ -75,8 +68,19 @@ class ParquetDataSource : public facebook::velox::connector::DataSource {
     return {};
   }
 
- protected:
-  virtual std::unique_ptr<cudf::io::chunked_parquet_reader> createSplitReader();
+ private:
+  std::unique_ptr<cudf::io::chunked_parquet_reader> createSplitReader();
+  // Clear split_ after split has been fully processed.  Keep readers around to
+  // hold adaptation.
+  void resetSplit();
+  const RowVectorPtr& getEmptyOutput() {
+    if (!emptyOutput_) {
+      emptyOutput_ = RowVector::createEmpty(outputType_, pool_);
+    }
+    return emptyOutput_;
+  }
+
+  RowVectorPtr emptyOutput_;
 
   folly::Executor* const executor_;
   const ConnectorQueryCtx* const connectorQueryCtx_;
@@ -85,8 +89,9 @@ class ParquetDataSource : public facebook::velox::connector::DataSource {
 
   std::shared_ptr<ParquetConnectorSplit> split_;
   std::shared_ptr<ParquetTableHandle> parquetTableHandle_;
-  std::shared_ptr<common::ScanSpec> scanSpec_;
-  VectorPtr output_;
+
+  // cuDF Parquet reader stuff.
+  cudf::io::parquet_reader_options readerOptions_;
   std::unique_ptr<cudf::io::chunked_parquet_reader> splitReader_;
 
   // Output type from file reader.  This is different from outputType_ that it
@@ -96,33 +101,13 @@ class ParquetDataSource : public facebook::velox::connector::DataSource {
 
   std::shared_ptr<io::IoStatistics> ioStats_;
 
- private:
-  size_t ParquetTableRowCount_{0};
-  std::shared_ptr<ParquetConnectorSplit> currentSplit_;
-
   size_t completedRows_{0};
   size_t completedBytes_{0};
-
-  void setupRowIdColumn();
-
-  // Clear split_ after split has been fully processed.  Keep readers around to
-  // hold adaptation.
-  void resetSplit();
-
-  const RowVectorPtr& getEmptyOutput() {
-    if (!emptyOutput_) {
-      emptyOutput_ = RowVector::createEmpty(outputType_, pool_);
-    }
-    return emptyOutput_;
-  }
-  RowVectorPtr emptyOutput_;
 
   // The row type for the data source output, not including filter-only columns
   const RowTypePtr outputType_;
 
   dwio::common::RuntimeStatistics runtimeStats_;
-
-  std::shared_ptr<random::RandomSkipTracker> randomSkip_;
 };
 
 } // namespace facebook::velox::cudf_velox::connector::parquet

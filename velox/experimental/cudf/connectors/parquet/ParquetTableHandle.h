@@ -59,10 +59,7 @@ class ParquetTableHandle : public ConnectorTableHandle {
       std::string connectorId,
       const std::string& tableName,
       bool filterPushdownEnabled,
-      SubfieldFilters subfieldFilters,
-      const core::TypedExprPtr& remainingFilter,
-      const RowTypePtr& dataColumns = nullptr,
-      const std::unordered_map<std::string, std::string>& tableParameters = {});
+      const RowTypePtr& dataColumns = nullptr);
 
   const std::string& tableName() const {
     return tableName_;
@@ -72,17 +69,9 @@ class ParquetTableHandle : public ConnectorTableHandle {
     return filterPushdownEnabled_;
   }
 
-  const core::TypedExprPtr& remainingFilter() const {
-    return remainingFilter_;
-  }
-
   // Schema of the table.  Need this for reading TEXTFILE.
   const RowTypePtr& dataColumns() const {
     return dataColumns_;
-  }
-
-  const std::unordered_map<std::string, std::string>& tableParameters() const {
-    return tableParameters_;
   }
 
   std::string toString() const override;
@@ -92,9 +81,8 @@ class ParquetTableHandle : public ConnectorTableHandle {
       void* context);
 
  private:
+  const std::string connectorId_;
   const std::string tableName_;
   const bool filterPushdownEnabled_;
-  const core::TypedExprPtr remainingFilter_;
   const RowTypePtr dataColumns_;
-  const std::unordered_map<std::string, std::string> tableParameters_;
 };

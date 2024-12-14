@@ -42,6 +42,7 @@ struct ParquetConnectorSplit : public velox::connector::ConnectorSplit {
 
   std::string toString() const override;
   std::string getFileName() const;
+
   const cudf::io::source_info& getCudfSourceInfo() const {
     return cudfSourceInfo;
   }
