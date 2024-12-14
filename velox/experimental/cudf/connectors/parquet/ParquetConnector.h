@@ -30,7 +30,7 @@ class ConfigBase;
 
 namespace facebook::velox::cudf_velox::connector::parquet {
 
-class ParquetConfig : public cudf::io::parquet_reader_options {
+class ParquetConfig {
  public:
   ParquetConfig(std::shared_ptr<const config::ConfigBase> config) {
     VELOX_CHECK_NOT_NULL(
