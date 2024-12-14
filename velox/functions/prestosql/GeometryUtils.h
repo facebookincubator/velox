@@ -33,7 +33,7 @@ class GeometryUtils {
       const std::unique_ptr<geos::geom::Geometry>& geometry,
       StringWriter& stringWriter) {
     SliceOutput sliceOutput(stringWriter);
-    serialize(geometry, sliceOutput);
+    serialize(geometry.get(), sliceOutput);
   }
 
   static std::unique_ptr<geos::geom::Geometry> deserialize(
@@ -172,7 +172,7 @@ class GeometryUtils {
 
   template <typename T>
   static void serialize(
-      const std::unique_ptr<geos::geom::Geometry>& geometry,
+      const geos::geom::Geometry* geometry,
       SliceOutput<T>& sliceOutput) {
     switch (geometry->getGeometryTypeId()) {
       case geos::geom::GEOS_POINT:
@@ -190,10 +190,13 @@ class GeometryUtils {
         break;
       case geos::geom::GEOS_POLYGON:
         writePolygon(geometry, sliceOutput, false);
+        break;
       case geos::geom::GEOS_MULTIPOLYGON:
         writePolygon(geometry, sliceOutput, true);
+        break;
       case geos::geom::GEOS_GEOMETRYCOLLECTION:
         writeGeometryCollection(geometry, sliceOutput);
+        break;
       default:
         VELOX_FAIL("Cannot serialize geometry type");
         break;
@@ -259,7 +262,7 @@ class GeometryUtils {
 
   template <typename T>
   static void writeEnvelope(
-      const std::unique_ptr<geos::geom::Geometry>& geometry,
+      const geos::geom::Geometry* geometry,
       SliceOutput<T>& output) {
     auto envelope = geometry->getEnvelopeInternal();
     output.writeDouble(envelope->getMinX());
@@ -280,7 +283,7 @@ class GeometryUtils {
 
   template <typename T>
   static void writePoint(
-      const std::unique_ptr<geos::geom::Geometry>& point,
+      const geos::geom::Geometry* point,
       SliceOutput<T>& output) {
     output.writeByte(static_cast<uint8_t>(GeometrySerializationType::POINT));
     if (!point->isEmpty()) {
@@ -293,7 +296,7 @@ class GeometryUtils {
 
   template <typename T>
   static void writeMultiPoint(
-      const std::unique_ptr<geos::geom::Geometry>& geometry,
+      const geos::geom::Geometry* geometry,
       SliceOutput<T>& output) {
     output.writeByte(
         static_cast<uint8_t>(GeometrySerializationType::MULTI_POINT));
@@ -305,7 +308,7 @@ class GeometryUtils {
 
   template <typename T>
   static void writePolyline(
-      const std::unique_ptr<geos::geom::Geometry>& geometry,
+      const geos::geom::Geometry* geometry,
       SliceOutput<T>& output,
       bool multiType) {
     int numParts;
@@ -346,7 +349,7 @@ class GeometryUtils {
 
   template <typename T>
   static void writePolygon(
-      const std::unique_ptr<geos::geom::Geometry>& geometry,
+      const geos::geom::Geometry* geometry,
       SliceOutput<T>& output,
       bool multitype) {
     int numGeometries = geometry->getNumGeometries();
@@ -445,7 +448,7 @@ class GeometryUtils {
 
   template <typename T>
   static void writeGeometryCollection(
-      const std::unique_ptr<geos::geom::Geometry>& collection,
+      const geos::geom::Geometry* collection,
       SliceOutput<T>& output) {
     output.writeByte(
         static_cast<uint8_t>(GeometrySerializationType::GEOMETRY_COLLECTION));
@@ -454,18 +457,12 @@ class GeometryUtils {
          geometryIndex < collection->getNumGeometries();
          ++geometryIndex) {
       auto* geometry = collection->getGeometryN(geometryIndex);
-      // Wrap the raw pointer into a temporary `std::unique_ptr` without
-      // ownership transfer
-      const std::unique_ptr<geos::geom::Geometry> geometryPtr(
-          const_cast<geos::geom::Geometry*>(geometry),
-          [](geos::geom::Geometry*) {});
-
       // Use a temporary buffer to serialize the geometry and calculate its
       // length
       std::string tempBuffer;
       SliceOutput tempOutput(tempBuffer);
 
-      serialize(geometryPtr, tempOutput);
+      serialize(geometry, tempOutput);
 
       int32_t length = static_cast<int32_t>(tempBuffer.size());
       output.writeInt(length);
