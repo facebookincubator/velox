@@ -521,6 +521,195 @@ of <code class="docutils literal notranslate"><span class="pre">accuracy</span><
 </dd></dl>
 
 </section>
+<section id="classification-metrics-aggregate-functions">
+<h2>Classification Metrics Aggregate Functions<a class="headerlink" href="#classification-metrics-aggregate-functions" title="Link to this heading">¶</a></h2>
+<p>The following functions each measure how some metric of a binary
+<a class="reference external" href="https://en.wikipedia.org/wiki/Confusion_matrix">confusion matrix</a> changes as a function of
+classification thresholds. They are meant to be used in conjunction.</p>
+<p>For example, to find the <a class="reference external" href="https://en.wikipedia.org/wiki/Precision_and_recall">precision-recall curve</a>, use</p>
+<blockquote>
+<div><div class="highlight-none notranslate"><div class="highlight"><pre><span></span>WITH
+    recall_precision AS (
+        SELECT
+            CLASSIFICATION_RECALL(10000, correct, pred) AS recalls,
+            CLASSIFICATION_PRECISION(10000, correct, pred) AS precisions
+        FROM
+           classification_dataset
+    )
+SELECT
+    recall,
+    precision
+FROM
+    recall_precision
+CROSS JOIN UNNEST(recalls, precisions) AS t(recall, precision)
+</pre></div>
+</div>
+</div></blockquote>
+<p>To get the corresponding thresholds for these values, use</p>
+<blockquote>
+<div><div class="highlight-none notranslate"><div class="highlight"><pre><span></span>WITH
+    recall_precision AS (
+        SELECT
+            CLASSIFICATION_THRESHOLDS(10000, correct, pred) AS thresholds,
+            CLASSIFICATION_RECALL(10000, correct, pred) AS recalls,
+            CLASSIFICATION_PRECISION(10000, correct, pred) AS precisions
+        FROM
+           classification_dataset
+    )
+SELECT
+    threshold,
+    recall,
+    precision
+FROM
+    recall_precision
+CROSS JOIN UNNEST(thresholds, recalls, precisions) AS t(threshold, recall, precision)
+</pre></div>
+</div>
+</div></blockquote>
+<p>To find the <a class="reference external" href="https://en.wikipedia.org/wiki/Receiver_operating_characteristic">ROC curve</a>, use</p>
+<blockquote>
+<div><div class="highlight-none notranslate"><div class="highlight"><pre><span></span>WITH
+    fallout_recall AS (
+        SELECT
+            CLASSIFICATION_FALLOUT(10000, correct, pred) AS fallouts,
+            CLASSIFICATION_RECALL(10000, correct, pred) AS recalls
+        FROM
+           classification_dataset
+    )
+SELECT
+    fallout
+    recall,
+FROM
+    recall_fallout
+CROSS JOIN UNNEST(fallouts, recalls) AS t(fallout, recall)
+</pre></div>
+</div>
+</div></blockquote>
+<dl class="py function">
+<dt class="sig sig-object py" id="classification_miss_rate">
+<span class="sig-name descname"><span class="pre">classification_miss_rate</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">buckets</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">y</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">x</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">weight</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">array&lt;double&gt;</span></span></span><a class="headerlink" href="#classification_miss_rate" title="Link to this definition">¶</a></dt>
+<dd><p>Computes the miss-rate with up to <code class="docutils literal notranslate"><span class="pre">buckets</span></code> number of buckets. Returns
+an array of miss-rate values.</p>
+<p><code class="docutils literal notranslate"><span class="pre">y</span></code> should be a boolean outcome value; <code class="docutils literal notranslate"><span class="pre">x</span></code> should be predictions, each
+between 0 and 1; <code class="docutils literal notranslate"><span class="pre">weight</span></code> should be non-negative values, indicating the weight of the instance.</p>
+<p>The
+<a class="reference external" href="https://en.wikipedia.org/wiki/Type_I_and_type_II_errors#False_positive_and_false_negative_rates">miss-rate</a>
+is defined as a sequence whose <span class="math notranslate nohighlight">\(j\)</span>-th entry is</p>
+<div class="math notranslate nohighlight">
+\[{
+    \sum_{i \;|\; x_i \leq t_j \bigwedge y_i = 1} \left[ w_i \right]
+    \over
+    \sum_{i \;|\; x_i \leq t_j \bigwedge y_i = 1} \left[ w_i \right]
+    +
+    \sum_{i \;|\; x_i &gt; t_j \bigwedge y_i = 1} \left[ w_i \right]
+},\]</div>
+<p>where <span class="math notranslate nohighlight">\(t_j\)</span> is the <span class="math notranslate nohighlight">\(j\)</span>-th smallest threshold,
+and <span class="math notranslate nohighlight">\(y_i\)</span>, <span class="math notranslate nohighlight">\(x_i\)</span>, and <span class="math notranslate nohighlight">\(w_i\)</span> are the <span class="math notranslate nohighlight">\(i\)</span>-th
+entries of <code class="docutils literal notranslate"><span class="pre">y</span></code>, <code class="docutils literal notranslate"><span class="pre">x</span></code>, and <code class="docutils literal notranslate"><span class="pre">weight</span></code>, respectively.</p>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="id0">
+<span class="sig-name descname"><span class="pre">classification_miss_rate</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">buckets</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">y</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">x</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">array&lt;double&gt;</span></span></span><a class="headerlink" href="#id0" title="Link to this definition">¶</a></dt>
+<dd><p>This function is equivalent to the variant of
+<code class="xref py py-func docutils literal notranslate"><span class="pre">classification_miss_rate()</span></code> that takes a <code class="docutils literal notranslate"><span class="pre">weight</span></code>, with a per-item weight of <code class="docutils literal notranslate"><span class="pre">1</span></code>.</p>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="classification_fall_out">
+<span class="sig-name descname"><span class="pre">classification_fall_out</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">buckets</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">y</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">x</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">weight</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">array&lt;double&gt;</span></span></span><a class="headerlink" href="#classification_fall_out" title="Link to this definition">¶</a></dt>
+<dd><p>Computes the fall-out with up to <code class="docutils literal notranslate"><span class="pre">buckets</span></code> number of buckets. Returns
+an array of fall-out values.</p>
+<p><code class="docutils literal notranslate"><span class="pre">y</span></code> should be a boolean outcome value; <code class="docutils literal notranslate"><span class="pre">x</span></code> should be predictions, each
+between 0 and 1; <code class="docutils literal notranslate"><span class="pre">weight</span></code> should be non-negative values, indicating the weight of the instance.</p>
+<p>The
+<a class="reference external" href="https://en.wikipedia.org/wiki/Information_retrieval#Fall-out">fall-out</a>
+is defined as a sequence whose <span class="math notranslate nohighlight">\(j\)</span>-th entry is</p>
+<div class="math notranslate nohighlight">
+\[{
+    \sum_{i \;|\; x_i &gt; t_j \bigwedge y_i = 0} \left[ w_i \right]
+    \over
+    \sum_{i \;|\; y_i = 0} \left[ w_i \right]
+},\]</div>
+<p>where <span class="math notranslate nohighlight">\(t_j\)</span> is the <span class="math notranslate nohighlight">\(j\)</span>-th smallest threshold,
+and <span class="math notranslate nohighlight">\(y_i\)</span>, <span class="math notranslate nohighlight">\(x_i\)</span>, and <span class="math notranslate nohighlight">\(w_i\)</span> are the <span class="math notranslate nohighlight">\(i\)</span>-th
+entries of <code class="docutils literal notranslate"><span class="pre">y</span></code>, <code class="docutils literal notranslate"><span class="pre">x</span></code>, and <code class="docutils literal notranslate"><span class="pre">weight</span></code>, respectively.</p>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="id2">
+<span class="sig-name descname"><span class="pre">classification_fall_out</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">buckets</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">y</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">x</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">array&lt;double&gt;</span></span></span><a class="headerlink" href="#id2" title="Link to this definition">¶</a></dt>
+<dd><p>This function is equivalent to the variant of
+<code class="xref py py-func docutils literal notranslate"><span class="pre">classification_fall_out()</span></code> that takes a <code class="docutils literal notranslate"><span class="pre">weight</span></code>, with a per-item weight of <code class="docutils literal notranslate"><span class="pre">1</span></code>.</p>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="classification_precision">
+<span class="sig-name descname"><span class="pre">classification_precision</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">buckets</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">y</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">x</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">weight</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">array&lt;double&gt;</span></span></span><a class="headerlink" href="#classification_precision" title="Link to this definition">¶</a></dt>
+<dd><p>Computes the precision with up to <code class="docutils literal notranslate"><span class="pre">buckets</span></code> number of buckets. Returns
+an array of precision values.</p>
+<p><code class="docutils literal notranslate"><span class="pre">y</span></code> should be a boolean outcome value; <code class="docutils literal notranslate"><span class="pre">x</span></code> should be predictions, each
+between 0 and 1; <code class="docutils literal notranslate"><span class="pre">weight</span></code> should be non-negative values, indicating the weight of the instance.</p>
+<p>The
+<a class="reference external" href="https://en.wikipedia.org/wiki/Positive_and_negative_predictive_values">precision</a>
+is defined as a sequence whose <span class="math notranslate nohighlight">\(j\)</span>-th entry is</p>
+<div class="math notranslate nohighlight">
+\[{
+    \sum_{i \;|\; x_i &gt; t_j \bigwedge y_i = 1} \left[ w_i \right]
+    \over
+    \sum_{i \;|\; x_i &gt; t_j} \left[ w_i \right]
+},\]</div>
+<p>where <span class="math notranslate nohighlight">\(t_j\)</span> is the <span class="math notranslate nohighlight">\(j\)</span>-th smallest threshold,
+and <span class="math notranslate nohighlight">\(y_i\)</span>, <span class="math notranslate nohighlight">\(x_i\)</span>, and <span class="math notranslate nohighlight">\(w_i\)</span> are the <span class="math notranslate nohighlight">\(i\)</span>-th
+entries of <code class="docutils literal notranslate"><span class="pre">y</span></code>, <code class="docutils literal notranslate"><span class="pre">x</span></code>, and <code class="docutils literal notranslate"><span class="pre">weight</span></code>, respectively.</p>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="id3">
+<span class="sig-name descname"><span class="pre">classification_precision</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">buckets</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">y</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">x</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">array&lt;double&gt;</span></span></span><a class="headerlink" href="#id3" title="Link to this definition">¶</a></dt>
+<dd><p>This function is equivalent to the variant of
+<code class="xref py py-func docutils literal notranslate"><span class="pre">classification_precision()</span></code> that takes a <code class="docutils literal notranslate"><span class="pre">weight</span></code>, with a per-item weight of <code class="docutils literal notranslate"><span class="pre">1</span></code>.</p>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="classification_recall">
+<span class="sig-name descname"><span class="pre">classification_recall</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">buckets</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">y</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">x</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">weight</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">array&lt;double&gt;</span></span></span><a class="headerlink" href="#classification_recall" title="Link to this definition">¶</a></dt>
+<dd><p>Computes the recall with up to <code class="docutils literal notranslate"><span class="pre">buckets</span></code> number of buckets. Returns
+an array of recall values.</p>
+<p><code class="docutils literal notranslate"><span class="pre">y</span></code> should be a boolean outcome value; <code class="docutils literal notranslate"><span class="pre">x</span></code> should be predictions, each
+between 0 and 1; <code class="docutils literal notranslate"><span class="pre">weight</span></code> should be non-negative values, indicating the weight of the instance.</p>
+<p>The
+<a class="reference external" href="https://en.wikipedia.org/wiki/Precision_and_recall#Recall">recall</a>
+is defined as a sequence whose <span class="math notranslate nohighlight">\(j\)</span>-th entry is</p>
+<div class="math notranslate nohighlight">
+\[{
+    \sum_{i \;|\; x_i &gt; t_j \bigwedge y_i = 1} \left[ w_i \right]
+    \over
+    \sum_{i \;|\; y_i = 1} \left[ w_i \right]
+},\]</div>
+<p>where <span class="math notranslate nohighlight">\(t_j\)</span> is the <span class="math notranslate nohighlight">\(j\)</span>-th smallest threshold,
+and <span class="math notranslate nohighlight">\(y_i\)</span>, <span class="math notranslate nohighlight">\(x_i\)</span>, and <span class="math notranslate nohighlight">\(w_i\)</span> are the <span class="math notranslate nohighlight">\(i\)</span>-th
+entries of <code class="docutils literal notranslate"><span class="pre">y</span></code>, <code class="docutils literal notranslate"><span class="pre">x</span></code>, and <code class="docutils literal notranslate"><span class="pre">weight</span></code>, respectively.</p>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="id4">
+<span class="sig-name descname"><span class="pre">classification_recall</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">buckets</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">y</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">x</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">array&lt;double&gt;</span></span></span><a class="headerlink" href="#id4" title="Link to this definition">¶</a></dt>
+<dd><p>This function is equivalent to the variant of
+<code class="xref py py-func docutils literal notranslate"><span class="pre">classification_recall()</span></code> that takes a <code class="docutils literal notranslate"><span class="pre">weight</span></code>, with a per-item weight of <code class="docutils literal notranslate"><span class="pre">1</span></code>.</p>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="classification_thresholds">
+<span class="sig-name descname"><span class="pre">classification_thresholds</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">buckets</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">y</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">x</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">array&lt;double&gt;</span></span></span><a class="headerlink" href="#classification_thresholds" title="Link to this definition">¶</a></dt>
+<dd><p>Computes the thresholds with up to <code class="docutils literal notranslate"><span class="pre">buckets</span></code> number of buckets. Returns
+an array of threshold values.</p>
+<p><code class="docutils literal notranslate"><span class="pre">y</span></code> should be a boolean outcome value; <code class="docutils literal notranslate"><span class="pre">x</span></code> should be predictions, each
+between 0 and 1.</p>
+<p>The thresholds are defined as a sequence whose <span class="math notranslate nohighlight">\(j\)</span>-th entry is the <span class="math notranslate nohighlight">\(j\)</span>-th smallest threshold.</p>
+</dd></dl>
+
+</section>
 <section id="statistical-aggregate-functions">
 <h2>Statistical Aggregate Functions<a class="headerlink" href="#statistical-aggregate-functions" title="Link to this heading">¶</a></h2>
 <dl class="py function">
@@ -729,6 +918,18 @@ value. <code class="docutils literal notranslate"><span class="pre">x</span></co
 <li><a class="reference internal" href="#approx_distinct"><code class="docutils literal notranslate"><span class="pre">approx_distinct()</span></code></a></li>
 <li><a class="reference internal" href="#approx_most_frequent"><code class="docutils literal notranslate"><span class="pre">approx_most_frequent()</span></code></a></li>
 <li><a class="reference internal" href="#approx_percentile"><code class="docutils literal notranslate"><span class="pre">approx_percentile()</span></code></a></li>
+</ul>
+</li>
+<li><a class="reference internal" href="#classification-metrics-aggregate-functions">Classification Metrics Aggregate Functions</a><ul>
+<li><a class="reference internal" href="#classification_miss_rate"><code class="docutils literal notranslate"><span class="pre">classification_miss_rate()</span></code></a></li>
+<li><a class="reference internal" href="#id0"><code class="docutils literal notranslate"><span class="pre">classification_miss_rate()</span></code></a></li>
+<li><a class="reference internal" href="#classification_fall_out"><code class="docutils literal notranslate"><span class="pre">classification_fall_out()</span></code></a></li>
+<li><a class="reference internal" href="#id2"><code class="docutils literal notranslate"><span class="pre">classification_fall_out()</span></code></a></li>
+<li><a class="reference internal" href="#classification_precision"><code class="docutils literal notranslate"><span class="pre">classification_precision()</span></code></a></li>
+<li><a class="reference internal" href="#id3"><code class="docutils literal notranslate"><span class="pre">classification_precision()</span></code></a></li>
+<li><a class="reference internal" href="#classification_recall"><code class="docutils literal notranslate"><span class="pre">classification_recall()</span></code></a></li>
+<li><a class="reference internal" href="#id4"><code class="docutils literal notranslate"><span class="pre">classification_recall()</span></code></a></li>
+<li><a class="reference internal" href="#classification_thresholds"><code class="docutils literal notranslate"><span class="pre">classification_thresholds()</span></code></a></li>
 </ul>
 </li>
 <li><a class="reference internal" href="#statistical-aggregate-functions">Statistical Aggregate Functions</a><ul>
