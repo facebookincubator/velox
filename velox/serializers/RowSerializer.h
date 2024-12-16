@@ -64,7 +64,7 @@ class RowSerializer : public IterativeVectorSerializer {
     }
 
     BufferPtr buffer = AlignedBuffer::allocate<char>(totalSize, pool_, 0);
-    auto* rawBuffer = buffer->asMutable<char>();
+    auto* rawBuffer = buffer->template asMutable<char>();
     buffers_.push_back(std::move(buffer));
 
     serializeRanges(row, ranges, rawBuffer, rowSize);
@@ -83,7 +83,7 @@ class RowSerializer : public IterativeVectorSerializer {
     }
 
     BufferPtr buffer = AlignedBuffer::allocate<char>(totalSize, pool_, 0);
-    auto* rawBuffer = buffer->asMutable<char>();
+    auto* rawBuffer = buffer->template asMutable<char>();
     buffers_.push_back(std::move(buffer));
 
     size_t offset = 0;
