@@ -20,23 +20,23 @@
 
 #include "velox/connectors/Connector.h"
 #include "velox/dwio/common/Options.h"
-#include "velox/experimental/cudf/connectors/parquet/FileProperties.h"
-#include "velox/experimental/cudf/connectors/parquet/TableHandle.h"
 
 #include <cudf/io/types.hpp>
 
 namespace facebook::velox::cudf_velox::connector::parquet {
 
-struct ParquetConnectorSplit : public velox::connector::ConnectorSplit {
+struct ParquetConnectorSplit
+    : public facebook::velox::connector::ConnectorSplit {
   const std::string filePath;
-  const dwio::common::FileFormat{dwio::common::FileFormat::PARQUET};
+  const facebook::velox::dwio::common::FileFormat fileFormat{
+      facebook::velox::dwio::common::FileFormat::PARQUET};
   const cudf::io::source_info cudfSourceInfo;
 
   ParquetConnectorSplit(
       const std::string& connectorId,
       const std::string& _filePath,
       int64_t _splitWeight = 0)
-      : ConnectorSplit(connectorId, _splitWeight),
+      : facebook::velox::connector::ConnectorSplit(connectorId, _splitWeight),
         filePath(_filePath),
         cudfSourceInfo({filePath}) {}
 
@@ -66,8 +66,8 @@ class ParquetConnectorSplitBuilder {
     return *this;
   }
 
-  std::shared_ptr<connector::parquet::ParquetConnectorSplit> build() const {
-    return std::make_shared<connector::parquet::ParquetConnectorSplit>(
+  std::shared_ptr<ParquetConnectorSplit> build() const {
+    return std::make_shared<ParquetConnectorSplit>(
         connectorId_, filePath_, splitWeight_);
   }
 

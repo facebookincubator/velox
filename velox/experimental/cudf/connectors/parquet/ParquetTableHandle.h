@@ -18,6 +18,7 @@
 #include "velox/common/config/Config.h"
 #include "velox/connectors/Connector.h"
 #include "velox/experimental/cudf/connectors/parquet/ParquetDataSource.h"
+#include "velox/type/Type.h"
 
 #include <cudf/io/parquet.hpp>
 #include <cudf/io/types.hpp>
@@ -25,9 +26,11 @@
 
 #include <vector>
 
+namespace facebook::velox::cudf_velox::connector::parquet {
+
 // Parquet column handle only needs the column name (all columns are generated
 // in the same way).
-class ParquetColumnHandle : public ColumnHandle {
+class ParquetColumnHandle : public facebook::velox::connector::ColumnHandle {
  public:
   explicit ParquetColumnHandle(
       const std::string& name,
@@ -53,7 +56,8 @@ class ParquetColumnHandle : public ColumnHandle {
   const std::vector<ParquetColumnHandle> children_;
 };
 
-class ParquetTableHandle : public ConnectorTableHandle {
+class ParquetTableHandle
+    : public facebook::velox::connector::ConnectorTableHandle {
  public:
   ParquetTableHandle(
       std::string connectorId,
@@ -74,9 +78,16 @@ class ParquetTableHandle : public ConnectorTableHandle {
     return dataColumns_;
   }
 
-  std::string toString() const override;
+  std::string toString() const override {
+    std::stringstream out;
+    out << "table: " << tableName_;
+    if (dataColumns_) {
+      out << ", data columns: " << dataColumns_->toString();
+    }
+    return out.str();
+  }
 
-  static ConnectorTableHandlePtr create(
+  static facebook::velox::connector::ConnectorTableHandlePtr create(
       const folly::dynamic& obj,
       void* context);
 
@@ -86,3 +97,5 @@ class ParquetTableHandle : public ConnectorTableHandle {
   const bool filterPushdownEnabled_;
   const RowTypePtr dataColumns_;
 };
+
+} // namespace facebook::velox::cudf_velox::connector::parquet
