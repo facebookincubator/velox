@@ -14,21 +14,42 @@
  * limitations under the License.
  */
 #include "velox/experimental/cudf/connectors/parquet/ParquetDataSource.h"
+#include "velox/experimental/cudf/connectors/parquet/ParquetConfig.h"
 #include "velox/experimental/cudf/connectors/parquet/ParquetConnector.h"
+#include "velox/experimental/cudf/connectors/parquet/ParquetConnectorSplit.h"
+
+#include "velox/experimental/cudf/exec/Utilities.h"
+#include "velox/experimental/cudf/exec/VeloxCudfInterop.h"
+#include "velox/experimental/cudf/vector/CudfVector.h"
 
 #include <cudf/io/parquet.hpp>
 #include <cudf/io/types.hpp>
 #include <cudf/table/table.hpp>
 #include <cudf/table/table_view.hpp>
-
-#include "velox/experimental/cudf/exec/CudfTableScan.h"
-#include "velox/experimental/cudf/exec/Utilities.h"
-#include "velox/experimental/cudf/exec/VeloxCudfInterop.h"
-#include "velox/experimental/cudf/vector/CudfVector.h"
-
 #include <memory>
 
 namespace facebook::velox::cudf_velox::connector::parquet {
+
+ParquetDataSource::ParquetDataSource(
+    const std::shared_ptr<const RowType>& outputType,
+    const std::shared_ptr<facebook::velox::connector::ConnectorTableHandle>&
+        tableHandle,
+    const std::unordered_map<
+        std::string,
+        std::shared_ptr<facebook::velox::connector::ColumnHandle>>&
+    /*columnHandles*/,
+    folly::Executor* executor,
+    const facebook::velox::connector::ConnectorQueryCtx* connectorQueryCtx,
+    const std::shared_ptr<ParquetConfig>& parquetConfig)
+    : parquetConfig_(parquetConfig),
+      executor_(executor),
+      connectorQueryCtx_(connectorQueryCtx),
+      pool_(connectorQueryCtx->memoryPool()),
+      outputType_(outputType) {
+  tableHandle_ = std::dynamic_pointer_cast<ParquetTableHandle>(tableHandle);
+  VELOX_CHECK_NOT_NULL(
+      tableHandle_, "TableHandle must be an instance of ParquetTableHandle");
+}
 
 std::optional<RowVectorPtr> ParquetDataSource::next(
     uint64_t /* size */,
@@ -36,42 +57,45 @@ std::optional<RowVectorPtr> ParquetDataSource::next(
   VELOX_CHECK(split_ != nullptr, "No split to process. Call addSplit first.");
   VELOX_CHECK_NOT_NULL(splitReader_, "No split reader present");
 
-  if (splitReader_->emptySplit()) {
-    resetSplit();
-    return nullptr;
-  }
+  // TODO: MH: Enable this some other way
+  // if (splitReader_->emptySplit()) {
+  //  resetSplit();
+  //  return nullptr;
+  //}
 
   // cudf parquet reader returns has_next() = true if no chunk has yet been
   // read.
   if (splitReader_->has_next()) {
     // Read a chunk of table.
+    // TODO: Does table needs to stay in scope after to_velox_column()?
     auto [table, metadata] = splitReader_->read_chunk();
     // Check if the chunk is empty
-    const auto rowsScanned = table.num_rows();
+    const auto rowsScanned = table->num_rows();
     if (rowsScanned == 0) {
       return nullptr;
     }
 
     // update completedRows
-    completedRows_ += table.num_rows();
+    completedRows_ += table->num_rows();
 
     // TODO: Update completedBytes_
     // completedBytes_ += what?
 
     // Convert to velox RowVectorPtr and return
-    return std::make_optional(to_velox_column(tbl->view(), pool_));
+    return std::make_optional(to_velox_column(table->view(), pool_));
 
   } else {
     return nullptr;
   }
 }
 
-void ParquetDataSource::addSplit(std::shared_ptr<ConnectorSplit> split) {
+void ParquetDataSource::addSplit(
+    std::shared_ptr<facebook::velox::connector::ConnectorSplit> split) {
   split_ = std::dynamic_pointer_cast<ParquetConnectorSplit>(split);
 
   VLOG(1) << "Adding split " << split_->toString();
 
-  // Split reader already exists
+  // Split reader already exists, reset
   if (splitReader_) {
     splitReader_.reset();
   }
@@ -81,13 +105,27 @@ void ParquetDataSource::addSplit(std::shared_ptr<ConnectorSplit> split) {
 
 std::unique_ptr<cudf::io::chunked_parquet_reader>
 ParquetDataSource::createSplitReader() {
-  auto const source_info = split_.getSourceInfo();
-  auto options = cudf::io::parquet_reader_options::builder(source_info)
-                     /*.filter()*/
-                     .build();
+  // Reader options
+  auto readerOptions =
+      cudf::io::parquet_reader_options::builder(split_->getCudfSourceInfo())
+          .skip_rows(parquetConfig_->skipRows())
+          .use_pandas_metadata(parquetConfig_->isUsePandasMetadata())
+          .use_arrow_schema(parquetConfig_->isUseArrowSchema())
+          .allow_mismatched_pq_schemas(
+              parquetConfig_->isAllowMismatchedParquetSchemas())
+          .timestamp_type(parquetConfig_->timestampType())
+          .build();
 
-  return std::make_unique(
-      parquetConfig.chunkReadLimit(), parquetConfig.passReadLimit(), options);
+  // Set num_rows only if available
+  if (parquetConfig_->numRows().has_value()) {
+    readerOptions.set_num_rows(parquetConfig_->numRows().value());
+  }
+
+  // Create a parquet reader
+  return std::make_unique<cudf::io::chunked_parquet_reader>(
+      parquetConfig_->maxChunkReadLimit(),
+      parquetConfig_->maxPassReadLimit(),
+      readerOptions);
 }
 
 void ParquetDataSource::resetSplit() {

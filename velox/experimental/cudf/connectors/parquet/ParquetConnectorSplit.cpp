@@ -19,7 +19,7 @@
 namespace facebook::velox::cudf_velox::connector::parquet {
 
 std::string ParquetConnectorSplit::toString() const {
-  return fmt::format("Parquet: {} {} - {}", filePath, start, length);
+  return fmt::format("Parquet: {}", filePath);
 }
 
 std::string ParquetConnectorSplit::getFileName() const {

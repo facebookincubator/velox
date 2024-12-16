@@ -20,13 +20,15 @@
 #include "velox/connectors/Connector.h"
 #include "velox/dwio/common/Statistics.h"
 #include "velox/exec/OperatorUtils.h"
+#include "velox/experimental/cudf/connectors/parquet/ParquetConfig.h"
 #include "velox/experimental/cudf/connectors/parquet/ParquetConnector.h"
+#include "velox/experimental/cudf/connectors/parquet/ParquetConnectorSplit.h"
 #include "velox/experimental/cudf/connectors/parquet/ParquetTableHandle.h"
 #include "velox/expression/Expr.h"
+#include "velox/type/Type.h"
 
 #include <cudf/io/parquet.hpp>
 #include <cudf/io/types.hpp>
-#include <cudf/logger.hpp>
 #include <cudf/types.hpp>
 
 namespace facebook::velox::cudf_velox::connector::parquet {
@@ -35,19 +37,23 @@ class ParquetDataSource : public facebook::velox::connector::DataSource {
  public:
   ParquetDataSource(
       const std::shared_ptr<const RowType>& outputType,
-      const std::shared_ptr<connector::ConnectorTableHandle>& tableHandle,
+      const std::shared_ptr<facebook::velox::connector::ConnectorTableHandle>&
+          tableHandle,
       const std::unordered_map<
           std::string,
-          std::shared_ptr<connector::ColumnHandle>>& columnHandles,
-      velox::memory::MemoryPool* pool,
-      const std::shared_ptr<parquetConfig>& parquetConfig);
+          std::shared_ptr<facebook::velox::connector::ColumnHandle>>&
+      /*columnHandles*/,
+      folly::Executor* executor,
+      const facebook::velox::connector::ConnectorQueryCtx* connectorQueryCtx,
+      const std::shared_ptr<ParquetConfig>& parquetConfig);
 
-  void addSplit(std::shared_ptr<ConnectorSplit> split) override;
+  void addSplit(std::shared_ptr<facebook::velox::connector::ConnectorSplit>
+                    split) override;
 
   void addDynamicFilter(
       column_index_t /*outputChannel*/,
-      const std::shared_ptr<common::Filter>& /*filter*/) override {
-    // parquetConfig_->options().set_filter(filter);
+      const std::shared_ptr<facebook::velox::common::Filter>& /*filter*/)
+      override {
     VELOX_NYI("Dynamic filters not yet implemented by cudf::ParquetConnector.");
   }
 
@@ -79,16 +85,17 @@ class ParquetDataSource : public facebook::velox::connector::DataSource {
     }
     return emptyOutput_;
   }
-
   RowVectorPtr emptyOutput_;
 
-  folly::Executor* const executor_;
-  const ConnectorQueryCtx* const connectorQueryCtx_;
-  const std::shared_ptr<ParquetConfig> parquetConfig_;
-  memory::MemoryPool* const pool_;
-
   std::shared_ptr<ParquetConnectorSplit> split_;
-  std::shared_ptr<ParquetTableHandle> parquetTableHandle_;
+  std::shared_ptr<ParquetTableHandle> tableHandle_;
+
+  const std::shared_ptr<ParquetConfig> parquetConfig_;
+
+  folly::Executor* const executor_;
+  const facebook::velox::connector::ConnectorQueryCtx* const connectorQueryCtx_;
+
+  memory::MemoryPool* const pool_;
 
   // cuDF Parquet reader stuff.
   cudf::io::parquet_reader_options readerOptions_;

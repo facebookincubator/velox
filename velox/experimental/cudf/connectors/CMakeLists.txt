@@ -12,10 +12,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-add_subdirectory(exec)
-add_subdirectory(connectors)
-add_subdirectory(vector)
-
-if(VELOX_BUILD_TESTING)
-  add_subdirectory(tests)
-endif()
+#if(${VELOX_ENABLE_CUDF_PARQUET_CONNECTOR})
+add_subdirectory(parquet)
+#endif()
