@@ -85,7 +85,6 @@ TEST(TypeTest, integer) {
   EXPECT_THROW(int0->childAt(0), std::invalid_argument);
   EXPECT_EQ(int0->kind(), TypeKind::INTEGER);
   EXPECT_STREQ(int0->kindName(), "INTEGER");
-  EXPECT_EQ(int0->begin(), int0->end());
 
   testTypeSerde(int0);
 }
@@ -101,7 +100,6 @@ TEST(TypeTest, timestamp) {
   EXPECT_THROW(t0->childAt(0), std::invalid_argument);
   EXPECT_EQ(t0->kind(), TypeKind::TIMESTAMP);
   EXPECT_STREQ(t0->kindName(), "TIMESTAMP");
-  EXPECT_EQ(t0->begin(), t0->end());
 
   testTypeSerde(t0);
 }
@@ -158,7 +156,6 @@ TEST(TypeTest, date) {
   EXPECT_THROW(date->childAt(0), std::invalid_argument);
   EXPECT_EQ(date->kind(), TypeKind::INTEGER);
   EXPECT_STREQ(date->kindName(), "INTEGER");
-  EXPECT_EQ(date->begin(), date->end());
 
   EXPECT_TRUE(date->kindEquals(INTEGER()));
   EXPECT_NE(*date, *INTEGER());
@@ -175,7 +172,6 @@ TEST(TypeTest, intervalDayTime) {
   EXPECT_THROW(interval->childAt(0), std::invalid_argument);
   EXPECT_EQ(interval->kind(), TypeKind::BIGINT);
   EXPECT_STREQ(interval->kindName(), "BIGINT");
-  EXPECT_EQ(interval->begin(), interval->end());
 
   EXPECT_TRUE(interval->kindEquals(BIGINT()));
   EXPECT_NE(*interval, *BIGINT());
@@ -196,7 +192,6 @@ TEST(TypeTest, intervalYearMonth) {
   EXPECT_THROW(interval->childAt(0), std::invalid_argument);
   EXPECT_EQ(interval->kind(), TypeKind::INTEGER);
   EXPECT_STREQ(interval->kindName(), "INTEGER");
-  EXPECT_EQ(interval->begin(), interval->end());
 
   EXPECT_TRUE(interval->kindEquals(INTEGER()));
   EXPECT_NE(*interval, *INTEGER());
@@ -224,7 +219,6 @@ TEST(TypeTest, unknown) {
   EXPECT_THROW(type->childAt(0), std::invalid_argument);
   EXPECT_EQ(type->kind(), TypeKind::UNKNOWN);
   EXPECT_STREQ(type->kindName(), "UNKNOWN");
-  EXPECT_EQ(type->begin(), type->end());
   EXPECT_TRUE(type->isComparable());
   EXPECT_TRUE(type->isOrderable());
 
@@ -237,7 +231,6 @@ TEST(TypeTest, shortDecimal) {
   EXPECT_EQ(shortDecimal->size(), 0);
   EXPECT_THROW(shortDecimal->childAt(0), std::invalid_argument);
   EXPECT_EQ(shortDecimal->kind(), TypeKind::BIGINT);
-  EXPECT_EQ(shortDecimal->begin(), shortDecimal->end());
 
   EXPECT_EQ(*DECIMAL(10, 5), *shortDecimal);
   EXPECT_NE(*DECIMAL(9, 5), *shortDecimal);
@@ -273,7 +266,6 @@ TEST(TypeTest, longDecimal) {
   EXPECT_EQ(longDecimal->size(), 0);
   EXPECT_THROW(longDecimal->childAt(0), std::invalid_argument);
   EXPECT_EQ(longDecimal->kind(), TypeKind::HUGEINT);
-  EXPECT_EQ(longDecimal->begin(), longDecimal->end());
   EXPECT_EQ(*DECIMAL(30, 5), *longDecimal);
   EXPECT_NE(*DECIMAL(9, 5), *longDecimal);
   EXPECT_NE(*DECIMAL(30, 3), *longDecimal);
@@ -370,18 +362,6 @@ TEST(TypeTest, map) {
   EXPECT_THROW(mapType->childAt(2), VeloxUserError);
   EXPECT_EQ(mapType->kind(), TypeKind::MAP);
   EXPECT_STREQ(mapType->kindName(), "MAP");
-  int32_t num = 0;
-  for (auto& i : *mapType) {
-    if (num == 0) {
-      EXPECT_EQ(i->toString(), "INTEGER");
-    } else if (num == 1) {
-      EXPECT_EQ(i->toString(), "ARRAY<BIGINT>");
-    } else {
-      FAIL();
-    }
-    ++num;
-  }
-  CHECK_EQ(num, 2);
 
   EXPECT_STREQ(mapType->name(), "MAP");
   EXPECT_EQ(mapType->parameters().size(), 2);
@@ -424,22 +404,6 @@ TEST(TypeTest, row) {
   EXPECT_TRUE(row0->containsChild("a"));
   EXPECT_TRUE(row0->containsChild("b"));
   EXPECT_FALSE(row0->containsChild("c"));
-  int32_t seen = 0;
-  for (auto& i : *row0) {
-    if (seen == 0) {
-      EXPECT_STREQ("INTEGER", i->kindName());
-    } else if (seen == 1) {
-      EXPECT_EQ("ROW<a:BIGINT>", i->toString());
-      int32_t seen2 = 0;
-      for (auto& j : *i) {
-        EXPECT_EQ(j->toString(), "BIGINT");
-        seen2++;
-      }
-      EXPECT_EQ(seen2, 1);
-    }
-    seen++;
-  }
-  CHECK_EQ(seen, 2);
 
   EXPECT_STREQ(row0->name(), "ROW");
   EXPECT_EQ(row0->parameters().size(), 2);

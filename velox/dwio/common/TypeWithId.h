@@ -23,7 +23,7 @@
 
 namespace facebook::velox::dwio::common {
 
-class TypeWithId : public velox::Tree<std::shared_ptr<const TypeWithId>> {
+class TypeWithId {
  public:
   /// NOTE: This constructor will re-parent the children.
   TypeWithId(
@@ -32,6 +32,8 @@ class TypeWithId : public velox::Tree<std::shared_ptr<const TypeWithId>> {
       uint32_t id,
       uint32_t maxId,
       uint32_t column);
+
+  virtual ~TypeWithId() = default;
 
   TypeWithId(const TypeWithId&) = delete;
   TypeWithId& operator=(const TypeWithId&) = delete;
@@ -47,7 +49,9 @@ class TypeWithId : public velox::Tree<std::shared_ptr<const TypeWithId>> {
       const RowTypePtr& type,
       const velox::common::ScanSpec& spec);
 
-  uint32_t size() const override;
+  uint32_t size() const {
+    return children_.size();
+  }
 
   const std::shared_ptr<const velox::Type>& type() const {
     return type_;
@@ -69,7 +73,9 @@ class TypeWithId : public velox::Tree<std::shared_ptr<const TypeWithId>> {
     return column_;
   }
 
-  const std::shared_ptr<const TypeWithId>& childAt(uint32_t idx) const override;
+  const std::shared_ptr<const TypeWithId>& childAt(uint32_t idx) const {
+    return children_.at(idx);
+  }
 
   const std::shared_ptr<const TypeWithId>& childByName(
       const std::string& name) const {

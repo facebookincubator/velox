@@ -37,7 +37,6 @@
 #include "velox/type/HugeInt.h"
 #include "velox/type/StringView.h"
 #include "velox/type/Timestamp.h"
-#include "velox/type/Tree.h"
 
 namespace facebook::velox {
 
@@ -433,7 +432,7 @@ struct TypeParameter {
 ///   IntegerType    ArrayType
 ///                     |
 ///                   BigintType
-class Type : public Tree<const TypePtr>, public velox::ISerializable {
+class Type : public velox::ISerializable {
  public:
   explicit Type(TypeKind kind, bool providesCustomComparison = false)
       : kind_{kind}, providesCustomComparison_(providesCustomComparison) {}
@@ -480,6 +479,12 @@ class Type : public Tree<const TypePtr>, public velox::ISerializable {
   /// Returns a possibly empty list of type parameters.
   virtual const std::vector<TypeParameter>& parameters() const = 0;
 
+  /// Returns the number of children of this type.
+  virtual uint32_t size() const = 0;
+
+  /// Returns the child at position index.  Index must be smaller than size().
+  virtual const TypePtr& childAt(uint32_t index) const = 0;
+
   /// Returns physical type name. Multiple logical types may share the same
   /// physical type backing and therefore return the same physical type name.
   /// The logical type name returned by 'name()' must be unique though.
@@ -490,7 +495,7 @@ class Type : public Tree<const TypePtr>, public velox::ISerializable {
   /// Options to control the output of toSummaryString().
   struct TypeSummaryOptions {
     /// Maximum number of child types to include in the summary.
-    size_type maxChildren{0};
+    uint32_t maxChildren{0};
   };
 
   /// Returns human-readable summary of the type. Useful when full output of
