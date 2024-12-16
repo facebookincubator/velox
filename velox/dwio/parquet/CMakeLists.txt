@@ -23,8 +23,8 @@ if(VELOX_ENABLE_PARQUET)
   endif()
 endif()
 
-velox_add_library(velox_dwio_parquet_reader RegisterParquetReader.cpp)
-velox_add_library(velox_dwio_parquet_writer RegisterParquetWriter.cpp)
+velox_add_library(velox_dwio_parquet_reader RegisterParquetReaderImpl.cpp)
+velox_add_library(velox_dwio_parquet_writer RegisterParquetWriterImpl.cpp)
 
 if(VELOX_ENABLE_PARQUET)
   velox_link_libraries(velox_dwio_parquet_reader

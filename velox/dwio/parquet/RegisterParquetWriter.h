@@ -18,8 +18,10 @@
 
 namespace facebook::velox::parquet {
 
-void registerParquetWriterFactory();
+/// Registers the Parquet writer factory.
+/// Has the weak attribute so that it can be overridden by a custom factory.
+__attribute__((__weak__)) void registerParquetWriterFactory();
 
-void unregisterParquetWriterFactory();
+__attribute__((__weak__)) void unregisterParquetWriterFactory();
 
 } // namespace facebook::velox::parquet
