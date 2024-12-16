@@ -65,9 +65,7 @@ struct RowHeader {
 template <class Serializer>
 class RowSerializer : public IterativeVectorSerializer {
  public:
-  explicit RowSerializer(
-      memory::MemoryPool* pool,
-      const VectorSerde::Options* options)
+  RowSerializer(memory::MemoryPool* pool, const VectorSerde::Options* options)
       : pool_(pool),
         options_(options == nullptr ? VectorSerde::Options() : *options),
         codec_(common::compressionKindToCodec(options_.compressionKind)) {}
@@ -155,7 +153,7 @@ class RowSerializer : public IterativeVectorSerializer {
   }
 
   // The serialization format is | uncompressedSize | compressedSize |
-  // compressed | data |.
+  // compressed | data.
   void flush(OutputStream* stream) override {
     constexpr int32_t kMaxCompressionAttemptsToSkip = 30;
     const auto size = uncompressedSize();
