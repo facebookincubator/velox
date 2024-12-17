@@ -206,10 +206,9 @@ void HashAggregation::addInput(RowVectorPtr input) {
       // Save input to use for output in getOutput().
       input_ = input;
     } else {
-      // If no new distinct groups (meaning we don't have anything to output),
-      // then we need to ensure we 'need input'. For that we need to reset
-      // the 'partial full' flag.
-      partialFull_ = false;
+      VELOX_CHECK(
+          !partialFull_,
+          "Unexpected partial full when there is no new distincts");
     }
   }
 }
