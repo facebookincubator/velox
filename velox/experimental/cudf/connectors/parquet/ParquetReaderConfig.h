@@ -31,7 +31,7 @@ class ConfigBase;
 
 namespace facebook::velox::cudf_velox::connector::parquet {
 
-class ParquetConfig {
+class ParquetReaderConfig {
  public:
   enum class InsertExistingPartitionsBehavior {
     kError,
@@ -100,9 +100,9 @@ class ParquetConfig {
   InsertExistingPartitionsBehavior insertExistingPartitionsBehavior(
       const config::ConfigBase* session) const;
 
-  ParquetConfig(std::shared_ptr<const config::ConfigBase> config) {
+  ParquetReaderConfig(std::shared_ptr<const config::ConfigBase> config) {
     VELOX_CHECK_NOT_NULL(
-        config, "Config is null for parquetConfig initialization");
+        config, "Config is null for ParquetReaderConfig initialization");
     config_ = std::move(config);
   }
 

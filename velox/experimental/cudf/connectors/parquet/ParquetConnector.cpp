@@ -24,7 +24,7 @@ ParquetConnector::ParquetConnector(
     std::shared_ptr<const facebook::velox::config::ConfigBase> config,
     folly::Executor* executor)
     : Connector(id),
-      parquetConfig_(std::make_shared<ParquetConfig>(config)),
+      ParquetReaderConfig_(std::make_shared<ParquetReaderConfig>(config)),
       executor_(executor) {
   LOG(INFO) << "cudf::Parquet connector " << connectorId() << " created.";
 }
@@ -45,7 +45,7 @@ ParquetConnector::createDataSource(
       columnHandles,
       executor_,
       connectorQueryCtx,
-      parquetConfig_);
+      ParquetReaderConfig_);
 }
 
 std::shared_ptr<facebook::velox::connector::Connector>

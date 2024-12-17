@@ -16,8 +16,8 @@
 #pragma once
 
 #include "velox/connectors/Connector.h"
-#include "velox/experimental/cudf/connectors/parquet/ParquetConfig.h"
 #include "velox/experimental/cudf/connectors/parquet/ParquetDataSource.h"
+#include "velox/experimental/cudf/connectors/parquet/ParquetReaderConfig.h"
 #include "velox/experimental/cudf/connectors/parquet/ParquetTableHandle.h"
 
 #include <cudf/io/parquet.hpp>
@@ -46,7 +46,7 @@ class ParquetConnector final : public facebook::velox::connector::Connector {
 
   const std::shared_ptr<const facebook::velox::config::ConfigBase>&
   connectorConfig() const override {
-    return parquetConfig_->config();
+    return ParquetReaderConfig_->config();
   }
 
   std::unique_ptr<facebook::velox::connector::DataSink> createDataSink(
@@ -65,7 +65,7 @@ class ParquetConnector final : public facebook::velox::connector::Connector {
   }
 
  protected:
-  const std::shared_ptr<ParquetConfig> parquetConfig_;
+  const std::shared_ptr<ParquetReaderConfig> ParquetReaderConfig_;
   folly::Executor* executor_;
 };
 
