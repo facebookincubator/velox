@@ -2093,6 +2093,8 @@ createWriterReader(
       asRowType(batches[0]->type()),
       batches,
       config,
+      /*sessionTimezone=*/nullptr,
+      /*adjustTimestampToTimezone=*/false,
       std::move(flushPolicy));
   std::string data(sinkPtr->data(), sinkPtr->size());
   auto input = std::make_unique<BufferedInput>(

@@ -52,7 +52,9 @@ void fillTimestamps(
     const uint64_t* nullsPtr,
     const int64_t* secondsPtr,
     const uint64_t* nanosPtr,
-    vector_size_t numValues) {
+    vector_size_t numValues,
+    const tz::TimeZone* sessionTimezone,
+    const bool adjustTimestampToTimezone) {
   for (vector_size_t i = 0; i < numValues; i++) {
     if (!nullsPtr || !bits::isBitNull(nullsPtr, i)) {
       auto nanos = nanosPtr[i];
@@ -63,11 +65,21 @@ void fillTimestamps(
           nanos *= 10;
         }
       }
-      auto seconds = secondsPtr[i] + dwio::common::EPOCH_OFFSET;
+
+      int64_t seconds;
+      if (sessionTimezone) {
+        seconds = secondsPtr[i] + dwio::common::UTC_EPOCH_OFFSET;
+      } else {
+        // Compatible with meta internal use cases.
+        seconds = secondsPtr[i] + dwio::common::EPOCH_OFFSET;
+      }
       if (seconds < 0 && nanos != 0) {
         seconds -= 1;
       }
       timestamps[i] = Timestamp(seconds, nanos);
+      if (adjustTimestampToTimezone && sessionTimezone) {
+        timestamps[i].toGMT(*sessionTimezone);
+      }
     }
   }
 }
@@ -752,6 +764,9 @@ class TimestampColumnReader : public ColumnReader {
   std::unique_ptr<dwio::common::IntDecoder</*isSigned*/ true>> seconds;
   std::unique_ptr<dwio::common::IntDecoder</*isSigned*/ false>> nano;
 
+  const tz::TimeZone* sessionTimezone_{nullptr};
+  bool adjustTimestampToTimezone_{false};
+
   BufferPtr secondsBuffer_;
   BufferPtr nanosBuffer_;
 
@@ -797,6 +812,9 @@ TimestampColumnReader::TimestampColumnReader(
       memoryPool_,
       nanoVInts,
       dwio::common::LONG_BYTE_SIZE);
+
+  sessionTimezone_ = stripe.sessionTimezone();
+  adjustTimestampToTimezone_ = stripe.adjustTimestampToTimezone();
 }
 
 uint64_t TimestampColumnReader::skip(uint64_t numValues) {
@@ -843,7 +861,13 @@ void TimestampColumnReader::next(
   nano->next(reinterpret_cast<int64_t*>(nanosData), numValues, nullsPtr);
   auto* valuesPtr = values->asMutable<Timestamp>();
   detail::fillTimestamps(
-      valuesPtr, nullsPtr, secondsData, nanosData, numValues);
+      valuesPtr,
+      nullsPtr,
+      secondsData,
+      nanosData,
+      numValues,
+      sessionTimezone_,
+      adjustTimestampToTimezone_);
 }
 
 template <class T>
