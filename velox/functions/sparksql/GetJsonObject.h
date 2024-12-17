@@ -75,7 +75,7 @@ struct GetJsonObjectFunction {
     }
 
     const char* currentPos;
-    jsonDoc.current_location().get(currentPos);
+    auto _ = jsonDoc.current_location().get(currentPos);
     return isValidEndingCharacter(currentPos);
   }
 
