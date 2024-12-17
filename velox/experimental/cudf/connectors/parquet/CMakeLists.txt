@@ -18,7 +18,8 @@ set_target_properties(
   velox_cudf_parquet_config
   PROPERTIES CUDA_ARCHITECTURES native)
 
-velox_link_libraries(velox_cudf_parquet_config velox_core velox_exception cudf::cudf)
+velox_link_libraries(velox_cudf_parquet_config velox_core velox_exception
+                     cudf::cudf)
 
 velox_add_library(
   velox_cudf_parquet_connector
