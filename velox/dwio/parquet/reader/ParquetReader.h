@@ -16,6 +16,7 @@
 
 #pragma once
 
+#include <arrow/io/api.h>
 #include "velox/dwio/common/Reader.h"
 #include "velox/dwio/common/ReaderFactory.h"
 #include "velox/dwio/parquet/reader/Metadata.h"
@@ -106,6 +107,8 @@ class ParquetReader : public dwio::common::Reader {
 
   FileMetaDataPtr fileMetaData() const;
 
+  const thrift::FileMetaData& thriftFileMetaData() const;
+
  private:
   std::shared_ptr<ReaderBase> readerBase_;
 };
@@ -125,4 +128,8 @@ void registerParquetReaderFactory();
 
 void unregisterParquetReaderFactory();
 
+struct ColumnInfo {
+  int64_t col_start;
+  int64_t col_length;
+};
 } // namespace facebook::velox::parquet
