@@ -509,7 +509,10 @@ void WindowFuzzer::go() {
       }
     }
 
-    logVectors(input);
+    auto [convertedInput, projections] =
+        referenceQueryRunner_->inputProjections(input);
+
+    logVectors(convertedInput);
 
     // For kRange frames with constant k, velox expects the frame bounds to be
     // columns containing precomputed offset values. Presto frame clause uses
@@ -523,7 +526,8 @@ void WindowFuzzer::go() {
         sortingKeysAndOrders,
         frameClause,
         call,
-        input,
+        convertedInput,
+        projections,
         customVerification,
         customVerifier,
         FLAGS_enable_window_reference_verification,
@@ -561,6 +565,7 @@ void WindowFuzzer::testAlternativePlans(
     const std::string& frame,
     const std::string& functionCall,
     const std::vector<RowVectorPtr>& input,
+    const std::vector<core::ExprPtr>& projections,
     bool customVerification,
     const std::shared_ptr<ResultVerifier>& customVerifier,
     const velox::fuzzer::ResultOrError& expected) {
@@ -580,6 +585,7 @@ void WindowFuzzer::testAlternativePlans(
     plans.push_back(
         {PlanBuilder()
              .values(input)
+             .projectExpressions(projections)
              .orderBy(allKeys, false)
              .streamingWindow(
                  {fmt::format("{} over ({})", functionCall, frame)})
@@ -602,6 +608,7 @@ void WindowFuzzer::testAlternativePlans(
     plans.push_back(
         {PlanBuilder()
              .tableScan(inputRowType)
+             .projectExpressions(projections)
              .localPartition(partitionKeys)
              .window({fmt::format("{} over ({})", functionCall, frame)})
              .planNode(),
@@ -612,6 +619,7 @@ void WindowFuzzer::testAlternativePlans(
       plans.push_back(
           {PlanBuilder()
                .tableScan(inputRowType)
+               .projectExpressions(projections)
                .orderBy(allKeys, false)
                .streamingWindow(
                    {fmt::format("{} over ({})", functionCall, frame)})
@@ -631,6 +639,7 @@ void initializeVerifier(
     const core::PlanNodePtr& plan,
     const std::shared_ptr<ResultVerifier>& customVerifier,
     const std::vector<RowVectorPtr>& input,
+    const std::vector<core::ExprPtr>& projections,
     const std::vector<std::string>& partitionKeys,
     const std::vector<SortingKeyAndOrder>& sortingKeysAndOrders,
     const std::string& frame) {
@@ -638,6 +647,7 @@ void initializeVerifier(
       std::dynamic_pointer_cast<const core::WindowNode>(plan);
   customVerifier->initializeWindow(
       input,
+      projections,
       partitionKeys,
       sortingKeysAndOrders,
       windowNode->windowFunctions()[0],
@@ -652,6 +662,7 @@ bool WindowFuzzer::verifyWindow(
     const std::string& frameClause,
     const std::string& functionCall,
     const std::vector<RowVectorPtr>& input,
+    const std::vector<core::ExprPtr>& projections,
     bool customVerification,
     const std::shared_ptr<ResultVerifier>& customVerifier,
     bool enableWindowVerification,
@@ -666,6 +677,7 @@ bool WindowFuzzer::verifyWindow(
   auto frame = getFrame(partitionKeys, sortingKeysAndOrders, frameClause);
   auto plan = PlanBuilder()
                   .values(input)
+                  .projectExpressions(projections)
                   .window({fmt::format("{} over ({})", functionCall, frame)})
                   .capturePlanNodeId(windowNodeId)
                   .planNode();
@@ -722,6 +734,7 @@ bool WindowFuzzer::verifyWindow(
             plan,
             customVerifier,
             input,
+            projections,
             partitionKeys,
             sortingKeysAndOrders,
             frame);
@@ -735,6 +748,7 @@ bool WindowFuzzer::verifyWindow(
         frame,
         functionCall,
         input,
+        projections,
         customVerification,
         customVerifier,
         resultOrError);
