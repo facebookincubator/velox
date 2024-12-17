@@ -22,6 +22,7 @@ target_link_libraries(
   velox_exec_test_lib
   velox_expression_functions
   velox_presto_types
+  velox_presto_types_fuzzer
   cpr::cpr
   Boost::regex
   velox_type_parser

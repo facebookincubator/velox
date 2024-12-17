@@ -46,6 +46,12 @@ class ReferenceQueryRunner {
     return defaultScalarTypes();
   }
 
+  /// Register CustomVectorFuzzers specific to the reference query engine, e.g.
+  /// custom types only supported by this engine.
+  virtual void registerCustomVectorFuzzers(VectorFuzzer& vectorFuzzer) const {
+    return;
+  }
+
   virtual const std::unordered_map<std::string, DataSpec>&
   aggregationFunctionDataSpecs() const = 0;
 

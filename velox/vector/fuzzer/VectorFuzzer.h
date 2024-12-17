@@ -21,6 +21,7 @@
 #include "velox/type/Type.h"
 #include "velox/vector/BaseVector.h"
 #include "velox/vector/ComplexVector.h"
+#include "velox/vector/fuzzer/CustomVectorFuzzer.h"
 #include "velox/vector/fuzzer/GeneratorSpec.h"
 #include "velox/vector/fuzzer/Utils.h"
 
@@ -348,6 +349,27 @@ class VectorFuzzer {
     opaqueTypeGenerators_[std::type_index(typeid(Class))] = generator;
   }
 
+  /// Register a CustomVectorFuzzer for a given type. This adds the type to the
+  /// list of known scalar types and causes the VectorFuzzer to use the
+  /// CustomVectorFuzzer when producing flat/constant Vectors of that type.
+  ///
+  /// Currently complex types are not supported.
+  void registerCustomVectorFuzzer(
+      const TypePtr& type,
+      std::unique_ptr<CustomVectorFuzzer>&& customVectorFuzzer) {
+    customVectorFuzzers_[type] = std::move(customVectorFuzzer);
+
+    VELOX_CHECK(
+        type->isPrimitiveType(),
+        "Currently only primitive types are supported.");
+
+    if (type->isPrimitiveType() &&
+        std::find(scalarTypes_.begin(), scalarTypes_.end(), type) ==
+            scalarTypes_.end()) {
+      scalarTypes_.push_back(type);
+    }
+  }
+
  private:
   // Generates a flat vector for primitive types.
   VectorPtr fuzzFlatPrimitive(const TypePtr& type, vector_size_t size);
@@ -393,6 +415,9 @@ class VectorFuzzer {
   // evaluated, which can lead to inconsistent results across platforms.
   FuzzerGenerator rng_;
 
+  std::unordered_map<TypePtr, std::unique_ptr<CustomVectorFuzzer>>
+      customVectorFuzzers_;
+
   // Since the underlying type of opaque types are transparent to Velox, we
   // require callers to register a generator for each underlying type, so we're
   // able to generate random data for opaque types.
@@ -401,6 +426,8 @@ class VectorFuzzer {
       std::type_index,
       std::function<std::shared_ptr<void>(FuzzerGenerator& rng)>>
       opaqueTypeGenerators_;
+
+  std::vector<TypePtr> scalarTypes_ = defaultScalarTypes();
 };
 
 /// Generates a random type, including maps, structs, and arrays. maxDepth

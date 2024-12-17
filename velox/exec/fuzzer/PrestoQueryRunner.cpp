@@ -33,6 +33,8 @@
 #include "velox/functions/prestosql/types/IPAddressType.h"
 #include "velox/functions/prestosql/types/IPPrefixType.h"
 #include "velox/functions/prestosql/types/JsonType.h"
+#include "velox/functions/prestosql/types/TimestampWithTimeZoneType.h"
+#include "velox/functions/prestosql/types/fuzzer/TimestampWithTimeZoneFuzzer.h"
 #include "velox/serializers/PrestoSerializer.h"
 #include "velox/type/parser/TypeParser.h"
 
@@ -251,6 +253,13 @@ const std::vector<TypePtr>& PrestoQueryRunner::supportedScalarTypes() const {
       TIMESTAMP(),
   };
   return kScalarTypes;
+}
+
+void PrestoQueryRunner::registerCustomVectorFuzzers(
+    VectorFuzzer& vectorFuzzer) const {
+  vectorFuzzer.registerCustomVectorFuzzer(
+      TIMESTAMP_WITH_TIME_ZONE(),
+      std::make_unique<TimestampWithTimeZoneVectorFuzzer>());
 }
 
 const std::unordered_map<std::string, DataSpec>&

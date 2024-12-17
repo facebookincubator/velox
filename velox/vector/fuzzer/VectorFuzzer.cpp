@@ -415,6 +415,14 @@ VectorPtr VectorFuzzer::fuzz(const TypePtr& type, vector_size_t size) {
   // 20% chance of adding a constant vector.
   if (coinToss(0.2)) {
     vector = fuzzConstant(type, vectorSize);
+  } else if (const auto it = customVectorFuzzers_.find(type);
+             it != customVectorFuzzers_.end()) {
+    vector = it->second->fuzzFlat(pool_, type, vectorSize, rng_);
+    for (size_t i = 0; i < vector->size(); ++i) {
+      if (coinToss(opts_.nullRatio)) {
+        vector->setNull(i, true);
+      }
+    }
   } else if (type->isPrimitiveType()) {
     vector = fuzzFlatPrimitive(type, vectorSize);
   } else if (type->isOpaque()) {
@@ -467,6 +475,10 @@ VectorPtr VectorFuzzer::fuzzConstant(const TypePtr& type, vector_size_t size) {
     }
     if (type->isUnKnown()) {
       return BaseVector::createNullConstant(type, size, pool_);
+    }
+    if (const auto it = customVectorFuzzers_.find(type);
+        it != customVectorFuzzers_.end()) {
+      return it->second->fuzzConstant(pool_, type, size, rng_);
     } else {
       return VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH_ALL(
           fuzzConstantPrimitiveImpl,
@@ -898,11 +910,11 @@ std::pair<int8_t, int8_t> VectorFuzzer::randPrecisionScale(
 }
 
 TypePtr VectorFuzzer::randType(int maxDepth) {
-  return velox::randType(rng_, maxDepth);
+  return velox::randType(rng_, scalarTypes_, maxDepth);
 }
 
 TypePtr VectorFuzzer::randOrderableType(int maxDepth) {
-  return velox::randOrderableType(rng_, maxDepth);
+  return velox::randOrderableType(rng_, scalarTypes_, maxDepth);
 }
 
 TypePtr VectorFuzzer::randOrderableType(
@@ -918,11 +930,11 @@ TypePtr VectorFuzzer::randType(
 }
 
 TypePtr VectorFuzzer::randMapType(int maxDepth) {
-  return velox::randMapType(rng_, defaultScalarTypes(), maxDepth);
+  return velox::randMapType(rng_, scalarTypes_, maxDepth);
 }
 
 RowTypePtr VectorFuzzer::randRowType(int maxDepth) {
-  return velox::randRowType(rng_, maxDepth);
+  return velox::randRowType(rng_, scalarTypes_, maxDepth);
 }
 
 RowTypePtr VectorFuzzer::randRowType(
