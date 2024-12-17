@@ -84,6 +84,10 @@ class InputExpr : public core::IExpr {
     return EMPTY();
   }
 
+  bool equals(const IExpr& other) const override {
+    return true;
+  }
+
   VELOX_DEFINE_CLASS_NAME(InputExpr)
 };
 
@@ -121,6 +125,13 @@ class FieldAccessExpr : public core::IExpr {
 
   const std::vector<std::shared_ptr<const IExpr>>& getInputs() const override {
     return inputs_;
+  }
+
+  bool equals(const IExpr& other) const override {
+    if (auto otherCast = dynamic_cast<const FieldAccessExpr*>(&other)) {
+      return name_ == otherCast->name_ && equal(inputs_, otherCast->inputs_);
+    }
+    return false;
   }
 
  private:
@@ -177,6 +188,13 @@ class CallExpr : public core::IExpr {
     return inputs_;
   }
 
+  bool equals(const IExpr& other) const override {
+    if (auto otherCast = dynamic_cast<const CallExpr*>(&other)) {
+      return name_ == otherCast->name_ && equal(inputs_, otherCast->inputs_);
+    }
+    return false;
+  }
+
  private:
   const std::string name_;
   const std::vector<std::shared_ptr<const IExpr>> inputs_;
@@ -211,6 +229,13 @@ class ConstantExpr : public IExpr,
     return EMPTY();
   }
 
+  bool equals(const IExpr& other) const override {
+    if (auto otherCast = dynamic_cast<const ConstantExpr*>(&other)) {
+      return *type_ == *otherCast->type_ && value_ == otherCast->value_;
+    }
+    return false;
+  }
+
   VELOX_DEFINE_CLASS_NAME(ConstantExpr)
 
  private:
@@ -219,12 +244,6 @@ class ConstantExpr : public IExpr,
 };
 
 class CastExpr : public IExpr, public std::enable_shared_from_this<CastExpr> {
- private:
-  const TypePtr type_;
-  const std::shared_ptr<const IExpr> expr_;
-  const std::vector<std::shared_ptr<const IExpr>> inputs_;
-  bool nullOnFailure_;
-
  public:
   explicit CastExpr(
       const TypePtr& type,
@@ -258,7 +277,22 @@ class CastExpr : public IExpr, public std::enable_shared_from_this<CastExpr> {
     return nullOnFailure_;
   }
 
+  bool equals(const IExpr& other) const override {
+    if (auto otherCast = dynamic_cast<const CastExpr*>(&other)) {
+      return *type_ == *otherCast->type_ && *expr_ == *otherCast->expr_ &&
+          equal(inputs_, otherCast->inputs_) &&
+          nullOnFailure_ == otherCast->nullOnFailure_;
+    }
+    return false;
+  }
+
   VELOX_DEFINE_CLASS_NAME(CastExpr)
+
+ private:
+  const TypePtr type_;
+  const std::shared_ptr<const IExpr> expr_;
+  const std::vector<std::shared_ptr<const IExpr>> inputs_;
+  bool nullOnFailure_;
 };
 
 /// Represents lambda expression as a list of inputs and the body expression.
@@ -305,8 +339,17 @@ class LambdaExpr : public IExpr,
     return body_;
   }
 
+  bool equals(const IExpr& other) const override {
+    if (auto otherCast = dynamic_cast<const LambdaExpr*>(&other)) {
+      return inputNames_ == otherCast->inputNames_ &&
+          equal(body_, otherCast->body_);
+    }
+    return false;
+  }
+
  private:
   std::vector<std::string> inputNames_;
   std::vector<std::shared_ptr<const IExpr>> body_;
 };
+
 } // namespace facebook::velox::core
