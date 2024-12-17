@@ -82,6 +82,7 @@ class AggregationFuzzerBase {
     registerHiveConnector(hiveConfigs);
     dwrf::registerDwrfReaderFactory();
     dwrf::registerDwrfWriterFactory();
+    referenceQueryRunner_->registerCustomVectorFuzzers(vectorFuzzer_);
     seed(initialSeed);
   }
 
