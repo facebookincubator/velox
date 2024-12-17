@@ -14,6 +14,8 @@
  * limitations under the License.
  */
 
+#include <boost/process.hpp>
+
 #include "HdfsMiniCluster.h"
 
 namespace facebook::velox::filesystems::test {
@@ -77,6 +79,14 @@ HdfsMiniCluster::HdfsMiniCluster() {
 }
 
 void HdfsMiniCluster::addFile(std::string source, std::string destination) {
+  std::cout << "Starting to add file from " << source << " to " << destination << std::endl;
+
+  std::ostringstream output;
+  std::ostringstream error;
+
+  boost::process::ipstream outStream;
+  boost::process::ipstream errStream;
+
   auto filePutProcess = std::make_shared<boost::process::child>(
       env_,
       exePath_,
@@ -85,13 +95,36 @@ void HdfsMiniCluster::addFile(std::string source, std::string destination) {
       filesystemUrl,
       filePutOption,
       source,
-      destination);
-  bool isExited =
-      filePutProcess->wait_for(std::chrono::duration<int, std::milli>(5000));
-  if (!isExited) {
-    VELOX_FAIL(
-        "Failed to add file to hdfs, exit code: {}",
-        filePutProcess->exit_code());
+      destination,
+      boost::process::std_out > outStream,
+      boost::process::std_err > errStream);
+
+  std::cout << "Process started with PID: " << filePutProcess->id() << std::endl;
+
+  std::string line;
+  while (outStream && std::getline(outStream, line) && !line.empty())
+      output << line << std::endl;
+
+  while (errStream && std::getline(errStream, line) && !line.empty())
+      error << line << std::endl;
+
+  bool isExited = filePutProcess->wait_for(std::chrono::duration<int, std::milli>(5000));
+
+  if (isExited) {
+    int exitCode = filePutProcess->exit_code();
+    std::cout << "Process exited with code: " << exitCode << std::endl;
+    std::cout << "Process output: " << output.str() << std::endl;
+    std::cout << "Process error: " << error.str() << std::endl;
+
+    if (exitCode != 0) {
+      std::cerr << "Failed to add file to hdfs, exit code: " << exitCode << ", error: " << error.str() << std::endl;
+      throw std::runtime_error("Failed to add file to hdfs, exit code: " + std::to_string(exitCode));
+    }
+  } else {
+    std::cerr << "Failed to add file to hdfs, process did not exit in time" << std::endl;
+    filePutProcess->terminate();
+    std::cerr << "Process terminated" << std::endl;
+    throw std::runtime_error("Failed to add file to hdfs, process did not exit in time");
   }
 }
 
