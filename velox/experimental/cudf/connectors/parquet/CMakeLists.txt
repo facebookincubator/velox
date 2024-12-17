@@ -41,10 +41,10 @@ velox_link_libraries(
     velox_type_tz
     velox_gcs)
 
-#if(${VELOX_BUILD_TESTING})
-#  add_subdirectory(tests)
-#endif()
+if(${VELOX_BUILD_TESTING})
+  add_subdirectory(tests)
+endif()
 
-#if(${VELOX_ENABLE_BENCHMARKS})
-#  add_subdirectory(benchmarks)
-#endif()
+if(${VELOX_ENABLE_BENCHMARKS})
+  add_subdirectory(benchmarks)
+endif()
