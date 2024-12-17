@@ -40,7 +40,6 @@ add_executable(
   AssignUniqueIdTest.cpp
   AsyncConnectorTest.cpp
   ContainerRowSerdeTest.cpp
-  CustomIdentity.cpp
   CustomJoinTest.cpp
   EnforceSingleRowTest.cpp
   ExchangeClientTest.cpp
