@@ -1,0 +1,197 @@
+/*
+ * Copyright (c) Facebook, Inc. and its affiliates.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+#pragma once
+
+#include "velox/dwio/dwrf/common/Config.h"
+#include "velox/dwio/dwrf/writer/FlushPolicy.h"
+#include "velox/exec/Operator.h"
+#include "velox/exec/tests/utils/OperatorTestBase.h"
+#include "velox/exec/tests/utils/TempFilePath.h"
+#include "velox/experimental/cudf/connectors/parquet/ParquetConnector.h"
+#include "velox/experimental/cudf/connectors/parquet/ParquetDataSource.h"
+#include "velox/experimental/cudf/connectors/parquet/ParquetReaderConfig.h"
+#include "velox/experimental/cudf/connectors/parquet/ParquetTableHandle.h"
+#include "velox/type/tests/SubfieldFiltersBuilder.h"
+
+namespace facebook::velox::cudf_velox::exec::test {
+
+static const std::string kParquetConnectorId = "test-parquet";
+
+using ColumnHandleMap = std::unordered_map<
+    std::string,
+    std::shared_ptr<facebook::velox::connector::ColumnHandle>>;
+
+class ParquetConnectorTestBase : public OperatorTestBase {
+ public:
+  ParquetConnectorTestBase();
+
+  void SetUp() override;
+  void TearDown() override;
+
+  void resetParquetConnector(
+      const std::shared_ptr<const config::ConfigBase>& config);
+
+  std::vector<RowVectorPtr> makeVectors(
+      const RowTypePtr& rowType,
+      int32_t numVectors,
+      int32_t rowsPerVector);
+
+  using facebook::velox::OperatorTestBase::assertQuery;
+
+  /// Assumes plan has a single TableScan node.
+  std::shared_ptr<exec::Task> assertQuery(
+      const core::PlanNodePtr& plan,
+      const std::vector<std::shared_ptr<TempFilePath>>& filePaths,
+      const std::string& duckDbSql);
+
+  std::shared_ptr<Task> assertQuery(
+      const core::PlanNodePtr& plan,
+      const std::vector<
+          std::shared_ptr<facebook::velox::connector::ConnectorSplit>>& splits,
+      const std::string& duckDbSql,
+      const int32_t numPrefetchSplit);
+
+  static std::vector<std::shared_ptr<TempFilePath>> makeFilePaths(int count);
+
+  static std::shared_ptr<
+      facebook::velox::cudf_velox::connector::parquet::ParquetConnectorSplit>
+  makeParquetConnectorSplit(
+      const std::string& filePath,
+      int64_t splitWeight = 0);
+
+  static std::shared_ptr<connector::parquet::ParquetTableHandle>
+  makeTableHandle(
+      common::test::SubfieldFilters subfieldFilters = {},
+      const core::TypedExprPtr& remainingFilter = nullptr,
+      const std::string& tableName = "parquet_table",
+      const RowTypePtr& dataColumns = nullptr,
+      bool filterPushdownEnabled = false) {
+    return std::make_shared<
+        facebook::velox::velox_cudf::connector::parquet::ParquetTableHandle>(
+        kParquetConnectorId,
+        tableName,
+        filterPushdownEnabled,
+        std::move(subfieldFilters),
+        remainingFilter,
+        dataColumns);
+  }
+
+  /// @param name Column name.
+  /// @param type Column type.
+  /// @param Required subfields of this column.
+  static std::unique_ptr<
+      facebook::velox::velox_cudf::connector::parquet::ParquetColumnHandle>
+  makeColumnHandle(
+      const std::string& name,
+      const TypePtr& type,
+      const std::vector<std::string>& requiredSubfields);
+
+  /// @param name Column name.
+  /// @param type Column type.
+  /// @param type Parquet type.
+  /// @param Required subfields of this column.
+  static std::unique_ptr<
+      facebook::velox::velox_cudf::connector::parquet::ParquetColumnHandle>
+  makeColumnHandle(
+      const std::string& name,
+      const TypePtr& dataType,
+      const TypePtr& parquetType,
+      const std::vector<std::string>& requiredSubfields,
+      facebook::velox::velox_cudf::connector::parquet::ParquetColumnHandle::
+          ColumnType columnType =
+              connector::parquet::ParquetColumnHandle::ColumnType::kRegular);
+
+  /// @param targetDirectory Final directory of the target table after commit.
+  /// @param writeDirectory Write directory of the target table before commit.
+  /// @param tableType Whether to create a new table, insert into an existing
+  /// table, or write a temporary table.
+  /// @param writeMode How to write to the target directory.
+  static std::shared_ptr<connector::parquet::LocationHandle> makeLocationHandle(
+      std::string targetDirectory,
+      std::optional<std::string> writeDirectory = std::nullopt,
+      connector::parquet::LocationHandle::TableType tableType =
+          connector::parquet::LocationHandle::TableType::kNew) {
+    return std::make_shared<connector::parquet::LocationHandle>(
+        targetDirectory, writeDirectory.value_or(targetDirectory), tableType);
+  }
+
+  /// Build a ParquetInsertTableHandle.
+  /// @param tableColumnNames Column names of the target table. Corresponding
+  /// type of tableColumnNames[i] is tableColumnTypes[i].
+  /// @param tableColumnTypes Column types of the target table. Corresponding
+  /// name of tableColumnTypes[i] is tableColumnNames[i].
+  /// @param partitionedBy A list of partition columns of the target table.
+  /// @param bucketProperty if not nulll, specifies the property for a bucket
+  /// table.
+  /// @param locationHandle Location handle for the table write.
+  /// @param compressionKind compression algorithm to use for table write.
+  /// @param serdeParameters Table writer configuration parameters.
+  static std::shared_ptr<connector::parquet::ParquetInsertTableHandle>
+  makeParquetInsertTableHandle(
+      const std::vector<std::string>& tableColumnNames,
+      const std::vector<TypePtr>& tableColumnTypes,
+      const std::vector<std::string>& partitionedBy,
+      std::shared_ptr<connector::parquet::ParquetBucketProperty> bucketProperty,
+      std::shared_ptr<connector::parquet::LocationHandle> locationHandle,
+      const dwio::common::FileFormat tableStorageFormat =
+          dwio::common::FileFormat::DWRF,
+      const std::optional<common::CompressionKind> compressionKind = {},
+      const std::unordered_map<std::string, std::string>& serdeParameters = {},
+      const std::shared_ptr<dwio::common::WriterOptions>& writerOptions =
+          nullptr);
+
+  static std::shared_ptr<connector::parquet::ParquetInsertTableHandle>
+  makeParquetInsertTableHandle(
+      const std::vector<std::string>& tableColumnNames,
+      const std::vector<TypePtr>& tableColumnTypes,
+      const std::vector<std::string>& partitionedBy,
+      std::shared_ptr<connector::parquet::LocationHandle> locationHandle,
+      const dwio::common::FileFormat tableStorageFormat =
+          dwio::common::FileFormat::DWRF,
+      const std::optional<common::CompressionKind> compressionKind = {},
+      const std::shared_ptr<dwio::common::WriterOptions>& writerOptions =
+          nullptr);
+
+  static std::shared_ptr<connector::parquet::ParquetColumnHandle> regularColumn(
+      const std::string& name,
+      const TypePtr& type);
+
+  static std::shared_ptr<connector::parquet::ParquetColumnHandle>
+  synthesizedColumn(const std::string& name, const TypePtr& type);
+
+  static ColumnHandleMap allRegularColumns(const RowTypePtr& rowType) {
+    ColumnHandleMap assignments;
+    assignments.reserve(rowType->size());
+    for (uint32_t i = 0; i < rowType->size(); ++i) {
+      const auto& name = rowType->nameOf(i);
+      assignments[name] = regularColumn(name, rowType->childAt(i));
+    }
+    return assignments;
+  }
+};
+
+/// Same as connector::parquet::ParquetConnectorBuilder, except that this
+/// defaults connectorId to kParquetConnectorId.
+class ParquetConnectorSplitBuilder
+    : public connector::parquet::ParquetConnectorSplitBuilder {
+ public:
+  explicit ParquetConnectorSplitBuilder(std::string filePath)
+      : connector::parquet::ParquetConnectorSplitBuilder(filePath) {
+    connectorId(kParquetConnectorId);
+  }
+};
+
+} // namespace facebook::velox::cudf_velox::exec::test
