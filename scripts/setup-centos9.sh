@@ -95,7 +95,7 @@ function install_gflags {
 
 function install_glog {
   wget_and_untar https://github.com/google/glog/archive/v0.6.0.tar.gz glog
-  cmake_install_dir glog -DBUILD_SHARED_LIBS=ON
+  cmake_install_dir glog -DBUILD_SHARED_LIBS="$VELOX_BUILD_SHARED"
 }
 
 function install_lzo {
