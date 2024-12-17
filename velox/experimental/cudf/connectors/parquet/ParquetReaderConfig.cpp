@@ -14,9 +14,9 @@
  * limitations under the License.
  */
 
-#include "velox/experimental/cudf/connectors/parquet/ParquetConfig.h"
 #include "velox/common/config/Config.h"
 #include "velox/core/QueryConfig.h"
+#include "velox/experimental/cudf/connectors/parquet/ParquetReaderConfig.h"
 
 #include <boost/algorithm/string.hpp>
 #include <cudf/io/parquet.hpp>
@@ -30,14 +30,14 @@ namespace facebook::velox::cudf_velox::connector::parquet {
 
 namespace {
 
-ParquetConfig::InsertExistingPartitionsBehavior
+ParquetReaderConfig::InsertExistingPartitionsBehavior
 stringToInsertExistingPartitionsBehavior(const std::string& strValue) {
   auto upperValue = boost::algorithm::to_upper_copy(strValue);
   if (upperValue == "ERROR") {
-    return ParquetConfig::InsertExistingPartitionsBehavior::kError;
+    return ParquetReaderConfig::InsertExistingPartitionsBehavior::kError;
   }
   if (upperValue == "OVERWRITE") {
-    return ParquetConfig::InsertExistingPartitionsBehavior::kOverwrite;
+    return ParquetReaderConfig::InsertExistingPartitionsBehavior::kOverwrite;
   }
   VELOX_UNSUPPORTED(
       "Unsupported insert existing partitions behavior: {}.", strValue);
@@ -46,7 +46,7 @@ stringToInsertExistingPartitionsBehavior(const std::string& strValue) {
 } // namespace
 
 // static
-std::string ParquetConfig::insertExistingPartitionsBehaviorString(
+std::string ParquetReaderConfig::insertExistingPartitionsBehaviorString(
     InsertExistingPartitionsBehavior behavior) {
   switch (behavior) {
     case InsertExistingPartitionsBehavior::kError:
@@ -58,18 +58,19 @@ std::string ParquetConfig::insertExistingPartitionsBehaviorString(
   }
 }
 
-ParquetConfig::InsertExistingPartitionsBehavior
-ParquetConfig::insertExistingPartitionsBehavior(
+ParquetReaderConfig::InsertExistingPartitionsBehavior
+ParquetReaderConfig::insertExistingPartitionsBehavior(
     const config::ConfigBase* session) const {
   return stringToInsertExistingPartitionsBehavior(session->get<std::string>(
       kInsertExistingPartitionsBehaviorSession,
       config_->get<std::string>(kInsertExistingPartitionsBehavior, "ERROR")));
 }
 
-int64_t ParquetConfig::skipRows() const {
+int64_t ParquetReaderConfig::skipRows() const {
   return config_->get<int64_t>(kSkipRows, 0);
 }
-std::optional<cudf::size_type> ParquetConfig::numRows() const {
+
+std::optional<cudf::size_type> ParquetReaderConfig::numRows() const {
   auto numRows = config_->get<cudf::size_type>(kNumRows);
   if (numRows.has_value()) {
     return numRows.value();
@@ -77,12 +78,12 @@ std::optional<cudf::size_type> ParquetConfig::numRows() const {
   return std::nullopt;
 }
 
-std::size_t ParquetConfig::maxChunkReadLimit() const {
+std::size_t ParquetReaderConfig::maxChunkReadLimit() const {
   // chunk read limit = 0 means no limit
   return config_->get<std::size_t>(kMaxChunkReadLimit, 0);
 }
 
-std::size_t ParquetConfig::maxChunkReadLimitSession(
+std::size_t ParquetReaderConfig::maxChunkReadLimitSession(
     const config::ConfigBase* session) const {
   // pass read limit = 0 means no limit
   return session->get<std::size_t>(
@@ -90,12 +91,12 @@ std::size_t ParquetConfig::maxChunkReadLimitSession(
       config_->get<std::size_t>(kMaxChunkReadLimit, 0));
 }
 
-std::size_t ParquetConfig::maxPassReadLimit() const {
+std::size_t ParquetReaderConfig::maxPassReadLimit() const {
   // pass read limit = 0 means no limit
   return config_->get<std::size_t>(kMaxPassReadLimit, 0);
 }
 
-std::size_t ParquetConfig::maxPassReadLimitSession(
+std::size_t ParquetReaderConfig::maxPassReadLimitSession(
     const config::ConfigBase* session) const {
   // pass read limit = 0 means no limit
   return session->get<std::size_t>(
@@ -103,49 +104,49 @@ std::size_t ParquetConfig::maxPassReadLimitSession(
       config_->get<std::size_t>(kMaxPassReadLimit, 0));
 }
 
-bool ParquetConfig::isConvertStringsToCategories() const {
+bool ParquetReaderConfig::isConvertStringsToCategories() const {
   return config_->get<bool>(kConvertStringsToCategories, false);
 }
 
-bool ParquetConfig::isConvertStringsToCategoriesSession(
+bool ParquetReaderConfig::isConvertStringsToCategoriesSession(
     const config::ConfigBase* session) const {
   return session->get<bool>(
       kConvertStringsToCategoriesSession,
       config_->get<bool>(kConvertStringsToCategories, false));
 }
 
-bool ParquetConfig::isUsePandasMetadata() const {
+bool ParquetReaderConfig::isUsePandasMetadata() const {
   return config_->get<bool>(kUsePandasMetadata, true);
 }
 
-bool ParquetConfig::isUsePandasMetadataSession(
+bool ParquetReaderConfig::isUsePandasMetadataSession(
     const config::ConfigBase* session) const {
   return session->get<bool>(
       kUsePandasMetadataSession, config_->get<bool>(kUsePandasMetadata, true));
 }
 
-bool ParquetConfig::isUseArrowSchema() const {
+bool ParquetReaderConfig::isUseArrowSchema() const {
   return config_->get<bool>(kUseArrowSchema, true);
 }
 
-bool ParquetConfig::isUseArrowSchemaSession(
+bool ParquetReaderConfig::isUseArrowSchemaSession(
     const config::ConfigBase* session) const {
   return session->get<bool>(
       kUseArrowSchemaSession, config_->get<bool>(kUseArrowSchema, true));
 }
 
-bool ParquetConfig::isAllowMismatchedParquetSchemas() const {
+bool ParquetReaderConfig::isAllowMismatchedParquetSchemas() const {
   return config_->get<bool>(kAllowMismatchedParquetSchemas, false);
 }
 
-bool ParquetConfig::isAllowMismatchedParquetSchemasSession(
+bool ParquetReaderConfig::isAllowMismatchedParquetSchemasSession(
     const config::ConfigBase* session) const {
   return session->get<bool>(
       kAllowMismatchedParquetSchemasSession,
       config_->get<bool>(kAllowMismatchedParquetSchemas, false));
 }
 
-cudf::data_type ParquetConfig::timestampType() const {
+cudf::data_type ParquetReaderConfig::timestampType() const {
   const auto unit = config_->get<cudf::type_id>(
       kTimestampType, cudf::type_id::EMPTY /*empty*/);
   VELOX_CHECK(
@@ -158,7 +159,7 @@ cudf::data_type ParquetConfig::timestampType() const {
   return cudf::data_type(cudf::type_id{unit});
 }
 
-cudf::data_type ParquetConfig::timestampTypeSession(
+cudf::data_type ParquetReaderConfig::timestampTypeSession(
     const config::ConfigBase* session) const {
   const auto unit = session->get<cudf::type_id>(
       kTimestampTypeSession,

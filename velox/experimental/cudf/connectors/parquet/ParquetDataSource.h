@@ -20,9 +20,9 @@
 #include "velox/connectors/Connector.h"
 #include "velox/dwio/common/Statistics.h"
 #include "velox/exec/OperatorUtils.h"
-#include "velox/experimental/cudf/connectors/parquet/ParquetConfig.h"
 #include "velox/experimental/cudf/connectors/parquet/ParquetConnector.h"
 #include "velox/experimental/cudf/connectors/parquet/ParquetConnectorSplit.h"
+#include "velox/experimental/cudf/connectors/parquet/ParquetReaderConfig.h"
 #include "velox/experimental/cudf/connectors/parquet/ParquetTableHandle.h"
 #include "velox/expression/Expr.h"
 #include "velox/type/Type.h"
@@ -45,7 +45,7 @@ class ParquetDataSource : public facebook::velox::connector::DataSource {
       /*columnHandles*/,
       folly::Executor* executor,
       const facebook::velox::connector::ConnectorQueryCtx* connectorQueryCtx,
-      const std::shared_ptr<ParquetConfig>& parquetConfig);
+      const std::shared_ptr<ParquetReaderConfig>& ParquetReaderConfig);
 
   void addSplit(std::shared_ptr<facebook::velox::connector::ConnectorSplit>
                     split) override;
@@ -90,7 +90,7 @@ class ParquetDataSource : public facebook::velox::connector::DataSource {
   std::shared_ptr<ParquetConnectorSplit> split_;
   std::shared_ptr<ParquetTableHandle> tableHandle_;
 
-  const std::shared_ptr<ParquetConfig> parquetConfig_;
+  const std::shared_ptr<ParquetReaderConfig> ParquetReaderConfig_;
 
   folly::Executor* const executor_;
   const facebook::velox::connector::ConnectorQueryCtx* const connectorQueryCtx_;
