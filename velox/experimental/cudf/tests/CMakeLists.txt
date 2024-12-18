@@ -33,7 +33,10 @@ add_test(
 
 set_tests_properties(velox_cudf_hash_test PROPERTIES LABELS cuda_driver TIMEOUT
                                                      3000)
-
+set_tests_properties(velox_cudf_order_by_test PROPERTIES LABELS cuda_driver
+                                                         TIMEOUT 3000)
+set_tests_properties(velox_cudf_table_scan_test PROPERTIES LABELS cuda_driver
+                                                           TIMEOUT 3000)
 target_link_libraries(
   velox_cudf_hash_test
   velox_cudf_exec
@@ -46,9 +49,6 @@ target_link_libraries(
   Folly::folly
   fmt::fmt)
 
-set_tests_properties(velox_cudf_order_by_test PROPERTIES LABELS cuda_driver
-                                                         TIMEOUT 3000)
-
 target_link_libraries(
   velox_cudf_order_by_test
   velox_cudf_exec
@@ -58,9 +58,6 @@ target_link_libraries(
   gtest
   gtest_main
   fmt::fmt)
-
-set_tests_properties(velox_cudf_table_scan_test PROPERTIES LABELS cuda_driver
-                                                           TIMEOUT 3000)
 
 target_link_libraries(
   velox_cudf_table_scan_test
