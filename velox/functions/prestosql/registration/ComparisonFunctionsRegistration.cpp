@@ -16,9 +16,9 @@
 #include "velox/functions/Registerer.h"
 #include "velox/functions/lib/RegistrationHelpers.h"
 #include "velox/functions/prestosql/Comparisons.h"
-#include "velox/functions/prestosql/types/IPAddressType.h"
-#include "velox/functions/prestosql/types/IPPrefixType.h"
 #include "velox/functions/prestosql/types/TimestampWithTimeZoneType.h"
+#include "velox/functions/prestosql/types/headers/IPAddressType.h"
+#include "velox/functions/prestosql/types/headers/IPPrefixType.h"
 #include "velox/type/Type.h"
 
 namespace facebook::velox::functions {

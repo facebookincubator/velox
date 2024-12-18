@@ -125,6 +125,12 @@ void addCastFromDateSignature(
   signatures.push_back(makeCastSignature("date", toType));
 }
 
+void addCastFromIPPrefixSignature(
+    const std::string& toType,
+    std::vector<facebook::velox::exec::FunctionSignaturePtr>& signatures) {
+  signatures.push_back(makeCastSignature("ipprefix", toType));
+}
+
 std::vector<facebook::velox::exec::FunctionSignaturePtr>
 getSignaturesForCast() {
   std::vector<facebook::velox::exec::FunctionSignaturePtr> signatures;
@@ -149,6 +155,7 @@ getSignaturesForCast() {
   addCastFromVarcharSignature("varchar", signatures);
   addCastFromDateSignature("varchar", signatures);
   addCastFromTimestampSignature("varchar", signatures);
+  addCastFromIPPrefixSignature("varchar", signatures);
 
   // To timestamp type.
   addCastFromVarcharSignature("timestamp", signatures);
@@ -157,6 +164,9 @@ getSignaturesForCast() {
   // To date type.
   addCastFromVarcharSignature("date", signatures);
   addCastFromTimestampSignature("date", signatures);
+
+  // To ipprefix type.
+  addCastFromVarcharSignature("ipprefix", signatures);
 
   // For each supported translation pair T --> U, add signatures of array(T) -->
   // array(U), map(varchar, T) --> map(varchar, U), row(T) --> row(U).

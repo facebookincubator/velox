@@ -21,8 +21,8 @@
 #include <xxhash.h>
 
 #include "velox/functions/lib/RowsTranslationUtil.h"
-#include "velox/functions/prestosql/types/IPAddressType.h"
 #include "velox/functions/prestosql/types/TimestampWithTimeZoneType.h"
+#include "velox/functions/prestosql/types/headers/IPAddressType.h"
 
 namespace facebook::velox::aggregate {
 

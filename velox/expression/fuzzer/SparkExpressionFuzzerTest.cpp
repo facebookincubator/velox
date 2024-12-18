@@ -71,6 +71,8 @@ int main(int argc, char** argv) {
       // timestamp_millis(bigint) can generate timestamps out of the supported
       // range that make other functions throw VeloxRuntimeErrors.
       "timestamp_millis(bigint) -> timestamp",
+      "cast(ipprefix) -> varchar",
+      "cast(varchar) -> ipprefix",
   };
 
   // Required by spark_partition_id function.

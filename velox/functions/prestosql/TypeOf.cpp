@@ -15,11 +15,11 @@
  */
 #include "velox/expression/VectorFunction.h"
 #include "velox/functions/prestosql/types/HyperLogLogType.h"
-#include "velox/functions/prestosql/types/IPAddressType.h"
-#include "velox/functions/prestosql/types/IPPrefixType.h"
 #include "velox/functions/prestosql/types/JsonType.h"
 #include "velox/functions/prestosql/types/TimestampWithTimeZoneType.h"
 #include "velox/functions/prestosql/types/UuidType.h"
+#include "velox/functions/prestosql/types/headers/IPAddressType.h"
+#include "velox/functions/prestosql/types/headers/IPPrefixType.h"
 
 namespace facebook::velox::functions {
 namespace {

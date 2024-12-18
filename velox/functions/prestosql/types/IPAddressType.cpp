@@ -14,10 +14,10 @@
  * limitations under the License.
  */
 
-#include "velox/functions/prestosql/types/IPAddressType.h"
+#include "velox/functions/prestosql/types/headers/IPAddressType.h"
 #include "velox/expression/CastExpr.h"
 #include "velox/expression/VectorWriters.h"
-#include "velox/functions/prestosql/types/IPPrefixType.h"
+#include "velox/functions/prestosql/types/headers/IPPrefixType.h"
 
 namespace facebook::velox {
 

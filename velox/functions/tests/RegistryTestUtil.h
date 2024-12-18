@@ -18,7 +18,7 @@
 #include "velox/expression/FunctionSignature.h"
 #include "velox/expression/VectorFunction.h"
 #include "velox/functions/Macros.h"
-#include "velox/functions/prestosql/types/IPPrefixType.h"
+#include "velox/functions/prestosql/types/headers/IPPrefixType.h"
 
 namespace facebook::velox {
 
