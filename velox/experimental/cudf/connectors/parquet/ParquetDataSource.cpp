@@ -72,7 +72,8 @@ ParquetDataSource::ParquetDataSource(
 std::optional<RowVectorPtr> ParquetDataSource::next(
     uint64_t /* size */,
     velox::ContinueFuture& /* future */) {
-  VELOX_CHECK(split_ != nullptr, "No split to process. Call addSplit first.");
+  // Basic sanity checks
+  VELOX_CHECK_NOT_NULL(split_, "No split to process. Call addSplit first.");
   VELOX_CHECK_NOT_NULL(splitReader_, "No split reader present");
 
   // TODO: Implement a cudf::partition and cudf::concatenate based algorithm to
@@ -91,14 +92,10 @@ std::optional<RowVectorPtr> ParquetDataSource::next(
       return nullptr;
     }
 
-    // update completedRows
+    // Update completedRows_
     completedRows_ += table->num_rows();
 
-    // TODO: Get `completedBytes_` from elsewhere instead of this hacky method
-    const auto& filePaths = split_->getCudfSourceInfo().filepaths();
-    for (const auto& filePath : filePaths) {
-      completedBytes_ += std::filesystem::file_size(filePath);
-    }
+    // TODO: Update `completedBytes_` here instead of in `addSplit()`
 
     // Use the `with_arrow` version to support more rowTypes
     RowVectorPtr output =
@@ -113,8 +110,8 @@ std::optional<RowVectorPtr> ParquetDataSource::next(
 }
 
 void ParquetDataSource::addSplit(std::shared_ptr<ConnectorSplit> split) {
+  // Dynamic cast split to `ParquetConnectorSplit`
   split_ = std::dynamic_pointer_cast<ParquetConnectorSplit>(split);
-
   VLOG(1) << "Adding split " << split_->toString();
 
   // Split reader already exists, reset
@@ -122,7 +119,15 @@ void ParquetDataSource::addSplit(std::shared_ptr<ConnectorSplit> split) {
     splitReader_.reset();
   }
 
+  // Create a `cudf::io::chunked_parquet_reader` SplitReader
   splitReader_ = createSplitReader();
+
+  // TODO: `completedBytes_` should be updated in `next()` as we read more and
+  // more table bytes
+  const auto& filePaths = split_->getCudfSourceInfo().filepaths();
+  for (const auto& filePath : filePaths) {
+    completedBytes_ += std::filesystem::file_size(filePath);
+  }
 }
 
 std::unique_ptr<cudf::io::chunked_parquet_reader>
