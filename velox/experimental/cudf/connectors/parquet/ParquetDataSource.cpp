@@ -97,7 +97,6 @@ std::optional<RowVectorPtr> ParquetDataSource::next(
 
     // TODO: Update `completedBytes_` here instead of in `addSplit()`
 
-    // Use the `with_arrow` version to support more rowTypes
     RowVectorPtr output =
         with_arrow::to_velox_column(table->view(), pool_, "c");
 
