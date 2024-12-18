@@ -189,7 +189,7 @@ class TableScanTest : public virtual ParquetConnectorTestBase {
 };
 
 TEST_F(TableScanTest, allColumns) {
-  auto vectors = makeVectors(1, 100);
+  auto vectors = makeVectors(10, 1'000);
   auto filePath = facebook::velox::exec::test::TempFilePath::create();
   writeToFile(filePath->getPath(), vectors);
 
