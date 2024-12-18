@@ -52,7 +52,7 @@ struct RowHeader {
     return sizeof(int32_t) * 2 + sizeof(char);
   }
 
-  std::string debugString() const {
+  std::string toString() const {
     return fmt::format(
         "uncompressedSize: {}, compressedSize: {}, compressed: {}",
         succinctBytes(uncompressedSize),
