@@ -15,7 +15,6 @@
  */
 #pragma once
 
-#include "velox/dwio/dwrf/common/Config.h"
 #include "velox/exec/Operator.h"
 #include "velox/exec/tests/utils/OperatorTestBase.h"
 #include "velox/exec/tests/utils/TempFilePath.h"

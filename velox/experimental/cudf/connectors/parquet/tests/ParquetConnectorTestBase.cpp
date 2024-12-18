@@ -49,8 +49,7 @@ void ParquetConnectorTestBase::SetUp() {
       std::make_shared<connector::parquet::ParquetConnectorFactory>());
   auto parquetConnector =
       facebook::velox::connector::getConnectorFactory(
-          facebook::velox::cudf_velox::connector::parquet::
-              ParquetConnectorFactory::kParquetConnectorName)
+          connector::parquet::ParquetConnectorFactory::kParquetConnectorName)
           ->newConnector(
               kParquetConnectorId,
               std::make_shared<facebook::velox::config::ConfigBase>(
@@ -138,7 +137,10 @@ void ParquetConnectorTestBase::writeToFile(
   std::vector<std::unique_ptr<cudf::table>> cudfTables;
   cudfTables.reserve(vectors.size());
   for (const auto& vector : vectors) {
-    cudfTables.emplace_back(to_cudf_table(vector));
+    if (vector->size()) {
+      auto cudfTable = with_arrow::to_cudf_table(vector, vector->pool());
+      cudfTables.emplace_back(std::move(cudfTable));
+    }
   }
   // Make sure cudfTables has at least one table
   if (cudfTables.empty()) {
@@ -158,13 +160,16 @@ void ParquetConnectorTestBase::writeToFile(
   for (const auto& table : cudfTables) {
     writer.write(table->view());
   }
+
+  // Close the writer
+  writer.close();
 }
 
 void ParquetConnectorTestBase::writeToFile(
     const std::string& filePath,
     RowVectorPtr vector) {
   auto const sinkInfo = cudf::io::sink_info(filePath);
-  auto cudfTable = to_cudf_table(vector);
+  auto cudfTable = with_arrow::to_cudf_table(vector, vector->pool());
   auto tableInputMetadata = cudf::io::table_input_metadata(cudfTable->view());
   auto options =
       cudf::io::parquet_writer_options::builder(sinkInfo, cudfTable->view())
