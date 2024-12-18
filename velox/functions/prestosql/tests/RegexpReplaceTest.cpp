@@ -87,6 +87,8 @@ TEST_F(RegexpReplaceTest, withReplacement) {
   EXPECT_EQ(
       regexpReplace("123", "(?<digit>(?<nest>\\d))", ".${nest}"), ".1.2.3");
   EXPECT_EQ(regexpReplace(std::nullopt, "abc", "def"), std::nullopt);
+  EXPECT_EQ(regexpReplace("[{}]", "\\[\\{", "\\{"), "{}]");
+  EXPECT_EQ(regexpReplace("[{}]", "\\}\\]", "\\}"), "[{}");
 
   EXPECT_THROW(regexpReplace("123", "(?<d", "."), VeloxUserError);
   EXPECT_THROW(regexpReplace("123", R"((?''digit''\d))", "."), VeloxUserError);
@@ -266,6 +268,30 @@ TEST_F(RegexpReplaceTest, lambda) {
        "_s_e_a_t_t_l_e",
        std::nullopt});
   test::assertEqualVectors(expected, result);
+}
+
+// Make sure we do not compile more than "expression.max_compiled_regexes".
+TEST_F(RegexpReplaceTest, limit) {
+  const auto maxCompiledRegexes =
+      core::QueryConfig({}).exprMaxCompiledRegexes();
+  const auto aboveMaxCompiledRegexes = maxCompiledRegexes + 5;
+
+  auto data = makeRowVector(
+      {makeFlatVector<std::string>(
+           aboveMaxCompiledRegexes,
+           [](auto row) { return fmt::format("Apples and oranges {}", row); }),
+       makeFlatVector<std::string>(
+           aboveMaxCompiledRegexes,
+           [](auto row) { return fmt::format("\\d+[ab]{}", row); }),
+       makeFlatVector<std::string>(aboveMaxCompiledRegexes, [&](auto row) {
+         return fmt::format("Apples (.*) oranges {}", row % maxCompiledRegexes);
+       })});
+
+  VELOX_ASSERT_THROW(
+      evaluate("regexp_replace(c0, c1, c2)", data),
+      "Max number of regex reached");
+  VELOX_ASSERT_THROW(
+      evaluate("regexp_replace(c0, c1)", data), "Max number of regex reached");
 }
 
 } // namespace

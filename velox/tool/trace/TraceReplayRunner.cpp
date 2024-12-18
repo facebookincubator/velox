@@ -70,7 +70,7 @@ DEFINE_string(
     "Specify the target task id, if empty, show the summary of all the traced "
     "query task.");
 DEFINE_string(node_id, "", "Specify the target node id.");
-DEFINE_int32(driver_id, -1, "Specify the target driver id.");
+DEFINE_string(driver_ids, "", "A comma-separated list of target driver ids");
 DEFINE_string(
     table_writer_output_dir,
     "",
@@ -223,7 +223,9 @@ void TraceReplayRunner::init() {
   VELOX_USER_CHECK(!FLAGS_query_id.empty(), "--query_id must be provided");
   VELOX_USER_CHECK(!FLAGS_node_id.empty(), "--node_id must be provided");
 
-  memory::initializeMemoryManager({});
+  if (memory::memoryManager() == nullptr) {
+    memory::initializeMemoryManager({});
+  }
   filesystems::registerLocalFileSystem();
   filesystems::registerS3FileSystem();
   filesystems::registerHdfsFileSystem();
@@ -265,15 +267,17 @@ void TraceReplayRunner::init() {
   aggregate::prestosql::registerAllAggregateFunctions();
   parse::registerTypeResolver();
 
-  connector::registerConnectorFactory(
-      std::make_shared<connector::hive::HiveConnectorFactory>());
-  const auto hiveConnector =
-      connector::getConnectorFactory("hive")->newConnector(
-          "test-hive",
-          std::make_shared<config::ConfigBase>(
-              std::unordered_map<std::string, std::string>()),
-          ioExecutor_.get());
-  connector::registerConnector(hiveConnector);
+  if (!facebook::velox::connector::hasConnectorFactory("hive")) {
+    connector::registerConnectorFactory(
+        std::make_shared<connector::hive::HiveConnectorFactory>());
+    const auto hiveConnector =
+        connector::getConnectorFactory("hive")->newConnector(
+            "test-hive",
+            std::make_shared<config::ConfigBase>(
+                std::unordered_map<std::string, std::string>()),
+            ioExecutor_.get());
+    connector::registerConnector(hiveConnector);
+  }
 
   fs_ = filesystems::getFileSystem(FLAGS_root_dir, nullptr);
 }
@@ -298,6 +302,7 @@ TraceReplayRunner::createReplayer() const {
         FLAGS_task_id,
         FLAGS_node_id,
         traceNodeName,
+        FLAGS_driver_ids,
         FLAGS_table_writer_output_dir);
   } else if (traceNodeName == "Aggregation") {
     replayer = std::make_unique<tool::trace::AggregationReplayer>(
@@ -305,7 +310,8 @@ TraceReplayRunner::createReplayer() const {
         FLAGS_query_id,
         FLAGS_task_id,
         FLAGS_node_id,
-        traceNodeName);
+        traceNodeName,
+        FLAGS_driver_ids);
   } else if (traceNodeName == "PartitionedOutput") {
     replayer = std::make_unique<tool::trace::PartitionedOutputReplayer>(
         FLAGS_root_dir,
@@ -313,28 +319,32 @@ TraceReplayRunner::createReplayer() const {
         FLAGS_task_id,
         FLAGS_node_id,
         getVectorSerdeKind(),
-        traceNodeName);
+        traceNodeName,
+        FLAGS_driver_ids);
   } else if (traceNodeName == "TableScan") {
     replayer = std::make_unique<tool::trace::TableScanReplayer>(
         FLAGS_root_dir,
         FLAGS_query_id,
         FLAGS_task_id,
         FLAGS_node_id,
-        traceNodeName);
+        traceNodeName,
+        FLAGS_driver_ids);
   } else if (traceNodeName == "Filter" || traceNodeName == "Project") {
     replayer = std::make_unique<tool::trace::FilterProjectReplayer>(
         FLAGS_root_dir,
         FLAGS_query_id,
         FLAGS_task_id,
         FLAGS_node_id,
-        traceNodeName);
+        traceNodeName,
+        FLAGS_driver_ids);
   } else if (traceNodeName == "HashJoin") {
     replayer = std::make_unique<tool::trace::HashJoinReplayer>(
         FLAGS_root_dir,
         FLAGS_query_id,
         FLAGS_task_id,
         FLAGS_node_id,
-        traceNodeName);
+        traceNodeName,
+        FLAGS_driver_ids);
   } else {
     VELOX_UNSUPPORTED("Unsupported operator type: {}", traceNodeName);
   }

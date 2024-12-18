@@ -345,8 +345,8 @@ core::PlanNodePtr SubstraitVeloxPlanConverter::toVeloxPlan(
   } else {
     return std::make_shared<core::LimitNode>(
         nextPlanNodeId(),
-        (int32_t)fetchRel.offset(),
-        (int32_t)fetchRel.count(),
+        static_cast<int32_t>(fetchRel.offset()),
+        static_cast<int32_t>(fetchRel.count()),
         false /*isPartial*/,
         childNode);
   }
@@ -545,7 +545,6 @@ core::PlanNodePtr SubstraitVeloxPlanConverter::toVeloxPlan(
 core::PlanNodePtr SubstraitVeloxPlanConverter::toVeloxPlan(
     const ::substrait::RelRoot& root) {
   // TODO: Use the names as the output names for the whole computing.
-  const auto& names = root.names();
   if (root.has_input()) {
     const auto& rel = root.input();
     return toVeloxPlan(rel);

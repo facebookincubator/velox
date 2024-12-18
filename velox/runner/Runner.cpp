@@ -35,25 +35,4 @@ std::string Runner::stateString(Runner::State state) {
   return fmt::format("invalid state {}", static_cast<int32_t>(state));
 }
 
-std::string MultiFragmentPlan::toString() const {
-  std::stringstream out;
-  for (auto i = 0; i < fragments_.size(); ++i) {
-    out << fmt::format(
-        "Fragment {}: {} numWorkers={}:\n",
-        i,
-        fragments_[i].taskPrefix,
-        fragments_[i].width);
-    out << fragments_[i].fragment.planNode->toString(true, true) << std::endl;
-    if (!fragments_[i].inputStages.empty()) {
-      out << "Inputs: ";
-      for (auto& input : fragments_[i].inputStages) {
-        out << fmt::format(
-            " {} <- {} ", input.consumerNodeId, input.producerTaskPrefix);
-      }
-      out << std::endl;
-    }
-  }
-  return out.str();
-}
-
 } // namespace facebook::velox::runner

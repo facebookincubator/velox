@@ -19,9 +19,18 @@
 #include "velox/vector/BaseVector.h"
 #include "velox/vector/NullsBuilder.h"
 
+#include <folly/Random.h>
+
 namespace facebook::velox {
 
-using FuzzerGenerator = std::mt19937;
+using FuzzerGenerator = folly::detail::DefaultGenerator;
+
+enum class FuzzerTimestampPrecision : int8_t {
+  kNanoSeconds = 0,
+  kMicroSeconds = 1,
+  kMilliSeconds = 2,
+  kSeconds = 3,
+};
 
 namespace generator_spec_utils {
 

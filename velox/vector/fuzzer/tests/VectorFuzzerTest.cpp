@@ -499,6 +499,8 @@ TEST_F(VectorFuzzerTest, containerHasNulls) {
   opts.nullRatio = 0.5;
   opts.normalizeMapKeys = false;
   opts.containerHasNulls = true;
+  opts.allowDictionaryVector = false;
+  opts.allowConstantVector = false;
 
   {
     VectorFuzzer fuzzer(opts, pool());
@@ -938,6 +940,14 @@ TEST_F(VectorFuzzerTest, randOrderableType) {
   VectorFuzzer fuzzer(opts, pool());
   for (int i = 0; i < 100; ++i) {
     ASSERT_TRUE(fuzzer.randOrderableType()->isOrderable());
+  }
+}
+
+TEST_F(VectorFuzzerTest, randMapType) {
+  VectorFuzzer::Options opts;
+  VectorFuzzer fuzzer(opts, pool());
+  for (int i = 0; i < 100; ++i) {
+    ASSERT_TRUE(fuzzer.randMapType()->isMap());
   }
 }
 } // namespace

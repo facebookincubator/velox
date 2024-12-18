@@ -15,6 +15,9 @@
  */
 #pragma once
 
+#include "velox/expression/ComplexViewTypes.h"
+#include "velox/functions/Udf.h"
+
 namespace facebook::velox::functions {
 
 template <typename TExec>

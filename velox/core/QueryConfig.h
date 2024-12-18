@@ -82,6 +82,11 @@ class QueryConfig {
   static constexpr const char* kExprMaxArraySizeInReduce =
       "expression.max_array_size_in_reduce";
 
+  /// Controls maximum number of compiled regular expression patterns per
+  /// function instance per thread of execution.
+  static constexpr const char* kExprMaxCompiledRegexes =
+      "expression.max_compiled_regexes";
+
   /// Used for backpressure to block local exchange producers when the local
   /// exchange buffer reaches or exceeds this size.
   static constexpr const char* kMaxLocalExchangeBufferSize =
@@ -378,6 +383,11 @@ class QueryConfig {
   /// derived using micro-benchmarking.
   static constexpr const char* kPrefixSortMinRows = "prefixsort_min_rows";
 
+  /// Maximum number of bytes to be stored in prefix-sort buffer for a string
+  /// key.
+  static constexpr const char* kPrefixSortMaxStringPrefixLength =
+      "prefixsort_max_string_prefix_length";
+
   /// Enable query tracing flag.
   static constexpr const char* kQueryTraceEnabled = "query_trace_enabled";
 
@@ -395,6 +405,12 @@ class QueryConfig {
   /// matches.
   static constexpr const char* kQueryTraceTaskRegExp =
       "query_trace_task_reg_exp";
+
+  /// Config used to create operator trace directory. This config is provided to
+  /// underlying file system and the config is free form. The form should be
+  /// defined by the underlying file system.
+  static constexpr const char* kOpTraceDirectoryCreateConfig =
+      "op_trace_directory_create_config";
 
   /// Disable optimization in expression evaluation to peel common dictionary
   /// layer from inputs.
@@ -417,11 +433,44 @@ class QueryConfig {
   static constexpr const char* kDebugDisableExpressionWithLazyInputs =
       "debug_disable_expression_with_lazy_inputs";
 
+  /// Fix the random seed used to create data structure used in
+  /// approx_percentile.  This makes the query result deterministic on single
+  /// node; multi-node partial aggregation is still subject to non-determinism
+  /// due to non-deterministic merge order.
+  static constexpr const char*
+      kDebugAggregationApproxPercentileFixedRandomSeed =
+          "debug_aggregation_approx_percentile_fixed_random_seed";
+
   /// Temporary flag to control whether selective Nimble reader should be used
   /// in this query or not.  Will be removed after the selective Nimble reader
   /// is fully rolled out.
   static constexpr const char* kSelectiveNimbleReaderEnabled =
       "selective_nimble_reader_enabled";
+
+  /// The max ratio of a query used memory to its max capacity, and the scale
+  /// writer exchange stops scaling writer processing if the query's current
+  /// memory usage exceeds this ratio. The value is in the range of (0, 1].
+  static constexpr const char* kScaleWriterRebalanceMaxMemoryUsageRatio =
+      "scaled_writer_rebalance_max_memory_usage_ratio";
+
+  /// The max number of logical table partitions that can be assigned to a
+  /// single table writer thread. The logical table partition is used by local
+  /// exchange writer for writer scaling, and multiple physical table
+  /// partitions can be mapped to the same logical table partition based on the
+  /// hash value of calculated partitioned ids.
+  static constexpr const char* kScaleWriterMaxPartitionsPerWriter =
+      "scaled_writer_max_partitions_per_writer";
+
+  /// Minimum amount of data processed by a logical table partition to trigger
+  /// writer scaling if it is detected as overloaded by scale wrirer exchange.
+  static constexpr const char*
+      kScaleWriterMinPartitionProcessedBytesRebalanceThreshold =
+          "scaled_writer_min_partition_processed_bytes_rebalance_threshold";
+
+  /// Minimum amount of data processed by all the logical table partitions to
+  /// trigger skewed partition rebalancing by scale writer exchange.
+  static constexpr const char* kScaleWriterMinProcessedBytesRebalanceThreshold =
+      "scaled_writer_min_processed_bytes_rebalance_threshold";
 
   bool selectiveNimbleReaderEnabled() const {
     return get<bool>(kSelectiveNimbleReaderEnabled, false);
@@ -441,6 +490,11 @@ class QueryConfig {
 
   bool debugDisableExpressionsWithLazyInputs() const {
     return get<bool>(kDebugDisableExpressionWithLazyInputs, false);
+  }
+
+  std::optional<uint32_t> debugAggregationApproxPercentileFixedRandomSeed()
+      const {
+    return get<uint32_t>(kDebugAggregationApproxPercentileFixedRandomSeed);
   }
 
   uint64_t queryMaxMemoryPerNode() const {
@@ -568,6 +622,10 @@ class QueryConfig {
     return get<uint64_t>(kExprMaxArraySizeInReduce, 100'000);
   }
 
+  uint64_t exprMaxCompiledRegexes() const {
+    return get<uint64_t>(kExprMaxCompiledRegexes, 100);
+  }
+
   bool adjustTimestampToTimezone() const {
     return get<bool>(kAdjustTimestampToTimezone, false);
   }
@@ -692,6 +750,10 @@ class QueryConfig {
     return get<std::string>(kQueryTraceTaskRegExp, "");
   }
 
+  std::string opTraceDirectoryCreateConfig() const {
+    return get<std::string>(kOpTraceDirectoryCreateConfig, "");
+  }
+
   bool prestoArrayAggIgnoreNulls() const {
     return get<bool>(kPrestoArrayAggIgnoreNulls, false);
   }
@@ -788,12 +850,34 @@ class QueryConfig {
     return get<uint32_t>(kDriverCpuTimeSliceLimitMs, 0);
   }
 
-  int64_t prefixSortNormalizedKeyMaxBytes() const {
-    return get<int64_t>(kPrefixSortNormalizedKeyMaxBytes, 128);
+  uint32_t prefixSortNormalizedKeyMaxBytes() const {
+    return get<uint32_t>(kPrefixSortNormalizedKeyMaxBytes, 128);
   }
 
-  int32_t prefixSortMinRows() const {
-    return get<int32_t>(kPrefixSortMinRows, 130);
+  uint32_t prefixSortMinRows() const {
+    return get<uint32_t>(kPrefixSortMinRows, 128);
+  }
+
+  uint32_t prefixSortMaxStringPrefixLength() const {
+    return get<uint32_t>(kPrefixSortMaxStringPrefixLength, 16);
+  }
+
+  double scaleWriterRebalanceMaxMemoryUsageRatio() const {
+    return get<double>(kScaleWriterRebalanceMaxMemoryUsageRatio, 0.7);
+  }
+
+  uint32_t scaleWriterMaxPartitionsPerWriter() const {
+    return get<uint32_t>(kScaleWriterMaxPartitionsPerWriter, 128);
+  }
+
+  uint64_t scaleWriterMinPartitionProcessedBytesRebalanceThreshold() const {
+    return get<uint64_t>(
+        kScaleWriterMinPartitionProcessedBytesRebalanceThreshold, 128 << 20);
+  }
+
+  uint64_t scaleWriterMinProcessedBytesRebalanceThreshold() const {
+    return get<uint64_t>(
+        kScaleWriterMinProcessedBytesRebalanceThreshold, 256 << 20);
   }
 
   template <typename T>

@@ -36,8 +36,9 @@ int64_t widthBucket(
   while (lower < upper) {
     const int index = (lower + upper) / 2;
     VELOX_USER_CHECK(
-        !elementsHolder.isNullAt(lower) && !elementsHolder.isNullAt(index) &&
-            !elementsHolder.isNullAt(upper - 1),
+        !elementsHolder.isNullAt(offset + lower) &&
+            !elementsHolder.isNullAt(offset + index) &&
+            !elementsHolder.isNullAt(offset + upper - 1),
         "Bin values cannot be NULL");
 
     const auto bin = elementsHolder.valueAt<T>(offset + index);
@@ -80,8 +81,12 @@ class WidthBucketArrayFunction : public exec::VectorFunction {
     auto rawSizes = binsArray->rawSizes();
     auto rawOffsets = binsArray->rawOffsets();
     auto elementsVector = binsArray->elements();
-    auto elementsRows =
-        toElementRows(elementsVector->size(), rows, binsArray, bins->indices());
+    auto elementsRows = toElementRows(
+        elementsVector->size(),
+        rows,
+        binsArray,
+        bins->nulls(&rows),
+        bins->indices());
     exec::LocalDecodedVector elementsHolder(
         context, *elementsVector, elementsRows);
 
@@ -124,7 +129,7 @@ class WidthBucketArrayFunctionConstantBins : public exec::VectorFunction {
     VELOX_USER_CHECK(!std::isnan(operand), "Operand cannot be NaN");
 
     int lower = 0;
-    int upper = (int)bins.size();
+    int upper = static_cast<int>(bins.size());
     while (lower < upper) {
       int index = (lower + upper) / 2;
       auto bin = bins.at(index);

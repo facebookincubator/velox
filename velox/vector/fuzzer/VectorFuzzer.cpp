@@ -407,13 +407,13 @@ VectorPtr VectorFuzzer::fuzz(const TypePtr& type, vector_size_t size) {
 
   bool usingLazyVector = opts_.allowLazyVector && coinToss(0.1);
   // Lazy Vectors cannot be sliced, so we skip this if using lazy wrapping.
-  if (!usingLazyVector && coinToss(0.1)) {
+  if (opts_.allowSlice && !usingLazyVector && coinToss(0.1)) {
     // Extend the underlying vector to allow slicing later.
     vectorSize += rand<uint32_t>(rng_) % 8;
   }
 
   // 20% chance of adding a constant vector.
-  if (coinToss(0.2)) {
+  if (opts_.allowConstantVector && coinToss(0.2)) {
     vector = fuzzConstant(type, vectorSize);
   } else if (type->isPrimitiveType()) {
     vector = fuzzFlatPrimitive(type, vectorSize);
@@ -433,9 +433,10 @@ VectorPtr VectorFuzzer::fuzz(const TypePtr& type, vector_size_t size) {
   }
 
   // Toss a coin and add dictionary indirections.
-  while (coinToss(0.5)) {
+  while (opts_.allowDictionaryVector && coinToss(0.5)) {
     vectorSize = size;
-    if (!usingLazyVector && vectorSize > 0 && coinToss(0.05)) {
+    if (opts_.allowSlice && !usingLazyVector && vectorSize > 0 &&
+        coinToss(0.05)) {
       vectorSize += rand<uint32_t>(rng_) % 8;
     }
     vector = fuzzDictionary(vector, vectorSize);
@@ -537,16 +538,7 @@ VectorPtr VectorFuzzer::fuzzFlat(const TypePtr& type, vector_size_t size) {
     // Do not initialize keys and values inline in the fuzzMap call as C++ does
     // not specify the order they'll be called in, leading to inconsistent
     // results across platforms.
-    const auto& keyType = type->asMap().keyType();
-    const auto& valueType = type->asMap().valueType();
-    auto length = getElementsVectorLength(opts_, size);
-
-    auto keys = opts_.normalizeMapKeys || !opts_.containerHasNulls
-        ? fuzzFlatNotNull(keyType, length)
-        : fuzzFlat(keyType, length);
-    auto values = opts_.containerHasNulls ? fuzzFlat(valueType, length)
-                                          : fuzzFlatNotNull(valueType, length);
-    return fuzzMap(keys, values, size);
+    return fuzzMap(type->asMap().keyType(), type->asMap().valueType(), size);
   }
   // Rows.
   else if (type->isRow()) {
@@ -566,6 +558,20 @@ VectorPtr VectorFuzzer::fuzzFlat(const TypePtr& type, vector_size_t size) {
   } else {
     VELOX_UNREACHABLE();
   }
+}
+
+VectorPtr VectorFuzzer::fuzzMap(
+    const TypePtr& keyType,
+    const TypePtr& valueType,
+    vector_size_t size) {
+  auto length = getElementsVectorLength(opts_, size);
+
+  auto keys = opts_.normalizeMapKeys || !opts_.containerHasNulls
+      ? fuzzFlatNotNull(keyType, length)
+      : fuzzFlat(keyType, length);
+  auto values = opts_.containerHasNulls ? fuzzFlat(valueType, length)
+                                        : fuzzFlatNotNull(valueType, length);
+  return fuzzMap(keys, values, size);
 }
 
 VectorPtr VectorFuzzer::fuzzFlatPrimitive(
@@ -912,6 +918,10 @@ TypePtr VectorFuzzer::randType(
   return velox::randType(rng_, scalarTypes, maxDepth);
 }
 
+TypePtr VectorFuzzer::randMapType(int maxDepth) {
+  return velox::randMapType(rng_, defaultScalarTypes(), maxDepth);
+}
+
 RowTypePtr VectorFuzzer::randRowType(int maxDepth) {
   return velox::randRowType(rng_, maxDepth);
 }
@@ -920,6 +930,10 @@ RowTypePtr VectorFuzzer::randRowType(
     const std::vector<TypePtr>& scalarTypes,
     int maxDepth) {
   return velox::randRowType(rng_, scalarTypes, maxDepth);
+}
+
+size_t VectorFuzzer::randInRange(size_t min, size_t max) {
+  return rand(rng_, min, max);
 }
 
 VectorPtr VectorFuzzer::wrapInLazyVector(VectorPtr baseVector) {
@@ -1139,14 +1153,20 @@ TypePtr randType(
   }
   switch (rand<uint32_t>(rng) % 3) {
     case 0:
-      return MAP(
-          randType(rng, scalarTypes, 0),
-          randType(rng, scalarTypes, maxDepth - 1));
+      return randMapType(rng, scalarTypes, maxDepth);
     case 1:
       return ARRAY(randType(rng, scalarTypes, maxDepth - 1));
     default:
       return randRowType(rng, scalarTypes, maxDepth - 1);
   }
+}
+
+TypePtr randMapType(
+    FuzzerGenerator& rng,
+    const std::vector<TypePtr>& scalarTypes,
+    int maxDepth) {
+  return MAP(
+      randType(rng, scalarTypes, 0), randType(rng, scalarTypes, maxDepth - 1));
 }
 
 TypePtr randOrderableType(FuzzerGenerator& rng, int maxDepth) {

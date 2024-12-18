@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 #include "velox/expression/VectorFunction.h"
+#include "velox/functions/lib/Utf8Utils.h"
 #include "velox/functions/prestosql/json/JsonStringUtil.h"
 #include "velox/functions/prestosql/json/SIMDJsonUtil.h"
 #include "velox/functions/prestosql/types/JsonType.h"
@@ -166,15 +167,23 @@ class JsonParseFunction : public exec::VectorFunction {
     const auto& arg = args[0];
     if (arg->isConstantEncoding()) {
       auto value = arg->as<ConstantVector<StringView>>()->valueAt(0);
-      paddedInput_.resize(value.size() + simdjson::SIMDJSON_PADDING);
-      memcpy(paddedInput_.data(), value.data(), value.size());
-      auto escapeSize = escapedStringSize(value.data(), value.size());
+      auto size = value.size();
+      if (FOLLY_UNLIKELY(hasInvalidUTF8(value.data(), value.size()))) {
+        size = replaceInvalidUTF8Characters(
+            paddedInput_.data(), value.data(), value.size());
+        paddedInput_.resize(size + simdjson::SIMDJSON_PADDING);
+      } else {
+        paddedInput_.resize(size + simdjson::SIMDJSON_PADDING);
+        memcpy(paddedInput_.data(), value.data(), size);
+      }
+
+      auto escapeSize = escapedStringSize(value.data(), size);
       auto buffer = AlignedBuffer::allocate<char>(escapeSize, context.pool());
       BufferTracker bufferTracker{buffer};
 
       JsonViews jsonViews;
 
-      if (auto error = parse(value.size(), jsonViews)) {
+      if (auto error = parse(size, jsonViews)) {
         context.setErrors(rows, errors_[error]);
         return;
       }
@@ -219,8 +228,23 @@ class JsonParseFunction : public exec::VectorFunction {
       rows.applyToSelected([&](auto row) {
         JsonViews jsonViews;
         auto value = flatInput->valueAt(row);
-        memcpy(paddedInput_.data(), value.data(), value.size());
-        if (auto error = parse(value.size(), jsonViews)) {
+        auto size = value.size();
+        if (FOLLY_UNLIKELY(hasInvalidUTF8(value.data(), size))) {
+          size = replaceInvalidUTF8Characters(
+              paddedInput_.data(), value.data(), size);
+          if (maxSize < size) {
+            paddedInput_.resize(size + simdjson::SIMDJSON_PADDING);
+            maxSize = size;
+          }
+        } else {
+          // We clear out the buffer since SIMDJSON peeks past the size of the
+          // string and can throw if a ':' comes after a '"'.
+          // issue : https://github.com/simdjson/simdjson/issues/2312
+          memset(paddedInput_.data(), 0, paddedInput_.size());
+          memcpy(paddedInput_.data(), value.data(), size);
+        }
+
+        if (auto error = parse(size, jsonViews)) {
           context.setVeloxExceptionError(row, errors_[error]);
         } else {
           auto canonicalString = bufferTracker.getCanonicalString(jsonViews);
@@ -303,7 +327,7 @@ class JsonParseFunction : public exec::VectorFunction {
           // Remove the quotes from the keys before we sort them.
           auto af = std::string_view{a.first.data() + 1, a.first.size() - 2};
           auto bf = std::string_view{b.first.data() + 1, b.first.size() - 2};
-          return lessThan(a.first, b.first);
+          return lessThan(af, bf);
         });
 
         jsonViews.push_back(kObjectStart);

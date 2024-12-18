@@ -112,7 +112,7 @@ std::optional<common::SpillConfig> DriverCtx::makeSpillConfig(
   if (!queryConfig.spillEnabled()) {
     return std::nullopt;
   }
-  if (task->spillDirectory().empty()) {
+  if (task->spillDirectory().empty() && !task->hasCreateSpillDirectoryCb()) {
     return std::nullopt;
   }
   common::GetSpillDirectoryPathCB getSpillDirPathCb =
@@ -1101,21 +1101,6 @@ StopReason Driver::blockDriver(
   return StopReason::kBlock;
 }
 
-SuspendedSection::SuspendedSection(Driver* driver) : driver_(driver) {
-  if (driver->task()->enterSuspended(driver->state()) != StopReason::kNone) {
-    VELOX_FAIL("Terminate detected when entering suspended section");
-  }
-}
-
-SuspendedSection::~SuspendedSection() {
-  if (driver_->task()->leaveSuspended(driver_->state()) != StopReason::kNone) {
-    LOG(WARNING)
-        << "Terminate detected when leaving suspended section for driver "
-        << driver_->driverCtx()->driverId << " from task "
-        << driver_->task()->taskId();
-  }
-}
-
 std::string Driver::label() const {
   return fmt::format("<Driver {}:{}>", task()->taskId(), ctx_->driverId);
 }
@@ -1140,14 +1125,14 @@ std::string blockingReasonToString(BlockingReason reason) {
       return "kWaitForMemory";
     case BlockingReason::kWaitForConnector:
       return "kWaitForConnector";
-    case BlockingReason::kWaitForSpill:
-      return "kWaitForSpill";
     case BlockingReason::kYield:
       return "kYield";
     case BlockingReason::kWaitForArbitration:
       return "kWaitForArbitration";
+    default:
+      VELOX_UNREACHABLE(
+          fmt::format("Unknown blocking reason {}", static_cast<int>(reason)));
   }
-  VELOX_UNREACHABLE();
 }
 
 DriverThreadContext* driverThreadContext() {

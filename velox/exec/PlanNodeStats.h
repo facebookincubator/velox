@@ -44,6 +44,8 @@ struct PlanNodeStats {
   PlanNodeStats(PlanNodeStats&&) = default;
   PlanNodeStats& operator=(PlanNodeStats&&) = default;
 
+  PlanNodeStats& operator+=(const PlanNodeStats&);
+
   /// Sum of input rows for all corresponding operators. Useful primarily for
   /// leaf plan nodes or plan nodes that correspond to a single operator type.
   uint64_t inputRows{0};
@@ -75,6 +77,10 @@ struct PlanNodeStats {
 
   /// Sum of output bytes for all corresponding operators.
   uint64_t outputBytes{0};
+
+  // Sum of CPU, scheduled and wall times for isBLocked call for all
+  // corresponding operators.
+  CpuWallTiming isBlockedTiming;
 
   // Sum of CPU, scheduled and wall times for addInput call for all
   // corresponding operators.

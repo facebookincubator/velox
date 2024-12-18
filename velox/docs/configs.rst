@@ -142,8 +142,12 @@ Generic Configuration
      - Maximum number of bytes to use for the normalized key in prefix-sort. Use 0 to disable prefix-sort.
    * - prefixsort_min_rows
      - integer
-     - 130
+     - 128
      - Minimum number of rows to use prefix-sort. The default value has been derived using micro-benchmarking.
+   * - prefixsort_max_string_prefix_length
+     - integer
+     - 16
+     - Byte length of the string prefix stored in the prefix-sort buffer. This doesn't include the null byte.
 
 .. _expression-evaluation-conf:
 
@@ -179,6 +183,10 @@ Expression Evaluation Configuration
      - integer
      - 100000
      - ``Reduce`` function will throw an error if encountered an array of size greater than this.
+   * - expression.max_compiled_regexes
+     - integer
+     - 100
+     - Controls maximum number of compiled regular expression patterns per batch.
    * - debug_disable_expression_with_peeling
      - bool
      - false
@@ -400,7 +408,32 @@ Table Writer
    * - task_partitioned_writer_count
      - integer
      - task_writer_count
-     - The number of parallel table writer threads per task for partitioned table writes. If not set, use 'task_writer_count' as default.
+     - The number of parallel table writer threads per task for partitioned
+       table writes. If not set, use 'task_writer_count' as default.
+   * - scaled_writer_rebalance_max_memory_usage_ratio
+     - double
+     - 0.7
+     - The max ratio of a query used memory to its max capacity, and the scale
+     - writer exchange stops scaling writer processing if the query's current
+     - memory usage exceeds this ratio. The value is in the range of (0, 1].
+   * - scaled_writer_max_partitions_per_writer
+     - integer
+     - 128
+     - The max number of logical table partitions that can be assigned to a
+     - single table writer thread. The logical table partition is used by local
+     - exchange writer for writer scaling, and multiple physical table
+     - partitions can be mapped to the same logical table partition based on the
+     - hash value of calculated partitioned ids.
+     - integer
+     - 128MB
+   * - scaled_writer_min_partition_processed_bytes_rebalance_threshold
+     - Minimum amount of data processed by a logical table partition to trigger
+     - writer scaling if it is detected as overloaded by scale wrirer exchange.
+   * - scaled_writer_min_processed_bytes_rebalance_threshold
+     - Minimum amount of data processed by all the logical table partitions to
+     - trigger skewed partition rebalancing by scale writer exchange.
+     - integer
+     - 256MB
 
 Hive Connector
 --------------
@@ -464,11 +497,11 @@ Each query can override the config by setting corresponding query session proper
      - integer
      - 128MB
      - Maximum size in bytes to coalesce requests to be fetched in a single request.
-   * - max-coalesced-distance-bytes
+   * - max-coalesced-distance
      -
      - integer
      - 512KB
-     - Maximum distance in bytes between chunks to be fetched that may be coalesced into a single request.
+     - Maximum distance in capacity units between chunks to be fetched that may be coalesced into a single request.
    * - load-quantum
      -
      - integer
@@ -533,7 +566,7 @@ Each query can override the config by setting corresponding query session proper
      - tinyint
      - 9
      - Timestamp unit used when writing timestamps into Parquet through Arrow bridge.
-       Valid values are 0 (second), 3 (millisecond), 6 (microsecond), 9 (nanosecond).
+       Valid values are 3 (millisecond), 6 (microsecond), and 9 (nanosecond).
    * - hive.orc.writer.linear-stripe-size-heuristics
      - orc_writer_linear_stripe_size_heuristics
      - bool
@@ -681,12 +714,42 @@ These semantics are similar to the `Apache Hadoop-Aws module <https://hadoop.apa
      - Type
      - Default Value
      - Description
+   * - fs.azure.account.auth.type.<storage-account>.dfs.core.windows.net
+     - string
+     - SharedKey
+     - Specifies the authentication mechanism to use for Azure storage accounts.
+       **Allowed values:** "SharedKey", "OAuth", "SAS".
+       "SharedKey": Uses the storage account name and key for authentication.
+       "OAuth": Utilizes OAuth tokens for secure authentication.
+       "SAS": Employs Shared Access Signatures for granular access control.
    * - fs.azure.account.key.<storage-account>.dfs.core.windows.net
      - string
      -
-     -  The credentials to access the specific Azure Blob Storage account, replace <storage-account> with the name of your Azure Storage account.
-        This property aligns with how Spark configures Azure account key credentials for accessing Azure storage, by setting this property multiple
-        times with different storage account names, you can access multiple Azure storage accounts.
+     - The credentials to access the specific Azure Blob Storage account, replace <storage-account> with the name of your Azure Storage account.
+       This property aligns with how Spark configures Azure account key credentials for accessing Azure storage, by setting this property multiple
+       times with different storage account names, you can access multiple Azure storage accounts.
+   * - fs.azure.sas.fixed.token.<storage-account>.dfs.core.windows.net
+     - string
+     -
+     - Specifies a fixed SAS (Shared Access Signature) token for accessing Azure storage.
+       This token provides scoped and time-limited access to specific resources.
+       Use this property when a pre-generated SAS token is used for authentication.
+   * - fs.azure.account.oauth2.client.id.<storage-account>.dfs.core.windows.net
+     - string
+     -
+     - Specifies the client ID of the Azure AD application used for OAuth 2.0 authentication.
+       This client ID is required when using OAuth as the authentication type.
+   * - fs.azure.account.oauth2.client.secret.<storage-account>.dfs.core.windows.net
+     - string
+     -
+     - Specifies the client secret of the Azure AD application used for OAuth 2.0 authentication.
+       This secret is required in conjunction with the client ID to authenticate the application.
+   * - fs.azure.account.oauth2.client.endpoint.<storage-account>.dfs.core.windows.net
+     - string
+     -
+     - Specifies the OAuth 2.0 token endpoint URL for the Azure AD application.
+       This endpoint is used to acquire access tokens for authenticating with Azure storage.
+       The URL follows the format: `https://login.microsoftonline.com/<tenant-id>/oauth2/token`.
 
 Presto-specific Configuration
 -----------------------------

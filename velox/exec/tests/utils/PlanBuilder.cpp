@@ -240,9 +240,14 @@ PlanBuilder& PlanBuilder::values(
 PlanBuilder& PlanBuilder::traceScan(
     const std::string& traceNodeDir,
     uint32_t pipelineId,
+    std::vector<uint32_t> driverIds,
     const RowTypePtr& outputType) {
   planNode_ = std::make_shared<core::TraceScanNode>(
-      nextPlanNodeId(), traceNodeDir, pipelineId, outputType);
+      nextPlanNodeId(),
+      traceNodeDir,
+      pipelineId,
+      std::move(driverIds),
+      outputType);
   return *this;
 }
 
@@ -437,9 +442,11 @@ PlanBuilder& PlanBuilder::tableWrite(
     const std::string_view& connectorId,
     const std::unordered_map<std::string, std::string>& serdeParameters,
     const std::shared_ptr<dwio::common::WriterOptions>& options,
-    const std::string& outputFileName) {
+    const std::string& outputFileName,
+    const common::CompressionKind compressionKind,
+    const RowTypePtr& schema) {
   VELOX_CHECK_NOT_NULL(planNode_, "TableWrite cannot be the source node");
-  auto rowType = planNode_->outputType();
+  auto rowType = schema ? schema : planNode_->outputType();
 
   std::vector<std::shared_ptr<const connector::hive::HiveColumnHandle>>
       columnHandles;
@@ -472,7 +479,7 @@ PlanBuilder& PlanBuilder::tableWrite(
       locationHandle,
       fileFormat,
       bucketProperty,
-      common::CompressionKind_NONE,
+      compressionKind,
       serdeParameters,
       options);
 
@@ -1169,6 +1176,7 @@ RowTypePtr rename(
 core::PlanNodePtr createLocalPartitionNode(
     const core::PlanNodeId& planNodeId,
     const std::vector<core::TypedExprPtr>& keys,
+    bool scaleWriter,
     const std::vector<core::PlanNodePtr>& sources,
     memory::MemoryPool* pool) {
   auto partitionFunctionFactory =
@@ -1177,6 +1185,7 @@ core::PlanNodePtr createLocalPartitionNode(
       planNodeId,
       keys.empty() ? core::LocalPartitionNode::Type::kGather
                    : core::LocalPartitionNode::Type::kRepartition,
+      scaleWriter,
       partitionFunctionFactory,
       sources);
 }
@@ -1265,7 +1274,11 @@ PlanBuilder& PlanBuilder::localPartition(
     const std::vector<core::PlanNodePtr>& sources) {
   VELOX_CHECK_NULL(planNode_, "localPartition() must be the first call");
   planNode_ = createLocalPartitionNode(
-      nextPlanNodeId(), exprs(keys, sources[0]->outputType()), sources, pool_);
+      nextPlanNodeId(),
+      exprs(keys, sources[0]->outputType()),
+      /*scaleWriter=*/false,
+      sources,
+      pool_);
   return *this;
 }
 
@@ -1273,8 +1286,28 @@ PlanBuilder& PlanBuilder::localPartition(const std::vector<std::string>& keys) {
   planNode_ = createLocalPartitionNode(
       nextPlanNodeId(),
       exprs(keys, planNode_->outputType()),
+      /*scaleWriter=*/false,
       {planNode_},
       pool_);
+  return *this;
+}
+
+PlanBuilder& PlanBuilder::scaleWriterlocalPartition(
+    const std::vector<std::string>& keys) {
+  std::vector<column_index_t> keyIndices;
+  keyIndices.reserve(keys.size());
+  for (const auto& key : keys) {
+    keyIndices.push_back(planNode_->outputType()->getChildIdx(key));
+  }
+  auto hivePartitionFunctionFactory =
+      std::make_shared<HivePartitionFunctionSpec>(
+          1009, keyIndices, std::vector<VectorPtr>{});
+  planNode_ = std::make_shared<core::LocalPartitionNode>(
+      nextPlanNodeId(),
+      core::LocalPartitionNode::Type::kRepartition,
+      true,
+      hivePartitionFunctionFactory,
+      std::vector{planNode_});
   return *this;
 }
 
@@ -1288,6 +1321,7 @@ PlanBuilder& PlanBuilder::localPartition(
   planNode_ = std::make_shared<core::LocalPartitionNode>(
       nextPlanNodeId(),
       core::LocalPartitionNode::Type::kRepartition,
+      /*scaleWriter=*/false,
       std::move(hivePartitionFunctionFactory),
       std::vector<core::PlanNodePtr>{planNode_});
   return *this;
@@ -1310,6 +1344,7 @@ PlanBuilder& PlanBuilder::localPartitionByBucket(
   planNode_ = std::make_shared<core::LocalPartitionNode>(
       nextPlanNodeId(),
       core::LocalPartitionNode::Type::kRepartition,
+      /*scaleWriter=*/false,
       std::move(hivePartitionFunctionFactory),
       std::vector<core::PlanNodePtr>{planNode_});
   return *this;
@@ -1318,10 +1353,12 @@ PlanBuilder& PlanBuilder::localPartitionByBucket(
 namespace {
 core::PlanNodePtr createLocalPartitionRoundRobinNode(
     const core::PlanNodeId& planNodeId,
+    bool scaleWriter,
     const std::vector<core::PlanNodePtr>& sources) {
   return std::make_shared<core::LocalPartitionNode>(
       planNodeId,
       core::LocalPartitionNode::Type::kRepartition,
+      scaleWriter,
       std::make_shared<RoundRobinPartitionFunctionSpec>(),
       sources);
 }
@@ -1331,12 +1368,20 @@ PlanBuilder& PlanBuilder::localPartitionRoundRobin(
     const std::vector<core::PlanNodePtr>& sources) {
   VELOX_CHECK_NULL(
       planNode_, "localPartitionRoundRobin() must be the first call");
-  planNode_ = createLocalPartitionRoundRobinNode(nextPlanNodeId(), sources);
+  planNode_ = createLocalPartitionRoundRobinNode(
+      nextPlanNodeId(), /*scaleWriter=*/false, sources);
   return *this;
 }
 
 PlanBuilder& PlanBuilder::localPartitionRoundRobin() {
-  planNode_ = createLocalPartitionRoundRobinNode(nextPlanNodeId(), {planNode_});
+  planNode_ = createLocalPartitionRoundRobinNode(
+      nextPlanNodeId(), /*scaleWriter=*/false, {planNode_});
+  return *this;
+}
+
+PlanBuilder& PlanBuilder::scaleWriterlocalPartitionRoundRobin() {
+  planNode_ = createLocalPartitionRoundRobinNode(
+      nextPlanNodeId(), /*scaleWriter=*/true, {planNode_});
   return *this;
 }
 
@@ -1393,6 +1438,7 @@ PlanBuilder& PlanBuilder::localPartitionRoundRobinRow() {
   planNode_ = std::make_shared<core::LocalPartitionNode>(
       nextPlanNodeId(),
       core::LocalPartitionNode::Type::kRepartition,
+      /*scaleWriter=*/false,
       std::make_shared<RoundRobinRowPartitionFunctionSpec>(),
       std::vector<core::PlanNodePtr>{planNode_});
   return *this;

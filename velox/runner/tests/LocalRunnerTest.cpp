@@ -18,10 +18,13 @@
 #include "velox/exec/tests/utils/LocalRunnerTestBase.h"
 #include "velox/exec/tests/utils/QueryAssertions.h"
 
-using namespace facebook::velox;
+namespace facebook::velox::runner {
+namespace {
+
 using namespace facebook::velox::exec;
-using namespace facebook::velox::runner;
 using namespace facebook::velox::exec::test;
+
+constexpr int kWaitTimeoutUs = 500'000;
 
 class LocalRunnerTest : public LocalRunnerTestBase {
  protected:
@@ -68,13 +71,18 @@ class LocalRunnerTest : public LocalRunnerTestBase {
     LocalRunnerTestBase::SetUpTestCase();
   }
 
+  std::shared_ptr<memory::MemoryPool> makeRootPool(const std::string& queryId) {
+    static std::atomic_uint64_t poolId{0};
+    return memory::memoryManager()->addRootPool(
+        fmt::format("{}_{}", queryId, poolId++));
+  }
+
   // Returns a plan with a table scan. This is a single stage if 'numWorkers' is
   // 1, otherwise this is a scan stage plus shuffle to a stage that gathers the
   // scan results.
   MultiFragmentPlanPtr makeScanPlan(const std::string& id, int32_t numWorkers) {
     MultiFragmentPlan::Options options = {
         .queryId = id, .numWorkers = numWorkers, .numDrivers = 2};
-    const int32_t width = 3;
 
     DistributedPlanBuilder rootBuilder(options, idGenerator_, pool_.get());
     rootBuilder.tableScan("T", rowType_);
@@ -119,17 +127,16 @@ class LocalRunnerTest : public LocalRunnerTestBase {
 
   void checkScanCount(const std::string& id, int32_t numWorkers) {
     auto scan = makeScanPlan(id, numWorkers);
+    auto rootPool = makeRootPool(id);
     auto localRunner = std::make_shared<LocalRunner>(
-        std::move(scan),
-        makeQueryCtx("q1", rootPool_.get()),
-        splitSourceFactory_);
+        std::move(scan), makeQueryCtx(id, rootPool.get()), splitSourceFactory_);
     auto results = readCursor(localRunner);
 
     int32_t count = 0;
     for (auto& rows : results) {
       count += rows->size();
     }
-    localRunner->waitForCompletion(5000);
+    localRunner->waitForCompletion(kWaitTimeoutUs);
     EXPECT_EQ(250'000, count);
   }
 
@@ -143,10 +150,10 @@ class LocalRunnerTest : public LocalRunnerTestBase {
 
 TEST_F(LocalRunnerTest, count) {
   auto join = makeJoinPlan();
+  const std::string id = "q1";
+  auto rootPool = makeRootPool(id);
   auto localRunner = std::make_shared<LocalRunner>(
-      std::move(join),
-      makeQueryCtx("q1", rootPool_.get()),
-      splitSourceFactory_);
+      std::move(join), makeQueryCtx(id, rootPool.get()), splitSourceFactory_);
   auto results = readCursor(localRunner);
   auto stats = localRunner->stats();
   EXPECT_EQ(1, results.size());
@@ -155,21 +162,24 @@ TEST_F(LocalRunnerTest, count) {
       kNumRows, results[0]->childAt(0)->as<FlatVector<int64_t>>()->valueAt(0));
   results.clear();
   EXPECT_EQ(Runner::State::kFinished, localRunner->state());
-  localRunner->waitForCompletion(5000);
+  localRunner->waitForCompletion(kWaitTimeoutUs);
 }
 
 TEST_F(LocalRunnerTest, error) {
   auto join = makeJoinPlan("if (c0 = 111, c0 / 0, c0 + 1) as c0");
+  const std::string id = "q1";
+  auto rootPool = makeRootPool(id);
   auto localRunner = std::make_shared<LocalRunner>(
-      std::move(join),
-      makeQueryCtx("q1", rootPool_.get()),
-      splitSourceFactory_);
+      std::move(join), makeQueryCtx(id, rootPool.get()), splitSourceFactory_);
   EXPECT_THROW(readCursor(localRunner), VeloxUserError);
   EXPECT_EQ(Runner::State::kError, localRunner->state());
-  localRunner->waitForCompletion(5000);
+  localRunner->waitForCompletion(kWaitTimeoutUs);
 }
 
 TEST_F(LocalRunnerTest, scan) {
   checkScanCount("s1", 1);
   checkScanCount("s2", 3);
 }
+
+} // namespace
+} // namespace facebook::velox::runner

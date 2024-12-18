@@ -30,6 +30,8 @@
 #include "velox/exec/fuzzer/FuzzerUtil.h"
 #include "velox/exec/fuzzer/ToSQLUtil.h"
 #include "velox/exec/tests/utils/QueryAssertions.h"
+#include "velox/functions/prestosql/types/IPAddressType.h"
+#include "velox/functions/prestosql/types/IPPrefixType.h"
 #include "velox/functions/prestosql/types/JsonType.h"
 #include "velox/serializers/PrestoSerializer.h"
 #include "velox/type/parser/TypeParser.h"
@@ -67,7 +69,7 @@ std::unique_ptr<ByteInputStream> toByteStream(const std::string& input) {
   std::vector<ByteRange> ranges;
   ranges.push_back(
       {reinterpret_cast<uint8_t*>(const_cast<char*>(input.data())),
-       (int32_t)input.length(),
+       static_cast<int32_t>(input.length()),
        0});
   return std::make_unique<BufferInputStream>(std::move(ranges));
 }
@@ -424,16 +426,18 @@ bool PrestoQueryRunner::isConstantExprSupported(
     const core::TypedExprPtr& expr) {
   if (std::dynamic_pointer_cast<const core::ConstantTypedExpr>(expr)) {
     // TODO: support constant literals of these types. Complex-typed constant
-    // literals require support of converting them to SQL. Json can be enabled
-    // after we're able to generate valid Json strings, because when Json is
-    // used as the type of constant literals in SQL, Presto implicitly invoke
-    // json_parse() on it, which makes the behavior of Presto different from
-    // Velox. Timestamp constant literals require further investigation to
+    // literals require support of converting them to SQL. Json, Ipaddress, and
+    // Ipprefix can be enabled after we're able to generate valid input values,
+    // because when these types are used as the type of a constant literal in
+    // SQL, Presto implicitly invoke json_parse(), cast(x as Ipaddress), and
+    // cast(x as Ipprefix) on it, which makes the behavior of Presto different
+    // from Velox. Timestamp constant literals require further investigation to
     // ensure Presto uses the same timezone as Velox. Interval type cannot be
     // used as the type of constant literals in Presto SQL.
     auto& type = expr->type();
     return type->isPrimitiveType() && !type->isTimestamp() &&
-        !isJsonType(type) && !type->isIntervalDayTime();
+        !isJsonType(type) && !type->isIntervalDayTime() &&
+        !isIPAddressType(type) && !isIPPrefixType(type);
   }
   return true;
 }
@@ -444,14 +448,16 @@ bool PrestoQueryRunner::isSupported(const exec::FunctionSignature& signature) {
   // cast-to or constant literals. Hyperloglog can only be casted from varbinary
   // and cannot be used as the type of constant literals. Interval year to month
   // can only be casted from NULL and cannot be used as the type of constant
-  // literals. Json requires special handling, because Presto requires Json
-  // literals to be valid Json strings, and doesn't allow creation of Json-typed
-  // HIVE columns.
+  // literals. Json, Ipaddress, and Ipprefix require special handling, because
+  // Presto requires literals of these types to be valid, and doesn't allow
+  // creating HIVE columns of these types.
   return !(
       usesTypeName(signature, "interval year to month") ||
       usesTypeName(signature, "hugeint") ||
       usesTypeName(signature, "hyperloglog") ||
-      usesTypeName(signature, "json"));
+      usesInputTypeName(signature, "json") ||
+      usesInputTypeName(signature, "ipaddress") ||
+      usesInputTypeName(signature, "ipprefix"));
 }
 
 std::optional<std::string> PrestoQueryRunner::toSql(
@@ -569,7 +575,12 @@ std::optional<std::string> PrestoQueryRunner::toSql(
     return out.str();
   };
 
-  const auto equiClausesToSql = [](auto joinNode) {
+  const auto filterToSql = [](core::TypedExprPtr filter) {
+    auto call = std::dynamic_pointer_cast<const core::CallTypedExpr>(filter);
+    return toCallSql(call);
+  };
+
+  const auto& joinConditionAsSql = [&](auto joinNode) {
     std::stringstream out;
     for (auto i = 0; i < joinNode->leftKeys().size(); ++i) {
       if (i > 0) {
@@ -577,6 +588,9 @@ std::optional<std::string> PrestoQueryRunner::toSql(
       }
       out << joinNode->leftKeys()[i]->name() << " = "
           << joinNode->rightKeys()[i]->name();
+    }
+    if (joinNode->filter()) {
+      out << " AND " << filterToSql(joinNode->filter());
     }
     return out.str();
   };
@@ -593,64 +607,69 @@ std::optional<std::string> PrestoQueryRunner::toSql(
 
   switch (joinNode->joinType()) {
     case core::JoinType::kInner:
-      sql << " FROM t INNER JOIN u ON " << equiClausesToSql(joinNode);
+      sql << " FROM t INNER JOIN u ON " << joinConditionAsSql(joinNode);
       break;
     case core::JoinType::kLeft:
-      sql << " FROM t LEFT JOIN u ON " << equiClausesToSql(joinNode);
+      sql << " FROM t LEFT JOIN u ON " << joinConditionAsSql(joinNode);
       break;
     case core::JoinType::kFull:
-      sql << " FROM t FULL OUTER JOIN u ON " << equiClausesToSql(joinNode);
+      sql << " FROM t FULL OUTER JOIN u ON " << joinConditionAsSql(joinNode);
       break;
     case core::JoinType::kLeftSemiFilter:
+      // Multiple columns returned by a scalar subquery is not supported in
+      // Presto. A scalar subquery expression is a subquery that returns one
+      // result row from exactly one column for every input row.
       if (joinNode->leftKeys().size() > 1) {
         return std::nullopt;
       }
       sql << " FROM t WHERE " << joinKeysToSql(joinNode->leftKeys())
           << " IN (SELECT " << joinKeysToSql(joinNode->rightKeys())
-          << " FROM u)";
+          << " FROM u";
+      if (joinNode->filter()) {
+        sql << " WHERE " << filterToSql(joinNode->filter());
+      }
+      sql << ")";
       break;
     case core::JoinType::kLeftSemiProject:
       if (joinNode->isNullAware()) {
         sql << ", " << joinKeysToSql(joinNode->leftKeys()) << " IN (SELECT "
-            << joinKeysToSql(joinNode->rightKeys()) << " FROM u) FROM t";
+            << joinKeysToSql(joinNode->rightKeys()) << " FROM u";
+        if (joinNode->filter()) {
+          sql << " WHERE " << filterToSql(joinNode->filter());
+        }
+        sql << ") FROM t";
       } else {
-        sql << ", EXISTS (SELECT * FROM u WHERE " << equiClausesToSql(joinNode)
-            << ") FROM t";
+        sql << ", EXISTS (SELECT * FROM u WHERE "
+            << joinConditionAsSql(joinNode);
+        sql << ") FROM t";
       }
       break;
     case core::JoinType::kAnti:
       if (joinNode->isNullAware()) {
         sql << " FROM t WHERE " << joinKeysToSql(joinNode->leftKeys())
             << " NOT IN (SELECT " << joinKeysToSql(joinNode->rightKeys())
-            << " FROM u)";
+            << " FROM u";
+        if (joinNode->filter()) {
+          sql << " WHERE " << filterToSql(joinNode->filter());
+        }
+        sql << ")";
       } else {
         sql << " FROM t WHERE NOT EXISTS (SELECT * FROM u WHERE "
-            << equiClausesToSql(joinNode) << ")";
+            << joinConditionAsSql(joinNode);
+        sql << ")";
       }
       break;
     default:
       VELOX_UNREACHABLE(
           "Unknown join type: {}", static_cast<int>(joinNode->joinType()));
   }
-
   return sql.str();
 }
 
 std::optional<std::string> PrestoQueryRunner::toSql(
     const std::shared_ptr<const core::NestedLoopJoinNode>& joinNode) {
-  const auto& joinKeysToSql = [](auto keys) {
-    std::stringstream out;
-    for (auto i = 0; i < keys.size(); ++i) {
-      if (i > 0) {
-        out << ", ";
-      }
-      out << keys[i]->name();
-    }
-    return out.str();
-  };
-
-  const auto& outputNames = joinNode->outputType()->names();
   std::stringstream sql;
+  sql << "SELECT " << folly::join(", ", joinNode->outputType()->names());
 
   // Nested loop join without filter.
   VELOX_CHECK(

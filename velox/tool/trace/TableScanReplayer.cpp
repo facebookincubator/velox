@@ -28,13 +28,17 @@ using namespace facebook::velox::exec::test;
 namespace facebook::velox::tool::trace {
 
 RowVectorPtr TableScanReplayer::run() {
+  std::shared_ptr<exec::Task> task;
   const auto plan = createPlan();
-  return exec::test::AssertQueryBuilder(plan)
-      .maxDrivers(maxDrivers_)
-      .configs(queryConfigs_)
-      .connectorSessionProperties(connectorConfigs_)
-      .splits(getSplits())
-      .copyResults(memory::MemoryManager::getInstance()->tracePool());
+  const auto result =
+      exec::test::AssertQueryBuilder(plan)
+          .maxDrivers(driverIds_.size())
+          .configs(queryConfigs_)
+          .connectorSessionProperties(connectorConfigs_)
+          .splits(getSplits())
+          .copyResults(memory::MemoryManager::getInstance()->tracePool(), task);
+  printStats(task);
+  return result;
 }
 
 core::PlanNodePtr TableScanReplayer::createPlanNode(
@@ -52,14 +56,9 @@ core::PlanNodePtr TableScanReplayer::createPlanNode(
 
 std::vector<exec::Split> TableScanReplayer::getSplits() const {
   std::vector<std::string> splitInfoDirs;
-  if (driverId_ != -1) {
+  for (const auto driverId : driverIds_) {
     splitInfoDirs.push_back(exec::trace::getOpTraceDirectory(
-        nodeTraceDir_, pipelineIds_.front(), driverId_));
-  } else {
-    for (auto i = 0; i < maxDrivers_; ++i) {
-      splitInfoDirs.push_back(exec::trace::getOpTraceDirectory(
-          nodeTraceDir_, pipelineIds_.front(), i));
-    }
+        nodeTraceDir_, pipelineIds_.front(), driverId));
   }
   const auto splitStrs =
       exec::trace::OperatorTraceSplitReader(

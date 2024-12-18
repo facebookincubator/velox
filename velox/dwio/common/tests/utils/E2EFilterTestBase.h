@@ -16,6 +16,7 @@
 
 #pragma once
 
+#include "velox/common/testutil/RandomSeed.h"
 #include "velox/common/time/Timer.h"
 #include "velox/dwio/common/BufferedInput.h"
 #include "velox/dwio/common/FileSink.h"
@@ -102,20 +103,10 @@ class E2EFilterTestBase : public testing::Test {
     memory::MemoryManager::testingSetInstance({});
   }
 
-  static bool useRandomSeed() {
-    // Check environment variable because `buck test` does not allow pass in
-    // command line arguments.
-    const char* env = getenv("VELOX_TEST_USE_RANDOM_SEED");
-    return !env ? false : folly::to<bool>(env);
-  }
-
   void SetUp() override {
     rootPool_ = memory::memoryManager()->addRootPool("E2EFilterTestBase");
     leafPool_ = rootPool_->addLeafChild("E2EFilterTestBase");
-    if (useRandomSeed()) {
-      seed_ = folly::Random::secureRand32();
-      LOG(INFO) << "Random seed: " << seed_;
-    }
+    seed_ = common::testutil::getRandomSeed(seed_);
   }
 
   static bool typeKindSupportsValueHook(TypeKind kind) {
@@ -302,6 +293,10 @@ class E2EFilterTestBase : public testing::Test {
       const std::vector<RowVectorPtr>& batches,
       const std::vector<std::string>& filterable);
 
+  void setReadSize(uint64_t readSize) {
+    readSize_ = readSize;
+  }
+
  private:
   void testReadWithFilterLazy(
       const std::shared_ptr<common::ScanSpec>& spec,
@@ -355,7 +350,7 @@ class E2EFilterTestBase : public testing::Test {
 
   int32_t nextReadBatchSize() {
     if (nextReadSizeIndex_ >= readSizes_.size()) {
-      return 1000;
+      return readSize_;
     }
     return readSizes_[nextReadSizeIndex_++];
   }
@@ -380,6 +375,7 @@ class E2EFilterTestBase : public testing::Test {
   int32_t batchSize_ = kBatchSize;
   bool testRowGroupSkip_ = true;
   uint32_t seed_ = 1;
+  uint64_t readSize_ = 1000;
 };
 
 } // namespace facebook::velox::dwio::common

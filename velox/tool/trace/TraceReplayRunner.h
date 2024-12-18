@@ -29,6 +29,7 @@ DECLARE_string(query_id);
 DECLARE_string(task_id);
 DECLARE_string(node_id);
 DECLARE_int32(driver_id);
+DECLARE_string(driver_ids);
 DECLARE_string(table_writer_output_dir);
 DECLARE_double(hiveConnectorExecutorHwMultiplier);
 DECLARE_int32(shuffle_serialization_format);
@@ -49,7 +50,7 @@ class TraceReplayRunner {
   /// Runs the trace replay with a set of gflags passed from replayer tool.
   virtual void run();
 
- private:
+ protected:
   std::unique_ptr<tool::trace::OperatorReplayerBase> createReplayer() const;
 
   const std::unique_ptr<folly::IOThreadPoolExecutor> ioExecutor_;

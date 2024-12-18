@@ -27,16 +27,16 @@
 
 namespace facebook::velox::exec {
 
-// Represents a column that is copied from input to output, possibly
-// with cardinality change, i.e. values removed or duplicated.
+/// Represents a column that is copied from input to output, possibly
+/// with cardinality change, i.e. values removed or duplicated.
 struct IdentityProjection {
   IdentityProjection(
       column_index_t _inputChannel,
       column_index_t _outputChannel)
       : inputChannel(_inputChannel), outputChannel(_outputChannel) {}
 
-  const column_index_t inputChannel;
-  const column_index_t outputChannel;
+  column_index_t inputChannel;
+  column_index_t outputChannel;
 };
 
 struct MemoryStats {
@@ -488,7 +488,7 @@ class Operator : public BaseRuntimeStatWriter {
   /// should be called after this.
   virtual void close();
 
-  // Returns true if 'this' never has more output rows than input rows.
+  /// Returns true if 'this' never has more output rows than input rows.
   virtual bool isFilter() const {
     return false;
   }
@@ -708,7 +708,7 @@ class Operator : public BaseRuntimeStatWriter {
 
    protected:
     MemoryReclaimer(const std::shared_ptr<Driver>& driver, Operator* op)
-        : driver_(driver), op_(op) {
+        : memory::MemoryReclaimer(0), driver_(driver), op_(op) {
       VELOX_CHECK_NOT_NULL(op_);
     }
 
@@ -832,7 +832,7 @@ std::vector<column_index_t> calculateOutputChannels(
     const RowTypePtr& targetInputType,
     const RowTypePtr& targetOutputType);
 
-// A first operator in a Driver, e.g. table scan or exchange client.
+/// A first operator in a Driver, e.g. table scan or exchange client.
 class SourceOperator : public Operator {
  public:
   SourceOperator(
