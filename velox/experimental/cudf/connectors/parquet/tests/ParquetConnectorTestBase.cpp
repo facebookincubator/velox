@@ -167,7 +167,6 @@ void ParquetConnectorTestBase::writeToFile(
   for (const auto& vector : vectors) {
     VELOX_CHECK_NOT_NULL(vector);
     if (vector->size()) {
-      // Use the `with_arrow` version to properly convert `nulls`
       auto cudfTable = with_arrow::to_cudf_table(vector, vector->pool());
       cudfTables.emplace_back(std::move(cudfTable));
     }
@@ -203,7 +202,6 @@ void ParquetConnectorTestBase::writeToFile(
     std::string prefix) {
   auto const sinkInfo = cudf::io::sink_info(filePath);
   VELOX_CHECK_NOT_NULL(vector);
-  // Use the `with_arrow` version to properly convert `nulls`
   auto cudfTable = with_arrow::to_cudf_table(vector, vector->pool());
   auto tableInputMetadata = cudf::io::table_input_metadata(cudfTable->view());
   fillColumnNames(tableInputMetadata, prefix);
