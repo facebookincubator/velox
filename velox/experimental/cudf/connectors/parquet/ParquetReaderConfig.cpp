@@ -15,12 +15,12 @@
  */
 
 #include "velox/experimental/cudf/connectors/parquet/ParquetReaderConfig.h"
+#include "velox/common/base/Exceptions.h"
 #include "velox/common/config/Config.h"
 #include "velox/core/QueryConfig.h"
 
 #include <boost/algorithm/string.hpp>
-#include <cudf/io/parquet.hpp>
-#include <cudf/io/types.hpp>
+
 #include <cudf/types.hpp>
 
 #include <optional>

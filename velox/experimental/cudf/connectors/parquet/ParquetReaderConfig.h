@@ -15,11 +15,8 @@
  */
 #pragma once
 
-#include "velox/common/base/Exceptions.h"
 #include "velox/common/config/Config.h"
 
-#include <cudf/io/parquet.hpp>
-#include <cudf/io/types.hpp>
 #include <cudf/types.hpp>
 
 #include <optional>
@@ -109,8 +106,6 @@ class ParquetReaderConfig {
   const std::shared_ptr<const config::ConfigBase>& config() const {
     return config_;
   }
-
-  // [[nodiscard]] cudf::io::source_info const& get_source() const = delete;
 
   std::size_t maxChunkReadLimit() const;
   std::size_t maxChunkReadLimitSession(const config::ConfigBase* session) const;

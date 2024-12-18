@@ -15,16 +15,13 @@
  */
 #pragma once
 
-#include "velox/common/config/Config.h"
+#include <string>
+#include <vector>
+
 #include "velox/connectors/Connector.h"
-#include "velox/experimental/cudf/connectors/parquet/ParquetDataSource.h"
 #include "velox/type/Type.h"
 
-#include <cudf/io/parquet.hpp>
-#include <cudf/io/types.hpp>
 #include <cudf/types.hpp>
-
-#include <vector>
 
 namespace facebook::velox::cudf_velox::connector::parquet {
 
@@ -38,8 +35,7 @@ class ParquetColumnHandle : public ColumnHandle {
       const std::string& name,
       const TypePtr& type,
       const cudf::data_type data_type,
-      const std::vector<ParquetColumnHandle>& children)
-      : name_(name), type_(type), data_type_(data_type), children_(children) {}
+      const std::vector<ParquetColumnHandle>& children);
 
   const std::string& name() const {
     return name_;
@@ -70,11 +66,7 @@ class ParquetTableHandle : public ConnectorTableHandle {
       std::string connectorId,
       const std::string& tableName,
       bool filterPushdownEnabled,
-      const RowTypePtr& dataColumns = nullptr)
-      : ConnectorTableHandle(std::move(connectorId)),
-        tableName_(tableName),
-        filterPushdownEnabled_(filterPushdownEnabled),
-        dataColumns_(dataColumns) {}
+      const RowTypePtr& dataColumns = nullptr);
 
   const std::string& tableName() const {
     return tableName_;
@@ -89,20 +81,11 @@ class ParquetTableHandle : public ConnectorTableHandle {
     return dataColumns_;
   }
 
-  std::string toString() const override {
-    std::stringstream out;
-    out << "table: " << tableName_;
-    if (dataColumns_) {
-      out << ", data columns: " << dataColumns_->toString();
-    }
-    return out.str();
-  }
+  std::string toString() const override;
 
   static ConnectorTableHandlePtr create(
       const folly::dynamic& obj,
-      void* context) {
-    VELOX_NYI("ParquetTableHandle::create() not yet implemented");
-  }
+      void* context);
 
  private:
   const std::string tableName_;
