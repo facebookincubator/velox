@@ -81,8 +81,11 @@ std::optional<RowVectorPtr> ParquetDataSource::next(
     // TODO: Update completedBytes_
     // completedBytes_ += what?
 
-    // Convert to velox RowVectorPtr and return
-    return std::make_optional(to_velox_column(table->view(), pool_));
+    // Convert to velox RowVectorPtr with_arrow to support more rowTypes
+    RowVectorPtr output = with_arrow::to_velox_column(table->view(), pool_, "");
+
+    // Return output
+    return output;
 
   } else {
     return nullptr;

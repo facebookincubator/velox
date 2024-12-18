@@ -69,7 +69,11 @@ class ParquetTableHandle
       std::string connectorId,
       const std::string& tableName,
       bool filterPushdownEnabled,
-      const RowTypePtr& dataColumns = nullptr);
+      const RowTypePtr& dataColumns = nullptr)
+      : ConnectorTableHandle(std::move(connectorId)),
+        tableName_(tableName),
+        filterPushdownEnabled_(filterPushdownEnabled),
+        dataColumns_(dataColumns) {}
 
   const std::string& tableName() const {
     return tableName_;
@@ -98,7 +102,6 @@ class ParquetTableHandle
       void* context);
 
  private:
-  const std::string connectorId_;
   const std::string tableName_;
   const bool filterPushdownEnabled_;
   const RowTypePtr dataColumns_;

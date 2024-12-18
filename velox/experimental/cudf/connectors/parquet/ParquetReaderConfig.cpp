@@ -148,7 +148,7 @@ bool ParquetReaderConfig::isAllowMismatchedParquetSchemasSession(
 
 cudf::data_type ParquetReaderConfig::timestampType() const {
   const auto unit = config_->get<cudf::type_id>(
-      kTimestampType, cudf::type_id::EMPTY /*empty*/);
+      kTimestampType, cudf::type_id::TIMESTAMP_MILLISECONDS /*milli*/);
   VELOX_CHECK(
       unit == cudf::type_id::TIMESTAMP_DAYS /*days*/ ||
           unit == cudf::type_id::TIMESTAMP_SECONDS /*seconds*/ ||
@@ -164,7 +164,7 @@ cudf::data_type ParquetReaderConfig::timestampTypeSession(
   const auto unit = session->get<cudf::type_id>(
       kTimestampTypeSession,
       config_->get<cudf::type_id>(
-          kTimestampType, cudf::type_id::EMPTY /*empty*/));
+          kTimestampType, cudf::type_id::TIMESTAMP_MILLISECONDS /*milli*/));
   VELOX_CHECK(
       unit == cudf::type_id::TIMESTAMP_DAYS /*days*/ ||
           unit == cudf::type_id::TIMESTAMP_SECONDS /*seconds*/ ||
