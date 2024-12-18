@@ -36,7 +36,33 @@
 #include "velox/experimental/cudf/exec/VeloxCudfInterop.h"
 #include "velox/experimental/cudf/vector/CudfVector.h"
 
+#include <functional>
+#include <string>
+
 namespace facebook::velox::cudf_velox::exec::test {
+
+namespace {
+
+void fillColumnNames(
+    cudf::io::table_input_metadata& tableMeta,
+    const std::string& prefix) {
+  // Fill unnamed columns' names in cudf table_meta
+  std::function<void(cudf::io::column_in_metadata&, std::string)>
+      addDefaultName =
+          [&](cudf::io::column_in_metadata& colMeta, std::string defaultName) {
+            if (colMeta.get_name().empty()) {
+              colMeta.set_name(defaultName);
+            }
+            for (int32_t i = 0; i < colMeta.num_children(); ++i) {
+              addDefaultName(colMeta.child(i), std::to_string(i));
+            }
+          };
+  for (int32_t i = 0; i < tableMeta.column_metadata.size(); ++i) {
+    addDefaultName(tableMeta.column_metadata[i], prefix + std::to_string(i));
+  }
+}
+
+} // namespace
 
 ParquetConnectorTestBase::ParquetConnectorTestBase() {
   filesystems::registerLocalFileSystem();
@@ -132,7 +158,8 @@ ParquetConnectorTestBase::makeFilePaths(int count) {
 
 void ParquetConnectorTestBase::writeToFile(
     const std::string& filePath,
-    const std::vector<RowVectorPtr>& vectors) {
+    const std::vector<RowVectorPtr>& vectors,
+    std::string prefix) {
   // Convert all RowVectorPtrs to cudf tables
   std::vector<std::unique_ptr<cudf::table>> cudfTables;
   cudfTables.reserve(vectors.size());
@@ -151,6 +178,7 @@ void ParquetConnectorTestBase::writeToFile(
   auto const sinkInfo = cudf::io::sink_info(filePath);
   auto tableInputMetadata =
       cudf::io::table_input_metadata(cudfTables[0]->view());
+  fillColumnNames(tableInputMetadata, prefix);
   auto options = cudf::io::chunked_parquet_writer_options::builder(sinkInfo)
                      .metadata(tableInputMetadata)
                      .build();
@@ -167,10 +195,12 @@ void ParquetConnectorTestBase::writeToFile(
 
 void ParquetConnectorTestBase::writeToFile(
     const std::string& filePath,
-    RowVectorPtr vector) {
+    RowVectorPtr vector,
+    std::string prefix) {
   auto const sinkInfo = cudf::io::sink_info(filePath);
   auto cudfTable = with_arrow::to_cudf_table(vector, vector->pool());
   auto tableInputMetadata = cudf::io::table_input_metadata(cudfTable->view());
+  fillColumnNames(tableInputMetadata, prefix);
   auto options =
       cudf::io::parquet_writer_options::builder(sinkInfo, cudfTable->view())
           .metadata(tableInputMetadata)

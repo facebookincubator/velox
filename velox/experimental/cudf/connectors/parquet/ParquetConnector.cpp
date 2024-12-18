@@ -19,6 +19,8 @@
 
 namespace facebook::velox::cudf_velox::connector::parquet {
 
+using namespace facebook::velox::connector;
+
 ParquetConnector::ParquetConnector(
     const std::string& id,
     std::shared_ptr<const facebook::velox::config::ConfigBase> config,
@@ -29,16 +31,12 @@ ParquetConnector::ParquetConnector(
   LOG(INFO) << "cudf::Parquet connector " << connectorId() << " created.";
 }
 
-std::unique_ptr<facebook::velox::connector::DataSource>
-ParquetConnector::createDataSource(
+std::unique_ptr<DataSource> ParquetConnector::createDataSource(
     const std::shared_ptr<const RowType>& outputType,
-    const std::shared_ptr<facebook::velox::connector::ConnectorTableHandle>&
-        tableHandle,
-    const std::unordered_map<
-        std::string,
-        std::shared_ptr<facebook::velox::connector::ColumnHandle>>&
+    const std::shared_ptr<ConnectorTableHandle>& tableHandle,
+    const std::unordered_map<std::string, std::shared_ptr<ColumnHandle>>&
         columnHandles,
-    facebook::velox::connector::ConnectorQueryCtx* connectorQueryCtx) {
+    ConnectorQueryCtx* connectorQueryCtx) {
   return std::make_unique<ParquetDataSource>(
       outputType,
       tableHandle,
@@ -48,8 +46,7 @@ ParquetConnector::createDataSource(
       ParquetReaderConfig_);
 }
 
-std::shared_ptr<facebook::velox::connector::Connector>
-ParquetConnectorFactory::newConnector(
+std::shared_ptr<Connector> ParquetConnectorFactory::newConnector(
     const std::string& id,
     std::shared_ptr<const facebook::velox::config::ConfigBase> config,
     folly::Executor* executor) {

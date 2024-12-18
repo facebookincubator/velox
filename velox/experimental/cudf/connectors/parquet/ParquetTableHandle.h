@@ -28,9 +28,11 @@
 
 namespace facebook::velox::cudf_velox::connector::parquet {
 
+using namespace facebook::velox::connector;
+
 // Parquet column handle only needs the column name (all columns are generated
 // in the same way).
-class ParquetColumnHandle : public facebook::velox::connector::ColumnHandle {
+class ParquetColumnHandle : public ColumnHandle {
  public:
   explicit ParquetColumnHandle(
       const std::string& name,
@@ -62,8 +64,7 @@ class ParquetColumnHandle : public facebook::velox::connector::ColumnHandle {
   const std::vector<ParquetColumnHandle> children_;
 };
 
-class ParquetTableHandle
-    : public facebook::velox::connector::ConnectorTableHandle {
+class ParquetTableHandle : public ConnectorTableHandle {
  public:
   ParquetTableHandle(
       std::string connectorId,
@@ -97,9 +98,11 @@ class ParquetTableHandle
     return out.str();
   }
 
-  static facebook::velox::connector::ConnectorTableHandlePtr create(
+  static ConnectorTableHandlePtr create(
       const folly::dynamic& obj,
-      void* context);
+      void* context) {
+    VELOX_NYI("ParquetTableHandle::create() not yet implemented");
+  }
 
  private:
   const std::string tableName_;

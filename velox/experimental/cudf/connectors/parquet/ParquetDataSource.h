@@ -33,22 +33,20 @@
 
 namespace facebook::velox::cudf_velox::connector::parquet {
 
-class ParquetDataSource : public facebook::velox::connector::DataSource {
+using namespace facebook::velox::connector;
+
+class ParquetDataSource : public DataSource {
  public:
   ParquetDataSource(
       const std::shared_ptr<const RowType>& outputType,
-      const std::shared_ptr<facebook::velox::connector::ConnectorTableHandle>&
-          tableHandle,
-      const std::unordered_map<
-          std::string,
-          std::shared_ptr<facebook::velox::connector::ColumnHandle>>&
-      /*columnHandles*/,
+      const std::shared_ptr<ConnectorTableHandle>& tableHandle,
+      const std::unordered_map<std::string, std::shared_ptr<ColumnHandle>>&
+          columnHandles,
       folly::Executor* executor,
-      const facebook::velox::connector::ConnectorQueryCtx* connectorQueryCtx,
+      const ConnectorQueryCtx* connectorQueryCtx,
       const std::shared_ptr<ParquetReaderConfig>& ParquetReaderConfig);
 
-  void addSplit(std::shared_ptr<facebook::velox::connector::ConnectorSplit>
-                    split) override;
+  void addSplit(std::shared_ptr<ConnectorSplit> split) override;
 
   void addDynamicFilter(
       column_index_t /*outputChannel*/,
@@ -93,7 +91,7 @@ class ParquetDataSource : public facebook::velox::connector::DataSource {
   const std::shared_ptr<ParquetReaderConfig> ParquetReaderConfig_;
 
   folly::Executor* const executor_;
-  const facebook::velox::connector::ConnectorQueryCtx* const connectorQueryCtx_;
+  const ConnectorQueryCtx* const connectorQueryCtx_;
 
   memory::MemoryPool* const pool_;
 
@@ -105,6 +103,9 @@ class ParquetDataSource : public facebook::velox::connector::DataSource {
   // contains column names before assignment, and columns that only used in
   // remaining filter.
   RowTypePtr readerOutputType_;
+
+  // Columns to read.
+  std::vector<std::string> readColumnNames_;
 
   std::shared_ptr<io::IoStatistics> ioStats_;
 

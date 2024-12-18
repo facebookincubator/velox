@@ -43,11 +43,15 @@ class ParquetConnectorTestBase
   void resetParquetConnector(
       const std::shared_ptr<const facebook::velox::config::ConfigBase>& config);
 
-  void writeToFile(const std::string& filePath, RowVectorPtr vector);
+  void writeToFile(
+      const std::string& filePath,
+      RowVectorPtr vector,
+      std::string prefix = "c");
 
   void writeToFile(
       const std::string& filePath,
-      const std::vector<RowVectorPtr>& vectors);
+      const std::vector<RowVectorPtr>& vectors,
+      std::string prefix = "c");
 
   std::vector<RowVectorPtr> makeVectors(
       const RowTypePtr& rowType,

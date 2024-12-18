@@ -26,37 +26,35 @@
 
 namespace facebook::velox::cudf_velox::connector::parquet {
 
-class ParquetConnector final : public facebook::velox::connector::Connector {
+using namespace facebook::velox::connector;
+using namespace facebook::velox::config;
+
+class ParquetConnector final : public Connector {
  public:
   ParquetConnector(
       const std::string& id,
-      std::shared_ptr<const facebook::velox::config::ConfigBase> config,
+      std::shared_ptr<const ConfigBase> config,
       folly::Executor* executor);
 
-  std::unique_ptr<facebook::velox::connector::DataSource> createDataSource(
+  std::unique_ptr<DataSource> createDataSource(
       const std::shared_ptr<const RowType>& outputType,
-      const std::shared_ptr<facebook::velox::connector::ConnectorTableHandle>&
-          tableHandle,
-      const std::unordered_map<
-          std::string,
-          std::shared_ptr<facebook::velox::connector::ColumnHandle>>&
+      const std::shared_ptr<ConnectorTableHandle>& tableHandle,
+      const std::unordered_map<std::string, std::shared_ptr<ColumnHandle>>&
           columnHandles,
-      facebook::velox::connector::ConnectorQueryCtx* connectorQueryCtx)
-      override final;
+      ConnectorQueryCtx* connectorQueryCtx) override final;
 
-  const std::shared_ptr<const facebook::velox::config::ConfigBase>&
-  connectorConfig() const override {
+  const std::shared_ptr<const ConfigBase>& connectorConfig() const override {
     return ParquetReaderConfig_->config();
   }
 
-  std::unique_ptr<facebook::velox::connector::DataSink> createDataSink(
+  std::unique_ptr<DataSink> createDataSink(
       RowTypePtr /*inputType*/,
       std::shared_ptr<
-          facebook::velox::connector::
-              ConnectorInsertTableHandle> /*connectorInsertTableHandle*/,
-      facebook::velox::connector::ConnectorQueryCtx* /*connectorQueryCtx*/,
-      facebook::velox::connector::CommitStrategy /*commitStrategy*/)
-      override final {
+
+          ConnectorInsertTableHandle> /*connectorInsertTableHandle*/,
+      ConnectorQueryCtx* /*connectorQueryCtx*/,
+      CommitStrategy /*commitStrategy*/) override final {
+    // TODO: Implement cudf parquet writer
     VELOX_NYI("cudf::ParquetConnector does not yet support data sink.");
   }
 
@@ -69,8 +67,7 @@ class ParquetConnector final : public facebook::velox::connector::Connector {
   folly::Executor* executor_;
 };
 
-class ParquetConnectorFactory
-    : public facebook::velox::connector::ConnectorFactory {
+class ParquetConnectorFactory : public ConnectorFactory {
  public:
   static constexpr const char* kParquetConnectorName = "parquet";
 
@@ -79,9 +76,9 @@ class ParquetConnectorFactory
   explicit ParquetConnectorFactory(const char* connectorName)
       : ConnectorFactory(connectorName) {}
 
-  std::shared_ptr<facebook::velox::connector::Connector> newConnector(
+  std::shared_ptr<Connector> newConnector(
       const std::string& id,
-      std::shared_ptr<const facebook::velox::config::ConfigBase> config,
+      std::shared_ptr<const ConfigBase> config,
       folly::Executor* executor = nullptr) override;
 };
 
