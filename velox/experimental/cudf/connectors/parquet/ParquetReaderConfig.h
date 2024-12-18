@@ -83,17 +83,6 @@ class ParquetReaderConfig {
   static constexpr const char* kTimestampType = "timestamp-type";
   static constexpr const char* kTimestampTypeSession = "timestamp_type";
 
-  // Predicate filter as AST to filter output rows.
-  // std::optional<std::reference_wrapper<ast::expression const>> _filter;
-
-  // Path in schema of column to read; `nullopt` is all
-  // std::optional<std::vector<std::string>> _columns;
-
-  // List of individual row groups to read (ignored if empty)
-  // std::vector<std::vector<size_type>> _row_groups;
-
-  // std::optional<std::vector<reader_column_schema>> _reader_column_schema;
-
   InsertExistingPartitionsBehavior insertExistingPartitionsBehavior(
       const config::ConfigBase* session) const;
 
