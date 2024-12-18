@@ -13,13 +13,8 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-
-/*
- *  The contents of this folder should be moved to the following location:
- * #include
- * "velox/experimental/cudf/exec/tests/utils/ParquetConnectorTestBase.h"
- */
-#include "velox/experimental/cudf/connectors/parquet/tests/ParquetConnectorTestBase.h"
+#include <functional>
+#include <string>
 
 #include <cudf/io/parquet.hpp>
 #include <cudf/io/types.hpp>
@@ -35,10 +30,8 @@
 
 #include "velox/experimental/cudf/exec/Utilities.h"
 #include "velox/experimental/cudf/exec/VeloxCudfInterop.h"
+#include "velox/experimental/cudf/tests/utils/ParquetConnectorTestBase.h"
 #include "velox/experimental/cudf/vector/CudfVector.h"
-
-#include <functional>
-#include <string>
 
 namespace facebook::velox::cudf_velox::exec::test {
 

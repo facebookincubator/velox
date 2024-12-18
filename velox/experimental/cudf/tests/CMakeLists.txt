@@ -69,3 +69,5 @@ target_link_libraries(
   gtest
   gtest_main
   fmt::fmt)
+
+add_subdirectory(utils)
