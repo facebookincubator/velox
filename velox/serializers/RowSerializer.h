@@ -44,8 +44,8 @@ struct RowHeader {
   void write(OutputStream* out) {
     out->write(reinterpret_cast<char*>(&uncompressedSize), sizeof(int32_t));
     out->write(reinterpret_cast<char*>(&compressedSize), sizeof(int32_t));
-    char writeValue = compressed ? 1 : 0;
-    out->write(reinterpret_cast<char*>(&writeValue), sizeof(char));
+    const char writeValue = compressed ? 1 : 0;
+    out->write(reinterpret_cast<const char*>(&writeValue), sizeof(char));
   }
 
   static size_t size() {
@@ -55,8 +55,8 @@ struct RowHeader {
   std::string debugString() const {
     return fmt::format(
         "uncompressedSize: {}, compressedSize: {}, compressed: {}",
-        uncompressedSize,
-        compressedSize,
+        succinctBytes(uncompressedSize),
+        succinctBytes(compressedSize),
         compressed);
   }
 };
@@ -152,8 +152,8 @@ class RowSerializer : public IterativeVectorSerializer {
     return detail::RowHeader::size() + codec_->maxCompressedLength(size);
   }
 
-  // The serialization format is | uncompressedSize | compressedSize |
-  // compressed | data.
+  /// The serialization format is | uncompressedSize | compressedSize |
+  /// compressed | data.
   void flush(OutputStream* stream) override {
     constexpr int32_t kMaxCompressionAttemptsToSkip = 30;
     const auto size = uncompressedSize();
@@ -283,11 +283,11 @@ class RowDeserializer {
         ? VectorSerde::Options().compressionKind
         : options->compressionKind;
     while (!source->atEnd()) {
-      std::unique_ptr<folly::IOBuf> uncompressedBuf = nullptr;
+      std::unique_ptr<folly::IOBuf> uncompressedBuf;
       const auto header = detail::RowHeader::read(source);
       if (header.compressed) {
-        VELOX_DCHECK(
-            compressionKind != common::CompressionKind::CompressionKind_NONE);
+        VELOX_DCHECK_NE(
+            compressionKind, common::CompressionKind::CompressionKind_NONE);
         auto compressBuf = folly::IOBuf::create(header.compressedSize);
         source->readBytes(compressBuf->writableData(), header.compressedSize);
         compressBuf->append(header.compressedSize);
@@ -297,8 +297,9 @@ class RowDeserializer {
         uncompressedBuf =
             codec->uncompress(compressBuf.get(), header.uncompressedSize);
       }
+
       std::unique_ptr<ByteInputStream> uncompressedStream;
-      ByteInputStream* uncompressedSource;
+      ByteInputStream* uncompressedSource{nullptr};
       if (uncompressedBuf == nullptr) {
         uncompressedSource = source;
       } else {
