@@ -26,8 +26,8 @@
 #include "velox/experimental/cudf/connectors/parquet/ParquetDataSource.h"
 #include "velox/experimental/cudf/connectors/parquet/ParquetReaderConfig.h"
 #include "velox/experimental/cudf/connectors/parquet/ParquetTableHandle.h"
-#include "velox/experimental/cudf/connectors/parquet/tests/ParquetConnectorTestBase.h"
 #include "velox/experimental/cudf/exec/Utilities.h"
+#include "velox/experimental/cudf/tests/utils/ParquetConnectorTestBase.h"
 
 #include "velox/exec/Exchange.h"
 #include "velox/exec/PlanNodeStats.h"

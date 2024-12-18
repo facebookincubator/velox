@@ -42,7 +42,3 @@ target_link_libraries(
     velox_connector
     velox_type_tz
     velox_gcs)
-
-if(${VELOX_BUILD_TESTING})
-  add_subdirectory(tests)
-endif()
