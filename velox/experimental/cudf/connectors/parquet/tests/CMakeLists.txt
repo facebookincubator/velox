@@ -14,9 +14,6 @@
 
 add_library(velox_cudf_exec_test_lib ParquetConnectorTestBase.cpp)
 
-set_property(SOURCE ParquetConnectorTestBase.cpp
-PROPERTY COMPILE_FLAGS " -g -O0")
-
 set_target_properties(
   velox_cudf_exec_test_lib
   PROPERTIES CUDA_ARCHITECTURES native)
