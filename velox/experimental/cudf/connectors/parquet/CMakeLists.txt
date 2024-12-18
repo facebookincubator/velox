@@ -30,12 +30,6 @@ velox_add_library(
   ParquetConnectorSplit.cpp
   ParquetDataSource.cpp)
 
-  set_property(SOURCE ParquetReaderConfig.cpp
-  ParquetConnector.cpp
-  ParquetConnectorSplit.cpp
-  ParquetDataSource.cpp
-  PROPERTY COMPILE_FLAGS " -g -O0")
-
 set_target_properties(
   velox_cudf_parquet_connector
   PROPERTIES CUDA_ARCHITECTURES native)
