@@ -23,8 +23,11 @@ target_link_libraries(
 
 add_library(
   velox_cudf_parquet_connector OBJECT
-  ParquetReaderConfig.cpp ParquetConnector.cpp ParquetConnectorSplit.cpp
-  ParquetDataSource.cpp)
+  ParquetReaderConfig.cpp
+  ParquetConnector.cpp
+  ParquetConnectorSplit.cpp
+  ParquetDataSource.cpp
+  ParquetTableHandle.cpp)
 
 set_target_properties(
   velox_cudf_parquet_connector

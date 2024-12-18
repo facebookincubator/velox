@@ -19,12 +19,9 @@
 #include "velox/common/io/IoStatistics.h"
 #include "velox/connectors/Connector.h"
 #include "velox/dwio/common/Statistics.h"
-#include "velox/exec/OperatorUtils.h"
-#include "velox/experimental/cudf/connectors/parquet/ParquetConnector.h"
 #include "velox/experimental/cudf/connectors/parquet/ParquetConnectorSplit.h"
 #include "velox/experimental/cudf/connectors/parquet/ParquetReaderConfig.h"
 #include "velox/experimental/cudf/connectors/parquet/ParquetTableHandle.h"
-#include "velox/expression/Expr.h"
 #include "velox/type/Type.h"
 
 #include <cudf/io/parquet.hpp>

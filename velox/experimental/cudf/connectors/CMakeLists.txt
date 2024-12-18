@@ -12,6 +12,4 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# if(${VELOX_ENABLE_CUDF_PARQUET_CONNECTOR})
 add_subdirectory(parquet)
-# endif()

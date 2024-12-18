@@ -16,10 +16,10 @@
 #include <filesystem>
 #include <memory>
 
-#include "velox/experimental/cudf/connectors/parquet/ParquetConnector.h"
 #include "velox/experimental/cudf/connectors/parquet/ParquetConnectorSplit.h"
 #include "velox/experimental/cudf/connectors/parquet/ParquetDataSource.h"
 #include "velox/experimental/cudf/connectors/parquet/ParquetReaderConfig.h"
+#include "velox/experimental/cudf/connectors/parquet/ParquetTableHandle.h"
 
 #include "velox/experimental/cudf/exec/Utilities.h"
 #include "velox/experimental/cudf/exec/VeloxCudfInterop.h"
