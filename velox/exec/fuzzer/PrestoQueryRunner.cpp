@@ -28,11 +28,14 @@
 #include "velox/dwio/common/WriterFactory.h"
 #include "velox/dwio/dwrf/writer/Writer.h"
 #include "velox/exec/fuzzer/FuzzerUtil.h"
+#include "velox/exec/fuzzer/PrestoQueryRunnerIntermediateTypeTransforms.h"
 #include "velox/exec/fuzzer/ToSQLUtil.h"
 #include "velox/exec/tests/utils/QueryAssertions.h"
 #include "velox/functions/prestosql/types/IPAddressType.h"
 #include "velox/functions/prestosql/types/IPPrefixType.h"
 #include "velox/functions/prestosql/types/JsonType.h"
+#include "velox/functions/prestosql/types/TimestampWithTimeZoneType.h"
+#include "velox/functions/prestosql/types/fuzzer/TimestampWithTimeZoneFuzzer.h"
 #include "velox/serializers/PrestoSerializer.h"
 #include "velox/type/parser/TypeParser.h"
 
@@ -203,6 +206,11 @@ std::optional<std::string> PrestoQueryRunner::toSql(
     return toSql(valuesNode);
   }
 
+  if (const auto tableScanNode =
+          std::dynamic_pointer_cast<const core::TableScanNode>(plan)) {
+    return toSql(tableScanNode);
+  }
+
   VELOX_NYI();
 }
 
@@ -249,8 +257,72 @@ const std::vector<TypePtr>& PrestoQueryRunner::supportedScalarTypes() const {
       VARCHAR(),
       VARBINARY(),
       TIMESTAMP(),
+      TIMESTAMP_WITH_TIME_ZONE(),
   };
   return kScalarTypes;
+}
+
+void PrestoQueryRunner::registerCustomVectorFuzzers(
+    VectorFuzzer& vectorFuzzer) const {
+  vectorFuzzer.registerCustomVectorFuzzer(
+      TIMESTAMP_WITH_TIME_ZONE(),
+      std::make_unique<TimestampWithTimeZoneVectorFuzzer>());
+}
+
+std::pair<std::vector<RowVectorPtr>, std::vector<core::ExprPtr>>
+PrestoQueryRunner::inputProjections(
+    const std::vector<RowVectorPtr>& input) const {
+  if (input.empty()) {
+    return {input, {}};
+  }
+
+  std::vector<core::ExprPtr> projections;
+  std::vector<std::string> names = input[0]->type()->asRow().names();
+  std::vector<std::vector<VectorPtr>> children(input.size());
+  for (int childIndex = 0; childIndex < input[0]->childrenSize();
+       childIndex++) {
+    const auto& childType = input[0]->childAt(childIndex)->type();
+    // If it's an intermediate only type, transform the input and add
+    // expressions to reverse the transformation.  Otherwise the input is
+    // unchanged and the projection is just an identity mapping.
+    if (isIntermediateOnlyType(childType)) {
+      for (int batchIndex = 0; batchIndex < input.size(); batchIndex++) {
+        children[batchIndex].push_back(transformIntermediateOnlyType(
+            input[batchIndex]->childAt(childIndex)));
+      }
+      projections.push_back(getIntermediateOnlyTypeProjectionExpr(
+          childType,
+          std::make_shared<core::FieldAccessExpr>(
+              names[childIndex], names[childIndex]),
+          names[childIndex]));
+    } else {
+      for (int batchIndex = 0; batchIndex < input.size(); batchIndex++) {
+        children[batchIndex].push_back(input[batchIndex]->childAt(childIndex));
+      }
+
+      projections.push_back(std::make_shared<core::FieldAccessExpr>(
+          names[childIndex], names[childIndex]));
+    }
+  }
+
+  std::vector<TypePtr> types;
+  for (const auto& child : children[0]) {
+    types.push_back(child->type());
+  }
+
+  auto rowType = ROW(std::move(names), std::move(types));
+
+  std::vector<RowVectorPtr> output;
+  for (int batchIndex = 0; batchIndex < input.size(); batchIndex++) {
+    output.push_back(std::make_shared<RowVector>(
+        input[batchIndex]->pool(),
+        rowType,
+        nullptr,
+        input[batchIndex]->size(),
+        std::move(children[batchIndex])));
+  }
+
+  return std::make_pair(output, projections);
 }
 
 const std::unordered_map<std::string, DataSpec>&
@@ -315,7 +387,12 @@ std::optional<std::string> PrestoQueryRunner::toSql(
     }
   }
 
-  sql << " FROM tmp";
+  auto sourceSql = toSql(aggregationNode->sources()[0]);
+  if (!sourceSql.has_value()) {
+    return std::nullopt;
+  }
+
+  sql << " FROM (" << sourceSql.value() << ")";
 
   if (!groupingKeys.empty()) {
     sql << " GROUP BY " << folly::join(", ", groupingKeys);
@@ -697,6 +774,14 @@ std::optional<std::string> PrestoQueryRunner::toSql(
 std::optional<std::string> PrestoQueryRunner::toSql(
     const std::shared_ptr<const core::ValuesNode>& valuesNode) {
   if (!isSupportedDwrfType(valuesNode->outputType())) {
+    return std::nullopt;
+  }
+  return "tmp";
+}
+
+std::optional<std::string> PrestoQueryRunner::toSql(
+    const std::shared_ptr<const core::TableScanNode>& tableScanNode) {
+  if (!isSupportedDwrfType(tableScanNode->outputType())) {
     return std::nullopt;
   }
   return "tmp";

@@ -53,6 +53,11 @@ class PrestoQueryRunner : public velox::exec::test::ReferenceQueryRunner {
 
   const std::vector<TypePtr>& supportedScalarTypes() const override;
 
+  void registerCustomVectorFuzzers(VectorFuzzer& vectorFuzzer) const override;
+
+  std::pair<std::vector<RowVectorPtr>, std::vector<core::ExprPtr>>
+  inputProjections(const std::vector<RowVectorPtr>& input) const override;
+
   const std::unordered_map<std::string, DataSpec>&
   aggregationFunctionDataSpecs() const override;
 
@@ -144,6 +149,9 @@ class PrestoQueryRunner : public velox::exec::test::ReferenceQueryRunner {
 
   std::optional<std::string> toSql(
       const std::shared_ptr<const core::ValuesNode>& valuesNode);
+
+  std::optional<std::string> toSql(
+      const std::shared_ptr<const core::TableScanNode>& tableScanNode);
 
   std::string startQuery(
       const std::string& sql,

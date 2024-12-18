@@ -12,8 +12,13 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-add_library(velox_fuzzer_util DuckQueryRunner.cpp PrestoQueryRunner.cpp
-                              FuzzerUtil.cpp ToSQLUtil.cpp)
+add_library(
+  velox_fuzzer_util
+  DuckQueryRunner.cpp
+  PrestoQueryRunner.cpp
+  FuzzerUtil.cpp
+  ToSQLUtil.cpp
+  PrestoQueryRunnerIntermediateTypeTransforms.cpp)
 
 target_link_libraries(
   velox_fuzzer_util
@@ -22,6 +27,7 @@ target_link_libraries(
   velox_exec_test_lib
   velox_expression_functions
   velox_presto_types
+  velox_presto_types_fuzzer
   cpr::cpr
   Boost::regex
   velox_type_parser

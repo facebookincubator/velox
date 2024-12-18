@@ -136,7 +136,7 @@ TEST_F(PrestoQueryRunnerTest, sortedAggregation) {
   ASSERT_TRUE(sql.has_value());
 
   ASSERT_EQ(
-      "SELECT multimap_agg(c0, c1 ORDER BY c0 ASC NULLS LAST) as a0 FROM tmp",
+      "SELECT multimap_agg(c0, c1 ORDER BY c0 ASC NULLS LAST) as a0 FROM (tmp)",
       sql.value());
 
   // Plans with multiple order by's in the aggregate.
@@ -152,7 +152,7 @@ TEST_F(PrestoQueryRunnerTest, sortedAggregation) {
   sql = queryRunner->toSql(plan);
   ASSERT_TRUE(sql.has_value());
   ASSERT_EQ(
-      "SELECT multimap_agg(c0, c1 ORDER BY c1 ASC NULLS FIRST, c0 DESC NULLS LAST, c2 ASC NULLS LAST) as a0 FROM tmp",
+      "SELECT multimap_agg(c0, c1 ORDER BY c1 ASC NULLS FIRST, c0 DESC NULLS LAST, c2 ASC NULLS LAST) as a0 FROM (tmp)",
       sql.value());
 }
 
@@ -174,7 +174,7 @@ TEST_F(PrestoQueryRunnerTest, distinctAggregation) {
 
   auto sql = queryRunner->toSql(plan);
   ASSERT_TRUE(sql.has_value());
-  ASSERT_EQ("SELECT array_agg(distinct c0) as a0 FROM tmp", sql.value());
+  ASSERT_EQ("SELECT array_agg(distinct c0) as a0 FROM (tmp)", sql.value());
 }
 
 TEST_F(PrestoQueryRunnerTest, toSql) {
@@ -234,7 +234,7 @@ TEST_F(PrestoQueryRunnerTest, toSql) {
                     .planNode();
     EXPECT_EQ(
         queryRunner->toSql(plan),
-        "SELECT c1, avg(c0) as a0 FROM tmp GROUP BY c1");
+        "SELECT c1, avg(c0) as a0 FROM (tmp) GROUP BY c1");
 
     plan = PlanBuilder()
                .tableScan("tmp", dataType)
@@ -243,7 +243,7 @@ TEST_F(PrestoQueryRunnerTest, toSql) {
                .planNode();
     EXPECT_EQ(
         queryRunner->toSql(plan),
-        "SELECT (a0 + c1) as p0 FROM (SELECT c1, sum(c0) as a0 FROM tmp GROUP BY c1)");
+        "SELECT (a0 + c1) as p0 FROM (SELECT c1, sum(c0) as a0 FROM (tmp) GROUP BY c1)");
 
     plan = PlanBuilder()
                .tableScan("tmp", dataType)
@@ -251,7 +251,7 @@ TEST_F(PrestoQueryRunnerTest, toSql) {
                .planNode();
     EXPECT_EQ(
         queryRunner->toSql(plan),
-        "SELECT avg(c0) filter (where c2) as a0, avg(c1) as a1 FROM tmp");
+        "SELECT avg(c0) filter (where c2) as a0, avg(c1) as a1 FROM (tmp)");
   }
 }
 

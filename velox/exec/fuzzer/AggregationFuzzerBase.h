@@ -82,6 +82,14 @@ class AggregationFuzzerBase {
     registerHiveConnector(hiveConfigs);
     dwrf::registerDwrfReaderFactory();
     dwrf::registerDwrfWriterFactory();
+    referenceQueryRunner_->registerCustomVectorFuzzers(vectorFuzzer_);
+
+    for (const auto& type : referenceQueryRunner_->supportedScalarTypes()) {
+      if (!type->isReal() && !type->isDouble()) {
+        supportedKeyTypes_.push_back(type);
+      }
+    }
+
     seed(initialSeed);
   }
 
@@ -275,6 +283,7 @@ class AggregationFuzzerBase {
   std::shared_ptr<memory::MemoryPool> writerPool_{
       rootPool_->addAggregateChild("aggregationFuzzerWriter")};
   VectorFuzzer vectorFuzzer_;
+  std::vector<TypePtr> supportedKeyTypes_;
 };
 
 // Returns true if the elapsed time is greater than or equal to
