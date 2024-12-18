@@ -38,7 +38,6 @@ target_link_libraries(
   velox_cudf_hash_test
   velox_cudf_exec
   velox_exec
-  velox_cudf_parquet_connector
   velox_exec_test_lib
   velox_test_util
   velox_vector_fuzzer
@@ -66,6 +65,7 @@ set_tests_properties(velox_cudf_table_scan_test PROPERTIES LABELS cuda_driver
 target_link_libraries(
   velox_cudf_table_scan_test
   velox_cudf_exec_test_lib
+  velox_cudf_parquet_connector
   velox_exec
   velox_exec_test_lib
   velox_test_util
