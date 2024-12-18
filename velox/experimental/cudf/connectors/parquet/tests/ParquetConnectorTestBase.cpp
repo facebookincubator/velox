@@ -165,6 +165,7 @@ void ParquetConnectorTestBase::writeToFile(
   cudfTables.reserve(vectors.size());
   for (const auto& vector : vectors) {
     if (vector->size()) {
+      // Use the `with_arrow` version to properly convert `nulls`
       auto cudfTable = with_arrow::to_cudf_table(vector, vector->pool());
       cudfTables.emplace_back(std::move(cudfTable));
     }
@@ -198,6 +199,7 @@ void ParquetConnectorTestBase::writeToFile(
     RowVectorPtr vector,
     std::string prefix) {
   auto const sinkInfo = cudf::io::sink_info(filePath);
+  // Use the `with_arrow` version to properly convert `nulls`
   auto cudfTable = with_arrow::to_cudf_table(vector, vector->pool());
   auto tableInputMetadata = cudf::io::table_input_metadata(cudfTable->view());
   fillColumnNames(tableInputMetadata, prefix);

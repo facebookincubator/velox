@@ -100,7 +100,7 @@ std::optional<RowVectorPtr> ParquetDataSource::next(
       completedBytes_ += std::filesystem::file_size(filePath);
     }
 
-    // Convert to velox RowVectorPtr with_arrow to support more rowTypes
+    // Use the `with_arrow` version to support more rowTypes
     RowVectorPtr output =
         with_arrow::to_velox_column(table->view(), pool_, "c");
 
