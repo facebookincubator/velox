@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-add_library(velox_cudf_parquet_reader_config OBJECT
+add_library(velox_cudf_parquet_reader_config
                   ParquetReaderConfig.cpp)
 
 set_target_properties(
