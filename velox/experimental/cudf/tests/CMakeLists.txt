@@ -15,7 +15,6 @@
 add_executable(velox_cudf_hash_test HashJoinTest.cpp Main.cpp)
 add_executable(velox_cudf_order_by_test Main.cpp OrderByTest.cpp)
 add_executable(velox_cudf_table_scan_test Main.cpp TableScanTest.cpp)
-set_property(SOURCE TableScanTest.cpp PROPERTY COMPILE_FLAGS " -g -O0")
 
 add_test(
   NAME velox_cudf_hash_test
