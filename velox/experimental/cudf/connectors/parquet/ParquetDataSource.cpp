@@ -78,12 +78,6 @@ std::optional<RowVectorPtr> ParquetDataSource::next(
   // TODO: Implement a cudf::partition and cudf::concatenate based algorithm to
   // cater for `size` argument
 
-  // TODO: MH: Enable this some other way
-  // if (splitReader_->emptySplit()) {
-  //  resetSplit();
-  //  return nullptr;
-  //}
-
   // cudf parquet reader returns has_next() = true if no chunk has yet been
   // read.
   if (splitReader_->has_next()) {
