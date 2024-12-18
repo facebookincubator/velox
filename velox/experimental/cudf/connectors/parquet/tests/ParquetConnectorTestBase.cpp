@@ -14,14 +14,27 @@
  * limitations under the License.
  */
 
-#include "velox/exec/tests/utils/ParquetConnectorTestBase.h"
+/*
+ *  The contents of this folder should be moved to the following location:
+ * #include
+ * "velox/experimental/cudf/exec/tests/utils/ParquetConnectorTestBase.h"
+ */
+#include "velox/experimental/cudf/connectors/parquet/tests/ParquetConnectorTestBase.h"
+
+#include <cudf/io/parquet.hpp>
+#include <cudf/io/types.hpp>
+#include <cudf/table/table.hpp>
+#include <cudf/table/table_view.hpp>
 
 #include "velox/common/file/FileSystems.h"
 #include "velox/common/file/tests/FaultyFileSystem.h"
 #include "velox/dwio/common/tests/utils/BatchMaker.h"
 #include "velox/dwio/dwrf/writer/FlushPolicy.h"
-#include "velox/dwio/parquet/RegisterParquetWriter.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
+
+#include "velox/experimental/cudf/exec/Utilities.h"
+#include "velox/experimental/cudf/exec/VeloxCudfInterop.h"
+#include "velox/experimental/cudf/vector/CudfVector.h"
 
 namespace facebook::velox::cudf_velox::exec::test {
 
@@ -32,43 +45,40 @@ ParquetConnectorTestBase::ParquetConnectorTestBase() {
 
 void ParquetConnectorTestBase::SetUp() {
   OperatorTestBase::SetUp();
-  connector::registerConnectorFactory(
+  facebook::velox::connector::registerConnectorFactory(
       std::make_shared<connector::parquet::ParquetConnectorFactory>());
   auto parquetConnector =
-      connector::getConnectorFactory(
-          connector::parquet::ParquetConnectorFactory::kParquetConnectorName)
+      facebook::velox::connector::getConnectorFactory(
+          facebook::velox::cudf_velox::connector::parquet::
+              ParquetConnectorFactory::kParquetConnectorName)
           ->newConnector(
               kParquetConnectorId,
-              std::make_shared<config::ConfigBase>(
+              std::make_shared<facebook::velox::config::ConfigBase>(
                   std::unordered_map<std::string, std::string>()),
               ioExecutor_.get());
-  connector::registerConnector(parquetConnector);
-  // TODO: Using Velox's Parquet writer for testing until we have a DataSink in
-  // ParquetConnector
-  parquet::registerParquetWriterFactory();
+  facebook::velox::connector::registerConnector(parquetConnector);
 }
 
 void ParquetConnectorTestBase::TearDown() {
   // Make sure all pending loads are finished or cancelled before unregister
   // connector.
   ioExecutor_.reset();
-  connector::unregisterConnector(kParquetConnectorId);
-  connector::unregisterConnectorFactory(
-      connector::parquet::ParquetConnectorFactory::kParquetConnectorName);
-  // TODO: Using Velox's Parquet writer for testing until we have a DataSink in
-  // ParquetConnector
-  parquet::unregisterParquetWriterFactory();
+  facebook::velox::connector::unregisterConnector(kParquetConnectorId);
+  facebook::velox::connector::unregisterConnectorFactory(
+      facebook::velox::cudf_velox::connector::parquet::ParquetConnectorFactory::
+          kParquetConnectorName);
   OperatorTestBase::TearDown();
 }
 
 void ParquetConnectorTestBase::resetParquetConnector(
-    const std::shared_ptr<const config::ConfigBase>& config) {
-  connector::unregisterConnector(kParquetConnectorId);
+    const std::shared_ptr<const facebook::velox::config::ConfigBase>& config) {
+  facebook::velox::connector::unregisterConnector(kParquetConnectorId);
   auto parquetConnector =
-      connector::getConnectorFactory(
-          connector::parquet::ParquetConnectorFactory::kParquetConnectorName)
+      facebook::velox::connector::getConnectorFactory(
+          facebook::velox::cudf_velox::connector::parquet::
+              ParquetConnectorFactory::kParquetConnectorName)
           ->newConnector(kParquetConnectorId, config, ioExecutor_.get());
-  connector::registerConnector(parquetConnector);
+  facebook::velox::connector::registerConnector(parquetConnector);
 }
 
 std::vector<RowVectorPtr> ParquetConnectorTestBase::makeVectors(
@@ -84,68 +94,112 @@ std::vector<RowVectorPtr> ParquetConnectorTestBase::makeVectors(
   return vectors;
 }
 
-std::shared_ptr<exec::Task> ParquetConnectorTestBase::assertQuery(
+std::shared_ptr<facebook::velox::exec::Task>
+ParquetConnectorTestBase::assertQuery(
     const core::PlanNodePtr& plan,
-    const std::vector<std::shared_ptr<TempFilePath>>& filePaths,
+    const std::vector<
+        std::shared_ptr<facebook::velox::exec::test::TempFilePath>>& filePaths,
     const std::string& duckDbSql) {
   return OperatorTestBase::assertQuery(
       plan, makeParquetConnectorSplits(filePaths), duckDbSql);
 }
 
-std::shared_ptr<Task> ParquetConnectorTestBase::assertQuery(
-    const core::PlanNodePtr& plan,
-    const std::vector<std::shared_ptr<connector::ConnectorSplit>>& splits,
+std::shared_ptr<facebook::velox::exec::Task>
+ParquetConnectorTestBase::assertQuery(
+    const facebook::velox::core::PlanNodePtr& plan,
+    const std::vector<
+        std::shared_ptr<facebook::velox::connector::ConnectorSplit>>& splits,
     const std::string& duckDbSql,
     const int32_t numPrefetchSplit) {
-  return AssertQueryBuilder(plan, duckDbQueryRunner_)
+  return facebook::velox::exec::test::AssertQueryBuilder(
+             plan, duckDbQueryRunner_)
       .config(
-          core::QueryConfig::kMaxSplitPreloadPerDriver,
+          facebook::velox::core::QueryConfig::kMaxSplitPreloadPerDriver,
           std::to_string(numPrefetchSplit))
       .splits(splits)
       .assertResults(duckDbSql);
 }
 
-std::vector<std::shared_ptr<TempFilePath>>
+std::vector<std::shared_ptr<facebook::velox::exec::test::TempFilePath>>
 ParquetConnectorTestBase::makeFilePaths(int count) {
-  std::vector<std::shared_ptr<TempFilePath>> filePaths;
-
+  std::vector<std::shared_ptr<facebook::velox::exec::test::TempFilePath>>
+      filePaths;
   filePaths.reserve(count);
   for (auto i = 0; i < count; ++i) {
-    filePaths.emplace_back(TempFilePath::create());
+    filePaths.emplace_back(facebook::velox::exec::test::TempFilePath::create());
   }
   return filePaths;
+}
+
+void ParquetConnectorTestBase::writeToFile(
+    const std::string& filePath,
+    const std::vector<RowVectorPtr>& vectors) {
+  // Convert all RowVectorPtrs to cudf tables
+  std::vector<std::unique_ptr<cudf::table>> cudfTables;
+  cudfTables.reserve(vectors.size());
+  for (const auto& vector : vectors) {
+    cudfTables.emplace_back(to_cudf_table(vector));
+  }
+  // Make sure cudfTables has at least one table
+  if (cudfTables.empty()) {
+    return;
+  }
+
+  // Create a sink and writer
+  auto const sinkInfo = cudf::io::sink_info(filePath);
+  auto tableInputMetadata =
+      cudf::io::table_input_metadata(cudfTables[0]->view());
+  auto options = cudf::io::chunked_parquet_writer_options::builder(sinkInfo)
+                     .metadata(tableInputMetadata)
+                     .build();
+  cudf::io::parquet_chunked_writer writer(options);
+
+  // Write all table chunks
+  for (const auto& table : cudfTables) {
+    writer.write(table->view());
+  }
+}
+
+void ParquetConnectorTestBase::writeToFile(
+    const std::string& filePath,
+    RowVectorPtr vector) {
+  auto const sinkInfo = cudf::io::sink_info(filePath);
+  auto cudfTable = to_cudf_table(vector);
+  auto tableInputMetadata = cudf::io::table_input_metadata(cudfTable->view());
+  auto options =
+      cudf::io::parquet_writer_options::builder(sinkInfo, cudfTable->view())
+          .metadata(tableInputMetadata)
+          .build();
+  cudf::io::write_parquet(options);
 }
 
 std::unique_ptr<connector::parquet::ParquetColumnHandle>
 ParquetConnectorTestBase::makeColumnHandle(
     const std::string& name,
     const TypePtr& type,
-    const std::vector<std::string>& requiredSubfields) {
-  return makeColumnHandle(name, type, type, requiredSubfields);
+    const std::vector<connector::parquet::ParquetColumnHandle>& children) {
+  return std::make_unique<connector::parquet::ParquetColumnHandle>(
+      name, type, cudf::data_type(cudf::type_id::EMPTY), children);
 }
 
 std::unique_ptr<connector::parquet::ParquetColumnHandle>
 ParquetConnectorTestBase::makeColumnHandle(
     const std::string& name,
-    const TypePtr& dataType,
-    const TypePtr& parquetType,
-    const std::vector<std::string>& requiredSubfields,
-    connector::parquet::ParquetColumnHandle::ColumnType columnType) {
-  std::vector<common::Subfield> subfields;
-  subfields.reserve(requiredSubfields.size());
-  for (auto& path : requiredSubfields) {
-    subfields.emplace_back(path);
-  }
-
+    const TypePtr& type,
+    const cudf::data_type data_type,
+    const std::vector<connector::parquet::ParquetColumnHandle>& children) {
   return std::make_unique<connector::parquet::ParquetColumnHandle>(
-      name, columnType, dataType, parquetType, std::move(subfields));
+      name, type, data_type, children);
 }
 
-std::vector<std::shared_ptr<connector::ConnectorSplit>>
+std::vector<std::shared_ptr<facebook::velox::connector::ConnectorSplit>>
 ParquetConnectorTestBase::makeParquetConnectorSplits(
-    const std::vector<std::shared_ptr<TempFilePath>>& filePaths) {
-  std::vector<std::shared_ptr<connector::ConnectorSplit>> splits;
-  for (auto filePath : filePaths) {
+    const std::vector<
+        std::shared_ptr<facebook::velox::exec::test::TempFilePath>>&
+        filePaths) {
+  std::vector<std::shared_ptr<facebook::velox::connector::ConnectorSplit>>
+      splits;
+  for (const auto& filePath : filePaths) {
     splits.push_back(makeParquetConnectorSplit(filePath->getPath()));
   }
   return splits;
@@ -158,121 +212,6 @@ ParquetConnectorTestBase::makeParquetConnectorSplit(
   return ParquetConnectorSplitBuilder(filePath)
       .splitWeight(splitWeight)
       .build();
-}
-
-// static
-std::shared_ptr<connector::parquet::ParquetInsertTableHandle>
-ParquetConnectorTestBase::makeParquetInsertTableHandle(
-    const std::vector<std::string>& tableColumnNames,
-    const std::vector<TypePtr>& tableColumnTypes,
-    const std::vector<std::string>& partitionedBy,
-    std::shared_ptr<connector::parquet::LocationHandle> locationHandle,
-    const dwio::common::FileFormat tableStorageFormat,
-    const std::optional<common::CompressionKind> compressionKind,
-    const std::shared_ptr<dwio::common::WriterOptions>& writerOptions) {
-  return makeParquetInsertTableHandle(
-      tableColumnNames,
-      tableColumnTypes,
-      partitionedBy,
-      nullptr,
-      std::move(locationHandle),
-      tableStorageFormat,
-      compressionKind,
-      {},
-      writerOptions);
-}
-
-// static
-std::shared_ptr<connector::parquet::ParquetInsertTableHandle>
-ParquetConnectorTestBase::makeParquetInsertTableHandle(
-    const std::vector<std::string>& tableColumnNames,
-    const std::vector<TypePtr>& tableColumnTypes,
-    const std::vector<std::string>& partitionedBy,
-    std::shared_ptr<connector::parquet::ParquetBucketProperty> bucketProperty,
-    std::shared_ptr<connector::parquet::LocationHandle> locationHandle,
-    const dwio::common::FileFormat tableStorageFormat,
-    const std::optional<common::CompressionKind> compressionKind,
-    const std::unordered_map<std::string, std::string>& serdeParameters,
-    const std::shared_ptr<dwio::common::WriterOptions>& writerOptions) {
-  std::vector<std::shared_ptr<const connector::parquet::ParquetColumnHandle>>
-      columnHandles;
-  std::vector<std::string> bucketedBy;
-  std::vector<TypePtr> bucketedTypes;
-  std::vector<std::shared_ptr<const connector::parquet::ParquetSortingColumn>>
-      sortedBy;
-  if (bucketProperty != nullptr) {
-    bucketedBy = bucketProperty->bucketedBy();
-    bucketedTypes = bucketProperty->bucketedTypes();
-    sortedBy = bucketProperty->sortedBy();
-  }
-  int32_t numPartitionColumns{0};
-  int32_t numSortingColumns{0};
-  int32_t numBucketColumns{0};
-  for (int i = 0; i < tableColumnNames.size(); ++i) {
-    for (int j = 0; j < bucketedBy.size(); ++j) {
-      if (bucketedBy[j] == tableColumnNames[i]) {
-        ++numBucketColumns;
-      }
-    }
-    for (int j = 0; j < sortedBy.size(); ++j) {
-      if (sortedBy[j]->sortColumn() == tableColumnNames[i]) {
-        ++numSortingColumns;
-      }
-    }
-    if (std::find(
-            partitionedBy.cbegin(),
-            partitionedBy.cend(),
-            tableColumnNames.at(i)) != partitionedBy.cend()) {
-      ++numPartitionColumns;
-      columnHandles.push_back(std::make_shared<
-                              connector::parquet::ParquetColumnHandle>(
-          tableColumnNames.at(i),
-          connector::parquet::ParquetColumnHandle::ColumnType::kPartitionKey,
-          tableColumnTypes.at(i),
-          tableColumnTypes.at(i)));
-    } else {
-      columnHandles.push_back(
-          std::make_shared<connector::parquet::ParquetColumnHandle>(
-              tableColumnNames.at(i),
-              connector::parquet::ParquetColumnHandle::ColumnType::kRegular,
-              tableColumnTypes.at(i),
-              tableColumnTypes.at(i)));
-    }
-  }
-  VELOX_CHECK_EQ(numPartitionColumns, partitionedBy.size());
-  VELOX_CHECK_EQ(numBucketColumns, bucketedBy.size());
-  VELOX_CHECK_EQ(numSortingColumns, sortedBy.size());
-
-  return std::make_shared<connector::parquet::ParquetInsertTableHandle>(
-      columnHandles,
-      locationHandle,
-      tableStorageFormat,
-      bucketProperty,
-      compressionKind,
-      serdeParameters,
-      writerOptions);
-}
-
-std::shared_ptr<connector::parquet::ParquetColumnHandle>
-ParquetConnectorTestBase::regularColumn(
-    const std::string& name,
-    const TypePtr& type) {
-  return std::make_shared<connector::parquet::ParquetColumnHandle>(
-      name,
-      connector::parquet::ParquetColumnHandle::ColumnType::kRegular,
-      type,
-      type);
-}
-
-std::shared_ptr<connector::parquet::ParquetColumnHandle>
-ParquetConnectorTestBase::synthesizedColumn(
-    const std::string& name,
-    const TypePtr& type) {
-  return std::make_shared<connector::parquet::ParquetColumnHandle>(
-      name,
-      connector::parquet::ParquetColumnHandle::ColumnType::kSynthesized,
-      type,
-      type);
 }
 
 } // namespace facebook::velox::cudf_velox::exec::test
