@@ -12,14 +12,15 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-velox_add_library(velox_cudf_parquet_reader_config OBJECT ParquetReaderConfig.cpp)
+velox_add_library(velox_cudf_parquet_reader_config OBJECT
+                  ParquetReaderConfig.cpp)
 
 set_target_properties(
   velox_cudf_parquet_reader_config
   PROPERTIES CUDA_ARCHITECTURES native)
 
-velox_link_libraries(velox_cudf_parquet_reader_config velox_core velox_exception
-                     cudf::cudf)
+velox_link_libraries(velox_cudf_parquet_reader_config velox_core
+                     velox_exception cudf::cudf)
 
 velox_add_library(
   velox_cudf_parquet_connector
@@ -29,6 +30,12 @@ velox_add_library(
   ParquetConnectorSplit.cpp
   ParquetDataSource.cpp)
 
+  set_property(SOURCE ParquetReaderConfig.cpp
+  ParquetConnector.cpp
+  ParquetConnectorSplit.cpp
+  ParquetDataSource.cpp
+  PROPERTY COMPILE_FLAGS " -g -O0")
+
 set_target_properties(
   velox_cudf_parquet_connector
   PROPERTIES CUDA_ARCHITECTURES native)
@@ -37,6 +44,7 @@ velox_link_libraries(
   velox_cudf_parquet_connector
   PRIVATE
     cudf::cudf
+    velox_cudf_exec
     velox_common_io
     velox_connector
     velox_type_tz

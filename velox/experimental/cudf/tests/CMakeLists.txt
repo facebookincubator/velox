@@ -14,6 +14,8 @@
 
 add_executable(velox_cudf_hash_test HashJoinTest.cpp Main.cpp)
 add_executable(velox_cudf_order_by_test Main.cpp OrderByTest.cpp)
+add_executable(velox_cudf_table_scan_test Main.cpp TableScanTest.cpp)
+set_property(SOURCE TableScanTest.cpp PROPERTY COMPILE_FLAGS " -g -O0")
 
 add_test(
   NAME velox_cudf_hash_test
@@ -25,15 +27,19 @@ add_test(
   COMMAND velox_cudf_order_by_test
   WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR})
 
+add_test(
+  NAME velox_cudf_table_scan_test
+  COMMAND velox_cudf_table_scan_test
+  WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR})
+
 set_tests_properties(velox_cudf_hash_test PROPERTIES LABELS cuda_driver TIMEOUT
                                                      3000)
-set_tests_properties(velox_cudf_order_by_test PROPERTIES LABELS cuda_driver
-                                                         TIMEOUT 3000)
 
 target_link_libraries(
   velox_cudf_hash_test
   velox_cudf_exec
   velox_exec
+  velox_cudf_parquet_connector
   velox_exec_test_lib
   velox_test_util
   velox_vector_fuzzer
@@ -42,9 +48,25 @@ target_link_libraries(
   Folly::folly
   fmt::fmt)
 
+set_tests_properties(velox_cudf_order_by_test PROPERTIES LABELS cuda_driver
+                                                         TIMEOUT 3000)
+
 target_link_libraries(
   velox_cudf_order_by_test
   velox_cudf_exec
+  velox_exec
+  velox_exec_test_lib
+  velox_test_util
+  gtest
+  gtest_main
+  fmt::fmt)
+
+set_tests_properties(velox_cudf_table_scan_test PROPERTIES LABELS cuda_driver
+                                                           TIMEOUT 3000)
+
+target_link_libraries(
+  velox_cudf_table_scan_test
+  velox_cudf_exec_test_lib
   velox_exec
   velox_exec_test_lib
   velox_test_util

@@ -34,16 +34,21 @@ class ParquetColumnHandle : public facebook::velox::connector::ColumnHandle {
  public:
   explicit ParquetColumnHandle(
       const std::string& name,
-      const cudf::data_type type,
+      const TypePtr& type,
+      const cudf::data_type data_type,
       const std::vector<ParquetColumnHandle>& children)
-      : name_(name), type_(type), children_(children) {}
+      : name_(name), type_(type), data_type_(data_type), children_(children) {}
 
   const std::string& name() const {
     return name_;
   }
 
-  const cudf::data_type type() const {
+  const TypePtr& type() const {
     return type_;
+  }
+
+  const cudf::data_type data_type() const {
+    return data_type_;
   }
 
   const std::vector<ParquetColumnHandle>& children() const {
@@ -52,7 +57,8 @@ class ParquetColumnHandle : public facebook::velox::connector::ColumnHandle {
 
  private:
   const std::string name_;
-  const cudf::data_type type_;
+  const TypePtr type_;
+  const cudf::data_type data_type_;
   const std::vector<ParquetColumnHandle> children_;
 };
 
