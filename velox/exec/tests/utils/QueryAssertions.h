@@ -23,6 +23,7 @@
 #include "velox/vector/ComplexVector.h"
 
 #include <duckdb.hpp> // @manual
+#include "velox/runner/LocalRunner.h"
 
 namespace facebook::velox::exec::test {
 

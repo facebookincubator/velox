@@ -17,6 +17,7 @@
 #pragma once
 
 #include <velox/common/base/Exceptions.h>
+#include <velox/common/hyperloglog/SparseHll.h>
 #include "velox/dwio/dwrf/common/Config.h"
 #include "velox/dwio/dwrf/common/Statistics.h"
 #include "velox/dwio/dwrf/common/wrap/dwrf-proto-wrapper.h"
@@ -76,11 +77,18 @@ inline dwio::common::KeyInfo constructKey(const dwrf::proto::KeyInfo& keyInfo) {
 struct StatisticsBuilderOptions {
   explicit StatisticsBuilderOptions(
       uint32_t stringLengthLimit,
-      std::optional<uint64_t> initialSize = std::nullopt)
-      : stringLengthLimit{stringLengthLimit}, initialSize{initialSize} {}
+      std::optional<uint64_t> initialSize = std::nullopt,
+      bool countDistincts = false,
+      HashStringAllocator* allocator = nullptr)
+      : stringLengthLimit{stringLengthLimit},
+        initialSize{initialSize},
+        countDistincts(countDistincts),
+        allocator(allocator) {}
 
   uint32_t stringLengthLimit;
   std::optional<uint64_t> initialSize;
+  bool countDistincts{false};
+  HashStringAllocator* allocator;
 
   static StatisticsBuilderOptions fromConfig(const Config& config) {
     return StatisticsBuilderOptions{config.get(Config::STRING_STATS_LIMIT)};
@@ -132,6 +140,18 @@ class StatisticsBuilder : public virtual dwio::common::ColumnStatistics {
     }
   }
 
+  template <typename T>
+  void addHash(const T& data) {
+    if (hll_) {
+      hll_->insertHash(folly::hasher<T>()(data));
+    }
+  }
+
+  int64_t cardinality() {
+    VELOX_CHECK(hll_);
+    return hll_->cardinality();
+  }
+
   /*
    * Merge stats of same type. This is used in writer to aggregate file level
    * stats.
@@ -170,10 +190,14 @@ class StatisticsBuilder : public virtual dwio::common::ColumnStatistics {
     hasNull_ = false;
     rawSize_ = 0;
     size_ = options_.initialSize;
+    if (options_.countDistincts) {
+      hll_ = std::make_shared<common::hll::SparseHll>(options_.allocator);
+    }
   }
 
  protected:
   StatisticsBuilderOptions options_;
+  std::shared_ptr<common::hll::SparseHll> hll_;
 };
 
 class BooleanStatisticsBuilder : public StatisticsBuilder,
@@ -229,6 +253,7 @@ class IntegerStatisticsBuilder : public StatisticsBuilder,
       max_ = value;
     }
     addWithOverflowCheck(sum_, value, count);
+    addHash(value);
   }
 
   void merge(

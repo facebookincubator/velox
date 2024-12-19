@@ -21,6 +21,8 @@
 #include "velox/connectors/hive/HiveDataSink.h"
 #include "velox/connectors/hive/HiveDataSource.h"
 #include "velox/connectors/hive/HivePartitionFunction.h"
+#include "velox/connectors/hive/TableHandle.h"
+#include "velox/expression/ExprToSubfieldFilter.h"
 #include "velox/expression/FieldReference.h"
 
 #include <boost/lexical_cast.hpp>
@@ -51,6 +53,15 @@ HiveConnector::HiveConnector(
   } else {
     LOG(INFO) << "Hive connector " << connectorId()
               << " created with file handle cache disabled";
+  }
+  for (auto& factory : hiveConnectorMetadataFactories()) {
+    metadata_ = factory->create(this);
+    if (metadata_ != nullptr) {
+      // Two-phase construction. The Connector and ConnectorMetadata need to be
+      // coupled to finalize metadata setup.
+      factory->initialize(metadata_.get());
+      break;
+    }
   }
 }
 
@@ -178,6 +189,18 @@ void registerHivePartitionFunctionSerDe() {
   auto& registry = DeserializationWithContextRegistryForSharedPtr();
   registry.Register(
       "HivePartitionFunctionSpec", HivePartitionFunctionSpec::deserialize);
+}
+
+std::vector<std::unique_ptr<HiveConnectorMetadataFactory>>&
+hiveConnectorMetadataFactories() {
+  static std::vector<std::unique_ptr<HiveConnectorMetadataFactory>> factories;
+  return factories;
+}
+
+bool registerHiveConnectorMetadataFactory(
+    std::unique_ptr<HiveConnectorMetadataFactory> factory) {
+  hiveConnectorMetadataFactories().push_back(std::move(factory));
+  return true;
 }
 
 } // namespace facebook::velox::connector::hive
