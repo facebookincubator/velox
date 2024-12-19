@@ -172,9 +172,6 @@ TEST_F(TableScanTest, allColumns) {
   auto filePath = TempFilePath::create();
   writeToFile(filePath->getPath(), vectors, "c");
 
-  writeToFile("/velox/test.parquet", vectors);
-  std::cout << "Also writing parquet file to: /velox/test.parquet" << std::endl;
-
   createDuckDbTable(vectors);
   auto plan = tableScanNode();
   auto task = assertQuery(plan, {filePath}, "SELECT * FROM tmp");
