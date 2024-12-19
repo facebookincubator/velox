@@ -25,6 +25,7 @@
 #include "velox/common/caching/ScanTracker.h"
 #include "velox/common/future/VeloxPromise.h"
 #include "velox/core/ExpressionEvaluator.h"
+#include "velox/type/Subfield.h"
 #include "velox/vector/ComplexVector.h"
 
 #include <folly/Synchronized.h>
@@ -74,6 +75,9 @@ struct ConnectorSplit : public ISerializable {
 class ColumnHandle : public ISerializable {
  public:
   virtual ~ColumnHandle() = default;
+  virtual const std::string& name() const {
+    VELOX_NYI();
+  }
 
   folly::dynamic serialize() const override;
 
@@ -96,6 +100,10 @@ class ConnectorTableHandle : public ISerializable {
 
   const std::string& connectorId() const {
     return connectorId_;
+  }
+
+  virtual const std::string& tableName() const {
+    VELOX_UNSUPPORTED();
   }
 
   virtual folly::dynamic serialize() const override;
@@ -404,6 +412,8 @@ class ConnectorQueryCtx {
   bool selectiveNimbleReaderEnabled_{false};
 };
 
+class ConnectorMetadata;
+
 class Connector {
  public:
   explicit Connector(const std::string& id) : id_(id) {}
@@ -423,6 +433,12 @@ class Connector {
   /// during query execution.
   virtual bool canAddDynamicFilter() const {
     return false;
+  }
+
+  /// Returns a ConnectorMetadata for accessing table
+  /// information.
+  virtual ConnectorMetadata* metadata() const {
+    VELOX_UNSUPPORTED();
   }
 
   virtual std::unique_ptr<DataSource> createDataSource(

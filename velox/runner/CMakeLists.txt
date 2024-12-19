@@ -15,15 +15,37 @@ if(${VELOX_BUILD_TESTING})
   add_subdirectory(tests)
 endif()
 
-velox_add_library(
-  velox_local_runner
-  LocalRunner.cpp
-  LocalSchema.cpp
-  MultiFragmentPlan.cpp
-  Runner.cpp)
+velox_add_library(velox_schema Schema.cpp)
+
+velox_link_libraries(velox_schema velox_common_base velox_memory
+                     velox_connector_metadata)
+
+velox_add_library(velox_multifragment_plan MultiFragmentPlan.cpp)
+velox_link_libraries(velox_multifragment_plan velox_common_base velox_memory
+                     velox_core)
+
+velox_add_library(velox_local_runner LocalRunner.cpp Runner.cpp)
 
 velox_link_libraries(
   velox_local_runner
+  velox_schema
+  velox_multifragment_plan
+  velox_common_base
+  velox_memory
+  velox_hive_connector
+  velox_dwio_common
+  velox_dwio_dwrf_writer
+  velox_exec
+  velox_cursor)
+
+velox_add_library(velox_connector_split_source ConnectorSplitSource.cpp)
+
+velox_link_libraries(
+  velox_connector_split_source
+  velox_connector_metadata
+  velox_local_runner
+  velox_schema
+  velox_multifragment_plan
   velox_common_base
   velox_memory
   velox_hive_connector

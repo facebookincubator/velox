@@ -61,7 +61,7 @@ class HiveColumnHandle : public ColumnHandle {
         hiveType_->toString());
   }
 
-  const std::string& name() const {
+  const std::string& name() const override {
     return name_;
   }
 
@@ -131,7 +131,7 @@ class HiveTableHandle : public ConnectorTableHandle {
       const RowTypePtr& dataColumns = nullptr,
       const std::unordered_map<std::string, std::string>& tableParameters = {});
 
-  const std::string& tableName() const {
+  const std::string& tableName() const override {
     return tableName_;
   }
 
