@@ -805,12 +805,8 @@ TEST_F(VectorFuzzerTest, lazyOverDictionary) {
   dict = fuzzer.fuzzDictionary(dict);
   lazy = VectorFuzzer::wrapInLazyVector(dict);
 
-  // Also verify that the lazy layer is applied on the innermost dictionary
-  // layer. Should look like Dict(Dict(Dict(Lazy(Base)))))
-  ASSERT_TRUE(VectorEncoding::isDictionary(lazy->encoding()));
-  ASSERT_TRUE(VectorEncoding::isDictionary(lazy->valueVector()->encoding()));
-  ASSERT_TRUE(
-      VectorEncoding::isLazy(lazy->valueVector()->valueVector()->encoding()));
+  // The dictionaries are collapsed to one level, which is wrapped in lazy.
+  ASSERT_EQ(VectorEncoding::Simple::LAZY, lazy->encoding());
   LazyVector::ensureLoadedRows(lazy, partialRows);
   ASSERT_TRUE(VectorEncoding::isDictionary(lazy->loadedVector()->encoding()));
   assertEqualVectors(&partialRows, dict, lazy);

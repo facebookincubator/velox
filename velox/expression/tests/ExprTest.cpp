@@ -438,6 +438,8 @@ TEST_P(ParameterizedExprTest, moreEncodings) {
   b = wrapInDictionary(indices, size, b);
 
   // Wrap both a and b in another dictionary.
+  // a and b are wrapped in different dictionaries now since b's dictionaries
+  // are combined.
   auto evenIndices = makeIndices(size / 2, [](auto row) { return row * 2; });
 
   a = wrapInDictionary(evenIndices, size / 2, a);
@@ -445,7 +447,7 @@ TEST_P(ParameterizedExprTest, moreEncodings) {
 
   auto result =
       evaluate("if(c1 = 'grapes', c0 + 10, c0)", makeRowVector({a, b}));
-  ASSERT_EQ(VectorEncoding::Simple::DICTIONARY, result->encoding());
+  ASSERT_EQ(VectorEncoding::Simple::FLAT, result->encoding());
   ASSERT_EQ(size / 2, result->size());
 
   auto expected = makeFlatVector<int64_t>(size / 2, [&fruits](auto row) {

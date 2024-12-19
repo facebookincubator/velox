@@ -169,6 +169,14 @@ class DictionaryVector : public SimpleVector<T> {
 
     LazyVector::ensureLoadedRows(dictionaryValues_, rows);
     dictionaryValues_ = BaseVector::loadedVectorShared(dictionaryValues_);
+    if (dictionaryValues_->encoding() == VectorEncoding::Simple::DICTIONARY) {
+      // Lazy load made a dictionary. Rewrite indices of 'this' to refer to the
+      // base vector of 'dictionaryValues_'.
+      BaseVector::transposeDictionaryValues(
+          BaseVector::length_, BaseVector::nulls_, indices_, dictionaryValues_);
+      BaseVector::rawNulls_ =
+          BaseVector::nulls_ ? BaseVector::nulls_->as<uint64_t>() : nullptr;
+    }
     setInternalState();
     return this;
   }
