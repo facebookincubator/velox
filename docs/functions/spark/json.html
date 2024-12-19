@@ -41,10 +41,42 @@
             
   <section id="json-functions">
 <h1>JSON Functions<a class="headerlink" href="#json-functions" title="Link to this heading">¶</a></h1>
+<section id="json-format">
+<h2>JSON Format<a class="headerlink" href="#json-format" title="Link to this heading">¶</a></h2>
+<p>JSON is a language-independent data format that represents data as
+human-readable text. A JSON text can represent a number, a boolean, a
+string, an array, an object, or a null. A JSON text representing a string
+must escape all characters and enclose the string in double quotes, e.g.,
+<code class="docutils literal notranslate"><span class="pre">&quot;123\n&quot;</span></code>, whereas a JSON text representing a number does not need to,
+e.g., <code class="docutils literal notranslate"><span class="pre">123</span></code>. A JSON text representing an array must enclose the array
+elements in square brackets, e.g., <code class="docutils literal notranslate"><span class="pre">[1,2,3]</span></code>. More detailed grammar can
+be found in <a class="reference external" href="https://www.json.org">this JSON introduction</a>.</p>
+</section>
+<section id="id1">
+<h2>JSON Functions<a class="headerlink" href="#id1" title="Link to this heading">¶</a></h2>
+<dl class="spark function">
+<dt class="sig sig-object spark" id="get_json_object">
+<span class="sig-name descname"><span class="pre">get_json_object</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">jsonString</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">path</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">varchar</span></span></span><a class="headerlink" href="#get_json_object" title="Link to this definition">¶</a></dt>
+<dd><p>Returns a json object, represented by VARCHAR, from <code class="docutils literal notranslate"><span class="pre">jsonString</span></code> by searching <code class="docutils literal notranslate"><span class="pre">path</span></code>.
+Valid <code class="docutils literal notranslate"><span class="pre">path</span></code> should start with ‘$’ and then contain “[index]”, “[‘field’]” or “.field”
+to define a JSON path. Here are some examples: “$.a” “$.a.b”, “$[0][‘a’].b”. Returns
+<code class="docutils literal notranslate"><span class="pre">jsonString</span></code> if <code class="docutils literal notranslate"><span class="pre">path</span></code> is “$”. Returns NULL if <code class="docutils literal notranslate"><span class="pre">jsonString</span></code> or <code class="docutils literal notranslate"><span class="pre">path</span></code> is malformed.
+Returns NULL if <code class="docutils literal notranslate"><span class="pre">path</span></code> does not exist.</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span>SELECT get_json_object(&#39;{&quot;a&quot;:&quot;b&quot;}&#39;, &#39;$.a&#39;); -- &#39;b&#39;
+SELECT get_json_object(&#39;{&quot;a&quot;:{&quot;b&quot;:&quot;c&quot;}}&#39;, &#39;$.a&#39;); -- &#39;{&quot;b&quot;:&quot;c&quot;}&#39;
+SELECT get_json_object(&#39;{&quot;a&quot;:3}&#39;, &#39;$.b&#39;); -- NULL (unexisting field)
+SELECT get_json_object(&#39;{&quot;a&quot;-3}&#39;&#39;, &#39;$.a&#39;); -- NULL (malformed JSON string)
+SELECT get_json_object(&#39;{&quot;a&quot;:3}&#39;&#39;, &#39;.a&#39;); -- NULL (malformed JSON path)
+</pre></div>
+</div>
+</dd></dl>
+
 <dl class="spark function">
 <dt class="sig sig-object spark" id="json_object_keys">
 <span class="sig-name descname"><span class="pre">json_object_keys</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">jsonString</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#json_object_keys" title="Link to this definition">¶</a></dt>
-<dd><p>Returns all the keys of the outermost JSON object as an array if a valid JSON object is given.  If it is any other valid JSON string, an invalid JSON string or an empty string, the function returns null.</p>
+<dd><p>Returns all the keys of the outermost JSON object as an array if a valid JSON object is given.
+If it is any other valid JSON string, an invalid JSON string or an empty string, the function
+returns null.</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">json_object_keys</span><span class="p">(</span><span class="s1">&#39;</span><span class="si">{}</span><span class="s1">&#39;</span><span class="p">);</span> <span class="o">--</span> <span class="p">[]</span>
 <span class="n">SELECT</span> <span class="n">json_object_keys</span><span class="p">(</span><span class="s1">&#39;{&quot;name&quot;: &quot;Alice&quot;, &quot;age&quot;: 5, &quot;id&quot;: &quot;001&quot;}&#39;</span><span class="p">);</span> <span class="o">--</span> <span class="p">[</span><span class="s1">&#39;name&#39;</span><span class="p">,</span> <span class="s1">&#39;age&#39;</span><span class="p">,</span> <span class="s1">&#39;id&#39;</span><span class="p">]</span>
 <span class="n">SELECT</span> <span class="n">json_object_keys</span><span class="p">(</span><span class="s1">&#39;&#39;</span><span class="p">);</span> <span class="o">--</span> <span class="n">NULL</span>
@@ -54,6 +86,7 @@
 </div>
 </dd></dl>
 
+</section>
 </section>
 
 
@@ -67,7 +100,12 @@
     <h3><a href="../../index.html">Table of Contents</a></h3>
     <ul>
 <li><a class="reference internal" href="#">JSON Functions</a><ul>
+<li><a class="reference internal" href="#json-format">JSON Format</a></li>
+<li><a class="reference internal" href="#id1">JSON Functions</a><ul>
+<li><a class="reference internal" href="#get_json_object"><code class="docutils literal notranslate"><span class="pre">get_json_object()</span></code></a></li>
 <li><a class="reference internal" href="#json_object_keys"><code class="docutils literal notranslate"><span class="pre">json_object_keys()</span></code></a></li>
+</ul>
+</li>
 </ul>
 </li>
 </ul>
