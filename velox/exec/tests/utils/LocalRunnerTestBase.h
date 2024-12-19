@@ -55,6 +55,11 @@ class LocalRunnerTestBase : public HiveConnectorTestBase {
   void ensureTestData();
   void makeSchema();
 
+  /// Returns a split source factory that contains splits for the table scans in
+  /// 'plan'. 'plan' should refer to testing tables created by 'this'.
+  std::shared_ptr<TestingSplitSourceFactory> makeTestingSplitSourceFactory(
+      const MultiFragmentPlanPtr& plan);
+
   void makeTables(
       std::vector<TableSpec> specs,
       std::shared_ptr<TempDirectoryPath>& directory);

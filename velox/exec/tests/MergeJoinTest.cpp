@@ -180,8 +180,30 @@ class MergeJoinTest : public HiveConnectorTestBase {
   void testJoin(
       const std::vector<VectorPtr>& leftKeys,
       const std::vector<VectorPtr>& rightKeys) {
-    createDuckDbTable("t", generateInput(leftKeys));
-    createDuckDbTable("u", generateInput(rightKeys));
+    std::vector<RowVectorPtr> left;
+    left.reserve(leftKeys.size());
+    vector_size_t startRow = 0;
+    for (const auto& key : leftKeys) {
+      auto payload = makeFlatVector<int32_t>(
+          key->size(), [startRow](auto row) { return (startRow + row) * 10; });
+      left.push_back(makeRowVector({key, payload}));
+      startRow += key->size();
+    }
+    addIdentityWrap(left);
+
+    std::vector<RowVectorPtr> right;
+    right.reserve(rightKeys.size());
+    startRow = 0;
+    for (const auto& key : rightKeys) {
+      auto payload = makeFlatVector<int32_t>(
+          key->size(), [startRow](auto row) { return (startRow + row) * 20; });
+      right.push_back(makeRowVector({key, payload}));
+      startRow += key->size();
+    }
+    addIdentityWrap(right);
+
+    createDuckDbTable("t", left);
+    createDuckDbTable("u", right);
 
     // Test INNER join.
     auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
@@ -310,6 +332,31 @@ class MergeJoinTest : public HiveConnectorTestBase {
     assertQuery(
         makeCursorParameters(fullPlan, 10'000),
         "SELECT t.c0, t.c1, u.c1 FROM u FULL OUTER JOIN t ON t.c0 = u.c0");
+  }
+
+  // Wraps each member in 'rows' in an identity dictionary. Tests dictionary
+  // combining in different cases of merge join with eager collapsing of
+  // multilevel dictionaries.
+  void addIdentityWrap(std::vector<RowVectorPtr>& rows) {
+    for (auto& r : rows) {
+      identityWrap(r);
+    }
+  }
+
+  // Wraps each member of 'row' in an identity dictionary. Tests dictionary
+  // combining in different cases of merge join with eager collapsing of
+  // multilevel dictionaries.
+  RowVectorPtr identityWrap(RowVectorPtr& row) {
+    auto indices = allocateIndices(row->size(), pool_.get());
+    auto rawIndices = indices->asMutable<vector_size_t>();
+    for (auto i = 0; i < row->size(); ++i) {
+      rawIndices[i] = i;
+    }
+    for (auto i = 0; i < row->childrenSize(); ++i) {
+      row->children()[i] = BaseVector::wrapInDictionary(
+          nullptr, indices, row->size(), row->children()[i]);
+    }
+    return row;
   }
 };
 

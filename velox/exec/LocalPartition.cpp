@@ -15,6 +15,7 @@
  */
 
 #include "velox/exec/LocalPartition.h"
+#include "velox/exec/OperatorUtils.h"
 #include "velox/exec/Task.h"
 
 namespace facebook::velox::exec {
@@ -291,10 +292,10 @@ RowVectorPtr LocalPartition::wrapChildren(
     vector_size_t size,
     BufferPtr indices) {
   VELOX_CHECK_EQ(childVectors_.size(), input->type()->size());
-
-  for (auto i = 0; i < input->type()->size(); ++i) {
-    childVectors_[i] = BaseVector::wrapInDictionary(
-        BufferPtr(nullptr), indices, size, input->childAt(i));
+  WrapState state;
+  for (auto i = 0; i < input->type()->size(); i++) {
+    childVectors_[i] =
+        wrapOne(size, indices, input->childAt(i), nullptr, state);
   }
 
   return std::make_shared<RowVector>(
