@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 list(APPEND CMAKE_PREFIX_PATH "${CUDAToolkit_LIBRARY_DIR}/cmake")
+find_package(Thrust REQUIRED)
 find_package(CUB REQUIRED)
 
 add_executable(velox_gpu_hash_table_test HashTableTest.cu)
@@ -21,4 +22,5 @@ target_link_libraries(
   gflags::gflags
   glog::glog
   CUB::CUB
+  Thrust::Thrust
   CUDA::cudart)
