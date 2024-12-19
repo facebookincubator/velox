@@ -208,7 +208,7 @@ class MultiFragmentTest
   std::vector<std::shared_ptr<TempFilePath>> filePaths_;
   std::vector<RowVectorPtr> vectors_;
   std::shared_ptr<OutputBufferManager> bufferManager_{
-      OutputBufferManager::getInstance().lock()};
+      OutputBufferManager::getInstanceRef()};
 };
 
 TEST_P(MultiFragmentTest, aggregationSingleKey) {
@@ -2160,7 +2160,7 @@ class DataFetcher {
   std::vector<std::vector<std::size_t>> packetPageSizes_;
 
   std::shared_ptr<OutputBufferManager> bufferManager_{
-      OutputBufferManager::getInstance().lock()};
+      OutputBufferManager::getInstanceRef()};
 };
 
 /// Verify that POBM::getData() honors maxBytes parameter roughly at 1MB

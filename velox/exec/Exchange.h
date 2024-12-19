@@ -55,7 +55,7 @@ class Exchange : public SourceOperator {
         processSplits_{operatorCtx_->driverCtx()->driverId == 0},
         exchangeClient_{std::move(exchangeClient)} {
     options_.compressionKind =
-        OutputBufferManager::getInstance().lock()->compressionKind();
+        OutputBufferManager::getInstanceRef()->compressionKind();
   }
 
   ~Exchange() override {

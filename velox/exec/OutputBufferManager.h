@@ -98,11 +98,9 @@ class OutputBufferManager {
 
   void removeTask(const std::string& taskId);
 
-  /// Initializes singleton with 'options'. May be called once before
-  /// getInstance().
-  static void initialize(const Options& options);
-
   static std::weak_ptr<OutputBufferManager> getInstance();
+
+  static const std::shared_ptr<OutputBufferManager>& getInstanceRef();
 
   uint64_t numBuffers() const;
 
@@ -157,8 +155,5 @@ class OutputBufferManager {
 
   std::function<std::unique_ptr<OutputStreamListener>()> listenerFactory_{
       nullptr};
-
-  inline static std::shared_ptr<OutputBufferManager> instance_;
-  inline static std::mutex initMutex_;
 };
 } // namespace facebook::velox::exec
