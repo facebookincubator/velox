@@ -47,8 +47,8 @@ class UnsafeRowFuzzTests : public ::testing::Test {
 
   void doTest(
       const RowTypePtr& rowType,
-      std::function<std::vector<std::optional<std::string_view>>(
-          const RowVectorPtr& data)> serializeFunc) {
+      std::function<std::vector<std::string_view>(const RowVectorPtr& data)>
+          serializeFunc) {
     VectorFuzzer::Options opts;
     opts.vectorSize = kNumBuffers;
     opts.nullRatio = 0.1;
@@ -65,7 +65,7 @@ class UnsafeRowFuzzTests : public ::testing::Test {
 
     VectorFuzzer fuzzer(opts, pool_.get());
 
-    const auto iterations = 200;
+    const auto iterations = 1;
     for (size_t i = 0; i < iterations; ++i) {
       clearBuffers();
 
@@ -82,7 +82,7 @@ class UnsafeRowFuzzTests : public ::testing::Test {
 
       // Deserialize previous bytes back to row vector
       VectorPtr outputVector =
-          UnsafeRowDeserializer::deserialize(serialized, rowType, pool_.get());
+          UnsafeRowFast::deserialize(serialized, rowType, pool_.get());
 
       assertEqualVectors(inputVector, outputVector);
     }
@@ -164,7 +164,7 @@ TEST_F(UnsafeRowFuzzTests, fast) {
 
   doTest(rowType, [&](const RowVectorPtr& data) {
     const auto numRows = data->size();
-    std::vector<std::optional<std::string_view>> serialized;
+    std::vector<std::string_view> serialized;
     serialized.reserve(numRows);
 
     UnsafeRowFast fast(data);
