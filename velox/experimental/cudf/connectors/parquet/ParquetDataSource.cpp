@@ -14,7 +14,9 @@
  * limitations under the License.
  */
 #include <filesystem>
+#include <limits>
 #include <memory>
+#include <string>
 
 #include "velox/experimental/cudf/connectors/parquet/ParquetConnectorSplit.h"
 #include "velox/experimental/cudf/connectors/parquet/ParquetDataSource.h"
@@ -25,10 +27,35 @@
 #include "velox/experimental/cudf/exec/VeloxCudfInterop.h"
 #include "velox/experimental/cudf/vector/CudfVector.h"
 
+#include <cudf/concatenate.hpp>
+#include <cudf/copying.hpp>
 #include <cudf/io/parquet.hpp>
 #include <cudf/io/types.hpp>
 #include <cudf/table/table.hpp>
 #include <cudf/table/table_view.hpp>
+
+namespace {
+
+// Concatenate a vector of cuDF tables into a single table
+std::unique_ptr<cudf::table> concatenateTables(
+    std::vector<std::unique_ptr<cudf::table>> tables) {
+  // Check for empty vector
+  VELOX_CHECK_GT(tables.size(), 0);
+
+  if (tables.size() == 1) {
+    return std::move(tables[0]);
+  }
+  std::vector<cudf::table_view> tableViews;
+  tableViews.reserve(tables.size());
+  std::transform(
+      tables.begin(),
+      tables.end(),
+      std::back_inserter(tableViews),
+      [&](auto const& tbl) { return tbl->view(); });
+  return cudf::concatenate(tableViews, cudf::get_default_stream());
+}
+
+} // namespace
 
 namespace facebook::velox::cudf_velox::connector::parquet {
 
@@ -70,42 +97,87 @@ ParquetDataSource::ParquetDataSource(
 }
 
 std::optional<RowVectorPtr> ParquetDataSource::next(
-    uint64_t /* size */,
+    uint64_t size,
     velox::ContinueFuture& /* future */) {
   // Basic sanity checks
   VELOX_CHECK_NOT_NULL(split_, "No split to process. Call addSplit first.");
   VELOX_CHECK_NOT_NULL(splitReader_, "No split reader present");
 
-  // TODO: Implement a cudf::partition and cudf::concatenate based algorithm to
-  // cater for `size` argument
+  // Limit the size to 1B rows to avoid overflow in cudf::concatenate.
+  VELOX_CHECK(
+      size < static_cast<uint64_t>(
+                 std::numeric_limits<cudf::size_type>::max() / 2),
+      "ParquetDataSource can read less than 1 billion rows at once");
 
-  // cudf parquet reader returns has_next() = true if no chunk has yet been
-  // read.
-  if (splitReader_->has_next()) {
-    // Read a chunk of table.
-    auto [table, metadata] = splitReader_->read_chunk();
+  // Read table chunks via cudf until we have enough rows or no more
+  // chunks left.
+  if (currentCudfTableView_.num_rows() < size) {
+    // Vector to store read tables
+    auto readTables = std::vector<std::unique_ptr<cudf::table>>{};
+    size_t currentNumRows = currentCudfTableView_.num_rows();
 
-    // Check if the chunk is empty
-    const auto rowsScanned = table->num_rows();
-    if (rowsScanned == 0) {
-      // TODO: Update runtime stats here
+    // Read chunks until num_rows > size or no more chunks left.
+    while (splitReader_->has_next() and currentNumRows < size) {
+      readTables.emplace_back(splitReader_->read_chunk().tbl);
+      currentNumRows += readTables.back()->num_rows();
+    }
+
+    if (readTables.empty() and cudfTable_ == nullptr) {
+      // Check if currentCudfTableView_ is also reset.
+      VELOX_CHECK_EQ(currentCudfTableView_.num_rows(), 0);
+      // We are done with this split, reset the split.
+      resetSplit();
       return nullptr;
     }
 
-    // Update completedRows_
-    completedRows_ += table->num_rows();
-
-    // TODO: Update `completedBytes_` here instead of in `addSplit()`
-
-    RowVectorPtr output =
-        with_arrow::to_velox_column(table->view(), pool_, "c");
-
-    // Return output
-    return output;
-
-  } else {
-    return nullptr;
+    if (readTables.size()) {
+      auto readTable = concatenateTables(std::move(readTables));
+      if (cudfTable_ != nullptr) {
+        // Concatenate the current view ahead of the read table.
+        auto tableViews = std::vector<cudf::table_view>{
+            currentCudfTableView_, readTable->view()};
+        cudfTable_ = cudf::concatenate(tableViews, cudf::get_default_stream());
+      } else {
+        cudfTable_ = std::move(readTable);
+      }
+      // Update the current table view
+      currentCudfTableView_ = cudfTable_->view();
+    }
   }
+
+  // Output RowVectorPtr
+  auto output = RowVectorPtr{};
+
+  // If the current table view has <= size rows, this is the last chunk.
+  if (currentCudfTableView_.num_rows() <= size) {
+    // Convert the current table view to RowVectorPtr.
+    output = with_arrow::to_velox_column(currentCudfTableView_, pool_, "c");
+    // Reset internal tables
+    resetCudfTableAndView();
+  } else {
+    // Split the current table view into two partitions.
+    auto partitions =
+        std::vector<cudf::size_type>{static_cast<cudf::size_type>(size)};
+    auto tableSplits = cudf::split(currentCudfTableView_, partitions);
+    VELOX_CHECK_EQ(
+        size,
+        static_cast<uint64_t>(tableSplits[0].num_rows()),
+        "cudf::split yielded incorrect partitions");
+    // Convert the first split view to RowVectorPtr.
+    output = with_arrow::to_velox_column(tableSplits[0], pool_, "c");
+    // Set the current view to the second split view.
+    currentCudfTableView_ = tableSplits[1];
+  }
+
+  // Check if conversion yielded a nullptr
+  VELOX_CHECK_NOT_NULL(output, "Cudf to Velox conversion yielded a nullptr");
+
+  // Update completedRows_.
+  completedRows_ += output->size();
+
+  // TODO: Update `completedBytes_` here instead of in `addSplit()`
+
+  return output;
 }
 
 void ParquetDataSource::addSplit(std::shared_ptr<ConnectorSplit> split) {
@@ -160,9 +232,13 @@ ParquetDataSource::createSplitReader() {
 }
 
 void ParquetDataSource::resetSplit() {
-  // Simply reset the split and the reader
   split_.reset();
   splitReader_.reset();
+}
+
+void ParquetDataSource::resetCudfTableAndView() {
+  cudfTable_.reset();
+  currentCudfTableView_ = cudf::table_view{};
 }
 
 } // namespace facebook::velox::cudf_velox::connector::parquet
