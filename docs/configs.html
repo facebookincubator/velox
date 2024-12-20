@@ -220,6 +220,13 @@ run on a thread before yield. If it is zero, then it no limit.</p></td>
 <td><p>16</p></td>
 <td><p>Byte length of the string prefix stored in the prefix-sort buffer. This doesn’t include the null byte.</p></td>
 </tr>
+<tr class="row-odd"><td><p>shuffle_compression_codec</p></td>
+<td><p>string</p></td>
+<td><p>none</p></td>
+<td><p>Specifies the compression algorithm type to compress the shuffle data to
+trade CPU for network IO efficiency. The supported compression codecs
+are: zlib, snappy, lzo, zstd, lz4 and gzip. none means no compression.</p></td>
+</tr>
 </tbody>
 </table>
 </section>
@@ -490,8 +497,8 @@ spilled files.</p></td>
 <td><p>string</p></td>
 <td><p>none</p></td>
 <td><p>Specifies the compression algorithm type to compress the spilled data before write to disk to trade CPU for IO
-efficiency. The supported compression codecs are: ZLIB, SNAPPY, LZO, ZSTD, LZ4 and GZIP.
-NONE means no compression.</p></td>
+efficiency. The supported compression codecs are: zlib, snappy, lzo, zstd, lz4 and gzip.
+none means no compression.</p></td>
 </tr>
 <tr class="row-even"><td><p>spill_prefixsort_enabled</p></td>
 <td><p>bool</p></td>

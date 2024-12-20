@@ -316,6 +316,12 @@ underlying filesystem.</p></td>
 for Presto, 2 for CompactRow, 3 for UnsafeRow. It is reported by Exchange,
 MergeExchange and PartitionedOutput operators for now.</p></td>
 </tr>
+<tr class="row-odd"><td><p>shuffleCompressionKind</p></td>
+<td></td>
+<td><p>Indicates the compression kind used by an operator for shuffle. The
+reported value is set to the corresponding CompressionKind enum with 0
+(CompressionKind_NONE) as no compression.</p></td>
+</tr>
 </tbody>
 </table>
 </section>
