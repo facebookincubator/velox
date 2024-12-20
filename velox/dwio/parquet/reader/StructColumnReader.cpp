@@ -73,13 +73,13 @@ StructColumnReader::StructColumnReader(
   // Missing fields are not empty only when using column names for column
   // mapping.
   if (missingFields.size() > 0) {
-    // Set the struct as null if all the subfields in the output type are
+    // Set the struct as null if all the subfields in the requested type are
     // missing and the number of subfields is more than one.
     if (childSpecs.size() > 1 && missingFields.size() == childSpecs.size()) {
       scanSpec_->setConstantValue(
           BaseVector::createNullConstant(requestedType_, 1, &pool));
     } else {
-      // Set null constant for the missing subfield of output type.
+      // Set null constant for the missing subfield of requested type.
       auto rowTypePtr = asRowType(requestedType_);
       for (int channel : missingFields) {
         childSpecs[channel]->setConstantValue(BaseVector::createNullConstant(
