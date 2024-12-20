@@ -91,46 +91,196 @@ encoding, which affects the operator’s execution. Hence, it might not always b
 <p>There are three types of writers: <cite>TaskTraceMetadataWriter</cite>, <cite>OperatorTraceInputWriter</cite>,
 and <cite>OperatorTraceSplitWriter</cite>. They are used in the prod or shadow environment to record
 the real execution data.</p>
-<p><strong>TaskTraceMetadataWriter</strong> records the query metadata during task creation,
-serializes, and writes them into a file in JSON format. There are two kinds
-of metadata:</p>
-<ul class="simple">
-<li><p>Query configurations and connector properties are specified by the user per query.
-They can be serialized as JSON map objects (key-value pairs).</p></li>
-<li><p>Plan fragment of the task (also known as a plan node tree). It can be serialized
-as a JSON object, which is already supported in Velox.</p></li>
-</ul>
-<p><strong>OperatorTraceInputWriter</strong> records the input vectors from the target operator, it uses a Presto
+<p><strong>TaskTraceMetadataWriter</strong></p>
+<p>The <cite>TaskTraceMetadataWriter</cite> records the query metadata during task creation, serializes it,
+and saves it into a file in JSON format. There are two types of metadata:</p>
+<ol class="arabic simple">
+<li><p><strong>Query Configurations and Connector Properties</strong>: These are user-specified per query and can
+be serialized as JSON map objects (key-value pairs).</p></li>
+<li><p><strong>Task Plan Fragment</strong> (aka Plan Node Tree): This can be serialized as a JSON object, a feature
+already supported in Velox (see <a class="reference external" href="https://github.com/facebookincubator/velox/issues/4614">#4614</a>, <a class="reference external" href="https://github.com/facebookincubator/velox/issues/4301">#4301</a>, and <a class="reference external" href="https://github.com/facebookincubator/velox/issues/4398">#4398</a>).</p></li>
+</ol>
+<p>The metadata is saved as a single JSON object string in the metadata file. It would look similar
+to the following simplified, pretty-printed JSON string (with some content removed for brevity):</p>
+<div class="highlight-JSON notranslate"><div class="highlight"><pre><span></span><span class="p">{</span>
+<span class="w">  </span><span class="nt">&quot;planNode&quot;</span><span class="p">:{</span>
+<span class="w">    </span><span class="nt">&quot;nullAware&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">false</span><span class="p">,</span>
+<span class="w">    </span><span class="nt">&quot;outputType&quot;</span><span class="p">:{</span><span class="err">...</span><span class="p">},</span>
+<span class="w">    </span><span class="nt">&quot;leftKeys&quot;</span><span class="p">:[</span><span class="err">...</span><span class="p">],</span>
+<span class="w">    </span><span class="nt">&quot;rightKeys&quot;</span><span class="p">:[</span><span class="err">...</span><span class="p">],</span>
+<span class="w">    </span><span class="nt">&quot;joinType&quot;</span><span class="p">:</span><span class="s2">&quot;INNER&quot;</span><span class="p">,</span>
+<span class="w">    </span><span class="nt">&quot;sources&quot;</span><span class="p">:[</span>
+<span class="w">      </span><span class="p">{</span>
+<span class="w">        </span><span class="nt">&quot;outputType&quot;</span><span class="p">:{</span><span class="err">...</span><span class="p">},</span>
+<span class="w">        </span><span class="nt">&quot;tableHandle&quot;</span><span class="p">:{</span><span class="err">...</span><span class="p">},</span>
+<span class="w">        </span><span class="nt">&quot;assignments&quot;</span><span class="p">:[</span><span class="err">...</span><span class="p">],</span>
+<span class="w">        </span><span class="nt">&quot;id&quot;</span><span class="p">:</span><span class="s2">&quot;0&quot;</span><span class="p">,</span>
+<span class="w">        </span><span class="nt">&quot;name&quot;</span><span class="p">:</span><span class="s2">&quot;TableScanNode&quot;</span>
+<span class="w">      </span><span class="p">},</span>
+<span class="w">      </span><span class="p">{</span>
+<span class="w">        </span><span class="nt">&quot;outputType&quot;</span><span class="p">:{</span><span class="err">...</span><span class="p">},</span>
+<span class="w">        </span><span class="nt">&quot;tableHandle&quot;</span><span class="p">:{</span><span class="err">...</span><span class="p">},</span>
+<span class="w">        </span><span class="nt">&quot;assignments&quot;</span><span class="p">:[</span><span class="err">...</span><span class="p">],</span>
+<span class="w">        </span><span class="nt">&quot;id&quot;</span><span class="p">:</span><span class="s2">&quot;1&quot;</span><span class="p">,</span>
+<span class="w">        </span><span class="nt">&quot;name&quot;</span><span class="p">:</span><span class="s2">&quot;TableScanNode&quot;</span>
+<span class="w">      </span><span class="p">}</span>
+<span class="w">    </span><span class="p">],</span>
+<span class="w">    </span><span class="nt">&quot;id&quot;</span><span class="p">:</span><span class="s2">&quot;2&quot;</span><span class="p">,</span>
+<span class="w">    </span><span class="nt">&quot;name&quot;</span><span class="p">:</span><span class="s2">&quot;HashJoinNode&quot;</span>
+<span class="w">  </span><span class="p">},</span>
+<span class="w">  </span><span class="nt">&quot;connectorProperties&quot;</span><span class="p">:{</span><span class="err">...</span><span class="p">},</span>
+<span class="w">  </span><span class="nt">&quot;queryConfig&quot;</span><span class="p">:{</span><span class="nt">&quot;query_trace_node_ids&quot;</span><span class="p">:</span><span class="s2">&quot;2&quot;</span><span class="p">,</span><span class="w"> </span><span class="err">...</span><span class="p">}</span>
+<span class="p">}</span>
+</pre></div>
+</div>
+<p><strong>OperatorTraceInputWriter</strong></p>
+<p>The <cite>OperatorTraceInputWriter</cite> records the input vectors from the target operator, it uses a Presto
 serializer to serialize each vector batch and flush immediately to ensure that replay is possible
-even if a crash occurs during execution. It is created during the target operator’s initialization
-and writes data in the <cite>Operator::addInput</cite> method during execution. It finishes when the target
-operator is closed. However, it can finish early if the recorded data size exceeds the limit specified
-by the user.</p>
-<p><strong>OperatorTraceSplitWriter</strong> captures the input splits from the target <cite>TableScan</cite> operator. It
+even if a crash occurs during execution.</p>
+<p>It is created during the target operator’s initialization and writes data in the <cite>Operator::addInput</cite>
+method during execution. It finishes when the target operator is closed. However, it can finish early
+if the recorded data size exceeds the limit specified by the user.</p>
+<p><strong>OperatorTraceSplitWriter</strong></p>
+<p>The <cite>OperatorTraceSplitWriter</cite> captures the input splits from the target <cite>TableScan</cite> operator. It
 serializes each split and immediately flushes it to ensure that replay is possible even if a crash
-occurs during execution. Each split is serialized as follows:</p>
+occurs during execution.</p>
+<p>Each split is serialized as follows:</p>
 <div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="o">|</span><span class="w"> </span><span class="n">length</span><span class="w"> </span><span class="o">:</span><span class="w"> </span><span class="kt">uint32_t</span><span class="w"> </span><span class="o">|</span><span class="w"> </span><span class="n">split</span><span class="w"> </span><span class="o">:</span><span class="w"> </span><span class="n">JSON</span><span class="w"> </span><span class="n">string</span><span class="w"> </span><span class="o">|</span><span class="w"> </span><span class="n">crc32</span><span class="w"> </span><span class="o">:</span><span class="w"> </span><span class="kt">uint32_t</span><span class="w"> </span><span class="o">|</span>
 </pre></div>
 </div>
+</section>
+<section id="storage-location">
+<h3>Storage Location<a class="headerlink" href="#storage-location" title="Link to this heading">¶</a></h3>
+<p>It is recommended to store traced data in a remote storage system to ensure its preservation and
+accessibility even if the computation clusters are reconfigured or encounter issues. This also
+helps prevent nodes in the cluster from failing due to local disk exhaustion.</p>
+<p>Users should start by creating a root directory. Writers will then create subdirectories within
+this root directory to organize the traced data. A well-designed directory structure will keep
+the data organized and accessible for replay and analysis.</p>
+<p><strong>Metadata Location</strong></p>
+<p>The <cite>TaskTraceMetadataWriter</cite> is set up during the task creation so it creates a trace directory
+named <cite>$rootDir/$queryId/$taskId</cite>.</p>
+<p><strong>Input Data and Split Location</strong></p>
+<p>The task generates Drivers and Operators, and each is identified by a set of IDs. Each driver
+is assigned a pipeline ID and a driver ID. Pipeline IDs are sequential numbers starting from zero,
+and driver IDs are also sequential numbers starting from zero but are scoped to a specific pipeline,
+ensuring uniqueness within that pipeline. Additionally, each operator within a driver is assigned a
+sequential operator ID, starting from zero and unique within the driver.</p>
+<p>The node ID consolidates the tracing for the same tracing plan node. The pipeline ID isolates the
+tracing data between operators created from the same plan node (e.g., HashProbe and HashBuild from
+the HashJoinNode). The driver ID isolates the tracing data of peer operators in the same pipeline
+from different drivers.</p>
+<p>Correspondingly, to ensure the organized and isolated tracing data storage, the <cite>OperatorTraceInputWriter</cite>
+and <cite>OpeartorTraceSplitWriter</cite> are set up during the operator initialization and create a data or split
+tracing directory in <cite>$rootDir/$queryId$taskId/$nodeId/$pipelineId/$driverId</cite>.</p>
+<p>The following is a typical <cite>HashJoinNode</cite> traced metadata and data storage directory structure:</p>
+<div class="highlight-SHELL notranslate"><div class="highlight"><pre><span></span>trace<span class="w"> </span>---------------------------------------------------&gt;<span class="w"> </span>rootDir
+└──<span class="w"> </span>query-1<span class="w"> </span>-------------------------------------------&gt;<span class="w"> </span>query<span class="w"> </span>ID
+<span class="w">    </span>└──<span class="w"> </span>task-1<span class="w"> </span>----------------------------------------&gt;<span class="w"> </span>task<span class="w"> </span>ID
+<span class="w">        </span>├──<span class="w"> </span><span class="m">2</span><span class="w"> </span>-----------------------------------------&gt;<span class="w"> </span>node<span class="w"> </span>ID
+<span class="w">        </span>│<span class="w">   </span>├──<span class="w"> </span><span class="m">0</span><span class="w"> </span>-------------------------&gt;<span class="w"> </span>pipeline<span class="w"> </span>ID<span class="w"> </span><span class="o">(</span>probe<span class="o">)</span>
+<span class="w">        </span>│<span class="w">   </span>│<span class="w">   </span>├──<span class="w"> </span><span class="m">0</span><span class="w">  </span>-------------------------&gt;<span class="w"> </span>driver<span class="w"> </span>ID<span class="w"> </span><span class="o">(</span><span class="m">0</span><span class="o">)</span>
+<span class="w">        </span>│<span class="w">   </span>│<span class="w">   </span>│<span class="w">   </span>├──<span class="w"> </span>op_input_trace.data
+<span class="w">        </span>│<span class="w">   </span>│<span class="w">   </span>│<span class="w">   </span>└──<span class="w"> </span>op_trace_summary.json
+<span class="w">        </span>│<span class="w">   </span>│<span class="w">   </span>└──<span class="w"> </span><span class="m">1</span><span class="w">  </span>-------------------------&gt;<span class="w"> </span>driver<span class="w"> </span>ID<span class="w"> </span><span class="o">(</span><span class="m">1</span><span class="o">)</span>
+<span class="w">        </span>│<span class="w">   </span>│<span class="w">       </span>├──<span class="w"> </span>op_input_trace.data
+<span class="w">        </span>│<span class="w">   </span>│<span class="w">       </span>└──<span class="w"> </span>op_trace_summary.json
+<span class="w">        </span>│<span class="w">   </span>└──<span class="w"> </span><span class="m">1</span><span class="w">  </span>-------------------------&gt;<span class="w"> </span>pipeline<span class="w"> </span>ID<span class="w"> </span><span class="o">(</span>build<span class="o">)</span>
+<span class="w">        </span>│<span class="w">       </span>├──<span class="w"> </span><span class="m">0</span><span class="w"> </span>---------------------------&gt;<span class="w"> </span>driver<span class="w"> </span>ID<span class="w"> </span><span class="o">(</span><span class="m">0</span><span class="o">)</span>
+<span class="w">        </span>│<span class="w">       </span>│<span class="w">   </span>├──<span class="w"> </span>op_input_trace.data
+<span class="w">        </span>│<span class="w">       </span>│<span class="w">   </span>└──<span class="w"> </span>op_trace_summary.json
+<span class="w">        </span>│<span class="w">       </span>└──<span class="w"> </span><span class="m">1</span><span class="w">  </span>-------------------------&gt;<span class="w"> </span>driver<span class="w"> </span>ID<span class="w"> </span><span class="o">(</span><span class="m">1</span><span class="o">)</span>
+<span class="w">        </span>│<span class="w">           </span>├──<span class="w"> </span>op_input_trace.data
+<span class="w">        </span>│<span class="w">           </span>└──<span class="w"> </span>op_trace_summary.json
+<span class="w">        </span>└──<span class="w"> </span>task_trace_meta.json<span class="w">  </span>----------------&gt;<span class="w"> </span>query<span class="w"> </span>metadata
+</pre></div>
+</div>
+</section>
+<section id="memory-management">
+<h3>Memory Management<a class="headerlink" href="#memory-management" title="Link to this heading">¶</a></h3>
+<p>Add a new leaf system pool named tracePool for tracing memory usage, and expose it
+like <cite>memory::MemoryManager::getInstance()-&gt;tracePool()</cite>.</p>
 </section>
 <section id="query-trace-readers">
 <h3>Query Trace Readers<a class="headerlink" href="#query-trace-readers" title="Link to this heading">¶</a></h3>
 <p>Three types of readers correspond to the query trace writers: <cite>TaskTraceMetadataReader</cite>,
 <cite>OperatorTraceInputReader</cite>, and <cite>OperatorTraceSplitReader</cite>. The replayers typically use
 them in the local environment, which will be described in detail in the Query Trace Replayer section.</p>
-<p><strong>TaskTraceMetadataReader</strong> can load the query metadata JSON file and extract the query
+<p><strong>TaskTraceMetadataReader</strong></p>
+<p>The <cite>TaskTraceMetadataReader</cite> can load the query metadata JSON file and extract the query
 configurations, connector properties, and a plan fragment. The replayer uses these to build
 a replay task.</p>
-<p><strong>OperatorTraceInputReader</strong> reads and deserializes the input vectors in a tracing data file.
+<p><strong>OperatorTraceInputReader</strong></p>
+<p>The <cite>OperatorTraceInputReader</cite> reads and deserializes the input vectors in a tracing data file.
 It is created and used by a <cite>QueryTraceScan</cite> operator which will be described in detail in
 the <strong>Query Trace Scan</strong> section.</p>
-<p><strong>OperatorTraceSplitReader</strong> reads and deserializes the input splits in tracing split info files,
+<p><strong>OperatorTraceSplitReader</strong></p>
+<p>The <cite>OperatorTraceSplitReader</cite> reads and deserializes the input splits in tracing split info files,
 and produces a list of <cite>exec::Split</cite> for the query replay.</p>
 </section>
+<section id="trace-scan">
+<h3>Trace Scan<a class="headerlink" href="#trace-scan" title="Link to this heading">¶</a></h3>
+<p>As outlined in the <strong>How Tracing Works</strong> section, replaying a non-leaf operator requires a
+specialized source operator. This operator is responsible for reading data records during the
+tracing phase and integrating with Velox’s <cite>LocalPlanner</cite> with a customized plan node and
+operator translator.</p>
+<p><strong>TraceScanNode</strong></p>
+<p>We introduce a customized ‘TraceScanNode’ to replay a non-leaf operator. This node acts as
+the source node and creates a specialized scan operator, known as <cite>OperatorTraceScan</cite> with
+one per driver during the replay. The <cite>TraceScanNode</cite> contains the trace directory for the
+designated trace node, the pipeline ID associated with it, and a driver ID list passed during
+the replaying by users so that the OperatorTraceScan can locate the right trace input data or
+split directory.</p>
+<p><strong>OperatorTraceScan</strong></p>
+<p>As described in the <strong>Storage Location</strong> section, a plan node may be split into multiple pipelines,
+each pipeline can be divided into multiple operators. Each operator corresponds to a driver, which
+is a thread of execution. There may be multiple tracing data files for a single plan node, one file
+per driver.</p>
+<p>To identify the correct input data file associated with a specific <cite>OperatorTraceScan</cite> operator, it
+leverages the trace node directory, pipeline ID, and driver ID list supplied by the TraceScanNode.</p>
+<p>During the replay process, it uses its own driver ID as an index to extract the replay driver ID from
+the driver ID list in the <cite>TraceScanNode</cite>. Along with the trace node directory and pipeline ID from
+the <cite>TraceScanNode</cite>, it locates its corresponding input data file.</p>
+<p>Correspondingly, an <cite>OperatorTraceScan</cite> operator uses a trace data file in
+<cite>$rootDir/$queryId/$taskId/$nodeId/$pipelineId/$dirverId</cite> to create an
+<cite>OperatorTraceReader</cite>. And <cite>OperatorTraceScan::getOutput</cite> method returns the vectors read by
+its <cite>OperatorTraceInputReader</cite>, which returns the vectors in the same sequence order as originally
+processed in the production execution. This ensures that the replaying maintains the same data flow
+as in the original production execution.</p>
 </section>
-<section id="how-to-replay">
-<h2>How To Replay<a class="headerlink" href="#how-to-replay" title="Link to this heading">¶</a></h2>
-<p>After the traced query finishes, its metadata and the input data for the target tasks and operators
+<section id="query-trace-replayer">
+<h3>Query Trace Replayer<a class="headerlink" href="#query-trace-replayer" title="Link to this heading">¶</a></h3>
+<p>The query trace replayer is typically used in the local environment and works as follows:</p>
+<ol class="arabic simple">
+<li><p>Use <cite>TaskTraceMetadataReader</cite> to load traced query configurations, connector properties,
+and a plan fragment.</p></li>
+<li><p>Extract the target plan node from the plan fragment using the specified plan node ID.</p></li>
+<li><p>Use the target plan node in step 2 to create a replay plan node. Create a replay plan
+using <cite>exec::test::PlanBuilder</cite>.</p></li>
+<li><dl class="simple">
+<dt>If the target plan node is a <cite>TableScanNode</cite></dt><dd><ul class="simple">
+<li><p>Add the replay plan node to the replay plan as the source node.</p></li>
+<li><p>Get all the traced splits using <cite>OperatorInputSplitReader</cite>.</p></li>
+<li><p>Use the splits as inputs for task replaying.</p></li>
+</ul>
+</dd>
+</dl>
+</li>
+<li><p>For a non-leaf operator, add a <cite>QueryTraceScanNode</cite> as the source node to the replay plan and
+then add the replay plan node.</p></li>
+<li><p>Use <cite>exec::test::AssertQueryBuilder</cite> to add the sink node, apply the query
+configurations (disable tracing), and connector properties, and execute the replay plan.</p></li>
+</ol>
+<p>The <cite>OperatorReplayBase</cite> provides the core functionality required for replaying an operator.
+It handles the retrieval of metadata, creation of the replay plan, and execution of the plan.
+Concrete operator replayers, such as <cite>HashJoinReplayer</cite> and <cite>AggregationReplayer</cite>, extend this
+base class and override the <cite>createPlanNode</cite> method to create the specific plan node.</p>
+</section>
+</section>
+<section id="query-trace-tool-usage">
+<h2>Query Trace Tool Usage<a class="headerlink" href="#query-trace-tool-usage" title="Link to this heading">¶</a></h2>
+<p>Enable tracing using configurations in <a class="reference external" href="https://facebookincubator.github.io/velox/configs.html#tracing">https://facebookincubator.github.io/velox/configs.html#tracing</a>.
+After the traced query finishes, its metadata and the input data for the target tasks and operators
 are all saved in the directory specified by <cite>query_trace_dir</cite>.</p>
 <p>To get a glance at the traced task, we can execute the following command:</p>
 <div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="n">velox_query_replayer</span><span class="w"> </span><span class="o">--</span><span class="n">root_dir</span><span class="w"> </span><span class="o">/</span><span class="n">trace_root</span><span class="w"> </span><span class="o">--</span><span class="n">task_id</span><span class="w"> </span><span class="n">task</span><span class="mi">-4</span><span class="w"> </span><span class="o">--</span><span class="n">summary</span>
@@ -207,10 +357,6 @@ It also print the query metadata including query configs, connectors properties,
 <li><p><code class="docutils literal notranslate"><span class="pre">--hiveConnectorExecutorHwMultiplier</span></code>: Hardware multiplier for hive connector.</p></li>
 </ul>
 </section>
-<section id="future-work">
-<h2>Future Work<a class="headerlink" href="#future-work" title="Link to this heading">¶</a></h2>
-<p><a class="reference external" href="https://github.com/facebookincubator/velox/issues/9668">https://github.com/facebookincubator/velox/issues/9668</a></p>
-</section>
 </section>
 
 
@@ -228,11 +374,14 @@ It also print the query metadata including query configs, connectors properties,
 <li><a class="reference internal" href="#how-tracing-tool-works">How Tracing Tool Works</a></li>
 <li><a class="reference internal" href="#tracing-framework">Tracing Framework</a><ul>
 <li><a class="reference internal" href="#trace-writers">Trace Writers</a></li>
+<li><a class="reference internal" href="#storage-location">Storage Location</a></li>
+<li><a class="reference internal" href="#memory-management">Memory Management</a></li>
 <li><a class="reference internal" href="#query-trace-readers">Query Trace Readers</a></li>
+<li><a class="reference internal" href="#trace-scan">Trace Scan</a></li>
+<li><a class="reference internal" href="#query-trace-replayer">Query Trace Replayer</a></li>
 </ul>
 </li>
-<li><a class="reference internal" href="#how-to-replay">How To Replay</a></li>
-<li><a class="reference internal" href="#future-work">Future Work</a></li>
+<li><a class="reference internal" href="#query-trace-tool-usage">Query Trace Tool Usage</a></li>
 </ul>
 </li>
 </ul>
