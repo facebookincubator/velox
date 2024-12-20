@@ -122,7 +122,7 @@ std::optional<RowVectorPtr> ParquetDataSource::next(
       currentNumRows += readTables.back()->num_rows();
     }
 
-    if (readTables.empty() and cudfTable_ == nullptr) {
+    if (readTables.empty() and not cudfTable_) {
       // Check if currentCudfTableView_ is also reset.
       VELOX_CHECK_EQ(currentCudfTableView_.num_rows(), 0);
       // We are done with this split, reset the split.
@@ -132,7 +132,7 @@ std::optional<RowVectorPtr> ParquetDataSource::next(
 
     if (readTables.size()) {
       auto readTable = concatenateTables(std::move(readTables));
-      if (cudfTable_ != nullptr) {
+      if (cudfTable_) {
         // Concatenate the current view ahead of the read table.
         auto tableViews = std::vector<cudf::table_view>{
             currentCudfTableView_, readTable->view()};
@@ -160,8 +160,8 @@ std::optional<RowVectorPtr> ParquetDataSource::next(
         std::vector<cudf::size_type>{static_cast<cudf::size_type>(size)};
     auto tableSplits = cudf::split(currentCudfTableView_, partitions);
     VELOX_CHECK_EQ(
-        size,
-        static_cast<uint64_t>(tableSplits[0].num_rows()),
+        static_cast<cudf::size_type>(size),
+        tableSplits[0].num_rows(),
         "cudf::split yielded incorrect partitions");
     // Convert the first split view to RowVectorPtr.
     output = with_arrow::to_velox_column(tableSplits[0], pool_, "c");
@@ -188,6 +188,11 @@ void ParquetDataSource::addSplit(std::shared_ptr<ConnectorSplit> split) {
   // Split reader already exists, reset
   if (splitReader_) {
     splitReader_.reset();
+  }
+
+  // Reset cudfTable and views if not already reset.
+  if (cudfTable_) {
+    resetCudfTableAndView();
   }
 
   // Create a `cudf::io::chunked_parquet_reader` SplitReader
