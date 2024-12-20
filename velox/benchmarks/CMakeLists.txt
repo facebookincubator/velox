@@ -23,7 +23,7 @@ set(velox_benchmark_deps
     velox_parse_expression
     velox_serialization
     Folly::folly
-    ${FOLLY_BENCHMARK}
+    Folly::follybenchmark
     ${DOUBLE_CONVERSION}
     gflags::gflags
     glog::glog)
@@ -61,6 +61,6 @@ target_link_libraries(
   velox_caching
   velox_vector_test_lib
   velox_cudf_exec
-  ${FOLLY_BENCHMARK}
   Folly::folly
+  Folly::follybenchmark
   fmt::fmt)

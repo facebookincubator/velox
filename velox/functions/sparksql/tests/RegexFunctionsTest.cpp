@@ -551,8 +551,9 @@ TEST_F(RegexFunctionsTest, regexpReplaceCacheLimitTest) {
   std::vector<std::string> strings;
   std::vector<std::string> replaces;
   std::vector<std::string> expectedOutputs;
+  const core::QueryConfig config({});
 
-  for (int i = 0; i <= kMaxCompiledRegexes; ++i) {
+  for (int i = 0; i <= config.exprMaxCompiledRegexes(); ++i) {
     patterns.push_back("\\d" + std::to_string(i) + "-\\d" + std::to_string(i));
     strings.push_back("1" + std::to_string(i) + "-2" + std::to_string(i));
     replaces.push_back("X" + std::to_string(i) + "-Y" + std::to_string(i));
@@ -562,7 +563,7 @@ TEST_F(RegexFunctionsTest, regexpReplaceCacheLimitTest) {
 
   VELOX_ASSERT_THROW(
       testingRegexpReplaceRows(strings, patterns, replaces),
-      "regexp_replace hit the maximum number of unique regexes: 20");
+      "Max number of regex reached");
 }
 
 TEST_F(RegexFunctionsTest, regexpReplaceCacheMissLimit) {
@@ -571,8 +572,9 @@ TEST_F(RegexFunctionsTest, regexpReplaceCacheMissLimit) {
   std::vector<std::string> replaces;
   std::vector<std::string> expectedOutputs;
   std::vector<int32_t> positions;
+  const core::QueryConfig config({});
 
-  for (int i = 0; i <= kMaxCompiledRegexes - 1; ++i) {
+  for (int i = 0; i <= config.exprMaxCompiledRegexes() - 1; ++i) {
     patterns.push_back("\\d" + std::to_string(i) + "-\\d" + std::to_string(i));
     strings.push_back("1" + std::to_string(i) + "-2" + std::to_string(i));
     replaces.push_back("X" + std::to_string(i) + "-Y" + std::to_string(i));
@@ -586,5 +588,32 @@ TEST_F(RegexFunctionsTest, regexpReplaceCacheMissLimit) {
   auto output = convertOutput(expectedOutputs, 3);
   assertEqualVectors(result, output);
 }
+
+TEST_F(RegexFunctionsTest, regexpReplacePreprocess) {
+  EXPECT_EQ(
+      testRegexpReplace("bdztlszhxz_44", "(.*)(_)([0-9]+$)", "$1$2"),
+      "bdztlszhxz_");
+  EXPECT_EQ(
+      testRegexpReplace("1a 2b 14m", "(\\d+)([ab]) ", "3c$2 "), "3ca 3cb 14m");
+  EXPECT_EQ(
+      testRegexpReplace("1a 2b 14m", "(\\d+)([ab])", "3c$2"), "3ca 3cb 14m");
+  EXPECT_EQ(testRegexpReplace("abc", "(?P<alpha>\\w)", "1${alpha}"), "1a1b1c");
+  EXPECT_EQ(
+      testRegexpReplace("1a1b1c", "(?<digit>\\d)(?<alpha>\\w)", "${alpha}\\$"),
+      "a$b$c$");
+  EXPECT_EQ(
+      testRegexpReplace(
+          "1a2b3c", "(?<digit>\\d)(?<alpha>\\w)", "${alpha}${digit}"),
+      "a1b2c3");
+  EXPECT_EQ(testRegexpReplace("123", "(\\d)", "\\$"), "$$$");
+  EXPECT_EQ(
+      testRegexpReplace("123", "(?<digit>(?<nest>\\d))", ".${digit}"),
+      ".1.2.3");
+  EXPECT_EQ(
+      testRegexpReplace("123", "(?<digit>(?<nest>\\d))", ".${nest}"), ".1.2.3");
+  EXPECT_EQ(testRegexpReplace("[{}]", "\\[\\{", "\\{"), "{}]");
+  EXPECT_EQ(testRegexpReplace("[{}]", "\\}\\]", "\\}"), "[{}");
+}
+
 } // namespace
 } // namespace facebook::velox::functions::sparksql

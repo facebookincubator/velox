@@ -115,7 +115,7 @@ jobs:
           python setup.py sdist --dist-dir wheelhouse
 
       - name: Build wheels
-        uses: pypa/cibuildwheel@v2.12.1
+        uses: pypa/cibuildwheel@v2.22.0
         env:
           # required for preadv/pwritev
           MACOSX_DEPLOYMENT_TARGET: "11.0"
@@ -157,7 +157,7 @@ jobs:
           cd wheelhouse
           rename 's/11_0/10_15/g' *.whl
 
-      - uses: actions/upload-artifact@v3
+      - uses: actions/upload-artifact@v4
         with:
           name: wheels
           path: |
@@ -170,7 +170,7 @@ jobs:
     needs: build_wheels
     runs-on: ubuntu-22.04
     steps:
-      - uses: actions/download-artifact@v3
+      - uses: actions/download-artifact@v4
         with:
           name: wheels
           path: ./wheelhouse
@@ -182,7 +182,7 @@ jobs:
           python-version: "3.10"
 
       - name: Publish a Python distribution to PyPI
-        uses: pypa/gh-action-pypi-publish@v1.6.4
+        uses: pypa/gh-action-pypi-publish@v1.12.2
         with:
           password: ${{ secrets.PYPI_API_TOKEN }}
           packages_dir: wheelhouse

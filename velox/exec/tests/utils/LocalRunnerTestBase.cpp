@@ -15,6 +15,8 @@
  */
 
 #include "velox/exec/tests/utils/LocalRunnerTestBase.h"
+#include "velox/exec/tests/utils/LocalExchangeSource.h"
+
 namespace facebook::velox::exec::test {
 
 void LocalRunnerTestBase::SetUp() {
@@ -57,7 +59,7 @@ void LocalRunnerTestBase::ensureTestData() {
 void LocalRunnerTestBase::makeSchema() {
   auto schemaQueryCtx = makeQueryCtx("schema", rootPool_.get());
   common::SpillConfig spillConfig;
-  common::PrefixSortConfig prefixSortConfig(100, 130);
+  common::PrefixSortConfig prefixSortConfig(100, 130, 12);
   auto leafPool = schemaQueryCtx->pool()->addLeafChild("schemaReader");
   auto connectorQueryCtx = std::make_shared<connector::ConnectorQueryCtx>(
       leafPool.get(),

@@ -134,7 +134,7 @@ TEST_F(HiveConnectorUtilTest, configureReaderOptions) {
   EXPECT_EQ(readerOptions.maxCoalesceBytes(), hiveConfig->maxCoalescedBytes());
   EXPECT_EQ(
       readerOptions.maxCoalesceDistance(),
-      hiveConfig->maxCoalescedDistanceBytes());
+      hiveConfig->maxCoalescedDistanceBytes(&sessionProperties));
   EXPECT_EQ(
       readerOptions.fileColumnNamesReadAsLowerCase(),
       hiveConfig->isFileColumnNamesReadAsLowerCase(&sessionProperties));
@@ -227,7 +227,7 @@ TEST_F(HiveConnectorUtilTest, configureReaderOptions) {
   std::unordered_map<std::string, std::string> customHiveConfigProps;
   customHiveConfigProps[hive::HiveConfig::kLoadQuantum] = "321";
   customHiveConfigProps[hive::HiveConfig::kMaxCoalescedBytes] = "129";
-  customHiveConfigProps[hive::HiveConfig::kMaxCoalescedDistanceBytes] = "513";
+  customHiveConfigProps[hive::HiveConfig::kMaxCoalescedDistance] = "513KB";
   customHiveConfigProps[hive::HiveConfig::kFileColumnNamesReadAsLowerCase] =
       "true";
   customHiveConfigProps[hive::HiveConfig::kOrcUseColumnNames] = "true";
@@ -241,7 +241,7 @@ TEST_F(HiveConnectorUtilTest, configureReaderOptions) {
   EXPECT_EQ(readerOptions.maxCoalesceBytes(), hiveConfig->maxCoalescedBytes());
   EXPECT_EQ(
       readerOptions.maxCoalesceDistance(),
-      hiveConfig->maxCoalescedDistanceBytes());
+      hiveConfig->maxCoalescedDistanceBytes(&sessionProperties));
   EXPECT_EQ(
       readerOptions.fileColumnNamesReadAsLowerCase(),
       hiveConfig->isFileColumnNamesReadAsLowerCase(&sessionProperties));
@@ -424,7 +424,8 @@ TEST_F(HiveConnectorUtilTest, updateWriterOptionsFromHiveConfigParquet) {
   auto parquetOptions =
       std::dynamic_pointer_cast<parquet::WriterOptions>(options);
   ASSERT_EQ(
-      parquetOptions->parquetWriteTimestampUnit.value(), TimestampUnit::kMilli);
+      parquetOptions->parquetWriteTimestampUnit.value(),
+      TimestampPrecision::kMilliseconds);
   ASSERT_EQ(parquetOptions->parquetWriteTimestampTimeZone.value(), "UTC");
 }
 #endif

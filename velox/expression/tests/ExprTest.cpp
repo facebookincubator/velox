@@ -4861,6 +4861,15 @@ TEST_F(ExprTest, disablePeeling) {
       makeRowVector({flatInput}),
       {},
       execCtx.get()));
+
+  // Ensure functions that take a single column as input but can have more
+  // constant inputs also receive a flat vector. We use the in-predicate in this
+  // case which has a check for ensuring flat input.
+  ASSERT_NO_THROW(evaluateMultiple(
+      {"dict_wrap(c0) in (40, 42)"},
+      makeRowVector({flatInput}),
+      {},
+      execCtx.get()));
 }
 
 TEST_F(ExprTest, disableSharedSubExpressionReuse) {
@@ -4902,7 +4911,6 @@ TEST_F(ExprTest, disableMemoization) {
       makeIndices(2 * flatSize, [&](auto row) { return row % flatSize; }),
       2 * flatSize,
       flatInput);
-  auto dictSize = dictInput->size();
   auto inputRow = makeRowVector({dictInput});
 
   auto exprSet = compileExpression("c0 + 1", asRowType(inputRow->type()));

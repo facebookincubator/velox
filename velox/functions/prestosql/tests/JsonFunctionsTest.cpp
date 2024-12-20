@@ -235,6 +235,9 @@ TEST_F(JsonFunctionsTest, jsonParse) {
       R"("Items for D \ud835\udc52\ud835\udcc1 ")",
       R"("Items for D \uD835\uDC52\uD835\uDCC1 ")");
 
+  // Test bad unicode characters
+  testJsonParse("\"Hello \xc0\xaf World\"", "\"Hello �� World\"");
+
   VELOX_ASSERT_THROW(
       jsonParse(R"({"k1":})"), "The JSON document has an improper structure");
   VELOX_ASSERT_THROW(
@@ -275,6 +278,19 @@ TEST_F(JsonFunctionsTest, jsonParse) {
   auto expected = makeFlatVector<StringView>(
       {R"("This is a long sentence")", R"("This is some other sentence")"},
       JSON());
+  velox::test::assertEqualVectors(expected, result);
+
+  // ':' are placed below to make parser think its a key and not a value.
+  // when processing the next string.
+  auto svData = {
+      "\"SomeVerylargeStringThatIsUsedAaaBbbService::someSortOfImpressions\""_sv,
+      "\"SomeBusinessClusterImagesSignal::genValue\""_sv,
+      "\"SomeVerylargeStringThatIsUsedAaaBbbCc::Service::someSortOfImpressions\""_sv,
+      "\"SomePreviewUtils::genMediaComponent\""_sv};
+
+  data = makeRowVector({makeFlatVector<StringView>(svData)});
+  expected = makeFlatVector<StringView>(svData, JSON());
+  result = evaluate("json_parse(c0)", data);
   velox::test::assertEqualVectors(expected, result);
 
   data = makeRowVector({makeConstant(R"("apple")", 2)});

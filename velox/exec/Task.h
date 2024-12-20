@@ -15,6 +15,7 @@
  */
 #pragma once
 
+#include "velox/common/base/SkewedPartitionBalancer.h"
 #include "velox/core/PlanFragment.h"
 #include "velox/core/QueryCtx.h"
 #include "velox/exec/Driver.h"
@@ -69,6 +70,9 @@ class Task : public std::enable_shared_from_this<Task> {
   /// thread are passed on to a separate consumer.
   /// @param onError Optional callback to receive an exception if task
   /// execution fails.
+  /// @param memoryArbitrationPriority Optional priority on task that, in a
+  /// multi task system, is used for memory arbitration to decide the order of
+  /// reclaiming.
   static std::shared_ptr<Task> create(
       const std::string& taskId,
       core::PlanFragment planFragment,
@@ -76,6 +80,7 @@ class Task : public std::enable_shared_from_this<Task> {
       std::shared_ptr<core::QueryCtx> queryCtx,
       ExecutionMode mode,
       Consumer consumer = nullptr,
+      int32_t memoryArbitrationPriority = 0,
       std::function<void(std::exception_ptr)> onError = nullptr);
 
   static std::shared_ptr<Task> create(
@@ -85,6 +90,7 @@ class Task : public std::enable_shared_from_this<Task> {
       std::shared_ptr<core::QueryCtx> queryCtx,
       ExecutionMode mode,
       ConsumerSupplier consumerSupplier,
+      int32_t memoryArbitrationPriority = 0,
       std::function<void(std::exception_ptr)> onError = nullptr);
 
   /// Convenience function for shortening a Presto taskId. To be used
@@ -101,6 +107,12 @@ class Task : public std::enable_shared_from_this<Task> {
       bool alreadyCreated = true) {
     spillDirectory_ = spillDirectory;
     spillDirectoryCreated_ = alreadyCreated;
+  }
+
+  void setCreateSpillDirectoryCb(
+      std::function<std::string()> spillDirectoryCallback) {
+    VELOX_CHECK_NULL(spillDirectoryCallback_);
+    spillDirectoryCallback_ = std::move(spillDirectoryCallback);
   }
 
   std::string toString() const;
@@ -446,7 +458,7 @@ class Task : public std::enable_shared_from_this<Task> {
 
   void createLocalExchangeQueuesLocked(
       uint32_t splitGroupId,
-      const core::PlanNodeId& planNodeId,
+      const core::PlanNodePtr& planNode,
       int numPartitions);
 
   void noMoreLocalExchangeProducers(uint32_t splitGroupId);
@@ -458,6 +470,18 @@ class Task : public std::enable_shared_from_this<Task> {
 
   const std::vector<std::shared_ptr<LocalExchangeQueue>>&
   getLocalExchangeQueues(
+      uint32_t splitGroupId,
+      const core::PlanNodeId& planNodeId);
+
+  const std::shared_ptr<LocalExchangeMemoryManager>&
+  getLocalExchangeMemoryManager(
+      uint32_t splitGroupId,
+      const core::PlanNodeId& planNodeId);
+
+  /// Returns the shared skewed partition balancer for scale writer local
+  /// partitioning with the given split group id and plan node id.
+  const std::shared_ptr<common::SkewedPartitionRebalancer>&
+  getScaleWriterPartitionBalancer(
       uint32_t splitGroupId,
       const core::PlanNodeId& planNodeId);
 
@@ -607,13 +631,13 @@ class Task : public std::enable_shared_from_this<Task> {
   /// realized when the last thread stops running for 'this'. This is used to
   /// mark cancellation by the user.
   ContinueFuture requestCancel() {
-    return terminate(kCanceled);
+    return terminate(TaskState::kCanceled);
   }
 
   /// Like requestCancel but sets end state to kAborted. This is for stopping
   /// Tasks due to failures of other parts of the query.
   ContinueFuture requestAbort() {
-    return terminate(kAborted);
+    return terminate(TaskState::kAborted);
   }
 
   void requestYield() {
@@ -642,6 +666,10 @@ class Task : public std::enable_shared_from_this<Task> {
 
   const std::string& spillDirectory() const {
     return spillDirectory_;
+  }
+
+  bool hasCreateSpillDirectoryCb() const {
+    return spillDirectoryCallback_ != nullptr;
   }
 
   /// Returns the spill directory path. Ensures that the spill directory is
@@ -703,6 +731,7 @@ class Task : public std::enable_shared_from_this<Task> {
       std::shared_ptr<core::QueryCtx> queryCtx,
       ExecutionMode mode,
       ConsumerSupplier consumerSupplier,
+      int32_t memoryArbitrationPriority = 0,
       std::function<void(std::exception_ptr)> onError = nullptr);
 
   // Invoked to add this to the system-wide running task list on task creation.
@@ -801,7 +830,8 @@ class Task : public std::enable_shared_from_this<Task> {
   class MemoryReclaimer : public exec::MemoryReclaimer {
    public:
     static std::unique_ptr<memory::MemoryReclaimer> create(
-        const std::shared_ptr<Task>& task);
+        const std::shared_ptr<Task>& task,
+        int64_t priority = 0);
 
     uint64_t reclaim(
         memory::MemoryPool* pool,
@@ -813,7 +843,8 @@ class Task : public std::enable_shared_from_this<Task> {
         override;
 
    private:
-    explicit MemoryReclaimer(const std::shared_ptr<Task>& task) : task_(task) {
+    MemoryReclaimer(const std::shared_ptr<Task>& task, int64_t priority)
+        : exec::MemoryReclaimer(priority), task_(task) {
       VELOX_CHECK_NOT_NULL(task);
     }
 
@@ -986,6 +1017,8 @@ class Task : public std::enable_shared_from_this<Task> {
   // trace enabled.
   void maybeInitTrace();
 
+  std::shared_ptr<Driver> getDriver(uint32_t driverId) const;
+
   // Universally unique identifier of the task. Used to identify the task when
   // calling TaskListener.
   const std::string uuid_;
@@ -999,6 +1032,10 @@ class Task : public std::enable_shared_from_this<Task> {
   // The execution mode of the task. It is enforced that a task can only be
   // executed in a single mode throughout its lifetime
   const ExecutionMode mode_;
+
+  // In a multi-task system, it is used to make cross task decisions by memory
+  // arbitration to determine which task to reclaim first.
+  const int32_t memoryArbitrationPriority_;
 
   std::shared_ptr<core::QueryCtx> queryCtx_;
 
@@ -1057,6 +1094,39 @@ class Task : public std::enable_shared_from_this<Task> {
 
   std::vector<std::unique_ptr<DriverFactory>> driverFactories_;
   std::vector<std::shared_ptr<Driver>> drivers_;
+
+  // Tracks the blocking state for each driver under serialized execution mode.
+  class DriverBlockingState {
+   public:
+    explicit DriverBlockingState(const Driver* driver) : driver_(driver) {
+      VELOX_CHECK_NOT_NULL(driver_);
+    }
+
+    /// Sets driver future by setting the continuation callback via inline
+    /// executor.
+    void setDriverFuture(ContinueFuture& diverFuture);
+
+    /// Indicates if the associated driver is blocked or not. If blocked,
+    /// 'future' is set which becomes realized when the driver is unblocked.
+    ///
+    /// NOTE: the function throws if the driver has encountered error.
+    bool blocked(ContinueFuture* future);
+
+   private:
+    const Driver* const driver_;
+
+    mutable std::mutex mutex_;
+    // Indicates if the associated driver is blocked or not.
+    bool blocked_{false};
+    // Sets the driver future error if not null.
+    std::exception_ptr error_{nullptr};
+    // Promises to fulfill when the driver is unblocked.
+    std::vector<std::unique_ptr<ContinuePromise>> promises_;
+  };
+
+  // Tracks the driver blocking state under serialized execution mode.
+  std::vector<std::unique_ptr<DriverBlockingState>> driverBlockingStates_;
+
   // When Drivers are closed by the Task, there is a chance that race and/or
   // bugs can cause such Drivers to be held forever, in turn holding a pointer
   // to the Task making it a zombie Tasks. This vector is used to keep track of
@@ -1168,6 +1238,10 @@ class Task : public std::enable_shared_from_this<Task> {
   std::vector<ContinuePromise> resumePromises_;
   // Base spill directory for this task.
   std::string spillDirectory_;
+  // Spill directory callback for this task. This callback will be used to
+  // create the spill directory for this task. This callback returns
+  // a path that will be into spillDirectory_
+  std::function<std::string()> spillDirectoryCallback_;
 
   // Mutex to ensure only the first caller thread of 'getOrCreateSpillDirectory'
   // creates the directory.
@@ -1196,6 +1270,17 @@ class TaskListener {
       TaskState state,
       std::exception_ptr error,
       TaskStats stats) = 0;
+
+  // onTaskCompletion() overload for the case when we pass PlanFragment
+  virtual void onTaskCompletion(
+      const std::string& taskUuid,
+      const std::string& taskId,
+      TaskState state,
+      std::exception_ptr error,
+      const TaskStats& stats,
+      const core::PlanFragment& /*fragment*/) {
+    onTaskCompletion(taskUuid, taskId, state, error, stats);
+  }
 };
 
 /// Register a listener to be invoked on task completion. Returns true if

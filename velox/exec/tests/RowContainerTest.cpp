@@ -41,8 +41,7 @@ class RowContainerTestHelper {
     std::vector<RowColumn::Stats> columnsStats;
     columnsStats.reserve(rowContainer_->rowColumnsStats_.size());
     columnsStats.resize(rowContainer_->rowColumnsStats_.size());
-    const bool isColumnStatsValid = rowContainer_->collectColumnStats_ &&
-        !rowContainer_->rowColumnsStats_.empty();
+    const bool isColumnStatsValid = !rowContainer_->rowColumnsStats_.empty();
     for (;;) {
       int64_t numRows = rowContainer_->listRows(&iter, kBatch, rows.data());
       if (!numRows) {
@@ -1417,7 +1416,6 @@ TEST_F(RowContainerTest, alignment) {
       false,
       true,
       true,
-      true,
       pool_.get());
   constexpr int kNumRows = 100;
   char* rows[kNumRows];
@@ -1585,7 +1583,6 @@ TEST_F(RowContainerTest, probedFlag) {
       true, // isJoinBuild
       true, // hasProbedFlag
       false, // hasNormalizedKey
-      true, // collectColumnStats
       pool_.get());
 
   auto input = makeRowVector({
@@ -2479,7 +2476,7 @@ TEST_F(RowContainerTest, invalidatedColumnStats) {
     EXPECT_EQ(data->columnStats(4)->numCells(), 0);
 
     for (int i = 0; i < kNumRows; ++i) {
-      auto row = data->newRow();
+      data->newRow();
     }
     EXPECT_EQ(kNumRows, data->numRows());
     RowContainerIterator iter;
@@ -2599,5 +2596,45 @@ TEST_F(RowContainerTest, rowColumnStats) {
   EXPECT_EQ(stats.nonNullCount(), 6);
   EXPECT_EQ(stats.nullCount(), 4);
   EXPECT_EQ(stats.numCells(), 10);
+}
+
+TEST_F(RowContainerTest, storeAndCollectColumnStats) {
+  const uint64_t kNumRows = 1000;
+  auto rowVector = makeRowVector({
+      makeFlatVector<int64_t>(
+          kNumRows, [](auto row) { return row % 5; }, nullEvery(7)),
+      makeFlatVector<std::string>(
+          kNumRows,
+          [](auto row) { return fmt::format("abcdefg123_{}", row); },
+          nullEvery(7)),
+  });
+
+  auto rowContainer = makeRowContainer({BIGINT(), VARCHAR()}, {}, false);
+  std::vector<char*> rows;
+  rows.reserve(kNumRows);
+
+  SelectivityVector allRows(kNumRows);
+  for (size_t i = 0; i < kNumRows; i++) {
+    auto row = rowContainer->newRow();
+    rows.push_back(row);
+  }
+  for (int i = 0; i < rowContainer->columnTypes().size(); ++i) {
+    DecodedVector decoded(*rowVector->childAt(i), allRows);
+    rowContainer->store(decoded, folly::Range(rows.data(), kNumRows), i);
+  }
+
+  ASSERT_EQ(rowContainer->numRows(), kNumRows);
+  for (int i = 0; i < rowContainer->columnTypes().size(); ++i) {
+    const auto stats = rowContainer->columnStats(i).value();
+    EXPECT_EQ(stats.nonNullCount(), 857);
+    EXPECT_EQ(stats.nullCount(), 143);
+    EXPECT_EQ(stats.numCells(), kNumRows);
+    if (rowVector->childAt(i)->typeKind() == TypeKind::VARCHAR) {
+      EXPECT_EQ(stats.maxBytes(), 14);
+      EXPECT_EQ(stats.minBytes(), 12);
+      EXPECT_EQ(stats.sumBytes(), 11905);
+      EXPECT_EQ(stats.avgBytes(), 13);
+    }
+  }
 }
 } // namespace facebook::velox::exec::test

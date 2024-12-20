@@ -104,6 +104,17 @@ These stats are reported only by TableWriter operator
    * - earlyFlushedRawBytes
      - bytes
      - Number of bytes pre-maturely flushed from file writers because of memory reclaiming.
+   * - rebalanceTriggers
+     -
+     - The number of times that we triggers the rebalance of table partitions
+       for a non-bucketed partition table.
+   * - scaledPartitions
+     -
+     - The number of times that we scale a partition processing for a
+       non-bucketed partition table.
+   * - scaledWriters
+     -
+     - The number of times that we scale writers for a non-partitioned table.
 
 Spilling
 --------
@@ -179,3 +190,18 @@ These stats are reported by shuffle operators.
      - Indicates the vector serde kind used by an operator for shuffle with 1
        for Presto, 2 for CompactRow, 3 for UnsafeRow. It is reported by Exchange,
        MergeExchange and PartitionedOutput operators for now.
+
+PrefixSort
+----------
+These stats are reported by prefix sort.
+
+.. list-table::
+   :widths: 50 25 50
+   :header-rows: 1
+
+   * - Stats
+     - Unit
+     - Description
+   * - numPrefixSortKeys
+     -
+     - The number of columns sorted using prefix sort.

@@ -34,12 +34,12 @@
 #include "velox/connectors/hive/HivePartitionFunction.h"
 #include "velox/dwio/common/CacheInputStream.h"
 #include "velox/dwio/common/tests/utils/DataFiles.h"
+#include "velox/exec/Cursor.h"
 #include "velox/exec/Exchange.h"
 #include "velox/exec/OutputBufferManager.h"
 #include "velox/exec/PlanNodeStats.h"
 #include "velox/exec/TableScan.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
-#include "velox/exec/tests/utils/Cursor.h"
 #include "velox/exec/tests/utils/HiveConnectorTestBase.h"
 #include "velox/exec/tests/utils/LocalExchangeSource.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
@@ -199,8 +199,20 @@ class TableScanTest : public virtual HiveConnectorTestBase {
                   .endTableScan()
                   .planNode();
 
-    std::string partitionValueStr =
-        partitionValue.has_value() ? "'" + *partitionValue + "'" : "null";
+    std::string partitionValueStr;
+    if (partitionType->isTimestamp() && partitionValue.has_value()) {
+      auto t = util::fromTimestampString(
+                   StringView(*partitionValue),
+                   util::TimestampParseMode::kPrestoCast)
+                   .thenOrThrow(folly::identity, [&](const Status& status) {
+                     VELOX_USER_FAIL("{}", status.message());
+                   });
+      t.toGMT(Timestamp::defaultTimezone());
+      partitionValueStr = "'" + t.toString() + "'";
+    } else {
+      partitionValueStr =
+          partitionValue.has_value() ? "'" + *partitionValue + "'" : "null";
+    }
     assertQuery(
         op, split, fmt::format("SELECT {}, * FROM tmp", partitionValueStr));
 
@@ -1980,6 +1992,58 @@ TEST_F(TableScanTest, partitionedTableDateKey) {
   }
 }
 
+TEST_F(TableScanTest, partitionedTableTimestampKey) {
+  auto rowType = ROW({"c0", "c1"}, {BIGINT(), DOUBLE()});
+  auto vectors = makeVectors(10, 1'000, rowType);
+  auto filePath = TempFilePath::create();
+  writeToFile(filePath->getPath(), vectors);
+  createDuckDbTable(vectors);
+  const std::string partitionValue = "2023-10-27 00:12:35";
+  testPartitionedTable(filePath->getPath(), TIMESTAMP(), partitionValue);
+
+  // Test partition filter on TIMESTAMP column.
+  {
+    auto split = exec::test::HiveConnectorSplitBuilder(filePath->getPath())
+                     .partitionKey("pkey", partitionValue)
+                     .build();
+    auto outputType =
+        ROW({"pkey", "c0", "c1"}, {TIMESTAMP(), BIGINT(), DOUBLE()});
+    ColumnHandleMap assignments = {
+        {"pkey", partitionKey("pkey", TIMESTAMP())},
+        {"c0", regularColumn("c0", BIGINT())},
+        {"c1", regularColumn("c1", DOUBLE())}};
+
+    SubfieldFilters filters;
+    // pkey = 2023-10-27 00:12:35.
+    auto lower = util::fromTimestampString(
+                     StringView("2023-10-27 00:12:35"),
+                     util::TimestampParseMode::kPrestoCast)
+                     .value();
+    lower.toGMT(Timestamp::defaultTimezone());
+    filters[common::Subfield("pkey")] =
+        std::make_unique<common::TimestampRange>(lower, lower, false);
+
+    auto tableHandle = std::make_shared<HiveTableHandle>(
+        "test-hive", "hive_table", true, std::move(filters), nullptr, nullptr);
+    auto op = std::make_shared<TableScanNode>(
+        "0",
+        std::move(outputType),
+        std::move(tableHandle),
+        std::move(assignments));
+
+    auto t =
+        util::fromTimestampString(
+            StringView(partitionValue), util::TimestampParseMode::kPrestoCast)
+            .thenOrThrow(folly::identity, [&](const Status& status) {
+              VELOX_USER_FAIL("{}", status.message());
+            });
+    t.toGMT(Timestamp::defaultTimezone());
+    std::string partitionValueStr = "'" + t.toString() + "'";
+    assertQuery(
+        op, split, fmt::format("SELECT {}, * FROM tmp", partitionValueStr));
+  }
+}
+
 std::vector<StringView> toStringViews(const std::vector<std::string>& values) {
   std::vector<StringView> views;
   views.reserve(values.size());
@@ -2324,8 +2388,8 @@ TEST_F(TableScanTest, statsBasedSkippingNulls) {
   EXPECT_EQ(31'234, stats.rawInputRows);
   EXPECT_EQ(31'234, stats.inputRows);
   EXPECT_EQ(31'234, stats.outputRows);
-  ASSERT_EQ(getTableScanRuntimeStats(task).at("skippedSplits").sum, 0);
-  ASSERT_EQ(getTableScanRuntimeStats(task).at("skippedStrides").sum, 0);
+  ASSERT_EQ(getTableScanRuntimeStats(task).count("skippedSplits"), 0);
+  ASSERT_EQ(getTableScanRuntimeStats(task).count("skippedStrides"), 0);
 
   task = assertQuery("c0 IS NULL");
 
@@ -2334,7 +2398,7 @@ TEST_F(TableScanTest, statsBasedSkippingNulls) {
   EXPECT_EQ(0, stats.inputRows);
   EXPECT_EQ(0, stats.outputRows);
   ASSERT_EQ(getTableScanRuntimeStats(task).at("skippedSplits").sum, 1);
-  ASSERT_EQ(getTableScanRuntimeStats(task).at("skippedStrides").sum, 0);
+  ASSERT_EQ(getTableScanRuntimeStats(task).count("skippedStrides"), 0);
 
   // c1 IS NULL - first stride should be skipped based on stats
   task = assertQuery("c1 IS NULL");
@@ -2343,7 +2407,7 @@ TEST_F(TableScanTest, statsBasedSkippingNulls) {
   EXPECT_EQ(size - 10'000, stats.rawInputRows);
   EXPECT_EQ(size - 11'111, stats.inputRows);
   EXPECT_EQ(size - 11'111, stats.outputRows);
-  ASSERT_EQ(getTableScanRuntimeStats(task).at("skippedSplits").sum, 0);
+  ASSERT_EQ(getTableScanRuntimeStats(task).count("skippedSplits"), 0);
   ASSERT_EQ(getTableScanRuntimeStats(task).at("skippedStrides").sum, 1);
 
   // c1 IS NOT NULL - 3rd and 4th strides should be skipped based on stats
@@ -2353,7 +2417,7 @@ TEST_F(TableScanTest, statsBasedSkippingNulls) {
   EXPECT_EQ(20'000, stats.rawInputRows);
   EXPECT_EQ(11'111, stats.inputRows);
   EXPECT_EQ(11'111, stats.outputRows);
-  ASSERT_EQ(getTableScanRuntimeStats(task).at("skippedSplits").sum, 0);
+  ASSERT_EQ(getTableScanRuntimeStats(task).count("skippedSplits"), 0);
   ASSERT_EQ(getTableScanRuntimeStats(task).at("skippedStrides").sum, 2);
 }
 
@@ -5354,4 +5418,21 @@ TEST_F(TableScanTest, rowId) {
     });
     AssertQueryBuilder(plan).split(split).assertResults(expected);
   }
+}
+
+TEST_F(TableScanTest, footerIOCount) {
+  // We should issue only 1 IO for a split range that does not contain any
+  // stripe.
+  auto vector = makeRowVector({makeFlatVector<int64_t>(10, folly::identity)});
+  auto file = TempFilePath::create();
+  writeToFile(file->getPath(), {vector});
+  auto plan = PlanBuilder().tableScan(asRowType(vector->type())).planNode();
+  auto task =
+      AssertQueryBuilder(plan)
+          .split(makeHiveConnectorSplit(file->getPath(), 10'000, 10'000))
+          .assertResults(
+              BaseVector::create<RowVector>(vector->type(), 0, pool()));
+  auto stats = getTableScanRuntimeStats(task);
+  ASSERT_EQ(stats.at("numStorageRead").sum, 1);
+  ASSERT_GT(stats.at("footerBufferOverread").sum, 0);
 }

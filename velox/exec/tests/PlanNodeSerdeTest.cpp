@@ -43,6 +43,7 @@ class PlanNodeSerdeTest : public testing::Test,
     connector::hive::LocationHandle::registerSerDe();
     connector::hive::HiveColumnHandle::registerSerDe();
     connector::hive::HiveInsertTableHandle::registerSerDe();
+    connector::hive::registerHivePartitionFunctionSerDe();
     core::PlanNode::registerSerDe();
     core::ITypedExpr::registerSerDe();
     registerPartitionFunctionSerDe();
@@ -225,6 +226,20 @@ TEST_F(PlanNodeSerdeTest, localPartition) {
   testSerde(plan);
 
   plan = PlanBuilder().values({data_}).localPartition({"c0", "c1"}).planNode();
+  testSerde(plan);
+}
+
+TEST_F(PlanNodeSerdeTest, scaleWriterlocalPartition) {
+  auto plan = PlanBuilder()
+                  .values({data_})
+                  .scaleWriterlocalPartition(std::vector<std::string>{"c0"})
+                  .planNode();
+  testSerde(plan);
+
+  plan = PlanBuilder()
+             .values({data_})
+             .scaleWriterlocalPartitionRoundRobin()
+             .planNode();
   testSerde(plan);
 }
 

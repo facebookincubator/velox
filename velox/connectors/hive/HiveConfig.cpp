@@ -64,7 +64,7 @@ uint32_t HiveConfig::maxPartitionsPerWriters(
     const config::ConfigBase* session) const {
   return session->get<uint32_t>(
       kMaxPartitionsPerWritersSession,
-      config_->get<uint32_t>(kMaxPartitionsPerWriters, 100));
+      config_->get<uint32_t>(kMaxPartitionsPerWriters, 128));
 }
 
 bool HiveConfig::immutablePartitions() const {
@@ -124,11 +124,23 @@ bool HiveConfig::ignoreMissingFiles(const config::ConfigBase* session) const {
 }
 
 int64_t HiveConfig::maxCoalescedBytes() const {
-  return config_->get<int64_t>(kMaxCoalescedBytes, 128 << 20);
+  return config_->get<int64_t>(kMaxCoalescedBytes, 128 << 20); // 128MB
 }
 
-int32_t HiveConfig::maxCoalescedDistanceBytes() const {
-  return config_->get<int32_t>(kMaxCoalescedDistanceBytes, 512 << 10);
+int32_t HiveConfig::maxCoalescedDistanceBytes(
+    const config::ConfigBase* session) const {
+  const auto distance = config::toCapacity(
+      session->get<std::string>(
+          kMaxCoalescedDistanceSession,
+          config_->get<std::string>(kMaxCoalescedDistance, "512kB")),
+      config::CapacityUnit::BYTE);
+  VELOX_USER_CHECK_LE(
+      distance,
+      std::numeric_limits<int32_t>::max(),
+      "The max merge distance to combine read requests must be less than 2GB."
+      " Got {} bytes.",
+      distance);
+  return int32_t(distance);
 }
 
 int32_t HiveConfig::prefetchRowGroups() const {
@@ -254,7 +266,7 @@ uint64_t HiveConfig::sortWriterFinishTimeSliceLimitMs(
 }
 
 uint64_t HiveConfig::footerEstimatedSize() const {
-  return config_->get<uint64_t>(kFooterEstimatedSize, 1UL << 20);
+  return config_->get<uint64_t>(kFooterEstimatedSize, 256UL << 10);
 }
 
 uint64_t HiveConfig::filePreloadThreshold() const {

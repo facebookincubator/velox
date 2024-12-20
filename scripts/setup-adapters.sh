@@ -127,6 +127,11 @@ function install_azure-storage-sdk-cpp {
     cd $azure_core_dir
     cmake_install -DCMAKE_BUILD_TYPE=${CMAKE_BUILD_TYPE} -DBUILD_SHARED_LIBS=OFF
   )
+  # install azure-identity
+  (
+    cd sdk/identity/azure-identity
+    cmake_install -DCMAKE_BUILD_TYPE=${CMAKE_BUILD_TYPE} -DBUILD_SHARED_LIBS=OFF
+  )
   # install azure-storage-common
   (
     cd sdk/storage/azure-storage-common
@@ -146,16 +151,7 @@ function install_azure-storage-sdk-cpp {
 }
 
 function install_hdfs_deps {
-  github_checkout apache/hawq master
-  libhdfs3_dir=hawq/depends/libhdfs3
-  if [[ "$OSTYPE" == darwin* ]]; then
-     sed -i '' -e "/FIND_PACKAGE(GoogleTest REQUIRED)/d" $DEPENDENCY_DIR/$libhdfs3_dir/CMakeLists.txt
-     sed -i '' -e "s/dumpversion/dumpfullversion/" $DEPENDENCY_DIR/$libhdfs3_dir/CMakeLists.txt
-  fi
-
   if [[ "$OSTYPE" == linux-gnu* ]]; then
-    sed -i "/FIND_PACKAGE(GoogleTest REQUIRED)/d" $DEPENDENCY_DIR/$libhdfs3_dir/CMakeLists.txt
-    sed -i "s/dumpversion/dumpfullversion/" $DEPENDENCY_DIR/$libhdfs3_dir/CMake/Platform.cmake
     # Dependencies for Hadoop testing
     wget_and_untar https://archive.apache.org/dist/hadoop/common/hadoop-3.3.0/hadoop-3.3.0.tar.gz hadoop
     cp -a ${DEPENDENCY_DIR}/hadoop /usr/local/
@@ -168,7 +164,6 @@ function install_hdfs_deps {
       yum install -y java-1.8.0-openjdk-devel
     fi
   fi
-  cmake_install_dir $libhdfs3_dir
 }
 
 (mkdir -p "${DEPENDENCY_DIR}") || exit

@@ -558,7 +558,8 @@ void configureReaderOptions(
   auto sessionProperties = connectorQueryCtx->sessionProperties();
   readerOptions.setLoadQuantum(hiveConfig->loadQuantum());
   readerOptions.setMaxCoalesceBytes(hiveConfig->maxCoalescedBytes());
-  readerOptions.setMaxCoalesceDistance(hiveConfig->maxCoalescedDistanceBytes());
+  readerOptions.setMaxCoalesceDistance(
+      hiveConfig->maxCoalescedDistanceBytes(sessionProperties));
   readerOptions.setFileColumnNamesReadAsLowerCase(
       hiveConfig->isFileColumnNamesReadAsLowerCase(sessionProperties));
   bool useColumnNamesForColumnMapping = false;
@@ -663,6 +664,13 @@ bool applyPartitionFilter(
     }
     case TypeKind::BOOLEAN: {
       return applyFilter(*filter, folly::to<bool>(partitionValue));
+    }
+    case TypeKind::TIMESTAMP: {
+      auto result = util::fromTimestampString(
+          StringView(partitionValue), util::TimestampParseMode::kPrestoCast);
+      VELOX_CHECK(!result.hasError());
+      result.value().toGMT(Timestamp::defaultTimezone());
+      return applyFilter(*filter, result.value());
     }
     case TypeKind::VARCHAR: {
       return applyFilter(*filter, partitionValue);
@@ -898,16 +906,15 @@ core::TypedExprPtr extractFiltersFromRemainingFilter(
 namespace {
 
 #ifdef VELOX_ENABLE_PARQUET
-std::optional<TimestampUnit> getTimestampUnit(
+std::optional<TimestampPrecision> getTimestampUnit(
     const config::ConfigBase& config,
     const char* configKey) {
   if (const auto unit = config.get<uint8_t>(configKey)) {
     VELOX_CHECK(
-        unit == 0 /*second*/ || unit == 3 /*milli*/ || unit == 6 /*micro*/ ||
-            unit == 9 /*nano*/,
+        unit == 3 /*milli*/ || unit == 6 /*micro*/ || unit == 9 /*nano*/,
         "Invalid timestamp unit: {}",
         unit.value());
-    return std::optional(static_cast<TimestampUnit>(unit.value()));
+    return std::optional(static_cast<TimestampPrecision>(unit.value()));
   }
   return std::nullopt;
 }
