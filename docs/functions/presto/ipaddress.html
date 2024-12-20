@@ -1,0 +1,101 @@
+<!DOCTYPE html>
+
+<html lang="en" data-content_root="../../">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="viewport" content="width=device-width, initial-scale=1" />
+
+    <title>IP Functions &#8212; Velox  documentation</title>
+    <link rel="stylesheet" type="text/css" href="../../_static/pygments.css?v=a746c00c" />
+    <link rel="stylesheet" type="text/css" href="../../_static/nature.css?v=279e0f84" />
+    <script src="../../_static/documentation_options.js?v=5929fcd5"></script>
+    <script src="../../_static/doctools.js?v=9bcbadda"></script>
+    <script src="../../_static/sphinx_highlight.js?v=dc90522c"></script>
+    <link rel="index" title="Index" href="../../genindex.html" />
+    <link rel="search" title="Search" href="../../search.html" /> 
+  </head><body>
+    <div class="related" role="navigation" aria-label="Related">
+      <h3>Navigation</h3>
+      <ul>
+        <li class="right" style="margin-right: 10px">
+          <a href="../../genindex.html" title="General Index"
+             accesskey="I">index</a></li>
+        <li class="nav-item nav-item-0"><a href="../../index.html">Velox  documentation</a> &#187;</li>
+        <li class="nav-item nav-item-this"><a href="">IP Functions</a></li> 
+      </ul>
+    </div>  
+
+    <div class="document">
+      <div class="documentwrapper">
+        <div class="bodywrapper">
+          <div class="body" role="main">
+            
+  <section id="ip-functions">
+<h1>IP Functions<a class="headerlink" href="#ip-functions" title="Link to this heading">¶</a></h1>
+<dl class="py function">
+<dt class="sig sig-object py" id="ip_prefix">
+<span class="sig-name descname"><span class="pre">ip_prefix</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">ip_address</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">prefix_bits</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">ipprefix</span></span></span><a class="headerlink" href="#ip_prefix" title="Link to this definition">¶</a></dt>
+<dd><p>Returns the IP prefix of a given <code class="docutils literal notranslate"><span class="pre">ip_address</span></code> with subnet size of <code class="docutils literal notranslate"><span class="pre">prefix_bits</span></code>.
+<code class="docutils literal notranslate"><span class="pre">ip_address</span></code> can be either of type <code class="docutils literal notranslate"><span class="pre">VARCHAR</span></code> or type <code class="docutils literal notranslate"><span class="pre">IPADDRESS</span></code>.</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">ip_prefix</span><span class="p">(</span><span class="n">CAST</span><span class="p">(</span><span class="s1">&#39;192.168.255.255&#39;</span> <span class="n">AS</span> <span class="n">IPADDRESS</span><span class="p">),</span> <span class="mi">9</span><span class="p">);</span> <span class="o">--</span> <span class="p">{</span><span class="mf">192.128.0.0</span><span class="o">/</span><span class="mi">9</span><span class="p">}</span>
+<span class="n">SELECT</span> <span class="n">ip_prefix</span><span class="p">(</span><span class="s1">&#39;2001:0db8:85a3:0001:0001:8a2e:0370:7334&#39;</span><span class="p">,</span> <span class="mi">48</span><span class="p">);</span> <span class="o">--</span> <span class="p">{</span><span class="mi">2001</span><span class="p">:</span><span class="n">db8</span><span class="p">:</span><span class="mi">85</span><span class="n">a3</span><span class="p">::</span><span class="o">/</span><span class="mi">48</span><span class="p">}</span>
+</pre></div>
+</div>
+</dd></dl>
+
+</section>
+
+
+            <div class="clearer"></div>
+          </div>
+        </div>
+      </div>
+      <div class="sphinxsidebar" role="navigation" aria-label="Main">
+        <div class="sphinxsidebarwrapper">
+  <div>
+    <h3><a href="../../index.html">Table of Contents</a></h3>
+    <ul>
+<li><a class="reference internal" href="#">IP Functions</a><ul>
+<li><a class="reference internal" href="#ip_prefix"><code class="docutils literal notranslate"><span class="pre">ip_prefix()</span></code></a></li>
+</ul>
+</li>
+</ul>
+
+  </div>
+  <div role="note" aria-label="source link">
+    <h3>This Page</h3>
+    <ul class="this-page-menu">
+      <li><a href="../../_sources/functions/presto/ipaddress.rst.txt"
+            rel="nofollow">Show Source</a></li>
+    </ul>
+   </div>
+<search id="searchbox" style="display: none" role="search">
+  <h3 id="searchlabel">Quick search</h3>
+    <div class="searchformwrapper">
+    <form class="search" action="../../search.html" method="get">
+      <input type="text" name="q" aria-labelledby="searchlabel" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false"/>
+      <input type="submit" value="Go" />
+    </form>
+    </div>
+</search>
+<script>document.getElementById('searchbox').style.display = "block"</script>
+        </div>
+      </div>
+      <div class="clearer"></div>
+    </div>
+    <div class="related" role="navigation" aria-label="Related">
+      <h3>Navigation</h3>
+      <ul>
+        <li class="right" style="margin-right: 10px">
+          <a href="../../genindex.html" title="General Index"
+             >index</a></li>
+        <li class="nav-item nav-item-0"><a href="../../index.html">Velox  documentation</a> &#187;</li>
+        <li class="nav-item nav-item-this"><a href="">IP Functions</a></li> 
+      </ul>
+    </div>
+    <div class="footer" role="contentinfo">
+    &#169; Copyright TBD.
+      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 8.1.3.
+    </div>
+  </body>
+</html>
