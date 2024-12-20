@@ -43,6 +43,13 @@ class UnsafeRowFast {
   /// 'buffer' must have sufficient capacity and set to all zeros.
   int32_t serialize(vector_size_t index, char* buffer) const;
 
+  /// Deserializes multiple rows into a RowVector of specified type. The type
+  /// must match the contents of the serialized rows.
+  static RowVectorPtr deserialize(
+      const std::vector<std::string_view>& data,
+      const RowTypePtr& rowType,
+      memory::MemoryPool* pool);
+
  protected:
   explicit UnsafeRowFast(const VectorPtr& vector);
 
