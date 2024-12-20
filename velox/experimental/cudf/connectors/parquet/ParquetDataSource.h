@@ -53,7 +53,7 @@ class ParquetDataSource : public DataSource {
   }
 
   std::optional<RowVectorPtr> next(
-      uint64_t /* size */,
+      uint64_t size,
       velox::ContinueFuture& /* future */) override;
 
   uint64_t getCompletedRows() override {
@@ -70,10 +70,14 @@ class ParquetDataSource : public DataSource {
   }
 
  private:
+  // Create a cudf::io::chunked_parquet_reader with the given split.
   std::unique_ptr<cudf::io::chunked_parquet_reader> createSplitReader();
-  // Clear split_ after split has been fully processed.  Keep readers around to
-  // hold adaptation.
+  // Clear split_ and splitReader after split has been fully processed.  Keep
+  // readers around to hold adaptation.
   void resetSplit();
+  // Clear cudfTable_ and currentCudfTableView_ once we have successfully
+  // converted it to `RowVectorPtr` and returned.
+  void resetCudfTableAndView();
   const RowVectorPtr& getEmptyOutput() {
     if (!emptyOutput_) {
       emptyOutput_ = RowVector::createEmpty(outputType_, pool_);
@@ -95,6 +99,13 @@ class ParquetDataSource : public DataSource {
   // cuDF Parquet reader stuff.
   cudf::io::parquet_reader_options readerOptions_;
   std::unique_ptr<cudf::io::chunked_parquet_reader> splitReader_;
+
+  // cuDF Table not fully converted and returned to `RowVectorPtr` in the last
+  // `next()` call.
+  std::unique_ptr<cudf::table> cudfTable_;
+  // View of the currently available portion of the `cudfTable_` to be
+  // converted to `RowVectorPtr` in subsequent `next()` call.
+  cudf::table_view currentCudfTableView_;
 
   // Output type from file reader.  This is different from outputType_ that it
   // contains column names before assignment, and columns that only used in
