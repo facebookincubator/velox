@@ -48,17 +48,17 @@ class MultiFragmentTest : public HiveConnectorTestBase,
   static std::vector<TestParam> getTestParams() {
     std::vector<TestParam> params;
     params.emplace_back(
-        VectorSerde::Kind::kPresto, common::CompressionKind_NONE);
+        TestParam{VectorSerde::Kind::kPresto, common::CompressionKind_NONE});
+    params.emplace_back(TestParam{
+        VectorSerde::Kind::kCompactRow, common::CompressionKind_NONE});
     params.emplace_back(
-        VectorSerde::Kind::kCompactRow, common::CompressionKind_NONE);
+        TestParam{VectorSerde::Kind::kUnsafeRow, common::CompressionKind_NONE});
     params.emplace_back(
-        VectorSerde::Kind::kUnsafeRow, common::CompressionKind_NONE);
+        TestParam{VectorSerde::Kind::kPresto, common::CompressionKind_LZ4});
     params.emplace_back(
-        VectorSerde::Kind::kPresto, common::CompressionKind_LZ4);
+        TestParam{VectorSerde::Kind::kCompactRow, common::CompressionKind_LZ4});
     params.emplace_back(
-        VectorSerde::Kind::kCompactRow, common::CompressionKind_LZ4);
-    params.emplace_back(
-        VectorSerde::Kind::kUnsafeRow, common::CompressionKind_LZ4);
+        TestParam{VectorSerde::Kind::kUnsafeRow, common::CompressionKind_LZ4});
     return params;
   }
 
