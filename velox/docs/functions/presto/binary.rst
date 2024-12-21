@@ -33,6 +33,29 @@ Binary Functions
 
     Decodes ``string`` data from the base64 encoded representation using the `URL safe alphabet <https://www.rfc-editor.org/rfc/rfc4648#section-5>`_ into a varbinary.
 
+.. function:: from_base64(string) -> varbinary
+
+    Decodes a Base64-encoded ``string`` back into its original binary form.
+    This function can handle both padded and non-padded Base64 encoded strings. 
+    Partially padded Base64 strings will result in a "UserError" status being returned.
+
+    Examples
+    --------
+    Query with padded Base64 string:
+    ::
+        SELECT from_base64('SGVsbG8gV29ybGQ='); -- [72, 101, 108, 108, 111, 32, 87, 111, 114, 108, 100]
+
+    Query with non-padded Base64 string:
+    ::
+        SELECT from_base64('SGVsbG8gV29ybGQ'); -- [72, 101, 108, 108, 111, 32, 87, 111, 114, 108, 100]
+
+    Query with partially padded Base64 string:
+    ::
+        SELECT from_base64('SGVsbG8gV29ybGQgZm9yIHZlbG94IQ='); -- Error: Base64::decode() - invalid input string: length is not a multiple of 4.
+
+    In the examples above, both fully padded and non-padded Base64 strings ('SGVsbG8gV29ybGQ=' and 'SGVsbG8gV29ybGQ') decode to the binary representation of the text 'Hello World'.
+    The partially padded Base64 string 'SGVsbG8gV29ybGQgZm9yIHZlbG94IQ=' will result in a "UserError" status indicating the Base64 string is invalid.
+
 .. function:: from_big_endian_32(varbinary) -> integer
 
     Decodes ``integer`` value from a 32-bit 2’s complement big endian ``binary``.
@@ -123,6 +146,24 @@ Binary Functions
 
     Encodes ``binary`` into a base64 string representation.
 
+.. function:: to_base32(varbinary) -> string
+
+      Encodes a binary ``varbinary`` value into its Base32 string representation.
+      This function generates padded Base32 strings by default. 
+
+      Examples
+      --------
+      Query to encode a binary value to a padded Base32 string:
+      ::
+         SELECT to_base32(ARRAY[72, 101, 108, 108, 111, 32, 87, 111, 114, 108, 100]); -- 'JBSWY3DPEBLW64TMMQ======'
+
+      Query to encode a binary value with fewer bytes:
+      ::
+         SELECT to_base32(ARRAY[104, 101, 108, 108, 111]); -- 'NBSWY3DP'
+
+      In the above examples, the binary array `[72, 101, 108, 108, 111, 32, 87, 111, 114, 108, 100]` is encoded to the padded Base32 string 'JBSWY3DPEBLW64TMMQ======'.
+      The binary array `[104, 101, 108, 108, 111]` is encoded to 'NBSWY3DP'.
+
 .. function:: to_base64url(binary) -> varchar
 
     Encodes ``binary`` into a base64 string representation using the `URL safe alphabet <https://www.rfc-editor.org/rfc/rfc4648#section-5>`_.
@@ -134,6 +175,24 @@ Binary Functions
  .. function:: to_big_endian_64(bigint) -> varbinary
 
      Encodes ``bigint`` in a 64-bit 2’s complement big endian format.
+
+.. function:: to_base32(varbinary) -> string
+
+     Encodes a binary ``varbinary`` value into its Base32 string representation.
+     This function generates padded Base32 strings by default. 
+
+     Examples
+     --------
+     Query to encode a binary value to a padded Base32 string:
+     ::
+        SELECT to_base32(ARRAY[72, 101, 108, 108, 111, 32, 87, 111, 114, 108, 100]); -- 'JBSWY3DPEBLW64TMMQ======'
+
+     Query to encode a binary value with fewer bytes:
+     ::
+        SELECT to_base32(ARRAY[104, 101, 108, 108, 111]); -- 'NBSWY3DP'
+
+     In the above examples, the binary array `[72, 101, 108, 108, 111, 32, 87, 111, 114, 108, 100]` is encoded to the padded Base32 string 'JBSWY3DPEBLW64TMMQ======'.
+     The binary array `[104, 101, 108, 108, 111]` is encoded to 'NBSWY3DP'.
 
 .. function:: to_hex(binary) -> varchar
 
