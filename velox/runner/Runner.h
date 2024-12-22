@@ -18,7 +18,6 @@
 #include "velox/connectors/Connector.h"
 #include "velox/exec/Cursor.h"
 #include "velox/exec/Exchange.h"
-#include "velox/runner/LocalSchema.h"
 #include "velox/runner/MultiFragmentPlan.h"
 
 /// Base classes for multifragment Velox query execution.
@@ -28,10 +27,18 @@ namespace facebook::velox::runner {
 /// scan.
 class SplitSource {
  public:
+  /// Result of getSplits. Each split belongs to a group. A nullptr split for
+  /// group n means that there are on more splits for the group. In ungrouped
+  /// execution, the group is always 0.
+  struct SplitAndGroup {
+    std::shared_ptr<connector::ConnectorSplit> split;
+    int32_t group;
+  };
+
   virtual ~SplitSource() = default;
-  /// Returns a split for 'worker'. This may implement soft affinity or strict
-  /// bucket to worker mapping.
-  virtual exec::Split next(int32_t worker) = 0;
+
+  /// Returns a set of splits that cover up to 'targetBytes' of data.
+  virtual std::vector<SplitAndGroup> getSplits(uint64_t targetBytes) = 0;
 };
 
 /// A factory for getting a SplitSource for each TableScan. The splits produced
@@ -43,7 +50,7 @@ class SplitSourceFactory {
   /// Returns a splitSource for one TableScan across all Tasks of
   /// the fragment. The source will be invoked to produce splits for
   /// each individual worker running the scan.
-  virtual std::unique_ptr<SplitSource> splitSourceForScan(
+  virtual std::shared_ptr<SplitSource> splitSourceForScan(
       const core::TableScanNode& scan) = 0;
 };
 

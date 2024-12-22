@@ -43,6 +43,11 @@ class HiveConnector : public Connector {
     return true;
   }
 
+  ConnectorMetadata* metadata() const override {
+    VELOX_CHECK_NOT_NULL(metadata_);
+    return metadata_.get();
+  }
+
   std::unique_ptr<DataSource> createDataSource(
       const RowTypePtr& outputType,
       const std::shared_ptr<ConnectorTableHandle>& tableHandle,
@@ -79,6 +84,7 @@ class HiveConnector : public Connector {
   const std::shared_ptr<HiveConfig> hiveConfig_;
   FileHandleFactory fileHandleFactory_;
   folly::Executor* executor_;
+  std::shared_ptr<ConnectorMetadata> metadata_;
 };
 
 class HiveConnectorFactory : public ConnectorFactory {
@@ -149,5 +155,19 @@ class HivePartitionFunctionSpec : public core::PartitionFunctionSpec {
 };
 
 void registerHivePartitionFunctionSerDe();
+
+class HiveConnectorMetadataFactory {
+ public:
+  virtual ~HiveConnectorMetadataFactory() = default;
+  virtual std::shared_ptr<ConnectorMetadata> create(
+      HiveConnector* connector) = 0;
+  virtual void initialize(ConnectorMetadata* metadata) = 0;
+};
+
+std::vector<std::unique_ptr<HiveConnectorMetadataFactory>>&
+hiveConnectorMetadataFactories();
+
+bool registerHiveConnectorMetadataFactory(
+    std::unique_ptr<HiveConnectorMetadataFactory>);
 
 } // namespace facebook::velox::connector::hive
