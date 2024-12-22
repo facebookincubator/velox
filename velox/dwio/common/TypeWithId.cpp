@@ -64,8 +64,8 @@ namespace {
 
 int countNodes(const TypePtr& type) {
   int count = 1;
-  for (auto& child : *type) {
-    count += countNodes(child);
+  for (uint32_t end = type->size(), i = 0; i < end; ++i) {
+    count += countNodes(type->childAt(i));
   }
   return count;
 }
@@ -89,15 +89,6 @@ std::unique_ptr<TypeWithId> TypeWithId::create(
       type, std::move(children), 0, next - 1, 0);
 }
 
-uint32_t TypeWithId::size() const {
-  return children_.size();
-}
-
-const std::shared_ptr<const TypeWithId>& TypeWithId::childAt(
-    uint32_t idx) const {
-  return children_.at(idx);
-}
-
 std::unique_ptr<TypeWithId> TypeWithId::create(
     const std::shared_ptr<const Type>& type,
     uint32_t& next,
@@ -107,9 +98,9 @@ std::unique_ptr<TypeWithId> TypeWithId::create(
   std::vector<std::unique_ptr<TypeWithId>> children;
   children.reserve(type->size());
   auto offset = 0;
-  for (const auto& child : *type) {
+  for (uint32_t end = type->size(), i = 0; i < end; ++i) {
     children.emplace_back(create(
-        child,
+        type->childAt(i),
         next,
         (myId == 0 && type->kind() == TypeKind::ROW) ? offset++ : column));
   }
