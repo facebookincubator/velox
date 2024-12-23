@@ -93,6 +93,13 @@ void StatisticsBuilder::merge(
     // Merge size
     mergeCount(size_, other.getSize());
   }
+  if (hll_) {
+    if (auto* otherBuilder = dynamic_cast<const StatisticsBuilder*>(&other)) {
+      if (otherBuilder->hll_) {
+        hll_->mergeWith(*otherBuilder->hll_);
+      }
+    }
+  }
 }
 
 void StatisticsBuilder::toProto(proto::ColumnStatistics& stats) const {
@@ -115,8 +122,12 @@ std::unique_ptr<dwio::common::ColumnStatistics> StatisticsBuilder::build()
   proto::ColumnStatistics stats;
   toProto(stats);
   StatsContext context{WriterVersion_CURRENT};
-  return buildColumnStatisticsFromProto(
-      ColumnStatisticsWrapper(&stats), context);
+  auto result =
+      buildColumnStatisticsFromProto(ColumnStatisticsWrapper(&stats), context);
+  if (hll_) {
+    result->setNumDistinct(hll_->cardinality());
+  }
+  return result;
 }
 
 std::unique_ptr<StatisticsBuilder> StatisticsBuilder::create(
