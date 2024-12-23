@@ -84,13 +84,13 @@ class PrefixSortEncoder {
 #define SCALAR_CASE(kind) \
   case TypeKind::kind:    \
     return nullByteSize + sizeof(TypeTraits<TypeKind::kind>::NativeType);
-    SCALAR_CASE(SMALLINT)
-    SCALAR_CASE(INTEGER)
-    SCALAR_CASE(BIGINT)
-    SCALAR_CASE(HUGEINT)
-    SCALAR_CASE(REAL)
-    SCALAR_CASE(DOUBLE)
-    SCALAR_CASE(TIMESTAMP)
+      SCALAR_CASE(SMALLINT)
+      SCALAR_CASE(INTEGER)
+      SCALAR_CASE(BIGINT)
+      SCALAR_CASE(HUGEINT)
+      SCALAR_CASE(REAL)
+      SCALAR_CASE(DOUBLE)
+      SCALAR_CASE(TIMESTAMP)
 #undef SCALAR_CASE
       case TypeKind::VARBINARY:
         [[fallthrough]];
