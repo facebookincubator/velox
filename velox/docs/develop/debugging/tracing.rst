@@ -216,7 +216,7 @@ and produces a list of `exec::Split` for the query replay.
 Trace Scan
 ^^^^^^^^^^
 
-As outlined in the **How Tracing Works** section, replaying a non-leaf operator requires a
+As outlined in the **How Tracing Tool Works** section, replaying a non-leaf operator requires a
 specialized source operator. This operator is responsible for reading data records during the
 tracing phase and integrating with Velox’s `LocalPlanner` with a customized plan node and
 operator translator.
@@ -269,12 +269,12 @@ The query trace replayer is typically used in the local environment and works as
       - Add the replay plan node to the replay plan as the source node.
       - Get all the traced splits using `OperatorInputSplitReader`.
       - Use the splits as inputs for task replaying.
-5. For a non-leaf operator, add a `QueryTraceScanNode` as the source node to the replay plan and
+5. For a non-leaf operator, add a `TraceScanNode` as the source node to the replay plan and
    then add the replay plan node.
 6. Use `exec::test::AssertQueryBuilder` to add the sink node, apply the query
    configurations (disable tracing), and connector properties, and execute the replay plan.
 
-The `OperatorReplayBase` provides the core functionality required for replaying an operator.
+The `OperatorReplayerBase` provides the core functionality required for replaying an operator.
 It handles the retrieval of metadata, creation of the replay plan, and execution of the plan.
 Concrete operator replayers, such as `HashJoinReplayer` and `AggregationReplayer`, extend this
 base class and override the `createPlanNode` method to create the specific plan node.
@@ -360,9 +360,9 @@ Here is a full list of supported command line arguments.
 * ``--summary``: Show the summary of the tracing including number of tasks and task ids.
   It also print the query metadata including query configs, connectors properties, and query plan in JSON format.
 * ``--query_id``: Specify the target query ID, it must be set.
-* ``--task_id``: Specify the target task ID, it must be set.
+* ``--task_id``: Specify the target task ID, if empty, show the summary of all the traced query task.
 * ``--node_id``: Specify the target node ID, it must be set.
-* ``--driver_ids``: Specify the target driver IDs to replay.
+* ``--driver_ids``: A comma-separated list of target driver ids.
 * ``--shuffle_serialization_format``: Specify the shuffle serialization format.
 * ``--table_writer_output_dir``: Specify the output directory of TableWriter.
 * ``--hiveConnectorExecutorHwMultiplier``: Hardware multiplier for hive connector.

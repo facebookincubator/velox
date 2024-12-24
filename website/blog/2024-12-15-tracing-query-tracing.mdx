@@ -142,7 +142,7 @@ and a plan fragment.
 4. If the target plan node is a `TableScanNode`, add the replay plan node to the replay plan
    as the source node. Get all the traced splits using `OperatorInputSplitReader`.
    Use the splits as inputs for task replaying.
-5. For a non-leaf operator, add a `QueryTraceScanNode` as the source node to the replay plan and
+5. For a non-leaf operator, add a `TraceScanNode` as the source node to the replay plan and
    then add the replay plan node.
 6. Add a sink node, apply the query configurations (disable tracing), and connector properties,
    and execute the replay plan.
