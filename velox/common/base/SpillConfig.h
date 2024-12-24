@@ -53,6 +53,7 @@ struct SpillConfig {
       uint64_t _maxFileSize,
       uint64_t _writeBufferSize,
       uint64_t _readBufferSize,
+      bool _mergePrefixComparatorEnabled,
       folly::Executor* _executor,
       int32_t _minSpillableReservationPct,
       int32_t _spillableReservationGrowthPct,
@@ -104,6 +105,12 @@ struct SpillConfig {
   /// filesystem supports async read, we do read-ahead with double buffering,
   /// which doubles the buffer used to read from each spill file.
   uint64_t readBufferSize;
+
+  /// Enable the prefix comparator for the spill merge ordered reader. The more
+  /// the number of sort keys, the faster the prefix comparator. But it requires
+  /// the memory to build normalized prefix keys, which might have potential
+  /// risk of running out of server memory.
+  bool mergePrefixComparatorEnabled;
 
   /// Executor for spilling. If nullptr spilling writes on the Driver's thread.
   folly::Executor* executor; // Not owned.

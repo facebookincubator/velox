@@ -421,8 +421,8 @@ class SpillTest : public ::testing::TestWithParam<uint32_t>,
       ASSERT_EQ(state_->numFinishedFiles(partition), 0);
       auto spillPartition =
           SpillPartition(SpillPartitionId{0, partition}, std::move(spillFiles));
-      auto merge =
-          spillPartition.createOrderedReader(1 << 20, pool(), &spillStats_);
+      auto merge = spillPartition.createOrderedReader(
+          1 << 20, true, pool(), &spillStats_);
       int numReadBatches = 0;
       // We expect all the rows in dense increasing order.
       for (auto i = 0; i < numBatches * numRowsPerBatch; ++i) {
@@ -576,10 +576,10 @@ TEST_P(SpillTest, spillTimestamp) {
 
   SpillPartition spillPartition(SpillPartitionId{0, 0}, state.finish(0));
   auto merge =
-      spillPartition.createOrderedReader(1 << 20, pool(), &spillStats_);
+      spillPartition.createOrderedReader(1 << 20, true, pool(), &spillStats_);
   ASSERT_TRUE(merge != nullptr);
   ASSERT_TRUE(
-      spillPartition.createOrderedReader(1 << 20, pool(), &spillStats_) ==
+      spillPartition.createOrderedReader(1 << 20, true, pool(), &spillStats_) ==
       nullptr);
   for (auto i = 0; i < timeValues.size(); ++i) {
     auto* stream = merge->next();
@@ -934,6 +934,87 @@ TEST(SpillTest, scopedSpillInjectionRegex) {
     ASSERT_TRUE(testingTriggerSpill("op.1.0.0.TableWrite-hive-xyz"));
     ASSERT_TRUE(testingTriggerSpill("op.1.0.0.Aggregation"));
     ASSERT_TRUE(testingTriggerSpill());
+  }
+}
+
+TEST_P(SpillTest, multipleSortKeys) {
+  auto tempDirectory = exec::test::TempDirectoryPath::create();
+  std::vector<CompareFlags> emptyCompareFlags;
+  const std::string spillPath = tempDirectory->getPath() + "/test";
+  std::vector<Timestamp> timeValues = {Timestamp{0, 0}, Timestamp{12, 0}};
+  std::vector<int64_t> intValues = {1, 2};
+  const std::optional<common::PrefixSortConfig> prefixSortConfig =
+      enablePrefixSort_
+      ? std::optional<common::PrefixSortConfig>(common::PrefixSortConfig())
+      : std::nullopt;
+  struct {
+    bool mergePrefixComparatorEnabled;
+    int numSortKey;
+
+    std::string debugString() const {
+      return fmt::format(
+          "mergePrefixComparatorEnabled: {}, numSortKey: {}",
+          mergePrefixComparatorEnabled,
+          numSortKey);
+    }
+
+  } testSettings[] = {{false, 1}, {true, 2}, {true, 1}, {false, 2}, {true, 3}};
+
+  for (const auto& testData : testSettings) {
+    SCOPED_TRACE(testData.debugString());
+    SpillState state(
+        [&]() -> const std::string& { return tempDirectory->getPath(); },
+        updateSpilledBytesCb_,
+        "test",
+        1,
+        testData.numSortKey,
+        emptyCompareFlags,
+        1024,
+        0,
+        compressionKind_,
+        prefixSortConfig,
+        pool(),
+        &spillStats_);
+    int partitionIndex = 0;
+    state.setPartitionSpilled(partitionIndex);
+    ASSERT_TRUE(state.isPartitionSpilled(partitionIndex));
+    ASSERT_FALSE(
+        state.testingNonEmptySpilledPartitionSet().contains(partitionIndex));
+    std::vector<VectorPtr> vectors = {
+        makeFlatVector<Timestamp>(timeValues),
+        makeFlatVector<int64_t>(intValues)};
+    // The last sort key is not supported in prefix comparator.
+    if (testData.numSortKey == 3) {
+      vectors.push_back(makeArrayVector<int32_t>({{1, 2, 3}, {3, 4, 5}}));
+    }
+    state.appendToPartition(partitionIndex, makeRowVector({vectors}));
+    state.appendToPartition(partitionIndex, makeRowVector({vectors}));
+    state.finishFile(partitionIndex);
+    EXPECT_TRUE(
+        state.testingNonEmptySpilledPartitionSet().contains(partitionIndex));
+
+    SpillPartition spillPartition(SpillPartitionId{0, 0}, state.finish(0));
+    auto merge = spillPartition.createOrderedReader(
+        1 << 20, testData.mergePrefixComparatorEnabled, pool(), &spillStats_);
+    ASSERT_TRUE(merge != nullptr);
+
+    const auto testMerge = [&] {
+      for (auto i = 0; i < timeValues.size(); ++i) {
+        auto* stream = merge->next();
+        ASSERT_NE(stream, nullptr);
+        ASSERT_EQ(
+            timeValues[i],
+            stream->decoded(0).valueAt<Timestamp>(stream->currentIndex()));
+
+        ASSERT_EQ(
+            intValues[i],
+            stream->decoded(1).valueAt<int64_t>(stream->currentIndex()));
+        stream->pop();
+      }
+    };
+    testMerge();
+    testMerge();
+    ASSERT_EQ(nullptr, merge->next());
   }
 }
 

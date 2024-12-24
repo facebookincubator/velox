@@ -24,6 +24,7 @@
 #include "velox/common/compression/Compression.h"
 #include "velox/common/file/File.h"
 #include "velox/common/file/FileSystems.h"
+#include "velox/exec/PrefixSort.h"
 #include "velox/exec/SpillFile.h"
 #include "velox/exec/TreeOfLosers.h"
 #include "velox/exec/UnorderedStreamReader.h"
@@ -86,12 +87,17 @@ class SpillMergeStream : public MergeStream {
 
   virtual void close();
 
+  virtual void buildPrefixBuffer() {};
+
   // loads the next 'rowVector' and sets 'decoded_' if this is initialized.
   void setNextBatch() {
     nextBatch();
     if (!decoded_.empty()) {
       ensureRows();
-      for (auto i = 0; i < decoded_.size(); ++i) {
+      // Prefix comparator has decoded some columns in `buildPrefixBuffer`
+      const auto start =
+          prefixComparatorEnabled_ ? sortLayout_.numNormalizedKeys : 0;
+      for (auto i = start; i < decoded_.size(); ++i) {
         decoded_[i].decode(*rowVector_->childAt(i), rows_);
       }
     }
@@ -133,15 +139,32 @@ class SpillMergeStream : public MergeStream {
 
   // Covers all rows inn 'rowVector_' Set if 'decoded_' is non-empty.
   SelectivityVector rows_;
+
+  bool prefixComparatorEnabled_{false};
+  PrefixSortLayout sortLayout_;
+  BufferPtr prefixBuffer_;
+  char* rawPrefixBuffer_;
+
+ private:
+  FOLLY_ALWAYS_INLINE int compareAllNormalizedKeys(char* left, char* right)
+      const;
+
+  int comparePartNormalizedKeys(
+      char* left,
+      char* right,
+      const SpillMergeStream& other) const;
 };
 
 // A source of spilled RowVectors coming from a file.
 class FileSpillMergeStream : public SpillMergeStream {
  public:
   static std::unique_ptr<SpillMergeStream> create(
-      std::unique_ptr<SpillReadFile> spillFile) {
-    auto spillStream = std::unique_ptr<SpillMergeStream>(
-        new FileSpillMergeStream(std::move(spillFile)));
+      std::unique_ptr<SpillReadFile> spillFile,
+      bool prefixComparatorEnabled,
+      memory::MemoryPool* pool) {
+    auto spillStream =
+        std::unique_ptr<SpillMergeStream>(new FileSpillMergeStream(
+            std::move(spillFile), prefixComparatorEnabled, pool));
     static_cast<FileSpillMergeStream*>(spillStream.get())->nextBatch();
     return spillStream;
   }
@@ -149,10 +172,10 @@ class FileSpillMergeStream : public SpillMergeStream {
   uint32_t id() const override;
 
  private:
-  explicit FileSpillMergeStream(std::unique_ptr<SpillReadFile> spillFile)
-      : spillFile_(std::move(spillFile)) {
-    VELOX_CHECK_NOT_NULL(spillFile_);
-  }
+  FileSpillMergeStream(
+      std::unique_ptr<SpillReadFile> spillFile,
+      bool prefixComparatorEnabled,
+      memory::MemoryPool* pool);
 
   int32_t numSortKeys() const override {
     VELOX_CHECK(!closed_);
@@ -164,11 +187,14 @@ class FileSpillMergeStream : public SpillMergeStream {
     return spillFile_->sortCompareFlags();
   }
 
+  void buildPrefixBuffer() override;
+
   void nextBatch() override;
 
   void close() override;
 
   std::unique_ptr<SpillReadFile> spillFile_;
+  memory::MemoryPool* const pool_;
 };
 
 /// A source of spilled RowVectors coming from a file. The spill data might not
@@ -319,6 +345,7 @@ class SpillPartition {
   /// stats when reading data from spilled files.
   std::unique_ptr<TreeOfLosers<SpillMergeStream>> createOrderedReader(
       uint64_t bufferSize,
+      bool prefixComparatorEnabled,
       memory::MemoryPool* pool,
       folly::Synchronized<common::SpillStats>* spillStats);
 

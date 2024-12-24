@@ -20,24 +20,13 @@
 #include "velox/common/time/CpuWallTimer.h"
 #include "velox/core/PlanNode.h"
 #include "velox/exec/Driver.h"
+#include "velox/exec/IdentityProjection.h"
 #include "velox/exec/JoinBridge.h"
 #include "velox/exec/OperatorTraceWriter.h"
 #include "velox/exec/Spiller.h"
 #include "velox/type/Filter.h"
 
 namespace facebook::velox::exec {
-
-/// Represents a column that is copied from input to output, possibly
-/// with cardinality change, i.e. values removed or duplicated.
-struct IdentityProjection {
-  IdentityProjection(
-      column_index_t _inputChannel,
-      column_index_t _outputChannel)
-      : inputChannel(_inputChannel), outputChannel(_outputChannel) {}
-
-  column_index_t inputChannel;
-  column_index_t outputChannel;
-};
 
 struct MemoryStats {
   uint64_t userMemoryReservation{0};

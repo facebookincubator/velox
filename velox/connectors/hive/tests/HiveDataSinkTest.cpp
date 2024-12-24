@@ -97,6 +97,7 @@ class HiveDataSinkTest : public exec::test::HiveConnectorTestBase {
         0,
         0,
         /*readBufferSize=*/1 << 20,
+        true,
         spillExecutor_.get(),
         10,
         20,

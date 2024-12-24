@@ -52,6 +52,7 @@ class WindowTest : public OperatorTestBase {
         0,
         0,
         1 << 20,
+        true,
         executor_.get(),
         5,
         10,
