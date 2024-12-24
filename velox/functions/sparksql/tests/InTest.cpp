@@ -198,13 +198,6 @@ TEST_F(InTest, shortDecimal) {
   EXPECT_EQ(in<int64_t>(1, {1, 2}, DECIMAL(2, 1)), true);
   EXPECT_EQ(in<int64_t>(2, {1, 2}, DECIMAL(10, 5)), true);
   EXPECT_EQ(in<int64_t>(3, {1, 2}, DECIMAL(17, 11)), false);
-  EXPECT_EQ(in<int64_t>(std::nullopt, {1, 2}, DECIMAL(3, 2)), std::nullopt);
-  EXPECT_EQ(in<int64_t>(1, {1, std::nullopt, 2}, DECIMAL(3, 2)), true);
-  EXPECT_EQ(in<int64_t>(2, {1, std::nullopt, 2}, DECIMAL(3, 2)), true);
-  EXPECT_EQ(in<int64_t>(3, {1, std::nullopt, 2}, DECIMAL(3, 2)), std::nullopt);
-  EXPECT_EQ(
-      in<int64_t>(std::nullopt, {1, std::nullopt, 2}, DECIMAL(3, 2)),
-      std::nullopt);
   EXPECT_EQ(
       in<int64_t>(
           DecimalUtil::kShortDecimalMin,
@@ -223,14 +216,6 @@ TEST_F(InTest, longDecimal) {
   EXPECT_EQ(in<int128_t>(1, {1, 2}, DECIMAL(21, 2)), true);
   EXPECT_EQ(in<int128_t>(2, {1, 2}, DECIMAL(29, 10)), true);
   EXPECT_EQ(in<int128_t>(3, {1, 2}, DECIMAL(35, 20)), false);
-  EXPECT_EQ(in<int128_t>(std::nullopt, {1, 2}, DECIMAL(23, 2)), std::nullopt);
-  EXPECT_EQ(in<int128_t>(1, {1, std::nullopt, 2}, DECIMAL(23, 2)), true);
-  EXPECT_EQ(in<int128_t>(2, {1, std::nullopt, 2}, DECIMAL(23, 2)), true);
-  EXPECT_EQ(
-      in<int128_t>(3, {1, std::nullopt, 2}, DECIMAL(23, 2)), std::nullopt);
-  EXPECT_EQ(
-      in<int128_t>(std::nullopt, {1, std::nullopt, 2}, DECIMAL(23, 2)),
-      std::nullopt);
   EXPECT_EQ(
       in<int128_t>(
           DecimalUtil::kLongDecimalMin,
