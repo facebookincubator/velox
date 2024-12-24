@@ -459,7 +459,7 @@ struct MakeDateFunction {
       return false;
     }
     int64_t daysSinceEpoch = expected.value();
-    if (daysSinceEpoch != (int32_t)daysSinceEpoch) {
+    if (daysSinceEpoch != static_cast<int32_t>(daysSinceEpoch)) {
       return false;
     }
     result = daysSinceEpoch;
