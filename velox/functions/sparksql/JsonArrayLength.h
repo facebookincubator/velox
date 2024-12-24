@@ -17,7 +17,6 @@
 #pragma once
 
 #include "velox/functions/Macros.h"
-#include "velox/functions/prestosql/types/JsonType.h"
 
 namespace facebook::velox::functions::sparksql {
 
@@ -25,7 +24,7 @@ template <typename T>
 struct JsonArrayLengthFunction {
   VELOX_DEFINE_FUNCTION_TYPES(T);
 
-  FOLLY_ALWAYS_INLINE bool call(int32_t& len, const arg_type<Json>& json) {
+  FOLLY_ALWAYS_INLINE bool call(int32_t& len, const arg_type<Varchar>& json) {
     simdjson::ondemand::document jsonDoc;
 
     simdjson::padded_string paddedJson(json.data(), json.size());
