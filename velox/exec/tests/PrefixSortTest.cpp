@@ -208,7 +208,9 @@ TEST_F(PrefixSortTest, singleKeyWithNulls) {
            HugeInt::parse("12345679"),
            HugeInt::parse("-12345678901234567890")}),
       makeNullableFlatVector<float>({5.5, 4.4, std::nullopt, 2.2, 1.1}),
-      makeNullableFlatVector<double>({5.5, 4.4, std::nullopt, 2.2, 1.1}),
+      // Test number of nulls is more than valid values.
+      makeNullableFlatVector<double>(
+          {std::nullopt, std::nullopt, std::nullopt, 2.2, 1.1}),
       makeNullableFlatVector<Timestamp>(
           {Timestamp(5, 5),
            Timestamp(4, 4),

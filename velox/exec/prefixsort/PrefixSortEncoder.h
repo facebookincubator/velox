@@ -76,10 +76,11 @@ class PrefixSortEncoder {
   FOLLY_ALWAYS_INLINE static std::optional<uint32_t> encodedSize(
       TypeKind typeKind,
       uint32_t maxStringPrefixLength,
-      bool columnHasNulls) {
+      bool columnHasNulls,
+      bool isSingleSortKey) {
     // NOTE: if columnHasNulls is true, one byte is reserved for nullable
     // comparison.
-    const uint32_t nullByteSize = columnHasNulls ? 1 : 0;
+    const uint32_t nullByteSize = columnHasNulls && !isSingleSortKey ? 1 : 0;
     switch ((typeKind)) {
 #define SCALAR_CASE(kind) \
   case TypeKind::kind:    \

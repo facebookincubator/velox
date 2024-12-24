@@ -2036,24 +2036,28 @@ TEST_F(AggregationTest, spillPrefixSortOptimization) {
       {true, 0, 0, 0},
       {false, 0, 0, 0},
       {true,
-       prefixsort::PrefixSortEncoder::encodedSize(TypeKind::SMALLINT, 12, false)
+       prefixsort::PrefixSortEncoder::encodedSize(
+           TypeKind::SMALLINT, 12, false, false)
                .value() -
            1,
        0,
        0},
       {false,
-       prefixsort::PrefixSortEncoder::encodedSize(TypeKind::SMALLINT, 12, false)
+       prefixsort::PrefixSortEncoder::encodedSize(
+           TypeKind::SMALLINT, 12, false, false)
                .value() -
            1,
        0,
        0},
       {true,
-       prefixsort::PrefixSortEncoder::encodedSize(TypeKind::SMALLINT, 12, false)
+       prefixsort::PrefixSortEncoder::encodedSize(
+           TypeKind::SMALLINT, 12, false, false)
            .value(),
        0,
        1},
       {false,
-       prefixsort::PrefixSortEncoder::encodedSize(TypeKind::SMALLINT, 12, false)
+       prefixsort::PrefixSortEncoder::encodedSize(
+           TypeKind::SMALLINT, 12, false, false)
            .value(),
        0,
        0},
@@ -2062,96 +2066,106 @@ TEST_F(AggregationTest, spillPrefixSortOptimization) {
       {true, 1'000'000, 1'000'000, 0},
       {false, 1'000'000, 1'000'000, 0},
       {true,
-       prefixsort::PrefixSortEncoder::encodedSize(TypeKind::SMALLINT, 12, false)
+       prefixsort::PrefixSortEncoder::encodedSize(
+           TypeKind::SMALLINT, 12, false, false)
                .value() +
            prefixsort::PrefixSortEncoder::encodedSize(
-               TypeKind::INTEGER, 12, false)
+               TypeKind::INTEGER, 12, false, false)
                .value(),
        0,
        2},
       {false,
-       prefixsort::PrefixSortEncoder::encodedSize(TypeKind::SMALLINT, 12, false)
+       prefixsort::PrefixSortEncoder::encodedSize(
+           TypeKind::SMALLINT, 12, false, false)
                .value() +
            prefixsort::PrefixSortEncoder::encodedSize(
-               TypeKind::INTEGER, 12, false)
+               TypeKind::INTEGER, 12, false, false)
                .value(),
        0,
        0},
       {true,
-       prefixsort::PrefixSortEncoder::encodedSize(TypeKind::SMALLINT, 12, false)
+       prefixsort::PrefixSortEncoder::encodedSize(
+           TypeKind::SMALLINT, 12, false, false)
                .value() +
            prefixsort::PrefixSortEncoder::encodedSize(
-               TypeKind::INTEGER, 12, false)
+               TypeKind::INTEGER, 12, false, false)
                .value(),
        1'000'000,
        0},
       {false,
-       prefixsort::PrefixSortEncoder::encodedSize(TypeKind::SMALLINT, 12, false)
+       prefixsort::PrefixSortEncoder::encodedSize(
+           TypeKind::SMALLINT, 12, false, false)
                .value() +
            prefixsort::PrefixSortEncoder::encodedSize(
-               TypeKind::INTEGER, 12, false)
+               TypeKind::INTEGER, 12, false, false)
                .value(),
        1'000'000,
        0},
       {true,
-       prefixsort::PrefixSortEncoder::encodedSize(TypeKind::SMALLINT, 12, false)
+       prefixsort::PrefixSortEncoder::encodedSize(
+           TypeKind::SMALLINT, 12, false, false)
                .value() +
            prefixsort::PrefixSortEncoder::encodedSize(
-               TypeKind::BIGINT, 12, false)
+               TypeKind::BIGINT, 12, false, false)
                .value(),
        0,
        2},
       {false,
-       prefixsort::PrefixSortEncoder::encodedSize(TypeKind::SMALLINT, 12, false)
+       prefixsort::PrefixSortEncoder::encodedSize(
+           TypeKind::SMALLINT, 12, false, false)
                .value() +
            prefixsort::PrefixSortEncoder::encodedSize(
-               TypeKind::BIGINT, 12, false)
+               TypeKind::BIGINT, 12, false, false)
                .value(),
        0,
        0},
       {true,
-       prefixsort::PrefixSortEncoder::encodedSize(TypeKind::SMALLINT, 12, false)
+       prefixsort::PrefixSortEncoder::encodedSize(
+           TypeKind::SMALLINT, 12, false, false)
                .value() +
            prefixsort::PrefixSortEncoder::encodedSize(
-               TypeKind::BIGINT, 12, false)
+               TypeKind::BIGINT, 12, false, false)
                .value() +
            prefixsort::PrefixSortEncoder::encodedSize(
-               TypeKind::INTEGER, 12, false)
+               TypeKind::INTEGER, 12, false, false)
                .value() -
            1,
        0,
        2},
       {false,
-       prefixsort::PrefixSortEncoder::encodedSize(TypeKind::SMALLINT, 12, false)
+       prefixsort::PrefixSortEncoder::encodedSize(
+           TypeKind::SMALLINT, 12, false, false)
                .value() +
            prefixsort::PrefixSortEncoder::encodedSize(
-               TypeKind::BIGINT, 12, false)
+               TypeKind::BIGINT, 12, false, false)
                .value() +
            prefixsort::PrefixSortEncoder::encodedSize(
-               TypeKind::INTEGER, 12, false)
+               TypeKind::INTEGER, 12, false, false)
                .value() -
            1,
        0,
        0},
       {true,
-       prefixsort::PrefixSortEncoder::encodedSize(TypeKind::SMALLINT, 12, false)
+       prefixsort::PrefixSortEncoder::encodedSize(
+           TypeKind::SMALLINT, 12, false, false)
                .value() +
            prefixsort::PrefixSortEncoder::encodedSize(
-               TypeKind::BIGINT, 12, false)
+               TypeKind::BIGINT, 12, false, false)
                .value() +
            prefixsort::PrefixSortEncoder::encodedSize(
-               TypeKind::INTEGER, 12, false)
+               TypeKind::INTEGER, 12, false, false)
                .value(),
        0,
        3},
       {false,
-       prefixsort::PrefixSortEncoder::encodedSize(TypeKind::SMALLINT, 12, false)
+       prefixsort::PrefixSortEncoder::encodedSize(
+           TypeKind::SMALLINT, 12, false, false)
                .value() +
            prefixsort::PrefixSortEncoder::encodedSize(
-               TypeKind::BIGINT, 12, false)
+               TypeKind::BIGINT, 12, false, false)
                .value() +
            prefixsort::PrefixSortEncoder::encodedSize(
-               TypeKind::INTEGER, 12, false)
+               TypeKind::INTEGER, 12, false, false)
                .value(),
        0,
        0}};

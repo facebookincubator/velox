@@ -26,76 +26,143 @@ namespace {
 // to bitswap32.
 static constexpr int32_t kAlignment = 8;
 
-template <typename T>
+template <typename T, bool isSingleSortKey>
 FOLLY_ALWAYS_INLINE void encodeRowColumn(
     const PrefixSortLayout& prefixSortLayout,
     column_index_t index,
     const RowColumn& rowColumn,
     char* row,
-    char* prefixBuffer) {
+    char* prefixBuffer,
+    size_t& nullBoundary,
+    std::vector<char*, memory::StlAllocator<char*>>& rows) {
   std::optional<T> value;
-  if (!prefixSortLayout.normalizedKeyHasNullByte[index] ||
-      !RowContainer::isNullAt(
-          row, rowColumn.nullByte(), rowColumn.nullMask())) {
-    value = *(reinterpret_cast<T*>(row + rowColumn.offset()));
+  if constexpr (isSingleSortKey) {
+    if (RowContainer::isNullAt(
+            row, rowColumn.nullByte(), rowColumn.nullMask())) {
+      // Store the null value address in the sortedRows.
+      rows[nullBoundary++] = row;
+    } else {
+      auto value = *(reinterpret_cast<T*>(row + rowColumn.offset()));
+      prefixSortLayout.encoders[index].encodeNoNulls(
+          value,
+          prefixBuffer + prefixSortLayout.prefixOffsets[index],
+          prefixSortLayout.encodeSizes[index]);
+    }
   } else {
-    value = std::nullopt;
+    if (!prefixSortLayout.normalizedKeyHasNullByte[index] ||
+        !RowContainer::isNullAt(
+            row, rowColumn.nullByte(), rowColumn.nullMask())) {
+      value = *(reinterpret_cast<T*>(row + rowColumn.offset()));
+    } else {
+      value = std::nullopt;
+    }
+    prefixSortLayout.encoders[index].encode(
+        value,
+        prefixBuffer + prefixSortLayout.prefixOffsets[index],
+        prefixSortLayout.encodeSizes[index],
+        prefixSortLayout.normalizedKeyHasNullByte[index]);
   }
-  prefixSortLayout.encoders[index].encode(
-      value,
-      prefixBuffer + prefixSortLayout.prefixOffsets[index],
-      prefixSortLayout.encodeSizes[index],
-      prefixSortLayout.normalizedKeyHasNullByte[index]);
 }
 
+template <bool isSingleSortKey>
 FOLLY_ALWAYS_INLINE void extractRowColumnToPrefix(
     TypeKind typeKind,
     const PrefixSortLayout& prefixSortLayout,
     uint32_t index,
     const RowColumn& rowColumn,
     char* row,
-    char* prefixBuffer) {
+    char* prefixBuffer,
+    size_t& nullBoundary,
+    std::vector<char*, memory::StlAllocator<char*>>& rows) {
   switch (typeKind) {
     case TypeKind::SMALLINT: {
-      encodeRowColumn<int16_t>(
-          prefixSortLayout, index, rowColumn, row, prefixBuffer);
+      encodeRowColumn<int16_t, isSingleSortKey>(
+          prefixSortLayout,
+          index,
+          rowColumn,
+          row,
+          prefixBuffer,
+          nullBoundary,
+          rows);
       return;
     }
     case TypeKind::INTEGER: {
-      encodeRowColumn<int32_t>(
-          prefixSortLayout, index, rowColumn, row, prefixBuffer);
+      encodeRowColumn<int32_t, isSingleSortKey>(
+          prefixSortLayout,
+          index,
+          rowColumn,
+          row,
+          prefixBuffer,
+          nullBoundary,
+          rows);
       return;
     }
     case TypeKind::BIGINT: {
-      encodeRowColumn<int64_t>(
-          prefixSortLayout, index, rowColumn, row, prefixBuffer);
+      encodeRowColumn<int64_t, isSingleSortKey>(
+          prefixSortLayout,
+          index,
+          rowColumn,
+          row,
+          prefixBuffer,
+          nullBoundary,
+          rows);
       return;
     }
     case TypeKind::REAL: {
-      encodeRowColumn<float>(
-          prefixSortLayout, index, rowColumn, row, prefixBuffer);
+      encodeRowColumn<float, isSingleSortKey>(
+          prefixSortLayout,
+          index,
+          rowColumn,
+          row,
+          prefixBuffer,
+          nullBoundary,
+          rows);
       return;
     }
     case TypeKind::DOUBLE: {
-      encodeRowColumn<double>(
-          prefixSortLayout, index, rowColumn, row, prefixBuffer);
+      encodeRowColumn<double, isSingleSortKey>(
+          prefixSortLayout,
+          index,
+          rowColumn,
+          row,
+          prefixBuffer,
+          nullBoundary,
+          rows);
       return;
     }
     case TypeKind::TIMESTAMP: {
-      encodeRowColumn<Timestamp>(
-          prefixSortLayout, index, rowColumn, row, prefixBuffer);
+      encodeRowColumn<Timestamp, isSingleSortKey>(
+          prefixSortLayout,
+          index,
+          rowColumn,
+          row,
+          prefixBuffer,
+          nullBoundary,
+          rows);
       return;
     }
     case TypeKind::HUGEINT: {
-      encodeRowColumn<int128_t>(
-          prefixSortLayout, index, rowColumn, row, prefixBuffer);
+      encodeRowColumn<int128_t, isSingleSortKey>(
+          prefixSortLayout,
+          index,
+          rowColumn,
+          row,
+          prefixBuffer,
+          nullBoundary,
+          rows);
       return;
     }
     case TypeKind::VARCHAR:
       [[fallthrough]];
     case TypeKind::VARBINARY: {
-      encodeRowColumn<StringView>(
-          prefixSortLayout, index, rowColumn, row, prefixBuffer);
+      encodeRowColumn<StringView, isSingleSortKey>(
+          prefixSortLayout,
+          index,
+          rowColumn,
+          row,
+          prefixBuffer,
+          nullBoundary,
+          rows);
       return;
     }
     default:
@@ -169,7 +236,8 @@ PrefixSortLayout PrefixSortLayout::generate(
         maxStringLengths[i].has_value()
             ? std::min(maxStringLengths[i].value(), maxStringPrefixLength)
             : maxStringPrefixLength,
-        columnHasNulls[i]);
+        columnHasNulls[i],
+        compareFlags.size() == 1);
     if (!encodedSize.has_value() ||
         normalizedKeySize + encodedSize.value() > maxNormalizedKeySize) {
       break;
@@ -218,8 +286,13 @@ void PrefixSortLayout::optimizeSortKeysOrder(
   for (const auto& projection : keyColumnProjections) {
     // Set maxStringPrefixLength to UINT_MAX - 1 to ensure VARCHAR columns are
     // placed after all other supported types and before un-supported types.
+    // The encodeSize is just used for comparision no matter what
+    // isSingleSortKey set.
     encodedKeySizes[projection.inputChannel] = PrefixSortEncoder::encodedSize(
-        rowType->childAt(projection.inputChannel)->kind(), UINT_MAX - 1, true);
+        rowType->childAt(projection.inputChannel)->kind(),
+        UINT_MAX - 1,
+        true,
+        /*isSingleSortKey=*/false);
   }
 
   std::sort(
@@ -246,6 +319,15 @@ void PrefixSortLayout::optimizeSortKeysOrder(
         return lhs.outputChannel < rhs.outputChannel;
       });
 }
+
+PrefixSort::PrefixSort(
+    const RowContainer* rowContainer,
+    const PrefixSortLayout& sortLayout,
+    memory::MemoryPool* pool)
+    : rowContainer_(rowContainer),
+      isSingleSortKey_(rowContainer->keyTypes().size() == 1),
+      sortLayout_(sortLayout),
+      pool_(pool) {}
 
 FOLLY_ALWAYS_INLINE int PrefixSort::compareAllNormalizedKeys(
     char* left,
@@ -274,21 +356,21 @@ int PrefixSort::comparePartNormalizedKeys(char* left, char* right) {
   return result;
 }
 
-PrefixSort::PrefixSort(
-    const RowContainer* rowContainer,
-    const PrefixSortLayout& sortLayout,
-    memory::MemoryPool* pool)
-    : rowContainer_(rowContainer), sortLayout_(sortLayout), pool_(pool) {}
-
-void PrefixSort::extractRowAndEncodePrefixKeys(char* row, char* prefixBuffer) {
+template <>
+void PrefixSort::extractRowAndEncodePrefixKeys<true>(
+    char* row,
+    char* prefixBuffer,
+    std::vector<char*, memory::StlAllocator<char*>>& rows) {
   for (auto i = 0; i < sortLayout_.numNormalizedKeys; ++i) {
-    extractRowColumnToPrefix(
+    extractRowColumnToPrefix<true>(
         rowContainer_->keyTypes()[i]->kind(),
         sortLayout_,
         i,
         rowContainer_->columnAt(i),
         row,
-        prefixBuffer);
+        prefixBuffer,
+        nullBoundary_,
+        rows);
   }
 
   simd::memset(
@@ -305,6 +387,32 @@ void PrefixSort::extractRowAndEncodePrefixKeys(char* row, char* prefixBuffer) {
   // every 8 bytes.
   bitsSwapByWord((uint64_t*)prefixBuffer, sortLayout_.normalizedBufferSize);
 
+  // Set row address.
+  getRowAddrFromPrefixBuffer(prefixBuffer) = row;
+}
+
+template <>
+void PrefixSort::extractRowAndEncodePrefixKeys<false>(
+    char* row,
+    char* prefixBuffer,
+    std::vector<char*, memory::StlAllocator<char*>>& rows) {
+  for (auto i = 0; i < sortLayout_.numNormalizedKeys; ++i) {
+    extractRowColumnToPrefix<false>(
+        rowContainer_->keyTypes()[i]->kind(),
+        sortLayout_,
+        i,
+        rowContainer_->columnAt(i),
+        row,
+        prefixBuffer,
+        nullBoundary_,
+        rows);
+  }
+  simd::memset(
+      prefixBuffer + sortLayout_.normalizedBufferSize -
+          sortLayout_.numPaddingBytes,
+      0,
+      sortLayout_.numPaddingBytes);
+  bitsSwapByWord((uint64_t*)prefixBuffer, sortLayout_.normalizedBufferSize);
   // Set row address.
   getRowAddrFromPrefixBuffer(prefixBuffer) = row;
 }
@@ -363,6 +471,9 @@ void PrefixSort::sortInternal(
   memory::ContiguousAllocation prefixBufferAlloc;
   // Allocates prefix sort buffer.
   {
+    // TODO: If we store the numNullRows of first column in RowContainer, we can
+    // get the accurate prefix buffer size. Now we only store columnHasNulls_
+    // for all columns.
     const auto numPages =
         memory::AllocationTraits::numPages(numRows * entrySize);
     pool_->allocateContiguous(numPages, prefixBufferAlloc);
@@ -370,9 +481,18 @@ void PrefixSort::sortInternal(
   char* prefixBuffer = prefixBufferAlloc.data<char>();
 
   // Extracts rows, and stores the serialized normalized keys plus the row
-  // address (in row container) to prefix sort buffer.
-  for (auto i = 0; i < rows.size(); ++i) {
-    extractRowAndEncodePrefixKeys(rows[i], prefixBuffer + entrySize * i);
+  // address (in row container) to prefix sort buffer. Store the row address of
+  // null rows to the beginning of `rows` when `isSingleSortKey_` is true.
+  if (isSingleSortKey_) {
+    for (auto i = 0; i < numRows; ++i) {
+      extractRowAndEncodePrefixKeys<true>(
+          rows[i], prefixBuffer + entrySize * (i - nullBoundary_), rows);
+    }
+  } else {
+    for (auto i = 0; i < numRows; ++i) {
+      extractRowAndEncodePrefixKeys<false>(
+          rows[i], prefixBuffer + entrySize * i, rows);
+    }
   }
 
   // Sort rows with the normalized prefix keys.
@@ -380,7 +500,8 @@ void PrefixSort::sortInternal(
     const auto swapBuffer = AlignedBuffer::allocate<char>(entrySize, pool_);
     PrefixSortRunner sortRunner(entrySize, swapBuffer->asMutable<char>());
     auto* prefixBufferStart = prefixBuffer;
-    auto* prefixBufferEnd = prefixBuffer + numRows * entrySize;
+    auto* prefixBufferEnd =
+        prefixBuffer + (numRows - nullBoundary_) * entrySize;
     if (sortLayout_.numNormalizedKeys > 0) {
       addThreadLocalRuntimeStat(
           PrefixSort::kNumPrefixSortKeys,
@@ -401,9 +522,30 @@ void PrefixSort::sortInternal(
     }
   }
 
-  // Output sorted row addresses.
-  for (auto i = 0; i < rows.size(); ++i) {
-    rows[i] = getRowAddrFromPrefixBuffer(prefixBuffer + i * entrySize);
+  // Output sorted row addresses. Only set the address for non-null value if
+  // `isSingleSortKey_`, otherwise, the address is set for all values.
+  if (isSingleSortKey_) {
+    // The null rows address has been set in the extractRowAndEncodePrefixKeys.
+    if (sortLayout_.compareFlags[0].nullsFirst) {
+      for (auto i = nullBoundary_; i < numRows; ++i) {
+        rows[i] = getRowAddrFromPrefixBuffer(
+            prefixBuffer + (i - nullBoundary_) * entrySize);
+      }
+    } else {
+      // Move the null rows address from beginning to the end.
+      const auto numValidRows = numRows - nullBoundary_;
+      for (auto i = nullBoundary_; i > 0; --i) {
+        rows[i + numValidRows - 1] = rows[i - 1];
+      }
+
+      for (auto i = 0; i < numValidRows; ++i) {
+        rows[i] = getRowAddrFromPrefixBuffer(prefixBuffer + i * entrySize);
+      }
+    }
+  } else {
+    for (auto i = 0; i < numRows; ++i) {
+      rows[i] = getRowAddrFromPrefixBuffer(prefixBuffer + i * entrySize);
+    }
   }
 }
 
