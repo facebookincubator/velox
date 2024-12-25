@@ -580,6 +580,33 @@ TEST_F(SparkCastExprTest, timestampToString) {
           "-0010-02-01 10:00:00",
           std::nullopt,
       });
+
+  setTimezone("America/Los_Angeles");
+  testCast<Timestamp, std::string>(
+      "string",
+      {
+          Timestamp(0, 0),
+          Timestamp(3600, 0),
+          Timestamp(61, 10),
+      },
+      {
+          "1969-12-31 16:00:00",
+          "1969-12-31 17:00:00",
+          "1969-12-31 16:01:01",
+      });
+  setTimezone("Asia/Shanghai");
+  testCast<Timestamp, std::string>(
+      "string",
+      {
+          Timestamp(0, 0),
+          Timestamp(3600, 0),
+          Timestamp(61, 10),
+      },
+      {
+          "1970-01-01 08:00:00",
+          "1970-01-01 09:00:00",
+          "1970-01-01 08:01:01",
+      });
 }
 
 TEST_F(SparkCastExprTest, fromString) {
