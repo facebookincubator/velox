@@ -17,14 +17,19 @@
 #pragma once
 
 #include "velox/functions/Macros.h"
+#include "velox/functions/prestosql/json/JsonPathTokenizer.h"
+#include "velox/functions/prestosql/json/SIMDJsonExtractor.h"
+#include "velox/functions/prestosql/json/SIMDJsonWrapper.h"
+#include "velox/functions/prestosql/types/JsonType.h"
 
-namespace facebook::velox::functions::sparksql {
+namespace facebook::velox::functions {
 
 template <typename T>
 struct JsonArrayLengthFunction {
   VELOX_DEFINE_FUNCTION_TYPES(T);
 
-  FOLLY_ALWAYS_INLINE bool call(int32_t& len, const arg_type<Varchar>& json) {
+  template <typename TOUTPUT>
+  FOLLY_ALWAYS_INLINE bool call(TOUTPUT& len, const arg_type<Json>& json) {
     simdjson::ondemand::document jsonDoc;
 
     simdjson::padded_string paddedJson(json.data(), json.size());
@@ -48,5 +53,5 @@ struct JsonArrayLengthFunction {
     return true;
   }
 };
-}  // namespace facebook::velox::functions::sparksql
+}  // namespace facebook::velox::functions
 

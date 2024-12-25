@@ -15,6 +15,7 @@
  */
 
 #include "velox/functions/Registerer.h"
+#include "velox/functions/lib/JsonArrayLength.h"
 #include "velox/functions/prestosql/JsonFunctions.h"
 
 namespace facebook::velox::functions {

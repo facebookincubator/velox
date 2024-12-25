@@ -13,9 +13,10 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
+#include "velox/functions/lib/JsonArrayLength.h"
 #include "velox/functions/lib/RegistrationHelpers.h"
 #include "velox/functions/sparksql/GetJsonObject.h"
-#include "velox/functions/sparksql/JsonArrayLength.h"
 #include "velox/functions/sparksql/JsonObjectKeys.h"
 
 namespace facebook::velox::functions::sparksql {
