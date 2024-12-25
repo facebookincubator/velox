@@ -65,5 +65,11 @@ class SparkCastHooks : public exec::CastHooks {
 
  private:
   const core::QueryConfig& config_;
+  TimestampToStringOptions timestampToStringOptions_ = {
+      .precision = TimestampToStringOptions::Precision::kMicroseconds,
+      .leadingPositiveSign = true,
+      .skipTrailingZeros = true,
+      .zeroPaddingYear = true,
+      .dateTimeSeparator = ' '};
 };
 } // namespace facebook::velox::functions::sparksql

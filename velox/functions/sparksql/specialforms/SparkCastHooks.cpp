@@ -22,7 +22,12 @@
 namespace facebook::velox::functions::sparksql {
 
 SparkCastHooks::SparkCastHooks(const velox::core::QueryConfig& config)
-    : config_(config) {}
+    : config_(config) {
+  const auto sessionTzName = config.sessionTimezone();
+  if (!sessionTzName.empty()) {
+    timestampToStringOptions_.timeZone = tz::locateZone(sessionTzName);
+  }
+}
 
 Expected<Timestamp> SparkCastHooks::castStringToTimestamp(
     const StringView& view) const {
@@ -80,15 +85,7 @@ StringView SparkCastHooks::removeWhiteSpaces(const StringView& view) const {
 
 const TimestampToStringOptions& SparkCastHooks::timestampToStringOptions()
     const {
-  static TimestampToStringOptions options = {
-      .precision = TimestampToStringOptions::Precision::kMicroseconds,
-      .leadingPositiveSign = true,
-      .skipTrailingZeros = true,
-      .zeroPaddingYear = true,
-      .dateTimeSeparator = ' ',
-      .timeZone = tz::locateZone(config_.sessionTimezone()),
-  };
-  return options;
+  return timestampToStringOptions_;
 }
 
 exec::PolicyType SparkCastHooks::getPolicy() const {
