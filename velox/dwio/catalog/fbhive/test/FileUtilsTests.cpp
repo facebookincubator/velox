@@ -36,6 +36,9 @@ TEST(FileUtilsTests, MakePartName) {
 
 TEST(FileUtilsTests, ParsePartKeyValues) {
   ASSERT_THROW(FileUtils::parsePartKeyValues("ds"), LoggedException);
+  ASSERT_THROW(
+      FileUtils::parsePartKeyValues("ts=2025-01-01+00%3A00%ZZ99"),
+      LoggedException);
 
   ASSERT_THAT(
       FileUtils::parsePartKeyValues(
