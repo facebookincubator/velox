@@ -130,7 +130,7 @@ exec::AggregateRegistrationResult registerAverage(
             case TypeKind::BIGINT: {
               if (inputType->isShortDecimal()) {
                 return std::make_unique<DecimalAverageAggregateBase<int64_t>>(
-                    resultType);
+                    inputType, resultType);
               }
               return std::make_unique<
                   AverageAggregate<int64_t, double, double>>(resultType);
@@ -138,7 +138,7 @@ exec::AggregateRegistrationResult registerAverage(
             case TypeKind::HUGEINT: {
               if (inputType->isLongDecimal()) {
                 return std::make_unique<DecimalAverageAggregateBase<int128_t>>(
-                    resultType);
+                    inputType, resultType);
               }
               VELOX_NYI();
             }
@@ -166,14 +166,14 @@ exec::AggregateRegistrationResult registerAverage(
                   AverageAggregate<int64_t, double, double>>(resultType);
             case TypeKind::BIGINT:
               return std::make_unique<DecimalAverageAggregateBase<int64_t>>(
-                  resultType);
+                  inputType, resultType);
             case TypeKind::HUGEINT:
               return std::make_unique<DecimalAverageAggregateBase<int128_t>>(
-                  resultType);
+                  inputType, resultType);
             case TypeKind::VARBINARY:
               if (inputType->isLongDecimal()) {
                 return std::make_unique<DecimalAverageAggregateBase<int128_t>>(
-                    resultType);
+                    inputType, resultType);
               } else if (
                   inputType->isShortDecimal() ||
                   inputType->kind() == TypeKind::VARBINARY) {
@@ -181,7 +181,7 @@ exec::AggregateRegistrationResult registerAverage(
                 // LongDecimalWithOverflowState is used and the template type
                 // does not matter.
                 return std::make_unique<DecimalAverageAggregateBase<int64_t>>(
-                    resultType);
+                    inputType, resultType);
               }
               [[fallthrough]];
             default:
