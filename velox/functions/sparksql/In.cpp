@@ -129,6 +129,7 @@ void registerInFn(const std::string& prefix) {
   registerFunction<InFunctionOuter<T>::template Inner, bool, T, Array<T>>(
       {prefix + "in"});
 }
+
 } // namespace
 
 void registerIn(const std::string& prefix) {
