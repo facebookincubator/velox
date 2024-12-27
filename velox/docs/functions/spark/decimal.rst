@@ -127,6 +127,7 @@ Decimal Functions
     Returns negated value of x (r = -x). Corresponds to Spark's operator ``-``.
 
     ::
+
         SELECT unaryminus(cast(-9999999999999999999.9999999999999999999 as DECIMAL(38, 19))); -- 9999999999999999999.9999999999999999999
 
 .. spark:function:: unscaled_value(x) -> bigint
@@ -152,6 +153,7 @@ Decimal Special Forms
     After rounding we may need one more digit in the integral part.
     
     ::
+        
         SELECT (round(cast (9.9 as decimal(2, 1)), 0)); -- decimal 10
         SELECT (round(cast (99 as decimal(2, 0)), -1)); -- decimal 100
 
