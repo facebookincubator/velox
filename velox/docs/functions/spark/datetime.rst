@@ -37,6 +37,9 @@ These functions support TIMESTAMP and DATE input types.
 .. spark:function:: date_format(timestamp, dateFormat) -> string
 
     Converts `timestamp` to a string in the format specified by `dateFormat`.
+    The format follows Spark's
+    `Datetime patterns
+    <https://spark.apache.org/docs/latest/sql-ref-datetime-pattern.html>`_.
 
         SELECT date_format('2020-01-29', 'yyyy'); -- '2020'
         SELECT date_format('2024-05-30 08:00:00', 'yyyy-MM-dd'); -- '2024-05-30'
