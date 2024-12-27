@@ -36,7 +36,7 @@ These functions support TIMESTAMP and DATE input types.
 
 .. spark:function:: date_format(timestamp, dateFormat) -> string
 
-    Converts `timestamp` to a string in the format specified by `dateFormat`.
+    Converts ``timestamp`` to a string in the format specified by ``dateFormat``.
     The format follows Spark's
     `Datetime patterns
     <https://spark.apache.org/docs/latest/sql-ref-datetime-pattern.html>`_.
