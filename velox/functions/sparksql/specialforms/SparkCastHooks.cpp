@@ -83,11 +83,6 @@ StringView SparkCastHooks::removeWhiteSpaces(const StringView& view) const {
   return output;
 }
 
-const TimestampToStringOptions& SparkCastHooks::timestampToStringOptions()
-    const {
-  return timestampToStringOptions_;
-}
-
 exec::PolicyType SparkCastHooks::getPolicy() const {
   return exec::PolicyType::SparkCastPolicy;
 }

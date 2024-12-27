@@ -52,10 +52,9 @@ class SparkCastHooks : public exec::CastHooks {
   /// whitespaces before cast.
   StringView removeWhiteSpaces(const StringView& view) const override;
 
-  /// 1) Does not follow 'isLegacyCast' and session timezone. 2) The conversion
-  /// precision is microsecond. 3) Does not append trailing zeros. 4) Adds a
-  /// positive sign at first if the year exceeds 9999.
-  const TimestampToStringOptions& timestampToStringOptions() const override;
+  const TimestampToStringOptions& timestampToStringOptions() const override {
+    return timestampToStringOptions_;
+  }
 
   bool truncate() const override {
     return true;
@@ -65,6 +64,10 @@ class SparkCastHooks : public exec::CastHooks {
 
  private:
   const core::QueryConfig& config_;
+  /// 1) Does not follow 'isLegacyCast' and session timezone. 2) The conversion
+  /// precision is microsecond. 3) Does not append trailing zeros. 4) Adds a
+  /// positive sign at first if the year exceeds 9999. 5) The configured session
+  /// timezone is respected.
   TimestampToStringOptions timestampToStringOptions_ = {
       .precision = TimestampToStringOptions::Precision::kMicroseconds,
       .leadingPositiveSign = true,
