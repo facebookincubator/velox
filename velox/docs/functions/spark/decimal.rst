@@ -116,7 +116,11 @@ Decimal Functions
 -----------------
 .. spark:function:: floor(x: decimal(p, s)) -> r: decimal(pr, 0) 
 
-    Returns ``x`` rounded down to the type ``decimal(38, min({p} - {s} + min(1, {s})), 0)``.
+    Returns ``x`` rounded down to the type ``decimal(38, min(p - s + min(1, s)), 0)``.
+
+    ::
+
+        SELECT floor(cast(1.23 as DECIMAL(3, 2))); -- 1 // Output type: decimal(2,0)
 
 .. spark:function:: unaryminus(x: decimal(p, s)) -> r: decimal(p, s)
 
