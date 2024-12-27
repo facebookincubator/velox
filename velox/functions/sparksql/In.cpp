@@ -129,20 +129,6 @@ void registerInFn(const std::string& prefix) {
   registerFunction<InFunctionOuter<T>::template Inner, bool, T, Array<T>>(
       {prefix + "in"});
 }
-
-void registerInFnForDecimal(const std::string& prefix) {
-  registerFunction<
-      InFunctionOuter<ShortDecimal<P1, S1>>::template Inner,
-      bool,
-      ShortDecimal<P1, S1>,
-      Array<ShortDecimal<P1, S1>>>({prefix + "in"});
-  registerFunction<
-      InFunctionOuter<LongDecimal<P1, S1>>::template Inner,
-      bool,
-      LongDecimal<P1, S1>,
-      Array<LongDecimal<P1, S1>>>({prefix + "in"});
-}
-
 } // namespace
 
 void registerIn(const std::string& prefix) {
@@ -156,7 +142,8 @@ void registerIn(const std::string& prefix) {
   registerInFn<Varchar>(prefix);
   registerInFn<Timestamp>(prefix);
   registerInFn<Date>(prefix);
-  registerInFnForDecimal(prefix);
+  registerInFn<ShortDecimal<P1, S1>>(prefix);
+  registerInFn<LongDecimal<P1, S1>>(prefix);
 }
 
 } // namespace facebook::velox::functions::sparksql
