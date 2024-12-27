@@ -114,6 +114,9 @@ Returns NULL when the actual result cannot be represented with the calculated de
 
 Decimal Functions
 -----------------
+.. spark:function:: floor(x: decimal(p, s)) -> r: decimal(pr, 0) 
+
+    Returns ``x`` rounded down to the type ``decimal(min(p - s + 1, 38), 0)``.
 
 .. spark:function:: unaryminus(x: decimal(p, s)) -> r: decimal(p, s)
 
