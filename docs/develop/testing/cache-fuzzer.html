@@ -85,6 +85,9 @@ checkpoint will be disabled, while the other times, a random value from 32MB
 to 64MB will be used, inclusively. Checkpoint after every written into each
 file. 0 means no checkpointing.</p></li>
 <li><p><code class="docutils literal notranslate"><span class="pre">–-num_restarts</span></code>: Number of cache restarts in one iteration.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">–-enable_file_faulty_injection</span></code>: Enable fault injection on read and write
+operations for cache-related files. When enabled, the file read and write
+operations will fail 5 out of 100 times.</p></li>
 </ul>
 <p>If running from CLion IDE, add <code class="docutils literal notranslate"><span class="pre">--logtostderr=1</span></code> to see the full output.</p>
 </section>
