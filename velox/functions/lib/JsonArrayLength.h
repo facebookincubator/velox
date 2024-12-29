@@ -24,12 +24,19 @@
 
 namespace facebook::velox::functions {
 
+/// json_array_length(jsonString) -> length
+///
+/// Returns the array length of json if a valid json string is given.
+/// Returns null if the input json string is invalid.
+/// It is used both in SparkSQL and Presto, See documentation at
+/// Presto: https://prestodb.io/docs/current/functions/json.html#json_array_length-json-bigint
+/// SparkSQL: https://spark.apache.org/docs/latest/api/sql/index.html#json_array_length
 template <typename T>
 struct JsonArrayLengthFunction {
   VELOX_DEFINE_FUNCTION_TYPES(T);
 
-  template <typename TOUTPUT>
-  FOLLY_ALWAYS_INLINE bool call(TOUTPUT& len, const arg_type<Json>& json) {
+  template <typename TOutput>
+  FOLLY_ALWAYS_INLINE bool call(TOutput& len, const arg_type<Json>& json) {
     simdjson::ondemand::document jsonDoc;
 
     simdjson::padded_string paddedJson(json.data(), json.size());
