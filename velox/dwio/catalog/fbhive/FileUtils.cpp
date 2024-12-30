@@ -151,7 +151,10 @@ std::string FileUtils::unescapePathName(const std::string& data) {
       std::string tmp{data.data() + i + 1, HEX_WIDTH};
       char* end;
       c = static_cast<char>(std::strtol(tmp.c_str(), &end, 16));
-      DWIO_ENSURE(errno != ERANGE && end == tmp.data() + HEX_WIDTH);
+      DWIO_ENSURE(
+          errno != ERANGE && end == tmp.data() + HEX_WIDTH,
+          "Malformed path component: ",
+          data);
       i += HEX_WIDTH;
     }
     ret.append(1, c);
