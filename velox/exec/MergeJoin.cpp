@@ -331,6 +331,14 @@ void MergeJoin::flattenRightProjections() {
     newFlat->copy(currentVector.get(), 0, 0, outputSize_);
     children[projection.outputChannel] = std::move(newFlat);
   }
+
+  if (filter_ != nullptr && filterInput_ != nullptr) {
+    auto& filterInputChildren = filterInput_->children();
+    for (const auto [filterInputChannel, outputChannel] :
+         filterInputToOutputChannel_) {
+      filterInputChildren[filterInputChannel] = children[outputChannel];
+    }
+  }
   isRightFlattened_ = true;
 }
 
