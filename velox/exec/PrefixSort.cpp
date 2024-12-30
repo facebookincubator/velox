@@ -75,96 +75,28 @@ FOLLY_ALWAYS_INLINE void extractRowColumnToPrefix(
     size_t& nullBoundary,
     std::vector<char*, memory::StlAllocator<char*>>& rows) {
   switch (typeKind) {
-    case TypeKind::SMALLINT: {
-      encodeRowColumn<int16_t, isSingleSortKey>(
-          prefixSortLayout,
-          index,
-          rowColumn,
-          row,
-          prefixBuffer,
-          nullBoundary,
-          rows);
-      return;
-    }
-    case TypeKind::INTEGER: {
-      encodeRowColumn<int32_t, isSingleSortKey>(
-          prefixSortLayout,
-          index,
-          rowColumn,
-          row,
-          prefixBuffer,
-          nullBoundary,
-          rows);
-      return;
-    }
-    case TypeKind::BIGINT: {
-      encodeRowColumn<int64_t, isSingleSortKey>(
-          prefixSortLayout,
-          index,
-          rowColumn,
-          row,
-          prefixBuffer,
-          nullBoundary,
-          rows);
-      return;
-    }
-    case TypeKind::REAL: {
-      encodeRowColumn<float, isSingleSortKey>(
-          prefixSortLayout,
-          index,
-          rowColumn,
-          row,
-          prefixBuffer,
-          nullBoundary,
-          rows);
-      return;
-    }
-    case TypeKind::DOUBLE: {
-      encodeRowColumn<double, isSingleSortKey>(
-          prefixSortLayout,
-          index,
-          rowColumn,
-          row,
-          prefixBuffer,
-          nullBoundary,
-          rows);
-      return;
-    }
-    case TypeKind::TIMESTAMP: {
-      encodeRowColumn<Timestamp, isSingleSortKey>(
-          prefixSortLayout,
-          index,
-          rowColumn,
-          row,
-          prefixBuffer,
-          nullBoundary,
-          rows);
-      return;
-    }
-    case TypeKind::HUGEINT: {
-      encodeRowColumn<int128_t, isSingleSortKey>(
-          prefixSortLayout,
-          index,
-          rowColumn,
-          row,
-          prefixBuffer,
-          nullBoundary,
-          rows);
-      return;
-    }
-    case TypeKind::VARCHAR:
-      [[fallthrough]];
-    case TypeKind::VARBINARY: {
-      encodeRowColumn<StringView, isSingleSortKey>(
-          prefixSortLayout,
-          index,
-          rowColumn,
-          row,
-          prefixBuffer,
-          nullBoundary,
-          rows);
-      return;
-    }
+#define SCALAR_CASE(kind)                       \
+  case TypeKind::kind:                          \
+    return encodeRowColumn<                     \
+        TypeTraits<TypeKind::kind>::NativeType, \
+        isSingleSortKey>(                       \
+        prefixSortLayout,                       \
+        index,                                  \
+        rowColumn,                              \
+        row,                                    \
+        prefixBuffer,                           \
+        nullBoundary,                           \
+        rows);
+    SCALAR_CASE(SMALLINT)
+    SCALAR_CASE(INTEGER)
+    SCALAR_CASE(BIGINT)
+    SCALAR_CASE(HUGEINT)
+    SCALAR_CASE(REAL)
+    SCALAR_CASE(DOUBLE)
+    SCALAR_CASE(TIMESTAMP)
+    SCALAR_CASE(VARCHAR)
+    SCALAR_CASE(VARBINARY)
+#undef SCALAR_CASE
     default:
       VELOX_UNSUPPORTED(
           "prefix-sort does not support type kind: {}",
@@ -471,11 +403,12 @@ void PrefixSort::sortInternal(
   memory::ContiguousAllocation prefixBufferAlloc;
   // Allocates prefix sort buffer.
   {
-    // TODO: If we store the numNullRows of first column in RowContainer, we can
-    // get the accurate prefix buffer size. Now we only store columnHasNulls_
-    // for all columns.
+    auto numNotNullRows = numRows;
+    if (isSingleSortKey_ && rowContainer_->columnStats(0).has_value()) {
+      numNotNullRows = rowContainer_->columnStats(0)->nonNullCount();
+    }
     const auto numPages =
-        memory::AllocationTraits::numPages(numRows * entrySize);
+        memory::AllocationTraits::numPages(numNotNullRows * entrySize);
     pool_->allocateContiguous(numPages, prefixBufferAlloc);
   }
   char* prefixBuffer = prefixBufferAlloc.data<char>();
