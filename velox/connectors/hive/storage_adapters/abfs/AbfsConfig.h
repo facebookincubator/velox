@@ -94,9 +94,14 @@ class AbfsConfig {
   }
 
   /// Test only.
-  static void registerFakeWriteFileClient(
-      std::unique_ptr<AzureDataLakeFileClient> fakeClient) {
-    fakeWriteClient_ = std::move(fakeClient);
+  static void setUpTestWriteClient(
+      std::function<std::unique_ptr<AzureDataLakeFileClient>()> testClientFn) {
+    testWriteClientFn_ = testClientFn;
+  }
+
+  /// Test only.
+  static void tearDownTestWriteClient() {
+    testWriteClientFn_ = nullptr;
   }
 
  private:
@@ -118,7 +123,8 @@ class AbfsConfig {
   std::string authorityHost_;
   std::shared_ptr<Azure::Core::Credentials::TokenCredential> tokenCredential_;
 
-  static std::unique_ptr<AzureDataLakeFileClient> fakeWriteClient_;
+  static std::function<std::unique_ptr<AzureDataLakeFileClient>()>
+      testWriteClientFn_;
 };
 
 } // namespace facebook::velox::filesystems

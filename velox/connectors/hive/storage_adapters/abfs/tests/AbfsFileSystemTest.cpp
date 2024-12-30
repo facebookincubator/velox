@@ -50,6 +50,8 @@ class AbfsFileSystemTest : public testing::Test {
   }
 
   void SetUp() override {
+    AbfsConfig::setUpTestWriteClient(
+        []() { return std::make_unique<MockDataLakeFileClient>(); });
     auto port = facebook::velox::exec::test::getFreePort();
     azuriteServer_ = std::make_shared<AzuriteServer>(port);
     azuriteServer_->start();
@@ -59,6 +61,7 @@ class AbfsFileSystemTest : public testing::Test {
   }
 
   void TearDown() override {
+    AbfsConfig::tearDownTestWriteClient();
     azuriteServer_->stop();
   }
 
@@ -277,8 +280,6 @@ TEST_F(AbfsFileSystemTest, registerAbfsFileSink) {
   auto hiveConfig =
       std::make_shared<const config::ConfigBase>(std::move(config));
   for (const auto& path : paths) {
-    AbfsConfig::registerFakeWriteFileClient(
-        std::make_unique<MockDataLakeFileClient>());
     auto sink = dwio::common::FileSink::create(
         path, {.connectorProperties = hiveConfig});
     auto writeFileSink = dynamic_cast<dwio::common::WriteFileSink*>(sink.get());

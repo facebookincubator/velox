@@ -23,7 +23,8 @@
 
 namespace facebook::velox::filesystems {
 
-std::unique_ptr<AzureDataLakeFileClient> AbfsConfig::fakeWriteClient_;
+std::function<std::unique_ptr<AzureDataLakeFileClient>()>
+    AbfsConfig::testWriteClientFn_;
 
 class DataLakeFileClientWrapper final : public AzureDataLakeFileClient {
  public:
@@ -161,8 +162,8 @@ std::unique_ptr<BlobClient> AbfsConfig::getReadFileClient() {
 }
 
 std::unique_ptr<AzureDataLakeFileClient> AbfsConfig::getWriteFileClient() {
-  if (fakeWriteClient_) {
-    return std::move(fakeWriteClient_);
+  if (testWriteClientFn_) {
+    return testWriteClientFn_();
   }
   std::unique_ptr<DataLakeFileClient> client;
   if (authType_ == kAzureSASAuthType) {
