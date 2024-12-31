@@ -14,7 +14,9 @@
  * limitations under the License.
  */
 
-#include "HdfsMiniCluster.h"
+#include "velox/connectors/hive/storage_adapters/hdfs/tests/HdfsMiniCluster.h"
+
+#include "velox/exec/tests/utils/PortUtil.h"
 
 namespace facebook::velox::filesystems::test {
 void HdfsMiniCluster::start() {
@@ -28,9 +30,9 @@ void HdfsMiniCluster::start() {
         noMapReduceOption,
         formatNameNodeOption,
         httpPortOption,
-        httpPort,
+        httpPort_,
         nameNodePortOption,
-        nameNodePort,
+        nameNodePort_,
         configurationOption,
         turnOffPermissions);
     serverProcess_->wait_for(std::chrono::duration<int, std::milli>(60000));
@@ -71,6 +73,11 @@ HdfsMiniCluster::HdfsMiniCluster() {
     VELOX_FAIL(
         "Failed to find minicluster executable {}'", miniClusterExecutableName);
   }
+  constexpr auto kHostAddressTemplate = "hdfs://localhost:{}";
+  auto ports = facebook::velox::exec::test::getFreePorts(2);
+  nameNodePort_ = ports[0];
+  httpPort_ = ports[1];
+  filesystemUrl_ = fmt::format(kHostAddressTemplate, nameNodePort_);
   boost::filesystem::path hadoopHomeDirectory = exePath_;
   hadoopHomeDirectory.remove_leaf().remove_leaf();
   setupEnvironment(hadoopHomeDirectory.string());
@@ -82,7 +89,7 @@ void HdfsMiniCluster::addFile(std::string source, std::string destination) {
       exePath_,
       filesystemCommand,
       filesystemUrlOption,
-      filesystemUrl,
+      filesystemUrl_,
       filePutOption,
       source,
       destination);
