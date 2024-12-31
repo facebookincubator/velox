@@ -71,7 +71,7 @@ Array Functions
     Concatenates the elements of the given array using the ``delimiter`` and an optional string to replace nulls.
     If no value is set for ``nullReplacement``, any null value is filtered. ::
 
-        SELECT array_join(array('1', '2', '3'), ','') -- '1,2,3'
+        SELECT array_join(array('1', '2', '3'), ',') -- '1,2,3'
         SELECT array_join(array('1', NULL, '2'), ',') -- '1,2'
         SELECT array_join(array('1', NULL, '2'), ',', '0') -- '1,0,2'
 
