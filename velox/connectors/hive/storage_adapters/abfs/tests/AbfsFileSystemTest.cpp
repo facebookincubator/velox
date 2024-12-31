@@ -47,11 +47,15 @@ class AbfsFileSystemTest : public testing::Test {
 
   static void SetUpTestCase() {
     registerAbfsFileSystem();
+    AbfsConfig::setUpTestWriteClient(
+        []() { return std::make_unique<MockDataLakeFileClient>(); });
+  }
+
+  static void TearDownTestSuite() {
+    AbfsConfig::tearDownTestWriteClient();
   }
 
   void SetUp() override {
-    AbfsConfig::setUpTestWriteClient(
-        []() { return std::make_unique<MockDataLakeFileClient>(); });
     auto port = facebook::velox::exec::test::getFreePort();
     azuriteServer_ = std::make_shared<AzuriteServer>(port);
     azuriteServer_->start();
@@ -61,7 +65,6 @@ class AbfsFileSystemTest : public testing::Test {
   }
 
   void TearDown() override {
-    AbfsConfig::tearDownTestWriteClient();
     azuriteServer_->stop();
   }
 
