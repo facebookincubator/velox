@@ -72,7 +72,7 @@ TEST_F(InsertIntoHdfsTest, insertIntoHdfsTest) {
        makeFlatVector<int16_t>(expectedRows, [](auto row) { return row; }),
        makeFlatVector<double>(expectedRows, [](auto row) { return row; })});
 
-  auto outputDirectory = "hdfs://localhost:7878/";
+  auto outputDirectory = "hdfs://localhost:/" + miniCluster->nameNodePort();
   // INSERT INTO hdfs with one writer
   auto plan = PlanBuilder()
                   .values({input})

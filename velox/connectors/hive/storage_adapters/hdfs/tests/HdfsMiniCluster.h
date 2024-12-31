@@ -51,6 +51,10 @@ class HdfsMiniCluster {
   void addFile(std::string source, std::string destination);
   virtual ~HdfsMiniCluster();
 
+  std::string nameNodePort() const {
+    return nameNodePort_;
+  }
+
  private:
   void setupEnvironment(const std::string& homeDirectory);
 
