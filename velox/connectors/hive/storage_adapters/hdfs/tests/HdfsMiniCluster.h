@@ -51,8 +51,17 @@ class HdfsMiniCluster {
   void addFile(std::string source, std::string destination);
   virtual ~HdfsMiniCluster();
 
-  std::string nameNodePort() const {
+  std::string_view nameNodePort() const {
     return nameNodePort_;
+  }
+
+  std::string_view url() const {
+    return filesystemUrl_;
+  }
+
+  std::string_view host() const {
+    static const std::string_view kLocalhost = "localhost";
+    return kLocalhost;
   }
 
  private:

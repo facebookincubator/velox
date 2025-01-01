@@ -73,11 +73,11 @@ HdfsMiniCluster::HdfsMiniCluster() {
     VELOX_FAIL(
         "Failed to find minicluster executable {}'", miniClusterExecutableName);
   }
-  constexpr auto kHostAddressTemplate = "hdfs://localhost:{}";
+  constexpr auto kHostAddressTemplate = "hdfs://{}:{}";
   auto ports = facebook::velox::exec::test::getFreePorts(2);
   nameNodePort_ = ports[0];
   httpPort_ = ports[1];
-  filesystemUrl_ = fmt::format(kHostAddressTemplate, nameNodePort_);
+  filesystemUrl_ = fmt::format(kHostAddressTemplate, host(), nameNodePort_);
   boost::filesystem::path hadoopHomeDirectory = exePath_;
   hadoopHomeDirectory.remove_leaf().remove_leaf();
   setupEnvironment(hadoopHomeDirectory.string());

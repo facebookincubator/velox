@@ -36,11 +36,9 @@ using filesystems::arrow::io::internal::LibHdfsShim;
 
 constexpr int kOneMB = 1 << 20;
 static const std::string destinationPath = "/test_file.txt";
-static const std::string localhost = "localhost";
 static const std::string simpleDestinationPath = "hdfs://" + destinationPath;
 static const std::string viewfsDestinationPath = "viewfs://" + destinationPath;
-std::unordered_map<std::string, std::string> configurationValues(
-    {{"hive.hdfs.host", localhost}});
+std::unordered_map<std::string, std::string> configurationValues;
 
 class HdfsFileSystemTest : public testing::Test {
  public:
@@ -52,12 +50,12 @@ class HdfsFileSystemTest : public testing::Test {
       auto tempFile = createFile();
       miniCluster->addFile(tempFile->getPath(), destinationPath);
     }
-    configurationValues.insert({"hive.hdfs.port", miniCluster->nameNodePort()});
-    fullDestinationPath_ = fmt::format(
-        "hdfs://{}:{}{}",
-        localhost,
-        miniCluster->nameNodePort(),
-        destinationPath);
+    configurationValues.insert(
+        {"hive.hdfs.host", std::string(miniCluster->host())});
+    configurationValues.insert(
+        {"hive.hdfs.port", std::string(miniCluster->nameNodePort())});
+    fullDestinationPath_ =
+        fmt::format("{}{}", miniCluster->url(), destinationPath);
   }
 
   void SetUp() override {
@@ -74,8 +72,7 @@ class HdfsFileSystemTest : public testing::Test {
   static std::unique_ptr<WriteFile> openFileForWrite(std::string_view path) {
     auto config = std::make_shared<const config::ConfigBase>(
         std::unordered_map<std::string, std::string>(configurationValues));
-    std::string hdfsFilePath = "hdfs://" + localhost + ":" +
-        miniCluster->nameNodePort() + std::string(path);
+    auto hdfsFilePath = fmt::format("{}{}", miniCluster->url(), path);
     auto hdfsFileSystem = filesystems::getFileSystem(hdfsFilePath, config);
     return hdfsFileSystem->openFileForWrite(path);
   }
@@ -191,7 +188,8 @@ void verifyFailures(LibHdfsShim* driver, hdfsFS hdfs) {
 
 hdfsFS connectHdfsDriver(
     filesystems::arrow::io::internal::LibHdfsShim** driver,
-    const std::string& port) {
+    const std::string host,
+    const std::string port) {
   filesystems::arrow::io::internal::LibHdfsShim* libhdfs_shim;
   auto status = filesystems::arrow::io::internal::ConnectLibHdfs(&libhdfs_shim);
   if (!status.ok()) {
@@ -200,22 +198,26 @@ hdfsFS connectHdfsDriver(
 
   // Connect to HDFS with the builder object
   hdfsBuilder* builder = libhdfs_shim->NewBuilder();
-  libhdfs_shim->BuilderSetNameNode(builder, localhost.c_str());
+  libhdfs_shim->BuilderSetNameNode(builder, host.c_str());
   libhdfs_shim->BuilderSetNameNodePort(builder, std::stoi(port));
   libhdfs_shim->BuilderSetForceNewInstance(builder);
 
   auto hdfs = libhdfs_shim->BuilderConnect(builder);
   VELOX_CHECK_NOT_NULL(
       hdfs,
-      "Unable to connect to HDFS: {}, got error",
-      std::string(localhost.c_str()) + ":" + port);
+      "Unable to connect to HDFS at {}:{}, got error",
+      host.c_str(),
+      port);
   *driver = libhdfs_shim;
   return hdfs;
 }
 
 TEST_F(HdfsFileSystemTest, read) {
   filesystems::arrow::io::internal::LibHdfsShim* driver;
-  auto hdfs = connectHdfsDriver(&driver, miniCluster->nameNodePort());
+  auto hdfs = connectHdfsDriver(
+      &driver,
+      std::string(miniCluster->host()),
+      std::string(miniCluster->nameNodePort()));
   HdfsReadFile readFile(driver, hdfs, destinationPath);
   readData(&readFile);
 }
@@ -240,7 +242,8 @@ TEST_F(HdfsFileSystemTest, initializeFsWithEndpointInfoInFilePath) {
 
   // Wrong endpoint info specified in hdfs file path.
   const std::string wrongFullDestinationPath =
-      "hdfs://not_exist_host:" + miniCluster->nameNodePort() + destinationPath;
+      "hdfs://not_exist_host:" + std::string(miniCluster->nameNodePort()) +
+      destinationPath;
   VELOX_ASSERT_THROW(
       filesystems::getFileSystem(wrongFullDestinationPath, config),
       "Unable to connect to HDFS");
@@ -279,7 +282,7 @@ TEST_F(HdfsFileSystemTest, missingFileViaFileSystem) {
 TEST_F(HdfsFileSystemTest, missingHost) {
   try {
     std::unordered_map<std::string, std::string> missingHostConfiguration(
-        {{"hive.hdfs.port", miniCluster->nameNodePort()}});
+        {{"hive.hdfs.port", std::string(miniCluster->nameNodePort())}});
     auto config = std::make_shared<const config::ConfigBase>(
         std::move(missingHostConfiguration));
     filesystems::HdfsFileSystem hdfsFileSystem(
@@ -298,7 +301,7 @@ TEST_F(HdfsFileSystemTest, missingHost) {
 TEST_F(HdfsFileSystemTest, missingPort) {
   try {
     std::unordered_map<std::string, std::string> missingPortConfiguration(
-        {{"hive.hdfs.host", localhost}});
+        {{"hive.hdfs.host", std::string(miniCluster->host())}});
     auto config = std::make_shared<const config::ConfigBase>(
         std::move(missingPortConfiguration));
     filesystems::HdfsFileSystem hdfsFileSystem(
@@ -317,7 +320,10 @@ TEST_F(HdfsFileSystemTest, missingPort) {
 TEST_F(HdfsFileSystemTest, missingFileViaReadFile) {
   try {
     filesystems::arrow::io::internal::LibHdfsShim* driver;
-    auto hdfs = connectHdfsDriver(&driver, miniCluster->nameNodePort());
+    auto hdfs = connectHdfsDriver(
+        &driver,
+        std::string(miniCluster->host()),
+        std::string(miniCluster->nameNodePort()));
     HdfsReadFile readFile(driver, hdfs, "/path/that/does/not/exist");
     FAIL() << "expected VeloxException";
   } catch (VeloxException const& error) {
@@ -376,8 +382,10 @@ TEST_F(HdfsFileSystemTest, multipleThreadsWithReadFile) {
   startThreads = false;
 
   filesystems::arrow::io::internal::LibHdfsShim* driver;
-  auto hdfs = connectHdfsDriver(&driver, miniCluster->nameNodePort());
-
+  auto hdfs = connectHdfsDriver(
+      &driver,
+      std::string(miniCluster->host()),
+      std::string(miniCluster->nameNodePort()));
   std::vector<std::thread> threads;
   std::mt19937 generator(std::random_device{}());
   std::vector<int> sleepTimesInMicroseconds = {0, 500, 50000};
@@ -490,6 +498,9 @@ TEST_F(HdfsFileSystemTest, writeWithParentDirNotExist) {
 
 TEST_F(HdfsFileSystemTest, readFailures) {
   filesystems::arrow::io::internal::LibHdfsShim* driver;
-  auto hdfs = connectHdfsDriver(&driver, miniCluster->nameNodePort());
+  auto hdfs = connectHdfsDriver(
+      &driver,
+      std::string(miniCluster->host()),
+      std::string(miniCluster->nameNodePort()));
   verifyFailures(driver, hdfs);
 }
