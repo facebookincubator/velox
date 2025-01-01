@@ -70,8 +70,8 @@ class HdfsMiniCluster {
   std::unique_ptr<::boost::process::child> serverProcess_;
   boost::filesystem::path exePath_;
   boost::process::environment env_;
-  std::string nameNodePort_{""};
-  std::string httpPort_{""};
-  std::string filesystemUrl_{""};
+  std::string nameNodePort_;
+  std::string httpPort_;
+  std::string filesystemUrl_;
 };
 } // namespace facebook::velox::filesystems::test

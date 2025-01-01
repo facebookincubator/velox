@@ -39,7 +39,7 @@ void HdfsMiniCluster::start() {
     VELOX_CHECK_EQ(
         serverProcess_->exit_code(),
         383,
-        "Minicluster process exited, code: ",
+        "Minicluster process exited, code: {}",
         serverProcess_->exit_code());
   } catch (const std::exception& e) {
     VELOX_FAIL("Failed to launch Minicluster server: {}", e.what());
@@ -75,8 +75,8 @@ HdfsMiniCluster::HdfsMiniCluster() {
   }
   constexpr auto kHostAddressTemplate = "hdfs://{}:{}";
   auto ports = facebook::velox::exec::test::getFreePorts(2);
-  nameNodePort_ = ports[0];
-  httpPort_ = ports[1];
+  nameNodePort_ = fmt::format("{}", ports[0]);
+  httpPort_ = fmt::format("{}", ports[1]);
   filesystemUrl_ = fmt::format(kHostAddressTemplate, host(), nameNodePort_);
   boost::filesystem::path hadoopHomeDirectory = exePath_;
   hadoopHomeDirectory.remove_leaf().remove_leaf();
