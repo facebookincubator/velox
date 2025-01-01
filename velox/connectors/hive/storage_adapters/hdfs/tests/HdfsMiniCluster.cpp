@@ -94,7 +94,7 @@ void HdfsMiniCluster::addFile(std::string source, std::string destination) {
       source,
       destination);
   bool isExited =
-      filePutProcess->wait_for(std::chrono::duration<int, std::milli>(5000));
+      filePutProcess->wait_for(std::chrono::duration<int, std::milli>(15000));
   if (!isExited) {
     VELOX_FAIL(
         "Failed to add file to hdfs, exit code: {}",

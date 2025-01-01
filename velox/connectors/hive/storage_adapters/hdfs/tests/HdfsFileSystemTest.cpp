@@ -95,7 +95,7 @@ class HdfsFileSystemTest : public testing::Test {
 std::shared_ptr<filesystems::test::HdfsMiniCluster>
     HdfsFileSystemTest::miniCluster = nullptr;
 std::atomic<bool> HdfsFileSystemTest::startThreads = false;
-std::string HdfsFileSystemTest::fullDestinationPath_ = "";
+std::string HdfsFileSystemTest::fullDestinationPath_;
 
 void readData(ReadFile* readFile) {
   ASSERT_EQ(readFile->size(), 15 + kOneMB);
@@ -192,9 +192,7 @@ hdfsFS connectHdfsDriver(
     const std::string port) {
   filesystems::arrow::io::internal::LibHdfsShim* libhdfs_shim;
   auto status = filesystems::arrow::io::internal::ConnectLibHdfs(&libhdfs_shim);
-  if (!status.ok()) {
-    LOG(ERROR) << "ConnectLibHdfs failed ";
-  }
+  VELOX_CHECK(status.ok(), "ConnectLibHdfs failed.");
 
   // Connect to HDFS with the builder object
   hdfsBuilder* builder = libhdfs_shim->NewBuilder();
