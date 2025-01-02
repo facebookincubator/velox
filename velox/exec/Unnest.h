@@ -107,6 +107,10 @@ class Unnest : public Operator {
       const RowRange& rowRange,
       std::vector<VectorPtr>& outputs);
 
+  // Calculate the max number of elements of each row after unnested.
+  // @param size The number of input rows
+  // @param isOuter Whether we should generate a null element
+  // if the array/map is null or empty then null is produced
   template <bool isOuter>
   void countMaxNumElementsPerRow(int32_t size);
 

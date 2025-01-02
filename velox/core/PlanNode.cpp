@@ -834,7 +834,7 @@ UnnestNode::UnnestNode(
     const std::vector<std::string>& unnestNames,
     const std::optional<std::string>& ordinalityName,
     const PlanNodePtr& source,
-    const bool isOuter)
+    bool isOuter)
     : PlanNode(id),
       replicateVariables_{std::move(replicateVariables)},
       unnestVariables_{std::move(unnestVariables)},

@@ -1959,7 +1959,7 @@ class UnnestNode : public PlanNode {
       const std::vector<std::string>& unnestNames,
       const std::optional<std::string>& ordinalityName,
       const PlanNodePtr& source,
-      const bool isOuter);
+      bool isOuter);
 
   UnnestNode(
       const PlanNodeId& id,
