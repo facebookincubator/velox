@@ -340,20 +340,11 @@ bool registerAggregateFunction(
                  const TypePtr& resultType,
                  const core::QueryConfig& config)
                  -> std::unique_ptr<Aggregate> {
-               const auto& [originalResultType, _] =
-                   resolveAggregateFunction(mergeExtractFunctionName, argTypes);
-               if (!originalResultType) {
-                 // TODO: limitation -- result type must be resolvable given
-                 // intermediate type of the original UDAF.
-                 VELOX_UNREACHABLE(
-                     "Signatures whose result types are not resolvable given intermediate types should have been excluded.");
-               }
-
                if (auto func = getAggregateFunctionEntry(name)) {
                  auto fn = func->factory(
                      core::AggregationNode::Step::kFinal,
                      argTypes,
-                     originalResultType,
+                     resultType,
                      config);
                  VELOX_CHECK_NOT_NULL(fn);
                  return std::make_unique<
