@@ -30,8 +30,6 @@ static const char* kErrorMessageEntryNotNull = "map entry cannot be null";
 
 class MapFromEntriesFunction : public exec::VectorFunction {
  public:
-  // @param throwOnNull If true, throws exception when input array is null or
-  // contains null entry. Otherwise, returns null.
   MapFromEntriesFunction(bool throwOnNull) : throwOnNull_(throwOnNull) {}
   void apply(
       const SelectivityVector& rows,
@@ -147,11 +145,11 @@ class MapFromEntriesFunction : public exec::VectorFunction {
             // The map vector needs to be valid because its consumed by
             // checkDuplicateKeys before try sets invalid rows to null.
             resetSize(row);
-            if (!throwOnNull_) {
-              bits::setNull(mutableNulls, row);
-              break;
+            if (throwOnNull_) {
+              VELOX_USER_FAIL(kErrorMessageEntryNotNull);
             }
-            VELOX_USER_FAIL(kErrorMessageEntryNotNull);
+            bits::setNull(mutableNulls, row);
+            break;
           }
 
           // Check null keys.
@@ -237,6 +235,8 @@ class MapFromEntriesFunction : public exec::VectorFunction {
     return mapVector;
   }
 
+  // If true, throws exception for null input or null entry (Presto behavior).
+  // Otherwise, returns null for these cases (Spark behavior).
   const bool throwOnNull_;
 };
 } // namespace
