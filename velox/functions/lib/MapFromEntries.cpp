@@ -118,7 +118,7 @@ class MapFromEntriesFunction : public exec::VectorFunction {
           BaseVector::create(UNKNOWN(), 0, context.pool()));
     }
 
-    exec::LocalSelectivityVector remianingRows(context, rows);
+    exec::LocalSelectivityVector remainingRows(context, rows);
     auto rowVector = decodedRowVector->base()->as<RowVector>();
     auto keyVector = rowVector->childAt(0);
 
@@ -162,7 +162,7 @@ class MapFromEntriesFunction : public exec::VectorFunction {
       });
     }
 
-    context.deselectErrors(*remianingRows.get());
+    context.deselectErrors(*remainingRows.get());
 
     VectorPtr wrappedKeys;
     VectorPtr wrappedValues;
@@ -231,7 +231,7 @@ class MapFromEntriesFunction : public exec::VectorFunction {
         wrappedKeys,
         wrappedValues);
 
-    checkDuplicateKeys(mapVector, *remianingRows, context);
+    checkDuplicateKeys(mapVector, *remainingRows, context);
     return mapVector;
   }
 
