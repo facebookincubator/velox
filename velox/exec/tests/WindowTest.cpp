@@ -245,34 +245,15 @@ TEST_F(WindowTest, windowOOMWithHugeWindowPartition) {
 
   params.queryCtx = queryCtx;
 
-  auto testWindowBuild = [&](bool useStreamingWindow) {
-    if (useStreamingWindow) {
-      params.planNode =
-          PlanBuilder(planNodeIdGenerator)
-              .values(valuesSplit)
-              .streamingWindow(
-                  {"row_number() over (partition by p order by s)"})
-              .project({"d"})
-              .singleAggregation({}, {"sum(d)"})
-              .planNode();
+  params.planNode =
+      PlanBuilder(planNodeIdGenerator)
+          .values(valuesSplit)
+          .streamingWindow({"row_number() over (partition by p order by s)"})
+          .project({"d"})
+          .singleAggregation({}, {"sum(d)"})
+          .planNode();
 
-      readCursor(params, [](Task*) {});
-    } else {
-      params.planNode =
-          PlanBuilder(planNodeIdGenerator)
-              .values(valuesSplit)
-              .window({"row_number() over (partition by p order by s)"})
-              .project({"d"})
-              .singleAggregation({}, {"sum(d)"})
-              .planNode();
-
-      VELOX_ASSERT_THROW(
-          readCursor(params, [](Task*) {}),
-          "Exceeded memory pool capacity after attempt to grow capacity through arbitration.");
-    }
-  };
-  // RowStreamingWindow will not OOM even with huge window partition.
-  testWindowBuild(true);
+  readCursor(params, [](Task*) {});
 }
 
 DEBUG_ONLY_TEST_F(WindowTest, aggWindowResultMismatch) {
