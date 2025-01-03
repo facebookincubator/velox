@@ -13,6 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+#include <type/Type.h>
 #include "velox/functions/lib/aggregates/SetBaseAggregate.h"
 
 namespace facebook::velox::functions::aggregate::sparksql {
@@ -88,6 +89,8 @@ void registerCollectSetAggAggregate(
           case TypeKind::ROW:
             return std::make_unique<SparkSetAggAggregate<ComplexType>>(
                 resultType);
+          case TypeKind::UNKNOWN:
+            return std::make_unique<SparkSetAggAggregate<UnknownValue>>(resultType);
           default:
             VELOX_UNSUPPORTED(
                 "Unsupported type {}", mapTypeKindToName(typeKind));

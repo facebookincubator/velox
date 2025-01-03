@@ -260,5 +260,18 @@ TEST_F(CollectSetAggregateTest, rowWithNestedNull) {
       {data}, {}, {"collect_set(c0)"}, {"spark_array_sort(a0)"}, {expected});
 }
 
+TEST_F(CollectSetAggregateTest, nullType) {
+  auto data = makeRowVector({
+    makeNullConstant(TypeKind::UNKNOWN, 3),
+  });
+
+  auto expected = makeRowVector({
+      makeArrayVectorFromJson<int32_t>({"[]"}),
+  });
+
+  testAggregations(
+      {data}, {}, {"collect_set(c0)"}, {}, {expected});
+}
+
 } // namespace
 } // namespace facebook::velox::functions::aggregate::sparksql::test
