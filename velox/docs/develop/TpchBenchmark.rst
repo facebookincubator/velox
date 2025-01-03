@@ -109,8 +109,8 @@ Top Optimization Recommendations
    :header: "Option Name", "Single Process", "Multi-Process"
    :widths: auto
 
-   "num_drivers","max(20, vCPUs<super>*</super> X 3 / 4)","NA"
-   "num_io_threads", "max(16, vCPUs<super>*</super> X 3 / 8)", "vCPUs*"
+   "num_drivers","max(20, vCPUs* X 3 / 4)","NA"
+   "num_io_threads", "max(16, vCPUs* X 3 / 8)", "vCPUs*"
    "cache_gb", "50% System RAM", "NA (default = 0)"
    "num_splits_per_file", "Row Group Size of Data", "Row Group Size of Data"
    "max_coalesced_bytes", "Minimum of 90MB", "Minimum of 90MB"
