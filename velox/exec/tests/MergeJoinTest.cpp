@@ -106,11 +106,12 @@ class MergeJoinTest : public HiveConnectorTestBase {
           pool(),
           CppToType<int32_t>::create(),
           key->size(),
-          std::make_unique<MySimpleVectorLoader>(batchId, counter, [=](RowSet) {
-            return makeFlatVector<int32_t>(key->size(), [startRow](auto row) {
-              return (startRow + row) * 10;
-            });
-          }));
+          std::make_unique<MySimpleVectorLoader>(
+              batchId, counter, [=, this](RowSet) {
+                return makeFlatVector<int32_t>(
+                    key->size(),
+                    [startRow](auto row) { return (startRow + row) * 10; });
+              }));
 
       auto lazyKeys = std::make_shared<LazyVector>(
           pool(),
