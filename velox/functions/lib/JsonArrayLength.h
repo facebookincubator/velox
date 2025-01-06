@@ -56,6 +56,11 @@ struct JsonArrayLengthFunction {
       return false;
     }
 
+    VELOX_USER_CHECK(numElements <= std::numeric_limits<TOutput>::max(),
+      "The json array length {} is bigger than the max value of output type {}.",
+      numElements,
+      std::numeric_limits<TOutput>::max());
+
     len = numElements;
     return true;
   }
