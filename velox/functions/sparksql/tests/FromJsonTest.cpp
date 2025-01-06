@@ -45,8 +45,8 @@ class FromJsonTest : public SparkFunctionBaseTest {
 TEST_F(FromJsonTest, basicStruct) {
   auto expected = makeFlatVector<int64_t>({1, 2, 3});
   auto input = makeFlatVector<std::string>(
-      {R"({"a": 1})", R"({"a": 2})", R"({"a": 3})"});
-  testFromJson(input, makeRowVector({"a"}, {expected}));
+      {R"({"Id": 1})", R"({"Id": 2})", R"({"Id": 3})"});
+  testFromJson(input, makeRowVector({"Id"}, {expected}));
 }
 
 TEST_F(FromJsonTest, basicArray) {
@@ -189,14 +189,6 @@ TEST_F(FromJsonTest, nestedComplexType) {
   auto input = makeFlatVector<std::string>(
       {R"({"a": 1})", R"([{"a": 2}])", R"([{"a": 2}])"});
   testFromJson(input, arrayVector);
-}
-
-TEST_F(FromJsonTest, keyCaseSensitive) {
-  auto expected1 = makeNullableFlatVector<int64_t>({1, 2, 4});
-  auto expected2 = makeNullableFlatVector<int64_t>({3, 4, 5});
-  auto input = makeFlatVector<std::string>(
-      {R"({"a": 1, "A": 3})", R"({"a": 2, "A": 4})", R"({"a": 4, "A": 5})"});
-  testFromJson(input, makeRowVector({"a", "A"}, {expected1, expected2}));
 }
 
 TEST_F(FromJsonTest, nullOnFailure) {

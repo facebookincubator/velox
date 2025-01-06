@@ -53,8 +53,7 @@ JSON Functions
     REAL, DOUBLE, VARCHAR, ARRAY, MAP and ROW. When casting to ARRAY or MAP, 
     the element type of the array or the value type of the map must be one of 
     these supported types, and for maps, the key type must be VARCHAR. Casting 
-    to ROW supports only JSON objects, where the keys must exactly match the ROW 
-    field names (case sensitivity).
+    to ROW supports only JSON objects.
     The current implementation has the following limitations.
 
     * Does not support user provided options.
