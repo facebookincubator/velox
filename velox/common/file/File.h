@@ -349,6 +349,10 @@ class LocalWriteFile final : public WriteFile {
     return size_;
   }
 
+  std::string getName() {
+    return path_;
+  }
+
  private:
   // File descriptor.
   int32_t fd_{-1};
