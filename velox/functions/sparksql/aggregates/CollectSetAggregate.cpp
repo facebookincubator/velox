@@ -13,7 +13,6 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#include <type/Type.h>
 #include "velox/functions/lib/aggregates/SetBaseAggregate.h"
 
 namespace facebook::velox::functions::aggregate::sparksql {
