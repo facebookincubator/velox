@@ -118,8 +118,15 @@ std::optional<RowVectorPtr> ParquetDataSource::next(
 
     // Read chunks until num_rows > size or no more chunks left.
     while (splitReader_->has_next() and currentNumRows < size) {
-      readTables.emplace_back(splitReader_->read_chunk().tbl);
+      auto [table, metadata] = splitReader_->read_chunk();
+      readTables.emplace_back(std::move(table));
       currentNumRows += readTables.back()->num_rows();
+      // Fill in the column names if reading the first chunk.
+      if (columnNames.empty()) {
+        for (auto schema : metadata.schema_info) {
+          columnNames.emplace_back(schema.name);
+        }
+      }
     }
 
     if (readTables.empty() and not cudfTable_) {
@@ -151,7 +158,8 @@ std::optional<RowVectorPtr> ParquetDataSource::next(
   // If the current table view has <= size rows, this is the last chunk.
   if (currentCudfTableView_.num_rows() <= size) {
     // Convert the current table view to RowVectorPtr.
-    output = with_arrow::to_velox_column(currentCudfTableView_, pool_, "c");
+    output =
+        with_arrow::to_velox_column(currentCudfTableView_, pool_, columnNames);
     // Reset internal tables
     resetCudfTableAndView();
   } else {
@@ -164,7 +172,7 @@ std::optional<RowVectorPtr> ParquetDataSource::next(
         tableSplits[0].num_rows(),
         "cudf::split yielded incorrect partitions");
     // Convert the first split view to RowVectorPtr.
-    output = with_arrow::to_velox_column(tableSplits[0], pool_, "c");
+    output = with_arrow::to_velox_column(tableSplits[0], pool_, columnNames);
     // Set the current view to the second split view.
     currentCudfTableView_ = tableSplits[1];
   }
@@ -190,7 +198,12 @@ void ParquetDataSource::addSplit(std::shared_ptr<ConnectorSplit> split) {
     splitReader_.reset();
   }
 
-  // Reset cudfTable and views if not already reset.
+  // Clear columnNames if not empty
+  if (not columnNames.empty()) {
+    columnNames.clear();
+  }
+
+  // Reset cudfTable and views if not already reset
   if (cudfTable_) {
     resetCudfTableAndView();
   }
@@ -239,6 +252,7 @@ ParquetDataSource::createSplitReader() {
 void ParquetDataSource::resetSplit() {
   split_.reset();
   splitReader_.reset();
+  columnNames.clear();
 }
 
 void ParquetDataSource::resetCudfTableAndView() {

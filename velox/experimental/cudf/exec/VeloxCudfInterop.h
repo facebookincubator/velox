@@ -45,6 +45,11 @@ facebook::velox::RowVectorPtr to_velox_column(
     const cudf::table_view& table,
     facebook::velox::memory::MemoryPool* pool,
     std::string name_prefix);
+
+facebook::velox::RowVectorPtr to_velox_column(
+    const cudf::table_view& table,
+    facebook::velox::memory::MemoryPool* pool,
+    const std::vector<std::string>& columnNames);
 } // namespace with_arrow
 
 } // namespace facebook::velox::cudf_velox
