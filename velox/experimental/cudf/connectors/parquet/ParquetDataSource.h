@@ -108,6 +108,9 @@ class ParquetDataSource : public DataSource {
   // converted to `RowVectorPtr` in subsequent `next()` call.
   cudf::table_view currentCudfTableView_;
 
+  // Table column names read from the Parquet file
+  std::vector<std::string> columnNames;
+
   // Output type from file reader.  This is different from outputType_ that it
   // contains column names before assignment, and columns that only used in
   // remaining filter.

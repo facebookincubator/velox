@@ -399,6 +399,8 @@ std::unique_ptr<cudf::table> to_cudf_table(
   return tbl;
 }
 
+namespace {
+
 void to_signed_int_format(char* format) {
   VELOX_CHECK_NOT_NULL(format);
   switch (format[0]) {
@@ -435,17 +437,13 @@ void fix_dictionary_indices(ArrowSchema& arrowSchema) {
   }
 }
 
-facebook::velox::RowVectorPtr to_velox_column(
+RowVectorPtr to_velox_column(
     const cudf::table_view& table,
-    facebook::velox::memory::MemoryPool* pool,
-    std::string name_prefix) {
+    memory::MemoryPool* pool,
+    const std::vector<cudf::column_metadata>& metadata) {
   auto arrowDeviceArray = cudf::to_arrow_host(table);
   auto& arrowArray = arrowDeviceArray->array;
 
-  std::vector<cudf::column_metadata> metadata;
-  for (auto i = 0; i < table.num_columns(); i++) {
-    metadata.push_back(cudf::column_metadata(name_prefix + std::to_string(i)));
-  }
   auto arrowSchema = cudf::to_arrow_schema(table, metadata);
   // Hack to convert unsigned indices to signed indices for dictionary columns
   fix_dictionary_indices(*arrowSchema);
@@ -457,5 +455,30 @@ facebook::velox::RowVectorPtr to_velox_column(
   VELOX_CHECK_NOT_NULL(casted_ptr);
   return casted_ptr;
 }
+
+} // namespace
+
+facebook::velox::RowVectorPtr to_velox_column(
+    const cudf::table_view& table,
+    facebook::velox::memory::MemoryPool* pool,
+    std::string name_prefix) {
+  std::vector<cudf::column_metadata> metadata;
+  for (auto i = 0; i < table.num_columns(); i++) {
+    metadata.push_back(cudf::column_metadata(name_prefix + std::to_string(i)));
+  }
+  return to_velox_column(table, pool, metadata);
+}
+
+RowVectorPtr to_velox_column(
+    const cudf::table_view& table,
+    memory::MemoryPool* pool,
+    const std::vector<std::string>& columnNames) {
+  std::vector<cudf::column_metadata> metadata;
+  for (auto name : columnNames) {
+    metadata.emplace_back(cudf::column_metadata(name));
+  }
+  return to_velox_column(table, pool, metadata);
+}
+
 } // namespace with_arrow
 } // namespace facebook::velox::cudf_velox
