@@ -6,7 +6,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="viewport" content="width=device-width, initial-scale=1" />
 
     <title>Array Functions &#8212; Velox  documentation</title>
-    <link rel="stylesheet" type="text/css" href="../../_static/pygments.css?v=a746c00c" />
+    <link rel="stylesheet" type="text/css" href="../../_static/pygments.css?v=8f2a1f02" />
     <link rel="stylesheet" type="text/css" href="../../_static/nature.css?v=279e0f84" />
     <script src="../../_static/documentation_options.js?v=5929fcd5"></script>
     <script src="../../_static/doctools.js?v=9bcbadda"></script>
@@ -122,6 +122,18 @@ array if index is negative, with ‘null’ elements.</p>
 <span class="sig-name descname"><span class="pre">array_intersect</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">array(E)</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">array(E1))</span> <span class="pre">-&gt;</span> <span class="pre">array(E2</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#array_intersect" title="Link to this definition">¶</a></dt>
 <dd><p>Returns an array of the elements in the intersection of array1 and array2, without duplicates.</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">array_intersect</span><span class="p">(</span><span class="n">array</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">3</span><span class="p">),</span> <span class="n">array</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="mi">3</span><span class="p">,</span> <span class="mi">5</span><span class="p">));</span> <span class="o">--</span> <span class="p">[</span><span class="mi">1</span><span class="p">,</span><span class="mi">3</span><span class="p">]</span>
+</pre></div>
+</div>
+</dd></dl>
+
+<dl class="spark function">
+<dt class="sig sig-object spark" id="array_join">
+<span class="sig-name descname"><span class="pre">array_join</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">delimiter</span></span></em><span class="optional">[</span>, <em class="sig-param"><span class="n"><span class="pre">nullReplacement</span></span></em><span class="optional">]</span><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">varchar</span></span></span><a class="headerlink" href="#array_join" title="Link to this definition">¶</a></dt>
+<dd><p>Concatenates the elements of the given array using the <code class="docutils literal notranslate"><span class="pre">delimiter</span></code> and an optional string to replace nulls.
+If no value is set for <code class="docutils literal notranslate"><span class="pre">nullReplacement</span></code>, any null value is filtered.</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">array_join</span><span class="p">(</span><span class="n">array</span><span class="p">(</span><span class="s1">&#39;1&#39;</span><span class="p">,</span> <span class="s1">&#39;2&#39;</span><span class="p">,</span> <span class="s1">&#39;3&#39;</span><span class="p">),</span> <span class="s1">&#39;,&#39;</span><span class="p">)</span> <span class="o">--</span> <span class="s1">&#39;1,2,3&#39;</span>
+<span class="n">SELECT</span> <span class="n">array_join</span><span class="p">(</span><span class="n">array</span><span class="p">(</span><span class="s1">&#39;1&#39;</span><span class="p">,</span> <span class="n">NULL</span><span class="p">,</span> <span class="s1">&#39;2&#39;</span><span class="p">),</span> <span class="s1">&#39;,&#39;</span><span class="p">)</span> <span class="o">--</span> <span class="s1">&#39;1,2&#39;</span>
+<span class="n">SELECT</span> <span class="n">array_join</span><span class="p">(</span><span class="n">array</span><span class="p">(</span><span class="s1">&#39;1&#39;</span><span class="p">,</span> <span class="n">NULL</span><span class="p">,</span> <span class="s1">&#39;2&#39;</span><span class="p">),</span> <span class="s1">&#39;,&#39;</span><span class="p">,</span> <span class="s1">&#39;0&#39;</span><span class="p">)</span> <span class="o">--</span> <span class="s1">&#39;1,0,2&#39;</span>
 </pre></div>
 </div>
 </dd></dl>
@@ -401,6 +413,7 @@ longer array, before applying <code class="docutils literal notranslate"><span c
 <li><a class="reference internal" href="#array_except"><code class="docutils literal notranslate"><span class="pre">array_except()</span></code></a></li>
 <li><a class="reference internal" href="#array_insert"><code class="docutils literal notranslate"><span class="pre">array_insert()</span></code></a></li>
 <li><a class="reference internal" href="#array_intersect"><code class="docutils literal notranslate"><span class="pre">array_intersect()</span></code></a></li>
+<li><a class="reference internal" href="#array_join"><code class="docutils literal notranslate"><span class="pre">array_join()</span></code></a></li>
 <li><a class="reference internal" href="#array_max"><code class="docutils literal notranslate"><span class="pre">array_max()</span></code></a></li>
 <li><a class="reference internal" href="#array_min"><code class="docutils literal notranslate"><span class="pre">array_min()</span></code></a></li>
 <li><a class="reference internal" href="#array_position"><code class="docutils literal notranslate"><span class="pre">array_position()</span></code></a></li>
