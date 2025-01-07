@@ -639,11 +639,11 @@ struct WriterOptions {
   const tz::TimeZone* sessionTimezone{nullptr};
   bool adjustTimestampToTimezone{false};
 
-  // WriterOption implementations should provide this function to specify how to
+  // WriterOption implementations can implement this function to specify how to
   // process format-specific session and connector configs.
   virtual void processConfigs(
       const config::ConfigBase& connectorConfig,
-      const config::ConfigBase& session) = 0;
+      const config::ConfigBase& session) {}
 
   virtual ~WriterOptions() = default;
 };
