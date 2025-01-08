@@ -28,9 +28,10 @@ namespace facebook::velox::functions {
 ///
 /// Returns the array length of json if a valid json string is given.
 /// Returns null if the input json string is invalid.
-/// It is used both in SparkSQL and Presto, See documentation at
-/// Presto: https://prestodb.io/docs/current/functions/json.html#json_array_length-json-bigint
-/// SparkSQL: https://spark.apache.org/docs/latest/api/sql/index.html#json_array_length
+/// Presto:
+/// https://prestodb.io/docs/current/functions/json.html#json_array_length-json-bigint
+/// SparkSQL:
+/// https://spark.apache.org/docs/latest/api/sql/index.html#json_array_length
 template <typename T>
 struct JsonArrayLengthFunction {
   VELOX_DEFINE_FUNCTION_TYPES(T);
@@ -56,14 +57,15 @@ struct JsonArrayLengthFunction {
       return false;
     }
 
-    VELOX_USER_CHECK(numElements <= std::numeric_limits<TOutput>::max(),
-      "The json array length {} is bigger than the max value of output type {}.",
-      numElements,
-      std::numeric_limits<TOutput>::max());
+    VELOX_USER_CHECK_LE(
+        numElements,
+        std::numeric_limits<TOutput>::max(),
+        "The json array length {} is bigger than the max value of output type {}.",
+        numElements,
+        std::numeric_limits<TOutput>::max());
 
     len = numElements;
     return true;
   }
 };
-}  // namespace facebook::velox::functions
-
+} // namespace facebook::velox::functions

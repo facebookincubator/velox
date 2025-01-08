@@ -13,6 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+#include <optional>
 #include "velox/functions/sparksql/tests/SparkFunctionBaseTest.h"
 
 using namespace facebook::velox::test;
@@ -22,21 +23,18 @@ namespace {
 
 class JsonArrayLengthTest : public SparkFunctionBaseTest {
  protected:
-  VectorPtr jsonArrayLength(const std::string& json) {
+  const auto jsonArrayLength(const std::string& json) {
     auto varcharVector = makeFlatVector<std::string>({json});
-    return evaluate("json_array_length(c0)", makeRowVector({varcharVector}));
+    return evaluateOnce<int32_t>(
+        "json_array_length(c0)", makeRowVector({varcharVector}));
   }
 };
 
 TEST_F(JsonArrayLengthTest, basic) {
-  auto expected = makeConstant<int32_t>(4, 1);
-  assertEqualVectors(expected, jsonArrayLength(R"([1,2,3,4])"));
-
-  expected = makeConstant<int32_t>(5, 1);
-  assertEqualVectors(expected, jsonArrayLength(R"([1,2,3,{"f1":1,"f2":[5,6]},4])"));
-
-  expected = makeNullConstant(TypeKind::INTEGER, 1);
-  assertEqualVectors(expected, jsonArrayLength(R"([1,2)"));
+  EXPECT_EQ(4, jsonArrayLength(R"([1,2,3,4])"));
+  EXPECT_EQ(5, jsonArrayLength(R"([1,2,3,{"f1":1,"f2":[5,6]},4])"));
+  // Malformed Json.
+  EXPECT_EQ(std::nullopt, jsonArrayLength(R"([1,2)"));
 }
 
 } // namespace

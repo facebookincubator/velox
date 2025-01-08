@@ -44,3 +44,12 @@ JSON Functions
         SELECT json_object_keys(''); -- NULL
         SELECT json_object_keys(1); -- NULL
         SELECT json_object_keys('"hello"'); -- NULL
+
+.. spark:function:: json_array_length(jsonString) -> integer
+
+    Returns the number of elements in the outermost JSON array.
+    If jsonArray is not a valid JSON string or NULL, the function returns null. ::
+
+        SELECT json_array_length('[1,2,3,4]'); -- 4
+        SELECT json_array_length('[1,2,3,{"f1":1,"f2":[5,6]},4]'); -- 5
+        SELECT json_array_length('[1,2'); -- NULL
