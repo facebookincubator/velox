@@ -89,7 +89,8 @@ void registerCollectSetAggAggregate(
             return std::make_unique<SparkSetAggAggregate<ComplexType>>(
                 resultType);
           case TypeKind::UNKNOWN:
-            return std::make_unique<SparkSetAggAggregate<UnknownValue>>(resultType);
+            return std::make_unique<SparkSetAggAggregate<UnknownValue>>(
+                resultType);
           default:
             VELOX_UNSUPPORTED(
                 "Unsupported type {}", mapTypeKindToName(typeKind));

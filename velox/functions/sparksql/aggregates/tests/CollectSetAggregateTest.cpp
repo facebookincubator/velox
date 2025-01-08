@@ -262,15 +262,20 @@ TEST_F(CollectSetAggregateTest, rowWithNestedNull) {
 
 TEST_F(CollectSetAggregateTest, nullType) {
   auto data = makeRowVector({
-    makeNullConstant(TypeKind::UNKNOWN, 3),
+      makeNullConstant(TypeKind::UNKNOWN, 3),
   });
 
   auto expected = makeRowVector({
       makeArrayVectorFromJson<int32_t>({"[]"}),
   });
+  testAggregations({data}, {}, {"collect_set(c0)"}, {}, {expected});
 
-  testAggregations(
-      {data}, {}, {"collect_set(c0)"}, {}, {expected});
+  // with groupby key
+  auto expected2 = makeRowVector({
+      makeNullConstant(TypeKind::UNKNOWN, 1),
+      makeArrayVectorFromJson<int32_t>({"[]"}),
+  });
+  testAggregations({data}, {"c0"}, {"collect_set(c0)"}, {}, {expected2});
 }
 
 } // namespace
