@@ -757,6 +757,45 @@ The parameter controls the threshold when whole file is fetched.</p></td>
 <td><p>Define the estimation of footer size in ORC and Parquet format. The footer data includes version, schema, and meta data for every columns which may or may not need to be fetched later.
 The parameter controls the size when footer is fetched each time. Bigger value can decrease the IO requests but may fetch more useless meta data.</p></td>
 </tr>
+<tr class="row-even"><td><p>cache.no_retention</p></td>
+<td><p>cache.no_retention</p></td>
+<td><p>bool</p></td>
+<td><p>false</p></td>
+<td><p>If true, evict out a query scanned data out of in-memory cache right after the access,
+and also skip staging to the ssd cache. This helps to prevent the cache space pollution
+from the one-time table scan by large batch query when mixed running with interactive
+query which has high data locality.</p></td>
+</tr>
+<tr class="row-odd"><td><p>hive.reader.stats_based_filter_reorder_disabaled</p></td>
+<td><p>hive.reader.stats_based_filter_reorder_disabaled</p></td>
+<td><p>bool</p></td>
+<td><p>false</p></td>
+<td><p>If true, disable the stats based filter reordering during the read processing, and the
+filter execution order is totally determined by the filter type. Otherwise, the file
+reader will dynamically adjust the filter execution order based on the past filter
+execution stats.</p></td>
+</tr>
+</tbody>
+</table>
+<section id="orc-file-format-configuration">
+<h3><code class="docutils literal notranslate"><span class="pre">ORC</span> <span class="pre">File</span> <span class="pre">Format</span> <span class="pre">Configuration</span></code><a class="headerlink" href="#orc-file-format-configuration" title="Link to this heading">¶</a></h3>
+<table class="docutils align-default">
+<colgroup>
+<col style="width: 15.4%" />
+<col style="width: 15.4%" />
+<col style="width: 7.7%" />
+<col style="width: 7.7%" />
+<col style="width: 53.8%" />
+</colgroup>
+<thead>
+<tr class="row-odd"><th class="head"><p>Configuration Property Name</p></th>
+<th class="head"><p>Session Property Name</p></th>
+<th class="head"><p>Type</p></th>
+<th class="head"><p>Default Value</p></th>
+<th class="head"><p>Description</p></th>
+</tr>
+</thead>
+<tbody>
 <tr class="row-even"><td><p>hive.orc.writer.stripe-max-size</p></td>
 <td><p>orc_optimized_writer_max_stripe_size</p></td>
 <td><p>string</p></td>
@@ -781,6 +820,46 @@ The parameter controls the size when footer is fetched each time. Bigger value c
 <td><p>true</p></td>
 <td><p>Whether or not dictionary encoding of string types should be used by the ORC writer.</p></td>
 </tr>
+<tr class="row-even"><td><p>hive.orc.writer.linear-stripe-size-heuristics</p></td>
+<td><p>orc_writer_linear_stripe_size_heuristics</p></td>
+<td><p>bool</p></td>
+<td><p>true</p></td>
+<td><p>Enables historical based stripe size estimation after compression.</p></td>
+</tr>
+<tr class="row-odd"><td><p>hive.orc.writer.min-compression-size</p></td>
+<td><p>orc_writer_min_compression_size</p></td>
+<td><p>integer</p></td>
+<td><p>1024</p></td>
+<td><p>Minimal number of items in an encoded stream.</p></td>
+</tr>
+<tr class="row-even"><td><p>hive.orc.writer.compression-level</p></td>
+<td><p>orc_optimized_writer_compression_level</p></td>
+<td><p>tinyint</p></td>
+<td><p>3 for ZSTD and 4 for ZLIB</p></td>
+<td><p>The compression level to use with ZLIB and ZSTD.</p></td>
+</tr>
+</tbody>
+</table>
+</section>
+<section id="parquet-file-format-configuration">
+<h3><code class="docutils literal notranslate"><span class="pre">Parquet</span> <span class="pre">File</span> <span class="pre">Format</span> <span class="pre">Configuration</span></code><a class="headerlink" href="#parquet-file-format-configuration" title="Link to this heading">¶</a></h3>
+<table class="docutils align-default">
+<colgroup>
+<col style="width: 15.4%" />
+<col style="width: 15.4%" />
+<col style="width: 7.7%" />
+<col style="width: 7.7%" />
+<col style="width: 53.8%" />
+</colgroup>
+<thead>
+<tr class="row-odd"><th class="head"><p>Configuration Property Name</p></th>
+<th class="head"><p>Session Property Name</p></th>
+<th class="head"><p>Type</p></th>
+<th class="head"><p>Default Value</p></th>
+<th class="head"><p>Description</p></th>
+</tr>
+</thead>
+<tbody>
 <tr class="row-even"><td><p>hive.parquet.writer.timestamp-unit</p></td>
 <td><p>hive.parquet.writer.timestamp_unit</p></td>
 <td><p>tinyint</p></td>
@@ -788,44 +867,9 @@ The parameter controls the size when footer is fetched each time. Bigger value c
 <td><p>Timestamp unit used when writing timestamps into Parquet through Arrow bridge.
 Valid values are 3 (millisecond), 6 (microsecond), and 9 (nanosecond).</p></td>
 </tr>
-<tr class="row-odd"><td><p>hive.orc.writer.linear-stripe-size-heuristics</p></td>
-<td><p>orc_writer_linear_stripe_size_heuristics</p></td>
-<td><p>bool</p></td>
-<td><p>true</p></td>
-<td><p>Enables historical based stripe size estimation after compression.</p></td>
-</tr>
-<tr class="row-even"><td><p>hive.orc.writer.min-compression-size</p></td>
-<td><p>orc_writer_min_compression_size</p></td>
-<td><p>integer</p></td>
-<td><p>1024</p></td>
-<td><p>Minimal number of items in an encoded stream.</p></td>
-</tr>
-<tr class="row-odd"><td><p>hive.orc.writer.compression-level</p></td>
-<td><p>orc_optimized_writer_compression_level</p></td>
-<td><p>tinyint</p></td>
-<td><p>3 for ZSTD and 4 for ZLIB</p></td>
-<td><p>The compression level to use with ZLIB and ZSTD.</p></td>
-</tr>
-<tr class="row-even"><td><p>cache.no_retention</p></td>
-<td><p>cache.no_retention</p></td>
-<td><p>bool</p></td>
-<td><p>false</p></td>
-<td><p>If true, evict out a query scanned data out of in-memory cache right after the access,
-and also skip staging to the ssd cache. This helps to prevent the cache space pollution
-from the one-time table scan by large batch query when mixed running with interactive
-query which has high data locality.</p></td>
-</tr>
-<tr class="row-odd"><td><p>hive.reader.stats_based_filter_reorder_disabaled</p></td>
-<td><p>hive.reader.stats_based_filter_reorder_disabaled</p></td>
-<td><p>bool</p></td>
-<td><p>false</p></td>
-<td><p>If true, disable the stats based filter reordering during the read processing, and the
-filter execution order is totally determined by the filter type. Otherwise, the file
-reader will dynamically adjust the filter execution order based on the past filter
-execution stats.</p></td>
-</tr>
 </tbody>
 </table>
+</section>
 <section id="amazon-s3-configuration">
 <h3><code class="docutils literal notranslate"><span class="pre">Amazon</span> <span class="pre">S3</span> <span class="pre">Configuration</span></code><a class="headerlink" href="#amazon-s3-configuration" title="Link to this heading">¶</a></h3>
 <table class="docutils align-default">
@@ -1183,6 +1227,8 @@ query metadata which includes the query plan and configs etc.</p></td>
 <li><a class="reference internal" href="#table-scan">Table Scan</a></li>
 <li><a class="reference internal" href="#table-writer">Table Writer</a></li>
 <li><a class="reference internal" href="#hive-connector">Hive Connector</a><ul>
+<li><a class="reference internal" href="#orc-file-format-configuration"><code class="docutils literal notranslate"><span class="pre">ORC</span> <span class="pre">File</span> <span class="pre">Format</span> <span class="pre">Configuration</span></code></a></li>
+<li><a class="reference internal" href="#parquet-file-format-configuration"><code class="docutils literal notranslate"><span class="pre">Parquet</span> <span class="pre">File</span> <span class="pre">Format</span> <span class="pre">Configuration</span></code></a></li>
 <li><a class="reference internal" href="#amazon-s3-configuration"><code class="docutils literal notranslate"><span class="pre">Amazon</span> <span class="pre">S3</span> <span class="pre">Configuration</span></code></a><ul>
 <li><a class="reference internal" href="#bucket-level-configuration">Bucket Level Configuration</a></li>
 </ul>
