@@ -56,13 +56,10 @@ struct ExtractJsonTypeImpl {
     apply(Input value, exec::GenericWriter& writer, bool /*isRoot*/) {
       SIMDJSON_ASSIGN_OR_RAISE(auto type, value.type());
       std::string_view s;
-      switch (type) {
-        case simdjson::ondemand::json_type::string: {
-          SIMDJSON_ASSIGN_OR_RAISE(s, value.get_string());
-          break;
-        }
-        default:
-          s = value.raw_json();
+      if (type == simdjson::ondemand::json_type::string) {
+        SIMDJSON_ASSIGN_OR_RAISE(s, value.get_string());
+      } else {
+        s = value.raw_json();
       }
       writer.castTo<Varchar>().append(s);
       return simdjson::SUCCESS;
@@ -74,16 +71,12 @@ struct ExtractJsonTypeImpl {
     static simdjson::error_code
     apply(Input value, exec::GenericWriter& writer, bool /*isRoot*/) {
       SIMDJSON_ASSIGN_OR_RAISE(auto type, value.type());
-      switch (type) {
-        case simdjson::ondemand::json_type::boolean: {
-          auto& w = writer.castTo<bool>();
-          SIMDJSON_ASSIGN_OR_RAISE(w, value.get_bool());
-          break;
-        }
-        default:
-          return simdjson::INCORRECT_TYPE;
+      if (type == simdjson::ondemand::json_type::boolean) {
+        auto& w = writer.castTo<bool>();
+        SIMDJSON_ASSIGN_OR_RAISE(w, value.get_bool());
+        return simdjson::SUCCESS;
       }
-      return simdjson::SUCCESS;
+      return simdjson::INCORRECT_TYPE;
     }
   };
 
@@ -216,13 +209,11 @@ struct ExtractJsonTypeImpl {
       if (type == simdjson::ondemand::json_type::object) {
         SIMDJSON_ASSIGN_OR_RAISE(auto object, value.get_object());
 
-        bool allFieldsAreAscii = true;
-        const auto size = rowType.size();
-        for (auto i = 0; i < size; ++i) {
-          const auto& name = rowType.nameOf(i);
-          allFieldsAreAscii &=
-              functions::stringCore::isAscii(name.data(), name.size());
-        }
+        const auto& names = rowType.names();
+        bool allFieldsAreAscii =
+            std::all_of(names.begin(), names.end(), [](const auto& name) {
+              return functions::stringCore::isAscii(name.data(), name.size());
+            });
 
         auto fieldIndices = makeFieldIndicesMap(rowType, allFieldsAreAscii);
 
@@ -349,6 +340,7 @@ struct ExtractJsonTypeImpl {
     return simdjson::SUCCESS;
   }
 
+  // Creates a map of lower case field names to their indices in the row type.
   static folly::F14FastMap<std::string, int32_t> makeFieldIndicesMap(
       const RowType& rowType,
       bool allFieldsAreAscii) {
