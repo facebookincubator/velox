@@ -232,7 +232,7 @@ struct ExtractJsonTypeImpl {
               boost::algorithm::to_lower(key);
             }
             auto it = fieldIndices.find(key);
-            if (it != fieldIndices.end()) {
+            if (it != fieldIndices.end() && it->second >= 0) {
               const auto index = it->second;
               it->second = -1;
 
