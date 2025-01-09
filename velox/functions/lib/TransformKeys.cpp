@@ -13,6 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+#include "velox/functions/lib/TransformKeys.h"
 #include "velox/expression/Expr.h"
 #include "velox/expression/VectorFunction.h"
 #include "velox/functions/lib/CheckDuplicateKeys.h"
@@ -141,5 +142,9 @@ VELOX_DECLARE_VECTOR_FUNCTION_WITH_METADATA(
     TransformKeysFunction::signatures(),
     exec::VectorFunctionMetadataBuilder().defaultNullBehavior(false).build(),
     std::make_unique<TransformKeysFunction>());
+
+void registerTransformKeysFunction(const std::string& name) {
+  VELOX_REGISTER_VECTOR_FUNCTION(udf_transform_keys, name);
+}
 
 } // namespace facebook::velox::functions

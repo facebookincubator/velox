@@ -24,6 +24,7 @@ add_executable(
   Re2FunctionsTest.cpp
   RepeatTest.cpp
   TDigestTest.cpp
+  TransformKeysTest.cpp
   Utf8Test.cpp
   ZetaDistributionTest.cpp)
 
