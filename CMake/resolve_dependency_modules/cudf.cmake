@@ -26,6 +26,7 @@ block(SCOPE_FOR VARIABLES)
 # Setup libcudf build to not have testing components
 set(BUILD_TESTS OFF)
 set(CUDF_BUILD_TESTUTIL OFF)
+set(BUILD_SHARED_LIBS ON)
 
 # cudf sets all warnings as errors, and therefore fails to compile with velox
 # expanded set of warnings. We selectively disable problematic warnings just for
@@ -48,4 +49,5 @@ FetchContent_Declare(
   UPDATE_DISCONNECTED 1)
 
 FetchContent_MakeAvailable(cudf)
+unset(BUILD_SHARED_LIBS)
 endblock()
