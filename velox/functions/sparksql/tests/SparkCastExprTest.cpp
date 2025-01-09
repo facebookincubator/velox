@@ -291,6 +291,46 @@ TEST_F(SparkCastExprTest, intToTimestamp) {
   testIntegralToTimestampCast<int32_t>();
 }
 
+TEST_F(SparkCastExprTest, doubleToTimestamp) {
+  testCast(
+      makeNullableFlatVector<double>({
+          0.0,
+          1727181032.0,
+          -1727181032.0,
+          kInf,
+          kNan,
+          -kInf,
+      }),
+      makeNullableFlatVector<Timestamp>({
+          Timestamp(0, 0),
+          Timestamp(1727181032, 0),
+          Timestamp(-1727181032, 0),
+          std::nullopt,
+          std::nullopt,
+          std::nullopt,
+      }));
+}
+
+TEST_F(SparkCastExprTest, floatToTimestamp) {
+  testCast(
+      makeNullableFlatVector<float>({
+          0.0,
+          1727181032.0,
+          -1727181032.0,
+          kInf,
+          kNan,
+          -kInf,
+      }),
+      makeNullableFlatVector<Timestamp>({
+          Timestamp(0, 0),
+          Timestamp(1727181056, 0),
+          Timestamp(-1727181056, 0),
+          std::nullopt,
+          std::nullopt,
+          std::nullopt,
+      }));
+}
+
 TEST_F(SparkCastExprTest, primitiveInvalidCornerCases) {
   // To integer.
   {
