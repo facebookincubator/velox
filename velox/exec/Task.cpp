@@ -1870,7 +1870,6 @@ void Task::addCustomJoinBridgesLocked(
           inserted,
           "Join bridge for node {} is already present",
           planNode->id());
-      return;
     }
   }
 }
