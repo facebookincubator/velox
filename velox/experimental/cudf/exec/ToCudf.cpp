@@ -128,6 +128,15 @@ bool CompileState::compile() {
       replacements_made = true;
     }
   }
+
+  if (cudfDebugEnabled()) {
+    operators = driver_.operators();
+    std::cout << "Number of new operators: " << operators.size() << std::endl;
+    for (auto& op : operators) {
+      std::cout << "  Operator: ID " << op->operatorId() << ": "
+                << op->toString() << std::endl;
+    }
+  }
   return replacements_made;
 }
 
