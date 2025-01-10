@@ -157,6 +157,7 @@ RowVectorPtr CudfToVelox::getOutput() {
   }
   RowVectorPtr output = with_arrow::to_velox_column(tbl->view(), pool(), "");
   finished_ = noMoreInput_ && inputs_.empty();
+  output->setType(outputType_);
   return output;
 }
 
