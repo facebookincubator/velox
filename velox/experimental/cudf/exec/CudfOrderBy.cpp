@@ -82,6 +82,9 @@ void CudfOrderBy::noMoreInput() {
 
   NVTX3_FUNC_RANGE();
 
+  if (inputs_.empty()) {
+    return;
+  }
   auto cudf_tables = std::vector<std::unique_ptr<cudf::table>>(inputs_.size());
   auto cudf_table_views = std::vector<cudf::table_view>(inputs_.size());
   for (int i = 0; i < inputs_.size(); i++) {
