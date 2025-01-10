@@ -70,7 +70,7 @@ bool CompileState::compile() {
     VELOX_CHECK(it != nodes.end());
     return *it;
   };
-  int32_t operatorsOffset = 0; 
+  int32_t operatorsOffset = 0;
   // Replace HashBuild and HashProbe operators with CudfHashJoinBuild and
   // CudfHashJoinProbe operators.
   for (int32_t operatorIndex = 0; operatorIndex < operators.size();
@@ -94,7 +94,10 @@ bool CompileState::compile() {
 
       operatorsOffset += replace_op.size() - 1;
       [[maybe_unused]] auto replaced = driverFactory_.replaceOperators(
-          driver_, replacingOperatorIndex, replacingOperatorIndex + 1, std::move(replace_op));
+          driver_,
+          replacingOperatorIndex,
+          replacingOperatorIndex + 1,
+          std::move(replace_op));
       replacements_made = true;
     } else if (auto joinProbeOp = dynamic_cast<exec::HashProbe*>(oper)) {
       auto id = joinProbeOp->operatorId();
@@ -113,7 +116,10 @@ bool CompileState::compile() {
 
       operatorsOffset += replace_op.size() - 1;
       [[maybe_unused]] auto replaced = driverFactory_.replaceOperators(
-          driver_, replacingOperatorIndex, replacingOperatorIndex + 1, std::move(replace_op));
+          driver_,
+          replacingOperatorIndex,
+          replacingOperatorIndex + 1,
+          std::move(replace_op));
       replacements_made = true;
     } else if (auto orderByOp = dynamic_cast<exec::OrderBy*>(oper)) {
       auto id = orderByOp->operatorId();
@@ -131,7 +137,10 @@ bool CompileState::compile() {
 
       operatorsOffset += replace_op.size() - 1;
       [[maybe_unused]] auto replaced = driverFactory_.replaceOperators(
-          driver_, replacingOperatorIndex, replacingOperatorIndex + 1, std::move(replace_op));
+          driver_,
+          replacingOperatorIndex,
+          replacingOperatorIndex + 1,
+          std::move(replace_op));
       replacements_made = true;
     }
   }
