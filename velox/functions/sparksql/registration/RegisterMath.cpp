@@ -72,6 +72,7 @@ void registerMathFunctions(const std::string& prefix) {
   // In Spark only long, double, and decimal have ceil/floor
   registerFunction<sparksql::CeilFunction, int64_t, int64_t>({prefix + "ceil"});
   registerFunction<sparksql::CeilFunction, int64_t, double>({prefix + "ceil"});
+  registerDecimalCeil(prefix);
   registerFunction<sparksql::FloorFunction, int64_t, int64_t>(
       {prefix + "floor"});
   registerFunction<sparksql::FloorFunction, int64_t, double>(

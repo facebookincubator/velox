@@ -672,6 +672,29 @@ void registerDecimalDivide(
       LongDecimal<P1, S1>,
       ShortDecimal<P2, S2>>({functionName}, constraints);
 }
+
+template <typename TExec>
+struct DecimalCeilFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(TExec);
+
+  template <typename A>
+  void initialize(
+      const std::vector<TypePtr>& inputTypes,
+      const core::QueryConfig& /*config*/,
+      A* /*a*/) {
+    scale_ = getDecimalPrecisionScale(*inputTypes[0]).second;
+  }
+
+  template <typename R, typename A>
+  void call(R& out, const A& a) {
+    const auto rescaleFactor = velox::DecimalUtil::kPowersOfTen[scale_];
+    const auto increment = (a % rescaleFactor) > 0 ? 1 : 0;
+    out = a / rescaleFactor + increment;
+  }
+
+ private:
+  uint8_t scale_;
+};
 } // namespace
 
 void registerDecimalAdd(const std::string& prefix) {
@@ -714,5 +737,34 @@ void registerDecimalDivide(const std::string& prefix) {
   registerDecimalDivide<DivideFunctionDenyPrecisionLoss>(
       prefix + "divide" + kDenyPrecisionLoss,
       getDivideConstraintsDenyPrecisionLoss());
+}
+
+void registerDecimalCeil(const std::string& prefix) {
+  std::vector<exec::SignatureVariable> constraints = {
+      exec::SignatureVariable(
+          P2::name(),
+          fmt::format(
+              "min(38, {p} - {s} + min({s}, 1))",
+              fmt::arg("p", P1::name()),
+              fmt::arg("s", S1::name())),
+          exec::ParameterType::kIntegerParameter),
+      exec::SignatureVariable(
+          S2::name(), "0", exec::ParameterType::kIntegerParameter),
+  };
+
+  registerFunction<
+      DecimalCeilFunction,
+      LongDecimal<P2, S2>,
+      LongDecimal<P1, S1>>({prefix + "ceil"}, constraints);
+
+  registerFunction<
+      DecimalCeilFunction,
+      ShortDecimal<P2, S2>,
+      LongDecimal<P1, S1>>({prefix + "ceil"}, constraints);
+
+  registerFunction<
+      DecimalCeilFunction,
+      ShortDecimal<P2, S2>,
+      ShortDecimal<P1, S1>>({prefix + "ceil"}, constraints);
 }
 } // namespace facebook::velox::functions::sparksql

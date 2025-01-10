@@ -27,4 +27,6 @@ void registerDecimalMultiply(const std::string& prefix);
 
 void registerDecimalDivide(const std::string& prefix);
 
+void registerDecimalCeil(const std::string& prefix);
+
 } // namespace facebook::velox::functions::sparksql
