@@ -49,8 +49,7 @@ bool CompileState::compile() {
     }
     std::cout << "Number of plan nodes: " << nodes.size() << std::endl;
     for (auto& node : nodes) {
-      std::cout << "  Plan node: ID " << node->id() << ": " << node->toString()
-                << std::endl;
+      std::cout << "  Plan node: ID " << node->id() << ": " << node->toString();
     }
   }
 
@@ -186,9 +185,6 @@ struct cudfDriverAdapter {
     // Stored planNodes_ from inspect.
     if (cudfDebugEnabled()) {
       printf("driver.planNodes_=%p\n", planNodes_.get());
-      for (auto planNode : *planNodes_) {
-        std::cout << "PlanNode: " << (*planNode).toString() << std::endl;
-      }
     }
     auto res = state.compile();
     return res;
