@@ -57,13 +57,12 @@ namespace facebook::velox::exec {
 
 class RowNumberFuzzerRunner {
  public:
-  static int run(
+  static void run(
       size_t seed,
       std::unique_ptr<test::ReferenceQueryRunner> referenceQueryRunner) {
     serializer::presto::PrestoVectorSerde::registerVectorSerde();
     filesystems::registerLocalFileSystem();
     rowNumberFuzzer(seed, std::move(referenceQueryRunner));
-    return RUN_ALL_TESTS();
   }
 };
 

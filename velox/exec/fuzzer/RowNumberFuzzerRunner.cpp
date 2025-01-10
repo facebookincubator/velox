@@ -88,6 +88,5 @@ int main(int argc, char** argv) {
       "row_number_fuzzer",
       FLAGS_req_timeout_ms);
   const size_t initialSeed = FLAGS_seed == 0 ? std::time(nullptr) : FLAGS_seed;
-  return RowNumberFuzzerRunner::run(
-      initialSeed, std::move(referenceQueryRunner));
+  RowNumberFuzzerRunner::run(initialSeed, std::move(referenceQueryRunner));
 }
