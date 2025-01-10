@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+#include "velox/exec/fuzzer/RowNumberFuzzerRunner.h"
 #include <folly/init/Init.h>
 #include <gflags/gflags.h>
 #include <gtest/gtest.h>
@@ -25,7 +26,6 @@
 #include "velox/exec/fuzzer/FuzzerUtil.h"
 #include "velox/exec/fuzzer/PrestoQueryRunner.h"
 #include "velox/exec/fuzzer/ReferenceQueryRunner.h"
-#include "velox/exec/fuzzer/RowNumberFuzzerRunner.h"
 
 DEFINE_int64(
     seed,

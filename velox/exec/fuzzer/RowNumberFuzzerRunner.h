@@ -67,4 +67,4 @@ class RowNumberFuzzerRunner {
   }
 };
 
-} // namespace facebook::velox::exec::test
+} // namespace facebook::velox::exec

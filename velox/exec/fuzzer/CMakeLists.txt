@@ -73,10 +73,10 @@ target_link_libraries(
   velox_aggregation_fuzzer_base
   velox_temp_path)
 
-add_library(velox_row_number_fuzzer RowNumberFuzzer.cpp)
+add_library(velox_row_number_fuzzer_util RowNumberFuzzer.cpp)
 
 target_link_libraries(
-  velox_row_number_fuzzer
+  velox_row_number_fuzzer_util
   velox_fuzzer_util
   velox_type
   velox_vector_fuzzer
@@ -127,4 +127,5 @@ target_link_libraries(
 # RowNumber Fuzzer.
 add_executable(velox_row_number_fuzzer RowNumberFuzzerRunner.cpp)
 
-target_link_libraries(velox_row_number_fuzzer velox_row_number_fuzzer)
+target_link_libraries(
+  velox_row_number_fuzzer velox_row_number_fuzzer_util)
