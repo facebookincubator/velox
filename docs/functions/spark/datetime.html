@@ -76,6 +76,18 @@ Supported types for <code class="docutils literal notranslate"><span class="pre"
 </dd></dl>
 
 <dl class="spark function">
+<dt class="sig sig-object spark" id="date_format">
+<span class="sig-name descname"><span class="pre">date_format</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">timestamp</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">dateFormat</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">string</span></span></span><a class="headerlink" href="#date_format" title="Link to this definition">¶</a></dt>
+<dd><p>Converts <code class="docutils literal notranslate"><span class="pre">timestamp</span></code> to a string in the format specified by <code class="docutils literal notranslate"><span class="pre">dateFormat</span></code>.
+The format follows Spark’s
+<a class="reference external" href="https://spark.apache.org/docs/latest/sql-ref-datetime-pattern.html">Datetime patterns</a>.</p>
+<blockquote>
+<div><p>SELECT date_format(‘2020-01-29’, ‘yyyy’); – ‘2020’
+SELECT date_format(‘2024-05-30 08:00:00’, ‘yyyy-MM-dd’); – ‘2024-05-30’</p>
+</div></blockquote>
+</dd></dl>
+
+<dl class="spark function">
 <dt class="sig sig-object spark" id="date_from_unix_date">
 <span class="sig-name descname"><span class="pre">date_from_unix_date</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">integer</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">date</span></span></span><a class="headerlink" href="#date_from_unix_date" title="Link to this definition">¶</a></dt>
 <dd><p>Creates date from the number of days since 1970-01-01 in either direction. Returns null when input is null.</p>
@@ -506,6 +518,7 @@ returned for invalid format; otherwise, exception is thrown.</p>
 <li><a class="reference internal" href="#convenience-extraction-functions">Convenience Extraction Functions</a><ul>
 <li><a class="reference internal" href="#add_months"><code class="docutils literal notranslate"><span class="pre">add_months()</span></code></a></li>
 <li><a class="reference internal" href="#date_add"><code class="docutils literal notranslate"><span class="pre">date_add()</span></code></a></li>
+<li><a class="reference internal" href="#date_format"><code class="docutils literal notranslate"><span class="pre">date_format()</span></code></a></li>
 <li><a class="reference internal" href="#date_from_unix_date"><code class="docutils literal notranslate"><span class="pre">date_from_unix_date()</span></code></a></li>
 <li><a class="reference internal" href="#date_sub"><code class="docutils literal notranslate"><span class="pre">date_sub()</span></code></a></li>
 <li><a class="reference internal" href="#datediff"><code class="docutils literal notranslate"><span class="pre">datediff()</span></code></a></li>
