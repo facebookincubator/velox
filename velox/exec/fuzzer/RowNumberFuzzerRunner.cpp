@@ -75,8 +75,6 @@ std::unique_ptr<test::ReferenceQueryRunner> setupReferenceQueryRunner(
 } // namespace
 
 int main(int argc, char** argv) {
-  ::testing::InitGoogleTest(&argc, argv);
-
   // Calls common init functions in the necessary order, initializing
   // singletons, installing proper signal handlers for better debugging
   // experience, and initialize glog and gflags.
@@ -90,6 +88,6 @@ int main(int argc, char** argv) {
       "row_number_fuzzer",
       FLAGS_req_timeout_ms);
   const size_t initialSeed = FLAGS_seed == 0 ? std::time(nullptr) : FLAGS_seed;
-  return test::RowNumberFuzzerRunner::run(
+  return RowNumberFuzzerRunner::run(
       initialSeed, std::move(referenceQueryRunner));
 }

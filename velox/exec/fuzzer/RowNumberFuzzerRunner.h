@@ -15,8 +15,6 @@
  */
 #pragma once
 
-#include <gtest/gtest.h>
-
 #include "velox/common/file/FileSystems.h"
 
 #include "velox/exec/fuzzer/ReferenceQueryRunner.h"
@@ -34,7 +32,7 @@
 ///
 /// It is used as follows:
 ///
-///  $ ./velox_row_number_fuzzer_test --duration_sec 600
+///  $ ./velox_row_number_fuzzer --duration_sec 600
 ///
 /// The flags that configure RowNumberFuzzer's behavior are:
 ///
@@ -50,18 +48,18 @@
 ///  --enable_oom_injection: randomly trigger OOM while executing query plans.
 /// e.g:
 ///
-///  $ ./velox_row_number_fuzzer_test \
+///  $ ./velox_row_number_fuzzer \
 ///         --seed 123 \
 ///         --duration_sec 600 \
 ///         --v=1
 
-namespace facebook::velox::exec::test {
+namespace facebook::velox::exec {
 
 class RowNumberFuzzerRunner {
  public:
   static int run(
       size_t seed,
-      std::unique_ptr<ReferenceQueryRunner> referenceQueryRunner) {
+      std::unique_ptr<test::ReferenceQueryRunner> referenceQueryRunner) {
     serializer::presto::PrestoVectorSerde::registerVectorSerde();
     filesystems::registerLocalFileSystem();
     rowNumberFuzzer(seed, std::move(referenceQueryRunner));

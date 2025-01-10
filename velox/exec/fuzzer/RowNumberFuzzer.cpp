@@ -501,4 +501,5 @@ void rowNumberFuzzer(
     std::unique_ptr<test::ReferenceQueryRunner> referenceQueryRunner) {
   RowNumberFuzzer(seed, std::move(referenceQueryRunner)).go();
 }
+
 } // namespace facebook::velox::exec::test
