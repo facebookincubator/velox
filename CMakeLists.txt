@@ -524,14 +524,8 @@ if(VELOX_ENABLE_REMOTE_FUNCTIONS)
 endif()
 
 if(VELOX_ENABLE_PRESTO_FUNCTIONS)
-  set_source(geos)
-  resolve_dependhhhency(geos)
-endif()
-
-if(DEFINED FOLLY_BENCHMARK_STATIC_LIB)
-  set(FOLLY_BENCHMARK ${FOLLY_BENCHMARK_STATIC_LIB})
-else()
-  set(FOLLY_BENCHMARK Folly::follybenchmark)
+  velox_set_source(geos)
+  velox_resolve_dependency(geos)
 endif()
 
 if(VELOX_ENABLE_GCS)
