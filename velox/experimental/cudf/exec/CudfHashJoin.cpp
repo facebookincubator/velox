@@ -141,6 +141,15 @@ void CudfHashJoinBuild::noMoreInput() {
     inputs_.insert(inputs_.end(), build->inputs_.begin(), build->inputs_.end());
   }
 
+  SCOPE_EXIT {
+    // Realize the promises so that the other Drivers (which were not
+    // the last to finish) can continue from the barrier and finish.
+    peers.clear();
+    for (auto& promise : promises) {
+      promise.setValue();
+    }
+  };
+
   auto cudf_tables = std::vector<std::unique_ptr<cudf::table>>(inputs_.size());
   auto cudf_table_views = std::vector<cudf::table_view>(inputs_.size());
   for (int i = 0; i < inputs_.size(); i++) {
@@ -181,12 +190,6 @@ void CudfHashJoinBuild::noMoreInput() {
     } else {
       printf("hashObject is *** nullptr\n");
     }
-  }
-
-  // Copied
-  peers.clear();
-  for (auto& promise : promises) {
-    promise.setValue();
   }
 
   // set hash table to CudfHashJoinBridge
