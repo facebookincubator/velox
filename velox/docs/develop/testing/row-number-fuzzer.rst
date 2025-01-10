@@ -23,7 +23,7 @@ Use velox_row_number_fuzzer binary to run rowNumber fuzzer:
 
 ::
 
-    velox/exec/tests/velox_row_number_fuzzer --seed 123 --duration_sec 60
+    velox/exec/fuzzer/velox_row_number_fuzzer --seed 123 --duration_sec 60
 
 By default, the fuzzer will go through 10 iterations. Use --steps
 or --duration-sec flag to run fuzzer for longer. Use --seed to

@@ -324,7 +324,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: row_number
-          path: velox/_build/debug//velox/exec/tests/velox_row_number_fuzzer
+          path: velox/_build/debug//velox/exec/fuzzer/velox_row_number_fuzzer
           retention-days: "${{ env.RETENTION }}"
 
       - name: Upload writer fuzzer
