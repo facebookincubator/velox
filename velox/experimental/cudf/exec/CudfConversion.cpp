@@ -44,8 +44,15 @@ CudfFromVelox::CudfFromVelox(
 
 void CudfFromVelox::addInput(RowVectorPtr input) {
   // Accumulate inputs
-  if (input->size() > 0) {
-    inputs_.push_back(std::move(input));
+  if (input != nullptr) {
+    for (auto& child : input->children()) {
+      child->loadedVector();
+    }
+    input->loadedVector();
+    if (input->size() > 0) {
+      auto cudf_table = with_arrow::to_cudf_table(input, input->pool());
+      inputs_.push_back(std::move(cudf_table));
+    }
   }
 }
 
@@ -58,19 +65,16 @@ void CudfFromVelox::noMoreInput() {
     return;
   }
 
-  auto cudf_tables = std::vector<std::unique_ptr<cudf::table>>(inputs_.size());
   auto cudf_table_views = std::vector<cudf::table_view>(inputs_.size());
   for (int i = 0; i < inputs_.size(); i++) {
     VELOX_CHECK_NOT_NULL(inputs_[i]);
-    cudf_tables[i] = with_arrow::to_cudf_table(inputs_[i], inputs_[i]->pool());
-    cudf_table_views[i] = cudf_tables[i]->view();
+    cudf_table_views[i] = inputs_[i]->view();
   }
   auto tbl = cudf::concatenate(cudf_table_views);
 
   // Release input data
   cudf::get_default_stream().synchronize();
   cudf_table_views.clear();
-  cudf_tables.clear();
   inputs_.clear();
   VELOX_CHECK_NOT_NULL(tbl);
   if (cudfDebugEnabled()) {
