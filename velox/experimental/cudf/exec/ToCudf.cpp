@@ -70,6 +70,7 @@ bool CompileState::compile() {
     VELOX_CHECK(it != nodes.end());
     return *it;
   };
+  int32_t operatorsOffset = 0; 
   // Replace HashBuild and HashProbe operators with CudfHashJoinBuild and
   // CudfHashJoinProbe operators.
   for (int32_t operatorIndex = 0; operatorIndex < operators.size();
@@ -77,6 +78,7 @@ bool CompileState::compile() {
     std::vector<std::unique_ptr<exec::Operator>> replace_op;
 
     exec::Operator* oper = operators[operatorIndex];
+    auto replacingOperatorIndex = operatorIndex + operatorsOffset;
     VELOX_CHECK(oper);
     if (auto joinBuildOp = dynamic_cast<exec::HashBuild*>(oper)) {
       auto id = joinBuildOp->operatorId();
@@ -89,8 +91,10 @@ bool CompileState::compile() {
       replace_op.push_back(
           std::make_unique<CudfHashJoinBuild>(id, ctx, plan_node));
       replace_op[1]->initialize();
+
+      operatorsOffset += replace_op.size() - 1;
       [[maybe_unused]] auto replaced = driverFactory_.replaceOperators(
-          driver_, operatorIndex, operatorIndex + 1, std::move(replace_op));
+          driver_, replacingOperatorIndex, replacingOperatorIndex + 1, std::move(replace_op));
       replacements_made = true;
     } else if (auto joinProbeOp = dynamic_cast<exec::HashProbe*>(oper)) {
       auto id = joinProbeOp->operatorId();
@@ -106,8 +110,10 @@ bool CompileState::compile() {
       replace_op.push_back(std::make_unique<CudfToVelox>(
           id, plan_node->outputType(), ctx, plan_node->id()));
       replace_op[2]->initialize();
+
+      operatorsOffset += replace_op.size() - 1;
       [[maybe_unused]] auto replaced = driverFactory_.replaceOperators(
-          driver_, operatorIndex, operatorIndex + 1, std::move(replace_op));
+          driver_, replacingOperatorIndex, replacingOperatorIndex + 1, std::move(replace_op));
       replacements_made = true;
     } else if (auto orderByOp = dynamic_cast<exec::OrderBy*>(oper)) {
       auto id = orderByOp->operatorId();
@@ -123,8 +129,9 @@ bool CompileState::compile() {
           id, plan_node->outputType(), ctx, plan_node->id()));
       replace_op[2]->initialize();
 
+      operatorsOffset += replace_op.size() - 1;
       [[maybe_unused]] auto replaced = driverFactory_.replaceOperators(
-          driver_, operatorIndex, operatorIndex + 1, std::move(replace_op));
+          driver_, replacingOperatorIndex, replacingOperatorIndex + 1, std::move(replace_op));
       replacements_made = true;
     }
   }
