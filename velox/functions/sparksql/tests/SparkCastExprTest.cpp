@@ -265,16 +265,14 @@ TEST_F(SparkCastExprTest, stringToTimestamp) {
   setTimezone("Asia/Shanghai");
   testCast<std::string, Timestamp>(
       "timestamp",
-      {
-          "1970-01-01 00:00:00",
-          "1970-01-01 08:00:00",
-          "1970-01-01 08:00:59",
-      },
-      {
-          Timestamp(-8 * 3600, 0),
-          Timestamp(0, 0),
-          Timestamp(59, 0),
-      });
+      {"1970-01-01 00:00:00",
+       "1970-01-01 08:00:00",
+       "1970-01-01 08:00:59",
+       "1970"},
+      {Timestamp(-8 * 3600, 0),
+       Timestamp(0, 0),
+       Timestamp(59, 0),
+       Timestamp(-8 * 3600, 0)});
 }
 
 TEST_F(SparkCastExprTest, intToTimestamp) {
