@@ -133,12 +133,11 @@ TEST(S3UtilTest, parseRegion) {
   // bucket.s3-[region]
   EXPECT_EQ(parseStandardRegionName("foo.s3-region.amazonaws.com"), "region");
   // service.[region]
-  EXPECT_EQ(
-      parseStandardRegionName("foo.a3-region.amazonaws.com"), "a3-region");
+  EXPECT_EQ(parseStandardRegionName("foo.a3-reg.amazonaws.com"), "a3-reg");
   // Not the right suffix
-  EXPECT_EQ(parseStandardRegionName("foo.a3-region.amazonaw.com"), "");
-  EXPECT_EQ(parseStandardRegionName(""), "");
-  EXPECT_EQ(parseStandardRegionName("velox"), "");
+  EXPECT_EQ(parseStandardRegionName("foo.a3-region.amazon.com"), std::nullopt);
+  EXPECT_EQ(parseStandardRegionName(""), std::nullopt);
+  EXPECT_EQ(parseStandardRegionName("velox"), std::nullopt);
 }
 
 TEST(S3UtilTest, isIpExcludedFromProxy) {

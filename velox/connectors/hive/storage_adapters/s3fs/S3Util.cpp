@@ -149,11 +149,11 @@ std::optional<folly::Uri> S3ProxyConfigurationBuilder::build() {
   return proxyUri;
 }
 
-std::string parseStandardRegionName(std::string_view endpoint) {
+std::optional<std::string> parseStandardRegionName(std::string_view endpoint) {
   const std::string_view kAmazonHostSuffix = ".amazonaws.com";
   auto index = endpoint.size() - kAmazonHostSuffix.size();
   if (endpoint.rfind(kAmazonHostSuffix) != index) {
-    return "";
+    return std::nullopt;
   }
   // Remove the kAmazonHostSuffix.
   std::string_view endpointPrefix = endpoint.substr(0, index);
@@ -165,13 +165,13 @@ std::string parseStandardRegionName(std::string_view endpoint) {
   }
 
   index = endpointPrefix.rfind('.');
-  if (index == -1) {
-    // Use default region set by the SDK.
-    return "";
+  if (index != std::string::npos) {
+    // endpointPrefix was 'service.[region]'.
+    return std::string(endpointPrefix.substr(index + 1));
   }
 
-  // endpointPrefix was 'service.[region]'.
-  return std::string(endpointPrefix.substr(index + 1));
+  // Use default region set by the SDK.
+  return std::nullopt;
 }
 
 } // namespace facebook::velox::filesystems

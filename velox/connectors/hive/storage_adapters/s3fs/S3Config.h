@@ -140,9 +140,7 @@ class S3Config {
   }
 
   /// The S3 storage endpoint region.
-  std::optional<std::string> endpointRegion() const {
-    return config_.find(Keys::kEndpointRegion)->second;
-  }
+  std::optional<std::string> endpointRegion() const;
 
   /// Access key to use.
   std::optional<std::string> accessKey() const {
