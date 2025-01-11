@@ -35,7 +35,7 @@ TEST(S3ConfigTest, defaultConfig) {
   ASSERT_EQ(s3Config.iamRoleSessionName(), "velox-session");
 }
 
-TEST(HiveConfigTest, overrideConfig) {
+TEST(S3ConfigTest, overrideConfig) {
   std::unordered_map<std::string, std::string> configFromFile = {
       {S3Config::baseConfigKey(S3Config::Keys::kPathStyleAccess), "true"},
       {S3Config::baseConfigKey(S3Config::Keys::kSSLEnabled), "false"},
@@ -58,7 +58,7 @@ TEST(HiveConfigTest, overrideConfig) {
   ASSERT_EQ(s3Config.iamRoleSessionName(), "velox");
 }
 
-TEST(HiveConfigTest, overrideBucketConfig) {
+TEST(S3ConfigTest, overrideBucketConfig) {
   std::string_view bucket = "bucket";
   std::unordered_map<std::string, std::string> bucketConfigFromFile = {
       {S3Config::baseConfigKey(S3Config::Keys::kPathStyleAccess), "true"},

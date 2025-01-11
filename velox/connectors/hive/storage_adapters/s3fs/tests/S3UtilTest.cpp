@@ -127,6 +127,20 @@ TEST(S3UtilTest, isDomainExcludedFromProxy) {
   }
 }
 
+TEST(S3UtilTest, parseRegion) {
+  // bucket.s3.[region]
+  EXPECT_EQ(parseStandardRegionName("foo.s3.region.amazonaws.com"), "region");
+  // bucket.s3-[region]
+  EXPECT_EQ(parseStandardRegionName("foo.s3-region.amazonaws.com"), "region");
+  // service.[region]
+  EXPECT_EQ(
+      parseStandardRegionName("foo.a3-region.amazonaws.com"), "a3-region");
+  // Not the right suffix
+  EXPECT_EQ(parseStandardRegionName("foo.a3-region.amazonaw.com"), "");
+  EXPECT_EQ(parseStandardRegionName(""), "");
+  EXPECT_EQ(parseStandardRegionName("velox"), "");
+}
+
 TEST(S3UtilTest, isIpExcludedFromProxy) {
   auto hostname = "127.0.0.1";
 
