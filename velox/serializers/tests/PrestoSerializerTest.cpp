@@ -21,6 +21,7 @@
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/common/memory/ByteStream.h"
 #include "velox/common/time/Timer.h"
+#include "velox/functions/prestosql/types/IPAddressType.h"
 #include "velox/functions/prestosql/types/TimestampWithTimeZoneType.h"
 #include "velox/vector/fuzzer/VectorFuzzer.h"
 #include "velox/vector/tests/utils/VectorTestBase.h"
@@ -1175,6 +1176,24 @@ TEST_P(PrestoSerializerTest, uuid) {
     vector->setNull(i, true);
   }
   testRoundTrip(vector);
+}
+
+TEST_P(PrestoSerializerTest, ipaddress) {
+  auto ipaddress = makeFlatVector<int128_t>(
+      100,
+      [](auto row) {
+        return HugeInt::build(folly::Random::rand64(), folly::Random::rand64());
+      },
+      /* isNullAt */ nullptr,
+      IPADDRESS());
+
+  testRoundTrip(ipaddress);
+
+  // Add some nulls.
+  for (auto i = 0; i < 100; i += 7) {
+    ipaddress->setNull(i, true);
+  }
+  testRoundTrip(ipaddress);
 }
 
 // Test that hierarchically encoded columns (rows) have their encodings

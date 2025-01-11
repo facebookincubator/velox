@@ -17,12 +17,14 @@
 
 #include <optional>
 
+#include <folly/IPAddressV6.h>
 #include <folly/lang/Bits.h>
 
 #include "velox/common/base/Crc.h"
 #include "velox/common/base/IOUtils.h"
 #include "velox/common/base/RawVector.h"
 #include "velox/common/memory/ByteStream.h"
+#include "velox/functions/prestosql/types/IPAddressType.h"
 #include "velox/functions/prestosql/types/UuidType.h"
 #include "velox/vector/BiasVector.h"
 #include "velox/vector/ComplexVector.h"
@@ -468,6 +470,56 @@ int128_t readUuidValue(ByteInputStream* source) {
   return HugeInt::build(high, low);
 }
 
+FOLLY_ALWAYS_INLINE int128_t
+reverseIpAddressByteOrder(int128_t currentIpBytes) {
+  folly::ByteArray16 byteArray{{0}};
+  memcpy(&byteArray, &currentIpBytes, sizeof(currentIpBytes));
+  std::reverse(byteArray.begin(), byteArray.end());
+  int128_t reversedIpBytes;
+  memcpy(&reversedIpBytes, byteArray.data(), ipaddress::kIPAddressBytes);
+  return reversedIpBytes;
+}
+
+int128_t readIpAddress(ByteInputStream* source) {
+  // Java stores ipaddress as a binary, and thus the binary
+  // is always in big endian byte order. In Velox, ipaddress
+  // is a custom type with underlying type of int128_t, which
+  // is always stored as little endian byte order. This means
+  // to ensure compatibility between the coordinator and velox,
+  // we need to actually convert the 16 bytes read from coordinator
+  // to little endian.
+  const int128_t beIpIntAddr = source->read<int128_t>();
+  return reverseIpAddressByteOrder(beIpIntAddr);
+}
+
+void readIpAddressValues(
+    ByteInputStream* source,
+    vector_size_t size,
+    vector_size_t offset,
+    const BufferPtr& nulls,
+    vector_size_t nullCount,
+    const BufferPtr& values) {
+  auto rawValues = values->asMutable<int128_t>();
+  if (nullCount) {
+    checkValuesSize<int128_t>(values, nulls, size, offset);
+
+    vector_size_t toClear = offset;
+    bits::forEachSetBit(
+        nulls->as<uint64_t>(), offset, offset + size, [&](vector_size_t row) {
+          // Set the values between the last non-null and this to type default.
+          for (; toClear < row; ++toClear) {
+            rawValues[toClear] = 0;
+          }
+          rawValues[row] = readIpAddress(source);
+          toClear = row + 1;
+        });
+  } else {
+    for (vector_size_t row = 0; row < size; ++row) {
+      rawValues[offset + row] = readIpAddress(source);
+    }
+  }
+}
+
 void readUuidValues(
     ByteInputStream* source,
     vector_size_t size,
@@ -623,6 +675,16 @@ void read(
   }
   if (isUuidType(type)) {
     readUuidValues(
+        source,
+        numNewValues,
+        resultOffset,
+        flatResult->nulls(),
+        nullCount,
+        values);
+    return;
+  }
+  if (isIPAddressType(type)) {
+    readIpAddressValues(
         source,
         numNewValues,
         resultOffset,
@@ -1490,6 +1552,7 @@ class VectorStream {
         nullsFirst_(opts.nullsFirst),
         isLongDecimal_(type_->isLongDecimal()),
         isUuid_(isUuidType(type_)),
+        isIpAddress_(isIPAddressType(type_)),
         opts_(opts),
         encoding_(getEncoding(encoding, vector)),
         nulls_(streamArena, true, true),
@@ -1845,6 +1908,10 @@ class VectorStream {
     return isUuid_;
   }
 
+  bool isIpAddress() const {
+    return isIpAddress_;
+  }
+
   void clear() {
     encoding_ = std::nullopt;
     initializeHeader(typeToEncodingName(type_), *streamArena_);
@@ -1926,6 +1993,7 @@ class VectorStream {
   const bool nullsFirst_;
   const bool isLongDecimal_;
   const bool isUuid_;
+  const bool isIpAddress_;
   const SerdeOpts opts_;
   std::optional<VectorEncoding::Simple> encoding_;
   int32_t nonNullCount_{0};
@@ -1998,6 +2066,8 @@ void VectorStream::append(folly::Range<const int128_t*> values) {
       val = toJavaDecimalValue(value);
     } else if (isUuid_) {
       val = toJavaUuidValue(value);
+    } else if (isIpAddress_) {
+      val = reverseIpAddressByteOrder(value);
     }
     values_.append<int128_t>(folly::Range(&val, 1));
   }
@@ -2680,6 +2750,14 @@ void appendNonNull(
           numNonNull,
           values,
           toJavaUuidValue);
+    } else if (stream->isIpAddress()) {
+      copyWordsWithRows(
+          output,
+          rows.data(),
+          nonNullIndices,
+          numNonNull,
+          values,
+          reverseIpAddressByteOrder);
     } else {
       copyWordsWithRows(
           output, rows.data(), nonNullIndices, numNonNull, values);
@@ -2765,6 +2843,13 @@ void serializeFlatVector(
             output, rows.data(), rows.size(), rawValues, toJavaDecimalValue);
       } else if (stream->isUuid()) {
         copyWords(output, rows.data(), rows.size(), rawValues, toJavaUuidValue);
+      } else if (stream->isIpAddress()) {
+        copyWords(
+            output,
+            rows.data(),
+            rows.size(),
+            rawValues,
+            reverseIpAddressByteOrder);
       } else {
         copyWords(output, rows.data(), rows.size(), rawValues);
       }
