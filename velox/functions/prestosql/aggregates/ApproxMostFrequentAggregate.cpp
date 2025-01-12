@@ -375,7 +375,9 @@ class ApproxMostFrequentBooleanAggregate {
     int64_t numTrue{0};
     int64_t numFalse{0};
 
-    explicit AccumulatorType(HashStringAllocator* /*allocator*/) {}
+    explicit AccumulatorType(
+        HashStringAllocator* /*allocator*/,
+        ApproxMostFrequentBooleanAggregate* /*fn*/) {}
 
     void addInput(
         HashStringAllocator* /*allocator*/,
@@ -447,7 +449,9 @@ template <TypeKind kKind>
 std::unique_ptr<exec::Aggregate> makeApproxMostFrequentAggregate(
     const TypePtr& resultType,
     const std::string& name,
-    const TypePtr& valueType) {
+    const TypePtr& valueType,
+    core::AggregationNode::Step step,
+    const std::vector<TypePtr>& argTypes) {
   if constexpr (
       kKind == TypeKind::TINYINT || kKind == TypeKind::SMALLINT ||
       kKind == TypeKind::INTEGER || kKind == TypeKind::BIGINT ||
@@ -460,7 +464,7 @@ std::unique_ptr<exec::Aggregate> makeApproxMostFrequentAggregate(
   if (kKind == TypeKind::BOOLEAN) {
     return std::make_unique<
         exec::SimpleAggregateAdapter<ApproxMostFrequentBooleanAggregate>>(
-        resultType);
+        step, argTypes, resultType);
   }
 
   VELOX_USER_FAIL(
@@ -494,7 +498,7 @@ void registerApproxMostFrequentAggregate(
       std::move(signatures),
       [name](
           core::AggregationNode::Step step,
-          const std::vector<TypePtr>&,
+          const std::vector<TypePtr>& argTypes,
           const TypePtr& resultType,
           const core::QueryConfig& /*config*/)
           -> std::unique_ptr<exec::Aggregate> {
@@ -506,7 +510,9 @@ void registerApproxMostFrequentAggregate(
             valueType->kind(),
             resultType,
             name,
-            valueType);
+            valueType,
+            step,
+            argTypes);
       },
       withCompanionFunctions,
       overwrite);
