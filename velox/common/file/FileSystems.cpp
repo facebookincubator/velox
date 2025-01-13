@@ -76,11 +76,20 @@ namespace {
 
 folly::once_flag localFSInstantiationFlag;
 
+// Implement Local FileSystem metrics.
+struct LocalFileSystemMetrics : public FileSystemMetrics {
+  uint64_t getActiveConnections() const override { return 0; }
+  uint64_t getMetadataCalls() const override { return 0; }
+  uint64_t getStartedUploads() const override { return 0; }
+  uint64_t getFailedUploads() const override { return 0; }
+  uint64_t getSuccessfulUploads() const override { return 0; }
+};
+
 // Implement Local FileSystem.
 class LocalFileSystem : public FileSystem {
  public:
   explicit LocalFileSystem(std::shared_ptr<const config::ConfigBase> config)
-      : FileSystem(config) {}
+      : FileSystem(config), metrics_(std::make_unique<LocalFileSystemMetrics>()) {}
 
   ~LocalFileSystem() override {}
 
@@ -206,6 +215,10 @@ class LocalFileSystem : public FileSystem {
     VLOG(1) << "LocalFileSystem::rmdir " << path;
   }
 
+  const FileSystemMetrics& metrics() const override {
+    return *metrics_;
+  }
+
   static std::function<bool(std::string_view)> schemeMatcher() {
     // Note: presto behavior is to prefix local paths with 'file:'.
     // Check for that prefix and prune to absolute regular paths as needed.
@@ -228,6 +241,9 @@ class LocalFileSystem : public FileSystem {
       return lfs;
     };
   }
+
+ private:
+  std::unique_ptr<FileSystemMetrics> metrics_;
 };
 } // namespace
 
