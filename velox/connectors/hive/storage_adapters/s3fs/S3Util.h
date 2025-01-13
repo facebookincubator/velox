@@ -190,6 +190,7 @@ bool isHostExcludedFromProxy(
 std::string getHttpProxyEnvVar();
 std::string getHttpsProxyEnvVar();
 std::string getNoProxyEnvVar();
+
 // Adopted from the AWS Java SDK
 // Endpoint can be 'service.[region].amazonaws.com' or
 // 'bucket.s3-[region].amazonaws.com' or bucket.s3.[region].amazonaws.com'

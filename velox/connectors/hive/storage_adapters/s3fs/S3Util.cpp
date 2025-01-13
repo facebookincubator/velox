@@ -158,9 +158,9 @@ std::optional<std::string> parseStandardRegionName(std::string_view endpoint) {
   // Remove the kAmazonHostSuffix.
   std::string_view endpointPrefix = endpoint.substr(0, index);
   const re2::RE2 pattern("^(?:.+\\.)?s3[-.]([a-z0-9-]+)$");
-  std::string bucket, region;
+  std::string region;
   if (re2::RE2::FullMatch(endpointPrefix, pattern, &region)) {
-    // endpointPrefix was 'bucket.s3-[region]' or 'bucket.s3.[region]'
+    // endpointPrefix is 'bucket.s3-[region]' or 'bucket.s3.[region]'
     return region;
   }
 
