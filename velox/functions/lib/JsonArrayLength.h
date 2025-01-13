@@ -26,8 +26,8 @@ namespace facebook::velox::functions {
 
 /// json_array_length(jsonString) -> length
 ///
-/// Returns the array length of json if a valid json string is given.
-/// Returns null if the input json string is invalid.
+/// Returns the number of elements in the outermost JSON array from jsonString.
+/// If jsonString is not a valid JSON array or NULL, the function returns null.
 /// Presto:
 /// https://prestodb.io/docs/current/functions/json.html#json_array_length-json-bigint
 /// SparkSQL:
