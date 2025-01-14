@@ -92,6 +92,12 @@ class PrestoBatchVectorSerializer : public BatchVectorSerializer {
     }
   }
 
+  template <typename RangeType>
+  void serializeColumn(
+      const VectorPtr& vector,
+      const folly::Range<const RangeType*>& ranges,
+      BufferedOutputStream* stream);
+
   template <
       TypeKind kind,
       typename RangeType,
@@ -497,6 +503,12 @@ class PrestoBatchVectorSerializer : public BatchVectorSerializer {
     nulls_.appendBool(bits::kNull, numRows);
     nulls_.flush(stream);
   }
+
+  template <typename RangeType>
+  void serializeRowVector(
+      const VectorPtr& vector,
+      const folly::Range<const RangeType*>& ranges,
+      BufferedOutputStream* stream);
 
   StreamArena arena_;
   const std::unique_ptr<folly::io::Codec> codec_;
