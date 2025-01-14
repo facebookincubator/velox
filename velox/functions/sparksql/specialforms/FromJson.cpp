@@ -23,7 +23,6 @@
 #include "velox/expression/SpecialForm.h"
 #include "velox/expression/VectorWriters.h"
 #include "velox/functions/prestosql/json/SIMDJsonUtil.h"
-#include "velox/type/Type.h"
 
 using namespace facebook::velox::exec;
 
@@ -137,7 +136,7 @@ struct ExtractJsonTypeImpl {
       SIMDJSON_ASSIGN_OR_RAISE(auto type, value.type());
       if (type == simdjson::ondemand::json_type::array) {
         SIMDJSON_ASSIGN_OR_RAISE(auto array, value.get_array());
-        for (auto elementResult : array) {
+        for (const auto& elementResult : array) {
           SIMDJSON_ASSIGN_OR_RAISE(auto element, elementResult);
           // If casting to array of JSON, nulls in array elements should become
           // the JSON text "null".
@@ -173,7 +172,7 @@ struct ExtractJsonTypeImpl {
       auto& writerTyped = writer.castTo<Map<Any, Any>>();
       const auto& valueType = writer.type()->childAt(1);
       SIMDJSON_ASSIGN_OR_RAISE(auto object, value.get_object());
-      for (auto fieldResult : object) {
+      for (const auto& fieldResult : object) {
         SIMDJSON_ASSIGN_OR_RAISE(auto field, fieldResult);
         SIMDJSON_ASSIGN_OR_RAISE(auto key, field.unescaped_key(true));
         // If casting to map of JSON values, nulls in map values should become
@@ -205,7 +204,7 @@ struct ExtractJsonTypeImpl {
         writerTyped.set_null_at(0);
         return simdjson::SUCCESS;
       }
-      auto type = value.type().value_unsafe();
+      const auto type = value.type().value_unsafe();
       if (type == simdjson::ondemand::json_type::object) {
         SIMDJSON_ASSIGN_OR_RAISE(auto object, value.get_object());
 
@@ -218,7 +217,7 @@ struct ExtractJsonTypeImpl {
         auto fieldIndices = makeFieldIndicesMap(rowType, allFieldsAreAscii);
 
         std::string key;
-        for (auto fieldResult : object) {
+        for (const auto& fieldResult : object) {
           if (fieldResult.error() != ::simdjson::SUCCESS) {
             continue;
           }
@@ -236,7 +235,7 @@ struct ExtractJsonTypeImpl {
               const auto index = it->second;
               it->second = -1;
 
-              auto res = VELOX_DYNAMIC_TYPE_DISPATCH(
+              const auto res = VELOX_DYNAMIC_TYPE_DISPATCH(
                   ExtractJsonTypeImpl<simdjson::ondemand::value>::apply,
                   rowType.childAt(index)->kind(),
                   field.value(),
