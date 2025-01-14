@@ -149,7 +149,8 @@ void PrestoBatchVectorSerializer::estimateSerializedSizeImpl(
       break;
     case VectorEncoding::Simple::DICTIONARY:
       VELOX_DYNAMIC_TYPE_DISPATCH_ALL(
-          estimateDictionarySerializedSize,
+          facebook::velox::serializer::presto::detail::
+              estimateDictionarySerializedSize,
           vector->typeKind(),
           vector,
           ranges,
@@ -494,12 +495,12 @@ void PrestoBatchVectorSerializer::serializeColumn(
           serializeConstantVector, vector->typeKind(), vector, ranges, stream);
       break;
     case VectorEncoding::Simple::DICTIONARY:
-      // VELOX_DYNAMIC_TYPE_DISPATCH_ALL(
-      //     serializeDictionaryVector,
-      //     vector->typeKind(),
-      //     vector,
-      //     ranges,
-      //     stream);
+      VELOX_DYNAMIC_TYPE_DISPATCH_ALL(
+          serializeDictionaryVector,
+          vector->typeKind(),
+          vector,
+          ranges,
+          stream);
       break;
     case VectorEncoding::Simple::ROW:
       serializeRowVector(vector, ranges, stream);
@@ -850,5 +851,75 @@ void PrestoBatchVectorSerializer::writeEmptyVector(
     default:
       VELOX_UNSUPPORTED();
   }
+}
+
+void PrestoBatchVectorSerializer::estimateFlattenedDictionarySize(
+    const VectorPtr& vector,
+    const folly::Range<const IndexRange*>& ranges,
+    vector_size_t** sizes,
+    Scratch& scratch) {
+  const auto numRows = rangesTotalSize(ranges);
+
+  // Used to hold the ranges of the values Vector that will get written out.
+  ScratchPtr<IndexRange, 64> newRangesHolder(scratch_);
+  auto* mutableNewRanges = newRangesHolder.get(numRows);
+  // Used to track the pointer to the size for the given range to update.
+  ScratchPtr<vector_size_t*, 64> childSizesHolder(scratch_);
+  auto* mutableChildSizes = childSizesHolder.get(numRows);
+  // The index in mutableNewRanges/mutableChildSizes to write the next value.
+  int32_t offset = 0;
+
+  const VectorPtr& wrapped = BaseVector::wrappedVectorShared(vector);
+  for (int i = 0; i < ranges.size(); i++) {
+    int nullCount = 0;
+    const auto& range = ranges[i];
+    for (int32_t rangeOffset = range.begin;
+         rangeOffset < range.begin + range.size;
+         ++rangeOffset) {
+      if (vector->mayHaveNulls() && vector->isNullAt(rangeOffset)) {
+        nullCount++;
+        continue;
+      }
+
+      const auto innerIndex = vector->wrappedIndex(rangeOffset);
+      mutableNewRanges[offset] = IndexRange{innerIndex, 1};
+      mutableChildSizes[offset] = sizes[i];
+      offset++;
+    }
+
+    *sizes[i] += bits::nbytes(nullCount);
+  }
+
+  if (offset > 0) {
+    // If there were any non-null ranges, compute their size.
+    estimateSerializedSize(
+        wrapped,
+        folly::Range<const IndexRange*>(mutableNewRanges, offset),
+        mutableChildSizes,
+        scratch);
+  }
+}
+
+vector_size_t PrestoBatchVectorSerializer::computeSelectedIndices(
+    const VectorPtr& vector,
+    const VectorPtr& wrappedVector,
+    const folly::Range<const IndexRange*>& ranges,
+    Scratch& scratch,
+    vector_size_t* selectedIndices) {
+  // Create a bit set to track which values in the Dictionary are used.
+  ScratchPtr<uint64_t, 64> usedIndicesHolder(scratch);
+  auto* usedIndices =
+      usedIndicesHolder.get(bits::nwords(wrappedVector->size()));
+  simd::memset(usedIndices, 0, usedIndicesHolder.size() * sizeof(uint64_t));
+
+  for (const auto& range : ranges) {
+    for (auto i = 0; i < range.size; ++i) {
+      bits::setBit(usedIndices, vector->wrappedIndex(range.begin + i));
+    }
+  }
+
+  // Convert the bitset to a list of the used indices.
+  return simd::indicesOfSetBits(
+      usedIndices, 0, wrappedVector->size(), selectedIndices);
 }
 } // namespace facebook::velox::serializer::presto::detail
