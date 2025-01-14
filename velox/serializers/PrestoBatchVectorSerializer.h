@@ -516,6 +516,12 @@ class PrestoBatchVectorSerializer : public BatchVectorSerializer {
       const folly::Range<const RangeType*>& ranges,
       BufferedOutputStream* stream);
 
+  template <typename RangeType>
+  void serializeMapVector(
+      const VectorPtr& vector,
+      const folly::Range<const RangeType*>& ranges,
+      BufferedOutputStream* stream);
+
   StreamArena arena_;
   const std::unique_ptr<folly::io::Codec> codec_;
   const PrestoVectorSerde::PrestoOptions opts_;
