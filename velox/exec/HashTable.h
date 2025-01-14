@@ -173,6 +173,8 @@ class BaseHashTable {
 
     vector_size_t lastRowIndex{0};
     vector_size_t lastDuplicateRowIndex{0};
+    /// The total bytes of the output batch produced by a list join call. It is
+    /// reset on the next call.
     uint64_t outputBatchBytes{0};
   };
 
