@@ -46,7 +46,7 @@ class TestCase {
     }
     data_ = std::make_unique<RowContainer>(keyTypes, dependentTypes, pool);
     RowVectorPtr sortedRows =
-        OrderByBenchmarkUtil::fuzzRows(rowType, numRows, numKeys, pool_);
+        OrderByBenchmarkUtil::fuzzRows(rowType, numRows, pool_);
     storeRows(numRows, sortedRows);
 
     // Initialize CompareFlags, it could be same for each key in benchmark.

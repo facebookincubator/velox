@@ -22,23 +22,19 @@ namespace facebook::velox::exec {
 class OrderByBenchmarkUtil {
  public:
   /// Add the benchmarks with the parameter.
-  /// @param benchmark benchmark generator.
+  /// @param benchmarkFunc benchmark generator.
   static void addBenchmarks(const std::function<void(
                                 const std::string& benchmarkName,
                                 vector_size_t numRows,
                                 const RowTypePtr& rowType,
                                 int iterations,
-                                int numKeys)>& benchmark);
+                                int numKeys)>& benchmarkFunc);
 
-  /// Generate RowVector by VectorFuzzer according to rowType, for front keys
-  /// (column 0 to numKeys -2) use high
-  /// nullRatio to enforce all columns to be compared.
-  /// @param numKeys 0 to numKeys - 2 is high null ratio column, other
-  /// columns do not have null values.
+  /// Generate RowVector by VectorFuzzer according to rowType. Use
+  /// FLAGS_data_null_ratio to specify the columns null ratio
   static RowVectorPtr fuzzRows(
       const RowTypePtr& rowType,
       vector_size_t numRows,
-      int numKeys,
       memory::MemoryPool* pool);
 };
 } // namespace facebook::velox::exec

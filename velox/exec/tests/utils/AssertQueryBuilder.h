@@ -184,7 +184,7 @@ class AssertQueryBuilder {
       std::shared_ptr<Task>& task);
 
   /// Run the query and return the number of result rows.
-  uint64_t countResults(std::shared_ptr<Task>& task);
+  uint64_t runWithoutResults(std::shared_ptr<Task>& task);
 
  private:
   std::pair<std::unique_ptr<TaskCursor>, std::vector<RowVectorPtr>>

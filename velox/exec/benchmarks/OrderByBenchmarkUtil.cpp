@@ -39,12 +39,13 @@ void addBenchmark(
     const std::vector<RowTypePtr>& rowTypes,
     const std::vector<int>& numKeys,
     int32_t iterations,
-    const OrderByBenchmarkFunction& benchmark) {
+    const OrderByBenchmarkFunction& benchmarkFunc) {
   for (auto batchSize : batchSizes) {
     for (auto i = 0; i < rowTypes.size(); ++i) {
       const auto benchmarkName = fmt::format(
           "{}_{}_{}_{}k", prefix, numKeys[i], keyName, batchSize / 1000.0);
-      benchmark(benchmarkName, batchSize, rowTypes[i], iterations, numKeys[i]);
+      benchmarkFunc(
+          benchmarkName, batchSize, rowTypes[i], iterations, numKeys[i]);
     }
   }
 }
@@ -104,7 +105,7 @@ void bigint(
     bool noPayload,
     int numIterations,
     const std::vector<vector_size_t>& batchSizes,
-    const OrderByBenchmarkFunction& benchmark) {
+    const OrderByBenchmarkFunction& benchmarkFunc) {
   const std::vector<RowTypePtr> rowTypes = bigintRowTypes(noPayload);
   const std::vector<int> numKeys = {1, 2, 3, 4};
   addBenchmark(
@@ -114,38 +115,38 @@ void bigint(
       rowTypes,
       numKeys,
       numIterations,
-      benchmark);
+      benchmarkFunc);
 }
 
-void smallBigint(const OrderByBenchmarkFunction& benchmark) {
+void smallBigint(const OrderByBenchmarkFunction& benchmarkFunc) {
   // For small dateset, iterations need to be large enough to ensure that the
   // benchmark runs for enough time.
   const auto iterations = 100'000;
   const std::vector<vector_size_t> batchSizes = {10, 50, 100, 500};
-  bigint(true, iterations, batchSizes, benchmark);
+  bigint(true, iterations, batchSizes, benchmarkFunc);
 }
 
-void smallBigintWithPayload(const OrderByBenchmarkFunction& benchmark) {
+void smallBigintWithPayload(const OrderByBenchmarkFunction& benchmarkFunc) {
   const auto iterations = 100'000;
   const std::vector<vector_size_t> batchSizes = {10, 50, 100, 500};
-  bigint(false, iterations, batchSizes, benchmark);
+  bigint(false, iterations, batchSizes, benchmarkFunc);
 }
 
-void largeBigint(const OrderByBenchmarkFunction& benchmark) {
+void largeBigint(const OrderByBenchmarkFunction& benchmarkFunc) {
   const auto iterations = 10;
   const std::vector<vector_size_t> batchSizes = {
       1'000, 10'000, 100'000, 1'000'000};
-  bigint(true, iterations, batchSizes, benchmark);
+  bigint(true, iterations, batchSizes, benchmarkFunc);
 }
 
-void largeBigintWithPayloads(const OrderByBenchmarkFunction& benchmark) {
+void largeBigintWithPayloads(const OrderByBenchmarkFunction& benchmarkFunc) {
   const auto iterations = 10;
   const std::vector<vector_size_t> batchSizes = {
       1'000, 10'000, 100'000, 1'000'000};
-  bigint(false, iterations, batchSizes, benchmark);
+  bigint(false, iterations, batchSizes, benchmarkFunc);
 }
 
-void largeVarchar(const OrderByBenchmarkFunction& benchmark) {
+void largeVarchar(const OrderByBenchmarkFunction& benchmarkFunc) {
   const auto iterations = 10;
   const std::vector<vector_size_t> batchSizes = {
       1'000, 10'000, 100'000, 1'000'000};
@@ -157,14 +158,14 @@ void largeVarchar(const OrderByBenchmarkFunction& benchmark) {
       largeVarcharRowTypes(),
       numKeys,
       iterations,
-      benchmark);
+      benchmarkFunc);
 }
 
 void smallint(
     bool noPayload,
     int numIterations,
     const std::vector<vector_size_t>& batchSizes,
-    const OrderByBenchmarkFunction& benchmark) {
+    const OrderByBenchmarkFunction& benchmarkFunc) {
   const std::vector<RowTypePtr> rowTypes = smallintRowTypes(noPayload);
   const std::vector<int> numKeys = {1, 2, 3, 4};
   addBenchmark(
@@ -174,75 +175,59 @@ void smallint(
       rowTypes,
       numKeys,
       numIterations,
-      benchmark);
+      benchmarkFunc);
 }
 
-void smallSmallint(const OrderByBenchmarkFunction& benchmark) {
+void smallSmallint(const OrderByBenchmarkFunction& benchmarkFunc) {
   // For small dateset, iterations need to be large enough to ensure that the
   // benchmark runs for enough time.
   const auto iterations = 100'000;
   const std::vector<vector_size_t> batchSizes = {10, 50, 100, 500};
-  smallint(true, iterations, batchSizes, benchmark);
+  smallint(true, iterations, batchSizes, benchmarkFunc);
 }
 
-void smallSmallintWithPayload(const OrderByBenchmarkFunction& benchmark) {
+void smallSmallintWithPayload(const OrderByBenchmarkFunction& benchmarkFunc) {
   const auto iterations = 100'000;
   const std::vector<vector_size_t> batchSizes = {10, 50, 100, 500};
-  smallint(false, iterations, batchSizes, benchmark);
+  smallint(false, iterations, batchSizes, benchmarkFunc);
 }
 
-void largeSmallint(const OrderByBenchmarkFunction& benchmark) {
+void largeSmallint(const OrderByBenchmarkFunction& benchmarkFunc) {
   const auto iterations = 10;
   const std::vector<vector_size_t> batchSizes = {
       1'000, 10'000, 100'000, 1'000'000};
-  smallint(true, iterations, batchSizes, benchmark);
+  smallint(true, iterations, batchSizes, benchmarkFunc);
 }
 
-void largeSmallintWithPayloads(const OrderByBenchmarkFunction& benchmark) {
+void largeSmallintWithPayloads(const OrderByBenchmarkFunction& benchmarkFunc) {
   const auto iterations = 10;
   const std::vector<vector_size_t> batchSizes = {
       1'000, 10'000, 100'000, 1'000'000};
-  smallint(false, iterations, batchSizes, benchmark);
+  smallint(false, iterations, batchSizes, benchmarkFunc);
 }
 } // namespace
 
 RowVectorPtr OrderByBenchmarkUtil::fuzzRows(
     const RowTypePtr& rowType,
     vector_size_t numRows,
-    int numKeys,
     memory::MemoryPool* pool) {
-  VectorFuzzer fuzzer({.vectorSize = static_cast<size_t>(numRows)}, pool);
-  VectorFuzzer fuzzerWithNulls(
+  VectorFuzzer fuzzer(
       {.vectorSize = static_cast<size_t>(numRows),
        .nullRatio = FLAGS_data_null_ratio},
       pool);
-  std::vector<VectorPtr> children;
-
-  // Fuzz keys: for front keys (column 0 to numKeys -2) use high
-  // nullRatio to enforce all columns to be compared.
-  for (auto i = 0; i < numKeys - 1; ++i) {
-    children.push_back(fuzzerWithNulls.fuzz(rowType->childAt(i)));
-  }
-  children.push_back(fuzzer.fuzz(rowType->childAt(numKeys - 1)));
-
-  // Fuzz payload.
-  for (auto i = numKeys; i < rowType->size(); ++i) {
-    children.push_back(fuzzer.fuzz(rowType->childAt(i)));
-  }
-  return std::make_shared<RowVector>(
-      pool, rowType, nullptr, numRows, std::move(children));
+  return std::dynamic_pointer_cast<RowVector>(fuzzer.fuzz(rowType));
 }
 
 void OrderByBenchmarkUtil::addBenchmarks(
-    const OrderByBenchmarkFunction& benchmark) {
-  smallBigint(benchmark);
-  largeBigint(benchmark);
-  largeBigintWithPayloads(benchmark);
-  smallBigintWithPayload(benchmark);
-  largeVarchar(benchmark);
-  smallSmallint(benchmark);
-  largeSmallint(benchmark);
-  smallSmallintWithPayload(benchmark);
-  largeSmallintWithPayloads(benchmark);
+    const OrderByBenchmarkFunction& benchmarkFunc) {
+  smallBigint(benchmarkFunc);
+  largeBigint(benchmarkFunc);
+  largeBigintWithPayloads(benchmarkFunc);
+  smallBigintWithPayload(benchmarkFunc);
+  largeVarchar(benchmarkFunc);
+  smallSmallint(benchmarkFunc);
+  largeSmallint(benchmarkFunc);
+  smallSmallintWithPayload(benchmarkFunc);
+  largeSmallintWithPayloads(benchmarkFunc);
 }
 } // namespace facebook::velox::exec
