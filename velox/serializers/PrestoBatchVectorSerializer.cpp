@@ -139,7 +139,8 @@ void PrestoBatchVectorSerializer::estimateSerializedSizeImpl(
       break;
     case VectorEncoding::Simple::CONSTANT:
       VELOX_DYNAMIC_TYPE_DISPATCH_ALL(
-          estimateConstantSerializedSize,
+          facebook::velox::serializer::presto::detail::
+              estimateConstantSerializedSize,
           vector->typeKind(),
           vector,
           ranges,
@@ -489,12 +490,8 @@ void PrestoBatchVectorSerializer::serializeColumn(
           serializeFlatVector, vector->typeKind(), vector, ranges, stream);
       break;
     case VectorEncoding::Simple::CONSTANT:
-      // VELOX_DYNAMIC_TYPE_DISPATCH_ALL(
-      //     serializeConstantVector,
-      //     vector->typeKind(),
-      //     vector,
-      //     ranges,
-      //     stream);
+      VELOX_DYNAMIC_TYPE_DISPATCH_ALL(
+          serializeConstantVector, vector->typeKind(), vector, ranges, stream);
       break;
     case VectorEncoding::Simple::DICTIONARY:
       // VELOX_DYNAMIC_TYPE_DISPATCH_ALL(
@@ -621,5 +618,237 @@ void PrestoBatchVectorSerializer::serializeMapVector(
 
   // Wirte out the hasNull and isNull flags.
   writeNullsSegment(hasNulls, vector, ranges, numRows, stream);
+}
+
+/// Specialization for opaque types.
+template <>
+void PrestoBatchVectorSerializer::writeSingleValue(
+    const std::shared_ptr<void>& value,
+    const TypePtr& type,
+    BufferedOutputStream* stream,
+    bool withNull) {
+  // Write out the header.
+  writeHeader(type, stream);
+  // Write out the number of nulls.
+  writeInt32(stream, withNull ? 2 : 1);
+
+  const std::string serializedValue =
+      type->asOpaque().getSerializeFunc()(value);
+
+  // Write out the lengths.
+  if (withNull) {
+    writeInt32(stream, 0);
+  }
+  writeInt32(stream, serializedValue.size());
+
+  // Write out the hasNull and isNull flags.
+  if (withNull) {
+    stream->write(&kOne, 1);
+    stream->write(&kSingleNull, 1);
+  } else {
+    stream->write(&kZero, 1);
+  }
+
+  // Write out the total length of the values, i.e. the length of the only
+  // value.
+  writeInt32(stream, serializedValue.size());
+
+  // Write out the single non-null value.
+  stream->write(serializedValue.data(), serializedValue.size());
+}
+
+void PrestoBatchVectorSerializer::writeSingleNull(
+    const TypePtr& type,
+    BufferedOutputStream* stream) {
+  switch (type->kind()) {
+    case TypeKind::BOOLEAN:
+    case TypeKind::TINYINT:
+    case TypeKind::SMALLINT:
+    case TypeKind::INTEGER:
+    case TypeKind::BIGINT:
+    case TypeKind::REAL:
+    case TypeKind::DOUBLE:
+    case TypeKind::TIMESTAMP:
+    case TypeKind::HUGEINT:
+    case TypeKind::UNKNOWN:
+      // Write the header.
+      writeHeader(type, stream);
+      // Write the number of rows.
+      writeInt32(stream, 1);
+      // Write the hasNull flag.
+      stream->write(&kOne, 1);
+      // Write the isNull flags.
+      stream->write(&kSingleNull, 1);
+      break;
+    case TypeKind::VARCHAR:
+    case TypeKind::VARBINARY:
+      // Write the header.
+      writeHeader(type, stream);
+      // Write the number of rows.
+      writeInt32(stream, 1);
+      // Write the offsets of the (non-existent) values.
+      writeInt32(stream, 0);
+      // Write the hasNull flag.
+      stream->write(&kOne, 1);
+      // Write the isNull flags.
+      stream->write(&kSingleNull, 1);
+      // Write the total size of the (non-existent) values.
+      writeInt32(stream, 0);
+      break;
+    case TypeKind::ARRAY:
+      // Write the header.
+      writeHeader(type, stream);
+      // Write the non-existent elements.
+      writeEmptyVector(type->childAt(0), stream);
+      // Write the number of rows.
+      writeInt32(stream, 1);
+      // Write the offsets of the (non-existent) values.
+      writeInt32(stream, 0);
+      writeInt32(stream, 0);
+      // Write the hasNull flag.
+      stream->write(&kOne, 1);
+      // Write the isNull flags.
+      stream->write(&kSingleNull, 1);
+      break;
+    case TypeKind::MAP:
+      // Write the header.
+      writeHeader(type, stream);
+      // Write the non-existent keys.
+      writeEmptyVector(type->childAt(0), stream);
+      // Write the non-existent values.
+      writeEmptyVector(type->childAt(1), stream);
+      // Write the size of the hash map (which we don't use, so it's -1).
+      writeInt32(stream, -1);
+      // Write the number of rows.
+      writeInt32(stream, 1);
+      // Write the offsets of the (non-existent) values.
+      writeInt32(stream, 0);
+      writeInt32(stream, 0);
+      // Write the hasNull flag.
+      stream->write(&kOne, 1);
+      // Write the isNull flags.
+      stream->write(&kSingleNull, 1);
+      break;
+    case TypeKind::ROW:
+      // Write the header.
+      writeHeader(type, stream);
+      if (opts_.nullsFirst) {
+        // Write the number of rows.
+        writeInt32(stream, 1);
+        // Write the hasNull flag.
+        stream->write(&kOne, 1);
+        // Write the isNull flags.
+        stream->write(&kSingleNull, 1);
+      }
+      // Write the number of children.
+      writeInt32(stream, type->size());
+      // Write the non-existent children.
+      for (int i = 0; i < type->size(); ++i) {
+        writeEmptyVector(type->childAt(i), stream);
+      }
+      if (!opts_.nullsFirst) {
+        // Write the number of rows.
+        writeInt32(stream, 1);
+        // Write the offsets of the (non-existent) values.
+        writeInt32(stream, 0);
+        writeInt32(stream, 0);
+        // Write the hasNull flag.
+        stream->write(&kOne, 1);
+        // Write the isNull flags.
+        stream->write(&kSingleNull, 1);
+      }
+      break;
+    default:
+      VELOX_UNSUPPORTED();
+  }
+}
+
+void PrestoBatchVectorSerializer::writeEmptyVector(
+    const TypePtr& type,
+    BufferedOutputStream* stream) {
+  switch (type->kind()) {
+    case TypeKind::BOOLEAN:
+    case TypeKind::TINYINT:
+    case TypeKind::SMALLINT:
+    case TypeKind::INTEGER:
+    case TypeKind::BIGINT:
+    case TypeKind::REAL:
+    case TypeKind::DOUBLE:
+    case TypeKind::TIMESTAMP:
+    case TypeKind::HUGEINT:
+    case TypeKind::UNKNOWN:
+      // Write the header.
+      writeHeader(type, stream);
+      // Write the number of rows.
+      writeInt32(stream, 0);
+      // Write the hasNulls flag.
+      stream->write(&kZero, 1);
+      break;
+    case TypeKind::VARCHAR:
+    case TypeKind::VARBINARY:
+      // Write the header.
+      writeHeader(type, stream);
+      // Write the number of rows.
+      writeInt32(stream, 0);
+      // Write the hasNulls flag.
+      stream->write(&kZero, 1);
+      // Write the total size of the non-existent values.
+      writeInt32(stream, 0);
+      break;
+    case TypeKind::ARRAY:
+      // Write the header.
+      writeHeader(type, stream);
+      // Write the non-existent elements.
+      writeEmptyVector(type->childAt(0), stream);
+      // Write the number of rows.
+      writeInt32(stream, 0);
+      // Write the offsets of the non-existent values.
+      writeInt32(stream, 0);
+      // Write the hasNulls flag.
+      stream->write(&kZero, 1);
+      break;
+    case TypeKind::MAP:
+      // Write the header.
+      writeHeader(type, stream);
+      // Write the non-existent keys.
+      writeEmptyVector(type->childAt(0), stream);
+      // Write the non-existent values.
+      writeEmptyVector(type->childAt(1), stream);
+      // Write the size of the hash map (which we don't use, so it's -1).
+      writeInt32(stream, -1);
+      // Write the number of rows.
+      writeInt32(stream, 0);
+      // Write the offsets of the non-existent values.
+      writeInt32(stream, 0);
+      // Write the hasNulls flag.
+      stream->write(&kZero, 1);
+      break;
+    case TypeKind::ROW:
+      // Write the header.
+      writeHeader(type, stream);
+      if (opts_.nullsFirst) {
+        // Write the number of rows.
+        writeInt32(stream, 0);
+        // Write the hasNulls flag.
+        stream->write(&kZero, 1);
+      }
+      // Write the number of children.
+      writeInt32(stream, type->size());
+      // Write the non-existent children.
+      for (int i = 0; i < type->size(); ++i) {
+        writeEmptyVector(type->childAt(i), stream);
+      }
+      if (!opts_.nullsFirst) {
+        // Write the number of rows.
+        writeInt32(stream, 0);
+        // Write the offsets of the non-existent values.
+        writeInt32(stream, 0);
+        // Write the hasNulls flag.
+        stream->write(&kZero, 1);
+      }
+      break;
+    default:
+      VELOX_UNSUPPORTED();
+  }
 }
 } // namespace facebook::velox::serializer::presto::detail
