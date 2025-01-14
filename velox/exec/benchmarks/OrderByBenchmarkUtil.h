@@ -23,12 +23,12 @@ class OrderByBenchmarkUtil {
  public:
   /// Add the benchmarks with the parameter.
   /// @param benchmark benchmark generator.
-  static void addBenchmarks(std::function<void(
-                                const std::string& testName,
+  static void addBenchmarks(const std::function<void(
+                                const std::string& benchmarkName,
                                 vector_size_t numRows,
                                 const RowTypePtr& rowType,
                                 int iterations,
-                                int numKeys)> benchmark);
+                                int numKeys)>& benchmark);
 
   /// Generate RowVector by VectorFuzzer according to rowType, for front keys
   /// (column 0 to numKeys -2) use high

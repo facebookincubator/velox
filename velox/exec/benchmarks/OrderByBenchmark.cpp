@@ -37,7 +37,7 @@ struct TestCase {
 class OrderByBenchmark {
  public:
   void addBenchmark(
-      const std::string& testName,
+      const std::string& benchmarkName,
       vector_size_t numRows,
       const RowTypePtr& rowType,
       int32_t iterations,
@@ -46,28 +46,28 @@ class OrderByBenchmark {
     {
       folly::addBenchmark(
           __FILE__,
-          "OrderBy_" + testName,
+          "OrderBy_" + benchmarkName,
           [test = testCase, iterations = std::max(1, iterations / 10), this]() {
             core::PlanNodeId orderByNodeId;
-            auto plan = makeOrderByPlan(test, orderByNodeId);
-            uint64_t inputNanos = 0;
-            uint64_t outputNanos = 0;
-            uint64_t finishNanos = 0;
-            auto start = getCurrentTimeMicro();
+            const auto plan = makeOrderByPlan(test, orderByNodeId);
+            uint64_t inputNs = 0;
+            uint64_t outputNs = 0;
+            uint64_t finishNs = 0;
+            const auto start = getCurrentTimeMicro();
             for (auto i = 0; i < iterations; ++i) {
               std::shared_ptr<Task> task;
               test::AssertQueryBuilder(plan).countResults(task);
               auto taskStats = exec::toPlanStats(task->taskStats());
               auto& stats = taskStats.at(orderByNodeId);
-              inputNanos += stats.addInputTiming.wallNanos;
-              finishNanos += stats.finishTiming.wallNanos;
-              outputNanos += stats.getOutputTiming.wallNanos;
+              inputNs += stats.addInputTiming.wallNanos;
+              finishNs += stats.finishTiming.wallNanos;
+              outputNs += stats.getOutputTiming.wallNanos;
             }
-            uint64_t total = getCurrentTimeMicro() - start;
+            const uint64_t total = getCurrentTimeMicro() - start;
             std::cout << "Total " << succinctMicros(total) << " Input "
-                      << succinctNanos(inputNanos) << " Output "
-                      << succinctNanos(outputNanos) << " Finish "
-                      << succinctNanos(finishNanos) << std::endl;
+                      << succinctNanos(inputNs) << " Output "
+                      << succinctNanos(outputNs) << " Finish "
+                      << succinctNanos(finishNs) << std::endl;
             return 1;
           });
     }
@@ -107,12 +107,12 @@ int main(int argc, char** argv) {
 
   memory::MemoryManager::initialize({});
   OrderByBenchmark bm;
-  OrderByBenchmarkUtil::addBenchmarks([&](const std::string& testName,
+  OrderByBenchmarkUtil::addBenchmarks([&](const std::string& benchmarkName,
                                           vector_size_t numRows,
                                           const RowTypePtr& rowType,
                                           int iterations,
                                           int numKeys) {
-    bm.addBenchmark(testName, numRows, rowType, iterations, numKeys);
+    bm.addBenchmark(benchmarkName, numRows, rowType, iterations, numKeys);
   });
 
   folly::runBenchmarks();
