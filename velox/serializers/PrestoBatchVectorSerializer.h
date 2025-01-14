@@ -89,6 +89,65 @@ class PrestoBatchVectorSerializer : public BatchVectorSerializer {
     }
   }
 
+  void estimateFlattenedDictionarySize(
+      const VectorPtr& vector,
+      const folly::Range<const IndexRange*>& ranges,
+      vector_size_t** sizes,
+      Scratch& scratch);
+
+  vector_size_t computeSelectedIndices(
+      const VectorPtr& vector,
+      const VectorPtr& wrappedVector,
+      const folly::Range<const IndexRange*>& ranges,
+      Scratch& scratch,
+      vector_size_t* selectedIndices);
+
+  template <TypeKind Kind>
+  void estimateDictionarySerializedSize(
+      const VectorPtr& vector,
+      const folly::Range<const IndexRange*>& ranges,
+      vector_size_t** sizes,
+      Scratch& scratch) {
+    VELOX_CHECK(vector->encoding() == VectorEncoding::Simple::DICTIONARY);
+    using T = typename KindToFlatVector<Kind>::WrapperType;
+    const auto& wrappedVector = BaseVector::wrappedVectorShared(vector);
+
+    // We don't currently support serializing DictionaryVectors with nulls, so
+    // use the flattened size.
+    if (vector->nulls()) {
+      estimateFlattenedDictionarySize(vector, ranges, sizes, scratch);
+      return;
+    }
+
+    // This will ultimately get passed to simd::transpose, so it needs to be a
+    // raw_vector.
+    raw_vector<IndexRange> childRanges;
+    std::vector<vector_size_t*> childSizes;
+    for (int rangeIndex = 0; rangeIndex < ranges.size(); rangeIndex++) {
+      ScratchPtr<vector_size_t, 64> selectedIndicesHolder(scratch);
+      auto* mutableSelectedIndices =
+          selectedIndicesHolder.get(wrappedVector->size());
+      auto numUsed = computeSelectedIndices(
+          vector,
+          wrappedVector,
+          ranges.subpiece(rangeIndex, 1),
+          scratch,
+          mutableSelectedIndices);
+      for (int i = 0; i < numUsed; i++) {
+        childRanges.push_back({mutableSelectedIndices[i], 1});
+        childSizes.push_back(sizes[rangeIndex]);
+      }
+
+      // Add the size of the indices.
+      *sizes[rangeIndex] += sizeof(int32_t) * ranges[rangeIndex].size;
+    }
+
+    // In PrestoBatchVectorSerializer we don't preserve the encodings for the
+    // valueVector for a DictionaryVector.
+    estimateSerializedSize(
+        wrappedVector, childRanges, childSizes.data(), scratch);
+  }
+
   void writeHeader(const TypePtr& type, BufferedOutputStream* stream);
 
   /// Are there any nulls in the Vector or introduced artificially in the
@@ -821,6 +880,165 @@ class PrestoBatchVectorSerializer : public BatchVectorSerializer {
       writeSingleValue(
           extractConstant<kind>(constVector), constVector->type(), stream);
     }
+  }
+
+  template <bool WithNulls>
+  void serializeFlattenedDictionary(
+      const VectorPtr& vector,
+      const folly::Range<const IndexRange*>& ranges,
+      const int32_t numRows,
+      BufferedOutputStream* stream) {
+    using RangeType =
+        std::conditional_t<WithNulls, IndexRangeWithNulls, IndexRange>;
+    // Holds the ranges to write out of the values Vector.
+    ScratchPtr<RangeType, 64> selectedRangesHolder(scratch_);
+    RangeType* mutableSelectedRanges = selectedRangesHolder.get(numRows);
+    // Where to write the next range in mutableSelectedRanges;
+    size_t selectedRangesIndex = 0;
+
+    // Compute the ranges to write out from the base Vector.
+    const VectorPtr& wrapped = BaseVector::wrappedVectorShared(vector);
+    for (const auto& range : ranges) {
+      for (int32_t i = range.begin; i < range.begin + range.size; ++i) {
+        if constexpr (WithNulls) {
+          if (vector->isNullAt(i)) {
+            mutableSelectedRanges[selectedRangesIndex++] =
+                IndexRangeWithNulls{0, 1, true};
+            continue;
+          }
+        }
+
+        const auto innerIndex = vector->wrappedIndex(i);
+        mutableSelectedRanges[selectedRangesIndex++] = {innerIndex, 1};
+      }
+    }
+
+    // Write out the flattened data.
+    serializeColumn(
+        wrapped,
+        folly::Range<const RangeType*>(mutableSelectedRanges, numRows),
+        stream);
+  }
+
+  template <
+      TypeKind kind,
+      typename RangeType,
+      typename std::enable_if_t<std::is_same_v<RangeType, IndexRange>, bool> =
+          true>
+  void serializeDictionaryVector(
+      const VectorPtr& vector,
+      const folly::Range<const RangeType*>& ranges,
+      BufferedOutputStream* stream) {
+    auto numRows = rangesTotalSize(ranges);
+
+    // Cannot serialize dictionary as PrestoPage dictionary if it has nulls.
+    if (vector->mayHaveNulls()) {
+      serializeFlattenedDictionary<true>(vector, ranges, numRows, stream);
+      return;
+    }
+
+    const auto& wrappedVector = BaseVector::wrappedVectorShared(vector);
+
+    // This is used to track a mapping from output row to the index in the
+    // dictionary's alphabet.
+    ScratchPtr<vector_size_t, 64> selectedIndicesHolder(scratch_);
+    auto* mutableSelectedIndices =
+        selectedIndicesHolder.get(wrappedVector->size());
+    auto numUsed = computeSelectedIndices(
+        vector, wrappedVector, ranges, scratch_, mutableSelectedIndices);
+
+    // If the values are fixed width and we aren't getting enough reuse to
+    // justify the dictionary, flatten it. For variable width types, rather
+    // than iterate over them computing their size, we simply assume we'll get
+    // a benefit.
+    if constexpr (TypeTraits<kind>::isFixedWidth) {
+      // This calculation admittdely ignores some constants, but if they
+      // really make a difference, they're small so there's not much
+      // difference either way.
+      if (!opts_.preserveEncodings &&
+          numUsed * vector->type()->cppSizeInBytes() +
+                  numRows * sizeof(int32_t) >=
+              numRows * vector->type()->cppSizeInBytes()) {
+        if (vector->mayHaveNulls()) {
+          serializeFlattenedDictionary<true>(vector, ranges, numRows, stream);
+        } else {
+          serializeFlattenedDictionary<false>(vector, ranges, numRows, stream);
+        }
+        return;
+      }
+    }
+
+    // If every element is unique the dictionary isn't giving us any benefit,
+    // flatten it.
+    if (!opts_.preserveEncodings && numUsed == numRows) {
+      if (vector->mayHaveNulls()) {
+        serializeFlattenedDictionary<true>(vector, ranges, numRows, stream);
+      } else {
+        serializeFlattenedDictionary<false>(vector, ranges, numRows, stream);
+      }
+      return;
+    }
+
+    // Write out the header.
+    const auto& encoding = kDictionary;
+    writeInt32(stream, encoding.size());
+    stream->write(encoding.data(), encoding.size());
+
+    // Write out the number of rows.
+    writeInt32(stream, numRows);
+
+    // This is used to track which ranges in the base Vector we need to
+    // serialize as the dictionary's alphabet.
+    ScratchPtr<IndexRange, 64> selectedRangesHolder(scratch_);
+    IndexRange* mutableSelectedRanges = selectedRangesHolder.get(numUsed);
+
+    for (vector_size_t i = 0; i < numUsed; ++i) {
+      mutableSelectedRanges[i] = {mutableSelectedIndices[i], 1};
+    }
+
+    // Serialize the used elements from the Dictionary.
+    serializeColumn(
+        wrappedVector,
+        folly::Range<const IndexRange*>(mutableSelectedRanges, numUsed),
+        stream);
+
+    // Create a mapping from the original indices to the indices in the shrunk
+    // Dictionary of just used values.
+    ScratchPtr<vector_size_t, 64> updatedIndicesHolder(scratch_);
+    auto* updatedIndices = updatedIndicesHolder.get(wrappedVector->size());
+    vector_size_t curIndex = 0;
+    for (vector_size_t i = 0; i < numUsed; ++i) {
+      updatedIndices[mutableSelectedIndices[i]] = curIndex++;
+    }
+
+    // Write out the indices, translating them using the above mapping.
+    for (const auto& range : ranges) {
+      for (auto i = 0; i < range.size; ++i) {
+        writeInt32(
+            stream, updatedIndices[vector->wrappedIndex(range.begin + i)]);
+      }
+    }
+
+    // Write out the dictionary ID (we don't use it, so just write 0).
+    static const int64_t unused{0};
+    writeInt64(stream, unused);
+    writeInt64(stream, unused);
+    writeInt64(stream, unused);
+  }
+
+  template <
+      TypeKind kind,
+      typename RangeType,
+      typename std::enable_if_t<!std::is_same_v<RangeType, IndexRange>, bool> =
+          true>
+  void serializeDictionaryVector(
+      const VectorPtr& vector,
+      const folly::Range<const RangeType*>& ranges,
+      BufferedOutputStream* stream) {
+    // This would mean this DictionaryVector is the base values of another
+    // DictionaryVector that injected nulls.  The base values can only be a
+    // ConstantVector or a flat-like Vector.
+    VELOX_UNSUPPORTED();
   }
 
   StreamArena arena_;
