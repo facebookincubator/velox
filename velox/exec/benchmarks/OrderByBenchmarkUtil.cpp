@@ -42,9 +42,9 @@ void addBenchmark(
     const OrderByBenchmarkFunction& benchmark) {
   for (auto batchSize : batchSizes) {
     for (auto i = 0; i < rowTypes.size(); ++i) {
-      const auto name = fmt::format(
+      const auto benchmarkName = fmt::format(
           "{}_{}_{}_{}k", prefix, numKeys[i], keyName, batchSize / 1000.0);
-      benchmark(name, batchSize, rowTypes[i], iterations, numKeys[i]);
+      benchmark(benchmarkName, batchSize, rowTypes[i], iterations, numKeys[i]);
     }
   }
 }
@@ -149,13 +149,12 @@ void largeVarchar(const OrderByBenchmarkFunction& benchmark) {
   const auto iterations = 10;
   const std::vector<vector_size_t> batchSizes = {
       1'000, 10'000, 100'000, 1'000'000};
-  std::vector<RowTypePtr> rowTypes = largeVarcharRowTypes();
-  std::vector<int> numKeys = {1, 2, 3, 4};
+  const std::vector<int> numKeys = {1, 2, 3, 4};
   addBenchmark(
       "no-payloads",
       "varchar",
       batchSizes,
-      rowTypes,
+      largeVarcharRowTypes(),
       numKeys,
       iterations,
       benchmark);
