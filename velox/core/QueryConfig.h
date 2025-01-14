@@ -324,6 +324,22 @@ class QueryConfig {
   static constexpr const char* kSparkLegacyDateFormatter =
       "spark.legacy_date_formatter";
 
+  /// The first day-of-week varies by culture.
+  /// firstDayOfWeek is a 1-based weekday number starting with Sunday. It
+  /// determines how week-based calendar works. For example, the ISO-8601 use
+  /// Monday (2) and the US uses Sunday (1). It should be set to match the
+  /// 'Calender.getFirstDayOfWeek()' in Java. Sunday (1) is used by default.
+  static constexpr const char* kSparkFirstDayOfWeek =
+      "spark.legacy_date_formatter.first_day_of_week";
+
+  /// The minimal number of days in the first week by culture.
+  /// The week that includes January 1st and has 'minimalDaysInFirstWeek' or
+  /// more days is referred to as week 1. It determines how week-based calendar
+  /// works. It should be set to match the
+  /// 'Calender.getMinimalDaysInFirstWeek()' in Java. 1 days is used by default.
+  static constexpr const char* kSparkMinimalDaysInFirstWeek =
+      "spark.legacy_date_formatter.minimal_days_in_first_week";
+
   /// The number of local parallel table writer operators per task.
   static constexpr const char* kTaskWriterCount = "task_writer_count";
 
@@ -815,6 +831,22 @@ class QueryConfig {
 
   bool sparkLegacyDateFormatter() const {
     return get<bool>(kSparkLegacyDateFormatter, false);
+  }
+
+  uint8_t sparkFirstDayOfWeek() const {
+    auto value = get<uint32_t>(kSparkFirstDayOfWeek, 1);
+    VELOX_USER_CHECK(
+        1 <= value && value <= 7,
+        "firstDayOfWeek must be a number between 1 and 7");
+    return static_cast<uint8_t>(value);
+  }
+
+  uint8_t sparkMinimalDaysInFirstWeek() const {
+    auto value = get<uint32_t>(kSparkMinimalDaysInFirstWeek, 1);
+    VELOX_USER_CHECK(
+        1 <= value && value <= 7,
+        "minimalDaysInFirstWeek must be a number between 1 and 7");
+    return static_cast<uint8_t>(value);
   }
 
   bool exprTrackCpuUsage() const {

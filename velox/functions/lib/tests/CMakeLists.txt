@@ -25,6 +25,7 @@ add_executable(
   RepeatTest.cpp
   TDigestTest.cpp
   Utf8Test.cpp
+  TimeUtilsTest.cpp
   ZetaDistributionTest.cpp)
 
 add_test(

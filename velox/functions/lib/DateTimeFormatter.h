@@ -215,11 +215,31 @@ class DateTimeFormatter {
       bool allowOverflow = false,
       const std::optional<std::string>& zeroOffsetText = std::nullopt) const;
 
+  void setFirstDayOfWeek(uint8_t firstDayOfWeek) {
+    firstDayOfWeek_ = firstDayOfWeek;
+  }
+
+  void setMinimalDaysInFirstWeek(uint8_t minimalDaysInFirstWeek) {
+    minimalDaysInFirstWeek_ = minimalDaysInFirstWeek;
+  }
+
  private:
   std::unique_ptr<char[]> literalBuf_;
   size_t bufSize_;
   std::vector<DateTimeToken> tokens_;
   DateTimeFormatterType type_;
+
+  /// The first day-of-week varies by culture.
+  /// firstDayOfWeek is a 1-based weekday number starting with Sunday. It
+  /// determines how week-based calendar works. For example, the ISO-8601 use
+  /// Monday (2) and the US uses Sunday (1).
+  uint8_t firstDayOfWeek_ = 2;
+
+  /// The minimal number of days in the first week by culture.
+  /// The week that includes January 1st and has 'minimalDaysInFirstWeek' or
+  /// more days is referred to as week 1. It determines how week-based calendar
+  /// works. For example, the ISO-8601 use 4 days.
+  uint8_t minimalDaysInFirstWeek_ = 4;
 };
 
 Expected<std::shared_ptr<DateTimeFormatter>> buildMysqlDateTimeFormatter(
