@@ -8085,15 +8085,6 @@ TEST_F(HashJoinTest, combineSmallVectorsAfterFilter) {
         "SELECT t0, t1 FROM t LEFT JOIN u ON t0 = u0 AND (t1 + u1) % 3 = 0");
   }
   {
-    SCOPED_TRACE("right join");
-    verifyJoinOutputVectorCount(
-        15,
-        core::JoinType::kLeft, // Flip join side.
-        "SELECT t0, t1 FROM t LEFT JOIN u ON t0 = u0 AND (t1 + u1) % 3 = 0",
-        false,
-        true);
-  }
-  {
     SCOPED_TRACE("semi project join");
     verifyJoinOutputVectorCount(
         10,

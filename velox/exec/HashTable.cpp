@@ -1840,6 +1840,7 @@ int32_t HashTable<ignoreNullKeys>::listJoinResults(
     folly::Range<char**> hits,
     uint64_t maxBytes) {
   VELOX_CHECK_LE(inputRows.size(), hits.size());
+  iter.outputBatchBytes = 0;
   if (iter.estimatedRowSize.has_value() && !hasDuplicates_) {
     // When there is no duplicates, and row size is estimable, we are able to
     // go through fast path.
@@ -1964,9 +1965,7 @@ int32_t HashTable<ignoreNullKeys>::listJoinResultsFastPath(
   }
 
   iter.lastRowIndex = i;
-  if (iter.estimatedRowSize.value() != 0) {
-    iter.outputBatchBytes += numOut * iter.estimatedRowSize.value();
-  }
+  iter.outputBatchBytes += numOut * iter.estimatedRowSize.value();
   return numOut;
 }
 
