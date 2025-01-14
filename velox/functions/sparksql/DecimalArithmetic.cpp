@@ -682,18 +682,18 @@ struct DecimalCeilFunction {
       const std::vector<TypePtr>& inputTypes,
       const core::QueryConfig& /*config*/,
       A* /*a*/) {
-    scale_ = getDecimalPrecisionScale(*inputTypes[0]).second;
+    rescaleFactor_ = velox::DecimalUtil::kPowersOfTen
+        [getDecimalPrecisionScale(*inputTypes[0]).second];
   }
 
   template <typename R, typename A>
   void call(R& out, const A& a) {
-    const auto rescaleFactor = velox::DecimalUtil::kPowersOfTen[scale_];
-    const auto increment = (a % rescaleFactor) > 0 ? 1 : 0;
-    out = a / rescaleFactor + increment;
+    const auto increment = (a % rescaleFactor_) > 0 ? 1 : 0;
+    out = a / rescaleFactor_ + increment;
   }
 
  private:
-  uint8_t scale_;
+  int128_t rescaleFactor_;
 };
 } // namespace
 
