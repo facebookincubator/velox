@@ -87,19 +87,19 @@ static void gen_phone(DSS_HUGE ind, char* target, seed_t* seed) {
   RANDOM(number, 1000, 9999, seed);
 
   int res = sprintf(target, "%02d", static_cast<int>(10 + (ind % NATIONS_MAX)));
-  if (FOLLY_UNLIKELY(res < 0)) {
+  if(FOLLY_UNLIKELY(res < 0)) {
     target[0] = '\0';
   }
   res = sprintf(target + 3, "%03d", static_cast<int>(acode));
-  if (FOLLY_UNLIKELY(res < 0)) {
+  if(FOLLY_UNLIKELY(res < 0)) {
     target[3] = '\0';
   }
   res = sprintf(target + 7, "%03d", static_cast<int>(exchg));
-  if (FOLLY_UNLIKELY(res < 0)) {
+  if(FOLLY_UNLIKELY(res < 0)) {
     target[7] = '\0';
   }
   res = sprintf(target + 11, "%04d", static_cast<int>(number));
-  if (FOLLY_UNLIKELY(res < 0)) {
+  if(FOLLY_UNLIKELY(res < 0)) {
     target[11] = '\0';
   }
   target[2] = target[6] = target[10] = '-';
@@ -114,14 +114,14 @@ long mk_cust(DSS_HUGE n_cust, customer_t* c, DBGenContext* ctx) {
 
   if (!bInit) {
     int result = sprintf(szFormat, C_NAME_FMT, 9, &HUGE_FORMAT[1]);
-    if (FOLLY_UNLIKELY(result < 0)) {
+    if(FOLLY_UNLIKELY(result < 0)) {
       szFormat[0] = '\0';
     }
     bInit = 1;
   }
   c->custkey = n_cust;
   int res = sprintf(c->name, szFormat, C_NAME_TAG, n_cust);
-  if (FOLLY_UNLIKELY(res < 0)) {
+  if(FOLLY_UNLIKELY(res < 0)) {
     c->name[0] = '\0';
   }
   V_STR(C_ADDR_LEN, &ctx->Seed[C_ADDR_SD], c->address);
@@ -173,7 +173,7 @@ long mk_order(DSS_HUGE index, order_t* o, DBGenContext* ctx, long upd_num) {
 
   if (!bInit) {
     int res = sprintf(szFormat, O_CLRK_FMT, 9, &HUGE_FORMAT[1]);
-    if (FOLLY_UNLIKELY(res < 0)) {
+    if(FOLLY_UNLIKELY(res < 0)) {
       szFormat[0] = '\0';
     }
     bInit = 1;
@@ -202,7 +202,7 @@ long mk_order(DSS_HUGE index, order_t* o, DBGenContext* ctx, long upd_num) {
       MAX((ctx->scale_factor * O_CLRK_SCL), O_CLRK_SCL),
       &ctx->Seed[O_CLRK_SD]);
   int res = sprintf(o->clerk, szFormat, O_CLRK_TAG, clk_num);
-  if (FOLLY_UNLIKELY(res < 0)) {
+  if(FOLLY_UNLIKELY(res < 0)) {
     o->clerk[0] = '\0';
   }
   TEXT(O_CMNT_LEN, &ctx->Seed[O_CMNT_SD], o->comment);
@@ -286,11 +286,11 @@ long mk_part(DSS_HUGE index, part_t* p, DBGenContext* ctx) {
 
   if (!bInit) {
     int res = sprintf(szFormat, P_MFG_FMT, 1, &HUGE_FORMAT[1]);
-    if (FOLLY_UNLIKELY(res < 0)) {
+    if(FOLLY_UNLIKELY(res < 0)) {
       szFormat[0] = '\0';
     }
     res = sprintf(szBrandFormat, P_BRND_FMT, 2, &HUGE_FORMAT[1]);
-    if (FOLLY_UNLIKELY(res < 0)) {
+    if(FOLLY_UNLIKELY(res < 0)) {
       szBrandFormat[0] = '\0';
     }
     bInit = 1;
@@ -300,12 +300,12 @@ long mk_part(DSS_HUGE index, part_t* p, DBGenContext* ctx) {
       &colors, static_cast<long>(P_NAME_SCL), &ctx->Seed[P_NAME_SD], p->name);
   RANDOM(temp, P_MFG_MIN, P_MFG_MAX, &ctx->Seed[P_MFG_SD]);
   int res = sprintf(p->mfgr, szFormat, P_MFG_TAG, temp);
-  if (FOLLY_UNLIKELY(res < 0)) {
+  if(FOLLY_UNLIKELY(res < 0)) {
     p->mfgr[0] = '\0';
   }
   RANDOM(brnd, P_BRND_MIN, P_BRND_MAX, &ctx->Seed[P_BRND_SD]);
   res = sprintf(p->brand, szBrandFormat, P_BRND_TAG, (temp * 10 + brnd));
-  if (FOLLY_UNLIKELY(res < 0)) {
+  if(FOLLY_UNLIKELY(res < 0)) {
     p->brand[0] = '\0';
   }
   p->tlen = pick_str(&p_types_set, &ctx->Seed[P_TYPE_SD], p->type);
@@ -334,14 +334,14 @@ long mk_supp(DSS_HUGE index, supplier_t* s, DBGenContext* ctx) {
 
   if (!bInit) {
     int res = sprintf(szFormat, S_NAME_FMT, 9, &HUGE_FORMAT[1]);
-    if (FOLLY_UNLIKELY(res < 0)) {
+    if(FOLLY_UNLIKELY(res < 0)) {
       szFormat[0] = '\0';
     }
     bInit = 1;
   }
   s->suppkey = index;
   int res = sprintf(s->name, szFormat, S_NAME_TAG, index);
-  if (FOLLY_UNLIKELY(res < 0)) {
+  if(FOLLY_UNLIKELY(res < 0)) {
     s->name[0] = '\0';
   }
   V_STR(S_ADDR_LEN, &ctx->Seed[S_ADDR_SD], s->address);
