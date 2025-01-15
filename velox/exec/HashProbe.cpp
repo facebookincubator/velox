@@ -1059,10 +1059,10 @@ RowVectorPtr HashProbe::getOutputInternal(bool toSpillOutput) {
   // Left semi and anti joins are always cardinality reducing, e.g. for a
   // given row of input they produce zero or 1 row of output. Therefore, if
   // there is no extra filter we can process each batch of input in one go.
-  auto outputBatchSize = (isLeftSemiOrAntiJoinNoFilter || emptyBuildSide)
+  auto maxOutputBatchRows = (isLeftSemiOrAntiJoinNoFilter || emptyBuildSide)
       ? inputSize
       : outputBatchSize_;
-  outputTableRowsCapacity_ = outputBatchSize;
+  outputTableRowsCapacity_ = maxOutputBatchRows;
   if (filter_) {
     if (isLeftJoin(joinType_) || isFullJoin(joinType_) ||
         isAntiJoin(joinType_)) {
@@ -1104,16 +1104,14 @@ RowVectorPtr HashProbe::getOutputInternal(bool toSpillOutput) {
         for (auto i = 0; i < inputSize; ++i) {
           if (nonNullInputRows_.isValid(i) &&
               (!activeRows_.isValid(i) || !lookup_->hits[i])) {
-            mapping[numJoinedRows] = i;
-            ++numJoinedRows;
+            mapping[numJoinedRows++] = i;
           }
         }
       } else {
         for (auto i = 0; i < inputSize; ++i) {
           if (!nonNullInputRows_.isValid(i) ||
               (!activeRows_.isValid(i) || !lookup_->hits[i])) {
-            mapping[numJoinedRows] = i;
-            ++numJoinedRows;
+            mapping[numJoinedRows++] = i;
           }
         }
       }
@@ -1121,8 +1119,8 @@ RowVectorPtr HashProbe::getOutputInternal(bool toSpillOutput) {
       numJoinedRows = table_->listJoinResults(
           *resultIter_,
           joinIncludesMissesFromLeft(joinType_),
-          folly::Range(mapping.data(), outputBatchSize),
-          folly::Range(outputTableRows, outputBatchSize),
+          folly::Range(mapping.data(), maxOutputBatchRows),
+          folly::Range(outputTableRows, maxOutputBatchRows),
           maxOutputBatchBytes);
     }
 
@@ -1138,7 +1136,7 @@ RowVectorPtr HashProbe::getOutputInternal(bool toSpillOutput) {
       input_ = nullptr;
       return nullptr;
     }
-    VELOX_CHECK_LE(numJoinedRows, outputBatchSize);
+    VELOX_CHECK_LE(numJoinedRows, maxOutputBatchRows);
     auto numJoinedRowsAfterFilter = evalFilter(numOutputRows, numJoinedRows);
 
     if (numJoinedRowsAfterFilter == 0) {
@@ -1172,13 +1170,13 @@ RowVectorPtr HashProbe::getOutputInternal(bool toSpillOutput) {
       // 'outputTableRows_' until either all input rows are processed or the
       // desired row count / max bytes is reached, avoiding low-selectivity
       // vectors.
-      if (!resultIter_->atEnd() && numOutputRows < outputBatchSize &&
+      if (!resultIter_->atEnd() && numOutputRows < maxOutputBatchRows &&
           estimatedOutputBatchBytes < maxOutputBatchBytes) {
         mapping = folly::Range(
             outputRowMapping_->asMutable<vector_size_t>() + numOutputRows,
             outputTableRowsCapacity_ - numOutputRows);
         outputTableRows = outputTableRows_->asMutable<char*>() + numOutputRows;
-        outputBatchSize -= numJoinedRowsAfterFilter;
+        maxOutputBatchRows -= numJoinedRowsAfterFilter;
         maxOutputBatchBytes -= estimatedOutputBatchBytes;
         continue;
       }
