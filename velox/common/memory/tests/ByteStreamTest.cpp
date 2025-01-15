@@ -138,6 +138,45 @@ TEST_F(ByteStreamTest, outputStream) {
   EXPECT_EQ(0, mmapAllocator_->numAllocated());
 }
 
+TEST_F(ByteStreamTest, bufferedOutputStream) {
+  auto arena = newArena();
+  auto out = std::make_unique<IOBufOutputStream>(*pool_, nullptr, 10000);
+  auto buffered =
+      std::make_unique<BufferedOutputStream>(out.get(), arena.get());
+
+  std::stringstream referenceSStream;
+  auto reference = std::make_unique<OStreamOutputStream>(&referenceSStream);
+  for (auto i = 0; i < 1000; ++i) {
+    std::string data;
+    data.resize(10000);
+    std::fill(data.begin(), data.end(), i);
+    buffered->write(data.data(), data.size());
+    reference->write(data.data(), data.size());
+  }
+  buffered->flush();
+  EXPECT_EQ(reference->tellp(), buffered->tellp());
+  EXPECT_EQ(out->tellp(), buffered->tellp());
+
+  for (auto i = 0; i < 100; ++i) {
+    std::string data;
+    data.resize(6000);
+    std::fill(data.begin(), data.end(), i + 10);
+    buffered->seekp(i * 10000 + 5000);
+    reference->seekp(i * 10000 + 5000);
+    buffered->write(data.data(), data.size());
+    reference->write(data.data(), data.size());
+    buffered->flush();
+  }
+
+  auto str = referenceSStream.str();
+  auto iobuf = out->getIOBuf();
+  auto outData = iobuf->coalesce();
+  EXPECT_EQ(
+      str,
+      std::string(
+          reinterpret_cast<const char*>(outData.data()), outData.size()));
+}
+
 TEST_F(ByteStreamTest, newRangeAllocation) {
   const int kPageSize = AllocationTraits::kPageSize;
   struct {
