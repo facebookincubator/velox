@@ -145,20 +145,18 @@ class JoinFuzzer {
   static std::pair<core::PlanNodePtr, core::PlanNodePtr> tryFlipJoinSidesHelper(
       const TNode& joinNode);
 
-  // Makes the query plan with default settings in JoinFuzzer and value inputs
-  // for both probe and build sides.
+  // Makes the query plan with default settings in JoinFuzzer using inputs
+  // joining each input from left to right.
   //
-  // NOTE: 'probeInput' and 'buildInput' could either input rows with lazy
-  // vectors or flatten ones.
+  // NOTE: inputs can be rows with lazy vectors or flattened ones.
   JoinFuzzer::PlanWithSplits makeDefaultPlan(
-      core::JoinType joinType,
-      bool nullAware,
-      const std::vector<std::string>& probeKeys,
-      const std::vector<std::string>& buildKeys,
-      const std::vector<RowVectorPtr>& probeInput,
-      const std::vector<RowVectorPtr>& buildInput,
-      const std::vector<std::string>& outputColumns,
-      const std::string& filter);
+      const std::vector<core::JoinType>& joinTypes,
+      const std::vector<bool>& nullAwareList,
+      const std::vector<std::vector<std::string>>& probeKeysList,
+      const std::vector<std::vector<std::string>>& buildKeysList,
+      const std::vector<std::vector<RowVectorPtr>>& inputs,
+      const std::vector<std::vector<std::string>>& outputColumnsList,
+      const std::vector<std::string>& filterList);
 
   JoinFuzzer::PlanWithSplits makeMergeJoinPlan(
       core::JoinType joinType,
@@ -742,28 +740,37 @@ std::vector<std::string> fieldNames(
 }
 
 JoinFuzzer::PlanWithSplits JoinFuzzer::makeDefaultPlan(
-    core::JoinType joinType,
-    bool nullAware,
-    const std::vector<std::string>& probeKeys,
-    const std::vector<std::string>& buildKeys,
-    const std::vector<RowVectorPtr>& probeInput,
-    const std::vector<RowVectorPtr>& buildInput,
-    const std::vector<std::string>& outputColumns,
-    const std::string& filter) {
+    const std::vector<core::JoinType>& joinTypes,
+    const std::vector<bool>& nullAwareList,
+    const std::vector<std::vector<std::string>>& probeKeysList,
+    const std::vector<std::vector<std::string>>& buildKeysList,
+    const std::vector<std::vector<RowVectorPtr>>& inputs,
+    const std::vector<std::vector<std::string>>& outputColumnsList,
+    const std::vector<std::string>& filterList) {
+  VELOX_CHECK(inputs.size() > 1);
   auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
-  auto plan =
+  PlanBuilder plan =
       PlanBuilder(planNodeIdGenerator)
-          .values(probeInput)
+          .values(inputs[0])
           .hashJoin(
-              probeKeys,
-              buildKeys,
-              PlanBuilder(planNodeIdGenerator).values(buildInput).planNode(),
-              filter,
-              outputColumns,
-              joinType,
-              nullAware)
-          .planNode();
-  return PlanWithSplits{plan};
+              probeKeysList[0],
+              buildKeysList[0],
+              PlanBuilder(planNodeIdGenerator).values(inputs[1]).planNode(),
+              filterList[0],
+              outputColumnsList[0],
+              joinTypes[0],
+              nullAwareList[0]);
+  for (auto i = 1; i < inputs.size() - 1; i++) {
+    plan = plan.hashJoin(
+        probeKeysList[i],
+        buildKeysList[i],
+        PlanBuilder(planNodeIdGenerator).values(inputs[i + 1]).planNode(),
+        filterList[i],
+        outputColumnsList[i],
+        joinTypes[i],
+        nullAwareList[i]);
+  }
+  return PlanWithSplits{plan.planNode()};
 }
 
 JoinFuzzer::PlanWithSplits JoinFuzzer::makeDefaultPlanWithTableScan(
@@ -1183,14 +1190,13 @@ void JoinFuzzer::verify(core::JoinType joinType) {
   shuffleJoinKeys(probeKeys, buildKeys);
 
   const auto defaultPlan = makeDefaultPlan(
-      joinType,
-      nullAware,
-      probeKeys,
-      buildKeys,
-      probeInput,
-      buildInput,
-      outputColumns,
-      filter);
+      {joinType},
+      {nullAware},
+      {probeKeys},
+      {buildKeys},
+      {probeInput, buildInput},
+      {outputColumns},
+      {filter});
 
   const auto expected = execute(defaultPlan, /*injectSpill=*/false);
 
@@ -1213,14 +1219,13 @@ void JoinFuzzer::verify(core::JoinType joinType) {
 
   std::vector<PlanWithSplits> altPlans;
   altPlans.push_back(makeDefaultPlan(
-      joinType,
-      nullAware,
-      probeKeys,
-      buildKeys,
-      flatProbeInput,
-      flatBuildInput,
-      outputColumns,
-      filter));
+      {joinType},
+      {nullAware},
+      {probeKeys},
+      {buildKeys},
+      {flatProbeInput, flatBuildInput},
+      {outputColumns},
+      {filter}));
 
   makeAlternativePlans(
       defaultPlan.plan, probeInput, buildInput, altPlans, filter);
