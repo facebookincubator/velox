@@ -53,6 +53,10 @@ static inline const std::string_view kRow{"ROW"};
 static inline const std::string_view kRLE{"RLE"};
 static inline const std::string_view kDictionary{"DICTIONARY"};
 
+/// When we decide to turn off compression, this is the maximum number of
+/// serialized batches to skip before trying to enable compression again.
+static inline const int32_t kMaxCompressionAttemptsToSkip = 30;
+
 void initBitsToMapOnce();
 
 FOLLY_ALWAYS_INLINE int128_t toJavaDecimalValue(int128_t value) {
@@ -140,13 +144,47 @@ struct FlushSizes {
   int64_t compressedSize;
 };
 
-FlushSizes flushStreams(
+inline char getCodecMarker() {
+  char marker = 0;
+  marker |= kCheckSumBitMask;
+  return marker;
+}
+
+void flushStreams(
     std::vector<VectorStream>& streams,
-    int32_t numRows,
+    const int32_t numRows,
     const StreamArena& arena,
+    // non-const only because it's compress function is non-const and will be
+    // invoked by flushCompressed.
     folly::io::Codec& codec,
-    float minCompressionRatio,
+    // If compression is enabled and the compression ratio for a batch exceeds
+    // this value, compression will be temporarily disabled.
+    const float minCompressionRatio,
+    // If this is 0 and compression is enabled, if the compression ratio exceeds
+    // minCompressionRatio this will be used to indicate the number of batches
+    // to skip compression on.  If this is greater than 0, compression will be
+    // disabled for the current batch and this value will be decremented.
+    int32_t& numCompressionsToSkip,
+    // If compression is enabled, this will be updated with values suitable for
+    // exporting.
+    CompressionStats& stats,
+    // The stream the output is written to.
     OutputStream* out);
+
+inline std::unordered_map<std::string, RuntimeCounter> runtimeStats(
+    const CompressionStats& stats) {
+  std::unordered_map<std::string, RuntimeCounter> map;
+  map.insert(
+      {{"compressedBytes",
+        RuntimeCounter(stats.compressedBytes, RuntimeCounter::Unit::kBytes)},
+       {"compressionInputBytes",
+        RuntimeCounter(
+            stats.compressionInputBytes, RuntimeCounter::Unit::kBytes)},
+       {"compressionSkippedBytes",
+        RuntimeCounter(
+            stats.compressionSkippedBytes, RuntimeCounter::Unit::kBytes)}});
+  return map;
+}
 
 FOLLY_ALWAYS_INLINE bool needCompression(const folly::io::Codec& codec) {
   return codec.type() != folly::io::CodecType::NO_COMPRESSION;

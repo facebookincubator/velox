@@ -407,7 +407,11 @@ class PrestoSerializerTest
       auto actualEncoding = actual->childAt(i)->encoding();
 
       if (allowFlatteningDictionaries &&
-          actualEncoding == VectorEncoding::Simple::FLAT &&
+          (actualEncoding == VectorEncoding::Simple::FLAT ||
+           actualEncoding == VectorEncoding::Simple::ARRAY ||
+           actualEncoding == VectorEncoding::Simple::MAP ||
+           actualEncoding == VectorEncoding::Simple::ROW ||
+           actualEncoding == VectorEncoding::Simple::CONSTANT) &&
           expectedEncoding == VectorEncoding::Simple::DICTIONARY) {
         continue;
       }
@@ -1180,7 +1184,7 @@ TEST_P(PrestoSerializerTest, uuid) {
 // Test that hierarchically encoded columns (rows) have their encodings
 // preserved by the PrestoBatchVectorSerializer.
 TEST_P(PrestoSerializerTest, encodingsBatchVectorSerializer) {
-  testBatchVectorSerializerRoundTrip(encodingsTestVector());
+  testBatchVectorSerializerRoundTrip(encodingsTestVector(), true);
 }
 
 // Test that array elements have their encodings preserved by the
@@ -1407,12 +1411,15 @@ TEST_P(PrestoSerializerTest, encodedRoundtrip) {
   opts.timestampPrecision =
       VectorFuzzer::Options::TimestampPrecision::kMilliSeconds;
   opts.nullRatio = 0.1;
-  opts.dictionaryHasNulls = false;
+  std::mt19937 rng;
   VectorFuzzer fuzzer(opts, pool_.get());
 
   const size_t numRounds = 200;
 
   for (size_t i = 0; i < numRounds; ++i) {
+    auto seed = rng();
+    fuzzer.reSeed(seed);
+    SCOPED_TRACE(fmt::format("Seed: {}", seed));
     auto rowType = fuzzer.randRowType();
     auto inputRowVector = fuzzer.fuzzInputRow(rowType);
     serializer::presto::PrestoVectorSerde::PrestoOptions serdeOpts;
@@ -1429,6 +1436,21 @@ TEST_P(PrestoSerializerTest, opaqueBatchVectorSerializer) {
       [](vector_size_t row) { return Foo::create(row + 10); },
       [](vector_size_t row) { return row == 1; },
       OPAQUE<Foo>());
+  auto inputRowVector = makeRowVector({inputVector});
+
+  std::ostringstream out;
+  serializeBatch(inputRowVector, &out, nullptr);
+
+  auto rowType = asRowType(inputRowVector->type());
+  auto deserialized = deserialize(rowType, out.str(), nullptr);
+  assertEqualVectors(inputRowVector, deserialized);
+}
+
+TEST_P(PrestoSerializerTest, constantOpaqueBatchVectorSerializer) {
+  OpaqueType::registerSerialization<Foo>(
+      "Foo", Foo::serialize, Foo::deserialize);
+  auto inputVector = std::make_shared<ConstantVector<std::shared_ptr<void>>>(
+      pool_.get(), 3, false, OPAQUE<Foo>(), Foo::create(10));
   auto inputRowVector = makeRowVector({inputVector});
 
   std::ostringstream out;
@@ -1997,18 +2019,14 @@ TEST_F(PrestoSerializerBatchEstimateSizeTest, constant) {
   auto constantArrayWithConstantElements =
       BaseVector::wrapInConstant(32, 0, arrayVectorWithConstantElements);
 
-  // The single constant array is 4 bytes for the length, and 4 bytes for each
-  // of the 2 integer elements (encodings for children of encoded complex types
-  // are not currently preserved).
-  // 4 + 2 * 4 = 12
+  // The single constant array is 4 bytes for the length, and 4 bytes for the
+  // constant element.
+  // 4 + 4 = 8
+  testEstimateSerializedSize(constantArrayWithConstantElements, {{0, 32}}, {8});
   testEstimateSerializedSize(
-      constantArrayWithConstantElements, {{0, 32}}, {12});
+      constantArrayWithConstantElements, {{0, 16}, {16, 16}}, {8, 8});
   testEstimateSerializedSize(
-      constantArrayWithConstantElements, {{0, 16}, {16, 16}}, {12, 12});
-  testEstimateSerializedSize(
-      constantArrayWithConstantElements,
-      {{0, 8}, {8, 16}, {24, 8}},
-      {12, 12, 12});
+      constantArrayWithConstantElements, {{0, 8}, {8, 16}, {24, 8}}, {8, 8, 8});
 }
 
 TEST_F(PrestoSerializerBatchEstimateSizeTest, dictionary) {
@@ -2032,16 +2050,15 @@ TEST_F(PrestoSerializerBatchEstimateSizeTest, dictionary) {
   auto dictionaryNullElements =
       BaseVector::wrapInDictionary(nullptr, indices, 32, flatVectorWithNulls);
 
-  // The indices are 4 bytes, half the dictionary entries are 8 byte doubles.
-  // Note that the bytes for the null bits in the entries are not accounted for,
-  // this is a limitation of having non-contiguous ranges selected from the
-  // dictionary values.
-  // 4 * 32 + 8 * 8 = 192
-  testEstimateSerializedSize(dictionaryNullElements, {{0, 32}}, {192});
+  // The indices are 4 bytes, half the dictionary entries are 8 byte doubles,
+  // the rest are null (each null gets counted as 1 byte, this is a current
+  // limitation of estimating dictionary sizes).
+  // 4 * 32 + 8 * 8 + 8  = 200
+  testEstimateSerializedSize(dictionaryNullElements, {{0, 32}}, {200});
   testEstimateSerializedSize(
-      dictionaryNullElements, {{0, 16}, {16, 16}}, {128, 128});
+      dictionaryNullElements, {{0, 16}, {16, 16}}, {136, 136});
   testEstimateSerializedSize(
-      dictionaryNullElements, {{0, 8}, {8, 16}, {24, 8}}, {64, 128, 64});
+      dictionaryNullElements, {{0, 8}, {8, 16}, {24, 8}}, {68, 136, 68});
 
   auto arrayIndices = makeIndices(16, [](auto row) { return (row * 2) % 16; });
   std::vector<vector_size_t> offsets{
@@ -2064,17 +2081,18 @@ TEST_F(PrestoSerializerBatchEstimateSizeTest, dictionary) {
       nullptr, arrayIndices, 16, arrayVectorWithConstantElements);
 
   // The indices are 4 bytes, and the dictionary entries are 4 bytes length + 4
-  // bytes for each of the 2 array elements (encodings for children of encoded
-  // complex types are not currently preserved).
-  // 4 * 16 + 4 * 8 + 2 * 8 * 4 = 160
+  // bytes for the constant element in each array (the constant element gets
+  // counted for each array, this is a current limitation of estimating
+  // dictionary sizes).
+  // 4 * 16 + 4 * 8 + 4 * 8 = 128
   testEstimateSerializedSize(
-      dictionaryArrayWithConstantElements, {{0, 16}}, {160});
+      dictionaryArrayWithConstantElements, {{0, 16}}, {128});
   testEstimateSerializedSize(
-      dictionaryArrayWithConstantElements, {{0, 8}, {8, 8}}, {128, 128});
+      dictionaryArrayWithConstantElements, {{0, 8}, {8, 8}}, {96, 96});
   testEstimateSerializedSize(
       dictionaryArrayWithConstantElements,
       {{0, 4}, {4, 8}, {12, 4}},
-      {64, 128, 64});
+      {48, 96, 48});
 
   auto dictionaryWithNulls = BaseVector::wrapInDictionary(
       makeNulls(32, [](auto row) { return row % 2 == 0; }),

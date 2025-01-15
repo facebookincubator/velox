@@ -79,55 +79,20 @@ size_t PrestoIterativeVectorSerializer::maxSerializedSize() const {
 // numRows(4) | codec(1) | uncompressedSize(4) | compressedSize(4) |
 // checksum(8) | data
 void PrestoIterativeVectorSerializer::flush(OutputStream* out) {
-  constexpr int32_t kMaxCompressionAttemptsToSkip = 30;
-  if (!needCompression(*codec_)) {
-    flushStreams(
-        streams_,
-        numRows_,
-        *streamArena_,
-        *codec_,
-        opts_.minCompressionRatio,
-        out);
-  } else {
-    if (numCompressionToSkip_ > 0) {
-      const auto noCompressionCodec = common::compressionKindToCodec(
-          common::CompressionKind::CompressionKind_NONE);
-      auto [size, ignore] = flushStreams(
-          streams_, numRows_, *streamArena_, *noCompressionCodec, 1, out);
-      stats_.compressionSkippedBytes += size;
-      --numCompressionToSkip_;
-      ++stats_.numCompressionSkipped;
-    } else {
-      auto [size, compressedSize] = flushStreams(
-          streams_,
-          numRows_,
-          *streamArena_,
-          *codec_,
-          opts_.minCompressionRatio,
-          out);
-      stats_.compressionInputBytes += size;
-      stats_.compressedBytes += compressedSize;
-      if (compressedSize > size * opts_.minCompressionRatio) {
-        numCompressionToSkip_ = std::min<int64_t>(
-            kMaxCompressionAttemptsToSkip, 1 + stats_.numCompressionSkipped);
-      }
-    }
-  }
+  flushStreams(
+      streams_,
+      numRows_,
+      *streamArena_,
+      *codec_,
+      opts_.minCompressionRatio,
+      numCompressionToSkip_,
+      stats_,
+      out);
 }
 
 std::unordered_map<std::string, RuntimeCounter>
 PrestoIterativeVectorSerializer::runtimeStats() {
-  std::unordered_map<std::string, RuntimeCounter> map;
-  map.insert(
-      {{"compressedBytes",
-        RuntimeCounter(stats_.compressedBytes, RuntimeCounter::Unit::kBytes)},
-       {"compressionInputBytes",
-        RuntimeCounter(
-            stats_.compressionInputBytes, RuntimeCounter::Unit::kBytes)},
-       {"compressionSkippedBytes",
-        RuntimeCounter(
-            stats_.compressionSkippedBytes, RuntimeCounter::Unit::kBytes)}});
-  return map;
+  return facebook::velox::serializer::presto::detail::runtimeStats(stats_);
 }
 
 void PrestoIterativeVectorSerializer::clear() {

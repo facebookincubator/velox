@@ -89,9 +89,53 @@ void computeCollectionRangesAndOffsets(
     }
   }
 }
+
+void flushSerialization(
+    int32_t numRows,
+    int32_t uncompressedSize,
+    int32_t serializationSize,
+    char codecMask,
+    const std::unique_ptr<folly::IOBuf>& iobuf,
+    OutputStream* output) {
+  auto listener = dynamic_cast<PrestoOutputStreamListener*>(output->listener());
+
+  // Pause CRC computation.
+  if (listener) {
+    listener->reset();
+    listener->pause();
+    codecMask |= getCodecMarker();
+  }
+  writeInt32(output, numRows);
+  output->write(&codecMask, 1);
+  writeInt32(output, uncompressedSize);
+  writeInt32(output, serializationSize);
+  auto crcOffset = output->tellp();
+  // Write zero checksum.
+  writeInt64(output, 0);
+  // Number of columns and stream content. Unpause CRC.
+  if (listener) {
+    listener->resume();
+  }
+  for (auto range : *iobuf) {
+    output->write(reinterpret_cast<const char*>(range.data()), range.size());
+  }
+  // Pause CRC computation.
+  if (listener) {
+    listener->pause();
+  }
+  const int32_t endSize = output->tellp();
+  // Fill in crc.
+  int64_t crc = 0;
+  if (listener) {
+    crc = computeChecksum(listener, codecMask, numRows, uncompressedSize);
+  }
+  output->seekp(crcOffset);
+  writeInt64(output, crc);
+  output->seekp(endSize);
+}
 } // namespace
 
-void PrestoBatchVectorSerializer::serialize(
+int32_t PrestoBatchVectorSerializer::serializeUncompressed(
     const RowVectorPtr& vector,
     const folly::Range<const IndexRange*>& ranges,
     Scratch& scratch,
@@ -100,25 +144,144 @@ void PrestoBatchVectorSerializer::serialize(
   const auto rowType = vector->type();
   const auto numChildren = vector->childrenSize();
 
-  std::vector<VectorStream> streams;
-  streams.reserve(numChildren);
-  for (int i = 0; i < numChildren; i++) {
-    streams.emplace_back(
-        rowType->childAt(i),
-        std::nullopt,
-        vector->childAt(i),
-        &arena_,
-        numRows,
-        opts_);
+  BufferedOutputStream out(stream, &arena_);
 
-    if (numRows > 0) {
-      velox::serializer::presto::detail::serializeColumn(
-          vector->childAt(i), ranges, &streams[i], scratch);
-    }
+  auto listener = dynamic_cast<PrestoOutputStreamListener*>(stream->listener());
+  // Reset CRC computation.
+  if (listener) {
+    listener->reset();
   }
 
-  flushStreams(
-      streams, numRows, arena_, *codec_, opts_.minCompressionRatio, stream);
+  int32_t offset = out.tellp();
+
+  char codecMask = 0;
+  if (listener) {
+    codecMask = getCodecMarker();
+  }
+  // Pause CRC computation.
+  if (listener) {
+    out.flush();
+    listener->pause();
+  }
+
+  writeInt32(&out, numRows);
+  out.write(&codecMask, 1);
+
+  // Make space for uncompressedSizeInBytes & sizeInBytes.
+  writeInt32(&out, 0);
+  writeInt32(&out, 0);
+  // Write zero checksum.
+  writeInt64(&out, 0);
+
+  // Number of columns and stream content. Unpause CRC.
+  if (listener) {
+    out.flush();
+    listener->resume();
+  }
+  writeInt32(&out, numChildren);
+
+  for (int i = 0; i < numChildren; i++) {
+    serializeColumn(vector->childAt(i), ranges, &out);
+  }
+
+  out.flush();
+
+  // Pause CRC computation.
+  if (listener) {
+    listener->pause();
+  }
+
+  // Fill in uncompressedSizeInBytes & sizeInBytes.
+  int32_t size = (int32_t)out.tellp() - offset;
+  const int32_t uncompressedSize = size - kHeaderSize;
+  int64_t crc = 0;
+  if (listener) {
+    crc = computeChecksum(listener, codecMask, numRows, uncompressedSize);
+  }
+
+  out.seekp(offset + kSizeInBytesOffset);
+  writeInt32(&out, uncompressedSize);
+  writeInt32(&out, uncompressedSize);
+  writeInt64(&out, crc);
+  out.flush();
+  out.seekp(offset + size);
+
+  return uncompressedSize;
+}
+
+FlushSizes PrestoBatchVectorSerializer::serializeCompressed(
+    const RowVectorPtr& vector,
+    const folly::Range<const IndexRange*>& ranges,
+    Scratch& scratch,
+    OutputStream* stream) {
+  const auto numRows = rangesTotalSize(ranges);
+  const auto rowType = vector->type();
+  const auto numChildren = vector->childrenSize();
+
+  IOBufOutputStream ioBufStream(*(arena_.pool()), nullptr, arena_.size());
+  BufferedOutputStream out(&ioBufStream, &arena_);
+
+  writeInt32(&out, numChildren);
+
+  for (int i = 0; i < numChildren; i++) {
+    serializeColumn(vector->childAt(i), ranges, &out);
+  }
+
+  out.flush();
+
+  const int32_t uncompressedSize = ioBufStream.tellp();
+  VELOX_CHECK_LE(
+      uncompressedSize,
+      codec_->maxUncompressedLength(),
+      "UncompressedSize exceeds limit");
+  auto iobuf = ioBufStream.getIOBuf();
+  const auto compressedBuffer = codec_->compress(iobuf.get());
+  const int32_t compressedSize = compressedBuffer->length();
+
+  if (compressedSize > uncompressedSize * opts_.minCompressionRatio) {
+    flushSerialization(
+        numRows, uncompressedSize, uncompressedSize, 0, iobuf, stream);
+
+    return {uncompressedSize, uncompressedSize};
+  } else {
+    flushSerialization(
+        numRows,
+        uncompressedSize,
+        compressedSize,
+        kCompressedBitMask,
+        compressedBuffer,
+        stream);
+
+    return {uncompressedSize, compressedSize};
+  }
+}
+
+void PrestoBatchVectorSerializer::serialize(
+    const RowVectorPtr& vector,
+    const folly::Range<const IndexRange*>& ranges,
+    Scratch& scratch,
+    OutputStream* stream) {
+  if (!needCompression(*codec_)) {
+    serializeUncompressed(vector, ranges, scratch, stream);
+  } else {
+    if (numCompressionsToSkip_ > 0) {
+      const auto noCompressionCodec = common::compressionKindToCodec(
+          common::CompressionKind::CompressionKind_NONE);
+      const auto size = serializeUncompressed(vector, ranges, scratch, stream);
+      stats_.compressionSkippedBytes += size;
+      --numCompressionsToSkip_;
+      ++stats_.numCompressionSkipped;
+    } else {
+      const auto [size, compressedSize] =
+          serializeCompressed(vector, ranges, scratch, stream);
+      stats_.compressionInputBytes += size;
+      stats_.compressedBytes += compressedSize;
+      if (compressedSize > size * opts_.minCompressionRatio) {
+        numCompressionsToSkip_ = std::min<int64_t>(
+            kMaxCompressionAttemptsToSkip, 1 + stats_.numCompressionSkipped);
+      }
+    }
+  }
 
   arena_.clear();
 }
@@ -139,8 +302,7 @@ void PrestoBatchVectorSerializer::estimateSerializedSizeImpl(
       break;
     case VectorEncoding::Simple::CONSTANT:
       VELOX_DYNAMIC_TYPE_DISPATCH_ALL(
-          facebook::velox::serializer::presto::detail::
-              estimateConstantSerializedSize,
+          estimateConstantSerializedSize,
           vector->typeKind(),
           vector,
           ranges,
@@ -149,8 +311,7 @@ void PrestoBatchVectorSerializer::estimateSerializedSizeImpl(
       break;
     case VectorEncoding::Simple::DICTIONARY:
       VELOX_DYNAMIC_TYPE_DISPATCH_ALL(
-          facebook::velox::serializer::presto::detail::
-              estimateDictionarySerializedSize,
+          estimateDictionarySerializedSize,
           vector->typeKind(),
           vector,
           ranges,
@@ -193,15 +354,17 @@ void PrestoBatchVectorSerializer::estimateSerializedSizeImpl(
         }
       }
 
-      auto rowVector = vector->as<RowVector>();
-      auto& children = rowVector->children();
-      for (auto& child : children) {
-        if (child) {
-          estimateSerializedSizeImpl(
-              child,
-              folly::Range(childRanges.data(), childRanges.size()),
-              childSizes.data(),
-              scratch);
+      if (!childRanges.empty()) {
+        auto rowVector = vector->as<RowVector>();
+        auto& children = rowVector->children();
+        for (auto& child : children) {
+          if (child) {
+            estimateSerializedSizeImpl(
+                child,
+                folly::Range(childRanges.data(), childRanges.size()),
+                childSizes.data(),
+                scratch);
+          }
         }
       }
 
@@ -219,10 +382,12 @@ void PrestoBatchVectorSerializer::estimateSerializedSizeImpl(
           sizes,
           &childRanges,
           &childSizes);
-      estimateSerializedSizeImpl(
-          mapVector->mapKeys(), childRanges, childSizes.data(), scratch);
-      estimateSerializedSizeImpl(
-          mapVector->mapValues(), childRanges, childSizes.data(), scratch);
+      if (!childRanges.empty()) {
+        estimateSerializedSizeImpl(
+            mapVector->mapKeys(), childRanges, childSizes.data(), scratch);
+        estimateSerializedSizeImpl(
+            mapVector->mapValues(), childRanges, childSizes.data(), scratch);
+      }
       break;
     }
     case VectorEncoding::Simple::ARRAY: {
@@ -237,8 +402,10 @@ void PrestoBatchVectorSerializer::estimateSerializedSizeImpl(
           sizes,
           &childRanges,
           &childSizes);
-      estimateSerializedSizeImpl(
-          arrayVector->elements(), childRanges, childSizes.data(), scratch);
+      if (!childRanges.empty()) {
+        estimateSerializedSizeImpl(
+            arrayVector->elements(), childRanges, childSizes.data(), scratch);
+      }
       break;
     }
     case VectorEncoding::Simple::LAZY:

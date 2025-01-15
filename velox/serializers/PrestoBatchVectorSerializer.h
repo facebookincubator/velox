@@ -45,11 +45,27 @@ class PrestoBatchVectorSerializer : public BatchVectorSerializer {
     estimateSerializedSizeImpl(vector, ranges, sizes, scratch);
   }
 
+  std::unordered_map<std::string, RuntimeCounter> runtimeStats() override {
+    return facebook::velox::serializer::presto::detail::runtimeStats(stats_);
+  }
+
  private:
   static inline constexpr char kZero = 0;
   static inline constexpr char kOne = 1;
   // The isNull flags to use when there is just a single null at position 0.
   static inline constexpr char kSingleNull = -128;
+
+  int32_t serializeUncompressed(
+      const RowVectorPtr& vector,
+      const folly::Range<const IndexRange*>& ranges,
+      Scratch& scratch,
+      OutputStream* stream);
+
+  FlushSizes serializeCompressed(
+      const RowVectorPtr& vector,
+      const folly::Range<const IndexRange*>& ranges,
+      Scratch& scratch,
+      OutputStream* stream);
 
   void estimateSerializedSizeImpl(
       const VectorPtr& vector,
@@ -1044,6 +1060,10 @@ class PrestoBatchVectorSerializer : public BatchVectorSerializer {
   StreamArena arena_;
   const std::unique_ptr<folly::io::Codec> codec_;
   const PrestoVectorSerde::PrestoOptions opts_;
+
+  // Count of forthcoming compressions to skip.
+  int32_t numCompressionsToSkip_{0};
+  CompressionStats stats_;
 
   // A scratch space for writing null bits, this is a frequent operation that
   // the OutputStream interface is not well suited for.
