@@ -970,12 +970,6 @@ FlushSizes flushCompressed(
   return {uncompressedSize, compressedSize};
 }
 
-char getCodecMarker() {
-  char marker = 0;
-  marker |= kCheckSumBitMask;
-  return marker;
-}
-
 int64_t flushUncompressed(
     std::vector<VectorStream>& streams,
     int32_t numRows,
@@ -1198,12 +1192,14 @@ void serializeColumn(
   }
 }
 
-FlushSizes flushStreams(
+void flushStreams(
     std::vector<VectorStream>& streams,
-    int32_t numRows,
+    const int32_t numRows,
     const StreamArena& arena,
     folly::io::Codec& codec,
-    float minCompressionRatio,
+    const float minCompressionRatio,
+    int32_t& numCompressionsToSkip,
+    CompressionStats& stats,
     OutputStream* out) {
   auto listener = dynamic_cast<PrestoOutputStreamListener*>(out->listener());
   // Reset CRC computation
@@ -1212,11 +1208,25 @@ FlushSizes flushStreams(
   }
 
   if (!needCompression(codec)) {
-    const auto size = flushUncompressed(streams, numRows, out, listener);
-    return {size, size};
+    flushUncompressed(streams, numRows, out, listener);
   } else {
-    return flushCompressed(
-        streams, arena, codec, numRows, minCompressionRatio, out, listener);
+    if (numCompressionsToSkip > 0) {
+      const auto noCompressionCodec = common::compressionKindToCodec(
+          common::CompressionKind::CompressionKind_NONE);
+      const auto size = flushUncompressed(streams, numRows, out, listener);
+      stats.compressionSkippedBytes += size;
+      --numCompressionsToSkip;
+      ++stats.numCompressionSkipped;
+    } else {
+      const auto [size, compressedSize] = flushCompressed(
+          streams, arena, codec, numRows, minCompressionRatio, out, listener);
+      stats.compressionInputBytes += size;
+      stats.compressedBytes += compressedSize;
+      if (compressedSize > size * minCompressionRatio) {
+        numCompressionsToSkip = std::min<int64_t>(
+            kMaxCompressionAttemptsToSkip, 1 + stats.numCompressionSkipped);
+      }
+    }
   }
 }
 

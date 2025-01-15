@@ -71,6 +71,54 @@ class OutputStream {
   OutputStreamListener* listener_;
 };
 
+/// An OutputStream that wraps another and coalesces writes into a buffer before
+/// flushing them as large writes to the wrapped OutputStream.
+///
+/// Note that you must call flush before calling tellp or seekp and at the end
+/// of writing to ensure the changes propagate to the wrapped OutputStream.
+class BufferedOutputStream : public OutputStream {
+ public:
+  BufferedOutputStream(
+      OutputStream* out,
+      StreamArena* arena,
+      int32_t bufferSize = 1 << 20)
+      : OutputStream(), out_(out) {
+    arena->newRange(bufferSize, nullptr, &buffer_);
+  }
+
+  void write(const char* s, std::streamsize count) override {
+    auto remaining = count;
+    do {
+      auto copyLength =
+          std::min(remaining, (std::streamsize)buffer_.size - buffer_.position);
+      simd::memcpy(
+          buffer_.buffer + buffer_.position, s + count - remaining, copyLength);
+      buffer_.position += copyLength;
+      remaining -= copyLength;
+      if (buffer_.position == buffer_.size) {
+        flush();
+      }
+    } while (remaining > 0);
+  }
+
+  std::streampos tellp() const override {
+    return out_->tellp();
+  }
+
+  void seekp(std::streampos pos) override {
+    out_->seekp(pos);
+  }
+
+  void flush() {
+    out_->write(reinterpret_cast<char*>(buffer_.buffer), buffer_.position);
+    buffer_.position = 0;
+  }
+
+ private:
+  OutputStream* out_;
+  ByteRange buffer_;
+};
+
 class OStreamOutputStream : public OutputStream {
  public:
   explicit OStreamOutputStream(
