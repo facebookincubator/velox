@@ -437,7 +437,7 @@ int dbg_print(int dt, FILE* tgt, void* data, int len, int eol);
 #ifdef MDY_DATE
 #define PR_DATE(tgt, yr, mn, dy)                               \
   do {                                                         \
-    int res = sprintf(tgt, "19%02ld-%02ld-%02ld", yr, mn, dy); \
+    auto res = sprintf(tgt, "19%02ld-%02ld-%02ld", yr, mn, dy); \
     if (FOLLY_UNLIKELY(res < 0)) {                             \
       tgt[0] = '\0';                                           \
     }                                                          \
@@ -445,7 +445,7 @@ int dbg_print(int dt, FILE* tgt, void* data, int len, int eol);
 #else
 #define PR_DATE(tgt, yr, mn, dy)                               \
   do {                                                         \
-    int res = sprintf(tgt, "19%02ld-%02ld-%02ld", yr, mn, dy); \
+    auto res = sprintf(tgt, "19%02ld-%02ld-%02ld", yr, mn, dy); \
     if (FOLLY_UNLIKELY(res < 0)) {                             \
       tgt[0] = '\0';                                           \
     }                                                          \
