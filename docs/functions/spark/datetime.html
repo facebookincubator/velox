@@ -211,7 +211,7 @@ The format follows Spark’s
 <span class="sig-name descname"><span class="pre">make_date</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">year</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">month</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">day</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">date</span></span></span><a class="headerlink" href="#make_date" title="Link to this definition">¶</a></dt>
 <dd><p>Returns the date from year, month and day fields.
 <code class="docutils literal notranslate"><span class="pre">year</span></code>, <code class="docutils literal notranslate"><span class="pre">month</span></code> and <code class="docutils literal notranslate"><span class="pre">day</span></code> must be <code class="docutils literal notranslate"><span class="pre">INTEGER</span></code>.
-Throws an error if inputs are not valid.</p>
+Returns NULL if inputs are not valid.</p>
 <p>The valid inputs need to meet the following conditions,
 <code class="docutils literal notranslate"><span class="pre">month</span></code> need to be from 1 (January) to 12 (December).
 <code class="docutils literal notranslate"><span class="pre">day</span></code> need to be from 1 to 31, and matches the number of days in each month.
