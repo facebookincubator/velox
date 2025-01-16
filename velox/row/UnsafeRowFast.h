@@ -45,8 +45,9 @@ class UnsafeRowFast {
 
   /// Deserializes multiple rows into a RowVector of specified type. The type
   /// must match the contents of the serialized rows.
+  /// @param data The start memory address of each row.
   static RowVectorPtr deserialize(
-      const std::vector<std::string_view>& data,
+      const std::vector<char*>& data,
       const RowTypePtr& rowType,
       memory::MemoryPool* pool);
 
