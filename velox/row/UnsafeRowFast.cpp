@@ -367,6 +367,7 @@ int32_t UnsafeRowFast::serializeAsArray(
       } else {
         auto serializedBytes = elements.serializeVariableWidth(
             offset + i, buffer + variableWidthOffset);
+
         // Write size and offset.
         uint64_t sizeAndOffset = variableWidthOffset << 32 | serializedBytes;
         reinterpret_cast<uint64_t*>(buffer + fixedWidthOffset)[i] =
@@ -427,7 +428,6 @@ int32_t UnsafeRowFast::serializeRow(vector_size_t index, char* buffer) const {
 }
 
 namespace {
-
 // Reads single fixed-width value from buffer into rawValue[index].
 template <typename T>
 inline void
@@ -459,7 +459,7 @@ inline int32_t valueSize() {
 template <TypeKind Kind>
 VectorPtr deserializeFixedWidth(
     const TypePtr& type,
-    const std::vector<std::string_view>& data,
+    const std::vector<char*>& data,
     const BufferPtr& nulls,
     std::vector<size_t>& offsets,
     memory::MemoryPool* pool) {
@@ -475,7 +475,7 @@ VectorPtr deserializeFixedWidth(
     if (isNull) {
       flatVector->setNull(i, true);
     } else {
-      readFixedWidthValue<T>(data[i].data() + offsets[i], rawValues, i);
+      readFixedWidthValue<T>(data[i] + offsets[i], rawValues, i);
     }
     offsets[i] += kFieldWidth;
   }
@@ -486,7 +486,7 @@ VectorPtr deserializeFixedWidth(
 template <>
 VectorPtr deserializeFixedWidth<TypeKind::BOOLEAN>(
     const TypePtr& type,
-    const std::vector<std::string_view>& data,
+    const std::vector<char*>& data,
     const BufferPtr& nulls,
     std::vector<size_t>& offsets,
     memory::MemoryPool* pool) {
@@ -500,8 +500,7 @@ VectorPtr deserializeFixedWidth<TypeKind::BOOLEAN>(
     if (isNull) {
       flatVector->setNull(i, true);
     } else {
-      bool value =
-          reinterpret_cast<const bool*>(data[i].data() + offsets[i])[0];
+      bool value = reinterpret_cast<const bool*>(data[i] + offsets[i])[0];
       bits::setBit(rawValues, i, value);
     }
     offsets[i] += kFieldWidth;
@@ -518,7 +517,7 @@ vector_size_t totalSize(const vector_size_t* rawSizes, size_t numRows) {
   return total;
 }
 
-const uint8_t* readNulls(const char* buffer) {
+inline const uint8_t* readNulls(const char* buffer) {
   return reinterpret_cast<const uint8_t*>(buffer);
 }
 
@@ -538,7 +537,7 @@ const uint8_t* readNulls(const char* buffer) {
 template <TypeKind Kind>
 VectorPtr deserializeFixedWidthArrays(
     const TypePtr& type,
-    const std::vector<std::string_view>& data,
+    const std::vector<char*>& data,
     const BufferPtr& sizes,
     const std::vector<int32_t>& arrayStartOffsets,
     std::vector<int32_t>& arrayDataOffsets,
@@ -561,8 +560,8 @@ VectorPtr deserializeFixedWidthArrays(
     if (size > 0) {
       auto nullBytes = alignBits(size);
 
-      auto* rawElementNulls = readNulls(
-          data[i].data() + arrayStartOffsets[i] + arrayDataOffsets[i]);
+      auto* rawElementNulls =
+          readNulls(data[i] + arrayStartOffsets[i] + arrayDataOffsets[i]);
 
       arrayDataOffsets[i] += nullBytes;
 
@@ -572,11 +571,11 @@ VectorPtr deserializeFixedWidthArrays(
         } else {
           if constexpr (Kind == TypeKind::BOOLEAN) {
             bool value = reinterpret_cast<const bool*>(
-                data[i].data() + arrayStartOffsets[i] + arrayDataOffsets[i])[0];
+                data[i] + arrayStartOffsets[i] + arrayDataOffsets[i])[0];
             flatVector->set(index, value);
           } else {
             readFixedWidthValue<T>(
-                data[i].data() + arrayStartOffsets[i] + arrayDataOffsets[i],
+                data[i] + arrayStartOffsets[i] + arrayDataOffsets[i],
                 rawValues,
                 index);
           }
@@ -594,8 +593,12 @@ inline const int32_t* readInt32Ptr(const char* buffer) {
   return reinterpret_cast<const int32_t*>(buffer);
 }
 
-inline int64_t readInt64(const char* buffer) {
+inline int32_t readInt32(const char* buffer) {
   return *reinterpret_cast<const int32_t*>(buffer);
+}
+
+inline int64_t readInt64(const char* buffer) {
+  return *reinterpret_cast<const int64_t*>(buffer);
 }
 
 // Reads the offset to start and length from buffer, set flatVector[index].
@@ -631,7 +634,7 @@ void readLongDecimal(
 
 VectorPtr deserializeUnknowns(
     const TypePtr& type,
-    const std::vector<std::string_view>& data,
+    const std::vector<char*>& data,
     const BufferPtr& nulls,
     std::vector<size_t>& offsets,
     memory::MemoryPool* pool) {
@@ -639,7 +642,7 @@ VectorPtr deserializeUnknowns(
   for (auto i = 0; i < numRows; ++i) {
     offsets[i] += kFieldWidth;
   }
-  return BaseVector::createNullConstant(UNKNOWN(), data.size(), pool);
+  return BaseVector::createNullConstant(UNKNOWN(), numRows, pool);
 }
 
 // Deserializes one string from each 'row' in 'data'.
@@ -649,7 +652,7 @@ VectorPtr deserializeUnknowns(
 // Advances the offsets past the fixed field width.
 VectorPtr deserializeStrings(
     const TypePtr& type,
-    const std::vector<std::string_view>& data,
+    const std::vector<char*>& data,
     const BufferPtr& nulls,
     std::vector<size_t>& offsets,
     memory::MemoryPool* pool) {
@@ -663,8 +666,7 @@ VectorPtr deserializeStrings(
     if (bits::isBitNull(rawNulls, i)) {
       flatVector->setNull(i, true);
     } else {
-      readString(
-          data[i].data() + offsets[i], data[i].data(), flatVector.get(), i);
+      readString(data[i] + offsets[i], data[i], flatVector.get(), i);
     }
     offsets[i] += kFieldWidth;
   }
@@ -674,7 +676,7 @@ VectorPtr deserializeStrings(
 
 VectorPtr deserializeLongDecimal(
     const TypePtr& type,
-    const std::vector<std::string_view>& data,
+    const std::vector<char*>& data,
     const BufferPtr& nulls,
     std::vector<size_t>& offsets,
     memory::MemoryPool* pool) {
@@ -689,8 +691,7 @@ VectorPtr deserializeLongDecimal(
     if (bits::isBitNull(rawNulls, i)) {
       flatVector->setNull(i, true);
     } else {
-      readLongDecimal(
-          data[i].data() + offsets[i], data[i].data(), rawValues, i);
+      readLongDecimal(data[i] + offsets[i], data[i], rawValues, i);
     }
     offsets[i] += kFieldWidth;
   }
@@ -700,7 +701,7 @@ VectorPtr deserializeLongDecimal(
 
 VectorPtr deserializeUnknownArrays(
     const TypePtr& type,
-    const std::vector<std::string_view>& data,
+    const std::vector<char*>& data,
     const BufferPtr& sizes,
     memory::MemoryPool* pool) {
   const auto numRows = data.size();
@@ -712,7 +713,7 @@ VectorPtr deserializeUnknownArrays(
 
 VectorPtr deserializeLongDecimalArrays(
     const TypePtr& type,
-    const std::vector<std::string_view>& data,
+    const std::vector<char*>& data,
     const BufferPtr& sizes,
     const std::vector<int32_t>& arrayStartOffsets,
     std::vector<int32_t>& arrayDataOffsets,
@@ -731,8 +732,8 @@ VectorPtr deserializeLongDecimalArrays(
     if (size > 0) {
       auto nullBytes = alignBits(size);
 
-      auto* rawElementNulls = readNulls(
-          data[i].data() + arrayStartOffsets[i] + arrayDataOffsets[i]);
+      auto* rawElementNulls =
+          readNulls(data[i] + arrayStartOffsets[i] + arrayDataOffsets[i]);
 
       arrayDataOffsets[i] += nullBytes;
 
@@ -741,8 +742,8 @@ VectorPtr deserializeLongDecimalArrays(
           flatVector->setNull(index, true);
         } else {
           readLongDecimal(
-              data[i].data() + arrayStartOffsets[i] + arrayDataOffsets[i],
-              data[i].data() + arrayStartOffsets[i],
+              data[i] + arrayStartOffsets[i] + arrayDataOffsets[i],
+              data[i] + arrayStartOffsets[i],
               rawValues,
               index);
         }
@@ -762,7 +763,7 @@ VectorPtr deserializeLongDecimalArrays(
 // Advances arrayDataOffsets past the fixed field width.
 VectorPtr deserializeStringArrays(
     const TypePtr& type,
-    const std::vector<std::string_view>& data,
+    const std::vector<char*>& data,
     const BufferPtr& sizes,
     const std::vector<int32_t>& arrayStartOffsets,
     std::vector<int32_t>& arrayDataOffsets,
@@ -781,8 +782,8 @@ VectorPtr deserializeStringArrays(
     if (size > 0) {
       auto nullBytes = alignBits(size);
 
-      auto* rawElementNulls = readNulls(
-          data[i].data() + arrayStartOffsets[i] + arrayDataOffsets[i]);
+      auto* rawElementNulls =
+          readNulls(data[i] + arrayStartOffsets[i] + arrayDataOffsets[i]);
 
       arrayDataOffsets[i] += nullBytes;
 
@@ -791,8 +792,8 @@ VectorPtr deserializeStringArrays(
           flatVector->setNull(index, true);
         } else {
           readString(
-              data[i].data() + arrayStartOffsets[i] + arrayDataOffsets[i],
-              data[i].data() + arrayStartOffsets[i],
+              data[i] + arrayStartOffsets[i] + arrayDataOffsets[i],
+              data[i] + arrayStartOffsets[i],
               flatVector.get(),
               index);
         }
@@ -806,7 +807,7 @@ VectorPtr deserializeStringArrays(
 
 VectorPtr deserialize(
     const TypePtr& type,
-    const std::vector<std::string_view>& data,
+    const std::vector<char*>& data,
     const BufferPtr& nulls,
     std::vector<size_t>& offsets,
     memory::MemoryPool* pool);
@@ -818,7 +819,7 @@ VectorPtr deserialize(
 // nulls | size-offset-a1 | size-offset-a2 | <a1 elements> |...
 VectorPtr deserializeComplexArrays(
     const TypePtr& type,
-    const std::vector<std::string_view>& data,
+    const std::vector<char*>& data,
     const BufferPtr& sizes,
     const std::vector<int32_t>& arrayStartOffsets,
     std::vector<int32_t>& arrayDataOffsets,
@@ -831,7 +832,7 @@ VectorPtr deserializeComplexArrays(
   BufferPtr nulls = allocateNulls(total, pool);
   auto* rawNulls = nulls->asMutable<uint64_t>();
 
-  std::vector<std::string_view> nestedData(total);
+  std::vector<char*> nestedData(total);
   std::vector<size_t> nestedOffsets(total, 0);
 
   vector_size_t nestedIndex = 0;
@@ -839,8 +840,8 @@ VectorPtr deserializeComplexArrays(
     const auto size = rawSizes[i];
     if (size > 0) {
       // Read nulls.
-      const auto* rawElementNulls = readNulls(
-          data[i].data() + arrayStartOffsets[i] + arrayDataOffsets[i]);
+      const auto* rawElementNulls =
+          readNulls(data[i] + arrayStartOffsets[i] + arrayDataOffsets[i]);
       const auto nullLength = alignBits(size);
       arrayDataOffsets[i] += nullLength;
       for (auto j = 0; j < size; ++j, ++nestedIndex) {
@@ -848,11 +849,10 @@ VectorPtr deserializeComplexArrays(
           bits::setNull(rawNulls, nestedIndex);
         } else {
           // Read offsets of individual elements.
-          const auto* sizeAndOffset = readInt32Ptr(
-              data[i].data() + arrayStartOffsets[i] + arrayDataOffsets[i]);
-          auto* buffer =
-              data[i].data() + arrayStartOffsets[i] + sizeAndOffset[1];
-          nestedData[nestedIndex] = std::string_view(buffer, sizeAndOffset[0]);
+          const auto offset = readInt32(
+              data[i] + arrayStartOffsets[i] + arrayDataOffsets[i] +
+              sizeof(int32_t));
+          nestedData[nestedIndex] = data[i] + arrayStartOffsets[i] + offset;
         }
         arrayDataOffsets[i] += kFieldWidth;
       }
@@ -873,7 +873,7 @@ enum class DeserializeArrayType {
 template <DeserializeArrayType DeserializeType = DeserializeArrayType::ARRAY>
 ArrayVectorPtr deserializeArrays(
     const TypePtr& type,
-    const std::vector<std::string_view>& data,
+    const std::vector<char*>& data,
     const BufferPtr& nulls,
     memory::MemoryPool* pool) {
   const auto numRows = data.size();
@@ -897,11 +897,10 @@ ArrayVectorPtr deserializeArrays(
         // Skip the key array size.
         arrayStartOffsets[i] += sizeof(int64_t);
       } else if constexpr (DeserializeType == DeserializeArrayType::MAP_VALUE) {
-        const auto keyArraySize = readInt64(data[i].data());
+        const auto keyArraySize = readInt64(data[i]);
         arrayStartOffsets[i] += sizeof(int64_t) + keyArraySize;
       }
-      vector_size_t numElements =
-          readInt64(data[i].data() + arrayStartOffsets[i]);
+      vector_size_t numElements = readInt64(data[i] + arrayStartOffsets[i]);
       arrayDataOffsets[i] += sizeof(int64_t);
 
       rawArrayOffsets[i] = arrayOffset;
@@ -969,7 +968,7 @@ ArrayVectorPtr deserializeArrays(
 // key-array-bytes | array-of-keys | array-of-values
 VectorPtr deserializeMaps(
     const TypePtr& type,
-    const std::vector<std::string_view>& data,
+    const std::vector<char*>& data,
     const BufferPtr& nulls,
     memory::MemoryPool* pool) {
   auto arrayOfKeysType = ARRAY(type->childAt(0));
@@ -992,7 +991,7 @@ VectorPtr deserializeMaps(
 
 RowVectorPtr deserializeRows(
     const TypePtr& type,
-    const std::vector<std::string_view>& data,
+    const std::vector<char*>& data,
     const BufferPtr& nulls,
     std::vector<size_t>& offsets,
     memory::MemoryPool* pool);
@@ -1001,7 +1000,7 @@ RowVectorPtr deserializeRows(
 // one value from each 'row' in 'data'.
 VectorPtr deserialize(
     const TypePtr& type,
-    const std::vector<std::string_view>& data,
+    const std::vector<char*>& data,
     const BufferPtr& nulls,
     std::vector<size_t>& offsets,
     memory::MemoryPool* pool) {
@@ -1043,7 +1042,7 @@ VectorPtr deserialize(
 // If the type is complex data type, extract the nested data and deserialize it.
 RowVectorPtr deserializeRows(
     const TypePtr& type,
-    const std::vector<std::string_view>& data,
+    const std::vector<char*>& data,
     const BufferPtr& nulls,
     std::vector<size_t>& offsets,
     memory::MemoryPool* pool) {
@@ -1060,7 +1059,7 @@ RowVectorPtr deserializeRows(
     fieldNulls.emplace_back(allocateNulls(numRows, pool));
     auto* rawFieldNulls = fieldNulls.back()->asMutable<uint8_t>();
     for (auto row = 0; row < numRows; ++row) {
-      auto* serializedNulls = readNulls(data[row].data() + offsets[row]);
+      auto* serializedNulls = readNulls(data[row] + offsets[row]);
       const auto isNull =
           (rawNulls != nullptr && bits::isBitNull(rawNulls, row)) ||
           bits::isBitSet(serializedNulls, i);
@@ -1079,13 +1078,12 @@ RowVectorPtr deserializeRows(
   for (auto i = 0; i < numFields; ++i) {
     const auto& child = type->childAt(i);
     if (!child->isPrimitiveType()) {
-      std::vector<std::string_view> nestedData(numRows);
+      std::vector<char*> nestedData(numRows);
       std::vector<size_t> nestedOffsets(numRows, 0);
       for (auto row = 0; row < numRows; ++row) {
-        const auto* sizeAndOffset =
-            readInt32Ptr(data[row].data() + offsets[row]);
-        nestedData[row] = std::string_view(
-            data[row].data() + sizeAndOffset[1], sizeAndOffset[0]);
+        const auto offset =
+            readInt32(data[row] + offsets[row] + sizeof(int32_t));
+        nestedData[row] = data[row] + offset;
         offsets[row] += kFieldWidth;
       }
       auto field =
@@ -1105,7 +1103,7 @@ RowVectorPtr deserializeRows(
 
 // static
 RowVectorPtr UnsafeRowFast::deserialize(
-    const std::vector<std::string_view>& data,
+    const std::vector<char*>& data,
     const RowTypePtr& rowType,
     memory::MemoryPool* pool) {
   const auto numRows = data.size();

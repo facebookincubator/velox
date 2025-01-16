@@ -59,14 +59,10 @@ class SerializeBenchmark {
     UnsafeRowFast fast(data);
     auto totalSize = computeTotalSize(fast, rowType, data->size());
     auto buffer = AlignedBuffer::allocate<char>(totalSize, pool());
-    auto serialized = serialize(fast, data->size(), buffer);
-    std::vector<std::string_view> serializedViews;
-    for (const auto& view : serialized) {
-      serializedViews.push_back(view.value());
-    }
+    auto serialized = serializeFast(fast, data->size(), buffer);
     suspender.dismiss();
 
-    auto copy = UnsafeRowFast::deserialize(serializedViews, rowType, pool());
+    auto copy = UnsafeRowFast::deserialize(serialized, rowType, pool());
     VELOX_CHECK_EQ(copy->size(), data->size());
   }
 
@@ -173,6 +169,24 @@ class SerializeBenchmark {
     for (auto i = 0; i < numRows; ++i) {
       auto rowSize = unsafeRow.serialize(i, rawBuffer + offset);
       serialized.push_back(std::string_view(rawBuffer + offset, rowSize));
+      offset += rowSize;
+    }
+
+    VELOX_CHECK_EQ(buffer->size(), offset);
+    return serialized;
+  }
+
+  std::vector<char*> serializeFast(
+      UnsafeRowFast& unsafeRow,
+      vector_size_t numRows,
+      BufferPtr& buffer) {
+    std::vector<char*> serialized;
+    auto rawBuffer = buffer->asMutable<char>();
+
+    size_t offset = 0;
+    for (auto i = 0; i < numRows; ++i) {
+      auto rowSize = unsafeRow.serialize(i, rawBuffer + offset);
+      serialized.push_back(rawBuffer + offset);
       offset += rowSize;
     }
 
