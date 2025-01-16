@@ -79,5 +79,8 @@ class SparkCastHooks : public exec::CastHooks {
       .skipTrailingZeros = true,
       .zeroPaddingYear = true,
       .dateTimeSeparator = ' '};
+
+  template <typename T>
+  Expected<Timestamp> castNumberToTimestamp(T value) const;
 };
 } // namespace facebook::velox::functions::sparksql

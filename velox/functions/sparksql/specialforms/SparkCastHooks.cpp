@@ -35,19 +35,29 @@ Expected<Timestamp> SparkCastHooks::castStringToTimestamp(
       view.data(), view.size(), util::TimestampParseMode::kSparkCast);
 }
 
-Expected<Timestamp> SparkCastHooks::castIntToTimestamp(int64_t seconds) const {
+template <typename T>
+Expected<Timestamp> SparkCastHooks::castNumberToTimestamp(T value) const {
   // Spark internally use microsecond precision for timestamp.
   // To avoid overflow, we need to check the range of seconds.
-  static constexpr int64_t maxSeconds = std::numeric_limits<int64_t>::max() /
-      (Timestamp::kMicrosecondsInMillisecond *
-       Timestamp::kMillisecondsInSecond);
-  if (seconds > maxSeconds) {
+  static constexpr int64_t maxSeconds =
+      std::numeric_limits<int64_t>::max() / Timestamp::kMicrosecondsInSecond;
+  if (value > maxSeconds) {
     return Timestamp::fromMicrosNoError(std::numeric_limits<int64_t>::max());
   }
-  if (seconds < -maxSeconds) {
+  if (value < -maxSeconds) {
     return Timestamp::fromMicrosNoError(std::numeric_limits<int64_t>::min());
   }
-  return Timestamp(seconds, 0);
+
+  if constexpr (std::is_floating_point_v<T>) {
+    return Timestamp::fromMicrosNoError(
+        static_cast<int64_t>(value * Timestamp::kMicrosecondsInSecond));
+  }
+
+  return Timestamp(value, 0);
+}
+
+Expected<Timestamp> SparkCastHooks::castIntToTimestamp(int64_t seconds) const {
+  return castNumberToTimestamp(seconds);
 }
 
 Expected<Timestamp> SparkCastHooks::castDoubleToTimestamp(double value) const {
@@ -55,8 +65,7 @@ Expected<Timestamp> SparkCastHooks::castDoubleToTimestamp(double value) const {
     return folly::makeUnexpected(
         Status::Invalid("Can not convert NaN or Infinity to timestamp"));
   }
-  return Timestamp::fromMicrosNoError(
-      static_cast<int64_t>(value * Timestamp::kMicrosecondsInSecond));
+  return castNumberToTimestamp(value);
 }
 
 Expected<int32_t> SparkCastHooks::castStringToDate(
