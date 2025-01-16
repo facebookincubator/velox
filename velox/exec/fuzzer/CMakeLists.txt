@@ -75,6 +75,12 @@ target_link_libraries(
 
 add_library(velox_row_number_fuzzer_lib RowNumberFuzzer.cpp)
 
+# RowNumber Fuzzer.
+add_executable(velox_row_number_fuzzer RowNumberFuzzerRunner.cpp)
+
+target_link_libraries(
+  velox_row_number_fuzzer velox_row_number_fuzzer_lib)
+
 target_link_libraries(
   velox_row_number_fuzzer_lib
   velox_fuzzer_util
@@ -123,9 +129,3 @@ add_library(velox_cache_fuzzer CacheFuzzer.cpp)
 
 target_link_libraries(
   velox_cache_fuzzer velox_dwio_common velox_temp_path velox_vector_test_lib)
-
-# RowNumber Fuzzer.
-add_executable(velox_row_number_fuzzer RowNumberFuzzerRunner.cpp)
-
-target_link_libraries(
-  velox_row_number_fuzzer velox_row_number_fuzzer_lib)
