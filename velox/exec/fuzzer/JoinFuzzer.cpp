@@ -110,6 +110,12 @@ class JoinFuzzer {
           numGroups(_numGroups) {}
   };
 
+  static core::PlanNodePtr tryFlipJoinSides(const core::HashJoinNode& joinNode);
+  static core::PlanNodePtr tryFlipJoinSides(
+      const core::MergeJoinNode& joinNode);
+  static core::PlanNodePtr tryFlipJoinSides(
+      const core::NestedLoopJoinNode& joinNode);
+
  private:
   static VectorFuzzer::Options getFuzzerOptions() {
     VectorFuzzer::Options opts;
@@ -135,20 +141,22 @@ class JoinFuzzer {
   // Randomly pick a join type to test.
   core::JoinType pickJoinType();
 
-  // Makes the query plan with default settings in JoinFuzzer and value inputs
-  // for both probe and build sides.
+  template <typename TNode>
+  static std::pair<core::PlanNodePtr, core::PlanNodePtr> tryFlipJoinSidesHelper(
+      const TNode& joinNode);
+
+  // Makes the query plan with default settings in JoinFuzzer using inputs
+  // joining each input from left to right.
   //
-  // NOTE: 'probeInput' and 'buildInput' could either input rows with lazy
-  // vectors or flatten ones.
+  // NOTE: inputs can be rows with lazy vectors or flattened ones.
   JoinFuzzer::PlanWithSplits makeDefaultPlan(
-      core::JoinType joinType,
-      bool nullAware,
-      const std::vector<std::string>& probeKeys,
-      const std::vector<std::string>& buildKeys,
-      const std::vector<RowVectorPtr>& probeInput,
-      const std::vector<RowVectorPtr>& buildInput,
-      const std::vector<std::string>& outputColumns,
-      const std::string& filter);
+      const std::vector<core::JoinType>& joinTypes,
+      const std::vector<bool>& nullAwareList,
+      const std::vector<std::vector<std::string>>& probeKeysList,
+      const std::vector<std::vector<std::string>>& buildKeysList,
+      const std::vector<std::vector<RowVectorPtr>>& inputs,
+      const std::vector<std::vector<std::string>>& outputColumnsList,
+      const std::vector<std::string>& filterList);
 
   JoinFuzzer::PlanWithSplits makeMergeJoinPlan(
       core::JoinType joinType,
@@ -605,67 +613,100 @@ std::optional<core::JoinType> tryFlipJoinType(core::JoinType joinType) {
   }
 }
 
+template <typename TNode>
+std::pair<core::PlanNodePtr, core::PlanNodePtr>
+JoinFuzzer::tryFlipJoinSidesHelper(const TNode& joinNode) {
+  core::PlanNodePtr left = joinNode.sources()[0];
+  core::PlanNodePtr right = joinNode.sources()[1];
+  if (auto leftJoinInput =
+          std::dynamic_pointer_cast<const TNode>(joinNode.sources()[0])) {
+    left = JoinFuzzer::tryFlipJoinSides(*leftJoinInput);
+  }
+  if (auto rightJoinInput =
+          std::dynamic_pointer_cast<const TNode>(joinNode.sources()[1])) {
+    right = JoinFuzzer::tryFlipJoinSides(*rightJoinInput);
+  }
+  return make_pair(left, right);
+}
+
 // Returns a plan with flipped join sides of the input hash join node. If the
-// join type doesn't allow flipping, returns a nullptr.
-core::PlanNodePtr tryFlipJoinSides(const core::HashJoinNode& joinNode) {
+// inputs of the join node are other hash join nodes, recursively flip the join
+// sides of those join nodes as well. If the join type doesn't allow flipping,
+// returns a nullptr.
+core::PlanNodePtr JoinFuzzer::tryFlipJoinSides(
+    const core::HashJoinNode& joinNode) {
   //  Null-aware right semi project join doesn't support filter.
   if (joinNode.filter() &&
       joinNode.joinType() == core::JoinType::kLeftSemiProject &&
       joinNode.isNullAware()) {
     return nullptr;
   }
+
   auto flippedJoinType = tryFlipJoinType(joinNode.joinType());
-  if (!flippedJoinType.has_value()) {
+  if (!flippedJoinType) {
     return nullptr;
   }
+  auto [left, right] =
+      JoinFuzzer::tryFlipJoinSidesHelper<core::HashJoinNode>(joinNode);
 
   return std::make_shared<core::HashJoinNode>(
       joinNode.id(),
-      flippedJoinType.value(),
+      *flippedJoinType,
       joinNode.isNullAware(),
       joinNode.rightKeys(),
       joinNode.leftKeys(),
       joinNode.filter(),
-      joinNode.sources()[1],
-      joinNode.sources()[0],
+      right,
+      left,
       joinNode.outputType());
 }
 
 // Returns a plan with flipped join sides of the input merge join node. If the
+// inputs of the join node are other merge join nodes, recursively flip the join
+// sides of those join nodes as well. If the
 // join type doesn't allow flipping, returns a nullptr.
-core::PlanNodePtr tryFlipJoinSides(const core::MergeJoinNode& joinNode) {
+core::PlanNodePtr JoinFuzzer::tryFlipJoinSides(
+    const core::MergeJoinNode& joinNode) {
   // Merge join only supports inner and left join, so only inner join can be
   // flipped.
   if (joinNode.joinType() != core::JoinType::kInner) {
     return nullptr;
   }
-  auto flippedJoinType = core::JoinType::kInner;
+
+  auto [left, right] =
+      JoinFuzzer::tryFlipJoinSidesHelper<core::MergeJoinNode>(joinNode);
 
   return std::make_shared<core::MergeJoinNode>(
       joinNode.id(),
-      flippedJoinType,
+      core::JoinType::kInner,
       joinNode.rightKeys(),
       joinNode.leftKeys(),
       joinNode.filter(),
-      joinNode.sources()[1],
-      joinNode.sources()[0],
+      right,
+      left,
       joinNode.outputType());
 }
 
 // Returns a plan with flipped join sides of the input nested loop join node. If
-// the join type doesn't allow flipping, returns a nullptr.
-core::PlanNodePtr tryFlipJoinSides(const core::NestedLoopJoinNode& joinNode) {
+// the inputs of the join node are other nested loop join nodes, recursively
+// flip the join sides of those join nodes as well. If the join type doesn't
+// allow flipping, returns a nullptr.
+core::PlanNodePtr JoinFuzzer::tryFlipJoinSides(
+    const core::NestedLoopJoinNode& joinNode) {
   auto flippedJoinType = tryFlipJoinType(joinNode.joinType());
-  if (!flippedJoinType.has_value()) {
+  if (!flippedJoinType) {
     return nullptr;
   }
+
+  auto [left, right] =
+      JoinFuzzer::tryFlipJoinSidesHelper<core::NestedLoopJoinNode>(joinNode);
 
   return std::make_shared<core::NestedLoopJoinNode>(
       joinNode.id(),
       flippedJoinType.value(),
       joinNode.joinCondition(),
-      joinNode.sources()[1],
-      joinNode.sources()[0],
+      right,
+      left,
       joinNode.outputType());
 }
 
@@ -679,12 +720,12 @@ std::optional<MaterializedRowMultiset> JoinFuzzer::computeReferenceResults(
     VELOX_CHECK(!containsUnsupportedTypes(buildInput[0]->type()));
   }
 
-  if (auto sql = referenceQueryRunner_->toSql(plan)) {
-    return referenceQueryRunner_->execute(
-        sql.value(), probeInput, buildInput, plan->outputType());
+  auto result = referenceQueryRunner_->execute(plan);
+  if (result.first) {
+    return result.first;
   }
 
-  LOG(INFO) << "Query not supported by the reference DB";
+  LOG(INFO) << "Query not supported by or failed in the reference DB";
   return std::nullopt;
 }
 
@@ -699,28 +740,37 @@ std::vector<std::string> fieldNames(
 }
 
 JoinFuzzer::PlanWithSplits JoinFuzzer::makeDefaultPlan(
-    core::JoinType joinType,
-    bool nullAware,
-    const std::vector<std::string>& probeKeys,
-    const std::vector<std::string>& buildKeys,
-    const std::vector<RowVectorPtr>& probeInput,
-    const std::vector<RowVectorPtr>& buildInput,
-    const std::vector<std::string>& outputColumns,
-    const std::string& filter) {
+    const std::vector<core::JoinType>& joinTypes,
+    const std::vector<bool>& nullAwareList,
+    const std::vector<std::vector<std::string>>& probeKeysList,
+    const std::vector<std::vector<std::string>>& buildKeysList,
+    const std::vector<std::vector<RowVectorPtr>>& inputs,
+    const std::vector<std::vector<std::string>>& outputColumnsList,
+    const std::vector<std::string>& filterList) {
+  VELOX_CHECK(inputs.size() > 1);
   auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
-  auto plan =
+  PlanBuilder plan =
       PlanBuilder(planNodeIdGenerator)
-          .values(probeInput)
+          .values(inputs[0])
           .hashJoin(
-              probeKeys,
-              buildKeys,
-              PlanBuilder(planNodeIdGenerator).values(buildInput).planNode(),
-              filter,
-              outputColumns,
-              joinType,
-              nullAware)
-          .planNode();
-  return PlanWithSplits{plan};
+              probeKeysList[0],
+              buildKeysList[0],
+              PlanBuilder(planNodeIdGenerator).values(inputs[1]).planNode(),
+              filterList[0],
+              outputColumnsList[0],
+              joinTypes[0],
+              nullAwareList[0]);
+  for (auto i = 1; i < inputs.size() - 1; i++) {
+    plan = plan.hashJoin(
+        probeKeysList[i],
+        buildKeysList[i],
+        PlanBuilder(planNodeIdGenerator).values(inputs[i + 1]).planNode(),
+        filterList[i],
+        outputColumnsList[i],
+        joinTypes[i],
+        nullAwareList[i]);
+  }
+  return PlanWithSplits{plan.planNode()};
 }
 
 JoinFuzzer::PlanWithSplits JoinFuzzer::makeDefaultPlanWithTableScan(
@@ -821,7 +871,7 @@ void addFlippedJoinPlan(
     int32_t numGroups = 0) {
   auto joinNode = std::dynamic_pointer_cast<const TNode>(plan);
   VELOX_CHECK_NOT_NULL(joinNode);
-  if (auto flippedPlan = tryFlipJoinSides(*joinNode)) {
+  if (auto flippedPlan = JoinFuzzer::tryFlipJoinSides(*joinNode)) {
     plans.push_back(JoinFuzzer::PlanWithSplits{
         flippedPlan,
         probeScanId,
@@ -1140,14 +1190,13 @@ void JoinFuzzer::verify(core::JoinType joinType) {
   shuffleJoinKeys(probeKeys, buildKeys);
 
   const auto defaultPlan = makeDefaultPlan(
-      joinType,
-      nullAware,
-      probeKeys,
-      buildKeys,
-      probeInput,
-      buildInput,
-      outputColumns,
-      filter);
+      {joinType},
+      {nullAware},
+      {probeKeys},
+      {buildKeys},
+      {probeInput, buildInput},
+      {outputColumns},
+      {filter});
 
   const auto expected = execute(defaultPlan, /*injectSpill=*/false);
 
@@ -1170,14 +1219,13 @@ void JoinFuzzer::verify(core::JoinType joinType) {
 
   std::vector<PlanWithSplits> altPlans;
   altPlans.push_back(makeDefaultPlan(
-      joinType,
-      nullAware,
-      probeKeys,
-      buildKeys,
-      flatProbeInput,
-      flatBuildInput,
-      outputColumns,
-      filter));
+      {joinType},
+      {nullAware},
+      {probeKeys},
+      {buildKeys},
+      {flatProbeInput, flatBuildInput},
+      {outputColumns},
+      {filter}));
 
   makeAlternativePlans(
       defaultPlan.plan, probeInput, buildInput, altPlans, filter);
