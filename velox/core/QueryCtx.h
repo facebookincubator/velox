@@ -96,8 +96,8 @@ class QueryCtx : public std::enable_shared_from_this<QueryCtx> {
     this->queryConfig_.testingOverrideConfigUnsafe(std::move(values));
   }
 
-  // Overrides the previous connector-specific configuration. Note that this
-  // function is NOT thread-safe and should probably only be used in tests.
+  /// Overrides the previous connector-specific configuration. Note that this
+  /// function is NOT thread-safe and should probably only be used in tests.
   void setConnectorSessionOverridesUnsafe(
       const std::string& connectorId,
       std::unordered_map<std::string, std::string>&& configOverrides) {

@@ -19,8 +19,11 @@
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/dwio/common/tests/utils/BatchMaker.h"
 #include "velox/exec/Task.h"
+#include "velox/exec/tests/utils/OperatorTestBase.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
 #include "velox/exec/tests/utils/SerializedPageUtil.h"
+#include "velox/exec/tests/utils/TempDirectoryPath.h"
+#include "velox/exec/tests/utils/TempFilePath.h"
 #include "velox/serializers/CompactRowSerializer.h"
 #include "velox/serializers/PrestoSerializer.h"
 #include "velox/serializers/UnsafeRowSerializer.h"
@@ -1613,3 +1616,593 @@ VELOX_INSTANTIATE_TEST_SUITE_P(
     AllOutputBufferManagerTestSuite,
     AllOutputBufferManagerTest,
     testing::ValuesIn(AllOutputBufferManagerTest::getTestParams()));
+
+using PageSpiller = DestinationBuffer::BufferedPages::PageSpiller;
+using BufferedPages = DestinationBuffer::BufferedPages;
+class OutputBufferTest : public exec::test::OperatorTestBase {
+ public:
+  void SetUp() override {
+    OperatorTestBase::SetUp();
+    filesystems::registerLocalFileSystem();
+    rng_.seed(0);
+  }
+
+ protected:
+  std::vector<std::shared_ptr<SerializedPage>> generateData(
+      uint32_t numPages,
+      int64_t maxPageSize,
+      bool hasVoidedNumRows,
+      int64_t maxNumRows) {
+    std::vector<std::shared_ptr<SerializedPage>> pages;
+    pages.reserve(numPages);
+    for (auto i = 0; i < numPages; ++i) {
+      auto iobufBytes = folly::Random().rand64(maxPageSize, rng_);
+
+      // Setup a chained iobuf.
+      std::unique_ptr<folly::IOBuf> iobuf;
+      if (iobufBytes > 1) {
+        auto firstHalfBytes = iobufBytes / 2;
+        iobuf = folly::IOBuf::create(firstHalfBytes);
+        std::memset(iobuf->writableData(), 'x', firstHalfBytes);
+        iobuf->append(firstHalfBytes);
+
+        auto secondHalfBytes = iobufBytes - firstHalfBytes;
+        auto secondHalfBuf = folly::IOBuf::create(secondHalfBytes);
+        std::memset(secondHalfBuf->writableData(), 'y', secondHalfBytes);
+        secondHalfBuf->append(secondHalfBytes);
+        iobuf->prependChain(std::move(secondHalfBuf));
+      } else {
+        iobuf = folly::IOBuf::create(iobufBytes);
+        std::memset(iobuf->writableData(), 'x', iobufBytes);
+        iobuf->append(iobufBytes);
+      }
+
+      std::optional<int64_t> numRowsOpt;
+      if (!hasVoidedNumRows || folly::Random().oneIn(2, rng_)) {
+        numRowsOpt = std::optional(folly::Random().rand64(maxNumRows, rng_));
+      }
+      pages.push_back(std::make_shared<SerializedPage>(
+          std::move(iobuf), nullptr, numRowsOpt));
+    }
+    return pages;
+  }
+
+  void checkIOBufsEqual(
+      std::unique_ptr<folly::IOBuf>& buf1,
+      std::unique_ptr<folly::IOBuf>& buf2) {
+    auto coalescedBuf1 = buf1->coalesce();
+    auto coalescedBuf2 = buf2->coalesce();
+    ASSERT_EQ(coalescedBuf1.size(), coalescedBuf2.size());
+    ASSERT_EQ(
+        std::memcmp(
+            coalescedBuf1.data(), coalescedBuf2.data(), coalescedBuf1.size()),
+        0);
+  }
+
+  void checkSerializedPageEqual(SerializedPage& page1, SerializedPage& page2) {
+    ASSERT_EQ(page1.numRows().has_value(), page2.numRows().has_value());
+    if (page1.numRows().has_value()) {
+      ASSERT_EQ(page1.numRows().value(), page1.numRows().value());
+    }
+    auto buf1 = page1.getIOBuf();
+    auto buf2 = page2.getIOBuf();
+    checkIOBufsEqual(buf1, buf2);
+  }
+
+  void checkSpillerConsistency(PageSpiller& spiller) {
+    ASSERT_GE(spiller.pageSizes_.size(), spiller.bufferedPages_.size());
+    for (int32_t i = 0; i < spiller.bufferedPages_.size(); ++i) {
+      auto& pageSizeOpt = spiller.pageSizes_[i];
+      if (!pageSizeOpt.has_value()) {
+        ASSERT_EQ(spiller.bufferedPages_[i], nullptr);
+        continue;
+      }
+      ASSERT_EQ(pageSizeOpt.value(), spiller.bufferedPages_[i]->size());
+    }
+    ASSERT_LE(spiller.spillFilePaths_.size(), spiller.nextFileId_ + 1);
+
+    uint64_t totalBytes{0};
+    for (const auto& pageSizeOpt : spiller.pageSizes_) {
+      totalBytes += pageSizeOpt.has_value() ? pageSizeOpt.value() : 0;
+    }
+    ASSERT_EQ(spiller.totalBytes(), totalBytes);
+  }
+
+  void assertNumBufferedPages(PageSpiller& spiller, uint64_t numPages) {
+    ASSERT_EQ(spiller.bufferedPages_.size(), numPages);
+  }
+
+  folly::Random::DefaultGenerator rng_;
+};
+
+TEST_F(OutputBufferTest, pageSpillerBasic) {
+  auto pool = rootPool_->addLeafChild("destinationBufferSpiller");
+
+  struct TestValue {
+    uint32_t numPages;
+    int64_t maxPageSize;
+    bool hasVoidedNumRows;
+    int64_t maxNumRows;
+    uint64_t readBufferSize;
+    uint64_t writeBufferSize;
+
+    std::string debugString() const {
+      return fmt::format(
+          "numPages {}, maxPageSize {}, hasVoidedNumRows {}, maxNumRows {}, "
+          "readBufferSize {}, writeBufferSize {}",
+          numPages,
+          maxPageSize,
+          hasVoidedNumRows,
+          maxNumRows,
+          readBufferSize,
+          writeBufferSize);
+    }
+  };
+
+  std::vector<TestValue> testValues{
+      {10, 64, true, 20, 1024, 1024},
+      {10, 64, false, 20, 1024, 0},
+      {0, 64, true, 20, 1024, 256},
+      {10, 64, true, 20, 1, 2048},
+      {10, 0, true, 20, 128, 2048}};
+
+  for (const auto& testValue : testValues) {
+    SCOPED_TRACE(testValue.debugString());
+
+    auto tempFile = exec::test::TempFilePath::create();
+    const auto& prefixPath = tempFile->getPath();
+    auto fs = filesystems::getFileSystem(prefixPath, {});
+    SCOPE_EXIT {
+      fs->remove(prefixPath);
+    };
+
+    auto pages = generateData(
+        testValue.numPages,
+        testValue.maxPageSize,
+        testValue.hasVoidedNumRows,
+        testValue.maxNumRows);
+
+    folly::Synchronized<common::SpillStats> spillStats;
+    PageSpiller spiller(
+        &pages,
+        prefixPath,
+        "",
+        testValue.readBufferSize,
+        testValue.writeBufferSize,
+        pool.get(),
+        &spillStats);
+    checkSpillerConsistency(spiller);
+
+    ASSERT_TRUE(spiller.empty());
+    ASSERT_EQ(spiller.size(), 0);
+
+    VELOX_ASSERT_THROW(spiller.at(0), "");
+    checkSpillerConsistency(spiller);
+
+    VELOX_ASSERT_THROW(spiller.isNullAt(0), "");
+    checkSpillerConsistency(spiller);
+
+    VELOX_ASSERT_THROW(spiller.sizeAt(0), "");
+    checkSpillerConsistency(spiller);
+
+    VELOX_ASSERT_THROW(spiller.deleteFront(1), "");
+    checkSpillerConsistency(spiller);
+
+    ASSERT_NO_THROW(spiller.deleteAll());
+    checkSpillerConsistency(spiller);
+
+    spiller.spill();
+    checkSpillerConsistency(spiller);
+
+    if (pages.empty()) {
+      ASSERT_TRUE(spiller.empty());
+      continue;
+    }
+
+    ASSERT_FALSE(spiller.empty());
+    uint32_t i = 0;
+    while (!spiller.empty()) {
+      ASSERT_EQ(spiller.isNullAt(0), pages[i] == nullptr);
+      if (spiller.isNullAt(0)) {
+        VELOX_ASSERT_THROW(spiller.sizeAt(0), "");
+      } else {
+        ASSERT_EQ(spiller.sizeAt(0), pages[i]->size());
+      }
+      checkSpillerConsistency(spiller);
+      auto unspilledPage = spiller.at(0);
+      checkSpillerConsistency(spiller);
+      ASSERT_LT(i, pages.size());
+      ASSERT_EQ(unspilledPage->numRows(), pages[i]->numRows());
+      ASSERT_EQ(unspilledPage->size(), pages[i]->size());
+      auto originalIOBuf = pages[i]->getIOBuf();
+      auto unspilledIOBuf = unspilledPage->getIOBuf();
+      checkIOBufsEqual(originalIOBuf, unspilledIOBuf);
+      if (testValue.maxPageSize == 0) {
+        ASSERT_GE(pool->usedBytes(), 0);
+      } else {
+        ASSERT_GT(pool->usedBytes(), 0);
+      }
+      spiller.deleteFront(1);
+      ++i;
+    }
+    ASSERT_EQ(i, pages.size());
+    ASSERT_TRUE(spiller.empty());
+    ASSERT_EQ(spiller.size(), 0);
+
+    VELOX_ASSERT_THROW(spiller.at(0), "");
+    checkSpillerConsistency(spiller);
+
+    VELOX_ASSERT_THROW(spiller.isNullAt(0), "");
+    checkSpillerConsistency(spiller);
+
+    VELOX_ASSERT_THROW(spiller.sizeAt(0), "");
+    checkSpillerConsistency(spiller);
+
+    VELOX_ASSERT_THROW(spiller.deleteFront(1), "");
+    checkSpillerConsistency(spiller);
+
+    ASSERT_NO_THROW(spiller.deleteAll());
+    checkSpillerConsistency(spiller);
+  }
+  ASSERT_EQ(pool->usedBytes(), 0);
+}
+
+TEST_F(OutputBufferTest, pageSpillerAccess) {
+  auto pool = rootPool_->addLeafChild("pageSpillerAccess");
+  auto pages = generateData(20, 1LL << 20, true, 1000);
+
+  struct TestValue {
+    std::string testName;
+    std::function<void(
+        std::vector<std::shared_ptr<SerializedPage>>&,
+        PageSpiller&,
+        uint64_t)>
+        accessorVerifier;
+    std::string debugString() {
+      return testName;
+    }
+  };
+
+  std::vector<TestValue> testValues{
+      {"PageSpiller::at",
+       [this](auto& originalPages, auto& spiller, auto index) {
+         // Accessor verifier for PageSpiller::at()
+         if (index >= originalPages.size()) {
+           VELOX_ASSERT_THROW(spiller.at(index), "");
+           return;
+         }
+         auto originalPage = originalPages[index];
+         auto unspilledPage = spiller.at(index);
+         if (originalPage == nullptr) {
+           ASSERT_EQ(unspilledPage, nullptr);
+           return;
+         }
+         ASSERT_EQ(originalPage->size(), unspilledPage->size());
+         ASSERT_EQ(originalPage->numRows(), unspilledPage->numRows());
+         auto originalIOBuf = originalPage->getIOBuf();
+         auto unspilledIOBuf = unspilledPage->getIOBuf();
+         checkIOBufsEqual(originalIOBuf, unspilledIOBuf);
+       }},
+      {"PageSpiller::isNullAt",
+       [this](auto& originalPages, auto& spiller, auto index) {
+         // Accessor verifier for PageSpiller::isNullAt()
+         if (index >= originalPages.size()) {
+           VELOX_ASSERT_THROW(spiller.isNullAt(index), "");
+           return;
+         }
+         ASSERT_EQ(originalPages[index] == nullptr, spiller.isNullAt(index));
+       }},
+      {"PageSpiller::sizeAt",
+       [this](auto& originalPages, auto& spiller, auto index) {
+         // Accessor verifier for PageSpiller::sizeAt()
+         if (index >= originalPages.size()) {
+           VELOX_ASSERT_THROW(spiller.sizeAt(index), "");
+           return;
+         }
+         auto originalPage = originalPages[index];
+         if (originalPage == nullptr) {
+           VELOX_ASSERT_THROW(spiller.sizeAt(index), "");
+           return;
+         }
+         ASSERT_EQ(originalPage->size(), spiller.sizeAt(index));
+       }}};
+
+  for (auto& testValue : testValues) {
+    SCOPED_TRACE(testValue.debugString());
+    auto tempFile = exec::test::TempFilePath::create();
+    const auto& prefixPath = tempFile->getPath();
+    auto fs = filesystems::getFileSystem(prefixPath, {});
+    SCOPE_EXIT {
+      fs->remove(prefixPath);
+    };
+
+    folly::Synchronized<common::SpillStats> spillStats;
+    PageSpiller spiller(
+        &pages, prefixPath, "", 1024, 1024, pool.get(), &spillStats);
+    spiller.spill();
+
+    // Only PageSpiller::at loads the actual buffer.
+    const bool loadBuffer = testValue.testName == "PageSpiller::at";
+
+    testValue.accessorVerifier(pages, spiller, 1);
+    checkSpillerConsistency(spiller);
+    assertNumBufferedPages(spiller, loadBuffer ? 2 : 0);
+
+    testValue.accessorVerifier(pages, spiller, 10);
+    checkSpillerConsistency(spiller);
+    assertNumBufferedPages(spiller, loadBuffer ? 11 : 0);
+
+    testValue.accessorVerifier(pages, spiller, 25);
+    checkSpillerConsistency(spiller);
+    assertNumBufferedPages(spiller, loadBuffer ? 11 : 0);
+
+    testValue.accessorVerifier(pages, spiller, 19);
+    checkSpillerConsistency(spiller);
+    assertNumBufferedPages(spiller, loadBuffer ? 20 : 0);
+
+    testValue.accessorVerifier(pages, spiller, 5);
+    checkSpillerConsistency(spiller);
+    assertNumBufferedPages(spiller, loadBuffer ? 20 : 0);
+  }
+  ASSERT_EQ(pool->usedBytes(), 0);
+}
+
+TEST_F(OutputBufferTest, pageSpillerDelete) {
+  auto pool = rootPool_->addLeafChild("pageSpillerAccess");
+  const auto kNumPages = 20;
+  auto pages = generateData(kNumPages, 1LL << 20, true, 1000);
+
+  struct TestValue {
+    uint32_t numBufferedPages;
+    uint32_t numDelete;
+
+    std::string debugString() {
+      return fmt::format(
+          "numBufferedPages {}, numDelete {}", numBufferedPages, numDelete);
+    }
+  };
+
+  std::vector<TestValue> testValues{
+      {0, 0},
+      {0, 10},
+      {0, 20},
+      {0, 25},
+      {10, 0},
+      {10, 5},
+      {10, 15},
+      {10, 20},
+      {10, 25}};
+  for (auto& testValue : testValues) {
+    SCOPED_TRACE(testValue.debugString());
+    // Test delete front.
+    auto tempFile = exec::test::TempFilePath::create();
+    const auto& prefixPath = tempFile->getPath();
+    auto fs = filesystems::getFileSystem(prefixPath, {});
+    SCOPE_EXIT {
+      fs->remove(prefixPath);
+    };
+
+    folly::Synchronized<common::SpillStats> spillStats;
+    PageSpiller spiller(
+        &pages, prefixPath, "", 1024, 1024, pool.get(), &spillStats);
+    spiller.spill();
+    checkSpillerConsistency(spiller);
+
+    // Unspill pages to buffer
+    if (testValue.numBufferedPages > 0) {
+      spiller.at(testValue.numBufferedPages - 1);
+    }
+    checkSpillerConsistency(spiller);
+    assertNumBufferedPages(spiller, testValue.numBufferedPages);
+
+    if (testValue.numDelete > kNumPages) {
+      VELOX_ASSERT_THROW(spiller.deleteFront(testValue.numDelete), "");
+      checkSpillerConsistency(spiller);
+      assertNumBufferedPages(spiller, testValue.numBufferedPages);
+      continue;
+    } else {
+      spiller.deleteFront(testValue.numDelete);
+    }
+    checkSpillerConsistency(spiller);
+    if (testValue.numDelete <= testValue.numBufferedPages) {
+      assertNumBufferedPages(
+          spiller, (testValue.numBufferedPages - testValue.numDelete));
+    } else {
+      assertNumBufferedPages(spiller, 0);
+    }
+  }
+
+  {
+    // Test delete all.
+    auto tempFile = exec::test::TempFilePath::create();
+    const auto& prefixPath = tempFile->getPath();
+    auto fs = filesystems::getFileSystem(prefixPath, {});
+    SCOPE_EXIT {
+      fs->remove(prefixPath);
+    };
+
+    folly::Synchronized<common::SpillStats> spillStats;
+    PageSpiller spiller(
+        &pages, prefixPath, "", 1024, 1024, pool.get(), &spillStats);
+    spiller.spill();
+    checkSpillerConsistency(spiller);
+    spiller.at(10);
+
+    auto removedPages = spiller.deleteAll();
+    checkSpillerConsistency(spiller);
+    assertNumBufferedPages(spiller, 0);
+
+    ASSERT_EQ(removedPages.size(), pages.size());
+    for (uint32_t i = 0; i < pages.size(); ++i) {
+      ASSERT_EQ(removedPages[i] == nullptr, pages[i] == nullptr);
+      if (removedPages[i] == nullptr) {
+        continue;
+      }
+      checkSerializedPageEqual(*removedPages[i], *pages[i]);
+    }
+  }
+}
+
+TEST_F(OutputBufferTest, bufferedPagesBasic) {
+  const uint64_t kNumPages = 50;
+  auto verifyFn = [this](
+                      BufferedPages& bufferedPages,
+                      std::vector<std::shared_ptr<SerializedPage>>& pages) {
+    ASSERT_EQ(bufferedPages.size(), pages.size());
+    const auto numPages = bufferedPages.size();
+    for (auto i = 0; i < numPages; ++i) {
+      if (pages[i] == nullptr) {
+        ASSERT_TRUE(bufferedPages.isNullAt(i));
+        VELOX_ASSERT_THROW(bufferedPages.sizeAt(i), "");
+        ASSERT_EQ(bufferedPages.at(i), nullptr);
+        continue;
+      }
+      ASSERT_FALSE(bufferedPages.isNullAt(i));
+      ASSERT_EQ(bufferedPages.sizeAt(i), pages[i]->size());
+      auto originalPage = pages[i];
+      auto bufferedPage = bufferedPages.at(i);
+      checkSerializedPageEqual(*originalPage, *bufferedPage);
+    }
+  };
+
+  BufferedPages bufferedPages;
+  auto pages = generateData(kNumPages, 1LL << 20, true, 100);
+
+  ASSERT_TRUE(bufferedPages.empty());
+  for (auto& page : pages) {
+    bufferedPages.append(page);
+  }
+  ASSERT_EQ(bufferedPages.size(), pages.size());
+  ASSERT_FALSE(bufferedPages.empty());
+  verifyFn(bufferedPages, pages);
+
+  for (auto i = 0; i < kNumPages / 2; ++i) {
+    bufferedPages.deleteFront(0);
+    bufferedPages.deleteFront(2);
+    pages.erase(pages.begin(), pages.begin() + 2);
+    verifyFn(bufferedPages, pages);
+  }
+  VELOX_ASSERT_THROW(bufferedPages.deleteFront(kNumPages * 2), "");
+  bufferedPages.deleteAll();
+  ASSERT_EQ(bufferedPages.size(), 0);
+  ASSERT_TRUE(bufferedPages.empty());
+}
+
+TEST_F(OutputBufferTest, bufferedPagesWithSpill) {
+  struct TestValue {
+    uint32_t numInMemoryPages;
+    uint32_t numSpills;
+    uint32_t numPagesPerSpill;
+    uint64_t maxPageSize;
+    uint64_t advanceSize;
+    uint64_t deleteSize;
+
+    std::string debugString() {
+      return fmt::format(
+          "numInMemoryPages {}, numSpills {}, numPagesPerSpill {}, "
+          "maxPagesSize {}, advanceSize {}, deleteSize {}",
+          numInMemoryPages,
+          numSpills,
+          numPagesPerSpill,
+          maxPageSize,
+          advanceSize,
+          deleteSize);
+    }
+  };
+  auto pool = rootPool_->addLeafChild("bufferedPagesWithSpill");
+
+  std::vector<TestValue> testValues{
+      {30, 10, 20, 1L << 20, 3, 5},
+      {50, 10, 10, 1L << 20, 15, 5},
+      {50, 10, 10, 1L << 20, 5, 15},
+      {0, 10, 20, 1L << 20, 15, 5}};
+
+  for (auto& testValue : testValues) {
+    SCOPED_TRACE(testValue.debugString());
+
+    std::vector<std::vector<std::shared_ptr<SerializedPage>>> pageBatches;
+    pageBatches.reserve(testValue.numSpills + 1);
+    for (uint32_t i = 0; i < testValue.numSpills; ++i) {
+      pageBatches.push_back(generateData(
+          testValue.numPagesPerSpill, testValue.maxPageSize, true, 100));
+    }
+    pageBatches.push_back(generateData(
+        testValue.numInMemoryPages, testValue.maxPageSize, true, 100));
+
+    auto tempDir = exec::test::TempDirectoryPath::create();
+    const auto dirPath = tempDir->getPath();
+    auto fs = filesystems::getFileSystem(dirPath, {});
+    SCOPE_EXIT {
+      fs->rmdir(dirPath);
+    };
+    common::SpillConfig spillConfig;
+    spillConfig.readBufferSize = 1024;
+    spillConfig.writeBufferSize = 1024;
+    spillConfig.fileNamePrefix = "bufferedPagesWithSpill";
+    spillConfig.getSpillDirPathCb = [&]() { return std::string_view(dirPath); };
+    folly::Synchronized<common::SpillStats> spillStats;
+
+    BufferedPages bufferedPages;
+    bufferedPages.setupSpiller(pool.get(), &spillConfig, 0, &spillStats);
+
+    for (uint32_t i = 0; i < testValue.numSpills; ++i) {
+      const auto& curPageBatch = pageBatches[i];
+      for (const auto& page : curPageBatch) {
+        bufferedPages.append(page);
+      }
+      bufferedPages.spill();
+    }
+    const auto& inMemoryPages = pageBatches.back();
+    for (auto& page : inMemoryPages) {
+      bufferedPages.append(page);
+    }
+
+    const auto totalPages = testValue.numSpills * testValue.numPagesPerSpill +
+        testValue.numInMemoryPages;
+    ASSERT_EQ(bufferedPages.size(), totalPages);
+
+    uint32_t numDeleted{0};
+    while (numDeleted < totalPages) {
+      // Read 'advanceSize' pages.
+      for (uint32_t i = 0;
+           i < testValue.advanceSize && numDeleted + i < totalPages;
+           ++i) {
+        // Find corresponding indexes for the original page
+        uint32_t totalSize{0};
+        uint32_t batchIndex{0};
+        uint32_t pageIndex{0};
+        for (; batchIndex < pageBatches.size(); ++batchIndex) {
+          totalSize += pageBatches[batchIndex].size();
+          if (numDeleted + i < totalSize) {
+            pageIndex =
+                numDeleted + i - (totalSize - pageBatches[batchIndex].size());
+            break;
+          }
+        }
+
+        auto page = bufferedPages.at(i);
+        auto originalPage = pageBatches[batchIndex][pageIndex];
+        if (originalPage == nullptr) {
+          ASSERT_TRUE(page == nullptr);
+          ASSERT_TRUE(bufferedPages.isNullAt(i));
+          VELOX_ASSERT_THROW(bufferedPages.sizeAt(i), "");
+        } else {
+          checkSerializedPageEqual(*page, *originalPage);
+          ASSERT_FALSE(bufferedPages.isNullAt(i));
+          ASSERT_EQ(bufferedPages.sizeAt(i), originalPage->size());
+        }
+      }
+
+      // Delete 'deleteSize' pages.
+      uint32_t deleteSize = testValue.deleteSize;
+      if (numDeleted + testValue.deleteSize > totalPages) {
+        deleteSize = totalPages - numDeleted;
+      }
+      numDeleted += deleteSize;
+      bufferedPages.deleteFront(deleteSize);
+      ASSERT_EQ(bufferedPages.size(), totalPages - numDeleted);
+    }
+    ASSERT_TRUE(bufferedPages.empty());
+    ASSERT_EQ(bufferedPages.size(), 0);
+  }
+}

@@ -73,7 +73,8 @@ BlockingReason Destination::advance(
   const auto firstRow = rowIdx_;
   const uint32_t adjustedMaxBytes = (maxBytes * targetSizePct_) / 100;
   if (bytesInCurrent_ >= adjustedMaxBytes) {
-    return flush(bufferManager, bufferReleaseFn, future);
+    int64_t bytesFlushed{0};
+    return flush(bufferManager, bufferReleaseFn, bytesFlushed, future);
   }
 
   // Collect rows to serialize.
@@ -110,7 +111,8 @@ BlockingReason Destination::advance(
     *atEnd = true;
   }
   if (shouldFlush || (eagerFlush_ && rowsInCurrent_ > 0)) {
-    return flush(bufferManager, bufferReleaseFn, future);
+    int64_t bytesFlushed{0};
+    return flush(bufferManager, bufferReleaseFn, bytesFlushed, future);
   }
   return BlockingReason::kNotBlocked;
 }
@@ -118,7 +120,9 @@ BlockingReason Destination::advance(
 BlockingReason Destination::flush(
     OutputBufferManager& bufferManager,
     const std::function<void()>& bufferReleaseFn,
+    int64_t& bytesFlushed,
     ContinueFuture* future) {
+  VELOX_CHECK_EQ(bytesFlushed, 0);
   if (!current_ || rowsInCurrent_ == 0) {
     return BlockingReason::kNotBlocked;
   }
@@ -141,11 +145,12 @@ BlockingReason Destination::flush(
   rowsInCurrent_ = 0;
   setTargetSizePct();
 
+  auto ioBuf = stream.getIOBuf(bufferReleaseFn);
+  bytesFlushed = ioBuf->computeChainDataLength();
   bool blocked = bufferManager.enqueue(
       taskId_,
       destination_,
-      std::make_unique<SerializedPage>(
-          stream.getIOBuf(bufferReleaseFn), nullptr, flushedRows),
+      std::make_unique<SerializedPage>(std::move(ioBuf), nullptr, flushedRows),
       future);
 
   recordEnqueued_(flushedBytes, flushedRows);
@@ -177,7 +182,10 @@ PartitionedOutput::PartitionedOutput(
           planNode->outputType(),
           operatorId,
           planNode->id(),
-          "PartitionedOutput"),
+          "PartitionedOutput",
+          planNode->canSpill(ctx->queryConfig())
+              ? ctx->makeSpillConfig(operatorId)
+              : std::nullopt),
       keyChannels_(toChannels(planNode->inputType(), planNode->keys())),
       numDestinations_(planNode->numPartitions()),
       replicateNullsAndAny_(planNode->isReplicateNullsAndAny()),
@@ -204,6 +212,10 @@ PartitionedOutput::PartitionedOutput(
       serdeOptions_(getVectorSerdeOptions(
           operatorCtx_->driverCtx()->queryConfig(),
           planNode->serdeKind())) {
+  if (spillConfig_.has_value()) {
+    bufferManager_.lock()->getBufferIfExists(taskId())->setupSpiller(
+        spillConfig(), &spillStats_);
+  }
   if (!planNode->isPartitioned()) {
     VELOX_USER_CHECK_EQ(numDestinations_, 1);
   }
@@ -391,6 +403,15 @@ RowVectorPtr PartitionedOutput::getOutput() {
     return nullptr;
   }
 
+  auto testSpillGuard = folly::makeGuard([self = this]() {
+    // Test-only spill path.
+    if (testingTriggerSpill(self->pool()->name())) {
+      Operator::ReclaimableSectionGuard guard(self);
+      memory::testingRunArbitration(self->pool());
+      return;
+    }
+  });
+
   blockingReason_ = BlockingReason::kNotBlocked;
   detail::Destination* blockedDestination = nullptr;
   auto bufferManager = bufferManager_.lock();
@@ -442,7 +463,9 @@ RowVectorPtr PartitionedOutput::getOutput() {
           destination->serializedBytes() < kMinDestinationSize) {
         continue;
       }
-      destination->flush(*bufferManager, bufferReleaseFn_, nullptr);
+      int64_t bytesFlushed{0};
+      destination->flush(
+          *bufferManager, bufferReleaseFn_, bytesFlushed, nullptr);
     }
     return nullptr;
   }
@@ -454,12 +477,43 @@ RowVectorPtr PartitionedOutput::getOutput() {
       if (destination->isFinished()) {
         continue;
       }
-      destination->flush(*bufferManager, bufferReleaseFn_, nullptr);
+      int64_t bytesFlushed{0};
+      destination->flush(
+          *bufferManager, bufferReleaseFn_, bytesFlushed, nullptr);
       destination->setFinished();
       destination->updateStats(this);
     }
 
     bufferManager->noMoreData(operatorCtx_->task()->taskId());
+    if (canSpill()) {
+      // Block until the last partitioned output operator finished signaling
+      // buffer manager no more data. Because buffer manager does not have the
+      // same lifecycle as drivers and operators, we need to wait until the last
+      // possible spill triggering call to buffer manager completes, in order
+      // for output buffer to safely write spill stats back to partitioned
+      // output operator.
+      std::vector<ContinuePromise> promises;
+      std::vector<std::shared_ptr<Driver>> peers;
+      if (!operatorCtx_->task()->allPeersFinished(
+              planNodeId(),
+              operatorCtx_->driver(),
+              &future_,
+              promises,
+              peers)) {
+        blockingReason_ = BlockingReason::kWaitForSpill;
+        // The input is fully processed, drop the reference to allow reuse.
+        input_ = nullptr;
+        output_ = nullptr;
+        outputCompactRow_.reset();
+        outputUnsafeRow_.reset();
+        return nullptr;
+      }
+      peers.clear();
+      for (auto& promise : promises) {
+        promise.setValue();
+      }
+    }
+
     finished_ = true;
   }
   // The input is fully processed, drop the reference to allow reuse.
@@ -488,4 +542,37 @@ void PartitionedOutput::close() {
   destinations_.clear();
 }
 
+void PartitionedOutput::reclaim(
+    uint64_t /* targetBytes */,
+    memory::MemoryReclaimer::Stats& /* stats */) {
+  auto* driver = operatorCtx_->driver();
+  VELOX_CHECK_NOT_NULL(driver);
+  VELOX_CHECK(!nonReclaimableSection_);
+  const auto& task = driver->task();
+  VELOX_CHECK(task->pauseRequested());
+
+  auto bufferManager = bufferManager_.lock();
+  const std::vector<Operator*> operators =
+      task->findPeerOperators(operatorCtx_->driverCtx()->pipelineId, this);
+  for (int32_t i = 0; i < operators.size(); ++i) {
+    auto* partitionedOutputOp = dynamic_cast<PartitionedOutput*>(operators[i]);
+    VELOX_CHECK_NOT_NULL(partitionedOutputOp);
+    if (partitionedOutputOp->nonReclaimableSection_) {
+      // We skip flushing the operator that triggers the spill because it is in
+      // the middle state.
+      continue;
+    }
+    for (auto& destination : partitionedOutputOp->destinations_) {
+      int64_t bytesFlushed{0};
+      destination->flush(
+          *bufferManager,
+          partitionedOutputOp->bufferReleaseFn_,
+          bytesFlushed,
+          nullptr);
+    }
+  }
+  auto outputBuffer = bufferManager->getBufferIfExists(task->taskId());
+  VELOX_CHECK_NOT_NULL(outputBuffer);
+  outputBuffer->reclaim();
+}
 } // namespace facebook::velox::exec

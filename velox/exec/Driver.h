@@ -185,6 +185,7 @@ struct ThreadState {
 enum class BlockingReason {
   kNotBlocked,
   kWaitForConsumer,
+  kWaitForSpill,
   kWaitForSplit,
   /// Some operators can get blocked due to the producer(s) (they are
   /// currently waiting data from) not having anything produced. Used by

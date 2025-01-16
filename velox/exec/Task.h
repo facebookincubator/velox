@@ -796,6 +796,11 @@ class Task : public std::enable_shared_from_this<Task> {
   // to ensure lifetime and returns a raw pointer.
   memory::MemoryPool* getOrAddNodePool(const core::PlanNodeId& planNodeId);
 
+  // Smilar to getOrAddNodePool but creates the memory pool instance for a
+  // partitioned output plan node.
+  memory::MemoryPool* getOrAddPartitionedOutputNodePool(
+      const core::PlanNodeId& planNodeId);
+
   // Similar to getOrAddNodePool but creates the memory pool instance for a hash
   // join plan node. If 'splitGroupId' is not kUngroupedGroupId, it specifies
   // the split group id under the grouped execution mode.
@@ -817,6 +822,10 @@ class Task : public std::enable_shared_from_this<Task> {
   // memory arbitration request initiated under the driver execution context.
   std::unique_ptr<memory::MemoryReclaimer> createExchangeClientReclaimer()
       const;
+
+  // Creates a memory reclaimer instance for the output buffer of the task, if
+  // the task memory pool has set memory reclaimer.
+  std::unique_ptr<memory::MemoryReclaimer> createOutputBufferReclaimer() const;
 
   // Creates a memory reclaimer instance for this task. If the query memory
   // pool doesn't set memory reclaimer, then the function simply returns null.

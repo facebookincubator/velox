@@ -106,7 +106,7 @@ struct SpillConfig {
   uint64_t readBufferSize;
 
   /// Executor for spilling. If nullptr spilling writes on the Driver's thread.
-  folly::Executor* executor; // Not owned.
+  folly::Executor* executor{nullptr}; // Not owned.
 
   /// The minimal spillable memory reservation in percentage of the current
   /// memory usage.

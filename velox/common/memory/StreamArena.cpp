@@ -76,6 +76,7 @@ void StreamArena::newTinyRange(
   range->buffer = reinterpret_cast<uint8_t*>(tinyRanges_.back().data());
   range->size = bytes;
 }
+
 void StreamArena::clear() {
   allocations_.clear();
   pool_->freeNonContiguous(allocation_);

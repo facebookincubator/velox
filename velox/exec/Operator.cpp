@@ -754,7 +754,7 @@ uint64_t Operator::MemoryReclaimer::reclaim(
             reclaimedBytes,
             0,
             "Unexpected memory growth after reclaim from operator memory pool {}",
-            pool->name());
+            op_->pool()->name());
         return reclaimedBytes;
       },
       stats);

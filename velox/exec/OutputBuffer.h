@@ -15,11 +15,13 @@
  */
 #pragma once
 
+#include "velox/common/file/FileInputStream.h"
 #include "velox/core/PlanNode.h"
 #include "velox/exec/ExchangeQueue.h"
+#include "velox/exec/MemoryReclaimer.h"
 
+class OutputBufferTest;
 namespace facebook::velox::exec {
-
 /// nullptr in pages indicates that there is no more data.
 /// sequence is the same as specified in BufferManager::getData call. The
 /// caller is expected to advance sequence by the number of entries in groups
@@ -92,6 +94,8 @@ class ArbitraryBuffer {
 
 class DestinationBuffer {
  public:
+  explicit DestinationBuffer(int32_t destinationIdx = -1);
+
   /// The data transferred by the destination buffer has two phases:
   /// 1. Buffered: the data resides in the buffer after enqueued and before
   ///              acked / deleted.
@@ -106,12 +110,16 @@ class DestinationBuffer {
 
     bool finished{false};
 
-    /// Number of buffered bytes / rows / pages.
+    /// Snapshot number of buffered bytes / rows / pages (both in-memory and
+    /// spilled)
     int64_t bytesBuffered{0};
     int64_t rowsBuffered{0};
     int64_t pagesBuffered{0};
 
-    /// Number of sent bytes / rows / pages.
+    /// Snapshot number of spilled bytes
+    int64_t bytesSpilled{0};
+
+    /// Cumulated number of sent bytes / rows / pages.
     int64_t bytesSent{0};
     int64_t rowsSent{0};
     int64_t pagesSent{0};
@@ -176,6 +184,14 @@ class DestinationBuffer {
   /// the callback.
   DataAvailable getAndClearNotify();
 
+  void setupSpiller(
+      memory::MemoryPool* pool,
+      const common::SpillConfig* spillConfig,
+      folly::Synchronized<common::SpillStats>* spillStats);
+
+  /// Spills the current 'data_'.
+  void spill();
+
   /// Finishes this destination buffer, set finished stats.
   void finish();
 
@@ -184,17 +200,163 @@ class DestinationBuffer {
 
   std::string toString();
 
+  /// Representations of an ordered list of pages, including both spilled (if
+  /// spill is enabled) and in-memory ones. If spill is enabled, it preserves
+  /// the order of the pages across all spilled and in-memory pages.
+  ///
+  /// The spilled pages are always in the front if any. This is because after
+  /// spilling, all front pages are spilled and any upcoming in-memory pages are
+  /// appended at the back.
+  class BufferedPages {
+   public:
+    BufferedPages() = default;
+
+    class PageSpiller {
+     public:
+      PageSpiller(
+          std::vector<std::shared_ptr<SerializedPage>>* pages,
+          const std::string& filePrefix,
+          const std::string& fileCreateConfig,
+          uint64_t readBufferSize,
+          uint64_t writeBufferSize,
+          memory::MemoryPool* pool,
+          folly::Synchronized<common::SpillStats>* spillStats)
+          : filePrefix_(filePrefix),
+            fileCreateConfig_(fileCreateConfig),
+            readBufferSize_(readBufferSize),
+            writeBufferSize_(writeBufferSize),
+            spillStats_(spillStats),
+            pages_(pages),
+            pool_(pool) {
+        VELOX_CHECK_NOT_NULL(pool_);
+      }
+
+      /// Spills all the in memory buffers to file. All currently in-memory
+      /// serialized pages are spilled into the same file. The method does not
+      /// free the original in-memory structure. It is caller's responsibility
+      /// to free them.
+      void spill();
+
+      /// Returns true if there are any pages that are yet to be unspilled.
+      bool empty() const;
+
+      uint64_t size() const;
+
+      uint64_t totalBytes() const;
+
+      std::shared_ptr<SerializedPage> at(uint64_t index);
+
+      bool isNullAt(uint64_t index) const;
+
+      uint64_t sizeAt(uint64_t index) const;
+
+      /// Delete 'numPages' from the front.
+      void deleteFront(uint64_t numPages);
+
+      /// Delete all data, spilled or buffered. Returns the deleted data.
+      std::vector<std::shared_ptr<SerializedPage>> deleteAll();
+
+     private:
+      std::tuple<std::string, std::unique_ptr<WriteFile>> nextSpillWriteFile();
+
+      // Unspills one serialized page and returns it.
+      std::shared_ptr<SerializedPage> unspillNextPage();
+
+      void ensureFileStream();
+
+      const std::string filePrefix_;
+
+      const std::string fileCreateConfig_;
+
+      const uint64_t readBufferSize_;
+
+      const uint64_t writeBufferSize_;
+
+      folly::Synchronized<common::SpillStats>* const spillStats_;
+
+      std::vector<std::shared_ptr<SerializedPage>>* const pages_;
+
+      memory::MemoryPool* const pool_;
+
+      // Each spilled file represents a series of 'SerializedPage'.
+      std::deque<std::string> spillFilePaths_;
+
+      std::unique_ptr<common::FileInputStream> curFileStream_;
+
+      // Page sizes in all spilled files. A nullopt represents null page.
+      std::vector<std::optional<int64_t>> pageSizes_;
+
+      // A small number of front pages buffered in memory from spilled pages.
+      // These pages will be kept in memory and won't be spilled again.
+      std::vector<std::shared_ptr<SerializedPage>> bufferedPages_;
+
+      uint64_t totalBytes_{0};
+
+      uint32_t nextFileId_{0};
+
+      friend class ::OutputBufferTest;
+    };
+
+    void setupSpiller(
+        memory::MemoryPool* pool,
+        const common::SpillConfig* spillConfig,
+        int32_t destinationIdx,
+        folly::Synchronized<common::SpillStats>* spillStats);
+
+    /// Returns total number of pages currently in the 'DestinationBuffer',
+    /// including both in-memory ones in 'data_' and spilled ones in 'spiller_'.
+    uint64_t size() const;
+
+    /// Returns the page at 'index'.
+    std::shared_ptr<SerializedPage> at(uint64_t index);
+
+    /// Returns if the page at 'index' is null.
+    bool isNullAt(uint64_t index) const;
+
+    /// Returns the size of the page at 'index'.
+    uint64_t sizeAt(uint64_t index) const;
+
+    bool empty() const;
+
+    /// Appends 'page' to the back of the buffered pages.
+    void append(std::shared_ptr<SerializedPage> page);
+
+    /// Delete first 'numPages' from 'this'.
+    void deleteFront(uint64_t numPages);
+
+    /// Delete all pages from the buffer.
+    std::vector<std::shared_ptr<SerializedPage>> deleteAll();
+
+    /// Spills all the pages and remove them from memory.
+    void spill();
+
+    /// Snapshot of currently spilled bytes.
+    uint64_t spilledBytes() const;
+
+   private:
+    std::vector<std::shared_ptr<SerializedPage>> pages_;
+    std::unique_ptr<PageSpiller> spiller_;
+  };
+
  private:
   void clearNotify();
 
-  std::vector<std::shared_ptr<SerializedPage>> data_;
+  const int32_t destinationIdx_;
+
+  BufferedPages data_;
+
   // The sequence number of the first in 'data_'.
   int64_t sequence_ = 0;
+
   DataAvailableCallback notify_{nullptr};
+
   DataConsumerActiveCheckCallback aliveCheck_{nullptr};
+
   // The sequence number of the first item to pass to 'notify'.
   int64_t notifySequence_{0};
+
   uint64_t notifyMaxBytes_{0};
+
   Stats stats_;
 };
 
@@ -261,7 +423,8 @@ class OutputBuffer {
       std::shared_ptr<Task> task,
       core::PartitionedOutputNode::Kind kind,
       int numDestinations,
-      uint32_t numDrivers);
+      uint32_t numDrivers,
+      memory::MemoryPool* pool = nullptr);
 
   core::PartitionedOutputNode::Kind kind() const {
     return kind_;
@@ -319,7 +482,21 @@ class OutputBuffer {
   /// and will start blocking producers soon. This is used to dynamically scale
   /// the number of consumers, for example, increase number of TableWriter
   /// tasks.
-  bool isOverutilized() const;
+  bool isOverUtilized() const;
+
+  /// Returns if this 'OutputBuffer' can be reclaimed. Currently only
+  /// partitioned mode is supported for reclaim.
+  ///
+  /// TODO: In fact functionality-wise all modes reclaim shall be supported, the
+  /// performance for arbitrary and broadcast spill is sub-optimal.
+  /// Optimizations need to be done to enable spill for these two modes.
+  bool canReclaim() const;
+
+  void reclaim();
+
+  void setupSpiller(
+      const common::SpillConfig* spillConfig,
+      folly::Synchronized<common::SpillStats>* spillStats);
 
   /// Gets the Stats of this output buffer.
   Stats stats();
@@ -328,6 +505,8 @@ class OutputBuffer {
   // Percentage of maxSize below which a blocked producer should
   // be unblocked.
   static constexpr int32_t kContinuePct = 90;
+
+  void reclaimLocked();
 
   void updateStatsWithEnqueuedPageLocked(int64_t pageBytes, int64_t pageRows);
 
@@ -348,8 +527,11 @@ class OutputBuffer {
       const std::vector<std::shared_ptr<SerializedPage>>& freed,
       std::vector<ContinuePromise>& promises);
 
-  /// Given an updated total number of broadcast buffers, add any missing ones
-  /// and enqueue data that has been produced so far (e.g. dataToBroadcast_).
+  std::unique_ptr<DestinationBuffer> createDestinationBuffer(
+      int32_t destinationIdx) const;
+
+  // Given an updated total number of broadcast buffers, add any missing ones
+  // and enqueue data that has been produced so far (e.g. dataToBroadcast_).
   void addOutputBuffersLocked(int numBuffers);
 
   void enqueueBroadcastOutputLocked(
@@ -380,14 +562,24 @@ class OutputBuffer {
   }
 
   const std::shared_ptr<Task> task_;
+
   const core::PartitionedOutputNode::Kind kind_;
-  /// If 'bufferedBytes_' > 'maxSize_', each producer is blocked after adding
-  /// data.
+
+  // If 'bufferedBytes_' > 'maxSize_', each producer is blocked after adding
+  // data.
   const uint64_t maxSize_;
+
   // When 'bufferedBytes_' goes below 'continueSize_', blocked producers are
   // resumed.
   const uint64_t continueSize_;
+
   const std::unique_ptr<ArbitraryBuffer> arbitraryBuffer_;
+
+  memory::MemoryPool* const pool_;
+
+  std::optional<common::SpillConfig> spillConfig_;
+
+  bool spilled_{false};
 
   // Total number of drivers expected to produce results. This number will
   // decrease in the end of grouped execution, when we understand the real
@@ -404,27 +596,37 @@ class OutputBuffer {
   std::vector<std::shared_ptr<SerializedPage>> dataToBroadcast_;
 
   std::mutex mutex_;
+
   // Actual data size in 'buffers_'.
   int64_t bufferedBytes_{0};
+
   // The number of buffered pages which corresponds to 'bufferedBytes_'.
   int64_t bufferedPages_{0};
+
   // The total number of output bytes, rows and pages.
   uint64_t numOutputBytes_{0};
   uint64_t numOutputRows_{0};
   uint64_t numOutputPages_{0};
+
   std::vector<ContinuePromise> promises_;
+
   // The next buffer index in 'buffers_' to load data from arbitrary buffer
   // which is only used by arbitrary output type.
   int32_t nextArbitraryLoadBufferIndex_{0};
+
   // One buffer per destination.
   std::vector<std::unique_ptr<DestinationBuffer>> buffers_;
+
   // The sizes of buffers_ and finishedBufferStats_ are the same, but
   // finishedBufferStats_[i] is set if and only if buffers_[i] is null as
   // the buffer is finished and deleted.
   std::vector<DestinationBuffer::Stats> finishedBufferStats_;
+
   uint32_t numFinished_{0};
+
   // When this reaches buffers_.size(), 'this' can be freed.
   int numFinalAcknowledges_ = 0;
+
   bool atEnd_ = false;
 
   // Time since last change in bufferedBytes_. Used to compute total time data
@@ -435,4 +637,30 @@ class OutputBuffer {
   double totalBufferedBytesMs_;
 };
 
+class PartitionedOutputNodeReclaimer final : public exec::MemoryReclaimer {
+ public:
+  static std::unique_ptr<memory::MemoryReclaimer> create(
+      core::PartitionedOutputNode::Kind kind,
+      int32_t priority) {
+    return std::unique_ptr<memory::MemoryReclaimer>(
+        new PartitionedOutputNodeReclaimer(kind, priority));
+  }
+
+  bool reclaimableBytes(
+      const memory::MemoryPool& pool,
+      uint64_t& reclaimableBytes) const final;
+
+  uint64_t reclaim(
+      memory::MemoryPool* pool,
+      uint64_t targetBytes,
+      uint64_t maxWaitMs,
+      memory::MemoryReclaimer::Stats& stats) final;
+
+ private:
+  PartitionedOutputNodeReclaimer(
+      core::PartitionedOutputNode::Kind kind,
+      int32_t priority);
+
+  core::PartitionedOutputNode::Kind kind_;
+};
 } // namespace facebook::velox::exec
