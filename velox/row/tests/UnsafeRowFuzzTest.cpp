@@ -47,7 +47,7 @@ class UnsafeRowFuzzTests : public ::testing::Test {
 
   void doTest(
       const RowTypePtr& rowType,
-      std::function<std::vector<std::string_view>(const RowVectorPtr& data)>
+      std::function<std::vector<char*>(const RowVectorPtr& data)>
           serializeFunc) {
     VectorFuzzer::Options opts;
     opts.vectorSize = kNumBuffers;
@@ -164,7 +164,7 @@ TEST_F(UnsafeRowFuzzTests, fast) {
 
   doTest(rowType, [&](const RowVectorPtr& data) {
     const auto numRows = data->size();
-    std::vector<std::string_view> serialized;
+    std::vector<char*> serialized;
     serialized.reserve(numRows);
 
     UnsafeRowFast fast(data);
@@ -189,7 +189,7 @@ TEST_F(UnsafeRowFuzzTests, fast) {
 
       EXPECT_EQ(rowSize, fast.rowSize(i)) << i << ", " << data->toString(i);
 
-      serialized.push_back(std::string_view(buffers_[i], rowSize));
+      serialized.push_back(buffers_[i]);
     }
     return serialized;
   });
