@@ -71,11 +71,7 @@ int64_t ParquetReaderConfig::skipRows() const {
 }
 
 std::optional<cudf::size_type> ParquetReaderConfig::numRows() const {
-  auto numRows = config_->get<cudf::size_type>(kNumRows);
-  if (numRows.has_value()) {
-    return numRows.value();
-  }
-  return std::nullopt;
+  return config_->get<cudf::size_type>(kNumRows);
 }
 
 std::size_t ParquetReaderConfig::maxChunkReadLimit() const {
