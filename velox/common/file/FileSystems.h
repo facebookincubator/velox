@@ -77,6 +77,14 @@ struct DirectoryOptions : FileOptions {
       "make-directory-config"};
 };
 
+struct FileSystemOptions {
+  /// Now only local file system respects this option, Spark spills to local
+  /// file while native Presto spills to remote storage which supports read
+  /// async. Use an executor to submit the read async task. We can extend to
+  /// other file systems in need.
+  bool readAheadEnabled{false};
+};
+
 /// An abstract FileSystem
 class FileSystem {
  public:
@@ -161,6 +169,7 @@ void registerFileSystem(
         std::string_view)> fileSystemGenerator);
 
 /// Register the local filesystem.
-void registerLocalFileSystem();
+void registerLocalFileSystem(
+    const FileSystemOptions& options = FileSystemOptions());
 
 } // namespace facebook::velox::filesystems
