@@ -841,4 +841,106 @@ struct MillisToTimestampFunction {
   }
 };
 
+template <typename TExec>
+struct MonthsBetweenFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(TExec);
+
+  FOLLY_ALWAYS_INLINE void initialize(
+      const std::vector<TypePtr>& /*inputTypes*/,
+      const core::QueryConfig& config,
+      const arg_type<Timestamp>* /*date1*/,
+      const arg_type<Timestamp>* /*date2*/) {
+    timeZone_ = getTimeZoneFromConfig(config);
+  }
+
+  FOLLY_ALWAYS_INLINE void initialize(
+      const std::vector<TypePtr>& /*inputTypes*/,
+      const core::QueryConfig& config,
+      const arg_type<Timestamp>* /*date1*/,
+      const arg_type<Timestamp>* /*date2*/,
+      const arg_type<bool>* /*roundOff*/) {
+    timeZone_ = getTimeZoneFromConfig(config);
+  }
+
+  FOLLY_ALWAYS_INLINE void initialize(
+      const std::vector<TypePtr>& /*inputTypes*/,
+      const core::QueryConfig& /*config*/,
+      const arg_type<Timestamp>* /*date1*/,
+      const arg_type<Timestamp>* /*date2*/,
+      const arg_type<bool>* /*roundOff*/,
+      const arg_type<Varchar>* timezone) {
+    if (timezone) {
+      timeZone_ = tz::locateZone(std::string_view(*timezone), false);
+    }
+  }
+
+  FOLLY_ALWAYS_INLINE void call(
+      out_type<double>& result,
+      const arg_type<Timestamp>& date1,
+      const arg_type<Timestamp>& date2) {
+    const auto datetime1 = getDateTime(date1, timeZone_);
+    const auto datetime2 = getDateTime(date2, timeZone_);
+    result = monthsBetween(datetime1, datetime2, true);
+  }
+
+  FOLLY_ALWAYS_INLINE void call(
+      out_type<double>& result,
+      const arg_type<Timestamp>& date1,
+      const arg_type<Timestamp>& date2,
+      const arg_type<bool>& roundOff) {
+    const auto datetime1 = getDateTime(date1, timeZone_);
+    const auto datetime2 = getDateTime(date2, timeZone_);
+    result = monthsBetween(datetime1, datetime2, roundOff);
+  }
+
+  FOLLY_ALWAYS_INLINE void call(
+      out_type<double>& result,
+      const arg_type<Timestamp>& date1,
+      const arg_type<Timestamp>& date2,
+      const arg_type<bool>& roundOff,
+      const arg_type<Varchar>& timezone) {
+    const auto* toTimeZone = timeZone_ != nullptr
+        ? timeZone_
+        : tz::locateZone(std::string_view(timezone), false);
+    VELOX_USER_CHECK_NOT_NULL(toTimeZone, "Unknown time zone: '{}'", timezone);
+    const auto datetime1 = getDateTime(date1, toTimeZone);
+    const auto datetime2 = getDateTime(date2, toTimeZone);
+    result = monthsBetween(datetime1, datetime2, roundOff);
+  }
+
+ private:
+  FOLLY_ALWAYS_INLINE bool isEndDayOfMonth(const std::tm& dateTime) {
+    auto year = getYear(dateTime);
+    auto month = getMonth(dateTime);
+    auto endDay = util::getMaxDayOfMonth(year, month);
+    return dateTime.tm_mday == endDay;
+  }
+
+  FOLLY_ALWAYS_INLINE double monthsBetween(
+      const std::tm& datetime1,
+      const std::tm& datetime2,
+      bool roundOff) {
+    auto yearDiff = datetime1.tm_year - datetime2.tm_year;
+    auto monthDiff = yearDiff * 12 + datetime1.tm_mon - datetime2.tm_mon;
+
+    if (datetime1.tm_mday == datetime2.tm_mday ||
+        (isEndDayOfMonth(datetime1) && isEndDayOfMonth(datetime2))) {
+      return static_cast<double>(monthDiff);
+    }
+    auto dayDiff = datetime1.tm_mday - datetime2.tm_mday;
+    auto hourDiff = datetime1.tm_hour - datetime2.tm_hour;
+    auto minuteDiff = datetime1.tm_min - datetime2.tm_min;
+    auto secondsDiff = dayDiff * kSecondsInDay + hourDiff * kSecondsInHour +
+        minuteDiff * kSecondsInMinute + datetime1.tm_sec - datetime2.tm_sec;
+    auto diff =
+        monthDiff + static_cast<double>(secondsDiff) / (31 * 24 * 60 * 60);
+    if (roundOff) {
+      return std::round(diff * 100'000'000) / 100'000'000;
+    }
+    return diff;
+  }
+
+  const tz::TimeZone* timeZone_{nullptr};
+};
+
 } // namespace facebook::velox::functions::sparksql

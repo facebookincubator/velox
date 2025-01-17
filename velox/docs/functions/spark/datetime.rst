@@ -213,6 +213,35 @@ These functions support TIMESTAMP and DATE input types.
 
         SELECT month('2009-07-30'); -- 7
 
+.. spark:function:: months_between(timestamp1, timestamp2) -> double
+
+    	If `timestamp1` is later than `timestamp2`, then the result is positive.
+    	If `timestamp1` and `timestamp2` are on the same day of month, or both are the last day of month, time of day will be ignored.
+    	Otherwise, the difference is calculated based on 31 days per month, and rounded to 8 digits ::
+
+        SELECT months_between("1970-05-01 00:00:01", "1970-06-01 12:00:01"); -- -1
+        SELECT months_between("1970-07-01 00:00:01", "1970-06-01 12:00:01"); -- 1
+
+.. spark:function:: months_between(timestamp1, timestamp2, roundOff) -> double
+   :noindex:
+
+    	If `timestamp1` is later than `timestamp2`, then the result is positive.
+    	If `timestamp1` and `timestamp2` are on the same day of month, or both are the last day of month, time of day will be ignored.
+    	Otherwise, the difference is calculated based on 31 days per month, and rounded to 8 digits unless roundOff=false ::
+
+        SELECT months_between("1973-05-10 10:00:00", "1972-06-01 12:00:00", false); -- 11.28763440860215
+        SELECT months_between("1973-05-10 10:00:00", "1972-06-01 12:00:00", true); -- 11.28763441
+
+.. spark:function:: months_between(timestamp1, timestamp2, roundOff, timezone) -> double
+   :noindex:
+   
+    	If `timestamp1` is later than `timestamp2`, then the result is positive.
+    	If `timestamp1` and `timestamp2` are on the same day of month, or both are the last day of month, time of day will be ignored.
+    	Otherwise, the difference is calculated based on 31 days per month, and rounded to 8 digits unless roundOff=false ::
+
+        SELECT months_between("1973-05-10 10:00:00", "1972-06-01 12:00:00", false, "Asia/Shanghai"); -- 11.28763440860215
+        SELECT months_between("1973-05-10 10:00:00", "1972-06-01 12:00:00", true, "Asia/Shanghai"); -- 11.28763441
+
 .. spark:function:: next_day(startDate, dayOfWeek) -> date
 
     Returns the first date which is later than ``startDate`` and named as ``dayOfWeek``.
