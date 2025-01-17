@@ -119,7 +119,7 @@ std::vector<CacheRequest*> makeRequestParts(
   const bool prefetchOne =
       request.trackingId.id() == StreamIdentifier::sequentialFile().id_;
   const auto readDensity =
-      trackingData.readBytes / (1 + trackingData.referencedBytes);
+      ((double)trackingData.readBytes) / (1 + trackingData.referencedBytes);
   const auto readPct = 100 * readDensity;
   const bool prefetch = trackingData.referencedBytes > 0 &&
       isPrefetchPct(readPct) && readDensity >= 0.8;

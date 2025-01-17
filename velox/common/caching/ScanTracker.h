@@ -16,6 +16,7 @@
 
 #pragma once
 
+#include <folly/Synchronized.h>
 #include <folly/container/F14Map.h>
 #include <cstdint>
 #include <mutex>
@@ -72,10 +73,24 @@ namespace facebook::velox::cache {
 class FileGroupStats;
 
 /// Records references and actual uses of a stream.
+/// Note: All TrackingData fields are atomic.
 struct TrackingData {
-  double referencedBytes{};
-  double lastReferencedBytes{};
-  double readBytes{};
+  std::atomic_int64_t referencedBytes{};
+  std::atomic_int64_t lastReferencedBytes{};
+  std::atomic_int64_t readBytes{};
+
+  TrackingData() = default;
+
+  TrackingData(const TrackingData& other) {
+    *this = other;
+  }
+
+  TrackingData& operator=(const TrackingData& other) {
+    referencedBytes = other.referencedBytes.load();
+    lastReferencedBytes = other.lastReferencedBytes.load();
+    readBytes = other.readBytes.load();
+    return *this;
+  }
 };
 
 /// Tracks column access frequency during execution of a query. A ScanTracker is
@@ -124,26 +139,7 @@ class ScanTracker {
       uint64_t fileId,
       uint64_t groupId);
 
-  /// True if 'trackingId' is read at least 'minReadPct' % of the time.
-  bool shouldPrefetch(TrackingId id, int32_t minReadPct) {
-    return readPct(id) >= minReadPct;
-  }
-
-  /// Returns the percentage of referenced columns that are actually read. 100%
-  /// if no data.
-  int32_t readPct(TrackingId id) {
-    std::lock_guard<std::mutex> l(mutex_);
-    const auto& data = data_[id];
-    if (data.referencedBytes == 0) {
-      return 100;
-    }
-    return data.readBytes / data.referencedBytes * 100;
-  }
-
-  TrackingData trackingData(TrackingId id) {
-    std::lock_guard<std::mutex> l(mutex_);
-    return data_[id];
-  }
+  TrackingData& trackingData(TrackingId id);
 
   std::string_view id() const {
     return id_;
@@ -161,8 +157,7 @@ class ScanTracker {
   const std::function<void(ScanTracker*)> unregisterer_{nullptr};
   FileGroupStats* const fileGroupStats_;
 
-  std::mutex mutex_;
-  folly::F14FastMap<TrackingId, TrackingData> data_;
+  folly::Synchronized<folly::F14FastMap<TrackingId, TrackingData>> data_;
   TrackingData sum_;
 };
 

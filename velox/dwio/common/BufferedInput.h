@@ -159,7 +159,7 @@ class BufferedInput {
     if (referencedBytes == 0) {
       return 0;
     }
-    const int pct = trackingData.readBytes / referencedBytes * 100;
+    const int pct = ((double)trackingData.readBytes) / referencedBytes * 100;
     VELOX_CHECK_LE(0, pct, "Bad read percentage: {}", pct);
     // It is possible to seek back or clone the stream and read the same data
     // multiple times, or because of unplanned read, so pct could be larger than

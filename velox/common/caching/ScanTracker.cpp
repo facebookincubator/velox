@@ -21,6 +21,19 @@
 
 namespace facebook::velox::cache {
 
+TrackingData& ScanTracker::trackingData(TrackingId id) {
+  {
+    auto rlock = data_.rlock();
+    auto it = rlock->find(id);
+    if (it != rlock->end()) {
+      // This is ok because TrackingData fields are all atomic.
+      return const_cast<TrackingData&>(it->second);
+    }
+  }
+  auto wlock = data_.wlock();
+  return (*wlock)[id];
+}
+
 // Marks that 'bytes' worth of data may be accessed in the future. See
 // TrackingData for meaning of quantum.
 void ScanTracker::recordReference(
@@ -31,8 +44,7 @@ void ScanTracker::recordReference(
   if (fileGroupStats_) {
     fileGroupStats_->recordReference(fileId, groupId, id, bytes);
   }
-  std::lock_guard<std::mutex> l(mutex_);
-  auto& data = data_[id];
+  auto& data = trackingData(id);
   data.referencedBytes += bytes;
   data.lastReferencedBytes = bytes;
   sum_.referencedBytes += bytes;
@@ -46,8 +58,7 @@ void ScanTracker::recordRead(
   if (fileGroupStats_) {
     fileGroupStats_->recordRead(fileId, groupId, id, bytes);
   }
-  std::lock_guard<std::mutex> l(mutex_);
-  auto& data = data_[id];
+  auto& data = trackingData(id);
   data.readBytes += bytes;
   sum_.readBytes += bytes;
 }
@@ -55,7 +66,8 @@ void ScanTracker::recordRead(
 std::string ScanTracker::toString() const {
   std::stringstream out;
   out << "ScanTracker for " << id_ << std::endl;
-  for (const auto& [id, data] : data_) {
+  auto rlock = data_.rlock();
+  for (const auto& [id, data] : *rlock) {
     out << id.id() << ": " << data.readBytes << "/" << data.referencedBytes
         << std::endl;
   }
