@@ -91,7 +91,8 @@ class LocalFileSystem : public FileSystem {
                           1,
                           static_cast<int32_t>(
                               std::thread::hardware_concurrency() / 2)),
-                      std::make_shared<folly::NamedThreadFactory>("ReadAhead"))
+                      std::make_shared<folly::NamedThreadFactory>(
+                          "LocalReadahead"))
                 : nullptr) {}
 
   ~LocalFileSystem() override {}

@@ -78,10 +78,9 @@ struct DirectoryOptions : FileOptions {
 };
 
 struct FileSystemOptions {
-  /// Now only local file system respects this option, Spark spills to local
-  /// file while native Presto spills to remote storage which supports read
-  /// async. Use an executor to submit the read async task. We can extend to
-  /// other file systems in need.
+  /// As for now, only local file system respects this option. It implements
+  /// async read by using a background cpu executor. Some filesystem might has
+  /// native async read-ahead support.
   bool readAheadEnabled{false};
 };
 

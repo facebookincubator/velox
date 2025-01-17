@@ -253,6 +253,7 @@ folly::SemiFuture<uint64_t> LocalReadFile::preadvAsync(
     uint64_t offset,
     const std::vector<folly::Range<char*>>& buffers) const {
   auto [promise, future] = folly::makePromiseContract<uint64_t>();
+  VELOX_CHECK_NOT_NULL(executor_);
   executor_->add([this,
                   _promise = std::move(promise),
                   _offset = offset,

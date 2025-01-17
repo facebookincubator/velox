@@ -190,7 +190,8 @@ class LocalFileTest : public ::testing::TestWithParam<bool> {
           std::max(
               1,
               static_cast<int32_t>(std::thread::hardware_concurrency() / 2)),
-          std::make_shared<folly::NamedThreadFactory>("FileReadAheadTest"));
+          std::make_shared<folly::NamedThreadFactory>(
+              "LocalFileReadAheadTest"));
 };
 
 TEST_P(LocalFileTest, writeAndRead) {
