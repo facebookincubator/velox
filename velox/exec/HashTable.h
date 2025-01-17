@@ -95,6 +95,9 @@ struct HashLookup {
   /// If using valueIds, list of concatenated valueIds. 1:1 with 'hashes'.
   /// Populated by groupProbe and joinProbe.
   raw_vector<uint64_t> normalizedKeys;
+
+  /// If true, only probe for null keys. Used by listNullKeyRows.
+  bool probeForNullKeyOnly{false};
 };
 
 struct HashTableStats {

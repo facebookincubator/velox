@@ -350,6 +350,9 @@ bool HashTable<ignoreNullKeys>::compareKeys(
     const char* group,
     HashLookup& lookup,
     vector_size_t row) {
+  if (lookup.probeForNullKeyOnly) {
+    return true;
+  }
   int32_t numKeys = lookup.hashers.size();
   // The loop runs at least once. Allow for first comparison to fail
   // before loop end check.
@@ -2038,6 +2041,7 @@ int32_t HashTable<false>::listNullKeyRows(
     VELOX_CHECK_GT(nextOffset_, 0);
     VELOX_CHECK_EQ(hashers_.size(), 1);
     HashLookup lookup(hashers_);
+    lookup.probeForNullKeyOnly = true;
     if (hashMode_ == HashMode::kHash) {
       lookup.hashes.push_back(VectorHasher::kNullHash);
     } else {
