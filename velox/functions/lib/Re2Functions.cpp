@@ -2105,18 +2105,16 @@ PatternMetadata determinePatternKind(
           return PatternMetadata::prefix(
               std::string(unescapedPattern, 0, firstSubPatternLength));
         } else if (lastSubPatternKind == SubPatternKind::kLiteralString) {
-          return PatternMetadata::suffix(
-              std::string(
-                  unescapedPattern, lastSubPatternStart, lastSubPatternLength));
+          return PatternMetadata::suffix(std::string(
+              unescapedPattern, lastSubPatternStart, lastSubPatternLength));
         } else if (
             numSubPatterns == 3 &&
             firstSubPatternKind == SubPatternKind::kAnyCharsWildcard &&
             lastSubPatternKind == SubPatternKind::kAnyCharsWildcard) {
-          return PatternMetadata::substring(
-              std::string(
-                  unescapedPattern,
-                  subPatternRanges[1].first,
-                  subPatternRanges[1].second));
+          return PatternMetadata::substring(std::string(
+              unescapedPattern,
+              subPatternRanges[1].first,
+              subPatternRanges[1].second));
         }
       }
 
