@@ -161,19 +161,18 @@ A simple aggregation function is implemented as a class as the following.
         exec::optional_arg_type<Generic<T1>> in);
 
     // Optional. Define some function-level variables.
-    TypePtr inputType;
-    TypePtr resultType;
+    TypePtr inputType_;
+    TypePtr resultType_;
 
     // Optional. Defined only when the aggregation function needs to use function-level variables.
     // This method is called once when the aggregation function is created.
-    static void initialize(
-        std::shared_ptr<FuncLevelVariableTestAggregate> fn,
+    void initialize(
         core::AggregationNode::Step step,
         const std::vector<TypePtr>& argTypes,
         const TypePtr& resultType) {
       VELOX_CHECK_EQ(argTypes.size(), 1);
-      fn->inputType_ = argTypes[0];
-      fn->resultType_ = resultType;
+      inputType_ = argTypes[0];
+      resultType_ = resultType;
     }
 
     struct AccumulatorType { ... };
@@ -189,7 +188,7 @@ Some function-level variables needs to be declared in the simple aggregation
 function class. These variables are initialized once when the aggregation
 function is created and used at every row when adding inputs to accumulators
 or extracting values from accumulators. For example, if the aggregation
-function needs to get the result type or the raw input type of the aggregaiton
+function needs to get the result type or the raw input type of the aggregation
 function, the author can hold them in the aggregate class variables, and
 initialize them in the initialize() method.
 
@@ -273,7 +272,7 @@ For aggregaiton functions of default-null behavior, the author defines an
     ...
 
     // Define a pointer to the UDAF class.
-    std::shared_ptr<ArrayAggAggregate> fn_;
+    ArrayAggAggregate* fn_;
 
     // Optional. Default is true.
     static constexpr bool is_fixed_size_ = false;
@@ -285,7 +284,7 @@ For aggregaiton functions of default-null behavior, the author defines an
     static constexpr bool is_aligned_ = true;
 
     explicit AccumulatorType(
-        HashStringAllocator* allocator, ArrayAggAggregate fn)
+        HashStringAllocator* allocator, ArrayAggAggregate* fn)
         : fn_(fn);
 
     void addInput(HashStringAllocator* allocator, exec::arg_type<T1> value1, ...);

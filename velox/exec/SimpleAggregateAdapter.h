@@ -47,7 +47,7 @@ class SimpleAggregateAdapter : public Aggregate {
       TypePtr resultType)
       : Aggregate(std::move(resultType)), fn_{std::make_unique<FUNC>()} {
     if constexpr (support_initialize_) {
-      FUNC::initialize(fn_.get(), step, argTypes, resultType_);
+      fn_->initialize(step, argTypes, resultType_);
     }
   }
 
@@ -110,7 +110,6 @@ class SimpleAggregateAdapter : public Aggregate {
   // These functions are called on groups of both non-null and null
   // accumulators. These functions also return a bool indicating whether the
   // current group should be a NULL in the result vector.
-  std::unique_ptr<FUNC> fn_;
   template <typename T, typename = void>
   struct aggregate_default_null_behavior : std::true_type {};
 
@@ -589,6 +588,8 @@ class SimpleAggregateAdapter : public Aggregate {
 
   std::vector<DecodedVector> inputDecoded_;
   DecodedVector intermediateDecoded_;
+
+  std::unique_ptr<FUNC> fn_;
 };
 
 } // namespace facebook::velox::exec

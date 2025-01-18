@@ -447,11 +447,11 @@ class ApproxMostFrequentBooleanAggregate {
 
 template <TypeKind kKind>
 std::unique_ptr<exec::Aggregate> makeApproxMostFrequentAggregate(
-    const TypePtr& resultType,
     const std::string& name,
-    const TypePtr& valueType,
     core::AggregationNode::Step step,
-    const std::vector<TypePtr>& argTypes) {
+    const std::vector<TypePtr>& argTypes,
+    const TypePtr& resultType,
+    const TypePtr& valueType) {
   if constexpr (
       kKind == TypeKind::TINYINT || kKind == TypeKind::SMALLINT ||
       kKind == TypeKind::INTEGER || kKind == TypeKind::BIGINT ||
@@ -508,11 +508,11 @@ void registerApproxMostFrequentAggregate(
         return VELOX_DYNAMIC_TYPE_DISPATCH(
             makeApproxMostFrequentAggregate,
             valueType->kind(),
-            resultType,
             name,
-            valueType,
             step,
-            argTypes);
+            argTypes,
+            resultType,
+            valueType);
       },
       withCompanionFunctions,
       overwrite);

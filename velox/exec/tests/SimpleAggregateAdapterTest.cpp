@@ -480,17 +480,18 @@ class FuncLevelVariableTestAggregate {
   using IntermediateType = Row<int64_t, double>;
   using OutputType = double;
 
+  // These two variables are used for testing, they are set during the creation
+  // of the aggregation function and will be checked in addInput().
   TypePtr inputType_;
   TypePtr resultType_;
 
-  static void initialize(
-      FuncLevelVariableTestAggregate* fn,
+  void initialize(
       core::AggregationNode::Step step,
       const std::vector<TypePtr>& argTypes,
       const TypePtr& resultType) {
     VELOX_CHECK_EQ(argTypes.size(), 1);
-    fn->inputType_ = argTypes[0];
-    fn->resultType_ = resultType;
+    inputType_ = argTypes[0];
+    resultType_ = resultType;
   }
 
   struct Accumulator {
