@@ -281,13 +281,11 @@ void HashAggregation::resetPartialOutputIfNeed() {
 
 void HashAggregation::maybeIncreasePartialAggregationMemoryUsage(
     double aggregationPct) {
-  // If more than this many are unique at full memory, give up on partial agg.
-  constexpr int32_t kPartialMinFinalPct = 40;
   VELOX_DCHECK(isPartialOutput_);
   // If size is at max and there still is not enough reduction, abandon partial
   // aggregation.
   if (abandonPartialAggregationEarly(numOutputRows_) ||
-      (aggregationPct > kPartialMinFinalPct &&
+      (aggregationPct > abandonPartialAggregationMinPct_ &&
        maxPartialAggregationMemoryUsage_ >=
            maxExtendedPartialAggregationMemoryUsage_)) {
     groupingSet_->abandonPartialAggregation();
