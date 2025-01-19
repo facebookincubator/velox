@@ -95,7 +95,12 @@ class LocalFileSystem : public FileSystem {
                           "LocalReadahead"))
                 : nullptr) {}
 
-  ~LocalFileSystem() override {}
+  ~LocalFileSystem() override {
+    if (executor_) {
+      executor_->stop();
+      LOG(INFO) << "Executor " << executor_->getName() << " stopped.";
+    }
+  }
 
   std::string name() const override {
     return "Local FS";
