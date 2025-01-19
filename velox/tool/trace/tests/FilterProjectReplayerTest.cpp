@@ -259,6 +259,9 @@ TEST_F(FilterProjectReplayerTest, projectOnly) {
 
   assertEqualResults({result}, {traceResult});
 
+  const auto& mgr = memory::memoryManager();
+  LOG(ERROR) << "0 Memory manager: " << mgr->toString();
+
   const auto taskId = task->taskId();
   auto replayingResult = FilterProjectReplayer(
                              traceRoot,
@@ -271,6 +274,7 @@ TEST_F(FilterProjectReplayerTest, projectOnly) {
                              executor_.get())
                              .run();
   assertEqualResults({result}, {replayingResult});
+  LOG(ERROR) << "1 Memory manager: " << mgr->toString();
 
   auto replayingResult1 = FilterProjectReplayer(
                               traceRoot,
@@ -282,6 +286,8 @@ TEST_F(FilterProjectReplayerTest, projectOnly) {
                               0,
                               executor_.get())
                               .run();
+  LOG(ERROR) << "2 Memory manager: " << mgr->toString();
+
   auto replayingResult2 = FilterProjectReplayer(
                               traceRoot,
                               task->queryCtx()->queryId(),
@@ -292,6 +298,9 @@ TEST_F(FilterProjectReplayerTest, projectOnly) {
                               0,
                               executor_.get())
                               .run();
+  LOG(ERROR) << "3 Memory manager: " << mgr->toString();
+
   assertEqualResults({result}, {replayingResult1, replayingResult2});
+  LOG(ERROR) << "4 Memory manager: " << mgr->toString();
 }
 } // namespace facebook::velox::tool::trace::test

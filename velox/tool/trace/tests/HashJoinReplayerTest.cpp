@@ -261,6 +261,9 @@ TEST_F(HashJoinReplayerTest, partialDriverIds) {
   }
   const auto result = builder.copyResults(pool());
 
+  const auto& mgr = memory::memoryManager();
+  LOG(ERROR) << "0 Memory manager: " << mgr->toString();
+
   const auto traceRoot =
       fmt::format("{}/{}/traceRoot/", testDir->getPath(), "basic");
   std::shared_ptr<Task> task;
@@ -284,6 +287,7 @@ TEST_F(HashJoinReplayerTest, partialDriverIds) {
   auto traceResult = traceBuilder.copyResults(pool(), task);
 
   assertEqualResults({result}, {traceResult});
+  LOG(ERROR) << "1 Memory manager: " << mgr->toString();
 
   const auto taskId = task->taskId();
   const auto taskTraceDir =
@@ -313,6 +317,8 @@ TEST_F(HashJoinReplayerTest, partialDriverIds) {
             executor_.get())
             .run(),
         "Read wrong data file");
+
+    LOG(ERROR) << "2 Memory manager: " << mgr->toString();
   }
   HashJoinReplayer(
       traceRoot,
@@ -324,6 +330,8 @@ TEST_F(HashJoinReplayerTest, partialDriverIds) {
       0,
       executor_.get())
       .run();
+  LOG(ERROR) << "3 Memory manager: " << mgr->toString();
+
   faultyFs->clearFileFaultInjections();
 }
 
@@ -394,11 +402,16 @@ TEST_F(HashJoinReplayerTest, runner) {
   FLAGS_task_id = task->taskId();
   FLAGS_node_id = traceNodeId_;
   FLAGS_summary = true;
+  LOG(ERROR) << "runner 1 Memory manager: "
+             << memory::memoryManager()->toString();
+
   {
     TraceReplayRunner runner;
     runner.init();
     runner.run();
   }
+  LOG(ERROR) << "runner 2 Memory manager: "
+             << memory::memoryManager()->toString();
 
   FLAGS_task_id = task->taskId();
   FLAGS_driver_ids = "";
@@ -408,6 +421,8 @@ TEST_F(HashJoinReplayerTest, runner) {
     runner.init();
     runner.run();
   }
+  LOG(ERROR) << "runner 3 Memory manager: "
+             << memory::memoryManager()->toString();
 }
 
 DEBUG_ONLY_TEST_F(HashJoinReplayerTest, hashBuildSpill) {

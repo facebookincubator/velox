@@ -57,6 +57,8 @@ OperatorReplayerBase::OperatorReplayerBase(
                             : exec::trace::extractDriverIds(driverIds)),
       queryCapacity_(queryCapacity == 0 ? memory::kMaxMemory : queryCapacity),
       executor_(executor) {
+  LOG(ERROR) << "Start to construct replayer";
+
   VELOX_USER_CHECK(!taskTraceDir_.empty());
   VELOX_USER_CHECK(!taskId_.empty());
   VELOX_USER_CHECK(!nodeId_.empty());
@@ -66,7 +68,7 @@ OperatorReplayerBase::OperatorReplayerBase(
   } else {
     VELOX_USER_CHECK_EQ(pipelineIds_.size(), 1);
   }
-
+  LOG(ERROR) << "Start to read meta";
   const auto taskMetaReader = exec::trace::TaskTraceMetadataReader(
       taskTraceDir_, memory::MemoryManager::getInstance()->tracePool());
   taskMetaReader.read(queryConfigs_, connectorConfigs_, planFragment_);
@@ -74,18 +76,27 @@ OperatorReplayerBase::OperatorReplayerBase(
 }
 
 RowVectorPtr OperatorReplayerBase::run(bool copyResults) {
+  LOG(ERROR) << "Start to run " << copyResults;
+
   auto queryCtx = createQueryCtx();
+  LOG(ERROR) << "create query ctx " << queryCtx->pool()->name();
+
   std::shared_ptr<exec::test::TempDirectoryPath> spillDirectory;
   if (queryCtx->queryConfig().spillEnabled()) {
+    LOG(ERROR) << "spill enabled";
     spillDirectory = exec::test::TempDirectoryPath::create();
   }
 
   TraceReplayTaskRunner traceTaskRunner(createPlan(), std::move(queryCtx));
+  LOG(ERROR) << "create trace runner";
+
   auto [task, result] =
       traceTaskRunner.maxDrivers(driverIds_.size())
           .spillDirectory(spillDirectory ? spillDirectory->getPath() : "")
           .run(copyResults);
   printStats(task);
+  LOG(ERROR) << "Memory manager: " << memory::memoryManager()->toString();
+
   return result;
 }
 
@@ -113,6 +124,8 @@ core::PlanNodePtr OperatorReplayerBase::createPlan() {
 }
 
 std::shared_ptr<core::QueryCtx> OperatorReplayerBase::createQueryCtx() {
+  LOG(ERROR) << "start to create query cxt";
+
   auto queryPool = memory::memoryManager()->addRootPool(
       fmt::format("{}_replayer", operatorType_), queryCapacity_);
   std::unordered_map<std::string, std::shared_ptr<config::ConfigBase>>
@@ -121,6 +134,7 @@ std::shared_ptr<core::QueryCtx> OperatorReplayerBase::createQueryCtx() {
     connectorConfigs.emplace(
         connectorId, std::make_shared<config::ConfigBase>(std::move(configs)));
   }
+  LOG(ERROR) << "start to create query cxt impl " << queryPool->name();
   return core::QueryCtx::create(
       executor_,
       core::QueryConfig{queryConfigs_},
@@ -142,10 +156,11 @@ void OperatorReplayerBase::printStats(
     const std::shared_ptr<exec::Task>& task) const {
   const auto planStats = exec::toPlanStats(task->taskStats());
   const auto& stats = planStats.at(replayPlanNodeId_);
+  LOG(ERROR) << "start to print stats";
   for (const auto& [name, operatorStats] : stats.operatorStats) {
-    LOG(INFO) << "Stats of replaying operator " << name << " : "
-              << operatorStats->toString();
+    LOG(ERROR) << "Stats of replaying operator " << name << " : "
+               << operatorStats->toString();
   }
-  LOG(INFO) << "Memory usage: " << task->pool()->treeMemoryUsage(false);
+  LOG(ERROR) << "Memory usage: " << task->pool()->treeMemoryUsage(false);
 }
 } // namespace facebook::velox::tool::trace
