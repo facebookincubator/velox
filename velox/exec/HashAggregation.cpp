@@ -330,6 +330,8 @@ RowVectorPtr HashAggregation::getOutput() {
     prepareOutput(input_->size());
     groupingSet_->toIntermediate(input_, output_);
     numOutputRows_ += input_->size();
+    addRuntimeStat(
+        "abandonedPartialAggregationRowCount", RuntimeCounter(input_->size()));
     input_ = nullptr;
     return output_;
   }
