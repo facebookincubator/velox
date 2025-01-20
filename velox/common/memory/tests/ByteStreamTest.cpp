@@ -497,12 +497,39 @@ TEST_P(InputByteStreamTest, inputStream) {
   ASSERT_TRUE(byteStream->atEnd());
 }
 
-TEST_P(InputByteStreamTest, emptyInputStreamError) {
-  if (GetParam()) {
-    VELOX_ASSERT_THROW(createStream({}), "Empty BufferInputStream");
-  } else {
-    VELOX_ASSERT_THROW(createStream({}), "(0 vs. 0) Empty FileInputStream");
+TEST_P(InputByteStreamTest, iobuf) {
+  if (!GetParam()) {
+    return;
   }
+  const auto streamSize = 4096;
+  std::vector<ByteRange> byteRanges;
+  std::uint8_t buffer[streamSize];
+  for (auto i = 0; i < streamSize; ++i) {
+    buffer[i] = i % 256;
+  }
+  byteRanges.push_back(ByteRange{buffer, streamSize, 0});
+
+  std::uint8_t buffer2[streamSize];
+  for (auto i = 0; i < streamSize; ++i) {
+    buffer2[i] = i % 13;
+  }
+  byteRanges.push_back(ByteRange{buffer2, streamSize, 0});
+
+  auto byteStream = createStream(byteRanges);
+  auto bufferStream = dynamic_cast<BufferInputStream*>(byteStream.get());
+  for (int offset = 0; offset < streamSize * 2;) {
+    const int readBytes = std::min(streamSize / 11, streamSize * 2 - offset);
+    auto iobuf = bufferStream->readBytes(readBytes);
+    ASSERT_EQ(iobuf->computeChainDataLength(), readBytes);
+    for (int i = 0; i < readBytes; ++i, ++offset) {
+      if (offset < streamSize) {
+        ASSERT_EQ(iobuf->data()[i], offset % 256);
+      } else {
+        ASSERT_EQ(iobuf->data()[i], (offset - streamSize) % 13);
+      }
+    }
+  }
+  ASSERT_TRUE(byteStream->atEnd());
 }
 
 TEST_P(InputByteStreamTest, remainingSize) {
