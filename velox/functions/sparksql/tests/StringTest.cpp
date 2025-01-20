@@ -1055,5 +1055,25 @@ TEST_F(StringTest, empty2Null) {
   EXPECT_EQ(empty2Null(""), std::nullopt);
   EXPECT_EQ(empty2Null("abc"), "abc");
 }
+
+TEST_F(StringTest, VarcharWriteSideCheck) {
+  const auto varcharWriteSideCheck = [&](const std::string& srcStr,
+                                         int32_t length) {
+    return evaluateOnce<std::string>(
+        "varchar_writeside_check(c0, c1)",
+        std::make_optional(srcStr),
+        std::make_optional(length));
+  };
+
+  EXPECT_EQ(varcharWriteSideCheck("", 3), "");
+  EXPECT_EQ(varcharWriteSideCheck(" ", 3), " ");
+  EXPECT_EQ(varcharWriteSideCheck("abc", 3), "abc");
+  EXPECT_EQ(varcharWriteSideCheck("ab ", 3), "ab ");
+  EXPECT_EQ(varcharWriteSideCheck("ab    ", 3), "ab ");
+  EXPECT_EQ(varcharWriteSideCheck("abc    ", 3), "abc");
+  VELOX_ASSERT_USER_THROW(
+      varcharWriteSideCheck("abcd", 3),
+      "Exceeds varchar type length limitation: 3")
+}
 } // namespace
 } // namespace facebook::velox::functions::sparksql::test

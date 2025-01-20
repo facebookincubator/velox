@@ -147,6 +147,8 @@ void registerStringFunctions(const std::string& prefix) {
   registerFunctionCallToSpecialForm(
       ConcatWsCallToSpecialForm::kConcatWs,
       std::make_unique<ConcatWsCallToSpecialForm>());
+  registerFunction<VarcharWriteSideCheckFunction, Varchar, Varchar, int32_t>(
+      {prefix + "varchar_writeside_check"});
 }
 } // namespace sparksql
 } // namespace facebook::velox::functions

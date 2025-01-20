@@ -1556,4 +1556,57 @@ struct Empty2NullFunction {
   }
 };
 
+template <typename T>
+struct VarcharWriteSideCheckFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  // Results refer to strings in the first argument.
+  static constexpr int32_t reuse_strings_from_arg = 0;
+
+  // ASCII input always produces ASCII result.
+  static constexpr bool is_default_ascii_behavior = true;
+
+  FOLLY_ALWAYS_INLINE void call(
+      out_type<Varchar>& result,
+      const arg_type<Varchar>& input,
+      int32_t length) {
+    doCall<false>(result, input, length);
+  }
+
+  FOLLY_ALWAYS_INLINE void callAscii(
+      out_type<Varchar>& result,
+      const arg_type<Varchar>& input,
+      int32_t length) {
+    doCall<true>(result, input, length);
+  }
+
+  template <bool isAscii>
+  FOLLY_ALWAYS_INLINE void doCall(
+      out_type<Varchar>& result,
+      const arg_type<Varchar>& input,
+      int32_t length) {
+    int32_t numInputChars = stringImpl::length<isAscii>(input);
+    if (numInputChars <= length) {
+      result.setNoCopy(input);
+      return;
+    }
+    StringView trimmed;
+    stringImpl::trimAscii<false, true, StringView>(
+        trimmed, input, stringImpl::isAsciiSpace);
+    int32_t numTrimmedChars = stringImpl::length<isAscii>(trimmed);
+
+    if (numTrimmedChars < length) {
+      int32_t start = 1;
+      auto byteRange = stringCore::getByteRange<isAscii>(
+          input.data(), input.size(), start, length);
+      result.setNoCopy(StringView(
+          input.data() + byteRange.first, byteRange.second - byteRange.first));
+    } else if (numTrimmedChars == length) {
+      result.setNoCopy(trimmed);
+    } else {
+      VELOX_USER_FAIL("Exceeds varchar type length limitation: {}", length);
+    }
+  }
+};
+
 } // namespace facebook::velox::functions::sparksql
