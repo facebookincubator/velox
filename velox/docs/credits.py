@@ -14,9 +14,8 @@ def is_git_root(path):
 def list_contributors(velox_root, since, until):
     # Change directory to Velox root.
     os.chdir(velox_root)
-    print("Velox Path: " + str(velox_root) + ", range:[" + since + " - " + until + "]")
 
-    # Unpack mailmap
+    # Unpack mailmap.
     try:
         subprocess.run(
             ["base64", "-D", "-i", "velox/docs/mailmap_base64", "-o", "./.mailmap"]
@@ -24,7 +23,7 @@ def list_contributors(velox_root, since, until):
     except subprocess.CalledProcessError as e:
         print("Error:", e)
 
-    # Get a list of contributors using git log
+    # Get a list of contributors in the specified range using git log.
     try:
         contributors = subprocess.check_output(
             ["git", "shortlog", "-se", "--since", since, "--until", until], text=True
@@ -32,17 +31,17 @@ def list_contributors(velox_root, since, until):
     except subprocess.CalledProcessError as e:
         print("Error:", e)
 
-    # Load affiliations map
+    # Load affiliations map.
     affiliateMap = json.load(open("velox/docs/affiliations_map.txt"))
 
-    # Output sample: " 1  John <john@abc.com>"
-    # Format contributor affiliation from the output
+    # Output entry format is " 1  John <john@abc.com>" or " 1  John <ABC>"
+    # Format contributor affiliation from the output.
     unknownAffiliations = []
     for line in contributors.splitlines():
         start = line.find("<") + 1
         end = line.find(">")
         affiliation = line[start:end]
-        # Get affiliation from email if present
+        # Get affiliation from the email-domain and affiliateMap if present.
         if "@" in affiliation:
             domain = affiliation.split("@")[1]
             if domain in affiliateMap:
@@ -50,13 +49,15 @@ def list_contributors(velox_root, since, until):
             else:
                 unknownAffiliations.append(affiliation)
                 affiliation = ""
+        # Append affiliation if found.
         if affiliation != "":
             print(line[0 : start - 2], "-", affiliation)
         else:
             print(line[0 : start - 2])
 
     print("Unknown affiliations found: ", unknownAffiliations)
-    # Remove .mailmap
+
+    # Remove .mailmap.
     try:
         subprocess.run(["rm", "./.mailmap"])
     except subprocess.CalledProcessError as e:

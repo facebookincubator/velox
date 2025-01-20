@@ -78,17 +78,17 @@ Below are a few monthly update guidelines.
 - Add a reference to the PR if the update requires more context.
 
 ### Credits
-A list of contributors with their contribution count, name, and affiliation.
+A list of contributors with their contribution count, name, and optional affiliation.
 An affiliation is the name of the company they are associated with.
 The `credits.py` program tries to automatically infer an affiliation from an email using the
 `affiliations_map.txt` file. New entries can be added to this file.
-An individual user can also add a custom affiliation in the `mailmap_base64` file. 
+An individual user can also add a custom affiliation in the `mailmap_base64` file.
 A user must decode the file using base64 to add an entry and then encode it again.
-Each entry is in the `.mailmap` format: "Name <Affiliation> email".
-The affiliation is empty if one is not found.
+Each entry is in the `.mailmap` format: `Name <Affiliation> email`.
+The affiliation is empty if none is found.
 To get the list of contributors in a specific month say June-2024, from the Velox root directory
 execute the following command:
 ```
-python velox/docs/credits.py "June 01 2024" "June 31 2024"
+python velox/docs/credits.py "June 01 2024" "June 30 2024"
 ```
 Duplicate entries for a user are possible if different e-mails are used. Such entries must be combined.
