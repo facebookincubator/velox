@@ -2043,6 +2043,9 @@ Expected<std::shared_ptr<DateTimeFormatter>> buildSimpleDateTimeFormatter(
         case 'S':
           builder.appendFractionOfSecond(count);
           break;
+        case 'u':
+          builder.appendDayOfWeek1Based(count);
+          break;
         case 'w':
           builder.appendWeekOfWeekYear(count);
           break;
