@@ -31,12 +31,15 @@ class HdfsFileSystem::Impl {
       const config::ConfigBase* config,
       const HdfsServiceEndpoint& endpoint) {
     auto status = filesystems::arrow::io::internal::ConnectLibHdfs(&driver_);
-    if (!status.ok()) {
-      LOG(ERROR) << "ConnectLibHdfs failed due to: " << status.ToString();
-    }
+    VELOX_CHECK(
+        status.ok(), "ConnectLibHdfs failed due to: ", status.ToString());
 
     // connect to HDFS with the builder object
     hdfsBuilder* builder = driver_->NewBuilder();
+    VELOX_CHECK_NOT_NULL(
+        builder,
+        "Failed to NewBuilder: {}",
+        driver_->GetLastExceptionRootCause());
     if (endpoint.isViewfs) {
       // The default NameNode configuration will be used (from the XML
       // configuration files). See:
