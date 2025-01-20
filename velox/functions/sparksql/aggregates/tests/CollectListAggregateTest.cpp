@@ -28,6 +28,10 @@ class CollectListAggregateTest : public AggregationTestBase {
   void SetUp() override {
     AggregationTestBase::SetUp();
     registerAggregateFunctions("spark_");
+    // The intermediate data of spark_collect_list includes the json string of
+    // type, but it is non-deterministic. Therefore, it cannot be tested
+    // incrementally.
+    disableTestIncremental();
   }
 };
 
