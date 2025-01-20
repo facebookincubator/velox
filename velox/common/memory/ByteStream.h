@@ -253,6 +253,8 @@ class BufferInputStream : public ByteInputStream {
 
   void readBytes(uint8_t* bytes, int32_t size) override;
 
+  std::unique_ptr<folly::IOBuf> readBytes(int32_t size);
+
   std::string_view nextView(int32_t size) override;
 
   void skip(int32_t size) override;

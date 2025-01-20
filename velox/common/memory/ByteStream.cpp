@@ -172,6 +172,31 @@ std::string_view BufferInputStream::nextView(int32_t size) {
       reinterpret_cast<char*>(current_->buffer) + position, viewSize);
 }
 
+std::unique_ptr<folly::IOBuf> BufferInputStream::readBytes(int32_t size) {
+  VELOX_CHECK_GE(size, 0, "Attempting to read negative number of bytes");
+  if (size == 0) {
+    return nullptr;
+  }
+  std::unique_ptr<folly::IOBuf> result;
+  for (;;) {
+    const int32_t availableBytes = current_->size - current_->position;
+    const int32_t readBytes = std::min(availableBytes, size);
+    auto newBuf = folly::IOBuf::wrapBuffer(
+        current_->buffer + current_->position, readBytes);
+    if (result) {
+      result->appendToChain(std::move(newBuf));
+    } else {
+      result = std::move(newBuf);
+    }
+    size -= readBytes;
+    current_->position += readBytes;
+    if (size == 0) {
+      return result;
+    }
+    nextRange();
+  }
+}
+
 void BufferInputStream::skip(int32_t size) {
   VELOX_CHECK_GE(size, 0, "Attempting to skip negative number of bytes");
   for (;;) {
