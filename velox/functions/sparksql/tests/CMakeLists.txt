@@ -34,6 +34,7 @@ add_executable(
   DecimalUtilTest.cpp
   ElementAtTest.cpp
   GetJsonObjectTest.cpp
+  GetStructFieldTest.cpp
   HashTest.cpp
   InTest.cpp
   JsonObjectKeysTest.cpp
