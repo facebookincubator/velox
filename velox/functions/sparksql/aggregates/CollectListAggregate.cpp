@@ -302,7 +302,10 @@ AggregateRegistrationResult registerCollectList(
         }
         return std::make_unique<CollectListAggregate>(resultType, argTypes[0]);
       },
-      withCompanionFunctions,
+      // Currently, Velox doesn't support automatically generating companion
+      // functions for aggregate functions whose result type is not resolvable
+      // given solely the concrete intermediate type.
+      false /*withCompanionFunctions*/,
       overwrite);
 }
 } // namespace
