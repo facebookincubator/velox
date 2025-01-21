@@ -216,6 +216,28 @@ std::shared_ptr<::arrow::Field> updateFieldNameRecursive(
   }
 }
 
+std::optional<TimestampPrecision> getTimestampUnit(
+    const config::ConfigBase& config,
+    const char* configKey) {
+  if (const auto unit = config.get<uint8_t>(configKey)) {
+    VELOX_CHECK(
+        unit == 3 /*milli*/ || unit == 6 /*micro*/ || unit == 9 /*nano*/,
+        "Invalid timestamp unit: {}",
+        unit.value());
+    return std::optional(static_cast<TimestampPrecision>(unit.value()));
+  }
+  return std::nullopt;
+}
+
+std::optional<std::string> getTimestampTimeZone(
+    const config::ConfigBase& config,
+    const char* configKey) {
+  if (const auto timezone = config.get<std::string>(configKey)) {
+    return timezone.value();
+  }
+  return std::nullopt;
+}
+
 } // namespace
 
 Writer::Writer(
@@ -239,7 +261,8 @@ Writer::Writer(
     flushPolicy_ = std::make_unique<DefaultFlushPolicy>();
   }
   options_.timestampUnit =
-      options.parquetWriteTimestampUnit.value_or(TimestampUnit::kNano);
+      static_cast<TimestampUnit>(options.parquetWriteTimestampUnit.value_or(
+          TimestampPrecision::kNanoseconds));
   options_.timestampTimeZone = options.parquetWriteTimestampTimeZone;
   arrowContext_->properties =
       getArrowParquetWriterOptions(options, flushPolicy_);
@@ -424,6 +447,29 @@ std::unique_ptr<dwio::common::Writer> ParquetWriterFactory::createWriter(
 std::unique_ptr<dwio::common::WriterOptions>
 ParquetWriterFactory::createWriterOptions() {
   return std::make_unique<parquet::WriterOptions>();
+}
+
+void WriterOptions::processConfigs(
+    const config::ConfigBase& connectorConfig,
+    const config::ConfigBase& session) {
+  auto parquetWriterOptions = dynamic_cast<WriterOptions*>(this);
+  VELOX_CHECK_NOT_NULL(
+      parquetWriterOptions, "Expected a Parquet WriterOptions object.");
+
+  if (!parquetWriteTimestampUnit) {
+    parquetWriteTimestampUnit =
+        getTimestampUnit(session, kParquetSessionWriteTimestampUnit).has_value()
+        ? getTimestampUnit(session, kParquetSessionWriteTimestampUnit)
+        : getTimestampUnit(connectorConfig, kParquetSessionWriteTimestampUnit);
+  }
+  if (!parquetWriteTimestampTimeZone) {
+    parquetWriteTimestampTimeZone =
+        getTimestampTimeZone(session, core::QueryConfig::kSessionTimezone)
+            .has_value()
+        ? getTimestampTimeZone(session, core::QueryConfig::kSessionTimezone)
+        : getTimestampTimeZone(
+              connectorConfig, core::QueryConfig::kSessionTimezone);
+  }
 }
 
 } // namespace facebook::velox::parquet

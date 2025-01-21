@@ -58,6 +58,8 @@ using namespace facebook::velox::common::test;
 using namespace facebook::velox::exec::test;
 using namespace facebook::velox::tests::utils;
 
+DECLARE_int32(cache_prefetch_min_pct);
+
 namespace {
 void verifyCacheStats(
     const FileHandleCacheStats& cacheStats,
@@ -2388,8 +2390,8 @@ TEST_F(TableScanTest, statsBasedSkippingNulls) {
   EXPECT_EQ(31'234, stats.rawInputRows);
   EXPECT_EQ(31'234, stats.inputRows);
   EXPECT_EQ(31'234, stats.outputRows);
-  ASSERT_EQ(getTableScanRuntimeStats(task).at("skippedSplits").sum, 0);
-  ASSERT_EQ(getTableScanRuntimeStats(task).at("skippedStrides").sum, 0);
+  ASSERT_EQ(getTableScanRuntimeStats(task).count("skippedSplits"), 0);
+  ASSERT_EQ(getTableScanRuntimeStats(task).count("skippedStrides"), 0);
 
   task = assertQuery("c0 IS NULL");
 
@@ -2398,7 +2400,7 @@ TEST_F(TableScanTest, statsBasedSkippingNulls) {
   EXPECT_EQ(0, stats.inputRows);
   EXPECT_EQ(0, stats.outputRows);
   ASSERT_EQ(getTableScanRuntimeStats(task).at("skippedSplits").sum, 1);
-  ASSERT_EQ(getTableScanRuntimeStats(task).at("skippedStrides").sum, 0);
+  ASSERT_EQ(getTableScanRuntimeStats(task).count("skippedStrides"), 0);
 
   // c1 IS NULL - first stride should be skipped based on stats
   task = assertQuery("c1 IS NULL");
@@ -2407,7 +2409,7 @@ TEST_F(TableScanTest, statsBasedSkippingNulls) {
   EXPECT_EQ(size - 10'000, stats.rawInputRows);
   EXPECT_EQ(size - 11'111, stats.inputRows);
   EXPECT_EQ(size - 11'111, stats.outputRows);
-  ASSERT_EQ(getTableScanRuntimeStats(task).at("skippedSplits").sum, 0);
+  ASSERT_EQ(getTableScanRuntimeStats(task).count("skippedSplits"), 0);
   ASSERT_EQ(getTableScanRuntimeStats(task).at("skippedStrides").sum, 1);
 
   // c1 IS NOT NULL - 3rd and 4th strides should be skipped based on stats
@@ -2417,7 +2419,7 @@ TEST_F(TableScanTest, statsBasedSkippingNulls) {
   EXPECT_EQ(20'000, stats.rawInputRows);
   EXPECT_EQ(11'111, stats.inputRows);
   EXPECT_EQ(11'111, stats.outputRows);
-  ASSERT_EQ(getTableScanRuntimeStats(task).at("skippedSplits").sum, 0);
+  ASSERT_EQ(getTableScanRuntimeStats(task).count("skippedSplits"), 0);
   ASSERT_EQ(getTableScanRuntimeStats(task).at("skippedStrides").sum, 2);
 }
 
@@ -4098,14 +4100,14 @@ TEST_F(TableScanTest, addSplitsToFailedTask) {
   writeToFile(filePath->getPath(), {data});
 
   core::PlanNodeId scanNodeId;
-  exec::test::CursorParameters params;
+  CursorParameters params;
   params.planNode = exec::test::PlanBuilder()
                         .tableScan(ROW({"c0"}, {INTEGER()}))
                         .capturePlanNodeId(scanNodeId)
                         .project({"5 / c0"})
                         .planNode();
 
-  auto cursor = exec::test::TaskCursor::create(params);
+  auto cursor = TaskCursor::create(params);
   cursor->task()->addSplit(scanNodeId, makeHiveSplit(filePath->getPath()));
 
   EXPECT_THROW(while (cursor->moveNext()){}, VeloxUserError);
@@ -5161,16 +5163,28 @@ TEST_F(TableScanTest, noCacheRetention) {
   writeToFile(filePath->getPath(), vectors);
   createDuckDbTable(vectors);
 
-  for (const bool noCacheRetention : {true}) {
-    SCOPED_TRACE(fmt::format("noCacheRetention: {}", noCacheRetention));
+  struct {
+    bool splitCacheable;
+    bool expectSplitCached;
+
+    std::string debugString() const {
+      return fmt::format(
+          "splitCacheable {}, expectSplitCached {}",
+          splitCacheable,
+          expectSplitCached);
+    }
+  } testSettings[] = {{false, false}, {true, true}};
+
+  for (const auto& testData : testSettings) {
+    SCOPED_TRACE(testData.debugString());
 
     auto split = makeHiveConnectorSplit(
-        filePath->getPath(), 0, fs::file_size(filePath->getPath()));
+        filePath->getPath(),
+        0,
+        fs::file_size(filePath->getPath()),
+        0,
+        testData.splitCacheable);
     AssertQueryBuilder(tableScanNode(), duckDbQueryRunner_)
-        .connectorSessionProperty(
-            kHiveConnectorId,
-            connector::hive::HiveConfig::kCacheNoRetentionSession,
-            noCacheRetention ? "true" : "false")
         .split(std::move(split))
         .assertResults("SELECT * FROM tmp");
     waitForAllTasksToBeDeleted();
@@ -5182,14 +5196,7 @@ TEST_F(TableScanTest, noCacheRetention) {
     for (const auto& cacheEntry : cacheEntries) {
       const auto cacheEntryHelper =
           cache::test::AsyncDataCacheEntryTestHelper(cacheEntry);
-      if (noCacheRetention) {
-        if (!cacheEntryHelper.firstUse()) {
-          ASSERT_EQ(cacheEntryHelper.accessStats().lastUse, 0)
-              << cacheEntry->toString();
-        }
-        ASSERT_EQ(cacheEntryHelper.accessStats().numUses, 0)
-            << cacheEntry->toString();
-      } else {
+      if (testData.expectSplitCached) {
         if (cacheEntryHelper.firstUse()) {
           ASSERT_EQ(cacheEntryHelper.accessStats().numUses, 0)
               << cacheEntry->toString();
@@ -5198,6 +5205,13 @@ TEST_F(TableScanTest, noCacheRetention) {
               << cacheEntry->toString();
         }
         ASSERT_NE(cacheEntryHelper.accessStats().lastUse, 0)
+            << cacheEntry->toString();
+      } else {
+        if (!cacheEntryHelper.firstUse()) {
+          ASSERT_EQ(cacheEntryHelper.accessStats().lastUse, 0)
+              << cacheEntry->toString();
+        }
+        ASSERT_EQ(cacheEntryHelper.accessStats().numUses, 0)
             << cacheEntry->toString();
       }
     }
@@ -5417,5 +5431,154 @@ TEST_F(TableScanTest, rowId) {
         }),
     });
     AssertQueryBuilder(plan).split(split).assertResults(expected);
+  }
+}
+
+TEST_F(TableScanTest, footerIOCount) {
+  // We should issue only 1 IO for a split range that does not contain any
+  // stripe.
+  auto vector = makeRowVector({makeFlatVector<int64_t>(10, folly::identity)});
+  auto file = TempFilePath::create();
+  writeToFile(file->getPath(), {vector});
+  auto plan = PlanBuilder().tableScan(asRowType(vector->type())).planNode();
+  auto task =
+      AssertQueryBuilder(plan)
+          .split(makeHiveConnectorSplit(file->getPath(), 10'000, 10'000))
+          .assertResults(
+              BaseVector::create<RowVector>(vector->type(), 0, pool()));
+  auto stats = getTableScanRuntimeStats(task);
+  ASSERT_EQ(stats.at("numStorageRead").sum, 1);
+  ASSERT_GT(stats.at("footerBufferOverread").sum, 0);
+}
+
+TEST_F(TableScanTest, statsBasedFilterReorderDisabled) {
+  gflags::FlagSaver gflagSaver;
+  // Disable prefetch to avoid test flakiness.
+  FLAGS_cache_prefetch_min_pct = 200;
+
+  auto rowType = ROW(
+      {"c0", "c1", "c2", "c3"}, {INTEGER(), INTEGER(), INTEGER(), INTEGER()});
+  const auto numSplits{10};
+  auto filePaths = makeFilePaths(numSplits);
+  const auto vectorSize{1'000};
+  auto vectors = makeVectors(numSplits, vectorSize, rowType);
+  for (int i = 0; i < numSplits; ++i) {
+    if (i % 2 == 0) {
+      vectors[i]->childAt(1) = makeFlatVector<int32_t>(
+          vectorSize, [](vector_size_t row) { return 3 * row; });
+      vectors[i]->childAt(3) = makeFlatVector<int32_t>(
+          vectorSize, [](vector_size_t row) { return 2 * row; });
+    } else {
+      vectors[i]->childAt(1) = makeFlatVector<int32_t>(
+          vectorSize, [](vector_size_t row) { return 2 * row; });
+      vectors[i]->childAt(3) = makeFlatVector<int32_t>(
+          vectorSize, [](vector_size_t row) { return 3 * row; });
+    }
+  }
+  for (int32_t i = 0; i < vectors.size(); ++i) {
+    writeToFile(filePaths[i]->getPath(), vectors[i]);
+  }
+  createDuckDbTable(vectors);
+
+  for (auto disableReoder : {false}) {
+    SCOPED_TRACE(fmt::format("disableReoder {}", disableReoder));
+    auto* cache = cache::AsyncDataCache::getInstance();
+    cache->clear();
+
+    auto tableHandle = makeTableHandle(
+        // Set the filter conditions can't leverage the column stats.
+        SubfieldFiltersBuilder()
+            .add("c1", in({1, 7, 11}, true))
+            .add("c3", in({1, 7, 11}, true))
+            .build(),
+        nullptr,
+        "hive_table",
+        rowType);
+
+    auto assignments = allRegularColumns(rowType);
+
+    auto plan = PlanBuilder()
+                    .startTableScan()
+                    // Do not materialize the filter column.
+                    .outputType(ROW({"c0"}, {INTEGER()}))
+                    .tableHandle(tableHandle)
+                    .assignments(assignments)
+                    .endTableScan()
+                    .planNode();
+    // First run.
+    {
+      auto task =
+          AssertQueryBuilder(plan, duckDbQueryRunner_)
+              .maxDrivers(1)
+              .connectorSessionProperty(
+                  kHiveConnectorId,
+                  connector::hive::HiveConfig::
+                      kReadStatsBasedFilterReorderDisabledSession,
+                  disableReoder ? "true" : "false")
+              // Disable coalesce so that each column stream has a separate read
+              // per split at least.
+              .connectorSessionProperty(
+                  kHiveConnectorId,
+                  connector::hive::HiveConfig::kMaxCoalescedBytesSession,
+                  "1")
+              // Generate small reads to trigger storage reads when filter
+              // reorderiing is enabled.
+              .connectorSessionProperty(
+                  kHiveConnectorId,
+                  connector::hive::HiveConfig::kLoadQuantumSession,
+                  "8")
+              // Disable coalesce so that each column stream has a separate read
+              // per split at least.
+              .config(QueryConfig::kMaxOutputBatchRows, "10")
+              .config(QueryConfig::kMaxSplitPreloadPerDriver, "2")
+              .splits(makeHiveConnectorSplits(filePaths))
+              .assertResults(
+                  "SELECT c0 FROM tmp WHERE (c1 IN (1,7,11) OR c1 IS NULL) AND (c3 IN (1,7,11)  OR c3 IS NULL)");
+
+      auto tableScanStats = getTableScanStats(task);
+      ASSERT_EQ(tableScanStats.customStats.count("storageReadBytes"), 1);
+      ASSERT_GT(tableScanStats.customStats["storageReadBytes"].sum, 0);
+      ASSERT_EQ(tableScanStats.customStats["storageReadBytes"].count, 1);
+      ASSERT_EQ(tableScanStats.numSplits, numSplits);
+    }
+
+    {
+      auto task =
+          AssertQueryBuilder(plan, duckDbQueryRunner_)
+              .maxDrivers(1)
+              .connectorSessionProperty(
+                  kHiveConnectorId,
+                  connector::hive::HiveConfig::
+                      kReadStatsBasedFilterReorderDisabledSession,
+                  disableReoder ? "true" : "false")
+              .connectorSessionProperty(
+                  kHiveConnectorId,
+                  connector::hive::HiveConfig::kMaxCoalescedBytesSession,
+                  "1")
+              // Generate small reads to trigger storage reads when filter
+              // reorderiing is enabled.
+              .connectorSessionProperty(
+                  kHiveConnectorId,
+                  connector::hive::HiveConfig::kLoadQuantumSession,
+                  "8")
+              .config(QueryConfig::kMaxOutputBatchRows, "10")
+              .config(QueryConfig::kMaxSplitPreloadPerDriver, "2")
+              .splits(makeHiveConnectorSplits(filePaths))
+              .assertResults(
+                  "SELECT c0 FROM tmp WHERE (c1 IN (1,7,11) OR c1 IS NULL) AND (c3 IN (1,7,11)  OR c3 IS NULL)");
+
+      auto tableScanStats = getTableScanStats(task);
+      if (disableReoder) {
+        ASSERT_EQ(tableScanStats.customStats.count("storageReadBytes"), 0);
+      } else {
+        if (tableScanStats.customStats.count("storageReadBytes") == 0) {
+          continue;
+        }
+        ASSERT_EQ(tableScanStats.customStats.count("storageReadBytes"), 1);
+        ASSERT_GT(tableScanStats.customStats["storageReadBytes"].sum, 0);
+        ASSERT_EQ(tableScanStats.customStats["storageReadBytes"].count, 1);
+      }
+      ASSERT_EQ(tableScanStats.numSplits, numSplits);
+    }
   }
 }

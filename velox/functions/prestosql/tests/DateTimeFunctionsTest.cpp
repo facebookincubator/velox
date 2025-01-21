@@ -2375,6 +2375,16 @@ TEST_F(DateTimeFunctionsTest, dateAddTimestamp) {
           "year",
           -2,
           Timestamp(1582970400, 500'999'999) /*2020-02-29 10:00:00.500*/));
+
+  // Test cases where the result would end up in the nonexistent gap between
+  // daylight savings time and standard time. 2023-03-12 02:30:00.000 does not
+  // exist in America/Los_Angeles since that hour is skipped.
+  EXPECT_EQ(
+      Timestamp(1678617000, 0), /*2023-03-12 03:30:00*/
+      dateAdd("day", 45, Timestamp(1674729000, 0) /*2023-01-26 02:30:00*/));
+  EXPECT_EQ(
+      Timestamp(1678617000, 0), /*2023-03-12 03:30:00*/
+      dateAdd("day", -45, Timestamp(1682501400, 0) /*2023-04-26 02:30:00*/));
 }
 
 TEST_F(DateTimeFunctionsTest, dateAddTimestampWithTimeZone) {
@@ -2553,6 +2563,17 @@ TEST_F(DateTimeFunctionsTest, dateAddTimestampWithTimeZone) {
       "2023-03-11 00:00:00.000 America/Los_Angeles",
       dateAddAndCast(
           "year", -1, "2024-03-11 00:00:00.000 America/Los_Angeles"));
+
+  // Test cases where the result would end up in the nonexistent gap between
+  // daylight savings time and standard time. 2023-03-12 02:30:00.000 does not
+  // exist in America/Los_Angeles since that hour is skipped.
+  EXPECT_EQ(
+      "2023-03-12 03:30:00.000 America/Los_Angeles",
+      dateAddAndCast("day", 45, "2023-01-26 02:30:00.000 America/Los_Angeles"));
+  EXPECT_EQ(
+      "2023-03-12 03:30:00.000 America/Los_Angeles",
+      dateAddAndCast(
+          "day", -45, "2023-04-26 02:30:00.000 America/Los_Angeles"));
 }
 
 TEST_F(DateTimeFunctionsTest, dateDiffDate) {
@@ -3776,8 +3797,6 @@ TEST_F(DateTimeFunctionsTest, formatDateTime) {
 
   // User format errors or unsupported errors.
   EXPECT_THROW(
-      formatDatetime(parseTimestamp("1970-01-01"), "x"), VeloxUserError);
-  EXPECT_THROW(
       formatDatetime(parseTimestamp("1970-01-01"), "q"), VeloxUserError);
   EXPECT_THROW(
       formatDatetime(parseTimestamp("1970-01-01"), "'abcd"), VeloxUserError);
@@ -4101,9 +4120,6 @@ TEST_F(DateTimeFunctionsTest, dateFormat) {
   VELOX_ASSERT_THROW(
       dateFormat(timestamp, "%X"),
       "Date format specifier is not supported: %X");
-  VELOX_ASSERT_THROW(
-      dateFormat(timestamp, "%x"),
-      "Date format specifier is not supported: WEEK_YEAR");
 }
 
 TEST_F(DateTimeFunctionsTest, dateFormatTimestampWithTimezone) {
@@ -4146,6 +4162,24 @@ TEST_F(DateTimeFunctionsTest, dateFormatTimestampWithTimezone) {
       "69-May-11 20:04:45 PM",
       dateFormatTimestampWithTimezone(
           "%y-%M-%e %T %p", TimestampWithTimezone(-20220915000, "-03:00")));
+}
+
+TEST_F(DateTimeFunctionsTest, test_week_year) {
+  const auto dateFormat = [&](std::optional<Timestamp> timestamp,
+                              std::optional<std::string> format) {
+    return evaluateOnce<std::string>("date_format(c0, c1)", timestamp, format);
+  };
+  auto rst_wy = dateFormat(Timestamp(1609545600, 0), "%x");
+  EXPECT_EQ("2020", rst_wy);
+
+  EXPECT_EQ(
+      "1999-52",
+      dateFormat(parseTimestamp("1999-12-31 23:59:59.999"), "%x-%v"));
+  // 2023-01-01 is a Sunday, so it's part of the last week of 2022 (week 52)
+  // according to ISO week date system.
+  EXPECT_EQ(
+      "2022-52",
+      dateFormat(parseTimestamp("2023-01-01 00:00:00.000"), "%x-%v"));
 }
 
 TEST_F(DateTimeFunctionsTest, fromIso8601Date) {
@@ -4366,6 +4400,9 @@ TEST_F(DateTimeFunctionsTest, fromIso8601Timestamp) {
   VELOX_ASSERT_THROW(
       fromIso("1970-01-02T11:38:56.123 America/New_York"),
       R"(Unable to parse timestamp value: "1970-01-02T11:38:56.123 America/New_York")");
+  VELOX_ASSERT_THROW(
+      fromIso("1970-01-02T11:38:56+16:00:01"),
+      "Unknown timezone value: \"+16:00:01\"");
 
   VELOX_ASSERT_THROW(fromIso("T"), R"(Unable to parse timestamp value: "T")");
 

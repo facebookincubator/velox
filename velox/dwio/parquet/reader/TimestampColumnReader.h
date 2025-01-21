@@ -18,9 +18,23 @@
 
 #include "velox/dwio/parquet/reader/IntegerColumnReader.h"
 #include "velox/dwio/parquet/reader/ParquetColumnReader.h"
+#include "velox/dwio/parquet/thrift/ParquetThriftTypes.h"
 
 namespace facebook::velox::parquet {
 namespace {
+
+Timestamp toInt64Timestamp(int64_t value, TimestampPrecision filePrecision) {
+  switch (filePrecision) {
+    case TimestampPrecision::kMilliseconds:
+      return Timestamp::fromMillis(value);
+    case TimestampPrecision::kMicroseconds:
+      return Timestamp::fromMicros(value);
+    case TimestampPrecision::kNanoseconds:
+      return Timestamp::fromNanos(value);
+    default:
+      VELOX_UNREACHABLE();
+  }
+}
 
 Timestamp toInt96Timestamp(const int128_t& value) {
   // Convert int128_t to Int96 Timestamp by extracting days and nanos.
@@ -29,35 +43,84 @@ Timestamp toInt96Timestamp(const int128_t& value) {
   return Timestamp::fromDaysAndNanos(days, nanos);
 }
 
-// Range filter for Parquet Int96 Timestamp.
-class ParquetInt96TimestampRange final : public common::TimestampRange {
+// Range filter for Parquet Timestamp.
+template <typename T>
+class ParquetTimestampRange final : public common::TimestampRange {
  public:
+  // Use int128_t for Int96
+  static_assert(std::is_same_v<T, int64_t> || std::is_same_v<T, int128_t>);
+
   // @param lower Lower end of the range, inclusive.
   // @param upper Upper end of the range, inclusive.
   // @param nullAllowed Null values are passing the filter if true.
-  ParquetInt96TimestampRange(
+  // @param timestampUnit Unit of the Int64 Timestamp.
+  ParquetTimestampRange(
       const Timestamp& lower,
       const Timestamp& upper,
-      bool nullAllowed)
-      : TimestampRange(lower, upper, nullAllowed) {}
+      bool nullAllowed,
+      TimestampPrecision filePrecision)
+      : TimestampRange(lower, upper, nullAllowed),
+        filePrecision_(filePrecision) {}
 
   bool testInt128(const int128_t& value) const final {
-    const auto ts = toInt96Timestamp(value);
+    Timestamp ts;
+    if constexpr (std::is_same_v<T, int64_t>) {
+      ts = toInt64Timestamp(value, filePrecision_);
+    } else if constexpr (std::is_same_v<T, int128_t>) {
+      ts = toInt96Timestamp(value);
+    }
     return ts >= this->lower() && ts <= this->upper();
   }
+
+ private:
+  // Only used when T is int64_t.
+  const TimestampPrecision filePrecision_;
 };
 
 } // namespace
 
+template <typename T>
 class TimestampColumnReader : public IntegerColumnReader {
  public:
+  // Use int128_t for Int96
+  static_assert(std::is_same_v<T, int64_t> || std::is_same_v<T, int128_t>);
+
   TimestampColumnReader(
       const TypePtr& requestedType,
       std::shared_ptr<const dwio::common::TypeWithId> fileType,
       ParquetParams& params,
       common::ScanSpec& scanSpec)
       : IntegerColumnReader(requestedType, fileType, params, scanSpec),
-        timestampPrecision_(params.timestampPrecision()) {}
+        requestedPrecision_(params.timestampPrecision()) {
+    if constexpr (std::is_same_v<T, int64_t>) {
+      const auto typeWithId =
+          std::static_pointer_cast<const ParquetTypeWithId>(fileType_);
+      if (auto logicalType = typeWithId->logicalType_) {
+        VELOX_CHECK(logicalType->__isset.TIMESTAMP);
+        const auto unit = logicalType->TIMESTAMP.unit;
+        if (unit.__isset.MILLIS) {
+          filePrecision_ = TimestampPrecision::kMilliseconds;
+        } else if (unit.__isset.MICROS) {
+          filePrecision_ = TimestampPrecision::kMicroseconds;
+        } else if (unit.__isset.NANOS) {
+          filePrecision_ = TimestampPrecision::kNanoseconds;
+        } else {
+          VELOX_UNREACHABLE();
+        }
+      } else if (auto convertedType = typeWithId->convertedType_) {
+        if (convertedType == thrift::ConvertedType::type::TIMESTAMP_MILLIS) {
+          filePrecision_ = TimestampPrecision::kMilliseconds;
+        } else if (
+            convertedType == thrift::ConvertedType::type::TIMESTAMP_MICROS) {
+          filePrecision_ = TimestampPrecision::kMicroseconds;
+        } else {
+          VELOX_UNREACHABLE();
+        }
+      } else {
+        VELOX_NYI("Logical type and converted type are not provided.");
+      }
+    }
+  }
 
   bool hasBulkPath() const override {
     return false;
@@ -79,7 +142,15 @@ class TimestampColumnReader : public IntegerColumnReader {
       }
 
       const int128_t encoded = reinterpret_cast<int128_t&>(rawValues[i]);
-      rawValues[i] = toInt96Timestamp(encoded).toPrecision(timestampPrecision_);
+      if constexpr (std::is_same_v<T, int64_t>) {
+        rawValues[i] = toInt64Timestamp(encoded, filePrecision_);
+        if (needsConversion_) {
+          rawValues[i] = rawValues[i].toPrecision(requestedPrecision_);
+        }
+      } else if constexpr (std::is_same_v<T, int128_t>) {
+        rawValues[i] =
+            toInt96Timestamp(encoded).toPrecision(requestedPrecision_);
+      }
     }
   }
 
@@ -93,14 +164,13 @@ class TimestampColumnReader : public IntegerColumnReader {
       const RowSet& rows,
       ExtractValues extractValues) {
     if (auto* range = dynamic_cast<common::TimestampRange*>(filter)) {
-      // Convert TimestampRange to ParquetInt96TimestampRange.
-      ParquetInt96TimestampRange newRange = ParquetInt96TimestampRange(
-          range->lower(), range->upper(), range->nullAllowed());
+      ParquetTimestampRange<T> newRange{
+          range->lower(), range->upper(), range->nullAllowed(), filePrecision_};
       this->readWithVisitor(
           rows,
           dwio::common::ColumnVisitor<
               int128_t,
-              ParquetInt96TimestampRange,
+              common::TimestampRange,
               ExtractValues,
               isDense>(newRange, this, rows, extractValues));
     } else {
@@ -128,7 +198,13 @@ class TimestampColumnReader : public IntegerColumnReader {
  private:
   // The requested precision can be specified from HiveConfig to read timestamp
   // from Parquet.
-  const TimestampPrecision timestampPrecision_;
+  const TimestampPrecision requestedPrecision_;
+
+  // The precision of int64_t timestamp in Parquet. Only set when T is int64_t.
+  TimestampPrecision filePrecision_;
+
+  // Whether Int64 Timestamp needs to be converted to the requested precision.
+  bool needsConversion_ = false;
 };
 
 } // namespace facebook::velox::parquet

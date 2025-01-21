@@ -224,7 +224,7 @@ void PageReader::prepareDataPageV1(const PageHeader& pageHeader, int64_t row) {
   auto pageEnd = pageData_ + pageHeader.uncompressed_page_size;
   if (maxRepeat_ > 0) {
     uint32_t repeatLength = readField<int32_t>(pageData_);
-    repeatDecoder_ = std::make_unique<arrow::util::RleDecoder>(
+    repeatDecoder_ = std::make_unique<RleDecoder>(
         reinterpret_cast<const uint8_t*>(pageData_),
         repeatLength,
         ::arrow::bit_util::NumRequiredBits(maxRepeat_));
@@ -240,7 +240,7 @@ void PageReader::prepareDataPageV1(const PageHeader& pageHeader, int64_t row) {
           pageData_ + defineLength,
           ::arrow::bit_util::NumRequiredBits(maxDefine_));
     }
-    wideDefineDecoder_ = std::make_unique<arrow::util::RleDecoder>(
+    wideDefineDecoder_ = std::make_unique<RleDecoder>(
         reinterpret_cast<const uint8_t*>(pageData_),
         defineLength,
         ::arrow::bit_util::NumRequiredBits(maxDefine_));
@@ -281,7 +281,7 @@ void PageReader::prepareDataPageV2(const PageHeader& pageHeader, int64_t row) {
   pageData_ = readBytes(bytes, pageBuffer_);
 
   if (repeatLength) {
-    repeatDecoder_ = std::make_unique<arrow::util::RleDecoder>(
+    repeatDecoder_ = std::make_unique<RleDecoder>(
         reinterpret_cast<const uint8_t*>(pageData_),
         repeatLength,
         ::arrow::bit_util::NumRequiredBits(maxRepeat_));
@@ -352,6 +352,10 @@ void PageReader::prepareDictionary(const PageHeader& pageHeader) {
         auto numVeloxBytes = dictionary_.numValues * veloxTypeLength;
         dictionary_.values =
             AlignedBuffer::allocate<char>(numVeloxBytes, &pool_);
+      } else if (type_->type()->isTimestamp()) {
+        const auto numVeloxBytes = dictionary_.numValues * sizeof(int128_t);
+        dictionary_.values =
+            AlignedBuffer::allocate<char>(numVeloxBytes, &pool_);
       } else {
         dictionary_.values = AlignedBuffer::allocate<char>(numBytes, &pool_);
       }
@@ -369,6 +373,15 @@ void PageReader::prepareDictionary(const PageHeader& pageHeader) {
           parquetType == thrift::Type::INT32) {
         auto values = dictionary_.values->asMutable<int64_t>();
         auto parquetValues = dictionary_.values->asMutable<int32_t>();
+        for (auto i = dictionary_.numValues - 1; i >= 0; --i) {
+          // Expand the Parquet type length values to Velox type length.
+          // We start from the end to allow in-place expansion.
+          values[i] = parquetValues[i];
+        }
+      } else if (type_->type()->isTimestamp()) {
+        VELOX_DCHECK_EQ(parquetType, thrift::Type::INT64);
+        auto values = dictionary_.values->asMutable<int128_t>();
+        auto parquetValues = dictionary_.values->asMutable<int64_t>();
         for (auto i = dictionary_.numValues - 1; i >= 0; --i) {
           // Expand the Parquet type length values to Velox type length.
           // We start from the end to allow in-place expansion.

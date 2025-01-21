@@ -26,18 +26,6 @@
 
 namespace facebook::velox {
 
-enum UTF8CharList {
-  ASCII = 0, // Ascii character set.
-  UNICODE_CASE_SENSITIVE = 1, // Unicode scripts that support case.
-  EXTENDED_UNICODE = 2, // Extended Unicode: Arabic, Devanagiri etc
-  MATHEMATICAL_SYMBOLS = 3 // Mathematical Symbols.
-};
-
-struct DataSpec {
-  bool includeNaN;
-  bool includeInfinity;
-};
-
 const std::vector<TypePtr>& defaultScalarTypes();
 
 /// VectorFuzzer is a helper class that generates randomized vectors and their
@@ -148,6 +136,10 @@ class VectorFuzzer {
     /// vectors. The generated lazy vectors can also have any number of
     /// dictionary layers on top of them.
     bool allowLazyVector{false};
+
+    bool allowSlice{true};
+    bool allowConstantVector{true};
+    bool allowDictionaryVector{true};
 
     /// Data spec for randomly generated data.
     DataSpec dataSpec{false, false};
@@ -271,6 +263,15 @@ class VectorFuzzer {
   TypePtr randType(int maxDepth = 5);
 
   TypePtr randType(const std::vector<TypePtr>& scalarTypes, int maxDepth = 5);
+
+  /// Generate a random RowType with random fields including maps, vectors, and
+  /// arrays. minWidth limits the minimum width of the RowType, i.e., the number
+  /// of streams involved when reading or writing data of this type.
+  TypePtr randRowTypeByWidth(int minWidth);
+
+  TypePtr randRowTypeByWidth(
+      const std::vector<TypePtr>& scalarTypes,
+      int minWidth);
 
   /// Same as the function above, but only generate orderable types.
   /// MAP types are not generated as they are not orderable.
@@ -436,6 +437,12 @@ RowTypePtr randRowType(
     FuzzerGenerator& rng,
     const std::vector<TypePtr>& scalarTypes,
     int maxDepth = 5);
+
+/// Generate a random RowType with a minimal width.
+TypePtr randRowTypeByWidth(
+    FuzzerGenerator& rng,
+    const std::vector<TypePtr>& scalarTypes,
+    int minWidth);
 
 /// Default set of scalar types to be chosen from when generating random types.
 const std::vector<TypePtr>& defaultScalarTypes();

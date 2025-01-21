@@ -23,6 +23,7 @@
 #include "velox/exec/tests/utils/TempDirectoryPath.h"
 
 #include <fcntl.h>
+#include <folly/executors/IOThreadPoolExecutor.h>
 #include <folly/executors/QueuedImmediateExecutor.h>
 #include <glog/logging.h>
 #include <gtest/gtest.h>
@@ -100,7 +101,8 @@ class SsdFileTest : public testing::Test {
         checkpointIntervalBytes,
         disableFileCow,
         checksumEnabled,
-        checksumReadVerificationEnabled);
+        checksumReadVerificationEnabled,
+        ssdExecutor());
     ssdFile_ = std::make_unique<SsdFile>(config);
     if (ssdFile_ != nullptr) {
       ssdFileHelper_ =
@@ -165,6 +167,12 @@ class SsdFileTest : public testing::Test {
         }
       }
     }
+  }
+
+  static folly::IOThreadPoolExecutor* ssdExecutor() {
+    static std::unique_ptr<folly::IOThreadPoolExecutor> ssdExecutor =
+        std::make_unique<folly::IOThreadPoolExecutor>(20);
+    return ssdExecutor.get();
   }
 
   // Gets consecutive entries from file 'fileId' starting at 'startOffset' with
@@ -546,7 +554,7 @@ TEST_F(SsdFileTest, fileCorruption) {
   // Corrupt the Checkpoint file. Cache cannot be recovered. All entries are
   // lost.
   ssdFile_->checkpoint(true);
-  corruptSsdFile(ssdFile_->getCheckpointFilePath());
+  corruptSsdFile(ssdFile_->checkpointFilePath());
   stats.clear();
   ssdFile_->updateStats(stats);
   EXPECT_EQ(stats.readCheckpointErrors, 0);

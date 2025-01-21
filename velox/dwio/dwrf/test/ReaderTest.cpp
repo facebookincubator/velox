@@ -1392,7 +1392,7 @@ TEST_F(TestReader, fileColumnNamesReadAsLowerCaseComplexStruct) {
 TEST_F(TestReader, TestStripeSizeCallback) {
   dwio::common::ReaderOptions readerOpts{pool()};
   readerOpts.setFilePreloadThreshold(0);
-  readerOpts.setFooterEstimatedSize(4);
+  readerOpts.setFooterEstimatedSize(17);
   RowReaderOptions rowReaderOpts;
 
   std::shared_ptr<const RowType> requestedType = std::dynamic_pointer_cast<
@@ -1420,7 +1420,7 @@ TEST_F(TestReader, TestStripeSizeCallback) {
 TEST_F(TestReader, TestStripeSizeCallbackLimitsOneStripe) {
   dwio::common::ReaderOptions readerOpts{pool()};
   readerOpts.setFilePreloadThreshold(0);
-  readerOpts.setFooterEstimatedSize(4);
+  readerOpts.setFooterEstimatedSize(17);
   RowReaderOptions rowReaderOpts;
 
   std::shared_ptr<const RowType> requestedType = std::dynamic_pointer_cast<
@@ -1449,7 +1449,7 @@ TEST_F(TestReader, TestStripeSizeCallbackLimitsOneStripe) {
 TEST_F(TestReader, TestStripeSizeCallbackLimitsTwoStripe) {
   dwio::common::ReaderOptions readerOpts{pool()};
   readerOpts.setFilePreloadThreshold(0);
-  readerOpts.setFooterEstimatedSize(4);
+  readerOpts.setFooterEstimatedSize(17);
   RowReaderOptions rowReaderOpts;
 
   std::shared_ptr<const RowType> requestedType = std::dynamic_pointer_cast<
@@ -1713,7 +1713,7 @@ VELOX_INSTANTIATE_TEST_SUITE_P(
 TEST_F(TestReader, testEmptyFile) {
   MemorySink sink{1024, {.pool = pool()}};
   DataBufferHolder holder{*pool(), 1024, 0, DEFAULT_PAGE_GROW_RATIO, &sink};
-  BufferedOutputStream output{holder};
+  facebook::velox::dwio::common::BufferedOutputStream output{holder};
 
   proto::Footer footer;
   footer.set_numberofrows(0);

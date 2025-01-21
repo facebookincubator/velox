@@ -250,8 +250,7 @@ void HashProbe::maybeSetupInputSpiller(
 
   // If 'spillInputPartitionIds_' is not empty, then we set up a spiller to
   // spill the incoming probe inputs.
-  inputSpiller_ = std::make_unique<Spiller>(
-      Spiller::Type::kHashJoinProbe,
+  inputSpiller_ = std::make_unique<NoRowContainerSpiller>(
       probeType_,
       HashBitRange(
           spillInputPartitionIds_.begin()->partitionBitOffset(),
@@ -302,8 +301,8 @@ std::optional<uint64_t> HashProbe::estimatedRowSize(
   std::vector<RowColumn::Stats> varSizeListColumnsStats;
   varSizeListColumnsStats.reserve(varSizedColumns.size());
   for (uint32_t i = 0; i < varSizedColumns.size(); ++i) {
-    auto statsOpt = columnStats(varSizedColumns[i]);
-    if (!statsOpt.has_value()) {
+    const auto statsOpt = columnStats(varSizedColumns[i]);
+    if (!statsOpt.has_value() || !statsOpt->minMaxColumnStatsValid()) {
       return std::nullopt;
     }
     varSizeListColumnsStats.push_back(statsOpt.value());
@@ -428,7 +427,9 @@ void HashProbe::asyncWaitForHashTable() {
     }
   } else if (
       (isInnerJoin(joinType_) || isLeftSemiFilterJoin(joinType_) ||
-       isRightSemiFilterJoin(joinType_) || isRightSemiProjectJoin(joinType_)) &&
+       isRightSemiFilterJoin(joinType_) ||
+       (isRightSemiProjectJoin(joinType_) && !nullAware_) ||
+       isRightJoin(joinType_)) &&
       table_->hashMode() != BaseHashTable::HashMode::kHash && !isSpillInput() &&
       !hasMoreSpillData()) {
     // Find out whether there are any upstream operators that can accept dynamic
@@ -443,13 +444,9 @@ void HashProbe::asyncWaitForHashTable() {
     const auto channels = operatorCtx_->driverCtx()->driver->canPushdownFilters(
         this, keyChannels_);
 
-    // Null aware Right Semi Project join needs to know whether there are any
-    // nulls on the probe side. Hence, cannot filter these out.
-    const auto nullAllowed = isRightSemiProjectJoin(joinType_) && nullAware_;
-
     for (auto i = 0; i < keyChannels_.size(); ++i) {
       if (channels.find(keyChannels_[i]) != channels.end()) {
-        if (auto filter = buildHashers[i]->getFilter(nullAllowed)) {
+        if (auto filter = buildHashers[i]->getFilter(/*nullAllowed=*/false)) {
           dynamicFilters_.emplace(keyChannels_[i], std::move(filter));
         }
       }
@@ -539,7 +536,7 @@ void HashProbe::spillInput(RowVectorPtr& input) {
   for (auto row = 0; row < numInput; ++row) {
     const auto partition = singlePartition.has_value() ? singlePartition.value()
                                                        : spillPartitions_[row];
-    if (!inputSpiller_->isSpilled(partition)) {
+    if (!inputSpiller_->state().isPartitionSpilled(partition)) {
       rawNonSpillInputIndicesBuffer_[numNonSpillingInput++] = row;
       continue;
     }
@@ -559,7 +556,7 @@ void HashProbe::spillInput(RowVectorPtr& input) {
     if (numSpillInputs == 0) {
       continue;
     }
-    VELOX_CHECK(inputSpiller_->isSpilled(partition));
+    VELOX_CHECK(inputSpiller_->state().isPartitionSpilled(partition));
     inputSpiller_->spill(
         partition,
         wrap(numSpillInputs, spillInputIndicesBuffers_[partition], input));
@@ -636,7 +633,8 @@ void HashProbe::clearDynamicFilters() {
   //  * hash table has a single key with unique values,
   //  * build side has no dependent columns.
   if (keyChannels_.size() == 1 && !table_->hasDuplicateKeys() &&
-      tableOutputProjections_.empty() && !filter_ && !dynamicFilters_.empty()) {
+      tableOutputProjections_.empty() && !filter_ && !dynamicFilters_.empty() &&
+      !isRightJoin(joinType_)) {
     canReplaceWithDynamicFilter_ = true;
   }
 
@@ -1220,21 +1218,24 @@ void HashProbe::prepareFilterRowsForNullAwareJoin(
       filterInputColumnDecodedVector_.decode(
           *filterInput->childAt(projection.outputChannel), filterInputRows_);
       if (filterInputColumnDecodedVector_.mayHaveNulls()) {
-        SelectivityVector nullsInActiveRows(numRows);
-        memcpy(
-            nullsInActiveRows.asMutableRange().bits(),
-            filterInputColumnDecodedVector_.nulls(&filterInputRows_),
-            bits::nbytes(numRows));
-        // All rows that are not active count as non-null here.
-        bits::orWithNegatedBits(
-            nullsInActiveRows.asMutableRange().bits(),
-            filterInputRows_.asRange().bits(),
-            0,
-            numRows);
-        // NOTE: the false value of a raw null bit indicates null so we OR
-        // with negative of the raw bit.
-        bits::orWithNegatedBits(
-            rawNullRows, nullsInActiveRows.asRange().bits(), 0, numRows);
+        if (const uint64_t* nulls =
+                filterInputColumnDecodedVector_.nulls(&filterInputRows_)) {
+          SelectivityVector nullsInActiveRows(numRows);
+          memcpy(
+              nullsInActiveRows.asMutableRange().bits(),
+              nulls,
+              bits::nbytes(numRows));
+          // All rows that are not active count as non-null here.
+          bits::orWithNegatedBits(
+              nullsInActiveRows.asMutableRange().bits(),
+              filterInputRows_.asRange().bits(),
+              0,
+              numRows);
+          // NOTE: the false value of a raw null bit indicates null so we OR
+          // with negative of the raw bit.
+          bits::orWithNegatedBits(
+              rawNullRows, nullsInActiveRows.asRange().bits(), 0, numRows);
+        }
       }
     }
     nullFilterInputRows_.updateBounds();
@@ -1630,7 +1631,7 @@ void HashProbe::noMoreInputInternal() {
     VELOX_CHECK_NOT_NULL(inputSpiller_);
     VELOX_CHECK_EQ(
         spillInputPartitionIds_.size(),
-        inputSpiller_->spilledPartitionSet().size());
+        inputSpiller_->state().spilledPartitionSet().size());
     inputSpiller_->finishSpill(inputSpillPartitionSet_);
     VELOX_CHECK_EQ(spillStats_.rlock()->spillSortTimeNanos, 0);
   }
@@ -1889,12 +1890,8 @@ void HashProbe::spillOutput() {
     return;
   }
   // We spill all the outputs produced from 'input_' into a single partition.
-  auto outputSpiller = std::make_unique<Spiller>(
-      Spiller::Type::kHashJoinProbe,
-      outputType_,
-      HashBitRange{},
-      spillConfig(),
-      &spillStats_);
+  auto outputSpiller = std::make_unique<NoRowContainerSpiller>(
+      outputType_, HashBitRange{}, spillConfig(), &spillStats_);
   outputSpiller->setPartitionsSpilled({0});
 
   RowVectorPtr output{nullptr};
@@ -1918,7 +1915,7 @@ void HashProbe::spillOutput() {
         isRightSemiFilterJoin(joinType_) || isRightSemiProjectJoin(joinType_));
     VELOX_CHECK((output == nullptr) && (input_ != nullptr));
   }
-  VELOX_CHECK_LE(outputSpiller->spilledPartitionSet().size(), 1);
+  VELOX_CHECK_LE(outputSpiller->state().spilledPartitionSet().size(), 1);
 
   VELOX_CHECK(spillOutputPartitionSet_.empty());
   outputSpiller->finishSpill(spillOutputPartitionSet_);

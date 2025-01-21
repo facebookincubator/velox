@@ -60,22 +60,23 @@ std::shared_ptr<common::ScanSpec> makeScanSpec(
     const std::unordered_map<std::string, std::shared_ptr<HiveColumnHandle>>&
         infoColumns,
     const SpecialColumnNames& specialColumns,
+    bool disableStatsBasedFilterReorder,
     memory::MemoryPool* pool);
 
 void configureReaderOptions(
-    dwio::common::ReaderOptions& readerOptions,
     const std::shared_ptr<const HiveConfig>& config,
     const ConnectorQueryCtx* connectorQueryCtx,
     const std::shared_ptr<const HiveTableHandle>& hiveTableHandle,
-    const std::shared_ptr<const HiveConnectorSplit>& hiveSplit);
+    const std::shared_ptr<const HiveConnectorSplit>& hiveSplit,
+    dwio::common::ReaderOptions& readerOptions);
 
 void configureReaderOptions(
-    dwio::common::ReaderOptions& readerOptions,
     const std::shared_ptr<const HiveConfig>& hiveConfig,
     const ConnectorQueryCtx* connectorQueryCtx,
     const RowTypePtr& fileSchema,
     const std::shared_ptr<const HiveConnectorSplit>& hiveSplit,
-    const std::unordered_map<std::string, std::string>& tableParameters = {});
+    const std::unordered_map<std::string, std::string>& tableParameters,
+    dwio::common::ReaderOptions& readerOptions);
 
 void configureRowReaderOptions(
     const std::unordered_map<std::string, std::string>& tableParameters,
@@ -109,12 +110,5 @@ core::TypedExprPtr extractFiltersFromRemainingFilter(
     bool negated,
     SubfieldFilters& filters,
     double& sampleRate);
-
-/// Updates the file format's WriteOptions based on the HiveConfig.
-void updateWriterOptionsFromHiveConfig(
-    dwio::common::FileFormat fileFormat,
-    const std::shared_ptr<const HiveConfig>& hiveConfig,
-    const config::ConfigBase* sessionProperties,
-    std::shared_ptr<dwio::common::WriterOptions>& writerOptions);
 
 } // namespace facebook::velox::connector::hive

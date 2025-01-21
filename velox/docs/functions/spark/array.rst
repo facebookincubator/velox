@@ -66,6 +66,15 @@ Array Functions
 
         SELECT array_intersect(array(1, 2, 3), array(1, 3, 5)); -- [1,3]
 
+.. spark:function:: array_join(x, delimiter[, nullReplacement]) -> varchar
+
+    Concatenates the elements of the given array using the ``delimiter`` and an optional string to replace nulls.
+    If no value is set for ``nullReplacement``, any null value is filtered. ::
+
+        SELECT array_join(array('1', '2', '3'), ',') -- '1,2,3'
+        SELECT array_join(array('1', NULL, '2'), ',') -- '1,2'
+        SELECT array_join(array('1', NULL, '2'), ',', '0') -- '1,0,2'
+
 .. spark:function:: array_max(array(E)) -> E
 
     Returns maximum non-NULL element of the array. Returns NULL if array is empty or all elements are NULL.
@@ -196,7 +205,7 @@ Array Functions
 .. spark:function:: in(value, array(E)) -> boolean
 
     Returns true if value matches at least one of the elements of the array.
-    Supports BOOLEAN, REAL, DOUBLE, BIGINT, VARCHAR, TIMESTAMP, DATE input types.
+    Supports BOOLEAN, REAL, DOUBLE, BIGINT, VARCHAR, TIMESTAMP, DATE, DECIMAL input types.
 
 .. spark:function:: shuffle(array(E), seed) -> array(E)
 

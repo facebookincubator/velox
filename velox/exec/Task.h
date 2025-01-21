@@ -16,6 +16,7 @@
 #pragma once
 
 #include "velox/common/base/SkewedPartitionBalancer.h"
+#include "velox/common/base/TraceConfig.h"
 #include "velox/core/PlanFragment.h"
 #include "velox/core/QueryCtx.h"
 #include "velox/exec/Driver.h"
@@ -23,10 +24,10 @@
 #include "velox/exec/MemoryReclaimer.h"
 #include "velox/exec/MergeSource.h"
 #include "velox/exec/Split.h"
+#include "velox/exec/TableScan.h"
 #include "velox/exec/TaskStats.h"
 #include "velox/exec/TaskStructs.h"
 #include "velox/exec/TaskTraceWriter.h"
-#include "velox/exec/TraceConfig.h"
 #include "velox/vector/ComplexVector.h"
 
 namespace facebook::velox::exec {
@@ -52,74 +53,27 @@ class Task : public std::enable_shared_from_this<Task> {
     kParallel,
   };
 
-/// Creates a task to execute a plan fragment, but doesn't start execution
-/// until Task::start() method is called.
-/// @param taskId Unique task identifier.
-/// @param planFragment Plan fragment.
-/// @param destination Partition number if task is expected to receive data
-/// for a particular partition from a set of upstream tasks participating in a
-/// distributed execution. Used to initialize an ExchangeClient. Ignored if
-/// plan fragment doesn't have an ExchangeNode.
-/// @param queryCtx Query context containing MemoryPool and MemoryAllocator
-/// instances to use for memory allocations during execution, executor to
-/// schedule operators on, and session properties.
-/// @param mode Execution mode for this task. The task can be executed in
-/// Serial and Parallel mode.
-/// @param consumer Optional factory function to get callbacks to pass the
-/// results of the execution. In a parallel execution mode, results from each
-/// thread are passed on to a separate consumer.
-/// @param onError Optional callback to receive an exception if task
-/// execution fails.
-/// @param memoryArbitrationPriority Optional priority on task that, in a
-/// multi task system, is used for memory arbitration to decide the order of
-/// reclaiming.
-#ifdef VELOX_ENABLE_BACKWARD_COMPATIBILITY
-  // TODO: Remove this overload once call sites are updated.
-  static std::shared_ptr<Task> create(
-      const std::string& taskId,
-      core::PlanFragment planFragment,
-      int destination,
-      std::shared_ptr<core::QueryCtx> queryCtx,
-      ExecutionMode mode,
-      Consumer consumer = nullptr,
-      std::function<void(std::exception_ptr)> onError = nullptr) {
-    return Task::create(
-        taskId,
-        std::move(planFragment),
-        destination,
-        std::move(queryCtx),
-        mode,
-        (consumer ? [c = std::move(consumer)]() { return c; }
-                  : ConsumerSupplier{}),
-        std::move(onError));
-  }
-
-  // TODO: Remove this overload once call sites are updated.
-  static std::shared_ptr<Task> create(
-      const std::string& taskId,
-      core::PlanFragment planFragment,
-      int destination,
-      std::shared_ptr<core::QueryCtx> queryCtx,
-      ExecutionMode mode,
-      ConsumerSupplier consumerSupplier,
-      std::function<void(std::exception_ptr)> onError = nullptr) {
-    auto task = std::shared_ptr<Task>(new Task(
-        taskId,
-        std::move(planFragment),
-        destination,
-        std::move(queryCtx),
-        mode,
-        std::move(consumerSupplier),
-        0,
-        std::move(onError)));
-    task->initTaskPool();
-    task->addToTaskList();
-    return task;
-  }
-#else
-  // TODO: Move the definition of this function to the cpp file after above is
-  // cleaned up. The temporary move of definition from cpp to header is because
-  // compatibility macro does not work in cpp file.
+  /// Creates a task to execute a plan fragment, but doesn't start execution
+  /// until Task::start() method is called.
+  /// @param taskId Unique task identifier.
+  /// @param planFragment Plan fragment.
+  /// @param destination Partition number if task is expected to receive data
+  /// for a particular partition from a set of upstream tasks participating in a
+  /// distributed execution. Used to initialize an ExchangeClient. Ignored if
+  /// plan fragment doesn't have an ExchangeNode.
+  /// @param queryCtx Query context containing MemoryPool and MemoryAllocator
+  /// instances to use for memory allocations during execution, executor to
+  /// schedule operators on, and session properties.
+  /// @param mode Execution mode for this task. The task can be executed in
+  /// Serial and Parallel mode.
+  /// @param consumer Optional factory function to get callbacks to pass the
+  /// results of the execution. In a parallel execution mode, results from each
+  /// thread are passed on to a separate consumer.
+  /// @param onError Optional callback to receive an exception if task
+  /// execution fails.
+  /// @param memoryArbitrationPriority Optional priority on task that, in a
+  /// multi task system, is used for memory arbitration to decide the order of
+  /// reclaiming.
   static std::shared_ptr<Task> create(
       const std::string& taskId,
       core::PlanFragment planFragment,
@@ -128,18 +82,7 @@ class Task : public std::enable_shared_from_this<Task> {
       ExecutionMode mode,
       Consumer consumer = nullptr,
       int32_t memoryArbitrationPriority = 0,
-      std::function<void(std::exception_ptr)> onError = nullptr) {
-    return Task::create(
-        taskId,
-        std::move(planFragment),
-        destination,
-        std::move(queryCtx),
-        mode,
-        (consumer ? [c = std::move(consumer)]() { return c; }
-                  : ConsumerSupplier{}),
-        memoryArbitrationPriority,
-        std::move(onError));
-  }
+      std::function<void(std::exception_ptr)> onError = nullptr);
 
   static std::shared_ptr<Task> create(
       const std::string& taskId,
@@ -149,21 +92,7 @@ class Task : public std::enable_shared_from_this<Task> {
       ExecutionMode mode,
       ConsumerSupplier consumerSupplier,
       int32_t memoryArbitrationPriority = 0,
-      std::function<void(std::exception_ptr)> onError = nullptr) {
-    auto task = std::shared_ptr<Task>(new Task(
-        taskId,
-        std::move(planFragment),
-        destination,
-        std::move(queryCtx),
-        mode,
-        std::move(consumerSupplier),
-        memoryArbitrationPriority,
-        std::move(onError)));
-    task->initTaskPool();
-    task->addToTaskList();
-    return task;
-  }
-#endif
+      std::function<void(std::exception_ptr)> onError = nullptr);
 
   /// Convenience function for shortening a Presto taskId. To be used
   /// in debugging messages and listings.
@@ -501,6 +430,12 @@ class Task : public std::enable_shared_from_this<Task> {
       ContinueFuture& future,
       int32_t maxPreloadSplits = 0,
       const ConnectorSplitPreloadFunc& preload = nullptr);
+
+  /// Returns the scaled scan controller for a given table scan node if the
+  /// query has configured.
+  std::shared_ptr<ScaledScanController> getScaledScanControllerLocked(
+      uint32_t splitGroupId,
+      const core::PlanNodeId& planNodeId);
 
   void splitFinished(bool fromTableScan, int64_t splitWeight);
 
@@ -850,6 +785,12 @@ class Task : public std::enable_shared_from_this<Task> {
 
   // Invoked to initialize the memory pool for this task on creation.
   void initTaskPool();
+
+  // Creates a scaled scan controller for a given table scan node.
+  void addScaledScanControllerLocked(
+      uint32_t splitGroupId,
+      const core::PlanNodeId& planNodeId,
+      uint32_t numDrivers);
 
   // Creates new instance of memory pool for a plan node, stores it in the task
   // to ensure lifetime and returns a raw pointer.

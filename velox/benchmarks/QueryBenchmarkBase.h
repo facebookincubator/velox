@@ -33,6 +33,8 @@
 #include "velox/connectors/hive/HiveConfig.h"
 #include "velox/connectors/hive/HiveConnector.h"
 #include "velox/dwio/common/Options.h"
+#include "velox/dwio/dwrf/RegisterDwrfReader.h"
+#include "velox/dwio/parquet/RegisterParquetReader.h"
 #include "velox/exec/PlanNodeStats.h"
 #include "velox/exec/Split.h"
 #include "velox/exec/tests/utils/HiveConnectorTestBase.h"
@@ -84,8 +86,8 @@ class QueryBenchmarkBase {
   virtual ~QueryBenchmarkBase() = default;
   virtual void initialize();
   void shutdown();
-  std::pair<std::unique_ptr<exec::test::TaskCursor>, std::vector<RowVectorPtr>>
-  run(const exec::test::TpchPlan& tpchPlan);
+  std::pair<std::unique_ptr<exec::TaskCursor>, std::vector<RowVectorPtr>> run(
+      const exec::test::TpchPlan& tpchPlan);
 
   virtual std::vector<std::shared_ptr<connector::ConnectorSplit>> listSplits(
       const std::string& path,

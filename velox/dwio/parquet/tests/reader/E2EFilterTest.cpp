@@ -258,7 +258,32 @@ TEST_F(E2EFilterTest, integerDictionary) {
       20);
 }
 
-TEST_F(E2EFilterTest, timestampDirect) {
+TEST_F(E2EFilterTest, timestampInt64Direct) {
+  options_.enableDictionary = false;
+  options_.dataPageSize = 4 * 1024;
+
+  testWithTypes(
+      "timestamp_val_0:timestamp,"
+      "timestamp_val_1:timestamp",
+      [&]() {},
+      true,
+      {"timestamp_val_0", "timestamp_val_1"},
+      20);
+}
+
+TEST_F(E2EFilterTest, timestampInt64Dictionary) {
+  options_.dataPageSize = 4 * 1024;
+
+  testWithTypes(
+      "timestamp_val_0:timestamp,"
+      "timestamp_val_1:timestamp",
+      [&]() {},
+      true,
+      {"timestamp_val_0", "timestamp_val_1"},
+      20);
+}
+
+TEST_F(E2EFilterTest, timestampInt96Direct) {
   options_.enableDictionary = false;
   options_.dataPageSize = 4 * 1024;
   options_.writeInt96AsTimestamp = true;
@@ -272,7 +297,7 @@ TEST_F(E2EFilterTest, timestampDirect) {
       20);
 }
 
-TEST_F(E2EFilterTest, timestampDictionary) {
+TEST_F(E2EFilterTest, timestampInt96Dictionary) {
   options_.dataPageSize = 4 * 1024;
   options_.writeInt96AsTimestamp = true;
 

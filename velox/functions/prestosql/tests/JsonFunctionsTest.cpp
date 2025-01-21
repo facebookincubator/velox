@@ -237,6 +237,12 @@ TEST_F(JsonFunctionsTest, jsonParse) {
 
   // Test bad unicode characters
   testJsonParse("\"Hello \xc0\xaf World\"", "\"Hello �� World\"");
+  // The below tests fail if simdjson.doc.get_string() is called
+  // without specifying replacement for bad characters in simdjson.
+  testJsonParse(R"("\uDE2Dau")", R"("\uDE2Dau")");
+  testJsonParse(
+      R"([{"response": "[\"fusil a peinture\",\"\ufffduD83E\\uDE2Dau bois\"]"}])",
+      R"([{"response":"[\"fusil a peinture\",\"�uD83E\\uDE2Dau bois\"]"}])");
 
   VELOX_ASSERT_THROW(
       jsonParse(R"({"k1":})"), "The JSON document has an improper structure");
@@ -267,9 +273,7 @@ TEST_F(JsonFunctionsTest, jsonParse) {
   velox::test::assertEqualVectors(
       expectedVector, evaluate("try(json_parse(c0))", data));
 
-  VELOX_ASSERT_THROW(
-      evaluate("json_parse(c0)", data),
-      "TAPE_ERROR: The JSON document has an improper structure: missing or superfluous commas, braces, missing keys, etc.");
+  VELOX_ASSERT_THROW(evaluate("json_parse(c0)", data), "TRAILING_CONTENT");
 
   data = makeRowVector({makeFlatVector<StringView>(
       {R"("This is a long sentence")", R"("This is some other sentence")"})});
@@ -328,6 +332,12 @@ TEST_F(JsonFunctionsTest, jsonParse) {
   } catch (const VeloxUserError& e) {
     ASSERT_EQ(e.context(), "Top-level Expression: json_parse(c0)");
   }
+
+  // Test partial escape sequences.
+  VELOX_ASSERT_USER_THROW(
+      jsonParse("{\"k1\\"), "Invalid escape sequence at the end of string");
+  VELOX_ASSERT_USER_THROW(
+      jsonParse("{\"k1\\u"), "Invalid escape sequence at the end of string");
 }
 
 TEST_F(JsonFunctionsTest, canonicalization) {

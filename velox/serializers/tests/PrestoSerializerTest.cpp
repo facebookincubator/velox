@@ -20,8 +20,8 @@
 #include <vector>
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/common/memory/ByteStream.h"
-#include "velox/common/time/Timer.h"
 #include "velox/functions/prestosql/types/TimestampWithTimeZoneType.h"
+#include "velox/serializers/PrestoVectorLexer.h"
 #include "velox/vector/fuzzer/VectorFuzzer.h"
 #include "velox/vector/tests/utils/VectorTestBase.h"
 
@@ -120,7 +120,7 @@ class PrestoSerializerTest
     const bool preserveEncodings =
         serdeOptions == nullptr ? false : serdeOptions->preserveEncodings;
     serializer::presto::PrestoVectorSerde::PrestoOptions paramOptions{
-        useLosslessTimestamp, kind, nullsFirst, preserveEncodings};
+        useLosslessTimestamp, kind, 0.8, nullsFirst, preserveEncodings};
 
     return paramOptions;
   }
@@ -217,7 +217,7 @@ class PrestoSerializerTest
       // Unsupported options
       return;
     }
-    std::vector<serializer::presto::PrestoVectorSerde::Token> tokens;
+    std::vector<serializer::presto::Token> tokens;
     const auto status = serializer::presto::PrestoVectorSerde::lex(
         input, tokens, &paramOptions);
     EXPECT_TRUE(status.ok()) << status.message();

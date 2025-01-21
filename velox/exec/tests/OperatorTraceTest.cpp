@@ -233,6 +233,10 @@ TEST_F(OperatorTraceTest, traceData) {
     ASSERT_EQ(summary.opType, "Aggregation");
     ASSERT_GT(summary.peakMemory, 0);
     ASSERT_EQ(summary.inputRows, testData.numTracedBatches * 16);
+    ASSERT_GT(summary.inputBytes, 0);
+    ASSERT_EQ(summary.rawInputRows, 0);
+    ASSERT_EQ(summary.rawInputBytes, 0);
+    ASSERT_FALSE(summary.numSplits.has_value());
 
     const auto reader = OperatorTraceInputReader(opTraceDir, dataType_, pool());
     RowVectorPtr actual;
@@ -457,7 +461,7 @@ TEST_F(OperatorTraceTest, error) {
             .copyResults(pool()),
         "Query trace enabled but the trace dir is not set");
   }
-  // Duplicate trace plan node ids.
+  // No trace task regexp.
   {
     const auto queryConfigs = std::unordered_map<std::string, std::string>{
         {core::QueryConfig::kQueryTraceEnabled, "true"},

@@ -197,36 +197,6 @@ size_t ByteOutputStream::size() const {
   return total + std::max(ranges_.back().position, lastRangeEnd_);
 }
 
-void ByteOutputStream::appendBool(bool value, int32_t count) {
-  VELOX_DCHECK(isBits_);
-
-  if (count == 1 && current_->size > current_->position) {
-    bits::setBit(
-        reinterpret_cast<uint64_t*>(current_->buffer),
-        current_->position,
-        value);
-    ++current_->position;
-    return;
-  }
-
-  int32_t offset{0};
-  for (;;) {
-    const int32_t bitsFit =
-        std::min(count - offset, current_->size - current_->position);
-    bits::fillBits(
-        reinterpret_cast<uint64_t*>(current_->buffer),
-        current_->position,
-        current_->position + bitsFit,
-        value);
-    current_->position += bitsFit;
-    offset += bitsFit;
-    if (offset == count) {
-      return;
-    }
-    extend(bits::nbytes(count - offset));
-  }
-}
-
 void ByteOutputStream::appendBits(
     const uint64_t* bits,
     int32_t begin,
@@ -234,6 +204,16 @@ void ByteOutputStream::appendBits(
   VELOX_DCHECK(isBits_);
 
   const int32_t count = end - begin;
+
+  if (count == 1 && current_->size > current_->position) {
+    bits::setBit(
+        reinterpret_cast<uint64_t*>(current_->buffer),
+        current_->position,
+        bits::isBitSet(bits, begin));
+    ++current_->position;
+    return;
+  }
+
   int32_t offset = 0;
   for (;;) {
     const int32_t bitsFit =
@@ -316,10 +296,16 @@ void ByteOutputStream::flush(OutputStream* out) {
   for (int32_t i = 0; i < ranges_.size(); ++i) {
     int32_t count = i == ranges_.size() - 1 ? lastRangeEnd_ : ranges_[i].size;
     int32_t bytes = isBits_ ? bits::nbytes(count) : count;
+    if (isBits_ && isNegateBits_ && !isNegated_) {
+      bits::negate(reinterpret_cast<uint64_t*>(ranges_[i].buffer), count);
+    }
     if (isBits_ && isReverseBitOrder_ && !isReversed_) {
       bits::reverseBits(ranges_[i].buffer, bytes);
     }
     out->write(reinterpret_cast<char*>(ranges_[i].buffer), bytes);
+  }
+  if (isBits_ && isNegateBits_) {
+    isNegated_ = true;
   }
   if (isBits_ && isReverseBitOrder_) {
     isReversed_ = true;

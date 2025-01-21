@@ -236,6 +236,52 @@ bool unregisterTaskListener(const std::shared_ptr<TaskListener>& listener) {
   });
 }
 
+// static
+std::shared_ptr<Task> Task::create(
+    const std::string& taskId,
+    core::PlanFragment planFragment,
+    int destination,
+    std::shared_ptr<core::QueryCtx> queryCtx,
+    ExecutionMode mode,
+    Consumer consumer,
+    int32_t memoryArbitrationPriority,
+    std::function<void(std::exception_ptr)> onError) {
+  return Task::create(
+      taskId,
+      std::move(planFragment),
+      destination,
+      std::move(queryCtx),
+      mode,
+      (consumer ? [c = std::move(consumer)]() { return c; }
+                : ConsumerSupplier{}),
+      memoryArbitrationPriority,
+      std::move(onError));
+}
+
+// static
+std::shared_ptr<Task> Task::create(
+    const std::string& taskId,
+    core::PlanFragment planFragment,
+    int destination,
+    std::shared_ptr<core::QueryCtx> queryCtx,
+    ExecutionMode mode,
+    ConsumerSupplier consumerSupplier,
+    int32_t memoryArbitrationPriority,
+    std::function<void(std::exception_ptr)> onError) {
+  auto task = std::shared_ptr<Task>(new Task(
+      taskId,
+      std::move(planFragment),
+      destination,
+      std::move(queryCtx),
+      mode,
+      std::move(consumerSupplier),
+      memoryArbitrationPriority,
+      std::move(onError)));
+  task->initTaskPool();
+  task->addToTaskList();
+  return task;
+}
+
 Task::Task(
     const std::string& taskId,
     core::PlanFragment planFragment,
@@ -1076,6 +1122,14 @@ void Task::createSplitGroupStateLocked(uint32_t splitGroupId) {
     addNestedLoopJoinBridgesLocked(
         splitGroupId, factory->needsNestedLoopJoinBridges());
     addCustomJoinBridgesLocked(splitGroupId, factory->planNodes);
+
+    core::PlanNodeId tableScanNodeId;
+    if (queryCtx_->queryConfig().tableScanScaledProcessingEnabled() &&
+        factory->needsTableScan(tableScanNodeId)) {
+      VELOX_CHECK(!tableScanNodeId.empty());
+      addScaledScanControllerLocked(
+          splitGroupId, tableScanNodeId, factory->numDrivers);
+    }
   }
 }
 
@@ -1198,10 +1252,10 @@ void Task::removeDriver(std::shared_ptr<Task> self, Driver* driver) {
     }
 
     if (self->numFinishedDrivers_ == self->numTotalDrivers_) {
-      LOG(INFO) << "All drivers (" << self->numFinishedDrivers_
-                << ") finished for task " << self->taskId()
-                << " after running for "
-                << succinctMillis(self->timeSinceStartMsLocked());
+      VLOG(1) << "All drivers (" << self->numFinishedDrivers_
+              << ") finished for task " << self->taskId()
+              << " after running for "
+              << succinctMillis(self->timeSinceStartMsLocked());
     }
   }
   stateChangeNotifier.notify();
@@ -1584,6 +1638,37 @@ exec::Split Task::getSplitLocked(
   }
 
   return split;
+}
+
+std::shared_ptr<ScaledScanController> Task::getScaledScanControllerLocked(
+    uint32_t splitGroupId,
+    const core::PlanNodeId& planNodeId) {
+  auto& splitGroupState = splitGroupStates_[splitGroupId];
+  auto it = splitGroupState.scaledScanControllers.find(planNodeId);
+  if (it == splitGroupState.scaledScanControllers.end()) {
+    VELOX_CHECK(!queryCtx_->queryConfig().tableScanScaledProcessingEnabled());
+    return nullptr;
+  }
+
+  VELOX_CHECK(queryCtx_->queryConfig().tableScanScaledProcessingEnabled());
+  VELOX_CHECK_NOT_NULL(it->second);
+  return it->second;
+}
+
+void Task::addScaledScanControllerLocked(
+    uint32_t splitGroupId,
+    const core::PlanNodeId& planNodeId,
+    uint32_t numDrivers) {
+  VELOX_CHECK(queryCtx_->queryConfig().tableScanScaledProcessingEnabled());
+
+  auto& splitGroupState = splitGroupStates_[splitGroupId];
+  VELOX_CHECK_EQ(splitGroupState.scaledScanControllers.count(planNodeId), 0);
+  splitGroupState.scaledScanControllers.emplace(
+      planNodeId,
+      std::make_shared<ScaledScanController>(
+          getOrAddNodePool(planNodeId),
+          numDrivers,
+          queryCtx_->queryConfig().tableScanScaleUpMemoryUsageRatio()));
 }
 
 void Task::splitFinished(bool fromTableScan, int64_t splitWeight) {
@@ -2524,11 +2609,12 @@ void Task::createLocalExchangeQueuesLocked(
   LocalExchangeState exchange;
   exchange.memoryManager = std::make_shared<LocalExchangeMemoryManager>(
       queryCtx_->queryConfig().maxLocalExchangeBufferSize());
-
+  exchange.vectorPool = std::make_shared<LocalExchangeVectorPool>(
+      queryCtx_->queryConfig().maxLocalExchangeBufferSize());
   exchange.queues.reserve(numPartitions);
   for (auto i = 0; i < numPartitions; ++i) {
-    exchange.queues.emplace_back(
-        std::make_shared<LocalExchangeQueue>(exchange.memoryManager, i));
+    exchange.queues.emplace_back(std::make_shared<LocalExchangeQueue>(
+        exchange.memoryManager, exchange.vectorPool, i));
   }
 
   const auto partitionNode =

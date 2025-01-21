@@ -15,6 +15,8 @@
  */
 #pragma once
 
+#include <optional>
+
 #include "velox/common/base/PrefixSortConfig.h"
 #include "velox/exec/Operator.h"
 #include "velox/exec/RowContainer.h"
@@ -53,9 +55,20 @@ struct PrefixSortLayout {
   /// Whether the sort keys contains non-normalized key.
   const bool hasNonNormalizedKey;
 
+  /// Indicates the starting index for key comparison.
+  /// If the last key is only partially encoded in the prefix, start from
+  /// numNormalizedKeys - 1. Otherwise, start from numNormalizedKeys.
+  const uint32_t nonPrefixSortStartIndex;
+
+  /// A vector indicating whether each normalized key contains a null byte.
+  const std::vector<bool> normalizedKeyHasNullByte;
+
   /// Offsets of normalized keys, used to find write locations when
   /// extracting columns
   const std::vector<uint32_t> prefixOffsets;
+
+  /// Sizes of normalized keys.
+  const std::vector<uint32_t> encodeSizes;
 
   /// The encoders for normalized keys.
   const std::vector<prefixsort::PrefixSortEncoder> encoders;
@@ -64,10 +77,13 @@ struct PrefixSortLayout {
   /// for fast long compare.
   const int32_t numPaddingBytes;
 
-  static PrefixSortLayout makeSortLayout(
+  static PrefixSortLayout generate(
       const std::vector<TypePtr>& types,
+      const std::vector<bool>& columnHasNulls,
       const std::vector<CompareFlags>& compareFlags,
-      uint32_t maxNormalizedKeySize);
+      uint32_t maxNormalizedKeySize,
+      uint32_t maxStringPrefixLength,
+      const std::vector<std::optional<uint32_t>>& maxStringLengths);
 
   /// Optimizes the order of sort key columns to maximize the number of prefix
   /// sort keys for acceleration. This only applies for use case which doesn't
@@ -121,10 +137,8 @@ class PrefixSort {
       stdSort(rows, rowContainer, compareFlags);
       return;
     }
-
-    VELOX_CHECK_EQ(rowContainer->keyTypes().size(), compareFlags.size());
-    const auto sortLayout = PrefixSortLayout::makeSortLayout(
-        rowContainer->keyTypes(), compareFlags, config.maxNormalizedKeyBytes);
+    const auto sortLayout =
+        generateSortLayout(rowContainer, compareFlags, config);
     // All keys can not normalize, skip the binary string compare opt.
     // Putting this outside sort-internal helps with stdSort.
     if (!sortLayout.hasNormalizedKeys) {
@@ -157,6 +171,37 @@ class PrefixSort {
       std::vector<char*, memory::StlAllocator<char*>>& rows,
       const RowContainer* rowContainer,
       const std::vector<CompareFlags>& compareFlags);
+
+  FOLLY_ALWAYS_INLINE static PrefixSortLayout generateSortLayout(
+      const RowContainer* rowContainer,
+      const std::vector<CompareFlags>& compareFlags,
+      const velox::common::PrefixSortConfig& config) {
+    const auto keyTypes = rowContainer->keyTypes();
+    VELOX_CHECK_EQ(keyTypes.size(), compareFlags.size());
+    std::vector<std::optional<uint32_t>> maxStringLengths;
+    maxStringLengths.reserve(keyTypes.size());
+    std::vector<bool> columnHasNulls;
+    columnHasNulls.reserve(keyTypes.size());
+    for (int i = 0; i < keyTypes.size(); ++i) {
+      std::optional<uint32_t> maxStringLength = std::nullopt;
+      if (keyTypes[i]->kind() == TypeKind::VARBINARY ||
+          keyTypes[i]->kind() == TypeKind::VARCHAR) {
+        const auto stats = rowContainer->columnStats(i);
+        if (stats.has_value()) {
+          maxStringLength = stats.value().maxBytes();
+        }
+      }
+      maxStringLengths.emplace_back(maxStringLength);
+      columnHasNulls.emplace_back(rowContainer->columnHasNulls(i));
+    }
+    return PrefixSortLayout::generate(
+        keyTypes,
+        columnHasNulls,
+        compareFlags,
+        config.maxNormalizedKeyBytes,
+        config.maxStringPrefixLength,
+        maxStringLengths);
+  }
 
   // Estimates the memory required for prefix sort such as prefix buffer and
   // swap buffer.

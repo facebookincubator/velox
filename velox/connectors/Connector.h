@@ -25,6 +25,7 @@
 #include "velox/common/caching/ScanTracker.h"
 #include "velox/common/future/VeloxPromise.h"
 #include "velox/core/ExpressionEvaluator.h"
+#include "velox/type/Subfield.h"
 #include "velox/vector/ComplexVector.h"
 
 #include <folly/Synchronized.h>
@@ -51,13 +52,17 @@ class DataSource;
 struct ConnectorSplit : public ISerializable {
   const std::string connectorId;
   const int64_t splitWeight{0};
+  const bool cacheable{true};
 
   std::unique_ptr<AsyncSource<DataSource>> dataSource;
 
   explicit ConnectorSplit(
       const std::string& _connectorId,
-      int64_t _splitWeight = 0)
-      : connectorId(_connectorId), splitWeight(_splitWeight) {}
+      int64_t _splitWeight = 0,
+      bool _cacheable = true)
+      : connectorId(_connectorId),
+        splitWeight(_splitWeight),
+        cacheable(_cacheable) {}
 
   folly::dynamic serialize() const override {
     VELOX_UNSUPPORTED();
@@ -67,13 +72,21 @@ struct ConnectorSplit : public ISerializable {
   virtual ~ConnectorSplit() {}
 
   virtual std::string toString() const {
-    return fmt::format("[split: {}]", connectorId);
+    return fmt::format(
+        "[split: connector id {}, weight {}, cacheable {}]",
+        connectorId,
+        splitWeight,
+        cacheable ? "true" : "false");
   }
 };
 
 class ColumnHandle : public ISerializable {
  public:
   virtual ~ColumnHandle() = default;
+
+  virtual const std::string& name() const {
+    VELOX_UNSUPPORTED();
+  }
 
   folly::dynamic serialize() const override;
 
@@ -96,6 +109,13 @@ class ConnectorTableHandle : public ISerializable {
 
   const std::string& connectorId() const {
     return connectorId_;
+  }
+
+  /// Returns the connector-dependent table name. Used with
+  /// ConnectorMetadata. Implementations need to supply a definition
+  /// to work with metadata.
+  virtual const std::string& name() const {
+    VELOX_UNSUPPORTED();
   }
 
   virtual folly::dynamic serialize() const override;
@@ -391,7 +411,7 @@ class ConnectorQueryCtx {
   const config::ConfigBase* const sessionProperties_;
   const common::SpillConfig* const spillConfig_;
   const common::PrefixSortConfig prefixSortConfig_;
-  std::unique_ptr<core::ExpressionEvaluator> expressionEvaluator_;
+  const std::unique_ptr<core::ExpressionEvaluator> expressionEvaluator_;
   cache::AsyncDataCache* cache_;
   const std::string scanId_;
   const std::string queryId_;
@@ -403,6 +423,8 @@ class ConnectorQueryCtx {
   const folly::CancellationToken cancellationToken_;
   bool selectiveNimbleReaderEnabled_{false};
 };
+
+class ConnectorMetadata;
 
 class Connector {
  public:
@@ -423,6 +445,12 @@ class Connector {
   /// during query execution.
   virtual bool canAddDynamicFilter() const {
     return false;
+  }
+
+  /// Returns a ConnectorMetadata for accessing table
+  /// information.
+  virtual ConnectorMetadata* metadata() const {
+    VELOX_UNSUPPORTED();
   }
 
   virtual std::unique_ptr<DataSource> createDataSource(
@@ -482,7 +510,8 @@ class ConnectorFactory {
   virtual std::shared_ptr<Connector> newConnector(
       const std::string& id,
       std::shared_ptr<const config::ConfigBase> config,
-      folly::Executor* executor = nullptr) = 0;
+      folly::Executor* ioExecutor = nullptr,
+      folly::Executor* cpuExecutor = nullptr) = 0;
 
  private:
   const std::string name_;

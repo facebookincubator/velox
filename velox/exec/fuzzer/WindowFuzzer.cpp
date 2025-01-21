@@ -256,7 +256,14 @@ std::vector<SortingKeyAndOrder> WindowFuzzer::generateSortingKeysAndOrders(
     std::vector<TypePtr>& types,
     bool isKRangeFrame,
     std::optional<uint32_t> numKeys) {
-  auto keys = generateSortingKeys(prefix, names, types, isKRangeFrame, numKeys);
+  VELOX_CHECK_NOT_NULL(referenceQueryRunner_);
+  auto keys = generateSortingKeys(
+      prefix,
+      names,
+      types,
+      isKRangeFrame,
+      referenceQueryRunner_->supportedScalarTypes(),
+      numKeys);
   std::vector<SortingKeyAndOrder> results;
   for (auto i = 0; i < keys.size(); ++i) {
     auto asc = vectorFuzzer_.coinToss(0.5);
@@ -455,8 +462,14 @@ void WindowFuzzer::go() {
 
     const uint32_t numKeys =
         boost::random::uniform_int_distribution<uint32_t>(1, 15)(rng_);
-    const auto partitionKeys =
-        generateSortingKeys("p", argNames, argTypes, false, numKeys);
+    VELOX_CHECK_NOT_NULL(referenceQueryRunner_);
+    const auto partitionKeys = generateSortingKeys(
+        "p",
+        argNames,
+        argTypes,
+        false,
+        referenceQueryRunner_->supportedScalarTypes(),
+        numKeys);
 
     std::vector<SortingKeyAndOrder> sortingKeysAndOrders;
     TypeKind orderByTypeKind;
@@ -478,8 +491,18 @@ void WindowFuzzer::go() {
           generateSortingKeysAndOrders("s", argNames, argTypes, false, numKeys);
     }
 
+    std::vector<std::string> sortingKeys;
+    sortingKeys.reserve(sortingKeysAndOrders.size());
+    for (const auto& sortingKeyAndOrder : sortingKeysAndOrders) {
+      sortingKeys.push_back(sortingKeyAndOrder.key_);
+    }
     auto input = generateInputDataWithRowNumber(
-        argNames, argTypes, partitionKeys, signature);
+        argNames,
+        argTypes,
+        partitionKeys,
+        kBoundColumns,
+        sortingKeys,
+        signature);
     // Offset column names used for k-RANGE frame bounds have fixed names: off0
     // and off1, representing the precomputed offset columns used as frame start
     // and frame end bound respectively.
@@ -548,6 +571,16 @@ void WindowFuzzer::go() {
 
   stats_.print(iteration);
   printSignatureStats();
+  if (FLAGS_enable_window_reference_verification) {
+    // Check that at least half of the iterations were verified, either against
+    // the reference DB or through custom result verifiers.
+    // stats_.numVerificationSkipped tracks the number of iterations verified
+    // through custom result verifiers.
+    VELOX_CHECK_GE(
+        (stats_.numVerified + stats_.numVerificationSkipped) /
+            (double)iteration,
+        0.5);
+  }
 }
 
 void WindowFuzzer::go(const std::string& /*planPath*/) {
@@ -764,6 +797,20 @@ void windowFuzzer(
     bool orderableGroupKeys,
     const std::optional<std::string>& planPath,
     std::unique_ptr<ReferenceQueryRunner> referenceQueryRunner) {
+  auto fuzzerOptions =
+      AggregationFuzzerBase::getFuzzerOptions(timestampPrecision);
+  // The window fuzzer often runs into OOMs when generating complex types
+  // nested inside other complex types.
+  // For e.g if we were to run map_union on a MAP<MAP<INT, TIMESTAMP>, ARRAY<>>,
+  // Then currently with the worst case the inner map can have up to 10k entries
+  // as that is the limit set by complexElementsMaxSize.
+  // Window frames can contain tens or hundreds of rows, causing the map_union
+  // result of every input row to contain up to windowFrameSize *
+  // complexElementsMaxSize number of nested elements. This leads to very fat
+  // vectors and an inordinate amount of time in just creating materialized rows
+  // and processing. Thus we set the complexElementsMaxSize to 100 to avoid
+  // OOMs.
+  fuzzerOptions.complexElementsMaxSize = 100;
   auto windowFuzzer = WindowFuzzer(
       std::move(aggregationSignatureMap),
       std::move(windowSignatureMap),
@@ -776,7 +823,8 @@ void windowFuzzer(
       queryConfigs,
       hiveConfigs,
       orderableGroupKeys,
-      std::move(referenceQueryRunner));
+      std::move(referenceQueryRunner),
+      fuzzerOptions);
   planPath.has_value() ? windowFuzzer.go(planPath.value()) : windowFuzzer.go();
 }
 

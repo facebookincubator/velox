@@ -93,6 +93,12 @@ RowTypePtr concat(const RowTypePtr& a, const RowTypePtr& b);
 /// TODO Investigate mismatches reported when comparing Varbinary.
 bool containsUnsupportedTypes(const TypePtr& type);
 
+/// Determines whether the signature has an argument that contains typeName.
+/// typeName should be in lower case.
+bool usesInputTypeName(
+    const exec::FunctionSignature& signature,
+    const std::string& typeName);
+
 /// Determines whether the signature has an argument or return type that
 /// contains typeName. typeName should be in lower case.
 bool usesTypeName(
@@ -124,12 +130,6 @@ void setupMemory(
 /// PrestoQueryRunner that writes data to a local file.
 void registerHiveConnector(
     const std::unordered_map<std::string, std::string>& hiveConfigs);
-
-enum ReferenceQueryErrorCode {
-  kSuccess,
-  kReferenceQueryFail,
-  kReferenceQueryUnsupported
-};
 
 // Converts 'plan' into an SQL query and runs it on 'input' in the reference DB.
 // Result is returned as a MaterializedRowMultiset with the

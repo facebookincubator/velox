@@ -82,11 +82,12 @@ PositionalDeleteFileReader::PositionalDeleteFileReader(
 
   dwio::common::ReaderOptions deleteReaderOpts(pool_);
   configureReaderOptions(
-      deleteReaderOpts,
       hiveConfig_,
       connectorQueryCtx,
       deleteFileSchema,
-      deleteSplit_);
+      deleteSplit_,
+      /*tableParameters=*/{},
+      deleteReaderOpts);
 
   auto deleteFileHandleCachePtr =
       fileHandleFactory_->generate(deleteFile_.filePath);
@@ -233,7 +234,7 @@ void PositionalDeleteFileReader::updateDeleteBitmap(
   // There might be multiple delete files for a single base file. The size of
   // the deleteBitmapBuffer should be the largest position among all delte files
   deleteBitmapBuffer->setSize(std::max(
-      (uint64_t)deleteBitmapBuffer->size(),
+      static_cast<uint64_t>(deleteBitmapBuffer->size()),
       deletePositionsOffset_ == 0 ||
               (deletePositionsOffset_ < deletePositionsVector->size() &&
                deletePositions[deletePositionsOffset_] > rowNumberUpperBound)
