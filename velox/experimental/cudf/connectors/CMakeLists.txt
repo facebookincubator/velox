@@ -12,10 +12,4 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-add_subdirectory(exec)
-add_subdirectory(connectors)
-add_subdirectory(vector)
-
-if(VELOX_BUILD_TESTING)
-  add_subdirectory(tests)
-endif()
+add_subdirectory(parquet)
