@@ -67,6 +67,9 @@ class SparkCastHooks : public exec::CastHooks {
   exec::PolicyType getPolicy() const override;
 
  private:
+  template <typename T>
+  Expected<Timestamp> castNumberToTimestamp(T value) const;
+
   const core::QueryConfig& config_;
 
   /// 1) Does not follow 'isLegacyCast'. 2) The conversion precision is
@@ -79,8 +82,5 @@ class SparkCastHooks : public exec::CastHooks {
       .skipTrailingZeros = true,
       .zeroPaddingYear = true,
       .dateTimeSeparator = ' '};
-
-  template <typename T>
-  Expected<Timestamp> castNumberToTimestamp(T value) const;
 };
 } // namespace facebook::velox::functions::sparksql
