@@ -42,7 +42,8 @@ TraceContext::TraceContext(std::string label, bool isTemporary)
     entry.time = enterTime_;
     entry.file = __FILE__;
     entry.line = __LINE__;
-    auto res = snprintf(entry.label, entry.kLabelCapacity, "%s", label_.c_str());
+    auto res =
+        snprintf(entry.label, entry.kLabelCapacity, "%s", label_.c_str());
 
     if (FOLLY_UNLIKELY(res < 0)) {
       entry.label[0] = '\0';
