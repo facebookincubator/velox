@@ -49,8 +49,7 @@ bool CompileState::compile() {
     }
     std::cout << "Number of plan nodes: " << nodes.size() << std::endl;
     for (auto& node : nodes) {
-      std::cout << "  Plan node: ID " << node->id() << ": " << node->toString()
-                << std::endl;
+      std::cout << "  Plan node: ID " << node->id() << ": " << node->toString();
     }
   }
 
@@ -86,7 +85,7 @@ bool CompileState::compile() {
           get_plan_node(joinBuildOp->planNodeId()));
       VELOX_CHECK(plan_node != nullptr);
       replace_op.push_back(std::make_unique<CudfFromVelox>(
-          id, plan_node->outputType(), ctx, plan_node->id()));
+          id, plan_node->outputType(), ctx, plan_node->id() + "-from-velox"));
       replace_op[0]->initialize();
       replace_op.push_back(
           std::make_unique<CudfHashJoinBuild>(id, ctx, plan_node));
@@ -105,13 +104,13 @@ bool CompileState::compile() {
           get_plan_node(joinProbeOp->planNodeId()));
       VELOX_CHECK(plan_node != nullptr);
       replace_op.push_back(std::make_unique<CudfFromVelox>(
-          id, plan_node->outputType(), ctx, plan_node->id()));
+          id, plan_node->outputType(), ctx, plan_node->id() + "-from-velox"));
       replace_op[0]->initialize();
       replace_op.push_back(
           std::make_unique<CudfHashJoinProbe>(id, ctx, plan_node));
       replace_op[1]->initialize();
       replace_op.push_back(std::make_unique<CudfToVelox>(
-          id, plan_node->outputType(), ctx, plan_node->id()));
+          id, plan_node->outputType(), ctx, plan_node->id() + "-to-velox"));
       replace_op[2]->initialize();
 
       operatorsOffset += replace_op.size() - 1;
@@ -127,12 +126,12 @@ bool CompileState::compile() {
           get_plan_node(orderByOp->planNodeId()));
       VELOX_CHECK(plan_node != nullptr);
       replace_op.push_back(std::make_unique<CudfFromVelox>(
-          id, plan_node->outputType(), ctx, plan_node->id()));
+          id, plan_node->outputType(), ctx, plan_node->id() + "-from-velox"));
       replace_op[0]->initialize();
       replace_op.push_back(std::make_unique<CudfOrderBy>(id, ctx, plan_node));
       replace_op[1]->initialize();
       replace_op.push_back(std::make_unique<CudfToVelox>(
-          id, plan_node->outputType(), ctx, plan_node->id()));
+          id, plan_node->outputType(), ctx, plan_node->id() + "-to-velox"));
       replace_op[2]->initialize();
 
       operatorsOffset += replace_op.size() - 1;
@@ -186,9 +185,6 @@ struct cudfDriverAdapter {
     // Stored planNodes_ from inspect.
     if (cudfDebugEnabled()) {
       printf("driver.planNodes_=%p\n", planNodes_.get());
-      for (auto planNode : *planNodes_) {
-        std::cout << "PlanNode: " << (*planNode).toString() << std::endl;
-      }
     }
     auto res = state.compile();
     return res;

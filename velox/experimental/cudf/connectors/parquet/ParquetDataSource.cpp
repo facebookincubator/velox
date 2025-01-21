@@ -107,7 +107,7 @@ std::optional<RowVectorPtr> ParquetDataSource::next(
   // Limit the size to [1, 1B] rows to avoid overflow in cudf::concatenate.
   VELOX_CHECK(
       size > 0 and size < std::numeric_limits<cudf::size_type>::max() / 2,
-      "ParquetDataSource can read [1, 1 billion] rows at once");
+      "ParquetDataSource can read [1, 2^30] rows at once");
 
   // Read table chunks via cudf until we have enough rows or no more
   // chunks left.
