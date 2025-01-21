@@ -435,20 +435,20 @@ int dbg_print(int dt, FILE* tgt, void* data, int len, int eol);
 #define PR_STRT(fp) /* any line prep for a record goes here */
 #define PR_END(fp) fprintf(fp, "\n") /* finish the record here */
 #ifdef MDY_DATE
-#define PR_DATE(tgt, yr, mn, dy)                               \
-  do {                                                         \
+#define PR_DATE(tgt, yr, mn, dy)                                \
+  do {                                                          \
     auto res = sprintf(tgt, "19%02ld-%02ld-%02ld", yr, mn, dy); \
-    if (FOLLY_UNLIKELY(res < 0)) {                             \
-      tgt[0] = '\0';                                           \
-    }                                                          \
+    if (FOLLY_UNLIKELY(res < 0)) {                              \
+      tgt[0] = '\0';                                            \
+    }                                                           \
   } while (0)
 #else
-#define PR_DATE(tgt, yr, mn, dy)                               \
-  do {                                                         \
+#define PR_DATE(tgt, yr, mn, dy)                                \
+  do {                                                          \
     auto res = sprintf(tgt, "19%02ld-%02ld-%02ld", yr, mn, dy); \
-    if (FOLLY_UNLIKELY(res < 0)) {                             \
-      tgt[0] = '\0';                                           \
-    }                                                          \
+    if (FOLLY_UNLIKELY(res < 0)) {                              \
+      tgt[0] = '\0';                                            \
+    }                                                           \
   } while (0)
 #endif /* DATE_FORMAT */
 
