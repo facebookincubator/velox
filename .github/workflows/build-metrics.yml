@@ -35,7 +35,7 @@ permissions:
 
 jobs:
   metrics:
-    name: Linux ${{ matrix.type }} with adapters
+    name: Linux ${{ matrix.link-type }} - ${{ matrix.type }} with adapters
     if: ${{ github.repository == 'facebookincubator/velox' }}
     runs-on: ${{ matrix.runner }}
     container: ghcr.io/facebookincubator/velox-dev:adapters
@@ -108,6 +108,9 @@ jobs:
 
           find velox -type f -name 'velox_*' -exec ls -l -BB {} \; |
             awk '{print $5, $9; total += $5} END {print total," total_exec_size"}' >> $sizes_file
+          
+          echo 'Size file for ${{ matrix.link-type }} - ${{ matrix.type }} ' 
+          cat $sizes_file
 
       - name: Copy ninja_log
         run: cp _build/${{ matrix.type }}/.ninja_log /tmp/metrics/.ninja_log
