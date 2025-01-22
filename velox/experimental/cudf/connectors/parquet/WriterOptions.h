@@ -53,13 +53,13 @@ struct ParquetWriterOptions
   size_t rowGroupSizeBytes = default_row_group_size_bytes;
 
   // Maximum number of rows in row group (unless smaller than a single page)
-  size_type rowGroupSizeRows = default_row_group_size_rows;
+  cudf::size_type rowGroupSizeRows = default_row_group_size_rows;
 
   // Maximum size of each page (uncompressed) - Velox uses 1KB (2 x cudf limit)
   size_t maxPageSizeBytes = 2 * default_max_page_size_bytes;
 
   // Maximum number of rows in a page
-  size_type maxPageSizeRows = default_max_page_size_rows;
+  cudf::size_type maxPageSizeRows = default_max_page_size_rows;
 
   // Maximum size of min or max values in column index
   int32_t columnIndexTruncateLength = default_column_index_truncate_length;
