@@ -14,9 +14,9 @@
  * limitations under the License.
  */
 
-#include "velox/functions/sparksql/specialforms/ToJson.h"
 #include "velox/functions/prestosql/types/JsonType.h"
 
+#include <expression/FunctionSignature.h>
 #include <expression/PeeledEncoding.h>
 #include <expression/StringWriter.h>
 #include <expression/VectorFunction.h>
@@ -519,31 +519,22 @@ class ToJsonFunction final : public exec::VectorFunction {
     VELOX_DYNAMIC_TYPE_DISPATCH_ALL(
         toJson, args[0]->typeKind(), *args[0], context, rows, *rawResults);
   }
+
+  static std::vector<std::shared_ptr<exec::FunctionSignature>> signatures() {
+    // T(ROW/ARRAY/MAP) -> varchar
+    return {exec::FunctionSignatureBuilder()
+                .typeVariable("T")
+                .returnType("varchar")
+                .argumentType("T")
+                .build()};
+  }
 };
 
 } // namespace
 
-TypePtr ToJsonCallToSpecialForm::resolveType(const std::vector<TypePtr>& /* argTypes */) {
-  VELOX_FAIL("to_json function does not support type resolution.");
-}
+VELOX_DECLARE_VECTOR_FUNCTION(
+    udf_to_json,
+    ToJsonFunction::signatures(),
+    std::make_unique<ToJsonFunction>());
 
-exec::ExprPtr ToJsonCallToSpecialForm::constructSpecialForm(
-    const TypePtr &type,
-    std::vector<exec::ExprPtr>&& args,
-    bool trackCpuUsage,
-    const core::QueryConfig& /* config */) {
-  VELOX_USER_CHECK(type->isVarchar(), "The result type of to_json should be VARCHAR");
-  VELOX_USER_CHECK_EQ(args.size(), 1, "to_json expects one argument.");
-  VELOX_USER_CHECK(
-    args[0]->type()->isRow() || args[0]->type()->isArray() || args[0]->type()->isMap(),
-    "The argument type of to_json should be row, array or map.");
-
-  return std::make_shared<exec::Expr>(
-      type,
-      std::move(args),
-      std::make_shared<ToJsonFunction>(),
-      exec::VectorFunctionMetadata{},
-      kToJson,
-      trackCpuUsage);
-}
 } // namespace facebook::velox::functions::sparksql

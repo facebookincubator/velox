@@ -18,8 +18,7 @@ velox_add_library(
   DecimalRound.cpp
   MakeDecimal.cpp
   SparkCastExpr.cpp
-  SparkCastHooks.cpp
-  ToJson.cpp)
+  SparkCastHooks.cpp)
 
 velox_link_libraries(velox_functions_spark_specialforms fmt::fmt
-                     velox_functions_json velox_expression)
+                     velox_expression)

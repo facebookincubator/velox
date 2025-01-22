@@ -20,7 +20,6 @@
 #include "velox/functions/sparksql/specialforms/DecimalRound.h"
 #include "velox/functions/sparksql/specialforms/MakeDecimal.h"
 #include "velox/functions/sparksql/specialforms/SparkCastExpr.h"
-#include "velox/functions/sparksql/specialforms/ToJson.h"
 
 namespace facebook::velox::functions {
 void registerSparkSpecialFormFunctions() {
@@ -45,9 +44,6 @@ void registerSpecialFormGeneralFunctions(const std::string& prefix) {
       "cast", std::make_unique<SparkCastCallToSpecialForm>());
   registerFunctionCallToSpecialForm(
       "try_cast", std::make_unique<SparkTryCastCallToSpecialForm>());
-  exec::registerFunctionCallToSpecialForm(
-      ToJsonCallToSpecialForm::kToJson,
-      std::make_unique<ToJsonCallToSpecialForm>());
 }
 } // namespace sparksql
 } // namespace facebook::velox::functions
