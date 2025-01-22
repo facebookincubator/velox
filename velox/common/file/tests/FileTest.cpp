@@ -225,6 +225,8 @@ TEST_P(LocalFileTest, writeAndRead) {
       auto readFile =
           std::make_shared<LocalReadFile>(filename, executor_.get());
       readData(readFile.get(), true, true);
+      auto readFileWithoutExecutor = std::make_shared<LocalReadFile>(filename);
+      readData(readFileWithoutExecutor.get(), true, true);
     }
     auto readFile = fs->openFileForRead(filename);
     readData(readFile.get());
