@@ -29,67 +29,78 @@ class ConfigBase;
 
 namespace facebook::velox::cudf_velox::connector::parquet {
 
-class ParquetReaderConfig {
+class ParquetConfig {
  public:
-  enum class InsertExistingPartitionsBehavior {
-    kError,
-    kOverwrite,
-  };
-
-  static std::string insertExistingPartitionsBehaviorString(
-      InsertExistingPartitionsBehavior behavior);
-
-  /// Behavior on insert into existing partitions.
-  static constexpr const char* kInsertExistingPartitionsBehaviorSession =
-      "insert_existing_partitions_behavior";
-  static constexpr const char* kInsertExistingPartitionsBehavior =
-      "insert-existing-partitions-behavior";
+  // Reader config options
 
   // Number of rows to skip from the start; Parquet stores the number of rows as
   // int64_t
-  static constexpr const char* kSkipRows = "skip-rows";
+  static constexpr const char* kSkipRows = "parquet.reader.skip-rows";
 
   // Number of rows to read; `nullopt` is all
-  static constexpr const char* kNumRows = "num-rows";
+  static constexpr const char* kNumRows = "parquet.reader.num-rows";
 
-  static constexpr const char* kMaxChunkReadLimit = "chunk-read-limit";
-  static constexpr const char* kMaxChunkReadLimitSession = "chunk_read_limit";
+  // This isn't a typo; parquet connector and session config names are different
+  // ('-' vs '_').
+  static constexpr const char* kMaxChunkReadLimit =
+      "parquet.reader.chunk-read-limit";
+  static constexpr const char* kMaxChunkReadLimitSession =
+      "parquet.reader.chunk_read_limit";
 
-  static constexpr const char* kMaxPassReadLimit = "pass-read-limit";
-  static constexpr const char* kMaxPassReadLimitSession = "pass_read_limit";
+  static constexpr const char* kMaxPassReadLimit =
+      "parquet.reader.pass-read-limit";
+  static constexpr const char* kMaxPassReadLimitSession =
+      "parquet.reader.pass_read_limit";
 
   // Whether to store string data as categorical type
   static constexpr const char* kConvertStringsToCategories =
-      "convert-strings-to-categories";
+      "parquet.reader.convert-strings-to-categories";
   static constexpr const char* kConvertStringsToCategoriesSession =
-      "convert_strings_to_categories";
+      "parquet.reader.convert_strings_to_categories";
 
   // Whether to use PANDAS metadata to load columns
-  static constexpr const char* kUsePandasMetadata = "use-pandas-metadata";
+  static constexpr const char* kUsePandasMetadata =
+      "parquet.reader.use-pandas-metadata";
   static constexpr const char* kUsePandasMetadataSession =
-      "use_pandas_metadata";
+      "parquet.reader.use_pandas_metadata";
 
   // Whether to read and use ARROW schema
-  static constexpr const char* kUseArrowSchema = "use-arrow-schema";
-  static constexpr const char* kUseArrowSchemaSession = "use_arrow_schema";
+  static constexpr const char* kUseArrowSchema =
+      "parquet.reader.use-arrow-schema";
+  static constexpr const char* kUseArrowSchemaSession =
+      "parquet.reader.use_arrow_schema";
 
   // Whether to allow reading matching select columns from mismatched Parquet
   // files.
   static constexpr const char* kAllowMismatchedParquetSchemas =
-      "allow-mismatched-parquet-schemas";
+      "parquet.reader.allow-mismatched-parquet-schemas";
   static constexpr const char* kAllowMismatchedParquetSchemasSession =
-      "allow_mismatched_parquet_schemas";
+      "parquet.reader.allow_mismatched_parquet_schemas";
 
   // Cast timestamp columns to a specific type
-  static constexpr const char* kTimestampType = "timestamp-type";
-  static constexpr const char* kTimestampTypeSession = "timestamp_type";
+  static constexpr const char* kTimestampType = "parquet.reader.timestamp-type";
+  static constexpr const char* kTimestampTypeSession =
+      "parquet.reader.timestamp_type";
 
-  InsertExistingPartitionsBehavior insertExistingPartitionsBehavior(
-      const config::ConfigBase* session) const;
+  // Writer config options
+  static constexpr const char* kWriteTimestampsAsUTC =
+      "parquet.writer.write-timestamps-as-utc";
+  static constexpr const char* kWriteTimestampsAsUTCSession =
+      "parquet.writer.write_timestamps_as_utc";
 
-  ParquetReaderConfig(std::shared_ptr<const config::ConfigBase> config) {
+  static constexpr const char* kWriteArrowSchema =
+      "parquet.writer.write-arrow-schema";
+  static constexpr const char* kWriteArrowSchemaSession =
+      "parquet.writer.write_arrow_schema";
+
+  static constexpr const char* kWritev2PageHeaders =
+      "parquet.writer.write-v2-page-headers";
+  static constexpr const char* kWritev2PageHeadersSession =
+      "parquet.writer.write_v2_page_headers";
+
+  ParquetConfig(std::shared_ptr<const config::ConfigBase> config) {
     VELOX_CHECK_NOT_NULL(
-        config, "Config is null for ParquetReaderConfig initialization");
+        config, "Config is null for ParquetConfig initialization");
     config_ = std::move(config);
   }
 
@@ -122,6 +133,15 @@ class ParquetReaderConfig {
 
   cudf::data_type timestampType() const;
   cudf::data_type timestampTypeSession(const config::ConfigBase* session) const;
+
+  bool isWriteTimestampsAsUTC() const;
+  bool isWriteTimestampsAsUTCSession(const config::ConfigBase* session) const;
+
+  bool isWriteArrowSchema() const;
+  bool isWriteArrowSchemaSession(const config::ConfigBase* session) const;
+
+  bool isWritev2PageHeaders() const;
+  bool isWritev2PageHeadersSession(const config::ConfigBase* session) const;
 
  private:
   std::shared_ptr<const config::ConfigBase> config_;

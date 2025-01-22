@@ -19,9 +19,9 @@
 #include "velox/exec/Operator.h"
 #include "velox/exec/tests/utils/OperatorTestBase.h"
 #include "velox/exec/tests/utils/TempFilePath.h"
+#include "velox/experimental/cudf/connectors/parquet/ParquetConfig.h"
 #include "velox/experimental/cudf/connectors/parquet/ParquetConnector.h"
 #include "velox/experimental/cudf/connectors/parquet/ParquetDataSource.h"
-#include "velox/experimental/cudf/connectors/parquet/ParquetReaderConfig.h"
 #include "velox/experimental/cudf/connectors/parquet/ParquetTableHandle.h"
 #include "velox/type/tests/SubfieldFiltersBuilder.h"
 

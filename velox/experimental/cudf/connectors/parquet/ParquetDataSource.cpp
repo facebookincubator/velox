@@ -19,9 +19,9 @@
 #include <memory>
 #include <string>
 
+#include "velox/experimental/cudf/connectors/parquet/ParquetConfig.h"
 #include "velox/experimental/cudf/connectors/parquet/ParquetConnectorSplit.h"
 #include "velox/experimental/cudf/connectors/parquet/ParquetDataSource.h"
-#include "velox/experimental/cudf/connectors/parquet/ParquetReaderConfig.h"
 #include "velox/experimental/cudf/connectors/parquet/ParquetTableHandle.h"
 
 #include "velox/experimental/cudf/exec/Utilities.h"
@@ -69,8 +69,8 @@ ParquetDataSource::ParquetDataSource(
         columnHandles,
     folly::Executor* executor,
     const ConnectorQueryCtx* connectorQueryCtx,
-    const std::shared_ptr<ParquetReaderConfig>& ParquetReaderConfig)
-    : ParquetReaderConfig_(ParquetReaderConfig),
+    const std::shared_ptr<ParquetConfig>& ParquetConfig)
+    : ParquetConfig_(ParquetConfig),
       executor_(executor),
       connectorQueryCtx_(connectorQueryCtx),
       pool_(connectorQueryCtx->memoryPool()),
@@ -224,17 +224,17 @@ ParquetDataSource::createSplitReader() {
   // Reader options
   auto readerOptions =
       cudf::io::parquet_reader_options::builder(split_->getCudfSourceInfo())
-          .skip_rows(ParquetReaderConfig_->skipRows())
-          .use_pandas_metadata(ParquetReaderConfig_->isUsePandasMetadata())
-          .use_arrow_schema(ParquetReaderConfig_->isUseArrowSchema())
+          .skip_rows(ParquetConfig_->skipRows())
+          .use_pandas_metadata(ParquetConfig_->isUsePandasMetadata())
+          .use_arrow_schema(ParquetConfig_->isUseArrowSchema())
           .allow_mismatched_pq_schemas(
-              ParquetReaderConfig_->isAllowMismatchedParquetSchemas())
-          .timestamp_type(ParquetReaderConfig_->timestampType())
+              ParquetConfig_->isAllowMismatchedParquetSchemas())
+          .timestamp_type(ParquetConfig_->timestampType())
           .build();
 
   // Set num_rows only if available
-  if (ParquetReaderConfig_->numRows().has_value()) {
-    readerOptions.set_num_rows(ParquetReaderConfig_->numRows().value());
+  if (ParquetConfig_->numRows().has_value()) {
+    readerOptions.set_num_rows(ParquetConfig_->numRows().value());
   }
 
   // Set column projection if needed
@@ -244,8 +244,8 @@ ParquetDataSource::createSplitReader() {
 
   // Create a parquet reader
   return std::make_unique<cudf::io::chunked_parquet_reader>(
-      ParquetReaderConfig_->maxChunkReadLimit(),
-      ParquetReaderConfig_->maxPassReadLimit(),
+      ParquetConfig_->maxChunkReadLimit(),
+      ParquetConfig_->maxPassReadLimit(),
       readerOptions);
 }
 
