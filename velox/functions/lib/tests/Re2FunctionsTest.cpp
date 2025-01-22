@@ -73,6 +73,12 @@ class Re2FunctionsTest : public test::FunctionBaseTest {
       const std::vector<std::optional<T>>& groupIds,
       const std::vector<std::optional<std::vector<std::string>>>& output);
 
+  void testRe2ExtractAll(
+      std::string source,
+      std::string pattern,
+      int idx,
+      std::vector<std::optional<std::string>> expected);
+
   std::string generateString(
       const char* characterSet,
       vector_size_t outputLength = 60) {
@@ -1070,6 +1076,24 @@ void Re2FunctionsTest::testRe2ExtractAll(
   assertEqualVectors(expectedResult, result);
 }
 
+void Re2FunctionsTest::testRe2ExtractAll(
+    std::string source,
+    std::string pattern,
+    int idx,
+    std::vector<std::optional<std::string>> expected) {
+  auto sourceVector = makeFlatVector<std::string>({source}, velox::VARCHAR());
+  auto patternVector = makeFlatVector<std::string>({pattern}, velox::VARCHAR());
+  auto idxVector = makeFlatVector<int>(std::vector<int>{idx}, velox::INTEGER());
+  // Make the complex vector explicitly, otherwise it would cause template
+  // conflict.
+  auto expectedVector = makeNullableArrayVector<std::string>(
+      std::vector<std::vector<std::optional<std::string>>>{expected});
+  std::string expression = "regexp_extract_all(c0, c1, c2)";
+  auto result = evaluate(
+      expression, makeRowVector({sourceVector, patternVector, idxVector}));
+  assertEqualVectors(expectedVector, result);
+}
+
 TEST_F(Re2FunctionsTest, regexExtractAllConstantPatternNoGroupId) {
   const std::vector<std::optional<std::string>> inputs = {
       "  123a   2b   14m  ", "123a 2b     14m", "123a2b14m"};
@@ -1098,6 +1122,10 @@ TEST_F(Re2FunctionsTest, regexExtractAllConstantPatternConstantGroupId) {
 
   testRe2ExtractAll(inputs, constantPattern, intGroupIds, expectedOutputs);
   testRe2ExtractAll(inputs, constantPattern, bigGroupIds, expectedOutputs);
+}
+
+TEST_F(Re2FunctionsTest, regexExtractAllMismatchedGroup) {
+  testRe2ExtractAll("rat cat\nbat dog", "ra(.)|blah(.)(.)", 2, {std::nullopt});
 }
 
 TEST_F(Re2FunctionsTest, regexExtractAllConstantPatternVariableGroupId) {
