@@ -103,6 +103,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           path: ${{ env.sizes_file }}
+          name: "${{ matrix.type }}-${{ matrix.link-type }}-sizes"
 
       - name: Copy ninja_log
         run: cp _build/${{ matrix.type }}/.ninja_log /tmp/metrics/.ninja_log
