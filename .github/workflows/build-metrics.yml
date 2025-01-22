@@ -87,13 +87,13 @@ jobs:
           pushd '_build/${{ matrix.type }}'
 
           # . to also check in lib for mono build
-          find . -type f -name 'libvelox*.so' -o -name 'libvelox*.a' -exec ls -l -BB {} \; |
+          find . -type f -name 'libvelox*.so' -o -name 'libvelox*.a' | xargs ls -l -BB  |
             awk '{print $5, $9; total += $5} END {print total," total_lib_size"}' > $sizes_file
 
-          find velox -type f -name '*.o' -exec ls -l -BB {} \; |
+          find velox -type f -name '*.o' | ls -l -BB |
             awk '{print $5, $9; total += $5} END {print total," total_obj_size"}' >> $sizes_file
 
-          find velox -type f -name 'velox_*' -exec ls -l -BB {} \; |
+          find velox -type f -name 'velox_*' | ls -l -BB |
             awk '{print $5, $9; total += $5} END {print total," total_exec_size"}' >> $sizes_file
 
           echo "::group::Size file for ${{ matrix.link-type }} - ${{ matrix.type }}"
