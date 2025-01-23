@@ -8,6 +8,7 @@
   "meta.com": "Meta",
   "fb.com": "Meta",
   "microsoft.com": "Microsoft",
+  "voltrondata.com": "Voltron Data",
   "tencent.com": "Tencent",
   "xiaomi.com": "Xiaomi"
 }

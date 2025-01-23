@@ -17,6 +17,7 @@ import os
 import subprocess
 import argparse
 import json
+import sys
 from pathlib import Path
 
 
@@ -36,7 +37,8 @@ def list_contributors(velox_root, since, until):
             ["base64", "-D", "-i", "velox/docs/mailmap_base64", "-o", "./.mailmap"]
         )
     except subprocess.CalledProcessError as e:
-        print("Error:", e)
+        print("Error decoding mailmap_base64:", e)
+        sys.exit(-1)
 
     # Get a list of contributors in the specified range using git log.
     try:
@@ -44,10 +46,15 @@ def list_contributors(velox_root, since, until):
             ["git", "shortlog", "-se", "--since", since, "--until", until], text=True
         )
     except subprocess.CalledProcessError as e:
-        print("Error:", e)
+        print("Error listing git log:", e)
+        sys.exit(-1)
 
     # Load affiliations map.
-    affiliateMap = json.load(open("velox/docs/affiliations_map.txt"))
+    try:
+        affiliateMap = json.load(open("velox/docs/affiliations_map.txt"))
+    except ValueError as e:
+        print("Error loading affiliations_map.txt:", e)
+        sys.exit(-1)
 
     # Output entry format is " 1  John <john@abc.com>" or " 1  John <ABC>"
     # Format contributor affiliation from the output.
@@ -76,22 +83,22 @@ def list_contributors(velox_root, since, until):
     try:
         subprocess.run(["rm", "./.mailmap"])
     except subprocess.CalledProcessError as e:
-        print("Error:", e)
+        print("Error removing .mailmap:", e)
+        sys.exit(-1)
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("since")
-    parser.add_argument("until")
-    parser.add_argument("--path", help="Velox root directory")
+    parser.add_argument("--since", type=str, default="June 01 2024")
+    parser.add_argument("--until", type=str, default="June 30 2024")
+    parser.add_argument(
+        "--path", type=str, help="Velox root directory", default=Path.cwd()
+    )
     args = parser.parse_args()
 
-    velox_git_root = Path.cwd()
-    if args.path:
-        velox_git_root = args.path
+    if not is_git_root(args.path):
+        print("Invalid Velox git root path:", args.path)
+        sys.exit(-1)
 
-    if not is_git_root(velox_git_root):
-        print("Invalid Velox git root path", velox_git_root)
-        exit()
-
-    list_contributors(velox_git_root, args.since, args.until)
+    list_contributors(args.path, args.since, args.until)
+    sys.exit()
