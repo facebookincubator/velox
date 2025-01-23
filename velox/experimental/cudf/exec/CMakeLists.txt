@@ -28,6 +28,8 @@ set_target_properties(
 target_link_libraries(
   velox_cudf_exec
   cudf::cudf
+  arrow
+  velox_arrow_bridge
   velox_exception
   velox_common_base
   velox_exec)

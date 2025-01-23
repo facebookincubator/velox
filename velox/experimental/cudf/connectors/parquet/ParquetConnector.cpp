@@ -58,8 +58,9 @@ std::unique_ptr<DataSink> createDataSink(
 std::shared_ptr<Connector> ParquetConnectorFactory::newConnector(
     const std::string& id,
     std::shared_ptr<const facebook::velox::config::ConfigBase> config,
-    folly::Executor* executor) {
-  return std::make_shared<ParquetConnector>(id, config, executor);
+    folly::Executor* ioExecutor,
+    folly::Executor* cpuExecutor) {
+  return std::make_shared<ParquetConnector>(id, config, ioExecutor);
 }
 
 } // namespace facebook::velox::cudf_velox::connector::parquet
