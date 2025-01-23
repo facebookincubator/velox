@@ -135,12 +135,41 @@ struct UnixDateFunction {
 
 template <typename T>
 struct UnixTimestampFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  FOLLY_ALWAYS_INLINE void initialize(
+      const std::vector<TypePtr>& /*inputTypes*/,
+      const core::QueryConfig& config,
+      const arg_type<Date>* /*date*/,
+      const arg_type<Varchar>* /*format*/) {
+    sessionTimeZone_ = getTimeZoneFromConfig(config);
+  }
+
   // unix_timestamp();
   // If no parameters, return the current unix timestamp without adjusting
   // timezones.
   FOLLY_ALWAYS_INLINE void call(int64_t& result) {
     result = Timestamp::now().getSeconds();
   }
+
+  FOLLY_ALWAYS_INLINE void call(
+      int64_t& result,
+      const arg_type<Timestamp>& timestamp,
+      const arg_type<Varchar>& /*format*/) {
+    result = timestamp.getSeconds();
+  }
+
+  FOLLY_ALWAYS_INLINE void call(
+      int64_t& result,
+      const arg_type<Date>& date,
+      const arg_type<Varchar>& /*format*/) {
+    auto timestamp = Timestamp::fromDate(date);
+    timestamp.toGMT(*sessionTimeZone_);
+    result = timestamp.getSeconds();
+  }
+
+ private:
+  const tz::TimeZone* sessionTimeZone_{tz::locateZone(0)};
 };
 
 template <typename T>

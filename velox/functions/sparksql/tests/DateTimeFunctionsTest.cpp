@@ -1126,5 +1126,39 @@ TEST_F(DateTimeFunctionsTest, timestampToMillis) {
   EXPECT_EQ(timestampToMillis("-292275055-05-16 16:47:04.192"), kMinBigint);
 }
 
+TEST_F(DateTimeFunctionsTest, unixTimestampFromTimestamp) {
+  const auto unixTimestamp = [&](const StringView time,
+                                 const StringView format) {
+    return evaluateOnce<int64_t>(
+        "unix_timestamp(c0, c1)",
+        std::make_optional(parseTimestamp(time)),
+        std::make_optional(format));
+  };
+  EXPECT_EQ(unixTimestamp("1970-01-01 00:00:01", "yyyy-MM-dd"), 1);
+  EXPECT_EQ(unixTimestamp("1970-01-01 00:00:01", "yyyy-MM-dd HH:mm:ss"), 1);
+  EXPECT_EQ(unixTimestamp("1970-01-01 00:00:00.000127", "yyyy-MM-dd"), 0);
+  EXPECT_EQ(unixTimestamp("1969-12-31 23:59:59.999872", "yyyy-MM-dd"), -1);
+  EXPECT_EQ(unixTimestamp("1970-01-01 00:35:47.483647", "yyyy-MM-dd"), 2147);
+  EXPECT_EQ(
+      unixTimestamp("1970-01-01 00:35:47.483647", "yyyy-MM-dd HH:mm:ss"), 2147);
+  EXPECT_EQ(
+      unixTimestamp("1971-01-01 00:00:01.483647", "yyyy-MM-dd"), 31536001);
+}
+
+TEST_F(DateTimeFunctionsTest, unixTimestampFromDate) {
+  const auto unixTimestamp = [&](const StringView date,
+                                 std::optional<StringView> format) {
+    return evaluateOnce<int64_t>(
+        "unix_timestamp(c0, c1)",
+        {DATE(), VARCHAR()},
+        std::make_optional(parseDate(date)),
+        format);
+  };
+  EXPECT_EQ(unixTimestamp("1970-01-01", "yyyy-MM-dd"), 0);
+  EXPECT_EQ(unixTimestamp("1970-01-01", "yyyy-MM-dd HH:mm:ss"), 0);
+  EXPECT_EQ(unixTimestamp("1970-01-02", "yyyy-MM-dd"), 86400);
+  EXPECT_EQ(unixTimestamp("1969-12-31", "yyyy-MM-dd"), -86400);
+}
+
 } // namespace
 } // namespace facebook::velox::functions::sparksql::test

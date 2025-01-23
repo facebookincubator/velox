@@ -311,6 +311,16 @@ These functions support TIMESTAMP and DATE input types.
     Returns null if ``string`` does not match ``format`` or if ``format``
     is invalid.
 
+.. spark:function:: unix_timestamp(timestamp, format) -> integer
+   :noindex:
+
+    Returns the UNIX timestamp of time specified by ``timestamp``.
+
+.. spark:function:: unix_timestamp(date) -> integer
+   :noindex:
+
+    Returns the UNIX timestamp of time specified by ``date``.
+
 .. function:: week_of_year(x) -> integer
 
     Returns the `ISO-Week`_ of the year from x. The value ranges from ``1`` to ``53``.
