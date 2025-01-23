@@ -350,6 +350,8 @@ bool HashTable<ignoreNullKeys>::compareKeys(
     const char* group,
     HashLookup& lookup,
     vector_size_t row) {
+  // If `probeForNullKeyOnly` is set in the lookup object, the function will
+  // skip the key comparison and return true immediately.
   if (lookup.probeForNullKeyOnly) {
     return true;
   }

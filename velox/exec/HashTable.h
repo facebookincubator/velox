@@ -96,7 +96,9 @@ struct HashLookup {
   /// Populated by groupProbe and joinProbe.
   raw_vector<uint64_t> normalizedKeys;
 
-  /// If true, only probe for null keys. Used by listNullKeyRows.
+  /// If true, the probe will only consider rows with null keys.
+  /// During probing, only the hash value is compared, and key comparison is
+  /// skipped to avoid potential issues. This is used by listNullKeyRows.
   bool probeForNullKeyOnly{false};
 };
 
