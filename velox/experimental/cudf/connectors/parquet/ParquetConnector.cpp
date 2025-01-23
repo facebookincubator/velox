@@ -26,7 +26,7 @@ ParquetConnector::ParquetConnector(
     std::shared_ptr<const facebook::velox::config::ConfigBase> config,
     folly::Executor* executor)
     : Connector(id),
-      ParquetConfig_(std::make_shared<ParquetConfig>(config)),
+      parquetConfig_(std::make_shared<ParquetConfig>(config)),
       executor_(executor) {
   LOG(INFO) << "cudf::Parquet connector " << connectorId() << " created.";
 }
@@ -43,16 +43,25 @@ std::unique_ptr<DataSource> ParquetConnector::createDataSource(
       columnHandles,
       executor_,
       connectorQueryCtx,
-      ParquetConfig_);
+      parquetConfig_);
 }
 
-std::unique_ptr<DataSink> createDataSink(
+std::unique_ptr<DataSink> ParquetConnector::createDataSink(
     RowTypePtr inputType,
     std::shared_ptr<ConnectorInsertTableHandle> connectorInsertTableHandle,
     ConnectorQueryCtx* connectorQueryCtx,
     CommitStrategy commitStrategy) {
+  auto parquetInsertHandle =
+      std::dynamic_pointer_cast<ParquetInsertTableHandle>(
+          connectorInsertTableHandle);
+  VELOX_CHECK_NOT_NULL(
+      parquetInsertHandle, "Parquet connector expecting parquet write handle!");
   return std::make_unique<ParquetDataSink>(
-      inputType, connectorInsertTableHandle, connectorQueryCtx, commitStrategy);
+      inputType,
+      parquetInsertHandle,
+      connectorQueryCtx,
+      commitStrategy,
+      parquetConfig_);
 }
 
 std::shared_ptr<Connector> ParquetConnectorFactory::newConnector(

@@ -83,6 +83,14 @@ class ParquetConfig {
       "parquet.reader.timestamp_type";
 
   // Writer config options
+
+  /// Sort Writer will exit finish() method after this many milliseconds even if
+  /// it has not completed its work yet. Zero means no time limit.
+  static constexpr const char* kSortWriterFinishTimeSliceLimitMs =
+      "sort-writer_finish_time_slice_limit_ms";
+  static constexpr const char* kSortWriterFinishTimeSliceLimitMsSession =
+      "sort_writer_finish_time_slice_limit_ms";
+
   static constexpr const char* kWriteTimestampsAsUTC =
       "parquet.writer.write-timestamps-as-utc";
   static constexpr const char* kWriteTimestampsAsUTCSession =
@@ -107,6 +115,9 @@ class ParquetConfig {
   const std::shared_ptr<const config::ConfigBase>& config() const {
     return config_;
   }
+
+  uint64_t sortWriterFinishTimeSliceLimitMs(
+      const config::ConfigBase* session) const;
 
   std::size_t maxChunkReadLimit() const;
   std::size_t maxChunkReadLimitSession(const config::ConfigBase* session) const;
@@ -134,14 +145,14 @@ class ParquetConfig {
   cudf::data_type timestampType() const;
   cudf::data_type timestampTypeSession(const config::ConfigBase* session) const;
 
-  bool isWriteTimestampsAsUTC() const;
-  bool isWriteTimestampsAsUTCSession(const config::ConfigBase* session) const;
+  bool writeTimestampsAsUTC() const;
+  bool writeTimestampsAsUTCSession(const config::ConfigBase* session) const;
 
-  bool isWriteArrowSchema() const;
-  bool isWriteArrowSchemaSession(const config::ConfigBase* session) const;
+  bool writeArrowSchema() const;
+  bool writeArrowSchemaSession(const config::ConfigBase* session) const;
 
-  bool isWritev2PageHeaders() const;
-  bool isWritev2PageHeadersSession(const config::ConfigBase* session) const;
+  bool writev2PageHeaders() const;
+  bool writev2PageHeadersSession(const config::ConfigBase* session) const;
 
  private:
   std::shared_ptr<const config::ConfigBase> config_;

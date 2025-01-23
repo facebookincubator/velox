@@ -46,7 +46,7 @@ class ParquetConnector final : public Connector {
       ConnectorQueryCtx* connectorQueryCtx) override final;
 
   const std::shared_ptr<const ConfigBase>& connectorConfig() const override {
-    return ParquetConfig_->config();
+    return parquetConfig_->config();
   }
 
   std::unique_ptr<DataSink> createDataSink(
@@ -60,7 +60,7 @@ class ParquetConnector final : public Connector {
   }
 
  protected:
-  const std::shared_ptr<ParquetConfig> ParquetConfig_;
+  const std::shared_ptr<ParquetConfig> parquetConfig_;
   folly::Executor* executor_;
 };
 

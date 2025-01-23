@@ -136,6 +136,13 @@ cudf::data_type ParquetConfig::timestampTypeSession(
   return cudf::data_type(cudf::type_id{unit});
 }
 
+uint64_t ParquetConfig::sortWriterFinishTimeSliceLimitMs(
+    const config::ConfigBase* session) const {
+  return session->get<uint64_t>(
+      kSortWriterFinishTimeSliceLimitMsSession,
+      config_->get<uint64_t>(kSortWriterFinishTimeSliceLimitMs, 5'000));
+}
+
 bool ParquetConfig::writeTimestampsAsUTC() const {
   return config_->get<bool>(kWriteTimestampsAsUTC, true);
 }

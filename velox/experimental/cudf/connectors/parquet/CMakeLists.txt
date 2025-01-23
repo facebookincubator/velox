@@ -27,6 +27,7 @@ add_library(
   ParquetConnector.cpp
   ParquetConnectorSplit.cpp
   ParquetDataSource.cpp
+  ParquetDataSink.cpp
   ParquetTableHandle.cpp)
 
 set_target_properties(

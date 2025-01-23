@@ -15,7 +15,6 @@
  */
 
 #pragma once
-
 #include "velox/dwio/common/Options.h"
 
 #include <cudf/io/parquet.hpp>
@@ -31,11 +30,8 @@ using namespace cudf::io;
 
 struct ParquetWriterOptions
     : public facebook::velox::dwio::common::WriterOptions {
-  // Specify the compression format to use
-  compression_type compression = compression_type::SNAPPY;
-
   // Specify the level of statistics in the output file
-  statistics_freq statsLevel = statistics_freq::STATISTICS_ROW_GROUP;
+  statistics_freq statsLevel = statistics_freq::STATISTICS_ROWGROUP;
 
   // Parquet writer can write INT96 or TIMESTAMP_MICROS. Defaults to
   // TIMESTAMPMICROS. If true then overrides any per-column setting in
@@ -74,13 +70,16 @@ struct ParquetWriterOptions
   std::optional<cudf::size_type> maxPageFragmentSize;
 
   // Optional compression statistics
-  std::sharedPtr<writer_compression_statistics> compressionStats;
+  std::shared_ptr<writer_compression_statistics> compressionStats;
 
   // Write V2 page headers?
   bool v2PageHeaders = false;
 
   // Encoding to use for columns
-  std::vector<arrow::Encoding::type> encoding;
+  column_encoding encoding = column_encoding::PLAIN;
+
+  // Sorting columns
+  std::vector<sorting_column> sortingColumns;
 };
 
 } // namespace facebook::velox::cudf_velox::connector::parquet
