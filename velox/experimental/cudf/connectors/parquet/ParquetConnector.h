@@ -80,7 +80,8 @@ class ParquetConnectorFactory : public ConnectorFactory {
   std::shared_ptr<Connector> newConnector(
       const std::string& id,
       std::shared_ptr<const ConfigBase> config,
-      folly::Executor* executor = nullptr) override;
+      folly::Executor* ioExecutor = nullptr,
+      folly::Executor* cpuExecutor = nullptr) override;
 };
 
 } // namespace facebook::velox::cudf_velox::connector::parquet
