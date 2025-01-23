@@ -20,18 +20,22 @@ namespace facebook::velox {
 
 /// Dynamically opens and registers functions defined in a shared library.
 ///
-/// Opens a shared library using dlopen, looks for the symbol registry, and invokes it.
-/// search for a "void registry()" C function containing the registration code
-/// for the functions defined in library, and execute it.
-///
 /// The library being linked needs to provide a function with the following
 /// signature:
 ///
-///   void registry();
+/// void registry();
 ///
 /// The registration function needs to be defined in the top-level namespace,
 /// and be enclosed by a extern "C" directive to prevent the compiler from
 /// mangling the symbol name.
+
+/// The function uses dlopen to load the shared library.
+/// It then searches for the "void registry()" C function which typically contains all
+/// the registration code for the UDFs defined in library. After locating the function it
+/// executes the registration bringing the UDFs in the scope of the Velox runtime.
+/// 
+/// If the same library is loaded twice then a no-op scenerio will happen.
+
 void loadDynamicLibrary(const char* fileName);
 
 } // namespace facebook::velox
