@@ -30,6 +30,26 @@
 
 namespace facebook::velox::cudf_velox {
 
+namespace {
+  // From AggregationFuzzer.cpp
+  RowVectorPtr mergeRowVectors(
+    const std::vector<RowVectorPtr>& results,
+    velox::memory::MemoryPool* pool) {
+    auto totalCount = 0;
+    for (const auto& result : results) {
+      totalCount += result->size();
+    }
+    auto copy =
+        BaseVector::create<RowVector>(results[0]->type(), totalCount, pool);
+    auto copyCount = 0;
+    for (const auto& result : results) {
+      copy->copy(result.get(), copyCount, 0, result->size());
+      copyCount += result->size();
+    }
+    return copy;
+  }
+}
+
 CudfFromVelox::CudfFromVelox(
     int32_t operatorId,
     RowTypePtr outputType,
@@ -45,13 +65,13 @@ CudfFromVelox::CudfFromVelox(
 void CudfFromVelox::addInput(RowVectorPtr input) {
   // Accumulate inputs
   if (input != nullptr) {
-    for (auto& child : input->children()) {
-      child->loadedVector();
-    }
-    input->loadedVector();
+    // Materialize lazy vectors
     if (input->size() > 0) {
-      auto cudf_table = with_arrow::to_cudf_table(input, input->pool());
-      inputs_.push_back(std::move(cudf_table));
+      for (auto& child : input->children()) {
+        child->loadedVector();
+      }
+      input->loadedVector();
+      inputs_.push_back(input);
     }
   }
 }
@@ -65,18 +85,17 @@ void CudfFromVelox::noMoreInput() {
     return;
   }
 
-  auto cudf_table_views = std::vector<cudf::table_view>(inputs_.size());
-  for (int i = 0; i < inputs_.size(); i++) {
-    VELOX_CHECK_NOT_NULL(inputs_[i]);
-    cudf_table_views[i] = inputs_[i]->view();
-  }
-  auto tbl = cudf::concatenate(cudf_table_views);
-
-  // Release input data
-  cudf::get_default_stream().synchronize();
-  cudf_table_views.clear();
+  auto input = mergeRowVectors(inputs_, inputs_[0]->pool());
   inputs_.clear();
+
+  if (input->size() == 0) {
+    outputTable_ = nullptr;
+    return;
+  }
+  auto tbl = with_arrow::to_cudf_table(input, input->pool());
+  cudf::get_default_stream().synchronize();
   VELOX_CHECK_NOT_NULL(tbl);
+
   if (cudfDebugEnabled()) {
     std::cout << "CudfFromVelox table number of columns: " << tbl->num_columns()
               << std::endl;
@@ -85,12 +104,8 @@ void CudfFromVelox::noMoreInput() {
   }
 
   auto const size = tbl->num_rows();
-  if (size == 0) {
-    outputTable_ = nullptr;
-    return;
-  }
   outputTable_ =
-      std::make_shared<CudfVector>(pool(), outputType_, size, std::move(tbl));
+      std::make_shared<CudfVector>(input->pool(), outputType_, size, std::move(tbl));
 }
 
 RowVectorPtr CudfFromVelox::getOutput() {
