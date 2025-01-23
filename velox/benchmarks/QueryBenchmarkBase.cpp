@@ -101,10 +101,7 @@ DEFINE_int32(
     1024,
     "Preferred output batch size in rows");
 
-DEFINE_int32(
-    max_output_batch_rows,
-    10'000,
-    "Max output batch size in rows");
+DEFINE_int32(max_output_batch_rows, 10'000, "Max output batch size in rows");
 
 using namespace facebook::velox::exec;
 using namespace facebook::velox::exec::test;

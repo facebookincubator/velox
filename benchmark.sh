@@ -27,7 +27,7 @@ pushd "$(dirname ${0})"
 
 mkdir -p benchmark_results
 
-queries=${1:-$(seq 1 20)}
+queries=${1:-$(seq 1 22)}
 devices=${2:-"cpu gpu"}
 profile=${3:-"false"}
 
