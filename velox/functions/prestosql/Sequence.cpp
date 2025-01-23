@@ -17,7 +17,7 @@
 #include <iostream>
 #include "velox/expression/DecodedArgs.h"
 #include "velox/expression/VectorFunction.h"
-#include "velox/functions/prestosql/DateTimeImpl.h"
+#include "velox/functions/lib/DateTimeImpl.h"
 #include "velox/vector/ConstantVector.h"
 
 namespace facebook::velox::functions {

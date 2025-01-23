@@ -88,6 +88,8 @@ void registerDatetimeFunctions(const std::string& prefix) {
       {prefix + "unix_millis"});
   registerUnaryIntegralWithTReturn<MillisToTimestampFunction, Timestamp>(
       {prefix + "timestamp_millis"});
+  registerFunction<DateAddYMIntervalFunction, Date, Date, IntervalYearMonth>(
+      {prefix + "date_add_ym_interval"});
 }
 
 } // namespace facebook::velox::functions::sparksql

@@ -18,8 +18,8 @@
 #include <string_view>
 #include "velox/expression/ComplexViewTypes.h"
 #include "velox/functions/lib/DateTimeFormatter.h"
+#include "velox/functions/lib/DateTimeImpl.h"
 #include "velox/functions/lib/TimeUtils.h"
-#include "velox/functions/prestosql/DateTimeImpl.h"
 #include "velox/functions/prestosql/types/TimestampWithTimeZoneType.h"
 #include "velox/type/TimestampConversion.h"
 #include "velox/type/Type.h"
