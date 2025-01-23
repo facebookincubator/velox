@@ -59,8 +59,8 @@ class CudfFromVelox : public exec::Operator {
   void close() override;
 
  private:
-  CudfVectorPtr outputTable_;
   std::vector<RowVectorPtr> inputs_;
+  std::size_t current_output_size_ = 0;
   bool finished_ = false;
 };
 

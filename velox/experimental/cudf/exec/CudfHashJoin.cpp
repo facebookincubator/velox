@@ -202,13 +202,7 @@ void CudfHashJoinBuild::noMoreInput() {
 }
 
 exec::BlockingReason CudfHashJoinBuild::isBlocked(ContinueFuture* future) {
-  if (cudfDebugEnabled()) {
-    std::cout << "Calling CudfHashJoinBuild::isBlocked" << std::endl;
-  }
   if (!future_.valid()) {
-    if (cudfDebugEnabled()) {
-      std::cout << "CudfHashJoinBuild future is not valid" << std::endl;
-    }
     return exec::BlockingReason::kNotBlocked;
   }
   *future = std::move(future_);
@@ -216,9 +210,6 @@ exec::BlockingReason CudfHashJoinBuild::isBlocked(ContinueFuture* future) {
 }
 
 bool CudfHashJoinBuild::isFinished() {
-  if (cudfDebugEnabled()) {
-    std::cout << "Calling CudfHashJoinBuild::isFinished" << std::endl;
-  }
   return !future_.valid() && noMoreInput_;
 }
 
@@ -239,16 +230,10 @@ CudfHashJoinProbe::CudfHashJoinProbe(
 }
 
 bool CudfHashJoinProbe::needsInput() const {
-  if (cudfDebugEnabled()) {
-    std::cout << "Calling CudfHashJoinProbe::needsInput" << std::endl;
-  }
   return !finished_ && input_ == nullptr;
 }
 
 void CudfHashJoinProbe::addInput(RowVectorPtr input) {
-  if (cudfDebugEnabled()) {
-    std::cout << "Calling CudfHashJoinProbe::addInput" << std::endl;
-  }
   input_ = std::move(input);
 }
 
@@ -412,9 +397,6 @@ RowVectorPtr CudfHashJoinProbe::getOutput() {
 }
 
 exec::BlockingReason CudfHashJoinProbe::isBlocked(ContinueFuture* future) {
-  if (cudfDebugEnabled()) {
-    std::cout << "Calling CudfHashJoinProbe::isBlocked" << std::endl;
-  }
   if (hashObject_.has_value()) {
     return exec::BlockingReason::kNotBlocked;
   }
@@ -440,9 +422,6 @@ exec::BlockingReason CudfHashJoinProbe::isBlocked(ContinueFuture* future) {
 }
 
 bool CudfHashJoinProbe::isFinished() {
-  if (cudfDebugEnabled()) {
-    std::cout << "Calling CudfHashJoinProbe::isFinished" << std::endl;
-  }
   auto const is_finished = finished_ || (noMoreInput_ && input_ == nullptr);
 
   // Release hashObject_ if finished
