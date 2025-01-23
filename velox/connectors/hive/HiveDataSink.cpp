@@ -543,6 +543,15 @@ DataSink::Stats HiveDataSink::stats() const {
   for (const auto& ioStats : ioStats_) {
     numWrittenBytes += ioStats->rawBytesWritten();
     writeIOTimeUs += ioStats->writeIOTimeUs();
+
+    for (const auto& [name, counter] : ioStats->storageStats()) {
+      if (stats.aggStorageStats.count(name) == 0) {
+        stats.aggStorageStats.emplace(name, RuntimeMetric(counter.unit));
+      } else {
+        VELOX_CHECK_EQ(stats.aggStorageStats.at(name).unit, counter.unit);
+      }
+      stats.aggStorageStats.at(name).addValue(counter.value);
+    }
   }
   stats.numWrittenBytes = numWrittenBytes;
   stats.writeIOTimeUs = writeIOTimeUs;

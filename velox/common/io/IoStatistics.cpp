@@ -108,6 +108,12 @@ IoStatistics::operationStats() const {
   return operationStats_;
 }
 
+std::unordered_map<std::string, RuntimeCounter> IoStatistics::storageStats()
+    const {
+  std::lock_guard<std::mutex> lock{storageStatsMutex_};
+  return storageStats_;
+}
+
 void IoStatistics::merge(const IoStatistics& other) {
   rawBytesRead_ += other.rawBytesRead_;
   rawBytesWritten_ += other.rawBytesWritten_;

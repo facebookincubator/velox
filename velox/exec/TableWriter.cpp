@@ -293,6 +293,11 @@ void TableWriter::updateStats(const connector::DataSink::Stats& stats) {
         "writeIOTime",
         RuntimeCounter(
             stats.writeIOTimeUs * 1000, RuntimeCounter::Unit::kNanos));
+
+    for (const auto& [name, metric] : stats.aggStorageStats) {
+      VELOX_CHECK_EQ(lockedStats->runtimeStats.count(name), 0);
+      lockedStats->runtimeStats.emplace(name, metric);
+    }
   }
   if (!stats.spillStats.empty()) {
     *spillStats_.wlock() += stats.spillStats;

@@ -178,6 +178,7 @@ class DataSink {
     uint32_t numWrittenFiles{0};
     uint64_t writeIOTimeUs{0};
     common::SpillStats spillStats;
+    std::unordered_map<std::string, RuntimeMetric> aggStorageStats;
 
     bool empty() const;
 
