@@ -319,6 +319,22 @@ TEST_F(ProbabilityTest, inverseFCDF) {
       inverseFCDF(1, -kInf, -0.1), "p must be in the interval [0, 1]");
 }
 
+
+// TODO: remove this test after completion of fuzzer debug
+TEST_F(ProbabilityTest, inverseFCDF_FUZZER) {
+  const auto inverseFCDF = [&](std::optional<double> df1,
+                               std::optional<double> df2,
+                               std::optional<double> p) {
+    return evaluateOnce<double>("inverse_f_cdf(c0, c1, c2)", df1, df2, p);
+  };
+
+  // EXPECT_EQ(inverseFCDF(2.0, 5.0, 0.0), 0.0);
+
+  // inverse_f_cdf(0.36946232430636883, inverse_f_cdf(0.5703326677903533, 0.7623271467164159, 0.13314712885767221), 0.9104626753833145)
+  auto subExpr1 = inverseFCDF(0.5703326677903533, 0.7623271467164159, 0.13314712885767221);
+  auto mainExpr1 = inverseFCDF(0.36946232430636883, subExpr1, 0.9104626753833145);
+}
+
 TEST_F(ProbabilityTest, chiSquaredCDF) {
   const auto chiSquaredCDF = [&](std::optional<double> df,
                                  std::optional<double> value) {
