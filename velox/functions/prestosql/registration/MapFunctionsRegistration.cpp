@@ -17,6 +17,7 @@
 #include "velox/expression/VectorFunction.h"
 #include "velox/functions/Registerer.h"
 #include "velox/functions/lib/MapConcat.h"
+#include "velox/functions/lib/TransformKeys.h"
 #include "velox/functions/prestosql/Map.h"
 #include "velox/functions/prestosql/MapFunctions.h"
 #include "velox/functions/prestosql/MapNormalize.h"
@@ -82,7 +83,6 @@ void registerMapKeyExists(const std::string& prefix) {
 
 void registerMapFunctions(const std::string& prefix) {
   VELOX_REGISTER_VECTOR_FUNCTION(udf_map_filter, prefix + "map_filter");
-  VELOX_REGISTER_VECTOR_FUNCTION(udf_transform_keys, prefix + "transform_keys");
   VELOX_REGISTER_VECTOR_FUNCTION(
       udf_transform_values, prefix + "transform_values");
   registerMapFunction(prefix + "map", false /*allowDuplicateKeys*/);
@@ -102,6 +102,7 @@ void registerMapFunctions(const std::string& prefix) {
   VELOX_REGISTER_VECTOR_FUNCTION(
       udf_no_values_match, prefix + "no_values_match");
 
+  registerTransformKeysFunction(prefix + "transform_keys");
   registerMapConcatFunction(prefix + "map_concat");
 
   registerFunction<

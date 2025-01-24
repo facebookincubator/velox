@@ -51,7 +51,6 @@ velox_add_library(
   Subscript.cpp
   ToUtf8.cpp
   Transform.cpp
-  TransformKeys.cpp
   TransformValues.cpp
   TypeOf.cpp
   URIParser.cpp
