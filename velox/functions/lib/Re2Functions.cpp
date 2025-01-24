@@ -149,8 +149,13 @@ bool re2Extract(
       result.setNoCopy(row, StringView(extracted.data(), extracted.size()));
       return !StringView::isInline(extracted.size());
     } else {
-      result.setNull(row, true);
-      return false;
+      if (emptyNoMatch) {
+        result.setNoCopy(row, StringView(nullptr, 0));
+        return true;
+      } else {
+        result.setNull(row, true);
+        return false;
+      }
     }
   }
 }
