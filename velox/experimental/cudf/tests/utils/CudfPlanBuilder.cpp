@@ -22,7 +22,7 @@
 
 namespace facebook::velox::cudf_velox::exec::test {
 
-std::function<PlanNodePtr(std::string, PlanNodePtr)> addTableWriter(
+std::function<PlanNodePtr(std::string, PlanNodePtr)> addCudfTableWriter(
     const RowTypePtr& inputColumns,
     const std::vector<std::string>& tableColumnNames,
     const std::shared_ptr<core::AggregationNode>& aggregationNode,
