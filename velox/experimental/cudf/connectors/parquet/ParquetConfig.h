@@ -149,7 +149,7 @@ class ParquetConfig {
   cudf::data_type timestampType() const;
   cudf::data_type timestampTypeSession(const config::ConfigBase* session) const;
 
-  bool ParquetConfig::immutableFiles() const;
+  bool immutableFiles() const;
 
   bool writeTimestampsAsUTC() const;
   bool writeTimestampsAsUTCSession(const config::ConfigBase* session) const;
