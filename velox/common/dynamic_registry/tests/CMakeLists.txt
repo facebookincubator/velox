@@ -24,7 +24,6 @@ add_library(velox_function_err_my_dynamic SHARED MyDynamicErrFunction.cpp)
 
 
 if(APPLE)
-
 target_link_libraries(
   velox_function_my_dynamic
   PRIVATE
