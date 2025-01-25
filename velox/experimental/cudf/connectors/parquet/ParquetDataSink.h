@@ -88,17 +88,88 @@ class LocationHandle : public ISerializable {
   const TableType tableType_;
 };
 
+/// Parameters for Hive writers.
+class ParquetWriterParameters {
+ public:
+  enum class UpdateMode {
+    kNew, // Write files to a new directory.
+  };
+
+  /// @param updateMode Write the files to a new directory, or append to an
+  /// existing directory or overwrite an existing directory.
+  /// @param targetFileName The final name of a file after committing.
+  /// @param targetDirectory The final directory that a file should be in after
+  /// committing.
+  /// @param writeFileName The temporary name of the file that a running writer
+  /// writes to. If a running writer writes directory to the target file, set
+  /// writeFileName to targetFileName by default.
+  /// @param writeDirectory The temporary directory that a running writer writes
+  /// to. If a running writer writes directory to the target directory, set
+  /// writeDirectory to targetDirectory by default.
+  ParquetWriterParameters(
+      UpdateMode updateMode,
+      std::string targetFileName,
+      std::string targetDirectory,
+      std::optional<std::string> writeFileName = std::nullopt,
+      std::optional<std::string> writeDirectory = std::nullopt)
+      : updateMode_(updateMode),
+        targetFileName_(std::move(targetFileName)),
+        targetDirectory_(std::move(targetDirectory)),
+        writeFileName_(writeFileName.value_or(targetFileName_)),
+        writeDirectory_(writeDirectory.value_or(targetDirectory_)) {}
+
+  UpdateMode updateMode() const {
+    return updateMode_;
+  }
+
+  static std::string updateModeToString(UpdateMode updateMode) {
+    switch (updateMode) {
+      case UpdateMode::kNew:
+        return "NEW";
+      default:
+        VELOX_UNSUPPORTED("Unsupported update mode.");
+    }
+  }
+
+  const std::string& targetFileName() const {
+    return targetFileName_;
+  }
+
+  const std::string& writeFileName() const {
+    return writeFileName_;
+  }
+
+  const std::string& targetDirectory() const {
+    return targetDirectory_;
+  }
+
+  const std::string& writeDirectory() const {
+    return writeDirectory_;
+  }
+
+ private:
+  const UpdateMode updateMode_;
+  const std::optional<std::string> partitionName_;
+  const std::string targetFileName_;
+  const std::string targetDirectory_;
+  const std::string writeFileName_;
+  const std::string writeDirectory_;
+};
+
 struct ParquetWriterInfo {
   ParquetWriterInfo(
+      ParquetWriterParameters parameters,
       std::shared_ptr<memory::MemoryPool> _writerPool,
       std::shared_ptr<memory::MemoryPool> _sinkPool,
       std::shared_ptr<memory::MemoryPool> _sortPool)
-      : nonReclaimableSectionHolder(new tsan_atomic<bool>(false)),
+      : writerParameters(std::move(parameters)),
+        nonReclaimableSectionHolder(new tsan_atomic<bool>(false)),
         spillStats(std::make_unique<folly::Synchronized<common::SpillStats>>()),
         writerPool(std::move(_writerPool)),
         sinkPool(std::move(_sinkPool)),
         sortPool(std::move(_sortPool)) {}
 
+  const ParquetWriterParameters writerParameters;
   const std::unique_ptr<tsan_atomic<bool>> nonReclaimableSectionHolder;
   /// Collects the spill stats from sort writer if the spilling has been
   /// triggered.
@@ -129,6 +200,9 @@ class ParquetInsertTableHandle : public ConnectorInsertTableHandle {
         serdeParameters_(serdeParameters),
         writerOptions_(writerOptions) {
     if (compressionKind.has_value()) {
+      VELOX_CHECK(
+          compressionKind.value() != common::CompressionKind_MAX,
+          "Unsupported compression type: CompressionKind_MAX");
       VELOX_CHECK(
           compressionKind.value() == common::CompressionKind_NONE or
               compressionKind.value() == common::CompressionKind_SNAPPY or
@@ -162,9 +236,6 @@ class ParquetInsertTableHandle : public ConnectorInsertTableHandle {
   }
 
   const std::shared_ptr<dwio::common::WriterOptions>& writerOptions() const {
-    VELOX_CHECK(
-        dynamic_cast<ParquetWriterOptions*>(writerOptions_.get()) != nullptr,
-        "Invalid WriterOptions pointer.");
     return writerOptions_;
   }
 
@@ -253,7 +324,7 @@ class ParquetDataSink : public DataSink {
   }
 
   FOLLY_ALWAYS_INLINE bool isCommitRequired() const {
-    return commitStrategy_ != CommitStrategy::kNoCommit;
+    return false; // Since we always immediately write
   }
 
   FOLLY_ALWAYS_INLINE void checkRunning() const {
@@ -261,14 +332,13 @@ class ParquetDataSink : public DataSink {
   }
 
   void closeInternal();
-  void makeWriterOptions();
+  void makeWriterOptions(ParquetWriterParameters writerParameters);
 
   const RowTypePtr inputType_;
   const std::shared_ptr<const ParquetInsertTableHandle> insertTableHandle_;
   const ConnectorQueryCtx* const connectorQueryCtx_;
   const CommitStrategy commitStrategy_;
   const std::shared_ptr<const ParquetConfig> parquetConfig_;
-  const std::shared_ptr<dwio::common::WriterFactory> writerFactory_;
   const common::SpillConfig* const spillConfig_;
   const uint64_t sortWriterFinishTimeSliceLimitMs_{0};
   State state_{State::kRunning};

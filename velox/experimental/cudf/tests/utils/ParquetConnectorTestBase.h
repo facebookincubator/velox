@@ -129,7 +129,9 @@ class ParquetConnectorTestBase
   static std::shared_ptr<connector::parquet::LocationHandle> makeLocationHandle(
       std::string targetDirectory) {
     return std::make_shared<connector::parquet::LocationHandle>(
-        targetDirectory, connector::parquet::LocationHandle::TableType::kNew);
+        targetDirectory,
+        connector::parquet::LocationHandle::TableType::kNew,
+        "");
   }
 
   /// @param targetDirectory Final directory of the target table.

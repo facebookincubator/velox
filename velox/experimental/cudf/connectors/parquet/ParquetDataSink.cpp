@@ -134,8 +134,6 @@ ParquetDataSink::ParquetDataSink(
       connectorQueryCtx_(connectorQueryCtx),
       commitStrategy_(commitStrategy),
       parquetConfig_(parquetConfig),
-      writerFactory_(
-          dwio::common::getWriterFactory(insertTableHandle_->storageFormat())),
       spillConfig_(connectorQueryCtx->spillConfig()),
       sortWriterFinishTimeSliceLimitMs_(
           getFinishTimeSliceLimitMsFromParquetConfig(
@@ -150,7 +148,9 @@ ParquetDataSink::ParquetDataSink(
   const auto& writerOptions = dynamic_cast<ParquetWriterOptions*>(
       insertTableHandle_->writerOptions().get());
 
-  sortingColumns_ = std::move(writerOptions->sortingColumns);
+  if (writerOptions != nullptr) {
+    sortingColumns_ = std::move(writerOptions->sortingColumns);
+  }
 }
 
 void ParquetDataSink::appendData(RowVectorPtr input) {
@@ -174,19 +174,8 @@ void ParquetDataSink::appendData(RowVectorPtr input) {
 
 std::unique_ptr<cudf::io::parquet_chunked_writer>
 ParquetDataSink::createCudfWriter(cudf::table_view cudfTable) {
-  makeWriterOptions();
-
   // Create a table_input_metadata from the input
   auto tableInputMetadata = createCudfTableInputMetadata(cudfTable);
-
-  const auto& writerOptions = dynamic_cast<ParquetWriterOptions*>(
-      insertTableHandle_->writerOptions().get());
-
-  // Set encoding for all columns
-  std::for_each(
-      tableInputMetadata.column_metadata.begin(),
-      tableInputMetadata.column_metadata.end(),
-      [=](auto& col_meta) { col_meta.set_encoding(writerOptions->encoding); });
 
   auto compressionKind =
       getCompressionType(insertTableHandle_->compressionKind().value_or(
@@ -195,11 +184,22 @@ ParquetDataSink::createCudfWriter(cudf::table_view cudfTable) {
   // Create a sink and writer
   const auto& locationHandle = insertTableHandle_->locationHandle();
   const auto targetFileName = locationHandle->targetFileName().empty()
-      ? locationHandle->targetPath() + "/" + makeUuid() + ".parquet"
+      ? fmt::format("{}{}", makeUuid(), ".parquet")
       : locationHandle->targetFileName();
 
+  auto writerParameters = ParquetWriterParameters(
+      ParquetWriterParameters::UpdateMode::kNew,
+      targetFileName,
+      locationHandle->targetPath());
+
+  const auto writePath = fs::path(writerParameters.writeDirectory()) /
+      writerParameters.writeFileName();
+
+  makeWriterOptions(writerParameters);
+
   // Create writer options for the given sink
-  const auto sinkInfo = cudf::io::sink_info(targetFileName);
+  const auto sinkInfo = cudf::io::sink_info(
+      fmt::format("{}/{}", locationHandle->targetPath(), targetFileName));
   auto cudfWriterOptions =
       cudf::io::chunked_parquet_writer_options::builder(sinkInfo)
           .metadata(tableInputMetadata)
@@ -207,29 +207,55 @@ ParquetDataSink::createCudfWriter(cudf::table_view cudfTable) {
           .write_arrow_schema(parquetConfig_->writeArrowSchema())
           .write_v2_headers(parquetConfig_->writev2PageHeaders())
           .compression(compressionKind)
-          .stats_level(writerOptions->statsLevel)
-          .row_group_size_bytes(writerOptions->rowGroupSizeBytes)
-          .row_group_size_rows(writerOptions->rowGroupSizeRows)
-          .max_page_size_bytes(writerOptions->maxPageSizeBytes)
-          .max_page_size_rows(writerOptions->maxPageSizeRows)
-          .dictionary_policy(writerOptions->dictionaryPolicy)
-          .max_dictionary_size(writerOptions->maxDictionarySize)
-          .int96_timestamps(writerOptions->writeTimestampsAsInt96)
-          .utc_timestamps(writerOptions->writeTimestampsAsUTC)
           .build();
 
-  if (writerOptions->maxPageFragmentSize.has_value()) {
-    cudfWriterOptions.set_max_page_fragment_size(
-        writerOptions->maxPageFragmentSize.value());
-  }
-  // Write sorting columns if available
-  if (not sortingColumns_.empty()) {
-    cudfWriterOptions.set_sorting_columns(sortingColumns_);
-  }
-  // Get compression stats if needed
-  if (writerOptions->compressionStats != nullptr) {
-    cudfWriterOptions.set_compression_statistics(
-        writerOptions->compressionStats);
+  const auto& writerOptions = dynamic_cast<ParquetWriterOptions*>(
+      insertTableHandle_->writerOptions().get());
+
+  // If non-null writerOptions were passed, pass them to the chunked parquet
+  // writer options
+  if (writerOptions != nullptr) {
+    // Set encoding for all columns
+    std::for_each(
+        tableInputMetadata.column_metadata.begin(),
+        tableInputMetadata.column_metadata.end(),
+        [=](auto& col_meta) {
+          col_meta.set_encoding(writerOptions->encoding);
+        });
+
+    cudfWriterOptions.set_row_group_size_bytes(
+        writerOptions->rowGroupSizeBytes);
+    cudfWriterOptions.set_row_group_size_rows(writerOptions->rowGroupSizeRows);
+    cudfWriterOptions.set_max_page_size_bytes(writerOptions->maxPageSizeBytes);
+    cudfWriterOptions.set_max_page_size_rows(writerOptions->maxPageSizeRows);
+    cudfWriterOptions.set_dictionary_policy(writerOptions->dictionaryPolicy);
+    cudfWriterOptions.set_max_dictionary_size(writerOptions->maxDictionarySize);
+    cudfWriterOptions.enable_int96_timestamps(
+        writerOptions->writeTimestampsAsInt96);
+
+    // Enable if enabled in the session or the writerOptions
+    cudfWriterOptions.enable_utc_timestamps(
+        parquetConfig_->writeTimestampsAsUTC() or
+        writerOptions->writeTimestampsAsUTC);
+    cudfWriterOptions.enable_write_arrow_schema(
+        parquetConfig_->writeArrowSchema() or writerOptions->writeArrowSchema);
+    cudfWriterOptions.enable_write_v2_headers(
+        parquetConfig_->writev2PageHeaders() or writerOptions->v2PageHeaders);
+    cudfWriterOptions.set_stats_level(writerOptions->statsLevel);
+
+    if (writerOptions->maxPageFragmentSize.has_value()) {
+      cudfWriterOptions.set_max_page_fragment_size(
+          writerOptions->maxPageFragmentSize.value());
+    }
+    // Get compression stats if needed
+    if (writerOptions->compressionStats != nullptr) {
+      cudfWriterOptions.set_compression_statistics(
+          writerOptions->compressionStats);
+    }
+    // Write sorting columns if available
+    if (sortingColumns_.empty()) {
+      cudfWriterOptions.set_sorting_columns(sortingColumns_);
+    }
   }
 
   return std::make_unique<cudf::io::parquet_chunked_writer>(cudfWriterOptions);
@@ -252,12 +278,20 @@ cudf::io::table_input_metadata ParquetDataSink::createCudfTableInputMetadata(
                           const ParquetColumnHandle& columnHandle) {
         // Check if equal number of children
         const auto& childrenHandles = columnHandle.children();
-        VELOX_CHECK_EQ(
-            colMeta.num_children(),
-            childrenHandles.size(),
-            "Unequal number of columns in the input and ParquetInsertTableHandle");
+
+        // Warn if the mismatch in the number of child cols in Parquet
+        // table_metadata and columnHandles
+        if (colMeta.num_children() != childrenHandles.size()) {
+          LOG(WARNING) << fmt::format(
+              "({} vs {}): Unequal number of child columns in Parquet table_metadata and ColumnHandles",
+              colMeta.num_children(),
+              childrenHandles.size());
+        }
+
         // Set children's names
-        for (int32_t i = 0; i < colMeta.num_children(); ++i) {
+        for (int32_t i = 0; i <
+             std::min<int32_t>(colMeta.num_children(), childrenHandles.size());
+             ++i) {
           setColumnName(colMeta.child(i), childrenHandles[i]);
         }
         // Set this column's name
@@ -363,8 +397,6 @@ std::vector<std::string> ParquetDataSink::close() {
   // clang-format off
       auto partitionUpdateJson = folly::toJson(
        folly::dynamic::object
-#if 0 // writerInfo does not yet have writerParameters
-          ("name", writerInfo_->writerParameters.partitionName().value_or(""))
           ("writePath", writerInfo_->writerParameters.writeDirectory())
           ("targetPath", writerInfo_->writerParameters.targetDirectory())
           ("fileWriteInfos", folly::dynamic::array(
@@ -372,7 +404,6 @@ std::vector<std::string> ParquetDataSink::close() {
               ("writeFileName", writerInfo_->writerParameters.writeFileName())
               ("targetFileName", writerInfo_->writerParameters.targetFileName())
               ("fileSize", ioStats_->rawBytesWritten())))
-#endif
           ("rowCount", writerInfo_->numWrittenRows)
           ("inMemoryDataSizeInBytes", writerInfo_->inputSizeInBytes)
           ("onDiskDataSizeInBytes", ioStats_->rawBytesWritten())
@@ -410,7 +441,8 @@ std::shared_ptr<memory::MemoryPool> ParquetDataSink::createWriterPool() {
       fmt::format("{}.{}", connectorPool->name(), "parquet-writer"));
 }
 
-void ParquetDataSink::makeWriterOptions() {
+void ParquetDataSink::makeWriterOptions(
+    ParquetWriterParameters writerParameters) {
   auto writerPool = createWriterPool();
   auto sinkPool = createSinkPool(writerPool);
   std::shared_ptr<memory::MemoryPool> sortPool{nullptr};
@@ -419,7 +451,10 @@ void ParquetDataSink::makeWriterOptions() {
   }
 
   writerInfo_ = std::make_shared<ParquetWriterInfo>(
-      std::move(writerPool), std::move(sinkPool), std::move(sortPool));
+      std::move(writerParameters),
+      std::move(writerPool),
+      std::move(sinkPool),
+      std::move(sortPool));
 
   ioStats_ = std::make_shared<io::IoStatistics>();
 
@@ -427,7 +462,7 @@ void ParquetDataSink::makeWriterOptions() {
   // or allocate a new one.
   auto options = insertTableHandle_->writerOptions();
   if (!options) {
-    options = writerFactory_->createWriterOptions();
+    options = std::make_unique<ParquetWriterOptions>();
   }
 
   const auto* connectorSessionProperties =

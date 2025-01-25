@@ -50,7 +50,7 @@ std::unique_ptr<DataSink> ParquetConnector::createDataSink(
     RowTypePtr inputType,
     std::shared_ptr<ConnectorInsertTableHandle> connectorInsertTableHandle,
     ConnectorQueryCtx* connectorQueryCtx,
-    CommitStrategy commitStrategy) {
+    CommitStrategy /*commitStrategy*/) {
   auto parquetInsertHandle =
       std::dynamic_pointer_cast<ParquetInsertTableHandle>(
           connectorInsertTableHandle);
@@ -60,7 +60,7 @@ std::unique_ptr<DataSink> ParquetConnector::createDataSink(
       inputType,
       parquetInsertHandle,
       connectorQueryCtx,
-      commitStrategy,
+      CommitStrategy::kNoCommit,
       parquetConfig_);
 }
 

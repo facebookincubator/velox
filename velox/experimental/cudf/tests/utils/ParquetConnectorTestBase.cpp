@@ -50,7 +50,8 @@ void fillColumnNames(
               colMeta.set_name(defaultName);
             }
             for (int32_t i = 0; i < colMeta.num_children(); ++i) {
-              addDefaultName(colMeta.child(i), std::to_string(i));
+              addDefaultName(
+                  colMeta.child(i), fmt::format("{}_{}", defaultName, i));
             }
           };
   for (int32_t i = 0; i < tableMeta.column_metadata.size(); ++i) {
