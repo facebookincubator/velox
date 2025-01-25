@@ -78,7 +78,7 @@ target_link_libraries(
   gtest_main
   fmt::fmt)
 
-  target_link_libraries(
+target_link_libraries(
   velox_cudf_table_write_test
   velox_cudf_exec_test_lib
   velox_cudf_parquet_connector

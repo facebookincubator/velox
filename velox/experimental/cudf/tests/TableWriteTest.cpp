@@ -444,7 +444,7 @@ class TableWriteTest : public ParquetConnectorTestBase {
     const bool addScaleWriterExchange = false;
     auto insertPlan = inputPlan;
     insertPlan
-        .addNode(addTableWriter(
+        .addNode(addCudfTableWriter(
             inputRowType,
             tableRowType->names(),
             aggregationNode,
@@ -750,14 +750,14 @@ TEST_P(UnpartitionedTableWriterTest, differentCompression) {
 TEST_P(UnpartitionedTableWriterTest, immutableSettings) {
   struct {
     cudf_velox::connector::parquet::LocationHandle::TableType dataType;
-    bool immutableSplitsEnabled;
+    bool immutableFilesEnabled;
     bool expectedInsertSuccees;
 
     std::string debugString() const {
       return fmt::format(
-          "dataType:{}, immutableSplitsEnabled:{}, operationSuccess:{}",
+          "dataType:{}, immutableFilesEnabled:{}, operationSuccess:{}",
           dataType,
-          immutableSplitsEnabled,
+          immutableFilesEnabled,
           expectedInsertSuccees);
     }
   } testSettings[] = {
@@ -771,8 +771,8 @@ TEST_P(UnpartitionedTableWriterTest, immutableSettings) {
   for (auto testData : testSettings) {
     SCOPED_TRACE(testData.debugString());
     std::unordered_map<std::string, std::string> propFromFile{
-        {"parquet.immutable-splits",
-         testData.immutableSplitsEnabled ? "true" : "false"}};
+        {"parquet.immutable-files",
+         testData.immutableFilesEnabled ? "true" : "false"}};
     std::shared_ptr<const config::ConfigBase> config{
         std::make_shared<config::ConfigBase>(std::move(propFromFile))};
     resetParquetConnector(config);
