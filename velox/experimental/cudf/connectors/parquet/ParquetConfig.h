@@ -84,6 +84,10 @@ class ParquetConfig {
 
   // Writer config options
 
+  /// Whether new data can be inserted into a Parquet file
+  /// Cudf-Velox currently does not support appending data to existing files.
+  static constexpr const char* kImmutableFiles = "parquet.immutable-files";
+
   /// Sort Writer will exit finish() method after this many milliseconds even if
   /// it has not completed its work yet. Zero means no time limit.
   static constexpr const char* kSortWriterFinishTimeSliceLimitMs =
@@ -144,6 +148,8 @@ class ParquetConfig {
 
   cudf::data_type timestampType() const;
   cudf::data_type timestampTypeSession(const config::ConfigBase* session) const;
+
+  bool ParquetConfig::immutableFiles() const;
 
   bool writeTimestampsAsUTC() const;
   bool writeTimestampsAsUTCSession(const config::ConfigBase* session) const;

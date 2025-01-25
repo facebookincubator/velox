@@ -136,6 +136,10 @@ cudf::data_type ParquetConfig::timestampTypeSession(
   return cudf::data_type(cudf::type_id{unit});
 }
 
+bool ParquetConfig::immutableFiles() const {
+  return config_->get<bool>(kImmutableFiles, false);
+}
+
 uint64_t ParquetConfig::sortWriterFinishTimeSliceLimitMs(
     const config::ConfigBase* session) const {
   return session->get<uint64_t>(
