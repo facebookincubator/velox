@@ -19,7 +19,7 @@ using namespace facebook::velox::common::testutil;
 using namespace facebook::velox::dwio::common;
 
 // Adds a TableWriter node to write all input columns into a Parquet table.
-std::function<PlanNodePtr(std::string, PlanNodePtr)> addTableWriter(
+std::function<PlanNodePtr(std::string, PlanNodePtr)> addCudfTableWriter(
     const RowTypePtr& inputColumns,
     const std::vector<std::string>& tableColumnNames,
     const std::shared_ptr<core::AggregationNode>& aggregationNode,
