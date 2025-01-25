@@ -77,6 +77,10 @@ struct GlobalConfiguration {
   /// and be writable. This flag is ignored if
   /// saveInputOnExpressionAnyFailurePath flag is set.
   std::string saveInputOnExpressionSystemFailurePath;
+  /// Use O_DIRECT for SSD cache IO.
+  bool ssd_odirect{true};
+  /// Read back data after writing to SSD.
+  bool ssd_verify_write{false};
 };
 
 GlobalConfiguration& globalConfig();
