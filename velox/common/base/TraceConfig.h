@@ -45,11 +45,14 @@ struct TraceConfig {
   UpdateAndCheckTraceLimitCB updateAndCheckTraceLimitCB;
   /// The trace task regexp.
   std::string taskRegExp;
+  /// Single node mode.
+  bool singleNodeMode;
 
   TraceConfig(
       std::unordered_set<std::string> _queryNodeIds,
       std::string _queryTraceDir,
       UpdateAndCheckTraceLimitCB _updateAndCheckTraceLimitCB,
-      std::string _taskRegExp);
+      std::string _taskRegExp,
+      bool _singleNodeMode = false);
 };
 } // namespace facebook::velox::exec::trace

@@ -73,6 +73,7 @@ class FilterProjectReplayerTest : public HiveConnectorTestBase {
     core::PlanNode::registerSerDe();
     core::ITypedExpr::registerSerDe();
     registerPartitionFunctionSerDe();
+    exec::trace::registerDummySourceSerDe();
   }
 
   void TearDown() override {
@@ -161,11 +162,20 @@ TEST_F(FilterProjectReplayerTest, filterProject) {
 
   struct {
     uint32_t maxDrivers;
+    bool singleNodeMode;
 
     std::string debugString() const {
-      return fmt::format("maxDrivers: {}", maxDrivers);
+      return fmt::format(
+          "maxDrivers: {}, singleNodeMode: {}", maxDrivers, singleNodeMode);
     }
-  } testSettings[]{{1}, {4}, {8}};
+  } testSettings[]{
+      {1, true},
+      {4, true},
+      {8, true},
+      {1, false},
+      {4, false},
+      {8, false},
+  };
 
   for (const auto& testData : testSettings) {
     SCOPED_TRACE(testData.debugString());
@@ -178,9 +188,10 @@ TEST_F(FilterProjectReplayerTest, filterProject) {
         .config(core::QueryConfig::kQueryTraceDir, traceRoot)
         .config(core::QueryConfig::kQueryTraceMaxBytes, 100UL << 30)
         .config(core::QueryConfig::kQueryTraceTaskRegExp, ".*")
+        .config(core::QueryConfig::kQueryTraceNodeIds, projectNodeId_)
         .config(
-            core::QueryConfig::kQueryTraceNodeIds,
-            fmt::format("{},{}", filterNodeId_, projectNodeId_));
+            core::QueryConfig::kQueryTraceSingleNodeMode,
+            testData.singleNodeMode);
     auto traceResult = traceBuilder.splits(tracePlanWithSplits.splits)
                            .copyResults(pool(), task);
 
@@ -206,118 +217,121 @@ TEST_F(FilterProjectReplayerTest, filterOnly) {
   AssertQueryBuilder builder(planWithSplits.plan);
   const auto result = builder.splits(planWithSplits.splits).copyResults(pool());
 
-  const auto traceRoot = fmt::format("{}/{}", testDir_->getPath(), "filter");
-  const auto tracePlanWithSplits = createPlan(PlanMode::FilterOnly);
-  std::shared_ptr<Task> task;
-  AssertQueryBuilder traceBuilder(tracePlanWithSplits.plan);
-  traceBuilder.maxDrivers(4)
-      .config(core::QueryConfig::kQueryTraceEnabled, true)
-      .config(core::QueryConfig::kQueryTraceDir, traceRoot)
-      .config(core::QueryConfig::kQueryTraceMaxBytes, 100UL << 30)
-      .config(core::QueryConfig::kQueryTraceTaskRegExp, ".*")
-      .config(
-          core::QueryConfig::kQueryTraceNodeIds,
-          fmt::format("{},{}", filterNodeId_, projectNodeId_));
-  auto traceResult =
-      traceBuilder.splits(tracePlanWithSplits.splits).copyResults(pool(), task);
+  for (const auto singleNodeMode : {true, false}) {
+    const auto traceRoot = fmt::format("{}/{}", testDir_->getPath(), "filter");
+    const auto tracePlanWithSplits = createPlan(PlanMode::FilterOnly);
+    std::shared_ptr<Task> task;
+    AssertQueryBuilder traceBuilder(tracePlanWithSplits.plan);
+    traceBuilder.maxDrivers(4)
+        .config(core::QueryConfig::kQueryTraceEnabled, true)
+        .config(core::QueryConfig::kQueryTraceDir, traceRoot)
+        .config(core::QueryConfig::kQueryTraceMaxBytes, 100UL << 30)
+        .config(core::QueryConfig::kQueryTraceTaskRegExp, ".*")
+        .config(core::QueryConfig::kQueryTraceNodeIds, filterNodeId_)
+        .config(core::QueryConfig::kQueryTraceSingleNodeMode, singleNodeMode);
+    auto traceResult = traceBuilder.splits(tracePlanWithSplits.splits)
+                           .copyResults(pool(), task);
 
-  assertEqualResults({result}, {traceResult});
+    assertEqualResults({result}, {traceResult});
 
-  const auto taskId = task->taskId();
-  auto replayingResult = FilterProjectReplayer(
-                             traceRoot,
-                             task->queryCtx()->queryId(),
-                             task->taskId(),
-                             filterNodeId_,
-                             "FilterProject",
-                             "",
-                             0,
-                             executor_.get())
-                             .run();
-  assertEqualResults({result}, {replayingResult});
+    const auto taskId = task->taskId();
+    auto replayingResult = FilterProjectReplayer(
+                               traceRoot,
+                               task->queryCtx()->queryId(),
+                               task->taskId(),
+                               filterNodeId_,
+                               "FilterProject",
+                               "",
+                               0,
+                               executor_.get())
+                               .run();
+    assertEqualResults({result}, {replayingResult});
+  }
 }
 
 TEST_F(FilterProjectReplayerTest, projectOnly) {
   const auto planWithSplits = createPlan(PlanMode::ProjectOnly);
   AssertQueryBuilder builder(planWithSplits.plan);
   const auto result = builder.splits(planWithSplits.splits).copyResults(pool());
-
   const auto traceRoot = fmt::format("{}/{}", testDir_->getPath(), "project");
   const auto tracePlanWithSplits = createPlan(PlanMode::ProjectOnly);
-  std::shared_ptr<Task> task;
-  AssertQueryBuilder traceBuilder(tracePlanWithSplits.plan);
-  traceBuilder.maxDrivers(4)
-      .config(core::QueryConfig::kQueryTraceEnabled, true)
-      .config(core::QueryConfig::kQueryTraceDir, traceRoot)
-      .config(core::QueryConfig::kQueryTraceMaxBytes, 100UL << 30)
-      .config(core::QueryConfig::kQueryTraceTaskRegExp, ".*")
-      .config(
-          core::QueryConfig::kQueryTraceNodeIds,
-          fmt::format("{},{}", filterNodeId_, projectNodeId_));
-  auto traceResult =
-      traceBuilder.splits(tracePlanWithSplits.splits).copyResults(pool(), task);
 
-  assertEqualResults({result}, {traceResult});
+  for (const auto singleNodeMode : {true, false}) {
+    std::shared_ptr<Task> task;
+    AssertQueryBuilder traceBuilder(tracePlanWithSplits.plan);
+    traceBuilder.maxDrivers(4)
+        .config(core::QueryConfig::kQueryTraceEnabled, true)
+        .config(core::QueryConfig::kQueryTraceDir, traceRoot)
+        .config(core::QueryConfig::kQueryTraceMaxBytes, 100UL << 30)
+        .config(core::QueryConfig::kQueryTraceTaskRegExp, ".*")
+        .config(core::QueryConfig::kQueryTraceNodeIds, projectNodeId_)
+        .config(core::QueryConfig::kQueryTraceSingleNodeMode, singleNodeMode);
+    auto traceResult = traceBuilder.splits(tracePlanWithSplits.splits)
+                           .copyResults(pool(), task);
 
-  const auto taskId = task->taskId();
-  auto replayingResult = FilterProjectReplayer(
-                             traceRoot,
-                             task->queryCtx()->queryId(),
-                             task->taskId(),
-                             projectNodeId_,
-                             "FilterProject",
-                             "",
-                             0,
-                             executor_.get())
-                             .run();
-  assertEqualResults({result}, {replayingResult});
+    assertEqualResults({result}, {traceResult});
 
-  auto replayingResult1 = FilterProjectReplayer(
-                              traceRoot,
-                              task->queryCtx()->queryId(),
-                              task->taskId(),
-                              projectNodeId_,
-                              "FilterProject",
-                              "0,2",
-                              0,
-                              executor_.get())
-                              .run();
-  auto replayingResult2 = FilterProjectReplayer(
-                              traceRoot,
-                              task->queryCtx()->queryId(),
-                              task->taskId(),
-                              projectNodeId_,
-                              "FilterProject",
-                              "1,3",
-                              0,
-                              executor_.get())
-                              .run();
-  assertEqualResults({result}, {replayingResult1, replayingResult2});
+    const auto taskId = task->taskId();
+    auto replayingResult = FilterProjectReplayer(
+                               traceRoot,
+                               task->queryCtx()->queryId(),
+                               task->taskId(),
+                               projectNodeId_,
+                               "FilterProject",
+                               "",
+                               0,
+                               executor_.get())
+                               .run();
+    assertEqualResults({result}, {replayingResult});
 
-  const auto taskTraceDir =
-      exec::trace::getTaskTraceDirectory(traceRoot, *task);
-  const auto opTraceDir =
-      exec::trace::getOpTraceDirectory(taskTraceDir, projectNodeId_, 0, 0);
-  const auto opTraceDataFile = exec::trace::getOpTraceInputFilePath(opTraceDir);
-  auto fs = filesystems::getFileSystem(opTraceDataFile, nullptr);
-  auto file = fs->openFileForWrite(
-      opTraceDataFile,
-      filesystems::FileOptions{
-          .values = {},
-          .fileSize = std::nullopt,
-          .shouldThrowOnFileAlreadyExists = false});
-  file->truncate(0);
-  file->close();
-  auto emptyResult = FilterProjectReplayer(
-                         traceRoot,
-                         task->queryCtx()->queryId(),
-                         task->taskId(),
-                         projectNodeId_,
-                         "FilterProject",
-                         "0",
-                         0,
-                         executor_.get())
-                         .run();
-  ASSERT_EQ(emptyResult->size(), 0);
+    auto replayingResult1 = FilterProjectReplayer(
+                                traceRoot,
+                                task->queryCtx()->queryId(),
+                                task->taskId(),
+                                projectNodeId_,
+                                "FilterProject",
+                                "0,2",
+                                0,
+                                executor_.get())
+                                .run();
+    auto replayingResult2 = FilterProjectReplayer(
+                                traceRoot,
+                                task->queryCtx()->queryId(),
+                                task->taskId(),
+                                projectNodeId_,
+                                "FilterProject",
+                                "1,3",
+                                0,
+                                executor_.get())
+                                .run();
+    assertEqualResults({result}, {replayingResult1, replayingResult2});
+
+    const auto taskTraceDir =
+        exec::trace::getTaskTraceDirectory(traceRoot, *task);
+    const auto opTraceDir =
+        exec::trace::getOpTraceDirectory(taskTraceDir, projectNodeId_, 0, 0);
+    const auto opTraceDataFile =
+        exec::trace::getOpTraceInputFilePath(opTraceDir);
+    auto fs = filesystems::getFileSystem(opTraceDataFile, nullptr);
+    auto file = fs->openFileForWrite(
+        opTraceDataFile,
+        filesystems::FileOptions{
+            .values = {},
+            .fileSize = std::nullopt,
+            .shouldThrowOnFileAlreadyExists = false});
+    file->truncate(0);
+    file->close();
+    auto emptyResult = FilterProjectReplayer(
+                           traceRoot,
+                           task->queryCtx()->queryId(),
+                           task->taskId(),
+                           projectNodeId_,
+                           "FilterProject",
+                           "0",
+                           0,
+                           executor_.get())
+                           .run();
+    ASSERT_EQ(emptyResult->size(), 0);
+  }
 }
 } // namespace facebook::velox::tool::trace::test

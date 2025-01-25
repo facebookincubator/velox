@@ -29,6 +29,11 @@ class TaskTraceMetadataWriter {
       const std::shared_ptr<core::QueryCtx>& queryCtx,
       const core::PlanNodePtr& planNode);
 
+  void write(
+      const std::shared_ptr<core::QueryCtx>& queryCtx,
+      const core::PlanNodePtr& planNode,
+      const core::PlanNodeId& planNodeId);
+
  private:
   const std::string traceDir_;
   const std::shared_ptr<filesystems::FileSystem> fs_;

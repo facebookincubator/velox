@@ -58,6 +58,7 @@ class OperatorTraceTest : public HiveConnectorTestBase {
     core::PlanNode::registerSerDe();
     core::ITypedExpr::registerSerDe();
     registerPartitionFunctionSerDe();
+    trace::registerDummySourceSerDe();
   }
 
   void SetUp() override {
@@ -99,7 +100,9 @@ class OperatorTraceTest : public HiveConnectorTestBase {
     }
 
     for (auto i = 0; i < left->sources().size(); ++i) {
-      isSamePlan(left->sources().at(i), right->sources().at(i));
+      if (!isSamePlan(left->sources().at(i), right->sources().at(i))) {
+        return false;
+      }
     }
     return true;
   }
@@ -267,6 +270,7 @@ TEST_F(OperatorTraceTest, traceMetadata) {
 
   const auto outputDir = TempDirectoryPath::create();
   auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  core::PlanNodeId traceNodeId;
   const auto planNode =
       PlanBuilder(planNodeIdGenerator)
           .values(rows, false)
@@ -282,6 +286,7 @@ TEST_F(OperatorTraceTest, traceMetadata) {
               "c0 < 135",
               {"c0", "c1", "c2"},
               core::JoinType::kInner)
+          .capturePlanNodeId(traceNodeId)
           .planNode();
   const auto expectedQueryConfigs =
       std::unordered_map<std::string, std::string>{
@@ -299,30 +304,50 @@ TEST_F(OperatorTraceTest, traceMetadata) {
       executor_.get(),
       core::QueryConfig(expectedQueryConfigs),
       expectedConnectorProperties);
-  auto writer = trace::TaskTraceMetadataWriter(outputDir->getPath(), pool());
-  writer.write(queryCtx, planNode);
-  std::unordered_map<std::string, std::string> acutalQueryConfigs;
-  std::unordered_map<std::string, std::unordered_map<std::string, std::string>>
-      actualConnectorProperties;
-  core::PlanNodePtr actualQueryPlan;
-  auto reader = trace::TaskTraceMetadataReader(outputDir->getPath(), pool());
-  reader.read(acutalQueryConfigs, actualConnectorProperties, actualQueryPlan);
+  int i = 0;
+  for (const auto singleTraceMode : {true, false}) {
+    const auto tracePath =
+        fmt::format("{}/mode={}", outputDir->getPath(), singleTraceMode);
+    trace::createTraceDirectory(tracePath);
+    auto writer = trace::TaskTraceMetadataWriter(tracePath, pool());
+    if (singleTraceMode) {
+      writer.write(queryCtx, planNode, traceNodeId);
+    } else {
+      writer.write(queryCtx, planNode);
+    }
+    std::unordered_map<std::string, std::string> acutalQueryConfigs;
+    std::
+        unordered_map<std::string, std::unordered_map<std::string, std::string>>
+            actualConnectorProperties;
+    core::PlanNodePtr actualQueryPlan;
+    auto reader = trace::TaskTraceMetadataReader(tracePath, pool());
+    reader.read(acutalQueryConfigs, actualConnectorProperties, actualQueryPlan);
 
-  ASSERT_TRUE(isSamePlan(actualQueryPlan, planNode));
-  ASSERT_EQ(acutalQueryConfigs.size(), expectedQueryConfigs.size());
-  for (const auto& [key, value] : acutalQueryConfigs) {
-    ASSERT_EQ(acutalQueryConfigs.at(key), expectedQueryConfigs.at(key));
-  }
+    if (singleTraceMode) {
+      ASSERT_EQ(actualQueryPlan->id(), planNode->id());
+      ASSERT_EQ(actualQueryPlan->name(), planNode->name());
+      ASSERT_EQ(actualQueryPlan->sources().size(), planNode->sources().size());
+      ASSERT_EQ(actualQueryPlan->sources().front()->name(), "DummySource");
+    } else {
+      ASSERT_TRUE(isSamePlan(actualQueryPlan, planNode));
+    }
 
-  ASSERT_EQ(
-      actualConnectorProperties.size(), expectedConnectorProperties.size());
-  ASSERT_EQ(actualConnectorProperties.count("test_trace"), 1);
-  const auto expectedConnectorConfigs =
-      expectedConnectorProperties.at("test_trace")->rawConfigsCopy();
-  const auto actualConnectorConfigs =
-      actualConnectorProperties.at("test_trace");
-  for (const auto& [key, value] : actualConnectorConfigs) {
-    ASSERT_EQ(actualConnectorConfigs.at(key), expectedConnectorConfigs.at(key));
+    ASSERT_EQ(acutalQueryConfigs.size(), expectedQueryConfigs.size());
+    for (const auto& [key, value] : acutalQueryConfigs) {
+      ASSERT_EQ(acutalQueryConfigs.at(key), expectedQueryConfigs.at(key));
+    }
+
+    ASSERT_EQ(
+        actualConnectorProperties.size(), expectedConnectorProperties.size());
+    ASSERT_EQ(actualConnectorProperties.count("test_trace"), 1);
+    const auto expectedConnectorConfigs =
+        expectedConnectorProperties.at("test_trace")->rawConfigsCopy();
+    const auto actualConnectorConfigs =
+        actualConnectorProperties.at("test_trace");
+    for (const auto& [key, value] : actualConnectorConfigs) {
+      ASSERT_EQ(
+          actualConnectorConfigs.at(key), expectedConnectorConfigs.at(key));
+    }
   }
 }
 

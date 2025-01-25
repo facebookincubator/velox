@@ -74,6 +74,7 @@ class HashJoinReplayerTest : public HiveConnectorTestBase {
     core::PlanNode::registerSerDe();
     core::ITypedExpr::registerSerDe();
     registerPartitionFunctionSerDe();
+    exec::trace::registerDummySourceSerDe();
   }
 
   void TearDown() override {
@@ -216,31 +217,34 @@ TEST_F(HashJoinReplayerTest, basic) {
       probeInput_,
       buildInput_);
   AssertQueryBuilder traceBuilder(tracePlanWithSplits.plan);
-  traceBuilder.maxDrivers(4)
-      .config(core::QueryConfig::kQueryTraceEnabled, true)
-      .config(core::QueryConfig::kQueryTraceDir, traceRoot)
-      .config(core::QueryConfig::kQueryTraceMaxBytes, 100UL << 30)
-      .config(core::QueryConfig::kQueryTraceTaskRegExp, ".*")
-      .config(core::QueryConfig::kQueryTraceNodeIds, traceNodeId_);
-  for (const auto& [planNodeId, nodeSplits] : tracePlanWithSplits.splits) {
-    traceBuilder.splits(planNodeId, nodeSplits);
+  for (const auto traceSingleNodeMode : {true, false}) {
+    traceBuilder.maxDrivers(4)
+        .config(core::QueryConfig::kQueryTraceEnabled, true)
+        .config(core::QueryConfig::kQueryTraceDir, traceRoot)
+        .config(core::QueryConfig::kQueryTraceMaxBytes, 100UL << 30)
+        .config(core::QueryConfig::kQueryTraceTaskRegExp, ".*")
+        .config(core::QueryConfig::kQueryTraceNodeIds, traceNodeId_)
+        .config(QueryConfig::kQueryTraceSingleNodeMode, traceSingleNodeMode);
+    for (const auto& [planNodeId, nodeSplits] : tracePlanWithSplits.splits) {
+      traceBuilder.splits(planNodeId, nodeSplits);
+    }
+    auto traceResult = traceBuilder.copyResults(pool(), task);
+
+    assertEqualResults({result}, {traceResult});
+
+    const auto taskId = task->taskId();
+    const auto replayingResult = HashJoinReplayer(
+                                     traceRoot,
+                                     task->queryCtx()->queryId(),
+                                     task->taskId(),
+                                     traceNodeId_,
+                                     "HashJoin",
+                                     "",
+                                     0,
+                                     executor_.get())
+                                     .run();
+    assertEqualResults({result}, {replayingResult});
   }
-  auto traceResult = traceBuilder.copyResults(pool(), task);
-
-  assertEqualResults({result}, {traceResult});
-
-  const auto taskId = task->taskId();
-  const auto replayingResult = HashJoinReplayer(
-                                   traceRoot,
-                                   task->queryCtx()->queryId(),
-                                   task->taskId(),
-                                   traceNodeId_,
-                                   "HashJoin",
-                                   "",
-                                   0,
-                                   executor_.get())
-                                   .run();
-  assertEqualResults({result}, {replayingResult});
 }
 
 TEST_F(HashJoinReplayerTest, partialDriverIds) {
@@ -345,6 +349,7 @@ TEST_F(HashJoinReplayerTest, runner) {
       buildKeys_,
       probeInput_,
       buildInput_);
+
   AssertQueryBuilder traceBuilder(tracePlanWithSplits.plan);
   traceBuilder.config(core::QueryConfig::kQueryTraceEnabled, true)
       .config(core::QueryConfig::kQueryTraceDir, traceRoot)

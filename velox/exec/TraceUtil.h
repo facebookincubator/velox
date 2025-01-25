@@ -26,7 +26,6 @@
 #include <folly/dynamic.h>
 
 namespace facebook::velox::exec::trace {
-
 /// Creates a directory to store the query trace metdata and data.
 void createTraceDirectory(
     const std::string& traceDir,
@@ -142,4 +141,39 @@ folly::dynamic getTaskMetadata(
 
 /// Checks whether the operator can be traced.
 bool canTrace(const std::string& operatorType);
+
+class DummySourceNode : public core::PlanNode {
+ public:
+  explicit DummySourceNode(const RowTypePtr outputType)
+      : PlanNode(""), outputType_(std::move(outputType)) {}
+
+  const RowTypePtr& outputType() const override {
+    return outputType_;
+  }
+
+  const std::vector<core::PlanNodePtr>& sources() const override;
+
+  std::string_view name() const override;
+
+  folly::dynamic serialize() const override;
+
+  static core::PlanNodePtr create(const folly::dynamic& obj, void* context) {
+    return std::make_shared<DummySourceNode>(
+        ISerializable::deserialize<RowType>(obj["outputType"]));
+  }
+
+ private:
+  void addDetails(std::stringstream& stream) const override {
+    // Nothing to add.
+  }
+
+  const RowTypePtr outputType_;
+};
+
+void registerDummySourceSerDe();
+
+/// Copy the target plan node, and replay the source node with DummySourceNode.
+core::PlanNodePtr copyTraceNode(
+    const core::PlanNodePtr& node,
+    core::PlanNodeId nodeId);
 } // namespace facebook::velox::exec::trace

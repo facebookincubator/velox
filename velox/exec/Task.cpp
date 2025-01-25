@@ -3084,7 +3084,8 @@ std::optional<trace::TraceConfig> Task::maybeMakeTraceConfig() const {
       std::move(traceNodeIdSet),
       traceDir,
       std::move(updateAndCheckTraceLimitCB),
-      queryConfig.queryTraceTaskRegExp());
+      queryConfig.queryTraceTaskRegExp(),
+      queryConfig.queryTraceSingleNodeMode());
 }
 
 void Task::maybeInitTrace() {
@@ -3095,7 +3096,13 @@ void Task::maybeInitTrace() {
   trace::createTraceDirectory(traceConfig_->queryTraceDir);
   const auto metadataWriter = std::make_unique<trace::TaskTraceMetadataWriter>(
       traceConfig_->queryTraceDir, memory::traceMemoryPool());
-  metadataWriter->write(queryCtx_, planFragment_.planNode);
+  if (traceConfig_->singleNodeMode) {
+    VELOX_USER_CHECK_EQ(traceConfig_->queryNodes.size(), 1);
+    metadataWriter->write(
+        queryCtx_, planFragment_.planNode, *traceConfig_->queryNodes.cbegin());
+  } else {
+    metadataWriter->write(queryCtx_, planFragment_.planNode);
+  }
 }
 
 void Task::testingVisitDrivers(const std::function<void(Driver*)>& callback) {

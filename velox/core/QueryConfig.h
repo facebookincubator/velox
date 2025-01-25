@@ -416,6 +416,11 @@ class QueryConfig {
   static constexpr const char* kQueryTraceTaskRegExp =
       "query_trace_task_reg_exp";
 
+  /// Single Trace node mode. Only write the target trace node metadata if true,
+  /// and the num of query trace nodes must be 1.
+  static constexpr const char* kQueryTraceSingleNodeMode =
+      "query_trace_single_node_mode";
+
   /// Config used to create operator trace directory. This config is provided to
   /// underlying file system and the config is free form. The form should be
   /// defined by the underlying file system.
@@ -786,6 +791,10 @@ class QueryConfig {
   std::string queryTraceTaskRegExp() const {
     // The default query trace task regexp, empty by default.
     return get<std::string>(kQueryTraceTaskRegExp, "");
+  }
+
+  bool queryTraceSingleNodeMode() const {
+    return get<bool>(kQueryTraceSingleNodeMode, false);
   }
 
   std::string opTraceDirectoryCreateConfig() const {
