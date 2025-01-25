@@ -22,6 +22,9 @@ add_library(velox_str_function_my_dynamic SHARED MyDynamicStrFunction.cpp)
 add_library(velox_function_same_twice_my_dynamic SHARED MyDynamicSameTwiceFunction.cpp)
 add_library(velox_function_err_my_dynamic SHARED MyDynamicErrFunction.cpp)
 
+
+if(APPLE)
+
 target_link_libraries(
   velox_function_my_dynamic
   PRIVATE
@@ -66,13 +69,17 @@ target_link_libraries(
     gflags::gflags
     xsimd
 )
-
-if(APPLE)
   target_link_options(velox_function_my_dynamic PRIVATE "-Wl,-undefined,dynamic_lookup")
   target_link_options(velox_int_function_my_dynamic PRIVATE "-Wl,-undefined,dynamic_lookup")
   target_link_options(velox_str_function_my_dynamic PRIVATE "-Wl,-undefined,dynamic_lookup")
   target_link_options(velox_function_same_twice_my_dynamic PRIVATE "-Wl,-undefined,dynamic_lookup")
   target_link_options(velox_function_err_my_dynamic PRIVATE "-Wl,-undefined,dynamic_lookup")
+else()
+  target_link_libraries(velox_function_my_dynamic xsimd fmt)
+  target_link_libraries(velox_int_function_my_dynamic xsimd fmt)
+  target_link_libraries(velox_str_function_my_dynamic xsimd fmt)
+  target_link_libraries(velox_function_same_twice_my_dynamic xsimd fmt)
+  target_link_libraries(velox_function_err_my_dynamic xsimd fmt)
 endif()
 
 # Here's the actual test which will dynamically load the library defined above.
