@@ -33,7 +33,7 @@ namespace facebook::velox::connector::hive {
 struct HiveBucketConversion {
   int32_t tableBucketCount;
   int32_t partitionBucketCount;
-  std::vector<std::unique_ptr<HiveColumnHandle>> bucketColumnHandles;
+  std::vector<std::shared_ptr<HiveColumnHandle>> bucketColumnHandles;
 };
 
 struct RowIdProperties {
@@ -79,6 +79,7 @@ struct HiveConnectorSplit : public connector::ConnectorSplit {
       const std::unordered_map<std::string, std::optional<std::string>>&
           _partitionKeys = {},
       std::optional<int32_t> _tableBucketNumber = std::nullopt,
+      std::optional<HiveBucketConversion> _bucketConversion = std::nullopt,
       const std::unordered_map<std::string, std::string>& _customSplitInfo = {},
       const std::shared_ptr<std::string>& _extraFileInfo = {},
       const std::unordered_map<std::string, std::string>& _serdeParameters = {},
@@ -94,6 +95,7 @@ struct HiveConnectorSplit : public connector::ConnectorSplit {
         length(_length),
         partitionKeys(_partitionKeys),
         tableBucketNumber(_tableBucketNumber),
+        bucketConversion(std::move(_bucketConversion)),
         customSplitInfo(_customSplitInfo),
         extraFileInfo(_extraFileInfo),
         serdeParameters(_serdeParameters),
@@ -164,6 +166,12 @@ class HiveConnectorSplitBuilder {
     return *this;
   }
 
+  HiveConnectorSplitBuilder& bucketConversion(
+      HiveBucketConversion bucketConversion) {
+    bucketConversion_ = std::move(bucketConversion);
+    return *this;
+  }
+
   HiveConnectorSplitBuilder& customSplitInfo(
       const std::unordered_map<std::string, std::string>& customSplitInfo) {
     customSplitInfo_ = customSplitInfo;
@@ -201,6 +209,7 @@ class HiveConnectorSplitBuilder {
         length_,
         partitionKeys_,
         tableBucketNumber_,
+        bucketConversion_,
         customSplitInfo_,
         extraFileInfo_,
         serdeParameters_,
@@ -217,6 +226,7 @@ class HiveConnectorSplitBuilder {
   uint64_t length_{std::numeric_limits<uint64_t>::max()};
   std::unordered_map<std::string, std::optional<std::string>> partitionKeys_;
   std::optional<int32_t> tableBucketNumber_;
+  std::optional<HiveBucketConversion> bucketConversion_;
   std::unordered_map<std::string, std::string> customSplitInfo_ = {};
   std::shared_ptr<std::string> extraFileInfo_ = {};
   std::unordered_map<std::string, std::string> serdeParameters_ = {};

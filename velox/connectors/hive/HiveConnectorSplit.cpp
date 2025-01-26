@@ -57,6 +57,20 @@ folly::dynamic HiveConnectorSplit::serialize() const {
       ? folly::dynamic(tableBucketNumber.value())
       : nullptr;
 
+  if (bucketConversion.has_value()) {
+    folly::dynamic bucketConversionObj = folly::dynamic::object;
+    bucketConversionObj["tableBucketCount"] =
+        bucketConversion->tableBucketCount;
+    bucketConversionObj["partitionBucketCount"] =
+        bucketConversion->partitionBucketCount;
+    folly::dynamic bucketColumnHandlesArray = folly::dynamic::array;
+    for (const auto& handle : bucketConversion->bucketColumnHandles) {
+      bucketColumnHandlesArray.push_back(handle->serialize());
+    }
+    bucketConversionObj["bucketColumnHandles"] = bucketColumnHandlesArray;
+    obj["bucketConversion"] = bucketConversionObj;
+  }
+
   folly::dynamic customSplitInfoObj = folly::dynamic::object;
   for (const auto& [key, value] : customSplitInfo) {
     customSplitInfoObj[key] = value;
@@ -122,6 +136,23 @@ std::shared_ptr<HiveConnectorSplit> HiveConnectorSplit::create(
       ? std::nullopt
       : std::optional<int32_t>(obj["tableBucketNumber"].asInt());
 
+  std::optional<HiveBucketConversion> bucketConversion = std::nullopt;
+  if (obj.count("bucketConversion")) {
+    const auto& bucketConversionObj = obj["bucketConversion"];
+    std::vector<std::shared_ptr<HiveColumnHandle>> bucketColumnHandles;
+    for (const auto& bucketColumnHandleObj :
+         bucketConversionObj["bucketColumnHandles"]) {
+      bucketColumnHandles.push_back(std::const_pointer_cast<HiveColumnHandle>(
+          ISerializable::deserialize<HiveColumnHandle>(bucketColumnHandleObj)));
+    }
+    bucketConversion = HiveBucketConversion{
+        .tableBucketCount = static_cast<int32_t>(
+            bucketConversionObj["tableBucketCount"].asInt()),
+        .partitionBucketCount = static_cast<int32_t>(
+            bucketConversionObj["partitionBucketCount"].asInt()),
+        .bucketColumnHandles = bucketColumnHandles};
+  }
+
   std::unordered_map<std::string, std::string> customSplitInfo;
   for (const auto& [key, value] : obj["customSplitInfo"].items()) {
     customSplitInfo[key.asString()] = value.asString();
@@ -169,6 +200,7 @@ std::shared_ptr<HiveConnectorSplit> HiveConnectorSplit::create(
       length,
       partitionKeys,
       tableBucketNumber,
+      bucketConversion,
       customSplitInfo,
       extraFileInfo,
       serdeParameters,
