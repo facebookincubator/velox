@@ -60,7 +60,7 @@ class CudfFromVelox : public exec::Operator {
 
  private:
   CudfVectorPtr outputTable_;
-  std::vector<std::unique_ptr<cudf::table>> inputs_;
+  std::vector<RowVectorPtr> inputs_;
   bool finished_ = false;
 };
 
