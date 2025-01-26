@@ -350,11 +350,6 @@ bool HashTable<ignoreNullKeys>::compareKeys(
     const char* group,
     HashLookup& lookup,
     vector_size_t row) {
-  // If `probeForNullKeyOnly` is set in the lookup object, the function will
-  // skip the key comparison and return true immediately.
-  if (lookup.probeForNullKeyOnly) {
-    return true;
-  }
   int32_t numKeys = lookup.hashers.size();
   // The loop runs at least once. Allow for first comparison to fail
   // before loop end check.
@@ -2038,12 +2033,11 @@ template <>
 int32_t HashTable<false>::listNullKeyRows(
     NullKeyRowsIterator* iter,
     int32_t maxRows,
-    char** rows) {
+    char** rows,
+    const std::vector<std::unique_ptr<VectorHasher>>& hashers) {
   if (!iter->initialized) {
     VELOX_CHECK_GT(nextOffset_, 0);
-    VELOX_CHECK_EQ(hashers_.size(), 1);
-    HashLookup lookup(hashers_);
-    lookup.probeForNullKeyOnly = true;
+    HashLookup lookup(hashers);
     if (hashMode_ == HashMode::kHash) {
       lookup.hashes.push_back(VectorHasher::kNullHash);
     } else {
@@ -2081,8 +2075,11 @@ int32_t HashTable<false>::listNullKeyRows(
 }
 
 template <>
-int32_t
-HashTable<true>::listNullKeyRows(NullKeyRowsIterator*, int32_t, char**) {
+int32_t HashTable<true>::listNullKeyRows(
+    NullKeyRowsIterator*,
+    int32_t,
+    char**,
+    const std::vector<std::unique_ptr<VectorHasher>>&) {
   VELOX_UNREACHABLE();
 }
 
