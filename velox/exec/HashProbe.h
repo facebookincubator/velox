@@ -680,6 +680,12 @@ class HashProbe : public Operator {
 
   // The spilled probe partitions remaining to restore.
   SpillPartitionSet inputSpillPartitionSet_;
+
+  // VectorHashers used for listing rows with null keys.
+  std::vector<std::unique_ptr<VectorHasher>> nullKeyProbeHashers_;
+
+  // Input vector used for listing rows with null keys.
+  VectorPtr nullKeyProbeInput_;
 };
 
 inline std::ostream& operator<<(std::ostream& os, ProbeOperatorState state) {
