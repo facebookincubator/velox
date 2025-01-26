@@ -16,6 +16,8 @@
 
 #include "velox/connectors/hive/iceberg/IcebergSplit.h"
 
+#include <utility>
+
 #include "velox/connectors/hive/iceberg/IcebergDeleteFile.h"
 
 namespace facebook::velox::connector::hive::iceberg {
@@ -29,6 +31,7 @@ HiveIcebergSplit::HiveIcebergSplit(
     const std::unordered_map<std::string, std::optional<std::string>>&
         partitionKeys,
     std::optional<int32_t> tableBucketNumber,
+    std::optional<HiveBucketConversion> bucketConversion,
     const std::unordered_map<std::string, std::string>& customSplitInfo,
     const std::shared_ptr<std::string>& extraFileInfo,
     bool cacheable,
@@ -42,6 +45,7 @@ HiveIcebergSplit::HiveIcebergSplit(
           length,
           partitionKeys,
           tableBucketNumber,
+          std::move(bucketConversion),
           customSplitInfo,
           extraFileInfo,
           {},
@@ -62,6 +66,7 @@ HiveIcebergSplit::HiveIcebergSplit(
     const std::unordered_map<std::string, std::optional<std::string>>&
         partitionKeys,
     std::optional<int32_t> tableBucketNumber,
+    std::optional<HiveBucketConversion> bucketConversion,
     const std::unordered_map<std::string, std::string>& customSplitInfo,
     const std::shared_ptr<std::string>& extraFileInfo,
     bool cacheable,
@@ -76,6 +81,7 @@ HiveIcebergSplit::HiveIcebergSplit(
           length,
           partitionKeys,
           tableBucketNumber,
+          std::move(bucketConversion),
           customSplitInfo,
           extraFileInfo,
           {},

@@ -35,6 +35,7 @@ struct HiveIcebergSplit : public connector::hive::HiveConnectorSplit {
       const std::unordered_map<std::string, std::optional<std::string>>&
           partitionKeys = {},
       std::optional<int32_t> tableBucketNumber = std::nullopt,
+      std::optional<HiveBucketConversion> bucketConversion = std::nullopt,
       const std::unordered_map<std::string, std::string>& customSplitInfo = {},
       const std::shared_ptr<std::string>& extraFileInfo = {},
       bool cacheable = true,
@@ -51,6 +52,7 @@ struct HiveIcebergSplit : public connector::hive::HiveConnectorSplit {
       const std::unordered_map<std::string, std::optional<std::string>>&
           partitionKeys = {},
       std::optional<int32_t> tableBucketNumber = std::nullopt,
+      std::optional<HiveBucketConversion> bucketConversion = std::nullopt,
       const std::unordered_map<std::string, std::string>& customSplitInfo = {},
       const std::shared_ptr<std::string>& extraFileInfo = {},
       bool cacheable = true,

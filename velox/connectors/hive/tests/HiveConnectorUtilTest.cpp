@@ -94,6 +94,7 @@ TEST_F(HiveConnectorUtilTest, configureReaderOptions) {
         std::numeric_limits<uint64_t>::max(),
         partitionKeys,
         std::nullopt,
+        std::nullopt,
         customSplitInfo,
         nullptr,
         serdeParameters);
@@ -317,6 +318,7 @@ TEST_F(HiveConnectorUtilTest, cacheRetention) {
         0UL,
         std::numeric_limits<uint64_t>::max(),
         std::unordered_map<std::string, std::optional<std::string>>{},
+        std::nullopt,
         std::nullopt,
         std::unordered_map<std::string, std::string>{},
         std::shared_ptr<std::string>{},
