@@ -17,6 +17,7 @@
 #include <gtest/gtest.h>
 #include "velox/connectors/Connector.h"
 #include "velox/connectors/hive/HiveConnector.h"
+#include "velox/dwio/common/Options.h"
 #include "velox/exec/tests/utils/HiveConnectorTestBase.h"
 #include "velox/expression/ExprToSubfieldFilter.h"
 
@@ -128,7 +129,9 @@ TEST_F(HiveConnectorSerDeTest, hiveTableHandle) {
           .build(),
       parseExpr("c1 > c4 and c3 = true", rowType),
       "hive_table",
-      ROW({"c0", "c1"}, {BIGINT(), VARCHAR()}));
+      ROW({"c0", "c1"}, {BIGINT(), VARCHAR()}),
+      true,
+      {{dwio::common::TableParameter::kSkipHeaderLineCount, "1"}});
   testSerde(*tableHandle);
 }
 
