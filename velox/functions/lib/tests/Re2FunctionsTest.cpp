@@ -1101,27 +1101,17 @@ TEST_F(Re2FunctionsTest, regexExtractAllConstantPatternConstantGroupId) {
 }
 
 TEST_F(Re2FunctionsTest, regexExtractAllMismatchedGroup) {
-  const auto testRe2ExtractAllMismatchedGroup =
-      [&](const std::string& source,
-          const std::string& pattern,
-          int groupId,
-          const std::vector<std::optional<std::string>>& expected) {
-        auto sourceVector = makeFlatVector<std::string>({source}, VARCHAR());
-        auto patternVector = makeFlatVector<std::string>({pattern}, VARCHAR());
-        auto groupIdVector =
-            makeFlatVector<int>(std::vector{groupId}, INTEGER());
-        // Make the complex vector explicitly, otherwise it would cause template
-        // conflict.
-        auto expectedVector = makeNullableArrayVector<std::string>(
-            std::vector<std::vector<std::optional<std::string>>>{expected});
-        std::string expression = "regexp_extract_all(c0, c1, c2)";
-        auto result = evaluate(
-            expression,
-            makeRowVector({sourceVector, patternVector, groupIdVector}));
-        assertEqualVectors(expectedVector, result);
-      };
-  testRe2ExtractAllMismatchedGroup(
-      "rat cat\nbat dog", "ra(.)|blah(.)(.)", 2, {std::nullopt});
+  auto sourceVector =
+      makeFlatVector<std::string>({"rat cat\nbat dog"}, VARCHAR());
+  auto patternVector =
+      makeFlatVector<std::string>({"ra(.)|blah(.)(.)"}, VARCHAR());
+  auto groupIdVector = makeFlatVector<int>(std::vector{2}, INTEGER());
+  auto expectedVector = makeNullableArrayVector<std::string>(
+      std::vector<std::vector<std::optional<std::string>>>{{std::nullopt}});
+  auto result = evaluate(
+      "regexp_extract_all(c0, c1, c2)",
+      makeRowVector({sourceVector, patternVector, groupIdVector}));
+  assertEqualVectors(expectedVector, result);
 }
 
 TEST_F(Re2FunctionsTest, regexExtractAllConstantPatternVariableGroupId) {
