@@ -31,24 +31,24 @@
 namespace facebook::velox::cudf_velox {
 
 namespace {
-  // From AggregationFuzzer.cpp
-  RowVectorPtr mergeRowVectors(
+// From AggregationFuzzer.cpp
+RowVectorPtr mergeRowVectors(
     const std::vector<RowVectorPtr>& results,
     velox::memory::MemoryPool* pool) {
-    auto totalCount = 0;
-    for (const auto& result : results) {
-      totalCount += result->size();
-    }
-    auto copy =
-        BaseVector::create<RowVector>(results[0]->type(), totalCount, pool);
-    auto copyCount = 0;
-    for (const auto& result : results) {
-      copy->copy(result.get(), copyCount, 0, result->size());
-      copyCount += result->size();
-    }
-    return copy;
+  auto totalCount = 0;
+  for (const auto& result : results) {
+    totalCount += result->size();
   }
+  auto copy =
+      BaseVector::create<RowVector>(results[0]->type(), totalCount, pool);
+  auto copyCount = 0;
+  for (const auto& result : results) {
+    copy->copy(result.get(), copyCount, 0, result->size());
+    copyCount += result->size();
+  }
+  return copy;
 }
+} // namespace
 
 CudfFromVelox::CudfFromVelox(
     int32_t operatorId,
@@ -104,8 +104,8 @@ void CudfFromVelox::noMoreInput() {
   }
 
   auto const size = tbl->num_rows();
-  outputTable_ =
-      std::make_shared<CudfVector>(input->pool(), outputType_, size, std::move(tbl));
+  outputTable_ = std::make_shared<CudfVector>(
+      input->pool(), outputType_, size, std::move(tbl));
 }
 
 RowVectorPtr CudfFromVelox::getOutput() {
