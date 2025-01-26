@@ -46,3 +46,6 @@ target_link_libraries(
 
 file(COPY ${CMAKE_CURRENT_SOURCE_DIR}/examples
      DESTINATION ${CMAKE_CURRENT_BINARY_DIR})
+
+file(COPY ${CMAKE_CURRENT_SOURCE_DIR}/parquet-testing
+     DESTINATION ${CMAKE_CURRENT_BINARY_DIR})

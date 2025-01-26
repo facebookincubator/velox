@@ -21,7 +21,6 @@
 #include "velox/dwio/common/ColumnVisitors.h"
 #include "velox/dwio/parquet/common/LevelConversion.h"
 #include "velox/dwio/parquet/thrift/ThriftTransport.h"
-
 #include "velox/vector/FlatVector.h"
 
 #include <thrift/protocol/TCompactProtocol.h> // @manual

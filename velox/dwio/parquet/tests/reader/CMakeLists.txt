@@ -11,6 +11,19 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+add_executable(velox_dwio_parquet_compatibility_test
+               ParquetCompatibilityTest.cpp)
+add_test(velox_dwio_parquet_compatibility_test
+         velox_dwio_parquet_compatibility_test)
+target_link_libraries(
+  velox_dwio_parquet_compatibility_test
+  velox_dwio_arrow_parquet_writer_lib
+  velox_dwio_common
+  velox_dwio_common_test_utils
+  velox_dwio_native_parquet_reader
+  velox_temp_path
+  GTest::gtest
+  GTest::gtest_main)
 
 add_executable(velox_dwio_parquet_page_reader_test ParquetPageReaderTest.cpp)
 add_test(
@@ -98,7 +111,6 @@ target_link_libraries(
   ${TEST_LINK_LIBS})
 
 if(${VELOX_ENABLE_ARROW})
-
   add_executable(velox_dwio_parquet_rlebp_decoder_test RleBpDecoderTest.cpp)
   add_test(
     NAME velox_dwio_parquet_rlebp_decoder_test
@@ -110,5 +122,4 @@ if(${VELOX_ENABLE_ARROW})
     arrow
     velox_link_libs
     ${TEST_LINK_LIBS})
-
 endif()
