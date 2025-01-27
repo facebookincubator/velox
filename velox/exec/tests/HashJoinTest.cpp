@@ -7313,7 +7313,7 @@ TEST_F(HashJoinTest, semiJoinAbandonBuildNoDupHashEarly) {
       .run();
 }
 
-TEST_F(HashJoinTest, antiJoinAbandomBuildNoDupHashEarly) {
+TEST_F(HashJoinTest, antiJoinAbandonBuildNoDupHashEarly) {
   auto probeVectors = makeBatches(64, [&](int32_t /*unused*/) {
     return makeRowVector(
         {"t0", "t1"},

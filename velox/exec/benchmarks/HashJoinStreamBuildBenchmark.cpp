@@ -14,17 +14,17 @@
  * limitations under the License.
  */
 
+#include <iostream>
+#include <utility>
+#include <folly/Benchmark.h>
+#include <folly/executors/CPUThreadPoolExecutor.h>
+#include <folly/init/Init.h>
+
 #include "velox/exec/HashTable.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
 #include "velox/exec/tests/utils/VectorTestUtil.h"
 #include "velox/vector/tests/utils/VectorTestBase.h"
-
-#include <folly/Benchmark.h>
-#include <folly/executors/CPUThreadPoolExecutor.h>
-#include <folly/init/Init.h>
-#include <iostream>
-#include <utility>
 
 using namespace facebook::velox;
 using namespace facebook::velox::exec;
