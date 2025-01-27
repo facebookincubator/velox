@@ -42,6 +42,8 @@ jobs:
         path: /tmp/artifacts/
         github-token: ${{ github.token }}
 
+    - run: ls -R /tmp/artifacts/
+
     - name: Set meta data outputs
       id: 'download'
       uses: actions/github-script@v7
