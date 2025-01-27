@@ -91,7 +91,7 @@ uint64_t lzoDecompress(
       if (input >= inputLimit) {
         throw MalformedInputException(input - inputAddress);
       }
-      uint32_t command = *(input++) & 0xFF;
+      uint32_t command = static_cast<uint32_t>(*(input++)) & 0xFF;
       if (command == 0x11) {
         break;
       }
@@ -104,8 +104,8 @@ uint64_t lzoDecompress(
       // M: part of match length
       // ?: see documentation in command decoder
 
-      int32_t matchLength;
-      int32_t matchOffset;
+      uint32_t matchLength;
+      uint32_t matchOffset;
       uint32_t literalLength;
       if ((command & 0xf0) == 0) {
         if (lastLiteralLength == 0) {
@@ -126,7 +126,7 @@ uint64_t lzoDecompress(
             literalLength = 0xf;
 
             uint32_t nextByte = 0;
-            while (input < inputLimit && (nextByte = *(input++) & 0xFF) == 0) {
+            while (input < inputLimit && (nextByte = static_cast<uint32_t>(*(input++)) & 0xFF) == 0) {
               literalLength += 0xff;
             }
             literalLength += nextByte;
@@ -148,7 +148,7 @@ uint64_t lzoDecompress(
             throw MalformedInputException(input - inputAddress);
           }
           matchOffset = (command & 0xc) >> 2;
-          matchOffset |= (*(input++) & 0xFF) << 2;
+          matchOffset |= (static_cast<uint32_t>(*(input++)) & 0xFF) << 2;
           matchOffset |= 0x800;
 
           // literal length :: 2 bits :: valid range [0..3]
@@ -168,7 +168,7 @@ uint64_t lzoDecompress(
             throw MalformedInputException(input - inputAddress);
           }
           matchOffset = (command & 0xc) >> 2;
-          matchOffset |= (*(input++) & 0xFF) << 2;
+          matchOffset |= (static_cast<uint32_t>(*(input++)) & 0xFF) << 2;
 
           // literal length :: 2 bits :: valid range [0..3]
           //   [0..1] from command [0..1]
@@ -188,8 +188,8 @@ uint64_t lzoDecompress(
         if (matchLength == 0) {
           matchLength = 0x7;
 
-          int32_t nextByte = 0;
-          while (input < inputLimit && (nextByte = *(input++) & 0xFF) == 0) {
+          uint32_t nextByte = 0;
+          while (input < inputLimit && (nextByte = static_cast<uint32_t>(*(input++)) & 0xFF) == 0) {
             matchLength += 0xff;
           }
           matchLength += nextByte;
@@ -244,11 +244,11 @@ uint64_t lzoDecompress(
 
         // copy offset :: 14 bits :: valid range [0..16383]
         //  [0..13] from trailer [2..15]
-        matchOffset = trailer >> 2;
+        matchOffset = static_cast<uint32_t>(trailer) >> 2;
 
         // literal length :: 2 bits :: valid range [0..3]
         //   [0..1] from trailer [0..1]
-        literalLength = trailer & 0x3;
+        literalLength = static_cast<uint32_t>(trailer) & 0x3;
       } else if ((command & 0xc0) != 0) {
         // 0bMMMP_PPLL 0bPPPP_PPPP
 
@@ -265,7 +265,7 @@ uint64_t lzoDecompress(
           throw MalformedInputException(input - inputAddress);
         }
         matchOffset = (command & 0x1c) >> 2;
-        matchOffset |= (*(input++) & 0xFF) << 3;
+        matchOffset |= (static_cast<uint32_t>(*(input++)) & 0xFF) << 3;
 
         // literal length :: 2 bits :: valid range [0..3]
         //   [0..1] from command [0..1]

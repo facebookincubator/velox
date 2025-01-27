@@ -42,7 +42,7 @@ void BigintIdMap::resize(int64_t newCapacity) {
     if (*ptr == kEmptyMarker) {
       continue;
     }
-    auto newIndex = indexOfEntry(*ptr);
+    auto newIndex = static_cast<uint64_t>(indexOfEntry(*ptr));
     auto newPtr = valuePtr(table_, newIndex);
     while (*newPtr != kEmptyMarker) {
       newIndex = (newIndex + 1) & sizeMask_;
