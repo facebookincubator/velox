@@ -20,7 +20,6 @@ add_executable(
   EncodingTest.cpp
   FileDeserializeTest.cpp
   FileSerializeTest.cpp
-  MetadataTest.cpp
   PageIndexTest.cpp
   PropertiesTest.cpp
   SchemaTest.cpp

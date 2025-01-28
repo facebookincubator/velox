@@ -255,6 +255,18 @@ int RowGroupMetaDataPtr::numColumns() const {
   return thriftRowGroupPtr(ptr_)->columns.size();
 }
 
+int32_t RowGroupMetaDataPtr::sortingColumnIdx(int i) const {
+  return thriftRowGroupPtr(ptr_)->sorting_columns[i].column_idx;
+}
+
+bool RowGroupMetaDataPtr::sortingColumnDescending(int i) const {
+  return thriftRowGroupPtr(ptr_)->sorting_columns[i].descending;
+}
+
+bool RowGroupMetaDataPtr::sortingColumnNullsFirst(int i) const {
+  return thriftRowGroupPtr(ptr_)->sorting_columns[i].nulls_first;
+}
+
 int64_t RowGroupMetaDataPtr::numRows() const {
   return thriftRowGroupPtr(ptr_)->num_rows;
 }
@@ -304,6 +316,28 @@ int64_t FileMetaDataPtr::numRows() const {
 
 int FileMetaDataPtr::numRowGroups() const {
   return thriftFileMetaDataPtr(ptr_)->row_groups.size();
+}
+
+int64_t FileMetaDataPtr::keyValueMetadataSize() const {
+  return thriftFileMetaDataPtr(ptr_)->key_value_metadata.size();
+}
+
+bool FileMetaDataPtr::keyValueMetadataContains(std::string key) const {
+  auto thrift_key_value_meta = thriftFileMetaDataPtr(ptr_)->key_value_metadata;
+  for (const auto& kv : thrift_key_value_meta) {
+    if (kv.key == key) {
+      return true;
+    }
+  }
+  return false;
+}
+
+std::string FileMetaDataPtr::keyValueMetadataKey(int i) const {
+  return thriftFileMetaDataPtr(ptr_)->key_value_metadata[i].key;
+}
+
+std::string FileMetaDataPtr::keyValueMetadataValue(int i) const {
+  return thriftFileMetaDataPtr(ptr_)->key_value_metadata[i].value;
 }
 
 } // namespace facebook::velox::parquet
