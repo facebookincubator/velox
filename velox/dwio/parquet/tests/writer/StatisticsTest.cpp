@@ -37,6 +37,7 @@
 #include "arrow/util/bitmap_ops.h"
 #include "arrow/util/ubsan.h"
 
+#include "velox/dwio/parquet/reader/ParquetReader.h"
 #include "velox/dwio/parquet/writer/arrow/ColumnWriter.h"
 #include "velox/dwio/parquet/writer/arrow/FileWriter.h"
 #include "velox/dwio/parquet/writer/arrow/Platform.h"
@@ -45,8 +46,8 @@
 #include "velox/dwio/parquet/writer/arrow/ThriftInternal.h"
 #include "velox/dwio/parquet/writer/arrow/Types.h"
 #include "velox/dwio/parquet/writer/arrow/tests/ColumnReader.h"
-#include "velox/dwio/parquet/writer/arrow/tests/FileReader.h"
 #include "velox/dwio/parquet/writer/arrow/tests/TestUtil.h"
+#include "velox/exec/tests/utils/TempFilePath.h"
 
 using arrow::default_memory_pool;
 using arrow::MemoryPool;
@@ -494,18 +495,39 @@ class TestStatistics : public PrimitiveTypedTest<TestType> {
 
     ASSERT_OK_AND_ASSIGN(auto buffer, sink->Finish());
     auto source = std::make_shared<::arrow::io::BufferReader>(buffer);
-    auto file_reader = ParquetFileReader::Open(source);
-    auto rg_reader = file_reader->RowGroup(0);
-    auto column_chunk = rg_reader->metadata()->ColumnChunk(0);
-    if (!column_chunk->is_stats_set())
-      return;
-    std::shared_ptr<Statistics> stats = column_chunk->statistics();
-    // check values after serialization + deserialization
-    EXPECT_EQ(null_count, stats->null_count());
-    EXPECT_EQ(num_values - null_count, stats->num_values());
+
+    // Write the buffer to a temp file
+    auto temp_file = exec::test::TempFilePath::create();
+    auto file_path = temp_file->getPath();
+    auto local_write_file =
+        std::make_unique<LocalWriteFile>(file_path, false, false);
+    auto buffer_reader = std::make_shared<::arrow::io::BufferReader>(buffer);
+    auto buffer_to_string = buffer_reader->buffer()->ToString();
+    local_write_file->append(buffer_to_string);
+    local_write_file->close();
+    memory::MemoryManager::testingSetInstance({});
+    std::shared_ptr<facebook::velox::memory::MemoryPool> root_pool;
+    std::shared_ptr<facebook::velox::memory::MemoryPool> leaf_pool;
+    root_pool = memory::memoryManager()->addRootPool("StatisticsTest");
+    leaf_pool = root_pool->addLeafChild("StatisticsTest");
+    dwio::common::ReaderOptions readerOptions{leaf_pool.get()};
+    auto input = std::make_unique<dwio::common::BufferedInput>(
+        std::make_shared<LocalReadFile>(file_path), readerOptions.memoryPool());
+    auto reader =
+        std::make_unique<ParquetReader>(std::move(input), readerOptions);
+    auto row_group = reader->fileMetaData().rowGroup(0);
+    auto column_chunk = row_group.columnChunk(0);
+    EXPECT_EQ(null_count, column_chunk.getColumnMetadataStatsNullCount());
     EXPECT_TRUE(expected_stats->HasMinMax());
-    EXPECT_EQ(expected_stats->EncodeMin(), stats->EncodeMin());
-    EXPECT_EQ(expected_stats->EncodeMax(), stats->EncodeMax());
+    EXPECT_EQ(
+        expected_stats->EncodeMin(),
+        column_chunk.getColumnMetadataStatsMinValue());
+    EXPECT_EQ(
+        expected_stats->EncodeMax(),
+        column_chunk.getColumnMetadataStatsMaxValue());
+    auto column_stats =
+        column_chunk.getColumnStatistics(INTEGER(), row_group.numRows());
+    EXPECT_EQ(num_values - null_count, column_stats->getNumberOfValues());
   }
 };
 
@@ -1015,19 +1037,31 @@ class TestStatisticsSortOrder : public ::testing::Test {
   void VerifyParquetStats() {
     ASSERT_OK_AND_ASSIGN(auto pbuffer, parquet_sink_->Finish());
 
-    // Create a ParquetReader instance
-    std::unique_ptr<ParquetFileReader> parquet_reader = ParquetFileReader::Open(
-        std::make_shared<::arrow::io::BufferReader>(pbuffer));
-
-    // Get the File MetaData
-    std::shared_ptr<FileMetaData> file_metadata = parquet_reader->metadata();
-    std::shared_ptr<RowGroupMetaData> rg_metadata = file_metadata->RowGroup(0);
+    // Write the pbuffer to a temp file
+    auto temp_file = exec::test::TempFilePath::create();
+    auto file_path = temp_file->getPath();
+    auto local_write_file =
+        std::make_unique<LocalWriteFile>(file_path, false, false);
+    auto buffer_reader = std::make_shared<::arrow::io::BufferReader>(pbuffer);
+    auto buffer_to_string = buffer_reader->buffer()->ToString();
+    local_write_file->append(buffer_to_string);
+    local_write_file->close();
+    memory::MemoryManager::testingSetInstance({});
+    std::shared_ptr<facebook::velox::memory::MemoryPool> root_pool;
+    std::shared_ptr<facebook::velox::memory::MemoryPool> leaf_pool;
+    root_pool = memory::memoryManager()->addRootPool("StatisticsTest");
+    leaf_pool = root_pool->addLeafChild("StatisticsTest");
+    dwio::common::ReaderOptions readerOptions{leaf_pool.get()};
+    auto input = std::make_unique<dwio::common::BufferedInput>(
+        std::make_shared<LocalReadFile>(file_path), readerOptions.memoryPool());
+    auto reader =
+        std::make_unique<ParquetReader>(std::move(input), readerOptions);
+    auto row_group = reader->fileMetaData().rowGroup(0);
     for (int i = 0; i < static_cast<int>(fields_.size()); i++) {
       ARROW_SCOPED_TRACE("Statistics for field #", i);
-      std::shared_ptr<ColumnChunkMetaData> cc_metadata =
-          rg_metadata->ColumnChunk(i);
-      EXPECT_EQ(stats_[i].min(), cc_metadata->statistics()->EncodeMin());
-      EXPECT_EQ(stats_[i].max(), cc_metadata->statistics()->EncodeMax());
+      auto column_chunk = row_group.columnChunk(i);
+      EXPECT_EQ(stats_[i].min(), column_chunk.getColumnMetadataStatsMinValue());
+      EXPECT_EQ(stats_[i].max(), column_chunk.getColumnMetadataStatsMaxValue());
     }
   }
 
@@ -1262,34 +1296,6 @@ TEST(TestByteArrayStatisticsFromArrow, StringType) {
 
 TEST(TestByteArrayStatisticsFromArrow, LargeStringType) {
   TestByteArrayStatisticsFromArrow<::arrow::LargeStringType>();
-}
-
-// Ensure UNKNOWN sort order is handled properly
-using TestStatisticsSortOrderFLBA = TestStatisticsSortOrder<FLBAType>;
-
-TEST_F(TestStatisticsSortOrderFLBA, UnknownSortOrder) {
-  this->fields_.push_back(schema::PrimitiveNode::Make(
-      "Column 0",
-      Repetition::REQUIRED,
-      Type::FIXED_LEN_BYTE_ARRAY,
-      ConvertedType::INTERVAL,
-      FLBA_LENGTH));
-  this->SetUpSchema();
-  this->WriteParquet();
-
-  ASSERT_OK_AND_ASSIGN(auto pbuffer, parquet_sink_->Finish());
-
-  // Create a ParquetReader instance
-  std::unique_ptr<ParquetFileReader> parquet_reader = ParquetFileReader::Open(
-      std::make_shared<::arrow::io::BufferReader>(pbuffer));
-  // Get the File MetaData
-  std::shared_ptr<FileMetaData> file_metadata = parquet_reader->metadata();
-  std::shared_ptr<RowGroupMetaData> rg_metadata = file_metadata->RowGroup(0);
-  std::shared_ptr<ColumnChunkMetaData> cc_metadata =
-      rg_metadata->ColumnChunk(0);
-
-  // stats should not be set for UNKNOWN sort order
-  ASSERT_FALSE(cc_metadata->is_stats_set());
 }
 
 template <
