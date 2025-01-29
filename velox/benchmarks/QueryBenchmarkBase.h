@@ -95,6 +95,11 @@ class QueryBenchmarkBase {
       int32_t numSplitsPerFile,
       const exec::test::TpchPlan& plan);
 
+  std::vector<std::shared_ptr<connector::ConnectorSplit>> listCudfSplits(
+      const std::string& path,
+      int32_t numSplitsPerFile,
+      const exec::test::TpchPlan& plan);
+
   static void ensureTaskCompletion(exec::Task* task);
 
   static bool validateDataFormat(

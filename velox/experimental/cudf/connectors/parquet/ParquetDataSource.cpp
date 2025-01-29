@@ -98,91 +98,40 @@ ParquetDataSource::ParquetDataSource(
 }
 
 std::optional<RowVectorPtr> ParquetDataSource::next(
-    uint64_t size,
+    uint64_t /*size*/,
     velox::ContinueFuture& /* future */) {
   // Basic sanity checks
   VELOX_CHECK_NOT_NULL(split_, "No split to process. Call addSplit first.");
   VELOX_CHECK_NOT_NULL(splitReader_, "No split reader present");
 
-  // Limit the size to [1, 1B] rows to avoid overflow in cudf::concatenate.
-  VELOX_CHECK(
-      size > 0 and size < std::numeric_limits<cudf::size_type>::max() / 2,
-      "ParquetDataSource can read [1, 2^30] rows at once");
+  if (not splitReader_->has_next())
+  {
+    return nullptr;
+  }
 
-  // Read table chunks via cudf until we have enough rows or no more
-  // chunks left.
-  if (currentCudfTableView_.num_rows() < size) {
-    // Vector to store read tables
-    auto readTables = std::vector<std::unique_ptr<cudf::table>>{};
-    size_t currentNumRows = currentCudfTableView_.num_rows();
-
-    // Read chunks until num_rows > size or no more chunks left.
-    while (splitReader_->has_next() and currentNumRows < size) {
-      auto [table, metadata] = splitReader_->read_chunk();
-      readTables.emplace_back(std::move(table));
-      currentNumRows += readTables.back()->num_rows();
-      // Fill in the column names if reading the first chunk.
-      if (columnNames.empty()) {
-        for (auto schema : metadata.schema_info) {
-          columnNames.emplace_back(schema.name);
-        }
+  // Vector to store read tables
+  auto readTables = std::vector<std::unique_ptr<cudf::table>>{};
+  // Read chunks until num_rows > size or no more chunks left.
+  while (splitReader_->has_next()) {
+    auto [table, metadata] = splitReader_->read_chunk();
+    readTables.emplace_back(std::move(table));
+    // Fill in the column names if reading the first chunk.
+    if (columnNames.empty()) {
+      for (auto schema : metadata.schema_info) {
+        columnNames.emplace_back(schema.name);
       }
-    }
-
-    if (readTables.empty() and not cudfTable_) {
-      // Check if currentCudfTableView_ is also reset.
-      VELOX_CHECK_EQ(currentCudfTableView_.num_rows(), 0);
-      // We are done with this split, reset the split.
-      resetSplit();
-      return nullptr;
-    }
-
-    if (readTables.size()) {
-      auto readTable = concatenateTables(std::move(readTables));
-      if (cudfTable_) {
-        // Concatenate the current view ahead of the read table.
-        auto tableViews = std::vector<cudf::table_view>{
-            currentCudfTableView_, readTable->view()};
-        cudfTable_ = cudf::concatenate(tableViews, cudf::get_default_stream());
-      } else {
-        cudfTable_ = std::move(readTable);
-      }
-      // Update the current table view
-      currentCudfTableView_ = cudfTable_->view();
     }
   }
 
-  // Output RowVectorPtr
-  auto output = RowVectorPtr{};
+  cudfTable_ = concatenateTables(std::move(readTables));
+  currentCudfTableView_ = cudfTable_->view();
 
-  // If the current table view has <= size rows, this is the last chunk.
-  // if (currentCudfTableView_.num_rows() <= size) {
-  auto sz = cudfTable_->num_rows();
-    output = std::make_shared<CudfVector>(
-      pool_, outputType_, sz, std::move(cudfTable_));
-    // Convert the current table view to RowVectorPtr.
-    // output =
-    //     with_arrow::to_velox_column(currentCudfTableView_, pool_, columnNames);
-    // Reset internal tables
-    resetCudfTableAndView();
-  // } else {
-  //   // Split the current table view into two partitions.
-  //   auto partitions =
-  //       std::vector<cudf::size_type>{static_cast<cudf::size_type>(size)};
-  //   auto tableSplits = cudf::split(currentCudfTableView_, partitions);
-  //   VELOX_CHECK_EQ(
-  //       static_cast<cudf::size_type>(size),
-  //       tableSplits[0].num_rows(),
-  //       "cudf::split yielded incorrect partitions");
-  //   // Convert the first split view to RowVectorPtr.
-  //   // output = with_arrow::to_velox_column(tableSplits[0], pool_, columnNames);
-  //   // Set the current view to the second split view.
-  //   // currentCudfTableView_ = tableSplits[1];
-  //   output = std::make_shared<CudfVector>(
-  //     pool_, outputType_, size, std::make_unique<cudf::table>(tableSplits[0]));
-  //   cudfTable_ = std::make_unique<cudf::table>(tableSplits[1]);
-  //   currentCudfTableView_ = cudfTable_->view();
-  // }
+  // Output RowVectorPtr
+  auto output =
+      with_arrow::to_velox_column(currentCudfTableView_, pool_, columnNames);
+
+  // Reset internal tables
+  resetCudfTableAndView();
 
   // Check if conversion yielded a nullptr
   VELOX_CHECK_NOT_NULL(output, "Cudf to Velox conversion yielded a nullptr");

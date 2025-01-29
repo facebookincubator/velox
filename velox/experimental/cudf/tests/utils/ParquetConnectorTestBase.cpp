@@ -238,6 +238,23 @@ ParquetConnectorTestBase::makeParquetConnectorSplits(
   return splits;
 }
 
+std::vector<std::shared_ptr<connector::parquet::ParquetConnectorSplit>>
+ParquetConnectorTestBase::makeParquetConnectorSplits(
+    const std::string& filePath,
+    uint32_t /* splitCount*/) {
+  auto file =
+      filesystems::getFileSystem(filePath, nullptr)->openFileForRead(filePath);
+  const int64_t fileSize = file->size();
+  std::vector<std::shared_ptr<connector::parquet::ParquetConnectorSplit>>
+      splits;
+  // Add all the splits.
+  for (int i = 0; i < 1; i++) {
+    auto split = ParquetConnectorSplitBuilder(filePath).build();
+    splits.push_back(std::move(split));
+  }
+  return splits;
+}
+
 std::shared_ptr<connector::parquet::ParquetConnectorSplit>
 ParquetConnectorTestBase::makeParquetConnectorSplit(
     const std::string& filePath,
