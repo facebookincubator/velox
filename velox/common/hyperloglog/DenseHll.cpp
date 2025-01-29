@@ -15,6 +15,8 @@
  */
 #include "velox/common/hyperloglog/DenseHll.h"
 
+#include <sys/stat.h>
+
 #include <exception>
 #include <sstream>
 #include "velox/common/base/IOUtils.h"
@@ -720,7 +722,9 @@ int32_t DenseHll::mergeWithSimd(const HllView& other, int8_t newBaseline) {
 
         // Store newDelta in deltas_[deltaIndex].
         auto slot1 = deltas_[deltaIndex];
-        deltas_[deltaIndex] = (newDelta << 4) | (slot1 & kBucketMask);
+        uint8_t highNibble = static_cast<uint8_t>(newDelta) << 4;
+        uint8_t lowNibble = static_cast<uint8_t>(slot1) & static_cast<uint8_t>(kBucketMask);
+        deltas_[deltaIndex] = deltas_[deltaIndex] = highNibble | lowNibble;
       });
     }
 
@@ -742,8 +746,10 @@ int32_t DenseHll::mergeWithSimd(const HllView& other, int8_t newBaseline) {
         }
 
         // Store newDelta.
-        auto slot1 = deltas_[deltaIndex];
-        deltas_[deltaIndex] = (((slot1 >> 4) & kBucketMask) << 4) | newDelta;
+        auto slot1 = static_cast<uint8_t>(deltas_[deltaIndex]);
+        uint8_t upperBits = (slot1 >> 4) & static_cast<uint8_t>(kBucketMask);
+        uint8_t shiftedUpperBits = upperBits << 4;
+        deltas_[deltaIndex] = shiftedUpperBits | static_cast<uint8_t>(newDelta);
       });
     }
   }
@@ -762,8 +768,10 @@ int32_t DenseHll::mergeWithScalar(const HllView& other, int8_t newBaseline) {
     int8_t slot2 = other.deltas[i];
 
     for (int shift = 4; shift >= 0; shift -= 4) {
-      int8_t delta1 = (slot1 >> shift) & kBucketMask;
-      int8_t delta2 = (slot2 >> shift) & kBucketMask;
+      uint8_t maskedSlot1 = static_cast<uint8_t>(slot1) >> shift;
+      uint8_t maskedSlot2 = static_cast<uint8_t>(slot2) >> shift;
+      int8_t delta1 = maskedSlot1 & static_cast<uint8_t>(kBucketMask);
+      int8_t delta2 = maskedSlot2 & static_cast<uint8_t>(kBucketMask);
 
       auto [newValue, overflowEntry] =
           computeNewValue(delta1, delta2, bucket, other);
@@ -776,8 +784,8 @@ int32_t DenseHll::mergeWithScalar(const HllView& other, int8_t newBaseline) {
 
       newDelta = updateOverflow(bucket, overflowEntry, newDelta);
 
-      newSlot <<= 4;
-      newSlot |= newDelta;
+      newSlot = static_cast<uint32_t>(newSlot) << 4;
+      newSlot = static_cast<uint32_t>(newSlot) | static_cast<uint32_t>(newDelta);
       bucket++;
     }
 

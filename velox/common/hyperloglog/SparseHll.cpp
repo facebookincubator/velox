@@ -31,7 +31,7 @@ inline uint32_t decodeIndex(uint32_t entry) {
 }
 
 inline uint32_t decodeValue(uint32_t entry) {
-  return entry & ((1 << kValueBitLength) - 1);
+  return entry & ((1u << kValueBitLength) - 1);
 }
 
 int searchIndex(
@@ -41,7 +41,7 @@ int searchIndex(
   int high = entries.size() - 1;
 
   while (low <= high) {
-    int middle = (low + high) >> 1;
+    int middle = static_cast<uint32_t>(low + high) >> 1;
 
     auto middleIndex = decodeIndex(entries[middle]);
 
@@ -93,7 +93,7 @@ int64_t SparseHll::cardinality() const {
   // 2^kIndexBitLength buckets available due to the fact that we're
   // recording the raw leading kIndexBitLength of the hash. This produces
   // much better precision while in the sparse regime.
-  static const int kTotalBuckets = 1 << kIndexBitLength;
+  static const int kTotalBuckets = 1u << kIndexBitLength;
 
   int zeroBuckets = kTotalBuckets - entries_.size();
   return std::round(linearCounting(zeroBuckets, kTotalBuckets));
