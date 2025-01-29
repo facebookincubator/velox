@@ -14,23 +14,13 @@
  * limitations under the License.
  */
 
-#include "velox/vector/fuzzer/ConstrainedGenerators.h"
+#include "velox/common/fuzzer/ConstrainedGenerators.h"
 
 #include <boost/random/uniform_int_distribution.hpp>
 
-#include "velox/vector/fuzzer/Utils.h"
+#include "velox/common/fuzzer/Utils.h"
 
 namespace facebook::velox::fuzzer {
-
-// AbstractInputGenerator
-AbstractInputGenerator::AbstractInputGenerator(
-    size_t seed,
-    const TypePtr& type,
-    std::unique_ptr<AbstractInputGenerator>&& next,
-    double nullRatio)
-    : type_{type}, next_{std::move(next)}, nullRatio_{nullRatio} {
-  rng_.seed(seed);
-}
 
 // NotEqualConstrainedGenerator
 variant NotEqualConstrainedGenerator::generate() {
@@ -49,19 +39,35 @@ variant SetConstrainedGenerator::generate() {
 }
 
 // JsonInputGenerator
-folly::json::serialization_opts JsonInputGenerator::getSerializationOptions() {
+JsonInputGenerator::~JsonInputGenerator() = default;
+
+folly::json::serialization_opts getSerializationOptions(
+    FuzzerGenerator& rng,
+    bool makeRandomVariation) {
   folly::json::serialization_opts opts;
   opts.allow_non_string_keys = true;
   opts.allow_nan_inf = true;
-  if (makeRandomVariation_) {
-    opts.convert_int_keys = rand<bool>(rng_);
-    opts.pretty_formatting = rand<bool>(rng_);
-    opts.pretty_formatting_indent_width = rand<uint32_t>(rng_, 0, 4);
-    opts.encode_non_ascii = rand<bool>(rng_);
-    opts.sort_keys = rand<bool>(rng_);
-    opts.skip_invalid_utf8 = rand<bool>(rng_);
+  if (makeRandomVariation) {
+    opts.convert_int_keys = rand<bool>(rng);
+    opts.pretty_formatting = rand<bool>(rng);
+    opts.pretty_formatting_indent_width = rand<uint32_t>(rng, 0, 4);
+    opts.encode_non_ascii = rand<bool>(rng);
+    opts.sort_keys = rand<bool>(rng);
+    opts.skip_invalid_utf8 = rand<bool>(rng);
   }
   return opts;
+}
+
+JsonInputGenerator::JsonInputGenerator(
+    size_t seed,
+    const TypePtr& type,
+    double nullRatio,
+    std::unique_ptr<AbstractInputGenerator>&& objectGenerator,
+    bool makeRandomVariation)
+    : AbstractInputGenerator(seed, type, nullptr, nullRatio),
+      objectGenerator_{std::move(objectGenerator)},
+      makeRandomVariation_{makeRandomVariation} {
+  opts_ = getSerializationOptions(rng_, makeRandomVariation_);
 }
 
 variant JsonInputGenerator::generate() {

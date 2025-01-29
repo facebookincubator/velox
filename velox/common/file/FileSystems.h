@@ -58,12 +58,10 @@ struct FileOptions {
   /// NOTE: this only applies for write open file.
   bool shouldThrowOnFileAlreadyExists{true};
 
-  /// Whether to buffer the write data in file system client or not. For local
+  /// Whether to buffer the data in file system client or not. For local
   /// filesystem on Unix-like operating system, this corresponds to the direct
   /// IO mode if set.
-  ///
-  /// NOTE: this only applies for write open file.
-  bool bufferWrite{true};
+  bool bufferIo{true};
 };
 
 /// Defines directory options
@@ -77,6 +75,13 @@ struct DirectoryOptions : FileOptions {
   /// This is similar to kFileCreateConfig
   static constexpr folly::StringPiece kMakeDirectoryConfig{
       "make-directory-config"};
+};
+
+struct FileSystemOptions {
+  /// As for now, only local file system respects this option. It implements
+  /// async read by using a background cpu executor. Some filesystem might has
+  /// native async read-ahead support.
+  bool readAheadEnabled{false};
 };
 
 /// An abstract FileSystem
@@ -163,6 +168,7 @@ void registerFileSystem(
         std::string_view)> fileSystemGenerator);
 
 /// Register the local filesystem.
-void registerLocalFileSystem();
+void registerLocalFileSystem(
+    const FileSystemOptions& options = FileSystemOptions());
 
 } // namespace facebook::velox::filesystems

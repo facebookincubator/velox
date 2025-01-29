@@ -970,7 +970,8 @@ void Task::initializePartitionOutput() {
       // exchange client for each merge source to fetch data as we can't mix
       // the data from different sources for merging.
       if (auto exchangeNodeId = factory->needsExchangeClient()) {
-        createExchangeClientLocked(pipeline, exchangeNodeId.value());
+        createExchangeClientLocked(
+            pipeline, exchangeNodeId.value(), factory->numDrivers);
       }
     }
   }
@@ -2609,11 +2610,12 @@ void Task::createLocalExchangeQueuesLocked(
   LocalExchangeState exchange;
   exchange.memoryManager = std::make_shared<LocalExchangeMemoryManager>(
       queryCtx_->queryConfig().maxLocalExchangeBufferSize());
-
+  exchange.vectorPool = std::make_shared<LocalExchangeVectorPool>(
+      queryCtx_->queryConfig().maxLocalExchangeBufferSize());
   exchange.queues.reserve(numPartitions);
   for (auto i = 0; i < numPartitions; ++i) {
-    exchange.queues.emplace_back(
-        std::make_shared<LocalExchangeQueue>(exchange.memoryManager, i));
+    exchange.queues.emplace_back(std::make_shared<LocalExchangeQueue>(
+        exchange.memoryManager, exchange.vectorPool, i));
   }
 
   const auto partitionNode =
@@ -2981,7 +2983,8 @@ bool Task::pauseRequested(ContinueFuture* future) {
 
 void Task::createExchangeClientLocked(
     int32_t pipelineId,
-    const core::PlanNodeId& planNodeId) {
+    const core::PlanNodeId& planNodeId,
+    int32_t numberOfConsumers) {
   VELOX_CHECK_NULL(
       getExchangeClientLocked(pipelineId),
       "Exchange client has been created at pipeline: {} for planNode: {}",
@@ -2997,6 +3000,8 @@ void Task::createExchangeClientLocked(
       taskId_,
       destination_,
       queryCtx()->queryConfig().maxExchangeBufferSize(),
+      numberOfConsumers,
+      queryCtx()->queryConfig().minExchangeOutputBatchBytes(),
       addExchangeClientPool(planNodeId, pipelineId),
       queryCtx()->executor());
   exchangeClientByPlanNode_.emplace(planNodeId, exchangeClients_[pipelineId]);

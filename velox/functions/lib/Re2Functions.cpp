@@ -144,8 +144,14 @@ bool re2Extract(
     }
   } else {
     const re2::StringPiece extracted = groups[groupId];
-    result.setNoCopy(row, StringView(extracted.data(), extracted.size()));
-    return !StringView::isInline(extracted.size());
+    // Check if the extracted data is null.
+    if (extracted.data()) {
+      result.setNoCopy(row, StringView(extracted.data(), extracted.size()));
+      return !StringView::isInline(extracted.size());
+    } else {
+      result.setNull(row, true);
+      return false;
+    }
   }
 }
 
@@ -1064,8 +1070,13 @@ void re2ExtractAll(
     const re2::StringPiece fullMatch = groups[0];
     const re2::StringPiece subMatch = groups[groupId];
 
-    arrayWriter.add_item().setNoCopy(
-        StringView(subMatch.data(), subMatch.size()));
+    // Check if the subMatch is null.
+    if (subMatch.data()) {
+      arrayWriter.add_item().setNoCopy(
+          StringView(subMatch.data(), subMatch.size()));
+    } else {
+      arrayWriter.add_null();
+    }
     pos = fullMatch.data() + fullMatch.size() - input.data();
     if (UNLIKELY(fullMatch.size() == 0)) {
       ++pos;

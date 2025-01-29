@@ -43,6 +43,10 @@ namespace facebook::velox::config {
 class ConfigBase;
 }
 
+namespace facebook::velox::core {
+class ITypedExpr;
+}
+
 namespace facebook::velox::connector {
 
 class DataSource;
@@ -116,6 +120,11 @@ class ConnectorTableHandle : public ISerializable {
   /// to work with metadata.
   virtual const std::string& name() const {
     VELOX_UNSUPPORTED();
+  }
+
+  /// Returns true if the connector table handle supports index lookup.
+  virtual bool supportsIndexLookup() const {
+    return false;
   }
 
   virtual folly::dynamic serialize() const override;
@@ -282,10 +291,77 @@ class DataSource {
   }
 };
 
-/// Collection of context data for use in a DataSource or DataSink. One instance
-/// of this per DataSource and DataSink. This may be passed between threads but
-/// methods must be invoked sequentially. Serializing use is the responsibility
-/// of the caller.
+class IndexSource {
+ public:
+  virtual ~IndexSource() = default;
+
+  /// Represents a lookup request for a given input.
+  struct LookupRequest {
+    /// Contains the input column vectors used by lookup join and range
+    /// conditions.
+    RowVectorPtr input;
+
+    explicit LookupRequest(RowVectorPtr input) : input(std::move(input)) {}
+  };
+
+  /// Represents the lookup result for a subset of input produced by the
+  /// 'LookupResultIterator'.
+  struct LookupResult {
+    /// Specifies the indices of input row in the lookup request that have
+    /// matches in 'output'. It contains the input indices in the order
+    /// of the input rows in the lookup request. Any gap in the indices means
+    /// the input rows that has no matches in output.
+    ///
+    /// Example:
+    ///   LookupRequest: input = [0, 1, 2, 3, 4]
+    ///   LookupResult:  inputHits = [0, 0, 2, 2, 3, 4, 4, 4]
+    ///                  output    = [0, 1, 2, 3, 4, 5, 6, 7]
+    ///
+    ///   Here is match results for each input row:
+    ///   input row #0: match with output rows #0 and #1.
+    ///   input row #1: no matches
+    ///   input row #2: match with output rows #2 and #3.
+    ///   input row #3: match with output row #4.
+    ///   input row #4: match with output rows #5, #6 and #7.
+    ///
+    /// 'LookupResultIterator' must also produce the output result in order of
+    /// input rows.
+    BufferPtr inputHits;
+
+    /// Contains the lookup result rows.
+    RowVectorPtr output;
+
+    LookupResult(BufferPtr _inputHits, RowVectorPtr _output)
+        : inputHits(std::move(_inputHits)), output(std::move(_output)) {
+      VELOX_CHECK_EQ(inputHits->size() / sizeof(int32_t), output->size());
+    }
+  };
+
+  /// The lookup result iterator used to fetch the lookup result in batch for a
+  /// given lookup request.
+  class LookupResultIterator {
+   public:
+    virtual ~LookupResultIterator() = default;
+
+    /// Invoked to fetch update to 'size' number of output rows. Returns nullptr
+    /// if all the lookup results have been fetched. Returns std::nullopt and
+    /// sets the 'future' if started asynchronous work and needs to wait for it
+    /// to complete to continue processing. The caller will wait for the
+    /// 'future' to complete before calling 'next' again.
+    virtual std::optional<std::shared_ptr<LookupResult>> next(
+        vector_size_t size,
+        velox::ContinueFuture& future) = 0;
+  };
+
+  virtual LookupResultIterator lookup(const LookupRequest& request) = 0;
+
+  virtual std::unordered_map<std::string, RuntimeCounter> runtimeStats() = 0;
+};
+
+/// Collection of context data for use in a DataSource, IndexSource or DataSink.
+/// One instance of this per DataSource and DataSink. This may be passed between
+/// threads but methods must be invoked sequentially. Serializing use is the
+/// responsibility of the caller.
 class ConnectorQueryCtx {
  public:
   ConnectorQueryCtx(
@@ -327,9 +403,9 @@ class ConnectorQueryCtx {
     return operatorPool_;
   }
 
-  /// Returns the connector's memory pool which is an aggregate kind of memory
-  /// pool, used for the data sink for table write that needs the hierarchical
-  /// memory pool management, such as HiveDataSink.
+  /// Returns the connector's memory pool which is an aggregate kind of
+  /// memory pool, used for the data sink for table write that needs the
+  /// hierarchical memory pool management, such as HiveDataSink.
   memory::MemoryPool* connectorMemoryPool() const {
     return connectorPool_;
   }
@@ -354,10 +430,10 @@ class ConnectorQueryCtx {
     return cache_;
   }
 
-  /// This is a combination of task id and the scan's PlanNodeId. This is an id
-  /// that allows sharing state between different threads of the same scan. This
-  /// is used for locating a scanTracker, which tracks the read density of
-  /// columns for prefetch and other memory hierarchy purposes.
+  /// This is a combination of task id and the scan's PlanNodeId. This is an
+  /// id that allows sharing state between different threads of the same
+  /// scan. This is used for locating a scanTracker, which tracks the read
+  /// density of columns for prefetch and other memory hierarchy purposes.
   const std::string& scanId() const {
     return scanId_;
   }
@@ -441,8 +517,8 @@ class Connector {
     VELOX_NYI("connectorConfig is not supported yet");
   }
 
-  /// Returns true if this connector would accept a filter dynamically generated
-  /// during query execution.
+  /// Returns true if this connector would accept a filter dynamically
+  /// generated during query execution.
   virtual bool canAddDynamicFilter() const {
     return false;
   }
@@ -467,6 +543,62 @@ class Connector {
   /// thread.
   virtual bool supportsSplitPreload() {
     return false;
+  }
+
+  /// Returns true if the connector supports index lookup, otherwise false.
+  virtual bool supportsIndexLookup() const {
+    return false;
+  }
+
+  /// Creates index source for index join lookup.
+  /// @param inputType The list of probe-side columns that either used in
+  /// equi-clauses or join conditions.
+  /// @param numJoinKeys The number of key columns used in join equi-clauses.
+  /// The first 'numJoinKeys' columns in 'inputType' form a prefix of the
+  /// index, and the rest of the columns in inputType are expected to be used in
+  /// 'joinCondition'.
+  /// @param joinConditions The join conditions. It expects inputs columns from
+  /// the 'tail' of 'inputType' and from 'columnHandles'.
+  /// @param outputType The lookup output type from index source.
+  /// @param tableHandle The index table handle.
+  /// @param columnHandles The column handles which maps from column name
+  /// used in 'outputType' and 'joinConditions' to the corresponding column
+  /// handles in the index table.
+  /// @param connectorQueryCtx The query context.
+  ///
+  /// Here is an example that how the lookup join operator uses index source:
+  ///
+  /// SELECT t.sid, t.day_ts, u.event_value
+  /// FROM t LEFT JOIN u
+  /// ON t.sid = u.sid
+  ///  AND contains(t.event_list, u.event_type)
+  ///  AND t.ds BETWEEN '2024-01-01' AND '2024-01-07'
+  ///
+  /// Here,
+  /// - 'inputType' is ROW{t.sid, t.event_list}
+  /// - 'numJoinKeys' is 1 since only t.sid is used in join equi-clauses.
+  /// - 'joinConditions' is list of one expression: contains(t.event_list,
+  ///    u.event_type)
+  /// - 'outputType' is ROW{u.event_value}
+  /// - 'tableHandle' specifies the metadata of the index table.
+  /// - 'columnHandles' is a map from 'u.event_type' (in 'joinConditions') and
+  ///   'u.event_value' (in 'outputType') to the actual column names in the
+  ///   index table.
+  /// - 'connectorQueryCtx' provide the connector query execution context.
+  ///
+  virtual std::unique_ptr<IndexSource> createIndexSource(
+      const RowTypePtr& inputType,
+      size_t numJoinKeys,
+      const std::vector<std::shared_ptr<const core::ITypedExpr>>&
+          joinConditions,
+      const RowTypePtr& outputType,
+      const std::shared_ptr<ConnectorTableHandle>& tableHandle,
+      const std::unordered_map<
+          std::string,
+          std::shared_ptr<connector::ColumnHandle>>& columnHandles,
+      ConnectorQueryCtx* connectorQueryCtx) {
+    VELOX_UNSUPPORTED(
+        "Connector {} does not support index source", connectorId());
   }
 
   virtual std::unique_ptr<DataSink> createDataSink(
@@ -517,9 +649,9 @@ class ConnectorFactory {
   const std::string name_;
 };
 
-/// Adds a factory for creating connectors to the registry using connector name
-/// as the key. Throws if factor with the same name is already present. Always
-/// returns true. The return value makes it easy to use with
+/// Adds a factory for creating connectors to the registry using connector
+/// name as the key. Throws if factor with the same name is already present.
+/// Always returns true. The return value makes it easy to use with
 /// FB_ANONYMOUS_VARIABLE.
 bool registerConnectorFactory(std::shared_ptr<ConnectorFactory> factory);
 
@@ -528,12 +660,12 @@ bool registerConnectorFactory(std::shared_ptr<ConnectorFactory> factory);
 bool hasConnectorFactory(const std::string& connectorName);
 
 /// Unregister a connector factory by name.
-/// Returns true if a connector with the specified name has been unregistered,
-/// false otherwise.
+/// Returns true if a connector with the specified name has been
+/// unregistered, false otherwise.
 bool unregisterConnectorFactory(const std::string& connectorName);
 
-/// Returns a factory for creating connectors with the specified name. Throws if
-/// factory doesn't exist.
+/// Returns a factory for creating connectors with the specified name.
+/// Throws if factory doesn't exist.
 std::shared_ptr<ConnectorFactory> getConnectorFactory(
     const std::string& connectorName);
 
@@ -542,14 +674,16 @@ std::shared_ptr<ConnectorFactory> getConnectorFactory(
 /// true. The return value makes it easy to use with FB_ANONYMOUS_VARIABLE.
 bool registerConnector(std::shared_ptr<Connector> connector);
 
-/// Removes the connector with specified ID from the registry. Returns true if
-/// connector was removed and false if connector didn't exist.
+/// Removes the connector with specified ID from the registry. Returns true
+/// if connector was removed and false if connector didn't exist.
 bool unregisterConnector(const std::string& connectorId);
 
-/// Returns a connector with specified ID. Throws if connector doesn't exist.
+/// Returns a connector with specified ID. Throws if connector doesn't
+/// exist.
 std::shared_ptr<Connector> getConnector(const std::string& connectorId);
 
-/// Returns a map of all (connectorId -> connector) pairs currently registered.
+/// Returns a map of all (connectorId -> connector) pairs currently
+/// registered.
 const std::unordered_map<std::string, std::shared_ptr<Connector>>&
 getAllConnectors();
 

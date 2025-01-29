@@ -237,6 +237,12 @@ TEST_F(JsonFunctionsTest, jsonParse) {
 
   // Test bad unicode characters
   testJsonParse("\"Hello \xc0\xaf World\"", "\"Hello �� World\"");
+  // The below tests fail if simdjson.doc.get_string() is called
+  // without specifying replacement for bad characters in simdjson.
+  testJsonParse(R"("\uDE2Dau")", R"("\uDE2Dau")");
+  testJsonParse(
+      R"([{"response": "[\"fusil a peinture\",\"\ufffduD83E\\uDE2Dau bois\"]"}])",
+      R"([{"response":"[\"fusil a peinture\",\"�uD83E\\uDE2Dau bois\"]"}])");
 
   VELOX_ASSERT_THROW(
       jsonParse(R"({"k1":})"), "The JSON document has an improper structure");
@@ -332,6 +338,21 @@ TEST_F(JsonFunctionsTest, jsonParse) {
       jsonParse("{\"k1\\"), "Invalid escape sequence at the end of string");
   VELOX_ASSERT_USER_THROW(
       jsonParse("{\"k1\\u"), "Invalid escape sequence at the end of string");
+
+  // Ensure state is cleared after invalid json
+  {
+    data = makeRowVector({makeFlatVector<StringView>({
+        R"({"key":1578377,"name":"Alto Ma\\u00e9 \\"A\\"","type":"cities"})", // invalid json
+        R"([{"k1": "v1" }, {"k2": "v2" }])" // valid json
+    })});
+
+    result = evaluate("try(json_parse(c0))", data);
+
+    expected = makeNullableFlatVector<StringView>(
+        {std::nullopt, R"([{"k1":"v1"},{"k2":"v2"}])"}, JSON());
+
+    velox::test::assertEqualVectors(expected, result);
+  }
 }
 
 TEST_F(JsonFunctionsTest, canonicalization) {

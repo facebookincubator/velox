@@ -20,39 +20,13 @@
 
 #include "folly/json.h"
 
+#include "velox/common/fuzzer/Utils.h"
 #include "velox/type/Type.h"
 #include "velox/type/Variant.h"
-#include "velox/vector/fuzzer/Utils.h"
 
 namespace facebook::velox::fuzzer {
 
 using facebook::velox::variant;
-
-class AbstractInputGenerator {
- public:
-  AbstractInputGenerator(
-      size_t seed,
-      const TypePtr& type,
-      std::unique_ptr<AbstractInputGenerator>&& next,
-      double nullRatio);
-
-  virtual ~AbstractInputGenerator() = default;
-
-  virtual variant generate() = 0;
-
-  TypePtr type() const {
-    return type_;
-  }
-
- protected:
-  FuzzerGenerator rng_;
-
-  TypePtr type_;
-
-  std::unique_ptr<AbstractInputGenerator> next_;
-
-  double nullRatio_;
-};
 
 std::unique_ptr<AbstractInputGenerator>
 getRandomInputGenerator(size_t seed, const TypePtr& type, double nullRatio);
@@ -356,13 +330,9 @@ class JsonInputGenerator : public AbstractInputGenerator {
       const TypePtr& type,
       double nullRatio,
       std::unique_ptr<AbstractInputGenerator>&& objectGenerator,
-      bool makeRandomVariation = false)
-      : AbstractInputGenerator(seed, type, nullptr, nullRatio),
-        objectGenerator_{std::move(objectGenerator)},
-        makeRandomVariation_{makeRandomVariation},
-        opts_{getSerializationOptions()} {}
+      bool makeRandomVariation = false);
 
-  ~JsonInputGenerator() override = default;
+  ~JsonInputGenerator() override;
 
   variant generate() override;
 
@@ -382,8 +352,6 @@ class JsonInputGenerator : public AbstractInputGenerator {
   folly::dynamic convertVariantToDynamic(const variant& object);
 
   void makeRandomVariation(std::string json);
-
-  folly::json::serialization_opts getSerializationOptions();
 
   std::unique_ptr<AbstractInputGenerator> objectGenerator_;
 
