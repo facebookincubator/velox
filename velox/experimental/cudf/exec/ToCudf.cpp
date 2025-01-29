@@ -19,6 +19,7 @@
 #include <cudf/detail/nvtx/ranges.hpp>
 #include "velox/exec/Driver.h"
 #include "velox/exec/HashBuild.h"
+#include "velox/exec/TableScan.h"
 #include "velox/exec/HashProbe.h"
 #include "velox/exec/Operator.h"
 #include "velox/exec/OrderBy.h"
@@ -79,6 +80,23 @@ bool CompileState::compile() {
     exec::Operator* oper = operators[operatorIndex];
     auto replacingOperatorIndex = operatorIndex + operatorsOffset;
     VELOX_CHECK(oper);
+    //TableScan
+    if (auto scanOp = dynamic_cast<exec::TableScan*>(oper)) {
+      // auto id = scanOp->operatorId();
+      // auto plan_node = std::dynamic_pointer_cast<const core::TableScanNode>(
+      //     get_plan_node(scanOp->planNodeId()));
+      // VELOX_CHECK(plan_node != nullptr);
+      // replace_op.push_back(std::make_unique<CudfToVelox>(
+      //     id, plan_node->outputType(), ctx, plan_node->id() + "-to-velox"));
+      // replace_op[0]->initialize();
+      // operatorsOffset += replace_op.size();
+      // [[maybe_unused]] auto replaced = driverFactory_.replaceOperators(
+      //     driver_,
+      //     replacingOperatorIndex +1,
+      //     replacingOperatorIndex +1,
+      //     std::move(replace_op));
+      // replacements_made = true;
+    } else
     if (auto joinBuildOp = dynamic_cast<exec::HashBuild*>(oper)) {
       auto id = joinBuildOp->operatorId();
       auto plan_node = std::dynamic_pointer_cast<const core::HashJoinNode>(
