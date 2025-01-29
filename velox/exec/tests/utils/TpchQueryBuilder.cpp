@@ -637,7 +637,7 @@ TpchPlan TpchQueryBuilder::getQ5Plan() const {
                     .planNode();
 
   auto orders = PlanBuilder(planNodeIdGenerator, pool_.get())
-                    .tableScan(
+                    .cudftableScan(
                         kOrders,
                         ordersSelectedRowType,
                         ordersFileColumns,
@@ -647,13 +647,13 @@ TpchPlan TpchQueryBuilder::getQ5Plan() const {
 
   auto customer =
       PlanBuilder(planNodeIdGenerator, pool_.get())
-          .tableScan(kCustomer, customerSelectedRowType, customerFileColumns)
+          .cudftableScan(kCustomer, customerSelectedRowType, customerFileColumns)
           .capturePlanNodeId(customerScanNodeId)
           .planNode();
 
   auto nationJoinRegion =
       PlanBuilder(planNodeIdGenerator, pool_.get())
-          .tableScan(kNation, nationSelectedRowType, nationFileColumns)
+          .cudftableScan(kNation, nationSelectedRowType, nationFileColumns)
           .capturePlanNodeId(nationScanNodeId)
           .hashJoin(
               {"n_regionkey"},
@@ -665,7 +665,7 @@ TpchPlan TpchQueryBuilder::getQ5Plan() const {
 
   auto supplierJoinNationRegion =
       PlanBuilder(planNodeIdGenerator, pool_.get())
-          .tableScan(kSupplier, supplierSelectedRowType, supplierFileColumns)
+          .cudftableScan(kSupplier, supplierSelectedRowType, supplierFileColumns)
           .capturePlanNodeId(supplierScanNodeId)
           .hashJoin(
               {"s_nationkey"},
@@ -677,7 +677,7 @@ TpchPlan TpchQueryBuilder::getQ5Plan() const {
 
   auto plan =
       PlanBuilder(planNodeIdGenerator, pool_.get())
-          .tableScan(kLineitem, lineitemSelectedRowType, lineitemFileColumns)
+          .cudftableScan(kLineitem, lineitemSelectedRowType, lineitemFileColumns)
           .capturePlanNodeId(lineitemScanNodeId)
           .project(
               {"l_extendedprice * (1.0 - l_discount) AS part_revenue",
@@ -733,7 +733,7 @@ TpchPlan TpchQueryBuilder::getQ6Plan() const {
 
   core::PlanNodeId lineitemPlanNodeId;
   auto plan = PlanBuilder(pool_.get())
-                  .tableScan(
+                  .cudftableScan(
                       kLineitem,
                       selectedRowType,
                       fileColumnNames,
