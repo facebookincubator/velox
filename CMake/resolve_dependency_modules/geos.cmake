@@ -22,7 +22,7 @@ string(
         VELOX_GEOS_SOURCE_URL "https://download.osgeo.org/geos/"
         "geos-${VELOX_GEOS_BUILD_VERSION}.tar.bz2")
 
-resolve_dependency_url(GEOS)
+velox_resolve_dependency_url(GEOS)
 
 FetchContent_Declare(
         geos
