@@ -181,7 +181,7 @@ TEST_F(ArrayHasDuplicatesTest, json) {
             std::nullopt}},
           ARRAY(JSON()))}));
   assertEqualVectors(
-      makeFlatVector<bool>(
-          {false, false, true, true, false, true, true, true, true, true}),
+      makeFlatVector<bool>(std::vector<bool>{
+          {false, false, true, true, false, true, true, true, true, true}}),
       result);
 }
