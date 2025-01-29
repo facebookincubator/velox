@@ -441,6 +441,7 @@ RowVectorPtr to_velox_column(
     const cudf::table_view& table,
     memory::MemoryPool* pool,
     const std::vector<cudf::column_metadata>& metadata) {
+  NVTX3_FUNC_RANGE();
   auto arrowDeviceArray = cudf::to_arrow_host(table);
   auto& arrowArray = arrowDeviceArray->array;
 
@@ -462,6 +463,7 @@ facebook::velox::RowVectorPtr to_velox_column(
     const cudf::table_view& table,
     facebook::velox::memory::MemoryPool* pool,
     std::string name_prefix) {
+  NVTX3_FUNC_RANGE();
   std::vector<cudf::column_metadata> metadata;
   for (auto i = 0; i < table.num_columns(); i++) {
     metadata.push_back(cudf::column_metadata(name_prefix + std::to_string(i)));
@@ -473,6 +475,7 @@ RowVectorPtr to_velox_column(
     const cudf::table_view& table,
     memory::MemoryPool* pool,
     const std::vector<std::string>& columnNames) {
+  NVTX3_FUNC_RANGE();
   std::vector<cudf::column_metadata> metadata;
   for (auto name : columnNames) {
     metadata.emplace_back(cudf::column_metadata(name));
