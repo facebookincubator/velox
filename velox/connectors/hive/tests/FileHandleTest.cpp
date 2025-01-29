@@ -42,7 +42,7 @@ TEST(FileHandleTest, localFile) {
   auto fileHandle = factory.generate(filename);
   ASSERT_EQ(fileHandle->file->size(), 3);
   char buffer[3];
-  ASSERT_EQ(fileHandle->file->pread(0, 3, &buffer), "foo");
+  ASSERT_EQ(fileHandle->file->pread(0, 3, &buffer, nullptr), "foo");
 
   // Clean up
   remove(filename.c_str());
@@ -68,7 +68,7 @@ TEST(FileHandleTest, localFileWithProperties) {
   auto fileHandle = factory.generate(filename, &properties);
   ASSERT_EQ(fileHandle->file->size(), 3);
   char buffer[3];
-  ASSERT_EQ(fileHandle->file->pread(0, 3, &buffer), "foo");
+  ASSERT_EQ(fileHandle->file->pread(0, 3, &buffer, nullptr), "foo");
 
   // Clean up
   remove(filename.c_str());

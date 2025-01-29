@@ -74,7 +74,7 @@ OperatorTraceSummaryReader::OperatorTraceSummaryReader(
 
 OperatorTraceSummary OperatorTraceSummaryReader::read() const {
   VELOX_CHECK_NOT_NULL(summaryFile_);
-  const auto summaryStr = summaryFile_->pread(0, summaryFile_->size());
+  const auto summaryStr = summaryFile_->pread(0, summaryFile_->size(), nullptr);
   VELOX_CHECK(!summaryStr.empty());
 
   folly::dynamic summaryObj = folly::parseJson(summaryStr);

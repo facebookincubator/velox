@@ -73,7 +73,8 @@ void FileInputStream::readNextRange() {
       VELOX_CHECK_LT(
           0, readBytes, "Read past end of FileInputStream {}", fileSize_);
       NanosecondTimer timer_2{&readTimeNs};
-      file_->pread(fileOffset_, readBytes, buffer()->asMutable<char>());
+      file_->pread(
+          fileOffset_, readBytes, buffer()->asMutable<char>(), nullptr);
     }
   }
 
@@ -218,7 +219,7 @@ void FileInputStream::maybeIssueReadahead() {
   }
   std::vector<folly::Range<char*>> ranges;
   ranges.emplace_back(nextBuffer()->asMutable<char>(), size);
-  readAheadWait_ = file_->preadvAsync(fileOffset_, ranges);
+  readAheadWait_ = file_->preadvAsync(fileOffset_, ranges, nullptr);
   VELOX_CHECK(readAheadWait_.valid());
 }
 

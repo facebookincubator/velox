@@ -94,7 +94,7 @@ void TraceFileToolRunner::copyFiles() const {
     while (offset < fileSize) {
       const auto curLen = std::min<uint64_t>(fileSize - offset, batchSize);
       const auto dataView =
-          readFile->pread(offset, curLen, ioBuf->writableData());
+          readFile->pread(offset, curLen, ioBuf->writableData(), nullptr);
       writeFile->append(dataView);
       ioBuf->append(curLen);
       offset += curLen;

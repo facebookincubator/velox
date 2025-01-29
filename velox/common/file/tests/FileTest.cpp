@@ -75,19 +75,20 @@ void readData(
     ASSERT_EQ(readFile->size(), 15 + kOneMB);
   }
   char buffer1[5];
-  ASSERT_EQ(readFile->pread(10 + kOneMB, 5, &buffer1), "ddddd");
+  ASSERT_EQ(readFile->pread(10 + kOneMB, 5, &buffer1, nullptr), "ddddd");
   char buffer2[10];
-  ASSERT_EQ(readFile->pread(0, 10, &buffer2), "aaaaabbbbb");
+  ASSERT_EQ(readFile->pread(0, 10, &buffer2, nullptr), "aaaaabbbbb");
   char buffer3[kOneMB];
-  ASSERT_EQ(readFile->pread(10, kOneMB, &buffer3), std::string(kOneMB, 'c'));
+  ASSERT_EQ(
+      readFile->pread(10, kOneMB, &buffer3, nullptr), std::string(kOneMB, 'c'));
   if (checkFileSize) {
     ASSERT_EQ(readFile->size(), 15 + kOneMB);
   }
   char buffer4[10];
-  const std::string_view arf = readFile->pread(5, 10, &buffer4);
-  const std::string zarf = readFile->pread(kOneMB, 15);
+  const std::string_view arf = readFile->pread(5, 10, &buffer4, nullptr);
+  const std::string zarf = readFile->pread(kOneMB, 15, nullptr);
   auto buf = std::make_unique<char[]>(8);
-  const std::string_view warf = readFile->pread(4, 8, buf.get());
+  const std::string_view warf = readFile->pread(4, 8, buf.get(), nullptr);
   const std::string_view warfFromBuf(buf.get(), 8);
   ASSERT_EQ(arf, "bbbbbccccc");
   ASSERT_EQ(zarf, "ccccccccccddddd");
@@ -105,7 +106,7 @@ void readData(
           (char*)(uint64_t)(15 + kOneMB - 500000 - sizeof(head) -
                             sizeof(middle) - sizeof(tail))),
       folly::Range<char*>(tail, sizeof(tail))};
-  ASSERT_EQ(15 + kOneMB, readFile->preadv(0, buffers));
+  ASSERT_EQ(15 + kOneMB, readFile->preadv(0, buffers, nullptr));
   ASSERT_EQ(std::string_view(head, sizeof(head)), "aaaaabbbbbcc");
   ASSERT_EQ(std::string_view(middle, sizeof(middle)), "cccc");
   ASSERT_EQ(std::string_view(tail, sizeof(tail)), "ccddddd");
@@ -113,7 +114,7 @@ void readData(
     std::vector<folly::Range<char*>> buffers1 = {
         folly::Range<char*>(head, sizeof(head)),
         folly::Range<char*>(nullptr, (char*)(uint64_t)500000)};
-    auto future1 = readFile->preadvAsync(0, buffers1);
+    auto future1 = readFile->preadvAsync(0, buffers1, nullptr);
     const auto offset1 = sizeof(head) + 500000;
     std::vector<folly::Range<char*>> buffers2 = {
         folly::Range<char*>(middle, sizeof(middle)),
@@ -121,11 +122,11 @@ void readData(
             nullptr,
             (char*)(uint64_t)(15 + kOneMB - offset1 - sizeof(middle) -
                               sizeof(tail)))};
-    auto future2 = readFile->preadvAsync(offset1, buffers2);
+    auto future2 = readFile->preadvAsync(offset1, buffers2, nullptr);
     std::vector<folly::Range<char*>> buffers3 = {
         folly::Range<char*>(tail, sizeof(tail))};
     const auto offset2 = 15 + kOneMB - sizeof(tail);
-    auto future3 = readFile->preadvAsync(offset2, buffers3);
+    auto future3 = readFile->preadvAsync(offset2, buffers3, nullptr);
     ASSERT_EQ(offset1, future1.wait().value());
     ASSERT_EQ(offset2 - offset1, future2.wait().value());
     ASSERT_EQ(sizeof(tail), future3.wait().value());
@@ -164,7 +165,7 @@ TEST(InMemoryFile, preadv) {
       {5 + 5 + kOneMB + 2, 3UL, {}}};
 
   std::vector<folly::IOBuf> iobufs(readRegions.size());
-  readFile.preadv(readRegions, {iobufs.data(), iobufs.size()});
+  readFile.preadv(readRegions, {iobufs.data(), iobufs.size()}, nullptr);
   std::vector<std::string> values;
   values.reserve(iobufs.size());
   for (auto& iobuf : iobufs) {
@@ -245,7 +246,7 @@ TEST_P(LocalFileTest, viaRegistry) {
   auto readFile = fs->openFileForRead(filename);
   ASSERT_EQ(readFile->size(), 5);
   char buffer1[5];
-  ASSERT_EQ(readFile->pread(0, 5, &buffer1), "snarf");
+  ASSERT_EQ(readFile->pread(0, 5, &buffer1, nullptr), "snarf");
   fs->remove(filename);
 }
 
@@ -273,7 +274,7 @@ TEST_P(LocalFileTest, rename) {
   localFs->rename(b, newA, true);
   auto readFile = localFs->openFileForRead(newA);
   char buffer[5];
-  ASSERT_EQ(readFile->pread(0, 5, &buffer), data);
+  ASSERT_EQ(readFile->pread(0, 5, &buffer, nullptr), data);
 }
 
 TEST_P(LocalFileTest, exists) {
@@ -522,11 +523,11 @@ class FaultyFsTest : public ::testing::Test {
   void readData(ReadFile* file, bool useReadv = false) {
     char readBuf[buffer_.size()];
     if (!useReadv) {
-      file->pread(0, buffer_.size(), readBuf);
+      file->pread(0, buffer_.size(), readBuf, nullptr);
     } else {
       std::vector<folly::Range<char*>> buffers;
       buffers.push_back(folly::Range<char*>(readBuf, buffer_.size()));
-      file->preadv(0, buffers);
+      file->preadv(0, buffers, nullptr);
     }
     for (int i = 0; i < buffer_.size(); ++i) {
       if (buffer_[i] != readBuf[i]) {
@@ -782,7 +783,7 @@ TEST_F(FaultyFsTest, fileWriteFaultHookInjection) {
     auto readFile = fs_->openFileForRead(path1, {});
     char buffer[5];
     ASSERT_EQ(readFile->size(), 5);
-    ASSERT_EQ(readFile->pread(0, 5, &buffer), "hello");
+    ASSERT_EQ(readFile->pread(0, 5, &buffer, nullptr), "hello");
     fs_->remove(path1);
   }
   {
@@ -792,7 +793,7 @@ TEST_F(FaultyFsTest, fileWriteFaultHookInjection) {
     auto readFile = fs_->openFileForRead(path2, {});
     char buffer[10];
     ASSERT_EQ(readFile->size(), 10);
-    ASSERT_EQ(readFile->pread(0, 10, &buffer), "Error data");
+    ASSERT_EQ(readFile->pread(0, 10, &buffer, nullptr), "Error data");
     fs_->remove(path2);
   }
 
@@ -816,7 +817,7 @@ TEST_F(FaultyFsTest, fileWriteFaultHookInjection) {
     auto readFile = fs_->openFileForRead(path1, {});
     char buffer[5];
     ASSERT_EQ(readFile->size(), 5);
-    ASSERT_EQ(readFile->pread(0, 5, &buffer), "hello");
+    ASSERT_EQ(readFile->pread(0, 5, &buffer, nullptr), "hello");
     fs_->remove(path1);
   }
   {

@@ -40,6 +40,7 @@
 
 #include "velox/common/base/Exceptions.h"
 #include "velox/common/file/Region.h"
+#include "velox/common/io/IoStatistics.h"
 
 namespace facebook::velox {
 
@@ -52,13 +53,17 @@ class ReadFile {
   // buffer 'buf'. The bytes are returned as a string_view pointing to 'buf'.
   //
   // This method should be thread safe.
-  virtual std::string_view pread(uint64_t offset, uint64_t length, void* buf)
-      const = 0;
+  virtual std::string_view pread(
+      uint64_t offset,
+      uint64_t length,
+      void* buf,
+      io::IoStatistics* stats) const = 0;
 
   // Same as above, but returns owned data directly.
   //
   // This method should be thread safe.
-  virtual std::string pread(uint64_t offset, uint64_t length) const;
+  virtual std::string
+  pread(uint64_t offset, uint64_t length, io::IoStatistics* stats) const;
 
   // Reads starting at 'offset' into the memory referenced by the
   // Ranges in 'buffers'. The buffers are filled left to right. A
@@ -67,7 +72,8 @@ class ReadFile {
   // This method should be thread safe.
   virtual uint64_t preadv(
       uint64_t /*offset*/,
-      const std::vector<folly::Range<char*>>& /*buffers*/) const;
+      const std::vector<folly::Range<char*>>& /*buffers*/,
+      io::IoStatistics* stats) const;
 
   // Vectorized read API. Implementations can coalesce and parallelize.
   // The offsets don't need to be sorted.
@@ -82,7 +88,8 @@ class ReadFile {
   // This method should be thread safe.
   virtual uint64_t preadv(
       folly::Range<const common::Region*> regions,
-      folly::Range<folly::IOBuf*> iobufs) const;
+      folly::Range<folly::IOBuf*> iobufs,
+      io::IoStatistics* stats) const;
 
   /// Like preadv but may execute asynchronously and returns the read size or
   /// exception via SemiFuture. Use hasPreadvAsync() to check if the
@@ -91,9 +98,10 @@ class ReadFile {
   /// This method should be thread safe.
   virtual folly::SemiFuture<uint64_t> preadvAsync(
       uint64_t offset,
-      const std::vector<folly::Range<char*>>& buffers) const {
+      const std::vector<folly::Range<char*>>& buffers,
+      io::IoStatistics* stats) const {
     try {
-      return folly::SemiFuture<uint64_t>(preadv(offset, buffers));
+      return folly::SemiFuture<uint64_t>(preadv(offset, buffers, stats));
     } catch (const std::exception& e) {
       return folly::makeSemiFuture<uint64_t>(e);
     }
@@ -213,10 +221,14 @@ class InMemoryReadFile : public ReadFile {
   explicit InMemoryReadFile(std::string file)
       : ownedFile_(std::move(file)), file_(ownedFile_) {}
 
-  std::string_view pread(uint64_t offset, uint64_t length, void* buf)
-      const override;
+  std::string_view pread(
+      uint64_t offset,
+      uint64_t length,
+      void* buf,
+      io::IoStatistics* stats) const override;
 
-  std::string pread(uint64_t offset, uint64_t length) const override;
+  std::string pread(uint64_t offset, uint64_t length, io::IoStatistics* stats)
+      const override;
 
   uint64_t size() const final {
     return file_.size();
@@ -278,18 +290,23 @@ class LocalReadFile final : public ReadFile {
 
   ~LocalReadFile();
 
-  std::string_view pread(uint64_t offset, uint64_t length, void* buf)
-      const final;
+  std::string_view pread(
+      uint64_t offset,
+      uint64_t length,
+      void* buf,
+      io::IoStatistics* stats) const final;
 
   uint64_t size() const final;
 
   uint64_t preadv(
       uint64_t offset,
-      const std::vector<folly::Range<char*>>& buffers) const final;
+      const std::vector<folly::Range<char*>>& buffers,
+      io::IoStatistics* stats) const final;
 
   folly::SemiFuture<uint64_t> preadvAsync(
       uint64_t offset,
-      const std::vector<folly::Range<char*>>& buffers) const override;
+      const std::vector<folly::Range<char*>>& buffers,
+      io::IoStatistics* stats) const override;
 
   bool hasPreadvAsync() const override {
     return executor_ != nullptr;

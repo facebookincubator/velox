@@ -150,7 +150,7 @@ folly::dynamic getTaskMetadata(
   try {
     const auto file = fs->openFileForRead(taskMetaFilePath);
     VELOX_CHECK_NOT_NULL(file);
-    const auto taskMeta = file->pread(0, file->size());
+    const auto taskMeta = file->pread(0, file->size(), nullptr);
     VELOX_USER_CHECK(!taskMeta.empty());
     return folly::parseJson(taskMeta);
   } catch (const std::exception& e) {
@@ -169,7 +169,7 @@ std::string getNodeName(
   try {
     const auto file = fs->openFileForRead(taskMetaFilePath);
     VELOX_CHECK_NOT_NULL(file);
-    const auto taskMeta = file->pread(0, file->size());
+    const auto taskMeta = file->pread(0, file->size(), nullptr);
     VELOX_USER_CHECK(!taskMeta.empty());
     folly::dynamic metaObj = folly::parseJson(taskMeta);
     const auto planFragment = ISerializable::deserialize<core::PlanNode>(

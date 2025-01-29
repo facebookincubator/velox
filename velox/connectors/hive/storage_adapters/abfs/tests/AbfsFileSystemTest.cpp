@@ -96,17 +96,18 @@ class AbfsFileSystemTest : public testing::Test {
 void readData(ReadFile* readFile) {
   ASSERT_EQ(readFile->size(), 15 + kOneMB);
   char buffer1[5];
-  ASSERT_EQ(readFile->pread(10 + kOneMB, 5, &buffer1), "ddddd");
+  ASSERT_EQ(readFile->pread(10 + kOneMB, 5, &buffer1, nullptr), "ddddd");
   char buffer2[10];
-  ASSERT_EQ(readFile->pread(0, 10, &buffer2), "aaaaabbbbb");
+  ASSERT_EQ(readFile->pread(0, 10, &buffer2, nullptr), "aaaaabbbbb");
   char buffer3[kOneMB];
-  ASSERT_EQ(readFile->pread(10, kOneMB, buffer3), std::string(kOneMB, 'c'));
+  ASSERT_EQ(
+      readFile->pread(10, kOneMB, buffer3, nullptr), std::string(kOneMB, 'c'));
   ASSERT_EQ(readFile->size(), 15 + kOneMB);
   char buffer4[10];
-  const std::string_view arf = readFile->pread(5, 10, &buffer4);
-  const std::string zarf = readFile->pread(kOneMB, 15);
+  const std::string_view arf = readFile->pread(5, 10, &buffer4, nullptr);
+  const std::string zarf = readFile->pread(kOneMB, 15, nullptr);
   auto buf = std::make_unique<char[]>(8);
-  const std::string_view warf = readFile->pread(4, 8, buf.get());
+  const std::string_view warf = readFile->pread(4, 8, buf.get(), nullptr);
   const std::string_view warfFromBuf(buf.get(), 8);
   ASSERT_EQ(arf, "bbbbbccccc");
   ASSERT_EQ(zarf, "ccccccccccddddd");
@@ -119,7 +120,7 @@ void readData(ReadFile* readFile) {
       folly::Range<char*>(buff1, 10),
       folly::Range<char*>(nullptr, kOneMB - 5),
       folly::Range<char*>(buff2, 10)};
-  ASSERT_EQ(10 + kOneMB - 5 + 10, readFile->preadv(0, buffers));
+  ASSERT_EQ(10 + kOneMB - 5 + 10, readFile->preadv(0, buffers, nullptr));
   ASSERT_EQ(std::string_view(buff1, sizeof(buff1)), "aaaaabbbbb");
   ASSERT_EQ(std::string_view(buff2, sizeof(buff2)), "cccccddddd");
 
@@ -128,7 +129,9 @@ void readData(ReadFile* readFile) {
   ASSERT_EQ(
       10 + 5,
       readFile->preadv(
-          {regions.data(), regions.size()}, {iobufs.data(), iobufs.size()}));
+          {regions.data(), regions.size()},
+          {iobufs.data(), iobufs.size()},
+          nullptr));
   ASSERT_EQ(
       std::string_view(
           reinterpret_cast<const char*>(iobufs[0].writableData()),

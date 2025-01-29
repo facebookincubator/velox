@@ -46,17 +46,18 @@ TEST_F(GcsFileSystemTest, readFile) {
   std::int64_t size = readFile->size();
   std::int64_t ref_size = kLoremIpsum.length();
   EXPECT_EQ(size, ref_size);
-  EXPECT_EQ(readFile->pread(0, size), kLoremIpsum);
+  EXPECT_EQ(readFile->pread(0, size, nullptr), kLoremIpsum);
 
   char buffer1[size];
-  ASSERT_EQ(readFile->pread(0, size, &buffer1), kLoremIpsum);
+  ASSERT_EQ(readFile->pread(0, size, &buffer1, nullptr), kLoremIpsum);
   ASSERT_EQ(readFile->size(), ref_size);
 
   char buffer2[50];
-  ASSERT_EQ(readFile->pread(10, 50, &buffer2), kLoremIpsum.substr(10, 50));
+  ASSERT_EQ(
+      readFile->pread(10, 50, &buffer2, nullptr), kLoremIpsum.substr(10, 50));
   ASSERT_EQ(readFile->size(), ref_size);
 
-  EXPECT_EQ(readFile->pread(10, size - 10), kLoremIpsum.substr(10));
+  EXPECT_EQ(readFile->pread(10, size - 10, nullptr), kLoremIpsum.substr(10));
 
   char buff1[10];
   char buff2[20];
@@ -67,7 +68,7 @@ TEST_F(GcsFileSystemTest, readFile) {
       folly::Range<char*>(buff2, 20),
       folly::Range<char*>(nullptr, 30),
       folly::Range<char*>(buff3, 30)};
-  ASSERT_EQ(10 + 20 + 20 + 30 + 30, readFile->preadv(0, buffers));
+  ASSERT_EQ(10 + 20 + 20 + 30 + 30, readFile->preadv(0, buffers, nullptr));
   ASSERT_EQ(std::string_view(buff1, sizeof(buff1)), kLoremIpsum.substr(0, 10));
   ASSERT_EQ(std::string_view(buff2, sizeof(buff2)), kLoremIpsum.substr(30, 20));
   ASSERT_EQ(std::string_view(buff3, sizeof(buff3)), kLoremIpsum.substr(80, 30));
@@ -100,7 +101,7 @@ TEST_F(GcsFileSystemTest, writeAndReadFile) {
   auto readFile = gcfs.openFileForRead(gcsFile);
   std::int64_t size = readFile->size();
   EXPECT_EQ(readFile->size(), contentSize);
-  EXPECT_EQ(readFile->pread(0, size), kDataContent);
+  EXPECT_EQ(readFile->pread(0, size, nullptr), kDataContent);
 
   // Opening an existing file for write must be an error.
   filesystems::GcsFileSystem newGcfs(emulator_->hiveConfig());
