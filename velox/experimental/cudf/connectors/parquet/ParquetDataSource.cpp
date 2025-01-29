@@ -156,26 +156,33 @@ std::optional<RowVectorPtr> ParquetDataSource::next(
   auto output = RowVectorPtr{};
 
   // If the current table view has <= size rows, this is the last chunk.
-  if (currentCudfTableView_.num_rows() <= size) {
+  // if (currentCudfTableView_.num_rows() <= size) {
+  auto sz = cudfTable_->num_rows();
+    output = std::make_shared<CudfVector>(
+      pool_, outputType_, sz, std::move(cudfTable_));
     // Convert the current table view to RowVectorPtr.
-    output =
-        with_arrow::to_velox_column(currentCudfTableView_, pool_, columnNames);
+    // output =
+    //     with_arrow::to_velox_column(currentCudfTableView_, pool_, columnNames);
     // Reset internal tables
     resetCudfTableAndView();
-  } else {
-    // Split the current table view into two partitions.
-    auto partitions =
-        std::vector<cudf::size_type>{static_cast<cudf::size_type>(size)};
-    auto tableSplits = cudf::split(currentCudfTableView_, partitions);
-    VELOX_CHECK_EQ(
-        static_cast<cudf::size_type>(size),
-        tableSplits[0].num_rows(),
-        "cudf::split yielded incorrect partitions");
-    // Convert the first split view to RowVectorPtr.
-    output = with_arrow::to_velox_column(tableSplits[0], pool_, columnNames);
-    // Set the current view to the second split view.
-    currentCudfTableView_ = tableSplits[1];
-  }
+  // } else {
+  //   // Split the current table view into two partitions.
+  //   auto partitions =
+  //       std::vector<cudf::size_type>{static_cast<cudf::size_type>(size)};
+  //   auto tableSplits = cudf::split(currentCudfTableView_, partitions);
+  //   VELOX_CHECK_EQ(
+  //       static_cast<cudf::size_type>(size),
+  //       tableSplits[0].num_rows(),
+  //       "cudf::split yielded incorrect partitions");
+  //   // Convert the first split view to RowVectorPtr.
+  //   // output = with_arrow::to_velox_column(tableSplits[0], pool_, columnNames);
+  //   // Set the current view to the second split view.
+  //   // currentCudfTableView_ = tableSplits[1];
+  //   output = std::make_shared<CudfVector>(
+  //     pool_, outputType_, size, std::make_unique<cudf::table>(tableSplits[0]));
+  //   cudfTable_ = std::make_unique<cudf::table>(tableSplits[1]);
+  //   currentCudfTableView_ = cudfTable_->view();
+  // }
 
   // Check if conversion yielded a nullptr
   VELOX_CHECK_NOT_NULL(output, "Cudf to Velox conversion yielded a nullptr");
