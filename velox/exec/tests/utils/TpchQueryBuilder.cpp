@@ -628,7 +628,7 @@ TpchPlan TpchQueryBuilder::getQ5Plan() const {
   core::PlanNodeId regionScanNodeId;
 
   auto region = PlanBuilder(planNodeIdGenerator, pool_.get())
-                    .tableScan(
+                    .cudftableScan(
                         kRegion,
                         regionSelectedRowType,
                         regionFileColumns,
