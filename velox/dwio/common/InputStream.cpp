@@ -78,7 +78,7 @@ void ReadFileInputStream::read(
   std::string_view readData;
   {
     MicrosecondTimer timer(&readTimeUs);
-    readData = readFile_->pread(offset, length, buf);
+    readData = readFile_->pread(offset, length, buf, stats_);
   }
   if (stats_) {
     stats_->incRawBytesRead(length);

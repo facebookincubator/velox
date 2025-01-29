@@ -67,7 +67,8 @@ std::string ReadFile::pread(uint64_t offset, uint64_t length) const {
 
 uint64_t ReadFile::preadv(
     uint64_t offset,
-    const std::vector<folly::Range<char*>>& buffers) const {
+    const std::vector<folly::Range<char*>>& buffers,
+    io::IoStatistics* stats) const {
   auto fileSize = size();
   uint64_t numRead = 0;
   if (offset >= fileSize) {
@@ -87,7 +88,8 @@ uint64_t ReadFile::preadv(
 
 uint64_t ReadFile::preadv(
     folly::Range<const common::Region*> regions,
-    folly::Range<folly::IOBuf*> iobufs) const {
+    folly::Range<folly::IOBuf*> iobufs,
+    io::IoStatistics* stats) const {
   VELOX_CHECK_EQ(regions.size(), iobufs.size());
   uint64_t length = 0;
   for (size_t i = 0; i < regions.size(); ++i) {
@@ -195,7 +197,8 @@ LocalReadFile::pread(uint64_t offset, uint64_t length, void* buf) const {
 
 uint64_t LocalReadFile::preadv(
     uint64_t offset,
-    const std::vector<folly::Range<char*>>& buffers) const {
+    const std::vector<folly::Range<char*>>& buffers,
+    io::IoStatistics* stats) const {
   // Dropped bytes sized so that a typical dropped range of 50K is not
   // too many iovecs.
   static thread_local std::vector<char> droppedBytes(16 * 1024);
@@ -251,16 +254,18 @@ uint64_t LocalReadFile::preadv(
 
 folly::SemiFuture<uint64_t> LocalReadFile::preadvAsync(
     uint64_t offset,
-    const std::vector<folly::Range<char*>>& buffers) const {
+    const std::vector<folly::Range<char*>>& buffers,
+    io::IoStatistics* stats) const {
   if (!executor_) {
-    return ReadFile::preadvAsync(offset, buffers);
+    return ReadFile::preadvAsync(offset, buffers, stats);
   }
   auto [promise, future] = folly::makePromiseContract<uint64_t>();
   executor_->add([this,
                   _promise = std::move(promise),
                   _offset = offset,
-                  _buffers = buffers]() mutable {
-    auto delegateFuture = ReadFile::preadvAsync(_offset, _buffers);
+                  _buffers = buffers,
+                  _stats = stats]() mutable {
+    auto delegateFuture = ReadFile::preadvAsync(_offset, _buffers, _stats);
     _promise.setTry(std::move(delegateFuture).getTry());
   });
   return std::move(future);
