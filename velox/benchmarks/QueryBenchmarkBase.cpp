@@ -16,6 +16,9 @@
 
 #include "velox/benchmarks/QueryBenchmarkBase.h"
 
+#include "velox/experimental/cudf/connectors/parquet/ParquetConnector.h"
+#include "velox/experimental/cudf/connectors/parquet/ParquetDataSource.h"
+
 DEFINE_string(data_format, "parquet", "Data format");
 
 DEFINE_validator(
@@ -207,6 +210,19 @@ void QueryBenchmarkBase::initialize() {
   connector::registerConnector(hiveConnector);
   parquet::registerParquetReaderFactory();
   dwrf::registerDwrfReaderFactory();
+
+
+  facebook::velox::connector::registerConnectorFactory(
+      std::make_shared<cudf_velox::connector::parquet::ParquetConnectorFactory>());
+  auto parquetConnector =
+      facebook::velox::connector::getConnectorFactory(
+          cudf_velox::connector::parquet::ParquetConnectorFactory::kParquetConnectorName)
+          ->newConnector(
+              "test-parquet",
+              std::make_shared<facebook::velox::config::ConfigBase>(
+                  std::unordered_map<std::string, std::string>()),
+              ioExecutor_.get());
+  facebook::velox::connector::registerConnector(parquetConnector);
 
   // Enable cuDF operators
   cudf_velox::registerCudf();
