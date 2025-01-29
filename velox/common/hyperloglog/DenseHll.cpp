@@ -24,8 +24,8 @@
 namespace facebook::velox::common::hll {
 namespace {
 const int kBitsPerBucket = 4;
-const int8_t kMaxDelta = (1 << kBitsPerBucket) - 1;
-const int8_t kBucketMask = (1 << kBitsPerBucket) - 1;
+const int8_t kMaxDelta = (1u << kBitsPerBucket) - 1;
+const int8_t kBucketMask = (1u << kBitsPerBucket) - 1;
 constexpr double kLinearCountingMinEmptyBuckets = 0.4;
 
 /// Buckets are stored in a byte array. Each byte stored 2 buckets, 4 bits each.
@@ -34,7 +34,7 @@ constexpr double kLinearCountingMinEmptyBuckets = 0.4;
 /// the byte for a given bucket, e.g. 0 for even and 4 for odd buckets.
 int8_t shiftForBucket(int32_t index) {
   // ((1 - bucket) % 2) * kBitsPerBucket
-  return ((~index) & 1) << 2;
+  return ((~static_cast<uint32_t>(index)) & 1) << 2;
 }
 
 /// Returns the value of alpha constant. See "Practical considerations" section
@@ -48,7 +48,7 @@ double alpha(int32_t indexBitLength) {
     case 6:
       return 0.709;
     default:
-      return (0.7213 / (1 + 1.079 / (1 << indexBitLength)));
+      return (0.7213 / (1 + 1.079 / (1u << indexBitLength)));
   }
 }
 
@@ -132,7 +132,7 @@ void DenseHll::initialize(int8_t indexBitLength) {
 
   indexBitLength_ = indexBitLength;
 
-  auto numBuckets = 1 << indexBitLength;
+  auto numBuckets = 1u << indexBitLength;
   baselineCount_ = numBuckets;
   deltas_.resize(numBuckets * kBitsPerBucket / 8);
 }
@@ -186,8 +186,8 @@ struct DenseHllView {
   const int8_t* overflowValues;
 
   int8_t getDelta(int32_t index) const {
-    int slot = index >> 1;
-    return (deltas[slot] >> shiftForBucket(index)) & kBucketMask;
+    unsigned int slot = static_cast<uint32_t>(index) >> 1;
+    return (static_cast<uint32_t>(deltas[slot]) >> shiftForBucket(index)) & kBucketMask;
   }
 
   int8_t getValue(int32_t index) const {
@@ -203,7 +203,7 @@ struct DenseHllView {
 };
 
 int64_t cardinalityImpl(const DenseHllView& hll) {
-  auto numBuckets = 1 << hll.indexBitLength;
+  auto numBuckets = 1u << hll.indexBitLength;
 
   int32_t baselineCount = 0;
   for (int i = 0; i < numBuckets; i++) {
@@ -222,7 +222,7 @@ int64_t cardinalityImpl(const DenseHllView& hll) {
   double sum = 0;
   for (int i = 0; i < numBuckets; i++) {
     int value = hll.getValue(i);
-    sum += 1.0 / (1L << value);
+    sum += 1.0 / (1UL << value);
   }
 
   double estimate = (alpha(hll.indexBitLength) * numBuckets * numBuckets) / sum;
@@ -240,7 +240,7 @@ DenseHllView deserialize(const char* serialized) {
   auto indexBitLength = stream.read<int8_t>();
   auto baseline = stream.read<int8_t>();
 
-  auto numBuckets = 1 << indexBitLength;
+  auto numBuckets = 1u << indexBitLength;
   // next numBuckets / 2 bytes are deltas
   const int8_t* deltas = stream.read<int8_t>(numBuckets / 2);
 
@@ -279,20 +279,20 @@ int64_t DenseHll::cardinality(const char* serialized) {
 }
 
 int8_t DenseHll::getDelta(int32_t index) const {
-  int slot = index >> 1;
+  unsigned int slot = static_cast<uint32_t>(index) >> 1;
   return (deltas_[slot] >> shiftForBucket(index)) & kBucketMask;
 }
 
 void DenseHll::setDelta(int32_t index, int8_t value) {
-  int slot = index >> 1;
+  unsigned int slot = static_cast<uint32_t>(index) >> 1;
 
   // Clear the old value.
-  int8_t clearMask = static_cast<int8_t>(kBucketMask << shiftForBucket(index));
-  deltas_[slot] &= ~clearMask;
+  int8_t clearMask = static_cast<int8_t>(static_cast<uint8_t>(kBucketMask) << shiftForBucket(index));
+  deltas_[slot] = static_cast<uint8_t>(deltas_[slot]) & ~static_cast<uint8_t>(clearMask);
 
   // Set the new value.
-  int8_t setMask = static_cast<int8_t>(value << shiftForBucket(index));
-  deltas_[slot] |= setMask;
+  int8_t setMask = static_cast<int8_t>(static_cast<uint8_t>(value) << shiftForBucket(index));
+  deltas_[slot] |= static_cast<uint8_t>(deltas_[slot]) | static_cast<uint8_t>(setMask);
 }
 
 int8_t DenseHll::getOverflow(int32_t index) const {
@@ -310,7 +310,7 @@ int DenseHll::findOverflowEntry(int32_t index) const {
 }
 
 void DenseHll::adjustBaselineIfNeeded() {
-  auto numBuckets = 1 << indexBitLength_;
+  auto numBuckets = 1u << indexBitLength_;
 
   while (baselineCount_ == 0) {
     baseline_++;
@@ -389,7 +389,7 @@ int32_t DenseHll::serializedSize() const {
   return 1 /* type + version */
       + 1 /* indexBitLength */
       + 1 /* baseline */
-      + (1 << indexBitLength_) / 2 /* buckets */
+      + (1u << indexBitLength_) / 2 /* buckets */
       + 2 /* overflow bucket count */
       + 2 * overflows_ /* overflow bucket indexes */
       + overflows_ /* overflow bucket values */;
@@ -426,7 +426,7 @@ bool DenseHll::canDeserialize(const char* input, int size) {
     return false;
   }
 
-  auto numBuckets = 1 << indexBitLength;
+  auto numBuckets = 1u << indexBitLength;
   const int8_t* deltas = stream.read<int8_t>(numBuckets / 2);
   auto overflows = stream.read<int16_t>();
 
@@ -471,7 +471,7 @@ int32_t DenseHll::estimateInMemorySize(int8_t indexBitLength) {
   // Note: we don't take into account overflow entries since their number can
   // vary.
   return sizeof(indexBitLength_) + sizeof(baseline_) + sizeof(baselineCount_) +
-      (1 << indexBitLength) / 2;
+      (1u << indexBitLength) / 2;
 }
 
 void DenseHll::serialize(char* output) {
@@ -500,7 +500,7 @@ DenseHll::DenseHll(const char* serialized, HashStringAllocator* allocator)
   initialize(hll.indexBitLength);
   baseline_ = hll.baseline;
 
-  auto numBuckets = 1 << indexBitLength_;
+  auto numBuckets = 1u << indexBitLength_;
   std::copy(hll.deltas, hll.deltas + numBuckets / 2, deltas_.data());
 
   overflows_ = hll.overflows;
@@ -553,7 +553,7 @@ void DenseHll::mergeWith(const char* serialized) {
 
   auto baseline = stream.read<int8_t>();
 
-  auto numBuckets = 1 << indexBitLength_;
+  auto numBuckets = 1u << indexBitLength_;
   auto deltas = stream.read<int8_t>(numBuckets / 2);
   auto overflows = stream.read<int16_t>();
   auto overflowBuckets = overflows ? stream.read<uint16_t>(overflows) : nullptr;
