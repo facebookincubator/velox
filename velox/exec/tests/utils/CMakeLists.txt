@@ -34,6 +34,8 @@ add_library(
 
 target_link_libraries(
   velox_exec_test_lib
+  cudf::cudf
+  velox_cudf_parquet_connector
   velox_vector_test_lib
   velox_vector_fuzzer
   velox_temp_path
