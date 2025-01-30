@@ -350,7 +350,7 @@ class HiveIcebergTest : public HiveConnectorTestBase {
         kHiveConnectorId,
         dataFilePath,
         fileFomat_,
-        0, m
+        0,
         fileSize,
         partitionKeys,
         std::nullopt,
