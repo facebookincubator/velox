@@ -13,8 +13,8 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#include "velox/functions/prestosql/GeometryFunctions.h"
 #include "velox/functions/Registerer.h"
+#include "velox/functions/prestosql/GeometryFunctions.h"
 
 namespace facebook::velox::functions {
 void registerGeometryFunctions(const std::string& prefix) {
