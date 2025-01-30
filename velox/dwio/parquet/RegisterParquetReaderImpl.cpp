@@ -14,14 +14,18 @@
  * limitations under the License.
  */
 
-#pragma once
+// This file invokes the Parquet Reader
+
+#include "velox/dwio/parquet/reader/ParquetReader.h"
 
 namespace facebook::velox::parquet {
 
-/// Registers the Parquet reader factory.
-/// Has the weak attribute so that it can be overridden by a custom factory.
-__attribute__((__weak__)) void registerParquetReaderFactory();
+void registerParquetReaderFactory() {
+  dwio::common::registerReaderFactory(std::make_shared<ParquetReaderFactory>());
+}
 
-__attribute__((__weak__)) void unregisterParquetReaderFactory();
+void unregisterParquetReaderFactory() {
+  dwio::common::unregisterReaderFactory(dwio::common::FileFormat::PARQUET);
+}
 
 } // namespace facebook::velox::parquet
