@@ -29,6 +29,8 @@
 #include "velox/common/memory/MemoryAllocator.h"
 #include "velox/common/memory/MemoryArbitrator.h"
 
+DECLARE_bool(velox_memory_pool_debug_enabled);
+
 namespace facebook::velox::exec {
 class ParallelMemoryReclaimer;
 }
@@ -151,7 +153,7 @@ class MemoryPool : public std::enable_shared_from_this<MemoryPool> {
 
     /// If true, tracks the allocation and free call stacks to detect the source
     /// of memory leak for testing purpose.
-    bool debugEnabled{config::globalConfig.memoryPoolDebugEnabled};
+    bool debugEnabled{FLAGS_velox_memory_pool_debug_enabled};
 
     /// Terminates the process and generates a core file on an allocation
     /// failure

@@ -24,6 +24,8 @@
 #include "velox/common/memory/MallocAllocator.h"
 #include "velox/common/memory/MmapAllocator.h"
 
+DECLARE_int32(velox_memory_num_shared_leaf_pools);
+
 namespace facebook::velox::memory {
 namespace {
 constexpr std::string_view kSysRootName{"__sys_root__"};
@@ -78,7 +80,7 @@ std::vector<std::shared_ptr<MemoryPool>> createSharedLeafMemoryPools(
   VELOX_CHECK_EQ(sysPool.name(), kSysRootName);
   std::vector<std::shared_ptr<MemoryPool>> leafPools;
   const size_t numSharedPools =
-      std::max(1, config::globalConfig.memoryNumSharedLeafPools);
+      std::max(1, FLAGS_velox_memory_num_shared_leaf_pools);
   leafPools.reserve(numSharedPools);
   for (size_t i = 0; i < numSharedPools; ++i) {
     leafPools.emplace_back(
@@ -129,7 +131,7 @@ MemoryManager::MemoryManager(const MemoryManagerOptions& options)
       sysRoot_->name());
   VELOX_CHECK_EQ(
       sharedLeafPools_.size(),
-      std::max(1, config::globalConfig.memoryNumSharedLeafPools));
+      std::max(1, FLAGS_velox_memory_num_shared_leaf_pools));
 }
 
 MemoryManager::~MemoryManager() {
