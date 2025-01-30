@@ -1005,7 +1005,7 @@ class ParquetRowReader::Impl {
       } else if (i != 0) {
         // Clear the metadata of row groups that are not read. This helps reduce
         // the memory consumption. ColumnChunks consume the most memory.
-        // Skip the 0th RowGroup as it is used by rowGroupUncompressedSize().
+        // Skip the 0th RowGroup as it is used by estimatedRowSize().
         rowGroups_[i].columns.clear();
       }
 
