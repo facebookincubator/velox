@@ -603,7 +603,7 @@ class S3FileSystem::Impl {
     auto credentialsProvider = getCredentialsProvider(s3Config);
 
     client_ = std::make_shared<Aws::S3::S3Client>(
-        credentialsProvider, nullptr, clientConfig);
+        credentialsProvider, nullptr /* endpointProvider */, clientConfig);
     ++fileSystemCount;
   }
 
