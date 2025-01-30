@@ -24,6 +24,7 @@
 #include "velox/experimental/cudf/connectors/parquet/ParquetReaderConfig.h"
 #include "velox/experimental/cudf/connectors/parquet/ParquetTableHandle.h"
 
+#include "velox/experimental/cudf/exec/ToCudf.h"
 #include "velox/experimental/cudf/exec/Utilities.h"
 #include "velox/experimental/cudf/exec/VeloxCudfInterop.h"
 #include "velox/experimental/cudf/vector/CudfVector.h"
@@ -104,8 +105,7 @@ std::optional<RowVectorPtr> ParquetDataSource::next(
   VELOX_CHECK_NOT_NULL(split_, "No split to process. Call addSplit first.");
   VELOX_CHECK_NOT_NULL(splitReader_, "No split reader present");
 
-  if (not splitReader_->has_next())
-  {
+  if (not splitReader_->has_next()) {
     return nullptr;
   }
 
@@ -127,8 +127,11 @@ std::optional<RowVectorPtr> ParquetDataSource::next(
   currentCudfTableView_ = cudfTable_->view();
 
   // Output RowVectorPtr
-  auto output =
-      with_arrow::to_velox_column(currentCudfTableView_, pool_, columnNames);
+  auto sz = cudfTable_->num_rows();
+  auto output = cudfIsRegistered()
+      ? std::make_shared<CudfVector>(
+            pool_, outputType_, sz, std::move(cudfTable_))
+      : with_arrow::to_velox_column(currentCudfTableView_, pool_, columnNames);
 
   // Reset internal tables
   resetCudfTableAndView();
