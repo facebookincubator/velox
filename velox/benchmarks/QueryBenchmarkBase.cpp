@@ -93,6 +93,16 @@ DEFINE_int32(
     "prefetch. 1 means prefetch the next row group before decoding "
     "the current one");
 
+DEFINE_uint64(
+    cudf_chunk_read_limit,
+    0,
+    "Output table chunk read limit for cudf::parquet_chunked_reader.");
+
+DEFINE_uint64(
+    cudf_pass_read_limit,
+    0,
+    "Pass read limit for cudf::parquet_chunked_reader.");
+
 DEFINE_bool(
     use_arrow_schema,
     true,
@@ -222,10 +232,10 @@ void QueryBenchmarkBase::initialize() {
       std::unordered_map<std::string, std::string>();
   parquetConfigurationValues[cudf_velox::connector::parquet::
                                  ParquetReaderConfig::kMaxChunkReadLimit] =
-      std::to_string(0);
+      std::to_string(FLAGS_cudf_chunk_read_limit);
   parquetConfigurationValues
       [cudf_velox::connector::parquet::ParquetReaderConfig::kMaxPassReadLimit] =
-          std::to_string(0);
+          std::to_string(FLAGS_cudf_pass_read_limit);
   parquetConfigurationValues
       [cudf_velox::connector::parquet::ParquetReaderConfig::kUseArrowSchema] =
           std::to_string(FLAGS_use_arrow_schema);

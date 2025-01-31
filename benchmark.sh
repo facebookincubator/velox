@@ -34,6 +34,11 @@ profile=${3:-"false"}
 num_drivers=16
 output_batch_rows=100000
 
+# Please set these values based on your requirement
+cudf_chunk_read_limit=1024000
+cudf_pass_read_limit=1024000
+
+
 for query_number in ${queries}; do
     printf -v query_number '%02d' "${query_number}"
     for device in ${devices}; do
@@ -65,6 +70,8 @@ for query_number in ${queries}; do
             --num_drivers=${num_drivers} \
             --preferred_output_batch_rows=${output_batch_rows} \
             --max_output_batch-rows=${output_batch_rows} 2>&1 \
+            --cudf_chunk_read_limit=${cudf_chunk_read_limit} \
+            --cudf_pass_read_limit=${cudf_pass_read_limit} \
             | tee benchmark_results/q${query_number}_${device}_${num_drivers}_drivers
         { set -e +x; } &> /dev/null
     done

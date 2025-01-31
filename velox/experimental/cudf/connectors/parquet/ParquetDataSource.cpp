@@ -112,9 +112,9 @@ std::optional<RowVectorPtr> ParquetDataSource::next(
   // Vector to store read tables
   auto readTables = std::vector<std::unique_ptr<cudf::table>>{};
   // Read chunks until num_rows > size or no more chunks left.
-  while (splitReader_->has_next()) {
+  if (splitReader_->has_next()) {
     auto [table, metadata] = splitReader_->read_chunk();
-    readTables.emplace_back(std::move(table));
+    cudfTable_ = std::move(table);
     // Fill in the column names if reading the first chunk.
     if (columnNames.empty()) {
       for (auto schema : metadata.schema_info) {
@@ -123,7 +123,7 @@ std::optional<RowVectorPtr> ParquetDataSource::next(
     }
   }
 
-  cudfTable_ = concatenateTables(std::move(readTables));
+  // cudfTable_ = concatenateTables(std::move(readTables));
   currentCudfTableView_ = cudfTable_->view();
 
   // Output RowVectorPtr
