@@ -40,6 +40,7 @@
 
 #include "velox/common/base/Exceptions.h"
 #include "velox/common/file/Region.h"
+#include "velox/common/io/IoStatistics.h"
 
 namespace facebook::velox {
 
@@ -67,7 +68,8 @@ class ReadFile {
   // This method should be thread safe.
   virtual uint64_t preadv(
       uint64_t /*offset*/,
-      const std::vector<folly::Range<char*>>& /*buffers*/) const;
+      const std::vector<folly::Range<char*>>& /*buffers*/,
+      io::IoStatistics* /*stats*/) const;
 
   // Vectorized read API. Implementations can coalesce and parallelize.
   // The offsets don't need to be sorted.
@@ -82,7 +84,8 @@ class ReadFile {
   // This method should be thread safe.
   virtual uint64_t preadv(
       folly::Range<const common::Region*> regions,
-      folly::Range<folly::IOBuf*> iobufs) const;
+      folly::Range<folly::IOBuf*> iobufs,
+      io::IoStatistics* stats) const;
 
   /// Like preadv but may execute asynchronously and returns the read size or
   /// exception via SemiFuture. Use hasPreadvAsync() to check if the
@@ -91,9 +94,10 @@ class ReadFile {
   /// This method should be thread safe.
   virtual folly::SemiFuture<uint64_t> preadvAsync(
       uint64_t offset,
-      const std::vector<folly::Range<char*>>& buffers) const {
+      const std::vector<folly::Range<char*>>& buffers,
+      io::IoStatistics* stats) const {
     try {
-      return folly::SemiFuture<uint64_t>(preadv(offset, buffers));
+      return folly::SemiFuture<uint64_t>(preadv(offset, buffers, stats));
     } catch (const std::exception& e) {
       return folly::makeSemiFuture<uint64_t>(e);
     }
@@ -285,11 +289,13 @@ class LocalReadFile final : public ReadFile {
 
   uint64_t preadv(
       uint64_t offset,
-      const std::vector<folly::Range<char*>>& buffers) const final;
+      const std::vector<folly::Range<char*>>& buffers,
+      io::IoStatistics* stats) const final;
 
   folly::SemiFuture<uint64_t> preadvAsync(
       uint64_t offset,
-      const std::vector<folly::Range<char*>>& buffers) const override;
+      const std::vector<folly::Range<char*>>& buffers,
+      io::IoStatistics* stats) const override;
 
   bool hasPreadvAsync() const override {
     return executor_ != nullptr;
