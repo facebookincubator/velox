@@ -750,5 +750,49 @@ TEST_F(SparkCastExprTest, bigintToBinary) {
        std::string("\x80\x00\x00\x00\x00\x00\x00\x00", 8)});
 }
 
+
+TEST_F(SparkCastExprTest, doubleToTimestamp) {
+  testCast<double, Timestamp>(
+      "castDoubleToTimestamp",
+      {
+          0.0,
+          1.0,
+          1727181032.0,
+          -1727181032.0,
+          9223372036.855,
+          -9223372036.856,
+          std::numeric_limits<double>::max(),
+          std::numeric_limits<double>::min(),
+          std::nullopt,
+      },
+      {
+          Timestamp(0, 0),
+          Timestamp(1, 0),
+          Timestamp(1727181032, 0),
+          Timestamp(-1727181032, 0),
+          Timestamp(9223372036, 855'000'000),
+          Timestamp(-9223372036, -856'000'000),
+          Timestamp(9223372036, 855'000'000),
+          Timestamp(-9223372036, -856'000'000),
+          std::nullopt,
+      });
+
+  testCast<double, Timestamp>(
+      "castDoubleToTimestamp",
+      {
+          12345.6789,
+          -98765.4321,
+          1.999999,
+          -1.999999,
+          0.123456789,
+      },
+      {
+          Timestamp(12345, 678900000),
+          Timestamp(-98765, 432100000),
+          Timestamp(1, 999999000),
+          Timestamp(-1, -999999000),
+          Timestamp(0, 123456789),
+      });
+}
 } // namespace
 } // namespace facebook::velox::test
