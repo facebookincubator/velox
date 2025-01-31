@@ -18,19 +18,6 @@
 
 namespace facebook::velox::tests::utils {
 
-std::string FaultFileOperation::typeString(Type type) {
-  switch (type) {
-    case Type::kReadv:
-      return "READV";
-    case Type::kRead:
-      return "READ";
-    default:
-      VELOX_UNSUPPORTED(
-          "Unknown file operation type: {}", static_cast<int>(type));
-      break;
-  }
-}
-
 FaultyReadFile::FaultyReadFile(
     const std::string& path,
     std::shared_ptr<ReadFile> delegatedFile,
@@ -146,5 +133,13 @@ std::unordered_map<std::string, std::string> FaultyWriteFile::getAttributes()
 
 void FaultyWriteFile::close() {
   delegatedFile_->close();
+}
+
+uint64_t FaultyWriteFile::size() const {
+  return delegatedFile_->size();
+}
+
+const std::string FaultyWriteFile::getName() const {
+  return delegatedFile_->getName();
 }
 } // namespace facebook::velox::tests::utils

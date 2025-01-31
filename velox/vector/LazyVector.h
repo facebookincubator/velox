@@ -305,7 +305,7 @@ class LazyVector : public BaseVector {
     return loadedVector()->wrappedIndex(index);
   }
 
-  BufferPtr wrapInfo() const override {
+  const BufferPtr& wrapInfo() const override {
     return loadedVector()->wrapInfo();
   }
 
@@ -364,8 +364,9 @@ class LazyVector : public BaseVector {
   void validate(const VectorValidateOptions& options) const override;
 
   VectorPtr copyPreserveEncodings(
-      velox::memory::MemoryPool* /* pool */ = nullptr) const override {
-    VELOX_UNSUPPORTED("copyPreserveEncodings not defined for LazyVector");
+      velox::memory::MemoryPool* pool = nullptr) const override {
+    VELOX_CHECK(isLoaded());
+    return loadedVector()->copyPreserveEncodings(pool);
   }
 
  private:

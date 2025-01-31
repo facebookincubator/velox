@@ -28,32 +28,34 @@ struct HiveIcebergSplit : public connector::hive::HiveConnectorSplit {
 
   HiveIcebergSplit(
       const std::string& connectorId,
-      const std::string& _filePath,
-      dwio::common::FileFormat _fileFormat,
-      uint64_t _start = 0,
-      uint64_t _length = std::numeric_limits<uint64_t>::max(),
+      const std::string& filePath,
+      dwio::common::FileFormat fileFormat,
+      uint64_t start = 0,
+      uint64_t length = std::numeric_limits<uint64_t>::max(),
       const std::unordered_map<std::string, std::optional<std::string>>&
-          _partitionKeys = {},
-      std::optional<int32_t> _tableBucketNumber = std::nullopt,
-      const std::unordered_map<std::string, std::string>& _customSplitInfo = {},
-      const std::shared_ptr<std::string>& _extraFileInfo = {},
-      const std::unordered_map<std::string, std::string>& _infoColumns = {},
+          partitionKeys = {},
+      std::optional<int32_t> tableBucketNumber = std::nullopt,
+      const std::unordered_map<std::string, std::string>& customSplitInfo = {},
+      const std::shared_ptr<std::string>& extraFileInfo = {},
+      bool cacheable = true,
+      const std::unordered_map<std::string, std::string>& infoColumns = {},
       std::optional<FileProperties> fileProperties = std::nullopt);
 
   // For tests only
   HiveIcebergSplit(
       const std::string& connectorId,
-      const std::string& _filePath,
-      dwio::common::FileFormat _fileFormat,
-      uint64_t _start = 0,
-      uint64_t _length = std::numeric_limits<uint64_t>::max(),
+      const std::string& filePath,
+      dwio::common::FileFormat fileFormat,
+      uint64_t start = 0,
+      uint64_t length = std::numeric_limits<uint64_t>::max(),
       const std::unordered_map<std::string, std::optional<std::string>>&
-          _partitionKeys = {},
-      std::optional<int32_t> _tableBucketNumber = std::nullopt,
-      const std::unordered_map<std::string, std::string>& _customSplitInfo = {},
-      const std::shared_ptr<std::string>& _extraFileInfo = {},
+          partitionKeys = {},
+      std::optional<int32_t> tableBucketNumber = std::nullopt,
+      const std::unordered_map<std::string, std::string>& customSplitInfo = {},
+      const std::shared_ptr<std::string>& extraFileInfo = {},
+      bool cacheable = true,
       std::vector<IcebergDeleteFile> deletes = {},
-      const std::unordered_map<std::string, std::string>& _infoColumns = {},
+      const std::unordered_map<std::string, std::string>& infoColumns = {},
       std::optional<FileProperties> fileProperties = std::nullopt);
 };
 

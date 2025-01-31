@@ -21,12 +21,12 @@ set(TEST_LINK_LIBS
     GTest::gtest_main
     GTest::gmock
     gflags::gflags
-    ${GLOG}
-    ${FILESYSTEM})
+    glog::glog)
 
+add_subdirectory(common)
 add_subdirectory(reader)
-add_subdirectory(writer)
 add_subdirectory(thrift)
+add_subdirectory(writer)
 
 add_executable(velox_dwio_parquet_tpch_test ParquetTpchTest.cpp)
 add_test(

@@ -219,9 +219,9 @@ void registerVeloxMetrics() {
   // Total number of SSD evict log file open errors.
   DEFINE_METRIC(kMetricSsdCacheOpenLogErrors, facebook::velox::StatType::SUM);
 
-  // Total number of errors while deleting SSD checkpoint files.
+  // Total number of errors while deleting SSD checkpoint/evictlog files.
   DEFINE_METRIC(
-      kMetricSsdCacheDeleteCheckpointErrors, facebook::velox::StatType::SUM);
+      kMetricSsdCacheMetaFileDeleteErrors, facebook::velox::StatType::SUM);
 
   // Total number of errors while growing SSD cache files.
   DEFINE_METRIC(kMetricSsdCacheGrowFileErrors, facebook::velox::StatType::SUM);
@@ -264,13 +264,6 @@ void registerVeloxMetrics() {
   // Total number of cache entries recovered from checkpoint.
   DEFINE_METRIC(
       kMetricSsdCacheRecoveredEntries, facebook::velox::StatType::SUM);
-
-  // Total number of local file space allocation failures.
-  //
-  // NOTE: space allocation is attempted by fallocate wherever it is supported.
-  DEFINE_METRIC(
-      kMetricLocalFileSpaceAllocationFailuresCount,
-      facebook::velox::StatType::COUNT);
 
   /// ================== Memory Arbitration Counters =================
 

@@ -299,6 +299,8 @@ TEST_F(URLFunctionsTest, extractHostIPv6) {
   // Two compressions.
   EXPECT_EQ(std::nullopt, extractHost("http://[0123::4567::]"));
   EXPECT_EQ(std::nullopt, extractHost("http://[::0123::]"));
+  // IPv6 address doesn't end with ']'.
+  EXPECT_EQ(std::nullopt, extractHost("http://[0123:4567:89ab::cdef:0123"));
 
   // Invalid IPv4 addresses.
   // Too many dec-octets.
@@ -338,6 +340,8 @@ TEST_F(URLFunctionsTest, extractHostIPvFuture) {
   EXPECT_EQ(std::nullopt, extractHost("http://[v0.]"));
   // Invalid character in suffix.
   EXPECT_EQ(std::nullopt, extractHost("http://[v0.a/]"));
+  // IPvFuture address doesn't end with ']'.
+  EXPECT_EQ(std::nullopt, extractHost("http://[v0.a"));
 }
 
 TEST_F(URLFunctionsTest, extractHostRegName) {
@@ -648,6 +652,9 @@ TEST_F(URLFunctionsTest, urlDecode) {
   EXPECT_THROW(urlDecode("http%3A%2F%2"), VeloxUserError);
   EXPECT_THROW(urlDecode("http%3A%2F%"), VeloxUserError);
   EXPECT_THROW(urlDecode("http%3A%2F%2H"), VeloxUserError);
+  EXPECT_THROW(urlDecode("%-1"), VeloxUserError);
+  EXPECT_THROW(urlDecode("% 1"), VeloxUserError);
+  EXPECT_THROW(urlDecode("%1 "), VeloxUserError);
 }
 
 } // namespace

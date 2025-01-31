@@ -369,6 +369,9 @@ void testRe2Extract(F&& regexExtract) {
   EXPECT_EQ(regexExtract(std::nullopt, "\\d+", 0), std::nullopt);
   EXPECT_EQ(regexExtract(" 123 ", std::nullopt, 0), std::nullopt);
   EXPECT_EQ(regexExtract(" 123 ", "\\d+", std::nullopt), std::nullopt);
+  // Group case that mismatch.
+  EXPECT_EQ(
+      regexExtract("rat cat\nbat dog", "ra(.)|blah(.)(.)", 2), std::nullopt);
 }
 
 TEST_F(Re2FunctionsTest, regexExtract) {
@@ -1100,6 +1103,20 @@ TEST_F(Re2FunctionsTest, regexExtractAllConstantPatternConstantGroupId) {
   testRe2ExtractAll(inputs, constantPattern, bigGroupIds, expectedOutputs);
 }
 
+TEST_F(Re2FunctionsTest, regexExtractAllMismatchedGroup) {
+  auto sourceVector =
+      makeFlatVector<std::string>({"rat cat\nbat dog"}, VARCHAR());
+  auto patternVector =
+      makeFlatVector<std::string>({"ra(.)|blah(.)(.)"}, VARCHAR());
+  auto groupIdVector = makeFlatVector<int>(std::vector{2}, INTEGER());
+  auto expectedVector = makeNullableArrayVector<std::string>(
+      std::vector<std::vector<std::optional<std::string>>>{{std::nullopt}});
+  auto result = evaluate(
+      "regexp_extract_all(c0, c1, c2)",
+      makeRowVector({sourceVector, patternVector, groupIdVector}));
+  assertEqualVectors(expectedVector, result);
+}
+
 TEST_F(Re2FunctionsTest, regexExtractAllConstantPatternVariableGroupId) {
   const std::vector<std::optional<std::string>> inputs = {
       "  123a   2b   14m  ",
@@ -1312,15 +1329,18 @@ TEST_F(Re2FunctionsTest, tryException) {
   }
 }
 
-// Make sure we do not compile more than kMaxCompiledRegexes.
+// Make sure we do not compile more than "expression.max_compiled_regexes".
 TEST_F(Re2FunctionsTest, likeRegexLimit) {
-  int count = 26;
-  VectorPtr pattern = makeFlatVector<StringView>(count);
-  VectorPtr input = makeFlatVector<StringView>(count);
+  const auto maxCompiledRegexes =
+      core::QueryConfig({}).exprMaxCompiledRegexes();
+  const auto aboveMaxCompiledRegexes = maxCompiledRegexes + 5;
+
+  VectorPtr pattern = makeFlatVector<StringView>(aboveMaxCompiledRegexes);
+  VectorPtr input = makeFlatVector<StringView>(aboveMaxCompiledRegexes);
   VectorPtr result;
 
   auto flatInput = input->asFlatVector<StringView>();
-  for (int i = 0; i < count; i++) {
+  for (auto i = 0; i < aboveMaxCompiledRegexes; i++) {
     flatInput->set(i, "");
   }
 
@@ -1346,19 +1366,21 @@ TEST_F(Re2FunctionsTest, likeRegexLimit) {
   };
 
   auto verifyNoRegexCompilationForPattern = [&](PatternKind patternKind) {
-    // Over 20 all optimized, will pass.
-    for (int i = 0; i < count; i++) {
+    // Over maxCompiledRegexes all optimized, will pass.
+    for (auto i = 0; i < aboveMaxCompiledRegexes; i++) {
       std::string patternAtIdx = getPatternAtIdx(patternKind, i);
       flatPattern->set(i, StringView(patternAtIdx));
     }
     result = evaluate("like(c0 , c1)", makeRowVector({input, pattern}));
     // Pattern '%%%', of type kAtleastN, matches with empty input.
     assertEqualVectors(
-        makeConstant((patternKind == PatternKind::kAtLeastN), count), result);
+        makeConstant(
+            (patternKind == PatternKind::kAtLeastN), aboveMaxCompiledRegexes),
+        result);
   };
 
   // Infer regex compilation does not happen for optimized patterns by verifying
-  // less than kMaxCompiledRegexes are compiled for each optimized pattern type.
+  // less than maxCompiledRegexes are compiled for each optimized pattern type.
   verifyNoRegexCompilationForPattern(PatternKind::kExactlyN);
   verifyNoRegexCompilationForPattern(PatternKind::kAtLeastN);
   verifyNoRegexCompilationForPattern(PatternKind::kFixed);
@@ -1366,8 +1388,8 @@ TEST_F(Re2FunctionsTest, likeRegexLimit) {
   verifyNoRegexCompilationForPattern(PatternKind::kSuffix);
   verifyNoRegexCompilationForPattern(PatternKind::kSubstring);
 
-  // Over 20, all require regex, will fail.
-  for (int i = 0; i < 26; i++) {
+  // Over maxCompiledRegexes, all require regex, will fail.
+  for (auto i = 0; i < aboveMaxCompiledRegexes; i++) {
     std::string localPattern =
         fmt::format("b%[0-9]+.*{}.*{}.*[0-9]+", 'c' + i, 'c' + i);
     flatPattern->set(i, StringView(localPattern));
@@ -1377,21 +1399,21 @@ TEST_F(Re2FunctionsTest, likeRegexLimit) {
       evaluate("like(c0, c1)", makeRowVector({input, pattern})),
       "Max number of regex reached");
 
-  // First 20 rows should return false, the rest raise and error and become
-  // null.
+  // First maxCompiledRegexes rows should return false, the rest raise and error
+  // and become null.
   result = evaluate("try(like(c0, c1))", makeRowVector({input, pattern}));
   auto expected = makeFlatVector<bool>(
-      26,
+      aboveMaxCompiledRegexes,
       [](auto /*row*/) { return false; },
-      [](auto row) { return row >= 20; });
+      [&](auto row) { return row >= maxCompiledRegexes; });
   assertEqualVectors(expected, result);
 
   // All are complex but the same, should pass.
-  for (int i = 0; i < 26; i++) {
+  for (auto i = 0; i < aboveMaxCompiledRegexes; i++) {
     flatPattern->set(i, "b%[0-9]+.*{}.*{}.*[0-9]+");
   }
   result = evaluate("like(c0, c1)", makeRowVector({input, pattern}));
-  assertEqualVectors(makeConstant(false, 26), result);
+  assertEqualVectors(makeConstant(false, aboveMaxCompiledRegexes), result);
 }
 
 TEST_F(Re2FunctionsTest, invalidEscapeChar) {
@@ -1435,19 +1457,24 @@ TEST_F(Re2FunctionsTest, regexExtractAllLarge) {
       "No group 4611686018427387904 in regex '(\\d+)([a-z]+)")
 }
 
-// Make sure we do not compile more than kMaxCompiledRegexes.
+// Make sure we do not compile more than "expression.max_compiled_regexes".
 TEST_F(Re2FunctionsTest, limit) {
+  const auto maxCompiledRegexes =
+      core::QueryConfig({}).exprMaxCompiledRegexes();
+  const auto aboveMaxCompiledRegexes = maxCompiledRegexes + 5;
+
   auto data = makeRowVector({
       makeFlatVector<std::string>(
-          100,
+          aboveMaxCompiledRegexes,
           [](auto row) { return fmt::format("Apples and oranges {}", row); }),
       makeFlatVector<std::string>(
-          100,
+          aboveMaxCompiledRegexes,
           [](auto row) { return fmt::format("Apples (.*) oranges {}", row); }),
       makeFlatVector<std::string>(
-          100,
-          [](auto row) {
-            return fmt::format("Apples (.*) oranges {}", row % 20);
+          aboveMaxCompiledRegexes,
+          [&](auto row) {
+            return fmt::format(
+                "Apples (.*) oranges {}", row % maxCompiledRegexes);
           }),
   });
 

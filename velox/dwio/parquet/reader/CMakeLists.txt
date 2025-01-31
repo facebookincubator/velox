@@ -30,6 +30,7 @@ velox_add_library(
 velox_link_libraries(
   velox_dwio_native_parquet_reader
   velox_dwio_parquet_thrift
+  velox_dwio_parquet_common
   velox_type
   velox_dwio_common
   velox_dwio_common_compression

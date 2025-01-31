@@ -174,8 +174,8 @@ void MemoryArbitrator::unregisterFactory(const std::string& kind) {
   return pool->shrink(targetBytes);
 }
 
-std::unique_ptr<MemoryReclaimer> MemoryReclaimer::create() {
-  return std::unique_ptr<MemoryReclaimer>(new MemoryReclaimer());
+std::unique_ptr<MemoryReclaimer> MemoryReclaimer::create(int32_t priority) {
+  return std::unique_ptr<MemoryReclaimer>(new MemoryReclaimer(priority));
 }
 
 // static
@@ -234,21 +234,37 @@ uint64_t MemoryReclaimer::reclaim(
     return 0;
   }
 
-  // Sort the child pools based on their reserved memory and reclaim from the
-  // child pool with most reservation first.
+  // Sort the child pools based on their reclaimer priority and reserved memory.
+  // Reclaim from the child pool with highest priority and most reservation
+  // first.
   struct Candidate {
     std::shared_ptr<memory::MemoryPool> pool;
     int64_t reclaimableBytes;
   };
+
+  // NOTE: We hold candidate reference for non-reclaimable pools as well. This
+  // is to make sure child shared pointer is stored to keep child alive,
+  // avoiding destruction of child pool within below parents' 'poolMutex_' lock.
+  // Otherwise a double acquisition of 'poolMutex_' can happen in destructor,
+  // which creates deadlock.
+  std::vector<Candidate> nonReclaimableCandidates;
   std::vector<Candidate> candidates;
   {
     std::shared_lock guard{pool->poolMutex_};
     candidates.reserve(pool->children_.size());
+    nonReclaimableCandidates.reserve(pool->children_.size());
     for (auto& entry : pool->children_) {
       auto child = entry.second.lock();
       if (child != nullptr) {
-        const int64_t reclaimableBytes = child->reclaimableBytes().value_or(0);
-        candidates.push_back(Candidate{std::move(child), reclaimableBytes});
+        const auto reclaimableBytesOpt = child->reclaimableBytes();
+        if (!reclaimableBytesOpt.has_value() ||
+            reclaimableBytesOpt.value() == 0) {
+          nonReclaimableCandidates.push_back(Candidate{std::move(child), 0});
+          continue;
+        }
+        candidates.push_back(Candidate{
+            std::move(child),
+            static_cast<int64_t>(reclaimableBytesOpt.value())});
       }
     }
   }
@@ -257,14 +273,17 @@ uint64_t MemoryReclaimer::reclaim(
       candidates.begin(),
       candidates.end(),
       [](const auto& lhs, const auto& rhs) {
-        return lhs.reclaimableBytes > rhs.reclaimableBytes;
+        const auto lhsPrio = lhs.pool->reclaimer()->priority();
+        const auto rhsPrio = rhs.pool->reclaimer()->priority();
+        if (lhsPrio == rhsPrio) {
+          return lhs.reclaimableBytes > rhs.reclaimableBytes;
+        }
+        return lhsPrio < rhsPrio;
       });
 
   uint64_t reclaimedBytes{0};
   for (const auto& candidate : candidates) {
-    if (candidate.reclaimableBytes == 0) {
-      break;
-    }
+    VELOX_CHECK_GT(candidate.reclaimableBytes, 0);
     const auto bytes = candidate.pool->reclaim(targetBytes, maxWaitMs, stats);
     reclaimedBytes += bytes;
     if (targetBytes != 0) {

@@ -129,16 +129,16 @@ class HashProbe : public Operator {
   // number mappings or input vectors. In this way input vectors do
   // not have to be copied and will be singly referenced by their
   // producer.
-  void clearIdentityProjectedOutput();
+  void clearProjectedOutput();
 
   // Populate output columns with matching build-side rows
   // for the right semi join and non-matching build-side rows
   // for right join and full join.
   RowVectorPtr getBuildSideOutput();
 
-  // Apply 'filter_' to 'outputTableRows_' from 'offset' for 'size' entries,
-  // updating 'outputRowMapping_'. Returns the number of passing rows.
-  vector_size_t evalFilter(vector_size_t numRows, vector_size_t offset);
+  // Applies 'filter_' to 'outputTableRows_' and updates 'outputRowMapping_'.
+  // Returns the number of passing rows.
+  vector_size_t evalFilter(vector_size_t numRows);
 
   inline bool filterPassed(vector_size_t row) {
     return filterInputRows_.isValid(row) &&
@@ -149,7 +149,7 @@ class HashProbe : public Operator {
   // Create a temporary input vector to be passed to the filter. This ensures it
   // gets destroyed in case its wrapping an unloaded vector which eventually
   // needs to be wrapped in fillOutput().
-  RowVectorPtr createFilterInput(vector_size_t size, vector_size_t offset);
+  RowVectorPtr createFilterInput(vector_size_t size);
 
   // Prepare filter row selectivity for null-aware join. 'numRows'
   // specifies the number of rows in 'filterInputRows_' to process. If
@@ -158,14 +158,12 @@ class HashProbe : public Operator {
   void prepareFilterRowsForNullAwareJoin(
       RowVectorPtr& filterInput,
       vector_size_t numRows,
-      bool filterPropagateNulls,
-      vector_size_t* rawMapping);
+      bool filterPropagateNulls);
 
   // Evaluate the filter for null-aware anti or left semi project join.
   SelectivityVector evalFilterForNullAwareJoin(
       vector_size_t numRows,
-      bool filterPropagateNulls,
-      vector_size_t* rawMapping);
+      bool filterPropagateNulls);
 
   // Combine the selected probe-side rows with all or null-join-key (depending
   // on the iterator) build side rows and evaluate the filter.  Mark probe rows
@@ -424,7 +422,7 @@ class HashProbe : public Operator {
   RowTypePtr filterInputType_;
 
   // The input channels that are projected to the output.
-  std::unordered_set<column_index_t> projectedInputColumns_;
+  folly::F14FastMap<column_index_t, column_index_t> projectedInputColumns_;
 
   // Maps input channels to channels in 'filterInputType_'.
   std::vector<IdentityProjection> filterInputProjections_;
@@ -651,7 +649,7 @@ class HashProbe : public Operator {
   // 'inputSpiller_' is created if some part of build-side rows have been
   // spilled. It is used to spill probe-side rows if the corresponding
   // build-side rows have been spilled.
-  std::unique_ptr<Spiller> inputSpiller_;
+  std::unique_ptr<NoRowContainerSpiller> inputSpiller_;
 
   // If not empty, the probe inputs with partition id set in
   // 'spillInputPartitionIds_' needs to spill. It is set along with 'spiller_'

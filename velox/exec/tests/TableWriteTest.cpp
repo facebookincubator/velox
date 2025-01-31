@@ -27,7 +27,6 @@
 #include "velox/exec/tests/utils/HiveConnectorTestBase.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
 #include "velox/exec/tests/utils/TempDirectoryPath.h"
-#include "velox/functions/prestosql/aggregates/RegisterAggregateFunctions.h"
 #include "velox/vector/fuzzer/VectorFuzzer.h"
 
 #include <re2/re2.h>
@@ -156,8 +155,10 @@ struct TestParam {
       HiveBucketProperty::Kind bucketKind,
       bool bucketSort,
       bool multiDrivers,
-      CompressionKind compressionKind) {
-    value = static_cast<uint64_t>(compressionKind) << 48 |
+      CompressionKind compressionKind,
+      bool scaleWriter) {
+    value = (scaleWriter ? 1ULL << 56 : 0) |
+        static_cast<uint64_t>(compressionKind) << 48 |
         static_cast<uint64_t>(!!multiDrivers) << 40 |
         static_cast<uint64_t>(fileFormat) << 32 |
         static_cast<uint64_t>(testMode) << 24 |
@@ -195,16 +196,21 @@ struct TestParam {
     return (value & ((1L << 8) - 1)) != 0;
   }
 
+  bool scaleWriter() const {
+    return (value >> 56) != 0;
+  }
+
   std::string toString() const {
     return fmt::format(
-        "FileFormat[{}] TestMode[{}] commitStrategy[{}] bucketKind[{}] bucketSort[{}] multiDrivers[{}] compression[{}]",
+        "FileFormat[{}] TestMode[{}] commitStrategy[{}] bucketKind[{}] bucketSort[{}] multiDrivers[{}] compression[{}] scaleWriter[{}]",
         dwio::common::toString((fileFormat())),
         testModeString(testMode()),
         commitStrategyToString(commitStrategy()),
         HiveBucketProperty::kindString(bucketKind()),
         bucketSort(),
         multiDrivers(),
-        compressionKindToString(compressionKind()));
+        compressionKindToString(compressionKind()),
+        scaleWriter());
   }
 };
 
@@ -219,7 +225,8 @@ class TableWriteTest : public HiveConnectorTestBase {
         numPartitionedTableWriterCount_(
             testParam_.multiDrivers() ? kNumPartitionedTableWriterCount : 1),
         commitStrategy_(testParam_.commitStrategy()),
-        compressionKind_(testParam_.compressionKind()) {
+        compressionKind_(testParam_.compressionKind()),
+        scaleWriter_(testParam_.scaleWriter()) {
     LOG(INFO) << testParam_.toString();
 
     auto rowType =
@@ -281,6 +288,14 @@ class TableWriteTest : public HiveConnectorTestBase {
           .config(
               QueryConfig::kTaskPartitionedWriterCount,
               std::to_string(numPartitionedTableWriterCount_))
+          // Scale writer settings to trigger partition rebalancing.
+          .config(QueryConfig::kScaleWriterRebalanceMaxMemoryUsageRatio, "1.0")
+          .config(
+              QueryConfig::kScaleWriterMinProcessedBytesRebalanceThreshold, "0")
+          .config(
+              QueryConfig::
+                  kScaleWriterMinPartitionProcessedBytesRebalanceThreshold,
+              "0")
           .splits(splits)
           .assertResults(duckDbSql);
     }
@@ -297,6 +312,14 @@ class TableWriteTest : public HiveConnectorTestBase {
             std::to_string(numPartitionedTableWriterCount_))
         .config(core::QueryConfig::kSpillEnabled, "true")
         .config(QueryConfig::kWriterSpillEnabled, "true")
+        // Scale writer settings to trigger partition rebalancing.
+        .config(QueryConfig::kScaleWriterRebalanceMaxMemoryUsageRatio, "1.0")
+        .config(
+            QueryConfig::kScaleWriterMinProcessedBytesRebalanceThreshold, "0")
+        .config(
+            QueryConfig::
+                kScaleWriterMinPartitionProcessedBytesRebalanceThreshold,
+            "0")
         .splits(splits)
         .assertResults(duckDbSql);
   }
@@ -319,6 +342,14 @@ class TableWriteTest : public HiveConnectorTestBase {
               std::to_string(numPartitionedTableWriterCount_))
           .config(core::QueryConfig::kSpillEnabled, "true")
           .config(QueryConfig::kWriterSpillEnabled, "true")
+          // Scale writer settings to trigger partition rebalancing.
+          .config(QueryConfig::kScaleWriterRebalanceMaxMemoryUsageRatio, "1.0")
+          .config(
+              QueryConfig::kScaleWriterMinProcessedBytesRebalanceThreshold, "0")
+          .config(
+              QueryConfig::
+                  kScaleWriterMinPartitionProcessedBytesRebalanceThreshold,
+              "0")
           .assertResults(duckDbSql);
     }
 
@@ -335,6 +366,14 @@ class TableWriteTest : public HiveConnectorTestBase {
             std::to_string(numPartitionedTableWriterCount_))
         .config(core::QueryConfig::kSpillEnabled, "true")
         .config(QueryConfig::kWriterSpillEnabled, "true")
+        // Scale writer settings to trigger partition rebalancing.
+        .config(QueryConfig::kScaleWriterRebalanceMaxMemoryUsageRatio, "1.0")
+        .config(
+            QueryConfig::kScaleWriterMinProcessedBytesRebalanceThreshold, "0")
+        .config(
+            QueryConfig::
+                kScaleWriterMinPartitionProcessedBytesRebalanceThreshold,
+            "0")
         .assertResults(duckDbSql);
   }
 
@@ -352,6 +391,14 @@ class TableWriteTest : public HiveConnectorTestBase {
           .config(
               QueryConfig::kTaskPartitionedWriterCount,
               std::to_string(numPartitionedTableWriterCount_))
+          // Scale writer settings to trigger partition rebalancing.
+          .config(QueryConfig::kScaleWriterRebalanceMaxMemoryUsageRatio, "1.0")
+          .config(
+              QueryConfig::kScaleWriterMinProcessedBytesRebalanceThreshold, "0")
+          .config(
+              QueryConfig::
+                  kScaleWriterMinPartitionProcessedBytesRebalanceThreshold,
+              "0")
           .copyResults(pool());
     }
 
@@ -368,6 +415,14 @@ class TableWriteTest : public HiveConnectorTestBase {
             std::to_string(numPartitionedTableWriterCount_))
         .config(core::QueryConfig::kSpillEnabled, "true")
         .config(QueryConfig::kWriterSpillEnabled, "true")
+        // Scale writer settings to trigger partition rebalancing.
+        .config(QueryConfig::kScaleWriterRebalanceMaxMemoryUsageRatio, "1.0")
+        .config(
+            QueryConfig::kScaleWriterMinProcessedBytesRebalanceThreshold, "0")
+        .config(
+            QueryConfig::
+                kScaleWriterMinPartitionProcessedBytesRebalanceThreshold,
+            "0")
         .copyResults(pool());
   }
 
@@ -594,97 +649,213 @@ class TableWriteTest : public HiveConnectorTestBase {
       bool aggregateResult = true,
       std::shared_ptr<core::AggregationNode> aggregationNode = nullptr) {
     if (numTableWriters == 1) {
-      auto insertPlan = inputPlan
-                            .addNode(addTableWriter(
-                                inputRowType,
-                                tableRowType->names(),
-                                aggregationNode,
-                                createInsertTableHandle(
-                                    tableRowType,
-                                    outputTableType,
-                                    outputDirectoryPath,
-                                    partitionedBy,
-                                    bucketProperty,
-                                    compressionKind),
-                                false,
-                                outputCommitStrategy))
-                            .capturePlanNodeId(tableWriteNodeId_);
-      if (aggregateResult) {
-        insertPlan.project({TableWriteTraits::rowCountColumnName()})
-            .singleAggregation(
-                {},
-                {fmt::format(
-                    "sum({})", TableWriteTraits::rowCountColumnName())});
-      }
-      return insertPlan.planNode();
+      return createInsertPlanWithSingleWriter(
+          inputPlan,
+          inputRowType,
+          tableRowType,
+          outputDirectoryPath,
+          partitionedBy,
+          bucketProperty,
+          compressionKind,
+          outputTableType,
+          outputCommitStrategy,
+          aggregateResult,
+          aggregationNode);
     } else if (bucketProperty_ == nullptr) {
-      auto insertPlan = inputPlan.localPartitionRoundRobin()
-                            .addNode(addTableWriter(
-                                inputRowType,
-                                tableRowType->names(),
-                                nullptr,
-                                createInsertTableHandle(
-                                    tableRowType,
-                                    outputTableType,
-                                    outputDirectoryPath,
-                                    partitionedBy,
-                                    bucketProperty,
-                                    compressionKind),
-                                false,
-                                outputCommitStrategy))
-                            .capturePlanNodeId(tableWriteNodeId_)
-                            .localPartition(std::vector<std::string>{})
-                            .tableWriteMerge();
-      if (aggregateResult) {
-        insertPlan.project({TableWriteTraits::rowCountColumnName()})
-            .singleAggregation(
-                {},
-                {fmt::format(
-                    "sum({})", TableWriteTraits::rowCountColumnName())});
-      }
-      return insertPlan.planNode();
+      return createInsertPlanWithForNonBucketedTable(
+          inputPlan,
+          inputRowType,
+          tableRowType,
+          outputDirectoryPath,
+          partitionedBy,
+          compressionKind,
+          outputTableType,
+          outputCommitStrategy,
+          aggregateResult,
+          aggregationNode);
     } else {
-      // Since we might do column rename, so generate bucket property based on
-      // the data type from 'inputPlan'.
-      std::vector<std::string> bucketColumns;
-      bucketColumns.reserve(bucketProperty->bucketedBy().size());
-      for (int i = 0; i < bucketProperty->bucketedBy().size(); ++i) {
-        bucketColumns.push_back(inputRowType->names()[tableRowType->getChildIdx(
-            bucketProperty->bucketedBy()[i])]);
-      }
-      auto localPartitionBucketProperty = std::make_shared<HiveBucketProperty>(
-          bucketProperty->kind(),
-          bucketProperty->bucketCount(),
-          bucketColumns,
-          bucketProperty->bucketedTypes(),
-          bucketProperty->sortedBy());
-      auto insertPlan =
-          inputPlan.localPartitionByBucket(localPartitionBucketProperty)
-              .addNode(addTableWriter(
-                  inputRowType,
-                  tableRowType->names(),
-                  nullptr,
-                  createInsertTableHandle(
-                      tableRowType,
-                      outputTableType,
-                      outputDirectoryPath,
-                      partitionedBy,
-                      bucketProperty,
-                      compressionKind),
-                  false,
-                  outputCommitStrategy))
-              .capturePlanNodeId(tableWriteNodeId_)
-              .localPartition({})
-              .tableWriteMerge();
-      if (aggregateResult) {
-        insertPlan.project({TableWriteTraits::rowCountColumnName()})
-            .singleAggregation(
-                {},
-                {fmt::format(
-                    "sum({})", TableWriteTraits::rowCountColumnName())});
-      }
-      return insertPlan.planNode();
+      return createInsertPlanForBucketTable(
+          inputPlan,
+          inputRowType,
+          tableRowType,
+          outputDirectoryPath,
+          partitionedBy,
+          bucketProperty,
+          compressionKind,
+          outputTableType,
+          outputCommitStrategy,
+          aggregateResult,
+          aggregationNode);
     }
+  }
+
+  PlanNodePtr createInsertPlanWithSingleWriter(
+      PlanBuilder& inputPlan,
+      const RowTypePtr& inputRowType,
+      const RowTypePtr& tableRowType,
+      const std::string& outputDirectoryPath,
+      const std::vector<std::string>& partitionedBy,
+      std::shared_ptr<HiveBucketProperty> bucketProperty,
+      const std::optional<CompressionKind> compressionKind,
+      const connector::hive::LocationHandle::TableType& outputTableType,
+      const CommitStrategy& outputCommitStrategy,
+      bool aggregateResult,
+      std::shared_ptr<core::AggregationNode> aggregationNode) {
+    const bool addScaleWriterExchange =
+        scaleWriter_ && (bucketProperty != nullptr);
+    auto insertPlan = inputPlan;
+    if (addScaleWriterExchange) {
+      if (!partitionedBy.empty()) {
+        insertPlan.scaleWriterlocalPartition(
+            inputColumnNames(partitionedBy, tableRowType, inputRowType));
+      } else {
+        insertPlan.scaleWriterlocalPartitionRoundRobin();
+      }
+    }
+    insertPlan
+        .addNode(addTableWriter(
+            inputRowType,
+            tableRowType->names(),
+            aggregationNode,
+            createInsertTableHandle(
+                tableRowType,
+                outputTableType,
+                outputDirectoryPath,
+                partitionedBy,
+                bucketProperty,
+                compressionKind),
+            false,
+            outputCommitStrategy))
+        .capturePlanNodeId(tableWriteNodeId_);
+    if (addScaleWriterExchange) {
+      if (!partitionedBy.empty()) {
+        insertPlan.scaleWriterlocalPartition(
+            inputColumnNames(partitionedBy, tableRowType, inputRowType));
+      } else {
+        insertPlan.scaleWriterlocalPartitionRoundRobin();
+      }
+    }
+    if (aggregateResult) {
+      insertPlan.project({TableWriteTraits::rowCountColumnName()})
+          .singleAggregation(
+              {},
+              {fmt::format("sum({})", TableWriteTraits::rowCountColumnName())});
+    }
+    return insertPlan.planNode();
+  }
+
+  PlanNodePtr createInsertPlanForBucketTable(
+      PlanBuilder& inputPlan,
+      const RowTypePtr& inputRowType,
+      const RowTypePtr& tableRowType,
+      const std::string& outputDirectoryPath,
+      const std::vector<std::string>& partitionedBy,
+      std::shared_ptr<HiveBucketProperty> bucketProperty,
+      const std::optional<CompressionKind> compressionKind,
+      const connector::hive::LocationHandle::TableType& outputTableType,
+      const CommitStrategy& outputCommitStrategy,
+      bool aggregateResult,
+      std::shared_ptr<core::AggregationNode> aggregationNode) {
+    // Since we might do column rename, so generate bucket property based on
+    // the data type from 'inputPlan'.
+    std::vector<std::string> bucketColumns;
+    bucketColumns.reserve(bucketProperty->bucketedBy().size());
+    for (int i = 0; i < bucketProperty->bucketedBy().size(); ++i) {
+      bucketColumns.push_back(inputRowType->names()[tableRowType->getChildIdx(
+          bucketProperty->bucketedBy()[i])]);
+    }
+    auto localPartitionBucketProperty = std::make_shared<HiveBucketProperty>(
+        bucketProperty->kind(),
+        bucketProperty->bucketCount(),
+        bucketColumns,
+        bucketProperty->bucketedTypes(),
+        bucketProperty->sortedBy());
+    auto insertPlan =
+        inputPlan.localPartitionByBucket(localPartitionBucketProperty)
+            .addNode(addTableWriter(
+                inputRowType,
+                tableRowType->names(),
+                nullptr,
+                createInsertTableHandle(
+                    tableRowType,
+                    outputTableType,
+                    outputDirectoryPath,
+                    partitionedBy,
+                    bucketProperty,
+                    compressionKind),
+                false,
+                outputCommitStrategy))
+            .capturePlanNodeId(tableWriteNodeId_)
+            .localPartition({})
+            .tableWriteMerge();
+    if (aggregateResult) {
+      insertPlan.project({TableWriteTraits::rowCountColumnName()})
+          .singleAggregation(
+              {},
+              {fmt::format("sum({})", TableWriteTraits::rowCountColumnName())});
+    }
+    return insertPlan.planNode();
+  }
+
+  // Return the corresponding column names in 'inputRowType' of
+  // 'tableColumnNames' from 'tableRowType'.
+  static std::vector<std::string> inputColumnNames(
+      const std::vector<std::string>& tableColumnNames,
+      const RowTypePtr& tableRowType,
+      const RowTypePtr& inputRowType) {
+    std::vector<std::string> inputNames;
+    inputNames.reserve(tableColumnNames.size());
+    for (const auto& tableColumnName : tableColumnNames) {
+      const auto columnIdx = tableRowType->getChildIdx(tableColumnName);
+      inputNames.push_back(inputRowType->nameOf(columnIdx));
+    }
+    return inputNames;
+  }
+
+  PlanNodePtr createInsertPlanWithForNonBucketedTable(
+      PlanBuilder& inputPlan,
+      const RowTypePtr& inputRowType,
+      const RowTypePtr& tableRowType,
+      const std::string& outputDirectoryPath,
+      const std::vector<std::string>& partitionedBy,
+      const std::optional<CompressionKind> compressionKind,
+      const connector::hive::LocationHandle::TableType& outputTableType,
+      const CommitStrategy& outputCommitStrategy,
+      bool aggregateResult,
+      std::shared_ptr<core::AggregationNode> aggregationNode) {
+    auto insertPlan = inputPlan;
+    if (scaleWriter_) {
+      if (!partitionedBy.empty()) {
+        insertPlan.scaleWriterlocalPartition(
+            inputColumnNames(partitionedBy, tableRowType, inputRowType));
+      } else {
+        insertPlan.scaleWriterlocalPartitionRoundRobin();
+      }
+    }
+    insertPlan
+        .addNode(addTableWriter(
+            inputRowType,
+            tableRowType->names(),
+            nullptr,
+            createInsertTableHandle(
+                tableRowType,
+                outputTableType,
+                outputDirectoryPath,
+                partitionedBy,
+                nullptr,
+                compressionKind),
+            false,
+            outputCommitStrategy))
+        .capturePlanNodeId(tableWriteNodeId_)
+        .localPartition(std::vector<std::string>{})
+        .tableWriteMerge();
+    if (aggregateResult) {
+      insertPlan.project({TableWriteTraits::rowCountColumnName()})
+          .singleAggregation(
+              {},
+              {fmt::format("sum({})", TableWriteTraits::rowCountColumnName())});
+    }
+    return insertPlan.planNode();
   }
 
   // Parameter partitionName is string formatted in the Hive style
@@ -1032,6 +1203,7 @@ class TableWriteTest : public HiveConnectorTestBase {
   RowTypePtr tableSchema_;
   CommitStrategy commitStrategy_;
   std::optional<CompressionKind> compressionKind_;
+  bool scaleWriter_;
   std::vector<std::string> partitionedBy_;
   std::vector<TypePtr> partitionTypes_;
   std::vector<column_index_t> partitionChannels_;
@@ -1099,6 +1271,68 @@ TEST_F(BasicTableWriteTest, roundTrip) {
   assertEqualResults({data}, {copy});
 }
 
+// Generates a struct (row), write it as a flap map, and check that it is read
+// back as a map.
+TEST_F(BasicTableWriteTest, structAsMap) {
+  // Input struct type.
+  vector_size_t size = 1'000;
+  auto data = makeRowVector(
+      {"col1"},
+      {
+          makeRowVector(
+              // Struct field names are the feature/map keys.
+              {"1", "2"},
+              {
+                  makeFlatVector<int32_t>(size, [](auto row) { return row; }),
+                  makeFlatVector<int32_t>(size, [](auto row) { return row; }),
+              }),
+      });
+
+  // Write it as a flat map.
+  auto outputType = ROW({"col1"}, {MAP(INTEGER(), INTEGER())});
+  auto targetDirectoryPath = TempDirectoryPath::create();
+  std::string fileName = "output_file";
+
+  auto plan = PlanBuilder()
+                  .values({data})
+                  .tableWrite(
+                      targetDirectoryPath->getPath(),
+                      {},
+                      0,
+                      {},
+                      {},
+                      dwio::common::FileFormat::DWRF,
+                      {},
+                      PlanBuilder::kHiveDefaultConnectorId,
+                      {
+                          {"orc.flatten.map", "true"},
+                          {"orc.map.flat.cols", "0"},
+                          {"orc.map.flat.cols.struct.keys", "[[\"1\", \"2\"]]"},
+                      },
+                      nullptr,
+                      fileName,
+                      common::CompressionKind_NONE,
+                      outputType)
+                  .planNode();
+  auto writerResults = AssertQueryBuilder(plan).copyResults(pool());
+
+  // Check we get the expected map after reading.
+  auto expected = makeRowVector(
+      {"col1"},
+      {
+          makeMapVector<int32_t, int32_t>(
+              size,
+              [](auto /*row*/) { return 2; },
+              [](auto row) { return row % 2 == 0 ? 2 : 1; },
+              [](auto row) { return row / 2; }),
+      });
+  plan = PlanBuilder().tableScan(outputType).planNode();
+  AssertQueryBuilder(plan)
+      .split(makeHiveConnectorSplit(
+          targetDirectoryPath->getPath() + "/" + fileName))
+      .assertResults(expected);
+}
+
 TEST_F(BasicTableWriteTest, targetFileName) {
   constexpr const char* kFileName = "test.dwrf";
   auto data = makeRowVector({makeFlatVector<int64_t>(10, folly::identity)});
@@ -1141,60 +1375,68 @@ class PartitionedTableWriterTest
     }
     for (bool multiDrivers : multiDriverOptions) {
       for (FileFormat fileFormat : fileFormats) {
-        testParams.push_back(TestParam{
-            fileFormat,
-            TestMode::kPartitioned,
-            CommitStrategy::kNoCommit,
-            HiveBucketProperty::Kind::kHiveCompatible,
-            false,
-            multiDrivers,
-            CompressionKind_ZSTD}
-                                 .value);
-        testParams.push_back(TestParam{
-            fileFormat,
-            TestMode::kPartitioned,
-            CommitStrategy::kTaskCommit,
-            HiveBucketProperty::Kind::kHiveCompatible,
-            false,
-            multiDrivers,
-            CompressionKind_ZSTD}
-                                 .value);
-        testParams.push_back(TestParam{
-            fileFormat,
-            TestMode::kBucketed,
-            CommitStrategy::kNoCommit,
-            HiveBucketProperty::Kind::kHiveCompatible,
-            false,
-            multiDrivers,
-            CompressionKind_ZSTD}
-                                 .value);
-        testParams.push_back(TestParam{
-            fileFormat,
-            TestMode::kBucketed,
-            CommitStrategy::kTaskCommit,
-            HiveBucketProperty::Kind::kHiveCompatible,
-            false,
-            multiDrivers,
-            CompressionKind_ZSTD}
-                                 .value);
-        testParams.push_back(TestParam{
-            fileFormat,
-            TestMode::kBucketed,
-            CommitStrategy::kNoCommit,
-            HiveBucketProperty::Kind::kPrestoNative,
-            false,
-            multiDrivers,
-            CompressionKind_ZSTD}
-                                 .value);
-        testParams.push_back(TestParam{
-            fileFormat,
-            TestMode::kBucketed,
-            CommitStrategy::kTaskCommit,
-            HiveBucketProperty::Kind::kPrestoNative,
-            false,
-            multiDrivers,
-            CompressionKind_ZSTD}
-                                 .value);
+        for (bool scaleWriter : {false, true}) {
+          testParams.push_back(TestParam{
+              fileFormat,
+              TestMode::kPartitioned,
+              CommitStrategy::kNoCommit,
+              HiveBucketProperty::Kind::kHiveCompatible,
+              false,
+              multiDrivers,
+              CompressionKind_ZSTD,
+              scaleWriter}
+                                   .value);
+          testParams.push_back(TestParam{
+              fileFormat,
+              TestMode::kPartitioned,
+              CommitStrategy::kTaskCommit,
+              HiveBucketProperty::Kind::kHiveCompatible,
+              false,
+              multiDrivers,
+              CompressionKind_ZSTD,
+              scaleWriter}
+                                   .value);
+          testParams.push_back(TestParam{
+              fileFormat,
+              TestMode::kBucketed,
+              CommitStrategy::kNoCommit,
+              HiveBucketProperty::Kind::kHiveCompatible,
+              false,
+              multiDrivers,
+              CompressionKind_ZSTD,
+              scaleWriter}
+                                   .value);
+          testParams.push_back(TestParam{
+              fileFormat,
+              TestMode::kBucketed,
+              CommitStrategy::kTaskCommit,
+              HiveBucketProperty::Kind::kHiveCompatible,
+              false,
+              multiDrivers,
+              CompressionKind_ZSTD,
+              scaleWriter}
+                                   .value);
+          testParams.push_back(TestParam{
+              fileFormat,
+              TestMode::kBucketed,
+              CommitStrategy::kNoCommit,
+              HiveBucketProperty::Kind::kPrestoNative,
+              false,
+              multiDrivers,
+              CompressionKind_ZSTD,
+              scaleWriter}
+                                   .value);
+          testParams.push_back(TestParam{
+              fileFormat,
+              TestMode::kBucketed,
+              CommitStrategy::kTaskCommit,
+              HiveBucketProperty::Kind::kPrestoNative,
+              false,
+              multiDrivers,
+              CompressionKind_ZSTD,
+              scaleWriter}
+                                   .value);
+        }
       }
     }
     return testParams;
@@ -1216,24 +1458,28 @@ class UnpartitionedTableWriterTest
     }
     for (bool multiDrivers : multiDriverOptions) {
       for (FileFormat fileFormat : fileFormats) {
-        testParams.push_back(TestParam{
-            fileFormat,
-            TestMode::kUnpartitioned,
-            CommitStrategy::kNoCommit,
-            HiveBucketProperty::Kind::kHiveCompatible,
-            false,
-            multiDrivers,
-            CompressionKind_NONE}
-                                 .value);
-        testParams.push_back(TestParam{
-            fileFormat,
-            TestMode::kUnpartitioned,
-            CommitStrategy::kTaskCommit,
-            HiveBucketProperty::Kind::kHiveCompatible,
-            false,
-            multiDrivers,
-            CompressionKind_NONE}
-                                 .value);
+        for (bool scaleWriter : {false, true}) {
+          testParams.push_back(TestParam{
+              fileFormat,
+              TestMode::kUnpartitioned,
+              CommitStrategy::kNoCommit,
+              HiveBucketProperty::Kind::kHiveCompatible,
+              false,
+              multiDrivers,
+              CompressionKind_NONE,
+              scaleWriter}
+                                   .value);
+          testParams.push_back(TestParam{
+              fileFormat,
+              TestMode::kUnpartitioned,
+              CommitStrategy::kTaskCommit,
+              HiveBucketProperty::Kind::kHiveCompatible,
+              false,
+              multiDrivers,
+              CompressionKind_NONE,
+              scaleWriter}
+                                   .value);
+        }
       }
     }
     return testParams;
@@ -1265,7 +1511,8 @@ class BucketedTableOnlyWriteTest
               HiveBucketProperty::Kind::kHiveCompatible,
               false,
               multiDrivers,
-              CompressionKind_ZSTD}
+              CompressionKind_ZSTD,
+              /*scaleWriter=*/false}
                                    .value);
           testParams.push_back(TestParam{
               fileFormat,
@@ -1274,7 +1521,8 @@ class BucketedTableOnlyWriteTest
               HiveBucketProperty::Kind::kHiveCompatible,
               true,
               multiDrivers,
-              CompressionKind_ZSTD}
+              CompressionKind_ZSTD,
+              /*scaleWriter=*/false}
                                    .value);
           testParams.push_back(TestParam{
               fileFormat,
@@ -1283,7 +1531,8 @@ class BucketedTableOnlyWriteTest
               HiveBucketProperty::Kind::kHiveCompatible,
               false,
               multiDrivers,
-              CompressionKind_ZSTD}
+              CompressionKind_ZSTD,
+              /*scaleWriter=*/false}
                                    .value);
           testParams.push_back(TestParam{
               fileFormat,
@@ -1292,7 +1541,8 @@ class BucketedTableOnlyWriteTest
               HiveBucketProperty::Kind::kHiveCompatible,
               true,
               multiDrivers,
-              CompressionKind_ZSTD}
+              CompressionKind_ZSTD,
+              /*scaleWriter=*/false}
                                    .value);
           testParams.push_back(TestParam{
               fileFormat,
@@ -1301,7 +1551,8 @@ class BucketedTableOnlyWriteTest
               HiveBucketProperty::Kind::kPrestoNative,
               false,
               multiDrivers,
-              CompressionKind_ZSTD}
+              CompressionKind_ZSTD,
+              /*scaleWriter=*/false}
                                    .value);
           testParams.push_back(TestParam{
               fileFormat,
@@ -1310,7 +1561,8 @@ class BucketedTableOnlyWriteTest
               HiveBucketProperty::Kind::kPrestoNative,
               true,
               multiDrivers,
-              CompressionKind_ZSTD}
+              CompressionKind_ZSTD,
+              /*scaleWriter=*/false}
                                    .value);
           testParams.push_back(TestParam{
               fileFormat,
@@ -1319,7 +1571,8 @@ class BucketedTableOnlyWriteTest
               HiveBucketProperty::Kind::kPrestoNative,
               false,
               multiDrivers,
-              CompressionKind_ZSTD}
+              CompressionKind_ZSTD,
+              /*scaleWriter=*/false}
                                    .value);
           testParams.push_back(TestParam{
               fileFormat,
@@ -1328,7 +1581,8 @@ class BucketedTableOnlyWriteTest
               HiveBucketProperty::Kind::kPrestoNative,
               true,
               multiDrivers,
-              CompressionKind_ZSTD}
+              CompressionKind_ZSTD,
+              /*scaleWriter=*/false}
                                    .value);
         }
       }
@@ -1346,8 +1600,10 @@ class BucketSortOnlyTableWriterTest
   static std::vector<uint64_t> getTestParams() {
     std::vector<uint64_t> testParams;
     const std::vector<bool> multiDriverOptions = {false, true};
-    // Add Parquet with https://github.com/facebookincubator/velox/issues/5560
     std::vector<FileFormat> fileFormats = {FileFormat::DWRF};
+    if (hasWriterFactory(FileFormat::PARQUET)) {
+      fileFormats.push_back(FileFormat::PARQUET);
+    }
     const std::vector<TestMode> bucketModes = {
         TestMode::kBucketed, TestMode::kOnlyBucketed};
     for (bool multiDrivers : multiDriverOptions) {
@@ -1360,7 +1616,8 @@ class BucketSortOnlyTableWriterTest
               HiveBucketProperty::Kind::kHiveCompatible,
               true,
               multiDrivers,
-              facebook::velox::common::CompressionKind_ZSTD}
+              facebook::velox::common::CompressionKind_ZSTD,
+              /*scaleWriter=*/false}
                                    .value);
           testParams.push_back(TestParam{
               fileFormat,
@@ -1369,7 +1626,8 @@ class BucketSortOnlyTableWriterTest
               HiveBucketProperty::Kind::kHiveCompatible,
               true,
               multiDrivers,
-              facebook::velox::common::CompressionKind_NONE}
+              facebook::velox::common::CompressionKind_NONE,
+              /*scaleWriter=*/false}
                                    .value);
         }
       }
@@ -1393,24 +1651,28 @@ class PartitionedWithoutBucketTableWriterTest
     }
     for (bool multiDrivers : multiDriverOptions) {
       for (FileFormat fileFormat : fileFormats) {
-        testParams.push_back(TestParam{
-            fileFormat,
-            TestMode::kPartitioned,
-            CommitStrategy::kNoCommit,
-            HiveBucketProperty::Kind::kHiveCompatible,
-            false,
-            multiDrivers,
-            CompressionKind_ZSTD}
-                                 .value);
-        testParams.push_back(TestParam{
-            fileFormat,
-            TestMode::kPartitioned,
-            CommitStrategy::kTaskCommit,
-            HiveBucketProperty::Kind::kHiveCompatible,
-            false,
-            true,
-            CompressionKind_ZSTD}
-                                 .value);
+        for (bool scaleWriter : {false, true}) {
+          testParams.push_back(TestParam{
+              fileFormat,
+              TestMode::kPartitioned,
+              CommitStrategy::kNoCommit,
+              HiveBucketProperty::Kind::kHiveCompatible,
+              false,
+              multiDrivers,
+              CompressionKind_ZSTD,
+              scaleWriter}
+                                   .value);
+          testParams.push_back(TestParam{
+              fileFormat,
+              TestMode::kPartitioned,
+              CommitStrategy::kTaskCommit,
+              HiveBucketProperty::Kind::kHiveCompatible,
+              false,
+              true,
+              CompressionKind_ZSTD,
+              scaleWriter}
+                                   .value);
+        }
       }
     }
     return testParams;
@@ -1431,114 +1693,128 @@ class AllTableWriterTest : public TableWriteTest,
     }
     for (bool multiDrivers : multiDriverOptions) {
       for (FileFormat fileFormat : fileFormats) {
-        testParams.push_back(TestParam{
-            fileFormat,
-            TestMode::kUnpartitioned,
-            CommitStrategy::kNoCommit,
-            HiveBucketProperty::Kind::kHiveCompatible,
-            false,
-            multiDrivers,
-            CompressionKind_ZSTD}
-                                 .value);
-        testParams.push_back(TestParam{
-            fileFormat,
-            TestMode::kUnpartitioned,
-            CommitStrategy::kTaskCommit,
-            HiveBucketProperty::Kind::kHiveCompatible,
-            false,
-            multiDrivers,
-            CompressionKind_ZSTD}
-                                 .value);
-        testParams.push_back(TestParam{
-            fileFormat,
-            TestMode::kPartitioned,
-            CommitStrategy::kNoCommit,
-            HiveBucketProperty::Kind::kHiveCompatible,
-            false,
-            multiDrivers,
-            CompressionKind_ZSTD}
-                                 .value);
-        testParams.push_back(TestParam{
-            fileFormat,
-            TestMode::kPartitioned,
-            CommitStrategy::kTaskCommit,
-            HiveBucketProperty::Kind::kHiveCompatible,
-            false,
-            multiDrivers,
-            CompressionKind_ZSTD}
-                                 .value);
-        testParams.push_back(TestParam{
-            fileFormat,
-            TestMode::kBucketed,
-            CommitStrategy::kNoCommit,
-            HiveBucketProperty::Kind::kHiveCompatible,
-            false,
-            multiDrivers,
-            CompressionKind_ZSTD}
-                                 .value);
-        testParams.push_back(TestParam{
-            fileFormat,
-            TestMode::kBucketed,
-            CommitStrategy::kTaskCommit,
-            HiveBucketProperty::Kind::kHiveCompatible,
-            false,
-            multiDrivers,
-            CompressionKind_ZSTD}
-                                 .value);
-        testParams.push_back(TestParam{
-            fileFormat,
-            TestMode::kBucketed,
-            CommitStrategy::kNoCommit,
-            HiveBucketProperty::Kind::kPrestoNative,
-            false,
-            multiDrivers,
-            CompressionKind_ZSTD}
-                                 .value);
-        testParams.push_back(TestParam{
-            fileFormat,
-            TestMode::kBucketed,
-            CommitStrategy::kTaskCommit,
-            HiveBucketProperty::Kind::kPrestoNative,
-            false,
-            multiDrivers,
-            CompressionKind_ZSTD}
-                                 .value);
-        testParams.push_back(TestParam{
-            fileFormat,
-            TestMode::kOnlyBucketed,
-            CommitStrategy::kNoCommit,
-            HiveBucketProperty::Kind::kHiveCompatible,
-            false,
-            multiDrivers,
-            CompressionKind_ZSTD}
-                                 .value);
-        testParams.push_back(TestParam{
-            fileFormat,
-            TestMode::kOnlyBucketed,
-            CommitStrategy::kTaskCommit,
-            HiveBucketProperty::Kind::kHiveCompatible,
-            false,
-            multiDrivers,
-            CompressionKind_ZSTD}
-                                 .value);
-        testParams.push_back(TestParam{
-            fileFormat,
-            TestMode::kOnlyBucketed,
-            CommitStrategy::kNoCommit,
-            HiveBucketProperty::Kind::kPrestoNative,
-            false,
-            multiDrivers,
-            CompressionKind_ZSTD}
-                                 .value);
-        testParams.push_back(TestParam{
-            fileFormat,
-            TestMode::kOnlyBucketed,
-            CommitStrategy::kTaskCommit,
-            HiveBucketProperty::Kind::kPrestoNative,
-            false,
-            multiDrivers,
-            CompressionKind_ZSTD}
-                                 .value);
+        for (bool scaleWriter : {false, true}) {
+          testParams.push_back(TestParam{
+              fileFormat,
+              TestMode::kUnpartitioned,
+              CommitStrategy::kNoCommit,
+              HiveBucketProperty::Kind::kHiveCompatible,
+              false,
+              multiDrivers,
+              CompressionKind_ZSTD,
+              scaleWriter}
+                                   .value);
+          testParams.push_back(TestParam{
+              fileFormat,
+              TestMode::kUnpartitioned,
+              CommitStrategy::kTaskCommit,
+              HiveBucketProperty::Kind::kHiveCompatible,
+              false,
+              multiDrivers,
+              CompressionKind_ZSTD,
+              scaleWriter}
+                                   .value);
+          testParams.push_back(TestParam{
+              fileFormat,
+              TestMode::kPartitioned,
+              CommitStrategy::kNoCommit,
+              HiveBucketProperty::Kind::kHiveCompatible,
+              false,
+              multiDrivers,
+              CompressionKind_ZSTD,
+              scaleWriter}
+                                   .value);
+          testParams.push_back(TestParam{
+              fileFormat,
+              TestMode::kPartitioned,
+              CommitStrategy::kTaskCommit,
+              HiveBucketProperty::Kind::kHiveCompatible,
+              false,
+              multiDrivers,
+              CompressionKind_ZSTD,
+              scaleWriter}
+                                   .value);
+          testParams.push_back(TestParam{
+              fileFormat,
+              TestMode::kBucketed,
+              CommitStrategy::kNoCommit,
+              HiveBucketProperty::Kind::kHiveCompatible,
+              false,
+              multiDrivers,
+              CompressionKind_ZSTD,
+              scaleWriter}
+                                   .value);
+          testParams.push_back(TestParam{
+              fileFormat,
+              TestMode::kBucketed,
+              CommitStrategy::kTaskCommit,
+              HiveBucketProperty::Kind::kHiveCompatible,
+              false,
+              multiDrivers,
+              CompressionKind_ZSTD,
+              scaleWriter}
+                                   .value);
+          testParams.push_back(TestParam{
+              fileFormat,
+              TestMode::kBucketed,
+              CommitStrategy::kNoCommit,
+              HiveBucketProperty::Kind::kPrestoNative,
+              false,
+              multiDrivers,
+              CompressionKind_ZSTD,
+              scaleWriter}
+                                   .value);
+          testParams.push_back(TestParam{
+              fileFormat,
+              TestMode::kBucketed,
+              CommitStrategy::kTaskCommit,
+              HiveBucketProperty::Kind::kPrestoNative,
+              false,
+              multiDrivers,
+              CompressionKind_ZSTD,
+              scaleWriter}
+                                   .value);
+          testParams.push_back(TestParam{
+              fileFormat,
+              TestMode::kOnlyBucketed,
+              CommitStrategy::kNoCommit,
+              HiveBucketProperty::Kind::kHiveCompatible,
+              false,
+              multiDrivers,
+              CompressionKind_ZSTD,
+              scaleWriter}
+                                   .value);
+          testParams.push_back(TestParam{
+              fileFormat,
+              TestMode::kOnlyBucketed,
+              CommitStrategy::kTaskCommit,
+              HiveBucketProperty::Kind::kHiveCompatible,
+              false,
+              multiDrivers,
+              CompressionKind_ZSTD,
+              scaleWriter}
+                                   .value);
+          testParams.push_back(TestParam{
+              fileFormat,
+              TestMode::kOnlyBucketed,
+              CommitStrategy::kNoCommit,
+              HiveBucketProperty::Kind::kPrestoNative,
+              false,
+              multiDrivers,
+              CompressionKind_ZSTD,
+              scaleWriter}
+                                   .value);
+          testParams.push_back(TestParam{
+              fileFormat,
+              TestMode::kOnlyBucketed,
+              CommitStrategy::kTaskCommit,
+              HiveBucketProperty::Kind::kPrestoNative,
+              false,
+              multiDrivers,
+              CompressionKind_ZSTD,
+              scaleWriter}
+                                   .value);
+        }
       }
     }
     return testParams;
@@ -2118,7 +2394,6 @@ TEST_P(PartitionedTableWriterTest, singlePartition) {
 }
 
 TEST_P(PartitionedWithoutBucketTableWriterTest, fromSinglePartitionToMultiple) {
-  const int32_t numBatches = 1;
   auto rowType = ROW({"c0", "c1"}, {BIGINT(), BIGINT()});
   setDataTypes(rowType);
   std::vector<std::string> partitionKeys = {"c0"};
@@ -2369,7 +2644,7 @@ TEST_P(UnpartitionedTableWriterTest, runtimeStatsCheck) {
             .config(QueryConfig::kTaskWriterCount, std::to_string(1))
             .connectorSessionProperty(
                 kHiveConnectorId,
-                HiveConfig::kOrcWriterMaxStripeSizeSession,
+                dwrf::Config::kOrcWriterMaxStripeSizeSession,
                 testData.maxStripeSize)
             .assertResults("SELECT count(*) FROM tmp");
     auto stats = task->taskStats().pipelineStats.front().operatorStats;
@@ -2867,7 +3142,7 @@ TEST_P(AllTableWriterTest, columnStatsDataTypes) {
   ASSERT_EQ(countStatsVector->valueAt(0), 1000);
   const auto countIfStatsVector =
       result->childAt(nextColumnStatsIndex++)->asFlatVector<int64_t>();
-  ASSERT_EQ(countStatsVector->valueAt(0), 1000);
+  ASSERT_EQ(countIfStatsVector->valueAt(0), 1000);
   const auto countMapStatsVector =
       result->childAt(nextColumnStatsIndex++)->asFlatVector<int64_t>();
   ASSERT_EQ(countMapStatsVector->valueAt(0), 1000);
@@ -2933,13 +3208,10 @@ TEST_P(AllTableWriterTest, columnStats) {
   auto result = AssertQueryBuilder(plan).copyResults(pool());
   auto rowVector = result->childAt(0)->asFlatVector<int64_t>();
   auto fragmentVector = result->childAt(1)->asFlatVector<StringView>();
-  auto commitContextVector = result->childAt(2)->asFlatVector<StringView>();
   auto columnStatsVector =
       result->childAt(3 + partitionedBy_.size())->asFlatVector<int64_t>();
 
-  const int64_t expectedRows = 10 * 100;
   std::vector<std::string> writeFiles;
-  int64_t numRows{0};
 
   // For partitioned, expected result is as follows:
   // Row     Fragment           Context       partition           c1_min_value
@@ -3043,13 +3315,10 @@ TEST_P(AllTableWriterTest, columnStatsWithTableWriteMerge) {
   auto result = AssertQueryBuilder(finalPlan).copyResults(pool());
   auto rowVector = result->childAt(0)->asFlatVector<int64_t>();
   auto fragmentVector = result->childAt(1)->asFlatVector<StringView>();
-  auto commitContextVector = result->childAt(2)->asFlatVector<StringView>();
   auto columnStatsVector =
       result->childAt(3 + partitionedBy_.size())->asFlatVector<int64_t>();
 
-  const int64_t expectedRows = 10 * 100;
   std::vector<std::string> writeFiles;
-  int64_t numRows{0};
 
   // For partitioned, expected result is as follows:
   // Row     Fragment           Context       partition           c1_min_value
@@ -3953,12 +4222,10 @@ DEBUG_ONLY_TEST_F(
       // Set large stripe and dictionary size thresholds to avoid writer
       // internal stripe flush.
       .connectorSessionProperty(
-          kHiveConnectorId,
-          connector::hive::HiveConfig::kOrcWriterMaxStripeSizeSession,
-          "1GB")
+          kHiveConnectorId, dwrf::Config::kOrcWriterMaxStripeSizeSession, "1GB")
       .connectorSessionProperty(
           kHiveConnectorId,
-          connector::hive::HiveConfig::kOrcWriterMaxDictionaryMemorySession,
+          dwrf::Config::kOrcWriterMaxDictionaryMemorySession,
           "1GB")
       .plan(std::move(writerPlan))
       .assertResults(fmt::format("SELECT {}", numRows));
@@ -4051,12 +4318,10 @@ DEBUG_ONLY_TEST_F(
       // Set large stripe and dictionary size thresholds to avoid writer
       // internal stripe flush.
       .connectorSessionProperty(
-          kHiveConnectorId,
-          connector::hive::HiveConfig::kOrcWriterMaxStripeSizeSession,
-          "1GB")
+          kHiveConnectorId, dwrf::Config::kOrcWriterMaxStripeSizeSession, "1GB")
       .connectorSessionProperty(
           kHiveConnectorId,
-          connector::hive::HiveConfig::kOrcWriterMaxDictionaryMemorySession,
+          dwrf::Config::kOrcWriterMaxDictionaryMemorySession,
           "1GB")
       .plan(std::move(writerPlan))
       .assertResults(fmt::format("SELECT {}", numRows));
@@ -4155,12 +4420,10 @@ DEBUG_ONLY_TEST_F(
       // Set large stripe and dictionary size thresholds to avoid writer
       // internal stripe flush.
       .connectorSessionProperty(
-          kHiveConnectorId,
-          connector::hive::HiveConfig::kOrcWriterMaxStripeSizeSession,
-          "1GB")
+          kHiveConnectorId, dwrf::Config::kOrcWriterMaxStripeSizeSession, "1GB")
       .connectorSessionProperty(
           kHiveConnectorId,
-          connector::hive::HiveConfig::kOrcWriterMaxDictionaryMemorySession,
+          dwrf::Config::kOrcWriterMaxDictionaryMemorySession,
           "1GB")
       .plan(std::move(writerPlan))
       .assertResults(fmt::format("SELECT {}", numRows));
@@ -4175,7 +4438,6 @@ DEBUG_ONLY_TEST_F(
 }
 
 DEBUG_ONLY_TEST_F(TableWriterArbitrationTest, tableFileWriteError) {
-  const uint64_t memoryCapacity = 32 * MB;
   VectorFuzzer::Options options;
   const int batchSize = 1'000;
   options.vectorSize = batchSize;
@@ -4192,7 +4454,6 @@ DEBUG_ONLY_TEST_F(TableWriterArbitrationTest, tableFileWriteError) {
 
   auto queryPool = memory::memoryManager()->addRootPool(
       "tableFileWriteError", kQueryMemoryCapacity);
-  auto* arbitrator = memory::memoryManager()->arbitrator();
   auto queryCtx = core::QueryCtx::create(
       executor_.get(), QueryConfig{{}}, {}, nullptr, std::move(queryPool));
   ASSERT_EQ(queryCtx->pool()->capacity(), kQueryMemoryCapacity);
@@ -4234,11 +4495,11 @@ DEBUG_ONLY_TEST_F(TableWriterArbitrationTest, tableFileWriteError) {
           // triggered flush.
           .connectorSessionProperty(
               kHiveConnectorId,
-              connector::hive::HiveConfig::kOrcWriterMaxStripeSizeSession,
+              dwrf::Config::kOrcWriterMaxStripeSizeSession,
               "1GB")
           .connectorSessionProperty(
               kHiveConnectorId,
-              connector::hive::HiveConfig::kOrcWriterMaxDictionaryMemorySession,
+              dwrf::Config::kOrcWriterMaxDictionaryMemorySession,
               "1GB")
           .plan(std::move(writerPlan))
           .copyResults(pool()),
@@ -4248,7 +4509,6 @@ DEBUG_ONLY_TEST_F(TableWriterArbitrationTest, tableFileWriteError) {
 }
 
 DEBUG_ONLY_TEST_F(TableWriterArbitrationTest, tableWriteSpillUseMoreMemory) {
-  const uint64_t memoryCapacity = 256 * MB;
   // Create a large number of vectors to trigger writer spill.
   fuzzerOpts_.vectorSize = 1000;
   fuzzerOpts_.stringLength = 2048;
@@ -4274,7 +4534,6 @@ DEBUG_ONLY_TEST_F(TableWriterArbitrationTest, tableWriteSpillUseMoreMemory) {
       fakeLeafPool->allocate(fakeAllocationSize),
       fakeAllocationSize};
 
-  void* allocatedBuffer;
   TestAllocation injectedWriterAllocation;
   SCOPED_TESTVALUE_SET(
       "facebook::velox::dwrf::Writer::flushInternal",
@@ -4322,11 +4581,11 @@ DEBUG_ONLY_TEST_F(TableWriterArbitrationTest, tableWriteSpillUseMoreMemory) {
           // triggered flush.
           .connectorSessionProperty(
               kHiveConnectorId,
-              connector::hive::HiveConfig::kOrcWriterMaxStripeSizeSession,
+              dwrf::Config::kOrcWriterMaxStripeSizeSession,
               "1GB")
           .connectorSessionProperty(
               kHiveConnectorId,
-              connector::hive::HiveConfig::kOrcWriterMaxDictionaryMemorySession,
+              dwrf::Config::kOrcWriterMaxDictionaryMemorySession,
               "1GB")
           .plan(std::move(writerPlan))
           .copyResults(pool()),
@@ -4348,7 +4607,6 @@ DEBUG_ONLY_TEST_F(TableWriterArbitrationTest, tableWriteReclaimOnClose) {
     numRows += vectors.back()->size();
   }
 
-  auto* arbitrator = memory::memoryManager()->arbitrator();
   auto queryPool = memory::memoryManager()->addRootPool(
       "tableWriteSpillUseMoreMemory", kQueryMemoryCapacity);
   auto queryCtx = core::QueryCtx::create(
@@ -4422,12 +4680,10 @@ DEBUG_ONLY_TEST_F(TableWriterArbitrationTest, tableWriteReclaimOnClose) {
       // Set stripe size to extreme large to avoid writer internal triggered
       // flush.
       .connectorSessionProperty(
-          kHiveConnectorId,
-          connector::hive::HiveConfig::kOrcWriterMaxStripeSizeSession,
-          "1GB")
+          kHiveConnectorId, dwrf::Config::kOrcWriterMaxStripeSizeSession, "1GB")
       .connectorSessionProperty(
           kHiveConnectorId,
-          connector::hive::HiveConfig::kOrcWriterMaxDictionaryMemorySession,
+          dwrf::Config::kOrcWriterMaxDictionaryMemorySession,
           "1GB")
       .plan(std::move(writerPlan))
       .assertResults(fmt::format("SELECT {}", numRows));

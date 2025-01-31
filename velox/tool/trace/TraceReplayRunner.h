@@ -29,9 +29,14 @@ DECLARE_string(query_id);
 DECLARE_string(task_id);
 DECLARE_string(node_id);
 DECLARE_int32(driver_id);
+DECLARE_string(driver_ids);
 DECLARE_string(table_writer_output_dir);
-DECLARE_double(hiveConnectorExecutorHwMultiplier);
+DECLARE_double(hive_connector_executor_hw_multiplier);
 DECLARE_int32(shuffle_serialization_format);
+DECLARE_uint64(query_memory_capacity_mb);
+DECLARE_double(driver_cpu_executor_hw_multiplier);
+DECLARE_string(memory_arbitrator_type);
+DECLARE_bool(copy_results);
 
 namespace facebook::velox::tool::trace {
 
@@ -49,9 +54,10 @@ class TraceReplayRunner {
   /// Runs the trace replay with a set of gflags passed from replayer tool.
   virtual void run();
 
- private:
+ protected:
   std::unique_ptr<tool::trace::OperatorReplayerBase> createReplayer() const;
 
+  const std::unique_ptr<folly::CPUThreadPoolExecutor> cpuExecutor_;
   const std::unique_ptr<folly::IOThreadPoolExecutor> ioExecutor_;
   std::shared_ptr<filesystems::FileSystem> fs_;
 };

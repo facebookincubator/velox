@@ -16,16 +16,15 @@ add_subdirectory(utils)
 
 set(TEST_LINK_LIBS
     velox_dwio_common_test_utils
-    velox_dwio_dwrf_proto
     velox_dwio_dwrf_reader
     velox_dwio_dwrf_writer
     velox_row_fast
+    velox_flag_definitions
     gflags::gflags
     GTest::gtest
     GTest::gtest_main
     GTest::gmock
-    glog::glog
-    ${FILESYSTEM})
+    glog::glog)
 
 add_executable(velox_dwio_dwrf_buffered_output_stream_test
                TestBufferedOutputStream.cpp)
@@ -541,25 +540,27 @@ target_link_libraries(
   ZLIB::ZLIB
   ${TEST_LINK_LIBS})
 
-add_executable(velox_dwrf_int_encoder_benchmark IntEncoderBenchmark.cpp)
-target_link_libraries(
-  velox_dwrf_int_encoder_benchmark
-  velox_dwio_dwrf_common
-  velox_memory
-  velox_dwio_common_exception
-  Folly::folly
-  ${FOLLY_BENCHMARK})
+if(VELOX_ENABLE_BENCHMARKS)
+  add_executable(velox_dwrf_int_encoder_benchmark IntEncoderBenchmark.cpp)
+  target_link_libraries(
+    velox_dwrf_int_encoder_benchmark
+    velox_dwio_dwrf_common
+    velox_memory
+    velox_dwio_common_exception
+    Folly::folly
+    Folly::follybenchmark)
 
-add_executable(velox_dwrf_float_column_writer_benchmark
-               FloatColumnWriterBenchmark.cpp)
-target_link_libraries(
-  velox_dwrf_float_column_writer_benchmark
-  velox_vector
-  velox_dwio_common_exception
-  velox_dwio_dwrf_writer
-  Folly::folly
-  ${FOLLY_BENCHMARK}
-  fmt::fmt)
+  add_executable(velox_dwrf_float_column_writer_benchmark
+                 FloatColumnWriterBenchmark.cpp)
+  target_link_libraries(
+    velox_dwrf_float_column_writer_benchmark
+    velox_vector
+    velox_dwio_common_exception
+    velox_dwio_dwrf_writer
+    Folly::folly
+    Folly::follybenchmark
+    fmt::fmt)
+endif()
 
 add_executable(velox_dwio_cache_test CacheInputTest.cpp
                                      DirectBufferedInputTest.cpp)

@@ -904,9 +904,7 @@ int32_t parseFromPattern(
       int count = 0;
       while (cur < end && cur < startPos + maxDigitConsume &&
              characterIsDigit(*cur)) {
-        if (count < 3) {
-          number = number * 10 + (*cur - '0');
-        }
+        number = number * 10 + (*cur - '0');
         ++cur;
         ++count;
       }
@@ -1188,6 +1186,7 @@ uint32_t DateTimeFormatter::maxResultSize(const tz::TimeZone* timezone) const {
         // 9 is the max size of elements in weekdaysFull or monthsFull.
         size += token.pattern.minRepresentDigits <= 3 ? 3 : 9;
         break;
+      case DateTimeFormatSpecifier::WEEK_YEAR:
       case DateTimeFormatSpecifier::YEAR:
         // Timestamp is in [-32767-01-01, 32767-12-31] range.
         size += token.pattern.minRepresentDigits == 2
@@ -1244,8 +1243,6 @@ uint32_t DateTimeFormatter::maxResultSize(const tz::TimeZone* timezone) const {
           size += 32;
         }
         break;
-      // Not supported.
-      case DateTimeFormatSpecifier::WEEK_YEAR:
       default:
         VELOX_UNSUPPORTED(
             "Date format specifier is not supported: {}",
@@ -1347,8 +1344,14 @@ int32_t DateTimeFormatter::format(
           result += piece.length();
         } break;
 
+        case DateTimeFormatSpecifier::WEEK_YEAR:
         case DateTimeFormatSpecifier::YEAR: {
           auto year = static_cast<signed>(calDate.year());
+          if (token.pattern.specifier == DateTimeFormatSpecifier::WEEK_YEAR) {
+            const auto isoWeek = date::iso_week::year_weeknum_weekday{calDate};
+            year = isoWeek.year().ok() ? static_cast<signed>(isoWeek.year())
+                                       : year;
+          }
           if (token.pattern.minRepresentDigits == 2) {
             year = std::abs(year);
             auto twoDigitYear = year % 100;
@@ -1360,7 +1363,7 @@ int32_t DateTimeFormatter::format(
                 result);
           } else {
             result += padContent(
-                static_cast<signed>(calDate.year()),
+                year,
                 '0',
                 token.pattern.minRepresentDigits,
                 maxResultEnd,
@@ -1542,7 +1545,6 @@ int32_t DateTimeFormatter::format(
               result);
           break;
         }
-        case DateTimeFormatSpecifier::WEEK_YEAR:
         default:
           VELOX_UNSUPPORTED(
               "format is not supported for specifier {}",

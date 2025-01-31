@@ -1372,14 +1372,15 @@ TEST_F(ColumnWriterTest, TestMapWriterMixedBatchTypeHandling) {
   // Test type cast assertion in the direct encoding case.
   // TODO(T91654228): Check and throw for non-homogeneous batch types
   // when dictionary encoding is enabled.
-  EXPECT_THROW(
+  VELOX_ASSERT_THROW(
       (testMapWriter<keyType, valueType>(
           *pool_,
           batches,
           /* useFlatMap */ true,
+
           true,
           false)),
-      exception::LoggedException);
+      "");
 }
 
 TEST_F(ColumnWriterTest, TestMapWriterBinaryKey) {
@@ -1581,12 +1582,10 @@ TEST_F(ColumnWriterTest, TestMapWriterUnalignedKeyValueCount) {
       sizes,
       keys,
       values);
-  ASSERT_THROW(
-      (testMapWriter<int64_t, int64_t>(*pool_, batch, false)),
-      exception::LoggedException);
-  ASSERT_THROW(
-      (testMapWriter<int64_t, int64_t>(*pool_, batch, true)),
-      exception::LoggedException);
+  VELOX_ASSERT_THROW(
+      (testMapWriter<int64_t, int64_t>(*pool_, batch, false)), "");
+  VELOX_ASSERT_THROW(
+      (testMapWriter<int64_t, int64_t>(*pool_, batch, true)), "");
 }
 
 TEST_F(ColumnWriterTest, TestStructKeysConfigSerializationDeserialization) {
@@ -1873,7 +1872,6 @@ int64_t generateRangeWithCustomLimits(
   // Generate the range such that we have similar amounts of values generated
   // for each exponent.
   double center = size % 2 ? -0.5 : interval / 2 - 0.5;
-  double value = center + (i - size / 2) * interval;
   // Return a guard-railed value with the numeric limits.
   // NOTE: There can be a more compact way to write this if we cast i and size
   // to signed types, but it's not worth the effort enforcing the assumptions.

@@ -16,6 +16,7 @@
 
 #include "velox/exec/HashJoinBridge.h"
 #include "velox/common/memory/MemoryArbitrator.h"
+#include "velox/exec/HashBuild.h"
 
 namespace facebook::velox::exec {
 namespace {
@@ -91,15 +92,14 @@ namespace {
 // 'table' to parallelize the table spilling. The function spills all the rows
 // from the row container and returns the spiller for the caller to collect the
 // spilled partitions and stats.
-std::unique_ptr<Spiller> createSpiller(
+std::unique_ptr<HashBuildSpiller> createSpiller(
     RowContainer* subTableRows,
     core::JoinType joinType,
     const RowTypePtr& tableType,
     const HashBitRange& hashBitRange,
     const common::SpillConfig* spillConfig,
     folly::Synchronized<common::SpillStats>* stats) {
-  return std::make_unique<Spiller>(
-      Spiller::Type::kHashJoinBuild,
+  return std::make_unique<HashBuildSpiller>(
       joinType,
       subTableRows,
       hashJoinTableSpillType(tableType, joinType),
@@ -110,7 +110,7 @@ std::unique_ptr<Spiller> createSpiller(
 } // namespace
 
 std::vector<std::unique_ptr<HashJoinTableSpillResult>> spillHashJoinTable(
-    const std::vector<Spiller*>& spillers,
+    const std::vector<HashBuildSpiller*>& spillers,
     const common::SpillConfig* spillConfig) {
   VELOX_CHECK_NOT_NULL(spillConfig);
   auto spillExecutor = spillConfig->executor;
@@ -172,8 +172,8 @@ SpillPartitionSet spillHashJoinTable(
     return {};
   }
 
-  std::vector<std::unique_ptr<Spiller>> spillersHolder;
-  std::vector<Spiller*> spillers;
+  std::vector<std::unique_ptr<HashBuildSpiller>> spillersHolder;
+  std::vector<HashBuildSpiller*> spillers;
   const auto rowContainers = table->allRows();
   const auto tableType = hashJoinTableType(joinNode);
   for (auto* rowContainer : rowContainers) {
@@ -256,7 +256,7 @@ void HashJoinBridge::appendSpilledHashTablePartitionsLocked(
   }
   auto spillPartitionIdSet = toSpillPartitionIdSet(spillPartitionSet);
   if (restoringSpillPartitionId_.has_value()) {
-    for (const auto& id : spillPartitionIdSet) {
+    for ([[maybe_unused]] const auto& id : spillPartitionIdSet) {
       VELOX_DCHECK_LT(
           restoringSpillPartitionId_->partitionBitOffset(),
           id.partitionBitOffset());
@@ -382,11 +382,12 @@ uint64_t HashJoinMemoryReclaimer::reclaim(
     uint64_t targetBytes,
     uint64_t maxWaitMs,
     memory::MemoryReclaimer::Stats& stats) {
+  const auto prevNodeReservedMemory = pool->reservedBytes();
+
   // The flags to track if we have reclaimed from both build and probe operators
   // under a hash join node.
   bool hasReclaimedFromBuild{false};
   bool hasReclaimedFromProbe{false};
-  uint64_t reclaimedBytes{0};
   pool->visitChildren([&](memory::MemoryPool* child) {
     VELOX_CHECK_EQ(child->kind(), memory::MemoryPool::Kind::kLeaf);
     const bool isBuild = isHashBuildMemoryPool(*child);
@@ -394,7 +395,7 @@ uint64_t HashJoinMemoryReclaimer::reclaim(
       if (!hasReclaimedFromBuild) {
         // We just need to reclaim from any one of the hash build operator.
         hasReclaimedFromBuild = true;
-        reclaimedBytes += child->reclaim(targetBytes, maxWaitMs, stats);
+        child->reclaim(targetBytes, maxWaitMs, stats);
       }
       return !hasReclaimedFromProbe;
     }
@@ -403,22 +404,25 @@ uint64_t HashJoinMemoryReclaimer::reclaim(
       // The same as build operator, we only need to reclaim from any one of the
       // hash probe operator.
       hasReclaimedFromProbe = true;
-      reclaimedBytes += child->reclaim(targetBytes, maxWaitMs, stats);
+      child->reclaim(targetBytes, maxWaitMs, stats);
     }
     return !hasReclaimedFromBuild;
   });
-  if (reclaimedBytes != 0) {
-    return reclaimedBytes;
+
+  auto currNodeReservedMemory = pool->reservedBytes();
+  VELOX_CHECK_LE(currNodeReservedMemory, prevNodeReservedMemory);
+  if (currNodeReservedMemory < prevNodeReservedMemory) {
+    return prevNodeReservedMemory - currNodeReservedMemory;
   }
+
   auto joinBridge = joinBridge_.lock();
   if (joinBridge == nullptr) {
-    return reclaimedBytes;
+    return 0;
   }
-  const auto oldNodeReservedMemory = pool->reservedBytes();
   joinBridge->reclaim();
-  const auto newNodeReservedMemory = pool->reservedBytes();
-  VELOX_CHECK_LE(newNodeReservedMemory, oldNodeReservedMemory);
-  return oldNodeReservedMemory - newNodeReservedMemory;
+  currNodeReservedMemory = pool->reservedBytes();
+  VELOX_CHECK_LE(currNodeReservedMemory, prevNodeReservedMemory);
+  return prevNodeReservedMemory - currNodeReservedMemory;
 }
 
 bool isHashBuildMemoryPool(const memory::MemoryPool& pool) {

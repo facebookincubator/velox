@@ -23,8 +23,8 @@
 #include "velox/core/QueryCtx.h"
 #include "velox/dwio/parquet/RegisterParquetWriter.h" // @manual
 #include "velox/dwio/parquet/tests/ParquetTestBase.h"
+#include "velox/exec/Cursor.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
-#include "velox/exec/tests/utils/Cursor.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
 #include "velox/exec/tests/utils/QueryAssertions.h"
 #include "velox/exec/tests/utils/TempDirectoryPath.h"
@@ -162,7 +162,7 @@ DEBUG_ONLY_TEST_F(ParquetWriterTest, unitFromWriterOptions) {
       10'000, [](auto row) { return Timestamp(row, row); })});
   parquet::WriterOptions writerOptions;
   writerOptions.memoryPool = leafPool_.get();
-  writerOptions.parquetWriteTimestampUnit = TimestampUnit::kMicro;
+  writerOptions.parquetWriteTimestampUnit = TimestampPrecision::kMicroseconds;
   writerOptions.parquetWriteTimestampTimeZone = "America/Los_Angeles";
 
   // Create an in-memory writer.
@@ -191,7 +191,7 @@ TEST_F(ParquetWriterTest, parquetWriteTimestampTimeZoneWithDefault) {
       10'000, [](auto row) { return Timestamp(row, row); })});
   parquet::WriterOptions writerOptions;
   writerOptions.memoryPool = leafPool_.get();
-  writerOptions.parquetWriteTimestampUnit = TimestampUnit::kMicro;
+  writerOptions.parquetWriteTimestampUnit = TimestampPrecision::kMicroseconds;
 
   // Create an in-memory writer.
   auto sink = std::make_unique<MemorySink>(
@@ -202,6 +202,24 @@ TEST_F(ParquetWriterTest, parquetWriteTimestampTimeZoneWithDefault) {
   writer->write(data);
   writer->close();
 };
+
+TEST_F(ParquetWriterTest, updateWriterOptionsFromHiveConfig) {
+  std::unordered_map<std::string, std::string> configFromFile = {
+      {parquet::WriterOptions::kParquetSessionWriteTimestampUnit, "3"},
+      {core::QueryConfig::kSessionTimezone, "UTC"}};
+  const config::ConfigBase connectorConfig(std::move(configFromFile));
+  const config::ConfigBase connectorSessionProperties({});
+
+  parquet::WriterOptions options;
+  options.compressionKind = facebook::velox::common::CompressionKind_ZLIB;
+
+  options.processConfigs(connectorConfig, connectorSessionProperties);
+
+  ASSERT_EQ(
+      options.parquetWriteTimestampUnit.value(),
+      TimestampPrecision::kMilliseconds);
+  ASSERT_EQ(options.parquetWriteTimestampTimeZone.value(), "UTC");
+}
 
 #ifdef VELOX_ENABLE_PARQUET
 DEBUG_ONLY_TEST_F(ParquetWriterTest, unitFromHiveConfig) {
@@ -220,7 +238,7 @@ DEBUG_ONLY_TEST_F(ParquetWriterTest, unitFromHiveConfig) {
   const auto outputDirectory = TempDirectoryPath::create();
 
   auto writerOptions = std::make_shared<parquet::WriterOptions>();
-  writerOptions->parquetWriteTimestampUnit = TimestampUnit::kMicro;
+  writerOptions->parquetWriteTimestampUnit = TimestampPrecision::kMicroseconds;
 
   const auto plan = PlanBuilder()
                         .values({data})

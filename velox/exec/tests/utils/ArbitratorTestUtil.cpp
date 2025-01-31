@@ -16,6 +16,7 @@
 
 #include "velox/exec/tests/utils/ArbitratorTestUtil.h"
 #include "velox/common/memory/SharedArbitrator.h"
+#include "velox/dwio/dwrf/common/Config.h"
 #include "velox/exec/TableWriter.h"
 
 using namespace facebook::velox;
@@ -347,17 +348,15 @@ QueryTestResult runWriteTask(
             // triggered flush.
             .connectorSessionProperty(
                 kHiveConnectorId,
-                connector::hive::HiveConfig::kOrcWriterMaxStripeSizeSession,
+                dwrf::Config::kOrcWriterMaxStripeSizeSession,
                 "1GB")
             .connectorSessionProperty(
                 kHiveConnectorId,
-                connector::hive::HiveConfig::
-                    kOrcWriterMaxDictionaryMemorySession,
+                dwrf::Config::kOrcWriterMaxDictionaryMemorySession,
                 "1GB")
             .connectorSessionProperty(
                 kHiveConnectorId,
-                connector::hive::HiveConfig::
-                    kOrcWriterMaxDictionaryMemorySession,
+                dwrf::Config::kOrcWriterMaxDictionaryMemorySession,
                 "1GB")
             .queryCtx(queryCtx)
             .maxDrivers(numDrivers)
@@ -373,5 +372,20 @@ QueryTestResult runWriteTask(
     assertEqualResults({result.data}, {expectedResult});
   }
   return result;
+}
+
+TestSuspendedSection::TestSuspendedSection(Driver* driver) : driver_(driver) {
+  if (driver->task()->enterSuspended(driver->state()) != StopReason::kNone) {
+    VELOX_FAIL("Terminate detected when entering suspended section");
+  }
+}
+
+TestSuspendedSection::~TestSuspendedSection() {
+  if (driver_->task()->leaveSuspended(driver_->state()) != StopReason::kNone) {
+    LOG(WARNING)
+        << "Terminate detected when leaving suspended section for driver "
+        << driver_->driverCtx()->driverId << " from task "
+        << driver_->task()->taskId();
+  }
 }
 } // namespace facebook::velox::exec::test

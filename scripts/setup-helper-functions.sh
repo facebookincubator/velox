@@ -18,6 +18,7 @@
 
 DEPENDENCY_DIR=${DEPENDENCY_DIR:-$(pwd)/deps-download}
 OS_CXXFLAGS=""
+NPROC=${BUILD_THREADS:-$(getconf _NPROCESSORS_ONLN)}
 
 function run_and_time {
   time "$@" || (echo "Failed to run $* ." ; exit 1 )
@@ -111,15 +112,15 @@ function get_cxx_flags {
   case $CPU_ARCH in
 
     "arm64")
-      echo -n "-mcpu=apple-m1+crc -std=c++17 -fvisibility=hidden"
+      echo -n "-mcpu=apple-m1+crc"
     ;;
 
     "avx")
-      echo -n "-mavx2 -mfma -mavx -mf16c -mlzcnt -std=c++17 -mbmi2"
+      echo -n "-mavx2 -mfma -mavx -mf16c -mlzcnt  -mbmi2"
     ;;
 
     "sse")
-      echo -n "-msse4.2 -std=c++17"
+      echo -n "-msse4.2 "
     ;;
 
     "aarch64")
@@ -138,16 +139,16 @@ function get_cxx_flags {
         ARM_CPU_PRODUCT=${hex_ARM_CPU_DETECT: -4:3}
 
         if [ "$ARM_CPU_PRODUCT" = "$Neoverse_N1" ]; then
-          echo -n "-mcpu=neoverse-n1 -std=c++17"
+          echo -n "-mcpu=neoverse-n1 "
         elif [ "$ARM_CPU_PRODUCT" = "$Neoverse_N2" ]; then
-          echo -n "-mcpu=neoverse-n2 -std=c++17"
+          echo -n "-mcpu=neoverse-n2 "
         elif [ "$ARM_CPU_PRODUCT" = "$Neoverse_V1" ]; then
-          echo -n "-mcpu=neoverse-v1 -std=c++17"
+          echo -n "-mcpu=neoverse-v1 "
         else
-          echo -n "-march=armv8-a+crc+crypto -std=c++17"
+          echo -n "-march=armv8-a+crc+crypto "
         fi
       else
-        echo -n "-std=c++17"
+        echo -n ""
       fi
     ;;
   *)
@@ -214,7 +215,7 @@ function cmake_install {
     -DBUILD_TESTING=OFF \
     "$@"
   # Exit if the build fails.
-  cmake --build "${BINARY_DIR}" || { echo 'build failed' ; exit 1; }
+  cmake --build "${BINARY_DIR}" "-j ${NPROC}" || { echo 'build failed' ; exit 1; }
   ${SUDO} cmake --install "${BINARY_DIR}"
 }
 

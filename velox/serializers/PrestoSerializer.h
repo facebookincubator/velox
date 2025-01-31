@@ -19,6 +19,7 @@
 
 #include "velox/common/base/Crc.h"
 #include "velox/common/compression/Compression.h"
+#include "velox/serializers/PrestoVectorLexer.h"
 #include "velox/vector/VectorStream.h"
 
 namespace facebook::velox::serializer::presto {
@@ -54,9 +55,10 @@ class PrestoVectorSerde : public VectorSerde {
     PrestoOptions(
         bool _useLosslessTimestamp,
         common::CompressionKind _compressionKind,
+        float _minCompressionRatio = 0.8,
         bool _nullsFirst = false,
         bool _preserveEncodings = false)
-        : VectorSerde::Options(_compressionKind),
+        : VectorSerde::Options(_compressionKind, _minCompressionRatio),
           useLosslessTimestamp(_useLosslessTimestamp),
           nullsFirst(_nullsFirst),
           preserveEncodings(_preserveEncodings) {}
@@ -73,11 +75,6 @@ class PrestoVectorSerde : public VectorSerde {
     /// TODO: Make Presto also serialize nulls before columns of
     /// structs.
     bool nullsFirst{false};
-
-    /// Minimum achieved compression if compression is enabled. Compressing less
-    /// than this causes subsequent compression attempts to be skipped. The more
-    /// times compression misses the target the less frequently it is tried.
-    float minCompressionRatio{0.8};
 
     /// If true, the serializer will not employ any optimizations that can
     /// affect the encoding of the input vectors. This is only relevant when
@@ -160,32 +157,6 @@ class PrestoVectorSerde : public VectorSerde {
       const Options* opts,
       memory::MemoryPool* pool,
       std::ostream* output);
-
-  enum class TokenType {
-    HEADER,
-    NUM_COLUMNS,
-    COLUMN_ENCODING,
-    NUM_ROWS,
-    NULLS,
-    BYTE_ARRAY,
-    SHORT_ARRAY,
-    INT_ARRAY,
-    LONG_ARRAY,
-    INT128_ARRAY,
-    VARIABLE_WIDTH_DATA_SIZE,
-    VARIABLE_WIDTH_DATA,
-    DICTIONARY_INDICES,
-    DICTIONARY_ID,
-    HASH_TABLE_SIZE,
-    HASH_TABLE,
-    NUM_FIELDS,
-    OFFSETS,
-  };
-
-  struct Token {
-    TokenType tokenType;
-    uint32_t length;
-  };
 
   /**
    * This function lexes the PrestoPage encoded source into tokens so that

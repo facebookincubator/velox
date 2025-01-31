@@ -16,6 +16,7 @@
 #pragma once
 
 #include <folly/CPortability.h>
+#include <folly/Random.h>
 #include <folly/Range.h>
 #include <folly/dynamic.h>
 
@@ -487,6 +488,17 @@ class Type : public Tree<const TypePtr>, public velox::ISerializable {
 
   virtual std::string toString() const = 0;
 
+  /// Options to control the output of toSummaryString().
+  struct TypeSummaryOptions {
+    /// Maximum number of child types to include in the summary.
+    size_type maxChildren{0};
+  };
+
+  /// Returns human-readable summary of the type. Useful when full output of
+  /// toString() is too large.
+  std::string toSummaryString(
+      TypeSummaryOptions options = {.maxChildren = 0}) const;
+
   /// Types are weakly matched.
   /// Examples: Two RowTypes are equivalent if the children types are
   /// equivalent, but the children names could be different. Two OpaqueTypes are
@@ -674,7 +686,7 @@ class ScalarType : public CanProvideCustomComparisonType<KIND> {
   }
 
   const std::shared_ptr<const Type>& childAt(uint32_t) const override {
-    throw std::invalid_argument{"scalar type has no children"};
+    VELOX_FAIL("scalar type has no children");
   }
 
   std::string toString() const override {
@@ -1139,7 +1151,7 @@ class OpaqueType : public TypeBase<TypeKind::OPAQUE> {
   }
 
   const std::shared_ptr<const Type>& childAt(uint32_t) const override {
-    throw std::invalid_argument{"OpaqueType type has no children"};
+    VELOX_FAIL("OpaqueType type has no children");
   }
 
   std::string toString() const override;
@@ -1990,14 +2002,26 @@ namespace exec {
 class CastOperator;
 
 using CastOperatorPtr = std::shared_ptr<const CastOperator>;
-
 } // namespace exec
+
+/// Forward declaration.
+class variant;
+class AbstractInputGenerator;
+
+using AbstractInputGeneratorPtr = std::shared_ptr<AbstractInputGenerator>;
+using FuzzerGenerator = folly::detail::DefaultGenerator;
+
+struct InputGeneratorConfig {
+  // TODO: hook up the rest options in VectorFuzzer::Options.
+  size_t seed_;
+  double nullRatio_;
+};
 
 /// Associates custom types with their custom operators to be the payload in
 /// the custom type registry.
 class CustomTypeFactories {
  public:
-  virtual ~CustomTypeFactories() = default;
+  virtual ~CustomTypeFactories();
 
   /// Returns a shared pointer to the custom type.
   virtual TypePtr getType() const = 0;
@@ -2007,6 +2031,38 @@ class CustomTypeFactories {
   /// return a nullptr. If a custom type does not support castings, throw an
   /// exception.
   virtual exec::CastOperatorPtr getCastOperator() const = 0;
+
+  virtual AbstractInputGeneratorPtr getInputGenerator(
+      const InputGeneratorConfig& config) const = 0;
+};
+
+class AbstractInputGenerator {
+ public:
+  AbstractInputGenerator(
+      size_t seed,
+      const TypePtr& type,
+      std::unique_ptr<AbstractInputGenerator>&& next,
+      double nullRatio)
+      : type_{type}, next_{std::move(next)}, nullRatio_{nullRatio} {
+    rng_.seed(seed);
+  }
+
+  virtual ~AbstractInputGenerator();
+
+  virtual variant generate() = 0;
+
+  TypePtr type() const {
+    return type_;
+  }
+
+ protected:
+  FuzzerGenerator rng_;
+
+  TypePtr type_;
+
+  std::unique_ptr<AbstractInputGenerator> next_;
+
+  double nullRatio_;
 };
 
 /// Adds custom type to the registry if it doesn't exist already. No-op if
@@ -2072,6 +2128,11 @@ bool unregisterCustomType(const std::string& name);
 /// name. Returns nullptr if a type with the specified name does not exist or
 /// does not have a dedicated custom cast operator.
 exec::CastOperatorPtr getCustomTypeCastOperator(const std::string& name);
+
+/// Returns the input generator for the custom type with the specified name.
+AbstractInputGeneratorPtr getCustomTypeInputGenerator(
+    const std::string& name,
+    const InputGeneratorConfig& config);
 
 // Allows us to transparently use folly::toAppend(), folly::join(), etc.
 template <class TString>

@@ -24,12 +24,14 @@
 
 #include "velox/exec/fuzzer/ReferenceQueryRunner.h"
 #include "velox/expression/fuzzer/FuzzerRunner.h"
-#include "velox/functions/sparksql/Register.h"
+#include "velox/expression/fuzzer/SparkSpecialFormSignatureGenerator.h"
+#include "velox/functions/prestosql/fuzzer/FloorAndRoundArgGenerator.h"
 #include "velox/functions/sparksql/fuzzer/AddSubtractArgGenerator.h"
 #include "velox/functions/sparksql/fuzzer/DivideArgGenerator.h"
 #include "velox/functions/sparksql/fuzzer/MakeTimestampArgGenerator.h"
 #include "velox/functions/sparksql/fuzzer/MultiplyArgGenerator.h"
 #include "velox/functions/sparksql/fuzzer/UnscaledValueArgGenerator.h"
+#include "velox/functions/sparksql/registration/Register.h"
 
 using namespace facebook::velox::functions::sparksql::fuzzer;
 using facebook::velox::fuzzer::ArgGenerator;
@@ -92,6 +94,9 @@ int main(int argc, char** argv) {
        {"divide", std::make_shared<DivideArgGenerator>(true)},
        {"divide_deny_precision_loss",
         std::make_shared<DivideArgGenerator>(false)},
+       {"floor",
+        std::make_shared<
+            facebook::velox::exec::test::FloorAndRoundArgGenerator>()},
        {"unscaled_value", std::make_shared<UnscaledValueArgGenerator>()},
        {"make_timestamp", std::make_shared<MakeTimestampArgGenerator>()}};
 
@@ -102,5 +107,7 @@ int main(int argc, char** argv) {
       {{}},
       queryConfigs,
       argGenerators,
-      referenceQueryRunner);
+      referenceQueryRunner,
+      std::make_shared<
+          facebook::velox::fuzzer::SparkSpecialFormSignatureGenerator>());
 }

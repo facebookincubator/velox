@@ -26,12 +26,14 @@ add_executable(
   AtLeastNNonNullsTest.cpp
   BitwiseTest.cpp
   ComparisonsTest.cpp
+  ConcatWsTest.cpp
   DateTimeFunctionsTest.cpp
   DecimalArithmeticTest.cpp
   DecimalCompareTest.cpp
   DecimalRoundTest.cpp
   DecimalUtilTest.cpp
   ElementAtTest.cpp
+  GetJsonObjectTest.cpp
   HashTest.cpp
   InTest.cpp
   JsonObjectKeysTest.cpp

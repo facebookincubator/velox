@@ -45,22 +45,17 @@ class HdfsReadFile final : public ReadFile {
 
   bool shouldCoalesce() const final;
 
-  std::string getName() const final {
-    return filePath_;
-  }
+  std::string getName() const final;
 
   uint64_t getNaturalReadSize() const final {
     return 72 << 20;
   }
 
  private:
-  void preadInternal(uint64_t offset, uint64_t length, char* pos) const;
   void checkFileReadParameters(uint64_t offset, uint64_t length) const;
 
-  filesystems::arrow::io::internal::LibHdfsShim* driver_;
-  hdfsFS hdfsClient_;
-  hdfsFileInfo* fileInfo_;
-  std::string filePath_;
+  class Impl;
+  std::unique_ptr<Impl> pImpl;
 };
 
 } // namespace facebook::velox

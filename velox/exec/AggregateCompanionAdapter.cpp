@@ -183,8 +183,8 @@ char** AggregateCompanionAdapter::ExtractFunction::allocateGroups(
     memory::AllocationPool& allocationPool,
     const SelectivityVector& rows,
     uint64_t offsetInGroup) const {
-  auto* groups =
-      (char**)allocationPool.allocateFixed(sizeof(char*) * rows.end());
+  auto* groups = reinterpret_cast<char**>(
+      allocationPool.allocateFixed(sizeof(char*) * rows.end()));
 
   auto size = fn_->accumulatorFixedWidthSize();
   auto alignment = fn_->accumulatorAlignmentSize();
@@ -343,7 +343,7 @@ bool registerAggregateFunction(
                const auto& [originalResultType, _] =
                    resolveAggregateFunction(mergeExtractFunctionName, argTypes);
                if (!originalResultType) {
-                 // TODO: limitation -- result type must be resolveable given
+                 // TODO: limitation -- result type must be resolvable given
                  // intermediate type of the original UDAF.
                  VELOX_UNREACHABLE(
                      "Signatures whose result types are not resolvable given intermediate types should have been excluded.");
@@ -436,7 +436,7 @@ VectorFunctionFactory getVectorFunctionFactory(
 
     auto resultType = resolveVectorFunction(name, argTypes);
     if (!resultType) {
-      // TODO: limitation -- result type must be resolveable given
+      // TODO: limitation -- result type must be resolvable given
       // intermediate type of the original UDAF.
       VELOX_UNREACHABLE(
           "Signatures whose result types are not resolvable given intermediate types should have been excluded.");

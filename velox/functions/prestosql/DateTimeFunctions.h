@@ -1269,8 +1269,13 @@ struct DateAddFunction : public TimestampWithTimezoneSupport<T> {
         result = Timestamp(
             resultTimestamp.getSeconds() + offset, resultTimestamp.getNanos());
       } else {
-        resultTimestamp.toGMT(*sessionTimeZone_);
-        result = resultTimestamp;
+        result = Timestamp(
+            sessionTimeZone_
+                ->correct_nonexistent_time(
+                    std::chrono::seconds(resultTimestamp.getSeconds()))
+                .count(),
+            resultTimestamp.getNanos());
+        result.toGMT(*sessionTimeZone_);
       }
     } else {
       result = addToTimestamp(timestamp, unit, (int32_t)value);
@@ -1520,7 +1525,8 @@ struct FromIso8601Timestamp {
       return castResult.error();
     }
 
-    auto [ts, timeZone] = castResult.value();
+    auto [ts, timeZone, offsetMillis] = castResult.value();
+    VELOX_DCHECK(!offsetMillis.has_value());
     // Input string may not contain a timezone - if so, it is interpreted in
     // session timezone.
     if (!timeZone) {
