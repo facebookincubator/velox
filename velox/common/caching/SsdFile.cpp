@@ -244,7 +244,7 @@ void SsdFile::read(
     uint64_t offset,
     const std::vector<folly::Range<char*>>& buffers) {
   process::TraceContext trace("SsdFile::read");
-  readFile_->preadv(offset, buffers);
+  readFile_->preadv(offset, buffers, nullptr);
 }
 
 std::optional<std::pair<uint64_t, int32_t>> SsdFile::getSpace(
@@ -467,7 +467,7 @@ void SsdFile::verifyWrite(AsyncDataCacheEntry& entry, SsdRun ssdRun) {
   process::TraceContext trace("SsdFile::verifyWrite");
   auto testData = std::make_unique<char[]>(entry.size());
   const auto rc =
-      readFile_->pread(ssdRun.offset(), entry.size(), testData.get());
+      readFile_->pread(ssdRun.offset(), entry.size(), testData.get(), nullptr);
   VELOX_CHECK_EQ(rc.size(), entry.size());
   if (entry.tinyData() != nullptr) {
     if (::memcmp(testData.get(), entry.tinyData(), entry.size()) != 0) {
@@ -1008,7 +1008,7 @@ void SsdFile::readCheckpoint() {
   const auto logSize = evictLogReadFile->size();
   std::vector<uint32_t> evicted(logSize / sizeof(uint32_t));
   try {
-    evictLogReadFile->pread(0, logSize, evicted.data());
+    evictLogReadFile->pread(0, logSize, evicted.data(), nullptr);
   } catch (const std::exception& e) {
     ++stats_.readCheckpointErrors;
     VELOX_FAIL("Failed to read eviction log: {}", e.what());
