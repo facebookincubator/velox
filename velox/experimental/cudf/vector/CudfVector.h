@@ -49,9 +49,6 @@ class CudfVector : public RowVector {
   std::unique_ptr<cudf::table>&& release() {
     return std::move(table_);
   }
-  vector_size_t size() const {
-    return table_->num_rows();
-  }
 
  private:
   std::unique_ptr<cudf::table> table_;
