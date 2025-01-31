@@ -72,16 +72,19 @@ bool CompileState::compile() {
   };
 
   auto is_supported_gpu_operator = [&](const exec::Operator* op) {
-    return dynamic_cast<const exec::HashBuild*>(op) != nullptr or
+    return dynamic_cast<const exec::TableScan*>(op) != nullptr or
+        dynamic_cast<const exec::HashBuild*>(op) != nullptr or
         dynamic_cast<const exec::HashProbe*>(op) != nullptr or
         dynamic_cast<const exec::OrderBy*>(op) != nullptr;
   };
+  std::vector<bool> is_supported_gpu_operators(operators.size());
+  std::transform(
+      operators.begin(),
+      operators.end(),
+      is_supported_gpu_operators.begin(),
+      is_supported_gpu_operator);
 
-  // if next operator is not GPU, add CudfToVelox
-  bool is_prev_gpu_op = false;
   int32_t operatorsOffset = 0;
-  // Replace HashBuild and HashProbe operators with CudfHashJoinBuild and
-  // CudfHashJoinProbe operators.
   for (int32_t operatorIndex = 0; operatorIndex < operators.size();
        ++operatorIndex) {
     std::vector<std::unique_ptr<exec::Operator>> replace_op;
@@ -90,15 +93,19 @@ bool CompileState::compile() {
     auto replacingOperatorIndex = operatorIndex + operatorsOffset;
     VELOX_CHECK(oper);
 
+    bool const previous_operator_is_not_gpu =
+        (operatorIndex > 0 and !is_supported_gpu_operators[operatorIndex - 1]);
+    bool const next_operator_is_not_gpu =
+        (operatorIndex < operators.size() - 1 and
+         !is_supported_gpu_operators[operatorIndex + 1]);
+
     // TableScan
     if (auto scanOp = dynamic_cast<exec::TableScan*>(oper)) {
       auto id = scanOp->operatorId();
       auto plan_node = std::dynamic_pointer_cast<const core::TableScanNode>(
           get_plan_node(scanOp->planNodeId()));
       VELOX_CHECK(plan_node != nullptr);
-      // Check if next operator is one of supported.
-      if (operatorIndex + 1 < operators.size() and
-          (!is_supported_gpu_operator(operators[operatorIndex + 1]))) {
+      if (next_operator_is_not_gpu) {
         replace_op.push_back(std::make_unique<CudfToVelox>(
             id, plan_node->outputType(), ctx, plan_node->id() + "-to-velox"));
         replace_op[0]->initialize();
@@ -109,16 +116,13 @@ bool CompileState::compile() {
             replacingOperatorIndex + 1,
             std::move(replace_op));
         replacements_made = true;
-        is_prev_gpu_op = false;
-      } else {
-        is_prev_gpu_op = true;
       }
     } else if (auto joinBuildOp = dynamic_cast<exec::HashBuild*>(oper)) {
       auto id = joinBuildOp->operatorId();
       auto plan_node = std::dynamic_pointer_cast<const core::HashJoinNode>(
           get_plan_node(joinBuildOp->planNodeId()));
       VELOX_CHECK(plan_node != nullptr);
-      if (!is_prev_gpu_op) {
+      if (previous_operator_is_not_gpu) {
         replace_op.push_back(std::make_unique<CudfFromVelox>(
             id, plan_node->outputType(), ctx, plan_node->id() + "-from-velox"));
         replace_op.back()->initialize();
@@ -126,7 +130,6 @@ bool CompileState::compile() {
       replace_op.push_back(
           std::make_unique<CudfHashJoinBuild>(id, ctx, plan_node));
       replace_op.back()->initialize();
-      is_prev_gpu_op = false;
 
       operatorsOffset += replace_op.size() - 1;
       [[maybe_unused]] auto replaced = driverFactory_.replaceOperators(
@@ -140,7 +143,7 @@ bool CompileState::compile() {
       auto plan_node = std::dynamic_pointer_cast<const core::HashJoinNode>(
           get_plan_node(joinProbeOp->planNodeId()));
       VELOX_CHECK(plan_node != nullptr);
-      if (!is_prev_gpu_op) {
+      if (previous_operator_is_not_gpu) {
         replace_op.push_back(std::make_unique<CudfFromVelox>(
             id, plan_node->outputType(), ctx, plan_node->id() + "-from-velox"));
         replace_op.back()->initialize();
@@ -148,15 +151,10 @@ bool CompileState::compile() {
       replace_op.push_back(
           std::make_unique<CudfHashJoinProbe>(id, ctx, plan_node));
       replace_op.back()->initialize();
-      // Check if next operator is one of supported.
-      if (operatorIndex + 1 < operators.size() and
-          (!is_supported_gpu_operator(operators[operatorIndex + 1]))) {
+      if (next_operator_is_not_gpu) {
         replace_op.push_back(std::make_unique<CudfToVelox>(
             id, plan_node->outputType(), ctx, plan_node->id() + "-to-velox"));
         replace_op.back()->initialize();
-        is_prev_gpu_op = false;
-      } else {
-        is_prev_gpu_op = true;
       }
 
       operatorsOffset += replace_op.size() - 1;
@@ -171,22 +169,17 @@ bool CompileState::compile() {
       auto plan_node = std::dynamic_pointer_cast<const core::OrderByNode>(
           get_plan_node(orderByOp->planNodeId()));
       VELOX_CHECK(plan_node != nullptr);
-      if (!is_prev_gpu_op) {
+      if (previous_operator_is_not_gpu) {
         replace_op.push_back(std::make_unique<CudfFromVelox>(
             id, plan_node->outputType(), ctx, plan_node->id() + "-from-velox"));
         replace_op.back()->initialize();
       }
       replace_op.push_back(std::make_unique<CudfOrderBy>(id, ctx, plan_node));
       replace_op.back()->initialize();
-      // Check if next operator is one of supported.
-      if (operatorIndex + 1 < operators.size() and
-          (!is_supported_gpu_operator(operators[operatorIndex + 1]))) {
+      if (next_operator_is_not_gpu) {
         replace_op.push_back(std::make_unique<CudfToVelox>(
             id, plan_node->outputType(), ctx, plan_node->id() + "-to-velox"));
         replace_op.back()->initialize();
-        is_prev_gpu_op = false;
-      } else {
-        is_prev_gpu_op = true;
       }
 
       operatorsOffset += replace_op.size() - 1;
@@ -196,8 +189,6 @@ bool CompileState::compile() {
           replacingOperatorIndex + 1,
           std::move(replace_op));
       replacements_made = true;
-    } else {
-      is_prev_gpu_op = false;
     }
   }
 
