@@ -33,6 +33,7 @@
 #include "velox/parse/TypeResolver.h"
 
 #include "velox/experimental/cudf/connectors/parquet/ParquetTableHandle.h"
+#include "velox/experimental/cudf/tests/utils/ParquetConnectorTestBase.h"
 
 using namespace facebook::velox;
 using namespace facebook::velox::connector;
@@ -118,9 +119,12 @@ PlanBuilder& PlanBuilder::cudftableScan(
     const std::unordered_map<
         std::string,
         std::shared_ptr<connector::ColumnHandle>>& assignments) {
-  
-   auto tableHandle = std::make_shared<cudf_velox::connector::parquet::ParquetTableHandle>(
-        "test-parquet", tableName, /*filterPushdownEnabled*/ false, dataColumns);
+  auto tableHandle =
+      std::make_shared<cudf_velox::connector::parquet::ParquetTableHandle>(
+          cudf_velox::exec::test::kParquetConnectorId,
+          tableName,
+          /*filterPushdownEnabled*/ false,
+          dataColumns);
   return TableScanBuilder(*this)
       .tableName(tableName)
       .tableHandle(tableHandle)
