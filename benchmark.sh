@@ -36,7 +36,7 @@ output_batch_rows=100000
 
 # Please set these values based on your requirement
 cudf_chunk_read_limit=1024000
-cudf_pass_read_limit=1024000
+cudf_pass_read_limit=0
 
 
 for query_number in ${queries}; do
