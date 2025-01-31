@@ -28,7 +28,7 @@
 namespace facebook::velox::filesystems {
 
 class AbfsReadFile::Impl {
-  constexpr static uint64_t kNaturalReadSize = 4 << 20; // 4M
+  constexpr static uint64_t kNaturalReadSize = 4UL << 20; // 4M
   constexpr static uint64_t kReadConcurrency = 8;
 
  public:

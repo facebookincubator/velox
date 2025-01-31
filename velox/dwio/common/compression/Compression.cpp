@@ -149,8 +149,8 @@ ZlibDecompressor::ZlibDecompressor(
   zstream_.opaque = Z_NULL;
   zstream_.next_out = Z_NULL;
   zstream_.avail_out = folly::to<uInt>(blockSize);
-  int zlibWindowBits = windowBits;
-  constexpr int GZIP_DETECT_CODE = 32;
+  unsigned int zlibWindowBits = windowBits;
+  constexpr unsigned int GZIP_DETECT_CODE = 32;
   if (isGzip) {
     zlibWindowBits = zlibWindowBits | GZIP_DETECT_CODE;
   }

@@ -161,7 +161,7 @@ class S3ReadFile final : public ReadFile {
   }
 
   uint64_t getNaturalReadSize() const final {
-    return 72 << 20;
+    return 72UL << 20;
   }
 
  private:

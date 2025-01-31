@@ -60,7 +60,7 @@ void PagedInputStream::readHeader() {
   if (state_ != State::END) {
     header |= readByte(true) << 8;
     header |= readByte(true) << 16;
-    if (header & 1) {
+    if (header & 1u) {
       state_ = State::ORIGINAL;
     } else {
       state_ = State::START;
