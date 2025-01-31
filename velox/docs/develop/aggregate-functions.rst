@@ -184,13 +184,13 @@ function's argument type(s) wrapped in a Row<> even if the function only takes
 one argument. This is needed for the SimpleAggregateAdapter to parse input
 types for arbitrary aggregation functions properly.
 
-Some function-level variables needs to be declared in the simple aggregation
-function class. These variables are initialized once when the aggregation
-function is created and used at every row when adding inputs to accumulators
-or extracting values from accumulators. For example, if the aggregation
-function needs to get the result type or the raw input type of the aggregation
-function, the author can hold them in the aggregate class variables, and
-initialize them in the initialize() method.
+The author can optionally define function-level variables in the simple
+aggregation function class. These variables are initialized once when the
+aggregation function is created and used at every row when adding inputs to
+accumulators or extracting values from accumulators. For example, if the
+aggregation function needs to get the result type or the raw input type of the
+aggregation function, these types can be defined as member variables in the
+aggregate class and initialized in the initialize() method.
 
 The author can define an optional flag `default_null_behavior_` indicating
 whether the aggregation function has default-null behavior. This flag is true
@@ -271,7 +271,8 @@ For aggregaiton functions of default-null behavior, the author defines an
     // Author defines data members
     ...
 
-    // Define a pointer to the UDAF class.
+    // Optional. Define a pointer to the UDAF class if the aggregation
+    // function uses function-level variables.
     ArrayAggAggregate* fn_;
 
     // Optional. Default is true.
