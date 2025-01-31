@@ -82,16 +82,11 @@ bool registerConnector(std::shared_ptr<Connector> connector) {
 }
 
 bool unregisterConnector(const std::string& connectorId) {
-  LOG(ERROR) << "unregisterConnector connectorId: " << connectorId;
   auto count = connectors().erase(connectorId);
   return count == 1;
 }
 
 std::shared_ptr<Connector> getConnector(const std::string& connectorId) {
-  LOG(ERROR) << connectorId;
-  for (const auto& connector : connectors()) {
-    LOG(ERROR) << connector.first << " " << (connector.first == connectorId);
-  }
   auto it = connectors().find(connectorId);
   VELOX_CHECK(
       it != connectors().end(),

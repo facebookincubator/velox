@@ -64,7 +64,6 @@ IndexLookupJoin::IndexLookupJoin(
       expressionEvaluator_(connectorQueryCtx_->expressionEvaluator()),
       connector_(connector::getConnector(lookupTableHandle_->connectorId())),
       joinNode_{joinNode} {
-  VELOX_CHECK_EQ(joinNode_->sources()[1], joinNode_->lookupSource());
   duplicateJoinKeyCheck(joinNode_->leftKeys());
   duplicateJoinKeyCheck(joinNode_->rightKeys());
 }
