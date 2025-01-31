@@ -781,7 +781,7 @@ class Operator : public BaseRuntimeStatWriter {
 
   bool initialized_{false};
 
-  folly::Synchronized<OperatorStats> stats_;
+  folly::ImplicitSynchronized<OperatorStats> stats_;
   folly::Synchronized<common::SpillStats> spillStats_;
 
   /// NOTE: only one of the two could be set for an operator for tracing .
