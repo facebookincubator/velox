@@ -144,14 +144,8 @@ bool re2Extract(
     }
   } else {
     const re2::StringPiece extracted = groups[groupId];
-    // Check if the extracted data is null.
-    if (extracted.data()) {
-      result.setNoCopy(row, StringView(extracted.data(), extracted.size()));
-      return !StringView::isInline(extracted.size());
-    } else {
-      result.setNull(row, true);
-      return false;
-    }
+    result.setNoCopy(row, StringView(extracted.data(), extracted.size()));
+    return !StringView::isInline(extracted.size());
   }
 }
 

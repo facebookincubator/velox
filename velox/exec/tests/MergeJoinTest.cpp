@@ -838,6 +838,190 @@ TEST_F(MergeJoinTest, semiJoin) {
       core::JoinType::kRightSemiFilter);
 }
 
+TEST_F(MergeJoinTest, semiJoinWithMultiMatchedRowsInDifferentBatches) {
+  auto left =
+      makeRowVector({"t0"}, {makeNullableFlatVector<int64_t>({2, 2, 2, 2, 2})});
+
+  auto right = makeRowVector(
+      {"u0"}, {makeNullableFlatVector<int64_t>({2, 2, 2, 2, 2, 2})});
+
+  createDuckDbTable("t", {left});
+  createDuckDbTable("u", {right});
+
+  auto testSemiJoin = [&](const std::string& filter,
+                          const std::string& sql,
+                          const std::vector<std::string>& outputLayout,
+                          core::JoinType joinType) {
+    auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+    auto plan = PlanBuilder(planNodeIdGenerator)
+                    .values(split(left, 2))
+                    .mergeJoin(
+                        {"t0"},
+                        {"u0"},
+                        PlanBuilder(planNodeIdGenerator)
+                            .values(split(right, 2))
+                            .planNode(),
+                        filter,
+                        outputLayout,
+                        joinType)
+                    .planNode();
+    AssertQueryBuilder(plan, duckDbQueryRunner_)
+        .config(core::QueryConfig::kPreferredOutputBatchRows, "2")
+        .config(core::QueryConfig::kMaxOutputBatchRows, "2")
+        .assertResults(sql);
+  };
+
+  // Without filter
+  testSemiJoin(
+      "",
+      "SELECT t0 FROM t where t0 IN (SELECT u0 from u)",
+      {"t0"},
+      core::JoinType::kLeftSemiFilter);
+  testSemiJoin(
+      "",
+      "SELECT u0 FROM u where u0 IN (SELECT t0 from t)",
+      {"u0"},
+      core::JoinType::kRightSemiFilter);
+
+  // With filter
+  testSemiJoin(
+      "t0 >1",
+      "SELECT t0 FROM t where t0 IN (SELECT u0 from u) and t0 > 1",
+      {"t0"},
+      core::JoinType::kLeftSemiFilter);
+  testSemiJoin(
+      "u0 > 1",
+      "SELECT u0 FROM u where u0 IN (SELECT t0 from t) and u0 > 1",
+      {"u0"},
+      core::JoinType::kRightSemiFilter);
+}
+
+TEST_F(MergeJoinTest, leftJoinWithFilter) {
+  auto left = makeRowVector({"t0"}, {makeNullableFlatVector<int64_t>({1, 1})});
+
+  auto right = makeRowVector({"u0"}, {makeNullableFlatVector<int64_t>({1, 1})});
+
+  createDuckDbTable("t", {left});
+  createDuckDbTable("u", {right});
+
+  // Anti join.
+  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  auto plan = PlanBuilder(planNodeIdGenerator)
+                  .values({split(left, 2)})
+                  .mergeJoin(
+                      {"t0"},
+                      {"u0"},
+                      PlanBuilder(planNodeIdGenerator)
+                          .values(split(right, 2))
+                          .planNode(),
+                      "t0 > 2",
+                      {"t0"},
+                      core::JoinType::kLeft)
+                  .planNode();
+
+  AssertQueryBuilder(plan, duckDbQueryRunner_)
+      .config(core::QueryConfig::kPreferredOutputBatchRows, "2")
+      .config(core::QueryConfig::kMaxOutputBatchRows, "2")
+      .assertResults(
+          "SELECT t0 FROM t WHERE NOT exists (select 1 from u where t0 = u0 AND t.t0 > 2 ) ");
+}
+
+TEST_F(
+    MergeJoinTest,
+    antiJoinWithFilterWithMultiMatchedRowsInDifferentBatches) {
+  auto left =
+      makeRowVector({"t0"}, {makeNullableFlatVector<int64_t>({1, 2, 3})});
+
+  auto right =
+      makeRowVector({"u0"}, {makeNullableFlatVector<int64_t>({1, 2, 3})});
+
+  createDuckDbTable("t", {left});
+  createDuckDbTable("u", {right});
+
+  // Anti join.
+  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  auto plan = PlanBuilder(planNodeIdGenerator)
+                  .values({split(left, 2)})
+                  .mergeJoin(
+                      {"t0"},
+                      {"u0"},
+                      PlanBuilder(planNodeIdGenerator)
+                          .values(split(right, 2))
+                          .planNode(),
+                      "t0 > 2",
+                      {"t0"},
+                      core::JoinType::kAnti)
+                  .planNode();
+
+  AssertQueryBuilder(plan, duckDbQueryRunner_)
+      .config(core::QueryConfig::kPreferredOutputBatchRows, "2")
+      .config(core::QueryConfig::kMaxOutputBatchRows, "2")
+      .assertResults(
+          "SELECT t0 FROM t WHERE NOT exists (select 1 from u where t0 = u0 AND t.t0 > 2 ) ");
+}
+
+TEST_F(MergeJoinTest, antiJoinWithFilterWithMultiMatchedRows) {
+  auto left = makeRowVector({"t0"}, {makeNullableFlatVector<int64_t>({1, 2})});
+
+  auto right =
+      makeRowVector({"u0"}, {makeNullableFlatVector<int64_t>({1, 2, 2, 2})});
+
+  createDuckDbTable("t", {left});
+  createDuckDbTable("u", {right});
+
+  // Anti join.
+  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  auto plan =
+      PlanBuilder(planNodeIdGenerator)
+          .values({left})
+          .mergeJoin(
+              {"t0"},
+              {"u0"},
+              PlanBuilder(planNodeIdGenerator).values({right}).planNode(),
+              "t0 > 2",
+              {"t0"},
+              core::JoinType::kAnti)
+          .planNode();
+
+  AssertQueryBuilder(plan, duckDbQueryRunner_)
+      .assertResults(
+          "SELECT t0 FROM t WHERE NOT exists (select 1 from u where t0 = u0 AND t.t0 > 2 ) ");
+}
+
+TEST_F(MergeJoinTest, antiJoinWithTwoJoinKeysInDifferentBatch) {
+  auto left = makeRowVector(
+      {"a", "b"},
+      {makeNullableFlatVector<int32_t>({1, 1, 1, 1}),
+       makeNullableFlatVector<double>({3.0, 3.0, 3.0, 3.0})});
+
+  auto right = makeRowVector(
+      {"c", "d"},
+      {makeNullableFlatVector<int32_t>({1, 1, 1}),
+       makeNullableFlatVector<double>({2.0, 2.0, 4.0})});
+
+  createDuckDbTable("t", {left});
+  createDuckDbTable("u", {right});
+
+  // Anti join.
+  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  auto plan = PlanBuilder(planNodeIdGenerator)
+                  .values({split(left, 2)})
+                  .mergeJoin(
+                      {"a"},
+                      {"c"},
+                      PlanBuilder(planNodeIdGenerator)
+                          .values({split(right, 2)})
+                          .planNode(),
+                      "b < d",
+                      {"a", "b"},
+                      core::JoinType::kAnti)
+                  .planNode();
+
+  AssertQueryBuilder(plan, duckDbQueryRunner_)
+      .assertResults(
+          "SELECT * FROM t WHERE NOT exists (select * from u where t.a = u.c and t.b < u.d)");
+}
+
 TEST_F(MergeJoinTest, rightJoin) {
   auto left = makeRowVector(
       {"t0"},
@@ -1126,6 +1310,45 @@ TEST_F(MergeJoinTest, fullOuterJoin) {
   AssertQueryBuilder(plan, duckDbQueryRunner_)
       .assertResults(
           "SELECT * FROM t FULL OUTER JOIN u ON t.t0 = u.u0 AND t.t0 > 2");
+}
+
+TEST_F(MergeJoinTest, fullOuterJoinWithDuplicateMatch) {
+  // Each row on the left side has at most one match on the right side.
+  auto left = makeRowVector(
+      {"a", "b"},
+      {
+          makeNullableFlatVector<int32_t>({1, 2, 2, 2, 3, 5, 6, std::nullopt}),
+          makeNullableFlatVector<double>(
+              {2.0, 100.0, 1.0, 1.0, 3.0, 1.0, 6.0, std::nullopt}),
+      });
+
+  auto right = makeRowVector(
+      {"c", "d"},
+      {
+          makeNullableFlatVector<int32_t>(
+              {0, 2, 2, 2, 2, 3, 4, 5, 7, std::nullopt}),
+          makeNullableFlatVector<double>(
+              {0.0, 3.0, -1.0, -1.0, 3.0, 2.0, 1.0, 3.0, 7.0, std::nullopt}),
+      });
+
+  createDuckDbTable("t", {left});
+  createDuckDbTable("u", {right});
+
+  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+
+  auto rightPlan =
+      PlanBuilder(planNodeIdGenerator)
+          .values({left})
+          .mergeJoin(
+              {"a"},
+              {"c"},
+              PlanBuilder(planNodeIdGenerator).values({right}).planNode(),
+              "b < d",
+              {"a", "b", "c", "d"},
+              core::JoinType::kFull)
+          .planNode();
+  AssertQueryBuilder(rightPlan, duckDbQueryRunner_)
+      .assertResults("SELECT * from t FULL OUTER JOIN u ON a = c AND b < d");
 }
 
 TEST_F(MergeJoinTest, fullOuterJoinNoFilter) {

@@ -21,7 +21,8 @@ namespace facebook::velox::functions::aggregate {
 void checkAvgIntermediateType(const TypePtr& type) {
   VELOX_USER_CHECK(
       type->isRow() || type->isVarbinary(),
-      "Input type for final average must be row type or varbinary type.");
+      "Input type for final average must be row type or varbinary type, find {}",
+      type->toString());
   if (type->kind() == TypeKind::VARBINARY) {
     return;
   }
