@@ -31,8 +31,8 @@ queries=${1:-$(seq 1 22)}
 devices=${2:-"cpu gpu"}
 profile=${3:-"false"}
 
-num_drivers=16
-output_batch_rows=100000
+num_drivers=${NUM_DRIVERS:-16}
+output_batch_rows=${BATCH_SIZE_ROWS:-100000}
 
 for query_number in ${queries}; do
     printf -v query_number '%02d' "${query_number}"
