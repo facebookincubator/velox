@@ -17,6 +17,8 @@
 
 #include <optional>
 #include <string>
+
+#include "folly/String.h"
 #include "velox/common/base/Exceptions.h"
 
 namespace facebook::velox::config {

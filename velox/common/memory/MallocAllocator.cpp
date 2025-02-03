@@ -17,6 +17,8 @@
 #include "velox/common/memory/MallocAllocator.h"
 #include "velox/common/memory/Memory.h"
 
+#include "folly/String.h"
+
 #include <sys/mman.h>
 
 namespace facebook::velox::memory {

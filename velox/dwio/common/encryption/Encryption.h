@@ -16,6 +16,7 @@
 
 #pragma once
 
+#include <folly/String.h>
 #include "folly/Range.h"
 #include "folly/io/IOBuf.h"
 #include "velox/dwio/common/exception/Exception.h"

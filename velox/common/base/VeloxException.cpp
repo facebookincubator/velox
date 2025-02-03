@@ -268,10 +268,10 @@ void VeloxException::State::finalize() const {
     elaborateMessage += "Stack trace has been disabled.";
     if (exceptionType == VeloxException::Type::kSystem) {
       elaborateMessage +=
-          " Use --velox_exception_system_stacktrace_enabled=true to enable it.\n";
+          " Use config::globalConfig.exceptionSystemStacktraceEnabled=true to enable it.\n";
     } else {
       elaborateMessage +=
-          " Use --velox_exception_user_stacktrace_enabled=true to enable it.\n";
+          " Use config::globalConfig.exceptionUserStacktraceEnabled=true to enable it.\n";
     }
   }
 }

@@ -16,11 +16,18 @@
 
 #include <fmt/format.h>
 #include <folly/Random.h>
+#include <gflags/gflags.h>
 #include <gtest/gtest.h>
 
 #include "velox/common/base/Exceptions.h"
 #include "velox/common/config/GlobalConfig.h"
 #include "velox/flag_definitions/flags.h"
+
+DECLARE_bool(velox_exception_user_stacktrace_enabled);
+DECLARE_bool(velox_exception_system_stacktrace_enabled);
+
+DECLARE_int32(velox_exception_user_stacktrace_rate_limit_ms);
+DECLARE_int32(velox_exception_system_stacktrace_rate_limit_ms);
 
 using namespace facebook::velox;
 

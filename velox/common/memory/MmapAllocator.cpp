@@ -18,6 +18,8 @@
 
 #include <sys/mman.h>
 
+#include "folly/String.h"
+
 #include "velox/common/base/Counters.h"
 #include "velox/common/base/Portability.h"
 #include "velox/common/base/StatsReporter.h"

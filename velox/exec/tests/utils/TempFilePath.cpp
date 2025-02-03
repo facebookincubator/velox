@@ -15,6 +15,7 @@
  */
 
 #include "velox/exec/tests/utils/TempFilePath.h"
+#include <folly/String.h>
 
 namespace facebook::velox::exec::test {
 
