@@ -59,7 +59,7 @@ if(VELOX_ENABLE_ARROW)
 
   set(VELOX_ARROW_BUILD_VERSION 16.1.0)
   set(VELOX_ARROW_BUILD_SHA256_CHECKSUM
-      c9e60c7e87e59383d21b20dc874b17153729ee153264af6d21654b7dff2c60d7)
+      9762d9ecc13d09de2a03f9c625a74db0d645cb012de1e9a10dfed0b4ddc09524)
   set(VELOX_ARROW_SOURCE_URL
       "https://github.com/apache/arrow/archive/refs/tags/apache-arrow-${VELOX_ARROW_BUILD_VERSION}.tar.gz"
   )
