@@ -928,7 +928,8 @@ class VaryingLengthScalarType : public ScalarType<KIND> {
     }
     const auto& otherType =
         static_cast<const VaryingLengthScalarType<KIND>&>(other);
-    return (otherType.length() == length());
+    // Allow match if this is unbounded and the other is bounded.
+    return (length() == kUnboundedLength || otherType.length() == length());
   }
 
   const char* name() const override {
