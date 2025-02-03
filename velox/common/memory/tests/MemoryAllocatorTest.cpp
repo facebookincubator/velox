@@ -27,6 +27,7 @@
 #include <fmt/format.h>
 #include <folly/Random.h>
 #include <folly/Range.h>
+#include <folly/String.h>
 #include <gflags/gflags.h>
 #include <gmock/gmock-matchers.h>
 #include <gtest/gtest.h>
