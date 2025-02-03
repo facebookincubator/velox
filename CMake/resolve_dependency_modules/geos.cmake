@@ -11,27 +11,22 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-velox_add_library(
-  velox_presto_types
-  GeometryType.cpp
-  HyperLogLogType.cpp
-  JsonType.cpp
-  TimestampWithTimeZoneType.cpp
-  UuidType.cpp
-  IPAddressType.cpp
-  IPPrefixType.cpp)
+include_guard(GLOBAL)
 
-velox_link_libraries(
-  velox_presto_types
-  GEOS::geos
-  velox_type
-  velox_memory
-  velox_expression
-  velox_functions_util
-  velox_functions_json
-  velox_functions_lib_date_time_formatter
-  velox_constrained_input_generators)
+# GEOS Configuration
+set(VELOX_GEOS_BUILD_VERSION 3.11.1)
+set(VELOX_GEOS_BUILD_SHA256_CHECKSUM
+        6d0eb3cfa9f92d947731cc75f1750356b3bdfc07ea020553daf6af1c768e0be2)
+string(
+        CONCAT
+        VELOX_GEOS_SOURCE_URL "https://download.osgeo.org/geos/"
+        "geos-${VELOX_GEOS_BUILD_VERSION}.tar.bz2")
 
-if(${VELOX_BUILD_TESTING})
-  add_subdirectory(tests)
-endif()
+velox_resolve_dependency_url(GEOS)
+
+FetchContent_Declare(
+        geos
+        URL ${VELOX_GEOS_SOURCE_URL}
+        URL_HASH ${VELOX_GEOS_BUILD_SHA256_CHECKSUM}
+)
+FetchContent_MakeAvailable(geos)
