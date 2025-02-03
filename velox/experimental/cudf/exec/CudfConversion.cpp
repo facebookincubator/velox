@@ -154,10 +154,6 @@ void CudfToVelox::addInput(RowVectorPtr input) {
   }
 }
 
-void CudfToVelox::noMoreInput() {
-  exec::Operator::noMoreInput();
-}
-
 RowVectorPtr CudfToVelox::getOutput() {
   NVTX3_FUNC_RANGE();
   if (finished_ || inputs_.empty()) {

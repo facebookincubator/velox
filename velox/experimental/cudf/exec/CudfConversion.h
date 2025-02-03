@@ -44,8 +44,6 @@ class CudfFromVelox : public exec::Operator {
 
   void addInput(RowVectorPtr input) override;
 
-  void noMoreInput() override;
-
   RowVectorPtr getOutput() override;
 
   exec::BlockingReason isBlocked(ContinueFuture* /*future*/) override {
@@ -77,8 +75,6 @@ class CudfToVelox : public exec::Operator {
   }
 
   void addInput(RowVectorPtr input) override;
-
-  void noMoreInput() override;
 
   RowVectorPtr getOutput() override;
 
