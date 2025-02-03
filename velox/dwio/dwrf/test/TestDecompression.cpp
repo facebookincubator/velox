@@ -644,7 +644,7 @@ class CompressBuffer {
   }
 
   void writeUncompressedHeader(size_t compressedSize) {
-    buf[0] = static_cast<char>(compressedSize << 1) | 1;
+    buf[0] = static_cast<unsigned char>(compressedSize << 1) | 1u;
     buf[1] = static_cast<char>(compressedSize >> 7);
     buf[2] = static_cast<char>(compressedSize >> 15);
   }

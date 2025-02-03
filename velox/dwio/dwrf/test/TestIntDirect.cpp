@@ -184,7 +184,7 @@ TEST_F(DirectTest, vIntSignedLong) {
     auto mod = ++count % 33;
     auto numBytes = mod < 9 ? 1 : mod < 14 ? 2 : mod < 17 ? 3 : mod % 9;
     auto value = folly::Random::rand64(rng) & ((1UL << (7 * numBytes)) - 1);
-    return folly::Random::rand32(rng) & 1 ? -value : value;
+    return folly::Random::rand32(rng) & 1u ? -value : value;
   });
 }
 
