@@ -32,6 +32,11 @@
 
 namespace facebook::velox::cudf_velox {
 
+template <class... Deriveds, class Base>
+bool is_any_of(const Base* p) {
+  return ((dynamic_cast<const Deriveds*>(p) != nullptr) || ...);
+}
+
 static bool _cudfIsRegistered = false;
 
 bool CompileState::compile() {
@@ -71,11 +76,12 @@ bool CompileState::compile() {
     return *it;
   };
 
-  auto is_supported_gpu_operator = [&](const exec::Operator* op) {
-    return dynamic_cast<const exec::TableScan*>(op) != nullptr or
-        dynamic_cast<const exec::HashBuild*>(op) != nullptr or
-        dynamic_cast<const exec::HashProbe*>(op) != nullptr or
-        dynamic_cast<const exec::OrderBy*>(op) != nullptr;
+  auto is_supported_gpu_operator = [](const exec::Operator* op) {
+    return is_any_of<
+        exec::TableScan,
+        exec::HashBuild,
+        exec::HashProbe,
+        exec::OrderBy>(op);
   };
   std::vector<bool> is_supported_gpu_operators(operators.size());
   std::transform(
