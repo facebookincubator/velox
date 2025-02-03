@@ -195,6 +195,8 @@ HiveDataSource::HiveDataSource(
       partitionKeys_,
       infoColumns_,
       specialColumns_,
+      hiveConfig_->readStatsBasedFilterReorderDisabled(
+          connectorQueryCtx_->sessionProperties()),
       pool_);
   if (remainingFilter) {
     metadataFilter_ = std::make_shared<common::MetadataFilter>(
@@ -260,6 +262,8 @@ std::unique_ptr<HivePartitionFunction> HiveDataSource::setupBucketConversion() {
         partitionKeys_,
         infoColumns_,
         specialColumns_,
+        hiveConfig_->readStatsBasedFilterReorderDisabled(
+            connectorQueryCtx_->sessionProperties()),
         pool_);
     newScanSpec->moveAdaptationFrom(*scanSpec_);
     scanSpec_ = std::move(newScanSpec);
@@ -508,6 +512,11 @@ std::unordered_map<std::string, RuntimeCounter> HiveDataSource::runtimeStats() {
   }
   if (numBucketConversion_ > 0) {
     res.insert({"numBucketConversion", RuntimeCounter(numBucketConversion_)});
+  }
+  for (const auto& storageStats : ioStats_->storageStats()) {
+    res.emplace(
+        storageStats.first,
+        RuntimeCounter(storageStats.second.sum, storageStats.second.unit));
   }
   return res;
 }

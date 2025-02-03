@@ -26,6 +26,7 @@
 #include "velox/exec/HashAggregation.h"
 #include "velox/exec/HashBuild.h"
 #include "velox/exec/HashProbe.h"
+#include "velox/exec/IndexLookupJoin.h"
 #include "velox/exec/Limit.h"
 #include "velox/exec/MarkDistinct.h"
 #include "velox/exec/Merge.h"
@@ -69,6 +70,12 @@ bool mustStartNewPipeline(
 
   // Non-first sources always run in their own pipeline.
   return sourceId != 0;
+}
+
+bool isIndexLookupJoin(core::PlanNodePtr planNode) {
+  const auto indexLookupJoin =
+      std::dynamic_pointer_cast<const core::IndexLookupJoinNode>(planNode);
+  return indexLookupJoin != nullptr;
 }
 
 // Creates the customized local partition operator for table writer scaling.
@@ -174,7 +181,9 @@ void plan(
   if (sources.empty()) {
     driverFactories->back()->inputDriver = true;
   } else {
-    for (int32_t i = 0; i < sources.size(); ++i) {
+    const auto numSourcesToPlan =
+        isIndexLookupJoin(planNode) ? 1 : sources.size();
+    for (int32_t i = 0; i < numSourcesToPlan; ++i) {
       plan(
           sources[i],
           mustStartNewPipeline(planNode, i) ? nullptr : currentPlanNodes,
@@ -523,6 +532,12 @@ std::shared_ptr<Driver> DriverFactory::createDriver(
                 planNode)) {
       operators.push_back(
           std::make_unique<NestedLoopJoinProbe>(id, ctx.get(), joinNode));
+    } else if (
+        auto joinNode =
+            std::dynamic_pointer_cast<const core::IndexLookupJoinNode>(
+                planNode)) {
+      operators.push_back(
+          std::make_unique<IndexLookupJoin>(id, ctx.get(), joinNode));
     } else if (
         auto aggregationNode =
             std::dynamic_pointer_cast<const core::AggregationNode>(planNode)) {

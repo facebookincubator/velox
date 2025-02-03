@@ -385,7 +385,7 @@ void AggregationFuzzer::go() {
         auto partitionKeys = generateKeys("p", argNames, argTypes);
         auto sortingKeys = generateSortingKeys("s", argNames, argTypes);
         auto input = generateInputDataWithRowNumber(
-            argNames, argTypes, partitionKeys, signature);
+            argNames, argTypes, partitionKeys, {}, sortingKeys, signature);
 
         logVectors(input);
 
@@ -722,7 +722,7 @@ bool AggregationFuzzer::verifyWindow(
     if (!customVerification && enableWindowVerification) {
       if (resultOrError.result) {
         auto referenceResult =
-            computeReferenceResults(plan, input, referenceQueryRunner_.get());
+            computeReferenceResults(plan, referenceQueryRunner_.get());
         stats_.updateReferenceQueryStats(referenceResult.second);
         if (auto expectedResult = referenceResult.first) {
           ++stats_.numVerified;
@@ -1018,7 +1018,7 @@ void AggregationFuzzer::verifyAggregation(
   std::optional<MaterializedRowMultiset> expectedResult;
   if (!customVerification) {
     auto referenceResult =
-        computeReferenceResults(plan, input, referenceQueryRunner_.get());
+        computeReferenceResults(plan, referenceQueryRunner_.get());
     stats_.updateReferenceQueryStats(referenceResult.second);
     expectedResult = referenceResult.first;
   }
@@ -1052,27 +1052,6 @@ void AggregationFuzzer::Stats::print(size_t numIterations) const {
   AggregationFuzzerBase::Stats::print(numIterations);
 }
 
-namespace {
-// Merges a vector of RowVectors into one RowVector.
-RowVectorPtr mergeRowVectors(
-    const std::vector<RowVectorPtr>& results,
-    velox::memory::MemoryPool* pool) {
-  auto totalCount = 0;
-  for (const auto& result : results) {
-    totalCount += result->size();
-  }
-  auto copy =
-      BaseVector::create<RowVector>(results[0]->type(), totalCount, pool);
-  auto copyCount = 0;
-  for (const auto& result : results) {
-    copy->copy(result.get(), copyCount, 0, result->size());
-    copyCount += result->size();
-  }
-  return copy;
-}
-
-} // namespace
-
 bool AggregationFuzzer::compareEquivalentPlanResults(
     const std::vector<PlanWithSplits>& plans,
     bool customVerification,
@@ -1099,8 +1078,8 @@ bool AggregationFuzzer::compareEquivalentPlanResults(
 
     if (resultOrError.result != nullptr) {
       if (!customVerification) {
-        auto referenceResult = computeReferenceResults(
-            firstPlan, input, referenceQueryRunner_.get());
+        auto referenceResult =
+            computeReferenceResults(firstPlan, referenceQueryRunner_.get());
         stats_.updateReferenceQueryStats(referenceResult.second);
         auto expectedResult = referenceResult.first;
 
@@ -1118,13 +1097,13 @@ bool AggregationFuzzer::compareEquivalentPlanResults(
         if (isSupportedType(firstPlan->outputType()) &&
             isSupportedType(input.front()->type())) {
           auto referenceResult = computeReferenceResultsAsVector(
-              firstPlan, input, referenceQueryRunner_.get());
+              firstPlan, referenceQueryRunner_.get());
           stats_.updateReferenceQueryStats(referenceResult.second);
 
           if (referenceResult.first) {
             velox::fuzzer::ResultOrError expected;
-            expected.result =
-                mergeRowVectors(referenceResult.first.value(), pool_.get());
+            expected.result = fuzzer::mergeRowVectors(
+                referenceResult.first.value(), pool_.get());
 
             compare(
                 resultOrError, customVerification, {customVerifier}, expected);
