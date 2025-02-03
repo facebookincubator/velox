@@ -73,7 +73,7 @@ void PagedOutputStream::writeHeader(
 
 void PagedOutputStream::updateSize(char* buffer, size_t compressedSize) {
   VELOX_CHECK_LT(compressedSize, 1u << 23);
-  buffer[0] = ((buffer[0] & 0x01) | static_cast<char>(compressedSize << 1));
+  buffer[0] = static_cast<unsigned char>((static_cast<unsigned char>(buffer[0]) & 0x01) |  (static_cast<unsigned char>(compressedSize) << 1));
   buffer[1] = static_cast<char>(compressedSize >> 7);
   buffer[2] = static_cast<char>(compressedSize >> 15);
 }

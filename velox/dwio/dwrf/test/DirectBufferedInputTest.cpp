@@ -43,7 +43,7 @@ struct TestRegion {
 
 class DirectBufferedInputTest : public testing::Test {
  protected:
-  static constexpr int32_t kLoadQuantum = 8 << 20;
+  static constexpr int32_t kLoadQuantum = 8u << 20;
 
   static void SetUpTestCase() {
     memory::MemoryManager::testingSetInstance({});
@@ -54,7 +54,7 @@ class DirectBufferedInputTest : public testing::Test {
     ioStats_ = std::make_shared<IoStatistics>();
     fileIoStats_ = std::make_shared<IoStatistics>();
     tracker_ = std::make_shared<cache::ScanTracker>("", nullptr, kLoadQuantum);
-    file_ = std::make_shared<TestReadFile>(11, 100 << 20, fileIoStats_);
+    file_ = std::make_shared<TestReadFile>(11, 100u << 20, fileIoStats_);
     opts_ = std::make_unique<dwio::common::ReaderOptions>(pool_.get());
     opts_->setLoadQuantum(kLoadQuantum);
   }

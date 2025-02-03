@@ -259,7 +259,7 @@ class BooleanRleEncoderImpl : public ByteRleEncoderImpl {
 
   void writeBool(bool val) {
     --bitsRemained;
-    current |= ((val ? 1 : 0) << bitsRemained);
+    current = static_cast<unsigned char>(current) | (static_cast<uint32_t>(val ? 1 : 0) << bitsRemained);
     if (bitsRemained == 0) {
       writeByte();
     }
@@ -510,7 +510,7 @@ void BooleanRleDecoder::next(
     // need to read new data. Since remainingBits should be less than or equal
     // to 8, therefore nonNulls must be less than 8.
     data[0] =
-        reversedLastByte_ >> (8 - remainingBits_) & 0xff >> (8 - nonNulls);
+        (reversedLastByte_ >> (8 - remainingBits_)) & static_cast<uint8_t>(0xff) >> (8 - nonNulls);
     remainingBits_ -= nonNulls;
   } else {
     // Put the remaining bits, if any, into previousByte.
@@ -537,7 +537,7 @@ void BooleanRleDecoder::next(
         uint64_t tmp = reinterpret_cast<uint64_t*>(data)[i];
         reinterpret_cast<uint64_t*>(data)[i] =
             previousByte | tmp << remainingBits_; // previousByte is LSB
-        previousByte = (tmp >> (64 - remainingBits_)) & 0xff;
+        previousByte = (tmp >> (64 - remainingBits_)) & static_cast<uint64_t>(0xff);
       }
 
       // Shift 8 bits a time for the remaining bits
@@ -558,7 +558,7 @@ void BooleanRleDecoder::next(
 
   // Clear the most significant bits in the last byte which will be processed in
   // the next round.
-  data[outputBytes - 1] &= 0xff >> (outputBytes * 8 - numValues);
+  data[outputBytes - 1] = (static_cast<uint8_t>(data[outputBytes - 1]) &  static_cast<uint8_t>(0xff)) >> (outputBytes * 8 - numValues);
 }
 
 std::unique_ptr<BooleanRleDecoder> createBooleanRleDecoder(
