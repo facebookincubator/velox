@@ -94,7 +94,7 @@ RowVectorPtr CudfFromVelox::getOutput() {
   NVTX3_FUNC_RANGE();
   auto const target_output_size = preferred_gpu_batch_size_rows();
   auto const exit_early = finished_ or
-      (current_output_size_ < target_output_size and not noMoreInput_);
+      (current_output_size_ < target_output_size and not noMoreInput_) or inputs_.empty();
   finished_ = noMoreInput_;
   if (exit_early) {
     return nullptr;
