@@ -3294,6 +3294,35 @@ TEST_P(MultiThreadedHashJoinTest, noSpillLevelLimit) {
       .run();
 }
 
+TEST_F(HashJoinTest, filterOnASingleSide) {
+  // Verify that the hash join operator throws an error when a filter is applied
+  // exclusively to columns from one side of the join. This validation ensures
+  // the detection of suboptimal plans, where filters are evaluated at the join
+  // operator instead of being pushed to the upstream scan node of the
+  // respective join side for optimization.
+  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  auto plan = PlanBuilder(planNodeIdGenerator)
+                  .tableScan(ROW({"t0", "t1"}, {INTEGER(), BIGINT()}))
+                  .hashJoin(
+                      {"t0"},
+                      {"u0"},
+                      PlanBuilder(planNodeIdGenerator)
+                          .tableScan(ROW({"u0", "u1"}, {INTEGER(), BIGINT()}))
+                          .planNode(),
+                      "t0 = 1",
+                      {"t0", "u0"},
+                      core::JoinType::kFull)
+                  .planNode();
+  VELOX_ASSERT_THROW(
+      HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
+          .numDrivers(numDrivers_)
+          .planNode(plan)
+          .referenceQuery("SELECT t0, u0 FROM t, u WHERE t0 = 1")
+          .injectSpill(false)
+          .run(),
+      "Filter should be on both probe and build columns otherwise it should be pushed down.");
+}
+
 // Verify that dynamic filter pushed down is turned off for null-aware right
 // semi project join.
 TEST_F(HashJoinTest, nullAwareRightSemiProjectOverScan) {

@@ -101,7 +101,11 @@ class HashProbe : public Operator {
   // the hash table.
   void asyncWaitForHashTable();
 
-  // Sets up 'filter_' and related members.
+  // Sets up 'filter_' and related members. Throws if filter is applied
+  // exclusively to columns from one side of the join to ensure the detection
+  // of suboptimal plans, where filters are evaluated at the join operator
+  // instead of being pushed to the upstream scan node of the respective join
+  // side for optimization.
   void initializeFilter(
       const core::TypedExprPtr& filter,
       const RowTypePtr& probeType,
@@ -326,6 +330,15 @@ class HashProbe : public Operator {
   // could be invalidated in case of spilling. But we should never expect usage
   // of an invalidated table as we always spill the entire table.
   std::optional<RowColumn::Stats> columnStats(int32_t columnIndex) const;
+
+  // Returns the raw pointer to the output row mapping buffer.
+  // Throws exception if the buffer is not mutable.
+  // Note: Use this method close to the block that modifies the buffer to ensure
+  // mutability does not change in-between.
+  vector_size_t* getRawMutableOuputRowMapping() {
+    VELOX_CHECK(outputRowMapping_->isMutable());
+    return outputRowMapping_->asMutable<vector_size_t>();
+  }
 
   // TODO: Define batch size as bytes based on RowContainer row sizes.
   const vector_size_t outputBatchSize_;

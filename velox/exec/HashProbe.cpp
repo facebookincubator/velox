@@ -206,6 +206,8 @@ void HashProbe::initializeFilter(
   filter_ =
       std::make_unique<ExprSet>(std::move(filters), operatorCtx_->execCtx());
 
+  bool filterOnProbeColumns = false;
+  bool filterOnBuildColumns = false;
   column_index_t filterChannel = 0;
   std::vector<std::string> names;
   std::vector<TypePtr> types;
@@ -216,6 +218,7 @@ void HashProbe::initializeFilter(
     const auto& name = field->field();
     auto channel = probeType->getChildIdxIfExists(name);
     if (channel.has_value()) {
+      filterOnProbeColumns = true;
       auto channelValue = channel.value();
       filterInputProjections_.emplace_back(channelValue, filterChannel++);
       names.emplace_back(probeType->nameOf(channelValue));
@@ -224,6 +227,7 @@ void HashProbe::initializeFilter(
     }
     channel = tableType->getChildIdxIfExists(name);
     if (channel.has_value()) {
+      filterOnBuildColumns = true;
       auto channelValue = channel.value();
       filterTableProjections_.emplace_back(channelValue, filterChannel);
       names.emplace_back(tableType->nameOf(channelValue));
@@ -234,6 +238,10 @@ void HashProbe::initializeFilter(
     VELOX_FAIL(
         "Join filter field {} not in probe or build input", field->toString());
   }
+  VELOX_CHECK_EQ(
+      filterOnBuildColumns,
+      filterOnProbeColumns,
+      "Filter should be on both probe and build columns otherwise it should be pushed down.");
 
   filterInputType_ = ROW(std::move(names), std::move(types));
 }
@@ -1248,7 +1256,7 @@ void HashProbe::prepareFilterRowsForNullAwareJoin(
   // with null join key columns(s) as we can apply filtering after they cross
   // join with the table rows later.
   if (!nonNullInputRows_.isAllSelected()) {
-    auto* rawMapping = outputRowMapping_->asMutable<vector_size_t>();
+    auto* rawMapping = getRawMutableOuputRowMapping();
     for (int i = 0; i < numRows; ++i) {
       if (filterInputRows_.isValid(i) &&
           !nonNullInputRows_.isValid(rawMapping[i])) {
@@ -1339,8 +1347,7 @@ void HashProbe::applyFilterOnTableRowsForNullAwareJoin(
 SelectivityVector HashProbe::evalFilterForNullAwareJoin(
     vector_size_t numRows,
     bool filterPropagateNulls) {
-  auto* rawOutputProbeRowMapping =
-      outputRowMapping_->asMutable<vector_size_t>();
+  auto* rawOutputProbeRowMapping = getRawMutableOuputRowMapping();
 
   // Subset of probe-side rows with a match that passed the filter.
   SelectivityVector filterPassedRows(input_->size(), false);
@@ -1398,8 +1405,6 @@ int32_t HashProbe::evalFilter(int32_t numRows) {
   }
 
   const bool filterPropagateNulls = filter_->expr(0)->propagatesNulls();
-  auto* rawOutputProbeRowMapping =
-      outputRowMapping_->asMutable<vector_size_t>();
   auto* outputTableRows = outputTableRows_->asMutable<char*>();
 
   filterInputRows_.resizeFill(numRows);
@@ -1431,6 +1436,7 @@ int32_t HashProbe::evalFilter(int32_t numRows) {
   decodedFilterResult_.decode(*filterResult_[0], filterInputRows_);
 
   int32_t numPassed = 0;
+  auto* rawOutputProbeRowMapping = getRawMutableOuputRowMapping();
   if (isLeftJoin(joinType_) || isFullJoin(joinType_)) {
     // Identify probe rows which got filtered out and add them back with nulls
     // for build side.
