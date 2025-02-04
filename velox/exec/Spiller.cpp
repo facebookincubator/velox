@@ -212,7 +212,7 @@ std::unique_ptr<SpillerBase::SpillStatus> SpillerBase::writeSpill(
   // Target size of a single vector of spilled content. One of
   // these will be materialized at a time for each stream of the
   // merge.
-  constexpr int32_t kTargetBatchBytes = 1 << 18; // 256K
+  constexpr int32_t kTargetBatchBytes = 1u << 18; // 256K
   constexpr int32_t kTargetBatchRows = 64;
 
   RowVectorPtr spillVector;

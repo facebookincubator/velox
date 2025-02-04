@@ -167,7 +167,7 @@ namespace facebook::velox::crypto {
         }
         bits[1] += len >> 29;
 
-        t = (t >> 3) & 0x3f; /* Bytes already in shsInfo->data */
+        t = (t >> 3) & static_cast<uint32_t>(0x3f); /* Bytes already in shsInfo->data */
 
         /* Handle any leading odd-sized chunks */
 
@@ -209,7 +209,7 @@ namespace facebook::velox::crypto {
         unsigned char *p;
 
         /* Compute number of bytes mod 64 */
-        count = (bits[0] >> 3) & 0x3F;
+        count = (bits[0] >> 3) & static_cast<uint32_t>(0x3F);
 
         /* Set the first char of padding to 0x80.  This is safe since there is
            always at least one byte free */
@@ -248,17 +248,17 @@ namespace facebook::velox::crypto {
         int i, j;
 
         for (j = i = 0; i < MD5_HASH_LENGTH_BINARY; i++) {
-            int a = digest[i];
-            zbuf[j++] = HEX_CODES[(a >> 4) & 0xf];
-            zbuf[j++] = HEX_CODES[a & 0xf];
+            uint32_t a = digest[i];
+            zbuf[j++] = HEX_CODES[(a >> 4) & static_cast<uint32_t>(0xf)];
+            zbuf[j++] = HEX_CODES[a & static_cast<uint32_t>(0xf)];
         }
     }
 
     std::string MD5Context::DigestToBase10(const unsigned char* digest) {
       __uint128_t val = 0;
       for (int i = 0; i < MD5_HASH_LENGTH_BINARY; i++) {
-        val = static_cast<__uint128_t>(val << 4) | ((digest[i] >> 4) & 0xf);
-        val = static_cast<__uint128_t>(val << 4) | (digest[i] & 0xf);
+        val = static_cast<__uint128_t>(val << 4) | ((digest[i] >> 4) & static_cast<uint8_t>(0xf));
+        val = static_cast<__uint128_t>(val << 4) | (digest[i] & static_cast<uint8_t>(0xf));
       }
       auto dec = folly::to<std::string>(static_cast<__uint128_t>(val));
       return dec;

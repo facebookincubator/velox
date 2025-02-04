@@ -904,10 +904,10 @@ VectorPtr CastExpr::applyIntToBinaryCast(
   applyToSelectedNoThrowLocal(context, rows, result, [&](vector_size_t row) {
     TInput input = simpleInput->valueAt(row);
     if constexpr (std::is_same_v<TInput, int8_t>) {
-      inlined[0] = static_cast<char>(input & 0xFF);
+      inlined[0] = static_cast<char>(input & static_cast<uint64_t>(0xFF));
     } else {
       for (int i = sizeof(TInput) - 1; i >= 0; --i) {
-        inlined[i] = static_cast<char>(input & 0xFF);
+        inlined[i] = static_cast<char>(input & static_cast<uint64_t>(0xFF));
         input >>= 8;
       }
     }
