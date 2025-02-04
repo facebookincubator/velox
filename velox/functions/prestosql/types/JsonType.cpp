@@ -25,6 +25,7 @@
 #include "folly/json.h"
 
 #include "velox/common/base/Exceptions.h"
+#include "velox/common/fuzzer/ConstrainedGenerators.h"
 #include "velox/expression/EvalCtx.h"
 #include "velox/expression/PeeledEncoding.h"
 #include "velox/expression/StringWriter.h"
@@ -32,7 +33,6 @@
 #include "velox/functions/lib/RowsTranslationUtil.h"
 #include "velox/functions/lib/string/StringCore.h"
 #include "velox/functions/prestosql/json/JsonStringUtil.h"
-#include "velox/functions/prestosql/json/SIMDJsonUtil.h"
 #include "velox/type/Conversions.h"
 #include "velox/type/Type.h"
 
@@ -50,10 +50,10 @@ void generateJsonTyped(
   auto value = input.valueAt(row);
 
   if constexpr (std::is_same_v<T, StringView>) {
-    size_t resultSize = escapedStringSize(value.data(), value.size());
+    size_t resultSize = normalizedSizeForJsonCast(value.data(), value.size());
     result.resize(resultSize + 2);
     result.data()[0] = '"';
-    escapeString(value.data(), value.size(), result.data() + 1);
+    normalizeForJsonCast(value.data(), value.size(), result.data() + 1);
     result.data()[resultSize + 1] = '"';
   } else if constexpr (std::is_same_v<T, UnknownValue>) {
     VELOX_FAIL(
@@ -1095,79 +1095,7 @@ bool isSupportedBasicType(const TypePtr& type) {
   }
 }
 
-/// Custom operator for casts from and to Json type.
-class JsonCastOperator : public exec::CastOperator {
- public:
-  bool isSupportedFromType(const TypePtr& other) const override;
-
-  bool isSupportedToType(const TypePtr& other) const override;
-
-  void castTo(
-      const BaseVector& input,
-      exec::EvalCtx& context,
-      const SelectivityVector& rows,
-      const TypePtr& resultType,
-      VectorPtr& result) const override;
-
-  void castTo(
-      const BaseVector& input,
-      exec::EvalCtx& context,
-      const SelectivityVector& rows,
-      const TypePtr& resultType,
-      VectorPtr& result,
-      const std::shared_ptr<exec::CastHooks>& hooks) const override;
-
-  void castFrom(
-      const BaseVector& input,
-      exec::EvalCtx& context,
-      const SelectivityVector& rows,
-      const TypePtr& resultType,
-      VectorPtr& result) const override;
-
- private:
-  template <TypeKind kind>
-  void castFromJson(
-      const BaseVector& input,
-      exec::EvalCtx& context,
-      const SelectivityVector& rows,
-      BaseVector& result) const {
-    // Result is guaranteed to be a flat writable vector.
-    auto* flatResult = result.as<typename KindToFlatVector<kind>::type>();
-    exec::VectorWriter<Any> writer;
-    writer.init(*flatResult);
-    // Input is guaranteed to be in flat or constant encodings when passed in.
-    auto* inputVector = input.as<SimpleVector<StringView>>();
-    size_t maxSize = 0;
-    rows.applyToSelected([&](auto row) {
-      if (inputVector->isNullAt(row)) {
-        return;
-      }
-      auto& input = inputVector->valueAt(row);
-      maxSize = std::max(maxSize, input.size());
-    });
-    paddedInput_.resize(maxSize + simdjson::SIMDJSON_PADDING);
-    context.applyToSelectedNoThrow(rows, [&](auto row) {
-      writer.setOffset(row);
-      if (inputVector->isNullAt(row)) {
-        writer.commitNull();
-        return;
-      }
-      auto& input = inputVector->valueAt(row);
-      memcpy(paddedInput_.data(), input.data(), input.size());
-      simdjson::padded_string_view paddedInput(
-          paddedInput_.data(), input.size(), paddedInput_.size());
-      if (auto error = castFromJsonOneRow<kind>(paddedInput, writer)) {
-        context.setVeloxExceptionError(row, errors_[error]);
-        writer.commitNull();
-      }
-    });
-    writer.finish();
-  }
-
-  mutable folly::once_flag initializeErrors_;
-  mutable std::exception_ptr errors_[simdjson::NUM_ERROR_CODES];
-  mutable std::string paddedInput_;
-};
+} // namespace
 
 bool JsonCastOperator::isSupportedFromType(const TypePtr& other) const {
   if (isSupportedBasicType(other)) {
@@ -1194,6 +1122,45 @@ bool JsonCastOperator::isSupportedFromType(const TypePtr& other) const {
     default:
       return false;
   }
+}
+
+template <TypeKind kind>
+void JsonCastOperator::castFromJson(
+    const BaseVector& input,
+    exec::EvalCtx& context,
+    const SelectivityVector& rows,
+    BaseVector& result) const {
+  // Result is guaranteed to be a flat writable vector.
+  auto* flatResult = result.as<typename KindToFlatVector<kind>::type>();
+  exec::VectorWriter<Any> writer;
+  writer.init(*flatResult);
+  // Input is guaranteed to be in flat or constant encodings when passed in.
+  auto* inputVector = input.as<SimpleVector<StringView>>();
+  size_t maxSize = 0;
+  rows.applyToSelected([&](auto row) {
+    if (inputVector->isNullAt(row)) {
+      return;
+    }
+    auto& input = inputVector->valueAt(row);
+    maxSize = std::max(maxSize, input.size());
+  });
+  paddedInput_.resize(maxSize + simdjson::SIMDJSON_PADDING);
+  context.applyToSelectedNoThrow(rows, [&](auto row) {
+    writer.setOffset(row);
+    if (inputVector->isNullAt(row)) {
+      writer.commitNull();
+      return;
+    }
+    auto& input = inputVector->valueAt(row);
+    memcpy(paddedInput_.data(), input.data(), input.size());
+    simdjson::padded_string_view paddedInput(
+        paddedInput_.data(), input.size(), paddedInput_.size());
+    if (auto error = castFromJsonOneRow<kind>(paddedInput, writer)) {
+      context.setVeloxExceptionError(row, errors_[error]);
+      writer.commitNull();
+    }
+  });
+  writer.finish();
 }
 
 bool JsonCastOperator::isSupportedToType(const TypePtr& other) const {
@@ -1288,9 +1255,31 @@ class JsonTypeFactories : public CustomTypeFactories {
   exec::CastOperatorPtr getCastOperator() const override {
     return std::make_shared<JsonCastOperator>();
   }
-};
 
-} // namespace
+  AbstractInputGeneratorPtr getInputGenerator(
+      const InputGeneratorConfig& config) const override {
+    static const std::vector<TypePtr> kScalarTypes{
+        BOOLEAN(),
+        TINYINT(),
+        SMALLINT(),
+        INTEGER(),
+        BIGINT(),
+        REAL(),
+        DOUBLE(),
+        VARCHAR(),
+    };
+    fuzzer::FuzzerGenerator rng(config.seed_);
+    return std::make_shared<fuzzer::JsonInputGenerator>(
+        config.seed_,
+        JSON(),
+        config.nullRatio_,
+        fuzzer::getRandomInputGenerator(
+            config.seed_,
+            fuzzer::randType(rng, kScalarTypes, 3),
+            config.nullRatio_),
+        false);
+  }
+};
 
 void registerJsonType() {
   registerCustomType("json", std::make_unique<const JsonTypeFactories>());

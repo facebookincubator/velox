@@ -21,7 +21,8 @@ add_library(
   PartitionedOutputReplayer.cpp
   TableScanReplayer.cpp
   TableWriterReplayer.cpp
-  TraceReplayRunner.cpp)
+  TraceReplayRunner.cpp
+  TraceReplayTaskRunner.cpp)
 
 target_link_libraries(
   velox_query_trace_replayer_base
@@ -34,6 +35,10 @@ target_link_libraries(
   velox_hive_connector
   velox_tpch_connector
   velox_memory
+  velox_hdfs
+  velox_gcs
+  velox_abfs
+  velox_s3fs
   Folly::folly
   glog::glog
   gflags::gflags)
@@ -46,5 +51,23 @@ target_link_libraries(
   velox_exec
   velox_exec_test_lib
   velox_tpch_connector)
+
+add_library(velox_trace_file_tool_base TraceFileToolRunner.cpp)
+
+target_link_libraries(
+  velox_trace_file_tool_base
+  velox_exec
+  velox_type
+  velox_vector
+  velox_exec
+  velox_hive_connector
+  Folly::folly
+  glog::glog
+  gflags::gflags)
+
+add_executable(velox_trace_file_tool TraceFileToolMain.cpp)
+
+target_link_libraries(
+  velox_trace_file_tool velox_trace_file_tool_base)
 
 add_subdirectory(tests)

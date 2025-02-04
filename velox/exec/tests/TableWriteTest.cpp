@@ -1271,6 +1271,68 @@ TEST_F(BasicTableWriteTest, roundTrip) {
   assertEqualResults({data}, {copy});
 }
 
+// Generates a struct (row), write it as a flap map, and check that it is read
+// back as a map.
+TEST_F(BasicTableWriteTest, structAsMap) {
+  // Input struct type.
+  vector_size_t size = 1'000;
+  auto data = makeRowVector(
+      {"col1"},
+      {
+          makeRowVector(
+              // Struct field names are the feature/map keys.
+              {"1", "2"},
+              {
+                  makeFlatVector<int32_t>(size, [](auto row) { return row; }),
+                  makeFlatVector<int32_t>(size, [](auto row) { return row; }),
+              }),
+      });
+
+  // Write it as a flat map.
+  auto outputType = ROW({"col1"}, {MAP(INTEGER(), INTEGER())});
+  auto targetDirectoryPath = TempDirectoryPath::create();
+  std::string fileName = "output_file";
+
+  auto plan = PlanBuilder()
+                  .values({data})
+                  .tableWrite(
+                      targetDirectoryPath->getPath(),
+                      {},
+                      0,
+                      {},
+                      {},
+                      dwio::common::FileFormat::DWRF,
+                      {},
+                      PlanBuilder::kHiveDefaultConnectorId,
+                      {
+                          {"orc.flatten.map", "true"},
+                          {"orc.map.flat.cols", "0"},
+                          {"orc.map.flat.cols.struct.keys", "[[\"1\", \"2\"]]"},
+                      },
+                      nullptr,
+                      fileName,
+                      common::CompressionKind_NONE,
+                      outputType)
+                  .planNode();
+  auto writerResults = AssertQueryBuilder(plan).copyResults(pool());
+
+  // Check we get the expected map after reading.
+  auto expected = makeRowVector(
+      {"col1"},
+      {
+          makeMapVector<int32_t, int32_t>(
+              size,
+              [](auto /*row*/) { return 2; },
+              [](auto row) { return row % 2 == 0 ? 2 : 1; },
+              [](auto row) { return row / 2; }),
+      });
+  plan = PlanBuilder().tableScan(outputType).planNode();
+  AssertQueryBuilder(plan)
+      .split(makeHiveConnectorSplit(
+          targetDirectoryPath->getPath() + "/" + fileName))
+      .assertResults(expected);
+}
+
 TEST_F(BasicTableWriteTest, targetFileName) {
   constexpr const char* kFileName = "test.dwrf";
   auto data = makeRowVector({makeFlatVector<int64_t>(10, folly::identity)});
@@ -2582,7 +2644,7 @@ TEST_P(UnpartitionedTableWriterTest, runtimeStatsCheck) {
             .config(QueryConfig::kTaskWriterCount, std::to_string(1))
             .connectorSessionProperty(
                 kHiveConnectorId,
-                HiveConfig::kOrcWriterMaxStripeSizeSession,
+                dwrf::Config::kOrcWriterMaxStripeSizeSession,
                 testData.maxStripeSize)
             .assertResults("SELECT count(*) FROM tmp");
     auto stats = task->taskStats().pipelineStats.front().operatorStats;
@@ -4160,12 +4222,10 @@ DEBUG_ONLY_TEST_F(
       // Set large stripe and dictionary size thresholds to avoid writer
       // internal stripe flush.
       .connectorSessionProperty(
-          kHiveConnectorId,
-          connector::hive::HiveConfig::kOrcWriterMaxStripeSizeSession,
-          "1GB")
+          kHiveConnectorId, dwrf::Config::kOrcWriterMaxStripeSizeSession, "1GB")
       .connectorSessionProperty(
           kHiveConnectorId,
-          connector::hive::HiveConfig::kOrcWriterMaxDictionaryMemorySession,
+          dwrf::Config::kOrcWriterMaxDictionaryMemorySession,
           "1GB")
       .plan(std::move(writerPlan))
       .assertResults(fmt::format("SELECT {}", numRows));
@@ -4258,12 +4318,10 @@ DEBUG_ONLY_TEST_F(
       // Set large stripe and dictionary size thresholds to avoid writer
       // internal stripe flush.
       .connectorSessionProperty(
-          kHiveConnectorId,
-          connector::hive::HiveConfig::kOrcWriterMaxStripeSizeSession,
-          "1GB")
+          kHiveConnectorId, dwrf::Config::kOrcWriterMaxStripeSizeSession, "1GB")
       .connectorSessionProperty(
           kHiveConnectorId,
-          connector::hive::HiveConfig::kOrcWriterMaxDictionaryMemorySession,
+          dwrf::Config::kOrcWriterMaxDictionaryMemorySession,
           "1GB")
       .plan(std::move(writerPlan))
       .assertResults(fmt::format("SELECT {}", numRows));
@@ -4362,12 +4420,10 @@ DEBUG_ONLY_TEST_F(
       // Set large stripe and dictionary size thresholds to avoid writer
       // internal stripe flush.
       .connectorSessionProperty(
-          kHiveConnectorId,
-          connector::hive::HiveConfig::kOrcWriterMaxStripeSizeSession,
-          "1GB")
+          kHiveConnectorId, dwrf::Config::kOrcWriterMaxStripeSizeSession, "1GB")
       .connectorSessionProperty(
           kHiveConnectorId,
-          connector::hive::HiveConfig::kOrcWriterMaxDictionaryMemorySession,
+          dwrf::Config::kOrcWriterMaxDictionaryMemorySession,
           "1GB")
       .plan(std::move(writerPlan))
       .assertResults(fmt::format("SELECT {}", numRows));
@@ -4439,11 +4495,11 @@ DEBUG_ONLY_TEST_F(TableWriterArbitrationTest, tableFileWriteError) {
           // triggered flush.
           .connectorSessionProperty(
               kHiveConnectorId,
-              connector::hive::HiveConfig::kOrcWriterMaxStripeSizeSession,
+              dwrf::Config::kOrcWriterMaxStripeSizeSession,
               "1GB")
           .connectorSessionProperty(
               kHiveConnectorId,
-              connector::hive::HiveConfig::kOrcWriterMaxDictionaryMemorySession,
+              dwrf::Config::kOrcWriterMaxDictionaryMemorySession,
               "1GB")
           .plan(std::move(writerPlan))
           .copyResults(pool()),
@@ -4525,11 +4581,11 @@ DEBUG_ONLY_TEST_F(TableWriterArbitrationTest, tableWriteSpillUseMoreMemory) {
           // triggered flush.
           .connectorSessionProperty(
               kHiveConnectorId,
-              connector::hive::HiveConfig::kOrcWriterMaxStripeSizeSession,
+              dwrf::Config::kOrcWriterMaxStripeSizeSession,
               "1GB")
           .connectorSessionProperty(
               kHiveConnectorId,
-              connector::hive::HiveConfig::kOrcWriterMaxDictionaryMemorySession,
+              dwrf::Config::kOrcWriterMaxDictionaryMemorySession,
               "1GB")
           .plan(std::move(writerPlan))
           .copyResults(pool()),
@@ -4624,12 +4680,10 @@ DEBUG_ONLY_TEST_F(TableWriterArbitrationTest, tableWriteReclaimOnClose) {
       // Set stripe size to extreme large to avoid writer internal triggered
       // flush.
       .connectorSessionProperty(
-          kHiveConnectorId,
-          connector::hive::HiveConfig::kOrcWriterMaxStripeSizeSession,
-          "1GB")
+          kHiveConnectorId, dwrf::Config::kOrcWriterMaxStripeSizeSession, "1GB")
       .connectorSessionProperty(
           kHiveConnectorId,
-          connector::hive::HiveConfig::kOrcWriterMaxDictionaryMemorySession,
+          dwrf::Config::kOrcWriterMaxDictionaryMemorySession,
           "1GB")
       .plan(std::move(writerPlan))
       .assertResults(fmt::format("SELECT {}", numRows));

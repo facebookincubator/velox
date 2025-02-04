@@ -88,6 +88,7 @@ struct SplitsState {
 /// Stores local exchange queues with the memory manager.
 struct LocalExchangeState {
   std::shared_ptr<LocalExchangeMemoryManager> memoryManager;
+  std::shared_ptr<LocalExchangeVectorPool> vectorPool;
   std::vector<std::shared_ptr<LocalExchangeQueue>> queues;
   std::shared_ptr<common::SkewedPartitionRebalancer>
       scaleWriterPartitionBalancer;
@@ -116,6 +117,10 @@ struct SplitGroupState {
   /// Map of local exchanges keyed on LocalPartition plan node ID.
   std::unordered_map<core::PlanNodeId, LocalExchangeState> localExchanges;
 
+  /// Map of scaled scan controllers keyed on TableScan plan node ID.
+  std::unordered_map<core::PlanNodeId, std::shared_ptr<ScaledScanController>>
+      scaledScanControllers;
+
   /// Drivers created and still running for this split group.
   /// The split group is finished when this numbers reaches zero.
   uint32_t numRunningDrivers{0};
@@ -128,7 +133,7 @@ struct SplitGroupState {
   uint32_t numFinishedOutputDrivers{0};
 
   // True if the state contains structures used for connecting ungrouped
-  // execution pipeline with grouped excution pipeline. In that case we don't
+  // execution pipeline with grouped execution pipeline. In that case we don't
   // want to clean up some of these structures.
   bool mixedExecutionMode{false};
 

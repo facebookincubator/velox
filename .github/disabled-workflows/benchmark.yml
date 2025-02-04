@@ -43,7 +43,7 @@ jobs:
     if: github.repository == 'facebookincubator/velox'
     runs-on: linux-amd64-cpu8
     env:
-      CCACHE_DIR: "${{ github.workspace }}/.ccache/"
+      CCACHE_DIR: "${{ github.workspace }}/ccache/"
       CCACHE_BASEDIR: "${{ github.workspace }}"
       BINARY_DIR: "${{ github.workspace }}/benchmarks/"
       LINUX_DISTRO: "ubuntu"
@@ -56,7 +56,7 @@ jobs:
         uses: actions/cache/restore@v3
         id: restore-cache
         with:
-          path: ".ccache"
+          path: "ccache"
           key: ccache-benchmark-${{ github.sha }}
           restore-keys: |
             ccache-benchmark-
@@ -132,7 +132,7 @@ jobs:
         uses: actions/cache/save@v3
         id: cache
         with:
-          path: ".ccache"
+          path: "ccache"
           key: ccache-benchmark-${{ github.sha }}
 
       - name: "Install benchmark dependencies"
@@ -151,7 +151,7 @@ jobs:
         run: |
             make benchmarks-basic-run \
                 EXTRA_BENCHMARK_FLAGS="--binary_path ${BINARY_DIR}/contender/ --output_path ${CONTENDER_OUTPUT_PATH}"
-                
+
       - name: "Compare initial results"
         id: compare
         if: ${{ github.event_name == 'pull_request' }}
@@ -163,13 +163,13 @@ jobs:
                 --do_not_fail
 
       - name: "Rerun Benchmarks"
-        if: ${{ github.event_name == 'pull_request'}}    
+        if: ${{ github.event_name == 'pull_request'}}
         working-directory: 'velox'
         run: |
           for i in 1 2 3 4 5; do
             CURRENT_JSON_RERUN="${RESULTS_ROOT}/rerun_json_output_$((${i} - 1)).json"
             NEXT_JSON_RERUN="${RESULTS_ROOT}/rerun_json_output_${i}.json"
-  
+
             if [ ! -s "${CURRENT_JSON_RERUN}" ]; then
               echo "::notice::Rerun iteration ${i} found empty file. Finalizing."
               break
@@ -189,7 +189,7 @@ jobs:
                 --do_not_fail
           echo "::endgroup::"
           done
-          
+
 
           echo "::group::Compare final results"
           ./scripts/benchmark-runner.py compare \
@@ -207,7 +207,7 @@ jobs:
         with:
           path: "pr_number.txt"
           name: "pr_number"
-      
+
       - name: "Upload result artifact"
         uses: actions/upload-artifact@v4
         with:

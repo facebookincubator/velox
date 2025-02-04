@@ -24,7 +24,9 @@
 #include "velox/exec/TraceUtil.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
+#include "velox/exec/tests/utils/TempDirectoryPath.h"
 #include "velox/tool/trace/OperatorReplayerBase.h"
+#include "velox/tool/trace/TraceReplayTaskRunner.h"
 
 using namespace facebook::velox;
 
@@ -35,7 +37,9 @@ OperatorReplayerBase::OperatorReplayerBase(
     std::string taskId,
     std::string nodeId,
     std::string operatorType,
-    const std::string& driverIds)
+    const std::string& driverIds,
+    uint64_t queryCapacity,
+    folly::Executor* executor)
     : queryId_(std::string(std::move(queryId))),
       taskId_(std::move(taskId)),
       nodeId_(std::move(nodeId)),
@@ -50,7 +54,9 @@ OperatorReplayerBase::OperatorReplayerBase(
                                   nodeTraceDir_,
                                   pipelineIds_.front(),
                                   fs_)
-                            : exec::trace::extractDriverIds(driverIds)) {
+                            : exec::trace::extractDriverIds(driverIds)),
+      queryCapacity_(queryCapacity == 0 ? memory::kMaxMemory : queryCapacity),
+      executor_(executor) {
   VELOX_USER_CHECK(!taskTraceDir_.empty());
   VELOX_USER_CHECK(!taskId_.empty());
   VELOX_USER_CHECK(!nodeId_.empty());
@@ -67,15 +73,18 @@ OperatorReplayerBase::OperatorReplayerBase(
   queryConfigs_[core::QueryConfig::kQueryTraceEnabled] = "false";
 }
 
-RowVectorPtr OperatorReplayerBase::run() {
-  std::shared_ptr<exec::Task> task;
-  const auto restoredPlanNode = createPlan();
-  const auto result =
-      exec::test::AssertQueryBuilder(restoredPlanNode)
-          .maxDrivers(driverIds_.size())
-          .configs(queryConfigs_)
-          .connectorSessionProperties(connectorConfigs_)
-          .copyResults(memory::MemoryManager::getInstance()->tracePool(), task);
+RowVectorPtr OperatorReplayerBase::run(bool copyResults) {
+  auto queryCtx = createQueryCtx();
+  std::shared_ptr<exec::test::TempDirectoryPath> spillDirectory;
+  if (queryCtx->queryConfig().spillEnabled()) {
+    spillDirectory = exec::test::TempDirectoryPath::create();
+  }
+
+  TraceReplayTaskRunner traceTaskRunner(createPlan(), std::move(queryCtx));
+  auto [task, result] =
+      traceTaskRunner.maxDrivers(driverIds_.size())
+          .spillDirectory(spillDirectory ? spillDirectory->getPath() : "")
+          .run(copyResults);
   printStats(task);
   return result;
 }
@@ -101,6 +110,25 @@ core::PlanNodePtr OperatorReplayerBase::createPlan() {
       .addNode(replayNodeFactory(replayNode))
       .capturePlanNodeId(replayPlanNodeId_)
       .planNode();
+}
+
+std::shared_ptr<core::QueryCtx> OperatorReplayerBase::createQueryCtx() {
+  auto queryPool = memory::memoryManager()->addRootPool(
+      fmt::format("{}_replayer_{}", operatorType_, replayQueryId_++),
+      queryCapacity_);
+  std::unordered_map<std::string, std::shared_ptr<config::ConfigBase>>
+      connectorConfigs;
+  for (auto& [connectorId, configs] : connectorConfigs_) {
+    connectorConfigs.emplace(
+        connectorId, std::make_shared<config::ConfigBase>(std::move(configs)));
+  }
+  return core::QueryCtx::create(
+      executor_,
+      core::QueryConfig{queryConfigs_},
+      std::move(connectorConfigs),
+      nullptr,
+      std::move(queryPool),
+      executor_);
 }
 
 std::function<core::PlanNodePtr(std::string, core::PlanNodePtr)>

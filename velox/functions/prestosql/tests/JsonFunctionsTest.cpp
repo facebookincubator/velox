@@ -142,6 +142,26 @@ class JsonFunctionsTest : public functions::test::FunctionBaseTest {
     EXPECT_EQ(jsonResult, varcharResult);
     return jsonResult;
   }
+
+  void checkInternalFn(
+      const std::string& functionName,
+      const TypePtr& returnType,
+      const RowVectorPtr& data,
+      const VectorPtr& expected) {
+    auto inputFeild =
+        std::make_shared<core::FieldAccessTypedExpr>(VARCHAR(), "c0");
+
+    auto expression = std::make_shared<core::CallTypedExpr>(
+        returnType, std::vector<core::TypedExprPtr>{inputFeild}, functionName);
+
+    SelectivityVector rows(data->size());
+    std::vector<VectorPtr> result(1);
+    exec::ExprSet exprSet({expression}, &execCtx_);
+    exec::EvalCtx evalCtx(&execCtx_, &exprSet, data.get());
+
+    exprSet.eval(rows, evalCtx, result);
+    velox::test::assertEqualVectors(expected, result[0]);
+  };
 };
 
 TEST_F(JsonFunctionsTest, jsonFormat) {
@@ -237,6 +257,12 @@ TEST_F(JsonFunctionsTest, jsonParse) {
 
   // Test bad unicode characters
   testJsonParse("\"Hello \xc0\xaf World\"", "\"Hello �� World\"");
+  // The below tests fail if simdjson.doc.get_string() is called
+  // without specifying replacement for bad characters in simdjson.
+  testJsonParse(R"("\uDE2Dau")", R"("\uDE2Dau")");
+  testJsonParse(
+      R"([{"response": "[\"fusil a peinture\",\"\ufffduD83E\\uDE2Dau bois\"]"}])",
+      R"([{"response":"[\"fusil a peinture\",\"�uD83E\\uDE2Dau bois\"]"}])");
 
   VELOX_ASSERT_THROW(
       jsonParse(R"({"k1":})"), "The JSON document has an improper structure");
@@ -267,9 +293,7 @@ TEST_F(JsonFunctionsTest, jsonParse) {
   velox::test::assertEqualVectors(
       expectedVector, evaluate("try(json_parse(c0))", data));
 
-  VELOX_ASSERT_THROW(
-      evaluate("json_parse(c0)", data),
-      "TAPE_ERROR: The JSON document has an improper structure: missing or superfluous commas, braces, missing keys, etc.");
+  VELOX_ASSERT_THROW(evaluate("json_parse(c0)", data), "TRAILING_CONTENT");
 
   data = makeRowVector({makeFlatVector<StringView>(
       {R"("This is a long sentence")", R"("This is some other sentence")"})});
@@ -327,6 +351,27 @@ TEST_F(JsonFunctionsTest, jsonParse) {
     FAIL() << "Error expected";
   } catch (const VeloxUserError& e) {
     ASSERT_EQ(e.context(), "Top-level Expression: json_parse(c0)");
+  }
+
+  // Test partial escape sequences.
+  VELOX_ASSERT_USER_THROW(
+      jsonParse("{\"k1\\"), "Invalid escape sequence at the end of string");
+  VELOX_ASSERT_USER_THROW(
+      jsonParse("{\"k1\\u"), "Invalid escape sequence at the end of string");
+
+  // Ensure state is cleared after invalid json
+  {
+    data = makeRowVector({makeFlatVector<StringView>({
+        R"({"key":1578377,"name":"Alto Ma\\u00e9 \\"A\\"","type":"cities"})", // invalid json
+        R"([{"k1": "v1" }, {"k2": "v2" }])" // valid json
+    })});
+
+    result = evaluate("try(json_parse(c0))", data);
+
+    expected = makeNullableFlatVector<StringView>(
+        {std::nullopt, R"([{"k1":"v1"},{"k2":"v2"}])"}, JSON());
+
+    velox::test::assertEqualVectors(expected, result);
   }
 }
 
@@ -849,6 +894,79 @@ TEST_F(JsonFunctionsTest, jsonExtract) {
   VELOX_ASSERT_THROW(
       jsonExtract(kJson, "concat($..category)"), "Invalid JSON path");
   VELOX_ASSERT_THROW(jsonExtract(kJson, "$.store.keys()"), "Invalid JSON path");
+}
+
+// The following tests ensure that the internal json functions
+// $internal$json_string_to_array/map/row_cast can be invoked without issues
+// from Prestissimo. The actual functionality is tested in JsonCastTest.
+
+TEST_F(JsonFunctionsTest, jsonStringToArrayCast) {
+  // Array of strings.
+  auto data = makeRowVector({makeNullableFlatVector<std::string>(
+      {R"(["red","blue"])"_sv,
+       R"([null,null,"purple"])"_sv,
+       "[]"_sv,
+       "null"_sv})});
+  auto expected = makeNullableArrayVector<StringView>(
+      {{{"red"_sv, "blue"_sv}},
+       {{std::nullopt, std::nullopt, "purple"_sv}},
+       {{}},
+       std::nullopt});
+
+  checkInternalFn(
+      "$internal$json_string_to_array_cast", ARRAY(VARCHAR()), data, expected);
+
+  // Array of integers.
+  data = makeRowVector({makeNullableFlatVector<std::string>(
+      {R"(["10212","1015353"])"_sv, R"(["10322","285000"])"})});
+  expected =
+      makeNullableArrayVector<int64_t>({{10212, 1015353}, {10322, 285000}});
+
+  checkInternalFn(
+      "$internal$json_string_to_array_cast", ARRAY(BIGINT()), data, expected);
+}
+
+TEST_F(JsonFunctionsTest, jsonStringToMapCast) {
+  // Map of strings.
+  auto data = makeRowVector({makeFlatVector<std::string>(
+      {R"({"red":1,"blue":2})"_sv,
+       R"({"green":3,"magenta":4})"_sv,
+       R"({"violet":1,"blue":2})"_sv,
+       R"({"yellow":1,"blue":2})"_sv,
+       R"({"purple":10,"cyan":5})"_sv})});
+
+  auto expected = makeMapVector<StringView, int64_t>(
+      {{{"red"_sv, 1}, {"blue"_sv, 2}},
+       {{"green"_sv, 3}, {"magenta"_sv, 4}},
+       {{"violet"_sv, 1}, {"blue"_sv, 2}},
+       {{"yellow"_sv, 1}, {"blue"_sv, 2}},
+       {{"purple"_sv, 10}, {"cyan"_sv, 5}}});
+
+  checkInternalFn(
+      "$internal$json_string_to_map_cast",
+      MAP(VARCHAR(), BIGINT()),
+      data,
+      expected);
+}
+
+TEST_F(JsonFunctionsTest, jsonStringToRowCast) {
+  // Row of strings.
+  auto data = makeRowVector({makeFlatVector<std::string>(
+      {R"({"red":1,"blue":2})"_sv,
+       R"({"red":3,"blue":4})"_sv,
+       R"({"red":1,"blue":2})"_sv,
+       R"({"red":1,"blue":2})"_sv,
+       R"({"red":10,"blue":5})"_sv})});
+
+  auto expected = makeRowVector(
+      {makeFlatVector<int64_t>({1, 3, 1, 1, 10}),
+       makeFlatVector<int64_t>({2, 4, 2, 2, 5})});
+
+  checkInternalFn(
+      "$internal$json_string_to_row_cast",
+      ROW({{"red", BIGINT()}, {"blue", BIGINT()}}),
+      data,
+      expected);
 }
 
 } // namespace
