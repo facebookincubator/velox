@@ -88,8 +88,8 @@ class ZipFunction : public exec::VectorFunction {
       vector_size_t offset = -1;
       for (int i = 0; i < numInputArrays; i++) {
         vector_size_t size = rawSizes[i][indices[i][row]];
-        allSameSize &= i == 0 || maxSize == size;
-        allSameOffsets &= i == 0 || offset == rawOffsets[i][indices[i][row]];
+        allSameSize = static_cast<uint32_t>(allSameSize) & static_cast<uint32_t>(i) == 0 || maxSize == size;
+        allSameOffsets = static_cast<uint32_t>(allSameOffsets) & static_cast<uint32_t>(i) == 0 || offset == rawOffsets[i][indices[i][row]];
         maxSize = std::max(maxSize, size);
         offset = rawOffsets[i][indices[i][row]];
       }

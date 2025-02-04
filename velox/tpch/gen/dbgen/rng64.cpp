@@ -140,14 +140,14 @@ DSS_HUGE AdvanceRand64(DSS_HUGE nSeed, DSS_HUGE nCount) {
   /* */
 
   /* first get the highest non-zero bit */
-  for (nBit = 0; (nCount >> nBit) != RNG_C; nBit++) {
+  for (nBit = 0; (static_cast<uint64_t>(nCount) >> nBit) != RNG_C; nBit++) {
   }
 
   /* go 1 bit at the time */
   while (--nBit >= 0) {
     Dsum *= (Apow + 1);
     Apow = Apow * Apow;
-    if (((nCount >> nBit) % 2) == 1) { /* odd value */
+    if (((static_cast<uint64_t>(nCount) >> nBit) % 2) == 1) { /* odd value */
       Dsum += Apow;
       Apow *= a;
     }

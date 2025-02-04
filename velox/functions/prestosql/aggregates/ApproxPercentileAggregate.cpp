@@ -185,7 +185,7 @@ struct KllSketchAccumulator {
 };
 
 void checkWeight(int64_t weight) {
-  constexpr int64_t kMaxWeight = (1ll << 60) - 1;
+  constexpr int64_t kMaxWeight = (1ULL << 60) - 1;
   VELOX_USER_CHECK(
       1 <= weight && weight <= kMaxWeight,
       "{}: weight must be in range [1, {}], got {}",

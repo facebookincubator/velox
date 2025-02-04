@@ -35,7 +35,7 @@ namespace {
 static constexpr size_t kMaxBuffers{3};
 
 void clearNullableFlag(int64_t& flags) {
-  flags = flags & (~ARROW_FLAG_NULLABLE);
+  flags = static_cast<uint64_t>(flags) & (~static_cast<uint64_t>(ARROW_FLAG_NULLABLE));
 }
 
 // Structure that will hold the buffers needed by ArrowArray. This is opaquely
