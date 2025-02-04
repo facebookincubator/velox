@@ -2695,9 +2695,7 @@ TEST_P(MultiFragmentTest, compression) {
       test("local://t1", 0.7, false);
     }
     SCOPED_TRACE(fmt::format("minCompressionRatio 0.0000001"));
-    {
-      test("local://t2", 0.0000001, true);
-    }
+    { test("local://t2", 0.0000001, true); }
   }
 }
 
