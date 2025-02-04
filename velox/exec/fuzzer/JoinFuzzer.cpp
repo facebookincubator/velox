@@ -110,6 +110,16 @@ class JoinFuzzer {
           numGroups(_numGroups) {}
   };
 
+  struct JoinData {
+    core::JoinType joinType;
+    bool nullAware;
+    std::vector<std::string> probeKeys;
+    std::vector<std::string> buildKeys;
+    std::vector<RowVectorPtr> buildInput;
+    std::vector<std::string> outputColumns;
+    std::string filter;
+  };
+
   static core::PlanNodePtr tryFlipJoinSides(const core::HashJoinNode& joinNode);
   static core::PlanNodePtr tryFlipJoinSides(
       const core::MergeJoinNode& joinNode);
@@ -145,6 +155,12 @@ class JoinFuzzer {
   static std::pair<core::PlanNodePtr, core::PlanNodePtr> tryFlipJoinSidesHelper(
       const TNode& joinNode);
 
+  enum class InputNodeType {
+    kValues,
+    kLocalPartitionRoundRobin,
+    kLocalPartition,
+  };
+
   // Makes the query plan with default settings in JoinFuzzer and value inputs
   // for both probe and build sides.
   //
@@ -160,6 +176,20 @@ class JoinFuzzer {
       const std::vector<std::string>& outputColumns,
       const std::string& filter);
 
+  // Constructs a cascading multi-join plan using hash join nodes to join the
+  // input nodes of a specified type.
+  //        c
+  //       / \
+  //      b  t4
+  //     / \
+  //   a   t3
+  //  / \
+  // t1 t2
+  JoinFuzzer::PlanWithSplits makeHashJoinPlan(
+      const std::vector<RowVectorPtr>& probeInput,
+      const std::vector<JoinData>& joinDataList,
+      const InputNodeType inputNodeType = InputNodeType::kValues);
+
   JoinFuzzer::PlanWithSplits makeMergeJoinPlan(
       core::JoinType joinType,
       const std::vector<std::string>& probeKeys,
@@ -168,6 +198,11 @@ class JoinFuzzer {
       const std::vector<RowVectorPtr>& buildInput,
       const std::vector<std::string>& outputColumns,
       const std::string& filter);
+
+  // Constructs a cascading multi-join plan with merge join nodes.
+  JoinFuzzer::PlanWithSplits makeMergeJoinPlan(
+      const std::vector<RowVectorPtr>& probeInput,
+      const std::vector<JoinData>& joinDataList);
 
   // Returns a PlanWithSplits for NestedLoopJoin with inputs from Values nodes.
   // If withFilter is true, uses the equality filter between probeKeys and
@@ -180,6 +215,11 @@ class JoinFuzzer {
       const std::vector<RowVectorPtr>& buildInput,
       const std::vector<std::string>& outputColumns,
       const std::string& filter);
+
+  // Constructs a cascading multi-join plan with nested loop join nodes.
+  JoinFuzzer::PlanWithSplits makeNestedLoopJoinPlan(
+      const std::vector<RowVectorPtr>& probeInput,
+      const std::vector<JoinData>& joinDataList);
 
   // Makes the default query plan with table scan as inputs for both probe and
   // build sides.
@@ -221,11 +261,10 @@ class JoinFuzzer {
       const std::string& filter);
 
   void makeAlternativePlans(
-      const core::PlanNodePtr& plan,
+      const core::PlanNodePtr& defaultPlan,
       const std::vector<RowVectorPtr>& probeInput,
-      const std::vector<RowVectorPtr>& buildInput,
-      std::vector<JoinFuzzer::PlanWithSplits>& plans,
-      const std::string& filter);
+      const std::vector<JoinData>& joinDataList,
+      std::vector<JoinFuzzer::PlanWithSplits>& plans);
 
   // Makes the query plan from 'planWithTableScan' with grouped execution mode.
   // Correspondingly, it replaces the table scan input splits with grouped ones.
@@ -737,6 +776,24 @@ std::vector<std::string> fieldNames(
   return names;
 }
 
+std::vector<core::PlanNodePtr> makeSources(
+    const std::vector<RowVectorPtr>& input,
+    std::shared_ptr<core::PlanNodeIdGenerator> planNodeIdGenerator) {
+  auto numSources = std::min<size_t>(4, input.size());
+  std::vector<std::vector<RowVectorPtr>> sourceInputs(numSources);
+  for (auto i = 0; i < input.size(); ++i) {
+    sourceInputs[i % numSources].push_back(input[i]);
+  }
+
+  std::vector<core::PlanNodePtr> sourceNodes;
+  for (const auto& sourceInput : sourceInputs) {
+    sourceNodes.push_back(
+        PlanBuilder(planNodeIdGenerator).values(sourceInput).planNode());
+  }
+
+  return sourceNodes;
+}
+
 JoinFuzzer::PlanWithSplits JoinFuzzer::makeDefaultPlan(
     core::JoinType joinType,
     bool nullAware,
@@ -760,6 +817,64 @@ JoinFuzzer::PlanWithSplits JoinFuzzer::makeDefaultPlan(
               nullAware)
           .planNode();
   return PlanWithSplits{plan};
+}
+
+JoinFuzzer::PlanWithSplits JoinFuzzer::makeHashJoinPlan(
+    const std::vector<RowVectorPtr>& probeInput,
+    const std::vector<JoinFuzzer::JoinData>& joinDataList,
+    const InputNodeType inputNodeType) {
+  VELOX_CHECK_GT(joinDataList.size(), 0);
+
+  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  PlanBuilder plan = PlanBuilder(planNodeIdGenerator);
+  std::vector<core::PlanNodePtr> buildNodes;
+  switch (inputNodeType) {
+    case InputNodeType::kValues:
+      plan.values(probeInput);
+      for (const JoinFuzzer::JoinData& joinData : joinDataList) {
+        buildNodes.push_back(PlanBuilder(planNodeIdGenerator)
+                                 .values(joinData.buildInput)
+                                 .planNode());
+      }
+      break;
+    case InputNodeType::kLocalPartitionRoundRobin:
+      plan.localPartitionRoundRobin(
+          makeSources(probeInput, planNodeIdGenerator));
+      for (const JoinFuzzer::JoinData& joinData : joinDataList) {
+        buildNodes.push_back(PlanBuilder(planNodeIdGenerator)
+                                 .localPartitionRoundRobin(makeSources(
+                                     joinData.buildInput, planNodeIdGenerator))
+                                 .planNode());
+      }
+      break;
+    case InputNodeType::kLocalPartition:
+      plan.localPartition(
+          joinDataList[0].probeKeys,
+          makeSources(probeInput, planNodeIdGenerator));
+      for (const JoinFuzzer::JoinData& joinData : joinDataList) {
+        buildNodes.push_back(
+            PlanBuilder(planNodeIdGenerator)
+                .localPartition(
+                    joinData.buildKeys,
+                    makeSources(joinData.buildInput, planNodeIdGenerator))
+                .planNode());
+      }
+      break;
+    default:
+      VELOX_USER_FAIL("Invalid input node type");
+  }
+  for (int i = 0; i < joinDataList.size(); i++) {
+    plan.hashJoin(
+        joinDataList[i].probeKeys,
+        joinDataList[i].buildKeys,
+        /*build=*/
+        buildNodes[i],
+        joinDataList[i].filter,
+        joinDataList[i].outputColumns,
+        joinDataList[i].joinType,
+        joinDataList[i].nullAware);
+  }
+  return JoinFuzzer::PlanWithSplits{plan.planNode()};
 }
 
 JoinFuzzer::PlanWithSplits JoinFuzzer::makeDefaultPlanWithTableScan(
@@ -811,24 +926,6 @@ JoinFuzzer::PlanWithSplits JoinFuzzer::makeGroupedExecutionPlanWithTableScan(
        {planWithTableScan.buildScanId, groupedBuildScanSplits}},
       core::ExecutionStrategy::kGrouped,
       numGroups};
-}
-
-std::vector<core::PlanNodePtr> makeSources(
-    const std::vector<RowVectorPtr>& input,
-    std::shared_ptr<core::PlanNodeIdGenerator>& planNodeIdGenerator) {
-  auto numSources = std::min<size_t>(4, input.size());
-  std::vector<std::vector<RowVectorPtr>> sourceInputs(numSources);
-  for (auto i = 0; i < input.size(); ++i) {
-    sourceInputs[i % numSources].push_back(input[i]);
-  }
-
-  std::vector<core::PlanNodePtr> sourceNodes;
-  for (const auto& sourceInput : sourceInputs) {
-    sourceNodes.push_back(
-        PlanBuilder(planNodeIdGenerator).values(sourceInput).planNode());
-  }
-
-  return sourceNodes;
 }
 
 // Returns an equality join filter between probeKeys and buildKeys.
@@ -896,6 +993,32 @@ JoinFuzzer::PlanWithSplits JoinFuzzer::makeMergeJoinPlan(
                                         .planNode()};
 }
 
+JoinFuzzer::PlanWithSplits JoinFuzzer::makeMergeJoinPlan(
+    const std::vector<RowVectorPtr>& probeInput,
+    const std::vector<JoinFuzzer::JoinData>& joinDataList) {
+  VELOX_CHECK_GT(joinDataList.size(), 0);
+
+  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  PlanBuilder plan = PlanBuilder(planNodeIdGenerator)
+                         .values(probeInput)
+                         .orderBy(joinDataList[0].probeKeys, false);
+  for (const JoinFuzzer::JoinData& joinData : joinDataList) {
+    plan.orderBy(joinData.probeKeys, false)
+        .mergeJoin(
+            joinData.probeKeys,
+            joinData.buildKeys,
+            /*build=*/
+            PlanBuilder(planNodeIdGenerator)
+                .values(joinData.buildInput)
+                .orderBy(joinData.buildKeys, false)
+                .planNode(),
+            joinData.filter,
+            joinData.outputColumns,
+            joinData.joinType);
+  }
+  return JoinFuzzer::PlanWithSplits{plan.planNode()};
+}
+
 JoinFuzzer::PlanWithSplits JoinFuzzer::makeNestedLoopJoinPlan(
     core::JoinType joinType,
     const std::vector<std::string>& probeKeys,
@@ -916,90 +1039,74 @@ JoinFuzzer::PlanWithSplits JoinFuzzer::makeNestedLoopJoinPlan(
           .planNode()};
 }
 
-void JoinFuzzer::makeAlternativePlans(
-    const core::PlanNodePtr& plan,
+JoinFuzzer::PlanWithSplits JoinFuzzer::makeNestedLoopJoinPlan(
     const std::vector<RowVectorPtr>& probeInput,
-    const std::vector<RowVectorPtr>& buildInput,
-    std::vector<JoinFuzzer::PlanWithSplits>& plans,
-    const std::string& filter) {
-  auto joinNode = std::dynamic_pointer_cast<const core::HashJoinNode>(plan);
+    const std::vector<JoinFuzzer::JoinData>& joinDataList) {
+  VELOX_CHECK_GT(joinDataList.size(), 0);
+
+  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  PlanBuilder plan = PlanBuilder(planNodeIdGenerator).values(probeInput);
+  for (const JoinFuzzer::JoinData& joinData : joinDataList) {
+    plan.orderBy(joinData.probeKeys, false)
+        .nestedLoopJoin(
+            /*right=*/PlanBuilder(planNodeIdGenerator)
+                .values(joinData.buildInput)
+                .planNode(),
+            /*joinCondition=*/joinData.filter.empty()
+                ? makeJoinFilter(joinData.probeKeys, joinData.buildKeys)
+                : fmt::format(
+                      "{} AND {}",
+                      makeJoinFilter(joinData.probeKeys, joinData.buildKeys),
+                      joinData.filter),
+            joinData.outputColumns,
+            joinData.joinType);
+  }
+  return JoinFuzzer::PlanWithSplits{plan.planNode()};
+}
+
+void JoinFuzzer::makeAlternativePlans(
+    const core::PlanNodePtr& defaultPlan,
+    const std::vector<RowVectorPtr>& probeInput,
+    const std::vector<JoinData>& joinDataList,
+    std::vector<JoinFuzzer::PlanWithSplits>& plans) {
+  auto joinNode =
+      std::dynamic_pointer_cast<const core::HashJoinNode>(defaultPlan);
   VELOX_CHECK_NOT_NULL(joinNode);
 
   // Flip join sides.
-  addFlippedJoinPlan<core::HashJoinNode>(plan, plans);
+  addFlippedJoinPlan<core::HashJoinNode>(defaultPlan, plans);
 
-  // Parallelize probe and build sides.
-  const auto probeKeys = fieldNames(joinNode->leftKeys());
-  const auto buildKeys = fieldNames(joinNode->rightKeys());
-  const auto outputColumns = joinNode->outputType()->names();
-  const auto joinType = joinNode->joinType();
-
-  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
   // Use LocalPartition with round robin.
-  plans.push_back(JoinFuzzer::PlanWithSplits{
-      PlanBuilder(planNodeIdGenerator)
-          .localPartitionRoundRobin(
-              makeSources(probeInput, planNodeIdGenerator))
-          .hashJoin(
-              probeKeys,
-              buildKeys,
-              PlanBuilder(planNodeIdGenerator)
-                  .localPartitionRoundRobin(
-                      makeSources(buildInput, planNodeIdGenerator))
-                  .planNode(),
-              filter,
-              outputColumns,
-              joinType,
-              joinNode->isNullAware())
-          .planNode()});
+  plans.push_back(makeHashJoinPlan(
+      probeInput,
+      joinDataList,
+      JoinFuzzer::InputNodeType::kLocalPartitionRoundRobin));
 
   // Use LocalPartition with hash.
-  plans.push_back(JoinFuzzer::PlanWithSplits{
-      PlanBuilder(planNodeIdGenerator)
-          .localPartition(
-              probeKeys, makeSources(probeInput, planNodeIdGenerator))
-          .hashJoin(
-              probeKeys,
-              buildKeys,
-              PlanBuilder(planNodeIdGenerator)
-                  .localPartition(
-                      buildKeys, makeSources(buildInput, planNodeIdGenerator))
-                  .planNode(),
-              filter,
-              outputColumns,
-              joinType,
-              joinNode->isNullAware())
-          .planNode()});
+  plans.push_back(makeHashJoinPlan(
+      probeInput, joinDataList, JoinFuzzer::InputNodeType::kLocalPartition));
 
+  bool mergeJoinSupported = true;
+  bool nestedLoopJoinSupported = true;
+  for (const JoinData& joinData : joinDataList) {
+    if (!core::MergeJoinNode::isSupported(joinData.joinType)) {
+      mergeJoinSupported = false;
+    }
+    if (!core::NestedLoopJoinNode::isSupported(joinData.joinType)) {
+      nestedLoopJoinSupported = false;
+    }
+  }
   // Use OrderBy + MergeJoin
-  if (core::MergeJoinNode::isSupported(joinNode->joinType())) {
-    auto planWithSplits = makeMergeJoinPlan(
-        joinType,
-        probeKeys,
-        buildKeys,
-        probeInput,
-        buildInput,
-        outputColumns,
-        filter);
+  if (mergeJoinSupported) {
+    auto planWithSplits = makeMergeJoinPlan(probeInput, joinDataList);
     plans.push_back(planWithSplits);
 
     addFlippedJoinPlan<core::MergeJoinNode>(planWithSplits.plan, plans);
   }
 
   // Use NestedLoopJoin.
-  if (core::NestedLoopJoinNode::isSupported(joinNode->joinType())) {
-    std::string joinCondition = filter.empty()
-        ? makeJoinFilter(probeKeys, buildKeys)
-        : fmt::format(
-              "{} AND {}", makeJoinFilter(probeKeys, buildKeys), filter);
-    auto planWithSplits = makeNestedLoopJoinPlan(
-        joinType,
-        probeKeys,
-        buildKeys,
-        probeInput,
-        buildInput,
-        outputColumns,
-        joinCondition);
+  if (nestedLoopJoinSupported) {
+    auto planWithSplits = makeNestedLoopJoinPlan(probeInput, joinDataList);
     plans.push_back(planWithSplits);
 
     addFlippedJoinPlan<core::NestedLoopJoinNode>(planWithSplits.plan, plans);
@@ -1101,8 +1208,11 @@ RowVectorPtr JoinFuzzer::testCrossProduct(
 }
 
 void JoinFuzzer::verify(core::JoinType joinType) {
+  JoinData joinData;
+  joinData.joinType = joinType;
   const bool nullAware =
       isNullAwareSupported(joinType) && vectorFuzzer_.coinToss(0.5);
+  joinData.nullAware = nullAware;
 
   // Add boolean/integer join filter.
   const bool withFilter = vectorFuzzer_.coinToss(FLAGS_filter_ratio);
@@ -1122,12 +1232,14 @@ void JoinFuzzer::verify(core::JoinType joinType) {
           "t{0} % {1} = 0 AND u{0} % {1} = 0", keyTypes.size() - 1, rand);
     }
   }
+  joinData.filter = filter;
 
   std::vector<std::string> probeKeys = makeNames("t", keyTypes.size());
   std::vector<std::string> buildKeys = makeNames("u", keyTypes.size());
 
   auto probeInput = generateProbeInput(probeKeys, keyTypes);
   auto buildInput = generateBuildInput(probeInput, probeKeys, buildKeys);
+  joinData.buildInput = buildInput;
 
   // Flatten inputs.
   auto flatProbeInput = flatten(probeInput);
@@ -1192,18 +1304,12 @@ void JoinFuzzer::verify(core::JoinType joinType) {
       core::isRightSemiProjectJoin(joinType)) {
     outputColumns.push_back("match");
   }
+  joinData.outputColumns = outputColumns;
 
   shuffleJoinKeys(probeKeys, buildKeys);
-
-  const auto defaultPlan = makeDefaultPlan(
-      joinType,
-      nullAware,
-      probeKeys,
-      buildKeys,
-      probeInput,
-      buildInput,
-      outputColumns,
-      filter);
+  joinData.probeKeys = probeKeys;
+  joinData.buildKeys = buildKeys;
+  const auto defaultPlan = makeHashJoinPlan(probeInput, {joinData});
 
   const auto expected = execute(defaultPlan, /*injectSpill=*/false);
 
@@ -1223,22 +1329,12 @@ void JoinFuzzer::verify(core::JoinType joinType) {
       stats_.numVerified++;
     }
   }
-
+  joinData.buildInput = flatBuildInput;
   std::vector<PlanWithSplits> altPlans;
-  altPlans.push_back(makeDefaultPlan(
-      joinType,
-      nullAware,
-      probeKeys,
-      buildKeys,
-      flatProbeInput,
-      flatBuildInput,
-      outputColumns,
-      filter));
+  altPlans.push_back(makeHashJoinPlan(flatProbeInput, {joinData}));
 
-  makeAlternativePlans(
-      defaultPlan.plan, probeInput, buildInput, altPlans, filter);
-  makeAlternativePlans(
-      defaultPlan.plan, flatProbeInput, flatBuildInput, altPlans, filter);
+  makeAlternativePlans(defaultPlan.plan, probeInput, {joinData}, altPlans);
+  makeAlternativePlans(defaultPlan.plan, flatProbeInput, {joinData}, altPlans);
 
   addPlansWithTableScan(
       tableScanDir->getPath(),
