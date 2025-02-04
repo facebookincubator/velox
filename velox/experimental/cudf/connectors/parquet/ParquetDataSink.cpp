@@ -395,19 +395,19 @@ std::vector<std::string> ParquetDataSink::close() {
   partitionUpdates.reserve(1);
   VELOX_CHECK_NOT_NULL(writerInfo_);
   // clang-format off
-      auto partitionUpdateJson = folly::toJson(
-       folly::dynamic::object
-          ("writePath", writerInfo_->writerParameters.writeDirectory())
-          ("targetPath", writerInfo_->writerParameters.targetDirectory())
-          ("fileWriteInfos", folly::dynamic::array(
-            folly::dynamic::object
-              ("writeFileName", writerInfo_->writerParameters.writeFileName())
-              ("targetFileName", writerInfo_->writerParameters.targetFileName())
-              ("fileSize", ioStats_->rawBytesWritten())))
-          ("rowCount", writerInfo_->numWrittenRows)
-          ("inMemoryDataSizeInBytes", writerInfo_->inputSizeInBytes)
-          ("onDiskDataSizeInBytes", ioStats_->rawBytesWritten())
-          ("containsNumberedFileNames", true));
+    auto partitionUpdateJson = folly::toJson(
+     folly::dynamic::object
+        ("writePath", writerInfo_->writerParameters.writeDirectory())
+        ("targetPath", writerInfo_->writerParameters.targetDirectory())
+        ("fileWriteInfos", folly::dynamic::array(
+          folly::dynamic::object
+            ("writeFileName", writerInfo_->writerParameters.writeFileName())
+            ("targetFileName", writerInfo_->writerParameters.targetFileName())
+            ("fileSize", ioStats_->rawBytesWritten())))
+        ("rowCount", writerInfo_->numWrittenRows)
+        ("inMemoryDataSizeInBytes", writerInfo_->inputSizeInBytes)
+        ("onDiskDataSizeInBytes", ioStats_->rawBytesWritten())
+        ("containsNumberedFileNames", true));
   // clang-format on
   partitionUpdates.emplace_back(partitionUpdateJson);
 
@@ -475,14 +475,6 @@ void ParquetDataSink::makeWriterOptions(
   if (!options->compressionKind) {
     options->compressionKind = insertTableHandle_->compressionKind();
   }
-
-  /* Not yet implemented
-  updateWriterOptionsFromParquetConfig(
-      insertTableHandle_->storageFormat(),
-      parquetConfig_,
-      connectorSessionProperties,
-      options);
-      */
 
   const auto& sessionTimeZoneName = connectorQueryCtx_->sessionTimezone();
   if (!sessionTimeZoneName.empty()) {

@@ -240,12 +240,12 @@ class ParquetInsertTableHandle : public ConnectorInsertTableHandle {
   }
 
   bool supportsMultiThreading() const override {
-    return false; /* true? */
+    return true; // TODO: Needs more testing if this is ok
   }
 
   bool isExistingTable() const {
-    return false; // locationHandle_->tableType() ==
-                  // LocationHandle::TableType::kExisting;
+    return false; // This is always false as cudf's Parquet writer doesn't yet
+                  // support updating existing Parquet files
   }
 
   folly::dynamic serialize() const override;

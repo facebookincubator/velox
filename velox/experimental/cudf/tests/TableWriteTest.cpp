@@ -114,7 +114,7 @@ struct TestParam {
       bool multiDrivers,
       CompressionKind compressionKind) {
     value = static_cast<uint64_t>(compressionKind) << 32 |
-        static_cast<uint64_t>(!!multiDrivers) << 24 |
+        static_cast<uint64_t>(static_cast<bool>(multiDrivers)) << 24 |
         static_cast<uint64_t>(fileFormat) << 16 |
         static_cast<uint64_t>(testMode) << 8 |
         static_cast<uint64_t>(commitStrategy);
@@ -321,7 +321,7 @@ class TableWriteTest : public ParquetConnectorTestBase {
         {makeConstant((int64_t)123'456, size),
          makeConstant((int32_t)321, size),
          makeConstant((int16_t)12'345, size),
-         // makeConstant(variant(TypeKind::REAL), size),
+         makeConstant(variant(TypeKind::REAL), size),
          makeConstant((double)1'234.01, size),
          makeConstant(variant(TypeKind::VARCHAR), size)});
   }
@@ -684,7 +684,7 @@ class UnpartitionedTableWriterTest
 
   static std::vector<uint64_t> getTestParams() {
     std::vector<uint64_t> testParams;
-    const auto multiDriverOptions = std::vector<bool>{false}; // , true};
+    const auto multiDriverOptions = std::vector<bool>{false, true};
     for (bool multiDrivers : multiDriverOptions) {
       testParams.push_back(TestParam{
           FileFormat::PARQUET,
