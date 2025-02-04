@@ -94,7 +94,6 @@ static void gen_phone(DSS_HUGE ind, char* target, seed_t* seed) {
       static_cast<int>(exchg),
       static_cast<int>(number));
   std::strncpy(target, formatted.c_str(), sizeof(target) - 1);
-  target[sizeof(target) - 1] = '\0';
 
   return;
 }
