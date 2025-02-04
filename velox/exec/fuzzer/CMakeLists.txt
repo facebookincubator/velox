@@ -12,11 +12,17 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-add_library(velox_fuzzer_util DuckQueryRunner.cpp PrestoQueryRunner.cpp
-                              FuzzerUtil.cpp ToSQLUtil.cpp)
+add_library(
+  velox_fuzzer_util
+  ReferenceQueryRunner.cpp
+  DuckQueryRunner.cpp
+  PrestoQueryRunner.cpp
+  FuzzerUtil.cpp
+  ToSQLUtil.cpp)
 
 target_link_libraries(
   velox_fuzzer_util
+  velox_common_fuzzer_util
   velox_vector_fuzzer
   velox_core
   velox_exec_test_lib
@@ -73,10 +79,16 @@ target_link_libraries(
   velox_aggregation_fuzzer_base
   velox_temp_path)
 
-add_library(velox_row_number_fuzzer RowNumberFuzzer.cpp)
+add_library(velox_row_number_fuzzer_lib RowNumberFuzzer.cpp)
+
+# RowNumber Fuzzer.
+add_executable(velox_row_number_fuzzer RowNumberFuzzerRunner.cpp)
 
 target_link_libraries(
-  velox_row_number_fuzzer
+  velox_row_number_fuzzer velox_row_number_fuzzer_lib)
+
+target_link_libraries(
+  velox_row_number_fuzzer_lib
   velox_fuzzer_util
   velox_type
   velox_vector_fuzzer
@@ -111,6 +123,7 @@ add_library(velox_memory_arbitration_fuzzer MemoryArbitrationFuzzer.cpp)
 
 target_link_libraries(
   velox_memory_arbitration_fuzzer
+  velox_common_fuzzer_util
   velox_fuzzer_util
   velox_type
   velox_vector_fuzzer

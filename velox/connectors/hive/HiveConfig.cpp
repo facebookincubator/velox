@@ -123,8 +123,10 @@ bool HiveConfig::ignoreMissingFiles(const config::ConfigBase* session) const {
   return session->get<bool>(kIgnoreMissingFilesSession, false);
 }
 
-int64_t HiveConfig::maxCoalescedBytes() const {
-  return config_->get<int64_t>(kMaxCoalescedBytes, 128 << 20); // 128MB
+int64_t HiveConfig::maxCoalescedBytes(const config::ConfigBase* session) const {
+  return session->get<int64_t>(
+      kMaxCoalescedBytesSession,
+      config_->get<int64_t>(kMaxCoalescedBytes, 128 << 20)); // 128MB
 }
 
 int32_t HiveConfig::maxCoalescedDistanceBytes(
@@ -147,8 +149,9 @@ int32_t HiveConfig::prefetchRowGroups() const {
   return config_->get<int32_t>(kPrefetchRowGroups, 1);
 }
 
-int32_t HiveConfig::loadQuantum() const {
-  return config_->get<int32_t>(kLoadQuantum, 8 << 20);
+int32_t HiveConfig::loadQuantum(const config::ConfigBase* session) const {
+  return session->get<int32_t>(
+      kLoadQuantumSession, config_->get<int32_t>(kLoadQuantum, 8 << 20));
 }
 
 int32_t HiveConfig::numCacheFileHandles() const {
@@ -157,85 +160,6 @@ int32_t HiveConfig::numCacheFileHandles() const {
 
 bool HiveConfig::isFileHandleCacheEnabled() const {
   return config_->get<bool>(kEnableFileHandleCache, true);
-}
-
-uint64_t HiveConfig::orcWriterMaxStripeSize(
-    const config::ConfigBase* session) const {
-  return config::toCapacity(
-      session->get<std::string>(
-          kOrcWriterMaxStripeSizeSession,
-          config_->get<std::string>(kOrcWriterMaxStripeSize, "64MB")),
-      config::CapacityUnit::BYTE);
-}
-
-uint64_t HiveConfig::orcWriterMaxDictionaryMemory(
-    const config::ConfigBase* session) const {
-  return config::toCapacity(
-      session->get<std::string>(
-          kOrcWriterMaxDictionaryMemorySession,
-          config_->get<std::string>(kOrcWriterMaxDictionaryMemory, "16MB")),
-      config::CapacityUnit::BYTE);
-}
-
-bool HiveConfig::isOrcWriterIntegerDictionaryEncodingEnabled(
-    const config::ConfigBase* session) const {
-  return session->get<bool>(
-      kOrcWriterIntegerDictionaryEncodingEnabledSession,
-      config_->get<bool>(kOrcWriterIntegerDictionaryEncodingEnabled, true));
-}
-
-bool HiveConfig::isOrcWriterStringDictionaryEncodingEnabled(
-    const config::ConfigBase* session) const {
-  return session->get<bool>(
-      kOrcWriterStringDictionaryEncodingEnabledSession,
-      config_->get<bool>(kOrcWriterStringDictionaryEncodingEnabled, true));
-}
-
-bool HiveConfig::orcWriterLinearStripeSizeHeuristics(
-    const config::ConfigBase* session) const {
-  return session->get<bool>(
-      kOrcWriterLinearStripeSizeHeuristicsSession,
-      config_->get<bool>(kOrcWriterLinearStripeSizeHeuristics, true));
-}
-
-uint64_t HiveConfig::orcWriterMinCompressionSize(
-    const config::ConfigBase* session) const {
-  return session->get<uint64_t>(
-      kOrcWriterMinCompressionSizeSession,
-      config_->get<uint64_t>(kOrcWriterMinCompressionSize, 1024));
-}
-
-std::optional<uint8_t> HiveConfig::orcWriterCompressionLevel(
-    const config::ConfigBase* session) const {
-  auto sessionProp = session->get<uint8_t>(kOrcWriterCompressionLevelSession);
-
-  if (sessionProp.has_value()) {
-    return sessionProp.value();
-  }
-
-  auto configProp = config_->get<uint8_t>(kOrcWriterCompressionLevel);
-
-  if (configProp.has_value()) {
-    return configProp.value();
-  }
-
-  // Presto has a single config controlling this value, but different defaults
-  // depending on the compression kind.
-  return std::nullopt;
-}
-
-uint8_t HiveConfig::orcWriterZLIBCompressionLevel(
-    const config::ConfigBase* session) const {
-  constexpr uint8_t kDefaultZlibCompressionLevel = 4;
-  return orcWriterCompressionLevel(session).value_or(
-      kDefaultZlibCompressionLevel);
-}
-
-uint8_t HiveConfig::orcWriterZSTDCompressionLevel(
-    const config::ConfigBase* session) const {
-  constexpr uint8_t kDefaultZstdCompressionLevel = 3;
-  return orcWriterCompressionLevel(session).value_or(
-      kDefaultZstdCompressionLevel);
 }
 
 std::string HiveConfig::writeFileCreateConfig() const {
@@ -283,10 +207,19 @@ uint8_t HiveConfig::readTimestampUnit(const config::ConfigBase* session) const {
   return unit;
 }
 
-bool HiveConfig::cacheNoRetention(const config::ConfigBase* session) const {
+bool HiveConfig::readStatsBasedFilterReorderDisabled(
+    const config::ConfigBase* session) const {
   return session->get<bool>(
-      kCacheNoRetentionSession,
-      config_->get<bool>(kCacheNoRetention, /*defaultValue=*/false));
+      kReadStatsBasedFilterReorderDisabledSession,
+      config_->get<bool>(kReadStatsBasedFilterReorderDisabled, false));
+}
+
+std::string HiveConfig::hiveLocalDataPath() const {
+  return config_->get<std::string>(kLocalDataPath, "");
+}
+
+std::string HiveConfig::hiveLocalFileFormat() const {
+  return config_->get<std::string>(kLocalFileFormat, "");
 }
 
 } // namespace facebook::velox::connector::hive

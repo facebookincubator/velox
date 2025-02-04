@@ -82,11 +82,12 @@ struct HiveConnectorSplit : public connector::ConnectorSplit {
       const std::unordered_map<std::string, std::string>& _customSplitInfo = {},
       const std::shared_ptr<std::string>& _extraFileInfo = {},
       const std::unordered_map<std::string, std::string>& _serdeParameters = {},
-      int64_t _splitWeight = 0,
+      int64_t splitWeight = 0,
+      bool cacheable = true,
       const std::unordered_map<std::string, std::string>& _infoColumns = {},
       std::optional<FileProperties> _properties = std::nullopt,
       std::optional<RowIdProperties> _rowIdProperties = std::nullopt)
-      : ConnectorSplit(connectorId, _splitWeight),
+      : ConnectorSplit(connectorId, splitWeight, cacheable),
         filePath(_filePath),
         fileFormat(_fileFormat),
         start(_start),
@@ -130,6 +131,11 @@ class HiveConnectorSplitBuilder {
 
   HiveConnectorSplitBuilder& splitWeight(int64_t splitWeight) {
     splitWeight_ = splitWeight;
+    return *this;
+  }
+
+  HiveConnectorSplitBuilder& cacheable(bool cacheable) {
+    cacheable_ = cacheable;
     return *this;
   }
 
@@ -199,6 +205,7 @@ class HiveConnectorSplitBuilder {
         extraFileInfo_,
         serdeParameters_,
         splitWeight_,
+        cacheable_,
         infoColumns_,
         fileProperties_);
   }
@@ -216,6 +223,7 @@ class HiveConnectorSplitBuilder {
   std::unordered_map<std::string, std::string> infoColumns_ = {};
   std::string connectorId_;
   int64_t splitWeight_{0};
+  bool cacheable_{true};
   std::optional<FileProperties> fileProperties_;
 };
 

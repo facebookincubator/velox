@@ -79,7 +79,7 @@ TEST_F(HiveConnectorUtilTest, configureReaderOptions) {
         "testConnectorId",
         "testTable",
         false,
-        hive::SubfieldFilters{},
+        common::SubfieldFilters{},
         nullptr,
         nullptr,
         tableParameters);
@@ -103,7 +103,7 @@ TEST_F(HiveConnectorUtilTest, configureReaderOptions) {
     auto tableHandle = createTableHandle();
     auto split = createSplit();
     configureReaderOptions(
-        readerOptions, hiveConfig, connectorQueryCtx.get(), tableHandle, split);
+        hiveConfig, connectorQueryCtx.get(), tableHandle, split, readerOptions);
   };
 
   auto clearDynamicParameters = [&](FileFormat newFileFormat) {
@@ -130,8 +130,11 @@ TEST_F(HiveConnectorUtilTest, configureReaderOptions) {
   performConfigure();
   EXPECT_EQ(readerOptions.fileFormat(), fileFormat);
   EXPECT_TRUE(compareSerDeOptions(readerOptions.serDeOptions(), expectedSerDe));
-  EXPECT_EQ(readerOptions.loadQuantum(), hiveConfig->loadQuantum());
-  EXPECT_EQ(readerOptions.maxCoalesceBytes(), hiveConfig->maxCoalescedBytes());
+  EXPECT_EQ(
+      readerOptions.loadQuantum(), hiveConfig->loadQuantum(&sessionProperties));
+  EXPECT_EQ(
+      readerOptions.maxCoalesceBytes(),
+      hiveConfig->maxCoalescedBytes(&sessionProperties));
   EXPECT_EQ(
       readerOptions.maxCoalesceDistance(),
       hiveConfig->maxCoalescedDistanceBytes(&sessionProperties));
@@ -237,8 +240,11 @@ TEST_F(HiveConnectorUtilTest, configureReaderOptions) {
   hiveConfig = std::make_shared<hive::HiveConfig>(
       std::make_shared<config::ConfigBase>(std::move(customHiveConfigProps)));
   performConfigure();
-  EXPECT_EQ(readerOptions.loadQuantum(), hiveConfig->loadQuantum());
-  EXPECT_EQ(readerOptions.maxCoalesceBytes(), hiveConfig->maxCoalescedBytes());
+  EXPECT_EQ(
+      readerOptions.loadQuantum(), hiveConfig->loadQuantum(&sessionProperties));
+  EXPECT_EQ(
+      readerOptions.maxCoalesceBytes(),
+      hiveConfig->maxCoalescedBytes(&sessionProperties));
   EXPECT_EQ(
       readerOptions.maxCoalesceDistance(),
       hiveConfig->maxCoalescedDistanceBytes(&sessionProperties));
@@ -258,6 +264,78 @@ TEST_F(HiveConnectorUtilTest, configureReaderOptions) {
   checkUseColumnNamesForColumnMapping();
 }
 
+TEST_F(HiveConnectorUtilTest, cacheRetention) {
+  struct {
+    bool splitCacheable;
+    bool expectedNoCacheRetention;
+
+    std::string debugString() const {
+      return fmt::format(
+          "splitCacheable {}, expectedNoCacheRetention {}",
+          splitCacheable,
+          expectedNoCacheRetention);
+    }
+  } testSettings[] = {{false, true}, {true, false}};
+
+  for (const auto& testData : testSettings) {
+    SCOPED_TRACE(testData.debugString());
+
+    config::ConfigBase sessionProperties({});
+    auto hiveConfig =
+        std::make_shared<hive::HiveConfig>(std::make_shared<config::ConfigBase>(
+            std::unordered_map<std::string, std::string>()));
+
+    auto connectorQueryCtx = std::make_unique<connector::ConnectorQueryCtx>(
+        pool_.get(),
+        pool_.get(),
+        &sessionProperties,
+        nullptr,
+        common::PrefixSortConfig(),
+        nullptr,
+        nullptr,
+        "query.HiveConnectorUtilTest",
+        "task.HiveConnectorUtilTest",
+        "planNodeId.HiveConnectorUtilTest",
+        0,
+        "");
+
+    dwio::common::ReaderOptions readerOptions(pool_.get());
+
+    auto tableHandle = std::make_shared<hive::HiveTableHandle>(
+        "testConnectorId",
+        "testTable",
+        false,
+        common::SubfieldFilters{},
+        nullptr,
+        nullptr,
+        std::unordered_map<std::string, std::string>{});
+
+    auto hiveSplit = std::make_shared<hive::HiveConnectorSplit>(
+        "testConnectorId",
+        "/tmp/",
+        FileFormat::DWRF,
+        0UL,
+        std::numeric_limits<uint64_t>::max(),
+        std::unordered_map<std::string, std::optional<std::string>>{},
+        std::nullopt,
+        std::unordered_map<std::string, std::string>{},
+        std::shared_ptr<std::string>{},
+        std::unordered_map<std::string, std::string>{},
+        0,
+        testData.splitCacheable);
+
+    configureReaderOptions(
+        hiveConfig,
+        connectorQueryCtx.get(),
+        tableHandle,
+        hiveSplit,
+        readerOptions);
+
+    ASSERT_EQ(
+        readerOptions.noCacheRetention(), testData.expectedNoCacheRetention);
+  }
+}
+
 TEST_F(HiveConnectorUtilTest, configureRowReaderOptions) {
   auto split =
       std::make_shared<hive::HiveConnectorSplit>("", "", FileFormat::UNKNOWN);
@@ -269,165 +347,4 @@ TEST_F(HiveConnectorUtilTest, configureRowReaderOptions) {
       ->setFilter(common::createBigintValues({1, 3}, false));
   float_features->setFlatMapFeatureSelection({"1", "3"});
 }
-
-TEST_F(
-    HiveConnectorUtilTest,
-    updateWriterOptionsFromHiveConfigDWRFWithoutSessionProperties) {
-  auto fileFormat = dwio::common::FileFormat::DWRF;
-  std::unordered_map<std::string, std::string> connectorConfig = {
-      {hive::HiveConfig::kOrcWriterMaxStripeSize, "100MB"},
-      {hive::HiveConfig::kOrcWriterMaxDictionaryMemory, "128MB"},
-      {hive::HiveConfig::kOrcWriterIntegerDictionaryEncodingEnabled, "true"},
-      {hive::HiveConfig::kOrcWriterStringDictionaryEncodingEnabled, "false"},
-      {hive::HiveConfig::kOrcWriterLinearStripeSizeHeuristics, "true"},
-      {hive::HiveConfig::kOrcWriterMinCompressionSize, "512"},
-      {hive::HiveConfig::kOrcWriterCompressionLevel, "1"}};
-  auto hiveConfig = std::make_shared<hive::HiveConfig>(
-      std::make_shared<config::ConfigBase>(std::move(connectorConfig)));
-  std::shared_ptr<config::ConfigBase> connectorSessionProperties =
-      std::make_shared<config::ConfigBase>(
-          std::unordered_map<std::string, std::string>());
-  std::shared_ptr<dwio::common::WriterOptions> options =
-      std::make_shared<dwrf::WriterOptions>();
-  options->compressionKind = velox::common::CompressionKind_ZLIB;
-
-  updateWriterOptionsFromHiveConfig(
-      fileFormat, hiveConfig, connectorSessionProperties.get(), options);
-
-  auto dwrfOptions = std::dynamic_pointer_cast<dwrf::WriterOptions>(options);
-  ASSERT_EQ(
-      dwrfOptions->config->get<std::string>(dwrf::Config::COMPRESSION.key),
-      "1");
-  ASSERT_EQ(
-      dwrfOptions->config->get<std::string>(dwrf::Config::STRIPE_SIZE.key),
-      std::to_string(100 * 1024 * 1024));
-  ASSERT_EQ(
-      dwrfOptions->config->get<std::string>(
-          dwrf::Config::MAX_DICTIONARY_SIZE.key),
-      std::to_string(128 * 1024 * 1024));
-  ASSERT_EQ(
-      dwrfOptions->config->get<bool>(
-          dwrf::Config::INTEGER_DICTIONARY_ENCODING_ENABLED.key),
-      true);
-  ASSERT_EQ(
-      dwrfOptions->config->get<bool>(
-          dwrf::Config::STRING_DICTIONARY_ENCODING_ENABLED.key),
-      false);
-  ASSERT_EQ(
-      dwrfOptions->config->get<bool>(
-          dwrf::Config::LINEAR_STRIPE_SIZE_HEURISTICS.key),
-      true);
-  ASSERT_EQ(
-      dwrfOptions->config->get<std::string>(
-          dwrf::Config::COMPRESSION_BLOCK_SIZE_MIN.key),
-      "512");
-  ASSERT_EQ(
-      dwrfOptions->config->get<std::string>(
-          dwrf::Config::ZLIB_COMPRESSION_LEVEL.key),
-      "1");
-  ASSERT_EQ(
-      dwrfOptions->config->get<std::string>(
-          dwrf::Config::ZSTD_COMPRESSION_LEVEL.key),
-      "1");
-}
-
-TEST_F(
-    HiveConnectorUtilTest,
-    updateWriterOptionsFromHiveConfigDWRFWithSessionProperties) {
-  auto fileFormat = dwio::common::FileFormat::DWRF;
-  std::unordered_map<std::string, std::string> connectorConfig = {
-      {hive::HiveConfig::kOrcWriterMaxStripeSize, "100MB"},
-      {hive::HiveConfig::kOrcWriterMaxDictionaryMemory, "128MB"},
-      {hive::HiveConfig::kOrcWriterIntegerDictionaryEncodingEnabled, "true"},
-      {hive::HiveConfig::kOrcWriterStringDictionaryEncodingEnabled, "false"},
-      {hive::HiveConfig::kOrcWriterLinearStripeSizeHeuristics, "true"},
-      {hive::HiveConfig::kOrcWriterMinCompressionSize, "512"},
-      {hive::HiveConfig::kOrcWriterCompressionLevel, "1"}};
-  auto hiveConfig = std::make_shared<hive::HiveConfig>(
-      std::make_shared<config::ConfigBase>(std::move(connectorConfig)));
-
-  std::unordered_map<std::string, std::string> sessionConfig = {
-      {hive::HiveConfig::kOrcWriterMaxStripeSizeSession, "128MB"},
-      {hive::HiveConfig::kOrcWriterMaxDictionaryMemorySession, "100MB"},
-      {hive::HiveConfig::kOrcWriterIntegerDictionaryEncodingEnabledSession,
-       "false"},
-      {hive::HiveConfig::kOrcWriterStringDictionaryEncodingEnabledSession,
-       "true"},
-      {hive::HiveConfig::kOrcWriterLinearStripeSizeHeuristicsSession, "false"},
-      {hive::HiveConfig::kOrcWriterMinCompressionSizeSession, "1024"},
-      {hive::HiveConfig::kOrcWriterCompressionLevelSession, "2"}};
-
-  std::shared_ptr<config::ConfigBase> connectorSessionProperties =
-      std::make_shared<config::ConfigBase>(std::move(sessionConfig));
-  std::shared_ptr<dwio::common::WriterOptions> options =
-      std::make_shared<dwrf::WriterOptions>();
-  options->compressionKind = velox::common::CompressionKind_ZLIB;
-
-  updateWriterOptionsFromHiveConfig(
-      fileFormat, hiveConfig, connectorSessionProperties.get(), options);
-
-  auto dwrfOptions = std::dynamic_pointer_cast<dwrf::WriterOptions>(options);
-  ASSERT_EQ(
-      dwrfOptions->config->get<std::string>(dwrf::Config::COMPRESSION.key),
-      "1");
-  ASSERT_EQ(
-      dwrfOptions->config->get<std::string>(dwrf::Config::STRIPE_SIZE.key),
-      std::to_string(128 * 1024 * 1024));
-  ASSERT_EQ(
-      dwrfOptions->config->get<std::string>(
-          dwrf::Config::MAX_DICTIONARY_SIZE.key),
-      std::to_string(100 * 1024 * 1024));
-  ASSERT_EQ(
-      dwrfOptions->config->get<bool>(
-          dwrf::Config::INTEGER_DICTIONARY_ENCODING_ENABLED.key),
-      false);
-  ASSERT_EQ(
-      dwrfOptions->config->get<bool>(
-          dwrf::Config::STRING_DICTIONARY_ENCODING_ENABLED.key),
-      true);
-  ASSERT_EQ(
-      dwrfOptions->config->get<bool>(
-          dwrf::Config::LINEAR_STRIPE_SIZE_HEURISTICS.key),
-      false);
-  ASSERT_EQ(
-      dwrfOptions->config->get<std::string>(
-          dwrf::Config::COMPRESSION_BLOCK_SIZE_MIN.key),
-      "1024");
-  ASSERT_EQ(
-      dwrfOptions->config->get<std::string>(
-          dwrf::Config::ZLIB_COMPRESSION_LEVEL.key),
-      "2");
-  ASSERT_EQ(
-      dwrfOptions->config->get<std::string>(
-          dwrf::Config::ZSTD_COMPRESSION_LEVEL.key),
-      "2");
-}
-
-#ifdef VELOX_ENABLE_PARQUET
-TEST_F(HiveConnectorUtilTest, updateWriterOptionsFromHiveConfigParquet) {
-  auto fileFormat = dwio::common::FileFormat::PARQUET;
-  std::unordered_map<std::string, std::string> connectorConfig = {
-      {parquet::WriterOptions::kParquetSessionWriteTimestampUnit, "3"},
-      {core::QueryConfig::kSessionTimezone, "UTC"}};
-  auto hiveConfig = std::make_shared<hive::HiveConfig>(
-      std::make_shared<config::ConfigBase>(std::move(connectorConfig)));
-  std::shared_ptr<config::ConfigBase> connectorSessionProperties =
-      std::make_shared<config::ConfigBase>(
-          std::unordered_map<std::string, std::string>());
-  std::shared_ptr<dwio::common::WriterOptions> options =
-      std::make_shared<parquet::WriterOptions>();
-  options->compressionKind = velox::common::CompressionKind_ZLIB;
-
-  updateWriterOptionsFromHiveConfig(
-      fileFormat, hiveConfig, connectorSessionProperties.get(), options);
-
-  auto parquetOptions =
-      std::dynamic_pointer_cast<parquet::WriterOptions>(options);
-  ASSERT_EQ(
-      parquetOptions->parquetWriteTimestampUnit.value(),
-      TimestampPrecision::kMilliseconds);
-  ASSERT_EQ(parquetOptions->parquetWriteTimestampTimeZone.value(), "UTC");
-}
-#endif
-
 } // namespace facebook::velox::connector

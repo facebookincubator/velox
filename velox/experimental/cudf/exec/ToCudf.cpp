@@ -118,6 +118,7 @@ bool CompileState::compile() {
           id, plan_node->outputType(), ctx, plan_node->id() + "-from-velox"));
       replace_op.back()->initialize();
     }
+    // This is used to denote if the current operator is kept or replaced.
     auto keep_operator = 0;
     // TableScan
     if (auto scanOp = dynamic_cast<exec::TableScan*>(oper)) {

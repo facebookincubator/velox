@@ -91,7 +91,8 @@ class HiveConnectorTestBase : public OperatorTestBase {
       const std::string& filePath,
       uint64_t start = 0,
       uint64_t length = std::numeric_limits<uint64_t>::max(),
-      int64_t splitWeight = 0);
+      int64_t splitWeight = 0,
+      bool cacheable = true);
 
   static std::shared_ptr<connector::hive::HiveConnectorSplit>
   makeHiveConnectorSplit(
@@ -115,7 +116,7 @@ class HiveConnectorTestBase : public OperatorTestBase {
           infoColumns = {});
 
   static std::shared_ptr<connector::hive::HiveTableHandle> makeTableHandle(
-      common::test::SubfieldFilters subfieldFilters = {},
+      common::SubfieldFilters subfieldFilters = {},
       const core::TypedExprPtr& remainingFilter = nullptr,
       const std::string& tableName = "hive_table",
       const RowTypePtr& dataColumns = nullptr,

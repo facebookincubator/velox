@@ -147,6 +147,7 @@ TEST_F(TableScanReplayerTest, runner) {
 
   FLAGS_root_dir = traceRoot;
   FLAGS_query_id = task->queryCtx()->queryId();
+  FLAGS_task_id = task->taskId();
   FLAGS_node_id = traceNodeId_;
   FLAGS_summary = true;
   {
@@ -203,7 +204,9 @@ TEST_F(TableScanReplayerTest, basic) {
                                    task->taskId(),
                                    traceNodeId_,
                                    "TableScan",
-                                   "")
+                                   "",
+                                   0,
+                                   executor_.get())
                                    .run();
   assertEqualResults({results}, {replayingResult});
 
@@ -213,7 +216,9 @@ TEST_F(TableScanReplayerTest, basic) {
                                     task->taskId(),
                                     traceNodeId_,
                                     "TableScan",
-                                    "0,2")
+                                    "0,2",
+                                    0,
+                                    executor_.get())
                                     .run();
   const auto replayingResult2 = TableScanReplayer(
                                     traceRoot,
@@ -221,7 +226,9 @@ TEST_F(TableScanReplayerTest, basic) {
                                     task->taskId(),
                                     traceNodeId_,
                                     "TableScan",
-                                    "1,3")
+                                    "1,3",
+                                    0,
+                                    executor_.get())
                                     .run();
   assertEqualResults({results}, {replayingResult1, replayingResult2});
 }
@@ -266,7 +273,9 @@ TEST_F(TableScanReplayerTest, columnPrunning) {
                                    task->taskId(),
                                    traceNodeId_,
                                    "TableScan",
-                                   "")
+                                   "",
+                                   0,
+                                   executor_.get())
                                    .run();
   assertEqualResults({results}, {replayingResult});
 }
@@ -327,7 +336,9 @@ TEST_F(TableScanReplayerTest, subfieldPrunning) {
                                    task->taskId(),
                                    traceNodeId_,
                                    "TableScan",
-                                   "")
+                                   "",
+                                   0,
+                                   executor_.get())
                                    .run();
   assertEqualResults({results}, {replayingResult});
 }

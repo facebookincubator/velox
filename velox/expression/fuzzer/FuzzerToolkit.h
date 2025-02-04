@@ -43,6 +43,11 @@ struct SignatureTemplate {
   std::unordered_set<std::string> typeVariables;
 };
 
+struct InputTestCase {
+  RowVectorPtr inputVector;
+  SelectivityVector activeRows;
+};
+
 struct ResultOrError {
   RowVectorPtr result;
   std::exception_ptr exceptionPtr;
@@ -115,6 +120,11 @@ void compareVectors(
     const std::string& rightName = "right",
     const std::optional<SelectivityVector>& rows = std::nullopt);
 
+// Merges a vector of RowVectors into one RowVector.
+RowVectorPtr mergeRowVectors(
+    const std::vector<RowVectorPtr>& results,
+    velox::memory::MemoryPool* pool);
+
 struct InputRowMetadata {
   // Column indices to wrap in LazyVector (in a strictly increasing order)
   std::vector<int> columnsToWrapInLazy;
@@ -122,11 +132,6 @@ struct InputRowMetadata {
   // Column indices to wrap in a common dictionary layer (in a strictly
   // increasing order)
   std::vector<int> columnsToWrapInCommonDictionary;
-
-  // Dictionary indices and nulls for the common dictionary layer. Buffers are
-  // null if no columns are specified in `columnsToWrapInCommonDictionary`.
-  BufferPtr commonDictionaryIndices;
-  BufferPtr commonDictionaryNulls;
 
   bool empty() const {
     return columnsToWrapInLazy.empty() &&
@@ -138,11 +143,4 @@ struct InputRowMetadata {
       const char* filePath,
       memory::MemoryPool* pool);
 };
-
-// Wraps the columns in the row vector with a common dictionary layer. The
-// column indices to wrap and the wrap itself is specified in
-// `inputRowMetadata`.
-RowVectorPtr applyCommonDictionaryLayer(
-    const RowVectorPtr& rowVector,
-    const InputRowMetadata& inputRowMetadata);
 } // namespace facebook::velox::fuzzer

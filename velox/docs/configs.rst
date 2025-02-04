@@ -89,6 +89,13 @@ Generic Configuration
      - Size of buffer in the exchange client that holds data fetched from other nodes before it is processed.
        A larger buffer can increase network throughput for larger clusters and thus decrease query processing time
        at the expense of reducing the amount of memory available for other usage.
+   * - min_exchange_output_batch_bytes
+     - integer
+     - 2MB
+     - The minimum number of bytes to accumulate in the ExchangeQueue before unblocking a consumer. This is used to avoid
+       creating tiny batches which may have a negative impact on performance when the cost of creating vectors is high
+       (for example, when there are many columns). To avoid latency degradation, the exchange client unblocks a consumer
+       when 1% of the data size observed so far is accumulated.
    * - merge_exchange.max_buffer_size
      - integer
      - 128MB
@@ -148,6 +155,12 @@ Generic Configuration
      - integer
      - 16
      - Byte length of the string prefix stored in the prefix-sort buffer. This doesn't include the null byte.
+   * - shuffle_compression_codec
+     - string
+     - none
+     - Specifies the compression algorithm type to compress the shuffle data to
+       trade CPU for network IO efficiency. The supported compression codecs
+       are: zlib, snappy, lzo, zstd, lz4 and gzip. none means no compression.
 
 .. _expression-evaluation-conf:
 
@@ -355,8 +368,8 @@ Spilling
      - string
      - none
      - Specifies the compression algorithm type to compress the spilled data before write to disk to trade CPU for IO
-       efficiency. The supported compression codecs are: ZLIB, SNAPPY, LZO, ZSTD, LZ4 and GZIP.
-       NONE means no compression.
+       efficiency. The supported compression codecs are: zlib, snappy, lzo, zstd, lz4 and gzip.
+       none means no compression.
    * - spill_prefixsort_enabled
      - bool
      - false
@@ -390,6 +403,23 @@ Table Scan
      - integer
      - 2
      - Maximum number of splits to preload per driver. Set to 0 to disable preloading.
+   * - table_scan_scaled_processing_enabled
+     - bool
+     - false
+     - If true, enables the scaled table scan processing. For each table scan
+       plan node, a scan controller is used to control the number of running scan
+       threads based on the query memory usage. It keeps increasing the number of
+       running threads until the query memory usage exceeds the threshold defined
+       by 'table_scan_scale_up_memory_usage_ratio'.
+   * - table_scan_scale_up_memory_usage_ratio
+     - double
+     - 0.5
+     - The query memory usage ratio used by scan controller to decide if it can
+       increase the number of running scan threads. When the query memory usage
+       is below this ratio, the scan controller scale up the scan processing by
+       increasing the number of running scan threads, and stop once exceeds this
+       ratio. The value is in the range of [0, 1]. This only applies if
+       'table_scan_scaled_processing_enabled' is true.
 
 Table Writer
 ------------
@@ -414,26 +444,26 @@ Table Writer
      - double
      - 0.7
      - The max ratio of a query used memory to its max capacity, and the scale
-     - writer exchange stops scaling writer processing if the query's current
-     - memory usage exceeds this ratio. The value is in the range of (0, 1].
+       writer exchange stops scaling writer processing if the query's current
+       memory usage exceeds this ratio. The value is in the range of (0, 1].
    * - scaled_writer_max_partitions_per_writer
      - integer
      - 128
      - The max number of logical table partitions that can be assigned to a
-     - single table writer thread. The logical table partition is used by local
-     - exchange writer for writer scaling, and multiple physical table
-     - partitions can be mapped to the same logical table partition based on the
-     - hash value of calculated partitioned ids.
+       single table writer thread. The logical table partition is used by local
+       exchange writer for writer scaling, and multiple physical table
+       partitions can be mapped to the same logical table partition based on the
+       hash value of calculated partitioned ids.
+   * - scaled_writer_min_partition_processed_bytes_rebalance_threshold
      - integer
      - 128MB
-   * - scaled_writer_min_partition_processed_bytes_rebalance_threshold
      - Minimum amount of data processed by a logical table partition to trigger
-     - writer scaling if it is detected as overloaded by scale wrirer exchange.
+       writer scaling if it is detected as overloaded by scale wrirer exchange.
    * - scaled_writer_min_processed_bytes_rebalance_threshold
-     - Minimum amount of data processed by all the logical table partitions to
-     - trigger skewed partition rebalancing by scale writer exchange.
      - integer
      - 256MB
+     - Minimum amount of data processed by all the logical table partitions to
+       trigger skewed partition rebalancing by scale writer exchange.
 
 Hive Connector
 --------------
@@ -503,7 +533,7 @@ Each query can override the config by setting corresponding query session proper
      - 512KB
      - Maximum distance in capacity units between chunks to be fetched that may be coalesced into a single request.
    * - load-quantum
-     -
+     - load-quantum
      - integer
      - 8MB
      - Define the size of each coalesce load request. E.g. in Parquet scan, if it's bigger than rowgroup size then the whole row group can be fetched together. Otherwise, the row group will be fetched column chunk by column chunk
@@ -541,6 +571,34 @@ Each query can override the config by setting corresponding query session proper
      - 1MB
      - Define the estimation of footer size in ORC and Parquet format. The footer data includes version, schema, and meta data for every columns which may or may not need to be fetched later.
        The parameter controls the size when footer is fetched each time. Bigger value can decrease the IO requests but may fetch more useless meta data.
+   * - cache.no_retention
+     - cache.no_retention
+     - bool
+     - false
+     - If true, evict out a query scanned data out of in-memory cache right after the access,
+       and also skip staging to the ssd cache. This helps to prevent the cache space pollution
+       from the one-time table scan by large batch query when mixed running with interactive
+       query which has high data locality.
+   * - hive.reader.stats_based_filter_reorder_disabaled
+     - hive.reader.stats_based_filter_reorder_disabaled
+     - bool
+     - false
+     - If true, disable the stats based filter reordering during the read processing, and the
+       filter execution order is totally determined by the filter type. Otherwise, the file
+       reader will dynamically adjust the filter execution order based on the past filter
+       execution stats.
+
+``ORC File Format Configuration``
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+.. list-table::
+   :widths: 20 20 10 10 70
+   :header-rows: 1
+
+   * - Configuration Property Name
+     - Session Property Name
+     - Type
+     - Default Value
+     - Description
    * - hive.orc.writer.stripe-max-size
      - orc_optimized_writer_max_stripe_size
      - string
@@ -561,12 +619,6 @@ Each query can override the config by setting corresponding query session proper
      - bool
      - true
      - Whether or not dictionary encoding of string types should be used by the ORC writer.
-   * - hive.parquet.writer.timestamp-unit
-     - hive.parquet.writer.timestamp_unit
-     - tinyint
-     - 9
-     - Timestamp unit used when writing timestamps into Parquet through Arrow bridge.
-       Valid values are 3 (millisecond), 6 (microsecond), and 9 (nanosecond).
    * - hive.orc.writer.linear-stripe-size-heuristics
      - orc_writer_linear_stripe_size_heuristics
      - bool
@@ -582,15 +634,24 @@ Each query can override the config by setting corresponding query session proper
      - tinyint
      - 3 for ZSTD and 4 for ZLIB
      - The compression level to use with ZLIB and ZSTD.
-   * - cache.no_retention
-     - cache.no_retention
-     - bool
-     - false
-     - If true, evict out a query scanned data out of in-memory cache right after the access,
-       and also skip staging to the ssd cache. This helps to prevent the cache space pollution
-       from the one-time table scan by large batch query when mixed running with interactive
-       query which has high data locality.
 
+``Parquet File Format Configuration``
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+.. list-table::
+   :widths: 20 20 10 10 70
+   :header-rows: 1
+
+   * - Configuration Property Name
+     - Session Property Name
+     - Type
+     - Default Value
+     - Description
+   * - hive.parquet.writer.timestamp-unit
+     - hive.parquet.writer.timestamp_unit
+     - tinyint
+     - 9
+     - Timestamp unit used when writing timestamps into Parquet through Arrow bridge.
+       Valid values are 3 (millisecond), 6 (microsecond), and 9 (nanosecond).
 
 ``Amazon S3 Configuration``
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^
@@ -616,8 +677,13 @@ Each query can override the config by setting corresponding query session proper
      - Default AWS secret key to use.
    * - hive.s3.endpoint
      - string
-     - us-east-1
+     -
      - The S3 storage endpoint server. This can be used to connect to an S3-compatible storage system instead of AWS.
+   * - hive.s3.endpoint.region
+     - string
+     - us-east-1
+     - The S3 storage endpoint server region. Default is set by the AWS SDK. If not configured, region will be attempted
+       to be parsed from the hive.s3.endpoint value.
    * - hive.s3.path-style-access
      - bool
      - false
