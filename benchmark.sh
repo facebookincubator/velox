@@ -27,27 +27,46 @@ pushd "$(dirname ${0})"
 
 mkdir -p benchmark_results
 
-queries=${1:-$(seq 1 20)}
+queries=${1:-$(seq 1 22)}
 devices=${2:-"cpu gpu"}
+profile=${3:-"false"}
 
+num_drivers=${NUM_DRIVERS:-16}
+output_batch_rows=${BATCH_SIZE_ROWS:-100000}
 
 for query_number in ${queries}; do
     printf -v query_number '%02d' "${query_number}"
     for device in ${devices}; do
         case "${device}" in
             "cpu")
-                num_drivers=4
                 export VELOX_CUDF_DISABLED=1;;
             "gpu")
-                num_drivers=4
                 export VELOX_CUDF_MEMORY_RESOURCE="async"
                 export VELOX_CUDF_DISABLED=0;;
         esac
         echo "Running query ${query_number} on ${device} with ${num_drivers} drivers."
         # The benchmarks segfault after reporting results, so we disable errors
-        set +e
-        ./_build/release/velox/benchmarks/tpch/velox_tpch_benchmark --data_path=velox-tpch-sf10-data --data_format=parquet --run_query_verbose=${query_number} --num_repeats=1 --num_drivers ${num_drivers} 2>&1 | tee benchmark_results/q${query_number}_${device}_${num_drivers}_drivers
-        set -e
+        PROFILE_CMD=""
+        if [[ "${profile}" == "true" ]]; then
+            PROFILE_CMD="nsys profile -t nvtx,cuda,osrt -f true --cuda-memory-usage=true --cuda-um-cpu-page-faults=true --cuda-um-gpu-page-faults=true --output=benchmark_results/q${query_number}_${device}_${num_drivers}_drivers.nsys-rep"
+            # Enable GPU metrics if supported (Ampere or newer)
+            if [[ "$(nvidia-smi --query-gpu=compute_cap --format=csv,noheader -i 0 | cut -d '.' -f 1)" -gt 7 ]]; then
+                PROFILE_CMD="${PROFILE_CMD} --gpu-metrics-devices=0"
+            fi
+        fi
+
+        set +e -x
+        ${PROFILE_CMD} \
+        ./_build/release/velox/benchmarks/tpch/velox_tpch_benchmark \
+            --data_path=velox-tpch-sf10-data \
+            --data_format=parquet \
+            --run_query_verbose=${query_number} \
+            --num_repeats=1 \
+            --num_drivers=${num_drivers} \
+            --preferred_output_batch_rows=${output_batch_rows} \
+            --max_output_batch-rows=${output_batch_rows} 2>&1 \
+            | tee benchmark_results/q${query_number}_${device}_${num_drivers}_drivers
+        { set -e +x; } &> /dev/null
     done
 done
 

@@ -42,7 +42,7 @@ VectorPtr newConstantFromString(
   }
 
   if (type->isDate()) {
-    auto days = DATE()->toDays((folly::StringPiece)value.value());
+    auto days = DATE()->toDays(static_cast<folly::StringPiece>(value.value()));
     return std::make_shared<ConstantVector<int32_t>>(
         pool, size, false, type, std::move(days));
   }
@@ -134,13 +134,14 @@ SplitReader::SplitReader(
 void SplitReader::configureReaderOptions(
     std::shared_ptr<velox::random::RandomSkipTracker> randomSkip) {
   hive::configureReaderOptions(
-      baseReaderOpts_,
       hiveConfig_,
       connectorQueryCtx_,
       hiveTableHandle_,
-      hiveSplit_);
+      hiveSplit_,
+      baseReaderOpts_);
   baseReaderOpts_.setRandomSkip(std::move(randomSkip));
   baseReaderOpts_.setScanSpec(scanSpec_);
+  baseReaderOpts_.setFileFormat(hiveSplit_->fileFormat);
 }
 
 void SplitReader::prepareSplit(
@@ -341,7 +342,7 @@ std::vector<TypePtr> SplitReader::adaptColumns(
       auto fileTypeIdx = fileType->getChildIdxIfExists(fieldName);
       if (!fileTypeIdx.has_value()) {
         // Column is missing. Most likely due to schema evolution.
-        VELOX_CHECK(tableSchema);
+        VELOX_CHECK(tableSchema, "Unable to resolve column '{}'", fieldName);
         childSpec->setConstantValue(BaseVector::createNullConstant(
             tableSchema->findChild(fieldName),
             1,

@@ -328,5 +328,6 @@ scripts/bm-report/report.html
 
 # Custom ignores
 aws-sdk-cpp
-velox-tpch-sf10-data
+cufile.log
+velox-tpch-*-data
 xsimd

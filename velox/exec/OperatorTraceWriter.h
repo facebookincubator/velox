@@ -16,7 +16,7 @@
 
 #pragma once
 
-#include "TraceConfig.h"
+#include "velox/common/base/TraceConfig.h"
 #include "velox/common/file/File.h"
 #include "velox/common/file/FileSystems.h"
 #include "velox/exec/Split.h"
@@ -58,6 +58,7 @@ class OperatorTraceInputWriter {
   const serializer::presto::PrestoVectorSerde::PrestoOptions options_ = {
       true,
       common::CompressionKind::CompressionKind_ZSTD,
+      0.8,
       /*nullsFirst=*/true};
   const std::shared_ptr<filesystems::FileSystem> fs_;
   memory::MemoryPool* const pool_;

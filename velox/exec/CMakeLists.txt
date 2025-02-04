@@ -41,6 +41,7 @@ velox_add_library(
   HashPartitionFunction.cpp
   HashProbe.cpp
   HashTable.cpp
+  IndexLookupJoin.cpp
   JoinBridge.cpp
   Limit.cpp
   LocalPartition.cpp
@@ -63,7 +64,6 @@ velox_add_library(
   TaskTraceReader.cpp
   TaskTraceWriter.cpp
   Trace.cpp
-  TraceConfig.cpp
   TraceUtil.cpp
   PartitionedOutput.cpp
   PartitionFunction.cpp
@@ -74,6 +74,7 @@ velox_add_library(
   RowsStreamingWindowBuild.cpp
   RowContainer.cpp
   RowNumber.cpp
+  ScaledScanController.cpp
   ScaleWriterLocalPartition.cpp
   SortBuffer.cpp
   SortedAggregations.cpp

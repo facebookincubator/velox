@@ -24,10 +24,10 @@
 
 #include "velox/common/base/Counters.h"
 #include "velox/common/base/StatsReporter.h"
+#include "velox/common/base/TraceConfig.h"
 #include "velox/common/time/CpuWallTimer.h"
 #include "velox/core/PlanFragment.h"
 #include "velox/core/QueryCtx.h"
-#include "velox/exec/TraceConfig.h"
 
 namespace facebook::velox::exec {
 
@@ -210,6 +210,13 @@ enum class BlockingReason {
   /// Operator is blocked waiting for its associated query memory arbitration to
   /// finish.
   kWaitForArbitration,
+  /// For a table scan operator, it is blocked waiting for the scan controller
+  /// to increase the number of table scan processing threads to start
+  /// processing.
+  kWaitForScanScaleUp,
+  /// Used by IndexLookupJoin operator, indicating that it was blocked by the
+  /// async index lookup.
+  kWaitForIndexLookup,
 };
 
 std::string blockingReasonToString(BlockingReason reason);
@@ -697,6 +704,18 @@ struct DriverFactory {
             std::dynamic_pointer_cast<const core::LocalPartitionNode>(
                 planNodes.front())) {
       planNode = exchangeNode;
+      return true;
+    }
+    return false;
+  }
+
+  /// Returns true if the pipeline gets data from a table scan. The function
+  /// sets plan node id in 'planNodeId'.
+  bool needsTableScan(core::PlanNodeId& planNodeId) const {
+    VELOX_CHECK(!planNodes.empty());
+    if (auto scanNode = std::dynamic_pointer_cast<const core::TableScanNode>(
+            planNodes.front())) {
+      planNodeId = scanNode->id();
       return true;
     }
     return false;

@@ -91,6 +91,18 @@ DEFINE_int32(
 
 DEFINE_int32(split_preload_per_driver, 2, "Prefetch split metadata");
 
+DEFINE_int64(
+    preferred_output_batch_bytes,
+    10 << 20,
+    "Preferred output batch size in bytes");
+
+DEFINE_int32(
+    preferred_output_batch_rows,
+    1024,
+    "Preferred output batch size in rows");
+
+DEFINE_int32(max_output_batch_rows, 10'000, "Max output batch size in rows");
+
 using namespace facebook::velox::exec;
 using namespace facebook::velox::exec::test;
 using namespace facebook::velox::dwio::common;
@@ -231,6 +243,12 @@ QueryBenchmarkBase::run(const TpchPlan& tpchPlan) {
       params.planNode = tpchPlan.plan;
       params.queryConfigs[core::QueryConfig::kMaxSplitPreloadPerDriver] =
           std::to_string(FLAGS_split_preload_per_driver);
+      params.queryConfigs[core::QueryConfig::kPreferredOutputBatchBytes] =
+          std::to_string(FLAGS_preferred_output_batch_bytes);
+      params.queryConfigs[core::QueryConfig::kPreferredOutputBatchRows] =
+          std::to_string(FLAGS_preferred_output_batch_rows);
+      params.queryConfigs[core::QueryConfig::kMaxOutputBatchRows] =
+          std::to_string(FLAGS_max_output_batch_rows);
       const int numSplitsPerFile = FLAGS_num_splits_per_file;
 
       bool noMoreSplits = false;

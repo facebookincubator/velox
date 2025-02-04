@@ -90,6 +90,21 @@ These stats are reported only by HashBuild and HashAggregation operators.
      - Time spent on building the hash table from rows collected by all the
        hash build operators. This stat is only reported by the HashBuild operator.
 
+TableScan
+---------
+These stats are reported only by TableScan operator
+
+.. list-table::
+   :widths: 50 25 50
+   :header-rows: 1
+
+   * - Stats
+     - Unit
+     - Description
+   * - numRunningScanThreads
+     -
+     - The number of running table scan drivers.
+
 TableWriter
 -----------
 These stats are reported only by TableWriter operator
@@ -190,6 +205,11 @@ These stats are reported by shuffle operators.
      - Indicates the vector serde kind used by an operator for shuffle with 1
        for Presto, 2 for CompactRow, 3 for UnsafeRow. It is reported by Exchange,
        MergeExchange and PartitionedOutput operators for now.
+   * - shuffleCompressionKind
+     -
+     - Indicates the compression kind used by an operator for shuffle. The
+       reported value is set to the corresponding CompressionKind enum with 0
+       (CompressionKind_NONE) as no compression.
 
 PrefixSort
 ----------
