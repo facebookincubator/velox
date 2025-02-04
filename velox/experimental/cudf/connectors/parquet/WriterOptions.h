@@ -28,6 +28,11 @@ namespace facebook::velox::cudf_velox::connector::parquet {
 
 using namespace cudf::io;
 
+/**
+ * @brief Struct to 1:1 correspond with cudf::io::chunked_parquet_reader_options
+ * except sink_info and a few others which are provided to the ParquetDataSink
+ * from elsewhere.
+ */
 struct ParquetWriterOptions
     : public facebook::velox::dwio::common::WriterOptions {
   // Specify the level of statistics in the output file
