@@ -1024,7 +1024,7 @@ void GroupingSet::spill() {
         spillStats_);
     VELOX_CHECK_EQ(
         inputSpiller_->state().maxPartitions(),
-        1 << spillConfig_->numPartitionBits);
+        1u << spillConfig_->numPartitionBits);
   }
   // Spilling may execute on multiple partitions in parallel, and
   // HashStringAllocator is not thread safe. If any aggregations

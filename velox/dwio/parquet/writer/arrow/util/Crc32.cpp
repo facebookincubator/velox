@@ -872,7 +872,7 @@ uint32_t crc32(uint32_t prev, const void* data, size_t length) {
   /* process a byte at a time until we hit an alignment boundary (max 3) */
   current_char = reinterpret_cast<const uint8_t*>(data);
   for (; unaligned && length; unaligned--, length--)
-    crc = (crc >> 8) ^ crc32_lookup[0][(crc & 0xFF) ^ *current_char++];
+    crc = (crc >> 8) ^ crc32_lookup[0][(crc & static_cast<uint32_t>(0xFF)) ^ *current_char++];
 
   current = reinterpret_cast<const uint32_t*>(current_char);
 
@@ -891,35 +891,35 @@ uint32_t crc32(uint32_t prev, const void* data, size_t length) {
       uint32_t two = *current++;
       uint32_t three = *current++;
       uint32_t four = *current++;
-      crc = crc32_lookup[0][(four >> 24) & 0xFF] ^
-          crc32_lookup[1][(four >> 16) & 0xFF] ^
-          crc32_lookup[2][(four >> 8) & 0xFF] ^ crc32_lookup[3][four & 0xFF] ^
-          crc32_lookup[4][(three >> 24) & 0xFF] ^
-          crc32_lookup[5][(three >> 16) & 0xFF] ^
-          crc32_lookup[6][(three >> 8) & 0xFF] ^ crc32_lookup[7][three & 0xFF] ^
-          crc32_lookup[8][(two >> 24) & 0xFF] ^
-          crc32_lookup[9][(two >> 16) & 0xFF] ^
-          crc32_lookup[10][(two >> 8) & 0xFF] ^ crc32_lookup[11][two & 0xFF] ^
-          crc32_lookup[12][(one >> 24) & 0xFF] ^
-          crc32_lookup[13][(one >> 16) & 0xFF] ^
-          crc32_lookup[14][(one >> 8) & 0xFF] ^ crc32_lookup[15][one & 0xFF];
+      crc = crc32_lookup[0][(four >> 24) & static_cast<uint32_t>(0xFF)] ^
+          crc32_lookup[1][(four >> 16) & static_cast<uint32_t>(0xFF)] ^
+          crc32_lookup[2][(four >> 8) & static_cast<uint32_t>(0xFF)] ^ crc32_lookup[3][four & static_cast<uint32_t>(0xFF)] ^
+          crc32_lookup[4][(three >> 24) & static_cast<uint32_t>(0xFF)] ^
+          crc32_lookup[5][(three >> 16) & static_cast<uint32_t>(0xFF)] ^
+          crc32_lookup[6][(three >> 8) & static_cast<uint32_t>(0xFF)] ^ crc32_lookup[7][three & static_cast<uint32_t>(0xFF)] ^
+          crc32_lookup[8][(two >> 24) & static_cast<uint32_t>(0xFF)] ^
+          crc32_lookup[9][(two >> 16) & static_cast<uint32_t>(0xFF)] ^
+          crc32_lookup[10][(two >> 8) & static_cast<uint32_t>(0xFF)] ^ crc32_lookup[11][two & static_cast<uint32_t>(0xFF)] ^
+          crc32_lookup[12][(one >> 24) & static_cast<uint32_t>(0xFF)] ^
+          crc32_lookup[13][(one >> 16) & static_cast<uint32_t>(0xFF)] ^
+          crc32_lookup[14][(one >> 8) & static_cast<uint32_t>(0xFF)] ^ crc32_lookup[15][one & static_cast<uint32_t>(0xFF)];
 #else
       uint32_t one = *current++ ^ ::arrow::bit_util::ByteSwap(crc);
       uint32_t two = *current++;
       uint32_t three = *current++;
       uint32_t four = *current++;
-      crc = crc32_lookup[0][four & 0xFF] ^ crc32_lookup[1][(four >> 8) & 0xFF] ^
-          crc32_lookup[2][(four >> 16) & 0xFF] ^
-          crc32_lookup[3][(four >> 24) & 0xFF] ^ crc32_lookup[4][three & 0xFF] ^
-          crc32_lookup[5][(three >> 8) & 0xFF] ^
-          crc32_lookup[6][(three >> 16) & 0xFF] ^
-          crc32_lookup[7][(three >> 24) & 0xFF] ^ crc32_lookup[8][two & 0xFF] ^
-          crc32_lookup[9][(two >> 8) & 0xFF] ^
-          crc32_lookup[10][(two >> 16) & 0xFF] ^
-          crc32_lookup[11][(two >> 24) & 0xFF] ^ crc32_lookup[12][one & 0xFF] ^
-          crc32_lookup[13][(one >> 8) & 0xFF] ^
-          crc32_lookup[14][(one >> 16) & 0xFF] ^
-          crc32_lookup[15][(one >> 24) & 0xFF];
+      crc = crc32_lookup[0][four & static_cast<uint32_t>(0xFF)] ^ crc32_lookup[1][(four >> 8) & static_cast<uint32_t>(0xFF)] ^
+          crc32_lookup[2][(four >> 16) & static_cast<uint32_t>(0xFF)] ^
+          crc32_lookup[3][(four >> 24) & static_cast<uint32_t>(0xFF)] ^ crc32_lookup[4][three & static_cast<uint32_t>(0xFF)] ^
+          crc32_lookup[5][(three >> 8) & static_cast<uint32_t>(0xFF)] ^
+          crc32_lookup[6][(three >> 16) & static_cast<uint32_t>(0xFF)] ^
+          crc32_lookup[7][(three >> 24) & static_cast<uint32_t>(0xFF)] ^ crc32_lookup[8][two & static_cast<uint32_t>(0xFF)] ^
+          crc32_lookup[9][(two >> 8) & static_cast<uint32_t>(0xFF)] ^
+          crc32_lookup[10][(two >> 16) & static_cast<uint32_t>(0xFF)] ^
+          crc32_lookup[11][(two >> 24) & static_cast<uint32_t>(0xFF)] ^ crc32_lookup[12][one & static_cast<uint32_t>(0xFF)] ^
+          crc32_lookup[13][(one >> 8) & static_cast<uint32_t>(0xFF)] ^
+          crc32_lookup[14][(one >> 16) & static_cast<uint32_t>(0xFF)] ^
+          crc32_lookup[15][(one >> 24) & static_cast<uint32_t>(0xFF)];
 #endif
     }
 
@@ -932,21 +932,21 @@ uint32_t crc32(uint32_t prev, const void* data, size_t length) {
 #if ARROW_LITTLE_ENDIAN
     uint32_t one = *current++ ^ crc;
     uint32_t two = *current++;
-    crc = crc32_lookup[0][(two >> 24) & 0xFF] ^
-        crc32_lookup[1][(two >> 16) & 0xFF] ^
-        crc32_lookup[2][(two >> 8) & 0xFF] ^ crc32_lookup[3][two & 0xFF] ^
-        crc32_lookup[4][(one >> 24) & 0xFF] ^
-        crc32_lookup[5][(one >> 16) & 0xFF] ^
-        crc32_lookup[6][(one >> 8) & 0xFF] ^ crc32_lookup[7][one & 0xFF];
+    crc = crc32_lookup[0][(two >> 24) & static_cast<uint32_t>(0xFF)] ^
+        crc32_lookup[1][(two >> 16) & static_cast<uint32_t>(0xFF)] ^
+        crc32_lookup[2][(two >> 8) & static_cast<uint32_t>(0xFF)] ^ crc32_lookup[3][two & static_cast<uint32_t>(0xFF)] ^
+        crc32_lookup[4][(one >> 24) & static_cast<uint32_t>(0xFF)] ^
+        crc32_lookup[5][(one >> 16) & static_cast<uint32_t>(0xFF)] ^
+        crc32_lookup[6][(one >> 8) & static_cast<uint32_t>(0xFF)] ^ crc32_lookup[7][one & static_cast<uint32_t>(0xFF)];
 #else
     uint32_t one = *current++ ^ ::arrow::bit_util::ByteSwap(crc);
     uint32_t two = *current++;
-    crc = crc32_lookup[0][two & 0xFF] ^ crc32_lookup[1][(two >> 8) & 0xFF] ^
-        crc32_lookup[2][(two >> 16) & 0xFF] ^
-        crc32_lookup[3][(two >> 24) & 0xFF] ^ crc32_lookup[4][one & 0xFF] ^
-        crc32_lookup[5][(one >> 8) & 0xFF] ^
-        crc32_lookup[6][(one >> 16) & 0xFF] ^
-        crc32_lookup[7][(one >> 24) & 0xFF];
+    crc = crc32_lookup[0][two & static_cast<uint32_t>(0xFF)] ^ crc32_lookup[1][(two >> 8) & static_cast<uint32_t>(0xFF)] ^
+        crc32_lookup[2][(two >> 16) & static_cast<uint32_t>(0xFF)] ^
+        crc32_lookup[3][(two >> 24) & static_cast<uint32_t>(0xFF)] ^ crc32_lookup[4][one & static_cast<uint32_t>(0xFF)] ^
+        crc32_lookup[5][(one >> 8) & static_cast<uint32_t>(0xFF)] ^
+        crc32_lookup[6][(one >> 16) & static_cast<uint32_t>(0xFF)] ^
+        crc32_lookup[7][(one >> 24) & static_cast<uint32_t>(0xFF)];
 #endif
 
     length -= 8;
@@ -955,14 +955,14 @@ uint32_t crc32(uint32_t prev, const void* data, size_t length) {
   if (length >= 4) {
 #if ARROW_LITTLE_ENDIAN
     uint32_t one = *current++ ^ crc;
-    crc = crc32_lookup[0][(one >> 24) & 0xFF] ^
-        crc32_lookup[1][(one >> 16) & 0xFF] ^
-        crc32_lookup[2][(one >> 8) & 0xFF] ^ crc32_lookup[3][one & 0xFF];
+    crc = crc32_lookup[0][(one >> 24) & static_cast<uint32_t>(0xFF)] ^
+        crc32_lookup[1][(one >> 16) & static_cast<uint32_t>(0xFF)] ^
+        crc32_lookup[2][(one >> 8) & static_cast<uint32_t>(0xFF)] ^ crc32_lookup[3][one & static_cast<uint32_t>(0xFF)];
 #else
     uint32_t one = *current++ ^ ::arrow::bit_util::ByteSwap(crc);
-    crc = crc32_lookup[0][one & 0xFF] ^ crc32_lookup[1][(one >> 8) & 0xFF] ^
-        crc32_lookup[2][(one >> 16) & 0xFF] ^
-        crc32_lookup[3][(one >> 24) & 0xFF];
+    crc = crc32_lookup[0][one & static_cast<uint32_t>(0xFF)] ^ crc32_lookup[1][(one >> 8) & static_cast<uint32_t>(0xFF)] ^
+        crc32_lookup[2][(one >> 16) & static_cast<uint32_t>(0xFF)] ^
+        crc32_lookup[3][(one >> 24) & static_cast<uint32_t>(0xFF)];
 #endif
 
     length -= 4;

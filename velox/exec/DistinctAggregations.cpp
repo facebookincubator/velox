@@ -139,7 +139,7 @@ class TypedDistinctAggregations : public DistinctAggregations {
       char** groups,
       folly::Range<const vector_size_t*> indices) override {
     for (auto i : indices) {
-      groups[i][nullByte_] |= nullMask_;
+      groups[i][nullByte_] = static_cast<uint8_t>(groups[i][nullByte_]) | nullMask_;
       new (groups[i] + offset_) AccumulatorType(inputType_, allocator_);
     }
 
