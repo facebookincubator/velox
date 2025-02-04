@@ -36,6 +36,8 @@
 #include <cudf/table/table.hpp>
 #include <cudf/table/table_view.hpp>
 
+#include <nvtx3/nvtx3.hpp>
+
 namespace {
 
 // Concatenate a vector of cuDF tables into a single table
@@ -101,6 +103,7 @@ ParquetDataSource::ParquetDataSource(
 std::optional<RowVectorPtr> ParquetDataSource::next(
     uint64_t /*size*/,
     velox::ContinueFuture& /* future */) {
+  nvtx3::scoped_range r{std::string("ParquetDataSource::") + __func__};
   // Basic sanity checks
   VELOX_CHECK_NOT_NULL(split_, "No split to process. Call addSplit first.");
   VELOX_CHECK_NOT_NULL(splitReader_, "No split reader present");

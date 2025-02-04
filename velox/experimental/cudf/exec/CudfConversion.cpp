@@ -74,6 +74,7 @@ CudfFromVelox::CudfFromVelox(
           "CudfFromVelox") {}
 
 void CudfFromVelox::addInput(RowVectorPtr input) {
+  nvtx3::scoped_range r{planNodeId() + "CudfFromVelox::" + __func__};
   NVTX3_FUNC_RANGE();
   if (input != nullptr) {
     if (input->size() > 0) {
@@ -91,6 +92,7 @@ void CudfFromVelox::addInput(RowVectorPtr input) {
 }
 
 RowVectorPtr CudfFromVelox::getOutput() {
+  nvtx3::scoped_range r{planNodeId() + "CudfFromVelox::" + __func__};
   NVTX3_FUNC_RANGE();
   auto const target_output_size = preferred_gpu_batch_size_rows();
   auto const exit_early = finished_ or
@@ -156,6 +158,7 @@ void CudfToVelox::addInput(RowVectorPtr input) {
 }
 
 RowVectorPtr CudfToVelox::getOutput() {
+  nvtx3::scoped_range r{planNodeId() + "CudfToVelox::" + __func__};
   NVTX3_FUNC_RANGE();
   if (finished_ || inputs_.empty()) {
     finished_ = noMoreInput_ && inputs_.empty();
