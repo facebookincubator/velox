@@ -113,6 +113,7 @@ bool CompileState::compile() {
           id, plan_node->outputType(), ctx, plan_node->id() + "-from-velox"));
       replace_op.back()->initialize();
     }
+    // This is used to denote if the current operator is kept or replaced.
     auto keep_operator = 0;
     if (auto joinBuildOp = dynamic_cast<exec::HashBuild*>(oper)) {
       auto plan_node = std::dynamic_pointer_cast<const core::HashJoinNode>(
