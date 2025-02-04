@@ -31,6 +31,11 @@
 
 namespace facebook::velox::cudf_velox {
 
+template <class... Deriveds, class Base>
+bool is_any_of(const Base* p) {
+  return ((dynamic_cast<const Deriveds*>(p) != nullptr) || ...);
+}
+
 static bool _cudfIsRegistered = false;
 
 bool CompileState::compile() {
@@ -69,9 +74,24 @@ bool CompileState::compile() {
     VELOX_CHECK(it != nodes.end());
     return *it;
   };
+
+  auto is_supported_gpu_operator = [](const exec::Operator* op) {
+    return is_any_of<exec::HashBuild, exec::HashProbe, exec::OrderBy>(op);
+  };
+  std::vector<bool> is_supported_gpu_operators(operators.size());
+  std::transform(
+      operators.begin(),
+      operators.end(),
+      is_supported_gpu_operators.begin(),
+      is_supported_gpu_operator);
+  auto accepts_gpu_input = [](const exec::Operator* op) {
+    return is_any_of<exec::HashBuild, exec::HashProbe, exec::OrderBy>(op);
+  };
+  auto produces_gpu_output = [](const exec::Operator* op) {
+    return is_any_of<exec::HashProbe, exec::OrderBy>(op);
+  };
+
   int32_t operatorsOffset = 0;
-  // Replace HashBuild and HashProbe operators with CudfHashJoinBuild and
-  // CudfHashJoinProbe operators.
   for (int32_t operatorIndex = 0; operatorIndex < operators.size();
        ++operatorIndex) {
     std::vector<std::unique_ptr<exec::Operator>> replace_op;
@@ -79,65 +99,62 @@ bool CompileState::compile() {
     exec::Operator* oper = operators[operatorIndex];
     auto replacingOperatorIndex = operatorIndex + operatorsOffset;
     VELOX_CHECK(oper);
+
+    bool const previous_operator_is_not_gpu =
+        (operatorIndex > 0 and !is_supported_gpu_operators[operatorIndex - 1]);
+    bool const next_operator_is_not_gpu =
+        (operatorIndex < operators.size() - 1 and
+         !is_supported_gpu_operators[operatorIndex + 1]);
+
+    auto id = oper->operatorId();
+    if (previous_operator_is_not_gpu and accepts_gpu_input(oper)) {
+      auto plan_node = get_plan_node(oper->planNodeId());
+      replace_op.push_back(std::make_unique<CudfFromVelox>(
+          id, plan_node->outputType(), ctx, plan_node->id() + "-from-velox"));
+      replace_op.back()->initialize();
+    }
+    // This is used to denote if the current operator is kept or replaced.
+    auto keep_operator = 0;
     if (auto joinBuildOp = dynamic_cast<exec::HashBuild*>(oper)) {
-      auto id = joinBuildOp->operatorId();
       auto plan_node = std::dynamic_pointer_cast<const core::HashJoinNode>(
           get_plan_node(joinBuildOp->planNodeId()));
       VELOX_CHECK(plan_node != nullptr);
-      replace_op.push_back(std::make_unique<CudfFromVelox>(
-          id, plan_node->outputType(), ctx, plan_node->id() + "-from-velox"));
-      replace_op[0]->initialize();
+      // From-Velox (optional)
       replace_op.push_back(
           std::make_unique<CudfHashJoinBuild>(id, ctx, plan_node));
-      replace_op[1]->initialize();
-
-      operatorsOffset += replace_op.size() - 1;
-      [[maybe_unused]] auto replaced = driverFactory_.replaceOperators(
-          driver_,
-          replacingOperatorIndex,
-          replacingOperatorIndex + 1,
-          std::move(replace_op));
-      replacements_made = true;
+      replace_op.back()->initialize();
     } else if (auto joinProbeOp = dynamic_cast<exec::HashProbe*>(oper)) {
-      auto id = joinProbeOp->operatorId();
       auto plan_node = std::dynamic_pointer_cast<const core::HashJoinNode>(
           get_plan_node(joinProbeOp->planNodeId()));
       VELOX_CHECK(plan_node != nullptr);
-      replace_op.push_back(std::make_unique<CudfFromVelox>(
-          id, plan_node->outputType(), ctx, plan_node->id() + "-from-velox"));
-      replace_op[0]->initialize();
+      // From-Velox (optional)
       replace_op.push_back(
           std::make_unique<CudfHashJoinProbe>(id, ctx, plan_node));
-      replace_op[1]->initialize();
-      replace_op.push_back(std::make_unique<CudfToVelox>(
-          id, plan_node->outputType(), ctx, plan_node->id() + "-to-velox"));
-      replace_op[2]->initialize();
-
-      operatorsOffset += replace_op.size() - 1;
-      [[maybe_unused]] auto replaced = driverFactory_.replaceOperators(
-          driver_,
-          replacingOperatorIndex,
-          replacingOperatorIndex + 1,
-          std::move(replace_op));
-      replacements_made = true;
+      replace_op.back()->initialize();
+      // To-Velox (optional)
     } else if (auto orderByOp = dynamic_cast<exec::OrderBy*>(oper)) {
       auto id = orderByOp->operatorId();
       auto plan_node = std::dynamic_pointer_cast<const core::OrderByNode>(
           get_plan_node(orderByOp->planNodeId()));
       VELOX_CHECK(plan_node != nullptr);
-      replace_op.push_back(std::make_unique<CudfFromVelox>(
-          id, plan_node->outputType(), ctx, plan_node->id() + "-from-velox"));
-      replace_op[0]->initialize();
+      // From-velox (optional)
       replace_op.push_back(std::make_unique<CudfOrderBy>(id, ctx, plan_node));
-      replace_op[1]->initialize();
+      replace_op.back()->initialize();
+      // To-velox (optional)
+    }
+    if (next_operator_is_not_gpu and produces_gpu_output(oper)) {
+      auto plan_node = get_plan_node(oper->planNodeId());
       replace_op.push_back(std::make_unique<CudfToVelox>(
           id, plan_node->outputType(), ctx, plan_node->id() + "-to-velox"));
-      replace_op[2]->initialize();
+      replace_op.back()->initialize();
+    }
 
-      operatorsOffset += replace_op.size() - 1;
+    if (not replace_op.empty()) {
+      operatorsOffset +=
+          replace_op.size() - 1 + keep_operator; // Check this "- 1"
       [[maybe_unused]] auto replaced = driverFactory_.replaceOperators(
           driver_,
-          replacingOperatorIndex,
+          replacingOperatorIndex + keep_operator,
           replacingOperatorIndex + 1,
           std::move(replace_op));
       replacements_made = true;
