@@ -185,7 +185,7 @@ Array Functions
     :noindex:
 
     Returns the array sorted by values computed using specified lambda in ascending order. ``U`` must be an orderable type.
-    Null/NaN elements returned by the lambda function will be placed at the end of the returned array, with NaN elements appearing before Null elements. This functions is not supported in Spark and is only used inside velox for rewring :spark:func:`xxx` as :spark:func:`xxx`. ::
+    Null/NaN elements returned by the lambda function will be placed at the end of the returned array, with NaN elements appearing before Null elements. This functions is not supported in Spark and is only used inside velox for rewring :spark:func: array_sort(array(T), function(T,T,U)) as :spark:func: array_sort(array(T), function(T,U)). ::
 
 .. spark:function:: array_sort(array(T), function(T,T,U)) -> array(T)
     :noindex:
@@ -193,9 +193,12 @@ Array Functions
     Returns the array sorted by values computed using specified lambda in ascending
     order. ``U`` must be an orderable type. If the value from the lambda function is NULL, the element will be placed at the end.
     The function attempts to analyze the lambda function and rewrite it into a simpler call that 
-    specifies the sort-by expression (like :spark:func:`array_sort(array(T), function(T,U)) -> array(T)`). For example, ``(left, right) -> if(length(left) > length(right), 1, if(length(left) < length(right), -1, 0))`` will be rewritten to ``x -> length(x)``. If rewrite is not possible, a user error will be thrown ::
+    specifies the sort-by expression (like :spark:func:`array_sort(array(T), function(T,U)) -> array(T)`). For example, ``(left, right) -> if(length(left) > length(right), 1, if(length(left) < length(right), -1, 0))`` will be rewritten to ``x -> length(x)``. If rewrite is not possible, a user error will be thrown.
+    Please note that due to this rewrite optimization, there is a difference in null handling logic between Spark and Velox. In Velox, null elements are always placed at the end of the returned array, whereas in Spark, Java comparison logic is used to sort nulls with other elements. ::
 
         SELECT array_sort(array('cat', 'leopard', 'mouse'), (left, right) -> if(length(left) > length(right), 1, if(length(left) < length(right), -1, 0))); -- ['cat', 'mouse', 'leopard']
+        select array_sort(array("abcd123", "abcd", null, "abc"), (left, right) -> if(length(left)>length(right), 1, if(length(left)<length(right), -1, 0))); -- ["abc", "abcd", "abcd123", null]
+        select array_sort(array("abcd123", "abcd", null, "abc"), (left, right) -> if(length(left)>length(right), 1, if(length(left)=length(right), 0, -1))); -- ["abc", "abcd", "abcd123", null] different with Spark: ["abc", null, "abcd", "abcd123"]
 
 .. spark:function:: array_union(array(E) x, array(E) y) -> array(E)
 
