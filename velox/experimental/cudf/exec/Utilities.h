@@ -20,12 +20,24 @@
 #include <string_view>
 
 #include <rmm/mr/device/device_memory_resource.hpp>
+#include <cudf/detail/utilities/stream_pool.hpp>
 
 namespace facebook::velox::cudf_velox {
 
+/**
+ * @brief Creates a memory resource based on the given mode.
+ */
 [[nodiscard]] std::shared_ptr<rmm::mr::device_memory_resource>
 create_memory_resource(std::string_view mode);
 
+/**
+ * @brief Returns the global CUDA stream pool used by cudf.
+ */
+[[nodiscard]] cudf::detail::cuda_stream_pool& cudfGlobalStreamPool();
+
+/**
+ * @brief Returns true if the VELOX_CUDF_DEBUG environment variable is set to a nonzero value.
+ */
 bool cudfDebugEnabled();
 
 } // namespace facebook::velox::cudf_velox

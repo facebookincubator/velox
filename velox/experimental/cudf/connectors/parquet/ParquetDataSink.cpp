@@ -157,7 +157,9 @@ void ParquetDataSink::appendData(RowVectorPtr input) {
   checkRunning();
 
   // Convert the input RowVectorPtr to cudf::table
-  auto cudfInput = with_arrow::to_cudf_table(input, input->pool());
+  auto stream = cudfGlobalStreamPool().get_stream();
+  auto cudfInput = with_arrow::to_cudf_table(input, input->pool(), stream);
+  stream.synchronize();
   VELOX_CHECK_NOT_NULL(
       cudfInput, "Failed to convert input RowVectorPtr to cudf::table");
 

@@ -18,6 +18,8 @@
 #include <memory>
 #include <string_view>
 
+#include "velox/experimental/cudf/exec/Utilities.h"
+
 #include <rmm/mr/device/arena_memory_resource.hpp>
 #include <rmm/mr/device/cuda_async_memory_resource.hpp>
 #include <rmm/mr/device/cuda_memory_resource.hpp>
@@ -26,6 +28,7 @@
 #include <rmm/mr/device/owning_wrapper.hpp>
 #include <rmm/mr/device/pool_memory_resource.hpp>
 
+#include <cudf/detail/utilities/stream_pool.hpp>
 #include <cudf/utilities/error.hpp>
 
 namespace facebook::velox::cudf_velox {
@@ -77,6 +80,10 @@ std::shared_ptr<rmm::mr::device_memory_resource> create_memory_resource(
       "Unknown memory resource mode: " + std::string(mode) +
       "\nExpecting: cuda, pool, async, arena, managed, or managed_pool");
 }
+
+cudf::detail::cuda_stream_pool& cudfGlobalStreamPool() {
+    return cudf::detail::global_cuda_stream_pool();
+};
 
 bool cudfDebugEnabled() {
   const char* env_cudf_debug = std::getenv("VELOX_CUDF_DEBUG");

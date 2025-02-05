@@ -158,8 +158,10 @@ std::optional<RowVectorPtr> ParquetDataSource::next(
   // If the current table view has <= size rows, this is the last chunk.
   if (currentCudfTableView_.num_rows() <= size) {
     // Convert the current table view to RowVectorPtr.
+    auto stream = cudf::get_default_stream();
     output =
-        with_arrow::to_velox_column(currentCudfTableView_, pool_, columnNames);
+        with_arrow::to_velox_column(currentCudfTableView_, pool_, columnNames, stream);
+    stream.synchronize();
     // Reset internal tables
     resetCudfTableAndView();
   } else {
@@ -172,7 +174,9 @@ std::optional<RowVectorPtr> ParquetDataSource::next(
         tableSplits[0].num_rows(),
         "cudf::split yielded incorrect partitions");
     // Convert the first split view to RowVectorPtr.
-    output = with_arrow::to_velox_column(tableSplits[0], pool_, columnNames);
+    auto stream = cudf::get_default_stream();
+    output = with_arrow::to_velox_column(tableSplits[0], pool_, columnNames, stream);
+    stream.synchronize();
     // Set the current view to the second split view.
     currentCudfTableView_ = tableSplits[1];
   }
