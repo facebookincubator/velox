@@ -66,4 +66,11 @@ void TaskTraceMetadataWriter::write(
   file->close();
 }
 
+void TaskTraceMetadataWriter::write(
+    const std::shared_ptr<core::QueryCtx>& queryCtx,
+    const core::PlanNodePtr& planNode,
+    const core::PlanNodeId& planNodeId) {
+  write(queryCtx, copyTraceNode(planNode, planNodeId));
+}
+
 } // namespace facebook::velox::exec::trace
