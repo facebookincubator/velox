@@ -374,6 +374,7 @@ void AggregationTest::setTestKey(
   vector->set(row, StringView(chars));
 }
 
+// DM: Works
 TEST_F(AggregationTest, global) {
   auto vectors = makeVectors(rowType_, 10, 100);
   createDuckDbTable(vectors);

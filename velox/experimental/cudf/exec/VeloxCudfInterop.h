@@ -26,6 +26,8 @@
 
 namespace facebook::velox::cudf_velox {
 
+cudf::type_id velox_to_cudf_type_id(const TypePtr& type);
+
 std::unique_ptr<cudf::table> to_cudf_table(
     const facebook::velox::RowVectorPtr& leftBatch);
 facebook::velox::VectorPtr to_velox_column(

@@ -15,11 +15,14 @@
  */
 #include "CudfHashAggregation.h"
 
+#include "cudf/column/column_factories.hpp"
 #include "velox/exec/PrefixSort.h"
 #include "velox/exec/Task.h"
+#include "velox/experimental/cudf/exec/VeloxCudfInterop.h"
 #include "velox/expression/Expr.h"
 
 #include <cudf/concatenate.hpp>
+#include <cudf/reduction.hpp>
 #include <optional>
 
 namespace {
@@ -80,7 +83,7 @@ auto toAggregationsMap(const core::AggregationNode& aggregationNode) {
   return requests;
 }
 
-std::unique_ptr<cudf::groupby_aggregation> toAggregationRequest(
+std::unique_ptr<cudf::groupby_aggregation> toGroupbyAggregationRequest(
     cudf::aggregation::Kind kind) {
   switch (kind) {
     case cudf::aggregation::SUM:
@@ -91,6 +94,20 @@ std::unique_ptr<cudf::groupby_aggregation> toAggregationRequest(
       return cudf::make_min_aggregation<cudf::groupby_aggregation>();
     case cudf::aggregation::MAX:
       return cudf::make_max_aggregation<cudf::groupby_aggregation>();
+    default:
+      VELOX_NYI("Aggregation not yet supported");
+  }
+}
+
+std::unique_ptr<cudf::reduce_aggregation> toGlobalAggregationRequest(
+    cudf::aggregation::Kind kind) {
+  switch (kind) {
+    case cudf::aggregation::SUM:
+      return cudf::make_sum_aggregation<cudf::reduce_aggregation>();
+    case cudf::aggregation::MIN:
+      return cudf::make_min_aggregation<cudf::reduce_aggregation>();
+    case cudf::aggregation::MAX:
+      return cudf::make_max_aggregation<cudf::reduce_aggregation>();
     default:
       VELOX_NYI("Aggregation not yet supported");
   }
@@ -267,7 +284,7 @@ RowVectorPtr CudfHashAggregation::doGroupByAggregation(
     request.values = tbl->get_column(val_col_idx).view();
     auto& output_idx = output_indices.emplace_back();
     for (auto const& [aggKind, outIdx] : agg_kinds) {
-      request.aggregations.push_back(toAggregationRequest(aggKind));
+      request.aggregations.push_back(toGroupbyAggregationRequest(aggKind));
       output_idx.push_back(outIdx);
     }
   }
@@ -297,6 +314,39 @@ RowVectorPtr CudfHashAggregation::doGroupByAggregation(
 
   return std::make_shared<cudf_velox::CudfVector>(
       pool(), outputType_, result_table->num_rows(), std::move(result_table));
+}
+
+RowVectorPtr CudfHashAggregation::doGlobalAggregation(
+    std::unique_ptr<cudf::table> tbl) {
+  std::vector<std::unique_ptr<cudf::scalar>> result_scalars;
+  result_scalars.resize(numAggregates_);
+
+  for (auto const& [inColIdx, aggs] : requests_map_) {
+    for (auto const& [aggKind, outIdx] : aggs) {
+      auto inCol = tbl->get_column(inColIdx);
+      auto result = cudf::reduce(
+          inCol,
+          *toGlobalAggregationRequest(aggKind),
+          cudf::data_type(
+              cudf_velox::velox_to_cudf_type_id(outputType_->childAt(outIdx))));
+      result_scalars[outIdx] = std::move(result);
+    }
+  }
+
+  // Convert scalars to columns
+  std::vector<std::unique_ptr<cudf::column>> result_columns;
+  result_columns.reserve(result_scalars.size());
+  for (auto& scalar : result_scalars) {
+    result_columns.push_back(cudf::make_column_from_scalar(*scalar, 1));
+  }
+
+  return std::make_shared<cudf_velox::CudfVector>(
+      pool(),
+      outputType_,
+      1,
+      std::make_unique<cudf::table>(std::move(result_columns)));
+
+  VELOX_NYI("CudfHashAggregation::doGlobalAggregation()");
 }
 
 RowVectorPtr CudfHashAggregation::getOutput() {
@@ -344,7 +394,7 @@ RowVectorPtr CudfHashAggregation::getOutput() {
   if (!isGlobal_) {
     return doGroupByAggregation(std::move(tbl));
   } else {
-    VELOX_NYI("CudfHashAggregation::getOutput() for global aggregation");
+    return doGlobalAggregation(std::move(tbl));
   }
 }
 

@@ -19,7 +19,7 @@
 #include "velox/exec/GroupingSet.h"
 #include "velox/exec/Operator.h"
 
-#include "cudf/groupby.hpp"
+#include <cudf/groupby.hpp>
 
 // TODO (dm): rename namespace
 namespace facebook::velox::exec {
@@ -67,6 +67,7 @@ class CudfHashAggregation : public Operator {
       std::vector<column_index_t>& groupingKeyOutputChannels) const;
 
   RowVectorPtr doGroupByAggregation(std::unique_ptr<cudf::table> tbl);
+  RowVectorPtr doGlobalAggregation(std::unique_ptr<cudf::table> tbl);
 
   std::vector<column_index_t> groupingKeyInputChannels_;
   std::vector<column_index_t> groupingKeyOutputChannels_;
