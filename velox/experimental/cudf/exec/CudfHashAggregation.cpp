@@ -247,48 +247,8 @@ void CudfHashAggregation::addInput(RowVectorPtr input) {
   }
 }
 
-RowVectorPtr CudfHashAggregation::getOutput() {
-  if (finished_) {
-    input_ = nullptr;
-    return nullptr;
-  }
-
-  // Produce results if one of the following is true:
-  // - received no-more-input message;
-  // - partial aggregation reached memory limit;
-  // - distinct aggregation has new keys;
-  // - running in partial streaming mode and have some output ready.
-  if (!noMoreInput_ && !newDistincts_) {
-    input_ = nullptr;
-    return nullptr;
-  }
-
-  if (isDistinct_) {
-    // TODO (dm): Count distinct should be easy.
-    VELOX_NYI("CudfHashAggregation::getOutput() for distinct aggregation");
-  }
-
-  if (inputs_.empty()) {
-    return nullptr;
-  }
-
-  finished_ = true;
-
-  auto cudf_tables = std::vector<std::unique_ptr<cudf::table>>(inputs_.size());
-  auto cudf_table_views = std::vector<cudf::table_view>(inputs_.size());
-  for (int i = 0; i < inputs_.size(); i++) {
-    VELOX_CHECK_NOT_NULL(inputs_[i]);
-    cudf_tables[i] = inputs_[i]->release();
-    cudf_table_views[i] = cudf_tables[i]->view();
-  }
-  auto tbl = cudf::concatenate(cudf_table_views);
-
-  cudf_table_views.clear();
-  cudf_tables.clear();
-  inputs_.clear();
-
-  VELOX_CHECK_NOT_NULL(tbl);
-
+RowVectorPtr CudfHashAggregation::doGroupByAggregation(
+    std::unique_ptr<cudf::table> tbl) {
   auto groupby_key_tbl = tbl->select(
       groupingKeyInputChannels_.begin(), groupingKeyInputChannels_.end());
 
@@ -337,15 +297,55 @@ RowVectorPtr CudfHashAggregation::getOutput() {
 
   return std::make_shared<cudf_velox::CudfVector>(
       pool(), outputType_, result_table->num_rows(), std::move(result_table));
+}
 
-  // for (auto const& request_kind : requests_map_) {
-  //   auto& [val_col_idx, agg_kinds] = request_kind;
-  //   for (auto const& [aggKind, outIdx] : agg_kinds) {
-  //     result_columns[outIdx] =
-  //         std::move(results[val_col_idx -
-  //         num_grouping_keys].results[outIdx]);
-  //   }
-  // }
+RowVectorPtr CudfHashAggregation::getOutput() {
+  if (finished_) {
+    input_ = nullptr;
+    return nullptr;
+  }
+
+  // Produce results if one of the following is true:
+  // - received no-more-input message;
+  // - partial aggregation reached memory limit;
+  // - distinct aggregation has new keys;
+  // - running in partial streaming mode and have some output ready.
+  if (!noMoreInput_ && !newDistincts_) {
+    input_ = nullptr;
+    return nullptr;
+  }
+
+  if (isDistinct_) {
+    // TODO (dm): Count distinct should be easy.
+    VELOX_NYI("CudfHashAggregation::getOutput() for distinct aggregation");
+  }
+
+  if (inputs_.empty()) {
+    return nullptr;
+  }
+
+  finished_ = true;
+
+  auto cudf_tables = std::vector<std::unique_ptr<cudf::table>>(inputs_.size());
+  auto cudf_table_views = std::vector<cudf::table_view>(inputs_.size());
+  for (int i = 0; i < inputs_.size(); i++) {
+    VELOX_CHECK_NOT_NULL(inputs_[i]);
+    cudf_tables[i] = inputs_[i]->release();
+    cudf_table_views[i] = cudf_tables[i]->view();
+  }
+  auto tbl = cudf::concatenate(cudf_table_views);
+
+  cudf_table_views.clear();
+  cudf_tables.clear();
+  inputs_.clear();
+
+  VELOX_CHECK_NOT_NULL(tbl);
+
+  if (!isGlobal_) {
+    return doGroupByAggregation(std::move(tbl));
+  } else {
+    VELOX_NYI("CudfHashAggregation::getOutput() for global aggregation");
+  }
 }
 
 void CudfHashAggregation::noMoreInput() {
