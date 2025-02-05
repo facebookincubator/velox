@@ -68,6 +68,7 @@ class CudfHashAggregation : public Operator {
 
   RowVectorPtr doGroupByAggregation(std::unique_ptr<cudf::table> tbl);
   RowVectorPtr doGlobalAggregation(std::unique_ptr<cudf::table> tbl);
+  RowVectorPtr getDistinctKeys(std::unique_ptr<cudf::table> tbl);
 
   std::vector<column_index_t> groupingKeyInputChannels_;
   std::vector<column_index_t> groupingKeyOutputChannels_;

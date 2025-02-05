@@ -16,6 +16,7 @@
 #include "CudfHashAggregation.h"
 
 #include "cudf/column/column_factories.hpp"
+#include "cudf/stream_compaction.hpp"
 #include "velox/exec/PrefixSort.h"
 #include "velox/exec/Task.h"
 #include "velox/experimental/cudf/exec/VeloxCudfInterop.h"
@@ -349,6 +350,16 @@ RowVectorPtr CudfHashAggregation::doGlobalAggregation(
   VELOX_NYI("CudfHashAggregation::doGlobalAggregation()");
 }
 
+RowVectorPtr CudfHashAggregation::getDistinctKeys(
+    std::unique_ptr<cudf::table> tbl) {
+  std::vector<cudf::size_type> key_indices(
+      groupingKeyInputChannels_.begin(), groupingKeyInputChannels_.end());
+  auto result = cudf::distinct(tbl->view(), key_indices);
+
+  return std::make_shared<cudf_velox::CudfVector>(
+      pool(), outputType_, result->num_rows(), std::move(result));
+}
+
 RowVectorPtr CudfHashAggregation::getOutput() {
   if (finished_) {
     input_ = nullptr;
@@ -363,11 +374,6 @@ RowVectorPtr CudfHashAggregation::getOutput() {
   if (!noMoreInput_ && !newDistincts_) {
     input_ = nullptr;
     return nullptr;
-  }
-
-  if (isDistinct_) {
-    // TODO (dm): Count distinct should be easy.
-    VELOX_NYI("CudfHashAggregation::getOutput() for distinct aggregation");
   }
 
   if (inputs_.empty()) {
@@ -393,6 +399,8 @@ RowVectorPtr CudfHashAggregation::getOutput() {
 
   if (!isGlobal_) {
     return doGroupByAggregation(std::move(tbl));
+  } else if (isDistinct_) {
+    return getDistinctKeys(std::move(tbl));
   } else {
     return doGlobalAggregation(std::move(tbl));
   }

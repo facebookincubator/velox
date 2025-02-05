@@ -474,6 +474,7 @@ TEST_F(AggregationTest, singleBigintKey) {
   testSingleKey<int64_t>(vectors, "c0", true, false);
 }
 
+// DM: Works
 TEST_F(AggregationTest, singleBigintKeyDistinct) {
   auto vectors = makeVectors(rowType_, 10, 100);
   createDuckDbTable(vectors);
@@ -489,6 +490,7 @@ TEST_F(AggregationTest, singleStringKey) {
   testSingleKey<StringView>(vectors, "c6", true, false);
 }
 
+// DM: Works
 TEST_F(AggregationTest, singleStringKeyDistinct) {
   auto vectors = makeVectors(rowType_, 10, 100);
   createDuckDbTable(vectors);
@@ -504,6 +506,7 @@ TEST_F(AggregationTest, multiKey) {
   testMultiKey(vectors, true, false);
 }
 
+// DM: Works
 TEST_F(AggregationTest, multiKeyDistinct) {
   auto vectors = makeVectors(rowType_, 10, 100);
   createDuckDbTable(vectors);
