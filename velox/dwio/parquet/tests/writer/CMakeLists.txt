@@ -49,3 +49,24 @@ target_link_libraries(
   ${TEST_LINK_LIBS}
   GTest::gtest
   fmt::fmt)
+
+add_executable(velox_dwio_parquet_writer_test MetadataTest.cpp)
+
+add_test(
+  NAME velox_dwio_parquet_writer_test
+  COMMAND velox_dwio_parquet_writer_test
+  WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR})
+
+target_link_libraries(
+  velox_dwio_parquet_writer_test
+  velox_dwio_arrow_parquet_writer_test_lib
+  GTest::gmock
+  GTest::gtest
+  GTest::gtest_main
+  arrow
+  arrow_testing
+  ${TEST_LINK_LIBS}
+  velox_dwio_native_parquet_reader
+  velox_dwio_common_test_utils
+  velox_dwio_parquet_writer
+  velox_temp_path)
