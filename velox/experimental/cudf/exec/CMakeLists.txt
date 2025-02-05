@@ -16,6 +16,7 @@ add_library(
   velox_cudf_exec
   CudfConversion.cpp
   CudfHashJoin.cpp
+  CudfHashAggregation.cpp
   CudfOrderBy.cpp
   ToCudf.cpp
   Utilities.cpp
