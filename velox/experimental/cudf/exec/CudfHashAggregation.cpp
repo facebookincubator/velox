@@ -57,6 +57,12 @@ auto toAggregationsMap(const core::AggregationNode& aggregationNode) {
     if (agg_name == "sum") {
       requests[agg_inputs[0]].push_back(
           std::make_pair(cudf::aggregation::SUM, outputIndex));
+    } else if (agg_name == "min") {
+      requests[agg_inputs[0]].push_back(
+          std::make_pair(cudf::aggregation::MIN, outputIndex));
+    } else if (agg_name == "max") {
+      requests[agg_inputs[0]].push_back(
+          std::make_pair(cudf::aggregation::MAX, outputIndex));
     } else if (agg_name == "count") {
       if (facebook::velox::exec::isPartialOutput(step)) {
         // TODO (dm): Count valid and count all are separate aggregations. Fix
@@ -81,6 +87,10 @@ std::unique_ptr<cudf::groupby_aggregation> toAggregationRequest(
       return cudf::make_sum_aggregation<cudf::groupby_aggregation>();
     case cudf::aggregation::COUNT_ALL:
       return cudf::make_count_aggregation<cudf::groupby_aggregation>();
+    case cudf::aggregation::MIN:
+      return cudf::make_min_aggregation<cudf::groupby_aggregation>();
+    case cudf::aggregation::MAX:
+      return cudf::make_max_aggregation<cudf::groupby_aggregation>();
     default:
       VELOX_NYI("Aggregation not yet supported");
   }
