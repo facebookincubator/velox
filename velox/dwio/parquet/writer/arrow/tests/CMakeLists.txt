@@ -37,7 +37,10 @@ target_link_libraries(
   GTest::gtest
   GTest::gtest_main
   arrow
-  arrow_testing)
+  arrow_testing
+  velox_dwio_common_test_utils
+  velox_dwio_parquet_writer
+  velox_temp_path)
 
 add_library(
   velox_dwio_arrow_parquet_writer_test_lib

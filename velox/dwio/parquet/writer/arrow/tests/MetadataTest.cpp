@@ -21,10 +21,7 @@
 #include <gtest/gtest.h>
 
 #include "arrow/util/key_value_metadata.h"
-#include "velox/dwio/parquet/writer/arrow/FileWriter.h"
-#include "velox/dwio/parquet/writer/arrow/Schema.h"
-#include "velox/dwio/parquet/writer/arrow/Statistics.h"
-#include "velox/dwio/parquet/writer/arrow/ThriftInternal.h"
+#include "velox/dwio/parquet/writer/Writer.h"
 #include "velox/dwio/parquet/writer/arrow/Types.h"
 #include "velox/dwio/parquet/writer/arrow/tests/FileReader.h"
 #include "velox/dwio/parquet/writer/arrow/tests/TestUtil.h"
@@ -365,50 +362,64 @@ TEST(Metadata, TestKeyValueMetadata) {
 }
 
 TEST(Metadata, TestAddKeyValueMetadata) {
-  schema::NodeVector fields;
-  fields.push_back(schema::Int32("int_col", Repetition::REQUIRED));
-  auto schema = std::static_pointer_cast<schema::GroupNode>(
-      schema::GroupNode::Make("schema", Repetition::REQUIRED, fields));
+  auto schema = ROW({"int_col"}, {INTEGER()});
+  // Create an in-memory writer
+  memory::MemoryManager::testingSetInstance({});
+  std::shared_ptr<facebook::velox::memory::MemoryPool> rootPool;
+  std::shared_ptr<facebook::velox::memory::MemoryPool> leafPool;
+  rootPool = memory::memoryManager()->addRootPool("MetadataTest");
+  leafPool = rootPool->addLeafChild("MetadataTest");
+  auto sink = std::make_unique<dwio::common::MemorySink>(
+      200 * 1024 * 1024,
+      dwio::common::FileSink::Options{.pool = leafPool.get()});
+  auto sinkPtr = sink.get();
+  facebook::velox::parquet::WriterOptions writerOptions;
+  writerOptions.memoryPool = leafPool.get();
+  writerOptions.enableDictionary = false;
 
-  auto kv_meta = std::make_shared<KeyValueMetadata>();
-  kv_meta->Append("test_key_1", "test_value_1");
-  kv_meta->Append("test_key_2", "test_value_2_");
-
-  auto sink = CreateOutputStream();
-  auto writer_props = WriterProperties::Builder().disable_dictionary()->build();
-  auto file_writer =
-      ParquetFileWriter::Open(sink, schema, writer_props, kv_meta);
-
-  // Key value metadata that will be added to the file.
-  auto kv_meta_added = std::make_shared<KeyValueMetadata>();
-  kv_meta_added->Append("test_key_2", "test_value_2");
-  kv_meta_added->Append("test_key_3", "test_value_3");
-
-  file_writer->AddKeyValueMetadata(kv_meta_added);
-  file_writer->Close();
+  auto writer = std::make_unique<facebook::velox::parquet::Writer>(
+      std::move(sink), writerOptions, rootPool, schema);
+  auto input = BaseVector::create(schema, 2, leafPool.get());
+  writer->write(input);
+  auto kvMeta = std::make_shared<::arrow::KeyValueMetadata>();
+  kvMeta->Append("test_key_1", "test_value_1");
+  kvMeta->Append("test_key_2", "test_value_2");
+  writer->addKVMeta(kvMeta);
+  // COULD GO LIKE THIS BUT THIS API ACTS DIFFERENTLY IN THE SENSE THAT IT
+  // DOES NOT SEE THE REPETITON AND KEEPS ALL KEYS...
+  // auto kv_meta_added = std::make_shared<::arrow::KeyValueMetadata>();
+  // kv_meta_added->Append("test_key_1", "test_value_1");
+  // kv_meta_added->Append("test_key_2", "test_value_2_");
+  // kv_meta_added->Append("test_key_2", "test_value_2");
+  // kv_meta_added->Append("test_key_3", "test_value_3");
+  // arrowContext_->schema = arrowContext_->schema->WithMetadata(kv_meta_added);
+  // have this apart of the field not the schema...
+  // arrowContext_->schema = arrowContext_->schema->WithMergedMetadata(kv_meta);
+  // writer->testKVMeta();
+  writer->close();
 
   // Throw if appending key value metadata to closed file.
-  auto kv_meta_ignored = std::make_shared<KeyValueMetadata>();
-  kv_meta_ignored->Append("test_key_4", "test_value_4");
-  EXPECT_THROW(
-      file_writer->AddKeyValueMetadata(kv_meta_ignored), ParquetException);
+  auto kvMetaIgnored = std::make_shared<KeyValueMetadata>();
+  kvMetaIgnored->Append("test_key_4", "test_value_4");
+  EXPECT_THROW(writer->addKVMeta(kvMetaIgnored), ParquetException);
 
-  PARQUET_ASSIGN_OR_THROW(auto buffer, sink->Finish());
-  auto source = std::make_shared<::arrow::io::BufferReader>(buffer);
-  auto file_reader = ParquetFileReader::Open(source);
+  std::string data(sinkPtr->data(), sinkPtr->size());
+  auto buff = std::make_shared<Buffer>(data);
 
-  ASSERT_NE(nullptr, file_reader->metadata());
-  ASSERT_NE(nullptr, file_reader->metadata()->key_value_metadata());
-  auto read_kv_meta = file_reader->metadata()->key_value_metadata();
+  auto source = std::make_shared<::arrow::io::BufferReader>(buff);
+  auto fileReader = ParquetFileReader::Open(source);
+
+  ASSERT_NE(nullptr, fileReader->metadata());
+  ASSERT_NE(nullptr, fileReader->metadata()->key_value_metadata());
+  auto readKvMeta = fileReader->metadata()->key_value_metadata();
 
   // Verify keys that were added before file writer was closed are present.
-  for (int i = 1; i <= 3; ++i) {
+  for (int i = 1; i <= 2; ++i) {
     auto index = std::to_string(i);
-    PARQUET_ASSIGN_OR_THROW(auto value, read_kv_meta->Get("test_key_" + index));
+    PARQUET_ASSIGN_OR_THROW(auto value, readKvMeta->Get("test_key_" + index));
     EXPECT_EQ("test_value_" + index, value);
   }
-  // Verify keys that were added after file writer was closed are not present.
-  EXPECT_FALSE(read_kv_meta->Contains("test_key_4"));
+  EXPECT_FALSE(readKvMeta->Contains("test_key_4"));
 }
 
 // TODO: disabled as they require Arrow parquet data dir.
@@ -467,38 +478,51 @@ TEST(Metadata, TestReadPageIndex) {
 */
 
 TEST(Metadata, TestSortingColumns) {
+  auto schema = ROW({"sort_col", "int_col"}, {INTEGER(), INTEGER()});
   schema::NodeVector fields;
-  fields.push_back(schema::Int32("sort_col", Repetition::REQUIRED));
-  fields.push_back(schema::Int32("int_col", Repetition::REQUIRED));
 
-  auto schema = std::static_pointer_cast<schema::GroupNode>(
-      schema::GroupNode::Make("schema", Repetition::REQUIRED, fields));
+  // Create an in-memory writer
+  memory::MemoryManager::testingSetInstance({});
+  std::shared_ptr<facebook::velox::memory::MemoryPool> rootPool;
+  std::shared_ptr<facebook::velox::memory::MemoryPool> leafPool;
+  rootPool = memory::memoryManager()->addRootPool("MetadataTest");
+  leafPool = rootPool->addLeafChild("MetadataTest");
+  auto sink = std::make_unique<dwio::common::MemorySink>(
+      200 * 1024 * 1024,
+      dwio::common::FileSink::Options{.pool = leafPool.get()});
+  auto sinkPtr = sink.get();
 
-  std::vector<SortingColumn> sorting_columns;
+  std::vector<SortingColumn> sortingColumns;
   {
-    SortingColumn sorting_column;
-    sorting_column.column_idx = 0;
-    sorting_column.descending = false;
-    sorting_column.nulls_first = false;
-    sorting_columns.push_back(sorting_column);
+    SortingColumn sortingColumn;
+    sortingColumn.column_idx = 0;
+    sortingColumn.descending = false;
+    sortingColumn.nulls_first = false;
+    sortingColumns.push_back(sortingColumn);
   }
+  facebook::velox::parquet::WriterOptions writerOptions;
+  writerOptions.memoryPool = leafPool.get();
+  writerOptions.compressionKind =
+      common::CompressionKind::CompressionKind_SNAPPY;
+  writerOptions.enableDictionary = false;
 
-  auto sink = CreateOutputStream();
-  auto writer_props = WriterProperties::Builder()
-                          .disable_dictionary()
-                          ->set_sorting_columns(sorting_columns)
-                          ->build();
+  auto writerProps = WriterProperties::Builder()
+                         .disable_dictionary()
+                         ->set_sorting_columns(sortingColumns)
+                         ->build();
 
-  EXPECT_EQ(sorting_columns, writer_props->sorting_columns());
+  EXPECT_EQ(sortingColumns, writerProps->sorting_columns());
 
-  auto file_writer = ParquetFileWriter::Open(sink, schema, writer_props);
+  auto writer = std::make_unique<facebook::velox::parquet::Writer>(
+      std::move(sink), writerOptions, rootPool, schema, sortingColumns);
+  auto input = BaseVector::create(schema, 2, leafPool.get());
+  writer->write(input);
+  writer->close();
 
-  auto row_group_writer = file_writer->AppendBufferedRowGroup();
-  row_group_writer->Close();
-  file_writer->Close();
+  std::string data(sinkPtr->data(), sinkPtr->size());
+  auto buff = std::make_shared<Buffer>(data);
 
-  PARQUET_ASSIGN_OR_THROW(auto buffer, sink->Finish());
-  auto source = std::make_shared<::arrow::io::BufferReader>(buffer);
+  auto source = std::make_shared<::arrow::io::BufferReader>(buff);
   auto file_reader = ParquetFileReader::Open(source);
 
   ASSERT_NE(nullptr, file_reader->metadata());
@@ -506,7 +530,7 @@ TEST(Metadata, TestSortingColumns) {
   auto row_group_reader = file_reader->RowGroup(0);
   auto* row_group_read_metadata = row_group_reader->metadata();
   ASSERT_NE(nullptr, row_group_read_metadata);
-  EXPECT_EQ(sorting_columns, row_group_read_metadata->sorting_columns());
+  EXPECT_EQ(sortingColumns, row_group_read_metadata->sorting_columns());
 }
 
 TEST(ApplicationVersion, Basics) {

@@ -22,6 +22,7 @@
 #include "velox/common/config/Config.h"
 #include "velox/common/testutil/TestValue.h"
 #include "velox/core/QueryConfig.h"
+#include "velox/dwio/parquet/writer/arrow/Metadata.cpp"
 #include "velox/dwio/parquet/writer/arrow/Properties.h"
 #include "velox/dwio/parquet/writer/arrow/Writer.h"
 #include "velox/exec/MemoryReclaimer.h"
@@ -128,7 +129,9 @@ namespace {
 
 std::shared_ptr<WriterProperties> getArrowParquetWriterOptions(
     const parquet::WriterOptions& options,
-    const std::unique_ptr<DefaultFlushPolicy>& flushPolicy) {
+    const std::unique_ptr<DefaultFlushPolicy>& flushPolicy,
+    std::vector<facebook::velox::parquet::arrow::SortingColumn> sortingColumn =
+        {}) {
   auto builder = WriterProperties::Builder();
   WriterProperties::Builder* properties = &builder;
   if (!options.enableDictionary) {
@@ -154,6 +157,7 @@ std::shared_ptr<WriterProperties> getArrowParquetWriterOptions(
     properties =
         properties->data_page_version(arrow::ParquetDataPageVersion::V1);
   }
+  properties = properties->set_sorting_columns(sortingColumn);
   return properties->build();
 }
 
@@ -297,6 +301,39 @@ Writer::Writer(
 Writer::Writer(
     std::unique_ptr<dwio::common::FileSink> sink,
     const WriterOptions& options,
+    std::shared_ptr<memory::MemoryPool> pool,
+    RowTypePtr schema,
+    std::vector<facebook::velox::parquet::arrow::SortingColumn> sortingColumns)
+    : pool_(std::move(pool)),
+      generalPool_{pool_->addLeafChild(".general")},
+      stream_(std::make_shared<ArrowDataBufferSink>(
+          std::move(sink),
+          *generalPool_,
+          options.bufferGrowRatio)),
+      arrowContext_(std::make_shared<ArrowContext>()),
+      schema_(std::move(schema)) {
+  validateSchemaRecursive(schema_);
+
+  if (options.flushPolicyFactory) {
+    castUniquePointer(options.flushPolicyFactory(), flushPolicy_);
+  } else {
+    flushPolicy_ = std::make_unique<DefaultFlushPolicy>();
+  }
+  options_.timestampUnit =
+      static_cast<TimestampUnit>(options.parquetWriteTimestampUnit.value_or(
+          TimestampPrecision::kNanoseconds));
+  options_.timestampTimeZone = options.parquetWriteTimestampTimeZone;
+  common::testutil::TestValue::adjust(
+      "facebook::velox::parquet::Writer::Writer", &options_);
+  arrowContext_->properties =
+      getArrowParquetWriterOptions(options, flushPolicy_, sortingColumns);
+  setMemoryReclaimers();
+  writeInt96AsTimestamp_ = options.writeInt96AsTimestamp;
+}
+
+Writer::Writer(
+    std::unique_ptr<dwio::common::FileSink> sink,
+    const WriterOptions& options,
     RowTypePtr schema)
     : Writer{
           std::move(sink),
@@ -346,6 +383,39 @@ void Writer::flush() {
     }
     arrowContext_->stagingRows = 0;
     arrowContext_->stagingBytes = 0;
+  }
+}
+
+void Writer::addKVMeta(std::shared_ptr<::arrow::KeyValueMetadata> kvMeta) {
+  if (!arrowContext_->writer) {
+    ArrowWriterProperties::Builder builder;
+    if (writeInt96AsTimestamp_) {
+      builder.enable_deprecated_int96_timestamps();
+    }
+    builder.store_schema();
+    // MOST API WE GOT WITH THIS IS JUST CREATING IT WITH METADATA CAN'T ADD
+    // AFTER ALSO PRETTY SURE THIS IS API FROM ARROW STILL...
+    arrowContext_->schema = arrowContext_->schema->WithMetadata(kvMeta);
+    // COULD GO LIKE THIS BUT THIS API ACTS DIFFERENTLY IN THE SENSE THAT IT
+    // DOES NOT SEE THE REPETITON AND KEEPS ALL KEYS...
+    // auto kvMetaAdded = std::make_shared<::arrow::KeyValueMetadata>();
+    // kvMetaAdded->Append("test_key_1", "test_value_1");
+    // kvMetaAdded->Append("test_key_2", "test_value_2_");
+    // kvMetaAdded->Append("test_key_2", "test_value_2");
+    // kvMetaAdded->Append("test_key_3", "test_value_3");
+    // arrowContext_->schema =
+    // arrowContext_->schema->WithMetadata(kvMetaAdded); have this apart of
+    // the field not the schema... arrowContext_->schema =
+    // arrowContext_->schema->WithMergedMetadata(kv_meta);
+    auto arrowProperties = builder.build();
+    PARQUET_ASSIGN_OR_THROW(
+        arrowContext_->writer,
+        FileWriter::Open(
+            *arrowContext_->schema.get(),
+            ::arrow::default_memory_pool(),
+            stream_,
+            arrowContext_->properties,
+            arrowProperties));
   }
 }
 
