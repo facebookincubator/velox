@@ -24,7 +24,6 @@ velox_add_library(
   ArrayIntersectExcept.cpp
   ArrayAndMapMatch.cpp
   ArrayPosition.cpp
-  ArraySort.cpp
   ArraySum.cpp
   Comparisons.cpp
   DecimalFunctions.cpp
@@ -44,7 +43,6 @@ velox_add_library(
   Reverse.cpp
   RowFunction.cpp
   Sequence.cpp
-  SimpleComparisonMatcher.cpp
   Split.cpp
   SplitToMap.cpp
   StringFunctions.cpp
