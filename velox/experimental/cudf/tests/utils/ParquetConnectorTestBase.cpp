@@ -25,6 +25,7 @@
 #include "velox/common/base/Exceptions.h"
 #include "velox/common/file/FileSystems.h"
 #include "velox/common/file/tests/FaultyFileSystem.h"
+#include "velox/dwio/common/FileSink.h"
 #include "velox/dwio/common/tests/utils/BatchMaker.h"
 #include "velox/dwio/dwrf/writer/FlushPolicy.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
@@ -49,7 +50,8 @@ void fillColumnNames(
               colMeta.set_name(defaultName);
             }
             for (int32_t i = 0; i < colMeta.num_children(); ++i) {
-              addDefaultName(colMeta.child(i), std::to_string(i));
+              addDefaultName(
+                  colMeta.child(i), fmt::format("{}_{}", defaultName, i));
             }
           };
   for (int32_t i = 0; i < tableMeta.column_metadata.size(); ++i) {
@@ -77,6 +79,7 @@ void ParquetConnectorTestBase::SetUp() {
                   std::unordered_map<std::string, std::string>()),
               ioExecutor_.get());
   facebook::velox::connector::registerConnector(parquetConnector);
+  dwio::common::registerFileSinks();
 }
 
 void ParquetConnectorTestBase::TearDown() {
@@ -238,6 +241,25 @@ ParquetConnectorTestBase::makeParquetConnectorSplits(
   return splits;
 }
 
+std::vector<std::shared_ptr<connector::parquet::ParquetConnectorSplit>>
+ParquetConnectorTestBase::makeParquetConnectorSplits(
+    const std::string& filePath,
+    uint32_t splitCount) {
+  auto file =
+      filesystems::getFileSystem(filePath, nullptr)->openFileForRead(filePath);
+  const int64_t fileSize = file->size();
+  // Take the upper bound.
+  const int64_t splitSize = std::ceil((fileSize) / splitCount);
+  std::vector<std::shared_ptr<connector::parquet::ParquetConnectorSplit>>
+      splits;
+  // Add all the splits.
+  for (int i = 0; i < splitCount; i++) {
+    auto split = ParquetConnectorSplitBuilder(filePath).build();
+    splits.push_back(std::move(split));
+  }
+  return splits;
+}
+
 std::shared_ptr<connector::parquet::ParquetConnectorSplit>
 ParquetConnectorTestBase::makeParquetConnectorSplit(
     const std::string& filePath,
@@ -245,6 +267,34 @@ ParquetConnectorTestBase::makeParquetConnectorSplit(
   return ParquetConnectorSplitBuilder(filePath)
       .splitWeight(splitWeight)
       .build();
+}
+
+// static
+std::shared_ptr<connector::parquet::ParquetInsertTableHandle>
+ParquetConnectorTestBase::makeParquetInsertTableHandle(
+    const std::vector<std::string>& tableColumnNames,
+    const std::vector<TypePtr>& tableColumnTypes,
+    std::shared_ptr<connector::parquet::LocationHandle> locationHandle,
+    const std::optional<common::CompressionKind> compressionKind,
+    const std::unordered_map<std::string, std::string>& serdeParameters,
+    const std::shared_ptr<dwio::common::WriterOptions>& writerOptions) {
+  std::vector<std::shared_ptr<const connector::parquet::ParquetColumnHandle>>
+      columnHandles;
+
+  for (int i = 0; i < tableColumnNames.size(); ++i) {
+    columnHandles.push_back(
+        std::make_shared<connector::parquet::ParquetColumnHandle>(
+            tableColumnNames.at(i),
+            tableColumnTypes.at(i),
+            cudf::data_type{velox_to_cudf_type_id(tableColumnTypes.at(i))}));
+  }
+
+  return std::make_shared<connector::parquet::ParquetInsertTableHandle>(
+      columnHandles,
+      locationHandle,
+      compressionKind,
+      serdeParameters,
+      writerOptions);
 }
 
 } // namespace facebook::velox::cudf_velox::exec::test

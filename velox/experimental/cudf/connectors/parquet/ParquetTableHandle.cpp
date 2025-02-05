@@ -27,12 +27,12 @@ namespace facebook::velox::cudf_velox::connector::parquet {
 
 using namespace facebook::velox::connector;
 
-ParquetColumnHandle::ParquetColumnHandle(
-    const std::string& name,
-    const TypePtr& type,
-    const cudf::data_type data_type,
-    const std::vector<ParquetColumnHandle>& children)
-    : name_(name), type_(type), data_type_(data_type), children_(children) {}
+std::string ParquetColumnHandle::toString() const {
+  std::ostringstream out;
+  out << fmt::format(
+      "ParquetColumnHandle [name: {}, Type: {},", name_, type_->toString());
+  return out.str();
+}
 
 ParquetTableHandle::ParquetTableHandle(
     std::string connectorId,
