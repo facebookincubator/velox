@@ -1,0 +1,353 @@
+/*
+ * Copyright (c) Facebook, Inc. and its affiliates.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+#include "CudfHashAggregation.h"
+
+#include "velox/exec/PrefixSort.h"
+#include "velox/exec/Task.h"
+#include "velox/expression/Expr.h"
+
+#include <cudf/concatenate.hpp>
+#include <optional>
+
+namespace {
+
+using namespace facebook::velox;
+
+auto toAggregationsMap(const core::AggregationNode& aggregationNode) {
+  auto step = aggregationNode.step();
+  std::map<uint32_t, std::vector<std::pair<cudf::aggregation::Kind, uint32_t>>>
+      requests;
+  const auto& inputRowSchema = aggregationNode.sources()[0]->outputType();
+
+  uint32_t outputIndex = aggregationNode.groupingKeys().size();
+
+  for (auto& aggregate : aggregationNode.aggregates()) {
+    std::vector<column_index_t> agg_inputs;
+    for (const auto& arg : aggregate.call->inputs()) {
+      if (auto field =
+              dynamic_cast<const core::FieldAccessTypedExpr*>(arg.get())) {
+        agg_inputs.push_back(inputRowSchema->getChildIdx(field->name()));
+      } else {
+        VELOX_NYI("Constants and lambdas not yet supported");
+      }
+    }
+    // DM: This above seems to suggest that there can be multiple inputs to an
+    // aggregate. I don't really know which kinds of aggregations support this
+    // so I'm going to ignore it for now.
+    VELOX_CHECK(agg_inputs.size() == 1);
+
+    if (aggregate.distinct) {
+      VELOX_NYI("De-dup before aggregation is not yet supported");
+    }
+
+    auto& agg_name = aggregate.call->name();
+    if (agg_name == "sum") {
+      requests[agg_inputs[0]].push_back(
+          std::make_pair(cudf::aggregation::SUM, outputIndex));
+    } else if (agg_name == "count") {
+      if (facebook::velox::exec::isPartialOutput(step)) {
+        // TODO (dm): Count valid and count all are separate aggregations. Fix
+        // this
+        requests[agg_inputs[0]].push_back(
+            std::make_pair(cudf::aggregation::COUNT_ALL, outputIndex));
+      } else {
+        requests[agg_inputs[0]].push_back(
+            std::make_pair(cudf::aggregation::SUM, outputIndex));
+      }
+    }
+    outputIndex++;
+  }
+
+  return requests;
+}
+
+std::unique_ptr<cudf::groupby_aggregation> toAggregationRequest(
+    cudf::aggregation::Kind kind) {
+  switch (kind) {
+    case cudf::aggregation::SUM:
+      return cudf::make_sum_aggregation<cudf::groupby_aggregation>();
+    case cudf::aggregation::COUNT_ALL:
+      return cudf::make_count_aggregation<cudf::groupby_aggregation>();
+    default:
+      VELOX_NYI("Aggregation not yet supported");
+  }
+}
+
+} // namespace
+
+namespace facebook::velox::exec {
+
+CudfHashAggregation::CudfHashAggregation(
+    int32_t operatorId,
+    DriverCtx* driverCtx,
+    const std::shared_ptr<const core::AggregationNode>& aggregationNode)
+    : Operator(
+          driverCtx,
+          aggregationNode->outputType(),
+          operatorId,
+          aggregationNode->id(),
+          aggregationNode->step() == core::AggregationNode::Step::kPartial
+              ? "CudfPartialAggregation"
+              : "CudfAggregation",
+          aggregationNode->canSpill(driverCtx->queryConfig())
+              ? driverCtx->makeSpillConfig(operatorId)
+              : std::nullopt),
+      aggregationNode_(aggregationNode),
+      isPartialOutput_(isPartialOutput(aggregationNode->step())),
+      isGlobal_(aggregationNode->groupingKeys().empty()),
+      isDistinct_(!isGlobal_ && aggregationNode->aggregates().empty()) {}
+
+void CudfHashAggregation::initialize() {
+  Operator::initialize();
+
+  VELOX_CHECK(pool()->trackUsage());
+
+  const auto& inputType = aggregationNode_->sources()[0]->outputType();
+  setupGroupingKeyChannelProjections(
+      groupingKeyInputChannels_, groupingKeyOutputChannels_);
+
+  // auto hashers = createVectorHashers(inputType, groupingKeyInputChannels);
+  // const auto numHashers = hashers.size();
+  const auto numHashers = groupingKeyOutputChannels_.size();
+
+  // DM: This may be about optimizations related to pre-grouped keys. We
+  // can also do that in cudf. But let's not right now.
+  // std::vector<column_index_t> preGroupedChannels;
+  // preGroupedChannels.reserve(aggregationNode_->preGroupedKeys().size());
+  // for (const auto& key : aggregationNode_->preGroupedKeys()) {
+  //   auto channel = exprToChannel(key.get(), inputType);
+  //   preGroupedChannels.push_back(channel);
+  // }
+
+  // TODO (dm): This is the main function coverting expressions into aggregation
+  // function. I need to implement one where I convert things into aggregation
+  // requests for cudf.
+  std::shared_ptr<core::ExpressionEvaluator> expressionEvaluator;
+  std::vector<AggregateInfo> aggregateInfos = toAggregateInfo(
+      *aggregationNode_, *operatorCtx_, numHashers, expressionEvaluator);
+
+  requests_map_ = toAggregationsMap(*aggregationNode_);
+  numAggregates_ = aggregationNode_->aggregates().size();
+
+  // Check that aggregate result type match the output type.
+  // TODO (dm): This is like output schema validation. Just give it a go over to
+  // see if it's correct.
+  for (auto i = 0; i < aggregateInfos.size(); i++) {
+    const auto& aggResultType = aggregateInfos[i].function->resultType();
+    const auto& expectedType = outputType_->childAt(numHashers + i);
+    VELOX_CHECK(
+        aggResultType->kindEquals(expectedType),
+        "Unexpected result type for an aggregation: {}, expected {}, step {}",
+        aggResultType->toString(),
+        expectedType->toString(),
+        core::AggregationNode::stepName(aggregationNode_->step()));
+  }
+
+  // DM: This is just a maping of groupby key columns to their output
+  // index. We don't need hasher for this. I also don't know how this will be
+  // used. Apparently, it's used for HashProbe to pushdown some dynamic filters
+  // to table scan.
+  // TODO (dm): Figure out what this operator needs to do to support this. Leave
+  // for now
+  // for (auto i = 0; i < hashers.size(); ++i) {
+  //   identityProjections_.emplace_back(
+  //       hashers[groupingKeyOutputChannels[i]]->channel(), i);
+  // }
+
+  // TODO (dm): Figure out what group ID is.
+  // std::optional<column_index_t> groupIdChannel;
+  // if (aggregationNode_->groupId().has_value()) {
+  //   groupIdChannel = outputType_->getChildIdxIfExists(
+  //       aggregationNode_->groupId().value()->name());
+  //   VELOX_CHECK(groupIdChannel.has_value());
+  // }
+
+  // aggregationNode_.reset();
+}
+
+void CudfHashAggregation::setupGroupingKeyChannelProjections(
+    std::vector<column_index_t>& groupingKeyInputChannels,
+    std::vector<column_index_t>& groupingKeyOutputChannels) const {
+  VELOX_CHECK(groupingKeyInputChannels.empty());
+  VELOX_CHECK(groupingKeyOutputChannels.empty());
+
+  const auto& inputType = aggregationNode_->sources()[0]->outputType();
+  const auto& groupingKeys = aggregationNode_->groupingKeys();
+  // The map from the grouping key output channel to the input channel.
+  //
+  // NOTE: grouping key output order is specified as 'groupingKeys' in
+  // 'aggregationNode_'.
+  std::vector<IdentityProjection> groupingKeyProjections;
+  groupingKeyProjections.reserve(groupingKeys.size());
+  for (auto i = 0; i < groupingKeys.size(); ++i) {
+    groupingKeyProjections.emplace_back(
+        exprToChannel(groupingKeys[i].get(), inputType), i);
+  }
+
+  const bool reorderGroupingKeys = false;
+  //     canSpill() && spillConfig()->prefixSortEnabled();
+  // // If prefix sort is enabled, we need to sort the grouping key's layout in
+  // the
+  // // grouping set to maximize the prefix sort acceleration if spill is
+  // // triggered. The reorder stores the grouping key with smaller prefix sort
+  // // encoded size first.
+  // if (reorderGroupingKeys) {
+  //   PrefixSortLayout::optimizeSortKeysOrder(inputType,
+  //   groupingKeyProjections);
+  // }
+
+  groupingKeyInputChannels.reserve(groupingKeys.size());
+  for (auto i = 0; i < groupingKeys.size(); ++i) {
+    groupingKeyInputChannels.push_back(groupingKeyProjections[i].inputChannel);
+  }
+
+  groupingKeyOutputChannels.resize(groupingKeys.size());
+  if (!reorderGroupingKeys) {
+    // If there is no reorder, then grouping key output channels are the same as
+    // the column index order int he grouping set.
+    std::iota(
+        groupingKeyOutputChannels.begin(), groupingKeyOutputChannels.end(), 0);
+    return;
+  }
+
+  for (auto i = 0; i < groupingKeys.size(); ++i) {
+    groupingKeyOutputChannels[groupingKeyProjections[i].outputChannel] = i;
+  }
+}
+
+void CudfHashAggregation::addInput(RowVectorPtr input) {
+  // Accumulate inputs
+  if (input->size() > 0) {
+    auto cudf_input = std::dynamic_pointer_cast<cudf_velox::CudfVector>(input);
+    VELOX_CHECK_NOT_NULL(cudf_input);
+    inputs_.push_back(std::move(cudf_input));
+  }
+}
+
+RowVectorPtr CudfHashAggregation::getOutput() {
+  if (finished_) {
+    input_ = nullptr;
+    return nullptr;
+  }
+
+  // Produce results if one of the following is true:
+  // - received no-more-input message;
+  // - partial aggregation reached memory limit;
+  // - distinct aggregation has new keys;
+  // - running in partial streaming mode and have some output ready.
+  if (!noMoreInput_ && !newDistincts_) {
+    input_ = nullptr;
+    return nullptr;
+  }
+
+  if (isDistinct_) {
+    // TODO (dm): Count distinct should be easy.
+    VELOX_NYI("CudfHashAggregation::getOutput() for distinct aggregation");
+  }
+
+  if (inputs_.empty()) {
+    return nullptr;
+  }
+
+  finished_ = true;
+
+  auto cudf_tables = std::vector<std::unique_ptr<cudf::table>>(inputs_.size());
+  auto cudf_table_views = std::vector<cudf::table_view>(inputs_.size());
+  for (int i = 0; i < inputs_.size(); i++) {
+    VELOX_CHECK_NOT_NULL(inputs_[i]);
+    cudf_tables[i] = inputs_[i]->release();
+    cudf_table_views[i] = cudf_tables[i]->view();
+  }
+  auto tbl = cudf::concatenate(cudf_table_views);
+
+  cudf_table_views.clear();
+  cudf_tables.clear();
+  inputs_.clear();
+
+  VELOX_CHECK_NOT_NULL(tbl);
+
+  auto groupby_key_tbl = tbl->select(
+      groupingKeyInputChannels_.begin(), groupingKeyInputChannels_.end());
+
+  size_t num_grouping_keys = groupby_key_tbl.num_columns();
+
+  // TODO (dm): Support args like include_null_keys, keys_are_sorted,
+  // column_order, null_precedence. We're fine for now because very few nullable
+  // columns in tpch
+  cudf::groupby::groupby group_by_owner(groupby_key_tbl);
+
+  // convert aggregation map into aggregation requests
+  std::vector<cudf::groupby::aggregation_request> requests;
+  std::vector<std::vector<uint32_t>> output_indices;
+  for (auto& [val_col_idx, agg_kinds] : requests_map_) {
+    auto& request = requests.emplace_back();
+    request.values = tbl->get_column(val_col_idx).view();
+    auto& output_idx = output_indices.emplace_back();
+    for (auto const& [aggKind, outIdx] : agg_kinds) {
+      request.aggregations.push_back(toAggregationRequest(aggKind));
+      output_idx.push_back(outIdx);
+    }
+  }
+
+  auto [group_keys, results] = group_by_owner.aggregate(requests);
+  // flatten the results
+  std::vector<std::unique_ptr<cudf::column>> result_columns;
+
+  // first fill the grouping keys
+  auto group_keys_columns = group_keys->release();
+  result_columns.insert(
+      result_columns.begin(),
+      std::make_move_iterator(group_keys_columns.begin()),
+      std::make_move_iterator(group_keys_columns.end()));
+
+  // then fill the aggregation results
+  result_columns.resize(num_grouping_keys + numAggregates_);
+  for (auto i = 0; i < results.size(); i++) {
+    auto& per_column_results = results[i].results;
+    for (auto j = 0; j < per_column_results.size(); j++) {
+      result_columns[output_indices[i][j]] = std::move(per_column_results[j]);
+    }
+  }
+
+  // make a cudf table out of columns
+  auto result_table = std::make_unique<cudf::table>(std::move(result_columns));
+
+  return std::make_shared<cudf_velox::CudfVector>(
+      pool(), outputType_, result_table->num_rows(), std::move(result_table));
+
+  // for (auto const& request_kind : requests_map_) {
+  //   auto& [val_col_idx, agg_kinds] = request_kind;
+  //   for (auto const& [aggKind, outIdx] : agg_kinds) {
+  //     result_columns[outIdx] =
+  //         std::move(results[val_col_idx -
+  //         num_grouping_keys].results[outIdx]);
+  //   }
+  // }
+}
+
+void CudfHashAggregation::noMoreInput() {
+  Operator::noMoreInput();
+}
+
+bool CudfHashAggregation::isFinished() {
+  return finished_;
+}
+
+void CudfHashAggregation::close() {
+  Operator::close();
+}
+
+} // namespace facebook::velox::exec

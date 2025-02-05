@@ -17,12 +17,14 @@
 #include "velox/experimental/cudf/exec/ToCudf.h"
 #include <cuda.h>
 #include <cudf/detail/nvtx/ranges.hpp>
+#include <exec/HashAggregation.h>
 #include "velox/exec/Driver.h"
 #include "velox/exec/HashBuild.h"
 #include "velox/exec/HashProbe.h"
 #include "velox/exec/Operator.h"
 #include "velox/exec/OrderBy.h"
 #include "velox/experimental/cudf/exec/CudfConversion.h"
+#include "velox/experimental/cudf/exec/CudfHashAggregation.h"
 #include "velox/experimental/cudf/exec/CudfHashJoin.h"
 #include "velox/experimental/cudf/exec/CudfOrderBy.h"
 #include "velox/experimental/cudf/exec/Utilities.h"
@@ -129,6 +131,29 @@ bool CompileState::compile() {
           id, plan_node->outputType(), ctx, plan_node->id() + "-from-velox"));
       replace_op[0]->initialize();
       replace_op.push_back(std::make_unique<CudfOrderBy>(id, ctx, plan_node));
+      replace_op[1]->initialize();
+      replace_op.push_back(std::make_unique<CudfToVelox>(
+          id, plan_node->outputType(), ctx, plan_node->id() + "-to-velox"));
+      replace_op[2]->initialize();
+
+      operatorsOffset += replace_op.size() - 1;
+      [[maybe_unused]] auto replaced = driverFactory_.replaceOperators(
+          driver_,
+          replacingOperatorIndex,
+          replacingOperatorIndex + 1,
+          std::move(replace_op));
+      replacements_made = true;
+    } else if (auto hashAggOp = dynamic_cast<exec::HashAggregation*>(oper)) {
+      auto plan_node = std::dynamic_pointer_cast<const core::AggregationNode>(
+          get_plan_node(hashAggOp->planNodeId()));
+      VELOX_CHECK(plan_node != nullptr);
+      std::cout << hashAggOp->planNodeId() << std::endl;
+      auto id = hashAggOp->operatorId();
+      replace_op.push_back(std::make_unique<CudfFromVelox>(
+          id, plan_node->outputType(), ctx, plan_node->id() + "-from-velox"));
+      replace_op[0]->initialize();
+      replace_op.push_back(
+          std::make_unique<exec::CudfHashAggregation>(id, ctx, plan_node));
       replace_op[1]->initialize();
       replace_op.push_back(std::make_unique<CudfToVelox>(
           id, plan_node->outputType(), ctx, plan_node->id() + "-to-velox"));
