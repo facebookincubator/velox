@@ -171,13 +171,31 @@ Array Functions
 .. spark:function:: array_sort(array(E)) -> array(E)
 
     Returns an array which has the sorted order of the input array(E). The elements of array(E) must
-    be orderable. Null elements will be placed at the end of the returned array. ::
+    be orderable. Null/NaN elements will be placed at the end of the returned array, with NaN elements appearing before Null elements for float types. ::
 
         SELECT array_sort(array(1, 2, 3)); -- [1, 2, 3]
         SELECT array_sort(array(3, 2, 1)); -- [1, 2, 3]
         SELECT array_sort(array(2, 1, NULL); -- [1, 2, NULL]
         SELECT array_sort(array(NULL, 1, NULL)); -- [1, NULL, NULL]
         SELECT array_sort(array(NULL, 2, 1)); -- [1, 2, NULL]
+        SELECT array_sort(array(4.0, NULL, float('nan'), 3.0)); -- [3.0, 4.0, NaN, NULL]
+        SELECT array_sort(array(array(), array(1, 3, NULL), array(NULL, 6), NULL, array(2,1))); -- [[], [NULL, 6], [1, 3, NULL], [2, 1], NULL]
+
+.. spark:function:: array_sort(array(T), function(T,U)) -> array(T)
+    :noindex:
+
+    Returns the array sorted by values computed using specified lambda in ascending order. ``U`` must be an orderable type.
+    Null/NaN elements returned by the lambda function will be placed at the end of the returned array, with NaN elements appearing before Null elements. This functions is not supported in Spark and is only used inside velox for rewring :spark:func:`xxx` as :spark:func:`xxx`. ::
+
+.. spark:function:: array_sort(array(T), function(T,T,U)) -> array(T)
+    :noindex:
+    
+    Returns the array sorted by values computed using specified lambda in ascending
+    order. ``U`` must be an orderable type. If the value from the lambda function is NULL, the element will be placed at the end.
+    The function attempts to analyze the lambda function and rewrite it into a simpler call that 
+    specifies the sort-by expression (like :spark:func:`array_sort(array(T), function(T,U)) -> array(T)`). For example, ``(left, right) -> if(length(left) > length(right), 1, if(length(left) < length(right), -1, 0))`` will be rewritten to ``x -> length(x)``. If rewrite is not possible, a user error will be thrown ::
+
+        SELECT array_sort(array('cat', 'leopard', 'mouse'), (left, right) -> if(length(left) > length(right), 1, if(length(left) < length(right), -1, 0))); -- ['cat', 'mouse', 'leopard']
 
 .. spark:function:: array_union(array(E) x, array(E) y) -> array(E)
 
