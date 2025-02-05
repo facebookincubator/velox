@@ -431,7 +431,7 @@ class PlanBuilder {
     std::string outputDirectoryPath_;
     std::string outputFileName_;
     std::string connectorId_{kHiveDefaultConnectorId};
-    shared_ptr<core::InsertTableHandle> insertHandle_;
+    std::shared_ptr<core::InsertTableHandle> insertHandle_;
 
     std::vector<std::string> partitionBy_;
     int32_t bucketCount_{0};

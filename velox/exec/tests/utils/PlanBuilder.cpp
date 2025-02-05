@@ -299,7 +299,7 @@ core::PlanNodePtr PlanBuilder::TableWriterBuilder::build(core::PlanNodeId id) {
       outputType,
       outputType->names(),
       aggregationNode,
-      insertHandle,
+      insertHandle_,
       false,
       TableWriteTraits::outputType(aggregationNode),
       connector::CommitStrategy::kNoCommit,
