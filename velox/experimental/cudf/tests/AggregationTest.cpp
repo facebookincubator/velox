@@ -644,6 +644,48 @@ TEST_F(AggregationTest, allKeyTypes) {
       " GROUP BY c0, c1, c2, c3, c4, c5");
 }
 
+// DM: Works
+TEST_F(AggregationTest, ignoreNullKeys) {
+  // Some keys are null.
+  auto data = makeRowVector({
+      makeNullableFlatVector<int32_t>(
+          {std::nullopt, 1, std::nullopt, 2, std::nullopt, 1, 2}),
+      makeFlatVector<int32_t>({-1, 1, -2, 2, -3, 3, 4}),
+  });
+
+  auto makePlan = [&](bool ignoreNullKeys) {
+    return PlanBuilder()
+        .values({data})
+        .aggregation(
+            {"c0"},
+            {"sum(c1)"},
+            {},
+            core::AggregationNode::Step::kPartial,
+            ignoreNullKeys)
+        .planNode();
+  };
+
+  auto expected = makeRowVector({
+      makeFlatVector<int32_t>({1, 2}),
+      makeFlatVector<int64_t>({4, 6}),
+  });
+  AssertQueryBuilder(makePlan(true)).assertResults(expected);
+
+  expected = makeRowVector({
+      makeNullableFlatVector<int32_t>({std::nullopt, 1, 2}),
+      makeFlatVector<int64_t>({-6, 4, 6}),
+  });
+  AssertQueryBuilder(makePlan(false)).assertResults(expected);
+
+  // All keys are null.
+  data = makeRowVector({
+      makeAllNullFlatVector<int32_t>(3),
+      makeFlatVector<int32_t>({1, 2, 3}),
+  });
+
+  AssertQueryBuilder(makePlan(true)).assertEmptyResults();
+}
+
 #if 0
 TEST_F(AggregationTest, partialAggregationMemoryLimit) {
   auto vectors = {
@@ -3125,47 +3167,6 @@ TEST_F(AggregationTest, reclaimFromCompletedAggregation) {
   memory::testingRunArbitration();
   aggregationThread.join();
   waitForAllTasksToBeDeleted();
-}
-
-TEST_F(AggregationTest, ignoreNullKeys) {
-  // Some keys are null.
-  auto data = makeRowVector({
-      makeNullableFlatVector<int32_t>(
-          {std::nullopt, 1, std::nullopt, 2, std::nullopt, 1, 2}),
-      makeFlatVector<int32_t>({-1, 1, -2, 2, -3, 3, 4}),
-  });
-
-  auto makePlan = [&](bool ignoreNullKeys) {
-    return PlanBuilder()
-        .values({data})
-        .aggregation(
-            {"c0"},
-            {"sum(c1)"},
-            {},
-            core::AggregationNode::Step::kPartial,
-            ignoreNullKeys)
-        .planNode();
-  };
-
-  auto expected = makeRowVector({
-      makeFlatVector<int32_t>({1, 2}),
-      makeFlatVector<int64_t>({4, 6}),
-  });
-  AssertQueryBuilder(makePlan(true)).assertResults(expected);
-
-  expected = makeRowVector({
-      makeNullableFlatVector<int32_t>({std::nullopt, 1, 2}),
-      makeFlatVector<int64_t>({-6, 4, 6}),
-  });
-  AssertQueryBuilder(makePlan(false)).assertResults(expected);
-
-  // All keys are null.
-  data = makeRowVector({
-      makeAllNullFlatVector<int32_t>(3),
-      makeFlatVector<int32_t>({1, 2, 3}),
-  });
-
-  AssertQueryBuilder(makePlan(true)).assertEmptyResults();
 }
 
 // Verify that ORDER BY clause is ignored for aggregates that are not order

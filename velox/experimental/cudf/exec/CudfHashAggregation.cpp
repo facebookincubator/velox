@@ -317,6 +317,11 @@ RowVectorPtr CudfHashAggregation::doGroupByAggregation(
   // make a cudf table out of columns
   auto result_table = std::make_unique<cudf::table>(std::move(result_columns));
 
+  // velox expects nullptr instead of a table with 0 rows
+  if (result_table->num_rows() == 0) {
+    return nullptr;
+  }
+
   return std::make_shared<cudf_velox::CudfVector>(
       pool(), outputType_, result_table->num_rows(), std::move(result_table));
 }
