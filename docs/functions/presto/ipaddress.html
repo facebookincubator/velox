@@ -43,6 +43,28 @@
 </div>
 </dd></dl>
 
+<dl class="py function">
+<dt class="sig sig-object py" id="ip_subnet_min">
+<span class="sig-name descname"><span class="pre">ip_subnet_min</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">ip_prefix</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">ip_address</span></span></span><a class="headerlink" href="#ip_subnet_min" title="Link to this definition">¶</a></dt>
+<dd><p>Returns the smallest IP address of type <code class="docutils literal notranslate"><span class="pre">IPADDRESS</span></code> in the subnet
+specified by <code class="docutils literal notranslate"><span class="pre">ip_prefix</span></code>.</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">ip_subnet_min</span><span class="p">(</span><span class="n">IPPREFIX</span> <span class="s1">&#39;192.168.255.255/9&#39;</span><span class="p">);</span> <span class="o">--</span> <span class="p">{</span><span class="mf">192.128.0.0</span><span class="p">}</span>
+<span class="n">SELECT</span> <span class="n">ip_subnet_min</span><span class="p">(</span><span class="n">IPPREFIX</span> <span class="s1">&#39;2001:0db8:85a3:0001:0001:8a2e:0370:7334/48&#39;</span><span class="p">);</span> <span class="o">--</span> <span class="p">{</span><span class="mi">2001</span><span class="p">:</span><span class="n">db8</span><span class="p">:</span><span class="mi">85</span><span class="n">a3</span><span class="p">::}</span>
+</pre></div>
+</div>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="ip_subnet_max">
+<span class="sig-name descname"><span class="pre">ip_subnet_max</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">ip_prefix</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">ip_address</span></span></span><a class="headerlink" href="#ip_subnet_max" title="Link to this definition">¶</a></dt>
+<dd><p>Returns the largest IP address of type <code class="docutils literal notranslate"><span class="pre">IPADDRESS</span></code> in the subnet
+specified by <code class="docutils literal notranslate"><span class="pre">ip_prefix</span></code>.</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">ip_subnet_max</span><span class="p">(</span><span class="n">IPPREFIX</span> <span class="s1">&#39;192.64.0.0/9&#39;</span><span class="p">);</span> <span class="o">--</span> <span class="p">{</span><span class="mf">192.127.255.255</span><span class="p">}</span>
+<span class="n">SELECT</span> <span class="n">ip_subnet_max</span><span class="p">(</span><span class="n">IPPREFIX</span> <span class="s1">&#39;2001:0db8:85a3:0001:0001:8a2e:0370:7334/48&#39;</span><span class="p">);</span> <span class="o">--</span> <span class="p">{</span><span class="mi">2001</span><span class="p">:</span><span class="n">db8</span><span class="p">:</span><span class="mi">85</span><span class="n">a3</span><span class="p">:</span><span class="n">ffff</span><span class="p">:</span><span class="n">ffff</span><span class="p">:</span><span class="n">ffff</span><span class="p">:</span><span class="n">ffff</span><span class="p">:</span><span class="n">ffff</span><span class="p">}</span>
+</pre></div>
+</div>
+</dd></dl>
+
 </section>
 
 
@@ -57,6 +79,8 @@
     <ul>
 <li><a class="reference internal" href="#">IP Functions</a><ul>
 <li><a class="reference internal" href="#ip_prefix"><code class="docutils literal notranslate"><span class="pre">ip_prefix()</span></code></a></li>
+<li><a class="reference internal" href="#ip_subnet_min"><code class="docutils literal notranslate"><span class="pre">ip_subnet_min()</span></code></a></li>
+<li><a class="reference internal" href="#ip_subnet_max"><code class="docutils literal notranslate"><span class="pre">ip_subnet_max()</span></code></a></li>
 </ul>
 </li>
 </ul>
