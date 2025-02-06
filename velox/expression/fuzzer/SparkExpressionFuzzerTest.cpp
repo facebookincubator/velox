@@ -97,7 +97,7 @@ int main(int argc, char** argv) {
            std::make_shared<DivideArgTypesGenerator>(false)},
           {"ceil",
            std::make_shared<
-               facebook::velox::exec::test::FloorAndRoundArgGenerator>()},
+               facebook::velox::exec::test::FloorAndRoundArgTypesGenerator>()},
           {"floor",
            std::make_shared<
                facebook::velox::exec::test::FloorAndRoundArgTypesGenerator>()},

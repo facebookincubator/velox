@@ -19,12 +19,6 @@
 
 namespace facebook::velox::functions::sparksql {
 
-void registerDecimalAdd(const std::string& prefix);
-
-void registerDecimalSubtract(const std::string& prefix);
-
-void registerDecimalMultiply(const std::string& prefix);
-
-void registerDecimalDivide(const std::string& prefix);
+void registerDecimalCeil(const std::string& prefix);
 
 } // namespace facebook::velox::functions::sparksql

@@ -18,6 +18,7 @@
 #include "velox/functions/prestosql/DecimalFunctions.h"
 #include "velox/functions/sparksql/Arithmetic.h"
 #include "velox/functions/sparksql/DecimalArithmetic.h"
+#include "velox/functions/sparksql/DecimalCeil.h"
 #include "velox/functions/sparksql/Rand.h"
 
 namespace facebook::velox::functions::sparksql {
