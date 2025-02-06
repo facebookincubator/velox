@@ -17,6 +17,7 @@
 #include "velox/functions/remote/client/Remote.h"
 
 #include <folly/io/async/EventBase.h>
+#include "velox/exec/OperatorUtils.h"
 #include "velox/expression/Expr.h"
 #include "velox/expression/VectorFunction.h"
 #include "velox/functions/remote/client/ThriftClient.h"
@@ -99,9 +100,25 @@ class RemoteFunction : public exec::VectorFunction {
     requestInputs->rowCount_ref() = remoteRowVector->size();
     requestInputs->pageFormat_ref() = serdeFormat_;
 
-    // TODO: serialize only active rows.
+    bool isInputWrapped = false;
+    if (!rows.isAllSelected()) {
+      // Wrap the vector around dictionary encoding to only process selected
+      // rows.
+      auto numSelected = rows.countSelected();
+      auto indicesBuffer = velox::AlignedBuffer::allocate<velox::vector_size_t>(
+          numSelected, context.pool());
+      auto rawIndices = indicesBuffer->asMutable<velox::vector_size_t>();
+      size_t validIndex = 0;
+      rows.applyToSelected(
+          [&](auto rowIdx) { rawIndices[validIndex++] = rowIdx; });
+      remoteRowVector = velox::exec::wrap(
+          numSelected, std::move(indicesBuffer), remoteRowVector);
+      isInputWrapped = true;
+    }
+
+    // Note: we only serialize and process selected rows.
     requestInputs->payload_ref() = rowVectorToIOBuf(
-        remoteRowVector, rows.end(), *context.pool(), serde_.get());
+        remoteRowVector, rows.countSelected(), *context.pool(), serde_.get());
 
     try {
       thriftClient_->sync_invokeFunction(remoteResponse, request);
@@ -119,6 +136,26 @@ class RemoteFunction : public exec::VectorFunction {
         *context.pool(),
         serde_.get());
     result = outputRowVector->childAt(0);
+    // If the input is wrapped, we need to "unwrap" the result so that it can
+    // use the same selectivity vector from the inputs.
+    if (isInputWrapped) {
+      auto indicesBuffer = velox::AlignedBuffer::allocate<velox::vector_size_t>(
+          rows.size(), context.pool());
+      auto rawIndices = indicesBuffer->asMutable<velox::vector_size_t>();
+      auto nullsBuffer = velox::AlignedBuffer::allocate<bool>(
+          rows.size(), context.pool(), velox::bits::kNotNull);
+      auto nulls = nullsBuffer->asMutable<uint64_t>();
+      auto validIndex = -1;
+      for (auto i = 0; i < rows.size(); ++i) {
+        if (rows.isValid(i)) {
+          rawIndices[i] = ++validIndex;
+        } else {
+          velox::bits::setNull(nulls, i);
+        }
+      }
+      result = velox::BaseVector::wrapInDictionary(
+          nullsBuffer, indicesBuffer, rows.size(), std::move(result));
+    }
 
     if (auto errorPayload = remoteResponse.get_result().errorPayload()) {
       auto errorsRowVector = IOBufToRowVector(
