@@ -373,7 +373,7 @@ endif()
 
 message("FINAL CMAKE_CXX_FLAGS=${CMAKE_CXX_FLAGS}")
 
-if(VELOX_ENABLE_GPU)
+if(${VELOX_ENABLE_GPU})
   enable_language(CUDA)
   # Determine CUDA_ARCHITECTURES automatically.
   cmake_policy(SET CMP0104 NEW)
