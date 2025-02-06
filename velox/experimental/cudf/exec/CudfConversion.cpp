@@ -181,7 +181,8 @@ RowVectorPtr CudfToVelox::getOutput() {
   if (tbl->num_rows() == 0) {
     return nullptr;
   }
-  RowVectorPtr output = with_arrow::to_velox_column(tbl->view(), pool(), "", stream);
+  RowVectorPtr output =
+      with_arrow::to_velox_column(tbl->view(), pool(), "", stream);
   stream.synchronize();
   finished_ = noMoreInput_ && inputs_.empty();
   output->setType(outputType_);

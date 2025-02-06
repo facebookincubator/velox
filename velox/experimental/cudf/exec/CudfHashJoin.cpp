@@ -315,8 +315,8 @@ RowVectorPtr CudfHashJoinProbe::getOutput() {
           hb.get(),
           hashObject_.has_value());
   }
-  auto const [left_join_indices, right_join_indices] =
-      hb->inner_join(tbl->view().select(probe_key_indices), std::nullopt, stream);
+  auto const [left_join_indices, right_join_indices] = hb->inner_join(
+      tbl->view().select(probe_key_indices), std::nullopt, stream);
   auto left_indices_span =
       cudf::device_span<cudf::size_type const>{*left_join_indices};
   auto right_indices_span =
@@ -369,8 +369,10 @@ RowVectorPtr CudfHashJoinProbe::getOutput() {
   auto left_indices_col = cudf::column_view{left_indices_span};
   auto right_indices_col = cudf::column_view{right_indices_span};
   auto constexpr oob_policy = cudf::out_of_bounds_policy::DONT_CHECK;
-  auto left_result = cudf::gather(left_input, left_indices_col, oob_policy, stream);
-  auto right_result = cudf::gather(right_input, right_indices_col, oob_policy, stream);
+  auto left_result =
+      cudf::gather(left_input, left_indices_col, oob_policy, stream);
+  auto right_result =
+      cudf::gather(right_input, right_indices_col, oob_policy, stream);
 
   if (cudfDebugEnabled()) {
     std::cout << "Left result number of columns: " << left_result->num_columns()

@@ -82,7 +82,7 @@ std::shared_ptr<rmm::mr::device_memory_resource> create_memory_resource(
 }
 
 cudf::detail::cuda_stream_pool& cudfGlobalStreamPool() {
-    return cudf::detail::global_cuda_stream_pool();
+  return cudf::detail::global_cuda_stream_pool();
 };
 
 bool cudfDebugEnabled() {

@@ -19,8 +19,8 @@
 #include <memory>
 #include <string_view>
 
-#include <rmm/mr/device/device_memory_resource.hpp>
 #include <cudf/detail/utilities/stream_pool.hpp>
+#include <rmm/mr/device/device_memory_resource.hpp>
 
 namespace facebook::velox::cudf_velox {
 
@@ -36,7 +36,8 @@ create_memory_resource(std::string_view mode);
 [[nodiscard]] cudf::detail::cuda_stream_pool& cudfGlobalStreamPool();
 
 /**
- * @brief Returns true if the VELOX_CUDF_DEBUG environment variable is set to a nonzero value.
+ * @brief Returns true if the VELOX_CUDF_DEBUG environment variable is set to a
+ * nonzero value.
  */
 bool cudfDebugEnabled();
 
