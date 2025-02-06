@@ -27,6 +27,7 @@ add_library(
   PlanBuilder.cpp
   QueryAssertions.cpp
   SumNonPODAggregate.cpp
+  TestIndexStorageConnector.cpp
   TpchQueryBuilder.cpp
   VectorTestUtil.cpp
   PortUtil.cpp
@@ -46,6 +47,8 @@ target_link_libraries(
   velox_dwio_common
   velox_dwio_dwrf_reader
   velox_dwio_dwrf_writer
+  velox_dwio_parquet_writer
+  velox_dwio_parquet_reader
   velox_dwio_common_test_utils
   velox_file_test_utils
   velox_type_fbhive
@@ -53,6 +56,7 @@ target_link_libraries(
   velox_tpch_connector
   velox_presto_serializer
   velox_functions_prestosql
+  velox_flag_definitions
   velox_aggregates)
 
 if(${VELOX_BUILD_RUNNER})

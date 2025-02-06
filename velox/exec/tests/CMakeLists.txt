@@ -51,6 +51,7 @@ add_executable(
   HashJoinTest.cpp
   HashPartitionFunctionTest.cpp
   HashTableTest.cpp
+  IndexLookupJoinTest.cpp
   LimitTest.cpp
   LocalPartitionTest.cpp
   Main.cpp
@@ -74,6 +75,7 @@ add_executable(
   RoundRobinPartitionFunctionTest.cpp
   RowContainerTest.cpp
   RowNumberTest.cpp
+  ScaledScanControllerTest.cpp
   ScaleWriterLocalPartitionTest.cpp
   SortBufferTest.cpp
   SpillerTest.cpp
@@ -211,13 +213,6 @@ target_link_libraries(
   velox_exec_test_lib
   velox_tpch_connector
   velox_memory)
-
-# RowNumber Fuzzer.
-add_executable(velox_row_number_fuzzer_test RowNumberFuzzerTest.cpp)
-
-target_link_libraries(
-  velox_row_number_fuzzer_test velox_row_number_fuzzer GTest::gtest
-  GTest::gtest_main)
 
 # Join Fuzzer.
 add_executable(velox_join_fuzzer_test JoinFuzzerTest.cpp)

@@ -615,27 +615,27 @@ StopReason Driver::runInternal(
             });
             pushdownFilters(i);
             if (intermediateResult) {
-              withDeltaCpuWallTimer(op, &OperatorStats::addInputTiming, [&]() {
-                {
-                  auto lockedStats = nextOp->stats().wlock();
-                  lockedStats->addInputVector(
-                      resultBytes, intermediateResult->size());
-                }
-                nextOp->traceInput(intermediateResult);
-                TestValue::adjust(
-                    "facebook::velox::exec::Driver::runInternal::addInput",
-                    nextOp);
+              withDeltaCpuWallTimer(
+                  nextOp, &OperatorStats::addInputTiming, [&]() {
+                    {
+                      auto lockedStats = nextOp->stats().wlock();
+                      lockedStats->addInputVector(
+                          resultBytes, intermediateResult->size());
+                    }
+                    nextOp->traceInput(intermediateResult);
+                    TestValue::adjust(
+                        "facebook::velox::exec::Driver::runInternal::addInput",
+                        nextOp);
 
-                CALL_OPERATOR(
-                    nextOp->addInput(intermediateResult),
-                    nextOp,
-                    curOperatorId_ + 1,
-                    kOpMethodAddInput);
-
-                // The next iteration will see if operators_[i + 1] has
-                // output now that it got input.
-                i += 2;
-              });
+                    CALL_OPERATOR(
+                        nextOp->addInput(intermediateResult),
+                        nextOp,
+                        curOperatorId_ + 1,
+                        kOpMethodAddInput);
+                  });
+              // The next iteration will see if operators_[i + 1] has
+              // output now that it got input.
+              i += 2;
               continue;
             } else {
               stop = task()->shouldStop();
@@ -1129,6 +1129,10 @@ std::string blockingReasonToString(BlockingReason reason) {
       return "kYield";
     case BlockingReason::kWaitForArbitration:
       return "kWaitForArbitration";
+    case BlockingReason::kWaitForScanScaleUp:
+      return "kWaitForScanScaleUp";
+    case BlockingReason::kWaitForIndexLookup:
+      return "kWaitForIndexLookup";
     default:
       VELOX_UNREACHABLE(
           fmt::format("Unknown blocking reason {}", static_cast<int>(reason)));

@@ -23,11 +23,11 @@
 #include "velox/common/caching/FileIds.h"
 #include "velox/common/caching/SsdCache.h"
 #include "velox/common/file/FileSystems.h"
+#include "velox/common/file/tests/FaultyFileSystem.h"
 #include "velox/common/memory/Memory.h"
 #include "velox/common/memory/MmapAllocator.h"
 #include "velox/dwio/common/CachedBufferedInput.h"
 #include "velox/exec/tests/utils/TempDirectoryPath.h"
-#include "velox/vector/fuzzer/Utils.h"
 
 DEFINE_int32(steps, 10, "Number of plans to generate and test.");
 
@@ -74,8 +74,17 @@ DEFINE_int64(
     "each file. 0 means no checkpointing. When set to -1, 1 out of 4 times checkpoint will be disabled, "
     "while the other times, a random value from 32MB to 64MB will be used, inclusively.");
 
+DEFINE_int32(num_restarts, 3, "Number of cache restarts in one iteration.");
+
+DEFINE_bool(
+    enable_file_faulty_injection,
+    true,
+    "Enable fault injection on read and write operations for cache-related files. When enabled, "
+    "the file read and write operations will fail 5 out of 100 times.");
+
 using namespace facebook::velox::cache;
 using namespace facebook::velox::dwio::common;
+using namespace facebook::velox::tests::utils;
 
 namespace facebook::velox::exec::test {
 namespace {
@@ -88,6 +97,7 @@ class CacheFuzzer {
 
  private:
   static constexpr int32_t kRandomized = -1;
+  static constexpr int32_t kFileFaultInjectionPct = 5;
 
   void seed(size_t seed) {
     currentSeed_ = seed;
@@ -98,6 +108,8 @@ class CacheFuzzer {
     seed(rng_());
   }
 
+  void initSourceDataFiles();
+
   int32_t getSourceFileBytes() {
     if (FLAGS_source_file_bytes == kRandomized) {
       return boost::random::uniform_int_distribution<int64_t>(
@@ -106,55 +118,27 @@ class CacheFuzzer {
     return FLAGS_source_file_bytes;
   }
 
-  int64_t getMemoryCacheBytes() {
-    if (FLAGS_memory_cache_bytes == kRandomized) {
-      return boost::random::uniform_int_distribution<int64_t>(
-          48 << 20 /*48MB*/, 64 << 20 /*64MB*/)(rng_);
-    }
-    return FLAGS_memory_cache_bytes;
-  }
+  void initializeCache(bool restartCache = false);
 
-  int32_t getSsdCacheBytes() {
-    if (FLAGS_ssd_cache_bytes == kRandomized) {
-      // Enable SSD cache 90% of the time.
-      return folly::Random::oneIn(10, rng_)
-          ? 0
-          : boost::random::uniform_int_distribution<int64_t>(
-                128 << 20 /*128MB*/, 256 << 20 /*256MB*/)(rng_);
-    }
-    return FLAGS_ssd_cache_bytes;
-  }
+  int64_t getMemoryCacheBytes(bool restartCache = false);
 
-  int32_t getSsdCacheShards() {
-    if (FLAGS_num_ssd_cache_shards == kRandomized) {
-      // Use 1-4 shards to test different cases. The number of shards shouldn't
-      // be too larger so that each shard has enough space to hold large cache
-      // entries.
-      return boost::random::uniform_int_distribution<int32_t>(1, 4)(rng_);
-    }
-    return FLAGS_num_ssd_cache_shards;
-  }
+  int64_t getSsdCacheBytes(bool restartCache = false);
 
-  int32_t getSsdCheckpointIntervalBytes() {
-    if (FLAGS_ssd_checkpoint_interval_bytes == kRandomized) {
-      // Enable checkpoint 75% of the time as checksum depends on it.
-      return folly::Random::oneIn(4, rng_)
-          ? 0
-          : boost::random::uniform_int_distribution<uint64_t>(
-                32 << 20 /*32MB*/, 64 << 20 /*64MB*/)(rng_);
-    }
-    return FLAGS_ssd_checkpoint_interval_bytes;
-  }
+  int32_t getSsdCacheShards(bool restartCache = false);
 
-  void initSourceDataFiles();
+  int64_t getSsdCheckpointIntervalBytes(bool restartCache = false);
 
-  void initializeCache();
+  bool enableChecksum(bool restartCache = false);
+
+  bool enableChecksumReadVerification(bool restartCache = false);
 
   void initializeInputs();
 
   void readCache();
 
-  void reset();
+  void resetCache();
+
+  void resetSourceDataFiles();
 
   void read(uint32_t fileIdx, int32_t fragmentIdx);
 
@@ -173,9 +157,18 @@ class CacheFuzzer {
   std::vector<std::vector<std::pair<int32_t, int32_t>>> fileFragments_;
   std::vector<std::unique_ptr<CachedBufferedInput>> inputs_;
   std::shared_ptr<exec::test::TempDirectoryPath> sourceDataDir_;
+  std::shared_ptr<exec::test::TempDirectoryPath> cacheDataDir_;
   std::unique_ptr<memory::MemoryManager> memoryManager_;
   std::unique_ptr<folly::IOThreadPoolExecutor> executor_;
   std::shared_ptr<AsyncDataCache> cache_;
+  // Save the config for the last iteration so they can be potentially reused
+  // after restart.
+  int64_t lastMemoryCacheBytes_;
+  int64_t lastSsdCacheBytes_;
+  int32_t lastNumSsdCacheShards_;
+  int64_t lastSsdCheckpointIntervalBytes_;
+  bool lastEnableChecksum_;
+  bool lastEnableChecksumReadVerification_;
 };
 
 template <typename T>
@@ -191,10 +184,14 @@ bool isDone(size_t i, T startTime) {
 CacheFuzzer::CacheFuzzer(size_t initialSeed) {
   seed(initialSeed);
   filesystems::registerLocalFileSystem();
+  registerFaultyFileSystem();
 }
 
 void CacheFuzzer::initSourceDataFiles() {
+  // Skip errors on source data files.
   sourceDataDir_ = exec::test::TempDirectoryPath::create();
+  cacheDataDir_ =
+      exec::test::TempDirectoryPath::create(FLAGS_enable_file_faulty_injection);
   fs_ = filesystems::getFileSystem(sourceDataDir_->getPath(), nullptr);
 
   // Create files with random sizes.
@@ -227,31 +224,121 @@ void CacheFuzzer::initSourceDataFiles() {
       fileSizes_.emplace_back(fileSize);
     }
   }
+
+  if (FLAGS_enable_file_faulty_injection) {
+    faultyFileSystem()->setFileInjectionHook([&](FaultFileOperation* op) {
+      std::random_device rd;
+      boost::random::uniform_int_distribution<int> dist(1, 100);
+      if ((op->type == FaultFileOperation::Type::kWrite ||
+           op->type == FaultFileOperation::Type::kAppend) &&
+          dist(rd) <= kFileFaultInjectionPct) {
+        VELOX_FAIL("Inject hook write failure");
+      }
+      if ((op->type == FaultFileOperation::Type::kReadv ||
+           op->type == FaultFileOperation::Type::kRead) &&
+          dist(rd) <= kFileFaultInjectionPct) {
+        VELOX_FAIL("Inject hook read failure");
+      }
+    });
+  }
 }
 
-void CacheFuzzer::initializeCache() {
+int64_t CacheFuzzer::getMemoryCacheBytes(bool restartCache) {
+  if (!restartCache) {
+    if (FLAGS_memory_cache_bytes == kRandomized) {
+      lastMemoryCacheBytes_ = boost::random::uniform_int_distribution<int64_t>(
+          48 << 20 /*48MB*/, 64 << 20 /*64MB*/)(rng_);
+    } else {
+      lastMemoryCacheBytes_ = FLAGS_memory_cache_bytes;
+    }
+  }
+  return lastMemoryCacheBytes_;
+}
+
+int64_t CacheFuzzer::getSsdCacheBytes(bool restartCache) {
+  if (!restartCache) {
+    if (FLAGS_ssd_cache_bytes == kRandomized) {
+      // Enable SSD cache 90% of the time.
+      lastSsdCacheBytes_ = folly::Random::oneIn(10, rng_)
+          ? 0
+          : boost::random::uniform_int_distribution<int64_t>(
+                128 << 20 /*128MB*/, 256 << 20 /*256MB*/)(rng_);
+    } else {
+      lastSsdCacheBytes_ = FLAGS_ssd_cache_bytes;
+    }
+  }
+  return lastSsdCacheBytes_;
+}
+
+int32_t CacheFuzzer::getSsdCacheShards(bool restartCache) {
+  if (!restartCache) {
+    if (FLAGS_num_ssd_cache_shards == kRandomized) {
+      // Use 1-4 shards to test different cases. The number of shards shouldn't
+      // be too larger so that each shard has enough space to hold large cache
+      // entries.
+      lastNumSsdCacheShards_ =
+          boost::random::uniform_int_distribution<int32_t>(1, 4)(rng_);
+    } else {
+      lastNumSsdCacheShards_ = FLAGS_num_ssd_cache_shards;
+    }
+  }
+  return lastNumSsdCacheShards_;
+}
+
+int64_t CacheFuzzer::getSsdCheckpointIntervalBytes(bool restartCache) {
+  if (!restartCache) {
+    if (FLAGS_ssd_checkpoint_interval_bytes == kRandomized) {
+      // Enable checkpoint 75% of the time as checksum depends on it.
+      lastSsdCheckpointIntervalBytes_ = folly::Random::oneIn(4, rng_)
+          ? 0
+          : boost::random::uniform_int_distribution<uint64_t>(
+                32 << 20 /*32MB*/, 64 << 20 /*64MB*/)(rng_);
+    } else {
+      lastSsdCheckpointIntervalBytes_ = FLAGS_ssd_checkpoint_interval_bytes;
+    }
+  }
+  return lastSsdCheckpointIntervalBytes_;
+}
+
+bool CacheFuzzer::enableChecksum(bool restartCache) {
+  if (!restartCache) {
+    lastEnableChecksum_ = folly::Random::oneIn(2, rng_);
+  }
+  return lastEnableChecksum_;
+}
+
+bool CacheFuzzer::enableChecksumReadVerification(bool restartCache) {
+  if (!restartCache) {
+    lastEnableChecksum_ = folly::Random::oneIn(2, rng_);
+  }
+  return lastEnableChecksum_;
+}
+
+void CacheFuzzer::initializeCache(bool restartCache) {
   // We have up to 20 threads and 16 threads are used for reading so
   // there are some threads left over for SSD background write.
   executor_ = std::make_unique<folly::IOThreadPoolExecutor>(20);
-  const auto memoryCacheBytes = getMemoryCacheBytes();
-  const auto ssdCacheBytes = getSsdCacheBytes();
+  const auto memoryCacheBytes = getMemoryCacheBytes(restartCache);
+  const auto ssdCacheBytes = getSsdCacheBytes(restartCache);
 
   std::unique_ptr<SsdCache> ssdCache;
   if (ssdCacheBytes > 0) {
-    const auto numSsdCacheShards = getSsdCacheShards();
-    const auto checkpointIntervalBytes = getSsdCheckpointIntervalBytes();
-    const auto enableChecksum = folly::Random::oneIn(2, rng_);
-    const auto enableChecksumReadVerification = folly::Random::oneIn(2, rng_);
+    const auto numSsdCacheShards = getSsdCacheShards(restartCache);
+    const auto checkpointIntervalBytes =
+        getSsdCheckpointIntervalBytes(restartCache);
+    const auto enableChecksum_ = enableChecksum(restartCache);
+    const auto enableChecksumReadVerification_ =
+        enableChecksumReadVerification(restartCache);
 
     SsdCache::Config config(
-        fmt::format("{}/cache", sourceDataDir_->getPath()),
+        fmt::format("{}/cache", cacheDataDir_->getPath()),
         ssdCacheBytes,
         numSsdCacheShards,
         executor_.get(),
         checkpointIntervalBytes,
         false,
-        enableChecksum,
-        enableChecksumReadVerification);
+        enableChecksum_,
+        enableChecksumReadVerification_);
     ssdCache = std::make_unique<SsdCache>(config);
     LOG(INFO) << fmt::format(
         "Initialized SSD cache with {} shards, {}, with checkpoint {}, checksum write {}, read verification {}",
@@ -260,8 +347,8 @@ void CacheFuzzer::initializeCache() {
         checkpointIntervalBytes > 0
             ? fmt::format("enabled({})", succinctBytes(checkpointIntervalBytes))
             : "disabled",
-        enableChecksum ? "enabled" : "disabled",
-        enableChecksumReadVerification ? "enabled" : "disabled");
+        enableChecksum_ ? "enabled" : "disabled",
+        enableChecksumReadVerification_ ? "enabled" : "disabled");
   }
 
   memory::MemoryManagerOptions options;
@@ -276,9 +363,10 @@ void CacheFuzzer::initializeCache() {
       {});
 
   LOG(INFO) << fmt::format(
-      "Initialized cache with {} memory space, {} SSD cache",
+      "Initialized cache with {} memory space, {} SSD cache, {} file faulty injection",
       succinctBytes(memoryCacheBytes),
-      ssdCacheBytes == 0 ? "with" : "without");
+      ssdCacheBytes == 0 ? "with" : "without",
+      FLAGS_enable_file_faulty_injection ? "with" : "without");
 }
 
 void CacheFuzzer::initializeInputs() {
@@ -342,27 +430,38 @@ void CacheFuzzer::readCache() {
   }
 }
 
-void CacheFuzzer::reset() {
+void CacheFuzzer::resetCache() {
   cache_->shutdown();
   if (cache_->ssdCache() != nullptr) {
     cache_->ssdCache()->waitForWriteToFinish();
   }
   executor_->join();
   executor_.reset();
+  fileFragments_.clear();
+  inputs_.clear();
+  cache_.reset();
+  memoryManager_.reset();
+}
+
+void CacheFuzzer::resetSourceDataFiles() {
+  const auto& sourceDataDirPath = sourceDataDir_->getPath();
+  const auto& cacheDataDirPath = cacheDataDir_->getPath();
+  if (fs_->exists(sourceDataDirPath)) {
+    fs_->rmdir(sourceDataDirPath);
+  }
+  if (fs_->exists(cacheDataDirPath)) {
+    fs_->rmdir(cacheDataDirPath);
+  }
+  fs_.reset();
+  sourceDataDir_.reset();
+  cacheDataDir_.reset();
   fileNames_.clear();
   fileIds_.clear();
   fileSizes_.clear();
-  fileFragments_.clear();
-  inputs_.clear();
-  fs_.reset();
-  cache_.reset();
-  memoryManager_.reset();
-  sourceDataDir_.reset();
   fileIds().testingReset();
 }
 
 void CacheFuzzer::read(uint32_t fileIdx, int32_t fragmentIdx) {
-  // TODO: Faulty injection.
   const auto [offset, length] = fileFragments_[fileIdx][fragmentIdx];
   auto stream = inputs_[fileIdx]->read(offset, length, LogType::TEST);
   const void* buffer;
@@ -398,6 +497,12 @@ void CacheFuzzer::go() {
       FLAGS_steps > 0 || FLAGS_duration_sec > 0,
       "Either --steps or --duration_sec needs to be greater than zero.");
 
+  // O_DIRECT requires I/O size to be the same as a disk file block size which
+  // is not handled in SSD cache. Misalignment can lead to EINVAL in some
+  // filesystem and kernel version.
+  //
+  // TODO: add this support if needed later.
+  FLAGS_ssd_odirect = false;
   auto startTime = std::chrono::system_clock::now();
   size_t iteration = 0;
 
@@ -406,18 +511,28 @@ void CacheFuzzer::go() {
               << iteration << " (seed: " << currentSeed_ << ")";
 
     initSourceDataFiles();
+    SCOPE_EXIT {
+      resetSourceDataFiles();
+    };
 
-    initializeCache();
+    for (int i = 0; i <= FLAGS_num_restarts; ++i) {
+      if (i > 0) {
+        const auto restartCache = !folly::Random::oneIn(3, rng_);
+        LOG(INFO) << "Restarting cache with " << (restartCache ? "last" : "new")
+                  << " config";
+        initializeCache(restartCache);
+      } else {
+        initializeCache();
+      }
 
-    initializeInputs();
+      initializeInputs();
 
-    readCache();
+      readCache();
 
-    // TODO: Test cache restart.
+      LOG(INFO) << cache_->refreshStats().toString();
 
-    LOG(INFO) << cache_->refreshStats().toString();
-
-    reset();
+      resetCache();
+    }
 
     LOG(INFO) << "==============================> Done with iteration "
               << iteration;

@@ -17,8 +17,9 @@
 #pragma once
 
 #include "velox/connectors/Connector.h"
+#include "velox/experimental/cudf/connectors/parquet/ParquetConfig.h"
+#include "velox/experimental/cudf/connectors/parquet/ParquetDataSink.h"
 #include "velox/experimental/cudf/connectors/parquet/ParquetDataSource.h"
-#include "velox/experimental/cudf/connectors/parquet/ParquetReaderConfig.h"
 #include "velox/experimental/cudf/connectors/parquet/ParquetTableHandle.h"
 
 #include <cudf/io/parquet.hpp>
@@ -45,26 +46,21 @@ class ParquetConnector final : public Connector {
       ConnectorQueryCtx* connectorQueryCtx) override final;
 
   const std::shared_ptr<const ConfigBase>& connectorConfig() const override {
-    return ParquetReaderConfig_->config();
+    return parquetConfig_->config();
   }
 
   std::unique_ptr<DataSink> createDataSink(
-      RowTypePtr /*inputType*/,
-      std::shared_ptr<
-
-          ConnectorInsertTableHandle> /*connectorInsertTableHandle*/,
-      ConnectorQueryCtx* /*connectorQueryCtx*/,
-      CommitStrategy /*commitStrategy*/) override final {
-    // TODO: Implement cudf parquet writer
-    VELOX_NYI("cudf::ParquetConnector does not yet support data sink.");
-  }
+      RowTypePtr inputType,
+      std::shared_ptr<ConnectorInsertTableHandle> connectorInsertTableHandle,
+      ConnectorQueryCtx* connectorQueryCtx,
+      CommitStrategy commitStrategy) override final;
 
   folly::Executor* executor() const override {
     return executor_;
   }
 
  protected:
-  const std::shared_ptr<ParquetReaderConfig> ParquetReaderConfig_;
+  const std::shared_ptr<ParquetConfig> parquetConfig_;
   folly::Executor* executor_;
 };
 

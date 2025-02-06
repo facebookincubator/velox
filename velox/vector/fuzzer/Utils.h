@@ -16,25 +16,21 @@
 
 #pragma once
 
-#include "velox/vector/BaseVector.h"
-#include "velox/vector/NullsBuilder.h"
+#include <codecvt>
+#include <random>
 
 #include <folly/Random.h>
 
+#include <boost/random/uniform_01.hpp>
+#include <boost/random/uniform_int_distribution.hpp>
+#include <boost/random/uniform_real_distribution.hpp>
+
+#include "velox/common/fuzzer/Utils.h"
+#include "velox/vector/BaseVector.h"
+#include "velox/vector/NullsBuilder.h"
+
 namespace facebook::velox {
-
-using FuzzerGenerator = folly::detail::DefaultGenerator;
-
-enum class FuzzerTimestampPrecision : int8_t {
-  kNanoSeconds = 0,
-  kMicroSeconds = 1,
-  kMilliSeconds = 2,
-  kSeconds = 3,
-};
-
 namespace generator_spec_utils {
-
-bool coinToss(FuzzerGenerator& rng, double threshold);
 
 vector_size_t getRandomIndex(FuzzerGenerator& rng, vector_size_t maxIndex);
 

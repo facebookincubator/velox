@@ -58,12 +58,10 @@ struct FileOptions {
   /// NOTE: this only applies for write open file.
   bool shouldThrowOnFileAlreadyExists{true};
 
-  /// Whether to buffer the write data in file system client or not. For local
+  /// Whether to buffer the data in file system client or not. For local
   /// filesystem on Unix-like operating system, this corresponds to the direct
   /// IO mode if set.
-  ///
-  /// NOTE: this only applies for write open file.
-  bool bufferWrite{true};
+  bool bufferIo{true};
 };
 
 /// Defines directory options
@@ -79,6 +77,13 @@ struct DirectoryOptions : FileOptions {
       "make-directory-config"};
 };
 
+struct FileSystemOptions {
+  /// As for now, only local file system respects this option. It implements
+  /// async read by using a background cpu executor. Some filesystem might has
+  /// native async read-ahead support.
+  bool readAheadEnabled{false};
+};
+
 /// An abstract FileSystem
 class FileSystem {
  public:
@@ -91,7 +96,7 @@ class FileSystem {
 
   /// Returns the file path without the fs scheme prefix such as "local:" prefix
   /// for local file system.
-  virtual std::string_view extractPath(std::string_view path) {
+  virtual std::string_view extractPath(std::string_view path) const {
     VELOX_NYI();
   }
 
@@ -118,6 +123,11 @@ class FileSystem {
 
   /// Returns true if the file exists.
   virtual bool exists(std::string_view path) = 0;
+
+  /// Returns true if it is a directory.
+  virtual bool isDirectory(std::string_view path) const {
+    VELOX_UNSUPPORTED("isDirectory not implemented");
+  }
 
   /// Returns the list of files or folders in a path. Currently, this method
   /// will be used for testing, but we will need change this to an iterator
@@ -158,6 +168,7 @@ void registerFileSystem(
         std::string_view)> fileSystemGenerator);
 
 /// Register the local filesystem.
-void registerLocalFileSystem();
+void registerLocalFileSystem(
+    const FileSystemOptions& options = FileSystemOptions());
 
 } // namespace facebook::velox::filesystems

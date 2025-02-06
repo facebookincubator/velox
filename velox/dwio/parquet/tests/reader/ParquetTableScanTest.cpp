@@ -827,6 +827,22 @@ TEST_F(ParquetTableScanTest, sessionTimezone) {
   assertSelectWithTimezone({"a"}, "SELECT a FROM tmp", "Asia/Shanghai");
 }
 
+TEST_F(ParquetTableScanTest, timestampInt64Dictionary) {
+  WriterOptions options;
+  options.writeInt96AsTimestamp = false;
+  options.enableDictionary = true;
+  options.parquetWriteTimestampUnit = TimestampPrecision::kMicroseconds;
+  testTimestampRead(options);
+}
+
+TEST_F(ParquetTableScanTest, timestampInt64Plain) {
+  WriterOptions options;
+  options.writeInt96AsTimestamp = false;
+  options.enableDictionary = false;
+  options.parquetWriteTimestampUnit = TimestampPrecision::kMicroseconds;
+  testTimestampRead(options);
+}
+
 TEST_F(ParquetTableScanTest, timestampInt96Dictionary) {
   WriterOptions options;
   options.writeInt96AsTimestamp = true;
@@ -841,6 +857,37 @@ TEST_F(ParquetTableScanTest, timestampInt96Plain) {
   options.enableDictionary = false;
   options.parquetWriteTimestampUnit = TimestampPrecision::kMicroseconds;
   testTimestampRead(options);
+}
+
+TEST_F(ParquetTableScanTest, timestampConvertedType) {
+  auto stringToTimestamp = [](std::string_view view) {
+    return util::fromTimestampString(
+               view.data(), view.size(), util::TimestampParseMode::kPrestoCast)
+        .thenOrThrow(folly::identity, [&](const Status& status) {
+          VELOX_USER_FAIL("{}", status.message());
+        });
+  };
+  std::vector<std::string_view> expected = {
+      "1970-01-01 00:00:00.010",
+      "1970-01-01 00:00:00.010",
+      "1970-01-01 00:00:00.010",
+  };
+  std::vector<Timestamp> values;
+  values.reserve(expected.size());
+  for (auto view : expected) {
+    values.emplace_back(stringToTimestamp(view));
+  }
+
+  const auto vector = makeRowVector(
+      {"time"},
+      {
+          makeFlatVector<Timestamp>(values),
+      });
+  const auto schema = asRowType(vector->type());
+  const auto path = getExampleFilePath("tmmillis_i64.parquet");
+  loadData(path, schema, vector);
+
+  assertSelectWithFilter({"time"}, {}, "", "SELECT time from tmp");
 }
 
 TEST_F(ParquetTableScanTest, timestampPrecisionMicrosecond) {

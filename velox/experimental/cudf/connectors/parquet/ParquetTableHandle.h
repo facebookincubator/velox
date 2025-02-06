@@ -34,9 +34,13 @@ class ParquetColumnHandle : public ColumnHandle {
  public:
   explicit ParquetColumnHandle(
       const std::string& name,
-      const TypePtr& type,
-      const cudf::data_type data_type,
-      const std::vector<ParquetColumnHandle>& children);
+      const TypePtr type,
+      const cudf::data_type cudfDataType,
+      std::vector<ParquetColumnHandle> children = {})
+      : name_(name),
+        type_(type),
+        cudfDataType_(cudfDataType),
+        children_(std::move(children)) {}
 
   const std::string& name() const {
     return name_;
@@ -46,18 +50,20 @@ class ParquetColumnHandle : public ColumnHandle {
     return type_;
   }
 
-  const cudf::data_type data_type() const {
-    return data_type_;
+  const cudf::data_type cudfDataType() const {
+    return cudfDataType_;
   }
 
   const std::vector<ParquetColumnHandle>& children() const {
     return children_;
   }
 
+  std::string toString() const;
+
  private:
   const std::string name_;
   const TypePtr type_;
-  const cudf::data_type data_type_;
+  const cudf::data_type cudfDataType_;
   const std::vector<ParquetColumnHandle> children_;
 };
 

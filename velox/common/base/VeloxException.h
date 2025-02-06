@@ -23,7 +23,6 @@
 #include <folly/FixedString.h>
 #include <folly/String.h>
 #include <folly/synchronization/CallOnce.h>
-#include <gflags/gflags.h>
 #include <glog/logging.h>
 
 #include "velox/common/process/StackTrace.h"
@@ -72,7 +71,7 @@ inline constexpr auto kUnsupported = "UNSUPPORTED"_fs;
 /// Arithmetic errors - underflow, overflow, divide by zero etc.
 inline constexpr auto kArithmeticError = "ARITHMETIC_ERROR"_fs;
 
-/// Arithmetic errors - underflow, overflow, divide by zero etc.
+/// An error raised when types are not compatible
 inline constexpr auto kSchemaMismatch = "SCHEMA_MISMATCH"_fs;
 
 ///====================== Runtime Error Codes ======================:

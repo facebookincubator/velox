@@ -59,9 +59,9 @@ if(VELOX_ENABLE_ARROW)
 
   set(VELOX_ARROW_BUILD_VERSION 16.1.0)
   set(VELOX_ARROW_BUILD_SHA256_CHECKSUM
-      c9e60c7e87e59383d21b20dc874b17153729ee153264af6d21654b7dff2c60d7)
+      9762d9ecc13d09de2a03f9c625a74db0d645cb012de1e9a10dfed0b4ddc09524)
   set(VELOX_ARROW_SOURCE_URL
-      "https://archive.apache.org/dist/arrow/arrow-${VELOX_ARROW_BUILD_VERSION}/apache-arrow-${VELOX_ARROW_BUILD_VERSION}.tar.gz"
+      "https://github.com/apache/arrow/archive/refs/tags/apache-arrow-${VELOX_ARROW_BUILD_VERSION}.tar.gz"
   )
 
   velox_resolve_dependency_url(ARROW)
@@ -73,26 +73,23 @@ if(VELOX_ENABLE_ARROW)
     URL_HASH ${VELOX_ARROW_BUILD_SHA256_CHECKSUM}
     SOURCE_SUBDIR cpp
     CMAKE_ARGS ${ARROW_CMAKE_ARGS}
-    BUILD_BYPRODUCTS ${ARROW_LIBDIR}/libarrow.a ${ARROW_LIBDIR}/libparquet.a
-                     ${ARROW_LIBDIR}/libarrow_testing.a ${THRIFT_LIB})
+    BUILD_BYPRODUCTS ${ARROW_LIBDIR}/libarrow.a
+                     ${ARROW_LIBDIR}/libarrow_testing.a ${THRIFT_LIB}
+    PATCH_COMMAND git apply ${CMAKE_CURRENT_LIST_DIR}/thrift-download.patch)
 
   add_library(arrow STATIC IMPORTED GLOBAL)
   add_library(arrow_testing STATIC IMPORTED GLOBAL)
-  add_library(parquet STATIC IMPORTED GLOBAL)
   add_dependencies(arrow arrow_ep)
   add_dependencies(arrow_testing arrow)
-  add_dependencies(parquet arrow)
   file(MAKE_DIRECTORY ${ARROW_PREFIX}/install/include)
   set_target_properties(
-    arrow arrow_testing parquet PROPERTIES INTERFACE_INCLUDE_DIRECTORIES
-                                           ${ARROW_PREFIX}/install/include)
+    arrow arrow_testing PROPERTIES INTERFACE_INCLUDE_DIRECTORIES
+                                   ${ARROW_PREFIX}/install/include)
   set_target_properties(arrow PROPERTIES IMPORTED_LOCATION
                                          ${ARROW_LIBDIR}/libarrow.a)
   set_property(TARGET arrow PROPERTY INTERFACE_LINK_LIBRARIES ${RE2} thrift)
   set_target_properties(
     arrow_testing PROPERTIES IMPORTED_LOCATION
                              ${ARROW_LIBDIR}/libarrow_testing.a)
-  set_target_properties(parquet PROPERTIES IMPORTED_LOCATION
-                                           ${ARROW_LIBDIR}/libparquet.a)
 
 endif()
