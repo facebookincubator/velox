@@ -169,6 +169,82 @@ struct PrimitiveBatchIterator : UnsafeRowDataBatchIterator {
   size_t currentRow_ = 0;
 };
 
+struct StructFieldBatchIterator : UnsafeRowDataBatchIterator {
+ public:
+  /**
+   * StructFieldBatchIterator constructor.
+   * @param data the UnsafeRow data
+   * @param type the field type of struct
+   * @param fieldIdx the field index
+   * @param numElements the number of field in struct
+   */
+  StructFieldBatchIterator(
+      const std::vector<std::optional<std::string_view>>& data,
+      const TypePtr& type,
+      size_t fieldIdx,
+      size_t numElements)
+      : UnsafeRowDataBatchIterator(data, type),
+        idx_(fieldIdx),
+        numElements_(numElements) {
+    columnData_.resize(numRows_);
+  };
+
+  /**
+   * @return return the field column batch.
+   */
+  const std::vector<std::optional<std::string_view>>& columnBatch() {
+    std::size_t fixedSize =
+        isFixedWidth(type()) ? serializedSizeInBytes(type()) : 0;
+    std::size_t fieldOffset = UnsafeRow::getNullLength(numElements_) +
+        idx_ * UnsafeRow::kFieldWidthBytes;
+
+    for (int32_t i = 0; i < numRows_; ++i) {
+      // if null
+      if (!data_[i] || bits::isBitSet(data_[i].value().data(), idx_)) {
+        columnData_[i] = std::nullopt;
+        continue;
+      }
+
+      const char* rawData = data_[i]->data();
+      const char* fieldData = rawData + fieldOffset;
+
+      // Fixed length field
+      if (fixedSize > 0) {
+        columnData_[i] = std::string_view(fieldData, fixedSize);
+        continue;
+      }
+
+      auto [size, offset] = readDataPointer(fieldData);
+      columnData_[i] = std::string_view(rawData + offset, size);
+    }
+
+    return columnData_;
+  }
+
+  std::string toString(size_t idx) const override {
+    std::stringstream str;
+    str << "Struct field data iterator of type " << type()->toString()
+        << " of size " << size(idx);
+    return str.str();
+  }
+
+ private:
+  /**
+   * The field element index.
+   */
+  size_t idx_;
+
+  /**
+   * The number of elements in the struct.
+   */
+  const size_t numElements_;
+
+  /**
+   * The column data of the field.
+   */
+  std::vector<std::optional<std::string_view>> columnData_;
+};
+
 /**
  * Iterator representation of an UnsafeRow Struct object.
     UnsafeRow Struct representation:
@@ -712,6 +788,28 @@ struct UnsafeRowDeserializer {
   }
 
   /**
+   * Converts a list of structFieldBatchIterator to Vectors.
+   * @param dataIterator iterator that points to whole column batch of data.
+   * @param pool
+   * @return a VectorPtr
+   */
+  static VectorPtr convertFieldStructIteratorsToVectors(
+      const DataBatchIteratorPtr& dataIterator,
+      memory::MemoryPool* pool) {
+    const TypePtr& type = dataIterator->type();
+    auto* structFieldBatchIterator =
+        static_cast<StructFieldBatchIterator*>(dataIterator.get());
+    size_t numRows = structFieldBatchIterator->numRows();
+
+    auto nulls = populateNulls(dataIterator, pool, numRows);
+
+    return deserialize(
+        structFieldBatchIterator->columnBatch(),
+        structFieldBatchIterator->type(),
+        pool);
+  }
+
+  /**
    * Converts a list of PrimitiveBatchIterators to a FlatVector
    * @tparam Kind the element's type kind.
    * @param dataIterator iterator that points to the dataIterator over the
@@ -854,6 +952,29 @@ struct UnsafeRowDeserializer {
       const TypePtr& type,
       memory::MemoryPool* pool) {
     return convertToVectors(getBatchIteratorPtr(data, type), pool);
+  }
+
+  /**
+   * Deserializes a field of a struct type to its Vector representation.
+   * @param data A vector of string_view over a given element in the
+   *UnsafeRow.
+   * @param type the field element type.
+   * @param field the field index
+   * @param fieldsNum the number of fields
+   * @param pool the memory pool to allocate Vectors from
+   *data to a array.
+   * @return a VectorPtr
+   */
+  static VectorPtr deserializeStructField(
+      const std::vector<std::optional<std::string_view>>& data,
+      const TypePtr& type,
+      size_t field,
+      size_t fieldsNum,
+      memory::MemoryPool* pool) {
+    return convertFieldStructIteratorsToVectors(
+        std::make_shared<StructFieldBatchIterator>(
+            data, type, field, fieldsNum),
+        pool);
   }
 };
 
