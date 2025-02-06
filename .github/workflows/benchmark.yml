@@ -53,7 +53,7 @@ jobs:
     steps:
 
       - name: "Restore ccache"
-        uses: actions/cache/restore@v3
+        uses: actions/cache/restore@v4
         id: restore-cache
         with:
           path: "ccache"
@@ -129,7 +129,7 @@ jobs:
             cp -r --verbose _build/release/velox/benchmarks/basic/*  ${BINARY_DIR}/contender/
 
       - name: "Save ccache"
-        uses: actions/cache/save@v3
+        uses: actions/cache/save@v4
         id: cache
         with:
           path: "ccache"
