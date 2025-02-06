@@ -144,6 +144,7 @@ void CudfHashAggregation::initialize() {
   VELOX_CHECK(pool()->trackUsage());
 
   const auto& inputType = aggregationNode_->sources()[0]->outputType();
+  ignoreNullKeys_ = aggregationNode_->ignoreNullKeys();
   setupGroupingKeyChannelProjections(
       groupingKeyInputChannels_, groupingKeyOutputChannels_);
 
@@ -275,7 +276,10 @@ RowVectorPtr CudfHashAggregation::doGroupByAggregation(
   // TODO (dm): Support args like include_null_keys, keys_are_sorted,
   // column_order, null_precedence. We're fine for now because very few nullable
   // columns in tpch
-  cudf::groupby::groupby group_by_owner(groupby_key_tbl);
+  cudf::groupby::groupby group_by_owner(
+      groupby_key_tbl,
+      ignoreNullKeys_ ? cudf::null_policy::EXCLUDE
+                      : cudf::null_policy::INCLUDE);
 
   // convert aggregation map into aggregation requests
   std::vector<cudf::groupby::aggregation_request> requests;

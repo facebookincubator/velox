@@ -89,6 +89,7 @@ class CudfHashAggregation : public Operator {
   bool finished_ = false;
 
   size_t numAggregates_;
+  bool ignoreNullKeys_;
 
   std::map<uint32_t, std::vector<std::pair<cudf::aggregation::Kind, uint32_t>>>
       requests_map_;

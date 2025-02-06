@@ -616,6 +616,7 @@ TEST_F(AggregationTest, rangeToDistinct) {
       " GROUP BY c0, c1, c2, c3, c4, c5");
 }
 
+// DM: Works
 TEST_F(AggregationTest, allKeyTypes) {
   // Covers different key types. Unlike the integer/string tests, the
   // hash table begins life in the generic mode, not array or
