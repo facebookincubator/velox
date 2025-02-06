@@ -76,12 +76,26 @@ Generic Configuration
      - integer
      - 32MB
      - Used for backpressure to block local exchange producers when the local exchange buffer reaches or exceeds this size.
+   * - max_local_exchange_partition_count
+     - integer
+     - 2^32
+     - Limits the number of partitions created by a local exchange. Partitioning data too granularly can lead to poor performance.
+       This setting allows increasing the task concurrency for all pipelines except the ones that require a local partitioning.
+       Affects the number of drivers for pipelines containing LocalPartitionNode and cannot exceed the maximum number of
+       pipeline drivers configured for the task.
    * - exchange.max_buffer_size
      - integer
      - 32MB
      - Size of buffer in the exchange client that holds data fetched from other nodes before it is processed.
        A larger buffer can increase network throughput for larger clusters and thus decrease query processing time
        at the expense of reducing the amount of memory available for other usage.
+   * - min_exchange_output_batch_bytes
+     - integer
+     - 2MB
+     - The minimum number of bytes to accumulate in the ExchangeQueue before unblocking a consumer. This is used to avoid
+       creating tiny batches which may have a negative impact on performance when the cost of creating vectors is high
+       (for example, when there are many columns). To avoid latency degradation, the exchange client unblocks a consumer
+       when 1% of the data size observed so far is accumulated.
    * - merge_exchange.max_buffer_size
      - integer
      - 128MB
@@ -135,8 +149,18 @@ Generic Configuration
      - Maximum number of bytes to use for the normalized key in prefix-sort. Use 0 to disable prefix-sort.
    * - prefixsort_min_rows
      - integer
-     - 130
+     - 128
      - Minimum number of rows to use prefix-sort. The default value has been derived using micro-benchmarking.
+   * - prefixsort_max_string_prefix_length
+     - integer
+     - 16
+     - Byte length of the string prefix stored in the prefix-sort buffer. This doesn't include the null byte.
+   * - shuffle_compression_codec
+     - string
+     - none
+     - Specifies the compression algorithm type to compress the shuffle data to
+       trade CPU for network IO efficiency. The supported compression codecs
+       are: zlib, snappy, lzo, zstd, lz4 and gzip. none means no compression.
 
 .. _expression-evaluation-conf:
 
@@ -168,6 +192,30 @@ Expression Evaluation Configuration
      - bool
      - false
      - This flag makes the Row conversion to by applied in a way that the casting row field are matched by name instead of position.
+   * - expression.max_array_size_in_reduce
+     - integer
+     - 100000
+     - ``Reduce`` function will throw an error if encountered an array of size greater than this.
+   * - expression.max_compiled_regexes
+     - integer
+     - 100
+     - Controls maximum number of compiled regular expression patterns per batch.
+   * - debug_disable_expression_with_peeling
+     - bool
+     - false
+     - Disable optimization in expression evaluation to peel common dictionary layer from inputs. Should only be used for debugging.
+   * - debug_disable_common_sub_expressions
+     - bool
+     - false
+     - Disable optimization in expression evaluation to re-use cached results for common sub-expressions. Should only be used for debugging.
+   * - debug_disable_expression_with_memoization
+     - bool
+     - false
+     - Disable optimization in expression evaluation to re-use cached results between subsequent input batches that are dictionary encoded and have the same alphabet(underlying flat vector). Should only be used for debugging.
+   * - debug_disable_expression_with_lazy_inputs
+     - bool
+     - false
+     - Disable optimization in expression evaluation to delay loading of lazy inputs unless required. Should only be used for debugging.
 
 Memory Management
 -----------------
@@ -320,8 +368,13 @@ Spilling
      - string
      - none
      - Specifies the compression algorithm type to compress the spilled data before write to disk to trade CPU for IO
-       efficiency. The supported compression codecs are: ZLIB, SNAPPY, LZO, ZSTD, LZ4 and GZIP.
-       NONE means no compression.
+       efficiency. The supported compression codecs are: zlib, snappy, lzo, zstd, lz4 and gzip.
+       none means no compression.
+   * - spill_prefixsort_enabled
+     - bool
+     - false
+     - Enable the prefix sort or fallback to timsort in spill. The prefix sort is faster than std::sort but requires the
+       memory to build normalized prefix keys, which might have potential risk of running out of server memory.
    * - spiller_start_partition_bit
      - integer
      - 29
@@ -350,6 +403,23 @@ Table Scan
      - integer
      - 2
      - Maximum number of splits to preload per driver. Set to 0 to disable preloading.
+   * - table_scan_scaled_processing_enabled
+     - bool
+     - false
+     - If true, enables the scaled table scan processing. For each table scan
+       plan node, a scan controller is used to control the number of running scan
+       threads based on the query memory usage. It keeps increasing the number of
+       running threads until the query memory usage exceeds the threshold defined
+       by 'table_scan_scale_up_memory_usage_ratio'.
+   * - table_scan_scale_up_memory_usage_ratio
+     - double
+     - 0.5
+     - The query memory usage ratio used by scan controller to decide if it can
+       increase the number of running scan threads. When the query memory usage
+       is below this ratio, the scan controller scale up the scan processing by
+       increasing the number of running scan threads, and stop once exceeds this
+       ratio. The value is in the range of [0, 1]. This only applies if
+       'table_scan_scaled_processing_enabled' is true.
 
 Table Writer
 ------------
@@ -368,7 +438,32 @@ Table Writer
    * - task_partitioned_writer_count
      - integer
      - task_writer_count
-     - The number of parallel table writer threads per task for bucketed table writes. If not set, use 'task_writer_count' as default.
+     - The number of parallel table writer threads per task for partitioned
+       table writes. If not set, use 'task_writer_count' as default.
+   * - scaled_writer_rebalance_max_memory_usage_ratio
+     - double
+     - 0.7
+     - The max ratio of a query used memory to its max capacity, and the scale
+       writer exchange stops scaling writer processing if the query's current
+       memory usage exceeds this ratio. The value is in the range of (0, 1].
+   * - scaled_writer_max_partitions_per_writer
+     - integer
+     - 128
+     - The max number of logical table partitions that can be assigned to a
+       single table writer thread. The logical table partition is used by local
+       exchange writer for writer scaling, and multiple physical table
+       partitions can be mapped to the same logical table partition based on the
+       hash value of calculated partitioned ids.
+   * - scaled_writer_min_partition_processed_bytes_rebalance_threshold
+     - integer
+     - 128MB
+     - Minimum amount of data processed by a logical table partition to trigger
+       writer scaling if it is detected as overloaded by scale wrirer exchange.
+   * - scaled_writer_min_processed_bytes_rebalance_threshold
+     - integer
+     - 256MB
+     - Minimum amount of data processed by all the logical table partitions to
+       trigger skewed partition rebalancing by scale writer exchange.
 
 Hive Connector
 --------------
@@ -414,6 +509,14 @@ Each query can override the config by setting corresponding query session proper
      - bool
      - true
      - If true, the partition directory will be converted to lowercase when executing a table write operation.
+   * - allow-null-partition-keys
+     - allow_null_partition_keys
+     - bool
+     - true
+     - Determines whether null values for partition keys are allowed or not. If not, fails with "Partition key must
+       not be null" error message when writing data with null partition key.
+       Null check for partitioning key should be used only when partitions are generated dynamically during query execution.
+       For queries that write to fixed partitions, this check should happen much earlier before the Velox execution even starts.
    * - ignore_missing_files
      -
      - bool
@@ -424,13 +527,13 @@ Each query can override the config by setting corresponding query session proper
      - integer
      - 128MB
      - Maximum size in bytes to coalesce requests to be fetched in a single request.
-   * - max-coalesced-distance-bytes
+   * - max-coalesced-distance
      -
      - integer
      - 512KB
-     - Maximum distance in bytes between chunks to be fetched that may be coalesced into a single request.
+     - Maximum distance in capacity units between chunks to be fetched that may be coalesced into a single request.
    * - load-quantum
-     -
+     - load-quantum
      - integer
      - 8MB
      - Define the size of each coalesce load request. E.g. in Parquet scan, if it's bigger than rowgroup size then the whole row group can be fetched together. Otherwise, the row group will be fetched column chunk by column chunk
@@ -468,6 +571,34 @@ Each query can override the config by setting corresponding query session proper
      - 1MB
      - Define the estimation of footer size in ORC and Parquet format. The footer data includes version, schema, and meta data for every columns which may or may not need to be fetched later.
        The parameter controls the size when footer is fetched each time. Bigger value can decrease the IO requests but may fetch more useless meta data.
+   * - cache.no_retention
+     - cache.no_retention
+     - bool
+     - false
+     - If true, evict out a query scanned data out of in-memory cache right after the access,
+       and also skip staging to the ssd cache. This helps to prevent the cache space pollution
+       from the one-time table scan by large batch query when mixed running with interactive
+       query which has high data locality.
+   * - hive.reader.stats_based_filter_reorder_disabaled
+     - hive.reader.stats_based_filter_reorder_disabaled
+     - bool
+     - false
+     - If true, disable the stats based filter reordering during the read processing, and the
+       filter execution order is totally determined by the filter type. Otherwise, the file
+       reader will dynamically adjust the filter execution order based on the past filter
+       execution stats.
+
+``ORC File Format Configuration``
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+.. list-table::
+   :widths: 20 20 10 10 70
+   :header-rows: 1
+
+   * - Configuration Property Name
+     - Session Property Name
+     - Type
+     - Default Value
+     - Description
    * - hive.orc.writer.stripe-max-size
      - orc_optimized_writer_max_stripe_size
      - string
@@ -488,12 +619,6 @@ Each query can override the config by setting corresponding query session proper
      - bool
      - true
      - Whether or not dictionary encoding of string types should be used by the ORC writer.
-   * - hive.parquet.writer.timestamp-unit
-     - hive.parquet.writer.timestamp_unit
-     - tinyint
-     - 9
-     - Timestamp unit used when writing timestamps into Parquet through Arrow bridge.
-       Valid values are 0 (second), 3 (millisecond), 6 (microsecond), 9 (nanosecond).
    * - hive.orc.writer.linear-stripe-size-heuristics
      - orc_writer_linear_stripe_size_heuristics
      - bool
@@ -509,14 +634,24 @@ Each query can override the config by setting corresponding query session proper
      - tinyint
      - 3 for ZSTD and 4 for ZLIB
      - The compression level to use with ZLIB and ZSTD.
-   * - cache.no_retention
-     - cache.no_retention
-     - bool
-     - false
-     - If true, evict out a query scanned data out of in-memory cache right after the access,
-       and also skip staging to the ssd cache. This helps to prevent the cache space pollution
-       from the one-time table scan by large batch query when mixed running with interactive
-       query which has high data locality.
+
+``Parquet File Format Configuration``
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+.. list-table::
+   :widths: 20 20 10 10 70
+   :header-rows: 1
+
+   * - Configuration Property Name
+     - Session Property Name
+     - Type
+     - Default Value
+     - Description
+   * - hive.parquet.writer.timestamp-unit
+     - hive.parquet.writer.timestamp_unit
+     - tinyint
+     - 9
+     - Timestamp unit used when writing timestamps into Parquet through Arrow bridge.
+       Valid values are 3 (millisecond), 6 (microsecond), and 9 (nanosecond).
 
 ``Amazon S3 Configuration``
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^
@@ -544,6 +679,11 @@ Each query can override the config by setting corresponding query session proper
      - string
      -
      - The S3 storage endpoint server. This can be used to connect to an S3-compatible storage system instead of AWS.
+   * - hive.s3.endpoint.region
+     - string
+     - us-east-1
+     - The S3 storage endpoint server region. Default is set by the AWS SDK. If not configured, region will be attempted
+       to be parsed from the hive.s3.endpoint value.
    * - hive.s3.path-style-access
      - bool
      - false
@@ -594,6 +734,15 @@ Each query can override the config by setting corresponding query session proper
        Legacy mode only enables throttled retry for transient errors.
        Standard mode is built on top of legacy mode and has throttled retry enabled for throttling errors apart from transient errors.
        Adaptive retry mode dynamically limits the rate of AWS requests to maximize success rate.
+
+Bucket Level Configuration
+""""""""""""""""""""""""""
+All "hive.s3.*" config (except "hive.s3.log-level") can be set on a per-bucket basis. The bucket-specific option is set by
+replacing the "hive.s3." prefix on a config with "hive.s3.bucket.BUCKETNAME.", where BUCKETNAME is the name of the
+bucket. e.g. the endpoint for a bucket named "velox" can be specified by the config "hive.s3.bucket.velox.endpoint".
+When connecting to a bucket, all options explicitly set will override the base "hive.s3." values.
+These semantics are similar to the `Apache Hadoop-Aws module <https://hadoop.apache.org/docs/current/hadoop-aws/tools/hadoop-aws/index.html>`_.
+
 ``Google Cloud Storage Configuration``
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 .. list-table::
@@ -607,15 +756,11 @@ Each query can override the config by setting corresponding query session proper
    * - hive.gcs.endpoint
      - string
      -
-     - The GCS storage endpoint server.
-   * - hive.gcs.scheme
+     - The GCS storage URI.
+   * - hive.gcs.json-key-file-path
      - string
      -
-     - The GCS storage scheme, https for default credentials.
-   * - hive.gcs.credentials
-     - string
-     -
-     - The GCS service account configuration as json string.
+     - The GCS service account configuration JSON key file.
    * - hive.gcs.max-retry-count
      - integer
      -
@@ -635,12 +780,42 @@ Each query can override the config by setting corresponding query session proper
      - Type
      - Default Value
      - Description
+   * - fs.azure.account.auth.type.<storage-account>.dfs.core.windows.net
+     - string
+     - SharedKey
+     - Specifies the authentication mechanism to use for Azure storage accounts.
+       **Allowed values:** "SharedKey", "OAuth", "SAS".
+       "SharedKey": Uses the storage account name and key for authentication.
+       "OAuth": Utilizes OAuth tokens for secure authentication.
+       "SAS": Employs Shared Access Signatures for granular access control.
    * - fs.azure.account.key.<storage-account>.dfs.core.windows.net
      - string
      -
-     -  The credentials to access the specific Azure Blob Storage account, replace <storage-account> with the name of your Azure Storage account.
-        This property aligns with how Spark configures Azure account key credentials for accessing Azure storage, by setting this property multiple
-        times with different storage account names, you can access multiple Azure storage accounts.
+     - The credentials to access the specific Azure Blob Storage account, replace <storage-account> with the name of your Azure Storage account.
+       This property aligns with how Spark configures Azure account key credentials for accessing Azure storage, by setting this property multiple
+       times with different storage account names, you can access multiple Azure storage accounts.
+   * - fs.azure.sas.fixed.token.<storage-account>.dfs.core.windows.net
+     - string
+     -
+     - Specifies a fixed SAS (Shared Access Signature) token for accessing Azure storage.
+       This token provides scoped and time-limited access to specific resources.
+       Use this property when a pre-generated SAS token is used for authentication.
+   * - fs.azure.account.oauth2.client.id.<storage-account>.dfs.core.windows.net
+     - string
+     -
+     - Specifies the client ID of the Azure AD application used for OAuth 2.0 authentication.
+       This client ID is required when using OAuth as the authentication type.
+   * - fs.azure.account.oauth2.client.secret.<storage-account>.dfs.core.windows.net
+     - string
+     -
+     - Specifies the client secret of the Azure AD application used for OAuth 2.0 authentication.
+       This secret is required in conjunction with the client ID to authenticate the application.
+   * - fs.azure.account.oauth2.client.endpoint.<storage-account>.dfs.core.windows.net
+     - string
+     -
+     - Specifies the OAuth 2.0 token endpoint URL for the Azure AD application.
+       This endpoint is used to acquire access tokens for authenticating with Azure storage.
+       The URL follows the format: `https://login.microsoftonline.com/<tenant-id>/oauth2/token`.
 
 Presto-specific Configuration
 -----------------------------
@@ -686,4 +861,44 @@ Spark-specific Configuration
        the value of this config can not exceed the default value.
    * - spark.partition_id
      - integer
+     -
      - The current task's Spark partition ID. It's set by the query engine (Spark) prior to task execution.
+   * - spark.legacy_date_formatter
+     - bool
+     - false
+     - If true, `Simple Date Format <https://docs.oracle.com/javase/8/docs/api/java/text/SimpleDateFormat.html>`_ is used for time formatting and parsing. Joda date formatter is used by default.
+       Joda date formatter performs strict checking of its input and uses different pattern string.
+       For example, the 2015-07-22 10:00:00 timestamp cannot be parsed if pattern is yyyy-MM-dd because the parser does not consume whole input.
+       Another example is that the 'W' pattern, which means week in month, is not supported. For more differences, see :issue:`10354`.
+
+Tracing
+--------
+.. list-table::
+   :widths: 30 10 10 70
+   :header-rows: 1
+
+   * - Property Name
+     - Type
+     - Default Value
+     - Description
+   * - query_trace_enabled
+     - bool
+     - true
+     - If true, enable query tracing.
+   * - query_trace_dir
+     - string
+     -
+     - The root directory to store the tracing data and metadata for a query.
+   * - query_trace_node_ids
+     - string
+     -
+     - A comma-separated list of plan node ids whose input data will be trace. If it is empty, then we only trace the
+       query metadata which includes the query plan and configs etc.
+   * - query_trace_task_reg_exp
+     - string
+     -
+     - The regexp of traced task id. We only enable trace on a task if its id matches.
+   * - query_trace_max_bytes
+     - integer
+     - 0
+     - The max trace bytes limit. Tracing is disabled if zero.

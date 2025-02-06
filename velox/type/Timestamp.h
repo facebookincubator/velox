@@ -117,6 +117,9 @@ struct Timestamp {
   /// and the number of nanoseconds.
   static Timestamp fromDaysAndNanos(int32_t days, int64_t nanos);
 
+  // date is the number of days since unix epoch.
+  static Timestamp fromDate(int32_t date);
+
   // Returns the current unix timestamp (ms precision).
   static Timestamp now();
 
@@ -153,11 +156,11 @@ struct Timestamp {
 
   // Keep it in header for getting inlined.
   int64_t toMillis() const {
-    // We use int128_t to make sure the computation does not overflows since
+    // We use int128_t to make sure the computation does not overflow since
     // there are cases such that seconds*1000 does not fit in int64_t,
     // but seconds*1000 + nanos does, an example is TimeStamp::minMillis().
 
-    // If the final result does not fit in int64_tw we throw.
+    // If the final result does not fit in int64_t we throw.
     __int128_t result =
         (__int128_t)seconds_ * 1'000 + (int64_t)(nanos_ / 1'000'000);
     if (result < std::numeric_limits<int64_t>::min() ||
@@ -193,6 +196,21 @@ struct Timestamp {
           nanos_,
           e.what());
     }
+  }
+
+  Timestamp toPrecision(const TimestampPrecision& precision) const {
+    uint64_t nanos = nanos_;
+    switch (precision) {
+      case TimestampPrecision::kMilliseconds:
+        nanos = nanos / 1'000'000 * 1'000'000;
+        break;
+      case TimestampPrecision::kMicroseconds:
+        nanos = nanos / 1'000 * 1'000;
+        break;
+      case TimestampPrecision::kNanoseconds:
+        break;
+    }
+    return Timestamp(seconds_, nanos);
   }
 
   /// Exports the current timestamp as a std::chrono::time_point of millisecond
@@ -505,7 +523,7 @@ struct formatter<facebook::velox::TimestampToStringOptions::Precision>
     : formatter<int> {
   auto format(
       facebook::velox::TimestampToStringOptions::Precision s,
-      format_context& ctx) {
+      format_context& ctx) const {
     return formatter<int>::format(static_cast<int>(s), ctx);
   }
 };
@@ -514,7 +532,7 @@ struct formatter<facebook::velox::TimestampToStringOptions::Mode>
     : formatter<int> {
   auto format(
       facebook::velox::TimestampToStringOptions::Mode s,
-      format_context& ctx) {
+      format_context& ctx) const {
     return formatter<int>::format(static_cast<int>(s), ctx);
   }
 };

@@ -86,15 +86,12 @@ std::vector<KeyNode<T>> getKeyNodes(
   std::unordered_map<KeyValue<T>, common::ScanSpec*, KeyValueHash<T>>
       childSpecs;
   if (!asStruct) {
-    keysSpec = scanSpec.getOrCreateChild(
-        common::Subfield(common::ScanSpec::kMapKeysFieldName));
-    valuesSpec = scanSpec.getOrCreateChild(
-        common::Subfield(common::ScanSpec::kMapValuesFieldName));
+    keysSpec = scanSpec.getOrCreateChild(common::ScanSpec::kMapKeysFieldName);
+    valuesSpec =
+        scanSpec.getOrCreateChild(common::ScanSpec::kMapValuesFieldName);
     VELOX_CHECK(!valuesSpec->hasFilter());
     keysSpec->setProjectOut(true);
-    keysSpec->setExtractValues(true);
     valuesSpec->setProjectOut(true);
-    valuesSpec->setExtractValues(true);
   } else {
     for (auto& c : scanSpec.children()) {
       T key;
@@ -184,6 +181,9 @@ class SelectiveFlatMapAsStructReader : public SelectiveStructColumnReaderBase {
         !keyNodes_.empty(),
         "For struct encoding, keys to project must be configured");
     children_.resize(keyNodes_.size());
+    for (auto& childSpec : scanSpec.children()) {
+      childSpec->setSubscript(kConstantChildSpecSubscript);
+    }
     for (int i = 0; i < keyNodes_.size(); ++i) {
       keyNodes_[i].reader->scanSpec()->setSubscript(i);
       children_[i] = keyNodes_[i].reader.get();
@@ -211,12 +211,12 @@ class SelectiveFlatMapReader : public SelectiveStructColumnReaderBase {
             *this,
             getKeyNodes<T>(requestedType, fileType, params, scanSpec, false)) {}
 
-  void read(vector_size_t offset, RowSet rows, const uint64_t* incomingNulls)
+  void read(int64_t offset, const RowSet& rows, const uint64_t* incomingNulls)
       override {
     flatMap_.read(offset, rows, incomingNulls);
   }
 
-  void getValues(RowSet rows, VectorPtr* result) override {
+  void getValues(const RowSet& rows, VectorPtr* result) override {
     flatMap_.getValues(rows, result);
   }
 

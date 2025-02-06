@@ -26,15 +26,19 @@
 #include "velox/exec/HashAggregation.h"
 #include "velox/exec/HashBuild.h"
 #include "velox/exec/HashProbe.h"
+#include "velox/exec/IndexLookupJoin.h"
 #include "velox/exec/Limit.h"
 #include "velox/exec/MarkDistinct.h"
 #include "velox/exec/Merge.h"
 #include "velox/exec/MergeJoin.h"
 #include "velox/exec/NestedLoopJoinBuild.h"
 #include "velox/exec/NestedLoopJoinProbe.h"
+#include "velox/exec/OperatorTraceScan.h"
 #include "velox/exec/OrderBy.h"
 #include "velox/exec/PartitionedOutput.h"
+#include "velox/exec/RoundRobinPartitionFunction.h"
 #include "velox/exec/RowNumber.h"
+#include "velox/exec/ScaleWriterLocalPartition.h"
 #include "velox/exec/StreamingAggregation.h"
 #include "velox/exec/TableScan.h"
 #include "velox/exec/TableWriteMerge.h"
@@ -68,6 +72,27 @@ bool mustStartNewPipeline(
   return sourceId != 0;
 }
 
+bool isIndexLookupJoin(core::PlanNodePtr planNode) {
+  const auto indexLookupJoin =
+      std::dynamic_pointer_cast<const core::IndexLookupJoinNode>(planNode);
+  return indexLookupJoin != nullptr;
+}
+
+// Creates the customized local partition operator for table writer scaling.
+std::unique_ptr<Operator> createScaleWriterLocalPartition(
+    const std::shared_ptr<const core::LocalPartitionNode>& localPartitionNode,
+    int32_t operatorId,
+    DriverCtx* ctx) {
+  if (dynamic_cast<const RoundRobinPartitionFunctionSpec*>(
+          &localPartitionNode->partitionFunctionSpec())) {
+    return std::make_unique<ScaleWriterLocalPartition>(
+        operatorId, ctx, localPartitionNode);
+  }
+
+  return std::make_unique<ScaleWriterPartitioningLocalPartition>(
+      operatorId, ctx, localPartitionNode);
+}
+
 OperatorSupplier makeConsumerSupplier(ConsumerSupplier consumerSupplier) {
   if (consumerSupplier) {
     return [consumerSupplier = std::move(consumerSupplier)](
@@ -97,6 +122,12 @@ OperatorSupplier makeConsumerSupplier(
 
   if (auto localPartitionNode =
           std::dynamic_pointer_cast<const core::LocalPartitionNode>(planNode)) {
+    if (localPartitionNode->scaleWriter()) {
+      return [localPartitionNode](int32_t operatorId, DriverCtx* ctx) {
+        return createScaleWriterLocalPartition(
+            localPartitionNode, operatorId, ctx);
+      };
+    }
     return [localPartitionNode](int32_t operatorId, DriverCtx* ctx) {
       return std::make_unique<LocalPartition>(
           operatorId, ctx, localPartitionNode);
@@ -150,7 +181,9 @@ void plan(
   if (sources.empty()) {
     driverFactories->back()->inputDriver = true;
   } else {
-    for (int32_t i = 0; i < sources.size(); ++i) {
+    const auto numSourcesToPlan =
+        isIndexLookupJoin(planNode) ? 1 : sources.size();
+    for (int32_t i = 0; i < numSourcesToPlan; ++i) {
       plan(
           sources[i],
           mustStartNewPipeline(planNode, i) ? nullptr : currentPlanNodes,
@@ -212,8 +245,14 @@ uint32_t maxDrivers(
         auto localExchange =
             std::dynamic_pointer_cast<const core::LocalPartitionNode>(node)) {
       // Local gather must run single-threaded.
-      if (localExchange->type() == core::LocalPartitionNode::Type::kGather) {
-        return 1;
+      switch (localExchange->type()) {
+        case core::LocalPartitionNode::Type::kGather:
+          return 1;
+        case core::LocalPartitionNode::Type::kRepartition:
+          count = std::min(queryConfig.maxLocalExchangePartitionCount(), count);
+          break;
+        default:
+          VELOX_UNREACHABLE("Unexpected local exchange type");
       }
     } else if (std::dynamic_pointer_cast<const core::LocalMergeNode>(node)) {
       // Local merge must run single-threaded.
@@ -251,7 +290,7 @@ uint32_t maxDrivers(
             *result,
             0,
             "maxDrivers must be greater than 0. Plan node: {}",
-            node->toString())
+            node->toString());
         if (*result == 1) {
           return 1;
         }
@@ -494,6 +533,12 @@ std::shared_ptr<Driver> DriverFactory::createDriver(
       operators.push_back(
           std::make_unique<NestedLoopJoinProbe>(id, ctx.get(), joinNode));
     } else if (
+        auto joinNode =
+            std::dynamic_pointer_cast<const core::IndexLookupJoinNode>(
+                planNode)) {
+      operators.push_back(
+          std::make_unique<IndexLookupJoin>(id, ctx.get(), joinNode));
+    } else if (
         auto aggregationNode =
             std::dynamic_pointer_cast<const core::AggregationNode>(planNode)) {
       if (aggregationNode->isPreGrouped()) {
@@ -587,6 +632,11 @@ std::shared_ptr<Driver> DriverFactory::createDriver(
           assignUniqueIdNode,
           assignUniqueIdNode->taskUniqueId(),
           assignUniqueIdNode->uniqueIdCounter()));
+    } else if (
+        const auto traceScanNode =
+            std::dynamic_pointer_cast<const core::TraceScanNode>(planNode)) {
+      operators.push_back(std::make_unique<trace::OperatorTraceScan>(
+          id, ctx.get(), traceScanNode));
     } else {
       std::unique_ptr<Operator> extended;
       if (planNode->requiresExchangeClient()) {

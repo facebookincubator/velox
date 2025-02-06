@@ -17,13 +17,37 @@
 #include "velox/functions/sparksql/specialforms/SparkCastHooks.h"
 #include "velox/functions/lib/string/StringImpl.h"
 #include "velox/type/TimestampConversion.h"
+#include "velox/type/tz/TimeZoneMap.h"
 
 namespace facebook::velox::functions::sparksql {
+
+SparkCastHooks::SparkCastHooks(const velox::core::QueryConfig& config)
+    : config_(config) {
+  const auto sessionTzName = config.sessionTimezone();
+  if (!sessionTzName.empty()) {
+    timestampToStringOptions_.timeZone = tz::locateZone(sessionTzName);
+  }
+}
 
 Expected<Timestamp> SparkCastHooks::castStringToTimestamp(
     const StringView& view) const {
   return util::fromTimestampString(
       view.data(), view.size(), util::TimestampParseMode::kSparkCast);
+}
+
+Expected<Timestamp> SparkCastHooks::castIntToTimestamp(int64_t seconds) const {
+  // Spark internally use microsecond precision for timestamp.
+  // To avoid overflow, we need to check the range of seconds.
+  static constexpr int64_t maxSeconds = std::numeric_limits<int64_t>::max() /
+      (Timestamp::kMicrosecondsInMillisecond *
+       Timestamp::kMillisecondsInSecond);
+  if (seconds > maxSeconds) {
+    return Timestamp::fromMicrosNoError(std::numeric_limits<int64_t>::max());
+  }
+  if (seconds < -maxSeconds) {
+    return Timestamp::fromMicrosNoError(std::numeric_limits<int64_t>::min());
+  }
+  return Timestamp(seconds, 0);
 }
 
 Expected<int32_t> SparkCastHooks::castStringToDate(
@@ -57,18 +81,6 @@ StringView SparkCastHooks::removeWhiteSpaces(const StringView& view) const {
   stringImpl::trimUnicodeWhiteSpace<true, true, StringView, StringView>(
       output, view);
   return output;
-}
-
-const TimestampToStringOptions& SparkCastHooks::timestampToStringOptions()
-    const {
-  static constexpr TimestampToStringOptions options = {
-      .precision = TimestampToStringOptions::Precision::kMicroseconds,
-      .leadingPositiveSign = true,
-      .skipTrailingZeros = true,
-      .zeroPaddingYear = true,
-      .dateTimeSeparator = ' ',
-  };
-  return options;
 }
 
 exec::PolicyType SparkCastHooks::getPolicy() const {

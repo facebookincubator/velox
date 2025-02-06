@@ -15,5 +15,28 @@ add_executable(velox_common_base_benchmarks BitUtilBenchmark.cpp)
 
 target_link_libraries(
   velox_common_base_benchmarks
-  PUBLIC ${FOLLY_BENCHMARK}
+  PUBLIC Folly::follybenchmark
+  PRIVATE velox_common_base Folly::folly)
+
+add_executable(velox_common_stringsearch_benchmarks StringSearchBenchmark.cpp)
+
+target_link_libraries(
+  velox_common_stringsearch_benchmarks
+  PUBLIC Folly::follybenchmark
+  PRIVATE velox_common_base Folly::folly)
+
+add_executable(velox_common_indexed_priority_queue_benchmark
+               IndexedPriorityQueueBenchmark.cpp)
+
+target_link_libraries(
+  velox_common_indexed_priority_queue_benchmark
+  PUBLIC Folly::follybenchmark
+  PRIVATE velox_common_base Folly::folly)
+
+add_executable(velox_common_sorting_network_benchmark
+               SortingNetworkBenchmark.cpp)
+
+target_link_libraries(
+  velox_common_sorting_network_benchmark
+  PUBLIC Folly::follybenchmark
   PRIVATE velox_common_base Folly::folly)

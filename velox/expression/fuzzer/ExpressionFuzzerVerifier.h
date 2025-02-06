@@ -18,11 +18,13 @@
 
 #include "velox/core/ITypedExpr.h"
 #include "velox/core/QueryCtx.h"
+#include "velox/exec/fuzzer/ReferenceQueryRunner.h"
 #include "velox/expression/Expr.h"
 #include "velox/expression/fuzzer/ExpressionFuzzer.h"
 #include "velox/expression/fuzzer/FuzzerToolkit.h"
 #include "velox/expression/tests/ExpressionVerifier.h"
 #include "velox/functions/FunctionRegistry.h"
+#include "velox/vector/VectorSaver.h"
 #include "velox/vector/fuzzer/VectorFuzzer.h"
 #include "velox/vector/tests/utils/VectorMaker.h"
 
@@ -51,7 +53,9 @@ class ExpressionFuzzerVerifier {
   ExpressionFuzzerVerifier(
       const FunctionSignatureMap& signatureMap,
       size_t initialSeed,
-      const Options& options);
+      const Options& options,
+      const std::unordered_map<std::string, std::shared_ptr<ArgGenerator>>&
+          argGenerators);
 
   // This function starts the test that is performed by the
   // ExpressionFuzzerVerifier which is generating random expressions and
@@ -91,6 +95,14 @@ class ExpressionFuzzerVerifier {
     // be selected to be wrapped in lazy encoding (expressed as double from 0 to
     // 1).
     double lazyVectorGenerationRatio = 0.0;
+
+    // Specifies the probability with which columns in the input row vector will
+    // be selected to be wrapped in a common dictionary layer (expressed as
+    // double from 0 to 1). Only columns that are not already dictionary encoded
+    // will be selected as eventually only one dictionary wrap will be allowed
+    // so additional wrap can be folded into the existing one. This is to
+    // replicate inputs coming from a filter, union, or join.
+    double commonDictionaryWrapRatio = 0.0;
 
     // This sets an upper limit on the number of expression trees to generate
     // per step. These trees would be executed in the same ExprSet and can
@@ -146,6 +158,23 @@ class ExpressionFuzzerVerifier {
     std::unordered_map<std::string, ExprUsageStats>& exprNameToStats_;
   };
 
+  // Performs the following operations:
+  // 1. Randomly picks whether to generate either 1 or 2 input test cases.
+  // 2. Generates InputRowMetadata which contains the following:
+  // 2a. Randomly picked columns from the input row vector to wrap
+  // in lazy. Negative column indices represent lazy vectors that have been
+  // preloaded before feeding them to the evaluator.
+  // 2b. Randomly picked columns (2 or more) from the input row vector to
+  // wrap in a common dictionary layer. Only columns not already dictionary
+  // encoded are picked.
+  // Note: These lists are sorted on the absolute value of the entries.
+  // 3. Generates a Fuzzed input row vector and ensures that the columns picked
+  // in 2b are wrapped with the same dictionary.
+  // 4. Appends a row number column to the input row vector.
+  std::pair<std::vector<InputTestCase>, InputRowMetadata> generateInput(
+      const RowTypePtr& rowType,
+      VectorFuzzer& vectorFuzzer);
+
   /// Randomize initial result vector data to test for correct null and data
   /// setting in functions.
   RowVectorPtr generateResultVectors(std::vector<core::TypedExprPtr>& plans);
@@ -159,9 +188,9 @@ class ExpressionFuzzerVerifier {
   /// Throws in case any of these steps fail.
   void retryWithTry(
       std::vector<core::TypedExprPtr> plans,
-      const RowVectorPtr& rowVector,
+      std::vector<fuzzer::InputTestCase> inputsToRetry,
       const VectorPtr& resultVectors,
-      const std::vector<int>& columnsToWrapInLazy);
+      const InputRowMetadata& columnsToWrapInLazy);
 
   /// If --duration_sec > 0, check if we expired the time budget. Otherwise,
   /// check if we expired the number of iterations (--steps).
@@ -177,13 +206,10 @@ class ExpressionFuzzerVerifier {
   /// proportionOfTimesSelected numProcessedRows.
   void logStats();
 
-  // Randomly pick columns from the input row vector to wrap in lazy.
-  // Negative column indices represent lazy vectors that have been preloaded
-  // before feeding them to the evaluator. This list is sorted on the absolute
-  // value of the entries.
-  std::vector<int> generateLazyColumnIds(
-      const RowVectorPtr& rowVector,
-      VectorFuzzer& vectorFuzzer);
+  // Appends an additional row number column called 'row_number' at the end of
+  // the 'inputRow'. This column is then used to line up rows when comparing
+  // results against a reference database.
+  RowVectorPtr appendRowNumberColumn(RowVectorPtr& inputRow);
 
   const Options options_;
 
@@ -208,6 +234,8 @@ class ExpressionFuzzerVerifier {
 
   /// The expression fuzzer that is used to fuzz the expression in the test.
   ExpressionFuzzer expressionFuzzer_;
+
+  std::shared_ptr<exec::test::ReferenceQueryRunner> referenceQueryRunner_;
 };
 
 } // namespace facebook::velox::fuzzer

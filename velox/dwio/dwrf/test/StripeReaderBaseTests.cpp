@@ -65,7 +65,6 @@ class StripeLoadKeysTest : public Test {
     auto handler =
         DecryptionHandler::create(FooterWrapper(footer_.get()), &factory);
     pool_ = memoryManager()->addLeafPool();
-
     reader_ = std::make_unique<ReaderBase>(
         *pool_,
         std::make_unique<BufferedInput>(
@@ -87,10 +86,10 @@ class StripeLoadKeysTest : public Test {
         FooterWrapper(footer_.get()).stripes(index));
 
     auto handler = std::make_unique<encryption::DecryptionHandler>(
-        reader_->getDecryptionHandler());
+        reader_->decryptionHandler());
 
     stripeReader_->loadEncryptionKeys(
-        index, *stripeFooter_, *handler, *stripeInfo_);
+        index, *stripeFooter_, *stripeInfo_, *handler);
 
     handler_ = std::move(handler);
 
@@ -127,11 +126,12 @@ TEST_F(StripeLoadKeysTest, ThirdStripeHasKey) {
 }
 
 TEST_F(StripeLoadKeysTest, KeyMismatch) {
-  EXPECT_THAT(
-      [&]() { runTest(3); },
-      Throws<facebook::velox::dwio::common::exception::LoggedException>(
-          Property(
-              &facebook::velox::dwio::common::exception::LoggedException::
-                  failingExpression,
-              HasSubstr("keys.size() == providers_.size()"))));
+  try {
+    static_cast<void>(runTest(3));
+    FAIL() << "Expected an exception";
+  } catch (const facebook::velox::VeloxException& e) {
+    ASSERT_TRUE(
+        e.failingExpression().find("keys.size() == providers_.size()") !=
+        std::string::npos);
+  }
 }

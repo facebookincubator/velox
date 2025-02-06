@@ -19,6 +19,7 @@
 #include "folly/Range.h"
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/common/testutil/TestValue.h"
+#include "velox/flag_definitions/flags.h"
 #include "velox/type/StringView.h"
 
 #include <glog/logging.h>
@@ -27,8 +28,7 @@
 
 DECLARE_bool(velox_enable_memory_usage_track_in_default_memory_pool);
 
-namespace facebook {
-namespace velox {
+namespace facebook::velox {
 
 static_assert(Buffer::is_pod_like_v<int64_t>, "");
 static_assert(Buffer::is_pod_like_v<StringView>, "");
@@ -40,6 +40,7 @@ class BufferTest : public testing::Test {
  protected:
   static void SetUpTestCase() {
     FLAGS_velox_enable_memory_usage_track_in_default_memory_pool = true;
+    translateFlagsToGlobalConfig();
   }
 
   void SetUp() override {
@@ -154,7 +155,6 @@ TEST_F(BufferTest, testReallocate) {
   int32_t numInPlace = 0;
   int32_t numMoved = 0;
   for (int32_t i = 0; i < buffers.size(); ++i) {
-    size_t oldSize = buffers[i]->size();
     auto ptr = buffers[i].get();
     if (i % 10 == 0) {
       AlignedBuffer::reallocate<char>(&buffers[i], i + 10000);
@@ -453,5 +453,42 @@ TEST_F(BufferTest, testAllocateSizeOverflow) {
       AlignedBuffer::reallocate<int64_t>(&buf, 1ull << 62), VeloxException);
 }
 
-} // namespace velox
-} // namespace facebook
+TEST_F(BufferTest, sliceBigintBuffer) {
+  auto bufferPtr = AlignedBuffer::allocate<int64_t>(10, pool_.get());
+  auto sliceBufferPtr = Buffer::slice<int64_t>(bufferPtr, 1, 5, pool_.get());
+  ASSERT_TRUE(sliceBufferPtr->isView());
+  ASSERT_EQ(sliceBufferPtr->size(), 40); // 5 * type size of int64_t.
+  ASSERT_EQ(sliceBufferPtr->as<int64_t>(), bufferPtr->as<int64_t>() + 1);
+
+  VELOX_ASSERT_THROW(
+      Buffer::slice<int64_t>(bufferPtr, 11, 1, pool_.get()),
+      "Offset must be less than or equal to 10.");
+  VELOX_ASSERT_THROW(
+      Buffer::slice<int64_t>(bufferPtr, 5, 6, pool_.get()),
+      "Length must be less than or equal to 5.");
+  VELOX_ASSERT_THROW(
+      Buffer::slice<int64_t>(nullptr, 5, 6, pool_.get()),
+      "Buffer must not be null.");
+}
+
+TEST_F(BufferTest, sliceBooleanBuffer) {
+  auto bufferPtr = AlignedBuffer::allocate<bool>(16, pool_.get());
+  auto data = bufferPtr->asMutableRange<bool>();
+  for (int i = 0; i < 16; ++i) {
+    data[i] = (i % 2 != 0);
+  }
+  auto sliceBufferPtr = Buffer::slice<bool>(bufferPtr, 8, 8, pool_.get());
+  ASSERT_TRUE(sliceBufferPtr->isView());
+  ASSERT_EQ(sliceBufferPtr->as<bool>(), bufferPtr->as<bool>() + 1);
+
+  sliceBufferPtr = Buffer::slice<bool>(bufferPtr, 5, 5, pool_.get());
+  ASSERT_FALSE(sliceBufferPtr->isView());
+  auto sliceData = sliceBufferPtr->asRange<bool>();
+  for (int i = 0; i < 5; ++i) {
+    ASSERT_EQ(sliceData[i], i % 2 == 0);
+  }
+  VELOX_ASSERT_THROW(
+      Buffer::slice<bool>(bufferPtr, 5, 6, nullptr), "Pool must not be null.");
+}
+
+} // namespace facebook::velox

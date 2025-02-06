@@ -72,6 +72,14 @@ class HashProbe : public Operator {
     return inputSpiller_ != nullptr;
   }
 
+  bool testingExceededMaxSpillLevelLimit() const {
+    return exceededMaxSpillLevelLimit_;
+  }
+
+  bool testingHasPendingInput() const {
+    return input_ != nullptr;
+  }
+
  private:
   // Indicates if the join type includes misses from the left side in the
   // output.
@@ -93,11 +101,14 @@ class HashProbe : public Operator {
   // the hash table.
   void asyncWaitForHashTable();
 
-  // Sets up 'filter_' and related members.p
+  // Sets up 'filter_' and related members.
   void initializeFilter(
       const core::TypedExprPtr& filter,
       const RowTypePtr& probeType,
       const RowTypePtr& tableType);
+
+  // Setup 'resultIter_'.
+  void initializeResultIter();
 
   // If 'toSpillOutput', the produced output is spilled to disk for memory
   // arbitration.
@@ -118,7 +129,7 @@ class HashProbe : public Operator {
   // number mappings or input vectors. In this way input vectors do
   // not have to be copied and will be singly referenced by their
   // producer.
-  void clearIdentityProjectedOutput();
+  void clearProjectedOutput();
 
   // Populate output columns with matching build-side rows
   // for the right semi join and non-matching build-side rows
@@ -194,12 +205,12 @@ class HashProbe : public Operator {
   void maybeSetupSpillInputReader(
       const std::optional<SpillPartitionId>& restoredSpillPartitionId);
 
-  // Prepares the table spill by checking the spill level limit, setting spill
-  // partition bits and table spill type.
-  void prepareTableSpill(
+  // Checks the hash table's spill level limit from the restored table. Sets the
+  // 'exceededMaxSpillLevelLimit_' accordingly.
+  void checkMaxSpillLevel(
       const std::optional<SpillPartitionId>& restoredPartitionId);
 
-  bool spillEnabled() const;
+  bool canSpill() const override;
 
   // Indicates if the probe input is read from spilled data or not.
   bool isSpillInput() const;
@@ -211,12 +222,15 @@ class HashProbe : public Operator {
   // Indicates if the operator needs to spill probe inputs. It is true if parts
   // of the build-side rows have been spilled. Hence, the probe operator needs
   // to spill the corresponding probe-side rows as well.
-  bool needSpillInput() const;
+  bool needToSpillInput() const;
 
   // This ensures there is sufficient buffer reserved to produce the next output
   // batch. This might trigger memory arbitration underneath and the probe
   // operator is set to reclaimable at this stage.
   void ensureOutputFits();
+
+  // Setups spilled output reader if 'spillOutputPartitionSet_' is not empty.
+  void maybeSetupSpillOutputReader();
 
   // Reads from the spilled output if the spilling has been triggered during the
   // middle of an input processing. The latter produces all the outputs and
@@ -241,14 +255,6 @@ class HashProbe : public Operator {
   void spillOutput(const std::vector<HashProbe*>& operators);
   // Produces and spills output from this probe operator.
   void spillOutput();
-
-  // Spills the composed 'table_' from the built side.
-  SpillPartitionSet spillTable();
-  // Spills the row container from one of the sub-table from 'table_' to
-  // parallelize the table spilling. The function spills all the rows from the
-  // row container and returns the spiller for the caller to collect the spilled
-  // partitions and stats.
-  std::unique_ptr<Spiller> spillTable(RowContainer* subTableRows);
 
   // Invoked to spill rows in 'input' to disk directly if the corresponding
   // partitions have been spilled at the build side.
@@ -290,7 +296,7 @@ class HashProbe : public Operator {
   // restore. Also note that the spilled partition at build side must not be
   // empty.
   bool emptyBuildSide() const {
-    return table_->numDistinct() == 0 && spillPartitionSet_.empty() &&
+    return table_->numDistinct() == 0 && inputSpillPartitionSet_.empty() &&
         spillInputPartitionIds_.empty();
   }
 
@@ -300,10 +306,29 @@ class HashProbe : public Operator {
   // Wake up the peer hash probe operators when last probe operator finishes.
   void wakeupPeerOperators();
 
-  //  std::vector<Operator*> findPeerOperators();
+  // Invoked to release internal buffers to free up memory resources after
+  // memory reclamation or operator close.
+  void clearBuffers();
+
+  // Returns the estimated row size of the projected output columns. nullopt
+  // will be returned if insufficient column stats is presented in 'table_', or
+  // the row size variation is too large. The row size is too large if ratio of
+  // max row size and avg row size is larger than 'kToleranceRatio' which is set
+  // to 10.
+  std::optional<uint64_t> estimatedRowSize(
+      const std::vector<vector_size_t>& varColumnsStats,
+      uint64_t totalFixedColumnsBytes);
+
+  // Returns the aggregated column stats at 'columnIndex' of 'table_'. Returns
+  // nullopt if the column stats is not available.
+  //
+  // NOTE: The column stats is collected by default for hash join table but it
+  // could be invalidated in case of spilling. But we should never expect usage
+  // of an invalidated table as we always spill the entire table.
+  std::optional<RowColumn::Stats> columnStats(int32_t columnIndex) const;
 
   // TODO: Define batch size as bytes based on RowContainer row sizes.
-  const uint32_t outputBatchSize_;
+  const vector_size_t outputBatchSize_;
 
   const std::shared_ptr<const core::HashJoinNode> joinNode_;
 
@@ -361,8 +386,8 @@ class HashProbe : public Operator {
 
   std::vector<std::unique_ptr<VectorHasher>> hashers_;
 
-  // Table shared between other HashProbes in other Drivers of the same
-  // pipeline.
+  // Current working hash table that is shared between other HashProbes in other
+  // Drivers of the same pipeline.
   std::shared_ptr<BaseHashTable> table_;
 
   // Indicates whether there was no input. Used for right semi join project.
@@ -397,7 +422,7 @@ class HashProbe : public Operator {
   RowTypePtr filterInputType_;
 
   // The input channels that are projected to the output.
-  std::unordered_set<column_index_t> projectedInputColumns_;
+  folly::F14FastMap<column_index_t, column_index_t> projectedInputColumns_;
 
   // Maps input channels to channels in 'filterInputType_'.
   std::vector<IdentityProjection> filterInputProjections_;
@@ -427,11 +452,20 @@ class HashProbe : public Operator {
   // Row number in 'input_' for each output row.
   BufferPtr outputRowMapping_;
 
+  // For left join with filter, we could overwrite the row which we have not
+  // checked if there is a carryover.  Use a temporary buffer in this case.
+  BufferPtr tempOutputRowMapping_;
+
   // maps from column index in 'table_' to channel in 'output_'.
   std::vector<IdentityProjection> tableOutputProjections_;
 
   // Rows of table found by join probe, later filtered by 'filter_'.
-  std::vector<char*> outputTableRows_;
+  BufferPtr outputTableRows_;
+  vector_size_t outputTableRowsCapacity_;
+
+  // For left join with filter, we could overwrite the row which we have not
+  // checked if there is a carryover.  Use a temporary buffer in this case.
+  BufferPtr tempOutputTableRows_;
 
   // Indicates probe-side rows which should produce a NULL in left semi project
   // with filter.
@@ -444,89 +478,40 @@ class HashProbe : public Operator {
     // Called for each row that the filter was evaluated on. Expects that probe
     // side rows with multiple matches on the build side are next to each other.
     template <typename TOnMiss>
-    void advance(vector_size_t row, bool passed, TOnMiss onMiss) {
-      if (currentRow != row) {
-        // Check if 'currentRow' is the same input row as the last missed row
-        // from a previous output batch.  If so finishIteration will call
-        // onMiss.
-        if (currentRow != -1 && !currentRowPassed &&
-            (!lastMissedRow || currentRow != lastMissedRow)) {
-          onMiss(currentRow);
+    void advance(vector_size_t row, bool passed, TOnMiss&& onMiss) {
+      if (currentRow_ != row) {
+        if (hasLastMissedRow()) {
+          onMiss(currentRow_);
         }
-        currentRow = row;
-        currentRowPassed = false;
+        currentRow_ = row;
+        currentRowPassed_ = false;
       }
-
       if (passed) {
-        // lastMissedRow can only be a row that has never passed the filter.  If
-        // it passes there's no need to continue carrying it forward.
-        if (lastMissedRow && currentRow == lastMissedRow) {
-          lastMissedRow.reset();
-        }
-
-        currentRowPassed = true;
+        currentRowPassed_ = true;
       }
     }
 
-    // Invoked at the end of one output batch processing. 'end' is set to true
-    // at the end of processing an input batch. 'freeOutputRows' is the number
-    // of rows that can still be written to the output batch.
+    // Invoked at the end of all output batches.
     template <typename TOnMiss>
-    void
-    finishIteration(TOnMiss onMiss, bool endOfData, size_t freeOutputRows) {
-      if (endOfData) {
-        if (!currentRowPassed && currentRow != -1) {
-          // If we're at the end of the input batch and the current row hasn't
-          // passed the filter, it never will, process it as a miss.
-          // We're guaranteed to have space, at least the last row was never
-          // written out since it was a miss.
-          onMiss(currentRow);
-          freeOutputRows--;
-        }
-
-        // We no longer need to carry the current row since we already called
-        // onMiss on it.
-        if (lastMissedRow && currentRow == lastMissedRow) {
-          lastMissedRow.reset();
-        }
-
-        currentRow = -1;
-        currentRowPassed = false;
+    void finish(TOnMiss&& onMiss) {
+      if (hasLastMissedRow()) {
+        onMiss(currentRow_);
       }
-
-      // If there's space left in the output batch, write out the last missed
-      // row.
-      if (lastMissedRow && currentRow != lastMissedRow && freeOutputRows > 0) {
-        onMiss(*lastMissedRow);
-        lastMissedRow.reset();
-      }
-
-      // If the current row hasn't passed the filter, we need to carry it
-      // forward in case it never passes the filter.
-      if (!currentRowPassed && currentRow != -1) {
-        lastMissedRow = currentRow;
-      }
+      currentRow_ = -1;
     }
 
     // Returns if we're carrying forward a missed input row. Notably, if this is
     // true, we're not yet done processing the input batch.
-    bool hasLastMissedRow() {
-      return lastMissedRow.has_value();
+    bool hasLastMissedRow() const {
+      return currentRow_ != -1 && !currentRowPassed_;
     }
 
    private:
     // Row number being processed.
-    vector_size_t currentRow{-1};
+    vector_size_t currentRow_{-1};
 
-    // True if currentRow has a match.
-    bool currentRowPassed{false};
-
-    // If set, it points to the last missed (input) row carried over from
-    // previous output batch processing. The last missed row is either written
-    // as a passed row if the same input row has a hit in the next output batch
-    // processed or written to the first output batch which has space at
-    // the end if it never has a hit.
-    std::optional<vector_size_t> lastMissedRow;
+    // True if currentRow_ has a match.
+    bool currentRowPassed_{false};
   };
 
   // For left semi join filter with extra filter, de-duplicates probe side rows
@@ -611,21 +596,21 @@ class HashProbe : public Operator {
 
   BaseHashTable::RowsIterator lastProbeIterator_;
 
-  /// For left and anti join with filter, tracks the probe side rows which had
-  /// matches on the build side but didn't pass the filter.
+  // For left and anti join with filter, tracks the probe side rows which had
+  // matches on the build side but didn't pass the filter.
   NoMatchDetector noMatchDetector_;
 
-  /// For left semi join filter with extra filter, de-duplicates probe side rows
-  /// with multiple matches.
+  // For left semi join filter with extra filter, de-duplicates probe side rows
+  // with multiple matches.
   LeftSemiFilterJoinTracker leftSemiFilterJoinTracker_;
 
-  /// For left semi join project with filter, de-duplicates probe side rows with
-  /// multiple matches.
+  // For left semi join project with filter, de-duplicates probe side rows with
+  // multiple matches.
   LeftSemiProjectJoinTracker leftSemiProjectJoinTracker_;
 
   // Keeps track of returned results between successive batches of
   // output for a batch of input.
-  BaseHashTable::JoinResultIterator results_;
+  std::unique_ptr<BaseHashTable::JoinResultIterator> resultIter_;
 
   RowVectorPtr output_;
 
@@ -648,12 +633,14 @@ class HashProbe : public Operator {
   // Indicates if this hash probe has exceeded max spill limit which is not
   // allowed to spill. This is reset when hash probe operator starts to probe
   // the next previously spilled hash table partition.
-  bool exceededMaxSpillLevelLimit_{false};
+  tsan_atomic<bool> exceededMaxSpillLevelLimit_{false};
 
   // The partition bits used to spill the hash table.
   HashBitRange tableSpillHashBits_;
-  // The row type used to spill hash table on disk.
-  RowTypePtr tableSpillType_;
+
+  // The spilled output partition set which is cleared after setup
+  // 'spillOutputReader_'.
+  SpillPartitionSet spillOutputPartitionSet_;
 
   // The reader used to read the spilled output produced by pending input during
   // the spill processing.
@@ -662,7 +649,7 @@ class HashProbe : public Operator {
   // 'inputSpiller_' is created if some part of build-side rows have been
   // spilled. It is used to spill probe-side rows if the corresponding
   // build-side rows have been spilled.
-  std::unique_ptr<Spiller> inputSpiller_;
+  std::unique_ptr<NoRowContainerSpiller> inputSpiller_;
 
   // If not empty, the probe inputs with partition id set in
   // 'spillInputPartitionIds_' needs to spill. It is set along with 'spiller_'
@@ -692,7 +679,7 @@ class HashProbe : public Operator {
   bool noMoreSpillInput_{false};
 
   // The spilled probe partitions remaining to restore.
-  SpillPartitionSet spillPartitionSet_;
+  SpillPartitionSet inputSpillPartitionSet_;
 };
 
 inline std::ostream& operator<<(std::ostream& os, ProbeOperatorState state) {

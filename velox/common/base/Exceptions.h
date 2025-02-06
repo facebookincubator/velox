@@ -20,9 +20,8 @@
 #include <sstream>
 
 #include <fmt/format.h>
-#include <folly/Preprocessor.h>
-
 #include <fmt/ostream.h>
+#include <folly/Preprocessor.h>
 
 #include "velox/common/base/FmtStdFormatters.h"
 #include "velox/common/base/VeloxException.h"
@@ -156,7 +155,7 @@ std::string errorMessage(fmt::string_view fmt, const Args&... args) {
 
 #define _VELOX_THROW_IMPL(                                               \
     exception, exprStr, errorSource, errorCode, isRetriable, ...)        \
-  {                                                                      \
+  do {                                                                   \
     /* GCC 9.2.1 doesn't accept this code with constexpr. */             \
     static const ::facebook::velox::detail::VeloxCheckFailArgs           \
         veloxCheckFailArgs = {                                           \
@@ -172,19 +171,26 @@ std::string errorMessage(fmt::string_view fmt, const Args&... args) {
         exception,                                                       \
         typename ::facebook::velox::detail::VeloxCheckFailStringType<    \
             decltype(message)>::type>(veloxCheckFailArgs, message);      \
-  }
+  } while (0)
 
-#define _VELOX_CHECK_AND_THROW_IMPL(                                           \
-    expr, exprStr, exception, errorSource, errorCode, isRetriable, ...)        \
-  if (UNLIKELY(!(expr))) {                                                     \
-    _VELOX_THROW_IMPL(                                                         \
-        exception, exprStr, errorSource, errorCode, isRetriable, __VA_ARGS__); \
-  }
+#define _VELOX_CHECK_AND_THROW_IMPL(                                    \
+    expr, exprStr, exception, errorSource, errorCode, isRetriable, ...) \
+  do {                                                                  \
+    if (UNLIKELY(!(expr))) {                                            \
+      _VELOX_THROW_IMPL(                                                \
+          exception,                                                    \
+          exprStr,                                                      \
+          errorSource,                                                  \
+          errorCode,                                                    \
+          isRetriable,                                                  \
+          __VA_ARGS__);                                                 \
+    }                                                                   \
+  } while (0)
 
 #define _VELOX_THROW(exception, ...) \
   _VELOX_THROW_IMPL(exception, "", ##__VA_ARGS__)
 
-DECLARE_CHECK_FAIL_TEMPLATES(::facebook::velox::VeloxRuntimeError);
+DECLARE_CHECK_FAIL_TEMPLATES(::facebook::velox::VeloxRuntimeError)
 
 #define _VELOX_CHECK_IMPL(expr, exprStr, ...)                       \
   _VELOX_CHECK_AND_THROW_IMPL(                                      \
@@ -195,6 +201,22 @@ DECLARE_CHECK_FAIL_TEMPLATES(::facebook::velox::VeloxRuntimeError);
       ::facebook::velox::error_code::kInvalidState.c_str(),         \
       /* isRetriable */ false,                                      \
       ##__VA_ARGS__)
+
+/// Throws VeloxRuntimeError when functions receive input values out of the
+/// supported range. This should only be used when we want to force TRY() to not
+/// suppress the error.
+#define VELOX_CHECK_UNSUPPORTED_INPUT_UNCATCHABLE(expr, ...)                   \
+  do {                                                                         \
+    if (UNLIKELY(!(expr))) {                                                   \
+      _VELOX_THROW_IMPL(                                                       \
+          ::facebook::velox::VeloxRuntimeError,                                \
+          #expr,                                                               \
+          ::facebook::velox::error_source::kErrorSourceRuntime.c_str(),        \
+          ::facebook::velox::error_code::kUnsupportedInputUncatchable.c_str(), \
+          /* isRetriable */ false,                                             \
+          __VA_ARGS__);                                                        \
+    }                                                                          \
+  } while (0)
 
 // If the caller passes a custom message (4 *or more* arguments), we
 // have to construct a format string from ours ("({} vs. {})") plus
@@ -213,17 +235,19 @@ DECLARE_CHECK_FAIL_TEMPLATES(::facebook::velox::VeloxRuntimeError);
       ##__VA_ARGS__)
 
 #define _VELOX_CHECK_OP_HELPER(implmacro, expr1, expr2, op, ...) \
-  if constexpr (FOLLY_PP_DETAIL_NARGS(__VA_ARGS__) > 0) {        \
-    _VELOX_CHECK_OP_WITH_USER_FMT_HELPER(                        \
-        implmacro, expr1, expr2, op, __VA_ARGS__);               \
-  } else {                                                       \
-    implmacro(                                                   \
-        (expr1)op(expr2),                                        \
-        #expr1 " " #op " " #expr2,                               \
-        "({} vs. {})",                                           \
-        expr1,                                                   \
-        expr2);                                                  \
-  }
+  do {                                                           \
+    if constexpr (FOLLY_PP_DETAIL_NARGS(__VA_ARGS__) > 0) {      \
+      _VELOX_CHECK_OP_WITH_USER_FMT_HELPER(                      \
+          implmacro, expr1, expr2, op, __VA_ARGS__);             \
+    } else {                                                     \
+      implmacro(                                                 \
+          (expr1)op(expr2),                                      \
+          #expr1 " " #op " " #expr2,                             \
+          "({} vs. {})",                                         \
+          expr1,                                                 \
+          expr2);                                                \
+    }                                                            \
+  } while (0)
 
 #define _VELOX_CHECK_OP(expr1, expr2, op, ...) \
   _VELOX_CHECK_OP_HELPER(_VELOX_CHECK_IMPL, expr1, expr2, op, ##__VA_ARGS__)
@@ -310,6 +334,7 @@ DECLARE_CHECK_FAIL_TEMPLATES(::facebook::velox::VeloxRuntimeError);
 #define VELOX_DCHECK_NE(e1, e2, ...) VELOX_CHECK_NE(e1, e2, ##__VA_ARGS__)
 #define VELOX_DCHECK_NULL(e, ...) VELOX_CHECK_NULL(e, ##__VA_ARGS__)
 #define VELOX_DCHECK_NOT_NULL(e, ...) VELOX_CHECK_NOT_NULL(e, ##__VA_ARGS__)
+#define VELOX_DEBUG_ONLY
 #else
 #define VELOX_DCHECK(expr, ...) VELOX_CHECK(true)
 #define VELOX_DCHECK_GT(e1, e2, ...) VELOX_CHECK(true)
@@ -320,6 +345,7 @@ DECLARE_CHECK_FAIL_TEMPLATES(::facebook::velox::VeloxRuntimeError);
 #define VELOX_DCHECK_NE(e1, e2, ...) VELOX_CHECK(true)
 #define VELOX_DCHECK_NULL(e, ...) VELOX_CHECK(true)
 #define VELOX_DCHECK_NOT_NULL(e, ...) VELOX_CHECK(true)
+#define VELOX_DEBUG_ONLY [[maybe_unused]]
 #endif
 
 #define VELOX_FAIL(...)                                             \
@@ -330,7 +356,18 @@ DECLARE_CHECK_FAIL_TEMPLATES(::facebook::velox::VeloxRuntimeError);
       /* isRetriable */ false,                                      \
       ##__VA_ARGS__)
 
-DECLARE_CHECK_FAIL_TEMPLATES(::facebook::velox::VeloxUserError);
+/// Throws VeloxRuntimeError when functions receive input values out of the
+/// supported range. This should only be used when we want to force TRY() to not
+/// suppress the error.
+#define VELOX_FAIL_UNSUPPORTED_INPUT_UNCATCHABLE(...)                      \
+  _VELOX_THROW(                                                            \
+      ::facebook::velox::VeloxRuntimeError,                                \
+      ::facebook::velox::error_source::kErrorSourceRuntime.c_str(),        \
+      ::facebook::velox::error_code::kUnsupportedInputUncatchable.c_str(), \
+      /* isRetriable */ false,                                             \
+      ##__VA_ARGS__)
+
+DECLARE_CHECK_FAIL_TEMPLATES(::facebook::velox::VeloxUserError)
 
 // For all below macros, an additional message can be passed using a
 // format string and arguments, as with `fmt::format`.

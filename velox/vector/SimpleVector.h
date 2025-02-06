@@ -34,8 +34,7 @@
 #include "velox/vector/BaseVector.h"
 #include "velox/vector/TypeAliases.h"
 
-namespace facebook {
-namespace velox {
+namespace facebook::velox {
 
 namespace exec {
 class EvalCtx;
@@ -137,6 +136,10 @@ class SimpleVector : public BaseVector {
     return stats_;
   }
 
+  void testingSetStats(SimpleVectorStats<T>&& stats) {
+    stats_ = std::move(stats);
+  }
+
   // Concrete Vector types need to implement this themselves.
   // This method does not do bounds checking. When the value is null the return
   // value is technically undefined (currently implemented as default of T)
@@ -147,6 +150,10 @@ class SimpleVector : public BaseVector {
       vector_size_t index,
       vector_size_t otherIndex,
       CompareFlags flags) const override {
+    // By design `this` is not a lazy vector (or it would not be a
+    // SimpleVector), but it may be a dictionary wrapped around a lazy, so we
+    // need to ensure it is loaded.
+    loadedVector();
     other = other->loadedVector();
     DCHECK(dynamic_cast<const SimpleVector<T>*>(other) != nullptr)
         << "Attempting to compare vectors not of the same type";
@@ -160,7 +167,10 @@ class SimpleVector : public BaseVector {
     auto simpleVector = reinterpret_cast<const SimpleVector<T>*>(other);
     auto thisValue = valueAt(index);
     auto otherValue = simpleVector->valueAt(otherIndex);
-    auto result = comparePrimitiveAsc(thisValue, otherValue);
+    auto result = this->typeUsesCustomComparison_
+        ? comparePrimitiveAscWithCustomComparison(
+              this->type_.get(), thisValue, otherValue)
+        : comparePrimitiveAsc(thisValue, otherValue);
     return {flags.ascending ? result : result * -1};
   }
 
@@ -168,17 +178,37 @@ class SimpleVector : public BaseVector {
     BaseVector::validate(options);
   }
 
+  template <TypeKind Kind>
+  uint64_t hashValueAt(const T& value) const {
+    if constexpr (!std::is_same<T, typename TypeTraits<Kind>::NativeType>()) {
+      VELOX_UNSUPPORTED(
+          "Cannot apply custom comparisons when the value type of the Vector {} does not match the NativeType associated with the Type of the Vector {}",
+          typeid(typename TypeTraits<Kind>::NativeType).name(),
+          typeid(T).name());
+    } else {
+      return static_cast<const CanProvideCustomComparisonType<Kind>*>(
+                 type_.get())
+          ->hash(value);
+    }
+  }
+
   /**
    * @return the hash of the value at the given index in this vector
    */
   uint64_t hashValueAt(vector_size_t index) const override {
+    if (isNullAt(index)) {
+      return BaseVector::kNullHash;
+    }
+
+    if (type_->providesCustomComparison()) {
+      return VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(
+          hashValueAt, type_->kind(), valueAt(index));
+    }
+
     if constexpr (std::is_floating_point_v<T>) {
-      return isNullAt(index)
-          ? BaseVector::kNullHash
-          : util::floating_point::NaNAwareHash<T>{}(valueAt(index));
+      return util::floating_point::NaNAwareHash<T>{}(valueAt(index));
     } else {
-      return isNullAt(index) ? BaseVector::kNullHash
-                             : folly::hasher<T>{}(valueAt(index));
+      return folly::hasher<T>{}(valueAt(index));
     }
   }
 
@@ -216,6 +246,12 @@ class SimpleVector : public BaseVector {
       } else {
         return velox::to<std::string>(value);
       }
+    } else if constexpr (std::is_same_v<T, int32_t>) {
+      if (type()->isDate()) {
+        return DATE()->toString(value);
+      } else {
+        return velox::to<std::string>(value);
+      }
     } else {
       return velox::to<std::string>(value);
     }
@@ -246,7 +282,7 @@ class SimpleVector : public BaseVector {
   isAscii(
       const SelectivityVector& rows,
       const vector_size_t* rowMappings = nullptr) const {
-    VELOX_CHECK(rows.hasSelections())
+    VELOX_CHECK(rows.hasSelections());
     auto rlockedAsciiComputedRows{asciiInfo.readLockedAsciiComputedRows()};
     if (rlockedAsciiComputedRows->hasSelections()) {
       if (rowMappings) {
@@ -269,7 +305,7 @@ class SimpleVector : public BaseVector {
   template <typename U = T>
   typename std::enable_if_t<std::is_same_v<U, StringView>, std::optional<bool>>
   isAscii(vector_size_t index) const {
-    VELOX_CHECK_GE(index, 0)
+    VELOX_CHECK_GE(index, 0);
     auto rlockedAsciiComputedRows{asciiInfo.readLockedAsciiComputedRows()};
     if (index < rlockedAsciiComputedRows->size() &&
         rlockedAsciiComputedRows->isValid(index)) {
@@ -352,6 +388,34 @@ class SimpleVector : public BaseVector {
   typename std::enable_if_t<std::is_same_v<U, StringView>, const AsciiInfo&>
   testGetAsciiInfo() const {
     return asciiInfo;
+  }
+
+  template <TypeKind Kind>
+  FOLLY_ALWAYS_INLINE static int comparePrimitiveAscWithCustomComparison(
+      const Type* type,
+      const T& left,
+      const T& right) {
+    if constexpr (!std::is_same<T, typename TypeTraits<Kind>::NativeType>()) {
+      VELOX_UNSUPPORTED(
+          "Cannot apply custom comparisons when the value type of the Vector {} does not match the NativeType associated with the Type of the Vector {}",
+          typeid(typename TypeTraits<Kind>::NativeType).name(),
+          typeid(T).name());
+    } else {
+      return static_cast<const CanProvideCustomComparisonType<Kind>*>(type)
+          ->compare(left, right);
+    }
+  }
+
+  static int comparePrimitiveAscWithCustomComparison(
+      const Type* type,
+      const T& left,
+      const T& right) {
+    return VELOX_DYNAMIC_TYPE_DISPATCH(
+        comparePrimitiveAscWithCustomComparison,
+        type->kind(),
+        type,
+        left,
+        right);
   }
 
   FOLLY_ALWAYS_INLINE static int comparePrimitiveAsc(
@@ -487,5 +551,4 @@ inline uint64_t SimpleVector<ComplexType>::hashValueAt(
 template <typename T>
 using SimpleVectorPtr = std::shared_ptr<SimpleVector<T>>;
 
-} // namespace velox
-} // namespace facebook
+} // namespace facebook::velox

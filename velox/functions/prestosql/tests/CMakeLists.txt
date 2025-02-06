@@ -64,6 +64,8 @@ add_executable(
   HyperLogLogCastTest.cpp
   HyperLogLogFunctionsTest.cpp
   InPredicateTest.cpp
+  IPAddressCastTest.cpp
+  IPPrefixCastTest.cpp
   JsonCastTest.cpp
   JsonExtractScalarTest.cpp
   JsonFunctionsTest.cpp
@@ -99,7 +101,6 @@ add_executable(
   TrimFunctionsTest.cpp
   TypeOfTest.cpp
   URLFunctionsTest.cpp
-  Utf8Test.cpp
   UuidFunctionsTest.cpp
   WidthBucketArrayTest.cpp
   WordStemTest.cpp
@@ -120,8 +121,8 @@ target_link_libraries(
   velox_vector_fuzzer
   velox_expression_fuzzer_test_utility
   velox_expression_fuzzer
-  gtest
-  gtest_main
+  GTest::gtest
+  GTest::gtest_main
   gflags::gflags
-  gmock
-  gmock_main)
+  GTest::gmock
+  GTest::gmock_main)

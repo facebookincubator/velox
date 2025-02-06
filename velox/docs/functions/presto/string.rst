@@ -93,6 +93,12 @@ String Functions
         SELECT ltrim('test', 't'); -- est
         SELECT ltrim('tetris', 'te'); -- ris
 
+.. function:: replaceFirst(string, search, replace) -> varchar
+
+    Removes the first instances of ``search`` with ``replace`` in ``string``.
+
+    If ``search`` is an empty string, inserts ``replace`` in front of ``string``.
+
 .. function:: replace(string, search) -> varchar
 
     Removes all instances of ``search`` from ``string``.
@@ -213,6 +219,10 @@ String Functions
     It takes into account overlapping strings when counting occurrences. ::
 
         SELECT strrpos('aaa', 'aa', 2); -- 1
+
+.. function:: trail(string, N) -> varchar
+
+    Returns the last ``N`` characters of the input ``string`` up to at most the length of ``string``.
 
 .. function:: substr(string, start) -> varchar
 

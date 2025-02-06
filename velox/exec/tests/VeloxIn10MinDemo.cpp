@@ -47,17 +47,25 @@ class VeloxIn10MinDemo : public VectorTestBase {
     // Register type resolver with DuckDB SQL parser.
     parse::registerTypeResolver();
 
-    // Register TPC-H connector.
+    // Register the TPC-H Connector Factory.
+    connector::registerConnectorFactory(
+        std::make_shared<connector::tpch::TpchConnectorFactory>());
+
+    // Create and register a TPC-H connector.
     auto tpchConnector =
         connector::getConnectorFactory(
             connector::tpch::TpchConnectorFactory::kTpchConnectorName)
             ->newConnector(
-                kTpchConnectorId, std::make_shared<core::MemConfig>());
+                kTpchConnectorId,
+                std::make_shared<config::ConfigBase>(
+                    std::unordered_map<std::string, std::string>()));
     connector::registerConnector(tpchConnector);
   }
 
   ~VeloxIn10MinDemo() {
     connector::unregisterConnector(kTpchConnectorId);
+    connector::unregisterConnectorFactory(
+        connector::tpch::TpchConnectorFactory::kTpchConnectorName);
   }
 
   /// Parse SQL expression into a typed expression tree using DuckDB SQL parser.
@@ -92,7 +100,7 @@ class VeloxIn10MinDemo : public VectorTestBase {
   /// Make TPC-H split to add to TableScan node.
   exec::Split makeTpchSplit() const {
     return exec::Split(std::make_shared<connector::tpch::TpchConnectorSplit>(
-        kTpchConnectorId));
+        kTpchConnectorId, /*cacheable=*/true, 1, 0));
   }
 
   /// Run the demo.

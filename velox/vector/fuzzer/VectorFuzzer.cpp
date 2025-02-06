@@ -22,19 +22,22 @@
 #include <locale>
 
 #include "velox/common/base/Exceptions.h"
+#include "velox/common/fuzzer/Utils.h"
+#include "velox/functions/prestosql/types/IPPrefixType.h"
 #include "velox/type/Timestamp.h"
 #include "velox/vector/BaseVector.h"
 #include "velox/vector/FlatVector.h"
 #include "velox/vector/NullsBuilder.h"
 #include "velox/vector/VectorTypeUtils.h"
+#include "velox/vector/fuzzer/ConstrainedVectorGenerator.h"
+#include "velox/vector/fuzzer/Utils.h"
 
 namespace facebook::velox {
 
 namespace {
 
-// DWRF requires nano to be in a certain range. Hardcode the value here to avoid
-// the dependency on DWRF.
-constexpr int64_t MAX_NANOS = 1'000'000'000;
+using fuzzer::rand;
+using fuzzer::randDate;
 
 // Structure to help temporary changes to Options. This objects saves the
 // current state of the Options object, and restores it when it's destructed.
@@ -62,82 +65,13 @@ struct ScopedOptions {
   VectorFuzzer::Options savedOpts;
 };
 
-// Generate random values for the different supported types.
-template <typename T>
-T rand(FuzzerGenerator&) {
-  VELOX_NYI();
-}
-
-template <>
-int8_t rand(FuzzerGenerator& rng) {
-  return boost::random::uniform_int_distribution<int8_t>()(rng);
-}
-
-template <>
-int16_t rand(FuzzerGenerator& rng) {
-  return boost::random::uniform_int_distribution<int16_t>()(rng);
-}
-
-template <>
-int32_t rand(FuzzerGenerator& rng) {
-  return boost::random::uniform_int_distribution<int32_t>()(rng);
-}
-
-template <>
-int64_t rand(FuzzerGenerator& rng) {
-  return boost::random::uniform_int_distribution<int64_t>()(rng);
-}
-
-template <>
-double rand(FuzzerGenerator& rng) {
-  return boost::random::uniform_01<double>()(rng);
-}
-
-template <>
-float rand(FuzzerGenerator& rng) {
-  return boost::random::uniform_01<float>()(rng);
-}
-
-template <>
-bool rand(FuzzerGenerator& rng) {
-  return boost::random::uniform_int_distribution<uint32_t>(0, 1)(rng);
-}
-
-template <>
-uint32_t rand(FuzzerGenerator& rng) {
-  return boost::random::uniform_int_distribution<uint32_t>()(rng);
-}
-
-template <>
-uint64_t rand(FuzzerGenerator& rng) {
-  return boost::random::uniform_int_distribution<uint64_t>()(rng);
-}
-
-template <>
-int128_t rand(FuzzerGenerator& rng) {
-  return HugeInt::build(rand<int64_t>(rng), rand<uint64_t>(rng));
-}
-
-Timestamp randTimestamp(FuzzerGenerator& rng, VectorFuzzer::Options opts) {
-  switch (opts.timestampPrecision) {
-    case VectorFuzzer::Options::TimestampPrecision::kNanoSeconds:
-      return Timestamp(rand<int32_t>(rng), (rand<int64_t>(rng) % MAX_NANOS));
-    case VectorFuzzer::Options::TimestampPrecision::kMicroSeconds:
-      return Timestamp::fromMicros(rand<int64_t>(rng));
-    case VectorFuzzer::Options::TimestampPrecision::kMilliSeconds:
-      return Timestamp::fromMillis(rand<int64_t>(rng));
-    case VectorFuzzer::Options::TimestampPrecision::kSeconds:
-      return Timestamp(rand<int32_t>(rng), 0);
-  }
-  return {}; // no-op.
-}
-
 size_t getElementsVectorLength(
     const VectorFuzzer::Options& opts,
     vector_size_t size) {
-  if (opts.containerVariableLength == false &&
-      size * opts.containerLength > opts.complexElementsMaxSize) {
-    VELOX_USER_FAIL(
+  if (!opts.containerVariableLength) {
+    VELOX_USER_CHECK_LE(
+        size * opts.containerLength,
+        opts.complexElementsMaxSize,
         "Requested fixed opts.containerVariableLength can't be satisfied: "
         "increase opts.complexElementsMaxSize, reduce opts.containerLength"
         " or make opts.containerVariableLength=true");
@@ -155,54 +89,6 @@ int128_t randLongDecimal(const TypePtr& type, FuzzerGenerator& rng) {
   return rand<int128_t>(rng) % DecimalUtil::kPowersOfTen[precision];
 }
 
-/// Unicode character ranges. Ensure the vector indexes match the UTF8CharList
-/// enum values.
-///
-/// Source: https://jrgraphix.net/research/unicode_blocks.php
-const std::vector<std::vector<std::pair<char16_t, char16_t>>> kUTFChatSets{
-    // UTF8CharList::ASCII
-    {
-        {33, 127}, // All ASCII printable chars.
-    },
-    // UTF8CharList::UNICODE_CASE_SENSITIVE
-    {
-        {u'\u0020', u'\u007F'}, // Basic Latin.
-        {u'\u0400', u'\u04FF'}, // Cyrillic.
-    },
-    // UTF8CharList::EXTENDED_UNICODE
-    {
-        {u'\u03F0', u'\u03FF'}, // Greek.
-        {u'\u0100', u'\u017F'}, // Latin Extended A.
-        {u'\u0600', u'\u06FF'}, // Arabic.
-        {u'\u0900', u'\u097F'}, // Devanagari.
-        {u'\u0600', u'\u06FF'}, // Hebrew.
-        {u'\u3040', u'\u309F'}, // Hiragana.
-        {u'\u2000', u'\u206F'}, // Punctuation.
-        {u'\u2070', u'\u209F'}, // Sub/Super Script.
-        {u'\u20A0', u'\u20CF'}, // Currency.
-    },
-    // UTF8CharList::MATHEMATICAL_SYMBOLS
-    {
-        {u'\u2200', u'\u22FF'}, // Math Operators.
-        {u'\u2150', u'\u218F'}, // Number Forms.
-        {u'\u25A0', u'\u25FF'}, // Geometric Shapes.
-        {u'\u27C0', u'\u27EF'}, // Math Symbols.
-        {u'\u2A00', u'\u2AFF'}, // Supplemental.
-    },
-};
-
-FOLLY_ALWAYS_INLINE char16_t getRandomChar(
-    FuzzerGenerator& rng,
-    const std::vector<std::pair<char16_t, char16_t>>& charSet) {
-  const auto& chars = charSet.size() == 1
-      ? charSet.front()
-      : charSet[rand<uint32_t>(rng) % charSet.size()];
-  auto size = chars.second - chars.first;
-  auto inc = (rand<uint32_t>(rng) % size);
-  char16_t res = chars.first + inc;
-  return res;
-}
-
 /// Generates a random string (string size and encoding are passed through
 /// Options). Returns a StringView which uses `buf` as the underlying buffer.
 StringView randString(
@@ -210,24 +96,11 @@ StringView randString(
     const VectorFuzzer::Options& opts,
     std::string& buf,
     std::wstring_convert<std::codecvt_utf8<char16_t>, char16_t>& converter) {
-  buf.clear();
-  std::u16string wbuf;
   const size_t stringLength = opts.stringVariableLength
       ? rand<uint32_t>(rng) % opts.stringLength
       : opts.stringLength;
-  wbuf.resize(stringLength);
 
-  for (size_t i = 0; i < stringLength; ++i) {
-    // First choose a random encoding from the list of input acceptable
-    // encodings.
-    const auto& encoding = (opts.charEncodings.size() == 1)
-        ? opts.charEncodings.front()
-        : opts.charEncodings[rand<uint32_t>(rng) % opts.charEncodings.size()];
-
-    wbuf[i] = getRandomChar(rng, kUTFChatSets[encoding]);
-  }
-
-  buf.append(converter.to_bytes(wbuf));
+  randString(rng, stringLength, opts.charEncodings, buf, converter);
   return StringView(buf);
 }
 
@@ -237,7 +110,13 @@ VectorPtr fuzzConstantPrimitiveImpl(
     const TypePtr& type,
     vector_size_t size,
     FuzzerGenerator& rng,
-    const VectorFuzzer::Options& opts) {
+    const VectorFuzzer::Options& opts,
+    const AbstractInputGeneratorPtr& customGenerator) {
+  if (customGenerator) {
+    return fuzzer::ConstrainedVectorGenerator::generateConstant(
+        customGenerator, size, pool);
+  }
+
   using TCpp = typename TypeTraits<kind>::NativeType;
   if constexpr (std::is_same_v<TCpp, StringView>) {
     std::wstring_convert<std::codecvt_utf8<char16_t>, char16_t> converter;
@@ -249,7 +128,10 @@ VectorPtr fuzzConstantPrimitiveImpl(
   }
   if constexpr (std::is_same_v<TCpp, Timestamp>) {
     return std::make_shared<ConstantVector<TCpp>>(
-        pool, size, false, type, randTimestamp(rng, opts));
+        pool, size, false, type, randTimestamp(rng, opts.timestampPrecision));
+  } else if (type->isDate()) {
+    return std::make_shared<ConstantVector<int32_t>>(
+        pool, size, false, type, randDate(rng));
   } else if (type->isShortDecimal()) {
     return std::make_shared<ConstantVector<int64_t>>(
         pool, size, false, type, randShortDecimal(type, rng));
@@ -258,7 +140,7 @@ VectorPtr fuzzConstantPrimitiveImpl(
         pool, size, false, type, randLongDecimal(type, rng));
   } else {
     return std::make_shared<ConstantVector<TCpp>>(
-        pool, size, false, type, rand<TCpp>(rng));
+        pool, size, false, type, rand<TCpp>(rng, opts.dataSpec));
   }
 }
 
@@ -278,23 +160,29 @@ void fuzzFlatPrimitiveImpl(
     if constexpr (std::is_same_v<TCpp, StringView>) {
       flatVector->set(i, randString(rng, opts, strBuf, converter));
     } else if constexpr (std::is_same_v<TCpp, Timestamp>) {
-      flatVector->set(i, randTimestamp(rng, opts));
+      flatVector->set(i, randTimestamp(rng, opts.timestampPrecision));
     } else if constexpr (std::is_same_v<TCpp, int64_t>) {
       if (vector->type()->isShortDecimal()) {
         flatVector->set(i, randShortDecimal(vector->type(), rng));
       } else {
-        flatVector->set(i, rand<TCpp>(rng));
+        flatVector->set(i, rand<TCpp>(rng, opts.dataSpec));
       }
     } else if constexpr (std::is_same_v<TCpp, int128_t>) {
       if (vector->type()->isLongDecimal()) {
         flatVector->set(i, randLongDecimal(vector->type(), rng));
       } else if (vector->type()->isHugeint()) {
-        flatVector->set(i, rand<int128_t>(rng));
+        flatVector->set(i, rand<int128_t>(rng, opts.dataSpec));
       } else {
         VELOX_NYI();
       }
+    } else if constexpr (std::is_same_v<TCpp, int32_t>) {
+      if (vector->type()->isDate()) {
+        flatVector->set(i, randDate(rng));
+      } else {
+        flatVector->set(i, rand<TCpp>(rng));
+      }
     } else {
-      flatVector->set(i, rand<TCpp>(rng));
+      flatVector->set(i, rand<TCpp>(rng, opts.dataSpec));
     }
   }
 }
@@ -337,34 +225,54 @@ bool hasNestedDictionaryLayers(const VectorPtr& baseVector) {
 
 } // namespace
 
-VectorPtr VectorFuzzer::fuzzNotNull(const TypePtr& type) {
-  return fuzzNotNull(type, opts_.vectorSize);
+VectorPtr VectorFuzzer::fuzzNotNull(
+    const TypePtr& type,
+    const AbstractInputGeneratorPtr& customGenerator) {
+  return fuzzNotNull(type, opts_.vectorSize, customGenerator);
 }
 
-VectorPtr VectorFuzzer::fuzzNotNull(const TypePtr& type, vector_size_t size) {
+VectorPtr VectorFuzzer::fuzzNotNull(
+    const TypePtr& type,
+    vector_size_t size,
+    const AbstractInputGeneratorPtr& customGenerator) {
   ScopedOptions restorer(this);
   opts_.nullRatio = 0;
-  return fuzz(type, size);
+  return fuzz(type, size, customGenerator);
 }
 
-VectorPtr VectorFuzzer::fuzz(const TypePtr& type) {
-  return fuzz(type, opts_.vectorSize);
+VectorPtr VectorFuzzer::fuzz(
+    const TypePtr& type,
+    const AbstractInputGeneratorPtr& customGenerator) {
+  return fuzz(type, opts_.vectorSize, customGenerator);
 }
 
-VectorPtr VectorFuzzer::fuzz(const TypePtr& type, vector_size_t size) {
+VectorPtr VectorFuzzer::fuzz(
+    const TypePtr& type,
+    vector_size_t size,
+    const AbstractInputGeneratorPtr& customGenerator) {
   VectorPtr vector;
   vector_size_t vectorSize = size;
+  auto inputGenerator = customGenerator;
 
   bool usingLazyVector = opts_.allowLazyVector && coinToss(0.1);
   // Lazy Vectors cannot be sliced, so we skip this if using lazy wrapping.
-  if (!usingLazyVector && coinToss(0.1)) {
+  if (opts_.allowSlice && !usingLazyVector && coinToss(0.1)) {
     // Extend the underlying vector to allow slicing later.
     vectorSize += rand<uint32_t>(rng_) % 8;
   }
 
+  if (!inputGenerator && getCustomType(type->name())) {
+    InputGeneratorConfig config{rand<uint32_t>(rng_), opts_.nullRatio};
+    inputGenerator = getCustomTypeInputGenerator(type->name(), config);
+  }
+
   // 20% chance of adding a constant vector.
-  if (coinToss(0.2)) {
-    vector = fuzzConstant(type, vectorSize);
+  if (opts_.allowConstantVector && coinToss(0.2)) {
+    vector = fuzzConstant(type, vectorSize, inputGenerator);
+  } else if (type->isOpaque()) {
+    vector = fuzzFlatOpaque(type, vectorSize);
+  } else if (inputGenerator) {
+    vector = fuzzFlat(type, vectorSize, inputGenerator);
   } else {
     vector = type->isPrimitiveType() ? fuzzFlatPrimitive(type, vectorSize)
                                      : fuzzComplex(type, vectorSize);
@@ -380,9 +288,10 @@ VectorPtr VectorFuzzer::fuzz(const TypePtr& type, vector_size_t size) {
   }
 
   // Toss a coin and add dictionary indirections.
-  while (coinToss(0.5)) {
+  while (opts_.allowDictionaryVector && coinToss(0.5)) {
     vectorSize = size;
-    if (!usingLazyVector && vectorSize > 0 && coinToss(0.05)) {
+    if (opts_.allowSlice && !usingLazyVector && vectorSize > 0 &&
+        coinToss(0.05)) {
       vectorSize += rand<uint32_t>(rng_) % 8;
     }
     vector = fuzzDictionary(vector, vectorSize);
@@ -399,11 +308,16 @@ VectorPtr VectorFuzzer::fuzz(const GeneratorSpec& generatorSpec) {
   return generatorSpec.generateData(rng_, pool_, opts_.vectorSize);
 }
 
-VectorPtr VectorFuzzer::fuzzConstant(const TypePtr& type) {
-  return fuzzConstant(type, opts_.vectorSize);
+VectorPtr VectorFuzzer::fuzzConstant(
+    const TypePtr& type,
+    const AbstractInputGeneratorPtr& customGenerator) {
+  return fuzzConstant(type, opts_.vectorSize, customGenerator);
 }
 
-VectorPtr VectorFuzzer::fuzzConstant(const TypePtr& type, vector_size_t size) {
+VectorPtr VectorFuzzer::fuzzConstant(
+    const TypePtr& type,
+    vector_size_t size,
+    const AbstractInputGeneratorPtr& customGenerator) {
   // For constants, there are two possible cases:
   // - generate a regular constant vector (only for primitive types).
   // - generate a random vector and wrap it using a constant vector.
@@ -422,7 +336,8 @@ VectorPtr VectorFuzzer::fuzzConstant(const TypePtr& type, vector_size_t size) {
           type,
           size,
           rng_,
-          opts_);
+          opts_,
+          customGenerator);
     }
   }
 
@@ -445,11 +360,13 @@ VectorPtr VectorFuzzer::fuzzConstant(const TypePtr& type, vector_size_t size) {
         opts_.maxConstantContainerSize.value(), opts_.complexElementsMaxSize);
   }
   return BaseVector::wrapInConstant(
-      size, constantIndex, fuzz(type, innerVectorSize));
+      size, constantIndex, fuzz(type, innerVectorSize, customGenerator));
 }
 
-VectorPtr VectorFuzzer::fuzzFlat(const TypePtr& type) {
-  return fuzzFlat(type, opts_.vectorSize);
+VectorPtr VectorFuzzer::fuzzFlat(
+    const TypePtr& type,
+    const AbstractInputGeneratorPtr& customGenerator) {
+  return fuzzFlat(type, opts_.vectorSize, customGenerator);
 }
 
 VectorPtr VectorFuzzer::fuzzFlatNotNull(const TypePtr& type) {
@@ -464,7 +381,15 @@ VectorPtr VectorFuzzer::fuzzFlatNotNull(
   return fuzzFlat(type, size);
 }
 
-VectorPtr VectorFuzzer::fuzzFlat(const TypePtr& type, vector_size_t size) {
+VectorPtr VectorFuzzer::fuzzFlat(
+    const TypePtr& type,
+    vector_size_t size,
+    const AbstractInputGeneratorPtr& customGenerator) {
+  if (customGenerator) {
+    return fuzzer::ConstrainedVectorGenerator::generateFlat(
+        customGenerator, size, pool_);
+  }
+
   // Primitive types.
   if (type->isPrimitiveType()) {
     return fuzzFlatPrimitive(type, size);
@@ -484,16 +409,7 @@ VectorPtr VectorFuzzer::fuzzFlat(const TypePtr& type, vector_size_t size) {
     // Do not initialize keys and values inline in the fuzzMap call as C++ does
     // not specify the order they'll be called in, leading to inconsistent
     // results across platforms.
-    const auto& keyType = type->asMap().keyType();
-    const auto& valueType = type->asMap().valueType();
-    auto length = getElementsVectorLength(opts_, size);
-
-    auto keys = opts_.normalizeMapKeys || !opts_.containerHasNulls
-        ? fuzzFlatNotNull(keyType, length)
-        : fuzzFlat(keyType, length);
-    auto values = opts_.containerHasNulls ? fuzzFlat(valueType, length)
-                                          : fuzzFlatNotNull(valueType, length);
-    return fuzzMap(keys, values, size);
+    return fuzzMap(type->asMap().keyType(), type->asMap().valueType(), size);
   }
   // Rows.
   else if (type->isRow()) {
@@ -508,9 +424,25 @@ VectorPtr VectorFuzzer::fuzzFlat(const TypePtr& type, vector_size_t size) {
     }
 
     return fuzzRow(std::move(childrenVectors), rowType.names(), size);
+  } else if (type->isOpaque()) {
+    return fuzzFlatOpaque(type, size);
   } else {
     VELOX_UNREACHABLE();
   }
+}
+
+VectorPtr VectorFuzzer::fuzzMap(
+    const TypePtr& keyType,
+    const TypePtr& valueType,
+    vector_size_t size) {
+  auto length = getElementsVectorLength(opts_, size);
+
+  auto keys = opts_.normalizeMapKeys || !opts_.containerHasNulls
+      ? fuzzFlatNotNull(keyType, length)
+      : fuzzFlat(keyType, length);
+  auto values = opts_.containerHasNulls ? fuzzFlat(valueType, length)
+                                        : fuzzFlatNotNull(valueType, length);
+  return fuzzMap(keys, values, size);
 }
 
 VectorPtr VectorFuzzer::fuzzFlatPrimitive(
@@ -544,8 +476,14 @@ VectorPtr VectorFuzzer::fuzzComplex(const TypePtr& type, vector_size_t size) {
   opts_.allowLazyVector = false;
 
   switch (type->kind()) {
-    case TypeKind::ROW:
+    case TypeKind::ROW: {
+      if (isIPPrefixType(type)) {
+        ScopedOptions restorer(this);
+        opts_.containerHasNulls = false;
+        return fuzzRow(std::dynamic_pointer_cast<const RowType>(type), size);
+      }
       return fuzzRow(std::dynamic_pointer_cast<const RowType>(type), size);
+    }
 
     case TypeKind::ARRAY: {
       const auto& elementType = type->asArray().elementType();
@@ -577,6 +515,30 @@ VectorPtr VectorFuzzer::fuzzComplex(const TypePtr& type, vector_size_t size) {
       VELOX_UNREACHABLE("Unexpected type: {}", type->toString());
   }
   return nullptr; // no-op.
+}
+
+VectorPtr VectorFuzzer::fuzzFlatOpaque(
+    const TypePtr& type,
+    vector_size_t size) {
+  VELOX_CHECK(type->isOpaque());
+  auto vector = BaseVector::create(type, size, pool_);
+  using TFlat = typename KindToFlatVector<TypeKind::OPAQUE>::type;
+
+  auto& opaqueType = type->asOpaque();
+  auto flatVector = vector->as<TFlat>();
+  auto it = opaqueTypeGenerators_.find(opaqueType.typeIndex());
+  VELOX_CHECK(
+      it != opaqueTypeGenerators_.end(),
+      "generator does not exist for type index. Did you call registerOpaqueTypeGenerator()?");
+  auto& opaqueTypeGenerator = it->second;
+  for (vector_size_t i = 0; i < vector->size(); ++i) {
+    if (coinToss(opts_.nullRatio)) {
+      flatVector->setNull(i, true);
+    } else {
+      flatVector->set(i, opaqueTypeGenerator(rng_));
+    }
+  }
+  return vector;
 }
 
 VectorPtr VectorFuzzer::fuzzDictionary(const VectorPtr& vector) {
@@ -705,8 +667,10 @@ MapVectorPtr VectorFuzzer::fuzzMap(
       values);
 }
 
-RowVectorPtr VectorFuzzer::fuzzInputRow(const RowTypePtr& rowType) {
-  return fuzzRow(rowType, opts_.vectorSize, false);
+RowVectorPtr VectorFuzzer::fuzzInputRow(
+    const RowTypePtr& rowType,
+    const std::vector<AbstractInputGeneratorPtr>& inputGenerators) {
+  return fuzzRow(rowType, opts_.vectorSize, false, inputGenerators);
 }
 
 RowVectorPtr VectorFuzzer::fuzzInputFlatRow(const RowTypePtr& rowType) {
@@ -763,14 +727,19 @@ RowVectorPtr VectorFuzzer::fuzzRow(const RowTypePtr& rowType) {
 RowVectorPtr VectorFuzzer::fuzzRow(
     const RowTypePtr& rowType,
     vector_size_t size,
-    bool allowTopLevelNulls) {
+    bool allowTopLevelNulls,
+    const std::vector<AbstractInputGeneratorPtr>& inputGenerators) {
   std::vector<VectorPtr> children;
   children.reserve(rowType->size());
 
+  const AbstractInputGeneratorPtr kNoInputGenerator{nullptr};
   for (auto i = 0; i < rowType->size(); ++i) {
+    const auto& inputGenerator =
+        inputGenerators.size() > i ? inputGenerators[i] : kNoInputGenerator;
     children.push_back(
-        opts_.containerHasNulls ? fuzz(rowType->childAt(i), size)
-                                : fuzzNotNull(rowType->childAt(i), size));
+        opts_.containerHasNulls
+            ? fuzz(rowType->childAt(i), size, inputGenerator)
+            : fuzzNotNull(rowType->childAt(i), size, inputGenerator));
   }
 
   return std::make_shared<RowVector>(
@@ -833,6 +802,10 @@ TypePtr VectorFuzzer::randType(
   return velox::randType(rng_, scalarTypes, maxDepth);
 }
 
+TypePtr VectorFuzzer::randMapType(int maxDepth) {
+  return fuzzer::randMapType(rng_, defaultScalarTypes(), maxDepth);
+}
+
 RowTypePtr VectorFuzzer::randRowType(int maxDepth) {
   return velox::randRowType(rng_, maxDepth);
 }
@@ -841,6 +814,20 @@ RowTypePtr VectorFuzzer::randRowType(
     const std::vector<TypePtr>& scalarTypes,
     int maxDepth) {
   return velox::randRowType(rng_, scalarTypes, maxDepth);
+}
+
+TypePtr VectorFuzzer::randRowTypeByWidth(
+    const std::vector<TypePtr>& scalarTypes,
+    int minWidth) {
+  return velox::randRowTypeByWidth(rng_, scalarTypes, minWidth);
+}
+
+TypePtr VectorFuzzer::randRowTypeByWidth(int minWidth) {
+  return velox::randRowTypeByWidth(rng_, defaultScalarTypes(), minWidth);
+}
+
+size_t VectorFuzzer::randInRange(size_t min, size_t max) {
+  return rand(rng_, min, max);
 }
 
 VectorPtr VectorFuzzer::wrapInLazyVector(VectorPtr baseVector) {
@@ -1025,9 +1012,7 @@ VectorPtr VectorLoaderWrap::makeEncodingPreservedCopy(
       std::move(nulls), std::move(indices), vectorSize, baseResult);
 }
 
-namespace {
-
-const std::vector<TypePtr> defaultScalarTypes() {
+const std::vector<TypePtr>& defaultScalarTypes() {
   // @TODO Add decimal TypeKinds to randType.
   // Refer https://github.com/facebookincubator/velox/issues/3942
   static std::vector<TypePtr> kScalarTypes{
@@ -1046,7 +1031,6 @@ const std::vector<TypePtr> defaultScalarTypes() {
   };
   return kScalarTypes;
 }
-} // namespace
 
 TypePtr randType(FuzzerGenerator& rng, int maxDepth) {
   return randType(rng, defaultScalarTypes(), maxDepth);
@@ -1056,21 +1040,56 @@ TypePtr randType(
     FuzzerGenerator& rng,
     const std::vector<TypePtr>& scalarTypes,
     int maxDepth) {
-  const int numScalarTypes = scalarTypes.size();
-  // Should we generate a scalar type?
-  if (maxDepth <= 1 || rand<bool>(rng)) {
+  return fuzzer::randType(rng, scalarTypes, maxDepth);
+}
+
+TypePtr randMapType(
+    FuzzerGenerator& rng,
+    const std::vector<TypePtr>& scalarTypes,
+    int maxDepth) {
+  return fuzzer::randMapType(rng, scalarTypes, maxDepth);
+}
+
+TypePtr randTypeByWidth(
+    FuzzerGenerator& rng,
+    const std::vector<TypePtr>& scalarTypes,
+    int minWidth) {
+  if (minWidth <= 1) {
+    const int numScalarTypes = scalarTypes.size();
     return scalarTypes[rand<uint32_t>(rng) % numScalarTypes];
   }
+
   switch (rand<uint32_t>(rng) % 3) {
     case 0:
+      return ARRAY(randTypeByWidth(rng, scalarTypes, minWidth - 1));
+    case 1: {
+      const auto keyWidth =
+          minWidth == 2 ? 1 : rand<uint32_t>(rng) % (minWidth - 2);
       return MAP(
-          randType(rng, scalarTypes, 0),
-          randType(rng, scalarTypes, maxDepth - 1));
-    case 1:
-      return ARRAY(randType(rng, scalarTypes, maxDepth - 1));
+          randTypeByWidth(rng, scalarTypes, keyWidth),
+          randTypeByWidth(rng, scalarTypes, minWidth - keyWidth - 1));
+    }
+    // case 2:
     default:
-      return randRowType(rng, scalarTypes, maxDepth - 1);
+      return randRowTypeByWidth(rng, scalarTypes, minWidth);
   }
+}
+
+TypePtr randRowTypeByWidth(
+    FuzzerGenerator& rng,
+    const std::vector<TypePtr>& scalarTypes,
+    int minWidth) {
+  const auto numFields = 1 + rand<uint32_t>(rng) % 10;
+  std::vector<TypePtr> fields;
+  auto remainingWidth = minWidth;
+  for (auto i = 0; i < numFields - 1; ++i) {
+    const auto fieldWidth =
+        remainingWidth > 0 ? rand<uint32_t>(rng) % remainingWidth : 0;
+    fields.push_back(randTypeByWidth(rng, scalarTypes, fieldWidth));
+    remainingWidth -= fieldWidth;
+  }
+  fields.push_back(randTypeByWidth(rng, scalarTypes, remainingWidth));
+  return ROW(std::move(fields));
 }
 
 TypePtr randOrderableType(FuzzerGenerator& rng, int maxDepth) {
@@ -1109,14 +1128,7 @@ RowTypePtr randRowType(
     FuzzerGenerator& rng,
     const std::vector<TypePtr>& scalarTypes,
     int maxDepth) {
-  int numFields = 1 + rand<uint32_t>(rng) % 7;
-  std::vector<std::string> names;
-  std::vector<TypePtr> fields;
-  for (int i = 0; i < numFields; ++i) {
-    names.push_back(fmt::format("f{}", i));
-    fields.push_back(randType(rng, scalarTypes, maxDepth));
-  }
-  return ROW(std::move(names), std::move(fields));
+  return fuzzer::randRowType(rng, scalarTypes, maxDepth);
 }
 
 } // namespace facebook::velox

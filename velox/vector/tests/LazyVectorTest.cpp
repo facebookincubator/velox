@@ -70,6 +70,55 @@ TEST_F(LazyVectorTest, lazyInDictionary) {
   assertCopyableVector(wrapped);
 }
 
+// Ensure that compare() using lazies and lazies wrapped by a dictionay work
+// properly.
+TEST_F(LazyVectorTest, compareLazies) {
+  static constexpr int32_t kInnerSize = 100;
+  static constexpr int32_t kOuterSize = 100;
+
+  auto getLazy = [&]() {
+    return std::make_shared<LazyVector>(
+        pool_.get(),
+        INTEGER(),
+        kInnerSize,
+        std::make_unique<test::SimpleVectorLoader>([&](auto) {
+          return makeFlatVector<int32_t>(
+              kInnerSize, [](auto row) { return row; });
+        }));
+  };
+
+  auto getDictionary = [&]() {
+    return BaseVector::wrapInDictionary(
+        nullptr,
+        makeIndices(kOuterSize, [](auto row) { return row; }),
+        kOuterSize,
+        getLazy());
+  };
+
+  auto expected =
+      makeFlatVector<int32_t>(kInnerSize, [](auto row) { return row; });
+
+  // First compare with lazies.
+  auto lazy1 = getLazy();
+  auto lazy2 = getLazy();
+
+  for (size_t i = 0; i < kInnerSize; ++i) {
+    // Compare with lazies on either side.
+    EXPECT_EQ(lazy1->compare(expected.get(), i, i, {}), 0);
+    EXPECT_EQ(expected->compare(lazy2.get(), i, i, {}), 0);
+  }
+
+  // Then compare with lazies inside a dictionary.
+  auto dictionaryLazy1 = getDictionary();
+  auto dictionaryLazy2 = getDictionary();
+
+  for (size_t i = 0; i < kOuterSize; ++i) {
+    // Compare with dictionaries wrapped around lazies on either side.
+    EXPECT_EQ(dictionaryLazy1->compare(expected.get(), i, i, {}), 0);
+    EXPECT_EQ(expected->compare(dictionaryLazy2.get(), i, i, {}), 0);
+  }
+}
+
 TEST_F(LazyVectorTest, rowVectorWithLazyChild) {
   constexpr vector_size_t size = 1000;
   auto columnType = ROW({"a", "b"}, {INTEGER(), INTEGER()});
@@ -639,9 +688,11 @@ TEST_F(LazyVectorTest, runtimeStats) {
   std::sort(stats.begin(), stats.end(), [](auto& x, auto& y) {
     return x.first < y.first;
   });
-  ASSERT_EQ(stats.size(), 2);
+  ASSERT_EQ(stats.size(), 3);
   ASSERT_EQ(stats[0].first, LazyVector::kCpuNanos);
   ASSERT_GE(stats[0].second.value, 0);
-  ASSERT_EQ(stats[1].first, LazyVector::kWallNanos);
+  ASSERT_EQ(stats[1].first, LazyVector::kInputBytes);
   ASSERT_GE(stats[1].second.value, 0);
+  ASSERT_EQ(stats[2].first, LazyVector::kWallNanos);
+  ASSERT_GE(stats[2].second.value, 0);
 }

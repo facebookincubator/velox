@@ -17,11 +17,9 @@
 
 #include "folly/ssl/OpenSSLHash.h"
 
-#include <codecvt>
 #include <string>
 #include "velox/expression/VectorFunction.h"
 #include "velox/functions/Macros.h"
-#include "velox/functions/UDFOutputString.h"
 #include "velox/functions/lib/string/StringCore.h"
 #include "velox/functions/lib/string/StringImpl.h"
 
@@ -262,7 +260,6 @@ struct StartsWithFunction {
       result = false;
     } else {
       result = str1.substr(0, str2.length()) == str2;
-      ;
     }
     return true;
   }
@@ -288,6 +285,96 @@ struct EndsWithFunction {
     } else {
       result =
           str1.substr(str1.length() - str2.length(), str2.length()) == str2;
+    }
+    return true;
+  }
+};
+
+/// locate function
+/// locate(substring, string, start) -> integer
+///
+/// Returns the 1-based position of the first occurrence of 'substring' in
+/// 'string' after the give 'start' position. The search is from the beginning
+/// of 'string' to the end. 'start' is the starting character position in
+/// 'string' to search for the 'substring'. 'start' is 1-based and must be at
+/// least 1 and at most the characters number of 'string'.
+///
+/// The following rules on special values are applied to follow Spark's
+/// implementation. They are listed in order of priority:
+/// Returns 0 if 'start' is NULL. Returns NULL if 'substring' or 'string' is
+/// NULL. Returns 0 if 'start' is less than 1. Returns 1 if 'substring' is
+/// empty. Returns 0 if 'start' is greater than the characters number of
+/// 'string'. Returns 0 if 'substring' is not found in 'string'.
+template <typename T>
+struct LocateFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  FOLLY_ALWAYS_INLINE void callAscii(
+      out_type<int32_t>& result,
+      const arg_type<Varchar>& subString,
+      const arg_type<Varchar>& string,
+      const arg_type<int32_t>& start) {
+    if (start < 1) {
+      result = 0;
+    } else if (subString.empty()) {
+      result = 1;
+    } else if (start > string.size()) {
+      result = 0;
+    } else {
+      const auto position = stringImpl::stringPosition<true /*isAscii*/>(
+          std::string_view(
+              string.data() + start - 1, string.size() - start + 1),
+          std::string_view(subString.data(), subString.size()),
+          1 /*instance*/);
+      if (position) {
+        result = position + start - 1;
+      } else {
+        result = 0;
+      }
+    }
+  }
+
+  FOLLY_ALWAYS_INLINE bool callNullable(
+      out_type<int32_t>& result,
+      const arg_type<Varchar>* subString,
+      const arg_type<Varchar>* string,
+      const arg_type<int32_t>* start) {
+    if (start == nullptr) {
+      result = 0;
+      return true;
+    }
+    if (subString == nullptr || string == nullptr) {
+      return false;
+    }
+    if (*start < 1) {
+      result = 0;
+      return true;
+    }
+    if (subString->empty()) {
+      result = 1;
+      return true;
+    }
+    if (*start > stringImpl::length<false /*isAscii*/>(*string)) {
+      result = 0;
+      return true;
+    }
+
+    // Find the start byte index of the start character. For example, in the
+    // Unicode string "😋😋😋", each character occupies 4 bytes. When 'start' is
+    // 2, the 'startByteIndex' is 4 which specifies the start of the second
+    // character.
+    const auto startByteIndex = stringCore::cappedByteLengthUnicode(
+        string->data(), string->size(), *start - 1);
+
+    const auto position = stringImpl::stringPosition<false /*isAscii*/>(
+        std::string_view(
+            string->data() + startByteIndex, string->size() - startByteIndex),
+        std::string_view(subString->data(), subString->size()),
+        1 /*instance*/);
+    if (position) {
+      result = position + *start - 1;
+    } else {
+      result = 0;
     }
     return true;
   }
@@ -321,9 +408,15 @@ struct SubstringIndexFunction {
 
     int64_t index;
     if (count > 0) {
-      index = stringImpl::stringPosition<true, true>(str, delim, count);
+      index = stringImpl::stringPosition<true, true>(
+          std::string_view(str.data(), str.size()),
+          std::string_view(delim.data(), delim.size()),
+          count);
     } else {
-      index = stringImpl::stringPosition<true, false>(str, delim, -count);
+      index = stringImpl::stringPosition<true, false>(
+          std::string_view(str.data(), str.size()),
+          std::string_view(delim.data(), delim.size()),
+          -count);
     }
 
     // If 'delim' is not found or found fewer than 'count' times,
@@ -588,7 +681,7 @@ struct SubstrFunction {
 struct OverlayFunctionBase {
   template <bool isAscii, bool isVarchar>
   FOLLY_ALWAYS_INLINE void doCall(
-      exec::StringWriter<false>& result,
+      exec::StringWriter& result,
       StringView input,
       StringView replace,
       int32_t pos,
@@ -618,7 +711,7 @@ struct OverlayFunctionBase {
 
   template <bool isAscii, bool isVarchar>
   FOLLY_ALWAYS_INLINE void append(
-      exec::StringWriter<false>& result,
+      exec::StringWriter& result,
       StringView input,
       std::pair<int32_t, int32_t> pair) {
     if constexpr (isVarchar && !isAscii) {
@@ -782,53 +875,6 @@ struct TranslateFunction {
   // ASCII input always produces ASCII result.
   static constexpr bool is_default_ascii_behavior = true;
 
-  std::optional<folly::F14FastMap<std::string, std::string>> unicodeDictionary_;
-  std::optional<folly::F14FastMap<char, char>> asciiDictionary_;
-
-  bool isConstantDictionary_ = false;
-
-  folly::F14FastMap<std::string, std::string> buildUnicodeDictionary(
-      const arg_type<Varchar>& match,
-      const arg_type<Varchar>& replace) {
-    folly::F14FastMap<std::string, std::string> dictionary;
-    int i = 0;
-    int j = 0;
-    while (i < match.size()) {
-      std::string replaceChar;
-      // If match's character size is larger than replace's, the extra
-      // characters in match will be removed from input string.
-      if (j < replace.size()) {
-        int replaceCharLength = utf8proc_char_length(replace.data() + j);
-        replaceChar = std::string(replace.data() + j, replaceCharLength);
-        j += replaceCharLength;
-      }
-      int matchCharLength = utf8proc_char_length(match.data() + i);
-      std::string matchChar = std::string(match.data() + i, matchCharLength);
-      // Only considers the first occurrence of a character in match.
-      dictionary.emplace(matchChar, replaceChar);
-      i += matchCharLength;
-    }
-    return dictionary;
-  }
-
-  folly::F14FastMap<char, char> buildAsciiDictionary(
-      const arg_type<Varchar>& match,
-      const arg_type<Varchar>& replace) {
-    folly::F14FastMap<char, char> dictionary;
-    int i = 0;
-    for (; i < std::min(match.size(), replace.size()); i++) {
-      char matchChar = *(match.data() + i);
-      char replaceChar = *(replace.data() + i);
-      // Only consider the first occurrence of a character in match.
-      dictionary.emplace(matchChar, replaceChar);
-    }
-    for (; i < match.size(); i++) {
-      char matchChar = *(match.data() + i);
-      dictionary.emplace(matchChar, '\0');
-    }
-    return dictionary;
-  }
-
   FOLLY_ALWAYS_INLINE void initialize(
       const std::vector<TypePtr>& /*inputTypes*/,
       const core::QueryConfig& /*config*/,
@@ -858,7 +904,7 @@ struct TranslateFunction {
     int i = 0;
     int k = 0;
     while (k < input.size()) {
-      int inputCharLength = utf8proc_char_length(input.data() + k);
+      int inputCharLength = getUtf8CharLength(input, k);
       auto inputChar = std::string(input.data() + k, inputCharLength);
       auto it = unicodeDictionary_->find(inputChar);
       if (it == unicodeDictionary_->end()) {
@@ -908,6 +954,63 @@ struct TranslateFunction {
     }
     result.resize(i);
   }
+
+ private:
+  // Returns the length of a UTF-8 character starting at 'offset'. Returns 1
+  // for invalid UTF-8 character.
+  FOLLY_ALWAYS_INLINE int32_t
+  getUtf8CharLength(const arg_type<Varchar>& input, int32_t offset) {
+    return std::min<int32_t>(
+        std::abs(utf8proc_char_length(input.data() + offset)),
+        input.size() - offset);
+  }
+
+  folly::F14FastMap<std::string, std::string> buildUnicodeDictionary(
+      const arg_type<Varchar>& match,
+      const arg_type<Varchar>& replace) {
+    folly::F14FastMap<std::string, std::string> dictionary;
+    int i = 0;
+    int j = 0;
+    while (i < match.size()) {
+      std::string replaceChar;
+      // If match's character size is larger than replace's, the extra
+      // characters in match will be removed from input string.
+      if (j < replace.size()) {
+        int replaceCharLength = getUtf8CharLength(replace, j);
+        replaceChar = std::string(replace.data() + j, replaceCharLength);
+        j += replaceCharLength;
+      }
+      int matchCharLength = getUtf8CharLength(match, i);
+      std::string matchChar = std::string(match.data() + i, matchCharLength);
+      // Only considers the first occurrence of a character in match.
+      dictionary.emplace(matchChar, replaceChar);
+      i += matchCharLength;
+    }
+    return dictionary;
+  }
+
+  folly::F14FastMap<char, char> buildAsciiDictionary(
+      const arg_type<Varchar>& match,
+      const arg_type<Varchar>& replace) {
+    folly::F14FastMap<char, char> dictionary;
+    int i = 0;
+    for (; i < std::min(match.size(), replace.size()); i++) {
+      char matchChar = *(match.data() + i);
+      char replaceChar = *(replace.data() + i);
+      // Only consider the first occurrence of a character in match.
+      dictionary.emplace(matchChar, replaceChar);
+    }
+    for (; i < match.size(); i++) {
+      char matchChar = *(match.data() + i);
+      dictionary.emplace(matchChar, '\0');
+    }
+    return dictionary;
+  }
+
+  std::optional<folly::F14FastMap<std::string, std::string>> unicodeDictionary_;
+  std::optional<folly::F14FastMap<char, char>> asciiDictionary_;
+
+  bool isConstantDictionary_ = false;
 };
 
 template <typename T>

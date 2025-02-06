@@ -25,10 +25,13 @@
 #include "velox/functions/prestosql/fuzzer/ApproxDistinctResultVerifier.h"
 #include "velox/functions/prestosql/fuzzer/ApproxPercentileInputGenerator.h"
 #include "velox/functions/prestosql/fuzzer/ApproxPercentileResultVerifier.h"
+#include "velox/functions/prestosql/fuzzer/AverageResultVerifier.h"
+#include "velox/functions/prestosql/fuzzer/ClassificationAggregationInputGenerator.h"
 #include "velox/functions/prestosql/fuzzer/MinMaxInputGenerator.h"
 #include "velox/functions/prestosql/fuzzer/WindowOffsetInputGenerator.h"
 #include "velox/functions/prestosql/registration/RegistrationFunctions.h"
 #include "velox/functions/prestosql/window/WindowFunctionsRegistration.h"
+#include "velox/vector/fuzzer/VectorFuzzer.h"
 
 DEFINE_int64(
     seed,
@@ -73,7 +76,16 @@ getCustomInputGenerators() {
       {"lag", std::make_shared<WindowOffsetInputGenerator>(1)},
       {"nth_value", std::make_shared<WindowOffsetInputGenerator>(1)},
       {"ntile", std::make_shared<WindowOffsetInputGenerator>(0)},
-  };
+      {"classification_fall_out",
+       std::make_shared<ClassificationAggregationInputGenerator>()},
+      {"classification_precision",
+       std::make_shared<ClassificationAggregationInputGenerator>()},
+      {"classification_recall",
+       std::make_shared<ClassificationAggregationInputGenerator>()},
+      {"classification_miss_rate",
+       std::make_shared<ClassificationAggregationInputGenerator>()},
+      {"classification_thresholds",
+       std::make_shared<ClassificationAggregationInputGenerator>()}};
 }
 
 } // namespace
@@ -119,6 +131,7 @@ int main(int argc, char** argv) {
   // TODO: allow custom result verifiers.
   using facebook::velox::exec::test::ApproxDistinctResultVerifier;
   using facebook::velox::exec::test::ApproxPercentileResultVerifier;
+  using facebook::velox::exec::test::AverageResultVerifier;
 
   static const std::unordered_map<
       std::string,
@@ -138,6 +151,7 @@ int main(int argc, char** argv) {
           // https://github.com/facebookincubator/velox/issues/6330
           {"max_data_size_for_stats", nullptr},
           {"sum_data_size_for_stats", nullptr},
+          {"avg", std::make_shared<AverageResultVerifier>()},
       };
 
   static const std::unordered_set<std::string> orderDependentFunctions = {
@@ -157,6 +171,11 @@ int main(int argc, char** argv) {
       "any_value",
       "arbitrary",
       "array_agg",
+      "classification_fall_out",
+      "classification_precision",
+      "classification_recall",
+      "classification_miss_rate",
+      "classification_thresholds",
       "set_agg",
       "set_union",
       "map_agg",
@@ -180,9 +199,14 @@ int main(int argc, char** argv) {
   options.orderDependentFunctions = orderDependentFunctions;
   options.timestampPrecision =
       facebook::velox::VectorFuzzer::Options::TimestampPrecision::kMilliSeconds;
+  std::shared_ptr<facebook::velox::memory::MemoryPool> rootPool{
+      facebook::velox::memory::memoryManager()->addRootPool()};
   return Runner::run(
       initialSeed,
       setupReferenceQueryRunner(
-          FLAGS_presto_url, "window_fuzzer", FLAGS_req_timeout_ms),
+          rootPool.get(),
+          FLAGS_presto_url,
+          "window_fuzzer",
+          FLAGS_req_timeout_ms),
       options);
 }

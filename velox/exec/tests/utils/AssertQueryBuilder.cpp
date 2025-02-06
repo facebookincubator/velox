@@ -57,13 +57,25 @@ AssertQueryBuilder& AssertQueryBuilder::maxDrivers(int32_t maxDrivers) {
   return *this;
 }
 
+AssertQueryBuilder& AssertQueryBuilder::maxQueryCapacity(
+    int64_t maxQueryCapacity) {
+  params_.maxQueryCapacity = maxQueryCapacity;
+  return *this;
+}
+
 AssertQueryBuilder& AssertQueryBuilder::destination(int32_t destination) {
   params_.destination = destination;
   return *this;
 }
 
-AssertQueryBuilder& AssertQueryBuilder::singleThreaded(bool singleThreaded) {
-  params_.singleThreaded = singleThreaded;
+AssertQueryBuilder& AssertQueryBuilder::serialExecution(bool serial) {
+  if (serial) {
+    params_.serialExecution = true;
+    executor_ = nullptr;
+    return *this;
+  }
+  params_.serialExecution = false;
+  executor_ = newExecutor();
   return *this;
 }
 
@@ -87,6 +99,18 @@ AssertQueryBuilder& AssertQueryBuilder::connectorSessionProperty(
     const std::string& key,
     const std::string& value) {
   connectorSessionProperties_[connectorId][key] = value;
+  return *this;
+}
+
+AssertQueryBuilder& AssertQueryBuilder::connectorSessionProperties(
+    const std::unordered_map<
+        std::string,
+        std::unordered_map<std::string, std::string>>& properties) {
+  for (const auto& [connectorId, values] : properties) {
+    for (const auto& [key, value] : values) {
+      connectorSessionProperty(connectorId, key, value);
+    }
+  }
   return *this;
 }
 
@@ -229,6 +253,16 @@ RowVectorPtr AssertQueryBuilder::copyResults(
   return copy;
 }
 
+uint64_t AssertQueryBuilder::runWithoutResults(std::shared_ptr<Task>& task) {
+  auto [cursor, results] = readCursor();
+  uint64_t count = 0;
+  for (const auto& result : results) {
+    count += result->size();
+  }
+  task = cursor->task();
+  return count;
+}
+
 std::pair<std::unique_ptr<TaskCursor>, std::vector<RowVectorPtr>>
 AssertQueryBuilder::readCursor() {
   VELOX_CHECK_NOT_NULL(params_.planNode);
@@ -238,14 +272,19 @@ AssertQueryBuilder::readCursor() {
       // NOTE: the destructor of 'executor_' will wait for all the async task
       // activities to finish on AssertQueryBuilder dtor.
       static std::atomic<uint64_t> cursorQueryId{0};
+      const std::string queryId =
+          fmt::format("TaskCursorQuery_{}", cursorQueryId++);
+      auto queryPool = memory::memoryManager()->addRootPool(
+          queryId, params_.maxQueryCapacity);
       params_.queryCtx = core::QueryCtx::create(
           executor_.get(),
           core::QueryConfig({}),
-          std::unordered_map<std::string, std::shared_ptr<Config>>{},
+          std::
+              unordered_map<std::string, std::shared_ptr<config::ConfigBase>>{},
           cache::AsyncDataCache::getInstance(),
+          std::move(queryPool),
           nullptr,
-          nullptr,
-          fmt::format("TaskCursorQuery_{}", cursorQueryId++));
+          queryId);
     }
   }
   if (!configs_.empty()) {

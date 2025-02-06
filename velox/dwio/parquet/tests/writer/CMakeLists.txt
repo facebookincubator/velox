@@ -28,7 +28,7 @@ target_link_libraries(
   velox_link_libs
   Folly::folly
   ${TEST_LINK_LIBS}
-  gtest
+  GTest::gtest
   fmt::fmt)
 
 add_executable(velox_parquet_writer_test ParquetWriterTest.cpp)
@@ -41,10 +41,11 @@ add_test(
 target_link_libraries(
   velox_parquet_writer_test
   velox_dwio_parquet_writer
+  velox_dwio_parquet_reader
   velox_dwio_common_test_utils
   velox_link_libs
   Boost::regex
   Folly::folly
   ${TEST_LINK_LIBS}
-  gtest
+  GTest::gtest
   fmt::fmt)

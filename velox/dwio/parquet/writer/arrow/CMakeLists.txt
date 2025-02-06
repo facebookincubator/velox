@@ -13,7 +13,6 @@
 # limitations under the License.
 
 add_subdirectory(util)
-add_subdirectory(generated)
 
 if(${VELOX_BUILD_TESTING})
   add_subdirectory(tests)
@@ -31,9 +30,6 @@ velox_add_library(
   FileEncryptorInternal.cpp
   FileDecryptorInternal.cpp
   FileWriter.cpp
-  LevelComparison.cpp
-  LevelComparisonAvx2.cpp
-  LevelConversion.cpp
   Metadata.cpp
   PageIndex.cpp
   PathInternal.cpp
@@ -47,7 +43,8 @@ velox_add_library(
 velox_link_libraries(
   velox_dwio_arrow_parquet_writer_lib
   velox_dwio_arrow_parquet_writer_util_lib
-  velox_dwio_arrow_parquet_writer_thrift_lib
+  velox_dwio_parquet_common
+  velox_dwio_parquet_thrift
   velox_dwio_common
   velox_arrow_bridge
   arrow

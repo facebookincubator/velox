@@ -49,22 +49,31 @@ class ParquetTpchTest : public testing::Test {
 
     parse::registerTypeResolver();
     filesystems::registerLocalFileSystem();
+    dwio::common::registerFileSinks();
 
     parquet::registerParquetReaderFactory();
     parquet::registerParquetWriterFactory();
 
+    connector::registerConnectorFactory(
+        std::make_shared<connector::hive::HiveConnectorFactory>());
     auto hiveConnector =
         connector::getConnectorFactory(
             connector::hive::HiveConnectorFactory::kHiveConnectorName)
             ->newConnector(
-                kHiveConnectorId, std::make_shared<core::MemConfig>());
+                kHiveConnectorId,
+                std::make_shared<config::ConfigBase>(
+                    std::unordered_map<std::string, std::string>()));
     connector::registerConnector(hiveConnector);
 
+    connector::registerConnectorFactory(
+        std::make_shared<connector::tpch::TpchConnectorFactory>());
     auto tpchConnector =
         connector::getConnectorFactory(
             connector::tpch::TpchConnectorFactory::kTpchConnectorName)
             ->newConnector(
-                kTpchConnectorId, std::make_shared<core::MemConfig>());
+                kTpchConnectorId,
+                std::make_shared<config::ConfigBase>(
+                    std::unordered_map<std::string, std::string>()));
     connector::registerConnector(tpchConnector);
 
     saveTpchTablesAsParquet();
@@ -72,6 +81,10 @@ class ParquetTpchTest : public testing::Test {
   }
 
   static void TearDownTestSuite() {
+    connector::unregisterConnectorFactory(
+        connector::hive::HiveConnectorFactory::kHiveConnectorName);
+    connector::unregisterConnectorFactory(
+        connector::tpch::TpchConnectorFactory::kTpchConnectorName);
     connector::unregisterConnector(kHiveConnectorId);
     connector::unregisterConnector(kTpchConnectorId);
     parquet::unregisterParquetReaderFactory();
@@ -94,7 +107,7 @@ class ParquetTpchTest : public testing::Test {
                       .planNode();
       auto split =
           exec::Split(std::make_shared<connector::tpch::TpchConnectorSplit>(
-              kTpchConnectorId, 1, 0));
+              kTpchConnectorId, /*cacheable=*/true, 1, 0));
 
       auto rows =
           AssertQueryBuilder(plan).splits({split}).copyResults(pool.get());

@@ -291,7 +291,6 @@ struct InverseCauchyCDFFunction {
   FOLLY_ALWAYS_INLINE void
   call(double& result, double median, double scale, double p) {
     static constexpr double kInf = std::numeric_limits<double>::infinity();
-    static constexpr double kDoubleMax = std::numeric_limits<double>::max();
     static constexpr double kNan = std::numeric_limits<double>::quiet_NaN();
 
     VELOX_USER_CHECK(p >= 0 && p <= 1, "p must be in the interval [0, 1]");
@@ -318,7 +317,7 @@ struct InverseLaplaceCDFFunction {
   FOLLY_ALWAYS_INLINE void
   call(double& result, double location, double scale, double p) {
     VELOX_USER_CHECK_GT(scale, 0, "scale must be greater than 0");
-    VELOX_USER_CHECK(p >= 0 && p <= 1, "p must be in the interval [0, 1]")
+    VELOX_USER_CHECK(p >= 0 && p <= 1, "p must be in the interval [0, 1]");
 
     if (std::isnan(location) || std::isinf(location)) {
       result = std::numeric_limits<double>::quiet_NaN();

@@ -62,6 +62,11 @@ class FancyIntTypeFactories : public CustomTypeFactories {
   exec::CastOperatorPtr getCastOperator() const override {
     VELOX_UNSUPPORTED();
   }
+
+  AbstractInputGeneratorPtr getInputGenerator(
+      const InputGeneratorConfig& /*config*/) const override {
+    return nullptr;
+  }
 };
 
 class ToFancyIntFunction : public exec::VectorFunction {
@@ -147,6 +152,11 @@ class AlwaysFailingTypeFactories : public CustomTypeFactories {
   exec::CastOperatorPtr getCastOperator() const override {
     VELOX_UNSUPPORTED();
   }
+
+  AbstractInputGeneratorPtr getInputGenerator(
+      const InputGeneratorConfig& /*config*/) const override {
+    VELOX_UNSUPPORTED();
+  }
 };
 } // namespace
 
@@ -216,6 +226,8 @@ TEST_F(CustomTypeTest, getCustomTypeNames) {
           "HYPERLOGLOG",
           "TIMESTAMP WITH TIME ZONE",
           "UUID",
+          "IPADDRESS",
+          "IPPREFIX",
       }),
       names);
 
@@ -229,6 +241,8 @@ TEST_F(CustomTypeTest, getCustomTypeNames) {
           "HYPERLOGLOG",
           "TIMESTAMP WITH TIME ZONE",
           "UUID",
+          "IPADDRESS",
+          "IPPREFIX",
           "FANCY_INT",
       }),
       names);

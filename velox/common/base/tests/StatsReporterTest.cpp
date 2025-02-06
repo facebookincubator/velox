@@ -242,15 +242,15 @@ class TestStatsReportMemoryArbitrator : public memory::MemoryArbitrator {
     return "test";
   }
 
-  uint64_t growCapacity(memory::MemoryPool* /*unused*/, uint64_t /*unused*/)
-      override {
-    return 0;
+  void shutdown() override {}
+
+  void addPool(const std::shared_ptr<memory::MemoryPool>& /*unused*/) override {
   }
 
-  bool growCapacity(
-      memory::MemoryPool* /*unused*/,
-      const std::vector<std::shared_ptr<memory::MemoryPool>>& /*unused*/,
-      uint64_t /*unused*/) override {
+  void removePool(memory::MemoryPool* /*unused*/) override {}
+
+  bool growCapacity(memory::MemoryPool* /*unused*/, uint64_t /*unused*/)
+      override {
     return false;
   }
 
@@ -259,11 +259,8 @@ class TestStatsReportMemoryArbitrator : public memory::MemoryArbitrator {
     return 0;
   }
 
-  uint64_t shrinkCapacity(
-      const std::vector<std::shared_ptr<memory::MemoryPool>>& /*unused*/,
-      uint64_t /*unused*/,
-      bool /*unused*/,
-      bool /*unused*/) override {
+  uint64_t shrinkCapacity(uint64_t /*unused*/, bool /*unused*/, bool /*unused*/)
+      override {
     return 0;
   }
 
@@ -490,7 +487,7 @@ TEST_F(PeriodicStatsReporterTest, basic) {
     ASSERT_EQ(counterMap.count(kMetricSsdCacheOpenSsdErrors.str()), 0);
     ASSERT_EQ(counterMap.count(kMetricSsdCacheOpenCheckpointErrors.str()), 0);
     ASSERT_EQ(counterMap.count(kMetricSsdCacheOpenLogErrors.str()), 0);
-    ASSERT_EQ(counterMap.count(kMetricSsdCacheDeleteCheckpointErrors.str()), 0);
+    ASSERT_EQ(counterMap.count(kMetricSsdCacheMetaFileDeleteErrors.str()), 0);
     ASSERT_EQ(counterMap.count(kMetricSsdCacheGrowFileErrors.str()), 0);
     ASSERT_EQ(counterMap.count(kMetricSsdCacheWriteSsdErrors.str()), 0);
     ASSERT_EQ(counterMap.count(kMetricSsdCacheWriteSsdDropped.str()), 0);
@@ -523,7 +520,7 @@ TEST_F(PeriodicStatsReporterTest, basic) {
   newSsdStats->openFileErrors = 10;
   newSsdStats->openCheckpointErrors = 10;
   newSsdStats->openLogErrors = 10;
-  newSsdStats->deleteCheckpointErrors = 10;
+  newSsdStats->deleteMetaFileErrors = 10;
   newSsdStats->growFileErrors = 10;
   newSsdStats->writeSsdErrors = 10;
   newSsdStats->writeSsdDropped = 10;
@@ -546,7 +543,7 @@ TEST_F(PeriodicStatsReporterTest, basic) {
        .sumEvictScore = 10,
        .ssdStats = newSsdStats});
   arbitrator.updateStats(memory::MemoryArbitrator::Stats(
-      10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10));
+      10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10));
   std::this_thread::sleep_for(std::chrono::milliseconds(4'000));
 
   // Stop right after sufficient wait to ensure the following reads from main
@@ -573,7 +570,7 @@ TEST_F(PeriodicStatsReporterTest, basic) {
     ASSERT_EQ(counterMap.count(kMetricSsdCacheOpenSsdErrors.str()), 1);
     ASSERT_EQ(counterMap.count(kMetricSsdCacheOpenCheckpointErrors.str()), 1);
     ASSERT_EQ(counterMap.count(kMetricSsdCacheOpenLogErrors.str()), 1);
-    ASSERT_EQ(counterMap.count(kMetricSsdCacheDeleteCheckpointErrors.str()), 1);
+    ASSERT_EQ(counterMap.count(kMetricSsdCacheMetaFileDeleteErrors.str()), 1);
     ASSERT_EQ(counterMap.count(kMetricSsdCacheGrowFileErrors.str()), 1);
     ASSERT_EQ(counterMap.count(kMetricSsdCacheWriteSsdErrors.str()), 1);
     ASSERT_EQ(counterMap.count(kMetricSsdCacheWriteSsdDropped.str()), 1);

@@ -20,8 +20,8 @@ target_link_libraries(
     Folly::folly
     velox_time
     glog::glog
-    gtest
-    gtest_main)
+    GTest::gtest
+    GTest::gtest_main)
 
 add_executable(
   velox_cache_test
@@ -36,12 +36,13 @@ target_link_libraries(
   PRIVATE
     velox_caching
     velox_file
+    velox_file_test_utils
     velox_memory
     velox_temp_path
     Folly::folly
     glog::glog
-    gtest
-    gtest_main)
+    GTest::gtest
+    GTest::gtest_main)
 
 add_executable(cached_factory_test CachedFactoryTest.cpp)
 add_test(cached_factory_test cached_factory_test)
@@ -52,5 +53,5 @@ target_link_libraries(
     Folly::folly
     velox_time
     glog::glog
-    gtest
-    gtest_main)
+    GTest::gtest
+    GTest::gtest_main)

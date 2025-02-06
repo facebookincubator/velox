@@ -19,6 +19,7 @@
 
 #include "velox/common/base/Crc.h"
 #include "velox/common/compression/Compression.h"
+#include "velox/serializers/PrestoVectorLexer.h"
 #include "velox/vector/VectorStream.h"
 
 namespace facebook::velox::serializer::presto {
@@ -41,6 +42,10 @@ namespace facebook::velox::serializer::presto {
 /// 2. To serialize a single RowVector, one can use the BatchVectorSerializer
 /// returned by createBatchSerializer(). Since it serializes a single RowVector,
 /// it tries to preserve the encodings of the input data.
+///
+/// 3. To serialize data from a vector into a single column, adhering to
+/// PrestoPage's column format and excluding the PrestoPage header, one can use
+/// serializeSingleColumn() directly.
 class PrestoVectorSerde : public VectorSerde {
  public:
   // Input options that the serializer recognizes.
@@ -50,10 +55,13 @@ class PrestoVectorSerde : public VectorSerde {
     PrestoOptions(
         bool _useLosslessTimestamp,
         common::CompressionKind _compressionKind,
-        bool _nullsFirst = false)
-        : VectorSerde::Options(_compressionKind),
+        float _minCompressionRatio = 0.8,
+        bool _nullsFirst = false,
+        bool _preserveEncodings = false)
+        : VectorSerde::Options(_compressionKind, _minCompressionRatio),
           useLosslessTimestamp(_useLosslessTimestamp),
-          nullsFirst(_nullsFirst) {}
+          nullsFirst(_nullsFirst),
+          preserveEncodings(_preserveEncodings) {}
 
     /// Currently presto only supports millisecond precision and the serializer
     /// converts velox native timestamp to that resulting in loss of precision.
@@ -68,11 +76,13 @@ class PrestoVectorSerde : public VectorSerde {
     /// structs.
     bool nullsFirst{false};
 
-    /// Minimum achieved compression if compression is enabled. Compressing less
-    /// than this causes subsequent compression attempts to be skipped. The more
-    /// times compression misses the target the less frequently it is tried.
-    float minCompressionRatio{0.8};
+    /// If true, the serializer will not employ any optimizations that can
+    /// affect the encoding of the input vectors. This is only relevant when
+    /// using BatchVectorSerializer.
+    bool preserveEncodings{false};
   };
+
+  PrestoVectorSerde() : VectorSerde(Kind::kPresto) {}
 
   /// Adds the serialized sizes of the rows of 'vector' in 'ranges[i]' to
   /// '*sizes[i]'.
@@ -82,9 +92,11 @@ class PrestoVectorSerde : public VectorSerde {
       vector_size_t** sizes,
       Scratch& scratch) override;
 
+  /// Adds the serialized sizes of the rows of 'vector' in 'rows[i]' to
+  /// '*sizes[i]'.
   void estimateSerializedSize(
       const BaseVector* vector,
-      const folly::Range<const vector_size_t*> rows,
+      const folly::Range<const vector_size_t*>& rows,
       vector_size_t** sizes,
       Scratch& scratch) override;
 
@@ -134,31 +146,17 @@ class PrestoVectorSerde : public VectorSerde {
       VectorPtr* result,
       const Options* options);
 
-  enum class TokenType {
-    HEADER,
-    NUM_COLUMNS,
-    COLUMN_ENCODING,
-    NUM_ROWS,
-    NULLS,
-    BYTE_ARRAY,
-    SHORT_ARRAY,
-    INT_ARRAY,
-    LONG_ARRAY,
-    INT128_ARRAY,
-    VARIABLE_WIDTH_DATA_SIZE,
-    VARIABLE_WIDTH_DATA,
-    DICTIONARY_INDICES,
-    DICTIONARY_ID,
-    HASH_TABLE_SIZE,
-    HASH_TABLE,
-    NUM_FIELDS,
-    OFFSETS,
-  };
-
-  struct Token {
-    TokenType tokenType;
-    uint32_t length;
-  };
+  /// This function is used to serialize data from input vector into a single
+  /// column that conforms to PrestoPage's column format. The serialized binary
+  /// data is uncompressed and starts at the column header since the PrestoPage
+  /// header is not included. The deserializeSingleColumn function can be used
+  /// to deserialize the serialized binary data returned by this function back
+  /// to the input vector.
+  void serializeSingleColumn(
+      const VectorPtr& vector,
+      const Options* opts,
+      memory::MemoryPool* pool,
+      std::ostream* output);
 
   /**
    * This function lexes the PrestoPage encoded source into tokens so that
@@ -188,6 +186,7 @@ class PrestoVectorSerde : public VectorSerde {
       const Options* options = nullptr);
 
   static void registerVectorSerde();
+  static void registerNamedVectorSerde();
 };
 
 class PrestoOutputStreamListener : public OutputStreamListener {

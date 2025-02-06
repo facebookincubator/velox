@@ -22,32 +22,59 @@
 
 namespace facebook::velox::functions {
 
-/// Returns SelectivityVector for the nested vector with all rows corresponding
-/// to specified top-level rows selected. The optional topLevelRowMapping is
-/// used to pass the dictionary indices if the topLevelVector is dictionary
-/// encoded.
+/// This function returns a SelectivityVector for ARRAY/MAP vectors that selects
+/// all rows corresponding to the specified rows. This flavor is intended for
+/// use with the base vectors of decoded vectors. Use `nulls` and `rowMapping`
+/// to pass in the null and index mappings from the DecodedVector.
 template <typename T>
 SelectivityVector toElementRows(
     vector_size_t size,
     const SelectivityVector& topLevelRows,
-    const T* topLevelVector,
-    const vector_size_t* topLevelRowMapping = nullptr) {
-  auto rawNulls = topLevelVector->rawNulls();
-  auto rawSizes = topLevelVector->rawSizes();
-  auto rawOffsets = topLevelVector->rawOffsets();
+    const T* arrayBaseVector,
+    const uint64_t* nulls,
+    const vector_size_t* rowMapping) {
+  VELOX_CHECK(
+      arrayBaseVector->encoding() == VectorEncoding::Simple::MAP ||
+      arrayBaseVector->encoding() == VectorEncoding::Simple::ARRAY);
+
+  auto rawSizes = arrayBaseVector->rawSizes();
+  auto rawOffsets = arrayBaseVector->rawOffsets();
+  VELOX_DEBUG_ONLY const auto sizeRange =
+      arrayBaseVector->sizes()->template asRange<vector_size_t>().end();
+  VELOX_DEBUG_ONLY const auto offsetRange =
+      arrayBaseVector->offsets()->template asRange<vector_size_t>().end();
 
   SelectivityVector elementRows(size, false);
   topLevelRows.applyToSelected([&](vector_size_t row) {
-    auto index = topLevelRowMapping ? topLevelRowMapping[row] : row;
-    if (rawNulls && bits::isBitNull(rawNulls, index)) {
+    auto index = rowMapping ? rowMapping[row] : row;
+    if (nulls && bits::isBitNull(nulls, row)) {
       return;
     }
+
+    VELOX_DCHECK_LE(index, sizeRange);
+    VELOX_DCHECK_LE(index, offsetRange);
+
     auto size = rawSizes[index];
     auto offset = rawOffsets[index];
     elementRows.setValidRange(offset, offset + size, true);
   });
   elementRows.updateBounds();
   return elementRows;
+}
+
+/// This function returns a SelectivityVector for ARRAY/MAP vectors that selects
+/// all rows corresponding to the specified rows.
+template <typename T>
+SelectivityVector toElementRows(
+    vector_size_t size,
+    const SelectivityVector& topLevelRows,
+    const T* arrayBaseVector) {
+  return toElementRows(
+      size,
+      topLevelRows,
+      arrayBaseVector,
+      arrayBaseVector->rawNulls(),
+      nullptr);
 }
 
 /// Returns a buffer of vector_size_t that represents the mapping from

@@ -26,13 +26,22 @@ DEFINE_bool(
     false,
     "Use buffer  end guard to detect overruns");
 
+DEFINE_int32(
+    wave_random_fill,
+    0,
+    "If non-0 initialize allocated and freed from this seed");
+
 namespace facebook::velox::wave {
 
 uint64_t GpuSlab::roundBytes(uint64_t bytes) {
   if (FLAGS_wave_buffer_end_guard) {
     bytes += sizeof(int64_t);
   }
-  return bits::nextPowerOfTwo(std::max<int64_t>(16, bytes));
+  if (bytes > 32 << 10) {
+    return bits::roundUp(bytes, 32 << 10);
+  } else {
+    return bits::nextPowerOfTwo(std::max<int64_t>(16, bytes));
+  }
 }
 
 GpuSlab::GpuSlab(void* ptr, size_t capacityBytes, GpuAllocator* allocator)
@@ -285,12 +294,18 @@ GpuArena::Buffers::Buffers() {
   }
 }
 
-GpuArena::GpuArena(uint64_t singleArenaCapacity, GpuAllocator* allocator)
-    : singleArenaCapacity_(singleArenaCapacity), allocator_(allocator) {
+GpuArena::GpuArena(
+    uint64_t singleArenaCapacity,
+    GpuAllocator* allocator,
+    uint64_t standbyCapacity)
+    : singleArenaCapacity_(singleArenaCapacity),
+      standbyCapacity_(standbyCapacity),
+      allocator_(allocator) {
   auto arena = std::make_shared<GpuSlab>(
       allocator_->allocate(singleArenaCapacity),
       singleArenaCapacity,
       allocator_);
+  capacity_ += arena->byteSize();
   arenas_.emplace(reinterpret_cast<uint64_t>(arena->address()), arena);
   currentArena_ = arena;
 }
@@ -312,6 +327,13 @@ WaveBufferPtr GpuArena::getBuffer(void* ptr, size_t capacity, size_t size) {
   result->ptr_ = ptr;
   result->size_ = size;
   result->capacity_ = capacity;
+  if (FLAGS_wave_random_fill) {
+    fillMemory(
+        result->as<uint64_t>(),
+        result->size() / sizeof(uint64_t),
+        FLAGS_wave_random_fill,
+        allocator_->isDevice());
+  }
   result->setMagic();
   return result;
 }
@@ -319,6 +341,8 @@ WaveBufferPtr GpuArena::getBuffer(void* ptr, size_t capacity, size_t size) {
 WaveBufferPtr GpuArena::allocateBytes(uint64_t bytes) {
   auto roundedBytes = GpuSlab::roundBytes(bytes);
   std::lock_guard<std::mutex> l(mutex_);
+  totalAllocated_ += roundedBytes;
+  ++numAllocations_;
   auto* result = currentArena_->allocate(roundedBytes);
   if (result != nullptr) {
     return getBuffer(result, bytes, roundedBytes);
@@ -342,6 +366,10 @@ WaveBufferPtr GpuArena::allocateBytes(uint64_t bytes) {
   auto newArena = std::make_shared<GpuSlab>(
       allocator_->allocate(arenaBytes), arenaBytes, allocator_);
   arenas_.emplace(reinterpret_cast<uint64_t>(newArena->address()), newArena);
+  capacity_ += newArena->byteSize();
+  if (capacity_ > maxCapacity_) {
+    maxCapacity_ = capacity_;
+  }
   currentArena_ = newArena;
   result = currentArena_->allocate(bytes);
   if (result) {
@@ -354,6 +382,13 @@ void GpuArena::free(Buffer* buffer) {
   const uint64_t addressU64 = reinterpret_cast<uint64_t>(buffer->ptr_);
   VELOX_CHECK_EQ(0, buffer->referenceCount_);
   VELOX_CHECK_EQ(0, buffer->pinCount_);
+  if (FLAGS_wave_random_fill) {
+    fillMemory(
+        buffer->as<uint64_t>(),
+        buffer->size() / sizeof(uint64_t),
+        FLAGS_wave_random_fill + 0xdd,
+        allocator_->isDevice());
+  }
   std::lock_guard<std::mutex> l(mutex_);
   VELOX_CHECK(!arenas_.empty());
 
@@ -365,7 +400,9 @@ void GpuArena::free(Buffer* buffer) {
         iter->first + singleArenaCapacity_, addressU64 + buffer->size_);
   }
   iter->second->free(buffer->ptr_, buffer->size_);
-  if (iter->second->empty() && iter->second != currentArena_) {
+  if (iter->second->empty() && iter->second != currentArena_ &&
+      capacity_ - iter->second->byteSize() >= standbyCapacity_) {
+    capacity_ -= iter->second->byteSize();
     arenas_.erase(iter);
   }
   buffer->ptr_ = firstFreeBuffer_;
@@ -403,6 +440,14 @@ ArenaStatus GpuArena::checkBuffers() {
     }
   }
   return status;
+}
+
+std::string GpuArena::toString() const {
+  std::stringstream out;
+  for (auto& pair : arenas_) {
+    out << pair.second->toString() << std::endl;
+  }
+  return out.str();
 }
 
 } // namespace facebook::velox::wave

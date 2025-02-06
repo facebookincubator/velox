@@ -17,21 +17,21 @@ add_executable(
   GpuArenaTest.cpp
   CudaTest.cpp
   CudaTest.cu
+  BreezeCudaTest.cu
+  CompileTest.cu
   BlockTest.cpp
   BlockTest.cu
   HashTableTest.cpp
   HashTestUtil.cpp)
 
 add_test(velox_wave_common_test velox_wave_common_test)
+set_tests_properties(velox_wave_common_test PROPERTIES LABELS cuda_driver)
 
+target_include_directories(velox_wave_common_test PRIVATE ../../../breeze)
 target_link_libraries(
   velox_wave_common_test
   velox_wave_common
-  velox_memory
-  velox_time
-  velox_exception
-  gtest
-  gtest_main
-  gflags::gflags
-  glog::glog
-  Folly::folly)
+  xsimd
+  GTest::gtest
+  GTest::gtest_main
+  CUDA::cudart)

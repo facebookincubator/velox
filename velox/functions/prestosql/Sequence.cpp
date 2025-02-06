@@ -48,7 +48,8 @@ T add(T value, K step, int32_t sequence);
 
 template <>
 int64_t add(int64_t value, int64_t step, int32_t sequence) {
-  const auto delta = (int128_t)step * (int128_t)sequence;
+  const auto delta =
+      static_cast<int128_t>(step) * static_cast<int128_t>(sequence);
   // Since step is calcuated from start and stop,
   // the sum of 'value' and 'add' is within int64_t.
   return value + delta;
@@ -56,13 +57,15 @@ int64_t add(int64_t value, int64_t step, int32_t sequence) {
 
 template <>
 int32_t add(int32_t value, int64_t step, int32_t sequence) {
-  const auto delta = (int128_t)step * (int128_t)sequence;
+  const auto delta =
+      static_cast<int128_t>(step) * static_cast<int128_t>(sequence);
   return value + delta;
 }
 
 template <>
 Timestamp add(Timestamp value, int64_t step, int32_t sequence) {
-  const auto delta = (int128_t)step * (int128_t)sequence;
+  const auto delta =
+      static_cast<int128_t>(step) * static_cast<int128_t>(sequence);
   return Timestamp::fromMillis(value.toMillis() + delta);
 }
 
@@ -176,13 +179,14 @@ class SequenceFunction : public exec::VectorFunction {
     VELOX_USER_CHECK(
         step > 0 ? stop >= start : stop <= start,
         "sequence stop value should be greater than or equal to start value if "
-        "step is greater than zero otherwise stop should be less than or equal to start")
+        "step is greater than zero otherwise stop should be less than or equal to start");
     int128_t sequenceCount;
     if (isYearMonth) {
       sequenceCount = getStepCount(start, stop, step);
     } else {
-      sequenceCount =
-          ((int128_t)toInt64(stop) - (int128_t)toInt64(start)) / step +
+      sequenceCount = (static_cast<int128_t>(toInt64(stop)) -
+                       static_cast<int128_t>(toInt64(start))) /
+              step +
           1; // prevent overflow
     }
     VELOX_USER_CHECK_LE(

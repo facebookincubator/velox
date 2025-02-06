@@ -166,7 +166,7 @@ void HashStringAllocator::freeToPool(void* ptr, size_t size) {
 }
 
 // static
-ByteInputStream HashStringAllocator::prepareRead(
+std::unique_ptr<ByteInputStream> HashStringAllocator::prepareRead(
     const Header* begin,
     size_t maxBytes) {
   std::vector<ByteRange> ranges;
@@ -187,7 +187,7 @@ ByteInputStream HashStringAllocator::prepareRead(
 
     header = header->nextContinued();
   }
-  return ByteInputStream(std::move(ranges));
+  return std::make_unique<BufferInputStream>(std::move(ranges));
 }
 
 HashStringAllocator::Position HashStringAllocator::newWrite(
@@ -271,8 +271,8 @@ HashStringAllocator::finishWrite(
   // and the block was extended. Calculate the new position.
   if (state_.startPosition().header->isContinued()) {
     auto* header = state_.startPosition().header;
-    const auto offset = state_.startPosition().offset();
-    const auto extra = offset - header->usableSize();
+    const auto offset_2 = state_.startPosition().offset();
+    const auto extra = offset_2 - header->usableSize();
     if (extra > 0) {
       auto* newHeader = header->nextContinued();
       auto* newPosition = newHeader->begin() + extra;
@@ -365,7 +365,7 @@ StringView HashStringAllocator::contiguousString(
 
   auto stream = prepareRead(headerOf(view.data()));
   storage.resize(view.size());
-  stream.readBytes(storage.data(), view.size());
+  stream->readBytes(storage.data(), view.size());
   return StringView(storage);
 }
 
@@ -793,10 +793,4 @@ int64_t HashStringAllocator::checkConsistency() const {
 bool HashStringAllocator::isEmpty() const {
   return state_.sizeFromPool() == 0 && checkConsistency() == 0;
 }
-
-void HashStringAllocator::checkEmpty() const {
-  VELOX_CHECK_EQ(0, state_.sizeFromPool());
-  VELOX_CHECK_EQ(0, checkConsistency());
-}
-
 } // namespace facebook::velox

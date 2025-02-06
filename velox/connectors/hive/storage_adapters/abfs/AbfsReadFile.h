@@ -14,30 +14,43 @@
  * limitations under the License.
  */
 
-#include <folly/executors/ThreadedExecutor.h>
-#include <folly/futures/Future.h>
-#include "velox/common/file/File.h"
-#include "velox/connectors/hive/storage_adapters/abfs/AbfsUtil.h"
+#pragma once
 
-namespace facebook::velox::filesystems::abfs {
+#include "velox/common/file/File.h"
+
+namespace facebook::velox::config {
+class ConfigBase;
+}
+
+namespace facebook::velox::filesystems {
 class AbfsReadFile final : public ReadFile {
  public:
-  explicit AbfsReadFile(const std::string& path, const std::string& connectStr);
+  explicit AbfsReadFile(
+      std::string_view path,
+      const config::ConfigBase& config);
 
   void initialize(const FileOptions& options);
 
-  std::string_view pread(uint64_t offset, uint64_t length, void* buf)
-      const final;
+  std::string_view pread(
+      uint64_t offset,
+      uint64_t length,
+      void* buf,
+      io::IoStatistics* stats = nullptr) const final;
 
-  std::string pread(uint64_t offset, uint64_t length) const final;
+  std::string pread(
+      uint64_t offset,
+      uint64_t length,
+      io::IoStatistics* stats = nullptr) const final;
 
   uint64_t preadv(
       uint64_t offset,
-      const std::vector<folly::Range<char*>>& buffers) const final;
+      const std::vector<folly::Range<char*>>& buffers,
+      io::IoStatistics* stats = nullptr) const final;
 
   uint64_t preadv(
       folly::Range<const common::Region*> regions,
-      folly::Range<folly::IOBuf*> iobufs) const final;
+      folly::Range<folly::IOBuf*> iobufs,
+      io::IoStatistics* stats = nullptr) const final;
 
   uint64_t size() const final;
 
@@ -53,4 +66,4 @@ class AbfsReadFile final : public ReadFile {
   class Impl;
   std::shared_ptr<Impl> impl_;
 };
-} // namespace facebook::velox::filesystems::abfs
+} // namespace facebook::velox::filesystems

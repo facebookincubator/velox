@@ -26,13 +26,12 @@
 namespace facebook::velox::tests::utils {
 
 using namespace filesystems;
-
 /// Implements faulty filesystem for io fault injection in unit test. It is a
 /// wrapper on top of a real file system, and by default it delegates the the
 /// file operation to the real file system underneath.
 class FaultyFileSystem : public FileSystem {
  public:
-  explicit FaultyFileSystem(std::shared_ptr<const Config> config)
+  explicit FaultyFileSystem(std::shared_ptr<const config::ConfigBase> config)
       : FileSystem(std::move(config)) {}
 
   ~FaultyFileSystem() override {}
@@ -47,19 +46,19 @@ class FaultyFileSystem : public FileSystem {
 
   // Extracts the delegated real file path by removing the faulty file system
   // scheme prefix.
-  inline std::string_view extractPath(std::string_view path) override {
-    VELOX_CHECK_EQ(path.find(scheme()), 0, "");
-    const auto filePath = path.substr(scheme().length());
+  inline std::string_view extractPath(std::string_view path) const override {
+    const auto filePath =
+        (path.find(scheme()) == 0) ? path.substr(scheme().length()) : path;
     return getFileSystem(filePath, config_)->extractPath(filePath);
   }
 
   std::unique_ptr<ReadFile> openFileForRead(
       std::string_view path,
-      const FileOptions& options) override;
+      const FileOptions& options = {}) override;
 
   std::unique_ptr<WriteFile> openFileForWrite(
       std::string_view path,
-      const FileOptions& options) override;
+      const FileOptions& options = {}) override;
 
   void remove(std::string_view path) override;
 
@@ -70,9 +69,11 @@ class FaultyFileSystem : public FileSystem {
 
   bool exists(std::string_view path) override;
 
+  bool isDirectory(std::string_view path) const override;
+
   std::vector<std::string> list(std::string_view path) override;
 
-  void mkdir(std::string_view path) override;
+  void mkdir(std::string_view path, const DirectoryOptions& options) override;
 
   void rmdir(std::string_view path) override;
 
@@ -81,6 +82,15 @@ class FaultyFileSystem : public FileSystem {
     std::lock_guard<std::mutex> l(mu_);
     executor_ = executor;
   }
+
+  /// Sets the hook for filesystem fault injection.
+  void setFilesystemInjectionHook(FileSystemFaultInjectionHook hook);
+
+  /// Setups to inject 'error' for a particular set of filesystem operation
+  /// types. Only operations inside 'opTypes' will be injected with 'error'.
+  void setFileSystemInjectionError(
+      std::exception_ptr error,
+      std::unordered_set<FaultFileSystemOperation::Type> opTypes = {});
 
   /// Setups hook for file fault injection.
   void setFileInjectionHook(FileFaultInjectionHook hook);
@@ -102,7 +112,33 @@ class FaultyFileSystem : public FileSystem {
   /// Clears the file fault injections.
   void clearFileFaultInjections();
 
+  /// Clears the filesystem fault injections.
+  void clearFileSystemInjections();
+
  private:
+  // Defines the per filesystem fault injection setup. Only one type of can be
+  // set at a time
+  struct FileSystemInjections {
+    // TODO: Support more flavors of fault injection
+    FileSystemFaultInjectionHook filesystemInjectionHook{nullptr};
+
+    std::exception_ptr directoryException{nullptr};
+
+    std::unordered_set<FaultFileSystemOperation::Type> opTypes{};
+
+    FileSystemInjections() = default;
+
+    FileSystemInjections(
+        std::exception_ptr exception,
+        std::unordered_set<FaultFileSystemOperation::Type> _opTypes)
+        : directoryException(std::move(exception)),
+          opTypes(std::move(_opTypes)) {}
+
+    explicit FileSystemInjections(
+        FileSystemFaultInjectionHook _filesystemInjectionHook)
+        : filesystemInjectionHook(std::move(_filesystemInjectionHook)) {}
+  };
+
   // Defines the file injection setup and only one type of injection can be set
   // at a time.
   struct FileInjections {
@@ -131,11 +167,15 @@ class FaultyFileSystem : public FileSystem {
           opTypes(std::move(_opTypes)) {}
   };
 
+  // Invoked to inject filesystem fault to 'op' if configured.
+  void maybeInjectFilesystemFault(FaultFileSystemOperation* op);
+
   // Invoked to inject file fault to 'op' if configured.
   void maybeInjectFileFault(FaultFileOperation* op);
 
   mutable std::mutex mu_;
   std::optional<FileInjections> fileInjections_;
+  std::optional<FileSystemInjections> fsInjections_;
   folly::Executor* executor_;
 };
 

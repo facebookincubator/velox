@@ -68,9 +68,6 @@ class MergeJoin : public Operator {
     Operator::close();
   }
 
-  /// If merge join supports this join type.
-  static bool isSupported(core::JoinType joinType);
-
  private:
   // Sets up 'filter_' and related member variables.
   void initializeFilter(
@@ -183,13 +180,22 @@ class MergeJoin : public Operator {
   bool prepareOutput(const RowVectorPtr& left, const RowVectorPtr& right);
 
   // Appends a cartesian product of the current set of matching rows, leftMatch_
-  // x rightMatch_, to output_. Returns true if output_ is full. Sets
-  // leftMatchCursor_ and rightMatchCursor_ if output_ filled up before all the
-  // rows were added. Fills up output starting from leftMatchCursor_ and
-  // rightMatchCursor_ positions if these are set. Clears leftMatch_ and
-  // rightMatch_ if all rows were added. Updates leftMatchCursor_ and
-  // rightMatchCursor_ if output_ filled up before all rows were added.
+  // x rightMatch_ for left join and rightMatch_ x leftMatch_ for right join, to
+  // output_. Returns true if output_ is full. Sets leftMatchCursor_ and
+  // rightMatchCursor_ if output_ filled up before all the rows were added.
+  // Fills up output starting from leftMatchCursor_ and rightMatchCursor_
+  // positions if these are set. Clears leftMatch_ and rightMatch_ if all rows
+  // were added. Updates leftMatchCursor_ and rightMatchCursor_ if output_
+  // filled up before all rows were added.
   bool addToOutput();
+
+  // Appends the current set of matching rows, leftMatch_ x rightMatch_ for
+  // left.
+  bool addToOutputForLeftJoin();
+
+  // Appends the current set of matching rows, rightMatch_ x leftMatch_ for
+  // right.
+  bool addToOutputForRightJoin();
 
   // Adds one row of output by writing to the indices of the output
   // dictionaries. By default, this operator returns dictionaries wrapped around
@@ -224,6 +230,26 @@ class MergeJoin : public Operator {
   void addOutputRowForRightJoin(
       const RowVectorPtr& right,
       vector_size_t rightIndex);
+
+  /// If all rows from the current left batch have been processed.
+  bool finishedLeftBatch() const {
+    return index_ == input_->size();
+  }
+
+  /// If all rows from the current right batch have been processed.
+  bool finishedRightBatch() const {
+    return rightIndex_ == rightInput_->size();
+  }
+
+  /// Properly resizes and produces the current output vector if one is
+  /// available.
+  RowVectorPtr produceOutput() {
+    if (output_) {
+      output_->resize(outputSize_);
+      return std::move(output_);
+    }
+    return nullptr;
+  }
 
   /// Evaluates join filter on 'filterInput_' and returns 'output' that contains
   /// a subset of rows on which the filter passed. Returns nullptr if no rows

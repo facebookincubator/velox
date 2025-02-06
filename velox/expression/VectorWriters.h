@@ -353,7 +353,7 @@ struct VectorWriter<
     std::enable_if_t<std::is_same_v<T, Varchar> | std::is_same_v<T, Varbinary>>>
     : public VectorWriterBase {
   using vector_t = typename TypeToFlatVector<T>::type;
-  using exec_out_t = StringWriter<>;
+  using exec_out_t = StringWriter;
 
   void init(vector_t& vector, bool uniqueAndMutable = false) {
     proxy_.vector_ = &vector;
@@ -765,7 +765,8 @@ struct VectorWriter<DynamicRow, void> : public VectorWriterBase {
   vector_t* rowVector_ = nullptr;
 };
 
-template <typename T>
-struct VectorWriter<CustomType<T>> : public VectorWriter<typename T::type> {};
+template <typename T, bool providesCustomComparison>
+struct VectorWriter<CustomType<T, providesCustomComparison>>
+    : public VectorWriter<typename T::type> {};
 
 } // namespace facebook::velox::exec

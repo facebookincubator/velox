@@ -15,46 +15,90 @@
  */
 
 #include "velox/dwio/common/ScanSpec.h"
+
+#include "velox/core/Expressions.h"
 #include "velox/dwio/common/Statistics.h"
 
 namespace facebook::velox::common {
 
+ScanSpec* ScanSpec::getOrCreateChild(const std::string& name) {
+  if (auto it = this->childByFieldName_.find(name);
+      it != this->childByFieldName_.end()) {
+    return it->second;
+  }
+  this->children_.push_back(std::make_unique<ScanSpec>(name));
+  auto* child = this->children_.back().get();
+  this->childByFieldName_[child->fieldName()] = child;
+  return child;
+}
+
 ScanSpec* ScanSpec::getOrCreateChild(const Subfield& subfield) {
-  auto container = this;
-  auto& path = subfield.path();
+  auto* container = this;
+  const auto& path = subfield.path();
   for (size_t depth = 0; depth < path.size(); ++depth) {
-    auto element = path[depth].get();
+    const auto element = path[depth].get();
     VELOX_CHECK_EQ(element->kind(), kNestedField);
     auto* nestedField = static_cast<const Subfield::NestedField*>(element);
-    auto it = container->childByFieldName_.find(nestedField->name());
-    if (it != container->childByFieldName_.end()) {
-      container = it->second;
-    } else {
-      container->children_.push_back(std::make_unique<ScanSpec>(*element));
-      auto* child = container->children_.back().get();
-      container->childByFieldName_[child->fieldName()] = child;
-      container = child;
-    }
+    container = container->getOrCreateChild(nestedField->name());
   }
   return container;
 }
 
-uint64_t ScanSpec::newRead() {
-  if (!numReads_) {
-    reorder();
-  } else if (enableFilterReorder_) {
-    for (auto i = 1; i < children_.size(); ++i) {
-      if (!children_[i]->filter_) {
-        break;
-      }
-      if (children_[i - 1]->selectivity_.timeToDropValue() >
-          children_[i]->selectivity_.timeToDropValue()) {
-        reorder();
-        break;
-      }
+bool ScanSpec::compareTimeToDropValue(
+    const std::shared_ptr<ScanSpec>& left,
+    const std::shared_ptr<ScanSpec>& right) {
+  if (left->hasFilter() && right->hasFilter()) {
+    if (!disableStatsBasedFilterReorder_ &&
+        (left->selectivity_.numIn() || right->selectivity_.numIn())) {
+      return left->selectivity_.timeToDropValue() <
+          right->selectivity_.timeToDropValue();
     }
+    // Integer filters are before other filters if there is no
+    // history data.
+    if (left->filter_ && right->filter_) {
+      if (left->filter_->kind() == right->filter_->kind()) {
+        return left->fieldName_ < right->fieldName_;
+      }
+      return left->filter_->kind() < right->filter_->kind();
+    }
+    // If hasFilter() is true but 'filter_' is nullptr, we have a filter
+    // on complex type members. The simple type filter goes first.
+    if (left->filter_) {
+      return true;
+    }
+    if (right->filter_) {
+      return false;
+    }
+    return left->fieldName_ < right->fieldName_;
   }
-  return numReads_++;
+
+  if (left->hasFilter()) {
+    return true;
+  }
+  if (right->hasFilter()) {
+    return false;
+  }
+  return left->fieldName_ < right->fieldName_;
+}
+
+uint64_t ScanSpec::newRead() {
+  // NOTE: in case of split preload, a new split might see zero reads but
+  // non-empty filter stats. Hence we need to avoid stats triggered filter
+  // reordering even on the first read if 'disableStatsBasedFilterReorder_' is
+  // set.
+  if (numReads_ == 0 ||
+      (!disableStatsBasedFilterReorder_ &&
+       !std::is_sorted(
+           children_.begin(),
+           children_.end(),
+           [this](
+               const std::shared_ptr<ScanSpec>& left,
+               const std::shared_ptr<ScanSpec>& right) {
+             return compareTimeToDropValue(left, right);
+           }))) {
+    reorder();
+  }
+  return ++numReads_;
 }
 
 void ScanSpec::reorder() {
@@ -69,35 +113,15 @@ void ScanSpec::reorder() {
       [this](
           const std::shared_ptr<ScanSpec>& left,
           const std::shared_ptr<ScanSpec>& right) {
-        if (left->hasFilter() && right->hasFilter()) {
-          if (enableFilterReorder_ &&
-              (left->selectivity_.numIn() || right->selectivity_.numIn())) {
-            return left->selectivity_.timeToDropValue() <
-                right->selectivity_.timeToDropValue();
-          }
-          // Integer filters are before other filters if there is no
-          // history data.
-          if (left->filter_ && right->filter_) {
-            return left->filter_->kind() < right->filter_->kind();
-          }
-          // If hasFilter() is true but 'filter_' is nullptr, we have a filter
-          // on complex type members. The simple type filter goes first.
-          if (left->filter_) {
-            return true;
-          }
-          if (right->filter_) {
-            return false;
-          }
-          return left->fieldName_ < right->fieldName_;
-        }
-        if (left->hasFilter()) {
-          return true;
-        }
-        if (right->hasFilter()) {
-          return false;
-        }
-        return left->fieldName_ < right->fieldName_;
+        return compareTimeToDropValue(left, right);
       });
+}
+
+void ScanSpec::enableFilterInSubTree(bool value) {
+  filterDisabled_ = !value;
+  for (auto& child : children_) {
+    child->enableFilterInSubTree(value);
+  }
 }
 
 const std::vector<ScanSpec*>& ScanSpec::stableChildren() {
@@ -112,10 +136,13 @@ const std::vector<ScanSpec*>& ScanSpec::stableChildren() {
 }
 
 bool ScanSpec::hasFilter() const {
+  if (filterDisabled_) {
+    return false;
+  }
   if (hasFilter_.has_value()) {
     return hasFilter_.value();
   }
-  if (!isConstant() && filter_) {
+  if (!isConstant() && filter()) {
     hasFilter_ = true;
     return true;
   }
@@ -129,7 +156,34 @@ bool ScanSpec::hasFilter() const {
   return false;
 }
 
+bool ScanSpec::hasFilterApplicableToConstant() const {
+  if (filter_) {
+    return true;
+  }
+  for (auto& child : children_) {
+    if (!child->isArrayElementOrMapEntry_ &&
+        child->hasFilterApplicableToConstant()) {
+      return true;
+    }
+  }
+  return false;
+}
+
+bool ScanSpec::testNull() const {
+  auto* filter = this->filter();
+  if (filter && !filter->testNull()) {
+    return false;
+  }
+  for (auto& child : children_) {
+    if (!child->isArrayElementOrMapEntry_ && !child->testNull()) {
+      return false;
+    }
+  }
+  return true;
+}
+
 void ScanSpec::moveAdaptationFrom(ScanSpec& other) {
+  VELOX_CHECK(!filterDisabled_);
   // moves the filters and filter order from 'other'.
   for (auto& child : children_) {
     auto it = other.childByFieldName_.find(child->fieldName_);
@@ -252,8 +306,8 @@ bool testStringFilter(
 bool testBoolFilter(
     common::Filter* filter,
     dwio::common::BooleanColumnStatistics* boolStats) {
-  auto trueCount = boolStats->getTrueCount();
-  auto falseCount = boolStats->getFalseCount();
+  const auto trueCount = boolStats->getTrueCount();
+  const auto falseCount = boolStats->getFalseCount();
   if (trueCount.has_value() && falseCount.has_value()) {
     if (trueCount.value() == 0) {
       if (!filter->testBool(false)) {
@@ -275,7 +329,7 @@ bool testFilter(
     dwio::common::ColumnStatistics* stats,
     uint64_t totalRows,
     const TypePtr& type) {
-  bool mayHaveNull = true;
+  bool mayHaveNull{true};
 
   // Has-null statistics is often not set. Hence, we supplement it with
   // number-of-values statistic to detect no-null columns more often.
@@ -293,10 +347,14 @@ bool testFilter(
     // IS NULL filter cannot pass.
     return false;
   }
+
   if (mayHaveNull && filter->testNull()) {
     return true;
   }
   if (type->isDecimal()) {
+    // The min and max value in the metadata for decimal type in Parquet can be
+    // stored in different physical types, including int32, int64 and
+    // fixed_len_byte_array. The loading of them is not supported in Metadata.
     return true;
   }
   switch (type->kind()) {
@@ -304,23 +362,23 @@ bool testFilter(
     case TypeKind::INTEGER:
     case TypeKind::SMALLINT:
     case TypeKind::TINYINT: {
-      auto intStats =
+      auto* intStats =
           dynamic_cast<dwio::common::IntegerColumnStatistics*>(stats);
       return testIntFilter(filter, intStats, mayHaveNull);
     }
     case TypeKind::REAL:
     case TypeKind::DOUBLE: {
-      auto doubleStats =
+      auto* doubleStats =
           dynamic_cast<dwio::common::DoubleColumnStatistics*>(stats);
       return testDoubleFilter(filter, doubleStats, mayHaveNull);
     }
     case TypeKind::BOOLEAN: {
-      auto boolStats =
+      auto* boolStats =
           dynamic_cast<dwio::common::BooleanColumnStatistics*>(stats);
       return testBoolFilter(filter, boolStats);
     }
     case TypeKind::VARCHAR: {
-      auto stringStats =
+      auto* stringStats =
           dynamic_cast<dwio::common::StringColumnStatistics*>(stats);
       return testStringFilter(filter, stringStats, mayHaveNull);
     }
@@ -346,9 +404,15 @@ std::string ScanSpec::toString() const {
     out << fieldName_;
     if (filter_) {
       out << " filter " << filter_->toString();
+      if (filterDisabled_) {
+        out << " disabled";
+      }
     }
     if (isConstant()) {
       out << " constant";
+    }
+    if (deltaUpdate_) {
+      out << " deltaUpdate_=" << deltaUpdate_;
     }
     if (!metadataFilters_.empty()) {
       out << " metadata_filters(" << metadataFilters_.size() << ")";
@@ -369,7 +433,7 @@ void ScanSpec::addFilter(const Filter& filter) {
 }
 
 ScanSpec* ScanSpec::addField(const std::string& name, column_index_t channel) {
-  auto child = getOrCreateChild(Subfield(name));
+  auto child = getOrCreateChild(name);
   child->setProjectOut(true);
   child->setChannel(channel);
   return child;
@@ -438,6 +502,81 @@ void ScanSpec::addAllChildFields(const Type& type) {
       break;
     default:
       break;
+  }
+}
+
+namespace {
+
+template <TypeKind kKind>
+void filterSimpleVectorRows(
+    const BaseVector& vector,
+    Filter& filter,
+    vector_size_t size,
+    uint64_t* result) {
+  VELOX_CHECK(size == 0 || result);
+  using T = typename TypeTraits<kKind>::NativeType;
+  auto* simpleVector = vector.asChecked<SimpleVector<T>>();
+  bits::forEachSetBit(result, 0, size, [&](auto i) {
+    if (simpleVector->isNullAt(i)) {
+      if (!filter.testNull()) {
+        bits::clearBit(result, i);
+      }
+    } else if (!applyFilter(filter, simpleVector->valueAt(i))) {
+      bits::clearBit(result, i);
+    }
+  });
+}
+
+void filterRows(
+    const BaseVector& vector,
+    Filter& filter,
+    vector_size_t size,
+    uint64_t* result) {
+  switch (vector.typeKind()) {
+    case TypeKind::ARRAY:
+    case TypeKind::MAP:
+    case TypeKind::ROW:
+      VELOX_CHECK(
+          filter.kind() == FilterKind::kIsNull ||
+              filter.kind() == FilterKind::kIsNotNull,
+          "Complex type can only take null filter, got {}",
+          filter.toString());
+      bits::forEachSetBit(result, 0, size, [&](auto i) {
+        bool pass =
+            vector.isNullAt(i) ? filter.testNull() : filter.testNonNull();
+        if (!pass) {
+          bits::clearBit(result, i);
+        }
+      });
+      break;
+    default:
+      return VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(
+          filterSimpleVectorRows,
+          vector.typeKind(),
+          vector,
+          filter,
+          size,
+          result);
+  }
+}
+
+} // namespace
+
+void ScanSpec::applyFilter(const BaseVector& vector, uint64_t* result) const {
+  if (filter_) {
+    filterRows(vector, *filter_, vector.size(), result);
+  }
+  if (!vector.type()->isRow()) {
+    // Filter on MAP or ARRAY children are pruning, and won't affect correctness
+    // of the result.
+    return;
+  }
+  auto& rowType = vector.type()->asRow();
+  auto* rowVector = vector.asChecked<RowVector>();
+  for (int i = 0; i < rowType.size(); ++i) {
+    if (auto* child = childByName(rowType.nameOf(i))) {
+      child->applyFilter(*rowVector->childAt(i), result);
+    }
   }
 }
 

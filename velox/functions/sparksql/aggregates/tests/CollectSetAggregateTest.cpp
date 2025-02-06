@@ -15,8 +15,8 @@
  */
 
 #include "velox/functions/lib/aggregates/tests/utils/AggregationTestBase.h"
-#include "velox/functions/sparksql/Register.h"
 #include "velox/functions/sparksql/aggregates/Register.h"
+#include "velox/functions/sparksql/registration/Register.h"
 
 using namespace facebook::velox::functions::aggregate::test;
 
@@ -86,6 +86,47 @@ TEST_F(CollectSetAggregateTest, global) {
 
   testAggregations(
       {data}, {}, {"collect_set(c0)"}, {"spark_array_sort(a0)"}, {expected});
+}
+
+TEST_F(CollectSetAggregateTest, noInputRow) {
+  // Empty input.
+  auto data = makeRowVector({makeFlatVector<int32_t>({})});
+  auto expected = makeRowVector({
+      makeArrayVectorFromJson<int32_t>({"[]"}),
+  });
+  testAggregations({data}, {}, {"collect_set(c0)"}, {}, {expected});
+
+  // No input row passes aggregate filter.
+  const auto size = 1'000;
+  const auto integers =
+      makeFlatVector<int32_t>(size, [](auto row) { return row % 10; });
+  data = makeRowVector({
+      integers,
+      makeFlatVector<bool>(size, [](auto /*row*/) { return false; }),
+  });
+
+  auto op = exec::test::PlanBuilder()
+                .values({data})
+                .singleAggregation({}, {"collect_set(c0)"}, {"c1"})
+                .planNode();
+  assertQuery(op, expected);
+
+  // Some groups have no input row passes aggregate filter.
+  data = makeRowVector({
+      integers,
+      integers,
+      makeFlatVector<bool>(size, [](auto row) { return row % 2 == 0; }),
+  });
+  expected = makeRowVector({
+      makeFlatVector<int32_t>({0, 1, 2, 3, 4, 5, 6, 7, 8, 9}),
+      makeArrayVectorFromJson<int32_t>(
+          {"[0]", "[]", "[2]", "[]", "[4]", "[]", "[6]", "[]", "[8]", "[]"}),
+  });
+  op = exec::test::PlanBuilder()
+           .values({data})
+           .singleAggregation({"c0"}, {"collect_set(c1)"}, {"c2"})
+           .planNode();
+  assertQuery(op, expected);
 }
 
 TEST_F(CollectSetAggregateTest, groupBy) {
@@ -217,6 +258,24 @@ TEST_F(CollectSetAggregateTest, rowWithNestedNull) {
 
   testAggregations(
       {data}, {}, {"collect_set(c0)"}, {"spark_array_sort(a0)"}, {expected});
+}
+
+TEST_F(CollectSetAggregateTest, unknownType) {
+  auto data = makeRowVector({
+      makeNullConstant(TypeKind::UNKNOWN, 3),
+  });
+
+  auto expected = makeRowVector({
+      makeArrayVectorFromJson<int32_t>({"[]"}),
+  });
+  testAggregations({data}, {}, {"collect_set(c0)"}, {}, {expected});
+
+  // The grouping key is of UNKONWN type.
+  expected = makeRowVector({
+      makeNullConstant(TypeKind::UNKNOWN, 1),
+      makeArrayVectorFromJson<int32_t>({"[]"}),
+  });
+  testAggregations({data}, {"c0"}, {"collect_set(c0)"}, {}, {expected});
 }
 
 } // namespace

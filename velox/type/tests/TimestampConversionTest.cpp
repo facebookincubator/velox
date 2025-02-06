@@ -40,7 +40,7 @@ int32_t parseDate(const StringView& str, ParseMode mode) {
       });
 }
 
-std::pair<Timestamp, const tz::TimeZone*> parseTimestampWithTimezone(
+ParsedTimestampWithTimeZone parseTimestampWithTimezone(
     const StringView& str,
     TimestampParseMode parseMode = TimestampParseMode::kPrestoCast) {
   return fromTimestampWithTimezoneString(str.data(), str.size(), parseMode)
@@ -52,11 +52,10 @@ std::pair<Timestamp, const tz::TimeZone*> parseTimestampWithTimezone(
 TEST(DateTimeUtilTest, fromDate) {
   auto testDaysSinceEpochFromDate =
       [](int32_t year, int32_t month, int32_t day) {
-        int64_t daysSinceEpoch;
-        auto status =
-            util::daysSinceEpochFromDate(year, month, day, daysSinceEpoch);
-        EXPECT_TRUE(status.ok());
-        return daysSinceEpoch;
+        Expected<int64_t> daysSinceEpoch =
+            util::daysSinceEpochFromDate(year, month, day);
+        EXPECT_FALSE(daysSinceEpoch.hasError());
+        return daysSinceEpoch.value();
       };
   EXPECT_EQ(0, testDaysSinceEpochFromDate(1970, 1, 1));
   EXPECT_EQ(1, testDaysSinceEpochFromDate(1970, 1, 2));
@@ -81,11 +80,11 @@ TEST(DateTimeUtilTest, fromDate) {
 TEST(DateTimeUtilTest, fromDateInvalid) {
   auto testDaysSinceEpochFromDateInvalid =
       [](int32_t year, int32_t month, int32_t day, const std::string& error) {
-        int64_t daysSinceEpoch;
-        auto status =
-            util::daysSinceEpochFromDate(year, month, day, daysSinceEpoch);
-        EXPECT_TRUE(status.isUserError());
-        EXPECT_EQ(status.message(), error);
+        Expected<int64_t> expected =
+            util::daysSinceEpochFromDate(year, month, day);
+        EXPECT_TRUE(expected.hasError());
+        EXPECT_TRUE(expected.error().isUserError());
+        EXPECT_EQ(expected.error().message(), error);
       };
   EXPECT_NO_THROW(testDaysSinceEpochFromDateInvalid(
       1970, 1, -1, "Date out of range: 1970-1--1"));
@@ -103,6 +102,111 @@ TEST(DateTimeUtilTest, fromDateInvalid) {
       1970, 6, 31, "Date out of range: 1970-6-31"));
 }
 
+TEST(DateTimeUtilTest, daysSinceEpochFromWeekOfMonthDateLenient) {
+  auto daysSinceEpoch =
+      [](int32_t year, int32_t month, int32_t weekOfMonth, int32_t dayOfWeek) {
+        auto result = util::daysSinceEpochFromWeekOfMonthDate(
+            year, month, weekOfMonth, dayOfWeek, true);
+        EXPECT_TRUE(!result.hasError());
+        return result.value();
+      };
+
+  EXPECT_EQ(4, daysSinceEpoch(1970, 1, 2, 1));
+  EXPECT_EQ(361, daysSinceEpoch(1971, 1, 1, 1));
+  EXPECT_EQ(396, daysSinceEpoch(1971, 2, 1, 1));
+
+  EXPECT_EQ(10952, daysSinceEpoch(2000, 1, 1, 1));
+  EXPECT_EQ(19905, daysSinceEpoch(2024, 7, 1, 1));
+
+  // Before unix epoch.
+  EXPECT_EQ(-3, daysSinceEpoch(1970, 1, 1, 1));
+  EXPECT_EQ(-2, daysSinceEpoch(1970, 1, 1, 2));
+  EXPECT_EQ(-31, daysSinceEpoch(1969, 12, 1, 1));
+  EXPECT_EQ(-367, daysSinceEpoch(1969, 1, 1, 1));
+  EXPECT_EQ(-724, daysSinceEpoch(1968, 1, 2, 1));
+  EXPECT_EQ(-719533, daysSinceEpoch(0, 1, 1, 1));
+
+  // Negative year - BC.
+  EXPECT_EQ(-719561, daysSinceEpoch(-1, 12, 1, 1));
+  EXPECT_EQ(-719897, daysSinceEpoch(-1, 1, 1, 1));
+
+  // Day in the previous month.
+  EXPECT_EQ(19783, daysSinceEpoch(2024, 2, 5, 5));
+  // Day in the next month.
+  EXPECT_EQ(19751, daysSinceEpoch(2024, 2, 1, 1));
+
+  // Out of range day of week.
+  EXPECT_EQ(338, daysSinceEpoch(1970, 12, 1, 0));
+  EXPECT_EQ(337, daysSinceEpoch(1970, 12, 1, -1));
+  EXPECT_EQ(337, daysSinceEpoch(1970, 12, 1, -8));
+
+  EXPECT_EQ(332, daysSinceEpoch(1970, 12, 1, 8));
+  EXPECT_EQ(333, daysSinceEpoch(1970, 12, 1, 9));
+  EXPECT_EQ(336, daysSinceEpoch(1970, 12, 1, 19));
+
+  // Out of range month.
+  EXPECT_EQ(-3, daysSinceEpoch(1970, 1, 1, 1));
+  EXPECT_EQ(207, daysSinceEpoch(1970, 8, 1, 1));
+  EXPECT_EQ(361, daysSinceEpoch(1970, 13, 1, 1));
+
+  EXPECT_EQ(-31, daysSinceEpoch(1970, 0, 1, 1));
+  EXPECT_EQ(-66, daysSinceEpoch(1970, -1, 1, 1));
+  EXPECT_EQ(-430, daysSinceEpoch(1970, -13, 1, 1));
+
+  // Out of range year.
+  auto result =
+      util::daysSinceEpochFromWeekOfMonthDate(292278995, 1, 1, 1, true);
+  EXPECT_EQ(result.error().message(), "Date out of range: 292278995-1-1");
+}
+
+TEST(DateTimeUtilTest, extractISODayOfTheWeek) {
+  EXPECT_EQ(
+      4, util::extractISODayOfTheWeek(std::numeric_limits<int64_t>::max()));
+  EXPECT_EQ(
+      3, util::extractISODayOfTheWeek(std::numeric_limits<int64_t>::min()));
+  EXPECT_EQ(1, util::extractISODayOfTheWeek(-10));
+  EXPECT_EQ(7, util::extractISODayOfTheWeek(10));
+}
+
+TEST(DateTimeUtilTest, daysSinceEpochFromWeekOfMonthDateNonLenient) {
+  auto daysSinceEpochReturnError = [](int32_t year,
+                                      int32_t month,
+                                      int32_t weekOfMonth,
+                                      int32_t dayOfWeek,
+                                      const std::string& error) {
+    auto result = util::daysSinceEpochFromWeekOfMonthDate(
+        year, month, weekOfMonth, dayOfWeek, false);
+    EXPECT_TRUE(result.error().isUserError());
+    EXPECT_EQ(result.error().message(), error);
+  };
+
+  EXPECT_NO_THROW(daysSinceEpochReturnError(
+      292278995, 1, 1, 1, "Date out of range: 292278995-1-1-1"));
+  EXPECT_NO_THROW(daysSinceEpochReturnError(
+      2024, 0, 1, 1, "Date out of range: 2024-0-1-1"));
+  EXPECT_NO_THROW(daysSinceEpochReturnError(
+      2024, 13, 1, 1, "Date out of range: 2024-13-1-1"));
+  EXPECT_NO_THROW(daysSinceEpochReturnError(
+      2024, 1, 6, 1, "Date out of range: 2024-1-6-1"));
+  EXPECT_NO_THROW(daysSinceEpochReturnError(
+      2024, 2, 1, 1, "Date out of range: 2024-2-1-1"));
+  EXPECT_NO_THROW(daysSinceEpochReturnError(
+      2024, 2, 5, 5, "Date out of range: 2024-2-5-5"));
+
+  auto daysSinceEpochReturnValues =
+      [](int32_t year, int32_t month, int32_t weekOfMonth, int32_t dayOfWeek) {
+        auto result = util::daysSinceEpochFromWeekOfMonthDate(
+            year, month, weekOfMonth, dayOfWeek, false);
+        EXPECT_TRUE(!result.hasError());
+        return result.value();
+      };
+
+  EXPECT_EQ(-724, daysSinceEpochReturnValues(1968, 1, 2, 1));
+  EXPECT_EQ(4, daysSinceEpochReturnValues(1970, 1, 2, 1));
+  EXPECT_EQ(396, daysSinceEpochReturnValues(1971, 2, 1, 1));
+  EXPECT_EQ(19905, daysSinceEpochReturnValues(2024, 7, 1, 1));
+}
+
 TEST(DateTimeUtilTest, fromDateString) {
   for (ParseMode mode : {ParseMode::kPrestoCast, ParseMode::kSparkCast}) {
     EXPECT_EQ(0, parseDate("1970-01-01", mode));
@@ -113,12 +217,13 @@ TEST(DateTimeUtilTest, fromDateString) {
     EXPECT_EQ(1, parseDate("1970-1-02", mode));
 
     EXPECT_EQ(1, parseDate("+1970-01-02", mode));
-    EXPECT_EQ(-719893, parseDate("-1-1-1", mode));
 
     EXPECT_EQ(0, parseDate(" 1970-01-01", mode));
     EXPECT_EQ(0, parseDate("1970-01-01 ", mode));
     EXPECT_EQ(0, parseDate(" 1970-01-01 ", mode));
   }
+
+  EXPECT_EQ(-719893, parseDate("-1-1-1", ParseMode::kPrestoCast));
 
   EXPECT_EQ(3789391, parseDate("12345", ParseMode::kSparkCast));
   EXPECT_EQ(16436, parseDate("2015", ParseMode::kSparkCast));
@@ -172,6 +277,9 @@ TEST(DateTimeUtilTest, fromDateStringInvalid) {
     testCastFromDateStringInvalid("20150318", mode);
     testCastFromDateStringInvalid("2015-031-8", mode);
   }
+
+  testCastFromDateStringInvalid("-1-1-1", ParseMode::kSparkCast);
+  testCastFromDateStringInvalid("-111-1-1", ParseMode::kSparkCast);
 
   testCastFromDateStringInvalid("12345", ParseMode::kStrict);
   testCastFromDateStringInvalid("2015", ParseMode::kStrict);
@@ -237,9 +345,6 @@ TEST(DateTimeUtilTest, fromTimestampStringInvalid) {
       parseTimestampWithTimezone("1970-01-01 00:00:00-asd"), timezoneError);
   VELOX_ASSERT_THROW(
       parseTimestampWithTimezone("1970-01-01 00:00:00Z UTC"), parserError);
-  VELOX_ASSERT_THROW(
-      parseTimestampWithTimezone("1970-01-01 00:00:00+00:00:00"),
-      timezoneError);
 
   // Can't have multiple spaces.
   VELOX_ASSERT_THROW(
@@ -249,34 +354,119 @@ TEST(DateTimeUtilTest, fromTimestampStringInvalid) {
 TEST(DateTimeUtilTest, fromTimestampWithTimezoneString) {
   // -1 means no timezone information.
   auto expected =
-      std::make_pair<Timestamp, const tz::TimeZone*>(Timestamp(0, 0), nullptr);
+      (ParsedTimestampWithTimeZone{Timestamp(0, 0), nullptr, std::nullopt});
   EXPECT_EQ(parseTimestampWithTimezone("1970-01-01 00:00:00"), expected);
 
   // Test timezone offsets.
   EXPECT_EQ(
       parseTimestampWithTimezone("1970-01-01 00:00:00 -02:00"),
-      std::make_pair(Timestamp(0, 0), tz::locateZone("-02:00")));
+      (ParsedTimestampWithTimeZone{
+          Timestamp(0, 0), tz::locateZone("-02:00"), std::nullopt}));
   EXPECT_EQ(
       parseTimestampWithTimezone("1970-01-01 00:00:00+13:36"),
-      std::make_pair(Timestamp(0, 0), tz::locateZone("+13:36")));
+      (ParsedTimestampWithTimeZone{
+          Timestamp(0, 0), tz::locateZone("+13:36"), std::nullopt}));
   EXPECT_EQ(
       parseTimestampWithTimezone("1970-01-01 00:00:00 -11"),
-      std::make_pair(Timestamp(0, 0), tz::locateZone("-11:00")));
+      (ParsedTimestampWithTimeZone{
+          Timestamp(0, 0), tz::locateZone("-11:00"), std::nullopt}));
   EXPECT_EQ(
       parseTimestampWithTimezone("1970-01-01 00:00:00 +0000"),
-      std::make_pair(Timestamp(0, 0), tz::locateZone("+00:00")));
+      (ParsedTimestampWithTimeZone{
+          Timestamp(0, 0), tz::locateZone("+00:00"), std::nullopt}));
+
+  EXPECT_EQ(
+      parseTimestampWithTimezone("1970-01-01 00:00:00 +01:01:01.001"),
+      (ParsedTimestampWithTimeZone{Timestamp(0, 0), nullptr, 3661001}));
+  EXPECT_EQ(
+      parseTimestampWithTimezone("1970-01-01 00:00:00 -01:01:01.001"),
+      (ParsedTimestampWithTimeZone{Timestamp(0, 0), nullptr, -3661001}));
+  EXPECT_EQ(
+      parseTimestampWithTimezone("1970-01-01 00:00:00 +01:01:01.01"),
+      (ParsedTimestampWithTimeZone{Timestamp(0, 0), nullptr, 3661010}));
+  EXPECT_EQ(
+      parseTimestampWithTimezone("1970-01-01 00:00:00 -01:01:01.01"),
+      (ParsedTimestampWithTimeZone{Timestamp(0, 0), nullptr, -3661010}));
+  EXPECT_EQ(
+      parseTimestampWithTimezone("1970-01-01 00:00:00 +01:01:01.1"),
+      (ParsedTimestampWithTimeZone{Timestamp(0, 0), nullptr, 3661100}));
+  EXPECT_EQ(
+      parseTimestampWithTimezone("1970-01-01 00:00:00 -01:01:01.1"),
+      (ParsedTimestampWithTimeZone{Timestamp(0, 0), nullptr, -3661100}));
+  EXPECT_EQ(
+      parseTimestampWithTimezone("1970-01-01 00:00:00 +01:01:01"),
+      (ParsedTimestampWithTimeZone{Timestamp(0, 0), nullptr, 3661000}));
+  EXPECT_EQ(
+      parseTimestampWithTimezone("1970-01-01 00:00:00 -01:01:01"),
+      (ParsedTimestampWithTimeZone{Timestamp(0, 0), nullptr, -3661000}));
+  EXPECT_EQ(
+      parseTimestampWithTimezone("1970-01-01 00:00:00 +23:01"),
+      (ParsedTimestampWithTimeZone{Timestamp(0, 0), nullptr, 82860000}));
+  EXPECT_EQ(
+      parseTimestampWithTimezone("1970-01-01 00:00:00 -23:01"),
+      (ParsedTimestampWithTimeZone{Timestamp(0, 0), nullptr, -82860000}));
+  EXPECT_EQ(
+      parseTimestampWithTimezone("1970-01-01 00:00:00 +23"),
+      (ParsedTimestampWithTimeZone{Timestamp(0, 0), nullptr, 82800000}));
+  EXPECT_EQ(
+      parseTimestampWithTimezone("1970-01-01 00:00:00 -23"),
+      (ParsedTimestampWithTimeZone{Timestamp(0, 0), nullptr, -82800000}));
+  EXPECT_EQ(
+      parseTimestampWithTimezone("2000-01-01 12:13:14.123+23:59:59.999"),
+      (ParsedTimestampWithTimeZone{
+          Timestamp(946728794, 123000000), nullptr, 86399999}));
+  EXPECT_EQ(
+      parseTimestampWithTimezone("2000-01-01 12:13:14.123-23:59:59.999"),
+      (ParsedTimestampWithTimeZone{
+          Timestamp(946728794, 123000000), nullptr, -86399999}));
+  EXPECT_EQ(
+      parseTimestampWithTimezone("1970-01-01 00:00:00 +01:01:01,001"),
+      (ParsedTimestampWithTimeZone{Timestamp(0, 0), nullptr, 3661001}));
+  EXPECT_EQ(
+      parseTimestampWithTimezone("1970-01-01 00:00:00 -01:01:01.001     "),
+      (ParsedTimestampWithTimeZone{Timestamp(0, 0), nullptr, -3661001}));
+  EXPECT_EQ(
+      parseTimestampWithTimezone("1970-01-01 00:00:00 +010101001"),
+      (ParsedTimestampWithTimeZone{Timestamp(0, 0), nullptr, 3661001}));
 
   EXPECT_EQ(
       parseTimestampWithTimezone("1970-01-01 00:00:00Z"),
-      std::make_pair(Timestamp(0, 0), tz::locateZone("UTC")));
+      (ParsedTimestampWithTimeZone{
+          Timestamp(0, 0), tz::locateZone("UTC"), std::nullopt}));
 
   EXPECT_EQ(
       parseTimestampWithTimezone("1970-01-01 00:01:00 UTC"),
-      std::make_pair(Timestamp(60, 0), tz::locateZone("UTC")));
+      (ParsedTimestampWithTimeZone{
+          Timestamp(60, 0), tz::locateZone("UTC"), std::nullopt}));
 
   EXPECT_EQ(
       parseTimestampWithTimezone("1970-01-01 00:00:01 America/Los_Angeles"),
-      std::make_pair(Timestamp(1, 0), tz::locateZone("America/Los_Angeles")));
+      (ParsedTimestampWithTimeZone{
+          Timestamp(1, 0),
+          tz::locateZone("America/Los_Angeles"),
+          std::nullopt}));
+
+  EXPECT_EQ(
+      parseTimestampWithTimezone("1970-01-01 Pacific/Fiji"),
+      (ParsedTimestampWithTimeZone{
+          Timestamp(0, 0), tz::locateZone("Pacific/Fiji"), std::nullopt}));
+
+  EXPECT_EQ(
+      parseTimestampWithTimezone(
+          "1970-01-01T+01:00", TimestampParseMode::kIso8601),
+      (ParsedTimestampWithTimeZone{
+          Timestamp(0, 0), tz::locateZone("+01:00"), std::nullopt}));
+
+  EXPECT_EQ(
+      parseTimestampWithTimezone(
+          "1970-01T+14:00", TimestampParseMode::kIso8601),
+      (ParsedTimestampWithTimeZone{
+          Timestamp(0, 0), tz::locateZone("+14:00"), std::nullopt}));
+
+  EXPECT_EQ(
+      parseTimestampWithTimezone("1970T-06:00", TimestampParseMode::kIso8601),
+      (ParsedTimestampWithTimeZone{
+          Timestamp(0, 0), tz::locateZone("-06:00"), std::nullopt}));
 }
 
 TEST(DateTimeUtilTest, toGMT) {

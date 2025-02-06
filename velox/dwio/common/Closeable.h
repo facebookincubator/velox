@@ -18,10 +18,7 @@
 
 #include "velox/dwio/common/exception/Exception.h"
 
-namespace facebook {
-namespace velox {
-namespace dwio {
-namespace common {
+namespace facebook::velox::dwio::common {
 
 // Base class for closeable object which need to be explicitly closed before
 // being destructed
@@ -67,7 +64,4 @@ class Closeable {
   bool closed_;
 };
 
-} // namespace common
-} // namespace dwio
-} // namespace velox
-} // namespace facebook
+} // namespace facebook::velox::dwio::common

@@ -41,7 +41,7 @@ class IntegerColumnReader : public dwio::common::SelectiveIntegerColumnReader {
              : true);
   }
 
-  void seekToRowGroup(uint32_t index) override {
+  void seekToRowGroup(int64_t index) override {
     SelectiveIntegerColumnReader::seekToRowGroup(index);
     scanState().clear();
     readOffset_ = 0;
@@ -53,7 +53,7 @@ class IntegerColumnReader : public dwio::common::SelectiveIntegerColumnReader {
     return numValues;
   }
 
-  void getValues(RowSet rows, VectorPtr* result) override {
+  void getValues(const RowSet& rows, VectorPtr* result) override {
     auto& fileType = static_cast<const ParquetTypeWithId&>(*fileType_);
     auto logicalType = fileType.logicalType_;
     if (logicalType.has_value() && logicalType.value().__isset.INTEGER &&
@@ -65,10 +65,9 @@ class IntegerColumnReader : public dwio::common::SelectiveIntegerColumnReader {
   }
 
   void read(
-      vector_size_t offset,
-      RowSet rows,
+      int64_t offset,
+      const RowSet& rows,
       const uint64_t* /*incomingNulls*/) override {
-    auto& data = formatData_->as<ParquetData>();
     VELOX_WIDTH_DISPATCH(
         parquetSizeOfIntKind(fileType_->type()->kind()),
         prepareRead,
@@ -80,7 +79,7 @@ class IntegerColumnReader : public dwio::common::SelectiveIntegerColumnReader {
   }
 
   template <typename ColumnVisitor>
-  void readWithVisitor(RowSet rows, ColumnVisitor visitor) {
+  void readWithVisitor(const RowSet& rows, ColumnVisitor visitor) {
     formatData_->as<ParquetData>().readWithVisitor(visitor);
   }
 };

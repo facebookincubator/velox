@@ -34,8 +34,12 @@ enum class TimestampUnit : uint8_t {
 
 struct ArrowOptions {
   bool flattenDictionary{false};
+  // NOTE: flattenConstant is only supported for scalar types.
   bool flattenConstant{false};
   TimestampUnit timestampUnit = TimestampUnit::kNano;
+  std::optional<std::string> timestampTimeZone{std::nullopt};
+  // Export VARCHAR and VARBINARY to Arrow 15 StringView format
+  bool exportToStringView = false;
 };
 
 namespace facebook::velox {
@@ -66,7 +70,6 @@ namespace facebook::velox {
 ///   (use arrowArray)
 ///
 ///   arrowArray.release(&arrowArray);
-///
 void exportToArrow(
     const VectorPtr& vector,
     ArrowArray& arrowArray,

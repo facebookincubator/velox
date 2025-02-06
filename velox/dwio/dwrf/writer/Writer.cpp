@@ -19,6 +19,7 @@
 #include <folly/ScopeGuard.h>
 
 #include "velox/common/base/Counters.h"
+#include "velox/common/base/Pointers.h"
 #include "velox/common/base/StatsReporter.h"
 #include "velox/common/memory/MemoryArbitrator.h"
 #include "velox/common/testutil/TestValue.h"
@@ -32,6 +33,7 @@
 using facebook::velox::common::testutil::TestValue;
 
 namespace facebook::velox::dwrf {
+
 namespace {
 
 dwio::common::StripeProgress getStripeProgress(const WriterContext& context) {
@@ -50,6 +52,101 @@ dwio::common::StripeProgress getStripeProgress(const WriterContext& context) {
                     ? context.getEstimatedOutputStreamSize()
                     : 0)
           : context.getEstimatedOutputStreamSize()};
+}
+
+uint64_t orcWriterMaxStripeSize(
+    const config::ConfigBase& config,
+    const config::ConfigBase& session) {
+  return config::toCapacity(
+      session.get<std::string>(
+          dwrf::Config::kOrcWriterMaxStripeSizeSession,
+          config.get<std::string>(
+              dwrf::Config::kOrcWriterMaxStripeSize, "64MB")),
+      config::CapacityUnit::BYTE);
+}
+
+uint64_t orcWriterMaxDictionaryMemory(
+    const config::ConfigBase& config,
+    const config::ConfigBase& session) {
+  return config::toCapacity(
+      session.get<std::string>(
+          dwrf::Config::kOrcWriterMaxDictionaryMemorySession,
+          config.get<std::string>(
+              dwrf::Config::kOrcWriterMaxDictionaryMemory, "16MB")),
+      config::CapacityUnit::BYTE);
+}
+
+bool isOrcWriterIntegerDictionaryEncodingEnabled(
+    const config::ConfigBase& config,
+    const config::ConfigBase& session) {
+  return session.get<bool>(
+      dwrf::Config::kOrcWriterIntegerDictionaryEncodingEnabledSession,
+      config.get<bool>(
+          dwrf::Config::kOrcWriterIntegerDictionaryEncodingEnabled, true));
+}
+
+bool isOrcWriterStringDictionaryEncodingEnabled(
+    const config::ConfigBase& config,
+    const config::ConfigBase& session) {
+  return session.get<bool>(
+      dwrf::Config::kOrcWriterStringDictionaryEncodingEnabledSession,
+      config.get<bool>(
+          dwrf::Config::kOrcWriterStringDictionaryEncodingEnabled, true));
+}
+
+bool orcWriterLinearStripeSizeHeuristics(
+    const config::ConfigBase& config,
+    const config::ConfigBase& session) {
+  return session.get<bool>(
+      dwrf::Config::kOrcWriterLinearStripeSizeHeuristicsSession,
+      config.get<bool>(
+          dwrf::Config::kOrcWriterLinearStripeSizeHeuristics, true));
+}
+
+uint64_t orcWriterMinCompressionSize(
+    const config::ConfigBase& config,
+    const config::ConfigBase& session) {
+  return session.get<uint64_t>(
+      dwrf::Config::kOrcWriterMinCompressionSizeSession,
+      config.get<uint64_t>(dwrf::Config::kOrcWriterMinCompressionSize, 1024));
+}
+
+std::optional<uint8_t> orcWriterCompressionLevel(
+    const config::ConfigBase& config,
+    const config::ConfigBase& session) {
+  auto sessionProp =
+      session.get<uint8_t>(dwrf::Config::kOrcWriterCompressionLevelSession);
+
+  if (sessionProp.has_value()) {
+    return sessionProp.value();
+  }
+
+  auto configProp =
+      config.get<uint8_t>(dwrf::Config::kOrcWriterCompressionLevel);
+
+  if (configProp.has_value()) {
+    return configProp.value();
+  }
+
+  // Presto has a single config controlling this value, but different defaults
+  // depending on the compression kind.
+  return std::nullopt;
+}
+
+uint8_t orcWriterZLIBCompressionLevel(
+    const config::ConfigBase& config,
+    const config::ConfigBase& session) {
+  constexpr uint8_t kDefaultZlibCompressionLevel = 4;
+  return orcWriterCompressionLevel(config, session)
+      .value_or(kDefaultZlibCompressionLevel);
+}
+
+uint8_t orcWriterZSTDCompressionLevel(
+    const config::ConfigBase& config,
+    const config::ConfigBase& session) {
+  constexpr uint8_t kDefaultZstdCompressionLevel = 3;
+  return orcWriterCompressionLevel(config, session)
+      .value_or(kDefaultZstdCompressionLevel);
 }
 
 #define NON_RECLAIMABLE_SECTION_CHECK() \
@@ -73,8 +170,12 @@ Writer::Writer(
                                     *options.encryptionSpec,
                                     options.encrypterFactory.get())
                               : nullptr);
-  writerBase_->initContext(options.config, pool, std::move(handler));
-
+  writerBase_->initContext(
+      options.config,
+      pool,
+      options.sessionTimezone,
+      options.adjustTimestampToTimezone,
+      std::move(handler));
   auto& context = writerBase_->getContext();
   VELOX_CHECK_EQ(
       context.getTotalMemoryUsage(),
@@ -89,7 +190,7 @@ Writer::Writer(
         context.stripeSizeFlushThreshold(),
         context.dictionarySizeFlushThreshold());
   } else {
-    flushPolicy_ = options.flushPolicyFactory();
+    castUniquePointer(options.flushPolicyFactory(), flushPolicy_);
   }
 
   if (options.layoutPlannerFactory != nullptr) {
@@ -233,7 +334,7 @@ void Writer::ensureWriteFits(size_t appendBytes, size_t appendRows) {
   const size_t estimatedAppendMemoryBytes =
       std::max(appendBytes, context.estimateNextWriteSize(appendRows));
   const double estimatedMemoryGrowthRatio =
-      (double)estimatedAppendMemoryBytes / totalMemoryUsage;
+      static_cast<double>(estimatedAppendMemoryBytes) / totalMemoryUsage;
   if (!maybeReserveMemory(
           MemoryUsageCategory::GENERAL, estimatedMemoryGrowthRatio)) {
     return;
@@ -275,7 +376,7 @@ void Writer::ensureStripeFlushFits() {
         .maybeReserve(outputMemoryToReserve);
   } else {
     const double estimatedMemoryGrowthRatio =
-        (double)estimateFlushMemoryBytes / outputMemoryUsage;
+        static_cast<double>(estimateFlushMemoryBytes) / outputMemoryUsage;
     maybeReserveMemory(
         MemoryUsageCategory::OUTPUT_STREAM, estimatedMemoryGrowthRatio);
   }
@@ -442,8 +543,8 @@ void Writer::flushStripe(bool close) {
   uint32_t lastIndex = 0;
   uint64_t offset = 0;
   const auto addStream = [&](const DwrfStreamIdentifier& stream,
-                             const auto& out) {
-    uint32_t currentIndex;
+                             const DataBufferHolder& out) {
+    uint32_t currentIndex = 0;
     const auto nodeId = stream.encodingKey().node();
     proto::Stream* s = encodingManager.addStreamToFooter(nodeId, currentIndex);
 
@@ -476,28 +577,30 @@ void Writer::flushStripe(bool close) {
   uint64_t indexLength = 0;
   sink.setMode(WriterSink::Mode::Index);
   auto result = layoutPlanner_->plan(encodingManager, getStreamList(context));
-  result.iterateIndexStreams([&](auto& streamId, auto& content) {
-    DWIO_ENSURE(
-        isIndexStream(streamId.kind()),
-        "unexpected stream kind ",
-        streamId.kind());
-    indexLength += content.size();
-    addStream(streamId, content);
-    sink.addBuffers(content);
-  });
+  result.iterateIndexStreams(
+      [&](const DwrfStreamIdentifier& streamId, DataBufferHolder& content) {
+        VELOX_CHECK(
+            isIndexStream(streamId.kind()),
+            "unexpected stream kind {}",
+            streamId.kind());
+        indexLength += content.size();
+        addStream(streamId, content);
+        sink.addBuffers(content);
+      });
 
   uint64_t dataLength = 0;
   sink.setMode(WriterSink::Mode::Data);
-  result.iterateDataStreams([&](auto& streamId, auto& content) {
-    DWIO_ENSURE(
-        !isIndexStream(streamId.kind()),
-        "unexpected stream kind ",
-        streamId.kind());
-    dataLength += content.size();
-    addStream(streamId, content);
-    sink.addBuffers(content);
-  });
-  DWIO_ENSURE_GT(dataLength, 0);
+  result.iterateDataStreams(
+      [&](const DwrfStreamIdentifier& streamId, DataBufferHolder& content) {
+        VELOX_CHECK(
+            !isIndexStream(streamId.kind()),
+            "unexpected stream kind {}",
+            streamId.kind());
+        dataLength += content.size();
+        addStream(streamId, content);
+        sink.addBuffers(content);
+      });
+  VELOX_CHECK_GT(dataLength, 0);
   metrics.stripeSize = dataLength;
 
   if (handler.isEncrypted()) {
@@ -513,7 +616,7 @@ void Writer::flushStripe(bool close) {
 
   // flush footer
   const uint64_t footerOffset = sink.size();
-  DWIO_ENSURE_EQ(footerOffset, stripeOffset + dataLength + indexLength);
+  VELOX_CHECK_EQ(footerOffset, stripeOffset + dataLength + indexLength);
 
   sink.setMode(WriterSink::Mode::Footer);
   writerBase_->writeProto(encodingManager.getFooter());
@@ -794,75 +897,69 @@ uint64_t Writer::MemoryReclaimer::reclaim(
       stats);
 }
 
-dwrf::WriterOptions getDwrfOptions(const dwio::common::WriterOptions& options) {
-  std::map<std::string, std::string> configs;
-  if (options.compressionKind.has_value()) {
-    configs.emplace(
-        Config::COMPRESSION.configKey(),
-        std::to_string(options.compressionKind.value()));
-  }
-  if (options.orcMinCompressionSize.has_value()) {
-    configs.emplace(
-        Config::COMPRESSION_BLOCK_SIZE_MIN.configKey(),
-        std::to_string(options.orcMinCompressionSize.value()));
-  }
-  if (options.maxStripeSize.has_value()) {
-    configs.emplace(
-        Config::STRIPE_SIZE.configKey(),
-        std::to_string(options.maxStripeSize.value()));
-  }
-  if (options.orcLinearStripeSizeHeuristics.has_value()) {
-    configs.emplace(
-        Config::LINEAR_STRIPE_SIZE_HEURISTICS.configKey(),
-        std::to_string(options.orcLinearStripeSizeHeuristics.value()));
-  }
-  if (options.maxDictionaryMemory.has_value()) {
-    configs.emplace(
-        Config::MAX_DICTIONARY_SIZE.configKey(),
-        std::to_string(options.maxDictionaryMemory.value()));
-  }
-  if (options.orcWriterIntegerDictionaryEncodingEnabled.has_value()) {
-    configs.emplace(
-        Config::INTEGER_DICTIONARY_ENCODING_ENABLED.configKey(),
-        std::to_string(
-            options.orcWriterIntegerDictionaryEncodingEnabled.value()));
-  }
-  if (options.orcWriterStringDictionaryEncodingEnabled.has_value()) {
-    configs.emplace(
-        Config::STRING_DICTIONARY_ENCODING_ENABLED.configKey(),
-        std::to_string(
-            options.orcWriterStringDictionaryEncodingEnabled.value()));
-  }
-  if (options.zlibCompressionLevel.has_value()) {
-    configs.emplace(
-        Config::ZLIB_COMPRESSION_LEVEL.configKey(),
-        std::to_string(options.zlibCompressionLevel.value()));
-  }
-  if (options.zstdCompressionLevel.has_value()) {
-    configs.emplace(
-        Config::ZSTD_COMPRESSION_LEVEL.configKey(),
-        std::to_string(options.zstdCompressionLevel.value()));
-  }
-
-  dwrf::WriterOptions dwrfOptions;
-  dwrfOptions.config = Config::fromMap(configs);
-  dwrfOptions.schema = options.schema;
-  dwrfOptions.memoryPool = options.memoryPool;
-  dwrfOptions.spillConfig = options.spillConfig;
-  dwrfOptions.nonReclaimableSection = options.nonReclaimableSection;
-  return dwrfOptions;
-}
-
 std::unique_ptr<dwio::common::Writer> DwrfWriterFactory::createWriter(
     std::unique_ptr<dwio::common::FileSink> sink,
     const std::shared_ptr<dwio::common::WriterOptions>& options) {
-  auto dwrfOptions = getDwrfOptions(*options);
-  return std::make_unique<Writer>(std::move(sink), dwrfOptions);
+  auto dwrfOptions = std::dynamic_pointer_cast<dwrf::WriterOptions>(options);
+  VELOX_CHECK_NOT_NULL(
+      dwrfOptions, "DWRF writer factory expected a DWRF WriterOptions object.");
+  return std::make_unique<Writer>(std::move(sink), *dwrfOptions);
 }
 
 std::unique_ptr<dwio::common::WriterOptions>
 DwrfWriterFactory::createWriterOptions() {
   return std::make_unique<dwrf::WriterOptions>();
+}
+
+void WriterOptions::processConfigs(
+    const config::ConfigBase& connectorConfig,
+    const config::ConfigBase& session) {
+  auto dwrfWriterOptions = dynamic_cast<dwrf::WriterOptions*>(this);
+  VELOX_CHECK_NOT_NULL(
+      dwrfWriterOptions, "Expected a DWRF WriterOptions object.");
+
+  std::map<std::string, std::string> configs = serdeParameters;
+
+  if (compressionKind.has_value()) {
+    configs.emplace(
+        dwrf::Config::COMPRESSION.key, std::to_string(compressionKind.value()));
+  }
+
+  configs.emplace(
+      dwrf::Config::STRIPE_SIZE.key,
+      std::to_string(orcWriterMaxStripeSize(connectorConfig, session)));
+
+  configs.emplace(
+      dwrf::Config::MAX_DICTIONARY_SIZE.key,
+      std::to_string(orcWriterMaxDictionaryMemory(connectorConfig, session)));
+
+  configs.emplace(
+      dwrf::Config::INTEGER_DICTIONARY_ENCODING_ENABLED.key,
+      std::to_string(isOrcWriterIntegerDictionaryEncodingEnabled(
+          connectorConfig, session)));
+  configs.emplace(
+      dwrf::Config::STRING_DICTIONARY_ENCODING_ENABLED.key,
+      std::to_string(isOrcWriterStringDictionaryEncodingEnabled(
+          connectorConfig, session)));
+
+  configs.emplace(
+      dwrf::Config::COMPRESSION_BLOCK_SIZE_MIN.key,
+      std::to_string(orcWriterMinCompressionSize(connectorConfig, session)));
+
+  configs.emplace(
+      dwrf::Config::LINEAR_STRIPE_SIZE_HEURISTICS.key,
+      std::to_string(
+          orcWriterLinearStripeSizeHeuristics(connectorConfig, session)));
+
+  configs.emplace(
+      dwrf::Config::ZLIB_COMPRESSION_LEVEL.key,
+      std::to_string(orcWriterZLIBCompressionLevel(connectorConfig, session)));
+
+  configs.emplace(
+      dwrf::Config::ZSTD_COMPRESSION_LEVEL.key,
+      std::to_string(orcWriterZSTDCompressionLevel(connectorConfig, session)));
+
+  config = dwrf::Config::fromMap(configs);
 }
 
 void registerDwrfWriterFactory() {

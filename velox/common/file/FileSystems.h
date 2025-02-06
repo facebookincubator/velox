@@ -23,7 +23,9 @@
 #include <string_view>
 
 namespace facebook::velox {
-class Config;
+namespace config {
+class ConfigBase;
+}
 class ReadFile;
 class WriteFile;
 } // namespace facebook::velox
@@ -45,12 +47,47 @@ struct FileOptions {
   memory::MemoryPool* pool{nullptr};
   /// If specified then can be trusted to be the file size.
   std::optional<int64_t> fileSize;
+
+  /// Whether to create parent directories if they don't exist.
+  ///
+  /// NOTE: this only applies for write open file.
+  bool shouldCreateParentDirectories{false};
+
+  /// Whether to throw an error if a file already exists.
+  ///
+  /// NOTE: this only applies for write open file.
+  bool shouldThrowOnFileAlreadyExists{true};
+
+  /// Whether to buffer the data in file system client or not. For local
+  /// filesystem on Unix-like operating system, this corresponds to the direct
+  /// IO mode if set.
+  bool bufferIo{true};
+};
+
+/// Defines directory options
+struct DirectoryOptions : FileOptions {
+  /// Whether to throw an error if the directory already exists.
+  /// For POSIX systems, this is equivalent to handling EEXIST.
+  ///
+  /// NOTE: This is only applicable for mkdir
+  bool failIfExists{false};
+
+  /// This is similar to kFileCreateConfig
+  static constexpr folly::StringPiece kMakeDirectoryConfig{
+      "make-directory-config"};
+};
+
+struct FileSystemOptions {
+  /// As for now, only local file system respects this option. It implements
+  /// async read by using a background cpu executor. Some filesystem might has
+  /// native async read-ahead support.
+  bool readAheadEnabled{false};
 };
 
 /// An abstract FileSystem
 class FileSystem {
  public:
-  FileSystem(std::shared_ptr<const Config> config)
+  FileSystem(std::shared_ptr<const config::ConfigBase> config)
       : config_(std::move(config)) {}
   virtual ~FileSystem() = default;
 
@@ -59,7 +96,7 @@ class FileSystem {
 
   /// Returns the file path without the fs scheme prefix such as "local:" prefix
   /// for local file system.
-  virtual std::string_view extractPath(std::string_view path) {
+  virtual std::string_view extractPath(std::string_view path) const {
     VELOX_NYI();
   }
 
@@ -87,6 +124,11 @@ class FileSystem {
   /// Returns true if the file exists.
   virtual bool exists(std::string_view path) = 0;
 
+  /// Returns true if it is a directory.
+  virtual bool isDirectory(std::string_view path) const {
+    VELOX_UNSUPPORTED("isDirectory not implemented");
+  }
+
   /// Returns the list of files or folders in a path. Currently, this method
   /// will be used for testing, but we will need change this to an iterator
   /// output method to avoid potential heavy output if there are many entries in
@@ -94,19 +136,21 @@ class FileSystem {
   virtual std::vector<std::string> list(std::string_view path) = 0;
 
   /// Create a directory (recursively). Throws velox exception on failure.
-  virtual void mkdir(std::string_view path) = 0;
+  virtual void mkdir(
+      std::string_view path,
+      const DirectoryOptions& options = {}) = 0;
 
   /// Remove a directory (all the files and sub-directories underneath
   /// recursively). Throws velox exception on failure.
   virtual void rmdir(std::string_view path) = 0;
 
  protected:
-  std::shared_ptr<const Config> config_;
+  std::shared_ptr<const config::ConfigBase> config_;
 };
 
 std::shared_ptr<FileSystem> getFileSystem(
     std::string_view filename,
-    std::shared_ptr<const Config> config);
+    std::shared_ptr<const config::ConfigBase> config);
 
 /// Returns true if filePath is supported by any registered file system,
 /// otherwise false.
@@ -120,10 +164,11 @@ bool isPathSupportedByRegisteredFileSystems(const std::string_view& filePath);
 void registerFileSystem(
     std::function<bool(std::string_view)> schemeMatcher,
     std::function<std::shared_ptr<FileSystem>(
-        std::shared_ptr<const Config>,
+        std::shared_ptr<const config::ConfigBase>,
         std::string_view)> fileSystemGenerator);
 
 /// Register the local filesystem.
-void registerLocalFileSystem();
+void registerLocalFileSystem(
+    const FileSystemOptions& options = FileSystemOptions());
 
 } // namespace facebook::velox::filesystems

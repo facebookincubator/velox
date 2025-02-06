@@ -23,8 +23,9 @@
 #include <utility>
 #include <vector>
 
+#include "velox/dwio/parquet/common/LevelConversion.h"
+#include "velox/dwio/parquet/common/RleEncodingInternal.h"
 #include "velox/dwio/parquet/writer/arrow/Exception.h"
-#include "velox/dwio/parquet/writer/arrow/LevelConversion.h"
 #include "velox/dwio/parquet/writer/arrow/Metadata.h"
 #include "velox/dwio/parquet/writer/arrow/Properties.h"
 #include "velox/dwio/parquet/writer/arrow/Schema.h"
@@ -106,8 +107,8 @@ class PARQUET_EXPORT LevelDecoder {
   int bit_width_;
   int num_values_remaining_;
   Encoding::type encoding_;
-  std::unique_ptr<::arrow::util::RleDecoder> rle_decoder_;
-  std::unique_ptr<::arrow::bit_util::BitReader> bit_packed_decoder_;
+  std::unique_ptr<RleDecoder> rle_decoder_;
+  std::unique_ptr<BitReader> bit_packed_decoder_;
   int16_t max_level_;
 };
 

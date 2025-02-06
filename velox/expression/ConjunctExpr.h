@@ -21,6 +21,9 @@
 
 namespace facebook::velox::exec {
 
+constexpr const char* kAnd = "and";
+constexpr const char* kOr = "or";
+
 class ConjunctExpr : public SpecialForm {
  public:
   ConjunctExpr(
@@ -31,7 +34,7 @@ class ConjunctExpr : public SpecialForm {
       : SpecialForm(
             std::move(type),
             std::move(inputs),
-            isAnd ? "and" : "or",
+            isAnd ? kAnd : kOr,
             inputsSupportFlatNoNullsFastPath,
             false /* trackCpuUsage */),
         isAnd_(isAnd) {
@@ -67,6 +70,12 @@ class ConjunctExpr : public SpecialForm {
   std::string toSql(
       std::vector<VectorPtr>* complexConstants = nullptr) const override;
 
+  void clearCache() override {
+    Expr::clearCache();
+    tempValues_.reset();
+    tempNulls_.reset();
+  }
+
  private:
   static TypePtr resolveType(const std::vector<TypePtr>& argTypes);
 
@@ -89,8 +98,6 @@ class ConjunctExpr : public SpecialForm {
   // true if conjunction (and), false if disjunction (or).
   const bool isAnd_;
 
-  // Errors encountered before processing the current input.
-  FlatVectorPtr<StringView> errors_;
   // temp space for nulls and values of inputs
   BufferPtr tempValues_;
   BufferPtr tempNulls_;

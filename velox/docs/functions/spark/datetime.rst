@@ -34,6 +34,16 @@ These functions support TIMESTAMP and DATE input types.
     deducted from ``start_date``.
     Supported types for ``num_days`` are: TINYINT, SMALLINT, INTEGER.
 
+.. spark:function:: date_format(timestamp, dateFormat) -> string
+
+    Converts ``timestamp`` to a string in the format specified by ``dateFormat``.
+    The format follows Spark's
+    `Datetime patterns
+    <https://spark.apache.org/docs/latest/sql-ref-datetime-pattern.html>`_.
+
+        SELECT date_format('2020-01-29', 'yyyy'); -- '2020'
+        SELECT date_format('2024-05-30 08:00:00', 'yyyy-MM-dd'); -- '2024-05-30'
+
 .. spark:function:: date_from_unix_date(integer) -> date
 
     Creates date from the number of days since 1970-01-01 in either direction. Returns null when input is null.
@@ -84,10 +94,9 @@ These functions support TIMESTAMP and DATE input types.
     converts it to a formatted time string according to ``format``. Only supports BIGINT type for
     ``unixTime``.
     `Valid patterns for date format
-    <https://spark.apache.org/docs/latest/sql-ref-datetime-pattern.html>`_. Throws exception for
-    invalid ``format``. This function will convert input to milliseconds, and integer overflow is
-    allowed in the conversion, which aligns with Spark. See the below third example where INT64_MAX
-    is used, -1000 milliseconds are produced by INT64_MAX * 1000 due to integer overflow. ::
+    <https://spark.apache.org/docs/latest/sql-ref-datetime-pattern.html>`_. This function will convert input to
+    milliseconds, and integer overflow is allowed in the conversion, which aligns with Spark. See the below third
+    example where INT64_MAX is used, -1000 milliseconds are produced by INT64_MAX * 1000 due to integer overflow. ::
 
         SELECT from_unixtime(100, 'yyyy-MM-dd HH:mm:ss'); -- '1970-01-01 00:01:40'
         SELECT from_unixtime(3600, 'yyyy'); -- '1970'
@@ -110,13 +119,11 @@ These functions support TIMESTAMP and DATE input types.
     Returns timestamp by parsing ``string`` according to the specified ``dateFormat``.
     The format follows Spark's
     `Datetime patterns
-    <https://spark.apache.org/docs/latest/sql-ref-datetime-pattern.html>`_.
-    Returns NULL for parsing error or NULL input. Throws exception for invalid format. ::
+    <https://spark.apache.org/docs/latest/sql-ref-datetime-pattern.html>`_. ::
 
         SELECT get_timestamp('1970-01-01', 'yyyy-MM-dd);  -- timestamp `1970-01-01`
         SELECT get_timestamp('1970-01-01', 'yyyy-MM');  -- NULL (parsing error)
         SELECT get_timestamp('1970-01-01', null);  -- NULL
-        SELECT get_timestamp('2020-06-10', 'A');  -- (throws exception)
 
 .. spark:function:: hour(timestamp) -> integer
 
@@ -132,7 +139,7 @@ These functions support TIMESTAMP and DATE input types.
 
     Returns the date from year, month and day fields.
     ``year``, ``month`` and ``day`` must be ``INTEGER``.
-    Throws an error if inputs are not valid.
+    Returns NULL if inputs are not valid.
 
     The valid inputs need to meet the following conditions,
     ``month`` need to be from 1 (January) to 12 (December).
@@ -328,3 +335,34 @@ These functions support TIMESTAMP and DATE input types.
     part of the 53rd week of year 2004, so the result is 2004. Only supports DATE type.
 
         SELECT year_of_week('2005-01-02'); -- 2004
+
+Simple vs. Joda Date Formatter
+------------------------------
+
+To align with Spark, Velox supports both `Simple <https://docs.oracle.com/javase/8/docs/api/java/text/SimpleDateFormat.html>`_
+and `Joda <https://www.joda.org/joda-time/>`_ date formmaters to parse/format timestamp/date strings
+used in functions :spark:func:`from_unixtime`, :spark:func:`unix_timestamp`, :spark:func:`make_date`
+and :spark:func:`to_unix_timestamp`.
+If the configuration setting :doc:`spark.legacy_date_formatter <../../configs>` is true,
+`Simple` date formmater in lenient mode is used; otherwise, `Joda` is used. It is important
+to note that there are some different behaviors between these two formatters.
+
+For :spark:func:`unix_timestamp` and :spark:func:`get_timestamp`, the `Simple` date formatter permits partial date parsing
+which means that format can match only a part of input string. For example, if input string is
+2015-07-22 10:00:00, it can be parsed using format is yyyy-MM-dd because the parser does not require entire
+input to be consumed. In contrast, the `Joda` date formatter performs strict checks to ensure that the
+format completely matches the string. If there is any mismatch, exception is thrown. ::
+
+        SELECT get_timestamp('2015-07-22 10:00:00', 'yyyy-MM-dd'); -- timestamp `2015-07-22` (for Simple date formatter)
+        SELECT get_timestamp('2015-07-22 10:00:00', 'yyyy-MM-dd'); -- (throws exception) (for Joda date formatter)
+        SELECT unix_timestamp('2016-04-08 00:00:00', 'yyyy-MM-dd'); -- 1460041200 (for Simple date formatter)
+        SELECT unix_timestamp('2016-04-08 00:00:00', 'yyyy-MM-dd'); -- (throws exception) (for Joda date formatter)
+
+For :spark:func:`from_unixtime` and :spark:func:`get_timestamp`, when `Simple` date formatter is used, null is
+returned for invalid format; otherwise, exception is thrown. ::
+
+        SELECT from_unixtime(100, '!@#$%^&*'); -- NULL (parsing error) (for Simple date formatter)
+        SELECT from_unixtime(100, '!@#$%^&*'); -- throws exception) (for Joda date formatter)
+        SELECT get_timestamp('1970-01-01', '!@#$%^&*'); -- NULL (parsing error) (for Simple date formatter)
+        SELECT get_timestamp('1970-01-01', '!@#$%^&*'); -- throws exception) (for Joda date formatter)
+

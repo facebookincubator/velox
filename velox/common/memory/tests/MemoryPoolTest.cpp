@@ -26,6 +26,7 @@
 #include "velox/common/memory/MemoryPool.h"
 #include "velox/common/memory/MmapAllocator.h"
 #include "velox/common/memory/SharedArbitrator.h"
+#include "velox/common/memory/tests/SharedArbitratorTestUtil.h"
 #include "velox/common/testutil/TestValue.h"
 
 DECLARE_bool(velox_memory_leak_check_enabled);
@@ -40,9 +41,7 @@ constexpr int64_t KB = 1024L;
 constexpr int64_t MB = 1024L * KB;
 constexpr int64_t GB = 1024L * MB;
 
-namespace facebook {
-namespace velox {
-namespace memory {
+namespace facebook::velox::memory {
 
 struct TestParam {
   bool useMmap;
@@ -98,9 +97,12 @@ class MemoryPoolTest : public testing::TestWithParam<TestParam> {
 
   void setupMemory(
       MemoryManagerOptions options = {
+          .debugEnabled = true,
           .allocatorCapacity = kDefaultCapacity,
           .arbitratorCapacity = kDefaultCapacity,
-          .arbitratorReservedCapacity = 1LL << 30}) {
+          .extraArbitratorConfigs = {
+              {std::string(SharedArbitrator::ExtraConfig::kReservedCapacity),
+               "1GB"}}}) {
     options.useMmapAllocator = useMmap_;
     manager_ = std::make_shared<MemoryManager>(options);
     if (useCache_) {
@@ -142,7 +144,6 @@ class MemoryPoolTest : public testing::TestWithParam<TestParam> {
 };
 
 TEST_P(MemoryPoolTest, ctor) {
-  constexpr uint16_t kAlignment = 64;
   setupMemory({.alignment = 64, .allocatorCapacity = kDefaultCapacity});
   MemoryManager& manager = *getMemoryManager();
   const int64_t capacity = 4 * GB;
@@ -153,23 +154,19 @@ TEST_P(MemoryPoolTest, ctor) {
   ASSERT_EQ(root->parent(), nullptr);
   ASSERT_EQ(root->root(), root.get());
   ASSERT_EQ(root->capacity(), capacity);
+  VELOX_ASSERT_THROW(
+      static_cast<MemoryPoolImpl*>(root.get())
+          ->setDestructionCallback([](MemoryPool*) {}),
+      "");
 
   {
     auto fakeRoot = std::make_shared<MemoryPoolImpl>(
-        &manager,
-        "fake_root",
-        MemoryPool::Kind::kAggregate,
-        nullptr,
-        nullptr,
-        nullptr,
-        nullptr);
+        &manager, "fake_root", MemoryPool::Kind::kAggregate, nullptr, nullptr);
     // We can't construct an aggregate memory pool with non-thread safe.
     ASSERT_ANY_THROW(std::make_shared<MemoryPoolImpl>(
         &manager,
         "fake_root",
         MemoryPool::Kind::kAggregate,
-        nullptr,
-        nullptr,
         nullptr,
         nullptr,
         MemoryPool::Options{.threadSafe = false}));
@@ -185,6 +182,10 @@ TEST_P(MemoryPoolTest, ctor) {
     ASSERT_EQ(child->parent(), root.get());
     ASSERT_EQ(child->root(), root.get());
     ASSERT_EQ(child->capacity(), capacity);
+    VELOX_ASSERT_THROW(
+        static_cast<MemoryPoolImpl*>(child.get())
+            ->setDestructionCallback([](MemoryPool*) {}),
+        "");
     auto& favoriteChild = dynamic_cast<MemoryPoolImpl&>(*child);
     ASSERT_EQ("child", favoriteChild.name());
     ASSERT_EQ(
@@ -197,6 +198,10 @@ TEST_P(MemoryPoolTest, ctor) {
     ASSERT_EQ(aggregateChild->parent(), root.get());
     ASSERT_EQ(aggregateChild->root(), root.get());
     ASSERT_EQ(aggregateChild->capacity(), capacity);
+    VELOX_ASSERT_THROW(
+        static_cast<MemoryPoolImpl*>(aggregateChild.get())
+            ->setDestructionCallback([](MemoryPool*) {}),
+        "");
     auto grandChild = aggregateChild->addLeafChild("child", isLeafThreadSafe_);
     ASSERT_EQ(grandChild->parent(), aggregateChild.get());
     ASSERT_EQ(grandChild->root(), root.get());
@@ -435,7 +440,6 @@ TEST_P(MemoryPoolTest, DISABLED_memoryLeakCheck) {
   auto child = root->addLeafChild("elastic_quota", isLeafThreadSafe_);
   const int64_t kChunkSize{32L * MB};
   void* oneChunk = child->allocate(kChunkSize);
-  FLAGS_velox_memory_leak_check_enabled = true;
   ASSERT_DEATH(child.reset(), "");
   child->free(oneChunk, kChunkSize);
 }
@@ -685,7 +689,6 @@ TEST_P(MemoryPoolTest, alignmentCheck) {
     ASSERT_EQ(
         pool->alignment(),
         alignment == 0 ? MemoryAllocator::kMinAlignment : alignment);
-    const int32_t kTestIterations = 10;
     for (int32_t i = 0; i < 10; ++i) {
       const int64_t bytesToAlloc = 1 + folly::Random::rand32() % (1 * MB);
       void* ptr = pool->allocate(bytesToAlloc);
@@ -703,7 +706,9 @@ TEST_P(MemoryPoolTest, memoryCapExceptions) {
   setupMemory(
       {.allocatorCapacity = kMaxCap,
        .arbitratorCapacity = kMaxCap,
-       .arbitratorReservedCapacity = kMaxCap / 2});
+       .extraArbitratorConfigs = {
+           {std::string(SharedArbitrator::ExtraConfig::kReservedCapacity),
+            folly::to<std::string>(kMaxCap / 2) + "B"}}});
   auto manager = getMemoryManager();
   // Capping memory pool.
   {
@@ -720,9 +725,9 @@ TEST_P(MemoryPoolTest, memoryCapExceptions) {
         ASSERT_EQ(
             "Exceeded memory pool capacity after attempt to grow capacity "
             "through arbitration. Requestor pool name 'static_quota', request "
-            "size 136.00MB, memory pool capacity 128.00MB, memory pool max "
-            "capacity 128.00MB, memory manager capacity 128.00MB, current "
-            "usage 0B\nMemoryCapExceptions usage 0B reserved 0B peak 0B\n",
+            "size 136.00MB, current usage 0B, memory pool capacity 128.00MB, "
+            "memory pool max capacity 128.00MB, memory manager capacity "
+            "128.00MB\nMemoryCapExceptions usage 0B reserved 0B peak 0B\n",
             ex.message());
       }
     }
@@ -835,7 +840,9 @@ TEST_P(MemoryPoolTest, MemoryManagerGlobalCap) {
   setupMemory(
       {.allocatorCapacity = 32L * MB,
        .arbitratorCapacity = 32L * MB,
-       .arbitratorReservedCapacity = 16L * MB});
+       .extraArbitratorConfigs = {
+           {std::string(SharedArbitrator::ExtraConfig::kReservedCapacity),
+            "16MB"}}});
   auto manager = getMemoryManager();
   const auto kAllocCap = manager->capacity();
   auto root = manager->addRootPool();
@@ -1019,11 +1026,6 @@ TEST_P(MemoryPoolTest, contiguousAllocate) {
       ASSERT_GE(numAllocatedPages, 0);
       allocations.erase(allocations.begin() + freeAllocationIdx);
     }
-    const MachinePageCount minSizeClass = folly::Random().oneIn(4)
-        ? 0
-        : std::min(
-              manager->allocator()->largestSizeClass(),
-              folly::Random().rand32() % kMaxAllocationPages);
     pool->allocateContiguous(pagesToAllocate, allocation);
     numAllocatedPages += allocation.numPages();
     for (int32_t j = 0; j < allocation.size(); ++j) {
@@ -1049,7 +1051,9 @@ TEST_P(MemoryPoolTest, contiguousAllocateExceedLimit) {
   setupMemory(
       {.allocatorCapacity = memCapacity,
        .arbitratorCapacity = memCapacity,
-       .arbitratorReservedCapacity = memCapacity / 2});
+       .extraArbitratorConfigs = {
+           {std::string(SharedArbitrator::ExtraConfig::kReservedCapacity),
+            folly::to<std::string>(memCapacity / 2) + "B"}}});
   auto manager = getMemoryManager();
   const auto kMemoryCapBytes = manager->capacity();
   const auto kMaxNumPages = AllocationTraits::numPages(kMemoryCapBytes);
@@ -1071,7 +1075,6 @@ TEST_P(MemoryPoolTest, contiguousAllocateExceedLimit) {
 TEST_P(MemoryPoolTest, badContiguousAllocation) {
   auto manager = getMemoryManager();
   auto pool = manager->addLeafPool("badContiguousAllocation");
-  constexpr MachinePageCount kAllocSize = 8;
   ContiguousAllocation allocation;
   ASSERT_THROW(pool->allocateContiguous(0, allocation), VeloxRuntimeError);
 }
@@ -1166,8 +1169,12 @@ TEST_P(MemoryPoolTest, allocationFailStats) {
       {.allocatorCapacity = 16 * KB,
        .allocationSizeThresholdWithReservation = false,
        .arbitratorCapacity = 16 * KB,
-       .arbitratorReservedCapacity = 16 * KB,
-       .memoryPoolReservedCapacity = 16 * KB});
+       .extraArbitratorConfigs = {
+           {std::string(SharedArbitrator::ExtraConfig::kReservedCapacity),
+            "16KB"},
+           {std::string(
+                SharedArbitrator::ExtraConfig::kMemoryPoolReservedCapacity),
+            "16KB"}}});
   auto manager = getMemoryManager();
   auto pool = manager->addLeafPool("allocationFailStats");
   auto allocatorCapacity = manager->capacity();
@@ -1808,7 +1815,9 @@ TEST_P(MemoryPoolTest, contiguousAllocateExceedMemoryPoolLimit) {
   setupMemory(
       {.allocatorCapacity = 1 << 30,
        .arbitratorCapacity = 1 << 30,
-       .arbitratorReservedCapacity = 128 * MB});
+       .extraArbitratorConfigs = {
+           {std::string(SharedArbitrator::ExtraConfig::kReservedCapacity),
+            "128MB"}}});
   auto manager = getMemoryManager();
   auto root =
       manager->addRootPool("contiguousAllocateExceedLimit", kMemoryCapBytes);
@@ -1975,7 +1984,9 @@ TEST_P(MemoryPoolTest, contiguousAllocateGrowExceedMemoryPoolLimit) {
   setupMemory(
       {.allocatorCapacity = 1 << 30,
        .arbitratorCapacity = 1 << 30,
-       .arbitratorReservedCapacity = 128 * MB});
+       .extraArbitratorConfigs = {
+           {std::string(SharedArbitrator::ExtraConfig::kReservedCapacity),
+            "128MB"}}});
   auto manager = getMemoryManager();
   auto root = manager->addRootPool(
       "contiguousAllocateGrowExceedMemoryPoolLimit", kMemoryCapBytes);
@@ -2021,7 +2032,9 @@ TEST_P(MemoryPoolTest, nonContiguousAllocateExceedLimit) {
       {.allocatorCapacity = kMemoryCapBytes,
        .useMmapAllocator = useMmap_,
        .arbitratorCapacity = kMemoryCapBytes,
-       .arbitratorReservedCapacity = kMemoryCapBytes / 2});
+       .extraArbitratorConfigs = {
+           {std::string(SharedArbitrator::ExtraConfig::kReservedCapacity),
+            folly::to<std::string>(kMemoryCapBytes / 2) + "B"}}});
   auto manager = getMemoryManager();
   const MachinePageCount kMaxNumPages =
       AllocationTraits::numPages(kMemoryCapBytes);
@@ -2479,7 +2492,6 @@ TEST_P(MemoryPoolTest, concurrentUpdateToSharedPools) {
 TEST_P(MemoryPoolTest, concurrentPoolStructureAccess) {
   folly::Random::DefaultGenerator rng;
   rng.seed(1234);
-  constexpr int64_t kMaxMemory = 8 * GB;
   MemoryManager& manager = *getMemoryManager();
   auto root = manager.addRootPool();
   std::atomic<int64_t> poolId{0};
@@ -2644,7 +2656,6 @@ TEST(MemoryPoolTest, debugMode) {
 
 TEST(MemoryPoolTest, debugModeWithFilter) {
   constexpr int64_t kMaxMemory = 10 * GB;
-  constexpr int64_t kNumIterations = 100;
   const std::vector<int64_t> kAllocSizes = {128, 8 * KB, 2 * MB};
   const std::vector<bool> debugEnabledSet{true, false};
   for (const auto& debugEnabled : debugEnabledSet) {
@@ -3184,7 +3195,9 @@ TEST_P(MemoryPoolTest, memoryUsageUpdateCheck) {
       {.allocatorCapacity = kMaxSize,
        .allocationSizeThresholdWithReservation = false,
        .arbitratorCapacity = kMaxSize,
-       .arbitratorReservedCapacity = 128 << 20});
+       .extraArbitratorConfigs = {
+           {std::string(SharedArbitrator::ExtraConfig::kReservedCapacity),
+            "128MB"}}});
 
   auto manager = getMemoryManager();
   auto root = manager->addRootPool("memoryUsageUpdate", kMaxSize);
@@ -3321,7 +3334,9 @@ TEST_P(MemoryPoolTest, maybeReserve) {
   setupMemory(
       {.allocatorCapacity = kMaxSize,
        .arbitratorCapacity = kMaxSize,
-       .arbitratorReservedCapacity = kMaxSize / 8});
+       .extraArbitratorConfigs = {
+           {std::string(SharedArbitrator::ExtraConfig::kReservedCapacity),
+            folly::to<std::string>(kMaxSize / 8) + "B"}}});
   auto manager = getMemoryManager();
   auto root = manager->addRootPool("reserve", kMaxSize);
 
@@ -3428,8 +3443,10 @@ TEST_P(MemoryPoolTest, maybeReserveFailWithAbort) {
   setupMemory(
       {.allocatorCapacity = kMaxSize,
        .arbitratorCapacity = kMaxSize,
-       .arbitratorReservedCapacity = kMaxSize / 8,
-       .arbitratorKind = "SHARED"});
+       .arbitratorKind = "SHARED",
+       .extraArbitratorConfigs = {
+           {std::string(SharedArbitrator::ExtraConfig::kReservedCapacity),
+            folly::to<std::string>(kMaxSize / 8) + "B"}}});
   MemoryManager& manager = *getMemoryManager();
   auto root = manager.addRootPool(
       "maybeReserveFailWithAbort", kMaxSize, MemoryReclaimer::create());
@@ -3451,7 +3468,9 @@ DEBUG_ONLY_TEST_P(MemoryPoolTest, raceBetweenFreeAndFailedAllocation) {
   setupMemory(
       {.allocatorCapacity = 1 * GB,
        .arbitratorCapacity = 1 * GB,
-       .arbitratorReservedCapacity = 128 * MB});
+       .extraArbitratorConfigs = {
+           {std::string(SharedArbitrator::ExtraConfig::kReservedCapacity),
+            "128MB"}}});
   auto manager = getMemoryManager();
   auto root = manager->addRootPool("grow", 64 * MB);
   auto child = root->addLeafChild("grow", isLeafThreadSafe_);
@@ -3543,7 +3562,8 @@ class MockMemoryReclaimer : public MemoryReclaimer {
   }
 
  private:
-  explicit MockMemoryReclaimer(bool doThrow) : doThrow_(doThrow) {}
+  explicit MockMemoryReclaimer(bool doThrow)
+      : MemoryReclaimer(0), doThrow_(doThrow) {}
 
   const bool doThrow_;
 };
@@ -3557,8 +3577,19 @@ TEST_P(MemoryPoolTest, abortAPI) {
     {
       auto rootPool = manager.addRootPool("abortAPI", capacity);
       ASSERT_FALSE(rootPool->aborted());
-      VELOX_ASSERT_THROW(abortPool(rootPool.get()), "");
-      ASSERT_FALSE(rootPool->aborted());
+      abortPool(rootPool.get());
+      ASSERT_TRUE(rootPool->aborted());
+      auto leafPool = rootPool->addLeafChild("leafAbortAPI", true);
+      ASSERT_TRUE(leafPool->aborted());
+      ASSERT_EQ(leafPool->capacity(), capacity);
+      if (capacity != kMaxMemory) {
+        VELOX_ASSERT_THROW(
+            leafPool->allocate(leafPool->capacity() + 1),
+            "Manual MemoryPool Abortion");
+      }
+      VELOX_ASSERT_THROW(
+          abortPool(rootPool.get()),
+          "Trying to set another abort error on an already aborted pool.");
     }
     // The root memory pool with no child pool and default memory reclaimer.
     {
@@ -3796,16 +3827,19 @@ TEST_P(MemoryPoolTest, abort) {
       // Abort the pool.
       ContinueFuture future;
       if (!hasReclaimer) {
-        VELOX_ASSERT_THROW(abortPool(leafPool.get()), "");
-        VELOX_ASSERT_THROW(abortPool(aggregatePool.get()), "");
-        VELOX_ASSERT_THROW(abortPool(rootPool.get()), "");
-        ASSERT_FALSE(leafPool->aborted());
-        ASSERT_FALSE(aggregatePool->aborted());
-        ASSERT_FALSE(rootPool->aborted());
-        leafPool->free(buf1, 128);
-        buf1 = leafPool->allocate(capacity / 2);
-        leafPool->free(buf1, capacity / 2);
-        continue;
+        abortPool(leafPool.get());
+        ASSERT_TRUE(leafPool->aborted());
+        VELOX_ASSERT_THROW(
+            abortPool(aggregatePool.get()),
+            "Trying to set another abort error on an already aborted pool.");
+        VELOX_ASSERT_THROW(
+            abortPool(rootPool.get()),
+            "Trying to set another abort error on an already aborted pool.");
+        ASSERT_TRUE(leafPool->aborted());
+        ASSERT_TRUE(aggregatePool->aborted());
+        ASSERT_TRUE(rootPool->aborted());
+        VELOX_ASSERT_THROW(
+            leafPool->allocate(capacity / 2), "Manual MemoryPool Abortion");
       } else {
         abortPool(leafPool.get());
       }
@@ -3833,8 +3867,10 @@ TEST_P(MemoryPoolTest, overuseUnderArbitration) {
   setupMemory(
       {.allocatorCapacity = kMaxSize,
        .arbitratorCapacity = kMaxSize,
-       .arbitratorReservedCapacity = 4 * MB,
-       .arbitratorKind = "SHARED"});
+       .arbitratorKind = "SHARED",
+       .extraArbitratorConfigs = {
+           {std::string(SharedArbitrator::ExtraConfig::kReservedCapacity),
+            "4MB"}}});
   MemoryManager& manager = *getMemoryManager();
   auto root = manager.addRootPool(
       "overuseUnderArbitration", kMaxSize, MemoryReclaimer::create());
@@ -3843,7 +3879,7 @@ TEST_P(MemoryPoolTest, overuseUnderArbitration) {
   ASSERT_FALSE(child->maybeReserve(2 * kMaxSize));
   ASSERT_EQ(child->usedBytes(), 0);
   ASSERT_EQ(child->reservedBytes(), 0);
-  ScopedMemoryArbitrationContext scopedMemoryArbitration(child.get());
+  ScopedMemoryArbitrationContext scopedMemoryArbitration(root.get());
   ASSERT_TRUE(underMemoryArbitration());
   ASSERT_TRUE(child->maybeReserve(2 * kMaxSize));
   ASSERT_EQ(child->usedBytes(), 0);
@@ -3886,6 +3922,4 @@ VELOX_INSTANTIATE_TEST_SUITE_P(
     MemoryPoolTest,
     testing::ValuesIn(MemoryPoolTest::getTestParams()));
 
-} // namespace memory
-} // namespace velox
-} // namespace facebook
+} // namespace facebook::velox::memory

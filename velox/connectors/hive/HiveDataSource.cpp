@@ -16,12 +16,12 @@
 
 #include "velox/connectors/hive/HiveDataSource.h"
 
+#include <fmt/ranges.h>
 #include <string>
 #include <unordered_map>
 
 #include "velox/common/testutil/TestValue.h"
 #include "velox/connectors/hive/HiveConfig.h"
-#include "velox/connectors/hive/HiveConnectorUtil.h"
 #include "velox/dwio/common/ReaderFactory.h"
 #include "velox/expression/FieldReference.h"
 
@@ -66,11 +66,11 @@ HiveDataSource::HiveDataSource(
     folly::Executor* executor,
     const ConnectorQueryCtx* connectorQueryCtx,
     const std::shared_ptr<HiveConfig>& hiveConfig)
-    : pool_(connectorQueryCtx->memoryPool()),
-      fileHandleFactory_(fileHandleFactory),
+    : fileHandleFactory_(fileHandleFactory),
       executor_(executor),
       connectorQueryCtx_(connectorQueryCtx),
       hiveConfig_(hiveConfig),
+      pool_(connectorQueryCtx->memoryPool()),
       outputType_(outputType),
       expressionEvaluator_(connectorQueryCtx->expressionEvaluator()) {
   // Column handled keyed on the column alias, the name used in the query.
@@ -80,18 +80,21 @@ HiveDataSource::HiveDataSource(
         handle,
         "ColumnHandle must be an instance of HiveColumnHandle for {}",
         canonicalizedName);
-
-    if (handle->columnType() == HiveColumnHandle::ColumnType::kPartitionKey) {
-      partitionKeys_.emplace(handle->name(), handle);
-    }
-
-    if (handle->columnType() == HiveColumnHandle::ColumnType::kSynthesized) {
-      infoColumns_.emplace(handle->name(), handle);
-    }
-
-    if (handle->columnType() == HiveColumnHandle::ColumnType::kRowIndex) {
-      VELOX_CHECK_NULL(rowIndexColumn_);
-      rowIndexColumn_ = handle;
+    switch (handle->columnType()) {
+      case HiveColumnHandle::ColumnType::kRegular:
+        break;
+      case HiveColumnHandle::ColumnType::kPartitionKey:
+        partitionKeys_.emplace(handle->name(), handle);
+        break;
+      case HiveColumnHandle::ColumnType::kSynthesized:
+        infoColumns_.emplace(handle->name(), handle);
+        break;
+      case HiveColumnHandle::ColumnType::kRowIndex:
+        specialColumns_.rowIndex = handle->name();
+        break;
+      case HiveColumnHandle::ColumnType::kRowId:
+        specialColumns_.rowId = handle->name();
+        break;
     }
   }
 
@@ -171,10 +174,12 @@ HiveDataSource::HiveDataSource(
       const auto& name = getColumnName(subfield);
       auto it = subfields_.find(name);
       if (it != subfields_.end()) {
-        // Only subfields of the column are projected out.
+        // Some subfields of the column are already projected out, we append the
+        // remainingFilter subfield
         it->second.push_back(&subfield);
       } else if (columnNames.count(name) == 0) {
-        // Column appears only in remaining filter.
+        // remainingFilter subfield's column is not projected out, we add the
+        // column and append the subfield
         subfields_[name].push_back(&subfield);
       }
     }
@@ -189,7 +194,9 @@ HiveDataSource::HiveDataSource(
       hiveTableHandle_->dataColumns(),
       partitionKeys_,
       infoColumns_,
-      rowIndexColumn_,
+      specialColumns_,
+      hiveConfig_->readStatsBasedFilterReorderDisabled(
+          connectorQueryCtx_->sessionProperties()),
       pool_);
   if (remainingFilter) {
     metadataFilter_ = std::make_shared<common::MetadataFilter>(
@@ -254,13 +261,39 @@ std::unique_ptr<HivePartitionFunction> HiveDataSource::setupBucketConversion() {
         hiveTableHandle_->dataColumns(),
         partitionKeys_,
         infoColumns_,
-        rowIndexColumn_,
+        specialColumns_,
+        hiveConfig_->readStatsBasedFilterReorderDisabled(
+            connectorQueryCtx_->sessionProperties()),
         pool_);
     newScanSpec->moveAdaptationFrom(*scanSpec_);
     scanSpec_ = std::move(newScanSpec);
   }
   return std::make_unique<HivePartitionFunction>(
       split_->bucketConversion->tableBucketCount, std::move(bucketChannels));
+}
+
+void HiveDataSource::setupRowIdColumn() {
+  VELOX_CHECK(split_->rowIdProperties.has_value());
+  const auto& props = *split_->rowIdProperties;
+  auto* rowId = scanSpec_->childByName(*specialColumns_.rowId);
+  VELOX_CHECK_NOT_NULL(rowId);
+  auto& rowIdType =
+      readerOutputType_->findChild(*specialColumns_.rowId)->asRow();
+  auto rowGroupId = split_->getFileName();
+  rowId->childByName(rowIdType.nameOf(1))
+      ->setConstantValue<StringView>(
+          StringView(rowGroupId), VARCHAR(), connectorQueryCtx_->memoryPool());
+  rowId->childByName(rowIdType.nameOf(2))
+      ->setConstantValue<int64_t>(
+          props.metadataVersion, BIGINT(), connectorQueryCtx_->memoryPool());
+  rowId->childByName(rowIdType.nameOf(3))
+      ->setConstantValue<int64_t>(
+          props.partitionId, BIGINT(), connectorQueryCtx_->memoryPool());
+  rowId->childByName(rowIdType.nameOf(4))
+      ->setConstantValue<StringView>(
+          StringView(props.tableGuid),
+          VARCHAR(),
+          connectorQueryCtx_->memoryPool());
 }
 
 void HiveDataSource::addSplit(std::shared_ptr<ConnectorSplit> split) {
@@ -281,12 +314,15 @@ void HiveDataSource::addSplit(std::shared_ptr<ConnectorSplit> split) {
   } else {
     partitionFunction_.reset();
   }
+  if (specialColumns_.rowId.has_value()) {
+    setupRowIdColumn();
+  }
 
   splitReader_ = createSplitReader();
   // Split reader subclasses may need to use the reader options in prepareSplit
   // so we initialize it beforehand.
   splitReader_->configureReaderOptions(randomSkip_);
-  splitReader_->prepareSplit(metadataFilter_, runtimeStats_, rowIndexColumn_);
+  splitReader_->prepareSplit(metadataFilter_, runtimeStats_);
 }
 
 vector_size_t HiveDataSource::applyBucketConversion(
@@ -300,6 +336,7 @@ vector_size_t HiveDataSource::applyBucketConversion(
   for (vector_size_t i = 0; i < rowVector->size(); ++i) {
     VELOX_CHECK_EQ((partitions_[i] - bucketToKeep) % partitionBucketCount, 0);
   }
+
   if (remainingFilterExprSet_) {
     for (vector_size_t i = 0; i < rowVector->size(); ++i) {
       if (partitions_[i] != bucketToKeep) {
@@ -345,76 +382,76 @@ std::optional<RowVectorPtr> HiveDataSource::next(
     output_ = BaseVector::create(readerOutputType_, 0, pool_);
   }
 
-  auto rowsScanned = splitReader_->next(size, output_);
+  const auto rowsScanned = splitReader_->next(size, output_);
   completedRows_ += rowsScanned;
+  if (rowsScanned == 0) {
+    splitReader_->updateRuntimeStats(runtimeStats_);
+    resetSplit();
+    return nullptr;
+  }
 
-  if (rowsScanned) {
-    VELOX_CHECK(
-        !output_->mayHaveNulls(), "Top-level row vector cannot have nulls");
-    auto rowsRemaining = output_->size();
+  VELOX_CHECK(
+      !output_->mayHaveNulls(), "Top-level row vector cannot have nulls");
+  auto rowsRemaining = output_->size();
+  if (rowsRemaining == 0) {
+    // no rows passed the pushed down filters.
+    return getEmptyOutput();
+  }
+
+  auto rowVector = std::dynamic_pointer_cast<RowVector>(output_);
+
+  // In case there is a remaining filter that excludes some but not all
+  // rows, collect the indices of the passing rows. If there is no filter,
+  // or it passes on all rows, leave this as null and let exec::wrap skip
+  // wrapping the results.
+  BufferPtr remainingIndices;
+  if (remainingFilterExprSet_) {
+    if (numBucketConversion_ > 0) {
+      filterRows_.resizeFill(rowVector->size());
+    } else {
+      filterRows_.resize(rowVector->size());
+    }
+  }
+  if (partitionFunction_) {
+    rowsRemaining = applyBucketConversion(rowVector, remainingIndices);
     if (rowsRemaining == 0) {
-      // no rows passed the pushed down filters.
+      return getEmptyOutput();
+    }
+  }
+
+  if (remainingFilterExprSet_) {
+    rowsRemaining = evaluateRemainingFilter(rowVector);
+    VELOX_CHECK_LE(rowsRemaining, rowsScanned);
+    if (rowsRemaining == 0) {
+      // No rows passed the remaining filter.
       return getEmptyOutput();
     }
 
-    auto rowVector = std::dynamic_pointer_cast<RowVector>(output_);
-
-    // In case there is a remaining filter that excludes some but not all
-    // rows, collect the indices of the passing rows. If there is no filter,
-    // or it passes on all rows, leave this as null and let exec::wrap skip
-    // wrapping the results.
-    BufferPtr remainingIndices;
-    if (remainingFilterExprSet_) {
-      if (numBucketConversion_ > 0) {
-        filterRows_.resizeFill(rowVector->size());
-      } else {
-        filterRows_.resize(rowVector->size());
-      }
+    if (rowsRemaining < rowVector->size()) {
+      // Some, but not all rows passed the remaining filter.
+      remainingIndices = filterEvalCtx_.selectedIndices;
     }
-    if (partitionFunction_) {
-      rowsRemaining = applyBucketConversion(rowVector, remainingIndices);
-      if (rowsRemaining == 0) {
-        return getEmptyOutput();
-      }
-    }
-    if (remainingFilterExprSet_) {
-      rowsRemaining = evaluateRemainingFilter(rowVector);
-      VELOX_CHECK_LE(rowsRemaining, rowsScanned);
-      if (rowsRemaining == 0) {
-        // No rows passed the remaining filter.
-        return getEmptyOutput();
-      }
-
-      if (rowsRemaining < rowVector->size()) {
-        // Some, but not all rows passed the remaining filter.
-        remainingIndices = filterEvalCtx_.selectedIndices;
-      }
-    }
-
-    if (outputType_->size() == 0) {
-      return exec::wrap(rowsRemaining, remainingIndices, rowVector);
-    }
-
-    std::vector<VectorPtr> outputColumns;
-    outputColumns.reserve(outputType_->size());
-    for (int i = 0; i < outputType_->size(); i++) {
-      auto& child = rowVector->childAt(i);
-      if (remainingIndices) {
-        // Disable dictionary values caching in expression eval so that we
-        // don't need to reallocate the result for every batch.
-        child->disableMemo();
-      }
-      outputColumns.emplace_back(
-          exec::wrapChild(rowsRemaining, remainingIndices, child));
-    }
-
-    return std::make_shared<RowVector>(
-        pool_, outputType_, BufferPtr(nullptr), rowsRemaining, outputColumns);
   }
 
-  splitReader_->updateRuntimeStats(runtimeStats_);
-  resetSplit();
-  return nullptr;
+  if (outputType_->size() == 0) {
+    return exec::wrap(rowsRemaining, remainingIndices, rowVector);
+  }
+
+  std::vector<VectorPtr> outputColumns;
+  outputColumns.reserve(outputType_->size());
+  for (int i = 0; i < outputType_->size(); ++i) {
+    auto& child = rowVector->childAt(i);
+    if (remainingIndices) {
+      // Disable dictionary values caching in expression eval so that we
+      // don't need to reallocate the result for every batch.
+      child->disableMemo();
+    }
+    outputColumns.emplace_back(
+        exec::wrapChild(rowsRemaining, remainingIndices, child));
+  }
+
+  return std::make_shared<RowVector>(
+      pool_, outputType_, BufferPtr(nullptr), rowsRemaining, outputColumns);
 }
 
 void HiveDataSource::addDynamicFilter(
@@ -435,16 +472,6 @@ std::unordered_map<std::string, RuntimeCounter> HiveDataSource::runtimeStats() {
        {"prefetchBytes",
         RuntimeCounter(
             ioStats_->prefetch().sum(), RuntimeCounter::Unit::kBytes)},
-       {"numStorageRead", RuntimeCounter(ioStats_->read().count())},
-       {"storageReadBytes",
-        RuntimeCounter(ioStats_->read().sum(), RuntimeCounter::Unit::kBytes)},
-       {"numLocalRead", RuntimeCounter(ioStats_->ssdRead().count())},
-       {"localReadBytes",
-        RuntimeCounter(
-            ioStats_->ssdRead().sum(), RuntimeCounter::Unit::kBytes)},
-       {"numRamRead", RuntimeCounter(ioStats_->ramHit().count())},
-       {"ramReadBytes",
-        RuntimeCounter(ioStats_->ramHit().sum(), RuntimeCounter::Unit::kBytes)},
        {"totalScanTime",
         RuntimeCounter(
             ioStats_->totalScanTime(), RuntimeCounter::Unit::kNanos)},
@@ -463,8 +490,33 @@ std::unordered_map<std::string, RuntimeCounter> HiveDataSource::runtimeStats() {
        {"overreadBytes",
         RuntimeCounter(
             ioStats_->rawOverreadBytes(), RuntimeCounter::Unit::kBytes)}});
+  if (ioStats_->read().count() > 0) {
+    res.insert({"numStorageRead", RuntimeCounter(ioStats_->read().count())});
+    res.insert(
+        {"storageReadBytes",
+         RuntimeCounter(ioStats_->read().sum(), RuntimeCounter::Unit::kBytes)});
+  }
+  if (ioStats_->ssdRead().count() > 0) {
+    res.insert({"numLocalRead", RuntimeCounter(ioStats_->ssdRead().count())});
+    res.insert(
+        {"localReadBytes",
+         RuntimeCounter(
+             ioStats_->ssdRead().sum(), RuntimeCounter::Unit::kBytes)});
+  }
+  if (ioStats_->ramHit().count() > 0) {
+    res.insert({"numRamRead", RuntimeCounter(ioStats_->ramHit().count())});
+    res.insert(
+        {"ramReadBytes",
+         RuntimeCounter(
+             ioStats_->ramHit().sum(), RuntimeCounter::Unit::kBytes)});
+  }
   if (numBucketConversion_ > 0) {
     res.insert({"numBucketConversion", RuntimeCounter(numBucketConversion_)});
+  }
+  for (const auto& storageStats : ioStats_->storageStats()) {
+    res.emplace(
+        storageStats.first,
+        RuntimeCounter(storageStats.second.sum, storageStats.second.unit));
   }
   return res;
 }
@@ -505,15 +557,18 @@ vector_size_t HiveDataSource::evaluateRemainingFilter(RowVectorPtr& rowVector) {
         filterLazyDecoded_,
         filterLazyBaseRows_);
   }
-  auto filterStartMicros = getCurrentTimeMicro();
-  expressionEvaluator_->evaluate(
-      remainingFilterExprSet_.get(), filterRows_, *rowVector, filterResult_);
-  auto res = exec::processFilterResults(
-      filterResult_, filterRows_, filterEvalCtx_, pool_);
+  uint64_t filterTimeUs{0};
+  vector_size_t rowsRemaining{0};
+  {
+    MicrosecondTimer timer(&filterTimeUs);
+    expressionEvaluator_->evaluate(
+        remainingFilterExprSet_.get(), filterRows_, *rowVector, filterResult_);
+    rowsRemaining = exec::processFilterResults(
+        filterResult_, filterRows_, filterEvalCtx_, pool_);
+  }
   totalRemainingFilterTime_.fetch_add(
-      (getCurrentTimeMicro() - filterStartMicros) * 1000,
-      std::memory_order_relaxed);
-  return res;
+      filterTimeUs * 1000, std::memory_order_relaxed);
+  return rowsRemaining;
 }
 
 void HiveDataSource::resetSplit() {

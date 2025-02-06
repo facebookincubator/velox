@@ -45,7 +45,7 @@ class UuidCastOperator : public exec::CastOperator {
       castFromString(input, context, rows, *result);
     } else {
       VELOX_UNSUPPORTED(
-          "Cast from {} to UUID not yet supported", resultType->toString());
+          "Cast from {} to UUID not yet supported", input.type()->toString());
     }
   }
 
@@ -75,7 +75,8 @@ class UuidCastOperator : public exec::CastOperator {
     const auto* uuids = input.as<SimpleVector<int128_t>>();
 
     context.applyToSelectedNoThrow(rows, [&](auto row) {
-      const auto uuid = uuids->valueAt(row);
+      // Ensure UUID bytes are big endian when building the string.
+      const auto uuid = DecimalUtil::bigEndian(uuids->valueAt(row));
 
       const uint8_t* uuidBytes = reinterpret_cast<const uint8_t*>(&uuid);
 
@@ -92,7 +93,7 @@ class UuidCastOperator : public exec::CastOperator {
           "c0c1c2c3c4c5c6c7c8c9cacbcccdcecfd0d1d2d3d4d5d6d7d8d9dadbdcdddedf"
           "e0e1e2e3e4e5e6e7e8e9eaebecedeeeff0f1f2f3f4f5f6f7f8f9fafbfcfdfeff";
 
-      exec::StringWriter<false> result(flatResult, row);
+      exec::StringWriter result(flatResult, row);
       result.resize(36);
 
       size_t offset = 0;
@@ -127,6 +128,9 @@ class UuidCastOperator : public exec::CastOperator {
       int128_t u;
       memcpy(&u, &uuid, 16);
 
+      // Convert a big endian value from Boost to native byte-order.
+      u = DecimalUtil::bigEndian(u);
+
       flatResult->set(row, u);
     });
   }
@@ -142,6 +146,11 @@ class UuidTypeFactories : public CustomTypeFactories {
 
   exec::CastOperatorPtr getCastOperator() const override {
     return std::make_shared<UuidCastOperator>();
+  }
+
+  AbstractInputGeneratorPtr getInputGenerator(
+      const InputGeneratorConfig& /*config*/) const override {
+    return nullptr;
   }
 };
 

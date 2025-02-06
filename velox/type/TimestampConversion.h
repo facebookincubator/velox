@@ -31,6 +31,10 @@ constexpr const int32_t kMinsPerHour{60};
 constexpr const int32_t kSecsPerMinute{60};
 constexpr const int64_t kMsecsPerSec{1000};
 
+constexpr const int64_t kMillisPerSecond{1000};
+constexpr const int64_t kMillisPerMinute{kMillisPerSecond * kSecsPerMinute};
+constexpr const int64_t kMillisPerHour{kMillisPerMinute * kMinsPerHour};
+
 constexpr const int64_t kMicrosPerMsec{1000};
 constexpr const int64_t kMicrosPerSec{kMicrosPerMsec * kMsecsPerSec};
 constexpr const int64_t kMicrosPerMinute{kMicrosPerSec * kSecsPerMinute};
@@ -94,27 +98,57 @@ int32_t getMaxDayOfMonth(int32_t year, int32_t month);
 
 /// Computes the last day of month since unix epoch (1970-01-01).
 /// Returns UserError status if the date is invalid.
-Status lastDayOfMonthSinceEpochFromDate(const std::tm& dateTime, int64_t& out);
+Expected<int64_t> lastDayOfMonthSinceEpochFromDate(const std::tm& dateTime);
 
 /// Date conversions.
 
 /// Computes the (signed) number of days since unix epoch (1970-01-01).
 /// Returns UserError status if the date is invalid.
-Status
-daysSinceEpochFromDate(int32_t year, int32_t month, int32_t day, int64_t& out);
+Expected<int64_t>
+daysSinceEpochFromDate(int32_t year, int32_t month, int32_t day);
 
 /// Computes the (signed) number of days since unix epoch (1970-01-01).
 /// Returns UserError status if the date is invalid.
-Status daysSinceEpochFromWeekDate(
+Expected<int64_t> daysSinceEpochFromWeekDate(
     int32_t weekYear,
     int32_t weekOfYear,
+    int32_t dayOfWeek);
+
+/// Computes the signed number of days since the Unix epoch (1970-01-01). To
+/// align with Spark's SimpleDateFormat behavior, this function offers two
+/// modes: lenient and non-lenient. For non-lenient mode, dates before Jan 1, 1
+/// are not supported, and it returns an error status if the date is invalid.
+/// For lenient mode, it accepts a wider range of arguments.
+/// @param year Year. For non-lenient mode, it should be in the range [1,
+/// 292278994]. e.g: 1996, 2024. For lenient mode, it should be in the range
+/// [-292275055, 292278994].
+/// @param month Month of year. For non-lenient mode, it should be in the range
+/// [1, 12]. For example, 1 is January, 7 is July. For lenient mode, values
+/// greater than 12 wrap around to the start of the year, and values less than 1
+/// count backward from December. For example, 13 corresponds to January of the
+/// following year and -1 corresponds to November of the previous year.
+/// @param weekOfMonth Week of the month. For non-lenient mode, it should be in
+/// the range [1, depends on month]. For example, 1 is 1st week, 3 is 3rd week.
+/// For lenient mode, we consider days of the previous or next months as part of
+/// the specified weekOfMonth. For example, if weekOfMonth is 5 but the current
+/// month only has 4 weeks (such as February), the first week of March will be
+/// considered as the 5th week of February.
+/// @param dayOfWeek Day number of week. For non-lenient mode, it should be in
+/// the range [1, depends on month]. For example, 1 is Monday, 7 is Sunday. For
+/// lenient mode, we consider days of the previous or next months as part of the
+/// specified dayOfWeek.For example, if weekOfMonth is 1 and dayOfWeek is 1 but
+/// the month's first day is Saturday, the Monday of the last week of the
+/// previous month will be used.
+Expected<int64_t> daysSinceEpochFromWeekOfMonthDate(
+    int32_t year,
+    int32_t month,
+    int32_t weekOfMonth,
     int32_t dayOfWeek,
-    int64_t& out);
+    bool lenient);
 
 /// Computes the (signed) number of days since unix epoch (1970-01-01).
 /// Returns UserError status if the date is invalid.
-Status
-daysSinceEpochFromDayOfYear(int32_t year, int32_t dayOfYear, int64_t& out);
+Expected<int64_t> daysSinceEpochFromDayOfYear(int32_t year, int32_t dayOfYear);
 
 /// Cast string to date. Supported date formats vary, depending on input
 /// ParseMode. Refer to ParseMode enum for further info.
@@ -127,7 +161,7 @@ inline Expected<int32_t> fromDateString(const StringView& str, ParseMode mode) {
 }
 
 // Extracts the day of the week from the number of days since epoch
-int32_t extractISODayOfTheWeek(int32_t daysSinceEpoch);
+int32_t extractISODayOfTheWeek(int64_t daysSinceEpoch);
 
 /// Time conversions.
 
@@ -195,6 +229,18 @@ inline Expected<Timestamp> fromTimestampString(
   return fromTimestampString(str.data(), str.size(), parseMode);
 }
 
+struct ParsedTimestampWithTimeZone {
+  Timestamp timestamp;
+  const tz::TimeZone* timeZone;
+  std::optional<int64_t> offsetMillis;
+
+  // For ease of testing purposes.
+  bool operator==(const ParsedTimestampWithTimeZone& other) const {
+    return timestamp == other.timestamp && timeZone == other.timeZone &&
+        offsetMillis == other.offsetMillis;
+  }
+};
+
 /// Parses a timestamp string using specified TimestampParseMode.
 ///
 /// This is a timezone-aware version of the function above
@@ -207,16 +253,17 @@ inline Expected<Timestamp> fromTimestampString(
 /// "America/Los_Angeles", or a timezone offset, like "+06:00" or "-09:30". The
 /// white space between the hour definition and timestamp is optional.
 ///
-/// `nullptr` means no timezone information was found. Returns Unexpected with
-/// UserError status in case of parsing errors.
-Expected<std::pair<Timestamp, const tz::TimeZone*>>
-fromTimestampWithTimezoneString(
+/// `nullptr` means the timezone was not recognized as a valid time zone or
+/// was not present. In this case offsetMillis may be set with the milliseconds
+/// timezone offset if an offset was found but was not a valid timezone.
+///
+/// Returns Unexpected with UserError status in case of parsing errors.
+Expected<ParsedTimestampWithTimeZone> fromTimestampWithTimezoneString(
     const char* buf,
     size_t len,
     TimestampParseMode parseMode);
 
-inline Expected<std::pair<Timestamp, const tz::TimeZone*>>
-fromTimestampWithTimezoneString(
+inline Expected<ParsedTimestampWithTimeZone> fromTimestampWithTimezoneString(
     const StringView& str,
     TimestampParseMode parseMode) {
   return fromTimestampWithTimezoneString(str.data(), str.size(), parseMode);

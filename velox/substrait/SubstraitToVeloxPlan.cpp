@@ -345,8 +345,8 @@ core::PlanNodePtr SubstraitVeloxPlanConverter::toVeloxPlan(
   } else {
     return std::make_shared<core::LimitNode>(
         nextPlanNodeId(),
-        (int32_t)fetchRel.offset(),
-        (int32_t)fetchRel.count(),
+        static_cast<int32_t>(fetchRel.offset()),
+        static_cast<int32_t>(fetchRel.count()),
         false /*isPartial*/,
         childNode);
   }
@@ -412,11 +412,11 @@ core::PlanNodePtr SubstraitVeloxPlanConverter::toVeloxPlan(
         kHiveConnectorId,
         "hive_table",
         filterPushdownEnabled,
-        connector::hive::SubfieldFilters{},
+        common::SubfieldFilters{},
         nullptr,
         nullptr);
   } else {
-    connector::hive::SubfieldFilters filters =
+    common::SubfieldFilters filters =
         toVeloxFilter(colNameList, veloxTypeList, readRel.filter());
     tableHandle = std::make_shared<connector::hive::HiveTableHandle>(
         kHiveConnectorId,
@@ -545,7 +545,6 @@ core::PlanNodePtr SubstraitVeloxPlanConverter::toVeloxPlan(
 core::PlanNodePtr SubstraitVeloxPlanConverter::toVeloxPlan(
     const ::substrait::RelRoot& root) {
   // TODO: Use the names as the output names for the whole computing.
-  const auto& names = root.names();
   if (root.has_input()) {
     const auto& rel = root.input();
     return toVeloxPlan(rel);
@@ -557,7 +556,7 @@ core::PlanNodePtr SubstraitVeloxPlanConverter::toVeloxPlan(
     const ::substrait::Plan& substraitPlan) {
   VELOX_CHECK(
       checkTypeExtension(substraitPlan),
-      "The type extension only have unknown type.")
+      "The type extension only have unknown type.");
   // Construct the function map based on the Substrait representation.
   constructFunctionMap(substraitPlan);
 
@@ -634,12 +633,12 @@ class FilterInfo {
   bool isInitialized_ = false;
 };
 
-connector::hive::SubfieldFilters SubstraitVeloxPlanConverter::toVeloxFilter(
+common::SubfieldFilters SubstraitVeloxPlanConverter::toVeloxFilter(
     const std::vector<std::string>& inputNameList,
     const std::vector<TypePtr>& inputTypeList,
     const ::substrait::Expression& substraitFilter) {
-  connector::hive::SubfieldFilters filters;
-  // A map between the column index and the FilterInfo for that column.
+  common::SubfieldFilters filters;
+  // A map betweesn the column index and the FilterInfo for that column.
   std::unordered_map<int, std::shared_ptr<FilterInfo>> colInfoMap;
   for (int idx = 0; idx < inputNameList.size(); idx++) {
     colInfoMap[idx] = std::make_shared<FilterInfo>();

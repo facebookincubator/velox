@@ -562,7 +562,9 @@ NestedLoopJoinNode
 NestedLoopJoinNode represents an implementation that iterates through each row from
 the left side of the join and, for each row, iterates through all rows from the right
 side of the join, comparing them based on the join condition to find matching rows
-and emitting results. Nested loop join supports non-equality join.
+and emitting results. Nested loop join supports non-equality joins, and emit output
+rows in the same order as the probe input (for inner and left outer joins) for each
+thread of execution.
 
 .. list-table::
    :widths: 10 30
@@ -948,7 +950,7 @@ assigns row numbers within each partition starting from 1.
 
 This operator accumulates state: a hash table mapping partition keys to a list
 of top 'limit' rows within that partition.  Returning the row numbers as
-a column in the output is optional. This operator doesn't support spilling yet.
+a column in the output is optional. This operator supports spilling as well.
 
 This operator is logically equivalent to a WindowNode followed by
 FilterNode(row_number <= limit), but it uses less memory and CPU.

@@ -19,9 +19,13 @@
 #include "velox/connectors/hive/HiveConfig.h"
 #include "velox/connectors/hive/HiveConnectorSplit.h"
 #include "velox/connectors/hive/TableHandle.h"
-#include "velox/core/Config.h"
 #include "velox/exec/tests/utils/HiveConnectorTestBase.h"
-#include "velox/exec/tests/utils/PrefixSortUtils.h"
+
+#include "velox/dwio/dwrf/writer/Writer.h"
+
+#ifdef VELOX_ENABLE_PARQUET
+#include "velox/dwio/parquet/writer/Writer.h"
+#endif
 
 namespace facebook::velox::connector {
 
@@ -42,13 +46,13 @@ class HiveConnectorUtilTest : public exec::test::HiveConnectorTestBase {
 };
 
 TEST_F(HiveConnectorUtilTest, configureReaderOptions) {
-  core::MemConfig sessionProperties;
+  config::ConfigBase sessionProperties({});
   auto connectorQueryCtx = std::make_unique<connector::ConnectorQueryCtx>(
       pool_.get(),
       pool_.get(),
       &sessionProperties,
       nullptr,
-      exec::test::defaultPrefixSortConfig(),
+      common::PrefixSortConfig(),
       nullptr,
       nullptr,
       "query.HiveConnectorUtilTest",
@@ -57,7 +61,8 @@ TEST_F(HiveConnectorUtilTest, configureReaderOptions) {
       0,
       "");
   auto hiveConfig =
-      std::make_shared<hive::HiveConfig>(std::make_shared<core::MemConfig>());
+      std::make_shared<hive::HiveConfig>(std::make_shared<config::ConfigBase>(
+          std::unordered_map<std::string, std::string>()));
   const std::unordered_map<std::string, std::optional<std::string>>
       partitionKeys;
   const std::unordered_map<std::string, std::string> customSplitInfo;
@@ -74,7 +79,7 @@ TEST_F(HiveConnectorUtilTest, configureReaderOptions) {
         "testConnectorId",
         "testTable",
         false,
-        hive::SubfieldFilters{},
+        common::SubfieldFilters{},
         nullptr,
         nullptr,
         tableParameters);
@@ -98,7 +103,7 @@ TEST_F(HiveConnectorUtilTest, configureReaderOptions) {
     auto tableHandle = createTableHandle();
     auto split = createSplit();
     configureReaderOptions(
-        readerOptions, hiveConfig, connectorQueryCtx.get(), tableHandle, split);
+        hiveConfig, connectorQueryCtx.get(), tableHandle, split, readerOptions);
   };
 
   auto clearDynamicParameters = [&](FileFormat newFileFormat) {
@@ -109,21 +114,34 @@ TEST_F(HiveConnectorUtilTest, configureReaderOptions) {
     expectedSerDe = SerDeOptions{};
   };
 
+  auto checkUseColumnNamesForColumnMapping = [&]() {
+    if (fileFormat == FileFormat::DWRF || fileFormat == FileFormat::ORC) {
+      EXPECT_EQ(
+          readerOptions.useColumnNamesForColumnMapping(),
+          hiveConfig->isOrcUseColumnNames(&sessionProperties));
+    } else if (fileFormat == FileFormat::PARQUET) {
+      EXPECT_EQ(
+          readerOptions.useColumnNamesForColumnMapping(),
+          hiveConfig->isParquetUseColumnNames(&sessionProperties));
+    }
+  };
+
   // Default.
   performConfigure();
   EXPECT_EQ(readerOptions.fileFormat(), fileFormat);
   EXPECT_TRUE(compareSerDeOptions(readerOptions.serDeOptions(), expectedSerDe));
-  EXPECT_EQ(readerOptions.loadQuantum(), hiveConfig->loadQuantum());
-  EXPECT_EQ(readerOptions.maxCoalesceBytes(), hiveConfig->maxCoalescedBytes());
+  EXPECT_EQ(
+      readerOptions.loadQuantum(), hiveConfig->loadQuantum(&sessionProperties));
+  EXPECT_EQ(
+      readerOptions.maxCoalesceBytes(),
+      hiveConfig->maxCoalescedBytes(&sessionProperties));
   EXPECT_EQ(
       readerOptions.maxCoalesceDistance(),
-      hiveConfig->maxCoalescedDistanceBytes());
+      hiveConfig->maxCoalescedDistanceBytes(&sessionProperties));
   EXPECT_EQ(
       readerOptions.fileColumnNamesReadAsLowerCase(),
       hiveConfig->isFileColumnNamesReadAsLowerCase(&sessionProperties));
-  EXPECT_EQ(
-      readerOptions.useColumnNamesForColumnMapping(),
-      hiveConfig->isOrcUseColumnNames(&sessionProperties));
+  checkUseColumnNamesForColumnMapping();
   EXPECT_EQ(
       readerOptions.footerEstimatedSize(), hiveConfig->footerEstimatedSize());
   EXPECT_EQ(
@@ -159,6 +177,38 @@ TEST_F(HiveConnectorUtilTest, configureReaderOptions) {
   performConfigure();
   EXPECT_TRUE(compareSerDeOptions(readerOptions.serDeOptions(), expectedSerDe));
 
+  // Empty escape delim means default escape char.
+  clearDynamicParameters(FileFormat::TEXT);
+  serdeParameters[SerDeOptions::kEscapeChar] = "";
+  expectedSerDe.escapeChar = '\\';
+  expectedSerDe.isEscaped = true;
+  performConfigure();
+  EXPECT_TRUE(compareSerDeOptions(readerOptions.serDeOptions(), expectedSerDe));
+
+  // Convertible to byte escape char - use it.
+  clearDynamicParameters(FileFormat::TEXT);
+  serdeParameters[SerDeOptions::kEscapeChar] = "38";
+  expectedSerDe.escapeChar = '&';
+  expectedSerDe.isEscaped = true;
+  performConfigure();
+  EXPECT_TRUE(compareSerDeOptions(readerOptions.serDeOptions(), expectedSerDe));
+
+  // Overflow byte escape char - fall back to the 1st character of the string.
+  clearDynamicParameters(FileFormat::TEXT);
+  serdeParameters[SerDeOptions::kEscapeChar] = "381";
+  expectedSerDe.escapeChar = '3';
+  expectedSerDe.isEscaped = true;
+  performConfigure();
+  EXPECT_TRUE(compareSerDeOptions(readerOptions.serDeOptions(), expectedSerDe));
+
+  // Not convertible string - fall back to the 1st character of the string.
+  clearDynamicParameters(FileFormat::TEXT);
+  serdeParameters[SerDeOptions::kEscapeChar] = "7!";
+  expectedSerDe.escapeChar = '7';
+  expectedSerDe.isEscaped = true;
+  performConfigure();
+  EXPECT_TRUE(compareSerDeOptions(readerOptions.serDeOptions(), expectedSerDe));
+
   // Modify all previous together.
   clearDynamicParameters(FileFormat::TEXT);
   serdeParameters[SerDeOptions::kFieldDelim] = '~';
@@ -167,12 +217,12 @@ TEST_F(HiveConnectorUtilTest, configureReaderOptions) {
   expectedSerDe.separators[size_t(SerDeSeparator::COLLECTION_DELIM)] = '$';
   serdeParameters[SerDeOptions::kMapKeyDelim] = '*';
   expectedSerDe.separators[size_t(SerDeSeparator::MAP_KEY_DELIM)] = '*';
+  serdeParameters[SerDeOptions::kEscapeChar] = '*';
+  expectedSerDe.escapeChar = '*';
+  expectedSerDe.isEscaped = true;
   tableParameters[TableParameter::kSerializationNullFormat] = "";
   expectedSerDe.nullString = "";
   performConfigure();
-  EXPECT_TRUE(compareSerDeOptions(readerOptions.serDeOptions(), expectedSerDe));
-  EXPECT_TRUE(compareSerDeOptions(readerOptions.serDeOptions(), expectedSerDe));
-  EXPECT_TRUE(compareSerDeOptions(readerOptions.serDeOptions(), expectedSerDe));
   EXPECT_TRUE(compareSerDeOptions(readerOptions.serDeOptions(), expectedSerDe));
 
   // Tests other custom reader options.
@@ -180,7 +230,7 @@ TEST_F(HiveConnectorUtilTest, configureReaderOptions) {
   std::unordered_map<std::string, std::string> customHiveConfigProps;
   customHiveConfigProps[hive::HiveConfig::kLoadQuantum] = "321";
   customHiveConfigProps[hive::HiveConfig::kMaxCoalescedBytes] = "129";
-  customHiveConfigProps[hive::HiveConfig::kMaxCoalescedDistanceBytes] = "513";
+  customHiveConfigProps[hive::HiveConfig::kMaxCoalescedDistance] = "513KB";
   customHiveConfigProps[hive::HiveConfig::kFileColumnNamesReadAsLowerCase] =
       "true";
   customHiveConfigProps[hive::HiveConfig::kOrcUseColumnNames] = "true";
@@ -188,24 +238,102 @@ TEST_F(HiveConnectorUtilTest, configureReaderOptions) {
   customHiveConfigProps[hive::HiveConfig::kFilePreloadThreshold] = "9999";
   customHiveConfigProps[hive::HiveConfig::kPrefetchRowGroups] = "10";
   hiveConfig = std::make_shared<hive::HiveConfig>(
-      std::make_shared<core::MemConfig>(customHiveConfigProps));
+      std::make_shared<config::ConfigBase>(std::move(customHiveConfigProps)));
   performConfigure();
-  EXPECT_EQ(readerOptions.loadQuantum(), hiveConfig->loadQuantum());
-  EXPECT_EQ(readerOptions.maxCoalesceBytes(), hiveConfig->maxCoalescedBytes());
+  EXPECT_EQ(
+      readerOptions.loadQuantum(), hiveConfig->loadQuantum(&sessionProperties));
+  EXPECT_EQ(
+      readerOptions.maxCoalesceBytes(),
+      hiveConfig->maxCoalescedBytes(&sessionProperties));
   EXPECT_EQ(
       readerOptions.maxCoalesceDistance(),
-      hiveConfig->maxCoalescedDistanceBytes());
+      hiveConfig->maxCoalescedDistanceBytes(&sessionProperties));
   EXPECT_EQ(
       readerOptions.fileColumnNamesReadAsLowerCase(),
       hiveConfig->isFileColumnNamesReadAsLowerCase(&sessionProperties));
-  EXPECT_EQ(
-      readerOptions.useColumnNamesForColumnMapping(),
-      hiveConfig->isOrcUseColumnNames(&sessionProperties));
   EXPECT_EQ(
       readerOptions.footerEstimatedSize(), hiveConfig->footerEstimatedSize());
   EXPECT_EQ(
       readerOptions.filePreloadThreshold(), hiveConfig->filePreloadThreshold());
   EXPECT_EQ(readerOptions.prefetchRowGroups(), hiveConfig->prefetchRowGroups());
+  clearDynamicParameters(FileFormat::ORC);
+  performConfigure();
+  checkUseColumnNamesForColumnMapping();
+  clearDynamicParameters(FileFormat::PARQUET);
+  performConfigure();
+  checkUseColumnNamesForColumnMapping();
+}
+
+TEST_F(HiveConnectorUtilTest, cacheRetention) {
+  struct {
+    bool splitCacheable;
+    bool expectedNoCacheRetention;
+
+    std::string debugString() const {
+      return fmt::format(
+          "splitCacheable {}, expectedNoCacheRetention {}",
+          splitCacheable,
+          expectedNoCacheRetention);
+    }
+  } testSettings[] = {{false, true}, {true, false}};
+
+  for (const auto& testData : testSettings) {
+    SCOPED_TRACE(testData.debugString());
+
+    config::ConfigBase sessionProperties({});
+    auto hiveConfig =
+        std::make_shared<hive::HiveConfig>(std::make_shared<config::ConfigBase>(
+            std::unordered_map<std::string, std::string>()));
+
+    auto connectorQueryCtx = std::make_unique<connector::ConnectorQueryCtx>(
+        pool_.get(),
+        pool_.get(),
+        &sessionProperties,
+        nullptr,
+        common::PrefixSortConfig(),
+        nullptr,
+        nullptr,
+        "query.HiveConnectorUtilTest",
+        "task.HiveConnectorUtilTest",
+        "planNodeId.HiveConnectorUtilTest",
+        0,
+        "");
+
+    dwio::common::ReaderOptions readerOptions(pool_.get());
+
+    auto tableHandle = std::make_shared<hive::HiveTableHandle>(
+        "testConnectorId",
+        "testTable",
+        false,
+        common::SubfieldFilters{},
+        nullptr,
+        nullptr,
+        std::unordered_map<std::string, std::string>{});
+
+    auto hiveSplit = std::make_shared<hive::HiveConnectorSplit>(
+        "testConnectorId",
+        "/tmp/",
+        FileFormat::DWRF,
+        0UL,
+        std::numeric_limits<uint64_t>::max(),
+        std::unordered_map<std::string, std::optional<std::string>>{},
+        std::nullopt,
+        std::unordered_map<std::string, std::string>{},
+        std::shared_ptr<std::string>{},
+        std::unordered_map<std::string, std::string>{},
+        0,
+        testData.splitCacheable);
+
+    configureReaderOptions(
+        hiveConfig,
+        connectorQueryCtx.get(),
+        tableHandle,
+        hiveSplit,
+        readerOptions);
+
+    ASSERT_EQ(
+        readerOptions.noCacheRetention(), testData.expectedNoCacheRetention);
+  }
 }
 
 TEST_F(HiveConnectorUtilTest, configureRowReaderOptions) {
@@ -219,5 +347,4 @@ TEST_F(HiveConnectorUtilTest, configureRowReaderOptions) {
       ->setFilter(common::createBigintValues({1, 3}, false));
   float_features->setFlatMapFeatureSelection({"1", "3"});
 }
-
 } // namespace facebook::velox::connector

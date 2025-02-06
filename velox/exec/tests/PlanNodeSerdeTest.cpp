@@ -43,6 +43,7 @@ class PlanNodeSerdeTest : public testing::Test,
     connector::hive::LocationHandle::registerSerDe();
     connector::hive::HiveColumnHandle::registerSerDe();
     connector::hive::HiveInsertTableHandle::registerSerDe();
+    connector::hive::registerHivePartitionFunctionSerDe();
     core::PlanNode::registerSerDe();
     core::ITypedExpr::registerSerDe();
     registerPartitionFunctionSerDe();
@@ -173,11 +174,18 @@ TEST_F(PlanNodeSerdeTest, enforceSingleRow) {
 }
 
 TEST_F(PlanNodeSerdeTest, exchange) {
-  auto plan =
-      PlanBuilder()
-          .exchange(ROW({"a", "b", "c"}, {BIGINT(), DOUBLE(), VARCHAR()}))
-          .planNode();
-  testSerde(plan);
+  for (auto serdeKind : std::vector<VectorSerde::Kind>{
+           VectorSerde::Kind::kPresto,
+           VectorSerde::Kind::kCompactRow,
+           VectorSerde::Kind::kUnsafeRow}) {
+    SCOPED_TRACE(fmt::format("serdeKind: {}", serdeKind));
+    auto plan = PlanBuilder()
+                    .exchange(
+                        ROW({"a", "b", "c"}, {BIGINT(), DOUBLE(), VARCHAR()}),
+                        serdeKind)
+                    .planNode();
+    testSerde(plan);
+  }
 }
 
 TEST_F(PlanNodeSerdeTest, filter) {
@@ -221,6 +229,20 @@ TEST_F(PlanNodeSerdeTest, localPartition) {
   testSerde(plan);
 }
 
+TEST_F(PlanNodeSerdeTest, scaleWriterlocalPartition) {
+  auto plan = PlanBuilder()
+                  .values({data_})
+                  .scaleWriterlocalPartition(std::vector<std::string>{"c0"})
+                  .planNode();
+  testSerde(plan);
+
+  plan = PlanBuilder()
+             .values({data_})
+             .scaleWriterlocalPartitionRoundRobin()
+             .planNode();
+  testSerde(plan);
+}
+
 TEST_F(PlanNodeSerdeTest, limit) {
   auto plan = PlanBuilder().values({data_}).limit(0, 10, true).planNode();
   testSerde(plan);
@@ -233,12 +255,18 @@ TEST_F(PlanNodeSerdeTest, limit) {
 }
 
 TEST_F(PlanNodeSerdeTest, mergeExchange) {
-  auto plan = PlanBuilder()
-                  .mergeExchange(
-                      ROW({"a", "b", "c"}, {BIGINT(), DOUBLE(), VARCHAR()}),
-                      {"a DESC", "b NULLS FIRST"})
-                  .planNode();
-  testSerde(plan);
+  for (auto serdeKind : std::vector<VectorSerde::Kind>{
+           VectorSerde::Kind::kPresto,
+           VectorSerde::Kind::kCompactRow,
+           VectorSerde::Kind::kUnsafeRow}) {
+    auto plan = PlanBuilder()
+                    .mergeExchange(
+                        ROW({"a", "b", "c"}, {BIGINT(), DOUBLE(), VARCHAR()}),
+                        {"a DESC", "b NULLS FIRST"},
+                        serdeKind)
+                    .planNode();
+    testSerde(plan);
+  }
 }
 
 TEST_F(PlanNodeSerdeTest, localMerge) {
@@ -319,18 +347,30 @@ TEST_F(PlanNodeSerdeTest, orderBy) {
 }
 
 TEST_F(PlanNodeSerdeTest, partitionedOutput) {
-  auto plan =
-      PlanBuilder().values({data_}).partitionedOutputBroadcast().planNode();
-  testSerde(plan);
+  for (auto serdeKind : std::vector<VectorSerde::Kind>{
+           VectorSerde::Kind::kPresto,
+           VectorSerde::Kind::kCompactRow,
+           VectorSerde::Kind::kUnsafeRow}) {
+    SCOPED_TRACE(fmt::format("serdeKind: {}", serdeKind));
 
-  plan = PlanBuilder().values({data_}).partitionedOutput({"c0"}, 50).planNode();
-  testSerde(plan);
+    auto plan = PlanBuilder()
+                    .values({data_})
+                    .partitionedOutputBroadcast(/*outputLayout=*/{}, serdeKind)
+                    .planNode();
+    testSerde(plan);
 
-  plan = PlanBuilder()
-             .values({data_})
-             .partitionedOutput({"c0"}, 50, {"c1", {"c2"}, "c0"})
-             .planNode();
-  testSerde(plan);
+    plan = PlanBuilder()
+               .values({data_})
+               .partitionedOutput({"c0"}, 50, /*outputLayout=*/{}, serdeKind)
+               .planNode();
+    testSerde(plan);
+
+    plan = PlanBuilder()
+               .values({data_})
+               .partitionedOutput({"c0"}, 50, {"c1", {"c2"}, "c0"}, serdeKind)
+               .planNode();
+    testSerde(plan);
+  }
 }
 
 TEST_F(PlanNodeSerdeTest, project) {

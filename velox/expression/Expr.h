@@ -29,19 +29,6 @@
 #include "velox/type/Subfield.h"
 #include "velox/vector/SimpleVector.h"
 
-/// GFlag used to enable saving input vector and expression SQL on disk in case
-/// of any (user or system) error during expression evaluation. The value
-/// specifies a path to a directory where the vectors will be saved. That
-/// directory must exist and be writable.
-DECLARE_string(velox_save_input_on_expression_any_failure_path);
-
-/// GFlag used to enable saving input vector and expression SQL on disk in case
-/// of a system error during expression evaluation. The value specifies a path
-/// to a directory where the vectors will be saved. That directory must exist
-/// and be writable. This flag is ignored if
-/// velox_save_input_on_expression_any_failure_path flag is set.
-DECLARE_string(velox_save_input_on_expression_system_failure_path);
-
 namespace facebook::velox::exec {
 
 class ExprSet;
@@ -59,18 +46,24 @@ struct ExprStats {
   /// size.
   uint64_t numProcessedVectors{0};
 
+  /// Whether default-null behavior of an expression resulted in skipping
+  /// evaluation of rows.
+  bool defaultNullRowsSkipped{false};
+
   void add(const ExprStats& other) {
     timing.add(other.timing);
     numProcessedRows += other.numProcessedRows;
     numProcessedVectors += other.numProcessedVectors;
+    defaultNullRowsSkipped |= other.defaultNullRowsSkipped;
   }
 
   std::string toString() const {
     return fmt::format(
-        "timing: {}, numProcessedRows: {}, numProcessedVectors: {}",
+        "timing: {}, numProcessedRows: {}, numProcessedVectors: {}, defaultNullRowsSkipped: {}",
         timing.toString(),
         numProcessedRows,
-        numProcessedVectors);
+        numProcessedVectors,
+        defaultNullRowsSkipped ? "true" : "false");
   }
 };
 
@@ -259,6 +252,14 @@ class Expr {
     cachedDictionaryIndices_ = nullptr;
   }
 
+  virtual void clearCache() {
+    sharedSubexprResults_.clear();
+    clearMemo();
+    for (auto& input : inputs_) {
+      input->clearCache();
+    }
+  }
+
   const TypePtr& type() const {
     return type_;
   }
@@ -387,7 +388,7 @@ class Expr {
     return vectorFunctionMetadata_;
   }
 
-  auto& inputValues() {
+  std::vector<VectorPtr>& inputValues() {
     return inputValues_;
   }
 
@@ -486,8 +487,9 @@ class Expr {
   /// Evaluation of such expression is optimized by memoizing and reusing
   /// the results of prior evaluations. That logic is implemented in
   /// 'evaluateSharedSubexpr'.
-  bool shouldEvaluateSharedSubexp() const {
-    return deterministic_ && isMultiplyReferenced_ && !inputs_.empty();
+  bool shouldEvaluateSharedSubexp(EvalCtx& context) const {
+    return deterministic_ && isMultiplyReferenced_ && !inputs_.empty() &&
+        context.sharedSubExpressionReuseEnabled();
   }
 
   /// Evaluate common sub-expression. Check if sharedSubexprValues_ already has
@@ -588,11 +590,11 @@ class Expr {
   // The distinct references to input columns in 'inputs_'
   // subtrees. Empty if this is the same as 'distinctFields_' of
   // parent Expr.
-  std::vector<FieldReference * FOLLY_NONNULL> distinctFields_;
+  std::vector<FieldReference*> distinctFields_;
 
   // Fields referenced by multiple inputs, which is subset of distinctFields_.
   // Used to determine pre-loading of lazy vectors at current expr.
-  std::unordered_set<FieldReference * FOLLY_NONNULL> multiplyReferencedFields_;
+  std::unordered_set<FieldReference*> multiplyReferencedFields_;
 
   // True if a null in any of 'distinctFields_' causes 'this' to be
   // null for the row.
@@ -608,6 +610,37 @@ class Expr {
 
   std::vector<VectorPtr> inputValues_;
 
+  /// Represents a set of inputs referenced by 'distinctFields_' that are
+  /// captured when the 'evaluateSharedSubexpr()' method is called on a shared
+  /// sub-expression. The purpose of this class is to ensure that cached
+  /// results are re-used for the correct set of live input vectors.
+  class InputForSharedResults {
+   public:
+    void addInput(const std::shared_ptr<BaseVector>& input) {
+      inputVectors_.push_back(input.get());
+      inputWeakVectors_.push_back(input);
+    }
+
+    bool operator<(const InputForSharedResults& other) const {
+      return inputVectors_ < other.inputVectors_;
+    }
+
+    bool isExpired() const {
+      for (const auto& input : inputWeakVectors_) {
+        if (input.expired()) {
+          return true;
+        }
+      }
+      return false;
+    }
+
+   private:
+    // Used as a key in a map that keeps track of cached results.
+    std::vector<const BaseVector*> inputVectors_;
+    // Used to check if inputs have expired.
+    std::vector<std::weak_ptr<BaseVector>> inputWeakVectors_;
+  };
+
   struct SharedResults {
     // The rows for which 'sharedSubexprValues_' has a value.
     std::unique_ptr<SelectivityVector> sharedSubexprRows_ = nullptr;
@@ -617,7 +650,7 @@ class Expr {
 
   // Maps the inputs referenced by distinctFields_ captuered when
   // evaluateSharedSubexpr() is called to the cached shared results.
-  std::map<std::vector<const BaseVector*>, SharedResults> sharedSubexprResults_;
+  std::map<InputForSharedResults, SharedResults> sharedSubexprResults_;
 
   // Pointers to the last base vector of cachable dictionary input. Used to
   // check if the current input's base vector is the same as the last. If it's
@@ -655,8 +688,7 @@ class Expr {
 };
 
 /// Generate a selectivity vector of a single row.
-SelectivityVector* FOLLY_NONNULL
-singleRow(LocalSelectivityVector& holder, vector_size_t row);
+SelectivityVector* singleRow(LocalSelectivityVector& holder, vector_size_t row);
 
 using ExprPtr = std::shared_ptr<Expr>;
 
@@ -697,6 +729,11 @@ class ExprSet {
       std::vector<VectorPtr>& result);
 
   void clear();
+
+  /// Clears the internally cached buffers used for shared sub-expressions and
+  /// dictionary memoization which are allocated through memory pool. This is
+  /// used by memory arbitration to reclaim memory.
+  void clearCache();
 
   core::ExecCtx* execCtx() const {
     return execCtx_;
@@ -747,10 +784,10 @@ class ExprSet {
   std::vector<std::shared_ptr<Expr>> exprs_;
 
   // The distinct references to input columns among all expressions in ExprSet.
-  std::vector<FieldReference * FOLLY_NONNULL> distinctFields_;
+  std::vector<FieldReference*> distinctFields_;
 
   // Fields referenced by multiple expressions in ExprSet.
-  std::unordered_set<FieldReference * FOLLY_NONNULL> multiplyReferencedFields_;
+  std::unordered_set<FieldReference*> multiplyReferencedFields_;
 
   // Distinct Exprs reachable from 'exprs_' for which reset() needs to
   // be called at the start of eval().

@@ -52,7 +52,7 @@ struct XxHash64Function {
   void call(out_type<Varbinary>& result, const arg_type<Varbinary>& input) {
     // Seed is set to 0.
     int64_t hash = folly::Endian::swap64(XXH64(input.data(), input.size(), 0));
-    static const auto kLen = sizeof(int64_t);
+    static constexpr auto kLen = sizeof(int64_t);
 
     // Resizing output and copy
     result.resize(kLen);
@@ -159,6 +159,7 @@ struct HmacSha1Function {
   template <typename TOutput, typename TInput>
   FOLLY_ALWAYS_INLINE void
   call(TOutput& result, const TInput& data, const TInput& key) {
+    VELOX_USER_CHECK_GT(key.size(), 0, "Empty key is not allowed");
     result.resize(20);
     folly::ssl::OpenSSLHash::hmac_sha1(
         folly::MutableByteRange((uint8_t*)result.data(), result.size()),
@@ -175,6 +176,7 @@ struct HmacSha256Function {
   template <typename TTo, typename TFrom>
   FOLLY_ALWAYS_INLINE void
   call(TTo& result, const TFrom& data, const TFrom& key) {
+    VELOX_USER_CHECK_GT(key.size(), 0, "Empty key is not allowed");
     result.resize(32);
     folly::ssl::OpenSSLHash::hmac_sha256(
         folly::MutableByteRange((uint8_t*)result.data(), result.size()),
@@ -191,6 +193,7 @@ struct HmacSha512Function {
   template <typename TTo, typename TFrom>
   FOLLY_ALWAYS_INLINE void
   call(TTo& result, const TFrom& data, const TFrom& key) {
+    VELOX_USER_CHECK_GT(key.size(), 0, "Empty key is not allowed");
     result.resize(64);
     folly::ssl::OpenSSLHash::hmac_sha512(
         folly::MutableByteRange((uint8_t*)result.data(), result.size()),
@@ -208,6 +211,7 @@ struct HmacMd5Function {
       out_type<Varbinary>& result,
       const arg_type<Varbinary>& data,
       const arg_type<Varbinary>& key) {
+    VELOX_USER_CHECK_GT(key.size(), 0, "Empty key is not allowed");
     result.resize(16);
     folly::ssl::OpenSSLHash::hmac(
         folly::MutableByteRange((uint8_t*)result.data(), result.size()),
@@ -384,7 +388,11 @@ struct ToIEEE754Bits64 {
       out_type<Varbinary>& result,
       const arg_type<double>& input) {
     static constexpr auto kTypeLength = sizeof(int64_t);
-    auto value = folly::Endian::big(input);
+    // Since we consider NaNs with different binary representation as equal, we
+    // normalize them to a single value to ensure the output is equal too.
+    auto value = std::isnan(input)
+        ? folly::Endian::big(std::numeric_limits<double>::quiet_NaN())
+        : folly::Endian::big(input);
     result.setNoCopy(
         StringView(reinterpret_cast<const char*>(&value), kTypeLength));
   }
@@ -412,7 +420,11 @@ struct ToIEEE754Bits32 {
       out_type<Varbinary>& result,
       const arg_type<float>& input) {
     static constexpr auto kTypeLength = sizeof(int32_t);
-    auto value = folly::Endian::big(input);
+    // Since we consider NaNs with different binary representation as equal, we
+    // normalize them to a single value to ensure the output is equal too.
+    auto value = std::isnan(input)
+        ? folly::Endian::big(std::numeric_limits<float>::quiet_NaN())
+        : folly::Endian::big(input);
     result.setNoCopy(
         StringView(reinterpret_cast<const char*>(&value), kTypeLength));
   }

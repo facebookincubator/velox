@@ -43,9 +43,17 @@ struct SignatureTemplate {
   std::unordered_set<std::string> typeVariables;
 };
 
+struct InputTestCase {
+  RowVectorPtr inputVector;
+  SelectivityVector activeRows;
+};
+
 struct ResultOrError {
   RowVectorPtr result;
   std::exception_ptr exceptionPtr;
+  /// Whether the exception is UNSUPPORTED_INPUT_UNCATCHABLE error. This flag
+  /// should only be set to true when exceptionPtr is not a nullptr.
+  bool unsupportedInputUncatchableError{false};
 };
 
 /// Sort callable function signatures.
@@ -111,4 +119,28 @@ void compareVectors(
     const std::string& leftName = "left",
     const std::string& rightName = "right",
     const std::optional<SelectivityVector>& rows = std::nullopt);
+
+// Merges a vector of RowVectors into one RowVector.
+RowVectorPtr mergeRowVectors(
+    const std::vector<RowVectorPtr>& results,
+    velox::memory::MemoryPool* pool);
+
+struct InputRowMetadata {
+  // Column indices to wrap in LazyVector (in a strictly increasing order)
+  std::vector<int> columnsToWrapInLazy;
+
+  // Column indices to wrap in a common dictionary layer (in a strictly
+  // increasing order)
+  std::vector<int> columnsToWrapInCommonDictionary;
+
+  bool empty() const {
+    return columnsToWrapInLazy.empty() &&
+        columnsToWrapInCommonDictionary.empty();
+  }
+
+  void saveToFile(const char* filePath) const;
+  static InputRowMetadata restoreFromFile(
+      const char* filePath,
+      memory::MemoryPool* pool);
+};
 } // namespace facebook::velox::fuzzer

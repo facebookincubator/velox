@@ -88,7 +88,8 @@ class SimpleFunctionAdapter : public VectorFunction {
   template <int32_t POSITION>
   static constexpr bool isArgFlatConstantFastPathEligible =
       SimpleTypeTrait<arg_at<POSITION>>::isPrimitiveType &&
-      SimpleTypeTrait<arg_at<POSITION>>::typeKind != TypeKind::BOOLEAN;
+      SimpleTypeTrait<arg_at<POSITION>>::typeKind != TypeKind::BOOLEAN &&
+      !providesCustomComparison<arg_at<POSITION>>::value;
 
   constexpr int32_t reuseStringsFromArgValue() const {
     return udf_reuse_strings_from_arg<typename FUNC::udf_struct_t>();
@@ -280,10 +281,11 @@ class SimpleFunctionAdapter : public VectorFunction {
       return nullptr;
     } else if constexpr (
         SimpleTypeTrait<arg_at<POSITION>>::typeKind ==
-        return_type_traits::typeKind) {
+            return_type_traits::typeKind &&
+        !providesCustomComparison<arg_at<POSITION>>::value) {
       using type =
           typename VectorExec::template resolver<arg_at<POSITION>>::in_type;
-      if (args[POSITION]->isFlatEncoding() && args[POSITION].unique() &&
+      if (args[POSITION]->isFlatEncoding() && args[POSITION].use_count() == 1 &&
           args[POSITION]->asUnchecked<FlatVector<type>>()->isWritable()) {
         // Re-use arg for result. We rely on the fact that for each row
         // we read arguments before computing and writing out the

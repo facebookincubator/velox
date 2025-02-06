@@ -32,23 +32,23 @@ class SelectiveTimestampColumnReader
       DwrfParams& params,
       common::ScanSpec& scanSpec);
 
-  void seekToRowGroup(uint32_t index) override;
+  void seekToRowGroup(int64_t index) override;
   uint64_t skip(uint64_t numValues) override;
 
-  void read(vector_size_t offset, RowSet rows, const uint64_t* incomingNulls)
+  void read(int64_t offset, const RowSet& rows, const uint64_t* incomingNulls)
       override;
 
-  void getValues(RowSet rows, VectorPtr* result) override;
+  void getValues(const RowSet& rows, VectorPtr* result) override;
 
  private:
   template <bool isDense>
-  void readHelper(common::Filter* filter, RowSet rows);
+  void readHelper(common::Filter* filter, const RowSet& rows);
 
   void
-  processNulls(const bool isNull, const RowSet rows, const uint64_t* rawNulls);
+  processNulls(const bool isNull, const RowSet& rows, const uint64_t* rawNulls);
   void processFilter(
       const common::Filter* filter,
-      const RowSet rows,
+      const RowSet& rows,
       const uint64_t* rawNulls);
 
   const TimestampPrecision precision_;

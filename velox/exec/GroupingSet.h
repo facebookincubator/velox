@@ -25,6 +25,8 @@
 #include "velox/exec/VectorHasher.h"
 
 namespace facebook::velox::exec {
+class AggregationInputSpiller;
+class AggregationOutputSpiller;
 
 class GroupingSet {
  public:
@@ -32,6 +34,7 @@ class GroupingSet {
       const RowTypePtr& inputType,
       std::vector<std::unique_ptr<VectorHasher>>&& hashers,
       std::vector<column_index_t>&& preGroupedKeys,
+      std::vector<column_index_t>&& groupingKeyOutputProjections,
       std::vector<AggregateInfo>&& aggregates,
       bool ignoreNullKeys,
       bool isPartial,
@@ -45,7 +48,7 @@ class GroupingSet {
 
   ~GroupingSet();
 
-  // Used by MarkDistinct operator to identify rows with unique values.
+  /// Used by MarkDistinct operator to identify rows with unique values.
   static std::unique_ptr<GroupingSet> createForMarkDistinct(
       const RowTypePtr& inputType,
       std::vector<std::unique_ptr<VectorHasher>>&& hashers,
@@ -78,8 +81,9 @@ class GroupingSet {
 
   /// Resets the hash table inside the grouping set when partial aggregation
   /// is full or reclaims memory from distinct aggregation after it has received
-  /// all the inputs.
-  void resetTable();
+  /// all the inputs. If 'freeTable' is false, then hash table itself is not
+  /// freed but only table content.
+  void resetTable(bool freeTable);
 
   /// Returns true if 'this' should start producing partial
   /// aggregation results. Checks the memory consumption against
@@ -108,16 +112,12 @@ class GroupingSet {
   void spill();
 
   /// Spills all the rows in container starting from the offset specified by
-  /// 'rowIterator'.
+  /// 'rowIterator'. This should be only called during output processing and
+  /// when no spill has occurred previously.
   void spill(const RowContainerIterator& rowIterator);
 
   /// Returns the spiller stats including total bytes and rows spilled so far.
-  std::optional<common::SpillStats> spilledStats() const {
-    if (spiller_ == nullptr) {
-      return std::nullopt;
-    }
-    return spiller_->stats();
-  }
+  std::optional<common::SpillStats> spilledStats() const;
 
   /// Returns true if spilling has triggered on this grouping set.
   bool hasSpilled() const;
@@ -132,8 +132,8 @@ class GroupingSet {
     return table_ ? table_->rows()->numRows() : 0;
   }
 
-  // Frees hash tables and other state when giving up partial aggregation as
-  // non-productive. Must be called before toIntermediate() is used.
+  /// Frees hash tables and other state when giving up partial aggregation as
+  /// non-productive. Must be called before toIntermediate() is used.
   void abandonPartialAggregation();
 
   /// Translates the raw input in input to accumulators initialized from a
@@ -201,7 +201,10 @@ class GroupingSet {
   // Copies the grouping keys and aggregates for 'groups' into 'result' If
   // partial output, extracts the intermediate type for aggregates, final result
   // otherwise.
-  void extractGroups(folly::Range<char**> groups, const RowVectorPtr& result);
+  void extractGroups(
+      RowContainer* container,
+      folly::Range<char**> groups,
+      const RowVectorPtr& result);
 
   // Produces output in if spilling has occurred. First produces data
   // from non-spilled partitions, then merges spill runs and unspilled data
@@ -271,8 +274,13 @@ class GroupingSet {
 
   std::vector<column_index_t> keyChannels_;
 
-  /// A subset of grouping keys on which the input is clustered.
+  // A subset of grouping keys on which the input is clustered.
   const std::vector<column_index_t> preGroupedKeyChannels_;
+
+  // Provides the column projections for extracting the grouping keys from
+  // 'table_' for output. The vector index is the output channel and the value
+  // is the corresponding column index stored in 'table_'.
+  std::vector<column_index_t> groupingKeyOutputProjections_;
 
   std::vector<std::unique_ptr<VectorHasher>> hashers_;
   const bool isGlobal_;
@@ -332,7 +340,9 @@ class GroupingSet {
   // 'remainingInput_'.
   bool remainingMayPushdown_;
 
-  std::unique_ptr<Spiller> spiller_;
+  std::unique_ptr<AggregationInputSpiller> inputSpiller_;
+
+  std::unique_ptr<AggregationOutputSpiller> outputSpiller_;
 
   // The current spill partition in producing spill output. If it is -1, then we
   // haven't started yet.
@@ -381,4 +391,52 @@ class GroupingSet {
   folly::Synchronized<common::SpillStats>* const spillStats_;
 };
 
+class AggregationInputSpiller : public SpillerBase {
+ public:
+  static constexpr std::string_view kType = "AggregationInputSpiller";
+
+  AggregationInputSpiller(
+      RowContainer* container,
+      RowTypePtr rowType,
+      const HashBitRange& hashBitRange,
+      int32_t numSortingKeys,
+      const std::vector<CompareFlags>& sortCompareFlags,
+      const common::SpillConfig* spillConfig,
+      folly::Synchronized<common::SpillStats>* spillStats);
+
+  void spill();
+
+ private:
+  std::string type() const override {
+    return std::string(kType);
+  }
+
+  bool needSort() const override {
+    return true;
+  }
+};
+
+class AggregationOutputSpiller : public SpillerBase {
+ public:
+  static constexpr std::string_view kType = "AggregationOutputSpiller";
+
+  AggregationOutputSpiller(
+      RowContainer* container,
+      RowTypePtr rowType,
+      const common::SpillConfig* spillConfig,
+      folly::Synchronized<common::SpillStats>* spillStats);
+
+  void spill(const RowContainerIterator& startRowIter);
+
+ private:
+  std::string type() const override {
+    return std::string(kType);
+  }
+
+  void runSpill(bool lastRun) override;
+
+  bool needSort() const override {
+    return false;
+  }
+};
 } // namespace facebook::velox::exec

@@ -88,10 +88,18 @@ void castFromString(
     if (castResult.hasError()) {
       context.setStatus(row, castResult.error());
     } else {
-      auto [ts, timeZone] = castResult.value();
+      auto [ts, timeZone, millisOffset] = castResult.value();
       // Input string may not contain a timezone - if so, it is interpreted in
       // session timezone.
       if (timeZone == nullptr) {
+        if (millisOffset.has_value()) {
+          context.setStatus(
+              row,
+              Status::UserError(
+                  "Unknown timezone value in: \"{}\"",
+                  inputVector.valueAt(row)));
+          return;
+        }
         const auto& config = context.execCtx()->queryCtx()->queryConfig();
         timeZone = getTimeZoneFromConfig(config);
       }
@@ -109,9 +117,13 @@ void castToString(
   auto* flatResult = result.as<FlatVector<StringView>>();
   const auto* timestamps = input.as<SimpleVector<int64_t>>();
 
-  auto formatter =
-      functions::buildJodaDateTimeFormatter("yyyy-MM-dd HH:mm:ss.SSS zzzz");
-
+  auto expectedFormatter =
+      functions::buildJodaDateTimeFormatter("yyyy-MM-dd HH:mm:ss.SSS ZZZ");
+  VELOX_CHECK(
+      !expectedFormatter.hasError(),
+      "Default format should always be valid, error: {}",
+      expectedFormatter.error().message());
+  auto formatter = expectedFormatter.value();
   context.applyToSelectedNoThrow(rows, [&](auto row) {
     const auto timestampWithTimezone = timestamps->valueAt(row);
 
@@ -119,7 +131,7 @@ void castToString(
     const auto timeZoneId = unpackZoneKeyId(timestampWithTimezone);
     const auto* timezonePtr = tz::locateZone(tz::getTimeZoneName(timeZoneId));
 
-    exec::StringWriter<false> result(flatResult, row);
+    exec::StringWriter result(flatResult, row);
 
     const auto maxResultSize = formatter->maxResultSize(timezonePtr);
     result.reserve(maxResultSize);

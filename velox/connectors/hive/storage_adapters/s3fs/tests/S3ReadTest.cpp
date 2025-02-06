@@ -21,15 +21,16 @@
 #include "velox/connectors/hive/storage_adapters/s3fs/RegisterS3FileSystem.h"
 #include "velox/connectors/hive/storage_adapters/s3fs/tests/S3Test.h"
 #include "velox/dwio/common/tests/utils/DataFiles.h"
+#include "velox/dwio/parquet/RegisterParquetReader.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
 
 using namespace facebook::velox::exec::test;
 
-namespace facebook::velox {
+namespace facebook::velox::filesystems {
 namespace {
 
-class S3ReadTest : public S3Test {
+class S3ReadTest : public S3Test, public ::test::VectorTestBase {
  protected:
   static void SetUpTestCase() {
     memory::MemoryManager::testingSetInstance({});
@@ -38,15 +39,21 @@ class S3ReadTest : public S3Test {
   void SetUp() override {
     S3Test::SetUp();
     filesystems::registerS3FileSystem();
+    connector::registerConnectorFactory(
+        std::make_shared<connector::hive::HiveConnectorFactory>());
     auto hiveConnector =
         connector::getConnectorFactory(
             connector::hive::HiveConnectorFactory::kHiveConnectorName)
             ->newConnector(kHiveConnectorId, minioServer_->hiveConfig());
     connector::registerConnector(hiveConnector);
+    parquet::registerParquetReaderFactory();
   }
 
   void TearDown() override {
+    parquet::unregisterParquetReaderFactory();
     filesystems::finalizeS3FileSystem();
+    connector::unregisterConnectorFactory(
+        connector::hive::HiveConnectorFactory::kHiveConnectorName);
     connector::unregisterConnector(kHiveConnectorId);
     S3Test::TearDown();
   }
@@ -68,11 +75,9 @@ TEST_F(S3ReadTest, s3ReadTest) {
   dest.close();
 
   // Read the parquet file via the S3 bucket.
-  const auto readDirectory{s3URI(bucketName)};
   auto rowType = ROW({"int", "bigint"}, {INTEGER(), BIGINT()});
   auto plan = PlanBuilder().tableScan(rowType).planNode();
-  auto split = HiveConnectorSplitBuilder(
-                   fmt::format("{}/{}", readDirectory, "int.parquet"))
+  auto split = HiveConnectorSplitBuilder(s3URI(bucketName, "int.parquet"))
                    .fileFormat(dwio::common::FileFormat::PARQUET)
                    .build();
   auto copy = AssertQueryBuilder(plan).split(split).copyResults(pool());
@@ -86,7 +91,7 @@ TEST_F(S3ReadTest, s3ReadTest) {
            kExpectedRows, [](auto row) { return row + 1000; })});
   assertEqualResults({expectedResults}, {copy});
 }
-} // namespace facebook::velox
+} // namespace facebook::velox::filesystems
 
 int main(int argc, char** argv) {
   testing::InitGoogleTest(&argc, argv);

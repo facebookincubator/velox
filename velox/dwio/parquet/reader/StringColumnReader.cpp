@@ -32,25 +32,25 @@ uint64_t StringColumnReader::skip(uint64_t numValues) {
 }
 
 void StringColumnReader::read(
-    vector_size_t offset,
-    RowSet rows,
+    int64_t offset,
+    const RowSet& rows,
     const uint64_t* incomingNulls) {
   prepareRead<folly::StringPiece>(offset, rows, incomingNulls);
-  dwio::common::StringColumnReadWithVisitorHelper<true>(
+  dwio::common::StringColumnReadWithVisitorHelper<true, false>(
       *this, rows)([&](auto visitor) {
     formatData_->as<ParquetData>().readWithVisitor(visitor);
   });
   readOffset_ += rows.back() + 1;
 }
 
-void StringColumnReader::getValues(RowSet rows, VectorPtr* result) {
+void StringColumnReader::getValues(const RowSet& rows, VectorPtr* result) {
   if (scanState_.dictionary.values) {
     auto dictionaryValues =
         formatData_->as<ParquetData>().dictionaryValues(fileType_->type());
     compactScalarValues<int32_t, int32_t>(rows, false);
 
     *result = std::make_shared<DictionaryVector<StringView>>(
-        &memoryPool_, resultNulls(), numValues_, dictionaryValues, values_);
+        memoryPool_, resultNulls(), numValues_, dictionaryValues, values_);
     return;
   }
   rawStringBuffer_ = nullptr;

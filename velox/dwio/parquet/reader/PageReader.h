@@ -21,13 +21,13 @@
 #include "velox/dwio/common/DirectDecoder.h"
 #include "velox/dwio/common/SelectiveColumnReader.h"
 #include "velox/dwio/common/compression/Compression.h"
+#include "velox/dwio/parquet/common/RleEncodingInternal.h"
 #include "velox/dwio/parquet/reader/BooleanDecoder.h"
 #include "velox/dwio/parquet/reader/DeltaBpDecoder.h"
+#include "velox/dwio/parquet/reader/DeltaByteArrayDecoder.h"
 #include "velox/dwio/parquet/reader/ParquetTypeWithId.h"
 #include "velox/dwio/parquet/reader/RleBpDataDecoder.h"
 #include "velox/dwio/parquet/reader/StringDecoder.h"
-
-#include <arrow/util/rle_encoding.h>
 
 namespace facebook::velox::parquet {
 
@@ -88,7 +88,7 @@ class PageReader {
   /// filled.
   int32_t getLengthsAndNulls(
       LevelMode mode,
-      const arrow::LevelInfo& info,
+      const LevelInfo& info,
       int32_t begin,
       int32_t end,
       int32_t maxItems,
@@ -129,6 +129,10 @@ class PageReader {
 
   bool isDeltaBinaryPacked() const {
     return encoding_ == thrift::Encoding::DELTA_BINARY_PACKED;
+  }
+
+  bool isDeltaByteArray() const {
+    return encoding_ == thrift::Encoding::DELTA_BYTE_ARRAY;
   }
 
   /// Returns the range of repdefs for the top level rows covered by the last
@@ -305,6 +309,9 @@ class PageReader {
         nullsFromFastPath = dwio::common::useFastPath<Visitor, true>(visitor);
         auto dictVisitor = visitor.toStringDictionaryColumnVisitor();
         dictionaryIdDecoder_->readWithVisitor<true>(nulls, dictVisitor);
+      } else if (encoding_ == thrift::Encoding::DELTA_BYTE_ARRAY) {
+        nullsFromFastPath = false;
+        deltaByteArrDecoder_->readWithVisitor<true>(nulls, visitor);
       } else {
         nullsFromFastPath = false;
         stringDecoder_->readWithVisitor<true>(nulls, visitor);
@@ -313,6 +320,8 @@ class PageReader {
       if (isDictionary()) {
         auto dictVisitor = visitor.toStringDictionaryColumnVisitor();
         dictionaryIdDecoder_->readWithVisitor<false>(nullptr, dictVisitor);
+      } else if (encoding_ == thrift::Encoding::DELTA_BYTE_ARRAY) {
+        deltaByteArrDecoder_->readWithVisitor<false>(nulls, visitor);
       } else {
         stringDecoder_->readWithVisitor<false>(nulls, visitor);
       }
@@ -326,7 +335,7 @@ class PageReader {
           int>::type = 0>
   void
   callDecoder(const uint64_t* nulls, bool& nullsFromFastPath, Visitor visitor) {
-    VELOX_CHECK(!isDictionary(), "BOOLEAN types are never dictionary-encoded")
+    VELOX_CHECK(!isDictionary(), "BOOLEAN types are never dictionary-encoded");
     if (nulls) {
       nullsFromFastPath = false;
       booleanDecoder_->readWithVisitor<true>(nulls, visitor);
@@ -366,8 +375,8 @@ class PageReader {
   // Decoder for single bit definition levels. the arrow decoders are used for
   // multibit levels pending fixing RleBpDecoder for the case.
   std::unique_ptr<RleBpDecoder> defineDecoder_;
-  std::unique_ptr<::arrow::util::RleDecoder> repeatDecoder_;
-  std::unique_ptr<::arrow::util::RleDecoder> wideDefineDecoder_;
+  std::unique_ptr<RleDecoder> repeatDecoder_;
+  std::unique_ptr<RleDecoder> wideDefineDecoder_;
 
   // True for a leaf column for which repdefs are loaded for the whole column
   // chunk. This is typically the leaftmost leaf of a list. Other leaves under
@@ -476,7 +485,7 @@ class PageReader {
   dwio::common::BitConcatenation nullConcatenation_;
 
   // LevelInfo for reading nulls for the leaf column 'this' represents.
-  arrow::LevelInfo leafInfo_;
+  LevelInfo leafInfo_;
 
   // Base values of dictionary when reading a string dictionary.
   VectorPtr dictionaryValues_;
@@ -489,6 +498,7 @@ class PageReader {
   std::unique_ptr<StringDecoder> stringDecoder_;
   std::unique_ptr<BooleanDecoder> booleanDecoder_;
   std::unique_ptr<DeltaBpDecoder> deltaBpDecoder_;
+  std::unique_ptr<DeltaByteArrayDecoder> deltaByteArrDecoder_;
   // Add decoders for other encodings here.
 };
 

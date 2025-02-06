@@ -128,10 +128,17 @@ class MergeExchangeSource : public MergeSource {
             mergeExchange->taskId(),
             destination,
             maxQueuedBytes,
+            1,
+            // Deliver right away to avoid blocking other sources
+            0,
             pool,
             executor)) {
     client_->addRemoteTaskId(taskId);
     client_->noMoreRemoteTasks();
+  }
+
+  ~MergeExchangeSource() override {
+    close();
   }
 
   BlockingReason next(RowVectorPtr& data, ContinueFuture* future) override {
@@ -142,7 +149,7 @@ class MergeExchangeSource : public MergeSource {
     }
 
     if (!currentPage_) {
-      auto pages = client_->next(1, &atEnd_, future);
+      auto pages = client_->next(0, 1, &atEnd_, future);
       VELOX_CHECK_LE(pages.size(), 1);
       currentPage_ = pages.empty() ? nullptr : std::move(pages.front());
 
@@ -153,17 +160,19 @@ class MergeExchangeSource : public MergeSource {
         return BlockingReason::kWaitForProducer;
       }
     }
-    if (!inputStream_.has_value()) {
+    if (inputStream_ == nullptr) {
       mergeExchange_->stats().wlock()->rawInputBytes += currentPage_->size();
-      inputStream_.emplace(currentPage_->prepareStreamForDeserialize());
+      inputStream_ = currentPage_->prepareStreamForDeserialize();
     }
 
     if (!inputStream_->atEnd()) {
       VectorStreamGroup::read(
-          &inputStream_.value(),
+          inputStream_.get(),
           mergeExchange_->pool(),
           mergeExchange_->outputType(),
-          &data);
+          mergeExchange_->serde(),
+          &data,
+          mergeExchange_->serdeOptions());
 
       auto lockedStats = mergeExchange_->stats().wlock();
       lockedStats->addInputVector(data->estimateFlatSize(), data->size());
@@ -191,7 +200,7 @@ class MergeExchangeSource : public MergeSource {
  private:
   MergeExchange* const mergeExchange_;
   std::shared_ptr<ExchangeClient> client_;
-  std::optional<ByteInputStream> inputStream_;
+  std::unique_ptr<ByteInputStream> inputStream_;
   std::unique_ptr<SerializedPage> currentPage_;
   bool atEnd_ = false;
 

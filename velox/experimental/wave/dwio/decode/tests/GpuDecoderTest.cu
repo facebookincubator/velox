@@ -23,11 +23,17 @@
 
 DEFINE_int32(device_id, 0, "");
 DEFINE_bool(benchmark, false, "");
+DEFINE_bool(print_kernels, false, "Print register and smem usage");
+DEFINE_bool(use_selective, false, "Use selective path for test");
 
 namespace facebook::velox::wave {
 namespace {
 
 using namespace facebook::velox;
+
+// define to use the flexible call path wiht multiple ops per TB
+#define USE_PROGRAM_API
+#define USE_SEL_BITPACK true
 
 // Returns the number of bytes the "values" will occupy after varint encoding.
 uint64_t bulkVarintSize(const uint64_t* values, int count) {
@@ -84,6 +90,10 @@ inline const T* addBytes(const T* ptr, int bytes) {
   return reinterpret_cast<const T*>(reinterpret_cast<const char*>(ptr) + bytes);
 }
 
+void prefetchToDevice(void* ptr, size_t size) {
+  CUDA_CHECK_FATAL(cudaMemPrefetchAsync(ptr, size, FLAGS_device_id, nullptr));
+}
+
 template <typename T>
 void makeBitpackDict(
     int32_t bitWidth,
@@ -92,19 +102,25 @@ void makeBitpackDict(
     T*& dict,
     uint64_t*& bits,
     T*& result,
-    int32_t** scatter) {
-  int64_t dictBytes = sizeof(T) << bitWidth;
+    int32_t** scatter,
+    bool bitsOnly,
+    BlockStatus*& blockStatus,
+    int32_t numBlocks,
+    int32_t blockSize) {
+  int64_t dictBytes = bitsOnly ? 0 : sizeof(T) << bitWidth;
   int64_t bitBytes = (roundUp(numValues * bitWidth, 128) / 8) + 16;
   int64_t resultBytes = numValues * sizeof(T);
   int scatterBytes =
       scatter ? roundUp(numValues * sizeof(int32_t), sizeof(T)) : 0;
+  int32_t statusBytes = sizeof(BlockStatus) * numBlocks;
   if (scatterBytes) {
     resultBytes += resultBytes / 2;
   }
-  cudaPtr = allocate<char>(dictBytes + bitBytes + scatterBytes + resultBytes);
+  cudaPtr = allocate<char>(
+      dictBytes + bitBytes + scatterBytes + resultBytes + statusBytes);
   T* memory = (T*)cudaPtr.get();
 
-  dict = memory;
+  dict = bitsOnly ? nullptr : memory;
 
   static int sequence = 1;
   ++sequence;
@@ -126,6 +142,14 @@ void makeBitpackDict(
   }
   result = addBytes(
       reinterpret_cast<T*>(memory), dictBytes + bitBytes + scatterBytes);
+  blockStatus =
+      reinterpret_cast<BlockStatus*>(addBytes(result, numValues * sizeof(T)));
+  for (auto i = 0; i < numBlocks; ++i) {
+    blockStatus[i].numRows =
+        i < numBlocks - 1 ? blockSize : numValues - (i * blockSize);
+  }
+  prefetchToDevice(
+      memory, dictBytes + bitBytes + scatterBytes + resultBytes + statusBytes);
 }
 
 class GpuDecoderTest : public ::testing::Test {
@@ -151,8 +175,8 @@ class GpuDecoderTest : public ::testing::Test {
       int32_t numReps) {
     func();
     CUDA_CHECK_FATAL(cudaGetLastError());
+    CUDA_CHECK_FATAL(cudaDeviceSynchronize());
     if (!FLAGS_benchmark) {
-      CUDA_CHECK_FATAL(cudaDeviceSynchronize());
       return;
     }
     CUDA_CHECK_FATAL(cudaEventRecord(startEvent_, 0));
@@ -215,17 +239,67 @@ class GpuDecoderTest : public ::testing::Test {
     }
   }
 
+  struct SelectiveOptions {
+    // Whether to run on non-contiguous rows.
+    float everyNth{1};
+
+    // Filter selectivity. 1 means all selected, 3 means 1/3 selected.
+    float selectivity{1};
+  };
+
+  template <typename T>
+  void makeFilter(
+      GpuDecode* op,
+      T* dict,
+      int32_t dictSize,
+      int32_t bitWidth,
+      float selectivity) {
+    op->filterKind = WaveFilterKind::kBigintRange;
+    int64_t upper = bitWidth != 0 ? (1 << bitWidth) * selectivity
+                                  : dict[dictSize - 1] * selectivity;
+    op->filter._.int64Range[0] = 0;
+    op->filter._.int64Range[1] = upper;
+  }
+
+  template <int kBlockSize>
+  void
+  fillRows(GpuDecode* op, int32_t* rows, int32_t valuesPerOp, float everyNth) {
+    int32_t opIdx = op->nthBlock;
+    int32_t i = 0;
+
+    auto numBlocks = valuesPerOp / kBlockSize;
+    for (auto block = 0; block < op->numRowsPerThread; ++block) {
+      int32_t rowIdx = opIdx * valuesPerOp + (block * kBlockSize);
+      int32_t row = rowIdx;
+      int32_t last = std::min<int32_t>(op->maxRow, row + kBlockSize);
+      int32_t counter = 0;
+      for (;;) {
+        int32_t target = row + counter * everyNth;
+        if (target > last) {
+          op->blockStatus[block].numRows = counter;
+          break;
+        }
+        ++counter;
+        rows[rowIdx++] = target;
+      }
+    }
+  }
+
   template <typename T, int kBlockSize>
   void dictTestPlan(
       int32_t bitWidth,
       int64_t numValues,
       int numBlocks,
-      bool useScatter) {
+      bool useScatter,
+      bool bitsOnly = false,
+      bool useSelective = false,
+      SelectiveOptions opts = SelectiveOptions()) {
     gpu::CudaPtr<char[]> ptr;
     T* dict;
     uint64_t* bits;
     T* result;
     int32_t* scatter = nullptr;
+    BlockStatus* blockStatus;
     makeBitpackDict(
         bitWidth,
         numValues,
@@ -233,14 +307,59 @@ class GpuDecoderTest : public ::testing::Test {
         dict,
         bits,
         result,
-        useScatter ? &scatter : nullptr);
+        useScatter ? &scatter : nullptr,
+        bitsOnly,
+        blockStatus,
+        roundUp(numValues, kBlockSize) / kBlockSize,
+        kBlockSize);
     result[numValues] = 0xdeadbeef;
     int valuesPerOp = roundUp(numValues / numBlocks, kBlockSize);
     int numOps = roundUp(numValues, valuesPerOp) / valuesPerOp;
+    auto valuesPerThread = valuesPerOp / kBlockSize;
+    gpu::CudaPtr<int32_t[]> rows;
+    gpu::CudaPtr<int32_t[]> resultRows;
+    gpu::CudaPtr<int32_t[]> temp;
+    if (opts.selectivity != 1) {
+      resultRows = allocate<int32_t>(numValues);
+      temp = allocate<int32_t>(numOps * (2 + (kBlockSize / kWarpThreads)));
+    }
+    if (opts.everyNth != 1) {
+      rows = allocate<int32_t>(numValues);
+    }
     auto ops = allocate<GpuDecode>(numOps);
     for (auto i = 0; i < numOps; ++i) {
       int32_t begin = i * valuesPerOp;
-      ops[i].step = DecodeStep::kDictionaryOnBitpack;
+      ops[i].step = useSelective ? (sizeof(T) == 8 ? DecodeStep::kSelective64
+                                                   : DecodeStep::kSelective32)
+                                 : DecodeStep::kDictionaryOnBitpack;
+      ops[i].encoding = DecodeStep::kDictionaryOnBitpack;
+      ops[i].dataType = WaveTypeTrait<T>::typeKind;
+      ops[i].nullMode = opts.everyNth == 1 ? NullMode::kDenseNonNull
+                                           : NullMode::kSparseNonNull;
+      ops[i].nthBlock = i;
+      ops[i].numRowsPerThread = i == numOps - 1
+          ? roundUp(numValues - (valuesPerOp * i), kBlockSize) / kBlockSize
+          : valuesPerThread;
+      ops[i].baseRow = i * valuesPerOp;
+      ops[i].maxRow = std::min<int32_t>((i + 1) * valuesPerOp, numValues);
+      ops[i].result = reinterpret_cast<T*>(result) + i * valuesPerOp;
+
+      ops[i].blockStatus = blockStatus + (i * valuesPerThread);
+      if (rows) {
+        ops[i].rows = &(rows.get())[i * valuesPerOp];
+        fillRows<kBlockSize>(&ops[i], rows.get(), valuesPerOp, opts.everyNth);
+      }
+      if (resultRows) {
+        ops[i].resultRows = &resultRows[i * valuesPerOp];
+        makeFilter(
+            &ops[i],
+            dict,
+            (1 << bitWidth),
+            bitsOnly ? bitWidth : 0,
+            opts.selectivity);
+        ops[i].temp = &(temp.get())[i * (2 + (kBlockSize / kWarpThreads))];
+      }
+
       auto& op = ops[i].data.dictionaryOnBitpack;
       op.begin = begin;
       op.end = std::min<int>(numValues, (i + 1) * valuesPerOp);
@@ -252,23 +371,47 @@ class GpuDecoderTest : public ::testing::Test {
       op.baseline = 0;
       op.dataType = WaveTypeTrait<T>::typeKind;
     }
+    if (rows) {
+      prefetchToDevice(rows.get(), numValues * sizeof(int32_t));
+    }
+    if (resultRows) {
+      prefetchToDevice(resultRows.get(), numValues * sizeof(int32_t));
+    }
+
+    std::string selection;
+    if (opts.everyNth != 1 || opts.selectivity != 1) {
+      selection = fmt::format(
+          "look at {} select {}", 1 / opts.everyNth, opts.selectivity);
+    }
     testCase(
         fmt::format(
-            "bitpack dictplan {} numValues={} useScatter={}",
+            "bitpack dictplan {} -> {} numValues={} useScatter={} {}",
+            bitWidth,
             sizeof(T) * 8,
             numValues,
-            useScatter),
-        [&] { decodeGlobal<kBlockSize>(ops.get(), numOps); },
+            useScatter,
+            selection),
+        [&] {
+#ifdef USE_PROGRAM_API
+          callViaPrograms(ops.get(), numOps);
+#else
+          decodeGlobal<kBlockSize>(ops.get(), numOps);
+#endif
+        },
         numValues * sizeof(T),
         10);
+    if (opts.selectivity != 1 || opts.everyNth != 1) {
+      return;
+    }
     if (!scatter) {
       EXPECT_EQ(0xdeadbeef, result[numValues]);
     }
-    auto mask = (1u << bitWidth) - 1;
+    auto mask = (1uL << bitWidth) - 1;
     for (auto i = 0; i < numValues; ++i) {
       int32_t bit = i * bitWidth;
       uint64_t word = *addBytes(bits, bit / 8);
-      T expected = dict[(word >> (bit & 7)) & mask];
+      uint64_t index = (word >> (bit & 7)) & mask;
+      T expected = bitsOnly ? index : dict[index];
       ASSERT_EQ(result[scatter ? scatter[i] : i], expected) << i;
     }
   }
@@ -347,7 +490,6 @@ class GpuDecoderTest : public ::testing::Test {
         3);
     for (int j = 0; j < numBlocks; ++j) {
       auto& op = ops[j].data.varint;
-      ASSERT_EQ(op.resultSize, numValues);
       for (int i = 0; i < numValues; ++i) {
         ASSERT_EQ(reinterpret_cast<const uint64_t*>(op.result)[i], expected[i]);
       }
@@ -512,6 +654,20 @@ class GpuDecoderTest : public ::testing::Test {
     }
   }
 
+  void callViaPrograms(GpuDecode* ops, int32_t numOps) {
+    auto stream = std::make_unique<Stream>();
+    LaunchParams params(*arena_);
+    DecodePrograms programs;
+    for (int i = 0; i < numOps; ++i) {
+      programs.programs.emplace_back();
+      programs.programs.back().push_back(std::make_unique<GpuDecode>());
+      auto opPtr = programs.programs.back().front().get();
+      *opPtr = ops[i];
+    }
+    launchDecode(programs, params, stream.get());
+    stream->wait();
+  }
+
   void testMakeScatterIndicesStream(int numValues, int numBlocks) {
     auto bits = allocate<uint8_t>((numValues * numBlocks + 7) / 8);
     fillRandomBits(bits.get(), 0.5, numValues * numBlocks);
@@ -532,8 +688,8 @@ class GpuDecoderTest : public ::testing::Test {
       op.indicesCount = indicesCounts.get() + i;
     }
     auto stream = std::make_unique<Stream>();
-    WaveBufferPtr extra;
-    launchDecode(programs, arena_.get(), extra, stream.get());
+    LaunchParams params(*arena_);
+    launchDecode(programs, params, stream.get());
     stream->wait();
     for (int i = 0; i < numBlocks; ++i) {
       auto& op = programs.programs[i].front()->data.makeScatterIndices;
@@ -566,8 +722,8 @@ class GpuDecoderTest : public ::testing::Test {
     op.resultStride = stride;
     opPtr->result = result.get();
     auto stream = std::make_unique<Stream>();
-    WaveBufferPtr extra;
-    launchDecode(programs, arena_.get(), extra, stream.get());
+    LaunchParams params(*arena_);
+    launchDecode(programs, params, stream.get());
     stream->wait();
     auto numResults = ((numWords * 64) - 1) / stride;
     auto* rawResult = result.get();
@@ -599,6 +755,24 @@ TEST_F(GpuDecoderTest, dictionaryOnBitpack) {
   dictTestPlan<int32_t, 256>(11, 40'000'003, 1024, false);
   dictTestPlan<int64_t, 256>(11, 40'000'003, 1024, false);
   dictTestPlan<int64_t, 256>(11, 40'000'003, 1024, true);
+}
+
+TEST_F(GpuDecoderTest, bitpack) {
+  bool useSelective = FLAGS_use_selective;
+  dictTestPlan<int32_t, 256>(27, 4000001, 1024, false, true, useSelective);
+  dictTestPlan<int64_t, 256>(28, 4'000'037, 1024, false, true, useSelective);
+  dictTestPlan<int32_t, 256>(26, 40'000'003, 1024, false, true, useSelective);
+  dictTestPlan<int64_t, 256>(30, 40'000'003, 1024, false, true, useSelective);
+  dictTestPlan<int64_t, 256>(47, 40'000'003, 1024, false, true, useSelective);
+  dictTestPlan<int64_t, 256>(22, 40'000'003, 1024, true, true, false);
+}
+
+TEST_F(GpuDecoderTest, filter) {
+  SelectiveOptions opts = {1.05, 0.99};
+  dictTestPlan<int64_t, 256>(22, 40'000'003, 1024, false, true, true);
+  dictTestPlan<int64_t, 256>(22, 40'000'003, 1024, false, true, true, opts);
+  opts.selectivity = 1;
+  dictTestPlan<int64_t, 256>(22, 40'000'003, 1024, false, true, true, opts);
 }
 
 TEST_F(GpuDecoderTest, sparseBool) {
@@ -667,14 +841,19 @@ int main(int argc, char** argv) {
   CUDA_CHECK_FATAL(cudaGetDeviceProperties(&prop, FLAGS_device_id));
   printf("Running on device: %s\n", prop.name);
   CUDA_CHECK_FATAL(cudaSetDevice(FLAGS_device_id));
-  cudaFuncAttributes attrs;
-  CUDA_CHECK_FATAL(cudaFuncGetAttributes(&attrs, detail::decodeGlobal<128>));
-  printFuncAttrs("decode blocksize 128", attrs);
-  CUDA_CHECK_FATAL(cudaFuncGetAttributes(&attrs, detail::decodeGlobal<256>));
-  printFuncAttrs("decode blocksize 256", attrs);
-  CUDA_CHECK_FATAL(cudaFuncGetAttributes(&attrs, detail::decodeGlobal<512>));
-  printFuncAttrs("decode blocksize 512", attrs);
-  CUDA_CHECK_FATAL(cudaFuncGetAttributes(&attrs, detail::decodeGlobal<1024>));
-  printFuncAttrs("decode blocksize 1024", attrs);
+  if (FLAGS_print_kernels) {
+    cudaFuncAttributes attrs;
+    CUDA_CHECK_FATAL(cudaFuncGetAttributes(&attrs, detail::decodeGlobal<128>));
+    printFuncAttrs("decode blocksize 128", attrs);
+    CUDA_CHECK_FATAL(cudaFuncGetAttributes(&attrs, detail::decodeGlobal<256>));
+    printFuncAttrs("decode blocksize 256", attrs);
+    CUDA_CHECK_FATAL(cudaFuncGetAttributes(&attrs, detail::decodeGlobal<512>));
+    printFuncAttrs("decode blocksize 512", attrs);
+    CUDA_CHECK_FATAL(cudaFuncGetAttributes(&attrs, detail::decodeGlobal<1024>));
+    printFuncAttrs("decode blocksize 1024", attrs);
+    printFuncAttrs("decode2", attrs);
+
+    printKernels();
+  }
   return RUN_ALL_TESTS();
 }

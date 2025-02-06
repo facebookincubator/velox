@@ -29,15 +29,25 @@ set -e # Exit on error.
 set -x # Print commands that are executed.
 
 SCRIPTDIR=$(dirname "${BASH_SOURCE[0]}")
+export INSTALL_PREFIX=${INSTALL_PREFIX:-"$(pwd)/deps-install"}
 source $SCRIPTDIR/setup-helper-functions.sh
+PYTHON_VENV=${PYTHON_VENV:-"${SCRIPTDIR}/../.venv"}
+# Allow installed package headers to be picked up before brew package headers
+# by tagging the brew packages to be system packages.
+# This is used during package builds.
+export OS_CXXFLAGS=" -isystem $(brew --prefix)/include "
+NPROC=${BUILD_THREADS:-$(getconf _NPROCESSORS_ONLN)}
 
-NPROC=$(getconf _NPROCESSORS_ONLN)
-
+BUILD_DUCKDB="${BUILD_DUCKDB:-true}"
+VELOX_BUILD_SHARED=${VELOX_BUILD_SHARED:-"OFF"} #Build folly shared for use in libvelox.so.
 DEPENDENCY_DIR=${DEPENDENCY_DIR:-$(pwd)}
-MACOS_VELOX_DEPS="flex bison protobuf@21 icu4c boost gflags glog libevent lz4 lzo snappy xz zstd openssl libsodium"
-MACOS_BUILD_DEPS="ninja cmake ccache"
-FB_OS_VERSION="v2024.05.20.00"
+MACOS_VELOX_DEPS="bison flex gflags glog googletest icu4c libevent libsodium lz4 lzo openssl protobuf@21 snappy xz zstd"
+MACOS_BUILD_DEPS="ninja cmake"
+FB_OS_VERSION="v2024.07.01.00"
 FMT_VERSION="10.1.1"
+BOOST_VERSION="boost-1.84.0"
+STEMMER_VERSION="2.2.0"
+DUCKDB_VERSION="v0.8.1"
 
 function update_brew {
   DEFAULT_BREW_PATH=/usr/local/bin/brew
@@ -71,7 +81,17 @@ function install_build_prerequisites {
   do
     install_from_brew ${pkg}
   done
-  pip3 install --user cmake-format regex pyyaml
+  if [ ! -f ${PYTHON_VENV}/pyvenv.cfg ]; then
+    echo "Creating Python Virtual Environment at ${PYTHON_VENV}"
+    python3 -m venv ${PYTHON_VENV}
+  fi
+  source ${PYTHON_VENV}/bin/activate; pip3 install cmake-format regex pyyaml
+  if [ ! -f /usr/local/bin/ccache ]; then
+    curl -L https://github.com/ccache/ccache/releases/download/v4.10.2/ccache-4.10.2-darwin.tar.gz > ccache.tar.gz
+    tar -xf ccache.tar.gz
+    mv ccache-4.10.2-darwin/ccache /usr/local/bin/
+    rm -rf ccache-4.10.2-darwin ccache.tar.gz
+  fi
 }
 
 function install_velox_deps_from_brew {
@@ -81,49 +101,77 @@ function install_velox_deps_from_brew {
   done
 }
 
+function install_boost {
+  wget_and_untar https://github.com/boostorg/boost/releases/download/${BOOST_VERSION}/${BOOST_VERSION}.tar.gz boost
+  (
+    cd ${DEPENDENCY_DIR}/boost
+    ./bootstrap.sh --prefix=${INSTALL_PREFIX}
+    ${SUDO} ./b2 "-j${NPROC}" -d0 install threading=multi --without-python
+  )
+}
+
 function install_fmt {
   wget_and_untar https://github.com/fmtlib/fmt/archive/${FMT_VERSION}.tar.gz fmt
-  cmake_install fmt -DFMT_TEST=OFF
+  cmake_install_dir fmt -DFMT_TEST=OFF
 }
 
 function install_folly {
   wget_and_untar https://github.com/facebook/folly/archive/refs/tags/${FB_OS_VERSION}.tar.gz folly
-  cmake_install folly -DBUILD_TESTS=OFF -DFOLLY_HAVE_INT128_T=ON
+  cmake_install_dir folly -DBUILD_TESTS=OFF -DBUILD_SHARED_LIBS="$VELOX_BUILD_SHARED" -DFOLLY_HAVE_INT128_T=ON
 }
 
 function install_fizz {
   wget_and_untar https://github.com/facebookincubator/fizz/archive/refs/tags/${FB_OS_VERSION}.tar.gz fizz
-  cmake_install fizz/fizz -DBUILD_TESTS=OFF
+  cmake_install_dir fizz/fizz -DBUILD_TESTS=OFF
 }
 
 function install_wangle {
   wget_and_untar https://github.com/facebook/wangle/archive/refs/tags/${FB_OS_VERSION}.tar.gz wangle
-  cmake_install wangle/wangle -DBUILD_TESTS=OFF
+  cmake_install_dir wangle/wangle -DBUILD_TESTS=OFF
 }
 
 function install_mvfst {
   wget_and_untar https://github.com/facebook/mvfst/archive/refs/tags/${FB_OS_VERSION}.tar.gz mvfst
-  cmake_install mvfst -DBUILD_TESTS=OFF
+  cmake_install_dir mvfst -DBUILD_TESTS=OFF
 }
 
 function install_fbthrift {
   wget_and_untar https://github.com/facebook/fbthrift/archive/refs/tags/${FB_OS_VERSION}.tar.gz fbthrift
-  cmake_install fbthrift -Denable_tests=OFF -DBUILD_TESTS=OFF -DBUILD_SHARED_LIBS=OFF
+  cmake_install_dir fbthrift -Denable_tests=OFF -DBUILD_TESTS=OFF -DBUILD_SHARED_LIBS=OFF
 }
 
 function install_double_conversion {
   wget_and_untar https://github.com/google/double-conversion/archive/refs/tags/v3.1.5.tar.gz double-conversion
-  cmake_install double-conversion -DBUILD_TESTING=OFF
+  cmake_install_dir double-conversion -DBUILD_TESTING=OFF
 }
 
 function install_ranges_v3 {
   wget_and_untar https://github.com/ericniebler/range-v3/archive/refs/tags/0.12.0.tar.gz ranges_v3
-  cmake_install ranges_v3 -DRANGES_ENABLE_WERROR=OFF -DRANGE_V3_TESTS=OFF -DRANGE_V3_EXAMPLES=OFF
+  cmake_install_dir ranges_v3 -DRANGES_ENABLE_WERROR=OFF -DRANGE_V3_TESTS=OFF -DRANGE_V3_EXAMPLES=OFF
 }
 
 function install_re2 {
   wget_and_untar https://github.com/google/re2/archive/refs/tags/2022-02-01.tar.gz re2
-  cmake_install re2 -DRE2_BUILD_TESTING=OFF
+  cmake_install_dir re2 -DRE2_BUILD_TESTING=OFF
+}
+
+function install_duckdb {
+  if $BUILD_DUCKDB ; then
+    echo 'Building DuckDB'
+    wget_and_untar https://github.com/duckdb/duckdb/archive/refs/tags/${DUCKDB_VERSION}.tar.gz duckdb
+    cmake_install_dir duckdb -DBUILD_UNITTESTS=OFF -DENABLE_SANITIZER=OFF -DENABLE_UBSAN=OFF -DBUILD_SHELL=OFF -DEXPORT_DLL_SYMBOLS=OFF -DCMAKE_BUILD_TYPE=Release
+  fi
+}
+
+function install_stemmer {
+  wget_and_untar https://snowballstem.org/dist/libstemmer_c-${STEMMER_VERSION}.tar.gz stemmer
+  (
+    cd ${DEPENDENCY_DIR}/stemmer
+    sed -i '/CPPFLAGS=-Iinclude/ s/$/ -fPIC/' Makefile
+    make clean && make "-j${NPROC}"
+    ${SUDO} cp libstemmer.a ${INSTALL_PREFIX}/lib/
+    ${SUDO} cp include/libstemmer.h ${INSTALL_PREFIX}/include/
+  )
 }
 
 function install_velox_deps {
@@ -131,12 +179,15 @@ function install_velox_deps {
   run_and_time install_ranges_v3
   run_and_time install_double_conversion
   run_and_time install_re2
+  run_and_time install_boost
   run_and_time install_fmt
   run_and_time install_folly
   run_and_time install_fizz
   run_and_time install_wangle
   run_and_time install_mvfst
   run_and_time install_fbthrift
+  run_and_time install_duckdb
+  run_and_time install_stemmer
 }
 
 (return 2> /dev/null) && return # If script was sourced, don't run commands.
@@ -160,5 +211,5 @@ function install_velox_deps {
   fi
 )
 
-echo 'To add cmake-format bin to your $PATH, consider adding this to your ~/.profile:'
-echo 'export PATH=$HOME/bin:$HOME/Library/Python/3.7/bin:$PATH'
+echo "To reuse the installed dependencies for subsequent builds, consider adding this to your ~/.zshrc"
+echo "export INSTALL_PREFIX=$INSTALL_PREFIX"

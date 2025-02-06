@@ -17,7 +17,6 @@
 
 #include "velox/common/base/CompareFlags.h"
 #include "velox/functions/Macros.h"
-#include "velox/functions/prestosql/types/TimestampWithTimeZoneType.h"
 #include "velox/type/FloatingPointUtil.h"
 
 namespace facebook::velox::functions {
@@ -37,18 +36,6 @@ namespace facebook::velox::functions {
     }                                                          \
   };
 
-#define VELOX_GEN_BINARY_EXPR_TIMESTAMP_WITH_TIME_ZONE(Name, tsExpr, TResult) \
-  template <typename T>                                                       \
-  struct Name##TimestampWithTimezone {                                        \
-    VELOX_DEFINE_FUNCTION_TYPES(T);                                           \
-    FOLLY_ALWAYS_INLINE void call(                                            \
-        bool& result,                                                         \
-        const arg_type<TimestampWithTimezone>& lhs,                           \
-        const arg_type<TimestampWithTimezone>& rhs) {                         \
-      result = (tsExpr);                                                      \
-    }                                                                         \
-  };
-
 VELOX_GEN_BINARY_EXPR(
     LtFunction,
     lhs < rhs,
@@ -65,23 +52,6 @@ VELOX_GEN_BINARY_EXPR(
     GteFunction,
     lhs >= rhs,
     util::floating_point::NaNAwareGreaterThanEqual<TInput>{}(lhs, rhs));
-
-VELOX_GEN_BINARY_EXPR_TIMESTAMP_WITH_TIME_ZONE(
-    LtFunction,
-    unpackMillisUtc(lhs) < unpackMillisUtc(rhs),
-    bool);
-VELOX_GEN_BINARY_EXPR_TIMESTAMP_WITH_TIME_ZONE(
-    GtFunction,
-    unpackMillisUtc(lhs) > unpackMillisUtc(rhs),
-    bool);
-VELOX_GEN_BINARY_EXPR_TIMESTAMP_WITH_TIME_ZONE(
-    LteFunction,
-    unpackMillisUtc(lhs) <= unpackMillisUtc(rhs),
-    bool);
-VELOX_GEN_BINARY_EXPR_TIMESTAMP_WITH_TIME_ZONE(
-    GteFunction,
-    unpackMillisUtc(lhs) >= unpackMillisUtc(rhs),
-    bool);
 
 #undef VELOX_GEN_BINARY_EXPR
 #undef VELOX_GEN_BINARY_EXPR_TIMESTAMP_WITH_TIME_ZONE
@@ -141,18 +111,6 @@ struct EqFunction {
 };
 
 template <typename T>
-struct EqFunctionTimestampWithTimezone {
-  VELOX_DEFINE_FUNCTION_TYPES(T);
-
-  void call(
-      bool& result,
-      const arg_type<TimestampWithTimezone>& lhs,
-      const arg_type<TimestampWithTimezone>& rhs) {
-    result = unpackMillisUtc(lhs) == unpackMillisUtc(rhs);
-  }
-};
-
-template <typename T>
 struct NeqFunction {
   VELOX_DEFINE_FUNCTION_TYPES(T);
 
@@ -180,18 +138,6 @@ struct NeqFunction {
   }
 };
 
-template <typename T>
-struct NeqFunctionTimestampWithTimezone {
-  VELOX_DEFINE_FUNCTION_TYPES(T);
-
-  void call(
-      bool& result,
-      const arg_type<TimestampWithTimezone>& lhs,
-      const arg_type<TimestampWithTimezone>& rhs) {
-    result = unpackMillisUtc(lhs) != unpackMillisUtc(rhs);
-  }
-};
-
 template <typename TExec>
 struct BetweenFunction {
   template <typename T>
@@ -204,21 +150,6 @@ struct BetweenFunction {
       return;
     }
     result = value >= low && value <= high;
-  }
-};
-
-template <typename TExec>
-struct BetweenFunctionTimestampWithTimezone {
-  VELOX_DEFINE_FUNCTION_TYPES(TExec);
-
-  void call(
-      bool& result,
-      const arg_type<TimestampWithTimezone>& value,
-      const arg_type<TimestampWithTimezone>& low,
-      const arg_type<TimestampWithTimezone>& high) {
-    const auto millis = unpackMillisUtc(value);
-    result =
-        (millis >= unpackMillisUtc(low)) && (millis <= unpackMillisUtc(high));
   }
 };
 

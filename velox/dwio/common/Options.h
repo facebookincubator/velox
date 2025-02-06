@@ -23,9 +23,9 @@
 #include "velox/common/base/RandomUtil.h"
 #include "velox/common/base/SpillConfig.h"
 #include "velox/common/compression/Compression.h"
+#include "velox/common/config/Config.h"
 #include "velox/common/io/Options.h"
 #include "velox/common/memory/Memory.h"
-#include "velox/core/Config.h"
 #include "velox/dwio/common/ColumnSelector.h"
 #include "velox/dwio/common/ErrorTolerance.h"
 #include "velox/dwio/common/FlatMapHelper.h"
@@ -50,6 +50,7 @@ enum class FileFormat {
   PARQUET = 7,
   NIMBLE = 8,
   ORC = 9,
+  SST = 10, // rocksdb sst format
 };
 
 FileFormat toFileFormat(std::string_view s);
@@ -109,6 +110,9 @@ struct TableParameter {
       "serialization.null.format";
 };
 
+/// Implicit row number column to be added.  This column will be removed in the
+/// output of split reader.  Should use the ScanSpec::ColumnType::kRowIndex if
+/// the column is suppose to be explicit and kept in the output.
 struct RowNumberColumnInfo {
   column_index_t insertPosition;
   std::string name;
@@ -121,57 +125,12 @@ class FormatSpecificOptions {
 
 /// Options for creating a RowReader.
 class RowReaderOptions {
- private:
-  uint64_t dataStart;
-  uint64_t dataLength;
-  bool preloadStripe;
-  bool projectSelectedType;
-  bool returnFlatVector_ = false;
-  ErrorTolerance errorTolerance_;
-  std::shared_ptr<ColumnSelector> selector_;
-  RowTypePtr requestedType_;
-  std::shared_ptr<velox::common::ScanSpec> scanSpec_ = nullptr;
-  std::shared_ptr<velox::common::MetadataFilter> metadataFilter_;
-  // Node id for map column to a list of keys to be projected as a struct.
-  std::unordered_map<uint32_t, std::vector<std::string>> flatmapNodeIdAsStruct_;
-  // Optional executors to enable internal reader parallelism.
-  // 'decodingExecutor' allow parallelising the vector decoding process.
-  // 'ioExecutor' enables parallelism when performing file system read
-  // operations.
-  std::shared_ptr<folly::Executor> decodingExecutor_;
-  size_t decodingParallelismFactor_{0};
-  std::optional<RowNumberColumnInfo> rowNumberColumnInfo_ = std::nullopt;
-
-  // Function to populate metrics related to feature projection stats
-  // in Koski. This gets fired in FlatMapColumnReader.
-  // This is a bit of a hack as there is (by design) no good way
-  // To propogate information from column reader to Koski
-  std::function<void(
-      facebook::velox::dwio::common::flatmap::FlatMapKeySelectionStats)>
-      keySelectionCallback_;
-
-  // Function to track how much time we spend waiting on IO before reading rows
-  // (in dwrf row reader). todo: encapsulate this and keySelectionCallBack_ in a
-  // struct
-  std::function<void(std::chrono::high_resolution_clock::duration)>
-      blockedOnIoCallback_;
-  std::function<void(std::chrono::high_resolution_clock::duration)>
-      decodingTimeCallback_;
-  std::function<void(uint16_t)> stripeCountCallback_;
-  bool eagerFirstStripeLoad = true;
-  uint64_t skipRows_ = 0;
-  std::shared_ptr<UnitLoaderFactory> unitLoaderFactory_;
-
-  TimestampPrecision timestampPrecision_ = TimestampPrecision::kMilliseconds;
-
-  std::shared_ptr<FormatSpecificOptions> formatSpecificOptions_;
-
  public:
   RowReaderOptions() noexcept
-      : dataStart(0),
-        dataLength(std::numeric_limits<uint64_t>::max()),
-        preloadStripe(false),
-        projectSelectedType(false) {}
+      : dataStart_(0),
+        dataLength_(std::numeric_limits<uint64_t>::max()),
+        preloadStripe_(false),
+        projectSelectedType_(false) {}
 
   /// For files that have structs as the top-level object, select the fields
   /// to read. The first field is 0, the second 1, and so on. By default,
@@ -188,83 +147,83 @@ class RowReaderOptions {
     return *this;
   }
 
-  /// Set the section of the file to process.
+  /// Sets the section of the file to process.
   /// @param offset the starting byte offset
   /// @param length the number of bytes to read
   /// @return this
   RowReaderOptions& range(uint64_t offset, uint64_t length) {
-    dataStart = offset;
-    dataLength = length;
+    dataStart_ = offset;
+    dataLength_ = length;
     return *this;
   }
 
-  /// Get the list of selected field or type ids to read.
-  const std::shared_ptr<ColumnSelector>& getSelector() const {
+  /// Gets the list of selected field or type ids to read.
+  const std::shared_ptr<ColumnSelector>& selector() const {
     return selector_;
   }
 
-  /// Get the start of the range for the data being processed.
+  /// Gets the start of the range for the data being processed.
   /// @return if not set, return 0
-  uint64_t getOffset() const {
-    return dataStart;
+  uint64_t offset() const {
+    return dataStart_;
   }
 
-  /// Get the length of the range for the data being processed.
+  /// Gets the length of the range for the data being processed.
   /// @return if not set, return the maximum unsigned long.
-  uint64_t getLength() const {
-    return dataLength;
+  uint64_t length() const {
+    return dataLength_;
   }
 
-  /// Get the limit of the range (lowest offset not in the range).
+  /// Gets the limit of the range (lowest offset not in the range).
   /// @return if not set, return the maximum unsigned long.
-  uint64_t getLimit() const {
-    return ((std::numeric_limits<uint64_t>::max() - dataStart) > dataLength)
-        ? (dataStart + dataLength)
+  uint64_t limit() const {
+    return ((std::numeric_limits<uint64_t>::max() - dataStart_) > dataLength_)
+        ? (dataStart_ + dataLength_)
         : std::numeric_limits<uint64_t>::max();
   }
 
-  /// Request that stripes be pre-loaded.
+  /// Requests that stripes be pre-loaded.
   void setPreloadStripe(bool preload) {
-    preloadStripe = preload;
+    preloadStripe_ = preload;
   }
 
   /// Are stripes to be pre-loaded?
-  bool getPreloadStripe() const {
-    return preloadStripe;
+  bool preloadStripe() const {
+    return preloadStripe_;
   }
 
   /// Will load the first stripe on RowReader creation, if true.
   /// This behavior is already happening in DWRF, but isn't desired for some use
   /// cases. So this flag allows us to turn it off.
   void setEagerFirstStripeLoad(bool load) {
-    eagerFirstStripeLoad = load;
+    eagerFirstStripeLoad_ = load;
   }
 
   /// Will load the first stripe on RowReader creation, if true.
   /// This behavior is already happening in DWRF, but isn't desired for some use
   /// cases. So this flag allows us to turn it off.
-  bool getEagerFirstStripeLoad() const {
-    return eagerFirstStripeLoad;
+  bool eagerFirstStripeLoad() const {
+    return eagerFirstStripeLoad_;
   }
 
-  // For flat map, return flat vector representation
-  bool getReturnFlatVector() const {
+  /// For flat map, return flat vector representation
+  bool returnFlatVector() const {
     return returnFlatVector_;
   }
 
-  // For flat map, request that flat vector representation is used
+  /// For flat map, request that flat vector representation is used
   void setReturnFlatVector(bool value) {
     returnFlatVector_ = value;
   }
 
-  /// Request that the selected type be projected.
-  void setProjectSelectedType(bool vProjectSelectedType) {
-    projectSelectedType = vProjectSelectedType;
+  /// Requests that the selected type be projected.
+  void setProjectSelectedType(bool value) {
+    projectSelectedType_ = value;
   }
 
   /// Is the selected type to be projected?
-  bool getProjectSelectedType() const {
-    return projectSelectedType;
+  bool projectSelectedType() const {
+    return projectSelectedType_;
   }
 
   /// Set RowReader error tolerance.
@@ -273,7 +232,7 @@ class RowReaderOptions {
   }
 
   /// Get RowReader error tolerance.
-  const ErrorTolerance& getErrorTolerance() const {
+  const ErrorTolerance& errorTolerance() const {
     return errorTolerance_;
   }
 
@@ -286,7 +245,7 @@ class RowReaderOptions {
     requestedType_ = std::move(requestedType);
   }
 
-  const std::shared_ptr<velox::common::ScanSpec>& getScanSpec() const {
+  const std::shared_ptr<velox::common::ScanSpec>& scanSpec() const {
     return scanSpec_;
   }
 
@@ -294,8 +253,7 @@ class RowReaderOptions {
     scanSpec_ = std::move(scanSpec);
   }
 
-  const std::shared_ptr<velox::common::MetadataFilter>& getMetadataFilter()
-      const {
+  const std::shared_ptr<velox::common::MetadataFilter>& metadataFilter() const {
     return metadataFilter_;
   }
 
@@ -317,7 +275,7 @@ class RowReaderOptions {
   }
 
   const std::unordered_map<uint32_t, std::vector<std::string>>&
-  getMapColumnIdAsStruct() const {
+  mapColumnIdAsStruct() const {
     return flatmapNodeIdAsStruct_;
   }
 
@@ -334,7 +292,7 @@ class RowReaderOptions {
     rowNumberColumnInfo_ = std::move(rowNumberColumnInfo);
   }
 
-  const std::optional<RowNumberColumnInfo>& getRowNumberColumnInfo() const {
+  const std::optional<RowNumberColumnInfo>& rowNumberColumnInfo() const {
     return rowNumberColumnInfo_;
   }
 
@@ -347,7 +305,7 @@ class RowReaderOptions {
 
   const std::function<
       void(facebook::velox::dwio::common::flatmap::FlatMapKeySelectionStats)>
-  getKeySelectionCallback() const {
+  keySelectionCallback() const {
     return keySelectionCallback_;
   }
 
@@ -358,7 +316,7 @@ class RowReaderOptions {
   }
 
   const std::function<void(std::chrono::high_resolution_clock::duration)>
-  getBlockedOnIoCallback() const {
+  blockedOnIoCallback() const {
     return blockedOnIoCallback_;
   }
 
@@ -369,7 +327,7 @@ class RowReaderOptions {
   }
 
   std::function<void(std::chrono::high_resolution_clock::duration)>
-  getDecodingTimeCallback() const {
+  decodingTimeCallback() const {
     return decodingTimeCallback_;
   }
 
@@ -378,7 +336,7 @@ class RowReaderOptions {
     stripeCountCallback_ = std::move(stripeCountCallback);
   }
 
-  std::function<void(uint16_t)> getStripeCountCallback() const {
+  std::function<void(uint16_t)> stripeCountCallback() const {
     return stripeCountCallback_;
   }
 
@@ -386,7 +344,7 @@ class RowReaderOptions {
     skipRows_ = skipRows;
   }
 
-  uint64_t getSkipRows() const {
+  uint64_t skipRows() const {
     return skipRows_;
   }
 
@@ -395,15 +353,15 @@ class RowReaderOptions {
     unitLoaderFactory_ = std::move(unitLoaderFactory);
   }
 
-  const std::shared_ptr<UnitLoaderFactory>& getUnitLoaderFactory() const {
+  const std::shared_ptr<UnitLoaderFactory>& unitLoaderFactory() const {
     return unitLoaderFactory_;
   }
 
-  const std::shared_ptr<folly::Executor>& getDecodingExecutor() const {
+  const std::shared_ptr<folly::Executor>& decodingExecutor() const {
     return decodingExecutor_;
   }
 
-  size_t getDecodingParallelismFactor() const {
+  size_t decodingParallelismFactor() const {
     return decodingParallelismFactor_;
   }
 
@@ -423,6 +381,52 @@ class RowReaderOptions {
       std::shared_ptr<FormatSpecificOptions> options) {
     formatSpecificOptions_ = std::move(options);
   }
+
+ private:
+  uint64_t dataStart_;
+  uint64_t dataLength_;
+  bool preloadStripe_;
+  bool projectSelectedType_;
+  bool returnFlatVector_ = false;
+  ErrorTolerance errorTolerance_;
+  std::shared_ptr<ColumnSelector> selector_;
+  RowTypePtr requestedType_;
+  std::shared_ptr<velox::common::ScanSpec> scanSpec_{nullptr};
+  std::shared_ptr<velox::common::MetadataFilter> metadataFilter_;
+  // Node id for map column to a list of keys to be projected as a struct.
+  std::unordered_map<uint32_t, std::vector<std::string>> flatmapNodeIdAsStruct_;
+  // Optional executors to enable internal reader parallelism.
+  // 'decodingExecutor' allow parallelising the vector decoding process.
+  // 'ioExecutor' enables parallelism when performing file system read
+  // operations.
+  std::shared_ptr<folly::Executor> decodingExecutor_;
+  size_t decodingParallelismFactor_{0};
+  std::optional<RowNumberColumnInfo> rowNumberColumnInfo_{std::nullopt};
+
+  // Function to populate metrics related to feature projection stats
+  // in Koski. This gets fired in FlatMapColumnReader.
+  // This is a bit of a hack as there is (by design) no good way
+  // To propogate information from column reader to Koski
+  std::function<void(
+      facebook::velox::dwio::common::flatmap::FlatMapKeySelectionStats)>
+      keySelectionCallback_;
+
+  // Function to track how much time we spend waiting on IO before reading rows
+  // (in dwrf row reader). todo: encapsulate this and keySelectionCallBack_ in a
+  // struct
+  std::function<void(std::chrono::high_resolution_clock::duration)>
+      blockedOnIoCallback_;
+  std::function<void(std::chrono::high_resolution_clock::duration)>
+      decodingTimeCallback_;
+  std::function<void(uint16_t)> stripeCountCallback_;
+  bool eagerFirstStripeLoad_{true};
+  uint64_t skipRows_{0};
+
+  std::shared_ptr<UnitLoaderFactory> unitLoaderFactory_;
+
+  TimestampPrecision timestampPrecision_ = TimestampPrecision::kMilliseconds;
+
+  std::shared_ptr<FormatSpecificOptions> formatSpecificOptions_;
 };
 
 /// Options for creating a Reader.
@@ -445,9 +449,10 @@ class ReaderOptions : public io::ReaderOptions {
     return *this;
   }
 
-  /// Sets the schema of the file (a Type tree).  For "dwrf" format, a default
-  /// schema is derived from the file. For "rc" format, there is no default
-  /// schema.
+  /// Sets the current table schema of the file (a Type tree).  This could be
+  /// different from the actual schema in file if schema evolution happened.
+  /// For "dwrf" format, a default schema is derived from the file. For "rc"
+  /// format, there is no default schema.
   ReaderOptions& setFileSchema(const RowTypePtr& schema) {
     fileSchema_ = schema;
     return *this;
@@ -502,6 +507,11 @@ class ReaderOptions : public io::ReaderOptions {
     return *this;
   }
 
+  ReaderOptions& setAdjustTimestampToTimezone(bool adjustTimestampToTimezone) {
+    adjustTimestampToTimezone_ = adjustTimestampToTimezone;
+    return *this;
+  }
+
   /// Gets the desired tail location.
   uint64_t tailLocation() const {
     return tailLocation_;
@@ -541,8 +551,12 @@ class ReaderOptions : public io::ReaderOptions {
     return ioExecutor_;
   }
 
-  const tz::TimeZone* getSessionTimezone() const {
+  const tz::TimeZone* sessionTimezone() const {
     return sessionTimezone_;
+  }
+
+  bool adjustTimestampToTimezone() const {
+    return adjustTimestampToTimezone_;
   }
 
   bool fileColumnNamesReadAsLowerCase() const {
@@ -577,6 +591,14 @@ class ReaderOptions : public io::ReaderOptions {
     scanSpec_ = std::move(scanSpec);
   }
 
+  bool selectiveNimbleReaderEnabled() const {
+    return selectiveNimbleReaderEnabled_;
+  }
+
+  void setSelectiveNimbleReaderEnabled(bool value) {
+    selectiveNimbleReaderEnabled_ = value;
+  }
+
  private:
   uint64_t tailLocation_;
   FileFormat fileFormat_;
@@ -591,6 +613,8 @@ class ReaderOptions : public io::ReaderOptions {
   std::shared_ptr<random::RandomSkipTracker> randomSkip_;
   std::shared_ptr<velox::common::ScanSpec> scanSpec_;
   const tz::TimeZone* sessionTimezone_{nullptr};
+  bool adjustTimestampToTimezone_{false};
+  bool selectiveNimbleReaderEnabled_{false};
 };
 
 struct WriterOptions {
@@ -605,23 +629,21 @@ struct WriterOptions {
   /// can choose to implement its custom memory reclaimer if needed and not use
   /// this default one.
   std::function<std::unique_ptr<velox::memory::MemoryReclaimer>()>
-      defaultMemoryReclaimerFactory{[]() { return nullptr; }};
+      memoryReclaimerFactory{[]() { return nullptr; }};
 
   std::optional<velox::common::CompressionKind> compressionKind;
-  std::optional<uint64_t> orcMinCompressionSize{std::nullopt};
-  std::optional<uint64_t> maxStripeSize{std::nullopt};
-  std::optional<bool> orcLinearStripeSizeHeuristics{std::nullopt};
-  std::optional<uint64_t> maxDictionaryMemory{std::nullopt};
-  std::optional<bool> orcWriterIntegerDictionaryEncodingEnabled{std::nullopt};
-  std::optional<bool> orcWriterStringDictionaryEncodingEnabled{std::nullopt};
   std::map<std::string, std::string> serdeParameters;
-  std::optional<uint8_t> zlibCompressionLevel;
-  std::optional<uint8_t> zstdCompressionLevel;
+  std::function<std::unique_ptr<dwio::common::FlushPolicy>()>
+      flushPolicyFactory;
 
-  // WriterOption implementations should provide this function to specify how to
+  const tz::TimeZone* sessionTimezone{nullptr};
+  bool adjustTimestampToTimezone{false};
+
+  // WriterOption implementations can implement this function to specify how to
   // process format-specific session and connector configs.
-  virtual void processSessionConfigs(const Config&) {}
-  virtual void processHiveConnectorConfigs(const Config&) {}
+  virtual void processConfigs(
+      const config::ConfigBase& connectorConfig,
+      const config::ConfigBase& session) {}
 
   virtual ~WriterOptions() = default;
 };
@@ -632,9 +654,8 @@ template <>
 struct fmt::formatter<facebook::velox::dwio::common::FileFormat>
     : fmt::formatter<std::string_view> {
   template <typename FormatContext>
-  auto format(
-      facebook::velox::dwio::common::FileFormat fmt,
-      FormatContext& ctx) {
+  auto format(facebook::velox::dwio::common::FileFormat fmt, FormatContext& ctx)
+      const {
     return formatter<std::string_view>::format(
         facebook::velox::dwio::common::toString(fmt), ctx);
   }

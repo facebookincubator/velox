@@ -21,10 +21,14 @@
 #include "velox/exec/Spill.h"
 
 namespace facebook::velox::exec {
+class HashBuildSpiller;
 
 namespace test {
 class HashJoinBridgeTestHelper;
 }
+
+using HashJoinTableSpillFunc =
+    std::function<SpillPartitionSet(std::shared_ptr<BaseHashTable>)>;
 
 /// Hands over a hash table from a multi-threaded build pipeline to a
 /// multi-threaded probe pipeline. This is owned by shared_ptr by all the build
@@ -39,28 +43,29 @@ class HashJoinBridge : public JoinBridge {
   /// HashBuild operators to parallelize the restoring operation.
   void addBuilder();
 
+  void reclaim();
+
   /// Invoked by the build operator to set the built hash table.
   /// 'spillPartitionSet' contains the spilled partitions while building
   /// 'table' which only applies if the disk spilling is enabled.
   void setHashTable(
       std::unique_ptr<BaseHashTable> table,
       SpillPartitionSet spillPartitionSet,
-      bool hasNullKeys);
+      bool hasNullKeys,
+      HashJoinTableSpillFunc&& tableSpillFunc);
 
-  /// Invoked by the probe operator to set the spilled hash table while the
-  /// probing. The function puts the spilled table partitions into
+  /// Invoked by the probe operator to append the spilled hash table partitions
+  /// while probing. The function appends the spilled table partitions into
   /// 'spillPartitionSets_' stack. This only applies if the disk spilling is
   /// enabled.
-  void setSpilledHashTable(SpillPartitionSet spillPartitionSet);
+  void appendSpilledHashTablePartitions(SpillPartitionSet spillPartitionSet);
 
   void setAntiJoinHasNullKeys();
 
-  /// Represents the result of HashBuild operators: a hash table, an optional
-  /// restored spill partition id associated with the table, and the spilled
-  /// partitions while building the table if not empty. In case of an anti join,
-  /// a build side entry with a null in a join key makes the join return
-  /// nothing. In this case, HashBuild operators finishes early without
-  /// processing all the input and without finishing building the hash table.
+  /// Represents the result of HashBuild operators. In case of an anti join, a
+  /// build side entry with a null in a join key makes the join return nothing.
+  /// In this case, HashBuild operators finishes early without processing all
+  /// the input and without finishing building the hash table.
   struct HashBuildResult {
     HashBuildResult(
         std::shared_ptr<BaseHashTable> _table,
@@ -76,7 +81,14 @@ class HashJoinBridge : public JoinBridge {
 
     bool hasNullKeys;
     std::shared_ptr<BaseHashTable> table;
+
+    /// Restored spill partition id associated with 'table', null if 'table' is
+    /// not built from restoration.
     std::optional<SpillPartitionId> restoredPartitionId;
+
+    /// Spilled partitions while building hash table. Since we don't support
+    /// fine-grained spilling for hash table, either 'table' is empty or
+    /// 'spillPartitionIds' is empty.
     SpillPartitionIdSet spillPartitionIds;
   };
 
@@ -113,9 +125,19 @@ class HashJoinBridge : public JoinBridge {
   std::optional<SpillInput> spillInputOrFuture(ContinueFuture* future);
 
  private:
+  void appendSpilledHashTablePartitionsLocked(
+      SpillPartitionSet&& spillPartitionSet);
+
   uint32_t numBuilders_{0};
 
+  // The result of the build side. It is set by the last build operator when
+  // build is done.
   std::optional<HashBuildResult> buildResult_;
+
+  // Spill function that lets hash join bridge spill the hash table on behalf of
+  // the hash build operator after the table ownership transfer, and before
+  // probing.
+  HashJoinTableSpillFunc tableSpillFunc_{nullptr};
 
   // restoringSpillPartitionXxx member variables are populated by the
   // bridge itself. When probe side finished processing, the bridge picks the
@@ -123,7 +145,7 @@ class HashJoinBridge : public JoinBridge {
   // among the HashBuild operators and notifies these operators that they can
   // start building HashTables from these shards.
 
-  // If not null, set to the currently restoring spill partition id.
+  // If not null, set to the currently restoring table spill partition id.
   std::optional<SpillPartitionId> restoringSpillPartitionId_;
 
   // If 'restoringSpillPartitionId_' is not null, this set to the restoring
@@ -137,6 +159,11 @@ class HashJoinBridge : public JoinBridge {
   // memory and engages in recursive spilling.
   SpillPartitionSet spillPartitionSets_;
 
+  // A flag indicating if any probe operator has poked 'this' join bridge to
+  // attempt to get table. It is reset after probe side finish the (sub) table
+  // processing.
+  bool probeStarted_;
+
   friend test::HashJoinBridgeTestHelper;
 };
 
@@ -147,9 +174,11 @@ bool isLeftNullAwareJoinWithFilter(
 
 class HashJoinMemoryReclaimer final : public MemoryReclaimer {
  public:
-  static std::unique_ptr<memory::MemoryReclaimer> create() {
+  static std::unique_ptr<memory::MemoryReclaimer> create(
+      std::shared_ptr<HashJoinBridge> joinBridge,
+      int32_t priority = 0) {
     return std::unique_ptr<memory::MemoryReclaimer>(
-        new HashJoinMemoryReclaimer());
+        new HashJoinMemoryReclaimer(joinBridge, priority));
   }
 
   uint64_t reclaim(
@@ -159,7 +188,11 @@ class HashJoinMemoryReclaimer final : public MemoryReclaimer {
       memory::MemoryReclaimer::Stats& stats) final;
 
  private:
-  HashJoinMemoryReclaimer() : MemoryReclaimer() {}
+  HashJoinMemoryReclaimer(
+      const std::shared_ptr<HashJoinBridge>& joinBridge,
+      int32_t priority)
+      : MemoryReclaimer(priority), joinBridge_(joinBridge) {}
+  std::weak_ptr<HashJoinBridge> joinBridge_;
 };
 
 /// Returns true if 'pool' is a hash build operator's memory pool. The check is
@@ -171,6 +204,36 @@ bool isHashBuildMemoryPool(const memory::MemoryPool& pool);
 bool isHashProbeMemoryPool(const memory::MemoryPool& pool);
 
 bool needRightSideJoin(core::JoinType joinType);
+
+/// Returns the type of the hash table associated with this join.
+RowTypePtr hashJoinTableType(
+    const std::shared_ptr<const core::HashJoinNode>& joinNode);
+
+struct HashJoinTableSpillResult {
+  HashBuildSpiller* spiller{nullptr};
+  const std::exception_ptr error{nullptr};
+
+  explicit HashJoinTableSpillResult(std::exception_ptr _error)
+      : error(_error) {}
+  explicit HashJoinTableSpillResult(HashBuildSpiller* _spiller)
+      : spiller(_spiller) {}
+};
+
+/// Invoked to spill the hash table from a set of spillers. If 'spillExecutor'
+/// is provided, then we do parallel spill. This is used by hash build to spill
+/// a partially built hash join table.
+std::vector<std::unique_ptr<HashJoinTableSpillResult>> spillHashJoinTable(
+    const std::vector<HashBuildSpiller*>& spillers,
+    const common::SpillConfig* spillConfig);
+
+/// Invoked to spill 'table' and returns spilled partitions. This is used by
+/// hash probe or hash join bridge to spill a fully built table.
+SpillPartitionSet spillHashJoinTable(
+    std::shared_ptr<BaseHashTable> table,
+    const HashBitRange& hashBitRange,
+    const std::shared_ptr<const core::HashJoinNode>& joinNode,
+    const common::SpillConfig* spillConfig,
+    folly::Synchronized<common::SpillStats>* stats);
 
 /// Returns the type used to spill a given hash table type. The function
 /// might attach a boolean column at the end of 'tableType' if 'joinType' needs

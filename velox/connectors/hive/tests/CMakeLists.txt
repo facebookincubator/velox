@@ -21,6 +21,7 @@ add_executable(
   HiveConnectorSerDeTest.cpp
   HivePartitionFunctionTest.cpp
   HivePartitionUtilTest.cpp
+  HiveSplitTest.cpp
   PartitionIdGeneratorTest.cpp
   TableHandleTest.cpp)
 add_test(velox_hive_connector_test velox_hive_connector_test)
@@ -34,5 +35,14 @@ target_link_libraries(
   velox_vector_test_lib
   velox_exec
   velox_exec_test_lib
-  gtest
-  gtest_main)
+  GTest::gtest
+  GTest::gtest_main)
+
+if(VELOX_ENABLE_PARQUET)
+
+  target_include_directories(velox_hive_connector_test
+                             PUBLIC ${ARROW_PREFIX}/install/include)
+  target_link_libraries(velox_hive_connector_test velox_dwio_parquet_writer
+                        velox_dwio_parquet_reader)
+
+endif()

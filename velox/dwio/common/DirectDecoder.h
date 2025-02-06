@@ -38,8 +38,8 @@ class DirectDecoder : public IntDecoder<isSigned> {
   using IntDecoder<isSigned>::skip;
 
   void skipPending() final {
-    auto toSkip = this->pendingSkip;
-    this->pendingSkip = 0;
+    const auto toSkip = this->pendingSkip_;
+    this->pendingSkip_ = 0;
     this->skipLongs(toSkip);
   }
 
@@ -63,6 +63,7 @@ class DirectDecoder : public IntDecoder<isSigned> {
         return;
       }
     }
+
     int32_t current = visitor.start();
     this->template skip<hasNulls>(current, 0, nulls);
     const bool allowNulls = hasNulls && visitor.allowNulls();
@@ -96,6 +97,7 @@ class DirectDecoder : public IntDecoder<isSigned> {
       } else {
         toSkip = visitor.process(super::template readInt<int64_t>(), atEnd);
       }
+
     skip:
       ++current;
       if (toSkip) {
@@ -128,17 +130,17 @@ class DirectDecoder : public IntDecoder<isSigned> {
   // *temp and temp is returned.
   const void* readFixed(int32_t size, void* temp) {
     skipPending();
-    auto ptr = super::bufferStart;
-    if (ptr && ptr + size <= super::bufferEnd) {
-      super::bufferStart += size;
+    auto ptr = super::bufferStart_;
+    if (ptr && ptr + size <= super::bufferEnd_) {
+      super::bufferStart_ += size;
       return ptr;
     }
     readBytes(
         size,
-        super::inputStream.get(),
+        super::inputStream_.get(),
         temp,
-        super::bufferStart,
-        super::bufferEnd);
+        super::bufferStart_,
+        super::bufferEnd_);
     return temp;
   }
 
@@ -192,7 +194,12 @@ class DirectDecoder : public IntDecoder<isSigned> {
           return;
         }
       }
-      if (super::useVInts) {
+      if (hasHook && visitor.numValuesBias() > 0) {
+        for (auto& row : *outerVector) {
+          row += visitor.numValuesBias();
+        }
+      }
+      if (super::useVInts_) {
         if (Visitor::dense) {
           super::bulkRead(numNonNull, data);
         } else {
@@ -221,15 +228,15 @@ class DirectDecoder : public IntDecoder<isSigned> {
             visitor.rawValues(numRows),
             hasFilter ? visitor.outputRows(numRows) : nullptr,
             numValues,
-            *super::inputStream,
-            super::bufferStart,
-            super::bufferEnd,
+            *super::inputStream_,
+            super::bufferStart_,
+            super::bufferEnd_,
             visitor.filter(),
             visitor.hook());
         this->template skip<false>(tailSkip, 0, nullptr);
       }
     } else {
-      if (super::useVInts) {
+      if (super::useVInts_) {
         if (Visitor::dense) {
           super::bulkRead(numRows, visitor.rawValues(numRows));
         } else {
@@ -242,7 +249,10 @@ class DirectDecoder : public IntDecoder<isSigned> {
                 rowsAsRange,
                 0,
                 rowsAsRange.size(),
-                hasHook ? velox::iota(numRows, visitor.innerNonNullRows())
+                hasHook ? velox::iota(
+                              numRows,
+                              visitor.innerNonNullRows(),
+                              visitor.numValuesBias())
                         : nullptr,
                 visitor.rawValues(numRows),
                 hasFilter ? visitor.outputRows(numRows) : nullptr,
@@ -252,14 +262,17 @@ class DirectDecoder : public IntDecoder<isSigned> {
       } else {
         dwio::common::fixedWidthScan<T, filterOnly, false>(
             rowsAsRange,
-            hasHook ? velox::iota(numRows, visitor.innerNonNullRows())
+            hasHook ? velox::iota(
+                          numRows,
+                          visitor.innerNonNullRows(),
+                          visitor.numValuesBias())
                     : nullptr,
             visitor.rawValues(numRows),
             hasFilter ? visitor.outputRows(numRows) : nullptr,
             numValues,
-            *super::inputStream,
-            super::bufferStart,
-            super::bufferEnd,
+            *super::inputStream_,
+            super::bufferStart_,
+            super::bufferEnd_,
             visitor.filter(),
             visitor.hook());
       }

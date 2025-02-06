@@ -16,16 +16,21 @@
 
 #pragma once
 
+#include <codecvt>
+#include <random>
+
+#include <folly/Random.h>
+
+#include <boost/random/uniform_01.hpp>
+#include <boost/random/uniform_int_distribution.hpp>
+#include <boost/random/uniform_real_distribution.hpp>
+
+#include "velox/common/fuzzer/Utils.h"
 #include "velox/vector/BaseVector.h"
 #include "velox/vector/NullsBuilder.h"
 
 namespace facebook::velox {
-
-using FuzzerGenerator = std::mt19937;
-
 namespace generator_spec_utils {
-
-bool coinToss(FuzzerGenerator& rng, double threshold);
 
 vector_size_t getRandomIndex(FuzzerGenerator& rng, vector_size_t maxIndex);
 

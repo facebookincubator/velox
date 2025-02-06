@@ -16,13 +16,17 @@
 
 #include "velox/core/QueryCtx.h"
 #include "velox/common/base/SpillConfig.h"
+#include "velox/common/base/TraceConfig.h"
+#include "velox/common/config/Config.h"
 
 namespace facebook::velox::core {
 
-/*static*/ std::shared_ptr<QueryCtx> QueryCtx::create(
+// static
+std::shared_ptr<QueryCtx> QueryCtx::create(
     folly::Executor* executor,
     QueryConfig&& queryConfig,
-    std::unordered_map<std::string, std::shared_ptr<Config>> connectorConfigs,
+    std::unordered_map<std::string, std::shared_ptr<config::ConfigBase>>
+        connectorConfigs,
     cache::AsyncDataCache* cache,
     std::shared_ptr<memory::MemoryPool> pool,
     folly::Executor* spillExecutor,
@@ -42,7 +46,7 @@ namespace facebook::velox::core {
 QueryCtx::QueryCtx(
     folly::Executor* executor,
     QueryConfig&& queryConfig,
-    std::unordered_map<std::string, std::shared_ptr<Config>>
+    std::unordered_map<std::string, std::shared_ptr<config::ConfigBase>>
         connectorSessionProperties,
     cache::AsyncDataCache* cache,
     std::shared_ptr<memory::MemoryPool> pool,
@@ -81,6 +85,15 @@ void QueryCtx::updateSpilledBytesAndCheckLimit(uint64_t bytes) {
     VELOX_SPILL_LIMIT_EXCEEDED(fmt::format(
         "Query exceeded per-query local spill limit of {}",
         succinctBytes(queryConfig_.maxSpillBytes())));
+  }
+}
+
+void QueryCtx::updateTracedBytesAndCheckLimit(uint64_t bytes) {
+  if (numTracedBytes_.fetch_add(bytes) + bytes >=
+      queryConfig_.queryTraceMaxBytes()) {
+    VELOX_TRACE_LIMIT_EXCEEDED(fmt::format(
+        "Query exceeded per-query local trace limit of {}",
+        succinctBytes(queryConfig_.queryTraceMaxBytes())));
   }
 }
 

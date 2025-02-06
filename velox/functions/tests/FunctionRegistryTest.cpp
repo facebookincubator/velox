@@ -24,167 +24,16 @@
 #include "velox/functions/FunctionRegistry.h"
 #include "velox/functions/Macros.h"
 #include "velox/functions/Registerer.h"
+#include "velox/functions/prestosql/aggregates/RegisterAggregateFunctions.h"
 #include "velox/functions/prestosql/registration/RegistrationFunctions.h"
 #include "velox/functions/prestosql/tests/utils/FunctionBaseTest.h"
+#include "velox/functions/prestosql/types/IPPrefixType.h"
+#include "velox/functions/tests/RegistryTestUtil.h"
 #include "velox/type/Type.h"
 
 namespace facebook::velox {
 
 namespace {
-
-template <typename T>
-struct FuncOne {
-  VELOX_DEFINE_FUNCTION_TYPES(T);
-
-  // Set func_one as non-deterministic.
-  static constexpr bool is_deterministic = false;
-
-  FOLLY_ALWAYS_INLINE bool call(
-      out_type<velox::Varchar>& /* result */,
-      const arg_type<velox::Varchar>& /* arg1 */) {
-    return true;
-  }
-};
-
-template <typename T>
-struct FuncTwo {
-  template <typename T1, typename T2>
-  FOLLY_ALWAYS_INLINE bool callNullable(
-      int64_t& /* result */,
-      const T1* /* arg1 */,
-      const T2* /* arg2 */) {
-    return true;
-  }
-};
-
-template <typename T>
-struct FuncThree {
-  VELOX_DEFINE_FUNCTION_TYPES(T);
-
-  FOLLY_ALWAYS_INLINE bool call(
-      ArrayWriter<int64_t>& /* result */,
-      const ArrayVal<int64_t>& /* arg1 */) {
-    return true;
-  }
-};
-
-template <typename T>
-struct FuncFour {
-  VELOX_DEFINE_FUNCTION_TYPES(T);
-
-  FOLLY_ALWAYS_INLINE bool call(
-      out_type<velox::Varchar>& /* result */,
-      const arg_type<velox::Varchar>& /* arg1 */) {
-    return true;
-  }
-};
-
-template <typename T>
-struct FuncFive {
-  FOLLY_ALWAYS_INLINE bool call(int64_t& result, const int64_t& /* arg1 */) {
-    result = 5;
-    return true;
-  }
-};
-
-// FuncSix has the same signature as FuncFive. It's used to test overwrite
-// during registration.
-template <typename T>
-struct FuncSix {
-  FOLLY_ALWAYS_INLINE bool call(int64_t& result, const int64_t& /* arg1 */) {
-    result = 6;
-    return true;
-  }
-};
-
-template <typename T>
-struct VariadicFunc {
-  VELOX_DEFINE_FUNCTION_TYPES(T);
-
-  FOLLY_ALWAYS_INLINE bool call(
-      out_type<velox::Varchar>& /* result */,
-      const arg_type<Variadic<velox::Varchar>>& /* arg1 */) {
-    return true;
-  }
-};
-
-class VectorFuncOne : public velox::exec::VectorFunction {
- public:
-  void apply(
-      const velox::SelectivityVector& /* rows */,
-      std::vector<velox::VectorPtr>& /* args */,
-      const TypePtr& /* outputType */,
-      velox::exec::EvalCtx& /* context */,
-      velox::VectorPtr& /* result */) const override {}
-
-  static std::vector<std::shared_ptr<velox::exec::FunctionSignature>>
-  signatures() {
-    // varchar -> bigint
-    return {velox::exec::FunctionSignatureBuilder()
-                .returnType("bigint")
-                .argumentType("varchar")
-                .build()};
-  }
-};
-
-class VectorFuncTwo : public velox::exec::VectorFunction {
- public:
-  void apply(
-      const velox::SelectivityVector& /* rows */,
-      std::vector<velox::VectorPtr>& /* args */,
-      const TypePtr& /* outputType */,
-      velox::exec::EvalCtx& /* context */,
-      velox::VectorPtr& /* result */) const override {}
-
-  static std::vector<std::shared_ptr<velox::exec::FunctionSignature>>
-  signatures() {
-    // array(varchar) -> array(bigint)
-    return {velox::exec::FunctionSignatureBuilder()
-                .returnType("array(bigint)")
-                .argumentType("array(varchar)")
-                .build()};
-  }
-};
-
-class VectorFuncThree : public velox::exec::VectorFunction {
- public:
-  void apply(
-      const velox::SelectivityVector& /* rows */,
-      std::vector<velox::VectorPtr>& /* args */,
-      const TypePtr& /* outputType */,
-      velox::exec::EvalCtx& /* context */,
-      velox::VectorPtr& /* result */) const override {}
-
-  static std::vector<std::shared_ptr<velox::exec::FunctionSignature>>
-  signatures() {
-    // ... -> opaque
-    return {velox::exec::FunctionSignatureBuilder()
-                .returnType("opaque")
-                .argumentType("any")
-                .build()};
-  }
-};
-
-class VectorFuncFour : public velox::exec::VectorFunction {
- public:
-  void apply(
-      const velox::SelectivityVector& /* rows */,
-      std::vector<velox::VectorPtr>& /* args */,
-      const TypePtr& /* outputType */,
-      velox::exec::EvalCtx& /* context */,
-      velox::VectorPtr& /* result */) const override {}
-
-  static std::vector<std::shared_ptr<velox::exec::FunctionSignature>>
-  signatures() {
-    // map(K,V) -> array(K)
-    return {velox::exec::FunctionSignatureBuilder()
-                .knownTypeVariable("K")
-                .typeVariable("V")
-                .returnType("array(K)")
-                .argumentType("map(K,V)")
-                .build()};
-  }
-};
 
 VELOX_DECLARE_VECTOR_FUNCTION(
     udf_vector_func_one,
@@ -351,8 +200,7 @@ TEST_F(FunctionRegistryTest, getFunctionSignatures) {
       functionSignatures["variadic_func"].at(0)->toString(),
       exec::FunctionSignatureBuilder()
           .returnType("varchar")
-          .argumentType("varchar")
-          .variableArity()
+          .variableArity("varchar")
           .build()
           ->toString());
 
@@ -510,6 +358,26 @@ TEST_F(FunctionRegistryTest, isDeterministic) {
   ASSERT_FALSE(isDeterministic("not_found_function").has_value());
 }
 
+TEST_F(FunctionRegistryTest, companionFunction) {
+  functions::prestosql::registerAllScalarFunctions();
+  aggregate::prestosql::registerAllAggregateFunctions();
+  const auto functions = {"array_frequency", "bitwise_left_shift", "ceil"};
+  // Aggregate companion functions with suffix '_extract' are registered as
+  // vector functions.
+  const auto companionFunctions = {
+      "array_agg_extract", "arbitrary_extract", "bitwise_and_agg_extract"};
+
+  for (const auto& function : functions) {
+    ASSERT_FALSE(exec::simpleFunctions()
+                     .getFunctionSignaturesAndMetadata(function)
+                     .front()
+                     .first.companionFunction);
+  }
+  for (const auto& function : companionFunctions) {
+    ASSERT_TRUE(exec::getVectorFunctionMetadata(function)->companionFunction);
+  }
+}
+
 template <typename T>
 struct TestFunction {
   VELOX_DEFINE_FUNCTION_TYPES(T);
@@ -653,6 +521,22 @@ TEST_F(FunctionRegistryOverwriteTest, overwrite) {
   auto& simpleFunctions = exec::simpleFunctions();
   auto signatures = simpleFunctions.getFunctionSignatures("foo");
   ASSERT_EQ(signatures.size(), 1);
+}
+
+TEST_F(FunctionRegistryTest, ipPrefixRegistration) {
+  registerIPPrefixType();
+  registerFunction<IPPrefixFunc, IPPrefix, IPPrefix>({"ipprefix_func"});
+
+  auto& simpleFunctions = exec::simpleFunctions();
+  auto signatures = simpleFunctions.getFunctionSignatures("ipprefix_func");
+  ASSERT_EQ(signatures.size(), 1);
+
+  auto result = resolveFunctionWithMetadata("ipprefix_func", {IPPREFIX()});
+  EXPECT_TRUE(result.has_value());
+  EXPECT_EQ(*result->first, *IPPREFIX());
+  EXPECT_TRUE(result->second.defaultNullBehavior);
+  EXPECT_TRUE(result->second.deterministic);
+  EXPECT_FALSE(result->second.supportsFlattening);
 }
 
 } // namespace facebook::velox

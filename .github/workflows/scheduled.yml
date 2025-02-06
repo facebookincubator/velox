@@ -25,6 +25,7 @@ on:
       - "scripts/setup-ubuntu.sh"
       - "scripts/setup-helper-functions.sh"
       - ".github/workflows/scheduled.yml"
+      - "setup.py"
 
   push:
     branches:
@@ -88,11 +89,11 @@ jobs:
     name: Build
     # prevent errors when forks ff their main branch
     if: ${{ github.repository == 'facebookincubator/velox' }}
-    runs-on: 16-core-ubuntu
+    runs-on: 32-core-ubuntu
     container: ghcr.io/facebookincubator/velox-dev:centos9
     timeout-minutes: 120
     env:
-      CCACHE_DIR: "${{ github.workspace }}/.ccache"
+      CCACHE_DIR: "${{ github.workspace }}/ccache"
       LINUX_DISTRO: "ubuntu"
       MAKEFLAGS: "NUM_THREADS=${{ inputs.numThreads || 16 }} MAX_HIGH_MEM_JOBS=${{ inputs.maxHighMemJobs || 8 }} MAX_LINK_JOBS=${{ inputs.maxLinkJobs || 4 }}"
 
@@ -222,6 +223,7 @@ jobs:
         run: |
           python3 -m venv .venv
           source .venv/bin/activate
+
           python3 -m pip install -e .
 
       - name: Create and test new function signatures
@@ -312,11 +314,32 @@ jobs:
           path: velox/_build/debug/velox/functions/prestosql/fuzzer/velox_window_fuzzer_test
           retention-days: "${{ env.RETENTION }}"
 
+      - name: Upload cache fuzzer
+        uses: actions/upload-artifact@v4
+        with:
+          name: cache_fuzzer
+          path: velox/_build/debug/velox/exec/tests/velox_cache_fuzzer_test
+          retention-days: "${{ env.RETENTION }}"
+
+      - name: Upload table evolution fuzzer
+        uses: actions/upload-artifact@v4
+        with:
+          name: table_evolution_fuzzer
+          path: velox/_build/debug/velox/exec/tests/velox_table_evolution_fuzzer_test
+          retention-days: "${{ env.RETENTION }}"
+
+      - name: Upload memory arbitration fuzzer
+        uses: actions/upload-artifact@v4
+        with:
+          name: memory_arbitration_fuzzer
+          path: velox/_build/debug/velox/exec/tests/velox_memory_arbitration_fuzzer_test
+          retention-days: "${{ env.RETENTION }}"
+
       - name: Upload row number fuzzer
         uses: actions/upload-artifact@v4
         with:
           name: row_number
-          path: velox/_build/debug//velox/exec/tests/velox_row_number_fuzzer_test
+          path: velox/_build/debug//velox/exec/fuzzer/velox_row_number_fuzzer
           retention-days: "${{ env.RETENTION }}"
 
       - name: Upload writer fuzzer
@@ -374,11 +397,14 @@ jobs:
           mkdir -p /tmp/fuzzer_repro/logs/
           chmod -R 777 /tmp/fuzzer_repro
           chmod +x velox_expression_fuzzer_test
+          random_seed=${RANDOM}
+          echo "Random seed: ${random_seed}"
           ./velox_expression_fuzzer_test \
-                --seed ${RANDOM} \
+                --seed ${random_seed} \
                 --enable_variadic_signatures \
                 --velox_fuzzer_enable_complex_types \
                 --lazy_vector_generation_ratio 0.2 \
+                --common_dictionary_wraps_generation_ratio=0.3 \
                 --velox_fuzzer_enable_column_reuse \
                 --velox_fuzzer_enable_expression_reuse \
                 --max_expression_trees_per_step 2 \
@@ -423,11 +449,14 @@ jobs:
         run: |
           ls /tmp/signatures
           mkdir -p /tmp/presto_bias_fuzzer_repro/logs/
-            chmod -R 777 /tmp/presto_bias_fuzzer_repro
-            chmod +x velox_expression_fuzzer_test
-            ./velox_expression_fuzzer_test \
-                --seed ${RANDOM} \
+          chmod -R 777 /tmp/presto_bias_fuzzer_repro
+          chmod +x velox_expression_fuzzer_test
+          random_seed=${RANDOM}
+          echo "Random seed: ${random_seed}"
+          ./velox_expression_fuzzer_test \
+                --seed ${random_seed} \
                 --lazy_vector_generation_ratio 0.2 \
+                --common_dictionary_wraps_generation_ratio=0.3 \
                 --assign_function_tickets  $(cat /tmp/signatures/presto_bias_functions) \
                 --duration_sec 3600 \
                 --enable_variadic_signatures \
@@ -469,8 +498,10 @@ jobs:
           mkdir -p /tmp/spark_aggregate_fuzzer_repro/logs/
           chmod -R 777 /tmp/spark_aggregate_fuzzer_repro
           chmod +x spark_aggregation_fuzzer_test
+          random_seed=${RANDOM}
+          echo "Random seed: ${random_seed}"
           ./spark_aggregation_fuzzer_test \
-                --seed ${RANDOM} \
+                --seed ${random_seed} \
                 --duration_sec $DURATION \
                 --minloglevel=0 \
                 --stderrthreshold=2 \
@@ -510,10 +541,12 @@ jobs:
         run: |
           ls /tmp/signatures
           mkdir -p /tmp/spark_bias_fuzzer_repro/logs/
-            chmod -R 777 /tmp/spark_bias_fuzzer_repro
-            chmod +x spark_expression_fuzzer_test
-            ./spark_expression_fuzzer_test \
-                --seed ${RANDOM} \
+          chmod -R 777 /tmp/spark_bias_fuzzer_repro
+          chmod +x spark_expression_fuzzer_test
+          random_seed=${RANDOM}
+          echo "Random seed: ${random_seed}"
+          ./spark_expression_fuzzer_test \
+                --seed ${random_seed} \
                 --duration_sec $DURATION \
                 --minloglevel=0 \
                 --stderrthreshold=2 \
@@ -547,10 +580,12 @@ jobs:
       - name: Run Spark Expression Fuzzer
         run: |
           mkdir -p /tmp/spark_fuzzer_repro/logs/
-            chmod -R 777 /tmp/spark_fuzzer_repro
-            chmod +x spark_expression_fuzzer_test
-            ./spark_expression_fuzzer_test \
-                --seed ${RANDOM} \
+          chmod -R 777 /tmp/spark_fuzzer_repro
+          chmod +x spark_expression_fuzzer_test
+          random_seed=${RANDOM}
+          echo "Random seed: ${random_seed}"
+          ./spark_expression_fuzzer_test \
+                --seed ${random_seed} \
                 --enable_variadic_signatures \
                 --lazy_vector_generation_ratio 0.2 \
                 --velox_fuzzer_enable_column_reuse \
@@ -573,12 +608,15 @@ jobs:
           path: |
             /tmp/spark_fuzzer_repro
 
-  join-fuzzer-run:
+  presto-java-join-fuzzer-run:
     name: Join Fuzzer
     runs-on: ubuntu-latest
-    container: ghcr.io/facebookincubator/velox-dev:centos9
+    container: ghcr.io/facebookincubator/velox-dev:presto-java
     needs: compile
     timeout-minutes: 120
+    env:
+      CCACHE_DIR: "${{ github.workspace }}/ccache/"
+      LINUX_DISTRO: "centos"
     steps:
 
       - name: Download join fuzzer
@@ -586,26 +624,51 @@ jobs:
         with:
           name: join
 
+      - name: "Checkout Repo"
+        uses: actions/checkout@v4
+        with:
+          path: velox
+          submodules: 'recursive'
+          ref: "${{ inputs.ref }}"
+
+      - name: Fix git permissions
+          # Usually actions/checkout does this but as we run in a container
+        # it doesn't work
+        run: git config --global --add safe.directory ${GITHUB_WORKSPACE}/velox
+
       - name: Run Join Fuzzer
         run: |
+          cd  velox
+          cp ./scripts/presto/etc/hive.properties $PRESTO_HOME/etc/catalog
+          ls -lR $PRESTO_HOME/etc
+          $PRESTO_HOME/bin/launcher run -v > /tmp/server.log 2>&1 &
+          # Sleep for 60 seconds to allow Presto server to start.
+          sleep 60
+          /opt/presto-cli --server 127.0.0.1:8080 --execute 'CREATE SCHEMA hive.tpch;'
+          cd -
           mkdir -p /tmp/join_fuzzer_repro/logs/
           chmod -R 777 /tmp/join_fuzzer_repro
           chmod +x velox_join_fuzzer_test
+          random_seed=${RANDOM}
+          echo "Random seed: ${random_seed}"
           ./velox_join_fuzzer_test \
-                --seed ${RANDOM} \
+                --seed ${random_seed} \
                 --duration_sec $DURATION \
                 --minloglevel=0 \
                 --stderrthreshold=2 \
                 --log_dir=/tmp/join_fuzzer_repro/logs \
+                --presto_url=http://127.0.0.1:8080 \
+                --req_timeout_ms=2000 \
             && echo -e "\n\nJoin fuzzer run finished successfully."
 
-      - name: Archive aggregate production artifacts
+      - name: Archive join production artifacts
         if: ${{ !cancelled() }}
         uses: actions/upload-artifact@v4
         with:
-          name: join-fuzzer-failure-artifacts
+          name: presto-sot-join-fuzzer-failure-artifacts
           path: |
             /tmp/join_fuzzer_repro
+            /tmp/server.log
 
   exchange-fuzzer-run:
     name: Exchange Fuzzer
@@ -626,8 +689,10 @@ jobs:
           mkdir -p /tmp/exchange_fuzzer_repro/logs/
           chmod -R 777 /tmp/exchange_fuzzer_repro
           chmod +x velox_exchange_fuzzer_test
+          random_seed=${RANDOM}
+          echo "Random seed: ${random_seed}"
           ./velox_exchange_fuzzer_test \
-                --seed ${RANDOM} \
+                --seed ${random_seed} \
                 --duration_sec $DURATION \
                 --minloglevel=0 \
                 --stderrthreshold=2 \
@@ -661,9 +726,11 @@ jobs:
           cat /proc/sys/vm/max_map_count
           mkdir -p /tmp/row_fuzzer_repro/logs/
           chmod -R 777 /tmp/row_fuzzer_repro
-          chmod +x velox_row_number_fuzzer_test
-          ./velox_row_number_fuzzer_test \
-                --seed ${RANDOM} \
+          chmod +x velox_row_number_fuzzer
+          random_seed=${RANDOM}
+          echo "Random seed: ${random_seed}"
+          ./velox_row_number_fuzzer \
+                --seed ${random_seed} \
                 --duration_sec $DURATION \
                 --minloglevel=0 \
                 --stderrthreshold=2 \
@@ -677,6 +744,109 @@ jobs:
             name: row-fuzzer-failure-artifacts
             path: |
               /tmp/row_fuzzer_repro
+
+  cache-fuzzer-run:
+    name: Cache Fuzzer
+    runs-on: ubuntu-latest
+    container: ghcr.io/facebookincubator/velox-dev:centos9
+    needs: compile
+    timeout-minutes: 120
+    steps:
+
+      - name: Download cache fuzzer
+        uses: actions/download-artifact@v4
+        with:
+          name: cache_fuzzer
+
+      - name: Run Cache Fuzzer
+        run: |
+          mkdir -p /tmp/cache_fuzzer_test/logs/
+          chmod -R 777 /tmp/cache_fuzzer_test
+          chmod +x velox_cache_fuzzer_test
+          ./velox_cache_fuzzer_test \
+                --seed ${RANDOM} \
+                --duration_sec $DURATION \
+                --minloglevel=0 \
+                --stderrthreshold=2 \
+                --log_dir=/tmp/cache_fuzzer_test/logs \
+            && echo -e "\n\Cache fuzzer run finished successfully."
+
+      - name: Archive Cache production artifacts
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+            name: cache-fuzzer-test-logs
+            path: |
+              /tmp/cache_fuzzer_test
+
+  table-evolution-fuzzer-run:
+    name: Table Evolution Fuzzer
+    runs-on: ubuntu-latest
+    container: ghcr.io/facebookincubator/velox-dev:centos9
+    needs: compile
+    timeout-minutes: 120
+    steps:
+
+      - name: Download table evolution fuzzer
+        uses: actions/download-artifact@v4
+        with:
+          name: table_evolution_fuzzer
+
+      - name: Run Table Evolution Fuzzer
+        run: |
+          mkdir -p /tmp/table_evolution_fuzzer_test/logs/
+          chmod -R 777 /tmp/table_evolution_fuzzer_test
+          chmod +x velox_table_evolution_fuzzer_test
+          ./velox_table_evolution_fuzzer_test \
+                --seed ${RANDOM} \
+                --duration_sec $DURATION \
+                --minloglevel=0 \
+                --stderrthreshold=2 \
+                --log_dir=/tmp/table_evolution_fuzzer_test/logs \
+            && echo -e "\n\Table evolution fuzzer run finished successfully."
+
+      - name: Archive table evolution production artifacts
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+            name: table-evolution-fuzzer-test-logs
+            path: |
+              /tmp/table_evolution_fuzzer_test
+
+  memory-arbitration-fuzzer-run:
+    name: Memory Arbitration Fuzzer
+    runs-on: ubuntu-latest
+    container: ghcr.io/facebookincubator/velox-dev:centos9
+    needs: compile
+    timeout-minutes: 120
+    steps:
+
+      - name: Download memory arbitration fuzzer
+        uses: actions/download-artifact@v4
+        with:
+          name: memory_arbitration_fuzzer
+
+      - name: Run Memory Arbitration Fuzzer
+        run: |
+          mkdir -p /tmp/memory_arbitration_fuzzer_test/logs/
+          chmod -R 777 /tmp/memory_arbitration_fuzzer_test
+          chmod +x velox_memory_arbitration_fuzzer_test
+          ./velox_memory_arbitration_fuzzer_test \
+                --seed ${RANDOM} \
+                --duration_sec $DURATION \
+                --minloglevel=0 \
+                --stderrthreshold=2 \
+                --log_dir=/tmp/memory_arbitration_fuzzer_test/logs \
+            && echo -e "\n\Memory arbitration fuzzer run finished successfully."
+
+      - name: Archive memory arbitration production artifacts
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+            name: memory-arbitration-fuzzer-test-logs
+            path: |
+              /tmp/memory_arbitration_fuzzer_test
+
   presto-java-aggregation-fuzzer-run:
     name: Aggregation Fuzzer with Presto as source of truth
     needs: compile
@@ -684,7 +854,7 @@ jobs:
     container: ghcr.io/facebookincubator/velox-dev:presto-java
     timeout-minutes: 120
     env:
-      CCACHE_DIR: "${{ github.workspace }}/.ccache/"
+      CCACHE_DIR: "${{ github.workspace }}/ccache/"
       LINUX_DISTRO: "centos"
     steps:
 
@@ -719,8 +889,10 @@ jobs:
           mkdir -p /tmp/aggregate_fuzzer_repro/logs/
           chmod -R 777 /tmp/aggregate_fuzzer_repro
           chmod +x velox_aggregation_fuzzer_test
+          random_seed=${RANDOM}
+          echo "Random seed: ${random_seed}"
           ./velox_aggregation_fuzzer_test \
-                --seed ${RANDOM} \
+                --seed ${random_seed} \
                 --duration_sec $DURATION \
                 --minloglevel=0 \
                 --stderrthreshold=2 \
@@ -740,6 +912,95 @@ jobs:
             /tmp/server.log
 
 
+  presto-java-only-bias-function-expression-fuzzer-run:
+    name: Biased Expression Fuzzer with Only Added/Updated Functions and Presto as source of truth
+    needs: compile
+    runs-on: ubuntu-latest
+    container: ghcr.io/facebookincubator/velox-dev:presto-java
+    timeout-minutes: 120
+    if: ${{ needs.compile.outputs.presto_bias  == 'true' }}
+    env:
+      CCACHE_DIR: "${{ github.workspace }}/ccache/"
+      LINUX_DISTRO: "centos"
+    steps:
+
+      - name: Download presto expression fuzzer
+        uses: actions/download-artifact@v4
+        with:
+          name: presto
+
+      - name: "Checkout Repo"
+        uses: actions/checkout@v4
+        with:
+          path: velox
+          submodules: 'recursive'
+          ref: "${{ inputs.ref }}"
+
+      - name: Fix git permissions
+        # Usually actions/checkout does this but as we run in a container
+        # it doesn't work
+        run: git config --global --add safe.directory ${GITHUB_WORKSPACE}/velox
+
+      - name: Download Signatures
+        uses: actions/download-artifact@v4
+        with:
+          name: signatures
+          path: /tmp/signatures
+
+      - name: Run Bias Expression Fuzzer
+        run: |
+          cd  velox
+          cp ./scripts/presto/etc/hive.properties $PRESTO_HOME/etc/catalog
+          ls -lR $PRESTO_HOME/etc
+          $PRESTO_HOME/bin/launcher run -v > /tmp/server.log 2>&1 &
+          # Sleep for 60 seconds to allow Presto server to start.
+          sleep 60
+          /opt/presto-cli --server 127.0.0.1:8080 --execute 'CREATE SCHEMA hive.tpch;'
+          cd -
+          mkdir -p /tmp/presto_only_bias_function_fuzzer_repro/logs/
+          chmod -R 777 /tmp/presto_only_bias_function_fuzzer_repro
+          chmod +x velox_expression_fuzzer_test
+          echo "Biased functions: $(< /tmp/signatures/presto_bias_functions)"
+          # Convert the list of function names with tickets into a list of function names only.
+          function_names=""
+          IFS=',' read -r -a array <<< $(cat /tmp/signatures/presto_bias_functions)
+          for x in ${array[@]}; do
+            if [ -n "$function_names" ]; then
+              function_names+=","
+            fi
+            function_names+=$(echo $x | cut -d '=' -f 1)
+          done
+          echo "Biased function names: $function_names"
+          random_seed=${RANDOM}
+          echo "Random seed: ${random_seed}"
+          echo "Running Fuzzer for $DURATION"
+          ./velox_expression_fuzzer_test \
+                --seed ${random_seed} \
+                --lazy_vector_generation_ratio 0.2 \
+                --common_dictionary_wraps_generation_ratio=0.3 \
+                --only=$function_names \
+                --duration_sec $DURATION \
+                --enable_variadic_signatures \
+                --velox_fuzzer_enable_complex_types \
+                --velox_fuzzer_enable_column_reuse \
+                --velox_fuzzer_enable_expression_reuse \
+                --max_expression_trees_per_step 2 \
+                --retry_with_try \
+                --batch_size=6 \
+                --presto_url=http://127.0.0.1:8080 \
+                --minloglevel=0 \
+                --stderrthreshold=2 \
+                --log_dir=/tmp/presto_only_bias_function_fuzzer_repro/logs \
+                --repro_persist_path=/tmp/presto_only_bias_function_fuzzer_repro \
+          && echo -e "\n\nPresto Fuzzer run finished successfully."
+      - name: Archive Presto only-bias-function expression fuzzer production artifacts
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: presto-only-bias-function-fuzzer-failure-artifacts
+          path: |
+            /tmp/presto_only_bias_function_fuzzer_repro
+
   presto-bias-java-aggregation-fuzzer-run:
     name: Biased Aggregation Fuzzer with Presto as source of truth
     needs: compile
@@ -748,7 +1009,7 @@ jobs:
     timeout-minutes: 120
     if: ${{ needs.compile.outputs.presto_aggregate_bias  == 'true' }}
     env:
-      CCACHE_DIR: "${{ github.workspace }}/.ccache/"
+      CCACHE_DIR: "${{ github.workspace }}/ccache/"
       LINUX_DISTRO: "centos"
     steps:
 
@@ -790,11 +1051,12 @@ jobs:
           chmod +x velox_aggregation_fuzzer_test
           echo "signatures folder"
           ls /tmp/signatures/
-          echo "Biased functions:"
-          cat /tmp/signatures/presto_aggregate_bias_functions
+          echo "Biased functions: $(< cat /tmp/signatures/presto_aggregate_bias_functions)"
+          random_seed=${RANDOM}
+          echo "Random seed: ${random_seed}"
           echo "Running Fuzzer for $DURATION"
           ./velox_aggregation_fuzzer_test \
-                --seed ${RANDOM} \
+                --seed ${random_seed} \
                 --duration_sec $DURATION \
                 --minloglevel=0 \
                 --stderrthreshold=2 \
@@ -845,7 +1107,7 @@ jobs:
     container: ghcr.io/facebookincubator/velox-dev:presto-java
     timeout-minutes: 120
     env:
-      CCACHE_DIR: "${{ github.workspace }}/.ccache/"
+      CCACHE_DIR: "${{ github.workspace }}/ccache/"
       LINUX_DISTRO: "centos"
     steps:
 
@@ -880,9 +1142,12 @@ jobs:
           mkdir -p /tmp/window_fuzzer_repro/logs/
           chmod -R 777 /tmp/window_fuzzer_repro
           chmod +x velox_window_fuzzer_test
+          random_seed=${RANDOM}
+          echo "Random seed: ${random_seed}"
           ./velox_window_fuzzer_test \
-                --seed ${RANDOM} \
+                --seed ${random_seed} \
                 --duration_sec $DURATION \
+                --batch_size=50 \
                 --minloglevel=0 \
                 --stderrthreshold=2 \
                 --log_dir=/tmp/window_fuzzer_repro/logs \
@@ -907,7 +1172,7 @@ jobs:
     container: ghcr.io/facebookincubator/velox-dev:presto-java
     timeout-minutes: 120
     env:
-      CCACHE_DIR: "${{ github.workspace }}/.ccache/"
+      CCACHE_DIR: "${{ github.workspace }}/ccache/"
       LINUX_DISTRO: "centos"
     steps:
 
@@ -945,8 +1210,10 @@ jobs:
           mkdir -p /tmp/writer_fuzzer_repro/logs/
           chmod -R 777 /tmp/writer_fuzzer_repro
           chmod +x velox_writer_fuzzer_test
+          random_seed=${RANDOM}
+          echo "Random seed: ${random_seed}"
           ./velox_writer_fuzzer_test \
-                --seed ${RANDOM} \
+                --seed ${random_seed} \
                 --duration_sec $DURATION \
                 --minloglevel=0 \
                 --stderrthreshold=2 \
@@ -964,3 +1231,10 @@ jobs:
             /tmp/writer_fuzzer_repro
             /tmp/server.log
             /var/log
+
+  linux-clang:
+    if: ${{ github.event_name == 'schedule' }}
+    name: Build with Clang
+    uses: ./.github/workflows/linux-build-base.yml
+    with:
+      use-clang: true

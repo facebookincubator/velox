@@ -26,16 +26,7 @@ using facebook::velox::common::testutil::TestValue;
 namespace facebook::velox::exec {
 
 EvalCtx::EvalCtx(core::ExecCtx* execCtx, ExprSet* exprSet, const RowVector* row)
-    : execCtx_(execCtx),
-      exprSet_(exprSet),
-      row_(row),
-      cacheEnabled_(execCtx->exprEvalCacheEnabled()),
-      maxSharedSubexprResultsCached_(
-          execCtx->queryCtx()
-              ? execCtx->queryCtx()
-                    ->queryConfig()
-                    .maxSharedSubexprResultsCached()
-              : core::QueryConfig({}).maxSharedSubexprResultsCached()) {
+    : execCtx_(execCtx), exprSet_(exprSet), row_(row) {
   // TODO Change the API to replace raw pointers with non-const references.
   // Sanity check inputs to prevent crashes.
   VELOX_CHECK_NOT_NULL(execCtx);
@@ -53,17 +44,9 @@ EvalCtx::EvalCtx(core::ExecCtx* execCtx, ExprSet* exprSet, const RowVector* row)
 }
 
 EvalCtx::EvalCtx(core::ExecCtx* execCtx)
-    : execCtx_(execCtx),
-      exprSet_(nullptr),
-      row_(nullptr),
-      cacheEnabled_(execCtx->exprEvalCacheEnabled()),
-      maxSharedSubexprResultsCached_(
-          execCtx->queryCtx()
-              ? execCtx->queryCtx()
-                    ->queryConfig()
-                    .maxSharedSubexprResultsCached()
-              : core::QueryConfig({}).maxSharedSubexprResultsCached()) {
+    : execCtx_(execCtx), exprSet_(nullptr), row_(nullptr) {
   VELOX_CHECK_NOT_NULL(execCtx);
+  inputFlatNoNulls_ = false;
 }
 
 void EvalCtx::saveAndReset(ContextSaver& saver, const SelectivityVector& rows) {
@@ -131,7 +114,6 @@ void EvalCtx::copyError(
     vector_size_t fromIndex,
     EvalErrorsPtr& to,
     vector_size_t toIndex) const {
-  const auto fromSize = from.size();
   if (from.hasErrorAt(fromIndex)) {
     ensureErrorsVectorSize(to, toIndex + 1);
     to->copyError(from, fromIndex, toIndex);
@@ -395,7 +377,7 @@ void EvalCtx::addNulls(
   // or do nothing otherwise.
   if (result->isConstantEncoding() && result->isNullAt(0)) {
     if (result->size() < rows.end()) {
-      if (result.unique()) {
+      if (result.use_count() == 1) {
         result->resize(rows.end());
       } else {
         result =
@@ -407,7 +389,7 @@ void EvalCtx::addNulls(
 
   auto currentSize = result->size();
   auto targetSize = rows.end();
-  if (!result.unique() || !result->isNullsWritable()) {
+  if (result.use_count() != 1 || !result->isNullsWritable()) {
     if (result->type()->isPrimitiveType()) {
       if (currentSize < targetSize) {
         resizePrimitiveTypeVectors(result, targetSize, context);

@@ -22,7 +22,8 @@
 #include <string>
 #include <vector>
 
-#include "folly/Range.h"
+#include <folly/Range.h>
+
 #include "velox/type/TypeParser.h"
 
 namespace facebook::velox::type::fbhive {
@@ -41,6 +42,7 @@ enum class TokenType {
   String,
   Binary,
   Timestamp,
+  Opaque,
   List,
   Map,
   Struct,
@@ -87,6 +89,8 @@ struct Token {
   bool isValidType() const;
 
   bool isEOS() const;
+
+  bool isOpaqueType() const;
 };
 
 struct TokenAndRemaining : public Token {

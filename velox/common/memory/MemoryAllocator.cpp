@@ -25,8 +25,6 @@
 #include "velox/common/base/BitUtil.h"
 #include "velox/common/memory/Memory.h"
 
-DECLARE_bool(velox_memory_use_hugepages);
-
 namespace facebook::velox::memory {
 
 // static
@@ -415,7 +413,7 @@ void MemoryAllocator::useHugePages(
     const ContiguousAllocation& data,
     bool enable) {
 #ifdef linux
-  if (!FLAGS_velox_memory_use_hugepages) {
+  if (!config::globalConfig().memoryUseHugepages) {
     return;
   }
   auto maybeRange = data.hugePageRange();
@@ -483,7 +481,6 @@ void MemoryAllocator::getTracingHooks(
   report = [state, allocator, ioVolume]() -> std::string {
     struct rusage rusage;
     getrusage(RUSAGE_SELF, &rusage);
-    auto newStats = allocator->stats();
     float u = elapsedUsec(rusage.ru_utime, state->rusage.ru_utime);
     float s = elapsedUsec(rusage.ru_stime, state->rusage.ru_stime);
     auto m = allocator->stats() - state->allocatorStats;

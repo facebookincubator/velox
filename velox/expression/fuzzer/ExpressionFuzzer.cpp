@@ -22,18 +22,22 @@
 #include <unordered_set>
 
 #include "velox/common/base/Exceptions.h"
+#include "velox/exec/fuzzer/FuzzerUtil.h"
 #include "velox/expression/Expr.h"
 #include "velox/expression/FunctionSignature.h"
 #include "velox/expression/ReverseSignatureBinder.h"
 #include "velox/expression/SimpleFunctionRegistry.h"
 #include "velox/expression/fuzzer/ArgumentTypeFuzzer.h"
 #include "velox/expression/fuzzer/ExpressionFuzzer.h"
+#include "velox/expression/signature_parser/ParseUtil.h"
 
 namespace facebook::velox::fuzzer {
 
 namespace {
 using exec::SignatureBinder;
 using exec::SignatureBinderBase;
+using exec::test::sanitizeTryResolveType;
+using exec::test::usesTypeName;
 
 class FullSignatureBinder : public SignatureBinderBase {
  public:
@@ -69,205 +73,6 @@ class FullSignatureBinder : public SignatureBinderBase {
  private:
   bool bound_{false};
 };
-
-static const std::vector<std::string> kIntegralTypes{
-    "tinyint",
-    "smallint",
-    "integer",
-    "bigint",
-    "boolean"};
-
-static const std::vector<std::string> kFloatingPointTypes{"real", "double"};
-
-facebook::velox::exec::FunctionSignaturePtr makeCastSignature(
-    const std::string& fromType,
-    const std::string& toType) {
-  return facebook::velox::exec::FunctionSignatureBuilder()
-      .argumentType(fromType)
-      .returnType(toType)
-      .build();
-}
-
-void addCastFromIntegralSignatures(
-    const std::string& toType,
-    std::vector<facebook::velox::exec::FunctionSignaturePtr>& signatures) {
-  for (const auto& fromType : kIntegralTypes) {
-    signatures.push_back(makeCastSignature(fromType, toType));
-  }
-}
-
-void addCastFromFloatingPointSignatures(
-    const std::string& toType,
-    std::vector<facebook::velox::exec::FunctionSignaturePtr>& signatures) {
-  for (const auto& fromType : kFloatingPointTypes) {
-    signatures.push_back(makeCastSignature(fromType, toType));
-  }
-}
-
-void addCastFromVarcharSignature(
-    const std::string& toType,
-    std::vector<facebook::velox::exec::FunctionSignaturePtr>& signatures) {
-  signatures.push_back(makeCastSignature("varchar", toType));
-}
-
-void addCastFromTimestampSignature(
-    const std::string& toType,
-    std::vector<facebook::velox::exec::FunctionSignaturePtr>& signatures) {
-  signatures.push_back(makeCastSignature("timestamp", toType));
-}
-
-void addCastFromDateSignature(
-    const std::string& toType,
-    std::vector<facebook::velox::exec::FunctionSignaturePtr>& signatures) {
-  signatures.push_back(makeCastSignature("date", toType));
-}
-
-std::vector<facebook::velox::exec::FunctionSignaturePtr>
-getSignaturesForCast() {
-  std::vector<facebook::velox::exec::FunctionSignaturePtr> signatures;
-
-  // To integral types.
-  for (const auto& toType : kIntegralTypes) {
-    addCastFromIntegralSignatures(toType, signatures);
-    addCastFromFloatingPointSignatures(toType, signatures);
-    addCastFromVarcharSignature(toType, signatures);
-  }
-
-  // To floating-point types.
-  for (const auto& toType : kFloatingPointTypes) {
-    addCastFromIntegralSignatures(toType, signatures);
-    addCastFromFloatingPointSignatures(toType, signatures);
-    addCastFromVarcharSignature(toType, signatures);
-  }
-
-  // To varchar type.
-  addCastFromIntegralSignatures("varchar", signatures);
-  addCastFromFloatingPointSignatures("varchar", signatures);
-  addCastFromVarcharSignature("varchar", signatures);
-  addCastFromDateSignature("varchar", signatures);
-  addCastFromTimestampSignature("varchar", signatures);
-
-  // To timestamp type.
-  addCastFromVarcharSignature("timestamp", signatures);
-  addCastFromDateSignature("timestamp", signatures);
-
-  // To date type.
-  addCastFromVarcharSignature("date", signatures);
-  addCastFromTimestampSignature("date", signatures);
-
-  // For each supported translation pair T --> U, add signatures of array(T) -->
-  // array(U), map(varchar, T) --> map(varchar, U), row(T) --> row(U).
-  auto size = signatures.size();
-  for (auto i = 0; i < size; ++i) {
-    auto from = signatures[i]->argumentTypes()[0].baseName();
-    auto to = signatures[i]->returnType().baseName();
-
-    signatures.push_back(makeCastSignature(
-        fmt::format("array({})", from), fmt::format("array({})", to)));
-
-    signatures.push_back(makeCastSignature(
-        fmt::format("map(varchar, {})", from),
-        fmt::format("map(varchar, {})", to)));
-
-    signatures.push_back(makeCastSignature(
-        fmt::format("row({})", from), fmt::format("row({})", to)));
-  }
-  return signatures;
-}
-
-static const std::unordered_map<
-    std::string,
-    std::vector<facebook::velox::exec::FunctionSignaturePtr>>
-    kSpecialForms = {
-        {"and",
-         std::vector<facebook::velox::exec::FunctionSignaturePtr>{
-             // Signature: and (condition,...) -> output:
-             // boolean, boolean,.. -> boolean
-             facebook::velox::exec::FunctionSignatureBuilder()
-                 .argumentType("boolean")
-                 .argumentType("boolean")
-                 .variableArity()
-                 .returnType("boolean")
-                 .build()}},
-        {"or",
-         std::vector<facebook::velox::exec::FunctionSignaturePtr>{
-             // Signature: or (condition,...) -> output:
-             // boolean, boolean,.. -> boolean
-             facebook::velox::exec::FunctionSignatureBuilder()
-                 .argumentType("boolean")
-                 .argumentType("boolean")
-                 .variableArity()
-                 .returnType("boolean")
-                 .build()}},
-        {"coalesce",
-         std::vector<facebook::velox::exec::FunctionSignaturePtr>{
-             // Signature: coalesce (input,...) -> output:
-             // T, T,.. -> T
-             facebook::velox::exec::FunctionSignatureBuilder()
-                 .typeVariable("T")
-                 .argumentType("T")
-                 .argumentType("T")
-                 .variableArity()
-                 .returnType("T")
-                 .build()}},
-        {
-            "if",
-            std::vector<facebook::velox::exec::FunctionSignaturePtr>{
-                // Signature: if (condition, then) -> output:
-                // boolean, T -> T
-                facebook::velox::exec::FunctionSignatureBuilder()
-                    .typeVariable("T")
-                    .argumentType("boolean")
-                    .argumentType("T")
-                    .returnType("T")
-                    .build(),
-                // Signature: if (condition, then, else) -> output:
-                // boolean, T, T -> T
-                facebook::velox::exec::FunctionSignatureBuilder()
-                    .typeVariable("T")
-                    .argumentType("boolean")
-                    .argumentType("T")
-                    .argumentType("T")
-                    .returnType("T")
-                    .build()},
-        },
-        {
-            "switch",
-            std::vector<facebook::velox::exec::FunctionSignaturePtr>{
-                // Signature: Switch (condition, then) -> output:
-                // boolean, T -> T
-                // This is only used to bind to a randomly selected type for the
-                // output, then while generating arguments, an override is used
-                // to generate inputs that can create variation of multiple
-                // cases and may or may not include a final else clause.
-                facebook::velox::exec::FunctionSignatureBuilder()
-                    .typeVariable("T")
-                    .argumentType("boolean")
-                    .argumentType("T")
-                    .returnType("T")
-                    .build()},
-        },
-        {
-            "cast",
-            /// TODO: Add supported Cast signatures to CastTypedExpr and expose
-            /// them to fuzzer instead of hard-coding signatures here.
-            getSignaturesForCast(),
-        },
-};
-
-static std::unordered_set<std::string> splitNames(const std::string& names) {
-  // Parse, lower case and trim it.
-  std::vector<folly::StringPiece> nameList;
-  folly::split(',', names, nameList);
-  std::unordered_set<std::string> nameSet;
-
-  for (const auto& it : nameList) {
-    auto str = folly::trimWhitespace(it).toString();
-    folly::toLowerAscii(str);
-    nameSet.insert(str);
-  }
-  return nameSet;
-}
 
 static std::pair<std::string, std::string> splitSignature(
     const std::string& signature) {
@@ -310,7 +115,7 @@ static void filterSignatures(
     const std::unordered_set<std::string>& skipFunctions) {
   if (!onlyFunctions.empty()) {
     // Parse, lower case and trim it.
-    auto nameSet = splitNames(onlyFunctions);
+    auto nameSet = exec::splitNames(onlyFunctions);
 
     // Use the generated set to filter the input signatures.
     for (auto it = input.begin(); it != input.end();) {
@@ -355,23 +160,6 @@ static void filterSignatures(
   }
 }
 
-static void appendSpecialForms(
-    facebook::velox::FunctionSignatureMap& signatureMap,
-    const std::string& specialForms) {
-  auto specialFormNames = splitNames(specialForms);
-  for (const auto& [name, signatures] : kSpecialForms) {
-    if (specialFormNames.count(name) == 0) {
-      LOG(INFO) << "Skipping special form: " << name;
-      continue;
-    }
-    std::vector<const facebook::velox::exec::FunctionSignature*> rawSignatures;
-    for (const auto& signature : signatures) {
-      rawSignatures.push_back(signature.get());
-    }
-    signatureMap.insert({name, std::move(rawSignatures)});
-  }
-}
-
 std::optional<CallableSignature> processConcreteSignature(
     const std::string& functionName,
     const std::vector<TypePtr>& argTypes,
@@ -385,8 +173,7 @@ std::optional<CallableSignature> processConcreteSignature(
       .name = functionName,
       .args = argTypes,
       .variableArity = signature.variableArity(),
-      .returnType =
-          SignatureBinder::tryResolveType(signature.returnType(), {}, {}),
+      .returnType = sanitizeTryResolveType(signature.returnType(), {}, {}),
       .constantArgs = signature.constantArguments()};
   VELOX_CHECK_NOT_NULL(callable.returnType);
 
@@ -403,54 +190,6 @@ std::optional<CallableSignature> processConcreteSignature(
     return std::nullopt;
   }
   return callable;
-}
-
-// Determine whether type is or contains typeName. typeName should be in lower
-// case.
-bool containTypeName(
-    const exec::TypeSignature& type,
-    const std::string& typeName) {
-  auto sanitizedTypeName = exec::sanitizeName(type.baseName());
-  if (sanitizedTypeName == typeName) {
-    return true;
-  }
-  for (const auto& parameter : type.parameters()) {
-    if (containTypeName(parameter, typeName)) {
-      return true;
-    }
-  }
-  return false;
-}
-
-// Determine whether the signature has an argument or return type that
-// contains typeName. typeName should be in lower case.
-bool useTypeName(
-    const exec::FunctionSignature& signature,
-    const std::string& typeName) {
-  if (containTypeName(signature.returnType(), typeName)) {
-    return true;
-  }
-  for (const auto& argument : signature.argumentTypes()) {
-    if (containTypeName(argument, typeName)) {
-      return true;
-    }
-  }
-  return false;
-}
-
-bool isSupportedSignature(
-    const exec::FunctionSignature& signature,
-    bool enableComplexType) {
-  // Not supporting lambda functions, or functions using decimal and
-  // timestamp with time zone types.
-  return !(
-      useTypeName(signature, "opaque") ||
-      useTypeName(signature, "long_decimal") ||
-      useTypeName(signature, "short_decimal") ||
-      useTypeName(signature, "decimal") ||
-      useTypeName(signature, "timestamp with time zone") ||
-      useTypeName(signature, "interval day to second") ||
-      (enableComplexType && useTypeName(signature, "unknown")));
 }
 
 /// Returns row numbers for non-null rows among all children in'data' or null
@@ -531,14 +270,16 @@ ExpressionFuzzer::ExpressionFuzzer(
     FunctionSignatureMap signatureMap,
     size_t initialSeed,
     const std::shared_ptr<VectorFuzzer>& vectorFuzzer,
-    const std::optional<ExpressionFuzzer::Options>& options)
+    const std::optional<ExpressionFuzzer::Options>& options,
+    const std::unordered_map<std::string, std::shared_ptr<ArgGenerator>>&
+        argGenerators)
     : options_(options.value_or(Options())),
       vectorFuzzer_(vectorFuzzer),
-      state{rng_, std::max(1, options_.maxLevelOfNesting)} {
+      state{rng_, std::max(1, options_.maxLevelOfNesting)},
+      argGenerators_(argGenerators) {
   VELOX_CHECK(vectorFuzzer, "Vector fuzzer must be provided");
   seed(initialSeed);
 
-  appendSpecialForms(signatureMap, options_.specialForms);
   filterSignatures(
       signatureMap, options_.useOnlyFunctions, options_.skipFunctions);
 
@@ -558,10 +299,11 @@ ExpressionFuzzer::ExpressionFuzzer(
     for (const auto& signature : function.second) {
       ++totalFunctionSignatures;
 
-      if (!isSupportedSignature(*signature, options_.enableComplexTypes)) {
+      if (!isSupportedSignature(*signature)) {
         continue;
       }
-      if (!(signature->variables().empty() || options_.enableComplexTypes)) {
+      if (!(signature->variables().empty() || options_.enableComplexTypes ||
+            options_.enableDecimalType)) {
         LOG(WARNING) << "Skipping unsupported signature: " << function.first
                      << signature->toString();
         continue;
@@ -588,7 +330,7 @@ ExpressionFuzzer::ExpressionFuzzer(
         std::vector<TypePtr> argTypes;
         bool supportedSignature = true;
         for (const auto& arg : signature->argumentTypes()) {
-          auto resolvedType = SignatureBinder::tryResolveType(arg, {}, {});
+          auto resolvedType = sanitizeTryResolveType(arg, {}, {});
           if (!resolvedType) {
             supportedSignature = false;
             continue;
@@ -628,19 +370,21 @@ ExpressionFuzzer::ExpressionFuzzer(
   LOG(INFO) << fmt::format(
       "Functions with at least one supported signature: {} ({:.2f}%)",
       supportedFunctions_.size(),
-      (double)supportedFunctions_.size() / totalFunctions * 100);
+      static_cast<double>(supportedFunctions_.size()) / totalFunctions * 100);
   LOG(INFO) << fmt::format(
       "Functions with no supported signature: {} ({:.2f}%)",
       unsupportedFunctions,
-      (double)unsupportedFunctions / totalFunctions * 100);
+      static_cast<double>(unsupportedFunctions) / totalFunctions * 100);
   LOG(INFO) << fmt::format(
       "Supported function signatures: {} ({:.2f}%)",
       supportedFunctionSignatures,
-      (double)supportedFunctionSignatures / totalFunctionSignatures * 100);
+      static_cast<double>(supportedFunctionSignatures) /
+          totalFunctionSignatures * 100);
   LOG(INFO) << fmt::format(
       "Unsupported function signatures: {} ({:.2f}%)",
       unsupportedFunctionSignatures,
-      (double)unsupportedFunctionSignatures / totalFunctionSignatures * 100);
+      static_cast<double>(unsupportedFunctionSignatures) /
+          totalFunctionSignatures * 100);
 
   getTicketsForFunctions();
 
@@ -669,8 +413,10 @@ ExpressionFuzzer::ExpressionFuzzer(
   sortSignatureTemplates(signatureTemplates_);
 
   for (const auto& it : signatureTemplates_) {
-    auto& returnType = it.signature->returnType().baseName();
-    auto* returnTypeKey = &returnType;
+    const auto returnType =
+        exec::sanitizeName(it.signature->returnType().baseName());
+    const auto* returnTypeKey = &returnType;
+
     if (it.typeVariables.find(returnType) != it.typeVariables.end()) {
       // Return type is a template variable.
       returnTypeKey = &kTypeParameterName;
@@ -690,6 +436,31 @@ ExpressionFuzzer::ExpressionFuzzer(
   // Register function override (for cases where we want to restrict the types
   // or parameters we pass to functions).
   registerFuncOverride(&ExpressionFuzzer::generateSwitchArgs, "switch");
+}
+
+bool ExpressionFuzzer::isSupportedSignature(
+    const exec::FunctionSignature& signature) {
+  // When enableComplexType is disabled, not supporting complex functions.
+  const bool useComplexType = usesTypeName(signature, "array") ||
+      usesTypeName(signature, "map") || usesTypeName(signature, "row");
+  // Not supporting functions using custom types, timestamp with time zone types
+  // and interval day to second types.
+  if (usesTypeName(signature, "opaque") ||
+      usesTypeName(signature, "timestamp with time zone") ||
+      usesTypeName(signature, "interval day to second") ||
+      usesTypeName(signature, "ipprefix") ||
+      (!options_.enableDecimalType && usesTypeName(signature, "decimal")) ||
+      (!options_.enableComplexTypes && useComplexType) ||
+      (options_.enableComplexTypes && usesTypeName(signature, "unknown"))) {
+    return false;
+  }
+
+  if (options_.referenceQueryRunner &&
+      !options_.referenceQueryRunner->isSupported(signature)) {
+    return false;
+  }
+
+  return true;
 }
 
 void ExpressionFuzzer::getTicketsForFunctions() {
@@ -744,7 +515,7 @@ void ExpressionFuzzer::addToTypeToExpressionListByTicketTimes(
     const std::string& funcName) {
   int tickets = getTickets(funcName);
   for (int i = 0; i < tickets; i++) {
-    typeToExpressionList_[type].push_back(funcName);
+    typeToExpressionList_[exec::sanitizeName(type)].push_back(funcName);
   }
 }
 
@@ -818,7 +589,11 @@ core::TypedExprPtr ExpressionFuzzer::generateArg(const TypePtr& arg) {
   }
 
   if (argClass == kArgConstant) {
-    return generateArgConstant(arg);
+    auto argExpr = generateArgConstant(arg);
+    if ((options_.referenceQueryRunner == nullptr ||
+         options_.referenceQueryRunner->isConstantExprSupported(argExpr))) {
+      return argExpr;
+    }
   }
   // argClass == kArgColumn
   return generateArgColumn(arg);
@@ -892,18 +667,31 @@ core::TypedExprPtr ExpressionFuzzer::generateArgFunction(const TypePtr& arg) {
     }
   }
 
+  core::TypedExprPtr body;
   if (eligible.empty()) {
-    return std::make_shared<core::LambdaTypedExpr>(
-        ROW(std::move(names), std::move(args)),
-        generateArgConstant(returnType));
+    body = generateArgConstant(returnType);
+    if (options_.referenceQueryRunner == nullptr ||
+        options_.referenceQueryRunner->isConstantExprSupported(body)) {
+      return std::make_shared<core::LambdaTypedExpr>(
+          ROW(std::move(names), std::move(args)), body);
+    } else {
+      return std::make_shared<core::LambdaTypedExpr>(
+          ROW(std::move(names), std::move(args)),
+          generateArgColumn(returnType));
+    }
   }
 
   const auto idx = rand32(0, eligible.size() - 1);
   const auto name = eligible[idx];
 
+  if (name == "cast") {
+    bool tryCast = rand32(0, 1);
+    body = std::make_shared<core::CastTypedExpr>(returnType, inputs, tryCast);
+  } else {
+    body = std::make_shared<core::CallTypedExpr>(returnType, inputs, name);
+  }
   return std::make_shared<core::LambdaTypedExpr>(
-      ROW(std::move(names), std::move(args)),
-      std::make_shared<core::CallTypedExpr>(returnType, inputs, name));
+      ROW(std::move(names), std::move(args)), body);
 }
 
 core::TypedExprPtr ExpressionFuzzer::generateArg(
@@ -1006,28 +794,52 @@ core::TypedExprPtr ExpressionFuzzer::generateExpression(
       chosenFunctionName = templateList[chosenExprIndex];
     }
 
-    if (chosenFunctionName == "cast") {
-      expression = generateCastExpression(returnType);
-    } else if (chosenFunctionName == "row_constructor") {
-      // Avoid generating deeply nested types that is rarely used in practice.
-      if (levelOfNesting(returnType) < 3) {
-        expression = generateRowConstructorExpression(returnType);
-      }
-    } else if (chosenFunctionName == "dereference") {
-      expression = generateDereferenceExpression(returnType);
-    } else {
-      expression = generateExpressionFromConcreteSignatures(
-          returnType, chosenFunctionName);
-      if (!expression && options_.enableComplexTypes) {
-        expression = generateExpressionFromSignatureTemplate(
+    auto exprTransformer = options_.exprTransformers.find(chosenFunctionName);
+    if (exprTransformer != options_.exprTransformers.end()) {
+      state.remainingLevelOfNesting_ -=
+          exprTransformer->second->extraLevelOfNesting();
+    }
+
+    if (state.remainingLevelOfNesting_ >= 0) {
+      if (chosenFunctionName == "cast") {
+        expression = generateCastExpression(returnType);
+      } else if (chosenFunctionName == "row_constructor") {
+        // Avoid generating deeply nested types that is rarely used in practice.
+        if (levelOfNesting(returnType) < 3) {
+          expression = generateRowConstructorExpression(returnType);
+        }
+      } else if (chosenFunctionName == "dereference") {
+        expression = generateDereferenceExpression(returnType);
+      } else {
+        expression = generateExpressionFromConcreteSignatures(
             returnType, chosenFunctionName);
+        if (!expression &&
+            (options_.enableComplexTypes || options_.enableDecimalType)) {
+          expression = generateExpressionFromSignatureTemplate(
+              returnType, chosenFunctionName);
+        }
       }
+    }
+
+    if (exprTransformer != options_.exprTransformers.end()) {
+      if (expression) {
+        expression = exprTransformer->second->transform(std::move(expression));
+      }
+      state.remainingLevelOfNesting_ +=
+          exprTransformer->second->extraLevelOfNesting();
     }
   }
   if (!expression) {
     VLOG(1) << "Couldn't find a proper function to return '"
-            << returnType->toString() << "'. Returning a constant instead.";
-    return generateArgConstant(returnType);
+            << returnType->toString()
+            << "'. Returning a constant or column instead.";
+    expression = generateArgConstant(returnType);
+    if (options_.referenceQueryRunner == nullptr ||
+        options_.referenceQueryRunner->isConstantExprSupported(expression)) {
+      return expression;
+    } else {
+      return generateArgColumn(returnType);
+    }
   }
   state.expressionBank_.insert(expression);
   return expression;
@@ -1213,8 +1025,26 @@ core::TypedExprPtr ExpressionFuzzer::generateExpressionFromSignatureTemplate(
 
   auto chosenSignature = *chosen->signature;
   ArgumentTypeFuzzer fuzzer{chosenSignature, returnType, rng_};
-  VELOX_CHECK_EQ(fuzzer.fuzzArgumentTypes(options_.maxNumVarArgs), true);
-  auto& argumentTypes = fuzzer.argumentTypes();
+
+  std::vector<TypePtr> argumentTypes;
+  if (fuzzer.fuzzArgumentTypes(options_.maxNumVarArgs)) {
+    // Use the argument fuzzer to generate argument types.
+    argumentTypes = fuzzer.argumentTypes();
+  } else {
+    auto it = argGenerators_.find(functionName);
+    // Since the argument type fuzzer cannot produce argument types, argument
+    // generators should be provided.
+    VELOX_CHECK(
+        it != argGenerators_.end(),
+        "Cannot generate argument types for {} with return type {}.",
+        functionName,
+        returnType->toString());
+    argumentTypes = it->second->generateArgs(chosenSignature, returnType, rng_);
+    if (argumentTypes.empty()) {
+      return nullptr;
+    }
+  }
+
   auto constantArguments = chosenSignature.constantArguments();
 
   // ArgumentFuzzer may generate duplicate arguments if the signature's

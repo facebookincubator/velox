@@ -91,7 +91,7 @@
 /* End of lines added by Chuck McDevitt for WIN32 support */
 #include "dbgen/dsstypes.h" // @manual
 
-static char alpha_num[65] =
+static const char* alpha_num =
     "0123456789abcdefghijklmnopqrstuvwxyz ABCDEFGHIJKLMNOPQRSTUVWXYZ,";
 
 #if defined(__STDC__) || defined(__cplusplus)
@@ -103,6 +103,9 @@ static char alpha_num[65] =
 #ifndef WIN32
 char* getenv PROTO((const char* name));
 #endif
+
+namespace facebook::velox::tpch::dbgen {
+
 void usage();
 void permute_dist(distribution* d, seed_t* seed);
 
@@ -150,8 +153,8 @@ void e_str(distribution* d, int min, int max, seed_t* seed, char* dest) {
 
   tpch_a_rnd(min, max, seed, dest);
   pick_str(d, seed, strtmp);
-  len = (int)strlen(strtmp);
-  RANDOM(loc, 0, ((int)strlen(dest) - 1 - len), seed);
+  len = static_cast<int>(strlen(strtmp));
+  RANDOM(loc, 0, (static_cast<int>(strlen(dest)) - 1 - len), seed);
   memcpy(dest + loc, strtmp, sizeof(char) * len);
 
   return;
@@ -218,7 +221,11 @@ long julian(long date) {
   return (result + offset);
 }
 
+} // namespace facebook::velox::tpch::dbgen
+
 #include "dbgen/dists_dss.h" // @manual
+
+namespace facebook::velox::tpch::dbgen {
 
 static char
 read_line_into_buffer(char* buffer, size_t bufsiz, const char** src) {
@@ -270,12 +277,14 @@ void read_dist(const char* path, const char* name, distribution* target) {
 
     if (!dsscasecmp(token, "count")) {
       target->count = weight;
-      target->list = (set_member*)malloc((size_t)(weight * sizeof(set_member)));
+      target->list = reinterpret_cast<set_member*>(
+          malloc(static_cast<size_t>(weight * sizeof(set_member))));
       MALLOC_CHECK(target->list);
       target->max = 0;
       continue;
     }
-    target->list[count].text = (char*)malloc((size_t)((int)strlen(token) + 1));
+    target->list[count].text = reinterpret_cast<char*>(
+        malloc(static_cast<size_t>((static_cast<int>(strlen(token)) + 1))));
     MALLOC_CHECK(target->list[count].text);
     strcpy(target->list[count].text, token);
     target->max += weight;
@@ -288,7 +297,7 @@ void read_dist(const char* path, const char* name, distribution* target) {
     fprintf(stderr, "Read error on dist '%s'\n", name);
     exit(1);
   }
-  target->permute = (long*)NULL;
+  target->permute = reinterpret_cast<long*>(NULL);
   return;
 }
 
@@ -308,7 +317,7 @@ void agg_str(distribution* set, long count, seed_t* seed, char* dest) {
     strcat(dest, DIST_MEMBER(set, DIST_PERMUTE(d, i)));
     strcat(dest, " ");
   }
-  *(dest + (int)strlen(dest) - 1) = '\0';
+  *(dest + static_cast<int>(strlen(dest)) - 1) = '\0';
 
   return;
 }
@@ -391,7 +400,8 @@ char** mk_ascdate(void) {
   dss_time_t t;
   DSS_HUGE i;
 
-  m = (char**)malloc((size_t)(TOTDATE * sizeof(char*)));
+  m = reinterpret_cast<char**>(
+      malloc(static_cast<size_t>(TOTDATE * sizeof(char*))));
   MALLOC_CHECK(m);
   for (i = 0; i < TOTDATE; i++) {
     mk_time(i + 1, &t);
@@ -444,3 +454,5 @@ set_state(
 
   return (result);
 }
+
+} // namespace facebook::velox::tpch::dbgen

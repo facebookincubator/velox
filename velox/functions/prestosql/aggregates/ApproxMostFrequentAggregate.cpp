@@ -159,9 +159,17 @@ struct ApproxMostFrequentAggregate : exec::Aggregate {
     auto rowVec = (*result)->as<RowVector>();
     VELOX_CHECK(rowVec);
     rowVec->childAt(0) = std::make_shared<ConstantVector<int64_t>>(
-        rowVec->pool(), numGroups, false, BIGINT(), int64_t(buckets_));
+        rowVec->pool(),
+        numGroups,
+        false,
+        BIGINT(),
+        static_cast<int64_t&&>(buckets_));
     rowVec->childAt(1) = std::make_shared<ConstantVector<int64_t>>(
-        rowVec->pool(), numGroups, false, BIGINT(), int64_t(capacity_));
+        rowVec->pool(),
+        numGroups,
+        false,
+        BIGINT(),
+        static_cast<int64_t&&>(capacity_));
     auto values = rowVec->childAt(2)->as<ArrayVector>();
     auto counts = rowVec->childAt(3)->as<ArrayVector>();
     rowVec->resize(numGroups);
@@ -469,7 +477,13 @@ void registerApproxMostFrequentAggregate(
     bool overwrite) {
   std::vector<std::shared_ptr<exec::AggregateFunctionSignature>> signatures;
   for (const auto& valueType :
-       {"boolean", "tinyint", "smallint", "integer", "bigint", "varchar"}) {
+       {"boolean",
+        "tinyint",
+        "smallint",
+        "integer",
+        "bigint",
+        "varchar",
+        "json"}) {
     signatures.push_back(
         exec::AggregateFunctionSignatureBuilder()
             .returnType(fmt::format("map({},bigint)", valueType))

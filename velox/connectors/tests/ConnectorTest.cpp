@@ -16,6 +16,7 @@
 
 #include "velox/connectors/Connector.h"
 #include "velox/common/base/tests/GTestUtils.h"
+#include "velox/common/config/Config.h"
 
 #include <gtest/gtest.h>
 
@@ -57,8 +58,9 @@ class TestConnectorFactory : public connector::ConnectorFactory {
 
   std::shared_ptr<Connector> newConnector(
       const std::string& id,
-      std::shared_ptr<const Config> /*config*/,
-      folly::Executor* /*executor*/ = nullptr) override {
+      std::shared_ptr<const config::ConfigBase> /*config*/,
+      folly::Executor* /*ioExecutor*/ = nullptr,
+      folly::Executor* /*cpuExecutor*/ = nullptr) override {
     return std::make_shared<TestConnector>(id);
   }
 };
@@ -75,7 +77,10 @@ TEST_F(ConnectorTest, getAllConnectors) {
   for (int32_t i = 0; i < numConnectors; i++) {
     registerConnector(
         getConnectorFactory(TestConnectorFactory::kConnectorFactoryName)
-            ->newConnector(fmt::format("connector-{}", i), {}));
+            ->newConnector(
+                fmt::format("connector-{}", i),
+                std::make_shared<config::ConfigBase>(
+                    std::unordered_map<std::string, std::string>())));
   }
   const auto& connectors = getAllConnectors();
   EXPECT_EQ(connectors.size(), numConnectors);
@@ -90,5 +95,26 @@ TEST_F(ConnectorTest, getAllConnectors) {
       unregisterConnectorFactory(TestConnectorFactory::kConnectorFactoryName));
   EXPECT_FALSE(
       unregisterConnectorFactory(TestConnectorFactory::kConnectorFactoryName));
+}
+
+TEST_F(ConnectorTest, connectorSplit) {
+  {
+    const ConnectorSplit split("test", 100, true);
+    ASSERT_EQ(split.connectorId, "test");
+    ASSERT_EQ(split.splitWeight, 100);
+    ASSERT_EQ(split.cacheable, true);
+    ASSERT_EQ(
+        split.toString(),
+        "[split: connector id test, weight 100, cacheable true]");
+  }
+  {
+    const ConnectorSplit split("test", 50, false);
+    ASSERT_EQ(split.connectorId, "test");
+    ASSERT_EQ(split.splitWeight, 50);
+    ASSERT_EQ(split.cacheable, false);
+    ASSERT_EQ(
+        split.toString(),
+        "[split: connector id test, weight 50, cacheable false]");
+  }
 }
 } // namespace facebook::velox::connector

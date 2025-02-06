@@ -163,8 +163,9 @@ class TestConnectorFactory : public connector::ConnectorFactory {
 
   std::shared_ptr<connector::Connector> newConnector(
       const std::string& id,
-      std::shared_ptr<const Config> config,
-      folly::Executor* /* executor */) override {
+      std::shared_ptr<const config::ConfigBase> config,
+      folly::Executor* /* ioExecutor */,
+      folly::Executor* /* cpuExecutor */) override {
     return std::make_shared<TestConnector>(id);
   }
 };
@@ -179,7 +180,10 @@ class AsyncConnectorTest : public OperatorTestBase {
     auto testConnector =
         connector::getConnectorFactory(TestConnectorFactory::kTestConnectorName)
             ->newConnector(
-                kTestConnectorId, std::make_shared<core::MemConfig>(), nullptr);
+                kTestConnectorId,
+                std::make_shared<config::ConfigBase>(
+                    std::unordered_map<std::string, std::string>()),
+                nullptr);
     connector::registerConnector(testConnector);
   }
 

@@ -65,6 +65,14 @@ DEFINE_double(
     "vector will be selected to be wrapped in lazy encoding "
     "(expressed as double from 0 to 1).");
 
+DEFINE_double(
+    common_dictionary_wraps_generation_ratio,
+    0.0,
+    "Specifies the probability with which columns in the input row "
+    "vector will be selected to be wrapped in a common dictionary wrap "
+    "(expressed as double from 0 to 1). Only columns not already encoded "
+    "will be considered.");
+
 DEFINE_int32(
     max_expression_trees_per_step,
     1,
@@ -122,6 +130,11 @@ DEFINE_bool(
     "Enable testing of function signatures with complex argument or return types.");
 
 DEFINE_bool(
+    velox_fuzzer_enable_decimal_type,
+    false,
+    "Enable testing of function signatures with decimal argument or return types.");
+
+DEFINE_bool(
     velox_fuzzer_enable_column_reuse,
     false,
     "Enable generation of expressions where one input column can be "
@@ -157,17 +170,23 @@ VectorFuzzer::Options getVectorFuzzerOptions() {
   opts.stringVariableLength = true;
   opts.stringLength = 100;
   opts.nullRatio = FLAGS_null_ratio;
+  opts.timestampPrecision =
+      VectorFuzzer::Options::TimestampPrecision::kMilliSeconds;
   return opts;
 }
 
 ExpressionFuzzer::Options getExpressionFuzzerOptions(
-    const std::unordered_set<std::string>& skipFunctions) {
+    const std::unordered_set<std::string>& skipFunctions,
+    const std::unordered_map<std::string, std::shared_ptr<ExprTransformer>>&
+        exprTransformers,
+    std::shared_ptr<exec::test::ReferenceQueryRunner> referenceQueryRunner) {
   ExpressionFuzzer::Options opts;
   opts.maxLevelOfNesting = FLAGS_velox_fuzzer_max_level_of_nesting;
   opts.maxNumVarArgs = FLAGS_max_num_varargs;
   opts.enableVariadicSignatures = FLAGS_enable_variadic_signatures;
   opts.enableDereference = FLAGS_enable_dereference;
   opts.enableComplexTypes = FLAGS_velox_fuzzer_enable_complex_types;
+  opts.enableDecimalType = FLAGS_velox_fuzzer_enable_decimal_type;
   opts.enableColumnReuse = FLAGS_velox_fuzzer_enable_column_reuse;
   opts.enableExpressionReuse = FLAGS_velox_fuzzer_enable_expression_reuse;
   opts.functionTickets = FLAGS_assign_function_tickets;
@@ -175,12 +194,17 @@ ExpressionFuzzer::Options getExpressionFuzzerOptions(
   opts.specialForms = FLAGS_special_forms;
   opts.useOnlyFunctions = FLAGS_only;
   opts.skipFunctions = skipFunctions;
+  opts.referenceQueryRunner = referenceQueryRunner;
+  opts.exprTransformers = exprTransformers;
   return opts;
 }
 
 ExpressionFuzzerVerifier::Options getExpressionFuzzerVerifierOptions(
     const std::unordered_set<std::string>& skipFunctions,
-    const std::unordered_map<std::string, std::string>& queryConfigs) {
+    const std::unordered_map<std::string, std::shared_ptr<ExprTransformer>>&
+        exprTransformers,
+    const std::unordered_map<std::string, std::string>& queryConfigs,
+    std::shared_ptr<exec::test::ReferenceQueryRunner> referenceQueryRunner) {
   ExpressionFuzzerVerifier::Options opts;
   opts.steps = FLAGS_steps;
   opts.durationSeconds = FLAGS_duration_sec;
@@ -191,9 +215,12 @@ ExpressionFuzzerVerifier::Options getExpressionFuzzerVerifierOptions(
   opts.reproPersistPath = FLAGS_repro_persist_path;
   opts.persistAndRunOnce = FLAGS_persist_and_run_once;
   opts.lazyVectorGenerationRatio = FLAGS_lazy_vector_generation_ratio;
+  opts.commonDictionaryWrapRatio =
+      FLAGS_common_dictionary_wraps_generation_ratio;
   opts.maxExpressionTreesPerStep = FLAGS_max_expression_trees_per_step;
   opts.vectorFuzzerOptions = getVectorFuzzerOptions();
-  opts.expressionFuzzerOptions = getExpressionFuzzerOptions(skipFunctions);
+  opts.expressionFuzzerOptions = getExpressionFuzzerOptions(
+      skipFunctions, exprTransformers, referenceQueryRunner);
   opts.queryConfigs = queryConfigs;
   return opts;
 }
@@ -204,8 +231,22 @@ ExpressionFuzzerVerifier::Options getExpressionFuzzerVerifierOptions(
 int FuzzerRunner::run(
     size_t seed,
     const std::unordered_set<std::string>& skipFunctions,
-    const std::unordered_map<std::string, std::string>& queryConfigs) {
-  runFromGtest(seed, skipFunctions, queryConfigs);
+    const std::unordered_map<std::string, std::shared_ptr<ExprTransformer>>&
+        exprTransformers,
+    const std::unordered_map<std::string, std::string>& queryConfigs,
+    const std::unordered_map<std::string, std::shared_ptr<ArgGenerator>>&
+        argGenerators,
+    std::shared_ptr<exec::test::ReferenceQueryRunner> referenceQueryRunner,
+    const std::shared_ptr<SpecialFormSignatureGenerator>&
+        specialFormSignatureGenerator) {
+  runFromGtest(
+      seed,
+      skipFunctions,
+      exprTransformers,
+      queryConfigs,
+      argGenerators,
+      referenceQueryRunner,
+      specialFormSignatureGenerator);
   return RUN_ALL_TESTS();
 }
 
@@ -213,13 +254,23 @@ int FuzzerRunner::run(
 void FuzzerRunner::runFromGtest(
     size_t seed,
     const std::unordered_set<std::string>& skipFunctions,
-    const std::unordered_map<std::string, std::string>& queryConfigs) {
-  memory::MemoryManager::testingSetInstance({});
+    const std::unordered_map<std::string, std::shared_ptr<ExprTransformer>>&
+        exprTransformers,
+    const std::unordered_map<std::string, std::string>& queryConfigs,
+    const std::unordered_map<std::string, std::shared_ptr<ArgGenerator>>&
+        argGenerators,
+    std::shared_ptr<exec::test::ReferenceQueryRunner> referenceQueryRunner,
+    const std::shared_ptr<SpecialFormSignatureGenerator>&
+        specialFormSignatureGenerator) {
+  if (!memory::MemoryManager::testInstance()) {
+    memory::MemoryManager::testingSetInstance({});
+  }
   auto signatures = facebook::velox::getFunctionSignatures();
-  ExpressionFuzzerVerifier(
-      signatures,
-      seed,
-      getExpressionFuzzerVerifierOptions(skipFunctions, queryConfigs))
-      .go();
+  const auto options = getExpressionFuzzerVerifierOptions(
+      skipFunctions, exprTransformers, queryConfigs, referenceQueryRunner);
+  // Insert generated signatures of special forms into the signature map.
+  specialFormSignatureGenerator->appendSpecialForms(
+      signatures, options.expressionFuzzerOptions.specialForms);
+  ExpressionFuzzerVerifier(signatures, seed, options, argGenerators).go();
 }
 } // namespace facebook::velox::fuzzer

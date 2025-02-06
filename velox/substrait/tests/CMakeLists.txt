@@ -56,10 +56,9 @@ target_link_libraries(
   Boost::regex
   Boost::thread
   Boost::system
-  gtest
-  gtest_main
+  GTest::gtest
+  GTest::gtest_main
   Folly::folly
   gflags::gflags
   glog::glog
-  fmt::fmt
-  ${FILESYSTEM})
+  fmt::fmt)

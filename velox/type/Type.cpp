@@ -119,7 +119,7 @@ std::string mapTypeKindToName(const TypeKind& typeKind) {
   return found->second;
 }
 
-std::pair<int, int> getDecimalPrecisionScale(const Type& type) {
+std::pair<uint8_t, uint8_t> getDecimalPrecisionScale(const Type& type) {
   if (type.isShortDecimal()) {
     const auto& decimalType = static_cast<const ShortDecimalType&>(type);
     return {decimalType.precision(), decimalType.scale()};
@@ -244,6 +244,17 @@ bool ArrayType::equivalent(const Type& other) const {
   return child_->equivalent(*otherArray.child_);
 }
 
+bool ArrayType::equals(const Type& other) const {
+  if (&other == this) {
+    return true;
+  }
+  if (!Type::hasSameTypeId(other)) {
+    return false;
+  }
+  auto& otherArray = other.asArray();
+  return *child_ == *otherArray.child_;
+}
+
 folly::dynamic ArrayType::serialize() const {
   folly::dynamic obj = folly::dynamic::object;
   obj["name"] = "Type";
@@ -365,14 +376,6 @@ std::unique_ptr<std::vector<TypeParameter>> RowType::makeParameters() const {
       createTypeParameters(children_));
 }
 
-uint32_t RowType::size() const {
-  return children_.size();
-}
-
-const TypePtr& RowType::childAt(uint32_t idx) const {
-  return children_.at(idx);
-}
-
 namespace {
 template <typename T>
 std::string makeFieldNotFoundErrorMessage(
@@ -418,7 +421,7 @@ bool RowType::containsChild(std::string_view name) const {
   return std::find(names_.begin(), names_.end(), name) != names_.end();
 }
 
-uint32_t RowType::getChildIdx(const std::string& name) const {
+uint32_t RowType::getChildIdx(std::string_view name) const {
   auto index = getChildIdxIfExists(name);
   if (!index.has_value()) {
     VELOX_USER_FAIL(makeFieldNotFoundErrorMessage(name, names_));
@@ -427,7 +430,7 @@ uint32_t RowType::getChildIdx(const std::string& name) const {
 }
 
 std::optional<uint32_t> RowType::getChildIdxIfExists(
-    const std::string& name) const {
+    std::string_view name) const {
   for (uint32_t i = 0; i < names_.size(); i++) {
     if (names_.at(i) == name) {
       return i;
@@ -474,14 +477,6 @@ bool RowType::equals(const Type& other) const {
     }
   }
   return true;
-}
-
-bool RowType::operator==(const Type& other) const {
-  return this->equals(other);
-}
-
-bool RowType::operator==(const RowType& other) const {
-  return this->equals(other);
 }
 
 void RowType::printChildren(std::stringstream& ss, std::string_view delimiter)
@@ -569,6 +564,17 @@ bool MapType::equivalent(const Type& other) const {
       valueType_->equivalent(*otherMap.valueType_);
 }
 
+bool MapType::equals(const Type& other) const {
+  if (&other == this) {
+    return true;
+  }
+  if (!Type::hasSameTypeId(other)) {
+    return false;
+  }
+  auto& otherMap = other.asMap();
+  return *keyType_ == *otherMap.keyType_ && *valueType_ == *otherMap.valueType_;
+}
+
 FunctionType::FunctionType(
     std::vector<std::shared_ptr<const Type>>&& argumentTypes,
     std::shared_ptr<const Type> returnType)
@@ -591,6 +597,29 @@ bool FunctionType::equivalent(const Type& other) const {
 
   for (auto i = 0; i < children_.size(); ++i) {
     if (!children_.at(i)->equivalent(*otherTyped.children_.at(i))) {
+      return false;
+    }
+  }
+
+  return true;
+}
+
+bool FunctionType::equals(const Type& other) const {
+  if (&other == this) {
+    return true;
+  }
+
+  if (!Type::hasSameTypeId(other)) {
+    return false;
+  }
+
+  auto& otherTyped = *reinterpret_cast<const FunctionType*>(&other);
+  if (children_.size() != otherTyped.size()) {
+    return false;
+  }
+
+  for (auto i = 0; i < children_.size(); ++i) {
+    if (*children_.at(i) != *otherTyped.children_.at(i)) {
       return false;
     }
   }
@@ -629,10 +658,7 @@ bool OpaqueType::equivalent(const Type& other) const {
   return true;
 }
 
-bool OpaqueType::operator==(const Type& other) const {
-  if (&other == this) {
-    return true;
-  }
+bool OpaqueType::equals(const Type& other) const {
   if (!this->equivalent(other)) {
     return false;
   }
@@ -684,6 +710,12 @@ OpaqueType::DeserializeFunc<void> OpaqueType::getDeserializeFunc() const {
 std::shared_ptr<const OpaqueType> OpaqueType::deserializeExtra(
     const folly::dynamic&) const {
   return nullptr;
+}
+
+void OpaqueType::clearSerializationRegistry() {
+  auto& registry = OpaqueSerdeRegistry::get();
+  registry.mapping.clear();
+  registry.reverse.clear();
 }
 
 void OpaqueType::registerSerializationTypeErased(
@@ -839,6 +871,33 @@ bool Type::containsUnknown() const {
   return false;
 }
 
+std::string Type::toSummaryString(TypeSummaryOptions options) const {
+  std::ostringstream out;
+  out << kindName();
+
+  const auto cnt = std::min(options.maxChildren, size());
+  if (cnt > 0) {
+    out << "(";
+    for (auto i = 0; i < cnt; ++i) {
+      if (i > 0) {
+        out << ", ";
+      }
+      out << childAt(i)->kindName();
+    }
+
+    if (cnt < size()) {
+      out << ", ..." << (size() - cnt) << " more";
+    }
+    out << ")";
+  } else {
+    if (kind_ == TypeKind::ROW) {
+      out << "(" << size() << ")";
+    }
+  }
+
+  return out.str();
+}
+
 namespace {
 
 std::unordered_map<std::string, std::unique_ptr<const CustomTypeFactories>>&
@@ -850,6 +909,18 @@ typeFactories() {
 }
 
 } // namespace
+
+std::unordered_map<std::string, std::type_index>& getTypeIndexByOpaqueAlias() {
+  static std::unordered_map<std::string, std::type_index>
+      typeIndexByOpaqueAlias;
+  return typeIndexByOpaqueAlias;
+}
+
+std::unordered_map<std::type_index, std::string>& getOpaqueAliasByTypeIndex() {
+  static std::unordered_map<std::type_index, std::string>
+      opaqueAliasByTypeIndexMap;
+  return opaqueAliasByTypeIndexMap;
+}
 
 bool registerCustomType(
     const std::string& name,
@@ -901,6 +972,21 @@ exec::CastOperatorPtr getCustomTypeCastOperator(const std::string& name) {
   auto factories = getTypeFactories(name);
   if (factories) {
     return factories->getCastOperator();
+  }
+
+  return nullptr;
+}
+
+CustomTypeFactories::~CustomTypeFactories() = default;
+
+AbstractInputGenerator::~AbstractInputGenerator() = default;
+
+AbstractInputGeneratorPtr getCustomTypeInputGenerator(
+    const std::string& name,
+    const InputGeneratorConfig& config) {
+  auto factories = getTypeFactories(name);
+  if (factories) {
+    return factories->getInputGenerator(config);
   }
 
   return nullptr;
@@ -1172,4 +1258,21 @@ TypePtr getType(
   return getCustomType(name);
 }
 
+std::type_index getTypeIdForOpaqueTypeAlias(const std::string& name) {
+  auto it = getTypeIndexByOpaqueAlias().find(name);
+  VELOX_CHECK(
+      it != getTypeIndexByOpaqueAlias().end(),
+      "Could not find type '{}'. Did you call registerOpaqueType?",
+      name);
+  return it->second;
+}
+
+std::string getOpaqueAliasForTypeId(std::type_index typeIndex) {
+  auto it = getOpaqueAliasByTypeIndex().find(typeIndex);
+  VELOX_CHECK(
+      it != getOpaqueAliasByTypeIndex().end(),
+      "Could not find type index '{}'. Did you call registerOpaqueType?",
+      typeIndex.name());
+  return it->second;
+}
 } // namespace facebook::velox

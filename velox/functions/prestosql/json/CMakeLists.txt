@@ -15,10 +15,11 @@ velox_add_library(
   velox_functions_json
   JsonExtractor.cpp
   JsonPathTokenizer.cpp
+  JsonStringUtil.cpp
   SIMDJsonExtractor.cpp
   SIMDJsonUtil.cpp)
 
-velox_link_libraries(velox_functions_json velox_exception Folly::folly
+velox_link_libraries(velox_functions_json velox_functions_lib
                      simdjson::simdjson)
 
 if(${VELOX_BUILD_TESTING})

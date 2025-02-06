@@ -26,7 +26,7 @@ class WriterBase {
  public:
   explicit WriterBase(std::unique_ptr<dwio::common::FileSink> sink)
       : sink_{std::move(sink)} {
-    DWIO_ENSURE_NOT_NULL(sink_);
+    VELOX_CHECK_NOT_NULL(sink_);
   }
 
   virtual ~WriterBase() = default;
@@ -50,17 +50,17 @@ class WriterBase {
   }
 
   const WriterContext& getContext() const {
-    DWIO_ENSURE_NOT_NULL(context_);
+    VELOX_CHECK_NOT_NULL(context_);
     return *context_;
   }
 
   WriterSink& getSink() {
-    DWIO_ENSURE_NOT_NULL(writerSink_);
+    VELOX_CHECK_NOT_NULL(writerSink_);
     return *writerSink_;
   }
 
   const WriterSink& getSink() const {
-    DWIO_ENSURE_NOT_NULL(writerSink_);
+    VELOX_CHECK_NOT_NULL(writerSink_);
     return *writerSink_;
   }
 
@@ -74,9 +74,16 @@ class WriterBase {
   void initContext(
       const std::shared_ptr<const Config>& config,
       std::shared_ptr<velox::memory::MemoryPool> pool,
+      const tz::TimeZone* sessionTimezone = nullptr,
+      const bool adjustTimestampToTimezone = false,
       std::unique_ptr<encryption::EncryptionHandler> handler = nullptr) {
     context_ = std::make_unique<WriterContext>(
-        config, std::move(pool), sink_->metricsLog(), std::move(handler));
+        config,
+        std::move(pool),
+        sink_->metricsLog(),
+        sessionTimezone,
+        adjustTimestampToTimezone,
+        std::move(handler));
     writerSink_ = std::make_unique<WriterSink>(
         *sink_,
         context_->getMemoryPool(MemoryUsageCategory::OUTPUT_STREAM),
@@ -86,7 +93,7 @@ class WriterBase {
   void initBuffers();
 
   WriterContext& getContext() {
-    DWIO_ENSURE_NOT_NULL(context_);
+    VELOX_CHECK_NOT_NULL(context_);
     return *context_;
   }
 
@@ -149,7 +156,7 @@ class WriterBase {
       uint64_t streamSize) {
     if (context_->streamSizeAboveThresholdCheckEnabled()) {
       // Jolly doesn't support Streams bigger than 2GB.
-      DWIO_ENSURE_LE(
+      VELOX_CHECK_LE(
           streamSize,
           std::numeric_limits<int32_t>::max(),
           "Stream is bigger than 2GB ",

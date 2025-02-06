@@ -649,7 +649,7 @@ void OutputBuffer::updateAfterAcknowledgeLocked(
   uint64_t freedBytes{0};
   int freedPages{0};
   for (const auto& free : freed) {
-    if (free.unique()) {
+    if (free.use_count() == 1) {
       ++freedPages;
       freedBytes += free->size();
     }
@@ -777,7 +777,7 @@ std::string OutputBuffer::toStringLocked() const {
 }
 
 double OutputBuffer::getUtilization() const {
-  return bufferedBytes_ / (double)maxSize_;
+  return bufferedBytes_ / static_cast<double>(maxSize_);
 }
 
 bool OutputBuffer::isOverutilized() const {

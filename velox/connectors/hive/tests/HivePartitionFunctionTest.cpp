@@ -17,13 +17,15 @@
 #include "gtest/gtest.h"
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/connectors/hive/HiveConnector.h"
+#include "velox/exec/OperatorUtils.h"
 #include "velox/vector/fuzzer/VectorFuzzer.h"
 #include "velox/vector/tests/utils/VectorTestBase.h"
 
+using namespace facebook;
 using namespace facebook::velox;
 
 class HivePartitionFunctionTest : public ::testing::Test,
-                                  public test::VectorTestBase {
+                                  public velox::test::VectorTestBase {
  protected:
   static void SetUpTestCase() {
     memory::MemoryManager::testingSetInstance({});
@@ -319,23 +321,17 @@ TEST_F(HivePartitionFunctionTest, arrayElementsEncoded) {
   auto rawSizes = sizesBuffer->asMutable<vector_size_t>();
   auto rawNulls = nullsBuffer->asMutable<uint64_t>();
 
-  // Make the elements overlap and have gaps.
+  // Make the elements have gaps.
   // Set the values in position 2 to be invalid since that Array should be null.
   std::vector<vector_size_t> offsets{
-      0, 2, std::numeric_limits<int32_t>().max(), 1, 8};
+      0, 2, std::numeric_limits<int32_t>().max(), 4, 8};
   std::vector<vector_size_t> sizes{
-      4, 3, std::numeric_limits<int32_t>().max(), 5, 2};
+      2, 1, std::numeric_limits<int32_t>().max(), 3, 2};
   memcpy(rawOffsets, offsets.data(), size * sizeof(vector_size_t));
   memcpy(rawSizes, sizes.data(), size * sizeof(vector_size_t));
 
   bits::setNull(rawNulls, 2);
 
-  // Produces arrays that look like:
-  // [9, NULL, 7, 6]
-  // [7, 6, 5]
-  // NULL
-  // [NULL, 7, 6, 5, NULL]
-  // [1, NULL]
   auto values = std::make_shared<ArrayVector>(
       pool_.get(),
       ARRAY(elements->type()),
@@ -346,9 +342,9 @@ TEST_F(HivePartitionFunctionTest, arrayElementsEncoded) {
       encodedElements);
 
   assertPartitions(values, 1, {0, 0, 0, 0, 0});
-  assertPartitions(values, 2, {0, 0, 0, 0, 1});
-  assertPartitions(values, 500, {342, 418, 0, 458, 31});
-  assertPartitions(values, 997, {149, 936, 0, 103, 31});
+  assertPartitions(values, 2, {1, 1, 0, 0, 1});
+  assertPartitions(values, 500, {279, 7, 0, 308, 31});
+  assertPartitions(values, 997, {279, 7, 0, 820, 31});
 
   assertPartitionsWithConstChannel(values, 1);
   assertPartitionsWithConstChannel(values, 2);
@@ -428,23 +424,17 @@ TEST_F(HivePartitionFunctionTest, mapEntriesEncoded) {
   auto rawSizes = sizesBuffer->asMutable<vector_size_t>();
   auto rawNulls = nullsBuffer->asMutable<uint64_t>();
 
-  // Make the elements overlap and have gaps.
+  // Make the elements have gaps.
   // Set the values in position 2 to be invalid since that Map should be null.
   std::vector<vector_size_t> offsets{
-      0, 2, std::numeric_limits<int32_t>().max(), 1, 8};
+      0, 2, std::numeric_limits<int32_t>().max(), 4, 8};
   std::vector<vector_size_t> sizes{
-      4, 3, std::numeric_limits<int32_t>().max(), 5, 2};
+      2, 1, std::numeric_limits<int32_t>().max(), 3, 2};
   memcpy(rawOffsets, offsets.data(), size * sizeof(vector_size_t));
   memcpy(rawSizes, sizes.data(), size * sizeof(vector_size_t));
 
   bits::setNull(rawNulls, 2);
 
-  // Produces maps that look like:
-  // {key_0: 9, key_3: NULL, key_6: 7, key_9: 6}
-  // {key_6: 7, key_9: 6, key_2: 5}
-  // NULL
-  // {key_3: NULL, key_6: 7, key_9: 6, key_2: 5, key_5: NULL}
-  // {key_4: 1, key_7: NULL}
   auto values = std::make_shared<MapVector>(
       pool_.get(),
       MAP(mapKeys->type(), mapValues->type()),
@@ -457,8 +447,8 @@ TEST_F(HivePartitionFunctionTest, mapEntriesEncoded) {
 
   assertPartitions(values, 1, {0, 0, 0, 0, 0});
   assertPartitions(values, 2, {0, 1, 0, 1, 0});
-  assertPartitions(values, 500, {176, 259, 0, 91, 336});
-  assertPartitions(values, 997, {694, 24, 0, 365, 345});
+  assertPartitions(values, 500, {336, 413, 0, 259, 336});
+  assertPartitions(values, 997, {345, 666, 0, 24, 345});
 
   assertPartitionsWithConstChannel(values, 1);
   assertPartitionsWithConstChannel(values, 2);
@@ -653,7 +643,7 @@ TEST_F(HivePartitionFunctionTest, spec) {
       ASSERT_EQ(hiveSpecWithoutPartitionMap->toString(), copy->toString());
     }
     auto hiveFunctionWithoutPartitionMap =
-        hiveSpecWithoutPartitionMap->create(10);
+        hiveSpecWithoutPartitionMap->create(10, /*localExchange=*/false);
 
     auto hiveSpecWithPartitionMap =
         std::make_unique<connector::hive::HivePartitionFunctionSpec>(
@@ -670,7 +660,8 @@ TEST_F(HivePartitionFunctionTest, spec) {
           serialized, pool());
       ASSERT_EQ(hiveSpecWithPartitionMap->toString(), copy->toString());
     }
-    auto hiveFunctionWithPartitionMap = hiveSpecWithPartitionMap->create(10);
+    auto hiveFunctionWithPartitionMap =
+        hiveSpecWithPartitionMap->create(10, /*localExchange=*/false);
 
     // Test two functions generates the same result.
     auto rowType =
@@ -692,6 +683,60 @@ TEST_F(HivePartitionFunctionTest, spec) {
       }
     }
   }
+}
+
+TEST_F(HivePartitionFunctionTest, localExchange) {
+  const int numRows = 20'000;
+  auto input = makeRowVector(
+      {makeFlatVector<int32_t>(numRows, [](auto row) { return row; })});
+  auto rowType = asRowType(input->type());
+
+  const int bucketCount = 1024;
+  const int numPartitions = 8;
+  std::vector<int> bucketToPartition(bucketCount);
+  for (int bucket = 0; bucket < bucketCount; ++bucket) {
+    bucketToPartition[bucket] = bucket % numPartitions;
+  }
+
+  // Verifies if the bucket to partition is set, then remote and local hive
+  // partition function produces the same partitioning.
+  auto hiveSpecWithMap =
+      std::make_unique<connector::hive::HivePartitionFunctionSpec>(
+          bucketCount,
+          bucketToPartition,
+          std::vector<column_index_t>{0},
+          std::vector<VectorPtr>{});
+
+  auto remoteHiveFunctionWithMap =
+      hiveSpecWithMap->create(numPartitions, /*localExchange=*/true);
+  auto localHiveFunctionWithMap =
+      hiveSpecWithMap->create(numPartitions, /*localExchange=*/false);
+
+  std::vector<uint32_t> remotePartitions(numRows);
+  remoteHiveFunctionWithMap->partition(*input, remotePartitions);
+
+  std::vector<uint32_t> localPartitions(numRows);
+  remoteHiveFunctionWithMap->partition(*input, localPartitions);
+
+  ASSERT_EQ(remotePartitions, localPartitions);
+
+  // Verifies if the bucket to partition is not set, then remote and local hive
+  // partition function produces the different partitioning.
+  auto hiveSpecWithoutMap =
+      std::make_unique<connector::hive::HivePartitionFunctionSpec>(
+          bucketCount,
+          std::vector<column_index_t>{0},
+          std::vector<VectorPtr>{});
+
+  auto remoteHiveFunctionWithoutMap =
+      hiveSpecWithoutMap->create(numPartitions, /*localExchange=*/true);
+  auto localHiveFunctionWithoutMap =
+      hiveSpecWithoutMap->create(numPartitions, /*localExchange=*/false);
+
+  remoteHiveFunctionWithoutMap->partition(*input, remotePartitions);
+  localHiveFunctionWithoutMap->partition(*input, localPartitions);
+
+  ASSERT_NE(remotePartitions, localPartitions);
 }
 
 TEST_F(HivePartitionFunctionTest, function) {
@@ -744,4 +789,111 @@ TEST_F(HivePartitionFunctionTest, unknown) {
   assertPartitionsWithConstChannel(values, 2);
   assertPartitionsWithConstChannel(values, 500);
   assertPartitionsWithConstChannel(values, 997);
+}
+
+TEST_F(HivePartitionFunctionTest, skew) {
+  const int numRows = 20'000;
+  auto input = makeRowVector(
+      {makeFlatVector<int32_t>(numRows, [](auto row) { return row; })});
+  auto rowType = asRowType(input->type());
+
+  const int bucketCount = 1024;
+  const int numRemotePartitions = 8;
+  std::vector<int> remoteBucketToPartition(bucketCount);
+  for (int bucket = 0; bucket < bucketCount; ++bucket) {
+    remoteBucketToPartition[bucket] = bucket % numRemotePartitions;
+  }
+  auto remoteHiveSpec =
+      std::make_unique<connector::hive::HivePartitionFunctionSpec>(
+          bucketCount,
+          remoteBucketToPartition,
+          std::vector<column_index_t>{0},
+          std::vector<VectorPtr>{});
+
+  auto remoteHiveFunction =
+      remoteHiveSpec->create(numRemotePartitions, /*localExchange=*/false);
+  std::vector<uint32_t> remotePartitions(numRows);
+  remoteHiveFunction->partition(*input, remotePartitions);
+
+  std::vector<BufferPtr> partitionIndicesVector(numRemotePartitions);
+  std::vector<vector_size_t*> rawPartitionIndicesVector(numRemotePartitions);
+  std::vector<vector_size_t> partitionSizeVectors(numRemotePartitions, 0);
+  for (int i = 0; i < numRemotePartitions; ++i) {
+    partitionIndicesVector[i] =
+        AlignedBuffer::allocate<vector_size_t>(numRows, pool_.get());
+    rawPartitionIndicesVector[i] =
+        partitionIndicesVector[i]->asMutable<vector_size_t>();
+  }
+  for (int row = 0; row < numRows; ++row) {
+    ASSERT_LT(remotePartitions[row], numRemotePartitions);
+    const int partition = remotePartitions[row];
+    rawPartitionIndicesVector[partition][partitionSizeVectors[partition]++] =
+        row;
+  }
+  std::vector<VectorPtr> partitionedInputs;
+  for (int partition = 0; partition < numRemotePartitions; ++partition) {
+    partitionedInputs.push_back(exec::wrap(
+        partitionSizeVectors[partition],
+        partitionIndicesVector[partition],
+        input));
+  }
+
+  // Checks that the bad hive partition function (using round-robin map from
+  // bucket to partition as remote hive partition function does) map all the
+  // local input rows to one local partition.
+  const int numLocalPartitions{4};
+  std::vector<int> badLocalBucketToPartition(bucketCount);
+  for (int bucket = 0; bucket < bucketCount; ++bucket) {
+    badLocalBucketToPartition[bucket] = bucket % numLocalPartitions;
+  }
+  auto badLocalHiveSpec =
+      std::make_unique<connector::hive::HivePartitionFunctionSpec>(
+          bucketCount,
+          badLocalBucketToPartition,
+          std::vector<column_index_t>{0},
+          std::vector<VectorPtr>{});
+  auto badLocalHashFunction =
+      badLocalHiveSpec->create(numLocalPartitions, /*localExchange=*/true);
+  for (int partition = 0; partition < numRemotePartitions; ++partition) {
+    const auto localPartitionSize = partitionSizeVectors[partition];
+    std::vector<uint32_t> localPartitions(localPartitionSize);
+    badLocalHashFunction->partition(
+        *static_cast<RowVector*>(partitionedInputs[partition].get()),
+        localPartitions);
+    std::unordered_set<int> localPartitionSet;
+    for (int row = 1; row < localPartitionSize; ++row) {
+      localPartitionSet.insert(localPartitions[row]);
+    }
+    ASSERT_EQ(localPartitionSet.size(), 1) << partition;
+  }
+
+  // Verifies that the good local hive partition function evenly distributes the
+  // local input rows.
+  auto localHiveSpec =
+      std::make_unique<connector::hive::HivePartitionFunctionSpec>(
+          bucketCount,
+          std::vector<int>{},
+          std::vector<column_index_t>{0},
+          std::vector<VectorPtr>{});
+  auto localHiveFunction =
+      localHiveSpec->create(numLocalPartitions, /*localExchange=*/true);
+  for (int partition = 0; partition < numRemotePartitions; ++partition) {
+    const auto localPartitionSize = partitionSizeVectors[partition];
+    std::vector<uint32_t> localPartitions(localPartitionSize);
+    localHiveFunction->partition(
+        *static_cast<RowVector*>(partitionedInputs[partition].get()),
+        localPartitions);
+    std::unordered_set<int> localPartitionSet;
+    for (int row = 1; row < localPartitionSize; ++row) {
+      localPartitionSet.insert(localPartitions[row]);
+    }
+    ASSERT_EQ(localPartitionSet.size(), numLocalPartitions) << partition;
+  }
+  ASSERT_NE(
+      static_cast<connector::hive::HivePartitionFunction*>(
+          localHiveFunction.get())
+          ->testingBucketToPartition(),
+      static_cast<connector::hive::HivePartitionFunction*>(
+          badLocalHashFunction.get())
+          ->testingBucketToPartition());
 }

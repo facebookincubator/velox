@@ -24,6 +24,10 @@
 #include "velox/vector/DecodedVector.h"
 #include "velox/vector/VectorPool.h"
 
+namespace facebook::velox {
+class Config;
+};
+
 namespace facebook::velox::core {
 
 class QueryCtx : public std::enable_shared_from_this<QueryCtx> {
@@ -42,7 +46,7 @@ class QueryCtx : public std::enable_shared_from_this<QueryCtx> {
   static std::shared_ptr<QueryCtx> create(
       folly::Executor* executor = nullptr,
       QueryConfig&& queryConfig = QueryConfig{{}},
-      std::unordered_map<std::string, std::shared_ptr<Config>>
+      std::unordered_map<std::string, std::shared_ptr<config::ConfigBase>>
           connectorConfigs = {},
       cache::AsyncDataCache* cache = cache::AsyncDataCache::getInstance(),
       std::shared_ptr<memory::MemoryPool> pool = nullptr,
@@ -61,7 +65,6 @@ class QueryCtx : public std::enable_shared_from_this<QueryCtx> {
 
   folly::Executor* executor() const {
     return executor_;
-    ;
   }
 
   bool isExecutorSupplied() const {
@@ -72,12 +75,18 @@ class QueryCtx : public std::enable_shared_from_this<QueryCtx> {
     return queryConfig_;
   }
 
-  Config* connectorSessionProperties(const std::string& connectorId) const {
+  config::ConfigBase* connectorSessionProperties(
+      const std::string& connectorId) const {
     auto it = connectorSessionProperties_.find(connectorId);
     if (it == connectorSessionProperties_.end()) {
       return getEmptyConfig();
     }
     return it->second.get();
+  }
+
+  const std::unordered_map<std::string, std::shared_ptr<config::ConfigBase>>&
+  connectorSessionProperties() const {
+    return connectorSessionProperties_;
   }
 
   /// Overrides the previous configuration. Note that this function is NOT
@@ -93,7 +102,7 @@ class QueryCtx : public std::enable_shared_from_this<QueryCtx> {
       const std::string& connectorId,
       std::unordered_map<std::string, std::string>&& configOverrides) {
     connectorSessionProperties_[connectorId] =
-        std::make_shared<MemConfig>(std::move(configOverrides));
+        std::make_shared<config::ConfigBase>(std::move(configOverrides));
   }
 
   folly::Executor* spillExecutor() const {
@@ -109,9 +118,13 @@ class QueryCtx : public std::enable_shared_from_this<QueryCtx> {
   /// the memory arbiration finishes.
   bool checkUnderArbitration(ContinueFuture* future);
 
-  /// Updates the aggregated spill bytes of this query, and and throws if
-  /// exceeds the max spill bytes limit.
+  /// Updates the aggregated spill bytes of this query, and throws if exceeds
+  /// the max spill bytes limit.
   void updateSpilledBytesAndCheckLimit(uint64_t bytes);
+
+  /// Updates the aggregated trace bytes of this query, and throws if exceeds
+  /// the max query trace bytes limit.
+  void updateTracedBytesAndCheckLimit(uint64_t bytes);
 
   void testingOverrideMemoryPool(std::shared_ptr<memory::MemoryPool> pool) {
     pool_ = std::move(pool);
@@ -135,7 +148,7 @@ class QueryCtx : public std::enable_shared_from_this<QueryCtx> {
   QueryCtx(
       folly::Executor* executor = nullptr,
       QueryConfig&& queryConfig = QueryConfig{{}},
-      std::unordered_map<std::string, std::shared_ptr<Config>>
+      std::unordered_map<std::string, std::shared_ptr<config::ConfigBase>>
           connectorConfigs = {},
       cache::AsyncDataCache* cache = cache::AsyncDataCache::getInstance(),
       std::shared_ptr<memory::MemoryPool> pool = nullptr,
@@ -157,8 +170,9 @@ class QueryCtx : public std::enable_shared_from_this<QueryCtx> {
    protected:
     MemoryReclaimer(
         const std::shared_ptr<QueryCtx>& queryCtx,
-        memory::MemoryPool* pool)
-        : queryCtx_(queryCtx), pool_(pool) {
+        memory::MemoryPool* pool,
+        int32_t priority = 0)
+        : memory::MemoryReclaimer(priority), queryCtx_(queryCtx), pool_(pool) {
       VELOX_CHECK_NOT_NULL(pool_);
     }
 
@@ -174,9 +188,10 @@ class QueryCtx : public std::enable_shared_from_this<QueryCtx> {
     memory::MemoryPool* const pool_;
   };
 
-  static Config* getEmptyConfig() {
-    static const std::unique_ptr<Config> kEmptyConfig =
-        std::make_unique<MemConfig>();
+  static config::ConfigBase* getEmptyConfig() {
+    static const std::unique_ptr<config::ConfigBase> kEmptyConfig =
+        std::make_unique<config::ConfigBase>(
+            std::unordered_map<std::string, std::string>());
     return kEmptyConfig.get();
   }
 
@@ -201,11 +216,12 @@ class QueryCtx : public std::enable_shared_from_this<QueryCtx> {
   folly::Executor* const spillExecutor_{nullptr};
   cache::AsyncDataCache* const cache_;
 
-  std::unordered_map<std::string, std::shared_ptr<Config>>
+  std::unordered_map<std::string, std::shared_ptr<config::ConfigBase>>
       connectorSessionProperties_;
   std::shared_ptr<memory::MemoryPool> pool_;
   QueryConfig queryConfig_;
   std::atomic<uint64_t> numSpilledBytes_{0};
+  std::atomic<uint64_t> numTracedBytes_{0};
 
   mutable std::mutex mutex_;
   // Indicates if this query is under memory arbitration or not.
@@ -219,12 +235,53 @@ class ExecCtx {
   ExecCtx(memory::MemoryPool* pool, QueryCtx* queryCtx)
       : pool_(pool),
         queryCtx_(queryCtx),
-        exprEvalCacheEnabled_(
-            !queryCtx ||
-            queryCtx->queryConfig().isExpressionEvaluationCacheEnabled()),
+        optimizationParams_(queryCtx),
         vectorPool_(
-            exprEvalCacheEnabled_ ? std::make_unique<VectorPool>(pool)
-                                  : nullptr) {}
+            optimizationParams_.exprEvalCacheEnabled
+                ? std::make_unique<VectorPool>(pool)
+                : nullptr) {}
+
+  struct OptimizationParams {
+    explicit OptimizationParams(QueryCtx* queryCtx) {
+      const core::QueryConfig defaultQueryConfig = core::QueryConfig({});
+
+      const core::QueryConfig& queryConfig =
+          queryCtx ? queryCtx->queryConfig() : defaultQueryConfig;
+
+      exprEvalCacheEnabled = queryConfig.isExpressionEvaluationCacheEnabled();
+      dictionaryMemoizationEnabled =
+          !queryConfig.debugDisableExpressionsWithMemoization() &&
+          exprEvalCacheEnabled;
+      peelingEnabled = !queryConfig.debugDisableExpressionsWithPeeling();
+      sharedSubExpressionReuseEnabled =
+          !queryConfig.debugDisableCommonSubExpressions();
+      deferredLazyLoadingEnabled =
+          !queryConfig.debugDisableExpressionsWithLazyInputs();
+      maxSharedSubexprResultsCached =
+          queryConfig.maxSharedSubexprResultsCached();
+    }
+
+    /// True if caches in expression evaluation used for performance are
+    /// enabled, including VectorPool, DecodedVectorPool, SelectivityVectorPool
+    /// and dictionary memoization.
+    bool exprEvalCacheEnabled;
+    /// True if dictionary memoization optimization is enabled during experssion
+    /// evaluation, whichallows the reuse of results between consecutive input
+    /// batches if they are dictionary encoded and have the same
+    /// alphabet(undelying flat vector).
+    bool dictionaryMemoizationEnabled;
+    /// True if peeling is enabled during experssion evaluation.
+    bool peelingEnabled;
+    /// True if shared subexpression reuse is enabled during experssion
+    /// evaluation.
+    bool sharedSubExpressionReuseEnabled;
+    /// True if loading lazy inputs are deferred till they need to be
+    /// accessed during experssion evaluation.
+    bool deferredLazyLoadingEnabled;
+    /// The maximum number of distinct inputs to cache results in a
+    /// given shared subexpression during experssion evaluation.
+    uint32_t maxSharedSubexprResultsCached;
+  };
 
   velox::memory::MemoryPool* pool() const {
     return pool_;
@@ -241,7 +298,9 @@ class ExecCtx {
   /// Prefer using LocalSelectivityVector which takes care of returning the
   /// vector to the pool on destruction.
   std::unique_ptr<SelectivityVector> getSelectivityVector(int32_t size) {
-    VELOX_CHECK(exprEvalCacheEnabled_ || selectivityVectorPool_.empty());
+    VELOX_CHECK(
+        optimizationParams_.exprEvalCacheEnabled ||
+        selectivityVectorPool_.empty());
     if (selectivityVectorPool_.empty()) {
       return std::make_unique<SelectivityVector>(size);
     }
@@ -255,7 +314,9 @@ class ExecCtx {
   // content. The caller is responsible for setting the size and
   // assigning the contents.
   std::unique_ptr<SelectivityVector> getSelectivityVector() {
-    VELOX_CHECK(exprEvalCacheEnabled_ || selectivityVectorPool_.empty());
+    VELOX_CHECK(
+        optimizationParams_.exprEvalCacheEnabled ||
+        selectivityVectorPool_.empty());
     if (selectivityVectorPool_.empty()) {
       return std::make_unique<SelectivityVector>();
     }
@@ -266,7 +327,7 @@ class ExecCtx {
 
   // Returns true if the vector was moved into the pool.
   bool releaseSelectivityVector(std::unique_ptr<SelectivityVector>&& vector) {
-    if (exprEvalCacheEnabled_) {
+    if (optimizationParams_.exprEvalCacheEnabled) {
       selectivityVectorPool_.push_back(std::move(vector));
       return true;
     }
@@ -274,7 +335,8 @@ class ExecCtx {
   }
 
   std::unique_ptr<DecodedVector> getDecodedVector() {
-    VELOX_CHECK(exprEvalCacheEnabled_ || decodedVectorPool_.empty());
+    VELOX_CHECK(
+        optimizationParams_.exprEvalCacheEnabled || decodedVectorPool_.empty());
     if (decodedVectorPool_.empty()) {
       return std::make_unique<DecodedVector>();
     }
@@ -285,7 +347,7 @@ class ExecCtx {
 
   // Returns true if the vector was moved into the pool.
   bool releaseDecodedVector(std::unique_ptr<DecodedVector>&& vector) {
-    if (exprEvalCacheEnabled_) {
+    if (optimizationParams_.exprEvalCacheEnabled) {
       decodedVectorPool_.push_back(std::move(vector));
       return true;
     }
@@ -324,8 +386,8 @@ class ExecCtx {
     return 0;
   }
 
-  bool exprEvalCacheEnabled() const {
-    return exprEvalCacheEnabled_;
+  const OptimizationParams& optimizationParams() const {
+    return optimizationParams_;
   }
 
  private:
@@ -333,8 +395,9 @@ class ExecCtx {
   memory::MemoryPool* const pool_;
   QueryCtx* const queryCtx_;
 
-  const bool exprEvalCacheEnabled_;
-  // A pool of preallocated DecodedVectors for use by expressions and operators.
+  const OptimizationParams optimizationParams_;
+  // A pool of preallocated DecodedVectors for use by expressions and
+  // operators.
   std::vector<std::unique_ptr<DecodedVector>> decodedVectorPool_;
   // A pool of preallocated SelectivityVectors for use by expressions
   // and operators.

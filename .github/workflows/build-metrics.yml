@@ -18,6 +18,7 @@ on:
   pull_request:
       paths:
         - ".github/workflows/build-metrics.yml"
+        - "script/bm-report/**"
 
   workflow_dispatch:
     inputs:
@@ -34,7 +35,7 @@ permissions:
 
 jobs:
   metrics:
-    name: Linux ${{ matrix.type }} with adapters
+    name: Linux ${{ matrix.link-type }} - ${{ matrix.type }} with adapters
     if: ${{ github.repository == 'facebookincubator/velox' }}
     runs-on: ${{ matrix.runner }}
     container: ghcr.io/facebookincubator/velox-dev:adapters
@@ -43,13 +44,10 @@ jobs:
       matrix:
         runner: ["16-core-ubuntu"]
         type: ["debug", "release"]
+        link-type: ["shared", "static"]
     defaults:
       run:
         shell: bash
-    env:
-      VELOX_DEPENDENCY_SOURCE: SYSTEM
-      simdjson_SOURCE: BUNDLED
-      xsimd_SOURCE: BUNDLED
     steps:
       - uses: actions/checkout@v4
         with:
@@ -60,7 +58,7 @@ jobs:
         # it doesn't work
         run: git config --global --add safe.directory ${GITHUB_WORKSPACE}
 
-      - name: Make ${{ matrix.type }} Build
+      - name: Make  ${{ matrix.link-type }} - ${{ matrix.type }} Build
         env:
           MAKEFLAGS: 'MAX_HIGH_MEM_JOBS=8 MAX_LINK_JOBS=4'
         run: |
@@ -73,23 +71,39 @@ jobs:
             "-DVELOX_ENABLE_GCS=ON"
             "-DVELOX_ENABLE_ABFS=ON"
             "-DVELOX_ENABLE_REMOTE_FUNCTIONS=ON"
+            "-DVELOX_MONO_LIBRARY=ON"
+            "-DVELOX_BUILD_SHARED=${{ matrix.link-type == 'shared' && 'ON' || 'OFF' }}"
           )
-          make '${{ matrix.type }}'
+
+          echo "CMake Flags: ${EXTRA_CMAKE_FLAGS[*]}"
+          make '${{ matrix.type }}' EXTRA_CMAKE_FLAGS="${EXTRA_CMAKE_FLAGS[*]}"
 
       - name: Log binary sizes
         run: |
           mkdir -p /tmp/metrics
           sizes_file=/tmp/metrics/object_sizes
+          echo "sizes_file=$sizes_file" >> $GITHUB_ENV
+
           pushd '_build/${{ matrix.type }}'
 
-          find velox -type f -name '*.so' -o -name '*.a' -exec ls -l -BB {} \; |
+          # . to also check in lib for mono build
+          find . -type f \( -name 'libvelox*.so' -o -name 'libvelox*.a' \) -exec ls -l -BB {} \; |
             awk '{print $5, $9; total += $5} END {print total," total_lib_size"}' > $sizes_file
 
-          find velox -type f -name '*.o' -exec ls -l -BB {} \; |
+          find velox -type f -name '*.o' -exec ls -l -BB {} \;  |
             awk '{print $5, $9; total += $5} END {print total," total_obj_size"}' >> $sizes_file
 
           find velox -type f -name 'velox_*' -exec ls -l -BB {} \; |
             awk '{print $5, $9; total += $5} END {print total," total_exec_size"}' >> $sizes_file
+
+          echo "::group::Size file for ${{ matrix.link-type }} - ${{ matrix.type }}"
+          cat $sizes_file
+          echo "::endgroup::"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          path: ${{ env.sizes_file }}
+          name: "${{ matrix.type }}-${{ matrix.link-type }}-sizes"
 
       - name: Copy ninja_log
         run: cp _build/${{ matrix.type }}/.ninja_log /tmp/metrics/.ninja_log
@@ -113,14 +127,13 @@ jobs:
           CONBENCH_PROJECT_COMMIT: "${{ inputs.ref || github.sha }}"
         run: |
           ./scripts/build-metrics.py upload \
-            --build_type "${{ matrix.type }}" \
-            --run_id "BM-${{ matrix.type }}-${{ github.run_id }}-${{ github.run_attempt }}" \
+            --build_type "${{ matrix.link-type }}-${{ matrix.type }}" \
+            --run_id "BM-${{ matrix.link-type }}-${{ matrix.type }}-${{ github.run_id }}-${{ github.run_attempt }}" \
             --pr_number "${{ github.event.number }}" \
             --sha "${{ inputs.ref || github.sha }}" \
             "/tmp/metrics"
 
   upload-report:
-    if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'facebookincubator/velox' }}
     permissions:
       contents: write
     runs-on: ubuntu-latest
@@ -137,7 +150,7 @@ jobs:
           git config --global user.email "velox@users.noreply.github.com"
           git config --global user.name "velox"
 
-      - uses: cachix/install-nix-action@8887e596b4ee1134dae06b98d573bd674693f47c # v26
+      - uses: cachix/install-nix-action@08dcb3a5e62fa31e2da3d490afc4176ef55ecd72 # v30
         with:
           nix_path: nixpkgs=channel:nixos-unstable
 
@@ -154,6 +167,13 @@ jobs:
         run: |
           cd scripts/bm-report
           nix-shell --run "quarto render report.qmd"
+
+      - name: Upload Report Artifact
+        uses: actions/upload-artifact@b4b15b8c7c6ac21ea08fcf65892d2ee8f75cf882 # v4.4.3
+        with:
+          name: report
+          path: scripts/bm-report/report.html
+          retention-days: 5
 
       - name: Push Report
         # The report only uses conbench data from 'main'

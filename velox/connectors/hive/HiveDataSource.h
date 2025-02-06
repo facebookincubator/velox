@@ -20,6 +20,7 @@
 #include "velox/connectors/Connector.h"
 #include "velox/connectors/hive/FileHandle.h"
 #include "velox/connectors/hive/HiveConnectorSplit.h"
+#include "velox/connectors/hive/HiveConnectorUtil.h"
 #include "velox/connectors/hive/HivePartitionFunction.h"
 #include "velox/connectors/hive/SplitReader.h"
 #include "velox/connectors/hive/TableHandle.h"
@@ -30,9 +31,6 @@
 namespace facebook::velox::connector::hive {
 
 class HiveConfig;
-
-using SubfieldFilters =
-    std::unordered_map<common::Subfield, std::unique_ptr<common::Filter>>;
 
 class HiveDataSource : public DataSource {
  public:
@@ -102,9 +100,14 @@ class HiveDataSource : public DataSource {
  protected:
   virtual std::unique_ptr<SplitReader> createSplitReader();
 
+  FileHandleFactory* const fileHandleFactory_;
+  folly::Executor* const executor_;
+  const ConnectorQueryCtx* const connectorQueryCtx_;
+  const std::shared_ptr<HiveConfig> hiveConfig_;
+  memory::MemoryPool* const pool_;
+
   std::shared_ptr<HiveConnectorSplit> split_;
   std::shared_ptr<HiveTableHandle> hiveTableHandle_;
-  memory::MemoryPool* pool_;
   std::shared_ptr<common::ScanSpec> scanSpec_;
   VectorPtr output_;
   std::unique_ptr<SplitReader> splitReader_;
@@ -119,18 +122,15 @@ class HiveDataSource : public DataSource {
   std::unordered_map<std::string, std::shared_ptr<HiveColumnHandle>>
       partitionKeys_;
 
-  FileHandleFactory* const fileHandleFactory_;
-  folly::Executor* const executor_;
-  const ConnectorQueryCtx* const connectorQueryCtx_;
-  const std::shared_ptr<HiveConfig> hiveConfig_;
   std::shared_ptr<io::IoStatistics> ioStats_;
-  std::shared_ptr<HiveColumnHandle> rowIndexColumn_;
 
  private:
   std::unique_ptr<HivePartitionFunction> setupBucketConversion();
   vector_size_t applyBucketConversion(
       const RowVectorPtr& rowVector,
       BufferPtr& indices);
+
+  void setupRowIdColumn();
 
   // Evaluates remainingFilter_ on the specified vector. Returns number of rows
   // passed. Populates filterEvalCtx_.selectedIndices and selectedBits if only
@@ -156,9 +156,10 @@ class HiveDataSource : public DataSource {
   // Column handles for the Split info columns keyed on their column names.
   std::unordered_map<std::string, std::shared_ptr<HiveColumnHandle>>
       infoColumns_;
+  SpecialColumnNames specialColumns_{};
   folly::F14FastMap<std::string, std::vector<const common::Subfield*>>
       subfields_;
-  SubfieldFilters filters_;
+  common::SubfieldFilters filters_;
   std::shared_ptr<common::MetadataFilter> metadataFilter_;
   std::unique_ptr<exec::ExprSet> remainingFilterExprSet_;
   RowVectorPtr emptyOutput_;

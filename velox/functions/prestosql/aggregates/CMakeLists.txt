@@ -28,6 +28,7 @@ velox_add_library(
   CountIfAggregate.cpp
   CovarianceAggregates.cpp
   ChecksumAggregate.cpp
+  ClassificationAggregation.cpp
   EntropyAggregates.cpp
   GeometricMeanAggregate.cpp
   HistogramAggregate.cpp
@@ -36,7 +37,8 @@ velox_add_library(
   MapUnionSumAggregate.cpp
   MaxSizeForStatsAggregate.cpp
   MinMaxAggregates.cpp
-  MinMaxByAggregates.cpp
+  MaxByAggregate.cpp
+  MinByAggregate.cpp
   MultiMapAggAggregate.cpp
   PrestoHasher.cpp
   ReduceAgg.cpp
@@ -55,6 +57,7 @@ velox_link_libraries(
   velox_functions_aggregates
   velox_functions_lib
   velox_functions_util
+  velox_presto_types
   Folly::folly)
 
 if(${VELOX_BUILD_TESTING})

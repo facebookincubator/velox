@@ -127,8 +127,8 @@ class EncryptedStatsTest : public Test {
   std::shared_ptr<MemoryPool> readerPool_;
 };
 
-TEST_F(EncryptedStatsTest, getStatistics) {
-  auto stats = reader_->getStatistics();
+TEST_F(EncryptedStatsTest, statistics) {
+  auto stats = reader_->statistics();
   for (size_t i = 1; i < 7; ++i) {
     auto& stat = stats->getColumnStatistics(i);
     if (i != 5) {
@@ -141,7 +141,7 @@ TEST_F(EncryptedStatsTest, getStatistics) {
 
 TEST_F(EncryptedStatsTest, getStatisticsKeyNotLoaded) {
   clearKey(0);
-  auto stats = reader_->getStatistics();
+  auto stats = reader_->statistics();
   for (size_t i = 2; i < 7; ++i) {
     auto& stat = stats->getColumnStatistics(i);
     if (i != 5) {
@@ -154,7 +154,7 @@ TEST_F(EncryptedStatsTest, getStatisticsKeyNotLoaded) {
 
 TEST_F(EncryptedStatsTest, getColumnStatistics) {
   for (size_t i = 1; i < 7; ++i) {
-    auto stats = reader_->getColumnStatistics(i);
+    auto stats = reader_->columnStatistics(i);
     if (i != 5) {
       ASSERT_EQ(stats->getNumberOfValues(), i * 100);
     } else {
@@ -166,7 +166,7 @@ TEST_F(EncryptedStatsTest, getColumnStatistics) {
 TEST_F(EncryptedStatsTest, getColumnStatisticsKeyNotLoaded) {
   clearKey(0);
   for (size_t i = 2; i < 7; ++i) {
-    auto stats = reader_->getColumnStatistics(i);
+    auto stats = reader_->columnStatistics(i);
     if (i != 5) {
       ASSERT_EQ(stats->getNumberOfValues(), i * 100);
     } else {
@@ -212,8 +212,9 @@ std::unique_ptr<ReaderBase> createCorruptedFileReader(
   sink.write(std::move(buf));
   auto readFile = std::make_shared<facebook::velox::InMemoryReadFile>(
       std::string(sink.data(), sink.size()));
+  facebook::velox::dwio::common::ReaderOptions readerOpts{pool.get()};
   return std::make_unique<ReaderBase>(
-      *pool, std::make_unique<BufferedInput>(readFile, *pool));
+      readerOpts, std::make_unique<BufferedInput>(readFile, *pool));
 }
 
 class ReaderBaseTest : public Test {

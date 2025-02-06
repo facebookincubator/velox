@@ -18,24 +18,54 @@
 #include <folly/init/Init.h>
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
-#include <cstdio>
+#include <stdlib.h>
 
 #include "velox/common/base/Exceptions.h"
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/functions/Registerer.h"
 #include "velox/functions/lib/CheckedArithmetic.h"
 #include "velox/functions/prestosql/Arithmetic.h"
+#include "velox/functions/prestosql/Fail.h"
 #include "velox/functions/prestosql/StringFunctions.h"
 #include "velox/functions/prestosql/tests/utils/FunctionBaseTest.h"
 #include "velox/functions/remote/client/Remote.h"
 #include "velox/functions/remote/if/gen-cpp2/RemoteFunctionService.h"
 #include "velox/functions/remote/server/RemoteFunctionService.h"
+#include "velox/functions/remote/utils/RemoteFunctionServiceProvider.h"
+#include "velox/serializers/PrestoSerializer.h"
 
 using ::apache::thrift::ThriftServer;
 using ::facebook::velox::test::assertEqualVectors;
 
 namespace facebook::velox::functions {
 namespace {
+
+struct Foo {
+  explicit Foo(int64_t id) : id_(id) {}
+
+  int64_t id() const {
+    return id_;
+  }
+
+  int64_t id_;
+
+  static std::string serialize(const std::shared_ptr<Foo>& foo) {
+    return std::to_string(foo->id_);
+  }
+
+  static std::shared_ptr<Foo> deserialize(const std::string& serialized) {
+    return std::make_shared<Foo>(std::stoi(serialized));
+  }
+};
+
+template <typename T>
+struct OpaqueTypeFunction {
+  template <typename TInput, typename TOutput>
+  FOLLY_ALWAYS_INLINE void call(TOutput& result, const TInput& a) {
+    LOG(INFO) << "OpaqueTypeFunction.value: " << a->id();
+    result = a->id();
+  }
+};
 
 // Parametrize in the serialization format so we can test both presto page and
 // unsafe row.
@@ -44,15 +74,19 @@ class RemoteFunctionTest
       public ::testing::WithParamInterface<remote::PageFormat> {
  public:
   void SetUp() override {
-    initializeServer();
-    registerRemoteFunctions();
+    auto params = startLocalThriftServiceAndGetParams();
+    registerRemoteFunctions(params);
+  }
+
+  void TearDown() override {
+    OpaqueType::clearSerializationRegistry();
   }
 
   // Registers a few remote functions to be used in this test.
-  void registerRemoteFunctions() {
+  void registerRemoteFunctions(RemoteFunctionServiceParams params) {
     RemoteVectorFunctionMetadata metadata;
     metadata.serdeFormat = GetParam();
-    metadata.location = location_;
+    metadata.location = params.serverAddress;
 
     // Register the remote adapter.
     auto plusSignatures = {exec::FunctionSignatureBuilder()
@@ -61,6 +95,13 @@ class RemoteFunctionTest
                                .argumentType("bigint")
                                .build()};
     registerRemoteFunction("remote_plus", plusSignatures, metadata);
+
+    auto failSignatures = {exec::FunctionSignatureBuilder()
+                               .returnType("unknown")
+                               .argumentType("integer")
+                               .argumentType("varchar")
+                               .build()};
+    registerRemoteFunction("remote_fail", failSignatures, metadata);
 
     RemoteVectorFunctionMetadata wrongMetadata = metadata;
     wrongMetadata.location = folly::SocketAddress(); // empty address.
@@ -80,55 +121,29 @@ class RemoteFunctionTest
                                  .build()};
     registerRemoteFunction("remote_substr", substrSignatures, metadata);
 
+    auto opaqueSignatures = {exec::FunctionSignatureBuilder()
+                                 .returnType("bigint")
+                                 .argumentType("opaque")
+                                 .build()};
+    registerRemoteFunction("remote_opaque", opaqueSignatures, metadata);
+
     // Registers the actual function under a different prefix. This is only
     // needed for tests since the thrift service runs in the same process.
     registerFunction<PlusFunction, int64_t, int64_t, int64_t>(
-        {remotePrefix_ + ".remote_plus"});
+        {params.functionPrefix + ".remote_plus"});
+    registerFunction<FailFunction, UnknownValue, int32_t, Varchar>(
+        {params.functionPrefix + ".remote_fail"});
     registerFunction<CheckedDivideFunction, double, double, double>(
-        {remotePrefix_ + ".remote_divide"});
+        {params.functionPrefix + ".remote_divide"});
     registerFunction<SubstrFunction, Varchar, Varchar, int32_t>(
-        {remotePrefix_ + ".remote_substr"});
+        {params.functionPrefix + ".remote_substr"});
+    registerFunction<OpaqueTypeFunction, int64_t, std::shared_ptr<Foo>>(
+        {params.functionPrefix + ".remote_opaque"});
+
+    registerOpaqueType<Foo>("Foo");
+    OpaqueType::registerSerialization<Foo>(
+        "Foo", Foo::serialize, Foo::deserialize);
   }
-
-  void initializeServer() {
-    auto handler =
-        std::make_shared<RemoteFunctionServiceHandler>(remotePrefix_);
-    server_ = std::make_shared<ThriftServer>();
-    server_->setInterface(handler);
-    server_->setAddress(location_);
-
-    thread_ = std::make_unique<std::thread>([&] { server_->serve(); });
-    VELOX_CHECK(waitForRunning(), "Unable to initialize thrift server.");
-    LOG(INFO) << "Thrift server is up and running in local port " << location_;
-  }
-
-  ~RemoteFunctionTest() {
-    server_->stop();
-    thread_->join();
-    LOG(INFO) << "Thrift server stopped.";
-  }
-
- private:
-  // Loop until the server is up and running.
-  bool waitForRunning() {
-    for (size_t i = 0; i < 100; ++i) {
-      if (server_->getServerStatus() == ThriftServer::ServerStatus::RUNNING) {
-        return true;
-      }
-      std::this_thread::sleep_for(std::chrono::milliseconds(500));
-    }
-    return false;
-  }
-
-  std::shared_ptr<apache::thrift::ThriftServer> server_;
-  std::unique_ptr<std::thread> thread_;
-
-  // Creates a random temporary file name to use to communicate as a unix domain
-  // socket.
-  folly::SocketAddress location_{
-      folly::SocketAddress::makeFromPath(std::tmpnam(nullptr))};
-
-  const std::string remotePrefix_{"remote"};
 };
 
 TEST_P(RemoteFunctionTest, simple) {
@@ -148,6 +163,74 @@ TEST_P(RemoteFunctionTest, string) {
       "remote_substr(c0, c1)", makeRowVector({inputVector, inputVector1}));
 
   auto expected = makeFlatVector<StringView>({"ello", "my", "mote", "d"});
+  assertEqualVectors(expected, results);
+}
+
+TEST_P(RemoteFunctionTest, tryException) {
+  // remote_divide throws if denominator is 0.
+  auto numeratorVector = makeFlatVector<double>({0, 1, 4, 9, 16});
+  auto denominatorVector = makeFlatVector<double>({0, 1, 2, 3, 4});
+  auto data = makeRowVector({numeratorVector, denominatorVector});
+  auto results =
+      evaluate<SimpleVector<double>>("TRY(remote_divide(c0, c1))", data);
+
+  ASSERT_EQ(results->size(), 5);
+  auto expected = makeFlatVector<double>({0 /* doesn't matter*/, 1, 2, 3, 4});
+  expected->setNull(0, true);
+
+  assertEqualVectors(expected, results);
+}
+
+TEST_P(RemoteFunctionTest, conditionalConjunction) {
+  // conditional conjunction disables throwing on error.
+  auto inputVector0 = makeFlatVector<bool>({true, true});
+  auto inputVector1 = makeFlatVector<int32_t>({1, 2});
+  auto data = makeRowVector({inputVector0, inputVector1});
+  auto results = evaluate<SimpleVector<StringView>>(
+      "case when (c0 OR remote_fail(c1, 'error')) then 'hello' else 'world' end",
+      data);
+
+  ASSERT_EQ(results->size(), 2);
+  auto expected = makeFlatVector<StringView>({"hello", "hello"});
+  assertEqualVectors(expected, results);
+}
+
+TEST_P(RemoteFunctionTest, tryErrorCode) {
+  // remote_fail doesn't throw, but returns error code.
+  auto errorCodesVector = makeFlatVector<int32_t>({1, 2});
+  auto errorMessagesVector =
+      makeFlatVector<StringView>({"failed 1", "failed 2"});
+  auto data = makeRowVector({errorCodesVector, errorMessagesVector});
+  exec::ExprSet exprSet(
+      {makeTypedExpr("TRY(remote_fail(c0, c1))", asRowType(data->type()))},
+      &execCtx_);
+  std::optional<SelectivityVector> rows;
+  exec::EvalCtx context(&execCtx_, &exprSet, data.get());
+  std::vector<VectorPtr> results(1);
+  SelectivityVector defaultRows(data->size());
+  exprSet.eval(defaultRows, context, results);
+
+  ASSERT_EQ(results[0]->size(), 2);
+}
+
+TEST_P(RemoteFunctionTest, opaque) {
+  // TODO: Support opaque type serialization in SPARK_UNSAFE_ROW
+  if (GetParam() == remote::PageFormat::SPARK_UNSAFE_ROW) {
+    GTEST_SKIP()
+        << "opaque type serialization not supported in SPARK_UNSAFE_ROW";
+  }
+  auto inputVector = makeFlatVector<std::shared_ptr<void>>(
+      2,
+      [](vector_size_t row) { return std::make_shared<Foo>(row + 10); },
+      /*isNullAt=*/nullptr,
+      velox::OPAQUE<Foo>());
+  auto data = makeRowVector({inputVector});
+  LOG(INFO) << "type of data = " << data->type()->toString();
+
+  auto results = evaluate<SimpleVector<int64_t>>(
+      "remote_opaque(c0)", makeRowVector({inputVector}));
+
+  auto expected = makeFlatVector<int64_t>({10, 11});
   assertEqualVectors(expected, results);
 }
 

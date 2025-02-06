@@ -14,8 +14,28 @@
  * limitations under the License.
  */
 #include "velox/expression/fuzzer/FuzzerToolkit.h"
+#include "velox/vector/VectorSaver.h"
 
 namespace facebook::velox::fuzzer {
+
+namespace {
+void saveStdVector(const std::vector<int>& list, std::ostream& out) {
+  // Size of the vector
+  size_t size = list.size();
+  out.write((char*)&(size), sizeof(size));
+  out.write(
+      reinterpret_cast<const char*>(list.data()), list.size() * sizeof(int));
+}
+
+template <typename T>
+std::vector<T> restoreStdVector(std::istream& in) {
+  size_t size;
+  in.read((char*)&size, sizeof(size));
+  std::vector<T> vec(size);
+  in.read(reinterpret_cast<char*>(vec.data()), size * sizeof(T));
+  return vec;
+}
+} // namespace
 
 std::string CallableSignature::toString() const {
   std::string buf = name;
@@ -135,6 +155,44 @@ void compareVectors(
   });
 
   LOG(INFO) << "Two vectors match.";
+}
+
+RowVectorPtr mergeRowVectors(
+    const std::vector<RowVectorPtr>& results,
+    velox::memory::MemoryPool* pool) {
+  auto totalCount = 0;
+  for (const auto& result : results) {
+    totalCount += result->size();
+  }
+  auto copy =
+      BaseVector::create<RowVector>(results[0]->type(), totalCount, pool);
+  auto copyCount = 0;
+  for (const auto& result : results) {
+    copy->copy(result.get(), copyCount, 0, result->size());
+    copyCount += result->size();
+  }
+  return copy;
+}
+
+void InputRowMetadata::saveToFile(const char* filePath) const {
+  std::ofstream outputFile(filePath, std::ofstream::binary);
+  saveStdVector(columnsToWrapInLazy, outputFile);
+  saveStdVector(columnsToWrapInCommonDictionary, outputFile);
+  outputFile.close();
+}
+
+InputRowMetadata InputRowMetadata::restoreFromFile(
+    const char* filePath,
+    memory::MemoryPool* pool) {
+  InputRowMetadata ret;
+  std::ifstream in(filePath, std::ifstream::binary);
+  ret.columnsToWrapInLazy = restoreStdVector<int>(in);
+  if (in.peek() != EOF) {
+    // this check allows reading old files that only saved columnsToWrapInLazy.
+    ret.columnsToWrapInCommonDictionary = restoreStdVector<int>(in);
+  }
+  in.close();
+  return ret;
 }
 
 } // namespace facebook::velox::fuzzer

@@ -28,7 +28,13 @@ class MergeJoinSource;
 struct Split;
 
 /// Corresponds to Presto TaskState, needed for reporting query completion.
-enum TaskState { kRunning, kFinished, kCanceled, kAborted, kFailed };
+enum class TaskState : int {
+  kRunning = 0,
+  kFinished = 1,
+  kCanceled = 2,
+  kAborted = 3,
+  kFailed = 4
+};
 
 std::string taskStateString(TaskState state);
 
@@ -82,14 +88,20 @@ struct SplitsState {
 /// Stores local exchange queues with the memory manager.
 struct LocalExchangeState {
   std::shared_ptr<LocalExchangeMemoryManager> memoryManager;
+  std::shared_ptr<LocalExchangeVectorPool> vectorPool;
   std::vector<std::shared_ptr<LocalExchangeQueue>> queues;
+  std::shared_ptr<common::SkewedPartitionRebalancer>
+      scaleWriterPartitionBalancer;
 };
 
 /// Stores inter-operator state (exchange, bridges) for split groups.
 struct SplitGroupState {
   /// Map from the plan node id of the join to the corresponding JoinBridge.
+  /// This map will contain only HashJoinBridge and NestedLoopJoinBridge.
   std::unordered_map<core::PlanNodeId, std::shared_ptr<JoinBridge>> bridges;
-
+  /// This map will contain all other custom bridges.
+  std::unordered_map<core::PlanNodeId, std::shared_ptr<JoinBridge>>
+      customBridges;
   /// Holds states for Task::allPeersFinished.
   std::unordered_map<core::PlanNodeId, BarrierState> barriers;
 
@@ -105,6 +117,10 @@ struct SplitGroupState {
   /// Map of local exchanges keyed on LocalPartition plan node ID.
   std::unordered_map<core::PlanNodeId, LocalExchangeState> localExchanges;
 
+  /// Map of scaled scan controllers keyed on TableScan plan node ID.
+  std::unordered_map<core::PlanNodeId, std::shared_ptr<ScaledScanController>>
+      scaledScanControllers;
+
   /// Drivers created and still running for this split group.
   /// The split group is finished when this numbers reaches zero.
   uint32_t numRunningDrivers{0};
@@ -117,7 +133,7 @@ struct SplitGroupState {
   uint32_t numFinishedOutputDrivers{0};
 
   // True if the state contains structures used for connecting ungrouped
-  // execution pipeline with grouped excution pipeline. In that case we don't
+  // execution pipeline with grouped execution pipeline. In that case we don't
   // want to clean up some of these structures.
   bool mixedExecutionMode{false};
 
@@ -125,6 +141,7 @@ struct SplitGroupState {
   void clear() {
     if (!mixedExecutionMode) {
       bridges.clear();
+      customBridges.clear();
       barriers.clear();
     }
     localMergeSources.clear();
@@ -134,3 +151,13 @@ struct SplitGroupState {
 };
 
 } // namespace facebook::velox::exec
+
+template <>
+struct fmt::formatter<facebook::velox::exec::TaskState>
+    : formatter<std::string> {
+  auto format(facebook::velox::exec::TaskState state, format_context& ctx)
+      const {
+    return formatter<std::string>::format(
+        facebook::velox::exec::taskStateString(state), ctx);
+  }
+};

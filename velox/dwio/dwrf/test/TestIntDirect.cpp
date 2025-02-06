@@ -16,6 +16,7 @@
 
 #include <folly/Random.h>
 #include "velox/common/base/Nulls.h"
+#include "velox/common/base/tests/GTestUtils.h"
 #include "velox/dwio/common/IntDecoder.h"
 #include "velox/dwio/dwrf/common/DecoderUtil.h"
 #include "velox/dwio/dwrf/common/EncoderUtil.h"
@@ -43,7 +44,9 @@ void testInts(std::function<T()> generator) {
       count * (vInt ? folly::kMaxVarintLength64 : sizeof(T));
   MemorySink sink{capacity, {.pool = pool.get()}};
   DataBufferHolder holder{*pool, capacity, 0, DEFAULT_PAGE_GROW_RATIO, &sink};
-  auto output = std::make_unique<BufferedOutputStream>(holder);
+  auto output =
+      std::make_unique<facebook::velox::dwio::common::BufferedOutputStream>(
+          holder);
   auto encoder =
       createDirectEncoder<isSigned>(std::move(output), vInt, sizeof(T));
 
@@ -221,8 +224,7 @@ void testCorruptedVarInts() {
   std::array<int64_t, 2> vals;
   // First value is always read on the slow path.
   decoder->next(vals.data(), 1, nullptr);
-  EXPECT_THROW(decoder->next(vals.data(), 1, nullptr);
-               , exception::LoggedException);
+  VELOX_ASSERT_THROW(decoder->next(vals.data(), 1, nullptr), "");
 }
 
 TEST_F(DirectTest, corruptedInts) {

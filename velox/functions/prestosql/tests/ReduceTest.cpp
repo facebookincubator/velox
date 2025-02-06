@@ -269,14 +269,15 @@ TEST_F(ReduceTest, nullArray) {
 // Verify limit on the number of array elements.
 TEST_F(ReduceTest, limit) {
   // Make array vector with huge arrays in rows 2 and 4.
+  // Sizes of vectors in the 5 rows: 1'000, 9'000, 110'000, 10, 879'990.
   auto data = makeRowVector({makeArrayVector(
-      {0, 1'000, 10'000, 100'000, 100'010}, makeConstant(123, 1'000'000))});
+      {0, 1'000, 10'000, 120'000, 120'010}, makeConstant(123, 1'000'000))});
 
   VELOX_ASSERT_THROW(
       evaluate("reduce(c0, 0, (s, x) -> s + x, s -> 1 * s)", data),
-      "reduce lambda function doesn't support arrays with more than 10000 elements");
+      "reduce lambda function doesn't support arrays with more than");
 
-  // Exclude huge arrays.
+  // Exclude huge arrays (at rows 2 and 4).
   SelectivityVector rows(4);
   rows.setValid(2, false);
   rows.updateBounds();
@@ -286,11 +287,10 @@ TEST_F(ReduceTest, limit) {
       makeFlatVector<int64_t>({123 * 1'000, 123 * 9'000, -1, 123 * 10});
   assertEqualVectors(expected, result, rows);
 
-  // Mask errors with TRY.
-  result = evaluate("TRY(reduce(c0, 0, (s, x) -> s + x, s -> 1 * s))", data);
-  expected = makeNullableFlatVector<int64_t>(
-      {123 * 1'000, 123 * 9'000, std::nullopt, 123 * 10, std::nullopt});
-  assertEqualVectors(expected, result);
+  // TRY should not mask errors.
+  VELOX_ASSERT_THROW(
+      evaluate("TRY(reduce(c0, 0, (s, x) -> s + x, s -> 1 * s))", data),
+      "reduce lambda function doesn't support arrays with more than");
 }
 
 TEST_F(ReduceTest, rewrites) {

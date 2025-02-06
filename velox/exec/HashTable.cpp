@@ -52,8 +52,7 @@ HashTable<ignoreNullKeys>::HashTable(
     bool isJoinBuild,
     bool hasProbedFlag,
     uint32_t minTableSizeForParallelJoinBuild,
-    memory::MemoryPool* pool,
-    const std::shared_ptr<velox::HashStringAllocator>& stringArena)
+    memory::MemoryPool* pool)
     : BaseHashTable(std::move(hashers)),
       minTableSizeForParallelJoinBuild_(minTableSizeForParallelJoinBuild),
       isJoinBuild_(isJoinBuild) {
@@ -74,8 +73,7 @@ HashTable<ignoreNullKeys>::HashTable(
       isJoinBuild,
       hasProbedFlag,
       hashMode_ != HashMode::kHash,
-      pool,
-      stringArena);
+      pool);
   nextOffset_ = rows_->nextOffset();
 }
 
@@ -730,17 +728,11 @@ void HashTable<ignoreNullKeys>::allocateTables(
       memory::AllocationTraits::numPages(size * tableSlotSize());
   rows_->pool()->allocateContiguous(numPages, tableAllocation_);
   table_ = tableAllocation_.data<char*>();
-  memset(table_, 0, capacity_ * sizeof(char*));
+  ::memset(table_, 0, capacity_ * sizeof(char*));
 }
 
 template <bool ignoreNullKeys>
 void HashTable<ignoreNullKeys>::clear(bool freeTable) {
-  if (otherTables_.size() > 0) {
-    rows_->clearNextRowVectors();
-    for (auto i = 0; i < otherTables_.size(); ++i) {
-      otherTables_[i]->rows()->clearNextRowVectors();
-    }
-  }
   for (auto* rowContainer : allRows()) {
     rowContainer->clear();
   }
@@ -751,6 +743,7 @@ void HashTable<ignoreNullKeys>::clear(bool freeTable) {
     } else {
       rows_->pool()->freeContiguous(tableAllocation_);
       table_ = nullptr;
+      capacity_ = 0;
     }
   }
   numDistinct_ = 0;
@@ -935,6 +928,13 @@ void HashTable<ignoreNullKeys>::parallelJoinBuild() {
     rowPartitions.push_back(table->rows()->createRowPartitions(*rows_->pool()));
   }
 
+  // Passing driver context directly to avoid cross thread access to thread
+  // local driver thread context.
+  const DriverCtx* driverCtx{nullptr};
+  if (const auto* driverThreadCtx = driverThreadContext()) {
+    driverCtx = driverThreadCtx->driverCtx();
+  }
+
   // The parallel table partitioning step.
   for (auto i = 0; i < numPartitions; ++i) {
     auto* table = getTable(i);
@@ -944,7 +944,10 @@ void HashTable<ignoreNullKeys>::parallelJoinBuild() {
           return std::make_unique<bool>(true);
         }));
     VELOX_CHECK(!partitionSteps.empty());
-    buildExecutor_->add([step = partitionSteps.back()]() { step->prepare(); });
+    buildExecutor_->add([driverCtx, step = partitionSteps.back()]() {
+      ScopedDriverThreadContext scopedDriverThreadContext(driverCtx);
+      step->prepare();
+    });
   }
 
   std::exception_ptr error;
@@ -954,6 +957,12 @@ void HashTable<ignoreNullKeys>::parallelJoinBuild() {
   }
 
   // The parallel table building step.
+  VELOX_CHECK(joinInsertAllocators_.empty());
+  joinInsertAllocators_.reserve(otherTables_.size());
+  for (int i = 0; i < otherTables_.size(); ++i) {
+    joinInsertAllocators_.push_back(
+        std::make_unique<HashStringAllocator>(rows_->pool()));
+  }
   std::vector<std::vector<char*>> overflowPerPartition(numPartitions);
   for (auto i = 0; i < numPartitions; ++i) {
     buildSteps.push_back(std::make_shared<AsyncSource<bool>>(
@@ -962,7 +971,10 @@ void HashTable<ignoreNullKeys>::parallelJoinBuild() {
           return std::make_unique<bool>(true);
         }));
     VELOX_CHECK(!buildSteps.empty());
-    buildExecutor_->add([step = buildSteps.back()]() { step->prepare(); });
+    buildExecutor_->add([driverCtx, step = buildSteps.back()]() {
+      ScopedDriverThreadContext scopedDriverThreadContext(driverCtx);
+      step->prepare();
+    });
   }
   syncWorkItems(buildSteps, error, offThreadBuildTiming_);
 
@@ -984,7 +996,8 @@ void HashTable<ignoreNullKeys>::parallelJoinBuild() {
         overflows.data(),
         hashes.data(),
         overflows.size(),
-        nullptr);
+        nullptr,
+        &rows_->stringAllocator());
 
     VELOX_CHECK_EQ(table->rows()->numRows(), table->numParallelBuildRows_);
   }
@@ -1052,8 +1065,11 @@ void HashTable<ignoreNullKeys>::buildJoinPartition(
       buildPartitionBounds_[partition],
       buildPartitionBounds_[partition + 1],
       overflow};
-  auto rowContainer =
-      (partition == 0 ? this : otherTables_[partition - 1].get())->rows();
+  const int partitionNum = partition;
+  auto* allocator = (partitionNum == 0)
+      ? &rows_->stringAllocator()
+      : joinInsertAllocators_[partitionNum - 1].get();
+  VELOX_CHECK_NOT_NULL(allocator);
   for (auto i = 0; i < numPartitions; ++i) {
     auto* table = i == 0 ? this : otherTables_[i - 1].get();
     RowContainerIterator iter;
@@ -1061,7 +1077,12 @@ void HashTable<ignoreNullKeys>::buildJoinPartition(
                iter, partition, kBatch, *rowPartitions[i], rows.data())) {
       hashRows(folly::Range(rows.data(), numRows), false, hashes);
       insertForJoin(
-          rowContainer, rows.data(), hashes.data(), numRows, &partitionInfo);
+          table->rows_.get(),
+          rows.data(),
+          hashes.data(),
+          numRows,
+          &partitionInfo,
+          allocator);
       table->numParallelBuildRows_ += numRows;
     }
   }
@@ -1077,7 +1098,13 @@ bool HashTable<ignoreNullKeys>::insertBatch(
     return false;
   }
   if (isJoinBuild_) {
-    insertForJoin(rows(), groups, hashes.data(), numGroups);
+    insertForJoin(
+        rows(),
+        groups,
+        hashes.data(),
+        numGroups,
+        nullptr,
+        &rows_->stringAllocator());
   } else {
     insertForGroupBy(groups, hashes.data(), numGroups);
   }
@@ -1137,28 +1164,32 @@ void HashTable<ignoreNullKeys>::insertForGroupBy(
 }
 
 template <bool ignoreNullKeys>
-bool HashTable<ignoreNullKeys>::arrayPushRow(char* row, int32_t index) {
-  auto existing = table_[index];
-  if (existing) {
-    if (nextOffset_) {
+bool HashTable<ignoreNullKeys>::arrayPushRow(
+    RowContainer* rows,
+    char* row,
+    int32_t index,
+    HashStringAllocator* allocator) {
+  auto* existingRow = table_[index];
+  if (existingRow != nullptr) {
+    if (nextOffset_ > 0) {
       hasDuplicates_ = true;
-      rows_->appendNextRow(existing, row);
+      rows->appendNextRow(existingRow, row, allocator);
     }
     return false;
   }
   table_[index] = row;
-  return !existing;
+  return existingRow == nullptr;
 }
 
 template <bool ignoreNullKeys>
 void HashTable<ignoreNullKeys>::pushNext(
     RowContainer* rows,
     char* row,
-    char* next) {
-  if (nextOffset_ > 0) {
-    hasDuplicates_ = true;
-    rows->appendNextRow(row, next);
-  }
+    char* next,
+    HashStringAllocator* allocator) {
+  VELOX_CHECK_GT(nextOffset_, 0);
+  hasDuplicates_ = true;
+  rows->appendNextRow(row, next, allocator);
 }
 
 template <bool ignoreNullKeys>
@@ -1169,7 +1200,8 @@ FOLLY_ALWAYS_INLINE void HashTable<ignoreNullKeys>::buildFullProbe(
     uint64_t hash,
     char* inserted,
     bool extraCheck,
-    TableInsertPartitionInfo* partitionInfo) {
+    TableInsertPartitionInfo* partitionInfo,
+    HashStringAllocator* allocator) {
   constexpr int32_t kKeyOffset =
       -static_cast<int32_t>(sizeof(normalized_key_t));
   auto insertFn = [&](int32_t /*row*/, PartitionBoundIndexType index) {
@@ -1187,8 +1219,8 @@ FOLLY_ALWAYS_INLINE void HashTable<ignoreNullKeys>::buildFullProbe(
         [&](char* group, int32_t /*row*/) {
           if (RowContainer::normalizedKey(group) ==
               RowContainer::normalizedKey(inserted)) {
-            if (nextOffset_) {
-              pushNext(rows, group, inserted);
+            if (nextOffset_ > 0) {
+              pushNext(rows, group, inserted, allocator);
             }
             return true;
           }
@@ -1205,7 +1237,7 @@ FOLLY_ALWAYS_INLINE void HashTable<ignoreNullKeys>::buildFullProbe(
         [&](char* group, int32_t /*row*/) {
           if (compareKeys(group, inserted)) {
             if (nextOffset_ > 0) {
-              pushNext(rows, group, inserted);
+              pushNext(rows, group, inserted, allocator);
             }
             return true;
           }
@@ -1225,7 +1257,8 @@ FOLLY_ALWAYS_INLINE void HashTable<ignoreNullKeys>::insertForJoinWithPrefetch(
     char** groups,
     uint64_t* hashes,
     int32_t numGroups,
-    TableInsertPartitionInfo* partitionInfo) {
+    TableInsertPartitionInfo* partitionInfo,
+    HashStringAllocator* allocator) {
   auto i = 0;
   ProbeState states[kPrefetchSize];
   constexpr int32_t kKeyOffset =
@@ -1245,14 +1278,20 @@ FOLLY_ALWAYS_INLINE void HashTable<ignoreNullKeys>::insertForJoinWithPrefetch(
     for (int32_t j = 0; j < kPrefetchSize; ++j) {
       auto index = i + j;
       buildFullProbe<isNormailizedKeyMode>(
-          rows, states[j], hashes[index], groups[index], j != 0, partitionInfo);
+          rows,
+          states[j],
+          hashes[index],
+          groups[index],
+          j != 0,
+          partitionInfo,
+          allocator);
     }
   }
   for (; i < numGroups; ++i) {
     states[0].preProbe(*this, hashes[i], i);
     states[0].firstProbe(*this, keyOffset);
     buildFullProbe<isNormailizedKeyMode>(
-        rows, states[0], hashes[i], groups[i], false, partitionInfo);
+        rows, states[0], hashes[i], groups[i], false, partitionInfo, allocator);
   }
 }
 
@@ -1262,23 +1301,24 @@ void HashTable<ignoreNullKeys>::insertForJoin(
     char** groups,
     uint64_t* hashes,
     int32_t numGroups,
-    TableInsertPartitionInfo* partitionInfo) {
+    TableInsertPartitionInfo* partitionInfo,
+    HashStringAllocator* allocator) {
   // The insertable rows are in the table, all get put in the hash table or
   // array.
   if (hashMode_ == HashMode::kArray) {
     for (auto i = 0; i < numGroups; ++i) {
       auto index = hashes[i];
       VELOX_CHECK_LT(index, capacity_);
-      arrayPushRow(groups[i], index);
+      arrayPushRow(rows, groups[i], index, allocator);
     }
     return;
   }
   if (hashMode_ == HashMode::kNormalizedKey) {
     insertForJoinWithPrefetch<true>(
-        rows, groups, hashes, numGroups, partitionInfo);
+        rows, groups, hashes, numGroups, partitionInfo, allocator);
   } else {
     insertForJoinWithPrefetch<false>(
-        rows, groups, hashes, numGroups, partitionInfo);
+        rows, groups, hashes, numGroups, partitionInfo, allocator);
   }
 }
 
@@ -1712,6 +1752,20 @@ void HashTable<ignoreNullKeys>::prepareJoinTable(
     otherTables_.emplace_back(std::unique_ptr<HashTable<ignoreNullKeys>>(
         dynamic_cast<HashTable<ignoreNullKeys>*>(table.release())));
   }
+
+  // If there are multiple tables, we need to merge the 'columnHasNulls' flags
+  // from the containers of each table and store them in the main table. This
+  // is necessary because, when extracting results, 'rows' may contain row
+  // pointers from multiple containers. We need to ensure the correctness of
+  // the 'columnHasNulls' flags.
+  for (int i = 0; i < rows_->columnTypes().size(); ++i) {
+    columnHasNulls_.emplace_back(rows_->columnHasNulls(i));
+    for (auto& other : otherTables_) {
+      columnHasNulls_[i] =
+          columnHasNulls_[i] || other->rows()->columnHasNulls(i);
+    }
+  }
+
   bool useValueIds = mayUseValueIds(*this);
   if (useValueIds) {
     for (auto& other : otherTables_) {
@@ -1751,17 +1805,52 @@ void HashTable<ignoreNullKeys>::prepareJoinTable(
 }
 
 template <bool ignoreNullKeys>
+inline uint64_t HashTable<ignoreNullKeys>::joinProjectedVarColumnsSize(
+    const std::vector<vector_size_t>& columns,
+    const char* row) const {
+  uint64_t totalBytes{0};
+  for (const auto& column : columns) {
+    if (!rows_->columnTypes()[column]->isFixedWidth()) {
+      totalBytes += rows_->variableSizeAt(row, column);
+    }
+  }
+  return totalBytes;
+}
+
+template <bool ignoreNullKeys>
+inline uint64_t HashTable<ignoreNullKeys>::joinProjectedVarColumnsSize(
+    const std::vector<vector_size_t>& columns,
+    NextRowVector*& rows) const {
+  uint64_t totalBytes{0};
+  for (const auto& column : columns) {
+    if (!rows_->columnTypes()[column]->isFixedWidth()) {
+      for (const auto* row : *rows) {
+        totalBytes += rows_->variableSizeAt(row, column);
+      }
+    }
+  }
+  return totalBytes;
+}
+
+template <bool ignoreNullKeys>
 int32_t HashTable<ignoreNullKeys>::listJoinResults(
     JoinResultIterator& iter,
     bool includeMisses,
     folly::Range<vector_size_t*> inputRows,
-    folly::Range<char**> hits) {
+    folly::Range<char**> hits,
+    uint64_t maxBytes) {
   VELOX_CHECK_LE(inputRows.size(), hits.size());
-  if (!hasDuplicates_) {
-    return listJoinResultsNoDuplicates(iter, includeMisses, inputRows, hits);
+
+  if (iter.estimatedRowSize.has_value() && !hasDuplicates_) {
+    // When there is no duplicates, and row size is estimable, we are able to
+    // go through fast path.
+    return listJoinResultsFastPath(
+        iter, includeMisses, inputRows, hits, maxBytes);
   }
+
   size_t numOut = 0;
   auto maxOut = inputRows.size();
+  uint64_t totalBytes{0};
   while (iter.lastRowIndex < iter.rows->size()) {
     auto row = (*iter.rows)[iter.lastRowIndex];
     auto hit = (*iter.hits)[row]; // NOLINT
@@ -1784,8 +1873,12 @@ int32_t HashTable<ignoreNullKeys>::listJoinResults(
       hits[numOut] = hit;
       numOut++;
       iter.lastRowIndex++;
+      totalBytes += iter.estimatedRowSize.has_value()
+          ? iter.estimatedRowSize.value()
+          : (joinProjectedVarColumnsSize(iter.varSizeListColumns, hit) +
+             iter.fixedSizeListColumnsSizeSum);
     } else {
-      auto numRows = rows->size();
+      const auto numRows = rows->size();
       auto num =
           std::min(numRows - iter.lastDuplicateRowIndex, maxOut - numOut);
       std::fill_n(inputRows.begin() + numOut, num, row);
@@ -1795,12 +1888,20 @@ int32_t HashTable<ignoreNullKeys>::listJoinResults(
           num * sizeof(char*));
       iter.lastDuplicateRowIndex += num;
       numOut += num;
+      if (iter.estimatedRowSize.has_value()) {
+        totalBytes += iter.estimatedRowSize.value() * numRows;
+      } else {
+        totalBytes +=
+            joinProjectedVarColumnsSize(iter.varSizeListColumns, rows);
+        totalBytes += (iter.fixedSizeListColumnsSizeSum * rows->size());
+        totalBytes += (iter.fixedSizeListColumnsSizeSum * numRows);
+      }
       if (iter.lastDuplicateRowIndex >= numRows) {
         iter.lastDuplicateRowIndex = 0;
         iter.lastRowIndex++;
       }
     }
-    if (numOut >= maxOut) {
+    if (numOut >= maxOut || totalBytes >= maxBytes) {
       return numOut;
     }
   }
@@ -1808,15 +1909,20 @@ int32_t HashTable<ignoreNullKeys>::listJoinResults(
 }
 
 template <bool ignoreNullKeys>
-int32_t HashTable<ignoreNullKeys>::listJoinResultsNoDuplicates(
+int32_t HashTable<ignoreNullKeys>::listJoinResultsFastPath(
     JoinResultIterator& iter,
     bool includeMisses,
     folly::Range<vector_size_t*> inputRows,
-    folly::Range<char**> hits) {
+    folly::Range<char**> hits,
+    uint64_t maxBytes) {
   int32_t numOut = 0;
-  auto maxOut = inputRows.size();
+  const auto maxOut = std::min(
+      static_cast<uint64_t>(inputRows.size()),
+      (iter.estimatedRowSize.value() != 0
+           ? maxBytes / iter.estimatedRowSize.value()
+           : std::numeric_limits<uint64_t>::max()));
   int32_t i = iter.lastRowIndex;
-  auto numRows = iter.rows->size();
+  const auto numRows = iter.rows->size();
 
   constexpr int32_t kWidth = xsimd::batch<int64_t>::size;
   auto sourceHits = reinterpret_cast<int64_t*>(iter.hits->data());
@@ -1824,8 +1930,8 @@ int32_t HashTable<ignoreNullKeys>::listJoinResultsNoDuplicates(
   // We pass the pointers as int64_t's in 'hitWords'.
   auto resultHits = reinterpret_cast<int64_t*>(hits.data());
   auto resultRows = inputRows.data();
-  int32_t outLimit = maxOut - kWidth;
-  for (; i + kWidth <= numRows && numOut < outLimit; i += kWidth) {
+  const int64_t simdOutLimit = maxOut - kWidth;
+  for (; i + kWidth <= numRows && numOut < simdOutLimit; i += kWidth) {
     auto indices = simd::loadGatherIndices<int64_t, int32_t>(sourceRows + i);
     auto hitWords = simd::gather(sourceHits, indices);
     auto misses = includeMisses ? 0 : simd::toBitMask(hitWords == 0);

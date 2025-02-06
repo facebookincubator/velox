@@ -25,6 +25,7 @@ add_executable(
   Main.cpp
   MinMaxAggregationTest.cpp
   MinMaxByAggregationTest.cpp
+  ModeAggregateTest.cpp
   RegrReplacementAggregationTest.cpp
   SumAggregationTest.cpp)
 
@@ -41,5 +42,15 @@ target_link_libraries(
   velox_hive_connector
   velox_vector_fuzzer
   gflags::gflags
-  gtest
-  gtest_main)
+  GTest::gtest
+  GTest::gtest_main)
+
+add_executable(velox_spark_aggregate_function_registry_test
+               AggregateRegisterTest.cpp)
+
+add_test(velox_spark_aggregate_function_registry_test
+         velox_spark_aggregate_function_registry_test)
+
+target_link_libraries(
+  velox_spark_aggregate_function_registry_test velox_functions_spark_aggregates
+  GTest::gtest GTest::gtest_main)

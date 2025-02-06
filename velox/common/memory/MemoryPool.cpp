@@ -27,8 +27,6 @@
 
 #include <re2/re2.h>
 
-DECLARE_bool(velox_suppress_memory_capacity_exceeding_error_message);
-
 using facebook::velox::common::testutil::TestValue;
 
 namespace facebook::velox::memory {
@@ -413,24 +411,17 @@ MemoryPoolImpl::MemoryPoolImpl(
     Kind kind,
     std::shared_ptr<MemoryPool> parent,
     std::unique_ptr<MemoryReclaimer> reclaimer,
-    GrowCapacityCallback growCapacityCb,
-    DestructionCallback destructionCb,
     const Options& options)
     : MemoryPool{name, kind, parent, options},
       manager_{memoryManager},
       allocator_{manager_->allocator()},
-      growCapacityCb_(std::move(growCapacityCb)),
-      destructionCb_(std::move(destructionCb)),
+      arbitrator_{manager_->arbitrator()},
       debugPoolNameRegex_(debugEnabled_ ? *(debugPoolNameRegex().rlock()) : ""),
       reclaimer_(std::move(reclaimer)),
       // The memory manager sets the capacity through grow() according to the
       // actually used memory arbitration policy.
       capacity_(parent_ != nullptr ? kMaxMemory : 0) {
   VELOX_CHECK(options.threadSafe || isLeaf());
-  VELOX_CHECK(
-      isRoot() || (destructionCb_ == nullptr && growCapacityCb_ == nullptr),
-      "Only root memory pool allows to set destruction and capacity grow callbacks: {}",
-      name_);
 }
 
 MemoryPoolImpl::~MemoryPoolImpl() {
@@ -732,8 +723,6 @@ std::shared_ptr<MemoryPool> MemoryPoolImpl::genChild(
       kind,
       parent,
       std::move(reclaimer),
-      nullptr,
-      nullptr,
       Options{
           .alignment = alignment_,
           .trackUsage = trackUsage_,
@@ -842,8 +831,7 @@ bool MemoryPoolImpl::incrementReservationThreadSafe(
 
   VELOX_CHECK_NULL(parent_);
 
-  ++numCapacityGrowths_;
-  if (growCapacityCb_(requestor, size)) {
+  if (growCapacity(requestor, size)) {
     TestValue::adjust(
         "facebook::velox::memory::MemoryPoolImpl::incrementReservationThreadSafe::AfterGrowCallback",
         this);
@@ -853,16 +841,38 @@ bool MemoryPoolImpl::incrementReservationThreadSafe(
   }
   VELOX_MEM_POOL_CAP_EXCEEDED(fmt::format(
       "Exceeded memory pool capacity after attempt to grow capacity "
-      "through arbitration. Requestor pool name '{}', request size {}, memory "
-      "pool capacity {}, memory pool max capacity {}, memory manager capacity "
-      "{}, current usage {}\n{}",
+      "through arbitration. Requestor pool name '{}', request size {}, current "
+      "usage {}, memory pool capacity {}, memory pool max capacity {}, memory "
+      "manager capacity {}\n{}",
       requestor->name(),
       succinctBytes(size),
+      succinctBytes(requestor->usedBytes()),
       capacityToString(capacity()),
       capacityToString(maxCapacity_),
       capacityToString(manager_->capacity()),
-      succinctBytes(requestor->usedBytes()),
       treeMemoryUsage()));
+}
+
+bool MemoryPoolImpl::growCapacity(MemoryPool* requestor, uint64_t size) {
+  VELOX_CHECK(requestor->isLeaf());
+  ++numCapacityGrowths_;
+
+  bool success{false};
+  {
+    MemoryPoolArbitrationSection arbitrationSection(requestor);
+    success = arbitrator_->growCapacity(this, size);
+  }
+  // The memory pool might have been aborted during the time it leaves the
+  // arbitration no matter the arbitration succeed or not.
+  if (FOLLY_UNLIKELY(aborted())) {
+    if (success) {
+      // Release the reservation committed by the memory arbitration on success.
+      decrementReservation(size);
+    }
+    VELOX_CHECK_NOT_NULL(abortError());
+    std::rethrow_exception(abortError());
+  }
+  return success;
 }
 
 bool MemoryPoolImpl::maybeIncrementReservation(uint64_t size) {
@@ -954,7 +964,7 @@ std::string MemoryPoolImpl::treeMemoryUsage(bool skipEmptyPool) const {
   if (parent_ != nullptr) {
     return parent_->treeMemoryUsage(skipEmptyPool);
   }
-  if (FLAGS_velox_suppress_memory_capacity_exceeding_error_message) {
+  if (config::globalConfig().suppressMemoryCapacityExceedingErrorMessage) {
     return "";
   }
   std::stringstream out;
@@ -1102,10 +1112,10 @@ void MemoryPoolImpl::abort(const std::exception_ptr& error) {
     parent_->abort(error);
     return;
   }
-  if (reclaimer() == nullptr) {
-    VELOX_FAIL("Can't abort the memory pool {} without reclaimer", name_);
-  }
   setAbortError(error);
+  if (reclaimer() == nullptr) {
+    return;
+  }
   reclaimer()->abort(this, error);
 }
 
@@ -1122,6 +1132,18 @@ void MemoryPoolImpl::checkIfAborted() const {
     VELOX_CHECK_NOT_NULL(abortError());
     std::rethrow_exception(abortError());
   }
+}
+
+void MemoryPoolImpl::setDestructionCallback(
+    const DestructionCallback& callback) {
+  VELOX_CHECK_NOT_NULL(callback);
+  VELOX_CHECK(
+      isRoot(),
+      "Only root memory pool allows to set destruction callbacks: {}",
+      name_);
+  std::lock_guard<std::mutex> l(mutex_);
+  VELOX_CHECK_NULL(destructionCb_);
+  destructionCb_ = callback;
 }
 
 void MemoryPoolImpl::testingSetCapacity(int64_t bytes) {
@@ -1240,13 +1262,36 @@ void MemoryPoolImpl::leakCheckDbg() {
   }
   std::stringbuf buf;
   std::ostream oss(&buf);
-  oss << "Detected total of " << debugAllocRecords_.size()
-      << " leaked allocations:\n";
+  oss << "[MemoryPool] : " << name_ << " - Detected total of "
+      << debugAllocRecords_.size() << " leaked allocations:\n";
+  struct AllocationStats {
+    uint64_t size{0};
+    uint64_t numAllocations{0};
+  };
+  std::unordered_map<std::string, AllocationStats> sizeAggregatedRecords;
   for (const auto& itr : debugAllocRecords_) {
     const auto& allocationRecord = itr.second;
-    oss << "======== Leaked memory allocation of " << allocationRecord.size
-        << " bytes ========\n"
-        << allocationRecord.callStack.toString();
+    const auto stackStr = allocationRecord.callStack.toString();
+    if (sizeAggregatedRecords.count(stackStr) == 0) {
+      sizeAggregatedRecords[stackStr] = AllocationStats();
+    }
+    sizeAggregatedRecords[stackStr].size += allocationRecord.size;
+    ++sizeAggregatedRecords[stackStr].numAllocations;
+  }
+  std::vector<std::pair<std::string, AllocationStats>> sortedRecords(
+      sizeAggregatedRecords.begin(), sizeAggregatedRecords.end());
+  std::sort(
+      sortedRecords.begin(),
+      sortedRecords.end(),
+      [](const std::pair<std::string, AllocationStats>& a,
+         std::pair<std::string, AllocationStats>& b) {
+        return a.second.size > b.second.size;
+      });
+  for (const auto& pair : sortedRecords) {
+    oss << "======== Leaked memory from " << pair.second.numAllocations
+        << " total allocations of " << succinctBytes(pair.second.size)
+        << " total size ========\n"
+        << pair.first << "\n";
   }
   VELOX_FAIL(buf.str());
 }

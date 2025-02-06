@@ -21,8 +21,9 @@
 #include "velox/common/base/Exceptions.h"
 
 namespace facebook::velox::tpch {
-
 namespace {
+
+using namespace dbgen;
 
 // DBGenBackend is a singleton that controls access to the DBGEN C functions,
 // and ensures that the required structures are properly initialized and
@@ -36,7 +37,8 @@ class DBGenBackend {
     // structures required by dbgen are populated.
     DBGenContext dbgenCtx;
     load_dists(
-        10 * 1024 * 1024, &dbgenCtx); // 10 MB buffer size for text generation.
+        300 * 1024 * 1024,
+        &dbgenCtx); // 300 MB buffer size for text generation.
   }
   ~DBGenBackend() {
     cleanup_dists();

@@ -104,9 +104,7 @@ class TableWriter : public Operator {
       DriverCtx* driverCtx,
       const std::shared_ptr<const core::TableWriteNode>& tableWriteNode);
 
-  BlockingReason isBlocked(ContinueFuture* /* future */) override {
-    return BlockingReason::kNotBlocked;
-  }
+  BlockingReason isBlocked(ContinueFuture* future) override;
 
   void initialize() override;
 
@@ -180,7 +178,8 @@ class TableWriter : public Operator {
         const std::shared_ptr<Driver>& driver,
         Operator* op)
         : ParallelMemoryReclaimer(
-              spillConfig.has_value() ? spillConfig.value().executor : nullptr),
+              spillConfig.has_value() ? spillConfig.value().executor : nullptr,
+              0),
           canReclaim_(spillConfig.has_value()),
           driver_(driver),
           op_(op) {}
@@ -192,11 +191,18 @@ class TableWriter : public Operator {
 
   void createDataSink();
 
+  bool finishDataSink();
+
   std::vector<std::string> closeDataSink();
 
   void abortDataSink();
 
   void updateStats(const connector::DataSink::Stats& stats);
+
+  // Sets type mappings in `inputMapping_`, `mappedInputType_`, and
+  // `mappedOutputType_`.
+  void setTypeMappings(
+      const std::shared_ptr<const core::TableWriteNode>& tableWriteNode);
 
   std::string createTableCommitContext(bool lastOutput);
 
@@ -212,8 +218,20 @@ class TableWriter : public Operator {
   std::shared_ptr<connector::Connector> connector_;
   std::shared_ptr<connector::ConnectorQueryCtx> connectorQueryCtx_;
   std::unique_ptr<connector::DataSink> dataSink_;
+
+  // Contains the mappings between input and output columns.
   std::vector<column_index_t> inputMapping_;
-  std::shared_ptr<const RowType> mappedType_;
+
+  // Stores the mapped input and output types. Note that input types must have
+  // the same types as the types receing in addInput(), but they may be in a
+  // different order. Output type may have different types to allow the writer
+  // to convert them (for example, when writing structs as flap maps).
+  std::shared_ptr<const RowType> mappedInputType_;
+  std::shared_ptr<const RowType> mappedOutputType_;
+
+  // The blocking future might be set when finish data sink.
+  ContinueFuture blockingFuture_{ContinueFuture::makeEmpty()};
+  BlockingReason blockingReason_{BlockingReason::kNotBlocked};
 
   bool finished_{false};
   bool closed_{false};

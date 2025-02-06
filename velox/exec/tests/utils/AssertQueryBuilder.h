@@ -35,13 +35,16 @@ class AssertQueryBuilder {
   /// Change requested number of drivers. Default is 1.
   AssertQueryBuilder& maxDrivers(int32_t maxDrivers);
 
+  /// Change the query memory pool capacity. Default has no limit
+  AssertQueryBuilder& maxQueryCapacity(int64_t maxCapacity);
+
   /// Change task's 'destination', the partition number assigned to the task.
   /// Default is 0.
   AssertQueryBuilder& destination(int32_t destination);
 
-  /// Use single-threaded execution to execute the Velox plan.
+  /// Use serial execution mode to execute the Velox plan.
   /// Default is false.
-  AssertQueryBuilder& singleThreaded(bool singleThreaded);
+  AssertQueryBuilder& serialExecution(bool serial);
 
   /// Set configuration property. May be called multiple times to set multiple
   /// properties.
@@ -64,6 +67,11 @@ class AssertQueryBuilder {
       const std::string& connectorId,
       const std::string& key,
       const std::string& value);
+
+  AssertQueryBuilder& connectorSessionProperties(
+      const std::unordered_map<
+          std::string,
+          std::unordered_map<std::string, std::string>>& properties);
 
   // Methods to add splits.
 
@@ -175,13 +183,20 @@ class AssertQueryBuilder {
       memory::MemoryPool* pool,
       std::shared_ptr<Task>& task);
 
+  /// Run the query and return the number of result rows.
+  uint64_t runWithoutResults(std::shared_ptr<Task>& task);
+
  private:
   std::pair<std::unique_ptr<TaskCursor>, std::vector<RowVectorPtr>>
   readCursor();
 
+  static std::unique_ptr<folly::Executor> newExecutor() {
+    return std::make_unique<folly::CPUThreadPoolExecutor>(
+        std::thread::hardware_concurrency());
+  }
+
   // Used by the created task as the default driver executor.
-  std::unique_ptr<folly::Executor> executor_{
-      new folly::CPUThreadPoolExecutor(std::thread::hardware_concurrency())};
+  std::unique_ptr<folly::Executor> executor_{newExecutor()};
   DuckDbQueryRunner* const duckDbQueryRunner_;
   CursorParameters params_;
   std::unordered_map<std::string, std::string> configs_;

@@ -62,7 +62,10 @@ Split makeSplit(
 
 /// Create a connector split from an exsiting file.
 std::shared_ptr<connector::ConnectorSplit> makeConnectorSplit(
-    const std::string& filePath);
+    const std::string& filePath,
+    const std::unordered_map<std::string, std::optional<std::string>>&
+        partitionKeys = {},
+    std::optional<int32_t> tableBucketNumber = std::nullopt);
 
 /// Create column names with the pattern '${prefix}${i}'.
 std::vector<std::string> makeNames(const std::string& prefix, size_t n);
@@ -80,7 +83,7 @@ RowVectorPtr makeNullRows(
 /// type are not supported.
 bool isTableScanSupported(const TypePtr& type);
 
-/// Concat tow RowTypes.
+/// Concat two RowTypes.
 RowTypePtr concat(const RowTypePtr& a, const RowTypePtr& b);
 
 /// Skip queries that use Timestamp, Varbinary, and IntervalDayTime types.
@@ -90,23 +93,60 @@ RowTypePtr concat(const RowTypePtr& a, const RowTypePtr& b);
 /// TODO Investigate mismatches reported when comparing Varbinary.
 bool containsUnsupportedTypes(const TypePtr& type);
 
+/// Determines whether the signature has an argument that contains typeName.
+/// typeName should be in lower case.
+bool usesInputTypeName(
+    const exec::FunctionSignature& signature,
+    const std::string& typeName);
+
+/// Determines whether the signature has an argument or return type that
+/// contains typeName. typeName should be in lower case.
+bool usesTypeName(
+    const exec::FunctionSignature& signature,
+    const std::string& typeName);
+
+// First resolves typeSignature. Then, the resolved type is a RowType or
+// contains RowTypes with empty field names, adds default names to these fields
+// in the RowTypes.
+TypePtr sanitizeTryResolveType(
+    const exec::TypeSignature& typeSignature,
+    const std::unordered_map<std::string, SignatureVariable>& variables,
+    const std::unordered_map<std::string, TypePtr>& resolvedTypeVariables);
+
+TypePtr sanitizeTryResolveType(
+    const exec::TypeSignature& typeSignature,
+    const std::unordered_map<std::string, SignatureVariable>& variables,
+    const std::unordered_map<std::string, TypePtr>& typeVariablesBindings,
+    std::unordered_map<std::string, int>& integerVariablesBindings);
+
 // Invoked to set up memory system with arbitration.
-void setupMemory(int64_t allocatorCapacity, int64_t arbitratorCapacity);
+void setupMemory(
+    int64_t allocatorCapacity,
+    int64_t arbitratorCapacity,
+    bool enableGlobalArbitration = true);
 
-enum ReferenceQueryErrorCode {
-  kSuccess,
-  kReferenceQueryFail,
-  kReferenceQueryUnsupported
-};
+/// Registers hive connector with configs. It should be called in the
+/// constructor of fuzzers that test plans with TableScan or uses
+/// PrestoQueryRunner that writes data to a local file.
+void registerHiveConnector(
+    const std::unordered_map<std::string, std::string>& hiveConfigs);
 
-// Converts 'plan' into an SQL query and runs it on 'input' in the reference DB.
+// Returns a PrestoQueryRunner instance if prestoUrl is non-empty. Otherwise,
+// returns a DuckQueryRunner instance and set disabled aggregation functions
+// properly.
+std::unique_ptr<ReferenceQueryRunner> setupReferenceQueryRunner(
+    memory::MemoryPool* aggregatePool,
+    const std::string& prestoUrl,
+    const std::string& runnerName,
+    const uint32_t& reqTimeoutMs);
+
+// Converts 'plan' into an SQL query and runs in the reference DB.
 // Result is returned as a MaterializedRowMultiset with the
 // ReferenceQueryErrorCode::kSuccess if successful, or an std::nullopt with a
 // ReferenceQueryErrorCode if the query fails.
 std::pair<std::optional<MaterializedRowMultiset>, ReferenceQueryErrorCode>
 computeReferenceResults(
     const core::PlanNodePtr& plan,
-    const std::vector<RowVectorPtr>& input,
     ReferenceQueryRunner* referenceQueryRunner);
 
 // Similar to computeReferenceResults(), but returns the result as a
@@ -115,7 +155,6 @@ computeReferenceResults(
 std::pair<std::optional<std::vector<RowVectorPtr>>, ReferenceQueryErrorCode>
 computeReferenceResultsAsVector(
     const core::PlanNodePtr& plan,
-    const std::vector<RowVectorPtr>& input,
     ReferenceQueryRunner* referenceQueryRunner);
 
 } // namespace facebook::velox::exec::test

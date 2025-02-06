@@ -14,6 +14,7 @@
 
 add_executable(
   velox_base_test
+  AdmissionControllerTest.cpp
   AsyncSourceTest.cpp
   BitUtilTest.cpp
   BloomFilterTest.cpp
@@ -21,7 +22,7 @@ add_executable(
   ConcurrentCounterTest.cpp
   ExceptionTest.cpp
   FsTest.cpp
-  GenericAdmissionControllerTest.cpp
+  IndexedPriorityQueueTest.cpp
   RangeTest.cpp
   RawVectorTest.cpp
   RuntimeMetricsTest.cpp
@@ -29,6 +30,7 @@ add_executable(
   ScratchTest.cpp
   SemaphoreTest.cpp
   SimdUtilTest.cpp
+  SkewedPartitionBalancerTest.cpp
   SpillConfigTest.cpp
   SpillStatsTest.cpp
   StatsReporterTest.cpp
@@ -47,14 +49,15 @@ target_link_libraries(
     velox_status
     velox_exception
     velox_temp_path
+    velox_flag_definitions
     Boost::filesystem
     Boost::headers
     Folly::folly
     fmt::fmt
     gflags::gflags
-    gtest
-    gmock
-    gtest_main)
+    GTest::gtest
+    GTest::gmock
+    GTest::gtest_main)
 
 add_executable(velox_id_map_test IdMapTest.cpp)
 
@@ -68,8 +71,8 @@ target_link_libraries(
   Boost::headers
   gflags::gflags
   glog::glog
-  gtest
-  gtest_main
+  GTest::gtest
+  GTest::gtest_main
   pthread)
 
 add_executable(velox_memcpy_meter Memcpy.cpp)

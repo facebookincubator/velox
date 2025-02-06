@@ -75,6 +75,25 @@ TEST_F(SumTest, sumTinyint) {
       "SELECT sum(c1) FROM tmp WHERE c0 % 2 = 0");
 }
 
+TEST_F(SumTest, sumIntervalDayToSecond) {
+  auto inputRows = {
+      makeRowVector(
+          {makeFlatVector<int64_t>({1, 4}, INTERVAL_DAY_TIME()),
+           makeFlatVector<int64_t>({1, 2}, INTERVAL_DAY_TIME())}),
+
+  };
+  auto expectedResult = {
+      makeRowVector(
+          {makeFlatVector<int64_t>(
+               std::vector<int64_t>{5}, INTERVAL_DAY_TIME()),
+           makeFlatVector<int64_t>(
+               std::vector<int64_t>{3}, INTERVAL_DAY_TIME())}),
+  };
+
+  testAggregations(inputRows, {}, {"sum(c0)", "sum(c1)"}, expectedResult);
+  AggregationTestBase::enableTestIncremental();
+}
+
 TEST_F(SumTest, sumFloat) {
   auto data = makeRowVector({makeFlatVector<float>({2.00, 1.00})});
   createDuckDbTable({data});
@@ -405,7 +424,7 @@ TEST_F(SumTest, hook) {
 
   char* row = reinterpret_cast<char*>(&sumRow);
   uint64_t numNulls = 1;
-  aggregate::SumHook<int64_t, int64_t> hook(
+  aggregate::SumHook<int64_t> hook(
       offsetof(SumRow<int64_t>, sum),
       offsetof(SumRow<int64_t>, nulls),
       1,
@@ -413,7 +432,7 @@ TEST_F(SumTest, hook) {
       &numNulls);
 
   int64_t value = 11;
-  hook.addValue(0, &value);
+  hook.addValue(0, value);
   EXPECT_EQ(0, sumRow.nulls);
   EXPECT_EQ(0, numNulls);
   EXPECT_EQ(value, sumRow.sum);

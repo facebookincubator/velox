@@ -94,6 +94,36 @@ class ArrayCombinationsTest : public FunctionBaseTest {
 
 } // namespace
 
+TEST_F(ArrayCombinationsTest, arrayOfRows) {
+  auto arrayOfRowVector = makeArrayOfRowVector(
+      ROW({"a", "b", "c"}, {INTEGER(), VARCHAR(), BOOLEAN()}),
+      {
+          {},
+          {variant::row({11, "a", true}),
+           variant::row({2, variant::null(TypeKind::VARCHAR), true}),
+           variant::row({31, "d", false})},
+          {variant::row({11, "a", true}),
+           variant::row({2, variant::null(TypeKind::VARCHAR), true}),
+           variant::row({31, "d", false})},
+      });
+  auto comboLengthVector = makeFlatVector(std::vector<int32_t>({0, 2, 5}));
+  auto result = evaluate(
+      "combinations(C0, C1)",
+      makeRowVector({arrayOfRowVector, comboLengthVector}));
+
+  auto expected = makeArrayVector(
+      {0, 1, 4},
+      makeArrayOfRowVector(
+          ROW({"a", "b", "c"}, {INTEGER(), VARCHAR(), BOOLEAN()}),
+          {{},
+           {variant::row({11, "a", true}),
+            variant::row({2, variant::null(TypeKind::VARCHAR), true})},
+           {variant::row({11, "a", true}), variant::row({31, "d", false})},
+           {variant::row({2, variant::null(TypeKind::VARCHAR), true}),
+            variant::row({31, "d", false})}}));
+  facebook::velox::test::assertEqualVectors(expected, result);
+}
+
 TEST_F(ArrayCombinationsTest, intArrays) {
   testIntNullable<int8_t>();
   testIntNullable<int16_t>();

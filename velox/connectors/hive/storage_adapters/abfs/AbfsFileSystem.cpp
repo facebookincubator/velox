@@ -16,48 +16,26 @@
 
 #include "velox/connectors/hive/storage_adapters/abfs/AbfsFileSystem.h"
 
-#include <azure/storage/blobs/blob_client.hpp>
 #include <fmt/format.h>
 #include <folly/executors/IOThreadPoolExecutor.h>
 #include <glog/logging.h>
 
-#include "velox/common/file/File.h"
-#include "velox/connectors/hive/HiveConfig.h"
+#include "velox/connectors/hive/storage_adapters/abfs/AbfsConfig.h"
 #include "velox/connectors/hive/storage_adapters/abfs/AbfsReadFile.h"
+#include "velox/connectors/hive/storage_adapters/abfs/AbfsUtil.h"
 #include "velox/connectors/hive/storage_adapters/abfs/AbfsWriteFile.h"
-#include "velox/core/Config.h"
 
-namespace facebook::velox::filesystems::abfs {
-using namespace Azure::Storage::Blobs;
-
-class AbfsConfig {
- public:
-  AbfsConfig(const Config* config) : config_(config) {}
-
-  std::string connectionString(const std::string& path) const {
-    auto abfsAccount = AbfsAccount(path);
-    auto key = abfsAccount.credKey();
-    VELOX_USER_CHECK(
-        config_->isValueExists(key), "Failed to find storage credentials");
-
-    return abfsAccount.connectionString(config_->get(key).value());
-  }
-
- private:
-  const Config* config_;
-};
+namespace facebook::velox::filesystems {
 
 class AbfsReadFile::Impl {
   constexpr static uint64_t kNaturalReadSize = 4 << 20; // 4M
   constexpr static uint64_t kReadConcurrency = 8;
 
  public:
-  explicit Impl(const std::string& path, const std::string& connectStr) {
-    auto abfsAccount = AbfsAccount(path);
-    fileName_ = abfsAccount.filePath();
-    fileClient_ =
-        std::make_unique<BlobClient>(BlobClient::CreateFromConnectionString(
-            connectStr, abfsAccount.fileSystem(), fileName_));
+  explicit Impl(std::string_view path, const config::ConfigBase& config) {
+    auto abfsConfig = AbfsConfig(path, config);
+    filePath_ = abfsConfig.filePath();
+    fileClient_ = abfsConfig.getReadFileClient();
   }
 
   void initialize(const FileOptions& options) {
@@ -75,18 +53,22 @@ class AbfsReadFile::Impl {
       auto properties = fileClient_->GetProperties();
       length_ = properties.Value.BlobSize;
     } catch (Azure::Storage::StorageException& e) {
-      throwStorageExceptionWithOperationDetails("GetProperties", fileName_, e);
+      throwStorageExceptionWithOperationDetails("GetProperties", filePath_, e);
     }
-
     VELOX_CHECK_GE(length_, 0);
   }
 
-  std::string_view pread(uint64_t offset, uint64_t length, void* buffer) const {
+  std::string_view pread(
+      uint64_t offset,
+      uint64_t length,
+      void* buffer,
+      io::IoStatistics* stats) const {
     preadInternal(offset, length, static_cast<char*>(buffer));
     return {static_cast<char*>(buffer), length};
   }
 
-  std::string pread(uint64_t offset, uint64_t length) const {
+  std::string pread(uint64_t offset, uint64_t length, io::IoStatistics* stats)
+      const {
     std::string result(length, 0);
     preadInternal(offset, length, result.data());
     return result;
@@ -94,7 +76,8 @@ class AbfsReadFile::Impl {
 
   uint64_t preadv(
       uint64_t offset,
-      const std::vector<folly::Range<char*>>& buffers) const {
+      const std::vector<folly::Range<char*>>& buffers,
+      io::IoStatistics* stats) const {
     size_t length = 0;
     auto size = buffers.size();
     for (auto& range : buffers) {
@@ -115,14 +98,15 @@ class AbfsReadFile::Impl {
 
   uint64_t preadv(
       folly::Range<const common::Region*> regions,
-      folly::Range<folly::IOBuf*> iobufs) const {
+      folly::Range<folly::IOBuf*> iobufs,
+      io::IoStatistics* stats) const {
     size_t length = 0;
     VELOX_CHECK_EQ(regions.size(), iobufs.size());
     for (size_t i = 0; i < regions.size(); ++i) {
       const auto& region = regions[i];
       auto& output = iobufs[i];
       output = folly::IOBuf(folly::IOBuf::CREATE, region.length);
-      pread(region.offset, region.length, output.writableData());
+      pread(region.offset, region.length, output.writableData(), stats);
       output.append(region.length);
       length += region.length;
     }
@@ -143,7 +127,7 @@ class AbfsReadFile::Impl {
   }
 
   std::string getName() const {
-    return fileName_;
+    return filePath_;
   }
 
   uint64_t getNaturalReadSize() const {
@@ -159,47 +143,53 @@ class AbfsReadFile::Impl {
 
     Azure::Storage::Blobs::DownloadBlobOptions blob;
     blob.Range = range;
-
     auto response = fileClient_->Download(blob);
     response.Value.BodyStream->ReadToCount(
         reinterpret_cast<uint8_t*>(position), length);
   }
 
-  std::string fileName_;
+  std::string filePath_;
   std::unique_ptr<BlobClient> fileClient_;
-
   int64_t length_ = -1;
 };
 
 AbfsReadFile::AbfsReadFile(
-    const std::string& path,
-    const std::string& connectStr) {
-  impl_ = std::make_shared<Impl>(path, connectStr);
+    std::string_view path,
+    const config::ConfigBase& config) {
+  impl_ = std::make_shared<Impl>(path, config);
 }
 
 void AbfsReadFile::initialize(const FileOptions& options) {
   return impl_->initialize(options);
 }
 
-std::string_view
-AbfsReadFile::pread(uint64_t offset, uint64_t length, void* buffer) const {
-  return impl_->pread(offset, length, buffer);
+std::string_view AbfsReadFile::pread(
+    uint64_t offset,
+    uint64_t length,
+    void* buffer,
+    io::IoStatistics* stats) const {
+  return impl_->pread(offset, length, buffer, stats);
 }
 
-std::string AbfsReadFile::pread(uint64_t offset, uint64_t length) const {
-  return impl_->pread(offset, length);
+std::string AbfsReadFile::pread(
+    uint64_t offset,
+    uint64_t length,
+    io::IoStatistics* stats) const {
+  return impl_->pread(offset, length, stats);
 }
 
 uint64_t AbfsReadFile::preadv(
     uint64_t offset,
-    const std::vector<folly::Range<char*>>& buffers) const {
-  return impl_->preadv(offset, buffers);
+    const std::vector<folly::Range<char*>>& buffers,
+    io::IoStatistics* stats) const {
+  return impl_->preadv(offset, buffers, stats);
 }
 
 uint64_t AbfsReadFile::preadv(
     folly::Range<const common::Region*> regions,
-    folly::Range<folly::IOBuf*> iobufs) const {
-  return impl_->preadv(regions, iobufs);
+    folly::Range<folly::IOBuf*> iobufs,
+    io::IoStatistics* stats) const {
+  return impl_->preadv(regions, iobufs, stats);
 }
 
 uint64_t AbfsReadFile::size() const {
@@ -222,29 +212,9 @@ uint64_t AbfsReadFile::getNaturalReadSize() const {
   return impl_->getNaturalReadSize();
 }
 
-class AbfsFileSystem::Impl {
- public:
-  explicit Impl(const Config* config) : abfsConfig_(config) {
-    LOG(INFO) << "Init Azure Blob file system";
-  }
-
-  ~Impl() {
-    LOG(INFO) << "Dispose Azure Blob file system";
-  }
-
-  const std::string connectionString(const std::string& path) const {
-    // Extract account name
-    return abfsConfig_.connectionString(path);
-  }
-
- private:
-  const AbfsConfig abfsConfig_;
-  std::shared_ptr<folly::Executor> ioExecutor_;
-};
-
-AbfsFileSystem::AbfsFileSystem(const std::shared_ptr<const Config>& config)
+AbfsFileSystem::AbfsFileSystem(std::shared_ptr<const config::ConfigBase> config)
     : FileSystem(config) {
-  impl_ = std::make_shared<Impl>(config.get());
+  VELOX_CHECK_NOT_NULL(config.get());
 }
 
 std::string AbfsFileSystem::name() const {
@@ -254,8 +224,7 @@ std::string AbfsFileSystem::name() const {
 std::unique_ptr<ReadFile> AbfsFileSystem::openFileForRead(
     std::string_view path,
     const FileOptions& options) {
-  auto abfsfile = std::make_unique<AbfsReadFile>(
-      std::string(path), impl_->connectionString(std::string(path)));
+  auto abfsfile = std::make_unique<AbfsReadFile>(path, *config_);
   abfsfile->initialize(options);
   return abfsfile;
 }
@@ -263,9 +232,6 @@ std::unique_ptr<ReadFile> AbfsFileSystem::openFileForRead(
 std::unique_ptr<WriteFile> AbfsFileSystem::openFileForWrite(
     std::string_view path,
     const FileOptions& /*unused*/) {
-  auto abfsfile = std::make_unique<AbfsWriteFile>(
-      std::string(path), impl_->connectionString(std::string(path)));
-  abfsfile->initialize();
-  return abfsfile;
+  return std::make_unique<AbfsWriteFile>(path, *config_);
 }
-} // namespace facebook::velox::filesystems::abfs
+} // namespace facebook::velox::filesystems

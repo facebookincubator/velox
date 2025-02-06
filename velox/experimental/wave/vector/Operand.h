@@ -106,6 +106,9 @@ constexpr uint16_t kSharedOperandMask = 0x7ffc;
 constexpr uint8_t kNull = 0;
 constexpr uint8_t kNotNull = 255;
 
+/// Indicates a null value introduced by wrap in 'indices'.
+constexpr int32_t kNullIndex = -1;
+
 struct Operand {
   static constexpr int32_t kPointersInOperand = 4;
 
@@ -153,7 +156,43 @@ struct BlockStatus {
   ErrorCode errors[kBlockSize];
 };
 
+/// User error status returned from kernels. Represents one error from
+/// an arbitrary kernel thread with an error.
+struct KernelError {
+  static constexpr uintptr_t kNoParam = 0;
+  static constexpr uintptr_t kStringParam = 1UL << 60;
+  static constexpr uintptr_t kInt64Param = 2UL << 60;
+
+  /// Host addressable constant string with error message. nullptr if
+  /// no error message. The 4 high bits of the pointer indicate if the
+  /// message is compleemented by 'number' (kInt64Param) or
+  /// 'ptr'kStringParam) (k. If kNoParam the string is the only error
+  /// info.
+  int32_t messageEnum{0};
+  int64_t extra;
+};
+
+/// Describes the location of an instruction's return state in the
+/// BlockStatus area. The return states are allocated right above
+/// the BlockStatus array. First are grid level statuses for instructions that
+/// return a status. After this are block level statuses.
+
+struct InstructionStatus {
+  // Offset of containing instruction's grid state from the end of BlockStatus
+  // array.
+  uint16_t gridState{0};
+  // Total size of gridStates. Block level states start after the last grid
+  // state.
+  uint16_t gridStateSize{0};
+  // Start of per-block status. gridStateSize + gridDim.x * blocksPerThread *
+  // blockState' is the  offset of the first per block status from the end of
+  // BlockStatus array.
+  uint16_t blockState{0};
+};
+
 /// Returns the number of active rows in 'status' for 'numBlocks'.
+#ifndef __CUDACC_RTC__
 int32_t statusNumRows(const BlockStatus* status, int32_t numBlocks);
+#endif
 
 } // namespace facebook::velox::wave

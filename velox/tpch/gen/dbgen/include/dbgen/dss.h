@@ -118,6 +118,8 @@
 #define RANDOM(tgt, lower, upper, seed) dss_random(&tgt, lower, upper, seed)
 #define RANDOM64(tgt, lower, upper, seed) dss_random64(&tgt, lower, upper, seed)
 
+namespace facebook::velox::tpch::dbgen {
+
 typedef struct {
   long weight;
   char* text;
@@ -133,7 +135,7 @@ typedef struct {
  * some handy access functions
  */
 #define DIST_SIZE(d) d->count
-#define DIST_MEMBER(d, i) ((set_member*)((d)->list + i))->text
+#define DIST_MEMBER(d, i) (reinterpret_cast<set_member*>((d)->list + i))->text
 #define DIST_PERMUTE(d, i) (d->permute[i])
 
 typedef struct {
@@ -577,5 +579,7 @@ struct DBGenContext {
 
   long scale_factor = 1;
 };
+
+} // namespace facebook::velox::tpch::dbgen
 
 #endif /* DSS_H */

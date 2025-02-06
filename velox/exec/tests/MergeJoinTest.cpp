@@ -45,6 +45,87 @@ class MergeJoinTest : public HiveConnectorTestBase {
     return params;
   }
 
+  std::vector<RowVectorPtr> generateInput(const std::vector<VectorPtr>& keys) {
+    std::vector<RowVectorPtr> data;
+    data.reserve(keys.size());
+    vector_size_t startRow = 0;
+
+    for (const auto& key : keys) {
+      auto payload = makeFlatVector<int32_t>(
+          key->size(), [startRow](auto row) { return (startRow + row) * 10; });
+      data.push_back(makeRowVector({key, payload}));
+      startRow += key->size();
+    }
+    return data;
+  }
+
+  // Lazy vector loader class to ensure they get loaded in the correct order,
+  // and only once.
+  class MySimpleVectorLoader : public VectorLoader {
+   public:
+    explicit MySimpleVectorLoader(
+        size_t batchId,
+        const std::shared_ptr<size_t>& count,
+        std::function<VectorPtr(RowSet)> loader)
+        : batchId_(batchId), count_(count), loader_(loader) {}
+
+    void loadInternal(
+        RowSet rows,
+        ValueHook* hook,
+        vector_size_t resultSize,
+        VectorPtr* result) override {
+      if (batchId_ > *count_) {
+        *count_ = batchId_;
+      }
+      VELOX_CHECK_GE(batchId_, *count_, "Lazy vectors loaded out of order.");
+      VELOX_CHECK(!loaded_, "Trying to load a lazy vector twice.");
+      *result = loader_(rows);
+      loaded_ = true;
+    }
+
+   private:
+    const size_t batchId_;
+    const std::shared_ptr<size_t> count_;
+    bool loaded_{false};
+    std::function<VectorPtr(RowSet)> loader_;
+  };
+
+  // Generates lazy vectors to ensure the merge join operator is loading them as
+  // expected.
+  std::vector<RowVectorPtr> generateLazyInput(
+      const std::vector<VectorPtr>& keys) {
+    std::vector<RowVectorPtr> data;
+    data.reserve(keys.size());
+    vector_size_t startRow = 0;
+
+    size_t batchId = 0;
+    auto counter = std::make_shared<size_t>(0);
+
+    for (const auto& key : keys) {
+      auto payload = std::make_shared<LazyVector>(
+          pool(),
+          CppToType<int32_t>::create(),
+          key->size(),
+          std::make_unique<MySimpleVectorLoader>(batchId, counter, [=](RowSet) {
+            return makeFlatVector<int32_t>(key->size(), [startRow](auto row) {
+              return (startRow + row) * 10;
+            });
+          }));
+
+      auto lazyKeys = std::make_shared<LazyVector>(
+          pool(),
+          CppToType<int32_t>::create(),
+          key->size(),
+          std::make_unique<MySimpleVectorLoader>(
+              batchId, counter, [=](RowSet) { return key; }));
+
+      data.push_back(makeRowVector({lazyKeys, payload}));
+      startRow += key->size();
+      ++batchId;
+    }
+    return data;
+  }
+
   template <typename T>
   void testJoin(
       std::function<T(vector_size_t /*row*/)> leftKeyAt,
@@ -99,38 +180,18 @@ class MergeJoinTest : public HiveConnectorTestBase {
   void testJoin(
       const std::vector<VectorPtr>& leftKeys,
       const std::vector<VectorPtr>& rightKeys) {
-    std::vector<RowVectorPtr> left;
-    left.reserve(leftKeys.size());
-    vector_size_t startRow = 0;
-    for (const auto& key : leftKeys) {
-      auto payload = makeFlatVector<int32_t>(
-          key->size(), [startRow](auto row) { return (startRow + row) * 10; });
-      left.push_back(makeRowVector({key, payload}));
-      startRow += key->size();
-    }
-
-    std::vector<RowVectorPtr> right;
-    right.reserve(rightKeys.size());
-    startRow = 0;
-    for (const auto& key : rightKeys) {
-      auto payload = makeFlatVector<int32_t>(
-          key->size(), [startRow](auto row) { return (startRow + row) * 20; });
-      right.push_back(makeRowVector({key, payload}));
-      startRow += key->size();
-    }
-
-    createDuckDbTable("t", left);
-    createDuckDbTable("u", right);
+    createDuckDbTable("t", generateInput(leftKeys));
+    createDuckDbTable("u", generateInput(rightKeys));
 
     // Test INNER join.
     auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
     auto plan = PlanBuilder(planNodeIdGenerator)
-                    .values(left)
+                    .values(generateLazyInput(leftKeys))
                     .mergeJoin(
                         {"c0"},
                         {"u_c0"},
                         PlanBuilder(planNodeIdGenerator)
-                            .values(right)
+                            .values(generateLazyInput(rightKeys))
                             .project({"c1 AS u_c1", "c0 AS u_c0"})
                             .planNode(),
                         "",
@@ -156,12 +217,12 @@ class MergeJoinTest : public HiveConnectorTestBase {
     // Test LEFT join.
     planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
     auto leftPlan = PlanBuilder(planNodeIdGenerator)
-                        .values(left)
+                        .values(generateLazyInput(leftKeys))
                         .mergeJoin(
                             {"c0"},
                             {"u_c0"},
                             PlanBuilder(planNodeIdGenerator)
-                                .values(right)
+                                .values(generateLazyInput(rightKeys))
                                 .project({"c1 as u_c1", "c0 as u_c0"})
                                 .planNode(),
                             "",
@@ -187,12 +248,12 @@ class MergeJoinTest : public HiveConnectorTestBase {
     // Test RIGHT join.
     planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
     auto rightPlan = PlanBuilder(planNodeIdGenerator)
-                         .values(right)
+                         .values(generateLazyInput(rightKeys))
                          .mergeJoin(
                              {"c0"},
                              {"u_c0"},
                              PlanBuilder(planNodeIdGenerator)
-                                 .values(left)
+                                 .values(generateLazyInput(leftKeys))
                                  .project({"c1 as u_c1", "c0 as u_c0"})
                                  .planNode(),
                              "",
@@ -218,6 +279,37 @@ class MergeJoinTest : public HiveConnectorTestBase {
     // Test right join and left join with same result.
     auto expectedResult = AssertQueryBuilder(leftPlan).copyResults(pool_.get());
     AssertQueryBuilder(rightPlan).assertResults(expectedResult);
+
+    // Test FULL join.
+    planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+    auto fullPlan = PlanBuilder(planNodeIdGenerator)
+                        .values(generateLazyInput(rightKeys))
+                        .mergeJoin(
+                            {"c0"},
+                            {"u_c0"},
+                            PlanBuilder(planNodeIdGenerator)
+                                .values(generateLazyInput(leftKeys))
+                                .project({"c1 as u_c1", "c0 as u_c0"})
+                                .planNode(),
+                            "",
+                            {"u_c0", "u_c1", "c1"},
+                            core::JoinType::kFull)
+                        .planNode();
+
+    // Use very small output batch size.
+    assertQuery(
+        makeCursorParameters(fullPlan, 16),
+        "SELECT t.c0, t.c1, u.c1 FROM u FULL OUTER JOIN t ON t.c0 = u.c0");
+
+    // Use regular output batch size.
+    assertQuery(
+        makeCursorParameters(fullPlan, 1024),
+        "SELECT t.c0, t.c1, u.c1 FROM u FULL OUTER JOIN t ON t.c0 = u.c0");
+
+    // Use very large output batch size.
+    assertQuery(
+        makeCursorParameters(fullPlan, 10'000),
+        "SELECT t.c0, t.c1, u.c1 FROM u FULL OUTER JOIN t ON t.c0 = u.c0");
   }
 };
 
@@ -251,8 +343,13 @@ TEST_F(MergeJoinTest, allRowsMatch) {
       makeFlatVector<int32_t>(7, [](auto /* row */) { return 5; })};
 
   testJoin(leftKeys, rightKeys);
-
   testJoin(rightKeys, leftKeys);
+}
+
+TEST_F(MergeJoinTest, keySkew) {
+  testJoin<int32_t>(
+      [](auto row) { return row; },
+      [](auto row) { return row < 10 ? row : row + 10240; });
 }
 
 TEST_F(MergeJoinTest, aggregationOverJoin) {
@@ -477,6 +574,82 @@ TEST_F(MergeJoinTest, leftAndRightJoinFilter) {
   }
 }
 
+TEST_F(MergeJoinTest, rightJoinWithDuplicateMatch) {
+  // Each row on the left side has at most one match on the right side.
+  auto left = makeRowVector(
+      {"a", "b"},
+      {
+          makeNullableFlatVector<int32_t>({1, 2, 2, 2, 3, 5, 6, std::nullopt}),
+          makeNullableFlatVector<double>(
+              {2.0, 100.0, 1.0, 1.0, 3.0, 1.0, 6.0, std::nullopt}),
+      });
+
+  auto right = makeRowVector(
+      {"c", "d"},
+      {
+          makeNullableFlatVector<int32_t>(
+              {0, 2, 2, 2, 2, 3, 4, 5, 7, std::nullopt}),
+          makeNullableFlatVector<double>(
+              {0.0, 3.0, -1.0, -1.0, 3.0, 2.0, 1.0, 3.0, 7.0, std::nullopt}),
+      });
+
+  createDuckDbTable("t", {left});
+  createDuckDbTable("u", {right});
+
+  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+
+  auto rightPlan =
+      PlanBuilder(planNodeIdGenerator)
+          .values({left})
+          .mergeJoin(
+              {"a"},
+              {"c"},
+              PlanBuilder(planNodeIdGenerator).values({right}).planNode(),
+              "b < d",
+              {"a", "b", "c", "d"},
+              core::JoinType::kRight)
+          .planNode();
+  AssertQueryBuilder(rightPlan, duckDbQueryRunner_)
+      .assertResults("SELECT * from t RIGHT JOIN u ON a = c AND b < d");
+}
+
+TEST_F(MergeJoinTest, rightJoinFilterWithNull) {
+  auto left = makeRowVector(
+      {"a", "b"},
+      {
+          makeNullableFlatVector<int32_t>({std::nullopt, std::nullopt}),
+          makeNullableFlatVector<double>({std::nullopt, std::nullopt}),
+      });
+
+  auto right = makeRowVector(
+      {"c", "d"},
+      {
+          makeNullableFlatVector<int32_t>(
+              {std::nullopt, std::nullopt, std::nullopt}),
+          makeNullableFlatVector<double>(
+              {std::nullopt, std::nullopt, std::nullopt}),
+      });
+
+  createDuckDbTable("t", {left});
+  createDuckDbTable("u", {right});
+
+  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+
+  auto rightPlan =
+      PlanBuilder(planNodeIdGenerator)
+          .values({left})
+          .mergeJoin(
+              {"a"},
+              {"c"},
+              PlanBuilder(planNodeIdGenerator).values({right}).planNode(),
+              "b < d",
+              {"a", "b", "c", "d"},
+              core::JoinType::kRight)
+          .planNode();
+  AssertQueryBuilder(rightPlan, duckDbQueryRunner_)
+      .assertResults("SELECT * from t RIGHT JOIN u ON a = c AND b < d");
+}
+
 // Verify that both left-side and right-side pipelines feeding the merge join
 // always run single-threaded.
 TEST_F(MergeJoinTest, numDrivers) {
@@ -506,25 +679,30 @@ TEST_F(MergeJoinTest, numDrivers) {
 }
 
 TEST_F(MergeJoinTest, lazyVectors) {
-  // a dataset of multiple row groups with multiple columns. We create
+  // A dataset of multiple row groups with multiple columns. We create
   // different dictionary wrappings for different columns and load the
-  // rows in scope at different times.  We make 11000 repeats of 300
-  // followed by ascending rows. These will hits one 300 from the
+  // rows in scope at different times. We make 11000 repeats of 300
+  // followed by ascending rows. These will hit one 300 from the
   // right side and cover more than one batch, so that we test lazy
   // loading where we buffer multiple batches of input.
-  auto leftVectors = makeRowVector(
-      {makeFlatVector<int32_t>(
-           30'000, [](auto row) { return row < 11000 ? 300 : row; }),
-       makeFlatVector<int64_t>(30'000, [](auto row) { return row % 23; }),
-       makeFlatVector<int32_t>(30'000, [](auto row) { return row % 31; }),
-       makeFlatVector<StringView>(30'000, [](auto row) {
-         return StringView::makeInline(fmt::format("{}   string", row % 43));
-       })});
+  auto leftVectors = makeRowVector({
+      makeFlatVector<int32_t>(
+          30'000, [](auto row) { return row < 11000 ? 300 : row; }),
+      makeFlatVector<int64_t>(30'000, [](auto row) { return row % 23; }),
+      makeFlatVector<int32_t>(30'000, [](auto row) { return row % 31; }),
+      makeFlatVector<StringView>(
+          30'000,
+          [](auto row) {
+            return StringView::makeInline(fmt::format("{}   string", row % 43));
+          }),
+  });
 
   auto rightVectors = makeRowVector(
       {"rc0", "rc1"},
-      {makeFlatVector<int32_t>(10'000, [](auto row) { return row * 3; }),
-       makeFlatVector<int64_t>(10'000, [](auto row) { return row % 31; })});
+      {
+          makeFlatVector<int32_t>(10'000, [](auto row) { return row * 3; }),
+          makeFlatVector<int64_t>(10'000, [](auto row) { return row % 31; }),
+      });
 
   auto leftFile = TempFilePath::create();
   writeToFile(leftFile->getPath(), leftVectors);
@@ -534,30 +712,41 @@ TEST_F(MergeJoinTest, lazyVectors) {
   writeToFile(rightFile->getPath(), rightVectors);
   createDuckDbTable("u", {rightVectors});
 
-  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
-  core::PlanNodeId leftScanId;
-  core::PlanNodeId rightScanId;
-  auto op = PlanBuilder(planNodeIdGenerator)
-                .tableScan(
-                    ROW({"c0", "c1", "c2", "c3"},
-                        {INTEGER(), BIGINT(), INTEGER(), VARCHAR()}))
-                .capturePlanNodeId(leftScanId)
-                .mergeJoin(
-                    {"c0"},
-                    {"rc0"},
-                    PlanBuilder(planNodeIdGenerator)
-                        .tableScan(ROW({"rc0", "rc1"}, {INTEGER(), BIGINT()}))
-                        .capturePlanNodeId(rightScanId)
-                        .planNode(),
-                    "c1 + rc1 < 30",
-                    {"c0", "rc0", "c1", "rc1", "c2", "c3"})
-                .planNode();
+  auto joinTypes = {
+      core::JoinType::kInner,
+      core::JoinType::kLeft,
+      core::JoinType::kRight,
+  };
 
-  AssertQueryBuilder(op, duckDbQueryRunner_)
-      .split(rightScanId, makeHiveConnectorSplit(rightFile->getPath()))
-      .split(leftScanId, makeHiveConnectorSplit(leftFile->getPath()))
-      .assertResults(
-          "SELECT c0, rc0, c1, rc1, c2, c3  FROM t, u WHERE t.c0 = u.rc0 and c1 + rc1 < 30");
+  for (auto joinType : joinTypes) {
+    auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+    core::PlanNodeId leftScanId;
+    core::PlanNodeId rightScanId;
+    auto op = PlanBuilder(planNodeIdGenerator)
+                  .tableScan(
+                      ROW({"c0", "c1", "c2", "c3"},
+                          {INTEGER(), BIGINT(), INTEGER(), VARCHAR()}))
+                  .capturePlanNodeId(leftScanId)
+                  .mergeJoin(
+                      {"c0"},
+                      {"rc0"},
+                      PlanBuilder(planNodeIdGenerator)
+                          .tableScan(ROW({"rc0", "rc1"}, {INTEGER(), BIGINT()}))
+                          .capturePlanNodeId(rightScanId)
+                          .planNode(),
+                      "c1 + rc1 < 30",
+                      {"c0", "rc0", "c1", "rc1", "c2", "c3"},
+                      joinType)
+                  .planNode();
+
+    AssertQueryBuilder(op, duckDbQueryRunner_)
+        .split(rightScanId, makeHiveConnectorSplit(rightFile->getPath()))
+        .split(leftScanId, makeHiveConnectorSplit(leftFile->getPath()))
+        .assertResults(fmt::format(
+            "SELECT c0, rc0, c1, rc1, c2, c3 FROM t {} JOIN u "
+            "ON t.c0 = u.rc0 AND c1 + rc1 < 30",
+            joinTypeName(joinType)));
+  }
 }
 
 // Ensures the output of merge joins are dictionaries.
@@ -770,6 +959,38 @@ TEST_F(MergeJoinTest, antiJoinWithFilter) {
           "SELECT t0 FROM t WHERE NOT exists (select 1 from u where t0 = u0 AND t.t0 > 2 ) ");
 }
 
+TEST_F(MergeJoinTest, antiJoinFailed) {
+  auto size = 1'00;
+  auto left = makeRowVector(
+      {"t0"}, {makeFlatVector<int64_t>(size, [](auto row) { return row; })});
+
+  auto right = makeRowVector(
+      {"u0"}, {makeFlatVector<int64_t>(size, [](auto row) { return row; })});
+
+  createDuckDbTable("t", {left});
+  createDuckDbTable("u", {right});
+
+  // Anti join.
+  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  auto plan =
+      PlanBuilder(planNodeIdGenerator)
+          .values(split(left, 10))
+          .orderBy({"t0"}, false)
+          .mergeJoin(
+              {"t0"},
+              {"u0"},
+              PlanBuilder(planNodeIdGenerator).values({right}).planNode(),
+              "",
+              {"t0"},
+              core::JoinType::kAnti)
+          .planNode();
+
+  AssertQueryBuilder(plan, duckDbQueryRunner_)
+      .config(core::QueryConfig::kMaxOutputBatchRows, "10")
+      .assertResults(
+          "SELECT t0 FROM t WHERE NOT exists (select 1 from u where t0 = u0) ");
+}
+
 TEST_F(MergeJoinTest, antiJoinWithTwoJoinKeys) {
   auto left = makeRowVector(
       {"a", "b"},
@@ -873,6 +1094,131 @@ TEST_F(MergeJoinTest, antiJoinNoFilter) {
   AssertQueryBuilder(plan, duckDbQueryRunner_)
       .assertResults(
           "SELECT t0 FROM t WHERE NOT exists (select 1 from u where t0 = u0)");
+}
+
+TEST_F(MergeJoinTest, fullOuterJoin) {
+  auto left = makeRowVector(
+      {"t0"},
+      {makeNullableFlatVector<int64_t>(
+          {1, 2, std::nullopt, 5, 6, std::nullopt})});
+
+  auto right = makeRowVector(
+      {"u0"},
+      {makeNullableFlatVector<int64_t>(
+          {1, 5, 6, 8, std::nullopt, std::nullopt})});
+
+  createDuckDbTable("t", {left});
+  createDuckDbTable("u", {right});
+
+  // Full outer join.
+  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  auto plan =
+      PlanBuilder(planNodeIdGenerator)
+          .values({left})
+          .mergeJoin(
+              {"t0"},
+              {"u0"},
+              PlanBuilder(planNodeIdGenerator).values({right}).planNode(),
+              "t0 > 2",
+              {"t0", "u0"},
+              core::JoinType::kFull)
+          .planNode();
+  AssertQueryBuilder(plan, duckDbQueryRunner_)
+      .assertResults(
+          "SELECT * FROM t FULL OUTER JOIN u ON t.t0 = u.u0 AND t.t0 > 2");
+}
+
+TEST_F(MergeJoinTest, fullOuterJoinNoFilter) {
+  auto left = makeRowVector(
+      {"t0", "t1", "t2", "t3"},
+      {makeNullableFlatVector<int64_t>(
+           {7854252584298216695,
+            5874550437257860379,
+            6694700278390749883,
+            6952978413716179087,
+            2785313305792069690,
+            5306984336093303849,
+            2249699434807719017,
+            std::nullopt,
+            std::nullopt,
+            std::nullopt,
+            8814597374860168988}),
+       makeNullableFlatVector<int64_t>(
+           {1, 2, 3, 4, 5, 6, 7, std::nullopt, 8, 9, 10}),
+       makeNullableFlatVector<bool>(
+           {false,
+            true,
+            false,
+            false,
+            false,
+            true,
+            true,
+            false,
+            true,
+            false,
+            false}),
+       makeNullableFlatVector<int64_t>(
+           {58, 112, 125, 52, 69, 39, 73, 29, 101, std::nullopt, 51})});
+
+  auto right = makeRowVector(
+      {"u0", "u1", "u2", "u3"},
+      {makeNullableFlatVector<int64_t>({std::nullopt}),
+       makeNullableFlatVector<int64_t>({11}),
+       makeNullableFlatVector<bool>({false}),
+       makeNullableFlatVector<int64_t>({77})});
+
+  createDuckDbTable("t", {left});
+  createDuckDbTable("u", {right});
+
+  // Full outer join.
+  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  auto plan =
+      PlanBuilder(planNodeIdGenerator)
+          .values({left})
+          .mergeJoin(
+              {"t0", "t1", "t2", "t3"},
+              {"u0", "u1", "u2", "u3"},
+              PlanBuilder(planNodeIdGenerator).values({right}).planNode(),
+              "",
+              {"t0", "t1"},
+              core::JoinType::kFull)
+          .planNode();
+  AssertQueryBuilder(plan, duckDbQueryRunner_)
+      .assertResults(
+          "SELECT t0, t1 FROM t FULL OUTER JOIN u ON t3 = u3 and t2 = u2 and t1 = u1 and t.t0 = u.u0");
+}
+
+TEST_F(MergeJoinTest, fullOuterJoinWithNullCompare) {
+  auto right = makeRowVector(
+      {"u0", "u1"},
+      {makeNullableFlatVector<bool>({false, true}),
+       makeNullableFlatVector<int64_t>({std::nullopt, std::nullopt})});
+
+  auto left = makeRowVector(
+      {"t0", "t1"},
+      {makeNullableFlatVector<bool>({false, false, std::nullopt}),
+       makeNullableFlatVector<int64_t>(
+           {std::nullopt, 1195665568, std::nullopt})});
+
+  createDuckDbTable("t", {left});
+  createDuckDbTable("u", {right});
+
+  // Full outer join.
+  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  auto plan =
+      PlanBuilder(planNodeIdGenerator)
+          .values({left})
+          .mergeJoin(
+              {"t0", "t1"},
+              {"u0", "u1"},
+              PlanBuilder(planNodeIdGenerator).values({right}).planNode(),
+              "",
+              {"t0", "t1", "u0", "u1"},
+              core::JoinType::kFull)
+          .planNode();
+  AssertQueryBuilder(plan, duckDbQueryRunner_)
+      .assertResults(
+          "SELECT t0, t1, u0, u1 FROM t FULL OUTER JOIN u ON t.t0 = u.u0 and t1 = u1");
 }
 
 TEST_F(MergeJoinTest, complexTypedFilter) {

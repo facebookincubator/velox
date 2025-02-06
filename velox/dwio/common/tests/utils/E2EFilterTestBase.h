@@ -16,6 +16,7 @@
 
 #pragma once
 
+#include "velox/common/testutil/RandomSeed.h"
 #include "velox/common/time/Timer.h"
 #include "velox/dwio/common/BufferedInput.h"
 #include "velox/dwio/common/FileSink.h"
@@ -39,21 +40,41 @@ class TestingHook : public ValueHook {
  public:
   explicit TestingHook(FlatVector<T>* result) : result_(result) {}
 
-  void addValue(vector_size_t row, const void* value) override {
-    result_->set(row, *reinterpret_cast<const T*>(value));
+  void addValue(vector_size_t row, int64_t value) override {
+    if constexpr (std::is_integral_v<T>) {
+      result_->set(row, value);
+    } else {
+      VELOX_FAIL();
+    }
+  }
+
+  void addValue(vector_size_t row, float value) override {
+    if constexpr (std::is_same_v<T, float>) {
+      result_->set(row, value);
+    } else {
+      VELOX_FAIL();
+    }
+  }
+
+  void addValue(vector_size_t row, double value) override {
+    if constexpr (std::is_same_v<T, double>) {
+      result_->set(row, value);
+    } else {
+      VELOX_FAIL();
+    }
+  }
+
+  void addValue(vector_size_t row, folly::StringPiece value) override {
+    if constexpr (std::is_same_v<T, StringView>) {
+      result_->set(row, StringView(value));
+    } else {
+      VELOX_FAIL();
+    }
   }
 
  private:
   FlatVector<T>* result_;
 };
-
-template <>
-inline void TestingHook<StringView>::addValue(
-    vector_size_t row,
-    const void* value) {
-  result_->set(
-      row, StringView(*reinterpret_cast<const folly::StringPiece*>(value)));
-}
 
 // Utility for checking that a subsequent batch of output does not
 // overwrite internals of a possibly retained previous batch.
@@ -82,25 +103,16 @@ class E2EFilterTestBase : public testing::Test {
     memory::MemoryManager::testingSetInstance({});
   }
 
-  static bool useRandomSeed() {
-    // Check environment variable because `buck test` does not allow pass in
-    // command line arguments.
-    const char* env = getenv("VELOX_TEST_USE_RANDOM_SEED");
-    return !env ? false : folly::to<bool>(env);
-  }
-
   void SetUp() override {
     rootPool_ = memory::memoryManager()->addRootPool("E2EFilterTestBase");
     leafPool_ = rootPool_->addLeafChild("E2EFilterTestBase");
-    if (useRandomSeed()) {
-      seed_ = folly::Random::secureRand32();
-      LOG(INFO) << "Random seed: " << seed_;
-    }
+    seed_ = common::testutil::getRandomSeed(seed_);
   }
 
   static bool typeKindSupportsValueHook(TypeKind kind) {
     return kind != TypeKind::TIMESTAMP && kind != TypeKind::ARRAY &&
-        kind != TypeKind::ROW && kind != TypeKind::MAP;
+        kind != TypeKind::ROW && kind != TypeKind::MAP &&
+        kind != TypeKind::HUGEINT;
   }
 
   std::vector<RowVectorPtr> makeDataset(
@@ -237,7 +249,7 @@ class E2EFilterTestBase : public testing::Test {
     for (int32_t i = 0; i < 5 && i < batch->size(); ++i) {
       rows.push_back(i);
     }
-    for (int32_t i = 5; i < 5 && i < batch->size(); i += 2) {
+    for (int32_t i = 5; i < batch->size(); i += 2) {
       rows.push_back(i);
     }
     auto result = std::static_pointer_cast<FlatVector<T>>(
@@ -281,6 +293,10 @@ class E2EFilterTestBase : public testing::Test {
       const std::vector<RowVectorPtr>& batches,
       const std::vector<std::string>& filterable);
 
+  void setReadSize(uint64_t readSize) {
+    readSize_ = readSize;
+  }
+
  private:
   void testReadWithFilterLazy(
       const std::shared_ptr<common::ScanSpec>& spec,
@@ -300,6 +316,16 @@ class E2EFilterTestBase : public testing::Test {
       const std::vector<std::string>& filterable,
       int32_t numCombinations,
       bool withRecursiveNulls = true);
+
+  void testRunLengthDictionaryScenario(
+      const std::string& columns,
+      std::function<void()> customize,
+      bool wrapInStruct,
+      const std::vector<std::string>& filterable,
+      int32_t numCombinations,
+      int32_t maxRunLength,
+      bool withRecursiveNulls = true,
+      int64_t seed = time(nullptr));
 
  private:
   void testMetadataFilterImpl(
@@ -324,7 +350,7 @@ class E2EFilterTestBase : public testing::Test {
 
   int32_t nextReadBatchSize() {
     if (nextReadSizeIndex_ >= readSizes_.size()) {
-      return 1000;
+      return readSize_;
     }
     return readSizes_[nextReadSizeIndex_++];
   }
@@ -349,6 +375,7 @@ class E2EFilterTestBase : public testing::Test {
   int32_t batchSize_ = kBatchSize;
   bool testRowGroupSkip_ = true;
   uint32_t seed_ = 1;
+  uint64_t readSize_ = 1000;
 };
 
 } // namespace facebook::velox::dwio::common

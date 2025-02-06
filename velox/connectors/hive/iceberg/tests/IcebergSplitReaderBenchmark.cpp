@@ -16,7 +16,6 @@
 
 #include "velox/connectors/hive/iceberg/tests/IcebergSplitReaderBenchmark.h"
 #include <filesystem>
-#include "velox/exec/tests/utils/PrefixSortUtils.h"
 
 using namespace facebook::velox;
 using namespace facebook::velox::dwio;
@@ -116,6 +115,7 @@ IcebergSplitReaderBenchmark::makeIcebergSplit(
       std::nullopt,
       customSplitInfo,
       nullptr,
+      /*cacheable=*/true,
       deleteFiles);
 }
 
@@ -290,7 +290,8 @@ void IcebergSplitReaderBenchmark::readSingleColumn(
           rowType);
 
   std::shared_ptr<HiveConfig> hiveConfig =
-      std::make_shared<HiveConfig>(std::make_shared<core::MemConfigMutable>());
+      std::make_shared<HiveConfig>(std::make_shared<config::ConfigBase>(
+          std::unordered_map<std::string, std::string>(), true));
   const RowTypePtr readerOutputType;
   const std::shared_ptr<io::IoStatistics> ioStats =
       std::make_shared<io::IoStatistics>();
@@ -301,8 +302,9 @@ void IcebergSplitReaderBenchmark::readSingleColumn(
   std::shared_ptr<memory::MemoryPool> opPool = root->addLeafChild("operator");
   std::shared_ptr<memory::MemoryPool> connectorPool =
       root->addAggregateChild(kHiveConnectorId, MemoryReclaimer::create());
-  std::shared_ptr<core::MemConfig> connectorSessionProperties_ =
-      std::make_shared<core::MemConfig>();
+  std::shared_ptr<config::ConfigBase> connectorSessionProperties_ =
+      std::make_shared<config::ConfigBase>(
+          std::unordered_map<std::string, std::string>());
 
   std::unique_ptr<connector::ConnectorQueryCtx> connectorQueryCtx_ =
       std::make_unique<connector::ConnectorQueryCtx>(
@@ -310,7 +312,7 @@ void IcebergSplitReaderBenchmark::readSingleColumn(
           connectorPool.get(),
           connectorSessionProperties_.get(),
           nullptr,
-          exec::test::defaultPrefixSortConfig(),
+          common::PrefixSortConfig(),
           nullptr,
           nullptr,
           "query.IcebergSplitReader",
@@ -344,7 +346,7 @@ void IcebergSplitReaderBenchmark::readSingleColumn(
 
     std::shared_ptr<random::RandomSkipTracker> randomSkip;
     icebergSplitReader->configureReaderOptions(randomSkip);
-    icebergSplitReader->prepareSplit(nullptr, runtimeStats_, nullptr);
+    icebergSplitReader->prepareSplit(nullptr, runtimeStats_);
 
     // Filter range is generated from a small sample data of 4096 rows. So the
     // upperBound and lowerBound are introduced to estimate the result size.

@@ -20,6 +20,9 @@
 
 namespace facebook::velox::exec {
 
+constexpr const char* kIf = "if";
+constexpr const char* kSwitch = "switch";
+
 /// CASE expression:
 ///
 /// case
@@ -50,6 +53,11 @@ class SwitchExpr : public SpecialForm {
 
   bool isConditional() const override {
     return true;
+  }
+
+  void clearCache() override {
+    Expr::clearCache();
+    tempValues_.reset();
   }
 
  private:

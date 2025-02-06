@@ -2833,8 +2833,8 @@ static
 std::unique_ptr<CURL, curl_deleter>
 curl_init()
 {
-    static const auto curl_is_now_initiailized = curl_global();
-    (void)curl_is_now_initiailized;
+    static const auto curl_is_now_initialized = curl_global();
+    static_cast<void>(curl_is_now_initialized);
     return std::unique_ptr<CURL, curl_deleter>{::curl_easy_init()};
 }
 
@@ -3538,6 +3538,14 @@ get_tzdb()
     return get_tzdb_list().front();
 }
 
+std::vector<std::string> get_time_zone_names() {
+  std::vector<std::string> result;
+  for (const auto& z : get_tzdb().zones) {
+    result.push_back(z.name());
+  }
+  return result;
+}
+
 const time_zone*
 #if HAS_STRING_VIEW
 tzdb::locate_zone(std::string_view tz_name) const
@@ -3577,7 +3585,7 @@ tzdb::locate_zone(const std::string& tz_name) const
                 return &*zi;
         }
 #endif  // !USE_OS_TZDB
-        throw std::runtime_error(std::string(tz_name) + " not found in timezone database");
+        throw invalid_timezone(std::string(tz_name));
     }
     return &*zi;
 }

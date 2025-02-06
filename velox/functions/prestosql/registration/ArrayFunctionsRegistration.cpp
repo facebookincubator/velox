@@ -19,6 +19,7 @@
 #include "velox/functions/Registerer.h"
 #include "velox/functions/lib/ArrayShuffle.h"
 #include "velox/functions/lib/Repeat.h"
+#include "velox/functions/lib/Slice.h"
 #include "velox/functions/prestosql/ArrayConstructor.h"
 #include "velox/functions/prestosql/ArrayFunctions.h"
 #include "velox/functions/prestosql/ArraySort.h"
@@ -70,7 +71,7 @@ inline void registerArrayHasDuplicatesFunctions(const std::string& prefix) {
   registerFunction<
       ParameterBinder<ArrayHasDuplicatesFunction, T>,
       bool,
-      Array<T>>({prefix + "array_has_duplicates", prefix + "array_has_dupes"});
+      Array<T>>({prefix + "array_has_duplicates"});
 }
 
 template <typename T>
@@ -121,6 +122,7 @@ void registerInternalArrayFunctions() {
 }
 
 void registerArrayFunctions(const std::string& prefix) {
+  registerJsonType();
   registerArrayConstructor(prefix + "array_constructor");
   VELOX_REGISTER_VECTOR_FUNCTION(udf_all_match, prefix + "all_match");
   VELOX_REGISTER_VECTOR_FUNCTION(udf_any_match, prefix + "any_match");
@@ -133,13 +135,12 @@ void registerArrayFunctions(const std::string& prefix) {
   VELOX_REGISTER_VECTOR_FUNCTION(udf_array_distinct, prefix + "array_distinct");
   VELOX_REGISTER_VECTOR_FUNCTION(
       udf_array_duplicates, prefix + "array_duplicates");
-  VELOX_REGISTER_VECTOR_FUNCTION(udf_array_duplicates, prefix + "array_dupes");
   VELOX_REGISTER_VECTOR_FUNCTION(
       udf_array_intersect, prefix + "array_intersect");
   VELOX_REGISTER_VECTOR_FUNCTION(udf_array_contains, prefix + "contains");
   VELOX_REGISTER_VECTOR_FUNCTION(udf_array_except, prefix + "array_except");
   VELOX_REGISTER_VECTOR_FUNCTION(udf_arrays_overlap, prefix + "arrays_overlap");
-  VELOX_REGISTER_VECTOR_FUNCTION(udf_slice, prefix + "slice");
+  registerBigintSliceFunction(prefix);
   VELOX_REGISTER_VECTOR_FUNCTION(udf_zip, prefix + "zip");
   VELOX_REGISTER_VECTOR_FUNCTION(udf_zip_with, prefix + "zip_with");
   VELOX_REGISTER_VECTOR_FUNCTION(udf_array_position, prefix + "array_position");
@@ -191,6 +192,7 @@ void registerArrayFunctions(const std::string& prefix) {
   registerArrayJoinFunctions<Varchar>(prefix);
   registerArrayJoinFunctions<Timestamp>(prefix);
   registerArrayJoinFunctions<Date>(prefix);
+  registerArrayJoinFunctions<Json>(prefix);
 
   registerFunction<ArrayAverageFunction, double, Array<double>>(
       {prefix + "array_average"});
@@ -280,6 +282,7 @@ void registerArrayFunctions(const std::string& prefix) {
   registerArrayCombinationsFunctions<Varchar>(prefix);
   registerArrayCombinationsFunctions<Timestamp>(prefix);
   registerArrayCombinationsFunctions<Date>(prefix);
+  registerArrayCombinationsFunctions<Generic<T1>>(prefix);
 
   registerArrayCumSumFunction<int8_t>(prefix);
   registerArrayCumSumFunction<int16_t>(prefix);
@@ -295,6 +298,7 @@ void registerArrayFunctions(const std::string& prefix) {
   registerArrayHasDuplicatesFunctions<int64_t>(prefix);
   registerArrayHasDuplicatesFunctions<int128_t>(prefix);
   registerArrayHasDuplicatesFunctions<Varchar>(prefix);
+  registerArrayHasDuplicatesFunctions<Json>(prefix);
 
   registerArrayFrequencyFunctions<bool>(prefix);
   registerArrayFrequencyFunctions<int8_t>(prefix);
@@ -308,6 +312,10 @@ void registerArrayFunctions(const std::string& prefix) {
   registerArrayFrequencyFunctions<Date>(prefix);
   registerArrayFrequencyFunctions<Varchar>(prefix);
 
+  registerArrayNormalizeFunctions<int8_t>(prefix);
+  registerArrayNormalizeFunctions<int16_t>(prefix);
+  registerArrayNormalizeFunctions<int32_t>(prefix);
+  registerArrayNormalizeFunctions<int64_t>(prefix);
   registerArrayNormalizeFunctions<float>(prefix);
   registerArrayNormalizeFunctions<double>(prefix);
 }

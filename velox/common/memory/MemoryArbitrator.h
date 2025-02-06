@@ -18,6 +18,7 @@
 
 #include <vector>
 
+#include "velox/common/base/AsyncSource.h"
 #include "velox/common/base/Exceptions.h"
 #include "velox/common/base/Portability.h"
 #include "velox/common/base/SuccinctPrinter.h"
@@ -27,6 +28,7 @@
 namespace facebook::velox::memory {
 
 class MemoryPool;
+class ArbitrationOperation;
 
 using MemoryArbitrationStateCheckCB = std::function<void(MemoryPool&)>;
 
@@ -57,41 +59,14 @@ class MemoryArbitrator {
     /// manager.
     int64_t capacity;
 
-    /// The memory capacity reserved to ensure each running query has minimal
-    /// capacity of 'memoryPoolReservedCapacity' to run.
-    int64_t reservedCapacity{0};
-
-    /// The minimal amount of memory capacity reserved for each query to run.
-    uint64_t memoryPoolReservedCapacity{0};
-
-    /// The minimal memory capacity to transfer out of or into a memory pool
-    /// during the memory arbitration.
-    uint64_t memoryPoolTransferCapacity{128 << 20};
-
-    /// Specifies the max time to wait for memory reclaim by arbitration. The
-    /// memory reclaim might fail if the max time has exceeded. This prevents
-    /// the memory arbitration from getting stuck when the memory reclaim waits
-    /// for a hanging query task to pause. If it is zero, then there is no
-    /// timeout.
-    uint64_t memoryReclaimWaitMs{0};
-
-    /// If true, it allows memory arbitrator to reclaim used memory cross query
-    /// memory pools.
-    bool globalArbitrationEnabled{false};
-
-    /// Provided by the query system to validate the state after a memory pool
-    /// enters arbitration if not null. For instance, Prestissimo provides
-    /// callback to check if a memory arbitration request is issued from a
+    /// Callback to check if a memory arbitration request is issued from a
     /// driver thread, then the driver should be put in suspended state to avoid
     /// the potential deadlock when reclaim memory from the task of the request
     /// memory pool.
     MemoryArbitrationStateCheckCB arbitrationStateCheckCb{nullptr};
 
-    /// If true, do sanity check on the arbitrator state on destruction.
-    ///
-    /// TODO: deprecate this flag after all the existing memory leak use cases
-    /// have been fixed.
-    bool checkUsageLeak{true};
+    /// Additional configs that are arbitrator implementation specific.
+    std::unordered_map<std::string, std::string> extraConfigs{};
   };
 
   using Factory = std::function<std::unique_ptr<MemoryArbitrator>(
@@ -129,29 +104,27 @@ class MemoryArbitrator {
 
   virtual ~MemoryArbitrator() = default;
 
-  /// Invoked by the memory manager to allocate up to 'targetBytes' of free
-  /// memory capacity without triggering memory arbitration. The function will
-  /// grow the memory pool's capacity based on the free available memory
-  /// capacity in the arbitrator, and returns the actual grown capacity in
-  /// bytes.
-  virtual uint64_t growCapacity(MemoryPool* pool, uint64_t bytes) = 0;
+  /// Invoked by the memory manager to shutdown the memory arbitrator to stop
+  /// serving new memory arbitration requests.
+  virtual void shutdown() = 0;
+
+  /// Invoked by the memory manager to add a newly created memory pool. The
+  /// memory arbitrator allocates the initial capacity for 'pool' and
+  /// dynamically adjusts its capacity based query memory needs through memory
+  /// arbitration.
+  virtual void addPool(const std::shared_ptr<MemoryPool>& pool) = 0;
+
+  /// Invoked by the memory manager to remove a destroyed memory pool. The
+  /// memory arbitrator frees up all its capacity and stops memory arbitration
+  /// operation on it.
+  virtual void removePool(MemoryPool* pool) = 0;
 
   /// Invoked by the memory manager to grow a memory pool's capacity.
-  /// 'pool' is the memory pool to request to grow. 'candidates' is a list
-  /// of query root pools to participate in the memory arbitration. The memory
-  /// arbitrator picks up a number of pools to either shrink its memory capacity
-  /// without actually freeing memory or reclaim its used memory to free up
-  /// enough memory for 'requestor' to grow. Different arbitrators use different
-  /// policies to select the candidate pools. The shared memory arbitrator used
-  /// by both Prestissimo and Prestissimo-on-Spark, selects the candidates with
-  /// more memory capacity.
-  ///
-  /// NOTE: the memory manager keeps 'candidates' valid during the arbitration
-  /// processing.
-  virtual bool growCapacity(
-      MemoryPool* pool,
-      const std::vector<std::shared_ptr<MemoryPool>>& candidatePools,
-      uint64_t targetBytes) = 0;
+  /// 'pool' is the memory pool to request to grow. The memory arbitrator picks
+  /// up a number of pools to either shrink its memory capacity without actually
+  /// freeing memory or reclaim its used memory to free up enough memory for
+  /// 'requestor' to grow.
+  virtual bool growCapacity(MemoryPool* pool, uint64_t requestBytes) = 0;
 
   /// Invoked by the memory manager to shrink up to 'targetBytes' free capacity
   /// from a memory 'pool', and returns them back to the arbitrator. If
@@ -159,17 +132,24 @@ class MemoryArbitrator {
   /// pool. The function returns the actual freed capacity from 'pool'.
   virtual uint64_t shrinkCapacity(MemoryPool* pool, uint64_t targetBytes) = 0;
 
-  /// Invoked by the memory manager to shrink memory capacity from a given list
-  /// of memory pools by reclaiming free and used memory. The freed memory
-  /// capacity is given back to the arbitrator.  If 'targetBytes' is zero, then
-  /// try to reclaim all the memory from 'pools'. The function returns the
-  /// actual freed memory capacity in bytes. If 'allowSpill' is true, it
-  /// reclaims the used memory by spilling. If 'allowAbort' is true, it reclaims
-  /// the used memory by aborting the queries with the most memory usage. If
-  /// both are true, it first reclaims the used memory by spilling and then
-  /// abort queries to reach the reclaim target.
+  /// Invoked by the memory manager to globally shrink memory from
+  /// memory pools by reclaiming only used memory, to reduce system memory
+  /// pressure. The freed memory capacity is given back to the arbitrator.  If
+  /// 'targetBytes' is zero, then try to reclaim all the memory from 'pools'.
+  /// The function returns the actual freed memory capacity in bytes. If
+  /// 'allowSpill' is true, it reclaims the used memory by spilling. If
+  /// 'allowAbort' is true, it reclaims the used memory by aborting the queries
+  /// with the most memory usage. If both are true, it first reclaims the used
+  /// memory by spilling and then abort queries to reach the reclaim target.
+  ///
+  /// NOTE: The actual reclaimed used memory (hence system memory) may be less
+  /// than 'targetBytes' due to the accounting of free capacity reclaimed. This
+  /// is okay because when this method is called, system is normally under
+  /// memory pressure, and there normally isn't much free capacity to reclaim.
+  /// So the reclaimed used memory in this case should be very close to
+  /// 'targetBytes' if enough used memory is reclaimable. We should improve this
+  /// in the future.
   virtual uint64_t shrinkCapacity(
-      const std::vector<std::shared_ptr<MemoryPool>>& pools,
       uint64_t targetBytes,
       bool allowSpill = true,
       bool allowAbort = false) = 0;
@@ -178,54 +158,40 @@ class MemoryArbitrator {
   struct Stats {
     /// The number of arbitration requests.
     uint64_t numRequests{0};
+    /// The number of running arbitration requests.
+    uint64_t numRunning{0};
     /// The number of succeeded arbitration requests.
     uint64_t numSucceeded{0};
     /// The number of aborted arbitration requests.
     uint64_t numAborted{0};
     /// The number of arbitration request failures.
     uint64_t numFailures{0};
-    /// The sum of all the arbitration request queue times in microseconds.
-    uint64_t queueTimeUs{0};
-    /// The sum of all the arbitration run times in microseconds.
-    uint64_t arbitrationTimeUs{0};
-    /// The amount of memory bytes freed by reducing the memory pool's capacity
-    /// without actually freeing memory.
-    uint64_t numShrunkBytes{0};
-    /// The amount of memory bytes freed by memory reclamation.
-    uint64_t numReclaimedBytes{0};
+    /// The number of reclaimed unused free bytes.
+    uint64_t reclaimedFreeBytes{0};
+    /// The number of reclaimed used bytes.
+    uint64_t reclaimedUsedBytes{0};
     /// The max memory capacity in bytes.
     uint64_t maxCapacityBytes{0};
     /// The free memory capacity in bytes.
     uint64_t freeCapacityBytes{0};
     /// The free reserved memory capacity in bytes.
     uint64_t freeReservedCapacityBytes{0};
-    /// The sum of all reclaim operation durations during arbitration in
-    /// microseconds.
-    uint64_t reclaimTimeUs{0};
     /// The total number of times of the reclaim attempts that end up failing
     /// due to reclaiming at non-reclaimable stage.
     uint64_t numNonReclaimableAttempts{0};
-    /// The total number of memory reservations.
-    uint64_t numReserves{0};
-    /// The total number of memory releases.
-    uint64_t numReleases{0};
 
     Stats(
         uint64_t _numRequests,
+        uint64_t _numRunning,
         uint64_t _numSucceeded,
         uint64_t _numAborted,
         uint64_t _numFailures,
-        uint64_t _queueTimeUs,
-        uint64_t _arbitrationTimeUs,
-        uint64_t _numShrunkBytes,
-        uint64_t _numReclaimedBytes,
+        uint64_t _reclaimedFreeBytes,
+        uint64_t _reclaimedUsedBytes,
         uint64_t _maxCapacityBytes,
         uint64_t _freeCapacityBytes,
         uint64_t _freeReservedCapacityBytes,
-        uint64_t _reclaimTimeUs,
-        uint64_t _numNonReclaimableAttempts,
-        uint64_t _numReserves,
-        uint64_t _numReleases);
+        uint64_t _numNonReclaimableAttempts);
 
     Stats() = default;
 
@@ -250,23 +216,10 @@ class MemoryArbitrator {
   /// Returns the debug string of this memory arbitrator.
   virtual std::string toString() const = 0;
 
-  /// Enables/disables global arbitration accordingly.
-  void testingSetGlobalArbitration(bool enableGlobalArbitration) {
-    *const_cast<bool*>(&globalArbitrationEnabled_) = enableGlobalArbitration;
-  }
-
  protected:
   explicit MemoryArbitrator(const Config& config)
       : capacity_(config.capacity),
-        reservedCapacity_(config.reservedCapacity),
-        memoryPoolReservedCapacity_(config.memoryPoolReservedCapacity),
-        memoryPoolTransferCapacity_(config.memoryPoolTransferCapacity),
-        memoryReclaimWaitMs_(config.memoryReclaimWaitMs),
-        globalArbitrationEnabled_(config.globalArbitrationEnabled),
-        arbitrationStateCheckCb_(config.arbitrationStateCheckCb),
-        checkUsageLeak_(config.checkUsageLeak) {
-    VELOX_CHECK_LE(reservedCapacity_, capacity_);
-  }
+        arbitrationStateCheckCb_(config.arbitrationStateCheckCb) {}
 
   /// Helper utilities used by the memory arbitrator implementations to call
   /// protected methods of memory pool.
@@ -276,13 +229,7 @@ class MemoryArbitrator {
   static uint64_t shrinkPool(MemoryPool* pool, uint64_t targetBytes);
 
   const uint64_t capacity_;
-  const uint64_t reservedCapacity_;
-  const uint64_t memoryPoolReservedCapacity_;
-  const uint64_t memoryPoolTransferCapacity_;
-  const uint64_t memoryReclaimWaitMs_;
-  const bool globalArbitrationEnabled_;
   const MemoryArbitrationStateCheckCB arbitrationStateCheckCb_;
-  const bool checkUsageLeak_;
 };
 
 /// Formatter for fmt.
@@ -322,7 +269,7 @@ class MemoryReclaimer {
     /// due to reclaiming at non-reclaimable stage.
     uint64_t numNonReclaimableAttempts{0};
 
-    /// The total execution time to do the reclaim in microseconds.
+    /// The total time to do the reclaim in microseconds.
     uint64_t reclaimExecTimeUs{0};
 
     /// The total reclaimed memory bytes.
@@ -340,7 +287,7 @@ class MemoryReclaimer {
 
   virtual ~MemoryReclaimer() = default;
 
-  static std::unique_ptr<MemoryReclaimer> create();
+  static std::unique_ptr<MemoryReclaimer> create(int32_t priority = 0);
 
   /// Invoked memory reclaim function from 'pool' and record execution 'stats'.
   static uint64_t run(const std::function<int64_t()>& func, Stats& stats);
@@ -361,6 +308,26 @@ class MemoryReclaimer {
   /// NOTE: it is guaranteed to be called also on failure path if
   /// enterArbitration has been called.
   virtual void leaveArbitration() noexcept {}
+
+  /// Invoked by upper layer reclaimer, to return the priority of this
+  /// reclaimer. The priority determines the reclaiming order of self among all
+  /// same level reclaimers. The smaller the number, the higher the priority.
+  /// Consider the following memory pool & reclaimer structure:
+  ///
+  ///                 rec1(pri 1)
+  ///                /            \
+  ///               /              \
+  ///              /                \
+  ///      rec2(pri 1)           rec3(pri 3)
+  ///      /        \             /        \
+  ///     /          \           /          \
+  /// rec4(pri 1) rec5(pri 0)  rec6(pri 0) rec7(pri 1)
+  ///
+  /// The reclaiming traversing order will be rec1 -> rec2 -> rec5 -> rec4 ->
+  /// rec3 -> rec6 -> rec7
+  virtual int32_t priority() const {
+    return priority_;
+  };
 
   /// Invoked by the memory arbitrator to get the amount of memory bytes that
   /// can be reclaimed from 'pool'. The function returns true if 'pool' is
@@ -396,7 +363,10 @@ class MemoryReclaimer {
   virtual void abort(MemoryPool* pool, const std::exception_ptr& error);
 
  protected:
-  MemoryReclaimer() = default;
+  explicit MemoryReclaimer(int32_t priority) : priority_(priority){};
+
+ private:
+  const int32_t priority_;
 };
 
 /// Helper class used to measure the memory bytes reclaimed from a memory pool
@@ -452,27 +422,43 @@ class NonReclaimableSectionGuard {
   const bool oldNonReclaimableSectionValue_;
 };
 
-/// The memory arbitration context which is set on per-thread local variable by
-/// memory arbitrator. It is used to indicate a running thread is under memory
-/// arbitration processing or not. This helps to enable sanity check such as all
-/// the memory reservations during memory arbitration should come from the
-/// spilling memory pool.
+/// The memory arbitration context which is set as per-thread local variable by
+/// memory arbitrator. It is used to indicate if a running thread is under
+/// memory arbitration. This helps to enable sanity check such as all the memory
+/// reservations during memory arbitration should come from the spilling memory
+/// pool.
 struct MemoryArbitrationContext {
-  const MemoryPool* requestor;
+  /// Defines the type of memory arbitration.
+  enum class Type {
+    /// Indicates the memory arbitration is triggered by a memory pool for its
+    /// own capacity growth.
+    kLocal,
+    /// Indicates the memory arbitration is triggered by the memory arbitrator
+    /// to free up memory for the system.
+    kGlobal,
+  };
+  static std::string typeName(Type type);
+
+  const Type type;
+  /// The name of the request memory pool for local arbitration. It is empty for
+  /// global memory arbitration type.
+  const std::string requestorName;
+
+  explicit MemoryArbitrationContext(const MemoryPool* requestor);
+
+  MemoryArbitrationContext() : type(Type::kGlobal) {}
 };
 
 /// Object used to set/restore the memory arbitration context when a thread is
 /// under memory arbitration processing.
 class ScopedMemoryArbitrationContext {
  public:
-  explicit ScopedMemoryArbitrationContext(const MemoryPool* requestor);
+  ScopedMemoryArbitrationContext();
 
-  // Can be used to restore a previously captured MemoryArbitrationContext.
-  // contextToRestore can be nullptr if there was no context at the time it was
-  // captured, in which case arbitrationCtx is unchanged upon
-  // contruction/destruction of this object.
   explicit ScopedMemoryArbitrationContext(
-      const MemoryArbitrationContext* contextToRestore);
+      const MemoryArbitrationContext* context);
+
+  explicit ScopedMemoryArbitrationContext(const MemoryPool* requestor);
 
   ~ScopedMemoryArbitrationContext();
 
@@ -481,12 +467,42 @@ class ScopedMemoryArbitrationContext {
   MemoryArbitrationContext currentArbitrationCtx_;
 };
 
+/// Object used to setup arbitration section for a memory pool.
+class MemoryPoolArbitrationSection {
+ public:
+  explicit MemoryPoolArbitrationSection(MemoryPool* pool);
+
+  ~MemoryPoolArbitrationSection();
+
+ private:
+  MemoryPool* const pool_;
+};
+
 /// Returns the memory arbitration context set by a per-thread local variable if
 /// the running thread is under memory arbitration processing.
 const MemoryArbitrationContext* memoryArbitrationContext();
 
 /// Returns true if the running thread is under memory arbitration or not.
 bool underMemoryArbitration();
+
+/// Creates an async memory reclaim task with memory arbitration context set.
+/// This is to avoid recursive memory arbitration during memory reclaim.
+///
+/// NOTE: this must be called under memory arbitration.
+template <typename Item>
+std::shared_ptr<AsyncSource<Item>> createAsyncMemoryReclaimTask(
+    std::function<std::unique_ptr<Item>()> task) {
+  auto* arbitrationCtx = memory::memoryArbitrationContext();
+  return std::make_shared<AsyncSource<Item>>(
+      [asyncTask = std::move(task), arbitrationCtx]() -> std::unique_ptr<Item> {
+        std::unique_ptr<ScopedMemoryArbitrationContext> restoreArbitrationCtx;
+        if (arbitrationCtx != nullptr) {
+          restoreArbitrationCtx =
+              std::make_unique<ScopedMemoryArbitrationContext>(arbitrationCtx);
+        }
+        return asyncTask();
+      });
+}
 
 /// The function triggers memory arbitration by shrinking memory pools from
 /// 'manager' by invoking shrinkPools API. If 'manager' is not set, then it
@@ -515,7 +531,7 @@ struct fmt::formatter<facebook::velox::memory::MemoryArbitrator::Stats>
     : formatter<std::string> {
   auto format(
       facebook::velox::memory::MemoryArbitrator::Stats s,
-      format_context& ctx) {
+      format_context& ctx) const {
     return formatter<std::string>::format(s.toString(), ctx);
   }
 };

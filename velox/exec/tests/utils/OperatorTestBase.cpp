@@ -21,17 +21,17 @@
 #include "velox/common/memory/MallocAllocator.h"
 #include "velox/common/memory/SharedArbitrator.h"
 #include "velox/common/testutil/TestValue.h"
-#include "velox/exec/OutputBufferManager.h"
-#include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/LocalExchangeSource.h"
+#include "velox/flag_definitions/flags.h"
 #include "velox/functions/prestosql/aggregates/RegisterAggregateFunctions.h"
 #include "velox/functions/prestosql/registration/RegistrationFunctions.h"
 #include "velox/parse/Expressions.h"
 #include "velox/parse/ExpressionsParser.h"
 #include "velox/parse/TypeResolver.h"
+#include "velox/serializers/CompactRowSerializer.h"
 #include "velox/serializers/PrestoSerializer.h"
+#include "velox/serializers/UnsafeRowSerializer.h"
 #include "velox/vector/tests/utils/VectorMaker.h"
-#include "velox/vector/tests/utils/VectorTestBase.h"
 
 DECLARE_bool(velox_memory_leak_check_enabled);
 DECLARE_bool(velox_enable_memory_usage_track_in_default_memory_pool);
@@ -64,6 +64,7 @@ OperatorTestBase::~OperatorTestBase() {
 void OperatorTestBase::SetUpTestCase() {
   FLAGS_velox_enable_memory_usage_track_in_default_memory_pool = true;
   FLAGS_velox_memory_leak_check_enabled = true;
+  translateFlagsToGlobalConfig();
   memory::SharedArbitrator::registerFactory();
   resetMemory();
   functions::prestosql::registerAllScalarFunctions();
@@ -82,7 +83,9 @@ void OperatorTestBase::setupMemory(
     int64_t arbitratorCapacity,
     int64_t arbitratorReservedCapacity,
     int64_t memoryPoolInitCapacity,
-    int64_t memoryPoolReservedCapacity) {
+    int64_t memoryPoolReservedCapacity,
+    int64_t memoryPoolMinReclaimBytes,
+    int64_t memoryPoolAbortCapacityLimit) {
   if (asyncDataCache_ != nullptr) {
     asyncDataCache_->clear();
     asyncDataCache_.reset();
@@ -90,13 +93,25 @@ void OperatorTestBase::setupMemory(
   MemoryManagerOptions options;
   options.allocatorCapacity = allocatorCapacity;
   options.arbitratorCapacity = arbitratorCapacity;
-  options.arbitratorReservedCapacity = arbitratorReservedCapacity;
-  options.memoryPoolInitCapacity = memoryPoolInitCapacity;
-  options.memoryPoolReservedCapacity = memoryPoolReservedCapacity;
   options.arbitratorKind = "SHARED";
   options.checkUsageLeak = true;
-  options.globalArbitrationEnabled = true;
   options.arbitrationStateCheckCb = memoryArbitrationStateCheck;
+
+  using ExtraConfig = SharedArbitrator::ExtraConfig;
+  options.extraArbitratorConfigs = {
+      {std::string(ExtraConfig::kReservedCapacity),
+       folly::to<std::string>(arbitratorReservedCapacity) + "B"},
+      {std::string(ExtraConfig::kMemoryPoolInitialCapacity),
+       folly::to<std::string>(memoryPoolInitCapacity) + "B"},
+      {std::string(ExtraConfig::kMemoryPoolReservedCapacity),
+       folly::to<std::string>(memoryPoolReservedCapacity) + "B"},
+      {std::string(ExtraConfig::kMemoryPoolMinReclaimBytes),
+       folly::to<std::string>(memoryPoolMinReclaimBytes) + "B"},
+      {std::string(ExtraConfig::kMemoryPoolAbortCapacityLimit),
+       folly::to<std::string>(memoryPoolAbortCapacityLimit) + "B"},
+      {std::string(ExtraConfig::kGlobalArbitrationEnabled), "true"},
+  };
+
   memory::MemoryManager::testingSetInstance(options);
   asyncDataCache_ =
       cache::AsyncDataCache::create(memory::memoryManager()->allocator());
@@ -104,12 +119,21 @@ void OperatorTestBase::setupMemory(
 }
 
 void OperatorTestBase::resetMemory() {
-  OperatorTestBase::setupMemory(8L << 30, 6L << 30, 0, 512 << 20, 0);
+  OperatorTestBase::setupMemory(8L << 30, 6L << 30, 0, 512 << 20, 0, 0, 0);
 }
 
 void OperatorTestBase::SetUp() {
   if (!isRegisteredVectorSerde()) {
     this->registerVectorSerde();
+  }
+  if (!isRegisteredNamedVectorSerde(VectorSerde::Kind::kPresto)) {
+    serializer::presto::PrestoVectorSerde::registerNamedVectorSerde();
+  }
+  if (!isRegisteredNamedVectorSerde(VectorSerde::Kind::kCompactRow)) {
+    serializer::CompactRowVectorSerde::registerNamedVectorSerde();
+  }
+  if (!isRegisteredNamedVectorSerde(VectorSerde::Kind::kUnsafeRow)) {
+    serializer::spark::UnsafeRowVectorSerde::registerNamedVectorSerde();
   }
   driverExecutor_ = std::make_unique<folly::CPUThreadPoolExecutor>(3);
   ioExecutor_ = std::make_unique<folly::IOThreadPoolExecutor>(3);

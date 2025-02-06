@@ -16,26 +16,25 @@
 
 #pragma once
 
-#include <array>
 #include <atomic>
 #include <memory>
 #include <optional>
-#include <queue>
 
 #include <fmt/format.h>
 #include "velox/common/base/BitUtil.h"
 #include "velox/common/base/Exceptions.h"
 #include "velox/common/base/Portability.h"
-#include "velox/common/future/VeloxPromise.h"
+#include "velox/common/config/GlobalConfig.h"
 #include "velox/common/memory/Allocation.h"
 #include "velox/common/memory/MemoryAllocator.h"
 #include "velox/common/memory/MemoryArbitrator.h"
 
-DECLARE_bool(velox_memory_leak_check_enabled);
-DECLARE_bool(velox_memory_pool_debug_enabled);
-
 namespace facebook::velox::exec {
 class ParallelMemoryReclaimer;
+}
+
+namespace facebook::velox::memory {
+class TestArbitrator;
 }
 
 namespace facebook::velox::memory {
@@ -152,7 +151,7 @@ class MemoryPool : public std::enable_shared_from_this<MemoryPool> {
 
     /// If true, tracks the allocation and free call stacks to detect the source
     /// of memory leak for testing purpose.
-    bool debugEnabled{FLAGS_velox_memory_pool_debug_enabled};
+    bool debugEnabled{config::globalConfig().memoryPoolDebugEnabled};
 
     /// Terminates the process and generates a core file on an allocation
     /// failure
@@ -372,16 +371,6 @@ class MemoryPool : public std::enable_shared_from_this<MemoryPool> {
   /// Returns the memory reclaimer of this memory pool if not null.
   virtual MemoryReclaimer* reclaimer() const = 0;
 
-  /// Invoked by the memory arbitrator to enter memory arbitration processing.
-  /// It is a noop if 'reclaimer' is not set, otherwise invoke the reclaimer's
-  /// corresponding method.
-  virtual void enterArbitration() = 0;
-
-  /// Invoked by the memory arbitrator to leave memory arbitration processing.
-  /// It is a noop if 'reclaimer' is not set, otherwise invoke the reclaimer's
-  /// corresponding method.
-  virtual void leaveArbitration() noexcept = 0;
-
   /// Function estimates the number of reclaimable bytes and returns in
   /// 'reclaimableBytes'. If the 'reclaimer' is not set, the function returns
   /// std::nullopt. Otherwise, it will invoke the corresponding method of the
@@ -499,6 +488,16 @@ class MemoryPool : public std::enable_shared_from_this<MemoryPool> {
  protected:
   static constexpr uint64_t kMB = 1 << 20;
 
+  /// Invoked by the memory arbitrator to enter memory arbitration processing.
+  /// It is a noop if 'reclaimer' is not set, otherwise invoke the reclaimer's
+  /// corresponding method.
+  virtual void enterArbitration() = 0;
+
+  /// Invoked by the memory arbitrator to leave memory arbitration processing.
+  /// It is a noop if 'reclaimer' is not set, otherwise invoke the reclaimer's
+  /// corresponding method.
+  virtual void leaveArbitration() noexcept = 0;
+
   /// Invoked to free up to the specified amount of free memory by reducing
   /// this memory pool's capacity without actually freeing any used memory. The
   /// function returns the actually freed memory capacity in bytes. If
@@ -557,6 +556,9 @@ class MemoryPool : public std::enable_shared_from_this<MemoryPool> {
   friend class velox::exec::ParallelMemoryReclaimer;
   friend class MemoryManager;
   friend class MemoryArbitrator;
+  friend class velox::memory::TestArbitrator;
+  friend class MemoryPoolArbitrationSection;
+  friend class ArbitrationParticipant;
 
   VELOX_FRIEND_TEST(MemoryPoolTest, shrinkAndGrowAPIs);
   VELOX_FRIEND_TEST(MemoryPoolTest, grow);
@@ -573,11 +575,6 @@ class MemoryPoolImpl : public MemoryPool {
   /// The callback invoked on the root memory pool destruction. It is set by
   /// memory manager to removes the pool from 'MemoryManager::pools_'.
   using DestructionCallback = std::function<void(MemoryPool*)>;
-  /// The callback invoked when the used memory reservation of the root memory
-  /// pool exceed its capacity. It is set by memory manager to grow the memory
-  /// pool capacity. The callback returns true if the capacity growth succeeds,
-  /// otherwise false.
-  using GrowCapacityCallback = std::function<bool(MemoryPool*, uint64_t)>;
 
   MemoryPoolImpl(
       MemoryManager* manager,
@@ -585,8 +582,6 @@ class MemoryPoolImpl : public MemoryPool {
       Kind kind,
       std::shared_ptr<MemoryPool> parent,
       std::unique_ptr<MemoryReclaimer> reclaimer,
-      GrowCapacityCallback growCapacityCb,
-      DestructionCallback destructionCb,
       const Options& options = Options{});
 
   ~MemoryPoolImpl() override;
@@ -651,10 +646,6 @@ class MemoryPoolImpl : public MemoryPool {
 
   MemoryReclaimer* reclaimer() const override;
 
-  void enterArbitration() override;
-
-  void leaveArbitration() noexcept override;
-
   std::optional<uint64_t> reclaimableBytes() const override;
 
   uint64_t reclaim(
@@ -663,6 +654,8 @@ class MemoryPoolImpl : public MemoryPool {
       memory::MemoryReclaimer::Stats& stats) override;
 
   void abort(const std::exception_ptr& error) override;
+
+  void setDestructionCallback(const DestructionCallback& callback);
 
   std::string toString() const override {
     std::lock_guard<std::mutex> l(mutex_);
@@ -731,6 +724,10 @@ class MemoryPoolImpl : public MemoryPool {
   }
 
  private:
+  void enterArbitration() override;
+
+  void leaveArbitration() noexcept override;
+
   uint64_t shrink(uint64_t targetBytes = 0) override;
 
   bool grow(uint64_t growBytes, uint64_t reservationBytes = 0) override;
@@ -872,6 +869,11 @@ class MemoryPoolImpl : public MemoryPool {
 
   void releaseThreadSafe(uint64_t size, bool releaseOnly);
 
+  // Invoked to grow capacity of the root memory pool from the memory
+  // arbitrator. 'requestor' is the leaf memory pool that triggers the memory
+  // capacity growth. 'size' is the memory capacity growth in bytes.
+  bool growCapacity(MemoryPool* requestor, uint64_t size);
+
   FOLLY_ALWAYS_INLINE void releaseNonThreadSafe(
       uint64_t size,
       bool releaseOnly) {
@@ -999,8 +1001,7 @@ class MemoryPoolImpl : public MemoryPool {
 
   MemoryManager* const manager_;
   MemoryAllocator* const allocator_;
-  const GrowCapacityCallback growCapacityCb_;
-  const DestructionCallback destructionCb_;
+  MemoryArbitrator* const arbitrator_;
 
   // Regex for filtering on 'name_' when debug mode is enabled. This allows us
   // to only track the callsites of memory allocations for memory pools whose
@@ -1014,6 +1015,8 @@ class MemoryPoolImpl : public MemoryPool {
   // the same parent do not have to be serialized.
   mutable std::mutex mutex_;
 
+  DestructionCallback destructionCb_;
+
   // Used by memory arbitration to reclaim memory from the associated query
   // object if not null. For example, a memory pool can reclaim the used memory
   // from a spillable operator through disk spilling. If null, we can't reclaim
@@ -1021,7 +1024,7 @@ class MemoryPoolImpl : public MemoryPool {
   std::unique_ptr<MemoryReclaimer> reclaimer_;
 
   // The memory cap in bytes to enforce.
-  int64_t capacity_;
+  tsan_atomic<int64_t> capacity_;
 
   // The number of reservation bytes.
   tsan_atomic<int64_t> reservationBytes_{0};
@@ -1106,9 +1109,8 @@ class StlAllocator {
 template <>
 struct fmt::formatter<facebook::velox::memory::MemoryPool::Kind>
     : formatter<std::string> {
-  auto format(
-      facebook::velox::memory::MemoryPool::Kind s,
-      format_context& ctx) {
+  auto format(facebook::velox::memory::MemoryPool::Kind s, format_context& ctx)
+      const {
     return formatter<std::string>::format(
         facebook::velox::memory::MemoryPool::kindString(s), ctx);
   }

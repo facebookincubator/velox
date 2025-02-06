@@ -175,6 +175,16 @@ TopNRowNumber::TopNRowNumber(
   }
 }
 
+void TopNRowNumber::prepareInput(RowVectorPtr& input) {
+  // Potential large memory usage site that might trigger arbitration. Make it
+  // reclaimable because at this point it does not break the operator's state
+  // atomicity.
+  ReclaimableSectionGuard guard(this);
+  for (auto i = 0; i < inputChannels_.size(); ++i) {
+    decodedVectors_[i].decode(*input->childAt(inputChannels_[i]));
+  }
+}
+
 void TopNRowNumber::addInput(RowVectorPtr input) {
   if (abandonedPartial_) {
     input_ = std::move(input);
@@ -183,9 +193,7 @@ void TopNRowNumber::addInput(RowVectorPtr input) {
 
   const auto numInput = input->size();
 
-  for (auto i = 0; i < inputChannels_.size(); ++i) {
-    decodedVectors_[i].decode(*input->childAt(inputChannels_[i]));
-  }
+  prepareInput(input);
 
   if (table_) {
     ensureInputFits(input);
@@ -428,7 +436,7 @@ RowVectorPtr TopNRowNumber::getOutputFromMemory() {
   if (remainingRowsInPartition_ > 0) {
     auto& partition = currentPartition();
     auto start = partition.rows.size() - remainingRowsInPartition_;
-    auto numRows =
+    const auto numRows =
         std::min<vector_size_t>(outputBatchSize_, remainingRowsInPartition_);
     appendPartitionRows(partition, start, numRows, offset, rowNumbers);
     offset += numRows;
@@ -461,7 +469,7 @@ RowVectorPtr TopNRowNumber::getOutputFromMemory() {
   if (offset == 0) {
     data_->clear();
     if (table_ != nullptr) {
-      table_->clear();
+      table_->clear(true);
     }
     pool()->release();
     return nullptr;
@@ -501,9 +509,7 @@ bool TopNRowNumber::isNewPartition(
 void TopNRowNumber::setupNextOutput(
     const RowVectorPtr& output,
     int32_t rowNumber) {
-  nextRowNumber_ = rowNumber;
-
-  auto lookAhead = merge_->next();
+  auto* lookAhead = merge_->next();
   if (lookAhead == nullptr) {
     nextRowNumber_ = 0;
     return;
@@ -514,14 +520,14 @@ void TopNRowNumber::setupNextOutput(
     return;
   }
 
+  nextRowNumber_ = rowNumber;
   if (nextRowNumber_ < limit_) {
     return;
   }
 
   // Skip remaining rows for this partition.
   lookAhead->pop();
-
-  while (auto next = merge_->next()) {
+  while (auto* next = merge_->next()) {
     if (isNewPartition(output, output->size(), next)) {
       nextRowNumber_ = 0;
       return;
@@ -568,6 +574,8 @@ RowVectorPtr TopNRowNumber::getOutputFromSpill() {
       rowNumber = 0;
     }
 
+    // Copy this row to the output buffer if this partition has
+    // < limit_ rows output.
     if (rowNumber < limit_) {
       for (auto i = 0; i < inputChannels_.size(); ++i) {
         output->childAt(inputChannels_[i])
@@ -582,23 +590,26 @@ RowVectorPtr TopNRowNumber::getOutputFromSpill() {
         rowNumbers->set(index, rowNumber + 1);
       }
       ++index;
-    } else {
-      // Drop the row.
+      ++rowNumber;
     }
 
-    ++rowNumber;
+    // Pop this row from the spill.
     next->pop();
 
     if (index == outputBatchSize_) {
-      // Check if next row is from a new partition. Reset 'nextRowNumber_' if
-      // so. Check if next row is from the current partition, but we have
-      // reached the 'limit_'. Skip to the start of the next partition if so.
+      // This is the last row for this output batch.
+      // Prepare the next batch :
+      // i) If 'limit_' is reached for this partition, then skip the rows
+      // until the next partition.
+      // ii) If the next row is from a new partition, then reset rowNumber_.
       setupNextOutput(output, rowNumber);
-
       return output;
     }
   }
 
+  // At this point, all rows are read from the spill merge stream.
+  // (Note : The previous loop returns directly when the output buffer
+  // is filled).
   if (index > 0) {
     output->resize(index);
   } else {
@@ -616,18 +627,27 @@ bool TopNRowNumber::isFinished() {
 void TopNRowNumber::close() {
   Operator::close();
 
-  if (table_) {
-    partitionIt_.reset();
-    partitions_.resize(1000);
-    while (auto numPartitions = table_->listAllRows(
-               &partitionIt_,
-               partitions_.size(),
-               RowContainer::kUnlimited,
-               partitions_.data())) {
-      for (auto i = 0; i < numPartitions; ++i) {
-        std::destroy_at(
-            reinterpret_cast<TopRows*>(partitions_[i] + partitionOffset_));
-      }
+  SCOPE_EXIT {
+    table_.reset();
+    singlePartition_.reset();
+    data_.reset();
+    allocator_.reset();
+  };
+
+  if (table_ == nullptr) {
+    return;
+  }
+
+  partitionIt_.reset();
+  partitions_.resize(1'000);
+  while (auto numPartitions = table_->listAllRows(
+             &partitionIt_,
+             partitions_.size(),
+             RowContainer::kUnlimited,
+             partitions_.data())) {
+    for (auto i = 0; i < numPartitions; ++i) {
+      std::destroy_at(
+          reinterpret_cast<TopRows*>(partitions_[i] + partitionOffset_));
     }
   }
 }
@@ -729,7 +749,7 @@ void TopNRowNumber::spill() {
   updateEstimatedOutputRowSize();
 
   spiller_->spill();
-  table_->clear();
+  table_->clear(true);
   data_->clear();
   pool()->release();
 }
@@ -738,9 +758,7 @@ void TopNRowNumber::setupSpiller() {
   VELOX_CHECK_NULL(spiller_);
   VELOX_CHECK(spillConfig_.has_value());
 
-  spiller_ = std::make_unique<Spiller>(
-      // TODO Replace Spiller::Type::kOrderBy.
-      Spiller::Type::kOrderByInput,
+  spiller_ = std::make_unique<SortInputSpiller>(
       data_.get(),
       inputType_,
       spillCompareFlags_.size(),

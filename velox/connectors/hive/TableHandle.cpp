@@ -25,6 +25,7 @@ columnTypeNames() {
       {HiveColumnHandle::ColumnType::kPartitionKey, "PartitionKey"},
       {HiveColumnHandle::ColumnType::kRegular, "Regular"},
       {HiveColumnHandle::ColumnType::kSynthesized, "Synthesized"},
+      {HiveColumnHandle::ColumnType::kRowIndex, "RowIndex"},
   };
 }
 
@@ -106,7 +107,7 @@ HiveTableHandle::HiveTableHandle(
     std::string connectorId,
     const std::string& tableName,
     bool filterPushdownEnabled,
-    SubfieldFilters subfieldFilters,
+    common::SubfieldFilters subfieldFilters,
     const core::TypedExprPtr& remainingFilter,
     const RowTypePtr& dataColumns,
     const std::unordered_map<std::string, std::string>& tableParameters)
@@ -184,7 +185,7 @@ ConnectorTableHandlePtr HiveTableHandle::create(
         ISerializable::deserialize<core::ITypedExpr>(it->second, context);
   }
 
-  SubfieldFilters subfieldFilters;
+  common::SubfieldFilters subfieldFilters;
   folly::dynamic subfieldFiltersObj = obj["subfieldFilters"];
   for (const auto& subfieldFilter : subfieldFiltersObj) {
     common::Subfield subfield(subfieldFilter["subfield"].asString());

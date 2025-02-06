@@ -130,7 +130,9 @@ of rows in the vector.
 
 Vectors are always held by std::shared_ptr using the VectorPtr alias.
 
-using VectorPtr = std::shared_ptr<BaseVector>;
+.. code-block:: c++
+
+    using VectorPtr = std::shared_ptr<BaseVector>;
 
 The “bits” namespace contains a number of convenience functions for working with
 a nulls buffer.
@@ -254,6 +256,12 @@ After applying substr(s, 2) function string in position 1 became short enough
 to fit inside the StringView, hence, it no longer contains a pointer to a
 position in the string buffer.
 
+Allowing these zero-copy implementations of functions that simply change the
+starting position/length of a string, means that we may end up with StringViews
+pointing to overlapping ranges within `stringBuffers_`. For this reason the
+Buffers in `stringBuffers_` should be treated as immutable to prevent
+modifications from unintentionally cascading.
+
 Flat vectors of type TIMESTAMP are represented by FlatVector<Timestamp>.
 Timestamp struct consists of two 64-bit integers: seconds and nanoseconds. Each
 entry uses 16 bytes.
@@ -360,8 +368,8 @@ vector in a dictionary.
 innermost vector of a dictionary, e.g. Dict(Dict(Flat))->wrappedVector() return
 Flat.
 
-**wrappedIndex(index)** virtual method defined in BaseVector translates index into
-the dictionary vector into an index into the innermost vector, e.g.
+**wrappedIndex(index)** virtual method defined in BaseVector translates the index in
+the dictionary vector into the index in the innermost vector, e.g.
 wrappedIndex(3) returns 6 for the dictionary vector above.
 
 Dictionary vector has its own nulls buffer independent of the nulls buffer of
@@ -386,8 +394,9 @@ ArrayVector
 ~~~~~~~~~~~
 
 ArrayVector stores values of type ARRAY. In addition to nulls buffer, it
-contains offsets and sizes buffers and an elements vector. Offsets and sizes
-are 32-bit integers.
+contains offsets and sizes buffers and an elements vector. Offsets and sizes are
+32-bit integers. The non-null non-empty ranges formed by offsets and sizes in a
+vector is not allowed to overlap with each other.
 
 .. code-block:: c++
 
@@ -443,8 +452,9 @@ MapVector
 ~~~~~~~~~
 
 MapVector stores values of type MAP. In addition to nulls buffer, it contains
-offsets and sizes buffers, keys and values vectors. Offsets and sizes are
-32-bit integers.
+offsets and sizes buffers, keys and values vectors. Offsets and sizes are 32-bit
+integers. The non-null non-empty ranges formed by offsets and sizes in a vector
+is not allowed to overlap with each other.
 
 .. code-block:: c++
 
@@ -528,7 +538,7 @@ to a particular row in another vector.
     vector_size_t index_;
 
 The following diagram shows a complex vector of type ARRAY(INTEGER) representing
-an array of 3 integers: [10, 12, -1, 0]. It is defined as a pointer to row 2 in
+an array of 4 integers: [10, 12, -1, 0]. It is defined as a pointer to row 2 in
 some other ArrayVector.
 
 .. image:: images/constant-array-vector.png
@@ -551,7 +561,7 @@ referring to the innermost vector, e.g. wrapInConstant(100, 5, Dict
 **wrappedVector()** virtual method defined in BaseVector provides access to the
 underlying flat vector.
 
-**wrappedIndex(index)** virtual method defined in BaseVector returns the index into
+**wrappedIndex(index)** virtual method defined in BaseVector returns the index in
 the underlying flat vector that identifies the constant value. This method
 returns the same value for all inputs as all rows of the constant vector map to
 the same row of the underlying flat vector.

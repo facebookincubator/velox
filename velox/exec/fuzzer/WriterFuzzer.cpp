@@ -22,6 +22,7 @@
 #include "velox/common/base/Fs.h"
 #include "velox/common/encode/Base64.h"
 #include "velox/common/file/FileSystems.h"
+#include "velox/common/file/tests/FaultyFileSystem.h"
 #include "velox/connectors/hive/HiveConnector.h"
 #include "velox/connectors/hive/HiveConnectorSplit.h"
 #include "velox/connectors/hive/TableHandle.h"
@@ -35,6 +36,11 @@
 #include "velox/functions/prestosql/tests/utils/FunctionBaseTest.h"
 #include "velox/vector/VectorSaver.h"
 #include "velox/vector/fuzzer/VectorFuzzer.h"
+
+DEFINE_bool(
+    file_system_error_injection,
+    true,
+    "When enabled, inject file system write error with certain possibility");
 
 DEFINE_int32(steps, 10, "Number of plans to generate and test.");
 
@@ -63,6 +69,9 @@ using namespace facebook::velox::test;
 namespace facebook::velox::exec::test {
 
 namespace {
+using facebook::velox::filesystems::FileSystem;
+using tests::utils::FaultFileOperation;
+using tests::utils::FaultyFileSystem;
 
 class WriterFuzzer {
  public:
@@ -123,7 +132,7 @@ class WriterFuzzer {
       const std::vector<std::string>& bucketColumns,
       int32_t sortColumnOffset,
       const std::vector<std::shared_ptr<const HiveSortingColumn>>& sortBy,
-      const std::string& outputDirectoryPath);
+      const std::shared_ptr<TempDirectoryPath>& outputDirectoryPath);
 
   // Generates table column handles based on table column properties
   std::unordered_map<std::string, std::shared_ptr<connector::ColumnHandle>>
@@ -235,6 +244,12 @@ class WriterFuzzer {
       BIGINT(),
       VARCHAR()};
 
+  const std::shared_ptr<FaultyFileSystem> faultyFs_ =
+      std::dynamic_pointer_cast<FaultyFileSystem>(
+          filesystems::getFileSystem("faulty:/tmp", {}));
+  const std::string injectedErrorMsg_{"Injected Faulty File Error"};
+  std::atomic<uint64_t> injectedErrorCount_{0};
+
   FuzzerGenerator rng_;
   size_t currentSeed_{0};
   std::unique_ptr<ReferenceQueryRunner> referenceQueryRunner_;
@@ -287,10 +302,20 @@ WriterFuzzer::WriterFuzzer(
 void WriterFuzzer::go() {
   VELOX_CHECK(
       FLAGS_steps > 0 || FLAGS_duration_sec > 0,
-      "Either --steps or --duration_sec needs to be greater than zero.")
+      "Either --steps or --duration_sec needs to be greater than zero.");
 
   auto startTime = std::chrono::system_clock::now();
   size_t iteration = 0;
+
+  // Faulty fs will generate file system write error with certain possibility
+  if (FLAGS_file_system_error_injection) {
+    faultyFs_->setFileInjectionHook([&](FaultFileOperation* op) {
+      if (vectorFuzzer_.coinToss(0.01)) {
+        ++injectedErrorCount_;
+        VELOX_FAIL(injectedErrorMsg_);
+      }
+    });
+  }
 
   while (!isDone(iteration, startTime)) {
     LOG(INFO) << "==============================> Started iteration "
@@ -340,7 +365,9 @@ void WriterFuzzer::go() {
     }
     auto input = generateInputData(names, types, partitionOffset);
 
-    auto tempDirPath = exec::test::TempDirectoryPath::create();
+    const auto outputDirPath = exec::test::TempDirectoryPath::create(
+        FLAGS_file_system_error_injection);
+
     verifyWriter(
         input,
         names,
@@ -351,7 +378,7 @@ void WriterFuzzer::go() {
         bucketColumns,
         sortColumnOffset,
         sortBy,
-        tempDirPath->getPath());
+        outputDirPath);
 
     LOG(INFO) << "==============================> Done with iteration "
               << iteration++;
@@ -423,11 +450,11 @@ void WriterFuzzer::verifyWriter(
     const std::vector<std::string>& bucketColumns,
     const int32_t sortColumnOffset,
     const std::vector<std::shared_ptr<const HiveSortingColumn>>& sortBy,
-    const std::string& outputDirectoryPath) {
+    const std::shared_ptr<TempDirectoryPath>& outputDirectoryPath) {
   const auto plan = PlanBuilder()
                         .values(input)
                         .tableWrite(
-                            outputDirectoryPath,
+                            outputDirectoryPath->getPath(),
                             partitionKeys,
                             bucketCount,
                             bucketColumns,
@@ -436,28 +463,43 @@ void WriterFuzzer::verifyWriter(
 
   const auto maxDrivers =
       boost::random::uniform_int_distribution<int32_t>(1, 16)(rng_);
-  const auto result = veloxToPrestoResult(execute(plan, maxDrivers));
-
-  const auto dropSql = "DROP TABLE IF EXISTS tmp_write";
-  const auto sql = referenceQueryRunner_->toSql(plan).value();
-  std::multiset<std::vector<variant>> expectedResult;
+  RowVectorPtr result;
+  const uint64_t prevInjectedErrorCount = injectedErrorCount_;
   try {
-    referenceQueryRunner_->execute(dropSql);
-    expectedResult =
-        referenceQueryRunner_->execute(sql, input, plan->outputType());
+    result = veloxToPrestoResult(execute(plan, maxDrivers));
+  } catch (VeloxRuntimeError& error) {
+    if (injectedErrorCount_ == prevInjectedErrorCount) {
+      throw error;
+    }
+    VELOX_CHECK_GT(
+        injectedErrorCount_,
+        prevInjectedErrorCount,
+        "Unexpected writer fuzzer failure: {}",
+        error.message());
+    VELOX_CHECK_EQ(
+        error.message(), injectedErrorMsg_, "Unexpected writer fuzzer failure");
+    return;
+  }
+
+  try {
+    referenceQueryRunner_->execute("DROP TABLE IF EXISTS tmp_write");
   } catch (...) {
-    LOG(WARNING) << "Query failed in the reference DB";
+    LOG(WARNING) << "Drop table query failed in the reference DB";
+    return;
+  }
+  auto expectedResult = referenceQueryRunner_->execute(plan).first;
+  if (!expectedResult.has_value()) {
     return;
   }
 
   // 1. Verifies the table writer output result: the inserted number of rows.
   VELOX_CHECK_EQ(
-      expectedResult.size(), // Presto sql only produces one row which is how
-                             // many rows are inserted.
+      expectedResult->size(), // Presto sql only produces one row which is
+                              // how many rows are inserted.
       1,
       "Query returned unexpected result in the reference DB");
   VELOX_CHECK(
-      assertEqualResults(expectedResult, plan->outputType(), {result}),
+      assertEqualResults(*expectedResult, plan->outputType(), {result}),
       "Velox and reference DB results don't match");
 
   // 2. Verifies directory layout for partitioned (bucketed) table.
@@ -465,11 +507,13 @@ void WriterFuzzer::verifyWriter(
     const auto referencedOutputDirectoryPath =
         getReferenceOutputDirectoryPath(partitionKeys.size());
     comparePartitionAndBucket(
-        outputDirectoryPath, referencedOutputDirectoryPath, bucketCount);
+        outputDirectoryPath->getDelegatePath(),
+        referencedOutputDirectoryPath,
+        bucketCount);
   }
 
   // 3. Verifies data itself.
-  auto splits = makeSplits(outputDirectoryPath);
+  auto splits = makeSplits(outputDirectoryPath->getDelegatePath());
   auto columnHandles =
       getTableColumnHandles(names, types, partitionOffset, bucketCount);
   const auto rowType = generateOutputType(names, types, bucketCount);
@@ -502,7 +546,8 @@ void WriterFuzzer::verifyWriter(
         types.begin() + sortColumnOffset,
         types.begin() + sortColumnOffset + sortBy.size()};
 
-    // Read from each file and check if data is sorted as presto sorted result.
+    // Read from each file and check if data is sorted as presto sorted
+    // result.
     for (const auto& split : splits) {
       auto splitReadPlan = PlanBuilder()
                                .tableScan(generateOutputType(

@@ -17,17 +17,21 @@
 
 #include "velox/exec/Aggregate.h"
 #include "velox/exec/SetAccumulator.h"
-#include "velox/functions/lib/CheckNestedNulls.h"
 
 namespace facebook::velox::functions::aggregate {
 
-template <typename T, bool ignoreNulls = false>
+/// @tparam ignoreNulls Whether null inputs are ignored.
+/// @tparam nullForEmpty When true, nulls are returned for empty groups.
+/// Otherwise, empty arrays.
+template <
+    typename T,
+    bool ignoreNulls = false,
+    bool nullForEmpty = true,
+    typename AccumulatorType = velox::aggregate::prestosql::SetAccumulator<T>>
 class SetBaseAggregate : public exec::Aggregate {
  public:
   explicit SetBaseAggregate(const TypePtr& resultType)
       : exec::Aggregate(resultType) {}
-
-  using AccumulatorType = velox::aggregate::prestosql::SetAccumulator<T>;
 
   int32_t accumulatorFixedWidthSize() const override {
     return sizeof(AccumulatorType);
@@ -50,7 +54,15 @@ class SetBaseAggregate : public exec::Aggregate {
     for (auto i = 0; i < numGroups; ++i) {
       auto* group = groups[i];
       if (isNull(group)) {
-        arrayVector->setNull(i, true);
+        if constexpr (nullForEmpty) {
+          arrayVector->setNull(i, true);
+        } else {
+          // If the group's accumulator is null, the corresponding result is an
+          // empty array.
+          clearNull(rawNulls, i);
+          rawOffsets[i] = 0;
+          rawSizes[i] = 0;
+        }
       } else {
         clearNull(rawNulls, i);
 
@@ -205,16 +217,17 @@ class SetBaseAggregate : public exec::Aggregate {
   DecodedVector decodedElements_;
 };
 
-template <typename T, bool ignoreNulls = false>
-class SetAggAggregate : public SetBaseAggregate<T, ignoreNulls> {
+template <
+    typename T,
+    bool ignoreNulls = false,
+    bool nullForEmpty = true,
+    typename AccumulatorType = velox::aggregate::prestosql::SetAccumulator<T>>
+class SetAggAggregate
+    : public SetBaseAggregate<T, ignoreNulls, nullForEmpty, AccumulatorType> {
  public:
-  explicit SetAggAggregate(
-      const TypePtr& resultType,
-      const bool throwOnNestedNulls = false)
-      : SetBaseAggregate<T, ignoreNulls>(resultType),
-        throwOnNestedNulls_(throwOnNestedNulls) {}
+  using Base = SetBaseAggregate<T, ignoreNulls, nullForEmpty, AccumulatorType>;
 
-  using Base = SetBaseAggregate<T, ignoreNulls>;
+  explicit SetAggAggregate(const TypePtr& resultType) : Base(resultType) {}
 
   bool supportsToIntermediate() const override {
     return true;
@@ -225,16 +238,6 @@ class SetAggAggregate : public SetBaseAggregate<T, ignoreNulls> {
       std::vector<VectorPtr>& args,
       VectorPtr& result) const override {
     const auto& elements = args[0];
-
-    if (throwOnNestedNulls_) {
-      DecodedVector decodedElements(*elements, rows);
-      auto indices = decodedElements.indices();
-      rows.applyToSelected([&](vector_size_t i) {
-        velox::functions::checkNestedNulls(
-            decodedElements, indices, i, throwOnNestedNulls_);
-      });
-    }
-
     const auto numRows = rows.size();
 
     // Convert input to a single-entry array.
@@ -273,15 +276,9 @@ class SetAggAggregate : public SetBaseAggregate<T, ignoreNulls> {
       const std::vector<VectorPtr>& args,
       bool /*mayPushdown*/) override {
     Base::decoded_.decode(*args[0], rows);
-    auto indices = Base::decoded_.indices();
     rows.applyToSelected([&](vector_size_t i) {
       auto* group = groups[i];
       Base::clearNull(group);
-
-      if (throwOnNestedNulls_) {
-        velox::functions::checkNestedNulls(
-            Base::decoded_, indices, i, throwOnNestedNulls_);
-      }
 
       auto tracker = Base::trackRowSize(group);
       if constexpr (ignoreNulls) {
@@ -304,13 +301,7 @@ class SetAggAggregate : public SetBaseAggregate<T, ignoreNulls> {
     auto* accumulator = Base::value(group);
 
     auto tracker = Base::trackRowSize(group);
-    auto indices = Base::decoded_.indices();
     rows.applyToSelected([&](vector_size_t i) {
-      if (throwOnNestedNulls_) {
-        velox::functions::checkNestedNulls(
-            Base::decoded_, indices, i, throwOnNestedNulls_);
-      }
-
       if constexpr (ignoreNulls) {
         accumulator->addNonNullValue(Base::decoded_, i, Base::allocator_);
       } else {
@@ -318,9 +309,6 @@ class SetAggAggregate : public SetBaseAggregate<T, ignoreNulls> {
       }
     });
   }
-
- private:
-  const bool throwOnNestedNulls_;
 };
 
 } // namespace facebook::velox::functions::aggregate

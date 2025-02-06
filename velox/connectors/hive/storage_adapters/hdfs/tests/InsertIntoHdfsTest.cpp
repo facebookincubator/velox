@@ -17,6 +17,7 @@
 #include <folly/Singleton.h>
 #include "gtest/gtest.h"
 #include "velox/connectors/hive/storage_adapters/hdfs/HdfsFileSystem.h"
+#include "velox/connectors/hive/storage_adapters/hdfs/RegisterHdfsFileSystem.h"
 #include "velox/connectors/hive/storage_adapters/hdfs/tests/HdfsMiniCluster.h"
 #include "velox/exec/TableWriter.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
@@ -36,6 +37,7 @@ class InsertIntoHdfsTest : public HiveConnectorTestBase {
  public:
   void SetUp() override {
     HiveConnectorTestBase::SetUp();
+    filesystems::registerHdfsFileSystem();
     if (miniCluster == nullptr) {
       miniCluster = std::make_shared<filesystems::test::HdfsMiniCluster>();
       miniCluster->start();
@@ -70,12 +72,13 @@ TEST_F(InsertIntoHdfsTest, insertIntoHdfsTest) {
        makeFlatVector<int16_t>(expectedRows, [](auto row) { return row; }),
        makeFlatVector<double>(expectedRows, [](auto row) { return row; })});
 
-  auto outputDirectory = "hdfs://localhost:7878/";
   // INSERT INTO hdfs with one writer
-  auto plan = PlanBuilder()
-                  .values({input})
-                  .tableWrite(outputDirectory, dwio::common::FileFormat::DWRF)
-                  .planNode();
+  auto plan =
+      PlanBuilder()
+          .values({input})
+          .tableWrite(
+              std::string(miniCluster->url()), dwio::common::FileFormat::DWRF)
+          .planNode();
 
   auto results = AssertQueryBuilder(plan).copyResults(pool());
 
@@ -104,7 +107,7 @@ TEST_F(InsertIntoHdfsTest, insertIntoHdfsTest) {
   plan = PlanBuilder().tableScan(rowType_).planNode();
 
   auto splits = HiveConnectorTestBase::makeHiveConnectorSplits(
-      fmt::format("{}/{}", outputDirectory, writeFileName),
+      fmt::format("{}/{}", miniCluster->url(), writeFileName),
       1,
       dwio::common::FileFormat::DWRF);
   auto copy = AssertQueryBuilder(plan).split(splits[0]).copyResults(pool());

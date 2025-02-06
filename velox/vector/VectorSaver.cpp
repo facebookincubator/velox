@@ -31,7 +31,7 @@ enum class Encoding : int8_t {
 
 template <typename T>
 void write(const T& value, std::ostream& out) {
-  out.write((char*)&value, sizeof(T));
+  out.write(reinterpret_cast<const char*>(&value), sizeof(T));
 }
 
 template <>
@@ -48,7 +48,7 @@ void write<std::string>(const std::string& value, std::ostream& out) {
 template <typename T>
 T read(std::istream& in) {
   T value;
-  in.read((char*)&value, sizeof(T));
+  in.read(reinterpret_cast<char*>(&value), sizeof(T));
   return value;
 }
 
@@ -73,16 +73,16 @@ void writeEncoding(VectorEncoding::Simple encoding, std::ostream& out) {
     case VectorEncoding::Simple::ROW:
     case VectorEncoding::Simple::ARRAY:
     case VectorEncoding::Simple::MAP:
-      write<int32_t>((int8_t)Encoding::kFlat, out);
+      write<int32_t>(static_cast<int8_t>(Encoding::kFlat), out);
       return;
     case VectorEncoding::Simple::CONSTANT:
-      write<int32_t>((int8_t)Encoding::kConstant, out);
+      write<int32_t>(static_cast<int8_t>(Encoding::kConstant), out);
       return;
     case VectorEncoding::Simple::DICTIONARY:
-      write<int32_t>((int8_t)Encoding::kDictionary, out);
+      write<int32_t>(static_cast<int8_t>(Encoding::kDictionary), out);
       return;
     case VectorEncoding::Simple::LAZY:
-      write<int32_t>((int8_t)Encoding::kLazy, out);
+      write<int32_t>(static_cast<int8_t>(Encoding::kLazy), out);
       return;
     default:
       VELOX_UNSUPPORTED("Unsupported encoding: {}", mapSimpleToName(encoding));
@@ -102,11 +102,15 @@ Encoding readEncoding(std::istream& in) {
   }
 }
 
+/// Serializes a BufferPtr into binary format and writes it to the
+/// provided output stream. 'buffer' must be non-null.
 void writeBuffer(const BufferPtr& buffer, std::ostream& out) {
   write<int32_t>(buffer->size(), out);
   out.write(buffer->as<char>(), buffer->size());
 }
 
+/// Serializes a optional BufferPtr into binary format and writes it to the
+/// provided output stream.
 void writeOptionalBuffer(const BufferPtr& buffer, std::ostream& out) {
   if (buffer) {
     write<bool>(true, out);
@@ -116,6 +120,8 @@ void writeOptionalBuffer(const BufferPtr& buffer, std::ostream& out) {
   }
 }
 
+/// Deserializes a BufferPtr serialized by 'writeBuffer' from the provided
+/// input stream.
 BufferPtr readBuffer(std::istream& in, memory::MemoryPool* pool) {
   auto numBytes = read<int32_t>(in);
   auto buffer = AlignedBuffer::allocate<char>(numBytes, pool);
@@ -124,6 +130,8 @@ BufferPtr readBuffer(std::istream& in, memory::MemoryPool* pool) {
   return buffer;
 }
 
+/// Deserializes a optional BufferPtr serialized by 'writeOptionalBuffer' from
+/// the provided input stream.
 BufferPtr readOptionalBuffer(std::istream& in, memory::MemoryPool* pool) {
   bool hasBuffer = read<bool>(in);
   if (hasBuffer) {
@@ -301,7 +309,7 @@ void writeScalarConstant(const BaseVector& vector, std::ostream& out) {
   using T = typename TypeTraits<kind>::NativeType;
 
   auto value = vector.as<ConstantVector<T>>()->valueAt(0);
-  out.write((const char*)&value, sizeof(T));
+  out.write(reinterpret_cast<const char*>(&value), sizeof(T));
 
   if constexpr (std::is_same_v<T, StringView>) {
     if (!value.isInline()) {
@@ -572,7 +580,6 @@ VectorPtr readLazyVector(
   return std::make_shared<LazyVector>(
       pool, type, size, std::make_unique<LoadedVectorShim>(loadedVector));
 }
-
 } // namespace
 
 void saveType(const TypePtr& type, std::ostream& out) {
@@ -641,6 +648,8 @@ void saveStringToFile(const std::string& content, const char* filePath) {
 }
 
 VectorPtr restoreVector(std::istream& in, memory::MemoryPool* pool) {
+  VELOX_CHECK_NOT_NULL(pool);
+
   // Encoding.
   auto encoding = readEncoding(in);
 
@@ -717,39 +726,6 @@ std::optional<std::string> generateFolderPath(
   return path;
 }
 
-template <typename T>
-void saveStdVectorToFile(const std::vector<T>& list, const char* filePath) {
-  std::ofstream outputFile(filePath, std::ofstream::binary);
-  // Size of the vector
-  write<int32_t>(list.size(), outputFile);
-
-  outputFile.write(
-      reinterpret_cast<const char*>(list.data()), list.size() * sizeof(T));
-  outputFile.close();
-}
-
-template void saveStdVectorToFile<column_index_t>(
-    const std::vector<column_index_t>& list,
-    const char* filePath);
-template void saveStdVectorToFile<int>(
-    const std::vector<int>& list,
-    const char* filePath);
-
-template <typename T>
-std::vector<T> restoreStdVectorFromFile(const char* filePath) {
-  std::ifstream in(filePath, std::ifstream::binary);
-  auto size = read<int32_t>(in);
-  std::vector<T> vec(size);
-
-  in.read(reinterpret_cast<char*>(vec.data()), size * sizeof(T));
-  in.close();
-  return vec;
-}
-
-template std::vector<column_index_t> restoreStdVectorFromFile<column_index_t>(
-    const char* filePath);
-template std::vector<int> restoreStdVectorFromFile<int>(const char* filePath);
-
 void saveSelectivityVector(const SelectivityVector& rows, std::ostream& out) {
   auto range = rows.asRange();
 
@@ -774,11 +750,26 @@ SelectivityVector restoreSelectivityVector(std::istream& in) {
   return rows;
 }
 
+void saveSelectivityVectorToFile(
+    const SelectivityVector& rows,
+    const char* filePath) {
+  std::ofstream outputFile(filePath, std::ofstream::binary);
+  saveSelectivityVector(rows, outputFile);
+  outputFile.close();
+}
+
+SelectivityVector restoreSelectivityVectorFromFile(const char* filePath) {
+  std::ifstream inputFile(filePath, std::ifstream::binary);
+  VELOX_CHECK(!inputFile.fail(), "Cannot open file: {}", filePath);
+  auto result = restoreSelectivityVector(inputFile);
+  inputFile.close();
+  return result;
+}
 } // namespace facebook::velox
 
 template <>
 struct fmt::formatter<facebook::velox::Encoding> : formatter<int> {
-  auto format(facebook::velox::Encoding s, format_context& ctx) {
+  auto format(facebook::velox::Encoding s, format_context& ctx) const {
     return formatter<int>::format(static_cast<int>(s), ctx);
   }
 };

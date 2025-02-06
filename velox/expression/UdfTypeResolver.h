@@ -21,7 +21,6 @@
 
 namespace facebook::velox::exec {
 
-template <bool reuseInput>
 class StringWriter;
 
 template <bool nullable, typename V>
@@ -120,14 +119,14 @@ template <>
 struct resolver<Varchar> {
   using in_type = StringView;
   using null_free_in_type = in_type;
-  using out_type = StringWriter<false>;
+  using out_type = StringWriter;
 };
 
 template <>
 struct resolver<Varbinary> {
   using in_type = StringView;
   using null_free_in_type = in_type;
-  using out_type = StringWriter<false>;
+  using out_type = StringWriter;
 };
 
 template <>
@@ -172,11 +171,18 @@ struct resolver<Generic<T, comparable, orderable>> {
   using out_type = GenericWriter;
 };
 
-template <typename T>
-struct resolver<CustomType<T>> {
-  using in_type = typename resolver<typename T::type>::in_type;
-  using null_free_in_type =
-      typename resolver<typename T::type>::null_free_in_type;
+template <typename T, bool providesCustomComparison>
+struct resolver<CustomType<T, providesCustomComparison>> {
+  using in_type = std::conditional_t<
+      providesCustomComparison,
+      CustomTypeWithCustomComparisonView<
+          typename resolver<typename T::type>::in_type>,
+      typename resolver<typename T::type>::in_type>;
+  using null_free_in_type = std::conditional_t<
+      providesCustomComparison,
+      CustomTypeWithCustomComparisonView<
+          typename resolver<typename T::type>::null_free_in_type>,
+      typename resolver<typename T::type>::null_free_in_type>;
   using out_type = typename resolver<typename T::type>::out_type;
 };
 } // namespace detail

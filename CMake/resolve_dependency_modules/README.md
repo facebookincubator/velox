@@ -1,7 +1,7 @@
 # Dependency List
 Following is the list of libraries and their minimum version
 that Velox requires. Some of these libraries can be installed
-via a platform's package manager (eg. `brew` on MacOS).
+via a platform's package manager (eg. `brew` on macOS).
 The versions of certain libraries is the default provided by
 the platform's package manager. Some libraries can be bundled
 by Velox. See details on bundling below.
@@ -32,14 +32,15 @@ by Velox. See details on bundling below.
 | re2               | 2021-04-01      | Yes      |
 | fmt               | 10.1.1          | Yes      |
 | simdjson          | 3.9.3           | Yes      |
-| folly             | v2024.05.20.00  | Yes      |
-| fizz              | v2024.05.20.00  | No       |
-| wangle            | v2024.05.20.00  | No       |
-| mvfst             | v2024.05.20.00  | No       |
-| fbthrift          | v2024.05.20.00  | No       |
+| folly             | v2024.07.01.00  | Yes      |
+| fizz              | v2024.07.01.00  | No       |
+| wangle            | v2024.07.01.00  | No       |
+| mvfst             | v2024.07.01.00  | No       |
+| fbthrift          | v2024.07.01.00  | No       |
 | libstemmer        | 2.2.0           | Yes      |
 | DuckDB (testing)  | 0.8.1           | Yes      |
 | cpr (testing)     | 1.10.15         | Yes      |
+| arrow             | 15.0.0          | Yes      |
 
 # Bundled Dependency Management
 This module provides a dependency management system that allows us to automatically fetch and build dependencies from source if needed.
@@ -68,7 +69,7 @@ Ideally all patches should be upstream when possible and removed once merged.
 ## Adding new dependencies
 
 - Copy `template.cmake` and rename it to the name used in `find_package` but all lower-case.
-- Switch `find_package` vs `set_source('package')` `resolve_dependency('package' 'optional args for find_package')` in `CMakeLists.txt`
+- Switch `find_package` vs `velox_set_source('package')` `velox_resolve_dependency('package' 'optional args for find_package')` in `CMakeLists.txt`
 - Update the template with the correct package name and download url/repo etc., set any necessary package options
 - Try to build and make necessary changes
   - Repeat until success :D (Feel free to raise and issue for review & support)

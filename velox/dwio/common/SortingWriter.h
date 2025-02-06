@@ -28,15 +28,18 @@ class SortingWriter : public Writer {
   SortingWriter(
       std::unique_ptr<Writer> writer,
       std::unique_ptr<exec::SortBuffer> sortBuffer,
-      uint32_t maxOutputRowsConfig,
-      uint64_t maxOutputBytesConfig);
+      vector_size_t maxOutputRowsConfig,
+      uint64_t maxOutputBytesConfig,
+      uint64_t outputTimeSliceLimitMs);
 
   ~SortingWriter() override;
 
   void write(const VectorPtr& data) override;
 
+  bool finish() override;
+
   /// No action because we need to accumulate all data and sort before data can
-  /// be flushed
+  /// be flushed.
   void flush() override;
 
   void close() override;
@@ -60,8 +63,8 @@ class SortingWriter : public Writer {
         memory::MemoryReclaimer::Stats& stats) override;
 
    private:
-    explicit MemoryReclaimer(SortingWriter* writer)
-        : exec::MemoryReclaimer(),
+    MemoryReclaimer(SortingWriter* writer)
+        : exec::MemoryReclaimer(0),
           writer_(writer),
           canReclaim_(writer_->sortBuffer_->canSpill()) {}
 
@@ -73,11 +76,12 @@ class SortingWriter : public Writer {
 
   uint64_t reclaim(uint64_t targetBytes, memory::MemoryReclaimer::Stats& stats);
 
-  uint32_t outputBatchRows();
+  vector_size_t outputBatchRows();
 
   const std::unique_ptr<Writer> outputWriter_;
-  const uint32_t maxOutputRowsConfig_;
+  const vector_size_t maxOutputRowsConfig_;
   const uint64_t maxOutputBytesConfig_;
+  const uint64_t finishTimeSliceLimitMs_;
   memory::MemoryPool* const sortPool_;
   const bool canReclaim_;
 

@@ -17,7 +17,7 @@
 #pragma once
 
 #include "velox/common/compression/Compression.h"
-#include "velox/core/Config.h"
+#include "velox/common/config/Config.h"
 #include "velox/dwio/common/DataBuffer.h"
 #include "velox/dwio/common/FileSink.h"
 #include "velox/dwio/common/FlushPolicy.h"
@@ -91,7 +91,6 @@ struct WriterOptions : public dwio::common::WriterOptions {
   bool enableDictionary = true;
   int64_t dataPageSize = 1'024 * 1'024;
   int64_t dictionaryPageSizeLimit = 1'024 * 1'024;
-
   // Growth ratio passed to ArrowDataBufferSink. The default value is a
   // heuristic borrowed from
   // folly/FBVector(https://github.com/facebook/folly/blob/main/folly/docs/FBVector.md#memory-handling).
@@ -99,16 +98,15 @@ struct WriterOptions : public dwio::common::WriterOptions {
 
   arrow::Encoding::type encoding = arrow::Encoding::PLAIN;
 
-  // The default factory allows the writer to construct the default flush
-  // policy with the configs in its ctor.
-  std::function<std::unique_ptr<DefaultFlushPolicy>()> flushPolicyFactory;
   std::shared_ptr<CodecOptions> codecOptions;
   std::unordered_map<std::string, common::CompressionKind>
       columnCompressionsMap;
 
   /// Timestamp unit for Parquet write through Arrow bridge.
-  /// Default if not specified: TimestampUnit::kNano (9).
-  std::optional<TimestampUnit> parquetWriteTimestampUnit;
+  /// Default if not specified: TimestampPrecision::kNanoseconds (9).
+  std::optional<TimestampPrecision> parquetWriteTimestampUnit;
+  /// Timestamp time zone for Parquet write through Arrow bridge.
+  std::optional<std::string> parquetWriteTimestampTimeZone;
   bool writeInt96AsTimestamp = false;
 
   // Parsing session and hive configs.
@@ -121,8 +119,9 @@ struct WriterOptions : public dwio::common::WriterOptions {
       "hive.parquet.writer.timestamp-unit";
 
   // Process hive connector and session configs.
-  void processSessionConfigs(const Config& config) override;
-  void processHiveConnectorConfigs(const Config& config) override;
+  void processConfigs(
+      const config::ConfigBase& connectorConfig,
+      const config::ConfigBase& session) override;
 };
 
 // Writes Velox vectors into  a DataSink using Arrow Parquet writer.
@@ -155,6 +154,10 @@ class Writer : public dwio::common::Writer {
 
   // Forces a row group boundary before the data added by next write().
   void newRowGroup(int32_t numRows);
+
+  bool finish() override {
+    return true;
+  }
 
   // Closes 'this', After close, data can no longer be added and the completed
   // Parquet file is flushed into 'sink' provided at construction. 'sink' stays

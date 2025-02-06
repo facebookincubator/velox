@@ -28,7 +28,9 @@
 #include "velox/functions/prestosql/aggregates/RegisterAggregateFunctions.h"
 #include "velox/functions/prestosql/registration/RegistrationFunctions.h"
 #include "velox/parse/TypeResolver.h"
+#include "velox/serializers/CompactRowSerializer.h"
 #include "velox/serializers/PrestoSerializer.h"
+#include "velox/serializers/UnsafeRowSerializer.h"
 #include "velox/vector/VectorSaver.h"
 #include "velox/vector/fuzzer/VectorFuzzer.h"
 #include "velox/vector/tests/utils/VectorTestBase.h"
@@ -141,7 +143,7 @@ class ExchangeFuzzer : public VectorTestBase {
     }
     auto partialAggPlan =
         exec::test::PlanBuilder()
-            .exchange(leafPlan->outputType())
+            .exchange(leafPlan->outputType(), VectorSerde::Kind::kPresto)
             .partialAggregation({}, makeAggregates(rowType, 1))
             .partitionedOutput({}, 1)
             .planNode();
@@ -156,13 +158,14 @@ class ExchangeFuzzer : public VectorTestBase {
       addRemoteSplits(task, leafTaskIds);
     }
 
-    auto plan = exec::test::PlanBuilder()
-                    .exchange(partialAggPlan->outputType())
-                    .finalAggregation(
-                        {},
-                        makeAggregates(*partialAggPlan->outputType(), 0),
-                        rawInputTypes)
-                    .planNode();
+    auto plan =
+        exec::test::PlanBuilder()
+            .exchange(partialAggPlan->outputType(), VectorSerde::Kind::kPresto)
+            .finalAggregation(
+                {},
+                makeAggregates(*partialAggPlan->outputType(), 0),
+                rawInputTypes)
+            .planNode();
 
     try {
       // Create the Task to do the final aggregation using a TaskCursor so we
@@ -284,6 +287,42 @@ class ExchangeFuzzer : public VectorTestBase {
       saveRepro(vectors, params);
       return false;
     }
+
+    for (const auto& task : tasks) {
+      if (!waitForTaskCompletion(task.get(), 1'000'000)) {
+        if (task->state() == TaskState::kFailed) {
+          try {
+            std::rethrow_exception(task->error());
+          } catch (const std::exception& taskException) {
+            // This must be an unexpected exception.
+            LOG(ERROR) << "Task " << task->toString() << " failed with error "
+                       << taskException.what();
+            saveRepro(vectors, params);
+            return false;
+          }
+        } else if (task->state() == TaskState::kRunning) {
+          VELOX_FAIL(
+              "Timed out waiting for task to complete, task: {} {}",
+              task->toString(),
+              taskStateString(task->state()));
+        } else if (task->state() != TaskState::kFinished) {
+          VELOX_FAIL(
+              "Task {} ended in unexpected state {}",
+              task->toString(),
+              taskStateString(task->state()));
+        } else if (task->numFinishedDrivers() != task->numTotalDrivers()) {
+          VELOX_FAIL(
+              "Task {} finished but it has {} drivers still running",
+              task->toString(),
+              task->numTotalDrivers() - task->numFinishedDrivers());
+        }
+        // There's a chance that the task exceeded the timeout to finish but
+        // managed to finish in the gap before these if statements got executed,
+        // in this case just let it slide since we ended up in the right place
+        // eventually.
+      }
+    }
+
     return true;
   }
 
@@ -535,6 +574,15 @@ int main(int argc, char** argv) {
   aggregate::prestosql::registerAllAggregateFunctions();
   parse::registerTypeResolver();
   serializer::presto::PrestoVectorSerde::registerVectorSerde();
+  if (!isRegisteredNamedVectorSerde(VectorSerde::Kind::kPresto)) {
+    serializer::presto::PrestoVectorSerde::registerNamedVectorSerde();
+  }
+  if (!isRegisteredNamedVectorSerde(VectorSerde::Kind::kCompactRow)) {
+    serializer::CompactRowVectorSerde::registerNamedVectorSerde();
+  }
+  if (!isRegisteredNamedVectorSerde(VectorSerde::Kind::kUnsafeRow)) {
+    serializer::spark::UnsafeRowVectorSerde::registerNamedVectorSerde();
+  }
   exec::ExchangeSource::registerFactory(exec::test::createLocalExchangeSource);
 
   ExchangeFuzzer fuzzer;

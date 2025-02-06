@@ -23,8 +23,7 @@
 #include "velox/vector/DecodedVector.h"
 #include "velox/vector/TypeAliases.h"
 
-namespace facebook {
-namespace velox {
+namespace facebook::velox {
 
 // Here are some common intel intrsic operations. Please refer to
 // https://software.intel.com/sites/landingpage/IntrinsicsGuide for examples.
@@ -348,7 +347,7 @@ void FlatVector<T>::copyRanges(
       const T* sourceValues = flatSource->rawValues();
       applyToEachRange(
           ranges, [&](auto targetIndex, auto sourceIndex, auto count) {
-            if (Buffer::is_pod_like_v<T>) {
+            if constexpr (Buffer::is_pod_like_v<T>) {
               memcpy(
                   &rawValues_[targetIndex],
                   &sourceValues[sourceIndex],
@@ -418,13 +417,23 @@ void FlatVector<T>::copyRanges(
 template <typename T>
 VectorPtr FlatVector<T>::slice(vector_size_t offset, vector_size_t length)
     const {
+  BufferPtr values;
+  if (values_) {
+    // Values can be shorter than vector due to trailing nulls.
+    auto numValues = std::is_same_v<T, bool> ? 8 * values_->size()
+                                             : values_->size() / sizeof(T);
+    auto newNumValues = std::min<vector_size_t>(numValues, offset + length);
+    if (newNumValues >= offset) {
+      values =
+          Buffer::slice<T>(values_, offset, newNumValues - offset, this->pool_);
+    }
+  }
   return std::make_shared<FlatVector<T>>(
       this->pool_,
       this->type_,
       this->sliceNulls(offset, length),
       length,
-      BaseVector::sliceBuffer(
-          *this->type_, values_, offset, length, this->pool_),
+      std::move(values),
       std::vector<BufferPtr>(stringBuffers_));
 }
 
@@ -592,5 +601,5 @@ inline void FlatVector<bool>::resizeValues(
   values_ = std::move(newValues);
   rawValues_ = values_->asMutable<bool>();
 }
-} // namespace velox
-} // namespace facebook
+
+} // namespace facebook::velox

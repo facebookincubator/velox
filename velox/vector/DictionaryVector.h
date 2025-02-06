@@ -24,8 +24,7 @@
 #include "velox/vector/SimpleVector.h"
 #include "velox/vector/TypeAliases.h"
 
-namespace facebook {
-namespace velox {
+namespace facebook::velox {
 
 template <typename T>
 class DictionaryVector : public SimpleVector<T> {
@@ -131,12 +130,16 @@ class DictionaryVector : public SimpleVector<T> {
     return dictionaryValues_;
   }
 
-  VectorPtr& valueVector() override {
-    return dictionaryValues_;
+  void setValueVector(VectorPtr valueVector) override {
+    setDictionaryValues(std::move(valueVector));
   }
 
-  BufferPtr wrapInfo() const override {
+  const BufferPtr& wrapInfo() const override {
     return indices_;
+  }
+
+  void setWrapInfo(BufferPtr indices) override {
+    indices_ = std::move(indices);
   }
 
   BufferPtr mutableIndices(vector_size_t size) {
@@ -187,6 +190,9 @@ class DictionaryVector : public SimpleVector<T> {
   }
 
   std::string toString(vector_size_t index) const override {
+    VELOX_CHECK(
+        initialized_,
+        "Cannot convert to string because current DictionaryVector is not properly initialized yet.");
     if (BaseVector::isNullAt(index)) {
       return "null";
     }
@@ -270,7 +276,6 @@ class DictionaryVector : public SimpleVector<T> {
 template <typename T>
 using DictionaryVectorPtr = std::shared_ptr<DictionaryVector<T>>;
 
-} // namespace velox
-} // namespace facebook
+} // namespace facebook::velox
 
 #include "velox/vector/DictionaryVector-inl.h"

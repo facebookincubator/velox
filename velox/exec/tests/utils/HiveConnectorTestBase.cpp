@@ -19,6 +19,10 @@
 #include "velox/common/file/FileSystems.h"
 #include "velox/common/file/tests/FaultyFileSystem.h"
 #include "velox/dwio/common/tests/utils/BatchMaker.h"
+#include "velox/dwio/dwrf/RegisterDwrfReader.h"
+#include "velox/dwio/dwrf/RegisterDwrfWriter.h"
+#include "velox/dwio/dwrf/reader/DwrfReader.h"
+#include "velox/dwio/dwrf/writer/FlushPolicy.h"
 #include "velox/dwio/dwrf/writer/Writer.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 
@@ -31,26 +35,36 @@ HiveConnectorTestBase::HiveConnectorTestBase() {
 
 void HiveConnectorTestBase::SetUp() {
   OperatorTestBase::SetUp();
+  connector::registerConnectorFactory(
+      std::make_shared<connector::hive::HiveConnectorFactory>());
   auto hiveConnector =
       connector::getConnectorFactory(
           connector::hive::HiveConnectorFactory::kHiveConnectorName)
           ->newConnector(
               kHiveConnectorId,
-              std::make_shared<core::MemConfig>(),
+              std::make_shared<config::ConfigBase>(
+                  std::unordered_map<std::string, std::string>()),
               ioExecutor_.get());
   connector::registerConnector(hiveConnector);
+  dwio::common::registerFileSinks();
+  dwrf::registerDwrfReaderFactory();
+  dwrf::registerDwrfWriterFactory();
 }
 
 void HiveConnectorTestBase::TearDown() {
   // Make sure all pending loads are finished or cancelled before unregister
   // connector.
   ioExecutor_.reset();
+  dwrf::unregisterDwrfReaderFactory();
+  dwrf::unregisterDwrfWriterFactory();
   connector::unregisterConnector(kHiveConnectorId);
+  connector::unregisterConnectorFactory(
+      connector::hive::HiveConnectorFactory::kHiveConnectorName);
   OperatorTestBase::TearDown();
 }
 
 void HiveConnectorTestBase::resetHiveConnector(
-    const std::shared_ptr<const Config>& config) {
+    const std::shared_ptr<const config::ConfigBase>& config) {
   connector::unregisterConnector(kHiveConnectorId);
   auto hiveConnector =
       connector::getConnectorFactory(
@@ -89,9 +103,13 @@ void HiveConnectorTestBase::writeToFile(
   velox::dwrf::WriterOptions options;
   options.config = config;
   options.schema = schema;
-  auto localWriteFile = std::make_unique<LocalWriteFile>(filePath, true, false);
+  auto fs = filesystems::getFileSystem(filePath, {});
+  auto writeFile = fs->openFileForWrite(
+      filePath,
+      {.shouldCreateParentDirectories = true,
+       .shouldThrowOnFileAlreadyExists = false});
   auto sink = std::make_unique<dwio::common::WriteFileSink>(
-      std::move(localWriteFile), filePath);
+      std::move(writeFile), filePath);
   auto childPool = rootPool_->addAggregateChild("HiveConnectorTestBase.Writer");
   options.memoryPool = childPool.get();
   options.flushPolicyFactory = flushPolicyFactory;
@@ -162,7 +180,7 @@ HiveConnectorTestBase::makeHiveConnectorSplits(
       filesystems::getFileSystem(filePath, nullptr)->openFileForRead(filePath);
   const int64_t fileSize = file->size();
   // Take the upper bound.
-  const int splitSize = std::ceil((fileSize) / splitCount);
+  const int64_t splitSize = std::ceil((fileSize) / splitCount);
   std::vector<std::shared_ptr<connector::hive::HiveConnectorSplit>> splits;
   // Add all the splits.
   for (int i = 0; i < splitCount; i++) {
@@ -232,11 +250,13 @@ HiveConnectorTestBase::makeHiveConnectorSplit(
     const std::string& filePath,
     uint64_t start,
     uint64_t length,
-    int64_t splitWeight) {
+    int64_t splitWeight,
+    bool cacheable) {
   return HiveConnectorSplitBuilder(filePath)
       .start(start)
       .length(length)
       .splitWeight(splitWeight)
+      .cacheable(cacheable)
       .build();
 }
 
@@ -263,7 +283,8 @@ HiveConnectorTestBase::makeHiveInsertTableHandle(
     const std::vector<std::string>& partitionedBy,
     std::shared_ptr<connector::hive::LocationHandle> locationHandle,
     const dwio::common::FileFormat tableStorageFormat,
-    const std::optional<common::CompressionKind> compressionKind) {
+    const std::optional<common::CompressionKind> compressionKind,
+    const std::shared_ptr<dwio::common::WriterOptions>& writerOptions) {
   return makeHiveInsertTableHandle(
       tableColumnNames,
       tableColumnTypes,
@@ -271,7 +292,9 @@ HiveConnectorTestBase::makeHiveInsertTableHandle(
       nullptr,
       std::move(locationHandle),
       tableStorageFormat,
-      compressionKind);
+      compressionKind,
+      {},
+      writerOptions);
 }
 
 // static
@@ -283,7 +306,9 @@ HiveConnectorTestBase::makeHiveInsertTableHandle(
     std::shared_ptr<connector::hive::HiveBucketProperty> bucketProperty,
     std::shared_ptr<connector::hive::LocationHandle> locationHandle,
     const dwio::common::FileFormat tableStorageFormat,
-    const std::optional<common::CompressionKind> compressionKind) {
+    const std::optional<common::CompressionKind> compressionKind,
+    const std::unordered_map<std::string, std::string>& serdeParameters,
+    const std::shared_ptr<dwio::common::WriterOptions>& writerOptions) {
   std::vector<std::shared_ptr<const connector::hive::HiveColumnHandle>>
       columnHandles;
   std::vector<std::string> bucketedBy;
@@ -332,12 +357,15 @@ HiveConnectorTestBase::makeHiveInsertTableHandle(
   VELOX_CHECK_EQ(numPartitionColumns, partitionedBy.size());
   VELOX_CHECK_EQ(numBucketColumns, bucketedBy.size());
   VELOX_CHECK_EQ(numSortingColumns, sortedBy.size());
+
   return std::make_shared<connector::hive::HiveInsertTableHandle>(
       columnHandles,
       locationHandle,
       tableStorageFormat,
       bucketProperty,
-      compressionKind);
+      compressionKind,
+      serdeParameters,
+      writerOptions);
 }
 
 std::shared_ptr<connector::hive::HiveColumnHandle>

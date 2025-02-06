@@ -45,8 +45,6 @@ class BinarySizeAdapter(BenchmarkAdapter):
         result_fields_append: Dict[str, Any] = {},
     ) -> None:
         self.size_file = Path(size_file)
-        if build_type not in ["debug", "release"]:
-            raise ValueError(f"Build type '{build_type}' is not valid!")
         self.build_type = build_type
         super().__init__(command, result_fields_override, result_fields_append)
 
@@ -95,7 +93,7 @@ class BinarySizeAdapter(BenchmarkAdapter):
 class NinjaLogAdapter(BenchmarkAdapter):
     """
     Adapter to extract compile and link times from a .ninja_log.
-    Will calculate aggregates for total, compile, link and wall time.
+    Will calculate aggregates for total, compile and link time.
     Suite metadata will be set based on binary ending to object, library or executable.
 
     Only files in paths beginning with velox/ will be tracked to avoid dependencies.
@@ -112,8 +110,6 @@ class NinjaLogAdapter(BenchmarkAdapter):
         result_fields_append: Dict[str, Any] = {},
     ) -> None:
         self.ninja_log = Path(ninja_log)
-        if build_type not in ["debug", "release"]:
-            raise ValueError(f"Build type '{build_type}' is not valid!")
         self.build_type = build_type
         super().__init__(command, result_fields_override, result_fields_append)
 
@@ -135,7 +131,6 @@ class NinjaLogAdapter(BenchmarkAdapter):
             "link_time": 0,
             "compile_time": 0,
             "total_time": 0,
-            "wall_time": get_epoch(log_lines[-1]) - get_epoch(log_lines[0]),
         }
 
         for line in log_lines:
@@ -144,8 +139,8 @@ class NinjaLogAdapter(BenchmarkAdapter):
             end = int(end)
             duration = ms2sec(end - start)
 
-            # Don't track dependency times (refine check potentially?)
-            if not object_path.startswith("velox"):
+            # Mono build places library in lib/
+            if not object_path.startswith(("velox", "lib/libvelox")):
                 continue
 
             _, ext = splitext(object_path)

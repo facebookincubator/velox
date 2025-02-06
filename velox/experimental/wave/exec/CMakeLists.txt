@@ -12,19 +12,23 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-velox_add_library(velox_wave_stream OperandSet.cpp Wave.cpp)
+add_library(velox_wave_stream OperandSet.cpp Wave.cpp)
 
-velox_link_libraries(velox_wave_stream Folly::folly fmt::fmt xsimd)
+target_link_libraries(
+  velox_wave_stream Folly::folly fmt::fmt xsimd)
 
-velox_add_library(
-  velox_wave_exec
-  Aggregation.cpp
-  AggregationInstructions.cu
+add_library(
+  velox_wave_exec OBJECT
+  AggregateGen.cpp
+  HashGen.cpp
   ExprKernel.cu
-  ExprKernel2.cu
-  ExprKernel3.cu
   Instruction.cpp
+  RegisterFunctions.cpp
+  WaveRegistry.cpp
   ToWave.cpp
+  SimpleAggregate.cpp
+  WavePlan.cpp
+  WaveGen.cpp
   WaveOperator.cpp
   Vectors.cpp
   Values.cpp
@@ -34,14 +38,15 @@ velox_add_library(
   WaveHiveDataSource.cpp
   WaveSplitReader.cpp)
 
-velox_link_libraries(
+target_link_libraries(
   velox_wave_exec
   velox_wave_vector
   velox_wave_common
   velox_wave_stream
   velox_exception
   velox_common_base
-  velox_exec)
+  velox_exec
+  CUDA::cudart)
 
 if(${VELOX_BUILD_TESTING})
   add_subdirectory(tests)

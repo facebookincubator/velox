@@ -15,6 +15,7 @@
  */
 #pragma once
 
+#include "velox/common/config/Config.h"
 #include "velox/connectors/Connector.h"
 #include "velox/connectors/tpch/TpchConnectorSplit.h"
 #include "velox/tpch/gen/TpchGen.h"
@@ -130,7 +131,7 @@ class TpchConnector final : public Connector {
  public:
   TpchConnector(
       const std::string& id,
-      std::shared_ptr<const Config> config,
+      std::shared_ptr<const config::ConfigBase> config,
       folly::Executor* /*executor*/)
       : Connector(id) {}
 
@@ -169,9 +170,10 @@ class TpchConnectorFactory : public ConnectorFactory {
 
   std::shared_ptr<Connector> newConnector(
       const std::string& id,
-      std::shared_ptr<const Config> config,
-      folly::Executor* executor = nullptr) override {
-    return std::make_shared<TpchConnector>(id, config, executor);
+      std::shared_ptr<const config::ConfigBase> config,
+      folly::Executor* ioExecutor = nullptr,
+      folly::Executor* cpuExecutor = nullptr) override {
+    return std::make_shared<TpchConnector>(id, config, ioExecutor);
   }
 };
 

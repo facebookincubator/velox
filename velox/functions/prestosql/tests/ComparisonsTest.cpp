@@ -19,6 +19,11 @@
 #include "velox/functions/Udf.h"
 #include "velox/functions/lib/RegistrationHelpers.h"
 #include "velox/functions/prestosql/tests/utils/FunctionBaseTest.h"
+#include "velox/functions/prestosql/types/IPAddressType.h"
+#include "velox/functions/prestosql/types/IPPrefixType.h"
+#include "velox/functions/prestosql/types/TimestampWithTimeZoneType.h"
+#include "velox/type/tests/utils/CustomTypesForTesting.h"
+#include "velox/type/tz/TimeZoneMap.h"
 
 using namespace facebook::velox;
 
@@ -35,6 +40,96 @@ class ComparisonsTest : public functions::test::FunctionBaseTest {
       const VectorPtr& expectedResult) {
     auto actual = evaluate(exprStr, makeRowVector(input));
     test::assertEqualVectors(expectedResult, actual);
+  }
+
+  template <typename vectorType>
+  void testCompareComplexTypes(
+      vectorType vector1,
+      vectorType vector2,
+      const std::optional<std::vector<std::optional<bool>>>& expectedResults,
+      const std::string& expectedException) {
+    auto input = makeRowVector({vector1, vector2});
+    std::vector<std::optional<bool>> results;
+    std::string comparisonExpressions[4] = {">", ">=", "<", "<="};
+    if (expectedResults.has_value()) {
+      for (auto expression : comparisonExpressions) {
+        results.push_back(
+            evaluate<SimpleVector<bool>>("c0" + expression + "c1", input)
+                ->valueAt(0));
+      }
+      ASSERT_EQ(results, expectedResults);
+    } else {
+      for (auto expression : comparisonExpressions) {
+        VELOX_ASSERT_THROW(
+            evaluate<SimpleVector<bool>>("c0" + expression + "c1", input),
+            expectedException);
+      }
+    }
+  }
+
+  template <typename T, typename T2>
+  void testCompareRow(
+      const std::tuple<std::optional<T>, std::optional<T2>>& row1,
+      const std::tuple<std::optional<T>, std::optional<T2>>& row2,
+      std::optional<std::vector<std::optional<bool>>> expectedResults,
+      std::string expectedException = "") {
+    // Make row vectors.
+    auto vector1 = vectorMaker_.rowVector(
+        {vectorMaker_.flatVectorNullable<T>({std::get<0>(row1)}),
+         vectorMaker_.flatVectorNullable<T2>({std::get<1>(row1)})});
+    auto vector2 = vectorMaker_.rowVector(
+        {vectorMaker_.flatVectorNullable<T>({std::get<0>(row2)}),
+         vectorMaker_.flatVectorNullable<T2>({std::get<1>(row2)})});
+    testCompareComplexTypes<RowVectorPtr>(
+        vector1, vector2, expectedResults, expectedException);
+  }
+
+  template <typename T, typename T2>
+  void testCompareRowDifferentTypesAndSizes(
+      const std::tuple<std::optional<T>, std::optional<T>>& row1,
+      const std::tuple<std::optional<T2>, std::optional<T2>>& row2,
+      std::optional<std::vector<std::optional<bool>>> expectedResults,
+      std::string expectedException = "") {
+    // Make row vectors.
+    auto vector1 = vectorMaker_.rowVector(
+        {vectorMaker_.flatVectorNullable<T>({std::get<0>(row1)}),
+         vectorMaker_.flatVectorNullable<T>({std::get<1>(row1)})});
+    auto vector2 = vectorMaker_.rowVector(
+        {vectorMaker_.flatVectorNullable<T2>({std::get<0>(row2)}),
+         vectorMaker_.flatVectorNullable<T2>({std::get<1>(row2)})});
+    testCompareComplexTypes<RowVectorPtr>(
+        vector1, vector2, expectedResults, expectedException);
+
+    // Compare rows with different sizes by removing one element from vector1.
+    auto vector3 = vectorMaker_.rowVector(
+        {vectorMaker_.flatVectorNullable<T>({std::get<0>(row1)})});
+    testCompareComplexTypes<RowVectorPtr>(
+        vector1, vector3, expectedResults, expectedException);
+  }
+
+  template <typename T>
+  void testCompareArray(
+      const std::vector<std::optional<T>>& array1,
+      const std::vector<std::optional<T>>& array2,
+      std::optional<std::vector<std::optional<bool>>> expectedResults,
+      std::string expectedException = "") {
+    // Make array vectors.
+    auto vector1 = vectorMaker_.arrayVectorNullable<T>({array1});
+    auto vector2 = vectorMaker_.arrayVectorNullable<T>({array2});
+    testCompareComplexTypes<ArrayVectorPtr>(
+        vector1, vector2, expectedResults, expectedException);
+  }
+
+  template <typename T>
+  void testCompareMap(
+      const std::optional<std::vector<std::pair<T, std::optional<T>>>>& map1,
+      const std::optional<std::vector<std::pair<T, std::optional<T>>>>& map2,
+      std::string expectedException) {
+    // Make map vectors.
+    auto vector1 = makeNullableMapVector<T, T>({map1});
+    auto vector2 = makeNullableMapVector<T, T>({map2});
+    testCompareComplexTypes<MapVectorPtr>(
+        vector1, vector2, std::nullopt, expectedException);
   }
 
   void registerSimpleComparisonFunctions() {
@@ -529,6 +624,107 @@ TEST_F(ComparisonsTest, eqRow) {
   test({1, 2}, {std::nullopt, 2}, std::nullopt);
 }
 
+TEST_F(ComparisonsTest, gtLtRow) {
+  // Row Comparison in order of >, >=, <, <=
+
+  // Row<int64_t, int64_t>
+  std::vector<std::optional<bool>> expectedResults = {false, false, true, true};
+  testCompareRow<int64_t, int64_t>({1, 2}, {2, 3}, expectedResults);
+
+  expectedResults = {false, true, false, true};
+  testCompareRow<int64_t, int64_t>({1, 2}, {1, 2}, expectedResults);
+
+  // Row<int64_t, int64_t> with nulls
+  // User Exception thrown when nulls encountered before result is determined.
+  auto expectedException = "Ordering nulls is not supported";
+  testCompareRow<int64_t, int64_t>(
+      {1, std::nullopt}, {1, 2}, std::nullopt, expectedException);
+
+  // Row<double, double>
+  expectedResults = {false, false, true, true};
+  testCompareRow<double, double>({1.0, 2.0}, {1.0, 3.0}, expectedResults);
+
+  // Row<double, double> with NaNs
+  // NaNs are considered larger than all other numbers
+  static const auto NaN = std::numeric_limits<double>::quiet_NaN();
+  expectedResults = {true, true, false, false};
+  testCompareRow<double, double>({NaN, 0.0}, {2.0, 1.0}, expectedResults);
+
+  expectedResults = {false, false, true, true};
+  testCompareRow<double, double>({NaN, 0.0}, {NaN, 1.0}, expectedResults);
+
+  // Row<int64_t, double>
+  expectedResults = {false, false, true, true};
+  testCompareRow<int64_t, double>({1, 3.0}, {2, 1.0}, expectedResults);
+
+  // Row<int64_t, Timestamp>
+  const Timestamp ts1(998474645, 321000000);
+  const Timestamp ts2(998474645, 321000001);
+  expectedResults = {false, false, true, true};
+  testCompareRow<int64_t, Timestamp>({1, ts1}, {1, ts2}, expectedResults);
+
+  // Comparing two rows of different types or different sizes is invalid
+  expectedException = "Scalar function signature is not supported";
+
+  // Row<int64_t, int64_t>, Row<double, double>
+  testCompareRowDifferentTypesAndSizes<int64_t, double>(
+      {1, 1}, {1.0, 1.2}, std::nullopt, expectedException);
+  // Row<int64_t, int64_t>, Row<Timestamp, Timestamp>
+  testCompareRowDifferentTypesAndSizes<int64_t, Timestamp>(
+      {1, 1}, {ts1, ts2}, std::nullopt, expectedException);
+}
+
+TEST_F(ComparisonsTest, gtLtArray) {
+  // Array Comparison in order of >, >=, <, <=
+
+  // Array<int64_t>
+  std::vector<std::optional<bool>> expectedResults = {false, true, false, true};
+  testCompareArray<int64_t>({1, 2}, {1, 2}, expectedResults);
+
+  expectedResults = {false, false, true, true};
+  testCompareArray<int64_t>({1, 2}, {1, 3}, expectedResults);
+
+  // Array<int64_t> of different sizes
+  expectedResults = {false, false, true, true};
+  testCompareArray<int64_t>({1, 2}, {1, 2, 3}, expectedResults);
+
+  expectedResults = {true, true, false, false};
+  testCompareArray<int64_t>({1, 3}, {1, 2, 3}, expectedResults);
+
+  // Array<int64_t> with nulls
+  // When nulls present, compare based on CompareFlag rules.
+  expectedResults = {true, true, false, false};
+  testCompareArray<int64_t>({1, std::nullopt}, {1}, expectedResults);
+
+  expectedResults = {false, false, true, true};
+  testCompareArray<int64_t>(
+      {1, std::nullopt}, {2, std::nullopt}, expectedResults);
+
+  // User Exception thrown when nulls encountered before result is determined.
+  auto expectedException = "Ordering nulls is not supported";
+  testCompareArray<int64_t>(
+      {1, std::nullopt, std::nullopt},
+      {1, 2, 3},
+      std::nullopt,
+      expectedException);
+
+  // Array<double>
+  expectedResults = {false, false, true, true};
+  testCompareArray<double>({1.0, 2.0}, {1.1, 1.9}, expectedResults);
+
+  static const auto NaN = std::numeric_limits<double>::quiet_NaN();
+  expectedResults = {false, true, false, true};
+  testCompareArray<double>({NaN, NaN}, {NaN, NaN}, expectedResults);
+
+  // Array<double>  with NaNs
+  // NaNs are considered larger than all other numbers
+  expectedResults = {true, true, false, false};
+  testCompareArray<double>({NaN}, {3.0}, expectedResults);
+
+  expectedResults = {false, false, true, true};
+  testCompareArray<double>({NaN}, {NaN, 3.0}, expectedResults);
+}
+
 TEST_F(ComparisonsTest, distinctFrom) {
   auto input = makeRowVector({
       makeNullableFlatVector<int64_t>({3, 1, 1, std::nullopt, std::nullopt}),
@@ -738,6 +934,804 @@ TEST_F(ComparisonsTest, nanComparison) {
   testNaN("", input, false);
 }
 
+TEST_F(ComparisonsTest, TimestampWithTimezone) {
+  auto makeTimestampWithTimezone = [](int64_t millis, const std::string& tz) {
+    return pack(millis, tz::getTimeZoneID(tz));
+  };
+
+  auto lhs = makeFlatVector<int64_t>(
+      {makeTimestampWithTimezone(1639426440000, "+01:00"),
+       makeTimestampWithTimezone(1639426440000, "+01:00"),
+       makeTimestampWithTimezone(1639426440000, "+03:00"),
+       makeTimestampWithTimezone(1549770072000, "+01:00"),
+       makeTimestampWithTimezone(1549770072000, "+01:00"),
+       makeTimestampWithTimezone(1549770072000, "+03:00"),
+       makeTimestampWithTimezone(1639426440000, "+01:00"),
+       makeTimestampWithTimezone(1639426440000, "+01:00"),
+       makeTimestampWithTimezone(1639426440000, "+03:00"),
+       makeTimestampWithTimezone(-1639426440000, "+01:00"),
+       makeTimestampWithTimezone(-1539426440000, "+03:00"),
+       makeTimestampWithTimezone(-1639426440000, "-14:00"),
+       makeTimestampWithTimezone(1639426440000, "+03:00"),
+       makeTimestampWithTimezone(-1639426440000, "-14:00")},
+      TIMESTAMP_WITH_TIME_ZONE());
+
+  auto rhs = makeFlatVector<int64_t>(
+      {makeTimestampWithTimezone(1639426440000, "+03:00"),
+       makeTimestampWithTimezone(1639426440000, "-14:00"),
+       makeTimestampWithTimezone(1639426440000, "-14:00"),
+       makeTimestampWithTimezone(1639426440000, "+03:00"),
+       makeTimestampWithTimezone(1639426440000, "-14:00"),
+       makeTimestampWithTimezone(1639426440000, "-14:00"),
+       makeTimestampWithTimezone(1549770072000, "+03:00"),
+       makeTimestampWithTimezone(1549770072000, "-14:00"),
+       makeTimestampWithTimezone(1549770072000, "-14:00"),
+       makeTimestampWithTimezone(-1639426440000, "+01:00"),
+       makeTimestampWithTimezone(-1639426440000, "-14:00"),
+       makeTimestampWithTimezone(-1539426440000, "+03:00"),
+       makeTimestampWithTimezone(-1639426440000, "+03:00"),
+       makeTimestampWithTimezone(1639426440000, "+01:00")},
+      TIMESTAMP_WITH_TIME_ZONE());
+
+  auto input = makeRowVector({lhs, rhs});
+
+  auto eval = [&](const std::string& expr) {
+    return evaluate<SimpleVector<bool>>(fmt::format("c0 {} c1", expr), input);
+  };
+
+  test::assertEqualVectors(
+      eval("="),
+      makeFlatVector<bool>(
+          {true,
+           true,
+           true,
+           false,
+           false,
+           false,
+           false,
+           false,
+           false,
+           true,
+           false,
+           false,
+           false,
+           false}));
+  test::assertEqualVectors(
+      eval("<>"),
+      makeFlatVector<bool>(
+          {false,
+           false,
+           false,
+           true,
+           true,
+           true,
+           true,
+           true,
+           true,
+           false,
+           true,
+           true,
+           true,
+           true}));
+  test::assertEqualVectors(
+      eval("<"),
+      makeFlatVector<bool>(
+          {false,
+           false,
+           false,
+           true,
+           true,
+           true,
+           false,
+           false,
+           false,
+           false,
+           false,
+           true,
+           false,
+           true}));
+  test::assertEqualVectors(
+      eval(">"),
+      makeFlatVector<bool>(
+          {false,
+           false,
+           false,
+           false,
+           false,
+           false,
+           true,
+           true,
+           true,
+           false,
+           true,
+           false,
+           true,
+           false}));
+  test::assertEqualVectors(
+      eval("<="),
+      makeFlatVector<bool>(
+          {true,
+           true,
+           true,
+           true,
+           true,
+           true,
+           false,
+           false,
+           false,
+           true,
+           false,
+           true,
+           false,
+           true}));
+  test::assertEqualVectors(
+      eval(">="),
+      makeFlatVector<bool>(
+          {true,
+           true,
+           true,
+           false,
+           false,
+           false,
+           true,
+           true,
+           true,
+           true,
+           true,
+           false,
+           true,
+           false}));
+  test::assertEqualVectors(
+      eval("is distinct from"),
+      makeFlatVector<bool>(
+          {false,
+           false,
+           false,
+           true,
+           true,
+           true,
+           true,
+           true,
+           true,
+           false,
+           true,
+           true,
+           true,
+           true}));
+
+  auto betweenInput = makeRowVector({
+      makeFlatVector<int64_t>(
+          {makeTimestampWithTimezone(1639426440000, "+01:00"),
+           makeTimestampWithTimezone(1639426440000, "+01:00"),
+           makeTimestampWithTimezone(1639426440000, "+01:00"),
+           makeTimestampWithTimezone(1639426440000, "+01:00"),
+           makeTimestampWithTimezone(1639426440000, "+01:00"),
+           makeTimestampWithTimezone(1639426440000, "+03:00"),
+           makeTimestampWithTimezone(1539426440000, "+03:00"),
+           makeTimestampWithTimezone(1739426440000, "+01:00"),
+           makeTimestampWithTimezone(-1639426440000, "+01:00"),
+           makeTimestampWithTimezone(-1639426440000, "+03:00"),
+           makeTimestampWithTimezone(1639426440000, "-14:00"),
+           makeTimestampWithTimezone(-1739426440000, "+01:00"),
+           makeTimestampWithTimezone(1639426440000, "-14:00")},
+          TIMESTAMP_WITH_TIME_ZONE()),
+      makeFlatVector<int64_t>(
+          {makeTimestampWithTimezone(1639426440000, "+01:00"),
+           makeTimestampWithTimezone(1639426440000, "+03:00"),
+           makeTimestampWithTimezone(1539426440000, "+01:00"),
+           makeTimestampWithTimezone(1539426440000, "+03:00"),
+           makeTimestampWithTimezone(1539426440000, "+03:00"),
+           makeTimestampWithTimezone(1539426440000, "+03:00"),
+           makeTimestampWithTimezone(1639426440000, "+01:00"),
+           makeTimestampWithTimezone(1539426440000, "+03:00"),
+           makeTimestampWithTimezone(-1739426440000, "+01:00"),
+           makeTimestampWithTimezone(-1739426440000, "+01:00"),
+           makeTimestampWithTimezone(-1639426440000, "+01:00"),
+           makeTimestampWithTimezone(-1639426440000, "+01:00"),
+           makeTimestampWithTimezone(-1639426440000, "+01:00")},
+          TIMESTAMP_WITH_TIME_ZONE()),
+      makeFlatVector<int64_t>(
+          {makeTimestampWithTimezone(1739426440000, "+01:00"),
+           makeTimestampWithTimezone(1739426440000, "+01:00"),
+           makeTimestampWithTimezone(1639426440000, "+01:00"),
+           makeTimestampWithTimezone(1639426440000, "+03:00"),
+           makeTimestampWithTimezone(1739426440000, "+03:00"),
+           makeTimestampWithTimezone(1739426440000, "+03:00"),
+           makeTimestampWithTimezone(1739426440000, "+01:00"),
+           makeTimestampWithTimezone(1639426440000, "+01:00"),
+           makeTimestampWithTimezone(-1539426440000, "+03:00"),
+           makeTimestampWithTimezone(1539426440000, "+03:00"),
+           makeTimestampWithTimezone(1739426440000, "+01:00"),
+           makeTimestampWithTimezone(-1539426440000, "+03:00"),
+           makeTimestampWithTimezone(-1539426440000, "+03:00")},
+          TIMESTAMP_WITH_TIME_ZONE()),
+  });
+
+  test::assertEqualVectors(
+      evaluate<SimpleVector<bool>>(
+          fmt::format("c0 between c1 and c2"), betweenInput),
+      makeFlatVector<bool>(
+          {true,
+           true,
+           true,
+           true,
+           true,
+           true,
+           false,
+           false,
+           true,
+           true,
+           true,
+           false,
+           false}));
+}
+
+TEST_F(ComparisonsTest, IPPrefixType) {
+  auto ipprefix = [](const std::string& ipprefixString) {
+    auto tryIpPrefix = ipaddress::tryParseIpPrefixString(ipprefixString);
+    return variant::row(
+        {tryIpPrefix.value().first, tryIpPrefix.value().second});
+  };
+
+  // Comparison Operator Tests
+  {
+    auto left = makeArrayOfRowVector(
+        IPPREFIX(),
+        {{ipprefix("2001:0db8:0000:0000:0000:ff00:0042:8329/128")},
+         {ipprefix("1.2.3.4/32")},
+         {ipprefix("2001:0db8:0000:0000:0000:ff00:0042:8329/128")},
+         {ipprefix("1.2.3.5/32")},
+         {ipprefix("1.2.0.0/25")},
+         {ipprefix("::1/128")},
+         {ipprefix("::1/128")},
+         {ipprefix("ffff:ffff:ffff:ffff:ffff:ffff:ffff:ffff/80")},
+         {ipprefix("2001:0db8:0000:0000:0000:ff00:0042:8329/128")}});
+    auto right = makeArrayOfRowVector(
+        IPPREFIX(),
+        {{ipprefix("2001:0db8:0000:0000:0000:ff00:0042:8329/128")},
+         {ipprefix("2001:0db8:0000:0000:0000:ff00:0042:8329/128")},
+         {ipprefix("1.2.3.4/32")},
+         {ipprefix("1.2.3.4/32")},
+         {ipprefix("1.2.0.0/24")},
+         {ipprefix("::1/128")},
+         {ipprefix("1.2.3.4/32")},
+         {ipprefix("ffff:ffff:ffff:ffff:ffff:ffff:ffff:ffff/64")},
+         {ipprefix("2001:0db8:0000:0000:0000:ff00:0042:8321/128")}});
+    auto expected = makeFlatVector<bool>(
+        {false, false, true, true, true, false, false, true, true});
+    auto result = evaluate("c0 > c1", makeRowVector({left, right}));
+    test::assertEqualVectors(result, expected);
+  }
+
+  {
+    auto left = makeArrayOfRowVector(
+        IPPREFIX(),
+        {{ipprefix("2001:0db8:0000:0000:0000:ff00:0042:8329/128")},
+         {ipprefix("1.2.3.4/32")},
+         {ipprefix("2001:0db8:0000:0000:0000:ff00:0042:8329/128")},
+         {ipprefix("1.2.3.5/32")},
+         {ipprefix("1.2.0.0/25")},
+         {ipprefix("::1/128")},
+         {ipprefix("::1/128")},
+         {ipprefix("ffff:ffff:ffff:ffff:ffff:ffff:ffff:ffff/80")},
+         {ipprefix("2001:0db8:0000:0000:0000:ff00:0042:8329/128")}});
+    auto right = makeArrayOfRowVector(
+        IPPREFIX(),
+        {{ipprefix("2001:0db8:0000:0000:0000:ff00:0042:8329/128")},
+         {ipprefix("2001:0db8:0000:0000:0000:ff00:0042:8329/128")},
+         {ipprefix("1.2.3.4/32")},
+         {ipprefix("1.2.3.4/32")},
+         {ipprefix("1.2.0.0/24")},
+         {ipprefix("::1/128")},
+         {ipprefix("1.2.3.4/32")},
+         {ipprefix("ffff:ffff:ffff:ffff:ffff:ffff:ffff:ffff/64")},
+         {ipprefix("2001:0db8:0000:0000:0000:ff00:0042:8321/128")}});
+    auto expected = makeFlatVector<bool>(
+        {false, true, false, false, false, false, true, false, false});
+    auto result = evaluate("c0 < c1", makeRowVector({left, right}));
+    test::assertEqualVectors(result, expected);
+  }
+
+  {
+    auto left = makeArrayOfRowVector(
+        IPPREFIX(),
+        {{ipprefix("2001:0db8:0000:0000:0000:ff00:0042:8329/128")},
+         {ipprefix("1.2.3.4/32")},
+         {ipprefix("2001:0db8:0000:0000:0000:ff00:0042:8329/128")},
+         {ipprefix("1.2.3.5/32")},
+         {ipprefix("1.2.0.0/25")},
+         {ipprefix("::1/128")},
+         {ipprefix("::1/128")},
+         {ipprefix("ffff:ffff:ffff:ffff:ffff:ffff:ffff:ffff/80")},
+         {ipprefix("2001:0db8:0000:0000:0000:ff00:0042:8329/128")}});
+    auto right = makeArrayOfRowVector(
+        IPPREFIX(),
+        {{ipprefix("2001:0db8:0000:0000:0000:ff00:0042:8329/128")},
+         {ipprefix("2001:0db8:0000:0000:0000:ff00:0042:8329/128")},
+         {ipprefix("1.2.3.4/32")},
+         {ipprefix("1.2.3.4/32")},
+         {ipprefix("1.2.0.0/24")},
+         {ipprefix("::1/128")},
+         {ipprefix("1.2.3.4/32")},
+         {ipprefix("ffff:ffff:ffff:ffff:ffff:ffff:ffff:ffff/64")},
+         {ipprefix("2001:0db8:0000:0000:0000:ff00:0042:8321/128")}});
+    auto expected = makeFlatVector<bool>(
+        {true, false, true, true, true, true, false, true, true});
+    auto result = evaluate("c0 >= c1", makeRowVector({left, right}));
+    test::assertEqualVectors(result, expected);
+  }
+
+  {
+    auto left = makeArrayOfRowVector(
+        IPPREFIX(),
+        {{ipprefix("2001:0db8:0000:0000:0000:ff00:0042:8329/128")},
+         {ipprefix("1.2.3.4/32")},
+         {ipprefix("2001:0db8:0000:0000:0000:ff00:0042:8329/128")},
+         {ipprefix("1.2.3.5/32")},
+         {ipprefix("1.2.0.0/25")},
+         {ipprefix("::1/128")},
+         {ipprefix("::1/128")},
+         {ipprefix("ffff:ffff:ffff:ffff:ffff:ffff:ffff:ffff/80")},
+         {ipprefix("2001:0db8:0000:0000:0000:ff00:0042:8329/128")}});
+    auto right = makeArrayOfRowVector(
+        IPPREFIX(),
+        {{ipprefix("2001:0db8:0000:0000:0000:ff00:0042:8329/128")},
+         {ipprefix("2001:0db8:0000:0000:0000:ff00:0042:8329/128")},
+         {ipprefix("1.2.3.4/32")},
+         {ipprefix("1.2.3.4/32")},
+         {ipprefix("1.2.0.0/24")},
+         {ipprefix("::1/128")},
+         {ipprefix("1.2.3.4/32")},
+         {ipprefix("ffff:ffff:ffff:ffff:ffff:ffff:ffff:ffff/64")},
+         {ipprefix("2001:0db8:0000:0000:0000:ff00:0042:8321/128")}});
+    auto expected = makeFlatVector<bool>(
+        {true, true, false, false, false, true, true, false, false});
+    auto result = evaluate("c0 <= c1", makeRowVector({left, right}));
+    test::assertEqualVectors(result, expected);
+  }
+
+  {
+    auto left = makeArrayOfRowVector(
+        IPPREFIX(),
+        {{ipprefix("2001:0db8:0000:0000:0000:ff00:0042:8329/128")},
+         {ipprefix("1.2.3.4/32")},
+         {ipprefix("2001:0db8:0000:0000:0000:ff00:0042:8329/128")},
+         {ipprefix("1.2.0.0/25")},
+         {ipprefix("::1/128")},
+         {ipprefix("::1/128")},
+         {ipprefix("ffff:ffff:ffff:ffff:ffff:ffff:ffff:ffff/80")},
+         {ipprefix("2001:0db8:0000:0000:0000:ff00:0042:8329/128")},
+         {ipprefix("1.2.3.4/24")}});
+    auto right = makeArrayOfRowVector(
+        IPPREFIX(),
+        {{ipprefix("2001:0db8:0000:0000:0000:ff00:0042:8329/128")},
+         {ipprefix("2001:0db8:0000:0000:0000:ff00:0042:8329/128")},
+         {ipprefix("1.2.3.4/32")},
+         {ipprefix("1.2.0.0/24")},
+         {ipprefix("::1/128")},
+         {ipprefix("1.2.3.4/32")},
+         {ipprefix("ffff:ffff:ffff:ffff:ffff:ffff:ffff:ffff/64")},
+         {ipprefix("2001:0db8:0000:0000:0000:ff00:0042:8321/128")},
+         {ipprefix("1.2.3.5/24")}});
+    auto expected = makeFlatVector<bool>(
+        {true, false, false, false, true, false, false, false, true});
+    auto result = evaluate("c0 = c1", makeRowVector({left, right}));
+    test::assertEqualVectors(result, expected);
+  }
+
+  {
+    auto left = makeArrayOfRowVector(
+        IPPREFIX(),
+        {{ipprefix("2001:0db8:0000:0000:0000:ff00:0042:8329/128")},
+         {ipprefix("1.2.3.4/32")},
+         {ipprefix("2001:0db8:0000:0000:0000:ff00:0042:8329/128")},
+         {ipprefix("1.2.3.5/32")},
+         {ipprefix("1.2.0.0/25")},
+         {ipprefix("::1/128")},
+         {ipprefix("::1/128")},
+         {ipprefix("ffff:ffff:ffff:ffff:ffff:ffff:ffff:ffff/80")},
+         {ipprefix("2001:0db8:0000:0000:0000:ff00:0042:8329/128")}});
+    auto right = makeArrayOfRowVector(
+        IPPREFIX(),
+        {{ipprefix("2001:0db8:0000:0000:0000:ff00:0042:8329/128")},
+         {ipprefix("2001:0db8:0000:0000:0000:ff00:0042:8329/128")},
+         {ipprefix("1.2.3.4/32")},
+         {ipprefix("1.2.3.4/32")},
+         {ipprefix("1.2.0.0/24")},
+         {ipprefix("::1/128")},
+         {ipprefix("1.2.3.4/32")},
+         {ipprefix("ffff:ffff:ffff:ffff:ffff:ffff:ffff:ffff/64")},
+         {ipprefix("2001:0db8:0000:0000:0000:ff00:0042:8321/128")}});
+    auto expected = makeFlatVector<bool>(
+        {false, true, true, true, true, false, true, true, true});
+    auto result = evaluate("c0 <> c1", makeRowVector({left, right}));
+    test::assertEqualVectors(result, expected);
+  }
+
+  // Distinct from test
+  {
+    auto left = makeArrayOfRowVector(
+        IPPREFIX(),
+        {{ipprefix("2001:0db8:0000:0000:0000:ff00:0042:8329/128")},
+         {ipprefix("1.2.3.4/32")},
+         {ipprefix("2001:0db8:0000:0000:0000:ff00:0042:8329/128")},
+         {ipprefix("1.2.3.5/32")},
+         {ipprefix("1.2.0.0/25")},
+         {ipprefix("::1/128")},
+         {ipprefix("::1/128")},
+         {ipprefix("ffff:ffff:ffff:ffff:ffff:ffff:ffff:ffff/80")},
+         {ipprefix("2001:0db8:0000:0000:0000:ff00:0042:8329/128")}});
+    auto right = makeArrayOfRowVector(
+        IPPREFIX(),
+        {{ipprefix("2001:0db8:0000:0000:0000:ff00:0042:8329/128")},
+         {ipprefix("2001:0db8:0000:0000:0000:ff00:0042:8329/128")},
+         {ipprefix("1.2.3.4/32")},
+         {ipprefix("1.2.3.4/32")},
+         {ipprefix("1.2.0.0/24")},
+         {ipprefix("::1/128")},
+         {ipprefix("1.2.3.4/32")},
+         {ipprefix("ffff:ffff:ffff:ffff:ffff:ffff:ffff:ffff/64")},
+         {ipprefix("2001:0db8:0000:0000:0000:ff00:0042:8321/128")}});
+    auto expected = makeFlatVector<bool>(
+        {false, true, true, true, true, false, true, true, true});
+    auto result =
+        evaluate("c0 is distinct from c1", makeRowVector({left, right}));
+    test::assertEqualVectors(result, expected);
+  }
+
+  // Inbetween test
+  {
+    auto inbetween = makeArrayOfRowVector(
+        IPPREFIX(),
+        {{ipprefix("2001:0db8:0000:0000:0000:ff00:0042:8329/128")},
+         {ipprefix("1.2.3.4/32")},
+         {ipprefix("2001:0db8:0000:0000:0000:ff00:0042:8329/128")},
+         {ipprefix("1.2.3.5/32")},
+         {ipprefix("1.2.0.0/25")},
+         {ipprefix("::1/128")},
+         {ipprefix("::1/128")},
+         {ipprefix("ffff:ffff:ffff:ffff:ffff:ffff:ffff:ffff/80")},
+         {ipprefix("2001:0db8:0000:0000:0000:ff00:0042:8329/128")},
+         {ipprefix("::1/128")},
+         {ipprefix("::2222/128")}
+
+        });
+    auto left = makeArrayOfRowVector(
+        IPPREFIX(),
+        {
+            {ipprefix("2001:0db8:0000:0000:0000:ff00:0042:8329/128")},
+            {ipprefix("2001:0db8:0000:0000:0000:ff00:0042:8329/128")},
+            {ipprefix("1.2.3.4/32")},
+            {ipprefix("1.2.3.4/32")},
+            {ipprefix("1.2.0.0/24")},
+            {ipprefix("::1/128")},
+            {ipprefix("1.2.3.4/32")},
+            {ipprefix("ffff:ffff:ffff:ffff:ffff:ffff:ffff:ffff/64")},
+            {ipprefix("2001:0db8:0000:0000:0000:ff00:0042:8321/128")},
+            {ipprefix("::1/128")},
+            {ipprefix("::1/128")},
+        });
+    auto right = makeArrayOfRowVector(
+        IPPREFIX(),
+        {
+            {ipprefix("2001:0db8:0000:0000:0000:ff00:0042:8329/128")},
+            {ipprefix("2001:0db8:0000:0000:0000:ff00:0042:8329/128")},
+            {ipprefix("1.2.3.4/32")},
+            {ipprefix("1.2.3.4/32")},
+            {ipprefix("1.2.0.0/24")},
+            {ipprefix("::1/128")},
+            {ipprefix("1.2.3.4/32")},
+            {ipprefix("ffff:ffff:ffff:ffff:ffff:ffff:ffff:ffff/64")},
+            {ipprefix("2001:0db8:0000:0000:0000:ff00:0042:8321/128")},
+            {ipprefix("::1234/128")},
+            {ipprefix("::1234/128")},
+
+        });
+    auto expected = makeFlatVector<bool>(
+        {true,
+         false,
+         false,
+         false,
+         false,
+         true,
+         false,
+         false,
+         false,
+         true,
+         false});
+
+    auto result = evaluate(
+        "c0 between c1 and c2",
+        makeRowVector(
+            {inbetween->elements(), left->elements(), right->elements()}));
+    test::assertEqualVectors(result, expected);
+  }
+}
+
+TEST_F(ComparisonsTest, IpAddressType) {
+  auto makeIpAdressFromString = [](const std::string& ipAddr) -> int128_t {
+    auto ret = ipaddress::tryGetIPv6asInt128FromString(ipAddr);
+    return ret.value();
+  };
+
+  auto runAndCompare = [&](const std::string& expr,
+                           RowVectorPtr inputs,
+                           VectorPtr expectedResult) {
+    auto actual = evaluate<SimpleVector<bool>>(expr, inputs);
+    test::assertEqualVectors(expectedResult, actual);
+  };
+
+  auto lhs = makeNullableFlatVector<int128_t>(
+      {
+          makeIpAdressFromString("1.1.1.1"),
+          makeIpAdressFromString("255.255.255.255"),
+          makeIpAdressFromString("1.2.3.4"),
+          makeIpAdressFromString("1.1.1.2"),
+          makeIpAdressFromString("1.1.2.1"),
+          makeIpAdressFromString("1.1.1.1"),
+          makeIpAdressFromString("1.1.1.1"),
+          makeIpAdressFromString("::1"),
+          makeIpAdressFromString("2001:0db8:0000:0000:0000:ff00:0042:8329"),
+          makeIpAdressFromString("::ffff:1.2.3.4"),
+          makeIpAdressFromString("::ffff:0.1.1.1"),
+          makeIpAdressFromString("::FFFF:FFFF:FFFF"),
+          makeIpAdressFromString("::0001:255.255.255.255"),
+          makeIpAdressFromString("::ffff:ffff:ffff"),
+          std::nullopt,
+          makeIpAdressFromString("::0001:255.255.255.255"),
+      },
+      IPADDRESS());
+
+  auto rhs = makeNullableFlatVector<int128_t>(
+      {
+          makeIpAdressFromString("1.1.1.1"),
+          makeIpAdressFromString("255.255.255.255"),
+          makeIpAdressFromString("1.1.1.1"),
+          makeIpAdressFromString("1.1.1.1"),
+          makeIpAdressFromString("1.1.1.2"),
+          makeIpAdressFromString("1.1.2.1"),
+          makeIpAdressFromString("255.1.1.1"),
+          makeIpAdressFromString("::1"),
+          makeIpAdressFromString("2001:db8::ff00:42:8329"),
+          makeIpAdressFromString("1.2.3.4"),
+          makeIpAdressFromString("::ffff:1.1.1.0"),
+          makeIpAdressFromString("::0001:255.255.255.255"),
+          makeIpAdressFromString("255.255.255.255"),
+          makeIpAdressFromString("255.255.255.255"),
+          makeIpAdressFromString("255.255.255.255"),
+          std::nullopt,
+      },
+      IPADDRESS());
+
+  auto input = makeRowVector({lhs, rhs});
+
+  runAndCompare(
+      "c0 = c1",
+      input,
+      makeNullableFlatVector<bool>(
+          {true,
+           true,
+           false,
+           false,
+           false,
+           false,
+           false,
+           true,
+           true,
+           true,
+           false,
+           false,
+           false,
+           true,
+           std::nullopt,
+           std::nullopt}));
+
+  runAndCompare(
+      "c0 <> c1",
+      input,
+      makeNullableFlatVector<bool>(
+          {false,
+           false,
+           true,
+           true,
+           true,
+           true,
+           true,
+           false,
+           false,
+           false,
+           true,
+           true,
+           true,
+           false,
+           std::nullopt,
+           std::nullopt}));
+
+  runAndCompare(
+      "c0 < c1",
+      input,
+      makeNullableFlatVector<bool>(
+          {false,
+           false,
+           false,
+           false,
+           false,
+           true,
+           true,
+           false,
+           false,
+           false,
+           true,
+           false,
+           true,
+           false,
+           std::nullopt,
+           std::nullopt}));
+
+  runAndCompare(
+      "c0 > c1",
+      input,
+      makeNullableFlatVector<bool>(
+          {false,
+           false,
+           true,
+           true,
+           true,
+           false,
+           false,
+           false,
+           false,
+           false,
+           false,
+           true,
+           false,
+           false,
+           std::nullopt,
+           std::nullopt}));
+
+  runAndCompare(
+      "c0 <= c1",
+      input,
+      makeNullableFlatVector<bool>(
+          {true,
+           true,
+           false,
+           false,
+           false,
+           true,
+           true,
+           true,
+           true,
+           true,
+           true,
+           false,
+           true,
+           true,
+           std::nullopt,
+           std::nullopt}));
+
+  runAndCompare(
+      "c0 >= c1",
+      input,
+      makeNullableFlatVector<bool>(
+          {true,
+           true,
+           true,
+           true,
+           true,
+           false,
+           false,
+           true,
+           true,
+           true,
+           false,
+           true,
+           false,
+           true,
+           std::nullopt,
+           std::nullopt}));
+
+  runAndCompare(
+      "c0 is distinct from c1",
+      input,
+      makeNullableFlatVector<bool>(
+          {false,
+           false,
+           true,
+           true,
+           true,
+           true,
+           true,
+           false,
+           false,
+           false,
+           true,
+           true,
+           true,
+           false,
+           true,
+           true}));
+
+  auto betweenInput = makeRowVector({
+      makeNullableFlatVector<int128_t>(
+          {makeIpAdressFromString("2001:db8::ff00:42:8329"),
+           makeIpAdressFromString("1.1.1.1"),
+           makeIpAdressFromString("255.255.255.255"),
+           makeIpAdressFromString("::ffff:1.1.1.1"),
+           makeIpAdressFromString("1.1.1.1"),
+           makeIpAdressFromString("0.0.0.0"),
+           makeIpAdressFromString("::ffff"),
+           makeIpAdressFromString("0.0.0.0"),
+           std::nullopt,
+           makeIpAdressFromString("0.0.0.0"),
+           makeIpAdressFromString("0.0.0.0")},
+          IPADDRESS()),
+      makeNullableFlatVector<int128_t>(
+          {makeIpAdressFromString("::ffff"),
+           makeIpAdressFromString("1.1.1.1"),
+           makeIpAdressFromString("255.255.255.255"),
+           makeIpAdressFromString("::ffff:0.1.1.1"),
+           makeIpAdressFromString("0.1.1.1"),
+           makeIpAdressFromString("0.0.0.1"),
+           makeIpAdressFromString("::ffff:0.0.0.1"),
+           makeIpAdressFromString("2001:db8::0:0:0:1"),
+           makeIpAdressFromString("2001:db8::0:0:0:1"),
+           std::nullopt,
+           makeIpAdressFromString("2001:db8::0:0:0:1")},
+          IPADDRESS()),
+      makeNullableFlatVector<int128_t>(
+          {makeIpAdressFromString("2001:db8::ff00:42:8329"),
+           makeIpAdressFromString("1.1.1.1"),
+           makeIpAdressFromString("255.255.255.255"),
+           makeIpAdressFromString("2001:0db8:0000:0000:0000:ff00:0042:8329"),
+           makeIpAdressFromString("2001:0db8:0000:0000:0000:ff00:0042:8329"),
+           makeIpAdressFromString("0.0.0.2"),
+           makeIpAdressFromString("0.0.0.2"),
+           makeIpAdressFromString("2001:db8::1:0:0:1"),
+           makeIpAdressFromString("2001:db8::1:0:0:1"),
+           makeIpAdressFromString("2001:db8::1:0:0:1"),
+           std::nullopt},
+          IPADDRESS()),
+  });
+
+  runAndCompare(
+      "c0 between c1 and c2",
+      betweenInput,
+      makeNullableFlatVector<bool>(
+          {true,
+           true,
+           true,
+           true,
+           true,
+           false,
+           false,
+           false,
+           std::nullopt,
+           std::nullopt,
+           std::nullopt}));
+}
+
+TEST_F(ComparisonsTest, CustomComparisonWithGenerics) {
+  // Tests that functions that support signatures with generics handle custom
+  // comparison correctly.
+  auto input = makeRowVector({
+      makeFlatVector<int64_t>(
+          {0, 1}, test::BIGINT_TYPE_WITH_CUSTOM_COMPARISON()),
+      makeFlatVector<int64_t>(
+          {256, 258}, test::BIGINT_TYPE_WITH_CUSTOM_COMPARISON()),
+  });
+
+  test::assertEqualVectors(
+      evaluate<SimpleVector<bool>>("c0 = c1", input),
+      makeFlatVector<bool>({true, false}));
+  test::assertEqualVectors(
+      evaluate<SimpleVector<bool>>("c0 <> c1", input),
+      makeFlatVector<bool>({false, true}));
+  test::assertEqualVectors(
+      evaluate<SimpleVector<bool>>("c0 is distinct from c1", input),
+      makeFlatVector<bool>({false, true}));
+}
+
 namespace {
 template <typename Tp, typename Op, const char* fnName>
 struct ComparisonTypeOp {
@@ -778,7 +1772,7 @@ typedef ::testing::Types<
 template <typename ComparisonTypeOp>
 class SimdComparisonsTest : public functions::test::FunctionBaseTest {
  public:
-  using T = typename ComparisonTypeOp::type::NativeType::NativeType;
+  using T = typename ComparisonTypeOp::type::NativeType;
   using ComparisonOp = typename ComparisonTypeOp::fn;
   const std::string sqlFn = ComparisonTypeOp().sqlFunction;
 

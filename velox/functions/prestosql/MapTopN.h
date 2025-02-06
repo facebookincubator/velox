@@ -54,14 +54,9 @@ struct MapTopNFunction {
       out_type<Map<Orderable<T1>, Orderable<T2>>>& out,
       const arg_type<Map<Orderable<T1>, Orderable<T2>>>& inputMap,
       int64_t n) {
-    VELOX_USER_CHECK_GE(n, 0, "n must be greater than or equal to 0")
+    VELOX_USER_CHECK_GE(n, 0, "n must be greater than or equal to 0");
 
     if (n == 0) {
-      return;
-    }
-
-    if (n >= inputMap.size()) {
-      out.copy_from(inputMap);
       return;
     }
 

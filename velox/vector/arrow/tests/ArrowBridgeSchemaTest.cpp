@@ -17,6 +17,7 @@
 #include <arrow/c/abi.h>
 #include <arrow/c/bridge.h>
 #include <arrow/testing/gtest_util.h>
+#include <arrow/util/config.h>
 #include <gtest/gtest.h>
 
 #include "velox/common/base/tests/GTestUtils.h"
@@ -33,9 +34,12 @@ class ArrowBridgeSchemaExportTest : public testing::Test {
     memory::MemoryManager::testingSetInstance({});
   }
 
-  void testScalarType(const TypePtr& type, const char* arrowFormat) {
+  void testScalarType(
+      const TypePtr& type,
+      const char* arrowFormat,
+      const ArrowOptions& options = ArrowOptions{}) {
     ArrowSchema arrowSchema;
-    exportToArrow(type, arrowSchema);
+    exportToArrow(type, arrowSchema, options);
 
     verifyScalarType(arrowSchema, arrowFormat);
 
@@ -84,6 +88,11 @@ class ArrowBridgeSchemaExportTest : public testing::Test {
       EXPECT_STREQ("+m", schema->format);
       ASSERT_EQ(schema->n_children, 1);
       schema = schema->children[0];
+      // Map data should be a non-nullable struct type
+      ASSERT_EQ(schema->flags & ARROW_FLAG_NULLABLE, 0);
+      ASSERT_EQ(schema->n_children, 2);
+      // Map data key type should be a non-nullable
+      ASSERT_EQ(schema->children[0]->flags & ARROW_FLAG_NULLABLE, 0);
     } else if (type->kind() == TypeKind::ROW) {
       EXPECT_STREQ("+s", schema->format);
     }
@@ -105,7 +114,10 @@ class ArrowBridgeSchemaExportTest : public testing::Test {
     }
   }
 
-  void testConstant(const TypePtr& type, const char* arrowFormat) {
+  void testConstant(
+      const TypePtr& type,
+      const char* arrowFormat,
+      const ArrowOptions& options = ArrowOptions{}) {
     ArrowSchema arrowSchema;
     const bool isScalar = (type->size() == 0);
     const bool constantSize = 100;
@@ -120,7 +132,7 @@ class ArrowBridgeSchemaExportTest : public testing::Test {
               3, // index to use for the constant
               BaseVector::create(type, 100, pool_.get()));
 
-    velox::exportToArrow(constantVector, arrowSchema, options_);
+    velox::exportToArrow(constantVector, arrowSchema, options);
 
     EXPECT_STREQ("+r", arrowSchema.format);
     EXPECT_EQ(nullptr, arrowSchema.name);
@@ -154,9 +166,12 @@ class ArrowBridgeSchemaExportTest : public testing::Test {
     EXPECT_EQ(nullptr, arrowSchema.private_data);
   }
 
-  void exportToArrow(const TypePtr& type, ArrowSchema& out) {
+  void exportToArrow(
+      const TypePtr& type,
+      ArrowSchema& out,
+      const ArrowOptions& options = ArrowOptions{}) {
     velox::exportToArrow(
-        BaseVector::create(type, 0, pool_.get()), out, options_);
+        BaseVector::create(type, 0, pool_.get()), out, options);
   }
 
   ArrowSchema makeArrowSchema(const char* format) {
@@ -173,7 +188,6 @@ class ArrowBridgeSchemaExportTest : public testing::Test {
     };
   }
 
-  ArrowOptions options_;
   std::shared_ptr<memory::MemoryPool> pool_{
       memory::memoryManager()->addLeafPool()};
 };
@@ -192,14 +206,33 @@ TEST_F(ArrowBridgeSchemaExportTest, scalar) {
   testScalarType(VARCHAR(), "u");
   testScalarType(VARBINARY(), "z");
 
-  options_.timestampUnit = TimestampUnit::kSecond;
-  testScalarType(TIMESTAMP(), "tss:");
-  options_.timestampUnit = TimestampUnit::kMilli;
-  testScalarType(TIMESTAMP(), "tsm:");
-  options_.timestampUnit = TimestampUnit::kMicro;
-  testScalarType(TIMESTAMP(), "tsu:");
-  options_.timestampUnit = TimestampUnit::kNano;
-  testScalarType(TIMESTAMP(), "tsn:");
+  // Test default timezone
+  testScalarType(
+      TIMESTAMP(), "tss:", {.timestampUnit = TimestampUnit::kSecond});
+  testScalarType(TIMESTAMP(), "tsm:", {.timestampUnit = TimestampUnit::kMilli});
+  testScalarType(TIMESTAMP(), "tsu:", {.timestampUnit = TimestampUnit::kMicro});
+  testScalarType(TIMESTAMP(), "tsn:", {.timestampUnit = TimestampUnit::kNano});
+
+  testScalarType(VARCHAR(), "vu", {.exportToStringView = true});
+  testScalarType(VARBINARY(), "vz", {.exportToStringView = true});
+
+  // Test specific timezone
+  testScalarType(
+      TIMESTAMP(),
+      "tss:+01:0",
+      {.timestampUnit = TimestampUnit::kSecond, .timestampTimeZone = "+01:0"});
+  testScalarType(
+      TIMESTAMP(),
+      "tsm:+01:0",
+      {.timestampUnit = TimestampUnit::kMilli, .timestampTimeZone = "+01:0"});
+  testScalarType(
+      TIMESTAMP(),
+      "tsu:+01:0",
+      {.timestampUnit = TimestampUnit::kMicro, .timestampTimeZone = "+01:0"});
+  testScalarType(
+      TIMESTAMP(),
+      "tsn:+01:0",
+      {.timestampUnit = TimestampUnit::kNano, .timestampTimeZone = "+01:0"});
 
   testScalarType(DATE(), "tdD");
   testScalarType(INTERVAL_YEAR_MONTH(), "tiM");
@@ -250,6 +283,7 @@ TEST_F(ArrowBridgeSchemaExportTest, constant) {
   testConstant(BOOLEAN(), "b");
   testConstant(DOUBLE(), "g");
   testConstant(VARCHAR(), "u");
+  testConstant(VARCHAR(), "vu", {.exportToStringView = true});
   testConstant(DATE(), "tdD");
   testConstant(INTERVAL_YEAR_MONTH(), "tiM");
   testConstant(UNKNOWN(), "n");
@@ -260,6 +294,15 @@ TEST_F(ArrowBridgeSchemaExportTest, constant) {
   testConstant(MAP(UNKNOWN(), REAL()), "+m");
   testConstant(ROW({TIMESTAMP(), DOUBLE()}), "+s");
   testConstant(ROW({UNKNOWN(), UNKNOWN()}), "+s");
+  VELOX_ASSERT_THROW(
+      testConstant(ARRAY(INTEGER()), "+l", {false, true}),
+      "Flattening is only supported for scalar types.");
+  VELOX_ASSERT_THROW(
+      testConstant(MAP(BOOLEAN(), REAL()), "+m", {false, true}),
+      "Flattening is only supported for scalar types.");
+  VELOX_ASSERT_THROW(
+      testConstant(ROW({BOOLEAN(), REAL()}), "+s", {false, true}),
+      "Flattening is only supported for scalar types.");
 }
 
 class ArrowBridgeSchemaImportTest : public ArrowBridgeSchemaExportTest {
@@ -371,6 +414,9 @@ TEST_F(ArrowBridgeSchemaImportTest, scalar) {
   EXPECT_EQ(*VARBINARY(), *testSchemaImport("z"));
   EXPECT_EQ(*VARBINARY(), *testSchemaImport("Z"));
 
+  EXPECT_EQ(*VARCHAR(), *testSchemaImport("vu"));
+  EXPECT_EQ(*VARBINARY(), *testSchemaImport("vz"));
+
   // Temporal.
   EXPECT_EQ(*TIMESTAMP(), *testSchemaImport("tsn:"));
   EXPECT_EQ(*DATE(), *testSchemaImport("tdD"));
@@ -459,20 +505,24 @@ class ArrowBridgeSchemaTest : public testing::Test {
     memory::MemoryManager::testingSetInstance({});
   }
 
-  void roundtripTest(const TypePtr& inputType) {
+  void roundtripTest(
+      const TypePtr& inputType,
+      const ArrowOptions& options = ArrowOptions{}) {
     ArrowSchema arrowSchema;
-    exportToArrow(inputType, arrowSchema);
+    exportToArrow(inputType, arrowSchema, options);
     auto outputType = importFromArrow(arrowSchema);
     arrowSchema.release(&arrowSchema);
     EXPECT_EQ(*inputType, *outputType);
   }
 
-  void exportToArrow(const TypePtr& type, ArrowSchema& out) {
+  void exportToArrow(
+      const TypePtr& type,
+      ArrowSchema& out,
+      const ArrowOptions& options = ArrowOptions{}) {
     velox::exportToArrow(
-        BaseVector::create(type, 0, pool_.get()), out, options_);
+        BaseVector::create(type, 0, pool_.get()), out, options);
   }
 
-  ArrowOptions options_;
   std::shared_ptr<memory::MemoryPool> pool_{
       memory::memoryManager()->addLeafPool()};
 };
@@ -480,6 +530,7 @@ class ArrowBridgeSchemaTest : public testing::Test {
 TEST_F(ArrowBridgeSchemaTest, roundtrip) {
   roundtripTest(BOOLEAN());
   roundtripTest(VARCHAR());
+  roundtripTest(VARCHAR(), {.exportToStringView = true});
   roundtripTest(REAL());
   roundtripTest(ARRAY(DOUBLE()));
   roundtripTest(ARRAY(ARRAY(ARRAY(ARRAY(VARBINARY())))));
@@ -500,8 +551,14 @@ TEST_F(ArrowBridgeSchemaTest, validateInArrow) {
   const std::pair<TypePtr, std::shared_ptr<arrow::DataType>> kTypes[] = {
       {BOOLEAN(), arrow::boolean()},
       {VARCHAR(), arrow::utf8()},
+      {VARCHAR(), arrow::utf8_view()},
+#if ARROW_VERSION_MAJOR >= 18
+      {DECIMAL(10, 4), arrow::decimal128(10, 4)},
+      {DECIMAL(20, 15), arrow::decimal128(20, 15)},
+#else
       {DECIMAL(10, 4), arrow::decimal(10, 4)},
       {DECIMAL(20, 15), arrow::decimal(20, 15)},
+#endif
       {ARRAY(DOUBLE()), arrow::list(arrow::float64())},
       {ARRAY(ARRAY(DOUBLE())), arrow::list(arrow::list(arrow::float64()))},
       {MAP(VARCHAR(), REAL()), arrow::map(arrow::utf8(), arrow::float32())},
@@ -514,7 +571,9 @@ TEST_F(ArrowBridgeSchemaTest, validateInArrow) {
     VLOG(1) << "Validating conversion between " << tv->toString() << " and "
             << ta->ToString();
     ArrowSchema schema;
-    exportToArrow(tv, schema);
+    ta == arrow::utf8_view()
+        ? exportToArrow(tv, schema, {.exportToStringView = true})
+        : exportToArrow(tv, schema);
     ASSERT_OK_AND_ASSIGN(auto actual, arrow::ImportType(&schema));
     ASSERT_FALSE(schema.release);
     EXPECT_EQ(*actual, *ta);

@@ -20,6 +20,8 @@
 #include "velox/exec/Operator.h"
 
 namespace facebook::velox::exec {
+class RowNumberHashTableSpiller;
+class RowNumberInputSpiller;
 
 class RowNumber : public Operator {
  public:
@@ -64,8 +66,6 @@ class RowNumber : public Operator {
 
   void spill();
 
-  void addSpillInput();
-
   void restoreNextSpillPartition();
 
   SpillPartitionNumSet spillHashTable();
@@ -77,6 +77,10 @@ class RowNumber : public Operator {
   RowVectorPtr getOutputForSinglePartition();
 
   FlatVector<int64_t>& getOrCreateRowNumberVector(vector_size_t size);
+
+  // Finishes the current input spilling and restore the next processing
+  // partition.
+  void finishSpillInputAndRestoreNext();
 
   // Used by recursive spill processing to read the spilled input data from the
   // previous spill run through 'spillInputReader_' and then spill them back
@@ -125,7 +129,7 @@ class RowNumber : public Operator {
   SpillPartitionSet spillHashTablePartitionSet_;
 
   // Spiller for input received after spilling has been triggered.
-  std::unique_ptr<Spiller> inputSpiller_;
+  std::unique_ptr<NoRowContainerSpiller> inputSpiller_;
 
   // Used to restore previously spilled input.
   std::unique_ptr<UnorderedStreamReader<BatchStream>> spillInputReader_;
@@ -140,5 +144,28 @@ class RowNumber : public Operator {
   bool yield_{false};
 
   bool exceededMaxSpillLevelLimit_{false};
+};
+
+class RowNumberHashTableSpiller : public SpillerBase {
+ public:
+  static constexpr std::string_view kType = "RowNumberHashTableSpiller";
+
+  RowNumberHashTableSpiller(
+      RowContainer* container,
+      RowTypePtr rowType,
+      HashBitRange bits,
+      const common::SpillConfig* spillConfig,
+      folly::Synchronized<common::SpillStats>* spillStats);
+
+  void spill();
+
+ private:
+  bool needSort() const override {
+    return false;
+  }
+
+  std::string type() const override {
+    return std::string(kType);
+  }
 };
 } // namespace facebook::velox::exec

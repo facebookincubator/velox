@@ -20,8 +20,6 @@
 #include "velox/common/base/VeloxException.h"
 #include "velox/connectors/hive/HiveConnectorSplit.h"
 #include "velox/dwio/dwrf/writer/Writer.h"
-#include "velox/exec/fuzzer/DuckQueryRunner.h"
-#include "velox/exec/fuzzer/PrestoQueryRunner.h"
 #include "velox/exec/tests/utils/TempDirectoryPath.h"
 #include "velox/expression/SignatureBinder.h"
 #include "velox/expression/fuzzer/ArgumentTypeFuzzer.h"
@@ -241,14 +239,38 @@ std::vector<std::string> AggregationFuzzerBase::generateKeys(
 std::vector<std::string> AggregationFuzzerBase::generateSortingKeys(
     const std::string& prefix,
     std::vector<std::string>& names,
-    std::vector<TypePtr>& types) {
+    std::vector<TypePtr>& types,
+    bool rangeFrame,
+    const std::vector<TypePtr>& scalarTypes,
+    std::optional<uint32_t> numKeys) {
   std::vector<std::string> keys;
-  auto numKeys = boost::random::uniform_int_distribution<uint32_t>(1, 5)(rng_);
-  for (auto i = 0; i < numKeys; ++i) {
-    keys.push_back(fmt::format("{}{}", prefix, i));
+  vector_size_t maxDepth;
+  std::vector<TypePtr> sortingKeyTypes = scalarTypes;
 
+  // If frame has k-RANGE bound, only one sorting key should be present, and it
+  // should be a scalar type which supports '+', '-' arithmetic operations.
+  if (rangeFrame) {
+    numKeys = 1;
+    sortingKeyTypes = {
+        TINYINT(),
+        SMALLINT(),
+        INTEGER(),
+        BIGINT(),
+        HUGEINT(),
+        REAL(),
+        DOUBLE()};
+    maxDepth = 0;
+  } else {
+    if (!numKeys.has_value()) {
+      numKeys = boost::random::uniform_int_distribution<uint32_t>(1, 5)(rng_);
+    }
     // Pick random, possibly complex, type.
-    types.push_back(vectorFuzzer_.randOrderableType(2));
+    maxDepth = 2;
+  }
+
+  for (auto i = 0; i < numKeys.value(); ++i) {
+    keys.push_back(fmt::format("{}{}", prefix, i));
+    types.push_back(vectorFuzzer_.randOrderableType(sortingKeyTypes, maxDepth));
     names.push_back(keys.back());
   }
 
@@ -305,9 +327,11 @@ std::vector<RowVectorPtr> AggregationFuzzerBase::generateInputDataWithRowNumber(
     std::vector<std::string> names,
     std::vector<TypePtr> types,
     const std::vector<std::string>& partitionKeys,
+    const std::vector<std::string>& windowFrameBounds,
+    const std::vector<std::string>& sortingKeys,
     const CallableSignature& signature) {
   names.push_back("row_number");
-  types.push_back(BIGINT());
+  types.push_back(INTEGER());
 
   auto generator = findInputGenerator(signature);
 
@@ -316,11 +340,12 @@ std::vector<RowVectorPtr> AggregationFuzzerBase::generateInputDataWithRowNumber(
   velox::test::VectorMaker vectorMaker{pool_.get()};
   int64_t rowNumber = 0;
 
-  std::unordered_set<std::string> partitionKeySet;
-  partitionKeySet.reserve(partitionKeys.size());
-  for (auto partitionKey : partitionKeys) {
-    partitionKeySet.insert(partitionKey);
-  }
+  std::unordered_set<std::string> partitionKeySet{
+      partitionKeys.begin(), partitionKeys.end()};
+  std::unordered_set<std::string> windowFrameBoundsSet{
+      windowFrameBounds.begin(), windowFrameBounds.end()};
+  std::unordered_set<std::string> sortingKeySet{
+      sortingKeys.begin(), sortingKeys.end()};
 
   for (auto j = 0; j < FLAGS_num_batches; ++j) {
     std::vector<VectorPtr> children;
@@ -330,23 +355,79 @@ std::vector<RowVectorPtr> AggregationFuzzerBase::generateInputDataWithRowNumber(
           generator->generate(signature.args, vectorFuzzer_, rng_, pool_.get());
     }
 
-    // Number of partitions is randomly generated and is at least 1.
-    auto numPartitions = size ? randInt(1, size) : 1;
-    auto indices = vectorFuzzer_.fuzzIndices(size, numPartitions);
-    auto nulls = vectorFuzzer_.fuzzNulls(size);
+    // Some window functions like 'rank' have semantics influenced by "peer"
+    // rows. Peer rows are rows in the same partition having the same order by
+    // key. In rank and dense_rank functions, peer rows have the same function
+    // result value. This code influences the fuzzer to generate such data.
+    //
+    // To build such rows the code separates the notions of "peer" groups and
+    // "partition" groups during data generation. A number of peers are chosen
+    // between (1, size) of the input. Rows with the same peer number have the
+    // same order by keys. This means that there are sets of rows in the input
+    // data which will have the same order by key.
+    //
+    // Each peer is then mapped to a partition group. Rows in the same partition
+    // group have the same partition keys. So a partition can contain a group of
+    // rows with the same order by key and there can be multiple such groups
+    // (each with different order by keys) in one partition.
+    //
+    // This style of data generation is preferable for window functions. The
+    // input data so generated could look as follows:
+    //
+    //   numRows = 6, numPeerGroups = 3, numPartitions = 2,
+    //   columns = {p0: VARCHAR, s0: INTEGER}, partitioningKeys = {p0},
+    //   sortingKeys = {s0}
+    //     row1: 'APPLE'   2
+    //     row2: 'APPLE'   2
+    //     row3: 'APPLE'   2
+    //     row4: 'APPLE'   8
+    //     row5: 'ORANGE'  5
+    //     row6: 'ORANGE'  5
+    //
+    // In the above example, the sets of rows belonging to the same peer group
+    // are {row1, row2, row3}, {row4}, and {row5, row6}. The sets of rows
+    // belonging to the same partition are {row1, row2, row3, row4} and
+    // {row5, row6}.
+    auto numPeerGroups = size ? randInt(1, size) : 1;
+    auto sortingIndices = vectorFuzzer_.fuzzIndices(size, numPeerGroups);
+    auto rawSortingIndices = sortingIndices->as<vector_size_t>();
+    auto sortingNulls = vectorFuzzer_.fuzzNulls(size);
+
+    auto numPartitions = randInt(1, numPeerGroups);
+    auto peerGroupToPartitionIndices =
+        vectorFuzzer_.fuzzIndices(numPeerGroups, numPartitions);
+    auto rawPeerGroupToPartitionIndices =
+        peerGroupToPartitionIndices->as<vector_size_t>();
+    auto partitionIndices =
+        AlignedBuffer::allocate<vector_size_t>(size, pool_.get());
+    auto rawPartitionIndices = partitionIndices->asMutable<vector_size_t>();
+    auto partitionNulls = vectorFuzzer_.fuzzNulls(size);
+    for (auto i = 0; i < size; i++) {
+      auto peerGroup = rawSortingIndices[i];
+      rawPartitionIndices[i] = rawPeerGroupToPartitionIndices[peerGroup];
+    }
+
     for (auto i = children.size(); i < types.size() - 1; ++i) {
       if (partitionKeySet.find(names[i]) != partitionKeySet.end()) {
         // The partition keys are built with a dictionary over a smaller set of
         // values. This is done to introduce some repetition of key values for
         // windowing.
         auto baseVector = vectorFuzzer_.fuzz(types[i], numPartitions);
-        children.push_back(
-            BaseVector::wrapInDictionary(nulls, indices, size, baseVector));
+        children.push_back(BaseVector::wrapInDictionary(
+            partitionNulls, partitionIndices, size, baseVector));
+      } else if (
+          windowFrameBoundsSet.find(names[i]) != windowFrameBoundsSet.end()) {
+        // Frame bound columns cannot have NULLs.
+        children.push_back(vectorFuzzer_.fuzzNotNull(types[i], size));
+      } else if (sortingKeySet.find(names[i]) != sortingKeySet.end()) {
+        auto baseVector = vectorFuzzer_.fuzz(types[i], numPeerGroups);
+        children.push_back(BaseVector::wrapInDictionary(
+            sortingNulls, sortingIndices, size, baseVector));
       } else {
         children.push_back(vectorFuzzer_.fuzz(types[i], size));
       }
     }
-    children.push_back(vectorMaker.flatVector<int64_t>(
+    children.push_back(vectorMaker.flatVector<int32_t>(
         size, [&](auto /*row*/) { return rowNumber++; }));
     input.push_back(vectorMaker.rowVector(names, children));
   }
@@ -727,32 +808,6 @@ void persistReproInfo(
   } catch (std::exception& e) {
     LOG(ERROR) << "Failed to store aggregation plans to " << planPath << ": "
                << e.what();
-  }
-}
-
-std::unique_ptr<ReferenceQueryRunner> setupReferenceQueryRunner(
-    const std::string& prestoUrl,
-    const std::string& runnerName,
-    const uint32_t& reqTimeoutMs) {
-  if (prestoUrl.empty()) {
-    auto duckQueryRunner = std::make_unique<DuckQueryRunner>();
-    duckQueryRunner->disableAggregateFunctions({
-        "skewness",
-        // DuckDB results on constant inputs are incorrect. Should be NaN,
-        // but DuckDB returns some random value.
-        "kurtosis",
-        "entropy",
-        // Regr_count result in DuckDB is incorrect when the input data is null.
-        "regr_count",
-    });
-    LOG(INFO) << "Using DuckDB as the reference DB.";
-    return duckQueryRunner;
-  } else {
-    return std::make_unique<PrestoQueryRunner>(
-        prestoUrl,
-        runnerName,
-        static_cast<std::chrono::milliseconds>(reqTimeoutMs));
-    LOG(INFO) << "Using Presto as the reference DB.";
   }
 }
 

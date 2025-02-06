@@ -40,7 +40,8 @@ class HiveConnectorTestBase : public OperatorTestBase {
   void SetUp() override;
   void TearDown() override;
 
-  void resetHiveConnector(const std::shared_ptr<const Config>& config);
+  void resetHiveConnector(
+      const std::shared_ptr<const config::ConfigBase>& config);
 
   void writeToFile(const std::string& filePath, RowVectorPtr vector);
 
@@ -90,7 +91,8 @@ class HiveConnectorTestBase : public OperatorTestBase {
       const std::string& filePath,
       uint64_t start = 0,
       uint64_t length = std::numeric_limits<uint64_t>::max(),
-      int64_t splitWeight = 0);
+      int64_t splitWeight = 0,
+      bool cacheable = true);
 
   static std::shared_ptr<connector::hive::HiveConnectorSplit>
   makeHiveConnectorSplit(
@@ -114,7 +116,7 @@ class HiveConnectorTestBase : public OperatorTestBase {
           infoColumns = {});
 
   static std::shared_ptr<connector::hive::HiveTableHandle> makeTableHandle(
-      common::test::SubfieldFilters subfieldFilters = {},
+      common::SubfieldFilters subfieldFilters = {},
       const core::TypedExprPtr& remainingFilter = nullptr,
       const std::string& tableName = "hive_table",
       const RowTypePtr& dataColumns = nullptr,
@@ -172,6 +174,7 @@ class HiveConnectorTestBase : public OperatorTestBase {
   /// table.
   /// @param locationHandle Location handle for the table write.
   /// @param compressionKind compression algorithm to use for table write.
+  /// @param serdeParameters Table writer configuration parameters.
   static std::shared_ptr<connector::hive::HiveInsertTableHandle>
   makeHiveInsertTableHandle(
       const std::vector<std::string>& tableColumnNames,
@@ -181,7 +184,10 @@ class HiveConnectorTestBase : public OperatorTestBase {
       std::shared_ptr<connector::hive::LocationHandle> locationHandle,
       const dwio::common::FileFormat tableStorageFormat =
           dwio::common::FileFormat::DWRF,
-      const std::optional<common::CompressionKind> compressionKind = {});
+      const std::optional<common::CompressionKind> compressionKind = {},
+      const std::unordered_map<std::string, std::string>& serdeParameters = {},
+      const std::shared_ptr<dwio::common::WriterOptions>& writerOptions =
+          nullptr);
 
   static std::shared_ptr<connector::hive::HiveInsertTableHandle>
   makeHiveInsertTableHandle(
@@ -191,7 +197,9 @@ class HiveConnectorTestBase : public OperatorTestBase {
       std::shared_ptr<connector::hive::LocationHandle> locationHandle,
       const dwio::common::FileFormat tableStorageFormat =
           dwio::common::FileFormat::DWRF,
-      const std::optional<common::CompressionKind> compressionKind = {});
+      const std::optional<common::CompressionKind> compressionKind = {},
+      const std::shared_ptr<dwio::common::WriterOptions>& writerOptions =
+          nullptr);
 
   static std::shared_ptr<connector::hive::HiveColumnHandle> regularColumn(
       const std::string& name,
@@ -216,106 +224,15 @@ class HiveConnectorTestBase : public OperatorTestBase {
   }
 };
 
-class HiveConnectorSplitBuilder {
+/// Same as connector::hive::HiveConnectorBuilder, except that this defaults
+/// connectorId to kHiveConnectorId.
+class HiveConnectorSplitBuilder
+    : public connector::hive::HiveConnectorSplitBuilder {
  public:
-  HiveConnectorSplitBuilder(std::string filePath)
-      : filePath_{std::move(filePath)} {}
-
-  HiveConnectorSplitBuilder& start(uint64_t start) {
-    start_ = start;
-    return *this;
+  explicit HiveConnectorSplitBuilder(std::string filePath)
+      : connector::hive::HiveConnectorSplitBuilder(filePath) {
+    connectorId(kHiveConnectorId);
   }
-
-  HiveConnectorSplitBuilder& length(uint64_t length) {
-    length_ = length;
-    return *this;
-  }
-
-  HiveConnectorSplitBuilder& splitWeight(int64_t splitWeight) {
-    splitWeight_ = splitWeight;
-    return *this;
-  }
-
-  HiveConnectorSplitBuilder& fileFormat(dwio::common::FileFormat format) {
-    fileFormat_ = format;
-    return *this;
-  }
-
-  HiveConnectorSplitBuilder& infoColumn(
-      const std::string& name,
-      const std::string& value) {
-    infoColumns_.emplace(std::move(name), std::move(value));
-    return *this;
-  }
-
-  HiveConnectorSplitBuilder& partitionKey(
-      std::string name,
-      std::optional<std::string> value) {
-    partitionKeys_.emplace(std::move(name), std::move(value));
-    return *this;
-  }
-
-  HiveConnectorSplitBuilder& tableBucketNumber(int32_t bucket) {
-    tableBucketNumber_ = bucket;
-    return *this;
-  }
-
-  HiveConnectorSplitBuilder& customSplitInfo(
-      const std::unordered_map<std::string, std::string>& customSplitInfo) {
-    customSplitInfo_ = customSplitInfo;
-    return *this;
-  }
-
-  HiveConnectorSplitBuilder& extraFileInfo(
-      const std::shared_ptr<std::string>& extraFileInfo) {
-    extraFileInfo_ = extraFileInfo;
-    return *this;
-  }
-
-  HiveConnectorSplitBuilder& serdeParameters(
-      const std::unordered_map<std::string, std::string>& serdeParameters) {
-    serdeParameters_ = serdeParameters;
-    return *this;
-  }
-
-  HiveConnectorSplitBuilder& connectorId(const std::string& connectorId) {
-    connectorId_ = connectorId;
-    return *this;
-  }
-
-  std::shared_ptr<connector::hive::HiveConnectorSplit> build() const {
-    static const std::unordered_map<std::string, std::string> customSplitInfo;
-    static const std::shared_ptr<std::string> extraFileInfo;
-    static const std::unordered_map<std::string, std::string> serdeParameters;
-    return std::make_shared<connector::hive::HiveConnectorSplit>(
-        connectorId_,
-        filePath_.find("/") == 0 ? "file:" + filePath_ : filePath_,
-        fileFormat_,
-        start_,
-        length_,
-        partitionKeys_,
-        tableBucketNumber_,
-        customSplitInfo,
-        extraFileInfo,
-        serdeParameters,
-        splitWeight_,
-        infoColumns_,
-        std::nullopt);
-  }
-
- private:
-  const std::string filePath_;
-  dwio::common::FileFormat fileFormat_{dwio::common::FileFormat::DWRF};
-  uint64_t start_{0};
-  uint64_t length_{std::numeric_limits<uint64_t>::max()};
-  std::unordered_map<std::string, std::optional<std::string>> partitionKeys_;
-  std::optional<int32_t> tableBucketNumber_;
-  std::unordered_map<std::string, std::string> customSplitInfo_ = {};
-  std::shared_ptr<std::string> extraFileInfo_ = {};
-  std::unordered_map<std::string, std::string> serdeParameters_ = {};
-  std::unordered_map<std::string, std::string> infoColumns_ = {};
-  std::string connectorId_ = kHiveConnectorId;
-  int64_t splitWeight_{0};
 };
 
 } // namespace facebook::velox::exec::test

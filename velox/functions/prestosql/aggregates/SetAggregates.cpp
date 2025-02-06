@@ -22,13 +22,13 @@ namespace facebook::velox::aggregate::prestosql {
 
 namespace {
 
-template <typename T>
-class SetUnionAggregate : public SetBaseAggregate<T> {
+template <typename T, typename AccumulatorType = SetAccumulator<T>>
+class SetUnionAggregate
+    : public SetBaseAggregate<T, false, true, AccumulatorType> {
  public:
-  explicit SetUnionAggregate(const TypePtr& resultType)
-      : SetBaseAggregate<T>(resultType) {}
+  using Base = SetBaseAggregate<T, false, true, AccumulatorType>;
 
-  using Base = SetBaseAggregate<T>;
+  explicit SetUnionAggregate(const TypePtr& resultType) : Base(resultType) {}
 
   bool supportsToIntermediate() const override {
     return true;
@@ -61,7 +61,7 @@ class SetUnionAggregate : public SetBaseAggregate<T> {
     if (rows.isAllSelected()) {
       result = arrayInput;
     } else {
-      auto* pool = SetBaseAggregate<T>::allocator_->pool();
+      auto* pool = Base::allocator_->pool();
       const auto numRows = rows.size();
 
       // Set nulls for rows not present in 'rows'.
@@ -102,15 +102,16 @@ class SetUnionAggregate : public SetBaseAggregate<T> {
 
 /// Returns the number of distinct non-null values in a group. This is an
 /// internal function only used for testing.
-template <typename T>
-class CountDistinctAggregate : public SetAggAggregate<T, true> {
+template <typename T, typename AccumulatorType = SetAccumulator<T>>
+class CountDistinctAggregate
+    : public SetAggAggregate<T, true, false, AccumulatorType> {
  public:
+  using Base = SetAggAggregate<T, true, false, AccumulatorType>;
+
   explicit CountDistinctAggregate(
       const TypePtr& resultType,
       const TypePtr& inputType)
-      : SetAggAggregate<T, true>(resultType, false), inputType_{inputType} {}
-
-  using Base = SetAggAggregate<T, true>;
+      : Base(resultType), inputType_{inputType} {}
 
   bool supportsToIntermediate() const override {
     return false;
@@ -122,7 +123,7 @@ class CountDistinctAggregate : public SetAggAggregate<T, true> {
     exec::Aggregate::setAllNulls(groups, indices);
     for (auto i : indices) {
       new (groups[i] + Base::offset_)
-          SetAccumulator<T>(inputType_, Base::allocator_);
+          AccumulatorType(inputType_, Base::allocator_);
     }
   }
 
@@ -155,10 +156,26 @@ class CountDistinctAggregate : public SetAggAggregate<T, true> {
   TypePtr inputType_;
 };
 
-template <template <typename T> class Aggregate>
+template <
+    template <typename T, typename AccumulatorType>
+    class Aggregate,
+    TypeKind Kind>
+std::unique_ptr<exec::Aggregate> create(const TypePtr& resultType) {
+  return std::make_unique<Aggregate<
+      typename TypeTraits<Kind>::NativeType,
+      aggregate::prestosql::CustomComparisonSetAccumulator<Kind>>>(resultType);
+}
+
+template <template <typename T, typename AcumulatorType = SetAccumulator<T>>
+          class Aggregate>
 std::unique_ptr<exec::Aggregate> create(
     const TypePtr& inputType,
     const TypePtr& resultType) {
+  if (inputType->providesCustomComparison()) {
+    return VELOX_DYNAMIC_SCALAR_TEMPLATE_TYPE_DISPATCH(
+        create, Aggregate, inputType->kind(), resultType);
+  }
+
   switch (inputType->kind()) {
     case TypeKind::BOOLEAN:
       return std::make_unique<Aggregate<bool>>(resultType);
@@ -197,6 +214,26 @@ std::unique_ptr<exec::Aggregate> create(
   }
 }
 
+template <TypeKind Kind>
+std::unique_ptr<exec::Aggregate> creatSetAggAggregate(
+    const TypePtr& resultType) {
+  return std::make_unique<SetAggAggregate<
+      typename TypeTraits<Kind>::NativeType,
+      false,
+      true,
+      aggregate::prestosql::CustomComparisonSetAccumulator<Kind>>>(resultType);
+}
+
+template <TypeKind Kind>
+std::unique_ptr<exec::Aggregate> createCountDistinctAggregate(
+    const TypePtr& resultType,
+    const TypePtr& inputType) {
+  return std::make_unique<CountDistinctAggregate<
+      typename TypeTraits<Kind>::NativeType,
+      aggregate::prestosql::CustomComparisonSetAccumulator<Kind>>>(
+      resultType, inputType);
+}
+
 } // namespace
 
 void registerSetAggAggregate(
@@ -227,7 +264,11 @@ void registerSetAggAggregate(
         const TypePtr& inputType =
             isRawInput ? argTypes[0] : argTypes[0]->childAt(0);
         const TypeKind typeKind = inputType->kind();
-        const bool throwOnNestedNulls = isRawInput;
+
+        if (inputType->providesCustomComparison()) {
+          return VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(
+              creatSetAggAggregate, inputType->kind(), resultType);
+        }
 
         switch (typeKind) {
           case TypeKind::BOOLEAN:
@@ -260,8 +301,7 @@ void registerSetAggAggregate(
           case TypeKind::MAP:
             [[fallthrough]];
           case TypeKind::ROW:
-            return std::make_unique<SetAggAggregate<ComplexType>>(
-                resultType, throwOnNestedNulls);
+            return std::make_unique<SetAggAggregate<ComplexType>>(resultType);
           default:
             VELOX_UNREACHABLE(
                 "Unexpected type {}", mapTypeKindToName(typeKind));
@@ -325,8 +365,17 @@ void registerCountDistinctAggregate(
         VELOX_CHECK_EQ(argTypes.size(), 1);
 
         const bool isRawInput = exec::isRawInput(step);
-        const TypeKind typeKind =
-            isRawInput ? argTypes[0]->kind() : argTypes[0]->childAt(0)->kind();
+        const TypePtr& inputType =
+            isRawInput ? argTypes[0] : argTypes[0]->childAt(0);
+        const TypeKind typeKind = inputType->kind();
+
+        if (inputType->providesCustomComparison()) {
+          return VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(
+              createCountDistinctAggregate,
+              inputType->kind(),
+              resultType,
+              inputType);
+        }
 
         switch (typeKind) {
           case TypeKind::BOOLEAN:
@@ -367,6 +416,9 @@ void registerCountDistinctAggregate(
             [[fallthrough]];
           case TypeKind::ROW:
             return std::make_unique<CountDistinctAggregate<ComplexType>>(
+                resultType, argTypes[0]);
+          case TypeKind::UNKNOWN:
+            return std::make_unique<CountDistinctAggregate<UnknownValue>>(
                 resultType, argTypes[0]);
           default:
             VELOX_UNREACHABLE(

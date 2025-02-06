@@ -181,7 +181,8 @@ std::unique_ptr<MetadataFilter::Node> MetadataFilter::Node::fromExpression(
   try {
     Subfield subfield;
     auto filter =
-        exec::leafCallToSubfieldFilter(*call, subfield, evaluator, negated);
+        exec::ExprToSubfieldFilterParser::getInstance()
+            ->leafCallToSubfieldFilter(*call, subfield, evaluator, negated);
     if (!filter) {
       return nullptr;
     }
@@ -214,6 +215,7 @@ void MetadataFilter::eval(
   if (!root_) {
     return;
   }
+
   LeafResults leafResults;
   for (auto& [leaf, result] : leafNodeResults) {
     VELOX_CHECK_EQ(
@@ -226,7 +228,7 @@ void MetadataFilter::eval(
         "Duplicate results: {}",
         leaf->field().toString());
   }
-  auto bitCount = finalResult.size() * 64;
+  const auto bitCount = finalResult.size() * 64;
   if (auto* combined = root_->eval(leafResults, bitCount)) {
     bits::orBits(finalResult.data(), combined, 0, bitCount);
   }

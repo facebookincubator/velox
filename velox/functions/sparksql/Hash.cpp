@@ -705,7 +705,7 @@ bool checkHashElementType(const TypePtr& type) {
 void checkArgTypes(const std::vector<exec::VectorFunctionArg>& args) {
   for (const auto& arg : args) {
     if (!checkHashElementType(arg.type)) {
-      VELOX_USER_FAIL("Unsupported type for hash: {}", arg.type->toString())
+      VELOX_USER_FAIL("Unsupported type for hash: {}", arg.type->toString());
     }
   }
 }
@@ -717,8 +717,7 @@ void checkArgTypes(const std::vector<exec::VectorFunctionArg>& args) {
 std::vector<std::shared_ptr<exec::FunctionSignature>> hashSignatures() {
   return {exec::FunctionSignatureBuilder()
               .returnType("integer")
-              .argumentType("any")
-              .variableArity()
+              .variableArity("any")
               .build()};
 }
 
@@ -748,16 +747,14 @@ std::vector<std::shared_ptr<exec::FunctionSignature>> hashWithSeedSignatures() {
   return {exec::FunctionSignatureBuilder()
               .returnType("integer")
               .constantArgumentType("integer")
-              .argumentType("any")
-              .variableArity()
+              .variableArity("any")
               .build()};
 }
 
 std::vector<std::shared_ptr<exec::FunctionSignature>> xxhash64Signatures() {
   return {exec::FunctionSignatureBuilder()
               .returnType("bigint")
-              .argumentType("any")
-              .variableArity()
+              .variableArity("any")
               .build()};
 }
 
@@ -766,8 +763,7 @@ xxhash64WithSeedSignatures() {
   return {exec::FunctionSignatureBuilder()
               .returnType("bigint")
               .constantArgumentType("bigint")
-              .argumentType("any")
-              .variableArity()
+              .variableArity("any")
               .build()};
 }
 

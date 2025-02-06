@@ -169,9 +169,9 @@ To integrate with the Expression Fuzzer, create a test, register all scalar
 functions supported by the engine, and call ``FuzzerRunner::run()`` defined in
 `FuzzerRunner.h`_. See `ExpressionFuzzerTest.cpp`_.
 
-.. _FuzzerRunner.h: https://github.com/facebookincubator/velox/blob/main/velox/expression/tests/ExpressionFuzzer.h
+.. _FuzzerRunner.h: https://github.com/facebookincubator/velox/blob/main/velox/expression/fuzzer/ExpressionFuzzer.h
 
-.. _ExpressionFuzzerTest.cpp: https://github.com/facebookincubator/velox/blob/main/velox/expression/tests/ExpressionFuzzerTest.cpp
+.. _ExpressionFuzzerTest.cpp: https://github.com/facebookincubator/velox/blob/main/velox/expression/fuzzer/ExpressionFuzzerTest.cpp
 
 Functions with known bugs can be excluded from testing using a skip-list.
 
@@ -216,6 +216,12 @@ All fuzzers support a number of powerful command line arguments.
 
 * ``--max_num_varargs``: The maximum number of variadic arguments fuzzer will generate for functions that accept variadic arguments. Fuzzer will generate up to max_num_varargs arguments for the variadic list in addition to the required arguments by the function. Default is 10.
 
+For fuzzers that allows using Presto as the source of truth, two command line arguments can be used to specify the url and timeout of Presto:
+
+* ``--presto_url``: Presto coordinator URI along with port.
+
+* ``--req_timeout_ms``: Timeout in milliseconds for HTTP requests made to the reference DB, such as Presto.
+
 Below are arguments that toggle certain fuzzer features in Expression Fuzzer:
 
 * ``--retry_with_try``: Retry failed expressions by wrapping it using a try() statement. Default is false.
@@ -227,6 +233,8 @@ Below are arguments that toggle certain fuzzer features in Expression Fuzzer:
 * ``--enable_dereference``: Enable testing of the field-reference from structs and row_constructor functions. Default is false.
 
 * ``--velox_fuzzer_enable_complex_types``: Enable testing of function signatures with complex argument or return types. Default is false.
+
+* ``--velox_fuzzer_enable_decimal_type``: Enable testing of function signatures with decimal argument or return type. Default is false.
 
 * ``--lazy_vector_generation_ratio``: Specifies the probability with which columns in the input row vector will be selected to be wrapped in lazy encoding (expressed as double from 0 to 1). Default is 0.0.
 
@@ -264,6 +272,18 @@ An example set of arguments to run the expression fuzzer with all features enabl
 --repro_persist_path=<a_valid_local_path>
 --logtostderr=1``
 
+Expression fuzzer with Presto as the source of truth currently only supports a subset of features:
+``--duration_sec 60
+--presto_url=http://127.0.0.1:8080
+--req_timeout_ms 10000
+--enable_variadic_signatures
+--velox_fuzzer_enable_complex_types
+--special_forms="cast,coalesce,if,switch"
+--lazy_vector_generation_ratio 0.2
+--velox_fuzzer_enable_column_reuse
+--velox_fuzzer_enable_expression_reuse
+--max_expression_trees_per_step 2
+--logtostderr=1``
 
 `WindowFuzzerTest.cpp`_ and `AggregationFuzzerTest.cpp`_ allow results to be
 verified against Presto. To setup Presto as a reference DB, please follow these
@@ -349,7 +369,7 @@ ExpressionRunner supports the following flags:
 
 * ``--complex_constant_path`` optional path to complex constants that aren't accurately expressable in SQL (Array, Map, Structs, ...). This is used with SQL file to reproduce the exact expression, not needed when the expression doesn't contain complex constants.
 
-* ``--lazy_column_list_path`` optional path for the file stored on-disk which contains a vector of column indices that specify which columns of the input row vector should be wrapped in lazy. This is used when the failing test included input columns that were lazy vector.
+* ``--input_row_metadata_path`` optional path for the file stored on-disk which contains a struct containing input row metadata. This includes columns in the input row vector to be wrapped in a lazy vector and/or dictionary encoded. It may also contain a dictionary peel for columns requiring dictionary encoding. This is used when the failing test included input columns that were lazy vectors and/or had columns wrapped with a common dictionary wrap.
 
 * ``--result_path`` optional path to result vector that was created by the Fuzzer. Result vector is used to reproduce cases where Fuzzer passes dirty vectors to expression evaluation as a result buffer. This ensures that functions are implemented correctly, taking into consideration dirty result buffer.
 

@@ -130,8 +130,8 @@ void AsyncDataCacheEntry::initialize(FileCacheKey key) {
       // No memory to cover 'this'.
       release();
       VELOX_CACHE_ERROR(fmt::format(
-          "Failed to allocate {} bytes for cache: {}",
-          size_,
+          "Failed to allocate {} pages for cache: {}",
+          sizePages,
           cache->allocator()->getAndClearFailureMessage()));
     }
   }
@@ -518,7 +518,9 @@ void CacheShard::updateStats(CacheStats& stats) {
     if (!entry || !entry->key_.fileNum.hasValue()) {
       ++stats.numEmptyEntries;
       continue;
-    } else if (entry->isExclusive()) {
+    }
+
+    if (entry->isExclusive()) {
       stats.exclusivePinnedBytes +=
           entry->data().byteSize() + entry->tinyData_.capacity();
       ++stats.numExclusive;
@@ -527,10 +529,12 @@ void CacheShard::updateStats(CacheStats& stats) {
           entry->data().byteSize() + entry->tinyData_.capacity();
       ++stats.numShared;
     }
+
     if (entry->isPrefetch_) {
       ++stats.numPrefetch;
       stats.prefetchBytes += entry->size();
     }
+
     ++stats.numEntries;
     stats.tinySize += entry->tinyData_.size();
     stats.tinyPadding += entry->tinyData_.capacity() - entry->tinyData_.size();
@@ -606,7 +610,7 @@ bool CacheShard::removeFileEntries(
       }
 
       numAgedOut_++;
-      pagesRemoved += (int64_t)cacheEntry->data().numPages();
+      pagesRemoved += static_cast<int64_t>(cacheEntry->data().numPages());
 
       toFree.push_back(std::move(cacheEntry->data()));
       removeEntryLocked(cacheEntry.get());
@@ -864,7 +868,7 @@ uint64_t AsyncDataCache::shrink(uint64_t targetBytes) {
 }
 
 bool AsyncDataCache::canTryAllocate(
-    int32_t numPages,
+    MachinePageCount numPages,
     const memory::Allocation& acquired) const {
   if (numPages <= acquired.numPages()) {
     return true;
@@ -983,18 +987,6 @@ std::string AsyncDataCache::toString(bool details) const {
   return out.str();
 }
 
-std::vector<AsyncDataCacheEntry*> AsyncDataCache::testingCacheEntries() const {
-  std::vector<AsyncDataCacheEntry*> totalEntries;
-  for (const auto& shard : shards_) {
-    const auto shardEntries = shard->testingCacheEntries();
-    std::copy(
-        shardEntries.begin(),
-        shardEntries.end(),
-        std::back_inserter(totalEntries));
-  }
-  return totalEntries;
-}
-
 std::string CacheStats::toString() const {
   std::stringstream out;
   // Cache size stats.
@@ -1071,19 +1063,9 @@ CoalesceIoStats readPins(
       [&](int32_t size, std::vector<folly::Range<char*>>& ranges) {
         // This hack allows us to store the size of the gap in the Range,
         // without actually allocating a buffer for it.
-        ranges.push_back(folly::Range<char*>(nullptr, (char*)(uint64_t)size));
+        ranges.push_back(folly::Range<char*>(
+            nullptr, reinterpret_cast<char*>(static_cast<uint64_t>(size))));
       },
       std::move(readFunc));
 }
-
-std::vector<AsyncDataCacheEntry*> CacheShard::testingCacheEntries() const {
-  std::vector<AsyncDataCacheEntry*> entries;
-  std::lock_guard<std::mutex> l(mutex_);
-  entries.reserve(entries_.size());
-  for (const auto& entry : entries_) {
-    entries.push_back(entry.get());
-  }
-  return entries;
-}
-
 } // namespace facebook::velox::cache

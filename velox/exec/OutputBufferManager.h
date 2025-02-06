@@ -23,15 +23,11 @@ class OutputBufferManager {
  public:
   /// Options for shuffle. This is initialized once and affects both
   /// PartitionedOutput and Exchange. This can be used for controlling
-  /// compression, protocol version and other matters where shuffle sides should
+  /// protocol version and other matters where shuffle sides should
   /// agree.
-  struct Options {
-    common::CompressionKind compressionKind{
-        common::CompressionKind::CompressionKind_NONE};
-  };
+  struct Options {};
 
-  OutputBufferManager(Options options)
-      : compressionKind_(options.compressionKind) {}
+  explicit OutputBufferManager(Options /*unused*/) {}
 
   void initializeTask(
       std::shared_ptr<Task> task,
@@ -51,9 +47,9 @@ class OutputBufferManager {
   /// Returns true if the buffer exists for a given taskId, else returns false.
   bool updateNumDrivers(const std::string& taskId, uint32_t newNumDrivers);
 
-  // Adds data to the outgoing queue for 'destination'. 'data' must not be
-  // nullptr. 'data' is always added but if the buffers are full the future is
-  // set to a ContinueFuture that will be realized when there is space.
+  /// Adds data to the outgoing queue for 'destination'. 'data' must not be
+  /// nullptr. 'data' is always added but if the buffers are full the future is
+  /// set to a ContinueFuture that will be realized when there is space.
   bool enqueue(
       const std::string& taskId,
       int destination,
@@ -62,12 +58,12 @@ class OutputBufferManager {
 
   void noMoreData(const std::string& taskId);
 
-  // Returns true if noMoreData has been called and all the accumulated data
-  // have been fetched and acknowledged.
+  /// Returns true if noMoreData has been called and all the accumulated data
+  /// have been fetched and acknowledged.
   bool isFinished(const std::string& taskId);
 
-  // Removes data with sequence number < 'sequence' from the queue for
-  // 'destination_'.
+  /// Removes data with sequence number < 'sequence' from the queue for
+  /// 'destination_'.
   void
   acknowledge(const std::string& taskId, int destination, int64_t sequence);
 
@@ -135,20 +131,10 @@ class OutputBufferManager {
   // Returns NULL if task not found.
   std::shared_ptr<OutputBuffer> getBufferIfExists(const std::string& taskId);
 
-  void testingSetCompression(common::CompressionKind kind) {
-    *const_cast<common::CompressionKind*>(&compressionKind_) = kind;
-  }
-
-  common::CompressionKind compressionKind() const {
-    return compressionKind_;
-  }
-
  private:
   // Retrieves the set of buffers for a query.
   // Throws an exception if buffer doesn't exist.
   std::shared_ptr<OutputBuffer> getBuffer(const std::string& taskId);
-
-  const common::CompressionKind compressionKind_;
 
   folly::Synchronized<
       std::unordered_map<std::string, std::shared_ptr<OutputBuffer>>,

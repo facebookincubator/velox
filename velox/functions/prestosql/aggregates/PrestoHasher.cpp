@@ -18,14 +18,19 @@
 #include <type_traits>
 
 #define XXH_INLINE_ALL
-#include <xxhash.h>
+#include <xxhash.h> // @manual=third-party//xxHash:xxhash
 
 #include "velox/functions/lib/RowsTranslationUtil.h"
+#include "velox/functions/prestosql/types/IPAddressType.h"
 #include "velox/functions/prestosql/types/TimestampWithTimeZoneType.h"
 
 namespace facebook::velox::aggregate {
 
 namespace {
+
+FOLLY_ALWAYS_INLINE uint64_t hashBuffer(const uint8_t* data, size_t size) {
+  return XXH64(data, size, 0);
+}
 
 template <typename T>
 FOLLY_ALWAYS_INLINE int64_t hashInteger(const T& value) {
@@ -44,7 +49,7 @@ FOLLY_ALWAYS_INLINE void applyHashFunction(
     const DecodedVector& vector,
     BufferPtr& hashes,
     Callable func) {
-  VELOX_CHECK_GE(hashes->size(), rows.end())
+  VELOX_CHECK_GE(hashes->size(), rows.end());
   auto rawHashes = hashes->asMutable<int64_t>();
 
   rows.applyToSelected([&](auto row) {
@@ -171,7 +176,14 @@ FOLLY_ALWAYS_INLINE void PrestoHasher::hash<TypeKind::HUGEINT>(
     const SelectivityVector& rows,
     BufferPtr& hashes) {
   applyHashFunction(rows, *vector_.get(), hashes, [&](auto row) {
+    auto type = vector_->base()->type();
     auto value = vector_->valueAt<int128_t>(row);
+
+    if (isIPAddressType(type)) {
+      auto byteArray = ipaddress::toIPv6ByteArray(value);
+      return hashBuffer(byteArray.data(), byteArray.size());
+    }
+
     // Presto Java UnscaledDecimal128 representation uses signed magnitude
     // representation. Only negative values differ in this representation.
     // The processing here is mainly for the convenience of hash computation.
@@ -233,8 +245,10 @@ void PrestoHasher::hash<TypeKind::ARRAY>(
     BufferPtr& hashes) {
   auto baseArray = vector_->base()->as<ArrayVector>();
   auto indices = vector_->indices();
+  auto decodedNulls = vector_->nulls(&rows);
+
   auto elementRows = functions::toElementRows(
-      baseArray->elements()->size(), rows, baseArray, indices);
+      baseArray->elements()->size(), rows, baseArray, decodedNulls, indices);
 
   BufferPtr elementHashes =
       AlignedBuffer::allocate<int64_t>(elementRows.end(), baseArray->pool());
@@ -243,13 +257,12 @@ void PrestoHasher::hash<TypeKind::ARRAY>(
 
   auto rawSizes = baseArray->rawSizes();
   auto rawOffsets = baseArray->rawOffsets();
-  auto rawNulls = baseArray->rawNulls();
   auto rawElementHashes = elementHashes->as<int64_t>();
   auto rawHashes = hashes->asMutable<int64_t>();
 
   rows.applyToSelected([&](auto row) {
     int64_t hash = 0;
-    if (!(rawNulls && bits::isBitNull(rawNulls, indices[row]))) {
+    if (!((decodedNulls && bits::isBitNull(decodedNulls, row)))) {
       auto size = rawSizes[indices[row]];
       auto offset = rawOffsets[indices[row]];
 
@@ -267,10 +280,11 @@ void PrestoHasher::hash<TypeKind::MAP>(
     BufferPtr& hashes) {
   auto baseMap = vector_->base()->as<MapVector>();
   auto indices = vector_->indices();
-  VELOX_CHECK_EQ(children_.size(), 2)
+  auto decodedNulls = vector_->nulls(&rows);
+  VELOX_CHECK_EQ(children_.size(), 2);
 
   auto elementRows = functions::toElementRows(
-      baseMap->mapKeys()->size(), rows, baseMap, indices);
+      baseMap->mapKeys()->size(), rows, baseMap, decodedNulls, indices);
   BufferPtr keyHashes =
       AlignedBuffer::allocate<int64_t>(elementRows.end(), baseMap->pool());
 
@@ -286,11 +300,10 @@ void PrestoHasher::hash<TypeKind::MAP>(
 
   auto rawSizes = baseMap->rawSizes();
   auto rawOffsets = baseMap->rawOffsets();
-  auto rawNulls = baseMap->rawNulls();
 
   rows.applyToSelected([&](auto row) {
     int64_t hash = 0;
-    if (!(rawNulls && bits::isBitNull(rawNulls, indices[row]))) {
+    if (!((decodedNulls && bits::isBitNull(decodedNulls, row)))) {
       auto size = rawSizes[indices[row]];
       auto offset = rawOffsets[indices[row]];
 
@@ -362,7 +375,7 @@ void PrestoHasher::hash(
       *vector->type() == *type_,
       "Vector type: {} != initialized type: {}",
       vector->type()->toString(),
-      type_->toString())
+      type_->toString());
   vector_->decode(*vector, rows);
   auto kind = vector_->base()->typeKind();
   VELOX_DYNAMIC_TYPE_DISPATCH(hash, kind, rows, hashes);

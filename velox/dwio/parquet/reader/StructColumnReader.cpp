@@ -35,7 +35,11 @@ StructColumnReader::StructColumnReader(
   auto& childSpecs = scanSpec_->stableChildren();
   for (auto i = 0; i < childSpecs.size(); ++i) {
     auto childSpec = childSpecs[i];
-    if (childSpecs[i]->isConstant()) {
+    if (childSpec->isConstant() || isChildMissing(*childSpec)) {
+      childSpec->setSubscript(kConstantChildSpecSubscript);
+      continue;
+    }
+    if (!childSpecs[i]->readFromFile()) {
       continue;
     }
     auto childFileType = fileType_->childByName(childSpec->fieldName());
@@ -97,8 +101,8 @@ StructColumnReader::findBestLeaf() {
 }
 
 void StructColumnReader::read(
-    vector_size_t offset,
-    RowSet rows,
+    int64_t offset,
+    const RowSet& rows,
     const uint64_t* /*incomingNulls*/) {
   ensureRepDefs(*this, offset + rows.back() + 1 - readOffset_);
   SelectiveStructColumnReader::read(offset, rows, nullptr);
@@ -141,7 +145,7 @@ void StructColumnReader::enqueueRowGroup(
   }
 }
 
-void StructColumnReader::seekToRowGroup(uint32_t index) {
+void StructColumnReader::seekToRowGroup(int64_t index) {
   SelectiveStructColumnReader::seekToRowGroup(index);
   BufferPtr noBuffer;
   formatData_->as<ParquetData>().setNulls(noBuffer, 0);
@@ -170,13 +174,13 @@ void StructColumnReader::seekToEndOfPresetNulls() {
 }
 
 void StructColumnReader::setNullsFromRepDefs(PageReader& pageReader) {
-  if (levelInfo_.def_level == 0) {
+  if (levelInfo_.defLevel == 0) {
     return;
   }
   auto repDefRange = pageReader.repDefRange();
   int32_t numRepDefs = repDefRange.second - repDefRange.first;
   dwio::common::ensureCapacity<uint64_t>(
-      nullsInReadRange_, bits::nwords(numRepDefs), &memoryPool_);
+      nullsInReadRange_, bits::nwords(numRepDefs), memoryPool_);
   auto numStructs = pageReader.getLengthsAndNulls(
       levelMode_,
       levelInfo_,

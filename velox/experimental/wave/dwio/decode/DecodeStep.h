@@ -37,7 +37,8 @@ enum class WaveFilterKind : uint8_t {
   kBigintRange,
   kDoubleRange,
   kFloatRange,
-  kBigintValues
+  kBigintValues,
+  kDictFilter
 };
 
 struct alignas(16) WaveFilterBase {
@@ -97,6 +98,19 @@ enum class DecodeStep {
   kUnsupported,
 };
 
+enum class DictMode {
+  // Decoded values are returned as is
+  kNone,
+  // Decoded values are indices into a dictionary.
+  kDict,
+  // Decoded values are indices into a dictionary and into a bitmap where 1
+  // means filter passed.
+  kDictFilter,
+  // Decoded values are raw values and the filter result is to be stored into a
+  // filter pass bitmap.
+  kRecordFilter
+};
+
 class ColumnReader;
 
 /// Describes a decoding loop's input and result disposition.
@@ -118,11 +132,8 @@ struct alignas(16) GpuDecode {
 
   NullMode nullMode;
 
-  // Ordinal number of TB in TBs working on the same column. Each TB does a
-  // multiple of TB width rows. The TBs for different ranges of rows are
-  // launched in the same grid but are independent. The ordinal for non-first
-  // TBs gets the base index for values.
-  uint8_t nthBlock{0};
+  /// Specifies use of dictionary.
+  DictMode dictMode{DictMode::kNone};
 
   /// Number of chunks (e.g. Parquet pages). If > 1, different rows row ranges
   /// have different encodings. The first chunk's encoding is in 'data'. The
@@ -131,7 +142,18 @@ struct alignas(16) GpuDecode {
   /// given by the first GpuDecode.
   uint8_t numChunks{1};
 
+  // Ordinal number of TB in TBs working on the same column. Each TB does a
+  // multiple of TB width rows. The TBs for different ranges of rows are
+  // launched in the same grid but are independent. The ordinal for non-first
+  // TBs gets the base index for values.
+  uint16_t nthBlock{0};
+  /// Number of rows to process per thread of this block. This is equal across
+  /// the grid, except for last block.
   uint16_t numRowsPerThread{1};
+
+  /// Number of rows per thread in the grid, same for all blocks including the
+  /// last one.
+  uint16_t gridNumRowsPerThread{1};
 
   /// Number of rows to decode. if kFilterHits, the previous GpuDecode gives
   /// this number in BlockStatus. If 'rows' is set, this is the number of valid
@@ -191,6 +213,10 @@ struct alignas(16) GpuDecode {
 
   /// Result array. nullptr if filter only.
   void* result{nullptr};
+
+  // Bitmap of filter pass flags indexed by dictionary index. Filled in if
+  // 'dictMode' is kDictFilter or kRecordFilter.
+  uint32_t* filterBitmap{nullptr};
 
   struct Trivial {
     // Type of the input and result data.
@@ -325,6 +351,8 @@ struct alignas(16) GpuDecode {
   struct RowCountNoFilter {
     int32_t numRows;
     BlockStatus* status;
+    int32_t gridStatusSize;
+    bool gridOnly;
   };
 
   struct CountBits {
@@ -400,8 +428,7 @@ struct DecodePrograms {
 
 void launchDecode(
     const DecodePrograms& programs,
-    GpuArena* arena,
-    WaveBufferPtr& extra,
+    LaunchParams& params,
     Stream* stream);
 
 } // namespace facebook::velox::wave

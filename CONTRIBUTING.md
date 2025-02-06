@@ -17,10 +17,13 @@ you are expected to uphold this code.
 ## Community
 
 A good first step to getting involved in the Velox project is to participate in
-conversations in GitHub [Issues](https://github.com/facebookincubator/velox/issues) 
-and [Discussions](https://github.com/facebookincubator/velox/discussions), and join the
-[the Velox-OSS Slack workspace](http://velox-oss.slack.com) - please reach out to 
-**velox@meta.com** to get access.
+conversations in GitHub
+[Issues](https://github.com/facebookincubator/velox/issues) and
+[Discussions](https://github.com/facebookincubator/velox/discussions), and join
+the [the Velox-OSS Slack workspace](http://velox-oss.slack.com) - please
+comment on [this
+Discussion](https://github.com/facebookincubator/velox/discussions/11348) to
+get access.
 
 ## Components and Maintainers
 
@@ -56,10 +59,11 @@ maintainers, allowing them to provide more timely feedback and keeping the
 amount of rework from contributors to a minimum.
 
 We encourage new contributors to start with bug fixes and small features so you
-get familiar with the contributing process, while building relationships with
-community members.
-Look for GitHub issues labeled [good first issue](https://github.com/facebookincubator/velox/issues?q=is%3Aissue+is%3Aopen+label%3A%22good+first+issue%22) or consider adding one of the
-[missing Presto SQL functions](https://github.com/facebookincubator/velox/issues/2262).
+get familiar with the contribution process, while building relationships with
+community members.  Look for GitHub issues labeled [good first
+issue](https://github.com/facebookincubator/velox/issues?q=is%3Aissue+is%3Aopen+label%3A%22good+first+issue%22)
+or consider adding one of the [missing Presto SQL
+functions](https://github.com/facebookincubator/velox/issues/2262).
 
 The contribution process is outlined below:
 
@@ -72,25 +76,29 @@ The contribution process is outlined below:
 
 3. Start a discussion by creating a Github Issue, or asking on Slack (unless the change is trivial).
    * This step helps you identify possible collaborators and reviewers.
-   * Does the proposed change align with technical vision and project values?
+   * Does the proposed change align with the technical vision and project values?
    * Will the change conflict with another change in progress? If so, work with others to minimize impact.
 
 4. Implement the change.
-   * Always follow the coding best practices outlined in the list below.
+   * Always follow the [coding best practices](#coding-best-practices) outlined below.
    * If the change is large, consider posting a draft Github pull request (PR)
      with the title prefixed with [WIP], and share with collaborators to get early feedback.
-   * Give the PR a clear, brief description; when the PR is
-   merged, this will be retained in the extended commit message. Check out 
-   [How to Write Better Git Commit Messages – A Step-By-Step Guide](https://www.freecodecamp.org/news/how-to-write-better-git-commit-messages/)
-   and [How to Write a Git Commit Message](https://cbea.ms/git-commit/) to
-   learn more about how to write good commit messages.
-   * Make sure the PR passes all CI tests.
-   * Create/submit a Github PR and tag the reviewers identified in Step 3.
+   * Ensure the PR follows the [title and description
+     guidelines](#commit-messages) presented below.
+   * Create/submit a Github PR and make sure it passes **all CI tests**.
+     * Do not ignore red CI signals, even if they seem preexisting.
+     * If you believe a red CI signal is unrelated to your change, please search for
+     existing Issues reporting this particular test. They should contain the test name
+     in the Issue title.
+     * If an Issue already exist, add a comment containing the link to your failed CI job.
+     * If an Issue does not exist, please create one with the title "Broken CI \<test\_name\>",
+     tagging the appropriate maintainers for that component.
+   * Once all CI signals are green, tag the reviewers identified in Step 3.
 
 5. Review is performed by one or more reviewers.
-   * This normally happens within a few days, but may take longer if the change is
-   large, complex, or if a critical reviewer is unavailable (feel free to ping in the
-   PR).
+   * This normally happens within a few days, but may take longer if the change
+   is large, complex, or if a critical reviewer is unavailable (feel free to
+   ping them in the PR or on Slack).
 
 6. Address feedback and update the PR.
    * After pushing changes, add a comment to the PR mentioning the
@@ -102,8 +110,83 @@ The contribution process is outlined below:
    addressed and resolve the conversation.
 
 7. Iterate on this process until your changes are reviewed and accepted by a 
-   maintainer. At this point, a Meta employee will be required to merge your PR,
+   maintainer. At this point, a Meta employee will be notified to merge your PR,
    due to tooling limitations.
+
+## Commit Messages
+
+We build Velox for the long-run, and to do so it is crucial that project
+maintainers are able to efficiently inspect and understand project logs.
+
+Commit messages that follow a strict pattern improve maintainability, and allow
+tasks such as summarizing changelogs and identifying API breaking changes to be
+automated. Despite requiring more rigor from authors and reviewers, consistency
+and uniformity in developer workflows improve productivity in the long term.
+
+In Velox, commit messages are generated based on the input provided to PRs, and
+must follow the [conventional commit
+specification](https://www.conventionalcommits.org/en/v1.0.0/) in the following
+manner:
+
+**PR titles** must follow the pattern:
+
+> \<type\>[(optional scope)]: \<description\>
+
+where:
+
+* *Type* can be any of the following keywords:
+  * **feat** when new features are being added.
+  * **fix** for bug fixes.
+  * **build** for build or CI-related improvements.
+  * **test** for adding tests (only).
+  * **docs** for enhancements to documentation (only).
+  * **refactor** for refactoring (no logic changes).
+  * **misc** for other changes that may not match any of the categories above.
+
+* PR titles also take an *optional scope* field containing the area
+  of the code being target by the PR, to further help commit classification.
+  For example, "fix(expr): " or "refactor(parquet): " or "feat(memory):".
+  It is ok to omit this field if there is no adequate classification for the
+  PR, or if the PR touches multiple different components.
+
+  * Examples of scopes are *vector, type, expr, operator, memory, dwio,
+    parquet, dwrf, filesystem, connector, hive, function, aggregate*, but not
+    limited to.
+
+* A *description* sentence summarizing the PR, written in imperative tone. The
+  description must be capitalized, not contain a period at the end, and wrap
+  lines at the 80 characters limit to improve git-log readability.
+
+ * PR titles should also add a '!' to signal if the PR may break backward
+   compatibility. For example: "fix(expr)!: ..." or "feat!: ...". Moreover, the
+   compatibility changes need to be described in a section in the PR body as
+   described below.
+
+Examples of PR titles are:
+
+* feat(type): Add IPPREFIX
+* fix: Prevent unnecessary flatmap to map conversion
+* refactor(vector): Use 'if constexpr' for Buffer::is_pod_like_v\<T\>
+
+The **PR body** must contain a summary of the change, focusing on the *what*
+and *why*. Wrap lines at 80 characters for better git-log readability.
+
+**Breaking API Changes.** A "BREAKING CHANGE:" footer must be added to PRs
+that break backwards compatibility of any external API in Velox, followed by a
+sentence explaining the extent of the API change. This means either API changes
+that may break client builds, or semantic changes on the behavior of such APIs.
+
+If there is a Github Issue or Discussion related to the PR, authors must also
+add a "Fixes #[number]" line to the bottom of the PR body. This instructs
+Github to automatically close the associated Issue when the PR is merged. If
+you merely want to link the PR to an Issue (without closing it when the PR gets
+merged), use the pattern "Part of #[number]".
+
+Before contributing PRs to Velox, please review these resource about how to
+write great commit messages:
+
+* [How to Write Better Git Commit Messages – A Step-By-Step Guide](https://www.freecodecamp.org/news/how-to-write-better-git-commit-messages/)
+* [How to Write a Git Commit Message](https://cbea.ms/git-commit/)
 
 ## Coding Best Practices
 
@@ -182,6 +265,7 @@ with a benchmark.
    * Describe the function semantics and edge cases clearly.
 
 3. Use Presto or Spark to check the function semantics. 
+   * When implementing a Spark function, check the function semantics using Spark 3.5 with ANSI OFF.
    * Try different edge cases to check whether the function returns null, or
    throws, etc. 
    * Make sure to replicate the exact semantics.
@@ -203,13 +287,13 @@ with a benchmark.
    line arguments.
 
    ```
-   # Test the new function in isolation. Use --only flag to restrict the set of functions
+# Test the new function in isolation. Use --only flag to restrict the set of functions
    # and run for 60 seconds or longer.
-   velox_expression_fuzzer_test --only <my-new-function-name> --duration_sec 60 --logtostderr=1 --enable_variadic_signatures --velox_fuzzer_enable_complex_types --lazy_vector_generation_ratio 0.2 --velox_fuzzer_enable_column_reuse --velox_fuzzer_enable_expression_reuse
+   velox_expression_fuzzer_test --only <my-new-function-name> --duration_sec 60 --logtostderr=1 --enable_variadic_signatures --velox_fuzzer_enable_complex_types --velox_fuzzer_enable_decimal_type --lazy_vector_generation_ratio 0.2 --velox_fuzzer_enable_column_reuse --velox_fuzzer_enable_expression_reuse
 
    # Test the new function in combination with other functions. Do not restrict the set
    # of functions and run for 10 minutes (600 seconds) or longer.
-   velox_expression_fuzzer_test --duration_sec 600 --logtostderr=1 --enable_variadic_signatures --velox_fuzzer_enable_complex_types --lazy_vector_generation_ratio 0.2 --velox_fuzzer_enable_column_reuse --velox_fuzzer_enable_expression_reuse
+   velox_expression_fuzzer_test --duration_sec 600 --logtostderr=1 --enable_variadic_signatures --velox_fuzzer_enable_complex_types --velox_fuzzer_enable_decimal_type --lazy_vector_generation_ratio 0.2 --velox_fuzzer_enable_column_reuse --velox_fuzzer_enable_expression_reuse
    ```
 
 Here are example PRs:

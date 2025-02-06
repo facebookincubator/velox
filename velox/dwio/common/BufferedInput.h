@@ -16,6 +16,7 @@
 
 #pragma once
 
+#include "velox/common/caching/ScanTracker.h"
 #include "velox/common/memory/AllocationPool.h"
 #include "velox/dwio/common/SeekableInputStream.h"
 #include "velox/dwio/common/StreamIdentifier.h"
@@ -90,7 +91,7 @@ class BufferedInput {
 
   virtual std::unique_ptr<SeekableInputStream>
   read(uint64_t offset, uint64_t length, LogType logType) const {
-    std::unique_ptr<SeekableInputStream> ret = readBuffer(offset, length);
+    auto ret = readBuffer(offset, length);
     if (ret != nullptr) {
       return ret;
     }
@@ -149,6 +150,69 @@ class BufferedInput {
   virtual uint64_t nextFetchSize() const;
 
  protected:
+  static int adjustedReadPct(const cache::TrackingData& trackingData) {
+    // When this method is called, there is one more reference that is already
+    // counted, but the corresponding read (if exists) has not happened yet.  So
+    // we must count one fewer reference at this point.
+    const auto referencedBytes =
+        trackingData.referencedBytes - trackingData.lastReferencedBytes;
+    if (referencedBytes == 0) {
+      return 0;
+    }
+    const int pct = trackingData.readBytes / referencedBytes * 100;
+    VELOX_CHECK_LE(0, pct, "Bad read percentage: {}", pct);
+    // It is possible to seek back or clone the stream and read the same data
+    // multiple times, or because of unplanned read, so pct could be larger than
+    // 100.  This should be rare in production though.
+    return pct;
+  }
+
+  // Move the requests in `noPrefetch' to `prefetch' if it is already covered by
+  // coalescing in `prefetch'.
+  template <typename Request, typename GetRegionOffset, typename GetRegionEnd>
+  static void moveCoalesced(
+      std::vector<Request>& prefetch,
+      std::vector<int32_t>& ends,
+      std::vector<Request>& noPrefetch,
+      GetRegionOffset getRegionOffset,
+      GetRegionEnd getRegionEnd) {
+    auto numOldPrefetch = prefetch.size();
+    prefetch.resize(prefetch.size() + noPrefetch.size());
+    std::copy_backward(
+        prefetch.data(), prefetch.data() + numOldPrefetch, prefetch.end());
+    auto* oldPrefetch = prefetch.data() + noPrefetch.size();
+    int numMoved = 0;
+    int i = 0; // index into noPrefetch for read
+    int j = 0; // index into oldPrefetch
+    int k = 0; // index into prefetch
+    int l = 0; // index into noPrefetch for write
+    for (auto& end : ends) {
+      prefetch[k++] = oldPrefetch[j++];
+      while (j < end) {
+        auto coalesceStart = getRegionEnd(oldPrefetch[j - 1]);
+        auto coalesceEnd = getRegionOffset(oldPrefetch[j]);
+        while (i < noPrefetch.size() &&
+               getRegionOffset(noPrefetch[i]) < coalesceStart) {
+          noPrefetch[l++] = noPrefetch[i++];
+        }
+        while (i < noPrefetch.size() &&
+               getRegionEnd(noPrefetch[i]) <= coalesceEnd) {
+          prefetch[k++] = noPrefetch[i++];
+          ++numMoved;
+        }
+        prefetch[k++] = oldPrefetch[j++];
+      }
+      end += numMoved;
+    }
+    while (i < noPrefetch.size()) {
+      noPrefetch[l++] = noPrefetch[i++];
+    }
+    VELOX_CHECK_EQ(k, numOldPrefetch + numMoved);
+    prefetch.resize(k);
+    VELOX_CHECK_EQ(l + numMoved, noPrefetch.size());
+    noPrefetch.resize(l);
+  }
+
   const std::shared_ptr<ReadFileInputStream> input_;
   memory::MemoryPool* const pool_;
 

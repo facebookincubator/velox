@@ -24,8 +24,14 @@
 namespace facebook::velox::functions {
 
 /// Round function
-/// when AlwaysRoundNegDec is false, presto semantics is followed which does not
+/// When AlwaysRoundNegDec is false, presto semantics is followed which does not
 /// round negative decimals for integrals and round it otherwise
+/// Note that is is likely techinically impossible for this function to return
+/// expected results in all cases as the loss of precision plagues it on both
+/// paths: factor multiplication for large numbers and addition of truncated
+/// number to the rounded fraction for small numbers.
+/// We are trying to minimize the loss of precision by using the best path for
+/// the number, but the journey is likely not over yet.
 template <typename TNum, typename TDecimals, bool alwaysRoundNegDec = false>
 FOLLY_ALWAYS_INLINE TNum
 round(const TNum& number, const TDecimals& decimals = 0) {
@@ -43,11 +49,45 @@ round(const TNum& number, const TDecimals& decimals = 0) {
     return number;
   }
 
-  double factor = std::pow(10, decimals);
-  if (number < 0) {
-    return (std::round(number * factor * -1) / factor) * -1;
+  // If we just need to get rid of all the decimals.
+  if (decimals == 0) {
+    return std::round(number);
   }
-  return std::round(number * factor) / factor;
+
+  // For negative 'decimals', we aren't going to lose any precision - we divide
+  // first (multiply by factor which is < 1.0).
+  if (decimals < 0) {
+    const double factor = std::pow(10, decimals);
+    return std::round(number * factor) / factor;
+  }
+
+  // Get the fraction part and return number 'as is' if fraction part is 0.
+  const TNum trancated = std::trunc(number);
+  const TNum fraction = number - trancated;
+  if (fraction == 0.0)
+    return number;
+
+  const double factor = std::pow(10, decimals);
+
+  // Smaller numbers are less affected by precision loss being multiplied by the
+  // factor, but more affected by precision loss by adding truncated number to
+  // the rounded fraction in the end. Because of that, we use factor
+  // multiplication path on the smaller numbers.
+  // The threshold is a somewhat arbitrary/empirical number taking up 44 bits in
+  // the integer form.
+  if constexpr (!std::is_integral_v<TNum>) {
+    if (fabs(number) < 17592186044415) {
+      return std::round(number * factor) / factor;
+    }
+  }
+
+  // We implement the algorithm below for positive 'decimals' nd the large
+  // numbers because on the large numbers we would have precision loss when
+  // multiplying number by the factor, which would lose or gain some [power of
+  // 2] whole units.
+
+  const TNum roundedFractions = std::round(fraction * factor) / factor;
+  return trancated + roundedFractions;
 }
 
 // This is used by Velox for floating points plus.

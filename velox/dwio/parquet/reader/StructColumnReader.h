@@ -17,7 +17,7 @@
 #pragma once
 
 #include "velox/dwio/common/SelectiveStructColumnReader.h"
-#include "velox/dwio/parquet/writer/arrow/LevelConversion.h"
+#include "velox/dwio/parquet/common/LevelConversion.h"
 
 namespace facebook::velox::dwio::common {
 class BufferedInput;
@@ -37,10 +37,10 @@ class StructColumnReader : public dwio::common::SelectiveStructColumnReader {
       ParquetParams& params,
       common::ScanSpec& scanSpec);
 
-  void read(vector_size_t offset, RowSet rows, const uint64_t* incomingNulls)
+  void read(int64_t offset, const RowSet& rows, const uint64_t* incomingNulls)
       override;
 
-  void seekToRowGroup(uint32_t index) override;
+  void seekToRowGroup(int64_t index) override;
 
   /// Creates the streams for 'rowGroup'. Checks whether row 'rowGroup'
   /// has been buffered in 'input'. If true, return the input. Or else creates
@@ -53,7 +53,7 @@ class StructColumnReader : public dwio::common::SelectiveStructColumnReader {
   // no on-demand skipping to a new row group.
   void advanceFieldReader(
       dwio::common::SelectiveColumnReader* /*reader*/,
-      vector_size_t /*offset*/) override {}
+      int64_t /*offset*/) override {}
 
   void setNullsFromRepDefs(PageReader& pageReader);
 
@@ -92,7 +92,7 @@ class StructColumnReader : public dwio::common::SelectiveStructColumnReader {
 
   // The level information for extracting nulls for 'this' from the
   // repdefs in a leaf PageReader.
-  arrow::LevelInfo levelInfo_;
+  LevelInfo levelInfo_;
 };
 
 } // namespace facebook::velox::parquet

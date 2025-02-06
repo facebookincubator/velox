@@ -32,6 +32,22 @@ class MapFunction : public exec::VectorFunction {
       const TypePtr& outputType,
       exec::EvalCtx& context,
       VectorPtr& result) const override {
+    // No arguments case (empty map).
+    if (args.empty()) {
+      auto emptyMapVector = std::make_shared<MapVector>(
+          context.pool(),
+          outputType,
+          nullptr, // nulls
+          rows.end(),
+          allocateOffsets(rows.end(), context.pool()),
+          allocateSizes(rows.end(), context.pool()),
+          BaseVector::create(outputType->childAt(0), 0, context.pool()),
+          BaseVector::create(outputType->childAt(1), 0, context.pool()));
+
+      context.moveOrCopyResult(emptyMapVector, rows, result);
+      return;
+    }
+
     VELOX_CHECK_EQ(args.size(), 2);
 
     auto keys = args[0];
@@ -277,13 +293,19 @@ class MapFunction : public exec::VectorFunction {
 
   static std::vector<std::shared_ptr<exec::FunctionSignature>> signatures() {
     // array(K), array(V) -> map(K,V)
-    return {exec::FunctionSignatureBuilder()
-                .typeVariable("K")
-                .typeVariable("V")
-                .returnType("map(K,V)")
-                .argumentType("array(K)")
-                .argumentType("array(V)")
-                .build()};
+    // () -> map()
+    return {
+        exec::FunctionSignatureBuilder()
+            .typeVariable("K")
+            .typeVariable("V")
+            .returnType("map(K,V)")
+            .argumentType("array(K)")
+            .argumentType("array(V)")
+            .build(),
+        exec::FunctionSignatureBuilder()
+            .returnType("map(unknown,unknown)")
+            .build(),
+    };
   }
 
  private:
@@ -358,4 +380,12 @@ VELOX_DECLARE_VECTOR_FUNCTION(
     udf_map_allow_duplicates,
     MapFunction</*AllowDuplicateKeys=*/true>::signatures(),
     std::make_unique<MapFunction</*AllowDuplicateKeys=*/true>>());
+
+void registerMapFunction(const std::string& name, bool allowDuplicateKeys) {
+  if (allowDuplicateKeys) {
+    VELOX_REGISTER_VECTOR_FUNCTION(udf_map_allow_duplicates, name);
+  } else {
+    VELOX_REGISTER_VECTOR_FUNCTION(udf_map, name);
+  }
+}
 } // namespace facebook::velox::functions

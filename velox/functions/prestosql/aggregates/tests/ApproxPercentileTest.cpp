@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 #include <algorithm>
+#include "math.h"
 
 #include "velox/common/base/RandomUtil.h"
 #include "velox/common/base/tests/GTestUtils.h"
@@ -89,6 +90,9 @@ class ApproxPercentileTest : public AggregationTestBase {
   void SetUp() override {
     AggregationTestBase::SetUp();
     random::setSeed(0);
+    queryConfig_
+        [core::QueryConfig::kDebugAggregationApproxPercentileFixedRandomSeed] =
+            "0";
   }
 
   template <typename T>
@@ -106,23 +110,49 @@ class ApproxPercentileTest : public AggregationTestBase {
     auto rows =
         weights ? makeRowVector({values, weights}) : makeRowVector({values});
 
-    auto expected = expectedResult.has_value()
-        ? fmt::format("SELECT {}", expectedResult.value())
-        : "SELECT NULL";
-    auto expectedArray = expectedResult.has_value()
-        ? fmt::format("SELECT ARRAY[{0},{0},{0}]", expectedResult.value())
-        : "SELECT NULL";
+    std::string expected;
+    std::string expectedArray;
+    if (!expectedResult.has_value()) {
+      expected = "SELECT NULL";
+      expectedArray = "SELECT NULL";
+    } else if (
+        (std::is_same<T, float>::value && isnan(expectedResult.value())) ||
+        (std::is_same<T, double>::value && isnan(expectedResult.value()))) {
+      expected = "SELECT 'NaN'";
+      expectedArray = fmt::format("SELECT ARRAY[{0},{0},{0}]", "'NaN'");
+    } else if (
+        (std::is_same<T, float>::value &&
+         expectedResult.value() == std::numeric_limits<float>::infinity()) ||
+        (std::is_same<T, double>::value &&
+         expectedResult.value() == std::numeric_limits<double>::infinity())) {
+      expected = "SELECT 'INFINITY'";
+      expectedArray = fmt::format("SELECT ARRAY[{0},{0},{0}]", "'INFINITY'");
+    } else if (
+        (std::is_same<T, float>::value &&
+         expectedResult.value() == -std::numeric_limits<float>::infinity()) ||
+        (std::is_same<T, double>::value &&
+         expectedResult.value() == -std::numeric_limits<double>::infinity())) {
+      expected = "SELECT '-INFINITY'";
+      expectedArray = fmt::format("SELECT ARRAY[{0},{0},{0}]", "'-INFINITY'");
+    } else {
+      expected = fmt::format("SELECT {}", expectedResult.value());
+      expectedArray =
+          fmt::format("SELECT ARRAY[{0},{0},{0}]", expectedResult.value());
+    }
+
     enableTestStreaming();
     testAggregations(
         {rows},
         {},
         {functionCall(false, weights.get(), percentile, accuracy, -1)},
-        expected);
+        expected,
+        queryConfig_);
     testAggregations(
         {rows},
         {},
         {functionCall(false, weights.get(), percentile, accuracy, 3)},
-        expectedArray);
+        expectedArray,
+        queryConfig_);
 
     // Companion functions of approx_percentile do not support test streaming
     // because intermediate results are KLL that has non-deterministic shape.
@@ -134,7 +164,8 @@ class ApproxPercentileTest : public AggregationTestBase {
         {functionCall(false, weights.get(), percentile, accuracy, -1)},
         {getArgTypes(values->type(), weights.get(), accuracy, -1)},
         {},
-        expected);
+        expected,
+        queryConfig_);
     testAggregationsWithCompanion(
         {rows},
         [](auto& /*builder*/) {},
@@ -142,7 +173,32 @@ class ApproxPercentileTest : public AggregationTestBase {
         {functionCall(false, weights.get(), percentile, accuracy, 3)},
         {getArgTypes(values->type(), weights.get(), accuracy, 3)},
         {},
-        expectedArray);
+        expectedArray,
+        queryConfig_);
+  }
+
+  template <typename T>
+  void testNaN() {
+    const T nan = std::is_same_v<T, float> ? std::nanf("") : std::nan("");
+    vector_size_t size = 10;
+    auto values = makeFlatVector<T>(size, [nan](auto row) {
+      if (row > 8)
+        return -std::numeric_limits<T>::infinity();
+      else if (row > 7)
+        return std::numeric_limits<T>::infinity();
+      else if (row > 6)
+        return nan;
+      else
+        return (T)row;
+    });
+
+    testGlobalAgg<T>(
+        values, nullptr, 0.05, 0.005, -std::numeric_limits<T>::infinity());
+    testGlobalAgg<T>(values, nullptr, 0.11, 0.005, 0.0);
+    testGlobalAgg<T>(values, nullptr, 0.55, 0.005, 4.0);
+    testGlobalAgg<T>(
+        values, nullptr, 0.85, 0.005, std::numeric_limits<T>::infinity());
+    testGlobalAgg<T>(values, nullptr, 0.95, 0.005, nan);
   }
 
   void testGroupByAgg(
@@ -159,7 +215,8 @@ class ApproxPercentileTest : public AggregationTestBase {
         {rows},
         {"c0"},
         {functionCall(true, weights.get(), percentile, accuracy, -1)},
-        {expectedResult});
+        {expectedResult},
+        queryConfig_);
 
     // Companion functions of approx_percentile do not support test streaming
     // because intermediate results are KLL that has non-deterministic shape.
@@ -171,7 +228,8 @@ class ApproxPercentileTest : public AggregationTestBase {
         {functionCall(true, weights.get(), percentile, accuracy, -1)},
         {getArgTypes(values->type(), weights.get(), accuracy, -1)},
         {},
-        {expectedResult});
+        {expectedResult},
+        queryConfig_);
 
     {
       SCOPED_TRACE("Percentile array");
@@ -215,7 +273,8 @@ class ApproxPercentileTest : public AggregationTestBase {
           {rows},
           {"c0"},
           {functionCall(true, weights.get(), percentile, accuracy, 3)},
-          {expected});
+          {expected},
+          queryConfig_);
 
       // Companion functions of approx_percentile do not support test streaming
       // because intermediate results are KLL that has non-deterministic shape.
@@ -227,9 +286,13 @@ class ApproxPercentileTest : public AggregationTestBase {
           {functionCall(true, weights.get(), percentile, accuracy, 3)},
           {getArgTypes(values->type(), weights.get(), accuracy, 3)},
           {},
-          {expected});
+          {expected},
+          queryConfig_);
     }
   }
+
+ private:
+  std::unordered_map<std::string, std::string> queryConfig_;
 };
 
 TEST_F(ApproxPercentileTest, globalAgg) {
@@ -565,6 +628,11 @@ TEST_F(ApproxPercentileTest, nullPercentile) {
       testAggregations(
           {rows}, {}, {"approx_percentile(c0, c1)"}, "SELECT NULL"),
       "Percentile cannot be null");
+}
+
+TEST_F(ApproxPercentileTest, nanPercentile) {
+  testNaN<float>();
+  testNaN<double>();
 }
 
 class ApproxPercentileWindowTest : public WindowTestBase {

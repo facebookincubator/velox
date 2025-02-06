@@ -33,7 +33,7 @@ class ArgumentTypeFuzzerTest : public testing::Test {
       const std::shared_ptr<exec::FunctionSignature>& signature,
       const TypePtr& returnType,
       const std::vector<TypePtr>& expectedArgumentTypes) {
-    std::mt19937 seed{0};
+    FuzzerGenerator seed{0};
     ArgumentTypeFuzzer fuzzer{*signature, returnType, seed};
     ASSERT_TRUE(fuzzer.fuzzArgumentTypes(kMaxVariadicArgs));
 
@@ -62,7 +62,7 @@ class ArgumentTypeFuzzerTest : public testing::Test {
   void testFuzzingFailure(
       const std::shared_ptr<exec::FunctionSignature>& signature,
       const TypePtr& returnType) {
-    std::mt19937 seed{0};
+    FuzzerGenerator seed{0};
     ArgumentTypeFuzzer fuzzer{*signature, returnType, seed};
     ASSERT_FALSE(fuzzer.fuzzArgumentTypes(kMaxVariadicArgs));
   }
@@ -136,7 +136,7 @@ TEST_F(ArgumentTypeFuzzerTest, signatureTemplate) {
 
     auto verifyArgumentTypes = [&](const TypePtr& returnType,
                                    const TypePtr& firstArg) {
-      std::mt19937 seed{0};
+      FuzzerGenerator seed{0};
       ArgumentTypeFuzzer fuzzer{*signature, returnType, seed};
       ASSERT_TRUE(fuzzer.fuzzArgumentTypes(kMaxVariadicArgs));
 
@@ -161,7 +161,7 @@ TEST_F(ArgumentTypeFuzzerTest, signatureTemplate) {
                          .build();
 
     {
-      std::mt19937 seed{0};
+      FuzzerGenerator seed{0};
       ArgumentTypeFuzzer fuzzer{*signature, BIGINT(), seed};
       ASSERT_TRUE(fuzzer.fuzzArgumentTypes(kMaxVariadicArgs));
 
@@ -182,8 +182,7 @@ TEST_F(ArgumentTypeFuzzerTest, variableArity) {
                          .typeVariable("X")
                          .returnType("X")
                          .argumentType("X")
-                         .argumentType("bigint")
-                         .variableArity()
+                         .variableArity("bigint")
                          .build();
 
     testFuzzingSuccess(signature, VARCHAR(), {VARCHAR(), BIGINT()});
@@ -193,10 +192,9 @@ TEST_F(ArgumentTypeFuzzerTest, variableArity) {
     auto signature = exec::FunctionSignatureBuilder()
                          .knownTypeVariable("K")
                          .returnType("bigint")
-                         .argumentType("K")
-                         .variableArity()
+                         .variableArity("K")
                          .build();
-    std::mt19937 seed{0};
+    FuzzerGenerator seed{0};
     ArgumentTypeFuzzer fuzzer{*signature, BIGINT(), seed};
     ASSERT_TRUE(fuzzer.fuzzArgumentTypes(kMaxVariadicArgs));
 
@@ -213,7 +211,7 @@ TEST_F(ArgumentTypeFuzzerTest, any) {
                        .returnType("bigint")
                        .argumentType("any")
                        .build();
-  std::mt19937 seed{0};
+  FuzzerGenerator seed{0};
   ArgumentTypeFuzzer fuzzer{*signature, BIGINT(), seed};
   ASSERT_TRUE(fuzzer.fuzzArgumentTypes(kMaxVariadicArgs));
 
@@ -238,6 +236,21 @@ TEST_F(ArgumentTypeFuzzerTest, unsupported) {
           .argumentType("decimal(a_precision, a_scale)")
           .argumentType("decimal(b_precision, b_scale)")
           .build();
+
+  testFuzzingFailure(signature, ROW({ARRAY(DECIMAL(13, 6))}));
+
+  // Constraints on the argument types are not supported.
+  signature = exec::FunctionSignatureBuilder()
+                  .integerVariable("a_scale")
+                  .integerVariable("b_scale")
+                  .integerVariable("a_precision", "a_scale + 1")
+                  .integerVariable("b_precision")
+                  .integerVariable("r_precision")
+                  .integerVariable("r_scale")
+                  .returnType("decimal(r_precision, r_scale)")
+                  .argumentType("decimal(a_precision, a_scale)")
+                  .argumentType("decimal(b_precision, b_scale)")
+                  .build();
 
   testFuzzingFailure(signature, DECIMAL(13, 6));
 }
@@ -266,7 +279,7 @@ TEST_F(ArgumentTypeFuzzerTest, lambda) {
                   .build();
 
   {
-    std::mt19937 seed{0};
+    FuzzerGenerator seed{0};
     ArgumentTypeFuzzer fuzzer{*signature, ARRAY(VARCHAR()), seed};
     ASSERT_TRUE(fuzzer.fuzzArgumentTypes(kMaxVariadicArgs));
 
@@ -289,7 +302,7 @@ TEST_F(ArgumentTypeFuzzerTest, lambda) {
                   .build();
 
   {
-    std::mt19937 seed{0};
+    FuzzerGenerator seed{0};
     ArgumentTypeFuzzer fuzzer{*signature, MAP(BIGINT(), VARCHAR()), seed};
     ASSERT_TRUE(fuzzer.fuzzArgumentTypes(kMaxVariadicArgs));
 
@@ -312,7 +325,7 @@ TEST_F(ArgumentTypeFuzzerTest, unconstrainedSignatureTemplate) {
                        .argumentType("K")
                        .build();
 
-  std::mt19937 seed{0};
+  FuzzerGenerator seed{0};
   ArgumentTypeFuzzer fuzzer{*signature, MAP(BIGINT(), VARCHAR()), seed};
   ASSERT_TRUE(fuzzer.fuzzArgumentTypes(kMaxVariadicArgs));
 
@@ -323,7 +336,7 @@ TEST_F(ArgumentTypeFuzzerTest, unconstrainedSignatureTemplate) {
 
   ASSERT_EQ(argumentTypes[0]->kind(), TypeKind::MAP);
 
-  ASSERT_EQ(argumentTypes[0]->childAt(0), argumentTypes[1]);
+  ASSERT_EQ(*argumentTypes[0]->childAt(0), *argumentTypes[1]);
 }
 
 TEST_F(ArgumentTypeFuzzerTest, orderableConstraint) {
@@ -335,7 +348,7 @@ TEST_F(ArgumentTypeFuzzerTest, orderableConstraint) {
                          .build();
 
     for (size_t i = 0; i < 100; ++i) {
-      std::mt19937 rng(i);
+      FuzzerGenerator rng(i);
       ArgumentTypeFuzzer fuzzer{*signature, nullptr, rng};
       fuzzer.fuzzArgumentTypes(kMaxVariadicArgs);
       ASSERT_TRUE(fuzzer.argumentTypes()[0]->isOrderable())
@@ -406,7 +419,7 @@ TEST_F(ArgumentTypeFuzzerTest, orderableConstraint) {
 TEST_F(ArgumentTypeFuzzerTest, fuzzDecimalArgumentTypes) {
   auto fuzzArgumentTypes = [](const exec::FunctionSignature& signature,
                               const TypePtr& returnType) {
-    std::mt19937 seed{0};
+    FuzzerGenerator seed{0};
     ArgumentTypeFuzzer fuzzer{signature, returnType, seed};
     bool ok = fuzzer.fuzzArgumentTypes(kMaxVariadicArgs);
     VELOX_CHECK(
@@ -434,8 +447,7 @@ TEST_F(ArgumentTypeFuzzerTest, fuzzDecimalArgumentTypes) {
                   .integerVariable("s")
                   .returnType("decimal(p,s)")
                   .argumentType("decimal(p,s)")
-                  .argumentType("decimal(p,s)")
-                  .variableArity()
+                  .variableArity("decimal(p,s)")
                   .build();
   argTypes = fuzzArgumentTypes(*signature, DECIMAL(10, 7));
   ASSERT_LE(1, argTypes.size());
@@ -557,11 +569,34 @@ TEST_F(ArgumentTypeFuzzerTest, fuzzDecimalArgumentTypes) {
   EXPECT_TRUE(argTypes[1]->isDecimal());
   EXPECT_EQ(argTypes[0]->toString(), argTypes[2]->toString());
   EXPECT_EQ(argTypes[1]->toString(), argTypes[3]->toString());
+
+  // Decimal argument types are nested in complex types.
+  signature = exec::FunctionSignatureBuilder()
+                  .integerVariable("a_scale")
+                  .integerVariable("b_scale")
+                  .integerVariable("a_precision")
+                  .integerVariable("b_precision")
+                  .integerVariable("r_precision")
+                  .integerVariable("r_scale")
+                  .returnType("decimal(r_precision, r_scale)")
+                  .argumentType("row(array(decimal(a_precision, a_scale)))")
+                  .argumentType("row(array(decimal(b_precision, b_scale)))")
+                  .build();
+  argTypes = fuzzArgumentTypes(*signature, DECIMAL(10, 7));
+  ASSERT_EQ(2, argTypes.size());
+  EXPECT_TRUE(argTypes[0]->isRow());
+  EXPECT_TRUE(argTypes[0]->asRow().childAt(0)->isArray());
+  EXPECT_TRUE(
+      argTypes[0]->asRow().childAt(0)->asArray().elementType()->isDecimal());
+  EXPECT_TRUE(argTypes[1]->isRow());
+  EXPECT_TRUE(argTypes[1]->asRow().childAt(0)->isArray());
+  EXPECT_TRUE(
+      argTypes[1]->asRow().childAt(0)->asArray().elementType()->isDecimal());
 }
 
 TEST_F(ArgumentTypeFuzzerTest, fuzzDecimalReturnType) {
   auto fuzzReturnType = [](const exec::FunctionSignature& signature) {
-    std::mt19937 seed{0};
+    FuzzerGenerator seed{0};
     ArgumentTypeFuzzer fuzzer{signature, seed};
     return fuzzer.fuzzReturnType();
   };
@@ -582,8 +617,7 @@ TEST_F(ArgumentTypeFuzzerTest, fuzzDecimalReturnType) {
                   .integerVariable("s")
                   .returnType("decimal(p,s)")
                   .argumentType("decimal(p,s)")
-                  .argumentType("decimal(p,s)")
-                  .variableArity()
+                  .variableArity("decimal(p,s)")
                   .build();
 
   returnType = fuzzReturnType(*signature);
@@ -647,6 +681,27 @@ TEST_F(ArgumentTypeFuzzerTest, fuzzDecimalReturnType) {
 
   returnType = fuzzReturnType(*signature);
   EXPECT_EQ(DECIMAL(10, 7)->toString(), returnType->toString());
+
+  // Decimal return type is nested in complex types.
+  signature =
+      exec::FunctionSignatureBuilder()
+          .integerVariable("a_scale")
+          .integerVariable("b_scale")
+          .integerVariable("a_precision")
+          .integerVariable("b_precision")
+          .returnType(
+              "row(array(decimal(a_precision, a_scale)), array(decimal(b_precision, b_scale)))")
+          .argumentType("decimal(a_precision, a_scale)")
+          .argumentType("decimal(b_precision, b_scale)")
+          .build();
+  returnType = fuzzReturnType(*signature);
+  EXPECT_TRUE(returnType->isRow());
+  EXPECT_TRUE(returnType->asRow().childAt(0)->isArray());
+  EXPECT_TRUE(returnType->asRow().childAt(1)->isArray());
+  EXPECT_TRUE(
+      returnType->asRow().childAt(0)->asArray().elementType()->isDecimal());
+  EXPECT_TRUE(
+      returnType->asRow().childAt(1)->asArray().elementType()->isDecimal());
 }
 
 } // namespace facebook::velox::fuzzer::test

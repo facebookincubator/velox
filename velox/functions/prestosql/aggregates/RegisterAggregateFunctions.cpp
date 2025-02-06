@@ -15,6 +15,7 @@
  */
 #include "velox/functions/prestosql/aggregates/RegisterAggregateFunctions.h"
 #include "velox/exec/Aggregate.h"
+#include "velox/functions/prestosql/types/JsonType.h"
 
 namespace facebook::velox::aggregate::prestosql {
 
@@ -44,6 +45,10 @@ extern void registerBitwiseXorAggregate(
     bool onlyPrestoSignatures,
     bool overwrite);
 extern void registerChecksumAggregate(
+    const std::string& prefix,
+    bool withCompanionFunctions,
+    bool overwrite);
+extern void registerClassificationFunctions(
     const std::string& prefix,
     bool withCompanionFunctions,
     bool overwrite);
@@ -129,7 +134,11 @@ extern void registerMinMaxAggregates(
     const std::string& prefix,
     bool withCompanionFunctions,
     bool overwrite);
-extern void registerMinMaxByAggregates(
+extern void registerMaxByAggregates(
+    const std::string& prefix,
+    bool withCompanionFunctions,
+    bool overwrite);
+extern void registerMinByAggregates(
     const std::string& prefix,
     bool withCompanionFunctions,
     bool overwrite);
@@ -147,6 +156,7 @@ void registerAllAggregateFunctions(
     bool withCompanionFunctions,
     bool onlyPrestoSignatures,
     bool overwrite) {
+  registerJsonType();
   registerApproxDistinctAggregates(prefix, withCompanionFunctions, overwrite);
   registerApproxMostFrequentAggregate(
       prefix, withCompanionFunctions, overwrite);
@@ -161,6 +171,7 @@ void registerAllAggregateFunctions(
   registerBoolAggregates(prefix, withCompanionFunctions, overwrite);
   registerCentralMomentsAggregates(prefix, withCompanionFunctions, overwrite);
   registerChecksumAggregate(prefix, withCompanionFunctions, overwrite);
+  registerClassificationFunctions(prefix, withCompanionFunctions, overwrite);
   registerCountAggregate(prefix, withCompanionFunctions, overwrite);
   registerCountIfAggregate(prefix, withCompanionFunctions, overwrite);
   registerCovarianceAggregates(prefix, withCompanionFunctions, overwrite);
@@ -176,7 +187,8 @@ void registerAllAggregateFunctions(
   registerSumDataSizeForStatsAggregate(
       prefix, withCompanionFunctions, overwrite);
   registerMinMaxAggregates(prefix, withCompanionFunctions, overwrite);
-  registerMinMaxByAggregates(prefix, withCompanionFunctions, overwrite);
+  registerMaxByAggregates(prefix, withCompanionFunctions, overwrite);
+  registerMinByAggregates(prefix, withCompanionFunctions, overwrite);
   registerReduceAgg(prefix, withCompanionFunctions, overwrite);
   registerSetAggAggregate(prefix, withCompanionFunctions, overwrite);
   registerSetUnionAggregate(prefix, withCompanionFunctions, overwrite);

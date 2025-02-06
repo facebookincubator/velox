@@ -377,8 +377,16 @@ inline int64_t findNthInstanceByteIndexFromEnd(
 /// be the same. When replaced is empty and ignoreEmptyReplaced is false,
 /// replacement is added before and after each charecter. When replaced is
 /// empty and ignoreEmptyReplaced is true, the result is the inputString value.
-/// When inputString is empty results is empty.
-/// replace("", "", "x") = ""
+/// When inputString and replaced strings are empty, result is the
+/// replacement string if ignoreEmptyReplaced is false, otherwise the result is
+/// empty.
+///
+/// Note: if replaceFirst=true, the only the first found occurence of replaced
+/// is replaced. If replaced is empty, then replacement is added before the
+/// inputString.
+///
+/// replace("", "", "x") = "" -- when ignoreEmptyReplaced is true
+/// replace("", "", "x") = "x" -- when ignoreEmptyReplaced is false
 /// replace("aa", "", "x") = "xaxax" -- when ignoreEmptyReplaced is false
 /// replace("aa", "", "x") = "aa" -- when ignoreEmptyReplaced is true
 template <bool ignoreEmptyReplaced = false>
@@ -387,13 +395,18 @@ inline static size_t replace(
     const std::string_view& inputString,
     const std::string_view& replaced,
     const std::string_view& replacement,
-    bool inPlace = false) {
-  if (inputString.size() == 0) {
+    bool inPlace = false,
+    bool replaceFirst = false) {
+  if (inputString.empty()) {
+    if (!ignoreEmptyReplaced && replaced.empty() && !replacement.empty()) {
+      std::memcpy(outputString, replacement.data(), replacement.size());
+      return replacement.size();
+    }
     return 0;
   }
 
   if constexpr (ignoreEmptyReplaced) {
-    if (replaced.size() == 0) {
+    if (replaced.empty()) {
       if (!inPlace) {
         std::memcpy(outputString, inputString.data(), inputString.size());
       }
@@ -446,8 +459,8 @@ inline static size_t replace(
   };
 
   // Special case when size of replaced is 0
-  if (replaced.size() == 0) {
-    if (replacement.size() == 0) {
+  if (replaced.empty()) {
+    if (replacement.empty()) {
       if (!inPlace) {
         std::memcpy(outputString, inputString.data(), inputString.size());
       }
@@ -456,6 +469,17 @@ inline static size_t replace(
 
     // Can never be in place since replacement.size()>replaced.size()
     assert(!inPlace && "wrong inplace replace usage");
+
+    if (replaceFirst) {
+      // writes replacement to the beginning of outputString
+      std::memcpy(&outputString[0], replacement.data(), replacement.size());
+      // writes the original string
+      std::memcpy(
+          &outputString[replacement.size()],
+          inputString.data(),
+          inputString.size());
+      return replacement.size() + inputString.size();
+    }
 
     // add replacement before and after each char in inputString
     for (auto i = 0; i < inputString.size(); i++) {
@@ -480,6 +504,11 @@ inline static size_t replace(
     auto unchangedSize = position - readPosition;
     writeUnchanged(unchangedSize);
     writeReplacement();
+    // If replaceFirst is true, we only replace the first occurence
+    // of the found replaced
+    if (replaceFirst) {
+      break;
+    }
   }
 
   auto unchangedSize = inputString.size() - readPosition;

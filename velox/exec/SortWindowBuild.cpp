@@ -20,7 +20,7 @@
 namespace facebook::velox::exec {
 
 namespace {
-std::vector<CompareFlags> makeSpillCompareFlags(
+std::vector<CompareFlags> makeCompareFlags(
     int32_t numPartitionKeys,
     const std::vector<core::SortOrder>& sortingOrders) {
   std::vector<CompareFlags> compareFlags;
@@ -42,15 +42,18 @@ std::vector<CompareFlags> makeSpillCompareFlags(
 SortWindowBuild::SortWindowBuild(
     const std::shared_ptr<const core::WindowNode>& node,
     velox::memory::MemoryPool* pool,
+    common::PrefixSortConfig&& prefixSortConfig,
     const common::SpillConfig* spillConfig,
     tsan_atomic<bool>* nonReclaimableSection,
     folly::Synchronized<common::SpillStats>* spillStats)
     : WindowBuild(node, pool, spillConfig, nonReclaimableSection),
       numPartitionKeys_{node->partitionKeys().size()},
-      spillCompareFlags_{
-          makeSpillCompareFlags(numPartitionKeys_, node->sortingOrders())},
+      compareFlags_{makeCompareFlags(numPartitionKeys_, node->sortingOrders())},
       pool_(pool),
-      spillStats_(spillStats) {
+      prefixSortConfig_(prefixSortConfig),
+      spillStats_(spillStats),
+      sortedRows_(0, memory::StlAllocator<char*>(*pool)),
+      partitionStartRows_(0, memory::StlAllocator<char*>(*pool)) {
   VELOX_CHECK_NOT_NULL(pool_);
   allKeyInfo_.reserve(partitionKeyInfo_.size() + sortKeyInfo_.size());
   allKeyInfo_.insert(
@@ -137,16 +140,51 @@ void SortWindowBuild::ensureInputFits(const RowVectorPtr& input) {
                << succinctBytes(data_->pool()->reservedBytes());
 }
 
+void SortWindowBuild::ensureSortFits() {
+  // Check if spilling is enabled or not.
+  if (spillConfig_ == nullptr) {
+    return;
+  }
+
+  // Test-only spill path.
+  if (testingTriggerSpill(pool_->name())) {
+    spill();
+    return;
+  }
+
+  if (spiller_ != nullptr) {
+    return;
+  }
+
+  // The memory for std::vector sorted rows, `partitionStartRows_` and prefix
+  // sort required buffer.
+  uint64_t sortBufferToReserve =
+      numRows_ * (sizeof(char*) + sizeof(vector_size_t)) +
+      PrefixSort::maxRequiredBytes(
+          data_.get(), compareFlags_, prefixSortConfig_, pool_);
+  {
+    memory::ReclaimableSectionGuard guard(nonReclaimableSection_);
+    if (pool_->maybeReserve(sortBufferToReserve)) {
+      return;
+    }
+  }
+
+  LOG(WARNING) << fmt::format(
+      "Failed to reserve {} for sort window build from memory pool {}, usage: {}, reservation: {}",
+      succinctBytes(sortBufferToReserve),
+      pool_->name(),
+      succinctBytes(pool_->usedBytes()),
+      succinctBytes(pool_->reservedBytes()));
+}
+
 void SortWindowBuild::setupSpiller() {
   VELOX_CHECK_NULL(spiller_);
 
-  spiller_ = std::make_unique<Spiller>(
-      // TODO Replace Spiller::Type::kOrderBy.
-      Spiller::Type::kOrderByInput,
+  spiller_ = std::make_unique<SortInputSpiller>(
       data_.get(),
       inputType_,
-      spillCompareFlags_.size(),
-      spillCompareFlags_,
+      compareFlags_.size(),
+      compareFlags_,
       spillConfig_,
       spillStats_);
 }
@@ -159,6 +197,13 @@ void SortWindowBuild::spill() {
   spiller_->spill();
   data_->clear();
   data_->pool()->release();
+}
+
+std::optional<common::SpillStats> SortWindowBuild::spilledStats() const {
+  if (spiller_ == nullptr) {
+    return std::nullopt;
+  }
+  return spiller_->stats();
 }
 
 // Use double front and back search algorithm to find next partition start row.
@@ -217,12 +262,8 @@ void SortWindowBuild::sortPartitions() {
   RowContainerIterator iter;
   data_->listRows(&iter, numRows_, sortedRows_.data());
 
-  std::sort(
-      sortedRows_.begin(),
-      sortedRows_.end(),
-      [this](const char* leftRow, const char* rightRow) {
-        return compareRowsWithKeys(leftRow, rightRow, allKeyInfo_);
-      });
+  PrefixSort::sort(
+      data_.get(), compareFlags_, prefixSortConfig_, pool_, sortedRows_);
 
   computePartitionStartRows();
 }
@@ -231,6 +272,8 @@ void SortWindowBuild::noMoreInput() {
   if (numRows_ == 0) {
     return;
   }
+
+  ensureSortFits();
 
   if (spiller_ != nullptr) {
     // Spill remaining data to avoid running out of memory while sort-merging
@@ -251,10 +294,14 @@ void SortWindowBuild::noMoreInput() {
     // the partition. This will order the rows for getOutput().
     sortPartitions();
   }
+
+  // Releases the unused memory reservation after procesing input.
+  pool_->release();
 }
 
 void SortWindowBuild::loadNextPartitionFromSpill() {
   sortedRows_.clear();
+  sortedRows_.shrink_to_fit();
   data_->clear();
 
   for (;;) {
@@ -294,15 +341,15 @@ void SortWindowBuild::loadNextPartitionFromSpill() {
   }
 }
 
-std::unique_ptr<WindowPartition> SortWindowBuild::nextPartition() {
+std::shared_ptr<WindowPartition> SortWindowBuild::nextPartition() {
   if (merge_ != nullptr) {
-    VELOX_CHECK(!sortedRows_.empty(), "No window partitions available")
+    VELOX_CHECK(!sortedRows_.empty(), "No window partitions available");
     auto partition = folly::Range(sortedRows_.data(), sortedRows_.size());
-    return std::make_unique<WindowPartition>(
+    return std::make_shared<WindowPartition>(
         data_.get(), partition, inversedInputChannels_, sortKeyInfo_);
   }
 
-  VELOX_CHECK(!partitionStartRows_.empty(), "No window partitions available")
+  VELOX_CHECK(!partitionStartRows_.empty(), "No window partitions available");
 
   currentPartition_++;
   VELOX_CHECK_LE(
@@ -316,7 +363,7 @@ std::unique_ptr<WindowPartition> SortWindowBuild::nextPartition() {
   auto partition = folly::Range(
       sortedRows_.data() + partitionStartRows_[currentPartition_],
       partitionSize);
-  return std::make_unique<WindowPartition>(
+  return std::make_shared<WindowPartition>(
       data_.get(), partition, inversedInputChannels_, sortKeyInfo_);
 }
 
@@ -327,7 +374,6 @@ bool SortWindowBuild::hasNextPartition() {
   }
 
   return partitionStartRows_.size() > 0 &&
-      currentPartition_ < int(partitionStartRows_.size() - 2);
+      currentPartition_ < static_cast<int>(partitionStartRows_.size() - 2);
 }
-
 } // namespace facebook::velox::exec

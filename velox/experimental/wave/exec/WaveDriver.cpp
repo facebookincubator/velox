@@ -15,9 +15,12 @@
  */
 
 #include "velox/experimental/wave/exec/WaveDriver.h"
+#include <iostream>
+#include "velox/common/process/TraceContext.h"
 #include "velox/common/testutil/TestValue.h"
 #include "velox/exec/Task.h"
 #include "velox/experimental/wave/exec/Instruction.h"
+#include "velox/experimental/wave/exec/ToWave.h"
 #include "velox/experimental/wave/exec/WaveOperator.h"
 
 DEFINE_int32(
@@ -27,32 +30,270 @@ DEFINE_int32(
 
 namespace facebook::velox::wave {
 
+std::mutex WaveBarrier::barriersMutex_;
+std::unordered_map<std::string, std::weak_ptr<WaveBarrier>>
+    WaveBarrier::barriers_;
+
+WaveBarrier::WaveBarrier(std::string idString)
+    : idString_(std::move(idString)) {}
+
+std::shared_ptr<WaveBarrier> WaveBarrier::get(
+    const std::string& taskId,
+    int32_t driverId,
+    int32_t operatorId) {
+  auto id = fmt::format("{}:{}:{}", taskId, driverId, operatorId);
+  std::lock_guard<std::mutex> l(barriersMutex_);
+  auto it = barriers_.find(id);
+  if (it != barriers_.end()) {
+    auto ptr = it->second.lock();
+    if (ptr) {
+      return ptr;
+    }
+  }
+  auto barrier = std::make_shared<WaveBarrier>(id);
+  barriers_[id] = barrier;
+  return barrier;
+}
+
+WaveBarrier::~WaveBarrier() {
+  std::lock_guard<std::mutex> l(barriersMutex_);
+  barriers_.erase(idString_);
+}
+
+void waitFor(ContinueFuture future) {
+  std::move(future).via(&folly::QueuedImmediateExecutor::instance()).wait();
+}
+
+bool waitForBool(folly::SemiFuture<bool> future) {
+  return std::move(future)
+      .via(&folly::QueuedImmediateExecutor::instance())
+      .get();
+}
+
+#if !defined(__APPLE__)
+#define VELOX_CHECK_TID(n) VELOX_CHECK(n)
+#else
+#define VELOX_CHECK_TID()
+#endif
+namespace {
+int32_t getTid() {
+#if !defined(__APPLE__)
+  // This is a debugging feature disabled on the Mac since syscall
+  // is deprecated on that platform.
+  return syscall(FOLLY_SYS_gettid);
+#else
+  return 0;
+#endif
+}
+
+bool isTidIn(std::vector<int32_t>& tids) {
+  return std::find(tids.begin(), tids.end(), getTid()) != tids.end();
+}
+
+bool isTidNotIn(std::vector<int32_t>& tids) {
+  return std::find(tids.begin(), tids.end(), getTid()) == tids.end();
+}
+
+bool isTidNotIn(std::vector<int32_t>& tids, std::mutex& mtx) {
+  std::lock_guard<std::mutex> l(mtx);
+  return std::find(tids.begin(), tids.end(), getTid()) == tids.end();
+}
+
+} // namespace
+
+std::string WaveBarrier::toStringLocked() {
+  std::stringstream out;
+  out << "{barrier: " << (exclusiveToken_ ? "excl" : "")
+      << " joined=" << numJoined_ << " yielded=" << numInArrive_ << " ";
+  if (!waitingForExcl_.empty()) {
+    out << " wait for excl: ";
+    for (auto t : waitingForExcl_) {
+      out << t << " ";
+    }
+  }
+  if (!waitingForExclDone_.empty()) {
+    out << " wait for excl done: ";
+    for (auto t : waitingForExclDone_) {
+      out << t << " ";
+    }
+  }
+  out << "}";
+  return out.str();
+}
+
+std::string WaveBarrier::toString() {
+  std::lock_guard<std::mutex> l(mutex_);
+  return toStringLocked();
+}
+
+void WaveBarrier::enter() {
+  ContinueFuture waitFuture;
+  {
+    std::lock_guard<std::mutex> l(mutex_);
+    VELOX_CHECK_TID(isTidNotIn(waitingForExcl_));
+    VELOX_CHECK_TID(isTidNotIn(waitingForExclDone_));
+    if (!exclusiveToken_ && exclusiveTokens_.empty()) {
+      ++numJoined_;
+      return;
+    }
+    auto [promise, tempFuture] = makeVeloxContinuePromiseContract("WaveDriver");
+
+    waitFuture = std::move(tempFuture);
+    promises_.push_back(std::move(promise));
+    ++numJoined_;
+    ++numInArrive_;
+    waitingForExclDone_.push_back(getTid());
+  }
+  waitFor(std::move(waitFuture));
+  VELOX_CHECK_TID(isTidNotIn(waitingForExclDone_, mutex_));
+}
+
+void WaveBarrier::maybeReleaseAcquireLocked() {
+  if (exclusiveToken_) {
+    return;
+  }
+  if (numJoined_ - numInArrive_ == exclusivePromises_.size() &&
+      !exclusivePromises_.empty()) {
+    exclusiveToken_ = exclusiveTokens_.back();
+    waitingForExcl_.pop_back();
+    auto promise = std::move(exclusivePromises_.back());
+    exclusivePromises_.pop_back();
+    exclusiveTokens_.pop_back();
+    promise.setValue(true);
+  }
+}
+
+void WaveBarrier::leave() {
+  std::lock_guard<std::mutex> l(mutex_);
+  VELOX_CHECK_TID(isTidNotIn(waitingForExcl_));
+  VELOX_CHECK_TID(isTidNotIn(waitingForExclDone_));
+
+  --numJoined_;
+  maybeReleaseAcquireLocked();
+}
+
+void WaveBarrier::acquire(void* reason, std::function<void()> preWait) {
+  folly::SemiFuture<bool> future(false);
+  {
+    std::lock_guard<std::mutex> l(mutex_);
+    if (numJoined_ == 1) {
+      exclusiveToken_ = reason;
+      exclusiveTid_ = getTid();
+      return;
+    }
+  }
+  if (preWait) {
+    preWait();
+  }
+  {
+    std::lock_guard<std::mutex> l(mutex_);
+    auto promise = folly::Promise<bool>();
+    future = promise.getSemiFuture();
+    exclusivePromises_.push_back(std::move(promise));
+    exclusiveTokens_.push_back(reason);
+    waitingForExcl_.push_back(getTid());
+    maybeReleaseAcquireLocked();
+  }
+  waitForBool(std::move(future));
+  exclusiveTid_ = getTid();
+}
+
+void WaveBarrier::release() {
+  VELOX_CHECK_NOT_NULL(exclusiveToken_);
+  ContinueFuture waitFuture;
+  {
+    std::lock_guard<std::mutex> l(mutex_);
+    if (numJoined_ == 1) {
+      exclusiveToken_ = nullptr;
+      exclusiveTid_ = 0;
+      return;
+    }
+    if (exclusivePromises_.empty()) {
+      exclusiveToken_ = nullptr;
+      exclusiveTid_ = 0;
+      VELOX_CHECK_EQ(numInArrive_, promises_.size());
+      numInArrive_ = 0;
+      for (auto& promise : promises_) {
+        promise.setValue();
+      }
+      waitingForExclDone_.clear();
+      promises_.clear();
+      return;
+    }
+    auto [promise, future] = makeVeloxContinuePromiseContract("WaveDriver");
+    ++numInArrive_;
+    promises_.push_back(std::move(promise));
+    waitFuture = std::move(future);
+    exclusiveTid_ = 0;
+    exclusiveToken_ = nullptr;
+    maybeReleaseAcquireLocked();
+  }
+  waitFor(std::move(waitFuture));
+  VELOX_CHECK_TID(isTidNotIn(waitingForExclDone_, mutex_));
+}
+
+void WaveBarrier::mayYield(std::function<void()> preWait) {
+  ContinueFuture waitFuture;
+  folly::Promise<bool> exclPromise;
+  {
+    std::lock_guard<std::mutex> l(mutex_);
+    if (exclusiveTokens_.empty()) {
+      return;
+    }
+  }
+  // Somebody has acquire() pending. The acquire() will not complete until this
+  // adds itself to waiting. But before acknowledging the acquire, do preWait.
+  if (preWait) {
+    preWait();
+  }
+  {
+    std::lock_guard<std::mutex> l(mutex_);
+    auto [promise, future] = makeVeloxContinuePromiseContract("WaveDriver");
+    promises_.push_back(std::move(promise));
+    waitFuture = std::move(future);
+    ++numInArrive_;
+    waitingForExclDone_.push_back(getTid());
+    if (numJoined_ - numInArrive_ == exclusivePromises_.size() &&
+        !exclusivePromises_.empty()) {
+      exclusiveToken_ = exclusiveTokens_.back();
+      exclPromise = std::move(exclusivePromises_.back());
+      exclusivePromises_.pop_back();
+      exclusiveTokens_.pop_back();
+      waitingForExcl_.pop_back();
+    }
+  }
+  if (exclPromise.valid()) {
+    exclPromise.setValue(true);
+  }
+  waitFor(std::move(waitFuture));
+  VELOX_CHECK_TID(isTidNotIn(waitingForExclDone_, mutex_));
+}
+
 WaveDriver::WaveDriver(
     exec::DriverCtx* driverCtx,
     RowTypePtr outputType,
     core::PlanNodeId planNodeId,
     int32_t operatorId,
-    std::unique_ptr<GpuArena> arena,
+    std::shared_ptr<GpuArena> arena,
     std::vector<std::unique_ptr<WaveOperator>> waveOperators,
     std::vector<OperandId> resultOrder,
-    SubfieldMap subfields,
-    std::vector<std::unique_ptr<AbstractOperand>> operands,
-    std::vector<std::unique_ptr<AbstractState>> states)
+    std::shared_ptr<WaveRuntimeObjects> runtime)
     : exec::SourceOperator(
           driverCtx,
           outputType,
           operatorId,
           planNodeId,
           "Wave"),
+      barrier_(WaveBarrier::get(driverCtx->task->taskId(), 0, operatorId)),
       arena_(std::move(arena)),
       resultOrder_(std::move(resultOrder)),
-      subfields_(std::move(subfields)),
-      operands_(std::move(operands)),
-      states_(std::move(states)) {
+      runtime_(std::move(runtime)),
+      subfields_(runtime_->subfields),
+      operands_(runtime_->operands),
+      states_(runtime_->states) {
   VELOX_CHECK(!waveOperators.empty());
-  auto returnBatchSize = 10000 * outputType_->size() * 10;
-  hostArena_ = std::make_unique<GpuArena>(
-      returnBatchSize * 10, getHostAllocator(getDevice()));
+  deviceArena_ = std::make_unique<GpuArena>(
+      100000000, getDeviceAllocator(getDevice()), 400000000);
   pipelines_.emplace_back();
   for (auto& op : waveOperators) {
     op->setDriver(this);
@@ -82,7 +323,9 @@ RowVectorPtr WaveDriver::getOutput() {
   if (finished_) {
     return nullptr;
   }
+  barrier_->enter();
   startTimeMs_ = getCurrentTimeMs();
+  [[maybe_unused]] auto guard = folly::makeGuard([&]() { barrier_->leave(); });
   int32_t last = pipelines_.size() - 1;
   try {
     for (int32_t i = last; i >= 0; --i) {
@@ -92,6 +335,7 @@ RowVectorPtr WaveDriver::getOutput() {
       auto status = advance(i);
       switch (status) {
         case Advance::kBlocked:
+          updateStats();
           return nullptr;
         case Advance::kResult:
           if (i == last) {
@@ -112,10 +356,14 @@ RowVectorPtr WaveDriver::getOutput() {
               pipelines_[i + 1].noMoreInput = true;
               pipelines_[i + 1].canAdvance = true;
               i += 2;
+              if (maybeWaitForPeers()) {
+                return nullptr;
+              }
               break;
             } else {
               // Last finished.
               finished_ = true;
+              updateStats();
               return nullptr;
             }
           }
@@ -123,11 +371,44 @@ RowVectorPtr WaveDriver::getOutput() {
       }
     }
   } catch (const std::exception& e) {
+    updateStats();
     setError();
     throw;
   }
   finished_ = true;
+  updateStats();
   return nullptr;
+}
+
+bool WaveDriver::maybeWaitForPeers() {
+  if (operatorCtx_->task()->numDrivers(operatorCtx_->driver()) == 1) {
+    return false;
+  }
+  if (barrier_->stateMap().states.empty()) {
+    return false;
+  }
+  TR1("wait_for_peers\n");
+  std::vector<ContinuePromise> promises;
+  std::vector<std::shared_ptr<exec::Driver>> peers;
+
+  if (!operatorCtx_->task()->allPeersFinished(
+          planNodeId(),
+          operatorCtx_->driver(),
+          &blockingFuture_,
+          promises,
+          peers)) {
+    blockingReason_ = exec::BlockingReason::kYield;
+    return true;
+  }
+
+  // Realize the promises so that the other Drivers (which were not
+  // the last to finish) can continue from the barrier.
+  peers.clear();
+  for (auto& promise : promises) {
+    promise.setValue();
+  }
+
+  return false;
 }
 
 void WaveDriver::flush(int32_t pipelineIdx) {
@@ -147,6 +428,11 @@ void moveTo(
   to.push_back(std::move(from[i]));
   from.erase(from.begin() + i);
 }
+
+void interpretError(const KernelError* error) {
+  auto string = waveRegistry().message(error->messageEnum);
+  VELOX_USER_FAIL(string);
+}
 } // namespace
 
 exec::BlockingReason WaveDriver::processArrived(Pipeline& pipeline) {
@@ -160,9 +446,12 @@ exec::BlockingReason WaveDriver::processArrived(Pipeline& pipeline) {
       auto advance =
           pipeline.operators[i]->canAdvance(*pipeline.arrived[streamIdx]);
       if (!advance.empty()) {
+        prepareAdvance(pipeline, *pipeline.arrived[streamIdx], i, advance);
+
         runOperators(
-            pipeline, *pipeline.arrived[streamIdx], i, advance.numRows);
-        moveTo(pipeline.arrived, i, pipeline.running, true);
+            pipeline, *pipeline.arrived[streamIdx], i, advance[0].numRows);
+        TR(pipeline.arrived[streamIdx], "running");
+        moveTo(pipeline.arrived, streamIdx, pipeline.running, true);
         continued = true;
         break;
       }
@@ -172,6 +461,8 @@ exec::BlockingReason WaveDriver::processArrived(Pipeline& pipeline) {
       --streamIdx;
     } else {
       /// Not blocked and not continuable, so must be at end.
+      pipeline.arrived[streamIdx]->releaseStreamsAndEvents();
+      TR(pipeline.arrived[streamIdx], "finished");
       moveTo(pipeline.arrived, streamIdx, pipeline.finished);
       --streamIdx;
     }
@@ -179,17 +470,62 @@ exec::BlockingReason WaveDriver::processArrived(Pipeline& pipeline) {
   return exec::BlockingReason::kNotBlocked;
 }
 
+void WaveDriver::prepareAdvance(
+    Pipeline& pipeline,
+    WaveStream& stream,
+    int32_t from,
+    std::vector<AdvanceResult>& advanceVector) {
+  VELOX_CHECK(
+      stream.state() == WaveStream::State::kNotRunning ||
+      stream.state() == WaveStream::State::kHost);
+  void* driversToken = nullptr;
+  int32_t exclusiveIndex = 0;
+  for (auto i = 0; i < advanceVector.size(); ++i) {
+    auto& advance = advanceVector[i];
+    if (!advance.updateStatus) {
+      continue;
+    }
+    if (advance.syncDrivers) {
+      VELOX_CHECK_NULL(driversToken);
+      driversToken = advance.reason;
+      VELOX_CHECK_NOT_NULL(driversToken);
+      exclusiveIndex = i;
+    } else if (advance.syncStreams) {
+      waitForArrival(pipeline);
+    } else {
+      // No sync, like adding memory to string pool for func.
+      pipeline.operators[from]->callUpdateStatus(stream, advance);
+    }
+  }
+  if (driversToken) {
+    TR((&stream), "acquire");
+    barrier_->acquire(driversToken, [&]() { waitForArrival(pipeline); });
+    auto guard = folly::makeGuard([&]() {
+      TR((&stream), "release");
+      barrier_->release();
+    });
+
+    waitForArrival(pipeline);
+    pipeline.operators[from]->callUpdateStatus(
+        stream, advanceVector[exclusiveIndex]);
+  }
+}
+
 void WaveDriver::runOperators(
     Pipeline& pipeline,
     WaveStream& stream,
     int32_t from,
     int32_t numRows) {
+  // Pause here if other WaveDrivers need exclusive access.
+  barrier_->mayYield([&]() { waitForArrival(pipeline); });
   // The stream is in 'host' state for any host to device data
   // transfer, then in parallel state after first kernel launch.
+  ++stream.stats().numWaves;
   stream.setState(WaveStream::State::kHost);
   for (auto i = from; i < pipeline.operators.size(); ++i) {
     pipeline.operators[i]->schedule(stream, numRows);
   }
+  stream.resultToHost();
 }
 
 // Global counter for busy wait iterations.
@@ -205,13 +541,25 @@ void WaveDriver::waitForArrival(Pipeline& pipeline) {
       if (pipeline.running[i]->isArrived(set, waitUs, 0)) {
         incStats((pipeline.running[i]->stats()));
         pipeline.running[i]->setState(WaveStream::State::kNotRunning);
+        pipeline.running[i]->checkBlockStatuses();
+        pipeline.running[i]->throwIfError(interpretError);
+        TR(pipeline.running[i], "arrived inside wait");
         moveTo(pipeline.running, i, pipeline.arrived);
-        totalWaitLoops += waitLoops;
       }
       ++waitLoops;
+      --i;
+    }
+    if (waitLoops > 1000000) {
+      totalWaitLoops += waitLoops;
+      waitLoops = 0;
+      for (auto i = 0; i < pipeline.running.size(); ++i) {
+        TR(pipeline.running[i], "pending");
+      }
     }
   }
+  totalWaitLoops += waitLoops;
 }
+
 namespace {
 bool shouldStop(exec::StopReason taskStopReason) {
   return taskStopReason != exec::StopReason::kNone &&
@@ -222,6 +570,13 @@ bool shouldStop(exec::StopReason taskStopReason) {
 Advance WaveDriver::advance(int pipelineIdx) {
   auto& pipeline = pipelines_[pipelineIdx];
   int64_t waitLoops = 0;
+  // Set to true when any stream is seen not ready, false when any stream is
+  // seen ready.
+  bool isWaiting = false;
+  // Time when a stream was first seen not ready.
+  int64_t waitingSince = 0;
+  // Total wait time. Incremented when isWaiting is set to false from true.
+  int64_t waitUs = 0;
   for (;;) {
     const exec::StopReason taskStopReason =
         operatorCtx()->driverCtx()->task->shouldStop();
@@ -232,6 +587,9 @@ Advance WaveDriver::advance(int pipelineIdx) {
       // A point for test code injection.
       common::testutil::TestValue::adjust(
           "facebook::velox::wave::WaveDriver::getOutput::yield", this);
+      totalWaitLoops += waitLoops;
+      waveStats_.waitTime.micros += waitUs;
+
       return Advance::kBlocked;
     }
 
@@ -254,15 +612,26 @@ Advance WaveDriver::advance(int pipelineIdx) {
     auto& op = *pipeline.operators.back();
     auto& lastSet = op.syncSet();
     for (auto i = 0; i < pipeline.running.size(); ++i) {
-      if (pipeline.running[i]->isArrived(lastSet)) {
+      bool isArrived;
+      int64_t start = WaveTime::getMicro();
+      isArrived = pipeline.running[i]->isArrived(lastSet);
+      waveStats_.waitTime.micros += WaveTime::getMicro() - start;
+      if (isArrived) {
         auto arrived = pipeline.running[i].get();
         arrived->setState(WaveStream::State::kNotRunning);
         incStats(arrived->stats());
+        if (isWaiting) {
+          waitUs += WaveTime::getMicro() - waitingSince;
+          isWaiting = false;
+        }
+        arrived->throwIfError(interpretError);
+        TR(pipeline.running[i], "arrived");
         moveTo(pipeline.running, i, pipeline.arrived);
         if (pipeline.makesHostResult) {
           result_ = makeResult(*arrived, lastSet);
           if (result_ && result_->size() != 0) {
             totalWaitLoops += waitLoops;
+            waveStats_.waitTime.micros += waitUs;
             return Advance::kResult;
           }
           --i;
@@ -270,17 +639,31 @@ Advance WaveDriver::advance(int pipelineIdx) {
           pipeline.sinkFull = true;
           waitForArrival(pipeline);
           totalWaitLoops += waitLoops;
+          waveStats_.waitTime.micros += waitUs;
           return Advance::kResult;
         }
+      } else if (!isWaiting) {
+        waitingSince = WaveTime::getMicro();
+        isWaiting = true;
+      } else {
+        ++waitLoops;
       }
-      ++waitLoops;
     }
     if (pipeline.finished.empty() &&
         pipeline.running.size() + pipeline.arrived.size() <
             FLAGS_max_streams_per_driver) {
+      // Ordinal of WaveStream across this pipeline across all parallel
+      // WaveDrivers.
+      int16_t streamId = pipeline.arrived.size() + pipeline.running.size() +
+          (FLAGS_max_streams_per_driver * operatorCtx_->driverCtx()->driverId);
       auto stream = std::make_unique<WaveStream>(
-          *arena_, *hostArena_, &operands(), &stateMap_);
-      ++stream->stats().numWaves;
+          arena_,
+          *deviceArena_,
+          &operands(),
+          &barrier_->stateMap(),
+          pipeline.operators[0]->instructionStatus(),
+          streamId);
+      TR(stream, "created");
       stream->setState(WaveStream::State::kHost);
       pipeline.arrived.push_back(std::move(stream));
     }
@@ -340,8 +723,15 @@ std::string WaveDriver::toString() const {
 }
 
 void WaveDriver::setError() {
+  hasError_ = true;
   for (auto& pipeline : pipelines_) {
     for (auto& stream : pipeline.running) {
+      stream->setError();
+    }
+    for (auto& stream : pipeline.arrived) {
+      stream->setError();
+    }
+    for (auto& stream : pipeline.finished) {
       stream->setError();
     }
   }
@@ -368,18 +758,29 @@ void WaveDriver::updateStats() {
       "wave.bytesToHost",
       RuntimeCounter(waveStats_.bytesToHost, RuntimeCounter::Unit::kBytes));
   lockedStats->addRuntimeStat(
-      "wave.hostOnlyTime",
+      "wave.hostOnlyNanos",
       RuntimeCounter(
           waveStats_.hostOnlyTime.micros * 1000, RuntimeCounter::Unit::kNanos));
   lockedStats->addRuntimeStat(
-      "wave.hostParallelTime",
+      "wave.hostParallelNanos",
       RuntimeCounter(
           waveStats_.hostParallelTime.micros * 1000,
           RuntimeCounter::Unit::kNanos));
   lockedStats->addRuntimeStat(
-      "wave.waitTime",
+      "wave.waitNanos",
       RuntimeCounter(
           waveStats_.waitTime.micros * 1000, RuntimeCounter::Unit::kNanos));
+  lockedStats->addRuntimeStat(
+      "wave.stagingNanos",
+      RuntimeCounter(
+          waveStats_.stagingTime.micros * 1000, RuntimeCounter::Unit::kNanos));
+  if (FLAGS_wave_transfer_timing) {
+    lockedStats->addRuntimeStat(
+        "wave.transferWaitNanos",
+        RuntimeCounter(
+            waveStats_.transferWaitTime.micros * 1000,
+            RuntimeCounter::Unit::kNanos));
+  }
 }
 
 } // namespace facebook::velox::wave

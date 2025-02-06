@@ -19,6 +19,67 @@
 
 namespace facebook::velox::exec {
 
+PlanNodeStats& PlanNodeStats::operator+=(const PlanNodeStats& another) {
+  inputRows += another.inputRows;
+  inputBytes += another.inputBytes;
+  inputVectors += another.inputVectors;
+
+  rawInputRows += another.inputRows;
+  rawInputBytes += another.rawInputBytes;
+
+  dynamicFilterStats.add(another.dynamicFilterStats);
+
+  outputRows += another.outputRows;
+  outputBytes += another.outputBytes;
+  outputVectors += another.outputVectors;
+
+  isBlockedTiming.add(another.isBlockedTiming);
+  addInputTiming.add(another.addInputTiming);
+  getOutputTiming.add(another.getOutputTiming);
+  finishTiming.add(another.finishTiming);
+  cpuWallTiming.add(another.isBlockedTiming);
+  cpuWallTiming.add(another.addInputTiming);
+  cpuWallTiming.add(another.getOutputTiming);
+  cpuWallTiming.add(another.finishTiming);
+  cpuWallTiming.add(another.isBlockedTiming);
+
+  backgroundTiming.add(another.backgroundTiming);
+
+  blockedWallNanos += another.blockedWallNanos;
+
+  peakMemoryBytes += another.peakMemoryBytes;
+  numMemoryAllocations += another.numMemoryAllocations;
+
+  physicalWrittenBytes += another.physicalWrittenBytes;
+
+  for (const auto& [name, customStats] : another.customStats) {
+    if (UNLIKELY(this->customStats.count(name) == 0)) {
+      this->customStats.insert(std::make_pair(name, customStats));
+    } else {
+      this->customStats.at(name).merge(customStats);
+    }
+  }
+
+  // Populating number of drivers for plan nodes with multiple operators is not
+  // useful. Each operator could have been executed in different pipelines with
+  // different number of drivers.
+  if (!isMultiOperatorTypeNode()) {
+    numDrivers += another.numDrivers;
+  } else {
+    numDrivers = 0;
+  }
+
+  numSplits += another.numSplits;
+
+  spilledInputBytes += another.spilledInputBytes;
+  spilledBytes += another.spilledBytes;
+  spilledRows += another.spilledRows;
+  spilledPartitions += another.spilledPartitions;
+  spilledFiles += another.spilledFiles;
+
+  return *this;
+}
+
 void PlanNodeStats::add(const OperatorStats& stats) {
   auto it = operatorStats.find(stats.operatorType);
   if (it != operatorStats.end()) {
@@ -45,9 +106,14 @@ void PlanNodeStats::addTotals(const OperatorStats& stats) {
   outputBytes += stats.outputBytes;
   outputVectors += stats.outputVectors;
 
+  isBlockedTiming.add(stats.isBlockedTiming);
+  addInputTiming.add(stats.addInputTiming);
+  getOutputTiming.add(stats.getOutputTiming);
+  finishTiming.add(stats.finishTiming);
   cpuWallTiming.add(stats.addInputTiming);
   cpuWallTiming.add(stats.getOutputTiming);
   cpuWallTiming.add(stats.finishTiming);
+  cpuWallTiming.add(stats.isBlockedTiming);
 
   backgroundTiming.add(stats.backgroundTiming);
 
@@ -58,11 +124,11 @@ void PlanNodeStats::addTotals(const OperatorStats& stats) {
 
   physicalWrittenBytes += stats.physicalWrittenBytes;
 
-  for (const auto& [name, runtimeStats] : stats.runtimeStats) {
-    if (UNLIKELY(customStats.count(name) == 0)) {
-      customStats.insert(std::make_pair(name, runtimeStats));
+  for (const auto& [name, customStats] : stats.runtimeStats) {
+    if (UNLIKELY(this->customStats.count(name) == 0)) {
+      this->customStats.insert(std::make_pair(name, customStats));
     } else {
-      customStats.at(name).merge(runtimeStats);
+      this->customStats.at(name).merge(customStats);
     }
   }
 
@@ -95,8 +161,12 @@ std::string PlanNodeStats::toString(bool includeInputStats) const {
     }
   }
   out << "Output: " << outputRows << " rows (" << succinctBytes(outputBytes)
-      << ", " << outputVectors << " batches)"
-      << ", Cpu time: " << succinctNanos(cpuWallTiming.cpuNanos)
+      << ", " << outputVectors << " batches)";
+  if (physicalWrittenBytes > 0) {
+    out << ", Physical written output: " << succinctBytes(physicalWrittenBytes);
+  }
+  out << ", Cpu time: " << succinctNanos(cpuWallTiming.cpuNanos)
+      << ", Wall time: " << succinctNanos(cpuWallTiming.wallNanos)
       << ", Blocked wall time: " << succinctNanos(blockedWallNanos)
       << ", Peak memory: " << succinctBytes(peakMemoryBytes)
       << ", Memory allocations: " << numMemoryAllocations;
@@ -118,6 +188,14 @@ std::string PlanNodeStats::toString(bool includeInputStats) const {
     out << ", DynamicFilter producer plan nodes: "
         << folly::join(',', dynamicFilterStats.producerNodeIds);
   }
+
+  out << ", CPU breakdown: B/I/O/F "
+      << fmt::format(
+             "({}/{}/{}/{})",
+             succinctNanos(isBlockedTiming.cpuNanos),
+             succinctNanos(addInputTiming.cpuNanos),
+             succinctNanos(getOutputTiming.cpuNanos),
+             succinctNanos(finishTiming.cpuNanos));
 
   return out.str();
 }
@@ -159,6 +237,10 @@ folly::dynamic toPlanStatsJson(const facebook::velox::exec::TaskStats& stats) {
       stat["outputRows"] = operatorStat.second->outputRows;
       stat["outputVectors"] = operatorStat.second->outputVectors;
       stat["outputBytes"] = operatorStat.second->outputBytes;
+      stat["isBlockedTiming"] = operatorStat.second->isBlockedTiming.toString();
+      stat["addInputTiming"] = operatorStat.second->addInputTiming.toString();
+      stat["getOutputTiming"] = operatorStat.second->getOutputTiming.toString();
+      stat["finishTiming"] = operatorStat.second->finishTiming.toString();
       stat["cpuWallTiming"] = operatorStat.second->cpuWallTiming.toString();
       stat["blockedWallNanos"] = operatorStat.second->blockedWallNanos;
       stat["peakMemoryBytes"] = operatorStat.second->peakMemoryBytes;
@@ -213,7 +295,8 @@ void printCustomStats(
 std::string printPlanWithStats(
     const core::PlanNode& plan,
     const TaskStats& taskStats,
-    bool includeCustomStats) {
+    bool includeCustomStats,
+    PlanNodeAnnotation annotation) {
   auto planStats = toPlanStats(taskStats);
   auto leafPlanNodes = plan.leafPlanNodeIds();
 
@@ -246,6 +329,9 @@ std::string printPlanWithStats(
           if (includeCustomStats) {
             printCustomStats(stats.customStats, indentation + "   ", stream);
           }
+        }
+        if (annotation) {
+          stream << indentation << annotation(planNodeId) << std::endl;
         }
       });
 }

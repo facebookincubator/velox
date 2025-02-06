@@ -19,10 +19,11 @@
 #include <deque>
 
 #include <fmt/format.h>
+#include <folly/GLog.h>
 #include <folly/chrono/Hardware.h>
 #include <folly/container/F14Set.h>
 #include <folly/futures/SharedPromise.h>
-#include "folly/GLog.h"
+
 #include "velox/common/base/BitUtil.h"
 #include "velox/common/base/CoalesceIo.h"
 #include "velox/common/base/Portability.h"
@@ -46,6 +47,12 @@ class CacheShard;
 class SsdCache;
 struct SsdCacheStats;
 class SsdFile;
+
+namespace test {
+class AsyncDataCacheEntryTestHelper;
+class CacheShardTestHelper;
+class AsyncDataCacheTestHelper;
+} // namespace test
 
 // Type for tracking last access. This is based on CPU clock and
 // scaled to be around 1ms resolution. This can wrap around and is
@@ -265,14 +272,6 @@ class AsyncDataCacheEntry {
 
   std::string toString() const;
 
-  const AccessStats& testingAccessStats() const {
-    return accessStats_;
-  }
-
-  bool testingFirstUse() const {
-    return isFirstUse_;
-  }
-
  private:
   void release();
   void addReference();
@@ -337,6 +336,7 @@ class AsyncDataCacheEntry {
 
   friend class CacheShard;
   friend class CachePin;
+  friend class test::AsyncDataCacheEntryTestHelper;
 };
 
 class CachePin {
@@ -626,8 +626,6 @@ class CacheShard {
     return allocClocks_;
   }
 
-  std::vector<AsyncDataCacheEntry*> testingCacheEntries() const;
-
  private:
   static constexpr uint32_t kMaxFreeEntries = 1 << 10;
   static constexpr int32_t kNoThreshold = std::numeric_limits<int32_t>::max();
@@ -692,6 +690,8 @@ class CacheShard {
   // Tracker of cumulative time spent in allocating/freeing MemoryAllocator
   // space for backing cached data.
   std::atomic<uint64_t> allocClocks_{0};
+
+  friend class test::CacheShardTestHelper;
 };
 
 class AsyncDataCache : public memory::Cache {
@@ -787,9 +787,15 @@ class AsyncDataCache : public memory::Cache {
   /// Returns true if there is an entry for 'key'. Updates access time.
   bool exists(RawFileCacheKey key) const;
 
+#if defined(__has_feature)
+#if __has_feature(thread_sanitizer)
+  __attribute__((__no_sanitize__("thread")))
+#endif
+#endif
   /// Returns snapshot of the aggregated stats from all shards and the stats of
   /// SSD cache if used.
-  virtual CacheStats refreshStats() const;
+  virtual CacheStats
+  refreshStats() const;
 
   /// If 'details' is true, returns the stats of the backing memory allocator
   /// and ssd cache. Otherwise, only returns the cache stats.
@@ -869,24 +875,15 @@ class AsyncDataCache : public memory::Cache {
   /// NOTE: it is used by testing and Prestissimo server operation.
   void clear();
 
-  std::vector<AsyncDataCacheEntry*> testingCacheEntries() const;
-
-  uint64_t testingSsdSavable() const {
-    return ssdSaveable_;
-  }
-
-  int32_t testingNumShards() const {
-    return shards_.size();
-  }
-
  private:
   static constexpr int32_t kNumShards = 4; // Must be power of 2.
   static constexpr int32_t kShardMask = kNumShards - 1;
 
   // True if 'acquired' has more pages than 'numPages' or allocator has space
   // for numPages - acquired pages of more allocation.
-  bool canTryAllocate(int32_t numPages, const memory::Allocation& acquired)
-      const;
+  bool canTryAllocate(
+      memory::MachinePageCount numPages,
+      const memory::Allocation& acquired) const;
 
   static AsyncDataCache** getInstancePtr();
 
@@ -928,6 +925,8 @@ class AsyncDataCache : public memory::Cache {
   // Counter of threads competing for allocation in makeSpace(). Used
   // for setting staggered backoff. Mutexes are not allowed for this.
   std::atomic<int32_t> numThreadsInAllocate_{0};
+
+  friend class test::AsyncDataCacheTestHelper;
 };
 
 /// Samples a set of values T from 'numSamples' calls of 'iter'. Returns the
@@ -978,7 +977,7 @@ struct fmt::formatter<facebook::velox::cache::CoalescedLoad::State>
     : formatter<int> {
   auto format(
       facebook::velox::cache::CoalescedLoad::State s,
-      format_context& ctx) {
+      format_context& ctx) const {
     return formatter<int>::format(static_cast<int>(s), ctx);
   }
 };
