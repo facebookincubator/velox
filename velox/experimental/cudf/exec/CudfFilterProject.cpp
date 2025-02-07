@@ -37,6 +37,13 @@ cudf::ast::literal make_scalar_and_literal(
     scalars.emplace_back(std::make_unique<cudf::numeric_scalar<T>>(value));
     return cudf::ast::literal{
         *static_cast<cudf::numeric_scalar<T>*>(scalars.back().get())};
+  } else if (kind == TypeKind::VARCHAR) {
+    VELOX_CHECK(vector->isConstantEncoding());
+    auto constVector = vector->as<ConstantVector<StringView>>();
+    auto value = constVector->valueAt(0);
+    scalars.emplace_back(std::make_unique<cudf::string_scalar>(value));
+    return cudf::ast::literal{
+        *static_cast<cudf::string_scalar*>(scalars.back().get())};
   } else {
     // TODO for non-numeric types too.
     VELOX_CHECK(false, "Not implemented");
@@ -60,6 +67,7 @@ cudf::ast::expression const& create_ast_tree(
   using op = cudf::ast::ast_operator;
   using operation = cudf::ast::operation;
   auto& name = expr->name();
+  std::cout << "name: " << name << std::endl;
   if (name == "literal") {
     velox::exec::ConstantExpr* c =
         dynamic_cast<velox::exec::ConstantExpr*>(expr.get());
@@ -68,14 +76,30 @@ cudf::ast::expression const& create_ast_tree(
     // convert to cudf scalar
     auto lit = createLiteral(value, scalars);
     return t.push(std::move(lit));
-  } else if (name == "multiply") {
+  } else if (name == "eq") {
     auto len = expr->inputs().size();
     VELOX_CHECK_EQ(len, 2);
     auto const& op1 =
         create_ast_tree(expr->inputs()[0], t, scalars, inputRowSchema);
     auto const& op2 =
         create_ast_tree(expr->inputs()[1], t, scalars, inputRowSchema);
-    return t.push(operation{op::MUL, op1, op2});
+    return t.push(operation{op::EQUAL, op1, op2});
+  } else if (name == "ne") {
+    auto len = expr->inputs().size();
+    VELOX_CHECK_EQ(len, 2);
+    auto const& op1 =
+        create_ast_tree(expr->inputs()[0], t, scalars, inputRowSchema);
+    auto const& op2 =
+        create_ast_tree(expr->inputs()[1], t, scalars, inputRowSchema);
+    return t.push(operation{op::NOT_EQUAL, op1, op2});
+  } else if (name == "plus") {
+    auto len = expr->inputs().size();
+    VELOX_CHECK_EQ(len, 2);
+    auto const& op1 =
+        create_ast_tree(expr->inputs()[0], t, scalars, inputRowSchema);
+    auto const& op2 =
+        create_ast_tree(expr->inputs()[1], t, scalars, inputRowSchema);
+    return t.push(operation{op::ADD, op1, op2});
   } else if (name == "minus") {
     auto len = expr->inputs().size();
     VELOX_CHECK_EQ(len, 2);
@@ -84,6 +108,14 @@ cudf::ast::expression const& create_ast_tree(
     auto const& op2 =
         create_ast_tree(expr->inputs()[1], t, scalars, inputRowSchema);
     return t.push(operation{op::SUB, op1, op2});
+  } else if (name == "multiply") {
+    auto len = expr->inputs().size();
+    VELOX_CHECK_EQ(len, 2);
+    auto const& op1 =
+        create_ast_tree(expr->inputs()[0], t, scalars, inputRowSchema);
+    auto const& op2 =
+        create_ast_tree(expr->inputs()[1], t, scalars, inputRowSchema);
+    return t.push(operation{op::MUL, op1, op2});
   } else if (name == "divide") {
     auto len = expr->inputs().size();
     VELOX_CHECK_EQ(len, 2);

@@ -66,11 +66,28 @@ class CudfFilterProjectTest : public OperatorTestBase {
     // Create a plan with a multiply and minus operation
     auto plan = PlanBuilder()
                     .values(input)
-                    .project({"c1 * (1.0 - c2) AS result"})
+                    .project({"c0 * (1.0 - c1) AS result"})
                     .planNode();
 
     // Run the test
-    runTest(plan, "SELECT c1 * (1.0 - c2) AS result FROM tmp");
+    runTest(plan, "SELECT c0 * (1.0 - c1) AS result FROM tmp");
+  }
+
+  void testStringEqualOperation(const std::vector<RowVectorPtr>& input) {
+    // Create a plan with a string equal operation
+    auto c2Value = input[0]
+                       ->as<RowVector>()
+                       ->childAt(2)
+                       ->as<FlatVector<StringView>>()
+                       ->valueAt(1)
+                       .str();
+    auto plan = PlanBuilder()
+                    .values(input)
+                    .project({"c2 = '" + c2Value + "' AS result"})
+                    .planNode();
+
+    // Run the test
+    runTest(plan, "SELECT c2 = '" + c2Value + "' AS result FROM tmp");
   }
 
   void runTest(core::PlanNodePtr planNode, const std::string& duckDbSql) {
@@ -112,4 +129,19 @@ TEST_F(CudfFilterProjectTest, divideOperation) {
   testDivideOperation(vectors);
 }
 
+TEST_F(CudfFilterProjectTest, multiplyAndMinusOperation) {
+  vector_size_t batchSize = 1000;
+  auto vectors = makeVectors(rowType_, 2, batchSize);
+  createDuckDbTable(vectors);
+
+  testMultiplyAndMinusOperation(vectors);
+}
+
+TEST_F(CudfFilterProjectTest, stringEqualOperation) {
+  vector_size_t batchSize = 1000;
+  auto vectors = makeVectors(rowType_, 2, batchSize);
+  createDuckDbTable(vectors);
+
+  testStringEqualOperation(vectors);
+}
 } // namespace
