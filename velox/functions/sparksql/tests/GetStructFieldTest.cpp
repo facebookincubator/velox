@@ -15,7 +15,6 @@
  */
 #include <gtest/gtest.h>
 
-#include "functions/sparksql/specialforms/GetStructField.h"
 #include "velox/functions/sparksql/tests/SparkFunctionBaseTest.h"
 #include "velox/vector/tests/utils/VectorTestBase.h"
 
@@ -26,62 +25,68 @@ namespace {
 
 class GetStructFieldTest : public SparkFunctionBaseTest {
  protected:
-  void GetStructFieldSimple(
-      const VectorPtr& parameter,
-      const VectorPtr& index,
-      const TypePtr& inputType,
-      const TypePtr& resultType,
-      const VectorPtr& expected = nullptr) {
-    core::TypedExprPtr data =
-        std::make_shared<const core::FieldAccessTypedExpr>(inputType, "c0");
-    core::TypedExprPtr ordinal =
-        std::make_shared<const core::FieldAccessTypedExpr>(INTEGER(), "c1");
-    auto getStructFieldExpr = std::make_shared<const core::CallTypedExpr>(
+  void testGetStructField(
+      const VectorPtr& input,
+      int ordinal,
+      const VectorPtr& expected) {
+    auto batchSize = expected->size();
+    auto ordinalVector = makeConstant<int32_t>(ordinal, batchSize);
+    std::vector<core::TypedExprPtr> inputs = {
+        std::make_shared<const core::FieldAccessTypedExpr>(input->type(), "c0"),
+        std::make_shared<const core::FieldAccessTypedExpr>(INTEGER(), "c1")
+    };
+    auto resultType = expected->type();
+    auto expr = std::make_shared<const core::CallTypedExpr>(
         resultType,
-        std::vector<core::TypedExprPtr>{data, ordinal},
+        std::move(inputs),
         "get_struct_field");
     auto result = evaluate(
-        getStructFieldExpr, makeRowVector({"c0", "c1"}, {parameter, index}));
-    if (expected) {
-      ::facebook::velox::test::assertEqualVectors(expected, result);
-    }
+        expr, makeRowVector({"c0", "c1"}, {input, ordinalVector}));
+    ::facebook::velox::test::assertEqualVectors(expected, result);
   }
 };
 
-TEST_F(GetStructFieldTest, simpleInteger) {
-  auto dataType = ROW({"k1", "k2", "a"}, {BIGINT(), BIGINT(), BIGINT()});
-  auto data = makeRowVector(
-      {"k1", "k2", "a"},
-      {makeNullableFlatVector<int32_t>({12}),
-       makeNullableFlatVector<int32_t>({2}),
-       makeNullableFlatVector<int32_t>({1})});
-  auto result = makeNullableFlatVector<int32_t>({2});
-  auto index = makeConstant<int32_t>(1, 1);
-  GetStructFieldSimple(data, index, dataType, INTEGER(), result);
+TEST_F(GetStructFieldTest, simpleType) {
+  auto col0 = makeFlatVector<int32_t>({1, 2});
+  auto col1 = makeFlatVector<std::string>({"hello", "world"});
+  auto col2 = makeNullableFlatVector<int32_t>({std::nullopt, 12});
+  auto data = makeRowVector({col0, col1, col2});
+
+  // Get int field
+  testGetStructField(data, 0, col0);
+
+  // Get string field
+  testGetStructField(data, 1, col1);
+
+  // Get int field with null
+  testGetStructField(data, 2, col2);
 }
 
-TEST_F(GetStructFieldTest, simpleVarchar) {
-  auto dataType = ROW({"k1", "k2", "a"}, {BIGINT(), VARCHAR(), BIGINT()});
-  auto data = makeRowVector(
-      {"k1", "k2", "a"},
-      {makeNullableFlatVector<int32_t>({12}),
-       makeNullableFlatVector<std::string>({"Milly"}),
-       makeNullableFlatVector<int32_t>({1})});
-  auto result = makeNullableFlatVector<std::string>({"Milly"});
-  auto index = makeConstant<int32_t>(1, 1);
-  GetStructFieldSimple(data, index, dataType, VARCHAR(), result);
-}
+TEST_F(GetStructFieldTest, complexType) {
+  auto col0 = makeArrayVector<int32_t>({
+    {1, 2},
+    {3, 4}
+  });
+  auto col1 = makeMapVector<std::string, int32_t>({
+    {{"a", 0}, {"b", 1}},
+    {{"c", 3}, {"d", 4}}
+  });
+  auto col2 = makeRowVector({
+    makeArrayVector<int32_t>({
+      {100, 101}, {200, 202}, {300, 303}
+    }),
+    makeFlatVector<std::string>({"a", "b"})
+  });
+  auto data = makeRowVector({col0, col1, col2});
 
-TEST_F(GetStructFieldTest, simpleNull) {
-  auto dataType = ROW({"k1", "k2", "a"}, {BIGINT(), BIGINT(), BIGINT()});
-  auto data = makeRowVector(
-      {"k1", "k2", "a"},
-      {makeNullableFlatVector<int32_t>({12}),
-       makeNullableFlatVector<int32_t>({std::nullopt}),
-       makeNullableFlatVector<int32_t>({1})});
-  auto result = makeNullableFlatVector<int32_t>({std::nullopt});
-  auto index = makeConstant<int32_t>(1, 1);
-  GetStructFieldSimple(data, index, dataType, INTEGER(), result);
+  // Get array field
+  testGetStructField(data, 0, col0);
+
+  // Get map field
+  testGetStructField(data, 1, col1);
+
+  // Get row field
+  testGetStructField(data, 2, col2);
 }
 
 } // namespace

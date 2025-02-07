@@ -15,7 +15,6 @@
  */
 
 #include "velox/functions/sparksql/specialforms/GetStructField.h"
-#include <type/Type.h>
 #include "expression/Expr.h"
 #include "vector/ComplexVector.h"
 #include "vector/ConstantVector.h"
