@@ -517,7 +517,7 @@ void PrestoBatchVectorSerializer::serializeColumn(
       serializeArrayVector(stream, vector, ranges);
       break;
     case VectorEncoding::Simple::MAP:
-      // serializeMapVector(stream, vector, ranges);
+      serializeMapVector(stream, vector, ranges);
       break;
     case VectorEncoding::Simple::LAZY:
       serializeColumn(stream, BaseVector::loadedVectorShared(vector), ranges);
@@ -572,6 +572,61 @@ void PrestoBatchVectorSerializer::serializeArrayVector(
       reinterpret_cast<char*>(mutableOffsets), (numRows + 1) * sizeof(int32_t));
 
   // Write out the hasNull and isNUll flags.
+  writeNullsSegment(stream, hasNulls, vector, ranges, numRows);
+}
+
+template <typename RangeType>
+void PrestoBatchVectorSerializer::serializeMapVector(
+    BufferedOutputStream* stream,
+    const VectorPtr& vector,
+    const folly::Range<const RangeType*>& ranges) {
+  const auto* mapVector = vector->as<MapVector>();
+  const auto numRows = rangesTotalSize(ranges);
+
+  // Write out the header.
+  writeHeader(stream, vector->type());
+
+  const bool hasNulls = this->hasNulls(vector, ranges);
+
+  // This is used to hold the ranges of the keys/values Vectors to write out.
+  ScratchPtr<IndexRange, 64> selectedRangesHolder(scratch_);
+  IndexRange* mutableSelectedRanges = selectedRangesHolder.get(numRows);
+  // This is used to hold the offsets of the maps which we write out towards the
+  // end.
+  ScratchPtr<int32_t, 64> offsetsHolder(scratch_);
+  int32_t* mutableOffsets = offsetsHolder.get(numRows + 1);
+  // The number of ranges to write out from the keys/values Vectors. This is
+  // equal to the number of non-empty, non-null mpas in ranges.
+  size_t rangesSize = 0;
+  computeCollectionRangesAndOffsets(
+      mapVector,
+      ranges,
+      hasNulls,
+      mutableOffsets,
+      mutableSelectedRanges,
+      rangesSize);
+
+  // Write out the keys.
+  serializeColumn(
+      stream,
+      mapVector->mapKeys(),
+      folly::Range<const IndexRange*>(mutableSelectedRanges, rangesSize));
+  // Write out the values.
+  serializeColumn(
+      stream,
+      mapVector->mapValues(),
+      folly::Range<const IndexRange*>(mutableSelectedRanges, rangesSize));
+
+  // Write out the hash table size (we don't write out the optional hash table,
+  // so use -1 as the size).
+  writeInt32(stream, -1);
+  // Write out the number of rows.
+  writeInt32(stream, numRows);
+  // Write out the offsets.
+  stream->write(
+      reinterpret_cast<char*>(mutableOffsets), (numRows + 1) * sizeof(int32_t));
+
+  // Wirte out the hasNull and isNull flags.
   writeNullsSegment(stream, hasNulls, vector, ranges, numRows);
 }
 } // namespace facebook::velox::serializer::presto::detail
