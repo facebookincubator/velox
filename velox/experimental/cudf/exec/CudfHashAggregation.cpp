@@ -148,42 +148,18 @@ void CudfHashAggregation::initialize() {
   setupGroupingKeyChannelProjections(
       groupingKeyInputChannels_, groupingKeyOutputChannels_);
 
-  // auto hashers = createVectorHashers(inputType, groupingKeyInputChannels);
-  // const auto numHashers = hashers.size();
-  const auto numHashers = groupingKeyOutputChannels_.size();
+  const auto numGroupingKeys = groupingKeyOutputChannels_.size();
 
-  // DM: This may be about optimizations related to pre-grouped keys. We
-  // can also do that in cudf. But let's not right now.
-  // std::vector<column_index_t> preGroupedChannels;
-  // preGroupedChannels.reserve(aggregationNode_->preGroupedKeys().size());
-  // for (const auto& key : aggregationNode_->preGroupedKeys()) {
-  //   auto channel = exprToChannel(key.get(), inputType);
-  //   preGroupedChannels.push_back(channel);
-  // }
-
-  // TODO (dm): This is the main function coverting expressions into aggregation
-  // function. I need to implement one where I convert things into aggregation
-  // requests for cudf.
-  std::shared_ptr<core::ExpressionEvaluator> expressionEvaluator;
-  std::vector<AggregateInfo> aggregateInfos = toAggregateInfo(
-      *aggregationNode_, *operatorCtx_, numHashers, expressionEvaluator);
+  // DM: Velox CPU does optimizations related to pre-grouped keys. We can also
+  // do that in cudf. I'm skipping it for now
 
   requests_map_ = toAggregationsMap(*aggregationNode_);
   numAggregates_ = aggregationNode_->aggregates().size();
 
   // Check that aggregate result type match the output type.
-  // TODO (dm): This is like output schema validation. Just give it a go over to
-  // see if it's correct.
-  for (auto i = 0; i < aggregateInfos.size(); i++) {
-    const auto& aggResultType = aggregateInfos[i].function->resultType();
-    const auto& expectedType = outputType_->childAt(numHashers + i);
-    VELOX_CHECK(
-        aggResultType->kindEquals(expectedType),
-        "Unexpected result type for an aggregation: {}, expected {}, step {}",
-        aggResultType->toString(),
-        expectedType->toString(),
-        core::AggregationNode::stepName(aggregationNode_->step()));
-  }
+  // TODO (dm): This is output schema validation. In velox CPU, it's done using
+  // output types reported by aggregation functions. We can't do that in cudf
+  // groupby.
 
   // DM: This is just a maping of groupby key columns to their output
   // index. We don't need hasher for this. I also don't know how this will be
@@ -196,15 +172,9 @@ void CudfHashAggregation::initialize() {
   //       hashers[groupingKeyOutputChannels[i]]->channel(), i);
   // }
 
-  // TODO (dm): Figure out what group ID is.
-  // std::optional<column_index_t> groupIdChannel;
-  // if (aggregationNode_->groupId().has_value()) {
-  //   groupIdChannel = outputType_->getChildIdxIfExists(
-  //       aggregationNode_->groupId().value()->name());
-  //   VELOX_CHECK(groupIdChannel.has_value());
-  // }
+  // TODO (dm): Add support for grouping sets and group ids
 
-  // aggregationNode_.reset();
+  aggregationNode_.reset();
 }
 
 void CudfHashAggregation::setupGroupingKeyChannelProjections(
@@ -228,11 +198,11 @@ void CudfHashAggregation::setupGroupingKeyChannelProjections(
 
   const bool reorderGroupingKeys = false;
   //     canSpill() && spillConfig()->prefixSortEnabled();
-  // // If prefix sort is enabled, we need to sort the grouping key's layout in
-  // the
-  // // grouping set to maximize the prefix sort acceleration if spill is
-  // // triggered. The reorder stores the grouping key with smaller prefix sort
-  // // encoded size first.
+  // If prefix sort is enabled, we need to sort the grouping key's layout in the
+  // grouping set to maximize the prefix sort acceleration if spill is
+  // triggered. The reorder stores the grouping key with smaller prefix sort
+  // encoded size first.
+  // DM: Not sure if we need this yet.
   // if (reorderGroupingKeys) {
   //   PrefixSortLayout::optimizeSortKeysOrder(inputType,
   //   groupingKeyProjections);
@@ -250,10 +220,6 @@ void CudfHashAggregation::setupGroupingKeyChannelProjections(
     std::iota(
         groupingKeyOutputChannels.begin(), groupingKeyOutputChannels.end(), 0);
     return;
-  }
-
-  for (auto i = 0; i < groupingKeys.size(); ++i) {
-    groupingKeyOutputChannels[groupingKeyProjections[i].outputChannel] = i;
   }
 }
 
