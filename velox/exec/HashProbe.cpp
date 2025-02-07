@@ -1380,11 +1380,24 @@ SelectivityVector HashProbe::evalFilterForNullAwareJoin(
   }
 
   if (buildSideHasNullKeys_) {
+    if (nullKeyProbeHashers_.empty()) {
+      nullKeyProbeHashers_ =
+          createVectorHashers(probeType_, joinNode_->leftKeys());
+      VELOX_CHECK_EQ(nullKeyProbeHashers_.size(), 1);
+      if (table_->hashMode() == BaseHashTable::HashMode::kHash) {
+        nullKeyProbeInput_ =
+            BaseVector::create(nullKeyProbeHashers_[0]->type(), 1, pool());
+        nullKeyProbeInput_->setNull(0, true);
+        SelectivityVector selectivity(1);
+        nullKeyProbeHashers_[0]->decode(*nullKeyProbeInput_, selectivity);
+      }
+    }
     BaseHashTable::NullKeyRowsIterator iter;
     nullKeyProbeRows.deselect(filterPassedRows);
     applyFilterOnTableRowsForNullAwareJoin(
         nullKeyProbeRows, filterPassedRows, [&](char** data, int32_t maxRows) {
-          return table_->listNullKeyRows(&iter, maxRows, data);
+          return table_->listNullKeyRows(
+              &iter, maxRows, data, nullKeyProbeHashers_);
         });
   }
   BaseHashTable::RowsIterator iter;
