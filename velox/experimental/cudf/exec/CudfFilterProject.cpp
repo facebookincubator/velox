@@ -84,7 +84,7 @@ cudf::ast::expression const& create_ast_tree(
     auto const& op2 =
         create_ast_tree(expr->inputs()[1], t, scalars, inputRowSchema);
     return t.push(operation{op::EQUAL, op1, op2});
-  } else if (name == "ne") {
+  } else if (name == "neq") {
     auto len = expr->inputs().size();
     VELOX_CHECK_EQ(len, 2);
     auto const& op1 =
