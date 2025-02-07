@@ -18,11 +18,13 @@
 #include <cuda.h>
 #include <cudf/detail/nvtx/ranges.hpp>
 #include "velox/exec/Driver.h"
+#include "velox/exec/FilterProject.h"
 #include "velox/exec/HashBuild.h"
 #include "velox/exec/HashProbe.h"
 #include "velox/exec/Operator.h"
 #include "velox/exec/OrderBy.h"
 #include "velox/experimental/cudf/exec/CudfConversion.h"
+#include "velox/experimental/cudf/exec/CudfFilterProject.h"
 #include "velox/experimental/cudf/exec/CudfHashJoin.h"
 #include "velox/experimental/cudf/exec/CudfOrderBy.h"
 #include "velox/experimental/cudf/exec/Utilities.h"
@@ -76,7 +78,11 @@ bool CompileState::compile() {
   };
 
   auto is_supported_gpu_operator = [](const exec::Operator* op) {
-    return is_any_of<exec::HashBuild, exec::HashProbe, exec::OrderBy>(op);
+    return is_any_of<
+        exec::HashBuild,
+        exec::HashProbe,
+        exec::OrderBy,
+        exec::FilterProject>(op);
   };
   std::vector<bool> is_supported_gpu_operators(operators.size());
   std::transform(
@@ -85,10 +91,14 @@ bool CompileState::compile() {
       is_supported_gpu_operators.begin(),
       is_supported_gpu_operator);
   auto accepts_gpu_input = [](const exec::Operator* op) {
-    return is_any_of<exec::HashBuild, exec::HashProbe, exec::OrderBy>(op);
+    return is_any_of<
+        exec::HashBuild,
+        exec::HashProbe,
+        exec::OrderBy,
+        exec::FilterProject>(op);
   };
   auto produces_gpu_output = [](const exec::Operator* op) {
-    return is_any_of<exec::HashProbe, exec::OrderBy>(op);
+    return is_any_of<exec::HashProbe, exec::OrderBy, exec::FilterProject>(op);
   };
 
   int32_t operatorsOffset = 0;
@@ -141,7 +151,22 @@ bool CompileState::compile() {
       replace_op.push_back(std::make_unique<CudfOrderBy>(id, ctx, plan_node));
       replace_op.back()->initialize();
       // To-velox (optional)
+    } else if (
+        auto filterProjectOp = dynamic_cast<exec::FilterProject*>(oper)) {
+      auto info = filterProjectOp->exprsAndProjection();
+      auto& id_projections = filterProjectOp->identityProjections();
+      VELOX_CHECK(!info.hasFilter, "Filter not supported yet");
+      auto plan_node = std::dynamic_pointer_cast<const core::ProjectNode>(
+          get_plan_node(filterProjectOp->planNodeId()));
+      // If filter doesn't exist then project should definitely exist so this
+      // should never hit
+      VELOX_CHECK(plan_node != nullptr);
+      std::cout << filterProjectOp->planNodeId() << std::endl;
+      replace_op.push_back(std::make_unique<CudfFilterProject>(
+          id, ctx, info, id_projections, nullptr, plan_node));
+      replace_op.back()->initialize();
     }
+
     if (next_operator_is_not_gpu and produces_gpu_output(oper)) {
       auto plan_node = get_plan_node(oper->planNodeId());
       replace_op.push_back(std::make_unique<CudfToVelox>(
