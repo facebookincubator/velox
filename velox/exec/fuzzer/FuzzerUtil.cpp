@@ -24,6 +24,7 @@
 #include "velox/dwio/dwrf/writer/Writer.h"
 #include "velox/exec/fuzzer/DuckQueryRunner.h"
 #include "velox/exec/fuzzer/PrestoQueryRunner.h"
+#include "velox/exec/tests/utils/TempDirectoryPath.h"
 #include "velox/expression/SignatureBinder.h"
 #include "velox/functions/prestosql/types/IPPrefixType.h"
 
@@ -203,6 +204,11 @@ bool isTableScanSupported(const TypePtr& type) {
     return false;
   }
   if (type->kind() == TypeKind::HUGEINT) {
+    return false;
+  }
+  // Disable testing with TableScan when input contains TIMESTAMP type, due to
+  // the issue #8127.
+  if (type->kind() == TypeKind::TIMESTAMP) {
     return false;
   }
 
