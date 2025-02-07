@@ -130,9 +130,10 @@ cudf::ast::expression const& create_ast_tree(
     auto const& op1 =
         create_ast_tree(expr->inputs()[0], t, scalars, inputRowSchema);
     if (expr->type()->kind() == TypeKind::INTEGER) {
+      // No int32 cast in cudf ast
       return t.push(operation{op::CAST_TO_INT64, op1});
     } else if (expr->type()->kind() == TypeKind::BIGINT) {
-      return t.push(operation{op::CAST_TO_UINT64, op1});
+      return t.push(operation{op::CAST_TO_INT64, op1});
     } else if (expr->type()->kind() == TypeKind::DOUBLE) {
       return t.push(operation{op::CAST_TO_FLOAT64, op1});
     } else {
