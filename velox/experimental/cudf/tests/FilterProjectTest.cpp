@@ -90,6 +90,40 @@ class CudfFilterProjectTest : public OperatorTestBase {
     runTest(plan, "SELECT c2 = '" + c2Value + "' AS result FROM tmp");
   }
 
+  void testStringNotEqualOperation(const std::vector<RowVectorPtr>& input) {
+    // Create a plan with a string not equal operation
+    auto c2Value = input[0]
+                       ->as<RowVector>()
+                       ->childAt(2)
+                       ->as<FlatVector<StringView>>()
+                       ->valueAt(1)
+                       .str();
+    auto plan = PlanBuilder()
+                    .values(input)
+                    .project({"c2 <> '" + c2Value + "' AS result"})
+                    .planNode();
+
+    // Run the test
+    runTest(plan, "SELECT c2 <> '" + c2Value + "' AS result FROM tmp");
+  }
+
+  void testStringNotEqualOperation(const std::vector<RowVectorPtr>& input) {
+    // Create a plan with a string not equal operation
+    auto c2Value = input[0]
+                       ->as<RowVector>()
+                       ->childAt(2)
+                       ->as<FlatVector<StringView>>()
+                       ->valueAt(1)
+                       .str();
+    auto plan = PlanBuilder()
+                    .values(input)
+                    .project({"c2 <> '" + c2Value + "' AS result"})
+                    .planNode();
+
+    // Run the test
+    runTest(plan, "SELECT c2 <> '" + c2Value + "' AS result FROM tmp");
+  }
+
   void runTest(core::PlanNodePtr planNode, const std::string& duckDbSql) {
     SCOPED_TRACE("run without spilling");
     assertQuery(planNode, duckDbSql);
@@ -143,5 +177,13 @@ TEST_F(CudfFilterProjectTest, stringEqualOperation) {
   createDuckDbTable(vectors);
 
   testStringEqualOperation(vectors);
+}
+
+TEST_F(CudfFilterProjectTest, stringNotEqualOperation) {
+  vector_size_t batchSize = 1000;
+  auto vectors = makeVectors(rowType_, 2, batchSize);
+  createDuckDbTable(vectors);
+
+  testStringNotEqualOperation(vectors);
 }
 } // namespace
