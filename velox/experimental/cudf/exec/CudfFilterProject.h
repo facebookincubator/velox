@@ -163,7 +163,6 @@ class CudfFilterProject : public exec::Operator {
     projectAst_.clear();
     scalars_.clear();
   }
-  void initialize() override;
 
  private:
   bool allInputProcessed();

@@ -139,6 +139,7 @@ CudfFilterProject::CudfFilterProject(
   resultProjections_ = *(info.resultProjections);
   identityProjections_ = std::move(identityProjections);
   const auto& inputType = project_->sources()[0]->outputType();
+
   // convert to AST
   for (auto expr : info.exprs->exprs()) {
     tree t;
@@ -156,8 +157,10 @@ RowVectorPtr CudfFilterProject::getOutput() {
     return nullptr;
   }
   if (input_->size() == 0) {
+    input_.reset();
     return nullptr;
   }
+
   auto cudf_input = std::dynamic_pointer_cast<CudfVector>(input_);
   VELOX_CHECK_NOT_NULL(cudf_input);
   auto input_table = cudf_input->release();
@@ -172,6 +175,8 @@ RowVectorPtr CudfFilterProject::getOutput() {
         cudf::get_current_device_resource_ref());
     columns.emplace_back(std::move(col));
   }
+
+  // Rearrange columns to match outputType_
   std::vector<std::unique_ptr<cudf::column>> output_columns(
       outputType_->size());
   // computed resultProjections
@@ -179,7 +184,7 @@ RowVectorPtr CudfFilterProject::getOutput() {
     output_columns[resultProjections_[i].outputChannel] = std::move(columns[i]);
   }
   // identityProjections (input to output copy)
-  for (auto& identity : identityProjections_) {
+  for (auto const& identity : identityProjections_) {
     output_columns[identity.outputChannel] = std::make_unique<cudf::column>(
         cudf_table_view.column(identity.inputChannel));
   }
@@ -191,6 +196,7 @@ RowVectorPtr CudfFilterProject::getOutput() {
     std::cout << "cudfProject Output: " << output_table->num_columns()
               << " columns " << std::endl;
   }
+  
   input_.reset();
   if (output_table->num_columns() == 0 or size == 0) {
     return nullptr;
@@ -200,19 +206,11 @@ RowVectorPtr CudfFilterProject::getOutput() {
 }
 
 bool CudfFilterProject::allInputProcessed() {
-  if (!input_) {
-    return true;
-  }
-  return false;
+  return !input_;
 }
 
 bool CudfFilterProject::isFinished() {
   return noMoreInput_ && allInputProcessed();
-}
-
-void CudfFilterProject::initialize() {
-  Operator::initialize();
-  // all of the initialization is done in ctor
 }
 
 } // namespace facebook::velox::cudf_velox
