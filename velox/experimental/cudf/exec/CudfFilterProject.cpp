@@ -58,6 +58,18 @@ cudf::ast::literal createLiteral(
       make_scalar_and_literal, kind, std::move(vector), scalars);
 }
 
+using op = cudf::ast::ast_operator;
+const std::map<std::string, op> binary_ops = {
+  {"plus", op::ADD},
+  {"minus", op::SUB},
+  {"multiply", op::MUL},
+  {"divide", op::DIV},
+  {"eq", op::EQUAL},
+  {"neq", op::NOT_EQUAL},
+  {"and", op::NULL_LOGICAL_AND},
+  {"or", op::NULL_LOGICAL_OR}
+};
+
 // Create tree from Expr
 cudf::ast::expression const& create_ast_tree(
     const std::shared_ptr<velox::exec::Expr>& expr,
@@ -67,7 +79,7 @@ cudf::ast::expression const& create_ast_tree(
   using op = cudf::ast::ast_operator;
   using operation = cudf::ast::operation;
   auto& name = expr->name();
-  std::cout << "name: " << name << std::endl;
+
   if (name == "literal") {
     velox::exec::ConstantExpr* c =
         dynamic_cast<velox::exec::ConstantExpr*>(expr.get());
@@ -76,70 +88,14 @@ cudf::ast::expression const& create_ast_tree(
     // convert to cudf scalar
     auto lit = createLiteral(value, scalars);
     return t.push(std::move(lit));
-  } else if (name == "and") {
+  } else if (binary_ops.find(name) != binary_ops.end()) {
     auto len = expr->inputs().size();
     VELOX_CHECK_EQ(len, 2);
     auto const& op1 =
         create_ast_tree(expr->inputs()[0], t, scalars, inputRowSchema);
     auto const& op2 =
         create_ast_tree(expr->inputs()[1], t, scalars, inputRowSchema);
-    return t.push(operation{op::NULL_LOGICAL_AND, op1, op2});
-  } else if (name == "or") {
-    auto len = expr->inputs().size();
-    VELOX_CHECK_EQ(len, 2);
-    auto const& op1 =
-        create_ast_tree(expr->inputs()[0], t, scalars, inputRowSchema);
-    auto const& op2 =
-        create_ast_tree(expr->inputs()[1], t, scalars, inputRowSchema);
-    return t.push(operation{op::NULL_LOGICAL_OR, op1, op2});
-  } else if (name == "eq") {
-    auto len = expr->inputs().size();
-    VELOX_CHECK_EQ(len, 2);
-    auto const& op1 =
-        create_ast_tree(expr->inputs()[0], t, scalars, inputRowSchema);
-    auto const& op2 =
-        create_ast_tree(expr->inputs()[1], t, scalars, inputRowSchema);
-    return t.push(operation{op::EQUAL, op1, op2});
-  } else if (name == "neq") {
-    auto len = expr->inputs().size();
-    VELOX_CHECK_EQ(len, 2);
-    auto const& op1 =
-        create_ast_tree(expr->inputs()[0], t, scalars, inputRowSchema);
-    auto const& op2 =
-        create_ast_tree(expr->inputs()[1], t, scalars, inputRowSchema);
-    return t.push(operation{op::NOT_EQUAL, op1, op2});
-  } else if (name == "plus") {
-    auto len = expr->inputs().size();
-    VELOX_CHECK_EQ(len, 2);
-    auto const& op1 =
-        create_ast_tree(expr->inputs()[0], t, scalars, inputRowSchema);
-    auto const& op2 =
-        create_ast_tree(expr->inputs()[1], t, scalars, inputRowSchema);
-    return t.push(operation{op::ADD, op1, op2});
-  } else if (name == "minus") {
-    auto len = expr->inputs().size();
-    VELOX_CHECK_EQ(len, 2);
-    auto const& op1 =
-        create_ast_tree(expr->inputs()[0], t, scalars, inputRowSchema);
-    auto const& op2 =
-        create_ast_tree(expr->inputs()[1], t, scalars, inputRowSchema);
-    return t.push(operation{op::SUB, op1, op2});
-  } else if (name == "multiply") {
-    auto len = expr->inputs().size();
-    VELOX_CHECK_EQ(len, 2);
-    auto const& op1 =
-        create_ast_tree(expr->inputs()[0], t, scalars, inputRowSchema);
-    auto const& op2 =
-        create_ast_tree(expr->inputs()[1], t, scalars, inputRowSchema);
-    return t.push(operation{op::MUL, op1, op2});
-  } else if (name == "divide") {
-    auto len = expr->inputs().size();
-    VELOX_CHECK_EQ(len, 2);
-    auto const& op1 =
-        create_ast_tree(expr->inputs()[0], t, scalars, inputRowSchema);
-    auto const& op2 =
-        create_ast_tree(expr->inputs()[1], t, scalars, inputRowSchema);
-    return t.push(operation{op::DIV, op1, op2});
+    return t.push(operation{binary_ops.at(name), op1, op2});
   } else if (name == "cast") {
     auto len = expr->inputs().size();
     VELOX_CHECK_EQ(len, 1);
@@ -158,7 +114,6 @@ cudf::ast::expression const& create_ast_tree(
   } else {
     // Field? (not all are fields. Need better way to confirm Field)
     auto column_index = inputRowSchema->getChildIdx(name);
-    // std::cout << "Column index: " << column_index << std::endl;
     return t.push(cudf::ast::column_reference(column_index));
   }
 }
