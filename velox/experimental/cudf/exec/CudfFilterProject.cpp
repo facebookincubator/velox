@@ -14,10 +14,10 @@
  * limitations under the License.
  */
 #include "velox/experimental/cudf/exec/CudfFilterProject.h"
+#include "velox/experimental/cudf/exec/Utilities.h"
 #include "velox/expression/ConstantExpr.h"
 #include "velox/type/Type.h"
 #include "velox/vector/ConstantVector.h"
-#include "velox/experimental/cudf/exec/Utilities.h"
 
 #include <cudf/table/table.hpp>
 #include <cudf/transform.hpp>
@@ -92,6 +92,20 @@ cudf::ast::expression const& create_ast_tree(
     auto const& op2 =
         create_ast_tree(expr->inputs()[1], t, scalars, inputRowSchema);
     return t.push(operation{op::DIV, op1, op2});
+  } else if (name == "cast") {
+    auto len = expr->inputs().size();
+    VELOX_CHECK_EQ(len, 1);
+    auto const& op1 =
+        create_ast_tree(expr->inputs()[0], t, scalars, inputRowSchema);
+    if (expr->type()->kind() == TypeKind::INTEGER) {
+      return t.push(operation{op::CAST_TO_INT64, op1});
+    } else if (expr->type()->kind() == TypeKind::BIGINT) {
+      return t.push(operation{op::CAST_TO_UINT64, op1});
+    } else if (expr->type()->kind() == TypeKind::DOUBLE) {
+      return t.push(operation{op::CAST_TO_FLOAT64, op1});
+    } else {
+      VELOX_CHECK(false, "Unsupported type for cast operation");
+    }
   } else {
     // Field? (not all are fields. Need better way to confirm Field)
     auto column_index = inputRowSchema->getChildIdx(name);
