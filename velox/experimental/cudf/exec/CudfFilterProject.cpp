@@ -76,6 +76,22 @@ cudf::ast::expression const& create_ast_tree(
     // convert to cudf scalar
     auto lit = createLiteral(value, scalars);
     return t.push(std::move(lit));
+  } else if (name == "and") {
+    auto len = expr->inputs().size();
+    VELOX_CHECK_EQ(len, 2);
+    auto const& op1 =
+        create_ast_tree(expr->inputs()[0], t, scalars, inputRowSchema);
+    auto const& op2 =
+        create_ast_tree(expr->inputs()[1], t, scalars, inputRowSchema);
+    return t.push(operation{op::NULL_LOGICAL_AND, op1, op2});
+  } else if (name == "or") {
+    auto len = expr->inputs().size();
+    VELOX_CHECK_EQ(len, 2);
+    auto const& op1 =
+        create_ast_tree(expr->inputs()[0], t, scalars, inputRowSchema);
+    auto const& op2 =
+        create_ast_tree(expr->inputs()[1], t, scalars, inputRowSchema);
+    return t.push(operation{op::NULL_LOGICAL_OR, op1, op2});
   } else if (name == "eq") {
     auto len = expr->inputs().size();
     VELOX_CHECK_EQ(len, 2);

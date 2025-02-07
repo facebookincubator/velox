@@ -107,21 +107,26 @@ class CudfFilterProjectTest : public OperatorTestBase {
     runTest(plan, "SELECT c2 <> '" + c2Value + "' AS result FROM tmp");
   }
 
-  void testStringNotEqualOperation(const std::vector<RowVectorPtr>& input) {
-    // Create a plan with a string not equal operation
-    auto c2Value = input[0]
-                       ->as<RowVector>()
-                       ->childAt(2)
-                       ->as<FlatVector<StringView>>()
-                       ->valueAt(1)
-                       .str();
+  void testAndOperation(const std::vector<RowVectorPtr>& input) {
+    // Create a plan with AND operation
     auto plan = PlanBuilder()
                     .values(input)
-                    .project({"c2 <> '" + c2Value + "' AS result"})
+                    .project({"c0 = 1 AND c1 = 2.0 AS result"})
                     .planNode();
 
     // Run the test
-    runTest(plan, "SELECT c2 <> '" + c2Value + "' AS result FROM tmp");
+    runTest(plan, "SELECT c0 = 1 AND c1 = 2.0 AS result FROM tmp");
+  }
+
+  void testOrOperation(const std::vector<RowVectorPtr>& input) {
+    // Create a plan with OR operation
+    auto plan = PlanBuilder()
+                    .values(input)
+                    .project({"c0 = 1 OR c1 = 2.0 AS result"})
+                    .planNode();
+
+    // Run the test
+    runTest(plan, "SELECT c0 = 1 OR c1 = 2.0 AS result FROM tmp");
   }
 
   void runTest(core::PlanNodePtr planNode, const std::string& duckDbSql) {
@@ -186,4 +191,21 @@ TEST_F(CudfFilterProjectTest, stringNotEqualOperation) {
 
   testStringNotEqualOperation(vectors);
 }
+
+TEST_F(CudfFilterProjectTest, andOperation) {
+  vector_size_t batchSize = 1000;
+  auto vectors = makeVectors(rowType_, 2, batchSize);
+  createDuckDbTable(vectors);
+
+  testAndOperation(vectors);
+}
+
+TEST_F(CudfFilterProjectTest, orOperation) {
+  vector_size_t batchSize = 1000;
+  auto vectors = makeVectors(rowType_, 2, batchSize);
+  createDuckDbTable(vectors);
+
+  testOrOperation(vectors);
+}
+
 } // namespace
