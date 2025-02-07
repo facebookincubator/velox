@@ -60,15 +60,14 @@ cudf::ast::literal createLiteral(
 
 using op = cudf::ast::ast_operator;
 const std::map<std::string, op> binary_ops = {
-  {"plus", op::ADD},
-  {"minus", op::SUB},
-  {"multiply", op::MUL},
-  {"divide", op::DIV},
-  {"eq", op::EQUAL},
-  {"neq", op::NOT_EQUAL},
-  {"and", op::NULL_LOGICAL_AND},
-  {"or", op::NULL_LOGICAL_OR}
-};
+    {"plus", op::ADD},
+    {"minus", op::SUB},
+    {"multiply", op::MUL},
+    {"divide", op::DIV},
+    {"eq", op::EQUAL},
+    {"neq", op::NOT_EQUAL},
+    {"and", op::NULL_LOGICAL_AND},
+    {"or", op::NULL_LOGICAL_OR}};
 
 // Create tree from Expr
 cudf::ast::expression const& create_ast_tree(
@@ -196,7 +195,7 @@ RowVectorPtr CudfFilterProject::getOutput() {
     std::cout << "cudfProject Output: " << output_table->num_columns()
               << " columns " << std::endl;
   }
-  
+
   input_.reset();
   if (output_table->num_columns() == 0 or size == 0) {
     return nullptr;

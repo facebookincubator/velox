@@ -80,27 +80,30 @@ bool CompileState::compile() {
   auto is_filter_project_supported = [](const exec::Operator* op) {
     auto filter_project_op = dynamic_cast<const exec::FilterProject*>(op);
     return filter_project_op != nullptr &&
-         !((filter_project_op->exprsAndProjection().hasFilter));
+        !((filter_project_op->exprsAndProjection().hasFilter));
   };
 
-  auto is_supported_gpu_operator = [is_filter_project_supported](const exec::Operator* op) {
-    return is_any_of<exec::HashBuild, exec::HashProbe, exec::OrderBy>(op) ||
-        is_filter_project_supported(op);
-  };
+  auto is_supported_gpu_operator =
+      [is_filter_project_supported](const exec::Operator* op) {
+        return is_any_of<exec::HashBuild, exec::HashProbe, exec::OrderBy>(op) ||
+            is_filter_project_supported(op);
+      };
   std::vector<bool> is_supported_gpu_operators(operators.size());
   std::transform(
       operators.begin(),
       operators.end(),
       is_supported_gpu_operators.begin(),
       is_supported_gpu_operator);
-  auto accepts_gpu_input = [is_filter_project_supported](const exec::Operator* op) {
-    return is_any_of<exec::HashBuild, exec::HashProbe, exec::OrderBy>(op) ||
-        is_filter_project_supported(op);
-  };
-  auto produces_gpu_output = [is_filter_project_supported](const exec::Operator* op) {
-    return is_any_of<exec::HashProbe, exec::OrderBy>(op) ||
-        is_filter_project_supported(op);
-  };
+  auto accepts_gpu_input =
+      [is_filter_project_supported](const exec::Operator* op) {
+        return is_any_of<exec::HashBuild, exec::HashProbe, exec::OrderBy>(op) ||
+            is_filter_project_supported(op);
+      };
+  auto produces_gpu_output =
+      [is_filter_project_supported](const exec::Operator* op) {
+        return is_any_of<exec::HashProbe, exec::OrderBy>(op) ||
+            is_filter_project_supported(op);
+      };
 
   int32_t operatorsOffset = 0;
   for (int32_t operatorIndex = 0; operatorIndex < operators.size();
@@ -124,7 +127,7 @@ bool CompileState::compile() {
           id, plan_node->outputType(), ctx, plan_node->id() + "-from-velox"));
       replace_op.back()->initialize();
     }
-    
+
     // This is used to denote if the current operator is kept or replaced.
     auto keep_operator = 0;
     if (auto joinBuildOp = dynamic_cast<exec::HashBuild*>(oper)) {
@@ -157,7 +160,6 @@ bool CompileState::compile() {
       auto filterProjectOp = dynamic_cast<exec::FilterProject*>(oper);
       auto info = filterProjectOp->exprsAndProjection();
       auto& id_projections = filterProjectOp->identityProjections();
-      VELOX_CHECK(!info.hasFilter, "Filter not supported yet");
       auto plan_node = std::dynamic_pointer_cast<const core::ProjectNode>(
           get_plan_node(filterProjectOp->planNodeId()));
       // If filter doesn't exist then project should definitely exist so this
