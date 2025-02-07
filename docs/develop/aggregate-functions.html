@@ -214,8 +214,23 @@ and velox/exec/tests/SimpleArrayAggAggregate.cpp.</p>
 
 <span class="w">  </span><span class="c1">// Optional.</span>
 <span class="w">  </span><span class="k">static</span><span class="w"> </span><span class="kt">bool</span><span class="w"> </span><span class="nf">toIntermediate</span><span class="p">(</span>
-<span class="w">    </span><span class="n">exec</span><span class="o">::</span><span class="n">out_type</span><span class="o">&lt;</span><span class="n">Array</span><span class="o">&lt;</span><span class="n">Generic</span><span class="o">&lt;</span><span class="n">T1</span><span class="o">&gt;&gt;&gt;&amp;</span><span class="w"> </span><span class="n">out</span><span class="p">,</span>
-<span class="w">    </span><span class="n">exec</span><span class="o">::</span><span class="n">optional_arg_type</span><span class="o">&lt;</span><span class="n">Generic</span><span class="o">&lt;</span><span class="n">T1</span><span class="o">&gt;&gt;</span><span class="w"> </span><span class="n">in</span><span class="p">);</span>
+<span class="w">      </span><span class="n">exec</span><span class="o">::</span><span class="n">out_type</span><span class="o">&lt;</span><span class="n">Array</span><span class="o">&lt;</span><span class="n">Generic</span><span class="o">&lt;</span><span class="n">T1</span><span class="o">&gt;&gt;&gt;&amp;</span><span class="w"> </span><span class="n">out</span><span class="p">,</span>
+<span class="w">      </span><span class="n">exec</span><span class="o">::</span><span class="n">optional_arg_type</span><span class="o">&lt;</span><span class="n">Generic</span><span class="o">&lt;</span><span class="n">T1</span><span class="o">&gt;&gt;</span><span class="w"> </span><span class="n">in</span><span class="p">);</span>
+
+<span class="w">  </span><span class="c1">// Optional. Define some function-level variables.</span>
+<span class="w">  </span><span class="n">TypePtr</span><span class="w"> </span><span class="n">inputType_</span><span class="p">;</span>
+<span class="w">  </span><span class="n">TypePtr</span><span class="w"> </span><span class="n">resultType_</span><span class="p">;</span>
+
+<span class="w">  </span><span class="c1">// Optional. Defined only when the aggregation function needs to use function-level variables.</span>
+<span class="w">  </span><span class="c1">// This method is called once when the aggregation function is created.</span>
+<span class="w">  </span><span class="kt">void</span><span class="w"> </span><span class="nf">initialize</span><span class="p">(</span>
+<span class="w">      </span><span class="n">core</span><span class="o">::</span><span class="n">AggregationNode</span><span class="o">::</span><span class="n">Step</span><span class="w"> </span><span class="n">step</span><span class="p">,</span>
+<span class="w">      </span><span class="k">const</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="n">vector</span><span class="o">&lt;</span><span class="n">TypePtr</span><span class="o">&gt;&amp;</span><span class="w"> </span><span class="n">argTypes</span><span class="p">,</span>
+<span class="w">      </span><span class="k">const</span><span class="w"> </span><span class="n">TypePtr</span><span class="o">&amp;</span><span class="w"> </span><span class="n">resultType</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="n">VELOX_CHECK_EQ</span><span class="p">(</span><span class="n">argTypes</span><span class="p">.</span><span class="n">size</span><span class="p">(),</span><span class="w"> </span><span class="mi">1</span><span class="p">);</span>
+<span class="w">    </span><span class="n">inputType_</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">argTypes</span><span class="p">[</span><span class="mi">0</span><span class="p">];</span>
+<span class="w">    </span><span class="n">resultType_</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">resultType</span><span class="p">;</span>
+<span class="w">  </span><span class="p">}</span>
 
 <span class="w">  </span><span class="k">struct</span><span class="w"> </span><span class="nc">AccumulatorType</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="p">...</span><span class="w"> </span><span class="p">};</span>
 <span class="p">};</span>
@@ -226,6 +241,13 @@ type in the simple aggregation function class. The input type must be the
 function’s argument type(s) wrapped in a Row&lt;&gt; even if the function only takes
 one argument. This is needed for the SimpleAggregateAdapter to parse input
 types for arbitrary aggregation functions properly.</p>
+<p>The author can optionally define function-level variables in the simple
+aggregation function class. These variables are initialized once when the
+aggregation function is created and used at every row when adding inputs to
+accumulators or extracting values from accumulators. For example, if the
+aggregation function needs to get the result type or the raw input type of the
+aggregation function, these types can be defined as member variables in the
+aggregate class and initialized in the initialize() method.</p>
 <p>The author can define an optional flag <cite>default_null_behavior_</cite> indicating
 whether the aggregation function has default-null behavior. This flag is true
 by default. Next, the class can have an optional method <cite>toIntermediate()</cite>
@@ -304,6 +326,10 @@ exec::optional_arg_type&lt;Generic&lt;T1&gt;&gt; in);</p>
 <span class="w">  </span><span class="c1">// Author defines data members</span>
 <span class="w">  </span><span class="p">...</span>
 
+<span class="w">  </span><span class="c1">// Optional. Define a pointer to the UDAF class if the aggregation</span>
+<span class="w">  </span><span class="c1">// function uses function-level variables.</span>
+<span class="w">  </span><span class="n">ArrayAggAggregate</span><span class="o">*</span><span class="w"> </span><span class="n">fn_</span><span class="p">;</span>
+
 <span class="w">  </span><span class="c1">// Optional. Default is true.</span>
 <span class="w">  </span><span class="k">static</span><span class="w"> </span><span class="k">constexpr</span><span class="w"> </span><span class="kt">bool</span><span class="w"> </span><span class="n">is_fixed_size_</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nb">false</span><span class="p">;</span>
 
@@ -313,7 +339,9 @@ exec::optional_arg_type&lt;Generic&lt;T1&gt;&gt; in);</p>
 <span class="w">  </span><span class="c1">// Optional. Default is false.</span>
 <span class="w">  </span><span class="k">static</span><span class="w"> </span><span class="k">constexpr</span><span class="w"> </span><span class="kt">bool</span><span class="w"> </span><span class="n">is_aligned_</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nb">true</span><span class="p">;</span>
 
-<span class="w">  </span><span class="k">explicit</span><span class="w"> </span><span class="n">AccumulatorType</span><span class="p">(</span><span class="n">HashStringAllocator</span><span class="o">*</span><span class="w"> </span><span class="n">allocator</span><span class="p">);</span>
+<span class="w">  </span><span class="k">explicit</span><span class="w"> </span><span class="n">AccumulatorType</span><span class="p">(</span>
+<span class="w">      </span><span class="n">HashStringAllocator</span><span class="o">*</span><span class="w"> </span><span class="n">allocator</span><span class="p">,</span><span class="w"> </span><span class="n">ArrayAggAggregate</span><span class="o">*</span><span class="w"> </span><span class="n">fn</span><span class="p">)</span>
+<span class="w">      </span><span class="o">:</span><span class="w"> </span><span class="n">fn_</span><span class="p">(</span><span class="n">fn</span><span class="p">);</span>
 
 <span class="w">  </span><span class="kt">void</span><span class="w"> </span><span class="nf">addInput</span><span class="p">(</span><span class="n">HashStringAllocator</span><span class="o">*</span><span class="w"> </span><span class="n">allocator</span><span class="p">,</span><span class="w"> </span><span class="n">exec</span><span class="o">::</span><span class="n">arg_type</span><span class="o">&lt;</span><span class="n">T1</span><span class="o">&gt;</span><span class="w"> </span><span class="n">value1</span><span class="p">,</span><span class="w"> </span><span class="p">...);</span>
 
@@ -398,7 +426,7 @@ nulls in the final result vector without <cite>writeFinalResult</cite> being cal
 <span class="w">  </span><span class="c1">// Optional. Default is false.</span>
 <span class="w">  </span><span class="k">static</span><span class="w"> </span><span class="k">constexpr</span><span class="w"> </span><span class="kt">bool</span><span class="w"> </span><span class="n">is_aligned_</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nb">true</span><span class="p">;</span>
 
-<span class="w">  </span><span class="k">explicit</span><span class="w"> </span><span class="n">AccumulatorType</span><span class="p">(</span><span class="n">HashStringAllocator</span><span class="o">*</span><span class="w"> </span><span class="n">allocator</span><span class="p">);</span>
+<span class="w">  </span><span class="k">explicit</span><span class="w"> </span><span class="n">AccumulatorType</span><span class="p">(</span><span class="n">HashStringAllocator</span><span class="o">*</span><span class="w"> </span><span class="n">allocator</span><span class="p">,</span><span class="w"> </span><span class="n">ArrayAggAggregate</span><span class="o">*</span><span class="w"> </span><span class="n">fn</span><span class="p">);</span>
 
 <span class="w">  </span><span class="kt">bool</span><span class="w"> </span><span class="nf">addInput</span><span class="p">(</span><span class="n">HashStringAllocator</span><span class="o">*</span><span class="w"> </span><span class="n">allocator</span><span class="p">,</span><span class="w"> </span><span class="n">exec</span><span class="o">::</span><span class="n">optional_arg_type</span><span class="o">&lt;</span><span class="n">T1</span><span class="o">&gt;</span><span class="w"> </span><span class="n">value1</span><span class="p">,</span><span class="w"> </span><span class="p">...);</span>
 
@@ -926,7 +954,7 @@ unique pointers. Below is an example.</p>
 <span class="w">    </span><span class="n">name</span><span class="p">,</span>
 <span class="w">    </span><span class="n">std</span><span class="o">::</span><span class="n">move</span><span class="p">(</span><span class="n">signatures</span><span class="p">),</span>
 <span class="w">    </span><span class="p">[</span><span class="n">name</span><span class="p">](</span>
-<span class="w">        </span><span class="n">core</span><span class="o">::</span><span class="n">AggregationNode</span><span class="o">::</span><span class="n">Step</span><span class="w"> </span><span class="cm">/*step*/</span><span class="p">,</span>
+<span class="w">        </span><span class="n">core</span><span class="o">::</span><span class="n">AggregationNode</span><span class="o">::</span><span class="n">Step</span><span class="w"> </span><span class="n">step</span><span class="p">,</span>
 <span class="w">        </span><span class="k">const</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="n">vector</span><span class="o">&lt;</span><span class="n">TypePtr</span><span class="o">&gt;&amp;</span><span class="w"> </span><span class="n">argTypes</span><span class="p">,</span>
 <span class="w">        </span><span class="k">const</span><span class="w"> </span><span class="n">TypePtr</span><span class="o">&amp;</span><span class="w"> </span><span class="n">resultType</span><span class="p">,</span>
 <span class="w">        </span><span class="k">const</span><span class="w"> </span><span class="n">core</span><span class="o">::</span><span class="n">QueryConfig</span><span class="o">&amp;</span><span class="w"> </span><span class="cm">/*config*/</span><span class="p">)</span>
@@ -934,7 +962,7 @@ unique pointers. Below is an example.</p>
 <span class="w">      </span><span class="n">VELOX_CHECK_EQ</span><span class="p">(</span>
 <span class="w">          </span><span class="n">argTypes</span><span class="p">.</span><span class="n">size</span><span class="p">(),</span><span class="w"> </span><span class="mi">1</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;{} takes at most one argument&quot;</span><span class="p">,</span><span class="w"> </span><span class="n">name</span><span class="p">);</span>
 <span class="w">      </span><span class="k">return</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="n">make_unique</span><span class="o">&lt;</span><span class="n">SimpleAggregateAdapter</span><span class="o">&lt;</span><span class="n">SimpleArrayAggAggregate</span><span class="o">&gt;&gt;</span><span class="p">(</span>
-<span class="w">          </span><span class="n">resultType</span><span class="p">);</span>
+<span class="w">          </span><span class="n">step</span><span class="p">,</span><span class="w"> </span><span class="n">argTypes</span><span class="p">,</span><span class="w"> </span><span class="n">resultType</span><span class="p">);</span>
 <span class="w">    </span><span class="p">});</span>
 </pre></div>
 </div>
