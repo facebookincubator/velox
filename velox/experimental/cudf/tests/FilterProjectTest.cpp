@@ -1,0 +1,115 @@
+/*
+ * Copyright (c) Facebook, Inc. and its affiliates.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+#include "velox/common/base/tests/GTestUtils.h"
+#include "velox/dwio/common/tests/utils/BatchMaker.h"
+#include "velox/exec/tests/utils/OperatorTestBase.h"
+#include "velox/exec/tests/utils/PlanBuilder.h"
+#include "velox/experimental/cudf/exec/CudfFilterProject.h"
+#include "velox/experimental/cudf/exec/ToCudf.h"
+#include "velox/experimental/cudf/exec/Utilities.h"
+
+using namespace facebook::velox;
+using namespace facebook::velox::exec;
+using namespace facebook::velox::exec::test;
+using namespace facebook::velox::common::testutil;
+
+namespace {
+
+class CudfFilterProjectTest : public OperatorTestBase {
+ protected:
+  void SetUp() override {
+    OperatorTestBase::SetUp();
+    filesystems::registerLocalFileSystem();
+    cudf_velox::registerCudf();
+    rng_.seed(123);
+
+    rowType_ = ROW({{"c0", INTEGER()}, {"c1", DOUBLE()}, {"c2", VARCHAR()}});
+  }
+
+  void TearDown() override {
+    cudf_velox::unregisterCudf();
+    OperatorTestBase::TearDown();
+  }
+
+  void testMultiplyOperation(const std::vector<RowVectorPtr>& input) {
+    // Create a plan with a multiply operation
+    auto plan =
+        PlanBuilder().values(input).project({"1.0 * c1 AS result"}).planNode();
+
+    // Run the test
+    runTest(plan, "SELECT 1.0 * c1 AS result FROM tmp");
+  }
+
+  void testDivideOperation(const std::vector<RowVectorPtr>& input) {
+    // Create a plan with a divide operation
+    auto plan =
+        PlanBuilder().values(input).project({"c0 / c1 AS result"}).planNode();
+
+    // Run the test
+    runTest(plan, "SELECT c0 / c1 AS result FROM tmp");
+  }
+
+  void testMultiplyAndMinusOperation(const std::vector<RowVectorPtr>& input) {
+    // Create a plan with a multiply and minus operation
+    auto plan = PlanBuilder()
+                    .values(input)
+                    .project({"c1 * (1.0 - c2) AS result"})
+                    .planNode();
+
+    // Run the test
+    runTest(plan, "SELECT c1 * (1.0 - c2) AS result FROM tmp");
+  }
+
+  void runTest(core::PlanNodePtr planNode, const std::string& duckDbSql) {
+    SCOPED_TRACE("run without spilling");
+    assertQuery(planNode, duckDbSql);
+  }
+
+  std::vector<RowVectorPtr> makeVectors(
+      const RowTypePtr& rowType,
+      int32_t numVectors,
+      int32_t rowsPerVector) {
+    std::vector<RowVectorPtr> vectors;
+    for (int32_t i = 0; i < numVectors; ++i) {
+      auto vector = std::dynamic_pointer_cast<RowVector>(
+          facebook::velox::test::BatchMaker::createBatch(
+              rowType, rowsPerVector, *pool_));
+      vectors.push_back(vector);
+    }
+    return vectors;
+  }
+
+  folly::Random::DefaultGenerator rng_;
+  RowTypePtr rowType_;
+};
+
+TEST_F(CudfFilterProjectTest, multiplyOperation) {
+  vector_size_t batchSize = 1000;
+  auto vectors = makeVectors(rowType_, 2, batchSize);
+  createDuckDbTable(vectors);
+
+  testMultiplyOperation(vectors);
+}
+
+TEST_F(CudfFilterProjectTest, divideOperation) {
+  vector_size_t batchSize = 1000;
+  auto vectors = makeVectors(rowType_, 2, batchSize);
+  createDuckDbTable(vectors);
+
+  testDivideOperation(vectors);
+}
+
+} // namespace
