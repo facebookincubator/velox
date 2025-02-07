@@ -49,7 +49,6 @@ TEST_F(S3FileSystemRegistrationTest, readViaRegistry) {
     LocalWriteFile writeFile(filename);
     writeData(&writeFile);
   }
-  filesystems::registerS3FileSystem();
   auto hiveConfig = minioServer_->hiveConfig();
   {
     auto s3fs = filesystems::getFileSystem(s3File, hiveConfig);
@@ -82,7 +81,7 @@ TEST_F(S3FileSystemRegistrationTest, cacheKey) {
   std::string_view kDummyPath2 = "s3://dummy2/foo.txt";
   auto s3fs_new = filesystems::getFileSystem(kDummyPath2, hiveConfig);
   // The cacheKeyFunc function allows fs caching based on the endpoint value.
-  ASSERT_NE(s3fs, s3fs_new);
+  ASSERT_EQ(s3fs, s3fs_new);
 }
 
 TEST_F(S3FileSystemRegistrationTest, finalize) {
