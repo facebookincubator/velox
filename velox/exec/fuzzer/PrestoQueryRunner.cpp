@@ -183,6 +183,11 @@ std::optional<std::string> PrestoQueryRunner::toSql(
     return toSql(rowNumberNode);
   }
 
+  if (const auto topNRowNumberNode =
+          std::dynamic_pointer_cast<const core::TopNRowNumberNode>(plan)) {
+    return toSql(topNRowNumberNode);
+  }
+
   if (auto tableWriteNode =
           std::dynamic_pointer_cast<const core::TableWriteNode>(plan)) {
     return toSql(tableWriteNode);
@@ -494,6 +499,55 @@ std::optional<std::string> PrestoQueryRunner::toSql(
     return std::nullopt;
   }
   sql << ") as row_number FROM " << *source;
+
+  return sql.str();
+}
+
+std::optional<std::string> PrestoQueryRunner::toSql(
+    const std::shared_ptr<const core::TopNRowNumberNode>& topNRowNumberNode) {
+  if (!isSupportedDwrfType(topNRowNumberNode->sources()[0]->outputType())) {
+    return std::nullopt;
+  }
+
+  std::stringstream sql;
+  sql << "SELECT * FROM (SELECT ";
+
+  const auto& inputType = topNRowNumberNode->sources()[0]->outputType();
+  for (auto i = 0; i < inputType->size(); ++i) {
+    appendComma(i, sql);
+    sql << inputType->nameOf(i);
+  }
+
+  sql << ", row_number() OVER (";
+
+  const auto& partitionKeys = topNRowNumberNode->partitionKeys();
+  if (!partitionKeys.empty()) {
+    sql << "partition by ";
+    for (auto i = 0; i < partitionKeys.size(); ++i) {
+      appendComma(i, sql);
+      sql << partitionKeys[i]->name();
+    }
+  }
+
+  const auto& sortingKeys = topNRowNumberNode->sortingKeys();
+  const auto& sortingOrders = topNRowNumberNode->sortingOrders();
+
+  if (!sortingKeys.empty()) {
+    sql << " ORDER BY ";
+    for (auto j = 0; j < sortingKeys.size(); ++j) {
+      appendComma(j, sql);
+      sql << sortingKeys[j]->name() << " " << sortingOrders[j].toString();
+    }
+  }
+
+  // TopNRowNumberNode should have a single source.
+  std::optional<std::string> source = toSql(topNRowNumberNode->sources()[0]);
+  if (!source) {
+    return std::nullopt;
+  }
+  sql << ") as row_number FROM " << *source << ") ";
+
+  sql << " where row_number <= " << topNRowNumberNode->limit();
 
   return sql.str();
 }
