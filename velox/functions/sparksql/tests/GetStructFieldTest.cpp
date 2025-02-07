@@ -33,15 +33,12 @@ class GetStructFieldTest : public SparkFunctionBaseTest {
     auto ordinalVector = makeConstant<int32_t>(ordinal, batchSize);
     std::vector<core::TypedExprPtr> inputs = {
         std::make_shared<const core::FieldAccessTypedExpr>(input->type(), "c0"),
-        std::make_shared<const core::FieldAccessTypedExpr>(INTEGER(), "c1")
-    };
+        std::make_shared<const core::FieldAccessTypedExpr>(INTEGER(), "c1")};
     auto resultType = expected->type();
     auto expr = std::make_shared<const core::CallTypedExpr>(
-        resultType,
-        std::move(inputs),
-        "get_struct_field");
-    auto result = evaluate(
-        expr, makeRowVector({"c0", "c1"}, {input, ordinalVector}));
+        resultType, std::move(inputs), "get_struct_field");
+    auto result =
+        evaluate(expr, makeRowVector({"c0", "c1"}, {input, ordinalVector}));
     ::facebook::velox::test::assertEqualVectors(expected, result);
   }
 };
@@ -63,20 +60,12 @@ TEST_F(GetStructFieldTest, simpleType) {
 }
 
 TEST_F(GetStructFieldTest, complexType) {
-  auto col0 = makeArrayVector<int32_t>({
-    {1, 2},
-    {3, 4}
-  });
-  auto col1 = makeMapVector<std::string, int32_t>({
-    {{"a", 0}, {"b", 1}},
-    {{"c", 3}, {"d", 4}}
-  });
-  auto col2 = makeRowVector({
-    makeArrayVector<int32_t>({
-      {100, 101}, {200, 202}, {300, 303}
-    }),
-    makeFlatVector<std::string>({"a", "b"})
-  });
+  auto col0 = makeArrayVector<int32_t>({{1, 2}, {3, 4}});
+  auto col1 = makeMapVector<std::string, int32_t>(
+      {{{"a", 0}, {"b", 1}}, {{"c", 3}, {"d", 4}}});
+  auto col2 = makeRowVector(
+      {makeArrayVector<int32_t>({{100, 101}, {200, 202}, {300, 303}}),
+       makeFlatVector<std::string>({"a", "b"})});
   auto data = makeRowVector({col0, col1, col2});
 
   // Get array field
