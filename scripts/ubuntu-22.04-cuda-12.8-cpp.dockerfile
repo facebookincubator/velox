@@ -11,7 +11,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-ARG base=nvidia/cuda:12.2.2-devel-ubuntu22.04
+ARG base=nvidia/cuda:12.8.0-devel-ubuntu22.04
 # Set a default timezone, can be overriden via ARG
 ARG tz="Europe/Madrid"
 
