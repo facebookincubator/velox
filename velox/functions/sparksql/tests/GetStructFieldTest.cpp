@@ -63,9 +63,9 @@ TEST_F(GetStructFieldTest, complexType) {
   auto col0 = makeArrayVector<int32_t>({{1, 2}, {3, 4}});
   auto col1 = makeMapVector<std::string, int32_t>(
       {{{"a", 0}, {"b", 1}}, {{"c", 3}, {"d", 4}}});
-  auto col2 = makeRowVector(
-      {makeArrayVector<int32_t>({{100, 101}, {200, 202}, {300, 303}}),
-       makeFlatVector<std::string>({"a", "b"})});
+  auto col2 = makeRowVector({
+    makeArrayVector<int32_t>({{100, 101, 102}, {200, 201, 202}, {300, 301, 302}}),
+    makeFlatVector<std::string>({"a", "b", "c"})});
   auto data = makeRowVector({col0, col1, col2});
 
   // Get array field
