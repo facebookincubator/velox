@@ -38,7 +38,7 @@ DEFINE_bool(wave_trace_stream, false, "Enable trace of streams and drivers");
 
 DEFINE_int32(
     wave_init_group_by_buckets,
-    30000,
+    2048,
     "Initial buckets in group by hash table (4 slots/bucket)");
 
 namespace facebook::velox::wave {
@@ -1201,9 +1201,13 @@ AdvanceResult Program::canAdvance(
   return {};
 }
 
-void Program::callUpdateStatus(WaveStream& stream, AdvanceResult& advance) {
+void Program::callUpdateStatus(
+    WaveStream& stream,
+    const std::vector<WaveStream*>& otherStreams,
+    AdvanceResult& advance) {
   if (advance.updateStatus) {
-    advance.updateStatus(stream, *instructions_[advance.instructionIdx]);
+    advance.updateStatus(
+        stream, otherStreams, *instructions_[advance.instructionIdx]);
   }
 }
 

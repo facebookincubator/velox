@@ -65,7 +65,10 @@ class Project : public WaveOperator {
     return computedSet_;
   }
 
-  void callUpdateStatus(WaveStream& stream, AdvanceResult& advance) override;
+  void callUpdateStatus(
+      WaveStream& stream,
+      const std::vector<WaveStream*>& otherStreams,
+      AdvanceResult& advance) override;
 
  private:
   struct ContinueLocation {

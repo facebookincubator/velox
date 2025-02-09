@@ -197,7 +197,11 @@ struct AdvanceResult {
   /// Action to run before continue. If the update is visible between
   /// streams/Drivers, use the right sync flag above. No sync needed if e.g.
   /// adding space to a string buffer on the 'stream's' vectors.
-  std::function<void(WaveStream&, AbstractInstruction&)> updateStatus;
+  std::function<void(
+      WaveStream&,
+      const std::vector<WaveStream*>& otherStreams,
+      AbstractInstruction&)>
+      updateStatus;
 
   /// Extra token to mark reason for 'syncDrivers', e.g. the host side
   /// handle to a device hash table to rehash.

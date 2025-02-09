@@ -42,7 +42,7 @@ DEFINE_int32(wt_num_batches, 3, "Number of batches of test data");
 
 DEFINE_int32(wt_batch_size, 20'000, "Batch size  in test data");
 
-DEFINE_bool(extended, false, "Run extra permutations of drivers/streams");
+DEFINE_bool(extended, true, "Run extra permutations of drivers/streams");
 
 using namespace facebook::velox;
 using namespace facebook::velox::core;

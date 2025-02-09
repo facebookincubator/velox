@@ -62,9 +62,12 @@ void restockAllocator(
     AggregateOperatorState& state,
     int32_t size,
     HashPartitionAllocator* allocator) {
+  VELOX_CHECK_LT(0, size);
   // If we can get rows by raising the row limit we do this first.
   int32_t adjustedSize = size - allocator->raiseRowLimits(size);
   if (adjustedSize <= 0) {
+    TR1(fmt::format(
+        "Found {} rows of existing space", size / allocator->rowSize));
     return;
   }
   if (allocator->ranges[0].fixedFull) {
@@ -78,6 +81,7 @@ void restockAllocator(
       size,
       size,
       allocator->rowSize);
+  TR1(fmt::format("Made range of {} rows", size / allocator->rowSize));
   if (allocator->ranges[0].empty()) {
     allocator->ranges[0] = std::move(newRange);
   } else {
@@ -96,13 +100,26 @@ void AggregateOperatorState::setSizesToSafe() {
   for (auto i = 0; i < numPartitions; ++i) {
     auto availableInAllocator = allocators[i].availableFixed() / rowSize;
     if (availableInAllocator > allowedPerPartition) {
+      TR1(fmt::format(
+          "Trim avail from {} to {} rows\n",
+          availableInAllocator,
+          allowedPerPartition));
       allocators[i].trimRows(allowedPerPartition * rowSize);
     }
   }
 }
 
-void resupplyHashTable(WaveStream& stream, AbstractInstruction& inst) {
+void resupplyHashTable(
+    WaveStream& stream,
+    const std::vector<WaveStream*>& otherStreams,
+    AbstractInstruction& inst) {
+  float kLoadFactor = 5 / 6.0;
   auto* agg = &inst.as<AbstractAggregation>();
+  if (stream.mutableExclusiveProcessed()) {
+    TR(&stream, "Resupply already processed");
+    stream.mutableExclusiveProcessed() = false;
+    return;
+  }
   auto deviceStream = WaveStream::streamFromReserve();
   auto stateId = agg->state->id;
   auto* state = stream.operatorState(stateId)->as<AggregateOperatorState>();
@@ -114,23 +131,45 @@ void resupplyHashTable(WaveStream& stream, AbstractInstruction& inst) {
   deviceStream->prefetch(nullptr, state->alignedHead, state->alignedHeadSize);
   deviceStream->wait();
   VELOX_CHECK_EQ(head->debugActiveBlockCounter, 0);
-  auto* blockStatus = stream.hostBlockStatus();
-  int32_t numBlocks = bits::roundUp(stream.numRows(), kBlockSize) / kBlockSize;
-  int32_t numFailed =
-      countErrors(blockStatus, numBlocks, ErrorCode::kInsufficientMemory);
+  std::vector<WaveStream*> allStreams = {&stream};
+  allStreams.insert(allStreams.end(), otherStreams.begin(), otherStreams.end());
+  int32_t numFailed = 0;
+  bool first = true;
+  for (auto* stream : allStreams) {
+    auto* gridState =
+        stream->gridStatus<AggregateReturn>(*inst.mutableInstructionStatus());
+    if (!gridState) {
+      TR(stream, "Does not yet have grid State");
+      continue;
+    }
+    bool hasRetries = gridState->numDistinct != 0;
+    auto* blockStatus = stream->hostBlockStatus();
+    int32_t numBlocks =
+        bits::roundUp(stream->numRows(), kBlockSize) / kBlockSize;
+    auto numRetry =
+        countErrors(blockStatus, numBlocks, ErrorCode::kInsufficientMemory);
+    VELOX_CHECK_EQ(hasRetries, numRetry != 0);
+    numFailed += numRetry;
+    if (!first) {
+      stream->mutableExclusiveProcessed() = true;
+    }
+    first = false;
+  }
   int32_t rowSize = agg->rowSize();
   int32_t numPartitions = hashTable->partitionMask + 1;
-  int64_t newSize =
-      bits::nextPowerOfTwo(numFailed + hashTable->numDistinct * 2);
-  int64_t increment =
-      rowSize * (newSize - hashTable->numDistinct) / numPartitions;
-  TR1(fmt::format(
-      "resupply: size={} newSize={} increment={} numFailed={} ht={}\n",
-      numSlots(hashTable),
-      newSize,
-      increment,
-      numFailed,
-      (void*)hashTable));
+  int64_t newTableSize =
+      bits::nextPowerOfTwo((numFailed + hashTable->numDistinct) / kLoadFactor);
+  int64_t newMaxDistinct = newTableSize * kLoadFactor;
+  int64_t increment = (rowSize * (newMaxDistinct - hashTable->numDistinct)) /
+      (numPartitions == 1 ? 1.0 : numPartitions * 0.8);
+  TR(&stream,
+     fmt::format(
+         "resupply: size={} newSize={} increment={} numFailed={} ht={}\n",
+         numSlots(hashTable),
+         newTableSize,
+         increment,
+         numFailed,
+         (void*)hashTable));
   for (auto i = 0; i < numPartitions; ++i) {
     auto* allocator =
         &reinterpret_cast<HashPartitionAllocator*>(hashTable + 1)[i];
@@ -146,16 +185,16 @@ void resupplyHashTable(WaveStream& stream, AbstractInstruction& inst) {
   int32_t numOldBuckets;
   // Rehash if close to max. We can have growth from variable length
   // accumulators so rehash is not always right.
-  if (newSize > numSlots(hashTable)) {
+  if (newTableSize > numSlots(hashTable)) {
     oldBuckets = state->buffers[1];
     numOldBuckets = hashTable->sizeMask + 1;
     state->buffers[1] = state->arena->allocate<GpuBucketMembers>(
-        newSize / GpuBucketMembers::kNumSlots);
+        newTableSize / GpuBucketMembers::kNumSlots);
     deviceStream->memset(
         state->buffers[1]->as<char>(), 0, state->buffers[1]->size());
-    hashTable->sizeMask = (newSize / GpuBucketMembers::kNumSlots) - 1;
+    hashTable->sizeMask = (newTableSize / GpuBucketMembers::kNumSlots) - 1;
     hashTable->buckets = state->buffers[1]->as<GpuBucket>();
-    hashTable->maxEntries = newSize / 6 * 5;
+    hashTable->maxEntries = newTableSize * kLoadFactor;
     rehash = true;
   }
   state->setSizesToSafe();
@@ -175,7 +214,7 @@ void resupplyHashTable(WaveStream& stream, AbstractInstruction& inst) {
   }
   deviceStream->wait();
   if (rehash) {
-    TR1(fmt::format("rehashed {}\n", (void*)hashTable));
+    TR(&stream, fmt::format("rehashed {}\n", (void*)hashTable));
   }
   WaveStream::releaseStream(std::move(deviceStream));
 }
@@ -194,6 +233,7 @@ AdvanceResult AbstractAggregation::canAdvance(
     return {};
   }
   if (gridState->numDistinct) {
+    TR(&stream, fmt::format("agg need retry: card={}", gridState->numDistinct));
     stream.checkBlockStatuses();
     stream.clearGridStatus<AggregateReturn>(instructionStatus);
     // The hash table needs memory or rehash. Request a Task-wide break to
