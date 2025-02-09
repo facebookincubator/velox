@@ -16,6 +16,7 @@
 #include "velox/experimental/cudf/exec/CudfFilterProject.h"
 #include "velox/experimental/cudf/exec/Utilities.h"
 #include "velox/expression/ConstantExpr.h"
+#include "velox/expression/FieldReference.h"
 #include "velox/type/Type.h"
 #include "velox/vector/ConstantVector.h"
 
@@ -110,7 +111,28 @@ cudf::ast::expression const& create_ast_tree(
     } else {
       VELOX_CHECK(false, "Unsupported type for cast operation");
     }
+  } else if (name == "switch") {
+    auto len = expr->inputs().size();
+    VELOX_CHECK_EQ(len, 3);
+    // check if input[1], input[2] are literals 1 and 0.
+    // then simplify as typecast bool to int
+    velox::exec::ConstantExpr* c1 =
+        dynamic_cast<velox::exec::ConstantExpr*>(expr->inputs()[1].get());
+    velox::exec::ConstantExpr* c2 =
+        dynamic_cast<velox::exec::ConstantExpr*>(expr->inputs()[2].get());
+    if (c1 and c2 and c1->toString() == "1:BIGINT" and
+        c2->toString() == "0:BIGINT") {
+      auto const& op1 =
+          create_ast_tree(expr->inputs()[0], t, scalars, inputRowSchema);
+      return t.push(operation{op::CAST_TO_INT64, op1});
+    } else {
+      std::cerr << "switch subexpr: " << expr->toString() << std::endl;
+      VELOX_CHECK(false, "Unsupported switch complex operation");
+    }
   } else {
+    auto fieldExpr =
+        std::dynamic_pointer_cast<velox::exec::FieldReference>(expr);
+    VELOX_CHECK_NOT_NULL(fieldExpr, "Expression is not a field, name: " + name);
     // Field? (not all are fields. Need better way to confirm Field)
     auto column_index = inputRowSchema->getChildIdx(name);
     return t.push(cudf::ast::column_reference(column_index));
