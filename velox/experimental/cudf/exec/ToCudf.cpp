@@ -78,7 +78,11 @@ bool CompileState::compile() {
   };
 
   auto is_supported_gpu_operator = [](const exec::Operator* op) {
-    return is_any_of<exec::HashBuild, exec::HashProbe, exec::OrderBy>(op);
+    return is_any_of<
+        exec::HashBuild,
+        exec::HashProbe,
+        exec::OrderBy,
+        exec::HashAggregation>(op);
   };
   std::vector<bool> is_supported_gpu_operators(operators.size());
   std::transform(
@@ -87,10 +91,14 @@ bool CompileState::compile() {
       is_supported_gpu_operators.begin(),
       is_supported_gpu_operator);
   auto accepts_gpu_input = [](const exec::Operator* op) {
-    return is_any_of<exec::HashBuild, exec::HashProbe, exec::OrderBy>(op);
+    return is_any_of<
+        exec::HashBuild,
+        exec::HashProbe,
+        exec::OrderBy,
+        exec::HashAggregation>(op);
   };
   auto produces_gpu_output = [](const exec::Operator* op) {
-    return is_any_of<exec::HashProbe, exec::OrderBy>(op);
+    return is_any_of<exec::HashProbe, exec::OrderBy, exec::HashAggregation>(op);
   };
 
   int32_t operatorsOffset = 0;
@@ -143,6 +151,13 @@ bool CompileState::compile() {
       replace_op.push_back(std::make_unique<CudfOrderBy>(id, ctx, plan_node));
       replace_op.back()->initialize();
       // To-velox (optional)
+    } else if (auto hashAggOp = dynamic_cast<exec::HashAggregation*>(oper)) {
+      auto plan_node = std::dynamic_pointer_cast<const core::AggregationNode>(
+          get_plan_node(hashAggOp->planNodeId()));
+      VELOX_CHECK(plan_node != nullptr);
+      replace_op.push_back(
+          std::make_unique<exec::CudfHashAggregation>(id, ctx, plan_node));
+      replace_op.back()->initialize();
     }
     if (next_operator_is_not_gpu and produces_gpu_output(oper)) {
       auto plan_node = get_plan_node(oper->planNodeId());
@@ -157,29 +172,6 @@ bool CompileState::compile() {
       [[maybe_unused]] auto replaced = driverFactory_.replaceOperators(
           driver_,
           replacingOperatorIndex + keep_operator,
-          replacingOperatorIndex + 1,
-          std::move(replace_op));
-      replacements_made = true;
-    } else if (auto hashAggOp = dynamic_cast<exec::HashAggregation*>(oper)) {
-      auto plan_node = std::dynamic_pointer_cast<const core::AggregationNode>(
-          get_plan_node(hashAggOp->planNodeId()));
-      VELOX_CHECK(plan_node != nullptr);
-      std::cout << hashAggOp->planNodeId() << std::endl;
-      auto id = hashAggOp->operatorId();
-      replace_op.push_back(std::make_unique<CudfFromVelox>(
-          id, plan_node->outputType(), ctx, plan_node->id() + "-from-velox"));
-      replace_op[0]->initialize();
-      replace_op.push_back(
-          std::make_unique<exec::CudfHashAggregation>(id, ctx, plan_node));
-      replace_op[1]->initialize();
-      replace_op.push_back(std::make_unique<CudfToVelox>(
-          id, plan_node->outputType(), ctx, plan_node->id() + "-to-velox"));
-      replace_op[2]->initialize();
-
-      operatorsOffset += replace_op.size() - 1;
-      [[maybe_unused]] auto replaced = driverFactory_.replaceOperators(
-          driver_,
-          replacingOperatorIndex,
           replacingOperatorIndex + 1,
           std::move(replace_op));
       replacements_made = true;
