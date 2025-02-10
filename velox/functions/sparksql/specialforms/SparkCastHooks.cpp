@@ -31,8 +31,20 @@ SparkCastHooks::SparkCastHooks(const velox::core::QueryConfig& config)
 
 Expected<Timestamp> SparkCastHooks::castStringToTimestamp(
     const StringView& view) const {
-  return util::fromTimestampString(
+  auto conversionResult = util::fromTimestampString(
       view.data(), view.size(), util::TimestampParseMode::kSparkCast);
+  if (conversionResult.hasError()) {
+    return folly::makeUnexpected(conversionResult.error());
+  }
+  auto result = conversionResult.value();
+  // If no timezone information is available in the input string, check if we
+  // should understand it as being at the session timezone, and if so, convert
+  // to GMT.
+  const auto sessionTzName = config_.sessionTimezone();
+  if (!sessionTzName.empty()) {
+    result.toGMT(*tz::locateZone(sessionTzName));
+  }
+  return result;
 }
 
 Expected<Timestamp> SparkCastHooks::castIntToTimestamp(int64_t seconds) const {
