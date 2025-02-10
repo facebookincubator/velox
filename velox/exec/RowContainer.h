@@ -824,9 +824,8 @@ class RowContainer {
   }
 
   /// Returns the aggregated column stats of the column with given
-  /// 'columnIndex'. nullopt will be returned if the column stats was previous
-  /// invalidated. Any row erase operations will invalidate column stats.
-  std::optional<RowColumn::Stats> columnStats(int32_t columnIndex) const;
+  /// 'columnIndex'.
+  RowColumn::Stats columnStats(int32_t columnIndex) const;
 
   uint32_t columnNullCount(int32_t columnIndex) const {
     return rowColumnsStats_[columnIndex].nullCount();
@@ -838,8 +837,8 @@ class RowContainer {
 
   /// Returns true if specified column has nulls, false otherwise.
   inline bool columnHasNulls(int32_t columnIndex) const {
-    return columnStats(columnIndex)->numCells() > 0 &&
-        columnStats(columnIndex)->nullCount() > 0;
+    return columnStats(columnIndex).numCells() > 0 &&
+        columnStats(columnIndex).nullCount() > 0;
   }
 
   const std::vector<Accumulator>& accumulators() const {

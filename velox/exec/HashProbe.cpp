@@ -305,11 +305,11 @@ std::optional<uint64_t> HashProbe::estimatedRowSize(
   std::vector<RowColumn::Stats> varSizeListColumnsStats;
   varSizeListColumnsStats.reserve(varSizedColumns.size());
   for (uint32_t i = 0; i < varSizedColumns.size(); ++i) {
-    const auto statsOpt = columnStats(varSizedColumns[i]);
-    if (!statsOpt.has_value() || !statsOpt->minMaxColumnStatsValid()) {
+    const auto stats = columnStats(varSizedColumns[i]);
+    if (!stats.minMaxColumnStatsValid()) {
       return std::nullopt;
     }
-    varSizeListColumnsStats.push_back(statsOpt.value());
+    varSizeListColumnsStats.push_back(stats);
   }
 
   uint64_t totalAvgBytes{totalFixedColumnsBytes};
@@ -334,17 +334,12 @@ std::optional<uint64_t> HashProbe::estimatedRowSize(
   return (totalMaxBytes + totalAvgBytes) / 2;
 }
 
-std::optional<RowColumn::Stats> HashProbe::columnStats(
-    int32_t columnIndex) const {
+RowColumn::Stats HashProbe::columnStats(int32_t columnIndex) const {
   std::vector<RowColumn::Stats> columnStats;
   const auto rowContainers = table_->allRows();
   for (const auto* rowContainer : rowContainers) {
     VELOX_CHECK_NOT_NULL(rowContainer);
-    auto statsOpt = rowContainer->columnStats(columnIndex);
-    if (!statsOpt.has_value()) {
-      return std::nullopt;
-    }
-    columnStats.push_back(statsOpt.value());
+    columnStats.push_back(rowContainer->columnStats(columnIndex));
   }
   return RowColumn::Stats::merge(columnStats);
 }

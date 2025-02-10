@@ -42,7 +42,6 @@ class RowContainerTestHelper {
     std::vector<RowColumn::Stats> columnsStats;
     columnsStats.reserve(rowContainer_->rowColumnsStats_.size());
     columnsStats.resize(rowContainer_->rowColumnsStats_.size());
-    const bool isColumnStatsValid = !rowContainer_->rowColumnsStats_.empty();
     for (;;) {
       int64_t numRows = rowContainer_->listRows(&iter, kBatch, rows.data());
       if (!numRows) {
@@ -53,20 +52,18 @@ class RowContainerTestHelper {
         VELOX_CHECK(!bits::isBitSet(row, rowContainer_->freeFlagOffset_));
         ++allocatedRows;
 
-        if (isColumnStatsValid) {
-          for (uint32_t columnIndex = 0;
-               columnIndex < rowContainer_->rowColumnsStats_.size();
-               columnIndex++) {
-            if (rowContainer_->types_[columnIndex]->isFixedWidth()) {
-              continue;
-            }
-            if (rowContainer_->isNullAt(
-                    row, rowContainer_->columnAt(columnIndex))) {
-              columnsStats[columnIndex].addNullCell();
-            } else {
-              columnsStats[columnIndex].addCellSize(
-                  rowContainer_->variableSizeAt(row, columnIndex));
-            }
+        for (uint32_t columnIndex = 0;
+             columnIndex < rowContainer_->rowColumnsStats_.size();
+             columnIndex++) {
+          if (rowContainer_->types_[columnIndex]->isFixedWidth()) {
+            continue;
+          }
+          if (rowContainer_->isNullAt(
+                  row, rowContainer_->columnAt(columnIndex))) {
+            columnsStats[columnIndex].addNullCell();
+          } else {
+            columnsStats[columnIndex].addCellSize(
+                rowContainer_->variableSizeAt(row, columnIndex));
           }
         }
       }
@@ -81,26 +78,23 @@ class RowContainerTestHelper {
     VELOX_CHECK_EQ(numFree, rowContainer_->numFreeRows_);
     VELOX_CHECK_EQ(allocatedRows, rowContainer_->numRows_);
 
-    if (isColumnStatsValid) {
-      VELOX_CHECK_EQ(
-          rowContainer_->types_.size(), rowContainer_->rowColumnsStats_.size());
+    VELOX_CHECK_EQ(
+        rowContainer_->types_.size(), rowContainer_->rowColumnsStats_.size());
 
-      for (uint32_t i = 0; i < rowContainer_->rowColumnsStats_.size(); i++) {
-        const auto& storedStats = rowContainer_->rowColumnsStats_[i];
-        const auto& expectedStats = columnsStats[i];
-        if (rowContainer_->types_[i]->isFixedWidth()) {
-          continue;
-        }
-        if (storedStats.minMaxColumnStatsValid()) {
-          VELOX_CHECK_EQ(expectedStats.maxBytes(), storedStats.maxBytes());
-          VELOX_CHECK_EQ(expectedStats.minBytes(), storedStats.minBytes());
-        }
-        VELOX_CHECK_EQ(expectedStats.sumBytes(), storedStats.sumBytes());
-        VELOX_CHECK_EQ(expectedStats.avgBytes(), storedStats.avgBytes());
-        VELOX_CHECK_EQ(
-            expectedStats.nonNullCount(), storedStats.nonNullCount());
-        VELOX_CHECK_EQ(expectedStats.nullCount(), storedStats.nullCount());
+    for (uint32_t i = 0; i < rowContainer_->rowColumnsStats_.size(); i++) {
+      const auto& storedStats = rowContainer_->rowColumnsStats_[i];
+      const auto& expectedStats = columnsStats[i];
+      if (rowContainer_->types_[i]->isFixedWidth()) {
+        continue;
       }
+      if (storedStats.minMaxColumnStatsValid()) {
+        VELOX_CHECK_EQ(expectedStats.maxBytes(), storedStats.maxBytes());
+        VELOX_CHECK_EQ(expectedStats.minBytes(), storedStats.minBytes());
+      }
+      VELOX_CHECK_EQ(expectedStats.sumBytes(), storedStats.sumBytes());
+      VELOX_CHECK_EQ(expectedStats.avgBytes(), storedStats.avgBytes());
+      VELOX_CHECK_EQ(expectedStats.nonNullCount(), storedStats.nonNullCount());
+      VELOX_CHECK_EQ(expectedStats.nullCount(), storedStats.nullCount());
     }
   }
 
@@ -2575,26 +2569,26 @@ TEST_F(RowContainerTest, invalidatedColumnStats) {
   auto createRowContainer = [&](std::vector<char*>& rows) {
     auto data = makeRowContainer(keys, dependents);
 
-    EXPECT_TRUE(data->columnStats(0).has_value());
-    EXPECT_EQ(data->columnStats(0)->nonNullCount(), 0);
-    EXPECT_EQ(data->columnStats(0)->nullCount(), 0);
-    EXPECT_EQ(data->columnStats(0)->numCells(), 0);
-    EXPECT_TRUE(data->columnStats(1).has_value());
-    EXPECT_EQ(data->columnStats(1)->nonNullCount(), 0);
-    EXPECT_EQ(data->columnStats(1)->nullCount(), 0);
-    EXPECT_EQ(data->columnStats(1)->numCells(), 0);
-    EXPECT_TRUE(data->columnStats(2).has_value());
-    EXPECT_EQ(data->columnStats(2)->nonNullCount(), 0);
-    EXPECT_EQ(data->columnStats(2)->nullCount(), 0);
-    EXPECT_EQ(data->columnStats(2)->numCells(), 0);
-    EXPECT_TRUE(data->columnStats(3).has_value());
-    EXPECT_EQ(data->columnStats(3)->nonNullCount(), 0);
-    EXPECT_EQ(data->columnStats(3)->nullCount(), 0);
-    EXPECT_EQ(data->columnStats(3)->numCells(), 0);
-    EXPECT_TRUE(data->columnStats(4).has_value());
-    EXPECT_EQ(data->columnStats(4)->nonNullCount(), 0);
-    EXPECT_EQ(data->columnStats(4)->nullCount(), 0);
-    EXPECT_EQ(data->columnStats(4)->numCells(), 0);
+    EXPECT_TRUE(data->columnStats(0).minMaxColumnStatsValid());
+    EXPECT_EQ(data->columnStats(0).nonNullCount(), 0);
+    EXPECT_EQ(data->columnStats(0).nullCount(), 0);
+    EXPECT_EQ(data->columnStats(0).numCells(), 0);
+    EXPECT_TRUE(data->columnStats(1).minMaxColumnStatsValid());
+    EXPECT_EQ(data->columnStats(1).nonNullCount(), 0);
+    EXPECT_EQ(data->columnStats(1).nullCount(), 0);
+    EXPECT_EQ(data->columnStats(1).numCells(), 0);
+    EXPECT_TRUE(data->columnStats(2).minMaxColumnStatsValid());
+    EXPECT_EQ(data->columnStats(2).nonNullCount(), 0);
+    EXPECT_EQ(data->columnStats(2).nullCount(), 0);
+    EXPECT_EQ(data->columnStats(2).numCells(), 0);
+    EXPECT_TRUE(data->columnStats(3).minMaxColumnStatsValid());
+    EXPECT_EQ(data->columnStats(3).nonNullCount(), 0);
+    EXPECT_EQ(data->columnStats(3).nullCount(), 0);
+    EXPECT_EQ(data->columnStats(3).numCells(), 0);
+    EXPECT_TRUE(data->columnStats(4).minMaxColumnStatsValid());
+    EXPECT_EQ(data->columnStats(4).nonNullCount(), 0);
+    EXPECT_EQ(data->columnStats(4).nullCount(), 0);
+    EXPECT_EQ(data->columnStats(4).numCells(), 0);
 
     for (int i = 0; i < kNumRows; ++i) {
       data->newRow();
@@ -2636,25 +2630,24 @@ TEST_F(RowContainerTest, invalidatedColumnStats) {
     std::vector<char*> rows(kNumRows);
     auto rowContainer = createRowContainer(rows);
 
-    ASSERT_TRUE(rowContainer->columnStats(0).has_value());
-    ASSERT_GT(rowContainer->columnStats(0)->numCells(), 0);
-    ASSERT_TRUE(rowContainer->columnStats(1).has_value());
-    ASSERT_GT(rowContainer->columnStats(1)->numCells(), 0);
-    ASSERT_TRUE(rowContainer->columnStats(2).has_value());
-    ASSERT_GT(rowContainer->columnStats(2)->numCells(), 0);
-    ASSERT_TRUE(rowContainer->columnStats(3).has_value());
-    ASSERT_GT(rowContainer->columnStats(3)->numCells(), 0);
-    ASSERT_TRUE(rowContainer->columnStats(4).has_value());
-    ASSERT_GT(rowContainer->columnStats(4)->numCells(), 0);
+    ASSERT_TRUE(rowContainer->columnStats(0).minMaxColumnStatsValid());
+    ASSERT_GT(rowContainer->columnStats(0).numCells(), 0);
+    ASSERT_TRUE(rowContainer->columnStats(1).minMaxColumnStatsValid());
+    ASSERT_GT(rowContainer->columnStats(1).numCells(), 0);
+    ASSERT_TRUE(rowContainer->columnStats(2).minMaxColumnStatsValid());
+    ASSERT_GT(rowContainer->columnStats(2).numCells(), 0);
+    ASSERT_TRUE(rowContainer->columnStats(3).minMaxColumnStatsValid());
+    ASSERT_GT(rowContainer->columnStats(3).numCells(), 0);
+    ASSERT_TRUE(rowContainer->columnStats(4).minMaxColumnStatsValid());
+    ASSERT_GT(rowContainer->columnStats(4).numCells(), 0);
 
     invalidateFunc(rowContainer.get(), rows);
     RowContainerTestHelper(rowContainer.get()).checkConsistency();
-
-    ASSERT_TRUE(rowContainer->columnStats(0).has_value());
-    ASSERT_TRUE(rowContainer->columnStats(1).has_value());
-    ASSERT_TRUE(rowContainer->columnStats(2).has_value());
-    ASSERT_TRUE(rowContainer->columnStats(3).has_value());
-    ASSERT_TRUE(rowContainer->columnStats(4).has_value());
+    ASSERT_FALSE(rowContainer->columnStats(0).minMaxColumnStatsValid());
+    ASSERT_FALSE(rowContainer->columnStats(1).minMaxColumnStatsValid());
+    ASSERT_FALSE(rowContainer->columnStats(2).minMaxColumnStatsValid());
+    ASSERT_FALSE(rowContainer->columnStats(3).minMaxColumnStatsValid());
+    ASSERT_FALSE(rowContainer->columnStats(4).minMaxColumnStatsValid());
   }
 }
 
@@ -2762,7 +2755,7 @@ TEST_F(RowContainerTest, storeAndCollectColumnStats) {
 
   ASSERT_EQ(rowContainer->numRows(), kNumRows);
   for (int i = 0; i < rowContainer->columnTypes().size(); ++i) {
-    const auto stats = rowContainer->columnStats(i).value();
+    const auto stats = rowContainer->columnStats(i);
     EXPECT_EQ(stats.nonNullCount(), 857);
     EXPECT_EQ(stats.nullCount(), 143);
     EXPECT_EQ(stats.numCells(), kNumRows);
@@ -2776,7 +2769,7 @@ TEST_F(RowContainerTest, storeAndCollectColumnStats) {
 
   rowContainer->eraseRows(folly::Range(rows.data(), 10)); // there are 2 nulls
   for (int i = 0; i < rowContainer->columnTypes().size(); ++i) {
-    const auto stats = rowContainer->columnStats(i).value();
+    const auto stats = rowContainer->columnStats(i);
     EXPECT_EQ(stats.nonNullCount(), 849);
     EXPECT_EQ(stats.nullCount(), 141);
     EXPECT_EQ(stats.numCells(), kNumRows - 10);
@@ -2787,7 +2780,7 @@ TEST_F(RowContainerTest, storeAndCollectColumnStats) {
   }
   rowContainer->clear();
   for (int i = 0; i < rowContainer->columnTypes().size(); ++i) {
-    EXPECT_EQ(rowContainer->columnStats(i).value().numCells(), 0);
+    EXPECT_EQ(rowContainer->columnStats(i).numCells(), 0);
   }
 }
 
