@@ -180,7 +180,7 @@ TEST_F(WindowTest, rowBasedStreamingWindowOOM) {
   auto queryCtx = core::QueryCtx::create(executor_.get());
   queryCtx->testingOverrideMemoryPool(memory::memoryManager()->addRootPool(
       queryCtx->queryId(),
-      8'388'608 /* 8MB */,
+      4'194'304 /* 4MB */,
       exec::MemoryReclaimer::create()));
 
   params.queryCtx = queryCtx;
@@ -215,6 +215,45 @@ TEST_F(WindowTest, rowBasedStreamingWindowOOM) {
   testWindowBuild(true);
   // SortBasedWindow will OOM.
   testWindowBuild(false);
+}
+
+TEST_F(WindowTest, windowOOMWithHugeWindowPartition) {
+  const vector_size_t size = 1'000'000'00;
+  auto data = makeRowVector(
+      {"d", "p", "s"},
+      {
+          // Payload.
+          makeFlatVector<int64_t>(size, [](auto row) { return row; }),
+          // Partition key.
+          makeFlatVector<int16_t>(size, [](auto row) { return row; }),
+          // Sorting key.
+          makeFlatVector<int32_t>(size, [](auto row) { return row; }),
+      });
+
+  createDuckDbTable({data});
+
+  // Abstract the common values vector split.
+  auto valuesSplit = split(data, 10);
+
+  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  CursorParameters params;
+  auto queryCtx = core::QueryCtx::create(executor_.get());
+  queryCtx->testingOverrideMemoryPool(memory::memoryManager()->addRootPool(
+      queryCtx->queryId(),
+      838860800 /* 800MB */,
+      exec::MemoryReclaimer::create()));
+
+  params.queryCtx = queryCtx;
+
+  params.planNode =
+      PlanBuilder(planNodeIdGenerator)
+          .values(valuesSplit)
+          .streamingWindow({"row_number() over (partition by p order by s)"})
+          .project({"d"})
+          .singleAggregation({}, {"sum(d)"})
+          .planNode();
+
+  readCursor(params, [](Task*) {});
 }
 
 DEBUG_ONLY_TEST_F(WindowTest, aggWindowResultMismatch) {
