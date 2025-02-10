@@ -376,6 +376,7 @@ message("FINAL CMAKE_CXX_FLAGS=${CMAKE_CXX_FLAGS}")
 if(NOT TARGET fmt::fmt)
   velox_set_source(fmt)
   velox_resolve_dependency(fmt 9.0.0)
+  set_target_properties(fmt::fmt PROPERTIES IMPORTED_GLOBAL TRUE)
 endif()
 
 if(VELOX_ENABLE_GPU)
