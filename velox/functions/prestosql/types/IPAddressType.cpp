@@ -72,7 +72,7 @@ class IPAddressCastOperator : public exec::CastOperator {
       castFromIPPrefix(input, context, rows, *result);
     } else {
       VELOX_UNSUPPORTED(
-          "Cast from {} to IPAddress not supported", resultType->toString());
+          "Cast from {} to IPAddress not supported", input.type()->toString());
     }
   }
 
