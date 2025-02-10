@@ -29,7 +29,8 @@
 #include <cudf/table/table.hpp>
 #include <cudf/transform.hpp>
 
-namespace facebook::velox::cudf_velox {
+namespace cudf {
+namespace ast {
 
 // Copied from cudf 24.12, TODO: remove this after cudf is updated
 /**
@@ -131,6 +132,10 @@ class tree {
   // Consider using a bump allocator with type-erased deleters.
   std::vector<std::unique_ptr<cudf::ast::expression>> expressions;
 };
+} // namespace ast
+} // namespace cudf
+
+namespace facebook::velox::cudf_velox {
 
 // TODO: Does not support Filter yet.
 class CudfFilterProject : public exec::Operator {
@@ -172,7 +177,7 @@ class CudfFilterProject : public exec::Operator {
   // initialization, they will be reset, and initialized_ will be set to true.
   std::shared_ptr<const core::ProjectNode> project_;
   std::shared_ptr<const core::FilterNode> filter_;
-  std::vector<tree> projectAst_;
+  std::vector<cudf::ast::tree> projectAst_;
   std::vector<std::unique_ptr<cudf::scalar>> scalars_;
   // instruction on dependent column to get new column index on non-ast
   // supported operations in expressions

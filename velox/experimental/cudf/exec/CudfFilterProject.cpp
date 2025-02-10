@@ -85,7 +85,7 @@ void debug_print_tree(
 // and collect precompute instructions for non-ast operations
 cudf::ast::expression const& create_ast_tree(
     const std::shared_ptr<velox::exec::Expr>& expr,
-    tree& t,
+    cudf::ast::tree& tree,
     std::vector<std::unique_ptr<cudf::scalar>>& scalars,
     const RowTypePtr& inputRowSchema,
     std::vector<std::tuple<int, std::string, int>>& precompute_instructions) {
@@ -99,28 +99,39 @@ cudf::ast::expression const& create_ast_tree(
     VELOX_CHECK_NOT_NULL(c, "literal expression should be ConstantExpr");
     auto value = c->value();
     // convert to cudf scalar
-    auto lit = createLiteral(value, scalars);
-    return t.push(std::move(lit));
+    return tree.push(createLiteral(value, scalars));
   } else if (binary_ops.find(name) != binary_ops.end()) {
     auto len = expr->inputs().size();
     VELOX_CHECK_EQ(len, 2);
     auto const& op1 = create_ast_tree(
-        expr->inputs()[0], t, scalars, inputRowSchema, precompute_instructions);
+        expr->inputs()[0],
+        tree,
+        scalars,
+        inputRowSchema,
+        precompute_instructions);
     auto const& op2 = create_ast_tree(
-        expr->inputs()[1], t, scalars, inputRowSchema, precompute_instructions);
-    return t.push(operation{binary_ops.at(name), op1, op2});
+        expr->inputs()[1],
+        tree,
+        scalars,
+        inputRowSchema,
+        precompute_instructions);
+    return tree.push(operation{binary_ops.at(name), op1, op2});
   } else if (name == "cast") {
     auto len = expr->inputs().size();
     VELOX_CHECK_EQ(len, 1);
     auto const& op1 = create_ast_tree(
-        expr->inputs()[0], t, scalars, inputRowSchema, precompute_instructions);
+        expr->inputs()[0],
+        tree,
+        scalars,
+        inputRowSchema,
+        precompute_instructions);
     if (expr->type()->kind() == TypeKind::INTEGER) {
       // No int32 cast in cudf ast
-      return t.push(operation{op::CAST_TO_INT64, op1});
+      return tree.push(operation{op::CAST_TO_INT64, op1});
     } else if (expr->type()->kind() == TypeKind::BIGINT) {
-      return t.push(operation{op::CAST_TO_INT64, op1});
+      return tree.push(operation{op::CAST_TO_INT64, op1});
     } else if (expr->type()->kind() == TypeKind::DOUBLE) {
-      return t.push(operation{op::CAST_TO_FLOAT64, op1});
+      return tree.push(operation{op::CAST_TO_FLOAT64, op1});
     } else {
       VELOX_CHECK(false, "Unsupported type for cast operation");
     }
@@ -137,11 +148,11 @@ cudf::ast::expression const& create_ast_tree(
         c2->toString() == "0:BIGINT") {
       auto const& op1 = create_ast_tree(
           expr->inputs()[0],
-          t,
+          tree,
           scalars,
           inputRowSchema,
           precompute_instructions);
-      return t.push(operation{op::CAST_TO_INT64, op1});
+      return tree.push(operation{op::CAST_TO_INT64, op1});
     } else {
       std::cerr << "switch subexpr: " << expr->toString() << std::endl;
       VELOX_CHECK(false, "Unsupported switch complex operation");
@@ -160,15 +171,16 @@ cudf::ast::expression const& create_ast_tree(
         dependent_column_index, "year", new_column_index);
     // This custom op should be added to input columns.
     // cast to big int
-    auto const& col_ref = t.push(cudf::ast::column_reference(new_column_index));
-    return t.push(operation{op::CAST_TO_INT64, col_ref});
+    auto const& col_ref =
+        tree.push(cudf::ast::column_reference(new_column_index));
+    return tree.push(operation{op::CAST_TO_INT64, col_ref});
   } else {
     auto fieldExpr =
         std::dynamic_pointer_cast<velox::exec::FieldReference>(expr);
     VELOX_CHECK_NOT_NULL(fieldExpr, "Expression is not a field, name: " + name);
     // Field? (not all are fields. Need better way to confirm Field)
     auto column_index = inputRowSchema->getChildIdx(name);
-    return t.push(cudf::ast::column_reference(column_index));
+    return tree.push(cudf::ast::column_reference(column_index));
   }
 }
 
@@ -203,11 +215,11 @@ CudfFilterProject::CudfFilterProject(
     }
   }
   for (auto expr : info.exprs->exprs()) {
-    tree t;
-    create_ast_tree(expr, t, scalars_, inputType, precompute_instructions_);
-    // If t has only field reference, then it is a custom op or column
+    cudf::ast::tree tree;
+    create_ast_tree(expr, tree, scalars_, inputType, precompute_instructions_);
+    // If tree has only field reference, then it is a custom op or column
     // reference. so we need to move it to identityProjections_
-    projectAst_.emplace_back(std::move(t));
+    projectAst_.emplace_back(std::move(tree));
   }
 }
 
