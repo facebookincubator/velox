@@ -102,26 +102,31 @@ class HiveIcebergTest : public HiveConnectorTestBase {
 
   void assertMultipleSplits(
       const std::vector<int64_t>& deletePositions,
-      int32_t splitCount,
-      int32_t numPrefetchSplits) {
+      int32_t fileCount,
+      int32_t numPrefetchSplits,
+      int rowCountPerFile = rowCount,
+      int32_t splitCountPerFile = 1) {
     std::map<std::string, std::vector<int64_t>> rowGroupSizesForFiles;
-    for (int32_t i = 0; i < splitCount; i++) {
+    for (int32_t i = 0; i < fileCount; i++) {
       std::string dataFileName = fmt::format("data_file_{}", i);
-      rowGroupSizesForFiles[dataFileName] = {rowCount};
+      rowGroupSizesForFiles[dataFileName] = {rowCountPerFile};
     }
 
     std::unordered_map<
         std::string,
         std::multimap<std::string, std::vector<int64_t>>>
         deleteFilesForBaseDatafiles;
-    for (int i = 0; i < splitCount; i++) {
+    for (int i = 0; i < fileCount; i++) {
       std::string deleteFileName = fmt::format("delete_file_{}", i);
       deleteFilesForBaseDatafiles[deleteFileName] = {
           {fmt::format("data_file_{}", i), deletePositions}};
     }
 
     assertPositionalDeletes(
-        rowGroupSizesForFiles, deleteFilesForBaseDatafiles, numPrefetchSplits);
+        rowGroupSizesForFiles,
+        deleteFilesForBaseDatafiles,
+        numPrefetchSplits,
+        splitCountPerFile);
   }
 
   std::vector<int64_t> makeRandomIncreasingValues(int64_t begin, int64_t end) {
@@ -169,7 +174,8 @@ class HiveIcebergTest : public HiveConnectorTestBase {
           std::string,
           std::multimap<std::string, std::vector<int64_t>>>&
           deleteFilesForBaseDatafiles,
-      int32_t numPrefetchSplits = 0) {
+      int32_t numPrefetchSplits = 0,
+      int32_t splitCount = 1) {
     // Keep the reference to the deleteFilePath, otherwise the corresponding
     // file will be deleted.
     std::map<std::string, std::shared_ptr<TempFilePath>> dataFilePaths =
@@ -198,18 +204,20 @@ class HiveIcebergTest : public HiveConnectorTestBase {
           // add it to the split
           auto deleteFilePath =
               deleteFilePaths[deleteFileName].second->getPath();
-          IcebergDeleteFile deleteFile(
+          IcebergDeleteFile icebergDeleteFile(
               FileContent::kPositionalDeletes,
               deleteFilePath,
               fileFomat_,
               deleteFilePaths[deleteFileName].first,
               testing::internal::GetFileSize(
                   std::fopen(deleteFilePath.c_str(), "r")));
-          deleteFiles.push_back(deleteFile);
+          deleteFiles.push_back(icebergDeleteFile);
         }
       }
 
-      splits.emplace_back(makeIcebergSplit(baseFilePath, deleteFiles));
+      auto icebergSplits =
+          makeIcebergSplits(baseFilePath, deleteFiles, splitCount);
+      splits.insert(splits.end(), icebergSplits.begin(), icebergSplits.end());
     }
 
     std::string duckdbSql =
@@ -327,7 +335,7 @@ class HiveIcebergTest : public HiveConnectorTestBase {
     for (int j = 0; j < vectorSizes.size(); j++) {
       auto data = makeContinuousIncreasingValues(
           startingValue, startingValue + vectorSizes[j]);
-      VectorPtr c0 = vectorMaker_.flatVector<int64_t>(data);
+      VectorPtr c0 = makeFlatVector<int64_t>(data);
       vectors.push_back(makeRowVector({"c0"}, {c0}));
       startingValue += vectorSizes[j];
     }
@@ -335,9 +343,10 @@ class HiveIcebergTest : public HiveConnectorTestBase {
     return vectors;
   }
 
-  std::shared_ptr<ConnectorSplit> makeIcebergSplit(
+  std::vector<std::shared_ptr<ConnectorSplit>> makeIcebergSplits(
       const std::string& dataFilePath,
-      const std::vector<IcebergDeleteFile>& deleteFiles = {}) {
+      const std::vector<IcebergDeleteFile>& deleteFiles = {},
+      const uint32_t splitCount = 1) {
     std::unordered_map<std::string, std::optional<std::string>> partitionKeys;
     std::unordered_map<std::string, std::string> customSplitInfo;
     customSplitInfo["table_format"] = "hive-iceberg";
@@ -345,19 +354,25 @@ class HiveIcebergTest : public HiveConnectorTestBase {
     auto file = filesystems::getFileSystem(dataFilePath, nullptr)
                     ->openFileForRead(dataFilePath);
     const int64_t fileSize = file->size();
+    std::vector<std::shared_ptr<ConnectorSplit>> splits;
+    const uint64_t splitSize = std::floor((fileSize) / splitCount);
 
-    return std::make_shared<HiveIcebergSplit>(
-        kHiveConnectorId,
-        dataFilePath,
-        fileFomat_,
-        0,
-        fileSize,
-        partitionKeys,
-        std::nullopt,
-        customSplitInfo,
-        nullptr,
-        /*cacheable=*/true,
-        deleteFiles);
+    for (int i = 0; i < splitCount; ++i) {
+      splits.emplace_back(std::make_shared<HiveIcebergSplit>(
+          kHiveConnectorId,
+          dataFilePath,
+          fileFomat_,
+          i * splitSize,
+          splitSize,
+          partitionKeys,
+          std::nullopt,
+          customSplitInfo,
+          nullptr,
+          /*cacheable=*/true,
+          deleteFiles));
+    }
+
+    return splits;
   }
 
   std::string getDuckDBQuery(
@@ -658,6 +673,17 @@ TEST_F(HiveIcebergTest, positionalDeletesMultipleSplits) {
   assertMultipleSplits(makeRandomIncreasingValues(0, 20000), 10, 3);
   assertMultipleSplits(makeContinuousIncreasingValues(0, 20000), 10, 3);
   assertMultipleSplits({}, 10, 3);
-}
 
+  assertMultipleSplits({1, 2, 3, 4}, 10, 5, 30000, 3);
+  assertPositionalDeletes(
+      {
+          {"data_file_0", {500}},
+          {"data_file_1", {10000, 10000}},
+          {"data_file_2", {500}},
+      },
+      {{"delete_file_1",
+        {{"data_file_1", makeRandomIncreasingValues(0, 20000)}}}},
+      0,
+      3);
+}
 } // namespace facebook::velox::connector::hive::iceberg
