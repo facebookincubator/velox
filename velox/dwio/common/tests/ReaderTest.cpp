@@ -130,11 +130,11 @@ TEST_F(ReaderTest, projectColumnsMutation) {
   random::RandomSkipTracker randomSkip(0.5);
   mutation.randomSkip = &randomSkip;
   actual = RowReader::projectColumns(input, spec, &mutation);
-#if __APPLE__
+#if FOLLY_HAVE_EXTRANDOM_SFMT19937
   expected = makeRowVector({
       makeFlatVector<int64_t>({1, 5, 6, 7, 8, 9}),
   });
-#elif FOLLY_HAVE_EXTRANDOM_SFMT19937
+#elif __APPLE__
   expected = makeRowVector({
       makeFlatVector<int64_t>({0, 1, 3, 5, 6, 8}),
   });
