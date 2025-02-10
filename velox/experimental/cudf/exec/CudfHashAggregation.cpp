@@ -13,6 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
 #include "CudfHashAggregation.h"
 
 #include "cudf/column/column_factories.hpp"
@@ -161,16 +162,8 @@ void CudfHashAggregation::initialize() {
   // output types reported by aggregation functions. We can't do that in cudf
   // groupby.
 
-  // DM: This is just a maping of groupby key columns to their output
-  // index. We don't need hasher for this. I also don't know how this will be
-  // used. Apparently, it's used for HashProbe to pushdown some dynamic filters
+  // DM: Set identity projections used by HashProbe to pushdown dynamic filters
   // to table scan.
-  // TODO (dm): Figure out what this operator needs to do to support this. Leave
-  // for now
-  // for (auto i = 0; i < hashers.size(); ++i) {
-  //   identityProjections_.emplace_back(
-  //       hashers[groupingKeyOutputChannels[i]]->channel(), i);
-  // }
 
   // TODO (dm): Add support for grouping sets and group ids
 
@@ -196,31 +189,15 @@ void CudfHashAggregation::setupGroupingKeyChannelProjections(
         exprToChannel(groupingKeys[i].get(), inputType), i);
   }
 
-  const bool reorderGroupingKeys = false;
-  //     canSpill() && spillConfig()->prefixSortEnabled();
-  // If prefix sort is enabled, we need to sort the grouping key's layout in the
-  // grouping set to maximize the prefix sort acceleration if spill is
-  // triggered. The reorder stores the grouping key with smaller prefix sort
-  // encoded size first.
-  // DM: Not sure if we need this yet.
-  // if (reorderGroupingKeys) {
-  //   PrefixSortLayout::optimizeSortKeysOrder(inputType,
-  //   groupingKeyProjections);
-  // }
-
   groupingKeyInputChannels.reserve(groupingKeys.size());
   for (auto i = 0; i < groupingKeys.size(); ++i) {
     groupingKeyInputChannels.push_back(groupingKeyProjections[i].inputChannel);
   }
 
   groupingKeyOutputChannels.resize(groupingKeys.size());
-  if (!reorderGroupingKeys) {
-    // If there is no reorder, then grouping key output channels are the same as
-    // the column index order int he grouping set.
-    std::iota(
-        groupingKeyOutputChannels.begin(), groupingKeyOutputChannels.end(), 0);
-    return;
-  }
+
+  std::iota(
+      groupingKeyOutputChannels.begin(), groupingKeyOutputChannels.end(), 0);
 }
 
 void CudfHashAggregation::addInput(RowVectorPtr input) {
@@ -341,11 +318,6 @@ RowVectorPtr CudfHashAggregation::getOutput() {
     return nullptr;
   }
 
-  // Produce results if one of the following is true:
-  // - received no-more-input message;
-  // - partial aggregation reached memory limit;
-  // - distinct aggregation has new keys;
-  // - running in partial streaming mode and have some output ready.
   if (!noMoreInput_ && !newDistincts_) {
     input_ = nullptr;
     return nullptr;
