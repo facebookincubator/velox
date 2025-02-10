@@ -44,7 +44,7 @@ jobs:
       Arrow_SOURCE: BUNDLED
       Thrift_SOURCE: BUNDLED
       cudf_SOURCE:  BUNDLED
-      CUDA_VERSION: "12.4"
+      CUDA_VERSION: "12.8"
     steps:
       - uses: actions/checkout@v4
 
