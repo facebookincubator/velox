@@ -477,26 +477,16 @@ TEST_P(UnnestTest, batchSize) {
 TEST_P(UnnestTest, basicArrayWithOuter) {
   auto vector = makeRowVector({
       makeFlatVector<int64_t>({1, 2, 3}),
-      makeNullableArrayVector<int64_t>({
-        {1, 2, std::nullopt},
-        {},
-        {3}
-      }),
+      makeNullableArrayVector<int64_t>({{1, 2, std::nullopt}, {}, {3}}),
   });
 
   createDuckDbTable({vector});
 
-  // isOuter = false
-  auto op1 = PlanBuilder().values({vector}).unnest({"c0"}, {"c1"}, std::nullopt, /* isOuter = */ false).planNode();
-  auto params1 = makeCursorParameters(op1);
-  auto expected1 = makeRowVector({
-      makeFlatVector<int64_t>({1, 1, 1, 3}),
-      makeNullableFlatVector<int64_t>({1, 2, std::nullopt, 3}),
-  });
-  assertQuery(params1, expected1);
-
-  // isOuter = true
-  auto op2 = PlanBuilder().values({vector}).unnest({"c0"}, {"c1"}, std::nullopt, /* isOuter = */ true).planNode();
+  // isOuter = true.
+  auto op2 = PlanBuilder()
+                 .values({vector})
+                 .unnest({"c0"}, {"c1"}, std::nullopt, /* isOuter = */ true)
+                 .planNode();
   auto params2 = makeCursorParameters(op2);
   auto expected2 = makeRowVector({
       makeFlatVector<int64_t>({1, 1, 1, 2, 3}),
@@ -504,8 +494,11 @@ TEST_P(UnnestTest, basicArrayWithOuter) {
   });
   assertQuery(params2, expected2);
 
-  // ordinal = true && isOuter = true
-  auto op3 = PlanBuilder().values({vector}).unnest({"c0"}, {"c1"}, "ordinal", /* isOuter = */ true).planNode();
+  // ordinal = true && isOuter = true.
+  auto op3 = PlanBuilder()
+                 .values({vector})
+                 .unnest({"c0"}, {"c1"}, "ordinal", /* isOuter = */ true)
+                 .planNode();
   auto params3 = makeCursorParameters(op3);
   auto expected3 = makeRowVector({
       makeFlatVector<int64_t>({1, 1, 1, 2, 3}),

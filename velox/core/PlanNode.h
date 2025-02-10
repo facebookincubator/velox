@@ -1959,16 +1959,7 @@ class UnnestNode : public PlanNode {
       const std::vector<std::string>& unnestNames,
       const std::optional<std::string>& ordinalityName,
       const PlanNodePtr& source,
-      bool isOuter);
-
-  UnnestNode(
-      const PlanNodeId& id,
-      std::vector<FieldAccessTypedExprPtr> replicateVariables,
-      std::vector<FieldAccessTypedExprPtr> unnestVariables,
-      const std::vector<std::string>& unnestNames,
-      const std::optional<std::string>& ordinalityName,
-      const PlanNodePtr& source):
-      UnnestNode(id, replicateVariables, unnestVariables, unnestNames, ordinalityName, source, false) {}
+      bool isOuter = false);
 
   /// The order of columns in the output is: replicated columns (in the order
   /// specified), unnested columns (in the order specified, for maps: key

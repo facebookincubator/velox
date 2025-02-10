@@ -103,12 +103,8 @@ RowVectorPtr Unnest::getOutput() {
     return nullptr;
   }
 
-  RowVectorPtr output = nullptr;
-  if (isOuter_) {
-    output = generateOutput<true>(rowRange);
-  } else {
-    output = generateOutput<false>(rowRange);
-  }
+  const auto output = isOuter_ ? generateOutput<true>(rowRange)
+                               : generateOutput<false>(rowRange);
 
   if (rowRange.lastRowEnd.has_value()) {
     // The last row is not processed completely.
@@ -255,7 +251,7 @@ VectorPtr Unnest::generateOrdinalityVector(const RowRange& range) {
   vector_size_t index = 0;
   range.forEachRow(
       [&](vector_size_t row, vector_size_t start, vector_size_t size) {
-        if constexpr(isOuter) {
+        if constexpr (isOuter) {
           if (rawOrdinalityIsNull_[row]) {
             ordinalityVector->setNull(index, true);
           }
@@ -312,9 +308,8 @@ RowVectorPtr Unnest::generateOutput(const RowRange& range) {
       std::move(outputs));
 }
 
-
 template <bool isOuter>
-void Unnest::countMaxNumElementsPerRow(int32_t size) {
+void Unnest::countMaxNumElementsPerRow(vector_size_t numRows) {
   for (auto channel = 0; channel < unnestChannels_.size(); ++channel) {
     const auto& unnestVector = input_->childAt(unnestChannels_[channel]);
 
@@ -337,7 +332,7 @@ void Unnest::countMaxNumElementsPerRow(int32_t size) {
     // Count max number of elements per row.
     auto* currentSizes = rawSizes_[channel];
     auto* currentIndices = rawIndices_[channel];
-    for (auto row = 0; row < size; ++row) {
+    for (auto row = 0; row < numRows; ++row) {
       if (!currentDecoded.isNullAt(row)) {
         auto unnestSize = currentSizes[currentIndices[row]];
         if constexpr (isOuter) {
