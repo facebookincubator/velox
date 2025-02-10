@@ -28,7 +28,9 @@
 #include <rmm/mr/device/pool_memory_resource.hpp>
 
 #include <cudf/concatenate.hpp>
+#include <cudf/utilities/default_stream.hpp>
 #include <cudf/utilities/error.hpp>
+#include <cudf/utilities/memory_resource.hpp>
 
 #include "velox/experimental/cudf/exec/Utilities.h"
 
@@ -102,7 +104,10 @@ std::unique_ptr<cudf::table> concatenateTables(
       tables.end(),
       std::back_inserter(tableViews),
       [&](auto const& tbl) { return tbl->view(); });
-  return cudf::concatenate(tableViews, cudf::get_default_stream(), cudf::get_current_device_resource_ref());
+  return cudf::concatenate(
+      tableViews,
+      cudf::get_default_stream(),
+      cudf::get_current_device_resource_ref());
 }
 
 } // namespace facebook::velox::cudf_velox
