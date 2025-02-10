@@ -174,6 +174,10 @@ class CudfFilterProject : public exec::Operator {
   std::shared_ptr<const core::FilterNode> filter_;
   std::vector<tree> projectAst_;
   std::vector<std::unique_ptr<cudf::scalar>> scalars_;
+  // instruction on dependent column to get new column index on non-ast
+  // supported operations in expressions
+  // <dependent_column_index, "instruction", new_column_index>
+  std::vector<std::tuple<int, std::string, int>> precompute_instructions_;
 
   std::vector<velox::exec::IdentityProjection> resultProjections_;
   std::vector<velox::exec::IdentityProjection> identityProjections_;
