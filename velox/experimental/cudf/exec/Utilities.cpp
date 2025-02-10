@@ -102,7 +102,7 @@ std::unique_ptr<cudf::table> concatenateTables(
       tables.end(),
       std::back_inserter(tableViews),
       [&](auto const& tbl) { return tbl->view(); });
-  return cudf::concatenate(tableViews, cudf::get_default_stream());
+  return cudf::concatenate(tableViews, cudf::get_default_stream(), cudf::get_current_device_resource_ref());
 }
 
 } // namespace facebook::velox::cudf_velox
