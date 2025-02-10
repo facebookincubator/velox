@@ -18,7 +18,8 @@ set(VELOX_cudf_VERSION 25.04)
 set(VELOX_cudf_BUILD_SHA256_CHECKSUM
     076bb16bde78927d7d8eed34ce102890bfc2f74896fea4dd90020bacb9a07f6b)
 set(VELOX_cudf_SOURCE_URL
-    "https://github.com/rapidsai/cudf/archive/6dc4a536897b3156a3b549a400113e0373798dc9.tar.gz")
+    "https://github.com/rapidsai/cudf/archive/6dc4a536897b3156a3b549a400113e0373798dc9.tar.gz"
+)
 velox_resolve_dependency_url(cudf)
 
 # Use block so we don't leak variables
