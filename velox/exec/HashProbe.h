@@ -356,7 +356,7 @@ class HashProbe : public Operator {
   // NOTE: The column stats is collected by default for hash join table but it
   // could be invalidated in case of spilling. But we should never expect usage
   // of an invalidated table as we always spill the entire table.
-  std::optional<RowColumn::Stats> columnStats(int32_t columnIndex) const;
+  RowColumn::Stats columnStats(int32_t columnIndex) const;
 
   // TODO: Define batch size as bytes based on RowContainer row sizes.
   const vector_size_t outputBatchSize_;
