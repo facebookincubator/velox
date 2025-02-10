@@ -27,9 +27,9 @@
 #include <rmm/mr/device/owning_wrapper.hpp>
 #include <rmm/mr/device/pool_memory_resource.hpp>
 
+#include <cudf/concatenate.hpp>
 #include <cudf/utilities/error.hpp>
 
-#include "cudf/concatenate.hpp"
 #include "velox/experimental/cudf/exec/Utilities.h"
 
 namespace facebook::velox::cudf_velox {
