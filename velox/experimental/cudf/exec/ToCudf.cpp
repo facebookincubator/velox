@@ -26,6 +26,7 @@
 #include "velox/experimental/cudf/exec/CudfConversion.h"
 #include "velox/experimental/cudf/exec/CudfHashAggregation.h"
 #include "velox/experimental/cudf/exec/CudfHashJoin.h"
+#include "velox/experimental/cudf/exec/CudfLocalPartition.h"
 #include "velox/experimental/cudf/exec/CudfOrderBy.h"
 #include "velox/experimental/cudf/exec/Utilities.h"
 
@@ -77,12 +78,17 @@ bool CompileState::compile() {
     return *it;
   };
 
+  // TODO (dm): The logic to figure out whether to put a conversion before or
+  // after the replced operators needs a second go over after adding local
+  // exchange.
   auto is_supported_gpu_operator = [](const exec::Operator* op) {
     return is_any_of<
         exec::HashBuild,
         exec::HashProbe,
         exec::OrderBy,
-        exec::HashAggregation>(op);
+        exec::HashAggregation,
+        exec::LocalPartition,
+        exec::LocalExchange>(op);
   };
   std::vector<bool> is_supported_gpu_operators(operators.size());
   std::transform(
@@ -95,10 +101,15 @@ bool CompileState::compile() {
         exec::HashBuild,
         exec::HashProbe,
         exec::OrderBy,
-        exec::HashAggregation>(op);
+        exec::HashAggregation,
+        exec::LocalPartition>(op);
   };
   auto produces_gpu_output = [](const exec::Operator* op) {
-    return is_any_of<exec::HashProbe, exec::OrderBy, exec::HashAggregation>(op);
+    return is_any_of<
+        exec::HashProbe,
+        exec::OrderBy,
+        exec::HashAggregation,
+        exec::LocalExchange>(op);
   };
 
   int32_t operatorsOffset = 0;
@@ -157,6 +168,15 @@ bool CompileState::compile() {
       VELOX_CHECK(plan_node != nullptr);
       replace_op.push_back(
           std::make_unique<CudfHashAggregation>(id, ctx, plan_node));
+      replace_op.back()->initialize();
+    } else if (
+        auto localPartitionOp = dynamic_cast<exec::LocalPartition*>(oper)) {
+      auto plan_node =
+          std::dynamic_pointer_cast<const core::LocalPartitionNode>(
+              get_plan_node(localPartitionOp->planNodeId()));
+      VELOX_CHECK(plan_node != nullptr);
+      replace_op.push_back(
+          std::make_unique<CudfLocalPartition>(id, ctx, plan_node));
       replace_op.back()->initialize();
     }
     if (next_operator_is_not_gpu and produces_gpu_output(oper)) {
