@@ -249,15 +249,14 @@ RowVectorPtr CudfFilterProject::getOutput() {
     if (ins_name == "year") {
       auto new_column = cudf::datetime::extract_datetime_component(
           input_table_columns[dependent_column_index]->view(),
-          cudf::datetime::extract_component::YEAR,
+          cudf::datetime::datetime_component::YEAR,
           cudf::get_default_stream(),
           cudf::get_current_device_resource_ref());
       input_table_columns.emplace_back(std::move(new_column));
     } else if (ins_name == "length") {
       auto new_column = cudf::strings::count_characters(
           input_table_columns[dependent_column_index]->view(),
-          // cudf::get_default_stream(), // TODO add this after stream API
-          // update
+          cudf::get_default_stream(),
           cudf::get_current_device_resource_ref());
       input_table_columns.emplace_back(std::move(new_column));
     } else {
