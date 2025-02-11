@@ -47,7 +47,7 @@ __attribute__((__no_sanitize__("thread")))
 inline void
 setBit(char* bits, uint32_t idx) {
   auto bitsAs8Bit = reinterpret_cast<uint8_t*>(bits);
-  bitsAs8Bit[idx / 8] |= (1 << (idx % 8));
+  bitsAs8Bit[idx / 8] |= (1u << (idx % 8));
 }
 } // namespace
 
@@ -197,7 +197,7 @@ RowContainer::RowContainer(
     // This moves nullOffset to the start of the next byte.
     // This is to guarantee the null and initialized bits for an aggregate
     // always appear in the same byte.
-    nullOffset = (nullOffset + 7) & -8;
+    nullOffset = (nullOffset + 7) & ~7u;
   }
   for (const auto& accumulator : accumulators) {
     // Initialized bit.  Set when the accumulator is initialized.
@@ -861,7 +861,7 @@ void RowContainer::storeComplexType(
     int32_t column) {
   if (decoded.isNullAt(index)) {
     VELOX_DCHECK(nullMask);
-    row[nullByte] |= nullMask;
+    row[nullByte] = static_cast<uint8_t>(row[nullByte]) | nullMask;
     return;
   }
   RowSizeTracker tracker(row[rowSizeOffset_], *stringAllocator_);
@@ -1198,7 +1198,7 @@ int32_t RowContainer::listPartitionRows(
               partitionNumberVector ==
               xsimd::batch<uint8_t>::load_unaligned(runBytes + offsetInRun)) &
           firstBatchMask;
-      firstBatchMask = ~0;
+      firstBatchMask = ~0u;
       bool atEnd = false;
       if (startRow + kBatch >= numRows_) {
         // Clear bits that are for rows past numRows_ - 1.
@@ -1215,7 +1215,7 @@ int32_t RowContainer::listPartitionRows(
           return numResults;
         }
         // Clear last set bit in 'bits'.
-        bits &= bits - 1;
+        bits &= (bits - 1u);d
       }
       startRow += kBatch;
       // The last batch of 32 bytes may have been partly filled. If so, we

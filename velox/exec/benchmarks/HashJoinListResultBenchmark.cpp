@@ -537,7 +537,7 @@ int main(int argc, char** argv) {
   auto bm = std::make_unique<HashTableListJoinResultBenchmark>();
   std::vector<HashTableBenchmarkResult> results;
 
-  auto hashTableSize = (2L << 20) - 3;
+  auto hashTableSize = (2UL << 20) - 3;
   auto probeRowSize = 100000000L;
 
   TypePtr onlyKeyType{ROW({"k1"}, {BIGINT()})};
