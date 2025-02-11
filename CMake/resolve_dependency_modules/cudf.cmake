@@ -16,7 +16,7 @@ include_guard(GLOBAL)
 
 set(VELOX_cudf_VERSION 25.04)
 set(VELOX_cudf_BUILD_SHA256_CHECKSUM
-    076bb16bde78927d7d8eed34ce102890bfc2f74896fea4dd90020bacb9a07f6b)
+    c0fb004040a9adfce75d933fd2e2e7f2581636c5f9f29030c729297f76fc0fdc)
 set(VELOX_cudf_SOURCE_URL
     "https://github.com/rapidsai/cudf/archive/1a891e6cfd1daef5bb56990cd18b4e3c7640fb53.tar.gz"
 )
