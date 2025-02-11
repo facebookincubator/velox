@@ -35,9 +35,9 @@ DECLARE_bool(wave_timing);
 DECLARE_bool(wave_transfer_timing);
 DECLARE_bool(wave_trace_stream);
 
-#define TR(str, msg)                                                 \
-  if (FLAGS_wave_trace_stream) {                                     \
-    (std::cout << fmt::format("St{}: {}\n", str->streamIdx(), msg)); \
+#define TR(str, msg)                                                   \
+  if (FLAGS_wave_trace_stream) {                                       \
+    (std::cout << fmt::format("St{}: {}\n", (str)->streamIdx(), msg)); \
   }
 
 #define TR1(msg)                 \
@@ -605,7 +605,10 @@ class Program : public std::enable_shared_from_this<Program> {
 
   /// Runs the update callback in 'advance' with the right instruction.  E.g.
   /// rehash device side table,. Caller synchronizes.
-  void callUpdateStatus(WaveStream& stream, AdvanceResult& result);
+  void callUpdateStatus(
+      WaveStream& stream,
+      const std::vector<WaveStream*>& otherStreams,
+      AdvanceResult& result);
 
   CompiledKernel* kernel() const {
     return kernel_.get();
@@ -992,6 +995,7 @@ class WaveStream {
   template <typename T>
   T* gridStatus(const InstructionStatus& status) {
     if (!hostBlockStatus_) {
+      VELOX_CHECK_NULL(deviceBlockStatus_);
       return nullptr;
     }
     auto numBlocks = bits::roundUp(numRows_, kBlockSize) / kBlockSize;
@@ -1041,6 +1045,11 @@ class WaveStream {
 
   OperatorStateMap* taskStateMap() const {
     return taskStateMap_;
+  }
+
+  /// Mutable reference to flag indicating that
+  bool& mutableExclusiveProcessed() {
+    return exclusiveProcessed_;
   }
 
   const std::shared_ptr<GpuArena>& arenaShared() const {
@@ -1153,6 +1162,11 @@ class WaveStream {
   WaveTime start_;
 
   State state_{State::kNotRunning};
+
+  // set to true if 'this' has an exclusieve section coming and
+  // another WaveStream has processed it. If so, the exclusive section
+  // of'this' ends without more action and the flag is reset.
+  bool exclusiveProcessed_{false};
 
   bool hasError_{false};
 
