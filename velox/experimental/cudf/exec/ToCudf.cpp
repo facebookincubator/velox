@@ -156,7 +156,7 @@ bool CompileState::compile() {
           get_plan_node(hashAggOp->planNodeId()));
       VELOX_CHECK(plan_node != nullptr);
       replace_op.push_back(
-          std::make_unique<exec::CudfHashAggregation>(id, ctx, plan_node));
+          std::make_unique<CudfHashAggregation>(id, ctx, plan_node));
       replace_op.back()->initialize();
     }
     if (next_operator_is_not_gpu and produces_gpu_output(oper)) {

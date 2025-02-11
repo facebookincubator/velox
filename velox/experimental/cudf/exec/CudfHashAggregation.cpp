@@ -117,11 +117,11 @@ std::unique_ptr<cudf::reduce_aggregation> toGlobalAggregationRequest(
 
 } // namespace
 
-namespace facebook::velox::exec {
+namespace facebook::velox::cudf_velox {
 
 CudfHashAggregation::CudfHashAggregation(
     int32_t operatorId,
-    DriverCtx* driverCtx,
+    exec::DriverCtx* driverCtx,
     const std::shared_ptr<const core::AggregationNode>& aggregationNode)
     : Operator(
           driverCtx,
@@ -135,7 +135,7 @@ CudfHashAggregation::CudfHashAggregation(
               ? driverCtx->makeSpillConfig(operatorId)
               : std::nullopt),
       aggregationNode_(aggregationNode),
-      isPartialOutput_(isPartialOutput(aggregationNode->step())),
+      isPartialOutput_(exec::isPartialOutput(aggregationNode->step())),
       isGlobal_(aggregationNode->groupingKeys().empty()),
       isDistinct_(!isGlobal_ && aggregationNode->aggregates().empty()) {}
 
@@ -182,11 +182,11 @@ void CudfHashAggregation::setupGroupingKeyChannelProjections(
   //
   // NOTE: grouping key output order is specified as 'groupingKeys' in
   // 'aggregationNode_'.
-  std::vector<IdentityProjection> groupingKeyProjections;
+  std::vector<exec::IdentityProjection> groupingKeyProjections;
   groupingKeyProjections.reserve(groupingKeys.size());
   for (auto i = 0; i < groupingKeys.size(); ++i) {
     groupingKeyProjections.emplace_back(
-        exprToChannel(groupingKeys[i].get(), inputType), i);
+        exec::exprToChannel(groupingKeys[i].get(), inputType), i);
   }
 
   groupingKeyInputChannels.reserve(groupingKeys.size());
@@ -365,4 +365,4 @@ void CudfHashAggregation::close() {
   Operator::close();
 }
 
-} // namespace facebook::velox::exec
+} // namespace facebook::velox::cudf_velox

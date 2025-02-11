@@ -21,14 +21,13 @@
 
 #include <cudf/groupby.hpp>
 
-// TODO (dm): rename namespace
-namespace facebook::velox::exec {
+namespace facebook::velox::cudf_velox {
 
-class CudfHashAggregation : public Operator {
+class CudfHashAggregation : public exec::Operator {
  public:
   CudfHashAggregation(
       int32_t operatorId,
-      DriverCtx* driverCtx,
+      exec::DriverCtx* driverCtx,
       const std::shared_ptr<const core::AggregationNode>& aggregationNode);
 
   void initialize() override;
@@ -43,8 +42,8 @@ class CudfHashAggregation : public Operator {
 
   void noMoreInput() override;
 
-  BlockingReason isBlocked(ContinueFuture* /* unused */) override {
-    return BlockingReason::kNotBlocked;
+  exec::BlockingReason isBlocked(ContinueFuture* /* unused */) override {
+    return exec::BlockingReason::kNotBlocked;
   }
 
   bool isFinished() override;
@@ -96,4 +95,4 @@ class CudfHashAggregation : public Operator {
   std::vector<cudf_velox::CudfVectorPtr> inputs_;
 };
 
-} // namespace facebook::velox::exec
+} // namespace facebook::velox::cudf_velox
