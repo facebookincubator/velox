@@ -299,7 +299,10 @@ std::shared_ptr<Expr> compileLambda(
       config.exprTrackCpuUsage());
 }
 
-ExprPtr tryFoldIfConstant(const ExprPtr& expr, Scope* scope) {
+ExprPtr tryFoldIfConstant(
+    const ExprPtr& expr,
+    Scope* scope,
+    bool constantFoldErrorWithFailFunction) {
   if (expr->isConstant() && scope->exprSet->execCtx()) {
     try {
       auto rowType = ROW({}, {});
@@ -329,13 +332,26 @@ ExprPtr tryFoldIfConstant(const ExprPtr& expr, Scope* scope) {
     // yet because we can't guarantee that this expression would actually need
     // to be evaluated.
     //
-    // So, here, if folding an expression throws an exception, we just ignore it
-    // and leave the expression as-is. If this expression is hit at execution
-    // time and needs to be evaluated, it will throw and fail the query anyway.
-    // If not, in case this expression is never hit at execution time (for
-    // instance, if other arguments are all null in a function with default null
-    // behavior), the query won't fail.
-    catch (const VeloxUserError&) {
+    // If folding an expression throws an exception, the user can choose whether
+    // to ignore it or replace the expression with a FailFunction by setting the
+    // query config constant_fold_error_with_fail_function to either false or
+    // true respectively. By default, such exceptions are ignored. If this
+    // expression is hit at execution time and needs to be evaluated, it will
+    // throw and fail the query anyway. If not, in case this expression is never
+    // hit at execution time (for instance, if other arguments are all null in a
+    // function with default null behavior), the query won't fail.
+    catch (const VeloxUserError& error) {
+      if (constantFoldErrorWithFailFunction) {
+        auto failTypedExpr = std::make_shared<core::CallTypedExpr>(
+            UNKNOWN(),
+            std::vector<core::TypedExprPtr>{
+                std::make_shared<core::ConstantTypedExpr>(
+                    VARCHAR(), error.message())},
+            "fail");
+        auto failExprSet =
+            ExprSet({failTypedExpr}, scope->exprSet->execCtx(), false);
+        return failExprSet.exprs().front();
+      }
     }
   }
   return expr;
@@ -522,7 +538,8 @@ ExprPtr compileRewrittenExpression(
 
   // If the expression is constant folding it is redundant.
   auto folded = enableConstantFolding && !isConstantExpr
-      ? tryFoldIfConstant(result, scope)
+      ? tryFoldIfConstant(
+            result, scope, config.constantFoldErrorWithFailFunction())
       : result;
   scope->visited[expr.get()] = folded;
   return folded;

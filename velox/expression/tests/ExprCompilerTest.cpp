@@ -123,6 +123,28 @@ TEST_F(ExprCompilerTest, constantFolding) {
       "plus(plus(a, 1:BIGINT), 5:BIGINT)", compile(expression)->toString());
 }
 
+TEST_F(ExprCompilerTest, constantFoldingError) {
+  // When query config kConstantFoldErrorWithFailFunction is false, the compiled
+  // expression should be 'divide(0, 0)', since the 'divide by zero' exception
+  // seen during constant folding is ignored by the expression compiler.
+  queryCtx_->testingOverrideConfigUnsafe({
+      {core::QueryConfig::kConstantFoldErrorWithFailFunction, "false"},
+  });
+  auto exprSet = compile(makeTypedExpr("0 / 0", ROW({}, {})));
+  auto compiled = exprSet->exprs().front();
+  ASSERT_EQ(compiled->name(), "divide");
+
+  // When query config kConstantFoldErrorWithFailFunction is true, the compiled
+  // expression should be 'fail(errorMessage)', with the 'divide by zero' error
+  // seen during constant folding as errorMessage.
+  queryCtx_->testingOverrideConfigUnsafe({
+      {core::QueryConfig::kConstantFoldErrorWithFailFunction, "true"},
+  });
+  exprSet = compile(makeTypedExpr("0 / 0", ROW({}, {})));
+  compiled = exprSet->exprs().front();
+  ASSERT_EQ(compiled->name(), "fail");
+}
+
 TEST_F(ExprCompilerTest, andFlattening) {
   auto rowType =
       ROW({"a", "b", "c", "d"}, {BOOLEAN(), BOOLEAN(), BOOLEAN(), BOOLEAN()});
