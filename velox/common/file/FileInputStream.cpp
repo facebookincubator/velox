@@ -19,7 +19,7 @@
 namespace facebook::velox::common {
 
 FileInputStream::FileInputStream(
-    std::unique_ptr<ReadFile>&& file,
+    const std::shared_ptr<ReadFile>& file,
     uint64_t bufferSize,
     memory::MemoryPool* pool)
     : file_(std::move(file)),

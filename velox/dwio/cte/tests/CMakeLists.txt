@@ -11,29 +11,15 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-velox_add_library(velox_link_libs INTERFACE)
-velox_link_libraries(
-  velox_link_libs
-  INTERFACE
-    velox_caching
-    velox_dwio_catalog_fbhive
-    velox_dwio_common
-    velox_dwio_common_exception
-    velox_encode
-    velox_exception
-    velox_memory
-    velox_process
-    velox_serialization
-    velox_type
-    velox_type_fbhive
-    velox_vector
-    Folly::folly
-    fmt::fmt)
 
-add_subdirectory(common)
-add_subdirectory(catalog)
-add_subdirectory(cte)
-add_subdirectory(dwrf)
-add_subdirectory(orc)
-add_subdirectory(parquet)
-add_subdirectory(text)
+add_executable(velox_dwio_cte_pagefile_test CtePageFileTest.cpp)
+add_test(
+  NAME velox_dwio_cte_pagefile_test
+  COMMAND velox_dwio_cte_pagefile_test
+  WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR})
+target_link_libraries(
+  velox_dwio_cte_pagefile_test
+  velox_dwio_cte_page_reader
+  velox_dwio_cte_page_writer
+  velox_exec_test_lib
+  ${TEST_LINK_LIBS})
