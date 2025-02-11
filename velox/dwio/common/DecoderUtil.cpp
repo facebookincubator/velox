@@ -31,18 +31,18 @@ int32_t nonNullRowsFromDense(
 }
 // Returns 8 bits starting at bit 'index'.
 uint8_t load8Bits(const uint64_t* bits, int32_t index) {
-  uint8_t shift = index & 7;
-  uint32_t byte = index >> 3;
+  uint8_t shift = static_cast<uint32_t>(index) & 7u;
+  uint32_t byte = static_cast<uint32_t>(index) >> 3;
   auto asBytes = reinterpret_cast<const uint8_t*>(bits);
-  return (*reinterpret_cast<const int16_t*>(asBytes + byte) >> shift);
+  return (*reinterpret_cast<const uint16_t*>(asBytes + byte) >> shift);
 }
 
 // Loads 'width' bits starting at bit 'index' in 'bits'. 'width is
 // 56 bits or less, so that we can for any index load all the bits
 // in a 64 bit load.
 uint64_t loadUpTo56Bits(const uint64_t* bits, int32_t index, int32_t width) {
-  uint8_t shift = index & 7;
-  uint32_t byte = index >> 3;
+  uint8_t shift = static_cast<uint32_t>(index) & 7u;
+  uint32_t byte = static_cast<uint32_t>(index) >> 3;
   auto asBytes = reinterpret_cast<const uint8_t*>(bits);
   return (*reinterpret_cast<const uint64_t*>(asBytes + byte) >> shift) &
       bits::lowMask(width);
@@ -89,7 +89,7 @@ bool nonNullRowsFromSparse(
     int32_t width = i + kStep > numIn ? numIn - i : kStep;
     int16_t widthMask = bits::lowMask(width);
     if (isDense(rows.data() + i, width)) {
-      uint16_t flags = load8Bits(nulls, rows[i]) & widthMask;
+      uint16_t flags = load8Bits(nulls, rows[i]) & static_cast<uint16_t>(widthMask);
       if (outputNulls) {
         bits::storeBitsToByte<kStep>(flags, resultNullBytes, i);
         anyNull |= flags != widthMask;

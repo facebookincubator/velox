@@ -126,7 +126,7 @@ bool HiveConfig::ignoreMissingFiles(const config::ConfigBase* session) const {
 int64_t HiveConfig::maxCoalescedBytes(const config::ConfigBase* session) const {
   return session->get<int64_t>(
       kMaxCoalescedBytesSession,
-      config_->get<int64_t>(kMaxCoalescedBytes, 128 << 20)); // 128MB
+      config_->get<int64_t>(kMaxCoalescedBytes, 128u << 20)); // 128MB
 }
 
 int32_t HiveConfig::maxCoalescedDistanceBytes(
@@ -151,7 +151,7 @@ int32_t HiveConfig::prefetchRowGroups() const {
 
 int32_t HiveConfig::loadQuantum(const config::ConfigBase* session) const {
   return session->get<int32_t>(
-      kLoadQuantumSession, config_->get<int32_t>(kLoadQuantum, 8 << 20));
+      kLoadQuantumSession, config_->get<int32_t>(kLoadQuantum, 8u << 20));
 }
 
 int32_t HiveConfig::numCacheFileHandles() const {

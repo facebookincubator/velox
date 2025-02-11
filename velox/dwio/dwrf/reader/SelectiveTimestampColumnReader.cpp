@@ -139,7 +139,7 @@ void SelectiveTimestampColumnReader::readHelper(
   for (vector_size_t i = 0; i < numValues_; i++) {
     if (!rawNulls || !bits::isBitNull(rawNulls, i)) {
       auto nanos = nanosData[i];
-      uint64_t zeros = nanos & 0x7;
+      uint64_t zeros = nanos & static_cast<uint64_t>(0x7);
       nanos >>= 3;
       if (zeros != 0) {
         for (uint64_t j = 0; j <= zeros; ++j) {

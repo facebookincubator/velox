@@ -23,7 +23,7 @@ void mergeHash(bool mix, uint32_t oneHash, uint32_t& aggregateHash) {
 }
 
 int32_t hashInt64(int64_t value) {
-  return ((*reinterpret_cast<uint64_t*>(&value)) >> 32) ^ value;
+  return ((*reinterpret_cast<uint64_t*>(&value)) >> 32) ^ static_cast<uint64_t>(value);
 }
 
 #if defined(__has_feature)
@@ -501,12 +501,12 @@ std::optional<uint32_t> HivePartitionFunction::partition(
     // NOTE: if bucket to partition mapping is empty, then we do
     // identical mapping.
     for (auto i = 0; i < numRows; ++i) {
-      partitions[i] = (hashes[i] & kInt32Max) % numBuckets_;
+      partitions[i] = (hashes[i] & static_cast<uint32_t>(kInt32Max)) % numBuckets_;
     }
   } else {
     for (auto i = 0; i < numRows; ++i) {
       partitions[i] =
-          bucketToPartition_[((hashes[i] & kInt32Max) % numBuckets_)];
+          bucketToPartition_[((hashes[i] & static_cast<uint32_t>(kInt32Max)) % numBuckets_)];
     }
   }
 

@@ -283,7 +283,7 @@ void unpack(
     for (auto i_2 = numSafeRows; i_2 < numRows; ++i_2) {
       auto bit = bitOffset + (rows[i_2]) * bitWidth;
       auto byte = bit / 8;
-      auto shift = bit & 7;
+      auto shift = static_cast<uint32_t>(bit) & 7u;
       result[i_2] = safeLoadBits(
                         reinterpret_cast<const char*>(bits) + byte,
                         shift,

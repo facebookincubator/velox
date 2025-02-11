@@ -29,7 +29,7 @@ void printBuffer(std::ostream& out, const char* buffer, uint64_t length) {
     for (uint64_t byte = 0; byte < width && line * width + byte < length;
          ++byte) {
       out << " " << std::setfill('0') << std::setw(2)
-          << static_cast<uint64_t>(0xff & buffer[line * width + byte]);
+          << static_cast<uint64_t>(0xff & static_cast<uint8_t>(buffer[line * width + byte]));
     }
     out << "\n";
   }

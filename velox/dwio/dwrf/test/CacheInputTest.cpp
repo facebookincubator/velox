@@ -237,7 +237,7 @@ class CacheTest : public ::testing::Test {
       const Region region{
           offset + streamStarts_[streamIndex],
           std::min<uint64_t>(
-              (1 << 20) - 11,
+              (1UL << 20) - 11,
               (streamStarts_[streamIndex + 1] - streamStarts_[streamIndex]) /
                   2)};
       auto stream = data->input->enqueue(region, streamIds_[streamIndex].get());
@@ -450,7 +450,7 @@ class CacheTest : public ::testing::Test {
 };
 
 TEST_F(CacheTest, window) {
-  constexpr int32_t kMB = 1 << 20;
+  constexpr int32_t kMB = 1u << 20;
   initializeCache(64 * kMB);
   auto tracker = std::make_shared<ScanTracker>(
       "testTracker",
@@ -510,7 +510,7 @@ TEST_F(CacheTest, window) {
 
 TEST_F(CacheTest, bufferedInput) {
   // Size 160 MB. Frequent evictions and not everything fits in prefetch window.
-  initializeCache(160 << 20);
+  initializeCache(160u << 20);
   readLoop("testfile", 30, 70, 10, 20, 4, /*noCacheRetention=*/false, ioStats_);
   readLoop("testfile", 30, 70, 10, 20, 4, /*noCacheRetention=*/false, ioStats_);
   readLoop(
@@ -523,9 +523,9 @@ TEST_F(CacheTest, bufferedInput) {
 // reading pattern so that half the working set drops out and another half is
 // added. Checks that the working set stabilizes again.
 TEST_F(CacheTest, ssd) {
-  constexpr int64_t kSsdBytes = 256 << 20;
+  constexpr int64_t kSsdBytes = 256UL << 20;
   // 64 RAM, 256MB SSD
-  initializeCache(64 << 20, kSsdBytes);
+  initializeCache(64UL << 20, kSsdBytes);
   testRandomSeek_ = false;
   deterministic_ = true;
 
@@ -584,7 +584,7 @@ TEST_F(CacheTest, ssd) {
 }
 
 TEST_F(CacheTest, singleFileThreads) {
-  initializeCache(1 << 30);
+  initializeCache(1UL << 30);
 
   const int numThreads = 4;
   std::vector<std::thread> threads;
@@ -608,7 +608,7 @@ TEST_F(CacheTest, singleFileThreads) {
 }
 
 TEST_F(CacheTest, ssdThreads) {
-  initializeCache(64 << 20, 1024 << 20);
+  initializeCache(64UL << 20, 1024UL << 20);
   deterministic_ = true;
   constexpr int32_t kNumThreads = 8;
   std::vector<IoStatisticsPtr> stats;
@@ -654,8 +654,8 @@ TEST_F(CacheTest, ssdThreads) {
 
 class FileWithReadAhead {
  public:
-  static constexpr int32_t kFileSize = 21 << 20;
-  static constexpr int64_t kLoadQuantum = 6 << 20;
+  static constexpr int32_t kFileSize = 21u << 20;
+  static constexpr int64_t kLoadQuantum = 6UL << 20;
   FileWithReadAhead(
       const std::string& name,
       cache::AsyncDataCache* cache,
@@ -778,7 +778,7 @@ TEST_F(CacheTest, readAhead) {
 }
 
 TEST_F(CacheTest, noCacheRetention) {
-  const int64_t cacheSize = 1LL << 30;
+  const int64_t cacheSize = 1ULL << 30;
   struct {
     bool noCacheRetention;
     bool hasSsdCache;
@@ -855,12 +855,12 @@ TEST_F(CacheTest, noCacheRetention) {
 }
 
 TEST_F(CacheTest, loadQuotumTooLarge) {
-  initializeCache(64 << 20, 256 << 20);
+  initializeCache(64UL << 20, 256UL << 20);
   auto fileId = std::make_unique<StringIdLease>(fileIds(), "foo");
   auto readFile =
-      std::make_shared<TestReadFile>(fileId->id(), 10 << 20, nullptr);
+      std::make_shared<TestReadFile>(fileId->id(), 10u << 20, nullptr);
   auto readOptions = io::ReaderOptions(pool_.get());
-  readOptions.setLoadQuantum(9 << 20 /*9MB*/);
+  readOptions.setLoadQuantum(9u << 20 /*9MB*/);
   VELOX_ASSERT_THROW(
       std::make_unique<CachedBufferedInput>(
           readFile,
@@ -876,8 +876,8 @@ TEST_F(CacheTest, loadQuotumTooLarge) {
 }
 
 TEST_F(CacheTest, ssdReadVerification) {
-  constexpr int64_t kMemoryBytes = 32 << 20;
-  constexpr int64_t kSsdBytes = 256 << 20;
+  constexpr int64_t kMemoryBytes = 32UL << 20;
+  constexpr int64_t kSsdBytes = 256UL << 20;
   // 32 RAM, 256MB SSD, with checksumWrite/checksumReadVerification enabled.
   initializeCache(kMemoryBytes, kSsdBytes, true);
 
@@ -898,7 +898,7 @@ TEST_F(CacheTest, ssdReadVerification) {
       io::ReaderOptions(pool_.get()));
 
   const auto readData = [&](uint32_t numBytesRead) {
-    const uint64_t kNumBytesPerRead = 4 << 20;
+    const uint64_t kNumBytesPerRead = 4UL << 20;
     for (uint64_t offset = 0; offset < numBytesRead;
          offset += kNumBytesPerRead) {
       auto stream = input->read(offset, kNumBytesPerRead, LogType::TEST);
