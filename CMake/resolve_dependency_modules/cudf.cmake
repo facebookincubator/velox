@@ -32,21 +32,15 @@ set(BUILD_SHARED_LIBS ON)
 # cudf sets all warnings as errors, and therefore fails to compile with velox
 # expanded set of warnings. We selectively disable problematic warnings just for
 # cudf
-string(APPEND CMAKE_CXX_FLAGS
-       " -Wno-non-virtual-dtor -Wno-missing-field-initializers")
-string(APPEND CMAKE_CXX_FLAGS " -Wno-deprecated-copy")
-
-set(fmt_scope_patch
-    patch -p1 <
-    ${CMAKE_CURRENT_SOURCE_DIR}/CMake/resolve_dependency_modules/fmt_scope.patch
-)
+string(
+  APPEND CMAKE_CXX_FLAGS
+  " -Wno-non-virtual-dtor -Wno-missing-field-initializers -Wno-deprecated-copy")
 
 FetchContent_Declare(
   cudf
   URL ${VELOX_cudf_SOURCE_URL}
   URL_HASH ${VELOX_cudf_BUILD_SHA256_CHECKSUM}
   SOURCE_SUBDIR cpp
-  PATCH_COMMAND ${fmt_scope_patch}
   UPDATE_DISCONNECTED 1)
 
 FetchContent_MakeAvailable(cudf)
