@@ -1114,14 +1114,12 @@ void JoinFuzzer::verify(core::JoinType joinType) {
   if (withFilter) {
     if (vectorFuzzer_.coinToss(0.5)) {
       keyTypes.push_back(BOOLEAN());
-      filter = vectorFuzzer_.coinToss(0.5)
-          ? fmt::format("t{} = true", keyTypes.size() - 1)
-          : fmt::format("u{} = true", keyTypes.size() - 1);
+      filter = fmt::format("t{0} = true AND u{0} = true", keyTypes.size() - 1);
     } else {
       keyTypes.push_back(INTEGER());
-      filter = vectorFuzzer_.coinToss(0.5)
-          ? fmt::format("t{} % {} = 0", keyTypes.size() - 1, randInt(1, 9))
-          : fmt::format("u{} % {} = 0", keyTypes.size() - 1, randInt(1, 9));
+      int rand = randInt(1, 9);
+      filter = fmt::format(
+          "t{0} % {1} = 0 AND u{0} % {1} = 0", keyTypes.size() - 1, rand);
     }
   }
 
