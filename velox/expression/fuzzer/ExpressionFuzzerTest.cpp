@@ -107,6 +107,62 @@ int main(int argc, char** argv) {
       // from_unixtime can generate timestamps out of the supported range that
       // make other functions throw VeloxRuntimeErrors.
       "from_unixtime",
+      "round", // https://github.com/facebookincubator/velox/issues/10634
+      "json_size", // https://github.com/facebookincubator/velox/issues/10700
+      "bitwise_right_shift_arithmetic", // https://github.com/facebookincubator/velox/issues/10841
+      "map_size_with", // https://github.com/facebookincubator/velox/issues/10964
+      "binomial_cdf", // https://github.com/facebookincubator/velox/issues/10702
+      "inverse_laplace_cdf", // https://github.com/facebookincubator/velox/issues/10699
+      "gamma_cdf", // https://github.com/facebookincubator/velox/issues/10749
+      "inverse_normal_cdf", // https://github.com/facebookincubator/velox/issues/10836
+      "regr_avgx", // https://github.com/facebookincubator/velox/issues/10610
+      "is_json_scalar", // https://github.com/facebookincubator/velox/issues/10748
+      "json_extract_scalar", // https://github.com/facebookincubator/velox/issues/10698
+      "rtrim", // https://github.com/facebookincubator/velox/issues/10973
+      "split", // https://github.com/facebookincubator/velox/issues/10867
+      "array_intersect", // https://github.com/facebookincubator/velox/issues/10740
+      "f_cdf", // https://github.com/facebookincubator/velox/issues/10633
+      "truncate", // https://github.com/facebookincubator/velox/issues/10628
+      "url_extract_query", // https://github.com/facebookincubator/velox/issues/10659
+      "laplace_cdf", // https://github.com/facebookincubator/velox/issues/10974
+      "inverse_beta_cdf", // https://github.com/facebookincubator/velox/issues/11802
+      "conjunct", // https://github.com/facebookincubator/velox/issues/10678
+      "url_extract_host", // https://github.com/facebookincubator/velox/issues/10578
+      "weibull_cdf", // https://github.com/facebookincubator/velox/issues/10977
+      "zip_with", // https://github.com/facebookincubator/velox/issues/10844
+      "url_extract_path", // https://github.com/facebookincubator/velox/issues/10579
+      "cast", // https://github.com/facebookincubator/velox/issues/11034
+      "bitwise_shift_left", // https://github.com/facebookincubator/velox/issues/10870
+      "split_part", // https://github.com/facebookincubator/velox/issues/10839
+      "bitwise_arithmetic_shift_right", // https://github.com/facebookincubator/velox/issues/10750
+      "date_format", // https://github.com/facebookincubator/velox/issues/10968
+      "substr", // https://github.com/facebookincubator/velox/issues/10660
+      "cauchy_cdf", // https://github.com/facebookincubator/velox/issues/10976
+      "covar_pop", // https://github.com/facebookincubator/velox/issues/10627
+      "lpad", // https://github.com/facebookincubator/velox/issues/10757
+      "format_datetime", // https://github.com/facebookincubator/velox/issues/10779
+      "inverse_cauchy_cdf", // https://github.com/facebookincubator/velox/issues/10840
+      "array_position", // https://github.com/facebookincubator/velox/issues/10580
+      "url_extract_fragment",
+      "url_extract_protocol",
+      "map_subset",
+      "clamp",
+      "current_date",
+      "word_stem",
+      "json_array_contains",
+      "chi_squared_cdf",
+      "xxhash64_internal",
+      "not",
+      "is_infinite",
+      "wilson_interval_upper",
+      "to_ieee754_64",
+      "bitwise_right_shift",
+      "json_extract",
+      "combine_hash_internal",
+      "beta_cdf",
+      "from_base64url",
+      "to_ieee754_32",
+      "bitwise_left_shift",
   };
   size_t initialSeed = FLAGS_seed == 0 ? std::time(nullptr) : FLAGS_seed;
 
