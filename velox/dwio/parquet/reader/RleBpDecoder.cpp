@@ -29,9 +29,9 @@ void RleBpDecoder::skip(uint64_t numValues) {
     remainingValues_ -= count;
     numValues -= count;
     if (!repeating_) {
-      auto numBits = bitWidth_ * count + bitOffset_;
+      auto numBits = static_cast<uint64_t>(bitWidth_) * count + static_cast<uint64_t>(bitOffset_);
       bufferStart_ += numBits >> 3;
-      bitOffset_ = numBits & 7;
+      bitOffset_ = numBits & 7UL;
     }
   }
 }
@@ -72,9 +72,9 @@ void RleBpDecoder::readBits(
           outputBuffer,
           numWritten,
           consumed);
-      int64_t offset = bitOffset_ + consumed;
+      uint64_t offset = static_cast<uint64_t>(bitOffset_) + static_cast<uint64_t>(consumed);
       bufferStart_ += offset >> 3;
-      bitOffset_ = offset & 7;
+      bitOffset_ = offset & 7UL;
     }
     numWritten += consumed;
     toRead -= consumed;
@@ -96,7 +96,7 @@ void RleBpDecoder::readHeader() {
   bufferStart_ = reinterpret_cast<const char*>(headerRange.begin());
 
   // 0 in low bit means repeating.
-  repeating_ = (indicator & 1) == 0;
+  repeating_ = (indicator & 1u) == 0;
   uint32_t count = indicator >> 1;
   if (repeating_) {
     remainingValues_ = count;

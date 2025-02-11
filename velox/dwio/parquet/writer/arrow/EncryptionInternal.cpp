@@ -287,10 +287,10 @@ int AesEncryptor::AesEncryptorImpl::GcmEncrypt(
   // Copying the buffer size, nonce and tag to ciphertext
   uint32_t buffer_size = kNonceLength + ciphertext_len + kGcmTagLength;
   if (length_buffer_length_ > 0) {
-    ciphertext[3] = static_cast<uint8_t>(0xff & (buffer_size >> 24));
-    ciphertext[2] = static_cast<uint8_t>(0xff & (buffer_size >> 16));
-    ciphertext[1] = static_cast<uint8_t>(0xff & (buffer_size >> 8));
-    ciphertext[0] = static_cast<uint8_t>(0xff & (buffer_size));
+    ciphertext[3] = static_cast<uint8_t>(static_cast<uint32_t>(0xff) & (buffer_size >> 24));
+    ciphertext[2] = static_cast<uint8_t>(static_cast<uint32_t>(0xff) & (buffer_size >> 16));
+    ciphertext[1] = static_cast<uint8_t>(static_cast<uint32_t>(0xff) & (buffer_size >> 8));
+    ciphertext[0] = static_cast<uint8_t>(static_cast<uint32_t>(0xff) & (buffer_size));
   }
   std::copy(nonce, nonce + kNonceLength, ciphertext + length_buffer_length_);
   std::copy(
@@ -352,10 +352,10 @@ int AesEncryptor::AesEncryptorImpl::CtrEncrypt(
   // Copying the buffer size and nonce to ciphertext
   uint32_t buffer_size = kNonceLength + ciphertext_len;
   if (length_buffer_length_ > 0) {
-    ciphertext[3] = static_cast<uint8_t>(0xff & (buffer_size >> 24));
-    ciphertext[2] = static_cast<uint8_t>(0xff & (buffer_size >> 16));
-    ciphertext[1] = static_cast<uint8_t>(0xff & (buffer_size >> 8));
-    ciphertext[0] = static_cast<uint8_t>(0xff & (buffer_size));
+    ciphertext[3] = static_cast<uint8_t>(static_cast<uint32_t>(0xff) & (buffer_size >> 24));
+    ciphertext[2] = static_cast<uint8_t>(static_cast<uint32_t>(0xff) & (buffer_size >> 16));
+    ciphertext[1] = static_cast<uint8_t>(static_cast<uint32_t>(0xff) & (buffer_size >> 8));
+    ciphertext[0] = static_cast<uint8_t>(static_cast<uint32_t>(0xff) & (buffer_size));
   }
   std::copy(nonce, nonce + kNonceLength, ciphertext + length_buffer_length_);
 
@@ -607,9 +607,9 @@ int AesDecryptor::AesDecryptorImpl::GcmDecrypt(
 
   if (length_buffer_length_ > 0) {
     // Extract ciphertext length
-    uint32_t written_ciphertext_len = ((ciphertext[3] & 0xff) << 24) |
-        ((ciphertext[2] & 0xff) << 16) | ((ciphertext[1] & 0xff) << 8) |
-        ((ciphertext[0] & 0xff));
+    uint32_t written_ciphertext_len = ((ciphertext[3] & static_cast<uint32_t>(0xff)) << 24) |
+        ((ciphertext[2] & static_cast<uint32_t>(0xff)) << 16) | ((ciphertext[1] & static_cast<uint32_t>(0xff)) << 8) |
+        ((ciphertext[0] & static_cast<uint32_t>(0xff)));
 
     if (ciphertext_len > 0 &&
         ciphertext_len != (written_ciphertext_len + length_buffer_length_)) {
@@ -684,9 +684,9 @@ int AesDecryptor::AesDecryptorImpl::CtrDecrypt(
 
   if (length_buffer_length_ > 0) {
     // Extract ciphertext length
-    uint32_t written_ciphertext_len = ((ciphertext[3] & 0xff) << 24) |
-        ((ciphertext[2] & 0xff) << 16) | ((ciphertext[1] & 0xff) << 8) |
-        ((ciphertext[0] & 0xff));
+    uint32_t written_ciphertext_len = ((ciphertext[3] & static_cast<uint32_t>(0xff)) << 24) |
+        ((ciphertext[2] & static_cast<uint32_t>(0xff)) << 16) | ((ciphertext[1] & static_cast<uint32_t>(0xff)) << 8) |
+        ((ciphertext[0] & static_cast<uint32_t>(0xff)));
 
     if (ciphertext_len > 0 &&
         ciphertext_len != (written_ciphertext_len + length_buffer_length_)) {
@@ -762,8 +762,8 @@ static std::string ShortToBytesLe(int16_t input) {
   int8_t output[2];
   memset(output, 0, 2);
   uint16_t in = static_cast<uint16_t>(input);
-  output[1] = static_cast<int8_t>(0xff & (in >> 8));
-  output[0] = static_cast<int8_t>(0xff & (in));
+  output[1] = static_cast<int8_t>(static_cast<uint16_t>(0xff) & (in >> 8));
+  output[0] = static_cast<int8_t>(static_cast<uint16_t>(0xff) & (in));
 
   return std::string(reinterpret_cast<char const*>(output), 2);
 }

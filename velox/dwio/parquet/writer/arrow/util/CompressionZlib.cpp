@@ -76,7 +76,7 @@ int DecompressionWindowBitsForFormat(GZipFormat format, int window_bits) {
     return -window_bits;
   } else {
     /* If not deflate, autodetect format from header */
-    return window_bits | DETECT_CODEC;
+    return static_cast<uint32_t>(window_bits) | static_cast<uint32_t>(DETECT_CODEC);
   }
 }
 

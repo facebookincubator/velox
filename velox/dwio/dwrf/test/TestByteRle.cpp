@@ -72,7 +72,7 @@ TEST(ByteRle, nullTest) {
   rle->next(result, sizeof(result), nulls);
   for (size_t i = 0; i < sizeof(result); ++i) {
     if (i >= 10) {
-      EXPECT_EQ((i - 10) & 0xff, static_cast<int32_t>(result[i]) & 0xff)
+      EXPECT_EQ((i - 10) & static_cast<uint32_t>(0xff), static_cast<uint32_t>(result[i]) & static_cast<uint32_t>(0xff))
           << "Output wrong at " << i;
     }
   }
@@ -134,7 +134,7 @@ TEST(ByteRle, simpleRuns) {
   for (size_t i = 0; i < 3; ++i) {
     rle->next(data.data(), data.size(), nullptr);
     for (size_t j = 0; j < data.size(); ++j) {
-      EXPECT_EQ(static_cast<char>(-1 - static_cast<int32_t>(i)), data[j])
+      EXPECT_EQ(static_cast<unsigned char>(-1 - static_cast<uint32_t>(i)), data[j])
           << "Output wrong at " << (16 * i + j);
     }
   }
@@ -419,7 +419,7 @@ TEST(ByteRle, testSkip) {
   std::vector<char> data(1);
   for (size_t i = 0; i < 2048; i += 10) {
     rle->next(data.data(), data.size(), nullptr);
-    EXPECT_EQ(static_cast<char>(i < 1024 ? i / 16 : i & 0xff), data[0])
+    EXPECT_EQ(static_cast<char>(i < 1024 ? i / 16 : i & static_cast<uint64_t>(0xff)), data[0])
         << "Output wrong at " << i;
     if (i < 2038) {
       rle->skip(9);
@@ -901,7 +901,7 @@ TEST(ByteRle, testSeek) {
     PositionProvider location(positions[i]);
     rle->seekToRowGroup(location);
     rle->next(data.data(), 1, nullptr);
-    EXPECT_EQ(static_cast<char>(i < 1024 ? i / 4 : i & 0xff), data[0])
+    EXPECT_EQ(static_cast<char>(i < 1024 ? i / 4 : i & static_cast<uint64_t>(0xff)), data[0])
         << "Output wrong at " << i;
   } while (i != 0);
 
@@ -932,8 +932,8 @@ TEST(BooleanRle, simpleTest) {
   for (size_t i = 0; i < 16; ++i) {
     rle->next(data.data(), data.size(), nullptr);
     for (size_t j = 0; j < data.size(); ++j) {
-      const int32_t bitPosn = static_cast<int32_t>(50 * i + j);
-      EXPECT_EQ((bitPosn & 0x4) == 0 ? 1 : 0, bits::isBitSet(data.data(), j))
+      const uint32_t bitPosn = static_cast<int32_t>(50 * i + j);
+      EXPECT_EQ((bitPosn & static_cast<uint32_t>(0x4)) == 0 ? 1 : 0, bits::isBitSet(data.data(), j))
           << "Output wrong at " << i << ", " << j;
     }
   }
@@ -1094,7 +1094,7 @@ TEST(BooleanRle, skipTest) {
   std::vector<char> data(1);
   for (size_t i = 0; i < 16384; i += 5) {
     rle->next(data.data(), data.size(), nullptr);
-    EXPECT_EQ(i < 8192 ? i & 1 : (i / 3) & 1, bits::isBitSet(data.data(), 0))
+    EXPECT_EQ(i < 8192 ? i & 1UL : (i / 3) & 1UL, bits::isBitSet(data.data(), 0))
         << "Output wrong at " << i;
     if (i < 16379) {
       rle->skip(4);
@@ -1204,14 +1204,14 @@ TEST(BooleanRle, skipTestWithNulls) {
   std::unique_ptr<ByteRleDecoder> rle = createBooleanDecoder(std::move(stream));
   raw_vector<char> data;
   data.resize(3);
-  std::vector<uint64_t> someNull(1, ~0x0505050505050505);
+  std::vector<uint64_t> someNull(1, ~static_cast<uint64_t>(0x0505050505050505));
   std::vector<uint64_t> allNull(1, bits::kNull64);
   for (size_t i = 0; i < 16384; i += 5) {
     std::fill(data.begin(), data.end(), -1);
     rle->next(data.data(), data.size(), someNull.data());
     EXPECT_EQ(0, bits::isBitSet(data.data(), 0)) << "Output wrong at " << i;
     EXPECT_EQ(0, bits::isBitSet(data.data(), 2)) << "Output wrong at " << i;
-    EXPECT_EQ(i < 8192 ? i & 1 : (i / 3) & 1, bits::isBitSet(data.data(), 1))
+    EXPECT_EQ(i < 8192 ? i & 1UL : (i / 3) & 1UL, bits::isBitSet(data.data(), 1))
         << "Output wrong at " << i;
     if (i < 16379) {
       rle->skip(4);
@@ -1521,7 +1521,7 @@ TEST(BooleanRle, seekTestWithNulls) {
   rle->next(data.data(), data.size(), noNull.data());
   ASSERT_EQ(getNumReadBytes(), VELOX_ARRAY_SIZE(buffer));
   for (size_t i = 0; i < data.size(); ++i) {
-    EXPECT_EQ(i < 8192 ? i & 1 : (i / 3) & 1, bits::isBitSet(data.data(), i))
+    EXPECT_EQ(i < 8192 ? i & 1UL : (i / 3) & 1UL, bits::isBitSet(data.data(), i))
         << "Output wrong at " << i;
   }
   // set up all of the positions
@@ -1548,7 +1548,7 @@ TEST(BooleanRle, seekTestWithNulls) {
     char readByte;
     rle->next(&readByte, 1, noNull.data());
     ASSERT_GT(getNumReadBytes(), 0);
-    EXPECT_EQ(i < 8192 ? i & 1 : (i / 3) & 1, readByte & 1)
+    EXPECT_EQ(i < 8192 ? i & 1UL : (i / 3) & 1UL, readByte & 1)
         << "Output wrong at " << i;
     bits::setBit(&readByte, 0, 1);
     rle->next(&readByte, 1, allNull.data());
