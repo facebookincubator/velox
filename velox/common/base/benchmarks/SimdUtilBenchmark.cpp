@@ -48,7 +48,7 @@ class LeadingMask {
     return kSize;
   }
 
-  static constexpr int kSize = 4 << 10;
+  static constexpr int kSize = 4u << 10;
   int8_t inputs_[kSize];
 };
 
@@ -74,7 +74,7 @@ class FromBitMask {
     return kSize;
   }
 
-  static constexpr int kSize = 2 << 10;
+  static constexpr int kSize = 2u << 10;
   uint64_t inputs_[kSize];
 };
 

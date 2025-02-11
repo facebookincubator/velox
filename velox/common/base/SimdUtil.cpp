@@ -71,7 +71,7 @@ void initByteSetBits() {
     int32_t* entry = detail::byteSetBits[i];
     int32_t fill = 0;
     for (auto b = 0; b < 8; ++b) {
-      if (i & (1 << b)) {
+      if (i & (1u << b)) {
         entry[fill++] = b;
       }
     }
@@ -86,7 +86,7 @@ void initPermute4x64Indices() {
     int32_t* result = detail::permute4x64Indices[i];
     int32_t fill = 0;
     for (int bit = 0; bit < 4; ++bit) {
-      if (i & (1 << bit)) {
+      if (i & (1u << bit)) {
         result[fill++] = bit * 2;
         result[fill++] = bit * 2 + 1;
       }

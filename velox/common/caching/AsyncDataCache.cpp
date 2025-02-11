@@ -880,7 +880,7 @@ bool AsyncDataCache::canTryAllocate(
 
 void AsyncDataCache::backoff(int32_t counter) {
   size_t seed = folly::hasher<uint16_t>()(++backoffCounter_);
-  const auto usecs = (seed & 0xfff) * (counter & 0x1f);
+  const auto usecs = (seed & 0xfff) * (static_cast<unsigned int>(counter) & 0x1f);
   VELOX_CACHE_LOG_EVERY_MS(INFO, 1'000)
       << "Backoff in allocation contention for " << succinctMicros(usecs);
 
