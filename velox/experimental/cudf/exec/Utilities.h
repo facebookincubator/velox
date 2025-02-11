@@ -19,6 +19,7 @@
 #include <memory>
 #include <string_view>
 
+#include <cudf/table/table.hpp>
 #include <rmm/mr/device/device_memory_resource.hpp>
 
 namespace facebook::velox::cudf_velox {
@@ -27,5 +28,9 @@ namespace facebook::velox::cudf_velox {
 create_memory_resource(std::string_view mode);
 
 bool cudfDebugEnabled();
+
+// Concatenate a vector of cuDF tables into a single table
+std::unique_ptr<cudf::table> concatenateTables(
+    std::vector<std::unique_ptr<cudf::table>> tables);
 
 } // namespace facebook::velox::cudf_velox
