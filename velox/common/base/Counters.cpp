@@ -600,5 +600,12 @@ void registerVeloxMetrics() {
   // The number of times that storage IOs get throttled in a storage cluster.
   DEFINE_METRIC(
       kMetricStorageGlobalThrottled, facebook::velox::StatType::COUNT);
+
+#ifdef VELOX_ENABLE_S3
+  DEFINE_METRIC(
+        kMetricS3ActiveConnections, facebook::velox::StatType::COUNT);
+  DEFINE_METRIC(
+        kMetricS3MetadataCalls, facebook::velox::StatType::COUNT);
+#endif
 }
 } // namespace facebook::velox

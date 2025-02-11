@@ -24,6 +24,17 @@ bool initializeS3(std::string_view logLevel = "FATAL");
 
 void finalizeS3();
 
+
+struct S3FileSystemMetrics : FileSystemMetrics {
+  std::atomic<uint64_t> activeConnections{0};
+  std::atomic<uint64_t> metadataCalls{0};
+
+  void reset() {
+    activeConnections.store(0);
+    metadataCalls.store(0);
+  }
+};
+
 /// Implementation of S3 filesystem and file interface.
 /// We provide a registration method for read and write files so the appropriate
 /// type of file can be constructed based on a filename.
@@ -34,6 +45,8 @@ class S3FileSystem : public FileSystem {
       const std::shared_ptr<const config::ConfigBase> config);
 
   std::string name() const override;
+
+  void reportMetrics() const override;
 
   std::unique_ptr<ReadFile> openFileForRead(
       std::string_view s3Path,
@@ -73,9 +86,13 @@ class S3FileSystem : public FileSystem {
 
   std::string getLogLevelName() const;
 
+  static std::shared_ptr<S3FileSystemMetrics> metrics;
+
  protected:
   class Impl;
   std::shared_ptr<Impl> impl_;
 };
+
+std::shared_ptr<S3FileSystemMetrics> S3FileSystem::metrics = std::make_shared<S3FileSystemMetrics>();
 
 } // namespace facebook::velox::filesystems

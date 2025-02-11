@@ -360,4 +360,10 @@ constexpr folly::StringPiece kMetricStorageGlobalThrottled{
 
 constexpr folly::StringPiece kMetricStorageNetworkThrottled{
     "velox.storage_network_throttled_count"};
+
+constexpr folly::StringPiece kMetricS3ActiveConnections{
+    "velox.presto_hive_s3_presto_s3_file_system_active_connections_total_count"};
+
+constexpr folly::StringPiece kMetricS3MetadataCalls{
+    "velox.presto_hive_s3_presto_s3_file_system_metadata_calls_one_minute_count"};
 } // namespace facebook::velox

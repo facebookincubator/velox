@@ -63,6 +63,7 @@ PeriodicStatsReporter::PeriodicStatsReporter(const Options& options)
       cache_(options.cache),
       arbitrator_(options.arbitrator),
       spillMemoryPool_(options.spillMemoryPool),
+      fileSystem_(options.fileSystem),
       options_(options) {}
 
 void PeriodicStatsReporter::start() {
@@ -84,6 +85,10 @@ void PeriodicStatsReporter::start() {
       "report_spill_stats",
       [this]() { reportSpillStats(); },
       options_.spillStatsIntervalMs);
+  addTask(
+      "report_file_system_stats",
+      [this]() {reportFileSystemMetrics();},
+      options_.filesystemStatsIntervalMs);
 }
 
 void PeriodicStatsReporter::stop() {
@@ -255,5 +260,13 @@ void PeriodicStatsReporter::reportSpillStats() {
   RECORD_METRIC_VALUE(kMetricSpillMemoryBytes, spillMemoryStats.usedBytes);
   RECORD_METRIC_VALUE(kMetricSpillPeakMemoryBytes, spillMemoryStats.peakBytes);
 }
+
+void PeriodicStatsReporter::reportFileSystemMetrics() {
+  if (fileSystem_ == nullptr) {
+      return;
+  }
+  fileSystem_->reportMetrics();
+}
+
 
 } // namespace facebook::velox

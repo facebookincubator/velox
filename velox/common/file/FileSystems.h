@@ -90,6 +90,10 @@ struct FileSystemOptions {
   bool readAheadEnabled{false};
 };
 
+struct FileSystemMetrics {
+  virtual ~FileSystemMetrics() = default;
+};
+
 /// An abstract FileSystem
 class FileSystem {
  public:
@@ -99,6 +103,10 @@ class FileSystem {
 
   /// Returns the name of the File System
   virtual std::string name() const = 0;
+
+  virtual void reportMetrics() const {
+    VELOX_NYI();
+  }
 
   /// Returns the file path without the fs scheme prefix such as "local:" prefix
   /// for local file system.

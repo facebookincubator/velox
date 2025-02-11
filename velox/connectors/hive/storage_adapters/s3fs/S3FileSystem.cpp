@@ -15,6 +15,8 @@
  */
 
 #include "velox/connectors/hive/storage_adapters/s3fs/S3FileSystem.h"
+#include "velox/common/base/Counters.h"
+#include "velox/common/base/StatsReporter.h"
 #include "velox/common/config/Config.h"
 #include "velox/common/file/File.h"
 #include "velox/connectors/hive/storage_adapters/s3fs/S3Config.h"
@@ -97,6 +99,7 @@ class S3ReadFile final : public ReadFile {
     request.SetKey(awsString(key_));
 
     auto outcome = client_->HeadObject(request);
+    S3FileSystem::metrics->metadataCalls.fetch_add(1);
     VELOX_CHECK_AWS_OUTCOME(
         outcome, "Failed to get metadata for S3 object", bucket_, key_);
     length_ = outcome.GetResult().GetContentLength();
@@ -184,8 +187,10 @@ class S3ReadFile final : public ReadFile {
     request.SetRange(awsString(ss.str()));
     request.SetResponseStreamFactory(
         AwsWriteableStreamFactory(position, length));
+    S3FileSystem::metrics->activeConnections.fetch_add(1);
     auto outcome = client_->GetObject(request);
     VELOX_CHECK_AWS_OUTCOME(outcome, "Failed to get S3 object", bucket_, key_);
+    S3FileSystem::metrics->activeConnections.fetch_sub(1);
   }
 
   Aws::S3::S3Client* client_;
@@ -253,6 +258,7 @@ class S3WriteFile::Impl {
       request.SetBucket(awsString(bucket_));
       request.SetKey(awsString(key_));
       auto objectMetadata = client_->HeadObject(request);
+      S3FileSystem::metrics->metadataCalls.fetch_add(1);
       VELOX_CHECK(!objectMetadata.IsSuccess(), "S3 object already exists");
     }
 
@@ -779,6 +785,11 @@ std::unique_ptr<WriteFile> S3FileSystem::openFileForWrite(
 
 std::string S3FileSystem::name() const {
   return "S3";
+}
+
+void S3FileSystem::reportMetrics() const {
+  RECORD_METRIC_VALUE(kMetricS3ActiveConnections, S3FileSystem::metrics->activeConnections);
+  RECORD_METRIC_VALUE(kMetricS3MetadataCalls, S3FileSystem::metrics->metadataCalls);
 }
 
 } // namespace facebook::velox::filesystems

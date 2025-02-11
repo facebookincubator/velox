@@ -53,14 +53,18 @@ class PeriodicStatsReporter {
     const memory::MemoryPool* spillMemoryPool{nullptr};
     uint64_t spillStatsIntervalMs{60'000};
 
+    const filesystems::FileSystem* fileSystem{nullptr};
+    uint64_t filesystemStatsIntervalMs{60'000};
+
     std::string toString() const {
       return fmt::format(
           "allocatorStatsIntervalMs:{}, cacheStatsIntervalMs:{}, "
-          "arbitratorStatsIntervalMs:{}, spillStatsIntervalMs:{}",
+          "arbitratorStatsIntervalMs:{}, spillStatsIntervalMs:{}, filesystemStatsIntervalMs:{}",
           allocatorStatsIntervalMs,
           cacheStatsIntervalMs,
           arbitratorStatsIntervalMs,
-          spillStatsIntervalMs);
+          spillStatsIntervalMs,
+          filesystemStatsIntervalMs);
     }
   };
 
@@ -95,11 +99,13 @@ class PeriodicStatsReporter {
   void reportAllocatorStats();
   void reportArbitratorStats();
   void reportSpillStats();
+  void reportFileSystemMetrics();
 
   const velox::memory::MemoryAllocator* const allocator_{nullptr};
   const velox::cache::AsyncDataCache* const cache_{nullptr};
   const velox::memory::MemoryArbitrator* const arbitrator_{nullptr};
   const velox::memory::MemoryPool* const spillMemoryPool_{nullptr};
+  const velox::filesystems::FileSystem* const fileSystem_{nullptr};
   const Options options_;
 
   cache::CacheStats lastCacheStats_;
