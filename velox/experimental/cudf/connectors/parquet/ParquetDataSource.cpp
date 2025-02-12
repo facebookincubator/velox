@@ -35,29 +35,6 @@
 #include <cudf/table/table.hpp>
 #include <cudf/table/table_view.hpp>
 
-namespace {
-
-// Concatenate a vector of cuDF tables into a single table
-std::unique_ptr<cudf::table> concatenateTables(
-    std::vector<std::unique_ptr<cudf::table>> tables) {
-  // Check for empty vector
-  VELOX_CHECK_GT(tables.size(), 0);
-
-  if (tables.size() == 1) {
-    return std::move(tables[0]);
-  }
-  std::vector<cudf::table_view> tableViews;
-  tableViews.reserve(tables.size());
-  std::transform(
-      tables.begin(),
-      tables.end(),
-      std::back_inserter(tableViews),
-      [&](auto const& tbl) { return tbl->view(); });
-  return cudf::concatenate(tableViews, cudf::get_default_stream());
-}
-
-} // namespace
-
 namespace facebook::velox::cudf_velox::connector::parquet {
 
 using namespace facebook::velox::connector;

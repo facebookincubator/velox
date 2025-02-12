@@ -45,7 +45,7 @@ FMT_VERSION="10.1.1"
 BOOST_VERSION="boost-1.84.0"
 THRIFT_VERSION="v0.16.0"
 # Note: when updating arrow check if thrift needs an update as well.
-ARROW_VERSION="16.1.0"
+ARROW_VERSION="15.0.0"
 STEMMER_VERSION="2.2.0"
 DUCKDB_VERSION="v0.8.1"
 

@@ -151,23 +151,23 @@ void CudfHashJoinBuild::noMoreInput() {
   };
 
   auto cudf_tables = std::vector<std::unique_ptr<cudf::table>>(inputs_.size());
-  auto cudf_table_views = std::vector<cudf::table_view>(inputs_.size());
   auto input_streams = std::vector<rmm::cuda_stream_view>(inputs_.size());
   for (int i = 0; i < inputs_.size(); i++) {
     VELOX_CHECK_NOT_NULL(inputs_[i]);
     input_streams[i] = inputs_[i]->stream();
     cudf_tables[i] = inputs_[i]->release();
-    cudf_table_views[i] = cudf_tables[i]->view();
   }
   auto stream = cudfGlobalStreamPool().get_stream();
   cudf::detail::join_streams(input_streams, stream);
-  auto tbl = cudf::concatenate(cudf_table_views, stream);
+  auto tbl = concatenateTables(std::move(cudf_tables), stream);
 
   // Release input data after synchronizing
   stream.synchronize();
   input_streams.clear();
   cudf_table_views.clear();
   cudf_tables.clear();
+
+  // Release input data
   inputs_.clear();
 
   VELOX_CHECK_NOT_NULL(tbl);
