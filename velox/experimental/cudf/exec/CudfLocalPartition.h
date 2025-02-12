@@ -51,31 +51,13 @@ class CudfLocalPartition : public exec::Operator {
  protected:
   void prepareForInput(RowVectorPtr& input);
 
-  // // DM: We don't need this because we'll be materializing the output of hash
-  // // partition function.
-  // void allocateIndexBuffers(const std::vector<vector_size_t>& sizes);
-
-  // // DM: We don't need this because we'll be materializing the output of hash
-  // // partition function.
-  // RowVectorPtr wrapChildren(
-  //     const RowVectorPtr& input,
-  //     vector_size_t size,
-  //     const BufferPtr& indices,
-  //     RowVectorPtr reusable);
-
   const std::vector<std::shared_ptr<exec::LocalExchangeQueue>> queues_;
   const size_t numPartitions_;
-  // DM: We Definitely don't need their partition function.
-  // std::unique_ptr<core::PartitionFunction> partitionFunction_;
 
   std::vector<exec::BlockingReason> blockingReasons_;
   std::vector<ContinueFuture> futures_;
 
-  /// Reusable memory for hash calculation.
-  // std::vector<uint32_t> partitions_;
-  /// Reusable buffers for input partitioning.
-  // std::vector<BufferPtr> indexBuffers_;
-  // std::vector<vector_size_t*> rawIndices_;
+  std::vector<column_index_t> partitionKeyIndices_;
 };
 
 } // namespace facebook::velox::cudf_velox

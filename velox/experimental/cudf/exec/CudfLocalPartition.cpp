@@ -14,9 +14,14 @@
  * limitations under the License.
  */
 
-#include "CudfLocalPartition.h"
-#include <experimental/cudf/vector/CudfVector.h>
 #include "velox/exec/Task.h"
+
+#include <cudf/copying.hpp>
+#include <cudf/partitioning.hpp>
+
+#include "CudfLocalPartition.h"
+
+#include "velox/experimental/cudf/vector/CudfVector.h"
 
 namespace facebook::velox::cudf_velox {
 
@@ -32,14 +37,53 @@ CudfLocalPartition::CudfLocalPartition(
           "CudfLocalPartition"),
       queues_{
           ctx->task->getLocalExchangeQueues(ctx->splitGroupId, planNode->id())},
-      numPartitions_{queues_.size()}
-// partitionFunction_(
-//     numPartitions_ == 1 ? nullptr
-//                         : planNode->partitionFunctionSpec().create(
-//                               numPartitions_,
-//                               /*localExchange=*/true))
-{
-  // VELOX_CHECK(numPartitions_ == 1 || partitionFunction_ != nullptr);
+      numPartitions_{queues_.size()} {
+  // DM: Following is IMO a hacky way to get the partition key indices. The
+  // partition spec constructs the hash function directly and has no public
+  // methods to get the partition key indices.
+
+  // Get partition function specification string
+  std::string spec = planNode->partitionFunctionSpec().toString();
+  std::cout << "Partition function spec: " << spec << std::endl;
+
+  // Only parse keys if it's a hash function
+  if (spec.find("HASH(") != std::string::npos) {
+    // Extract keys between HASH( and )
+    size_t start = spec.find("HASH(") + 5;
+    size_t end = spec.find(")", start);
+    if (start != std::string::npos && end != std::string::npos) {
+      std::string keysStr = spec.substr(start, end - start);
+
+      // Split by comma to get individual keys
+      std::vector<std::string> keys;
+      size_t pos = 0;
+      while ((pos = keysStr.find(",")) != std::string::npos) {
+        std::string key = keysStr.substr(0, pos);
+        keys.push_back(key);
+        keysStr.erase(0, pos + 1);
+      }
+      keys.push_back(keysStr); // Add the last key
+
+      // Find field indices for each key
+      const auto& rowType = planNode->outputType();
+      for (const auto& key : keys) {
+        auto trimmedKey = key;
+        // Trim whitespace
+        trimmedKey.erase(0, trimmedKey.find_first_not_of(" "));
+        trimmedKey.erase(trimmedKey.find_last_not_of(" ") + 1);
+
+        auto fieldIndex = rowType->getChildIdx(trimmedKey);
+        partitionKeyIndices_.push_back(fieldIndex);
+      }
+    }
+
+    std::cout << "Partition key indices: ";
+    for (const auto& idx : partitionKeyIndices_) {
+      std::cout << idx << " ";
+    }
+    std::cout << std::endl;
+  }
+  VELOX_CHECK(numPartitions_ == 1 || partitionKeyIndices_.size() > 0);
 
   // DM: Since we're replacing the LocalPartition with CudfLocalPartition, the
   // number of producers is already set. Adding producer only adds to a counter
@@ -54,114 +98,67 @@ CudfLocalPartition::CudfLocalPartition(
   // }
 }
 
-// void CudfLocalPartition::allocateIndexBuffers(
-//     const std::vector<vector_size_t>& sizes) {
-//   VELOX_CHECK_EQ(indexBuffers_.size(), sizes.size());
-//   VELOX_CHECK_EQ(rawIndices_.size(), sizes.size());
-//
-//   for (auto i = 0; i < sizes.size(); ++i) {
-//     const auto indicesBufferBytes = sizes[i] * sizeof(vector_size_t);
-//     if ((indexBuffers_[i] == nullptr) ||
-//         (indexBuffers_[i]->capacity() < indicesBufferBytes) ||
-//         !indexBuffers_[i]->unique()) {
-//       indexBuffers_[i] = allocateIndices(sizes[i], pool());
-//     } else {
-//       const auto indicesBufferBytes = sizes[i] * sizeof(vector_size_t);
-//       indexBuffers_[i]->setSize(indicesBufferBytes);
-//     }
-//     rawIndices_[i] = indexBuffers_[i]->asMutable<vector_size_t>();
-//   }
-// }
-
-// RowVectorPtr CudfLocalPartition::wrapChildren(
-//     const RowVectorPtr& input,
-//     vector_size_t size,
-//     const BufferPtr& indices,
-//     RowVectorPtr reusable) {
-//   RowVectorPtr result;
-//   if (!reusable) {
-//     result = std::make_shared<RowVector>(
-//         pool(),
-//         input->type(),
-//         nullptr,
-//         size,
-//         std::vector<VectorPtr>(input->childrenSize()));
-//   } else {
-//     VELOX_CHECK(!reusable->mayHaveNulls());
-//     VELOX_CHECK_EQ(reusable.use_count(), 1);
-//     reusable->unsafeResize(size);
-//     result = std::move(reusable);
-//   }
-//   VELOX_CHECK_NOT_NULL(result);
-//
-//   for (auto i = 0; i < input->childrenSize(); ++i) {
-//     auto& child = result->childAt(i);
-//     if (child && child->encoding() == VectorEncoding::Simple::DICTIONARY &&
-//         child.use_count() == 1) {
-//       child->BaseVector::resize(size);
-//       child->setWrapInfo(indices);
-//       child->setValueVector(input->childAt(i));
-//     } else {
-//       child = BaseVector::wrapInDictionary(
-//           nullptr, indices, size, input->childAt(i));
-//     }
-//   }
-//
-//   result->updateContainsLazyNotLoaded();
-//   return result;
-// }
-
 void CudfLocalPartition::addInput(RowVectorPtr input) {
   prepareForInput(input);
   auto cudfVector = std::dynamic_pointer_cast<CudfVector>(input);
   VELOX_CHECK(cudfVector, "Input must be a CudfVector");
 
-  // const auto singlePartition = numPartitions_ == 1
-  //     ? 0
-  //     : partitionFunction_->partition(*input, partitions_);
-  // if (singlePartition.has_value()) {
-  ContinueFuture future;
-  // auto blockingReason = queues_[singlePartition.value()]->enqueue(
-  auto blockingReason =
-      queues_[0]->enqueue(input, input->retainedSize(), &future);
-  if (blockingReason != exec::BlockingReason::kNotBlocked) {
-    blockingReasons_.push_back(blockingReason);
-    futures_.push_back(std::move(future));
+  if (numPartitions_ > 1) {
+    // Use cudf hash partitioning
+    auto tableView = cudfVector->getTableView();
+    std::vector<cudf::size_type> partitionKeyIndices;
+    for (const auto& idx : partitionKeyIndices_) {
+      partitionKeyIndices.push_back(static_cast<cudf::size_type>(idx));
+    }
+
+    auto [partitionedTable, partitionOffsets] =
+        cudf::hash_partition(tableView, partitionKeyIndices, numPartitions_);
+
+    VELOX_CHECK(partitionOffsets.size() == numPartitions_);
+    VELOX_CHECK(partitionOffsets[0] == 0);
+
+    // Erase first element since it's always 0 and we don't need it
+    partitionOffsets.erase(partitionOffsets.begin());
+
+    auto partitionedTables =
+        cudf::split(partitionedTable->view(), partitionOffsets);
+
+    for (int i = 0; i < numPartitions_; ++i) {
+      auto partitionData = partitionedTables[i];
+      if (partitionData.num_rows() == 0) {
+        // Skip empty partitions
+        continue;
+      }
+
+      ContinueFuture future;
+      // DM: We should investigate if keeping partitionedTables alive and using
+      // the table view in partitonedData is more efficient than creating a new
+      // table each time. Currently out of scope because it would need a new
+      // type of RowVector that can hold a table view and shared_ptr to the
+      // table.
+      auto blockingReason = queues_[i]->enqueue(
+          std::make_shared<CudfVector>(
+              pool(),
+              outputType_,
+              partitionData.num_rows(),
+              std::make_unique<cudf::table>(partitionData)),
+          partitionData.num_rows(),
+          &future);
+      if (blockingReason != exec::BlockingReason::kNotBlocked) {
+        blockingReasons_.push_back(blockingReason);
+        futures_.push_back(std::move(future));
+      }
+    }
+  } else {
+    // Single partition case
+    ContinueFuture future;
+    auto blockingReason =
+        queues_[0]->enqueue(input, input->retainedSize(), &future);
+    if (blockingReason != exec::BlockingReason::kNotBlocked) {
+      blockingReasons_.push_back(blockingReason);
+      futures_.push_back(std::move(future));
+    }
   }
-  return;
-  // }
-
-  // const auto numInput = input->size();
-  // std::vector<vector_size_t> maxIndex(numPartitions_, 0);
-  // for (auto i = 0; i < numInput; ++i) {
-  //   ++maxIndex[partitions_[i]];
-  // }
-  // allocateIndexBuffers(maxIndex);
-
-  // std::fill(maxIndex.begin(), maxIndex.end(), 0);
-  // for (auto i = 0; i < numInput; ++i) {
-  //   auto partition = partitions_[i];
-  //   rawIndices_[partition][maxIndex[partition]] = i;
-  //   ++maxIndex[partition];
-  // }
-
-  // const int64_t totalSize = input->retainedSize();
-  // for (auto i = 0; i < numPartitions_; i++) {
-  //   auto partitionSize = maxIndex[i];
-  //   if (partitionSize == 0) {
-  //     // Do not enqueue empty partitions.
-  //     continue;
-  //   }
-  //   auto partitionData = wrapChildren(
-  //       input, partitionSize, indexBuffers_[i], queues_[i]->getVector());
-  //   ContinueFuture future;
-  //   auto reason = queues_[i]->enqueue(
-  //       partitionData, totalSize * partitionSize / numInput, &future);
-  //   if (reason != exec::BlockingReason::kNotBlocked) {
-  //     blockingReasons_.push_back(reason);
-  //     futures_.push_back(std::move(future));
-  //   }
-  // }
 }
 
 void CudfLocalPartition::prepareForInput(RowVectorPtr& input) {
