@@ -26,12 +26,15 @@ class GetStructFieldExpr : public SpecialForm {
  public:
   /// @param type The target type of the returned expression
   /// @param expr The struct expression to get by field ordinal
+  /// @param ordinal The ordinal to get from struct expression
   /// @param trackCpuUsage Whether to track CPU usage
   GetStructFieldExpr(
       TypePtr type,
       std::vector<ExprPtr>&& expr,
+      int32_t ordinal,
       bool trackCpuUsage)
-      : SpecialForm(type, expr, "get_struct_field", false, trackCpuUsage) {}
+      : SpecialForm(type, expr, "get_struct_field", false, trackCpuUsage),
+        ordinal_(ordinal) {}
 
   void evalSpecialForm(
       const SelectivityVector& rows,
@@ -41,6 +44,9 @@ class GetStructFieldExpr : public SpecialForm {
   void computePropagatesNulls() override {
     propagatesNulls_ = inputs_[0]->propagatesNulls();
   }
+
+ private:
+  const int32_t ordinal_;
 };
 
 class GetStructFieldCallToSpecialForm : public exec::FunctionCallToSpecialForm {
