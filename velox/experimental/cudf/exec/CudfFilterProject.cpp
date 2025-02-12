@@ -258,6 +258,7 @@ RowVectorPtr CudfFilterProject::getOutput() {
 
   auto cudf_input = std::dynamic_pointer_cast<CudfVector>(input_);
   VELOX_CHECK_NOT_NULL(cudf_input);
+  auto stream = cudf_input->stream();
   auto input_table_columns = cudf_input->release()->release();
   // add ast unsupported precomputed columns to input_table
   // Works only directly on column in input table, not intermediate columns
@@ -267,13 +268,13 @@ RowVectorPtr CudfFilterProject::getOutput() {
       auto new_column = cudf::datetime::extract_datetime_component(
           input_table_columns[dependent_column_index]->view(),
           cudf::datetime::datetime_component::YEAR,
-          cudf::get_default_stream(),
+          stream,
           cudf::get_current_device_resource_ref());
       input_table_columns.emplace_back(std::move(new_column));
     } else if (ins_name == "length") {
       auto new_column = cudf::strings::count_characters(
           input_table_columns[dependent_column_index]->view(),
-          cudf::get_default_stream(),
+          stream,
           cudf::get_current_device_resource_ref());
       input_table_columns.emplace_back(std::move(new_column));
     } else {
@@ -289,7 +290,7 @@ RowVectorPtr CudfFilterProject::getOutput() {
     auto col = cudf::compute_column(
         cudf_table_view,
         tree.back(),
-        cudf::get_default_stream(),
+        stream,
         cudf::get_current_device_resource_ref());
     columns.emplace_back(std::move(col));
   }
@@ -308,6 +309,7 @@ RowVectorPtr CudfFilterProject::getOutput() {
   }
 
   auto output_table = std::make_unique<cudf::table>(std::move(output_columns));
+  stream.synchronize();
   auto const num_columns = output_table->num_columns();
   auto const size = output_table->num_rows();
   if (cudfDebugEnabled()) {
@@ -316,7 +318,7 @@ RowVectorPtr CudfFilterProject::getOutput() {
   }
 
   auto cudf_output = std::make_shared<CudfVector>(
-      input_->pool(), outputType_, size, std::move(output_table));
+      input_->pool(), outputType_, size, std::move(output_table), stream);
   input_.reset();
   if (num_columns == 0 or size == 0) {
     return nullptr;
