@@ -18,6 +18,7 @@
 #include "expression/Expr.h"
 #include "vector/ComplexVector.h"
 #include "vector/ConstantVector.h"
+#include "velox/expression/ConstantExpr.h"
 #include "velox/expression/PeeledEncoding.h"
 
 using namespace facebook::velox::exec;
@@ -31,10 +32,6 @@ void GetStructFieldExpr::evalSpecialForm(
   VectorPtr input;
   VectorPtr ordinalVector;
   inputs_[0]->eval(rows, context, input);
-  inputs_[1]->eval(rows, context, ordinalVector);
-  VELOX_USER_CHECK(ordinalVector->isConstantEncoding());
-  auto ordinal =
-      ordinalVector->asUnchecked<ConstantVector<int32_t>>()->valueAt(0);
   auto resultType = std::const_pointer_cast<const Type>(type_);
 
   LocalSelectivityVector remainingRows(context, rows);
@@ -55,10 +52,10 @@ void GetStructFieldExpr::evalSpecialForm(
   } else {
     auto rowData = decoded->base()->as<RowVector>();
     if (decoded->isIdentityMapping()) {
-      localResult = rowData->childAt(ordinal);
+      localResult = rowData->childAt(ordinal_);
     } else {
       localResult =
-          decoded->wrap(rowData->childAt(ordinal), *input, decoded->size());
+          decoded->wrap(rowData->childAt(ordinal_), *input, decoded->size());
     }
   }
 
@@ -97,8 +94,22 @@ ExprPtr GetStructFieldCallToSpecialForm::constructSpecialForm(
       TypeKind::INTEGER,
       "The second argument of get_struct_field should be of integer type.");
 
+  auto constantExpr = std::dynamic_pointer_cast<exec::ConstantExpr>(args[1]);
+  VELOX_USER_CHECK_NOT_NULL(
+      constantExpr,
+      "The second argument of get_struct_field should be constant expression.");
+  VELOX_USER_CHECK(
+      constantExpr->value()->isConstantEncoding(),
+      "The second argument of get_struct_field should be wrapped in constant vector.");
+  auto constantVector =
+      constantExpr->value()->asUnchecked<ConstantVector<int32_t>>();
+  VELOX_USER_CHECK(
+      !constantVector->isNullAt(0),
+      "The second argument of get_struct_field is non-nullable.");
+  auto ordinal = constantVector->valueAt(0);
+
   return std::make_shared<GetStructFieldExpr>(
-      type, std::move(args), trackCpuUsage);
+      type, std::move(args), ordinal, trackCpuUsage);
 }
 
 } // namespace facebook::velox::functions::sparksql
