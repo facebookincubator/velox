@@ -151,14 +151,22 @@ void CudfHashJoinBuild::noMoreInput() {
   };
 
   auto cudf_tables = std::vector<std::unique_ptr<cudf::table>>(inputs_.size());
+  auto input_streams = std::vector<rmm::cuda_stream_view>(inputs_.size());
   for (int i = 0; i < inputs_.size(); i++) {
     VELOX_CHECK_NOT_NULL(inputs_[i]);
+    input_streams[i] = inputs_[i]->stream();
     cudf_tables[i] = inputs_[i]->release();
   }
-  auto tbl = concatenateTables(std::move(cudf_tables));
+  auto stream = cudfGlobalStreamPool().get_stream();
+  cudf::detail::join_streams(input_streams, stream);
+  auto tbl = concatenateTables(std::move(cudf_tables), stream);
+
+  // Release input data after synchronizing
+  stream.synchronize();
+  input_streams.clear();
+  cudf_tables.clear();
 
   // Release input data
-  cudf::get_default_stream().synchronize();
   inputs_.clear();
 
   VELOX_CHECK_NOT_NULL(tbl);
@@ -246,6 +254,7 @@ RowVectorPtr CudfHashJoinProbe::getOutput() {
   }
   auto cudf_input = std::dynamic_pointer_cast<CudfVector>(input_);
   VELOX_CHECK_NOT_NULL(cudf_input);
+  auto stream = cudf_input->stream();
   auto tbl = cudf_input->release();
   if (cudfDebugEnabled()) {
     std::cout << "Probe table number of columns: " << tbl->num_columns()
@@ -307,8 +316,8 @@ RowVectorPtr CudfHashJoinProbe::getOutput() {
           hb.get(),
           hashObject_.has_value());
   }
-  auto const [left_join_indices, right_join_indices] =
-      hb->inner_join(tbl->view().select(probe_key_indices));
+  auto const [left_join_indices, right_join_indices] = hb->inner_join(
+      tbl->view().select(probe_key_indices), std::nullopt, stream);
   auto left_indices_span =
       cudf::device_span<cudf::size_type const>{*left_join_indices};
   auto right_indices_span =
@@ -361,8 +370,10 @@ RowVectorPtr CudfHashJoinProbe::getOutput() {
   auto left_indices_col = cudf::column_view{left_indices_span};
   auto right_indices_col = cudf::column_view{right_indices_span};
   auto constexpr oob_policy = cudf::out_of_bounds_policy::DONT_CHECK;
-  auto left_result = cudf::gather(left_input, left_indices_col, oob_policy);
-  auto right_result = cudf::gather(right_input, right_indices_col, oob_policy);
+  auto left_result =
+      cudf::gather(left_input, left_indices_col, oob_policy, stream);
+  auto right_result =
+      cudf::gather(right_input, right_indices_col, oob_policy, stream);
 
   if (cudfDebugEnabled()) {
     std::cout << "Left result number of columns: " << left_result->num_columns()
@@ -391,7 +402,7 @@ RowVectorPtr CudfHashJoinProbe::getOutput() {
     return nullptr;
   }
   return std::make_shared<CudfVector>(
-      pool(), outputType, size, std::move(cudf_output));
+      pool(), outputType, size, std::move(cudf_output), stream);
 }
 
 exec::BlockingReason CudfHashJoinProbe::isBlocked(ContinueFuture* future) {

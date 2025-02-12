@@ -18,7 +18,10 @@
 #include <memory>
 #include <string_view>
 
+#include "velox/experimental/cudf/exec/Utilities.h"
+
 #include <common/base/Exceptions.h>
+
 #include <rmm/mr/device/arena_memory_resource.hpp>
 #include <rmm/mr/device/cuda_async_memory_resource.hpp>
 #include <rmm/mr/device/cuda_memory_resource.hpp>
@@ -28,11 +31,10 @@
 #include <rmm/mr/device/pool_memory_resource.hpp>
 
 #include <cudf/concatenate.hpp>
+#include <cudf/detail/utilities/stream_pool.hpp>
 #include <cudf/utilities/default_stream.hpp>
 #include <cudf/utilities/error.hpp>
 #include <cudf/utilities/memory_resource.hpp>
-
-#include "velox/experimental/cudf/exec/Utilities.h"
 
 namespace facebook::velox::cudf_velox {
 
@@ -84,13 +86,18 @@ std::shared_ptr<rmm::mr::device_memory_resource> create_memory_resource(
       "\nExpecting: cuda, pool, async, arena, managed, or managed_pool");
 }
 
+cudf::detail::cuda_stream_pool& cudfGlobalStreamPool() {
+  return cudf::detail::global_cuda_stream_pool();
+};
+
 bool cudfDebugEnabled() {
   const char* env_cudf_debug = std::getenv("VELOX_CUDF_DEBUG");
   return env_cudf_debug != nullptr && std::stoi(env_cudf_debug);
 }
 
 std::unique_ptr<cudf::table> concatenateTables(
-    std::vector<std::unique_ptr<cudf::table>> tables) {
+    std::vector<std::unique_ptr<cudf::table>> tables,
+    rmm::cuda_stream_view stream) {
   // Check for empty vector
   VELOX_CHECK_GT(tables.size(), 0);
 
@@ -105,9 +112,7 @@ std::unique_ptr<cudf::table> concatenateTables(
       std::back_inserter(tableViews),
       [&](auto const& tbl) { return tbl->view(); });
   return cudf::concatenate(
-      tableViews,
-      cudf::get_default_stream(),
-      cudf::get_current_device_resource_ref());
+      tableViews, stream, cudf::get_current_device_resource_ref());
 }
 
 } // namespace facebook::velox::cudf_velox
