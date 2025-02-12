@@ -45,7 +45,8 @@ cudf::ast::literal make_scalar_and_literal(
     VELOX_CHECK(vector->isConstantEncoding());
     auto constVector = vector->as<ConstantVector<StringView>>();
     auto value = constVector->valueAt(0);
-    scalars.emplace_back(std::make_unique<cudf::string_scalar>(value));
+    std::string_view stringValue = static_cast<std::string_view>(value);
+    scalars.emplace_back(std::make_unique<cudf::string_scalar>(stringValue));
     return cudf::ast::literal{
         *static_cast<cudf::string_scalar*>(scalars.back().get())};
   } else {
