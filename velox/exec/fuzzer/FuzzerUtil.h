@@ -86,6 +86,9 @@ bool isTableScanSupported(const TypePtr& type);
 /// Concat two RowTypes.
 RowTypePtr concat(const RowTypePtr& a, const RowTypePtr& b);
 
+/// Flatten the input vectors for printing.
+std::vector<RowVectorPtr> flatten(const std::vector<RowVectorPtr>& vectors);
+
 /// Skip queries that use Timestamp, Varbinary, and IntervalDayTime types.
 /// DuckDB doesn't support nanosecond precision for timestamps or casting from
 /// Bigint to Interval.
@@ -119,7 +122,7 @@ TypePtr sanitizeTryResolveType(
     const std::unordered_map<std::string, TypePtr>& typeVariablesBindings,
     std::unordered_map<std::string, int>& integerVariablesBindings);
 
-// Invoked to set up memory system with arbitration.
+/// Invoked to set up memory system with arbitration.
 void setupMemory(
     int64_t allocatorCapacity,
     int64_t arbitratorCapacity,

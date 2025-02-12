@@ -24,6 +24,7 @@
 #include "velox/dwio/dwrf/writer/Writer.h"
 #include "velox/exec/fuzzer/DuckQueryRunner.h"
 #include "velox/exec/fuzzer/PrestoQueryRunner.h"
+#include "velox/exec/tests/utils/TempDirectoryPath.h"
 #include "velox/expression/SignatureBinder.h"
 #include "velox/functions/prestosql/types/IPPrefixType.h"
 
@@ -192,6 +193,18 @@ RowTypePtr concat(const RowTypePtr& a, const RowTypePtr& b) {
   return ROW(std::move(names), std::move(types));
 }
 
+std::vector<RowVectorPtr> flatten(const std::vector<RowVectorPtr>& vectors) {
+  std::vector<RowVectorPtr> flatVectors;
+  for (const auto& vector : vectors) {
+    auto flat = BaseVector::create<RowVector>(
+        vector->type(), vector->size(), vector->pool());
+    flat->copy(vector.get(), 0, 0, vector->size());
+    flatVectors.push_back(flat);
+  }
+
+  return flatVectors;
+}
+
 // Sometimes we generate zero-column input of type ROW({}) or a column of type
 // UNKNOWN(). Such data cannot be written to a file and therefore cannot
 // be tested with TableScan.
@@ -203,6 +216,11 @@ bool isTableScanSupported(const TypePtr& type) {
     return false;
   }
   if (type->kind() == TypeKind::HUGEINT) {
+    return false;
+  }
+  // Disable testing with TableScan when input contains TIMESTAMP type, due to
+  // the issue #8127.
+  if (type->kind() == TypeKind::TIMESTAMP) {
     return false;
   }
 
