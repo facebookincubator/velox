@@ -993,6 +993,9 @@ TEST_F(JsonFunctionsTest, jsonExtract) {
   VELOX_ASSERT_THROW(
       jsonExtract(kJson, "concat($..category)"), "Invalid JSON path");
   VELOX_ASSERT_THROW(jsonExtract(kJson, "$.store.keys()"), "Invalid JSON path");
+
+  // Test json with control character.
+  EXPECT_EQ(jsonExtract("{\"c1\":\"ab\ncd\"}", "$.c1"), "\"ab\ncd\"");
 }
 
 // The following tests ensure that the internal json functions
