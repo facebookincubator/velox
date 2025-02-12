@@ -28,8 +28,12 @@ namespace facebook::velox::fuzzer {
 
 using facebook::velox::variant;
 
-std::unique_ptr<AbstractInputGenerator>
-getRandomInputGenerator(size_t seed, const TypePtr& type, double nullRatio);
+std::unique_ptr<AbstractInputGenerator> getRandomInputGenerator(
+    size_t seed,
+    const TypePtr& type,
+    double nullRatio,
+    const std::vector<variant>& mapKeys = {},
+    size_t maxContainerSize = 10);
 
 template <typename T, typename Enabled = void>
 class RandomInputGenerator : public AbstractInputGenerator {
@@ -358,6 +362,46 @@ class JsonInputGenerator : public AbstractInputGenerator {
   bool makeRandomVariation_;
 
   folly::json::serialization_opts opts_;
+};
+
+/// Generates a JSON path for JSON of a given type.
+/// @param jsonType The type of data represented by the JSON.
+/// @param mapKeys Candidate key values of maps in the JSON. All maps in the
+/// JSON are assumed to share the same key type and candidate key values.
+/// @param maxContainerLength The maximum length of a container (array or map)
+/// in the JSON.
+/// @param makeRandomVariation If true, the generator will generate JSON path
+/// not supported by JsonExtractor.
+class JsonPathGenerator : public AbstractInputGenerator {
+ public:
+  JsonPathGenerator(
+      size_t seed,
+      const TypePtr& type,
+      double nullRatio,
+      const TypePtr& jsonType,
+      const std::vector<variant>& mapKeys,
+      size_t maxContainerLength,
+      bool makeRandomVariation = false)
+      : AbstractInputGenerator(seed, type, nullptr, nullRatio),
+        jsonType_{jsonType},
+        mapKeys_{mapKeys},
+        maxContainerLength_{maxContainerLength},
+        makeRandomVariation_{makeRandomVariation} {}
+
+  ~JsonPathGenerator() override = default;
+
+  variant generate() override;
+
+ private:
+  void generateImpl(std::string& path, const TypePtr& type);
+
+  TypePtr jsonType_;
+
+  std::vector<variant> mapKeys_;
+
+  size_t maxContainerLength_;
+
+  bool makeRandomVariation_;
 };
 
 } // namespace facebook::velox::fuzzer

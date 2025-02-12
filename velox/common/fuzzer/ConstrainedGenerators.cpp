@@ -167,6 +167,89 @@ void JsonInputGenerator::makeRandomVariation(std::string json) {
   }
 }
 
+// JsonPathGenerator
+variant JsonPathGenerator::generate() {
+  if (coinToss(rng_, nullRatio_)) {
+    return variant::null(type_->kind());
+  }
+
+  std::string path = "$";
+  generateImpl(path, jsonType_);
+  return variant(path);
+}
+
+void JsonPathGenerator::generateImpl(std::string& path, const TypePtr& type) {
+  switch (type->kind()) {
+    case TypeKind::BOOLEAN:
+    case TypeKind::TINYINT:
+    case TypeKind::SMALLINT:
+    case TypeKind::INTEGER:
+    case TypeKind::BIGINT:
+    case TypeKind::REAL:
+    case TypeKind::DOUBLE:
+    case TypeKind::TIMESTAMP:
+      return;
+    case TypeKind::VARCHAR:
+    case TypeKind::VARBINARY:
+      if (makeRandomVariation_ && coinToss(rng_, 0.5)) {
+        path += ".length()";
+      }
+      return;
+    case TypeKind::ARRAY:
+      if (makeRandomVariation_ && coinToss(rng_, 0.2)) {
+        path += ".length()";
+      } else if (coinToss(rng_, 0.2)) {
+        path +=
+            fmt::format("[{}]", rand<uint64_t>(rng_, 0, maxContainerLength_));
+        generateImpl(path, type->childAt(0));
+      } else if (makeRandomVariation_ && coinToss(rng_, 0.2)) {
+        path += "[]";
+        generateImpl(path, type->childAt(0));
+      }
+      return;
+    case TypeKind::ROW: {
+      const auto selectedField =
+          rand<uint64_t>(rng_, 0, type->asRow().size() - 1);
+      if (makeRandomVariation_ && coinToss(rng_, 0.2)) {
+        path += ".length()";
+      } else if (coinToss(rng_, 0.2)) {
+        path += fmt::format("[{}]", selectedField);
+        generateImpl(path, type->childAt(selectedField));
+      } else if (makeRandomVariation_ && coinToss(rng_, 0.2)) {
+        path += "[]";
+        generateImpl(path, type->childAt(selectedField));
+      }
+      return;
+    }
+    case TypeKind::MAP: {
+      const auto selectedKey =
+          mapKeys_[rand<uint64_t>(rng_, 0, mapKeys_.size() - 1)].toString(
+              type->childAt(0));
+      if (makeRandomVariation_ && coinToss(rng_, 0.2)) {
+        path += ".length()";
+      } else if (makeRandomVariation_ && coinToss(rng_, 0.2)) {
+        path += fmt::format("[{}]", selectedKey);
+        generateImpl(path, type->childAt(1));
+      } else if (coinToss(rng_, 0.2)) {
+        path += fmt::format("['{}']", selectedKey);
+        generateImpl(path, type->childAt(1));
+      } else if (makeRandomVariation_ && coinToss(rng_, 0.2)) {
+        path += "[]";
+        generateImpl(path, type->childAt(1));
+      } else if (coinToss(rng_, 0.2)) {
+        path += "[*]";
+        generateImpl(path, type->childAt(1));
+      } else if (coinToss(rng_, 0.2)) {
+        path += fmt::format(".{}", selectedKey);
+        generateImpl(path, type->childAt(1));
+      }
+      return;
+    }
+    default:
+      VELOX_UNREACHABLE("Unsupported type");
+  }
+}
+
 // Utility functions
 template <bool, TypeKind KIND>
 std::unique_ptr<AbstractInputGenerator> getRandomInputGeneratorPrimitive(
@@ -179,8 +262,12 @@ std::unique_ptr<AbstractInputGenerator> getRandomInputGeneratorPrimitive(
   return generator;
 }
 
-std::unique_ptr<AbstractInputGenerator>
-getRandomInputGenerator(size_t seed, const TypePtr& type, double nullRatio) {
+std::unique_ptr<AbstractInputGenerator> getRandomInputGenerator(
+    size_t seed,
+    const TypePtr& type,
+    double nullRatio,
+    const std::vector<variant>& mapKeys,
+    size_t maxContainerSize) {
   std::unique_ptr<AbstractInputGenerator> generator;
   if (type->isPrimitiveType()) {
     return VELOX_DYNAMIC_SCALAR_TEMPLATE_TYPE_DISPATCH(
@@ -192,17 +279,30 @@ getRandomInputGenerator(size_t seed, const TypePtr& type, double nullRatio) {
         nullRatio);
   } else if (type->isArray()) {
     generator = std::make_unique<RandomInputGenerator<ArrayType>>(
-        seed, type, nullRatio);
-  } else if (type->isMap()) {
-    generator =
-        std::make_unique<RandomInputGenerator<MapType>>(seed, type, nullRatio);
-
-  } else if (type->isRow()) {
-    generator = std::make_unique<RandomInputGenerator<RowType>>(
         seed,
         type,
-        std::vector<std::unique_ptr<AbstractInputGenerator>>{},
-        nullRatio);
+        nullRatio,
+        maxContainerSize,
+        getRandomInputGenerator(
+            seed, type->childAt(0), nullRatio, mapKeys, maxContainerSize));
+  } else if (type->isMap()) {
+    generator = std::make_unique<RandomInputGenerator<MapType>>(
+        seed,
+        type,
+        nullRatio,
+        maxContainerSize,
+        std::make_unique<SetConstrainedGenerator>(
+            seed, type->childAt(0), mapKeys),
+        getRandomInputGenerator(
+            seed, type->childAt(1), nullRatio, mapKeys, maxContainerSize));
+  } else if (type->isRow()) {
+    std::vector<std::unique_ptr<AbstractInputGenerator>> children;
+    for (auto i = 0; i < type->size(); ++i) {
+      children.push_back(getRandomInputGenerator(
+          seed, type->childAt(i), nullRatio, mapKeys, maxContainerSize));
+    }
+    generator = std::make_unique<RandomInputGenerator<RowType>>(
+        seed, type, std::move(children), nullRatio);
   }
   return generator;
 }
