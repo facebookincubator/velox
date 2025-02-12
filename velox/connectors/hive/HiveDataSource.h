@@ -161,7 +161,7 @@ class HiveDataSource : public DataSource {
       subfields_;
   common::SubfieldFilters filters_;
   std::shared_ptr<common::MetadataFilter> metadataFilter_;
-  std::unique_ptr<exec::ExprSet> remainingFilterExprSet_;
+  std::shared_ptr<exec::ExprSet> remainingFilterExprSet_;
   RowVectorPtr emptyOutput_;
   dwio::common::RuntimeStatistics runtimeStats_;
   std::atomic<uint64_t> totalRemainingFilterTime_{0};

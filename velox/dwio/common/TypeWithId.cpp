@@ -78,6 +78,7 @@ std::unique_ptr<TypeWithId> TypeWithId::create(
   uint32_t next = 1;
   std::vector<std::unique_ptr<TypeWithId>> children(type->size());
   for (int i = 0, size = type->size(); i < size; ++i) {
+    // There is no guarantee that the spec contains
     auto* childSpec = spec.childByName(type->nameOf(i));
     if (childSpec && !childSpec->isConstant()) {
       children[i] = create(type->childAt(i), next, i);
