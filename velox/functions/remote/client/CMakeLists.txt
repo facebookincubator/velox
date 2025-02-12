@@ -16,11 +16,17 @@ velox_add_library(velox_functions_remote_thrift_client ThriftClient.cpp)
 velox_link_libraries(velox_functions_remote_thrift_client
                      PUBLIC remote_function_thrift FBThrift::thriftcpp2)
 
+velox_add_library(velox_functions_remote_rest_client RestClient.cpp)
+velox_link_libraries(velox_functions_remote_rest_client Folly::folly cpr::cpr)
+
 velox_add_library(velox_functions_remote Remote.cpp)
 velox_link_libraries(
   velox_functions_remote
   PUBLIC velox_expression
+         velox_exec
+         velox_presto_serializer
          velox_functions_remote_thrift_client
+         velox_functions_remote_rest_client
          velox_functions_remote_get_serde
          velox_type_fbhive
          Folly::folly)
