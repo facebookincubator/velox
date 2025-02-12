@@ -355,6 +355,9 @@ RowVectorPtr CudfHashAggregation::getOutput() {
 
 void CudfHashAggregation::noMoreInput() {
   Operator::noMoreInput();
+  if (inputs_.empty()) {
+    finished_ = true;
+  }
 }
 
 bool CudfHashAggregation::isFinished() {
