@@ -201,9 +201,9 @@ void SortedAggregations::initializeNewGroups(
     char** groups,
     folly::Range<const vector_size_t*> indices) {
   for (auto i : indices) {
-    groups[i][nullByte_] |= nullMask_;
+    groups[i][nullByte_] = static_cast<uint8_t>(groups[i][nullByte_]) | nullMask_;
     new (groups[i] + offset_) RowPointers();
-    groups[i][initializedByte_] |= initializedMask_;
+    groups[i][initializedByte_] = static_cast<uint8_t>(groups[i][initializedByte_]) | initializedMask_;
   }
 
   for (const auto& [sortingSpec, aggregates] : aggregates_) {

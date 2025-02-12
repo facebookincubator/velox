@@ -511,14 +511,14 @@ class XxHash64 final {
 
   static uint64_t hashInt32(const int32_t input, uint64_t seed) {
     int64_t hash = seed + PRIME64_5 + 4L;
-    hash ^= static_cast<int64_t>((input & 0xFFFFFFFFL) * PRIME64_1);
+    hash ^= static_cast<int64_t>((static_cast<uint64_t>(input) & static_cast<uint64_t>(0xFFFFFFFFL)) * PRIME64_1);
     hash = bits::rotateLeft64(hash, 23) * PRIME64_2 + PRIME64_3;
     return fmix(hash);
   }
 
   static uint64_t hashInt64(int64_t input, uint64_t seed) {
     int64_t hash = seed + PRIME64_5 + 8L;
-    hash ^= bits::rotateLeft64(input * PRIME64_2, 31) * PRIME64_1;
+    hash = static_cast<uint64_t>(hash) ^ bits::rotateLeft64(input * PRIME64_2, 31) * PRIME64_1;
     hash = bits::rotateLeft64(hash, 27) * PRIME64_1 + PRIME64_4;
     return fmix(hash);
   }
@@ -541,7 +541,7 @@ class XxHash64 final {
 
     uint64_t hash = hashBytesByWords(input, seed);
     uint32_t length = input.size();
-    auto offset = i + (length & -8);
+    auto offset = i + (length & ~7u);
     if (offset + 4L <= end) {
       hash ^= (*reinterpret_cast<const uint64_t*>(offset) & 0xFFFFFFFFL) *
           PRIME64_1;

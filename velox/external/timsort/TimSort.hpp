@@ -183,7 +183,7 @@ class TimSort {
 
     diff_t r = 0;
     while (n >= 2 * MIN_MERGE) {
-      r |= (n & 1);
+      r |= (static_cast<uint32_t>(n) & 1u);
       n >>= 1;
     }
     return n + r;

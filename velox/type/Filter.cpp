@@ -853,9 +853,9 @@ bool BigintValuesUsingHashTable::testInt64(int64_t value) const {
   if (value < min_ || value > max_) {
     return false;
   }
-  uint32_t pos = (value * M) & sizeMask_;
+  uint32_t pos = (value * M) & static_cast<uint32_t>(sizeMask_);
   for (auto i = pos; i <= pos + sizeMask_; i++) {
-    int32_t idx = i & sizeMask_;
+    int32_t idx = i & static_cast<uint32_t>(sizeMask_);
     int64_t l = hashTable_[idx];
     if (l == kEmptyMarker) {
       return false;
@@ -882,7 +882,7 @@ xsimd::batch_bool<int64_t> BigintValuesUsingHashTable::testValues(
   auto indices = simd::reinterpretBatch<int64_t>(
       simd::reinterpretBatch<uint64_t>(x) * M & sizeMask_);
   auto data =
-      simd::maskGather(allEmpty, ~outOfRange, hashTable_.data(), indices);
+      simd::maskGather(allEmpty, ~static_cast<uint64_t>(outOfRange), hashTable_.data(), indices);
   // The lanes with kEmptyMarker missed, the lanes matching x hit and the other
   // lanes must check next positions.
 
@@ -911,11 +911,11 @@ xsimd::batch_bool<int64_t> BigintValuesUsingHashTable::testValues(
       auto line = xsimd::load_unaligned(hashTable_.data() + index);
 
       if (simd::toBitMask(line == allValue)) {
-        resultBits |= 1 << lane;
+        resultBits = static_cast<uint32_t>(resultBits) | (1u << lane);
         break;
       }
       if (simd::toBitMask(line == allEmpty)) {
-        resultBits &= ~(1 << lane);
+        resultBits = static_cast<uint32_t>(resultBits) & ~(1u << lane);
         break;
       }
       index += line.size;
@@ -935,7 +935,7 @@ xsimd::batch_bool<int32_t> BigintValuesUsingHashTable::testValues(
   auto first = simd::toBitMask(testValues(simd::getHalf<int64_t, 0>(x)));
   auto second = simd::toBitMask(testValues(simd::getHalf<int64_t, 1>(x)));
   return simd::fromBitMask<int32_t>(
-      first | (second << xsimd::batch<int64_t>::size));
+      static_cast<uint32_t>(first) | (static_cast<uint32_t>(second) << xsimd::batch<int64_t>::size));
 }
 
 bool BigintValuesUsingHashTable::testInt64Range(

@@ -1127,7 +1127,7 @@ bool isAllSameFlat<TypeKind::BOOLEAN>(
   auto* bits = values->as<uint64_t>();
   // Check the all true and all false separately. Easier for compiler if the
   // last argument is constant.
-  if ((bits[0] & 1) == 1) {
+  if ((bits[0] & 1ULL) == 1) {
     return bits ::isAllSet(bits, 0, size, true);
   }
   return bits ::isAllSet(bits, 0, size, false);

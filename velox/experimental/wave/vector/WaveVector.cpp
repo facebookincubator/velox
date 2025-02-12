@@ -101,7 +101,7 @@ void WaveVector::toOperand(Operand* operand) const {
     return;
   }
   if (encoding_ == VectorEncoding::Simple::FLAT) {
-    operand->indexMask = ~0;
+    operand->indexMask = ~0u;
     operand->base = values_->as<int64_t>();
     operand->indices = nullptr;
   } else {

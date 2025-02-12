@@ -487,7 +487,7 @@ void VectorHasher::lookupIdsRangeSimd(
         uint64_t outOfRange =
             simd::toBitMask(lower > values) | simd::toBitMask(values > upper);
         if (outOfRange) {
-          bits[index / 64] &= ~(outOfRange << (index & 63));
+          bits[index / 64] &= ~(outOfRange << (static_cast<uint64_t>(index) & 63UL));
         }
         if (outOfRange != bits::lowMask(xsimd::batch<T>::size)) {
           if constexpr (sizeof(T) == 8) {

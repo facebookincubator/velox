@@ -125,11 +125,11 @@ void mk_sparse(DSS_HUGE i, DSS_HUGE* ok, long seq) {
   long low_bits;
 
   *ok = i;
-  low_bits = static_cast<long>(i & ((1 << SPARSE_KEEP) - 1));
-  *ok = *ok >> SPARSE_KEEP;
-  *ok = *ok << SPARSE_BITS;
+  low_bits = static_cast<long>(static_cast<uint64_t>(i) & static_cast<uint64_t>((1UL << SPARSE_KEEP) - 1));
+  *ok = static_cast<uint64_t>(*ok) >> SPARSE_KEEP;
+  *ok = static_cast<uint64_t>(*ok) << SPARSE_BITS;
   *ok += seq;
-  *ok = *ok << SPARSE_KEEP;
+  *ok = static_cast<uint64_t>(*ok) << SPARSE_KEEP;
   *ok += low_bits;
 
   return;

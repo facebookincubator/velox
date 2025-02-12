@@ -54,7 +54,7 @@ class BitwiseXorAggregate : public BitwiseAggregateBase<T> {
         args[0],
         [](T& result, T value) { result ^= value; },
         [](T& result, T value, int n) {
-          if ((n & 1) == 1) {
+          if ((static_cast<uint32_t>(n) & 1u) == 1) {
             result ^= value;
           }
         },

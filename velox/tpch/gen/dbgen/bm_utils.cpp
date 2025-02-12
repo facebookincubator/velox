@@ -134,8 +134,8 @@ void tpch_a_rnd(int min, int max, seed_t* seed, char* dest) {
   for (i = 0; i < len; i++) {
     if (i % 5 == 0)
       RANDOM(char_int, 0, MAX_LONG, seed);
-    *(dest + i) = alpha_num[char_int & 077];
-    char_int >>= 6;
+    *(dest + i) = alpha_num[static_cast<uint64_t>(char_int) & static_cast<uint64_t>(077)];
+    char_int = static_cast<uint64_t>(char_int) >> 6;
   }
   *(dest + len) = '\0';
   return;

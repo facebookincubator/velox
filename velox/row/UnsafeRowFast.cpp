@@ -368,7 +368,7 @@ int32_t UnsafeRowFast::serializeAsArray(
             offset + i, buffer + variableWidthOffset);
 
         // Write size and offset.
-        uint64_t sizeAndOffset = variableWidthOffset << 32 | serializedBytes;
+        uint64_t sizeAndOffset = (static_cast<uint64_t>(variableWidthOffset) << 32) | static_cast<uint64_t>(serializedBytes);
         reinterpret_cast<uint64_t*>(buffer + fixedWidthOffset)[i] =
             sizeAndOffset;
 
@@ -416,7 +416,7 @@ int32_t UnsafeRowFast::serializeRow(vector_size_t index, char* buffer) const {
       auto size = child.serializeVariableWidth(
           childIndex, buffer + variableWidthOffset);
       // Write size and offset.
-      uint64_t sizeAndOffset = variableWidthOffset << 32 | size;
+      uint64_t sizeAndOffset = static_cast<uint64_t>(variableWidthOffset) << 32 | static_cast<uint64_t>(size);
       reinterpret_cast<uint64_t*>(buffer + rowNullBytes_)[i] = sizeAndOffset;
 
       variableWidthOffset += alignBytes(size);
