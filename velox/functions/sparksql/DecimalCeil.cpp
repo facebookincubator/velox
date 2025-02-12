@@ -20,6 +20,8 @@
 namespace facebook::velox::functions::sparksql {
 namespace {
 
+/// Ceil function to round up a decimal value of type decimal(p, s) to
+/// decimal(min(38, p - s + min(1, s)), 0).
 template <typename TExec>
 struct DecimalCeilFunction {
   VELOX_DEFINE_FUNCTION_TYPES(TExec);
