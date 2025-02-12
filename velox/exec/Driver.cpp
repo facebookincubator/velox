@@ -566,7 +566,6 @@ StopReason Driver::runInternal(
               curOperatorId_,
               kOpMethodIsBlocked);
         });
-
         if (blockingReason_ != BlockingReason::kNotBlocked) {
           return blockDriver(self, i, std::move(future), blockingState, guard);
         }
@@ -574,7 +573,7 @@ StopReason Driver::runInternal(
         if (i < numOperators - 1) {
           Operator* nextOp = operators_[i + 1].get();
 
-          withDeltaCpuWallTimer(op, &OperatorStats::isBlockedTiming, [&]() {
+          withDeltaCpuWallTimer(nextOp, &OperatorStats::isBlockedTiming, [&]() {
             CALL_OPERATOR(
                 blockingReason_ = nextOp->isBlocked(&future),
                 nextOp,
@@ -1040,11 +1039,12 @@ void Driver::withDeltaCpuWallTimer(
   // If 'trackOperatorCpuUsage_' is true, create and initialize the timer object
   // to track cpu and wall time of the opFunction.
   if (!trackOperatorCpuUsage_) {
-    return opFunction();
+    opFunction();
+    return;
   }
 
   // The delta CpuWallTiming object would be recorded to the corresponding
-  // opTimingMember upon destruction of the timer when withDeltaCpuWallTimer
+  // 'opTimingMember' upon destruction of the timer when withDeltaCpuWallTimer
   // ends. The timer is created on the stack to avoid heap allocation
   auto f = [op, opTimingMember, this](const CpuWallTiming& elapsedTime) {
     auto elapsedSelfTime = processLazyIoStats(*op, elapsedTime);
