@@ -15,11 +15,18 @@
 find_library(ARROW_LIB libarrow.a)
 find_library(ARROW_TESTING_LIB libarrow_testing.a)
 if("${ARROW_LIB}" STREQUAL "ARROW_LIB-NOTFOUND"
-   # OR "${PARQUET_LIB}" STREQUAL "PARQUET_LIB-NOTFOUND"
    OR "${ARROW_TESTING_LIB}" STREQUAL "ARROW_TESTING_LIB-NOTFOUND")
   set(Arrow_FOUND false)
   return()
 endif()
+find_package(Thrift)
+if(NOT Thrift_FOUND)
+  # Requires building arrow from source with thrift bundled.
+  set(Arrow_FOUND false)
+  return()
+endif()
+add_library(thrift ALIAS thrift::thrift)
+
 set(Arrow_FOUND true)
 
 # Only add the libraries once.
