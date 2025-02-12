@@ -22,6 +22,8 @@
 #include <iostream>
 #include <numeric>
 
+#include "folly/String.h"
+
 #include "velox/common/base/BitUtil.h"
 #include "velox/common/memory/Memory.h"
 

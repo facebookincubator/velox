@@ -16,6 +16,8 @@
 
 #include "velox/common/base/SkewedPartitionBalancer.h"
 
+#include <unordered_set>
+
 #include "velox/common/testutil/TestValue.h"
 
 using facebook::velox::common::testutil::TestValue;

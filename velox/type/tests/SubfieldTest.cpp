@@ -17,6 +17,8 @@
 #include <gtest/gtest.h>
 #include "velox/type/Tokenizer.h"
 
+#include <unordered_set>
+
 using namespace facebook::velox::common;
 
 std::vector<std::unique_ptr<Subfield::PathElement>> tokenize(
