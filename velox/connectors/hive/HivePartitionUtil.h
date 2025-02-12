@@ -21,6 +21,7 @@ namespace facebook::velox::connector::hive {
 
 std::vector<std::pair<std::string, std::string>> extractPartitionKeyValues(
     const RowVectorPtr& partitionsVector,
-    vector_size_t row);
+    vector_size_t row,
+    const tz::TimeZone* sessionTimezone = nullptr);
 
 } // namespace facebook::velox::connector::hive

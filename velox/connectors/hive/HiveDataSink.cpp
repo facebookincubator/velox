@@ -383,7 +383,10 @@ HiveDataSink::HiveDataSink(
                     maxOpenWriters_,
                     connectorQueryCtx_->memoryPool(),
                     hiveConfig_->isPartitionPathAsLowerCase(
-                        connectorQueryCtx->sessionProperties()))
+                        connectorQueryCtx->sessionProperties()),
+                    connectorQueryCtx_->sessionTimezone().empty()
+                        ? nullptr
+                        : tz::locateZone(connectorQueryCtx_->sessionTimezone()))
               : nullptr),
       dataChannels_(
           getNonPartitionChannels(partitionChannels_, inputType_->size())),
