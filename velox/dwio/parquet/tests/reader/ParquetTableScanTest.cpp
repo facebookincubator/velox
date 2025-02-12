@@ -1183,6 +1183,156 @@ TEST_F(ParquetTableScanTest, deltaByteArray) {
   assertSelect({"a"}, "SELECT a from expected");
 }
 
+TEST_F(ParquetTableScanTest, booleanRle) {
+  WriterOptions options;
+  options.enableDictionary = false;
+  options.encoding = facebook::velox::parquet::arrow::Encoding::RLE;
+  options.useParquetDataPageV2 = true;
+
+  auto vector = makeRowVector(
+      {"c0", "c1", "c2", "c3", "c4", "c5"},
+      {
+          makeNullableFlatVector<bool>(
+              {true,
+               std::nullopt,
+               std::nullopt,
+               std::nullopt,
+               std::nullopt,
+               std::nullopt,
+               std::nullopt,
+               std::nullopt,
+               std::nullopt,
+               std::nullopt,
+               std::nullopt,
+               std::nullopt,
+               std::nullopt,
+               std::nullopt,
+               std::nullopt,
+               std::nullopt,
+               std::nullopt,
+               std::nullopt}),
+          makeNullableFlatVector<bool>(
+              {false,
+               std::nullopt,
+               std::nullopt,
+               std::nullopt,
+               std::nullopt,
+               std::nullopt,
+               std::nullopt,
+               std::nullopt,
+               std::nullopt,
+               std::nullopt,
+               std::nullopt,
+               std::nullopt,
+               std::nullopt,
+               std::nullopt,
+               std::nullopt,
+               std::nullopt,
+               std::nullopt,
+               std::nullopt}),
+          makeNullableFlatVector<bool>(
+              {std::nullopt,
+               std::nullopt,
+               std::nullopt,
+               std::nullopt,
+               std::nullopt,
+               std::nullopt,
+               std::nullopt,
+               std::nullopt,
+               std::nullopt,
+               std::nullopt,
+               std::nullopt,
+               std::nullopt,
+               std::nullopt,
+               std::nullopt,
+               std::nullopt,
+               std::nullopt,
+               std::nullopt,
+               std::nullopt}),
+          makeFlatVector<bool>(std::vector<bool>{
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true}),
+          makeFlatVector<bool>(std::vector<bool>{
+              false,
+              false,
+              false,
+              false,
+              false,
+              false,
+              false,
+              false,
+              false,
+              false,
+              false,
+              false,
+              false,
+              false,
+              false,
+              false,
+              false,
+              false}),
+          makeNullableFlatVector<bool>(
+              {false,
+               false,
+               false,
+               std::nullopt,
+               std::nullopt,
+               true,
+               true,
+               true,
+               true,
+               true,
+               false,
+               true,
+               std::nullopt,
+               false,
+               true,
+               std::nullopt,
+               std::nullopt,
+               false}),
+      });
+  auto schema = asRowType(vector->type());
+  auto file = TempFilePath::create();
+  writeToParquetFile(file->getPath(), {vector}, options);
+  loadData(file->getPath(), schema, vector);
+
+  std::shared_ptr<connector::ColumnHandle> c0 = makeColumnHandle(
+      "c0", BOOLEAN(), BOOLEAN(), {}, HiveColumnHandle::ColumnType::kRegular);
+  std::shared_ptr<connector::ColumnHandle> c1 = makeColumnHandle(
+      "c1", BOOLEAN(), BOOLEAN(), {}, HiveColumnHandle::ColumnType::kRegular);
+  std::shared_ptr<connector::ColumnHandle> c2 = makeColumnHandle(
+      "c2", BOOLEAN(), BOOLEAN(), {}, HiveColumnHandle::ColumnType::kRegular);
+  std::shared_ptr<connector::ColumnHandle> c3 = makeColumnHandle(
+      "c2", BOOLEAN(), BOOLEAN(), {}, HiveColumnHandle::ColumnType::kRegular);
+  std::shared_ptr<connector::ColumnHandle> c4 = makeColumnHandle(
+      "c3", BOOLEAN(), BOOLEAN(), {}, HiveColumnHandle::ColumnType::kRegular);
+  std::shared_ptr<connector::ColumnHandle> c5 = makeColumnHandle(
+      "c4", BOOLEAN(), BOOLEAN(), {}, HiveColumnHandle::ColumnType::kRegular);
+
+  assertSelect({"c0"}, "SELECT c0 FROM tmp");
+  assertSelect({"c1"}, "SELECT c1 FROM tmp");
+  assertSelect({"c2"}, "SELECT c2 FROM tmp");
+  assertSelect({"c3"}, "SELECT c3 FROM tmp");
+  assertSelect({"c4"}, "SELECT c4 FROM tmp");
+  assertSelect({"c5"}, "SELECT c5 FROM tmp");
+}
+
 int main(int argc, char** argv) {
   testing::InitGoogleTest(&argc, argv);
   folly::Init init{&argc, &argv, false};
