@@ -312,6 +312,27 @@ TEST_F(DateTimeFunctionsTest, unixTimestampCustomFormat) {
       unixTimestamp("2022-12-12 asd 07:45:31", "yyyy-MM-dd 'asd HH:mm:ss"));
 }
 
+TEST_F(DateTimeFunctionsTest, unixTimestampTimestampInput) {
+  const auto unixTimestamp = [&](std::optional<Timestamp> timestamp) {
+    return evaluateOnce<int64_t>("unix_timestamp(c0)", timestamp);
+  };
+  EXPECT_EQ(0, unixTimestamp(Timestamp(0, 0)));
+  EXPECT_EQ(1, unixTimestamp(Timestamp(1, 990)));
+  EXPECT_EQ(61, unixTimestamp(Timestamp(61, 0)));
+}
+
+TEST_F(DateTimeFunctionsTest, unixTimestampDateInput) {
+  const auto unixTimestamp = [&](std::optional<int32_t> date) {
+    return evaluateOnce<int64_t>("unix_timestamp(c0)", {DATE()}, date);
+  };
+  EXPECT_EQ(0, unixTimestamp(parseDate("1970-01-01")));
+  EXPECT_EQ(1727740800, unixTimestamp(parseDate("2024-10-01")));
+  VELOX_ASSERT_THROW(
+      unixTimestamp(kMax), "Timepoint is outside of supported year range");
+  setQueryTimeZone("America/Los_Angeles");
+  EXPECT_EQ(1727766000, unixTimestamp(parseDate("2024-10-01")));
+}
+
 // unix_timestamp and to_unix_timestamp are aliases.
 TEST_F(DateTimeFunctionsTest, toUnixTimestamp) {
   std::optional<StringView> dateStr = "1970-01-01 08:32:11"_sv;

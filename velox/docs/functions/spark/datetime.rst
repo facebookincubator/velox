@@ -257,6 +257,16 @@ These functions support TIMESTAMP and DATE input types.
 
     Alias for ``unix_timestamp(string, format) -> integer``.
 
+.. spark:function:: to_unix_timestamp(date) -> integer
+   :noindex:
+
+    Alias for ``unix_timestamp(date) -> integer``.
+
+.. spark:function:: to_unix_timestamp(timestamp) -> integer
+   :noindex:
+
+    Alias for ``unix_timestamp(timestamp) -> integer``.
+
 .. spark:function:: to_utc_timestamp(timestamp, string) -> timestamp
 
     Returns the timestamp value from the given timezone to UTC timezone. ::
@@ -310,6 +320,14 @@ These functions support TIMESTAMP and DATE input types.
     <https://spark.apache.org/docs/latest/sql-ref-datetime-pattern.html>`_.
     Returns null if ``string`` does not match ``format`` or if ``format``
     is invalid.
+
+.. spark:function:: unix_timestamp(date) -> integer
+
+    Returns the UNIX timestamp of time specified by ``date``.
+
+.. spark:function:: unix_timestamp(timestamp) -> integer
+
+    Returns the UNIX timestamp of time specified by ``timestamp``.
 
 .. function:: week_of_year(x) -> integer
 
