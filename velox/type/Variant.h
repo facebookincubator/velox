@@ -467,6 +467,8 @@ class variant {
     return toJsonUnsafe();
   }
 
+  std::string toString(const TypePtr& type) const;
+
   folly::dynamic serialize() const;
 
   static variant create(const folly::dynamic&);
