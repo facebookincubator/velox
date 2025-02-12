@@ -96,7 +96,7 @@ a double would look like this:
 
 .. code-block:: c++
 
-    void call(arg_type<double>& result, const arg_type<int32_t>& a, const arg_type<double>& b)
+    void call(out_type<double>& result, const arg_type<int32_t>& a, const arg_type<double>& b)
 
 Which is equivalent to
 
