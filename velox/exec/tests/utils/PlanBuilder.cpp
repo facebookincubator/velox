@@ -74,7 +74,8 @@ PlanBuilder& PlanBuilder::tableScan(
     const RowTypePtr& dataColumns,
     const std::unordered_map<
         std::string,
-        std::shared_ptr<connector::ColumnHandle>>& assignments) {
+        std::shared_ptr<connector::ColumnHandle>>& assignments,
+    const std::unordered_set<std::string>& partitionKeys) {
   return TableScanBuilder(*this)
       .outputType(outputType)
       .assignments(assignments)
@@ -82,6 +83,7 @@ PlanBuilder& PlanBuilder::tableScan(
       .remainingFilter(remainingFilter)
       .dataColumns(dataColumns)
       .assignments(assignments)
+      .partitionKeys(partitionKeys)
       .endTableScan();
 }
 
@@ -170,13 +172,25 @@ core::PlanNodePtr PlanBuilder::TableScanBuilder::build(core::PlanNodeId id) {
     }
 
     if (!hasAssignments) {
+      auto columnType = HiveColumnHandle::ColumnType::kRegular;
+      if (partitionKeys_.count(name) > 0) {
+        columnType = HiveColumnHandle::ColumnType::kPartitionKey;
+      }
+      HiveColumnHandle::ColumnParseParameters columnParseParameters;
+      if (tableFormat_ == "iceberg" && type->isDate()) {
+        columnParseParameters.partitionDateValueFormat =
+            HiveColumnHandle::ColumnParseParameters::kDaysSinceEpoch;
+      }
+      std::vector<common::Subfield> requiredSubFields;
       assignments_.insert(
           {name,
            std::make_shared<HiveColumnHandle>(
                hiveColumnName,
-               HiveColumnHandle::ColumnType::kRegular,
+               columnType,
                type,
-               type)});
+               type,
+               std::move(requiredSubFields),
+               columnParseParameters)});
     }
   }
 

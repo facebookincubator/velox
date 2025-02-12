@@ -131,6 +131,7 @@ class PlanBuilder {
   /// you define the output types only. See 'missingColumns' test in
   /// 'TableScanTest'.
   /// @param assignments Optional ColumnHandles.
+  /// @param partitionKeys Optional partition keys.
   PlanBuilder& tableScan(
       const RowTypePtr& outputType,
       const std::vector<std::string>& subfieldFilters = {},
@@ -138,7 +139,8 @@ class PlanBuilder {
       const RowTypePtr& dataColumns = nullptr,
       const std::unordered_map<
           std::string,
-          std::shared_ptr<connector::ColumnHandle>>& assignments = {});
+          std::shared_ptr<connector::ColumnHandle>>& assignments = {},
+      const std::unordered_set<std::string>& partitionKeys = {});
 
   /// Add a TableScanNode to scan a Hive table.
   ///
@@ -277,6 +279,17 @@ class PlanBuilder {
       return *this;
     }
 
+    TableScanBuilder& partitionKeys(
+        std::unordered_set<std::string> partitionKeys) {
+      partitionKeys_ = std::move(partitionKeys);
+      return *this;
+    }
+
+    TableScanBuilder& tableFormat(std::string tableFormat) {
+      tableFormat_ = tableFormat;
+      return *this;
+    }
+
     /// Stop the TableScanBuilder.
     PlanBuilder& endTableScan() {
       planBuilder_.planNode_ = build(planBuilder_.nextPlanNodeId());
@@ -298,6 +311,8 @@ class PlanBuilder {
     std::shared_ptr<connector::ConnectorTableHandle> tableHandle_;
     std::unordered_map<std::string, std::shared_ptr<connector::ColumnHandle>>
         assignments_;
+    std::unordered_set<std::string> partitionKeys_;
+    std::string tableFormat_;
   };
 
   /// Start a TableScanBuilder.
