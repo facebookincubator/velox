@@ -115,12 +115,13 @@ std::optional<RowVectorPtr> ParquetDataSource::next(
     }
 
     if (readTables.size()) {
-      auto readTable = concatenateTables(std::move(readTables));
+      auto stream = cudf::get_default_stream();
+      auto readTable = concatenateTables(std::move(readTables), stream);
       if (cudfTable_) {
         // Concatenate the current view ahead of the read table.
         auto tableViews = std::vector<cudf::table_view>{
             currentCudfTableView_, readTable->view()};
-        cudfTable_ = cudf::concatenate(tableViews, cudf::get_default_stream());
+        cudfTable_ = cudf::concatenate(tableViews, stream);
       } else {
         cudfTable_ = std::move(readTable);
       }

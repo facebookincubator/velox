@@ -164,7 +164,6 @@ void CudfHashJoinBuild::noMoreInput() {
   // Release input data after synchronizing
   stream.synchronize();
   input_streams.clear();
-  cudf_table_views.clear();
   cudf_tables.clear();
 
   // Release input data
