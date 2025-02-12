@@ -354,6 +354,7 @@ class HiveIcebergTest : public HiveConnectorTestBase {
         fileSize,
         partitionKeys,
         std::nullopt,
+        std::nullopt,
         customSplitInfo,
         nullptr,
         /*cacheable=*/true,

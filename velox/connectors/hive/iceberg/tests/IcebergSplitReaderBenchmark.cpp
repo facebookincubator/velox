@@ -113,6 +113,7 @@ IcebergSplitReaderBenchmark::makeIcebergSplit(
       fileSize,
       partitionKeys,
       std::nullopt,
+      std::nullopt,
       customSplitInfo,
       nullptr,
       /*cacheable=*/true,
