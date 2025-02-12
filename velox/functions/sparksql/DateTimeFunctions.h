@@ -135,11 +135,26 @@ struct UnixDateFunction {
 
 template <typename T>
 struct UnixTimestampFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
   // unix_timestamp();
   // If no parameters, return the current unix timestamp without adjusting
   // timezones.
   FOLLY_ALWAYS_INLINE void call(int64_t& result) {
     result = Timestamp::now().getSeconds();
+  }
+
+  FOLLY_ALWAYS_INLINE void call(
+      int64_t& result,
+      const arg_type<Timestamp>& timestamp,
+      const arg_type<Varchar>& /*format*/) {
+    result = timestamp.getSeconds();
+  }
+
+  FOLLY_ALWAYS_INLINE void call(
+      int64_t& result,
+      const arg_type<Date>& date,
+      const arg_type<Varchar>& /*format*/) {
+    result = static_cast<int64_t>(date) * kSecondsInDay;
   }
 };
 

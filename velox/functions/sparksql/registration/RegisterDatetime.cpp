@@ -33,6 +33,10 @@ void registerDatetimeFunctions(const std::string& prefix) {
   registerFunction<UnixSecondsFunction, int64_t, Timestamp>(
       {prefix + "unix_seconds"});
   registerFunction<UnixTimestampFunction, int64_t>({prefix + "unix_timestamp"});
+  registerFunction<UnixTimestampFunction, int64_t, Timestamp, Varchar>(
+      {prefix + "unix_timestamp", prefix + "to_unix_timestamp"});
+  registerFunction<UnixTimestampFunction, int64_t, Date, Varchar>(
+      {prefix + "unix_timestamp", prefix + "to_unix_timestamp"});
   registerFunction<UnixTimestampParseFunction, int64_t, Varchar>(
       {prefix + "unix_timestamp", prefix + "to_unix_timestamp"});
   registerFunction<
