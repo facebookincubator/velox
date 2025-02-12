@@ -280,10 +280,12 @@ RowVectorPtr CudfHashJoinProbe::getOutput() {
     }
   }
 
+  auto const probe_table_num_columns = tbl->num_columns();
   auto probe_key_indices = std::vector<cudf::size_type>(probeKeys.size());
   for (size_t i = 0; i < probe_key_indices.size(); i++) {
     probe_key_indices[i] = static_cast<cudf::size_type>(
         probeType->getChildIdx(probeKeys[i]->name()));
+    VELOX_CHECK_LT(probe_key_indices[i], probe_table_num_columns);
   }
 
   // TODO pass the input pool !!!
