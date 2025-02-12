@@ -288,6 +288,7 @@ class FlatMapColumnWriter : public BaseColumnWriter {
   uint64_t writeRow(const VectorPtr& slice, const common::Ranges& ranges);
 
   void clearNodes();
+  StringView cacheStringKey(const StringView& key);
 
   // Map of value writers for each key in the dictionary. Needs referential
   // stability because a member variable is captured by reference by lambda
@@ -314,6 +315,9 @@ class FlatMapColumnWriter : public BaseColumnWriter {
   // Stores column keys if writing with RowVector input
   std::vector<KeyType> structKeys_;
   const bool collectMapStats_;
+
+  // Stores data backing non-compact string keys referenced in valueWriters_
+  std::vector<BufferPtr> cachedStringKeys_;
 };
 
 template <>

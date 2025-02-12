@@ -173,6 +173,7 @@ void FlatMapColumnWriter<K>::reset() {
   BaseColumnWriter::reset();
   clearNodes();
   valueWriters_.clear();
+  cachedStringKeys_.clear();
   rowsInStrides_.clear();
   rowsInCurrentStride_ = 0;
 }
@@ -187,6 +188,22 @@ KeyInfo getKeyInfo(StringView key) {
   KeyInfo keyInfo;
   keyInfo.set_byteskey(key.data(), key.size());
   return keyInfo;
+}
+
+template <TypeKind K>
+StringView FlatMapColumnWriter<K>::cacheStringKey(const StringView& key) {
+  if (key.isInline()) {
+    return key;
+  }
+
+  const auto size = key.size();
+  BufferPtr buf = AlignedBuffer::allocate<char>(
+      size, &context_.getMemoryPool(MemoryUsageCategory::GENERAL));
+  auto data = buf->asMutable<char>();
+  memcpy(data, key.data(), size);
+
+  cachedStringKeys_.push_back(buf);
+  return StringView{data, static_cast<int32_t>(size)};
 }
 
 template <TypeKind K>
@@ -207,6 +224,9 @@ ValueWriter& FlatMapColumnWriter<K>::getValueWriter(
   }
 
   auto keyInfo = getKeyInfo(key);
+  if constexpr (std::is_same_v<KeyType, StringView>) {
+    key = cacheStringKey(key);
+  }
 
   it = valueWriters_
            .emplace(

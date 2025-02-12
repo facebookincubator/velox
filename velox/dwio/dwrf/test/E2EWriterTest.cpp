@@ -33,6 +33,7 @@
 #include "velox/type/fbhive/HiveTypeParser.h"
 #include "velox/vector/fuzzer/VectorFuzzer.h"
 #include "velox/vector/tests/utils/VectorMaker.h"
+#include "velox/vector/tests/utils/VectorTestBase.h"
 
 using namespace ::testing;
 using namespace facebook::velox::common::testutil;
@@ -49,7 +50,7 @@ using folly::Random;
 constexpr uint64_t kSizeMB = 1024UL * 1024UL;
 
 namespace {
-class E2EWriterTest : public testing::Test {
+class E2EWriterTest : public testing::Test, public VectorTestBase {
  protected:
   static void SetUpTestCase() {
     TestValue::enable();
@@ -846,6 +847,60 @@ TEST_F(E2EWriterTest, FlatMapConfigNotMapColumn) {
       ">");
 
   VELOX_ASSERT_THROW(testFlatMapConfig(type, {0}, {}), "");
+}
+
+TEST_F(E2EWriterTest, FlatMapNotInlinedStringKeys) {
+  // Ensure that the string keys of the length used in this
+  // test are indeed not inlined.
+  ASSERT_FALSE(
+      StringView{"aaa0123456789012345678901234567890123456789"}.isInline());
+
+  // Ensure that smaller keys are inlined.
+  ASSERT_TRUE(StringView{"small"}.isInline());
+
+  auto type = ROW({"c0"}, {MAP(VARCHAR(), BIGINT())});
+
+  auto config = std::make_shared<dwrf::Config>();
+  config->set(dwrf::Config::FLATTEN_MAP, true);
+  config->set(dwrf::Config::MAP_FLAT_COLS, {0});
+
+  auto sink = std::make_unique<MemorySink>(
+      1024 * 1024, FileSink::Options{.pool = leafPool_.get()});
+  auto sinkPtr = sink.get();
+
+  dwrf::WriterOptions options;
+  options.config = config;
+  options.schema = type;
+  options.memoryPool = rootPool_.get();
+  dwrf::Writer writer{std::move(sink), options};
+
+  // Use scoped string keys to force destruction of not inlined keys.
+  // Writes with not inlined string keys used to fail.
+  for (int i = 0; i < 2; i++) {
+    auto maps = makeMapVector<std::string, int64_t>(
+        {{{"aaa0123456789012345678901234567890123456789", 0}, {"small", 0}},
+         {{"aaa0123456789012345678901234567890123456789", 1}, {"small", 1}}});
+    auto batch = makeRowVector({"c0"}, {maps});
+    writer.write(batch);
+  }
+  writer.close();
+
+  dwio::common::ReaderOptions readerOpts{leafPool_.get()};
+  auto reader = createReader(*sinkPtr, readerOpts);
+  auto rowReader = reader->createRowReader({});
+
+  VectorPtr batch;
+
+  for (int i = 0; i < 2; i++) {
+    auto maps = makeMapVector<std::string, int64_t>(
+        {{{"aaa0123456789012345678901234567890123456789", 0}, {"small", 0}},
+         {{"aaa0123456789012345678901234567890123456789", 1}, {"small", 1}}});
+    auto expectedBatch = makeRowVector({"c0"}, {maps});
+    ASSERT_EQ(rowReader->next(2, batch), 2);
+    assertEqualVectors(batch, expectedBatch);
+  }
+
+  ASSERT_FALSE(rowReader->next(1, batch));
 }
 
 TEST_F(E2EWriterTest, mapStatsSingleStride) {
