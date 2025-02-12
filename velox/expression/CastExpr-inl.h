@@ -286,6 +286,23 @@ void CastExpr::applyCastKernel(
       return;
     }
 
+    if constexpr (
+        (FromKind == TypeKind::DOUBLE || FromKind == TypeKind::REAL) &&
+        ToKind == TypeKind::TIMESTAMP) {
+      const auto castResult =
+          hooks_->castDoubleToTimestamp(static_cast<double>(inputRowValue));
+      if (castResult.hasError()) {
+        if (castResult.error().isUserError()) {
+          setError(castResult.error().message());
+        } else {
+          result->setNull(row, true);
+        }
+      } else {
+        result->set(row, castResult.value());
+      }
+      return;
+    }
+
     // Optimize empty input strings casting by avoiding throwing exceptions.
     if constexpr (
         FromKind == TypeKind::VARCHAR || FromKind == TypeKind::VARBINARY) {
