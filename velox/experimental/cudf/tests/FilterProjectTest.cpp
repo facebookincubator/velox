@@ -129,6 +129,26 @@ class CudfFilterProjectTest : public OperatorTestBase {
     runTest(plan, "SELECT c0 = 1 OR c1 = 2.0 AS result FROM tmp");
   }
 
+  void testYearFunction(const std::vector<RowVectorPtr>& input) {
+    // Create a plan with YEAR function
+    auto plan =
+        PlanBuilder().values(input).project({"YEAR(c2) AS result"}).planNode();
+
+    // Run the test
+    runTest(plan, "SELECT YEAR(c2) AS result FROM tmp");
+  }
+
+  void testLengthFunction(const std::vector<RowVectorPtr>& input) {
+    // Create a plan with LENGTH function
+    auto plan = PlanBuilder()
+                    .values(input)
+                    .project({"LENGTH(c2) AS result"})
+                    .planNode();
+
+    // Run the test
+    runTest(plan, "SELECT LENGTH(c2) AS result FROM tmp");
+  }
+
   void runTest(core::PlanNodePtr planNode, const std::string& duckDbSql) {
     SCOPED_TRACE("run without spilling");
     assertQuery(planNode, duckDbSql);
@@ -206,6 +226,36 @@ TEST_F(CudfFilterProjectTest, orOperation) {
   createDuckDbTable(vectors);
 
   testOrOperation(vectors);
+}
+
+TEST_F(CudfFilterProjectTest, lengthFunction) {
+  vector_size_t batchSize = 1000;
+  auto vectors = makeVectors(rowType_, 2, batchSize);
+  createDuckDbTable(vectors);
+
+  testLengthFunction(vectors);
+}
+
+TEST_F(CudfFilterProjectTest, yearFunction) {
+  // Update row type to use TIMESTAMP directly
+  auto rowType =
+      ROW({{"c0", INTEGER()}, {"c1", DOUBLE()}, {"c2", TIMESTAMP()}});
+
+  vector_size_t batchSize = 1000;
+  auto vectors = makeVectors(rowType, 2, batchSize);
+
+  // Set timestamp values directly
+  for (auto& vector : vectors) {
+    auto timestampVector = vector->childAt(2)->asFlatVector<Timestamp>();
+    for (vector_size_t i = 0; i < batchSize; ++i) {
+      // Set to 2024-03-14 12:34:56
+      Timestamp ts(1710415496, 0); // seconds, nanos
+      timestampVector->set(i, ts);
+    }
+  }
+
+  createDuckDbTable(vectors);
+  testYearFunction(vectors);
 }
 
 } // namespace

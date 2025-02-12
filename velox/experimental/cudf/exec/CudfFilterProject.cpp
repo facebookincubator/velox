@@ -176,6 +176,22 @@ cudf::ast::expression const& create_ast_tree(
     auto const& col_ref =
         tree.push(cudf::ast::column_reference(new_column_index));
     return tree.push(operation{op::CAST_TO_INT64, col_ref});
+  } else if (name == "length") {
+    // ensure expr->inputs()[0] is a field
+    auto fieldExpr = std::dynamic_pointer_cast<velox::exec::FieldReference>(
+        expr->inputs()[0]);
+    VELOX_CHECK_NOT_NULL(fieldExpr, "Expression is not a field");
+    auto dependent_column_index =
+        inputRowSchema->getChildIdx(fieldExpr->name());
+    auto new_column_index =
+        inputRowSchema->size() + precompute_instructions.size();
+    // add this index and precompute instruction to a data structure
+    precompute_instructions.emplace_back(
+        dependent_column_index, "length", new_column_index);
+    // This custom op should be added to input columns.
+    auto const& col_ref =
+        tree.push(cudf::ast::column_reference(new_column_index));
+    return tree.push(operation{op::CAST_TO_INT64, col_ref});
   } else if (
       auto fieldExpr =
           std::dynamic_pointer_cast<velox::exec::FieldReference>(expr)) {
