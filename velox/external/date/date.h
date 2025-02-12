@@ -3970,6 +3970,16 @@ make_time(const std::chrono::duration<Rep, Period>& d)
     return hh_mm_ss<std::chrono::duration<Rep, Period>>(d);
 }
 
+/// Building on macOS using Apple Clang 15.0.0.15000309 (Xcode_15.4) results in
+/// ambiguous symbols (related to std::chrono::duration<long long> type parameter) because
+/// the newer SDK includes a definiton for this overloaded operator when C++20 standard is used.
+/// AppleClang 15.0.0.15000309 (Xcode_15.4) or newer does not need the overloaded definition but
+/// AppleClang 15.0.0.15000100 (Xcode_15.2), for example, does.
+/// With the introduction of AppleClang 1600.0.26.3 the behavior reverts back to the 15.0.0.15000100
+/// or earlier behavior and the function requires the overload again.
+/// This check is for allowing multiple versions AppleClang to build Velox.
+#if !defined(__APPLE__) || \
+    (defined(__APPLE__) && ((__apple_build_version__ < 15000309) || (__apple_build_version__ >= 16000026)))
 template <class CharT, class Traits, class Duration>
 inline
 typename std::enable_if
@@ -3983,6 +3993,7 @@ operator<<(std::basic_ostream<CharT, Traits>& os, const sys_time<Duration>& tp)
     auto const dp = date::floor<days>(tp);
     return os << year_month_day(dp) << ' ' << make_time(tp-dp);
 }
+#endif // !defined(__APPLE__) || (defined(__APPLE__) && ((__apple_build_version__ < 15000309) || (__apple_build_version__ >= 16000026)))
 
 template <class CharT, class Traits>
 inline
