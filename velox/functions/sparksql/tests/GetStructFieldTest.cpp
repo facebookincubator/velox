@@ -29,16 +29,13 @@ class GetStructFieldTest : public SparkFunctionBaseTest {
       const VectorPtr& input,
       int ordinal,
       const VectorPtr& expected) {
-    auto batchSize = expected->size();
-    auto ordinalVector = makeConstant<int32_t>(ordinal, batchSize);
     std::vector<core::TypedExprPtr> inputs = {
         std::make_shared<const core::FieldAccessTypedExpr>(input->type(), "c0"),
-        std::make_shared<const core::FieldAccessTypedExpr>(INTEGER(), "c1")};
+        std::make_shared<core::ConstantTypedExpr>(INTEGER(), variant(ordinal))};
     auto resultType = expected->type();
     auto expr = std::make_shared<const core::CallTypedExpr>(
         resultType, std::move(inputs), "get_struct_field");
-    auto result =
-        evaluate(expr, makeRowVector({"c0", "c1"}, {input, ordinalVector}));
+    auto result = evaluate(expr, makeRowVector({input}));
     ::facebook::velox::test::assertEqualVectors(expected, result);
   }
 };
