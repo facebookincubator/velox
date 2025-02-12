@@ -20,6 +20,7 @@ if(VELOX_ENABLE_S3)
     velox_s3fs
     PRIVATE
     S3FileSystem.cpp
+    S3Counters.cpp
     S3Util.cpp
     S3Config.cpp)
 

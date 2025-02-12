@@ -15,9 +15,11 @@
  */
 
 #include "velox/connectors/hive/storage_adapters/s3fs/S3FileSystem.h"
+#include "velox/common/base/StatsReporter.h"
 #include "velox/common/config/Config.h"
 #include "velox/common/file/File.h"
 #include "velox/connectors/hive/storage_adapters/s3fs/S3Config.h"
+#include "velox/connectors/hive/storage_adapters/s3fs/S3Counters.h"
 #include "velox/connectors/hive/storage_adapters/s3fs/S3Util.h"
 #include "velox/connectors/hive/storage_adapters/s3fs/S3WriteFile.h"
 #include "velox/dwio/common/DataBuffer.h"
@@ -71,6 +73,8 @@ Aws::IOStreamFactory AwsWriteableStreamFactory(void* data, int64_t nbytes) {
   return [=]() { return Aws::New<StringViewStream>("", data, nbytes); };
 }
 
+folly::once_flag s3MetricsFlag;
+
 class S3ReadFile final : public ReadFile {
  public:
   S3ReadFile(std::string_view path, Aws::S3::S3Client* client)
@@ -95,8 +99,12 @@ class S3ReadFile final : public ReadFile {
     Aws::S3::Model::HeadObjectRequest request;
     request.SetBucket(awsString(bucket_));
     request.SetKey(awsString(key_));
-
+    RECORD_METRIC_VALUE(kCounterS3MetadataCalls);
     auto outcome = client_->HeadObject(request);
+    if (!outcome.IsSuccess()) {
+      RECORD_METRIC_VALUE(kCounterS3GetMetadataErrors);
+    }
+    RECORD_METRIC_VALUE(kCounterS3GetMetadataRetries, outcome.GetRetryCount());
     VELOX_CHECK_AWS_OUTCOME(
         outcome, "Failed to get metadata for S3 object", bucket_, key_);
     length_ = outcome.GetResult().GetContentLength();
@@ -184,7 +192,13 @@ class S3ReadFile final : public ReadFile {
     request.SetRange(awsString(ss.str()));
     request.SetResponseStreamFactory(
         AwsWriteableStreamFactory(position, length));
+    RECORD_METRIC_VALUE(kCounterS3ActiveConnections);
     auto outcome = client_->GetObject(request);
+    if (!outcome.IsSuccess()) {
+      RECORD_METRIC_VALUE(kCounterS3GetObjectErrors);
+    }
+    RECORD_METRIC_VALUE(kCounterS3GetObjectRetries, outcome.GetRetryCount());
+    RECORD_METRIC_VALUE(kCounterS3ActiveConnections, -1);
     VELOX_CHECK_AWS_OUTCOME(outcome, "Failed to get S3 object", bucket_, key_);
   }
 
@@ -237,7 +251,12 @@ class S3WriteFile::Impl {
       Aws::S3::Model::HeadObjectRequest request;
       request.SetBucket(awsString(bucket_));
       request.SetKey(awsString(key_));
+      RECORD_METRIC_VALUE(kCounterS3MetadataCalls);
       auto objectMetadata = client_->HeadObject(request);
+      if (!objectMetadata.IsSuccess()) {
+        RECORD_METRIC_VALUE(kCounterS3GetMetadataErrors);
+      }
+      RECORD_METRIC_VALUE(kCounterS3GetObjectRetries, objectMetadata.GetRetryCount());
       VELOX_CHECK(!objectMetadata.IsSuccess(), "S3 object already exists");
     }
 
@@ -305,6 +324,7 @@ class S3WriteFile::Impl {
     if (closed()) {
       return;
     }
+    RECORD_METRIC_VALUE(kCounterS3StartedUploads);
     uploadPart({currentPart_->data(), currentPart_->size()}, true);
     VELOX_CHECK_EQ(uploadState_.partNumber, uploadState_.completedParts.size());
     // Complete the multipart upload.
@@ -318,6 +338,11 @@ class S3WriteFile::Impl {
       request.SetMultipartUpload(std::move(completedUpload));
 
       auto outcome = client_->CompleteMultipartUpload(request);
+      if (outcome.IsSuccess()) {
+        RECORD_METRIC_VALUE(kCounterS3SuccessfulUploads);
+      } else {
+        RECORD_METRIC_VALUE(kCounterS3FailedUploads);
+      }
       VELOX_CHECK_AWS_OUTCOME(
           outcome, "Failed to complete multiple part upload", bucket_, key_);
     }
@@ -594,6 +619,10 @@ class S3FileSystem::Impl {
         Aws::Client::AWSAuthV4Signer::PayloadSigningPolicy::Never,
         s3Config.useVirtualAddressing());
     ++fileSystemCount;
+
+    folly::call_once(s3MetricsFlag, []() {
+      registerS3Metrics();
+    });
   }
 
   ~Impl() {
