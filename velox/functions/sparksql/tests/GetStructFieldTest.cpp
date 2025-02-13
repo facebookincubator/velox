@@ -46,13 +46,13 @@ TEST_F(GetStructFieldTest, simpleType) {
   auto col2 = makeNullableFlatVector<int32_t>({std::nullopt, 12});
   auto data = makeRowVector({col0, col1, col2});
 
-  // Get int field
+  // Get int field.
   testGetStructField(data, 0, col0);
 
-  // Get string field
+  // Get string field.
   testGetStructField(data, 1, col1);
 
-  // Get int field with null
+  // Get int field with null.
   testGetStructField(data, 2, col2);
 }
 
@@ -66,13 +66,13 @@ TEST_F(GetStructFieldTest, complexType) {
        makeFlatVector<std::string>({"a", "b", "c"})});
   auto data = makeRowVector({col0, col1, col2});
 
-  // Get array field
+  // Get array field.
   testGetStructField(data, 0, col0);
 
-  // Get map field
+  // Get map field.
   testGetStructField(data, 1, col1);
 
-  // Get row field
+  // Get row field.
   testGetStructField(data, 2, col2);
 }
 
