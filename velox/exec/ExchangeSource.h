@@ -28,6 +28,7 @@ class ExchangeSource : public std::enable_shared_from_this<ExchangeSource> {
       std::shared_ptr<ExchangeQueue> queue,
       memory::MemoryPool* pool)
       : remoteTaskId_(remoteTaskId),
+        taskId_(remoteTaskId),
         destination_(destination),
         queue_(std::move(queue)),
         pool_(pool->shared_from_this()) {}
@@ -155,6 +156,8 @@ class ExchangeSource : public std::enable_shared_from_this<ExchangeSource> {
  protected:
   // ID of the remote task producing data.
   const std::string remoteTaskId_;
+  // Same with 'remoteTaskId_', will be removed after removing usage in Presto.
+  const std::string taskId_;
   // Destination number of 'this' on producer.
   const int destination_;
   const std::shared_ptr<ExchangeQueue> queue_{nullptr};
