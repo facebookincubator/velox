@@ -15,6 +15,11 @@ Miscellaneous Functions
         SELECT at_least_n_non_nulls(2, 0, 1.0, NULL);  -- true
         SELECT at_least_n_non_nulls(2, 0, array(NULL), NULL);  -- true
 
+.. spark:function:: get_struct_field(input, ordinal) -> T
+
+    Returns the value of field in the row type `input`.
+    The field position is specified by `ordinal`.
+
 .. spark:function:: monotonically_increasing_id() -> bigint
 
     Returns monotonically increasing 64-bit integers. The generated ID is
