@@ -111,9 +111,14 @@ RowVectorPtr CudfFromVelox::getOutput() {
     return nullptr;
   }
 
+  // Get a stream from the global stream pool
+  auto stream = cudfGlobalStreamPool().get_stream();
+
   // Convert RowVector to cudf table
-  auto tbl = with_arrow::to_cudf_table(input, input->pool());
-  cudf::get_default_stream().synchronize();
+  auto tbl = with_arrow::to_cudf_table(input, input->pool(), stream);
+
+  stream.synchronize();
+
   VELOX_CHECK_NOT_NULL(tbl);
 
   if (cudfDebugEnabled()) {
@@ -126,7 +131,7 @@ RowVectorPtr CudfFromVelox::getOutput() {
   // Return a CudfVector that owns the cudf table
   auto const size = tbl->num_rows();
   return std::make_shared<CudfVector>(
-      input->pool(), outputType_, size, std::move(tbl));
+      input->pool(), outputType_, size, std::move(tbl), stream);
 }
 
 void CudfFromVelox::close() {
@@ -162,6 +167,7 @@ RowVectorPtr CudfToVelox::getOutput() {
     return nullptr;
   }
 
+  auto stream = inputs_.front()->stream();
   std::unique_ptr<cudf::table> tbl = inputs_.front()->release();
   inputs_.pop_front();
 
@@ -172,12 +178,12 @@ RowVectorPtr CudfToVelox::getOutput() {
     std::cout << "CudfToVelox table number of rows: " << tbl->num_rows()
               << std::endl;
   }
-
-  cudf::get_default_stream().synchronize();
   if (tbl->num_rows() == 0) {
     return nullptr;
   }
-  RowVectorPtr output = with_arrow::to_velox_column(tbl->view(), pool(), "");
+  RowVectorPtr output =
+      with_arrow::to_velox_column(tbl->view(), pool(), "", stream);
+  stream.synchronize();
   finished_ = noMoreInput_ && inputs_.empty();
   output->setType(outputType_);
   return output;

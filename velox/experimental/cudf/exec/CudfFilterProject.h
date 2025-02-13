@@ -26,111 +26,8 @@
 #include "velox/vector/ComplexVector.h"
 
 #include <cudf/ast/expressions.hpp>
-#include <cudf/table/table.hpp>
-#include <cudf/transform.hpp>
 
 namespace facebook::velox::cudf_velox {
-
-// Copied from cudf 24.12, TODO: remove this after cudf is updated
-/**
- * @brief An AST expression tree. It owns and contains multiple dependent
- * expressions. All the expressions are destroyed when the tree is destroyed.
- */
-class tree {
- public:
-  /**
-   * @brief construct an empty ast tree
-   */
-  tree() = default;
-
-  /**
-   * @brief Moves the ast tree
-   */
-  tree(tree&&) = default;
-
-  /**
-   * @brief move-assigns the AST tree
-   * @returns a reference to the move-assigned tree
-   */
-  tree& operator=(tree&&) = default;
-
-  ~tree() = default;
-
-  // the tree is not copyable
-  tree(tree const&) = delete;
-  tree& operator=(tree const&) = delete;
-
-  /**
-   * @brief Add an expression to the AST tree
-   * @param args Arguments to use to construct the ast expression
-   * @returns a reference to the added expression
-   */
-  template <typename Expr, typename... Args>
-  std::enable_if_t<std::is_base_of_v<cudf::ast::expression, Expr>, Expr const&>
-  emplace(Args&&... args) {
-    auto expr = std::make_unique<Expr>(std::forward<Args>(args)...);
-    Expr const& expr_ref = *expr;
-    expressions.emplace_back(std::move(expr));
-    return expr_ref;
-  }
-
-  /**
-   * @brief Add an expression to the AST tree
-   * @param expr AST expression to be added
-   * @returns a reference to the added expression
-   */
-  template <typename Expr>
-  decltype(auto) push(Expr expr) {
-    return emplace<Expr>(std::move(expr));
-  }
-
-  /**
-   * @brief get the first expression in the tree
-   * @returns the first inserted expression into the tree
-   */
-  [[nodiscard]] cudf::ast::expression const& front() const {
-    return *expressions.front();
-  }
-
-  /**
-   * @brief get the last expression in the tree
-   * @returns the last inserted expression into the tree
-   */
-  [[nodiscard]] cudf::ast::expression const& back() const {
-    return *expressions.back();
-  }
-
-  /**
-   * @brief get the number of expressions added to the tree
-   * @returns the number of expressions added to the tree
-   */
-  [[nodiscard]] size_t size() const {
-    return expressions.size();
-  }
-
-  /**
-   * @brief get the expression at an index in the tree. Index is checked.
-   * @param index index of expression in the ast tree
-   * @returns the expression at the specified index
-   */
-  cudf::ast::expression const& at(size_t index) {
-    return *expressions.at(index);
-  }
-
-  /**
-   * @brief get the expression at an index in the tree. Index is unchecked.
-   * @param index index of expression in the ast tree
-   * @returns the expression at the specified index
-   */
-  cudf::ast::expression const& operator[](size_t index) const {
-    return *expressions[index];
-  }
-
- private:
-  // TODO: use better ownership semantics, the unique_ptr here is redundant.
-  // Consider using a bump allocator with type-erased deleters.
-  std::vector<std::unique_ptr<cudf::ast::expression>> expressions;
-};
 
 // TODO: Does not support Filter yet.
 class CudfFilterProject : public exec::Operator {
@@ -157,11 +54,11 @@ class CudfFilterProject : public exec::Operator {
 
   bool isFinished() override;
 
-  // TODO rewrite this.
   void close() override {
     Operator::close();
     projectAst_.clear();
     scalars_.clear();
+    precompute_instructions_.clear();
   }
 
  private:
@@ -172,8 +69,12 @@ class CudfFilterProject : public exec::Operator {
   // initialization, they will be reset, and initialized_ will be set to true.
   std::shared_ptr<const core::ProjectNode> project_;
   std::shared_ptr<const core::FilterNode> filter_;
-  std::vector<tree> projectAst_;
+  std::vector<cudf::ast::tree> projectAst_;
   std::vector<std::unique_ptr<cudf::scalar>> scalars_;
+  // instruction on dependent column to get new column index on non-ast
+  // supported operations in expressions
+  // <dependent_column_index, "instruction", new_column_index>
+  std::vector<std::tuple<int, std::string, int>> precompute_instructions_;
 
   std::vector<velox::exec::IdentityProjection> resultProjections_;
   std::vector<velox::exec::IdentityProjection> identityProjections_;
