@@ -99,4 +99,72 @@ struct StringToMapFunction {
   }
 };
 
+template <typename T>
+struct StringToMapLastWinFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  // Results refer to strings in the first argument.
+  static constexpr int32_t reuse_strings_from_arg = 0;
+
+  void call(
+      out_type<Map<Varchar, Varchar>>& out,
+      const arg_type<Varchar>& input,
+      const arg_type<Varchar>& entryDelimiter,
+      const arg_type<Varchar>& keyValueDelimiter) {
+    VELOX_USER_CHECK_EQ(
+        entryDelimiter.size(), 1, "entryDelimiter's size should be 1.");
+    VELOX_USER_CHECK_EQ(
+        keyValueDelimiter.size(), 1, "keyValueDelimiter's size should be 1.");
+
+    callImpl(
+        out,
+        toStringView(input),
+        toStringView(entryDelimiter),
+        toStringView(keyValueDelimiter));
+  }
+
+ private:
+  static std::string_view toStringView(const arg_type<Varchar>& input) {
+    return std::string_view(input.data(), input.size());
+  }
+
+  void callImpl(
+      out_type<Map<Varchar, Varchar>>& out,
+      std::string_view input,
+      std::string_view entryDelimiter,
+      std::string_view keyValueDelimiter) const {
+    folly::F14FastSet<std::string_view> keys;
+    char pairDelim = entryDelimiter[0];
+    char keyValueDelim = keyValueDelimiter[0];
+
+    int right = input.size(), left;
+
+    while (right >= 0) {
+      left = right - 1;
+      int firstKeyValueDelimPos = right;
+      while (left >= 0 && input[left] != pairDelim) {
+        if (input[left] == keyValueDelim) {
+          firstKeyValueDelimPos = left;
+        }
+        left--;
+      }
+
+      auto key = input.substr(left + 1, firstKeyValueDelimPos - left - 1);
+      if (!keys.contains(key)) {
+        if (firstKeyValueDelimPos != right) {
+          auto [keyWriter, valueWriter] = out.add_item();
+          keyWriter.setNoCopy(StringView(key));
+          valueWriter.setNoCopy(StringView(input.substr(
+              firstKeyValueDelimPos + 1, right - firstKeyValueDelimPos - 1)));
+        } else {
+          auto& keyWriter = out.add_null();
+          keyWriter.setNoCopy(StringView(key));
+        }
+        keys.insert(key);
+      }
+      right = left;
+    }
+  }
+};
+
 } // namespace facebook::velox::functions::sparksql
