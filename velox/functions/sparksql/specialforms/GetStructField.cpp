@@ -15,71 +15,45 @@
  */
 
 #include "velox/functions/sparksql/specialforms/GetStructField.h"
-#include "expression/Expr.h"
-#include "vector/ComplexVector.h"
-#include "vector/ConstantVector.h"
 #include "velox/expression/ConstantExpr.h"
-#include "velox/expression/PeeledEncoding.h"
-
-using namespace facebook::velox::exec;
 
 namespace facebook::velox::functions::sparksql {
+namespace {
 
-void GetStructFieldExpr::evalSpecialForm(
-    const SelectivityVector& rows,
-    EvalCtx& context,
-    VectorPtr& result) {
-  VectorPtr input;
-  VectorPtr ordinalVector;
-  inputs_[0]->eval(rows, context, input);
-  auto resultType = std::const_pointer_cast<const Type>(type_);
+class GetStructFieldFunction : public exec::VectorFunction {
+ public:
+  GetStructFieldFunction(int32_t ordinal) : ordinal_(ordinal) {}
 
-  LocalSelectivityVector remainingRows(context, rows);
-  context.deselectErrors(*remainingRows);
-
-  LocalDecodedVector decoded(context, *input, *remainingRows);
-
-  auto* rawNulls = decoded->nulls();
-  if (rawNulls) {
-    remainingRows->deselectNulls(
-        rawNulls, remainingRows->begin(), remainingRows->end());
-  }
-
-  VectorPtr localResult;
-  if (!remainingRows->hasSelections()) {
-    localResult =
-        BaseVector::createNullConstant(resultType, rows.end(), context.pool());
-  } else {
+  void apply(
+      const SelectivityVector& rows,
+      std::vector<VectorPtr>& args,
+      const TypePtr& resultType,
+      exec::EvalCtx& context,
+      VectorPtr& result) const override {
+    exec::LocalDecodedVector decoded(context, *args[0], rows);
     auto rowData = decoded->base()->as<RowVector>();
     if (decoded->isIdentityMapping()) {
-      localResult = rowData->childAt(ordinal_);
+      result = rowData->childAt(ordinal_);
     } else {
-      localResult =
-          decoded->wrap(rowData->childAt(ordinal_), *input, decoded->size());
+      result =
+          decoded->wrap(rowData->childAt(ordinal_), *args[0], decoded->size());
     }
   }
 
-  context.moveOrCopyResult(localResult, *remainingRows, result);
-  context.releaseVector(localResult);
+ private:
+  const int32_t ordinal_;
+};
 
-  VELOX_CHECK_NOT_NULL(result);
-  if (rawNulls || context.errors()) {
-    EvalCtx::addNulls(
-        rows, remainingRows->asRange().bits(), context, resultType, result);
-  }
-
-  context.releaseVector(input);
-  context.releaseVector(ordinalVector);
-}
+} // namespace
 
 TypePtr GetStructFieldCallToSpecialForm::resolveType(
     const std::vector<TypePtr>& /*argTypes*/) {
-  VELOX_FAIL("get_struct_field function does not support type resolution.");
+  VELOX_FAIL("GetStructField function does not support type resolution.");
 }
 
-ExprPtr GetStructFieldCallToSpecialForm::constructSpecialForm(
+exec::ExprPtr GetStructFieldCallToSpecialForm::constructSpecialForm(
     const TypePtr& type,
-    std::vector<ExprPtr>&& args,
+    std::vector<exec::ExprPtr>&& args,
     bool trackCpuUsage,
     const core::QueryConfig& /*config*/) {
   VELOX_USER_CHECK_EQ(args.size(), 2, "get_struct_field expects two argument.");
@@ -108,8 +82,15 @@ ExprPtr GetStructFieldCallToSpecialForm::constructSpecialForm(
       "The second argument of get_struct_field is non-nullable.");
   auto ordinal = constantVector->valueAt(0);
 
-  return std::make_shared<GetStructFieldExpr>(
-      type, std::move(args), ordinal, trackCpuUsage);
-}
+  auto getStructFieldFunction =
+      std::make_shared<GetStructFieldFunction>(ordinal);
 
+  return std::make_shared<exec::Expr>(
+      type,
+      std::move(args),
+      std::move(getStructFieldFunction),
+      exec::VectorFunctionMetadata{},
+      kGetStructField,
+      trackCpuUsage);
+}
 } // namespace facebook::velox::functions::sparksql
