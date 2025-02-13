@@ -25,6 +25,7 @@
 
 #include <cudf/concatenate.hpp>
 #include <cudf/reduction.hpp>
+#include <experimental/cudf/exec/Utilities.h>
 #include <optional>
 
 namespace {
@@ -210,17 +211,18 @@ void CudfHashAggregation::addInput(RowVectorPtr input) {
 }
 
 RowVectorPtr CudfHashAggregation::doGroupByAggregation(
-    std::unique_ptr<cudf::table> tbl) {
-  auto groupby_key_tbl = tbl->select(
+    std::unique_ptr<cudf::table> tbl,
+    rmm::cuda_stream_view stream) {
+  auto groupby_key_view = tbl->select(
       groupingKeyInputChannels_.begin(), groupingKeyInputChannels_.end());
 
-  size_t num_grouping_keys = groupby_key_tbl.num_columns();
+  size_t num_grouping_keys = groupby_key_view.num_columns();
 
   // TODO (dm): Support args like include_null_keys, keys_are_sorted,
   // column_order, null_precedence. We're fine for now because very few nullable
   // columns in tpch
   cudf::groupby::groupby group_by_owner(
-      groupby_key_tbl,
+      groupby_key_view,
       ignoreNullKeys_ ? cudf::null_policy::EXCLUDE
                       : cudf::null_policy::INCLUDE);
 
@@ -237,7 +239,7 @@ RowVectorPtr CudfHashAggregation::doGroupByAggregation(
     }
   }
 
-  auto [group_keys, results] = group_by_owner.aggregate(requests);
+  auto [group_keys, results] = group_by_owner.aggregate(requests, stream);
   // flatten the results
   std::vector<std::unique_ptr<cudf::column>> result_columns;
 
@@ -266,11 +268,16 @@ RowVectorPtr CudfHashAggregation::doGroupByAggregation(
   }
 
   return std::make_shared<cudf_velox::CudfVector>(
-      pool(), outputType_, result_table->num_rows(), std::move(result_table));
+      pool(),
+      outputType_,
+      result_table->num_rows(),
+      std::move(result_table),
+      stream);
 }
 
 RowVectorPtr CudfHashAggregation::doGlobalAggregation(
-    std::unique_ptr<cudf::table> tbl) {
+    std::unique_ptr<cudf::table> tbl,
+    rmm::cuda_stream_view stream) {
   std::vector<std::unique_ptr<cudf::scalar>> result_scalars;
   result_scalars.resize(numAggregates_);
 
@@ -281,7 +288,8 @@ RowVectorPtr CudfHashAggregation::doGlobalAggregation(
           inCol,
           *toGlobalAggregationRequest(aggKind),
           cudf::data_type(
-              cudf_velox::velox_to_cudf_type_id(outputType_->childAt(outIdx))));
+              cudf_velox::velox_to_cudf_type_id(outputType_->childAt(outIdx))),
+          stream);
       result_scalars[outIdx] = std::move(result);
     }
   }
@@ -290,26 +298,32 @@ RowVectorPtr CudfHashAggregation::doGlobalAggregation(
   std::vector<std::unique_ptr<cudf::column>> result_columns;
   result_columns.reserve(result_scalars.size());
   for (auto& scalar : result_scalars) {
-    result_columns.push_back(cudf::make_column_from_scalar(*scalar, 1));
+    result_columns.push_back(cudf::make_column_from_scalar(*scalar, 1, stream));
   }
 
   return std::make_shared<cudf_velox::CudfVector>(
       pool(),
       outputType_,
       1,
-      std::make_unique<cudf::table>(std::move(result_columns)));
-
-  VELOX_NYI("CudfHashAggregation::doGlobalAggregation()");
+      std::make_unique<cudf::table>(std::move(result_columns)),
+      stream);
 }
 
 RowVectorPtr CudfHashAggregation::getDistinctKeys(
-    std::unique_ptr<cudf::table> tbl) {
+    std::unique_ptr<cudf::table> tbl,
+    rmm::cuda_stream_view stream) {
   std::vector<cudf::size_type> key_indices(
       groupingKeyInputChannels_.begin(), groupingKeyInputChannels_.end());
-  auto result = cudf::distinct(tbl->view(), key_indices);
+  auto result = cudf::distinct(
+      tbl->view(),
+      key_indices,
+      cudf::duplicate_keep_option::KEEP_FIRST,
+      cudf::null_equality::EQUAL,
+      cudf::nan_equality::ALL_EQUAL,
+      stream);
 
   return std::make_shared<cudf_velox::CudfVector>(
-      pool(), outputType_, result->num_rows(), std::move(result));
+      pool(), outputType_, result->num_rows(), std::move(result), stream);
 }
 
 RowVectorPtr CudfHashAggregation::getOutput() {
@@ -330,26 +344,27 @@ RowVectorPtr CudfHashAggregation::getOutput() {
   finished_ = true;
 
   auto cudf_tables = std::vector<std::unique_ptr<cudf::table>>(inputs_.size());
-  auto cudf_table_views = std::vector<cudf::table_view>(inputs_.size());
+  auto input_streams = std::vector<rmm::cuda_stream_view>(inputs_.size());
   for (int i = 0; i < inputs_.size(); i++) {
     VELOX_CHECK_NOT_NULL(inputs_[i]);
     cudf_tables[i] = inputs_[i]->release();
-    cudf_table_views[i] = cudf_tables[i]->view();
+    input_streams[i] = inputs_[i]->stream();
   }
-  auto tbl = cudf::concatenate(cudf_table_views);
+  auto stream = cudfGlobalStreamPool().get_stream();
+  cudf::detail::join_streams(input_streams, stream);
+  auto tbl = concatenateTables(std::move(cudf_tables), stream);
 
-  cudf_table_views.clear();
   cudf_tables.clear();
   inputs_.clear();
 
   VELOX_CHECK_NOT_NULL(tbl);
 
   if (!isGlobal_) {
-    return doGroupByAggregation(std::move(tbl));
+    return doGroupByAggregation(std::move(tbl), stream);
   } else if (isDistinct_) {
-    return getDistinctKeys(std::move(tbl));
+    return getDistinctKeys(std::move(tbl), stream);
   } else {
-    return doGlobalAggregation(std::move(tbl));
+    return doGlobalAggregation(std::move(tbl), stream);
   }
 }
 
