@@ -44,7 +44,6 @@ CudfLocalPartition::CudfLocalPartition(
 
   // Get partition function specification string
   std::string spec = planNode->partitionFunctionSpec().toString();
-  std::cout << "Partition function spec: " << spec << std::endl;
 
   // Only parse keys if it's a hash function
   if (spec.find("HASH(") != std::string::npos) {
