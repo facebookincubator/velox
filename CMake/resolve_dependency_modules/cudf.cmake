@@ -14,11 +14,12 @@
 
 include_guard(GLOBAL)
 
-set(VELOX_cudf_VERSION 24.10)
+set(VELOX_cudf_VERSION 25.04)
 set(VELOX_cudf_BUILD_SHA256_CHECKSUM
-    daa270c1e9223f098823491606bad2d9b10577d4bea8e543ae80265f1cecc0ed)
+    c0fb004040a9adfce75d933fd2e2e7f2581636c5f9f29030c729297f76fc0fdc)
 set(VELOX_cudf_SOURCE_URL
-    "https://github.com/rapidsai/cudf/archive/refs/tags/v24.10.01.tar.gz")
+    "https://github.com/rapidsai/cudf/archive/1a891e6cfd1daef5bb56990cd18b4e3c7640fb53.tar.gz"
+)
 velox_resolve_dependency_url(cudf)
 
 # Use block so we don't leak variables
@@ -31,21 +32,15 @@ set(BUILD_SHARED_LIBS ON)
 # cudf sets all warnings as errors, and therefore fails to compile with velox
 # expanded set of warnings. We selectively disable problematic warnings just for
 # cudf
-string(APPEND CMAKE_CXX_FLAGS
-       " -Wno-non-virtual-dtor -Wno-missing-field-initializers")
-string(APPEND CMAKE_CXX_FLAGS " -Wno-deprecated-copy")
-
-set(fmt_scope_patch
-    patch -p1 <
-    ${CMAKE_CURRENT_SOURCE_DIR}/CMake/resolve_dependency_modules/fmt_scope.patch
-)
+string(
+  APPEND CMAKE_CXX_FLAGS
+  " -Wno-non-virtual-dtor -Wno-missing-field-initializers -Wno-deprecated-copy")
 
 FetchContent_Declare(
   cudf
   URL ${VELOX_cudf_SOURCE_URL}
   URL_HASH ${VELOX_cudf_BUILD_SHA256_CHECKSUM}
   SOURCE_SUBDIR cpp
-  PATCH_COMMAND ${fmt_scope_patch}
   UPDATE_DISCONNECTED 1)
 
 FetchContent_MakeAvailable(cudf)

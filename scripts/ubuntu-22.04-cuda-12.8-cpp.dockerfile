@@ -1,4 +1,3 @@
-#!/bin/bash
 # Copyright (c) Facebook, Inc. and its affiliates.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -12,5 +11,29 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+ARG base=nvidia/cuda:12.8.0-devel-ubuntu22.04
+# Set a default timezone, can be overriden via ARG
+ARG tz="Europe/Madrid"
 
-sed -i 's|/velox/|/home/nfs/bdice/rapids1/velox/|g' compile_commands.json
+FROM ${base}
+
+SHELL ["/bin/bash", "-o", "pipefail", "-c"]
+
+RUN apt update && \
+      apt install -y sudo \
+            lsb-release \
+            pip \
+            python3 \
+            python3-six
+
+
+ADD scripts /velox/scripts/
+
+# TZ and DEBIAN_FRONTEND="noninteractive"
+# are required to avoid tzdata installation
+# to prompt for region selection.
+ARG DEBIAN_FRONTEND="noninteractive"
+ENV TZ=${tz}
+RUN /velox/scripts/setup-ubuntu.sh
+
+WORKDIR /velox

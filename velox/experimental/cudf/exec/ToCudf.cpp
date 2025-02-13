@@ -19,11 +19,13 @@
 #include <cudf/detail/nvtx/ranges.hpp>
 #include <exec/HashAggregation.h>
 #include "velox/exec/Driver.h"
+#include "velox/exec/FilterProject.h"
 #include "velox/exec/HashBuild.h"
 #include "velox/exec/HashProbe.h"
 #include "velox/exec/Operator.h"
 #include "velox/exec/OrderBy.h"
 #include "velox/experimental/cudf/exec/CudfConversion.h"
+#include "velox/experimental/cudf/exec/CudfFilterProject.h"
 #include "velox/experimental/cudf/exec/CudfHashAggregation.h"
 #include "velox/experimental/cudf/exec/CudfHashJoin.h"
 #include "velox/experimental/cudf/exec/CudfOrderBy.h"
@@ -77,29 +79,43 @@ bool CompileState::compile() {
     return *it;
   };
 
-  auto is_supported_gpu_operator = [](const exec::Operator* op) {
-    return is_any_of<
-        exec::HashBuild,
-        exec::HashProbe,
-        exec::OrderBy,
-        exec::HashAggregation>(op);
+  auto is_filter_project_supported = [](const exec::Operator* op) {
+    auto filter_project_op = dynamic_cast<const exec::FilterProject*>(op);
+    return filter_project_op != nullptr &&
+        !((filter_project_op->exprsAndProjection().hasFilter));
   };
+
+  auto is_supported_gpu_operator =
+      [is_filter_project_supported](const exec::Operator* op) {
+        return is_any_of<
+                   exec::HashBuild,
+                   exec::HashProbe,
+                   exec::OrderBy,
+                   exec::HashAggregation>(op) ||
+            is_filter_project_supported(op);
+      };
+
   std::vector<bool> is_supported_gpu_operators(operators.size());
   std::transform(
       operators.begin(),
       operators.end(),
       is_supported_gpu_operators.begin(),
       is_supported_gpu_operator);
-  auto accepts_gpu_input = [](const exec::Operator* op) {
-    return is_any_of<
-        exec::HashBuild,
-        exec::HashProbe,
-        exec::OrderBy,
-        exec::HashAggregation>(op);
-  };
-  auto produces_gpu_output = [](const exec::Operator* op) {
-    return is_any_of<exec::HashProbe, exec::OrderBy, exec::HashAggregation>(op);
-  };
+  auto accepts_gpu_input =
+      [is_filter_project_supported](const exec::Operator* op) {
+        return is_any_of<
+                   exec::HashBuild,
+                   exec::HashProbe,
+                   exec::OrderBy,
+                   exec::HashAggregation>(op) ||
+            is_filter_project_supported(op);
+      };
+  auto produces_gpu_output =
+      [is_filter_project_supported](const exec::Operator* op) {
+        return is_any_of<exec::HashProbe, exec::OrderBy, exec::HashAggregation>(
+                   op) ||
+            is_filter_project_supported(op);
+      };
 
   int32_t operatorsOffset = 0;
   for (int32_t operatorIndex = 0; operatorIndex < operators.size();
@@ -123,6 +139,7 @@ bool CompileState::compile() {
           id, plan_node->outputType(), ctx, plan_node->id() + "-from-velox"));
       replace_op.back()->initialize();
     }
+
     // This is used to denote if the current operator is kept or replaced.
     auto keep_operator = 0;
     if (auto joinBuildOp = dynamic_cast<exec::HashBuild*>(oper)) {
@@ -157,8 +174,20 @@ bool CompileState::compile() {
       VELOX_CHECK(plan_node != nullptr);
       replace_op.push_back(
           std::make_unique<CudfHashAggregation>(id, ctx, plan_node));
+    } else if (is_filter_project_supported(oper)) {
+      auto filterProjectOp = dynamic_cast<exec::FilterProject*>(oper);
+      auto info = filterProjectOp->exprsAndProjection();
+      auto& id_projections = filterProjectOp->identityProjections();
+      auto plan_node = std::dynamic_pointer_cast<const core::ProjectNode>(
+          get_plan_node(filterProjectOp->planNodeId()));
+      // If filter doesn't exist then project should definitely exist so this
+      // should never hit
+      VELOX_CHECK(plan_node != nullptr);
+      replace_op.push_back(std::make_unique<CudfFilterProject>(
+          id, ctx, info, id_projections, nullptr, plan_node));
       replace_op.back()->initialize();
     }
+
     if (next_operator_is_not_gpu and produces_gpu_output(oper)) {
       auto plan_node = get_plan_node(oper->planNodeId());
       replace_op.push_back(std::make_unique<CudfToVelox>(
