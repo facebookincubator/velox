@@ -65,9 +65,15 @@ class CudfHashAggregation : public exec::Operator {
       std::vector<column_index_t>& groupingKeyInputChannels,
       std::vector<column_index_t>& groupingKeyOutputChannels) const;
 
-  RowVectorPtr doGroupByAggregation(std::unique_ptr<cudf::table> tbl);
-  RowVectorPtr doGlobalAggregation(std::unique_ptr<cudf::table> tbl);
-  RowVectorPtr getDistinctKeys(std::unique_ptr<cudf::table> tbl);
+  RowVectorPtr doGroupByAggregation(
+      std::unique_ptr<cudf::table> tbl,
+      rmm::cuda_stream_view stream);
+  RowVectorPtr doGlobalAggregation(
+      std::unique_ptr<cudf::table> tbl,
+      rmm::cuda_stream_view stream);
+  RowVectorPtr getDistinctKeys(
+      std::unique_ptr<cudf::table> tbl,
+      rmm::cuda_stream_view stream);
 
   std::vector<column_index_t> groupingKeyInputChannels_;
   std::vector<column_index_t> groupingKeyOutputChannels_;
