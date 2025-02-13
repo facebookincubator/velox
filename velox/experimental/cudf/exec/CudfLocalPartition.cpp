@@ -102,6 +102,7 @@ void CudfLocalPartition::addInput(RowVectorPtr input) {
   prepareForInput(input);
   auto cudfVector = std::dynamic_pointer_cast<CudfVector>(input);
   VELOX_CHECK(cudfVector, "Input must be a CudfVector");
+  auto stream = cudfVector->stream();
 
   if (numPartitions_ > 1) {
     // Use cudf hash partitioning
@@ -111,8 +112,13 @@ void CudfLocalPartition::addInput(RowVectorPtr input) {
       partitionKeyIndices.push_back(static_cast<cudf::size_type>(idx));
     }
 
-    auto [partitionedTable, partitionOffsets] =
-        cudf::hash_partition(tableView, partitionKeyIndices, numPartitions_);
+    auto [partitionedTable, partitionOffsets] = cudf::hash_partition(
+        tableView,
+        partitionKeyIndices,
+        numPartitions_,
+        cudf::hash_id::HASH_MURMUR3,
+        cudf::DEFAULT_HASH_SEED,
+        stream);
 
     VELOX_CHECK(partitionOffsets.size() == numPartitions_);
     VELOX_CHECK(partitionOffsets[0] == 0);
@@ -141,7 +147,8 @@ void CudfLocalPartition::addInput(RowVectorPtr input) {
               pool(),
               outputType_,
               partitionData.num_rows(),
-              std::make_unique<cudf::table>(partitionData)),
+              std::make_unique<cudf::table>(partitionData),
+              stream),
           partitionData.num_rows(),
           &future);
       if (blockingReason != exec::BlockingReason::kNotBlocked) {
