@@ -29,14 +29,14 @@
 namespace facebook::velox::cudf_velox {
 
 // Vector class which holds GPU data from cuDF.
-// TODO: This should own a stream.
 class CudfVector : public RowVector {
  public:
   CudfVector(
       velox::memory::MemoryPool* pool,
       TypePtr type,
       vector_size_t size,
-      std::unique_ptr<cudf::table>&& table)
+      std::unique_ptr<cudf::table>&& table,
+      rmm::cuda_stream_view stream)
       : RowVector(
             pool,
             std::move(type),
@@ -44,7 +44,12 @@ class CudfVector : public RowVector {
             size,
             std::vector<VectorPtr>(),
             std::nullopt),
-        table_{std::move(table)} {}
+        table_{std::move(table)},
+        stream_{stream} {}
+
+  rmm::cuda_stream_view stream() const {
+    return stream_;
+  }
 
   cudf::table_view getTableView() const {
     return table_->view();
@@ -56,6 +61,7 @@ class CudfVector : public RowVector {
 
  private:
   std::unique_ptr<cudf::table> table_;
+  rmm::cuda_stream_view stream_;
 };
 
 using CudfVectorPtr = std::shared_ptr<CudfVector>;

@@ -35,29 +35,6 @@
 #include <cudf/table/table.hpp>
 #include <cudf/table/table_view.hpp>
 
-namespace {
-
-// Concatenate a vector of cuDF tables into a single table
-std::unique_ptr<cudf::table> concatenateTables(
-    std::vector<std::unique_ptr<cudf::table>> tables) {
-  // Check for empty vector
-  VELOX_CHECK_GT(tables.size(), 0);
-
-  if (tables.size() == 1) {
-    return std::move(tables[0]);
-  }
-  std::vector<cudf::table_view> tableViews;
-  tableViews.reserve(tables.size());
-  std::transform(
-      tables.begin(),
-      tables.end(),
-      std::back_inserter(tableViews),
-      [&](auto const& tbl) { return tbl->view(); });
-  return cudf::concatenate(tableViews, cudf::get_default_stream());
-}
-
-} // namespace
-
 namespace facebook::velox::cudf_velox::connector::parquet {
 
 using namespace facebook::velox::connector;
@@ -138,12 +115,13 @@ std::optional<RowVectorPtr> ParquetDataSource::next(
     }
 
     if (readTables.size()) {
-      auto readTable = concatenateTables(std::move(readTables));
+      auto stream = cudf::get_default_stream();
+      auto readTable = concatenateTables(std::move(readTables), stream);
       if (cudfTable_) {
         // Concatenate the current view ahead of the read table.
         auto tableViews = std::vector<cudf::table_view>{
             currentCudfTableView_, readTable->view()};
-        cudfTable_ = cudf::concatenate(tableViews, cudf::get_default_stream());
+        cudfTable_ = cudf::concatenate(tableViews, stream);
       } else {
         cudfTable_ = std::move(readTable);
       }
@@ -158,8 +136,10 @@ std::optional<RowVectorPtr> ParquetDataSource::next(
   // If the current table view has <= size rows, this is the last chunk.
   if (currentCudfTableView_.num_rows() <= size) {
     // Convert the current table view to RowVectorPtr.
-    output =
-        with_arrow::to_velox_column(currentCudfTableView_, pool_, columnNames);
+    auto stream = cudf::get_default_stream();
+    output = with_arrow::to_velox_column(
+        currentCudfTableView_, pool_, columnNames, stream);
+    stream.synchronize();
     // Reset internal tables
     resetCudfTableAndView();
   } else {
@@ -172,7 +152,10 @@ std::optional<RowVectorPtr> ParquetDataSource::next(
         tableSplits[0].num_rows(),
         "cudf::split yielded incorrect partitions");
     // Convert the first split view to RowVectorPtr.
-    output = with_arrow::to_velox_column(tableSplits[0], pool_, columnNames);
+    auto stream = cudf::get_default_stream();
+    output =
+        with_arrow::to_velox_column(tableSplits[0], pool_, columnNames, stream);
+    stream.synchronize();
     // Set the current view to the second split view.
     currentCudfTableView_ = tableSplits[1];
   }

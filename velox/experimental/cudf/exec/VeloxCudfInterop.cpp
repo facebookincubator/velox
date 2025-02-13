@@ -372,7 +372,8 @@ namespace with_arrow {
 
 std::unique_ptr<cudf::table> to_cudf_table(
     const facebook::velox::RowVectorPtr& veloxTable, // BaseVector or RowVector?
-    facebook::velox::memory::MemoryPool* pool) {
+    facebook::velox::memory::MemoryPool* pool,
+    rmm::cuda_stream_view stream) {
   // Need to flattenDictionary and flattenConstant, otherwise we observe issues
   // in the null mask.
   ArrowOptions arrowOptions{true, true};
@@ -387,7 +388,7 @@ std::unique_ptr<cudf::table> to_cudf_table(
       std::dynamic_pointer_cast<facebook::velox::BaseVector>(veloxTable),
       arrowSchema,
       arrowOptions);
-  auto tbl = cudf::from_arrow(&arrowSchema, &arrowArray);
+  auto tbl = cudf::from_arrow(&arrowSchema, &arrowArray, stream);
 
   // Release Arrow resources
   if (arrowArray.release) {
@@ -440,8 +441,9 @@ void fix_dictionary_indices(ArrowSchema& arrowSchema) {
 RowVectorPtr to_velox_column(
     const cudf::table_view& table,
     memory::MemoryPool* pool,
-    const std::vector<cudf::column_metadata>& metadata) {
-  auto arrowDeviceArray = cudf::to_arrow_host(table);
+    const std::vector<cudf::column_metadata>& metadata,
+    rmm::cuda_stream_view stream) {
+  auto arrowDeviceArray = cudf::to_arrow_host(table, stream);
   auto& arrowArray = arrowDeviceArray->array;
 
   auto arrowSchema = cudf::to_arrow_schema(table, metadata);
@@ -461,23 +463,25 @@ RowVectorPtr to_velox_column(
 facebook::velox::RowVectorPtr to_velox_column(
     const cudf::table_view& table,
     facebook::velox::memory::MemoryPool* pool,
-    std::string name_prefix) {
+    std::string name_prefix,
+    rmm::cuda_stream_view stream) {
   std::vector<cudf::column_metadata> metadata;
   for (auto i = 0; i < table.num_columns(); i++) {
     metadata.push_back(cudf::column_metadata(name_prefix + std::to_string(i)));
   }
-  return to_velox_column(table, pool, metadata);
+  return to_velox_column(table, pool, metadata, stream);
 }
 
 RowVectorPtr to_velox_column(
     const cudf::table_view& table,
     memory::MemoryPool* pool,
-    const std::vector<std::string>& columnNames) {
+    const std::vector<std::string>& columnNames,
+    rmm::cuda_stream_view stream) {
   std::vector<cudf::column_metadata> metadata;
   for (auto name : columnNames) {
     metadata.emplace_back(cudf::column_metadata(name));
   }
-  return to_velox_column(table, pool, metadata);
+  return to_velox_column(table, pool, metadata, stream);
 }
 
 } // namespace with_arrow
