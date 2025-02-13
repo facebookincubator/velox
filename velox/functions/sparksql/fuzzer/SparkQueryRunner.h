@@ -62,14 +62,6 @@ class SparkQueryRunner : public velox::exec::test::ReferenceQueryRunner {
       const std::vector<velox::RowVectorPtr>& input,
       const velox::RowTypePtr& resultType) override;
 
-  std::multiset<std::vector<velox::variant>> execute(
-      const std::string& sql,
-      const std::vector<RowVectorPtr>& probeInput,
-      const std::vector<RowVectorPtr>& buildInput,
-      const RowTypePtr& resultType) override {
-    VELOX_NYI("SparkQueryRunner does not support join node.");
-  }
-
   RunnerType runnerType() const override {
     return RunnerType::kSparkQueryRunner;
   }
@@ -89,6 +81,16 @@ class SparkQueryRunner : public velox::exec::test::ReferenceQueryRunner {
       const velox::RowTypePtr& resultType) override;
 
   std::vector<velox::RowVectorPtr> execute(const std::string& sql) override;
+
+  std::pair<
+      std::optional<std::vector<RowVectorPtr>>,
+      exec::test::ReferenceQueryErrorCode>
+  executeAndReturnVector(const core::PlanNodePtr& plan) override;
+
+  std::pair<
+      std::optional<std::multiset<std::vector<variant>>>,
+      exec::test::ReferenceQueryErrorCode>
+  execute(const core::PlanNodePtr& plan) override;
 
  private:
   using ReferenceQueryRunner::toSql;
@@ -111,6 +113,9 @@ class SparkQueryRunner : public velox::exec::test::ReferenceQueryRunner {
 
   std::optional<std::string> toSql(
       const std::shared_ptr<const core::ProjectNode>& projectNode);
+
+  std::optional<std::string> toSql(
+      const core::ValuesNodePtr& valuesNode) override;
 
   google::protobuf::Arena arena_;
   const std::string userId_;
