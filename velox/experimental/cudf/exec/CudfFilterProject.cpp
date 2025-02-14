@@ -22,8 +22,11 @@
 
 #include <cudf/datetime.hpp>
 #include <cudf/strings/attributes.hpp>
+#include <cudf/strings/slice.hpp>
 #include <cudf/table/table.hpp>
 #include <cudf/transform.hpp>
+
+#include <sstream>
 
 namespace facebook::velox::cudf_velox {
 
@@ -207,6 +210,29 @@ cudf::ast::expression const& create_ast_tree(
     auto const& col_ref =
         tree.push(cudf::ast::column_reference(new_column_index));
     return tree.push(operation{op::CAST_TO_INT64, col_ref});
+  } else if (name == "substr") {
+    // add precompute instruction, special handling col_ref during ast
+    // evaluation
+    auto len = expr->inputs().size();
+    VELOX_CHECK_EQ(len, 3);
+    auto fieldExpr = std::dynamic_pointer_cast<velox::exec::FieldReference>(
+        expr->inputs()[0]);
+    VELOX_CHECK_NOT_NULL(fieldExpr, "Expression is not a field");
+    auto dependent_column_index =
+        inputRowSchema->getChildIdx(fieldExpr->name());
+    auto new_column_index =
+        inputRowSchema->size() + precompute_instructions.size();
+    // add this index and precompute instruction to a data structure
+    velox::exec::ConstantExpr* c1 =
+        dynamic_cast<velox::exec::ConstantExpr*>(expr->inputs()[1].get());
+    velox::exec::ConstantExpr* c2 =
+        dynamic_cast<velox::exec::ConstantExpr*>(expr->inputs()[2].get());
+    std::string substr_expr =
+        "substr " + c1->value()->toString(0) + " " + c2->value()->toString(0);
+    precompute_instructions.emplace_back(
+        dependent_column_index, substr_expr, new_column_index);
+    // This custom op should be added to input columns.
+    return tree.push(cudf::ast::column_reference(new_column_index));
   } else if (
       auto fieldExpr =
           std::dynamic_pointer_cast<velox::exec::FieldReference>(expr)) {
@@ -289,6 +315,25 @@ RowVectorPtr CudfFilterProject::getOutput() {
     } else if (ins_name == "length") {
       auto new_column = cudf::strings::count_characters(
           input_table_columns[dependent_column_index]->view(),
+          stream,
+          cudf::get_current_device_resource_ref());
+      input_table_columns.emplace_back(std::move(new_column));
+    } else if (ins_name.rfind("substr", 0) == 0) {
+      // extract begin, end from ins_name "substr begin end"
+      std::istringstream iss(ins_name.substr(6));
+      int begin_value, end_value;
+      iss >> begin_value >> end_value;
+      auto begin_scalar = cudf::numeric_scalar<cudf::size_type>(
+          begin_value, true, stream, cudf::get_current_device_resource_ref());
+      auto end_scalar = cudf::numeric_scalar<cudf::size_type>(
+          end_value, true, stream, cudf::get_current_device_resource_ref());
+      auto step_scalar = cudf::numeric_scalar<cudf::size_type>(
+          1, true, stream, cudf::get_current_device_resource_ref());
+      auto new_column = cudf::strings::slice_strings(
+          input_table_columns[dependent_column_index]->view(),
+          begin_scalar,
+          end_scalar,
+          step_scalar,
           stream,
           cudf::get_current_device_resource_ref());
       input_table_columns.emplace_back(std::move(new_column));
