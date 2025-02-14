@@ -146,7 +146,7 @@ cudf::ast::expression const& create_ast_tree(
         dynamic_cast<velox::exec::ConstantExpr*>(expr->inputs()[1].get());
     velox::exec::ConstantExpr* c2 =
         dynamic_cast<velox::exec::ConstantExpr*>(expr->inputs()[2].get());
-    if (c1 and c2 and c1->toString() == "1:BIGINT" and
+    if (c1 and c1->toString() == "1:BIGINT" and c2 and
         c2->toString() == "0:BIGINT") {
       auto const& op1 = create_ast_tree(
           expr->inputs()[0],
@@ -155,6 +155,21 @@ cudf::ast::expression const& create_ast_tree(
           inputRowSchema,
           precompute_instructions);
       return tree.push(operation{op::CAST_TO_INT64, op1});
+    } else if (c2 and c2->toString() == "0:DOUBLE") {
+      auto const& op1 = create_ast_tree(
+          expr->inputs()[0],
+          tree,
+          scalars,
+          inputRowSchema,
+          precompute_instructions);
+      auto const& op1d = tree.push(operation{op::CAST_TO_FLOAT64, op1});
+      auto const& op2 = create_ast_tree(
+          expr->inputs()[1],
+          tree,
+          scalars,
+          inputRowSchema,
+          precompute_instructions);
+      return tree.push(operation{op::MUL, op1d, op2});
     } else {
       std::cerr << "switch subexpr: " << expr->toString() << std::endl;
       VELOX_FAIL("Unsupported switch complex operation");
