@@ -37,7 +37,8 @@ class CastHooks {
 
   virtual Expected<Timestamp> castIntToTimestamp(int64_t seconds) const = 0;
 
-  virtual Expected<Timestamp> castDoubleToTimestamp(double seconds) const = 0;
+  virtual Expected<std::optional<Timestamp>> castDoubleToTimestamp(
+      double seconds) const = 0;
 
   virtual Expected<int32_t> castStringToDate(
       const StringView& dateString) const = 0;

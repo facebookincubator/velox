@@ -36,7 +36,8 @@ class SparkCastHooks : public exec::CastHooks {
 
   /// When casting double as timestamp, the input is treated as
   /// the number of seconds since the epoch (1970-01-01 00:00:00 UTC).
-  Expected<Timestamp> castDoubleToTimestamp(double value) const override;
+  Expected<std::optional<Timestamp>> castDoubleToTimestamp(
+      double value) const override;
 
   /// 1) Removes all leading and trailing UTF8 white-spaces before cast. 2) Uses
   /// non-standard cast mode to cast from string to date.

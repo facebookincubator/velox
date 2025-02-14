@@ -60,10 +60,10 @@ Expected<Timestamp> SparkCastHooks::castIntToTimestamp(int64_t seconds) const {
   return castNumberToTimestamp(seconds);
 }
 
-Expected<Timestamp> SparkCastHooks::castDoubleToTimestamp(double value) const {
+Expected<std::optional<Timestamp>> SparkCastHooks::castDoubleToTimestamp(
+    double value) const {
   if (FOLLY_UNLIKELY(std::isnan(value) || std::isinf(value))) {
-    return folly::makeUnexpected(
-        Status::Invalid("Can not convert NaN or Infinity to timestamp"));
+    return std::optional<Timestamp>{};
   }
   return castNumberToTimestamp(value);
 }

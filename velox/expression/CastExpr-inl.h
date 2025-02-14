@@ -292,13 +292,13 @@ void CastExpr::applyCastKernel(
       const auto castResult =
           hooks_->castDoubleToTimestamp(static_cast<double>(inputRowValue));
       if (castResult.hasError()) {
-        if (castResult.error().isUserError()) {
-          setError(castResult.error().message());
+        setError(castResult.error().message());
+      } else {
+        if (castResult.value().has_value()) {
+          result->set(row, castResult.value().value());
         } else {
           result->setNull(row, true);
         }
-      } else {
-        result->set(row, castResult.value());
       }
       return;
     }
