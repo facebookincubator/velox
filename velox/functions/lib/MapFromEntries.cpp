@@ -214,12 +214,8 @@ class MapFromEntriesFunction : public exec::VectorFunction {
     // For Presto, need construct map vector based on input nulls for possible
     // outer expression like try(). For Spark, use the updated nulls unless it's
     // empty.
-    if (throwOnNull_) {
+    if (throwOnNull_ || decodedRowVector->size() == 0) {
       nulls = inputArray->nulls();
-    } else {
-      if (decodedRowVector->size() == 0) {
-        nulls = inputArray->nulls();
-      }
     }
     auto mapVector = std::make_shared<MapVector>(
         context.pool(),
