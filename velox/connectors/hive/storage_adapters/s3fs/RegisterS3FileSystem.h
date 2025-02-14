@@ -21,6 +21,8 @@ namespace facebook::velox::filesystems {
 // Register the S3 filesystem.
 void registerS3FileSystem();
 
+void registerS3Metrics();
+
 /// Teardown the AWS SDK C++.
 /// Velox users need to manually invoke this before exiting an application.
 /// This is because Velox uses a static object to hold the S3 FileSystem

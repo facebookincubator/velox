@@ -16,34 +16,31 @@
 
 #pragma once
 
-#include <folly/Range.h>
-
 namespace facebook::velox::filesystems {
 
-void registerS3Metrics();
-
-constexpr folly::StringPiece kCounterS3ActiveConnections{
+constexpr std::string_view kMetricS3ActiveConnections{
   "presto_cpp.hive.s3.active_connections"};
-constexpr folly::StringPiece kCounterS3StartedUploads{
+constexpr std::string_view kMetricS3StartedUploads{
   "presto_cpp.hive.s3.started_uploads"};
-constexpr folly::StringPiece kCounterS3SuccessfulUploads{
+constexpr std::string_view kMetricS3SuccessfulUploads{
   "presto_cpp.hive.s3.successful_uploads"};
-constexpr folly::StringPiece kCounterS3FailedUploads{
+constexpr std::string_view kMetricS3FailedUploads{
   "presto_cpp.hive.s3.failed_uploads"};
-constexpr folly::StringPiece kCounterS3MetadataCalls{
+constexpr std::string_view kMetricS3MetadataCalls{
   "presto_cpp.hive.s3.metadata_calls"};
-constexpr folly::StringPiece kCounterS3ListStatusCalls{
+constexpr std::string_view kMetricS3ListStatusCalls{
   "presto_cpp.hive.s3.list_status_calls"};
-constexpr folly::StringPiece kCounterS3ListLocatedStatusCalls{
+constexpr std::string_view kMetricS3ListLocatedStatusCalls{
   "presto_cpp.hive.s3.list_located_status_calls"};
-constexpr folly::StringPiece kCounterS3ListObjectsCalls{
+constexpr std::string_view kMetricS3ListObjectsCalls{
   "presto_cpp.hive.s3.list_objects_calls"};
-constexpr folly::StringPiece kCounterS3GetObjectErrors{
+constexpr std::string_view kMetricS3GetObjectErrors{
   "presto_cpp.hive.s3.get_object_errors"};
-constexpr folly::StringPiece kCounterS3GetMetadataErrors{
+constexpr std::string_view kMetricS3GetMetadataErrors{
   "presto_cpp.hive.s3.get_metadata_errors"};
-constexpr folly::StringPiece kCounterS3GetObjectRetries{
+constexpr std::string_view kMetricS3GetObjectRetries{
   "presto_cpp.hive.s3.get_object_retries"};
-constexpr folly::StringPiece kCounterS3GetMetadataRetries{
+constexpr std::string_view kMetricS3GetMetadataRetries{
   "presto_cpp.hive.s3.get_metadata_retries"};
+
 } // namespace facebook::velox

@@ -15,6 +15,8 @@
  */
 
 #include "velox/common/memory/Memory.h"
+#include "velox/connectors/hive/storage_adapters/s3fs/RegisterS3FileSystem.h"
+#include "velox/connectors/hive/storage_adapters/s3fs/S3Counters.h"
 #include "velox/connectors/hive/storage_adapters/s3fs/S3WriteFile.h"
 #include "velox/connectors/hive/storage_adapters/s3fs/tests/S3Test.h"
 
@@ -265,4 +267,117 @@ TEST_F(S3FileSystemTest, invalidConnectionSettings) {
   VELOX_ASSERT_THROW(
       filesystems::S3FileSystem("", hiveConfig), "Invalid duration");
 }
+
+class S3TestReporter : public BaseStatsReporter {
+public:
+  mutable std::mutex m;
+  mutable std::map<std::string, size_t> counterMap;
+  mutable std::unordered_map<std::string, StatType> statTypeMap;
+
+  void clear() {
+    std::lock_guard<std::mutex> l(m);
+    counterMap.clear();
+    statTypeMap.clear();
+  }
+void registerMetricExportType(const char* key, StatType statType)
+      const override {
+    statTypeMap[key] = statType;
+  }
+
+  void registerMetricExportType(folly::StringPiece key, StatType statType)
+      const override {
+    statTypeMap[key.str()] = statType;
+  }
+
+  void registerHistogramMetricExportType(
+      const char* key,
+      int64_t,
+      int64_t,
+      int64_t,
+      const std::vector<int32_t>& pcts) const override {
+    VELOX_NYI();
+  }
+
+  void registerHistogramMetricExportType(
+      folly::StringPiece key,
+      int64_t /* bucketWidth */,
+      int64_t /* min */,
+      int64_t /* max */,
+      const std::vector<int32_t>& pcts) const override {
+    VELOX_NYI();
+  }
+
+  void addMetricValue(const std::string& key, const size_t value)
+      const override {
+    std::lock_guard<std::mutex> l(m);
+    counterMap[key] += value;
+  }
+
+  void addMetricValue(const char* key, const size_t value) const override {
+    std::lock_guard<std::mutex> l(m);
+    counterMap[key] += value;
+  }
+
+  void addMetricValue(folly::StringPiece key, size_t value) const override {
+    std::lock_guard<std::mutex> l(m);
+    counterMap[key.str()] += value;
+  }
+
+  void addHistogramMetricValue(const std::string& key, size_t value)
+      const override {
+    VELOX_NYI();
+  }
+
+  void addHistogramMetricValue(const char* key, size_t value) const override {
+    VELOX_NYI();
+  }
+
+  void addHistogramMetricValue(folly::StringPiece key, size_t value)
+      const override {
+    VELOX_NYI();
+  }
+
+  std::string fetchMetrics() override {
+    VELOX_NYI();
+  }
+};
+
+TEST_F(S3FileSystemTest, metrics) {
+  folly::Singleton<BaseStatsReporter> reporter([]() {
+    return new S3TestReporter();
+  });
+  std::shared_ptr<S3TestReporter> s3Reporter = std::dynamic_pointer_cast<S3TestReporter>(
+        folly::Singleton<BaseStatsReporter>::try_get());
+  s3Reporter->clear();
+  BaseStatsReporter::registered = true;
+  registerS3Metrics();
+
+  const auto bucketName = "metrics";
+  const auto file = "test.txt";
+  const auto filename = localPath(bucketName) + "/" + file;
+  const auto s3File = s3URI(bucketName, file);
+  auto hiveConfig = minioServer_->hiveConfig();
+  S3FileSystem s3fs(bucketName, hiveConfig);
+  auto pool = memory::memoryManager()->addLeafPool("S3FileSystemTest");
+
+  auto writeFile =
+      s3fs.openFileForWrite(s3File, {{}, pool.get(), std::nullopt});
+  EXPECT_EQ(1, s3Reporter->counterMap[std::string{kMetricS3MetadataCalls}]);
+  EXPECT_EQ(1, s3Reporter->counterMap[std::string{kMetricS3GetMetadataErrors}]);
+
+  std::string dataContent =
+      "Dance me to your beauty with a burning violin"
+      "Dance me through the panic till I'm gathered safely in"
+      "Lift me like an olive branch and be my homeward dove"
+      "Dance me to the end of love";
+  writeFile->append(dataContent);
+  writeFile->close();
+  EXPECT_EQ(1, s3Reporter->counterMap[std::string{kMetricS3StartedUploads}]);
+  EXPECT_EQ(1, s3Reporter->counterMap[std::string{kMetricS3SuccessfulUploads}]);
+
+  auto readFile = s3fs.openFileForRead(s3File);
+  EXPECT_EQ(2, s3Reporter->counterMap[std::string{kMetricS3MetadataCalls}]);
+  readFile->pread(0, dataContent.length());
+}
+
 } // namespace facebook::velox::filesystems
