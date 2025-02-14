@@ -302,16 +302,27 @@ RowVectorPtr CudfFilterProject::getOutput() {
   auto cudf_table_view = input_table->view();
   std::vector<std::unique_ptr<cudf::column>> columns;
   for (auto& tree : projectAst_) {
-    auto col = cudf::compute_column(
-        cudf_table_view,
-        tree.back(),
-        stream,
-        cudf::get_current_device_resource_ref());
-    columns.emplace_back(std::move(col));
+    if (auto col_ref_ptr =
+            dynamic_cast<cudf::ast::column_reference const*>(&tree.back())) {
+      auto col = std::make_unique<cudf::column>(
+          cudf_table_view.column(col_ref_ptr->get_column_index()),
+          stream,
+          cudf::get_current_device_resource_ref());
+      columns.emplace_back(std::move(col));
+    } else {
+      auto col = cudf::compute_column(
+          cudf_table_view,
+          tree.back(),
+          stream,
+          cudf::get_current_device_resource_ref());
+      columns.emplace_back(std::move(col));
+    }
   }
 
   // Rearrange columns to match outputType_
-  std::vector<std::unique_ptr<cudf::column>> output_columns(
+        cudf_table_view.column(identity.inputChannel),
+        stream,
+        cudf::get_current_device_resource_ref());
       outputType_->size());
   // computed resultProjections
   for (int i = 0; i < resultProjections_.size(); i++) {
@@ -320,7 +331,9 @@ RowVectorPtr CudfFilterProject::getOutput() {
   // identityProjections (input to output copy)
   for (auto const& identity : identityProjections_) {
     output_columns[identity.outputChannel] = std::make_unique<cudf::column>(
-        cudf_table_view.column(identity.inputChannel));
+        cudf_table_view.column(identity.inputChannel),
+        stream,
+        cudf::get_current_device_resource_ref());
   }
 
   auto output_table = std::make_unique<cudf::table>(std::move(output_columns));
