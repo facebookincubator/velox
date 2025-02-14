@@ -113,37 +113,11 @@ std::optional<std::string> SparkQueryRunner::toSql(
           std::dynamic_pointer_cast<const core::ValuesNode>(plan)) {
     return toSql(valuesNode);
   }
-  VELOX_NYI("Unsupported plan node: {}.", plan->toString());
-}
-
-std::multiset<std::vector<variant>> SparkQueryRunner::execute(
-    const std::string& sql,
-    const std::vector<RowVectorPtr>& input,
-    const RowTypePtr& resultType) {
-  return exec::test::materialize(executeVector(sql, input, resultType));
-}
-
-std::vector<RowVectorPtr> SparkQueryRunner::executeVector(
-    const std::string& sql,
-    const std::vector<RowVectorPtr>& input,
-    const RowTypePtr& resultType) {
-  auto inputType = asRowType(input[0]->type());
-  if (inputType->size() == 0) {
-    auto rowVector = exec::test::makeNullRows(input, "x", pool());
-    return executeVector(sql, {rowVector}, resultType);
+  if (const auto tableScanNode =
+          std::dynamic_pointer_cast<const core::TableScanNode>(plan)) {
+    return toSql(tableScanNode);
   }
-
-  // Write the input to a Parquet file.
-  auto tempFile = exec::test::TempFilePath::create();
-  const auto& filePath = tempFile->getPath();
-  auto writerPool = aggregatePool()->addAggregateChild("writer");
-  writeToFile(filePath, input, writerPool.get());
-
-  // Create temporary view 'tmp' in Spark by reading the generated Parquet file.
-  execute(fmt::format(
-      "CREATE OR REPLACE TEMPORARY VIEW tmp AS (SELECT * from parquet.`file://{}`);",
-      filePath));
-  return execute(sql);
+  VELOX_NYI("Unsupported plan node: {}.", plan->toString());
 }
 
 std::vector<RowVectorPtr> SparkQueryRunner::execute(
