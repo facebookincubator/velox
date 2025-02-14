@@ -182,6 +182,7 @@ bool CompileState::compile() {
       VELOX_CHECK(plan_node != nullptr);
       replace_op.push_back(
           std::make_unique<CudfHashAggregation>(id, ctx, plan_node));
+      replace_op.back()->initialize();
     } else if (is_filter_project_supported(oper)) {
       auto filterProjectOp = dynamic_cast<exec::FilterProject*>(oper);
       auto info = filterProjectOp->exprsAndProjection();
