@@ -233,8 +233,8 @@ add_executable(velox_cache_fuzzer_test CacheFuzzerTest.cpp)
 
 target_link_libraries(
   velox_cache_fuzzer_test
-  velox_cache_fuzzer
   velox_fuzzer_util
+  velox_cache_fuzzer
   GTest::gtest
   GTest::gtest_main)
 
