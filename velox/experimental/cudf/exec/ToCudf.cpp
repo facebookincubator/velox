@@ -92,7 +92,7 @@ bool CompileState::compile() {
     if (!plan_node) {
       return false;
     }
-    if (!plan_node->isInnerJoin()) {
+    if (!CudfHashJoinProbe::isSupportedJoinType(plan_node->joinType())) {
       return false;
     }
     if (plan_node->filter() != nullptr) {
