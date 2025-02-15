@@ -22,8 +22,12 @@
 
 #include <cudf/datetime.hpp>
 #include <cudf/strings/attributes.hpp>
+#include <cudf/strings/contains.hpp>
+#include <cudf/strings/slice.hpp>
 #include <cudf/table/table.hpp>
 #include <cudf/transform.hpp>
+
+#include <sstream>
 
 namespace facebook::velox::cudf_velox {
 
@@ -146,7 +150,7 @@ cudf::ast::expression const& create_ast_tree(
         dynamic_cast<velox::exec::ConstantExpr*>(expr->inputs()[1].get());
     velox::exec::ConstantExpr* c2 =
         dynamic_cast<velox::exec::ConstantExpr*>(expr->inputs()[2].get());
-    if (c1 and c2 and c1->toString() == "1:BIGINT" and
+    if (c1 and c1->toString() == "1:BIGINT" and c2 and
         c2->toString() == "0:BIGINT") {
       auto const& op1 = create_ast_tree(
           expr->inputs()[0],
@@ -155,6 +159,21 @@ cudf::ast::expression const& create_ast_tree(
           inputRowSchema,
           precompute_instructions);
       return tree.push(operation{op::CAST_TO_INT64, op1});
+    } else if (c2 and c2->toString() == "0:DOUBLE") {
+      auto const& op1 = create_ast_tree(
+          expr->inputs()[0],
+          tree,
+          scalars,
+          inputRowSchema,
+          precompute_instructions);
+      auto const& op1d = tree.push(operation{op::CAST_TO_FLOAT64, op1});
+      auto const& op2 = create_ast_tree(
+          expr->inputs()[1],
+          tree,
+          scalars,
+          inputRowSchema,
+          precompute_instructions);
+      return tree.push(operation{op::MUL, op1d, op2});
     } else {
       std::cerr << "switch subexpr: " << expr->toString() << std::endl;
       VELOX_FAIL("Unsupported switch complex operation");
@@ -192,6 +211,48 @@ cudf::ast::expression const& create_ast_tree(
     auto const& col_ref =
         tree.push(cudf::ast::column_reference(new_column_index));
     return tree.push(operation{op::CAST_TO_INT64, col_ref});
+  } else if (name == "substr") {
+    // add precompute instruction, special handling col_ref during ast
+    // evaluation
+    auto len = expr->inputs().size();
+    VELOX_CHECK_EQ(len, 3);
+    auto fieldExpr = std::dynamic_pointer_cast<velox::exec::FieldReference>(
+        expr->inputs()[0]);
+    VELOX_CHECK_NOT_NULL(fieldExpr, "Expression is not a field");
+    auto dependent_column_index =
+        inputRowSchema->getChildIdx(fieldExpr->name());
+    auto new_column_index =
+        inputRowSchema->size() + precompute_instructions.size();
+    // add this index and precompute instruction to a data structure
+    velox::exec::ConstantExpr* c1 =
+        dynamic_cast<velox::exec::ConstantExpr*>(expr->inputs()[1].get());
+    velox::exec::ConstantExpr* c2 =
+        dynamic_cast<velox::exec::ConstantExpr*>(expr->inputs()[2].get());
+    std::string substr_expr =
+        "substr " + c1->value()->toString(0) + " " + c2->value()->toString(0);
+    precompute_instructions.emplace_back(
+        dependent_column_index, substr_expr, new_column_index);
+    // This custom op should be added to input columns.
+    return tree.push(cudf::ast::column_reference(new_column_index));
+  } else if (name == "like") {
+    auto len = expr->inputs().size();
+    VELOX_CHECK_EQ(len, 2);
+    auto fieldExpr = std::dynamic_pointer_cast<velox::exec::FieldReference>(
+        expr->inputs()[0]);
+    VELOX_CHECK_NOT_NULL(fieldExpr, "Expression is not a field");
+    auto dependent_column_index =
+        inputRowSchema->getChildIdx(fieldExpr->name());
+    auto new_column_index =
+        inputRowSchema->size() + precompute_instructions.size();
+    auto literalExpr =
+        std::dynamic_pointer_cast<velox::exec::ConstantExpr>(expr->inputs()[1]);
+    VELOX_CHECK_NOT_NULL(literalExpr, "Expression is not a literal");
+    createLiteral(literalExpr->value(), scalars);
+    std::string like_expr = "like " + std::to_string(scalars.size() - 1);
+    std::cout << "like_expr: " << like_expr << std::endl;
+    precompute_instructions.emplace_back(
+        dependent_column_index, like_expr, new_column_index);
+    return tree.push(cudf::ast::column_reference(new_column_index));
   } else if (
       auto fieldExpr =
           std::dynamic_pointer_cast<velox::exec::FieldReference>(expr)) {
@@ -277,6 +338,35 @@ RowVectorPtr CudfFilterProject::getOutput() {
           stream,
           cudf::get_current_device_resource_ref());
       input_table_columns.emplace_back(std::move(new_column));
+    } else if (ins_name.rfind("substr", 0) == 0) {
+      // extract begin, end from ins_name "substr begin end"
+      std::istringstream iss(ins_name.substr(6));
+      int begin_value, end_value;
+      iss >> begin_value >> end_value;
+      auto begin_scalar = cudf::numeric_scalar<cudf::size_type>(
+          begin_value, true, stream, cudf::get_current_device_resource_ref());
+      auto end_scalar = cudf::numeric_scalar<cudf::size_type>(
+          end_value, true, stream, cudf::get_current_device_resource_ref());
+      auto step_scalar = cudf::numeric_scalar<cudf::size_type>(
+          1, true, stream, cudf::get_current_device_resource_ref());
+      auto new_column = cudf::strings::slice_strings(
+          input_table_columns[dependent_column_index]->view(),
+          begin_scalar,
+          end_scalar,
+          step_scalar,
+          stream,
+          cudf::get_current_device_resource_ref());
+      input_table_columns.emplace_back(std::move(new_column));
+    } else if (ins_name.rfind("like", 0) == 0) { // like index
+      auto scalar_index = std::stoi(ins_name.substr(4));
+      auto new_column = cudf::strings::like(
+          input_table_columns[dependent_column_index]->view(),
+          *static_cast<cudf::string_scalar*>(scalars_[scalar_index].get()),
+          cudf::string_scalar(
+              "", true, stream, cudf::get_current_device_resource_ref()),
+          stream,
+          cudf::get_current_device_resource_ref());
+      input_table_columns.emplace_back(std::move(new_column));
     } else {
       VELOX_FAIL("Unsupported precompute operation " + ins_name);
     }
@@ -287,12 +377,21 @@ RowVectorPtr CudfFilterProject::getOutput() {
   auto cudf_table_view = input_table->view();
   std::vector<std::unique_ptr<cudf::column>> columns;
   for (auto& tree : projectAst_) {
-    auto col = cudf::compute_column(
-        cudf_table_view,
-        tree.back(),
-        stream,
-        cudf::get_current_device_resource_ref());
-    columns.emplace_back(std::move(col));
+    if (auto col_ref_ptr =
+            dynamic_cast<cudf::ast::column_reference const*>(&tree.back())) {
+      auto col = std::make_unique<cudf::column>(
+          cudf_table_view.column(col_ref_ptr->get_column_index()),
+          stream,
+          cudf::get_current_device_resource_ref());
+      columns.emplace_back(std::move(col));
+    } else {
+      auto col = cudf::compute_column(
+          cudf_table_view,
+          tree.back(),
+          stream,
+          cudf::get_current_device_resource_ref());
+      columns.emplace_back(std::move(col));
+    }
   }
 
   // Rearrange columns to match outputType_
@@ -305,7 +404,9 @@ RowVectorPtr CudfFilterProject::getOutput() {
   // identityProjections (input to output copy)
   for (auto const& identity : identityProjections_) {
     output_columns[identity.outputChannel] = std::make_unique<cudf::column>(
-        cudf_table_view.column(identity.inputChannel));
+        cudf_table_view.column(identity.inputChannel),
+        stream,
+        cudf::get_current_device_resource_ref());
   }
 
   auto output_table = std::make_unique<cudf::table>(std::move(output_columns));

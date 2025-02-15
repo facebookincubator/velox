@@ -17,6 +17,7 @@
 #include "velox/experimental/cudf/exec/ToCudf.h"
 #include <cuda.h>
 #include <cudf/detail/nvtx/ranges.hpp>
+#include <exec/HashAggregation.h>
 #include "velox/exec/Driver.h"
 #include "velox/exec/FilterProject.h"
 #include "velox/exec/HashBuild.h"
@@ -25,7 +26,9 @@
 #include "velox/exec/OrderBy.h"
 #include "velox/experimental/cudf/exec/CudfConversion.h"
 #include "velox/experimental/cudf/exec/CudfFilterProject.h"
+#include "velox/experimental/cudf/exec/CudfHashAggregation.h"
 #include "velox/experimental/cudf/exec/CudfHashJoin.h"
+#include "velox/experimental/cudf/exec/CudfLocalPartition.h"
 #include "velox/experimental/cudf/exec/CudfOrderBy.h"
 #include "velox/experimental/cudf/exec/Utilities.h"
 
@@ -101,28 +104,40 @@ bool CompileState::compile() {
     return true;
   };
 
+  // TODO (dm): The logic to figure out whether to put a conversion before or
+  // after the replced operators needs a second go over after adding local
+  // exchange.
   auto is_supported_gpu_operator =
-      [is_filter_project_supported,
-       is_join_supported](const exec::Operator* op) {
-        return is_any_of<exec::OrderBy>(op) ||
+      [is_filter_project_supported](const exec::Operator* op) {
+        return is_any_of<
+                   exec::OrderBy,
+                    exec::HashAggregation,
+                    exec::LocalPartition,
+                    exec::LocalExchange>(op) ||
             is_filter_project_supported(op) || is_join_supported(op);
       };
+
   std::vector<bool> is_supported_gpu_operators(operators.size());
   std::transform(
       operators.begin(),
       operators.end(),
       is_supported_gpu_operators.begin(),
       is_supported_gpu_operator);
-  auto accepts_gpu_input = [is_filter_project_supported,
-                            is_join_supported](const exec::Operator* op) {
-    return is_any_of<exec::OrderBy>(op) || is_filter_project_supported(op) ||
+  auto accepts_gpu_input =
+      [is_filter_project_supported](const exec::Operator* op) {
+        return is_any_of<
+                   exec::OrderBy,
+                   exec::HashAggregation,
+                  exec::LocalPartition>(op) ||
+            is_filter_project_supported(op) ||
         is_join_supported(op);
-  };
-  auto produces_gpu_output = [is_filter_project_supported,
-                              is_join_supported](const exec::Operator* op) {
-    return is_any_of<exec::OrderBy>(op) || is_filter_project_supported(op) ||
+      };
+  auto produces_gpu_output =
+      [is_filter_project_supported](const exec::Operator* op) {
+        return is_any_of<exec::OrderBy, exec::HashAggregation,
+        exec::LocalExchange>(op) ||
         (is_any_of<exec::HashProbe>(op) && is_join_supported(op));
-  };
+      };
 
   int32_t operatorsOffset = 0;
   for (int32_t operatorIndex = 0; operatorIndex < operators.size();
@@ -177,6 +192,13 @@ bool CompileState::compile() {
       replace_op.push_back(std::make_unique<CudfOrderBy>(id, ctx, plan_node));
       replace_op.back()->initialize();
       // To-velox (optional)
+    } else if (auto hashAggOp = dynamic_cast<exec::HashAggregation*>(oper)) {
+      auto plan_node = std::dynamic_pointer_cast<const core::AggregationNode>(
+          get_plan_node(hashAggOp->planNodeId()));
+      VELOX_CHECK(plan_node != nullptr);
+      replace_op.push_back(
+          std::make_unique<CudfHashAggregation>(id, ctx, plan_node));
+      replace_op.back()->initialize();
     } else if (is_filter_project_supported(oper)) {
       auto filterProjectOp = dynamic_cast<exec::FilterProject*>(oper);
       auto info = filterProjectOp->exprsAndProjection();
@@ -188,6 +210,15 @@ bool CompileState::compile() {
       VELOX_CHECK(plan_node != nullptr);
       replace_op.push_back(std::make_unique<CudfFilterProject>(
           id, ctx, info, id_projections, nullptr, plan_node));
+      replace_op.back()->initialize();
+    } else if (
+        auto localPartitionOp = dynamic_cast<exec::LocalPartition*>(oper)) {
+      auto plan_node =
+          std::dynamic_pointer_cast<const core::LocalPartitionNode>(
+              get_plan_node(localPartitionOp->planNodeId()));
+      VELOX_CHECK(plan_node != nullptr);
+      replace_op.push_back(
+          std::make_unique<CudfLocalPartition>(id, ctx, plan_node));
       replace_op.back()->initialize();
     }
 
