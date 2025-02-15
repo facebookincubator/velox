@@ -93,6 +93,37 @@ class NestedLoopJoinProbe : public Operator {
 
   void close() override;
 
+  // Returns the 'match' column in the output for semi project joins.
+  VectorPtr& matchColumnVector() const {
+    VELOX_DCHECK(
+        isRightSemiProjectJoin(joinType_) || isLeftSemiProjectJoin(joinType_));
+    return output_->children().back();
+  }
+
+  // Implements a a Left Semi Project Join within NestedLoopJoinProbe.
+  // The getOutputLeftSemiJoinImpl() will ensure that exactly one row is
+  // produced for each probe row, along with a boolean "match" column
+  // which will indicate whether a matching build row exists on the
+  // build side.
+  //
+  // 1. At this point, the filter expressions are applied and we short
+  //    circuit the execution for a LeftSemiProject since we don't require
+  //    mismatch rows or build side projections. For each probe row, we simply
+  //    iterate through decoded filter results to determine if at least
+  //    one build side row satisfies the filter condition.
+  // 2. If match is found, the match column is marked as `true`, and
+  //    defaulted to false otherwise. Finally populates the output row with
+  //    the probe row data.
+  // 3. The function ensures that only one row is produced in the output,
+  //    indicating build side match. After processing the current probe row,
+  //    it skip the rest of the build rows.
+  //
+  // Returns a `RowVectorPtr` representing the output row. For left semi project
+  // this basically contains probe row data with the match column.
+  //
+  RowVectorPtr getOutputLeftSemiJoinImpl();
+  RowVectorPtr makeSingleOutputRow(bool matched);
+
  private:
   // TODO: maybe consolidate initializeFilter routine across operators like
   // HashProbe and MergeJoin.
@@ -231,7 +262,7 @@ class NestedLoopJoinProbe : public Operator {
 
   /// Cross joins are translated into NLJ's without a join conditition.
   bool isCrossJoin() const {
-    return joinCondition_ == nullptr;
+    return joinCondition_ == nullptr && !isLeftSemiProjectJoin(joinType_);
   }
 
   // If build has a single vector, we can wrap probe and build batches into
@@ -365,6 +396,7 @@ class NestedLoopJoinProbe : public Operator {
   std::vector<IdentityProjection> filterBuildProjections_;
 
   BufferPtr buildOutMapping_;
+
 };
 
 } // namespace facebook::velox::exec

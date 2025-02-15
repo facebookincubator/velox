@@ -118,7 +118,7 @@ AggregationNode::AggregationNode(
     const std::vector<FieldAccessTypedExprPtr>& groupingKeys,
     const std::vector<FieldAccessTypedExprPtr>& preGroupedKeys,
     const std::vector<std::string>& aggregateNames,
-    const std::vector<Aggregate>& aggregates,
+    const std::vector<AggregationNode::Aggregate>& aggregates,
     const std::vector<vector_size_t>& globalGroupingSets,
     const std::optional<FieldAccessTypedExprPtr>& groupId,
     bool ignoreNullKeys,
@@ -184,7 +184,7 @@ AggregationNode::AggregationNode(
     const std::vector<FieldAccessTypedExprPtr>& groupingKeys,
     const std::vector<FieldAccessTypedExprPtr>& preGroupedKeys,
     const std::vector<std::string>& aggregateNames,
-    const std::vector<Aggregate>& aggregates,
+    const std::vector<AggregationNode::Aggregate>& aggregates,
     bool ignoreNullKeys,
     PlanNodePtr source)
     : AggregationNode(
@@ -1225,7 +1225,7 @@ AbstractJoinNode::AbstractJoinNode(
         core::isLeftSemiProjectJoin(joinType) || core::isAntiJoin(joinType));
 
   for (auto i = 0; i < numOutputColumms; ++i) {
-    auto name = outputType_->nameOf(i);
+    const auto name = outputType_->nameOf(i);
     if (outputMayIncludeLeftColumns && leftType->containsChild(name)) {
       VELOX_CHECK(
           !rightType->containsChild(name),
@@ -1504,7 +1504,23 @@ NestedLoopJoinNode::NestedLoopJoinNode(
 
   auto leftType = sources_[0]->outputType();
   auto rightType = sources_[1]->outputType();
-  for (const auto& name : outputType_->names()) {
+  auto numOutputColumms = outputType_->size();
+  if (core::isLeftSemiProjectJoin(joinType)) {
+    --numOutputColumms;
+    VELOX_CHECK_EQ(outputType_->childAt(numOutputColumms), BOOLEAN());
+    const auto& name = outputType_->nameOf(numOutputColumms);
+    VELOX_CHECK(
+        !leftType->containsChild(name),
+        "Match column '{}' cannot be present in left source.",
+        name);
+    VELOX_CHECK(
+        !rightType->containsChild(name),
+        "Match column '{}' cannot be present in right source.",
+        name);
+  }
+
+  for (auto i = 0; i < numOutputColumms; ++i) {
+    auto name = outputType_->nameOf(i);
     const bool leftContains = leftType->containsChild(name);
     const bool rightContains = rightType->containsChild(name);
     VELOX_USER_CHECK(
@@ -1538,6 +1554,7 @@ bool NestedLoopJoinNode::isSupported(core::JoinType joinType) {
     case core::JoinType::kLeft:
     case core::JoinType::kRight:
     case core::JoinType::kFull:
+    case core::JoinType::kLeftSemiProject:
       return true;
 
     default:
