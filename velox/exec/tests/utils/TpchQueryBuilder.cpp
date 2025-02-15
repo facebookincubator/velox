@@ -1243,12 +1243,12 @@ TpchPlan TpchQueryBuilder::getQ10Plan() const {
 
   auto nation =
       PlanBuilder(planNodeIdGenerator, pool_.get())
-          .tableScan(kNation, nationSelectedRowType, nationFileColumns)
+          .cudftableScan(kNation, nationSelectedRowType, nationFileColumns)
           .capturePlanNodeId(nationScanNodeId)
           .planNode();
 
   auto orders = PlanBuilder(planNodeIdGenerator, pool_.get())
-                    .tableScan(
+                    .cudftableScan(
                         kOrders,
                         ordersSelectedRowType,
                         ordersFileColumns,
@@ -1258,7 +1258,7 @@ TpchPlan TpchQueryBuilder::getQ10Plan() const {
 
   auto partialPlan =
       PlanBuilder(planNodeIdGenerator, pool_.get())
-          .tableScan(kCustomer, customerSelectedRowType, customerFileColumns)
+          .cudftableScan(kCustomer, customerSelectedRowType, customerFileColumns)
           .capturePlanNodeId(customerScanNodeId)
           .hashJoin(
               {"c_custkey"},
@@ -1276,7 +1276,7 @@ TpchPlan TpchQueryBuilder::getQ10Plan() const {
           .planNode();
 
   auto plan = PlanBuilder(planNodeIdGenerator, pool_.get())
-                  .tableScan(
+                  .cudftableScan(
                       kLineitem,
                       lineitemSelectedRowType,
                       lineitemFileColumns,
