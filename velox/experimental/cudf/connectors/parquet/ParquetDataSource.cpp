@@ -19,9 +19,9 @@
 #include <memory>
 #include <string>
 
+#include "velox/experimental/cudf/connectors/parquet/ParquetConfig.h"
 #include "velox/experimental/cudf/connectors/parquet/ParquetConnectorSplit.h"
 #include "velox/experimental/cudf/connectors/parquet/ParquetDataSource.h"
-#include "velox/experimental/cudf/connectors/parquet/ParquetReaderConfig.h"
 #include "velox/experimental/cudf/connectors/parquet/ParquetTableHandle.h"
 
 #include "velox/experimental/cudf/exec/ToCudf.h"
@@ -36,31 +36,6 @@
 #include <cudf/table/table.hpp>
 #include <cudf/table/table_view.hpp>
 
-#include <nvtx3/nvtx3.hpp>
-
-namespace {
-
-// Concatenate a vector of cuDF tables into a single table
-std::unique_ptr<cudf::table> concatenateTables(
-    std::vector<std::unique_ptr<cudf::table>> tables) {
-  // Check for empty vector
-  VELOX_CHECK_GT(tables.size(), 0);
-
-  if (tables.size() == 1) {
-    return std::move(tables[0]);
-  }
-  std::vector<cudf::table_view> tableViews;
-  tableViews.reserve(tables.size());
-  std::transform(
-      tables.begin(),
-      tables.end(),
-      std::back_inserter(tableViews),
-      [&](auto const& tbl) { return tbl->view(); });
-  return cudf::concatenate(tableViews, cudf::get_default_stream());
-}
-
-} // namespace
-
 namespace facebook::velox::cudf_velox::connector::parquet {
 
 using namespace facebook::velox::connector;
@@ -72,8 +47,8 @@ ParquetDataSource::ParquetDataSource(
         columnHandles,
     folly::Executor* executor,
     const ConnectorQueryCtx* connectorQueryCtx,
-    const std::shared_ptr<ParquetReaderConfig>& ParquetReaderConfig)
-    : ParquetReaderConfig_(ParquetReaderConfig),
+    const std::shared_ptr<ParquetConfig>& ParquetConfig)
+    : ParquetConfig_(ParquetConfig),
       executor_(executor),
       connectorQueryCtx_(connectorQueryCtx),
       pool_(connectorQueryCtx->memoryPool()),
@@ -130,11 +105,13 @@ std::optional<RowVectorPtr> ParquetDataSource::next(
   currentCudfTableView_ = cudfTable_->view();
 
   // Output RowVectorPtr
+  auto stream = cudfGlobalStreamPool().get_stream();
   auto sz = cudfTable_->num_rows();
   auto output = cudfIsRegistered()
       ? std::make_shared<CudfVector>(
-            pool_, outputType_, sz, std::move(cudfTable_))
-      : with_arrow::to_velox_column(currentCudfTableView_, pool_, columnNames);
+            pool_, outputType_, sz, std::move(cudfTable_), stream)
+      : with_arrow::to_velox_column(currentCudfTableView_, pool_, columnNames, stream);
+  stream.synchronize();
 
   // Reset internal tables
   resetCudfTableAndView();
@@ -186,17 +163,17 @@ ParquetDataSource::createSplitReader() {
   // Reader options
   auto readerOptions =
       cudf::io::parquet_reader_options::builder(split_->getCudfSourceInfo())
-          .skip_rows(ParquetReaderConfig_->skipRows())
-          .use_pandas_metadata(ParquetReaderConfig_->isUsePandasMetadata())
-          .use_arrow_schema(ParquetReaderConfig_->isUseArrowSchema())
+          .skip_rows(ParquetConfig_->skipRows())
+          .use_pandas_metadata(ParquetConfig_->isUsePandasMetadata())
+          .use_arrow_schema(ParquetConfig_->isUseArrowSchema())
           .allow_mismatched_pq_schemas(
-              ParquetReaderConfig_->isAllowMismatchedParquetSchemas())
-          .timestamp_type(ParquetReaderConfig_->timestampType())
+              ParquetConfig_->isAllowMismatchedParquetSchemas())
+          .timestamp_type(ParquetConfig_->timestampType())
           .build();
 
   // Set num_rows only if available
-  if (ParquetReaderConfig_->numRows().has_value()) {
-    readerOptions.set_num_rows(ParquetReaderConfig_->numRows().value());
+  if (ParquetConfig_->numRows().has_value()) {
+    readerOptions.set_num_rows(ParquetConfig_->numRows().value());
   }
 
   // Set column projection if needed
@@ -206,8 +183,8 @@ ParquetDataSource::createSplitReader() {
 
   // Create a parquet reader
   return std::make_unique<cudf::io::chunked_parquet_reader>(
-      ParquetReaderConfig_->maxChunkReadLimit(),
-      ParquetReaderConfig_->maxPassReadLimit(),
+      ParquetConfig_->maxChunkReadLimit(),
+      ParquetConfig_->maxPassReadLimit(),
       readerOptions);
 }
 

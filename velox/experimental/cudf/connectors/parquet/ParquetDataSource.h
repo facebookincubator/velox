@@ -20,8 +20,8 @@
 #include "velox/common/io/IoStatistics.h"
 #include "velox/connectors/Connector.h"
 #include "velox/dwio/common/Statistics.h"
+#include "velox/experimental/cudf/connectors/parquet/ParquetConfig.h"
 #include "velox/experimental/cudf/connectors/parquet/ParquetConnectorSplit.h"
-#include "velox/experimental/cudf/connectors/parquet/ParquetReaderConfig.h"
 #include "velox/experimental/cudf/connectors/parquet/ParquetTableHandle.h"
 #include "velox/type/Type.h"
 
@@ -42,7 +42,7 @@ class ParquetDataSource : public DataSource {
           columnHandles,
       folly::Executor* executor,
       const ConnectorQueryCtx* connectorQueryCtx,
-      const std::shared_ptr<ParquetReaderConfig>& ParquetReaderConfig);
+      const std::shared_ptr<ParquetConfig>& ParquetConfig);
 
   void addSplit(std::shared_ptr<ConnectorSplit> split) override;
 
@@ -90,7 +90,7 @@ class ParquetDataSource : public DataSource {
   std::shared_ptr<ParquetConnectorSplit> split_;
   std::shared_ptr<ParquetTableHandle> tableHandle_;
 
-  const std::shared_ptr<ParquetReaderConfig> ParquetReaderConfig_;
+  const std::shared_ptr<ParquetConfig> ParquetConfig_;
 
   folly::Executor* const executor_;
   const ConnectorQueryCtx* const connectorQueryCtx_;

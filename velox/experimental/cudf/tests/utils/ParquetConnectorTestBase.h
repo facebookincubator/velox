@@ -19,9 +19,10 @@
 #include "velox/exec/Operator.h"
 #include "velox/exec/tests/utils/OperatorTestBase.h"
 #include "velox/exec/tests/utils/TempFilePath.h"
+#include "velox/experimental/cudf/connectors/parquet/ParquetConfig.h"
 #include "velox/experimental/cudf/connectors/parquet/ParquetConnector.h"
+#include "velox/experimental/cudf/connectors/parquet/ParquetDataSink.h"
 #include "velox/experimental/cudf/connectors/parquet/ParquetDataSource.h"
-#include "velox/experimental/cudf/connectors/parquet/ParquetReaderConfig.h"
 #include "velox/experimental/cudf/connectors/parquet/ParquetTableHandle.h"
 #include "velox/type/tests/SubfieldFiltersBuilder.h"
 
@@ -123,6 +124,47 @@ class ParquetConnectorTestBase
       const TypePtr& type,
       const cudf::data_type data_type,
       const std::vector<connector::parquet::ParquetColumnHandle>& children);
+
+  /// @param targetDirectory Final directory of the target table.
+  /// @param tableType Whether to create a new table.
+  static std::shared_ptr<connector::parquet::LocationHandle> makeLocationHandle(
+      std::string targetDirectory) {
+    return std::make_shared<connector::parquet::LocationHandle>(
+        targetDirectory,
+        connector::parquet::LocationHandle::TableType::kNew,
+        "");
+  }
+
+  /// @param targetDirectory Final directory of the target table.
+  /// @param tableType Whether to create a new table, insert into an existing
+  /// table, or write a temporary table.
+  /// @param targetDirectory Final file name of the target table .
+  static std::shared_ptr<connector::parquet::LocationHandle> makeLocationHandle(
+      std::string targetDirectory,
+      connector::parquet::LocationHandle::TableType tableType =
+          connector::parquet::LocationHandle::TableType::kNew,
+      std::string targetFileName = "") {
+    return std::make_shared<connector::parquet::LocationHandle>(
+        targetDirectory, tableType, targetFileName);
+  }
+
+  /// Build a ParquetInsertTableHandle.
+  /// @param tableColumnNames Column names of the target table. Corresponding
+  /// type of tableColumnNames[i] is tableColumnTypes[i].
+  /// @param tableColumnTypes Column types of the target table. Corresponding
+  /// name of tableColumnTypes[i] is tableColumnNames[i].
+  /// @param locationHandle Location handle for the table write.
+  /// @param compressionKind compression algorithm to use for table write.
+  /// @param serdeParameters Table writer configuration parameters.
+  static std::shared_ptr<connector::parquet::ParquetInsertTableHandle>
+  makeParquetInsertTableHandle(
+      const std::vector<std::string>& tableColumnNames,
+      const std::vector<TypePtr>& tableColumnTypes,
+      std::shared_ptr<connector::parquet::LocationHandle> locationHandle,
+      const std::optional<common::CompressionKind> compressionKind = {},
+      const std::unordered_map<std::string, std::string>& serdeParameters = {},
+      const std::shared_ptr<dwio::common::WriterOptions>& writerOptions =
+          nullptr);
 };
 
 /// Same as connector::parquet::ParquetConnectorBuilder, except that this
