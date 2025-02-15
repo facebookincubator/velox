@@ -364,7 +364,8 @@ VectorPtr to_velox_column(
 //     names.push_back(name_prefix + std::to_string(names.size()));
 //   }
 //   auto vcol =
-//       test::VectorMaker{pool}.rowVector(std::move(names), std::move(children));
+//       test::VectorMaker{pool}.rowVector(std::move(names),
+//       std::move(children));
 //   return vcol;
 // }
 

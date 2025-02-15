@@ -18,8 +18,8 @@
 
 #include "velox/experimental/cudf/connectors/parquet/ParquetConfig.h"
 #include "velox/experimental/cudf/connectors/parquet/ParquetConnector.h"
-#include "velox/experimental/cudf/tests/utils/ParquetConnectorTestBase.h"
 #include "velox/experimental/cudf/exec/ToCudf.h"
+#include "velox/experimental/cudf/tests/utils/ParquetConnectorTestBase.h"
 
 DEFINE_string(data_format, "parquet", "Data format");
 
@@ -327,9 +327,9 @@ QueryBenchmarkBase::run(const TpchPlan& tpchPlan) {
         if (!noMoreSplits) {
           for (const auto& entry : tpchPlan.dataFiles) {
             for (const auto& path : entry.second) {
-              auto splits = facebook::velox::cudf_velox::cudfIsRegistered() ?
-              listCudfSplits(path, numSplitsPerFile, tpchPlan) :
-              listSplits(path, numSplitsPerFile, tpchPlan);
+              auto splits = facebook::velox::cudf_velox::cudfIsRegistered()
+                  ? listCudfSplits(path, numSplitsPerFile, tpchPlan)
+                  : listSplits(path, numSplitsPerFile, tpchPlan);
               for (auto split : splits) {
                 task->addSplit(entry.first, exec::Split(std::move(split)));
               }

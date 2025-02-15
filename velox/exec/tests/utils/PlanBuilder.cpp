@@ -33,8 +33,8 @@
 #include "velox/parse/TypeResolver.h"
 
 #include "velox/experimental/cudf/connectors/parquet/ParquetTableHandle.h"
-#include "velox/experimental/cudf/tests/utils/ParquetConnectorTestBase.h"
 #include "velox/experimental/cudf/exec/ToCudf.h"
+#include "velox/experimental/cudf/tests/utils/ParquetConnectorTestBase.h"
 
 using namespace facebook::velox;
 using namespace facebook::velox::connector;
@@ -248,21 +248,21 @@ core::PlanNodePtr PlanBuilder::TableScanBuilder::build(core::PlanNodeId id) {
   if (!tableHandle_) {
     // if cudfIsRegistered, then use cudftableScan tableHandle_ here.
     if (facebook::velox::cudf_velox::cudfIsRegistered()) {
-    // TODO error out if it has filters.
-   tableHandle_ =
-      std::make_shared<cudf_velox::connector::parquet::ParquetTableHandle>(
-          cudf_velox::exec::test::kParquetConnectorId,
-          tableName_,
-          /*filterPushdownEnabled*/ false,
-          dataColumns_);
+      // TODO error out if it has filters.
+      tableHandle_ =
+          std::make_shared<cudf_velox::connector::parquet::ParquetTableHandle>(
+              cudf_velox::exec::test::kParquetConnectorId,
+              tableName_,
+              /*filterPushdownEnabled*/ false,
+              dataColumns_);
     } else {
-    tableHandle_ = std::make_shared<HiveTableHandle>(
-        connectorId_,
-        tableName_,
-        true,
-        std::move(filters),
-        remainingFilterExpr,
-        dataColumns_);
+      tableHandle_ = std::make_shared<HiveTableHandle>(
+          connectorId_,
+          tableName_,
+          true,
+          std::move(filters),
+          remainingFilterExpr,
+          dataColumns_);
     }
   }
   return std::make_shared<core::TableScanNode>(
