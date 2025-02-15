@@ -176,8 +176,8 @@ splits from the Task and initializing the shared ExchangeClient using task ID
 information found in the splits.
 
 Task is responsible for creating and storing shared ExchangeClient instances,
-one ExchangeClient per ExchangeNode in each pipeline. Task is passing the reference
-to the shared ExchangeClient for the corresponding ExchangeNode when creating Exchange
+one per ExchangeNode. Task is passing the reference to the shared
+ExchangeClient for the corresponding ExchangeNode when creating Exchange
 operators.
 
 The following diagram shows the first Exchange operator (driverId == 0) fetching
