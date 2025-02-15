@@ -1,0 +1,195 @@
+<!DOCTYPE html>
+
+<html lang="en" data-content_root="../">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="viewport" content="width=device-width, initial-scale=1" />
+
+    <title>Dynamic Loading of Velox Extensions &#8212; Velox  documentation</title>
+    <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=a746c00c" />
+    <link rel="stylesheet" type="text/css" href="../_static/nature.css?v=279e0f84" />
+    <script src="../_static/documentation_options.js?v=5929fcd5"></script>
+    <script src="../_static/doctools.js?v=9bcbadda"></script>
+    <script src="../_static/sphinx_highlight.js?v=dc90522c"></script>
+    <link rel="index" title="Index" href="../genindex.html" />
+    <link rel="search" title="Search" href="../search.html" />
+    <link rel="next" title="Programming Guide" href="../programming-guide.html" />
+    <link rel="prev" title="Window functions" href="window.html" /> 
+  </head><body>
+    <div class="related" role="navigation" aria-label="Related">
+      <h3>Navigation</h3>
+      <ul>
+        <li class="right" style="margin-right: 10px">
+          <a href="../genindex.html" title="General Index"
+             accesskey="I">index</a></li>
+        <li class="right" >
+          <a href="../programming-guide.html" title="Programming Guide"
+             accesskey="N">next</a> |</li>
+        <li class="right" >
+          <a href="window.html" title="Window functions"
+             accesskey="P">previous</a> |</li>
+        <li class="nav-item nav-item-0"><a href="../index.html">Velox  documentation</a> &#187;</li>
+          <li class="nav-item nav-item-1"><a href="../develop.html" accesskey="U">Developer Guide</a> &#187;</li>
+        <li class="nav-item nav-item-this"><a href="">Dynamic Loading of Velox Extensions</a></li> 
+      </ul>
+    </div>  
+
+    <div class="document">
+      <div class="documentwrapper">
+        <div class="bodywrapper">
+          <div class="body" role="main">
+            
+  <section id="dynamic-loading-of-velox-extensions">
+<h1>Dynamic Loading of Velox Extensions<a class="headerlink" href="#dynamic-loading-of-velox-extensions" title="Link to this heading">¶</a></h1>
+<p>This generic utility adds extensibility features to load User Defined Functions (UDFs) without having to fork and build Velox, through the use of shared libraries. Support for connectors and types will be added in the future.</p>
+<p>This mechanism relies on ABI compatibility, meaning it is only guarenteed to work if the shared libraries and the Velox build are based on the same Velox version.
+Using shared libraries built against a different version of Velox may result in undefined behavior or runtime errors due to ABI mismatches.</p>
+<section id="getting-started">
+<h2>Getting Started<a class="headerlink" href="#getting-started" title="Link to this heading">¶</a></h2>
+<ol class="arabic">
+<li><p><strong>Create a C++ file for your dynamic library</strong></p>
+<p>For dynamically loaded function registration, the format followed mirrors that of built-in function registration with some noted differences. Using <cite>DynamicTestFunction.cpp</cite> as an example, the function uses the <cite>extern “C”</cite> keyword to protect against name mangling. A <cite>registry()</cite> function call is also necessary.</p>
+<p>Make sure to also include the necessary header file:</p>
+<div class="highlight-cpp notranslate"><div class="highlight"><pre><span></span><span class="cp">#include</span><span class="w"> </span><span class="cpf">&quot;velox/common/dynamic_registry/DynamicUdf.h&quot;</span>
+</pre></div>
+</div>
+<p>Example template for a function with no arguments returning a BIGINT:</p>
+<div class="highlight-cpp notranslate"><div class="highlight"><pre><span></span><span class="cp">#include</span><span class="w"> </span><span class="cpf">&quot;velox/common/dynamic_registry/DynamicUdf.h&quot;</span>
+
+<span class="k">namespace</span><span class="w"> </span><span class="nn">example_namespace</span><span class="w"> </span><span class="p">{</span>
+
+<span class="k">template</span><span class="w"> </span><span class="o">&lt;</span><span class="k">typename</span><span class="w"> </span><span class="nc">T</span><span class="o">&gt;</span>
+<span class="k">struct</span><span class="w"> </span><span class="nc">DynamicFunction</span><span class="w"> </span><span class="p">{</span>
+<span class="w">  </span><span class="n">FOLLY_ALWAYS_INLINE</span><span class="w"> </span><span class="kt">bool</span><span class="w"> </span><span class="n">call</span><span class="p">(</span><span class="kt">int64_t</span><span class="o">&amp;</span><span class="w"> </span><span class="n">result</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="c1">// Code to calculate result.</span>
+<span class="w">  </span><span class="p">}</span>
+<span class="p">};</span>
+<span class="p">}</span>
+
+<span class="k">extern</span><span class="w"> </span><span class="s">&quot;C&quot;</span><span class="w"> </span><span class="p">{</span>
+<span class="kt">void</span><span class="w"> </span><span class="nf">registry</span><span class="p">()</span><span class="w"> </span><span class="p">{</span>
+<span class="w">  </span><span class="n">facebook</span><span class="o">::</span><span class="n">velox</span><span class="o">::</span><span class="n">registerFunction</span><span class="o">&lt;</span>
+<span class="w">      </span><span class="n">example_namespace</span><span class="o">::</span><span class="n">DynamicFunction</span><span class="p">,</span>
+<span class="w">      </span><span class="kt">int64_t</span><span class="o">&gt;</span><span class="p">({</span><span class="s">&quot;your_function_name&quot;</span><span class="p">});</span>
+<span class="p">}</span>
+<span class="p">}</span>
+</pre></div>
+</div>
+</li>
+<li><p><strong>Register functions dynamically by creating `.dylib` (MacOS) or `.so` (Linux) shared libraries</strong></p>
+<p>These shared libraries may be created using a CMakeLists file like the following:</p>
+<div class="highlight-cmake notranslate"><div class="highlight"><pre><span></span><span class="nb">add_library</span><span class="p">(</span><span class="s">name_of_dynamic_fn</span><span class="w"> </span><span class="s">SHARED</span><span class="w"> </span><span class="s">TestFunction.cpp</span><span class="p">)</span>
+<span class="nb">target_link_libraries</span><span class="p">(</span><span class="s">name_of_dynamic_fn</span><span class="w"> </span><span class="s">PRIVATE</span><span class="w"> </span><span class="s">fmt::fmt</span><span class="w"> </span><span class="s">Folly::folly</span><span class="w"> </span><span class="s">glog::glog</span><span class="w"> </span><span class="s">xsimd</span><span class="p">)</span>
+
+<span class="nb">if</span><span class="p">(</span><span class="s">APPLE</span><span class="p">)</span>
+<span class="nb">set</span><span class="p">(</span><span class="s">COMMON_LIBRARY_LINK_OPTIONS</span><span class="w"> </span><span class="s2">&quot;-Wl,-undefined,dynamic_lookup&quot;</span><span class="p">)</span>
+<span class="nb">else</span><span class="p">()</span>
+<span class="nb">set</span><span class="p">(</span><span class="s">COMMON_LIBRARY_LINK_OPTIONS</span><span class="w"> </span><span class="s2">&quot;-Wl,--exclude-libs,ALL&quot;</span><span class="p">)</span>
+<span class="nb">endif</span><span class="p">()</span>
+
+<span class="nb">target_link_options</span><span class="p">(</span><span class="s">name_of_dynamic_fn</span><span class="w"> </span><span class="s">PRIVATE</span><span class="w"> </span><span class="o">${</span><span class="nv">COMMON_LIBRARY_LINK_OPTIONS</span><span class="o">}</span><span class="p">)</span>
+</pre></div>
+</div>
+<p>Additional details:</p>
+<ul class="simple">
+<li><dl class="simple">
+<dt><strong>Required Libraries</strong>:</dt><dd><ul>
+<li><p>The <cite>fmt::fmt</cite>, <cite>Folly::folly</cite>, and <cite>xsimd</cite> libraries are required for all necessary symbols to be defined when loading <cite>TestFunction.cpp</cite> dynamically.</p></li>
+<li><p>The <cite>glog::glog</cite> library is required on macOS but optional on Linux.</p></li>
+</ul>
+</dd>
+</dl>
+</li>
+<li><dl class="simple">
+<dt><strong>Linking Options</strong>:</dt><dd><ul>
+<li><p>On <strong>macOS</strong>: The <cite>target_link_options</cite> (<cite>“-Wl,-undefined,dynamic_lookup”</cite>) allow symbols to be resolved at runtime.</p></li>
+<li><p>On <strong>Linux</strong>: The <cite>target_link_options</cite> (<cite>“-Wl,–exclude-libs,ALL”</cite>) prevent errors related to symbols being linked both statically and dynamically.</p></li>
+</ul>
+</dd>
+</dl>
+</li>
+</ul>
+</li>
+</ol>
+</section>
+<section id="notes">
+<h2>Notes<a class="headerlink" href="#notes" title="Link to this heading">¶</a></h2>
+<ul class="simple">
+<li><p>In Velox, a function’s signature is determined solely by its name and argument types. The return type is not taken into account. As a result, if a function with an identical signature is added but with a different return type, it will overwrite the existing function.</p></li>
+<li><p>Function overloading is supported. Therefore, multiple functions can share the same name as long as they differ in the number or types of arguments.</p></li>
+</ul>
+</section>
+</section>
+
+
+            <div class="clearer"></div>
+          </div>
+        </div>
+      </div>
+      <div class="sphinxsidebar" role="navigation" aria-label="Main">
+        <div class="sphinxsidebarwrapper">
+  <div>
+    <h3><a href="../index.html">Table of Contents</a></h3>
+    <ul>
+<li><a class="reference internal" href="#">Dynamic Loading of Velox Extensions</a><ul>
+<li><a class="reference internal" href="#getting-started">Getting Started</a></li>
+<li><a class="reference internal" href="#notes">Notes</a></li>
+</ul>
+</li>
+</ul>
+
+  </div>
+  <div>
+    <h4>Previous topic</h4>
+    <p class="topless"><a href="window.html"
+                          title="previous chapter">Window functions</a></p>
+  </div>
+  <div>
+    <h4>Next topic</h4>
+    <p class="topless"><a href="../programming-guide.html"
+                          title="next chapter">Programming Guide</a></p>
+  </div>
+  <div role="note" aria-label="source link">
+    <h3>This Page</h3>
+    <ul class="this-page-menu">
+      <li><a href="../_sources/develop/dynamic-loading.rst.txt"
+            rel="nofollow">Show Source</a></li>
+    </ul>
+   </div>
+<search id="searchbox" style="display: none" role="search">
+  <h3 id="searchlabel">Quick search</h3>
+    <div class="searchformwrapper">
+    <form class="search" action="../search.html" method="get">
+      <input type="text" name="q" aria-labelledby="searchlabel" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false"/>
+      <input type="submit" value="Go" />
+    </form>
+    </div>
+</search>
+<script>document.getElementById('searchbox').style.display = "block"</script>
+        </div>
+      </div>
+      <div class="clearer"></div>
+    </div>
+    <div class="related" role="navigation" aria-label="Related">
+      <h3>Navigation</h3>
+      <ul>
+        <li class="right" style="margin-right: 10px">
+          <a href="../genindex.html" title="General Index"
+             >index</a></li>
+        <li class="right" >
+          <a href="../programming-guide.html" title="Programming Guide"
+             >next</a> |</li>
+        <li class="right" >
+          <a href="window.html" title="Window functions"
+             >previous</a> |</li>
+        <li class="nav-item nav-item-0"><a href="../index.html">Velox  documentation</a> &#187;</li>
+          <li class="nav-item nav-item-1"><a href="../develop.html" >Developer Guide</a> &#187;</li>
+        <li class="nav-item nav-item-this"><a href="">Dynamic Loading of Velox Extensions</a></li> 
+      </ul>
+    </div>
+    <div class="footer" role="contentinfo">
+    &#169; Copyright TBD.
+      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 8.1.3.
+    </div>
+  </body>
+</html>
