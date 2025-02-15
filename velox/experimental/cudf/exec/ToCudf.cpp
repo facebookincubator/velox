@@ -24,6 +24,7 @@
 #include "velox/exec/HashProbe.h"
 #include "velox/exec/Operator.h"
 #include "velox/exec/OrderBy.h"
+#include "velox/exec/TableScan.h"
 #include "velox/experimental/cudf/exec/CudfConversion.h"
 #include "velox/experimental/cudf/exec/CudfFilterProject.h"
 #include "velox/experimental/cudf/exec/CudfHashAggregation.h"
@@ -111,6 +112,7 @@ bool CompileState::compile() {
       [is_filter_project_supported,
        is_join_supported](const exec::Operator* op) {
         return is_any_of<
+                   exec::TableScan,
                    exec::OrderBy,
                    exec::HashAggregation,
                    exec::LocalPartition,
@@ -134,7 +136,7 @@ bool CompileState::compile() {
   };
   auto produces_gpu_output = [is_filter_project_supported,
                               is_join_supported](const exec::Operator* op) {
-    return is_any_of<exec::OrderBy, exec::HashAggregation, exec::LocalExchange>(
+    return is_any_of<exec::TableScan, exec::OrderBy, exec::HashAggregation, exec::LocalExchange>(
                op) ||
         is_filter_project_supported(op) ||
         (is_any_of<exec::HashProbe>(op) && is_join_supported(op));
@@ -165,7 +167,13 @@ bool CompileState::compile() {
 
     // This is used to denote if the current operator is kept or replaced.
     auto keep_operator = 0;
-    if (is_join_supported(oper)) {
+    // TableScan
+    if (auto scanOp = dynamic_cast<exec::TableScan*>(oper)) {
+      auto plan_node = std::dynamic_pointer_cast<const core::TableScanNode>(
+          get_plan_node(scanOp->planNodeId()));
+      VELOX_CHECK(plan_node != nullptr);
+      keep_operator = 1;
+    } else if (is_join_supported(oper)) {
       if (auto joinBuildOp = dynamic_cast<exec::HashBuild*>(oper)) {
         auto plan_node = std::dynamic_pointer_cast<const core::HashJoinNode>(
             get_plan_node(joinBuildOp->planNodeId()));

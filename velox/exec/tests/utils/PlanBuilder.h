@@ -172,6 +172,17 @@ class PlanBuilder {
           std::string,
           std::shared_ptr<connector::ColumnHandle>>& assignments = {});
 
+  PlanBuilder& cudftableScan(
+      const std::string& tableName,
+      const RowTypePtr& outputType,
+      const std::unordered_map<std::string, std::string>& columnAliases = {},
+      const std::vector<std::string>& subfieldFilters = {},
+      const std::string& remainingFilter = "",
+      const RowTypePtr& dataColumns = nullptr,
+      const std::unordered_map<
+          std::string,
+          std::shared_ptr<connector::ColumnHandle>>& assignments = {});
+
   /// Add a TableScanNode to scan a TPC-H table.
   ///
   /// @param tpchTableHandle The handle that specifies the target TPC-H table

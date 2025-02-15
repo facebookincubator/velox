@@ -351,22 +351,22 @@ VectorPtr to_velox_column(
   return cudf::type_dispatcher(col.type(), copier, velox_type, col);
 }
 
-RowVectorPtr to_velox_column(
-    const cudf::table_view& table,
-    memory::MemoryPool* pool,
-    std::string name_prefix) {
-  NVTX3_FUNC_RANGE();
-  std::vector<VectorPtr> children;
-  std::vector<std::string> names;
-  for (auto& col : table) {
-    auto velox_col = to_velox_column(col, pool);
-    children.push_back(std::move(velox_col));
-    names.push_back(name_prefix + std::to_string(names.size()));
-  }
-  auto vcol =
-      test::VectorMaker{pool}.rowVector(std::move(names), std::move(children));
-  return vcol;
-}
+// RowVectorPtr to_velox_column(
+//     const cudf::table_view& table,
+//     memory::MemoryPool* pool,
+//     std::string name_prefix) {
+//   NVTX3_FUNC_RANGE();
+//   std::vector<VectorPtr> children;
+//   std::vector<std::string> names;
+//   for (auto& col : table) {
+//     auto velox_col = to_velox_column(col, pool);
+//     children.push_back(std::move(velox_col));
+//     names.push_back(name_prefix + std::to_string(names.size()));
+//   }
+//   auto vcol =
+//       test::VectorMaker{pool}.rowVector(std::move(names), std::move(children));
+//   return vcol;
+// }
 
 namespace with_arrow {
 
