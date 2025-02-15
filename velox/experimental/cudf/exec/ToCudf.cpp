@@ -86,19 +86,35 @@ bool CompileState::compile() {
         !((filter_project_op->exprsAndProjection().hasFilter));
   };
 
+  auto is_join_supported = [get_plan_node](const exec::Operator* op) {
+    if (!is_any_of<exec::HashBuild, exec::HashProbe>(op)) {
+      return false;
+    }
+    auto plan_node = std::dynamic_pointer_cast<const core::HashJoinNode>(
+        get_plan_node(op->planNodeId()));
+    if (!plan_node) {
+      return false;
+    }
+    if (!CudfHashJoinProbe::isSupportedJoinType(plan_node->joinType())) {
+      return false;
+    }
+    if (plan_node->filter() != nullptr) {
+      return false;
+    }
+    return true;
+  };
+
   // TODO (dm): The logic to figure out whether to put a conversion before or
   // after the replced operators needs a second go over after adding local
   // exchange.
   auto is_supported_gpu_operator =
       [is_filter_project_supported](const exec::Operator* op) {
         return is_any_of<
-                   exec::HashBuild,
-                   exec::HashProbe,
                    exec::OrderBy,
                     exec::HashAggregation,
                     exec::LocalPartition,
                     exec::LocalExchange>(op) ||
-            is_filter_project_supported(op);
+            is_filter_project_supported(op) || is_join_supported(op);
       };
 
   std::vector<bool> is_supported_gpu_operators(operators.size());
@@ -110,19 +126,17 @@ bool CompileState::compile() {
   auto accepts_gpu_input =
       [is_filter_project_supported](const exec::Operator* op) {
         return is_any_of<
-                   exec::HashBuild,
-                   exec::HashProbe,
                    exec::OrderBy,
                    exec::HashAggregation,
                   exec::LocalPartition>(op) ||
-            is_filter_project_supported(op);
+            is_filter_project_supported(op) ||
+        is_join_supported(op);
       };
   auto produces_gpu_output =
       [is_filter_project_supported](const exec::Operator* op) {
-        return is_any_of<exec::HashProbe, exec::OrderBy, exec::HashAggregation,
-        exec::LocalExchange>(
-                   op) ||
-            is_filter_project_supported(op);
+        return is_any_of<exec::OrderBy, exec::HashAggregation,
+        exec::LocalExchange>(op) ||
+        (is_any_of<exec::HashProbe>(op) && is_join_supported(op));
       };
 
   int32_t operatorsOffset = 0;
@@ -150,23 +164,25 @@ bool CompileState::compile() {
 
     // This is used to denote if the current operator is kept or replaced.
     auto keep_operator = 0;
-    if (auto joinBuildOp = dynamic_cast<exec::HashBuild*>(oper)) {
-      auto plan_node = std::dynamic_pointer_cast<const core::HashJoinNode>(
-          get_plan_node(joinBuildOp->planNodeId()));
-      VELOX_CHECK(plan_node != nullptr);
-      // From-Velox (optional)
-      replace_op.push_back(
-          std::make_unique<CudfHashJoinBuild>(id, ctx, plan_node));
-      replace_op.back()->initialize();
-    } else if (auto joinProbeOp = dynamic_cast<exec::HashProbe*>(oper)) {
-      auto plan_node = std::dynamic_pointer_cast<const core::HashJoinNode>(
-          get_plan_node(joinProbeOp->planNodeId()));
-      VELOX_CHECK(plan_node != nullptr);
-      // From-Velox (optional)
-      replace_op.push_back(
-          std::make_unique<CudfHashJoinProbe>(id, ctx, plan_node));
-      replace_op.back()->initialize();
-      // To-Velox (optional)
+    if (is_join_supported(oper)) {
+      if (auto joinBuildOp = dynamic_cast<exec::HashBuild*>(oper)) {
+        auto plan_node = std::dynamic_pointer_cast<const core::HashJoinNode>(
+            get_plan_node(joinBuildOp->planNodeId()));
+        VELOX_CHECK(plan_node != nullptr);
+        // From-Velox (optional)
+        replace_op.push_back(
+            std::make_unique<CudfHashJoinBuild>(id, ctx, plan_node));
+        replace_op.back()->initialize();
+      } else if (auto joinProbeOp = dynamic_cast<exec::HashProbe*>(oper)) {
+        auto plan_node = std::dynamic_pointer_cast<const core::HashJoinNode>(
+            get_plan_node(joinProbeOp->planNodeId()));
+        VELOX_CHECK(plan_node != nullptr);
+        // From-Velox (optional)
+        replace_op.push_back(
+            std::make_unique<CudfHashJoinProbe>(id, ctx, plan_node));
+        replace_op.back()->initialize();
+        // To-Velox (optional)
+      }
     } else if (auto orderByOp = dynamic_cast<exec::OrderBy*>(oper)) {
       auto id = orderByOp->operatorId();
       auto plan_node = std::dynamic_pointer_cast<const core::OrderByNode>(

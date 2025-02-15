@@ -87,6 +87,15 @@ class CudfHashJoinProbe : public exec::Operator {
 
   exec::BlockingReason isBlocked(ContinueFuture* future) override;
 
+  static bool isSupportedJoinType(core::JoinType joinType) {
+    return joinType == core::JoinType::kInner ||
+        joinType == core::JoinType::kLeft ||
+        joinType == core::JoinType::kRight ||
+        joinType == core::JoinType::kAnti ||
+        joinType == core::JoinType::kLeftSemiFilter ||
+        joinType == core::JoinType::kRightSemiFilter;
+  }
+
   bool isFinished() override;
 
  private:
