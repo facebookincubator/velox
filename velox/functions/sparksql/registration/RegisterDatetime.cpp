@@ -92,6 +92,11 @@ void registerDatetimeFunctions(const std::string& prefix) {
       {prefix + "unix_millis"});
   registerUnaryIntegralWithTReturn<MillisToTimestampFunction, Timestamp>(
       {prefix + "timestamp_millis"});
+  registerFunction<TruncFunction, Date, Date, Varchar>({prefix + "trunc"});
+  registerFunction<DateTruncFunction, Timestamp, Varchar, Timestamp>(
+      {prefix + "date_trunc"});
+  registerFunction<DateTruncFunction, Timestamp, Varchar, Timestamp, Varchar>(
+      {prefix + "date_trunc"});
 }
 
 } // namespace facebook::velox::functions::sparksql

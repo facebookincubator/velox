@@ -860,4 +860,113 @@ struct MillisToTimestampFunction {
   }
 };
 
+template <typename TExec>
+struct TruncFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(TExec);
+
+  FOLLY_ALWAYS_INLINE void initialize(
+      const std::vector<TypePtr>& /*inputTypes*/,
+      const core::QueryConfig& /*config*/,
+      const arg_type<Date>* /*date*/,
+      const arg_type<Varchar>* unitString) {
+    if (unitString != nullptr) {
+      unit_ = getDateTimeUnit(*unitString, false, DateTimeUnit::kWeek, true);
+    }
+  }
+
+  FOLLY_ALWAYS_INLINE bool call(
+      out_type<Date>& result,
+      const arg_type<Date>& date,
+      const arg_type<Varchar>& unitString) {
+    std::optional<DateTimeUnit> unit = unit_.has_value()
+        ? unit_
+        : getDateTimeUnit(unitString, false, DateTimeUnit::kWeek, true);
+
+    if (!unit.has_value()) {
+      return false;
+    }
+
+    auto dateTime = getDateTime(date);
+    adjustDateTime(dateTime, unit.value());
+
+    result = Timestamp::calendarUtcToEpoch(dateTime) / kSecondsInDay;
+    return true;
+  }
+
+ private:
+  std::optional<DateTimeUnit> unit_;
+};
+
+template <typename TExec>
+struct DateTruncFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(TExec);
+
+  FOLLY_ALWAYS_INLINE void initialize(
+      const std::vector<TypePtr>& /*inputTypes*/,
+      const core::QueryConfig& config,
+      const arg_type<Varchar>* unitString,
+      const arg_type<Timestamp>* /*timestamp*/) {
+    timeZone_ = getTimeZoneFromConfig(config);
+
+    if (unitString != nullptr) {
+      unit_ =
+          getDateTimeUnit(*unitString, false, DateTimeUnit::kMicrosecond, true);
+    }
+  }
+
+  FOLLY_ALWAYS_INLINE void initialize(
+      const std::vector<TypePtr>& /*inputTypes*/,
+      const core::QueryConfig& config,
+      const arg_type<Varchar>* unitString,
+      const arg_type<Timestamp>* /*timestamp*/,
+      const arg_type<Varchar>* timezone) {
+    if (unitString != nullptr) {
+      unit_ =
+          getDateTimeUnit(*unitString, false, DateTimeUnit::kMicrosecond, true);
+    }
+    if (timezone) {
+      timeZone_ = tz::locateZone(std::string_view(*timezone), false);
+    }
+  }
+
+  FOLLY_ALWAYS_INLINE bool call(
+      out_type<Timestamp>& result,
+      const arg_type<Varchar>& unitString,
+      const arg_type<Timestamp>& timestamp) {
+    std::optional<DateTimeUnit> unit = unit_.has_value()
+        ? unit_
+        : getDateTimeUnit(unitString, false, DateTimeUnit::kMicrosecond, true);
+
+    if (!unit.has_value()) {
+      return false;
+    }
+    result = truncateTimestamp(timestamp, unit.value(), timeZone_);
+    return true;
+  }
+
+  FOLLY_ALWAYS_INLINE bool call(
+      out_type<Timestamp>& result,
+      const arg_type<Varchar>& unitString,
+      const arg_type<Timestamp>& timestamp,
+      const arg_type<Varchar>& timezone) {
+    const auto* toTimeZone = timeZone_ != nullptr
+        ? timeZone_
+        : tz::locateZone(std::string_view(timezone), false);
+    VELOX_USER_CHECK_NOT_NULL(toTimeZone, "Unknown time zone: '{}'", timezone);
+    std::optional<DateTimeUnit> unit = unit_.has_value()
+        ? unit_
+        : getDateTimeUnit(unitString, false, DateTimeUnit::kMicrosecond, true);
+
+    if (!unit.has_value()) {
+      return false;
+    }
+    result = truncateTimestamp(timestamp, unit.value(), timeZone_);
+    return true;
+  }
+
+ private:
+  const tz::TimeZone* timeZone_{nullptr};
+  std::optional<DateTimeUnit> unit_;
+};
+
 } // namespace facebook::velox::functions::sparksql

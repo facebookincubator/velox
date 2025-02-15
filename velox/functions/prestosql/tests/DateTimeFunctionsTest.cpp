@@ -2618,12 +2618,17 @@ TEST_F(DateTimeFunctionsTest, dateDiffDate) {
 
   // Check invalid units
   VELOX_ASSERT_THROW(
-      dateDiff("millisecond", 1, 0), "millisecond is not a valid DATE field");
+      dateDiff("millisecond", 1, 0),
+      "millisecond is not a valid datetime unit field, minimum unit is day");
   VELOX_ASSERT_THROW(
-      dateDiff("second", 1, 0), "second is not a valid DATE field");
+      dateDiff("second", 1, 0),
+      "second is not a valid datetime unit field, minimum unit is day");
   VELOX_ASSERT_THROW(
-      dateDiff("minute", 1, 0), "minute is not a valid DATE field");
-  VELOX_ASSERT_THROW(dateDiff("hour", 1, 0), "hour is not a valid DATE field");
+      dateDiff("minute", 1, 0),
+      "minute is not a valid datetime unit field, minimum unit is day");
+  VELOX_ASSERT_THROW(
+      dateDiff("hour", 1, 0),
+      "hour is not a valid datetime unit field, minimum unit is day");
   VELOX_ASSERT_THROW(
       dateDiff("invalid_unit", 1, 0),
       "Unsupported datetime unit: invalid_unit");
