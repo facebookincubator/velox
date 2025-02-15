@@ -16,8 +16,8 @@
 
 #include "velox/benchmarks/QueryBenchmarkBase.h"
 
-#include "velox/experimental/cudf/connectors/parquet/ParquetConnector.h"
 #include "velox/experimental/cudf/connectors/parquet/ParquetConfig.h"
+#include "velox/experimental/cudf/connectors/parquet/ParquetConnector.h"
 #include "velox/experimental/cudf/tests/utils/ParquetConnectorTestBase.h"
 
 DEFINE_string(data_format, "parquet", "Data format");
@@ -230,18 +230,18 @@ void QueryBenchmarkBase::initialize() {
   // Add new values into the parquet configuration...
   auto parquetConfigurationValues =
       std::unordered_map<std::string, std::string>();
-  parquetConfigurationValues[cudf_velox::connector::parquet::
-                                 ParquetConfig::kMaxChunkReadLimit] =
-      std::to_string(FLAGS_cudf_chunk_read_limit);
+  parquetConfigurationValues
+      [cudf_velox::connector::parquet::ParquetConfig::kMaxChunkReadLimit] =
+          std::to_string(FLAGS_cudf_chunk_read_limit);
   parquetConfigurationValues
       [cudf_velox::connector::parquet::ParquetConfig::kMaxPassReadLimit] =
           std::to_string(FLAGS_cudf_pass_read_limit);
   parquetConfigurationValues
       [cudf_velox::connector::parquet::ParquetConfig::kUseArrowSchema] =
           std::to_string(FLAGS_use_arrow_schema);
-  parquetConfigurationValues
-      [cudf_velox::connector::parquet::ParquetConfig::
-           kAllowMismatchedParquetSchemas] = std::to_string(true);
+  parquetConfigurationValues[cudf_velox::connector::parquet::ParquetConfig::
+                                 kAllowMismatchedParquetSchemas] =
+      std::to_string(true);
   auto parquetProperties = std::make_shared<const config::ConfigBase>(
       std::move(parquetConfigurationValues));
 

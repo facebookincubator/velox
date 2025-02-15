@@ -86,7 +86,11 @@ bool CompileState::compile() {
 
   auto is_supported_gpu_operator =
       [is_filter_project_supported](const exec::Operator* op) {
-        return is_any_of<exec::TableScan, exec::HashBuild, exec::HashProbe, exec::OrderBy>(op) ||
+        return is_any_of<
+                   exec::TableScan,
+                   exec::HashBuild,
+                   exec::HashProbe,
+                   exec::OrderBy>(op) ||
             is_filter_project_supported(op);
       };
   std::vector<bool> is_supported_gpu_operators(operators.size());

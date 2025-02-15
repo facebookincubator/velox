@@ -110,7 +110,8 @@ std::optional<RowVectorPtr> ParquetDataSource::next(
   auto output = cudfIsRegistered()
       ? std::make_shared<CudfVector>(
             pool_, outputType_, sz, std::move(cudfTable_), stream)
-      : with_arrow::to_velox_column(currentCudfTableView_, pool_, columnNames, stream);
+      : with_arrow::to_velox_column(
+            currentCudfTableView_, pool_, columnNames, stream);
   stream.synchronize();
 
   // Reset internal tables
