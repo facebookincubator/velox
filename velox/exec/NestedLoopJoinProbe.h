@@ -231,7 +231,7 @@ class NestedLoopJoinProbe : public Operator {
 
   /// Cross joins are translated into NLJ's without a join conditition.
   bool isCrossJoin() const {
-    return joinCondition_ == nullptr;
+    return joinCondition_ == nullptr && !isLeftSemiProjectJoin(joinType_);
   }
 
   // If build has a single vector, we can wrap probe and build batches into
@@ -365,6 +365,18 @@ class NestedLoopJoinProbe : public Operator {
   std::vector<IdentityProjection> filterBuildProjections_;
 
   BufferPtr buildOutMapping_;
+
+  // Returns the 'match' column in the output for semi project joins.
+  VectorPtr& matchColumn() const {
+    VELOX_DCHECK(
+        isRightSemiProjectJoin(joinType_) || isLeftSemiProjectJoin(joinType_));
+    return output_->children().back();
+  }
+
+  bool isLeftSemiJoinProject(core::JoinType joinType);
+  RowVectorPtr getOutputLeftSemiJoinImpl();
+  RowVectorPtr makeSingleOutputRow(bool matched);
+
 };
 
 } // namespace facebook::velox::exec
