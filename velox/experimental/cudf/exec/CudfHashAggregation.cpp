@@ -46,6 +46,10 @@ auto toAggregationsMap(const core::AggregationNode& aggregationNode) {
       if (auto field =
               dynamic_cast<const core::FieldAccessTypedExpr*>(arg.get())) {
         agg_inputs.push_back(inputRowSchema->getChildIdx(field->name()));
+      } else if (
+          auto constant =
+              dynamic_cast<const core::ConstantTypedExpr*>(arg.get())) {
+        agg_inputs.push_back(0);
       } else {
         VELOX_NYI("Constants and lambdas not yet supported");
       }
