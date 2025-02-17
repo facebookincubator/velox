@@ -97,6 +97,11 @@ Expected<int32_t> PrestoCastHooks::castStringToDate(
   return util::fromDateString(dateString, util::ParseMode::kPrestoCast);
 }
 
+Expected<int64_t> PrestoCastHooks::castTimestampToInt(Timestamp timestamp) const {
+  return folly::makeUnexpected(
+      Status::UserError("Conversion to Timestamp is not supported"));
+}
+
 namespace {
 
 using double_conversion::StringToDoubleConverter;

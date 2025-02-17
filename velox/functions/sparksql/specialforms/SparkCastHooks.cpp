@@ -50,6 +50,21 @@ Expected<Timestamp> SparkCastHooks::castIntToTimestamp(int64_t seconds) const {
   return Timestamp(seconds, 0);
 }
 
+Expected<int64_t> SparkCastHooks::castTimestampToInt(Timestamp timestamp) const {
+  static constexpr int64_t MICROS_PER_SECOND = 1'000'000;
+  int64_t micros = timestamp.toMicros();
+
+  // Replicate Spark conversion via floor division.
+  int64_t quotient = micros / MICROS_PER_SECOND;
+  int64_t remainder = micros % MICROS_PER_SECOND;
+
+  if (remainder != 0 && micros < 0) {
+    quotient -= 1;
+  }
+
+  return quotient;
+}
+
 Expected<int32_t> SparkCastHooks::castStringToDate(
     const StringView& dateString) const {
   // Allows all patterns supported by Spark:
