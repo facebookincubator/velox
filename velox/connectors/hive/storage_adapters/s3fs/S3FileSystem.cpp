@@ -14,12 +14,12 @@
  * limitations under the License.
  */
 
+#include "velox/connectors/hive/storage_adapters/s3fs/S3FileSystem.h"
 #include "velox/common/base/StatsReporter.h"
 #include "velox/common/config/Config.h"
 #include "velox/common/file/File.h"
 #include "velox/connectors/hive/storage_adapters/s3fs/S3Config.h"
 #include "velox/connectors/hive/storage_adapters/s3fs/S3Counters.h"
-#include "velox/connectors/hive/storage_adapters/s3fs/S3FileSystem.h"
 #include "velox/connectors/hive/storage_adapters/s3fs/S3Util.h"
 #include "velox/connectors/hive/storage_adapters/s3fs/S3WriteFile.h"
 #include "velox/dwio/common/DataBuffer.h"
@@ -254,7 +254,8 @@ class S3WriteFile::Impl {
       if (!objectMetadata.IsSuccess()) {
         RECORD_METRIC_VALUE(kMetricS3GetMetadataErrors);
       }
-      RECORD_METRIC_VALUE(kMetricS3GetObjectRetries, objectMetadata.GetRetryCount());
+      RECORD_METRIC_VALUE(
+          kMetricS3GetObjectRetries, objectMetadata.GetRetryCount());
       VELOX_CHECK(!objectMetadata.IsSuccess(), "S3 object already exists");
     }
 
