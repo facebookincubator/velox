@@ -369,7 +369,8 @@ HiveConnectorTestBase::makeHiveInsertTableHandle(
       compressionKind,
       serdeParameters,
       writerOptions,
-      ensureFiles);
+      ensureFiles,
+      partitionedBy);
 }
 
 std::shared_ptr<connector::hive::HiveColumnHandle>
