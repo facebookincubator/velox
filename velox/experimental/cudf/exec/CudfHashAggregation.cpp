@@ -328,20 +328,18 @@ RowVectorPtr CudfHashAggregation::getDistinctKeys(
 
 RowVectorPtr CudfHashAggregation::getOutput() {
   if (finished_) {
-    input_ = nullptr;
     return nullptr;
   }
 
-  if (!noMoreInput_ && !newDistincts_) {
-    input_ = nullptr;
+  if (!isPartialOutput_ && !noMoreInput_) {
+    // Final aggregation has to wait for all batches to arrive so we cannot
+    // return any results here.
     return nullptr;
   }
 
   if (inputs_.empty()) {
     return nullptr;
   }
-
-  finished_ = true;
 
   auto cudf_tables = std::vector<std::unique_ptr<cudf::table>>(inputs_.size());
   auto input_streams = std::vector<rmm::cuda_stream_view>(inputs_.size());
@@ -356,6 +354,10 @@ RowVectorPtr CudfHashAggregation::getOutput() {
 
   cudf_tables.clear();
   inputs_.clear();
+
+  if (noMoreInput_) {
+    finished_ = true;
+  }
 
   VELOX_CHECK_NOT_NULL(tbl);
 
