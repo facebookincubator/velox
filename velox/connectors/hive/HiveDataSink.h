@@ -209,7 +209,8 @@ class HiveInsertTableHandle : public ConnectorInsertTableHandle {
       // When this option is set the HiveDataSink will always write a file even
       // if there's no data. This is useful when the table is bucketed, but the
       // engine handles ensuring a 1 to 1 mapping from task to bucket.
-      const bool ensureFiles = false)
+      const bool ensureFiles = false,
+      const std::vector<std::string> partitionKeys = {})
       : inputColumns_(std::move(inputColumns)),
         locationHandle_(std::move(locationHandle)),
         storageFormat_(storageFormat),
@@ -217,7 +218,8 @@ class HiveInsertTableHandle : public ConnectorInsertTableHandle {
         compressionKind_(compressionKind),
         serdeParameters_(serdeParameters),
         writerOptions_(writerOptions),
-        ensureFiles_(ensureFiles) {
+        ensureFiles_(ensureFiles),
+        partitionKeys_(partitionKeys) {
     if (compressionKind.has_value()) {
       VELOX_CHECK(
           compressionKind.value() != common::CompressionKind_MAX,
@@ -271,6 +273,10 @@ class HiveInsertTableHandle : public ConnectorInsertTableHandle {
     return ensureFiles_;
   }
 
+  const std::vector<std::string>& partitionKeys() const {
+    return partitionKeys_;
+  }
+
   bool supportsMultiThreading() const override {
     return true;
   }
@@ -300,6 +306,7 @@ class HiveInsertTableHandle : public ConnectorInsertTableHandle {
   const std::unordered_map<std::string, std::string> serdeParameters_;
   const std::shared_ptr<dwio::common::WriterOptions> writerOptions_;
   const bool ensureFiles_;
+  const std::vector<std::string> partitionKeys_;
 };
 
 /// Parameters for Hive writers.
