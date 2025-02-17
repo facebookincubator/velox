@@ -56,15 +56,19 @@ JSON Functions
     to ROW supports only JSON objects.
     The current implementation has the following limitations.
 
-    * Does not support user provided options.
+    * Does not support user provided options, for example, the Spark function below is not supported. ::
+
+        from_json('{"a":1}', 'a INT', map('option', 'value'))
 
     * Only supports partial result mode, which requires spark configuration spark.sql.json.enablePartialResults = true.
 
-    * Does not support single quotes as delimiters.  
-    
-    * Does not support schemas that include a corrupt record column.  
+    * Does not support single quotes as delimiters, for example: {'a':1}.
 
-    Behaviors of the casts are shown with the examples below. ::
+    * Does not support schemas that include a corrupt record column, for example, the Spark function below is not supported. ::
+
+        from_json('{"a":1, "b":0.8}', 'a INT, b DOUBLE, _corrupt_record STRING')  
+
+    Examples of supported behaviors are listed as below.. ::
 
         SELECT from_json('{"a": true}'); -- {'a'=true} // Output type: ROW({"a"}, {BOOLEAN()})
         SELECT from_json('{"a": 1}'); -- {'a'=1} // Output type: ROW({"a"}, {INTEGER()})

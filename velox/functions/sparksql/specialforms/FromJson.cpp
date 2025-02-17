@@ -490,7 +490,7 @@ class FromJsonFunction final : public exec::VectorFunction {
 };
 
 /// Determines whether a given type is supported.
-/// @param isRootType. A flag indicating whether the type is the root type in
+/// @param isRootType A flag indicating whether the type is the root type in
 /// the evaluation context. Only ROW, ARRAY, and MAP are allowed as root types;
 /// this flag helps differentiate such cases.
 bool isSupportedType(const TypePtr& type, bool isRootType) {
