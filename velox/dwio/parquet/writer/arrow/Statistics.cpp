@@ -407,6 +407,11 @@ optional<std::pair<ByteArray, ByteArray>> CleanStatistic(
   return min_max;
 }
 
+optional<std::pair<Int96, Int96>> CleanStatistic(
+    std::pair<Int96, Int96> min_max) {
+  return min_max;
+}
+
 template <bool is_signed, typename DType>
 class TypedComparatorImpl : virtual public TypedComparator<DType> {
  public:
@@ -1021,6 +1026,8 @@ std::shared_ptr<Statistics> Statistics::Make(
       return std::make_shared<TypedStatisticsImpl<Int32Type>>(descr, pool);
     case Type::INT64:
       return std::make_shared<TypedStatisticsImpl<Int64Type>>(descr, pool);
+    case Type::INT96:
+      return std::make_shared<TypedStatisticsImpl<Int96Type>>(descr, pool);
     case Type::FLOAT:
       return std::make_shared<TypedStatisticsImpl<FloatType>>(descr, pool);
     case Type::DOUBLE:
