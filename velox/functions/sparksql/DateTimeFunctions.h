@@ -152,7 +152,7 @@ struct UnixTimestampParseFunction {
   FOLLY_ALWAYS_INLINE void initialize(
       const std::vector<TypePtr>& /*inputTypes*/,
       const core::QueryConfig& config,
-      const arg_type<Varchar>* /*input*/) {
+      const optional_arg_type<Varchar>* /*input*/) {
     auto formatter = detail::getDateTimeFormatter(
         kDefaultFormat_,
         config.sparkLegacyDateFormatter() ? DateTimeFormatterType::STRICT_SIMPLE
@@ -204,8 +204,8 @@ struct UnixTimestampParseWithFormatFunction
   FOLLY_ALWAYS_INLINE void initialize(
       const std::vector<TypePtr>& /*inputTypes*/,
       const core::QueryConfig& config,
-      const arg_type<Varchar>* /*input*/,
-      const arg_type<Varchar>* format) {
+      const optional_arg_type<Varchar>* /*input*/,
+      const optional_arg_type<Varchar>* format) {
     legacyFormatter_ = config.sparkLegacyDateFormatter();
     if (format != nullptr) {
       auto formatter = detail::getDateTimeFormatter(
@@ -266,8 +266,8 @@ struct FromUnixtimeFunction {
   FOLLY_ALWAYS_INLINE void initialize(
       const std::vector<TypePtr>& /*inputTypes*/,
       const core::QueryConfig& config,
-      const arg_type<int64_t>* /*unixtime*/,
-      const arg_type<Varchar>* format) {
+      const optional_arg_type<int64_t>* /*unixtime*/,
+      const optional_arg_type<Varchar>* format) {
     legacyFormatter_ = config.sparkLegacyDateFormatter();
     sessionTimeZone_ = getTimeZoneFromConfig(config);
     if (format != nullptr) {
@@ -325,8 +325,8 @@ struct ToUtcTimestampFunction {
   FOLLY_ALWAYS_INLINE void initialize(
       const std::vector<TypePtr>& /*inputTypes*/,
       const core::QueryConfig& /*config*/,
-      const arg_type<Varchar>* /*input*/,
-      const arg_type<Varchar>* timezone) {
+      const optional_arg_type<Varchar>* /*input*/,
+      const optional_arg_type<Varchar>* timezone) {
     if (timezone) {
       timeZone_ = tz::locateZone(std::string_view(*timezone), false);
     }
@@ -356,8 +356,8 @@ struct FromUtcTimestampFunction {
   FOLLY_ALWAYS_INLINE void initialize(
       const std::vector<TypePtr>& /*inputTypes*/,
       const core::QueryConfig& /*config*/,
-      const arg_type<Varchar>* /*input*/,
-      const arg_type<Varchar>* timezone) {
+      const optional_arg_type<Varchar>* /*input*/,
+      const optional_arg_type<Varchar>* timezone) {
     if (timezone) {
       timeZone_ = tz::locateZone(std::string_view(*timezone), false);
     }
@@ -387,8 +387,8 @@ struct GetTimestampFunction {
   FOLLY_ALWAYS_INLINE void initialize(
       const std::vector<TypePtr>& /*inputTypes*/,
       const core::QueryConfig& config,
-      const arg_type<Varchar>* /*input*/,
-      const arg_type<Varchar>* format) {
+      const optional_arg_type<Varchar>* /*input*/,
+      const optional_arg_type<Varchar>* format) {
     legacyFormatter_ = config.sparkLegacyDateFormatter();
     auto sessionTimezoneName = config.sessionTimezone();
     if (!sessionTimezoneName.empty()) {
@@ -672,8 +672,8 @@ struct NextDayFunction {
   FOLLY_ALWAYS_INLINE void initialize(
       const std::vector<TypePtr>& /*inputTypes*/,
       const core::QueryConfig& /*config*/,
-      const arg_type<Date>* /*startDate*/,
-      const arg_type<Varchar>* dayOfWeek) {
+      const optional_arg_type<Date>* /*startDate*/,
+      const optional_arg_type<Varchar>* dayOfWeek) {
     if (dayOfWeek != nullptr) {
       weekDay_ = getDayOfWeekFromString(*dayOfWeek);
       if (!weekDay_.has_value()) {
