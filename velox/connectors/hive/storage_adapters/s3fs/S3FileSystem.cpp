@@ -97,6 +97,7 @@ class S3ReadFile final : public ReadFile {
     Aws::S3::Model::HeadObjectRequest request;
     request.SetBucket(awsString(bucket_));
     request.SetKey(awsString(key_));
+
     RECORD_METRIC_VALUE(kMetricS3MetadataCalls);
     auto outcome = client_->HeadObject(request);
     if (!outcome.IsSuccess()) {
