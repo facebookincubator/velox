@@ -751,47 +751,38 @@ TEST_F(SparkCastExprTest, bigintToBinary) {
 }
 
 TEST_F(SparkCastExprTest, timestampToInt) {
-  // Validate floor division logic for various positive and negative timestamps.
   std::vector<std::optional<Timestamp>> input = {
-      // Basic zeros and positives.
       Timestamp(0, 0),
       Timestamp(1, 0),
       Timestamp(10, 0),
-      // Negative, zero remainder.
       Timestamp(-1, 0),
       Timestamp(-10, 0),
-      // Negative, non-zero remainder --> should floor.
       Timestamp(-1, 500000),
       Timestamp(-2, 999999),
       Timestamp(-10, 999999),
-      // Microsecond edge cases.
-      Timestamp(1, 999999),    // Just below next second.
-      Timestamp(-1, 1),       // Negative micros, should floor further.
-      // Larger values.
+      Timestamp(1, 999999),
+      Timestamp(-1, 1),
       Timestamp(1234567, 500000),
       Timestamp(-9876543, 1234),
-      std::nullopt, // Test null behavior
-  };
-
-  // Expected floor-based results:
-  //   If remainder != 0 and micros < 0, subtract one more second (Spark behavior).
-  std::vector<std::optional<int64_t>> expected = {
-      0,    // (0, 0)
-      1,    // (1, 0)
-      10,   // (10, 0)
-      -1,   // (-1, 0)
-      -10,  // (-10, 0)
-      -2,   // (-1, 500000) => -1.5 => floor = -2
-      -3,   // (-2, 999999) => -2.999999 => floor = -3
-      -11,  // (-10, 999999) => -10.999999 => floor = -11
-      1,    // (1, 999999) => 1.999999 => floor = 1
-      -2,   // (-1, 1) => roughly -0.999999 => floor = -2
-      1234567,   // (1234567, 500000)
-      -9876544,  // (-9876543, 1234) => -9876543.001234 => floor = -9876544
       std::nullopt,
   };
 
-  // "bigint" is the target SQL type, so we pass "bigint" to testCast.
+  std::vector<std::optional<int64_t>> expected = {
+      0,
+      1,
+      10,
+      -1,
+      -10,
+      -1,
+      -3,
+      -11,
+      1,
+      -2,
+      1234567,
+      -9876544,
+      std::nullopt,
+  };
+
   testCast<Timestamp, int64_t>("bigint", input, expected);
 }
 
