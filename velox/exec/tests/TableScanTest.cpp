@@ -2089,7 +2089,7 @@ TEST_F(TableScanTest, partitionedTableTimestampKey) {
     auto planNodeWithSubfilter = [&](bool asLocalTime) {
       auto outputType =
           ROW({"pkey", "c0", "c1"}, {TIMESTAMP(), BIGINT(), DOUBLE()});
-      SubfieldFilters filters;
+      common::SubfieldFilters filters;
       // pkey = 2023-10-27 00:12:35.
       auto lower =
           util::fromTimestampString(
