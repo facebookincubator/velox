@@ -18,7 +18,6 @@
 #include "velox/type/DecimalUtil.h"
 
 #include <algorithm>
-#include <stdexcept>
 #include <string>
 
 #include "folly/Conv.h"

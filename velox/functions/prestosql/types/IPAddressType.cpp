@@ -16,7 +16,6 @@
 
 #include "velox/functions/prestosql/types/IPAddressType.h"
 #include "velox/expression/CastExpr.h"
-#include "velox/expression/VectorWriters.h"
 #include "velox/functions/prestosql/types/IPPrefixType.h"
 
 namespace facebook::velox {
