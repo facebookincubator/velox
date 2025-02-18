@@ -125,6 +125,7 @@ class S3FileSystemMetricsTest : public S3Test {
     filesystems::initializeS3("Info");
     s3Reporter = std::dynamic_pointer_cast<S3TestReporter>(
         folly::Singleton<BaseStatsReporter>::try_get());
+    s3Reporter->clear();
   }
 
   static void TearDownTestSuite() {
