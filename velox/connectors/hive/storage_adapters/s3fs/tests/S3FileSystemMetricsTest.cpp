@@ -151,7 +151,7 @@ TEST_F(S3FileSystemMetricsTest, metrics) {
   EXPECT_EQ(1, s3Reporter->counterMap[std::string{kMetricS3MetadataCalls}]);
   EXPECT_EQ(1, s3Reporter->counterMap[std::string{kMetricS3GetMetadataErrors}]);
 
-  std::string dataContent =
+  constexpr std::string_view dataContent =
       "Dance me to your beauty with a burning violin"
       "Dance me through the panic till I'm gathered safely in"
       "Lift me like an olive branch and be my homeward dove"
