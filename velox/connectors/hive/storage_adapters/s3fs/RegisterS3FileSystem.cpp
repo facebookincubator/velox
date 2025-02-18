@@ -131,6 +131,7 @@ void registerS3Metrics() {
   DEFINE_METRIC(kMetricS3FailedUploads, velox::StatType::COUNT);
   DEFINE_METRIC(kMetricS3SuccessfulUploads, velox::StatType::COUNT);
   DEFINE_METRIC(kMetricS3MetadataCalls, velox::StatType::COUNT);
+  DEFINE_METRIC(kMetricS3GetObjectCalls, velox::StatType::COUNT);
   DEFINE_METRIC(kMetricS3GetObjectErrors, velox::StatType::COUNT);
   DEFINE_METRIC(kMetricS3GetMetadataErrors, velox::StatType::COUNT);
   DEFINE_METRIC(kMetricS3GetObjectRetries, velox::StatType::COUNT);

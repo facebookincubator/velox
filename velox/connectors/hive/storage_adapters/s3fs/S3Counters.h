@@ -27,6 +27,8 @@ constexpr std::string_view kMetricS3FailedUploads{
     "presto_cpp.hive.s3.failed_uploads"};
 constexpr std::string_view kMetricS3MetadataCalls{
     "presto_cpp.hive.s3.metadata_calls"};
+constexpr std::string_view kMetricS3GetObjectCalls{
+    "presto_cpp.hive.s3.get_object_calls"};
 constexpr std::string_view kMetricS3GetObjectErrors{
     "presto_cpp.hive.s3.get_object_errors"};
 constexpr std::string_view kMetricS3GetMetadataErrors{

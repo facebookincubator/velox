@@ -191,6 +191,7 @@ class S3ReadFile final : public ReadFile {
     request.SetResponseStreamFactory(
         AwsWriteableStreamFactory(position, length));
     RECORD_METRIC_VALUE(kMetricS3ActiveConnections);
+    RECORD_METRIC_VALUE(kMetricS3GetObjectCalls);
     auto outcome = client_->GetObject(request);
     if (!outcome.IsSuccess()) {
       RECORD_METRIC_VALUE(kMetricS3GetObjectErrors);

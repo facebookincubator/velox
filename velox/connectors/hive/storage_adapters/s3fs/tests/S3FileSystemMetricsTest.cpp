@@ -151,19 +151,20 @@ TEST_F(S3FileSystemMetricsTest, metrics) {
   EXPECT_EQ(1, s3Reporter->counterMap[std::string{kMetricS3MetadataCalls}]);
   EXPECT_EQ(1, s3Reporter->counterMap[std::string{kMetricS3GetMetadataErrors}]);
 
-  constexpr std::string_view dataContent =
+  constexpr std::string_view kDataContent =
       "Dance me to your beauty with a burning violin"
       "Dance me through the panic till I'm gathered safely in"
       "Lift me like an olive branch and be my homeward dove"
       "Dance me to the end of love";
-  writeFile->append(dataContent);
+  writeFile->append(kDataContent);
   writeFile->close();
   EXPECT_EQ(1, s3Reporter->counterMap[std::string{kMetricS3StartedUploads}]);
   EXPECT_EQ(1, s3Reporter->counterMap[std::string{kMetricS3SuccessfulUploads}]);
 
   auto readFile = s3fs.openFileForRead(s3File);
   EXPECT_EQ(2, s3Reporter->counterMap[std::string{kMetricS3MetadataCalls}]);
-  readFile->pread(0, dataContent.length());
+  readFile->pread(0, kDataContent.length());
+  EXPECT_EQ(1, s3Reporter->counterMap[std::string{kMetricS3GetObjectCalls}]);
 }
 
 } // namespace facebook::velox::filesystems
