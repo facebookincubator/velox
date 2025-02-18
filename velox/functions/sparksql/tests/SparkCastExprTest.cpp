@@ -774,12 +774,12 @@ TEST_F(SparkCastExprTest, timestampToInt) {
       -1,
       -10,
       -1,
-      -3,
-      -11,
-      1,
       -2,
+      -10,
+      1,
+      -1,
       1234567,
-      -9876544,
+      -9876543,
       std::nullopt,
   };
 
