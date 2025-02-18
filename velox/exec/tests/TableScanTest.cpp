@@ -1992,7 +1992,7 @@ TEST_F(TableScanTest, partitionedTableTimestampKey) {
   const std::string partitionValue = "2023-10-27 00:12:35";
 
   auto partitionType = TIMESTAMP();
-  // test partition value is null
+  // Test partition value is null.
   testPartitionedTable(filePath->getPath(), partitionType, std::nullopt);
 
   auto split = exec::test::HiveConnectorSplitBuilder(filePath->getPath())
@@ -2073,7 +2073,7 @@ TEST_F(TableScanTest, partitionedTableTimestampKey) {
           .planNode(),
       "SELECT c0, c1, {} FROM tmp");
 
-  // select only partition key
+  // Select only partition key.
   expect(
       PlanBuilder()
           .startTableScan()
