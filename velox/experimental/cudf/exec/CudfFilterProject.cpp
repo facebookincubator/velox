@@ -159,14 +159,17 @@ cudf::ast::expression const& create_ast_tree(
           inputRowSchema,
           precompute_instructions);
       return tree.push(operation{op::CAST_TO_INT64, op1});
-    } else if (c2 and c2->toString() == "0:DOUBLE") {
+    } else if (
+        c2 and (c2->toString() == "0:DOUBLE" or c2->toString() == "0:BIGINT")) {
       auto const& op1 = create_ast_tree(
           expr->inputs()[0],
           tree,
           scalars,
           inputRowSchema,
           precompute_instructions);
-      auto const& op1d = tree.push(operation{op::CAST_TO_FLOAT64, op1});
+      auto const& op1d = (c2->toString() == "0:DOUBLE")
+          ? tree.push(operation{op::CAST_TO_FLOAT64, op1})
+          : tree.push(operation{op::CAST_TO_INT64, op1});
       auto const& op2 = create_ast_tree(
           expr->inputs()[1],
           tree,
@@ -249,7 +252,6 @@ cudf::ast::expression const& create_ast_tree(
     VELOX_CHECK_NOT_NULL(literalExpr, "Expression is not a literal");
     createLiteral(literalExpr->value(), scalars);
     std::string like_expr = "like " + std::to_string(scalars.size() - 1);
-    std::cout << "like_expr: " << like_expr << std::endl;
     precompute_instructions.emplace_back(
         dependent_column_index, like_expr, new_column_index);
     return tree.push(cudf::ast::column_reference(new_column_index));
