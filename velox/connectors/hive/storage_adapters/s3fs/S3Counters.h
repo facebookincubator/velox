@@ -17,16 +17,21 @@
 
 namespace facebook::velox::filesystems {
 
+// The number of opened connections for S3 read operations.
 constexpr std::string_view kMetricS3ActiveConnections{
     "presto_cpp.hive.s3.active_connections"};
+// The number of write operations to S3 objects.
 constexpr std::string_view kMetricS3StartedUploads{
     "presto_cpp.hive.s3.started_uploads"};
 constexpr std::string_view kMetricS3SuccessfulUploads{
     "presto_cpp.hive.s3.successful_uploads"};
 constexpr std::string_view kMetricS3FailedUploads{
     "presto_cpp.hive.s3.failed_uploads"};
+/// The number of metadata retrieval operations for S3 objects,
+/// which can occur during both read and write operations.
 constexpr std::string_view kMetricS3MetadataCalls{
     "presto_cpp.hive.s3.metadata_calls"};
+// The number of read operations on S3 objects.
 constexpr std::string_view kMetricS3GetObjectCalls{
     "presto_cpp.hive.s3.get_object_calls"};
 constexpr std::string_view kMetricS3GetObjectErrors{
