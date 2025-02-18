@@ -333,6 +333,12 @@ class QueryConfig {
   static constexpr const char* kSparkLegacyDateFormatter =
       "spark.legacy_date_formatter";
 
+  /// If a key is found in multiple given maps, by default that key's value in
+  /// the resulting map comes from the last one of those maps. When true, throw
+  /// exception on duplicate map key.
+  static constexpr const char* kSparkThrowExceptionOnDuplicateMapKeys =
+      "spark.throw_exception_on_duplicate_map_keys";
+
   /// The number of local parallel table writer operators per task.
   static constexpr const char* kTaskWriterCount = "task_writer_count";
 
@@ -829,6 +835,10 @@ class QueryConfig {
 
   bool sparkLegacyDateFormatter() const {
     return get<bool>(kSparkLegacyDateFormatter, false);
+  }
+
+  bool sparkThrowExceptionOnDuplicateMapKeys() const {
+    return get<bool>(kSparkThrowExceptionOnDuplicateMapKeys, false);
   }
 
   bool exprTrackCpuUsage() const {
