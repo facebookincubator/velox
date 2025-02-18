@@ -35,6 +35,7 @@ void registerSimpleFunctions(const std::string& prefix) {
   using namespace stringImpl;
 
   // Register string functions.
+  registerFunction<BitLengthFunction, Varchar, int64_t>({prefix + "bit_length"});
   registerFunction<ChrFunction, Varchar, int64_t>({prefix + "chr"});
   registerFunction<CodePointFunction, int32_t, Varchar>({prefix + "codepoint"});
   registerFunction<HammingDistanceFunction, int64_t, Varchar, Varchar>(
