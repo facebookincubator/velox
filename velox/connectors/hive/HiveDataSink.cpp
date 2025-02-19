@@ -83,8 +83,8 @@ std::vector<column_index_t> getPartitionChannels(
     const std::shared_ptr<const HiveInsertTableHandle>& insertTableHandle) {
   std::vector<column_index_t> channels;
 
-  if (insertTableHandle->partitionKeys().size() > 0) {
-    auto partitionKeys = insertTableHandle->partitionKeys();
+  if (insertTableHandle->partitionKeyOrder().size() > 0) {
+    auto partitionKeys = insertTableHandle->partitionKeyOrder();
     for (auto partitionKeyName : partitionKeys) {
       for (column_index_t j = 0; j < insertTableHandle->inputColumns().size();
            j++) {
