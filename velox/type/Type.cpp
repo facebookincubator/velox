@@ -1254,6 +1254,11 @@ TypePtr getType(
   if (parametricBuiltinTypes().count(name)) {
     return parametricBuiltinTypes().at(name)(parameters);
   }
+  // Special case for TDigest, already upper
+  if ((name == "tdigest" || name == "TDIGEST") && parameters.size() == 1 &&
+      parameters[0].type->kind() == TypeKind::DOUBLE) {
+    return getCustomType(name);
+  }
 
   return getCustomType(name);
 }
