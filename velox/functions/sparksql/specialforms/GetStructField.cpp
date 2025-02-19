@@ -20,6 +20,8 @@
 namespace facebook::velox::functions::sparksql {
 namespace {
 
+// Vector function that returns the value of fields in a RowVector.
+// The constructor parameter ordinal controls the field index.
 class GetStructFieldFunction : public exec::VectorFunction {
  public:
   GetStructFieldFunction(int32_t ordinal) : ordinal_(ordinal) {}
@@ -41,6 +43,7 @@ class GetStructFieldFunction : public exec::VectorFunction {
   }
 
  private:
+  // The ordinal to select child from the struct
   const int32_t ordinal_;
 };
 

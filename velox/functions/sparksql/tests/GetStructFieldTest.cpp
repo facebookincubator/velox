@@ -14,8 +14,10 @@
  * limitations under the License.
  */
 #include <gtest/gtest.h>
+#include <optional>
 
 #include "velox/functions/sparksql/tests/SparkFunctionBaseTest.h"
+#include "velox/vector/tests/TestingDictionaryFunction.h"
 #include "velox/vector/tests/utils/VectorTestBase.h"
 
 using namespace facebook::velox::test;
@@ -74,6 +76,42 @@ TEST_F(GetStructFieldTest, complexType) {
 
   // Get row field.
   testGetStructField(data, 2, col2);
+}
+
+TEST_F(GetStructFieldTest, dictionaryEncodedElementsInFlat) {
+  // Verify that get_struct_field properly handles an input where the top level
+  // vector has a dictionary layer wrapped.
+  exec::registerVectorFunction(
+      "add_dict",
+      TestingDictionaryFunction::signatures(),
+      std::make_unique<TestingDictionaryFunction>(1));
+
+  auto col0 = makeNullableFlatVector<int32_t>({1, std::nullopt, 2, 3});
+  auto col1 = makeNullableFlatVector<std::string>(
+      {"hello", "world", std::nullopt, "hi"});
+  auto col2 = makeNullableArrayVector<int32_t>(
+      {{1, 2, std::nullopt},
+       {3, std::nullopt, 4},
+       {5, std::nullopt, std::nullopt},
+       {6, 7, 8}});
+  auto data = makeRowVector({col0, col1, col2});
+  auto wrappedData = evaluate("add_dict(c0)", makeRowVector({data}));
+
+  auto expectedCol0 =
+      makeNullableFlatVector<int32_t>({3, 2, std::nullopt, std::nullopt});
+  testGetStructField(wrappedData, 0, expectedCol0);
+
+  auto expectedCol1 = makeNullableFlatVector<std::string>(
+      {"hi", std::nullopt, "world", std::nullopt});
+  testGetStructField(wrappedData, 1, expectedCol1);
+
+  auto expectedCol2 = makeNullableArrayVector<int32_t>({
+      {{6, 7, 8}},
+      {{5, std::nullopt, std::nullopt}},
+      {{3, std::nullopt, 4}},
+      std::nullopt,
+  });
+  testGetStructField(wrappedData, 2, expectedCol2);
 }
 
 } // namespace
