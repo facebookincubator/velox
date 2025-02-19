@@ -210,7 +210,7 @@ class HiveInsertTableHandle : public ConnectorInsertTableHandle {
       // if there's no data. This is useful when the table is bucketed, but the
       // engine handles ensuring a 1 to 1 mapping from task to bucket.
       const bool ensureFiles = false,
-      const std::vector<std::string> partitionKeys = {})
+      const std::vector<std::string> partitionKeyOrder = {})
       : inputColumns_(std::move(inputColumns)),
         locationHandle_(std::move(locationHandle)),
         storageFormat_(storageFormat),
@@ -219,7 +219,7 @@ class HiveInsertTableHandle : public ConnectorInsertTableHandle {
         serdeParameters_(serdeParameters),
         writerOptions_(writerOptions),
         ensureFiles_(ensureFiles),
-        partitionKeys_(partitionKeys) {
+        partitionKeyOrder_(partitionKeyOrder) {
     if (compressionKind.has_value()) {
       VELOX_CHECK(
           compressionKind.value() != common::CompressionKind_MAX,
@@ -239,6 +239,21 @@ class HiveInsertTableHandle : public ConnectorInsertTableHandle {
             !inputColumn->isPartitionKey(),
             "ensureFiles is not supported with partition keys in the data");
       }
+    }
+
+    if (partitionKeyOrder_.size() > 0) {
+      // Ensure the partitionKeyOrder contains all the partition keys in
+      // inputColumns_.
+      std::string partitionKeyNames;
+      for (const auto& inputColumn : inputColumns_) {
+        if (inputColumn->isPartitionKey()) {
+          partitionKeyNames.emplace_back(inputColumn->name());
+        }
+      }
+
+      VELOX_CHECK(
+          partitionKeyNames.size() == partitionKeyOrder_.size(),
+          "partition key order size is not equal with the partition column size in inputColumns_");
     }
   }
 
@@ -273,8 +288,11 @@ class HiveInsertTableHandle : public ConnectorInsertTableHandle {
     return ensureFiles_;
   }
 
-  const std::vector<std::string>& partitionKeys() const {
-    return partitionKeys_;
+  /// If partitionKeyOrder is specified, the partition directory will be
+  /// created according on this order. Otherwise, it will follow the order of
+  /// columns in inputColumns_.
+  const std::vector<std::string>& partitionKeyOrder() const {
+    return partitionKeyOrder_;
   }
 
   bool supportsMultiThreading() const override {
@@ -306,7 +324,7 @@ class HiveInsertTableHandle : public ConnectorInsertTableHandle {
   const std::unordered_map<std::string, std::string> serdeParameters_;
   const std::shared_ptr<dwio::common::WriterOptions> writerOptions_;
   const bool ensureFiles_;
-  const std::vector<std::string> partitionKeys_;
+  const std::vector<std::string> partitionKeyOrder_;
 };
 
 /// Parameters for Hive writers.
