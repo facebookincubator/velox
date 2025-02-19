@@ -37,9 +37,6 @@
 #include <fcntl.h>
 #include <sys/types.h>
 
-DECLARE_bool(velox_ssd_odirect);
-DECLARE_bool(velox_ssd_verify_write);
-
 using namespace facebook::velox;
 using namespace facebook::velox::cache;
 using namespace facebook::velox::common::testutil;

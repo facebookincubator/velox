@@ -17,3 +17,9 @@
 namespace facebook::velox {
 void translateFlagsToGlobalConfig();
 }
+
+/// Use O_DIRECT for SSD cache IO
+DECLARE_bool(velox_ssd_odirect);
+
+/// Read back data after writing to SSD
+DECLARE_bool(velox_ssd_verify_write);
