@@ -15,6 +15,7 @@
  */
 
 #include <folly/init/Init.h>
+#include <gflags/gflags.h>
 
 #include "velox/common/file/FileSystems.h"
 #include "velox/common/memory/Memory.h"
