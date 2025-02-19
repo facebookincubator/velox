@@ -86,7 +86,7 @@ using namespace facebook::velox::cache;
 using namespace facebook::velox::dwio::common;
 using namespace facebook::velox::tests::utils;
 
-namespace facebook::velox::exec::test {
+namespace facebook::velox::exec {
 namespace {
 
 class CacheFuzzer {
@@ -548,4 +548,4 @@ void cacheFuzzer(size_t seed) {
   auto cacheFuzzer = CacheFuzzer(seed);
   cacheFuzzer.go();
 }
-} // namespace facebook::velox::exec::test
+} // namespace facebook::velox::exec
