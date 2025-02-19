@@ -63,7 +63,7 @@ Expected<Timestamp> SparkCastHooks::castIntToTimestamp(int64_t seconds) const {
 Expected<std::optional<Timestamp>> SparkCastHooks::castDoubleToTimestamp(
     double value) const {
   if (FOLLY_UNLIKELY(std::isnan(value) || std::isinf(value))) {
-    return std::optional<Timestamp>{};
+    return std::nullopt;
   }
   return castNumberToTimestamp(value);
 }

@@ -68,8 +68,11 @@ class SparkCastHooks : public exec::CastHooks {
   exec::PolicyType getPolicy() const override;
 
  private:
+  /// Casts a number to a timestamp. The number is treated as the number of
+  /// seconds since the epoch (1970-01-01 00:00:00 UTC).
+  /// Supported input types: integer, floating-point.
   template <typename T>
-  Expected<Timestamp> castNumberToTimestamp(T value) const;
+  Expected<Timestamp> castNumberToTimestamp(T seconds) const;
 
   const core::QueryConfig& config_;
 
