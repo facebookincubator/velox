@@ -323,11 +323,19 @@ These functions support TIMESTAMP and DATE input types.
 
 .. spark:function:: unix_timestamp(date) -> integer
 
-    Returns the UNIX timestamp of time specified by ``date``.
+    Converts the time represented by ``date`` at the configured session timezone to the GMT time, and extracts the seconds. ::
+
+        SELECT unix_timestamp('1970-01-01'); -- 0
+        SELECT unix_timestamp('2024-10-01'); -- 1727740800
+        SELECT unix_timestamp('-2025-02-18'); -- -126065894400
 
 .. spark:function:: unix_timestamp(timestamp) -> integer
 
-    Returns the UNIX timestamp of time specified by ``timestamp``.
+    Returns the UNIX timestamp of the given ``timestamp`` in seconds. ::
+
+        SELECT unix_timestamp(CAST(0 AS TIMESTAMP)); -- 0
+        SELECT unix_timestamp(CAST(1739933174 AS TIMESTAMP)); -- 1739933174
+        SELECT unix_timestamp(CAST(-1739933174 AS TIMESTAMP)); -- -1739933174
 
 .. function:: week_of_year(x) -> integer
 

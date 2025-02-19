@@ -319,6 +319,11 @@ TEST_F(DateTimeFunctionsTest, unixTimestampTimestampInput) {
   EXPECT_EQ(0, unixTimestamp(Timestamp(0, 0)));
   EXPECT_EQ(1, unixTimestamp(Timestamp(1, 990)));
   EXPECT_EQ(61, unixTimestamp(Timestamp(61, 0)));
+  EXPECT_EQ(-1, unixTimestamp(Timestamp(-1, 0)));
+  EXPECT_EQ(1739933174, unixTimestamp(Timestamp(1739933174, 0)));
+  EXPECT_EQ(-1739933174, unixTimestamp(Timestamp(-1739933174, 0)));
+  EXPECT_EQ(kMax, unixTimestamp(Timestamp(kMax, 0)));
+  EXPECT_EQ(kMin, unixTimestamp(Timestamp(kMin, 0)));
 }
 
 TEST_F(DateTimeFunctionsTest, unixTimestampDateInput) {
@@ -327,10 +332,14 @@ TEST_F(DateTimeFunctionsTest, unixTimestampDateInput) {
   };
   EXPECT_EQ(0, unixTimestamp(parseDate("1970-01-01")));
   EXPECT_EQ(1727740800, unixTimestamp(parseDate("2024-10-01")));
+  EXPECT_EQ(-126065894400, unixTimestamp(parseDate("-2025-02-18")));
   VELOX_ASSERT_THROW(
       unixTimestamp(kMax), "Timepoint is outside of supported year range");
+  VELOX_ASSERT_THROW(
+      unixTimestamp(kMin), "Timepoint is outside of supported year range");
   setQueryTimeZone("America/Los_Angeles");
   EXPECT_EQ(1727766000, unixTimestamp(parseDate("2024-10-01")));
+  EXPECT_EQ(-126065866022, unixTimestamp(parseDate("-2025-02-18")));
 }
 
 // unix_timestamp and to_unix_timestamp are aliases.
