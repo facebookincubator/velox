@@ -17,8 +17,8 @@ Miscellaneous Functions
 
 .. spark:function:: get_struct_field(input, ordinal) -> T
 
-    Returns the value of field in the row type `input`.
-    The field position is specified by `ordinal`.
+    Returns the value of field in the row type ``input``.
+    The field position is specified by ``ordinal``.
 
 .. spark:function:: monotonically_increasing_id() -> bigint
 

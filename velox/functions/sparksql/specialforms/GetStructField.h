@@ -28,12 +28,12 @@ class GetStructFieldCallToSpecialForm : public exec::FunctionCallToSpecialForm {
   /// expression is a regular expression based on a custom VectorFunction
   /// implementation.
   /// @param type Result type.
-  /// @param args Two inputs. First input should be a RowVector. Second
-  /// input is the ordinal to get from RowVector, and must be constant
-  /// INTEGER.
+  /// @param args Two inputs. First input should be of row type.
+  /// Second input is the ordinal to select child from the struct,
+  /// and must be constant INTEGER.
   exec::ExprPtr constructSpecialForm(
       const TypePtr& type,
-      std::vector<exec::ExprPtr>&& compiledChildren,
+      std::vector<exec::ExprPtr>&& args,
       bool trackCpuUsage,
       const core::QueryConfig& config) override;
 
