@@ -90,7 +90,6 @@ class CudfHashAggregation : public exec::Operator {
   // aggregations
   const bool isDistinct_;
 
-  bool newDistincts_ = false;
   bool finished_ = false;
 
   size_t numAggregates_;
