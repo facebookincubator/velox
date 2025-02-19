@@ -15,6 +15,7 @@
  */
 #include <string>
 #include "velox/functions/prestosql/IPAddressFunctions.h"
+#include "velox/functions/prestosql/GeometryFunctions.h"
 #include "velox/functions/prestosql/UuidFunctions.h"
 
 namespace facebook::velox::functions {
@@ -116,6 +117,7 @@ void registerAllScalarFunctions(const std::string& prefix) {
   registerBitwiseFunctions(prefix);
   registerUuidFunctions(prefix);
   registerIPAddressFunctions(prefix);
+  registerGeometryFunctions(prefix);
 }
 
 void registerMapAllowingDuplicates(

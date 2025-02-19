@@ -14,6 +14,7 @@
 
 add_executable(
   velox_presto_types_test
+  GeometryTypeTest.cpp
   HyperLogLogTypeTest.cpp
   JsonTypeTest.cpp
   TimestampWithTimeZoneTypeTest.cpp

@@ -228,6 +228,7 @@ TEST_F(CustomTypeTest, getCustomTypeNames) {
           "UUID",
           "IPADDRESS",
           "IPPREFIX",
+          "GEOMETRY"
       }),
       names);
 
@@ -243,6 +244,7 @@ TEST_F(CustomTypeTest, getCustomTypeNames) {
           "UUID",
           "IPADDRESS",
           "IPPREFIX",
+          "GEOMETRY",
           "FANCY_INT",
       }),
       names);
