@@ -186,7 +186,7 @@ Array Functions
 
     Returns the array sorted by values computed using specified lambda in ascending order. ``U`` must be an orderable type.
     NULL and NaN elements returned by the lambda function will be placed at the end of the returned array, with NaN elements appearing before NULL elements.
-    This function is not supported in Spark and is only used inside Velox for rewring :spark:func:`array_sort(array(T), function(T,T,U)) -> array(T)` as :spark:func:`array_sort(array(T), function(T,U))`. ::
+    This function is not supported in Spark and is only used inside Velox for rewriting :spark:func:`array_sort(array(T), function(T,T,U)) -> array(T)` as :spark:func:`array_sort(array(T), function(T,U)) -> array(T)`. ::
 
 .. spark:function:: array_sort(array(T), function(T,T,U)) -> array(T)
     :noindex:
