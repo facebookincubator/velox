@@ -51,17 +51,18 @@ class RowsStreamingWindowBuild : public WindowBuild {
 
   std::shared_ptr<WindowPartition> nextPartition() override;
 
-  bool needsInput() override {
-    // No partitions are available or the currentPartition is the last available
-    // one, so can consume input rows.
-    return windowPartitions_.empty() ||
-        outputPartition_ == windowPartitions_.size() - 1;
-  }
+  inline bool needsInput() override;
 
  private:
   // Adds input rows to the current partition, or creates a new partition if it
   // does not exist.
   void addPartitionInputs(bool finished);
+
+  // Returns the current input partition.
+  std::shared_ptr<WindowPartition> inputPartition();
+
+  // Returns the current output partition.
+  std::shared_ptr<WindowPartition> outputPartition();
 
   // Sets to true if this window node has range frames.
   const bool hasRangeFrame_;
@@ -72,14 +73,11 @@ class RowsStreamingWindowBuild : public WindowBuild {
   // Used to compare rows based on partitionKeys.
   char* previousRow_ = nullptr;
 
-  // Point to the current output partition if not -1.
-  vector_size_t outputPartition_ = -1;
-
-  // Current input partition that receives inputs.
-  vector_size_t inputPartition_ = 0;
-
-  // Holds all the built window partitions.
-  std::vector<std::shared_ptr<WindowPartition>> windowPartitions_;
+  // The head of the deque (front) will always point to the current WP being
+  // processed. Once the current WP is processed, it will be discarded (removed
+  // from the front of the deque). The next WP to be processed will then become
+  // the new head of the deque.
+  std::deque<std::shared_ptr<WindowPartition>> windowPartitions_;
 };
 
 } // namespace facebook::velox::exec
