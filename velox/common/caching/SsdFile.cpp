@@ -116,7 +116,7 @@ SsdFile::SsdFile(const Config& config)
   process::TraceContext trace("SsdFile::SsdFile");
   filesystems::FileOptions fileOptions;
   fileOptions.shouldThrowOnFileAlreadyExists = false;
-  fileOptions.bufferIo = !config::globalConfig().ssd_odirect;
+  fileOptions.bufferIo = !config::globalConfig().useSsdODirect;
   writeFile_ = fs_->openFileForWrite(fileName_, fileOptions);
   readFile_ = fs_->openFileForRead(fileName_, fileOptions);
 
@@ -415,7 +415,7 @@ void SsdFile::write(std::vector<CachePin>& pins) {
           checksum = checksumEntry(*entry);
         }
         entries_[std::move(key)] = SsdRun(offset, size, checksum);
-        if (config::globalConfig().ssd_verify_write) {
+        if (config::globalConfig().ssdVerifyWrite) {
           verifyWrite(*entry, SsdRun(offset, size, checksum));
         }
         offset += size;

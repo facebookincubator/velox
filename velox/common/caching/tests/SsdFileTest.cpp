@@ -74,7 +74,7 @@ class SsdFileTest : public testing::Test {
       bool disableFileCow = false,
       bool enableFaultInjection = false) {
     // tmpfs does not support O_DIRECT, so turn this off for testing.
-    config::globalConfig().ssd_odirect = false;
+    config::globalConfig().useSsdODirect = false;
     cache_ = AsyncDataCache::create(memory::memoryManager()->allocator());
     cacheHelper_ =
         std::make_unique<test::AsyncDataCacheTestHelper>(cache_.get());
@@ -328,7 +328,7 @@ TEST_F(SsdFileTest, writeAndRead) {
   constexpr int64_t kSsdSize = 16 * SsdFile::kRegionSize;
   std::vector<TestEntry> allEntries;
   initializeCache(kSsdSize);
-  config::globalConfig().ssd_verify_write = true;
+  config::globalConfig().ssdVerifyWrite = true;
   for (auto startOffset = 0; startOffset <= kSsdSize - SsdFile::kRegionSize;
        startOffset += SsdFile::kRegionSize) {
     auto pins =
@@ -403,7 +403,7 @@ TEST_F(SsdFileTest, checkpoint) {
   constexpr int64_t kSsdSize = 16 * SsdFile::kRegionSize;
   const uint64_t checkpointIntervalBytes = 5 * SsdFile::kRegionSize;
   const auto fileNameAlt = StringIdLease(fileIds(), "fileInStorageAlt");
-  config::globalConfig().ssd_verify_write = true;
+  config::globalConfig().ssdVerifyWrite = true;
   initializeCache(kSsdSize, checkpointIntervalBytes);
 
   std::vector<TestEntry> allEntries;
@@ -499,7 +499,7 @@ TEST_F(SsdFileTest, checkpoint) {
 TEST_F(SsdFileTest, fileCorruption) {
   constexpr int64_t kSsdSize = 16 * SsdFile::kRegionSize;
   const uint64_t checkpointIntervalBytes = 5 * SsdFile::kRegionSize;
-  config::globalConfig().ssd_verify_write = true;
+  config::globalConfig().ssdVerifyWrite = true;
 
   const auto populateCache = [&](std::vector<TestEntry>& entries) {
     entries.clear();
@@ -571,7 +571,7 @@ TEST_F(SsdFileTest, fileCorruption) {
 TEST_F(SsdFileTest, recoverFromCheckpointWithChecksum) {
   constexpr int64_t kSsdSize = 4 * SsdFile::kRegionSize;
   const uint64_t checkpointIntervalBytes = 3 * SsdFile::kRegionSize;
-  config::globalConfig().ssd_verify_write = true;
+  config::globalConfig().ssdVerifyWrite = true;
 
   // Test if cache data can be recovered with different settings.
   struct {

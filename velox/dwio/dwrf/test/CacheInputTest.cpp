@@ -97,7 +97,7 @@ class CacheTest : public ::testing::Test {
 
     std::unique_ptr<SsdCache> ssd;
     if (ssdBytes > 0) {
-      config::globalConfig().ssd_odirect = false;
+      config::globalConfig().useSsdODirect = false;
       tempDirectory_ = exec::test::TempDirectoryPath::create();
       const SsdCache::Config config(
           fmt::format("{}/cache", tempDirectory_->getPath()),
