@@ -127,11 +127,13 @@ PositionalDeleteFileReader::PositionalDeleteFileReader(
   }
 
   dwio::common::RowReaderOptions deleteRowReaderOpts;
+  deleteReaderOpts.setIdentity(connectorQueryCtx->identity());
   configureRowReaderOptions(
       {},
       scanSpec,
       nullptr,
       deleteFileSchema,
+      connectorQueryCtx,
       deleteSplit_,
       nullptr,
       nullptr,
