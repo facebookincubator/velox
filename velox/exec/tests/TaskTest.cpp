@@ -2394,6 +2394,7 @@ DEBUG_ONLY_TEST_F(TaskTest, taskReclaimStats) {
       driverExecutor_.get(),
       core::QueryConfig{{}},
       std::unordered_map<std::string, std::shared_ptr<config::ConfigBase>>{},
+      {},
       nullptr,
       std::move(queryPool),
       nullptr);
@@ -2469,6 +2470,7 @@ DEBUG_ONLY_TEST_F(TaskTest, taskPauseTime) {
       driverExecutor_.get(),
       core::QueryConfig{{}},
       std::unordered_map<std::string, std::shared_ptr<config::ConfigBase>>{},
+      {},
       nullptr,
       std::move(queryPool),
       nullptr);

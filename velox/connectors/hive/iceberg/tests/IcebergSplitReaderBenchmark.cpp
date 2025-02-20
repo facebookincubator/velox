@@ -314,6 +314,7 @@ void IcebergSplitReaderBenchmark::readSingleColumn(
           connectorPool.get(),
           connectorSessionProperties_.get(),
           nullptr,
+          nullptr,
           common::PrefixSortConfig(),
           nullptr,
           nullptr,

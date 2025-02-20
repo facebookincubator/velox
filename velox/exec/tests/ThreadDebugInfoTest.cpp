@@ -105,6 +105,7 @@ DEBUG_ONLY_TEST_F(ThreadDebugInfoDeathTest, withinTheCallingThread) {
       executor_.get(),
       core::QueryConfig({}),
       std::unordered_map<std::string, std::shared_ptr<config::ConfigBase>>{},
+      {},
       cache::AsyncDataCache::getInstance(),
       nullptr,
       nullptr,

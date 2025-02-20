@@ -16,15 +16,20 @@
 
 #include "velox/dwio/parquet/reader/PageReader.h"
 
+#include <glog/logging.h>
 #include "velox/common/testutil/TestValue.h"
 #include "velox/common/time/Timer.h"
 #include "velox/dwio/common/BufferUtil.h"
 #include "velox/dwio/common/ColumnVisitors.h"
+#include "velox/dwio/parquet/crypto/AesEncryption.h"
+#include "velox/dwio/parquet/crypto/Exception.h"
 #include "velox/dwio/parquet/common/LevelConversion.h"
 #include "velox/dwio/parquet/thrift/ThriftTransport.h"
 #include "velox/vector/FlatVector.h"
 
+#include <thrift/TApplicationException.h>
 #include <thrift/protocol/TCompactProtocol.h> // @manual
+#include <thrift/transport/TBufferTransports.h> //@manual
 
 using facebook::velox::common::testutil::TestValue;
 
@@ -50,15 +55,42 @@ void PageReader::seekToPage(int64_t row) {
       numRowsInPage_ = 0;
       break;
     }
-    PageHeader pageHeader = readPageHeader();
+
+
+    std::string headerAad{""};
+    std::string dataAad{""};
+    std::shared_ptr<Decryptor> headerDecryptor;
+    std::shared_ptr<Decryptor> dataDecryptor;
+    bool encrypted = false;
+    if (columnDecryptionSetup_ && columnDecryptionSetup_->isEncrypted()) {
+      encrypted = true;
+      headerDecryptor = columnDecryptionSetup_->getMetadataDecryptor();
+      dataDecryptor = columnDecryptionSetup_->getDataDecryptor();
+      if (hasDictionaryPage_ && !dictionaryPageProcessed_) {
+        headerAad = createModuleAad(headerDecryptor->fileAad(), kDictionaryPageHeader, rowGroupIndex_, columnIndex_, static_cast<int16_t>(-1));
+        dictionaryPageProcessed_ = true;
+      } else {
+        headerAad = createModuleAad(headerDecryptor->fileAad(), kDataPageHeader, rowGroupIndex_, columnIndex_, pageOrdinal_);
+      }
+    }
+
+    PageHeader pageHeader = readPageHeader(headerDecryptor, headerAad);
     pageStart_ = pageDataStart_ + pageHeader.compressed_page_size;
 
     switch (pageHeader.type) {
       case thrift::PageType::DATA_PAGE:
-        prepareDataPageV1(pageHeader, row);
+        if (encrypted) {
+          dataAad = createModuleAad(dataDecryptor->fileAad(), kDataPage, rowGroupIndex_, columnIndex_, pageOrdinal_);
+        }
+        prepareDataPageV1(pageHeader, row, dataDecryptor, dataAad);
+        pageOrdinal_ ++;
         break;
       case thrift::PageType::DATA_PAGE_V2:
-        prepareDataPageV2(pageHeader, row);
+        if (encrypted) {
+          dataAad = createModuleAad(dataDecryptor->fileAad(), kDataPage, rowGroupIndex_, columnIndex_, pageOrdinal_);
+        }
+        prepareDataPageV2(pageHeader, row, dataDecryptor, dataAad);
+        pageOrdinal_ ++;
         break;
       case thrift::PageType::DICTIONARY_PAGE:
         if (row == kRepDefOnly) {
@@ -69,7 +101,10 @@ void PageReader::seekToPage(int64_t row) {
               bufferEnd_);
           continue;
         }
-        prepareDictionary(pageHeader);
+        if (encrypted) {
+          dataAad = createModuleAad(dataDecryptor->fileAad(), kDictionaryPage, rowGroupIndex_, columnIndex_, static_cast<int16_t>(-1));
+        }
+        prepareDictionary(pageHeader, dataDecryptor, dataAad);
         continue;
       default:
         break; // ignore INDEX page type and any other custom extensions
@@ -81,7 +116,47 @@ void PageReader::seekToPage(int64_t row) {
   }
 }
 
-PageHeader PageReader::readPageHeader() {
+PageHeader PageReader::decryptPageHeader(std::shared_ptr<Decryptor> decryptor, std::string_view aad) {
+  int encryptedLength;
+  if (bufferEnd_ - bufferStart_ < kBufferSizeLength) {
+    BufferPtr lengthBuffer;
+    const char* lengthData = readBytes(kBufferSizeLength, lengthBuffer);
+
+    encryptedLength = decryptor->getAesDecryptor()->getCiphertextLengthWithoutValidation(reinterpret_cast<const uint8_t*>(lengthData), kBufferSizeLength);
+
+    BufferPtr encryptedBuffer;
+    const char* encryptedData = readBytes(encryptedLength - kBufferSizeLength, encryptedBuffer);
+
+    dwio::common::ensureCapacity<char>(pageBuffer_, encryptedLength, &pool_);
+    char* bytesAsChars = pageBuffer_->asMutable<char>();
+
+    std::memcpy(&bytesAsChars[0], lengthData, kBufferSizeLength);
+    std::memcpy(&bytesAsChars[kBufferSizeLength], encryptedData, encryptedLength - kBufferSizeLength);
+    pageData_ = pageBuffer_->as<char>();
+  } else {
+    encryptedLength = decryptor->getAesDecryptor()->getCiphertextLengthWithoutValidation(reinterpret_cast<const uint8_t*>(bufferStart_), kBufferSizeLength);
+    pageData_ = readBytes(encryptedLength, pageBuffer_);
+  }
+
+  int decryptedPageSize = decryptor->plaintextLength(encryptedLength);
+  dwio::common::ensureCapacity<char>(decryptedData_, decryptedPageSize, &pool_);
+  int decrypted_buffer_len = decryptor->decrypt(reinterpret_cast<const uint8_t*>(pageData_), encryptedLength, decryptedData_->asMutable<uint8_t>(), decryptedPageSize, aad);
+  VELOX_USER_CHECK(decryptedPageSize == decrypted_buffer_len, "[CLAC] readPageHeader: decrypted size not equal");
+
+  std::shared_ptr<thrift::ThriftTransport> thriftTransport =
+      std::make_shared<thrift::ThriftBufferedTransport>(
+          decryptedData_->as<uint8_t>(), decrypted_buffer_len);
+  auto thriftProtocol = std::make_unique<
+      apache::thrift::protocol::TCompactProtocolT<thrift::ThriftTransport>>(
+      thriftTransport);
+  PageHeader pageHeader;
+  pageHeader.read(thriftProtocol.get());
+
+  pageDataStart_ = pageStart_ + encryptedLength;
+  return pageHeader;
+}
+
+PageHeader PageReader::readPageHeader(std::shared_ptr<Decryptor> decryptor, std::string_view aad) {
   TestValue::adjust(
       "facebook::velox::parquet::PageReader::readPageHeader", this);
   if (bufferEnd_ == bufferStart_) {
@@ -95,6 +170,10 @@ PageHeader PageReader::readPageHeader() {
     stats_.pageLoadTimeNs += readUs * 1'000;
     bufferStart_ = reinterpret_cast<const char*>(buffer);
     bufferEnd_ = bufferStart_ + size;
+  }
+
+  if (decryptor) {
+    return decryptPageHeader(decryptor, aad);
   }
 
   std::shared_ptr<thrift::ThriftTransport> transport =
@@ -210,7 +289,20 @@ void PageReader::updateRowInfoAfterPageSkipped() {
   }
 }
 
-void PageReader::prepareDataPageV1(const PageHeader& pageHeader, int64_t row) {
+int32_t PageReader::decryptPageData(const thrift::PageHeader& pageHeader, std::shared_ptr<Decryptor> decryptor, std::string_view aad) {
+  int32_t compressedPageSize{pageHeader.compressed_page_size};
+  int encryptedLength = decryptor->getAesDecryptor()->getCiphertextLength(reinterpret_cast<const uint8_t*>(pageData_), compressedPageSize);
+  VELOX_USER_CHECK(encryptedLength == compressedPageSize, "[CLAC] decryptDataPage: encryptedLength == compressedPageSize");
+
+  int32_t decryptedPageSize{decryptor->plaintextLength(compressedPageSize)};
+  dwio::common::ensureCapacity<char>(decryptedData_, decryptedPageSize, &pool_);
+  int decrypted_buffer_len = decryptor->decrypt(reinterpret_cast<const uint8_t*>(pageData_), compressedPageSize, decryptedData_->asMutable<uint8_t>(), decryptedPageSize, aad);
+  VELOX_USER_CHECK(decryptedPageSize == decrypted_buffer_len, "[CLAC] decryptDataPage: decryptedPageSize != decrypted_buffer_len");
+  pageData_ = decryptedData_->as<char>();
+  return decryptedPageSize;
+}
+
+void PageReader::prepareDataPageV1(const PageHeader& pageHeader, int64_t row, std::shared_ptr<Decryptor> decryptor, std::string_view aad) {
   VELOX_CHECK(
       pageHeader.type == thrift::PageType::DATA_PAGE &&
       pageHeader.__isset.data_page_header);
@@ -227,11 +319,21 @@ void PageReader::prepareDataPageV1(const PageHeader& pageHeader, int64_t row) {
     return;
   }
   pageData_ = readBytes(pageHeader.compressed_page_size, pageBuffer_);
+
+  int32_t decryptedPageSize{0};
+  if (decryptor) {
+    decryptedPageSize = decryptPageData(pageHeader, decryptor, aad);
+  } else {
+    decryptedPageSize = pageHeader.compressed_page_size;
+  }
+
+  int32_t uncompressedPageSize{pageHeader.uncompressed_page_size};
   pageData_ = decompressData(
       pageData_,
-      pageHeader.compressed_page_size,
-      pageHeader.uncompressed_page_size);
-  auto pageEnd = pageData_ + pageHeader.uncompressed_page_size;
+      decryptedPageSize,
+      uncompressedPageSize);
+
+  auto pageEnd = pageData_ + uncompressedPageSize;
   if (maxRepeat_ > 0) {
     uint32_t repeatLength = readField<int32_t>(pageData_);
     repeatDecoder_ = std::make_unique<RleDecoder>(
@@ -268,7 +370,7 @@ void PageReader::prepareDataPageV1(const PageHeader& pageHeader, int64_t row) {
   }
 }
 
-void PageReader::prepareDataPageV2(const PageHeader& pageHeader, int64_t row) {
+void PageReader::prepareDataPageV2(const PageHeader& pageHeader, int64_t row, std::shared_ptr<Decryptor> decryptor, std::string_view aad) {
   VELOX_CHECK(pageHeader.__isset.data_page_header_v2);
   numRepDefsInPage_ = pageHeader.data_page_header_v2.num_values;
   setPageRowInfo(row == kRepDefOnly);
@@ -287,8 +389,16 @@ void PageReader::prepareDataPageV2(const PageHeader& pageHeader, int64_t row) {
   uint32_t repeatLength =
       pageHeader.data_page_header_v2.repetition_levels_byte_length;
 
-  auto bytes = pageHeader.compressed_page_size;
-  pageData_ = readBytes(bytes, pageBuffer_);
+  pageData_ = readBytes(pageHeader.compressed_page_size, pageBuffer_);
+
+  int32_t decryptedPageSize{0};
+  if (decryptor) {
+    decryptedPageSize = decryptPageData(pageHeader, decryptor, aad);
+  } else {
+    decryptedPageSize = pageHeader.compressed_page_size;
+  }
+
+  int32_t uncompressedPageSize = pageHeader.uncompressed_page_size;
 
   if (repeatLength) {
     repeatDecoder_ = std::make_unique<RleDecoder>(
@@ -313,18 +423,18 @@ void PageReader::prepareDataPageV2(const PageHeader& pageHeader, int64_t row) {
   pageData_ += levelsSize;
   if (pageHeader.data_page_header_v2.__isset.is_compressed &&
       pageHeader.data_page_header_v2.is_compressed &&
-      (pageHeader.compressed_page_size - levelsSize > 0)) {
+      (decryptedPageSize - levelsSize > 0)) {
     pageData_ = decompressData(
         pageData_,
-        pageHeader.compressed_page_size - levelsSize,
-        pageHeader.uncompressed_page_size - levelsSize);
+        decryptedPageSize - levelsSize,
+        uncompressedPageSize - levelsSize);
   }
   if (row == kRepDefOnly) {
-    skipBytes(bytes, inputStream_.get(), bufferStart_, bufferEnd_);
+    skipBytes(pageHeader.compressed_page_size, inputStream_.get(), bufferStart_, bufferEnd_);
     return;
   }
 
-  encodedDataSize_ = pageHeader.uncompressed_page_size - levelsSize;
+  encodedDataSize_ = uncompressedPageSize - levelsSize;
   encoding_ = pageHeader.data_page_header_v2.encoding;
   if (numRowsInPage_ == kRowsUnknown) {
     readPageDefLevels();
@@ -334,7 +444,7 @@ void PageReader::prepareDataPageV2(const PageHeader& pageHeader, int64_t row) {
   }
 }
 
-void PageReader::prepareDictionary(const PageHeader& pageHeader) {
+void PageReader::prepareDictionary(const PageHeader& pageHeader, std::shared_ptr<Decryptor> decryptor, std::string_view aad) {
   dictionary_.numValues = pageHeader.dictionary_page_header.num_values;
   dictionaryEncoding_ = pageHeader.dictionary_page_header.encoding;
   dictionary_.sorted = pageHeader.dictionary_page_header.__isset.is_sorted &&
@@ -345,10 +455,20 @@ void PageReader::prepareDictionary(const PageHeader& pageHeader) {
 
   if (codec_ != common::CompressionKind::CompressionKind_NONE) {
     pageData_ = readBytes(pageHeader.compressed_page_size, pageBuffer_);
+
+    int32_t decryptedPageSize;
+    if (decryptor) {
+      decryptedPageSize = decryptPageData(pageHeader, decryptor, aad);
+    } else {
+      decryptedPageSize = pageHeader.compressed_page_size;
+    }
+
+    int32_t uncompressedPageSize{pageHeader.uncompressed_page_size};
+
     pageData_ = decompressData(
         pageData_,
-        pageHeader.compressed_page_size,
-        pageHeader.uncompressed_page_size);
+        decryptedPageSize,
+        uncompressedPageSize);
   }
 
   auto parquetType = type_->parquetType_.value();
@@ -614,6 +734,8 @@ void PageReader::preloadRepDefs() {
   dwio::common::PositionProvider position(rewind);
   inputStream_->seekToPosition(position);
   bufferStart_ = bufferEnd_ = nullptr;
+  dictionaryPageProcessed_ = false;
+  pageOrdinal_ = 0;
   rowOfPage_ = 0;
   numRowsInPage_ = 0;
   pageData_ = nullptr;

@@ -16,10 +16,15 @@
 
 #pragma once
 
-namespace facebook::velox::parquet {
+#include <string>
+#include <unordered_map>
 
-void registerParquetReaderFactory(bool clacEnabled=false);
+namespace facebook::velox::security {
 
-void unregisterParquetReaderFactory();
+/// Used to store user name and credentials.
+struct Identity {
+  std::string user;
+  std::unordered_map<std::string, std::string> credentials;
+};
 
-} // namespace facebook::velox::parquet
+} // namespace facebook::velox::security
