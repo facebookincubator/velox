@@ -41,23 +41,31 @@ RowsStreamingWindowBuild::RowsStreamingWindowBuild(
   velox::common::testutil::TestValue::adjust(
       "facebook::velox::exec::RowsStreamingWindowBuild::RowsStreamingWindowBuild",
       this);
-
-  // Create the first WindowPartition.
-  windowPartitions_.emplace_back(std::make_shared<WindowPartition>(
-      data_.get(), inversedInputChannels_, sortKeyInfo_));
 }
 
 bool RowsStreamingWindowBuild::needsInput() {
-  // There is no rows in currentPartition.
-  return outputPartition()->numRows() == 0;
+  // No partitions are available or there is no rows in currentPartition.
+  return windowPartitions_.empty() || outputPartition()->numRows() == 0;
 }
 
-std::shared_ptr<WindowPartition> RowsStreamingWindowBuild::inputPartition() {
+std::shared_ptr<WindowPartition> RowsStreamingWindowBuild::inputPartition()
+    const {
+  VELOX_CHECK(!windowPartitions_.empty());
+  VELOX_CHECK(!windowPartitions_.back()->complete());
   return windowPartitions_.back();
 }
 
-std::shared_ptr<WindowPartition> RowsStreamingWindowBuild::outputPartition() {
+std::shared_ptr<WindowPartition> RowsStreamingWindowBuild::outputPartition()
+    const {
+  VELOX_CHECK(!windowPartitions_.empty());
   return windowPartitions_.front();
+}
+
+void RowsStreamingWindowBuild::ensureInputPartition() {
+  if (windowPartitions_.empty() || windowPartitions_.back()->complete()) {
+    windowPartitions_.emplace_back(std::make_shared<WindowPartition>(
+        data_.get(), inversedInputChannels_, sortKeyInfo_));
+  }
 }
 
 void RowsStreamingWindowBuild::addPartitionInputs(bool finished) {
@@ -65,14 +73,11 @@ void RowsStreamingWindowBuild::addPartitionInputs(bool finished) {
     return;
   }
 
+  ensureInputPartition();
   inputPartition()->addRows(inputRows_);
 
   if (finished) {
     inputPartition()->setComplete();
-
-    // Create a new partition for the next input.
-    windowPartitions_.emplace_back(std::make_shared<WindowPartition>(
-        data_.get(), inversedInputChannels_, sortKeyInfo_));
   }
 
   inputRows_.clear();
@@ -117,17 +122,18 @@ void RowsStreamingWindowBuild::noMoreInput() {
 }
 
 std::shared_ptr<WindowPartition> RowsStreamingWindowBuild::nextPartition() {
-  VELOX_CHECK(hasNextPartition());
+  VELOX_CHECK(!windowPartitions_.empty());
   return outputPartition();
 }
 
 bool RowsStreamingWindowBuild::hasNextPartition() {
   // Remove the processed output partition from the queue.
-  if (outputPartition()->numRows() == 0 && outputPartition()->complete()) {
+  while (!windowPartitions_.empty() && outputPartition()->complete() &&
+         outputPartition()->numRows() == 0) {
     windowPartitions_.pop_front();
   }
 
-  return !windowPartitions_.empty() && (outputPartition()->numRows() > 0);
+  return !windowPartitions_.empty();
 }
 
 } // namespace facebook::velox::exec

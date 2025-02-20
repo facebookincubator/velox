@@ -51,7 +51,7 @@ class RowsStreamingWindowBuild : public WindowBuild {
 
   std::shared_ptr<WindowPartition> nextPartition() override;
 
-  inline bool needsInput() override;
+  bool needsInput() override;
 
  private:
   // Adds input rows to the current partition, or creates a new partition if it
@@ -59,10 +59,13 @@ class RowsStreamingWindowBuild : public WindowBuild {
   void addPartitionInputs(bool finished);
 
   // Returns the current input partition.
-  std::shared_ptr<WindowPartition> inputPartition();
+  std::shared_ptr<WindowPartition> inputPartition() const;
 
   // Returns the current output partition.
-  std::shared_ptr<WindowPartition> outputPartition();
+  std::shared_ptr<WindowPartition> outputPartition() const;
+
+  // Ensure an incomplete Window Partition exists; otherwise, create a new one.
+  void ensureInputPartition();
 
   // Sets to true if this window node has range frames.
   const bool hasRangeFrame_;
