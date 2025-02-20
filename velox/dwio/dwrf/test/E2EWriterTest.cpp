@@ -868,6 +868,8 @@ TEST_F(E2EWriterTest, mapStatsSingleStride) {
   testFlatMapFileStats(type, {0, 1, 2, 3, 4, 5});
 }
 
+#ifndef TSAN_BUILD
+// This test times out when TSAN is enabled. We exclude it for TSAN runs.
 TEST_F(E2EWriterTest, mapStatsMultiStrides) {
   HiveTypeParser parser;
   auto type = parser.parse(
@@ -887,6 +889,7 @@ TEST_F(E2EWriterTest, mapStatsMultiStrides) {
   // All columns
   testFlatMapFileStats(type, {0, 1, 2, 3, 4, 5}, /*strideSize=*/1000);
 }
+#endif
 
 TEST_F(E2EWriterTest, PartialStride) {
   auto type = ROW({"bool_val"}, {INTEGER()});
