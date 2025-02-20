@@ -230,14 +230,12 @@ class VarianceAggregate : public exec::Aggregate {
       });
     } else if (!exec::Aggregate::numNulls_ && decodedRaw_.isIdentityMapping()) {
       const T* data = decodedRaw_.data<T>();
-      VarianceAccumulator accData;
-      rows.applyToSelected([&](vector_size_t i) { accData.update(data[i]); });
-      updateNonNullValue<false>(group, accData);
-    } else {
-      VarianceAccumulator accData;
       rows.applyToSelected(
-          [&](vector_size_t i) { accData.update(decodedRaw_.valueAt<T>(i)); });
-      updateNonNullValue(group, accData);
+          [&](vector_size_t i) { updateNonNullValue(group, data[i]); });
+    } else {
+      rows.applyToSelected([&](vector_size_t i) {
+        updateNonNullValue(group, decodedRaw_.valueAt<T>(i));
+      });
     }
   }
 
