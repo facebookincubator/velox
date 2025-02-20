@@ -36,6 +36,7 @@
 #include "velox/dwio/common/encryption/Encryption.h"
 #include "velox/type/Timestamp.h"
 #include "velox/type/tz/TimeZoneMap.h"
+#include "velox/common/security/Identity.h"
 
 namespace facebook::velox::dwio::common {
 
@@ -392,6 +393,14 @@ class RowReaderOptions {
     storageParameters_ = std::move(storageParameters);
   }
 
+  const security::Identity* identity() const {
+    return identity_;
+  }
+
+  void setIdentity(const security::Identity* identity) {
+    identity_ = identity;
+  }
+
  private:
   uint64_t dataStart_;
   uint64_t dataLength_;
@@ -439,6 +448,8 @@ class RowReaderOptions {
   TimestampPrecision timestampPrecision_ = TimestampPrecision::kMilliseconds;
 
   std::shared_ptr<FormatSpecificOptions> formatSpecificOptions_;
+
+  const security::Identity* identity_{nullptr};
 };
 
 /// Options for creating a Reader.
@@ -611,6 +622,14 @@ class ReaderOptions : public io::ReaderOptions {
     selectiveNimbleReaderEnabled_ = value;
   }
 
+  const security::Identity* identity() const {
+    return identity_;
+  }
+
+  void setIdentity(const security::Identity* identity) {
+    identity_ = identity;
+  }
+
  private:
   uint64_t tailLocation_;
   FileFormat fileFormat_;
@@ -627,6 +646,7 @@ class ReaderOptions : public io::ReaderOptions {
   const tz::TimeZone* sessionTimezone_{nullptr};
   bool adjustTimestampToTimezone_{false};
   bool selectiveNimbleReaderEnabled_{false};
+  const security::Identity* identity_{nullptr};
 };
 
 struct WriterOptions {

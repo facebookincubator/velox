@@ -200,6 +200,14 @@ bool ColumnChunkMetaDataPtr::hasMetadata() const {
   return thriftColumnChunkPtr(ptr_)->__isset.meta_data;
 }
 
+bool ColumnChunkMetaDataPtr::hasCryptoMetadata() const {
+  return thriftColumnChunkPtr(ptr_)->__isset.crypto_metadata;
+}
+
+bool ColumnChunkMetaDataPtr::hasEncryptedColumnMetadata() const {
+  return thriftColumnChunkPtr(ptr_)->__isset.encrypted_column_metadata;
+}
+
 bool ColumnChunkMetaDataPtr::hasStatistics() const {
   return hasMetadata() &&
       thriftColumnChunkPtr(ptr_)->meta_data.__isset.statistics;
@@ -234,6 +242,18 @@ int64_t ColumnChunkMetaDataPtr::getColumnMetadataStatsNullCount() {
   return thriftColumnChunkPtr(ptr_)->meta_data.statistics.null_count;
 }
 
+bool ColumnChunkMetaDataPtr::hasEncodingStats() const {
+  return hasMetadata() && thriftColumnChunkPtr(ptr_)->meta_data.__isset.encoding_stats;
+}
+
+const std::vector<thrift::PageEncodingStats>& ColumnChunkMetaDataPtr::getEncodingStats() const {
+  return thriftColumnChunkPtr(ptr_)->meta_data.encoding_stats;
+}
+
+const std::vector<thrift::Encoding::type>& ColumnChunkMetaDataPtr::getEncoding() const {
+  return thriftColumnChunkPtr(ptr_)->meta_data.encodings;
+}
+
 int64_t ColumnChunkMetaDataPtr::dataPageOffset() const {
   return thriftColumnChunkPtr(ptr_)->meta_data.data_page_offset;
 }
@@ -254,6 +274,14 @@ int64_t ColumnChunkMetaDataPtr::totalCompressedSize() const {
 
 int64_t ColumnChunkMetaDataPtr::totalUncompressedSize() const {
   return thriftColumnChunkPtr(ptr_)->meta_data.total_uncompressed_size;
+}
+
+ColumnPath ColumnChunkMetaDataPtr::getColumnPath() const {
+  if (thriftColumnChunkPtr(ptr_)->__isset.crypto_metadata) {
+    return ColumnPath(thriftColumnChunkPtr(ptr_)->crypto_metadata.ENCRYPTION_WITH_COLUMN_KEY.path_in_schema);
+  } else {
+    return ColumnPath(thriftColumnChunkPtr(ptr_)->meta_data.path_in_schema);
+  }
 }
 
 FOLLY_ALWAYS_INLINE const thrift::RowGroup* thriftRowGroupPtr(

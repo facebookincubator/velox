@@ -18,6 +18,7 @@
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/core/QueryCtx.h"
 #include "velox/expression/EvalCtx.h"
+#include "velox/common/security/Identity.h"
 
 namespace facebook::velox::core::test {
 
@@ -33,6 +34,13 @@ TEST_F(QueryConfigTest, emptyConfig) {
   const QueryConfig& config = queryCtx->queryConfig();
 
   ASSERT_FALSE(config.isLegacyCast());
+}
+
+TEST_F(QueryConfigTest, withIdentity) {
+  auto userName = "user1";
+  auto identity = security::Identity{userName, {}};
+  auto queryCtx = QueryCtx::create(nullptr, QueryConfig{{}}, {}, std::move(identity));
+  ASSERT_EQ(queryCtx->identity()->user, userName);
 }
 
 TEST_F(QueryConfigTest, setConfig) {
