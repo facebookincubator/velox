@@ -2037,6 +2037,7 @@ int32_t HashTable<false>::listNullKeyRows(
     const std::vector<std::unique_ptr<VectorHasher>>& hashers) {
   if (!iter->initialized) {
     VELOX_CHECK_GT(nextOffset_, 0);
+    VELOX_CHECK_EQ(hashers_.size(), hashers.size());
     HashLookup lookup(hashers);
     if (hashMode_ == HashMode::kHash) {
       lookup.hashes.push_back(VectorHasher::kNullHash);

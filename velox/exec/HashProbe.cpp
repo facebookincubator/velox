@@ -1380,18 +1380,7 @@ SelectivityVector HashProbe::evalFilterForNullAwareJoin(
   }
 
   if (buildSideHasNullKeys_) {
-    if (nullKeyProbeHashers_.empty()) {
-      nullKeyProbeHashers_ =
-          createVectorHashers(probeType_, joinNode_->leftKeys());
-      VELOX_CHECK_EQ(nullKeyProbeHashers_.size(), 1);
-      if (table_->hashMode() == BaseHashTable::HashMode::kHash) {
-        nullKeyProbeInput_ =
-            BaseVector::create(nullKeyProbeHashers_[0]->type(), 1, pool());
-        nullKeyProbeInput_->setNull(0, true);
-        SelectivityVector selectivity(1);
-        nullKeyProbeHashers_[0]->decode(*nullKeyProbeInput_, selectivity);
-      }
-    }
+    prepareNullKeyProbeHashers();
     BaseHashTable::NullKeyRowsIterator iter;
     nullKeyProbeRows.deselect(filterPassedRows);
     applyFilterOnTableRowsForNullAwareJoin(
@@ -1410,6 +1399,22 @@ SelectivityVector HashProbe::evalFilterForNullAwareJoin(
   filterPassedRows.updateBounds();
 
   return filterPassedRows;
+}
+
+void HashProbe::prepareNullKeyProbeHashers() {
+  if (nullKeyProbeHashers_.empty()) {
+    nullKeyProbeHashers_ =
+        createVectorHashers(probeType_, joinNode_->leftKeys());
+    // Null-aware joins allow only one join key.
+    VELOX_CHECK_EQ(nullKeyProbeHashers_.size(), 1);
+    if (table_->hashMode() == BaseHashTable::HashMode::kHash) {
+      nullKeyProbeInput_ =
+          BaseVector::create(nullKeyProbeHashers_[0]->type(), 1, pool());
+      nullKeyProbeInput_->setNull(0, true);
+      SelectivityVector selectivity(1);
+      nullKeyProbeHashers_[0]->decode(*nullKeyProbeInput_, selectivity);
+    }
+  }
 }
 
 int32_t HashProbe::evalFilter(int32_t numRows) {
