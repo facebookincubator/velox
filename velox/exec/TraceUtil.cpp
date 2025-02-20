@@ -18,7 +18,6 @@
 
 #include <folly/json.h>
 
-#include <numeric>
 #include "velox/common/base/Exceptions.h"
 #include "velox/common/file/File.h"
 #include "velox/common/file/FileSystems.h"
@@ -264,5 +263,94 @@ bool canTrace(const std::string& operatorType) {
       "TableScan",
       "TableWrite"};
   return kSupportedOperatorTypes.count(operatorType) > 0;
+}
+
+namespace {
+const std::vector<core::PlanNodePtr> kEmptySources;
+} // namespace
+
+const std::vector<core::PlanNodePtr>& DummySourceNode::sources() const {
+  return kEmptySources;
+}
+
+std::string_view DummySourceNode::name() const {
+  return "DummySource";
+}
+
+folly::dynamic DummySourceNode::serialize() const {
+  folly::dynamic obj = folly::dynamic::object;
+  obj["name"] = "DummySource";
+  obj["outputType"] = outputType_->serialize();
+  return obj;
+}
+
+core::PlanNodePtr copyTraceNode(
+    const core::PlanNodePtr& node,
+    core::PlanNodeId nodeId) {
+  const auto* traceNode = core::PlanNode::findFirstNode(
+      node.get(),
+      [&nodeId](const core::PlanNode* node) { return node->id() == nodeId; });
+  if (const auto* hashJoinNode =
+          dynamic_cast<const core::HashJoinNode*>(traceNode)) {
+    return std::make_shared<core::HashJoinNode>(
+        nodeId,
+        hashJoinNode->joinType(),
+        hashJoinNode->isNullAware(),
+        hashJoinNode->leftKeys(),
+        hashJoinNode->rightKeys(),
+        hashJoinNode->filter(),
+        std::make_shared<DummySourceNode>(
+            hashJoinNode->sources()[0]->outputType()),
+        std::make_shared<DummySourceNode>(
+            hashJoinNode->sources()[1]->outputType()),
+        hashJoinNode->outputType());
+  } else if (
+      const auto* filterNode =
+          dynamic_cast<const core::FilterNode*>(traceNode)) {
+    // Single FilterNode.
+    return std::make_shared<core::FilterNode>(
+        nodeId,
+        filterNode->filter(),
+        std::make_shared<DummySourceNode>(
+            filterNode->sources().front()->outputType()));
+  } else if (
+      const auto* projectNode =
+          dynamic_cast<const core::ProjectNode*>(traceNode)) {
+    // A standalone ProjectNode.
+    if (projectNode->sources().empty() ||
+        projectNode->sources().front()->name() != "Filter") {
+      return std::make_shared<core::ProjectNode>(
+          nodeId,
+          projectNode->names(),
+          projectNode->projections(),
+          std::make_shared<DummySourceNode>(
+              projectNode->sources().front()->outputType()));
+    }
+
+    // -- ProjectNode [nodeId]
+    //   -- FilterNode [nodeId - 1]
+    const auto originalFilterNode =
+        std::dynamic_pointer_cast<const core::FilterNode>(
+            projectNode->sources().front());
+    VELOX_CHECK_NOT_NULL(originalFilterNode);
+
+    auto filterNode = std::make_shared<core::FilterNode>(
+        originalFilterNode->id(),
+        originalFilterNode->filter(),
+        std::make_shared<DummySourceNode>(
+            originalFilterNode->sources().front()->outputType()));
+    return std::make_shared<core::ProjectNode>(
+        nodeId,
+        projectNode->names(),
+        projectNode->projections(),
+        std::move(filterNode));
+  } else {
+    VELOX_UNSUPPORTED();
+  }
+}
+
+void registerDummySourceSerDe() {
+  auto& registry = DeserializationWithContextRegistryForSharedPtr();
+  registry.Register("DummySource", DummySourceNode::create);
 }
 } // namespace facebook::velox::exec::trace
