@@ -407,6 +407,7 @@ void SplitReader::createRowReader(
       scanSpec_,
       std::move(metadataFilter),
       std::move(rowType),
+      connectorQueryCtx_,
       hiveSplit_,
       hiveConfig_,
       connectorQueryCtx_->sessionProperties(),

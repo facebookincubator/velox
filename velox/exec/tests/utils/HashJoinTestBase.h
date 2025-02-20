@@ -600,6 +600,7 @@ class HashJoinBuilder {
         executor_,
         core::QueryConfig{{}},
         std::unordered_map<std::string, std::shared_ptr<config::ConfigBase>>{},
+        {},
         cache::AsyncDataCache::getInstance(),
         memory::MemoryManager::getInstance()->addRootPool(
             "query_pool",

@@ -21,6 +21,7 @@
 #include "velox/dwio/common/DirectDecoder.h"
 #include "velox/dwio/common/SelectiveColumnReader.h"
 #include "velox/dwio/common/compression/Compression.h"
+#include "velox/dwio/parquet/crypto/FileDecryptor.h"
 #include "velox/dwio/parquet/common/RleEncodingInternal.h"
 #include "velox/dwio/parquet/reader/BooleanDecoder.h"
 #include "velox/dwio/parquet/reader/DeltaBpDecoder.h"
@@ -43,7 +44,12 @@ class PageReader {
       common::CompressionKind codec,
       int64_t chunkSize,
       dwio::common::ColumnReaderStatistics& stats,
-      const tz::TimeZone* sessionTimezone)
+      const tz::TimeZone* sessionTimezone,
+      ColumnPath columnPath,
+      int16_t rowGroupIndex,
+      int16_t columnIndex,
+      std::shared_ptr<ColumnDecryptionSetup> columnDecryptionSetup,
+      bool hasDictionaryPage)
       : pool_(pool),
         inputStream_(std::move(stream)),
         type_(std::move(fileType)),
@@ -54,7 +60,12 @@ class PageReader {
         chunkSize_(chunkSize),
         nullConcatenation_(pool_),
         stats_(stats),
-        sessionTimezone_(sessionTimezone) {
+        sessionTimezone_(sessionTimezone),
+        columnPath_(columnPath),
+        rowGroupIndex_(rowGroupIndex),
+        columnIndex_(columnIndex),
+        columnDecryptionSetup_(columnDecryptionSetup),
+        hasDictionaryPage_(hasDictionaryPage) {
     type_->makeLevelInfo(leafInfo_);
   }
 
@@ -147,7 +158,7 @@ class PageReader {
 
   // Parses the PageHeader at 'inputStream_', and move the bufferStart_ and
   // bufferEnd_ to the corresponding positions.
-  thrift::PageHeader readPageHeader();
+  thrift::PageHeader readPageHeader(std::shared_ptr<Decryptor> decryptor=nullptr, std::string_view aad="");
 
   const tz::TimeZone* sessionTimezone() const {
     return sessionTimezone_;
@@ -204,9 +215,11 @@ class PageReader {
   // next page.
   void updateRowInfoAfterPageSkipped();
 
-  void prepareDataPageV1(const thrift::PageHeader& pageHeader, int64_t row);
-  void prepareDataPageV2(const thrift::PageHeader& pageHeader, int64_t row);
-  void prepareDictionary(const thrift::PageHeader& pageHeader);
+  thrift::PageHeader decryptPageHeader(std::shared_ptr<Decryptor> decryptor, std::string_view aad);
+  int32_t decryptPageData(const thrift::PageHeader& pageHeader, std::shared_ptr<Decryptor> decryptor, std::string_view aad);
+  void prepareDataPageV1(const thrift::PageHeader& pageHeader, int64_t row, std::shared_ptr<Decryptor> decryptor=nullptr, std::string_view aad="");
+  void prepareDataPageV2(const thrift::PageHeader& pageHeader, int64_t row, std::shared_ptr<Decryptor> decryptor=nullptr, std::string_view aad="");
+  void prepareDictionary(const thrift::PageHeader& pageHeader, std::shared_ptr<Decryptor> decryptor=nullptr, std::string_view aad="");
   void makeDecoder();
 
   // For a non-top level leaf, reads the defs and sets 'leafNulls_' and
@@ -450,6 +463,9 @@ class PageReader {
   // decompressed data for the page. Rep-def-data in V1, data alone in V2.
   BufferPtr decompressedData_;
 
+  // decrypted data for the page.
+  BufferPtr decryptedData_;
+
   // First byte of decompressed encoded data. Contains the encoded data as a
   // contiguous run of bytes.
   const char* pageData_{nullptr};
@@ -522,6 +538,14 @@ class PageReader {
   std::unique_ptr<DeltaByteArrayDecoder> deltaByteArrDecoder_;
   std::unique_ptr<RleBpDataDecoder> rleBooleanDecoder_;
   // Add decoders for other encodings here.
+
+  ColumnPath columnPath_;
+  int16_t rowGroupIndex_;
+  int16_t columnIndex_;
+  std::shared_ptr<ColumnDecryptionSetup> columnDecryptionSetup_;
+  bool hasDictionaryPage_;
+  int16_t pageOrdinal_{0};
+  bool dictionaryPageProcessed_{false};
 };
 
 FOLLY_ALWAYS_INLINE dwio::common::compression::CompressionOptions

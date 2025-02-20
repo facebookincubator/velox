@@ -134,6 +134,7 @@ std::shared_ptr<core::QueryCtx> OperatorReplayerBase::createQueryCtx() {
       executor_,
       core::QueryConfig{queryConfigs_},
       std::move(connectorConfigs),
+      {},
       nullptr,
       std::move(queryPool),
       executor_);

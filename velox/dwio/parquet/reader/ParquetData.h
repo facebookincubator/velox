@@ -17,6 +17,7 @@
 #pragma once
 
 #include "velox/dwio/common/BufferUtil.h"
+#include "velox/dwio/parquet/crypto/ColumnPath.h"
 #include "velox/dwio/parquet/reader/Metadata.h"
 #include "velox/dwio/parquet/reader/PageReader.h"
 
@@ -36,10 +37,12 @@ class ParquetParams : public dwio::common::FormatParams {
       memory::MemoryPool& pool,
       dwio::common::ColumnReaderStatistics& stats,
       const FileMetaDataPtr metaData,
+      std::shared_ptr<FileDecryptor> fileDecryptor,
       const tz::TimeZone* sessionTimezone,
       TimestampPrecision timestampPrecision)
       : FormatParams(pool, stats),
         metaData_(metaData),
+        fileDecryptor_(fileDecryptor),
         sessionTimezone_(sessionTimezone),
         timestampPrecision_(timestampPrecision) {}
   std::unique_ptr<dwio::common::FormatData> toFormatData(
@@ -52,6 +55,7 @@ class ParquetParams : public dwio::common::FormatParams {
 
  private:
   const FileMetaDataPtr metaData_;
+  const std::shared_ptr<FileDecryptor> fileDecryptor_;
   const tz::TimeZone* sessionTimezone_;
   const TimestampPrecision timestampPrecision_;
 };
@@ -62,12 +66,14 @@ class ParquetData : public dwio::common::FormatData {
   ParquetData(
       const std::shared_ptr<const dwio::common::TypeWithId>& type,
       const FileMetaDataPtr fileMetadataPtr,
+      const std::shared_ptr<FileDecryptor> fileDecryptor,
       memory::MemoryPool& pool,
       dwio::common::ColumnReaderStatistics& stats,
       const tz::TimeZone* sessionTimezone)
       : pool_(pool),
         type_(std::static_pointer_cast<const ParquetTypeWithId>(type)),
         fileMetaDataPtr_(fileMetadataPtr),
+        fileDecryptor_(fileDecryptor),
         maxDefine_(type_->maxDefine_),
         maxRepeat_(type_->maxRepeat_),
         rowsInRowGroup_(-1),
@@ -216,6 +222,7 @@ class ParquetData : public dwio::common::FormatData {
   memory::MemoryPool& pool_;
   std::shared_ptr<const ParquetTypeWithId> type_;
   const FileMetaDataPtr fileMetaDataPtr_;
+  const std::shared_ptr<FileDecryptor> fileDecryptor_;
   // Streams for this column in each of 'rowGroups_'. Will be created on or
   // ahead of first use, not at construction.
   std::vector<std::unique_ptr<dwio::common::SeekableInputStream>> streams_;
