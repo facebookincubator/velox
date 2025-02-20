@@ -19,7 +19,7 @@
 #include <gtest/gtest.h>
 
 #include "folly/Random.h"
-#include "folly/experimental/EventCount.h"
+#include "folly/synchronization/EventCount.h"
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/common/testutil/TestValue.h"
 

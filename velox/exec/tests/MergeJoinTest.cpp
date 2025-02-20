@@ -20,7 +20,7 @@
 #include "velox/exec/tests/utils/HiveConnectorTestBase.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
 
-#include "folly/experimental/EventCount.h"
+#include "folly/synchronization/EventCount.h"
 
 using namespace facebook::velox;
 using namespace facebook::velox::common::testutil;
