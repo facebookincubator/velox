@@ -93,7 +93,7 @@ bool testFilters(
         partitionKey,
     const std::unordered_map<std::string, std::shared_ptr<HiveColumnHandle>>&
         partitionKeysHandle,
-    bool asLocalTime = true);
+    bool asLocalTime);
 
 std::unique_ptr<dwio::common::BufferedInput> createBufferedInput(
     const FileHandle& fileHandle,
