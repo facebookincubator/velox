@@ -20,6 +20,7 @@
 #include "velox/functions/lib/aggregates/MinMaxAggregateBase.h"
 #include "velox/functions/lib/aggregates/SimpleNumericAggregate.h"
 #include "velox/functions/lib/aggregates/SingleValueAccumulator.h"
+#include "velox/functions/lib/aggregates/ValueSet.h"
 #include "velox/functions/prestosql/aggregates/AggregateNames.h"
 #include "velox/type/FloatingPointUtil.h"
 
@@ -99,10 +100,85 @@ struct MinMaxNAccumulator {
 
   /// Copy all values from 'topValues' into 'rawValues' buffer. The heap remains
   /// unchanged after the call.
-  void extractValues(T* rawValues, vector_size_t offset, Compare& comparator) {
+  void extractValues(VectorPtr& values, vector_size_t offset, Compare& comparator) {
+    auto rawValues = values->asFlatVector<T>()->mutableRawValues();
     std::sort_heap(heapValues.begin(), heapValues.end(), comparator);
     for (int64_t i = heapValues.size() - 1; i >= 0; --i) {
       rawValues[offset + i] = heapValues[i];
+    }
+    std::make_heap(heapValues.begin(), heapValues.end(), comparator);
+  }
+};
+
+// @tparam V Type of value.
+/// @tparam Compare Type of comparator for T.
+template <typename Compare>
+struct MinMaxNAccumulator<StringView, Compare> {
+  int64_t n{0};
+  using Allocator = StlAllocator<StringView>;
+  std::vector<StringView, Allocator> heapValues;
+  ValueSet valueSet;
+
+  explicit MinMaxNAccumulator(HashStringAllocator* allocator)
+      : heapValues{Allocator(allocator)},valueSet{allocator} {}
+
+  int64_t getN() const {
+    return n;
+  }
+
+  size_t size() const {
+    return heapValues.size();
+  }
+
+  void checkAndSetN(DecodedVector& decodedN, vector_size_t row) {
+    // Skip null N.
+    if (decodedN.isNullAt(row)) {
+      return;
+    }
+
+    const auto newN = decodedN.valueAt<int64_t>(row);
+    VELOX_USER_CHECK_GT(
+        newN, 0, "second argument of max/min must be a positive integer");
+
+    VELOX_USER_CHECK_LE(
+        newN,
+        10'000,
+        "second argument of max/min must be less than or equal to 10000");
+
+    if (n) {
+      VELOX_USER_CHECK_EQ(
+          newN,
+          n,
+          "second argument of max/min must be a constant for all rows in a group");
+    } else {
+      n = newN;
+    }
+  }
+
+  void compareAndAdd(StringView value, Compare& comparator) {
+    if (heapValues.size() < n) {
+      heapValues.push_back(valueSet.write(value));
+      std::push_heap(heapValues.begin(), heapValues.end(), comparator);
+    } else {
+      const auto& topValue = heapValues.front();
+      if (comparator(value, topValue)) {
+        std::pop_heap(
+            heapValues.begin(), heapValues.end(), comparator);
+        valueSet.free(heapValues.back());
+        heapValues.pop_back();
+        heapValues.push_back(valueSet.write(value));
+        std::push_heap(heapValues.begin(), heapValues.end(), comparator);
+      }
+    }
+  }
+
+  /// Copy all values from 'topValues' into 'values'. The heap remains
+  /// unchanged after the call.
+  void extractValues(VectorPtr& values, vector_size_t offset, Compare& comparator) {
+    auto result = values->asFlatVector<StringView>();
+    std::sort_heap(heapValues.begin(), heapValues.end(), comparator);
+    for (int64_t i = heapValues.size() - 1; i >= 0; --i) {
+      result->set(offset + i, heapValues[i]);
     }
     std::make_heap(heapValues.begin(), heapValues.end(), comparator);
   }
@@ -215,11 +291,9 @@ class MinMaxNAggregateBase : public exec::Aggregate {
     auto values = valuesArray->elements();
     values->resize(numValues);
 
-    auto* rawValues = values->asFlatVector<T>()->mutableRawValues();
-
     auto [rawOffsets, rawSizes] = rawOffsetAndSizes(*valuesArray);
 
-    extractValues(groups, numGroups, rawOffsets, rawSizes, rawValues, nullptr);
+    extractValues(groups, numGroups, rawOffsets, rawSizes, values, nullptr);
   }
 
   void extractAccumulators(char** groups, int32_t numGroups, VectorPtr* result)
@@ -240,11 +314,10 @@ class MinMaxNAggregateBase : public exec::Aggregate {
     values->resize(numValues);
 
     auto* rawNs = nVector->as<FlatVector<int64_t>>()->mutableRawValues();
-    auto* rawValues = values->asFlatVector<T>()->mutableRawValues();
 
     auto [rawOffsets, rawSizes] = rawOffsetAndSizes(*valuesArray);
 
-    extractValues(groups, numGroups, rawOffsets, rawSizes, rawValues, rawNs);
+    extractValues(groups, numGroups, rawOffsets, rawSizes, values, rawNs);
   }
 
   void destroyInternal(folly::Range<char**> groups) override {
@@ -261,7 +334,7 @@ class MinMaxNAggregateBase : public exec::Aggregate {
       int32_t numGroups,
       vector_size_t* rawOffsets,
       vector_size_t* rawSizes,
-      T* rawValues,
+      VectorPtr& values,
       int64_t* rawNs) {
     vector_size_t offset = 0;
     for (auto i = 0; i < numGroups; ++i) {
@@ -277,7 +350,7 @@ class MinMaxNAggregateBase : public exec::Aggregate {
         if (rawNs != nullptr) {
           rawNs[i] = accumulator->n;
         }
-        accumulator->extractValues(rawValues, offset, comparator_);
+        accumulator->extractValues(values, offset, comparator_);
 
         offset += size;
       }
@@ -432,7 +505,13 @@ exec::AggregateRegistrationResult registerMinMax(
                            .argumentType("T")
                            .build());
   for (const auto& type :
-       {"tinyint", "integer", "smallint", "bigint", "real", "double"}) {
+       {"tinyint",
+        "integer",
+        "smallint",
+        "bigint",
+        "real",
+        "double",
+        "varchar"}) {
     // T, bigint -> row(array(T), bigint) -> array(T)
     signatures.push_back(
         exec::AggregateFunctionSignatureBuilder()
@@ -487,6 +566,8 @@ exec::AggregateRegistrationResult registerMinMax(
               return std::make_unique<TNumericN<double>>(resultType);
             case TypeKind::TIMESTAMP:
               return std::make_unique<TNumericN<Timestamp>>(resultType);
+            case TypeKind::VARCHAR:
+              return std::make_unique<TNumericN<StringView>>(resultType);
             case TypeKind::HUGEINT:
               if (inputType->isLongDecimal()) {
                 return std::make_unique<TNumericN<int128_t>>(resultType);
