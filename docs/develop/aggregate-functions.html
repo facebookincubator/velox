@@ -278,14 +278,13 @@ in the <cite>AccumulatorType</cite> struct.</p>
 <section id="tointermediate">
 <h3>toIntermediate<a class="headerlink" href="#tointermediate" title="Link to this heading">¶</a></h3>
 <p>The author can optionally define a static method <cite>toIntermediate()</cite> that
-converts a raw input to an intermediate state. If defined, this function is used
-in query plans that abandon the partial aggregation step. If the aggregation
-function has default-null behavior, the toIntermediate() function has an
-out-parameter of the type <cite>exec::out_type&lt;IntermediateType&gt;&amp;</cite> followed by
-in-parameters of the type <cite>exec::arg_type&lt;T&gt;</cite> for each <cite>T</cite> wrapped inside
-InputType . If the aggregation function has non-default null behavior, the
-in-parameters of toIntermediate() are of the type <cite>exec::optional_arg_type&lt;T&gt;</cite>
-instead.</p>
+converts a raw input to an intermediate state. If defined, this function is
+used in query plans that abandon the partial aggregation step. If the aggregaiton function has
+default-null behavior, the toIntermediate() function has an out-parameter
+of the type <cite>exec::out_type&lt;IntermediateType&gt;&amp;</cite> followed by in-parameters of
+the type <cite>exec::arg_type&lt;T&gt;</cite> for each <cite>T</cite> wrapped inside InputType . If the
+aggregation function has non-default null behavior, the in-parameters of
+toIntermediate() are of the type <cite>exec::optional_arg_type&lt;T&gt;</cite> instead.</p>
 <p>When <cite>T</cite> is a primitive type except Varchar and Varbinary, <cite>exec::arg_type&lt;T&gt;</cite>
 is simply <cite>T</cite> itself and <cite>exec::out_type&lt;T&gt;</cite> is <cite>T&amp;</cite>. <cite>exec::optional_arg_type&lt;T&gt;</cite>
 is <cite>std::optional&lt;T&gt;</cite>.</p>

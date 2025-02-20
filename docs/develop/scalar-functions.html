@@ -566,7 +566,7 @@ syntactic type, and behaves somewhat similarly to Array.</p>
 <li><p>operator[](size_t index) : access the value of the argument at index. It returns either null_free_arg_type&lt;E&gt; or OptionalAccessor&lt;E&gt;.</p></li>
 <li><p>VariadicView&lt;T&gt;::Iterator begin() : iterator to the first argument.</p></li>
 <li><p>VariadicView&lt;T&gt;::Iterator end() : iterator indicating end of iteration.</p></li>
-<li><p>bool mayHaveNulls() : a check on the nullity of the arguments (note this takes time proportional to the number of arguments). When it returns false, there are definitely no nulls, a true does not guarantee null existence.</p></li>
+<li><p>bool mayHaveNulls() : a check on the nullity of the arugments (note this takes time proportional to the number of arguments). When it returns false, there are definitely no nulls, a true does not guarantee null existence.</p></li>
 <li><p>VariadicView&lt;T&gt;::SkipNullsContainer SkipNulls() : return an iterable container that provides direct access to each argument with a non-null value.</p></li>
 </ul>
 <p>The code below shows an example of a function that concatenates a variable number of strings:</p>

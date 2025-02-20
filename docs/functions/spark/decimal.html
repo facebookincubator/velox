@@ -128,15 +128,6 @@ The below formula shows how the precision and scale are adjusted for decimal add
 <section id="decimal-functions">
 <h2>Decimal Functions<a class="headerlink" href="#decimal-functions" title="Link to this heading">¶</a></h2>
 <dl class="spark function">
-<dt class="sig sig-object spark" id="ceil">
-<span class="sig-name descname"><span class="pre">ceil</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x:</span> <span class="pre">decimal(p</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">s))</span> <span class="pre">-&gt;</span> <span class="pre">r:</span> <span class="pre">decimal(pr</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">0</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#ceil" title="Link to this definition">¶</a></dt>
-<dd><p>Returns <code class="docutils literal notranslate"><span class="pre">x</span></code> rounded up to the type <code class="docutils literal notranslate"><span class="pre">decimal(min(38,</span> <span class="pre">p</span> <span class="pre">-</span> <span class="pre">s</span> <span class="pre">+</span> <span class="pre">min(1,</span> <span class="pre">s)),</span> <span class="pre">0)</span></code>.</p>
-<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">ceil</span><span class="p">(</span><span class="n">cast</span><span class="p">(</span><span class="mf">1.23</span> <span class="k">as</span> <span class="n">DECIMAL</span><span class="p">(</span><span class="mi">3</span><span class="p">,</span> <span class="mi">2</span><span class="p">)));</span> <span class="o">--</span> <span class="mi">2</span> <span class="o">//</span> <span class="n">Output</span> <span class="nb">type</span><span class="p">:</span> <span class="n">decimal</span><span class="p">(</span><span class="mi">2</span><span class="p">,</span><span class="mi">0</span><span class="p">)</span>
-</pre></div>
-</div>
-</dd></dl>
-
-<dl class="spark function">
 <dt class="sig sig-object spark" id="floor">
 <span class="sig-name descname"><span class="pre">floor</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x:</span> <span class="pre">decimal(p</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">s))</span> <span class="pre">-&gt;</span> <span class="pre">r:</span> <span class="pre">decimal(pr</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">0</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#floor" title="Link to this definition">¶</a></dt>
 <dd><p>Returns <code class="docutils literal notranslate"><span class="pre">x</span></code> rounded down to the type <code class="docutils literal notranslate"><span class="pre">decimal(min(38,</span> <span class="pre">p</span> <span class="pre">-</span> <span class="pre">s</span> <span class="pre">+</span> <span class="pre">min(1,</span> <span class="pre">s)),</span> <span class="pre">0)</span></code>.</p>
@@ -235,7 +226,6 @@ The result precision is decided with the number of integral digits and the resul
 </li>
 <li><a class="reference internal" href="#decimal-precision-and-scale-adjustment">Decimal Precision and Scale Adjustment</a></li>
 <li><a class="reference internal" href="#decimal-functions">Decimal Functions</a><ul>
-<li><a class="reference internal" href="#ceil"><code class="docutils literal notranslate"><span class="pre">ceil()</span></code></a></li>
 <li><a class="reference internal" href="#floor"><code class="docutils literal notranslate"><span class="pre">floor()</span></code></a></li>
 <li><a class="reference internal" href="#in"><code class="docutils literal notranslate"><span class="pre">in()</span></code></a></li>
 <li><a class="reference internal" href="#unaryminus"><code class="docutils literal notranslate"><span class="pre">unaryminus()</span></code></a></li>
