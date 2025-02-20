@@ -108,7 +108,8 @@ bool CompileState::compile() {
   // after the replced operators needs a second go over after adding local
   // exchange.
   auto is_supported_gpu_operator =
-      [is_filter_project_supported](const exec::Operator* op) {
+      [is_filter_project_supported,
+       is_join_supported](const exec::Operator* op) {
         return is_any_of<
                    exec::OrderBy,
                     exec::HashAggregation,
@@ -123,20 +124,20 @@ bool CompileState::compile() {
       operators.end(),
       is_supported_gpu_operators.begin(),
       is_supported_gpu_operator);
-  auto accepts_gpu_input =
-      [is_filter_project_supported](const exec::Operator* op) {
+  auto accepts_gpu_input = [is_filter_project_supported,
+                            is_join_supported](const exec::Operator* op) {
         return is_any_of<
                    exec::OrderBy,
                    exec::HashAggregation,
                   exec::LocalPartition>(op) ||
-            is_filter_project_supported(op) ||
-        is_join_supported(op);
+            is_filter_project_supported(op) || is_join_supported(op);
       };
-  auto produces_gpu_output =
-      [is_filter_project_supported](const exec::Operator* op) {
-        return is_any_of<exec::OrderBy, exec::HashAggregation,
-        exec::LocalExchange>(op) ||
-        (is_any_of<exec::HashProbe>(op) && is_join_supported(op));
+  auto produces_gpu_output = [is_filter_project_supported,
+                              is_join_supported](const exec::Operator* op) {
+        return is_any_of<exec::OrderBy, exec::HashAggregation, exec::LocalExchange>(
+op) ||
+        (is_any_of<exec::HashProbe>(op) && is_join_supported(op)) ||
+        is_filter_project_supported(op);
       };
 
   int32_t operatorsOffset = 0;
