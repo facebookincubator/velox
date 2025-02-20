@@ -208,9 +208,9 @@ bool isTableScanSupported(const TypePtr& type) {
   }
   // Disable testing with TableScan when input contains TIMESTAMP type, due to
   // the issue #8127.
-  if (type->kind() == TypeKind::TIMESTAMP) {
-    return false;
-  }
+  //if (type->kind() == TypeKind::TIMESTAMP) {
+  //  return false;
+  //}
 
   for (auto i = 0; i < type->size(); ++i) {
     if (!isTableScanSupported(type->childAt(i))) {
