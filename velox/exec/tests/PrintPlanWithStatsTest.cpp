@@ -344,6 +344,7 @@ TEST_F(PrintPlanWithStatsTest, tableWriterWithTableScan) {
        {"      dataSourceLazyInputBytes\\s+sum: .+, count: .+, min: .+, max: .+"},
        {"      dataSourceLazyWallNanos\\s+sum: .+, count: .+, min: .+, max: .+"},
        {"      numWrittenFiles\\s+sum: .+, count: 1, min: .+, max: .+"},
+       {"      numPartitionedWriters\\s+sum: .+, count: .+, min: .+, max: .+"},
        {"      runningAddInputWallNanos\\s+sum: .+, count: 1, min: .+, max: .+"},
        {"      runningFinishWallNanos\\s+sum: .+, count: 1, min: .+, max: .+"},
        {"      runningGetOutputWallNanos\\s+sum: .+, count: 1, min: .+, max: .+"},

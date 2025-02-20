@@ -683,6 +683,9 @@ void HiveDataSink::abort() {
 }
 
 void HiveDataSink::closeInternal() {
+  addThreadLocalRuntimeStat(
+      kNumPartitionedWriters,
+      RuntimeCounter(writers_.size(), RuntimeCounter::Unit::kNone));
   VELOX_CHECK_NE(state_, State::kRunning);
   VELOX_CHECK_NE(state_, State::kFinishing);
 

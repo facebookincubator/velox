@@ -451,7 +451,12 @@ struct HiveWriterIdEq {
 class HiveDataSink : public DataSink {
  public:
   /// The list of runtime stats reported by hive data sink
+  ///
+  /// Number of bytes pre-maturely flushed from file writers because of memory
+  /// reclaiming.
   static constexpr const char* kEarlyFlushedRawBytes = "earlyFlushedRawBytes";
+  /// The number of partitioned writers in hive data sink
+  static constexpr const char* kNumPartitionedWriters = "numPartitionedWriters";
 
   /// Defines the execution states of a hive data sink running internally.
   enum class State {
