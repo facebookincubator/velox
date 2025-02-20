@@ -242,18 +242,17 @@ class HiveInsertTableHandle : public ConnectorInsertTableHandle {
     }
 
     if (partitionKeyOrder_.size() > 0) {
-      // Ensure the partitionKeyOrder contains all the partition keys in
-      // inputColumns_.
-      std::string partitionKeyNames;
+      folly::F14FastSet<std::string> partitionKeyNames(
+          partitionKeyOrder_.begin(), partitionKeyOrder_.end());
       for (const auto& inputColumn : inputColumns_) {
         if (inputColumn->isPartitionKey()) {
-          partitionKeyNames.emplace_back(inputColumn->name());
+          VELOX_CHECK(partitionKeyNames.erase(inputColumn->name()) == 1);
         }
       }
 
       VELOX_CHECK(
-          partitionKeyNames.size() == partitionKeyOrder_.size(),
-          "partition key order size is not equal with the partition column size in inputColumns_");
+          partitionKeyNames.empty(),
+          "Ensure the partitionKeyOrder contains all the partition keys in inputColumns_");
     }
   }
 
