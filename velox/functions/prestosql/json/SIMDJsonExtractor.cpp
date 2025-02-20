@@ -15,6 +15,8 @@
  */
 
 #include "velox/functions/prestosql/json/SIMDJsonExtractor.h"
+#include "velox/external/jsoncons/json.hpp"
+#include "velox/external/jsoncons/jsonpath/jsonpath_parser.hpp"
 
 namespace facebook::velox::functions {
 namespace {
@@ -34,6 +36,17 @@ using JsonVector = std::vector<simdjson::ondemand::value>;
   std::shared_ptr<SIMDJsonExtractor> op;
   if (extractorCache.count(trimmedPath)) {
     return *extractorCache.at(trimmedPath);
+  }
+
+  std::error_code ec;
+  jsoncons::jsonpath::detail::
+      jsonpath_evaluator<jsoncons::json, const jsoncons::json&>
+          const_evaluator;
+  jsoncons::jsonpath::detail::static_resources<jsoncons::json> resources;
+  auto const_expr = const_evaluator.compile(resources, path, ec, true);
+
+  if (ec) {
+    VELOX_USER_FAIL("Invalid JSON path ({}): {}", ec.message(), path);
   }
 
   if (extractorCache.size() == kMaxCacheSize) {

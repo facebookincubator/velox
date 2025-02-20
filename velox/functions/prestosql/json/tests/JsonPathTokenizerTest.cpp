@@ -15,6 +15,8 @@
  */
 
 #include "velox/functions/prestosql/json/JsonPathTokenizer.h"
+#include "velox/external/jsoncons/json.hpp"
+#include "velox/external/jsoncons/jsonpath/jsonpath_parser.hpp"
 
 #include <vector>
 #include "gtest/gtest.h"
@@ -43,15 +45,23 @@ std::optional<TokenList> getTokens(std::string_view path) {
   return tokens;
 }
 
+bool isValidPathJsoncons(const std::string_view path) {
+  std::error_code ec;
+  jsoncons::jsonpath::detail::
+      jsonpath_evaluator<jsoncons::json, const jsoncons::json&>
+          const_evaluator;
+  jsoncons::jsonpath::detail::static_resources<jsoncons::json> resources;
+  auto const_expr = const_evaluator.compile(resources, path, ec, true);
+  return !ec;
+}
+
 // 'path' should start with '$'.
 void assertValidPath(std::string_view path, const TokenList& expectedTokens) {
   auto tokens = getTokens(path);
 
   EXPECT_TRUE(tokens.has_value()) << "Invalid JSON path: " << path;
-  if (!tokens.has_value()) {
-    return;
-  }
-
+  EXPECT_TRUE(isValidPathJsoncons(path))
+      << "Invalid JSON path flagged by jsoncons parser: " << path;
   EXPECT_EQ(expectedTokens, tokens.value());
 }
 
@@ -91,6 +101,7 @@ TEST(JsonPathTokenizerTest, validPaths) {
   assertValidPath(
       "$.store.book[*].author", TokenList{"store", "book", "*", "author"});
   assertValidPath("$.store.*", TokenList({"store", "*"}));
+  assertValidPath("$[30day]", TokenList({"30day"}));
 
   // Paths without leading '$'.
   assertValidPath("foo", TokenList({"foo"}));
@@ -107,6 +118,7 @@ TEST(JsonPathTokenizerTest, validPaths) {
   assertValidPath("$.[0].[1].foo.[2]", TokenList({"0", "1", "foo", "2"}));
   assertValidPath("$[0].[1].foo.[2]", TokenList({"0", "1", "foo", "2"}));
   assertValidPath("$[0][1].foo.[2]", TokenList({"0", "1", "foo", "2"}));
+  assertValidPath("$[0][1].foo.[bar]", TokenList({"0", "1", "foo", "bar"}));
 
   assertQuotedToken("!@#$%^&*()[]{}/?'"s, TokenList{"!@#$%^&*()[]{}/?'"s});
   assertQuotedToken("ab\u0001c"s, TokenList{"ab\u0001c"s});
@@ -151,9 +163,64 @@ TEST(JsonPathTokenizerTest, invalidPaths) {
   EXPECT_FALSE(getTokens("$..[3].foo"));
   EXPECT_FALSE(getTokens("..[3].foo"));
 
-  // Paths without leading '$'.
+  // Paths without leading '$' which essentially translates to "$.." and is
+  // unsupported.
   EXPECT_FALSE(getTokens(".[1].foo"));
   EXPECT_FALSE(getTokens(".foo.bar.baz"));
+}
+
+TEST(JsonPathTokenizerTest, invalidPathsJsoncons) {
+  JsonPathTokenizer tokenizer;
+
+  // Empty path.
+  EXPECT_FALSE(isValidPathJsoncons(""));
+
+  // Backslash not followed by valid escape.
+  EXPECT_FALSE(isValidPathJsoncons("$[\"a\\ \"]"s));
+
+  // Colon in subscript must be quoted.
+  EXPECT_FALSE(isValidPathJsoncons("$[foo:bar]"s));
+
+  // Open bracket without close bracket.
+  EXPECT_FALSE(isValidPathJsoncons("$.store.book["));
+
+  // Unmatched double quote.
+  EXPECT_FALSE(isValidPathJsoncons(R"($["foo'])"));
+
+  // Unmatched single quote.
+  EXPECT_FALSE(isValidPathJsoncons(R"($['foo"])"));
+
+  // Unsupported deep scan operator.
+  EXPECT_FALSE(isValidPathJsoncons("$..store"));
+  EXPECT_FALSE(isValidPathJsoncons("..store"));
+  EXPECT_FALSE(isValidPathJsoncons("$..[3].foo"));
+  EXPECT_FALSE(isValidPathJsoncons("..[3].foo"));
+
+  // Paths without leading '$' which essentially translates to "$.." and is
+  // unsupported.
+  EXPECT_FALSE(isValidPathJsoncons(".[1].foo"));
+  EXPECT_FALSE(isValidPathJsoncons(".foo.bar.baz"));
+
+  // Array Slice
+  EXPECT_FALSE(isValidPathJsoncons("$[1:3]"));
+  EXPECT_FALSE(isValidPathJsoncons("$[0:4:2]"));
+  EXPECT_FALSE(isValidPathJsoncons("$[1:3:]"));
+  EXPECT_FALSE(isValidPathJsoncons("$[::2]"));
+
+  // Union
+  EXPECT_FALSE(isValidPathJsoncons("$[0,1]"));
+  EXPECT_FALSE(isValidPathJsoncons("$['a','a']"));
+  EXPECT_FALSE(isValidPathJsoncons("$.*['c','d']"));
+
+  // Filter Expr
+  EXPECT_FALSE(isValidPathJsoncons("$[?(@.key)]"));
+  EXPECT_FALSE(isValidPathJsoncons("$[?(@.key>0 && false)]"));
+
+  // Script expression
+  EXPECT_FALSE(isValidPathJsoncons("$[(@.length-1)]"));
+
+  // Current element/node
+  EXPECT_FALSE(isValidPathJsoncons("@.a"));
 }
 
 } // namespace
