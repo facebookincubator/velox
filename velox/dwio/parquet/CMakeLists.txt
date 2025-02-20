@@ -13,6 +13,7 @@
 # limitations under the License.
 
 if(VELOX_ENABLE_PARQUET)
+  add_subdirectory(crypto)
   add_subdirectory(common)
   add_subdirectory(reader)
   add_subdirectory(thrift)
@@ -28,6 +29,7 @@ velox_add_library(velox_dwio_parquet_writer RegisterParquetWriter.cpp)
 
 if(VELOX_ENABLE_PARQUET)
   velox_link_libraries(velox_dwio_parquet_reader
+                       velox_dwio_parquet_crypto
                        velox_dwio_native_parquet_reader xsimd)
   velox_link_libraries(velox_dwio_parquet_writer
                        velox_dwio_arrow_parquet_writer)
