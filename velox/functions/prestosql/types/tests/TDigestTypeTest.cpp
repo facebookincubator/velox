@@ -26,16 +26,17 @@ class TDigestTypeTest : public testing::Test, public TypeTestBase {
 };
 
 TEST_F(TDigestTypeTest, basic) {
-  ASSERT_STREQ(TDIGEST()->name(), "TDIGEST");
-  ASSERT_STREQ(TDIGEST()->kindName(), "VARBINARY");
-  ASSERT_TRUE(TDIGEST()->parameters().empty());
-  ASSERT_EQ(TDIGEST()->toString(), "TDIGEST");
+  TypePtr doubleType = DOUBLE();
+  ASSERT_STREQ(TDIGEST(doubleType)->name(), "TDIGEST");
+  ASSERT_STREQ(TDIGEST(DOUBLE())->kindName(), "VARBINARY");
+  ASSERT_TRUE(TDIGEST(DOUBLE())->parameters().empty());
+  ASSERT_EQ(TDIGEST(DOUBLE())->toString(), "TDIGEST(DOUBLE)");
 
   ASSERT_TRUE(hasType("TDIGEST"));
-  ASSERT_EQ(*getType("TDIGEST", {}), *TDIGEST());
+  ASSERT_EQ(*getType("TDIGEST", {}), *TDIGEST(DOUBLE()));
 }
 
 TEST_F(TDigestTypeTest, serde) {
-  testTypeSerde(TDIGEST());
+  testTypeSerde(TDIGEST(DOUBLE()));
 }
 } // namespace facebook::velox::test

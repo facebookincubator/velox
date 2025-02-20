@@ -224,6 +224,7 @@ TEST_F(CustomTypeTest, getCustomTypeNames) {
       (std::unordered_set<std::string>{
           "JSON",
           "HYPERLOGLOG",
+          "TDIGEST",
           "TIMESTAMP WITH TIME ZONE",
           "UUID",
           "IPADDRESS",
@@ -239,6 +240,7 @@ TEST_F(CustomTypeTest, getCustomTypeNames) {
       (std::unordered_set<std::string>{
           "JSON",
           "HYPERLOGLOG",
+          "TDIGEST",
           "TIMESTAMP WITH TIME ZONE",
           "UUID",
           "IPADDRESS",
