@@ -327,7 +327,7 @@ QueryBenchmarkBase::run(const TpchPlan& tpchPlan) {
           for (const auto& entry : tpchPlan.dataFiles) {
             for (const auto& path : entry.second) {
               auto splits = facebook::velox::cudf_velox::cudfIsRegistered() &&
-                            facebook::velox::cudf_velox::isEnabledcudfTableScan()
+                      facebook::velox::cudf_velox::isEnabledcudfTableScan()
                   ? listCudfSplits(path, numSplitsPerFile, tpchPlan)
                   : listSplits(path, numSplitsPerFile, tpchPlan);
               for (auto split : splits) {

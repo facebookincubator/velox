@@ -647,8 +647,7 @@ TpchPlan TpchQueryBuilder::getQ5Plan() const {
 
   auto customer =
       PlanBuilder(planNodeIdGenerator, pool_.get())
-          .tableScan(
-              kCustomer, customerSelectedRowType, customerFileColumns)
+          .tableScan(kCustomer, customerSelectedRowType, customerFileColumns)
           .capturePlanNodeId(customerScanNodeId)
           .planNode();
 
@@ -666,8 +665,7 @@ TpchPlan TpchQueryBuilder::getQ5Plan() const {
 
   auto supplierJoinNationRegion =
       PlanBuilder(planNodeIdGenerator, pool_.get())
-          .tableScan(
-              kSupplier, supplierSelectedRowType, supplierFileColumns)
+          .tableScan(kSupplier, supplierSelectedRowType, supplierFileColumns)
           .capturePlanNodeId(supplierScanNodeId)
           .hashJoin(
               {"s_nationkey"},
@@ -679,8 +677,7 @@ TpchPlan TpchQueryBuilder::getQ5Plan() const {
 
   auto plan =
       PlanBuilder(planNodeIdGenerator, pool_.get())
-          .tableScan(
-              kLineitem, lineitemSelectedRowType, lineitemFileColumns)
+          .tableScan(kLineitem, lineitemSelectedRowType, lineitemFileColumns)
           .capturePlanNodeId(lineitemScanNodeId)
           .project(
               {"l_extendedprice * (1.0 - l_discount) AS part_revenue",
