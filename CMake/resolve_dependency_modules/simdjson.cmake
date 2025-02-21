@@ -27,7 +27,9 @@ message(STATUS "Building simdjson from source")
 FetchContent_Declare(
   simdjson
   URL ${VELOX_SIMDJSON_SOURCE_URL}
-  URL_HASH ${VELOX_SIMDJSON_BUILD_SHA256_CHECKSUM})
+  URL_HASH ${VELOX_SIMDJSON_BUILD_SHA256_CHECKSUM}
+  PATCH_COMMAND git init && git apply
+                ${CMAKE_CURRENT_LIST_DIR}/simdjson/fix-control-char.patch)
 
 if(${VELOX_SIMDJSON_SKIPUTF8VALIDATION})
   set(SIMDJSON_SKIPUTF8VALIDATION ON)
