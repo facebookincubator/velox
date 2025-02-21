@@ -127,6 +127,10 @@ class ParquetDataSource : public DataSource {
   // The row type for the data source output, not including filter-only columns
   const RowTypePtr outputType_;
 
+  // Expression evaluator for remaining filter.
+  core::ExpressionEvaluator* const expressionEvaluator_;
+  std::unique_ptr<exec::ExprSet> remainingFilterExprSet_;
+
   dwio::common::RuntimeStatistics runtimeStats_;
 };
 

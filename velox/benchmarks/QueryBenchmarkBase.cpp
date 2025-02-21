@@ -16,6 +16,7 @@
 
 #include "velox/benchmarks/QueryBenchmarkBase.h"
 
+#include "velox/experimental/cudf/exec/Utilities.h"
 #include "velox/experimental/cudf/connectors/parquet/ParquetConfig.h"
 #include "velox/experimental/cudf/connectors/parquet/ParquetConnector.h"
 #include "velox/experimental/cudf/exec/ToCudf.h"
@@ -327,7 +328,8 @@ QueryBenchmarkBase::run(const TpchPlan& tpchPlan) {
         if (!noMoreSplits) {
           for (const auto& entry : tpchPlan.dataFiles) {
             for (const auto& path : entry.second) {
-              auto splits = facebook::velox::cudf_velox::cudfIsRegistered()
+              auto splits = facebook::velox::cudf_velox::cudfIsRegistered() &&
+                      facebook::velox::cudf_velox::isEnabledcudfTableScan()
                   ? listCudfSplits(path, numSplitsPerFile, tpchPlan)
                   : listSplits(path, numSplitsPerFile, tpchPlan);
               for (auto split : splits) {
