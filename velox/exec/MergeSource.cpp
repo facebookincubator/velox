@@ -243,8 +243,10 @@ BlockingReason MergeJoinSource::next(
   common::testutil::TestValue::adjust(
       "facebook::velox::exec::MergeSource::next", this);
   return state_.withWLock([&](auto& state) {
-    if (state.data != nullptr) {
-      *data = std::move(state.data);
+    if (!state.dataQueue.empty()) {
+      *data = std::move(state.dataQueue.front());
+      state.dataQueue.pop();
+
       notify(producerPromise_);
       return BlockingReason::kNotBlocked;
     }
@@ -284,11 +286,7 @@ BlockingReason MergeJoinSource::enqueue(
       return BlockingReason::kNotBlocked;
     }
 
-    if (state.data != nullptr) {
-      return waitForConsumer(future);
-    }
-
-    state.data = std::move(data);
+    state.dataQueue.push(std::move(data));
     notify(consumerPromise_);
 
     return waitForConsumer(future);
