@@ -415,7 +415,7 @@ void SsdFile::write(std::vector<CachePin>& pins) {
           checksum = checksumEntry(*entry);
         }
         entries_[std::move(key)] = SsdRun(offset, size, checksum);
-        if (config::globalConfig().ssdVerifyWrite) {
+        if (config::globalConfig().verifySsdWrite) {
           verifyWrite(*entry, SsdRun(offset, size, checksum));
         }
         offset += size;

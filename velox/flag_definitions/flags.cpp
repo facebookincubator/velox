@@ -155,7 +155,7 @@ void translateFlagsToGlobalConfig() {
   config::globalConfig().suppressMemoryCapacityExceedingErrorMessage =
       FLAGS_velox_suppress_memory_capacity_exceeding_error_message;
   config::globalConfig().useSsdODirect = FLAGS_velox_ssd_odirect;
-  config::globalConfig().ssdVerifyWrite = FLAGS_velox_ssd_verify_write;
+  config::globalConfig().verifySsdWrite = FLAGS_velox_ssd_verify_write;
   config::globalConfig().memoryPoolCapacityTransferAcrossTasks =
       FLAGS_velox_memory_pool_capacity_transfer_across_tasks;
   config::globalConfig().exceptionSystemStacktraceEnabled =

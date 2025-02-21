@@ -84,7 +84,7 @@ struct GlobalConfiguration {
   /// Verify the data written to SSD. Once an entry is written, it is
   /// immediately read back and is compared against the entry written. This is
   /// helpful to protect against SSD write corruption.
-  bool ssdVerifyWrite{false};
+  bool verifySsdWrite{false};
 };
 
 GlobalConfiguration& globalConfig();
