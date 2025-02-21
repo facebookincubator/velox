@@ -126,9 +126,13 @@ std::shared_ptr<WindowPartition> RowsStreamingWindowBuild::nextPartition() {
 }
 
 bool RowsStreamingWindowBuild::hasNextPartition() {
-  // Remove the processed output partition from the queue.
+  // Note: an exception may be thrown if remove the windowPartition_ in
+  // nextPartition method. This is because hasNextPartition might return true,
+  // but when we actually retrieve the window partition in nextPartition, it
+  // could be empty after the removal.
   while (!windowPartitions_.empty() && outputPartition()->complete() &&
          outputPartition()->numRows() == 0) {
+    // Remove the processed output partition from the queue.
     windowPartitions_.pop_front();
   }
 
