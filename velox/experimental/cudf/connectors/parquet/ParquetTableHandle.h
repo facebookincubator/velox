@@ -21,6 +21,8 @@
 
 #include "velox/connectors/Connector.h"
 #include "velox/type/Type.h"
+#include "velox/core/Expressions.h"
+#include "velox/expression/Expr.h"
 
 #include <cudf/types.hpp>
 
@@ -73,6 +75,7 @@ class ParquetTableHandle : public ConnectorTableHandle {
       std::string connectorId,
       const std::string& tableName,
       bool filterPushdownEnabled,
+      const core::TypedExprPtr& remainingFilter = nullptr,
       const RowTypePtr& dataColumns = nullptr);
 
   const std::string& tableName() const {
@@ -81,6 +84,10 @@ class ParquetTableHandle : public ConnectorTableHandle {
 
   bool isFilterPushdownEnabled() const {
     return filterPushdownEnabled_;
+  }
+
+  const core::TypedExprPtr& remainingFilter() const {
+    return remainingFilter_;
   }
 
   // Schema of the table.  Need this for reading TEXTFILE.
@@ -97,6 +104,7 @@ class ParquetTableHandle : public ConnectorTableHandle {
  private:
   const std::string tableName_;
   const bool filterPushdownEnabled_;
+  const core::TypedExprPtr remainingFilter_;
   const RowTypePtr dataColumns_;
 };
 
