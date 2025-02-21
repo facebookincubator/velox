@@ -42,6 +42,12 @@ create_memory_resource(std::string_view mode);
  */
 bool cudfDebugEnabled();
 
+/**
+ * @brief Returns true if the VELOX_CUDF_TABLE_SCAN environment variable is set to a
+ * nonzero value.
+ */
+bool isEnabledcudfTableScan();
+
 // Concatenate a vector of cuDF tables into a single table
 std::unique_ptr<cudf::table> concatenateTables(
     std::vector<std::unique_ptr<cudf::table>> tables,
