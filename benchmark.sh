@@ -51,7 +51,8 @@ for query_number in ${queries}; do
             PROFILE_CMD="nsys profile -t nvtx,cuda,osrt -f true --cuda-memory-usage=true --cuda-um-cpu-page-faults=true --cuda-um-gpu-page-faults=true --output=benchmark_results/q${query_number}_${device}_${num_drivers}_drivers.nsys-rep"
             # Enable GPU metrics if supported (Ampere or newer)
             if [[ "$(nvidia-smi --query-gpu=compute_cap --format=csv,noheader -i 0 | cut -d '.' -f 1)" -gt 7 ]]; then
-                PROFILE_CMD="${PROFILE_CMD} --gpu-metrics-devices=0"
+                device_id=${CUDA_VISIBLE_DEVICES:-"0"}
+                PROFILE_CMD="${PROFILE_CMD} --gpu-metrics-devices=${device_id}"
             fi
         fi
 
