@@ -31,6 +31,7 @@
 #include "velox/expression/SignatureBinder.h"
 #include "velox/parse/Expressions.h"
 #include "velox/parse/TypeResolver.h"
+#include "velox/experimental/cudf/exec/Utilities.h"
 
 #include "velox/experimental/cudf/connectors/parquet/ParquetTableHandle.h"
 #include "velox/experimental/cudf/exec/ToCudf.h"
@@ -101,34 +102,6 @@ PlanBuilder& PlanBuilder::tableScan(
         std::shared_ptr<connector::ColumnHandle>>& assignments) {
   return TableScanBuilder(*this)
       .tableName(tableName)
-      .outputType(outputType)
-      .columnAliases(columnAliases)
-      .subfieldFilters(subfieldFilters)
-      .remainingFilter(remainingFilter)
-      .dataColumns(dataColumns)
-      .assignments(assignments)
-      .endTableScan();
-}
-
-PlanBuilder& PlanBuilder::cudftableScan(
-    const std::string& tableName,
-    const RowTypePtr& outputType,
-    const std::unordered_map<std::string, std::string>& columnAliases,
-    const std::vector<std::string>& subfieldFilters,
-    const std::string& remainingFilter,
-    const RowTypePtr& dataColumns,
-    const std::unordered_map<
-        std::string,
-        std::shared_ptr<connector::ColumnHandle>>& assignments) {
-  auto tableHandle =
-      std::make_shared<cudf_velox::connector::parquet::ParquetTableHandle>(
-          cudf_velox::exec::test::kParquetConnectorId,
-          tableName,
-          /*filterPushdownEnabled*/ false,
-          dataColumns);
-  return TableScanBuilder(*this)
-      .tableName(tableName)
-      .tableHandle(tableHandle)
       .outputType(outputType)
       .columnAliases(columnAliases)
       .subfieldFilters(subfieldFilters)
