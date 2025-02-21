@@ -288,7 +288,7 @@ DEBUG_ONLY_TEST_F(E2EFilterTest, longDecimal) {
               30000, // rareMax
               true);
         },
-        true,
+        false,
         {"longdecimal_val"},
         20);
   }
