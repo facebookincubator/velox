@@ -24,8 +24,8 @@
 #include <cudf/ast/expressions.hpp>
 
 #include <memory>
-#include <vector>
 #include <tuple>
+#include <vector>
 
 namespace facebook::velox::cudf_velox {
 
@@ -38,7 +38,8 @@ cudf::ast::expression const& create_ast_tree(
 
 void addPrecomputedColumns(
     std::vector<std::unique_ptr<cudf::column>>& input_table_columns,
-    const std::vector<std::tuple<int, std::string, int>>& precompute_instructions,
+    const std::vector<std::tuple<int, std::string, int>>&
+        precompute_instructions,
     const std::vector<std::unique_ptr<cudf::scalar>>& scalars,
     rmm::cuda_stream_view stream);
 

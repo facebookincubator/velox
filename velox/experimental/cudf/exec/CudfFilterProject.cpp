@@ -102,7 +102,8 @@ RowVectorPtr CudfFilterProject::getOutput() {
   auto input_table_columns = cudf_input->release()->release();
 
   // Usage of the function
-  addPrecomputedColumns(input_table_columns, precompute_instructions_, scalars_, stream);
+  addPrecomputedColumns(
+      input_table_columns, precompute_instructions_, scalars_, stream);
 
   auto input_table =
       std::make_unique<cudf::table>(std::move(input_table_columns));

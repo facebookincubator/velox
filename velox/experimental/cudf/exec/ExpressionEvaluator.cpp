@@ -18,8 +18,8 @@
 #include "velox/expression/ConstantExpr.h"
 #include "velox/expression/FieldReference.h"
 #include "velox/type/Type.h"
-#include "velox/vector/ConstantVector.h"
 #include "velox/vector/BaseVector.h"
+#include "velox/vector/ConstantVector.h"
 #include "velox/vector/VectorTypeUtils.h"
 
 #include <cudf/datetime.hpp>
@@ -48,7 +48,8 @@ cudf::ast::literal make_scalar_and_literal(
         *static_cast<cudf::numeric_scalar<T>*>(scalars.back().get())};
   } else if (kind == TypeKind::VARCHAR) {
     VELOX_CHECK(vector->isConstantEncoding());
-    auto constVector = vector->as<facebook::velox::ConstantVector<StringView>>();
+    auto constVector =
+        vector->as<facebook::velox::ConstantVector<StringView>>();
     auto value = constVector->valueAt(0);
     std::string_view stringValue = static_cast<std::string_view>(value);
     scalars.emplace_back(std::make_unique<cudf::string_scalar>(stringValue));
@@ -257,57 +258,58 @@ cudf::ast::expression const& create_ast_tree(
   }
 }
 
-  void addPrecomputedColumns(
-      std::vector<std::unique_ptr<cudf::column>>& input_table_columns,
-      const std::vector<std::tuple<int, std::string, int>>& precompute_instructions,
-      const std::vector<std::unique_ptr<cudf::scalar>>& scalars,
-      rmm::cuda_stream_view stream) {
-    for (const auto& instruction : precompute_instructions) {
-      auto [dependent_column_index, ins_name, new_column_index] = instruction;
-      if (ins_name == "year") {
-        auto new_column = cudf::datetime::extract_datetime_component(
-            input_table_columns[dependent_column_index]->view(),
-            cudf::datetime::datetime_component::YEAR,
-            stream,
-            cudf::get_current_device_resource_ref());
-        input_table_columns.emplace_back(std::move(new_column));
-      } else if (ins_name == "length") {
-        auto new_column = cudf::strings::count_characters(
-            input_table_columns[dependent_column_index]->view(),
-            stream,
-            cudf::get_current_device_resource_ref());
-        input_table_columns.emplace_back(std::move(new_column));
-      } else if (ins_name.rfind("substr", 0) == 0) {
-        std::istringstream iss(ins_name.substr(6));
-        int begin_value, end_value;
-        iss >> begin_value >> end_value;
-        auto begin_scalar = cudf::numeric_scalar<cudf::size_type>(
-            begin_value, true, stream, cudf::get_current_device_resource_ref());
-        auto end_scalar = cudf::numeric_scalar<cudf::size_type>(
-            end_value, true, stream, cudf::get_current_device_resource_ref());
-        auto step_scalar = cudf::numeric_scalar<cudf::size_type>(
-            1, true, stream, cudf::get_current_device_resource_ref());
-        auto new_column = cudf::strings::slice_strings(
-            input_table_columns[dependent_column_index]->view(),
-            begin_scalar,
-            end_scalar,
-            step_scalar,
-            stream,
-            cudf::get_current_device_resource_ref());
-        input_table_columns.emplace_back(std::move(new_column));
-      } else if (ins_name.rfind("like", 0) == 0) {
-        auto scalar_index = std::stoi(ins_name.substr(4));
-        auto new_column = cudf::strings::like(
-            input_table_columns[dependent_column_index]->view(),
-            *static_cast<cudf::string_scalar*>(scalars[scalar_index].get()),
-            cudf::string_scalar(
-                "", true, stream, cudf::get_current_device_resource_ref()),
-            stream,
-            cudf::get_current_device_resource_ref());
-        input_table_columns.emplace_back(std::move(new_column));
-      } else {
-        VELOX_FAIL("Unsupported precompute operation " + ins_name);
-      }
+void addPrecomputedColumns(
+    std::vector<std::unique_ptr<cudf::column>>& input_table_columns,
+    const std::vector<std::tuple<int, std::string, int>>&
+        precompute_instructions,
+    const std::vector<std::unique_ptr<cudf::scalar>>& scalars,
+    rmm::cuda_stream_view stream) {
+  for (const auto& instruction : precompute_instructions) {
+    auto [dependent_column_index, ins_name, new_column_index] = instruction;
+    if (ins_name == "year") {
+      auto new_column = cudf::datetime::extract_datetime_component(
+          input_table_columns[dependent_column_index]->view(),
+          cudf::datetime::datetime_component::YEAR,
+          stream,
+          cudf::get_current_device_resource_ref());
+      input_table_columns.emplace_back(std::move(new_column));
+    } else if (ins_name == "length") {
+      auto new_column = cudf::strings::count_characters(
+          input_table_columns[dependent_column_index]->view(),
+          stream,
+          cudf::get_current_device_resource_ref());
+      input_table_columns.emplace_back(std::move(new_column));
+    } else if (ins_name.rfind("substr", 0) == 0) {
+      std::istringstream iss(ins_name.substr(6));
+      int begin_value, end_value;
+      iss >> begin_value >> end_value;
+      auto begin_scalar = cudf::numeric_scalar<cudf::size_type>(
+          begin_value, true, stream, cudf::get_current_device_resource_ref());
+      auto end_scalar = cudf::numeric_scalar<cudf::size_type>(
+          end_value, true, stream, cudf::get_current_device_resource_ref());
+      auto step_scalar = cudf::numeric_scalar<cudf::size_type>(
+          1, true, stream, cudf::get_current_device_resource_ref());
+      auto new_column = cudf::strings::slice_strings(
+          input_table_columns[dependent_column_index]->view(),
+          begin_scalar,
+          end_scalar,
+          step_scalar,
+          stream,
+          cudf::get_current_device_resource_ref());
+      input_table_columns.emplace_back(std::move(new_column));
+    } else if (ins_name.rfind("like", 0) == 0) {
+      auto scalar_index = std::stoi(ins_name.substr(4));
+      auto new_column = cudf::strings::like(
+          input_table_columns[dependent_column_index]->view(),
+          *static_cast<cudf::string_scalar*>(scalars[scalar_index].get()),
+          cudf::string_scalar(
+              "", true, stream, cudf::get_current_device_resource_ref()),
+          stream,
+          cudf::get_current_device_resource_ref());
+      input_table_columns.emplace_back(std::move(new_column));
+    } else {
+      VELOX_FAIL("Unsupported precompute operation " + ins_name);
+    }
   }
 }
 
