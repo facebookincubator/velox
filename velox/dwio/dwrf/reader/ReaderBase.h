@@ -146,6 +146,15 @@ class ReaderBase {
     return schemaWithId_;
   }
 
+  // An ORC file written by an old version of Hive has no field names in the
+  // physical schema.
+  const bool isOldSchema() const {
+    return std::all_of(
+        schema_->names().begin(),
+        schema_->names().end(),
+        [](const std::string& name) { return name.find("_col") == 0; });
+  }
+
   dwio::common::BufferedInput& bufferedInput() const {
     return *input_;
   }
