@@ -122,7 +122,6 @@ void RowsStreamingWindowBuild::noMoreInput() {
 }
 
 std::shared_ptr<WindowPartition> RowsStreamingWindowBuild::nextPartition() {
-  VELOX_CHECK(!windowPartitions_.empty());
   return outputPartition();
 }
 
