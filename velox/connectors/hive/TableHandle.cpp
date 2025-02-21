@@ -149,13 +149,13 @@ std::string HiveTableHandle::toString() const {
     std::map<std::string, std::string> orderedTableParameters{
         tableParameters_.begin(), tableParameters_.end()};
     out << ", table parameters: [";
-    bool notFirstParam = false;
+    bool firstParam = true;
     for (const auto& param : orderedTableParameters) {
-      if (notFirstParam) {
+      if (!firstParam) {
         out << ", ";
       }
       out << param.first << ":" << param.second;
-      notFirstParam = true;
+      firstParam = false;
     }
     out << "]";
   }
@@ -220,7 +220,7 @@ ConnectorTableHandlePtr HiveTableHandle::create(
   }
 
   std::unordered_map<std::string, std::string> tableParameters{};
-  folly::dynamic tableParametersObj = obj["tableParameters"];
+  const auto& tableParametersObj = obj["tableParameters"];
   for (const auto& key : tableParametersObj.keys()) {
     const auto& value = tableParametersObj[key];
     tableParameters.emplace(key.asString(), value.asString());
