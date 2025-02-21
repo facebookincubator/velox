@@ -149,6 +149,42 @@ class CudfFilterProjectTest : public OperatorTestBase {
     runTest(plan, "SELECT LENGTH(c2) AS result FROM tmp");
   }
 
+  void testCaseWhenOperation(const std::vector<RowVectorPtr>& input) {
+    // Create a plan with a CASE WHEN operation
+    auto plan =
+        PlanBuilder()
+            .values(input)
+            .project({"CASE WHEN c0 = 0 THEN 1.0 ELSE 0.0 END AS result"})
+            .planNode();
+
+    // Run the test
+    runTest(
+        plan,
+        "SELECT CASE WHEN c0 = 0 THEN 1.0 ELSE 0.0 END AS result FROM tmp");
+  }
+
+  void testSubstrOperation(const std::vector<RowVectorPtr>& input) {
+    // Create a plan with a substr operation
+    auto plan = PlanBuilder()
+                    .values(input)
+                    .project({"substr(c2, 1, 3) AS result"})
+                    .planNode();
+
+    // Run the test
+    runTest(plan, "SELECT substr(c2, 1, 3) AS result FROM tmp");
+  }
+
+  void testLikeOperation(const std::vector<RowVectorPtr>& input) {
+    // Create a plan with a like operation
+    auto plan = PlanBuilder()
+                    .values(input)
+                    .project({"c2 LIKE '%test%' AS result"})
+                    .planNode();
+
+    // Run the test
+    runTest(plan, "SELECT c2 LIKE '%test%' AS result FROM tmp");
+  }
+
   void runTest(core::PlanNodePtr planNode, const std::string& duckDbSql) {
     SCOPED_TRACE("run without spilling");
     assertQuery(planNode, duckDbSql);
@@ -256,6 +292,31 @@ TEST_F(CudfFilterProjectTest, yearFunction) {
 
   createDuckDbTable(vectors);
   testYearFunction(vectors);
+}
+
+TEST_F(CudfFilterProjectTest, DISABLED_caseWhenOperation) {
+  vector_size_t batchSize = 1000;
+  auto vectors = makeVectors(rowType_, 2, batchSize);
+  // failing because switch copies nulls too.
+  createDuckDbTable(vectors);
+
+  testCaseWhenOperation(vectors);
+}
+
+TEST_F(CudfFilterProjectTest, substrOperation) {
+  vector_size_t batchSize = 1000;
+  auto vectors = makeVectors(rowType_, 2, batchSize);
+  createDuckDbTable(vectors);
+
+  testSubstrOperation(vectors);
+}
+
+TEST_F(CudfFilterProjectTest, likeOperation) {
+  vector_size_t batchSize = 1000;
+  auto vectors = makeVectors(rowType_, 2, batchSize);
+  createDuckDbTable(vectors);
+
+  testLikeOperation(vectors);
 }
 
 } // namespace

@@ -22,7 +22,8 @@ add_library(
   CudfOrderBy.cpp
   ToCudf.cpp
   Utilities.cpp
-  VeloxCudfInterop.cpp)
+  VeloxCudfInterop.cpp
+  ExpressionEvaluator.cpp)
 
 set_target_properties(
   velox_cudf_exec
