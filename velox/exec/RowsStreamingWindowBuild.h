@@ -76,6 +76,12 @@ class RowsStreamingWindowBuild : public WindowBuild {
   // Used to compare rows based on partitionKeys.
   char* previousRow_ = nullptr;
 
+  // Point to the current output partition if not -1.
+  vector_size_t outputPartition_ = 0;
+
+  // Current input partition that receives inputs.
+  vector_size_t inputPartition_ = 0;
+
   // The head of the deque (front) will always point to the current WP being
   // processed. Once the current WP is processed, it will be discarded (removed
   // from the front of the deque). The next WP to be processed will then become
