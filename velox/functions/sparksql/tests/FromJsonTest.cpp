@@ -191,13 +191,6 @@ TEST_F(FromJsonTest, nestedComplexType) {
   testFromJson(input, arrayVector);
 }
 
-TEST_F(FromJsonTest, nullOnFailure) {
-  auto expected = makeNullableFlatVector<int64_t>({1, std::nullopt, 3});
-  auto input =
-      makeFlatVector<std::string>({R"({"a": 1})", R"({"a" 2})", R"({"a": 3})"});
-  testFromJson(input, makeRowVector({"a"}, {expected}));
-}
-
 TEST_F(FromJsonTest, structEmptyArray) {
   auto expected = makeNullableFlatVector<int64_t>({std::nullopt, 2, 3});
   auto input =
@@ -243,6 +236,14 @@ TEST_F(FromJsonTest, invalidType) {
       "Unsupported type ROW<a:DECIMAL(16, 7)>");
   VELOX_ASSERT_USER_THROW(
       testFromJson(input, mapOutput), "Unsupported type MAP<BIGINT,BIGINT>.");
+}
+
+TEST_F(FromJsonTest, invalidJson) {
+  auto expected = makeNullableFlatVector<int32_t>(
+      {std::nullopt, std::nullopt, std::nullopt});
+  auto input =
+      makeFlatVector<std::string>({R"("a": 1})", R"({a: 1})", R"({"a" 1})"});
+  testFromJson(input, makeRowVector({"a"}, {expected}));
 }
 
 } // namespace
