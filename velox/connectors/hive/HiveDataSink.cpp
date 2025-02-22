@@ -1098,7 +1098,7 @@ std::string HiveInsertTableHandle::toString() const {
 
 std::string LocationHandle::toString() const {
   return fmt::format(
-      "LocationHandle [targetPath: {}, writePath: {}, tableType: {}, tableFileName: {},",
+      "LocationHandle [targetPath: {}, writePath: {}, tableType: {}, tableFileName: {}]",
       targetPath_,
       writePath_,
       tableTypeName(tableType_),
