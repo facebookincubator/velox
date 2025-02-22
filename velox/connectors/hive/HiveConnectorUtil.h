@@ -99,6 +99,7 @@ std::unique_ptr<dwio::common::BufferedInput> createBufferedInput(
     const dwio::common::ReaderOptions& readerOpts,
     const ConnectorQueryCtx* connectorQueryCtx,
     std::shared_ptr<io::IoStatistics> ioStats,
+    std::shared_ptr<filesystems::FileSystemStatistics> fsStats,
     folly::Executor* executor);
 
 core::TypedExprPtr extractFiltersFromRemainingFilter(
