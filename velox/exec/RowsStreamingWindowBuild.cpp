@@ -44,20 +44,8 @@ RowsStreamingWindowBuild::RowsStreamingWindowBuild(
 }
 
 bool RowsStreamingWindowBuild::needsInput() {
-  // No partitions are available or there is no rows in currentPartition.
-  return windowPartitions_.empty() || windowPartitions_.size() < 2;
-}
-
-std::shared_ptr<WindowPartition> RowsStreamingWindowBuild::inputPartition()
-    const {
-  VELOX_CHECK(!windowPartitions_.empty());
-  VELOX_CHECK(!windowPartitions_.back()->complete());
-  return windowPartitions_.back();
-}
-
-std::shared_ptr<WindowPartition> RowsStreamingWindowBuild::outputPartition()
-    const {
-  return windowPartitions_.front();
+  // We need input if there is no or only partition.
+  return windowPartitions_.size() < 2;
 }
 
 void RowsStreamingWindowBuild::ensureInputPartition() {
@@ -73,10 +61,10 @@ void RowsStreamingWindowBuild::addPartitionInputs(bool finished) {
   }
 
   ensureInputPartition();
-  inputPartition()->addRows(inputRows_);
+  windowPartitions_.back()->addRows(inputRows_);
 
   if (finished) {
-    inputPartition()->setComplete();
+    windowPartitions_.back()->setComplete();
   }
 
   inputRows_.clear();
@@ -122,25 +110,22 @@ void RowsStreamingWindowBuild::noMoreInput() {
 
 std::shared_ptr<WindowPartition> RowsStreamingWindowBuild::nextPartition() {
   // Remove the processed output partition from the queue.
-  if (!windowPartitions_.empty() && outputPartition()->complete() &&
-      outputPartition()->numRows() == 0) {
+  //
+  // NOTE: the window operator only calls this after processing a completed
+  // partition.
+  if (!windowPartitions_.empty() && windowPartitions_.front()->complete() &&
+      windowPartitions_.front()->numRows() == 0) {
     windowPartitions_.pop_front();
-    VELOX_CHECK(!windowPartitions_.empty());
-    VELOX_CHECK(
-        !windowPartitions_.front()->complete() ||
-        (windowPartitions_.front()->complete() &&
-         windowPartitions_.front()->numRows() > 0));
   }
 
-  return outputPartition();
+  return windowPartitions_.front();
 }
 
 bool RowsStreamingWindowBuild::hasNextPartition() {
-  // Determine if there is an existing window partition that is either
-  // incomplete or completed but has unconsumed rows.
+  // Checks if there is a window partition that is either incomplete or
+  // completed but has unconsumed rows.
   for (auto windowPartition : windowPartitions_) {
-    if (!windowPartition->complete() ||
-        (windowPartition->complete() && windowPartition->numRows() > 0)) {
+    if (!windowPartition->complete() || windowPartition->numRows() > 0) {
       return true;
     }
   }

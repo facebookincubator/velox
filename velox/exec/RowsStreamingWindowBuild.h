@@ -58,13 +58,10 @@ class RowsStreamingWindowBuild : public WindowBuild {
   // does not exist.
   void addPartitionInputs(bool finished);
 
-  // Returns the current input partition.
-  std::shared_ptr<WindowPartition> inputPartition() const;
-
-  // Returns the current output partition.
-  std::shared_ptr<WindowPartition> outputPartition() const;
-
-  // Ensure an incomplete Window Partition exists; otherwise, create a new one.
+  // Invoked before add input to ensure there is an open (in-complete) partition
+  // to accept new input. The function creates a new one at the tail of
+  // 'windowPartitions_' if it is empty or the last partition is already
+  // completed.
   void ensureInputPartition();
 
   // Sets to true if this window node has range frames.
@@ -76,10 +73,8 @@ class RowsStreamingWindowBuild : public WindowBuild {
   // Used to compare rows based on partitionKeys.
   char* previousRow_ = nullptr;
 
-  // The head of the deque (front) will always point to the current WP being
-  // processed. Once the current WP is processed, it will be discarded (removed
-  // from the front of the deque). The next WP to be processed will then become
-  // the new head of the deque.
+  /// The output gets next partition from the head of 'windowPartitions_' and
+  /// input adds to the next partition from the tail of 'windowPartitions_'.
   std::deque<std::shared_ptr<WindowPartition>> windowPartitions_;
 };
 
