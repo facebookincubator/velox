@@ -18,6 +18,7 @@
 #include "velox/functions/Udf.h"
 #include "velox/functions/lib/RegistrationHelpers.h"
 #include "velox/functions/prestosql/types/JsonType.h"
+#include "velox/functions/prestosql/types/JsonRegistration.h"
 
 using namespace facebook::velox;
 
@@ -617,6 +618,7 @@ struct JsonOutTest {
 };
 
 void register10() {
+  registerJsonType();
   registerFunction<JsonOutTest, Json>({"json_out"});
 }
 } // namespace
