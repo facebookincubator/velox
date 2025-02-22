@@ -912,8 +912,8 @@ Tracing
      - 0
      - The max trace bytes limit. Tracing is disabled if zero.
 
-Async Data Cache (In-Memory Cache)
-----------------------------------
+Async Data Cache (In-Memory Cache) and SSD Cache
+------------------------------------------------
 .. list-table::
    :widths: 30 10 10 70
    :header-rows: 1
@@ -925,40 +925,7 @@ Async Data Cache (In-Memory Cache)
    * - async-data-cache-enabled
      - bool
      - true
-     - If true, enable async data cache (in-memory cache).
-   * - cache.velox.ttl-enabled
-     - bool
-     - false
-     - Enable TTL for AsyncDataCache and SSD cache.
-   * - cache.velox.ttl-threshold
-     - string
-     - 2d
-     - TTL duration for AsyncDataCache and SSD cache entries. The following time units are supported: ns, us, ms, s, m, h, d.
-   * - cache.velox.ttl-check-interval
-     - string
-     - 1h
-     - The periodic duration to apply cache TTL and evict AsyncDataCache and SSD cache entries.
-   * - cache.no_retention
-     - bool
-     - false
-     - If true, evict out a query scanned data out of in-memory cache right after the access,
-       and also skip staging to the ssd cache. This helps to prevent the cache space pollution
-       from the one-time table scan by large batch query when mixed running with interactive
-       query which has high data locality. Set the ``hive.node_scheduler_affinity`` session 
-       property to ``NO_PREFERENCE`` to turn cache.no_retention ON. Set the 
-       ``hive.node_scheduler_affinity`` session property to ``SOFT_AFFINITY`` 
-       or ``HARD_AFFINITY`` to turn cache.no_retention OFF.
-
-SSD Cache
----------
-.. list-table::
-   :widths: 30 10 10 70
-   :header-rows: 1
-
-   * - Property Name
-     - Type
-     - Default Value
-     - Description
+     - If true, enable async data cache.
    * - async-cache-ssd-gb
      - integer
      - 0
@@ -995,6 +962,28 @@ SSD Cache
      - bool
      - false
      - When enabled, the checksum is recalculated and verified against the stored value when cache data is loaded from the SSD.
+   * - cache.velox.ttl-enabled
+     - bool
+     - false
+     - Enable TTL for AsyncDataCache and SSD cache.
+   * - cache.velox.ttl-threshold
+     - string
+     - 2d
+     - TTL duration for AsyncDataCache and SSD cache entries. The following time units are supported: ns, us, ms, s, m, h, d.
+   * - cache.velox.ttl-check-interval
+     - string
+     - 1h
+     - The periodic duration to apply cache TTL and evict AsyncDataCache and SSD cache entries.
+   * - cache.no_retention
+     - bool
+     - false
+     - If true, evict out a query scanned data out of in-memory cache right after the access,
+       and also skip staging to the ssd cache. This helps to prevent the cache space pollution
+       from the one-time table scan by large batch query when mixed running with interactive
+       query which has high data locality. Set the ``hive.node_scheduler_affinity`` session 
+       property to ``NO_PREFERENCE`` to turn cache.no_retention ON. Set the 
+       ``hive.node_scheduler_affinity`` session property to ``SOFT_AFFINITY`` 
+       or ``HARD_AFFINITY`` to turn cache.no_retention OFF.
    * - query-data-cache-enabled-default
      - bool
      - true

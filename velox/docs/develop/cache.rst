@@ -1,15 +1,15 @@
-===========================
-AsyncDataCache (File Cache)
-===========================
+=====================================
+AsyncDataCache (In Memory Data Cache)
+=====================================
 
 Background
 ----------
-Velox provides a transparent file cache (AsyncDataCache) to accelerate table scans operators through hot data reuse and prefetch algorithms. 
-The file cache is integrated with the memory system to achieve dynamic memory sharing between the file cache and query memory. 
-When a query fails to allocate memory, we retry the allocation by shrinking the file cache. 
-Therefore, the file cache size is automatically adjusted in response to the query memory usage change. 
+Velox provides a transparent data cache (AsyncDataCache) to accelerate table scans operators through hot data reuse and prefetch algorithms. 
+This data cache is integrated with the memory system to achieve dynamic memory sharing between the data cache and query memory. 
+When a query fails to allocate memory, Velox retries the allocation by shrinking the data cache. 
+Therefore, the data cache size is automatically adjusted in response to the query memory usage change. 
 See `Memory Management - Velox Documentation <https://facebookincubator.github.io/velox/develop/memory.html>`_  
-for more information about Velox's file cache.
+for more information about Velox's data cache.
 
 Configuration Properties
 ------------------------
@@ -21,7 +21,7 @@ SSD Cache
 
 Background
 ----------
-The in-memory file cache (AsyncDataCache) is configured to use SSD when provided.
+The in-memory data cache (AsyncDataCache) is configured to use SSD when provided.
 The SSD serves as an extension for the AsyncDataCache.
 This helps mitigate the number of reads from slower storage.
 
