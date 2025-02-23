@@ -17,8 +17,8 @@
 #include <re2/re2.h>
 #include "velox/functions/Udf.h"
 #include "velox/functions/lib/RegistrationHelpers.h"
-#include "velox/functions/prestosql/types/JsonType.h"
 #include "velox/functions/prestosql/types/JsonRegistration.h"
+#include "velox/functions/prestosql/types/JsonType.h"
 
 using namespace facebook::velox;
 
