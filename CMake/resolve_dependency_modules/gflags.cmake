@@ -51,7 +51,7 @@ endif()
 FetchContent_MakeAvailable(gflags)
 
 # Workaround for https://github.com/gflags/gflags/issues/277
-if(DEFINED CACHED_BUILD_SHARED_LIBS AND NOT DEFINED CACHE{BUILD_SHARED_LIBS})
+if(DEFINED CACHED_BUILD_SHARED_LIBS)
   set(BUILD_SHARED_LIBS
       ${CACHED_BUILD_SHARED_LIBS}
       CACHE BOOL "Restored after setting up gflags")
