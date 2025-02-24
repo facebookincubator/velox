@@ -122,7 +122,7 @@ std::optional<RowVectorPtr> ParquetDataSource::next(
     auto const original_num_columns = cudf_table_columns.size();
     auto& remainingFilterExpr = remainingFilterExprSet_->expr(0);
     std::vector<std::unique_ptr<cudf::scalar>> scalars_;
-    std::vector<std::tuple<int, std::string, int>> precompute_instructions_;
+    std::vector<PrecomputeInstruction> precompute_instructions_;
     cudf::ast::tree tree;
     create_ast_tree(
         remainingFilterExpr,

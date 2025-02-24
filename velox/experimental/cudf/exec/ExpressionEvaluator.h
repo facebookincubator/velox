@@ -29,17 +29,30 @@
 
 namespace facebook::velox::cudf_velox {
 
+// Pre-compute instructions for the expression,
+// for ops that are not supported by cudf::ast
+struct PrecomputeInstruction {
+  int dependent_column_index;
+  std::string ins_name;
+  int new_column_index;
+
+  // Constructor to initialize the struct with values
+  PrecomputeInstruction(int depIndex, const std::string& name, int newIndex)
+      : dependent_column_index(depIndex),
+        ins_name(name),
+        new_column_index(newIndex) {}
+};
+
 cudf::ast::expression const& create_ast_tree(
     const std::shared_ptr<velox::exec::Expr>& expr,
     cudf::ast::tree& tree,
     std::vector<std::unique_ptr<cudf::scalar>>& scalars,
     const RowTypePtr& inputRowSchema,
-    std::vector<std::tuple<int, std::string, int>>& precompute_instructions);
+    std::vector<PrecomputeInstruction>& precompute_instructions);
 
 void addPrecomputedColumns(
     std::vector<std::unique_ptr<cudf::column>>& input_table_columns,
-    const std::vector<std::tuple<int, std::string, int>>&
-        precompute_instructions,
+    const std::vector<PrecomputeInstruction>& precompute_instructions,
     const std::vector<std::unique_ptr<cudf::scalar>>& scalars,
     rmm::cuda_stream_view stream);
 
