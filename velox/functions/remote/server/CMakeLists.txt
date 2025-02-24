@@ -13,15 +13,15 @@
 # limitations under the License.
 
 add_library(velox_functions_remote_thrift_server
-        RemoteFunctionThriftService.cpp)
+            RemoteFunctionThriftService.cpp)
 
 target_link_libraries(
   velox_functions_remote_thrift_server
   PUBLIC remote_function_thrift velox_functions_remote_get_serde
-         velox_type_fbhive velox_memory)
+         velox_type_fbhive)
 
 add_executable(velox_functions_remote_thrift_server_main
-        RemoteFunctionThriftServiceMain.cpp)
+               RemoteFunctionThriftServiceMain.cpp)
 
 target_link_libraries(
   velox_functions_remote_thrift_server_main
