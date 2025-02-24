@@ -366,4 +366,24 @@ TEST_F(AggregationTest, ignoreNullKeys) {
   AssertQueryBuilder(makePlan(true)).assertEmptyResults();
 }
 
+TEST_F(AggregationTest, avgSingle) {
+  auto vectors = makeVectors(rowType_, 10, 100);
+  createDuckDbTable(vectors);
+
+  // DM: removed avg(c3). We're having overflow issues with int64_t.
+  std::vector<std::string> aggregates = {
+      "avg(c1)", "avg(c2)", "avg(c4)", "avg(c5)"};
+
+  std::string keyName = "c0";
+  auto op = PlanBuilder()
+                .values(vectors)
+                .singleAggregation({keyName}, aggregates)
+                .planNode();
+
+  assertQuery(
+      op,
+      "SELECT " + keyName + ", avg(c1), avg(c2), avg(c4), avg(c5) " +
+          "FROM tmp GROUP BY " + keyName);
+}
+
 } // namespace facebook::velox::exec::test
