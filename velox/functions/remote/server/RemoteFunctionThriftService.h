@@ -17,9 +17,8 @@
 #pragma once
 
 #include <thrift/lib/cpp2/server/ThriftServer.h>
-#include "velox/common/memory/Memory.h"
 #include "velox/functions/remote/if/gen-cpp2/RemoteFunctionService.h"
-#include "velox/vector/VectorStream.h"
+#include "velox/functions/remote/server/RemoteFunctionBaseService.h"
 
 namespace facebook::velox::exec {
 class EvalErrors;
@@ -29,17 +28,14 @@ namespace facebook::velox::functions {
 
 // Simple implementation of the thrift server handler.
 class RemoteFunctionServiceHandler
-    : virtual public apache::thrift::ServiceHandler<
+    : public RemoteFunctionBaseService,
+      virtual public apache::thrift::ServiceHandler<
           remote::RemoteFunctionService> {
  public:
   RemoteFunctionServiceHandler(
       const std::string& functionPrefix = "",
       std::shared_ptr<memory::MemoryPool> pool = nullptr)
-      : functionPrefix_(functionPrefix), pool_(std::move(pool)) {
-    if (pool_ == nullptr) {
-      pool_ = memory::memoryManager()->addLeafPool();
-    }
-  }
+      : RemoteFunctionBaseService(functionPrefix, std::move(pool)) {}
 
   void invokeFunction(
       remote::RemoteFunctionResponse& response,
@@ -52,9 +48,6 @@ class RemoteFunctionServiceHandler
       apache::thrift::field_ref<remote::RemoteFunctionPage&> result,
       exec::EvalErrors* evalErrors,
       const std::unique_ptr<VectorSerde>& serde) const;
-
-  const std::string functionPrefix_;
-  std::shared_ptr<memory::MemoryPool> pool_;
 };
 
 } // namespace facebook::velox::functions
