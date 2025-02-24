@@ -21,6 +21,7 @@
 #include "velox/exec/Driver.h"
 #include "velox/exec/FilterProject.h"
 #include "velox/exec/Operator.h"
+#include "velox/experimental/cudf/exec/ExpressionEvaluator.h"
 #include "velox/experimental/cudf/vector/CudfVector.h"
 #include "velox/expression/Expr.h"
 #include "velox/vector/ComplexVector.h"
@@ -74,7 +75,7 @@ class CudfFilterProject : public exec::Operator {
   // instruction on dependent column to get new column index on non-ast
   // supported operations in expressions
   // <dependent_column_index, "instruction", new_column_index>
-  std::vector<std::tuple<int, std::string, int>> precompute_instructions_;
+  std::vector<PrecomputeInstruction> precompute_instructions_;
 
   std::vector<velox::exec::IdentityProjection> resultProjections_;
   std::vector<velox::exec::IdentityProjection> identityProjections_;

@@ -88,7 +88,7 @@ cudf::ast::expression const& create_ast_tree(
     cudf::ast::tree& tree,
     std::vector<std::unique_ptr<cudf::scalar>>& scalars,
     const RowTypePtr& inputRowSchema,
-    std::vector<std::tuple<int, std::string, int>>& precompute_instructions) {
+    std::vector<PrecomputeInstruction>& precompute_instructions) {
   using op = cudf::ast::ast_operator;
   using operation = cudf::ast::operation;
   auto& name = expr->name();
@@ -242,7 +242,6 @@ cudf::ast::expression const& create_ast_tree(
     VELOX_CHECK_NOT_NULL(literalExpr, "Expression is not a literal");
     createLiteral(literalExpr->value(), scalars);
     std::string like_expr = "like " + std::to_string(scalars.size() - 1);
-    std::cout << "like_expr: " << like_expr << std::endl;
     precompute_instructions.emplace_back(
         dependent_column_index, like_expr, new_column_index);
     return tree.push(cudf::ast::column_reference(new_column_index));
@@ -259,8 +258,7 @@ cudf::ast::expression const& create_ast_tree(
 
 void addPrecomputedColumns(
     std::vector<std::unique_ptr<cudf::column>>& input_table_columns,
-    const std::vector<std::tuple<int, std::string, int>>&
-        precompute_instructions,
+    const std::vector<PrecomputeInstruction>& precompute_instructions,
     const std::vector<std::unique_ptr<cudf::scalar>>& scalars,
     rmm::cuda_stream_view stream) {
   for (const auto& instruction : precompute_instructions) {
