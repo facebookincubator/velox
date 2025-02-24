@@ -1496,11 +1496,11 @@ int32_t HashProbe::evalFilter(int32_t offset, int32_t numRows) {
     prepareFilterRowsForNullAwareJoin(
         filterInput, numRows, filterPropagateNulls, rawOutputProbeRowMapping);
   }
-
-  EvalCtx evalCtx(operatorCtx_->execCtx(), filter_.get(), filterInput.get());
-  filter_->eval(0, 1, true, filterInputRows_, evalCtx, filterResult_);
-
-  decodedFilterResult_.decode(*filterResult_[0], filterInputRows_);
+  if (filterInputRows_.hasSelections()) {
+    EvalCtx evalCtx(operatorCtx_->execCtx(), filter_.get(), filterInput.get());
+    filter_->eval(0, 1, true, filterInputRows_, evalCtx, filterResult_);
+    decodedFilterResult_.decode(*filterResult_[0], filterInputRows_);
+  }
 
   int32_t numPassed = 0;
   if (isLeftJoin(joinType_) || isFullJoin(joinType_)) {
