@@ -94,6 +94,7 @@ cudf::ast::expression const& create_ast_tree(
   auto& name = expr->name();
 
   if (name == "literal") {
+    VELOX_CHECK_EQ(expr->inputs().size(), 1);
     velox::exec::ConstantExpr* c =
         dynamic_cast<velox::exec::ConstantExpr*>(expr.get());
     VELOX_CHECK_NOT_NULL(c, "literal expression should be ConstantExpr");
@@ -117,8 +118,7 @@ cudf::ast::expression const& create_ast_tree(
         precompute_instructions);
     return tree.push(operation{binary_ops.at(name), op1, op2});
   } else if (name == "cast") {
-    auto len = expr->inputs().size();
-    VELOX_CHECK_EQ(len, 1);
+    VELOX_CHECK_EQ(expr->inputs().size(), 1);
     auto const& op1 = create_ast_tree(
         expr->inputs()[0],
         tree,
@@ -136,8 +136,7 @@ cudf::ast::expression const& create_ast_tree(
       VELOX_FAIL("Unsupported type for cast operation");
     }
   } else if (name == "switch") {
-    auto len = expr->inputs().size();
-    VELOX_CHECK_EQ(len, 3);
+    VELOX_CHECK_EQ(expr->inputs().size(), 3);
     // check if input[1], input[2] are literals 1 and 0.
     // then simplify as typecast bool to int
     velox::exec::ConstantExpr* c1 =
@@ -173,6 +172,7 @@ cudf::ast::expression const& create_ast_tree(
       VELOX_FAIL("Unsupported switch complex operation");
     }
   } else if (name == "year") {
+    VELOX_CHECK_EQ(expr->inputs().size(), 1);
     // ensure expr->inputs()[0] is a field
     auto fieldExpr = std::dynamic_pointer_cast<velox::exec::FieldReference>(
         expr->inputs()[0]);
@@ -190,6 +190,7 @@ cudf::ast::expression const& create_ast_tree(
         tree.push(cudf::ast::column_reference(new_column_index));
     return tree.push(operation{op::CAST_TO_INT64, col_ref});
   } else if (name == "length") {
+    VELOX_CHECK_EQ(expr->inputs().size(), 1);
     // ensure expr->inputs()[0] is a field
     auto fieldExpr = std::dynamic_pointer_cast<velox::exec::FieldReference>(
         expr->inputs()[0]);
@@ -208,8 +209,7 @@ cudf::ast::expression const& create_ast_tree(
   } else if (name == "substr") {
     // add precompute instruction, special handling col_ref during ast
     // evaluation
-    auto len = expr->inputs().size();
-    VELOX_CHECK_EQ(len, 3);
+    VELOX_CHECK_EQ(expr->inputs().size(), 3);
     auto fieldExpr = std::dynamic_pointer_cast<velox::exec::FieldReference>(
         expr->inputs()[0]);
     VELOX_CHECK_NOT_NULL(fieldExpr, "Expression is not a field");
@@ -229,8 +229,7 @@ cudf::ast::expression const& create_ast_tree(
     // This custom op should be added to input columns.
     return tree.push(cudf::ast::column_reference(new_column_index));
   } else if (name == "like") {
-    auto len = expr->inputs().size();
-    VELOX_CHECK_EQ(len, 2);
+    VELOX_CHECK_EQ(expr->inputs().size(), 2);
     auto fieldExpr = std::dynamic_pointer_cast<velox::exec::FieldReference>(
         expr->inputs()[0]);
     VELOX_CHECK_NOT_NULL(fieldExpr, "Expression is not a field");
