@@ -277,12 +277,12 @@ void addPrecomputedColumns(
       input_table_columns.emplace_back(std::move(new_column));
     } else if (ins_name.rfind("substr", 0) == 0) {
       std::istringstream iss(ins_name.substr(6));
-      int begin_value, end_value;
-      iss >> begin_value >> end_value;
+      int begin_value, length;
+      iss >> begin_value >> length;
       auto begin_scalar = cudf::numeric_scalar<cudf::size_type>(
-          begin_value, true, stream, cudf::get_current_device_resource_ref());
+          begin_value - 1, true, stream, cudf::get_current_device_resource_ref());
       auto end_scalar = cudf::numeric_scalar<cudf::size_type>(
-          end_value, true, stream, cudf::get_current_device_resource_ref());
+          begin_value - 1 + length, true, stream, cudf::get_current_device_resource_ref());
       auto step_scalar = cudf::numeric_scalar<cudf::size_type>(
           1, true, stream, cudf::get_current_device_resource_ref());
       auto new_column = cudf::strings::slice_strings(
