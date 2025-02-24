@@ -17,7 +17,7 @@
 #include "velox/functions/remote/utils/RemoteFunctionServiceProvider.h"
 
 #include "thrift/lib/cpp2/server/ThriftServer.h"
-#include "velox/functions/remote/server/RemoteFunctionService.h"
+#include "velox/functions/remote/server/RemoteFunctionThriftService.h"
 
 namespace facebook::velox::functions {
 
