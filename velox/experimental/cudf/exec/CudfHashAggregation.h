@@ -35,6 +35,11 @@ class CudfHashAggregation : public exec::Operator {
         cudf::table_view tbl,
         std::vector<cudf::groupby::aggregation_request>& requests) = 0;
 
+    virtual std::unique_ptr<cudf::column> doReduce(
+        cudf::table_view input,
+        TypePtr const& output_type,
+        rmm::cuda_stream_view stream) = 0;
+
     virtual std::unique_ptr<cudf::column> makeOutputColumn(
         std::vector<cudf::groupby::aggregation_result>& results,
         rmm::cuda_stream_view stream) = 0;

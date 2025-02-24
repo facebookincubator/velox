@@ -366,7 +366,7 @@ TEST_F(AggregationTest, ignoreNullKeys) {
   AssertQueryBuilder(makePlan(true)).assertEmptyResults();
 }
 
-TEST_F(AggregationTest, avgSingle) {
+TEST_F(AggregationTest, avgSingleGrouped) {
   auto vectors = makeVectors(rowType_, 10, 100);
   createDuckDbTable(vectors);
 
@@ -386,7 +386,7 @@ TEST_F(AggregationTest, avgSingle) {
           "FROM tmp GROUP BY " + keyName);
 }
 
-TEST_F(AggregationTest, avgPartialFinal) {
+TEST_F(AggregationTest, avgPartialFinalGrouped) {
   auto vectors = makeVectors(rowType_, 10, 100);
   createDuckDbTable(vectors);
 
