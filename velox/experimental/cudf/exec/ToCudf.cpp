@@ -116,7 +116,7 @@ bool CompileState::compile() {
                    exec::HashAggregation,
                    exec::LocalPartition,
                    exec::LocalExchange>(op) ||
-            is_filter_project_supported(op) || is_join_supported(op)  ||
+            is_filter_project_supported(op) || is_join_supported(op) ||
             (is_any_of<exec::TableScan>(op) && isEnabledcudfTableScan());
       };
 
@@ -136,10 +136,8 @@ bool CompileState::compile() {
   };
   auto produces_gpu_output = [is_filter_project_supported,
                               is_join_supported](const exec::Operator* op) {
-    return is_any_of<
-               exec::OrderBy,
-               exec::HashAggregation,
-               exec::LocalExchange>(op) ||
+    return is_any_of<exec::OrderBy, exec::HashAggregation, exec::LocalExchange>(
+               op) ||
         is_filter_project_supported(op) ||
         (is_any_of<exec::HashProbe>(op) && is_join_supported(op)) ||
         (is_any_of<exec::TableScan>(op) && isEnabledcudfTableScan());

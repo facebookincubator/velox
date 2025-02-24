@@ -16,10 +16,10 @@
 
 #include "velox/benchmarks/QueryBenchmarkBase.h"
 
-#include "velox/experimental/cudf/exec/Utilities.h"
 #include "velox/experimental/cudf/connectors/parquet/ParquetConfig.h"
 #include "velox/experimental/cudf/connectors/parquet/ParquetConnector.h"
 #include "velox/experimental/cudf/exec/ToCudf.h"
+#include "velox/experimental/cudf/exec/Utilities.h"
 #include "velox/experimental/cudf/tests/utils/ParquetConnectorTestBase.h"
 
 DEFINE_string(data_format, "parquet", "Data format");
