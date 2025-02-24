@@ -15,9 +15,9 @@
  */
 #pragma once
 
-#include <experimental/cudf/vector/CudfVector.h>
 #include "velox/exec/GroupingSet.h"
 #include "velox/exec/Operator.h"
+#include "velox/experimental/cudf/vector/CudfVector.h"
 
 #include <cudf/groupby.hpp>
 

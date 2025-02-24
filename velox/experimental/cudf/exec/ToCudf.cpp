@@ -15,11 +15,9 @@
  */
 
 #include "velox/experimental/cudf/exec/ToCudf.h"
-#include <cuda.h>
-#include <cudf/detail/nvtx/ranges.hpp>
-#include <exec/HashAggregation.h>
 #include "velox/exec/Driver.h"
 #include "velox/exec/FilterProject.h"
+#include "velox/exec/HashAggregation.h"
 #include "velox/exec/HashBuild.h"
 #include "velox/exec/HashProbe.h"
 #include "velox/exec/Operator.h"
@@ -30,6 +28,10 @@
 #include "velox/experimental/cudf/exec/CudfHashJoin.h"
 #include "velox/experimental/cudf/exec/CudfOrderBy.h"
 #include "velox/experimental/cudf/exec/Utilities.h"
+
+#include <cudf/detail/nvtx/ranges.hpp>
+
+#include <cuda.h>
 
 #include <iostream>
 
@@ -118,12 +120,13 @@ bool CompileState::compile() {
       is_supported_gpu_operator);
   auto accepts_gpu_input = [is_filter_project_supported,
                             is_join_supported](const exec::Operator* op) {
-    return is_any_of<exec::OrderBy, exec::HashAggregation>(op) || is_filter_project_supported(op) ||
-        is_join_supported(op);
+    return is_any_of<exec::OrderBy, exec::HashAggregation>(op) ||
+        is_filter_project_supported(op) || is_join_supported(op);
   };
   auto produces_gpu_output = [is_filter_project_supported,
                               is_join_supported](const exec::Operator* op) {
-    return is_any_of<exec::OrderBy, exec::HashAggregation>(op) || is_filter_project_supported(op) ||
+    return is_any_of<exec::OrderBy, exec::HashAggregation>(op) ||
+        is_filter_project_supported(op) ||
         (is_any_of<exec::HashProbe>(op) && is_join_supported(op));
   };
 
