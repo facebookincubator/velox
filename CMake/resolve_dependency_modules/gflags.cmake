@@ -54,7 +54,7 @@ FetchContent_MakeAvailable(gflags)
 if(DEFINED CACHED_BUILD_SHARED_LIBS)
   set(BUILD_SHARED_LIBS
       ${CACHED_BUILD_SHARED_LIBS}
-      CACHE BOOL "Restored after setting up gflags")
+      CACHE BOOL "Restored after setting up gflags" FORCE)
 endif()
 
 # This causes find_package(gflags) in other dependencies to search in the build
