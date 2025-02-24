@@ -29,7 +29,7 @@
 
 namespace facebook::velox::cudf_velox {
 
-// Pre-compute instructions for the expression, 
+// Pre-compute instructions for the expression,
 // for ops that are not supported by cudf::ast
 struct PrecomputeInstruction {
   int dependent_column_index;
@@ -38,7 +38,9 @@ struct PrecomputeInstruction {
 
   // Constructor to initialize the struct with values
   PrecomputeInstruction(int depIndex, const std::string& name, int newIndex)
-      : dependent_column_index(depIndex), ins_name(name), new_column_index(newIndex) {}
+      : dependent_column_index(depIndex),
+        ins_name(name),
+        new_column_index(newIndex) {}
 };
 
 cudf::ast::expression const& create_ast_tree(

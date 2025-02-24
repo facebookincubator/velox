@@ -85,8 +85,7 @@ const std::map<std::string, op> binary_ops = {
     {"and", op::NULL_LOGICAL_AND},
     {"or", op::NULL_LOGICAL_OR}};
 
-const std::map<std::string, op> unary_ops = {
-    {"not", op::NOT}};
+const std::map<std::string, op> unary_ops = {{"not", op::NOT}};
 
 // Create tree from Expr
 // and collect precompute instructions for non-ast operations
@@ -297,9 +296,15 @@ void addPrecomputedColumns(
       int begin_value, length;
       iss >> begin_value >> length;
       auto begin_scalar = cudf::numeric_scalar<cudf::size_type>(
-          begin_value - 1, true, stream, cudf::get_current_device_resource_ref());
+          begin_value - 1,
+          true,
+          stream,
+          cudf::get_current_device_resource_ref());
       auto end_scalar = cudf::numeric_scalar<cudf::size_type>(
-          begin_value - 1 + length, true, stream, cudf::get_current_device_resource_ref());
+          begin_value - 1 + length,
+          true,
+          stream,
+          cudf::get_current_device_resource_ref());
       auto step_scalar = cudf::numeric_scalar<cudf::size_type>(
           1, true, stream, cudf::get_current_device_resource_ref());
       auto new_column = cudf::strings::slice_strings(
