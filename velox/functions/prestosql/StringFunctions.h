@@ -24,6 +24,16 @@
 
 namespace facebook::velox::functions {
 
+/// Returns the count of bits for the given string.
+template <typename T>
+struct BitLengthFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  FOLLY_ALWAYS_INLINE void call(int64_t& result, const StringView& input) {
+    result = input.size() * 8;
+  }
+};
+
 /// chr(n) → varchar
 /// Returns the Unicode code point n as a single character string.
 template <typename T>
