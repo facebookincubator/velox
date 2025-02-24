@@ -1,0 +1,460 @@
+diff --git a/include/jsoncons_ext/jsonpath/jsonpath_error.hpp b/include/jsoncons_ext/jsonpath/jsonpath_error.hpp
+index 9ec751e7a..d91662a62 100644
+--- a/include/jsoncons_ext/jsonpath/jsonpath_error.hpp
++++ b/include/jsoncons_ext/jsonpath/jsonpath_error.hpp
+@@ -58,7 +58,8 @@ namespace jsoncons { namespace jsonpath {
+         expected_and,
+         expected_comma_or_rparen,
+         expected_comma_or_rbracket,
+-        expected_relative_path
++        expected_relative_path,
++        unsupported_path
+     };
+
+     class jsonpath_error_category_impl
+@@ -149,6 +150,8 @@ namespace jsoncons { namespace jsonpath {
+                     return "Expected comma or right bracket";
+                 case jsonpath_errc::expected_relative_path:
+                     return "Expected unquoted string, or single or double quoted string, or index or '*'";
++                case jsonpath_errc::unsupported_path:
++                    return "Unsupported Json Path";
+                 default:
+                     return "Unknown jsonpath parser error";
+             }
+diff --git a/include/jsoncons_ext/jsonpath/jsonpath_parser.hpp b/include/jsoncons_ext/jsonpath/jsonpath_parser.hpp
+index 7eb932899..a4223534f 100644
+--- a/include/jsoncons_ext/jsonpath/jsonpath_parser.hpp
++++ b/include/jsoncons_ext/jsonpath/jsonpath_parser.hpp
+@@ -53,6 +53,7 @@ namespace detail {
+         identifier_or_function_expr,
+         name_or_lbracket,
+         unquoted_string,
++        index_or_identifier,
+         anything,
+         number,
+         function_expression,
+@@ -70,7 +71,7 @@ namespace detail {
+         index_or_slice,
+         wildcard_or_union,
+         union_element,
+-        index_or_slice_or_union,
++        index_or_slice_or_union_or_identifier,
+         integer,
+         digit,
+         slice_expression_stop,
+@@ -145,11 +146,11 @@ namespace detail {
+         {
+         }
+
+-        jsonpath_evaluator(std::size_t line, std::size_t column,
+-            const allocator_type& alloc = allocator_type())
+-            : alloc_(alloc), line_(line), column_(column),
+-              begin_input_(nullptr), end_input_(nullptr),
+-              p_(nullptr)
++        jsonpath_evaluator(std::size_t line, std::size_t column,
++                           const allocator_type& alloc = allocator_type())
++                : alloc_(alloc), line_(line), column_(column),
++                  begin_input_(nullptr), end_input_(nullptr),
++                  p_(nullptr)
+         {
+         }
+
+@@ -176,7 +177,7 @@ namespace detail {
+
+         path_expression_type compile(static_resources<value_type>& resources,
+                                      const string_view_type& path,
+-                                     std::error_code& ec)
++                                     std::error_code& ec, bool throwOnUnSupportedPaths = true)
+         {
+             std::size_t selector_id = 0;
+
+@@ -192,7 +193,7 @@ namespace detail {
+             slice slic;
+             bool paths_required = false;
+             int ancestor_depth = 0;
+-
++            bool absolute_start = true;
+             state_stack_.emplace_back(path_state::start);
+             while (p_ < end_input_ && !state_stack_.empty())
+             {
+@@ -208,24 +209,39 @@ namespace detail {
+                             case '$':
+                             case '@':
+                             {
++                                if (throwOnUnSupportedPaths && *p_ == '@') {
++                                    ec = jsonpath_errc::unsupported_path;
++                                    return path_expression_type(alloc_);
++                                }
+                                 push_token(resources, token_type(resources.new_selector(current_node_selector<Json,JsonReference>())), ec);
+                                 if (ec) {return path_expression_type(alloc_);}
+                                 state_stack_.emplace_back(path_state::relative_location);
+                                 ++p_;
+                                 ++column_;
++                                absolute_start = false;
+                                 break;
+                             }
+                             default:
+                             {
+                                 state_stack_.emplace_back(path_state::relative_location);
+-                                state_stack_.emplace_back(path_state::expect_function_expr);
+-                                state_stack_.emplace_back(path_state::unquoted_string);
++                                if(absolute_start){
++                                    // Support special case to conform with jayway where it
++                                    // prepends $. if not specified at the start to support
++                                    // paths like '[0]' or 'key'
++                                    push_token(resources, token_type(resources.new_selector(current_node_selector<Json,JsonReference>())), ec);
++                                    if (ec) {return path_expression_type(alloc_);}
++                                    state_stack_.emplace_back(path_state::recursive_descent_or_expression_lhs);
++                                } else {
++                                    state_stack_.emplace_back(path_state::expect_function_expr);
++                                    state_stack_.emplace_back(path_state::unquoted_string);
++                                }
++                                absolute_start = false;
+                                 break;
+                             }
+                         }
+                         break;
+                     }
+-                    case path_state::root_or_current_node:
++                    case path_state::root_or_current_node:
+                         switch (*p_)
+                         {
+                             case ' ':case '\t':case '\r':case '\n':
+@@ -240,6 +256,10 @@ namespace detail {
+                                 ++column_;
+                                 break;
+                             case '@':
++                                if (throwOnUnSupportedPaths) {
++                                    ec = jsonpath_errc::unsupported_path;
++                                    return path_expression_type(alloc_);
++                                }
+                                 push_token(resources, token_type(current_node_arg), ec); // ISSUE
+                                 push_token(resources, token_type(resources.new_selector(current_node_selector<Json,JsonReference>())), ec);
+                                 if (ec) {return path_expression_type(alloc_);}
+@@ -256,18 +276,28 @@ namespace detail {
+                         switch (*p_)
+                         {
+                             case '.':
++                                if (throwOnUnSupportedPaths) {
++                                    ec = jsonpath_errc::unsupported_path;
++                                    return path_expression_type(alloc_);
++                                }
+                                 push_token(resources, token_type(resources.new_selector(recursive_selector<Json,JsonReference>())), ec);
+                                 if (ec) {return path_expression_type(alloc_);}
+                                 ++p_;
+                                 ++column_;
+                                 state_stack_.back() = path_state::name_or_lbracket;
+                                 break;
++                            case '[':
++                                // Add support for bracket after dot $.[<id>]
++                                state_stack_.back() =  path_state::bracket_specifier_or_union;
++                                ++p_;
++                                ++column_;
++                                break;
+                             default:
+                                 state_stack_.back() = path_state::relative_path;
+                                 break;
+                         }
+                         break;
+-                    case path_state::name_or_lbracket:
++                    case path_state::name_or_lbracket:
+                         switch (*p_)
+                         {
+                             case ' ':case '\t':case '\r':case '\n':
+@@ -293,7 +323,7 @@ namespace detail {
+                         state_stack_.pop_back(); // json_value
+                         break;
+                     }
+-                    case path_state::path_or_literal_or_function:
++                    case path_state::path_or_literal_or_function:
+                     {
+                         switch (*p_)
+                         {
+@@ -302,6 +332,10 @@ namespace detail {
+                                 break;
+                             case '$':
+                             case '@':
++                                if (throwOnUnSupportedPaths && *p_ == '@') {
++                                    ec = jsonpath_errc::unsupported_path;
++                                    return path_expression_type(alloc_);
++                                }
+                                 state_stack_.back() = path_state::relative_location;
+                                 state_stack_.push_back(path_state::root_or_current_node);
+                                 break;
+@@ -478,7 +512,7 @@ namespace detail {
+                                 break;
+                         };
+                         break;
+-                    case path_state::number:
++                    case path_state::number:
+                         switch (*p_)
+                         {
+                             case '-':case '0':case '1':case '2':case '3':case '4':case '5':case '6':case '7':case '8':case '9':
+@@ -492,7 +526,7 @@ namespace detail {
+                                 break;
+                         };
+                         break;
+-                    case path_state::json_text_string:
++                    case path_state::json_text_string:
+                         switch (*p_)
+                         {
+                             case '\\':
+@@ -510,7 +544,7 @@ namespace detail {
+                                 break;
+                             case '\"':
+                                 buffer.push_back(*p_);
+-                                state_stack_.pop_back();
++                                state_stack_.pop_back();
+                                 ++p_;
+                                 ++column_;
+                                 break;
+@@ -521,7 +555,7 @@ namespace detail {
+                                 break;
+                         };
+                         break;
+-                    case path_state::relative_path:
++                    case path_state::relative_path:
+                         switch (*p_)
+                         {
+                             case ' ':case '\t':case '\r':case '\n':
+@@ -586,7 +620,7 @@ namespace detail {
+                                 push_token(resources, token_type(resources.new_selector(identifier_selector<Json,JsonReference>(buffer))), ec);
+                                 if (ec) {return path_expression_type(alloc_);}
+                                 buffer.clear();
+-                                state_stack_.pop_back();
++                                state_stack_.pop_back();
+                                 break;
+                             }
+                         }
+@@ -724,13 +758,39 @@ namespace detail {
+                         }
+                         break;
+                     }
+-                    case path_state::unquoted_string:
++                    case path_state::index_or_identifier:
++                        // Does not support (:) or (,) as its only used after a bracket start ([)
++                        switch (*p_)
++                        {
++                            case 'a':case 'b':case 'c':case 'd':case 'e':case 'f':case 'g':case 'h':case 'i':case 'j':case 'k':case 'l':case 'm':case 'n':case 'o':case 'p':case 'q':case 'r':case 's':case 't':case 'u':case 'v':case 'w':case 'x':case 'y':case 'z':
++                            case 'A':case 'B':case 'C':case 'D':case 'E':case 'F':case 'G':case 'H':case 'I':case 'J':case 'K':case 'L':case 'M':case 'N':case 'O':case 'P':case 'Q':case 'R':case 'S':case 'T':case 'U':case 'V':case 'W':case 'X':case 'Y':case 'Z':
++                            case '0':case '1':case '2':case '3':case '4':case '5':case '6':case '7':case '8':case '9':
++                            case '_':case '-':
++                                buffer.push_back(*p_);
++                                ++p_;
++                                ++column_;
++                                break;
++                            default:
++                                if (typename std::make_unsigned<char_type>::type(*p_) > 127)
++                                {
++                                    buffer.push_back(*p_);
++                                    ++p_;
++                                    ++column_;
++                                }
++                                else
++                                {
++                                    state_stack_.pop_back(); // unquoted_string
++                                }
++                                break;
++                        };
++                        break;
++                    case path_state::unquoted_string:
+                         switch (*p_)
+                         {
+                             case 'a':case 'b':case 'c':case 'd':case 'e':case 'f':case 'g':case 'h':case 'i':case 'j':case 'k':case 'l':case 'm':case 'n':case 'o':case 'p':case 'q':case 'r':case 's':case 't':case 'u':case 'v':case 'w':case 'x':case 'y':case 'z':
+                             case 'A':case 'B':case 'C':case 'D':case 'E':case 'F':case 'G':case 'H':case 'I':case 'J':case 'K':case 'L':case 'M':case 'N':case 'O':case 'P':case 'Q':case 'R':case 'S':case 'T':case 'U':case 'V':case 'W':case 'X':case 'Y':case 'Z':
+                             case '0':case '1':case '2':case '3':case '4':case '5':case '6':case '7':case '8':case '9':
+-                            case '_':
++                            case '_':case '-':case ':':case ',':
+                                 buffer.push_back(*p_);
+                                 ++p_;
+                                 ++column_;
+@@ -1281,22 +1341,29 @@ namespace detail {
+                                 ++column_;
+                                 break;
+                             case ':': // slice_expression
+-                                state_stack_.back() = path_state::index_or_slice_or_union;
++                                state_stack_.back() = path_state::index_or_slice_or_union_or_identifier;
+                                 break;
+-                            case '-':case '0':case '1':case '2':case '3':case '4':case '5':case '6':case '7':case '8':case '9':
+-                                state_stack_.back() = path_state::index_or_slice_or_union;
+-                                state_stack_.emplace_back(path_state::integer);
++                            case 'a':case 'b':case 'c':case 'd':case 'e':case 'f':case 'g':case 'h':case 'i':case 'j':case 'k':case 'l':case 'm':case 'n':case 'o':case 'p':case 'q':case 'r':case 's':case 't':case 'u':case 'v':case 'w':case 'x':case 'y':case 'z':
++                            case 'A':case 'B':case 'C':case 'D':case 'E':case 'F':case 'G':case 'H':case 'I':case 'J':case 'K':case 'L':case 'M':case 'N':case 'O':case 'P':case 'Q':case 'R':case 'S':case 'T':case 'U':case 'V':case 'W':case 'X':case 'Y':case 'Z':
++                            case '_':case '-':case '0':case '1':case '2':case '3':case '4':case '5':case '6':case '7':case '8':case '9':
++                                // Add support for unquoted identifier after bracket $[<identifier>] that can also start with a number.
++                                state_stack_.back() = path_state::index_or_slice_or_union_or_identifier;
++                                state_stack_.emplace_back(path_state::index_or_identifier);
+                                 break;
+                             case '$':
+                                 push_token(resources, token_type(begin_union_arg), ec);
+                                 push_token(resources, root_node_arg, ec);
+                                 if (ec) {return path_expression_type(alloc_);}
+                                 state_stack_.back() = path_state::union_expression; // union
+-                                state_stack_.emplace_back(path_state::relative_location);
++                                state_stack_.emplace_back(path_state::relative_location);
+                                 ++p_;
+                                 ++column_;
+                                 break;
+                             case '@':
++                                if (throwOnUnSupportedPaths) {
++                                    ec = jsonpath_errc::unsupported_path;
++                                    return path_expression_type(alloc_);
++                                }
+                                 push_token(resources, token_type(begin_union_arg), ec);
+                                 push_token(resources, token_type(current_node_arg), ec); // ISSUE
+                                 push_token(resources, token_type(resources.new_selector(current_node_selector<Json,JsonReference>())), ec);
+@@ -1307,8 +1374,15 @@ namespace detail {
+                                 ++column_;
+                                 break;
+                             default:
+-                                ec = jsonpath_errc::expected_bracket_specifier_or_union;
+-                                return path_expression_type(alloc_);
++                                if (typename std::make_unsigned<char_type>::type(*p_) > 127)
++                                {
++                                    // Add support for unquoted identifier after bracket $[<identifier>]
++                                    state_stack_.back() = path_state::index_or_slice_or_union_or_identifier;
++                                    state_stack_.push_back(path_state::index_or_identifier);
++                                } else {
++                                    ec = jsonpath_errc::expected_bracket_specifier_or_union;
++                                    return path_expression_type(alloc_);
++                                }
+                         }
+                         break;
+                     case path_state::union_element:
+@@ -1364,6 +1438,10 @@ namespace detail {
+                                 ++column_;
+                                 break;
+                             case '@':
++                                if (throwOnUnSupportedPaths) {
++                                    ec = jsonpath_errc::unsupported_path;
++                                    return path_expression_type(alloc_);
++                                }
+                                 push_token(resources, token_type(current_node_arg), ec); // ISSUE
+                                 push_token(resources, token_type(resources.new_selector(current_node_selector<Json,JsonReference>())), ec);
+                                 if (ec) {return path_expression_type(alloc_);}
+@@ -1416,7 +1494,7 @@ namespace detail {
+                                 break;
+                         }
+                         break;
+-                    case path_state::index_or_slice_or_union:
++                    case path_state::index_or_slice_or_union_or_identifier:
+                         switch(*p_)
+                         {
+                             case ' ':case '\t':case '\r':case '\n':
+@@ -1433,13 +1511,15 @@ namespace detail {
+                                 auto r = jsoncons::detail::to_integer(buffer.data(), buffer.size(), n);
+                                 if (!r)
+                                 {
+-                                    ec = jsonpath_errc::invalid_number;
+-                                    return path_expression_type(alloc_);
++                                    push_token(resources, token_type(resources.new_selector(identifier_selector<Json,JsonReference>(buffer))), ec);
++                                }
++                                else
++                                {
++                                    push_token(resources, token_type(resources.new_selector(index_selector<Json,JsonReference>(n))), ec);
+                                 }
+-                                push_token(resources, token_type(resources.new_selector(index_selector<Json,JsonReference>(n))), ec);
+                                 if (ec) {return path_expression_type(alloc_);}
+                                 buffer.clear();
+-                                state_stack_.pop_back(); // index_or_slice_or_union
++                                state_stack_.pop_back(); // index_or_slice_or_union_or_identifier
+                                 ++p_;
+                                 ++column_;
+                                 break;
+@@ -1477,6 +1557,10 @@ namespace detail {
+                             }
+                             case ':':
+                             {
++                                if (throwOnUnSupportedPaths) {
++                                    ec = jsonpath_errc::unsupported_path;
++                                    return path_expression_type(alloc_);
++                                }
+                                 if (!buffer.empty())
+                                 {
+                                     int64_t n{0};
+@@ -1505,6 +1589,10 @@ namespace detail {
+                         break;
+                     case path_state::slice_expression_stop:
+                     {
++                        if (throwOnUnSupportedPaths) {
++                            ec = jsonpath_errc::unsupported_path;
++                            return path_expression_type(alloc_);
++                        }
+                         if (!buffer.empty())
+                         {
+                             int64_t n{0};
+@@ -1543,6 +1631,10 @@ namespace detail {
+                     }
+                     case path_state::slice_expression_step:
+                     {
++                        if (throwOnUnSupportedPaths) {
++                            ec = jsonpath_errc::unsupported_path;
++                            return path_expression_type(alloc_);
++                        }
+                         if (!buffer.empty())
+                         {
+                             int64_t n{0};
+@@ -1632,6 +1724,11 @@ namespace detail {
+                         }
+                         break;
+                     case path_state::union_expression:
++                    {
++                        if (throwOnUnSupportedPaths) {
++                            ec = jsonpath_errc::unsupported_path;
++                            return path_expression_type(alloc_);
++                        }
+                         switch (*p_)
+                         {
+                             case ' ':case '\t':case '\r':case '\n':
+@@ -1666,6 +1763,7 @@ namespace detail {
+                                 return path_expression_type(alloc_);
+                         }
+                         break;
++                    }
+                     case path_state::identifier_or_union:
+                         switch (*p_)
+                         {
+@@ -1746,14 +1844,15 @@ namespace detail {
+                                 state_stack_.pop_back(); // bracket_specifier
+                                 break;
+                             }
+-                            case ':':
+-                            {
+-                                if (!buffer.empty())
+-                                {
++                            case ':': {
++                                if (throwOnUnSupportedPaths) {
++                                    ec = jsonpath_errc::unsupported_path;
++                                    return path_expression_type(alloc_);
++                                }
++                                if (!buffer.empty()) {
+                                     int64_t n{0};
+                                     auto r = jsoncons::detail::to_integer(buffer.data(), buffer.size(), n);
+-                                    if (!r)
+-                                    {
++                                    if (!r) {
+                                         ec = jsonpath_errc::invalid_number;
+                                         return path_expression_type(alloc_);
+                                     }
+@@ -1990,6 +2089,10 @@ namespace detail {
+                     }
+                     case path_state::filter_expression:
+                     {
++                        if (throwOnUnSupportedPaths) {
++                            ec = jsonpath_errc::unsupported_path;
++                            return path_expression_type(alloc_);
++                        }
+                         switch(*p_)
+                         {
+                             case ' ':case '\t':case '\r':case '\n':
+@@ -2011,6 +2114,10 @@ namespace detail {
+                     }
+                     case path_state::expression:
+                     {
++                        if (throwOnUnSupportedPaths) {
++                            ec = jsonpath_errc::unsupported_path;
++                            return path_expression_type(alloc_);
++                        }
+                         switch(*p_)
+                         {
+                             case ' ':case '\t':case '\r':case '\n':

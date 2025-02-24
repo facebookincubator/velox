@@ -1,0 +1,16 @@
+Contains patches applied to the vendored library, for convenience when upgrading it.
+I will also keep these changes updated to a fork of the jsoncons library
+(https://github.com/bikramSingh91/jsoncons/tree/jayway)
+
+Changes in conform_parser_with_jayway_velox.patch:
+- Added support for unquoted identifier after bracket `$[<identifier>]` that can also start with a number like `$[Key]` or `$[30day]`
+- Added support for bracket (`[`) after dot `$.['key']` (redundant use of dot operator)
+- Added support for dash (`-`) in the middle of an unquoted string
+- Added support for prepending by default `$.` in not included at the beginning of the path. This is to support cases like `[0]` or `key` which will now be equivalent to `$.[0]` or `$.key`
+- Added a new error type for unsupported json path
+
+Apart from this there are general refactoring changes required to build and run the library which include:
+- Only files relevant to json and json parsing have been included
+- The #include directives have been updated to point to local paths
+- Prepend Apache license while preserving the existing boost license
+- The namespaces have been prepended with facebook::velox to avoid namespace conflict if velox is included in projects that already use jsoncons
