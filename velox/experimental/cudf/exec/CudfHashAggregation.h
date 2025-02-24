@@ -25,6 +25,32 @@ namespace facebook::velox::cudf_velox {
 
 class CudfHashAggregation : public exec::Operator {
  public:
+  struct Aggregator {
+    core::AggregationNode::Step step;
+    bool is_global;
+    cudf::aggregation::Kind kind;
+    uint32_t inputIndex;
+
+    virtual void addGroupbyRequest(
+        cudf::table_view tbl,
+        std::vector<cudf::groupby::aggregation_request>& requests) = 0;
+
+    virtual std::unique_ptr<cudf::column> makeOutputColumn(
+        std::vector<cudf::groupby::aggregation_result>& results,
+        rmm::cuda_stream_view stream) = 0;
+
+   protected:
+    Aggregator(
+        core::AggregationNode::Step step,
+        cudf::aggregation::Kind kind,
+        uint32_t inputIndex,
+        bool is_global)
+        : step(step),
+          is_global(is_global),
+          kind(kind),
+          inputIndex(inputIndex) {}
+  };
+
   CudfHashAggregation(
       int32_t operatorId,
       exec::DriverCtx* driverCtx,
@@ -79,6 +105,7 @@ class CudfHashAggregation : public exec::Operator {
   std::vector<column_index_t> groupingKeyOutputChannels_;
 
   std::shared_ptr<const core::AggregationNode> aggregationNode_;
+  std::vector<std::unique_ptr<Aggregator>> aggregators_;
 
   // Partial aggregation is the first phase of aggregation. e.g. count(*) when
   // in partial phase will do a count_agg but in the final phase will do a sum
