@@ -17,19 +17,36 @@
 #pragma once
 
 #include <folly/SocketAddress.h>
+#include <variant>
 #include "velox/expression/VectorFunction.h"
 #include "velox/functions/remote/if/gen-cpp2/RemoteFunction_types.h"
 
 namespace facebook::velox::functions {
 
 struct RemoteVectorFunctionMetadata : public exec::VectorFunctionMetadata {
-  /// Network address of the servr to communicate with. Note that this can hold
-  /// a network location (ip/port pair) or a unix domain socket path (see
+  /// URL of the HTTP/REST server for remote function.
+  /// Or Network address of the server to communicate with. Note that this can
+  /// hold a network location (ip/port pair) or a unix domain socket path (see
   /// SocketAddress::makeFromPath()).
-  folly::SocketAddress location;
+  std::variant<folly::SocketAddress, std::string> location;
 
-  /// The serialization format to be used
+  /// The serialization format to be used when sending data to the remote.
   remote::PageFormat serdeFormat{remote::PageFormat::PRESTO_PAGE};
+
+  /// Optional schema defining the structure of the data or input/output types
+  /// involved in the remote function. This may include details such as column
+  /// names and data types.
+  std::optional<std::string> schema;
+
+  /// Optional identifier for the specific remote function to be invoked.
+  /// This can be useful when the same server hosts multiple functions,
+  /// and the client needs to specify which function to call.
+  std::optional<std::string> functionId;
+
+  /// Optional version information to be used when calling the remote function.
+  /// This can help in ensuring compatibility with a particular version of the
+  /// function if multiple versions are available on the server.
+  std::optional<std::string> version;
 };
 
 /// Registers a new remote function. It will use the meatadata defined in
