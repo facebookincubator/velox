@@ -12,15 +12,17 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-add_library(velox_functions_remote_server RemoteFunctionService.cpp)
+add_library(velox_functions_remote_thrift_server
+        RemoteFunctionThriftService.cpp)
 
 target_link_libraries(
-  velox_functions_remote_server
+  velox_functions_remote_thrift_server
   PUBLIC remote_function_thrift velox_functions_remote_get_serde
          velox_type_fbhive velox_memory)
 
-add_executable(velox_functions_remote_server_main RemoteFunctionServiceMain.cpp)
+add_executable(velox_functions_remote_thrift_server_main
+        RemoteFunctionThriftServiceMain.cpp)
 
 target_link_libraries(
-  velox_functions_remote_server_main velox_functions_remote_server
-  velox_functions_prestosql)
+  velox_functions_remote_thrift_server_main
+  velox_functions_remote_thrift_server velox_functions_prestosql)
