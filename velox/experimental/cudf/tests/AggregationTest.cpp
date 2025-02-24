@@ -421,4 +421,20 @@ TEST_F(AggregationTest, avgSingleGlobal) {
   assertQuery(op, "SELECT avg(c1), avg(c2), avg(c4), avg(c5) FROM tmp");
 }
 
+TEST_F(AggregationTest, avgPartialFinalGlobal) {
+  auto vectors = makeVectors(rowType_, 10, 100);
+  createDuckDbTable(vectors);
+
+  std::vector<std::string> aggregates = {
+      "avg(c1)", "avg(c2)", "avg(c4)", "avg(c5)"};
+
+  auto op = PlanBuilder()
+                .values(vectors)
+                .partialAggregation({}, aggregates)
+                .finalAggregation()
+                .planNode();
+
+  assertQuery(op, "SELECT avg(c1), avg(c2), avg(c4), avg(c5) FROM tmp");
+}
+
 } // namespace facebook::velox::exec::test

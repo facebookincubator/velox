@@ -232,6 +232,74 @@ struct MeanAggregator : cudf_velox::CudfHashAggregation::Aggregator {
             input.column(inputIndex), *agg_request, cudf_output_type, stream);
         return cudf::make_column_from_scalar(*result_scalar, 1, stream);
       }
+      case core::AggregationNode::Step::kPartial: {
+        VELOX_CHECK(output_type->isRow());
+        auto& row_type = output_type->asRow();
+        auto sum_type = row_type.childAt(0);
+        auto count_type = row_type.childAt(1);
+        auto cudf_sum_type =
+            cudf::data_type(cudf_velox::velox_to_cudf_type_id(sum_type));
+        auto cudf_count_type =
+            cudf::data_type(cudf_velox::velox_to_cudf_type_id(count_type));
+
+        // sum
+        auto agg_request =
+            cudf::make_sum_aggregation<cudf::reduce_aggregation>();
+        auto sum_result_scalar = cudf::reduce(
+            input.column(inputIndex), *agg_request, cudf_sum_type, stream);
+        auto sum_col =
+            cudf::make_column_from_scalar(*sum_result_scalar, 1, stream);
+
+        // libcudf doesn't have a count agg for reduce. what we want is to
+        // count the number of valid rows.
+        auto count_col = cudf::make_column_from_scalar(
+            cudf::numeric_scalar<int64_t>(
+                input.column(inputIndex).size() -
+                input.column(inputIndex).null_count()),
+            1,
+            stream);
+
+        // assemble into struct
+        auto children = std::vector<std::unique_ptr<cudf::column>>();
+        children.push_back(std::move(sum_col));
+        children.push_back(std::move(count_col));
+        return std::make_unique<cudf::column>(
+            cudf::data_type(cudf::type_id::STRUCT),
+            1,
+            rmm::device_buffer{},
+            rmm::device_buffer{},
+            0,
+            std::move(children));
+      }
+      case core::AggregationNode::Step::kFinal: {
+        // Input column has two children: sum and count
+        auto sum_col = input.column(inputIndex).child(0);
+        auto count_col = input.column(inputIndex).child(1);
+
+        // sum the sums
+        auto sum_agg_request =
+            cudf::make_sum_aggregation<cudf::reduce_aggregation>();
+        auto sum_result_scalar =
+            cudf::reduce(sum_col, *sum_agg_request, sum_col.type(), stream);
+        auto sum_result_col =
+            cudf::make_column_from_scalar(*sum_result_scalar, 1, stream);
+
+        // sum the counts
+        auto count_agg_request =
+            cudf::make_sum_aggregation<cudf::reduce_aggregation>();
+        auto count_result_scalar = cudf::reduce(
+            count_col, *count_agg_request, count_col.type(), stream);
+
+        // divide the sums by the counts
+        auto cudf_output_type =
+            cudf::data_type(cudf_velox::velox_to_cudf_type_id(output_type));
+        return cudf::binary_operation(
+            *sum_result_col,
+            *count_result_scalar,
+            cudf::binary_operator::DIV,
+            cudf_output_type,
+            stream);
+      }
       default:
         VELOX_NYI("Unsupported aggregation step for mean");
     }
