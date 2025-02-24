@@ -29,6 +29,7 @@
 #include <cudf/transform.hpp>
 
 #include <sstream>
+#include <unordered_map>
 
 namespace facebook::velox::cudf_velox {
 
@@ -134,12 +135,29 @@ RowVectorPtr CudfFilterProject::getOutput() {
   for (int i = 0; i < resultProjections_.size(); i++) {
     output_columns[resultProjections_[i].outputChannel] = std::move(columns[i]);
   }
+
+  // Count occurrences of each inputChannel, and move columns if they occur only
+  // once
+  std::unordered_map<decltype(identityProjections_[0].inputChannel), int>
+      inputChannelCount;
+  for (const auto& identity : identityProjections_) {
+    inputChannelCount[identity.inputChannel]++;
+  }
+
   // identityProjections (input to output copy)
   for (auto const& identity : identityProjections_) {
-    output_columns[identity.outputChannel] = std::make_unique<cudf::column>(
-        cudf_table_view.column(identity.inputChannel),
-        stream,
-        cudf::get_current_device_resource_ref());
+    if (inputChannelCount[identity.inputChannel] == 1) {
+      // Move the column if it occurs only once
+      output_columns[identity.outputChannel] =
+          std::move(columns[identity.inputChannel]);
+    } else {
+      // Otherwise, copy the column and decrement the count
+      output_columns[identity.outputChannel] = std::make_unique<cudf::column>(
+          cudf_table_view.column(identity.inputChannel),
+          stream,
+          cudf::get_current_device_resource_ref());
+      inputChannelCount[identity.inputChannel]--;
+    }
   }
 
   auto output_table = std::make_unique<cudf::table>(std::move(output_columns));
