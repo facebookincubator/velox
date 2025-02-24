@@ -78,8 +78,15 @@ const std::map<std::string, op> binary_ops = {
     {"divide", op::DIV},
     {"eq", op::EQUAL},
     {"neq", op::NOT_EQUAL},
+    {"lt", op::LESS},
+    {"gt", op::GREATER},
+    {"lte", op::LESS_EQUAL},
+    {"gte", op::GREATER_EQUAL},
     {"and", op::NULL_LOGICAL_AND},
     {"or", op::NULL_LOGICAL_OR}};
+
+const std::map<std::string, op> unary_ops = {
+    {"not", op::NOT}};
 
 // Create tree from Expr
 // and collect precompute instructions for non-ast operations
@@ -116,6 +123,16 @@ cudf::ast::expression const& create_ast_tree(
         inputRowSchema,
         precompute_instructions);
     return tree.push(operation{binary_ops.at(name), op1, op2});
+  } else if (unary_ops.find(name) != unary_ops.end()) {
+    auto len = expr->inputs().size();
+    VELOX_CHECK_EQ(len, 1);
+    auto const& op1 = create_ast_tree(
+        expr->inputs()[0],
+        tree,
+        scalars,
+        inputRowSchema,
+        precompute_instructions);
+    return tree.push(operation{unary_ops.at(name), op1});
   } else if (name == "cast") {
     VELOX_CHECK_EQ(expr->inputs().size(), 1);
     auto const& op1 = create_ast_tree(

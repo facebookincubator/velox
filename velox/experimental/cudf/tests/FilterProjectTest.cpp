@@ -185,6 +185,65 @@ class CudfFilterProjectTest : public OperatorTestBase {
     runTest(plan, "SELECT c2 LIKE '%test%' AS result FROM tmp");
   }
 
+  void testLessThanOperation(const std::vector<RowVectorPtr>& input) {
+    // Create a plan with a less than operation
+    auto plan =
+        PlanBuilder().values(input).project({"c0 < c1 AS result"}).planNode();
+
+    // Run the test
+    runTest(plan, "SELECT c0 < c1 AS result FROM tmp");
+
+    // compare against literals
+    plan = PlanBuilder().values(input).project({"c0 < 1 AS result"}).planNode();
+
+    // Run the test
+    runTest(plan, "SELECT c0 < 1 AS result FROM tmp");
+  }
+
+  void testGreaterThanOperation(const std::vector<RowVectorPtr>& input) {
+    // Create a plan with a greater than operation
+    auto plan =
+        PlanBuilder().values(input).project({"c0 > c1 AS result"}).planNode();
+
+    // Run the test
+    runTest(plan, "SELECT c0 > c1 AS result FROM tmp");
+
+    // compare against literals
+    plan = PlanBuilder().values(input).project({"c0 > 1 AS result"}).planNode();
+
+    // Run the test
+    runTest(plan, "SELECT c0 > 1 AS result FROM tmp");
+  }
+
+  void testLessThanEqualOperation(const std::vector<RowVectorPtr>& input) {
+    // Create a plan with a less than equal operation
+    auto plan =
+        PlanBuilder().values(input).project({"c0 <= c1 AS result"}).planNode();
+
+    // Run the test
+    runTest(plan, "SELECT c0 <= c1 AS result FROM tmp");
+  }
+
+  void testGreaterThanEqualOperation(const std::vector<RowVectorPtr>& input) {
+    // Create a plan with a greater than equal operation
+    auto plan =
+        PlanBuilder().values(input).project({"c0 >= c1 AS result"}).planNode();
+
+    // Run the test
+    runTest(plan, "SELECT c0 >= c1 AS result FROM tmp");
+  }
+
+  void testNotOperation(const std::vector<RowVectorPtr>& input) {
+    // Create a plan with a NOT operation
+    auto plan = PlanBuilder()
+                    .values(input)
+                    .project({"NOT (c0 = 1) AS result"})
+                    .planNode();
+
+    // Run the test
+    runTest(plan, "SELECT NOT (c0 = 1) AS result FROM tmp");
+  }
+
   void runTest(core::PlanNodePtr planNode, const std::string& duckDbSql) {
     SCOPED_TRACE("run without spilling");
     assertQuery(planNode, duckDbSql);
@@ -317,6 +376,46 @@ TEST_F(CudfFilterProjectTest, likeOperation) {
   createDuckDbTable(vectors);
 
   testLikeOperation(vectors);
+}
+
+TEST_F(CudfFilterProjectTest, lessThanOperation) {
+  vector_size_t batchSize = 1000;
+  auto vectors = makeVectors(rowType_, 2, batchSize);
+  createDuckDbTable(vectors);
+
+  testLessThanOperation(vectors);
+}
+
+TEST_F(CudfFilterProjectTest, greaterThanOperation) {
+  vector_size_t batchSize = 1000;
+  auto vectors = makeVectors(rowType_, 2, batchSize);
+  createDuckDbTable(vectors);
+
+  testGreaterThanOperation(vectors);
+}
+
+TEST_F(CudfFilterProjectTest, lessThanEqualOperation) {
+  vector_size_t batchSize = 1000;
+  auto vectors = makeVectors(rowType_, 2, batchSize);
+  createDuckDbTable(vectors);
+
+  testLessThanEqualOperation(vectors);
+}
+
+TEST_F(CudfFilterProjectTest, greaterThanEqualOperation) {
+  vector_size_t batchSize = 1000;
+  auto vectors = makeVectors(rowType_, 2, batchSize);
+  createDuckDbTable(vectors);
+
+  testGreaterThanEqualOperation(vectors);
+}
+
+TEST_F(CudfFilterProjectTest, notOperation) {
+  vector_size_t batchSize = 1000;
+  auto vectors = makeVectors(rowType_, 2, batchSize);
+  createDuckDbTable(vectors);
+
+  testNotOperation(vectors);
 }
 
 } // namespace
