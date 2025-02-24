@@ -15,6 +15,7 @@
  */
 
 #include "velox/functions/lib/DateTimeFormatter.h"
+#include <folly/CPortability.h>
 #include <folly/String.h>
 #include <charconv>
 #include <cstring>
@@ -626,7 +627,10 @@ int64_t parseHalfDayOfDay(const char* cur, const char* end, Date& date) {
 std::string formatFractionOfSecond(
     uint16_t subseconds,
     size_t minRepresentDigits) {
+  FOLLY_PUSH_WARNING
+  FOLLY_GNU_DISABLE_WARNING("-Wvla-cxx-extension")
   char toAdd[minRepresentDigits > 3 ? minRepresentDigits + 1 : 4];
+  FOLLY_POP_WARNING
 
   if (subseconds < 10) {
     toAdd[0] = '0';
