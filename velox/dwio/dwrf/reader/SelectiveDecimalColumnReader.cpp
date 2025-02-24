@@ -261,6 +261,13 @@ void SelectiveDecimalColumnReader<DataT>::read(
     const uint64_t* incomingNulls) {
   VELOX_CHECK(!scanSpec_->valueHook());
   prepareRead<int64_t>(offset, rows, incomingNulls);
+  if (!resultNulls_ || !resultNulls_->unique() ||
+      resultNulls_->capacity() * 8 < rows.size()) {
+    // Make sure a dedicated resultNulls_ is allocated with enough capacity as
+    // RleDecoder always assumes it is available.
+    resultNulls_ = AlignedBuffer::allocate<bool>(rows.size(), memoryPool_);
+    rawResultNulls_ = resultNulls_->asMutable<uint64_t>();
+  }
   bool isDense = rows.back() == rows.size() - 1;
   if (isDense) {
     readHelper<true>(scanSpec_->filter(), rows);
