@@ -34,86 +34,37 @@ namespace {
 
 using namespace facebook::velox;
 
-struct SumAggregator : cudf_velox::CudfHashAggregation::Aggregator {
-  SumAggregator(
-      core::AggregationNode::Step step,
-      uint32_t inputIndex,
-      bool is_global)
-      : Aggregator(step, cudf::aggregation::SUM, inputIndex, is_global) {}
+#define DEFINE_SIMPLE_AGGREGATOR(Name, name, KIND)                            \
+  struct Name##Aggregator : cudf_velox::CudfHashAggregation::Aggregator {     \
+    Name##Aggregator(                                                         \
+        core::AggregationNode::Step step,                                     \
+        uint32_t inputIndex,                                                  \
+        bool is_global)                                                       \
+        : Aggregator(step, cudf::aggregation::KIND, inputIndex, is_global) {} \
+                                                                              \
+    void addGroupbyRequest(                                                   \
+        cudf::table_view tbl,                                                 \
+        std::vector<cudf::groupby::aggregation_request>& requests) override { \
+      auto& request = requests.emplace_back();                                \
+      output_idx = requests.size() - 1;                                       \
+      request.values = tbl.column(inputIndex);                                \
+      request.aggregations.push_back(                                         \
+          cudf::make_##name##_aggregation<cudf::groupby_aggregation>());      \
+    }                                                                         \
+                                                                              \
+    std::unique_ptr<cudf::column> makeOutputColumn(                           \
+        std::vector<cudf::groupby::aggregation_result>& results,              \
+        rmm::cuda_stream_view stream) override {                              \
+      return std::move(results[output_idx].results[0]);                       \
+    }                                                                         \
+                                                                              \
+   private:                                                                   \
+    uint32_t output_idx;                                                      \
+  };
 
-  void addGroupbyRequest(
-      cudf::table_view tbl,
-      std::vector<cudf::groupby::aggregation_request>& requests) override {
-    auto& request = requests.emplace_back();
-    output_idx = requests.size() - 1;
-    request.values = tbl.column(inputIndex);
-    request.aggregations.push_back(
-        cudf::make_sum_aggregation<cudf::groupby_aggregation>());
-  }
-
-  std::unique_ptr<cudf::column> makeOutputColumn(
-      std::vector<cudf::groupby::aggregation_result>& results,
-      rmm::cuda_stream_view stream) override {
-    return std::move(results[output_idx].results[0]);
-  }
-
- private:
-  uint32_t output_idx;
-};
-
-struct MinAggregator : cudf_velox::CudfHashAggregation::Aggregator {
-  MinAggregator(
-      core::AggregationNode::Step step,
-      uint32_t inputIndex,
-      bool is_global)
-      : Aggregator(step, cudf::aggregation::MIN, inputIndex, is_global) {}
-
-  void addGroupbyRequest(
-      cudf::table_view tbl,
-      std::vector<cudf::groupby::aggregation_request>& requests) override {
-    auto& request = requests.emplace_back();
-    output_idx = requests.size() - 1;
-    request.values = tbl.column(inputIndex);
-    request.aggregations.push_back(
-        cudf::make_min_aggregation<cudf::groupby_aggregation>());
-  }
-
-  std::unique_ptr<cudf::column> makeOutputColumn(
-      std::vector<cudf::groupby::aggregation_result>& results,
-      rmm::cuda_stream_view stream) override {
-    return std::move(results[output_idx].results[0]);
-  }
-
- private:
-  uint32_t output_idx;
-};
-
-struct MaxAggregator : cudf_velox::CudfHashAggregation::Aggregator {
-  MaxAggregator(
-      core::AggregationNode::Step step,
-      uint32_t inputIndex,
-      bool is_global)
-      : Aggregator(step, cudf::aggregation::MAX, inputIndex, is_global) {}
-
-  void addGroupbyRequest(
-      cudf::table_view tbl,
-      std::vector<cudf::groupby::aggregation_request>& requests) override {
-    auto& request = requests.emplace_back();
-    output_idx = requests.size() - 1;
-    request.values = tbl.column(inputIndex);
-    request.aggregations.push_back(
-        cudf::make_max_aggregation<cudf::groupby_aggregation>());
-  }
-
-  std::unique_ptr<cudf::column> makeOutputColumn(
-      std::vector<cudf::groupby::aggregation_result>& results,
-      rmm::cuda_stream_view stream) override {
-    return std::move(results[output_idx].results[0]);
-  }
-
- private:
-  uint32_t output_idx;
-};
+DEFINE_SIMPLE_AGGREGATOR(Sum, sum, SUM)
+DEFINE_SIMPLE_AGGREGATOR(Min, min, MIN)
+DEFINE_SIMPLE_AGGREGATOR(Max, max, MAX)
 
 struct CountAggregator : cudf_velox::CudfHashAggregation::Aggregator {
   CountAggregator(
@@ -138,7 +89,6 @@ struct CountAggregator : cudf_velox::CudfHashAggregation::Aggregator {
   std::unique_ptr<cudf::column> makeOutputColumn(
       std::vector<cudf::groupby::aggregation_result>& results,
       rmm::cuda_stream_view stream) override {
-    // We need a move here to extract the column from the results vector
     return std::move(results[output_idx].results[0]);
   }
 
