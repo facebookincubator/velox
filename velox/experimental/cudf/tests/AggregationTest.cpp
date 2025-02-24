@@ -407,4 +407,18 @@ TEST_F(AggregationTest, avgPartialFinalGrouped) {
           "FROM tmp GROUP BY " + keyName);
 }
 
+TEST_F(AggregationTest, avgSingleGlobal) {
+  auto vectors = makeVectors(rowType_, 10, 100);
+  createDuckDbTable(vectors);
+
+  std::vector<std::string> aggregates = {
+      "avg(c1)", "avg(c2)", "avg(c4)", "avg(c5)"};
+  auto op = PlanBuilder()
+                .values(vectors)
+                .singleAggregation({}, aggregates)
+                .planNode();
+
+  assertQuery(op, "SELECT avg(c1), avg(c2), avg(c4), avg(c5) FROM tmp");
+}
+
 } // namespace facebook::velox::exec::test

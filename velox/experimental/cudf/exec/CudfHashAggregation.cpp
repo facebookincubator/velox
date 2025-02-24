@@ -41,7 +41,7 @@ using namespace facebook::velox;
         uint32_t inputIndex,                                                  \
         bool is_global)                                                       \
         : Aggregator(step, cudf::aggregation::KIND, inputIndex, is_global) {} \
-                                                                               \
+                                                                              \
     void addGroupbyRequest(                                                   \
         cudf::table_view tbl,                                                 \
         std::vector<cudf::groupby::aggregation_request>& requests) override { \
@@ -51,13 +51,13 @@ using namespace facebook::velox;
       request.aggregations.push_back(                                         \
           cudf::make_##name##_aggregation<cudf::groupby_aggregation>());      \
     }                                                                         \
-                                                                               \
+                                                                              \
     std::unique_ptr<cudf::column> makeOutputColumn(                           \
         std::vector<cudf::groupby::aggregation_result>& results,              \
         rmm::cuda_stream_view stream) override {                              \
       return std::move(results[output_idx].results[0]);                       \
     }                                                                         \
-                                                                               \
+                                                                              \
     std::unique_ptr<cudf::column> doReduce(                                   \
         cudf::table_view input,                                               \
         TypePtr const& output_type,                                           \
@@ -70,7 +70,7 @@ using namespace facebook::velox;
           input.column(inputIndex), *agg_request, cudf_output_type, stream);  \
       return cudf::make_column_from_scalar(*result_scalar, 1, stream);        \
     }                                                                         \
-                                                                               \
+                                                                              \
    private:                                                                   \
     uint32_t output_idx;                                                      \
   };
@@ -222,8 +222,19 @@ struct MeanAggregator : cudf_velox::CudfHashAggregation::Aggregator {
       cudf::table_view input,
       TypePtr const& output_type,
       rmm::cuda_stream_view stream) override {
-    VELOX_CHECK(false, "MeanAggregator does not support reduce");
-    return nullptr;
+    switch (step) {
+      case core::AggregationNode::Step::kSingle: {
+        auto agg_request =
+            cudf::make_mean_aggregation<cudf::reduce_aggregation>();
+        auto cudf_output_type =
+            cudf::data_type(cudf_velox::velox_to_cudf_type_id(output_type));
+        auto result_scalar = cudf::reduce(
+            input.column(inputIndex), *agg_request, cudf_output_type, stream);
+        return cudf::make_column_from_scalar(*result_scalar, 1, stream);
+      }
+      default:
+        VELOX_NYI("Unsupported aggregation step for mean");
+    }
   }
 
  private:
