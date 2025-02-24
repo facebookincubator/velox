@@ -62,7 +62,7 @@ class RemoteFunction : public exec::VectorFunction {
       exec::EvalCtx& context,
       VectorPtr& result) const override {
     try {
-      applyRemote(rows, args, outputType, context, result);
+      applyThriftRemote(rows, args, outputType, context, result);
     } catch (const VeloxRuntimeError&) {
       throw;
     } catch (const std::exception&) {
@@ -71,7 +71,7 @@ class RemoteFunction : public exec::VectorFunction {
   }
 
  private:
-  void applyRemote(
+  void applyThriftRemote(
       const SelectivityVector& rows,
       std::vector<VectorPtr>& args,
       const TypePtr& outputType,
