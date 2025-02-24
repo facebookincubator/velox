@@ -412,8 +412,8 @@ void CudfHashAggregation::initialize() {
   // output types reported by aggregation functions. We can't do that in cudf
   // groupby.
 
-  // DM: Set identity projections used by HashProbe to pushdown dynamic filters
-  // to table scan.
+  // TODO (dm): Set identity projections used by HashProbe to pushdown dynamic
+  // filters to table scan.
 
   // TODO (dm): Add support for grouping sets and group ids
 
@@ -467,9 +467,8 @@ RowVectorPtr CudfHashAggregation::doGroupByAggregation(
 
   size_t const num_grouping_keys = groupby_key_view.num_columns();
 
-  // TODO (dm): Support args like include_null_keys, keys_are_sorted,
-  // column_order, null_precedence. We're fine for now because very few nullable
-  // columns in tpch
+  // TODO (dm): All other args to groupby are related to sort groupby. We don't
+  // support optimizations related to it yet.
   cudf::groupby::groupby group_by_owner(
       groupby_key_view,
       ignoreNullKeys_ ? cudf::null_policy::EXCLUDE
@@ -504,12 +503,10 @@ RowVectorPtr CudfHashAggregation::doGroupByAggregation(
     return nullptr;
   }
 
+  auto num_rows = result_table->num_rows();
+
   return std::make_shared<cudf_velox::CudfVector>(
-      pool(),
-      outputType_,
-      result_table->num_rows(),
-      std::move(result_table),
-      stream);
+      pool(), outputType_, num_rows, std::move(result_table), stream);
 }
 
 RowVectorPtr CudfHashAggregation::doGlobalAggregation(
@@ -543,8 +540,10 @@ RowVectorPtr CudfHashAggregation::getDistinctKeys(
       cudf::nan_equality::ALL_EQUAL,
       stream);
 
+  auto num_rows = result->num_rows();
+
   return std::make_shared<cudf_velox::CudfVector>(
-      pool(), outputType_, result->num_rows(), std::move(result), stream);
+      pool(), outputType_, num_rows, std::move(result), stream);
 }
 
 RowVectorPtr CudfHashAggregation::getOutput() {
