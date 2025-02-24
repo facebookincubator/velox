@@ -19,6 +19,7 @@
 #include "velox/common/file/FileInputStream.h"
 #include "velox/common/file/FileSystems.h"
 #include "velox/common/memory/MmapAllocator.h"
+#include "velox/common/memory/SimpleStreamArena.h"
 #include "velox/exec/tests/utils/TempDirectoryPath.h"
 
 #include <gflags/gflags.h>
@@ -44,7 +45,7 @@ class ByteStreamTest : public testing::Test {
   void TearDown() override {}
 
   std::unique_ptr<StreamArena> newArena() {
-    return std::make_unique<StreamArena>(pool_.get());
+    return std::make_unique<SimpleStreamArena>(pool_.get());
   }
 
   std::unique_ptr<folly::IOBuf> createIOBuf(uint64_t size) {

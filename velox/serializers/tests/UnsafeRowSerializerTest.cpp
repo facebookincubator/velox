@@ -16,6 +16,7 @@
 #include "velox/serializers/UnsafeRowSerializer.h"
 #include <gtest/gtest.h>
 #include "velox/common/base/tests/GTestUtils.h"
+#include "velox/common/memory/SimpleStreamArena.h"
 #include "velox/row/UnsafeRowFast.h"
 #include "velox/vector/fuzzer/VectorFuzzer.h"
 #include "velox/vector/tests/utils/VectorTestBase.h"
@@ -94,7 +95,7 @@ class UnsafeRowSerializerTest : public ::testing::Test,
           unsafeRow.get(), rows, serializedRowSizesPtr.data());
     }
 
-    auto arena = std::make_unique<StreamArena>(pool_.get());
+    auto arena = std::make_unique<SimpleStreamArena>(pool_.get());
     auto rowType = std::dynamic_pointer_cast<const RowType>(rowVector->type());
     auto serializer = getVectorSerde()->createIterativeSerializer(
         rowType, numRows, arena.get(), options_.get());

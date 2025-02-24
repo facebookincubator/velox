@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 #include "velox/vector/VectorStream.h"
+#include "velox/common/memory/SimpleStreamArena.h"
 
 #include <memory>
 
@@ -40,7 +41,7 @@ class DefaultBatchVectorSerializer : public BatchVectorSerializer {
       numRows += range.size;
     }
 
-    StreamArena arena(pool_);
+    SimpleStreamArena arena(pool_);
     auto serializer = serde_->createIterativeSerializer(
         asRowType(vector->type()), numRows, &arena, options_);
     serializer->append(vector, ranges, scratch);

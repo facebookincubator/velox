@@ -163,7 +163,7 @@ struct FlushSizes {
 FlushSizes flushStreams(
     std::vector<VectorStream>& streams,
     int32_t numRows,
-    const StreamArena& arena,
+    const StreamArena* arena,
     folly::compression::Codec& codec,
     float minCompressionRatio,
     OutputStream* out);

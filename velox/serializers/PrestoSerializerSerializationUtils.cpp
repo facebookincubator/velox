@@ -1006,7 +1006,7 @@ void flushSerialization(
 
 FlushSizes flushCompressed(
     std::vector<VectorStream>& streams,
-    const StreamArena& arena,
+    const StreamArena* arena,
     folly::compression::Codec& codec,
     int32_t numRows,
     float minCompressionRatio,
@@ -1024,7 +1024,7 @@ FlushSizes flushCompressed(
 
   writeInt32(output, numRows);
 
-  IOBufOutputStream out(*(arena.pool()), nullptr, arena.size());
+  IOBufOutputStream out(*(arena->pool()), nullptr, arena->size());
   writeInt32(&out, streams.size());
 
   for (auto& stream : streams) {
@@ -1295,7 +1295,7 @@ void serializeColumn(
 FlushSizes flushStreams(
     std::vector<VectorStream>& streams,
     int32_t numRows,
-    const StreamArena& arena,
+    const StreamArena* arena,
     folly::compression::Codec& codec,
     float minCompressionRatio,
     OutputStream* out) {

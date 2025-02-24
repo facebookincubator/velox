@@ -84,7 +84,7 @@ void PrestoIterativeVectorSerializer::flush(OutputStream* out) {
     flushStreams(
         streams_,
         numRows_,
-        *streamArena_,
+        streamArena_,
         *codec_,
         opts_.minCompressionRatio,
         out);
@@ -93,7 +93,7 @@ void PrestoIterativeVectorSerializer::flush(OutputStream* out) {
       const auto noCompressionCodec = common::compressionKindToCodec(
           common::CompressionKind::CompressionKind_NONE);
       auto [size, ignore] = flushStreams(
-          streams_, numRows_, *streamArena_, *noCompressionCodec, 1, out);
+          streams_, numRows_, streamArena_, *noCompressionCodec, 1, out);
       stats_.compressionSkippedBytes += size;
       --numCompressionToSkip_;
       ++stats_.numCompressionSkipped;
@@ -101,7 +101,7 @@ void PrestoIterativeVectorSerializer::flush(OutputStream* out) {
       auto [size, compressedSize] = flushStreams(
           streams_,
           numRows_,
-          *streamArena_,
+          streamArena_,
           *codec_,
           opts_.minCompressionRatio,
           out);

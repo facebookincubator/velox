@@ -13,14 +13,20 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#include "velox/common/memory/StreamArena.h"
+#include "velox/common/memory/SimpleStreamArena.h"
 #include "velox/common/memory/ByteStream.h"
 
 namespace facebook::velox {
 
-StreamArena::StreamArena(memory::MemoryPool* pool) : pool_(pool) {}
+SimpleStreamArena::SimpleStreamArena(memory::MemoryPool* pool)
+    : StreamArena(pool),
+      allocator_(std::make_unique<HashStringAllocator>(pool_)),
+      tinyRanges_(StlAllocator<std::basic_string<
+                      char,
+                      std::char_traits<char>,
+                      StlAllocator<char>>>(allocator_.get())) {}
 
-void StreamArena::newRange(
+void SimpleStreamArena::newRange(
     int32_t bytes,
     ByteRange* /*lastRange*/,
     ByteRange* range) {
@@ -65,18 +71,21 @@ void StreamArena::newRange(
   }
 }
 
-void StreamArena::newTinyRange(
+void SimpleStreamArena::newTinyRange(
     int32_t bytes,
     ByteRange* /*lastRange*/,
     ByteRange* range) {
   VELOX_CHECK_GT(bytes, 0, "StreamArena::newTinyRange can't be zero length");
-  tinyRanges_.emplace_back();
+  tinyRanges_.emplace_back(
+      std::basic_string<char, std::char_traits<char>, StlAllocator<char>>(
+          StlAllocator<char>(allocator_.get())));
   tinyRanges_.back().resize(bytes);
   range->position = 0;
   range->buffer = reinterpret_cast<uint8_t*>(tinyRanges_.back().data());
   range->size = bytes;
 }
-void StreamArena::clear() {
+
+void SimpleStreamArena::clear() {
   allocations_.clear();
   pool_->freeNonContiguous(allocation_);
   currentRun_ = 0;

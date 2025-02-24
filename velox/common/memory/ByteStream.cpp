@@ -15,6 +15,7 @@
  */
 
 #include "velox/common/memory/ByteStream.h"
+#include "velox/common/memory/SimpleStreamArena.h"
 
 namespace facebook::velox {
 
@@ -38,6 +39,14 @@ uint32_t ByteRange::availableBytes() const {
 
 std::string ByteRange::toString() const {
   return fmt::format("[{} starting at {}]", succinctBytes(size), position);
+}
+
+BufferedOutputStream::BufferedOutputStream(
+    OutputStream* out,
+    StreamArena* arena,
+    int32_t bufferSize)
+    : OutputStream(), out_(out) {
+  arena->newRange(bufferSize, nullptr, &buffer_);
 }
 
 std::string BufferInputStream::toString() const {
@@ -429,6 +438,16 @@ void freeFunc(void* /*data*/, void* userData) {
   delete freeData;
 }
 } // namespace
+
+IOBufOutputStream::IOBufOutputStream(
+    memory::MemoryPool& pool,
+    OutputStreamListener* listener,
+    int32_t initialSize)
+    : OutputStream(listener),
+      arena_(std::make_shared<SimpleStreamArena>(&pool)),
+      out_(std::make_unique<ByteOutputStream>(arena_.get())) {
+  out_->startWrite(initialSize);
+}
 
 std::unique_ptr<folly::IOBuf> IOBufOutputStream::getIOBuf(
     const std::function<void()>& releaseFn) {

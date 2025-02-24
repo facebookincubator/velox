@@ -21,6 +21,7 @@
 
 #include "velox/common/base/Crc.h"
 #include "velox/common/memory/ByteStream.h"
+#include "velox/common/memory/SimpleStreamArena.h"
 #include "velox/serializers/PrestoBatchVectorSerializer.h"
 #include "velox/serializers/PrestoHeader.h"
 #include "velox/serializers/PrestoIterativeVectorSerializer.h"
@@ -236,7 +237,7 @@ void PrestoVectorSerde::serializeSingleColumn(
   VELOX_USER_CHECK_EQ(prestoOptions.nullsFirst, false);
 
   const IndexRange range{0, vector->size()};
-  const auto arena = std::make_unique<StreamArena>(pool);
+  const auto arena = std::make_unique<SimpleStreamArena>(pool);
   auto stream = std::make_unique<detail::VectorStream>(
       vector->type(),
       std::nullopt,

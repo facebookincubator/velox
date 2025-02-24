@@ -16,6 +16,7 @@
 
 #include "velox/serializers/PrestoBatchVectorSerializer.h"
 
+#include "velox/common/memory/SimpleStreamArena.h"
 #include "velox/serializers/PrestoSerializerEstimationUtils.h"
 #include "velox/serializers/PrestoSerializerSerializationUtils.h"
 #include "velox/serializers/VectorStream.h"
@@ -30,7 +31,7 @@ void PrestoBatchVectorSerializer::serialize(
   const auto rowType = vector->type();
   const auto numChildren = vector->childrenSize();
 
-  StreamArena arena(pool_);
+  SimpleStreamArena arena(pool_);
   std::vector<VectorStream> streams;
   streams.reserve(numChildren);
   for (int i = 0; i < numChildren; i++) {
@@ -48,7 +49,7 @@ void PrestoBatchVectorSerializer::serialize(
   }
 
   flushStreams(
-      streams, numRows, arena, *codec_, opts_.minCompressionRatio, stream);
+      streams, numRows, &arena, *codec_, opts_.minCompressionRatio, stream);
 }
 
 void PrestoBatchVectorSerializer::estimateSerializedSizeImpl(
