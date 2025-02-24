@@ -94,7 +94,6 @@ cudf::ast::expression const& create_ast_tree(
   auto& name = expr->name();
 
   if (name == "literal") {
-    VELOX_CHECK_EQ(expr->inputs().size(), 1);
     velox::exec::ConstantExpr* c =
         dynamic_cast<velox::exec::ConstantExpr*>(expr.get());
     VELOX_CHECK_NOT_NULL(c, "literal expression should be ConstantExpr");
