@@ -30,8 +30,8 @@
 #include "velox/functions/prestosql/tests/utils/FunctionBaseTest.h"
 #include "velox/functions/remote/client/Remote.h"
 #include "velox/functions/remote/if/gen-cpp2/RemoteFunctionService.h"
-#include "velox/functions/remote/server/RemoteFunctionService.h"
 #include "velox/functions/remote/utils/RemoteFunctionServiceProvider.h"
+#include "velox/functions/remote/server/RemoteFunctionThriftService.h"
 #include "velox/serializers/PrestoSerializer.h"
 
 using ::apache::thrift::ThriftServer;
@@ -69,7 +69,7 @@ struct OpaqueTypeFunction {
 
 // Parametrize in the serialization format so we can test both presto page and
 // unsafe row.
-class RemoteFunctionTest
+class RemoteFunctionThriftTest
     : public functions::test::FunctionBaseTest,
       public ::testing::WithParamInterface<remote::PageFormat> {
  public:
@@ -146,7 +146,7 @@ class RemoteFunctionTest
   }
 };
 
-TEST_P(RemoteFunctionTest, simple) {
+TEST_P(RemoteFunctionThriftTest, simple) {
   auto inputVector = makeFlatVector<int64_t>({1, 2, 3, 4, 5});
   auto results = evaluate<SimpleVector<int64_t>>(
       "remote_plus(c0, c0)", makeRowVector({inputVector}));
@@ -155,7 +155,7 @@ TEST_P(RemoteFunctionTest, simple) {
   assertEqualVectors(expected, results);
 }
 
-TEST_P(RemoteFunctionTest, string) {
+TEST_P(RemoteFunctionThriftTest, string) {
   auto inputVector =
       makeFlatVector<StringView>({"hello", "my", "remote", "world"});
   auto inputVector1 = makeFlatVector<int32_t>({2, 1, 3, 5});
@@ -166,7 +166,7 @@ TEST_P(RemoteFunctionTest, string) {
   assertEqualVectors(expected, results);
 }
 
-TEST_P(RemoteFunctionTest, tryException) {
+TEST_P(RemoteFunctionThriftTest, tryException) {
   // remote_divide throws if denominator is 0.
   auto numeratorVector = makeFlatVector<double>({0, 1, 4, 9, 16});
   auto denominatorVector = makeFlatVector<double>({0, 1, 2, 3, 4});
@@ -181,7 +181,7 @@ TEST_P(RemoteFunctionTest, tryException) {
   assertEqualVectors(expected, results);
 }
 
-TEST_P(RemoteFunctionTest, conditionalConjunction) {
+TEST_P(RemoteFunctionThriftTest, conditionalConjunction) {
   // conditional conjunction disables throwing on error.
   auto inputVector0 = makeFlatVector<bool>({true, true});
   auto inputVector1 = makeFlatVector<int32_t>({1, 2});
@@ -195,7 +195,7 @@ TEST_P(RemoteFunctionTest, conditionalConjunction) {
   assertEqualVectors(expected, results);
 }
 
-TEST_P(RemoteFunctionTest, tryErrorCode) {
+TEST_P(RemoteFunctionThriftTest, tryErrorCode) {
   // remote_fail doesn't throw, but returns error code.
   auto errorCodesVector = makeFlatVector<int32_t>({1, 2});
   auto errorMessagesVector =
@@ -213,7 +213,7 @@ TEST_P(RemoteFunctionTest, tryErrorCode) {
   ASSERT_EQ(results[0]->size(), 2);
 }
 
-TEST_P(RemoteFunctionTest, opaque) {
+TEST_P(RemoteFunctionThriftTest, opaque) {
   // TODO: Support opaque type serialization in SPARK_UNSAFE_ROW
   if (GetParam() == remote::PageFormat::SPARK_UNSAFE_ROW) {
     GTEST_SKIP()
@@ -234,7 +234,7 @@ TEST_P(RemoteFunctionTest, opaque) {
   assertEqualVectors(expected, results);
 }
 
-TEST_P(RemoteFunctionTest, connectionError) {
+TEST_P(RemoteFunctionThriftTest, connectionError) {
   auto inputVector = makeFlatVector<int64_t>({1, 2, 3, 4, 5});
   auto func = [&]() {
     evaluate<SimpleVector<int64_t>>(
@@ -253,7 +253,7 @@ TEST_P(RemoteFunctionTest, connectionError) {
 
 VELOX_INSTANTIATE_TEST_SUITE_P(
     RemoteFunctionTestFixture,
-    RemoteFunctionTest,
+    RemoteFunctionThriftTest,
     ::testing::Values(
         remote::PageFormat::PRESTO_PAGE,
         remote::PageFormat::SPARK_UNSAFE_ROW));
