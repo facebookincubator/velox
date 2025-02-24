@@ -30,8 +30,8 @@
 #include "velox/functions/prestosql/tests/utils/FunctionBaseTest.h"
 #include "velox/functions/remote/client/Remote.h"
 #include "velox/functions/remote/if/gen-cpp2/RemoteFunctionService.h"
-#include "velox/functions/remote/utils/RemoteFunctionServiceProvider.h"
 #include "velox/functions/remote/server/RemoteFunctionThriftService.h"
+#include "velox/functions/remote/utils/RemoteFunctionServiceProvider.h"
 #include "velox/serializers/PrestoSerializer.h"
 
 using ::apache::thrift::ThriftServer;

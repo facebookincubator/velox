@@ -17,18 +17,20 @@
 #pragma once
 
 #include <folly/SocketAddress.h>
+#include <variant>
 #include "velox/expression/VectorFunction.h"
 #include "velox/functions/remote/if/gen-cpp2/RemoteFunction_types.h"
 
 namespace facebook::velox::functions {
 
 struct RemoteVectorFunctionMetadata : public exec::VectorFunctionMetadata {
-  /// Network address of the servr to communicate with. Note that this can hold
-  /// a network location (ip/port pair) or a unix domain socket path (see
+  /// URL of the HTTP/REST server for remote function.
+  /// Or Network address of the server to communicate with. Note that this can
+  /// hold a network location (ip/port pair) or a unix domain socket path (see
   /// SocketAddress::makeFromPath()).
-  folly::SocketAddress location;
+  std::variant<folly::SocketAddress, std::string> location;
 
-  /// The serialization format to be used
+  /// The serialization format to be used when sending data to the remote.
   remote::PageFormat serdeFormat{remote::PageFormat::PRESTO_PAGE};
 };
 
