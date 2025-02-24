@@ -47,7 +47,7 @@ permissions:
 
 jobs:
   compile:
-    runs-on: 16-core-ubuntu
+    runs-on: 16-core-ubuntu-22.04
     timeout-minutes: 120
     env:
       CCACHE_DIR: "${{ github.workspace }}/ccache/"
