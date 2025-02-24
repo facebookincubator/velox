@@ -32,11 +32,11 @@ class CudfHashAggregation : public exec::Operator {
     uint32_t inputIndex;
 
     virtual void addGroupbyRequest(
-        cudf::table_view tbl,
+        cudf::table_view const& tbl,
         std::vector<cudf::groupby::aggregation_request>& requests) = 0;
 
     virtual std::unique_ptr<cudf::column> doReduce(
-        cudf::table_view input,
+        cudf::table_view const& input,
         TypePtr const& output_type,
         rmm::cuda_stream_view stream) = 0;
 
@@ -59,7 +59,7 @@ class CudfHashAggregation : public exec::Operator {
   CudfHashAggregation(
       int32_t operatorId,
       exec::DriverCtx* driverCtx,
-      const std::shared_ptr<const core::AggregationNode>& aggregationNode);
+      std::shared_ptr<const core::AggregationNode> const& aggregationNode);
 
   void initialize() override;
 
@@ -78,12 +78,6 @@ class CudfHashAggregation : public exec::Operator {
   }
 
   bool isFinished() override;
-
-  // TODO: It'll be a long while before we can reclaim memory from cudf.
-  // void reclaim(uint64_t targetBytes, memory::MemoryReclaimer::Stats& stats)
-  //     override;
-
-  void close() override;
 
  private:
   // Setups the projections for accessing grouping keys stored in grouping
@@ -127,8 +121,6 @@ class CudfHashAggregation : public exec::Operator {
   size_t numAggregates_;
   bool ignoreNullKeys_;
 
-  std::map<uint32_t, std::vector<std::pair<cudf::aggregation::Kind, uint32_t>>>
-      requests_map_;
   std::vector<cudf_velox::CudfVectorPtr> inputs_;
 };
 
