@@ -396,7 +396,7 @@ class MinMaxAggregateBase : public exec::Aggregate {
       return;
     }
 
-    static const CompareFlags kCompareFlags{
+    const CompareFlags compareFlags{
         true, // nullsFirst
         true, // ascending
         false, // equalsOnly
@@ -410,7 +410,7 @@ class MinMaxAggregateBase : public exec::Aggregate {
 
       auto accumulator = value<SingleValueAccumulator>(groups[i]);
       if (!accumulator->hasValue() ||
-          compareTest(compare(accumulator, decoded, i, kCompareFlags))) {
+          compareTest(compare(accumulator, decoded, i, compareFlags))) {
         accumulator->write(baseVector, indices[i], allocator_);
       }
     });
@@ -427,7 +427,7 @@ class MinMaxAggregateBase : public exec::Aggregate {
     DecodedVector decoded(*arg, rows, true);
     auto indices = decoded.indices();
     auto baseVector = decoded.base();
-    static const CompareFlags kCompareFlags{
+    const CompareFlags compareFlags{
         true, // nullsFirst
         true, // ascending
         false, // equalsOnly
@@ -441,7 +441,7 @@ class MinMaxAggregateBase : public exec::Aggregate {
 
       auto accumulator = value<SingleValueAccumulator>(group);
       if (!accumulator->hasValue() ||
-          compareTest(compare(accumulator, decoded, 0, kCompareFlags))) {
+          compareTest(compare(accumulator, decoded, 0, compareFlags))) {
         accumulator->write(baseVector, indices[0], allocator_);
       }
       return;
@@ -454,7 +454,7 @@ class MinMaxAggregateBase : public exec::Aggregate {
         return;
       }
       if (!accumulator->hasValue() ||
-          compareTest(compare(accumulator, decoded, i, kCompareFlags))) {
+          compareTest(compare(accumulator, decoded, i, compareFlags))) {
         accumulator->write(baseVector, indices[i], allocator_);
       }
     });
