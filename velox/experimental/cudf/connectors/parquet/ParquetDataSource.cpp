@@ -23,6 +23,7 @@
 #include "velox/experimental/cudf/connectors/parquet/ParquetConnectorSplit.h"
 #include "velox/experimental/cudf/connectors/parquet/ParquetDataSource.h"
 #include "velox/experimental/cudf/connectors/parquet/ParquetTableHandle.h"
+#include "velox/experimental/cudf/exec/ExpressionEvaluator.h"
 
 #include "velox/experimental/cudf/exec/ToCudf.h"
 #include "velox/experimental/cudf/exec/Utilities.h"
@@ -33,8 +34,10 @@
 #include <cudf/copying.hpp>
 #include <cudf/io/parquet.hpp>
 #include <cudf/io/types.hpp>
+#include <cudf/stream_compaction.hpp>
 #include <cudf/table/table.hpp>
 #include <cudf/table/table_view.hpp>
+#include <cudf/transform.hpp>
 
 namespace facebook::velox::cudf_velox::connector::parquet {
 
@@ -111,10 +114,54 @@ std::optional<RowVectorPtr> ParquetDataSource::next(
   }
 
   // cudfTable_ = concatenateTables(std::move(readTables));
-  currentCudfTableView_ = cudfTable_->view();
+  auto stream = cudfGlobalStreamPool().get_stream();
+
+  // Apply remaining filter if present
+  if (remainingFilterExprSet_) {
+    auto cudf_table_columns = cudfTable_->release();
+    auto const original_num_columns = cudf_table_columns.size();
+    auto& remainingFilterExpr = remainingFilterExprSet_->expr(0);
+    std::vector<std::unique_ptr<cudf::scalar>> scalars_;
+    std::vector<std::tuple<int, std::string, int>> precompute_instructions_;
+    cudf::ast::tree tree;
+    create_ast_tree(
+        remainingFilterExpr,
+        tree,
+        scalars_,
+        outputType_,
+        precompute_instructions_);
+    addPrecomputedColumns(
+        cudf_table_columns, precompute_instructions_, scalars_, stream);
+    cudfTable_ = std::make_unique<cudf::table>(std::move(cudf_table_columns));
+    auto cudf_table_view = cudfTable_->view();
+    std::unique_ptr<cudf::column> col;
+    if (auto col_ref_ptr =
+            dynamic_cast<cudf::ast::column_reference const*>(&tree.back())) {
+      col = std::make_unique<cudf::column>(
+          cudf_table_view.column(col_ref_ptr->get_column_index()),
+          stream,
+          cudf::get_current_device_resource_ref());
+    } else {
+      col = cudf::compute_column(
+          cudf_table_view,
+          tree.back(),
+          stream,
+          cudf::get_current_device_resource_ref());
+    }
+    std::vector<std::unique_ptr<cudf::column>> original_columns;
+    original_columns.reserve(original_num_columns);
+    cudf_table_columns = cudfTable_->release();
+    for (size_t i = 0; i < original_num_columns; ++i) {
+      original_columns.push_back(std::move(cudf_table_columns[i]));
+    }
+    auto original_table =
+        std::make_unique<cudf::table>(std::move(original_columns));
+    cudfTable_ = cudf::apply_boolean_mask(
+        *original_table, *col, stream, cudf::get_current_device_resource_ref());
+  }
 
   // Output RowVectorPtr
-  auto stream = cudfGlobalStreamPool().get_stream();
+  currentCudfTableView_ = cudfTable_->view();
   auto sz = cudfTable_->num_rows();
   auto output = cudfIsRegistered()
       ? std::make_shared<CudfVector>(
