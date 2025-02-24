@@ -17,8 +17,13 @@
 #include "velox/functions/remote/client/Remote.h"
 
 #include <folly/io/async/EventBase.h>
+#include <string>
+
+#include "velox/common/base/Exceptions.h"
+#include "velox/common/memory/ByteStream.h"
 #include "velox/expression/Expr.h"
 #include "velox/expression/VectorFunction.h"
+#include "velox/functions/remote/client/RestClient.h"
 #include "velox/functions/remote/client/ThriftClient.h"
 #include "velox/functions/remote/if/GetSerde.h"
 #include "velox/functions/remote/if/gen-cpp2/RemoteFunctionServiceAsyncClient.h"
@@ -40,10 +45,13 @@ class RemoteFunction : public exec::VectorFunction {
       const std::vector<exec::VectorFunctionArg>& inputArgs,
       const RemoteVectorFunctionMetadata& metadata)
       : functionName_(functionName),
-        location_(metadata.location),
-        thriftClient_(getThriftClient(location_, &eventBase_)),
+        metadata_(metadata),
         serdeFormat_(metadata.serdeFormat),
         serde_(getSerde(serdeFormat_)) {
+    std::visit(
+        [this](auto&& loc) { this->initializeClient(loc); },
+        metadata_.location);
+
     std::vector<TypePtr> types;
     types.reserve(inputArgs.size());
     serializedInputTypes_.reserve(inputArgs.size());
@@ -55,6 +63,15 @@ class RemoteFunction : public exec::VectorFunction {
     remoteInputType_ = ROW(std::move(types));
   }
 
+ private:
+  void initializeClient(const folly::SocketAddress& address) {
+    thriftClient_ = getThriftClient(address, &eventBase_);
+  }
+
+  void initializeClient(const std::string& url) {
+    restClient_ = getRestClient();
+  }
+
   void apply(
       const SelectivityVector& rows,
       std::vector<VectorPtr>& args,
@@ -63,6 +80,16 @@ class RemoteFunction : public exec::VectorFunction {
       VectorPtr& result) const override {
     try {
       applyThriftRemote(rows, args, outputType, context, result);
+      std::visit(
+          [&](auto&& loc) {
+            using T = std::decay_t<decltype(loc)>;
+            if constexpr (std::is_same_v<T, folly::SocketAddress>) {
+              applyThriftRemote(rows, args, outputType, context, result);
+            } else if constexpr (std::is_same_v<T, std::string>) {
+              applyRestRemote(rows, args, outputType, context, result);
+            }
+          },
+          metadata_.location);
     } catch (const VeloxRuntimeError&) {
       throw;
     } catch (const std::exception&) {
@@ -70,7 +97,42 @@ class RemoteFunction : public exec::VectorFunction {
     }
   }
 
- private:
+  void applyRestRemote(
+      const SelectivityVector& rows,
+      const std::vector<VectorPtr>& args,
+      const TypePtr& outputType,
+      const exec::EvalCtx& context,
+      VectorPtr& result) const {
+    try {
+      VELOX_DCHECK_NOT_NULL(
+          restClient_, "Rest Client not initialized properly.");
+
+      auto remoteRowVector = std::make_shared<RowVector>(
+          context.pool(),
+          remoteInputType_,
+          BufferPtr{},
+          rows.end(),
+          std::move(args));
+
+      std::unique_ptr<folly::IOBuf> requestBody =
+          std::make_unique<folly::IOBuf>(rowVectorToIOBuf(
+              remoteRowVector, rows.end(), *context.pool(), serde_.get()));
+
+      std::unique_ptr<folly::IOBuf> responseBody = restClient_->invokeFunction(
+          std::get<std::string>(metadata_.location), std::move(requestBody));
+
+      auto outputRowVector = IOBufToRowVector(
+          *responseBody, ROW({outputType}), *context.pool(), serde_.get());
+
+      result = outputRowVector->childAt(0);
+    } catch (const std::exception& e) {
+      VELOX_FAIL(
+          "Error while executing remote function '{}': {}",
+          functionName_,
+          e.what());
+    }
+  }
+
   void applyThriftRemote(
       const SelectivityVector& rows,
       std::vector<VectorPtr>& args,
@@ -109,7 +171,7 @@ class RemoteFunction : public exec::VectorFunction {
       VELOX_FAIL(
           "Error while executing remote function '{}' at '{}': {}",
           functionName_,
-          location_.describe(),
+          std::get<folly::SocketAddress>(metadata_.location).describe(),
           e.what());
     }
 
@@ -142,10 +204,13 @@ class RemoteFunction : public exec::VectorFunction {
   }
 
   const std::string functionName_;
-  folly::SocketAddress location_;
-
+  const RemoteVectorFunctionMetadata metadata_;
   folly::EventBase eventBase_;
-  std::unique_ptr<RemoteFunctionClient> thriftClient_;
+
+  // Depending on the location, one of these is initialized by the visitor.
+  std::unique_ptr<RemoteFunctionClient> thriftClient_{nullptr};
+  std::unique_ptr<HttpClient> restClient_{nullptr};
+
   remote::PageFormat serdeFormat_;
   std::unique_ptr<VectorSerde> serde_;
 
@@ -169,7 +234,7 @@ void registerRemoteFunction(
     std::vector<exec::FunctionSignaturePtr> signatures,
     const RemoteVectorFunctionMetadata& metadata,
     bool overwrite) {
-  exec::registerStatefulVectorFunction(
+  registerStatefulVectorFunction(
       name,
       signatures,
       std::bind(
