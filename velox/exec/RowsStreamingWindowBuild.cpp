@@ -118,13 +118,14 @@ std::shared_ptr<WindowPartition> RowsStreamingWindowBuild::nextPartition() {
     windowPartitions_.pop_front();
   }
 
+  VELOX_CHECK(hasNextPartition());
   return windowPartitions_.front();
 }
 
 bool RowsStreamingWindowBuild::hasNextPartition() {
   // Checks if there is a window partition that is either incomplete or
   // completed but has unconsumed rows.
-  for (auto windowPartition : windowPartitions_) {
+  for (const auto& windowPartition : windowPartitions_) {
     if (!windowPartition->complete() || windowPartition->numRows() > 0) {
       return true;
     }
