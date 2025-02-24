@@ -12,14 +12,16 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-add_executable(velox_functions_remote_client_test RemoteFunctionTest.cpp)
+add_executable(velox_functions_remote_client_thrift_test
+               RemoteFunctionThriftTest.cpp)
 
-add_test(velox_functions_remote_client_test velox_functions_remote_client_test)
+add_test(velox_functions_remote_client_thrift_test
+         velox_functions_remote_client_thrift_test)
 
 target_link_libraries(
-  velox_functions_remote_client_test
+  velox_functions_remote_client_thrift_test
   remote_function_thrift
-  velox_functions_remote_server
+  velox_functions_remote_thrift_server
   velox_functions_remote
   velox_function_registry
   velox_functions_test_lib

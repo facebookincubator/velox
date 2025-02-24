@@ -19,7 +19,7 @@
 #include <glog/logging.h>
 #include <thrift/lib/cpp2/server/ThriftServer.h>
 #include "velox/functions/prestosql/registration/RegistrationFunctions.h"
-#include "velox/functions/remote/server/RemoteFunctionService.h"
+#include "velox/functions/remote/server/RemoteFunctionThriftService.h"
 
 /// This file generates a binary only meant for testing. It instantiates a
 /// remote function server able to serve all Presto functions, and is used
