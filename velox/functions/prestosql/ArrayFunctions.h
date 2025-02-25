@@ -226,6 +226,10 @@ struct ArrayJoinFunction {
     result += inputValue.toString(options_);
   }
 
+  void writeValue(out_type<velox::Varchar>& result, const UnknownValue& value) {
+    // Do nothing for unknown values.
+  }
+
   template <typename C>
   void writeOutput(
       out_type<velox::Varchar>& result,
@@ -258,21 +262,19 @@ struct ArrayJoinFunction {
     }
   }
 
-  FOLLY_ALWAYS_INLINE bool call(
+  FOLLY_ALWAYS_INLINE void call(
       out_type<velox::Varchar>& result,
       const arg_type<velox::Array<T>>& inputArray,
       const arg_type<velox::Varchar>& delim) {
     createOutputString(result, inputArray, delim);
-    return true;
   }
 
-  FOLLY_ALWAYS_INLINE bool call(
+  FOLLY_ALWAYS_INLINE void call(
       out_type<velox::Varchar>& result,
       const arg_type<velox::Array<T>>& inputArray,
       const arg_type<velox::Varchar>& delim,
       const arg_type<velox::Varchar>& nullReplacement) {
     createOutputString(result, inputArray, delim, nullReplacement.getString());
-    return true;
   }
 
  private:
