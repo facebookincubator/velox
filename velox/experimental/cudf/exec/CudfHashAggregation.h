@@ -30,6 +30,7 @@ class CudfHashAggregation : public exec::Operator {
     bool is_global;
     cudf::aggregation::Kind kind;
     uint32_t inputIndex;
+    VectorPtr constant;
 
     virtual void addGroupbyRequest(
         cudf::table_view const& tbl,
@@ -49,11 +50,13 @@ class CudfHashAggregation : public exec::Operator {
         core::AggregationNode::Step step,
         cudf::aggregation::Kind kind,
         uint32_t inputIndex,
+        VectorPtr constant,
         bool is_global)
         : step(step),
           is_global(is_global),
           kind(kind),
-          inputIndex(inputIndex) {}
+          inputIndex(inputIndex),
+          constant(constant) {}
   };
 
   CudfHashAggregation(

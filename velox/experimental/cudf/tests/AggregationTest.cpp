@@ -318,7 +318,7 @@ TEST_F(AggregationTest, allKeyTypes) {
           .singleAggregation({"c0", "c1", "c2", "c3", "c4", "c5"}, {"sum(c6)"})
           .planNode();
 
-  // DM: Instead of sum(c6, this was sum(1) but we don't yet support constants
+  // DM: Instead of sum(c6), this was sum(1) but we don't yet support constants
   assertQuery(
       op,
       "SELECT c0, c1, c2, c3, c4, c5, sum(c6) FROM tmp "
@@ -435,6 +435,37 @@ TEST_F(AggregationTest, avgPartialFinalGlobal) {
                 .planNode();
 
   assertQuery(op, "SELECT avg(c1), avg(c2), avg(c4), avg(c5) FROM tmp");
+}
+
+TEST_F(AggregationTest, countSingleGroupBy) {
+  auto vectors = makeVectors(rowType_, 10, 100);
+  createDuckDbTable(vectors);
+
+  std::string keyName = "c0";
+  std::vector<std::string> aggregates = {"count(0)"};
+  auto op = PlanBuilder()
+                .values(vectors)
+                .singleAggregation({keyName}, aggregates)
+                .planNode();
+
+  assertQuery(
+      op, "SELECT " + keyName + ", count(*) FROM tmp GROUP BY " + keyName);
+}
+
+TEST_F(AggregationTest, countPartialFinalGroupBy) {
+  auto vectors = makeVectors(rowType_, 10, 100);
+  createDuckDbTable(vectors);
+
+  std::string keyName = "c0";
+  std::vector<std::string> aggregates = {"count(0)"};
+  auto op = PlanBuilder()
+                .values(vectors)
+                .partialAggregation({keyName}, aggregates)
+                .finalAggregation()
+                .planNode();
+
+  assertQuery(
+      op, "SELECT " + keyName + ", count(*) FROM tmp GROUP BY " + keyName);
 }
 
 } // namespace facebook::velox::exec::test
