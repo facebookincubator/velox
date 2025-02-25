@@ -120,7 +120,27 @@ struct CountAggregator : cudf_velox::CudfHashAggregation::Aggregator {
       cudf::table_view const& input,
       TypePtr const& output_type,
       rmm::cuda_stream_view stream) override {
-    VELOX_CHECK(false, "CountAggregator does not support reduce");
+    if (exec::isRawInput(step)) {
+      // For raw input, implement count using size + null count
+      auto input_col = input.column(constant == nullptr ? inputIndex : 0);
+
+      // count_valid: size - null_count, count_all: just the size
+      int64_t count = constant == nullptr
+          ? input_col.size() - input_col.null_count()
+          : input_col.size();
+
+      auto result_scalar = cudf::numeric_scalar<int64_t>(count);
+
+      return cudf::make_column_from_scalar(result_scalar, 1, stream);
+    } else {
+      // For non-raw input (intermediate/final), use sum aggregation
+      auto const agg_request =
+          cudf::make_sum_aggregation<cudf::reduce_aggregation>();
+      auto const cudf_output_type = cudf::data_type(cudf::type_id::INT64);
+      auto const result_scalar = cudf::reduce(
+          input.column(inputIndex), *agg_request, cudf_output_type, stream);
+      return cudf::make_column_from_scalar(*result_scalar, 1, stream);
+    }
     return nullptr;
   }
 

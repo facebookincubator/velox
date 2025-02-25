@@ -468,4 +468,31 @@ TEST_F(AggregationTest, countPartialFinalGroupBy) {
       op, "SELECT " + keyName + ", count(*) FROM tmp GROUP BY " + keyName);
 }
 
+TEST_F(AggregationTest, countSingleGlobal) {
+  auto vectors = makeVectors(rowType_, 10, 100);
+  createDuckDbTable(vectors);
+
+  std::vector<std::string> aggregates = {"count(0)"};
+  auto op = PlanBuilder()
+                .values(vectors)
+                .singleAggregation({}, aggregates)
+                .planNode();
+
+  assertQuery(op, "SELECT count(*) FROM tmp");
+}
+
+TEST_F(AggregationTest, countPartialFinalGlobal) {
+  auto vectors = makeVectors(rowType_, 10, 100);
+  createDuckDbTable(vectors);
+
+  std::vector<std::string> aggregates = {"count(0)"};
+  auto op = PlanBuilder()
+                .values(vectors)
+                .partialAggregation({}, aggregates)
+                .finalAggregation()
+                .planNode();
+
+  assertQuery(op, "SELECT count(*) FROM tmp");
+}
+
 } // namespace facebook::velox::exec::test
