@@ -55,6 +55,41 @@ be found in <a class="reference external" href="https://www.json.org">this JSON 
 <section id="id1">
 <h2>JSON Functions<a class="headerlink" href="#id1" title="Link to this heading">¶</a></h2>
 <dl class="spark function">
+<dt class="sig sig-object spark" id="from_json">
+<span class="sig-name descname"><span class="pre">from_json</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">jsonString</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">array</span> <span class="pre">/</span> <span class="pre">map</span> <span class="pre">/</span> <span class="pre">row</span></span></span><a class="headerlink" href="#from_json" title="Link to this definition">¶</a></dt>
+<dd><p>Casts <code class="docutils literal notranslate"><span class="pre">jsonString</span></code> to an ARRAY, MAP, or ROW type, with the output type
+determined by the expression. Returns NULL, if the input string is unparsable.
+Supported element types include BOOLEAN, TINYINT, SMALLINT, INTEGER, BIGINT,
+REAL, DOUBLE, VARCHAR, ARRAY, MAP and ROW. When casting to ARRAY or MAP,
+the element type of the array or the value type of the map must be one of
+these supported types, and for maps, the key type must be VARCHAR. Casting
+to ROW supports only JSON objects.</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">from_json</span><span class="p">(</span><span class="s1">&#39;{&quot;a&quot;: true}&#39;</span><span class="p">);</span> <span class="o">--</span> <span class="p">{</span><span class="s1">&#39;a&#39;</span><span class="o">=</span><span class="n">true</span><span class="p">}</span> <span class="o">//</span> <span class="n">Output</span> <span class="nb">type</span><span class="p">:</span> <span class="n">ROW</span><span class="p">({</span><span class="s2">&quot;a&quot;</span><span class="p">},</span> <span class="p">{</span><span class="n">BOOLEAN</span><span class="p">()})</span>
+<span class="n">SELECT</span> <span class="n">from_json</span><span class="p">(</span><span class="s1">&#39;{&quot;a&quot;: 1}&#39;</span><span class="p">);</span> <span class="o">--</span> <span class="p">{</span><span class="s1">&#39;a&#39;</span><span class="o">=</span><span class="mi">1</span><span class="p">}</span> <span class="o">//</span> <span class="n">Output</span> <span class="nb">type</span><span class="p">:</span> <span class="n">ROW</span><span class="p">({</span><span class="s2">&quot;a&quot;</span><span class="p">},</span> <span class="p">{</span><span class="n">INTEGER</span><span class="p">()})</span>
+<span class="n">SELECT</span> <span class="n">from_json</span><span class="p">(</span><span class="s1">&#39;{&quot;a&quot;: 1.0}&#39;</span><span class="p">);</span> <span class="o">--</span> <span class="p">{</span><span class="s1">&#39;a&#39;</span><span class="o">=</span><span class="mf">1.0</span><span class="p">}</span> <span class="o">//</span> <span class="n">Output</span> <span class="nb">type</span><span class="p">:</span> <span class="n">ROW</span><span class="p">({</span><span class="s2">&quot;a&quot;</span><span class="p">},</span> <span class="p">{</span><span class="n">DOUBLE</span><span class="p">()})</span>
+<span class="n">SELECT</span> <span class="n">from_json</span><span class="p">(</span><span class="s1">&#39;[&quot;name&quot;, &quot;age&quot;, &quot;id&quot;]&#39;</span><span class="p">);</span> <span class="o">--</span> <span class="p">[</span><span class="s1">&#39;name&#39;</span><span class="p">,</span> <span class="s1">&#39;age&#39;</span><span class="p">,</span> <span class="s1">&#39;id&#39;</span><span class="p">]</span> <span class="o">//</span> <span class="n">Output</span> <span class="nb">type</span><span class="p">:</span> <span class="n">ARRAY</span><span class="p">(</span><span class="n">VARCHAR</span><span class="p">())</span>
+<span class="n">SELECT</span> <span class="n">from_json</span><span class="p">(</span><span class="s1">&#39;{&quot;a&quot;: 1, &quot;b&quot;: 2}&#39;</span><span class="p">);</span> <span class="o">--</span> <span class="p">{</span><span class="s1">&#39;a&#39;</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span> <span class="s1">&#39;b&#39;</span><span class="o">=</span><span class="mi">2</span><span class="p">}</span> <span class="o">//</span> <span class="n">Output</span> <span class="nb">type</span><span class="p">:</span> <span class="n">MAP</span><span class="p">(</span><span class="n">VARCHAR</span><span class="p">(),</span><span class="n">INTEGER</span><span class="p">())</span>
+<span class="n">SELECT</span> <span class="n">from_json</span><span class="p">(</span><span class="s1">&#39;{&quot;a&quot;: {&quot;b&quot;: 1}}&#39;</span><span class="p">);</span> <span class="o">--</span> <span class="p">{</span><span class="s1">&#39;a&#39;</span><span class="o">=</span><span class="p">{</span><span class="n">b</span><span class="o">=</span><span class="mi">1</span><span class="p">}}</span> <span class="o">//</span> <span class="n">Output</span> <span class="nb">type</span><span class="p">:</span> <span class="n">ROW</span><span class="p">({</span><span class="s2">&quot;a&quot;</span><span class="p">},</span> <span class="p">{</span><span class="n">ROW</span><span class="p">({</span><span class="s2">&quot;b&quot;</span><span class="p">},</span> <span class="p">{</span><span class="n">INTEGER</span><span class="p">()})})</span>
+</pre></div>
+</div>
+<p>The current implementation has the following limitations.</p>
+<ul>
+<li><p>Does not support user provided options, for example, the Spark function below is not supported.</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">from_json</span><span class="p">(</span><span class="s1">&#39;{&quot;a&quot;:1}&#39;</span><span class="p">,</span> <span class="s1">&#39;a INT&#39;</span><span class="p">,</span> <span class="nb">map</span><span class="p">(</span><span class="s1">&#39;option&#39;</span><span class="p">,</span> <span class="s1">&#39;value&#39;</span><span class="p">))</span>
+</pre></div>
+</div>
+</li>
+<li><p>Only supports partial result mode, which requires spark configuration spark.sql.json.enablePartialResults = true.</p></li>
+<li><p>Does not allow single quotes enclosed string, {‘a’:1}. NULL will be returned.</p></li>
+<li><p>Does not support schemas that include a corrupt record column, for example, the Spark function below is not supported.</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">from_json</span><span class="p">(</span><span class="s1">&#39;{&quot;a&quot;:1, &quot;b&quot;:0.8}&#39;</span><span class="p">,</span> <span class="s1">&#39;a INT, b DOUBLE, _corrupt_record STRING&#39;</span><span class="p">)</span>
+</pre></div>
+</div>
+</li>
+</ul>
+</dd></dl>
+
+<dl class="spark function">
 <dt class="sig sig-object spark" id="get_json_object">
 <span class="sig-name descname"><span class="pre">get_json_object</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">jsonString</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">path</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">varchar</span></span></span><a class="headerlink" href="#get_json_object" title="Link to this definition">¶</a></dt>
 <dd><p>Returns a json object, represented by VARCHAR, from <code class="docutils literal notranslate"><span class="pre">jsonString</span></code> by searching <code class="docutils literal notranslate"><span class="pre">path</span></code>.
@@ -102,6 +137,7 @@ returns null.</p>
 <li><a class="reference internal" href="#">JSON Functions</a><ul>
 <li><a class="reference internal" href="#json-format">JSON Format</a></li>
 <li><a class="reference internal" href="#id1">JSON Functions</a><ul>
+<li><a class="reference internal" href="#from_json"><code class="docutils literal notranslate"><span class="pre">from_json()</span></code></a></li>
 <li><a class="reference internal" href="#get_json_object"><code class="docutils literal notranslate"><span class="pre">get_json_object()</span></code></a></li>
 <li><a class="reference internal" href="#json_object_keys"><code class="docutils literal notranslate"><span class="pre">json_object_keys()</span></code></a></li>
 </ul>
