@@ -106,6 +106,7 @@ class ParquetConnectorTestBase
         tableName,
         filterPushdownEnabled,
         nullptr,
+        nullptr,
         dataColumns);
   }
 

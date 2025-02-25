@@ -113,7 +113,7 @@ class ParquetDataSource : public DataSource {
 
   // Output type from file reader.  This is different from outputType_ that it
   // contains column names before assignment, and columns that only used in
-  // remaining filter.
+  // remaining filter. TODO
   RowTypePtr readerOutputType_;
 
   // Columns to read.
@@ -130,6 +130,11 @@ class ParquetDataSource : public DataSource {
   // Expression evaluator for remaining filter.
   core::ExpressionEvaluator* const expressionEvaluator_;
   std::unique_ptr<exec::ExprSet> remainingFilterExprSet_;
+
+  // Expression evaluator for subfield filter.
+  std::vector<std::unique_ptr<cudf::scalar>> subfield_scalars_;
+  cudf::ast::tree subfield_tree_;
+  std::unique_ptr<exec::ExprSet> subfieldFilterExprSet_;
 
   dwio::common::RuntimeStatistics runtimeStats_;
 };

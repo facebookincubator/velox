@@ -78,6 +78,12 @@ ParquetDataSource::ParquetDataSource(
   // Create empty IOStats for later use
   ioStats_ = std::make_shared<io::IoStatistics>();
 
+  // Create subfield filter
+  auto subfieldFilter = tableHandle_->subfieldFilterExpr();
+  if (subfieldFilter) {
+    subfieldFilterExprSet_ = expressionEvaluator_->compile(subfieldFilter);
+  }
+
   // Create remaining filter
   auto remainingFilter = tableHandle_->remainingFilter();
   if (remainingFilter) {
@@ -236,6 +242,18 @@ ParquetDataSource::createSplitReader() {
   // Set column projection if needed
   if (readColumnNames_.size()) {
     readerOptions.set_columns(readColumnNames_);
+  }
+  if (subfieldFilterExprSet_) {
+    auto subfieldFilterExpr = subfieldFilterExprSet_->expr(0);
+    std::vector<PrecomputeInstruction> precompute_instructions_;
+    create_ast_tree(
+        subfieldFilterExpr,
+        subfield_tree_,
+        subfield_scalars_,
+        outputType_,
+        precompute_instructions_);
+    VELOX_CHECK_EQ(precompute_instructions_.size(), 0);
+    readerOptions.set_filter(subfield_tree_.back());
   }
 
   // Create a parquet reader
