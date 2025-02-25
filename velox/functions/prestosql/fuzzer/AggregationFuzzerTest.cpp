@@ -129,7 +129,6 @@ int main(int argc, char** argv) {
       // Lambda functions are not supported yet.
       "reduce_agg",
       "max_data_size_for_stats",
-      "approx_set",
       "any_value",
   };
 
@@ -163,7 +162,7 @@ int main(int argc, char** argv) {
       customVerificationFunctions = {
           // Order-dependent functions.
           {"approx_distinct", std::make_shared<ApproxDistinctResultVerifier>()},
-          {"approx_set", nullptr},
+          {"approx_set", std::make_shared<ApproxDistinctResultVerifier>(true)},
           {"approx_percentile",
            std::make_shared<ApproxPercentileResultVerifier>()},
           {"arbitrary", std::make_shared<ArbitraryResultVerifier>()},
