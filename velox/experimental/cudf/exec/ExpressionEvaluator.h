@@ -56,4 +56,31 @@ void addPrecomputedColumns(
     const std::vector<std::unique_ptr<cudf::scalar>>& scalars,
     rmm::cuda_stream_view stream);
 
+// Evaluates the expression tree
+class ExpressionEvaluator {
+ public:
+  ExpressionEvaluator() = default;
+  // Converts velox expressions to cudf::ast::tree, scalars and
+  // precompute instructions and stores them
+  ExpressionEvaluator(
+      const std::vector<std::shared_ptr<velox::exec::Expr>>& exprs,
+      const RowTypePtr& inputRowSchema);
+
+  // Evaluates the expression tree for the given input columns
+  std::vector<std::unique_ptr<cudf::column>> compute(
+      std::vector<std::unique_ptr<cudf::column>>& input_table_columns,
+      rmm::cuda_stream_view stream,
+      rmm::device_async_resource_ref mr);
+
+  void close();
+
+ private:
+  std::vector<cudf::ast::tree> projectAst_;
+  std::vector<std::unique_ptr<cudf::scalar>> scalars_;
+  // instruction on dependent column to get new column index on non-ast
+  // supported operations in expressions
+  // <dependent_column_index, "instruction", new_column_index>
+  std::vector<PrecomputeInstruction> precompute_instructions_;
+};
+
 } // namespace facebook::velox::cudf_velox
