@@ -65,6 +65,39 @@ specified by <code class="docutils literal notranslate"><span class="pre">ip_pre
 </div>
 </dd></dl>
 
+<dl class="py function">
+<dt class="sig sig-object py" id="ip_subnet_range">
+<span class="sig-name descname"><span class="pre">ip_subnet_range</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">ip_prefix</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#ip_subnet_range" title="Link to this definition">¶</a></dt>
+<dd><p>Return an array of 2 IP addresses.
+The array contains the smallest and the largest IP address
+in the subnet specified by <code class="docutils literal notranslate"><span class="pre">ip_prefix</span></code>.</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">ip_subnet_range</span><span class="p">(</span><span class="n">IPPREFIX</span> <span class="s1">&#39;1.2.3.160/24&#39;</span><span class="p">);</span> <span class="o">--</span> <span class="p">[{</span><span class="mf">1.2.3.0</span><span class="p">},</span> <span class="p">{</span><span class="mf">1.2.3.255</span><span class="p">}]</span>
+<span class="n">SELECT</span> <span class="n">ip_subnet_range</span><span class="p">(</span><span class="n">IPPREFIX</span> <span class="s1">&#39;64:ff9b::52f4/120&#39;</span><span class="p">);</span> <span class="o">--</span> <span class="p">[{</span><span class="mi">64</span><span class="p">:</span><span class="n">ff9b</span><span class="p">::</span><span class="mi">5200</span><span class="p">},</span> <span class="p">{</span><span class="mi">64</span><span class="p">:</span><span class="n">ff9b</span><span class="p">::</span><span class="mi">52</span><span class="n">ff</span><span class="p">}]</span>
+</pre></div>
+</div>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="is_subnet_of">
+<span class="sig-name descname"><span class="pre">is_subnet_of</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">ip_prefix</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">ip_address</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">boolean</span></span></span><a class="headerlink" href="#is_subnet_of" title="Link to this definition">¶</a></dt>
+<dd><p>Returns <code class="docutils literal notranslate"><span class="pre">true</span></code> if the <code class="docutils literal notranslate"><span class="pre">ip_address</span></code> is in the subnet of <code class="docutils literal notranslate"><span class="pre">ip_prefix</span></code>.</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">is_subnet_of</span><span class="p">(</span><span class="n">IPPREFIX</span> <span class="s1">&#39;1.2.3.128/26&#39;</span><span class="p">,</span> <span class="n">IPADDRESS</span> <span class="s1">&#39;1.2.3.129&#39;</span><span class="p">);</span> <span class="o">--</span> <span class="n">true</span>
+<span class="n">SELECT</span> <span class="n">is_subnet_of</span><span class="p">(</span><span class="n">IPPREFIX</span> <span class="s1">&#39;64:fa9b::17/64&#39;</span><span class="p">,</span> <span class="n">IPADDRESS</span> <span class="s1">&#39;64:ffff::17&#39;</span><span class="p">);</span> <span class="o">--</span> <span class="n">false</span>
+</pre></div>
+</div>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="id0">
+<span class="sig-name descname"><span class="pre">is_subnet_of</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">ip_prefix1</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">ip_prefix2</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">boolean</span></span></span><a class="headerlink" href="#id0" title="Link to this definition">¶</a></dt>
+<dd><p>Returns <code class="docutils literal notranslate"><span class="pre">true</span></code> if <code class="docutils literal notranslate"><span class="pre">ip_prefix2</span></code> is a subnet of <code class="docutils literal notranslate"><span class="pre">ip_prefix1</span></code>.</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">is_subnet_of</span><span class="p">(</span><span class="n">IPPREFIX</span> <span class="s1">&#39;192.168.3.131/26&#39;</span><span class="p">,</span> <span class="n">IPPREFIX</span> <span class="s1">&#39;192.168.3.144/30&#39;</span><span class="p">);</span> <span class="o">--</span> <span class="n">true</span>
+<span class="n">SELECT</span> <span class="n">is_subnet_of</span><span class="p">(</span><span class="n">IPPREFIX</span> <span class="s1">&#39;64:ff9b::17/64&#39;</span><span class="p">,</span> <span class="n">IPPREFIX</span> <span class="s1">&#39;64:ffff::17/64&#39;</span><span class="p">);</span> <span class="o">--</span> <span class="n">false</span>
+<span class="n">SELECT</span> <span class="n">is_subnet_of</span><span class="p">(</span><span class="n">IPPREFIX</span> <span class="s1">&#39;192.168.3.131/26&#39;</span><span class="p">,</span> <span class="n">IPPREFIX</span> <span class="s1">&#39;192.168.3.131/26&#39;</span><span class="p">);</span> <span class="o">--</span> <span class="n">true</span>
+</pre></div>
+</div>
+</dd></dl>
+
 </section>
 
 
@@ -81,6 +114,9 @@ specified by <code class="docutils literal notranslate"><span class="pre">ip_pre
 <li><a class="reference internal" href="#ip_prefix"><code class="docutils literal notranslate"><span class="pre">ip_prefix()</span></code></a></li>
 <li><a class="reference internal" href="#ip_subnet_min"><code class="docutils literal notranslate"><span class="pre">ip_subnet_min()</span></code></a></li>
 <li><a class="reference internal" href="#ip_subnet_max"><code class="docutils literal notranslate"><span class="pre">ip_subnet_max()</span></code></a></li>
+<li><a class="reference internal" href="#ip_subnet_range"><code class="docutils literal notranslate"><span class="pre">ip_subnet_range()</span></code></a></li>
+<li><a class="reference internal" href="#is_subnet_of"><code class="docutils literal notranslate"><span class="pre">is_subnet_of()</span></code></a></li>
+<li><a class="reference internal" href="#id0"><code class="docutils literal notranslate"><span class="pre">is_subnet_of()</span></code></a></li>
 </ul>
 </li>
 </ul>
