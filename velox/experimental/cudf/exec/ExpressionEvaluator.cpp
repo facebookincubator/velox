@@ -38,21 +38,80 @@ cudf::ast::literal make_scalar_and_literal(
     VectorPtr vector,
     std::vector<std::unique_ptr<cudf::scalar>>& scalars) {
   using T = typename facebook::velox::KindToFlatVector<kind>::WrapperType;
+  auto stream = cudf::get_default_stream();
+  auto mr = cudf::get_current_device_resource_ref();
+  auto& type = vector->type();
+  auto constVector = vector->as<facebook::velox::ConstantVector<T>>();
+  T value = constVector->valueAt(0);
   if constexpr (cudf::is_fixed_width<T>()) {
     VELOX_CHECK(vector->isConstantEncoding());
-    auto constVector = vector->as<facebook::velox::ConstantVector<T>>();
-    T value = constVector->valueAt(0);
-    // store scalar and use its reference in the literal
-    scalars.emplace_back(std::make_unique<cudf::numeric_scalar<T>>(value));
-    return cudf::ast::literal{
-        *static_cast<cudf::numeric_scalar<T>*>(scalars.back().get())};
+    // check if decimal (unsupported by ast), if interval, if date
+    if (type->isShortDecimal()) {
+      VELOX_FAIL("Short decimal not supported");
+      /* TODO: enable after rewriting using binary ops
+      using CudfDecimalType = cudf::numeric::decimal64;
+      using cudfScalarType = cudf::fixed_point_scalar<CudfDecimalType>;
+      auto scalar = std::make_unique<cudfScalarType>(value,
+                    type->scale(),
+                     true,
+                     stream,
+                     mr);
+      scalars.emplace_back(std::move(scalar));
+      return cudf::ast::literal{
+          *static_cast<cudfScalarType*>(scalars.back().get())};
+      */
+    } else if (type->isLongDecimal()) {
+      VELOX_FAIL("Long decimal not supported");
+      /* TODO: enable after rewriting using binary ops
+      using CudfDecimalType = cudf::numeric::decimal128;
+      using cudfScalarType = cudf::fixed_point_scalar<CudfDecimalType>;
+      auto scalar = std::make_unique<cudfScalarType>(value,
+                    type->scale(),
+                     true,
+                     stream,
+                     mr);
+      scalars.emplace_back(std::move(scalar));
+      return cudf::ast::literal{
+          *static_cast<cudfScalarType*>(scalars.back().get())};
+      */
+    } else if (type->isIntervalYearMonth()) {
+      // no support for interval year month in cudf
+      VELOX_FAIL("Interval year month not supported");
+    } else if (type->isIntervalDayTime()) {
+      using CudfDurationType = cudf::duration_ms;
+      if constexpr (std::is_same_v<T, CudfDurationType::rep>) {
+        using cudfScalarType = cudf::duration_scalar<CudfDurationType>;
+        auto scalar = std::make_unique<cudfScalarType>(value, true, stream, mr);
+        scalars.emplace_back(std::move(scalar));
+        return cudf::ast::literal{
+            *static_cast<cudfScalarType*>(scalars.back().get())};
+      }
+    } else if (type->isDate()) {
+      using CudfDateType = cudf::timestamp_D;
+      if constexpr (std::is_same_v<T, CudfDateType::rep>) {
+        using cudfScalarType = cudf::timestamp_scalar<CudfDateType>;
+        auto scalar = std::make_unique<cudfScalarType>(value, true, stream, mr);
+        scalars.emplace_back(std::move(scalar));
+        return cudf::ast::literal{
+            *static_cast<cudfScalarType*>(scalars.back().get())};
+      }
+    } else {
+      // store scalar and use its reference in the literal
+      using cudfScalarType = cudf::numeric_scalar<T>;
+      scalars.emplace_back(
+          std::make_unique<cudfScalarType>(value, true, stream, mr));
+      return cudf::ast::literal{
+          *static_cast<cudfScalarType*>(scalars.back().get())};
+    }
+    VELOX_FAIL("Unsupported base type for literal");
   } else if (kind == TypeKind::VARCHAR) {
     VELOX_CHECK(vector->isConstantEncoding());
     auto constVector =
         vector->as<facebook::velox::ConstantVector<StringView>>();
     auto value = constVector->valueAt(0);
     std::string_view stringValue = static_cast<std::string_view>(value);
-    scalars.emplace_back(std::make_unique<cudf::string_scalar>(stringValue));
+    scalars.emplace_back(
+        std::make_unique<cudf::string_scalar>(stringValue, true, stream, mr));
     return cudf::ast::literal{
         *static_cast<cudf::string_scalar*>(scalars.back().get())};
   } else {
@@ -132,6 +191,30 @@ cudf::ast::expression const& create_ast_tree(
         inputRowSchema,
         precompute_instructions);
     return tree.push(operation{unary_ops.at(name), op1});
+  } else if (name == "between") {
+    VELOX_CHECK_EQ(expr->inputs().size(), 3);
+    auto const& op1 = create_ast_tree(
+        expr->inputs()[0],
+        tree,
+        scalars,
+        inputRowSchema,
+        precompute_instructions);
+    auto const& op2 = create_ast_tree(
+        expr->inputs()[1],
+        tree,
+        scalars,
+        inputRowSchema,
+        precompute_instructions);
+    auto const& op3 = create_ast_tree(
+        expr->inputs()[2],
+        tree,
+        scalars,
+        inputRowSchema,
+        precompute_instructions);
+    // construct between(op2, op3) using >= and <=
+    auto const& op4 = tree.push(operation{op::GREATER_EQUAL, op1, op2});
+    auto const& op5 = tree.push(operation{op::LESS_EQUAL, op1, op3});
+    return tree.push(operation{op::NULL_LOGICAL_AND, op4, op5});
   } else if (name == "cast") {
     VELOX_CHECK_EQ(expr->inputs().size(), 1);
     auto const& op1 = create_ast_tree(
@@ -267,6 +350,7 @@ cudf::ast::expression const& create_ast_tree(
     VELOX_CHECK(column_index != -1, "Field not found, " + name);
     return tree.push(cudf::ast::column_reference(column_index));
   } else {
+    std::cerr << "Unsupported expression: " << expr->toString() << std::endl;
     VELOX_FAIL("Unsupported expression: " + name);
   }
 }

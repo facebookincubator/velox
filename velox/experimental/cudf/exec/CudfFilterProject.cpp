@@ -132,6 +132,7 @@ RowVectorPtr CudfFilterProject::getOutput() {
       outputType_->size());
   // computed resultProjections
   for (int i = 0; i < resultProjections_.size(); i++) {
+    VELOX_CHECK_NOT_NULL(columns[i]);
     output_columns[resultProjections_[i].outputChannel] = std::move(columns[i]);
   }
 
@@ -144,19 +145,22 @@ RowVectorPtr CudfFilterProject::getOutput() {
   }
 
   // identityProjections (input to output copy)
+  input_table_columns = input_table->release();
   for (auto const& identity : identityProjections_) {
+    VELOX_CHECK_NOT_NULL(input_table_columns[identity.inputChannel]);
     if (inputChannelCount[identity.inputChannel] == 1) {
       // Move the column if it occurs only once
       output_columns[identity.outputChannel] =
-          std::move(columns[identity.inputChannel]);
+          std::move(input_table_columns[identity.inputChannel]);
     } else {
       // Otherwise, copy the column and decrement the count
       output_columns[identity.outputChannel] = std::make_unique<cudf::column>(
-          cudf_table_view.column(identity.inputChannel),
+          *input_table_columns[identity.inputChannel],
           stream,
           cudf::get_current_device_resource_ref());
-      inputChannelCount[identity.inputChannel]--;
     }
+    VELOX_CHECK_GT(inputChannelCount[identity.inputChannel], 0);
+    inputChannelCount[identity.inputChannel]--;
   }
 
   auto output_table = std::make_unique<cudf::table>(std::move(output_columns));
