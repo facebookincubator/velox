@@ -20,8 +20,11 @@
 namespace facebook::velox::functions::sparksql {
 namespace {
 
-// Vector function that returns the value of fields in a RowVector.
-// The constructor parameter ordinal controls the field index.
+// Returns the value of nested field in the input ``args``.
+// The input ``args`` must be of row type and nested complex type is allowed.
+// The field position is specified by ``ordinal``.
+// If ``ordinal`` is negative or greater than the children size of input,
+// it will throw exception.
 class GetStructFieldFunction : public exec::VectorFunction {
  public:
   GetStructFieldFunction(int32_t ordinal) : ordinal_(ordinal) {}
@@ -34,6 +37,13 @@ class GetStructFieldFunction : public exec::VectorFunction {
       VectorPtr& result) const override {
     exec::LocalDecodedVector decoded(context, *args[0], rows);
     auto rowData = decoded->base()->as<RowVector>();
+    VELOX_USER_CHECK_GE(
+        ordinal_, 0, "Invalid ordinal. Should be greater than 0.");
+    VELOX_USER_CHECK_LT(
+        ordinal_,
+        rowData->childrenSize(),
+        "Invalid ordinal. Should be small than the children size of input row vector {}.",
+        rowData->childrenSize());
     if (decoded->isIdentityMapping()) {
       result = rowData->childAt(ordinal_);
     } else {
