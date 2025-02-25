@@ -74,13 +74,7 @@ CudfFilterProject::CudfFilterProject(
       debug_print_tree(expr);
     }
   }
-  for (auto expr : info.exprs->exprs()) {
-    cudf::ast::tree tree;
-    create_ast_tree(expr, tree, scalars_, inputType, precompute_instructions_);
-    // If tree has only field reference, then it is a custom op or column
-    // reference. so we need to move it to identityProjections_
-    projectAst_.emplace_back(std::move(tree));
-  }
+  expressionEvaluator_ = ExpressionEvaluator(info.exprs->exprs(), inputType);
 }
 
 void CudfFilterProject::addInput(RowVectorPtr input) {
@@ -101,31 +95,9 @@ RowVectorPtr CudfFilterProject::getOutput() {
   auto stream = cudf_input->stream();
   auto input_table_columns = cudf_input->release()->release();
 
-  // Usage of the function
-  addPrecomputedColumns(
-      input_table_columns, precompute_instructions_, scalars_, stream);
-
-  auto input_table =
-      std::make_unique<cudf::table>(std::move(input_table_columns));
-  auto cudf_table_view = input_table->view();
-  std::vector<std::unique_ptr<cudf::column>> columns;
-  for (auto& tree : projectAst_) {
-    if (auto col_ref_ptr =
-            dynamic_cast<cudf::ast::column_reference const*>(&tree.back())) {
-      auto col = std::make_unique<cudf::column>(
-          cudf_table_view.column(col_ref_ptr->get_column_index()),
-          stream,
-          cudf::get_current_device_resource_ref());
-      columns.emplace_back(std::move(col));
-    } else {
-      auto col = cudf::compute_column(
-          cudf_table_view,
-          tree.back(),
-          stream,
-          cudf::get_current_device_resource_ref());
-      columns.emplace_back(std::move(col));
-    }
-  }
+  // Evaluate the expressions
+  auto columns = expressionEvaluator_.compute(
+      input_table_columns, stream, cudf::get_current_device_resource_ref());
 
   // Rearrange columns to match outputType_
   std::vector<std::unique_ptr<cudf::column>> output_columns(
@@ -145,7 +117,6 @@ RowVectorPtr CudfFilterProject::getOutput() {
   }
 
   // identityProjections (input to output copy)
-  input_table_columns = input_table->release();
   for (auto const& identity : identityProjections_) {
     VELOX_CHECK_NOT_NULL(input_table_columns[identity.inputChannel]);
     if (inputChannelCount[identity.inputChannel] == 1) {
