@@ -17,11 +17,9 @@ SCRIPTDIR=$(dirname "${BASH_SOURCE[0]}")
 source $SCRIPTDIR/setup-helper-functions.sh
 source $SCRIPTDIR/setup-versions.sh
 
-NPROC=$(getconf _NPROCESSORS_ONLN)
 VELOX_BUILD_SHARED=${VELOX_BUILD_SHARED:-"OFF"} #Build folly and gflags shared for use in libvelox.so.
 CMAKE_BUILD_TYPE="${BUILD_TYPE:-Release}"
 DEPENDENCY_DIR=${DEPENDENCY_DIR:-$(pwd)}
-export INSTALL_PREFIX=${INSTALL_PREFIX:-"/usr/local"}
 
 BUILD_DUCKDB="${BUILD_DUCKDB:-true}"
 
@@ -61,7 +59,6 @@ function install_fbthrift {
 
 function install_duckdb {
   if $BUILD_DUCKDB ; then
-    echo 'Building DuckDB'
     wget_and_untar https://github.com/duckdb/duckdb/archive/refs/tags/${DUCKDB_VERSION}.tar.gz duckdb
     cmake_install_dir duckdb -DBUILD_UNITTESTS=OFF -DENABLE_SANITIZER=OFF -DENABLE_UBSAN=OFF -DBUILD_SHELL=OFF -DEXPORT_DLL_SYMBOLS=OFF -DCMAKE_BUILD_TYPE=${CMAKE_BUILD_TYPE}
   fi

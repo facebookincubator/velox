@@ -32,6 +32,7 @@ source $SCRIPTDIR/setup-common.sh
 
 SUDO="${SUDO:-"sudo --preserve-env"}"
 USE_CLANG="${USE_CLANG:-false}"
+export INSTALL_PREFIX=${INSTALL_PREFIX:-"/usr/local"}
 DEPENDENCY_DIR=${DEPENDENCY_DIR:-$(pwd)/deps-download}
 VERSION=$(cat /etc/os-release | grep VERSION_ID)
 PYTHON_VENV=${PYTHON_VENV:-"${SCRIPTDIR}/../.venv"}

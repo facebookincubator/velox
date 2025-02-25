@@ -38,6 +38,7 @@ export CFLAGS=${CXXFLAGS//"-std=c++17"/} # Used by LZO.
 export COMPILER_FLAGS=${CXXFLAGS}
 SUDO="${SUDO:-""}"
 USE_CLANG="${USE_CLANG:-false}"
+export INSTALL_PREFIX=${INSTALL_PREFIX:-"/usr/local"}
 DEPENDENCY_DIR=${DEPENDENCY_DIR:-$(pwd)/deps-download}
 
 function dnf_install {
