@@ -23,6 +23,7 @@
 #include "velox/experimental/cudf/connectors/parquet/ParquetConfig.h"
 #include "velox/experimental/cudf/connectors/parquet/ParquetConnectorSplit.h"
 #include "velox/experimental/cudf/connectors/parquet/ParquetTableHandle.h"
+#include "velox/experimental/cudf/exec/ExpressionEvaluator.h"
 #include "velox/type/Type.h"
 
 #include <cudf/io/parquet.hpp>
@@ -130,6 +131,7 @@ class ParquetDataSource : public DataSource {
   // Expression evaluator for remaining filter.
   core::ExpressionEvaluator* const expressionEvaluator_;
   std::unique_ptr<exec::ExprSet> remainingFilterExprSet_;
+  velox::cudf_velox::ExpressionEvaluator cudfExpressionEvaluator_;
 
   // Expression evaluator for subfield filter.
   std::vector<std::unique_ptr<cudf::scalar>> subfield_scalars_;
