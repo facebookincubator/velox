@@ -13,6 +13,8 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+#include <folly/base64.h>
+
 #include "velox/common/hyperloglog/HllUtils.h"
 #include "velox/exec/PlanNodeStats.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
@@ -32,7 +34,9 @@ class ApproxDistinctTest : public AggregationTestBase {
   void testGlobalAgg(
       const VectorPtr& values,
       double maxStandardError,
-      int64_t expectedResult) {
+      int64_t expectedResult,
+      bool testApproxSet = false,
+      std::optional<int64_t> expectedApproxSetResult = std::nullopt) {
     auto vectors = makeRowVector({values});
     auto expected =
         makeRowVector({makeNullableFlatVector<int64_t>({expectedResult})});
@@ -51,18 +55,24 @@ class ApproxDistinctTest : public AggregationTestBase {
         {},
         {expected});
 
-    testAggregations(
-        {vectors},
-        {},
-        {fmt::format("approx_set(c0, {})", maxStandardError)},
-        {"cardinality(a0)"},
-        {expected});
+    if (testApproxSet) {
+      if (expectedApproxSetResult.has_value()) {
+        expected = makeRowVector(
+            {makeNullableFlatVector<int64_t>({*expectedApproxSetResult})});
+      }
+      testAggregations(
+          {vectors},
+          {},
+          {fmt::format("approx_set(c0, {})", maxStandardError)},
+          {"cardinality(a0)"},
+          {expected});
+    }
   }
 
   void testGlobalAgg(
       const VectorPtr& values,
       int64_t expectedResult,
-      bool testApproxSet = true) {
+      bool testApproxSet = false) {
     auto vectors = makeRowVector({values});
     auto expected =
         makeRowVector({makeNullableFlatVector<int64_t>({expectedResult})});
@@ -102,7 +112,7 @@ class ApproxDistinctTest : public AggregationTestBase {
       const VectorPtr& keys,
       const VectorPtr& values,
       const std::unordered_map<int32_t, int64_t>& expectedResults,
-      bool testApproxSet = true) {
+      bool testApproxSet = false) {
     auto vectors = makeRowVector({keys, values});
     auto expected = toRowVector(expectedResults);
 
@@ -150,10 +160,10 @@ const std::vector<std::string> ApproxDistinctTest::kVegetables = {
 TEST_F(ApproxDistinctTest, groupByIntegers) {
   vector_size_t size = 1'000;
   auto keys = makeFlatVector<int32_t>(size, [](auto row) { return row % 2; });
-  auto values = makeFlatVector<int32_t>(
+  auto values = makeFlatVector<int64_t>(
       size, [](auto row) { return row % 2 == 0 ? row % 17 : row % 21 + 100; });
 
-  testGroupByAgg(keys, values, {{0, 17}, {1, 21}});
+  testGroupByAgg(keys, values, {{0, 17}, {1, 21}}, true);
 }
 
 TEST_F(ApproxDistinctTest, groupByStrings) {
@@ -166,15 +176,16 @@ TEST_F(ApproxDistinctTest, groupByStrings) {
                      : kVegetables[row % kVegetables.size()]);
   });
 
-  testGroupByAgg(keys, values, {{0, kFruits.size()}, {1, kVegetables.size()}});
+  testGroupByAgg(
+      keys, values, {{0, kFruits.size()}, {1, kVegetables.size()}}, true);
 }
 
 TEST_F(ApproxDistinctTest, groupByHighCardinalityIntegers) {
   vector_size_t size = 1'000;
   auto keys = makeFlatVector<int32_t>(size, [](auto row) { return row % 2; });
-  auto values = makeFlatVector<int32_t>(size, [](auto row) { return row; });
+  auto values = makeFlatVector<int64_t>(size, [](auto row) { return row; });
 
-  testGroupByAgg(keys, values, {{0, 488}, {1, 493}}, false);
+  testGroupByAgg(keys, values, {{0, 516}, {1, 507}}, false);
   testAggregations(
       {makeRowVector({keys, values})},
       {"c0"},
@@ -186,10 +197,10 @@ TEST_F(ApproxDistinctTest, groupByHighCardinalityIntegers) {
 TEST_F(ApproxDistinctTest, groupByVeryLowCardinalityIntegers) {
   vector_size_t size = 1'000;
   auto keys = makeFlatVector<int32_t>(size, [](auto row) { return row % 2; });
-  auto values = makeFlatVector<int32_t>(
+  auto values = makeFlatVector<int64_t>(
       size, [](auto row) { return row % 2 == 0 ? 27 : row % 3; });
 
-  testGroupByAgg(keys, values, {{0, 1}, {1, 3}});
+  testGroupByAgg(keys, values, {{0, 1}, {1, 3}}, true);
 }
 
 TEST_F(ApproxDistinctTest, groupByAllNulls) {
@@ -215,7 +226,7 @@ TEST_F(ApproxDistinctTest, groupByAllNulls) {
 TEST_F(ApproxDistinctTest, globalAggIntegers) {
   vector_size_t size = 1'000;
   auto values =
-      makeFlatVector<int32_t>(size, [](auto row) { return row % 17; });
+      makeFlatVector<int64_t>(size, [](auto row) { return row % 17; });
 
   testGlobalAgg(values, 17);
 }
@@ -227,7 +238,7 @@ TEST_F(ApproxDistinctTest, globalAggStrings) {
     return StringView(kFruits[row % kFruits.size()]);
   });
 
-  testGlobalAgg(values, kFruits.size());
+  testGlobalAgg(values, kFruits.size(), true);
 }
 
 TEST_F(ApproxDistinctTest, globalAggVarbinary) {
@@ -248,22 +259,22 @@ TEST_F(ApproxDistinctTest, globalAggTimeStamp) {
 
 TEST_F(ApproxDistinctTest, globalAggHighCardinalityIntegers) {
   vector_size_t size = 1'000;
-  auto values = makeFlatVector<int32_t>(size, [](auto row) { return row; });
+  auto values = makeFlatVector<int64_t>(size, [](auto row) { return row; });
 
-  testGlobalAgg(values, 977, false);
+  testGlobalAgg(values, 1010, false);
   testAggregations(
       {makeRowVector({values})},
       {},
       {"approx_set(c0)"},
       {"cardinality(a0)"},
-      {makeRowVector({makeFlatVector<int64_t>(std::vector<int64_t>({997}))})});
+      {makeRowVector({makeFlatVector<int64_t>(std::vector<int64_t>({1005}))})});
 }
 
 TEST_F(ApproxDistinctTest, globalAggVeryLowCardinalityIntegers) {
   vector_size_t size = 1'000;
-  auto values = makeFlatVector<int32_t>(size, [](auto /*row*/) { return 27; });
+  auto values = makeFlatVector<int64_t>(size, [](auto /*row*/) { return 27; });
 
-  testGlobalAgg(values, 1);
+  testGlobalAgg(values, 1, true);
 }
 
 TEST_F(ApproxDistinctTest, toIndexBitLength) {
@@ -296,23 +307,45 @@ TEST_F(ApproxDistinctTest, toIndexBitLength) {
 
 TEST_F(ApproxDistinctTest, globalAggIntegersWithError) {
   vector_size_t size = 1'000;
-  auto values = makeFlatVector<int32_t>(size, [](auto row) { return row; });
 
-  testGlobalAgg(values, common::hll::kLowestMaxStandardError, 1000);
-  testGlobalAgg(values, 0.01, 1000);
-  testGlobalAgg(values, 0.1, 951);
-  testGlobalAgg(values, 0.2, 936);
-  testGlobalAgg(values, common::hll::kHighestMaxStandardError, 929);
+  // Test approx_distinct with integer.
+  {
+    auto values = makeFlatVector<int32_t>(size, [](auto row) { return row; });
 
-  values = makeFlatVector<int32_t>(50'000, folly::identity);
-  testGlobalAgg(values, common::hll::kLowestMaxStandardError, 50043);
-  testGlobalAgg(values, common::hll::kHighestMaxStandardError, 39069);
+    testGlobalAgg(values, common::hll::kLowestMaxStandardError, 1000);
+    testGlobalAgg(values, 0.01, 1000);
+    testGlobalAgg(values, 0.1, 951);
+    testGlobalAgg(values, 0.2, 936);
+    testGlobalAgg(values, common::hll::kHighestMaxStandardError, 929);
+
+    values = makeFlatVector<int32_t>(50'000, folly::identity);
+    testGlobalAgg(values, common::hll::kLowestMaxStandardError, 50043);
+    testGlobalAgg(values, common::hll::kHighestMaxStandardError, 39069);
+  }
+
+  // Test approx_set with bigint.
+  {
+    auto values = makeFlatVector<int64_t>(size, [](auto row) { return row; });
+
+    testGlobalAgg(values, common::hll::kLowestMaxStandardError, 1000, true);
+    testGlobalAgg(values, 0.01, 1000, true);
+    testGlobalAgg(values, 0.1, 1080, true, 945);
+    testGlobalAgg(values, 0.2, 1340, true, 1028);
+    testGlobalAgg(
+        values, common::hll::kHighestMaxStandardError, 1814, true, 1034);
+
+    values = makeFlatVector<int64_t>(50'000, folly::identity);
+    testGlobalAgg(
+        values, common::hll::kLowestMaxStandardError, 50060, true, 50284);
+    testGlobalAgg(
+        values, common::hll::kHighestMaxStandardError, 45437, true, 40037);
+  }
 }
 
 TEST_F(ApproxDistinctTest, globalAggAllNulls) {
   vector_size_t size = 1'000;
   auto values =
-      makeFlatVector<int32_t>(size, [](auto row) { return row; }, nullEvery(1));
+      makeFlatVector<int64_t>(size, [](auto row) { return row; }, nullEvery(1));
 
   auto op = PlanBuilder()
                 .values({makeRowVector({values})})
@@ -349,14 +382,7 @@ TEST_F(ApproxDistinctTest, globalAggAllNulls) {
 TEST_F(ApproxDistinctTest, hugeInt) {
   auto hugeIntValues =
       makeFlatVector<int128_t>(50000, [](auto row) { return row; });
-  testGlobalAgg(hugeIntValues, 49669, false);
-  testAggregations(
-      {makeRowVector({hugeIntValues})},
-      {},
-      {"approx_set(c0)"},
-      {"cardinality(a0)"},
-      {makeRowVector(
-          {makeFlatVector<int64_t>(std::vector<int64_t>({49958}))})});
+  testGlobalAgg(hugeIntValues, 49669);
   testGlobalAgg(hugeIntValues, common::hll::kLowestMaxStandardError, 50110);
   testGlobalAgg(hugeIntValues, common::hll::kHighestMaxStandardError, 41741);
 }
@@ -404,7 +430,7 @@ TEST_F(ApproxDistinctTest, mergeWithEmpty) {
   constexpr int kSize = 500;
   auto input = makeRowVector({
       makeFlatVector<int32_t>(kSize, [](auto i) { return std::min(i, 1); }),
-      makeFlatVector<int32_t>(
+      makeFlatVector<int64_t>(
           kSize, folly::identity, [](auto i) { return i == 0; }),
   });
   auto op = PlanBuilder()
@@ -469,6 +495,139 @@ TEST_F(ApproxDistinctTest, unknownType) {
           makeNullConstant(TypeKind::BIGINT, 2),
           makeNullConstant(TypeKind::BIGINT, 2),
       })});
+}
+
+TEST_F(ApproxDistinctTest, approxSetMatchJava) {
+  auto bigintData = makeFlatVector<int64_t>({123, -321});
+  auto op = PlanBuilder()
+                .values({makeRowVector({bigintData})})
+                .singleAggregation({}, {"approx_set(c0)"})
+                .project({"to_base64(cast(a0 as varbinary))"})
+                .planNode();
+  auto result = readSingleValue(op);
+  ASSERT_EQ(result.value<TypeKind::VARCHAR>(), "AgwCAEDjUEZAqnCk");
+
+  bigintData =
+      makeFlatVector<int64_t>(1000, [](auto row) { return -500 + row; });
+  op = PlanBuilder()
+           .values({makeRowVector({bigintData})})
+           .singleAggregation({}, {"approx_set(c0)"})
+           .project({"to_base64(cast(a0 as varbinary))"})
+           .planNode();
+  result = readSingleValue(op);
+  ASSERT_EQ(
+      result.value<TypeKind::VARCHAR>(),
+      "AwwAAAAgAAAAAnADAAEAAAEAAQAAAQAAIAABABACAgAAAAAAAAAQAAABEAAAACAAAAAWMBAEAAYQEBAQAAACAAACAAAAAAAAAQAgACACQAIAAAAQAAECADAAABAAAAEAAQAAAABgAAAAIQADAAAgMAAAYCACAAAQAAAAAAAAABEAAgAAMBEhAAAgAAAAEAAAAAAAADAAAREAEAIBEAMAAQEAAAAAAAACAAAQMwAAIAAAAAAwAQAAAAARABAAAAACAAMAEAAlAAAAAQAAEAAAIAAFAAAhBQAgAAAABAIBAAAAARAQAAAAABEAADAAABAAIQAAEAEAIBEAAgAAAAAhAyAAAAAgAAAAAAAAEAAAAAIAAgACABAAAAEAAAAAAAAEAAAAABABEAAQAAAAAAAAEAAAIgAxAQAAAANAAAAAABAAACACAAEAAAABAAARIAAAEgAwABAAAAAAAAAAAQACAQEAUAABAQIAEAAAAAAAAAAAAAEAAhAAEQMABwEgAAEQEAAwAAAACAEAAkAgAGAAAAUAAAAREAIAAAEBACMBAAMAADAgAQAAAAAAAAAAAAAVAAAxEAACAAAAESAAAAAAAAAIJQAAIAABEAAAEAAQACAAAAAQABAAAgABAAAAAAABADAAAAMAIAAAAgAAEwAxEAAAQAEAAwBAAAQAEAAQEAECAAEAEAEAECAAAAAAIgAAAAAQAQABAAAAEAAAAABwAAAAAQAAARAAACAEAFAQAABQAAAAAAUAADEBAAARACAAEAACAAEDAAAAAAAAACIAMAAAAAEAIAAAABAAAAAAIAAAEQAABAAAAAAAIBAAMAAAAQAAAAAAABMAAAEAAQAAAAAEAAAQIBAAAiABAAMQAAEAAwAgACAAAQAQAQAAAAADIgEAQQAAAAAAAAIAAAAAAAAAEAAAAAAwAEAAIBMAAgAAAAAAAAAQAAAAEBAAAAAAIAAAAABDAAAAAAAQAQQAEAIAAAEAAQAAAkABAAAAAAEAZwAgAQAAAAAAAQAAAAITAAAAABAQAEAAMgIAAQAAAgACAAACEAAABQAAAQAFAAAhAAAAAAAAACABADAAAAEAAQAABwAAAAEEIAAAAQADAAIAEAAAACABAgAAAAAAABAAABAQAwAAUgAEADAgAAAAAAAAYQAgAAEAAAAAAAAAAQAwAAAAAAAAAQIAAQAABSAAAAAFAQAgACAEAAUAAAAgIAQAADAAAEIAAAAAAAAQAQACMAMAAAEDAAAAABAABQAQAAAAAAAAAAAAAAAAEQABAAAAEAAAAANAABACABAAAABgAAAAECACAAAAACIREAAAAAACAAAAAgEAAAYAEQAQABAAAAAAMAAAAAAwAAAAEAEBUAIAAQAAEAAAIxAAAEAgIQMAAQIAAAAAAAAAAAEAAAAAMBAQAAAAAzAAAAUQABAQAAAAAAAAAEAAARAABQIAAAUAAQAQAQAAACAABAAwAAADEDAAEAAAAAIAAQAAAAEAAFAAAAAAAiQAAAAAEAABEAAAAAIAAQABAAABAEAAAAEAIAAAAAAAAAAAAAAAAAAAEAAAEAABAAEAAAIgEAAAAAAAABAAAAABABAAERIAAgBAAAAQAQICACEAACASAAEIAAACAAEEIAAAAgAAABAAAAAAAAAAMBAAAAYAABAwEgACACABAAARAAAAUAAAAgABAQABAAEQAAAAAAAAQAAABQBgAAAAAAAAIAAAAAAAEAAgAAAAAAIGARAAABIAAQEAAEAAAQUgAAAAAQAAAiAIAAAAAAEAAAAwACAAADABAAAgACAAAAIAAiAQAQAQAAAAAAEAAAAQAAAQAAAAAAEAEAAQACAAAAAQAAAAAAEAACASAAACBwQGAQAAAAAiAAEwAAABEAAAAAAAAAAAAAQAEAAAAAIAIQAAAAAAAAAAEBEAAQAAIjAAAAAAASAQASAAASAAAAAAEDACAAAAAAAABgAQAAAAEAUAAAAAAAAAAAAAESABMAAAAAAAAAAQEAAAEAATAAAAAAABEBAwAAIAAAAAAAACAAEAEQAAAAAAAAAgAQAAABABADEgAAATAQAQAAAAAgABIAAAEABAAAADAQBAAAAAAAIAAAAAAAAAFAAQAQAAADAAAQMAAAAFAAQBAAAAAABBAQAAAAEAAAAQJAAABAAAAAIAAAARMAAAAwAAEQAABAMAACAAAAACAAAABAAAAQAwAQAAAAAAIAAAAAAwA0EABQAAAAAgBAAQAAAQIgAAARACAAAgAAAAEAAAUAAAAQAwAAAAAAABAAAAABABAAEQAwAABCEAQAAwAAAAACMAIAAAICAAEAIAAAAAMAAAAAICEAEAABAQECAAAAEAAAAAABAAACEAAEIAFAAAEAEAIAAAAAAgACAAABACAAEAAAAAABAAIAAwAAACABAAMAAAAgAAAAAAAwAAARAAJQAAACAAAAACAwIAAAAHAgBAAAAAAAAgAwFAAAEAMCAAAAAAAQAQAAADUAAAEAAAAAABAAAAARAAIBEgAAAgAAFDBQAAADAAACAAIAAQAyAAAAAAAAAAAAMQABIgAAEAAAAAAAIAAAAAAAIAAAAAAAAAEAEBABAAAAARAAM0AAAAAAADAAAAAAAAAwBRRCAQEAAABBIgAAAQABAAAAIQAgAAAxAAAAEAAAAAAgAAAgAAAAAAASAAIARgAAIAABACABAAAAAAAAIAAxAlAAEAAAAwAAAAIAADIAAAAAADAAAAAA==");
+
+  auto stringData = makeFlatVector<std::string>({"123"});
+  op = PlanBuilder()
+           .values({makeRowVector({stringData})})
+           .singleAggregation({}, {"approx_set(c0)"})
+           .project({"to_base64(cast(a0 as varbinary))"})
+           .planNode();
+  result = readSingleValue(op);
+  ASSERT_EQ(result.value<TypeKind::VARCHAR>(), "AgwBAAEtW5g=");
+
+  stringData = makeFlatVector<std::string>(
+      1000, [](auto row) { return std::to_string(row); });
+  op = PlanBuilder()
+           .values({makeRowVector({stringData})})
+           .singleAggregation({}, {"approx_set(c0)"})
+           .project({"to_base64(cast(a0 as varbinary))"})
+           .planNode();
+  result = readSingleValue(op);
+  ASSERT_EQ(
+      result.value<TypeKind::VARCHAR>(),
+      "AwwAAAUAMABAAAAQAAABABAAMAAAAQAAAAABAAoAAAAAAAMyBAEAACAAQAAGACAAEAEAAEAAICAAAgEAABAhABAAAAAAAAACABAQAAAAAEMgAAAAAAIgABEAAgAAAABgACEAAAAAAAABAAAAABAAAAEAAAEAAAcAAAAAAAAQAAAAACAAACAhAAAAABAAAEAAABABAQECAWAEAAAAEAQAABACIAAAABAAADAQAAAAEAIAAAAAAAAANAAwAAABEhAAAAAAAAAAADAEEAAAACAAAwAAAgAQAAAAABAAAQAAICIAUAABAAIAAAAAAAAQADAgABEAEEEAAAAAAAAQAQAAAAEAAFAAIgAAAAABAAQAAAAAABAQBAQAABADAQEAADAgAAAAAAAAAAAAAgAAcgEQAAAAACAAAAAQAAAAEAABAAAAABAAAAAAAQADAAAAACIAAAEAABACAAAwEAAQABAAEDAGAgAAAAAQAgAwAAAAUAAAADEAAABAAAAAAAAAAAAAABEAAAAAAAAAAEAAAAUQACAAAAAAAAAAAAAQAAAAIAAAAAAQIAAAABACABAAAAAAIBAQAwAAAAAhADEAAAACAAAAAAABAAIAAAAAAAAAACBwABAAAAAAAAAAECAAEAACUAAAAAADIAAAAAIAIAAAAAQAAAAAIBACERAAAAAAAAAAQAEQBAAAAAAAAAIAAAABUAAAAAAxAAAAAwAQAAAAEAAAAAAAABAgAAAiAAAFEQAgBSACIBABIAAiAAAAAEAAAAEAAAIAEAABAAABABACAQEyAQAAAwAgEAEQAAAgEAAQAAQAECJQAAQBAwAAIAAAAgABAAEAIAAAAAABABABEAAQAAAAAgAABAAQAAIAIAAgBwAAAAABAAEAAgAQAAABAAAAAAACAAAQAAAAAAAAAAAAAAAAEgAAAAAAIAsBAAACAAAkAAAAQDABAAAAAAEAAAYAMAEAAAAAIBACAAAQMQAAAAAAMAAAAAAAAAAAAAUwACAgAAAAAAAQAAAAAQAAEAAQAAAAMCAQAAAAQAAAAEEAAAAgAAEAAAAAEQAAABAAIAACAFABEAABEBAAAwMAAAAAAAAAIAAAAAABAAAAABAAAQAAATIAEAABAAAAAQAAAQAQAAIAAAADEAAAEABAMAABAAAwAAAQAAAAIAAAAAABAAAAAwAQAAAAAAAAEBAEAQAAMCAAAAABEAABAAABAAERAAIwEGQAAwIAAAAAAAAAAAAQABQwAwAAAAACAyAQIAAAQgAwIRAgIQAiAgAQACEAERAAQAABAAABAAABAAAhEwAAEQAAEQAAAAAAAAAAAAAAEiFAAAIAAAIAAAAAAQEBAAAAEAAAIgEgASAAABAAEAAgABIgIBEAAAAAQQAwAEAAAAIAAAACAAAAAQAAAAAABwAQAAAAEAABIAAAABEAIAAQAjAAAgACAAASAAAAAAAAECACAhMAAAIAEAAAEQIBIBAAAAACAAAAAAAAAiAAEAAAAAAAAAEDAAAQAQASEAAAEAAAAwAAEAAAAQAAECABAAAgAAAAAAMBAAAQAAAAFAAAAAFjAQAAAAAAAAAAAAABAQAxAAAAEAAwABUAABAAMQABAAAAJgACEABQAAIAAAAAAQAAAAADAAAgAgABABAAABMAUAAAAwAAAAMQBAAAAAMAAAAAEgAAAwAAARAgAAAwEAACAAEAAAACADAAAREQAAAAABAAAAAAAAABAAAAAAAwMAAAAAAAAAABIRASAEAgAAAAAAAABAEwADAAAAEgAQAAAAAAAQAAAAAAAAAAAAADEDABAAAgAAASAQAAJAAAAAQAAAEhARAAAAIgIAAAIAAAAAARAAABBQAQAAIAABAFAARzAAEBAAIBAAEAAQAAABAAAEAAIAAAAAAAAQYBMAAQEAEAAQAAEwAAACAAADAAAAEjEAAAAAAAEDAAADEAAgAQAQAAABAAIAAgAAAQAAIDAHIAAAAAAAAAAAAAAAAAAAIDAgAAAAAgAAABAQAAAAAHAAEgAAAQIEIAAAAAAAAAASAwAwAAEAAAAAEAAgAAAQAAAAIgAwAAAFAAAQAwAQAAAAADAHAgEEAAAAAAgCEgAAMSAAAwAAAQMAAgEAAAIAQAAwAgAAEAAgUBAAAAAAAAIAUAQQQAACAAAAAAAAEQAEAAAAAAAAAAAAIAAAAAMAAEMAABAAACAAAAAhAAMBAgACABAAIAAQFQAAUCUAAQAhcAACABAAADAAIwABAAAAARAFAAAAAAJQAAEAAAAAEgQBQAAAACAAAAAAAAAAAAEAAAAAAAAAABAAAFEAAEAAABAAMAEAIAAAAAAEBVIAAAEDAABBUAEEEAAAAAASAAAAEAAAABAAAAAAAAAAIAMAIAAAAAAQAAQAACAAAAACAXAQIAECACABAgAAAAAwAAAAAAAAAwAAAAAAQgABAAAAABQAIDABAAAAAAADEAAAAQEAAAYDYAAAAAAAEgAAAQAAAAAgAgEQEAEAAAAAACACAQACEAAAEAAAIAAABAIAMAAAAAAAAAAQAAIAEBAAICAAAABQEBABACAAIBAAAAABAAAQAEABAwAAAAAAEAAAABUAECAAAAAAEAABEAABAAAAAAABAAABBQAAACAAABAAAAEDAAAAIEAAAAAQAAABAAAAMAEAAAEAABNQIAAQAAAAAQAAECAAESABMAAAQgADAQAAAAAAMDFwAiAgABAQABARAAAAACAAAAADAAAA==");
+
+  auto doubleData = makeFlatVector<double>({123.1, -321.1});
+  op = PlanBuilder()
+           .values({makeRowVector({doubleData})})
+           .singleAggregation({}, {"approx_set(c0)"})
+           .project({"to_base64(cast(a0 as varbinary))"})
+           .planNode();
+  result = readSingleValue(op);
+  ASSERT_EQ(result.value<TypeKind::VARCHAR>(), "AgwCAACW723A9ER8");
+
+  doubleData =
+      makeFlatVector<double>(1000, [](auto row) { return -500 + row + 0.1; });
+  op = PlanBuilder()
+           .values({makeRowVector({doubleData})})
+           .singleAggregation({}, {"approx_set(c0)"})
+           .project({"to_base64(cast(a0 as varbinary))"})
+           .planNode();
+  result = readSingleValue(op);
+  ASSERT_EQ(
+      result.value<TypeKind::VARCHAR>(),
+      "AwwAAAAAAwAAQAAAAAASAAAAAAAAABAAAAAAAAAAAAIBAEAAAAAAAAAAAAkAAAMgMAAAAABQAAAAAQAAACIAAAMAAAAAAQBnIAAAAAABAAAAAREAACAAAAAgEAAAIAADEAAAAAMAAAEAADAAAhAAEAAgAAAAACAgCAAAAgEAkAAAIDAAADAiBAADMAAAAQEQAAAQAwAQAAABEhAAARAgARAgAAAAABAgAAABAAACAAAFEAAAAgAgAAAQACAABQAAABAAAAECAAAAAAEgEAAwAwAAABAAAAEAAAAQAAAAIAAEAAAQAAAAAAAAMBBwECAABQQAAQAgAgABAgFQMQEAEAAAAGEgAAAAAAAAAAAAAAAQICAAAAAAABASAFADJxAAABABAwAAEwAAAAMBAgAAQAABJAAwAQICAAADMCAAIwAAAAAAAAACACAAAAAAABAUABAAACAAEAAAAQAAADAAABIAAwAAMRAAAAAwAQAAAAAAAAEAAgIAAAACABAAABEAAAAAAQMAMAAgAFUAAAAAAAEAAAIBIAAAAAAAAxAAAAAAAAAAMAAAAAAAAAAAAAAAAAAABgAhEAACIAAAEAAQAAAAAAEAAAEDAAQAAAAAAwEAAAACAAACEAABAAABAAACAAAAIAABAAMwABAAIAEAAUABAjABAAQQAUAAAAQAAAAAABAAAAAQABAAAAADAAAAQBASACAAAAEAAAIiAAAAUgAAAABgAAAwAAIAACAgAAAAEEAAAAAQIAAAAAAkAQAAAAAQAGESAAAAAAACAUAAAAAAAgAQEAAAAAAAAAAEAAAAEBAAIAABEDAAEAAgMAAAAAAQAAAAAQAAAAAAACAAAAEgUAAAAAIwIgAQAAMBBQAAIAEAEAAAIAEAAABwAAAAAAEAYAAAAwABACBSAAEQBQAAMAACAAABASAkAAABAQAAAAAAEBNAEAEQAQABMAAgAAAAAAAAAAEAAQAAAQAAEBAgAAAUABAAEAAAAAMAAAIAAAAAEAACAwAAAAAAAAAAAyAQABIAAAAAAEEAExAAAAAAADAAABAAAhMBBAEgAAAAQAAyEEAAEBIAAQAAAEAAAAAAAQAAAAAAAAARAgACAAcAMBABAAAEAAAAAAABBRAQAgAAEAAAFAACAAAAEAAAABAQAwADAAAAIAAAABBgAAMAEBAAARAABgAAAgAAADEAACEAMAIAAAEABAIgAAAAAgAAAAAAAAAAIAAAAlEAAAAAAAAQAAEgAAAAAQAwACAhAAAQUAAAAAEgAiAAEAAAADAAAAAAAhACAAAAAAEQAQAiEBAAAAACAQAAAAAAEAAAAAAAAFABcAAwAEAAAAAAAAAAABEAEABAAAAAMAAAAAAAAAIBAwAQAAEDEAUCMAAAAAAQAAAAAAAAEAAQAAEAABAAABABMAACAAAQAEAkEAAAACAAACAAAAADAAASAAAEAAAAAAAQAAAAAQADAAAABQAAAEAAAAAgAAEAAgAAAAAAAAAAATAAAAAgEDAAEAIwAAAAAEAAABgAAAIAABEAAQECAEAAAAAAAQECAAADABAAABAAAgEAAQAAMAAAAAMAAAAAAAECAAAAAAIAAgA1AAAAEBABAAAAAHEAA1ABAAAAAAEAAAAAAAEAAAAAAAAAIAAAAAAAAAIBACAgAAAAAAAAAEACACACAAAAAAEQABEBAAAGAQECAAEAMAAAAAIAAAABAQADAAAQEAAAEBEAAQAwATABAgAAAAEDAREAAAADAAAAAAAwAAAAAAEAEAEBAAAAAAAgAQFBAAAAAgBAAgAAAQAHAAAAAAAAAQAAAAABAAAAAAAQAAAAAAAAIDAAAAAAAAAAMBAAAAAAAKEAAAAQAAEAAAAABRAAAAAAAQAAAAAAAAAhAAEjAQAAAAAAAQAAAAMAACAgIAAAAAAAAAAQABAAcQAAAAABABMwAAAAJjAAAAAAAAACAQAAABIAAAABACIAAAIAAAAwAQAAAAAAABAAAAAAAAABAAABACAEAQAABgAAACEAAAAABAAAABAAEAAhAgAAAAAwAAAAAkAAIAIAADAQEAAAAQAAAAAgACABAgUQAAMQAAACABAEAAEAAQEAEBAAABAAABcDAAAAACACEAAgAAACEjMAEBAgAAABAAAAAAAiAAABAQARAAMAEAEAAnAAABEAMDAAABAAAAAIAiQDIAABAxAAIAAAACsAAAAAAAAAAAAAAEAAdCAwAAAQAAABABAAABAAAAAAQAARAAAAAwEAEAACABEQIEAAAAAAAgAAAAABAAAAAAADIQBAAhABMAEDACAQAAAAAAAAEBMAIAAAAAAAABAAAAUAAAAQAAABAAAABCACEDMCBQAAQAAAAAAAAAEwAAEAAAAAMABAACAAAAEAABABACAAAAAAAAAAAAEQEAAQACACAAAAAAAQAAAAAAAHAAABAAAAAQAAEAAAAAAAAAAAEAACAAAAAAMAAQAAABADAAEAEQAAAhAAAAMAIAMwAAAAACAAAgAAAAAAACAAQAAQABAwAQAIADAgAAAAAAIAMDAAAAAAAAACAAAAAAAAAAAAAgAQAQAAAAAAAAAAAAEAEDAAEAAAARAEEQAFBDcAADABEQAAADAgAEExAAIAAAAAAAAAIAIAAAAQAgEAQABBAAJAAAADAAIAAAEAIAAgAAEiAAAAAAABAAEBABAAAQEAAQAAAAAAAAABAEAAAiAAABEQAAAAAAEAAAADAQAAADAAAA==");
+
+  auto unknownData = makeNullConstant(TypeKind::UNKNOWN, 1000);
+  op = PlanBuilder()
+           .values({makeRowVector({unknownData})})
+           .singleAggregation({}, {"approx_set(c0)"})
+           .project({"to_base64(cast(a0 as varbinary))"})
+           .planNode();
+  result = readSingleValue(op);
+  ASSERT_TRUE(result.isNull());
+}
+
+TEST_F(ApproxDistinctTest, mergeMatchJava) {
+  // Base64-encoded HLLs from Presto Java.
+  const std::string kHll1 =
+      "AgxkAIADRABFYvAFQOzJBsGR7QZERuYIAW5WCQEuxAwCl4kNAGabD8DF1A+AjyMQgBN+EAA0LxKGHTQbwI9aGwEVax2C3wshRHmIJYCuFSiAY98oQDmbKwBGriwAzLIuglTmL4Ep4TCAAZMzABY6NABjrjiC0oc5ge+BPgDytj8AeMREAbAqRQBv+0fAXUZJQfw7TwD921MBZadZAFg9W0BttltBPppdQRXTXQHBymCCqTthgBtKYkKdsGKDRbFmAsDFZsGoJmsB25psgp+dbYBmH28FuyJywCBlegJiFHyCzJV8gfotgUGi8oEAqvKJgdRqikCutIyB3tqPwIjrkQA2SZQANQmVAYd0lcL34ZVBReWWgLsgnUK6YqeBngypgEGOqoBY961AWTuwAdIZtMIUPrWBw6y2AOXsuwAour6AveS/gLSxx0CzzMkC0lnQgIGQ0MBgLtmAZEvbgKF13YAgCN6CjCHmQA7D7IFl5e2B4knyQCTM8oBwS/OA/1rzQFTs9Ub3j/aB6Ez3QEC19wDr9Ps=";
+  const std::string kHll2 =
+      "Agw4AEGh/gFFYvAFAW5WCQKXiQ0AZpsPgI8jEIATfhABFWsdgt8LIUA5mysAzLIuglTmL4ABkzMAFjo0ge+BPgB4xEQAb/tHAWWnWUBttluAG0piQp2wYgLAxWbBqCZrAduabMAOvG6AZh9vBbsickDc3nPAIGV6gfotgUCutIyB3tqPAKlokwA2SZQANQmVAYd0lUFF5ZaAQY6qQFk7sMIUPrUAKLq+gLSxx4C9gcgC0lnQgIGQ0MBgLtmAZEvbwP2r3IChdd2CjCHmQCTM8oBwS/OA/1rzRveP9oHoTPcA6/T7";
+  const std::string kHll3 = "AgwCAEOMKoqArgCM";
+
+  // Check that Velox produces the same HLLs as Java.
+  auto data = makeRowVector(
+      {makeFlatVector<int64_t>(
+           158,
+           [](auto row) {
+             if (row < 100) {
+               return row;
+             } else if (row < 156) {
+               return row - 50;
+             } else {
+               return row - 156 + 200;
+             }
+           }),
+       makeFlatVector<int32_t>(158, [](auto row) {
+         if (row < 100) {
+           return 0;
+         } else if (row < 156) {
+           return 1;
+         } else {
+           return 2;
+         }
+       })});
+  auto op = PlanBuilder()
+                .values({data})
+                .singleAggregation({"c1"}, {"approx_set(c0)"})
+                .orderBy({"c1"}, false)
+                .project({"to_base64(cast(a0 as varbinary))"})
+                .planNode();
+  auto resultVector = AssertQueryBuilder(op).copyResults(pool_.get());
+  auto hllVector = resultVector->childAt(0);
+  BaseVector::flattenVector(hllVector);
+  ASSERT_EQ(hllVector->size(), 3);
+  ASSERT_EQ(hllVector->asFlatVector<StringView>()->valueAt(0), kHll1);
+  ASSERT_EQ(hllVector->asFlatVector<StringView>()->valueAt(1), kHll2);
+  ASSERT_EQ(hllVector->asFlatVector<StringView>()->valueAt(2), kHll3);
+
+  // Check that Velox merges the HLLs properly and produces the same HLL result
+  // as Java.
+  auto hll = makeFlatVector<std::string>({kHll1, kHll2, kHll3});
+  op = PlanBuilder()
+           .values({makeRowVector({hll})})
+           .project({"cast(from_base64(c0) as hyperloglog) as c0"})
+           .singleAggregation({}, {"merge(c0)"})
+           .project({"to_base64(cast(a0 as varbinary))"})
+           .planNode();
+  auto result = readSingleValue(op);
+  ASSERT_EQ(
+      result.value<TypeKind::VARCHAR>(),
+      "AgxsAIADRABBof4BRWLwBUDsyQbBke0GREbmCAFuVgkBLsQMApeJDQBmmw/AxdQPgI8jEIATfhAANC8Shh00G8CPWhsBFWsdgt8LIUR5iCWArhUogGPfKEA5mysARq4sAMyyLoJU5i+BKeEwgAGTMwAWOjQAY644gtKHOYHvgT4A8rY/AHjERAGwKkUAb/tHwF1GSUH8O08A/dtTAWWnWQBYPVtAbbZbQT6aXUEV010Bwcpggqk7YYAbSmJCnbBig0WxZgLAxWbBqCZrAduabIKfnW3ADrxugGYfbwW7InJA3N5zwCBlegJiFHyCzJV8gfotgUGi8oEAqvKJQ4wqioHUaoqArgCMQK60jIHe2o/AiOuRAKlokwA2SZQANQmVAYd0lcL34ZVBReWWgLsgnUK6YqeBngypgEGOqoBY961AWTuwAdIZtMIUPrWBw6y2AOXsuwAour6AveS/gLSxx4C9gchAs8zJAtJZ0ICBkNDAYC7ZgGRL28D9q9yAoXXdgCAI3oKMIeZADsPsgWXl7YHiSfJAJMzygHBL84D/WvNAVOz1RveP9oHoTPdAQLX3AOv0+w==");
 }
 
 } // namespace
