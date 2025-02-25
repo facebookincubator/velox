@@ -67,6 +67,9 @@ int main(int argc, char** argv) {
       "replace",
       "might_contain",
       "unix_timestamp",
+      // to_unix_timestamp(date) throws VeloxRuntimeError when the date is out
+      // of the supported range.
+      "to_unix_timestamp(date) -> bigint",
       // from_unixtime throws VeloxRuntimeError when the timestamp is out of the
       // supported range.
       "from_unixtime",
