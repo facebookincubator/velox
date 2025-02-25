@@ -15,12 +15,13 @@
  */
 #pragma once
 
-#include <folly/io/IOBuf.h>
 #include "velox/common/base/Scratch.h"
 #include "velox/common/memory/StreamArena.h"
 #include "velox/type/Type.h"
 
+#include <folly/Bits.h>
 #include <folly/io/IOBuf.h>
+
 #include <memory>
 
 namespace facebook::velox {
@@ -68,6 +69,68 @@ class OutputStream {
 
  protected:
   OutputStreamListener* listener_;
+};
+
+/// An OutputStream that wraps another and coalesces writes into a buffer before
+/// flushing them as large writes to the wrapped OutputStream.
+///
+/// Note that you must call flush at the end of writing to ensure the changes
+/// propagate to the wrapped OutputStream.
+class BufferedOutputStream : public OutputStream {
+ public:
+  BufferedOutputStream(
+      OutputStream* out,
+      StreamArena* arena,
+      int32_t bufferSize = 1 << 20)
+      : OutputStream(), out_(out) {
+    arena->newRange(bufferSize, nullptr, &buffer_);
+  }
+
+  ~BufferedOutputStream() {
+    flush();
+  }
+
+  void write(const char* s, std::streamsize count) override {
+    auto remaining = count;
+    while (remaining > 0) {
+      const int32_t copyLength =
+          std::min(remaining, (std::streamsize)buffer_.size - buffer_.position);
+      simd::memcpy(
+          buffer_.buffer + buffer_.position, s + count - remaining, copyLength);
+      buffer_.position += copyLength;
+      remaining -= copyLength;
+      if (buffer_.position == buffer_.size) {
+        flush();
+        if (remaining >= buffer_.size) {
+          out_->write(s + count - remaining, remaining);
+          break;
+        }
+      }
+    }
+  }
+
+  std::streampos tellp() const override {
+    flushImpl();
+    return out_->tellp();
+  }
+
+  void seekp(std::streampos pos) override {
+    flushImpl();
+    out_->seekp(pos);
+  }
+
+  void flush() {
+    flushImpl();
+  }
+
+ private:
+  inline void flushImpl() const {
+    out_->write(reinterpret_cast<char*>(buffer_.buffer), buffer_.position);
+    buffer_.position = 0;
+  }
+
+  OutputStream* const out_;
+  mutable ByteRange buffer_;
 };
 
 class OStreamOutputStream : public OutputStream {
@@ -122,20 +185,24 @@ class ByteInputStream {
 
   template <typename T>
   T read() {
+    static_assert(std::is_trivially_copyable_v<T>);
     if (current_->position + sizeof(T) <= current_->size) {
+      auto* source = current_->buffer + current_->position;
       current_->position += sizeof(T);
-      return *reinterpret_cast<const T*>(
-          current_->buffer + current_->position - sizeof(T));
+      return folly::loadUnaligned<T>(source);
     }
     // The number straddles two buffers. We read byte by byte and make a
     // little-endian uint64_t. The bytes can be cast to any integer or floating
     // point type since the wire format has the machine byte order.
     static_assert(sizeof(T) <= sizeof(uint64_t));
-    uint64_t value = 0;
+    union {
+      uint64_t bits;
+      T typed;
+    } value{};
     for (int32_t i = 0; i < sizeof(T); ++i) {
-      value |= static_cast<uint64_t>(readByte()) << (i * 8);
+      value.bits |= static_cast<uint64_t>(readByte()) << (i * 8);
     }
-    return *reinterpret_cast<const T*>(&value);
+    return value.typed;
   }
 
   template <typename Char>
@@ -226,11 +293,15 @@ inline int128_t ByteInputStream::read<int128_t>() {
 class ByteOutputStream {
  public:
   /// For output.
-  ByteOutputStream(
+  explicit ByteOutputStream(
       StreamArena* arena,
       bool isBits = false,
-      bool isReverseBitOrder = false)
-      : arena_(arena), isBits_(isBits), isReverseBitOrder_(isReverseBitOrder) {}
+      bool isReverseBitOrder = false,
+      bool isNegateBits = false)
+      : arena_(arena),
+        isBits_(isBits),
+        isReverseBitOrder_(isReverseBitOrder),
+        isNegateBits_(isNegateBits) {}
 
   ByteOutputStream(const ByteOutputStream& other) = delete;
 
@@ -262,6 +333,7 @@ class ByteOutputStream {
   void startWrite(int32_t initialSize) {
     ranges_.clear();
     isReversed_ = false;
+    isNegated_ = false;
     allocatedBytes_ = 0;
     current_ = nullptr;
     lastRangeEnd_ = 0;
@@ -288,25 +360,47 @@ class ByteOutputStream {
 
   template <typename T>
   void append(folly::Range<const T*> values) {
+    static_assert(std::is_trivially_copyable_v<T>);
     if (current_->position + sizeof(T) * values.size() > current_->size) {
       appendStringView(std::string_view(
           reinterpret_cast<const char*>(&values[0]),
           values.size() * sizeof(T)));
       return;
     }
-
-    auto* target = reinterpret_cast<T*>(current_->buffer + current_->position);
-    const auto* end = target + values.size();
-    auto* valuePtr = &values[0];
-    while (target != end) {
-      *target = *valuePtr;
-      ++target;
-      ++valuePtr;
-    }
+    auto* target = current_->buffer + current_->position;
+    memcpy(target, values.data(), values.size() * sizeof(T));
     current_->position += sizeof(T) * values.size();
   }
 
-  void appendBool(bool value, int32_t count);
+  inline void appendBool(bool value, int32_t count) {
+    VELOX_DCHECK(isBits_);
+
+    if (count == 1 && current_->size > current_->position) {
+      bits::setBit(
+          reinterpret_cast<uint64_t*>(current_->buffer),
+          current_->position,
+          value);
+      ++current_->position;
+      return;
+    }
+
+    int32_t offset{0};
+    for (;;) {
+      const int32_t bitsFit =
+          std::min(count - offset, current_->size - current_->position);
+      bits::fillBits(
+          reinterpret_cast<uint64_t*>(current_->buffer),
+          current_->position,
+          current_->position + bitsFit,
+          value);
+      current_->position += bitsFit;
+      offset += bitsFit;
+      if (offset == count) {
+        return;
+      }
+      extend(bits::nbytes(count - offset));
+    }
+  }
 
   // A fast path for appending bits into pre-cleared buffers after first extend.
   inline void
@@ -317,10 +411,11 @@ class ByteOutputStream {
       // There must be 8 bytes writable. If available is 56, there are 7, so >.
       if (available > 56) {
         const auto offset = position & 7;
-        uint64_t* buffer =
-            reinterpret_cast<uint64_t*>(current_->buffer + (position >> 3));
         const auto mask = bits::lowMask(offset);
-        *buffer = (*buffer & mask) | (bits[0] << offset);
+        auto* buffer = current_->buffer + (position >> 3);
+        auto value = folly::loadUnaligned<uint64_t>(buffer);
+        value = (value & mask) | (bits[0] << offset);
+        folly::storeUnaligned(buffer, value);
         current_->position += end;
         return;
       }
@@ -362,7 +457,7 @@ class ByteOutputStream {
   // Returns a range of 'size' items of T. If there is no contiguous space in
   // 'this', uses 'scratch' to make a temp block that is appended to 'this' in
   template <typename T>
-  T* getAppendWindow(int32_t size, ScratchPtr<T>& scratchPtr) {
+  uint8_t* getAppendWindow(int32_t size, ScratchPtr<T>& scratchPtr) {
     const int32_t bytes = sizeof(T) * size;
     if (!current_) {
       extend(bytes);
@@ -370,15 +465,14 @@ class ByteOutputStream {
     auto available = current_->size - current_->position;
     if (available >= bytes) {
       current_->position += bytes;
-      return reinterpret_cast<T*>(
-          current_->buffer + current_->position - bytes);
+      return current_->buffer + current_->position - bytes;
     }
     // If the tail is not large enough, make  temp of the right size
     // in scratch. Extend the stream so that there is guaranteed space to copy
     // the scratch to the stream. This copy takes place in destruction of
     // AppendWindow and must not allocate so that it is noexcept.
     ensureSpace(bytes);
-    return scratchPtr.get(size);
+    return reinterpret_cast<uint8_t*>(scratchPtr.get(size));
   }
 
   void extend(int32_t bytes);
@@ -404,9 +498,15 @@ class ByteOutputStream {
 
   const bool isReverseBitOrder_;
 
+  const bool isNegateBits_;
+
   // True if the bit order in ranges_ has been inverted. Presto requires
   // reverse bit order.
   bool isReversed_ = false;
+
+  // True if the bits in ranges_ have been negated. Presto requires null flags
+  // to be the inverse of Velox.
+  bool isNegated_ = false;
 
   std::vector<ByteRange> ranges_;
   // The total number of bytes allocated from 'arena_' in 'ranges_'.
@@ -424,6 +524,12 @@ class ByteOutputStream {
   template <typename T>
   friend class AppendWindow;
 };
+
+template <>
+inline void ByteOutputStream::append(
+    folly::Range<const std::shared_ptr<void>*> /*values*/) {
+  VELOX_FAIL("Cannot serialize OPAQUE data");
+}
 
 /// A scoped wrapper that provides 'size' T's of writable space in 'stream'.
 /// Normally gives an address into 'stream's buffer but can use 'scratch' to
@@ -448,7 +554,7 @@ class AppendWindow {
     }
   }
 
-  T* get(int32_t size) {
+  uint8_t* get(int32_t size) {
     return stream_.getAppendWindow(size, scratchPtr_);
   }
 

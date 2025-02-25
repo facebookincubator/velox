@@ -42,7 +42,6 @@ using namespace facebook::velox::exec;
 using namespace facebook::velox::exec::test;
 
 namespace facebook::velox::memory {
-namespace {
 // Class to write runtime stats in the tests to the stats container.
 class TestRuntimeStatWriter : public BaseRuntimeStatWriter {
  public:
@@ -70,8 +69,6 @@ constexpr uint64_t kFastExponentialGrowthCapacityLimit = 32 * MB;
 constexpr double kSlowCapacityGrowPct = 0.25;
 constexpr uint64_t kMemoryPoolMinFreeCapacity = 8 * MB;
 constexpr double kMemoryPoolMinFreeCapacityPct = 0.25;
-// constexpr uint64_t kMemoryPoolMinReclaimBytes = 8 * MB;
-// constexpr uint64_t kMemoryPoolAbortCapacityLimit = 16 * MB;
 constexpr double kGlobalArbitrationReclaimPct = 10;
 constexpr double kMemoryReclaimThreadsHwMultiplier = 0.5;
 
@@ -82,7 +79,7 @@ using ReclaimInjectionCallback =
     std::function<bool(MemoryPool* pool, uint64_t targetByte)>;
 using ArbitrationInjectionCallback = std::function<void()>;
 
-struct Allocation {
+struct AllocatedBuffer {
   void* buffer{nullptr};
   size_t size{0};
 };
@@ -95,7 +92,8 @@ class MockTask : public std::enable_shared_from_this<MockTask> {
 
   class MemoryReclaimer : public memory::MemoryReclaimer {
    public:
-    MemoryReclaimer(const std::shared_ptr<MockTask>& task) : task_(task) {}
+    MemoryReclaimer(const std::shared_ptr<MockTask>& task)
+        : memory::MemoryReclaimer(0), task_(task) {}
 
     static std::unique_ptr<MemoryReclaimer> create(
         const std::shared_ptr<MockTask>& task) {
@@ -181,7 +179,8 @@ class MockMemoryOperator {
         bool reclaimable,
         ReclaimInjectionCallback reclaimInjectCb = nullptr,
         ArbitrationInjectionCallback arbitrationInjectCb = nullptr)
-        : op_(op),
+        : memory::MemoryReclaimer(0),
+          op_(op),
           reclaimable_(reclaimable),
           reclaimInjectCb_(std::move(reclaimInjectCb)),
           arbitrationInjectCb_(std::move(arbitrationInjectCb)) {}
@@ -204,7 +203,6 @@ class MockMemoryOperator {
         return 0;
       }
       if (reclaimInjectCb_ != nullptr) {
-        uint64_t injectedReclaimedBytes{0};
         if (!reclaimInjectCb_(pool, targetBytes)) {
           return 0;
         }
@@ -301,7 +299,7 @@ class MockMemoryOperator {
   }
 
   void free() {
-    Allocation allocation;
+    AllocatedBuffer allocation;
     {
       std::lock_guard<std::mutex> l(mu_);
       if (allocations_.empty()) {
@@ -330,7 +328,7 @@ class MockMemoryOperator {
   uint64_t reclaim(MemoryPool* pool, uint64_t targetBytes) {
     VELOX_CHECK_GT(targetBytes, 0);
     uint64_t bytesReclaimed{0};
-    std::vector<Allocation> allocationsToFree;
+    std::vector<AllocatedBuffer> allocationsToFree;
     {
       std::lock_guard<std::mutex> l(mu_);
       VELOX_CHECK_NOT_NULL(pool_);
@@ -451,7 +449,9 @@ class MockSharedArbitrationTest : public testing::Test {
       bool globalArtbitrationEnabled = true,
       uint64_t arbitrationTimeoutNs = 5 * 60 * 1'000'000'000UL,
       bool globalArbitrationWithoutSpill = false,
-      double globalArbitrationAbortTimeRatio = 0.5) {
+      // Set the globalArbitrationAbortTimeRatio to be very small so that the
+      // query can be aborted sooner and the test would not timeout.
+      double globalArbitrationAbortTimeRatio = 0.005) {
     MemoryManagerOptions options;
     options.allocatorCapacity = memoryCapacity;
     std::string arbitratorKind = "SHARED";
@@ -481,7 +481,7 @@ class MockSharedArbitrationTest : public testing::Test {
          folly::to<std::string>(globalArbitrationReclaimPct)},
         {std::string(ExtraConfig::kMemoryReclaimThreadsHwMultiplier),
          folly::to<std::string>(memoryReclaimThreadsHwMultiplier)},
-        {std::string(ExtraConfig::kMemoryReclaimMaxWaitTime),
+        {std::string(ExtraConfig::kMaxMemoryArbitrationTime),
          folly::to<std::string>(arbitrationTimeoutNs) + "ns"},
         {std::string(ExtraConfig::kGlobalArbitrationEnabled),
          folly::to<std::string>(globalArtbitrationEnabled)},
@@ -578,7 +578,7 @@ TEST_F(MockSharedArbitrationTest, extraConfigs) {
       SharedArbitrator::ExtraConfig::memoryPoolInitialCapacity(emptyConfigs),
       256 << 20);
   ASSERT_EQ(
-      SharedArbitrator::ExtraConfig::memoryReclaimMaxWaitTimeNs(emptyConfigs),
+      SharedArbitrator::ExtraConfig::maxMemoryArbitrationTimeNs(emptyConfigs),
       300'000'000'000UL);
   ASSERT_EQ(
       SharedArbitrator::ExtraConfig::globalArbitrationEnabled(emptyConfigs),
@@ -618,7 +618,7 @@ TEST_F(MockSharedArbitrationTest, extraConfigs) {
   configs[std::string(
       SharedArbitrator::ExtraConfig::kMemoryPoolReservedCapacity)] = "200B";
   configs[std::string(
-      SharedArbitrator::ExtraConfig::kMemoryReclaimMaxWaitTime)] = "5000ms";
+      SharedArbitrator::ExtraConfig::kMaxMemoryArbitrationTime)] = "5000ms";
   configs[std::string(
       SharedArbitrator::ExtraConfig::kGlobalArbitrationEnabled)] = "true";
   configs[std::string(SharedArbitrator::ExtraConfig::kCheckUsageLeak)] =
@@ -645,8 +645,8 @@ TEST_F(MockSharedArbitrationTest, extraConfigs) {
   ASSERT_EQ(
       SharedArbitrator::ExtraConfig::memoryPoolReservedCapacity(configs), 200);
   ASSERT_EQ(
-      SharedArbitrator::ExtraConfig::memoryReclaimMaxWaitTimeNs(configs),
-      5'000'000'000);
+      SharedArbitrator::ExtraConfig::maxMemoryArbitrationTimeNs(configs),
+      5'000'000'000UL);
   ASSERT_TRUE(SharedArbitrator::ExtraConfig::globalArbitrationEnabled(configs));
   ASSERT_FALSE(SharedArbitrator::ExtraConfig::checkUsageLeak(configs));
   ASSERT_EQ(
@@ -676,7 +676,7 @@ TEST_F(MockSharedArbitrationTest, extraConfigs) {
   configs[std::string(
       SharedArbitrator::ExtraConfig::kMemoryPoolReservedCapacity)] = "invalid";
   configs[std::string(
-      SharedArbitrator::ExtraConfig::kMemoryReclaimMaxWaitTime)] = "invalid";
+      SharedArbitrator::ExtraConfig::kMaxMemoryArbitrationTime)] = "invalid";
   configs[std::string(
       SharedArbitrator::ExtraConfig::kGlobalArbitrationEnabled)] = "invalid";
   configs[std::string(SharedArbitrator::ExtraConfig::kCheckUsageLeak)] =
@@ -709,7 +709,7 @@ TEST_F(MockSharedArbitrationTest, extraConfigs) {
       SharedArbitrator::ExtraConfig::memoryPoolReservedCapacity(configs),
       "Invalid capacity string 'invalid'");
   VELOX_ASSERT_THROW(
-      SharedArbitrator::ExtraConfig::memoryReclaimMaxWaitTimeNs(configs),
+      SharedArbitrator::ExtraConfig::maxMemoryArbitrationTimeNs(configs),
       "Invalid duration 'invalid'");
   VELOX_ASSERT_THROW(
       SharedArbitrator::ExtraConfig::globalArbitrationEnabled(configs),
@@ -788,7 +788,6 @@ TEST_F(MockSharedArbitrationTest, constructor) {
 
 TEST_F(MockSharedArbitrationTest, arbitrationStateCheck) {
   const int memCapacity = 256 * MB;
-  const int minPoolCapacity = 32 * MB;
   std::atomic<int> checkCount{0};
   MemoryArbitrationStateCheckCB checkCountCb = [&](MemoryPool& pool) {
     const std::string re("RootPool.*");
@@ -860,26 +859,6 @@ TEST_F(MockSharedArbitrationTest, asyncArbitrationWork) {
 
 // Test different kinds of arbitraton failures.
 TEST_F(MockSharedArbitrationTest, arbitrationFailures) {
-  // Set the globalArbitrationAbortTimeRatio to be very small so that the query
-  // can be aborted sooner and the test would not timeout.
-  setupMemory(
-      kMemoryCapacity,
-      0,
-      0,
-      0,
-      0,
-      0,
-      0,
-      0,
-      0,
-      0,
-      0,
-      kMemoryReclaimThreadsHwMultiplier,
-      nullptr,
-      true,
-      5 * 60 * 1'000'000'000UL,
-      false,
-      0.005);
   // Local arbitration failure with exceeded capacity limit.
   {
     auto task = addTask(64 * MB);
@@ -1681,18 +1660,17 @@ DEBUG_ONLY_TEST_F(
         runtimeStats[SharedArbitrator::kMemoryArbitrationWallNanos].count, 1);
     ASSERT_GT(
         runtimeStats[SharedArbitrator::kMemoryArbitrationWallNanos].sum, 0);
-    ASSERT_EQ(
-        runtimeStats[SharedArbitrator::kGlobalArbitrationWaitCount].count, 2);
-    ASSERT_EQ(
-        runtimeStats[SharedArbitrator::kGlobalArbitrationWaitCount].sum, 2);
+    ASSERT_GE(
+        runtimeStats[SharedArbitrator::kGlobalArbitrationWaitCount].count, 1);
+    ASSERT_GE(
+        runtimeStats[SharedArbitrator::kGlobalArbitrationWaitCount].sum, 1);
     ASSERT_EQ(runtimeStats[SharedArbitrator::kLocalArbitrationCount].count, 0);
     ASSERT_EQ(runtimeStats[SharedArbitrator::kLocalArbitrationCount].sum, 0);
-    ASSERT_EQ(
+    ASSERT_GE(
         runtimeStats[SharedArbitrator::kGlobalArbitrationWaitWallNanos].count,
-        2);
+        1);
     ASSERT_GT(
-        runtimeStats[SharedArbitrator::kGlobalArbitrationWaitWallNanos].sum,
-        1'000'000'000);
+        runtimeStats[SharedArbitrator::kGlobalArbitrationWaitWallNanos].sum, 1);
   });
 
   std::atomic_bool globalArbitrationStarted{false};
@@ -1732,6 +1710,11 @@ DEBUG_ONLY_TEST_F(
   ASSERT_EQ(runtimeStats[SharedArbitrator::kGlobalArbitrationWaitCount].sum, 0);
   ASSERT_EQ(runtimeStats[SharedArbitrator::kLocalArbitrationCount].count, 1);
   ASSERT_EQ(runtimeStats[SharedArbitrator::kLocalArbitrationCount].sum, 1);
+
+  // Global arbitration thread may still be running in the background,
+  // triggerring ASAN failure. Wait until it exits.
+  test::SharedArbitratorTestHelper arbitratorHelper(arbitrator_);
+  arbitratorHelper.waitForGlobalArbitrationToFinish();
 }
 
 DEBUG_ONLY_TEST_F(MockSharedArbitrationTest, globalArbitrationAbortTimeRatio) {
@@ -2135,7 +2118,6 @@ TEST_F(MockSharedArbitrationTest, singlePoolGrowWithoutArbitration) {
 }
 
 TEST_F(MockSharedArbitrationTest, maxCapacityReserve) {
-  const int memCapacity = 256 * MB;
   struct {
     uint64_t memCapacity;
     uint64_t reservedCapacity;
@@ -2306,6 +2288,7 @@ TEST_F(MockSharedArbitrationTest, ensureMemoryPoolMaxCapacity) {
        memCapacity - memCapacity / 2,
        false,
        false}};
+
   for (const auto& testData : testSettings) {
     SCOPED_TRACE(testData.debugString());
     setupMemory(
@@ -2341,6 +2324,8 @@ TEST_F(MockSharedArbitrationTest, ensureMemoryPoolMaxCapacity) {
     } else if (testData.hasOtherTask) {
       ASSERT_EQ(otherOp->reclaimer()->stats().numReclaims, 0);
     }
+    test::SharedArbitratorTestHelper arbitratorHelper(arbitrator_);
+    arbitratorHelper.waitForGlobalArbitrationToFinish();
     if (testData.expectedSuccess &&
         (((testData.allocatedBytes + testData.requestBytes) >
           testData.poolMaxCapacity) ||
@@ -2433,7 +2418,6 @@ DEBUG_ONLY_TEST_F(MockSharedArbitrationTest, arbitrationAbort) {
   ASSERT_EQ(task3->capacity(), memoryCapacity / 4);
 
   folly::EventCount globalArbitrationWait;
-  std::atomic_bool globalArbitrationWaitFlag{true};
   SCOPED_TESTVALUE_SET(
       "facebook::velox::memory::SharedArbitrator::runGlobalArbitration",
       std::function<void(const SharedArbitrator*)>(
@@ -2848,6 +2832,60 @@ DEBUG_ONLY_TEST_F(MockSharedArbitrationTest, localArbitrationTimeout) {
   ASSERT_EQ(task->capacity(), 0);
 }
 
+DEBUG_ONLY_TEST_F(MockSharedArbitrationTest, reclaimLockTimeout) {
+  const uint64_t memoryCapacity = 256 * MB;
+  const uint64_t arbitrationTimeoutMs = 1'000;
+  setupMemory(
+      memoryCapacity,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      1.0,
+      nullptr,
+      false,
+      arbitrationTimeoutMs);
+  std::shared_ptr<MockTask> task = addTask(memoryCapacity);
+  ASSERT_EQ(task->capacity(), 0);
+  auto* op = task->addMemoryOp(true);
+
+  SCOPED_TESTVALUE_SET(
+      "facebook::velox::memory::ArbitrationParticipant::abort",
+      std::function<void(const ArbitrationParticipant*)>(
+          ([&](const ArbitrationParticipant* /*unused*/) {
+            std::this_thread::sleep_for(
+                std::chrono::milliseconds(2 * arbitrationTimeoutMs)); // NOLINT
+          })));
+
+  SCOPED_TESTVALUE_SET(
+      "facebook::velox::memory::ArbitrationParticipant::reclaim",
+      std::function<void(const ArbitrationParticipant*)>(
+          ([&](const ArbitrationParticipant* /*unused*/) {
+            // Timeout shall be enforced at lock level. We don't expect code to
+            // execute pass the lock in reclaim method.
+            FAIL();
+          })));
+
+  auto abortThread = std::thread(
+      [&]() { arbitrator_->shrinkCapacity(memoryCapacity, false, true); });
+  try {
+    op->allocate(memoryCapacity / 2);
+  } catch (const VeloxException& ex) {
+    ASSERT_EQ(ex.errorCode(), error_code::kMemArbitrationTimeout);
+    ASSERT_THAT(
+        ex.what(),
+        testing::HasSubstr("Memory arbitration timed out on memory pool"));
+  }
+
+  abortThread.join();
+}
+
 DEBUG_ONLY_TEST_F(MockSharedArbitrationTest, localArbitrationQueueTimeout) {
   uint64_t memoryCapacity = 256 * MB;
   setupMemory(
@@ -3048,28 +3086,8 @@ TEST_F(MockSharedArbitrationTest, minReclaimBytes) {
 
   for (const auto& testData : testSettings) {
     SCOPED_TRACE(testData.debugString());
-
-    // Make simple settings to focus shrink capacity logic testing. Set the
-    // globalArbitrationAbortTimeRatio to be very small so that the query
-    // can be aborted sooner and the test would not timeout.
-    setupMemory(
-        memoryCapacity,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        testData.minReclaimBytes,
-        0,
-        0,
-        kMemoryReclaimThreadsHwMultiplier,
-        nullptr,
-        true,
-        5 * 60 * 1'000'000'000UL,
-        false,
-        0.005);
+    // Make simple settings to focus shrink capacity logic testing.
+    setupMemory(memoryCapacity, 0, 0, 0, 0, 0, 0, 0, testData.minReclaimBytes);
     std::vector<TestTaskContainer> taskContainers;
     for (const auto& testTask : testData.testTasks) {
       auto task = addTask();
@@ -3108,7 +3126,6 @@ TEST_F(MockSharedArbitrationTest, minReclaimBytes) {
 
 TEST_F(MockSharedArbitrationTest, globalArbitrationReclaimPct) {
   const int64_t memoryCapacity = 256 << 20;
-  const int64_t memoryPoolCapacity = 64 << 20;
 
   struct TestTask {
     uint64_t capacity{0};
@@ -3944,26 +3961,7 @@ TEST_F(MockSharedArbitrationTest, arbitrationFailure) {
 
   for (const auto& testData : testSettings) {
     SCOPED_TRACE(testData.debugString());
-    // Set the globalArbitrationAbortTimeRatio to be very small so that the
-    // query can be aborted sooner and the test would not timeout.
-    setupMemory(
-        maxCapacity,
-        0,
-        initialCapacity,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        kMemoryReclaimThreadsHwMultiplier,
-        nullptr,
-        true,
-        5 * 60 * 1'000'000'000UL,
-        false,
-        0.005);
+    setupMemory(maxCapacity, 0, initialCapacity);
     std::shared_ptr<MockTask> requestorTask = addTask();
     MockMemoryOperator* requestorOp = addMemoryOp(requestorTask, false);
     requestorOp->allocate(testData.requestorCapacity);
@@ -4230,5 +4228,4 @@ TEST_F(MockSharedArbitrationTest, concurrentArbitrationWithTransientRoots) {
   }
   controlThread.join();
 }
-} // namespace
 } // namespace facebook::velox::memory

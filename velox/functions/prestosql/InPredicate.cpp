@@ -87,11 +87,12 @@ class VectorSetInPredicate : public exec::VectorFunction {
     result->clearNulls(rows);
     auto* boolResult = result->asUnchecked<FlatVector<bool>>();
 
-    rows.applyToSelected([&](vector_size_t row) {
+    context.applyToSelectedNoThrow(rows, [&](vector_size_t row) {
       if (arg->isNullAt(row)) {
         boolResult->setNull(row, true);
       } else {
-        const bool found = uniqueValues_.contains({arg.get(), row});
+        const bool found =
+            uniqueValues_.contains(VectorValue({arg.get(), row}));
         if (found) {
           if (arg->containsNullAt(row)) {
             boolResult->setNull(row, true);
@@ -542,12 +543,15 @@ class InPredicate : public exec::VectorFunction {
       if (simpleArg->isNullAt(rows.begin())) {
         localResult = createBoolConstantNull(rows.end(), context);
       } else {
-        bool pass = testFunction(simpleArg->valueAt(rows.begin()));
-        if (!pass && passOrNull) {
-          localResult = createBoolConstantNull(rows.end(), context);
-        } else {
-          localResult = createBoolConstant(pass, rows.end(), context);
-        }
+        static const SelectivityVector oneRow(1, true);
+        context.applyToSelectedNoThrow(oneRow, [&](vector_size_t row) {
+          bool pass = testFunction(simpleArg->valueAt(rows.begin()));
+          if (!pass && passOrNull) {
+            localResult = createBoolConstantNull(rows.end(), context);
+          } else {
+            localResult = createBoolConstant(pass, rows.end(), context);
+          }
+        });
       }
 
       context.moveOrCopyResult(localResult, rows, result);
@@ -564,7 +568,7 @@ class InPredicate : public exec::VectorFunction {
     auto* rawResults = boolResult->mutableRawValues<uint64_t>();
 
     if (flatArg->mayHaveNulls() || passOrNull) {
-      rows.applyToSelected([&](auto row) {
+      context.applyToSelectedNoThrow(rows, [&](vector_size_t row) {
         if (flatArg->isNullAt(row)) {
           boolResult->setNull(row, true);
         } else {
@@ -577,7 +581,7 @@ class InPredicate : public exec::VectorFunction {
         }
       });
     } else {
-      rows.applyToSelected([&](auto row) {
+      context.applyToSelectedNoThrow(rows, [&](vector_size_t row) {
         bool pass = testFunction(flatArg->valueAtFast(row));
         bits::setBit(rawResults, row, pass);
       });

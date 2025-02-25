@@ -15,6 +15,7 @@
  */
 
 #include "velox/expression/fuzzer/FuzzerRunner.h"
+
 #include "velox/expression/fuzzer/ExpressionFuzzer.h"
 
 DEFINE_int32(steps, 10, "Number of expressions to generate and execute.");
@@ -64,6 +65,14 @@ DEFINE_double(
     "Specifies the probability with which columns in the input row "
     "vector will be selected to be wrapped in lazy encoding "
     "(expressed as double from 0 to 1).");
+
+DEFINE_double(
+    common_dictionary_wraps_generation_ratio,
+    0.0,
+    "Specifies the probability with which columns in the input row "
+    "vector will be selected to be wrapped in a common dictionary wrap "
+    "(expressed as double from 0 to 1). Only columns not already encoded "
+    "will be considered.");
 
 DEFINE_int32(
     max_expression_trees_per_step,
@@ -207,6 +216,8 @@ ExpressionFuzzerVerifier::Options getExpressionFuzzerVerifierOptions(
   opts.reproPersistPath = FLAGS_repro_persist_path;
   opts.persistAndRunOnce = FLAGS_persist_and_run_once;
   opts.lazyVectorGenerationRatio = FLAGS_lazy_vector_generation_ratio;
+  opts.commonDictionaryWrapRatio =
+      FLAGS_common_dictionary_wraps_generation_ratio;
   opts.maxExpressionTreesPerStep = FLAGS_max_expression_trees_per_step;
   opts.vectorFuzzerOptions = getVectorFuzzerOptions();
   opts.expressionFuzzerOptions = getExpressionFuzzerOptions(
@@ -224,16 +235,22 @@ int FuzzerRunner::run(
     const std::unordered_map<std::string, std::shared_ptr<ExprTransformer>>&
         exprTransformers,
     const std::unordered_map<std::string, std::string>& queryConfigs,
-    const std::unordered_map<std::string, std::shared_ptr<ArgGenerator>>&
-        argGenerators,
-    std::shared_ptr<exec::test::ReferenceQueryRunner> referenceQueryRunner) {
+    const std::unordered_map<std::string, std::shared_ptr<ArgTypesGenerator>>&
+        argTypesGenerators,
+    const std::unordered_map<std::string, std::shared_ptr<ArgValuesGenerator>>&
+        argValuesGenerators,
+    std::shared_ptr<exec::test::ReferenceQueryRunner> referenceQueryRunner,
+    const std::shared_ptr<SpecialFormSignatureGenerator>&
+        specialFormSignatureGenerator) {
   runFromGtest(
       seed,
       skipFunctions,
       exprTransformers,
       queryConfigs,
-      argGenerators,
-      referenceQueryRunner);
+      argTypesGenerators,
+      argValuesGenerators,
+      referenceQueryRunner,
+      specialFormSignatureGenerator);
   return RUN_ALL_TESTS();
 }
 
@@ -244,19 +261,24 @@ void FuzzerRunner::runFromGtest(
     const std::unordered_map<std::string, std::shared_ptr<ExprTransformer>>&
         exprTransformers,
     const std::unordered_map<std::string, std::string>& queryConfigs,
-    const std::unordered_map<std::string, std::shared_ptr<ArgGenerator>>&
-        argGenerators,
-    std::shared_ptr<exec::test::ReferenceQueryRunner> referenceQueryRunner) {
+    const std::unordered_map<std::string, std::shared_ptr<ArgTypesGenerator>>&
+        argTypesGenerators,
+    const std::unordered_map<std::string, std::shared_ptr<ArgValuesGenerator>>&
+        argValuesGenerators,
+    std::shared_ptr<exec::test::ReferenceQueryRunner> referenceQueryRunner,
+    const std::shared_ptr<SpecialFormSignatureGenerator>&
+        specialFormSignatureGenerator) {
   if (!memory::MemoryManager::testInstance()) {
     memory::MemoryManager::testingSetInstance({});
   }
   auto signatures = facebook::velox::getFunctionSignatures();
+  const auto options = getExpressionFuzzerVerifierOptions(
+      skipFunctions, exprTransformers, queryConfigs, referenceQueryRunner);
+  // Insert generated signatures of special forms into the signature map.
+  specialFormSignatureGenerator->appendSpecialForms(
+      signatures, options.expressionFuzzerOptions.specialForms);
   ExpressionFuzzerVerifier(
-      signatures,
-      seed,
-      getExpressionFuzzerVerifierOptions(
-          skipFunctions, exprTransformers, queryConfigs, referenceQueryRunner),
-      argGenerators)
+      signatures, seed, options, argTypesGenerators, argValuesGenerators)
       .go();
 }
 } // namespace facebook::velox::fuzzer

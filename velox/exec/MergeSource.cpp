@@ -128,10 +128,17 @@ class MergeExchangeSource : public MergeSource {
             mergeExchange->taskId(),
             destination,
             maxQueuedBytes,
+            1,
+            // Deliver right away to avoid blocking other sources
+            0,
             pool,
             executor)) {
     client_->addRemoteTaskId(taskId);
     client_->noMoreRemoteTasks();
+  }
+
+  ~MergeExchangeSource() override {
+    close();
   }
 
   BlockingReason next(RowVectorPtr& data, ContinueFuture* future) override {
@@ -142,7 +149,7 @@ class MergeExchangeSource : public MergeSource {
     }
 
     if (!currentPage_) {
-      auto pages = client_->next(1, &atEnd_, future);
+      auto pages = client_->next(0, 1, &atEnd_, future);
       VELOX_CHECK_LE(pages.size(), 1);
       currentPage_ = pages.empty() ? nullptr : std::move(pages.front());
 
@@ -163,7 +170,9 @@ class MergeExchangeSource : public MergeSource {
           inputStream_.get(),
           mergeExchange_->pool(),
           mergeExchange_->outputType(),
-          &data);
+          mergeExchange_->serde(),
+          &data,
+          mergeExchange_->serdeOptions());
 
       auto lockedStats = mergeExchange_->stats().wlock();
       lockedStats->addInputVector(data->estimateFlatSize(), data->size());

@@ -25,7 +25,7 @@ namespace {
 
 using namespace facebook::velox::common;
 
-class ReaderTest : public testing::Test, public test::VectorTestBase {
+class ReaderTest : public testing::Test, public velox::test::VectorTestBase {
  protected:
   static void SetUpTestCase() {
     memory::MemoryManager::testingSetInstance({});
@@ -33,7 +33,6 @@ class ReaderTest : public testing::Test, public test::VectorTestBase {
 };
 
 TEST_F(ReaderTest, getOrCreateChild) {
-  constexpr int kSize = 5;
   auto input = makeRowVector(
       {"c.0", "c.1"},
       {
@@ -131,9 +130,19 @@ TEST_F(ReaderTest, projectColumnsMutation) {
   random::RandomSkipTracker randomSkip(0.5);
   mutation.randomSkip = &randomSkip;
   actual = RowReader::projectColumns(input, spec, &mutation);
+#if FOLLY_HAVE_EXTRANDOM_SFMT19937
   expected = makeRowVector({
       makeFlatVector<int64_t>({0, 1, 3, 5, 6, 8}),
   });
+#elif __APPLE__
+  expected = makeRowVector({
+      makeFlatVector<int64_t>({1, 5, 6, 7, 8, 9}),
+  });
+#else
+  expected = makeRowVector({
+      makeFlatVector<int64_t>({3, 4, 7, 9}),
+  });
+#endif
   test::assertEqualVectors(expected, actual);
 }
 

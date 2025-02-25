@@ -78,7 +78,7 @@ std::vector<TypePtr> implicitCastTargets(const TypePtr& type) {
       break;
     }
     default: // make compilers happy
-      (void)0; // Statement to avoid empty semicolon warning
+      break;
   }
   return targetTypes;
 }
@@ -384,11 +384,9 @@ const exec::FunctionSignature* findLambdaSignature(
 const exec::FunctionSignature* findLambdaSignature(
     const std::shared_ptr<const CallExpr>& callExpr) {
   // Look for a scalar lambda function.
-  auto allSignatures = getFunctionSignatures();
-  auto it = allSignatures.find(callExpr->getFunctionName());
-
-  if (it != allSignatures.end()) {
-    return findLambdaSignature(it->second, callExpr);
+  auto scalarSignatures = getFunctionSignatures(callExpr->getFunctionName());
+  if (!scalarSignatures.empty()) {
+    return findLambdaSignature(scalarSignatures, callExpr);
   }
 
   // Look for an aggregate lambda function.

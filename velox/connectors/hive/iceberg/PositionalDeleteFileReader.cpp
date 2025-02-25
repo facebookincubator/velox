@@ -82,11 +82,12 @@ PositionalDeleteFileReader::PositionalDeleteFileReader(
 
   dwio::common::ReaderOptions deleteReaderOpts(pool_);
   configureReaderOptions(
-      deleteReaderOpts,
       hiveConfig_,
       connectorQueryCtx,
       deleteFileSchema,
-      deleteSplit_);
+      deleteSplit_,
+      /*tableParameters=*/{},
+      deleteReaderOpts);
 
   auto deleteFileHandleCachePtr =
       fileHandleFactory_->generate(deleteFile_.filePath);
@@ -221,25 +222,40 @@ void PositionalDeleteFileReader::updateDeleteBitmap(
   // split.
   const int64_t* deletePositions =
       deletePositionsVector->as<FlatVector<int64_t>>()->rawValues();
-  int64_t offset = baseReadOffset + splitOffset_;
+  int64_t rowNumberLowerBound = baseReadOffset + splitOffset_;
 
+  // If the rowNumberLowerBound is greater than the last position in this delete
+  // rows batch, nothing to delete.
+  if (rowNumberLowerBound >
+      deletePositions[deletePositionsVector->size() - 1]) {
+    return;
+  }
+
+  // Skip the delete positions in deletePositionsVector until they are in the
+  // [rowNumberLowerBound, rowNumberUpperBound) range.
+  while (deletePositionsOffset_ < deletePositionsVector->size() &&
+         deletePositions[deletePositionsOffset_] < rowNumberLowerBound) {
+    deletePositionsOffset_++;
+  }
   while (deletePositionsOffset_ < deletePositionsVector->size() &&
          deletePositions[deletePositionsOffset_] < rowNumberUpperBound) {
     bits::setBit(
-        deleteBitmap, deletePositions[deletePositionsOffset_] - offset);
+        deleteBitmap,
+        deletePositions[deletePositionsOffset_] - rowNumberLowerBound);
     deletePositionsOffset_++;
   }
 
   // There might be multiple delete files for a single base file. The size of
   // the deleteBitmapBuffer should be the largest position among all delte files
   deleteBitmapBuffer->setSize(std::max(
-      (uint64_t)deleteBitmapBuffer->size(),
+      static_cast<uint64_t>(deleteBitmapBuffer->size()),
       deletePositionsOffset_ == 0 ||
               (deletePositionsOffset_ < deletePositionsVector->size() &&
                deletePositions[deletePositionsOffset_] > rowNumberUpperBound)
           ? 0
           : bits::nbytes(
-                deletePositions[deletePositionsOffset_ - 1] + 1 - offset)));
+                deletePositions[deletePositionsOffset_ - 1] + 1 -
+                rowNumberLowerBound)));
 }
 
 bool PositionalDeleteFileReader::readFinishedForBatch(

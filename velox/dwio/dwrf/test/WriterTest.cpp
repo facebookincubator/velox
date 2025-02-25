@@ -62,7 +62,9 @@ class WriterTest : public Test {
     auto readFile = std::make_shared<InMemoryReadFile>(std::move(data));
     auto input = std::make_unique<BufferedInput>(std::move(readFile), *pool_);
     dwio::common::ReaderOptions readerOpts{pool_.get()};
-    return std::make_unique<ReaderBase>(readerOpts, std::move(input));
+    auto reader = std::make_unique<ReaderBase>(readerOpts, std::move(input));
+    reader->loadCache();
+    return reader;
   }
 
   auto& getContext() {
@@ -400,15 +402,13 @@ TEST_P(SupportedCompressionTest, ValidateStreamSizeConfigEnabled) {
   validateStreamSize(std::numeric_limits<int32_t>::max());
 
   uint32_t int32Max = std::numeric_limits<int32_t>::max();
-  EXPECT_THROW(validateStreamSize(int32Max + 1), exception::LoggedException);
+  VELOX_ASSERT_THROW(validateStreamSize(int32Max + 1), "");
 
-  EXPECT_THROW(
-      validateStreamSize(std::numeric_limits<uint64_t>::max()),
-      exception::LoggedException);
+  VELOX_ASSERT_THROW(
+      validateStreamSize(std::numeric_limits<uint64_t>::max()), "");
 
-  EXPECT_THROW(
-      validateStreamSize(std::numeric_limits<uint32_t>::max()),
-      exception::LoggedException);
+  VELOX_ASSERT_THROW(
+      validateStreamSize(std::numeric_limits<uint32_t>::max()), "");
   writer.close();
 }
 

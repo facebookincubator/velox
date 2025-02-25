@@ -18,7 +18,7 @@
 
 #include "gtest/gtest.h"
 
-namespace facebook::velox {
+namespace facebook::velox::filesystems {
 
 // TODO: Each prefix should be implemented as its own filesystem.
 TEST(S3UtilTest, isS3File) {
@@ -85,14 +85,13 @@ TEST(S3UtilTest, isCosNFile) {
   EXPECT_TRUE(isCosNFile("cosn://bucket/file.txt"));
 }
 
-// TODO: Each prefix should be implemented as its own filesystem.
 TEST(S3UtilTest, s3Path) {
-  auto path_0 = s3Path("s3://bucket/file.txt");
-  auto path_1 = s3Path("oss://bucket-name/file.txt");
-  auto path_2 = s3Path("S3A://bucket-NAME/sub-PATH/my-file.txt");
-  auto path_3 = s3Path("s3N://bucket-NAME/sub-PATH/my-file.txt");
-  auto path_4 = s3Path("cos://bucket-name/file.txt");
-  auto path_5 = s3Path("cosn://bucket-name/file.txt");
+  auto path_0 = getPath("s3://bucket/file.txt");
+  auto path_1 = getPath("oss://bucket-name/file.txt");
+  auto path_2 = getPath("S3A://bucket-NAME/sub-PATH/my-file.txt");
+  auto path_3 = getPath("s3N://bucket-NAME/sub-PATH/my-file.txt");
+  auto path_4 = getPath("cos://bucket-name/file.txt");
+  auto path_5 = getPath("cosn://bucket-name/file.txt");
   EXPECT_EQ(path_0, "bucket/file.txt");
   EXPECT_EQ(path_1, "bucket-name/file.txt");
   EXPECT_NE(path_2, "bucket-NAME/sub-PATH/my-file.txt");
@@ -101,10 +100,10 @@ TEST(S3UtilTest, s3Path) {
   EXPECT_EQ(path_5, "bucket-name/file.txt");
 }
 
-TEST(S3UtilTest, bucketAndKeyFromS3Path) {
+TEST(S3UtilTest, bucketAndKeyFromgetPath) {
   std::string bucket, key;
   auto path = "bucket/file.txt";
-  getBucketAndKeyFromS3Path(path, bucket, key);
+  getBucketAndKeyFromPath(path, bucket, key);
   EXPECT_EQ(bucket, "bucket");
   EXPECT_EQ(key, "file.txt");
 }
@@ -126,6 +125,19 @@ TEST(S3UtilTest, isDomainExcludedFromProxy) {
   for (auto pair : tests) {
     EXPECT_EQ(isHostExcludedFromProxy(hostname, pair.first), pair.second);
   }
+}
+
+TEST(S3UtilTest, parseRegion) {
+  // bucket.s3.[region]
+  EXPECT_EQ(parseStandardRegionName("foo.s3.region.amazonaws.com"), "region");
+  // bucket.s3-[region]
+  EXPECT_EQ(parseStandardRegionName("foo.s3-region.amazonaws.com"), "region");
+  // service.[region]
+  EXPECT_EQ(parseStandardRegionName("foo.a3-reg.amazonaws.com"), "a3-reg");
+  // Not the right suffix
+  EXPECT_EQ(parseStandardRegionName("foo.a3-region.amazon.com"), std::nullopt);
+  EXPECT_EQ(parseStandardRegionName(""), std::nullopt);
+  EXPECT_EQ(parseStandardRegionName("velox"), std::nullopt);
 }
 
 TEST(S3UtilTest, isIpExcludedFromProxy) {
@@ -246,4 +258,4 @@ INSTANTIATE_TEST_SUITE_P(
     S3UtilProxyTest,
     ::testing::Values(true, false));
 
-} // namespace facebook::velox
+} // namespace facebook::velox::filesystems

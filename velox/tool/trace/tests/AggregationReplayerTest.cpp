@@ -203,8 +203,10 @@ TEST_F(AggregationReplayerTest, test) {
                                      task->queryCtx()->queryId(),
                                      task->taskId(),
                                      traceNodeId_,
+                                     "Aggregation",
+                                     "",
                                      0,
-                                     "Aggregation")
+                                     executor_.get())
                                      .run();
     assertEqualResults({results}, {replayingResult});
   }

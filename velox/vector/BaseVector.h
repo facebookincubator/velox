@@ -256,8 +256,12 @@ class BaseVector {
     return const_cast<uint64_t*>(rawNulls_);
   }
 
-  BufferPtr& mutableNulls(vector_size_t size) {
-    ensureNullsCapacity(size);
+  /// Ensures the vector has capacity for the nulls and returns the shared
+  /// pointer to the buffer containing them.
+  /// Optional parameter 'setNotNull' is passed to ensureNullsCapacity() and is
+  /// used to ensure all the rows will be 'not nulls' if set to true.
+  BufferPtr& mutableNulls(vector_size_t size, bool setNotNull = false) {
+    ensureNullsCapacity(size, setNotNull);
     return nulls_;
   }
 
@@ -540,12 +544,49 @@ class BaseVector {
   /// length.
   virtual VectorPtr slice(vector_size_t offset, vector_size_t length) const = 0;
 
-  /// Returns a vector of the type of 'source' where 'indices' contains
-  /// an index into 'source' for each element of 'source'. The
-  /// resulting vector has position i set to source[i]. This is
-  /// equivalent to wrapping 'source' in a dictionary with 'indices'
-  /// but this may reuse structure if said structure is uniquely owned
-  /// or if a copy is more efficient than dictionary wrapping.
+  /// Transposes two sets of dictionary indices into one level of indirection.
+  /// Sets result[i] = base[indices[i]] for i = 0 ... i < size.
+  static void transposeIndices(
+      const vector_size_t* base,
+      vector_size_t size,
+      const vector_size_t* indices,
+      vector_size_t* result);
+
+  /// Transposes two levels of indices into a single level with nulls. sets
+  /// result[i] = base[indices[i]] where i is not null in 'wrapNulls' and
+  /// indices[i] is not null in 'baseNulls'. If indices[i] is null in
+  /// 'baseNulls' or i is null in 'wrapNulls', then 'resultNulls' is null at i.
+  /// 'wrapNulls' may be nullptr, meaning that no new nulls are added.
+  static void transposeIndicesWithNulls(
+      const vector_size_t* baseIndices,
+      const uint64_t* baseNulls,
+      vector_size_t wrapSize,
+      const vector_size_t* wrapIndices,
+      const uint64_t* wrapNulls,
+      vector_size_t* resultIndices,
+      uint64_t* resultNulls);
+
+  /// Flattens 'dictionaryValues', which is a dictionary and replaces
+  /// it with its base. 'size' is the number of valid elements in
+  /// 'indices' and 'nulls'. Null positions may have an invalid
+  /// index. Rewrites 'indices' from being indices into
+  /// 'dictionaryValues' to being indices into the latter's
+  /// base. Rewrites 'nulls' to be nulls from 'dictionaryValues' and
+  /// its base vector. This is used when a dictionary vector loads a
+  /// lazy values vector and finds out that the loaded is itself a
+  /// dictionary.
+  static void transposeDictionaryValues(
+      vector_size_t wrapSize,
+      BufferPtr& wrapNulls,
+      BufferPtr& wrapIndices,
+      std::shared_ptr<BaseVector>& dictionaryValues);
+
+  // Returns a vector of the type of 'source' where 'indices' contains
+  // an index into 'source' for each element of 'source'. The
+  // resulting vector has position i set to source[i]. This is
+  // equivalent to wrapping 'source' in a dictionary with 'indices'
+  // but this may reuse structure if said structure is uniquely owned
+  // or if a copy is more efficient than dictionary wrapping.
   static VectorPtr transpose(BufferPtr indices, VectorPtr&& source);
 
   static VectorPtr createConstant(
@@ -559,11 +600,18 @@ class BaseVector {
       vector_size_t size,
       velox::memory::MemoryPool* pool);
 
+  /// Wraps the 'vector' in the provided dictionary encoding. If the input
+  /// vector is constant and the nulls buffer is empty, this method may return a
+  /// ConstantVector. Additionally, if 'flattenIfRedundant' is true, this method
+  /// may return a flattened version of the expected dictionary vector if
+  /// applying the dictionary encoding would result in a suboptimally encoded
+  /// vector.
   static VectorPtr wrapInDictionary(
       BufferPtr nulls,
       BufferPtr indices,
       vector_size_t size,
-      VectorPtr vector);
+      VectorPtr vector,
+      bool flattenIfRedundant = false);
 
   static VectorPtr
   wrapInSequence(BufferPtr lengths, vector_size_t size, VectorPtr vector);
@@ -647,7 +695,7 @@ class BaseVector {
     VELOX_UNSUPPORTED("Vector is not a wrapper");
   }
 
-  virtual VectorPtr& valueVector() {
+  virtual void setValueVector(VectorPtr valueVector) {
     VELOX_UNSUPPORTED("Vector is not a wrapper");
   }
 
@@ -671,8 +719,12 @@ class BaseVector {
 
   /// If 'this' is a wrapper, returns the wrap info, interpretation depends on
   /// encoding.
-  virtual BufferPtr wrapInfo() const {
-    throw std::runtime_error("Vector is not a wrapper");
+  virtual const BufferPtr& wrapInfo() const {
+    VELOX_UNSUPPORTED("Vector is not a wrapper");
+  }
+
+  virtual void setWrapInfo(BufferPtr wrapInfo) {
+    VELOX_UNSUPPORTED("Vector is not a wrapper");
   }
 
   template <typename T = BaseVector>

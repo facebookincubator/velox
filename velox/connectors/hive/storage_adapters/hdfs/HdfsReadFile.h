@@ -34,10 +34,16 @@ class HdfsReadFile final : public ReadFile {
       std::string_view path);
   ~HdfsReadFile() override;
 
-  std::string_view pread(uint64_t offset, uint64_t length, void* buf)
-      const final;
+  std::string_view pread(
+      uint64_t offset,
+      uint64_t length,
+      void* buf,
+      io::IoStatistics* stats = nullptr) const final;
 
-  std::string pread(uint64_t offset, uint64_t length) const final;
+  std::string pread(
+      uint64_t offset,
+      uint64_t length,
+      io::IoStatistics* stats = nullptr) const final;
 
   uint64_t size() const final;
 
@@ -45,22 +51,17 @@ class HdfsReadFile final : public ReadFile {
 
   bool shouldCoalesce() const final;
 
-  std::string getName() const final {
-    return filePath_;
-  }
+  std::string getName() const final;
 
   uint64_t getNaturalReadSize() const final {
     return 72 << 20;
   }
 
  private:
-  void preadInternal(uint64_t offset, uint64_t length, char* pos) const;
   void checkFileReadParameters(uint64_t offset, uint64_t length) const;
 
-  filesystems::arrow::io::internal::LibHdfsShim* driver_;
-  hdfsFS hdfsClient_;
-  hdfsFileInfo* fileInfo_;
-  std::string filePath_;
+  class Impl;
+  std::unique_ptr<Impl> pImpl;
 };
 
 } // namespace facebook::velox

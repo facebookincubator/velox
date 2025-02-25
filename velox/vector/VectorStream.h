@@ -16,13 +16,11 @@
 #pragma once
 
 #include <folly/Range.h>
-#include "velox/buffer/Buffer.h"
+
 #include "velox/common/base/RuntimeMetrics.h"
 #include "velox/common/base/Scratch.h"
 #include "velox/common/compression/Compression.h"
 #include "velox/common/memory/ByteStream.h"
-#include "velox/common/memory/Memory.h"
-#include "velox/common/memory/MemoryAllocator.h"
 #include "velox/common/memory/StreamArena.h"
 #include "velox/vector/ComplexVector.h"
 
@@ -33,6 +31,26 @@ class ByteStream;
 struct IndexRange {
   vector_size_t begin;
   vector_size_t size;
+};
+
+namespace row {
+class CompactRow;
+class UnsafeRowFast;
+}; // namespace row
+
+struct CompressionStats {
+  // Number of times compression was not attempted.
+  int32_t numCompressionSkipped{0};
+
+  // Uncompressed size for which compression was attempted.
+  int64_t compressionInputBytes{0};
+
+  // Compressed bytes.
+  int64_t compressedBytes{0};
+
+  // Bytes for which compression was not attempted because of past
+  // non-performance.
+  int64_t compressionSkippedBytes{0};
 };
 
 /// Serializer that can iteratively build up a buffer of serialized rows from
@@ -62,11 +80,25 @@ class IterativeVectorSerializer {
       const RowVectorPtr& vector,
       const folly::Range<const vector_size_t*>& rows,
       Scratch& scratch) {
-    VELOX_UNSUPPORTED();
+    VELOX_UNSUPPORTED("{}", __FUNCTION__);
   }
 
   /// Serialize all rows in a vector.
   void append(const RowVectorPtr& vector);
+
+  virtual void append(
+      const row::CompactRow& compactRow,
+      const folly::Range<const vector_size_t*>& rows,
+      const std::vector<vector_size_t>& sizes) {
+    VELOX_UNSUPPORTED("{}", __FUNCTION__);
+  }
+
+  virtual void append(
+      const row::UnsafeRowFast& unsafeRow,
+      const folly::Range<const vector_size_t*>& rows,
+      const std::vector<vector_size_t>& sizes) {
+    VELOX_UNSUPPORTED("{}", __FUNCTION__);
+  }
 
   // True if supports append with folly::Range<vector_size_t*>.
   virtual bool supportsAppendRows() const {
@@ -91,7 +123,7 @@ class IterativeVectorSerializer {
 
   /// Resets 'this' to post construction state.
   virtual void clear() {
-    VELOX_UNSUPPORTED("clear");
+    VELOX_UNSUPPORTED("{}", __FUNCTION__);
   }
 
   /// Returns serializer-dependent counters, e.g. about compression, data
@@ -137,6 +169,16 @@ class BatchVectorSerializer {
 
 class VectorSerde {
  public:
+  enum class Kind {
+    kPresto,
+    kCompactRow,
+    kUnsafeRow,
+  };
+
+  static std::string kindName(Kind type);
+
+  static Kind kindByName(const std::string& name);
+
   virtual ~VectorSerde() = default;
 
   // Lets the caller pass options to the Serde. This can be extended to add
@@ -144,32 +186,42 @@ class VectorSerde {
   struct Options {
     Options() = default;
 
-    explicit Options(common::CompressionKind _compressionKind)
-        : compressionKind(_compressionKind) {}
+    Options(
+        common::CompressionKind _compressionKind,
+        float _minCompressionRatio)
+        : compressionKind(_compressionKind),
+          minCompressionRatio(_minCompressionRatio) {}
 
     virtual ~Options() = default;
 
     common::CompressionKind compressionKind{
         common::CompressionKind::CompressionKind_NONE};
+    /// Minimum achieved compression if compression is enabled. Compressing less
+    /// than this causes subsequent compression attempts to be skipped. The more
+    /// times compression misses the target the less frequently it is tried.
+    float minCompressionRatio{0.8};
   };
 
-  /// Adds the serialized size of vector at 'rows[i]' to '*sizes[i]'.
+  Kind kind() const {
+    return kind_;
+  }
+
   virtual void estimateSerializedSize(
       const BaseVector* /*vector*/,
-      folly::Range<const vector_size_t*> rows,
-      vector_size_t** sizes,
-      Scratch& scratch) {
-    VELOX_UNSUPPORTED();
+      const folly::Range<const vector_size_t*>& /*rows*/,
+      vector_size_t** /*sizes*/,
+      Scratch& /*scratch*/) {
+    VELOX_UNSUPPORTED("{}", __FUNCTION__);
   }
 
   /// Adds the serialized sizes of the rows of 'vector' in 'ranges[i]' to
   /// '*sizes[i]'.
   virtual void estimateSerializedSize(
       const BaseVector* /*vector*/,
-      const folly::Range<const IndexRange*>& ranges,
-      vector_size_t** sizes,
-      Scratch& scratch) {
-    VELOX_UNSUPPORTED();
+      const folly::Range<const IndexRange*>& /*ranges*/,
+      vector_size_t** /*sizes*/,
+      Scratch& /*scratch*/) {
+    VELOX_UNSUPPORTED("{}", __FUNCTION__);
   }
 
   virtual void estimateSerializedSize(
@@ -178,6 +230,20 @@ class VectorSerde {
       vector_size_t** sizes) {
     Scratch scratch;
     estimateSerializedSize(vector, ranges, sizes, scratch);
+  }
+
+  virtual void estimateSerializedSize(
+      const row::CompactRow* /*compactRow*/,
+      const folly::Range<const vector_size_t*>& /*rows*/,
+      vector_size_t** /*sizes*/) {
+    VELOX_UNSUPPORTED("{}", __FUNCTION__);
+  }
+
+  virtual void estimateSerializedSize(
+      const row::UnsafeRowFast* /*unsafeRow*/,
+      const folly::Range<const vector_size_t*>& /*rows*/,
+      vector_size_t** /*sizes*/) {
+    VELOX_UNSUPPORTED("{}", __FUNCTION__);
   }
 
   /// Creates a Vector Serializer that iteratively builds up a buffer of
@@ -233,7 +299,14 @@ class VectorSerde {
     }
     VELOX_UNSUPPORTED();
   }
+
+ protected:
+  explicit VectorSerde(Kind kind) : kind_(kind) {}
+
+  const Kind kind_;
 };
+
+std::ostream& operator<<(std::ostream& out, VectorSerde::Kind kind);
 
 /// Register/deregister the "default" vector serde.
 void registerVectorSerde(std::unique_ptr<VectorSerde> serdeToRegister);
@@ -248,23 +321,21 @@ VectorSerde* getVectorSerde();
 /// Register/deregister a named vector serde. `serdeName` is a handle that
 /// allows users to register multiple serde formats.
 void registerNamedVectorSerde(
-    std::string_view serdeName,
+    VectorSerde::Kind kind,
     std::unique_ptr<VectorSerde> serdeToRegister);
-void deregisterNamedVectorSerde(std::string_view serdeName);
+void deregisterNamedVectorSerde(VectorSerde::Kind kind);
 
 /// Check if a named vector serde has been registered with `serdeName` as a
 /// handle.
-bool isRegisteredNamedVectorSerde(std::string_view serdeName);
+bool isRegisteredNamedVectorSerde(VectorSerde::Kind kind);
 
 /// Get the vector serde identified by `serdeName`. Throws if not found.
-VectorSerde* getNamedVectorSerde(std::string_view serdeName);
+VectorSerde* getNamedVectorSerde(VectorSerde::Kind kind);
 
 class VectorStreamGroup : public StreamArena {
  public:
   /// If `serde` is not specified, fallback to the default registered.
-  explicit VectorStreamGroup(
-      memory::MemoryPool* pool,
-      VectorSerde* serde = nullptr)
+  VectorStreamGroup(memory::MemoryPool* pool, VectorSerde* serde)
       : StreamArena(pool),
         serde_(serde != nullptr ? serde : getVectorSerde()) {}
 
@@ -276,23 +347,38 @@ class VectorStreamGroup : public StreamArena {
   /// Increments sizes[i] for each ith row in 'rows' in 'vector'.
   static void estimateSerializedSize(
       const BaseVector* vector,
-      folly::Range<const vector_size_t*> rows,
+      const folly::Range<const vector_size_t*>& rows,
+      VectorSerde* serde,
       vector_size_t** sizes,
       Scratch& scratch);
 
   static void estimateSerializedSize(
       const BaseVector* vector,
       const folly::Range<const IndexRange*>& ranges,
+      VectorSerde* serde,
       vector_size_t** sizes,
       Scratch& scratch);
 
   static inline void estimateSerializedSize(
       const BaseVector* vector,
       const folly::Range<const IndexRange*>& ranges,
+      VectorSerde* serde,
       vector_size_t** sizes) {
     Scratch scratch;
-    estimateSerializedSize(vector, ranges, sizes, scratch);
+    estimateSerializedSize(vector, ranges, serde, sizes, scratch);
   }
+
+  static void estimateSerializedSize(
+      const row::CompactRow* compactRow,
+      const folly::Range<const vector_size_t*>& rows,
+      VectorSerde* serde,
+      vector_size_t** sizes);
+
+  static void estimateSerializedSize(
+      const row::UnsafeRowFast* unsafeRow,
+      const folly::Range<const vector_size_t*>& rows,
+      VectorSerde* serde,
+      vector_size_t** sizes);
 
   void append(
       const RowVectorPtr& vector,
@@ -313,6 +399,16 @@ class VectorStreamGroup : public StreamArena {
 
   void append(const RowVectorPtr& vector);
 
+  void append(
+      const row::CompactRow& compactRow,
+      const folly::Range<const vector_size_t*>& rows,
+      const std::vector<vector_size_t>& sizes);
+
+  void append(
+      const row::UnsafeRowFast& unsafeRow,
+      const folly::Range<const vector_size_t*>& rows,
+      const std::vector<vector_size_t>& sizes);
+
   // Writes the contents to 'stream' in wire format.
   void flush(OutputStream* stream);
 
@@ -321,8 +417,9 @@ class VectorStreamGroup : public StreamArena {
       ByteInputStream* source,
       velox::memory::MemoryPool* pool,
       RowTypePtr type,
+      VectorSerde* serde,
       RowVectorPtr* result,
-      const VectorSerde::Options* options = nullptr);
+      const VectorSerde::Options* options);
 
   void clear() override {
     StreamArena::clear();
@@ -366,3 +463,12 @@ RowVectorPtr IOBufToRowVector(
     VectorSerde* serde = nullptr);
 
 } // namespace facebook::velox
+
+template <>
+struct fmt::formatter<facebook::velox::VectorSerde::Kind>
+    : formatter<std::string> {
+  auto format(facebook::velox::VectorSerde::Kind s, format_context& ctx) const {
+    return formatter<std::string>::format(
+        facebook::velox::VectorSerde::kindName(s), ctx);
+  }
+};

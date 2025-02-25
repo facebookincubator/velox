@@ -18,6 +18,7 @@
 
 #include "velox/common/file/FileSystems.h"
 #include "velox/core/PlanNode.h"
+#include "velox/core/QueryCtx.h"
 #include "velox/parse/PlanNodeIdGenerator.h"
 
 namespace facebook::velox::exec {
@@ -32,8 +33,10 @@ class OperatorReplayerBase {
       std::string queryId,
       std::string taskId,
       std::string nodeId,
-      int32_t pipelineId,
-      std::string operatorType);
+      std::string operatorType,
+      const std::string& driverIds,
+      uint64_t queryCapacity,
+      folly::Executor* executor);
   virtual ~OperatorReplayerBase() = default;
 
   OperatorReplayerBase(const OperatorReplayerBase& other) = delete;
@@ -42,7 +45,7 @@ class OperatorReplayerBase {
   OperatorReplayerBase& operator=(OperatorReplayerBase&& other) noexcept =
       delete;
 
-  virtual RowVectorPtr run();
+  virtual RowVectorPtr run(bool copyResults = true);
 
  protected:
   virtual core::PlanNodePtr createPlanNode(
@@ -50,26 +53,31 @@ class OperatorReplayerBase {
       const core::PlanNodeId& nodeId,
       const core::PlanNodePtr& source) const = 0;
 
-  core::PlanNodePtr createPlan() const;
+  core::PlanNodePtr createPlan();
+
+  std::shared_ptr<core::QueryCtx> createQueryCtx();
 
   const std::string queryId_;
   const std::string taskId_;
   const std::string nodeId_;
-  const int32_t pipelineId_;
   const std::string operatorType_;
-
   const std::string taskTraceDir_;
   const std::string nodeTraceDir_;
   const std::shared_ptr<filesystems::FileSystem> fs_;
-  const int32_t maxDrivers_;
-
+  const std::vector<uint32_t> pipelineIds_;
+  const std::vector<uint32_t> driverIds_;
+  const uint64_t queryCapacity_;
   const std::shared_ptr<core::PlanNodeIdGenerator> planNodeIdGenerator_{
       std::make_shared<core::PlanNodeIdGenerator>()};
+  folly::Executor* const executor_;
 
   std::unordered_map<std::string, std::string> queryConfigs_;
   std::unordered_map<std::string, std::unordered_map<std::string, std::string>>
       connectorConfigs_;
   core::PlanNodePtr planFragment_;
+  core::PlanNodeId replayPlanNodeId_;
+
+  void printStats(const std::shared_ptr<exec::Task>& task) const;
 
  private:
   std::function<core::PlanNodePtr(std::string, core::PlanNodePtr)>

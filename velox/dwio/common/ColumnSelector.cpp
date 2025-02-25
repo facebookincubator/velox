@@ -295,10 +295,9 @@ const FilterTypePtr& ColumnSelector::process(const std::string& column, bool) {
     // when seeing this type of column, we require it has to exist
     const auto& node = findNode(pair.first);
     if (node->valid()) {
-      DWIO_ENSURE_EQ(
-          node->getKind(),
-          TypeKind::MAP,
-          "only support expression for map type currently: ",
+      DWIO_ENSURE(
+          node->getKind() == TypeKind::MAP || node->getKind() == TypeKind::ROW,
+          "only support expression for map or row type currently: ",
           column);
 
       // set expression for this node
@@ -349,8 +348,21 @@ std::shared_ptr<ColumnSelector> ColumnSelector::fromScanSpec(
     }
     std::string name = child->fieldName();
     if (!child->flatMapFeatureSelection().empty()) {
+      const auto& featureIds = child->flatMapFeatureSelection();
+      const auto& type = rowType->findChild(name);
+      VELOX_CHECK(type->isMap());
+      const bool isVarchar = type->asMap().keyType()->isVarchar();
       name += "#[";
-      name += folly::join(',', child->flatMapFeatureSelection());
+      for (int i = 0; i < featureIds.size(); ++i) {
+        if (i > 0) {
+          name += ',';
+        }
+        if (isVarchar) {
+          folly::json::escapeString(featureIds[i], name, {});
+        } else {
+          name += featureIds[i];
+        }
+      }
       name += ']';
     }
     columnNames.push_back(std::move(name));

@@ -81,7 +81,11 @@ class HiveConnectorSerDeTest : public exec::test::HiveConnectorTestBase {
       ASSERT_EQ(value, clone->customSplitInfo.at(key));
     }
 
-    ASSERT_EQ(*split.extraFileInfo, *clone->extraFileInfo);
+    if (split.extraFileInfo != nullptr) {
+      ASSERT_EQ(*split.extraFileInfo, *clone->extraFileInfo);
+    } else {
+      ASSERT_EQ(clone->extraFileInfo, nullptr);
+    }
     ASSERT_EQ(split.serdeParameters.size(), clone->serdeParameters.size());
     for (const auto& [key, value] : split.serdeParameters) {
       ASSERT_EQ(value, clone->serdeParameters.at(key));
@@ -218,6 +222,7 @@ TEST_F(HiveConnectorSerDeTest, hiveInsertTableHandle) {
 TEST_F(HiveConnectorSerDeTest, hiveConnectorSplit) {
   const auto connectorId = "testSerde";
   constexpr auto splitWeight = 1;
+  constexpr bool cacheable = false;
   constexpr auto filePath = "/testSerde/p";
   constexpr auto fileFormat = dwio::common::FileFormat::DWRF;
   constexpr auto start = 0;
@@ -235,7 +240,9 @@ TEST_F(HiveConnectorSerDeTest, hiveConnectorSplit) {
   FileProperties fileProperties{
       .fileSize = 2048, .modificationTime = std::nullopt};
   const auto properties = std::optional<FileProperties>(fileProperties);
-  const auto split = HiveConnectorSplit(
+  RowIdProperties rowIdProperties{
+      .metadataVersion = 2, .partitionId = 3, .tableGuid = "test"};
+  const auto split1 = HiveConnectorSplit(
       connectorId,
       filePath,
       fileFormat,
@@ -247,9 +254,31 @@ TEST_F(HiveConnectorSerDeTest, hiveConnectorSplit) {
       extraFileInfo,
       serdeParameters,
       splitWeight,
+      cacheable,
       infoColumns,
+      properties,
+      rowIdProperties);
+  testSerde(split1);
+  ASSERT_EQ(split1.cacheable, cacheable);
+
+  const auto split2 = HiveConnectorSplit(
+      connectorId,
+      filePath,
+      fileFormat,
+      start,
+      length,
+      {},
+      tableBucketNumber,
+      customSplitInfo,
+      nullptr,
+      {},
+      splitWeight,
+      !cacheable,
+      {},
+      std::nullopt,
       std::nullopt);
-  testSerde(split);
+  ASSERT_EQ(split2.cacheable, !cacheable);
+  testSerde(split2);
 }
 
 } // namespace

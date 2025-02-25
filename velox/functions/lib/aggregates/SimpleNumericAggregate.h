@@ -100,7 +100,8 @@ class SimpleNumericAggregate : public exec::Aggregate {
     DecodedVector decoded(*arg, rows, !mayPushdown);
     auto encoding = decoded.base()->encoding();
     if constexpr (kMayPushdown<TData>) {
-      if (encoding == VectorEncoding::Simple::LAZY) {
+      if (encoding == VectorEncoding::Simple::LAZY &&
+          !arg->type()->isDecimal()) {
         velox::aggregate::SimpleCallableHook<TData, UpdateSingleValue> hook(
             exec::Aggregate::offset_,
             exec::Aggregate::nullByte_,
@@ -218,7 +219,7 @@ class SimpleNumericAggregate : public exec::Aggregate {
       if (numSelected != arg->size()) {
         pushdownCustomIndices_.resize(numSelected);
         vector_size_t tgtIndex{0};
-        rows.template applyToSelected([&](vector_size_t i) {
+        rows.applyToSelected([&](vector_size_t i) {
           pushdownCustomIndices_[tgtIndex++] = indices[i];
         });
         indices = pushdownCustomIndices_.data();

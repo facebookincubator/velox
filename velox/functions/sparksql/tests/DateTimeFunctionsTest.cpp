@@ -51,6 +51,12 @@ class DateTimeFunctionsTest : public SparkFunctionBaseTest {
     });
   }
 
+  void enableLegacyFormatter() {
+    queryCtx_->testingOverrideConfigUnsafe({
+        {core::QueryConfig::kSparkLegacyDateFormatter, "true"},
+    });
+  }
+
   template <typename TOutput, typename TValue>
   std::optional<TOutput> evaluateDateFuncOnce(
       const std::string& expr,
@@ -262,6 +268,9 @@ TEST_F(DateTimeFunctionsTest, unixTimestamp) {
   EXPECT_EQ(std::nullopt, unixTimestamp("00:00:00"));
   EXPECT_EQ(std::nullopt, unixTimestamp(""));
   EXPECT_EQ(std::nullopt, unixTimestamp("malformed input"));
+  enableLegacyFormatter();
+  EXPECT_EQ(std::nullopt, unixTimestamp(""));
+  EXPECT_EQ(std::nullopt, unixTimestamp("malformed input"));
 }
 
 TEST_F(DateTimeFunctionsTest, unixTimestampCurrent) {
@@ -328,19 +337,18 @@ TEST_F(DateTimeFunctionsTest, makeDate) {
   EXPECT_EQ(makeDate(1920, 1, 25), parseDate("1920-01-25"));
   EXPECT_EQ(makeDate(-10, 1, 30), parseDate("-0010-01-30"));
 
-  auto errorMessage = fmt::format("Date out of range: {}-12-15", kMax);
-  VELOX_ASSERT_THROW(makeDate(kMax, 12, 15), errorMessage);
+  EXPECT_EQ(makeDate(kMax, 12, 15), std::nullopt);
 
   constexpr const int32_t kJodaMaxYear{292278994};
-  VELOX_ASSERT_THROW(makeDate(kJodaMaxYear - 10, 12, 15), "Integer overflow");
+  EXPECT_EQ(makeDate(kJodaMaxYear - 10, 12, 15), std::nullopt);
 
-  VELOX_ASSERT_THROW(makeDate(2021, 13, 1), "Date out of range: 2021-13-1");
-  VELOX_ASSERT_THROW(makeDate(2022, 3, 35), "Date out of range: 2022-3-35");
+  EXPECT_EQ(makeDate(2021, 13, 1), std::nullopt);
+  EXPECT_EQ(makeDate(2022, 3, 35), std::nullopt);
 
-  VELOX_ASSERT_THROW(makeDate(2023, 4, 31), "Date out of range: 2023-4-31");
+  EXPECT_EQ(makeDate(2023, 4, 31), std::nullopt);
   EXPECT_EQ(makeDate(2023, 3, 31), parseDate("2023-03-31"));
 
-  VELOX_ASSERT_THROW(makeDate(2023, 2, 29), "Date out of range: 2023-2-29");
+  EXPECT_EQ(makeDate(2023, 2, 29), std::nullopt);
   EXPECT_EQ(makeDate(2023, 3, 29), parseDate("2023-03-29"));
 }
 
@@ -803,6 +811,14 @@ TEST_F(DateTimeFunctionsTest, getTimestamp) {
   VELOX_ASSERT_THROW(
       getTimestamp("2023-07-13 21:34", "yyyy-MM-dd HH:II"),
       "Specifier I is not supported");
+
+  // Returns null for invalid datetime format when legacy date formatter is
+  // used.
+  enableLegacyFormatter();
+  // Empty format.
+  EXPECT_EQ(getTimestamp("0", ""), std::nullopt);
+  // Unsupported specifier.
+  EXPECT_EQ(getTimestamp("0", "l"), std::nullopt);
 }
 
 TEST_F(DateTimeFunctionsTest, hour) {
@@ -926,6 +942,14 @@ TEST_F(DateTimeFunctionsTest, fromUnixtime) {
       fromUnixTime(0, "FF/MM/dd"), "Specifier F is not supported");
   VELOX_ASSERT_THROW(
       fromUnixTime(0, "yyyy-MM-dd HH:II"), "Specifier I is not supported");
+
+  // Returns null for invalid datetime format when legacy date formatter is
+  // used.
+  enableLegacyFormatter();
+  // Empty format.
+  EXPECT_EQ(fromUnixTime(0, ""), std::nullopt);
+  // Unsupported specifier.
+  EXPECT_EQ(fromUnixTime(0, "l"), std::nullopt);
 }
 
 TEST_F(DateTimeFunctionsTest, makeYMInterval) {

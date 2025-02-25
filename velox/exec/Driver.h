@@ -24,10 +24,10 @@
 
 #include "velox/common/base/Counters.h"
 #include "velox/common/base/StatsReporter.h"
+#include "velox/common/base/TraceConfig.h"
 #include "velox/common/time/CpuWallTimer.h"
 #include "velox/core/PlanFragment.h"
 #include "velox/core/QueryCtx.h"
-#include "velox/exec/TraceConfig.h"
 
 namespace facebook::velox::exec {
 
@@ -203,9 +203,6 @@ enum class BlockingReason {
   kWaitForMergeJoinRightSide,
   kWaitForMemory,
   kWaitForConnector,
-  /// Build operator is blocked waiting for all its peers to stop to run group
-  /// spill on all of them.
-  kWaitForSpill,
   /// Some operators (like Table Scan) may run long loops and can 'voluntarily'
   /// exit them because Task requested to yield or stop or after a certain time.
   /// This is the blocking reason used in such cases.
@@ -213,6 +210,13 @@ enum class BlockingReason {
   /// Operator is blocked waiting for its associated query memory arbitration to
   /// finish.
   kWaitForArbitration,
+  /// For a table scan operator, it is blocked waiting for the scan controller
+  /// to increase the number of table scan processing threads to start
+  /// processing.
+  kWaitForScanScaleUp,
+  /// Used by IndexLookupJoin operator, indicating that it was blocked by the
+  /// async index lookup.
+  kWaitForIndexLookup,
 };
 
 std::string blockingReasonToString(BlockingReason reason);
@@ -303,7 +307,8 @@ struct DriverCtx {
   common::PrefixSortConfig prefixSortConfig() const {
     return common::PrefixSortConfig{
         queryConfig().prefixSortNormalizedKeyMaxBytes(),
-        queryConfig().prefixSortMinRows()};
+        queryConfig().prefixSortMinRows(),
+        queryConfig().prefixSortMaxStringPrefixLength()};
   }
 };
 
@@ -656,8 +661,7 @@ struct DriverFactory {
   static void registerAdapter(DriverAdapter adapter);
 
   bool supportsSerialExecution() const {
-    return !needsPartitionedOutput() && !needsExchangeClient() &&
-        !needsLocalExchange();
+    return !needsPartitionedOutput() && !needsExchangeClient();
   }
 
   const core::PlanNodeId& leafNodeId() const {
@@ -692,16 +696,29 @@ struct DriverFactory {
     return std::nullopt;
   }
 
-  /// Returns LocalPartition plan node ID if the pipeline gets data from a
-  /// local exchange.
-  std::optional<core::PlanNodeId> needsLocalExchange() const {
+  /// Returns true if the pipeline gets data from a local exchange. The function
+  /// sets plan node in 'planNode'.
+  bool needsLocalExchange(core::PlanNodePtr& planNode) const {
     VELOX_CHECK(!planNodes.empty());
     if (auto exchangeNode =
             std::dynamic_pointer_cast<const core::LocalPartitionNode>(
                 planNodes.front())) {
-      return exchangeNode->id();
+      planNode = exchangeNode;
+      return true;
     }
-    return std::nullopt;
+    return false;
+  }
+
+  /// Returns true if the pipeline gets data from a table scan. The function
+  /// sets plan node id in 'planNodeId'.
+  bool needsTableScan(core::PlanNodeId& planNodeId) const {
+    VELOX_CHECK(!planNodes.empty());
+    if (auto scanNode = std::dynamic_pointer_cast<const core::TableScanNode>(
+            planNodes.front())) {
+      planNodeId = scanNode->id();
+      return true;
+    }
+    return false;
   }
 
   /// Returns plan node IDs for which Hash Join Bridges must be created based
@@ -713,24 +730,6 @@ struct DriverFactory {
   std::vector<core::PlanNodeId> needsNestedLoopJoinBridges() const;
 
   static std::vector<DriverAdapter> adapters;
-};
-
-/// Begins and ends a section where a thread is running but not counted in its
-/// Task. Using this, a Driver thread can for example stop its own Task. For
-/// arbitrating memory overbooking, the contending threads go suspended and each
-/// in turn enters a global critical section. When running the arbitration
-/// strategy, a thread can stop and restart Tasks, including its own. When a
-/// Task is stopped, its drivers are blocked or suspended and the strategy
-/// thread can alter the Task's memory including spilling or killing the whole
-/// Task. Other threads waiting to run the arbitration, are in a suspended state
-/// which also means that they are instantaneously killable or spillable.
-class SuspendedSection {
- public:
-  explicit SuspendedSection(Driver* driver);
-  ~SuspendedSection();
-
- private:
-  Driver* driver_;
 };
 
 /// Provides the execution context of a driver thread. This is set to a

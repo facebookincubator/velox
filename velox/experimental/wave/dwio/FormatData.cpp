@@ -96,7 +96,6 @@ void SplitStaging::transfer(
   hostBuffer_ = getTransferArena().allocate<char>(fill_);
   auto transferBuffer = hostBuffer_->as<char>();
   int firstToCopy = 0;
-  int32_t numCopies = staging_.size();
   int64_t copySize = 0;
   auto targetCopySize = FLAGS_staging_bytes_per_thread;
   int32_t numThreads = 0;
@@ -295,6 +294,37 @@ std::unique_ptr<GpuDecode> FormatData::makeStep(
       }
     }
   }
+  return step;
+}
+
+std::unique_ptr<GpuDecode> FormatData::makeAlphabetStep(
+    ColumnOp& op,
+    ResultStaging& deviceStaging,
+    SplitStaging& splitStaging,
+    ReadStream& stream,
+    WaveTypeKind columnKind,
+    int32_t blockIdx,
+    int32_t numRows) {
+  auto rowsPerBlock = FLAGS_wave_reader_rows_per_tb;
+  auto maxRowsPerThread = (rowsPerBlock / kBlockSize);
+
+  auto rowsInBlock =
+      std::min<int32_t>(rowsPerBlock, numRows - (blockIdx * rowsPerBlock));
+
+  auto step = std::make_unique<GpuDecode>();
+  step->numRowsPerThread = bits::roundUp(rowsInBlock, kBlockSize) / kBlockSize;
+  step->gridNumRowsPerThread = maxRowsPerThread;
+  setFilter(step.get(), op.reader, nullptr);
+  step->nullMode = NullMode::kDenseNonNull;
+  step->nthBlock = blockIdx;
+  step->dataType = columnKind;
+  auto kindSize = waveTypeKindSize(columnKind);
+  step->step =
+      kindSize == 4 ? DecodeStep::kSelective32 : DecodeStep::kSelective64;
+  step->maxRow = (blockIdx * rowsPerBlock) + rowsInBlock;
+
+  step->baseRow = rowsPerBlock * blockIdx;
+
   return step;
 }
 

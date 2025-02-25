@@ -17,14 +17,20 @@
 #include "velox/connectors/hive/storage_adapters/s3fs/RegisterS3FileSystem.h"
 #include "velox/connectors/hive/storage_adapters/s3fs/tests/S3Test.h"
 
-namespace facebook::velox {
+namespace facebook::velox::filesystems {
 namespace {
+
+std::string cacheKeyFunc(
+    std::shared_ptr<const config::ConfigBase> config,
+    std::string_view path) {
+  return config->get<std::string>("hive.s3.endpoint").value();
+}
 
 class S3FileSystemRegistrationTest : public S3Test {
  protected:
   static void SetUpTestCase() {
     memory::MemoryManager::testingSetInstance({});
-    filesystems::registerS3FileSystem();
+    filesystems::registerS3FileSystem(cacheKeyFunc);
   }
 
   static void TearDownTestCase() {
@@ -43,7 +49,6 @@ TEST_F(S3FileSystemRegistrationTest, readViaRegistry) {
     LocalWriteFile writeFile(filename);
     writeData(&writeFile);
   }
-  filesystems::registerS3FileSystem();
   auto hiveConfig = minioServer_->hiveConfig();
   {
     auto s3fs = filesystems::getFileSystem(s3File, hiveConfig);
@@ -70,6 +75,15 @@ TEST_F(S3FileSystemRegistrationTest, fileHandle) {
   readData(fileHandleCachePtr->file.get());
 }
 
+TEST_F(S3FileSystemRegistrationTest, cacheKey) {
+  auto hiveConfig = minioServer_->hiveConfig();
+  auto s3fs = filesystems::getFileSystem(kDummyPath, hiveConfig);
+  std::string_view kDummyPath2 = "s3://dummy2/foo.txt";
+  auto s3fs_new = filesystems::getFileSystem(kDummyPath2, hiveConfig);
+  // The cacheKeyFunc function allows fs caching based on the endpoint value.
+  ASSERT_EQ(s3fs, s3fs_new);
+}
+
 TEST_F(S3FileSystemRegistrationTest, finalize) {
   auto hiveConfig = minioServer_->hiveConfig();
   auto s3fs = filesystems::getFileSystem(kDummyPath, hiveConfig);
@@ -77,4 +91,4 @@ TEST_F(S3FileSystemRegistrationTest, finalize) {
       filesystems::finalizeS3FileSystem(),
       "Cannot finalize S3FileSystem while in use");
 }
-} // namespace facebook::velox
+} // namespace facebook::velox::filesystems

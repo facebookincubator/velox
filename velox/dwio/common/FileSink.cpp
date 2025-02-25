@@ -128,8 +128,8 @@ void WriteFileSink::write(std::vector<DataBuffer<char>>& buffers) {
 }
 
 void WriteFileSink::doClose() {
-  LOG(INFO) << "closing file: " << name()
-            << ",  total size: " << succinctBytes(size_);
+  VLOG(1) << "closing file: " << name()
+          << ",  total size: " << succinctBytes(size_);
   if (writeFile_ != nullptr) {
     writeFile_->close();
   }
@@ -145,9 +145,20 @@ LocalFileSink::LocalFileSink(const std::string& name, const Options& options)
   writeFile_ = fs->openFileForWrite(name_);
 }
 
+LocalFileSink::LocalFileSink(
+    const std::string& name,
+    const Options& options,
+    bool initializeWriter)
+    : FileSink{name, options}, writeFile_() {
+  const auto dir = fs::path(name_).parent_path();
+  if (!fs::exists(dir)) {
+    VELOX_CHECK(velox::common::generateFileDirectory(dir.c_str()));
+  }
+}
+
 void LocalFileSink::doClose() {
-  LOG(INFO) << "closing file: " << name()
-            << ",  total size: " << succinctBytes(size_);
+  VLOG(1) << "closing file: " << name()
+          << ",  total size: " << succinctBytes(size_);
   if (writeFile_ != nullptr) {
     writeFile_->close();
   }

@@ -28,10 +28,29 @@ namespace facebook::velox::functions::sparksql {
 /// applied as many times as possible.
 template <typename T>
 struct Split {
+  Split() : cache_(0) {}
+
   VELOX_DEFINE_FUNCTION_TYPES(T);
 
   // Results refer to strings in the first argument.
   static constexpr int32_t reuse_strings_from_arg = 0;
+
+  FOLLY_ALWAYS_INLINE void initialize(
+      const std::vector<TypePtr>& inputTypes,
+      const core::QueryConfig& config,
+      const arg_type<Varchar>* input,
+      const arg_type<Varchar>* delimiter) {
+    initialize(inputTypes, config, input, delimiter, nullptr);
+  }
+
+  FOLLY_ALWAYS_INLINE void initialize(
+      const std::vector<TypePtr>& /*inputTypes*/,
+      const core::QueryConfig& config,
+      const arg_type<Varchar>* /*input*/,
+      const arg_type<Varchar>* /*delimiter*/,
+      const arg_type<int32_t>* /*limit*/) {
+    cache_.setMaxCompiledRegexes(config.exprMaxCompiledRegexes());
+  }
 
   FOLLY_ALWAYS_INLINE void call(
       out_type<Array<Varchar>>& result,
@@ -81,10 +100,11 @@ struct Split {
     size_t pos = 0;
     int32_t count = 0;
     while (pos < end && count < limit) {
-      auto charLength = tryGetCharLength(start + pos, end - pos);
+      int32_t codePoint;
+      auto charLength = tryGetUtf8CharLength(start + pos, end - pos, codePoint);
       if (charLength <= 0) {
         // Invalid UTF-8 character, the length of the invalid
-        // character is the absolute value of result of `tryGetCharLength`.
+        // character is the absolute value of result of `tryGetUtf8CharLength`.
         charLength = -charLength;
       }
       result.add_item().setNoCopy(StringView(start + pos, charLength));
@@ -142,10 +162,13 @@ struct Split {
       // empty tail string at last, e.g., the result array for split('abc','d|')
       // is ["a","b","c",""].
       if (size == 0) {
-        auto charLength = tryGetCharLength(start + pos, end - pos);
+        int32_t codePoint;
+        auto charLength =
+            tryGetUtf8CharLength(start + pos, end - pos, codePoint);
         if (charLength <= 0) {
           // Invalid UTF-8 character, the length of the invalid
-          // character is the absolute value of result of `tryGetCharLength`.
+          // character is the absolute value of result of
+          // `tryGetUtf8CharLength`.
           charLength = -charLength;
         }
         offset += charLength;

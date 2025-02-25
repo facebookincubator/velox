@@ -28,7 +28,9 @@
 namespace facebook::velox::exec::trace {
 
 /// Creates a directory to store the query trace metdata and data.
-void createTraceDirectory(const std::string& traceDir);
+void createTraceDirectory(
+    const std::string& traceDir,
+    const std::string& directoryConfig = "");
 
 /// Returns the trace directory for a given query.
 std::string getQueryTraceDirectory(
@@ -67,14 +69,24 @@ std::string getOpTraceDirectory(
 
 std::string getOpTraceDirectory(
     const std::string& nodeTraceDir,
-    int pipelineId,
-    int driverId);
+    uint32_t pipelineId,
+    uint32_t driverId);
 
 /// Returns the file path for a given operator's traced input file.
 std::string getOpTraceInputFilePath(const std::string& opTraceDir);
 
+/// Returns the file path for a given operator's traced split file.
+std::string getOpTraceSplitFilePath(const std::string& opTraceDir);
+
 /// Returns the file path for a given operator's traced input file.
 std::string getOpTraceSummaryFilePath(const std::string& opTraceDir);
+
+/// Extracts the trace node name from the trace metadata file.
+std::string getNodeName(
+    const std::string& nodeId,
+    const std::string& taskMetaFilePath,
+    const std::shared_ptr<filesystems::FileSystem>& fs,
+    memory::MemoryPool* pool);
 
 /// Extracts the input data type for the trace scan operator. The function first
 /// uses the traced node id to find traced operator's plan node from the traced
@@ -95,21 +107,25 @@ RowTypePtr getDataType(
     const std::string& tracedNodeId,
     size_t sourceIndex = 0);
 
-/// Extracts the driver ids by listing the sub-directors under the trace
-/// directory for a given pipeline and decode the sub-directory names to get
-/// driver id. 'nodeTraceDir' is the trace directory of the plan node.
+/// Extracts pipeline IDs in ascending order by listing the trace directory,
+/// then decoding the names of the subdirectories to obtain the pipeline IDs,
+/// and finally sorting them. 'nodeTraceDir' corresponds to the trace directory
+/// of the plan node.
+std::vector<uint32_t> listPipelineIds(
+    const std::string& nodeTraceDir,
+    const std::shared_ptr<filesystems::FileSystem>& fs);
+
+/// Extracts driver IDs in ascending order by listing the trace directory for a
+/// given pipeline then decoding the names of the subdirectories to obtain the
+/// driver IDs, and finally sorting them. 'nodeTraceDir' corresponds to the
+/// trace directory of the plan node.
 std::vector<uint32_t> listDriverIds(
     const std::string& nodeTraceDir,
     uint32_t pipelineId,
     const std::shared_ptr<filesystems::FileSystem>& fs);
 
-/// Extracts the number of drivers by listing the number of sub-directors under
-/// the trace directory for a given pipeline. 'nodeTraceDir' is the trace
-/// directory of the plan node.
-size_t getNumDrivers(
-    const std::string& nodeTraceDir,
-    uint32_t pipelineId,
-    const std::shared_ptr<filesystems::FileSystem>& fs);
+/// Extracts the driver IDs from the comma-separated list of driver IDs string.
+std::vector<uint32_t> extractDriverIds(const std::string& driverIds);
 
 /// Extracts task ids of the query tracing by listing the query trace directory.
 /// 'traceDir' is the root trace directory. 'queryId' is the query id.

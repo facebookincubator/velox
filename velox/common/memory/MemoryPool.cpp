@@ -27,13 +27,6 @@
 
 #include <re2/re2.h>
 
-DEFINE_bool(
-    velox_memory_pool_capacity_transfer_across_tasks,
-    false,
-    "Whether allow to memory capacity transfer between memory pools from different tasks, which might happen in use case like Spark-Gluten");
-
-DECLARE_bool(velox_suppress_memory_capacity_exceeding_error_message);
-
 using facebook::velox::common::testutil::TestValue;
 
 namespace facebook::velox::memory {
@@ -971,7 +964,7 @@ std::string MemoryPoolImpl::treeMemoryUsage(bool skipEmptyPool) const {
   if (parent_ != nullptr) {
     return parent_->treeMemoryUsage(skipEmptyPool);
   }
-  if (FLAGS_velox_suppress_memory_capacity_exceeding_error_message) {
+  if (config::globalConfig().suppressMemoryCapacityExceedingErrorMessage) {
     return "";
   }
   std::stringstream out;
@@ -1269,8 +1262,8 @@ void MemoryPoolImpl::leakCheckDbg() {
   }
   std::stringbuf buf;
   std::ostream oss(&buf);
-  oss << "Detected total of " << debugAllocRecords_.size()
-      << " leaked allocations:\n";
+  oss << "[MemoryPool] : " << name_ << " - Detected total of "
+      << debugAllocRecords_.size() << " leaked allocations:\n";
   struct AllocationStats {
     uint64_t size{0};
     uint64_t numAllocations{0};

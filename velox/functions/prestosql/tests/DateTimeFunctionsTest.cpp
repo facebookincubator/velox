@@ -14,6 +14,9 @@
  * limitations under the License.
  */
 
+#define XXH_INLINE_ALL
+#include <xxhash.h>
+
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/external/date/tz.h"
 #include "velox/functions/prestosql/tests/utils/FunctionBaseTest.h"
@@ -1923,6 +1926,70 @@ TEST_F(DateTimeFunctionsTest, dateTruncTimestampWithTimezone) {
   evaluateDateTrunc("year", 123456789000, "+14:00", 94644000000);
   evaluateDateTrunc("year", -123456789000, "-09:30", -126196200000);
 
+  // Test cases that land on an ambiguous time.
+  // The first 1 AM
+  // 11/3/2024 01:01:01.01 AM GMT-07:00
+  evaluateDateTrunc(
+      "second", 1730620861100, "America/Los_Angeles", 1730620861000);
+  evaluateDateTrunc(
+      "minute", 1730620861100, "America/Los_Angeles", 1730620860000);
+  evaluateDateTrunc(
+      "hour", 1730620861100, "America/Los_Angeles", 1730620800000);
+
+  // The second 1AM
+  //  11/3/2024 01:01:01.01 AM GMT-08:00
+  evaluateDateTrunc(
+      "second", 1730624461100, "America/Los_Angeles", 1730624461000);
+  evaluateDateTrunc(
+      "minute", 1730624461100, "America/Los_Angeles", 1730624460000);
+  evaluateDateTrunc(
+      "hour", 1730624461100, "America/Los_Angeles", 1730624400000);
+
+  // Test cases that go back across a "fall back" daylight savings time
+  // boundary. (GMT-07:00 -> GMT-08:00)
+  //  11/3/2024 01:01:01.01 AM GMT-08:00
+  evaluateDateTrunc("day", 1730624461100, "America/Los_Angeles", 1730617200000);
+  evaluateDateTrunc(
+      "month", 1730624461100, "America/Los_Angeles", 1730444400000);
+  evaluateDateTrunc(
+      "quarter", 1730624461100, "America/Los_Angeles", 1727766000000);
+  // Technically this circles back again to the same daylight savings time zone,
+  // but just to make sure we're covered (and it also test leap years).
+  evaluateDateTrunc(
+      "year", 1730624461100, "America/Los_Angeles", 1704096000000);
+
+  // Test cases that go back across a "spring forward" daylight savings time
+  // boundary. (GMT-08:00 -> GMT-07:00)
+  //  3/10/2024 03:00:00 AM GMT-08:00
+  evaluateDateTrunc("day", 1710064800000, "America/Los_Angeles", 1710057600000);
+  evaluateDateTrunc(
+      "month", 1710064800000, "America/Los_Angeles", 1709280000000);
+  evaluateDateTrunc(
+      "quarter", 1710064800000, "America/Los_Angeles", 1704096000000);
+  // Technically this circles back again to the same daylight savings time zone,
+  // but just to make sure we're covered (and it also test leap years).
+  evaluateDateTrunc(
+      "year", 1710064800000, "America/Los_Angeles", 1704096000000);
+
+  // Test some cases that are close to hours that don't exist due to DST (it's
+  // impossible to truncate to a time in the hour that doesn't exist, so we
+  // don't test that case).
+  //  3/10/2024 03:01:01.01 AM GMT-08:00
+  evaluateDateTrunc(
+      "second", 1710064861100, "America/Los_Angeles", 1710064861000);
+  evaluateDateTrunc(
+      "minute", 1710064861100, "America/Los_Angeles", 1710064860000);
+  evaluateDateTrunc(
+      "hour", 1710064861100, "America/Los_Angeles", 1710064800000);
+
+  //  3/10/2024 01:59:59.999AM GMT-07:00
+  evaluateDateTrunc(
+      "second", 1710064799999, "America/Los_Angeles", 1710064799000);
+  evaluateDateTrunc(
+      "minute", 1710064799999, "America/Los_Angeles", 1710064740000);
+  evaluateDateTrunc(
+      "hour", 1710064799999, "America/Los_Angeles", 1710061200000);
+
   const auto evaluateDateTruncFromStrings = [&](const std::string& truncUnit,
                                                 const std::string&
                                                     inputTimestamp,
@@ -2311,6 +2378,16 @@ TEST_F(DateTimeFunctionsTest, dateAddTimestamp) {
           "year",
           -2,
           Timestamp(1582970400, 500'999'999) /*2020-02-29 10:00:00.500*/));
+
+  // Test cases where the result would end up in the nonexistent gap between
+  // daylight savings time and standard time. 2023-03-12 02:30:00.000 does not
+  // exist in America/Los_Angeles since that hour is skipped.
+  EXPECT_EQ(
+      Timestamp(1678617000, 0), /*2023-03-12 03:30:00*/
+      dateAdd("day", 45, Timestamp(1674729000, 0) /*2023-01-26 02:30:00*/));
+  EXPECT_EQ(
+      Timestamp(1678617000, 0), /*2023-03-12 03:30:00*/
+      dateAdd("day", -45, Timestamp(1682501400, 0) /*2023-04-26 02:30:00*/));
 }
 
 TEST_F(DateTimeFunctionsTest, dateAddTimestampWithTimeZone) {
@@ -2489,6 +2566,17 @@ TEST_F(DateTimeFunctionsTest, dateAddTimestampWithTimeZone) {
       "2023-03-11 00:00:00.000 America/Los_Angeles",
       dateAddAndCast(
           "year", -1, "2024-03-11 00:00:00.000 America/Los_Angeles"));
+
+  // Test cases where the result would end up in the nonexistent gap between
+  // daylight savings time and standard time. 2023-03-12 02:30:00.000 does not
+  // exist in America/Los_Angeles since that hour is skipped.
+  EXPECT_EQ(
+      "2023-03-12 03:30:00.000 America/Los_Angeles",
+      dateAddAndCast("day", 45, "2023-01-26 02:30:00.000 America/Los_Angeles"));
+  EXPECT_EQ(
+      "2023-03-12 03:30:00.000 America/Los_Angeles",
+      dateAddAndCast(
+          "day", -45, "2023-04-26 02:30:00.000 America/Los_Angeles"));
 }
 
 TEST_F(DateTimeFunctionsTest, dateDiffDate) {
@@ -3121,6 +3209,42 @@ TEST_F(DateTimeFunctionsTest, dateDiffTimestampWithTimezone) {
           "2023-03-11 00:00:00 America/Los_Angeles"));
 }
 
+TEST_F(DateTimeFunctionsTest, parseDatetimeRoundtrip) {
+  const auto parseDatetimeRoundTrip =
+      [&](const std::optional<std::string>& input,
+          const std::optional<std::string>& format) {
+        return evaluateOnce<std::string>(
+            "cast(parse_datetime(c0, c1) as varchar)", input, format);
+      };
+
+  EXPECT_EQ(
+      "2024-01-20 01:00:30.127 UTC",
+      parseDatetimeRoundTrip(
+          "2024-01-20 01:00:30.12700", "yyyy-MM-dd HH:mm:ss.SSSSS"));
+  EXPECT_EQ(
+      "2024-01-20 01:00:30.459 UTC",
+      parseDatetimeRoundTrip(
+          "2024-01-20 01:00:30.45900000", "yyyy-MM-dd HH:mm:ss.SSSSSSSS"));
+  EXPECT_EQ(
+      "2024-01-20 01:00:30.617 UTC",
+      parseDatetimeRoundTrip(
+          "2024-01-20 01:00:30.6170", "yyyy-MM-dd HH:mm:ss.SSSSSSSS"));
+
+  EXPECT_EQ(
+      "2024-01-20 01:00:30.127 UTC",
+      parseDatetimeRoundTrip(
+          "2024-01-20 01:00:30.127149", "yyyy-MM-dd HH:mm:ss.SSSSSS"));
+  EXPECT_EQ(
+      "2024-01-20 01:00:30.127 UTC",
+      parseDatetimeRoundTrip(
+          "2024-01-20 01:00:30.127941", "yyyy-MM-dd HH:mm:ss.SSSSSS"));
+
+  VELOX_ASSERT_THROW(
+      parseDatetimeRoundTrip(
+          "2024-01-20 01:00:30.6170", "yyyy-MM-dd HH:mm:ss.SSS"),
+      "Invalid date format");
+}
+
 TEST_F(DateTimeFunctionsTest, parseDatetime) {
   const auto parseDatetime = [&](const std::optional<std::string>& input,
                                  const std::optional<std::string>& format) {
@@ -3676,8 +3800,6 @@ TEST_F(DateTimeFunctionsTest, formatDateTime) {
 
   // User format errors or unsupported errors.
   EXPECT_THROW(
-      formatDatetime(parseTimestamp("1970-01-01"), "x"), VeloxUserError);
-  EXPECT_THROW(
       formatDatetime(parseTimestamp("1970-01-01"), "q"), VeloxUserError);
   EXPECT_THROW(
       formatDatetime(parseTimestamp("1970-01-01"), "'abcd"), VeloxUserError);
@@ -4001,9 +4123,6 @@ TEST_F(DateTimeFunctionsTest, dateFormat) {
   VELOX_ASSERT_THROW(
       dateFormat(timestamp, "%X"),
       "Date format specifier is not supported: %X");
-  VELOX_ASSERT_THROW(
-      dateFormat(timestamp, "%x"),
-      "Date format specifier is not supported: WEEK_YEAR");
 }
 
 TEST_F(DateTimeFunctionsTest, dateFormatTimestampWithTimezone) {
@@ -4046,6 +4165,24 @@ TEST_F(DateTimeFunctionsTest, dateFormatTimestampWithTimezone) {
       "69-May-11 20:04:45 PM",
       dateFormatTimestampWithTimezone(
           "%y-%M-%e %T %p", TimestampWithTimezone(-20220915000, "-03:00")));
+}
+
+TEST_F(DateTimeFunctionsTest, test_week_year) {
+  const auto dateFormat = [&](std::optional<Timestamp> timestamp,
+                              std::optional<std::string> format) {
+    return evaluateOnce<std::string>("date_format(c0, c1)", timestamp, format);
+  };
+  auto rst_wy = dateFormat(Timestamp(1609545600, 0), "%x");
+  EXPECT_EQ("2020", rst_wy);
+
+  EXPECT_EQ(
+      "1999-52",
+      dateFormat(parseTimestamp("1999-12-31 23:59:59.999"), "%x-%v"));
+  // 2023-01-01 is a Sunday, so it's part of the last week of 2022 (week 52)
+  // according to ISO week date system.
+  EXPECT_EQ(
+      "2022-52",
+      dateFormat(parseTimestamp("2023-01-01 00:00:00.000"), "%x-%v"));
 }
 
 TEST_F(DateTimeFunctionsTest, fromIso8601Date) {
@@ -4266,6 +4403,9 @@ TEST_F(DateTimeFunctionsTest, fromIso8601Timestamp) {
   VELOX_ASSERT_THROW(
       fromIso("1970-01-02T11:38:56.123 America/New_York"),
       R"(Unable to parse timestamp value: "1970-01-02T11:38:56.123 America/New_York")");
+  VELOX_ASSERT_THROW(
+      fromIso("1970-01-02T11:38:56+16:00:01"),
+      "Unknown timezone value: \"+16:00:01\"");
 
   VELOX_ASSERT_THROW(fromIso("T"), R"(Unable to parse timestamp value: "T")");
 
@@ -5134,4 +5274,24 @@ TEST_F(DateTimeFunctionsTest, toMilliseconds) {
           "to_milliseconds(c0)",
           INTERVAL_DAY_TIME(),
           std::optional<int64_t>(123)));
+}
+
+TEST_F(DateTimeFunctionsTest, xxHash64FunctionDate) {
+  const auto xxhash64 = [&](std::optional<int32_t> date) {
+    return evaluateOnce<int64_t>("xxhash64_internal(c0)", DATE(), date);
+  };
+
+  EXPECT_EQ(std::nullopt, xxhash64(std::nullopt));
+
+  // Epoch
+  EXPECT_EQ(3803688792395291579, xxhash64(parseDate("1970-01-01")));
+  EXPECT_EQ(3734916545851684445, xxhash64(parseDate("2024-10-07")));
+  EXPECT_EQ(1385444150471264300, xxhash64(parseDate("2025-01-10")));
+  EXPECT_EQ(-6977822845260490347, xxhash64(parseDate("1970-01-02")));
+  // Leap date
+  EXPECT_EQ(-5306598937769828126, xxhash64(parseDate("2020-02-29")));
+  // Max supported date
+  EXPECT_EQ(3856043376106280085, xxhash64(parseDate("9999-12-31")));
+  // Y2K
+  EXPECT_EQ(-7612541860844473816, xxhash64(parseDate("2000-01-01")));
 }

@@ -21,6 +21,7 @@
 #include "velox/common/base/Exceptions.h"
 #include "velox/common/base/Fs.h"
 #include "velox/common/base/SuccinctPrinter.h"
+#include "velox/common/config/GlobalConfig.h"
 #include "velox/common/process/ThreadDebugInfo.h"
 #include "velox/common/testutil/TestValue.h"
 #include "velox/core/Expressions.h"
@@ -34,25 +35,6 @@
 #include "velox/expression/VectorFunction.h"
 #include "velox/vector/SelectivityVector.h"
 #include "velox/vector/VectorSaver.h"
-
-DEFINE_bool(
-    force_eval_simplified,
-    false,
-    "Whether to overwrite queryCtx and force the "
-    "use of simplified expression evaluation path.");
-
-DEFINE_bool(
-    velox_experimental_save_input_on_fatal_signal,
-    false,
-    "This is an experimental flag only to be used for debugging "
-    "purposes. If set to true, serializes the input vector data and "
-    "all the SQL expressions in the ExprSet that is currently "
-    "executing, whenever a fatal signal is encountered. Enabling "
-    "this flag makes the signal handler async signal unsafe, so it "
-    "should only be used for debugging purposes. The vector and SQLs "
-    "are serialized to files in directories specified by either "
-    "'velox_save_input_on_expression_any_failure_path' or "
-    "'velox_save_input_on_expression_system_failure_path'");
 
 namespace facebook::velox::exec {
 
@@ -507,6 +489,8 @@ void Expr::evalSimplifiedImpl(
         inputValue->encoding() == VectorEncoding::Simple::ROW ||
         inputValue->encoding() == VectorEncoding::Simple::FUNCTION);
   };
+  auto releaseInputsGuard =
+      folly::makeGuard([&]() { releaseInputValues(context); });
 
   if (defaultNulls) {
     if (!evalArgsDefaultNulls(remainingRows, evalArg, context, result)) {
@@ -530,7 +514,6 @@ void Expr::evalSimplifiedImpl(
 
   // Make sure the returned vector has its null bitmap properly set.
   addNulls(rows, remainingRows.rows().asRange().bits(), context, result);
-  releaseInputValues(context);
 }
 
 namespace {
@@ -658,8 +641,7 @@ class ExprExceptionContext {
 
 /// Used to generate context for an error occurred while evaluating
 /// top-level expression or top-level context for an error occurred while
-/// evaluating top-level expression. If
-/// FLAGS_velox_save_input_on_expression_failure_path
+/// evaluating top-level expression. If saveInputOnExpressionAnyFailurePath
 /// is not empty, saves the input vector and expression SQL to files in
 /// that directory.
 ///
@@ -678,9 +660,10 @@ std::string onTopLevelException(VeloxException::Type exceptionType, void* arg) {
   auto* context = static_cast<ExprExceptionContext*>(arg);
 
   const char* basePath =
-      FLAGS_velox_save_input_on_expression_any_failure_path.c_str();
+      config::globalConfig().saveInputOnExpressionAnyFailurePath.c_str();
   if (strlen(basePath) == 0 && exceptionType == VeloxException::Type::kSystem) {
-    basePath = FLAGS_velox_save_input_on_expression_system_failure_path.c_str();
+    basePath =
+        config::globalConfig().saveInputOnExpressionSystemFailurePath.c_str();
   }
   if (strlen(basePath) == 0) {
     return fmt::format("Top-level Expression: {}", context->expr()->toString());
@@ -736,7 +719,8 @@ void Expr::evalFlatNoNullsImpl(
       {.messageFunc = parentExprSet ? onTopLevelException : onException,
        .arg = parentExprSet ? (void*)&exprExceptionContext : this,
        .isEssential = parentExprSet != nullptr});
-
+  auto releaseInputsGuard =
+      folly::makeGuard([&]() { releaseInputValues(context); });
   if (!rows.hasSelections()) {
     checkOrSetEmptyResult(type(), context.pool(), result);
     return;
@@ -768,7 +752,6 @@ void Expr::evalFlatNoNullsImpl(
       VELOX_CHECK_NULL(inputValues_[i]);
     }
   }
-  releaseInputValues(context);
 }
 
 void Expr::eval(
@@ -993,7 +976,7 @@ Expr::PeelEncodingsResult Expr::peelEncodings(
   // its a shared subexpression.
   const auto& rowsToPeel =
       context.isFinalSelection() ? rows : *context.finalSelection();
-  auto numFields = context.row()->childrenSize();
+  [[maybe_unused]] auto numFields = context.row()->childrenSize();
   std::vector<VectorPtr> vectorsToPeel;
   vectorsToPeel.reserve(distinctFields_.size());
   for (auto* field : distinctFields_) {
@@ -1413,7 +1396,8 @@ void Expr::evalAllImpl(
     EvalCtx& context,
     VectorPtr& result) {
   VELOX_DCHECK(rows.hasSelections());
-
+  auto releaseInputsGuard =
+      folly::makeGuard([&]() { releaseInputValues(context); });
   if (isSpecialForm()) {
     evalSpecialFormWithStats(rows, context, result);
     return;
@@ -1460,7 +1444,6 @@ void Expr::evalAllImpl(
   if (remainingRows.hasChanged()) {
     addNulls(rows, remainingRows.rows().asRange().bits(), context, result);
   }
-  releaseInputValues(context);
 }
 
 bool Expr::applyFunctionWithPeeling(
@@ -1470,10 +1453,14 @@ bool Expr::applyFunctionWithPeeling(
   LocalDecodedVector localDecoded(context);
   LocalSelectivityVector newRowsHolder(context);
   if (!context.peelingEnabled()) {
-    if (inputValues_.size() == 1) {
+    if (distinctFields_.size() < 2) {
       // If we have a single input, velox needs to ensure that the
-      // vectorFunction would receive a flat input.
-      BaseVector::flattenVector(inputValues_[0]);
+      // vectorFunction would receive a flat or constant input.
+      for (int i = 0; i < inputValues_.size(); ++i) {
+        if (inputValues_[i]->encoding() == VectorEncoding::Simple::DICTIONARY) {
+          BaseVector::flattenVector(inputValues_[i]);
+        }
+      }
       applyFunction(applyRows, context, result);
       return true;
     }
@@ -1863,9 +1850,10 @@ void printInputAndExprs(
     const BaseVector* vector,
     const std::vector<std::shared_ptr<Expr>>& exprs) {
   const char* basePath =
-      FLAGS_velox_save_input_on_expression_any_failure_path.c_str();
+      config::globalConfig().saveInputOnExpressionAnyFailurePath.c_str();
   if (strlen(basePath) == 0) {
-    basePath = FLAGS_velox_save_input_on_expression_system_failure_path.c_str();
+    basePath =
+        config::globalConfig().saveInputOnExpressionSystemFailurePath.c_str();
   }
   if (strlen(basePath) == 0) {
     return;
@@ -1925,7 +1913,7 @@ void ExprSet::eval(
     context.ensureFieldLoaded(field->index(context), rows);
   }
 
-  if (FLAGS_velox_experimental_save_input_on_fatal_signal) {
+  if (config::globalConfig().experimentalSaveInputOnFatalSignal) {
     auto other = process::GetThreadDebugInfo();
     process::ThreadDebugInfo debugInfo;
     if (other) {
@@ -1989,7 +1977,7 @@ std::unique_ptr<ExprSet> makeExprSetFromFlag(
     std::vector<core::TypedExprPtr>&& source,
     core::ExecCtx* execCtx) {
   if (execCtx->queryCtx()->queryConfig().exprEvalSimplified() ||
-      FLAGS_force_eval_simplified) {
+      config::globalConfig().forceEvalSimplified) {
     return std::make_unique<ExprSetSimplified>(std::move(source), execCtx);
   }
   return std::make_unique<ExprSet>(std::move(source), execCtx);
@@ -2024,6 +2012,22 @@ core::ExecCtx* SimpleExpressionEvaluator::ensureExecCtx() {
     execCtx_ = std::make_unique<core::ExecCtx>(pool_, queryCtx_);
   }
   return execCtx_.get();
+}
+
+VectorPtr evaluateConstantExpression(
+    const core::TypedExprPtr& expr,
+    memory::MemoryPool* pool) {
+  auto data = BaseVector::create<RowVector>(ROW({}), 1, pool);
+
+  auto queryCtx = velox::core::QueryCtx::create();
+  velox::core::ExecCtx execCtx{pool, queryCtx.get()};
+  velox::exec::ExprSet exprSet({expr}, &execCtx);
+  velox::exec::EvalCtx evalCtx(&execCtx, &exprSet, data.get());
+
+  velox::SelectivityVector singleRow(1);
+  std::vector<velox::VectorPtr> results(1);
+  exprSet.eval(singleRow, evalCtx, results);
+  return results.at(0);
 }
 
 } // namespace facebook::velox::exec

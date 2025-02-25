@@ -16,12 +16,16 @@
 #include "velox/exec/fuzzer/FuzzerUtil.h"
 #include <re2/re2.h>
 #include <filesystem>
+#include "velox/common/config/GlobalConfig.h"
 #include "velox/common/memory/SharedArbitrator.h"
 #include "velox/connectors/hive/HiveConnector.h"
 #include "velox/connectors/hive/HiveConnectorSplit.h"
 #include "velox/dwio/catalog/fbhive/FileUtils.h"
 #include "velox/dwio/dwrf/writer/Writer.h"
+#include "velox/exec/fuzzer/DuckQueryRunner.h"
+#include "velox/exec/fuzzer/PrestoQueryRunner.h"
 #include "velox/expression/SignatureBinder.h"
+#include "velox/functions/prestosql/types/IPPrefixType.h"
 
 using namespace facebook::velox::dwio::catalog::fbhive;
 
@@ -145,6 +149,7 @@ std::shared_ptr<connector::ConnectorSplit> makeConnectorSplit(
       /*extraFileInfo=*/nullptr,
       /*serdeParameters=*/std::unordered_map<std::string, std::string>{},
       /*splitWeight=*/0,
+      /*cacheable=*/true,
       infoColumns);
 }
 
@@ -260,12 +265,9 @@ bool containTypeName(
   return false;
 }
 
-bool usesTypeName(
+bool usesInputTypeName(
     const exec::FunctionSignature& signature,
     const std::string& typeName) {
-  if (containTypeName(signature.returnType(), typeName)) {
-    return true;
-  }
   for (const auto& argument : signature.argumentTypes()) {
     if (containTypeName(argument, typeName)) {
       return true;
@@ -274,10 +276,19 @@ bool usesTypeName(
   return false;
 }
 
+bool usesTypeName(
+    const exec::FunctionSignature& signature,
+    const std::string& typeName) {
+  if (containTypeName(signature.returnType(), typeName)) {
+    return true;
+  }
+  return usesInputTypeName(signature, typeName);
+}
+
 // If 'type' is a RowType or contains RowTypes with empty field names, adds
 // default names to these fields in the RowTypes.
 TypePtr sanitize(const TypePtr& type) {
-  if (!type) {
+  if (!type || isIPPrefixType(type)) {
     return type;
   }
 
@@ -333,8 +344,8 @@ void setupMemory(
     int64_t allocatorCapacity,
     int64_t arbitratorCapacity,
     bool enableGlobalArbitration) {
-  FLAGS_velox_enable_memory_usage_track_in_default_memory_pool = true;
-  FLAGS_velox_memory_leak_check_enabled = true;
+  config::globalConfig().enableMemoryUsageTrackInDefaultMemoryPool = true;
+  config::globalConfig().memoryLeakCheckEnabled = true;
   facebook::velox::memory::SharedArbitrator::registerFactory();
   facebook::velox::memory::MemoryManagerOptions options;
   options.allocatorCapacity = allocatorCapacity;
@@ -369,51 +380,57 @@ void registerHiveConnector(
   connector::registerConnector(hiveConnector);
 }
 
+std::unique_ptr<ReferenceQueryRunner> setupReferenceQueryRunner(
+    memory::MemoryPool* aggregatePool,
+    const std::string& prestoUrl,
+    const std::string& runnerName,
+    const uint32_t& reqTimeoutMs) {
+  if (prestoUrl.empty()) {
+    auto duckQueryRunner = std::make_unique<DuckQueryRunner>(aggregatePool);
+    duckQueryRunner->disableAggregateFunctions({
+        "skewness",
+        // DuckDB results on constant inputs are incorrect. Should be NaN,
+        // but DuckDB returns some random value.
+        "kurtosis",
+        "entropy",
+        // Regr_count result in DuckDB is incorrect when the input data is null.
+        "regr_count",
+    });
+    LOG(INFO) << "Using DuckDB as the reference DB.";
+    return duckQueryRunner;
+  } else {
+    return std::make_unique<PrestoQueryRunner>(
+        aggregatePool,
+        prestoUrl,
+        runnerName,
+        static_cast<std::chrono::milliseconds>(reqTimeoutMs));
+    LOG(INFO) << "Using Presto as the reference DB.";
+  }
+}
+
+void logVectors(const std::vector<RowVectorPtr>& vectors) {
+  if (!VLOG_IS_ON(1)) {
+    return;
+  }
+  for (auto i = 0; i < vectors.size(); ++i) {
+    VLOG(1) << "Input batch " << i << ":";
+    for (auto j = 0; j < vectors[i]->size(); ++j) {
+      VLOG(1) << "\tRow " << j << ": " << vectors[i]->toString(j);
+    }
+  }
+}
+
 std::pair<std::optional<MaterializedRowMultiset>, ReferenceQueryErrorCode>
 computeReferenceResults(
     const core::PlanNodePtr& plan,
-    const std::vector<RowVectorPtr>& input,
     ReferenceQueryRunner* referenceQueryRunner) {
-  if (auto sql = referenceQueryRunner->toSql(plan)) {
-    try {
-      return std::make_pair(
-          referenceQueryRunner->execute(sql.value(), input, plan->outputType()),
-          ReferenceQueryErrorCode::kSuccess);
-    } catch (...) {
-      LOG(WARNING) << "Query failed in the reference DB";
-      return std::make_pair(
-          std::nullopt, ReferenceQueryErrorCode::kReferenceQueryFail);
-    }
-  }
-
-  LOG(INFO) << "Query not supported by the reference DB";
-  return std::make_pair(
-      std::nullopt, ReferenceQueryErrorCode::kReferenceQueryUnsupported);
+  return referenceQueryRunner->execute(plan);
 }
 
 std::pair<std::optional<std::vector<RowVectorPtr>>, ReferenceQueryErrorCode>
 computeReferenceResultsAsVector(
     const core::PlanNodePtr& plan,
-    const std::vector<RowVectorPtr>& input,
     ReferenceQueryRunner* referenceQueryRunner) {
-  VELOX_CHECK(referenceQueryRunner->supportsVeloxVectorResults());
-
-  if (auto sql = referenceQueryRunner->toSql(plan)) {
-    try {
-      return std::make_pair(
-          referenceQueryRunner->executeVector(
-              sql.value(), input, plan->outputType()),
-          ReferenceQueryErrorCode::kSuccess);
-    } catch (...) {
-      LOG(WARNING) << "Query failed in the reference DB";
-      return std::make_pair(
-          std::nullopt, ReferenceQueryErrorCode::kReferenceQueryFail);
-    }
-  } else {
-    LOG(INFO) << "Query not supported by the reference DB";
-  }
-
-  return std::make_pair(
-      std::nullopt, ReferenceQueryErrorCode::kReferenceQueryUnsupported);
+  return referenceQueryRunner->executeAndReturnVector(plan);
 }
 } // namespace facebook::velox::exec::test

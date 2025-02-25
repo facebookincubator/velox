@@ -19,6 +19,8 @@
 #include <folly/executors/IOThreadPoolExecutor.h>
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/common/caching/FileIds.h"
+#include "velox/common/caching/tests/CacheTestUtil.h"
+#include "velox/common/config/GlobalConfig.h"
 #include "velox/common/file/FileSystems.h"
 #include "velox/common/io/IoStatistics.h"
 #include "velox/common/io/Options.h"
@@ -50,6 +52,7 @@ class CacheTest : public ::testing::Test {
     std::unique_ptr<CachedBufferedInput> input;
     std::vector<std::unique_ptr<SeekableInputStream>> streams;
     std::vector<Region> regions;
+    bool prefetched;
   };
 
   static void SetUpTestCase() {
@@ -77,7 +80,7 @@ class CacheTest : public ::testing::Test {
     if (cache_ != nullptr) {
       auto* ssdCache = cache_->ssdCache();
       if (ssdCache != nullptr) {
-        ssdCache->testingDeleteFiles();
+        ssdCacheHelper_->deleteFiles();
       }
     }
   }
@@ -94,7 +97,7 @@ class CacheTest : public ::testing::Test {
 
     std::unique_ptr<SsdCache> ssd;
     if (ssdBytes > 0) {
-      FLAGS_ssd_odirect = false;
+      config::globalConfig().useSsdODirect = false;
       tempDirectory_ = exec::test::TempDirectoryPath::create();
       const SsdCache::Config config(
           fmt::format("{}/cache", tempDirectory_->getPath()),
@@ -106,12 +109,15 @@ class CacheTest : public ::testing::Test {
           checksumEnabled,
           checksumEnabled);
       ssd = std::make_unique<SsdCache>(config);
+      ssdCacheHelper_ = std::make_unique<test::SsdCacheTestHelper>(ssd.get());
       groupStats_ = &ssd->groupStats();
     }
     memory::MmapAllocator::Options options;
     options.capacity = maxBytes;
     allocator_ = std::make_shared<memory::MmapAllocator>(options);
     cache_ = AsyncDataCache::create(allocator_.get(), std::move(ssd));
+    asyncDataCacheHelper_ =
+        std::make_unique<test::AsyncDataCacheTestHelper>(cache_.get());
     cache_->setVerifyHook(checkEntry);
     for (auto i = 0; i < kMaxStreams; ++i) {
       streamIds_.push_back(std::make_unique<dwrf::DwrfStreamIdentifier>(
@@ -369,11 +375,16 @@ class CacheTest : public ::testing::Test {
             ioStats));
         if (stripes.back()->input->shouldPreload()) {
           stripes.back()->input->load(LogType::TEST);
+          stripes.back()->prefetched = true;
+        } else {
+          stripes.back()->prefetched = false;
         }
       }
       auto currentStripe = std::move(stripes.front());
       stripes.erase(stripes.begin());
-      currentStripe->input->load(LogType::TEST);
+      if (!currentStripe->prefetched) {
+        currentStripe->input->load(LogType::TEST);
+      }
       for (auto columnIndex = 0; columnIndex < numColumns; ++columnIndex) {
         if (shouldRead(*currentStripe, columnIndex, readPct, readPctModulo)) {
           readStream(*currentStripe, columnIndex);
@@ -423,6 +434,8 @@ class CacheTest : public ::testing::Test {
   cache::FileGroupStats* groupStats_ = nullptr;
   std::shared_ptr<memory::MemoryAllocator> allocator_;
   std::shared_ptr<AsyncDataCache> cache_;
+  std::unique_ptr<test::AsyncDataCacheTestHelper> asyncDataCacheHelper_;
+  std::unique_ptr<test::SsdCacheTestHelper> ssdCacheHelper_;
   std::shared_ptr<IoStatistics> ioStats_;
   std::unique_ptr<folly::IOThreadPoolExecutor> executor_;
   std::shared_ptr<memory::MemoryPool> pool_{
@@ -470,8 +483,6 @@ TEST_F(CacheTest, window) {
   auto cacheInput = dynamic_cast<CacheInputStream*>(stream.get());
   EXPECT_TRUE(cacheInput != nullptr);
   ASSERT_EQ(cacheInput->getName(), "CacheInputStream 0 of 13631488");
-  auto maxSize =
-      allocator_->sizeClasses().back() * memory::AllocationTraits::kPageSize;
   const void* buffer;
   int32_t size;
   int32_t numRead = 0;
@@ -490,7 +501,7 @@ TEST_F(CacheTest, window) {
   // We make a second stream that ranges over a subset of the range of the first
   // one.
   auto clone = cacheInput->clone();
-  clone->Skip(100);
+  clone->SkipInt64(100);
   clone->setRemainingBytes(kMB);
   auto previousRead = ioStats_->rawBytesRead();
   EXPECT_TRUE(clone->Next(&buffer, &size));
@@ -832,14 +843,16 @@ TEST_F(CacheTest, noCacheRetention) {
       }
       ASSERT_EQ(ssdCache->stats().regionsEvicted, 0);
     }
-    const auto cacheEntries = cache_->testingCacheEntries();
+    const auto cacheEntries = asyncDataCacheHelper_->cacheEntries();
     for (const auto& cacheEntry : cacheEntries) {
+      const auto cacheEntryHelper =
+          std::make_unique<test::AsyncDataCacheEntryTestHelper>(cacheEntry);
       if (testData.noCacheRetention) {
-        ASSERT_EQ(cacheEntry->testingAccessStats().numUses, 0);
-        ASSERT_EQ(cacheEntry->testingAccessStats().lastUse, 0);
+        ASSERT_EQ(cacheEntryHelper->accessStats().numUses, 0);
+        ASSERT_EQ(cacheEntryHelper->accessStats().lastUse, 0);
       } else {
-        ASSERT_GE(cacheEntry->testingAccessStats().numUses, 0);
-        ASSERT_NE(cacheEntry->testingAccessStats().lastUse, 0);
+        ASSERT_GE(cacheEntryHelper->accessStats().numUses, 0);
+        ASSERT_NE(cacheEntryHelper->accessStats().lastUse, 0);
       }
     }
     const auto stats = cache_->refreshStats();

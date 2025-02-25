@@ -274,12 +274,13 @@ class FlatVector final : public SimpleVector<T> {
 
   VectorPtr copyPreserveEncodings(
       velox::memory::MemoryPool* pool = nullptr) const override {
+    const auto allocPool = pool ? pool : BaseVector::pool_;
     return std::make_shared<FlatVector<T>>(
-        pool ? pool : BaseVector::pool_,
+        allocPool,
         BaseVector::type_,
-        AlignedBuffer::copy(BaseVector::pool_, BaseVector::nulls_),
+        AlignedBuffer::copy(allocPool, BaseVector::nulls_),
         BaseVector::length_,
-        AlignedBuffer::copy(BaseVector::pool_, values_),
+        AlignedBuffer::copy(allocPool, values_),
         std::vector<BufferPtr>(stringBuffers_),
         SimpleVector<T>::stats_,
         BaseVector::distinctValueCount_,
@@ -609,10 +610,22 @@ Range<bool> FlatVector<bool>::asRange() const;
 template <>
 void FlatVector<StringView>::set(vector_size_t idx, StringView value);
 
+/// For types that requires buffer allocation this should be called only if
+/// value is inlined or if value is already allocated in a buffer within the
+/// vector. Used by StringWriter to allow UDFs to write directly into the
+/// buffers and avoid copying.
 template <>
-void FlatVector<StringView>::setNoCopy(
+inline void FlatVector<StringView>::setNoCopy(
     const vector_size_t idx,
-    const StringView& value);
+    const StringView& value) {
+  VELOX_DCHECK_LT(idx, BaseVector::length_);
+  ensureValues();
+  VELOX_DCHECK(!values_->isView());
+  if (BaseVector::nulls_) {
+    BaseVector::setNull(idx, false);
+  }
+  rawValues_[idx] = value;
+}
 
 template <>
 void FlatVector<bool>::set(vector_size_t idx, bool value);
@@ -637,6 +650,10 @@ char* FlatVector<StringView>::getRawStringBufferWithSpace(
 
 template <>
 void FlatVector<StringView>::prepareForReuse();
+
+template <>
+VectorPtr FlatVector<StringView>::copyPreserveEncodings(
+    velox::memory::MemoryPool* pool) const;
 
 template <typename T>
 using FlatVectorPtr = std::shared_ptr<FlatVector<T>>;

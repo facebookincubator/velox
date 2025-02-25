@@ -17,7 +17,6 @@
 #pragma once
 
 #include <cstdint>
-#include "velox/experimental/wave/common/Cuda.h"
 #include "velox/experimental/wave/common/HashTable.h"
 #include "velox/experimental/wave/exec/ErrorCode.h"
 #include "velox/experimental/wave/vector/Operand.h"
@@ -30,68 +29,14 @@
 /// be allocated dynamically at kernel invocation.
 namespace facebook::velox::wave {
 
-/// Opcodes for common instruction set. First all instructions that
-/// do not have operand type variants, then all the ones that
-/// do. For type templated instructions, the case label is opcode *
-/// numTypes + type, so these must be last in oredr not to conflict.
-enum class OpCode {
-  // First all OpCodes that have no operand type specialization.
-  kFilter = 0,
-  kWrap,
-  kLiteral,
-  kNegate,
-  kAggregate,
-  kReadAggregate,
-  kReturn,
-
-  // From here, only OpCodes that have variants for scalar types.
-  kPlus_BIGINT,
-  kLT_BIGINT
-};
-
-constexpr int32_t kLastScalarKind = static_cast<int32_t>(WaveTypeKind::HUGEINT);
-
-struct IBinary {
-  OperandIndex left;
-  OperandIndex right;
-  OperandIndex result;
-  // If set, apply operation to lanes where there is a non-zero byte in this.
-  OperandIndex predicate{kEmpty};
-};
-
-struct IFilter {
-  OperandIndex flags;
-  OperandIndex indices;
-};
-
-struct IWrap {
-  // The indices to wrap on top of 'columns'.
-  OperandIndex indices;
-  int32_t numColumns;
-
-  // The columns to wrap.
-  OperandIndex* columns;
-};
-
-struct ILiteral {
-  OperandIndex literal;
-  OperandIndex result;
-  OperandIndex predicate;
-};
-
-struct INegate {
-  OperandIndex value;
-  OperandIndex result;
-  OperandIndex predicate;
-};
-struct IReturn {};
-
-enum class AggregateOp : uint8_t { kSum };
-
 /// Device-side state for group by
 struct DeviceAggregation {
   /// hash table, nullptr if no grouping keys.
   GpuHashTableBase* table{nullptr};
+
+  /// Device side atomic counting thread blocks working on the state. Assert
+  /// this is 0 at rehash or resupply of allocators.
+  uint32_t debugActiveBlockCounter{0};
 
   // Byte size of a rowm rounded to next 8.
   int32_t rowSize = 0;
@@ -128,54 +73,9 @@ struct AggregationControl {
   int32_t rowSize{0};
 };
 
-struct IUpdateAgg {
-  AggregateOp op;
-  // Offset of null indicator byte on accumulator row.
-  int32_t nullOffset;
-  // Offset of accumulator on accumulator row. Aligned at 8.
-  int32_t accumulatorOffset;
-  OperandIndex arg1{kEmpty};
-  OperandIndex arg2{kEmpty};
-  OperandIndex result{kEmpty};
-};
-
-struct IAggregate {
-  uint16_t numKeys;
-  uint16_t numAggregates;
-  // Serial is used in BlockStatus to identify 'this' for continue.
-  uint8_t serial;
-  /// Index of the state in operator states.
-  uint8_t stateIndex;
-  /// Position of status return block in operator status returned to host.
-  InstructionStatus status;
-  //  'numAggregates' Updates followed by key 'numKeys' key operand indices.
-  IUpdateAgg* aggregates;
-};
-
 struct AggregateReturn {
   /// Count of rows in the table. Triggers rehash when high enough.
   int64_t numDistinct;
-};
-
-struct Instruction {
-  OpCode opCode;
-  union {
-    IBinary binary;
-    IFilter filter;
-    IWrap wrap;
-    ILiteral literal;
-    INegate negate;
-    IAggregate aggregate;
-  } _;
-};
-
-struct ThreadBlockProgram {
-  // Shared memory needed for block. The kernel is launched with max of this
-  // across the ThreadBlockPrograms.
-  int32_t sharedMemorySize{0};
-  int32_t numInstructions;
-  // Array of instructions. Ends in a kReturn.
-  Instruction* instructions;
 };
 
 /// Thread block wide status in Wave kernels
@@ -185,7 +85,13 @@ struct WaveShared {
   Operand** operands;
   void** states;
 
-  /// True if continuing the first instruction. The instructoin will
+  /// Every wrap in the kernel will also wrap these otherwise not accessed
+  /// Operands.
+  OperandIndex extraWraps;
+  int16_t numExtraWraps;
+  // The continue label where execution is to resume if continuing.
+  int16_t startLabel;
+  /// True if continuing the first instruction. The instruction will
   /// pick up its lane status from blockStatus or an
   /// instruction-specific source. The instruction must clear this
   /// before executing the next instruction.
@@ -204,9 +110,14 @@ struct WaveShared {
   /// '&blockStatus[numBlocks']
   int32_t numBlocks;
 
+  // The branch of a multibranch kernel this block is doing.
+  int16_t programIdx;
+
   /// Number of items in blockStatus covered by each TB.
   int16_t numRowsPerThread;
 
+  /// Iteration counter, =0; < numRowsPerThread.
+  int16_t nthBlock;
   int16_t streamIdx;
 
   // Scratch data area. Size depends on shared memory size for instructions.
@@ -219,13 +130,11 @@ struct KernelParams {
   /// The first thread block with the program. Subscript is blockIdx.x.
   int32_t* blockBase{nullptr};
   // The ordinal of the program. All blocks with the same program have the same
-  // number here. Subscript is blockIdx.x.
+  // number here. Subscript is blockIdx.x. For compiled kernels, this gives the
+  // branch to follow for the TB at blockIdx.x.
   int32_t* programIdx{nullptr};
 
-  // The TB program for each exe. The subscript is programIdx[blockIdx.x].
-  ThreadBlockProgram** programs{nullptr};
-
-  /// The instruction where to start the execution. If nullptr,
+  /// The label where to start the execution. If nullptr,
   /// 0. Otherwise subscript is programIdx. The active lanes are given
   /// in 'blockStatus'. Used when restarting program at a specific
   /// instruction, e.g. after allocating new memory on host. nullptr means first
@@ -234,7 +143,7 @@ struct KernelParams {
 
   // For each exe, the start of the array of Operand*. Instructions reference
   // operands via offset in this array. The subscript is
-  // programIndx[blockIdx.x].
+  // programIdx[blockIdx.x].
   Operand*** operands{nullptr};
 
   // the status return block for each TB. The subscript is blockIdx.x -
@@ -244,6 +153,11 @@ struct KernelParams {
   // Address of global states like hash tables. Subscript is 'programIdx' and
   // next subscript is state id in the instruction.
   void*** operatorStates;
+
+  /// first operand index for extra wraps. 'numExtraWraps' next
+  /// operands get wrapped by all wraps in the kernel.
+  OperandIndex extraWraps{0};
+  int16_t numExtraWraps{0};
 
   /// Number of blocks in each program. gridDim.x can be a multiple if many
   /// programs in launch.
@@ -255,38 +169,6 @@ struct KernelParams {
   /// Id of stream <stream ordinal within WaveDriver> + (<driverId of
   /// WaveDriver> * <number of Drivers>.
   int16_t streamIdx{0};
-};
-
-/// Returns the shared memory size for instruction for kBlockSize.
-int32_t instructionSharedMemory(const Instruction& instruction);
-
-/// A stream for invoking ExprKernel.
-class WaveKernelStream : public Stream {
- public:
-  /// Enqueus an invocation of ExprKernel for 'numBlocks' b
-  /// tBs. 'blockBase' is the ordinal of the TB within the TBs with
-  /// the same program.  'programIdx[blockIndx.x]' is the index into
-  /// 'programs' for the program of the TB. 'operands[i]' is the start
-  /// of the Operand array for 'programs[i]'. status[blockIdx.x] is
-  /// the return status for each TB. 'sharedSize' is the per TB bytes
-  /// shared memory to be reserved at launch.
-  void call(
-      Stream* alias,
-      int32_t numBlocks,
-      int32_t sharedSize,
-      KernelParams& params);
-
-  /// Sets up or updates an aggregation.
-  void setupAggregation(AggregationControl& op);
-
- private:
-  // Debug implementation of call() where each instruction is a separate kernel
-  // launch.
-  void callOne(
-      Stream* alias,
-      int32_t numBlocks,
-      int32_t sharedSize,
-      KernelParams& params);
 };
 
 } // namespace facebook::velox::wave

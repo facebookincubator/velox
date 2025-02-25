@@ -17,6 +17,7 @@
 #include "velox/common/base/Counters.h"
 #include "velox/common/base/StatsReporter.h"
 #include "velox/common/base/SuccinctPrinter.h"
+#include "velox/common/config/GlobalConfig.h"
 #include "velox/common/testutil/TestValue.h"
 #include "velox/exec/Driver.h"
 #include "velox/exec/OperatorUtils.h"
@@ -137,12 +138,15 @@ void Operator::maybeSetTracer() {
             << ", driver: " << driverId << ", task: " << taskId();
   const auto opTraceDirPath = trace::getOpTraceDirectory(
       traceConfig->queryTraceDir, planNodeId(), pipelineId, driverId);
-  trace::createTraceDirectory(opTraceDirPath);
-  inputTracer_ = std::make_unique<trace::OperatorTraceWriter>(
-      this,
+  trace::createTraceDirectory(
       opTraceDirPath,
-      memory::traceMemoryPool(),
-      traceConfig->updateAndCheckTraceLimitCB);
+      operatorCtx_->driverCtx()->queryConfig().opTraceDirectoryCreateConfig());
+
+  if (operatorType() == "TableScan") {
+    setupSplitTracer(opTraceDirPath);
+  } else {
+    setupInputTracer(opTraceDirPath);
+  }
 }
 
 void Operator::traceInput(const RowVectorPtr& input) {
@@ -152,8 +156,13 @@ void Operator::traceInput(const RowVectorPtr& input) {
 }
 
 void Operator::finishTrace() {
+  VELOX_CHECK(inputTracer_ == nullptr || splitTracer_ == nullptr);
   if (inputTracer_ != nullptr) {
     inputTracer_->finish();
+  }
+
+  if (splitTracer_ != nullptr) {
+    splitTracer_->finish();
   }
 }
 
@@ -161,6 +170,19 @@ std::vector<std::unique_ptr<Operator::PlanNodeTranslator>>&
 Operator::translators() {
   static std::vector<std::unique_ptr<PlanNodeTranslator>> translators;
   return translators;
+}
+
+void Operator::setupInputTracer(const std::string& opTraceDirPath) {
+  inputTracer_ = std::make_unique<trace::OperatorTraceInputWriter>(
+      this,
+      opTraceDirPath,
+      memory::traceMemoryPool(),
+      operatorCtx_->driverCtx()->traceConfig()->updateAndCheckTraceLimitCB);
+}
+
+void Operator::setupSplitTracer(const std::string& opTraceDirPath) {
+  splitTracer_ =
+      std::make_unique<trace::OperatorTraceSplitWriter>(this, opTraceDirPath);
 }
 
 // static
@@ -628,7 +650,7 @@ void Operator::MemoryReclaimer::enterArbitration() {
   }
 
   Driver* const runningDriver = driverThreadCtx->driverCtx()->driver;
-  if (!FLAGS_velox_memory_pool_capacity_transfer_across_tasks) {
+  if (!config::globalConfig().memoryPoolCapacityTransferAcrossTasks) {
     if (auto opDriver = ensureDriver()) {
       // NOTE: the current running driver might not be the driver of the
       // operator that requests memory arbitration. The reason is that an
@@ -658,7 +680,7 @@ void Operator::MemoryReclaimer::leaveArbitration() noexcept {
     return;
   }
   Driver* const runningDriver = driverThreadCtx->driverCtx()->driver;
-  if (!FLAGS_velox_memory_pool_capacity_transfer_across_tasks) {
+  if (!config::globalConfig().memoryPoolCapacityTransferAcrossTasks) {
     if (auto opDriver = ensureDriver()) {
       VELOX_CHECK_EQ(
           runningDriver->task()->taskId(),

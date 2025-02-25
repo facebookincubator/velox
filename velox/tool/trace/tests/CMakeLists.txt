@@ -18,6 +18,8 @@ add_executable(
   FilterProjectReplayerTest.cpp
   HashJoinReplayerTest.cpp
   PartitionedOutputReplayerTest.cpp
+  TraceFileToolTest.cpp
+  TableScanReplayerTest.cpp
   TableWriterReplayerTest.cpp)
 
 add_test(
@@ -33,11 +35,11 @@ target_link_libraries(
   velox_exec_test_lib
   velox_memory
   velox_query_trace_replayer_base
+  velox_trace_file_tool_base
   velox_vector_fuzzer
   GTest::gtest_main
   GTest::gmock
   Folly::folly
   gflags::gflags
   glog::glog
-  fmt::fmt
-  ${FILESYSTEM})
+  fmt::fmt)

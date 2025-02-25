@@ -138,6 +138,46 @@ TEST_F(ByteStreamTest, outputStream) {
   EXPECT_EQ(0, mmapAllocator_->numAllocated());
 }
 
+TEST_F(ByteStreamTest, bufferedOutputStream) {
+  auto arena = newArena();
+  auto out = std::make_unique<IOBufOutputStream>(*pool_, nullptr, 10000);
+  auto buffered =
+      std::make_unique<BufferedOutputStream>(out.get(), arena.get(), 50);
+
+  std::stringstream referenceSStream;
+  auto reference = std::make_unique<OStreamOutputStream>(&referenceSStream);
+  for (auto i = 0; i < 1000; ++i) {
+    std::string data;
+    data.resize((3 * i) % 200);
+    std::fill(data.begin(), data.end(), i);
+    buffered->write(data.data(), data.size());
+    reference->write(data.data(), data.size());
+  }
+
+  EXPECT_EQ(reference->tellp(), buffered->tellp());
+  EXPECT_EQ(out->tellp(), buffered->tellp());
+
+  for (auto i = 0; i < 100; ++i) {
+    std::string data;
+    data.resize((i * 7) % 200);
+    std::fill(data.begin(), data.end(), i + 10);
+    buffered->seekp((i * 11));
+    reference->seekp((i * 11));
+    buffered->write(data.data(), data.size());
+    reference->write(data.data(), data.size());
+  }
+
+  buffered->flush();
+
+  auto str = referenceSStream.str();
+  auto iobuf = out->getIOBuf();
+  auto outData = iobuf->coalesce();
+  EXPECT_EQ(
+      str,
+      std::string(
+          reinterpret_cast<const char*>(outData.data()), outData.size()));
+}
+
 TEST_F(ByteStreamTest, newRangeAllocation) {
   const int kPageSize = AllocationTraits::kPageSize;
   struct {
@@ -262,36 +302,62 @@ TEST_F(ByteStreamTest, bits) {
     bits.push_back(seed * (i + 1));
   }
   auto arena = newArena();
-  ByteOutputStream bitStream(arena.get(), true);
-  bitStream.startWrite(11);
-  int32_t offset = 0;
-  // Odd number of sizes.
-  std::vector<int32_t> bitSizes = {1, 19, 52, 58, 129};
-  int32_t counter = 0;
-  auto totalBits = bits.size() * 64;
-  while (offset < totalBits) {
-    // Every second uses the fast path for aligned source and append only.
-    auto numBits = std::min<int32_t>(
-        totalBits - offset, bitSizes[counter % bitSizes.size()]);
-    if (counter % 1 == 0) {
-      bitStream.appendBits(bits.data(), offset, offset + numBits);
-    } else {
-      uint64_t aligned[10];
-      bits::copyBits(bits.data(), offset, aligned, 0, numBits);
-      bitStream.appendBitsFresh(aligned, 0, numBits);
+
+  struct {
+    bool reversed;
+    bool negated;
+
+    std::string debugString() const {
+      return fmt::format("reversed: {}, negated: {}", reversed, negated);
     }
-    offset += numBits;
-    ++counter;
+  } testSettings[] = {
+      {false, false}, {true, false}, {false, true}, {true, true}};
+
+  for (const auto& settings : testSettings) {
+    SCOPED_TRACE(settings.debugString());
+    ByteOutputStream bitStream(
+        arena.get(), true, settings.reversed, settings.negated);
+    bitStream.startWrite(11);
+    int32_t offset = 0;
+    // Odd number of sizes.
+    std::vector<int32_t> bitSizes = {1, 19, 52, 58, 129};
+    int32_t counter = 0;
+    auto totalBits = bits.size() * 64;
+    while (offset < totalBits) {
+      // Every second uses the fast path for aligned source and append only.
+      auto numBits = std::min<int32_t>(
+          totalBits - offset, bitSizes[counter % bitSizes.size()]);
+      if (counter % 1 == 0) {
+        bitStream.appendBits(bits.data(), offset, offset + numBits);
+      } else {
+        uint64_t aligned[10];
+        bits::copyBits(bits.data(), offset, aligned, 0, numBits);
+        bitStream.appendBitsFresh(aligned, 0, numBits);
+      }
+      offset += numBits;
+      ++counter;
+    }
+    std::stringstream stringStream;
+    OStreamOutputStream out(&stringStream);
+    bitStream.flush(&out);
+
+    auto expected = bits;
+    if (settings.reversed) {
+      bits::reverseBits(
+          reinterpret_cast<uint8_t*>(expected.data()),
+          expected.size() * sizeof(expected[0]));
+    }
+    if (settings.negated) {
+      bits::negate(expected.data(), expected.size() * sizeof(expected[0]) * 8);
+    }
+
+    EXPECT_EQ(
+        0,
+        memcmp(
+            stringStream.str().data(),
+            expected.data(),
+            expected.size() * sizeof(expected[0])));
   }
-  std::stringstream stringStream;
-  OStreamOutputStream out(&stringStream);
-  bitStream.flush(&out);
-  EXPECT_EQ(
-      0,
-      memcmp(
-          stringStream.str().data(),
-          bits.data(),
-          bits.size() * sizeof(bits[0])));
 }
 
 TEST_F(ByteStreamTest, appendWindow) {
@@ -355,6 +421,18 @@ TEST_F(ByteStreamTest, reuse) {
     stream.appendStringView(std::string_view(bytes, sizeof(bytes)));
     EXPECT_EQ(sizeof(bytes), stream.size());
   }
+}
+
+TEST_F(ByteStreamTest, unalignedWrite) {
+  constexpr int kSize = 1 + sizeof(int128_t);
+  auto arena = newArena();
+  ByteOutputStream stream(arena.get());
+  stream.startWrite(kSize);
+  stream.appendStringView(std::string_view("x"));
+  int128_t data{};
+  // This only crashes in opt mode.
+  stream.append<int128_t>(folly::Range(&data, 1));
+  ASSERT_EQ(stream.size(), kSize);
 }
 
 class InputByteStreamTest : public ByteStreamTest,

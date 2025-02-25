@@ -21,6 +21,7 @@
 #include "velox/experimental/wave/common/CudaUtil.cuh"
 #include "velox/experimental/wave/common/Exception.h"
 
+#include <assert.h>
 #include <mutex>
 #include <sstream>
 
@@ -52,6 +53,19 @@ void cudaCheckFatal(cudaError_t err, const char* file, int line) {
   exit(1);
 }
 
+std::string Device::toString() const {
+  return fmt::format(
+      "Device {}: {} {}.{} global {}MB {} SMs, {}K shmem/SM, {}K L2",
+      deviceId,
+      model,
+      major,
+      minor,
+      globalMB,
+      numSM,
+      sharedMemPerSM >> 10,
+      L2Size >> 10);
+}
+
 namespace {
 std::mutex ctxMutex;
 bool driverInited = false;
@@ -73,6 +87,7 @@ Device* setDriverDevice(int32_t deviceId) {
     if (cnt == 0) {
       waveError("No Cuda devices found");
     }
+    driverInited = true;
   }
   if (deviceId >= contexts.size()) {
     waveError(fmt::format("Bad device id {}", deviceId));
@@ -251,6 +266,19 @@ void Stream::deviceToHostAsync(
       stream_->stream));
 }
 
+void Stream::deviceConstantToHostAsync(
+    void* hostAddress,
+    const void* deviceAddress,
+    size_t size) {
+  CUDA_CHECK(cudaMemcpyFromSymbolAsync(
+      hostAddress,
+      *reinterpret_cast<const char*>(deviceAddress),
+      size,
+      0,
+      cudaMemcpyDeviceToHost,
+      stream_->stream));
+}
+
 namespace {
 struct CallbackData {
   CallbackData(std::function<void()> callback)
@@ -327,9 +355,40 @@ struct KernelEntry {
   const void* func;
 };
 
+void __global__ fillDevice(uint64_t* ptr, int32_t numWords, int32_t seed) {
+  auto end = ptr + numWords;
+  for (auto* address = ptr + threadIdx.x + blockIdx.x * blockDim.x;
+       address < end;
+       address += gridDim.x * blockDim.x) {
+    *address = seed * reinterpret_cast<uint64_t>(address);
+  }
+  __syncthreads();
+}
+
 int32_t numKernelEntries = 0;
 KernelEntry kernelEntries[200];
 } // namespace
+
+void fillMemory(uint64_t* ptr, int32_t numWords, int32_t seed, bool isDevice) {
+  if (isDevice) {
+    static std::unique_ptr<Stream> fillStream;
+    static std::mutex initMutex;
+    if (!fillStream) {
+      std::lock_guard<std::mutex> l(initMutex);
+      if (!fillStream) {
+        fillStream = std::make_unique<Stream>();
+      }
+    }
+    int32_t numBlocks = std::min<int32_t>(numWords / 32, 200);
+    fillDevice<<<numBlocks, 256, 0, fillStream->stream()->stream>>>(
+        ptr, numWords, seed);
+    fillStream->wait();
+  } else {
+    for (auto i = 0; i < numWords; ++i) {
+      ptr[i] = seed * reinterpret_cast<uint64_t>(ptr + i);
+    }
+  }
+}
 
 bool registerKernel(const char* name, const void* func) {
   kernelEntries[numKernelEntries].name = name;
@@ -349,6 +408,7 @@ KernelInfo kernelInfo(const void* func) {
   info.numRegs = attrs.numRegs;
   info.maxThreadsPerBlock = attrs.maxThreadsPerBlock;
   info.sharedMemory = attrs.sharedSizeBytes;
+  info.localMemory = attrs.localSizeBytes;
   int max;
   cudaOccupancyMaxActiveBlocksPerMultiprocessor(&max, func, 256, 0);
   info.maxOccupancy0 = max;
@@ -361,7 +421,7 @@ KernelInfo kernelInfo(const void* func) {
 std::string KernelInfo::toString() const {
   std::stringstream out;
   out << "NumRegs=" << numRegs << " maxThreadsPerBlock= " << maxThreadsPerBlock
-      << " sharedMemory=" << sharedMemory
+      << " sharedMemory=" << sharedMemory << " localMemory=" << localMemory
       << " occupancy 256,  0=" << maxOccupancy0
       << " occupancy 256,32=" << maxOccupancy32;
   return out.str();
@@ -381,6 +441,39 @@ void printKernels() {
     std::cout << kernelEntries[i].name << " - "
               << getRegisteredKernelInfo(kernelEntries[i].name).toString()
               << std::endl;
+  }
+}
+
+int32_t numRegisteredHeaders{0};
+const char* registeredHeaders[100];
+const char* registeredHeaderNames[100];
+char nameString[5000];
+int32_t nameStringFill{0};
+
+bool registerHeader(const char* header) {
+  assert(
+      numRegisteredHeaders + 1 <
+      sizeof(registeredHeaders) / sizeof(registeredHeaders[0]));
+  auto newline = strchr(header, '\n');
+  assert(newline != nullptr);
+  registeredHeaderNames[numRegisteredHeaders] = &nameString[0] + nameStringFill;
+  int32_t nameLength = newline - header;
+  assert(sizeof(nameString) > nameLength + nameStringFill);
+  memcpy(&nameString[0] + nameStringFill, header, nameLength);
+  nameStringFill += nameLength + 1;
+
+  registeredHeaders[numRegisteredHeaders++] = newline + 1;
+  return true;
+}
+
+void getRegisteredHeaders(
+    std::vector<const char*>& names,
+    std::vector<const char*>& headers) {
+  names.resize(numRegisteredHeaders);
+  headers.resize(numRegisteredHeaders);
+  for (auto i = 0; i < names.size(); ++i) {
+    names[i] = registeredHeaderNames[i];
+    headers[i] = registeredHeaders[i];
   }
 }
 

@@ -23,13 +23,29 @@
 using facebook::velox::common::testutil::TestValue;
 
 namespace facebook::velox::exec {
+namespace {
+// Returns the CompareFlags vector whose size is equal to numSortKeys. Fill in
+// with default CompareFlags() if 'compareFlags' is empty.
+const std::vector<CompareFlags> getCompareFlagsOrDefault(
+    const std::vector<CompareFlags>& compareFlags,
+    int32_t numSortKeys) {
+  VELOX_DCHECK(compareFlags.empty() || compareFlags.size() == numSortKeys);
+  if (compareFlags.size() == numSortKeys) {
+    return compareFlags;
+  }
+  return std::vector<CompareFlags>(numSortKeys);
+}
+} // namespace
+
 void SpillMergeStream::pop() {
+  VELOX_CHECK(!closed_);
   if (++index_ >= size_) {
     setNextBatch();
   }
 }
 
 int32_t SpillMergeStream::compare(const MergeStream& other) const {
+  VELOX_CHECK(!closed_);
   auto& otherStream = static_cast<const SpillMergeStream&>(other);
   auto& children = rowVector_->children();
   auto& otherChildren = otherStream.current().children();
@@ -64,6 +80,16 @@ int32_t SpillMergeStream::compare(const MergeStream& other) const {
   return 0;
 }
 
+void SpillMergeStream::close() {
+  VELOX_CHECK(!closed_);
+  closed_ = true;
+  rowVector_.reset();
+  decoded_.clear();
+  rows_.resize(0);
+  index_ = 0;
+  size_ = 0;
+}
+
 SpillState::SpillState(
     const common::GetSpillDirectoryPathCB& getSpillDirPathCb,
     const common::UpdateAndCheckSpillLimitCB& updateAndCheckSpillLimitCb,
@@ -74,6 +100,7 @@ SpillState::SpillState(
     uint64_t targetFileSize,
     uint64_t writeBufferSize,
     common::CompressionKind compressionKind,
+    const std::optional<common::PrefixSortConfig>& prefixSortConfig,
     memory::MemoryPool* pool,
     folly::Synchronized<common::SpillStats>* stats,
     const std::string& fileCreateConfig)
@@ -82,10 +109,12 @@ SpillState::SpillState(
       fileNamePrefix_(fileNamePrefix),
       maxPartitions_(maxPartitions),
       numSortKeys_(numSortKeys),
-      sortCompareFlags_(sortCompareFlags),
+      sortCompareFlags_(
+          getCompareFlagsOrDefault(sortCompareFlags, numSortKeys)),
       targetFileSize_(targetFileSize),
       writeBufferSize_(writeBufferSize),
       compressionKind_(compressionKind),
+      prefixSortConfig_(prefixSortConfig),
       fileCreateConfig_(fileCreateConfig),
       pool_(pool),
       stats_(stats),
@@ -275,16 +304,25 @@ SpillPartition::createOrderedReader(
 }
 
 uint32_t FileSpillMergeStream::id() const {
+  VELOX_CHECK(!closed_);
   return spillFile_->id();
 }
 
 void FileSpillMergeStream::nextBatch() {
+  VELOX_CHECK(!closed_);
   index_ = 0;
   if (!spillFile_->nextBatch(rowVector_)) {
     size_ = 0;
+    close();
     return;
   }
   size_ = rowVector_->size();
+}
+
+void FileSpillMergeStream::close() {
+  VELOX_CHECK(!closed_);
+  SpillMergeStream::close();
+  spillFile_.reset();
 }
 
 SpillPartitionIdSet toSpillPartitionIdSet(

@@ -95,7 +95,7 @@ Status detail::parseDecimalComponents(
     }
     // Make sure all chars after sign are digits, as as folly::tryTo allows
     // leading and trailing whitespaces.
-    for (auto i = (size_t)withSign; i < size - pos; ++i) {
+    for (auto i = static_cast<size_t>(withSign); i < size - pos; ++i) {
       if (!std::isdigit(s[pos + i])) {
         return Status::UserError(
             "Non-digit character '{}' is not allowed in the exponent part.",
@@ -175,7 +175,7 @@ VectorPtr CastExpr::castFromDate(
         try {
           // TODO Optimize to avoid creating an intermediate string.
           auto output = DATE()->toString(inputFlatVector->valueAt(row));
-          auto writer = exec::StringWriter<>(resultFlatVector, row);
+          auto writer = exec::StringWriter(resultFlatVector, row);
           writer.resize(output.size());
           ::memcpy(writer.data(), output.data(), output.size());
           writer.finalize();
@@ -298,7 +298,7 @@ VectorPtr CastExpr::castFromIntervalDayTime(
           // TODO Optimize to avoid creating an intermediate string.
           auto output =
               INTERVAL_DAY_TIME()->valueToString(inputFlatVector->valueAt(row));
-          auto writer = exec::StringWriter<>(resultFlatVector, row);
+          auto writer = exec::StringWriter(resultFlatVector, row);
           writer.resize(output.size());
           ::memcpy(writer.data(), output.data(), output.size());
           writer.finalize();

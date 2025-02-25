@@ -90,6 +90,21 @@ These stats are reported only by HashBuild and HashAggregation operators.
      - Time spent on building the hash table from rows collected by all the
        hash build operators. This stat is only reported by the HashBuild operator.
 
+TableScan
+---------
+These stats are reported only by TableScan operator
+
+.. list-table::
+   :widths: 50 25 50
+   :header-rows: 1
+
+   * - Stats
+     - Unit
+     - Description
+   * - numRunningScanThreads
+     -
+     - The number of running table scan drivers.
+
 TableWriter
 -----------
 These stats are reported only by TableWriter operator
@@ -104,6 +119,17 @@ These stats are reported only by TableWriter operator
    * - earlyFlushedRawBytes
      - bytes
      - Number of bytes pre-maturely flushed from file writers because of memory reclaiming.
+   * - rebalanceTriggers
+     -
+     - The number of times that we triggers the rebalance of table partitions
+       for a non-bucketed partition table.
+   * - scaledPartitions
+     -
+     - The number of times that we scale a partition processing for a
+       non-bucketed partition table.
+   * - scaledWriters
+     -
+     - The number of times that we scale writers for a non-partitioned table.
 
 Spilling
 --------
@@ -162,3 +188,40 @@ These stats are reported by operators that support spilling.
    * - spillDeserializationWallNanos
      - nanos
      - The time spent on deserializing rows read from spilled files.
+
+Shuffle
+--------
+These stats are reported by shuffle operators.
+
+.. list-table::
+   :widths: 50 25 50
+   :header-rows: 1
+
+   * - Stats
+     - Unit
+     - Description
+   * - shuffleSerdeKind
+     -
+     - Indicates the vector serde kind used by an operator for shuffle with 1
+       for Presto, 2 for CompactRow, 3 for UnsafeRow. It is reported by Exchange,
+       MergeExchange and PartitionedOutput operators for now.
+   * - shuffleCompressionKind
+     -
+     - Indicates the compression kind used by an operator for shuffle. The
+       reported value is set to the corresponding CompressionKind enum with 0
+       (CompressionKind_NONE) as no compression.
+
+PrefixSort
+----------
+These stats are reported by prefix sort.
+
+.. list-table::
+   :widths: 50 25 50
+   :header-rows: 1
+
+   * - Stats
+     - Unit
+     - Description
+   * - numPrefixSortKeys
+     -
+     - The number of columns sorted using prefix sort.

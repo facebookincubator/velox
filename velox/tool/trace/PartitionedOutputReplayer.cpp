@@ -109,22 +109,28 @@ PartitionedOutputReplayer::PartitionedOutputReplayer(
     const std::string& queryId,
     const std::string& taskId,
     const std::string& nodeId,
-    const int32_t pipelineId,
+    VectorSerde::Kind serdeKind,
     const std::string& operatorType,
+    const std::string& driverIds,
+    uint64_t queryCapacity,
+    folly::Executor* executor,
     const ConsumerCallBack& consumerCb)
     : OperatorReplayerBase(
           traceDir,
           queryId,
           taskId,
           nodeId,
-          pipelineId,
-          operatorType),
+          operatorType,
+          driverIds,
+          queryCapacity,
+          executor),
       originalNode_(dynamic_cast<const core::PartitionedOutputNode*>(
           core::PlanNode::findFirstNode(
               planFragment_.get(),
               [this](const core::PlanNode* node) {
                 return node->id() == nodeId_;
               }))),
+      serdeKind_(serdeKind),
       consumerCb_(consumerCb) {
   VELOX_CHECK_NOT_NULL(originalNode_);
   consumerExecutor_ = std::make_unique<folly::CPUThreadPoolExecutor>(
@@ -132,14 +138,14 @@ PartitionedOutputReplayer::PartitionedOutputReplayer(
       std::make_shared<folly::NamedThreadFactory>("Consumer"));
 }
 
-RowVectorPtr PartitionedOutputReplayer::run() {
-  auto task = Task::create(
+RowVectorPtr PartitionedOutputReplayer::run(bool /*unused*/) {
+  const auto task = Task::create(
       "local://partitioned-output-replayer",
       core::PlanFragment{createPlan()},
       0,
       createQueryContext(queryConfigs_, executor_.get()),
       Task::ExecutionMode::kParallel);
-  task->start(maxDrivers_);
+  task->start(driverIds_.size());
 
   consumeAllData(
       bufferManager_,
@@ -148,6 +154,7 @@ RowVectorPtr PartitionedOutputReplayer::run() {
       executor_.get(),
       consumerExecutor_.get(),
       consumerCb_);
+  printStats(task);
   return nullptr;
 }
 
@@ -165,6 +172,7 @@ core::PlanNodePtr PartitionedOutputReplayer::createPlanNode(
       originalNode->isReplicateNullsAndAny(),
       originalNode->partitionFunctionSpecPtr(),
       originalNode->outputType(),
+      serdeKind_,
       source);
 }
 

@@ -15,9 +15,11 @@
  */
 #pragma once
 
-#include "velox/expression/CastExpr.h"
 #include "velox/type/SimpleFunctionApi.h"
 #include "velox/type/Type.h"
+
+// TODO: Remove this once Presto is updated.
+#include "velox/functions/prestosql/types/JsonRegistration.h"
 
 namespace facebook::velox {
 
@@ -69,7 +71,5 @@ struct JsonT {
 };
 
 using Json = CustomType<JsonT>;
-
-void registerJsonType();
 
 } // namespace facebook::velox

@@ -82,10 +82,12 @@ struct HiveConnectorSplit : public connector::ConnectorSplit {
       const std::unordered_map<std::string, std::string>& _customSplitInfo = {},
       const std::shared_ptr<std::string>& _extraFileInfo = {},
       const std::unordered_map<std::string, std::string>& _serdeParameters = {},
-      int64_t _splitWeight = 0,
+      int64_t splitWeight = 0,
+      bool cacheable = true,
       const std::unordered_map<std::string, std::string>& _infoColumns = {},
-      std::optional<FileProperties> _properties = std::nullopt)
-      : ConnectorSplit(connectorId, _splitWeight),
+      std::optional<FileProperties> _properties = std::nullopt,
+      std::optional<RowIdProperties> _rowIdProperties = std::nullopt)
+      : ConnectorSplit(connectorId, splitWeight, cacheable),
         filePath(_filePath),
         fileFormat(_fileFormat),
         start(_start),
@@ -96,7 +98,8 @@ struct HiveConnectorSplit : public connector::ConnectorSplit {
         extraFileInfo(_extraFileInfo),
         serdeParameters(_serdeParameters),
         infoColumns(_infoColumns),
-        properties(_properties) {}
+        properties(_properties),
+        rowIdProperties(_rowIdProperties) {}
 
   std::string toString() const override;
 
@@ -107,6 +110,121 @@ struct HiveConnectorSplit : public connector::ConnectorSplit {
   static std::shared_ptr<HiveConnectorSplit> create(const folly::dynamic& obj);
 
   static void registerSerDe();
+};
+
+class HiveConnectorSplitBuilder {
+ public:
+  explicit HiveConnectorSplitBuilder(std::string filePath)
+      : filePath_{std::move(filePath)} {
+    infoColumns_["$path"] = filePath_;
+  }
+
+  HiveConnectorSplitBuilder& start(uint64_t start) {
+    start_ = start;
+    return *this;
+  }
+
+  HiveConnectorSplitBuilder& length(uint64_t length) {
+    length_ = length;
+    return *this;
+  }
+
+  HiveConnectorSplitBuilder& splitWeight(int64_t splitWeight) {
+    splitWeight_ = splitWeight;
+    return *this;
+  }
+
+  HiveConnectorSplitBuilder& cacheable(bool cacheable) {
+    cacheable_ = cacheable;
+    return *this;
+  }
+
+  HiveConnectorSplitBuilder& fileFormat(dwio::common::FileFormat format) {
+    fileFormat_ = format;
+    return *this;
+  }
+
+  HiveConnectorSplitBuilder& infoColumn(
+      const std::string& name,
+      const std::string& value) {
+    infoColumns_.emplace(std::move(name), std::move(value));
+    return *this;
+  }
+
+  HiveConnectorSplitBuilder& partitionKey(
+      std::string name,
+      std::optional<std::string> value) {
+    partitionKeys_.emplace(std::move(name), std::move(value));
+    return *this;
+  }
+
+  HiveConnectorSplitBuilder& tableBucketNumber(int32_t bucket) {
+    tableBucketNumber_ = bucket;
+    infoColumns_["$bucket"] = std::to_string(bucket);
+    return *this;
+  }
+
+  HiveConnectorSplitBuilder& customSplitInfo(
+      const std::unordered_map<std::string, std::string>& customSplitInfo) {
+    customSplitInfo_ = customSplitInfo;
+    return *this;
+  }
+
+  HiveConnectorSplitBuilder& extraFileInfo(
+      const std::shared_ptr<std::string>& extraFileInfo) {
+    extraFileInfo_ = extraFileInfo;
+    return *this;
+  }
+
+  HiveConnectorSplitBuilder& serdeParameters(
+      const std::unordered_map<std::string, std::string>& serdeParameters) {
+    serdeParameters_ = serdeParameters;
+    return *this;
+  }
+
+  HiveConnectorSplitBuilder& connectorId(const std::string& connectorId) {
+    connectorId_ = connectorId;
+    return *this;
+  }
+
+  HiveConnectorSplitBuilder& fileProperties(FileProperties fileProperties) {
+    fileProperties_ = fileProperties;
+    return *this;
+  }
+
+  std::shared_ptr<connector::hive::HiveConnectorSplit> build() const {
+    return std::make_shared<connector::hive::HiveConnectorSplit>(
+        connectorId_,
+        filePath_,
+        fileFormat_,
+        start_,
+        length_,
+        partitionKeys_,
+        tableBucketNumber_,
+        customSplitInfo_,
+        extraFileInfo_,
+        serdeParameters_,
+        splitWeight_,
+        cacheable_,
+        infoColumns_,
+        fileProperties_);
+  }
+
+ private:
+  const std::string filePath_;
+  dwio::common::FileFormat fileFormat_{dwio::common::FileFormat::DWRF};
+  uint64_t start_{0};
+  uint64_t length_{std::numeric_limits<uint64_t>::max()};
+  std::unordered_map<std::string, std::optional<std::string>> partitionKeys_;
+  std::optional<int32_t> tableBucketNumber_;
+  std::unordered_map<std::string, std::string> customSplitInfo_ = {};
+  std::shared_ptr<std::string> extraFileInfo_ = {};
+  std::unordered_map<std::string, std::string> serdeParameters_ = {};
+  std::unordered_map<std::string, std::string> infoColumns_ = {};
+  std::string connectorId_;
+  int64_t splitWeight_{0};
+  bool cacheable_{true};
+  std::optional<FileProperties> fileProperties_;
 };
 
 } // namespace facebook::velox::connector::hive

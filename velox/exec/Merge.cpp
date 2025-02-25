@@ -21,6 +21,19 @@
 using facebook::velox::common::testutil::TestValue;
 
 namespace facebook::velox::exec {
+namespace {
+std::unique_ptr<VectorSerde::Options> getVectorSerdeOptions(
+    const core::QueryConfig& queryConfig,
+    VectorSerde::Kind kind) {
+  std::unique_ptr<VectorSerde::Options> options =
+      kind == VectorSerde::Kind::kPresto
+      ? std::make_unique<serializer::presto::PrestoVectorSerde::PrestoOptions>()
+      : std::make_unique<VectorSerde::Options>();
+  options->compressionKind =
+      common::stringToCompressionKind(queryConfig.shuffleCompressionKind());
+  return options;
+}
+} // namespace
 
 Merge::Merge(
     int32_t operatorId,
@@ -304,7 +317,11 @@ MergeExchange::MergeExchange(
           mergeExchangeNode->sortingKeys(),
           mergeExchangeNode->sortingOrders(),
           mergeExchangeNode->id(),
-          "MergeExchange") {}
+          "MergeExchange"),
+      serde_(getNamedVectorSerde(mergeExchangeNode->serdeKind())),
+      serdeOptions_(getVectorSerdeOptions(
+          driverCtx->queryConfig(),
+          mergeExchangeNode->serdeKind())) {}
 
 BlockingReason MergeExchange::addMergeSources(ContinueFuture* future) {
   if (operatorCtx_->driverCtx()->driverId != 0) {
@@ -364,4 +381,19 @@ BlockingReason MergeExchange::addMergeSources(ContinueFuture* future) {
   }
 }
 
+void MergeExchange::close() {
+  for (auto& source : sources_) {
+    source->close();
+  }
+  Operator::close();
+  {
+    auto lockedStats = stats_.wlock();
+    lockedStats->addRuntimeStat(
+        Operator::kShuffleSerdeKind,
+        RuntimeCounter(static_cast<int64_t>(serde_->kind())));
+    lockedStats->addRuntimeStat(
+        Operator::kShuffleCompressionKind,
+        RuntimeCounter(static_cast<int64_t>(serdeOptions_->compressionKind)));
+  }
+}
 } // namespace facebook::velox::exec

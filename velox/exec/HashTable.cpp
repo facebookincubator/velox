@@ -1818,6 +1818,21 @@ inline uint64_t HashTable<ignoreNullKeys>::joinProjectedVarColumnsSize(
 }
 
 template <bool ignoreNullKeys>
+inline uint64_t HashTable<ignoreNullKeys>::joinProjectedVarColumnsSize(
+    const std::vector<vector_size_t>& columns,
+    NextRowVector*& rows) const {
+  uint64_t totalBytes{0};
+  for (const auto& column : columns) {
+    if (!rows_->columnTypes()[column]->isFixedWidth()) {
+      for (const auto* row : *rows) {
+        totalBytes += rows_->variableSizeAt(row, column);
+      }
+    }
+  }
+  return totalBytes;
+}
+
+template <bool ignoreNullKeys>
 int32_t HashTable<ignoreNullKeys>::listJoinResults(
     JoinResultIterator& iter,
     bool includeMisses,
@@ -1825,18 +1840,16 @@ int32_t HashTable<ignoreNullKeys>::listJoinResults(
     folly::Range<char**> hits,
     uint64_t maxBytes) {
   VELOX_CHECK_LE(inputRows.size(), hits.size());
-
-  if (iter.varSizeListColumns.empty() && !hasDuplicates_) {
-    // When there is no duplicates, and no variable length columns are selected
-    // to be projected, we are able to calculate fixed length columns total size
-    // directly and go through fast path.
+  iter.outputBatchBytes = 0;
+  if (iter.estimatedRowSize.has_value() && !hasDuplicates_) {
+    // When there is no duplicates, and row size is estimable, we are able to
+    // go through fast path.
     return listJoinResultsFastPath(
         iter, includeMisses, inputRows, hits, maxBytes);
   }
 
   size_t numOut = 0;
   auto maxOut = inputRows.size();
-  uint64_t totalBytes{0};
   while (iter.lastRowIndex < iter.rows->size()) {
     auto row = (*iter.rows)[iter.lastRowIndex];
     auto hit = (*iter.hits)[row]; // NOLINT
@@ -1859,9 +1872,10 @@ int32_t HashTable<ignoreNullKeys>::listJoinResults(
       hits[numOut] = hit;
       numOut++;
       iter.lastRowIndex++;
-      totalBytes +=
-          (joinProjectedVarColumnsSize(iter.varSizeListColumns, hit) +
-           iter.fixedSizeListColumnsSizeSum);
+      iter.outputBatchBytes += iter.estimatedRowSize.has_value()
+          ? iter.estimatedRowSize.value()
+          : (joinProjectedVarColumnsSize(iter.varSizeListColumns, hit) +
+             iter.fixedSizeListColumnsSizeSum);
     } else {
       const auto numRows = rows->size();
       auto num =
@@ -1873,17 +1887,21 @@ int32_t HashTable<ignoreNullKeys>::listJoinResults(
           num * sizeof(char*));
       iter.lastDuplicateRowIndex += num;
       numOut += num;
-      for (const auto* dupRow : *rows) {
-        totalBytes +=
-            joinProjectedVarColumnsSize(iter.varSizeListColumns, dupRow);
+      if (iter.estimatedRowSize.has_value()) {
+        iter.outputBatchBytes += iter.estimatedRowSize.value() * numRows;
+      } else {
+        iter.outputBatchBytes +=
+            joinProjectedVarColumnsSize(iter.varSizeListColumns, rows);
+        iter.outputBatchBytes +=
+            (iter.fixedSizeListColumnsSizeSum * rows->size());
+        iter.outputBatchBytes += (iter.fixedSizeListColumnsSizeSum * numRows);
       }
-      totalBytes += (iter.fixedSizeListColumnsSizeSum * numRows);
       if (iter.lastDuplicateRowIndex >= numRows) {
         iter.lastDuplicateRowIndex = 0;
         iter.lastRowIndex++;
       }
     }
-    if (numOut >= maxOut || totalBytes >= maxBytes) {
+    if (numOut >= maxOut || iter.outputBatchBytes >= maxBytes) {
       return numOut;
     }
   }
@@ -1900,8 +1918,8 @@ int32_t HashTable<ignoreNullKeys>::listJoinResultsFastPath(
   int32_t numOut = 0;
   const auto maxOut = std::min(
       static_cast<uint64_t>(inputRows.size()),
-      (iter.fixedSizeListColumnsSizeSum != 0
-           ? maxBytes / iter.fixedSizeListColumnsSizeSum
+      (iter.estimatedRowSize.value() != 0
+           ? maxBytes / iter.estimatedRowSize.value()
            : std::numeric_limits<uint64_t>::max()));
   int32_t i = iter.lastRowIndex;
   const auto numRows = iter.rows->size();
@@ -1912,8 +1930,8 @@ int32_t HashTable<ignoreNullKeys>::listJoinResultsFastPath(
   // We pass the pointers as int64_t's in 'hitWords'.
   auto resultHits = reinterpret_cast<int64_t*>(hits.data());
   auto resultRows = inputRows.data();
-  const auto outLimit = maxOut - kWidth;
-  for (; i + kWidth <= numRows && numOut < outLimit; i += kWidth) {
+  const int64_t simdOutLimit = maxOut - kWidth;
+  for (; i + kWidth <= numRows && numOut < simdOutLimit; i += kWidth) {
     auto indices = simd::loadGatherIndices<int64_t, int32_t>(sourceRows + i);
     auto hitWords = simd::gather(sourceHits, indices);
     auto misses = includeMisses ? 0 : simd::toBitMask(hitWords == 0);
@@ -1947,6 +1965,7 @@ int32_t HashTable<ignoreNullKeys>::listJoinResultsFastPath(
   }
 
   iter.lastRowIndex = i;
+  iter.outputBatchBytes += numOut * iter.estimatedRowSize.value();
   return numOut;
 }
 
@@ -2015,11 +2034,14 @@ template <>
 int32_t HashTable<false>::listNullKeyRows(
     NullKeyRowsIterator* iter,
     int32_t maxRows,
-    char** rows) {
+    char** rows,
+    const std::vector<std::unique_ptr<VectorHasher>>& hashers) {
   if (!iter->initialized) {
     VELOX_CHECK_GT(nextOffset_, 0);
+    // Null-aware joins allow only one join key.
     VELOX_CHECK_EQ(hashers_.size(), 1);
-    HashLookup lookup(hashers_);
+    VELOX_CHECK_EQ(hashers_.size(), hashers.size());
+    HashLookup lookup(hashers);
     if (hashMode_ == HashMode::kHash) {
       lookup.hashes.push_back(VectorHasher::kNullHash);
     } else {
@@ -2057,8 +2079,11 @@ int32_t HashTable<false>::listNullKeyRows(
 }
 
 template <>
-int32_t
-HashTable<true>::listNullKeyRows(NullKeyRowsIterator*, int32_t, char**) {
+int32_t HashTable<true>::listNullKeyRows(
+    NullKeyRowsIterator*,
+    int32_t,
+    char**,
+    const std::vector<std::unique_ptr<VectorHasher>>&) {
   VELOX_UNREACHABLE();
 }
 

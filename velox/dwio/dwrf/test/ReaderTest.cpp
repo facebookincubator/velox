@@ -1392,7 +1392,7 @@ TEST_F(TestReader, fileColumnNamesReadAsLowerCaseComplexStruct) {
 TEST_F(TestReader, TestStripeSizeCallback) {
   dwio::common::ReaderOptions readerOpts{pool()};
   readerOpts.setFilePreloadThreshold(0);
-  readerOpts.setFooterEstimatedSize(4);
+  readerOpts.setFooterEstimatedSize(17);
   RowReaderOptions rowReaderOpts;
 
   std::shared_ptr<const RowType> requestedType = std::dynamic_pointer_cast<
@@ -1420,7 +1420,7 @@ TEST_F(TestReader, TestStripeSizeCallback) {
 TEST_F(TestReader, TestStripeSizeCallbackLimitsOneStripe) {
   dwio::common::ReaderOptions readerOpts{pool()};
   readerOpts.setFilePreloadThreshold(0);
-  readerOpts.setFooterEstimatedSize(4);
+  readerOpts.setFooterEstimatedSize(17);
   RowReaderOptions rowReaderOpts;
 
   std::shared_ptr<const RowType> requestedType = std::dynamic_pointer_cast<
@@ -1449,7 +1449,7 @@ TEST_F(TestReader, TestStripeSizeCallbackLimitsOneStripe) {
 TEST_F(TestReader, TestStripeSizeCallbackLimitsTwoStripe) {
   dwio::common::ReaderOptions readerOpts{pool()};
   readerOpts.setFilePreloadThreshold(0);
-  readerOpts.setFooterEstimatedSize(4);
+  readerOpts.setFooterEstimatedSize(17);
   RowReaderOptions rowReaderOpts;
 
   std::shared_ptr<const RowType> requestedType = std::dynamic_pointer_cast<
@@ -1713,7 +1713,7 @@ VELOX_INSTANTIATE_TEST_SUITE_P(
 TEST_F(TestReader, testEmptyFile) {
   MemorySink sink{1024, {.pool = pool()}};
   DataBufferHolder holder{*pool(), 1024, 0, DEFAULT_PAGE_GROW_RATIO, &sink};
-  BufferedOutputStream output{holder};
+  facebook::velox::dwio::common::BufferedOutputStream output{holder};
 
   proto::Footer footer;
   footer.set_numberofrows(0);
@@ -2620,4 +2620,48 @@ TEST_F(TestReader, selectiveFlatMapFastPathAllInlinedStringKeys) {
   VectorPtr batch = BaseVector::create(schema, 0, pool());
   ASSERT_EQ(rowReader->next(10, batch), 2);
   assertEqualVectors(batch, row);
+}
+
+TEST_F(TestReader, skipLongString) {
+  // c0 in long_string.dwrf has 25 rows of 200,000,000 character long strings,
+  // whose values are repeated 'a' to 'y' respectively.
+  auto input = std::make_unique<BufferedInput>(
+      std::make_shared<LocalReadFile>(getExampleFilePath("long_string.dwrf")),
+      *pool());
+  dwio::common::ReaderOptions readerOpts(pool());
+  readerOpts.setFileFormat(FileFormat::DWRF);
+  auto reader = DwrfReader::create(std::move(input), readerOpts);
+  auto spec = std::make_shared<common::ScanSpec>("<root>");
+  spec->addField("c0", 0);
+  spec->getOrCreateChild("c1")->setFilter(
+      std::make_unique<common::BoolValue>(true, false));
+  RowReaderOptions rowReaderOpts;
+  rowReaderOpts.setScanSpec(spec);
+  VectorPtr batch = BaseVector::create(ROW({"c0"}, {VARCHAR()}), 0, pool());
+  auto validate = [](const VectorPtr& batch) {
+    ASSERT_EQ(batch->size(), 1);
+    auto string = batch->asChecked<RowVector>()
+                      ->childAt(0)
+                      ->loadedVector()
+                      ->asChecked<SimpleVector<StringView>>()
+                      ->valueAt(0);
+    ASSERT_EQ(string.size(), 200'000'000);
+    for (char c : string) {
+      ASSERT_EQ(c, 'y');
+    }
+  };
+  {
+    SCOPED_TRACE("Skip");
+    auto rowReader = reader->createRowReader(rowReaderOpts);
+    ASSERT_EQ(rowReader->next(24, batch), 24);
+    ASSERT_EQ(batch->size(), 0);
+    ASSERT_EQ(rowReader->next(2, batch), 1);
+    validate(batch);
+  }
+  {
+    SCOPED_TRACE("Filter");
+    auto rowReader = reader->createRowReader(rowReaderOpts);
+    ASSERT_EQ(rowReader->next(26, batch), 25);
+    validate(batch);
+  }
 }

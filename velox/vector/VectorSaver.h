@@ -53,15 +53,6 @@ VectorPtr restoreVectorFromFile(const char* filePath, memory::MemoryPool* pool);
 /// Reads a string from a file stored by saveStringToFile() method
 std::string restoreStringFromFile(const char* filePath);
 
-// Write the vector to a file. Contents would include the size of the list
-// followed by all the values.
-template <typename T>
-void saveStdVectorToFile(const std::vector<T>& list, const char* filePath);
-
-// Reads a std::vector from a file stored by saveStdVectorToFile() method.
-template <typename T>
-std::vector<T> restoreStdVectorFromFile(const char* filePath);
-
 /// Serializes a SelectivityVector into binary format and writes it to the
 /// provided output stream.
 void saveSelectivityVector(const SelectivityVector& rows, std::ostream& out);
@@ -69,5 +60,11 @@ void saveSelectivityVector(const SelectivityVector& rows, std::ostream& out);
 /// Deserializes a SelectivityVector serialized by 'saveSelectivityVector' from
 /// the provided input stream.
 SelectivityVector restoreSelectivityVector(std::istream& in);
+
+void saveSelectivityVectorToFile(
+    const SelectivityVector& rows,
+    const char* filePath);
+
+SelectivityVector restoreSelectivityVectorFromFile(const char* filePath);
 
 } // namespace facebook::velox

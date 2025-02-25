@@ -2408,9 +2408,8 @@ TEST_P(ParameterizedExprTest, exceptionContext) {
   registerFunction<TestingAlwaysThrowsFunction, int32_t, int32_t>(
       {"always_throws"});
 
-  // Disable saving vector and expression SQL on error.
-  FLAGS_velox_save_input_on_expression_any_failure_path = "";
-  FLAGS_velox_save_input_on_expression_system_failure_path = "";
+  config::globalConfig().saveInputOnExpressionAnyFailurePath = "";
+  config::globalConfig().saveInputOnExpressionSystemFailurePath = "";
 
   try {
     evaluate("always_throws(c0) + c1", data);
@@ -2444,7 +2443,7 @@ TEST_P(ParameterizedExprTest, exceptionContext) {
 
   // Enable saving vector and expression SQL for system errors only.
   auto tempDirectory = exec::test::TempDirectoryPath::create();
-  FLAGS_velox_save_input_on_expression_system_failure_path =
+  config::globalConfig().saveInputOnExpressionSystemFailurePath =
       tempDirectory->getPath();
 
   try {
@@ -2480,9 +2479,9 @@ TEST_P(ParameterizedExprTest, exceptionContext) {
   }
 
   // Enable saving vector and expression SQL for all errors.
-  FLAGS_velox_save_input_on_expression_any_failure_path =
+  config::globalConfig().saveInputOnExpressionAnyFailurePath =
       tempDirectory->getPath();
-  FLAGS_velox_save_input_on_expression_system_failure_path = "";
+  config::globalConfig().saveInputOnExpressionSystemFailurePath = "";
 
   try {
     evaluate("always_throws(c0) + c1", data);
@@ -4861,6 +4860,15 @@ TEST_F(ExprTest, disablePeeling) {
       makeRowVector({flatInput}),
       {},
       execCtx.get()));
+
+  // Ensure functions that take a single column as input but can have more
+  // constant inputs also receive a flat vector. We use the in-predicate in this
+  // case which has a check for ensuring flat input.
+  ASSERT_NO_THROW(evaluateMultiple(
+      {"dict_wrap(c0) in (40, 42)"},
+      makeRowVector({flatInput}),
+      {},
+      execCtx.get()));
 }
 
 TEST_F(ExprTest, disableSharedSubExpressionReuse) {
@@ -4902,7 +4910,6 @@ TEST_F(ExprTest, disableMemoization) {
       makeIndices(2 * flatSize, [&](auto row) { return row % flatSize; }),
       2 * flatSize,
       flatInput);
-  auto dictSize = dictInput->size();
   auto inputRow = makeRowVector({dictInput});
 
   auto exprSet = compileExpression("c0 + 1", asRowType(inputRow->type()));
@@ -4961,6 +4968,19 @@ TEST_F(ExprTest, disabledeferredLazyLoading) {
   c1 = makeLazyFlatVector<int64_t>(3, valueAt, nullptr, 3);
   std::tie(result, stats) = evaluateMultipleWithStats(
       expressions, makeRowVector({c0, c1}), {}, execCtx.get());
+}
+
+TEST_F(ExprTest, evaluateConstantExpression) {
+  auto eval = [&](const std::string& sql) {
+    auto expr = parseExpression(sql, ROW({}));
+    return exec::evaluateConstantExpression(expr, pool());
+  };
+
+  assertEqualVectors(eval("1 + 2"), makeConstant<int64_t>(3, 1));
+
+  assertEqualVectors(
+      eval("transform(array[1, 2, 3], x -> (x * 2))"),
+      makeArrayVectorFromJson<int64_t>({"[2, 4, 6]"}));
 }
 
 } // namespace

@@ -28,15 +28,19 @@ class HashJoinReplayer final : public OperatorReplayerBase {
       const std::string& queryId,
       const std::string& taskId,
       const std::string& nodeId,
-      const int32_t pipelineId,
-      const std::string& operatorType)
+      const std::string& operatorType,
+      const std::string& driverIds,
+      uint64_t queryCapacity,
+      folly::Executor* executor)
       : OperatorReplayerBase(
             rootDir,
             queryId,
             taskId,
             nodeId,
-            pipelineId,
-            operatorType) {}
+            operatorType,
+            driverIds,
+            queryCapacity,
+            executor) {}
 
  private:
   core::PlanNodePtr createPlanNode(

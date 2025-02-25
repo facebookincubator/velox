@@ -17,17 +17,18 @@
 #include "velox/exec/Task.h"
 #include "folly/experimental/EventCount.h"
 #include "velox/common/base/tests/GTestUtils.h"
+#include "velox/common/file/tests/FaultyFileSystem.h"
 #include "velox/common/future/VeloxPromise.h"
 #include "velox/common/memory/MemoryArbitrator.h"
 #include "velox/common/memory/SharedArbitrator.h"
 #include "velox/common/memory/tests/SharedArbitratorTestUtil.h"
 #include "velox/common/testutil/TestValue.h"
 #include "velox/connectors/hive/HiveConnectorSplit.h"
+#include "velox/exec/Cursor.h"
 #include "velox/exec/OutputBufferManager.h"
 #include "velox/exec/PlanNodeStats.h"
 #include "velox/exec/Values.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
-#include "velox/exec/tests/utils/Cursor.h"
 #include "velox/exec/tests/utils/HiveConnectorTestBase.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
 #include "velox/exec/tests/utils/QueryAssertions.h"
@@ -1240,7 +1241,7 @@ DEBUG_ONLY_TEST_F(TaskTest, liveStats) {
   EXPECT_EQ(numBatches, operatorStats.outputVectors);
   // isBlocked() should be called at least twice for each batch
   EXPECT_LE(2 * numBatches, operatorStats.isBlockedTiming.count);
-  EXPECT_EQ(2, operatorStats.finishTiming.count);
+  EXPECT_EQ(1, operatorStats.finishTiming.count);
   // No operators with background CPU time yet.
   EXPECT_EQ(0, operatorStats.backgroundTiming.count);
 
@@ -1542,7 +1543,9 @@ DEBUG_ONLY_TEST_F(TaskPauseTest, resumeFuture) {
   observeThread.join();
 
   ASSERT_EQ(task_->numTotalDrivers(), 1);
-  ASSERT_EQ(task_->numFinishedDrivers(), 1);
+  while (task_->numFinishedDrivers() != 1) {
+    std::this_thread::sleep_for(std::chrono::milliseconds(100)); // NOLINT
+  }
   ASSERT_EQ(task_->numRunningDrivers(), 0);
 }
 
@@ -1699,6 +1702,104 @@ TEST_F(TaskTest, driverCreationMemoryAllocationCheck) {
           badTask->start(1), "Unexpected memory pool allocations");
     }
   }
+}
+
+TEST_F(TaskTest, spillDirectoryCallback) {
+  // Marks the spill directory as not already created and ensures that the Task
+  // handles creating it on first use and eventually deleting it on destruction.
+  auto data = makeRowVector({
+      makeFlatVector<int64_t>(1'000, [](auto row) { return row % 300; }),
+      makeFlatVector<int64_t>(1'000, [](auto row) { return row; }),
+  });
+  core::PlanNodeId aggrNodeId;
+  const auto plan = PlanBuilder()
+                        .values({data})
+                        .singleAggregation({"c0"}, {"sum(c1)"}, {})
+                        .capturePlanNodeId(aggrNodeId)
+                        .planNode();
+  CursorParameters params;
+  params.planNode = plan;
+  params.queryCtx = core::QueryCtx::create(driverExecutor_.get());
+  params.queryCtx->testingOverrideConfigUnsafe(
+      {{core::QueryConfig::kSpillEnabled, "true"},
+       {core::QueryConfig::kAggregationSpillEnabled, "true"}});
+  params.maxDrivers = 1;
+
+  auto cursor = TaskCursor::create(params);
+
+  std::shared_ptr<Task> task = cursor->task();
+  auto tmpRootDir = exec::test::TempDirectoryPath::create();
+  auto tmpParentSpillDir = fmt::format(
+      "{}{}/parent_spill/",
+      tests::utils::FaultyFileSystem::scheme(),
+      tmpRootDir->getPath());
+  auto tmpSpillDir = fmt::format(
+      "{}{}/parent_spill/spill/",
+      tests::utils::FaultyFileSystem::scheme(),
+      tmpRootDir->getPath());
+
+  EXPECT_FALSE(task->hasCreateSpillDirectoryCb());
+
+  task->setCreateSpillDirectoryCb([tmpParentSpillDir, tmpSpillDir]() {
+    auto filesystem = filesystems::getFileSystem(tmpParentSpillDir, nullptr);
+    filesystems::DirectoryOptions options;
+    options.values.emplace(
+        filesystems::DirectoryOptions::kMakeDirectoryConfig.toString(),
+        "dummy.config=123");
+    filesystem->mkdir(tmpParentSpillDir, options);
+    filesystem->mkdir(tmpSpillDir);
+    return tmpSpillDir;
+  });
+
+  EXPECT_TRUE(task->hasCreateSpillDirectoryCb());
+  auto fs = std::dynamic_pointer_cast<tests::utils::FaultyFileSystem>(
+      filesystems::getFileSystem(tmpParentSpillDir, nullptr));
+
+  fs->setFileSystemInjectionError(
+      std::make_exception_ptr(std::runtime_error("test exception")),
+      {tests::utils::FaultFileSystemOperation::Type::kMkdir});
+  // Test exception case
+  VELOX_ASSERT_THROW(task->getOrCreateSpillDirectory(), "test exception");
+  fs->clearFileSystemInjections();
+
+  // Test success case and assert on mkdir options.
+  bool parentDirectoryCreated = false;
+  bool spillDirectoryCreated = false;
+  tests::utils::FileSystemFaultInjectionHook hook = [&](auto* op) {
+    auto mkdirOp =
+        static_cast<tests::utils::FaultFileSystemMkdirOperation*>(op);
+    if (mkdirOp->path ==
+        fmt::format("{}/parent_spill/", tmpRootDir->getPath())) {
+      parentDirectoryCreated = true;
+      auto it = mkdirOp->options.values.find(
+          filesystems::DirectoryOptions::kMakeDirectoryConfig.toString());
+      EXPECT_TRUE(it != mkdirOp->options.values.end());
+      EXPECT_EQ(it->second, "dummy.config=123");
+    }
+    if (mkdirOp->path ==
+        fmt::format("{}/parent_spill/spill/", tmpRootDir->getPath())) {
+      spillDirectoryCreated = true;
+    }
+    return;
+  };
+
+  fs->setFilesystemInjectionHook(hook);
+
+  TestScopedSpillInjection scopedSpillInjection(100);
+
+  while (cursor->moveNext()) {
+  }
+
+  waitForTaskCompletion(task.get(), 5'000'000);
+
+  EXPECT_TRUE(parentDirectoryCreated);
+  EXPECT_TRUE(spillDirectoryCreated);
+  EXPECT_EQ(exec::TaskState::kFinished, task->state());
+  auto taskStats = exec::toPlanStats(task->taskStats());
+  auto& stats = taskStats.at(aggrNodeId);
+  ASSERT_GT(stats.spilledRows, 0);
+  cursor.reset(); // ensure 'task' has no other shared pointer.
+  OperatorTestBase::deleteTaskAndCheckSpillDirectory(task);
 }
 
 TEST_F(TaskTest, spillDirectoryLifecycleManagement) {
@@ -2198,9 +2299,9 @@ DEBUG_ONLY_TEST_F(TaskTest, taskReclaimFailure) {
 
   const std::string spillTableError{"spillTableError"};
   SCOPED_TESTVALUE_SET(
-      "facebook::velox::exec::Spiller",
-      std::function<void(Spiller*)>(
-          [&](Spiller* /*unused*/) { VELOX_FAIL(spillTableError); }));
+      "facebook::velox::exec::SpillerBase",
+      std::function<void(SpillerBase*)>(
+          [&](SpillerBase* /*unused*/) { VELOX_FAIL(spillTableError); }));
 
   TestScopedSpillInjection injection(100);
   const auto spillDirectory = exec::test::TempDirectoryPath::create();
@@ -2313,5 +2414,30 @@ DEBUG_ONLY_TEST_F(TaskTest, taskCancellation) {
 
   task.reset();
   waitForAllTasksToBeDeleted();
+}
+
+TEST_F(TaskTest, finishTiming) {
+  auto data = makeRowVector({
+      makeFlatVector<int64_t>(1'000, [](auto row) { return row; }),
+  });
+  core::PlanNodeId projectId;
+  core::PlanNodeId orderById;
+  auto plan = PlanBuilder()
+                  .values({data, data})
+                  .project({"c0"})
+                  .capturePlanNodeId(projectId)
+                  .orderBy({"c0 DESC NULLS LAST"}, false)
+                  .capturePlanNodeId(orderById)
+                  .planFragment();
+
+  auto [task, _] = executeSerial(plan);
+  auto taskStats = exec::toPlanStats(task->taskStats());
+  auto& projectStats = taskStats.at(projectId);
+  auto& orderByStats = taskStats.at(orderById);
+  // Since the sort is executed in the 'noMoreInput' function of the OrderBy
+  // operator, the finish time of the OrderBy operator should be greater than
+  // that of the Project operator.
+  ASSERT_GT(
+      orderByStats.finishTiming.wallNanos, projectStats.finishTiming.wallNanos);
 }
 } // namespace facebook::velox::exec::test

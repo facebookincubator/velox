@@ -29,19 +29,6 @@
 #include "velox/type/Subfield.h"
 #include "velox/vector/SimpleVector.h"
 
-/// GFlag used to enable saving input vector and expression SQL on disk in case
-/// of any (user or system) error during expression evaluation. The value
-/// specifies a path to a directory where the vectors will be saved. That
-/// directory must exist and be writable.
-DECLARE_string(velox_save_input_on_expression_any_failure_path);
-
-/// GFlag used to enable saving input vector and expression SQL on disk in case
-/// of a system error during expression evaluation. The value specifies a path
-/// to a directory where the vectors will be saved. That directory must exist
-/// and be writable. This flag is ignored if
-/// velox_save_input_on_expression_any_failure_path flag is set.
-DECLARE_string(velox_save_input_on_expression_system_failure_path);
-
 namespace facebook::velox::exec {
 
 class ExprSet;
@@ -842,6 +829,12 @@ class ExprSetSimplified : public ExprSet {
 std::unique_ptr<ExprSet> makeExprSetFromFlag(
     std::vector<core::TypedExprPtr>&& source,
     core::ExecCtx* execCtx);
+
+/// Evaluates an expression that doesn't depend on any inputs and returns the
+/// result as single-row vector.
+VectorPtr evaluateConstantExpression(
+    const core::TypedExprPtr& expr,
+    memory::MemoryPool* pool);
 
 /// Returns a string representation of the expression trees annotated with
 /// runtime statistics. Expected to be called after calling ExprSet::eval one or

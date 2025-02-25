@@ -16,18 +16,23 @@
 
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/common/caching/FileIds.h"
-#include "velox/common/caching/SsdCache.h"
+#include "velox/common/caching/tests/CacheTestUtil.h"
+#include "velox/common/config/GlobalConfig.h"
 #include "velox/common/file/FileSystems.h"
+#include "velox/common/file/tests/FaultyFileSystem.h"
 #include "velox/common/memory/Memory.h"
 #include "velox/exec/tests/utils/TempDirectoryPath.h"
 
 #include <fcntl.h>
+#include <folly/executors/IOThreadPoolExecutor.h>
 #include <folly/executors/QueuedImmediateExecutor.h>
 #include <glog/logging.h>
 #include <gtest/gtest.h>
+#include <re2/re2.h>
 
 using namespace facebook::velox;
 using namespace facebook::velox::cache;
+using namespace facebook::velox::tests::utils;
 
 using facebook::velox::memory::MemoryAllocator;
 
@@ -47,12 +52,13 @@ class SsdFileTest : public testing::Test {
 
   void SetUp() override {
     filesystems::registerLocalFileSystem();
+    registerFaultyFileSystem();
     memory::MemoryManager::testingSetInstance({});
   }
 
   void TearDown() override {
     if (ssdFile_) {
-      ssdFile_->testingDeleteFile();
+      ssdFileHelper_->deleteFile();
     }
     if (cache_) {
       cache_->shutdown();
@@ -65,12 +71,16 @@ class SsdFileTest : public testing::Test {
       uint64_t checkpointIntervalBytes = 0,
       bool checksumEnabled = false,
       bool checksumReadVerificationEnabled = false,
-      bool disableFileCow = false) {
+      bool disableFileCow = false,
+      bool enableFaultInjection = false) {
     // tmpfs does not support O_DIRECT, so turn this off for testing.
-    FLAGS_ssd_odirect = false;
+    config::globalConfig().useSsdODirect = false;
     cache_ = AsyncDataCache::create(memory::memoryManager()->allocator());
+    cacheHelper_ =
+        std::make_unique<test::AsyncDataCacheTestHelper>(cache_.get());
     fileName_ = StringIdLease(fileIds(), "fileInStorage");
-    tempDirectory_ = exec::test::TempDirectoryPath::create();
+    tempDirectory_ =
+        exec::test::TempDirectoryPath::create(enableFaultInjection);
     initializeSsdFile(
         ssdBytes,
         checkpointIntervalBytes,
@@ -92,8 +102,13 @@ class SsdFileTest : public testing::Test {
         checkpointIntervalBytes,
         disableFileCow,
         checksumEnabled,
-        checksumReadVerificationEnabled);
+        checksumReadVerificationEnabled,
+        ssdExecutor());
     ssdFile_ = std::make_unique<SsdFile>(config);
+    if (ssdFile_ != nullptr) {
+      ssdFileHelper_ =
+          std::make_unique<test::SsdFileTestHelper>(ssdFile_.get());
+    }
   }
 
   // Corrupts the file by invalidate the last 1/10th of its content.
@@ -153,6 +168,12 @@ class SsdFileTest : public testing::Test {
         }
       }
     }
+  }
+
+  static folly::IOThreadPoolExecutor* ssdExecutor() {
+    static std::unique_ptr<folly::IOThreadPoolExecutor> ssdExecutor =
+        std::make_unique<folly::IOThreadPoolExecutor>(20);
+    return ssdExecutor.get();
   }
 
   // Gets consecutive entries from file 'fileId' starting at 'startOffset' with
@@ -296,16 +317,18 @@ class SsdFileTest : public testing::Test {
   std::shared_ptr<exec::test::TempDirectoryPath> tempDirectory_;
 
   std::shared_ptr<AsyncDataCache> cache_;
+  std::unique_ptr<test::AsyncDataCacheTestHelper> cacheHelper_;
   StringIdLease fileName_;
 
   std::unique_ptr<SsdFile> ssdFile_;
+  std::unique_ptr<test::SsdFileTestHelper> ssdFileHelper_;
 };
 
 TEST_F(SsdFileTest, writeAndRead) {
   constexpr int64_t kSsdSize = 16 * SsdFile::kRegionSize;
   std::vector<TestEntry> allEntries;
   initializeCache(kSsdSize);
-  FLAGS_ssd_verify_write = true;
+  config::globalConfig().verifySsdWrite = true;
   for (auto startOffset = 0; startOffset <= kSsdSize - SsdFile::kRegionSize;
        startOffset += SsdFile::kRegionSize) {
     auto pins =
@@ -380,7 +403,7 @@ TEST_F(SsdFileTest, checkpoint) {
   constexpr int64_t kSsdSize = 16 * SsdFile::kRegionSize;
   const uint64_t checkpointIntervalBytes = 5 * SsdFile::kRegionSize;
   const auto fileNameAlt = StringIdLease(fileIds(), "fileInStorageAlt");
-  FLAGS_ssd_verify_write = true;
+  config::globalConfig().verifySsdWrite = true;
   initializeCache(kSsdSize, checkpointIntervalBytes);
 
   std::vector<TestEntry> allEntries;
@@ -401,13 +424,13 @@ TEST_F(SsdFileTest, checkpoint) {
     };
     readAndCheckPins(pins);
   }
-  const auto originalRegionScores = ssdFile_->testingCopyScores();
+  const auto originalRegionScores = ssdFileHelper_->copyScores();
   EXPECT_EQ(originalRegionScores.size(), 16);
 
   // Re-initialize SSD file from checkpoint.
   ssdFile_->checkpoint(true);
   initializeSsdFile(kSsdSize, checkpointIntervalBytes);
-  const auto recoveredRegionScores = ssdFile_->testingCopyScores();
+  const auto recoveredRegionScores = ssdFileHelper_->copyScores();
   EXPECT_EQ(recoveredRegionScores.size(), 16);
   EXPECT_EQ(originalRegionScores, recoveredRegionScores);
 
@@ -438,7 +461,7 @@ TEST_F(SsdFileTest, checkpoint) {
   // Block eviction.
   auto ssdPins = pinAllRegions(allEntries);
   ssdFile_->removeFileEntries(filesToRemove, filesRetained);
-  EXPECT_EQ(ssdFile_->testingNumWritableRegions(), 0);
+  EXPECT_EQ(ssdFileHelper_->numWritableRegions(), 0);
   EXPECT_EQ(filesRetained.size(), 1);
   numEntriesFound = checkEntries(allEntries);
   EXPECT_EQ(numEntriesFound, allEntries.size());
@@ -454,7 +477,7 @@ TEST_F(SsdFileTest, checkpoint) {
   filesRetained.clear();
   ssdFile_->removeFileEntries(filesToRemove, filesRetained);
   // All regions have been evicted and marked as writable.
-  EXPECT_EQ(ssdFile_->testingNumWritableRegions(), 16);
+  EXPECT_EQ(ssdFileHelper_->numWritableRegions(), 16);
   EXPECT_EQ(filesRetained.size(), 0);
   numEntriesFound = checkEntries(allEntries);
   EXPECT_EQ(numEntriesFound, 0);
@@ -476,7 +499,7 @@ TEST_F(SsdFileTest, checkpoint) {
 TEST_F(SsdFileTest, fileCorruption) {
   constexpr int64_t kSsdSize = 16 * SsdFile::kRegionSize;
   const uint64_t checkpointIntervalBytes = 5 * SsdFile::kRegionSize;
-  FLAGS_ssd_verify_write = true;
+  config::globalConfig().verifySsdWrite = true;
 
   const auto populateCache = [&](std::vector<TestEntry>& entries) {
     entries.clear();
@@ -532,7 +555,7 @@ TEST_F(SsdFileTest, fileCorruption) {
   // Corrupt the Checkpoint file. Cache cannot be recovered. All entries are
   // lost.
   ssdFile_->checkpoint(true);
-  corruptSsdFile(ssdFile_->getCheckpointFilePath());
+  corruptSsdFile(ssdFile_->checkpointFilePath());
   stats.clear();
   ssdFile_->updateStats(stats);
   EXPECT_EQ(stats.readCheckpointErrors, 0);
@@ -548,7 +571,7 @@ TEST_F(SsdFileTest, fileCorruption) {
 TEST_F(SsdFileTest, recoverFromCheckpointWithChecksum) {
   constexpr int64_t kSsdSize = 4 * SsdFile::kRegionSize;
   const uint64_t checkpointIntervalBytes = 3 * SsdFile::kRegionSize;
-  FLAGS_ssd_verify_write = true;
+  config::globalConfig().verifySsdWrite = true;
 
   // Test if cache data can be recovered with different settings.
   struct {
@@ -598,7 +621,7 @@ TEST_F(SsdFileTest, recoverFromCheckpointWithChecksum) {
         testData.writeEnabled,
         testData.readVerificationEnabled);
     EXPECT_EQ(
-        ssdFile_->testingChecksumReadVerificationEnabled(),
+        ssdFileHelper_->checksumReadVerificationEnabled(),
         testData.expectedReadVerificationEnabled);
 
     // Populate the cache with some entries.
@@ -647,12 +670,12 @@ TEST_F(SsdFileTest, recoverFromCheckpointWithChecksum) {
       ASSERT_EQ(statsAfterRecover.entriesCached, stats.entriesCached);
     } else {
       ASSERT_EQ(statsAfterRecover.bytesCached, 0);
-      ASSERT_EQ(statsAfterRecover.regionsCached, 0);
+      ASSERT_EQ(statsAfterRecover.regionsCached, stats.regionsCached);
       ASSERT_EQ(statsAfterRecover.entriesCached, 0);
     }
 
     EXPECT_EQ(
-        ssdFile_->testingChecksumReadVerificationEnabled(),
+        ssdFileHelper_->checksumReadVerificationEnabled(),
         testData.expectedReadVerificationEnabledOnRecovery);
 
     // Check if cache data is recoverable as expected.
@@ -795,16 +818,150 @@ TEST_F(SsdFileTest, ssdReadWithoutChecksumCheck) {
 #endif
 }
 
+TEST_F(SsdFileTest, dataFileErrorInjection) {
+  constexpr int64_t kSsdSize = 16 * SsdFile::kRegionSize;
+  initializeCache(kSsdSize, 0, false, false, false, true);
+
+  auto faultyFs = faultyFileSystem();
+  std::atomic_bool injectWriteError{true};
+  std::atomic_bool injectReadError{true};
+  faultyFs->setFileInjectionHook([&](FaultFileOperation* op) {
+    if (injectWriteError && op->type == FaultFileOperation::Type::kWrite) {
+      VELOX_FAIL("Inject hook write failure");
+    }
+    if (injectReadError && op->type == FaultFileOperation::Type::kReadv) {
+      VELOX_FAIL("Inject hook read failure");
+    }
+  });
+
+  // Write a set of cache entries.
+  auto pins =
+      makePins(fileName_.id(), 0, 4096, 2048 * 1025, SsdFile::kRegionSize / 2);
+  ssdFile_->write(pins);
+
+  // With write error injected, no entry has been written to SSD cache and the
+  // error has recorded as a write ssd error.
+  SsdCacheStats statsWithWriteErrorInjected;
+  ssdFile_->updateStats(statsWithWriteErrorInjected);
+
+  EXPECT_GT(statsWithWriteErrorInjected.writeSsdErrors, 0);
+  EXPECT_EQ(statsWithWriteErrorInjected.entriesWritten, 0);
+
+  // Without write error injected, the data was cached to SSD successfully.
+  injectWriteError = false;
+  ssdFile_->write(pins);
+
+  SsdCacheStats statsWithoutWriteErrorInjected;
+  ssdFile_->updateStats(statsWithoutWriteErrorInjected);
+
+  EXPECT_EQ(
+      statsWithoutWriteErrorInjected.writeSsdErrors,
+      statsWithWriteErrorInjected.writeSsdErrors); // No new error occurred.
+  EXPECT_GT(statsWithoutWriteErrorInjected.entriesWritten, 0);
+  EXPECT_GT(
+      statsWithoutWriteErrorInjected.regionsCached,
+      statsWithWriteErrorInjected.regionsCached);
+
+  // Load the ssd pins by reading the ssd cache.
+  std::vector<SsdPin> ssdPins;
+  ssdPins.reserve(pins.size());
+  for (auto& pin : pins) {
+    ssdPins.push_back(ssdFile_->find(RawFileCacheKey{
+        pin.entry()->key().fileNum.id(), pin.entry()->key().offset}));
+  }
+
+  SsdCacheStats statsWithReadErrorInjected;
+  ssdFile_->updateStats(statsWithReadErrorInjected);
+  VELOX_ASSERT_THROW(ssdFile_->load(ssdPins, pins), "Inject hook read failure");
+  VELOX_ASSERT_THROW(
+      readAndCheckPins(pins), ""); // Cache pins have not been loaded.
+  EXPECT_EQ(statsWithReadErrorInjected.entriesRead, 0); // No entry was loaded.
+
+  injectReadError = false;
+  ssdFile_->load(ssdPins, pins);
+  readAndCheckPins(pins);
+  SsdCacheStats statsWithoutReadErrorInjected;
+  ssdFile_->updateStats(statsWithoutReadErrorInjected);
+  EXPECT_GT(
+      statsWithoutReadErrorInjected.entriesRead,
+      0); // Read operations succeeded after clearing the injected error.
+}
+
+TEST_F(SsdFileTest, evictlogFileErrorInjection) {
+  constexpr int64_t kSsdSize = 16 * SsdFile::kRegionSize;
+  const uint64_t checkpointIntervalBytes = 5 * SsdFile::kRegionSize;
+  const auto retainFile = StringIdLease(fileIds(), "faultyFiles.Retained");
+  const auto evictFile = StringIdLease(fileIds(), "faultyFiles.Evicted");
+
+  initializeCache(kSsdSize, checkpointIntervalBytes, false, false, false, true);
+
+  auto faultyFs = faultyFileSystem();
+  faultyFs->setFileInjectionHook([&](FaultFileOperation* op) {
+    // Inject error on evict log file only.
+    const std::string evictlogFileRe(".*log");
+    if (RE2::FullMatch(op->path, evictlogFileRe)) {
+      VELOX_FAIL("Inject hook read failure");
+    }
+  });
+
+  // Fully populate ssd cache with two files.
+  for (auto startOffset = 0; startOffset <= kSsdSize / 2 - SsdFile::kRegionSize;
+       startOffset += SsdFile::kRegionSize) {
+    auto pins = makePins(
+        retainFile.id(),
+        startOffset,
+        4096,
+        2048 * 1025,
+        SsdFile::kRegionSize / 2);
+    ssdFile_->write(pins);
+  }
+
+  for (auto startOffset = kSsdSize / 2;
+       startOffset <= kSsdSize - SsdFile::kRegionSize;
+       startOffset += SsdFile::kRegionSize) {
+    auto pins = makePins(
+        evictFile.id(),
+        startOffset + SsdFile::kRegionSize,
+        4096,
+        2048 * 1025,
+        SsdFile::kRegionSize / 2);
+    ssdFile_->write(pins);
+  }
+
+  SsdCacheStats statsBeforeEviction;
+  ssdFile_->updateStats(statsBeforeEviction);
+  ASSERT_GT(statsBeforeEviction.entriesWritten, 0);
+
+  // Remove one file from the ssd cache to trigger eviction.
+  folly::F14FastSet<uint64_t> retainedFileIds;
+  ssdFile_->removeFileEntries({evictFile.id()}, retainedFileIds);
+  ASSERT_TRUE(retainedFileIds.empty());
+
+  SsdCacheStats statsWithLogErrorInjected;
+  ssdFile_->updateStats(statsWithLogErrorInjected);
+  EXPECT_GT(
+      statsWithLogErrorInjected.writeSsdErrors,
+      statsBeforeEviction.writeSsdErrors);
+
+  // Re-initialize SSD file from checkpoint.
+  ssdFile_->checkpoint(true);
+  initializeSsdFile(kSsdSize, checkpointIntervalBytes);
+
+  SsdCacheStats statsAfterRecovery;
+  ssdFile_->updateStats(statsAfterRecovery);
+  ASSERT_GT(statsAfterRecovery.readCheckpointErrors, 0);
+}
+
 #ifdef VELOX_SSD_FILE_TEST_SET_NO_COW_FLAG
 TEST_F(SsdFileTest, disabledCow) {
   constexpr int64_t kSsdSize = 16 * SsdFile::kRegionSize;
   initializeCache(kSsdSize, 0, false, false, true);
-  EXPECT_TRUE(ssdFile_->testingIsCowDisabled());
+  EXPECT_TRUE(ssdFileHelper_->isCowDisabled());
 }
 
 TEST_F(SsdFileTest, notDisabledCow) {
   constexpr int64_t kSsdSize = 16 * SsdFile::kRegionSize;
   initializeCache(kSsdSize, 0, false, false, false);
-  EXPECT_FALSE(ssdFile_->testingIsCowDisabled());
+  EXPECT_FALSE(ssdFileHelper_->isCowDisabled());
 }
 #endif // VELOX_SSD_FILE_TEST_SET_NO_COW_FLAG

@@ -41,6 +41,7 @@ velox_add_library(
   HashPartitionFunction.cpp
   HashProbe.cpp
   HashTable.cpp
+  IndexLookupJoin.cpp
   JoinBridge.cpp
   Limit.cpp
   LocalPartition.cpp
@@ -63,7 +64,6 @@ velox_add_library(
   TaskTraceReader.cpp
   TaskTraceWriter.cpp
   Trace.cpp
-  TraceConfig.cpp
   TraceUtil.cpp
   PartitionedOutput.cpp
   PartitionFunction.cpp
@@ -74,6 +74,8 @@ velox_add_library(
   RowsStreamingWindowBuild.cpp
   RowContainer.cpp
   RowNumber.cpp
+  ScaledScanController.cpp
+  ScaleWriterLocalPartition.cpp
   SortBuffer.cpp
   SortedAggregations.cpp
   SortWindowBuild.cpp
@@ -108,6 +110,22 @@ velox_link_libraries(
   velox_test_util
   velox_arrow_bridge
   velox_common_compression)
+
+velox_add_library(velox_cursor Cursor.cpp)
+velox_link_libraries(
+  velox_cursor
+  velox_core
+  velox_exception
+  velox_expression
+  velox_dwio_common
+  velox_dwio_dwrf_reader
+  velox_dwio_dwrf_writer
+  velox_type_fbhive
+  velox_hive_connector
+  velox_tpch_connector
+  velox_presto_serializer
+  velox_functions_prestosql
+  velox_aggregates)
 
 if(${VELOX_BUILD_TESTING})
   add_subdirectory(fuzzer)

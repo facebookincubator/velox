@@ -412,6 +412,13 @@ HiveDataSink::HiveDataSink(
       "Unsupported commit strategy: {}",
       commitStrategyToString(commitStrategy_));
 
+  if (insertTableHandle_->ensureFiles()) {
+    VELOX_CHECK(
+        !isPartitioned() && !isBucketed(),
+        "ensureFiles is not supported with bucketing or partition keys in the data");
+    ensureWriter(HiveWriterId::unpartitionedId());
+  }
+
   if (!isBucketed()) {
     return;
   }
@@ -780,18 +787,10 @@ uint32_t HiveDataSink::appendWriter(const HiveWriterId& id) {
         insertTableHandle_->serdeParameters().end());
   }
 
-  updateWriterOptionsFromHiveConfig(
-      insertTableHandle_->storageFormat(),
-      hiveConfig_,
-      connectorSessionProperties,
-      options);
-
-  const auto& sessionTimeZoneName = connectorQueryCtx_->sessionTimezone();
-  if (!sessionTimeZoneName.empty()) {
-    options->sessionTimezone = tz::locateZone(sessionTimeZoneName);
-  }
+  options->sessionTimezoneName = connectorQueryCtx_->sessionTimezone();
   options->adjustTimestampToTimezone =
       connectorQueryCtx_->adjustTimestampToTimezone();
+  options->processConfigs(*hiveConfig_->config(), *connectorSessionProperties);
 
   // Prevents the memory allocation during the writer creation.
   WRITER_NON_RECLAIMABLE_SECTION_GUARD(writerInfo_.size() - 1);
@@ -870,8 +869,8 @@ void HiveDataSink::splitInputRowsAndEnsureWriters() {
   const auto numRows =
       isPartitioned() ? partitionIds_.size() : bucketIds_.size();
   for (auto row = 0; row < numRows; ++row) {
-    auto id = getWriterId(row);
-    uint32_t index = ensureWriter(id);
+    const auto id = getWriterId(row);
+    const uint32_t index = ensureWriter(id);
 
     VELOX_DCHECK_LT(index, partitionSizes_.size());
     VELOX_DCHECK_EQ(partitionSizes_.size(), partitionRows_.size());
@@ -1019,6 +1018,8 @@ folly::dynamic HiveInsertTableHandle::serialize() const {
     params[key] = value;
   }
   obj["serdeParameters"] = params;
+
+  obj["ensureFiles"] = ensureFiles_;
   return obj;
 }
 
@@ -1048,13 +1049,17 @@ HiveInsertTableHandlePtr HiveInsertTableHandle::create(
     serdeParameters.emplace(pair.first.asString(), pair.second.asString());
   }
 
+  bool ensureFiles = obj["ensureFiles"].asBool();
+
   return std::make_shared<HiveInsertTableHandle>(
       inputColumns,
       locationHandle,
       storageFormat,
       bucketProperty,
       compressionKind,
-      serdeParameters);
+      serdeParameters,
+      nullptr, // writerOptions is not serializable
+      ensureFiles);
 }
 
 void HiveInsertTableHandle::registerSerDe() {

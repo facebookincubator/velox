@@ -19,8 +19,11 @@
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/exec/tests/utils/TempDirectoryPath.h"
 #include "velox/exec/tests/utils/TempFilePath.h"
+#include "velox/functions/prestosql/types/HyperLogLogRegistration.h"
 #include "velox/functions/prestosql/types/HyperLogLogType.h"
+#include "velox/functions/prestosql/types/JsonRegistration.h"
 #include "velox/functions/prestosql/types/JsonType.h"
+#include "velox/functions/prestosql/types/TimestampWithTimeZoneRegistration.h"
 #include "velox/functions/prestosql/types/TimestampWithTimeZoneType.h"
 #include "velox/vector/fuzzer/VectorFuzzer.h"
 #include "velox/vector/tests/utils/VectorTestBase.h"
@@ -620,14 +623,6 @@ TEST_F(VectorSaverTest, LazyVector) {
       fuzzer.wrapInLazyVector(
           fuzzer.fuzzDictionary(fuzzer.fuzzDictionary(flatVector))),
       fuzzer);
-}
-
-TEST_F(VectorSaverTest, stdVector) {
-  std::vector<column_index_t> intVector = {1, 2, 3, 4, 5};
-  auto path = exec::test::TempFilePath::create();
-  saveStdVectorToFile<column_index_t>(intVector, path->getPath().c_str());
-  auto copy = restoreStdVectorFromFile<column_index_t>(path->getPath().c_str());
-  ASSERT_EQ(intVector, copy);
 }
 
 namespace {

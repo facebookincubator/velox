@@ -93,6 +93,12 @@ RowTypePtr concat(const RowTypePtr& a, const RowTypePtr& b);
 /// TODO Investigate mismatches reported when comparing Varbinary.
 bool containsUnsupportedTypes(const TypePtr& type);
 
+/// Determines whether the signature has an argument that contains typeName.
+/// typeName should be in lower case.
+bool usesInputTypeName(
+    const exec::FunctionSignature& signature,
+    const std::string& typeName);
+
 /// Determines whether the signature has an argument or return type that
 /// contains typeName. typeName should be in lower case.
 bool usesTypeName(
@@ -125,20 +131,25 @@ void setupMemory(
 void registerHiveConnector(
     const std::unordered_map<std::string, std::string>& hiveConfigs);
 
-enum ReferenceQueryErrorCode {
-  kSuccess,
-  kReferenceQueryFail,
-  kReferenceQueryUnsupported
-};
+// Returns a PrestoQueryRunner instance if prestoUrl is non-empty. Otherwise,
+// returns a DuckQueryRunner instance and set disabled aggregation functions
+// properly.
+std::unique_ptr<ReferenceQueryRunner> setupReferenceQueryRunner(
+    memory::MemoryPool* aggregatePool,
+    const std::string& prestoUrl,
+    const std::string& runnerName,
+    const uint32_t& reqTimeoutMs);
 
-// Converts 'plan' into an SQL query and runs it on 'input' in the reference DB.
+// Logs the input vectors if verbose logging is turned on.
+void logVectors(const std::vector<RowVectorPtr>& vectors);
+
+// Converts 'plan' into an SQL query and runs in the reference DB.
 // Result is returned as a MaterializedRowMultiset with the
 // ReferenceQueryErrorCode::kSuccess if successful, or an std::nullopt with a
 // ReferenceQueryErrorCode if the query fails.
 std::pair<std::optional<MaterializedRowMultiset>, ReferenceQueryErrorCode>
 computeReferenceResults(
     const core::PlanNodePtr& plan,
-    const std::vector<RowVectorPtr>& input,
     ReferenceQueryRunner* referenceQueryRunner);
 
 // Similar to computeReferenceResults(), but returns the result as a
@@ -147,7 +158,6 @@ computeReferenceResults(
 std::pair<std::optional<std::vector<RowVectorPtr>>, ReferenceQueryErrorCode>
 computeReferenceResultsAsVector(
     const core::PlanNodePtr& plan,
-    const std::vector<RowVectorPtr>& input,
     ReferenceQueryRunner* referenceQueryRunner);
 
 } // namespace facebook::velox::exec::test

@@ -21,8 +21,6 @@
 #include <stdlib.h>
 #include <cstdint>
 #include <cstring>
-#include <sstream>
-#include <string>
 #include <string_view>
 #include <vector>
 #include "folly/CPortability.h"
@@ -62,20 +60,6 @@ FOLLY_ALWAYS_INLINE bool lower(TOutString& output, const TInString& input) {
         lowerUnicode(output.data(), output.size(), input.data(), input.size());
     output.resize(size);
   }
-  return true;
-}
-
-/// Inplace ascii lower
-template <typename T>
-FOLLY_ALWAYS_INLINE bool lowerAsciiInPlace(T& str) {
-  lowerAscii(str.data(), str.data(), str.size());
-  return true;
-}
-
-/// Inplace ascii upper
-template <typename T>
-FOLLY_ALWAYS_INLINE bool upperAsciiInPlace(T& str) {
-  upperAscii(str.data(), str.data(), str.size());
   return true;
 }
 
@@ -197,13 +181,17 @@ std::vector<int32_t> stringToCodePoints(const T& inputString) {
   return codePoints;
 }
 
-/// Returns the starting position in characters of the Nth instance(counting
-/// from the left if lpos==true and from the end otherwise) of the substring in
-/// string. Positions start with 1. If not found, 0 is returned. If subString is
-/// empty result is 1.
-template <bool isAscii, bool lpos = true, typename T>
-FOLLY_ALWAYS_INLINE int64_t
-stringPosition(const T& string, const T& subString, int64_t instance = 0) {
+/// Returns the starting position in characters of the Nth instance of the
+/// substring in string. Positions start with 1. If not found, 0 is returned. If
+/// subString is empty result is 1.
+/// @tparam lpos If true, counting from the start of the string. Counting from
+/// the end of the string otherwise.
+/// @param instance The 1-based instance of the substring to find in string.
+template <bool isAscii, bool lpos = true>
+FOLLY_ALWAYS_INLINE int64_t stringPosition(
+    std::string_view string,
+    std::string_view subString,
+    int64_t instance) {
   VELOX_USER_CHECK_GT(instance, 0, "'instance' must be a positive number");
   if (subString.size() == 0) {
     return 1;
@@ -211,15 +199,9 @@ stringPosition(const T& string, const T& subString, int64_t instance = 0) {
 
   int64_t byteIndex = -1;
   if constexpr (lpos) {
-    byteIndex = findNthInstanceByteIndexFromStart(
-        std::string_view(string.data(), string.size()),
-        std::string_view(subString.data(), subString.size()),
-        instance);
+    byteIndex = findNthInstanceByteIndexFromStart(string, subString, instance);
   } else {
-    byteIndex = findNthInstanceByteIndexFromEnd(
-        std::string_view(string.data(), string.size()),
-        std::string_view(subString.data(), subString.size()),
-        instance);
+    byteIndex = findNthInstanceByteIndexFromEnd(string, subString, instance);
   }
 
   if (byteIndex == -1) {

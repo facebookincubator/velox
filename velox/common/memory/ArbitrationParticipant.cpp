@@ -267,7 +267,7 @@ uint64_t ArbitrationParticipant::reclaim(
   if (targetBytes == 0) {
     return 0;
   }
-  std::lock_guard<std::timed_mutex> l(reclaimLock_);
+  ArbitrationTimedLock l(reclaimMutex_, maxWaitTimeNs);
   TestValue::adjust(
       "facebook::velox::memory::ArbitrationParticipant::reclaim", this);
   uint64_t reclaimedBytes{0};
@@ -320,7 +320,7 @@ uint64_t ArbitrationParticipant::shrinkLocked(bool reclaimAll) {
 
 uint64_t ArbitrationParticipant::abort(
     const std::exception_ptr& error) noexcept {
-  std::lock_guard<std::timed_mutex> l(reclaimLock_);
+  std::lock_guard<std::timed_mutex> l(reclaimMutex_);
   return abortLocked(error);
 }
 
@@ -351,13 +351,6 @@ uint64_t ArbitrationParticipant::abortLocked(
   VELOX_CHECK(!aborted_);
   aborted_ = true;
   return shrinkLocked(/*reclaimAll=*/true);
-}
-
-bool ArbitrationParticipant::waitForReclaimOrAbort(
-    uint64_t maxWaitTimeNs) const {
-  std::unique_lock<std::timed_mutex> l(
-      reclaimLock_, std::chrono::nanoseconds(maxWaitTimeNs));
-  return l.owns_lock();
 }
 
 bool ArbitrationParticipant::hasRunningOp() const {
@@ -408,4 +401,31 @@ std::string ArbitrationCandidate::toString() const {
       succinctBytes(reclaimableUsedCapacity),
       succinctBytes(reclaimableFreeCapacity));
 }
+
+#ifdef TSAN_BUILD
+ArbitrationTimedLock::ArbitrationTimedLock(
+    std::timed_mutex& mutex,
+    uint64_t /* unused */)
+    : mutex_(mutex) {
+  mutex_.lock();
+}
+
+ArbitrationTimedLock::~ArbitrationTimedLock() {
+  mutex_.unlock();
+}
+#else
+ArbitrationTimedLock::ArbitrationTimedLock(
+    std::timed_mutex& mutex,
+    uint64_t timeoutNs)
+    : mutex_(mutex) {
+  if (!mutex_.try_lock_for(std::chrono::nanoseconds(timeoutNs))) {
+    VELOX_MEM_ARBITRATION_TIMEOUT(fmt::format(
+        "Memory arbitration lock timed out when reclaiming from arbitration participant."));
+  }
+}
+
+ArbitrationTimedLock::~ArbitrationTimedLock() {
+  mutex_.unlock();
+}
+#endif
 } // namespace facebook::velox::memory

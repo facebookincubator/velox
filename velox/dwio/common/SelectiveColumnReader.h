@@ -183,10 +183,7 @@ class SelectiveColumnReader {
   // read(). If 'this' has no filter, returns 'rows' passed to last
   // read().
   const RowSet outputRows() const {
-    if (scanSpec_->hasFilter() || hasDeletion()) {
-      return outputRows_;
-    }
-    return inputRows_;
+    return useOutputRows() ? outputRows_ : inputRows_;
   }
 
   // Advances to 'offset', so that the next item to be read is the
@@ -593,6 +590,10 @@ class SelectiveColumnReader {
                              : resultNulls_;
   }
 
+  bool useOutputRows() const {
+    return scanSpec_->hasFilter() || hasDeletion();
+  }
+
   memory::MemoryPool* const memoryPool_;
 
   // The requested data type
@@ -675,9 +676,9 @@ class SelectiveColumnReader {
   // returned as the null flags of the vector in getValues().
   bool returnReaderNulls_ = false;
   // Total writable bytes in 'rawStringBuffer_'.
-  int32_t rawStringSize_ = 0;
+  int64_t rawStringSize_ = 0;
   // Number of written bytes in 'rawStringBuffer_'.
-  uint32_t rawStringUsed_ = 0;
+  int64_t rawStringUsed_ = 0;
 
   // True if last read() added any nulls.
   bool anyNulls_ = false;

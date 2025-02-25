@@ -23,11 +23,12 @@ namespace facebook::velox::exec {
 class ExchangeSource : public std::enable_shared_from_this<ExchangeSource> {
  public:
   ExchangeSource(
-      const std::string& taskId,
+      const std::string& remoteTaskId,
       int destination,
       std::shared_ptr<ExchangeQueue> queue,
       memory::MemoryPool* pool)
-      : taskId_(taskId),
+      : remoteTaskId_(remoteTaskId),
+        taskId_(remoteTaskId),
         destination_(destination),
         queue_(std::move(queue)),
         pool_(pool->shared_from_this()) {}
@@ -35,13 +36,12 @@ class ExchangeSource : public std::enable_shared_from_this<ExchangeSource> {
   virtual ~ExchangeSource() = default;
 
   static std::shared_ptr<ExchangeSource> create(
-      const std::string& taskId,
+      const std::string& remoteTaskId,
       int destination,
       std::shared_ptr<ExchangeQueue> queue,
       memory::MemoryPool* pool);
 
-  /// Temporary API to indicate whether 'metrics()' API
-  /// is supported.
+  /// Temporary API to indicate whether 'metrics()' API is supported.
   virtual bool supportsMetrics() const {
     return false;
   }
@@ -67,6 +67,14 @@ class ExchangeSource : public std::enable_shared_from_this<ExchangeSource> {
     /// one page, and the consumer can choose to fetch a prefix of them
     /// according to the memory restriction.
     const std::vector<int64_t> remainingBytes;
+
+    std::string toString() const {
+      return fmt::format(
+          "bytes {}, atEnd {}, remainingBytes {}",
+          succinctBytes(bytes),
+          atEnd ? "true" : "false",
+          remainingBytes.empty() ? "NULL" : folly::join(",", remainingBytes));
+    }
   };
 
   /// Requests the producer to generate up to 'maxBytes' more data and reply
@@ -113,14 +121,14 @@ class ExchangeSource : public std::enable_shared_from_this<ExchangeSource> {
 
   virtual std::string toString() {
     std::stringstream out;
-    out << "[ExchangeSource " << taskId_ << ":" << destination_
+    out << "[ExchangeSource " << remoteTaskId_ << ":" << destination_
         << (requestPending_ ? " pending " : "") << (atEnd_ ? " at end" : "");
     return out.str();
   }
 
   virtual folly::dynamic toJson() {
     folly::dynamic obj = folly::dynamic::object;
-    obj["taskId"] = taskId_;
+    obj["remoteTaskId"] = remoteTaskId_;
     obj["destination"] = destination_;
     obj["sequence"] = sequence_;
     obj["requestPending"] = requestPending_.load();
@@ -129,7 +137,7 @@ class ExchangeSource : public std::enable_shared_from_this<ExchangeSource> {
   }
 
   using Factory = std::function<std::shared_ptr<ExchangeSource>(
-      const std::string& taskId,
+      const std::string& remoteTaskId,
       int destination,
       std::shared_ptr<ExchangeQueue> queue,
       memory::MemoryPool* pool)>;
@@ -146,9 +154,11 @@ class ExchangeSource : public std::enable_shared_from_this<ExchangeSource> {
   }
 
  protected:
-  // ID of the task producing data
+  // ID of the remote task producing data.
+  const std::string remoteTaskId_;
+  // Same with 'remoteTaskId_', will be removed after removing usage in Presto.
   const std::string taskId_;
-  // Destination number of 'this' on producer
+  // Destination number of 'this' on producer.
   const int destination_;
   const std::shared_ptr<ExchangeQueue> queue_{nullptr};
   // Holds a shared reference on the memory pool as it might be still possible

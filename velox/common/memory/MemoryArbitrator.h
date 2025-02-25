@@ -28,6 +28,7 @@
 namespace facebook::velox::memory {
 
 class MemoryPool;
+class ArbitrationOperation;
 
 using MemoryArbitrationStateCheckCB = std::function<void(MemoryPool&)>;
 
@@ -286,7 +287,7 @@ class MemoryReclaimer {
 
   virtual ~MemoryReclaimer() = default;
 
-  static std::unique_ptr<MemoryReclaimer> create();
+  static std::unique_ptr<MemoryReclaimer> create(int32_t priority = 0);
 
   /// Invoked memory reclaim function from 'pool' and record execution 'stats'.
   static uint64_t run(const std::function<int64_t()>& func, Stats& stats);
@@ -307,6 +308,26 @@ class MemoryReclaimer {
   /// NOTE: it is guaranteed to be called also on failure path if
   /// enterArbitration has been called.
   virtual void leaveArbitration() noexcept {}
+
+  /// Invoked by upper layer reclaimer, to return the priority of this
+  /// reclaimer. The priority determines the reclaiming order of self among all
+  /// same level reclaimers. The smaller the number, the higher the priority.
+  /// Consider the following memory pool & reclaimer structure:
+  ///
+  ///                 rec1(pri 1)
+  ///                /            \
+  ///               /              \
+  ///              /                \
+  ///      rec2(pri 1)           rec3(pri 3)
+  ///      /        \             /        \
+  ///     /          \           /          \
+  /// rec4(pri 1) rec5(pri 0)  rec6(pri 0) rec7(pri 1)
+  ///
+  /// The reclaiming traversing order will be rec1 -> rec2 -> rec5 -> rec4 ->
+  /// rec3 -> rec6 -> rec7
+  virtual int32_t priority() const {
+    return priority_;
+  };
 
   /// Invoked by the memory arbitrator to get the amount of memory bytes that
   /// can be reclaimed from 'pool'. The function returns true if 'pool' is
@@ -342,7 +363,10 @@ class MemoryReclaimer {
   virtual void abort(MemoryPool* pool, const std::exception_ptr& error);
 
  protected:
-  MemoryReclaimer() = default;
+  explicit MemoryReclaimer(int32_t priority) : priority_(priority){};
+
+ private:
+  const int32_t priority_;
 };
 
 /// Helper class used to measure the memory bytes reclaimed from a memory pool
@@ -398,11 +422,11 @@ class NonReclaimableSectionGuard {
   const bool oldNonReclaimableSectionValue_;
 };
 
-/// The memory arbitration context which is set on per-thread local variable by
-/// memory arbitrator. It is used to indicate a running thread is under memory
-/// arbitration processing or not. This helps to enable sanity check such as all
-/// the memory reservations during memory arbitration should come from the
-/// spilling memory pool.
+/// The memory arbitration context which is set as per-thread local variable by
+/// memory arbitrator. It is used to indicate if a running thread is under
+/// memory arbitration. This helps to enable sanity check such as all the memory
+/// reservations during memory arbitration should come from the spilling memory
+/// pool.
 struct MemoryArbitrationContext {
   /// Defines the type of memory arbitration.
   enum class Type {
@@ -429,10 +453,12 @@ struct MemoryArbitrationContext {
 /// under memory arbitration processing.
 class ScopedMemoryArbitrationContext {
  public:
-  explicit ScopedMemoryArbitrationContext(const MemoryPool* requestor);
   ScopedMemoryArbitrationContext();
+
   explicit ScopedMemoryArbitrationContext(
       const MemoryArbitrationContext* context);
+
+  explicit ScopedMemoryArbitrationContext(const MemoryPool* requestor);
 
   ~ScopedMemoryArbitrationContext();
 

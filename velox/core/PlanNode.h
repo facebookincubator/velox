@@ -22,6 +22,7 @@
 #include "velox/connectors/Connector.h"
 #include "velox/core/Expressions.h"
 #include "velox/core/QueryConfig.h"
+#include "velox/vector/VectorStream.h"
 
 struct ArrowArrayStream;
 
@@ -107,6 +108,36 @@ extern const SortOrder kAscNullsLast;
 extern const SortOrder kDescNullsFirst;
 extern const SortOrder kDescNullsLast;
 
+struct PlanSummaryOptions {
+  /// Options that apply specifically to PROJECT nodes.
+  struct ProjectOptions {
+    /// For a given PROJECT node, maximum number of non-identity projection
+    /// expressions to include in the summary. By default, no expression is
+    /// included.
+    size_t maxProjections = 0;
+
+    /// For a given PROJECT node, maximum number of dereference (access of a
+    /// struct field) expressions to include in the summary. By default, no
+    /// expression is included.
+    size_t maxDereferences = 0;
+  };
+
+  ProjectOptions project = {};
+
+  /// For a given node, maximum number of output fields to include in the
+  /// summary. Each field has a name and a type. The amount of type information
+  /// is controlled by 'maxChildTypes' option. Use 0 to include only the number
+  /// of output fields.
+  size_t maxOutputFileds = 5;
+
+  /// For a given output type, maximum number of child types to include in the
+  /// summary. By default, only top-level type is included: BIGINT, ARRAY, MAP,
+  /// ROW. Set to 2 to include types of array elements, map keys and values as
+  /// well as up to 2 fields of a struct: ARRAY(REAL), MAP(INTEGER, ARRAY),
+  /// ROW(VARCHAR, ARRAY,...).
+  size_t maxChildTypes = 0;
+};
+
 class PlanNode : public ISerializable {
  public:
   explicit PlanNode(const PlanNodeId& id) : id_{id} {}
@@ -174,6 +205,12 @@ class PlanNode : public ISerializable {
     return stream.str();
   }
 
+  std::string toSummaryString(PlanSummaryOptions options = {}) const {
+    std::stringstream stream;
+    toSummaryString(options, stream, 0);
+    return stream.str();
+  }
+
   /// The name of the plan node, used in toString.
   virtual std::string_view name() const = 0;
 
@@ -215,6 +252,16 @@ class PlanNode : public ISerializable {
           const PlanNodeId& planNodeId,
           const std::string& indentation,
           std::stringstream& stream)>& addContext) const;
+
+  virtual void addSummaryDetails(
+      const std::string& indentation,
+      const PlanSummaryOptions& options,
+      std::stringstream& stream) const;
+
+  void toSummaryString(
+      const PlanSummaryOptions& options,
+      std::stringstream& stream,
+      size_t indentationSize) const;
 
   const std::string id_;
 };
@@ -277,6 +324,8 @@ class ValuesNode : public PlanNode {
   const size_t repeatTimes_;
 };
 
+using ValuesNodePtr = std::shared_ptr<const ValuesNode>;
+
 class ArrowStreamNode : public PlanNode {
  public:
   ArrowStreamNode(
@@ -320,10 +369,12 @@ class TraceScanNode final : public PlanNode {
       const PlanNodeId& id,
       const std::string& traceDir,
       uint32_t pipelineId,
+      std::vector<uint32_t> driverIds,
       const RowTypePtr& outputType)
       : PlanNode(id),
         traceDir_(traceDir),
         pipelineId_(pipelineId),
+        driverIds_(std::move(driverIds)),
         outputType_(outputType) {}
 
   const RowTypePtr& outputType() const override {
@@ -347,12 +398,17 @@ class TraceScanNode final : public PlanNode {
     return pipelineId_;
   }
 
+  std::vector<uint32_t> driverIds() const {
+    return driverIds_;
+  }
+
  private:
   void addDetails(std::stringstream& stream) const override;
 
   // Directory of traced data, which is $traceRoot/$taskId/$nodeId.
   const std::string traceDir_;
   const uint32_t pipelineId_;
+  const std::vector<uint32_t> driverIds_;
   const RowTypePtr outputType_;
 };
 
@@ -390,6 +446,11 @@ class FilterNode : public PlanNode {
   void addDetails(std::stringstream& stream) const override {
     stream << "expression: " << filter_->toString();
   }
+
+  void addSummaryDetails(
+      const std::string& indentation,
+      const PlanSummaryOptions& options,
+      std::stringstream& stream) const override;
 
   const std::vector<PlanNodePtr> sources_;
   const TypedExprPtr filter_;
@@ -447,6 +508,16 @@ class ProjectNode : public PlanNode {
 
  private:
   void addDetails(std::stringstream& stream) const override;
+
+  /// Append a summary of the plan node to 'stream'. Make sure to append full
+  /// lines that start with 'identation' and end with std::endl. It is append
+  /// one or multiple lines or not append anything. Make sure to truncate any
+  /// output that can be arbitrary long. The default implementation appends
+  /// truncated output of 'addDetails'.
+  void addSummaryDetails(
+      const std::string& indentation,
+      const PlanSummaryOptions& options,
+      std::stringstream& stream) const override;
 
   static RowTypePtr makeOutputType(
       const std::vector<std::string>& names,
@@ -517,6 +588,8 @@ class TableScanNode : public PlanNode {
       unordered_map<std::string, std::shared_ptr<connector::ColumnHandle>>
           assignments_;
 };
+
+using TableScanNodePtr = std::shared_ptr<const TableScanNode>;
 
 class AggregationNode : public PlanNode {
  public:
@@ -727,8 +800,8 @@ class TableWriteNode : public PlanNode {
         hasPartitioningScheme_(hasPartitioningScheme),
         outputType_(std::move(outputType)),
         commitStrategy_(commitStrategy) {
-    VELOX_USER_CHECK_EQ(columns->size(), columnNames.size());
-    for (const auto& column : columns->names()) {
+    VELOX_USER_CHECK_EQ(columns_->size(), columnNames_.size());
+    for (const auto& column : columns_->names()) {
       VELOX_USER_CHECK(
           source->outputType()->containsChild(column),
           "Column {} not found in TableWriter input: {}",
@@ -736,30 +809,6 @@ class TableWriteNode : public PlanNode {
           source->outputType()->toString());
     }
   }
-
-#ifdef VELOX_ENABLE_BACKWARD_COMPATIBILITY
-  TableWriteNode(
-      const PlanNodeId& id,
-      const RowTypePtr& columns,
-      const std::vector<std::string>& columnNames,
-      std::shared_ptr<AggregationNode> aggregationNode,
-      std::shared_ptr<InsertTableHandle> insertTableHandle,
-      bool hasPartitioningScheme,
-      bool /*unused*/,
-      RowTypePtr outputType,
-      connector::CommitStrategy commitStrategy,
-      const PlanNodePtr& source)
-      : TableWriteNode(
-            id,
-            columns,
-            columnNames,
-            std::move(aggregationNode),
-            std::move(insertTableHandle),
-            hasPartitioningScheme,
-            std::move(outputType),
-            commitStrategy,
-            source) {}
-#endif
 
   const std::vector<PlanNodePtr>& sources() const override {
     return sources_;
@@ -1012,8 +1061,11 @@ class GroupIdNode : public PlanNode {
 
 class ExchangeNode : public PlanNode {
  public:
-  ExchangeNode(const PlanNodeId& id, RowTypePtr type)
-      : PlanNode(id), outputType_(type) {}
+  ExchangeNode(
+      const PlanNodeId& id,
+      RowTypePtr type,
+      VectorSerde::Kind serdeKind)
+      : PlanNode(id), outputType_(type), serdeKind_(serdeKind) {}
 
   const RowTypePtr& outputType() const override {
     return outputType_;
@@ -1033,6 +1085,10 @@ class ExchangeNode : public PlanNode {
     return "Exchange";
   }
 
+  VectorSerde::Kind serdeKind() const {
+    return serdeKind_;
+  }
+
   folly::dynamic serialize() const override;
 
   static PlanNodePtr create(const folly::dynamic& obj, void* context);
@@ -1040,19 +1096,18 @@ class ExchangeNode : public PlanNode {
  private:
   void addDetails(std::stringstream& stream) const override;
 
-  RowTypePtr outputType_;
+  const RowTypePtr outputType_;
+  const VectorSerde::Kind serdeKind_;
 };
 
 class MergeExchangeNode : public ExchangeNode {
  public:
-  explicit MergeExchangeNode(
+  MergeExchangeNode(
       const PlanNodeId& id,
       const RowTypePtr& type,
       const std::vector<FieldAccessTypedExprPtr>& sortingKeys,
-      const std::vector<SortOrder>& sortingOrders)
-      : ExchangeNode(id, type),
-        sortingKeys_(sortingKeys),
-        sortingOrders_(sortingOrders) {}
+      const std::vector<SortOrder>& sortingOrders,
+      VectorSerde::Kind serdeKind);
 
   const std::vector<FieldAccessTypedExprPtr>& sortingKeys() const {
     return sortingKeys_;
@@ -1194,13 +1249,17 @@ class LocalPartitionNode : public PlanNode {
 
   static Type typeFromName(const std::string& name);
 
+  /// If 'scaleWriter' is true, the local partition is used to scale the table
+  /// writer prcessing.
   LocalPartitionNode(
       const PlanNodeId& id,
       Type type,
+      bool scaleWriter,
       PartitionFunctionSpecPtr partitionFunctionSpec,
       std::vector<PlanNodePtr> sources)
       : PlanNode(id),
         type_{type},
+        scaleWriter_(scaleWriter),
         sources_{std::move(sources)},
         partitionFunctionSpec_{std::move(partitionFunctionSpec)} {
     VELOX_USER_CHECK_GT(
@@ -1225,8 +1284,14 @@ class LocalPartitionNode : public PlanNode {
     return std::make_shared<LocalPartitionNode>(
         id,
         Type::kGather,
+        /*scaleWriter=*/false,
         std::make_shared<GatherPartitionFunctionSpec>(),
         std::move(sources));
+  }
+
+  /// Returns true if this is for table writer scaling.
+  bool scaleWriter() const {
+    return scaleWriter_;
   }
 
   Type type() const {
@@ -1257,6 +1322,7 @@ class LocalPartitionNode : public PlanNode {
   void addDetails(std::stringstream& stream) const override;
 
   const Type type_;
+  const bool scaleWriter_;
   const std::vector<PlanNodePtr> sources_;
   const PartitionFunctionSpecPtr partitionFunctionSpec_;
 };
@@ -1279,73 +1345,27 @@ class PartitionedOutputNode : public PlanNode {
       bool replicateNullsAndAny,
       PartitionFunctionSpecPtr partitionFunctionSpec,
       RowTypePtr outputType,
-      PlanNodePtr source)
-      : PlanNode(id),
-        kind_(kind),
-        sources_{{std::move(source)}},
-        keys_(keys),
-        numPartitions_(numPartitions),
-        replicateNullsAndAny_(replicateNullsAndAny),
-        partitionFunctionSpec_(std::move(partitionFunctionSpec)),
-        outputType_(std::move(outputType)) {
-    VELOX_USER_CHECK_GT(numPartitions, 0);
-    if (numPartitions_ == 1) {
-      VELOX_USER_CHECK(
-          keys_.empty(),
-          "Non-empty partitioning keys require more than one partition");
-    }
-    if (!isPartitioned()) {
-      VELOX_USER_CHECK(
-          keys_.empty(),
-          "{} partitioning doesn't allow for partitioning keys",
-          kindString(kind_));
-    }
-  }
+      VectorSerde::Kind serdeKind,
+      PlanNodePtr source);
 
   static std::shared_ptr<PartitionedOutputNode> broadcast(
       const PlanNodeId& id,
       int numPartitions,
       RowTypePtr outputType,
-      PlanNodePtr source) {
-    std::vector<TypedExprPtr> noKeys;
-    return std::make_shared<PartitionedOutputNode>(
-        id,
-        Kind::kBroadcast,
-        noKeys,
-        numPartitions,
-        false,
-        std::make_shared<GatherPartitionFunctionSpec>(),
-        std::move(outputType),
-        std::move(source));
-  }
+      VectorSerde::Kind serdeKind,
+      PlanNodePtr source);
 
-  static std::shared_ptr<PartitionedOutputNode>
-  arbitrary(const PlanNodeId& id, RowTypePtr outputType, PlanNodePtr source) {
-    std::vector<TypedExprPtr> noKeys;
-    return std::make_shared<PartitionedOutputNode>(
-        id,
-        Kind::kArbitrary,
-        noKeys,
-        1,
-        false,
-        std::make_shared<GatherPartitionFunctionSpec>(),
-        std::move(outputType),
-        std::move(source));
-  }
+  static std::shared_ptr<PartitionedOutputNode> arbitrary(
+      const PlanNodeId& id,
+      RowTypePtr outputType,
+      VectorSerde::Kind serdeKind,
+      PlanNodePtr source);
 
-  static std::shared_ptr<PartitionedOutputNode>
-  single(const PlanNodeId& id, RowTypePtr outputType, PlanNodePtr source) {
-    std::vector<TypedExprPtr> noKeys;
-    return std::make_shared<PartitionedOutputNode>(
-        id,
-        Kind::kPartitioned,
-        noKeys,
-        1,
-        false,
-        std::make_shared<GatherPartitionFunctionSpec>(),
-        std::move(outputType),
-        std::move(source));
-  }
+  static std::shared_ptr<PartitionedOutputNode> single(
+      const PlanNodeId& id,
+      RowTypePtr outputType,
+      VectorSerde::Kind VectorSerde,
+      PlanNodePtr source);
 
   const RowTypePtr& outputType() const override {
     return outputType_;
@@ -1383,6 +1403,10 @@ class PartitionedOutputNode : public PlanNode {
     return kind_;
   }
 
+  VectorSerde::Kind serdeKind() const {
+    return serdeKind_;
+  }
+
   /// Returns true if an arbitrary row and all rows with null keys must be
   /// replicated to all destinations. This is used to ensure correct results
   /// for anti-join which requires all nodes to know whether combined build
@@ -1416,6 +1440,7 @@ class PartitionedOutputNode : public PlanNode {
   const int numPartitions_;
   const bool replicateNullsAndAny_;
   const PartitionFunctionSpecPtr partitionFunctionSpec_;
+  const VectorSerde::Kind serdeKind_;
   const RowTypePtr outputType_;
 };
 
@@ -1737,10 +1762,114 @@ class MergeJoinNode : public AbstractJoinNode {
 
   folly::dynamic serialize() const override;
 
-  /// If merge join supports this join type.
+  /// Returns true if the merge join supports this join type, otherwise false.
   static bool isSupported(JoinType joinType);
 
   static PlanNodePtr create(const folly::dynamic& obj, void* context);
+};
+
+/// Represents index lookup join. Translates to an exec::IndexLookupJoin
+/// operator. Assumes the right input is a table scan source node that provides
+/// indexed table lookup for the left input with the specified join keys and
+/// conditions. The join keys must be a prefix of the index columns of the
+/// lookup table. Each join condition must use columns from both sides. For the
+/// right side, it can only use one index column. Each index column can either
+/// be a join key or a join condition once. The table scan node of the right
+/// input is translated to a connector::IndexSource within
+/// exec::IndexLookupJoin. Only INNER and LEFT joins are supported.
+///
+/// Take the following query for example, 't' is left table, 'u' is the right
+/// table with indexed columns. 'sid' is the join keys. 'u.event_type in
+/// t.event_list' is the join condition.
+///
+/// SELECT t.sid, t.day_ts, u.event_type
+/// FROM t LEFT JOIN u
+/// ON t.sid = u.sid
+///  AND contains(t.event_list, u.event_type)
+///  AND t.ds BETWEEN '2024-01-01' AND '2024-01-07'
+///
+/// Here,
+/// - 'joinType' is JoinType::kLeft
+/// - 'left' describes scan of t with a filter on 'ds':t.ds BETWEEN '2024-01-01'
+///    AND '2024-01-07'
+/// - 'right' describes indexed table 'u' with index keys sid, event_type(and
+///    maybe some more)
+/// - 'leftKeys' is a list of one key 't.sid'
+/// - 'rightKeys' is a list of one key 'u.sid'
+/// - 'joinConditions' is a list of one expression: contains(t.event_list,
+///    u.event_type)
+/// - 'outputType' contains 3 columns : t.sid, t.day_ts, u.event_type
+///
+class IndexLookupJoinNode : public AbstractJoinNode {
+ public:
+  /// @param joinType Specifies the lookup join type. Only INNER and LEFT joins
+  /// are supported.
+  IndexLookupJoinNode(
+      const PlanNodeId& id,
+      JoinType joinType,
+      const std::vector<FieldAccessTypedExprPtr>& leftKeys,
+      const std::vector<FieldAccessTypedExprPtr>& rightKeys,
+      const std::vector<TypedExprPtr>& joinConditions,
+      PlanNodePtr left,
+      TableScanNodePtr right,
+      RowTypePtr outputType)
+      : AbstractJoinNode(
+            id,
+            joinType,
+            leftKeys,
+            rightKeys,
+            /*filter=*/nullptr,
+            std::move(left),
+            right,
+            outputType),
+        lookupSourceNode_(std::move(right)),
+        joinConditions_(joinConditions) {
+    VELOX_USER_CHECK(
+        !leftKeys.empty(),
+        "The lookup join node requires at least one join key");
+    VELOX_USER_CHECK_EQ(
+        leftKeys_.size(),
+        rightKeys_.size(),
+        "The lookup join node requires same number of join keys on left and right sides");
+    // TODO: add check that (1) 'rightKeys_' form an index prefix. each of
+    // 'joinConditions_' uses columns from both sides and uses exactly one index
+    // column from the right side.
+    VELOX_USER_CHECK(
+        lookupSourceNode_->tableHandle()->supportsIndexLookup(),
+        "The lookup table handle {} from connector {} doesn't support index lookup",
+        lookupSourceNode_->tableHandle()->name(),
+        lookupSourceNode_->tableHandle()->connectorId());
+    VELOX_USER_CHECK(
+        isSupported(joinType_),
+        "Unsupported index lookup join type {}",
+        joinTypeName(joinType_));
+  }
+
+  const TableScanNodePtr& lookupSource() const {
+    return lookupSourceNode_;
+  }
+
+  const std::vector<TypedExprPtr>& joinConditions() const {
+    return joinConditions_;
+  }
+
+  std::string_view name() const override {
+    return "IndexLookupJoin";
+  }
+
+  folly::dynamic serialize() const override;
+
+  static PlanNodePtr create(const folly::dynamic& obj, void* context);
+
+  /// Returns true if the lookup join supports this join type, otherwise false.
+  static bool isSupported(JoinType joinType);
+
+ private:
+  void addDetails(std::stringstream& stream) const override;
+
+  const TableScanNodePtr lookupSourceNode_;
+
+  const std::vector<TypedExprPtr> joinConditions_;
 };
 
 /// Represents inner/outer nested loop joins. Translates to an

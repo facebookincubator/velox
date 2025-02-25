@@ -56,11 +56,17 @@ class TypeFactories : public CustomTypeFactories {
  public:
   TypeFactories(const TypePtr& type) : type_(type) {}
 
-  TypePtr getType() const override {
+  TypePtr getType(const std::vector<TypeParameter>& parameters) const override {
+    VELOX_CHECK(parameters.empty());
     return type_;
   }
 
   exec::CastOperatorPtr getCastOperator() const override {
+    return nullptr;
+  }
+
+  AbstractInputGeneratorPtr getInputGenerator(
+      const InputGeneratorConfig& /*config*/) const override {
     return nullptr;
   }
 

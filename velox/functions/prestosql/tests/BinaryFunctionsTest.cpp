@@ -257,6 +257,8 @@ TEST_F(BinaryFunctionsTest, HmacSha512) {
   EXPECT_EQ(std::nullopt, hmacSha512(std::nullopt, "velox"));
 }
 
+// Note: this test fails in a FIPS enabled environment because OpenSSL restricts
+// usage of MD5 for hmacs.
 TEST_F(BinaryFunctionsTest, HmacMd5) {
   const auto hmacMd5 = [&](std::optional<std::string> arg,
                            std::optional<std::string> key) {
@@ -298,13 +300,6 @@ TEST_F(BinaryFunctionsTest, crc32) {
 TEST_F(BinaryFunctionsTest, xxhash64) {
   const auto xxhash64 = [&](std::optional<std::string> value) {
     return evaluateOnce<std::string>("xxhash64(c0)", VARBINARY(), value);
-  };
-
-  const auto toVarbinary = [](const int64_t input) {
-    std::string out;
-    out.resize(sizeof(input));
-    std::memcpy(out.data(), &input, sizeof(input));
-    return out;
   };
 
   EXPECT_EQ(hexToDec("EF46DB3751D8E999"), xxhash64(""));

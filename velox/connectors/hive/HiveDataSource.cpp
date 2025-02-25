@@ -195,6 +195,8 @@ HiveDataSource::HiveDataSource(
       partitionKeys_,
       infoColumns_,
       specialColumns_,
+      hiveConfig_->readStatsBasedFilterReorderDisabled(
+          connectorQueryCtx_->sessionProperties()),
       pool_);
   if (remainingFilter) {
     metadataFilter_ = std::make_shared<common::MetadataFilter>(
@@ -260,6 +262,8 @@ std::unique_ptr<HivePartitionFunction> HiveDataSource::setupBucketConversion() {
         partitionKeys_,
         infoColumns_,
         specialColumns_,
+        hiveConfig_->readStatsBasedFilterReorderDisabled(
+            connectorQueryCtx_->sessionProperties()),
         pool_);
     newScanSpec->moveAdaptationFrom(*scanSpec_);
     scanSpec_ = std::move(newScanSpec);
@@ -319,6 +323,7 @@ void HiveDataSource::addSplit(std::shared_ptr<ConnectorSplit> split) {
   // so we initialize it beforehand.
   splitReader_->configureReaderOptions(randomSkip_);
   splitReader_->prepareSplit(metadataFilter_, runtimeStats_);
+  readerOutputType_ = splitReader_->readerOutputType();
 }
 
 vector_size_t HiveDataSource::applyBucketConversion(
@@ -374,7 +379,12 @@ std::optional<RowVectorPtr> HiveDataSource::next(
     return nullptr;
   }
 
-  if (!output_) {
+  // Bucket conversion or delta update could add extra column to reader output.
+  auto needsExtraColumn = [&] {
+    return output_->asUnchecked<RowVector>()->childrenSize() <
+        readerOutputType_->size();
+  };
+  if (!output_ || needsExtraColumn()) {
     output_ = BaseVector::create(readerOutputType_, 0, pool_);
   }
 
@@ -468,16 +478,6 @@ std::unordered_map<std::string, RuntimeCounter> HiveDataSource::runtimeStats() {
        {"prefetchBytes",
         RuntimeCounter(
             ioStats_->prefetch().sum(), RuntimeCounter::Unit::kBytes)},
-       {"numStorageRead", RuntimeCounter(ioStats_->read().count())},
-       {"storageReadBytes",
-        RuntimeCounter(ioStats_->read().sum(), RuntimeCounter::Unit::kBytes)},
-       {"numLocalRead", RuntimeCounter(ioStats_->ssdRead().count())},
-       {"localReadBytes",
-        RuntimeCounter(
-            ioStats_->ssdRead().sum(), RuntimeCounter::Unit::kBytes)},
-       {"numRamRead", RuntimeCounter(ioStats_->ramHit().count())},
-       {"ramReadBytes",
-        RuntimeCounter(ioStats_->ramHit().sum(), RuntimeCounter::Unit::kBytes)},
        {"totalScanTime",
         RuntimeCounter(
             ioStats_->totalScanTime(), RuntimeCounter::Unit::kNanos)},
@@ -496,8 +496,33 @@ std::unordered_map<std::string, RuntimeCounter> HiveDataSource::runtimeStats() {
        {"overreadBytes",
         RuntimeCounter(
             ioStats_->rawOverreadBytes(), RuntimeCounter::Unit::kBytes)}});
+  if (ioStats_->read().count() > 0) {
+    res.insert({"numStorageRead", RuntimeCounter(ioStats_->read().count())});
+    res.insert(
+        {"storageReadBytes",
+         RuntimeCounter(ioStats_->read().sum(), RuntimeCounter::Unit::kBytes)});
+  }
+  if (ioStats_->ssdRead().count() > 0) {
+    res.insert({"numLocalRead", RuntimeCounter(ioStats_->ssdRead().count())});
+    res.insert(
+        {"localReadBytes",
+         RuntimeCounter(
+             ioStats_->ssdRead().sum(), RuntimeCounter::Unit::kBytes)});
+  }
+  if (ioStats_->ramHit().count() > 0) {
+    res.insert({"numRamRead", RuntimeCounter(ioStats_->ramHit().count())});
+    res.insert(
+        {"ramReadBytes",
+         RuntimeCounter(
+             ioStats_->ramHit().sum(), RuntimeCounter::Unit::kBytes)});
+  }
   if (numBucketConversion_ > 0) {
     res.insert({"numBucketConversion", RuntimeCounter(numBucketConversion_)});
+  }
+  for (const auto& storageStats : ioStats_->storageStats()) {
+    res.emplace(
+        storageStats.first,
+        RuntimeCounter(storageStats.second.sum, storageStats.second.unit));
   }
   return res;
 }

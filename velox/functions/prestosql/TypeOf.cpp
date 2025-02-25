@@ -18,6 +18,7 @@
 #include "velox/functions/prestosql/types/IPAddressType.h"
 #include "velox/functions/prestosql/types/IPPrefixType.h"
 #include "velox/functions/prestosql/types/JsonType.h"
+#include "velox/functions/prestosql/types/TDigestType.h"
 #include "velox/functions/prestosql/types/TimestampWithTimeZoneType.h"
 #include "velox/functions/prestosql/types/UuidType.h"
 
@@ -79,8 +80,9 @@ std::string typeName(const TypePtr& type) {
     case TypeKind::VARBINARY:
       if (isHyperLogLogType(type)) {
         return "HyperLogLog";
-      } else if (isIPPrefixType(type)) {
-        return "ipprefix";
+      }
+      if (*type == *TDIGEST(DOUBLE())) {
+        return "tdigest(double)";
       }
       return "varbinary";
     case TypeKind::TIMESTAMP:
@@ -93,6 +95,9 @@ std::string typeName(const TypePtr& type) {
           typeName(type->childAt(0)),
           typeName(type->childAt(1)));
     case TypeKind::ROW: {
+      if (isIPPrefixType(type)) {
+        return "ipprefix";
+      }
       const auto& rowType = type->asRow();
       std::ostringstream out;
       out << "row(";

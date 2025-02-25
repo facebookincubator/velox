@@ -20,6 +20,7 @@
 
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/common/file/FileSystems.h"
+#include "velox/common/file/tests/FaultyFileSystem.h"
 #include "velox/exec/Trace.h"
 #include "velox/exec/TraceUtil.h"
 #include "velox/exec/tests/utils/TempDirectoryPath.h"
@@ -31,6 +32,7 @@ class TraceUtilTest : public testing::Test {
  protected:
   static void SetUpTestCase() {
     filesystems::registerLocalFileSystem();
+    tests::utils::registerFaultyFileSystem();
   }
 };
 
@@ -87,7 +89,15 @@ TEST_F(TraceUtilTest, OperatorTraceSummary) {
   summary.inputRows = 100;
   summary.peakMemory = 200;
   ASSERT_EQ(
-      summary.toString(), "opType summary, inputRows 100, peakMemory 200B");
+      summary.toString(),
+      "opType summary, inputRows 100,  inputBytes 0B, rawInputRows 0, rawInputBytes 0B, peakMemory 200B");
+  summary.numSplits = 10;
+  summary.rawInputBytes = 222;
+  VELOX_ASSERT_THROW(summary.toString(), "summary vs. TableScan");
+  summary.opType = "TableScan";
+  ASSERT_EQ(
+      summary.toString(),
+      "opType TableScan, numSplits 10, inputRows 100, inputBytes 0B, rawInputRows 0, rawInputBytes 222B, peakMemory 200B");
 }
 
 TEST_F(TraceUtilTest, traceDirectoryLayoutUtilities) {
@@ -124,6 +134,9 @@ TEST_F(TraceUtilTest, traceDirectoryLayoutUtilities) {
   ASSERT_EQ(
       getOpTraceSummaryFilePath(opTraceDir),
       "/traceRoot/queryId/taskId/1/1/1/op_trace_summary.json");
+  ASSERT_EQ(
+      getOpTraceSplitFilePath(opTraceDir),
+      "/traceRoot/queryId/taskId/1/1/1/op_split_trace.split");
 }
 
 TEST_F(TraceUtilTest, getTaskIds) {
@@ -144,6 +157,38 @@ TEST_F(TraceUtilTest, getTaskIds) {
   ASSERT_EQ(taskIds[1], taskId2);
 }
 
+TEST_F(TraceUtilTest, getPipelineIds) {
+  const auto rootDir = TempDirectoryPath::create();
+  const auto rootPath = rootDir->getPath();
+  const auto fs = filesystems::getFileSystem(rootPath, nullptr);
+  const std::string queryId = "queryId";
+  fs->mkdir(trace::getQueryTraceDirectory(rootPath, queryId));
+  ASSERT_TRUE(getTaskIds(rootPath, queryId, fs).empty());
+  const std::string taskId = "task";
+  const std::string taskTraceDir =
+      trace::getTaskTraceDirectory(rootPath, queryId, taskId);
+  fs->mkdir(taskTraceDir);
+  const std::string nodeId = "node";
+  const std::string nodeTraceDir =
+      trace::getNodeTraceDirectory(taskTraceDir, nodeId);
+  fs->mkdir(nodeTraceDir);
+
+  const std::vector<uint32_t> expectedPipelineIds{0, 1, 2};
+  for (const auto pipelineId : expectedPipelineIds) {
+    fs->mkdir(trace::getPipelineTraceDirectory(nodeTraceDir, pipelineId));
+  }
+  const auto pipelineIds = listPipelineIds(nodeTraceDir, fs);
+  for (int i = 0; i < 3; ++i) {
+    ASSERT_EQ(expectedPipelineIds[i], pipelineIds[i]);
+  }
+
+  // Bad pipeline id.
+  const std::string badPipelineId = "badPipelineId";
+  fs->mkdir(fmt::format("{}/{}", nodeTraceDir, badPipelineId));
+  VELOX_ASSERT_THROW(
+      listPipelineIds(nodeTraceDir, fs), "Failed to list pipeline IDs");
+}
+
 TEST_F(TraceUtilTest, getDriverIds) {
   const auto rootDir = TempDirectoryPath::create();
   const auto rootPath = rootDir->getPath();
@@ -161,7 +206,6 @@ TEST_F(TraceUtilTest, getDriverIds) {
   fs->mkdir(nodeTraceDir);
   const uint32_t pipelineId = 1;
   fs->mkdir(trace::getPipelineTraceDirectory(nodeTraceDir, pipelineId));
-  ASSERT_EQ(getNumDrivers(nodeTraceDir, pipelineId, fs), 0);
   ASSERT_TRUE(listDriverIds(nodeTraceDir, pipelineId, fs).empty());
   // create 3 drivers.
   const uint32_t driverId1 = 1;
@@ -170,7 +214,6 @@ TEST_F(TraceUtilTest, getDriverIds) {
   fs->mkdir(trace::getOpTraceDirectory(nodeTraceDir, pipelineId, driverId2));
   const uint32_t driverId3 = 3;
   fs->mkdir(trace::getOpTraceDirectory(nodeTraceDir, pipelineId, driverId3));
-  ASSERT_EQ(getNumDrivers(nodeTraceDir, pipelineId, fs), 3);
   auto driverIds = listDriverIds(nodeTraceDir, pipelineId, fs);
   ASSERT_EQ(driverIds.size(), 3);
   std::sort(driverIds.begin(), driverIds.end());
@@ -180,7 +223,47 @@ TEST_F(TraceUtilTest, getDriverIds) {
   // Bad driver id.
   const std::string BadDriverId = "badDriverId";
   fs->mkdir(fmt::format("{}/{}/{}", nodeTraceDir, pipelineId, BadDriverId));
-  ASSERT_ANY_THROW(getNumDrivers(nodeTraceDir, pipelineId, fs));
   ASSERT_ANY_THROW(listDriverIds(nodeTraceDir, pipelineId, fs));
+  ASSERT_EQ(std::vector<uint32_t>({1, 2, 4}), extractDriverIds("1,2,4"));
+  ASSERT_TRUE(extractDriverIds("").empty());
+  ASSERT_NE(std::vector<uint32_t>({1, 2}), extractDriverIds("1,2,4"));
+}
+
+TEST_F(TraceUtilTest, createTraceDirectoryTest) {
+  auto tmpRootDir = exec::test::TempDirectoryPath::create();
+  auto tmpTraceDir = fmt::format(
+      "{}{}/trace",
+      tests::utils::FaultyFileSystem::scheme(),
+      tmpRootDir->getPath());
+  auto fs = std::dynamic_pointer_cast<tests::utils::FaultyFileSystem>(
+      filesystems::getFileSystem(tmpTraceDir, nullptr));
+
+  filesystems::DirectoryOptions expectedOptions;
+  constexpr auto traceDirConfig = "dummy.value=123";
+  expectedOptions.values.emplace(
+      filesystems::DirectoryOptions::kMakeDirectoryConfig.toString(),
+      traceDirConfig);
+
+  bool createdTraceDir = false;
+  tests::utils::FileSystemFaultInjectionHook hook = [&](auto* op) {
+    auto mkdirOp =
+        static_cast<tests::utils::FaultFileSystemMkdirOperation*>(op);
+    if (mkdirOp->path == fmt::format("{}/trace", tmpRootDir->getPath())) {
+      createdTraceDir = true;
+      auto it = mkdirOp->options.values.find(
+          filesystems::DirectoryOptions::kMakeDirectoryConfig.toString());
+      EXPECT_TRUE(it != mkdirOp->options.values.end());
+      EXPECT_EQ(it->second, traceDirConfig);
+    }
+    return;
+  };
+  fs->setFilesystemInjectionHook(hook);
+
+  trace::createTraceDirectory(tmpTraceDir, traceDirConfig);
+  // Check that injection hook was called.
+  EXPECT_TRUE(createdTraceDir);
+  EXPECT_TRUE(fs->exists(tmpTraceDir));
+  fs->rmdir(tmpTraceDir);
+  EXPECT_FALSE(fs->exists(tmpTraceDir));
 }
 } // namespace facebook::velox::exec::trace::test
