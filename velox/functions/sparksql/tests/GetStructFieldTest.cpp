@@ -16,8 +16,8 @@
 #include <gtest/gtest.h>
 #include <optional>
 
+#include "velox/common/base/tests/GTestUtils.h"
 #include "velox/functions/sparksql/tests/SparkFunctionBaseTest.h"
-#include "velox/vector/tests/TestingDictionaryFunction.h"
 #include "velox/vector/tests/utils/VectorTestBase.h"
 
 using namespace facebook::velox::test;
@@ -37,81 +37,83 @@ class GetStructFieldTest : public SparkFunctionBaseTest {
     auto resultType = expected->type();
     auto expr = std::make_shared<const core::CallTypedExpr>(
         resultType, std::move(inputs), "get_struct_field");
+
+    // Input is flat.
     auto result = evaluate(expr, makeRowVector({input}));
     ::facebook::velox::test::assertEqualVectors(expected, result);
+
+    // Input is dictionary or constant encoding.
+    testEncodings(expr, {input}, expected);
   }
 };
 
 TEST_F(GetStructFieldTest, simpleType) {
-  auto col0 = makeFlatVector<int32_t>({1, 2});
-  auto col1 = makeFlatVector<std::string>({"hello", "world"});
-  auto col2 = makeNullableFlatVector<int32_t>({std::nullopt, 12});
-  auto data = makeRowVector({col0, col1, col2});
+  auto colInt = makeFlatVector<int32_t>({1, 2, 3, 4});
+  auto colString = makeNullableFlatVector<std::string>(
+      {"hello", "world", std::nullopt, "hi"});
+  auto colIntWithNull =
+      makeNullableFlatVector<int32_t>({11, std::nullopt, 13, 14});
+  auto data = makeRowVector({colInt, colString, colIntWithNull});
 
   // Get int field.
-  testGetStructField(data, 0, col0);
+  testGetStructField(data, 0, colInt);
 
   // Get string field.
-  testGetStructField(data, 1, col1);
+  testGetStructField(data, 1, colString);
 
   // Get int field with null.
-  testGetStructField(data, 2, col2);
+  testGetStructField(data, 2, colIntWithNull);
 }
 
 TEST_F(GetStructFieldTest, complexType) {
-  auto col0 = makeArrayVector<int32_t>({{1, 2}, {3, 4}});
-  auto col1 = makeMapVector<std::string, int32_t>(
-      {{{"a", 0}, {"b", 1}}, {{"c", 3}, {"d", 4}}});
-  auto col2 = makeRowVector(
-      {makeArrayVector<int32_t>(
-           {{100, 101, 102}, {200, 201, 202}, {300, 301, 302}}),
-       makeFlatVector<std::string>({"a", "b", "c"})});
-  auto data = makeRowVector({col0, col1, col2});
-
-  // Get array field.
-  testGetStructField(data, 0, col0);
-
-  // Get map field.
-  testGetStructField(data, 1, col1);
-
-  // Get row field.
-  testGetStructField(data, 2, col2);
-}
-
-TEST_F(GetStructFieldTest, dictionaryEncodedElementsInFlat) {
-  // Verify that get_struct_field properly handles an input where the top level
-  // vector has a dictionary layer wrapped.
-  exec::registerVectorFunction(
-      "add_dict",
-      TestingDictionaryFunction::signatures(),
-      std::make_unique<TestingDictionaryFunction>(1));
-
-  auto col0 = makeNullableFlatVector<int32_t>({1, std::nullopt, 2, 3});
-  auto col1 = makeNullableFlatVector<std::string>(
-      {"hello", "world", std::nullopt, "hi"});
-  auto col2 = makeNullableArrayVector<int32_t>(
+  auto colArray = makeNullableArrayVector<int32_t>(
       {{1, 2, std::nullopt},
        {3, std::nullopt, 4},
        {5, std::nullopt, std::nullopt},
        {6, 7, 8}});
-  auto data = makeRowVector({col0, col1, col2});
-  auto wrappedData = evaluate("add_dict(c0)", makeRowVector({data}));
+  auto colMap = makeMapVector<std::string, int32_t>(
+      {{{"a", 0}, {"b", 1}},
+       {{"c", 3}, {"d", 4}},
+       {{"e", 5}, {"f", 6}},
+       {{"g", 7}, {"h", 8}}});
+  auto colRow = makeRowVector(
+      {makeNullableArrayVector<int32_t>(
+           {{100, 101, std::nullopt},
+            {std::nullopt},
+            {200, std::nullopt, 202},
+            {300, 301, 302}}),
+       makeNullableFlatVector<std::string>({"a", "b", std::nullopt, "c"})});
+  auto data = makeRowVector({colArray, colMap, colRow});
 
-  auto expectedCol0 =
-      makeNullableFlatVector<int32_t>({3, 2, std::nullopt, std::nullopt});
-  testGetStructField(wrappedData, 0, expectedCol0);
+  // Get array field.
+  testGetStructField(data, 0, colArray);
 
-  auto expectedCol1 = makeNullableFlatVector<std::string>(
-      {"hi", std::nullopt, "world", std::nullopt});
-  testGetStructField(wrappedData, 1, expectedCol1);
+  // Get map field.
+  testGetStructField(data, 1, colMap);
 
-  auto expectedCol2 = makeNullableArrayVector<int32_t>({
-      {{6, 7, 8}},
-      {{5, std::nullopt, std::nullopt}},
-      {{3, std::nullopt, 4}},
-      std::nullopt,
-  });
-  testGetStructField(wrappedData, 2, expectedCol2);
+  // Get row field.
+  testGetStructField(data, 2, colRow);
+}
+
+TEST_F(GetStructFieldTest, invalidOrdinal) {
+  auto colInt = makeFlatVector<int32_t>({1, 2, 3, 4});
+  auto colString = makeNullableFlatVector<std::string>(
+      {"hello", "world", std::nullopt, "hi"});
+  auto colIntWithNull =
+      makeNullableFlatVector<int32_t>({11, std::nullopt, 13, 14});
+  auto data = makeRowVector({colInt, colString, colIntWithNull});
+
+  // Get int field.
+  VELOX_ASSERT_THROW(
+      testGetStructField(data, -1, colInt),
+      "Invalid ordinal. Should be greater than 0.");
+
+  // Get string field.
+  VELOX_ASSERT_THROW(
+      testGetStructField(data, 4, colString),
+      fmt::format(
+          "Invalid ordinal. Should be small than the children size of input row vector {}.",
+          3));
 }
 
 } // namespace
