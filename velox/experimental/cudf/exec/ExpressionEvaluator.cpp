@@ -132,6 +132,30 @@ cudf::ast::expression const& create_ast_tree(
         inputRowSchema,
         precompute_instructions);
     return tree.push(operation{unary_ops.at(name), op1});
+  } else if (name == "between") {
+    VELOX_CHECK_EQ(expr->inputs().size(), 3);
+    auto const& op1 = create_ast_tree(
+        expr->inputs()[0],
+        tree,
+        scalars,
+        inputRowSchema,
+        precompute_instructions);
+    auto const& op2 = create_ast_tree(
+        expr->inputs()[1],
+        tree,
+        scalars,
+        inputRowSchema,
+        precompute_instructions);
+    auto const& op3 = create_ast_tree(
+        expr->inputs()[2],
+        tree,
+        scalars,
+        inputRowSchema,
+        precompute_instructions);
+    // construct between(op2, op3) using >= and <=
+    auto const& op4 = tree.push(operation{op::GREATER_EQUAL, op1, op2});
+    auto const& op5 = tree.push(operation{op::LESS_EQUAL, op1, op3});
+    return tree.push(operation{op::NULL_LOGICAL_AND, op4, op5});
   } else if (name == "cast") {
     VELOX_CHECK_EQ(expr->inputs().size(), 1);
     auto const& op1 = create_ast_tree(
@@ -267,6 +291,7 @@ cudf::ast::expression const& create_ast_tree(
     VELOX_CHECK(column_index != -1, "Field not found, " + name);
     return tree.push(cudf::ast::column_reference(column_index));
   } else {
+    std::cerr << "Unsupported expression: " << expr->toString() << std::endl;
     VELOX_FAIL("Unsupported expression: " + name);
   }
 }

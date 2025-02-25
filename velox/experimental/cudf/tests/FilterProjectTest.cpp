@@ -244,6 +244,17 @@ class CudfFilterProjectTest : public OperatorTestBase {
     runTest(plan, "SELECT NOT (c0 = 1) AS result FROM tmp");
   }
 
+  void testBetweenOperation(const std::vector<RowVectorPtr>& input) {
+    // Create a plan with a BETWEEN operation
+    auto plan = PlanBuilder()
+                    .values(input)
+                    .project({"c0 BETWEEN 1 AND 100 AS result"})
+                    .planNode();
+
+    // Run the test
+    runTest(plan, "SELECT c0 BETWEEN 1 AND 100 AS result FROM tmp");
+  }
+
   void runTest(core::PlanNodePtr planNode, const std::string& duckDbSql) {
     SCOPED_TRACE("run without spilling");
     assertQuery(planNode, duckDbSql);
@@ -416,6 +427,14 @@ TEST_F(CudfFilterProjectTest, notOperation) {
   createDuckDbTable(vectors);
 
   testNotOperation(vectors);
+}
+
+TEST_F(CudfFilterProjectTest, betweenOperation) {
+  vector_size_t batchSize = 1000;
+  auto vectors = makeVectors(rowType_, 2, batchSize);
+  createDuckDbTable(vectors);
+
+  testBetweenOperation(vectors);
 }
 
 } // namespace
