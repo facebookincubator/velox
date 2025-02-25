@@ -572,7 +572,12 @@ RowVectorPtr CudfHashAggregation::getOutput() {
   cudf::detail::join_streams(input_streams, stream);
   auto tbl = concatenateTables(std::move(cudf_tables), stream);
 
+  // Release input data after synchronizing
+  stream.synchronize();
+  input_streams.clear();
   cudf_tables.clear();
+
+  // Release input data
   inputs_.clear();
 
   if (noMoreInput_) {
