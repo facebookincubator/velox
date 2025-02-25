@@ -15,9 +15,9 @@
  */
 #pragma once
 
-#include <experimental/cudf/vector/CudfVector.h>
 #include "velox/exec/GroupingSet.h"
 #include "velox/exec/Operator.h"
+#include "velox/experimental/cudf/vector/CudfVector.h"
 
 #include <cudf/groupby.hpp>
 
@@ -25,10 +25,41 @@ namespace facebook::velox::cudf_velox {
 
 class CudfHashAggregation : public exec::Operator {
  public:
+  struct Aggregator {
+    core::AggregationNode::Step step;
+    bool is_global;
+    cudf::aggregation::Kind kind;
+    uint32_t inputIndex;
+
+    virtual void addGroupbyRequest(
+        cudf::table_view const& tbl,
+        std::vector<cudf::groupby::aggregation_request>& requests) = 0;
+
+    virtual std::unique_ptr<cudf::column> doReduce(
+        cudf::table_view const& input,
+        TypePtr const& output_type,
+        rmm::cuda_stream_view stream) = 0;
+
+    virtual std::unique_ptr<cudf::column> makeOutputColumn(
+        std::vector<cudf::groupby::aggregation_result>& results,
+        rmm::cuda_stream_view stream) = 0;
+
+   protected:
+    Aggregator(
+        core::AggregationNode::Step step,
+        cudf::aggregation::Kind kind,
+        uint32_t inputIndex,
+        bool is_global)
+        : step(step),
+          is_global(is_global),
+          kind(kind),
+          inputIndex(inputIndex) {}
+  };
+
   CudfHashAggregation(
       int32_t operatorId,
       exec::DriverCtx* driverCtx,
-      const std::shared_ptr<const core::AggregationNode>& aggregationNode);
+      std::shared_ptr<const core::AggregationNode> const& aggregationNode);
 
   void initialize() override;
 
@@ -47,12 +78,6 @@ class CudfHashAggregation : public exec::Operator {
   }
 
   bool isFinished() override;
-
-  // TODO: It'll be a long while before we can reclaim memory from cudf.
-  // void reclaim(uint64_t targetBytes, memory::MemoryReclaimer::Stats& stats)
-  //     override;
-
-  void close() override;
 
  private:
   // Setups the projections for accessing grouping keys stored in grouping
@@ -79,6 +104,7 @@ class CudfHashAggregation : public exec::Operator {
   std::vector<column_index_t> groupingKeyOutputChannels_;
 
   std::shared_ptr<const core::AggregationNode> aggregationNode_;
+  std::vector<std::unique_ptr<Aggregator>> aggregators_;
 
   // Partial aggregation is the first phase of aggregation. e.g. count(*) when
   // in partial phase will do a count_agg but in the final phase will do a sum
@@ -90,14 +116,11 @@ class CudfHashAggregation : public exec::Operator {
   // aggregations
   const bool isDistinct_;
 
-  bool newDistincts_ = false;
   bool finished_ = false;
 
   size_t numAggregates_;
   bool ignoreNullKeys_;
 
-  std::map<uint32_t, std::vector<std::pair<cudf::aggregation::Kind, uint32_t>>>
-      requests_map_;
   std::vector<cudf_velox::CudfVectorPtr> inputs_;
 };
 
