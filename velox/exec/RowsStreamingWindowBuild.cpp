@@ -125,7 +125,9 @@ std::shared_ptr<WindowPartition> RowsStreamingWindowBuild::nextPartition() {
 bool RowsStreamingWindowBuild::hasNextPartition() {
   // Checks if there is a window partition that is either incomplete or
   // completed but has unconsumed rows.
-  for (const auto& windowPartition : windowPartitions_) {
+  for (auto it = windowPartitions_.rbegin(); it != windowPartitions_.rend();
+       ++it) {
+    const auto& windowPartition = *it;
     if (!windowPartition->complete() || windowPartition->numRows() > 0) {
       return true;
     }
