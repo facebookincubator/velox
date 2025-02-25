@@ -51,6 +51,9 @@ using namespace facebook::velox;
     void addGroupbyRequest(                                                   \
         cudf::table_view const& tbl,                                          \
         std::vector<cudf::groupby::aggregation_request>& requests) override { \
+      VELOX_CHECK(                                                            \
+          constant == nullptr,                                                \
+          #Name "Aggregator does not yet support constant input");            \
       auto& request = requests.emplace_back();                                \
       output_idx = requests.size() - 1;                                       \
       request.values = tbl.column(inputIndex);                                \
@@ -61,9 +64,6 @@ using namespace facebook::velox;
     std::unique_ptr<cudf::column> makeOutputColumn(                           \
         std::vector<cudf::groupby::aggregation_result>& results,              \
         rmm::cuda_stream_view stream) override {                              \
-      VELOX_CHECK(                                                            \
-          constant == nullptr,                                                \
-          #Name "Aggregator does not yet support constant input");            \
       return std::move(results[output_idx].results[0]);                       \
     }                                                                         \
                                                                               \
