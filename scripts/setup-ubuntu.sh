@@ -105,7 +105,7 @@ function install_build_prerequisites {
   fi
   source ${PYTHON_VENV}/bin/activate;
   # Install to /usr/local to make it available to all users.
-  ${SUDO} pip3 install cmake==3.28.3
+  ${SUDO} pip3 install cmake==3.30.4
 
   install_gcc11_if_needed
 

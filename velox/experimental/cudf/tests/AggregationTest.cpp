@@ -14,29 +14,10 @@
  * limitations under the License.
  */
 
-#include <fmt/format.h>
-#include <folly/Math.h>
-#include <re2/re2.h>
-
-#include "folly/experimental/EventCount.h"
-#include "velox/common/base/tests/GTestUtils.h"
-#include "velox/common/file/FileSystems.h"
-#include "velox/common/memory/SharedArbitrator.h"
-#include "velox/common/memory/tests/SharedArbitratorTestUtil.h"
-#include "velox/common/testutil/TestValue.h"
 #include "velox/dwio/common/tests/utils/BatchMaker.h"
-#include "velox/exec/Aggregate.h"
-#include "velox/exec/GroupingSet.h"
-#include "velox/exec/PlanNodeStats.h"
-#include "velox/exec/PrefixSort.h"
-#include "velox/exec/Values.h"
-#include "velox/exec/prefixsort/PrefixSortEncoder.h"
-#include "velox/exec/tests/utils/ArbitratorTestUtil.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/OperatorTestBase.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
-#include "velox/exec/tests/utils/SumNonPODAggregate.h"
-#include "velox/exec/tests/utils/TempDirectoryPath.h"
 #include "velox/experimental/cudf/exec/ToCudf.h"
 
 namespace facebook::velox::exec::test {

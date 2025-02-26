@@ -458,8 +458,6 @@ CudfHashAggregation::CudfHashAggregation(
 void CudfHashAggregation::initialize() {
   Operator::initialize();
 
-  VELOX_CHECK(pool()->trackUsage());
-
   auto const& inputType = aggregationNode_->sources()[0]->outputType();
   ignoreNullKeys_ = aggregationNode_->ignoreNullKeys();
   setupGroupingKeyChannelProjections(
