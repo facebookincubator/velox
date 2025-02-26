@@ -248,6 +248,8 @@ void CudfFilterProject::addInput(RowVectorPtr input) {
 }
 
 RowVectorPtr CudfFilterProject::getOutput() {
+  VELOX_NVTX_OPERATOR_FUNC_RANGE();
+
   if (allInputProcessed()) {
     return nullptr;
   }

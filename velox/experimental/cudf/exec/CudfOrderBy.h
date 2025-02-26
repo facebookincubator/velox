@@ -63,6 +63,8 @@ class CudfOrderBy : public exec::Operator {
   std::vector<cudf::null_order> null_order_;
   bool finished_{false};
   uint32_t maxOutputRows_;
+
+  nvtx3::color color_{nvtx3::rgb{64, 224, 208}}; // Turquoise
 };
 
 } // namespace facebook::velox::cudf_velox

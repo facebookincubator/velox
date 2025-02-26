@@ -17,6 +17,7 @@
 
 #include "velox/exec/GroupingSet.h"
 #include "velox/exec/Operator.h"
+#include "velox/experimental/cudf/exec/NvtxHelper.h"
 #include "velox/experimental/cudf/vector/CudfVector.h"
 
 #include <cudf/groupby.hpp>
@@ -125,6 +126,8 @@ class CudfHashAggregation : public exec::Operator {
   bool ignoreNullKeys_;
 
   std::vector<cudf_velox::CudfVectorPtr> inputs_;
+
+  nvtx3::color color_{nvtx3::rgb{34, 139, 34}}; // Forest Green
 };
 
 } // namespace facebook::velox::cudf_velox

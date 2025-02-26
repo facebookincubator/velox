@@ -124,7 +124,7 @@ void CudfHashJoinBuild::noMoreInput() {
   if (cudfDebugEnabled()) {
     std::cout << "Calling CudfHashJoinBuild::noMoreInput" << std::endl;
   }
-  NVTX3_FUNC_RANGE();
+  VELOX_NVTX_OPERATOR_FUNC_RANGE();
   Operator::noMoreInput();
   std::vector<ContinuePromise> promises;
   std::vector<std::shared_ptr<exec::Driver>> peers;
@@ -245,7 +245,8 @@ RowVectorPtr CudfHashJoinProbe::getOutput() {
   if (cudfDebugEnabled()) {
     std::cout << "Calling CudfHashJoinProbe::getOutput" << std::endl;
   }
-  NVTX3_FUNC_RANGE();
+  VELOX_NVTX_OPERATOR_FUNC_RANGE();
+
   if (!input_) {
     return nullptr;
   }

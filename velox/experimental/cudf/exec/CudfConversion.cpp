@@ -35,7 +35,7 @@ namespace {
 RowVectorPtr mergeRowVectors(
     const std::vector<RowVectorPtr>& results,
     velox::memory::MemoryPool* pool) {
-  NVTX3_FUNC_RANGE();
+  VELOX_NVTX_FUNC_RANGE();
   auto totalCount = 0;
   for (const auto& result : results) {
     totalCount += result->size();
@@ -160,7 +160,7 @@ void CudfToVelox::addInput(RowVectorPtr input) {
 }
 
 RowVectorPtr CudfToVelox::getOutput() {
-  NVTX3_FUNC_RANGE();
+  VELOX_NVTX_OPERATOR_FUNC_RANGE();
   if (finished_ || inputs_.empty()) {
     finished_ = noMoreInput_ && inputs_.empty();
     return nullptr;

@@ -612,6 +612,8 @@ RowVectorPtr CudfHashAggregation::getDistinctKeys(
 }
 
 RowVectorPtr CudfHashAggregation::getOutput() {
+  VELOX_NVTX_OPERATOR_FUNC_RANGE();
+
   if (finished_) {
     return nullptr;
   }

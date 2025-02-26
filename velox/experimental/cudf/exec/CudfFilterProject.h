@@ -21,6 +21,7 @@
 #include "velox/exec/Driver.h"
 #include "velox/exec/FilterProject.h"
 #include "velox/exec/Operator.h"
+#include "velox/experimental/cudf/exec/NvtxHelper.h"
 #include "velox/experimental/cudf/vector/CudfVector.h"
 #include "velox/expression/Expr.h"
 #include "velox/vector/ComplexVector.h"
@@ -78,6 +79,8 @@ class CudfFilterProject : public exec::Operator {
 
   std::vector<velox::exec::IdentityProjection> resultProjections_;
   std::vector<velox::exec::IdentityProjection> identityProjections_;
+
+  nvtx3::color color_{nvtx3::rgb{220, 20, 60}}; // Crimson
 };
 
 } // namespace facebook::velox::cudf_velox
