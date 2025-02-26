@@ -159,9 +159,9 @@ Array Functions
 
         SELECT arrays_zip(ARRAY[1, 2], ARRAY['1b', null, '3b']); -- [ROW(1, '1b'), ROW(2, null), ROW(null, '3b')]
 
-.. spark:function:: concat(array(E), array(E1), ..., array(En)) -> array(E, E1, ..., En)
+.. spark:function:: concat(array1, array2, ..., arrayN) -> array
 
-    Returns the concatenation of array(E), array(E1), ..., array(En). ::
+    Concatenates the arrays ``array1``, ``array2``, ..., ``arrayN``. This function provides the same functionality as the SQL-standard concatenation operator (``||``). ::
 
         SELECT concat(array(1, 2, 3), array(4, 5), array(6)); -- [1, 2, 3, 4, 5, 6]
 

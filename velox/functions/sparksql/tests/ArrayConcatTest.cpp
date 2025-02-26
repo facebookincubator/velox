@@ -32,7 +32,7 @@ class ArrayConcatTest : public SparkFunctionBaseTest {
   }
 };
 
-/// Concatenate two integer arrays.
+// Concatenate two integer arrays.
 TEST_F(ArrayConcatTest, intArray) {
   const auto intArray = makeArrayVector<int64_t>(
       {{1, 2, 3, 4}, {3, 4, 5}, {7, 8, 9}, {10, 20, 30}});
@@ -56,7 +56,7 @@ TEST_F(ArrayConcatTest, intArray) {
   testExpression("concat(c0, c1)", {emptyArray, intArray}, expected);
 }
 
-/// Concatenate two integer arrays with null.
+// Concatenate two integer arrays with null.
 TEST_F(ArrayConcatTest, nullArray) {
   const auto intArray =
       makeArrayVector<int64_t>({{1, 2, 3, 4}, {7, 8, 9}, {10, 20, 30}});
@@ -116,7 +116,7 @@ TEST_F(ArrayConcatTest, arity) {
       "concat(c0, c1, c2, c3)", {array1, array4, array3, array2}, expected);
 }
 
-/// Concatenate complex types.
+// Concatenate complex types.
 TEST_F(ArrayConcatTest, complexTypes) {
   auto baseVector = makeArrayVector<int64_t>(
       {{1, 1}, {2, 2}, {3, 3}, {4, 4}, {5, 5}, {6, 6}});
