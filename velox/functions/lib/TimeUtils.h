@@ -157,22 +157,6 @@ adjustEpoch(int64_t seconds, int64_t intervalSeconds) {
   return Timestamp(truncatedSeconds, 0);
 }
 
-/// Truncates a timestamp to a specified time unit.
-/// For example:
-///   date_trunc('hour', timestamp '2020-05-26 11:30:00') -> '2020-05-26 11:00:00'
-///   date_trunc('day', timestamp '2020-05-26 11:30:00') -> '2020-05-26 00:00:00'
-///   date_trunc('month', timestamp '2020-05-26 11:30:00') -> '2020-05-01 00:00:00'
-///
-/// @param format The time unit to truncate to. Valid values include:
-///   'microsecond', 'millisecond', 'second', 'minute', 'hour', 'day', 
-///   'week', 'month', 'quarter', 'year'
-/// @param timestamp The timestamp to truncate
-/// @return The truncated timestamp, or null if the format is invalid
-template <typename T>
-struct DateTruncFunction {
-  // ... existing code ...
-};
-
 // Returns timestamp truncated to the specified unit.
 FOLLY_ALWAYS_INLINE Timestamp truncateTimestamp(
     const Timestamp& timestamp,
