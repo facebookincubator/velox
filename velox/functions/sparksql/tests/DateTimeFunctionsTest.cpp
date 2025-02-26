@@ -1126,5 +1126,74 @@ TEST_F(DateTimeFunctionsTest, timestampToMillis) {
   EXPECT_EQ(timestampToMillis("-292275055-05-16 16:47:04.192"), kMinBigint);
 }
 
+TEST_F(DateTimeFunctionsTest, monthsBetween) {
+  const auto monthsBetween1 =
+      [&](const StringView& date1, const StringView& date2, bool roundOff) {
+        return evaluateOnce<double>(
+            "months_between(c0,c1,c2)",
+            std::make_optional(parseTimestamp(date1)),
+            std::make_optional(parseTimestamp(date2)),
+            std::make_optional(roundOff));
+      };
+  EXPECT_EQ(
+      monthsBetween1("1970-05-01 00:00:01", "1970-06-01 12:00:01", false),
+      -1.0);
+  EXPECT_EQ(
+      monthsBetween1("1970-07-01 00:00:01", "1970-06-01 12:00:01", false), 1.0);
+  EXPECT_EQ(
+      monthsBetween1("1970-05-31 00:00:01", "1970-06-30 12:00:01", false),
+      -1.0);
+  EXPECT_EQ(
+      monthsBetween1("1970-07-31 00:00:01", "1970-06-30 12:00:01", false), 1.0);
+  EXPECT_EQ(
+      monthsBetween1("1970-07-31 00:00:01", "1970-06-30 12:00:01", true), 1.0);
+  EXPECT_EQ(
+      monthsBetween1("1973-05-10 10:00:00", "1972-06-01 12:00:00", false),
+      11.28763440860215);
+  EXPECT_EQ(
+      monthsBetween1("1973-05-10 10:00:00", "1972-06-01 12:00:00", true),
+      11.28763441);
+
+  const auto monthsBetween2 = [&](const StringView& date1,
+                                  const StringView& date2,
+                                  bool roundOff,
+                                  std::optional<StringView> timezone) {
+    return evaluateOnce<double>(
+        "months_between(c0,c1,c2,c3)",
+        std::make_optional(parseTimestamp(date1)),
+        std::make_optional(parseTimestamp(date2)),
+        std::make_optional(roundOff),
+        timezone);
+  };
+  EXPECT_EQ(
+      monthsBetween2(
+          "1970-05-01 00:00:01", "1970-06-01 12:00:01", true, "Asia/Shanghai"),
+      -1.0);
+  EXPECT_EQ(
+      monthsBetween2(
+          "1970-07-01 00:00:01", "1970-06-01 12:00:01", true, "Asia/Shanghai"),
+      1.0);
+  EXPECT_EQ(
+      monthsBetween2(
+          "1970-05-31 00:00:01", "1970-06-30 12:00:01", true, "Asia/Shanghai"),
+      -1.0);
+  EXPECT_EQ(
+      monthsBetween2(
+          "1970-07-31 00:00:01", "1970-06-30 12:00:01", true, "Pacific/Apia"),
+      1.0);
+  EXPECT_EQ(
+      monthsBetween2(
+          "1973-05-10 10:00:00", "1972-06-01 12:00:00", true, "Asia/Shanghai"),
+      11.28763441);
+  VELOX_ASSERT_THROW(
+      monthsBetween2(
+          "1973-05-10 10:00:00", "1972-06-01 12:00:00", true, "Asia/Nanjing"),
+      "Unknown time zone: 'Asia/Nanjing'");
+  EXPECT_EQ(
+      monthsBetween2(
+          "1973-05-10 10:00:00", "1972-06-01 12:00:00", true, std::nullopt),
+      std::nullopt);
+}
+
 } // namespace
 } // namespace facebook::velox::functions::sparksql::test
