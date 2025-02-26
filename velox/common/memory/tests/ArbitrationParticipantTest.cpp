@@ -21,8 +21,8 @@
 #include <deque>
 #include <vector>
 
-#include "folly/experimental/EventCount.h"
 #include "folly/futures/Barrier.h"
+#include "folly/synchronization/EventCount.h"
 
 #include "gmock/gmock-matchers.h"
 #include "velox/common/base/SuccinctPrinter.h"
