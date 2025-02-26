@@ -39,6 +39,7 @@ CudfOrderBy::CudfOrderBy(
           operatorId,
           orderByNode->id(),
           "CudfOrderBy"),
+      NvtxHelper(nvtx3::rgb{64, 224, 208}, operatorId), // Turquoise
       orderByNode_(orderByNode) {
   maxOutputRows_ = outputBatchRows(std::nullopt);
   sort_keys_.reserve(orderByNode->sortingKeys().size());

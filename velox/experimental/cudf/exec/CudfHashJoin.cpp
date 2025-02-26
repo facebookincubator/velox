@@ -91,6 +91,7 @@ CudfHashJoinBuild::CudfHashJoinBuild(
           operatorId,
           joinNode->id(),
           "CudfHashJoinBuild"),
+      NvtxHelper(nvtx3::rgb{65, 105, 225}, operatorId), // Royal Blue
       joinNode_(joinNode) {
   if (cudfDebugEnabled()) {
     std::cout << "CudfHashJoinBuild constructor" << std::endl;
@@ -227,6 +228,7 @@ CudfHashJoinProbe::CudfHashJoinProbe(
           operatorId,
           joinNode->id(),
           "CudfHashJoinProbe"),
+      NvtxHelper(nvtx3::rgb{0, 128, 128}, operatorId), // Teal
       joinNode_(joinNode) {
   if (cudfDebugEnabled()) {
     std::cout << "CudfHashJoinProbe constructor" << std::endl;

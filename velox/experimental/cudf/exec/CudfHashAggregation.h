@@ -24,7 +24,7 @@
 
 namespace facebook::velox::cudf_velox {
 
-class CudfHashAggregation : public exec::Operator {
+class CudfHashAggregation : public exec::Operator, public NvtxHelper {
  public:
   struct Aggregator {
     core::AggregationNode::Step step;
@@ -126,8 +126,6 @@ class CudfHashAggregation : public exec::Operator {
   bool ignoreNullKeys_;
 
   std::vector<cudf_velox::CudfVectorPtr> inputs_;
-
-  nvtx3::color color_{nvtx3::rgb{34, 139, 34}}; // Forest Green
 };
 
 } // namespace facebook::velox::cudf_velox

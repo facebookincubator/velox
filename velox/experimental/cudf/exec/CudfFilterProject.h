@@ -31,7 +31,7 @@
 namespace facebook::velox::cudf_velox {
 
 // TODO: Does not support Filter yet.
-class CudfFilterProject : public exec::Operator {
+class CudfFilterProject : public exec::Operator, public NvtxHelper {
  public:
   CudfFilterProject(
       int32_t operatorId,
@@ -79,8 +79,6 @@ class CudfFilterProject : public exec::Operator {
 
   std::vector<velox::exec::IdentityProjection> resultProjections_;
   std::vector<velox::exec::IdentityProjection> identityProjections_;
-
-  nvtx3::color color_{nvtx3::rgb{220, 20, 60}}; // Crimson
 };
 
 } // namespace facebook::velox::cudf_velox

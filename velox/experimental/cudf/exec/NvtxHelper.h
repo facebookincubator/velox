@@ -17,16 +17,19 @@
 #pragma once
 
 #include <nvtx3/nvtx3.hpp>
+#include <optional>
 
 namespace facebook::velox::cudf_velox {
 
-// class NvtxHelper {
-//  public:
-//   NvtxHelper();
+class NvtxHelper {
+ public:
+  NvtxHelper();
+  NvtxHelper(nvtx3::color color, std::optional<int64_t> payload = std::nullopt)
+      : color_(color), payload_(payload) {}
 
-//  private:
-//   nvtx3::color color_;
-// };
+  nvtx3::color color_{nvtx3::rgb{125, 125, 125}}; // Gray
+  std::optional<int64_t> payload_{};
+};
 
 /**
  * @brief Tag type for libkvikio's NVTX domain.
@@ -37,11 +40,19 @@ struct velox_domain {
 
 using nvtx_registered_string_t = nvtx3::registered_string_in<velox_domain>;
 
-#define VELOX_NVTX_OPERATOR_FUNC_RANGE()                                    \
-  static nvtx_registered_string_t const nvtx3_func_name__{                  \
-      std::string(__func__) + " " + std::string(__PRETTY_FUNCTION__)};      \
-  static ::nvtx3::event_attributes const nvtx3_func_attr__{                 \
-      nvtx3_func_name__, this->color_, nvtx3::payload{this->operatorId()}}; \
+#define VELOX_NVTX_OPERATOR_FUNC_RANGE()                                         \
+  static_assert(                                                                 \
+      std::is_base_of<NvtxHelper, std::remove_pointer<decltype(this)>::type>::   \
+          value,                                                                 \
+      "VELOX_NVTX_OPERATOR_FUNC_RANGE can only be used"                          \
+      " in Operators derived from NvtxHelper");                                  \
+  static nvtx_registered_string_t const nvtx3_func_name__{                       \
+      std::string(__func__) + " " + std::string(__PRETTY_FUNCTION__)};           \
+  static ::nvtx3::event_attributes const nvtx3_func_attr__{                    \
+      this->payload_.has_value() ?                                             \
+          ::nvtx3::event_attributes{nvtx3_func_name__, this->color_,           \
+                                   nvtx3::payload{this->payload_.value()}} :   \
+          ::nvtx3::event_attributes{nvtx3_func_name__, this->color_}}; \
   ::nvtx3::scoped_range_in<velox_domain> const nvtx3_range__{nvtx3_func_attr__};
 
 #define VELOX_NVTX_FUNC_RANGE()                                                \

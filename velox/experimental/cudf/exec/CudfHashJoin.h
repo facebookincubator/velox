@@ -46,7 +46,7 @@ class CudfHashJoinBridge : public exec::JoinBridge {
   std::optional<hash_type> hashObject_;
 };
 
-class CudfHashJoinBuild : public exec::Operator {
+class CudfHashJoinBuild : public exec::Operator, public NvtxHelper {
  public:
   CudfHashJoinBuild(
       int32_t operatorId,
@@ -69,11 +69,9 @@ class CudfHashJoinBuild : public exec::Operator {
   std::shared_ptr<const core::HashJoinNode> joinNode_;
   std::vector<CudfVectorPtr> inputs_;
   ContinueFuture future_{ContinueFuture::makeEmpty()};
-
-  nvtx3::color color_{nvtx3::rgb{65, 105, 225}}; // Royal Blue
 };
 
-class CudfHashJoinProbe : public exec::Operator {
+class CudfHashJoinProbe : public exec::Operator, public NvtxHelper {
  public:
   using hash_type = CudfHashJoinBridge::hash_type;
 
@@ -96,8 +94,6 @@ class CudfHashJoinProbe : public exec::Operator {
   std::shared_ptr<const core::HashJoinNode> joinNode_;
   std::optional<hash_type> hashObject_;
   bool finished_{false};
-
-  nvtx3::color color_{nvtx3::rgb{0, 128, 128}}; // Teal
 };
 
 class CudfHashJoinBridgeTranslator : public exec::Operator::PlanNodeTranslator {

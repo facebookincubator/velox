@@ -22,6 +22,7 @@
 
 #include <cudf/table/table.hpp>
 
+#include "velox/experimental/cudf/exec/NvtxHelper.h"
 #include "velox/experimental/cudf/vector/CudfVector.h"
 
 #include <deque>
@@ -30,7 +31,7 @@
 
 namespace facebook::velox::cudf_velox {
 
-class CudfFromVelox : public exec::Operator {
+class CudfFromVelox : public exec::Operator, public NvtxHelper {
  public:
   CudfFromVelox(
       int32_t operatorId,
@@ -60,10 +61,9 @@ class CudfFromVelox : public exec::Operator {
   std::vector<RowVectorPtr> inputs_;
   std::size_t current_output_size_ = 0;
   bool finished_ = false;
-  nvtx3::color color_{nvtx3::rgb{255, 140, 0}}; // Orange
 };
 
-class CudfToVelox : public exec::Operator {
+class CudfToVelox : public exec::Operator, public NvtxHelper {
  public:
   CudfToVelox(
       int32_t operatorId,
@@ -92,7 +92,6 @@ class CudfToVelox : public exec::Operator {
  private:
   std::deque<CudfVectorPtr> inputs_;
   bool finished_ = false;
-  nvtx3::color color_{nvtx3::rgb{148, 0, 211}}; // Purple
 };
 
 } // namespace facebook::velox::cudf_velox
