@@ -28,7 +28,7 @@
 #include "velox/experimental/cudf/exec/CudfHashJoin.h"
 #include "velox/experimental/cudf/exec/CudfOrderBy.h"
 #include "velox/experimental/cudf/exec/Utilities.h"
-
+#include "velox/experimental/cudf/exec/ExpressionEvaluator.h"
 #include <iostream>
 
 namespace facebook::velox::cudf_velox {
@@ -78,9 +78,11 @@ bool CompileState::compile() {
   };
 
   auto is_filter_project_supported = [](const exec::Operator* op) {
-    auto filter_project_op = dynamic_cast<const exec::FilterProject*>(op);
-    return filter_project_op != nullptr &&
-        !((filter_project_op->exprsAndProjection().hasFilter));
+    if (auto filter_project_op = dynamic_cast<const exec::FilterProject*>(op)) {
+      auto info = filter_project_op->exprsAndProjection();
+      return !info.hasFilter && ExpressionEvaluator::can_be_evaluated(info.exprs->exprs());
+    }
+    return false;
   };
 
   auto is_join_supported = [get_plan_node](const exec::Operator* op) {

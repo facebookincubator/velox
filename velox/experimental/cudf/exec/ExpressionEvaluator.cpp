@@ -146,6 +146,16 @@ const std::map<std::string, op> binary_ops = {
 
 const std::map<std::string, op> unary_ops = {{"not", op::NOT}};
 
+const std::unordered_set<std::string> supported_ops = {
+    "literal",
+    "between",
+    "cast",
+    "switch",
+    "year",
+    "length",
+    "substr",
+    "like"};
+
 struct AstContext {
   // All members are references
   cudf::ast::tree& tree;
@@ -154,6 +164,7 @@ struct AstContext {
   std::vector<PrecomputeInstruction>& precompute_instructions;
   cudf::ast::expression const& push_expr_to_tree(
       const std::shared_ptr<velox::exec::Expr>& expr);
+  static bool can_be_evaluated(const std::shared_ptr<velox::exec::Expr>& expr);
 };
 
 // Create tree from Expr
@@ -166,6 +177,15 @@ cudf::ast::expression const& create_ast_tree(
     std::vector<PrecomputeInstruction>& precompute_instructions) {
   AstContext context{tree, scalars, inputRowSchema, precompute_instructions};
   return context.push_expr_to_tree(expr);
+}
+
+bool AstContext::can_be_evaluated(
+    const std::shared_ptr<velox::exec::Expr>& expr) {
+  const auto& name = expr->name();
+  if (supported_ops.count(name) || binary_ops.count(name) || unary_ops.count(name)) {
+    return std::all_of(expr->inputs().begin(), expr->inputs().end(), can_be_evaluated);
+  }
+  return std::dynamic_pointer_cast<velox::exec::FieldReference>(expr) != nullptr;
 }
 
 cudf::ast::expression const& AstContext::push_expr_to_tree(
@@ -419,5 +439,10 @@ std::vector<std::unique_ptr<cudf::column>> ExpressionEvaluator::compute(
   }
   input_table_columns = ast_input_table->release();
   return columns;
+}
+
+bool ExpressionEvaluator::can_be_evaluated(
+    const std::vector<std::shared_ptr<velox::exec::Expr>>& exprs) {
+  return std::all_of(exprs.begin(), exprs.end(), AstContext::can_be_evaluated);
 }
 } // namespace facebook::velox::cudf_velox
