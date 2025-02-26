@@ -182,10 +182,13 @@ cudf::ast::expression const& create_ast_tree(
 bool AstContext::can_be_evaluated(
     const std::shared_ptr<velox::exec::Expr>& expr) {
   const auto& name = expr->name();
-  if (supported_ops.count(name) || binary_ops.count(name) || unary_ops.count(name)) {
-    return std::all_of(expr->inputs().begin(), expr->inputs().end(), can_be_evaluated);
+  if (supported_ops.count(name) || binary_ops.count(name) ||
+      unary_ops.count(name)) {
+    return std::all_of(
+        expr->inputs().begin(), expr->inputs().end(), can_be_evaluated);
   }
-  return std::dynamic_pointer_cast<velox::exec::FieldReference>(expr) != nullptr;
+  return std::dynamic_pointer_cast<velox::exec::FieldReference>(expr) !=
+      nullptr;
 }
 
 cudf::ast::expression const& AstContext::push_expr_to_tree(
