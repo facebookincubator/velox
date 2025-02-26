@@ -909,7 +909,7 @@ inline std::optional<DateTimeUnit> getDateUnit(
 inline std::optional<DateTimeUnit> getTimestampUnit(
     const StringView& unitString) {
   std::optional<DateTimeUnit> unit =
-      fromDateTimeUnitString(unitString, false /*throwIfInvalid*/);
+      fromDateTimeUnitString(unitString, /*throwIfInvalid=*/false);
   VELOX_USER_CHECK(
       !(unit.has_value() && unit.value() == DateTimeUnit::kMillisecond),
       "{} is not a valid TIMESTAMP field",
@@ -1057,7 +1057,7 @@ struct DateAddFunction : public TimestampWithTimezoneSupport<T> {
       const arg_type<Timestamp>* /*timestamp*/) {
     sessionTimeZone_ = getTimeZoneFromConfig(config);
     if (unitString != nullptr) {
-      unit_ = fromDateTimeUnitString(*unitString, false /*throwIfInvalid*/);
+      unit_ = fromDateTimeUnitString(*unitString, /*throwIfInvalid=*/false);
     }
   }
 
@@ -1079,7 +1079,7 @@ struct DateAddFunction : public TimestampWithTimezoneSupport<T> {
       const arg_type<Timestamp>& timestamp) {
     const auto unit = unit_.has_value()
         ? unit_.value()
-        : fromDateTimeUnitString(unitString, true /*throwIfInvalid*/).value();
+        : fromDateTimeUnitString(unitString, /*throwIfInvalid=*/true).value();
 
     if (value != (int32_t)value) {
       VELOX_UNSUPPORTED("integer overflow");
@@ -1119,7 +1119,7 @@ struct DateAddFunction : public TimestampWithTimezoneSupport<T> {
       const int64_t value,
       const arg_type<TimestampWithTimezone>& timestampWithTimezone) {
     const auto unit = unit_.value_or(
-        fromDateTimeUnitString(unitString, true /*throwIfInvalid*/).value());
+        fromDateTimeUnitString(unitString, /*throwIfInvalid=*/true).value());
 
     if (value != (int32_t)value) {
       VELOX_UNSUPPORTED("integer overflow");
@@ -1160,7 +1160,7 @@ struct DateDiffFunction : public TimestampWithTimezoneSupport<T> {
       const arg_type<Timestamp>* /*timestamp1*/,
       const arg_type<Timestamp>* /*timestamp2*/) {
     if (unitString != nullptr) {
-      unit_ = fromDateTimeUnitString(*unitString, false /*throwIfInvalid*/);
+      unit_ = fromDateTimeUnitString(*unitString, /*throwIfInvalid=*/false);
     }
 
     sessionTimeZone_ = getTimeZoneFromConfig(config);
@@ -1184,7 +1184,7 @@ struct DateDiffFunction : public TimestampWithTimezoneSupport<T> {
       const arg_type<TimestampWithTimezone>* /*timestampWithTimezone1*/,
       const arg_type<TimestampWithTimezone>* /*timestampWithTimezone2*/) {
     if (unitString != nullptr) {
-      unit_ = fromDateTimeUnitString(*unitString, false /*throwIfInvalid*/);
+      unit_ = fromDateTimeUnitString(*unitString, /*throwIfInvalid=*/false);
     }
   }
 
@@ -1194,7 +1194,7 @@ struct DateDiffFunction : public TimestampWithTimezoneSupport<T> {
       const arg_type<Timestamp>& timestamp1,
       const arg_type<Timestamp>& timestamp2) {
     const auto unit = unit_.value_or(
-        fromDateTimeUnitString(unitString, true /*throwIfInvalid*/).value());
+        fromDateTimeUnitString(unitString, /*throwIfInvalid=*/true).value());
 
     if (LIKELY(sessionTimeZone_ != nullptr)) {
       // sessionTimeZone not null means that the config
@@ -1236,7 +1236,7 @@ struct DateDiffFunction : public TimestampWithTimezoneSupport<T> {
       const arg_type<TimestampWithTimezone>& timestampWithTz1,
       const arg_type<TimestampWithTimezone>& timestampWithTz2) {
     const auto unit = unit_.value_or(
-        fromDateTimeUnitString(unitString, true /*throwIfInvalid*/).value());
+        fromDateTimeUnitString(unitString, /*throwIfInvalid=*/true).value());
 
     // Presto's behavior is to use the time zone of the first parameter to
     // perform the calculation. Note that always normalizing to UTC is not

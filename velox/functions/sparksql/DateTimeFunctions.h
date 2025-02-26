@@ -534,6 +534,15 @@ struct DateFromUnixDateFunction {
   }
 };
 
+/// Truncates a timestamp to a specified time unit.
+/// For example:
+///   date_trunc('hour', timestamp '2020-05-26 11:30:00') -> '2020-05-26 11:00:00'
+///   date_trunc('day', timestamp '2020-05-26 11:30:00') -> '2020-05-26 00:00:00'
+///   date_trunc('month', timestamp '2020-05-26 11:30:00') -> '2020-05-01 00:00:00'
+///
+/// @param format The time unit to truncate to
+/// @param timestamp The timestamp to truncate
+/// @return The truncated timestamp, or null if the format is invalid
 template <typename T>
 struct DateTruncFunction {
   VELOX_DEFINE_FUNCTION_TYPES(T);
@@ -550,7 +559,7 @@ struct DateTruncFunction {
       const arg_type<Varchar>& format,
       const arg_type<Timestamp>& timestamp) {
     std::optional<DateTimeUnit> unitOption =
-        fromDateTimeUnitString(format, false /*throwIfInvalid*/, true, true);
+        fromDateTimeUnitString(format, /*throwIfInvalid=*/false, true, true);
     // Return null if unit is illegal.
     if (!unitOption.has_value()) {
       return false;

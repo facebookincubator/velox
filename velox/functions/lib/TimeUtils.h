@@ -138,125 +138,11 @@ FOLLY_ALWAYS_INLINE std::optional<DateTimeUnit> fromDateTimeUnitString(
     const StringView& unitString,
     bool throwIfInvalid,
     bool allowMicro = false,
-    bool allowAbbreviated = false) {
-  const auto unit = boost::algorithm::to_lower_copy(unitString.str());
-
-  if (unit == "microsecond" && allowMicro) {
-    return DateTimeUnit::kMicrosecond;
-  }
-  if (unit == "millisecond") {
-    return DateTimeUnit::kMillisecond;
-  }
-  if (unit == "second") {
-    return DateTimeUnit::kSecond;
-  }
-  if (unit == "minute") {
-    return DateTimeUnit::kMinute;
-  }
-  if (unit == "hour") {
-    return DateTimeUnit::kHour;
-  }
-  if (unit == "day") {
-    return DateTimeUnit::kDay;
-  }
-  if (unit == "week") {
-    return DateTimeUnit::kWeek;
-  }
-  if (unit == "month") {
-    return DateTimeUnit::kMonth;
-  }
-  if (unit == "quarter") {
-    return DateTimeUnit::kQuarter;
-  }
-  if (unit == "year") {
-    return DateTimeUnit::kYear;
-  }
-  if (allowAbbreviated) {
-    if (unit == "dd") {
-      return DateTimeUnit::kDay;
-    }
-    if (unit == "mon" || unit == "mm") {
-      return DateTimeUnit::kMonth;
-    }
-    if (unit == "yyyy" || unit == "yy") {
-      return DateTimeUnit::kYear;
-    }
-  }
-  if (throwIfInvalid) {
-    VELOX_UNSUPPORTED("Unsupported datetime unit: {}", unitString);
-  }
-  return std::nullopt;
-}
+    bool allowAbbreviated = false);
 
 /// Adjusts the given date time object to the start of the specified date time
 /// unit (e.g., year, quarter, month, week, day, hour, minute).
-FOLLY_ALWAYS_INLINE void adjustDateTime(
-    std::tm& dateTime,
-    const DateTimeUnit& unit) {
-  switch (unit) {
-    case DateTimeUnit::kYear:
-      dateTime.tm_mon = 0;
-      dateTime.tm_yday = 0;
-      FMT_FALLTHROUGH;
-    case DateTimeUnit::kQuarter:
-      dateTime.tm_mon = dateTime.tm_mon / 3 * 3;
-      FMT_FALLTHROUGH;
-    case DateTimeUnit::kMonth:
-      dateTime.tm_mday = 1;
-      dateTime.tm_hour = 0;
-      dateTime.tm_min = 0;
-      dateTime.tm_sec = 0;
-      break;
-    case DateTimeUnit::kWeek:
-      // Subtract the truncation.
-      dateTime.tm_mday -= dateTime.tm_wday == 0 ? 6 : dateTime.tm_wday - 1;
-      // Setting the day of the week to Monday.
-      dateTime.tm_wday = 1;
-
-      // If the adjusted day of the month falls in the previous month
-      // Move to the previous month.
-      if (dateTime.tm_mday < 1) {
-        dateTime.tm_mon -= 1;
-
-        // If the adjusted month falls in the previous year
-        // Set to December and Move to the previous year.
-        if (dateTime.tm_mon < 0) {
-          dateTime.tm_mon = 11;
-          dateTime.tm_year -= 1;
-        }
-
-        // Calculate the correct day of the month based on the number of days
-        // in the adjusted month.
-        static const int daysInMonth[] = {
-            31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31};
-        int daysInPrevMonth = daysInMonth[dateTime.tm_mon];
-
-        // Adjust for leap year if February.
-        if (dateTime.tm_mon == 1 && (dateTime.tm_year + 1900) % 4 == 0 &&
-            ((dateTime.tm_year + 1900) % 100 != 0 ||
-             (dateTime.tm_year + 1900) % 400 == 0)) {
-          daysInPrevMonth = 29;
-        }
-        // Set to the correct day in the previous month.
-        dateTime.tm_mday += daysInPrevMonth;
-      }
-      dateTime.tm_hour = 0;
-      dateTime.tm_min = 0;
-      dateTime.tm_sec = 0;
-      break;
-    case DateTimeUnit::kDay:
-      dateTime.tm_hour = 0;
-      FMT_FALLTHROUGH;
-    case DateTimeUnit::kHour:
-      dateTime.tm_min = 0;
-      FMT_FALLTHROUGH;
-    case DateTimeUnit::kMinute:
-      dateTime.tm_sec = 0;
-      break;
-    default:
-      VELOX_UNREACHABLE();
-  }
-}
+void adjustDateTime(std::tm& dateTime, const DateTimeUnit& unit);
 
 /// Returns timestamp with seconds adjusted to the nearest lower multiple of the
 /// specified interval. If the given seconds is negative and not an exact
@@ -270,6 +156,22 @@ adjustEpoch(int64_t seconds, int64_t intervalSeconds) {
   int64_t truncatedSeconds = s * intervalSeconds;
   return Timestamp(truncatedSeconds, 0);
 }
+
+/// Truncates a timestamp to a specified time unit.
+/// For example:
+///   date_trunc('hour', timestamp '2020-05-26 11:30:00') -> '2020-05-26 11:00:00'
+///   date_trunc('day', timestamp '2020-05-26 11:30:00') -> '2020-05-26 00:00:00'
+///   date_trunc('month', timestamp '2020-05-26 11:30:00') -> '2020-05-01 00:00:00'
+///
+/// @param format The time unit to truncate to. Valid values include:
+///   'microsecond', 'millisecond', 'second', 'minute', 'hour', 'day', 
+///   'week', 'month', 'quarter', 'year'
+/// @param timestamp The timestamp to truncate
+/// @return The truncated timestamp, or null if the format is invalid
+template <typename T>
+struct DateTruncFunction {
+  // ... existing code ...
+};
 
 // Returns timestamp truncated to the specified unit.
 FOLLY_ALWAYS_INLINE Timestamp truncateTimestamp(
