@@ -27,13 +27,13 @@ on:
         default: 'main'
       numThreads:
         description: 'Number of threads'
-        default: 16
+        default: 8
       maxHighMemJobs:
         description: 'Number of high memory jobs'
-        default: 8
+        default: 2
       maxLinkJobs:
         description: 'Maximum number of link jobs'
-        default: 4
+        default: 2
       extraCMakeFlags:
         description: 'Additional CMake flags'
         default: ''
