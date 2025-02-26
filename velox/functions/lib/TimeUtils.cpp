@@ -25,4 +25,126 @@ const folly::F14FastMap<std::string, int8_t> kDayOfWeekNames{
     {"tue", 5},      {"wed", 6},    {"thursday", 0}, {"friday", 1},
     {"saturday", 2}, {"sunday", 3}, {"monday", 4},   {"tuesday", 5},
     {"wednesday", 6}};
+
+std::optional<DateTimeUnit> fromDateTimeUnitString(
+    const StringView& unitString,
+    bool throwIfInvalid,
+    bool allowMicro,
+    bool allowAbbreviated) {
+  const auto unit = boost::algorithm::to_lower_copy(unitString.str());
+
+  if (unit == "microsecond" && allowMicro) {
+    return DateTimeUnit::kMicrosecond;
+  }
+  if (unit == "millisecond") {
+    return DateTimeUnit::kMillisecond;
+  }
+  if (unit == "second") {
+    return DateTimeUnit::kSecond;
+  }
+  if (unit == "minute") {
+    return DateTimeUnit::kMinute;
+  }
+  if (unit == "hour") {
+    return DateTimeUnit::kHour;
+  }
+  if (unit == "day") {
+    return DateTimeUnit::kDay;
+  }
+  if (unit == "week") {
+    return DateTimeUnit::kWeek;
+  }
+  if (unit == "month") {
+    return DateTimeUnit::kMonth;
+  }
+  if (unit == "quarter") {
+    return DateTimeUnit::kQuarter;
+  }
+  if (unit == "year") {
+    return DateTimeUnit::kYear;
+  }
+  if (allowAbbreviated) {
+    if (unit == "dd") {
+      return DateTimeUnit::kDay;
+    }
+    if (unit == "mon" || unit == "mm") {
+      return DateTimeUnit::kMonth;
+    }
+    if (unit == "yyyy" || unit == "yy") {
+      return DateTimeUnit::kYear;
+    }
+  }
+  if (throwIfInvalid) {
+    VELOX_UNSUPPORTED("Unsupported datetime unit: {}", unitString);
+  }
+  return std::nullopt;
+}
+
+void adjustDateTime(
+    std::tm& dateTime,
+    const DateTimeUnit& unit) {
+  switch (unit) {
+    case DateTimeUnit::kYear:
+      dateTime.tm_mon = 0;
+      dateTime.tm_yday = 0;
+      FMT_FALLTHROUGH;
+    case DateTimeUnit::kQuarter:
+      dateTime.tm_mon = dateTime.tm_mon / 3 * 3;
+      FMT_FALLTHROUGH;
+    case DateTimeUnit::kMonth:
+      dateTime.tm_mday = 1;
+      dateTime.tm_hour = 0;
+      dateTime.tm_min = 0;
+      dateTime.tm_sec = 0;
+      break;
+    case DateTimeUnit::kWeek:
+      // Subtract the truncation.
+      dateTime.tm_mday -= dateTime.tm_wday == 0 ? 6 : dateTime.tm_wday - 1;
+      // Setting the day of the week to Monday.
+      dateTime.tm_wday = 1;
+
+      // If the adjusted day of the month falls in the previous month
+      // Move to the previous month.
+      if (dateTime.tm_mday < 1) {
+        dateTime.tm_mon -= 1;
+
+        // If the adjusted month falls in the previous year
+        // Set to December and Move to the previous year.
+        if (dateTime.tm_mon < 0) {
+          dateTime.tm_mon = 11;
+          dateTime.tm_year -= 1;
+        }
+
+        // Calculate the correct day of the month based on the number of days
+        // in the adjusted month.
+        static const int daysInMonth[] = {
+            31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31};
+        int daysInPrevMonth = daysInMonth[dateTime.tm_mon];
+
+        // Adjust for leap year if February.
+        if (dateTime.tm_mon == 1 && (dateTime.tm_year + 1900) % 4 == 0 &&
+            ((dateTime.tm_year + 1900) % 100 != 0 ||
+             (dateTime.tm_year + 1900) % 400 == 0)) {
+          daysInPrevMonth = 29;
+        }
+        // Set to the correct day in the previous month.
+        dateTime.tm_mday += daysInPrevMonth;
+      }
+      dateTime.tm_hour = 0;
+      dateTime.tm_min = 0;
+      dateTime.tm_sec = 0;
+      break;
+    case DateTimeUnit::kDay:
+      dateTime.tm_hour = 0;
+      FMT_FALLTHROUGH;
+    case DateTimeUnit::kHour:
+      dateTime.tm_min = 0;
+      FMT_FALLTHROUGH;
+    case DateTimeUnit::kMinute:
+      dateTime.tm_sec = 0;
+      break;
+    default:
+      VELOX_UNREACHABLE();
+  }
+}
 } // namespace facebook::velox::functions
