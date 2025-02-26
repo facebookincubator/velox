@@ -1024,6 +1024,8 @@ TEST_F(JsonFunctionsTest, jsonExtract) {
   VELOX_ASSERT_THROW(
       jsonExtract(kJson, "concat($..category)"), "Invalid JSON path");
   VELOX_ASSERT_THROW(jsonExtract(kJson, "$.store.keys()"), "Invalid JSON path");
+  VELOX_ASSERT_THROW(jsonExtract(kJson, "$[0,1]"), "Invalid JSON path");
+  VELOX_ASSERT_THROW(jsonExtract(kJson, "$[0:1]"), "Invalid JSON path");
 }
 
 // The following tests ensure that the internal json functions
