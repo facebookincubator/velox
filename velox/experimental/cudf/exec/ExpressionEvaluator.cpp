@@ -146,6 +146,16 @@ const std::map<std::string, op> binary_ops = {
 
 const std::map<std::string, op> unary_ops = {{"not", op::NOT}};
 
+struct AstContext {
+  // All members are references
+  cudf::ast::tree& tree;
+  std::vector<std::unique_ptr<cudf::scalar>>& scalars;
+  const RowTypePtr& inputRowSchema;
+  std::vector<PrecomputeInstruction>& precompute_instructions;
+  cudf::ast::expression const& push_expr_to_tree(
+      const std::shared_ptr<velox::exec::Expr>& expr);
+};
+
 // Create tree from Expr
 // and collect precompute instructions for non-ast operations
 cudf::ast::expression const& create_ast_tree(
@@ -154,9 +164,16 @@ cudf::ast::expression const& create_ast_tree(
     std::vector<std::unique_ptr<cudf::scalar>>& scalars,
     const RowTypePtr& inputRowSchema,
     std::vector<PrecomputeInstruction>& precompute_instructions) {
+  AstContext context{tree, scalars, inputRowSchema, precompute_instructions};
+  return context.push_expr_to_tree(expr);
+}
+
+cudf::ast::expression const& AstContext::push_expr_to_tree(
+    const std::shared_ptr<velox::exec::Expr>& expr) {
   using op = cudf::ast::ast_operator;
   using operation = cudf::ast::operation;
   auto& name = expr->name();
+  auto len = expr->inputs().size();
 
   if (name == "literal") {
     velox::exec::ConstantExpr* c =
@@ -166,63 +183,27 @@ cudf::ast::expression const& create_ast_tree(
     // convert to cudf scalar
     return tree.push(createLiteral(value, scalars));
   } else if (binary_ops.find(name) != binary_ops.end()) {
-    auto len = expr->inputs().size();
     VELOX_CHECK_EQ(len, 2);
-    auto const& op1 = create_ast_tree(
-        expr->inputs()[0],
-        tree,
-        scalars,
-        inputRowSchema,
-        precompute_instructions);
-    auto const& op2 = create_ast_tree(
-        expr->inputs()[1],
-        tree,
-        scalars,
-        inputRowSchema,
-        precompute_instructions);
+    auto const& op1 = push_expr_to_tree(expr->inputs()[0]);
+    auto const& op2 = push_expr_to_tree(expr->inputs()[1]);
     return tree.push(operation{binary_ops.at(name), op1, op2});
   } else if (unary_ops.find(name) != unary_ops.end()) {
-    auto len = expr->inputs().size();
     VELOX_CHECK_EQ(len, 1);
-    auto const& op1 = create_ast_tree(
-        expr->inputs()[0],
-        tree,
-        scalars,
-        inputRowSchema,
-        precompute_instructions);
+    auto const& op1 = push_expr_to_tree(expr->inputs()[0]);
     return tree.push(operation{unary_ops.at(name), op1});
   } else if (name == "between") {
-    VELOX_CHECK_EQ(expr->inputs().size(), 3);
-    auto const& op1 = create_ast_tree(
-        expr->inputs()[0],
-        tree,
-        scalars,
-        inputRowSchema,
-        precompute_instructions);
-    auto const& op2 = create_ast_tree(
-        expr->inputs()[1],
-        tree,
-        scalars,
-        inputRowSchema,
-        precompute_instructions);
-    auto const& op3 = create_ast_tree(
-        expr->inputs()[2],
-        tree,
-        scalars,
-        inputRowSchema,
-        precompute_instructions);
+    VELOX_CHECK_EQ(len, 3);
+    auto const& value = push_expr_to_tree(expr->inputs()[0]);
+    auto const& lower = push_expr_to_tree(expr->inputs()[1]);
+    auto const& upper = push_expr_to_tree(expr->inputs()[2]);
     // construct between(op2, op3) using >= and <=
-    auto const& op4 = tree.push(operation{op::GREATER_EQUAL, op1, op2});
-    auto const& op5 = tree.push(operation{op::LESS_EQUAL, op1, op3});
-    return tree.push(operation{op::NULL_LOGICAL_AND, op4, op5});
+    auto const& ge_lower =
+        tree.push(operation{op::GREATER_EQUAL, value, lower});
+    auto const& le_upper = tree.push(operation{op::LESS_EQUAL, value, upper});
+    return tree.push(operation{op::NULL_LOGICAL_AND, ge_lower, le_upper});
   } else if (name == "cast") {
-    VELOX_CHECK_EQ(expr->inputs().size(), 1);
-    auto const& op1 = create_ast_tree(
-        expr->inputs()[0],
-        tree,
-        scalars,
-        inputRowSchema,
-        precompute_instructions);
+    VELOX_CHECK_EQ(len, 1);
+    auto const& op1 = push_expr_to_tree(expr->inputs()[0]);
     if (expr->type()->kind() == TypeKind::INTEGER) {
       // No int32 cast in cudf ast
       return tree.push(operation{op::CAST_TO_INT64, op1});
@@ -234,118 +215,76 @@ cudf::ast::expression const& create_ast_tree(
       VELOX_FAIL("Unsupported type for cast operation");
     }
   } else if (name == "switch") {
-    VELOX_CHECK_EQ(expr->inputs().size(), 3);
+    VELOX_CHECK_EQ(len, 3);
     // check if input[1], input[2] are literals 1 and 0.
     // then simplify as typecast bool to int
-    velox::exec::ConstantExpr* c1 =
-        dynamic_cast<velox::exec::ConstantExpr*>(expr->inputs()[1].get());
-    velox::exec::ConstantExpr* c2 =
-        dynamic_cast<velox::exec::ConstantExpr*>(expr->inputs()[2].get());
+    auto c1 = dynamic_cast<velox::exec::ConstantExpr*>(expr->inputs()[1].get());
+    auto c2 = dynamic_cast<velox::exec::ConstantExpr*>(expr->inputs()[2].get());
     if (c1 and c1->toString() == "1:BIGINT" and c2 and
         c2->toString() == "0:BIGINT") {
-      auto const& op1 = create_ast_tree(
-          expr->inputs()[0],
-          tree,
-          scalars,
-          inputRowSchema,
-          precompute_instructions);
+      auto const& op1 = push_expr_to_tree(expr->inputs()[0]);
       return tree.push(operation{op::CAST_TO_INT64, op1});
     } else if (c2 and c2->toString() == "0:DOUBLE") {
-      auto const& op1 = create_ast_tree(
-          expr->inputs()[0],
-          tree,
-          scalars,
-          inputRowSchema,
-          precompute_instructions);
+      auto const& op1 = push_expr_to_tree(expr->inputs()[0]);
       auto const& op1d = tree.push(operation{op::CAST_TO_FLOAT64, op1});
-      auto const& op2 = create_ast_tree(
-          expr->inputs()[1],
-          tree,
-          scalars,
-          inputRowSchema,
-          precompute_instructions);
+      auto const& op2 = push_expr_to_tree(expr->inputs()[1]);
       return tree.push(operation{op::MUL, op1d, op2});
     } else {
-      std::cerr << "switch subexpr: " << expr->toString() << std::endl;
-      VELOX_FAIL("Unsupported switch complex operation");
+      VELOX_NYI("Unsupported switch complex operation " + expr->toString());
     }
   } else if (name == "year") {
-    VELOX_CHECK_EQ(expr->inputs().size(), 1);
+    VELOX_CHECK_EQ(len, 1);
     // ensure expr->inputs()[0] is a field
-    auto fieldExpr = std::dynamic_pointer_cast<velox::exec::FieldReference>(
-        expr->inputs()[0]);
+    auto fieldExpr = std::dynamic_pointer_cast<velox::exec::FieldReference>(expr->inputs()[0]);
     VELOX_CHECK_NOT_NULL(fieldExpr, "Expression is not a field");
-    auto dependent_column_index =
-        inputRowSchema->getChildIdx(fieldExpr->name());
-    auto new_column_index =
-        inputRowSchema->size() + precompute_instructions.size();
+    auto dependent_column_index = inputRowSchema->getChildIdx(fieldExpr->name());
+    auto new_column_index = inputRowSchema->size() + precompute_instructions.size();
     // add this index and precompute instruction to a data structure
-    precompute_instructions.emplace_back(
-        dependent_column_index, "year", new_column_index);
+    precompute_instructions.emplace_back(dependent_column_index, "year", new_column_index);
     // This custom op should be added to input columns.
     // cast to big int
-    auto const& col_ref =
-        tree.push(cudf::ast::column_reference(new_column_index));
+    auto const& col_ref = tree.push(cudf::ast::column_reference(new_column_index));
     return tree.push(operation{op::CAST_TO_INT64, col_ref});
   } else if (name == "length") {
-    VELOX_CHECK_EQ(expr->inputs().size(), 1);
+    VELOX_CHECK_EQ(len, 1);
     // ensure expr->inputs()[0] is a field
-    auto fieldExpr = std::dynamic_pointer_cast<velox::exec::FieldReference>(
-        expr->inputs()[0]);
+    auto fieldExpr = std::dynamic_pointer_cast<velox::exec::FieldReference>(expr->inputs()[0]);
     VELOX_CHECK_NOT_NULL(fieldExpr, "Expression is not a field");
-    auto dependent_column_index =
-        inputRowSchema->getChildIdx(fieldExpr->name());
-    auto new_column_index =
-        inputRowSchema->size() + precompute_instructions.size();
+    auto dependent_column_index = inputRowSchema->getChildIdx(fieldExpr->name());
+    auto new_column_index = inputRowSchema->size() + precompute_instructions.size();
     // add this index and precompute instruction to a data structure
-    precompute_instructions.emplace_back(
-        dependent_column_index, "length", new_column_index);
+    precompute_instructions.emplace_back(dependent_column_index, "length", new_column_index);
     // This custom op should be added to input columns.
-    auto const& col_ref =
-        tree.push(cudf::ast::column_reference(new_column_index));
+    auto const& col_ref = tree.push(cudf::ast::column_reference(new_column_index));
     return tree.push(operation{op::CAST_TO_INT64, col_ref});
   } else if (name == "substr") {
     // add precompute instruction, special handling col_ref during ast
     // evaluation
-    VELOX_CHECK_EQ(expr->inputs().size(), 3);
-    auto fieldExpr = std::dynamic_pointer_cast<velox::exec::FieldReference>(
-        expr->inputs()[0]);
+    VELOX_CHECK_EQ(len, 3);
+    auto fieldExpr = std::dynamic_pointer_cast<velox::exec::FieldReference>(expr->inputs()[0]);
     VELOX_CHECK_NOT_NULL(fieldExpr, "Expression is not a field");
-    auto dependent_column_index =
-        inputRowSchema->getChildIdx(fieldExpr->name());
-    auto new_column_index =
-        inputRowSchema->size() + precompute_instructions.size();
+    auto dependent_column_index = inputRowSchema->getChildIdx(fieldExpr->name());
+    auto new_column_index = inputRowSchema->size() + precompute_instructions.size();
     // add this index and precompute instruction to a data structure
-    velox::exec::ConstantExpr* c1 =
-        dynamic_cast<velox::exec::ConstantExpr*>(expr->inputs()[1].get());
-    velox::exec::ConstantExpr* c2 =
-        dynamic_cast<velox::exec::ConstantExpr*>(expr->inputs()[2].get());
-    std::string substr_expr =
-        "substr " + c1->value()->toString(0) + " " + c2->value()->toString(0);
-    precompute_instructions.emplace_back(
-        dependent_column_index, substr_expr, new_column_index);
+    velox::exec::ConstantExpr* c1 = dynamic_cast<velox::exec::ConstantExpr*>(expr->inputs()[1].get());
+    velox::exec::ConstantExpr* c2 = dynamic_cast<velox::exec::ConstantExpr*>(expr->inputs()[2].get());
+    std::string substr_expr = "substr " + c1->value()->toString(0) + " " + c2->value()->toString(0);
+    precompute_instructions.emplace_back( dependent_column_index, substr_expr, new_column_index);
     // This custom op should be added to input columns.
     return tree.push(cudf::ast::column_reference(new_column_index));
   } else if (name == "like") {
-    VELOX_CHECK_EQ(expr->inputs().size(), 2);
-    auto fieldExpr = std::dynamic_pointer_cast<velox::exec::FieldReference>(
-        expr->inputs()[0]);
+    VELOX_CHECK_EQ(len, 2);
+    auto fieldExpr = std::dynamic_pointer_cast<velox::exec::FieldReference>(expr->inputs()[0]);
     VELOX_CHECK_NOT_NULL(fieldExpr, "Expression is not a field");
-    auto dependent_column_index =
-        inputRowSchema->getChildIdx(fieldExpr->name());
-    auto new_column_index =
-        inputRowSchema->size() + precompute_instructions.size();
-    auto literalExpr =
-        std::dynamic_pointer_cast<velox::exec::ConstantExpr>(expr->inputs()[1]);
+    auto dependent_column_index = inputRowSchema->getChildIdx(fieldExpr->name());
+    auto new_column_index = inputRowSchema->size() + precompute_instructions.size();
+    auto literalExpr = std::dynamic_pointer_cast<velox::exec::ConstantExpr>(expr->inputs()[1]);
     VELOX_CHECK_NOT_NULL(literalExpr, "Expression is not a literal");
     createLiteral(literalExpr->value(), scalars);
     std::string like_expr = "like " + std::to_string(scalars.size() - 1);
-    precompute_instructions.emplace_back(
-        dependent_column_index, like_expr, new_column_index);
+    precompute_instructions.emplace_back(dependent_column_index, like_expr, new_column_index);
     return tree.push(cudf::ast::column_reference(new_column_index));
-  } else if (
-      auto fieldExpr =
-          std::dynamic_pointer_cast<velox::exec::FieldReference>(expr)) {
+  } else if (auto fieldExpr = std::dynamic_pointer_cast<velox::exec::FieldReference>(expr)) {
     auto column_index = inputRowSchema->getChildIdx(name);
     VELOX_CHECK(column_index != -1, "Field not found, " + name);
     return tree.push(cudf::ast::column_reference(column_index));
