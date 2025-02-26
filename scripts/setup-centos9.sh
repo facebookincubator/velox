@@ -113,7 +113,7 @@ function install_hdfs {
   # Dependencies for Hadoop testing
   wget_and_untar https://archive.apache.org/dist/hadoop/common/hadoop-${HADOOP_VERSION}/hadoop-${HADOOP_VERSION}.tar.gz hadoop
   cp -a hadoop /usr/local/
-  cmake_install ${libhdfs3_dir}
+  cmake_install_dir ${libhdfs3_dir}
 }
 
 function install_adapters {
