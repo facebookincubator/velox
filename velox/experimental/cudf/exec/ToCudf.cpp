@@ -15,11 +15,9 @@
  */
 
 #include "velox/experimental/cudf/exec/ToCudf.h"
-#include <cuda.h>
-#include <cudf/detail/nvtx/ranges.hpp>
-#include <exec/HashAggregation.h>
 #include "velox/exec/Driver.h"
 #include "velox/exec/FilterProject.h"
+#include "velox/exec/HashAggregation.h"
 #include "velox/exec/HashBuild.h"
 #include "velox/exec/HashProbe.h"
 #include "velox/exec/Operator.h"
@@ -31,6 +29,10 @@
 #include "velox/experimental/cudf/exec/CudfLocalPartition.h"
 #include "velox/experimental/cudf/exec/CudfOrderBy.h"
 #include "velox/experimental/cudf/exec/Utilities.h"
+
+#include <cudf/detail/nvtx/ranges.hpp>
+
+#include <cuda.h>
 
 #include <iostream>
 
