@@ -21,9 +21,8 @@
 #include <cudf/table/table.hpp>
 #include <cudf/utilities/default_stream.hpp>
 
-#include <nvtx3/nvtx3.hpp>
-
 #include "velox/experimental/cudf/exec/CudfConversion.h"
+#include "velox/experimental/cudf/exec/NvtxHelper.h"
 #include "velox/experimental/cudf/exec/Utilities.h"
 #include "velox/experimental/cudf/exec/VeloxCudfInterop.h"
 #include "velox/experimental/cudf/vector/CudfVector.h"
@@ -74,7 +73,7 @@ CudfFromVelox::CudfFromVelox(
           "CudfFromVelox") {}
 
 void CudfFromVelox::addInput(RowVectorPtr input) {
-  NVTX3_FUNC_RANGE();
+  VELOX_NVTX_OPERATOR_FUNC_RANGE();
   if (input != nullptr) {
     if (input->size() > 0) {
       // Materialize lazy vectors
@@ -91,7 +90,7 @@ void CudfFromVelox::addInput(RowVectorPtr input) {
 }
 
 RowVectorPtr CudfFromVelox::getOutput() {
-  NVTX3_FUNC_RANGE();
+  VELOX_NVTX_OPERATOR_FUNC_RANGE();
   auto const target_output_size = preferred_gpu_batch_size_rows();
   auto const exit_early = finished_ or
       (current_output_size_ < target_output_size and not noMoreInput_) or
