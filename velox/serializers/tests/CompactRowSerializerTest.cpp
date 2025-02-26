@@ -16,6 +16,7 @@
 #include "velox/serializers/CompactRowSerializer.h"
 #include <gtest/gtest.h>
 #include "velox/common/base/tests/GTestUtils.h"
+#include "velox/common/memory/SimpleStreamArena.h"
 #include "velox/row/CompactRow.h"
 #include "velox/vector/fuzzer/VectorFuzzer.h"
 #include "velox/vector/tests/utils/VectorTestBase.h"
@@ -89,7 +90,7 @@ class CompactRowSerializerTest : public ::testing::Test,
       rangeSize = checkedMultiply<vector_size_t>(rangeSize, 2);
     }
 
-    auto arena = std::make_unique<StreamArena>(pool_.get());
+    auto arena = std::make_unique<SimpleStreamArena>(pool_.get());
     auto rowType = asRowType(rowVector->type());
     auto serializer = getVectorSerde()->createIterativeSerializer(
         rowType, numRows, arena.get(), options_.get());

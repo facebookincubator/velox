@@ -17,6 +17,7 @@
 #include "velox/common/memory/ByteStream.h"
 #include "velox/common/memory/MemoryAllocator.h"
 #include "velox/common/memory/MmapAllocator.h"
+#include "velox/common/memory/SimpleStreamArena.h"
 
 #include <gflags/gflags.h>
 #include <gtest/gtest.h>
@@ -40,7 +41,7 @@ class StreamArenaTest : public testing::Test {
   void TearDown() override {}
 
   std::unique_ptr<StreamArena> newArena() {
-    return std::make_unique<StreamArena>(pool_.get());
+    return std::make_unique<SimpleStreamArena>(pool_.get());
   }
 
   folly::Random::DefaultGenerator rng_;

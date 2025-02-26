@@ -20,6 +20,7 @@
 #include <vector>
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/common/memory/ByteStream.h"
+#include "velox/common/memory/SimpleStreamArena.h"
 #include "velox/functions/prestosql/types/IPAddressType.h"
 #include "velox/functions/prestosql/types/IPPrefixType.h"
 #include "velox/functions/prestosql/types/TimestampWithTimeZoneType.h"
@@ -148,7 +149,7 @@ class PrestoSerializerTest
       serializer = std::move(*reuseSerializer);
       serializer->clear();
     } else {
-      arena = std::make_unique<StreamArena>(pool_.get());
+      arena = std::make_unique<SimpleStreamArena>(pool_.get());
       serializer = serde_->createIterativeSerializer(
           rowType, numRows, arena.get(), &paramOptions);
     }
@@ -489,7 +490,7 @@ class PrestoSerializerTest
     std::vector<std::string> reusedPieces;
     auto rowType = ROW({{"f", vectors[0]->type()}});
     auto concatenation = BaseVector::create(rowType, 0, pool_.get());
-    auto arena = std::make_unique<StreamArena>(pool_.get());
+    auto arena = std::make_unique<SimpleStreamArena>(pool_.get());
     auto paramOptions = getParamSerdeOptions(serdeOptions);
     auto serializer = serde_->createIterativeSerializer(
         rowType, 10, arena.get(), &paramOptions);
@@ -900,7 +901,7 @@ TEST_P(PrestoSerializerTest, initMemory) {
   const auto numRows = 100;
   auto testFunc = [&](TypePtr type, int64_t expectedBytes) {
     const auto poolMemUsage = pool_->usedBytes();
-    auto arena = std::make_unique<StreamArena>(pool_.get());
+    auto arena = std::make_unique<SimpleStreamArena>(pool_.get());
     const auto paramOptions = getParamSerdeOptions(nullptr);
     const auto rowType = ROW({type});
     const auto serializer = serde_->createIterativeSerializer(
@@ -928,7 +929,7 @@ TEST_P(PrestoSerializerTest, serializeNoRowsSelected) {
   facebook::velox::serializer::presto::PrestoOutputStreamListener listener;
   OStreamOutputStream output(&out, &listener);
   auto paramOptions = getParamSerdeOptions(nullptr);
-  auto arena = std::make_unique<StreamArena>(pool_.get());
+  auto arena = std::make_unique<SimpleStreamArena>(pool_.get());
   auto rowVector = makeRowVector(
       {"a", "b", "c", "d", "e", "f", "g", "h", "i", "j", "k", "l"},
       {makeFlatVector<bool>({true, false, true, false}),
@@ -1734,7 +1735,7 @@ TEST_F(PrestoSerializerTest, serdeSingleColumn) {
     auto rowVector = makeRowVector({vector});
     // Serialize to PrestoPage format.
     std::ostringstream output;
-    auto arena = std::make_unique<StreamArena>(pool_.get());
+    auto arena = std::make_unique<SimpleStreamArena>(pool_.get());
     auto rowType = asRowType(rowVector->type());
     auto numRows = rowVector->size();
     auto serializer = serde_->createIterativeSerializer(

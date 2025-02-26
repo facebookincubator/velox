@@ -16,7 +16,7 @@
 #pragma once
 
 #include "velox/common/base/Scratch.h"
-#include "velox/common/memory/StreamArena.h"
+#include "velox/common/memory/MemoryPool.h"
 #include "velox/type/Type.h"
 
 #include <folly/Bits.h>
@@ -25,6 +25,12 @@
 #include <memory>
 
 namespace facebook::velox {
+
+namespace memory {
+class MemoryPool;
+}
+
+class StreamArena;
 
 struct ByteRange {
   /// Start of buffer. Not owned.
@@ -81,10 +87,7 @@ class BufferedOutputStream : public OutputStream {
   BufferedOutputStream(
       OutputStream* out,
       StreamArena* arena,
-      int32_t bufferSize = 1 << 20)
-      : OutputStream(), out_(out) {
-    arena->newRange(bufferSize, nullptr, &buffer_);
-  }
+      int32_t bufferSize = 1 << 20);
 
   ~BufferedOutputStream() {
     flush();
@@ -568,12 +571,7 @@ class IOBufOutputStream : public OutputStream {
   explicit IOBufOutputStream(
       memory::MemoryPool& pool,
       OutputStreamListener* listener = nullptr,
-      int32_t initialSize = memory::AllocationTraits::kPageSize)
-      : OutputStream(listener),
-        arena_(std::make_shared<StreamArena>(&pool)),
-        out_(std::make_unique<ByteOutputStream>(arena_.get())) {
-    out_->startWrite(initialSize);
-  }
+      int32_t initialSize = memory::AllocationTraits::kPageSize);
 
   void write(const char* s, std::streamsize count) override {
     out_->appendStringView(std::string_view(s, count));

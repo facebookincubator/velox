@@ -27,6 +27,10 @@
 
 namespace facebook::velox {
 
+struct ByteRange;
+class ByteInputStream;
+class ByteOutputStream;
+
 /// Implements an arena backed by memory::Allocation. This is for backing
 /// ByteOutputStream or for allocating single blocks. Blocks can be individually
 /// freed. Adjacent frees are coalesced and free blocks are kept in a free list.
@@ -175,17 +179,17 @@ class HashStringAllocator : public StreamArena {
   };
 
   explicit HashStringAllocator(memory::MemoryPool* pool)
-      : StreamArena(pool), state_(pool) {}
+      : StreamArena(pool), state_(pool_) {}
 
   ~HashStringAllocator();
 
-  // Copies the StringView 'srcStr' to storage owned by 'this'. Creates a new
-  // StringView at 'offset' in 'group' pointing to the copy. A large string may
-  // be copied into non-contiguous allocation pieces. The size in the StringView
-  // is the sum of the sizes. The pieces are linked via Headers, the first
-  // header is below the first byte of the StringView's data. StringViews
-  // written by this are to be read with contiguousString(). This is nearly
-  // always zero copy but will accommodate the odd extra large string.
+  /// Copies the StringView 'srcStr' to storage owned by 'this'. Creates a new
+  /// StringView at 'offset' in 'group' pointing to the copy. A large string may
+  /// be copied into non-contiguous allocation pieces. The size in the
+  /// StringView is the sum of the sizes. The pieces are linked via Headers, the
+  /// first header is below the first byte of the StringView's data. StringViews
+  /// written by this are to be read with contiguousString(). This is nearly
+  /// always zero copy but will accommodate the odd extra large string.
   void copyMultipart(const StringView& str, char* group, int32_t offset) {
     if (str.isInline()) {
       *reinterpret_cast<StringView*>(group + offset) = str;
@@ -267,8 +271,8 @@ class HashStringAllocator : public StreamArena {
       ByteOutputStream& stream,
       int32_t preferredSize = kMinContiguous);
 
-  // Sets 'stream' to write starting at 'position'. If new ranges have to
-  // be allocated when writing, headers will be updated accordingly.
+  /// Sets 'stream' to write starting at 'position'. If new ranges have to
+  /// be allocated when writing, headers will be updated accordingly.
   void extendWrite(Position position, ByteOutputStream& stream);
 
   /// Completes a write prepared with newWrite or extendWrite. Up to
@@ -299,6 +303,10 @@ class HashStringAllocator : public StreamArena {
   void newTinyRange(int32_t bytes, ByteRange* lastRange, ByteRange* range)
       override {
     newRange(bytes, lastRange, range);
+  }
+
+  size_t size() const override {
+    return retainedSize();
   }
 
   /// Returns the total memory footprint of 'this'.
