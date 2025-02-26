@@ -19,6 +19,7 @@
 #include "velox/functions/lib/Slice.h"
 #include "velox/functions/prestosql/ArrayFunctions.h"
 #include "velox/functions/sparksql/ArrayAppend.h"
+#include "velox/functions/sparksql/ArrayConcat.h"
 #include "velox/functions/sparksql/ArrayFlattenFunction.h"
 #include "velox/functions/sparksql/ArrayInsert.h"
 #include "velox/functions/sparksql/ArrayMinMaxFunction.h"
@@ -47,6 +48,28 @@ void registerSparkArrayFunctions(const std::string& prefix) {
 }
 
 namespace sparksql {
+template <typename T>
+inline void registerArrayConcatFunctions(const std::string& prefix) {
+  registerFunction<
+      ParameterBinder<ArrayConcatFunction, T>,
+      Array<T>,
+      Variadic<Array<T>>>({prefix + "concat"});
+}
+
+void registerArrayConcatFunctions(const std::string& prefix) {
+  registerArrayConcatFunctions<int8_t>(prefix);
+  registerArrayConcatFunctions<int16_t>(prefix);
+  registerArrayConcatFunctions<int32_t>(prefix);
+  registerArrayConcatFunctions<int64_t>(prefix);
+  registerArrayConcatFunctions<int128_t>(prefix);
+  registerArrayConcatFunctions<float>(prefix);
+  registerArrayConcatFunctions<double>(prefix);
+  registerArrayConcatFunctions<bool>(prefix);
+  registerArrayConcatFunctions<Varchar>(prefix);
+  registerArrayConcatFunctions<Timestamp>(prefix);
+  registerArrayConcatFunctions<Date>(prefix);
+  registerArrayConcatFunctions<Generic<T1>>(prefix);
+}
 
 inline void registerArrayJoinFunctions(const std::string& prefix) {
   registerFunction<
@@ -110,6 +133,7 @@ inline void registerArrayRemoveFunctions(const std::string& prefix) {
 }
 
 void registerArrayFunctions(const std::string& prefix) {
+  registerArrayConcatFunctions(prefix);
   registerArrayJoinFunctions(prefix);
   registerArrayMinMaxFunctions(prefix);
   registerArrayRemoveFunctions(prefix);
