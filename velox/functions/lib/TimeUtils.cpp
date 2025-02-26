@@ -80,9 +80,7 @@ std::optional<DateTimeUnit> fromDateTimeUnitString(
   return std::nullopt;
 }
 
-void adjustDateTime(
-    std::tm& dateTime,
-    const DateTimeUnit& unit) {
+void adjustDateTime(std::tm& dateTime, const DateTimeUnit& unit) {
   switch (unit) {
     case DateTimeUnit::kYear:
       dateTime.tm_mon = 0;

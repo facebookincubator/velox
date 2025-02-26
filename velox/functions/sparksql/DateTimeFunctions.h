@@ -535,10 +535,6 @@ struct DateFromUnixDateFunction {
 };
 
 /// Truncates a timestamp to a specified time unit.
-/// For example:
-///   date_trunc('hour', timestamp '2020-05-26 11:30:00') -> '2020-05-26 11:00:00'
-///   date_trunc('day', timestamp '2020-05-26 11:30:00') -> '2020-05-26 00:00:00'
-///   date_trunc('month', timestamp '2020-05-26 11:30:00') -> '2020-05-01 00:00:00'
 ///
 /// @param format The time unit to truncate to
 /// @param timestamp The timestamp to truncate
