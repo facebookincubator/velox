@@ -22,8 +22,6 @@ extern void registerElementAtFunction(
     bool enableCaching);
 
 void registerSparkMapFunctions(const std::string& prefix) {
-  VELOX_REGISTER_VECTOR_FUNCTION(
-      udf_map_allow_duplicates, prefix + "map_from_arrays");
   // Spark and Presto map_filter function has the same definition:
   //   function expression corresponds to body, arguments to signature
   VELOX_REGISTER_VECTOR_FUNCTION(udf_map_filter, prefix + "map_filter");
@@ -37,6 +35,8 @@ namespace sparksql {
 void registerMapFunctions(const std::string& prefix) {
   registerSparkMapFunctions(prefix);
   VELOX_REGISTER_VECTOR_FUNCTION(udf_map, prefix + "map");
+  VELOX_REGISTER_VECTOR_FUNCTION(
+      udf_map_from_arrays, prefix + "map_from_arrays");
   // This is the semantics of spark.sql.ansi.enabled = false.
   registerElementAtFunction(prefix + "element_at", true);
   registerSize(prefix + "size");

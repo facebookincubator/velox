@@ -21,6 +21,11 @@
 
 namespace facebook::velox::core {
 
+enum class SparkMapKeyDedupPolicy {
+  LAST_WIN,
+  EXCEPTION
+};
+
 /// A simple wrapper around velox::ConfigBase. Defines constants for query
 /// config properties and accessor methods.
 /// Create per query context. Does not have a singleton instance.
@@ -332,6 +337,13 @@ class QueryConfig {
   /// Joda date formatter is used by default.
   static constexpr const char* kSparkLegacyDateFormatter =
       "spark.legacy_date_formatter";
+
+  /// The policy to deduplicate map keys in Spark builtin functions: map,
+  /// map_from_arrays, map_from_entries, str_to_map, map_concat etc.
+  /// When set to EXCEPTION, the query fails if duplicated map keys are detected.
+  /// When set to LAST_WIN, the map key that is inserted at last takes precedence.
+  static constexpr const char* kSparkMapKeyDedupPolicy =
+      "spark.map_key_dedup_policy";
 
   /// The number of local parallel table writer operators per task.
   static constexpr const char* kTaskWriterCount = "task_writer_count";
@@ -928,6 +940,18 @@ class QueryConfig {
 
   std::string shuffleCompressionKind() const {
     return get<std::string>(kShuffleCompressionKind, "none");
+  }
+
+  SparkMapKeyDedupPolicy sparkMapKeyDedupPolicy() const {
+    std::string policy = get<std::string>(kSparkMapKeyDedupPolicy, "EXCEPTION");
+    std::transform(policy.begin(), policy.end(), policy.begin(), ::toupper);
+    if (policy == "LAST_WIN") {
+      return SparkMapKeyDedupPolicy::LAST_WIN;
+    } else if (policy == "EXCEPTION") {
+      return SparkMapKeyDedupPolicy::EXCEPTION;
+    } else {
+      VELOX_FAIL("Unknown mapKeyDedupPolicy: {}", policy);
+    }
   }
 
   template <typename T>
