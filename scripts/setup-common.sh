@@ -184,7 +184,7 @@ function install_aws_deps {
   local AWS_REPO_NAME="aws/aws-sdk-cpp"
 
   github_checkout $AWS_REPO_NAME $AWS_SDK_VERSION --depth 1 --recurse-submodules
-  cmake_install_dir -DCMAKE_BUILD_TYPE=${CMAKE_BUILD_TYPE} -DBUILD_SHARED_LIBS:BOOL=OFF -DMINIMIZE_SIZE:BOOL=ON -DENABLE_TESTING:BOOL=OFF -DBUILD_ONLY:STRING="s3;identity-management"
+  cmake_install -DCMAKE_BUILD_TYPE=${CMAKE_BUILD_TYPE} -DBUILD_SHARED_LIBS:BOOL=OFF -DMINIMIZE_SIZE:BOOL=ON -DENABLE_TESTING:BOOL=OFF -DBUILD_ONLY:STRING="s3;identity-management"
 }
 
 function install_minio {
@@ -210,7 +210,7 @@ function install_gcs-sdk-cpp {
 
   # abseil-cpp
   github_checkout abseil/abseil-cpp ${ABSEIL_VERSION} --depth 1
-  cmake_install_dir \
+  cmake_install \
     -DABSL_BUILD_TESTING=OFF \
     -DCMAKE_CXX_STANDARD=17 \
     -DABSL_PROPAGATE_CXX_STD=ON \
@@ -218,13 +218,13 @@ function install_gcs-sdk-cpp {
 
   # protobuf
   github_checkout protocolbuffers/protobuf v${PROTOBUF_VERSION} --depth 1
-  cmake_install_dir \
+  cmake_install \
     -Dprotobuf_BUILD_TESTS=OFF \
     -Dprotobuf_ABSL_PROVIDER=package
 
   # grpc
   github_checkout grpc/grpc ${GRPC_VERSION} --depth 1
-  cmake_install_dir \
+  cmake_install \
     -DgRPC_BUILD_TESTS=OFF \
     -DgRPC_ABSL_PROVIDER=package \
     -DgRPC_ZLIB_PROVIDER=package \
@@ -236,19 +236,19 @@ function install_gcs-sdk-cpp {
 
   # crc32
   github_checkout google/crc32c ${CRC32_VERSION} --depth 1
-  cmake_install_dir \
+  cmake_install \
     -DCRC32C_BUILD_TESTS=OFF \
     -DCRC32C_BUILD_BENCHMARKS=OFF \
     -DCRC32C_USE_GLOG=OFF
 
   # nlohmann json
   github_checkout nlohmann/json ${NLOHMAN_JSON_VERSION} --depth 1
-  cmake_install_dir \
+  cmake_install \
     -DJSON_BuildTests=OFF
 
   # google-cloud-cpp
   github_checkout googleapis/google-cloud-cpp ${GOOGLE_CLOUD_CPP_VERSION} --depth 1
-  cmake_install_dir \
+  cmake_install \
     -DGOOGLE_CLOUD_CPP_ENABLE_EXAMPLES=OFF \
     -DGOOGLE_CLOUD_CPP_ENABLE=storage
 }
