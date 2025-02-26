@@ -134,7 +134,7 @@ struct InitSessionTimezone {
 /// string.
 /// @param allowMicro Whether to allow microsecond.
 /// @param allowAbbreviated Whether to allow abbreviated unit string.
-FOLLY_ALWAYS_INLINE std::optional<DateTimeUnit> fromDateTimeUnitString(
+std::optional<DateTimeUnit> fromDateTimeUnitString(
     const StringView& unitString,
     bool throwIfInvalid,
     bool allowMicro = false,
