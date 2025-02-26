@@ -110,8 +110,7 @@ RowVectorPtr CudfFilterProject::getOutput() {
 
   // Count occurrences of each inputChannel, and move columns if they occur only
   // once
-  std::unordered_map<decltype(identityProjections_[0].inputChannel), int>
-      inputChannelCount;
+  std::unordered_map<column_index_t, int> inputChannelCount;
   for (const auto& identity : identityProjections_) {
     inputChannelCount[identity.inputChannel]++;
   }
