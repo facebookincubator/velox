@@ -35,6 +35,7 @@ extern void registerMapFunctions(const std::string& prefix);
 extern void registerStringFunctions(const std::string& prefix);
 extern void registerBinaryFunctions(const std::string& prefix);
 extern void registerURLFunctions(const std::string& prefix);
+extern void registerDataSizeFunctions(const std::string& prefix);
 extern void registerMapAllowingDuplicates(
     const std::string& name,
     const std::string& prefix);
@@ -116,6 +117,7 @@ void registerAllScalarFunctions(const std::string& prefix) {
   registerBitwiseFunctions(prefix);
   registerUuidFunctions(prefix);
   registerIPAddressFunctions(prefix);
+  registerDataSizeFunctions(prefix);
 }
 
 void registerMapAllowingDuplicates(
