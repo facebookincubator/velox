@@ -32,7 +32,7 @@ class NvtxHelper {
 };
 
 /**
- * @brief Tag type for libkvikio's NVTX domain.
+ * @brief Tag type for Velox's NVTX domain.
  */
 struct velox_domain {
   static constexpr char const* name{"velox"};
