@@ -55,10 +55,12 @@ using nvtx_registered_string_t = nvtx3::registered_string_in<velox_domain>;
           ::nvtx3::event_attributes{nvtx3_func_name__, this->color_}}; \
   ::nvtx3::scoped_range_in<velox_domain> const nvtx3_range__{nvtx3_func_attr__};
 
-#define VELOX_NVTX_FUNC_RANGE()                                                \
+#define VELOX_NVTX_PRETTY_FUNC_RANGE()                                         \
   static nvtx_registered_string_t const nvtx3_func_name__{                     \
       std::string(__func__) + " " + std::string(__PRETTY_FUNCTION__)};         \
   static ::nvtx3::event_attributes const nvtx3_func_attr__{nvtx3_func_name__}; \
   ::nvtx3::scoped_range_in<velox_domain> const nvtx3_range__{nvtx3_func_attr__};
+
+#define VELOX_NVTX_FUNC_RANGE() NVTX3_FUNC_RANGE_IN(velox_domain)
 
 } // namespace facebook::velox::cudf_velox

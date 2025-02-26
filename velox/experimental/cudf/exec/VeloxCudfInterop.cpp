@@ -341,7 +341,7 @@ struct copy_to_host {
 VectorPtr to_velox_column(
     const cudf::column_view& col,
     memory::MemoryPool* pool) {
-  VELOX_NVTX_FUNC_RANGE();
+  VELOX_NVTX_PRETTY_FUNC_RANGE();
   auto velox_type = cudf_type_id_to_velox_type(col.type().id());
   if (cudfDebugEnabled()) {
     std::cout << "Converting to_velox_column: " << velox_type->toString()
@@ -356,7 +356,7 @@ RowVectorPtr to_velox_column(
     const cudf::table_view& table,
     memory::MemoryPool* pool,
     std::string name_prefix) {
-  VELOX_NVTX_FUNC_RANGE();
+  VELOX_NVTX_PRETTY_FUNC_RANGE();
   std::vector<VectorPtr> children;
   std::vector<std::string> names;
   for (auto& col : table) {
