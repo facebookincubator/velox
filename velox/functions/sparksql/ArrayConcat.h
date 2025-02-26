@@ -32,7 +32,7 @@ struct ArrayConcatFunction {
   void call(
       out_type<Array<T>>& out,
       const arg_type<Variadic<Array<T>>>& arrays) {
-    int64_t elementCount = 0;
+    size_t elementCount = 0;
     for (const auto& array : arrays) {
       elementCount += array.value().size();
     }
