@@ -116,7 +116,7 @@ function install_hdfs {
   libhdfs3_dir=$DEPENDENCY_DIR/hawq/depends/libhdfs3
   sed -i '' -e "/FIND_PACKAGE(GoogleTest REQUIRED)/d" $libhdfs3_dir/CMakeLists.txt
   sed -i '' -e "s/dumpversion/dumpfullversion/" $libhdfs3_dir/CMakeLists.txt
-  cmake_install ${libhdfs3_dir}
+  cmake_install_dir ${libhdfs3_dir}
 }
 
 function install_adapters {
