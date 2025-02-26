@@ -18,10 +18,10 @@ add_library(
   CudfFilterProject.cpp
   CudfHashJoin.cpp
   CudfOrderBy.cpp
+  ExpressionEvaluator.cpp
   ToCudf.cpp
   Utilities.cpp
-  VeloxCudfInterop.cpp
-  ExpressionEvaluator.cpp)
+  VeloxCudfInterop.cpp)
 
 set_target_properties(
   velox_cudf_exec

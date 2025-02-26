@@ -116,7 +116,7 @@ cudf::ast::literal make_scalar_and_literal(
         *static_cast<cudf::string_scalar*>(scalars.back().get())};
   } else {
     // TODO for non-numeric types too.
-    VELOX_FAIL("Not implemented");
+    VELOX_NYI("Non-numeric types not yet implemented");
   }
 }
 
