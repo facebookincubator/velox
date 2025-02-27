@@ -459,6 +459,20 @@ RowVectorPtr to_velox_column(
   return casted_ptr;
 }
 
+template <typename Iterator>
+std::vector<cudf::column_metadata>
+get_metadata(Iterator begin, Iterator end, const std::string& name_prefix) {
+  std::vector<cudf::column_metadata> metadata;
+  int i = 0;
+  for (auto c = begin; c < end; c++) {
+    metadata.push_back(cudf::column_metadata(name_prefix + std::to_string(i)));
+    metadata.back().children_meta = get_metadata(
+        c->child_begin(), c->child_end(), name_prefix + std::to_string(i));
+    i++;
+  }
+  return metadata;
+}
+
 } // namespace
 
 facebook::velox::RowVectorPtr to_velox_column(
@@ -466,10 +480,7 @@ facebook::velox::RowVectorPtr to_velox_column(
     facebook::velox::memory::MemoryPool* pool,
     std::string name_prefix,
     rmm::cuda_stream_view stream) {
-  std::vector<cudf::column_metadata> metadata;
-  for (auto i = 0; i < table.num_columns(); i++) {
-    metadata.push_back(cudf::column_metadata(name_prefix + std::to_string(i)));
-  }
+  auto metadata = get_metadata(table.begin(), table.end(), name_prefix);
   return to_velox_column(table, pool, metadata, stream);
 }
 

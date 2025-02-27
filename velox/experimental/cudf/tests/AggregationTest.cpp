@@ -14,29 +14,10 @@
  * limitations under the License.
  */
 
-#include <fmt/format.h>
-#include <folly/Math.h>
-#include <re2/re2.h>
-
-#include "folly/experimental/EventCount.h"
-#include "velox/common/base/tests/GTestUtils.h"
-#include "velox/common/file/FileSystems.h"
-#include "velox/common/memory/SharedArbitrator.h"
-#include "velox/common/memory/tests/SharedArbitratorTestUtil.h"
-#include "velox/common/testutil/TestValue.h"
 #include "velox/dwio/common/tests/utils/BatchMaker.h"
-#include "velox/exec/Aggregate.h"
-#include "velox/exec/GroupingSet.h"
-#include "velox/exec/PlanNodeStats.h"
-#include "velox/exec/PrefixSort.h"
-#include "velox/exec/Values.h"
-#include "velox/exec/prefixsort/PrefixSortEncoder.h"
-#include "velox/exec/tests/utils/ArbitratorTestUtil.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/OperatorTestBase.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
-#include "velox/exec/tests/utils/SumNonPODAggregate.h"
-#include "velox/exec/tests/utils/TempDirectoryPath.h"
 #include "velox/experimental/cudf/exec/ToCudf.h"
 
 namespace facebook::velox::exec::test {
@@ -318,7 +299,7 @@ TEST_F(AggregationTest, allKeyTypes) {
           .singleAggregation({"c0", "c1", "c2", "c3", "c4", "c5"}, {"sum(c6)"})
           .planNode();
 
-  // DM: Instead of sum(c6, this was sum(1) but we don't yet support constants
+  // DM: Instead of sum(c6), this was sum(1) but we don't yet support constants
   assertQuery(
       op,
       "SELECT c0, c1, c2, c3, c4, c5, sum(c6) FROM tmp "
@@ -364,6 +345,135 @@ TEST_F(AggregationTest, ignoreNullKeys) {
   });
 
   AssertQueryBuilder(makePlan(true)).assertEmptyResults();
+}
+
+TEST_F(AggregationTest, avgSingleGrouped) {
+  auto vectors = makeVectors(rowType_, 10, 100);
+  createDuckDbTable(vectors);
+
+  // DM: removed avg(c3). We're having overflow issues with int64_t.
+  std::vector<std::string> aggregates = {
+      "avg(c1)", "avg(c2)", "avg(c4)", "avg(c5)"};
+
+  std::string keyName = "c0";
+  auto op = PlanBuilder()
+                .values(vectors)
+                .singleAggregation({keyName}, aggregates)
+                .planNode();
+
+  assertQuery(
+      op,
+      "SELECT " + keyName + ", avg(c1), avg(c2), avg(c4), avg(c5) " +
+          "FROM tmp GROUP BY " + keyName);
+}
+
+TEST_F(AggregationTest, avgPartialFinalGrouped) {
+  auto vectors = makeVectors(rowType_, 10, 100);
+  createDuckDbTable(vectors);
+
+  // DM: removed avg(c3). We're having overflow issues with int64_t.
+  std::vector<std::string> aggregates = {
+      "avg(c1)", "avg(c2)", "avg(c4)", "avg(c5)"};
+
+  std::string keyName = "c0";
+  auto op = PlanBuilder()
+                .values(vectors)
+                .partialAggregation({keyName}, aggregates)
+                .finalAggregation()
+                .planNode();
+
+  assertQuery(
+      op,
+      "SELECT " + keyName + ", avg(c1), avg(c2), avg(c4), avg(c5) " +
+          "FROM tmp GROUP BY " + keyName);
+}
+
+TEST_F(AggregationTest, avgSingleGlobal) {
+  auto vectors = makeVectors(rowType_, 10, 100);
+  createDuckDbTable(vectors);
+
+  std::vector<std::string> aggregates = {
+      "avg(c1)", "avg(c2)", "avg(c4)", "avg(c5)"};
+  auto op = PlanBuilder()
+                .values(vectors)
+                .singleAggregation({}, aggregates)
+                .planNode();
+
+  assertQuery(op, "SELECT avg(c1), avg(c2), avg(c4), avg(c5) FROM tmp");
+}
+
+TEST_F(AggregationTest, avgPartialFinalGlobal) {
+  auto vectors = makeVectors(rowType_, 10, 100);
+  createDuckDbTable(vectors);
+
+  std::vector<std::string> aggregates = {
+      "avg(c1)", "avg(c2)", "avg(c4)", "avg(c5)"};
+
+  auto op = PlanBuilder()
+                .values(vectors)
+                .partialAggregation({}, aggregates)
+                .finalAggregation()
+                .planNode();
+
+  assertQuery(op, "SELECT avg(c1), avg(c2), avg(c4), avg(c5) FROM tmp");
+}
+
+TEST_F(AggregationTest, countSingleGroupBy) {
+  auto vectors = makeVectors(rowType_, 10, 100);
+  createDuckDbTable(vectors);
+
+  std::string keyName = "c0";
+  std::vector<std::string> aggregates = {"count(0)"};
+  auto op = PlanBuilder()
+                .values(vectors)
+                .singleAggregation({keyName}, aggregates)
+                .planNode();
+
+  assertQuery(
+      op, "SELECT " + keyName + ", count(*) FROM tmp GROUP BY " + keyName);
+}
+
+TEST_F(AggregationTest, countPartialFinalGroupBy) {
+  auto vectors = makeVectors(rowType_, 10, 100);
+  createDuckDbTable(vectors);
+
+  std::string keyName = "c0";
+  std::vector<std::string> aggregates = {"count(0)"};
+  auto op = PlanBuilder()
+                .values(vectors)
+                .partialAggregation({keyName}, aggregates)
+                .finalAggregation()
+                .planNode();
+
+  assertQuery(
+      op, "SELECT " + keyName + ", count(*) FROM tmp GROUP BY " + keyName);
+}
+
+TEST_F(AggregationTest, countSingleGlobal) {
+  auto vectors = makeVectors(rowType_, 10, 100);
+  createDuckDbTable(vectors);
+
+  std::vector<std::string> aggregates = {"count(0)"};
+  auto op = PlanBuilder()
+                .values(vectors)
+                .singleAggregation({}, aggregates)
+                .planNode();
+
+  assertQuery(op, "SELECT count(*) FROM tmp");
+}
+
+TEST_F(AggregationTest, countPartialFinalGlobal) {
+  auto vectors = makeVectors(rowType_, 10, 100);
+  createDuckDbTable(vectors);
+
+  std::vector<std::string> aggregates = {"count(0)"};
+  auto op = PlanBuilder()
+                .values(vectors)
+                .partialAggregation({}, aggregates)
+                .finalAggregation()
+                .planNode();
+
+  assertQuery(op, "SELECT count(*) FROM tmp");
 }
 
 } // namespace facebook::velox::exec::test
