@@ -275,17 +275,28 @@ function install_azure-storage-sdk-cpp {
     sed -i "s/\"version-string\"/\"builtin-baseline\": \"$vcpkg_commit_id\",\"version-string\"/" $azure_core_dir/vcpkg.json
     sed -i "s/\"version-string\"/\"overrides\": [{ \"name\": \"openssl\", \"version-string\": \"$openssl_version\" }],\"version-string\"/" $azure_core_dir/vcpkg.json
   fi
-  cmake_install_dir $azure_core_dir -DCMAKE_BUILD_TYPE=${CMAKE_BUILD_TYPE} -DBUILD_SHARED_LIBS=OFF
-
+  (
+    cd $azure_core_dir
+    cmake_install  -DCMAKE_BUILD_TYPE=${CMAKE_BUILD_TYPE} -DBUILD_SHARED_LIBS=OFF
+  )
   # install azure-identity
-  cmake_install_dir sdk/identity/azure-identity -DCMAKE_BUILD_TYPE=${CMAKE_BUILD_TYPE} -DBUILD_SHARED_LIBS=OFF
-
+  (
+    cd sdk/identity/azure-identity
+    cmake_install -DCMAKE_BUILD_TYPE=${CMAKE_BUILD_TYPE} -DBUILD_SHARED_LIBS=OFF
+  )
   # install azure-storage-common
-  cmake_install_dir sdk/storage/azure-storage-common -DCMAKE_BUILD_TYPE=${CMAKE_BUILD_TYPE} -DBUILD_SHARED_LIBS=OFF
-
+  (
+    cd sdk/storage/azure-storage-common
+    cmake_install -DCMAKE_BUILD_TYPE=${CMAKE_BUILD_TYPE} -DBUILD_SHARED_LIBS=OFF
+  )
   # install azure-storage-blobs
-  cmake_install_dir sdk/storage/azure-storage-blobs -DCMAKE_BUILD_TYPE=${CMAKE_BUILD_TYPE} -DBUILD_SHARED_LIBS=OFF
-
+  (
+    cd sdk/storage/azure-storage-blobs
+    cmake_install -DCMAKE_BUILD_TYPE=${CMAKE_BUILD_TYPE} -DBUILD_SHARED_LIBS=OFF
+  )
   # install azure-storage-files-datalake
-  cmake_install_dir sdk/storage/azure-storage-files-datalake -DCMAKE_BUILD_TYPE=${CMAKE_BUILD_TYPE} -DBUILD_SHARED_LIBS=OFF
+  (
+    cd sdk/storage/azure-storage-files-datalake
+    cmake_install -DCMAKE_BUILD_TYPE=${CMAKE_BUILD_TYPE} -DBUILD_SHARED_LIBS=OFF
+  )
 }
