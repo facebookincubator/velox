@@ -239,7 +239,8 @@ class HiveIcebergTest : public HiveConnectorTestBase {
           equalityDeleteVectorMap,
       const std::unordered_map<int8_t, std::vector<int32_t>>&
           equalityFieldIdsMap,
-      std::string duckDbSql = "") {
+      std::string duckDbSql = "",
+      std::vector<RowVectorPtr> dataVectors = {}) {
     VELOX_CHECK_EQ(equalityDeleteVectorMap.size(), equalityFieldIdsMap.size());
     // We will create data vectors with numColumns number of columns that is the
     // max field Id in equalityFieldIds
@@ -260,7 +261,7 @@ class HiveIcebergTest : public HiveConnectorTestBase {
     VELOX_CHECK_LE(equalityFieldIdsMap.size(), numDataColumns);
 
     std::shared_ptr<TempFilePath> dataFilePath =
-        writeDataFiles(rowCount, numDataColumns)[0];
+        writeDataFiles(rowCount, numDataColumns, 1, dataVectors)[0];
 
     std::vector<IcebergDeleteFile> deleteFiles;
     std::string predicates = "";
@@ -304,7 +305,10 @@ class HiveIcebergTest : public HiveConnectorTestBase {
       }
     }
 
-    assertEqualityDeletes(icebergSplits.back(), rowType_, duckDbSql);
+    assertEqualityDeletes(
+        icebergSplits.back(),
+        !dataVectors.empty() ? asRowType(dataVectors[0]->type()) : rowType_,
+        duckDbSql);
 
     // Select a column that's not in the filter columns
     if (numDataColumns > 1 &&
@@ -388,7 +392,6 @@ class HiveIcebergTest : public HiveConnectorTestBase {
     return splits;
   }
 
- private:
   void assertEqualityDeletes(
       std::shared_ptr<connector::ConnectorSplit> split,
       RowTypePtr outputRowType,
@@ -403,6 +406,7 @@ class HiveIcebergTest : public HiveConnectorTestBase {
     ASSERT_TRUE(it->second.peakMemoryBytes > 0);
   }
 
+ private:
   std::map<std::string, std::shared_ptr<TempFilePath>> writeDataFiles(
       std::map<std::string, std::vector<int64_t>> rowGroupSizesForFiles) {
     std::map<std::string, std::shared_ptr<TempFilePath>> dataFilePaths;
@@ -430,24 +434,6 @@ class HiveIcebergTest : public HiveConnectorTestBase {
     }
 
     createDuckDbTable(dataVectorsJoined);
-    return dataFilePaths;
-  }
-
-  std::vector<std::shared_ptr<TempFilePath>> writeDataFiles(
-      uint64_t numRows,
-      int32_t numColumns = 1,
-      int32_t splitCount = 1) {
-    auto dataVectors = makeVectors(splitCount, numRows, numColumns);
-    VELOX_CHECK_EQ(dataVectors.size(), splitCount);
-
-    std::vector<std::shared_ptr<TempFilePath>> dataFilePaths;
-    dataFilePaths.reserve(splitCount);
-    for (auto i = 0; i < splitCount; i++) {
-      dataFilePaths.emplace_back(TempFilePath::create());
-      writeToFile(dataFilePaths.back()->getPath(), dataVectors[i]);
-    }
-
-    createDuckDbTable(dataVectors);
     return dataFilePaths;
   }
 
@@ -526,44 +512,6 @@ class HiveIcebergTest : public HiveConnectorTestBase {
     }
 
     return vectors;
-  }
-
-  std::vector<RowVectorPtr>
-  makeVectors(int32_t count, int32_t rowsPerVector, int32_t numColumns = 1) {
-    std::vector<TypePtr> types(numColumns, BIGINT());
-    std::vector<std::string> names;
-    for (int j = 0; j < numColumns; j++) {
-      names.push_back(fmt::format("c{}", j));
-    }
-
-    std::vector<RowVectorPtr> rowVectors;
-    for (int i = 0; i < count; i++) {
-      std::vector<VectorPtr> vectors;
-
-      // Create the column values like below:
-      // c0 c1 c2
-      //  0  0  0
-      //  1  0  0
-      //  2  1  0
-      //  3  1  1
-      //  4  2  1
-      //  5  2  1
-      //  6  3  2
-      // ...
-      // In the first column c0, the values are continuously increasing and not
-      // repeating. In the second column c1, the values are continuously
-      // increasing and each value repeats once. And so on.
-      for (int j = 0; j < numColumns; j++) {
-        auto data = makeSequenceValues(rowsPerVector, j + 1);
-        vectors.push_back(vectorMaker_.flatVector<int64_t>(data));
-      }
-
-      rowVectors.push_back(makeRowVector(names, vectors));
-    }
-
-    rowType_ = std::make_shared<RowType>(std::move(names), std::move(types));
-
-    return rowVectors;
   }
 
   std::string getDuckDBQuery(
@@ -683,24 +631,6 @@ class HiveIcebergTest : public HiveConnectorTestBase {
     return PlanBuilder(pool_.get()).tableScan(outputRowType).planNode();
   }
 
-  std::shared_ptr<TempFilePath> writeEqualityDeleteFile(
-      const std::vector<std::vector<int64_t>>& equalityDeleteVector) {
-    std::vector<std::string> names;
-    std::vector<VectorPtr> vectors;
-    for (int i = 0; i < equalityDeleteVector.size(); i++) {
-      names.push_back(fmt::format("c{}", i));
-      vectors.push_back(
-          vectorMaker_.flatVector<int64_t>(equalityDeleteVector[i]));
-    }
-
-    RowVectorPtr deleteFileVectors = makeRowVector(names, vectors);
-
-    auto deleteFilePath = TempFilePath::create();
-    writeToFile(deleteFilePath->getPath(), deleteFileVectors);
-
-    return deleteFilePath;
-  }
-
   std::string makePredicates(
       const std::vector<std::vector<int64_t>>& equalityDeleteVector,
       const std::vector<int32_t>& equalityFieldIds) {
@@ -758,13 +688,90 @@ class HiveIcebergTest : public HiveConnectorTestBase {
     return predicates;
   }
 
-  dwio::common::FileFormat fileFomat_{dwio::common::FileFormat::DWRF};
-
-  RowTypePtr rowType_{ROW({"c0"}, {BIGINT()})};
   std::shared_ptr<IcebergMetadataColumn> pathColumn_ =
       IcebergMetadataColumn::icebergDeleteFilePathColumn();
   std::shared_ptr<IcebergMetadataColumn> posColumn_ =
       IcebergMetadataColumn::icebergDeletePosColumn();
+
+ protected:
+  RowTypePtr rowType_{ROW({"c0"}, {BIGINT()})};
+  dwio::common::FileFormat fileFomat_{dwio::common::FileFormat::DWRF};
+
+  std::shared_ptr<TempFilePath> writeEqualityDeleteFile(
+      const std::vector<std::vector<int64_t>>& equalityDeleteVector) {
+    std::vector<std::string> names;
+    std::vector<VectorPtr> vectors;
+    for (int i = 0; i < equalityDeleteVector.size(); i++) {
+      names.push_back(fmt::format("c{}", i));
+      vectors.push_back(makeFlatVector<int64_t>(equalityDeleteVector[i]));
+    }
+
+    RowVectorPtr deleteFileVectors = makeRowVector(names, vectors);
+
+    auto deleteFilePath = TempFilePath::create();
+    writeToFile(deleteFilePath->getPath(), deleteFileVectors);
+
+    return deleteFilePath;
+  }
+
+  std::vector<std::shared_ptr<TempFilePath>> writeDataFiles(
+      uint64_t numRows,
+      int32_t numColumns = 1,
+      int32_t splitCount = 1,
+      std::vector<RowVectorPtr> dataVectors = {}) {
+    if (dataVectors.empty()) {
+      dataVectors = makeVectors(splitCount, numRows, numColumns);
+    }
+    VELOX_CHECK_EQ(dataVectors.size(), splitCount);
+
+    std::vector<std::shared_ptr<TempFilePath>> dataFilePaths;
+    dataFilePaths.reserve(splitCount);
+    for (auto i = 0; i < splitCount; i++) {
+      dataFilePaths.emplace_back(TempFilePath::create());
+      writeToFile(dataFilePaths.back()->getPath(), dataVectors[i]);
+    }
+
+    createDuckDbTable(dataVectors);
+    return dataFilePaths;
+  }
+
+  std::vector<RowVectorPtr>
+  makeVectors(int32_t count, int32_t rowsPerVector, int32_t numColumns = 1) {
+    std::vector<TypePtr> types(numColumns, BIGINT());
+    std::vector<std::string> names;
+    for (int j = 0; j < numColumns; j++) {
+      names.push_back(fmt::format("c{}", j));
+    }
+
+    std::vector<RowVectorPtr> rowVectors;
+    for (int i = 0; i < count; i++) {
+      std::vector<VectorPtr> vectors;
+
+      // Create the column values like below:
+      // c0 c1 c2
+      //  0  0  0
+      //  1  0  0
+      //  2  1  0
+      //  3  1  1
+      //  4  2  1
+      //  5  2  1
+      //  6  3  2
+      // ...
+      // In the first column c0, the values are continuously increasing and not
+      // repeating. In the second column c1, the values are continuously
+      // increasing and each value repeats once. And so on.
+      for (int j = 0; j < numColumns; j++) {
+        auto data = makeSequenceValues(rowsPerVector, j + 1);
+        vectors.push_back(vectorMaker_.flatVector<int64_t>(data));
+      }
+
+      rowVectors.push_back(makeRowVector(names, vectors));
+    }
+
+    rowType_ = std::make_shared<RowType>(std::move(names), std::move(types));
+
+    return rowVectors;
+  }
 };
 
 /// This test creates one single data file and one delete file. The parameter
@@ -1212,5 +1219,55 @@ TEST_F(HiveIcebergTest, equalityDeletesMultipleFiles) {
       equalityDeleteVectorMap,
       equalityFieldIdsMap,
       "SELECT * FROM tmp WHERE 1 = 0");
+}
+
+TEST_F(HiveIcebergTest, TestSubFieldEqualityDelete) {
+  folly::SingletonVault::singleton()->registrationComplete();
+
+  // Write the base file
+  std::shared_ptr<TempFilePath> dataFilePath = TempFilePath::create();
+  std::vector<RowVectorPtr> dataVectors = {makeRowVector(
+      {"c_bigint", "c_row"},
+      {makeFlatVector<int64_t>(20, [](auto row) { return row + 1; }),
+       makeRowVector(
+           {"c0", "c1", "c2"},
+           {makeFlatVector<int64_t>(20, [](auto row) { return row + 1; }),
+            makeFlatVector<int64_t>(20, [](auto row) { return row + 1; }),
+            makeFlatVector<int64_t>(20, [](auto row) { return row + 1; })})})};
+  int32_t numDataColumns = 1;
+  dataFilePath = writeDataFiles(rowCount, numDataColumns, 1, dataVectors)[0];
+
+  // Write the delete file. Equality delete field is c_row.c1
+  std::vector<IcebergDeleteFile> deleteFiles;
+  // Delete rows {0, 1} from c_row.c1, whose schema Id is 4
+  std::vector<RowVectorPtr> deleteDataVectors = {makeRowVector(
+      {"c1"}, {makeFlatVector<int64_t>(2, [](auto row) { return row + 1; })})};
+
+  std::vector<std::shared_ptr<TempFilePath>> deleteFilePaths;
+  auto equalityFieldIds = std::vector<int32_t>({4});
+  auto deleteFilePath = TempFilePath::create();
+  writeToFile(deleteFilePath->getPath(), deleteDataVectors.back());
+  deleteFilePaths.push_back(deleteFilePath);
+  IcebergDeleteFile deleteFile(
+      FileContent::kEqualityDeletes,
+      deleteFilePaths.back()->getPath(),
+      fileFomat_,
+      2,
+      testing::internal::GetFileSize(
+          std::fopen(deleteFilePaths.back()->getPath().c_str(), "r")),
+      equalityFieldIds);
+  deleteFiles.push_back(deleteFile);
+
+  auto icebergSplits = makeIcebergSplits(dataFilePath->getPath(), deleteFiles);
+
+  // Select both c_bigint and c_row column columns
+  std::string duckDbSql = "SELECT * FROM tmp WHERE c_row.c0 not in (1, 2)";
+  assertEqualityDeletes(
+      icebergSplits.back(), asRowType(dataVectors[0]->type()), duckDbSql);
+
+  // SELECT only c_bigint column
+  duckDbSql = "SELECT c_bigint FROM tmp WHERE c_row.c0 not in (1, 2)";
+  assertEqualityDeletes(
+      icebergSplits.back(), ROW({"c_bigint"}, {BIGINT()}), duckDbSql);
 }
 } // namespace facebook::velox::connector::hive::iceberg
