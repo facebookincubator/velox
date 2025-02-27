@@ -163,11 +163,10 @@ std::string capacityToString(int64_t capacity) {
 
 std::string MemoryPool::Stats::toString() const {
   return fmt::format(
-      "usedBytes:{} reservedBytes:{} peakBytes:{} cumulativeBytes:{} numAllocs:{} numFrees:{} numReserves:{} numReleases:{} numShrinks:{} numReclaims:{} numCollisions:{} numCapacityGrowths:{}",
+      "usedBytes:{} reservedBytes:{} peakBytes:{} numAllocs:{} numFrees:{} numReserves:{} numReleases:{} numShrinks:{} numReclaims:{} numCollisions:{} numCapacityGrowths:{}",
       succinctBytes(usedBytes),
       succinctBytes(reservedBytes),
       succinctBytes(peakBytes),
-      succinctBytes(cumulativeBytes),
       numAllocs,
       numFrees,
       numReserves,
@@ -183,7 +182,6 @@ bool MemoryPool::Stats::operator==(const MemoryPool::Stats& other) const {
              usedBytes,
              reservedBytes,
              peakBytes,
-             cumulativeBytes,
              numAllocs,
              numFrees,
              numReserves,
@@ -194,7 +192,6 @@ bool MemoryPool::Stats::operator==(const MemoryPool::Stats& other) const {
              other.usedBytes,
              other.reservedBytes,
              other.peakBytes,
-             other.cumulativeBytes,
              other.numAllocs,
              other.numFrees,
              other.numReserves,
@@ -469,7 +466,6 @@ MemoryPool::Stats MemoryPoolImpl::statsLocked() const {
   stats.usedBytes = usedBytes();
   stats.reservedBytes = reservationBytes_;
   stats.peakBytes = peakBytes_;
-  stats.cumulativeBytes = cumulativeBytes_;
   stats.numAllocs = numAllocs_;
   stats.numFrees = numFrees_;
   stats.numReserves = numReserves_;
@@ -780,7 +776,6 @@ void MemoryPoolImpl::reserveThreadSafe(uint64_t size, bool reserveOnly) {
           minReservationBytes_ = tsanAtomicValue(reservationBytes_);
         } else {
           usedReservationBytes_ += size;
-          cumulativeBytes_ += size;
           maybeUpdatePeakBytesLocked(usedReservationBytes_);
         }
         sanityCheckLocked();
@@ -897,7 +892,6 @@ bool MemoryPoolImpl::maybeIncrementReservation(uint64_t size) {
 void MemoryPoolImpl::incrementReservationLocked(uint64_t bytes) {
   reservationBytes_ += bytes;
   if (!isLeaf()) {
-    cumulativeBytes_ += bytes;
     maybeUpdatePeakBytesLocked(reservationBytes_);
   }
 }
