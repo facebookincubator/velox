@@ -107,6 +107,18 @@ SELECT get_json_object(&#39;{&quot;a&quot;:3}&#39;&#39;, &#39;.a&#39;); -- NULL 
 </dd></dl>
 
 <dl class="spark function">
+<dt class="sig sig-object spark" id="json_array_length">
+<span class="sig-name descname"><span class="pre">json_array_length</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">jsonString</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">integer</span></span></span><a class="headerlink" href="#json_array_length" title="Link to this definition">¶</a></dt>
+<dd><p>Returns the number of elements in the outermost JSON array from <code class="docutils literal notranslate"><span class="pre">jsonString</span></code>.
+If <code class="docutils literal notranslate"><span class="pre">jsonString</span></code> is not a valid JSON array or NULL, the function returns NULL.</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">json_array_length</span><span class="p">(</span><span class="s1">&#39;[1,2,3,4]&#39;</span><span class="p">);</span> <span class="o">--</span> <span class="mi">4</span>
+<span class="n">SELECT</span> <span class="n">json_array_length</span><span class="p">(</span><span class="s1">&#39;[1,2,3,{&quot;f1&quot;:1,&quot;f2&quot;:[5,6]},4]&#39;</span><span class="p">);</span> <span class="o">--</span> <span class="mi">5</span>
+<span class="n">SELECT</span> <span class="n">json_array_length</span><span class="p">(</span><span class="s1">&#39;[1,2&#39;</span><span class="p">);</span> <span class="o">--</span> <span class="n">NULL</span>
+</pre></div>
+</div>
+</dd></dl>
+
+<dl class="spark function">
 <dt class="sig sig-object spark" id="json_object_keys">
 <span class="sig-name descname"><span class="pre">json_object_keys</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">jsonString</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#json_object_keys" title="Link to this definition">¶</a></dt>
 <dd><p>Returns all the keys of the outermost JSON object as an array if a valid JSON object is given.
@@ -139,6 +151,7 @@ returns null.</p>
 <li><a class="reference internal" href="#id1">JSON Functions</a><ul>
 <li><a class="reference internal" href="#from_json"><code class="docutils literal notranslate"><span class="pre">from_json()</span></code></a></li>
 <li><a class="reference internal" href="#get_json_object"><code class="docutils literal notranslate"><span class="pre">get_json_object()</span></code></a></li>
+<li><a class="reference internal" href="#json_array_length"><code class="docutils literal notranslate"><span class="pre">json_array_length()</span></code></a></li>
 <li><a class="reference internal" href="#json_object_keys"><code class="docutils literal notranslate"><span class="pre">json_object_keys()</span></code></a></li>
 </ul>
 </li>
