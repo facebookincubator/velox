@@ -27,12 +27,11 @@ StreamingAggregation::StreamingAggregation(
           aggregationNode->outputType(),
           operatorId,
           aggregationNode->id(),
-          aggregationNode->step() == core::AggregationNode::Step::kPartial
+          aggregationNode->allRawInput() && aggregationNode->hasPartialOutput()
               ? "PartialAggregation"
               : "Aggregation"),
       outputBatchSize_{outputBatchRows()},
       aggregationNode_{aggregationNode},
-      step_{aggregationNode->step()},
       eagerFlush_{operatorCtx_->driverCtx()
                       ->queryConfig()
                       .streamingAggregationEagerFlush()} {
@@ -76,17 +75,15 @@ void StreamingAggregation::initialize() {
     } else {
       distinctAggregations_.push_back(nullptr);
     }
-  }
-
-  if (isRawInput(step_)) {
-    for (column_index_t i = 0; i < aggregates_.size(); ++i) {
-      if (aggregates_[i].sortingKeys.empty() && !aggregates_[i].distinct) {
+    if (isRawInput(aggregate.step)) {
+      if (aggregate.sortingKeys.empty() && !aggregate.distinct) {
         // Must be set before we initialize row container, because it could
         // change the type and size of accumulator.
-        aggregates_[i].function->setClusteredInput(true);
+        aggregate.function->setClusteredInput(true);
       }
     }
   }
+
   masks_ = std::make_unique<AggregationMasks>(extractMaskChannels(aggregates_));
   rows_ = makeRowContainer(groupingKeyTypes);
 
@@ -168,7 +165,7 @@ RowVectorPtr StreamingAggregation::createOutput(size_t numGroups) {
 
     const auto& function = aggregate.function;
     auto& result = output->childAt(numKeys + i);
-    if (isPartialOutput(step_)) {
+    if (isPartialOutput(aggregate.step)) {
       function->extractAccumulators(groups_.data(), numGroups, &result);
     } else {
       function->extractValues(groups_.data(), numGroups, &result);
@@ -279,7 +276,7 @@ void StreamingAggregation::evaluateAggregates() {
       }
     }
 
-    if (isRawInput(step_)) {
+    if (core::AggregationNode::Aggregate::isPartialInput(aggregate.step)) {
       if (function->supportsAddRawClusteredInput()) {
         function->addRawClusteredInput(
             inputGroups_.data(), rows, args, groupBoundaries_);

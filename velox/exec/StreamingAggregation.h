@@ -89,8 +89,6 @@ class StreamingAggregation : public Operator {
   // Used at initialize() and gets reset() afterward.
   std::shared_ptr<const core::AggregationNode> aggregationNode_;
 
-  const core::AggregationNode::Step step_;
-
   const bool eagerFlush_;
 
   std::vector<column_index_t> groupingKeys_;

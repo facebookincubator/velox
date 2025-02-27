@@ -162,12 +162,15 @@ class StreamingAggregationTest : public OperatorTestBase,
     }
 
     {
-      auto plan =
-          PlanBuilder()
-              .values(data)
-              .streamingAggregation(
-                  {"c0"}, {}, {}, core::AggregationNode::Step::kSingle, false)
-              .planNode();
+      auto plan = PlanBuilder()
+                      .values(data)
+                      .streamingAggregation(
+                          {"c0"},
+                          {},
+                          {},
+                          core::AggregationNode::Step::kSingle,
+                          false)
+                      .planNode();
 
       config(AssertQueryBuilder(plan, duckDbQueryRunner_), outputBatchSize)
           .assertResults("SELECT distinct c0 FROM tmp");

@@ -338,13 +338,17 @@ TEST_F(SimpleArrayAggAggregationTest, trackRowSize) {
   };
 
   auto rawInput = makeFlatVector<int64_t>({1, 2, 3, 4, 5});
-  testTractRowSize(core::AggregationNode::Step::kPartial, rawInput, true);
-  testTractRowSize(core::AggregationNode::Step::kPartial, rawInput, false);
+  testTractRowSize(
+      core::AggregationNode::Step::kPartial, rawInput, true);
+  testTractRowSize(
+      core::AggregationNode::Step::kPartial, rawInput, false);
 
   auto intermediate =
       makeArrayVector<int64_t>({{1, 2}, {3, 4}, {5, 6}, {7, 8}, {9, 10}});
-  testTractRowSize(core::AggregationNode::Step::kFinal, intermediate, true);
-  testTractRowSize(core::AggregationNode::Step::kFinal, intermediate, false);
+  testTractRowSize(
+      core::AggregationNode::Step::kFinal, intermediate, true);
+  testTractRowSize(
+      core::AggregationNode::Step::kFinal, intermediate, false);
 }
 
 // A testing aggregation function that counts the number of nulls in inputs.

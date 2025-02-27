@@ -164,7 +164,11 @@ class TableWriterReplayerTest : public HiveConnectorTestBase {
       std::shared_ptr<core::AggregationNode> aggNode = nullptr;
       if (aggregationNode == nullptr) {
         aggNode = generateAggregationNode(
-            "c0", nodeId, {}, core::AggregationNode::Step::kPartial, source);
+            "c0",
+            nodeId,
+            {},
+            core::AggregationNode::Step::kPartial,
+            source);
       } else {
         aggNode = aggregationNode;
       }
@@ -250,15 +254,15 @@ class TableWriterReplayerTest : public HiveConnectorTestBase {
     std::vector<std::string> aggregateNames = {"min"};
     std::vector<core::AggregationNode::Aggregate> aggregates = {
         core::AggregationNode::Aggregate{
-            callExpr, {{BIGINT()}}, nullptr, {}, {}}};
+            step, callExpr, {{BIGINT()}}, nullptr, {}, {}}};
     return std::make_shared<core::AggregationNode>(
         nodeId,
-        step,
         groupingKeys,
         std::vector<core::FieldAccessTypedExprPtr>{},
         aggregateNames,
         aggregates,
         false, // ignoreNullKeys
+        core::AggregationNode::Aggregate::isPartialOutput(step),
         source);
   }
 
