@@ -300,3 +300,10 @@ function install_azure-storage-sdk-cpp {
     cmake_install -DCMAKE_BUILD_TYPE=${CMAKE_BUILD_TYPE} -DBUILD_SHARED_LIBS=OFF
   )
 }
+
+function install_hdfs_deps {
+  # Dependencies for Hadoop testing
+  wget_and_untar https://archive.apache.org/dist/hadoop/common/hadoop-${HADOOP_VERSION}/hadoop-${HADOOP_VERSION}.tar.gz hadoop
+  cp -a ${DEPENDENCY_DIR}/hadoop /usr/local/
+  wget ${WGET_OPTIONS} -P /usr/local/hadoop/share/hadoop/common/lib/ https://repo1.maven.org/maven2/junit/junit/4.11/junit-4.11.jar
+}

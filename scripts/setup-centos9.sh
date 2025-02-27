@@ -106,15 +106,8 @@ function install_abfs {
 
 function install_hdfs {
   dnf -y install libxml2-devel libgsasl-devel libuuid-devel krb5-devel
+  install_hdfs_deps
   yum install -y java-1.8.0-openjdk-devel
-  github_checkout apache/hawq master
-  libhdfs3_dir=$DEPENDENCY_DIR/hawq/depends/libhdfs3
-  sed -i "/FIND_PACKAGE(GoogleTest REQUIRED)/d" $libhdfs3_dir/CMakeLists.txt
-  sed -i "s/dumpversion/dumpfullversion/" $libhdfs3_dir/CMake/Platform.cmake
-  # Dependencies for Hadoop testing
-  wget_and_untar https://archive.apache.org/dist/hadoop/common/hadoop-${HADOOP_VERSION}/hadoop-${HADOOP_VERSION}.tar.gz hadoop
-  cp -a hadoop /usr/local/
-  cmake_install_dir ${libhdfs3_dir}
 }
 
 function install_adapters {

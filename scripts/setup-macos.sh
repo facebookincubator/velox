@@ -112,11 +112,7 @@ function install_abfs {
 
 function install_hdfs {
   brew install libxml2 gsasl
-  github_checkout apache/hawq master
-  libhdfs3_dir=$DEPENDENCY_DIR/hawq/depends/libhdfs3
-  sed -i '' -e "/FIND_PACKAGE(GoogleTest REQUIRED)/d" $libhdfs3_dir/CMakeLists.txt
-  sed -i '' -e "s/dumpversion/dumpfullversion/" $libhdfs3_dir/CMakeLists.txt
-  cmake_install_dir ${libhdfs3_dir}
+  install_hdfs_deps
 }
 
 function install_adapters {

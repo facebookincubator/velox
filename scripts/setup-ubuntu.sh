@@ -186,14 +186,7 @@ function install_abfs {
 
 function install_hdfs {
   apt install -y --no-install-recommends libxml2-dev libgsasl7-dev uuid-dev openjdk-8-jdk
-  github_checkout apache/hawq master
-  libhdfs3_dir=$DEPENDENCY_DIR/hawq/depends/libhdfs3
-  sed -i "/FIND_PACKAGE(GoogleTest REQUIRED)/d" $libhdfs3_dir/CMakeLists.txt
-  sed -i "s/dumpversion/dumpfullversion/" $libhdfs3_dir/CMake/Platform.cmake
-  # Dependencies for Hadoop testing
-  wget_and_untar https://archive.apache.org/dist/hadoop/common/hadoop-${HADOOP_VERSION}/hadoop-${HADOOP_VERSION}.tar.gz hadoop
-  ${SUDO} cp -a hadoop /usr/local/
-  cmake_install_dir ${libhdfs3_dir}
+  install_hdfs_deps
 }
 
 function install_adapters {
