@@ -57,9 +57,10 @@ std::vector<TestParams> generateLz4TestParams() {
         Lz4CodecOptions::kLz4Frame,
         Lz4CodecOptions::kLz4Hadoop}) {
     params.emplace_back(
-        CompressionKind::CompressionKind_LZ4,
-        std::make_shared<Lz4CodecOptions>(type));
+        CompressionKind_LZ4, std::make_shared<Lz4CodecOptions>(type));
   }
+  // Add default CodecOptions.
+  params.emplace_back(CompressionKind_LZ4);
   return params;
 }
 
@@ -386,14 +387,8 @@ class CodecTest : public ::testing::TestWithParam<TestParams> {
 TEST_P(CodecTest, specifyCompressionLevel) {
   std::vector<uint8_t> data = makeRandomData(2000);
   const auto kind = getCompressionKind();
-  if (!Codec::isAvailable(kind)) {
-    // Support for this codec hasn't been built.
-    VELOX_ASSERT_THROW(
-        Codec::create(kind, kUseDefaultCompressionLevel),
-        "Support for codec '" + compressionKindToString(kind) +
-            "' is either not built or not implemented.");
-    return;
-  }
+  ASSERT_TRUE(Codec::isAvailable(kind));
+
   auto codecDefault =
       Codec::create(kind).thenOrThrow(folly::identity, throwsNotOk);
   checkCodecRoundtrip(codecDefault, data);
@@ -421,14 +416,22 @@ TEST_P(CodecTest, getUncompressedLength) {
   compressed.resize(compressedLength);
 
   if (Codec::supportsGetUncompressedLength(getCompressionKind())) {
-    ASSERT_EQ(
-        codec->getUncompressedLength(compressed.data(), compressedLength),
-        inputLength);
+    auto uncompressedLength =
+        codec->getUncompressedLength(compressed.data(), compressedLength)
+            .thenOrThrow(folly::identity, throwsNotOk);
+    ASSERT_EQ(uncompressedLength, inputLength);
   } else {
-    ASSERT_EQ(
-        codec->getUncompressedLength(compressed.data(), compressedLength),
-        std::nullopt);
+    VELOX_ASSERT_ERROR_STATUS(
+        codec->getUncompressedLength(compressed.data(), compressedLength)
+            .error(),
+        StatusCode::kInvalid,
+        fmt::format(
+            "getUncompressedLength is unsupported with {} format.",
+            codec->name()));
   }
+
+  // TODO: For codecs that support getUncompressedLength(), verify the error
+  // message for corrupted data.
 }
 
 TEST_P(CodecTest, codecRoundtrip) {
@@ -440,47 +443,47 @@ TEST_P(CodecTest, codecRoundtrip) {
 }
 
 TEST_P(CodecTest, streamingCompressor) {
-  if (!Codec::supportsStreamingCompression(getCompressionKind())) {
+  const auto codec = makeCodec();
+  if (!codec->supportsStreamingCompression()) {
     return;
   }
 
   for (auto dataSize : {0, 10, 10000, 100000}) {
-    auto codec = makeCodec();
     checkStreamingCompressor(codec.get(), makeRandomData(dataSize));
     checkStreamingCompressor(codec.get(), makeCompressibleData(dataSize));
   }
 }
 
 TEST_P(CodecTest, streamingDecompressor) {
-  if (!Codec::supportsStreamingCompression(getCompressionKind())) {
+  const auto codec = makeCodec();
+  if (!codec->supportsStreamingCompression()) {
     return;
   }
 
   for (auto dataSize : {0, 10, 10000, 100000}) {
-    auto codec = makeCodec();
     checkStreamingDecompressor(codec.get(), makeRandomData(dataSize));
     checkStreamingDecompressor(codec.get(), makeCompressibleData(dataSize));
   }
 }
 
 TEST_P(CodecTest, streamingRoundtrip) {
-  if (!Codec::supportsStreamingCompression(getCompressionKind())) {
+  const auto codec = makeCodec();
+  if (!codec->supportsStreamingCompression()) {
     return;
   }
 
   for (auto dataSize : {0, 10, 10000, 100000}) {
-    auto codec = makeCodec();
     checkStreamingRoundtrip(codec.get(), makeRandomData(dataSize));
     checkStreamingRoundtrip(codec.get(), makeCompressibleData(dataSize));
   }
 }
 
 TEST_P(CodecTest, streamingDecompressorReuse) {
-  if (!Codec::supportsStreamingCompression(getCompressionKind())) {
+  const auto codec = makeCodec();
+  if (!codec->supportsStreamingCompression()) {
     return;
   }
 
-  auto codec = makeCodec();
   const auto& decompressor = makeStreamingDecompressor(codec.get());
   checkStreamingRoundtrip(
       makeStreamingCompressor(codec.get()), decompressor, makeRandomData(100));
@@ -511,5 +514,17 @@ TEST(CodecLZ4HadoopTest, compatibility) {
   for (auto dataSize : {0, 10, 10000, 100000}) {
     checkCodecRoundtrip(c1, c2, makeRandomData(dataSize));
   }
+}
+
+TEST(CodecTestInvalid, invalidKind) {
+  CompressionKind kind = CompressionKind_NONE;
+  ASSERT_FALSE(Codec::isAvailable(kind));
+
+  VELOX_ASSERT_ERROR_STATUS(
+      Codec::create(kind, kUseDefaultCompressionLevel).error(),
+      StatusCode::kInvalid,
+      fmt::format(
+          "Support for codec '{}' is either not built or not implemented.",
+          compressionKindToString(kind)));
 }
 } // namespace facebook::velox::common
