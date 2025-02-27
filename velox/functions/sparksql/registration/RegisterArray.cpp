@@ -49,7 +49,7 @@ void registerSparkArrayFunctions(const std::string& prefix) {
 
 namespace sparksql {
 template <typename T>
-inline void registerArrayConcatFunctions(const std::string& prefix) {
+inline void registerArrayConcatFunction(const std::string& prefix) {
   registerFunction<
       ParameterBinder<ArrayConcatFunction, T>,
       Array<T>,
@@ -57,18 +57,19 @@ inline void registerArrayConcatFunctions(const std::string& prefix) {
 }
 
 void registerArrayConcatFunctions(const std::string& prefix) {
-  registerArrayConcatFunctions<int8_t>(prefix);
-  registerArrayConcatFunctions<int16_t>(prefix);
-  registerArrayConcatFunctions<int32_t>(prefix);
-  registerArrayConcatFunctions<int64_t>(prefix);
-  registerArrayConcatFunctions<int128_t>(prefix);
-  registerArrayConcatFunctions<float>(prefix);
-  registerArrayConcatFunctions<double>(prefix);
-  registerArrayConcatFunctions<bool>(prefix);
-  registerArrayConcatFunctions<Varchar>(prefix);
-  registerArrayConcatFunctions<Timestamp>(prefix);
-  registerArrayConcatFunctions<Date>(prefix);
-  registerArrayConcatFunctions<Generic<T1>>(prefix);
+  registerArrayConcatFunction<int8_t>(prefix);
+  registerArrayConcatFunction<int16_t>(prefix);
+  registerArrayConcatFunction<int32_t>(prefix);
+  registerArrayConcatFunction<int64_t>(prefix);
+  registerArrayConcatFunction<int128_t>(prefix);
+  registerArrayConcatFunction<float>(prefix);
+  registerArrayConcatFunction<double>(prefix);
+  registerArrayConcatFunction<bool>(prefix);
+  registerArrayConcatFunction<Varchar>(prefix);
+  registerArrayConcatFunction<Timestamp>(prefix);
+  registerArrayConcatFunction<Date>(prefix);
+  registerArrayConcatFunction<UnknownValue>(prefix);
+  registerArrayConcatFunction<Generic<T1>>(prefix);
 }
 
 inline void registerArrayJoinFunctions(const std::string& prefix) {
