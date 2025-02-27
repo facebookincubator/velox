@@ -230,7 +230,7 @@ Status LZ4Compressor::compressBegin(
   return Status::OK();
 }
 
-Status common::LZ4Decompressor::init() {
+Status LZ4Decompressor::init() {
   finished_ = false;
   auto ret = LZ4F_createDecompressionContext(&ctx_, LZ4F_VERSION);
   VELOX_RETURN_IF(LZ4F_isError(ret), lz4Error("LZ4 init failed: ", ret));
@@ -304,7 +304,7 @@ int32_t Lz4CodecBase::compressionLevel() const {
 }
 
 CompressionKind Lz4CodecBase::compressionKind() const {
-  return CompressionKind::CompressionKind_LZ4;
+  return CompressionKind_LZ4;
 }
 
 Lz4FrameCodec::Lz4FrameCodec(int32_t compressionLevel)
@@ -361,6 +361,10 @@ Expected<uint64_t> Lz4FrameCodec::decompress(
                 "Lz4 compressed input contains less than one frame."));
         return bytesWritten;
       });
+}
+
+bool Lz4FrameCodec::supportsStreamingCompression() const {
+  return true;
 }
 
 Expected<std::shared_ptr<StreamingCompressor>>
@@ -430,6 +434,10 @@ Expected<uint64_t> Lz4RawCodec::decompress(
   return static_cast<uint64_t>(decompressedSize);
 }
 
+std::string Lz4RawCodec::name() const {
+  return "lz4_raw";
+}
+
 Lz4HadoopCodec::Lz4HadoopCodec() : Lz4RawCodec(kLz4DefaultCompressionLevel) {}
 
 uint64_t Lz4HadoopCodec::maxCompressedLength(uint64_t inputLength) {
@@ -489,6 +497,10 @@ int32_t Lz4HadoopCodec::maximumCompressionLevel() const {
 
 int32_t Lz4HadoopCodec::defaultCompressionLevel() const {
   return kUseDefaultCompressionLevel;
+}
+
+std::string Lz4HadoopCodec::name() const {
+  return "lz4_hadoop";
 }
 
 Expected<uint64_t> Lz4HadoopCodec::decompressInternal(
