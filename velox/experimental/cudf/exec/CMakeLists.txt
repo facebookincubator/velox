@@ -18,6 +18,7 @@ add_library(
   CudfFilterProject.cpp
   CudfHashAggregation.cpp
   CudfHashJoin.cpp
+  CudfLimit.cpp
   CudfOrderBy.cpp
   ToCudf.cpp
   Utilities.cpp
