@@ -185,6 +185,23 @@ function install_aws_deps {
 
   github_checkout $AWS_REPO_NAME $AWS_SDK_VERSION --depth 1 --recurse-submodules
   cmake_install -DCMAKE_BUILD_TYPE=${CMAKE_BUILD_TYPE} -DBUILD_SHARED_LIBS:BOOL=OFF -DMINIMIZE_SIZE:BOOL=ON -DENABLE_TESTING:BOOL=OFF -DBUILD_ONLY:STRING="s3;identity-management"
+  # Dependencies for S3 testing
+  # We need this specific version of Minio for testing.
+  local MINIO_ARCH=$MACHINE
+  if [[ $MACHINE == aarch64 ]]; then
+    MINIO_ARCH="arm64"
+  elif [[ $MACHINE == x86_64 ]]; then
+    MINIO_ARCH="amd64"
+  fi
+  local MINIO_BINARY="minio-2022-05-26"
+  local MINIO_OS="linux"
+  if [[ "$OSTYPE" == darwin* ]]; then
+    # minio will have to approved under the Privacy & Security on MacOS on first use.
+    MINIO_OS="darwin"
+  fi
+  wget https://dl.min.io/server/minio/release/${MINIO_OS}-${MINIO_ARCH}/archive/minio.RELEASE.2022-05-26T05-48-41Z -O ${MINIO_BINARY}
+  chmod +x ./${MINIO_BINARY}
+  mv ./${MINIO_BINARY} /usr/local/bin/
 }
 
 function install_minio {
