@@ -72,8 +72,8 @@ class StreamingCompressor {
   };
 
   /// Compress some input.
-  /// If CompressResult.outputTooSmall is true on return, then a larger output
-  /// buffer should be supplied.
+  /// If CompressResult.outputTooSmall is true on return, compress() should be
+  /// called again with a larger output buffer.
   virtual Expected<CompressResult> compress(
       const uint8_t* input,
       uint64_t inputLength,
@@ -82,15 +82,15 @@ class StreamingCompressor {
 
   /// Flush part of the compressed output.
   /// If FlushResult.outputTooSmall is true on return, flush() should be called
-  /// again with a larger buffer.
+  /// again with a larger output buffer.
   virtual Expected<FlushResult> flush(
       uint8_t* output,
       uint64_t outputLength) = 0;
 
   /// End compressing, doing whatever is necessary to end the stream.
   /// If EndResult.outputTooSmall is true on return, end() should be called
-  /// again with a larger buffer. Otherwise, the StreamingCompressor should not
-  /// be used anymore. end() will flush the compressed output.
+  /// again with a larger output buffer. Otherwise, the StreamingCompressor
+  /// should not be used anymore. end() will flush the compressed output.
   virtual Expected<EndResult> end(uint8_t* output, uint64_t outputLength) = 0;
 };
 
@@ -105,8 +105,8 @@ class StreamingDecompressor {
   };
 
   /// Decompress some input.
-  /// If outputTooSmall is true on return, a larger output buffer needs
-  /// to be supplied.
+  /// If DecompressResult.outputTooSmall is true on return, decompress() should
+  /// be called again with a larger output buffer.
   virtual Expected<DecompressResult> decompress(
       const uint8_t* input,
       uint64_t inputLength,
