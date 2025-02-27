@@ -45,7 +45,8 @@ class TypeWithId : public velox::Tree<std::shared_ptr<const TypeWithId>> {
   /// selected.
   static std::unique_ptr<TypeWithId> create(
       const RowTypePtr& type,
-      const velox::common::ScanSpec& spec);
+      const velox::common::ScanSpec& spec,
+      const std::unordered_set<int32_t>& requiredExtraFieldIds);
 
   uint32_t size() const override;
 
@@ -70,6 +71,9 @@ class TypeWithId : public velox::Tree<std::shared_ptr<const TypeWithId>> {
   }
 
   const std::shared_ptr<const TypeWithId>& childAt(uint32_t idx) const override;
+
+  const std::shared_ptr<const TypeWithId>& childByFieldId(
+      uint32_t fieldId) const;
 
   const std::shared_ptr<const TypeWithId>& childByName(
       const std::string& name) const {

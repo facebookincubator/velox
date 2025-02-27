@@ -74,16 +74,29 @@ int countNodes(const TypePtr& type) {
 
 std::unique_ptr<TypeWithId> TypeWithId::create(
     const RowTypePtr& type,
-    const velox::common::ScanSpec& spec) {
+    const velox::common::ScanSpec& spec,
+    const std::unordered_set<int32_t>& requiredExtraFieldIds) {
   uint32_t next = 1;
   std::vector<std::unique_ptr<TypeWithId>> children(type->size());
+
+  auto extraFieldSelector = [&requiredExtraFieldIds](size_t id, size_t maxId) {
+    for (auto extraFieldId : requiredExtraFieldIds) {
+      if (extraFieldId >= id && extraFieldId < maxId) {
+        return true;
+      }
+    }
+    return false;
+  };
+
   for (int i = 0, size = type->size(); i < size; ++i) {
     // There is no guarantee that the spec contains
     auto* childSpec = spec.childByName(type->nameOf(i));
-    if (childSpec && !childSpec->isConstant()) {
+    uint32_t nodeCount = countNodes(type->childAt(i));
+    if ((childSpec && !childSpec->isConstant()) ||
+        extraFieldSelector(next, next + nodeCount)) {
       children[i] = create(type->childAt(i), next, i);
     } else {
-      next += countNodes(type->childAt(i));
+      next += nodeCount;
     }
   }
   return std::make_unique<TypeWithId>(
@@ -97,6 +110,20 @@ uint32_t TypeWithId::size() const {
 const std::shared_ptr<const TypeWithId>& TypeWithId::childAt(
     uint32_t idx) const {
   return children_.at(idx);
+}
+
+const std::shared_ptr<const TypeWithId>& TypeWithId::childByFieldId(
+    uint32_t fieldId) const {
+  std::vector<std::string> childNames;
+  std::vector<TypePtr> childTypes;
+  for (auto& child : children_) {
+    if (fieldId == child->id()) {
+      return child;
+    } else if (fieldId > child->id() && fieldId <= child->maxId()) {
+      return child->childByFieldId(fieldId);
+    }
+  }
+  VELOX_FAIL("FieldId {} not found", fieldId);
 }
 
 std::unique_ptr<TypeWithId> TypeWithId::create(

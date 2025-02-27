@@ -56,24 +56,10 @@ EqualityDeleteFileReader::EqualityDeleteFileReader(
     return;
   }
 
-  std::unordered_set<int32_t> equalityFieldIds(
-      deleteFile_.equalityFieldIds.begin(), deleteFile_.equalityFieldIds.end());
-  auto deleteFieldSelector = [&equalityFieldIds](size_t index) {
-    return equalityFieldIds.find(static_cast<int32_t>(index)) !=
-        equalityFieldIds.end();
-  };
-  auto deleteFileSchema = dwio::common::typeutils::buildSelectedType(
-      baseFileSchema_, deleteFieldSelector);
-
-  rowType_ = std::static_pointer_cast<const RowType>(deleteFileSchema->type());
-
   // TODO: push down filter if previous delete file contains this one. E.g.
   // previous equality delete file has a=1, and this file also contains
   // columns a, then a!=1 can be pushed as a filter when reading this delete
   // file.
-
-  auto scanSpec = std::make_shared<common::ScanSpec>("<root>");
-  scanSpec->addAllChildFields(rowType_->asRow());
 
   deleteSplit_ = std::make_shared<HiveConnectorSplit>(
       connectorId,
@@ -88,7 +74,7 @@ EqualityDeleteFileReader::EqualityDeleteFileReader(
   configureReaderOptions(
       hiveConfig_,
       connectorQueryCtx_,
-      rowType_,
+      nullptr,
       deleteSplit_,
       {},
       deleteReaderOpts);
@@ -105,6 +91,11 @@ EqualityDeleteFileReader::EqualityDeleteFileReader(
   auto deleteReader =
       dwio::common::getReaderFactory(deleteReaderOpts.fileFormat())
           ->createReader(std::move(deleteFileInput), deleteReaderOpts);
+
+  // For now, we assume only the delete columns are written in the delete file
+  rowType_ = deleteReader->rowType();
+  auto scanSpec = std::make_shared<common::ScanSpec>("<root>");
+  scanSpec->addAllChildFields(rowType_->asRow());
 
   dwio::common::RowReaderOptions deleteRowReaderOpts;
   configureRowReaderOptions(
@@ -147,6 +138,8 @@ void EqualityDeleteFileReader::readDeleteValues(
 void EqualityDeleteFileReader::readSingleColumnDeleteValues(
     SubfieldFilters& subfieldFilters) {
   std::unique_ptr<Filter> filter = std::make_unique<AlwaysTrue>();
+  auto name = baseFileSchema_->childByFieldId(deleteFile_.equalityFieldIds[0])
+                  ->fullName();
   while (deleteRowReader_->next(kMaxBatchRows, deleteValuesOutput_)) {
     if (deleteValuesOutput_->size() == 0) {
       continue;
@@ -155,7 +148,6 @@ void EqualityDeleteFileReader::readSingleColumnDeleteValues(
     deleteValuesOutput_->loadedVector();
     auto vector =
         std::dynamic_pointer_cast<RowVector>(deleteValuesOutput_)->childAt(0);
-    auto name = rowType_->nameOf(0);
 
     auto typeKind = vector->type()->kind();
     VELOX_CHECK(
@@ -170,14 +162,11 @@ void EqualityDeleteFileReader::readSingleColumnDeleteValues(
   }
 
   if (filter->kind() != FilterKind::kAlwaysTrue) {
-    if (subfieldFilters.find(common::Subfield(rowType_->nameOf(0))) !=
-        subfieldFilters.end()) {
-      subfieldFilters[common::Subfield(rowType_->nameOf(0))] =
-          subfieldFilters[common::Subfield(rowType_->nameOf(0))]->mergeWith(
-              filter.get());
+    if (subfieldFilters.find(common::Subfield(name)) != subfieldFilters.end()) {
+      subfieldFilters[common::Subfield(name)] =
+          subfieldFilters[common::Subfield(name)]->mergeWith(filter.get());
     } else {
-      subfieldFilters[common::Subfield(rowType_->nameOf(0))] =
-          std::move(filter);
+      subfieldFilters[common::Subfield(name)] = std::move(filter);
     }
   }
 }
@@ -205,7 +194,9 @@ void EqualityDeleteFileReader::readMultipleColumnDeleteValues(
 
       for (int j = 0; j < numDeleteFields; j++) {
         auto type = rowType_->childAt(j);
-        auto name = rowType_->nameOf(j);
+        auto name =
+            baseFileSchema_->childByFieldId(deleteFile_.equalityFieldIds[j])
+                ->fullName();
         auto value = BaseVector::wrapInConstant(1, i, rowVector->childAt(j));
 
         std::vector<core::TypedExprPtr> isNotEqualInputs;
