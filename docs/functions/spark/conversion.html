@@ -263,6 +263,22 @@ Supported types are tinyint, smallint, integer and bigint.</p>
 </pre></div>
 </div>
 </section>
+<section id="id5">
+<h3>From floating-point types<a class="headerlink" href="#id5" title="Link to this heading">¶</a></h3>
+<p>Casting from floating-point input to timestamp type is allowed.
+The input value is treated as the number of seconds since the epoch (1970-01-01 00:00:00 UTC) and converted to microseconds by truncating the fractional part.</p>
+<p>Valid examples</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="mf">0.0</span> <span class="k">as</span> <span class="n">timestamp</span><span class="p">);</span> <span class="o">--</span> <span class="mi">1970</span><span class="o">-</span><span class="mi">01</span><span class="o">-</span><span class="mi">01</span> <span class="mi">00</span><span class="p">:</span><span class="mi">00</span><span class="p">:</span><span class="mi">00</span>
+<span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="mf">1727181032.0</span> <span class="k">as</span> <span class="n">timestamp</span><span class="p">);</span> <span class="o">--</span> <span class="mi">2024</span><span class="o">-</span><span class="mi">09</span><span class="o">-</span><span class="mi">24</span> <span class="mi">12</span><span class="p">:</span><span class="mi">30</span><span class="p">:</span><span class="mi">32</span>
+<span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="o">-</span><span class="mf">1727181032.0</span> <span class="k">as</span> <span class="n">timestamp</span><span class="p">);</span> <span class="o">--</span> <span class="mi">1915</span><span class="o">-</span><span class="mi">04</span><span class="o">-</span><span class="mi">09</span> <span class="mi">11</span><span class="p">:</span><span class="mi">29</span><span class="p">:</span><span class="mi">28</span>
+<span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="n">cast</span><span class="p">(</span><span class="mf">9223372036855.999</span> <span class="k">as</span> <span class="n">double</span><span class="p">)</span> <span class="k">as</span> <span class="n">timestamp</span><span class="p">);</span> <span class="o">--</span> <span class="mi">294247</span><span class="o">-</span><span class="mi">01</span><span class="o">-</span><span class="mi">10</span> <span class="mi">04</span><span class="p">:</span><span class="mi">00</span><span class="p">:</span><span class="mf">54.775807</span>
+<span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="n">cast</span><span class="p">(</span><span class="o">-</span><span class="mf">9223372036856.999</span> <span class="k">as</span> <span class="n">double</span><span class="p">)</span> <span class="k">as</span> <span class="n">timestamp</span><span class="p">);</span> <span class="o">--</span> <span class="o">-</span><span class="mi">290308</span><span class="o">-</span><span class="mi">12</span><span class="o">-</span><span class="mi">21</span> <span class="mi">19</span><span class="p">:</span><span class="mi">59</span><span class="p">:</span><span class="mf">05.224192</span>
+<span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="n">cast</span><span class="p">(</span><span class="mf">1.79769e+308</span> <span class="k">as</span> <span class="n">double</span><span class="p">)</span> <span class="k">as</span> <span class="n">timestamp</span><span class="p">);</span> <span class="o">--</span> <span class="mi">294247</span><span class="o">-</span><span class="mi">01</span><span class="o">-</span><span class="mi">10</span> <span class="mi">04</span><span class="p">:</span><span class="mi">00</span><span class="p">:</span><span class="mf">54.775807</span>
+<span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="n">cast</span><span class="p">(</span><span class="s1">&#39;inf&#39;</span> <span class="k">as</span> <span class="n">double</span><span class="p">)</span> <span class="k">as</span> <span class="n">timestamp</span><span class="p">);</span> <span class="o">--</span> <span class="n">NULL</span>
+<span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="n">cast</span><span class="p">(</span><span class="s1">&#39;nan&#39;</span> <span class="k">as</span> <span class="n">double</span><span class="p">)</span> <span class="k">as</span> <span class="n">timestamp</span><span class="p">);</span> <span class="o">--</span> <span class="n">NULL</span>
+</pre></div>
+</div>
+</section>
 </section>
 </section>
 
@@ -306,6 +322,7 @@ Supported types are tinyint, smallint, integer and bigint.</p>
 </li>
 <li><a class="reference internal" href="#cast-to-timestamp">Cast to Timestamp</a><ul>
 <li><a class="reference internal" href="#id4">From integral types</a></li>
+<li><a class="reference internal" href="#id5">From floating-point types</a></li>
 </ul>
 </li>
 </ul>
