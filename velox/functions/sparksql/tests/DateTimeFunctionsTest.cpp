@@ -1126,5 +1126,28 @@ TEST_F(DateTimeFunctionsTest, timestampToMillis) {
   EXPECT_EQ(timestampToMillis("-292275055-05-16 16:47:04.192"), kMinBigint);
 }
 
+TEST_F(DateTimeFunctionsTest, dateAddYMInterval) {
+  const auto makeInput = [&](const std::string& date, int32_t interval) {
+    return makeRowVector({
+        makeNullableFlatVector<int32_t>({parseDate(date)}, DATE()),
+        makeNullableFlatVector<int32_t>({interval}, INTERVAL_YEAR_MONTH()),
+    });
+  };
+
+  const auto plus = [&](const std::string& date, int32_t interval) {
+    return evaluateOnce<int32_t>(
+        "date_add_ym_interval(c0, c1)", makeInput(date, interval));
+  };
+
+  EXPECT_EQ(parseDate("2021-10-15"), plus("2020-10-15", 12));
+  EXPECT_EQ(parseDate("2022-01-15"), plus("2020-10-15", 15));
+  EXPECT_EQ(parseDate("2020-11-15"), plus("2020-10-15", 1));
+  EXPECT_EQ(parseDate("2020-11-30"), plus("2020-10-30", 1));
+  EXPECT_EQ(parseDate("2020-11-30"), plus("2020-10-31", 1));
+  EXPECT_EQ(parseDate("2021-02-28"), plus("2020-02-28", 12));
+  EXPECT_EQ(parseDate("2021-02-28"), plus("2020-02-29", 12));
+  EXPECT_EQ(parseDate("2016-02-29"), plus("2020-02-29", -48));
+}
+
 } // namespace
 } // namespace facebook::velox::functions::sparksql::test

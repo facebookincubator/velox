@@ -19,6 +19,7 @@
 #include <boost/algorithm/string.hpp>
 
 #include "velox/functions/lib/DateTimeFormatter.h"
+#include "velox/functions/lib/DateTimeImpl.h"
 #include "velox/functions/lib/TimeUtils.h"
 #include "velox/type/TimestampConversion.h"
 #include "velox/type/tz/TimeZoneMap.h"
@@ -838,6 +839,18 @@ struct MillisToTimestampFunction {
   template <typename T>
   FOLLY_ALWAYS_INLINE void call(out_type<Timestamp>& result, const T& millis) {
     result = Timestamp::fromMillisNoError(millis);
+  }
+};
+
+template <typename TExec>
+struct DateAddYMIntervalFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(TExec);
+
+  FOLLY_ALWAYS_INLINE void call(
+      out_type<Date>& result,
+      const arg_type<Date>& date,
+      const arg_type<IntervalYearMonth>& interval) {
+    result = addToDate(date, DateTimeUnit::kMonth, interval);
   }
 };
 
