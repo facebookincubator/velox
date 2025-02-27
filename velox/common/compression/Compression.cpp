@@ -115,7 +115,7 @@ bool Codec::supportsGetUncompressedLength(CompressionKind kind) {
 bool Codec::supportsStreamingCompression(CompressionKind kind) {
   switch (kind) {
 #ifdef VELOX_ENABLE_COMPRESSION_LZ4
-    case CompressionKind::CompressionKind_LZ4:
+    case CompressionKind_LZ4:
       return true;
 #endif
     default:
@@ -145,7 +145,7 @@ Expected<std::unique_ptr<Codec>> Codec::create(
   std::unique_ptr<Codec> codec;
   switch (kind) {
 #ifdef VELOX_ENABLE_COMPRESSION_LZ4
-    case CompressionKind::CompressionKind_LZ4:
+    case CompressionKind_LZ4:
       if (auto options = dynamic_cast<const Lz4CodecOptions*>(&codecOptions)) {
         switch (options->type) {
           case Lz4CodecOptions::kLz4Frame:
@@ -185,10 +185,10 @@ Expected<std::unique_ptr<Codec>> Codec::create(
 
 bool Codec::isAvailable(CompressionKind kind) {
   switch (kind) {
-    case CompressionKind::CompressionKind_NONE:
+    case CompressionKind_NONE:
       return true;
 #ifdef VELOX_ENABLE_COMPRESSION_LZ4
-    case CompressionKind::CompressionKind_LZ4:
+    case CompressionKind_LZ4:
       return true;
 #endif
     default:
