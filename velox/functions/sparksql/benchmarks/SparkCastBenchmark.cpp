@@ -18,6 +18,7 @@
 #include <folly/init/Init.h>
 
 #include "velox/benchmarks/ExpressionBenchmarkBuilder.h"
+#include "velox/functions/sparksql/registration/Register.h"
 
 using namespace facebook;
 
@@ -25,9 +26,11 @@ using namespace facebook::velox;
 
 int main(int argc, char** argv) {
   folly::Init init(&argc, &argv);
-  memory::MemoryManager::initialize(memory::MemoryManager::Options{});
+  memory::MemoryManager::initialize({});
 
   ExpressionBenchmarkBuilder benchmarkBuilder;
+  functions::sparksql::registerFunctions("");
+
   const vector_size_t vectorSize = 1000;
   auto vectorMaker = benchmarkBuilder.vectorMaker();
   auto emptyInput = vectorMaker.flatVector<std::string>(
@@ -63,11 +66,6 @@ int main(int argc, char** argv) {
       [&](auto j) { return 123456789 * j; },
       nullptr,
       DECIMAL(18, 6));
-  auto smallDecimalInput = vectorMaker.flatVector<int64_t>(
-      vectorSize,
-      [&](auto j) { return 123456789 * j; },
-      nullptr,
-      DECIMAL(18, 17));
   auto longDecimalInput = vectorMaker.flatVector<int128_t>(
       vectorSize,
       [&](auto j) {
@@ -75,13 +73,6 @@ int main(int argc, char** argv) {
       },
       nullptr,
       DECIMAL(38, 16));
-  auto reinterpretLongDecimalInput = vectorMaker.flatVector<int128_t>(
-      vectorSize,
-      [&](auto j) {
-        return facebook::velox::HugeInt::build(j, 12345 * j + 6789);
-      },
-      nullptr,
-      DECIMAL(20, 4));
   auto largeRealInput = vectorMaker.flatVector<float>(
       vectorSize, [&](auto j) { return 12345678.0 * j; });
   auto smallRealInput = vectorMaker.flatVector<float>(
@@ -99,29 +90,6 @@ int main(int argc, char** argv) {
       [](auto row) { return fmt::format("2024-05-{:02d}", 1 + row % 30); });
   auto invalidDateStrings = vectorMaker.flatVector<std::string>(
       vectorSize, [](auto row) { return fmt::format("2024-05...{}", row); });
-  auto validTimeStrings =
-      vectorMaker.flatVector<std::string>(vectorSize, [](auto row) {
-        return fmt::format(
-            "{:02d}:{:02d}:{:02d}", row % 24, row % 60, row % 60);
-      });
-  auto timeInput = vectorMaker.flatVector<int64_t>(
-      vectorSize, [](auto j) { return j % 86'400'000; }, nullptr, TIME());
-
-  benchmarkBuilder
-      .addBenchmarkSet(
-          "cast_reinterpret",
-          vectorMaker.rowVector(
-              {"short_decimal", "long_decimal", "time"},
-              {decimalInput, reinterpretLongDecimalInput, timeInput}))
-      .addExpression(
-          "cast_short_decimal_same_scale_widen_precision",
-          "cast(short_decimal as decimal(18,2))")
-      .addExpression(
-          "cast_long_decimal_same_scale_widen_precision",
-          "cast(long_decimal as decimal(30,4))")
-      .addExpression("cast_time_as_bigint", "cast(time as bigint)")
-      .withIterations(100)
-      .disableTesting();
 
   benchmarkBuilder
       .addBenchmarkSet(
@@ -162,12 +130,6 @@ int main(int argc, char** argv) {
 
   benchmarkBuilder
       .addBenchmarkSet(
-          "cast_varchar_as_time",
-          vectorMaker.rowVector({"valid_time"}, {validTimeStrings}))
-      .addExpression("cast_valid", "cast (valid_time as time)");
-
-  benchmarkBuilder
-      .addBenchmarkSet(
           "cast_varchar_as_double",
           vectorMaker.rowVector(
               {"valid",
@@ -201,7 +163,6 @@ int main(int argc, char** argv) {
                "bigint",
                "decimal",
                "short_decimal",
-               "small_decimal",
                "long_decimal",
                "large_real",
                "small_real",
@@ -214,7 +175,6 @@ int main(int argc, char** argv) {
                bigintInput,
                decimalInput,
                shortDecimalInput,
-               smallDecimalInput,
                longDecimalInput,
                largeRealInput,
                smallRealInput,
@@ -232,7 +192,6 @@ int main(int argc, char** argv) {
       .addExpression(
           "cast_decimal_to_inline_string", "cast (decimal as varchar)")
       .addExpression("cast_short_decimal", "cast (short_decimal as varchar)")
-      .addExpression("cast_small_decimal", "cast (small_decimal as varchar)")
       .addExpression("cast_long_decimal", "cast (long_decimal as varchar)")
       .addExpression(
           "cast_large_real_to_scientific_notation",
