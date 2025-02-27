@@ -408,13 +408,14 @@ struct Re2RegexpSplit {
 
     const auto re2String = re2::StringPiece(string.data(), string.size());
 
-    size_t pos = 0;
+    size_t currPos = 0;
+    size_t lastPos = 0;
     const char* start = string.data();
 
     re2::StringPiece subMatches[1];
     while (re->Match(
         re2String,
-        pos,
+        currPos,
         string.size(),
         RE2::Anchor::UNANCHORED,
         subMatches,
@@ -423,16 +424,21 @@ struct Re2RegexpSplit {
       const auto offset = fullMatch.data() - start;
       const auto size = fullMatch.size();
 
-      out.add_item().setNoCopy(StringView(string.data() + pos, offset - pos));
+      out.add_item().setNoCopy(
+          StringView(string.data() + lastPos, offset - lastPos));
 
-      pos = offset + size;
+      currPos = offset + size;
+      lastPos = currPos;
+      // Only change currPos if encounters empty string match. The lastPos is
+      // not changed to make sure the produced string has correct position
+      // when encountering empty string matches in next match.
       if (UNLIKELY(size == 0)) {
-        ++pos;
+        ++currPos;
       }
     }
 
     out.add_item().setNoCopy(
-        StringView(string.data() + pos, string.size() - pos));
+        StringView(string.data() + lastPos, string.size() - lastPos));
   }
 
  private:
