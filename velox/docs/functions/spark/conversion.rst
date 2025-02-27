@@ -99,6 +99,23 @@ Valid examples
   SELECT cast(cast(2147483648.90 as DECIMAL(12, 2)) as integer); -- -2147483648
   SELECT cast(cast(2147483648.90 as DECIMAL(12, 2)) as bigint); -- 2147483648
 
+From timestamp
+^^^^^^^^^^^^^
+
+Casting a timestamp to an integer returns the number of seconds since the epoch (1970-01-01 00:00:00 UTC).
+
+Valid examples
+
+::
+
+  SELECT cast(cast('1970-01-01 00:00:00' as timestamp) as bigint); -- 0
+  SELECT cast(cast('2000-01-01 12:21:56' as timestamp) as bigint); -- 946684916
+  SELECT cast(cast('2025-02-25 08:00:26.88' as timestamp) as bigint); -- 1740470426
+  SELECT cast(cast('2025-02-25 08:00:27.88' as timestamp) as bigint); -- 1740470427
+  SELECT cast(cast('2025-02-25 08:00:26.88' as timestamp) as int); -- 1740470426
+  SELECT cast(cast('2025-02-25 08:00:26.88' as timestamp) as short); -- 30874
+  SELECT cast(cast(NULL as timestamp) as bigint); -- NULL
+
 Cast to Boolean
 ---------------
 
