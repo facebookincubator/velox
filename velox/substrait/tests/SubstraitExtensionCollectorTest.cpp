@@ -46,7 +46,7 @@ class SubstraitExtensionCollectorTest : public ::testing::Test {
   int getReferenceNumber(
       const std::string& functionName,
       std::vector<TypePtr>&& arguments,
-      core::AggregationNode::Step step) {
+      core::AggregationNode::Aggregate::Step step) {
     int referenceNumber1 =
         extensionCollector_->getReferenceNumber(functionName, arguments, step);
     // Repeat the call to make sure properly de-duplicated.
@@ -95,13 +95,13 @@ TEST_F(
   // Sum aggregate function have same argument type for each aggregation step.
   ASSERT_EQ(
       getReferenceNumber(
-          "sum", {INTEGER()}, core::AggregationNode::Step::kSingle),
+          "sum", {INTEGER()}, core::AggregationNode::Aggregate::Step::kSingle),
       0);
 
   // Partial avg aggregate function should use primitive integral type.
   ASSERT_EQ(
       getReferenceNumber(
-          "avg", {INTEGER()}, core::AggregationNode::Step::kPartial),
+          "avg", {INTEGER()}, core::AggregationNode::Aggregate::Step::kPartial),
       1);
 
   // Final avg aggregate function should use struct type, like
@@ -110,13 +110,13 @@ TEST_F(
       getReferenceNumber(
           "avg",
           {ROW({DOUBLE(), BIGINT()})},
-          core::AggregationNode::Step::kFinal),
+          core::AggregationNode::Aggregate::Step::kFinal),
       2);
 
   // Count aggregate function have same argument type for each aggregation step.
   ASSERT_EQ(
       getReferenceNumber(
-          "count", {INTEGER()}, core::AggregationNode::Step::kFinal),
+          "count", {INTEGER()}, core::AggregationNode::Aggregate::Step::kFinal),
       3);
 }
 

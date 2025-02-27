@@ -277,13 +277,13 @@ TEST_F(SimpleArrayAggAggregationTest, nestedArray) {
 
 TEST_F(SimpleArrayAggAggregationTest, trackRowSize) {
   core::QueryConfig queryConfig({});
-  auto testTractRowSize = [&](core::AggregationNode::Step step,
+  auto testTractRowSize = [&](core::AggregationNode::Aggregate::Step step,
                               const VectorPtr& input,
                               bool testGlobal) {
     auto fn = Aggregate::create(
         "simple_array_agg",
-        isPartialOutput(step) ? core::AggregationNode::Step::kPartial
-                              : core::AggregationNode::Step::kSingle,
+        isPartialOutput(step) ? core::AggregationNode::Aggregate::Step::kPartial
+                              : core::AggregationNode::Aggregate::Step::kSingle,
         std::vector<TypePtr>{BIGINT()},
         ARRAY(BIGINT()),
         queryConfig);
@@ -338,13 +338,17 @@ TEST_F(SimpleArrayAggAggregationTest, trackRowSize) {
   };
 
   auto rawInput = makeFlatVector<int64_t>({1, 2, 3, 4, 5});
-  testTractRowSize(core::AggregationNode::Step::kPartial, rawInput, true);
-  testTractRowSize(core::AggregationNode::Step::kPartial, rawInput, false);
+  testTractRowSize(
+      core::AggregationNode::Aggregate::Step::kPartial, rawInput, true);
+  testTractRowSize(
+      core::AggregationNode::Aggregate::Step::kPartial, rawInput, false);
 
   auto intermediate =
       makeArrayVector<int64_t>({{1, 2}, {3, 4}, {5, 6}, {7, 8}, {9, 10}});
-  testTractRowSize(core::AggregationNode::Step::kFinal, intermediate, true);
-  testTractRowSize(core::AggregationNode::Step::kFinal, intermediate, false);
+  testTractRowSize(
+      core::AggregationNode::Aggregate::Step::kFinal, intermediate, true);
+  testTractRowSize(
+      core::AggregationNode::Aggregate::Step::kFinal, intermediate, false);
 }
 
 // A testing aggregation function that counts the number of nulls in inputs.
@@ -425,7 +429,7 @@ exec::AggregateRegistrationResult registerSimpleCountNullsAggregate(
       name,
       std::move(signatures),
       [name](
-          core::AggregationNode::Step step,
+          core::AggregationNode::Aggregate::Step step,
           const std::vector<TypePtr>& argTypes,
           const TypePtr& resultType,
           const core::QueryConfig& /*config*/)
@@ -486,7 +490,7 @@ class FuncLevelVariableTestAggregate {
   TypePtr resultType_;
 
   void initialize(
-      core::AggregationNode::Step /*step*/,
+      core::AggregationNode::Aggregate::Step /*step*/,
       const std::vector<TypePtr>& argTypes,
       const TypePtr& resultType) {
     VELOX_CHECK_EQ(argTypes.size(), 1);
@@ -563,7 +567,7 @@ exec::AggregateRegistrationResult registerFuncLevelVariableTestAggregate(
       name,
       std::move(signatures),
       [name](
-          core::AggregationNode::Step step,
+          core::AggregationNode::Aggregate::Step step,
           const std::vector<TypePtr>& argTypes,
           const TypePtr& resultType,
           const core::QueryConfig& /*config*/)

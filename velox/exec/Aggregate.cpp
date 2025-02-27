@@ -24,19 +24,17 @@
 
 namespace facebook::velox::exec {
 
-bool isRawInput(core::AggregationNode::Step step) {
-  return step == core::AggregationNode::Step::kPartial ||
-      step == core::AggregationNode::Step::kSingle;
+bool isRawInput(core::AggregationNode::Aggregate::Step step) {
+  return !core::AggregationNode::Aggregate::isPartialInput(step);
 }
 
-bool isPartialOutput(core::AggregationNode::Step step) {
-  return step == core::AggregationNode::Step::kPartial ||
-      step == core::AggregationNode::Step::kIntermediate;
+bool isPartialOutput(core::AggregationNode::Aggregate::Step step) {
+  return core::AggregationNode::Aggregate::isPartialOutput(step);
 }
 
-bool isPartialInput(core::AggregationNode::Step step) {
-  return step == core::AggregationNode::Step::kIntermediate ||
-      step == core::AggregationNode::Step::kFinal;
+bool isPartialInput(core::AggregationNode::Aggregate::Step step) {
+  return step == core::AggregationNode::Aggregate::Step::kIntermediate ||
+      step == core::AggregationNode::Aggregate::Step::kFinal;
 }
 
 AggregateFunctionMap& aggregateFunctions() {
@@ -291,7 +289,7 @@ std::optional<CompanionFunctionSignatureMap> getCompanionFunctionSignatures(
 
 std::unique_ptr<Aggregate> Aggregate::create(
     const std::string& name,
-    core::AggregationNode::Step step,
+    core::AggregationNode::Aggregate::Step step,
     const std::vector<TypePtr>& argTypes,
     const TypePtr& resultType,
     const core::QueryConfig& config) {

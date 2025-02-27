@@ -65,7 +65,7 @@ class DuckQueryRunnerToSqlPlanNodeVisitor : public PrestoSqlPlanNodeVisitor {
       const core::AggregationNode& node,
       core::PlanNodeVisitorContext& ctx) const override {
     // Assume plan is Aggregation over Values.
-    VELOX_CHECK(node.step() == core::AggregationNode::Step::kSingle);
+    VELOX_CHECK(node.allRawInput() && node.allRawOutput());
 
     PrestoSqlPlanNodeVisitorContext& visitorContext =
         static_cast<PrestoSqlPlanNodeVisitorContext&>(ctx);

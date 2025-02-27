@@ -32,17 +32,17 @@ namespace facebook::velox::exec {
 
 class AggregateFunctionSignature;
 
-/// Returns true if aggregation receives raw (unprocessed) input, e.g. partial
-/// and single aggregation.
-bool isRawInput(core::AggregationNode::Step step);
+// Returns true if aggregate receives raw (unprocessed) input, e.g. partial
+// and single aggregate.
+bool isRawInput(core::AggregationNode::Aggregate::Step step);
 
-/// Returns false if aggregation produces final result, e.g. final
-/// and single aggregation.
-bool isPartialOutput(core::AggregationNode::Step step);
+// Returns false if aggregate produces final result, e.g. final
+// and single aggregate.
+bool isPartialOutput(core::AggregationNode::Aggregate::Step step);
 
 /// Returns true if aggregation receives intermediate states as input,
 /// e.g. intermediate and final aggregation steps.
-bool isPartialInput(core::AggregationNode::Step step);
+bool isPartialInput(core::AggregationNode::Aggregate::Step step);
 
 class Aggregate {
  protected:
@@ -304,7 +304,7 @@ class Aggregate {
   /// @return An instance of the aggregate function.
   static std::unique_ptr<Aggregate> create(
       const std::string& name,
-      core::AggregationNode::Step step,
+      core::AggregationNode::Aggregate::Step step,
       const std::vector<TypePtr>& argTypes,
       const TypePtr& resultType,
       const core::QueryConfig& config);
@@ -471,7 +471,7 @@ class Aggregate {
 };
 
 using AggregateFunctionFactory = std::function<std::unique_ptr<Aggregate>(
-    core::AggregationNode::Step step,
+    core::AggregationNode::Aggregate::Step step,
     const std::vector<TypePtr>& argTypes,
     const TypePtr& resultType,
     const core::QueryConfig& config)>;

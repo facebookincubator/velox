@@ -1111,7 +1111,7 @@ void AggregationTestBase::testStreamingAggregationsImpl(
             groupingKeys,
             aggregates,
             {},
-            core::AggregationNode::Step::kSingle,
+            core::AggregationNode::Aggregate::Step::kSingle,
             false);
     if (!postAggregationProjections.empty()) {
       builder.project(postAggregationProjections);
@@ -1258,7 +1258,7 @@ std::unique_ptr<exec::Aggregate> createAggregateFunction(
   core::QueryConfig queryConfig({config});
   auto func = exec::Aggregate::create(
       functionName,
-      core::AggregationNode::Step::kSingle,
+      core::AggregationNode::Aggregate::Step::kSingle,
       inputTypes,
       finalType,
       queryConfig);

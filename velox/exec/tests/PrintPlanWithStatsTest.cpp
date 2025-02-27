@@ -261,7 +261,7 @@ TEST_F(PrintPlanWithStatsTest, partialAggregateWithTableScan) {
     compareOutputs(
         ::testing::UnitTest::GetInstance()->current_test_info()->name(),
         printPlanWithStats(*op, task->taskStats()),
-        {{"-- Aggregation\\[1\\]\\[PARTIAL \\[c5\\] a0 := max\\(ROW\\[\"c0\"\\]\\), a1 := sum\\(ROW\\[\"c1\"\\]\\), a2 := sum\\(ROW\\[\"c2\"\\]\\), a3 := sum\\(ROW\\[\"c3\"\\]\\), a4 := sum\\(ROW\\[\"c4\"\\]\\)\\] -> c5:VARCHAR, a0:BIGINT, a1:BIGINT, a2:BIGINT, a3:DOUBLE, a4:DOUBLE"},
+        {{"-- Aggregation\\[1\\]\\[ALLOW FLUSH \\[c5\\] PARTIAL a0 := max\\(ROW\\[\"c0\"\\]\\), PARTIAL a1 := sum\\(ROW\\[\"c1\"\\]\\), PARTIAL a2 := sum\\(ROW\\[\"c2\"\\]\\), PARTIAL a3 := sum\\(ROW\\[\"c3\"\\]\\), PARTIAL a4 := sum\\(ROW\\[\"c4\"\\]\\)\\] -> c5:VARCHAR, a0:BIGINT, a1:BIGINT, a2:BIGINT, a3:DOUBLE, a4:DOUBLE"},
          {"   Output: .+, Cpu time: .+, Blocked wall time: .+, Peak memory: .+, Memory allocations: .+, Threads: 1, CPU breakdown: B/I/O/F (.+/.+/.+/.+)"},
          {"  -- TableScan\\[0\\]\\[table: hive_table\\] -> c0:BIGINT, c1:INTEGER, c2:SMALLINT, c3:REAL, c4:DOUBLE, c5:VARCHAR"},
          {"     Input: 10000 rows \\(.+\\), Output: 10000 rows \\(.+\\), Cpu time: .+, Blocked wall time: .+, Peak memory: .+, Memory allocations: .+, Threads: 1, Splits: 1, CPU breakdown: B/I/O/F (.+/.+/.+/.+)"}});
@@ -269,7 +269,7 @@ TEST_F(PrintPlanWithStatsTest, partialAggregateWithTableScan) {
     compareOutputs(
         ::testing::UnitTest::GetInstance()->current_test_info()->name(),
         printPlanWithStats(*op, task->taskStats(), true),
-        {{"-- Aggregation\\[1\\]\\[PARTIAL \\[c5\\] a0 := max\\(ROW\\[\"c0\"\\]\\), a1 := sum\\(ROW\\[\"c1\"\\]\\), a2 := sum\\(ROW\\[\"c2\"\\]\\), a3 := sum\\(ROW\\[\"c3\"\\]\\), a4 := sum\\(ROW\\[\"c4\"\\]\\)\\] -> c5:VARCHAR, a0:BIGINT, a1:BIGINT, a2:BIGINT, a3:DOUBLE, a4:DOUBLE"},
+        {{"-- Aggregation\\[1\\]\\[ALLOW FLUSH \\[c5\\] PARTIAL a0 := max\\(ROW\\[\"c0\"\\]\\), PARTIAL a1 := sum\\(ROW\\[\"c1\"\\]\\), PARTIAL a2 := sum\\(ROW\\[\"c2\"\\]\\), PARTIAL a3 := sum\\(ROW\\[\"c3\"\\]\\), PARTIAL a4 := sum\\(ROW\\[\"c4\"\\]\\)\\] -> c5:VARCHAR, a0:BIGINT, a1:BIGINT, a2:BIGINT, a3:DOUBLE, a4:DOUBLE"},
          {"   Output: .+, Cpu time: .+, Blocked wall time: .+, Peak memory: .+, Memory allocations: .+, Threads: 1, CPU breakdown: B/I/O/F (.+/.+/.+/.+)"},
          {"      dataSourceLazyCpuNanos\\s+sum: .+, count: .+, min: .+, max: .+"},
          {"      dataSourceLazyInputBytes\\s+sum: .+, count: .+, min: .+, max: .+"},
@@ -391,7 +391,7 @@ TEST_F(PrintPlanWithStatsTest, taskAPI) {
     compareOutputs(
         ::testing::UnitTest::GetInstance()->current_test_info()->name(),
         task->printPlanWithStats(),
-        {{"-- Aggregation\\[1\\]\\[SINGLE \\[c0\\] a0 := sum\\(ROW\\[\"c1\"\\]\\)\\] -> c0:BIGINT, a0:BIGINT"},
+        {{"-- Aggregation\\[1\\]\\[\\[c0\\] SINGLE a0 := sum\\(ROW\\[\"c1\"\\]\\)\\] -> c0:BIGINT, a0:BIGINT"},
          {"   Output: .+, Cpu time: .+, Wall time: .+, Blocked wall time: .+, Peak memory: .+, Memory allocations: .+, CPU breakdown: B/I/O/F (.+/.+/.+/.+)"},
          {"  -- TableScan\\[0\\]\\[table: hive_table\\] -> c0:BIGINT, c1:BIGINT"},
          {"     Input: .+, Output: .+, Cpu time: .+, Wall time: .+, Blocked wall time: .+, Peak memory: .+, Memory allocations: .+, CPU breakdown: B/I/O/F (.+/.+/.+/.+)"}});

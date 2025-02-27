@@ -188,7 +188,7 @@ class AggregationTest : public OperatorTestBase {
                       {keyName},
                       aggregates,
                       {},
-                      core::AggregationNode::Step::kPartial,
+                      core::AggregationNode::Aggregate::Step::kPartial,
                       ignoreNullKeys)
                   .planNode();
 
@@ -237,7 +237,7 @@ class AggregationTest : public OperatorTestBase {
                       {"c0", "c1", "c6"},
                       aggregates,
                       {},
-                      core::AggregationNode::Step::kPartial,
+                      core::AggregationNode::Aggregate::Step::kPartial,
                       ignoreNullKeys)
                   .planNode();
 
@@ -437,7 +437,7 @@ TEST_F(AggregationTest, missingFunctionOrSignature) {
            .argumentType("smallint")
            .argumentType("varchar")
            .build()},
-      [&](core::AggregationNode::Step step,
+      [&](core::AggregationNode::Aggregate::Step step,
           const std::vector<TypePtr>& argTypes,
           const TypePtr& resultType,
           const core::QueryConfig& /*config*/)
@@ -466,15 +466,20 @@ TEST_F(AggregationTest, missingFunctionOrSignature) {
           }
 
           std::vector<core::AggregationNode::Aggregate> aggregates{
-              {aggExpr, rawInputTypes, nullptr, {}, {}}};
+              {core::AggregationNode::Aggregate::Step::kSingle,
+               aggExpr,
+               rawInputTypes,
+               nullptr,
+               {},
+               {}}};
 
           return std::make_shared<core::AggregationNode>(
               nodeId,
-              core::AggregationNode::Step::kSingle,
               std::vector<core::FieldAccessTypedExprPtr>{},
               std::vector<core::FieldAccessTypedExprPtr>{},
               std::vector<std::string>{"agg"},
               aggregates,
+              false,
               false,
               std::move(source));
         })
@@ -524,7 +529,8 @@ TEST_F(AggregationTest, missingLambdaFunction) {
                   .values({data})
                   .addNode([&](auto nodeId, auto source) -> core::PlanNodePtr {
                     std::vector<core::AggregationNode::Aggregate> aggregates{
-                        {std::make_shared<core::CallTypedExpr>(
+                        {core::AggregationNode::Aggregate::Step::kSingle,
+                         std::make_shared<core::CallTypedExpr>(
                              BIGINT(), inputs, "missing-lambda"),
                          {BIGINT()},
                          nullptr,
@@ -533,11 +539,11 @@ TEST_F(AggregationTest, missingLambdaFunction) {
 
                     return std::make_shared<core::AggregationNode>(
                         nodeId,
-                        core::AggregationNode::Step::kSingle,
                         std::vector<core::FieldAccessTypedExprPtr>{},
                         std::vector<core::FieldAccessTypedExprPtr>{},
                         std::vector<std::string>{"agg"},
                         aggregates,
+                        false,
                         false,
                         std::move(source));
                   })
@@ -577,7 +583,7 @@ TEST_F(AggregationTest, global) {
                      "max(c5)",
                      "sumnonpod(1)"},
                     {},
-                    core::AggregationNode::Step::kPartial,
+                    core::AggregationNode::Aggregate::Step::kPartial,
                     false)
                 .planNode();
 
@@ -701,7 +707,7 @@ TEST_F(AggregationTest, aggregateOfNulls) {
                     {"c0"},
                     {"sum(c1)", "min(c1)", "max(c1)"},
                     {},
-                    core::AggregationNode::Step::kPartial,
+                    core::AggregationNode::Aggregate::Step::kPartial,
                     false)
                 .planNode();
 
@@ -714,7 +720,7 @@ TEST_F(AggregationTest, aggregateOfNulls) {
                {},
                {"sum(c1)", "min(c1)", "max(c1)"},
                {},
-               core::AggregationNode::Step::kPartial,
+               core::AggregationNode::Aggregate::Step::kPartial,
                false)
            .planNode();
 
@@ -835,6 +841,49 @@ TEST_F(AggregationTest, allKeyTypes) {
       op,
       "SELECT c0, c1, c2, c3, c4, c5, sum(1) FROM tmp "
       " GROUP BY c0, c1, c2, c3, c4, c5");
+}
+
+TEST_F(AggregationTest, functionsWithDifferentStepsUnsupported) {
+  auto vectors = makeVectors(rowType_, 10, 100);
+  createDuckDbTable(vectors);
+
+  // So far it's unsupported to have different aggregation steps in the same
+  // aggregation operator.
+  EXPECT_THROW(
+      PlanBuilder()
+          .values(vectors)
+          .aggregation(
+              {"c0"},
+              {},
+              {"sum(c1)", "count(1)"},
+              {},
+              {core::AggregationNode::Aggregate::Step::kSingle,
+               core::AggregationNode::Aggregate::Step::kPartial},
+              false,
+              false)
+          .planNode(),
+      VeloxException);
+}
+
+TEST_F(AggregationTest, flushingWithRawOutputUnsupported) {
+  auto vectors = makeVectors(rowType_, 10, 100);
+  createDuckDbTable(vectors);
+
+  // Flushing is only supported with partial / intermediate aggregation steps.
+  // Otherwise, Velox will throw.
+  EXPECT_THROW(
+      PlanBuilder()
+          .values(vectors)
+          .aggregation(
+              {"c0"},
+              {},
+              {"sum(c1)"},
+              {},
+              {core::AggregationNode::Aggregate::Step::kSingle},
+              false,
+              true)
+          .planNode(),
+      VeloxException);
 }
 
 TEST_F(AggregationTest, partialAggregationMemoryLimit) {
@@ -1599,7 +1648,7 @@ TEST_F(AggregationTest, disableNonBooleanMasks) {
                       {"c1"},
                       {"count(c0) FILTER(WHERE c0)"},
                       {},
-                      core::AggregationNode::Step::kPartial,
+                      core::AggregationNode::Aggregate::Step::kPartial,
                       false)
                   .planNode();
 
@@ -1615,7 +1664,7 @@ TEST_F(AggregationTest, disableNonBooleanMasks) {
                  {"c1"},
                  {"count(c0) FILTER(WHERE mask)"},
                  {},
-                 core::AggregationNode::Step::kPartial,
+                 core::AggregationNode::Aggregate::Step::kPartial,
                  true)
              .planNode();
 
@@ -2317,7 +2366,7 @@ TEST_F(AggregationTest, preGroupedAggregationWithSpilling) {
                         {"c0"},
                         {"sum(c2)"},
                         {},
-                        core::AggregationNode::Step::kSingle,
+                        core::AggregationNode::Aggregate::Step::kSingle,
                         false)
                     .capturePlanNodeId(aggrNodeId)
                     .planNode())
@@ -3414,7 +3463,7 @@ TEST_F(AggregationTest, memoryPoolAllocationAtInit) {
                       {"c0"},
                       {"sum(cast(NULL as INT))"},
                       {},
-                      core::AggregationNode::Step::kPartial,
+                      core::AggregationNode::Aggregate::Step::kPartial,
                       false)
                   .planNode();
 
@@ -3819,7 +3868,7 @@ TEST_F(AggregationTest, ignoreNullKeys) {
             {"c0"},
             {"sum(c1)"},
             {},
-            core::AggregationNode::Step::kPartial,
+            core::AggregationNode::Aggregate::Step::kPartial,
             ignoreNullKeys)
         .planNode();
   };

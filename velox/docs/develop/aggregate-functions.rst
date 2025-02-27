@@ -167,7 +167,7 @@ A simple aggregation function is implemented as a class as the following.
     // Optional. Defined only when the aggregation function needs to use function-level variables.
     // This method is called once when the aggregation function is created.
     void initialize(
-        core::AggregationNode::Step step,
+        core::AggregationNode::Aggregate::Step step,
         const std::vector<TypePtr>& argTypes,
         const TypePtr& resultType) {
       VELOX_CHECK_EQ(argTypes.size(), 1);
@@ -849,7 +849,7 @@ aggregate function. A new instance is created for each thread of execution. When
 partial aggregation runs on 5 threads, it uses 5 instances of each aggregate
 function.
 
-Factory function takes core::AggregationNode::Step
+Factory function takes core::AggregationNode::Aggregate::Step
 (partial/final/intermediate/single) which tells what type of input to expect,
 input type and result type.
 
@@ -863,10 +863,10 @@ input type and result type.
               name,
               std::move(signatures),
               [name](
-                  core::AggregationNode::Step step,
+                  core::AggregationNode::Aggregate::Step step,
                   const std::vector<TypePtr>& argTypes,
                   const TypePtr& resultType) -> std::unique_ptr<exec::Aggregate> {
-                if (step == core::AggregationNode::Step::kIntermediate) {
+                if (step == core::AggregationNode::Aggregate::Step::kIntermediate) {
                   return std::make_unique<ApproxPercentileAggregate<double>>(
                       false, false, VARBINARY());
                 }
@@ -903,7 +903,7 @@ unique pointers. Below is an example.
       name,
       std::move(signatures),
       [name](
-          core::AggregationNode::Step step,
+          core::AggregationNode::Aggregate::Step step,
           const std::vector<TypePtr>& argTypes,
           const TypePtr& resultType,
           const core::QueryConfig& /*config*/)

@@ -127,8 +127,8 @@ class AggregationFuzzer : public AggregationFuzzerBase {
         plan.get(), [](const core::PlanNode* node) {
           if (auto aggregation =
                   dynamic_cast<const core::AggregationNode*>(node)) {
-            return aggregation->step() ==
-                core::AggregationNode::Step::kPartial &&
+            return aggregation->allRawInput() &&
+                aggregation->allPartialOutput() &&
                 !aggregation->groupingKeys().empty();
           }
 
@@ -569,7 +569,7 @@ void makeStreamingPlansWithValues(
                           groupingKeys,
                           aggregates,
                           masks,
-                          core::AggregationNode::Step::kSingle,
+                          core::AggregationNode::Aggregate::Step::kSingle,
                           false)
                       .planNode());
 
@@ -629,7 +629,7 @@ void makeStreamingPlansWithTableScan(
                           groupingKeys,
                           aggregates,
                           masks,
-                          core::AggregationNode::Step::kSingle,
+                          core::AggregationNode::Aggregate::Step::kSingle,
                           false)
                       .planNode());
 
@@ -807,7 +807,7 @@ bool AggregationFuzzer::verifySortedAggregation(
                  groupingKeys,
                  {aggregate},
                  masks,
-                 core::AggregationNode::Step::kSingle,
+                 core::AggregationNode::Aggregate::Step::kSingle,
                  false)
              .planNode(),
          {}});
@@ -835,7 +835,7 @@ bool AggregationFuzzer::verifySortedAggregation(
                    groupingKeys,
                    {aggregate},
                    masks,
-                   core::AggregationNode::Step::kSingle,
+                   core::AggregationNode::Aggregate::Step::kSingle,
                    false)
                .planNode(),
            splits});
@@ -1088,7 +1088,7 @@ bool AggregationFuzzer::verifyDistinctAggregation(
                  groupingKeys,
                  {aggregate},
                  masks,
-                 core::AggregationNode::Step::kSingle,
+                 core::AggregationNode::Aggregate::Step::kSingle,
                  false)
              .planNode(),
          {}});
@@ -1118,7 +1118,7 @@ bool AggregationFuzzer::verifyDistinctAggregation(
                    groupingKeys,
                    {aggregate},
                    masks,
-                   core::AggregationNode::Step::kSingle,
+                   core::AggregationNode::Aggregate::Step::kSingle,
                    false)
                .planNode(),
            splits});

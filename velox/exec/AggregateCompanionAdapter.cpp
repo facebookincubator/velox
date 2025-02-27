@@ -261,14 +261,14 @@ bool CompanionFunctionsRegistrar::registerPartialFunction(
              CompanionSignatures::partialFunctionName(name),
              std::move(partialSignatures),
              [name](
-                 core::AggregationNode::Step step,
+                 core::AggregationNode::Aggregate::Step step,
                  const std::vector<TypePtr>& argTypes,
                  const TypePtr& resultType,
                  const core::QueryConfig& config)
                  -> std::unique_ptr<Aggregate> {
                if (auto func = getAggregateFunctionEntry(name)) {
                  if (!exec::isRawInput(step)) {
-                   step = core::AggregationNode::Step::kIntermediate;
+                   step = core::AggregationNode::Aggregate::Step::kIntermediate;
                  }
                  auto fn = func->factory(step, argTypes, resultType, config);
                  VELOX_CHECK_NOT_NULL(fn);
@@ -302,14 +302,14 @@ bool CompanionFunctionsRegistrar::registerMergeFunction(
              CompanionSignatures::mergeFunctionName(name),
              std::move(mergeSignatures),
              [name](
-                 core::AggregationNode::Step /*step*/,
+                 core::AggregationNode::Aggregate::Step /*step*/,
                  const std::vector<TypePtr>& argTypes,
                  const TypePtr& resultType,
                  const core::QueryConfig& config)
                  -> std::unique_ptr<Aggregate> {
                if (auto func = getAggregateFunctionEntry(name)) {
                  auto fn = func->factory(
-                     core::AggregationNode::Step::kIntermediate,
+                     core::AggregationNode::Aggregate::Step::kIntermediate,
                      argTypes,
                      resultType,
                      config);
@@ -340,7 +340,7 @@ bool registerMergeExtractFunctionInternal(
              mergeExtractFunctionName,
              std::move(mergeExtractSignatures),
              [name, mergeExtractFunctionName](
-                 core::AggregationNode::Step /*step*/,
+                 core::AggregationNode::Aggregate::Step /*step*/,
                  const std::vector<TypePtr>& argTypes,
                  const TypePtr& resultType,
                  const core::QueryConfig& config)
@@ -356,7 +356,7 @@ bool registerMergeExtractFunctionInternal(
 
                if (auto func = getAggregateFunctionEntry(name)) {
                  auto fn = func->factory(
-                     core::AggregationNode::Step::kFinal,
+                     core::AggregationNode::Aggregate::Step::kFinal,
                      argTypes,
                      originalResultType,
                      config);
@@ -455,7 +455,10 @@ VectorFunctionFactory getVectorFunctionFactory(
 
     if (auto func = getAggregateFunctionEntry(originalName)) {
       auto fn = func->factory(
-          core::AggregationNode::Step::kFinal, argTypes, resultType, config);
+          core::AggregationNode::Aggregate::Step::kFinal,
+          argTypes,
+          resultType,
+          config);
       VELOX_CHECK_NOT_NULL(fn);
       return std::make_shared<AggregateCompanionAdapter::ExtractFunction>(
           std::move(fn));

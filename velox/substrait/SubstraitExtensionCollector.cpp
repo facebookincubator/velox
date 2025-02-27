@@ -31,7 +31,7 @@ int SubstraitExtensionCollector::getReferenceNumber(
 int SubstraitExtensionCollector::getReferenceNumber(
     const std::string& functionName,
     const std::vector<TypePtr>& arguments,
-    const core::AggregationNode::Step /* aggregationStep */) {
+    const core::AggregationNode::Aggregate::Step /* aggregationStep */) {
   // TODO: Ignore aggregationStep for now, will refactor when introduce velox
   // registry for function signature binding
   return getReferenceNumber(functionName, arguments);

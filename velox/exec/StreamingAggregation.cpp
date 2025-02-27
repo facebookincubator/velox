@@ -27,12 +27,11 @@ StreamingAggregation::StreamingAggregation(
           aggregationNode->outputType(),
           operatorId,
           aggregationNode->id(),
-          aggregationNode->step() == core::AggregationNode::Step::kPartial
+          aggregationNode->allRawInput() && aggregationNode->hasPartialOutput()
               ? "PartialAggregation"
               : "Aggregation"),
       outputBatchSize_{outputBatchRows()},
-      aggregationNode_{aggregationNode},
-      step_{aggregationNode->step()} {
+      aggregationNode_{aggregationNode} {
   if (aggregationNode_->ignoreNullKeys()) {
     VELOX_UNSUPPORTED(
         "Streaming aggregation doesn't support ignoring null keys yet");
@@ -156,7 +155,7 @@ RowVectorPtr StreamingAggregation::createOutput(size_t numGroups) {
 
     const auto& function = aggregate.function;
     auto& result = output->childAt(numKeys + i);
-    if (isPartialOutput(step_)) {
+    if (core::AggregationNode::Aggregate::isPartialOutput(aggregate.step)) {
       function->extractAccumulators(groups_.data(), numGroups, &result);
     } else {
       function->extractValues(groups_.data(), numGroups, &result);
@@ -255,10 +254,10 @@ void StreamingAggregation::evaluateAggregates() {
       }
     }
 
-    if (isRawInput(step_)) {
-      function->addRawInput(inputGroups_.data(), rows, args, false);
-    } else {
+    if (core::AggregationNode::Aggregate::isPartialInput(aggregate.step)) {
       function->addIntermediateResults(inputGroups_.data(), rows, args, false);
+    } else {
+      function->addRawInput(inputGroups_.data(), rows, args, false);
     }
   }
 

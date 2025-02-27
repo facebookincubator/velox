@@ -286,15 +286,19 @@ core::PlanNodePtr PlanBuilder::TableWriterBuilder::build(core::PlanNodeId id) {
   std::shared_ptr<core::AggregationNode> aggregationNode;
   if (!aggregates_.empty()) {
     auto aggregatesAndNames = planBuilder_.createAggregateExpressionsAndNames(
-        aggregates_, {}, core::AggregationNode::Step::kPartial);
+        aggregates_,
+        {},
+        std::vector{
+            aggregates_.size(),
+            core::AggregationNode::Aggregate::Step::kPartial});
     aggregationNode = std::make_shared<core::AggregationNode>(
         planBuilder_.nextPlanNodeId(),
-        core::AggregationNode::Step::kPartial,
         std::vector<core::FieldAccessTypedExprPtr>{}, // groupingKeys
         std::vector<core::FieldAccessTypedExprPtr>{}, // preGroupedKeys
         aggregatesAndNames.names, // ignoreNullKeys
         aggregatesAndNames.aggregates,
         false,
+        true,
         upstreamNode);
   }
 
@@ -574,7 +578,7 @@ std::string throwAggregateFunctionSignatureNotSupported(
 
 TypePtr resolveAggregateType(
     const std::string& aggregateName,
-    core::AggregationNode::Step step,
+    core::AggregationNode::Aggregate::Step step,
     const std::vector<TypePtr>& rawInputTypes,
     bool nullOnFailure) {
   if (auto signatures = exec::getAggregateFunctionSignatures(aggregateName)) {
@@ -620,7 +624,7 @@ TypePtr resolveAggregateType(
 
 class AggregateTypeResolver {
  public:
-  explicit AggregateTypeResolver(core::AggregationNode::Step step)
+  explicit AggregateTypeResolver(core::AggregationNode::Aggregate::Step step)
       : step_(step), previousHook_(core::Expressions::getResolverHook()) {
     core::Expressions::setTypeResolverHook(
         [&](const auto& inputs, const auto& expr, bool nullOnFailure) {
@@ -667,7 +671,7 @@ class AggregateTypeResolver {
     return nullptr;
   }
 
-  const core::AggregationNode::Step step_;
+  const core::AggregationNode::Aggregate::Step step_;
   const core::Expressions::TypeResolverHook previousHook_;
   std::vector<TypePtr> rawInputTypes_;
 };
@@ -675,7 +679,7 @@ class AggregateTypeResolver {
 } // namespace
 
 core::PlanNodePtr PlanBuilder::createIntermediateOrFinalAggregation(
-    core::AggregationNode::Step step,
+    core::AggregationNode::Aggregate::Step step,
     const core::AggregationNode* partialAggNode) {
   // Create intermediate or final aggregation using same grouping keys and same
   // aggregate function names.
@@ -694,6 +698,7 @@ core::PlanNodePtr PlanBuilder::createIntermediateOrFinalAggregation(
     auto rawInputs = partialAggregates[i].call->inputs();
 
     core::AggregationNode::Aggregate aggregate;
+    aggregate.step = step;
     for (auto& rawInput : rawInputs) {
       aggregate.rawInputTypes.push_back(rawInput->type());
     }
@@ -716,12 +721,12 @@ core::PlanNodePtr PlanBuilder::createIntermediateOrFinalAggregation(
 
   return std::make_shared<core::AggregationNode>(
       nextPlanNodeId(),
-      step,
       groupingKeys,
       partialAggNode->preGroupedKeys(),
       partialAggNode->aggregateNames(),
       aggregates,
       partialAggNode->ignoreNullKeys(),
+      core::AggregationNode::Aggregate::isPartialOutput(step),
       planNode_);
 }
 
@@ -745,16 +750,16 @@ const core::AggregationNode* findPartialAggregation(
       "Current plan node must be one of: partial or intermediate aggregation, "
       "local merge or exchange. Got: {}",
       planNode->toString());
-  VELOX_CHECK(exec::isPartialOutput(aggNode->step()));
+  VELOX_CHECK(aggNode->aggregates().empty() || aggNode->allPartialOutput());
   return aggNode;
 }
 } // namespace
 
 PlanBuilder& PlanBuilder::intermediateAggregation() {
   const auto* aggNode = findPartialAggregation(planNode_.get());
-  VELOX_CHECK(exec::isRawInput(aggNode->step()));
+  VELOX_CHECK(!aggNode->hasPartialInput());
 
-  auto step = core::AggregationNode::Step::kIntermediate;
+  auto step = core::AggregationNode::Aggregate::Step::kIntermediate;
 
   planNode_ = createIntermediateOrFinalAggregation(step, aggNode);
   return *this;
@@ -763,16 +768,19 @@ PlanBuilder& PlanBuilder::intermediateAggregation() {
 PlanBuilder& PlanBuilder::finalAggregation() {
   const auto* aggNode = findPartialAggregation(planNode_.get());
 
-  if (!exec::isRawInput(aggNode->step())) {
+  if (aggNode->hasPartialInput()) {
+    // Harden the check at the moment: PlanBuilder only builds aggregation node
+    // where all aggregates have the same step.
+    VELOX_CHECK(aggNode->allPartialInput());
     // If aggregation node is not the partial aggregation, keep looking again.
     aggNode = findPartialAggregation(aggNode->sources()[0].get());
     VELOX_CHECK_NOT_NULL(aggNode);
   }
 
-  VELOX_CHECK(exec::isRawInput(aggNode->step()));
-  VELOX_CHECK(exec::isPartialOutput(aggNode->step()));
+  VELOX_CHECK(!aggNode->hasPartialInput());
+  VELOX_CHECK(aggNode->aggregates().empty() || aggNode->allPartialOutput());
 
-  auto step = core::AggregationNode::Step::kFinal;
+  auto step = core::AggregationNode::Aggregate::Step::kFinal;
 
   planNode_ = createIntermediateOrFinalAggregation(step, aggNode);
   return *this;
@@ -781,23 +789,9 @@ PlanBuilder& PlanBuilder::finalAggregation() {
 PlanBuilder::AggregatesAndNames PlanBuilder::createAggregateExpressionsAndNames(
     const std::vector<std::string>& aggregates,
     const std::vector<std::string>& masks,
-    core::AggregationNode::Step step,
+    const std::vector<core::AggregationNode::Aggregate::Step>& steps,
     const std::vector<std::vector<TypePtr>>& rawInputTypes) {
-  if (step == core::AggregationNode::Step::kPartial ||
-      step == core::AggregationNode::Step::kSingle) {
-    VELOX_CHECK(
-        rawInputTypes.empty(),
-        "Do not provide raw inputs types for partial or single aggregation");
-  } else {
-    VELOX_CHECK_EQ(
-        aggregates.size(),
-        rawInputTypes.size(),
-        "Do provide raw inputs types for final or intermediate aggregation");
-  }
-
   std::vector<core::AggregationNode::Aggregate> aggs;
-
-  AggregateTypeResolver resolver(step);
   std::vector<std::string> names;
   aggs.reserve(aggregates.size());
   names.reserve(aggregates.size());
@@ -806,6 +800,21 @@ PlanBuilder::AggregatesAndNames PlanBuilder::createAggregateExpressionsAndNames(
   options.parseIntegerAsBigint = options_.parseIntegerAsBigint;
 
   for (auto i = 0; i < aggregates.size(); i++) {
+    const auto step = steps[i];
+    if (step == core::AggregationNode::Aggregate::Step::kPartial ||
+        step == core::AggregationNode::Aggregate::Step::kSingle) {
+      VELOX_CHECK(
+          rawInputTypes.empty(),
+          "Do not provide raw inputs types for partial or single aggregation");
+    } else {
+      VELOX_CHECK_EQ(
+          aggregates.size(),
+          rawInputTypes.size(),
+          "Do provide raw inputs types for final or intermediate aggregation");
+    }
+
+    AggregateTypeResolver resolver(step);
+
     auto& aggregate = aggregates[i];
 
     if (!rawInputTypes.empty()) {
@@ -816,11 +825,12 @@ PlanBuilder::AggregatesAndNames PlanBuilder::createAggregateExpressionsAndNames(
 
     core::AggregationNode::Aggregate agg;
 
+    agg.step = step;
     agg.call = std::dynamic_pointer_cast<const core::CallTypedExpr>(
         inferTypes(untypedExpr.expr));
 
-    if (step == core::AggregationNode::Step::kPartial ||
-        step == core::AggregationNode::Step::kSingle) {
+    if (step == core::AggregationNode::Aggregate::Step::kPartial ||
+        step == core::AggregationNode::Aggregate::Step::kSingle) {
       for (const auto& input : agg.call->inputs()) {
         agg.rawInputTypes.push_back(input->type());
       }
@@ -853,7 +863,7 @@ PlanBuilder::AggregatesAndNames PlanBuilder::createAggregateExpressionsAndNames(
       const auto& metadata = entry->metadata;
       if (metadata.orderSensitive) {
         VELOX_CHECK(
-            step == core::AggregationNode::Step::kSingle,
+            step == core::AggregationNode::Aggregate::Step::kSingle,
             "Order sensitive aggregation over sorted inputs cannot be split "
             "into partial and final: {}.",
             aggregate);
@@ -890,11 +900,12 @@ PlanBuilder& PlanBuilder::aggregation(
     const std::vector<std::string>& preGroupedKeys,
     const std::vector<std::string>& aggregates,
     const std::vector<std::string>& masks,
-    core::AggregationNode::Step step,
+    const std::vector<core::AggregationNode::Aggregate::Step>& steps,
     bool ignoreNullKeys,
+    bool allowFlush,
     const std::vector<std::vector<TypePtr>>& rawInputTypes) {
   auto aggregatesAndNames = createAggregateExpressionsAndNames(
-      aggregates, masks, step, rawInputTypes);
+      aggregates, masks, steps, rawInputTypes);
 
   // If the aggregationNode is over a GroupId, then global grouping sets
   // need to be populated.
@@ -916,7 +927,6 @@ PlanBuilder& PlanBuilder::aggregation(
 
   planNode_ = std::make_shared<core::AggregationNode>(
       nextPlanNodeId(),
-      step,
       fields(groupingKeys),
       fields(preGroupedKeys),
       aggregatesAndNames.names,
@@ -924,6 +934,7 @@ PlanBuilder& PlanBuilder::aggregation(
       globalGroupingSets,
       groupId,
       ignoreNullKeys,
+      allowFlush,
       planNode_);
   return *this;
 }
@@ -932,18 +943,18 @@ PlanBuilder& PlanBuilder::streamingAggregation(
     const std::vector<std::string>& groupingKeys,
     const std::vector<std::string>& aggregates,
     const std::vector<std::string>& masks,
-    core::AggregationNode::Step step,
+    core::AggregationNode::Aggregate::Step step,
     bool ignoreNullKeys) {
-  auto aggregatesAndNames =
-      createAggregateExpressionsAndNames(aggregates, masks, step);
+  auto aggregatesAndNames = createAggregateExpressionsAndNames(
+      aggregates, masks, std::vector{aggregates.size(), step});
   planNode_ = std::make_shared<core::AggregationNode>(
       nextPlanNodeId(),
-      step,
       fields(groupingKeys),
       fields(groupingKeys),
       aggregatesAndNames.names,
       aggregatesAndNames.aggregates,
       ignoreNullKeys,
+      core::AggregationNode::Aggregate::isPartialOutput(step),
       planNode_);
   return *this;
 }

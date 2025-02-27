@@ -128,7 +128,7 @@ TEST_F(FunctionRegistryTest, duplicateRegistration) {
 
 TEST_F(FunctionRegistryTest, multipleNames) {
   auto signatures = AggregateFunc::signatures();
-  auto factory = [&](core::AggregationNode::Step step,
+  auto factory = [&](core::AggregationNode::Aggregate::Step step,
                      const std::vector<TypePtr>& argTypes,
                      const TypePtr& resultType,
                      const core::QueryConfig& /*config*/) {

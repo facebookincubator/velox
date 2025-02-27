@@ -20,18 +20,18 @@ namespace facebook::velox::substrait {
 
 namespace {
 ::substrait::AggregationPhase toAggregationPhase(
-    core::AggregationNode::Step step) {
+    core::AggregationNode::Aggregate::Step step) {
   switch (step) {
-    case core::AggregationNode::Step::kPartial: {
+    case core::AggregationNode::Aggregate::Step::kPartial: {
       return ::substrait::AGGREGATION_PHASE_INITIAL_TO_INTERMEDIATE;
     }
-    case core::AggregationNode::Step::kIntermediate: {
+    case core::AggregationNode::Aggregate::Step::kIntermediate: {
       return ::substrait::AGGREGATION_PHASE_INTERMEDIATE_TO_INTERMEDIATE;
     }
-    case core::AggregationNode::Step::kSingle: {
+    case core::AggregationNode::Aggregate::Step::kSingle: {
       return ::substrait::AGGREGATION_PHASE_INITIAL_TO_RESULT;
     }
-    case core::AggregationNode::Step::kFinal: {
+    case core::AggregationNode::Aggregate::Step::kFinal: {
       return ::substrait::AGGREGATION_PHASE_INTERMEDIATE_TO_RESULT;
     }
     default:

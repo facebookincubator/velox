@@ -61,7 +61,7 @@ class AggregateWindowFunction : public exec::WindowFunction {
     // the function value for each row.
     aggregate_ = exec::Aggregate::create(
         name,
-        core::AggregationNode::Step::kSingle,
+        core::AggregationNode::Aggregate::Step::kSingle,
         argTypes_,
         resultType,
         config);

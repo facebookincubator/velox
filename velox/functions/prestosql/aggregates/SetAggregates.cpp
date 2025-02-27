@@ -256,7 +256,7 @@ void registerSetAggAggregate(
       name,
       std::move(signatures),
       [name](
-          core::AggregationNode::Step step,
+          core::AggregationNode::Aggregate::Step step,
           const std::vector<TypePtr>& argTypes,
           const TypePtr& resultType,
           const core::QueryConfig& /*config*/)
@@ -333,7 +333,7 @@ void registerSetUnionAggregate(
       name,
       std::move(signatures),
       [name](
-          core::AggregationNode::Step /*step*/,
+          core::AggregationNode::Aggregate::Step /*step*/,
           const std::vector<TypePtr>& argTypes,
           const TypePtr& resultType,
           const core::QueryConfig& /*config*/)
@@ -362,7 +362,7 @@ void registerCountDistinctAggregate(
   exec::registerAggregateFunction(
       name,
       std::move(signatures),
-      [](core::AggregationNode::Step step,
+      [](core::AggregationNode::Aggregate::Step step,
          const std::vector<TypePtr>& argTypes,
          const TypePtr& resultType,
          const core::QueryConfig& /*config*/)
