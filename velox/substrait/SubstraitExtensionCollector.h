@@ -59,7 +59,7 @@ class SubstraitExtensionCollector {
   int getReferenceNumber(
       const std::string& functionName,
       const std::vector<TypePtr>& arguments,
-      core::AggregationNode::Step aggregationStep);
+      core::AggregationNode::Aggregate::Step aggregationStep);
 
   /// Add extension functions to Substrait plan.
   void addExtensionsToPlan(::substrait::Plan* plan) const;

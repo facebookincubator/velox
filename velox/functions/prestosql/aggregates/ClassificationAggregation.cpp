@@ -617,7 +617,7 @@ void registerAggregateFunctionImpl(
   exec::registerAggregateFunction(
       name,
       signatures,
-      [](core::AggregationNode::Step,
+      [](core::AggregationNode::Aggregate::Step,
          const std::vector<TypePtr>& args,
          const TypePtr& resultType,
          const core::QueryConfig& /*config*/)

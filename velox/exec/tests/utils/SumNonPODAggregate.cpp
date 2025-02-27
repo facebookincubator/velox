@@ -159,7 +159,7 @@ exec::AggregateRegistrationResult registerSumNonPODAggregate(
       name,
       std::move(signatures),
       [alignment](
-          velox::core::AggregationNode::Step /*step*/,
+          velox::core::AggregationNode::Aggregate::Step /*step*/,
           const std::vector<velox::TypePtr>& /*argTypes*/,
           const velox::TypePtr& /*resultType*/,
           const core::QueryConfig& /*config*/)

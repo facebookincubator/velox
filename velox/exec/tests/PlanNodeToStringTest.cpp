@@ -198,7 +198,7 @@ TEST_F(PlanNodeToStringTest, aggregation) {
 
   ASSERT_EQ("-- Aggregation[1]\n", plan->toString());
   ASSERT_EQ(
-      "-- Aggregation[1][PARTIAL a := sum(ROW[\"c0\"]), b := avg(ROW[\"c1\"]), c := min(ROW[\"c2\"]), a3 := count(ROW[\"c1\"]) distinct] "
+      "-- Aggregation[1][ALLOW FLUSH PARTIAL a := sum(ROW[\"c0\"]), PARTIAL b := avg(ROW[\"c1\"]), PARTIAL c := min(ROW[\"c2\"]), PARTIAL a3 := count(ROW[\"c1\"]) distinct] "
       "-> a:BIGINT, b:ROW<\"\":DOUBLE,\"\":BIGINT>, c:BIGINT, a3:BIGINT\n",
       plan->toString(true, false));
 
@@ -217,7 +217,7 @@ TEST_F(PlanNodeToStringTest, aggregation) {
 
   ASSERT_EQ("-- Aggregation[1]\n", plan->toString());
   ASSERT_EQ(
-      "-- Aggregation[1][PARTIAL a := sum(ROW[\"c0\"]) mask: m0, b := avg(ROW[\"c1\"]), c := min(ROW[\"c2\"]) mask: m2] -> a:BIGINT, b:ROW<\"\":DOUBLE,\"\":BIGINT>, c:BIGINT\n",
+      "-- Aggregation[1][ALLOW FLUSH PARTIAL a := sum(ROW[\"c0\"]) mask: m0, PARTIAL b := avg(ROW[\"c1\"]), PARTIAL c := min(ROW[\"c2\"]) mask: m2] -> a:BIGINT, b:ROW<\"\":DOUBLE,\"\":BIGINT>, c:BIGINT\n",
       plan->toString(true, false));
 
   // Group-by aggregation.
@@ -229,7 +229,7 @@ TEST_F(PlanNodeToStringTest, aggregation) {
 
   ASSERT_EQ("-- Aggregation[1]\n", plan->toString());
   ASSERT_EQ(
-      "-- Aggregation[1][SINGLE [c0] a := sum(ROW[\"c1\"]), b := avg(ROW[\"c2\"]), a2 := count(ROW[\"c2\"]) distinct] "
+      "-- Aggregation[1][[c0] SINGLE a := sum(ROW[\"c1\"]), SINGLE b := avg(ROW[\"c2\"]), SINGLE a2 := count(ROW[\"c2\"]) distinct] "
       "-> c0:SMALLINT, a:BIGINT, b:DOUBLE, a2:BIGINT\n",
       plan->toString(true, false));
 
@@ -242,7 +242,7 @@ TEST_F(PlanNodeToStringTest, aggregation) {
 
   ASSERT_EQ("-- Aggregation[1]\n", plan->toString());
   ASSERT_EQ(
-      "-- Aggregation[1][SINGLE [c0] a := sum(ROW[\"c1\"]) mask: m1, b := avg(ROW[\"c2\"]) mask: m2] -> c0:BIGINT, a:BIGINT, b:DOUBLE\n",
+      "-- Aggregation[1][[c0] SINGLE a := sum(ROW[\"c1\"]) mask: m1, SINGLE b := avg(ROW[\"c2\"]) mask: m2] -> c0:BIGINT, a:BIGINT, b:DOUBLE\n",
       plan->toString(true, false));
 
   // Aggregation over sorted inputs.
@@ -253,7 +253,7 @@ TEST_F(PlanNodeToStringTest, aggregation) {
 
   ASSERT_EQ("-- Aggregation[1]\n", plan->toString());
   ASSERT_EQ(
-      "-- Aggregation[1][SINGLE [c0] a0 := array_agg(ROW[\"c1\"]) ORDER BY c2 DESC NULLS LAST] -> c0:BIGINT, a0:ARRAY<INTEGER>\n",
+      "-- Aggregation[1][[c0] SINGLE a0 := array_agg(ROW[\"c1\"]) ORDER BY c2 DESC NULLS LAST] -> c0:BIGINT, a0:ARRAY<INTEGER>\n",
       plan->toString(true, false));
 
   // Aggregation over GroupId with global grouping sets.
@@ -264,7 +264,7 @@ TEST_F(PlanNodeToStringTest, aggregation) {
              .planNode();
   ASSERT_EQ("-- Aggregation[2]\n", plan->toString());
   ASSERT_EQ(
-      "-- Aggregation[2][SINGLE [c0, group_id] sum_c1 := sum(ROW[\"c1\"]) global group IDs: [ 1 ] Group Id key: group_id] -> c0:SMALLINT, group_id:BIGINT, sum_c1:BIGINT\n",
+      "-- Aggregation[2][[c0, group_id] SINGLE sum_c1 := sum(ROW[\"c1\"]) global group IDs: [ 1 ] Group Id key: group_id] -> c0:SMALLINT, group_id:BIGINT, sum_c1:BIGINT\n",
       plan->toString(true, false));
 
   // Aggregation over GroupId with > 1 global grouping sets.
@@ -275,7 +275,7 @@ TEST_F(PlanNodeToStringTest, aggregation) {
              .planNode();
   ASSERT_EQ("-- Aggregation[2]\n", plan->toString());
   ASSERT_EQ(
-      "-- Aggregation[2][SINGLE [c0, group_id] sum_c1 := sum(ROW[\"c1\"]) global group IDs: [ 1, 2 ] Group Id key: group_id] -> c0:SMALLINT, group_id:BIGINT, sum_c1:BIGINT\n",
+      "-- Aggregation[2][[c0, group_id] SINGLE sum_c1 := sum(ROW[\"c1\"]) global group IDs: [ 1, 2 ] Group Id key: group_id] -> c0:SMALLINT, group_id:BIGINT, sum_c1:BIGINT\n",
       plan->toString(true, false));
 
   plan = PlanBuilder()
@@ -283,7 +283,7 @@ TEST_F(PlanNodeToStringTest, aggregation) {
              .partialStreamingAggregation({"c0"}, {"sum(c1) AS a"})
              .planNode();
   ASSERT_EQ(
-      "-- Aggregation[1][PARTIAL STREAMING [c0] a := sum(ROW[\"c1\"])] -> c0:SMALLINT, a:BIGINT\n",
+      "-- Aggregation[1][STREAMING ALLOW FLUSH [c0] PARTIAL a := sum(ROW[\"c1\"])] -> c0:SMALLINT, a:BIGINT\n",
       plan->toString(true, false));
 }
 

@@ -237,7 +237,8 @@ std::vector<RowVectorPtr> SparkQueryRunner::readArrowData(
 std::optional<std::string> SparkQueryRunner::toSql(
     const std::shared_ptr<const core::AggregationNode>& aggregationNode) {
   // Assume plan is Aggregation over Values.
-  VELOX_CHECK(aggregationNode->step() == core::AggregationNode::Step::kSingle);
+  VELOX_CHECK(
+      aggregationNode->allRawInput() && aggregationNode->allRawOutput());
 
   std::vector<std::string> groupingKeys;
   for (const auto& key : aggregationNode->groupingKeys()) {

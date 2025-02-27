@@ -275,7 +275,8 @@ PrestoQueryRunner::aggregationFunctionDataSpecs() const {
 std::optional<std::string> PrestoQueryRunner::toSql(
     const std::shared_ptr<const core::AggregationNode>& aggregationNode) {
   // Assume plan is Aggregation over Values.
-  VELOX_CHECK(aggregationNode->step() == core::AggregationNode::Step::kSingle);
+  VELOX_CHECK(
+      aggregationNode->allRawInput() && aggregationNode->allRawOutput());
 
   if (!isSupportedDwrfType(aggregationNode->sources()[0]->outputType())) {
     return std::nullopt;
