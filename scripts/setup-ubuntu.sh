@@ -185,7 +185,7 @@ function install_abfs {
 }
 
 function install_hdfs {
-  apt install -y --no-install-recommends libxml2-dev libgsasl7-dev uuid-dev
+  apt install -y --no-install-recommends libxml2-dev libgsasl7-dev uuid-dev openjdk-8-jdk
   github_checkout apache/hawq master
   libhdfs3_dir=$DEPENDENCY_DIR/hawq/depends/libhdfs3
   sed -i "/FIND_PACKAGE(GoogleTest REQUIRED)/d" $libhdfs3_dir/CMakeLists.txt

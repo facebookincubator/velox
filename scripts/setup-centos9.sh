@@ -106,6 +106,7 @@ function install_abfs {
 
 function install_hdfs {
   dnf -y install libxml2-devel libgsasl-devel libuuid-devel krb5-devel
+  yum install -y java-1.8.0-openjdk-devel
   github_checkout apache/hawq master
   libhdfs3_dir=$DEPENDENCY_DIR/hawq/depends/libhdfs3
   sed -i "/FIND_PACKAGE(GoogleTest REQUIRED)/d" $libhdfs3_dir/CMakeLists.txt

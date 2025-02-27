@@ -27,6 +27,10 @@ USE_CLANG="${USE_CLANG:-false}"
 
 MACHINE=$(uname -m)
 
+WGET_OPTIONS=${WGET_OPTIONS:-""}
+
+mkdir -p "${DEPENDENCY_DIR}"
+
 function install_fmt {
   wget_and_untar https://github.com/fmtlib/fmt/archive/${FMT_VERSION}.tar.gz fmt
   cmake_install_dir fmt -DFMT_TEST=OFF
@@ -185,23 +189,6 @@ function install_aws_deps {
 
   github_checkout $AWS_REPO_NAME $AWS_SDK_VERSION --depth 1 --recurse-submodules
   cmake_install -DCMAKE_BUILD_TYPE=${CMAKE_BUILD_TYPE} -DBUILD_SHARED_LIBS:BOOL=OFF -DMINIMIZE_SIZE:BOOL=ON -DENABLE_TESTING:BOOL=OFF -DBUILD_ONLY:STRING="s3;identity-management"
-  # Dependencies for S3 testing
-  # We need this specific version of Minio for testing.
-  local MINIO_ARCH=$MACHINE
-  if [[ $MACHINE == aarch64 ]]; then
-    MINIO_ARCH="arm64"
-  elif [[ $MACHINE == x86_64 ]]; then
-    MINIO_ARCH="amd64"
-  fi
-  local MINIO_BINARY="minio-2022-05-26"
-  local MINIO_OS="linux"
-  if [[ "$OSTYPE" == darwin* ]]; then
-    # minio will have to approved under the Privacy & Security on MacOS on first use.
-    MINIO_OS="darwin"
-  fi
-  wget https://dl.min.io/server/minio/release/${MINIO_OS}-${MINIO_ARCH}/archive/minio.RELEASE.2022-05-26T05-48-41Z -O ${MINIO_BINARY}
-  chmod +x ./${MINIO_BINARY}
-  mv ./${MINIO_BINARY} /usr/local/bin/
 }
 
 function install_minio {
@@ -216,7 +203,7 @@ function install_minio {
     echo "Unsupported Minio platform"
   fi
 
-  wget https://dl.min.io/server/minio/release/${MINIO_OS}-${MINIO_ARCH}/archive/minio.RELEASE.${MINIO_VERSION} -O ${MINIO_BINARY_NAME}
+  wget ${WGET_OPTIONS} https://dl.min.io/server/minio/release/${MINIO_OS}-${MINIO_ARCH}/archive/minio.RELEASE.${MINIO_VERSION} -O ${MINIO_BINARY_NAME}
   chmod +x ./${MINIO_BINARY_NAME}
   ${SUDO} mv ./${MINIO_BINARY_NAME} /usr/local/bin/
 }
@@ -289,6 +276,9 @@ function install_azure-storage-sdk-cpp {
     sed -i "s/\"version-string\"/\"overrides\": [{ \"name\": \"openssl\", \"version-string\": \"$openssl_version\" }],\"version-string\"/" $azure_core_dir/vcpkg.json
   fi
   cmake_install_dir $azure_core_dir -DCMAKE_BUILD_TYPE=${CMAKE_BUILD_TYPE} -DBUILD_SHARED_LIBS=OFF
+
+  # install azure-identity
+  cmake_install_dir sdk/identity/azure-identity -DCMAKE_BUILD_TYPE=${CMAKE_BUILD_TYPE} -DBUILD_SHARED_LIBS=OFF
 
   # install azure-storage-common
   cmake_install_dir sdk/storage/azure-storage-common -DCMAKE_BUILD_TYPE=${CMAKE_BUILD_TYPE} -DBUILD_SHARED_LIBS=OFF
