@@ -282,7 +282,7 @@ class DwrfReader : public dwio::common::Reader {
 
   const std::shared_ptr<const dwio::common::TypeWithId>& typeWithId()
       const override {
-    return readerBase_->schemaWithId();
+    return readerBase_->schemaWithId(requiredExtraFieldIds());
   }
 
   const PostScript& getPostscript() const {

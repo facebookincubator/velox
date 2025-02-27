@@ -53,7 +53,6 @@ IcebergSplitReader::IcebergSplitReader(
           fileHandleFactory,
           executor,
           scanSpec),
-      originalScanSpec_(nullptr),
       baseReadOffset_(0),
       splitOffset_(0),
       deleteBitmap_(nullptr),
@@ -88,9 +87,7 @@ void IcebergSplitReader::prepareSplit(
 
   // checkIfSplitIsEmpty needs to use the base reader's schemaWithId_. For that
   // we need to update the ScanSpec first.
-  for (int32_t id : equalityFieldIds) {
-    scanSpec_->getOrCreateChild(baseReader_->rowType()->nameOf(id - 1), true);
-  }
+  baseReader_->setRequiredExtraFieldIds(equalityFieldIds);
 
   if (checkIfSplitIsEmpty(runtimeStats)) {
     VELOX_CHECK(emptySplit_);
