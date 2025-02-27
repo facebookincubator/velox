@@ -263,7 +263,7 @@ From floating-point types
 ^^^^^^^^^^^^^^^^^^^^^^^^^
 
 Casting from floating-point input to timestamp type is allowed.
-The input value is treated as the number of seconds since the epoch (1970-01-01 00:00:00 UTC) and converted to microseconds.
+The input value is treated as the number of seconds since the epoch (1970-01-01 00:00:00 UTC) and converted to microseconds by truncating the fractional part.
 
 Valid examples
 
