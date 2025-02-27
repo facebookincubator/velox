@@ -31,6 +31,7 @@ CudfLimit::CudfLimit(
           operatorId,
           limitNode->id(),
           "CudfLimit"),
+      NvtxHelper(nvtx3::rgb{112, 128, 144}, operatorId), // Slate Gray
       remainingOffset_{limitNode->offset()},
       remainingLimit_{limitNode->count()} {
   isIdentityProjection_ = true;
@@ -52,6 +53,7 @@ void CudfLimit::addInput(RowVectorPtr input) {
 }
 
 RowVectorPtr CudfLimit::getOutput() {
+  VELOX_NVTX_OPERATOR_FUNC_RANGE();
   if (input_ == nullptr || (remainingOffset_ == 0 && remainingLimit_ == 0)) {
     return nullptr;
   }
