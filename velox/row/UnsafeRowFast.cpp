@@ -451,11 +451,10 @@ inline int32_t valueSize() {
 }
 
 // Deserializes one fixed-width value from each 'row' in 'data'.
-// Each value starts at data[row].data() + offsets[row].
+// Each value starts at data[row] + offsets[row].
 // Advances the offsets past the fixed field width.
 // @param nulls Null flags for the values.
-// @param offsets Offsets in 'data' for the serialized values. Not used if value
-// is null.
+// @param offsets Offsets in 'data' for the serialized values.
 template <TypeKind Kind>
 VectorPtr deserializeFixedWidth(
     const TypePtr& type,
@@ -522,13 +521,13 @@ inline const uint8_t* readNulls(const char* buffer) {
 }
 
 // Deserializes multiple fixed-width values from each 'row' in 'data'.
-// Each set of values starts at data[row].data() + offsets[row] and contains
+// Each set of values starts at data[row] + offsets[row] and contains
 // null flags followed by values. The number of values is provided in
 // sizes[row].
-// The serialization format is:
-// [null bits][values or offset&length][variable length portion]
-// The fixed value in Row is stored as 8 bytes, but in array, stores as its cpp
-// size, for example, 8 bytes in row and 4 bytes in array for int32_t.
+// The serialization format is: [null bits][values or offset&length][variable
+// length portion] The fixed value in Row is stored as 8 bytes, but in array,
+// stores as its cpp size, for example, 8 bytes in row and 4 bytes in array for
+// int32_t.
 // @param arrayStartOffsets data[row] + arrayStartOffsets[row] is this array
 // start address. For array, it is always 0, but for map, key and value is
 // stored as two arrays, offset value is always 8 (unsafe key array numBytes)
@@ -646,9 +645,10 @@ VectorPtr deserializeUnknowns(
 }
 
 // Deserializes one string from each 'row' in 'data'.
-// Each string length and offset stores at data[row].data() + offsets[row].
-// The string starts at data[row].data() + wordOffset.
-// string size and offset | <string bytes>
+// Each string length and offset stores at data[row] + offsets[row].
+// The string starts at data[row] + wordOffset.
+// String format is:
+// <string size and offset> |...| <string bytes>
 // Advances the offsets past the fixed field width.
 VectorPtr deserializeStrings(
     const TypePtr& type,
@@ -756,7 +756,7 @@ VectorPtr deserializeLongDecimalArrays(
 }
 
 // Deserializes multiple strings from each 'row' in 'data'.
-// Each set of strings starts at data[row].data() + offsets and contains
+// Each set of strings starts at data[row] + offsets and contains
 // null flags followed by the strings. The number of strings is provided in
 // sizes[row].
 // nulls | size-and-offset-s1 | size-and-offset-s2 | <s1> | <s2> |...
@@ -813,7 +813,7 @@ VectorPtr deserialize(
     memory::MemoryPool* pool);
 
 // Deserializes multiple arrays from each 'row' in 'data'.
-// Each set of arrays starts at data[row].data() + offsets and contains
+// Each set of arrays starts at data[row] + offsets and contains
 // null flags followed by the arrays. The number of arrays is provided in
 // sizes[row].
 // nulls | size-offset-a1 | size-offset-a2 | <a1 elements> |...
@@ -848,7 +848,7 @@ VectorPtr deserializeComplexArrays(
         if (bits::isBitSet(rawElementNulls, j)) {
           bits::setNull(rawNulls, nestedIndex);
         } else {
-          // Read offsets of individual elements.
+          // Read offset of individual elements.
           const auto offset = readInt32(
               data[i] + arrayStartOffsets[i] + arrayDataOffsets[i] +
               sizeof(int32_t));
@@ -869,6 +869,7 @@ enum class DeserializeArrayType {
 };
 
 // Deserializes one array from each 'row' in 'data'.
+// Array format is:
 // [numElements][null bits][values or offset&length][variable length portion]
 template <DeserializeArrayType DeserializeType = DeserializeArrayType::ARRAY>
 ArrayVectorPtr deserializeArrays(
@@ -965,6 +966,7 @@ ArrayVectorPtr deserializeArrays(
 }
 
 // Deserializes one map from each 'row' in 'data'.
+// Map format is:
 // key-array-bytes | array-of-keys | array-of-values
 VectorPtr deserializeMaps(
     const TypePtr& type,
