@@ -53,6 +53,26 @@ class PrestoCastHooks : public CastHooks {
   // Returns cast options following 'isLegacyCast' and session timezone.
   const TimestampToStringOptions& timestampToStringOptions() const override;
 
+  Expected<float> castShortDecimalToReal(
+      int64_t unscaledValue,
+      uint8_t precision,
+      uint8_t scale) const override;
+
+  Expected<float> castLongDecimalToReal(
+      int128_t unscaledValue,
+      uint8_t precision,
+      uint8_t scale) const override;
+
+  Expected<double> castShortDecimalToDouble(
+      int64_t unscaledValue,
+      uint8_t precision,
+      uint8_t scale) const override;
+
+  Expected<double> castLongDecimalToDouble(
+      int128_t unscaledValue,
+      uint8_t precision,
+      uint8_t scale) const override;
+
   bool truncate() const override {
     return false;
   }

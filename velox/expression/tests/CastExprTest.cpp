@@ -97,6 +97,11 @@ class CastExprTest : public functions::test::CastBaseTest {
         longFlat,
         makeNullableFlatVector<T>(
             {-1e33, 0, 1e33, 1.2089258196146293E19, std::nullopt}));
+
+    testCast(
+        makeNullableFlatVector<int128_t>(
+            {HugeInt::build(0, 299250000)}, DECIMAL(20, 4)),
+        makeNullableFlatVector<T>({29925.0}));
   }
 
   template <TypeKind KIND>
