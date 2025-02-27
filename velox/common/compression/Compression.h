@@ -73,7 +73,7 @@ class StreamingCompressor {
 
   /// Compress some input.
   /// If CompressResult.outputTooSmall is true on return, compress() should be
-  /// called again with a larger output buffer.
+  /// called again with a larger output buffer, such as doubling its size.
   virtual Expected<CompressResult> compress(
       const uint8_t* input,
       uint64_t inputLength,
@@ -82,15 +82,16 @@ class StreamingCompressor {
 
   /// Flush part of the compressed output.
   /// If FlushResult.outputTooSmall is true on return, flush() should be called
-  /// again with a larger output buffer.
+  /// again with a larger output buffer, such as doubling its size.
   virtual Expected<FlushResult> flush(
       uint8_t* output,
       uint64_t outputLength) = 0;
 
-  /// End compressing, doing whatever is necessary to end the stream.
+  /// End compressing, doing whatever is necessary to end the stream, and
+  /// flushing the compressed output.
   /// If EndResult.outputTooSmall is true on return, end() should be called
-  /// again with a larger output buffer. Otherwise, the StreamingCompressor
-  /// should not be used anymore. end() will flush the compressed output.
+  /// again with a larger output buffer, such as doubling its size.
+  /// Otherwise, the StreamingCompressor should not be used anymore.
   virtual Expected<EndResult> end(uint8_t* output, uint64_t outputLength) = 0;
 };
 
@@ -106,7 +107,7 @@ class StreamingDecompressor {
 
   /// Decompress some input.
   /// If DecompressResult.outputTooSmall is true on return, decompress() should
-  /// be called again with a larger output buffer.
+  /// be called again with a larger output buffer, such as doubling its size.
   virtual Expected<DecompressResult> decompress(
       const uint8_t* input,
       uint64_t inputLength,
@@ -153,9 +154,6 @@ class Codec {
   /// Return true if indicated kind supports one-shot compression with fixed
   /// compressed length.
   static bool supportsCompressFixedLength(CompressionKind kind);
-
-  // Return true if indicated kind supports creating streaming de/compressor.
-  static bool supportsStreamingCompression(CompressionKind kind);
 
   /// Return the smallest supported compression level.
   /// If the codec doesn't support compression level,
@@ -214,19 +212,28 @@ class Codec {
   // Maximum compressed length of given input length.
   virtual uint64_t maxCompressedLength(uint64_t inputLength) = 0;
 
-  /// Retrieves the actual uncompressed length of data using the specified
-  /// compression library.
-  /// Note: This functionality is not universally supported by all compression
-  /// libraries. If not supported, `std::nullopt` will be returned.
-  virtual std::optional<uint64_t> getUncompressedLength(
+  /// Retrieves the uncompressed length of the given compressed data using the
+  /// specified compression library.
+  /// If the input data is corrupted, returns `Unexpected` with
+  /// `Status::IOError`. Not all compression libraries support this
+  /// functionality. Use supportsGetUncompressedLength() to check before
+  /// calling. If unsupported, returns `Unexpected` with `Status::Invalid`.
+  virtual Expected<uint64_t> getUncompressedLength(
       const uint8_t* input,
       uint64_t inputLength) const;
 
-  // Create a streaming compressor instance.
+  // Return true if indicated kind supports creating streaming de/compressor.
+  virtual bool supportsStreamingCompression() const;
+
+  /// Create a streaming compressor instance.
+  /// Use supportsStreamingCompression() to check before calling.
+  /// If unsupported, returns `Unexpected` with `Status::Invalid`.
   virtual Expected<std::shared_ptr<StreamingCompressor>>
   makeStreamingCompressor();
 
-  // Create a streaming compressor instance.
+  /// Create a streaming decompressor instance.
+  /// Use supportsStreamingCompression() to check before calling.
+  /// If unsupported, returns `Unexpected` with `Status::Invalid`.
   virtual Expected<std::shared_ptr<StreamingDecompressor>>
   makeStreamingDecompressor();
 
@@ -237,7 +244,7 @@ class Codec {
   virtual int32_t compressionLevel() const;
 
   // The name of this Codec's compression type.
-  std::string name() const;
+  virtual std::string name() const;
 
  private:
   // Initializes the codec's resources.

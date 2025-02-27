@@ -29,11 +29,11 @@ struct Lz4CodecOptions : CodecOptions {
   enum Type { kLz4Frame, kLz4Raw, kLz4Hadoop };
 
   Lz4CodecOptions(
-      Lz4CodecOptions::Type type,
+      Type type,
       int32_t compressionLevel = kUseDefaultCompressionLevel)
       : CodecOptions(compressionLevel), type(type) {}
 
-  Lz4CodecOptions::Type type;
+  Type type;
 };
 
 class Lz4CodecBase : public Codec {
@@ -72,6 +72,8 @@ class Lz4FrameCodec : public Lz4CodecBase {
       uint8_t* output,
       uint64_t outputLength) override;
 
+  bool supportsStreamingCompression() const override;
+
   Expected<std::shared_ptr<StreamingCompressor>> makeStreamingCompressor()
       override;
 
@@ -99,6 +101,8 @@ class Lz4RawCodec : public Lz4CodecBase {
       uint64_t inputLength,
       uint8_t* output,
       uint64_t outputLength) override;
+
+  std::string name() const override;
 };
 
 /// The Hadoop Lz4Codec source code can be found here:
@@ -126,6 +130,8 @@ class Lz4HadoopCodec : public Lz4RawCodec, public HadoopCompressionFormat {
   int32_t maximumCompressionLevel() const override;
 
   int32_t defaultCompressionLevel() const override;
+
+  std::string name() const override;
 
  private:
   Expected<uint64_t> decompressInternal(
