@@ -157,7 +157,7 @@ Array Functions
         SELECT array_union(array(1, 2, 3), array(1, 3, 5)); -- [1, 2, 3, 5]
         SELECT array_union(array(1, 3, 5), array(1, 2, 3)); -- [1, 3, 5, 2]
         SELECT array_union(array(1, 2, 3), array(1, 3, 5, null)); -- [1, 2, 3, 5, null]
-        SELECT array_union(array(1, 2, NaN), array(1, 3, NaN)); -- [1, 2, NaN, 3]
+        SELECT array_union(array(1, 2, float('nan')), array(1, 3, float('nan'))); -- [1, 2, NaN, 3]
 
 .. spark::function:: arrays_zip(array(T), array(U),..) -> array(row(T,U, ...))
 
