@@ -31,14 +31,14 @@ HashAggregation::HashAggregation(
           aggregationNode->outputType(),
           operatorId,
           aggregationNode->id(),
-          aggregationNode->step() == core::AggregationNode::Step::kPartial
+          aggregationNode->allRawInput() && aggregationNode->hasPartialOutput()
               ? "PartialAggregation"
               : "Aggregation",
           aggregationNode->canSpill(driverCtx->queryConfig())
               ? driverCtx->makeSpillConfig(operatorId)
               : std::nullopt),
       aggregationNode_(aggregationNode),
-      isPartialOutput_(isPartialOutput(aggregationNode->step())),
+      allowFlush_(aggregationNode->allowFlush()),
       isGlobal_(aggregationNode->groupingKeys().empty()),
       isDistinct_(!isGlobal_ && aggregationNode->aggregates().empty()),
       maxExtendedPartialAggregationMemoryUsage_(
@@ -77,14 +77,15 @@ void HashAggregation::initialize() {
 
   // Check that aggregate result type match the output type.
   for (auto i = 0; i < aggregateInfos.size(); i++) {
-    const auto& aggResultType = aggregateInfos[i].function->resultType();
+    const AggregateInfo& aggregateInfo = aggregateInfos[i];
+    const auto& aggResultType = aggregateInfo.function->resultType();
     const auto& expectedType = outputType_->childAt(numHashers + i);
     VELOX_CHECK(
         aggResultType->kindEquals(expectedType),
         "Unexpected result type for an aggregation: {}, expected {}, step {}",
         aggResultType->toString(),
         expectedType->toString(),
-        core::AggregationNode::stepName(aggregationNode_->step()));
+        core::AggregationNode::Aggregate::stepName(aggregateInfo.step));
   }
 
   for (auto i = 0; i < hashers.size(); ++i) {
@@ -106,8 +107,6 @@ void HashAggregation::initialize() {
       std::move(groupingKeyOutputChannels),
       std::move(aggregateInfos),
       aggregationNode_->ignoreNullKeys(),
-      isPartialOutput_,
-      isRawInput(aggregationNode_->step()),
       aggregationNode_->globalGroupingSets(),
       groupIdChannel,
       spillConfig_.has_value() ? &spillConfig_.value() : nullptr,
@@ -167,7 +166,15 @@ void HashAggregation::setupGroupingKeyChannelProjections(
 }
 
 bool HashAggregation::abandonPartialAggregationEarly(int64_t numOutput) const {
-  VELOX_CHECK(isPartialOutput_ && !isGlobal_);
+  VELOX_CHECK(
+      isDistinct_ || groupingSet_->allPartialOutput(),
+      "Hash aggregation only supports abandonment when all aggregates' outputs are partial");
+  VELOX_CHECK(
+      !isGlobal_,
+      "Hash aggregation doesn't support abandonment for global aggregation");
+  VELOX_CHECK(
+      groupingSet_->allPartialInput() || groupingSet_->allRawInput(),
+      "Hash aggregation only supports abandonment when either all aggregates' inputs are partial or all are raw");
   return numInputRows_ > abandonPartialAggregationMinRows_ &&
       100 * numOutput / numInputRows_ >= abandonPartialAggregationMinPct_;
 }
@@ -190,10 +197,9 @@ void HashAggregation::addInput(RowVectorPtr input) {
   // NOTE: we should not trigger partial output flush in case of global
   // aggregation as the final aggregator will handle it the same way as the
   // partial aggregator. Hence, we have to use more memory anyway.
-  const bool abandonPartialEarly = isPartialOutput_ && !isGlobal_ &&
-      abandonPartialAggregationEarly(groupingSet_->numDistinct());
-  if (isPartialOutput_ && !isGlobal_ &&
-      (abandonPartialEarly ||
+  if (allowFlush_ && (isDistinct_ || groupingSet_->allPartialOutput()) &&
+      !isGlobal_ &&
+      (abandonPartialAggregationEarly(groupingSet_->numDistinct()) ||
        groupingSet_->isPartialFull(maxPartialAggregationMemoryUsage_))) {
     partialFull_ = true;
   }
@@ -283,7 +289,7 @@ void HashAggregation::maybeIncreasePartialAggregationMemoryUsage(
     double aggregationPct) {
   // If more than this many are unique at full memory, give up on partial agg.
   constexpr int32_t kPartialMinFinalPct = 40;
-  VELOX_DCHECK(isPartialOutput_);
+  VELOX_DCHECK(allowFlush_);
   // If size is at max and there still is not enough reduction, abandon partial
   // aggregation.
   if (abandonPartialAggregationEarly(numOutputRows_) ||

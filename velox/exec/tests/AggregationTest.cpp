@@ -466,15 +466,20 @@ TEST_F(AggregationTest, missingFunctionOrSignature) {
           }
 
           std::vector<core::AggregationNode::Aggregate> aggregates{
-              {aggExpr, rawInputTypes, nullptr, {}, {}}};
+              {core::AggregationNode::Step::kSingle,
+               aggExpr,
+               rawInputTypes,
+               nullptr,
+               {},
+               {}}};
 
           return std::make_shared<core::AggregationNode>(
               nodeId,
-              core::AggregationNode::Step::kSingle,
               std::vector<core::FieldAccessTypedExprPtr>{},
               std::vector<core::FieldAccessTypedExprPtr>{},
               std::vector<std::string>{"agg"},
               aggregates,
+              false,
               false,
               std::move(source));
         })
@@ -524,7 +529,8 @@ TEST_F(AggregationTest, missingLambdaFunction) {
                   .values({data})
                   .addNode([&](auto nodeId, auto source) -> core::PlanNodePtr {
                     std::vector<core::AggregationNode::Aggregate> aggregates{
-                        {std::make_shared<core::CallTypedExpr>(
+                        {core::AggregationNode::Step::kSingle,
+                         std::make_shared<core::CallTypedExpr>(
                              BIGINT(), inputs, "missing-lambda"),
                          {BIGINT()},
                          nullptr,
@@ -533,11 +539,11 @@ TEST_F(AggregationTest, missingLambdaFunction) {
 
                     return std::make_shared<core::AggregationNode>(
                         nodeId,
-                        core::AggregationNode::Step::kSingle,
                         std::vector<core::FieldAccessTypedExprPtr>{},
                         std::vector<core::FieldAccessTypedExprPtr>{},
                         std::vector<std::string>{"agg"},
                         aggregates,
+                        false,
                         false,
                         std::move(source));
                   })
@@ -834,6 +840,49 @@ TEST_F(AggregationTest, allKeyTypes) {
       op,
       "SELECT c0, c1, c2, c3, c4, c5, sum(1) FROM tmp "
       " GROUP BY c0, c1, c2, c3, c4, c5");
+}
+
+TEST_F(AggregationTest, functionsWithDifferentStepsUnsupported) {
+  auto vectors = makeVectors(rowType_, 10, 100);
+  createDuckDbTable(vectors);
+
+  // So far it's unsupported to have different aggregation steps in the same
+  // aggregation operator.
+  EXPECT_THROW(
+      PlanBuilder()
+          .values(vectors)
+          .aggregation(
+              {"c0"},
+              {},
+              {"sum(c1)", "count(1)"},
+              {},
+              {core::AggregationNode::Step::kSingle,
+               core::AggregationNode::Step::kPartial},
+              false,
+              false)
+          .planNode(),
+      VeloxException);
+}
+
+TEST_F(AggregationTest, flushingWithRawOutputUnsupported) {
+  auto vectors = makeVectors(rowType_, 10, 100);
+  createDuckDbTable(vectors);
+
+  // Flushing is only supported with partial / intermediate aggregation steps.
+  // Otherwise, Velox will throw.
+  EXPECT_THROW(
+      PlanBuilder()
+          .values(vectors)
+          .aggregation(
+              {"c0"},
+              {},
+              {"sum(c1)"},
+              {},
+              {core::AggregationNode::Step::kSingle},
+              false,
+              true)
+          .planNode(),
+      VeloxException);
 }
 
 TEST_F(AggregationTest, partialAggregationMemoryLimit) {

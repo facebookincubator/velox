@@ -47,8 +47,6 @@ GroupingSet::GroupingSet(
     std::vector<column_index_t>&& groupingKeyOutputProjections,
     std::vector<AggregateInfo>&& aggregates,
     bool ignoreNullKeys,
-    bool isPartial,
-    bool isRawInput,
     const std::vector<vector_size_t>& globalGroupingSets,
     const std::optional<column_index_t>& groupIdChannel,
     const common::SpillConfig* spillConfig,
@@ -59,8 +57,6 @@ GroupingSet::GroupingSet(
       groupingKeyOutputProjections_(std::move(groupingKeyOutputProjections)),
       hashers_(std::move(hashers)),
       isGlobal_(hashers_.empty()),
-      isPartial_(isPartial),
-      isRawInput_(isRawInput),
       queryConfig_(operatorCtx->task()->queryCtx()->queryConfig()),
       aggregates_(std::move(aggregates)),
       masks_(extractMaskChannels(aggregates_)),
@@ -103,9 +99,34 @@ GroupingSet::GroupingSet(
         allAreSinglyReferenced(aggregate.inputs, channelUseCount));
   }
 
+  if (!aggregates_.empty()) {
+    bool hasPartialInput{false};
+    bool hasPartialOutput{false};
+    bool allPartialInput{true};
+    bool allPartialOutput{true};
+
+    for (const auto& aggregate : aggregates_) {
+      if (core::AggregationNode::Aggregate::isPartialInput(aggregate.step)) {
+        hasPartialInput = true;
+      } else {
+        allPartialInput = false;
+      }
+      if (core::AggregationNode::Aggregate::isPartialOutput(aggregate.step)) {
+        hasPartialOutput = true;
+      } else {
+        allPartialOutput = false;
+      }
+    }
+
+    hasPartialInput_ = hasPartialInput;
+    hasPartialOutput_ = hasPartialOutput;
+    allPartialInput_ = allPartialInput;
+    allPartialOutput_ = allPartialOutput;
+  }
+
   sortedAggregations_ =
       SortedAggregations::create(aggregates_, inputType, &pool_);
-  if (isPartial_) {
+  if (hasPartialOutput_) {
     VELOX_USER_CHECK_NULL(
         sortedAggregations_,
         "Partial aggregations over sorted inputs are not supported");
@@ -114,7 +135,7 @@ GroupingSet::GroupingSet(
   for (auto& aggregate : aggregates_) {
     if (aggregate.distinct) {
       VELOX_USER_CHECK(
-          !isPartial_,
+          !core::AggregationNode::Aggregate::isPartialOutput(aggregate.step),
           "Partial aggregations over distinct inputs are not supported");
       distinctAggregations_.emplace_back(
           DistinctAggregations::create({&aggregate}, inputType, &pool_));
@@ -142,8 +163,6 @@ std::unique_ptr<GroupingSet> GroupingSet::createForMarkDistinct(
       /*groupingKeyOutputProjections=*/std::vector<column_index_t>{},
       /*aggregates=*/std::vector<AggregateInfo>{},
       /*ignoreNullKeys=*/false,
-      /*isPartial=*/false,
-      /*isRawInput=*/false,
       /*globalGroupingSets=*/std::vector<vector_size_t>{},
       /*groupIdColumn=*/std::nullopt,
       /*spillConfig=*/nullptr,
@@ -295,10 +314,10 @@ void GroupingSet::addInputForActiveRows(
     // this.
     const bool canPushdown = (&rows == &activeRows_) && mayPushdown &&
         mayPushdown_[i] && areAllLazyNotLoaded(tempVectors_);
-    if (isRawInput_) {
-      function->addRawInput(groups, rows, tempVectors_, canPushdown);
-    } else {
+    if (core::AggregationNode::Aggregate::isPartialInput(aggregates_[i].step)) {
       function->addIntermediateResults(groups, rows, tempVectors_, canPushdown);
+    } else {
+      function->addRawInput(groups, rows, tempVectors_, canPushdown);
     }
   }
   tempVectors_.clear();
@@ -580,11 +599,11 @@ void GroupingSet::addGlobalAggregationInput(
     populateTempVectors(i, input);
     const bool canPushdown =
         mayPushdown && mayPushdown_[i] && areAllLazyNotLoaded(tempVectors_);
-    if (isRawInput_) {
-      function->addSingleGroupRawInput(group, rows, tempVectors_, canPushdown);
-    } else {
+    if (core::AggregationNode::Aggregate::isPartialInput(aggregates_[i].step)) {
       function->addSingleGroupIntermediateResults(
           group, rows, tempVectors_, canPushdown);
+    } else {
+      function->addSingleGroupRawInput(group, rows, tempVectors_, canPushdown);
     }
   }
   tempVectors_.clear();
@@ -611,7 +630,8 @@ bool GroupingSet::getGlobalAggregationOutput(
 
     auto& function = aggregates_[i].function;
     auto& resultVector = result->childAt(aggregates_[i].output);
-    if (isPartial_) {
+    if (core::AggregationNode::Aggregate::isPartialOutput(
+            aggregates_[i].step)) {
       function->extractAccumulators(groups, 1, &resultVector);
     } else {
       function->extractValues(groups, 1, &resultVector);
@@ -794,7 +814,8 @@ void GroupingSet::extractGroups(
 
     auto& function = aggregates_[i].function;
     auto& aggregateVector = result->childAt(i + totalKeys);
-    if (isPartial_) {
+    if (core::AggregationNode::Aggregate::isPartialOutput(
+            aggregates_[i].step)) {
       function->extractAccumulators(
           groups.data(), groups.size(), &aggregateVector);
     } else {
@@ -820,7 +841,7 @@ void GroupingSet::resetTable(bool freeTable) {
 }
 
 bool GroupingSet::isPartialFull(int64_t maxBytes) {
-  VELOX_CHECK(isPartial_);
+  VELOX_CHECK(isDistinct() || allPartialOutput_);
   if (!table_ || allocatedBytes() <= maxBytes) {
     return false;
   }
@@ -861,7 +882,7 @@ const HashLookup& GroupingSet::hashLookup() const {
 void GroupingSet::ensureInputFits(const RowVectorPtr& input) {
   // Spilling is considered if this is a final or single aggregation and
   // spillPath is set.
-  if (isPartial_ || spillConfig_ == nullptr) {
+  if (hasPartialOutput_ || spillConfig_ == nullptr) {
     return;
   }
 
@@ -939,7 +960,7 @@ void GroupingSet::ensureOutputFits() {
   // to reserve memory for the output as we can't reclaim much memory from this
   // operator itself. The output processing can reclaim memory from the other
   // operator or query through memory arbitration.
-  if (isPartial_ || spillConfig_ == nullptr || hasSpilled() ||
+  if (hasPartialOutput_ || spillConfig_ == nullptr || hasSpilled() ||
       table_ == nullptr || table_->numDistinct() == 0) {
     return;
   }
@@ -1430,10 +1451,13 @@ void GroupingSet::toIntermediate(
     RowVectorPtr& result) {
   VELOX_CHECK(abandonedPartialAggregation_);
   VELOX_CHECK_EQ(result.use_count(), 1);
-  if (!isRawInput_) {
+  if (allPartialInput_) {
     result = input;
     return;
   }
+  VELOX_CHECK(
+      !hasPartialInput_,
+      "GroupingSet::toIntermediate only supports either all aggregate's inputs are partial or all are raw");
   auto numRows = input->size();
   activeRows_.resize(numRows);
   activeRows_.setAll();

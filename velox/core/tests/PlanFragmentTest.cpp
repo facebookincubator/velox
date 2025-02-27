@@ -131,12 +131,6 @@ TEST_F(PlanFragmentTest, aggregationCanSpill) {
   std::vector<std::string> emptyAggregateNames{};
   std::vector<TypedExprPtr> aggregateInputs{
       std::make_shared<InputTypedExpr>(BIGINT())};
-  const std::vector<AggregationNode::Aggregate> aggregates{
-      {std::make_shared<core::CallTypedExpr>(BIGINT(), aggregateInputs, "sum"),
-       {},
-       nullptr,
-       {},
-       {}}};
   const std::vector<AggregationNode::Aggregate> emptyAggregates{};
 
   struct {
@@ -150,7 +144,7 @@ TEST_F(PlanFragmentTest, aggregationCanSpill) {
     std::string debugString() const {
       return fmt::format(
           "aggregationStep:{} isSpillEnabled:{} isAggregationSpillEnabled:{} isDistinct:{} hasPreAggregation:{} expectedCanSpill:{}",
-          AggregationNode::stepName(aggregationStep),
+          AggregationNode::Aggregate::stepName(aggregationStep),
           isSpillEnabled,
           isAggregationSpillEnabled,
           isDistinct,
@@ -181,14 +175,23 @@ TEST_F(PlanFragmentTest, aggregationCanSpill) {
 
   for (const auto& testData : testSettings) {
     SCOPED_TRACE(testData.debugString());
+    const std::vector<AggregationNode::Aggregate> aggregates{
+        {testData.aggregationStep,
+         std::make_shared<core::CallTypedExpr>(
+             BIGINT(), aggregateInputs, "sum"),
+         {},
+         nullptr,
+         {},
+         {}}};
     const auto aggregation = std::make_shared<AggregationNode>(
         "aggregation",
-        testData.aggregationStep,
         groupingKeys,
         testData.hasPreAggregation ? preGroupingKeys : emptyPreGroupingKeys,
         testData.isDistinct ? emptyAggregateNames : aggregateNames,
         testData.isDistinct ? emptyAggregates : aggregates,
         false,
+        core::AggregationNode::Aggregate::isPartialOutput(
+            testData.aggregationStep),
         valueNode_);
     auto queryCtx = getSpillQueryCtx(
         testData.isSpillEnabled,

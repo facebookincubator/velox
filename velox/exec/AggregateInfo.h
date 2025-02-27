@@ -24,6 +24,9 @@ class Aggregate;
 
 /// Information needed to evaluate an aggregate function.
 struct AggregateInfo {
+  /// Step of the Aggregate.
+  core::AggregationNode::Step step;
+
   /// Instance of the Aggregate class.
   std::unique_ptr<Aggregate> function;
 

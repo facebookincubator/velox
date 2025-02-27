@@ -25,13 +25,11 @@
 namespace facebook::velox::exec {
 
 bool isRawInput(core::AggregationNode::Step step) {
-  return step == core::AggregationNode::Step::kPartial ||
-      step == core::AggregationNode::Step::kSingle;
+  return !core::AggregationNode::Aggregate::isPartialInput(step);
 }
 
 bool isPartialOutput(core::AggregationNode::Step step) {
-  return step == core::AggregationNode::Step::kPartial ||
-      step == core::AggregationNode::Step::kIntermediate;
+  return core::AggregationNode::Aggregate::isPartialOutput(step);
 }
 
 bool isPartialInput(core::AggregationNode::Step step) {
