@@ -123,6 +123,10 @@ class ConjunctCallToSpecialForm : public FunctionCallToSpecialForm {
       const core::QueryConfig& config) override;
 
  private:
+  ExprPtr optimizeAnd(std::vector<ExprPtr>& compiledChildren);
+
+  ExprPtr optimizeOr(std::vector<ExprPtr>& compiledChildren);
+
   bool isAnd_;
 };
 

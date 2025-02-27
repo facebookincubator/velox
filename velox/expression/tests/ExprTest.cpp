@@ -343,12 +343,12 @@ class ExprTest : public testing::Test, public VectorTestBase {
 
   std::exception_ptr assertError(
       const std::string& expression,
-      const VectorPtr& input,
+      const RowVectorPtr& input,
       const std::string& context,
       const std::string& additionalContext,
       const std::string& message) {
     try {
-      evaluate(expression, makeRowVector({input}));
+      evaluate(expression, input);
       EXPECT_TRUE(false) << "Expected an error";
     } catch (VeloxException& e) {
       EXPECT_EQ(context, trimInputPath(e.context()));
@@ -2541,7 +2541,7 @@ struct AlwaysThrowsStdExceptionFunction {
 
 /// Verify exception context for the case when function throws std::exception.
 TEST_P(ParameterizedExprTest, stdExceptionContext) {
-  auto data = makeFlatVector<int64_t>({1, 2, 3});
+  auto data = makeRowVector({makeFlatVector<int64_t>({1, 2, 3})});
 
   registerFunction<AlwaysThrowsStdExceptionFunction, int64_t, int64_t>(
       {"throw_invalid_argument"});
@@ -2956,14 +2956,14 @@ TEST_P(ParameterizedExprTest, tryWithConstantFailure) {
 TEST_P(ParameterizedExprTest, castExceptionContext) {
   assertError(
       "cast(c0 as bigint)",
-      makeFlatVector<std::string>({"1a"}),
+      makeRowVector({makeFlatVector<std::string>({"1a"})}),
       "Top-level Expression: cast((c0) as BIGINT)",
       "",
       "Cannot cast VARCHAR '1a' to BIGINT. Non-whitespace character found after end of conversion: \"\"");
 
   assertError(
       "cast(c0 as timestamp)",
-      makeFlatVector(std::vector<int8_t>{1}),
+      makeRowVector({makeFlatVector(std::vector<int8_t>{1})}),
       "Top-level Expression: cast((c0) as TIMESTAMP)",
       "",
       "Cannot cast TINYINT '1' to TIMESTAMP. Conversion to Timestamp is not supported");
@@ -2972,14 +2972,15 @@ TEST_P(ParameterizedExprTest, castExceptionContext) {
 TEST_P(ParameterizedExprTest, switchExceptionContext) {
   assertError(
       "case c0 when 7 then c0 / 0 else 0 end",
-      makeFlatVector(std::vector<int64_t>{7}),
+      makeRowVector({makeFlatVector(std::vector<int64_t>{7})}),
       "divide(c0, 0:BIGINT)",
       "Top-level Expression: switch(eq(c0, 7:BIGINT), divide(c0, 0:BIGINT), 0:BIGINT)",
       "division by zero");
 }
 
 TEST_P(ParameterizedExprTest, conjunctExceptionContext) {
-  auto data = makeFlatVector<int64_t>(20, [](auto row) { return row; });
+  auto data = makeRowVector(
+      {makeFlatVector<int64_t>(20, [](auto row) { return row; })});
 
   assertError(
       "if (c0 % 409 < 300 and c0 / 0 < 30, 1, 2)",
@@ -2990,12 +2991,12 @@ TEST_P(ParameterizedExprTest, conjunctExceptionContext) {
 }
 
 TEST_P(ParameterizedExprTest, lambdaExceptionContext) {
-  auto array = makeArrayVector<int64_t>(
-      10, [](auto /*row*/) { return 5; }, [](auto row) { return row * 3; });
+  auto input = makeRowVector({makeArrayVector<int64_t>(
+      10, [](auto /*row*/) { return 5; }, [](auto row) { return row * 3; })});
 
   assertError(
       "filter(c0, x -> (x / 0 > 1))",
-      array,
+      input,
       "divide(x, 0:BIGINT)",
       "Top-level Expression: filter(c0, (x) -> gt(divide(x, 0:BIGINT), 1:BIGINT))",
       "division by zero");
@@ -3523,9 +3524,9 @@ class NoOpVectorFunction : public exec::VectorFunction {
 } // namespace
 
 TEST_P(ParameterizedExprTest, applyFunctionNoResult) {
-  auto data = makeRowVector({
-      makeFlatVector<int32_t>({1, 2, 3}),
-  });
+  auto input = makeRowVector(
+      {makeFlatVector<int32_t>({1, 2, 3}),
+       makeFlatVector<bool>({true, false, true})});
 
   exec::registerVectorFunction(
       "always_throws_vector_function",
@@ -3536,10 +3537,10 @@ TEST_P(ParameterizedExprTest, applyFunctionNoResult) {
   // not.  Conjuncts have the nice property that they set throwOnError to
   // false and don't check if the result VectorPtr is nullptr.
   assertError(
-      "always_throws_vector_function(c0) AND true",
-      makeFlatVector<int32_t>({1, 2, 3}),
+      "always_throws_vector_function(c0) AND true AND c1",
+      input,
       "always_throws_vector_function(c0)",
-      "Top-level Expression: and(always_throws_vector_function(c0), true:BOOLEAN)",
+      "Top-level Expression: and(always_throws_vector_function(c0), c1)",
       TestingAlwaysThrowsVectorFunction::kVeloxErrorMessage);
 
   exec::registerVectorFunction(
@@ -3548,10 +3549,10 @@ TEST_P(ParameterizedExprTest, applyFunctionNoResult) {
       std::make_unique<NoOpVectorFunction>());
 
   assertError(
-      "no_op(c0) AND true",
-      makeFlatVector<int32_t>({1, 2, 3}),
+      "no_op(c0) AND true AND c1",
+      input,
       "no_op(c0)",
-      "Top-level Expression: and(no_op(c0), true:BOOLEAN)",
+      "Top-level Expression: and(no_op(c0), c1)",
       "Function neither returned results nor threw exception.");
 }
 
@@ -3680,7 +3681,7 @@ TEST_P(ParameterizedExprTest, stdExceptionInVectorFunction) {
 
   assertError(
       "always_throws_vector_function(c0)",
-      makeFlatVector<int32_t>({1, 2, 3}),
+      makeRowVector({makeFlatVector<int32_t>({1, 2, 3})}),
       "Top-level Expression: always_throws_vector_function(c0)",
       "",
       TestingAlwaysThrowsVectorFunction::kStdErrorMessage);
