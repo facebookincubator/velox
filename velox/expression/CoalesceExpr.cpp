@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 #include "velox/expression/CoalesceExpr.h"
+#include "velox/expression/ConstantExpr.h"
 
 namespace facebook::velox::exec {
 
@@ -107,14 +108,49 @@ TypePtr CoalesceCallToSpecialForm::resolveType(
   return CoalesceExpr::resolveType(argTypes);
 }
 
+ExprPtr CoalesceCallToSpecialForm::optimize(
+    std::vector<ExprPtr>& compiledChildren) {
+  auto numChildren = compiledChildren.size();
+  std::vector<column_index_t> nullIndices;
+  bool allInputsConstant = true;
+  for (auto i = 0; i < numChildren; i++) {
+    if (auto constantExpr = std::dynamic_pointer_cast<exec::ConstantExpr>(
+            compiledChildren[i])) {
+      if (constantExpr->value()->isNullAt(0)) {
+        nullIndices.push_back(i);
+      } else if (allInputsConstant) {
+        return constantExpr;
+      }
+    } else {
+      allInputsConstant = false;
+    }
+  }
+
+  if (nullIndices.size() == compiledChildren.size()) {
+    auto nullChild = compiledChildren.at(nullIndices.front());
+    return std::dynamic_pointer_cast<exec::ConstantExpr>(nullChild);
+  } else if (!nullIndices.empty() && !allInputsConstant) {
+    for (vector_size_t j = nullIndices.size() - 1; j >= 0; j--) {
+      compiledChildren.erase(compiledChildren.begin() + j);
+    }
+  }
+  return nullptr;
+}
+
 ExprPtr CoalesceCallToSpecialForm::constructSpecialForm(
     const TypePtr& type,
     std::vector<ExprPtr>&& compiledChildren,
     bool /* trackCpuUsage */,
-    const core::QueryConfig& /*config*/) {
+    const core::QueryConfig& /*config*/,
+    memory::MemoryPool* pool) {
+  auto children = std::move(compiledChildren);
+  if (auto result = optimize(children)) {
+    return result;
+  }
+
   bool inputsSupportFlatNoNullsFastPath =
-      Expr::allSupportFlatNoNullsFastPath(compiledChildren);
+      Expr::allSupportFlatNoNullsFastPath(children);
   return std::make_shared<CoalesceExpr>(
-      type, std::move(compiledChildren), inputsSupportFlatNoNullsFastPath);
+      type, std::move(children), inputsSupportFlatNoNullsFastPath);
 }
 } // namespace facebook::velox::exec

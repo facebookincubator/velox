@@ -225,13 +225,14 @@ ExprPtr getSpecialForm(
     const std::string& name,
     const TypePtr& type,
     std::vector<ExprPtr>&& compiledChildren,
-    bool trackCpuUsage) {
+    bool trackCpuUsage,
+    memory::MemoryPool* pool) {
   // If we just check the output of constructSpecialForm we'll have moved
   // compiledChildren, and if the function isn't a special form we'll still need
   // compiledChildren. Splitting the check in two avoids this use after move.
   if (isFunctionCallToSpecialFormRegistered(name)) {
     return constructSpecialForm(
-        name, type, std::move(compiledChildren), trackCpuUsage, config);
+        name, type, std::move(compiledChildren), trackCpuUsage, config, pool);
   }
 
   return nullptr;
@@ -400,7 +401,8 @@ ExprPtr compileRewrittenExpression(
         RowConstructorCallToSpecialForm::kRowConstructor,
         resultType,
         std::move(compiledInputs),
-        trackCpuUsage);
+        trackCpuUsage,
+        pool);
   } else if (auto cast = dynamic_cast<const core::CastTypedExpr*>(expr.get())) {
     VELOX_CHECK(!compiledInputs.empty());
     if (FOLLY_UNLIKELY(*resultType == *compiledInputs[0]->type())) {
@@ -411,12 +413,13 @@ ExprPtr compileRewrittenExpression(
           cast->nullOnFailure() ? "try_cast" : "cast",
           resultType,
           std::move(compiledInputs),
-          trackCpuUsage);
+          trackCpuUsage,
+          pool);
     }
   } else if (auto call = dynamic_cast<const core::CallTypedExpr*>(expr.get())) {
     if (auto specialForm = specialFormRegistry().getSpecialForm(call->name())) {
       result = specialForm->constructSpecialForm(
-          resultType, std::move(compiledInputs), trackCpuUsage, config);
+          resultType, std::move(compiledInputs), trackCpuUsage, config, pool);
     } else if (
         auto functionWithMetadata = getVectorFunctionWithMetadata(
             call->name(),

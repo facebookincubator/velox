@@ -180,7 +180,8 @@ ExprPtr TryCallToSpecialForm::constructSpecialForm(
     const TypePtr& type,
     std::vector<ExprPtr>&& compiledChildren,
     bool /* trackCpuUsage */,
-    const core::QueryConfig& /*config*/) {
+    const core::QueryConfig& /*config*/,
+    memory::MemoryPool* /*pool*/) {
   VELOX_CHECK_EQ(
       compiledChildren.size(),
       1,

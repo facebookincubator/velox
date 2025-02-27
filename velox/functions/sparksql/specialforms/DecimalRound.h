@@ -36,7 +36,8 @@ class DecimalRoundCallToSpecialForm : public exec::FunctionCallToSpecialForm {
       const TypePtr& type,
       std::vector<exec::ExprPtr>&& args,
       bool trackCpuUsage,
-      const core::QueryConfig& config) override;
+      const core::QueryConfig& config,
+      memory::MemoryPool* pool) override;
 
   /// Returns the result precision and scale after rounding from the input
   /// precision and scale to a new scale. The calculation logic is consistent

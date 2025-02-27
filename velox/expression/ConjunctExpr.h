@@ -120,9 +120,18 @@ class ConjunctCallToSpecialForm : public FunctionCallToSpecialForm {
       const TypePtr& type,
       std::vector<ExprPtr>&& compiledChildren,
       bool trackCpuUsage,
-      const core::QueryConfig& config) override;
+      const core::QueryConfig& config,
+      memory::MemoryPool* pool) override;
 
  private:
+  ExprPtr optimizeAnd(
+      std::vector<ExprPtr>& compiledChildren,
+      memory::MemoryPool* pool);
+
+  ExprPtr optimizeOr(
+      std::vector<ExprPtr>& compiledChildren,
+      memory::MemoryPool* pool);
+
   bool isAnd_;
 };
 

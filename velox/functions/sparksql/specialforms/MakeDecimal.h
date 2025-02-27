@@ -34,7 +34,8 @@ class MakeDecimalCallToSpecialForm : public exec::FunctionCallToSpecialForm {
       const TypePtr& type,
       std::vector<exec::ExprPtr>&& args,
       bool trackCpuUsage,
-      const core::QueryConfig& config) override;
+      const core::QueryConfig& config,
+      memory::MemoryPool* pool) override;
 
   static constexpr const char* kMakeDecimal = "make_decimal";
 };

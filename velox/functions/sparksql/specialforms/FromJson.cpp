@@ -547,7 +547,8 @@ exec::ExprPtr FromJsonCallToSpecialForm::constructSpecialForm(
     const TypePtr& type,
     std::vector<exec::ExprPtr>&& args,
     bool trackCpuUsage,
-    const core::QueryConfig& /*config*/) {
+    const core::QueryConfig& /*config*/,
+    memory::MemoryPool* /*pool*/) {
   VELOX_USER_CHECK_EQ(args.size(), 1, "from_json expects one argument.");
   VELOX_USER_CHECK_EQ(
       args[0]->type()->kind(),

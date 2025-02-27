@@ -22,7 +22,8 @@ exec::ExprPtr SparkCastCallToSpecialForm::constructSpecialForm(
     const TypePtr& type,
     std::vector<exec::ExprPtr>&& compiledChildren,
     bool trackCpuUsage,
-    const core::QueryConfig& config) {
+    const core::QueryConfig& config,
+    memory::MemoryPool* /*pool*/) {
   VELOX_CHECK_EQ(
       compiledChildren.size(),
       1,
@@ -40,7 +41,8 @@ exec::ExprPtr SparkTryCastCallToSpecialForm::constructSpecialForm(
     const TypePtr& type,
     std::vector<exec::ExprPtr>&& compiledChildren,
     bool trackCpuUsage,
-    const core::QueryConfig& config) {
+    const core::QueryConfig& config,
+    memory::MemoryPool* /*pool*/) {
   VELOX_CHECK_EQ(
       compiledChildren.size(),
       1,

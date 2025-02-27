@@ -36,13 +36,14 @@ ExprPtr constructSpecialForm(
     const TypePtr& type,
     std::vector<ExprPtr>&& compiledChildren,
     bool trackCpuUsage,
-    const core::QueryConfig& config) {
+    const core::QueryConfig& config,
+    memory::MemoryPool* pool) {
   auto specialForm = specialFormRegistry().getSpecialForm(functionName);
   if (specialForm == nullptr) {
     return nullptr;
   }
 
   return specialForm->constructSpecialForm(
-      type, std::move(compiledChildren), trackCpuUsage, config);
+      type, std::move(compiledChildren), trackCpuUsage, config, pool);
 }
 } // namespace facebook::velox::exec
