@@ -266,7 +266,7 @@ Mathematical Functions
 
     Returns the secant of ``x``.
 
-.. function:: sign(x) -> double
+.. spark:function:: sign(x) -> double
 
     Returns the signum function of ``x``. It returns:
     * 0.0 if the argument is 0.0,
