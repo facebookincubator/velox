@@ -133,7 +133,7 @@ TEST_F(PrintPlanWithStatsTest, innerJoinWithTableScan) {
   ensureTaskCompletion(task.get());
   compareOutputs(
       ::testing::UnitTest::GetInstance()->current_test_info()->name(),
-      printPlanWithStats(*op, task->taskStats()),
+      task->printPlanWithStats(),
       {{"-- Project\\[4\\]\\[expressions: \\(c0:INTEGER, ROW\\[\"c0\"\\]\\), \\(p1:BIGINT, plus\\(ROW\\[\"c1\"\\],1\\)\\), \\(p2:BIGINT, plus\\(ROW\\[\"c1\"\\],ROW\\[\"u_c1\"\\]\\)\\)\\] -> c0:INTEGER, p1:BIGINT, p2:BIGINT"},
        {"   Output: 2000 rows \\(.+\\), Cpu time: .+, Blocked wall time: .+, Peak memory: .+, Memory allocations: .+, Threads: 1, CPU breakdown: B/I/O/F (.+/.+/.+/.+)"},
        {"  -- HashJoin\\[3\\]\\[INNER c0=u_c0\\] -> c0:INTEGER, c1:BIGINT, u_c1:BIGINT"},

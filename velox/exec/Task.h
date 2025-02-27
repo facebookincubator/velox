@@ -116,6 +116,8 @@ class Task : public std::enable_shared_from_this<Task> {
     spillDirectoryCallback_ = std::move(spillDirectoryCallback);
   }
 
+  std::string printPlanWithStats(bool includeCustomStats = false) const;
+
   std::string toString() const;
 
   folly::dynamic toJson() const;
