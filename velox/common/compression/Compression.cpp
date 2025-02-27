@@ -112,17 +112,6 @@ bool Codec::supportsGetUncompressedLength(CompressionKind kind) {
   return false;
 }
 
-bool Codec::supportsStreamingCompression(CompressionKind kind) {
-  switch (kind) {
-#ifdef VELOX_ENABLE_COMPRESSION_LZ4
-    case CompressionKind_LZ4:
-      return true;
-#endif
-    default:
-      return false;
-  }
-}
-
 bool Codec::supportsCompressFixedLength(CompressionKind kind) {
   // TODO: Return true if it's supported by compression kind.
   return false;
@@ -133,9 +122,6 @@ Expected<std::unique_ptr<Codec>> Codec::create(
     const CodecOptions& codecOptions) {
   if (!isAvailable(kind)) {
     auto name = compressionKindToString(kind);
-    VELOX_RETURN_UNEXPECTED_IF(
-        folly::StringPiece({name}).startsWith("unknown"),
-        Status::Invalid("Unrecognized codec: ", name));
     return folly::makeUnexpected(Status::Invalid(
         "Support for codec '{}' is either not built or not implemented.",
         name));
@@ -158,9 +144,10 @@ Expected<std::unique_ptr<Codec>> Codec::create(
             codec = makeLz4HadoopCodec();
             break;
         }
+      } else {
+        // By default, create LZ4 Frame codec.
+        codec = makeLz4FrameCodec(compressionLevel);
       }
-      // By default, create LZ4 Frame codec.
-      codec = makeLz4FrameCodec(compressionLevel);
       break;
 #endif
     default:
@@ -185,8 +172,6 @@ Expected<std::unique_ptr<Codec>> Codec::create(
 
 bool Codec::isAvailable(CompressionKind kind) {
   switch (kind) {
-    case CompressionKind_NONE:
-      return true;
 #ifdef VELOX_ENABLE_COMPRESSION_LZ4
     case CompressionKind_LZ4:
       return true;
@@ -196,10 +181,11 @@ bool Codec::isAvailable(CompressionKind kind) {
   }
 }
 
-std::optional<uint64_t> Codec::getUncompressedLength(
+Expected<uint64_t> Codec::getUncompressedLength(
     const uint8_t* input,
     uint64_t inputLength) const {
-  return std::nullopt;
+  return folly::makeUnexpected(Status::Invalid(
+      "getUncompressedLength is unsupported with {} format.", name()));
 }
 
 Expected<uint64_t> Codec::compressFixedLength(
@@ -209,6 +195,10 @@ Expected<uint64_t> Codec::compressFixedLength(
     uint64_t outputLength) {
   return folly::makeUnexpected(
       Status::Invalid("'{}' doesn't support fixed-length compression", name()));
+}
+
+bool Codec::supportsStreamingCompression() const {
+  return false;
 }
 
 Expected<std::shared_ptr<StreamingCompressor>>
