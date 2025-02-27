@@ -18,14 +18,17 @@ target_link_libraries(
   velox_wave_stream Folly::folly fmt::fmt xsimd)
 
 add_library(
-  velox_wave_exec
-  Aggregation.cpp
-  AggregationInstructions.cu
+  velox_wave_exec OBJECT
+  AggregateGen.cpp
+  HashGen.cpp
   ExprKernel.cu
-  ExprKernel2.cu
-  ExprKernel3.cu
   Instruction.cpp
+  RegisterFunctions.cpp
+  WaveRegistry.cpp
   ToWave.cpp
+  SimpleAggregate.cpp
+  WavePlan.cpp
+  WaveGen.cpp
   WaveOperator.cpp
   Vectors.cpp
   Values.cpp

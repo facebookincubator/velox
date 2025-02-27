@@ -67,7 +67,8 @@ class AggregationFuzzerBase {
       const std::unordered_map<std::string, std::string>& queryConfigs,
       const std::unordered_map<std::string, std::string>& hiveConfigs,
       bool orderableGroupKeys,
-      std::unique_ptr<ReferenceQueryRunner> referenceQueryRunner)
+      std::unique_ptr<ReferenceQueryRunner> referenceQueryRunner,
+      std::optional<VectorFuzzer::Options> fuzzerOptions = std::nullopt)
       : customVerificationFunctions_{customVerificationFunctions},
         customInputGenerators_{customInputGenerators},
         queryConfigs_{queryConfigs},
@@ -75,7 +76,10 @@ class AggregationFuzzerBase {
         persistAndRunOnce_{FLAGS_persist_and_run_once},
         reproPersistPath_{FLAGS_repro_persist_path},
         referenceQueryRunner_{std::move(referenceQueryRunner)},
-        vectorFuzzer_{getFuzzerOptions(timestampPrecision), pool_.get()} {
+        vectorFuzzer_{
+            fuzzerOptions.has_value() ? fuzzerOptions.value()
+                                      : getFuzzerOptions(timestampPrecision),
+            pool_.get()} {
     filesystems::registerLocalFileSystem();
     connector::registerConnectorFactory(
         std::make_shared<connector::hive::HiveConnectorFactory>());
@@ -104,6 +108,17 @@ class AggregationFuzzerBase {
     /// Number of times generated query plan failed.
     size_t numFailed{0};
   };
+
+  static VectorFuzzer::Options getFuzzerOptions(
+      VectorFuzzer::Options::TimestampPrecision timestampPrecision) {
+    VectorFuzzer::Options opts;
+    opts.vectorSize = FLAGS_batch_size;
+    opts.stringVariableLength = true;
+    opts.stringLength = 4'000;
+    opts.nullRatio = FLAGS_null_ratio;
+    opts.timestampPrecision = timestampPrecision;
+    return opts;
+  }
 
  protected:
   struct Stats {
@@ -149,17 +164,6 @@ class AggregationFuzzerBase {
       const CallableSignature& signature);
 
   PlanWithSplits deserialize(const folly::dynamic& obj);
-
-  static VectorFuzzer::Options getFuzzerOptions(
-      VectorFuzzer::Options::TimestampPrecision timestampPrecision) {
-    VectorFuzzer::Options opts;
-    opts.vectorSize = FLAGS_batch_size;
-    opts.stringVariableLength = true;
-    opts.stringLength = 4'000;
-    opts.nullRatio = FLAGS_null_ratio;
-    opts.timestampPrecision = timestampPrecision;
-    return opts;
-  }
 
   void seed(size_t seed) {
     currentSeed_ = seed;
@@ -209,6 +213,7 @@ class AggregationFuzzerBase {
       std::vector<TypePtr> types,
       const std::vector<std::string>& partitionKeys,
       const std::vector<std::string>& windowFrameBounds,
+      const std::vector<std::string>& sortingKeys,
       const CallableSignature& signature);
 
   velox::fuzzer::ResultOrError execute(
@@ -245,8 +250,6 @@ class AggregationFuzzerBase {
       int32_t maxDrivers = 2);
 
   void printSignatureStats();
-
-  void logVectors(const std::vector<RowVectorPtr>& vectors);
 
   const std::unordered_map<std::string, std::shared_ptr<ResultVerifier>>
       customVerificationFunctions_;
@@ -315,15 +318,6 @@ std::vector<std::string> makeNames(size_t n);
 void persistReproInfo(
     const std::vector<AggregationFuzzerBase::PlanWithSplits>& plans,
     const std::string& basePath);
-
-// Returns a PrestoQueryRunner instance if prestoUrl is non-empty. Otherwise,
-// returns a DuckQueryRunner instance and set disabled aggregation functions
-// properly.
-std::unique_ptr<ReferenceQueryRunner> setupReferenceQueryRunner(
-    memory::MemoryPool* aggregatePool,
-    const std::string& prestoUrl,
-    const std::string& runnerName,
-    const uint32_t& reqTimeoutMs);
 
 // Returns the function name used in a WindowNode. The input `node` should be a
 // pointer to a WindowNode.

@@ -79,6 +79,8 @@ option(
 option(VELOX_MONO_LIBRARY "Build single unified library." OFF)
 option(ENABLE_ALL_WARNINGS "Enable -Wall and -Wextra compiler warnings." ON)
 option(VELOX_BUILD_SHARED "Build Velox as shared libraries." OFF)
+option(VELOX_SKIP_WAVE_BRANCH_KERNEL_TEST "Disable Wave branch kernel test."
+       OFF)
 # While it's possible to build both in one go we currently want to build either
 # static or shared.
 cmake_dependent_option(
@@ -136,7 +138,7 @@ option(VELOX_ENABLE_S3 "Build S3 Connector" OFF)
 option(VELOX_ENABLE_GCS "Build GCS Connector" OFF)
 option(VELOX_ENABLE_ABFS "Build Abfs Connector" OFF)
 option(VELOX_ENABLE_HDFS "Build Hdfs Connector" OFF)
-option(VELOX_ENABLE_PARQUET "Enable Parquet support" OFF)
+option(VELOX_ENABLE_PARQUET "Enable Parquet support" ON)
 option(VELOX_ENABLE_ARROW "Enable Arrow support" OFF)
 option(VELOX_ENABLE_REMOTE_FUNCTIONS "Enable remote function support" OFF)
 option(VELOX_ENABLE_CCACHE "Use ccache if installed." ON)
@@ -149,6 +151,8 @@ option(
   VELOX_ENABLE_INT64_BUILD_PARTITION_BOUND
   "make buildPartitionBounds_ a vector int64 instead of int32 to avoid integer overflow when the hashtable has billions of records"
   OFF)
+option(VELOX_SIMDJSON_SKIPUTF8VALIDATION
+       "Skip simdjson utf8 validation in JSON parsing" OFF)
 
 # Explicitly force compilers to generate colored output. Compilers usually do
 # this by default if they detect the output is a terminal, but this assumption
@@ -171,19 +175,6 @@ if(${VELOX_BUILD_MINIMAL} OR ${VELOX_BUILD_MINIMAL_WITH_DWIO})
   set(VELOX_ENABLE_GCS OFF)
   set(VELOX_ENABLE_ABFS OFF)
   set(VELOX_ENABLE_SUBSTRAIT OFF)
-endif()
-
-if(${VELOX_BUILD_TESTING})
-  # Enable all components to build testing binaries
-  set(VELOX_ENABLE_PRESTO_FUNCTIONS ON)
-  set(VELOX_ENABLE_EXPRESSION ON)
-  set(VELOX_ENABLE_EXEC ON)
-  set(VELOX_ENABLE_AGGREGATES ON)
-  set(VELOX_ENABLE_HIVE_CONNECTOR ON)
-  set(VELOX_ENABLE_TPCH_CONNECTOR ON)
-  set(VELOX_ENABLE_SPARK_FUNCTIONS ON)
-  set(VELOX_ENABLE_EXAMPLES ON)
-  set(VELOX_ENABLE_PARQUET ON)
 endif()
 
 if(${VELOX_ENABLE_BENCHMARKS})
@@ -605,7 +596,7 @@ if(NOT VELOX_DISABLE_GOOGLETEST)
   velox_set_source(GTest)
   velox_resolve_dependency(GTest)
   set(VELOX_GTEST_INCUDE_DIR
-      "${gtest_SOURCE_DIR}/googletest/include"
+      "${gtest_SOURCE_DIR}/include"
       PARENT_SCOPE)
 endif()
 

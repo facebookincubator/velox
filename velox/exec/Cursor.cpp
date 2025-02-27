@@ -19,7 +19,7 @@
 
 #include <filesystem>
 
-namespace facebook::velox::exec::test {
+namespace facebook::velox::exec {
 
 bool waitForTaskDriversToFinish(exec::Task* task, uint64_t maxWaitMicros) {
   VELOX_USER_CHECK(!task->isRunning());
@@ -219,7 +219,9 @@ class MultiThreadedTaskCursor : public TaskCursorBase {
         queryCtx_->isExecutorSupplied(),
         "Executor should be set in parallel task cursor");
 
-    queue_ = std::make_shared<TaskQueue>(params.bufferedBytes);
+    queue_ =
+        std::make_shared<TaskQueue>(params.bufferedBytes, params.outputPool);
+
     // Captured as a shared_ptr by the consumer callback of task_.
     auto queue = queue_;
     task_ = Task::create(
@@ -460,4 +462,4 @@ bool RowCursor::hasNext() {
   return currentRow_ < numRows_ || cursor_->hasNext();
 }
 
-} // namespace facebook::velox::exec::test
+} // namespace facebook::velox::exec

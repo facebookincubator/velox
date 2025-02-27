@@ -52,14 +52,15 @@ Exchange::Exchange(
           operatorCtx_->driverCtx()->queryConfig(),
           serdeKind_)},
       processSplits_{operatorCtx_->driverCtx()->driverId == 0},
+      driverId_{driverCtx->driverId},
       exchangeClient_{std::move(exchangeClient)} {}
 
-void Exchange::addTaskIds(std::vector<std::string>& taskIds) {
-  std::shuffle(std::begin(taskIds), std::end(taskIds), rng_);
-  for (const std::string& taskId : taskIds) {
+void Exchange::addRemoteTaskIds(std::vector<std::string>& remoteTaskIds) {
+  std::shuffle(std::begin(remoteTaskIds), std::end(remoteTaskIds), rng_);
+  for (const std::string& taskId : remoteTaskIds) {
     exchangeClient_->addRemoteTaskId(taskId);
   }
-  stats_.wlock()->numSplits += taskIds.size();
+  stats_.wlock()->numSplits += remoteTaskIds.size();
 }
 
 bool Exchange::getSplits(ContinueFuture* future) {
@@ -69,7 +70,7 @@ bool Exchange::getSplits(ContinueFuture* future) {
   if (noMoreSplits_) {
     return false;
   }
-  std::vector<std::string> taskIds;
+  std::vector<std::string> remoteTaskIds;
   for (;;) {
     exec::Split split;
     auto reason = operatorCtx_->task()->getSplitOrFuture(
@@ -78,10 +79,10 @@ bool Exchange::getSplits(ContinueFuture* future) {
       if (split.hasConnectorSplit()) {
         auto remoteSplit = std::dynamic_pointer_cast<RemoteConnectorSplit>(
             split.connectorSplit);
-        VELOX_CHECK(remoteSplit, "Wrong type of split");
-        taskIds.push_back(remoteSplit->taskId);
+        VELOX_CHECK_NOT_NULL(remoteSplit, "Wrong type of split");
+        remoteTaskIds.push_back(remoteSplit->taskId);
       } else {
-        addTaskIds(taskIds);
+        addRemoteTaskIds(remoteTaskIds);
         exchangeClient_->noMoreRemoteTasks();
         noMoreSplits_ = true;
         if (atEnd_) {
@@ -92,7 +93,7 @@ bool Exchange::getSplits(ContinueFuture* future) {
         return false;
       }
     } else {
-      addTaskIds(taskIds);
+      addRemoteTaskIds(remoteTaskIds);
       return true;
     }
   }
@@ -103,16 +104,15 @@ BlockingReason Exchange::isBlocked(ContinueFuture* future) {
     return BlockingReason::kNotBlocked;
   }
 
-  // Start fetching data right away. Do not wait for all
-  // splits to be available.
+  // Start fetching data right away. Do not wait for all splits to be available.
 
   if (!splitFuture_.valid()) {
     getSplits(&splitFuture_);
   }
 
   ContinueFuture dataFuture;
-  currentPages_ =
-      exchangeClient_->next(preferredOutputBatchBytes_, &atEnd_, &dataFuture);
+  currentPages_ = exchangeClient_->next(
+      driverId_, preferredOutputBatchBytes_, &atEnd_, &dataFuture);
   if (!currentPages_.empty() || atEnd_) {
     if (atEnd_ && noMoreSplits_) {
       const auto numSplits = stats_.rlock()->numSplits;

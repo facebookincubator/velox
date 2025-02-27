@@ -18,6 +18,10 @@
 
 DEPENDENCY_DIR=${DEPENDENCY_DIR:-$(pwd)/deps-download}
 OS_CXXFLAGS=""
+NPROC=${BUILD_THREADS:-$(getconf _NPROCESSORS_ONLN)}
+
+CURL_OPTIONS=${CURL_OPTIONS:-""}
+CMAKE_OPTIONS=${CMAKE_OPTIONS:-""}
 
 function run_and_time {
   time "$@" || (echo "Failed to run $* ." ; exit 1 )
@@ -172,7 +176,7 @@ function wget_and_untar {
   fi
   mkdir -p "${DIR}"
   pushd "${DIR}"
-  curl -L "${URL}" > $2.tar.gz
+  curl ${CURL_OPTIONS} -L "${URL}" > $2.tar.gz
   tar -xz --strip-components=1 -f $2.tar.gz
   popd
   popd
@@ -204,7 +208,7 @@ function cmake_install {
   COMPILER_FLAGS+=${OS_CXXFLAGS}
 
   # CMAKE_POSITION_INDEPENDENT_CODE is required so that Velox can be built into dynamic libraries \
-  cmake -Wno-dev -B"${BINARY_DIR}" \
+  cmake -Wno-dev ${CMAKE_OPTIONS} -B"${BINARY_DIR}" \
     -GNinja \
     -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
     -DCMAKE_CXX_STANDARD=17 \
@@ -214,7 +218,7 @@ function cmake_install {
     -DBUILD_TESTING=OFF \
     "$@"
   # Exit if the build fails.
-  cmake --build "${BINARY_DIR}" || { echo 'build failed' ; exit 1; }
+  cmake --build "${BINARY_DIR}" "-j ${NPROC}" || { echo 'build failed' ; exit 1; }
   ${SUDO} cmake --install "${BINARY_DIR}"
 }
 

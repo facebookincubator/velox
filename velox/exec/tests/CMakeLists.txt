@@ -28,6 +28,7 @@ target_link_libraries(
   velox_exec
   velox_function_registry
   velox_exec_test_lib
+  velox_presto_types
   GTest::gtest
   GTest::gtest_main)
 
@@ -51,6 +52,7 @@ add_executable(
   HashJoinTest.cpp
   HashPartitionFunctionTest.cpp
   HashTableTest.cpp
+  IndexLookupJoinTest.cpp
   LimitTest.cpp
   LocalPartitionTest.cpp
   Main.cpp
@@ -213,13 +215,6 @@ target_link_libraries(
   velox_tpch_connector
   velox_memory)
 
-# RowNumber Fuzzer.
-add_executable(velox_row_number_fuzzer_test RowNumberFuzzerTest.cpp)
-
-target_link_libraries(
-  velox_row_number_fuzzer_test velox_row_number_fuzzer GTest::gtest
-  GTest::gtest_main)
-
 # Join Fuzzer.
 add_executable(velox_join_fuzzer_test JoinFuzzerTest.cpp)
 
@@ -233,16 +228,6 @@ add_executable(velox_memory_arbitration_fuzzer_test
 target_link_libraries(
   velox_memory_arbitration_fuzzer_test velox_memory_arbitration_fuzzer
   GTest::gtest GTest::gtest_main)
-
-# Cache Fuzzer
-add_executable(velox_cache_fuzzer_test CacheFuzzerTest.cpp)
-
-target_link_libraries(
-  velox_cache_fuzzer_test
-  velox_cache_fuzzer
-  velox_fuzzer_util
-  GTest::gtest
-  GTest::gtest_main)
 
 add_executable(velox_exchange_fuzzer_test ExchangeFuzzer.cpp)
 

@@ -15,8 +15,10 @@
  */
 #include "velox/functions/lib/RegistrationHelpers.h"
 #include "velox/functions/prestosql/Arithmetic.h"
+#include "velox/functions/prestosql/DecimalFunctions.h"
 #include "velox/functions/sparksql/Arithmetic.h"
 #include "velox/functions/sparksql/DecimalArithmetic.h"
+#include "velox/functions/sparksql/DecimalCeil.h"
 #include "velox/functions/sparksql/Rand.h"
 
 namespace facebook::velox::functions::sparksql {
@@ -71,10 +73,12 @@ void registerMathFunctions(const std::string& prefix) {
   // In Spark only long, double, and decimal have ceil/floor
   registerFunction<sparksql::CeilFunction, int64_t, int64_t>({prefix + "ceil"});
   registerFunction<sparksql::CeilFunction, int64_t, double>({prefix + "ceil"});
+  registerDecimalCeil(prefix);
   registerFunction<sparksql::FloorFunction, int64_t, int64_t>(
       {prefix + "floor"});
   registerFunction<sparksql::FloorFunction, int64_t, double>(
       {prefix + "floor"});
+  registerDecimalFloor(prefix);
   registerFunction<HypotFunction, double, double, double>({prefix + "hypot"});
   registerFunction<sparksql::Log2Function, double, double>({prefix + "log2"});
   registerFunction<sparksql::Log10Function, double, double>({prefix + "log10"});

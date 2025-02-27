@@ -18,11 +18,13 @@
 #include <type_traits>
 
 #define XXH_INLINE_ALL
-#include <xxhash.h>
+#include <xxhash.h> // @manual=third-party//xxHash:xxhash
 
 #include "velox/functions/lib/RowsTranslationUtil.h"
 #include "velox/functions/prestosql/types/IPAddressType.h"
 #include "velox/functions/prestosql/types/TimestampWithTimeZoneType.h"
+#include "velox/type/DecimalUtil.h"
+#include "velox/vector/ComplexVector.h"
 
 namespace facebook::velox::aggregate {
 

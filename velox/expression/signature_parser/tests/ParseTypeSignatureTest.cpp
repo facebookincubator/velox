@@ -56,11 +56,17 @@ class TypeFactories : public CustomTypeFactories {
  public:
   TypeFactories(const TypePtr& type) : type_(type) {}
 
-  TypePtr getType() const override {
+  TypePtr getType(const std::vector<TypeParameter>& parameters) const override {
+    VELOX_CHECK(parameters.empty());
     return type_;
   }
 
   exec::CastOperatorPtr getCastOperator() const override {
+    return nullptr;
+  }
+
+  AbstractInputGeneratorPtr getInputGenerator(
+      const InputGeneratorConfig& /*config*/) const override {
     return nullptr;
   }
 
@@ -224,6 +230,15 @@ TEST_F(ParseTypeSignatureTest, row) {
     ASSERT_EQ(rowfield.rowFieldName(), "bla");
     ASSERT_EQ(rowfield.parameters().size(), 0);
   }
+}
+
+TEST_F(ParseTypeSignatureTest, tdigest) {
+  auto signature = parseTypeSignature("tdigest(double)");
+  ASSERT_EQ(signature.baseName(), "tdigest");
+  ASSERT_EQ(signature.parameters().size(), 1);
+  auto& parameter = signature.parameters()[0];
+  ASSERT_EQ(parameter.baseName(), "double");
+  ASSERT_TRUE(parameter.parameters().empty());
 }
 
 TEST_F(ParseTypeSignatureTest, roundTrip) {

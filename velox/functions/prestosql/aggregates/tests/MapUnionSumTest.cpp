@@ -378,6 +378,68 @@ TEST_F(MapUnionSumTest, groupByVarcharKey) {
   testAggregations({data}, {"c0"}, {"map_union_sum(c1)"}, {expected});
 }
 
+TEST_F(MapUnionSumTest, groupByJsonKey) {
+  std::vector<std::string> jsonKeyStrings = {
+      "\"key1\"",
+      "\"key2\"",
+      "\"key3\"",
+      "\"key4\"",
+      "\"key5\"",
+  };
+  std::vector<StringView> jsonKeys;
+  jsonKeys.reserve(jsonKeyStrings.size());
+  for (const auto& key : jsonKeyStrings) {
+    jsonKeys.emplace_back(key);
+  }
+  auto data = makeRowVector({
+      makeFlatVector<int64_t>({1, 2, 1, 2, 1}),
+      makeNullableMapVector<StringView, int64_t>({
+          {},
+          std::nullopt,
+          {{{jsonKeys[0], 10}, {jsonKeys[1], 20}}},
+          {{{jsonKeys[0], 11}, {jsonKeys[2], 30}, {jsonKeys[3], 40}}},
+          {{{jsonKeys[2], 30}, {jsonKeys[4], 50}, {jsonKeys[0], 12}}},
+      }),
+  });
+
+  auto expected = makeRowVector({
+      makeFlatVector<int64_t>({1, 2}),
+      makeMapVector<StringView, int64_t>({
+          {{jsonKeys[0], 22},
+           {jsonKeys[1], 20},
+           {jsonKeys[2], 30},
+           {jsonKeys[4], 50}},
+          {{jsonKeys[0], 11}, {jsonKeys[2], 30}, {jsonKeys[3], 40}},
+      }),
+  });
+
+  testAggregations({data}, {"c0"}, {"map_union_sum(c1)"}, {expected});
+}
+
+TEST_F(MapUnionSumTest, groupByBooleanKeys) {
+  auto data = makeRowVector({
+      makeFlatVector<int64_t>({1, 2, 1, 2, 1}),
+      makeNullableMapVector<bool, int64_t>({
+          {}, // empty map
+          std::nullopt, // null map
+          {{{true, 10}, {false, 20}}},
+          {{{true, 11}, {false, 30}, {true, 40}}},
+          {{{false, 28}, {true, 50}, {true, 12}}},
+      }),
+
+  });
+
+  auto expected = makeRowVector({
+      makeFlatVector<int64_t>({1, 2}),
+      makeMapVector<bool, int64_t>({
+          {{{true, 72}, {false, 48}}},
+          {{{true, 51}, {false, 30}}},
+      }),
+  });
+
+  testAggregations({data}, {"c0"}, {"map_union_sum(c1)"}, {expected});
+}
+
 TEST_F(MapUnionSumTest, floatingPointKeys) {
   auto data = makeRowVector({
       makeFlatVector<int32_t>({1, 2, 1, 2, 1, 1, 2, 2}),
@@ -404,8 +466,8 @@ TEST_F(MapUnionSumTest, floatingPointKeys) {
 }
 
 TEST_F(MapUnionSumTest, nanKeys) {
-  // Verify that NaNs with different binary representations are considered equal
-  // and deduplicated when used as keys in the output map.
+  // Verify that NaNs with different binary representations are considered
+  // equal and deduplicated when used as keys in the output map.
   constexpr double kNan = std::numeric_limits<double>::quiet_NaN();
   constexpr double kSNaN = std::numeric_limits<double>::signaling_NaN();
 

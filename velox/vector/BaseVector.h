@@ -256,8 +256,12 @@ class BaseVector {
     return const_cast<uint64_t*>(rawNulls_);
   }
 
-  BufferPtr& mutableNulls(vector_size_t size) {
-    ensureNullsCapacity(size);
+  /// Ensures the vector has capacity for the nulls and returns the shared
+  /// pointer to the buffer containing them.
+  /// Optional parameter 'setNotNull' is passed to ensureNullsCapacity() and is
+  /// used to ensure all the rows will be 'not nulls' if set to true.
+  BufferPtr& mutableNulls(vector_size_t size, bool setNotNull = false) {
+    ensureNullsCapacity(size, setNotNull);
     return nulls_;
   }
 
@@ -691,7 +695,7 @@ class BaseVector {
     VELOX_UNSUPPORTED("Vector is not a wrapper");
   }
 
-  virtual VectorPtr& valueVector() {
+  virtual void setValueVector(VectorPtr valueVector) {
     VELOX_UNSUPPORTED("Vector is not a wrapper");
   }
 
@@ -715,8 +719,12 @@ class BaseVector {
 
   /// If 'this' is a wrapper, returns the wrap info, interpretation depends on
   /// encoding.
-  virtual BufferPtr wrapInfo() const {
-    throw std::runtime_error("Vector is not a wrapper");
+  virtual const BufferPtr& wrapInfo() const {
+    VELOX_UNSUPPORTED("Vector is not a wrapper");
+  }
+
+  virtual void setWrapInfo(BufferPtr wrapInfo) {
+    VELOX_UNSUPPORTED("Vector is not a wrapper");
   }
 
   template <typename T = BaseVector>

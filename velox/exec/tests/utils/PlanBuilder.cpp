@@ -108,8 +108,9 @@ PlanBuilder& PlanBuilder::tableScan(
 
 PlanBuilder& PlanBuilder::tpchTableScan(
     tpch::Table table,
-    std::vector<std::string>&& columnNames,
-    double scaleFactor) {
+    std::vector<std::string> columnNames,
+    double scaleFactor,
+    std::string_view connectorId) {
   std::unordered_map<std::string, std::shared_ptr<connector::ColumnHandle>>
       assignmentsMap;
   std::vector<TypePtr> outputTypes;
@@ -127,7 +128,7 @@ PlanBuilder& PlanBuilder::tpchTableScan(
   return TableScanBuilder(*this)
       .outputType(rowType)
       .tableHandle(std::make_shared<connector::tpch::TpchTableHandle>(
-          std::string(kTpchDefaultConnectorId), table, scaleFactor))
+          std::string(connectorId), table, scaleFactor))
       .assignments(assignmentsMap)
       .endTableScan();
 }
@@ -182,7 +183,7 @@ core::PlanNodePtr PlanBuilder::TableScanBuilder::build(core::PlanNodeId id) {
 
   const RowTypePtr& parseType = dataColumns_ ? dataColumns_ : outputType_;
 
-  SubfieldFilters filters;
+  common::SubfieldFilters filters;
   filters.reserve(subfieldFilters_.size());
   auto queryCtx = core::QueryCtx::create();
   exec::SimpleExpressionEvaluator evaluator(queryCtx.get(), planBuilder_.pool_);
@@ -270,7 +271,8 @@ core::PlanNodePtr PlanBuilder::TableWriterBuilder::build(core::PlanNodeId id) {
       bucketProperty,
       compressionKind_,
       serdeParameters_,
-      options_);
+      options_,
+      ensureFiles_);
 
   auto insertHandle =
       std::make_shared<core::InsertTableHandle>(connectorId_, hiveHandle);
@@ -440,10 +442,9 @@ PlanBuilder& PlanBuilder::optionalFilter(const std::string& optionalFilter) {
 
 PlanBuilder& PlanBuilder::filter(const std::string& filter) {
   VELOX_CHECK_NOT_NULL(planNode_, "Filter cannot be the source node");
-  planNode_ = std::make_shared<core::FilterNode>(
-      nextPlanNodeId(),
-      parseExpr(filter, planNode_->outputType(), options_, pool_),
-      planNode_);
+  auto expr = parseExpr(filter, planNode_->outputType(), options_, pool_);
+  planNode_ =
+      std::make_shared<core::FilterNode>(nextPlanNodeId(), expr, planNode_);
   return *this;
 }
 
@@ -509,7 +510,8 @@ PlanBuilder& PlanBuilder::tableWrite(
     const std::shared_ptr<dwio::common::WriterOptions>& options,
     const std::string& outputFileName,
     const common::CompressionKind compressionKind,
-    const RowTypePtr& schema) {
+    const RowTypePtr& schema,
+    const bool ensureFiles) {
   return TableWriterBuilder(*this)
       .outputDirectoryPath(outputDirectoryPath)
       .outputFileName(outputFileName)
@@ -524,6 +526,7 @@ PlanBuilder& PlanBuilder::tableWrite(
       .serdeParameters(serdeParameters)
       .options(options)
       .compressionKind(compressionKind)
+      .ensureFiles(ensureFiles)
       .endTableWriter();
 }
 
@@ -1570,6 +1573,39 @@ PlanBuilder& PlanBuilder::nestedLoopJoin(
       std::move(planNode_),
       right,
       outputType);
+  return *this;
+}
+
+PlanBuilder& PlanBuilder::indexLookupJoin(
+    const std::vector<std::string>& leftKeys,
+    const std::vector<std::string>& rightKeys,
+    const core::TableScanNodePtr& right,
+    const std::vector<std::string>& joinConditions,
+    const std::vector<std::string>& outputLayout,
+    core::JoinType joinType) {
+  VELOX_CHECK_NOT_NULL(planNode_, "indexLookupJoin cannot be the source node");
+  const auto inputType = concat(planNode_->outputType(), right->outputType());
+  auto outputType = extract(inputType, outputLayout);
+
+  auto leftKeyFields = fields(planNode_->outputType(), leftKeys);
+  auto rightKeyFields = fields(right->outputType(), rightKeys);
+
+  std::vector<core::TypedExprPtr> joinConditionExprs{};
+  joinConditionExprs.reserve(joinConditions.size());
+  for (const auto& joinCondition : joinConditions) {
+    joinConditionExprs.push_back(
+        parseExpr(joinCondition, inputType, options_, pool_));
+  }
+
+  planNode_ = std::make_shared<core::IndexLookupJoinNode>(
+      nextPlanNodeId(),
+      joinType,
+      std::move(leftKeyFields),
+      std::move(rightKeyFields),
+      std::move(joinConditionExprs),
+      std::move(planNode_),
+      right,
+      std::move(outputType));
   return *this;
 }
 

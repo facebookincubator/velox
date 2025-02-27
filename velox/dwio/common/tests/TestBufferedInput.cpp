@@ -32,7 +32,10 @@ class ReadFileMock : public ::facebook::velox::ReadFile {
   MOCK_METHOD(
       std::string_view,
       pread,
-      (uint64_t offset, uint64_t length, void* buf),
+      (uint64_t offset,
+       uint64_t length,
+       void* buf,
+       facebook::velox::filesystems::File::IoStats* stats),
       (const, override));
 
   MOCK_METHOD(bool, shouldCoalesce, (), (const, override));
@@ -43,7 +46,9 @@ class ReadFileMock : public ::facebook::velox::ReadFile {
   MOCK_METHOD(
       uint64_t,
       preadv,
-      (folly::Range<const Region*> regions, folly::Range<folly::IOBuf*> iobufs),
+      (folly::Range<const Region*> regions,
+       folly::Range<folly::IOBuf*> iobufs,
+       facebook::velox::filesystems::File::IoStats* stats),
       (const, override));
 };
 
@@ -55,10 +60,14 @@ void expectPreads(
   EXPECT_CALL(file, size()).WillRepeatedly(Return(content.size()));
   for (auto& read : reads) {
     ASSERT_GE(content.size(), read.offset + read.length);
-    EXPECT_CALL(file, pread(read.offset, read.length, _))
+    EXPECT_CALL(file, pread(read.offset, read.length, _, nullptr))
         .Times(1)
         .WillOnce(
-            [content](uint64_t offset, uint64_t length, void* buf)
+            [content](
+                uint64_t offset,
+                uint64_t length,
+                void* buf,
+                facebook::velox::filesystems::File::IoStats* stats)
                 -> std::string_view {
               memcpy(buf, content.data() + offset, length);
               return {content.data() + offset, length};
@@ -72,12 +81,13 @@ void expectPreadvs(
     std::vector<Region> reads) {
   EXPECT_CALL(file, getName()).WillRepeatedly(Return("mock_name"));
   EXPECT_CALL(file, size()).WillRepeatedly(Return(content.size()));
-  EXPECT_CALL(file, preadv(_, _))
+  EXPECT_CALL(file, preadv(_, _, nullptr))
       .Times(1)
       .WillOnce(
           [content, reads](
               folly::Range<const Region*> regions,
-              folly::Range<folly::IOBuf*> iobufs) -> uint64_t {
+              folly::Range<folly::IOBuf*> iobufs,
+              facebook::velox::filesystems::File::IoStats* stats) -> uint64_t {
             EXPECT_EQ(regions.size(), reads.size());
             uint64_t length = 0;
             for (size_t i = 0; i < reads.size(); ++i) {
@@ -145,6 +155,7 @@ TEST_F(TestBufferedInput, UseRead) {
       *pool_,
       MetricsLog::voidLog(),
       nullptr,
+      nullptr,
       10,
       /* wsVRLoad = */ false);
   auto ret = input.enqueue({0, 5});
@@ -167,6 +178,7 @@ TEST_F(TestBufferedInput, UseVRead) {
       readFileMock,
       *pool_,
       MetricsLog::voidLog(),
+      nullptr,
       nullptr,
       10,
       /* wsVRLoad = */ true);
@@ -193,6 +205,7 @@ TEST_F(TestBufferedInput, WillMerge) {
       readFileMock,
       *pool_,
       MetricsLog::voidLog(),
+      nullptr,
       nullptr,
       10, // Will merge if distance <= 10
       /* wsVRLoad = */ false);
@@ -227,6 +240,7 @@ TEST_F(TestBufferedInput, WontMerge) {
       *pool_,
       MetricsLog::voidLog(),
       nullptr,
+      nullptr,
       1, // Will merge if distance <= 1
       /* wsVRLoad = */ false);
 
@@ -257,6 +271,7 @@ TEST_F(TestBufferedInput, ReadSorting) {
       readFileMock,
       *pool_,
       MetricsLog::voidLog(),
+      nullptr,
       nullptr,
       1, // Will merge if distance <= 1
       /* wsVRLoad = */ false);
@@ -294,6 +309,7 @@ TEST_F(TestBufferedInput, VReadSorting) {
       readFileMock,
       *pool_,
       MetricsLog::voidLog(),
+      nullptr,
       nullptr,
       1, // Will merge if distance <= 1
       /* wsVRLoad = */ true);
@@ -335,6 +351,7 @@ TEST_F(TestBufferedInput, VReadSortingWithLabels) {
       readFileMock,
       *pool_,
       MetricsLog::voidLog(),
+      nullptr,
       nullptr,
       1, // Will merge if distance <= 1
       /* wsVRLoad = */ true);

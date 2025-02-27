@@ -18,6 +18,7 @@
 #include "velox/functions/lib/Repeat.h"
 #include "velox/functions/lib/Slice.h"
 #include "velox/functions/prestosql/ArrayFunctions.h"
+#include "velox/functions/sparksql/ArrayAppend.h"
 #include "velox/functions/sparksql/ArrayFlattenFunction.h"
 #include "velox/functions/sparksql/ArrayInsert.h"
 #include "velox/functions/sparksql/ArrayMinMaxFunction.h"
@@ -46,6 +47,21 @@ void registerSparkArrayFunctions(const std::string& prefix) {
 }
 
 namespace sparksql {
+
+inline void registerArrayJoinFunctions(const std::string& prefix) {
+  registerFunction<
+      ParameterBinder<ArrayJoinFunction, Varchar>,
+      Varchar,
+      Array<Varchar>,
+      Varchar>({prefix + "array_join"});
+
+  registerFunction<
+      ParameterBinder<ArrayJoinFunction, Varchar>,
+      Varchar,
+      Array<Varchar>,
+      Varchar,
+      Varchar>({prefix + "array_join"});
+}
 
 template <typename T>
 inline void registerArrayMinMaxFunctions(const std::string& prefix) {
@@ -94,6 +110,7 @@ inline void registerArrayRemoveFunctions(const std::string& prefix) {
 }
 
 void registerArrayFunctions(const std::string& prefix) {
+  registerArrayJoinFunctions(prefix);
   registerArrayMinMaxFunctions(prefix);
   registerArrayRemoveFunctions(prefix);
   registerSparkArrayFunctions(prefix);
@@ -125,6 +142,11 @@ void registerArrayFunctions(const std::string& prefix) {
       makeArrayShuffleWithCustomSeed,
       getMetadataForArrayShuffle());
   registerIntegerSliceFunction(prefix);
+  registerFunction<
+      ArrayAppendFunction,
+      Array<Generic<T1>>,
+      Array<Generic<T1>>,
+      Generic<T1>>({prefix + "array_append"});
 }
 
 } // namespace sparksql

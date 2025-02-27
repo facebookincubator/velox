@@ -15,6 +15,15 @@ Array Functions
 
         SELECT array(1, 2, 3); -- [1,2,3]
 
+.. spark:function:: array_append(array(E), element) -> array(E)
+
+    Add the ``element`` at the end of the input ``array``.
+    Type of ``element`` should be the same to the type of elements in the ``array``.
+    NULL element is also appended into the ``array``. Returns NULL when the input ``array`` is NULL. ::
+
+        SELECT array_append(array(1, 2, 3), 2); -- [1, 2, 3, 2]
+        SELECT array_append(array(1, 2, 3), NULL); -- [1, 2, 3, NULL]
+
 .. spark:function:: array_contains(array(E), value) -> boolean
 
     Returns true if the array contains the value. ::
@@ -65,6 +74,15 @@ Array Functions
     Returns an array of the elements in the intersection of array1 and array2, without duplicates. ::
 
         SELECT array_intersect(array(1, 2, 3), array(1, 3, 5)); -- [1,3]
+
+.. spark:function:: array_join(x, delimiter[, nullReplacement]) -> varchar
+
+    Concatenates the elements of the given array using the ``delimiter`` and an optional string to replace nulls.
+    If no value is set for ``nullReplacement``, any null value is filtered. ::
+
+        SELECT array_join(array('1', '2', '3'), ',') -- '1,2,3'
+        SELECT array_join(array('1', NULL, '2'), ',') -- '1,2'
+        SELECT array_join(array('1', NULL, '2'), ',', '0') -- '1,0,2'
 
 .. spark:function:: array_max(array(E)) -> E
 
@@ -196,7 +214,7 @@ Array Functions
 .. spark:function:: in(value, array(E)) -> boolean
 
     Returns true if value matches at least one of the elements of the array.
-    Supports BOOLEAN, REAL, DOUBLE, BIGINT, VARCHAR, TIMESTAMP, DATE input types.
+    Supports BOOLEAN, REAL, DOUBLE, BIGINT, VARCHAR, TIMESTAMP, DATE, DECIMAL input types.
 
 .. spark:function:: shuffle(array(E), seed) -> array(E)
 

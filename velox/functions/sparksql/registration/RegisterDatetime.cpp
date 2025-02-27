@@ -40,6 +40,10 @@ void registerDatetimeFunctions(const std::string& prefix) {
       int64_t,
       Varchar,
       Varchar>({prefix + "unix_timestamp", prefix + "to_unix_timestamp"});
+  registerFunction<UnixTimestampParseWithFormatFunction, int64_t, Timestamp>(
+      {prefix + "unix_timestamp", prefix + "to_unix_timestamp"});
+  registerFunction<UnixTimestampParseWithFormatFunction, int64_t, Date>(
+      {prefix + "unix_timestamp", prefix + "to_unix_timestamp"});
   registerFunction<FromUnixtimeFunction, Varchar, int64_t, Varchar>(
       {prefix + "from_unixtime"});
   registerFunction<MakeDateFunction, Date, int32_t, int32_t, int32_t>(
@@ -52,6 +56,8 @@ void registerDatetimeFunctions(const std::string& prefix) {
   registerFunction<DateAddFunction, Date, Date, int8_t>({prefix + "date_add"});
   registerFunction<DateAddFunction, Date, Date, int16_t>({prefix + "date_add"});
   registerFunction<DateAddFunction, Date, Date, int32_t>({prefix + "date_add"});
+  registerFunction<FormatDateTimeFunction, Varchar, Timestamp, Varchar>(
+      {prefix + "date_format"});
   registerFunction<DateFromUnixDateFunction, Date, int32_t>(
       {prefix + "date_from_unix_date"});
   registerFunction<DateSubFunction, Date, Date, int8_t>({prefix + "date_sub"});

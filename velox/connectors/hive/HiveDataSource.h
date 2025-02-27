@@ -16,6 +16,7 @@
 #pragma once
 
 #include "velox/common/base/RandomUtil.h"
+#include "velox/common/file/FileSystems.h"
 #include "velox/common/io/IoStatistics.h"
 #include "velox/connectors/Connector.h"
 #include "velox/connectors/hive/FileHandle.h"
@@ -31,9 +32,6 @@
 namespace facebook::velox::connector::hive {
 
 class HiveConfig;
-
-using SubfieldFilters =
-    std::unordered_map<common::Subfield, std::unique_ptr<common::Filter>>;
 
 class HiveDataSource : public DataSource {
  public:
@@ -126,6 +124,7 @@ class HiveDataSource : public DataSource {
       partitionKeys_;
 
   std::shared_ptr<io::IoStatistics> ioStats_;
+  std::shared_ptr<filesystems::File::IoStats> fsStats_;
 
  private:
   std::unique_ptr<HivePartitionFunction> setupBucketConversion();
@@ -162,7 +161,7 @@ class HiveDataSource : public DataSource {
   SpecialColumnNames specialColumns_{};
   folly::F14FastMap<std::string, std::vector<const common::Subfield*>>
       subfields_;
-  SubfieldFilters filters_;
+  common::SubfieldFilters filters_;
   std::shared_ptr<common::MetadataFilter> metadataFilter_;
   std::unique_ptr<exec::ExprSet> remainingFilterExprSet_;
   RowVectorPtr emptyOutput_;

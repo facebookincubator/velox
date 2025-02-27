@@ -61,7 +61,7 @@ void LocalRunner::start() {
   VELOX_CHECK_EQ(state_, State::kInitialized);
   auto lastStage = makeStages();
   params_.planNode = plan_->fragments().back().fragment.planNode;
-  auto cursor = exec::test::TaskCursor::create(params_);
+  auto cursor = exec::TaskCursor::create(params_);
   stages_.push_back({cursor->task()});
   // Add table scan splits to the final gathere stage.
   for (auto& scan : fragments_.back().scans) {
@@ -188,11 +188,13 @@ LocalRunner::makeStages() {
           0,
           onError);
       stages_.back().push_back(task);
+      // Output buffers are created during Task::start(), so we must start the
+      // task before calling updateOutputBuffers().
+      task->start(options_.numDrivers);
       if (fragment.numBroadcastDestinations) {
         // TODO: Add support for Arbitrary partition type.
         task->updateOutputBuffers(fragment.numBroadcastDestinations, true);
       }
-      task->start(options_.numDrivers);
     }
   }
 

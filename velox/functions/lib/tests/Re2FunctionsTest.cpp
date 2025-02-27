@@ -44,6 +44,13 @@ std::shared_ptr<exec::VectorFunction> makeRegexExtract(
   return makeRe2Extract(name, inputArgs, config, /*emptyNoMatch=*/false);
 }
 
+std::shared_ptr<exec::VectorFunction> makeRegexExtractEmptyNoMatch(
+    const std::string& name,
+    const std::vector<exec::VectorFunctionArg>& inputArgs,
+    const core::QueryConfig& config) {
+  return makeRe2Extract(name, inputArgs, config, /*emptyNoMatch=*/true);
+}
+
 class Re2FunctionsTest : public test::FunctionBaseTest {
  public:
   static void SetUpTestCase() {
@@ -54,6 +61,10 @@ class Re2FunctionsTest : public test::FunctionBaseTest {
         "re2_search", re2SearchSignatures(), makeRe2Search);
     exec::registerStatefulVectorFunction(
         "re2_extract", re2ExtractSignatures(), makeRegexExtract);
+    exec::registerStatefulVectorFunction(
+        "re2_extract_empty_no_match",
+        re2ExtractSignatures(),
+        makeRegexExtractEmptyNoMatch);
     exec::registerStatefulVectorFunction(
         "re2_extract_all", re2ExtractAllSignatures(), makeRe2ExtractAll);
     exec::registerStatefulVectorFunction("like", likeSignatures(), makeLike);
@@ -369,6 +380,9 @@ void testRe2Extract(F&& regexExtract) {
   EXPECT_EQ(regexExtract(std::nullopt, "\\d+", 0), std::nullopt);
   EXPECT_EQ(regexExtract(" 123 ", std::nullopt, 0), std::nullopt);
   EXPECT_EQ(regexExtract(" 123 ", "\\d+", std::nullopt), std::nullopt);
+  // Group case that mismatch.
+  EXPECT_EQ(
+      regexExtract("rat cat\nbat dog", "ra(.)|blah(.)(.)", 2), std::nullopt);
 }
 
 TEST_F(Re2FunctionsTest, regexExtract) {
@@ -377,6 +391,21 @@ TEST_F(Re2FunctionsTest, regexExtract) {
                      std::optional<int> group) {
     return evaluateOnce<std::string>(
         "re2_extract(c0, c1, c2)", str, pattern, group);
+  });
+}
+
+template <typename F>
+void testRe2ExtractEmptyNoMatch(F&& regexExtract) {
+  // Group case that mismatch.
+  EXPECT_EQ(regexExtract("rat cat\nbat dog", "ra(.)|blah(.)(.)", 2), "");
+}
+
+TEST_F(Re2FunctionsTest, regexExtractEmptyNoMatch) {
+  testRe2ExtractEmptyNoMatch([&](std::optional<std::string> str,
+                                 std::optional<std::string> pattern,
+                                 std::optional<int> group) {
+    return evaluateOnce<std::string>(
+        "re2_extract_empty_no_match(c0, c1, c2)", str, pattern, group);
   });
 }
 
@@ -1098,6 +1127,20 @@ TEST_F(Re2FunctionsTest, regexExtractAllConstantPatternConstantGroupId) {
 
   testRe2ExtractAll(inputs, constantPattern, intGroupIds, expectedOutputs);
   testRe2ExtractAll(inputs, constantPattern, bigGroupIds, expectedOutputs);
+}
+
+TEST_F(Re2FunctionsTest, regexExtractAllMismatchedGroup) {
+  auto sourceVector =
+      makeFlatVector<std::string>({"rat cat\nbat dog"}, VARCHAR());
+  auto patternVector =
+      makeFlatVector<std::string>({"ra(.)|blah(.)(.)"}, VARCHAR());
+  auto groupIdVector = makeFlatVector<int>(std::vector{2}, INTEGER());
+  auto expectedVector = makeNullableArrayVector<std::string>(
+      std::vector<std::vector<std::optional<std::string>>>{{std::nullopt}});
+  auto result = evaluate(
+      "regexp_extract_all(c0, c1, c2)",
+      makeRowVector({sourceVector, patternVector, groupIdVector}));
+  assertEqualVectors(expectedVector, result);
 }
 
 TEST_F(Re2FunctionsTest, regexExtractAllConstantPatternVariableGroupId) {

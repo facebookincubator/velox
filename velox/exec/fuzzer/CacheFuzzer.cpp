@@ -17,9 +17,8 @@
 #include "velox/exec/fuzzer/CacheFuzzer.h"
 
 #include <boost/random/uniform_int_distribution.hpp>
-
 #include <folly/executors/IOThreadPoolExecutor.h>
-#include <gtest/gtest.h>
+
 #include "velox/common/caching/FileIds.h"
 #include "velox/common/caching/SsdCache.h"
 #include "velox/common/file/FileSystems.h"
@@ -28,7 +27,6 @@
 #include "velox/common/memory/MmapAllocator.h"
 #include "velox/dwio/common/CachedBufferedInput.h"
 #include "velox/exec/tests/utils/TempDirectoryPath.h"
-#include "velox/vector/fuzzer/Utils.h"
 
 DEFINE_int32(steps, 10, "Number of plans to generate and test.");
 
@@ -68,6 +66,8 @@ DEFINE_int32(
     -1,
     "Number of SSD cache shards. When set to -1, a random value from 1 to 4 will be used, inclusively.");
 
+DEFINE_bool(ssd_odirect, true, "Use O_DIRECT for SSD cache IO");
+
 DEFINE_int64(
     ssd_checkpoint_interval_bytes,
     -1,
@@ -87,7 +87,7 @@ using namespace facebook::velox::cache;
 using namespace facebook::velox::dwio::common;
 using namespace facebook::velox::tests::utils;
 
-namespace facebook::velox::exec::test {
+namespace facebook::velox::exec {
 namespace {
 
 class CacheFuzzer {
@@ -319,8 +319,8 @@ void CacheFuzzer::initializeCache(bool restartCache) {
   // We have up to 20 threads and 16 threads are used for reading so
   // there are some threads left over for SSD background write.
   executor_ = std::make_unique<folly::IOThreadPoolExecutor>(20);
-  const auto memoryCacheBytes = getMemoryCacheBytes();
-  const auto ssdCacheBytes = getSsdCacheBytes();
+  const auto memoryCacheBytes = getMemoryCacheBytes(restartCache);
+  const auto ssdCacheBytes = getSsdCacheBytes(restartCache);
 
   std::unique_ptr<SsdCache> ssdCache;
   if (ssdCacheBytes > 0) {
@@ -375,6 +375,7 @@ void CacheFuzzer::initializeInputs() {
   auto tracker = std::make_shared<ScanTracker>(
       "testTracker", nullptr, 256 << 10 /*256KB*/);
   auto ioStats = std::make_shared<IoStatistics>();
+  auto fsStats = std::make_shared<filesystems::File::IoStats>();
   inputs_.reserve(FLAGS_num_source_files);
   for (auto i = 0; i < FLAGS_num_source_files; ++i) {
     // Initialize buffered input.
@@ -388,6 +389,7 @@ void CacheFuzzer::initializeInputs() {
         tracker,
         fileIds_[i].id(), // NOLINT
         ioStats,
+        fsStats,
         withExecutor ? executor_.get() : nullptr,
         readOptions));
 
@@ -475,7 +477,7 @@ void CacheFuzzer::read(uint32_t fileIdx, int32_t fragmentIdx) {
           // Verify read content.
           const auto* data = reinterpret_cast<const uint8_t*>(buffer);
           for (int32_t sequence = 0; sequence < size; ++sequence) {
-            ASSERT_EQ(data[sequence], (offset + numRead + sequence) % 256);
+            VELOX_CHECK_EQ(data[sequence], (offset + numRead + sequence) % 256);
           }
         }
         numRead += size;
@@ -490,7 +492,7 @@ void CacheFuzzer::read(uint32_t fileIdx, int32_t fragmentIdx) {
       }
     }
   }
-  ASSERT_EQ(numRead, length);
+  VELOX_CHECK_EQ(numRead, length);
 }
 
 void CacheFuzzer::go() {
@@ -498,6 +500,12 @@ void CacheFuzzer::go() {
       FLAGS_steps > 0 || FLAGS_duration_sec > 0,
       "Either --steps or --duration_sec needs to be greater than zero.");
 
+  // O_DIRECT requires I/O size to be the same as a disk file block size which
+  // is not handled in SSD cache. Misalignment can lead to EINVAL in some
+  // filesystem and kernel version.
+  //
+  // TODO: add this support if needed later.
+  FLAGS_ssd_odirect = false;
   auto startTime = std::chrono::system_clock::now();
   size_t iteration = 0;
 
@@ -543,4 +551,4 @@ void cacheFuzzer(size_t seed) {
   auto cacheFuzzer = CacheFuzzer(seed);
   cacheFuzzer.go();
 }
-} // namespace facebook::velox::exec::test
+} // namespace facebook::velox::exec

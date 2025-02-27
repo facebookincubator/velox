@@ -16,6 +16,7 @@
 #pragma once
 
 #include <folly/CPortability.h>
+#include <folly/Random.h>
 #include <folly/Range.h>
 #include <folly/dynamic.h>
 
@@ -1025,9 +1026,9 @@ class RowType : public TypeBase<TypeKind::ROW> {
 
   bool containsChild(std::string_view name) const;
 
-  uint32_t getChildIdx(const std::string& name) const;
+  uint32_t getChildIdx(std::string_view name) const;
 
-  std::optional<uint32_t> getChildIdxIfExists(const std::string& name) const;
+  std::optional<uint32_t> getChildIdxIfExists(std::string_view name) const;
 
   const std::string& nameOf(uint32_t idx) const {
     VELOX_CHECK_LT(idx, names_.size());
@@ -2003,20 +2004,66 @@ class CastOperator;
 using CastOperatorPtr = std::shared_ptr<const CastOperator>;
 } // namespace exec
 
+/// Forward declaration.
+class variant;
+class AbstractInputGenerator;
+
+using AbstractInputGeneratorPtr = std::shared_ptr<AbstractInputGenerator>;
+using FuzzerGenerator = folly::detail::DefaultGenerator;
+
+struct InputGeneratorConfig {
+  // TODO: hook up the rest options in VectorFuzzer::Options.
+  size_t seed_;
+  double nullRatio_;
+};
+
 /// Associates custom types with their custom operators to be the payload in
 /// the custom type registry.
 class CustomTypeFactories {
  public:
-  virtual ~CustomTypeFactories() = default;
+  virtual ~CustomTypeFactories();
 
   /// Returns a shared pointer to the custom type.
-  virtual TypePtr getType() const = 0;
+  virtual TypePtr getType(
+      const std::vector<TypeParameter>& parameters) const = 0;
 
   /// Returns a shared pointer to the custom cast operator. If a custom type
   /// should be treated as its underlying native type during type castings,
   /// return a nullptr. If a custom type does not support castings, throw an
   /// exception.
   virtual exec::CastOperatorPtr getCastOperator() const = 0;
+
+  virtual AbstractInputGeneratorPtr getInputGenerator(
+      const InputGeneratorConfig& config) const = 0;
+};
+
+class AbstractInputGenerator {
+ public:
+  AbstractInputGenerator(
+      size_t seed,
+      const TypePtr& type,
+      std::unique_ptr<AbstractInputGenerator>&& next,
+      double nullRatio)
+      : type_{type}, next_{std::move(next)}, nullRatio_{nullRatio} {
+    rng_.seed(seed);
+  }
+
+  virtual ~AbstractInputGenerator();
+
+  virtual variant generate() = 0;
+
+  TypePtr type() const {
+    return type_;
+  }
+
+ protected:
+  FuzzerGenerator rng_;
+
+  TypePtr type_;
+
+  std::unique_ptr<AbstractInputGenerator> next_;
+
+  double nullRatio_;
 };
 
 /// Adds custom type to the registry if it doesn't exist already. No-op if
@@ -2072,7 +2119,9 @@ std::unordered_set<std::string> getCustomTypeNames();
 
 /// Returns an instance of a custom type with the specified name and specified
 /// child types.
-TypePtr getCustomType(const std::string& name);
+TypePtr getCustomType(
+    const std::string& name,
+    const std::vector<TypeParameter>& parameters);
 
 /// Removes custom type from the registry if exists. Returns true if type was
 /// removed, false if type didn't exist.
@@ -2082,6 +2131,11 @@ bool unregisterCustomType(const std::string& name);
 /// name. Returns nullptr if a type with the specified name does not exist or
 /// does not have a dedicated custom cast operator.
 exec::CastOperatorPtr getCustomTypeCastOperator(const std::string& name);
+
+/// Returns the input generator for the custom type with the specified name.
+AbstractInputGeneratorPtr getCustomTypeInputGenerator(
+    const std::string& name,
+    const InputGeneratorConfig& config);
 
 // Allows us to transparently use folly::toAppend(), folly::join(), etc.
 template <class TString>
@@ -2093,6 +2147,95 @@ void toAppend(
 
 /// Appends type's SQL string to 'out'. Uses DuckDB SQL.
 void toTypeSql(const TypePtr& type, std::ostream& out);
+
+/// Cache of serialized RowType instances. Useful to reduce the size of
+/// serialized expressions and plans. Disabled by default. Not thread safe.
+///
+/// To enable, call 'serializedTypeCache().enable()'. This enables the cache for
+/// the current thread. To disable, call 'serializedTypeCache().disable()'.
+/// While enables, type serialization will use the cache and serialize the types
+/// using IDs stored in the cache. The caller is responsible for saving
+/// serialized types from the cache and using these to hidrate
+/// 'deserializedTypeCache()' before deserializing the types.
+class SerializedTypeCache {
+ public:
+  struct Options {
+    // Caching applies to RowType's with at least this many fields.
+    size_t minRowTypeSize = 10;
+  };
+
+  bool isEnabled() const {
+    return enabled_;
+  }
+
+  const Options& options() const {
+    return options_;
+  }
+
+  void enable(const Options& options = {.minRowTypeSize = 10}) {
+    enabled_ = true;
+    options_ = options;
+  }
+
+  void disable() {
+    enabled_ = false;
+  }
+
+  size_t size() const {
+    return cache_.size();
+  }
+
+  void clear() {
+    cache_.clear();
+  }
+
+  /// Returns the ID of the type if it is in the cache. Returns std::nullopt if
+  /// type is not found in the cache. Cache key is type instance pointer. Hence,
+  /// equal but different instances are stored separately.
+  std::optional<int32_t> get(const Type& type) const;
+
+  /// Stores the type in the cache. Returns the ID of the type. Reports an error
+  /// if type is already present in the cache. IDs are monotonically increasing.
+  /// Serialized type may refer to types stored previously in the cache. When
+  /// deserializing type cache, make sure to deserialize types in the order of
+  /// cache IDs.
+  int32_t put(const Type& type, folly::dynamic serialized);
+
+  /// Serialized the types stored in the cache. Use
+  /// DeserializedTypeCache::deserialize to deserialize.
+  folly::dynamic serialize();
+
+ private:
+  bool enabled_{false};
+  Options options_;
+  folly::F14FastMap<const Type*, std::pair<int32_t, folly::dynamic>> cache_;
+};
+
+/// Thread local cache of serialized RowType instances. Used by
+/// RowType::serialize.
+SerializedTypeCache& serializedTypeCache();
+
+/// Thread local cache of deserialized RowType instances. Used when
+/// deserializing Type objects.
+class DeserializedTypeCache {
+ public:
+  void deserialize(const folly::dynamic& obj);
+
+  size_t size() const {
+    return cache_.size();
+  }
+
+  const TypePtr& get(int32_t id) const;
+
+  void clear() {
+    cache_.clear();
+  }
+
+ private:
+  folly::F14FastMap<int32_t, TypePtr> cache_;
+};
+
+DeserializedTypeCache& deserializedTypeCache();
 
 } // namespace facebook::velox
 

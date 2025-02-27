@@ -14,6 +14,9 @@
  * limitations under the License.
  */
 
+#define XXH_INLINE_ALL
+#include <xxhash.h>
+
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/external/date/tz.h"
 #include "velox/functions/prestosql/tests/utils/FunctionBaseTest.h"
@@ -3797,8 +3800,6 @@ TEST_F(DateTimeFunctionsTest, formatDateTime) {
 
   // User format errors or unsupported errors.
   EXPECT_THROW(
-      formatDatetime(parseTimestamp("1970-01-01"), "x"), VeloxUserError);
-  EXPECT_THROW(
       formatDatetime(parseTimestamp("1970-01-01"), "q"), VeloxUserError);
   EXPECT_THROW(
       formatDatetime(parseTimestamp("1970-01-01"), "'abcd"), VeloxUserError);
@@ -4122,9 +4123,6 @@ TEST_F(DateTimeFunctionsTest, dateFormat) {
   VELOX_ASSERT_THROW(
       dateFormat(timestamp, "%X"),
       "Date format specifier is not supported: %X");
-  VELOX_ASSERT_THROW(
-      dateFormat(timestamp, "%x"),
-      "Date format specifier is not supported: WEEK_YEAR");
 }
 
 TEST_F(DateTimeFunctionsTest, dateFormatTimestampWithTimezone) {
@@ -4167,6 +4165,24 @@ TEST_F(DateTimeFunctionsTest, dateFormatTimestampWithTimezone) {
       "69-May-11 20:04:45 PM",
       dateFormatTimestampWithTimezone(
           "%y-%M-%e %T %p", TimestampWithTimezone(-20220915000, "-03:00")));
+}
+
+TEST_F(DateTimeFunctionsTest, test_week_year) {
+  const auto dateFormat = [&](std::optional<Timestamp> timestamp,
+                              std::optional<std::string> format) {
+    return evaluateOnce<std::string>("date_format(c0, c1)", timestamp, format);
+  };
+  auto rst_wy = dateFormat(Timestamp(1609545600, 0), "%x");
+  EXPECT_EQ("2020", rst_wy);
+
+  EXPECT_EQ(
+      "1999-52",
+      dateFormat(parseTimestamp("1999-12-31 23:59:59.999"), "%x-%v"));
+  // 2023-01-01 is a Sunday, so it's part of the last week of 2022 (week 52)
+  // according to ISO week date system.
+  EXPECT_EQ(
+      "2022-52",
+      dateFormat(parseTimestamp("2023-01-01 00:00:00.000"), "%x-%v"));
 }
 
 TEST_F(DateTimeFunctionsTest, fromIso8601Date) {
@@ -4513,6 +4529,12 @@ TEST_F(DateTimeFunctionsTest, dateParse) {
   // 05:30:00.000 UTC.
   EXPECT_EQ(
       Timestamp(-66600, 0), dateParse("1969-12-31+11:00", "%Y-%m-%d+%H:%i"));
+
+  setQueryTimeZone("America/Los_Angeles");
+  // Tests if it uses weekdateformat if %v not present but %a is present.
+  EXPECT_EQ(
+      Timestamp(1730707200, 0),
+      dateParse("04-Nov-2024 (Mon)", "%d-%b-%Y (%a)"));
 
   VELOX_ASSERT_THROW(dateParse("", "%y+"), "Invalid date format: ''");
   VELOX_ASSERT_THROW(dateParse("1", "%y+"), "Invalid date format: '1'");
@@ -5258,4 +5280,24 @@ TEST_F(DateTimeFunctionsTest, toMilliseconds) {
           "to_milliseconds(c0)",
           INTERVAL_DAY_TIME(),
           std::optional<int64_t>(123)));
+}
+
+TEST_F(DateTimeFunctionsTest, xxHash64FunctionDate) {
+  const auto xxhash64 = [&](std::optional<int32_t> date) {
+    return evaluateOnce<int64_t>("xxhash64_internal(c0)", DATE(), date);
+  };
+
+  EXPECT_EQ(std::nullopt, xxhash64(std::nullopt));
+
+  // Epoch
+  EXPECT_EQ(3803688792395291579, xxhash64(parseDate("1970-01-01")));
+  EXPECT_EQ(3734916545851684445, xxhash64(parseDate("2024-10-07")));
+  EXPECT_EQ(1385444150471264300, xxhash64(parseDate("2025-01-10")));
+  EXPECT_EQ(-6977822845260490347, xxhash64(parseDate("1970-01-02")));
+  // Leap date
+  EXPECT_EQ(-5306598937769828126, xxhash64(parseDate("2020-02-29")));
+  // Max supported date
+  EXPECT_EQ(3856043376106280085, xxhash64(parseDate("9999-12-31")));
+  // Y2K
+  EXPECT_EQ(-7612541860844473816, xxhash64(parseDate("2000-01-01")));
 }

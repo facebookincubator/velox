@@ -20,8 +20,10 @@
 #include <vector>
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/common/memory/ByteStream.h"
-#include "velox/common/time/Timer.h"
+#include "velox/functions/prestosql/types/IPAddressType.h"
+#include "velox/functions/prestosql/types/IPPrefixType.h"
 #include "velox/functions/prestosql/types/TimestampWithTimeZoneType.h"
+#include "velox/serializers/PrestoVectorLexer.h"
 #include "velox/vector/fuzzer/VectorFuzzer.h"
 #include "velox/vector/tests/utils/VectorTestBase.h"
 
@@ -217,7 +219,7 @@ class PrestoSerializerTest
       // Unsupported options
       return;
     }
-    std::vector<serializer::presto::PrestoVectorSerde::Token> tokens;
+    std::vector<serializer::presto::Token> tokens;
     const auto status = serializer::presto::PrestoVectorSerde::lex(
         input, tokens, &paramOptions);
     EXPECT_TRUE(status.ok()) << status.message();
@@ -906,19 +908,19 @@ TEST_P(PrestoSerializerTest, initMemory) {
     ASSERT_EQ(pool_->usedBytes() - poolMemUsage, expectedBytes);
   };
 
-  testFunc(BOOLEAN(), 0);
-  testFunc(TINYINT(), 0);
-  testFunc(SMALLINT(), 0);
-  testFunc(INTEGER(), 0);
-  testFunc(BIGINT(), 0);
-  testFunc(REAL(), 0);
-  testFunc(DOUBLE(), 0);
-  testFunc(VARCHAR(), 0);
-  testFunc(TIMESTAMP(), 0);
+  testFunc(BOOLEAN(), 384);
+  testFunc(TINYINT(), 384);
+  testFunc(SMALLINT(), 384);
+  testFunc(INTEGER(), 384);
+  testFunc(BIGINT(), 384);
+  testFunc(REAL(), 384);
+  testFunc(DOUBLE(), 384);
+  testFunc(VARCHAR(), 384);
+  testFunc(TIMESTAMP(), 384);
   // For nested types, 2 pages allocation quantum for first offset (0).
-  testFunc(ROW({VARCHAR()}), 8192);
-  testFunc(ARRAY(INTEGER()), 8192);
-  testFunc(MAP(VARCHAR(), INTEGER()), 8192);
+  testFunc(ROW({VARCHAR()}), 8960);
+  testFunc(ARRAY(INTEGER()), 8960);
+  testFunc(MAP(VARCHAR(), INTEGER()), 9280);
 }
 
 TEST_P(PrestoSerializerTest, serializeNoRowsSelected) {
@@ -1162,6 +1164,76 @@ TEST_P(PrestoSerializerTest, longDecimal) {
     vector->setNull(i, true);
   }
   testRoundTrip(vector);
+}
+
+TEST_P(PrestoSerializerTest, ipprefix) {
+  std::vector<int128_t> randomIpAddresss;
+  randomIpAddresss.reserve(100);
+  for (auto i = 0; i < 100; i++) {
+    randomIpAddresss.push_back(
+        HugeInt::build(folly::Random::rand64(), folly::Random::rand64()));
+  }
+  auto ipaddress = makeFlatVector<int128_t>(
+      100,
+      [&](auto row) { return randomIpAddresss.at(row); },
+      /* isNullAt */ nullptr,
+      IPADDRESS());
+
+  auto prefix = makeFlatVector<int8_t>(
+      100,
+      [&](auto row) {
+        if (randomIpAddresss.at(row) >= 4294967296) {
+          return folly::Random::rand32(33, 65);
+        }
+        return folly::Random::rand32(0, 33);
+      },
+      /* isNullAt */ nullptr,
+      TINYINT());
+
+  auto vector = std::make_shared<RowVector>(
+      pool_.get(),
+      IPPREFIX(),
+      BufferPtr(nullptr),
+      100,
+      std::vector<VectorPtr>{ipaddress, prefix});
+
+  testRoundTrip(vector);
+
+  // Add some nulls.
+  for (auto i = 0; i < 100; i += 7) {
+    vector->setNull(i, true);
+  }
+  testRoundTrip(vector);
+
+  // Test that if the vector is wrapped, we can still properly
+  // deserialize the ipprefix type
+  auto oneIndex = makeIndices(100, [](auto row) { return row; });
+  auto wrappedVector = makeRowVector({
+      BaseVector::wrapInDictionary(
+          makeNulls(100, [](auto row) { return row % 2 == 0; }),
+          oneIndex,
+          100,
+          vector),
+  });
+  testRoundTrip(wrappedVector);
+}
+
+TEST_P(PrestoSerializerTest, ipaddress) {
+  auto ipaddress = makeFlatVector<int128_t>(
+      100,
+      [](auto row) {
+        return HugeInt::build(folly::Random::rand64(), folly::Random::rand64());
+      },
+      /* isNullAt */ nullptr,
+      IPADDRESS());
+
+  testRoundTrip(ipaddress);
+
+  // Add some nulls.
+  for (auto i = 0; i < 100; i += 7) {
+    ipaddress->setNull(i, true);
+  }
+  testRoundTrip(ipaddress);
 }
 
 TEST_P(PrestoSerializerTest, uuid) {

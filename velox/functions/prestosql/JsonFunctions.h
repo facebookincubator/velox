@@ -124,35 +124,6 @@ struct JsonArrayContainsFunction {
   }
 };
 
-template <typename T>
-struct JsonArrayLengthFunction {
-  VELOX_DEFINE_FUNCTION_TYPES(T);
-
-  FOLLY_ALWAYS_INLINE bool call(int64_t& len, const arg_type<Json>& json) {
-    simdjson::ondemand::document jsonDoc;
-
-    simdjson::padded_string paddedJson(json.data(), json.size());
-    if (simdjsonParse(paddedJson).get(jsonDoc)) {
-      return false;
-    }
-    if (jsonDoc.type().error()) {
-      return false;
-    }
-
-    if (jsonDoc.type() != simdjson::ondemand::json_type::array) {
-      return false;
-    }
-
-    size_t numElements;
-    if (jsonDoc.count_elements().get(numElements)) {
-      return false;
-    }
-
-    len = numElements;
-    return true;
-  }
-};
-
 template <typename TExec>
 struct JsonArrayGetFunction {
   VELOX_DEFINE_FUNCTION_TYPES(TExec);
@@ -254,7 +225,8 @@ struct JsonExtractScalarFunction {
     };
 
     auto& extractor = SIMDJsonExtractor::getInstance(jsonPath);
-    SIMDJSON_TRY(simdJsonExtract(json, extractor, consumer));
+    bool isDefinitePath = true;
+    SIMDJSON_TRY(extractor.extract(json, consumer, isDefinitePath));
 
     if (resultStr.has_value()) {
       result.copy_from(*resultStr);
@@ -321,16 +293,17 @@ struct JsonExtractFunction {
     };
 
     auto& extractor = SIMDJsonExtractor::getInstance(jsonPath);
-    SIMDJSON_TRY(simdJsonExtract(json, extractor, consumer));
+    bool isDefinitePath = true;
+    SIMDJSON_TRY(extractor.extract(json, consumer, isDefinitePath));
 
     if (resultSize == 0) {
-      if (extractor.isDefinitePath()) {
+      if (isDefinitePath) {
         // If the path didn't map to anything in the JSON object, return null.
         return simdjson::NO_SUCH_FIELD;
       }
 
       result.copy_from("[]");
-    } else if (resultSize == 1 && extractor.isDefinitePath()) {
+    } else if (resultSize == 1 && isDefinitePath) {
       // If there was only one value mapped to by the path, don't wrap it in an
       // array.
       result.copy_from(results);
@@ -392,7 +365,8 @@ struct JsonSizeFunction {
     };
 
     auto& extractor = SIMDJsonExtractor::getInstance(jsonPath);
-    SIMDJSON_TRY(simdJsonExtract(json, extractor, consumer));
+    bool isDefinitePath = true;
+    SIMDJSON_TRY(extractor.extract(json, consumer, isDefinitePath));
 
     if (resultCount == 0) {
       // If the path didn't map to anything in the JSON object, return null.

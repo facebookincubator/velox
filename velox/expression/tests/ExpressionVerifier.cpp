@@ -94,9 +94,48 @@ RowVectorPtr reduceToSelectedRows(
   reducedVector->copy(rowVector.get(), rowsToCopy, rawIndices);
   return reducedVector;
 }
+
+// Returns the expression set used by common expression eval path.
+exec::ExprSet createExprSetCommon(
+    const std::vector<core::TypedExprPtr>& plans,
+    core::ExecCtx* execCtx,
+    bool disableConstantFolding) {
+  if (disableConstantFolding) {
+    exec::ExprSet exprSetCommon(
+        plans, execCtx, /*enableConstantFolding=*/false);
+    return exprSetCommon;
+  }
+
+  // When constant folding is enabled, the expression evaluation can throw
+  // VeloxRuntimeError of UNSUPPORTED_INPUT_UNCATCHABLE, which is allowed in
+  // the fuzzer test.
+  try {
+    exec::ExprSet exprSetCommon(plans, execCtx, /*enableConstantFolding=*/true);
+    return exprSetCommon;
+  } catch (const VeloxException& e) {
+    if (e.errorCode() != error_code::kUnsupportedInputUncatchable) {
+      LOG(ERROR)
+          << "ExprSet: Exceptions other than VeloxRuntimeError of UNSUPPORTED_INPUT_UNCATCHABLE are not allowed.";
+      throw;
+    }
+    LOG(WARNING)
+        << "ExprSet: Disabling constant folding to avoid VeloxRuntimeError of UNSUPPORTED_INPUT_UNCATCHABLE during evaluation.";
+    exec::ExprSet exprSetCommon(
+        plans, execCtx, /*enableConstantFolding=*/false);
+    return exprSetCommon;
+  } catch (...) {
+    LOG(ERROR)
+        << "ExprSet: Exceptions other than VeloxRuntimeError of UNSUPPORTED_INPUT_UNCATCHABLE are not allowed.";
+    throw;
+  }
+}
+
 } // namespace
 
-std::vector<fuzzer::ResultOrError> ExpressionVerifier::verify(
+std::pair<
+    std::vector<fuzzer::ResultOrError>,
+    std::vector<ExpressionVerifier::VerificationState>>
+ExpressionVerifier::verify(
     const std::vector<core::TypedExprPtr>& plans,
     const std::vector<fuzzer::InputTestCase>& inputTestCases,
     VectorPtr&& resultVector,
@@ -142,10 +181,11 @@ std::vector<fuzzer::ResultOrError> ExpressionVerifier::verify(
   }
 
   std::vector<fuzzer::ResultOrError> results;
+  std::vector<VerificationState> verificationStates;
   // Share ExpressionSet between consecutive iterations to simulate its usage in
   // FilterProject.
-  exec::ExprSet exprSetCommon(
-      plans, execCtx_, !options_.disableConstantFolding);
+  exec::ExprSet exprSetCommon =
+      createExprSetCommon(plans, execCtx_, options_.disableConstantFolding);
   exec::ExprSetSimplified exprSetSimplified(plans, execCtx_);
 
   int testCaseItr = 0;
@@ -251,8 +291,8 @@ std::vector<fuzzer::ResultOrError> ExpressionVerifier::verify(
       VLOG(1) << "Execute with reference DB.";
       auto inputRowVector = reduceToSelectedRows(rowVector, rows);
       auto projectionPlan = makeProjectionPlan(inputRowVector, plans);
-      auto referenceResultOrError = computeReferenceResults(
-          projectionPlan, {inputRowVector}, referenceQueryRunner_.get());
+      auto referenceResultOrError =
+          computeReferenceResults(projectionPlan, referenceQueryRunner_.get());
 
       auto referenceEvalResult = referenceResultOrError.first;
 
@@ -267,20 +307,23 @@ std::vector<fuzzer::ResultOrError> ExpressionVerifier::verify(
           if (exceptionCommonPtr || exceptionReference) {
             // Throws in case only one evaluation path throws exception.
             // Otherwise, return false to signal that the expression failed.
-            if (!(defaultNull &&
-                  referenceQueryRunner_->runnerType() ==
-                      ReferenceQueryRunner::RunnerType::kPrestoQueryRunner) &&
-                !(exceptionCommonPtr && exceptionReference)) {
-              LOG(ERROR) << "Only "
-                         << (exceptionCommonPtr ? "common" : "reference")
-                         << " path threw exception:";
-              if (exceptionCommonPtr) {
-                std::rethrow_exception(exceptionCommonPtr);
-              } else {
-                auto referenceSql =
-                    referenceQueryRunner_->toSql(projectionPlan);
-                VELOX_FAIL(
-                    "Reference path throws for query: {}", *referenceSql);
+            if (exceptionCommonPtr && exceptionReference) {
+              verificationStates.push_back(VerificationState::kBothPathsThrow);
+            } else {
+              if (!(defaultNull &&
+                    referenceQueryRunner_->runnerType() ==
+                        ReferenceQueryRunner::RunnerType::kPrestoQueryRunner)) {
+                LOG(ERROR) << "Only "
+                           << (exceptionCommonPtr ? "common" : "reference")
+                           << " path threw exception:";
+                if (exceptionCommonPtr) {
+                  std::rethrow_exception(exceptionCommonPtr);
+                } else {
+                  auto referenceSql =
+                      referenceQueryRunner_->toSql(projectionPlan);
+                  VELOX_FAIL(
+                      "Reference path throws for query: {}", *referenceSql);
+                }
               }
             }
           } else {
@@ -307,6 +350,8 @@ std::vector<fuzzer::ResultOrError> ExpressionVerifier::verify(
                     {commonEvalResultRow}),
                 "Velox and reference DB results don't match");
             LOG(INFO) << "Verified results against reference DB";
+            verificationStates.push_back(
+                VerificationState::kVerifiedAgainstReference);
           }
         } catch (...) {
           persistReproInfoIfNeeded(
@@ -317,6 +362,10 @@ std::vector<fuzzer::ResultOrError> ExpressionVerifier::verify(
               complexConstants);
           throw;
         }
+      } else {
+        LOG(INFO) << "Reference DB doesn't support this query";
+        verificationStates.push_back(
+            VerificationState::kReferencePathUnsupported);
       }
     } else {
       VLOG(1) << "Execute with simplified expression eval path.";
@@ -387,6 +436,7 @@ std::vector<fuzzer::ResultOrError> ExpressionVerifier::verify(
               {nullptr,
                exceptionCommonPtr ? exceptionCommonPtr : exceptionSimplifiedPtr,
                unsupportedInputUncatchableError});
+          verificationStates.push_back(VerificationState::kBothPathsThrow);
           continue;
         } else {
           // Throws in case output is different.
@@ -400,6 +450,8 @@ std::vector<fuzzer::ResultOrError> ExpressionVerifier::verify(
                 "simplified path results",
                 rows);
           }
+          verificationStates.push_back(
+              VerificationState::kVerifiedAgainstReference);
         }
       } catch (...) {
         persistReproInfoIfNeeded(
@@ -433,7 +485,8 @@ std::vector<fuzzer::ResultOrError> ExpressionVerifier::verify(
            unsupportedInputUncatchableError});
     }
   }
-  return results;
+  VELOX_CHECK_EQ(results.size(), verificationStates.size());
+  return std::make_pair(results, verificationStates);
 }
 
 void ExpressionVerifier::persistReproInfoIfNeeded(

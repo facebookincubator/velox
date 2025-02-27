@@ -33,6 +33,8 @@ class ExchangeClient : public std::enable_shared_from_this<ExchangeClient> {
       std::string taskId,
       int destination,
       int64_t maxQueuedBytes,
+      int32_t numberOfConsumers,
+      uint64_t minOutputBatchBytes,
       memory::MemoryPool* pool,
       folly::Executor* executor)
       : taskId_{std::move(taskId)},
@@ -40,7 +42,9 @@ class ExchangeClient : public std::enable_shared_from_this<ExchangeClient> {
         maxQueuedBytes_{maxQueuedBytes},
         pool_(pool),
         executor_(executor),
-        queue_(std::make_shared<ExchangeQueue>()) {
+        queue_(std::make_shared<ExchangeQueue>(
+            numberOfConsumers,
+            minOutputBatchBytes)) {
     VELOX_CHECK_NOT_NULL(pool_);
     VELOX_CHECK_NOT_NULL(executor_);
     // NOTE: the executor is used to run async response callback from the
@@ -66,7 +70,7 @@ class ExchangeClient : public std::enable_shared_from_this<ExchangeClient> {
   // upstream task. If 'close' has been called already, creates an exchange
   // source and immediately closes it to notify the upstream task that data is
   // no longer needed. Repeated calls with the same 'taskId' are ignored.
-  void addRemoteTaskId(const std::string& taskId);
+  void addRemoteTaskId(const std::string& remoteTaskId);
 
   void noMoreRemoteTasks();
 
@@ -91,7 +95,7 @@ class ExchangeClient : public std::enable_shared_from_this<ExchangeClient> {
   /// The data may be compressed, in which case 'maxBytes' applies to compressed
   /// size.
   std::vector<std::unique_ptr<SerializedPage>>
-  next(uint32_t maxBytes, bool* atEnd, ContinueFuture* future);
+  next(int consumerId, uint32_t maxBytes, bool* atEnd, ContinueFuture* future);
 
   std::string toString() const;
 

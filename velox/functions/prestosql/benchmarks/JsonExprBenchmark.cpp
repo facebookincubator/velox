@@ -20,9 +20,11 @@
 #include <folly/Benchmark.h>
 #include <folly/init/Init.h>
 #include "velox/functions/Registerer.h"
+#include "velox/functions/lib/JsonArrayLength.h"
 #include "velox/functions/lib/benchmarks/FunctionBenchmarkBase.h"
 #include "velox/functions/prestosql/JsonFunctions.h"
 #include "velox/functions/prestosql/json/JsonExtractor.h"
+#include "velox/functions/prestosql/types/JsonRegistration.h"
 #include "velox/functions/prestosql/types/JsonType.h"
 
 namespace facebook::velox::functions::prestosql {

@@ -19,6 +19,7 @@
 #include <folly/init/Init.h>
 #include <string>
 
+#include "velox/common/memory/SharedArbitrator.h"
 #include "velox/exec/Cursor.h"
 #include "velox/exec/tests/utils/HiveConnectorTestBase.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
@@ -41,6 +42,7 @@ namespace {
 class WindowPrefixSortBenchmark : public HiveConnectorTestBase {
  public:
   explicit WindowPrefixSortBenchmark() {
+    memory::SharedArbitrator::registerFactory();
     HiveConnectorTestBase::SetUp();
     aggregate::prestosql::registerAllAggregateFunctions();
     window::prestosql::registerAllWindowFunctions();
@@ -375,7 +377,7 @@ BENCHMARK_DRAW_LINE();
 } // namespace
 
 int main(int argc, char** argv) {
-  folly::Init(&argc, &argv);
+  folly::Init init(&argc, &argv);
   facebook::velox::memory::MemoryManager::initialize({});
 
   benchmark = std::make_unique<WindowPrefixSortBenchmark>();

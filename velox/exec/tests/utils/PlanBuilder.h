@@ -178,10 +178,12 @@ class PlanBuilder {
   /// and scale factor.
   /// @param columnNames The columns to be returned from that table.
   /// @param scaleFactor The TPC-H scale factor.
+  /// @param connectorId The TPC-H connector id.
   PlanBuilder& tpchTableScan(
       tpch::Table table,
-      std::vector<std::string>&& columnNames,
-      double scaleFactor = 1);
+      std::vector<std::string> columnNames,
+      double scaleFactor = 1,
+      std::string_view connectorId = kTpchDefaultConnectorId);
 
   /// Helper class to build a custom TableScanNode.
   /// Uses a planBuilder instance to get the next plan id, memory pool, and
@@ -408,6 +410,13 @@ class PlanBuilder {
       return *this;
     }
 
+    /// @param ensureFiles When set the Task will always output a file, even if
+    /// it's empty.
+    TableWriterBuilder& ensureFiles(const bool ensureFiles) {
+      ensureFiles_ = ensureFiles;
+      return *this;
+    }
+
     /// Stop the TableWriterBuilder.
     PlanBuilder& endTableWriter() {
       planBuilder_.planNode_ = build(planBuilder_.nextPlanNodeId());
@@ -436,6 +445,8 @@ class PlanBuilder {
 
     dwio::common::FileFormat fileFormat_{dwio::common::FileFormat::DWRF};
     common::CompressionKind compressionKind_{common::CompressionKind_NONE};
+
+    bool ensureFiles_{false};
   };
 
   /// Start a TableWriterBuilder.
@@ -629,6 +640,8 @@ class PlanBuilder {
   /// output data files.
   /// @param schema Output schema to be passed to the writer. By default use the
   /// output of the previous operator.
+  /// @param ensureFiles When this option is set the HiveDataSink will always
+  /// create a file even if there is no data.
   PlanBuilder& tableWrite(
       const std::string& outputDirectoryPath,
       const std::vector<std::string>& partitionBy,
@@ -644,7 +657,8 @@ class PlanBuilder {
       const std::shared_ptr<dwio::common::WriterOptions>& options = nullptr,
       const std::string& outputFileName = "",
       const common::CompressionKind = common::CompressionKind_NONE,
-      const RowTypePtr& schema = nullptr);
+      const RowTypePtr& schema = nullptr,
+      const bool ensureFiles = false);
 
   /// Add a TableWriteMergeNode.
   PlanBuilder& tableWriteMerge(
@@ -1100,6 +1114,26 @@ class PlanBuilder {
       const std::vector<std::string>& outputLayout,
       core::JoinType joinType = core::JoinType::kInner);
 
+  /// Add an IndexLoopJoinNode to join two inputs using one or more join keys
+  /// plus optional join conditions. First input comes from the preceding plan
+  /// node. Second input is specified in 'right' parameter and must be a
+  /// table source with the connector table handle with index lookup support.
+  ///
+  /// @param right The right input source with index lookup support.
+  /// @param joinCondition SQL expressions as the join conditions. Each join
+  /// condition must use columns from both sides. For the right side, it can
+  /// only use one index column.
+  /// @param joinType Type of the join supported: inner, left.
+  ///
+  /// See hashJoin method for the description of the other parameters.
+  PlanBuilder& indexLookupJoin(
+      const std::vector<std::string>& leftKeys,
+      const std::vector<std::string>& rightKeys,
+      const core::TableScanNodePtr& right,
+      const std::vector<std::string>& joinCondition,
+      const std::vector<std::string>& outputLayout,
+      core::JoinType joinType = core::JoinType::kInner);
+
   /// Add an UnnestNode to unnest one or more columns of type array or map.
   ///
   /// The output will contain 'replicatedColumns' followed by unnested columns,
@@ -1221,7 +1255,7 @@ class PlanBuilder {
   /// In a DistributedPlanBuilder, introduces a shuffle boundary. The plan so
   /// far is shuffled and subsequent nodes consume the shuffle. Arguments are as
   /// in partitionedOutput().
-  virtual PlanBuilder& shuffle(
+  virtual PlanBuilder& shufflePartitioned(
       const std::vector<std::string>& keys,
       int numPartitions,
       bool replicateNullsAndAny,
@@ -1232,11 +1266,18 @@ class PlanBuilder {
   /// In a DistributedPlanBuilder, returns an Exchange on top of the plan built
   /// so far and couples it to the current stage in the enclosing builder.
   /// Arguments are as in shuffle().
-  virtual core::PlanNodePtr shuffleResult(
+  virtual core::PlanNodePtr shufflePartitionedResult(
       const std::vector<std::string>& keys,
       int numPartitions,
       bool replicateNullsAndAny,
       const std::vector<std::string>& outputLayout = {}) {
+    VELOX_UNSUPPORTED("Needs DistributedPlanBuilder");
+  }
+
+  /// In a DistributedPlanBuilder, returns an Exchange on top of the plan built
+  /// so far that ends with a broadcast PartitionedOutput node, and couples the
+  /// Exchange to the current stage in the enclosing builder.
+  virtual core::PlanNodePtr shuffleBroadcastResult() {
     VELOX_UNSUPPORTED("Needs DistributedPlanBuilder");
   }
 

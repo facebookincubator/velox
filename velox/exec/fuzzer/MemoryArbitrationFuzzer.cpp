@@ -17,8 +17,10 @@
 #include "velox/exec/fuzzer/MemoryArbitrationFuzzer.h"
 #include <boost/random/uniform_int_distribution.hpp>
 
+#include <folly/concurrency/ConcurrentHashMap.h>
 #include "velox/common/file/FileSystems.h"
 #include "velox/common/file/tests/FaultyFileSystem.h"
+#include "velox/common/fuzzer/Utils.h"
 #include "velox/common/memory/SharedArbitrator.h"
 #include "velox/connectors/hive/HiveConnector.h"
 #include "velox/dwio/dwrf/RegisterDwrfReader.h" // @manual
@@ -98,6 +100,8 @@ using namespace facebook::velox::tests::utils;
 
 namespace facebook::velox::exec::test {
 namespace {
+
+using fuzzer::coinToss;
 
 class MemoryArbitrationFuzzer {
  public:
@@ -204,6 +208,9 @@ class MemoryArbitrationFuzzer {
   std::vector<PlanWithSplits> rowNumberPlans(const std::string& tableDir);
 
   std::vector<PlanWithSplits> orderByPlans(const std::string& tableDir);
+
+  // Helper method that combines all above plan methods into one.
+  std::vector<PlanWithSplits> allPlans(const std::string& tableDir);
 
   void verify();
 
@@ -685,7 +692,7 @@ MemoryArbitrationFuzzer::orderByPlans(const std::string& tableDir) {
   auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
   core::PlanNodeId scanId;
   plan = PlanWithSplits{
-      PlanBuilder(planNodeIdGenerator)
+      PlanBuilder(std::move(planNodeIdGenerator))
           .tableScan(asRowType(input[0]->type()))
           .capturePlanNodeId(scanId)
           .orderBy(keyNames, false)
@@ -696,13 +703,30 @@ MemoryArbitrationFuzzer::orderByPlans(const std::string& tableDir) {
   return plans;
 }
 
+std::vector<MemoryArbitrationFuzzer::PlanWithSplits>
+MemoryArbitrationFuzzer::allPlans(const std::string& tableDir) {
+  std::vector<PlanWithSplits> plans;
+  for (const auto& plan : hashJoinPlans(tableDir)) {
+    plans.push_back(plan);
+  }
+  for (const auto& plan : aggregatePlans(tableDir)) {
+    plans.push_back(plan);
+  }
+  for (const auto& plan : rowNumberPlans(tableDir)) {
+    plans.push_back(plan);
+  }
+  for (const auto& plan : orderByPlans(tableDir)) {
+    plans.push_back(plan);
+  }
+  return plans;
+}
+
 struct ThreadLocalStats {
   uint64_t spillFsFaultCount{0};
 };
 
 // Stats that keeps track of per thread execution status in verify()
 thread_local ThreadLocalStats threadLocalStats;
-std::atomic_uint32_t taskAbortRequestCount{0};
 
 std::shared_ptr<TempDirectoryPath>
 MemoryArbitrationFuzzer::maybeGenerateFaultySpillDirectory() {
@@ -745,19 +769,7 @@ void MemoryArbitrationFuzzer::verify() {
   auto spillDirectory = maybeGenerateFaultySpillDirectory();
   const auto tableScanDir = exec::test::TempDirectoryPath::create(false);
 
-  std::vector<PlanWithSplits> plans;
-  for (const auto& plan : hashJoinPlans(tableScanDir->getPath())) {
-    plans.push_back(plan);
-  }
-  for (const auto& plan : aggregatePlans(tableScanDir->getPath())) {
-    plans.push_back(plan);
-  }
-  for (const auto& plan : rowNumberPlans(tableScanDir->getPath())) {
-    plans.push_back(plan);
-  }
-  for (const auto& plan : orderByPlans(tableScanDir->getPath())) {
-    plans.push_back(plan);
-  }
+  auto plans = allPlans(tableScanDir->getPath());
 
   SCOPE_EXIT {
     waitForAllTasksToBeDeleted();
@@ -771,18 +783,25 @@ void MemoryArbitrationFuzzer::verify() {
   std::atomic_bool stop{false};
   std::vector<std::thread> queryThreads;
   queryThreads.reserve(numThreads);
+  // A map to keep track of the query task abort request. The key is the query
+  // id and the value indicates if an abort request is injected.
+  folly::ConcurrentHashMap<std::string, bool> queryTaskAbortRequestMap;
+  std::atomic_int32_t queryCount{0};
   for (int i = 0; i < numThreads; ++i) {
     auto seed = rng_();
     queryThreads.emplace_back([&, spillDirectory, i, seed]() {
       FuzzerGenerator rng(seed);
       while (!stop) {
         const auto prevSpillFsFaultCount = threadLocalStats.spillFsFaultCount;
-        const auto prevTaskAbortRequestCount = taskAbortRequestCount.load();
+        const auto queryId = fmt::format("query_id_{}", queryCount++);
+        queryTaskAbortRequestMap.insert(queryId, false);
         try {
           const auto queryCtx = newQueryCtx(
               memory::memoryManager(),
               executor_.get(),
-              FLAGS_arbitrator_capacity);
+              FLAGS_arbitrator_capacity,
+              queryId);
+
           const auto plan = plans.at(getRandomIndex(rng, plans.size() - 1));
           AssertQueryBuilder builder(plan.plan);
           builder.queryCtx(queryCtx);
@@ -813,44 +832,55 @@ void MemoryArbitrationFuzzer::verify() {
             const auto injectedSpillFsFault =
                 threadLocalStats.spillFsFaultCount > prevSpillFsFaultCount;
             const auto injectedTaskAbortRequest =
-                taskAbortRequestCount > prevTaskAbortRequestCount;
-            VELOX_CHECK(injectedSpillFsFault || injectedTaskAbortRequest);
+                queryTaskAbortRequestMap.find(queryId)->second;
+            VELOX_CHECK(
+                injectedSpillFsFault || injectedTaskAbortRequest,
+                "injectedSpillFsFault: {}, injectedTaskAbortRequest: {}, error message: {}",
+                injectedSpillFsFault,
+                injectedTaskAbortRequest,
+                e.message());
+
             if (injectedTaskAbortRequest && !injectedSpillFsFault) {
               VELOX_CHECK(
                   e.message().find("Aborted for external error") !=
-                  std::string::npos);
+                      std::string::npos,
+                  e.message());
             } else if (!injectedTaskAbortRequest && injectedSpillFsFault) {
               VELOX_CHECK(
                   e.message().find("Fault file injection on") !=
-                  std::string::npos);
+                      std::string::npos,
+                  e.message());
             } else {
               VELOX_CHECK(
                   e.message().find("Fault file injection on") !=
-                      std::string::npos ||
-                  e.message().find("Aborted for external error") !=
-                      std::string::npos);
+                          std::string::npos ||
+                      e.message().find("Aborted for external error") !=
+                          std::string::npos,
+                  e.message());
             }
           } else {
             LOG(ERROR) << "Unexpected exception:\n" << e.what();
             std::rethrow_exception(std::current_exception());
           }
         }
+        queryTaskAbortRequestMap.erase(queryId);
       }
     });
   }
 
-  // Inject global arbitration.
+  // Inject global arbitration from a background thread.
+  auto shrinkRng = FuzzerGenerator(rng_());
   std::thread globalShrinkThread([&]() {
     while (!stop) {
-      if (getRandomIndex(rng_, 99) < FLAGS_global_arbitration_pct) {
+      if (getRandomIndex(shrinkRng, 99) < FLAGS_global_arbitration_pct) {
         memory::memoryManager()->shrinkPools();
       }
       std::this_thread::sleep_for(std::chrono::seconds(1));
     }
   });
 
-  // Create a thread that randomly abort one worker thread
-  // every task_abort_interval_ms milliseconds.
+  // Inject random task abortion from a background thread.
+  auto abortRng = FuzzerGenerator(rng_());
   std::thread abortControlThread([&]() {
     if (FLAGS_task_abort_interval_ms == 0) {
       return;
@@ -860,9 +890,16 @@ void MemoryArbitrationFuzzer::verify() {
         std::this_thread::sleep_for(
             std::chrono::milliseconds(FLAGS_task_abort_interval_ms));
         auto tasksList = Task::getRunningTasks();
-        auto index = getRandomIndex(rng_, tasksList.size() - 1);
-        ++taskAbortRequestCount;
-        tasksList[index]->requestAbort();
+
+        // queryThreads start a new Task each time a Task finishes, but we still
+        // may get unlucky and hit a point where there are no tasks running.
+        if (!tasksList.empty()) {
+          vector_size_t index = getRandomIndex(abortRng, tasksList.size() - 1);
+          auto& task = tasksList[index];
+          const auto queryId = task->queryCtx()->queryId();
+          queryTaskAbortRequestMap.assign(queryId, true);
+          task->requestAbort();
+        }
       } catch (const VeloxException& e) {
         LOG(ERROR) << "Unexpected exception in abortControlScheduler:\n"
                    << e.what();

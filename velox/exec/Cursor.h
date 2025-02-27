@@ -18,7 +18,7 @@
 #include "velox/core/PlanNode.h"
 #include "velox/exec/Task.h"
 
-namespace facebook::velox::exec::test {
+namespace facebook::velox::exec {
 
 /// Wait up to maxWaitMicros for all the task drivers to finish. The function
 /// returns true if all the drivers have finished, otherwise false.
@@ -48,6 +48,12 @@ struct CursorParameters {
   std::shared_ptr<core::QueryCtx> queryCtx;
 
   uint64_t bufferedBytes{512 * 1024};
+
+  /// An optional memory pool to be used to allocate vectors returned by
+  /// MultiThreadedTaskCursor. A new pool is created if not specified.
+  ///
+  /// Only used if serialExecution is false.
+  std::shared_ptr<memory::MemoryPool> outputPool;
 
   /// Ungrouped (by default) or grouped (bucketed) execution.
   core::ExecutionStrategy executionStrategy{
@@ -82,8 +88,13 @@ class TaskQueue {
     uint64_t bytes;
   };
 
-  explicit TaskQueue(uint64_t maxBytes)
-      : pool_(memory::memoryManager()->addLeafPool()), maxBytes_(maxBytes) {}
+  explicit TaskQueue(
+      uint64_t maxBytes,
+      const std::shared_ptr<memory::MemoryPool>& outputPool)
+      : pool_(
+            outputPool != nullptr ? outputPool
+                                  : memory::memoryManager()->addLeafPool()),
+        maxBytes_(maxBytes) {}
 
   void setNumProducers(int32_t n) {
     numProducers_ = n;
@@ -186,4 +197,4 @@ class RowCursor {
   vector_size_t numRows_ = 0;
 };
 
-} // namespace facebook::velox::exec::test
+} // namespace facebook::velox::exec

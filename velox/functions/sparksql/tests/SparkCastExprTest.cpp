@@ -291,6 +291,62 @@ TEST_F(SparkCastExprTest, intToTimestamp) {
   testIntegralToTimestampCast<int32_t>();
 }
 
+TEST_F(SparkCastExprTest, doubleToTimestamp) {
+  testCast(
+      makeFlatVector<double>({
+          0.0,
+          1727181032.0,
+          -1727181032.0,
+          9223372036855.999,
+          -9223372036856.999,
+          1.79769e+308,
+          std::numeric_limits<double>::max(),
+          -std::numeric_limits<double>::max(),
+          std::numeric_limits<double>::min(),
+          kInf,
+          kNan,
+          -kInf,
+      }),
+      makeNullableFlatVector<Timestamp>({
+          Timestamp(0, 0),
+          Timestamp(1727181032, 0),
+          Timestamp(-1727181032, 0),
+          Timestamp(9223372036854, 775'807'000),
+          Timestamp(-9223372036855, 224'192'000),
+          Timestamp(9223372036854, 775'807'000),
+          Timestamp(9223372036854, 775'807'000),
+          Timestamp(-9223372036855, 224'192'000),
+          Timestamp(0, 0),
+          std::nullopt,
+          std::nullopt,
+          std::nullopt,
+      }));
+}
+
+TEST_F(SparkCastExprTest, floatToTimestamp) {
+  testCast(
+      makeFlatVector<float>({
+          0.0,
+          1727181032.0,
+          -1727181032.0,
+          std::numeric_limits<float>::max(),
+          std::numeric_limits<float>::min(),
+          kInf,
+          kNan,
+          -kInf,
+      }),
+      makeNullableFlatVector<Timestamp>({
+          Timestamp(0, 0),
+          Timestamp(1727181056, 0),
+          Timestamp(-1727181056, 0),
+          Timestamp(9223372036854, 775'807'000),
+          Timestamp(0, 0),
+          std::nullopt,
+          std::nullopt,
+          std::nullopt,
+      }));
+}
+
 TEST_F(SparkCastExprTest, primitiveInvalidCornerCases) {
   // To integer.
   {
@@ -578,6 +634,62 @@ TEST_F(SparkCastExprTest, timestampToString) {
           "0384-01-01 08:00:00",
           "+10000-02-01 16:00:00",
           "-0010-02-01 10:00:00",
+          std::nullopt,
+      });
+
+  std::vector<std::optional<Timestamp>> input = {
+      Timestamp(-946684800, 0),
+      Timestamp(-7266, 0),
+      Timestamp(0, 0),
+      Timestamp(61, 10),
+      Timestamp(3600, 0),
+      Timestamp(946684800, 0),
+
+      Timestamp(946729316, 0),
+      Timestamp(946729316, 123),
+      Timestamp(946729316, 100000000),
+      Timestamp(946729316, 129900000),
+      Timestamp(946729316, 123456789),
+      Timestamp(7266, 0),
+      std::nullopt,
+  };
+
+  setTimezone("America/Los_Angeles");
+  testCast<Timestamp, std::string>(
+      "string",
+      input,
+      {
+          "1940-01-01 16:00:00",
+          "1969-12-31 13:58:54",
+          "1969-12-31 16:00:00",
+          "1969-12-31 16:01:01",
+          "1969-12-31 17:00:00",
+          "1999-12-31 16:00:00",
+          "2000-01-01 04:21:56",
+          "2000-01-01 04:21:56",
+          "2000-01-01 04:21:56.1",
+          "2000-01-01 04:21:56.1299",
+          "2000-01-01 04:21:56.123456",
+          "1969-12-31 18:01:06",
+          std::nullopt,
+      });
+  setTimezone("Asia/Shanghai");
+  testCast<Timestamp, std::string>(
+      "string",
+      input,
+      {
+          "1940-01-02 08:00:00",
+          "1970-01-01 05:58:54",
+          "1970-01-01 08:00:00",
+          "1970-01-01 08:01:01",
+          "1970-01-01 09:00:00",
+          "2000-01-01 08:00:00",
+          "2000-01-01 20:21:56",
+          "2000-01-01 20:21:56",
+          "2000-01-01 20:21:56.1",
+          "2000-01-01 20:21:56.1299",
+          "2000-01-01 20:21:56.123456",
+          "1970-01-01 10:01:06",
           std::nullopt,
       });
 }
