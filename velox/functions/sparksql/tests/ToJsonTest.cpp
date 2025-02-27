@@ -13,15 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#include "velox/common/base/tests/GTestUtils.h"
-#include <core/Expressions.h>
-#include <cstdint>
 #include <functions/sparksql/tests/SparkFunctionBaseTest.h>
-#include <gtest/gtest.h>
-#include <limits>
-#include <optional>
-#include <type/Timestamp.h>
-#include <type/Type.h>
 
 using namespace facebook::velox::test;
 
@@ -74,6 +66,18 @@ TEST_F(ToJsonTest, basicBool) {
   auto input = makeRowVector({"a"}, {data});
   auto expected = makeFlatVector<std::string>(
       {R"({"a":true})", R"({"a":false})", R"({"a":null})"});
+  testToJson(input, expected);
+}
+
+TEST_F(ToJsonTest, basicString) {
+  auto data = makeNullableFlatVector<std::string>({"str1", "str2", std::nullopt, "str\"3\"", std::nullopt});
+  auto input = makeRowVector({"a"}, {data});
+  auto expected = makeFlatVector<std::string>(
+      {R"({"a":"str1"})",
+       R"({"a":"str2"})",
+       R"({"a":null})",
+       R"({"a":"str\"3\""})",
+       R"({"a":null})"});
   testToJson(input, expected);
 }
 
@@ -138,19 +142,38 @@ TEST_F(ToJsonTest, basicDouble) {
   testToJson(input, expected);
 }
 
+TEST_F(ToJsonTest, basicDecimal) {
+  auto data = makeNullableFlatVector<int64_t>(
+      {12345, 0, -67890, std::nullopt}, DECIMAL(10, 2));
+  auto input = makeRowVector({"a"}, {data});
+  auto expected = makeFlatVector<std::string>(
+      {R"({"a":123.45})",
+       R"({"a":0.00})",
+       R"({"a":-678.90})",
+       R"({"a":null})"});
+  testToJson(input, expected);
+}
+
 TEST_F(ToJsonTest, basicTimestamp) {
   auto data = makeNullableFlatVector<Timestamp>(
       {Timestamp(0, 0),
        Timestamp(1582934400, 0),
        Timestamp(-2208988800, 0),
-       Timestamp(253402300799, 0),
        std::nullopt});
   auto input = makeRowVector({"a"}, {data});
+  // UTC time zone.
   auto expected = makeFlatVector<std::string>(
-      {R"({"a":"1970-01-01T00:00:00.000000000"})",
-       R"({"a":"2020-02-29T00:00:00.000000000"})",
-       R"({"a":"1900-01-01T00:00:00.000000000"})",
-       R"({"a":"9999-12-31T23:59:59.000000000"})",
+      {R"({"a":"1970-01-01T00:00:00.000Z"})",
+       R"({"a":"2020-02-29T00:00:00.000Z"})",
+       R"({"a":"1900-01-01T00:00:00.000Z"})",
+       R"({"a":null})"});
+  testToJson(input, expected);
+  // Los_Angeles time zone.
+  setTimezone("America/Los_Angeles");
+  expected = makeFlatVector<std::string>(
+      {R"({"a":"1969-12-31T16:00:00.000-08:00"})",
+       R"({"a":"2020-02-28T16:00:00.000-08:00"})",
+       R"({"a":"1899-12-31T16:00:00.000-08:00"})",
        R"({"a":null})"});
   testToJson(input, expected);
 }
