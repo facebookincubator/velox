@@ -24,7 +24,7 @@ namespace {
 // The input ``args`` must be of row type and nested complex type is allowed.
 // The field position is specified by ``ordinal``.
 // If ``ordinal`` is negative or greater than the children size of input,
-// it will throw exception.
+// exception is thrown.
 class GetStructFieldFunction : public exec::VectorFunction {
  public:
   GetStructFieldFunction(int32_t ordinal) : ordinal_(ordinal) {}
