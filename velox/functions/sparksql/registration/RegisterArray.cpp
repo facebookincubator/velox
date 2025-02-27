@@ -68,6 +68,7 @@ void registerArrayConcatFunctions(const std::string& prefix) {
   registerArrayConcatFunctions<Varchar>(prefix);
   registerArrayConcatFunctions<Timestamp>(prefix);
   registerArrayConcatFunctions<Date>(prefix);
+  registerArrayConcatFunctions<UnknownValue>(prefix);
   registerArrayConcatFunctions<Generic<T1>>(prefix);
 }
 

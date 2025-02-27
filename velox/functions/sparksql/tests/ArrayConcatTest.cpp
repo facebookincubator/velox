@@ -153,5 +153,14 @@ TEST_F(ArrayConcatTest, complexTypes) {
   testExpression("concat(c0, c1)", {arrayOfArrays1, arrayOfArrays2}, expected);
 }
 
+TEST_F(ArrayConcatTest, unknown) {
+  const auto array1 = makeArrayVectorFromJson<UnknownValue>({"[null, null]"});
+  const auto array2 = makeArrayVectorFromJson<UnknownValue>({"[null]"});
+
+  const auto expected =
+      makeArrayVectorFromJson<UnknownValue>({"[null, null, null]"});
+  testExpression("concat(c0, c1)", {array1, array2}, expected);
+}
+
 } // namespace
 } // namespace facebook::velox::functions::sparksql::test
