@@ -516,14 +516,40 @@ VectorPtr CastExpr::applyDecimalToFloatCast(
   auto resultBuffer = result->asUnchecked<FlatVector<To>>()->mutableRawValues();
   const auto precisionScale = getDecimalPrecisionScale(*fromType);
   const auto simpleInput = input.as<SimpleVector<FromNativeType>>();
-  const auto scaleFactor = DecimalUtil::kPowersOfTen[precisionScale.second];
   applyToSelectedNoThrowLocal(context, rows, result, [&](int row) {
-    const auto output =
-        util::Converter<ToKind>::tryCast(simpleInput->valueAt(row))
-            .thenOrThrow(folly::identity, [&](const Status& status) {
-              VELOX_USER_FAIL("{}", status.message());
-            });
-    resultBuffer[row] = output / scaleFactor;
+    auto unscaledValue = simpleInput->valueAt(row);
+
+    Expected<To> expect;
+    if constexpr (
+        std::is_same_v<FromNativeType, int64_t> && ToKind == TypeKind::REAL) {
+      expect = hooks_->castShortDecimalToReal(
+          unscaledValue, precisionScale.first, precisionScale.second);
+    } else if constexpr (
+        std::is_same_v<FromNativeType, int128_t> && ToKind == TypeKind::REAL) {
+      expect = hooks_->castLongDecimalToReal(
+          unscaledValue, precisionScale.first, precisionScale.second);
+    } else if constexpr (
+        std::is_same_v<FromNativeType, int64_t> && ToKind == TypeKind::DOUBLE) {
+      expect = hooks_->castShortDecimalToDouble(
+          unscaledValue, precisionScale.first, precisionScale.second);
+    } else {
+      expect = hooks_->castLongDecimalToDouble(
+          unscaledValue, precisionScale.first, precisionScale.second);
+    }
+
+    if (expect) {
+      resultBuffer[row] = expect.value();
+    } else {
+      if (setNullInResultAtError()) {
+        result->setNull(row, true);
+      } else {
+        context.setVeloxExceptionError(
+            row,
+            std::make_exception_ptr(VeloxUserError(
+                std::current_exception(), expect.error().message(), false)));
+      }
+      return;
+    }
   });
   return result;
 }

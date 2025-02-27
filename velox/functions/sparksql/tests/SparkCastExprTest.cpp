@@ -109,6 +109,71 @@ class SparkCastExprTest : public functions::test::CastBaseTest {
              Timestamp(std::numeric_limits<T>::min(), 0),
              std::nullopt}));
   }
+
+  template <typename T>
+  void testDecimalToFloatCasts() {
+    // short to short, scale up.
+    auto shortFlat = makeNullableFlatVector<int64_t>(
+        {DecimalUtil::kShortDecimalMin,
+         DecimalUtil::kShortDecimalMin,
+         -3,
+         0,
+         55,
+         DecimalUtil::kShortDecimalMax,
+         DecimalUtil::kShortDecimalMax,
+         std::nullopt},
+        DECIMAL(18, 18));
+    testCast(
+        shortFlat,
+        makeNullableFlatVector<T>(
+            {-1,
+             // the same DecimalUtil::kShortDecimalMin conversion, checking
+             // floating point diff works on decimals
+             -0.999999999999999999,
+             -0.000000000000000003,
+             0,
+             0.000000000000000055,
+             // the same DecimalUtil::kShortDecimalMax conversion, checking
+             // floating point diff works on decimals
+             0.999999999999999999,
+             1,
+             std::nullopt}));
+
+    auto longFlat = makeNullableFlatVector<int128_t>(
+        {DecimalUtil::kLongDecimalMin,
+         0,
+         DecimalUtil::kLongDecimalMax,
+         HugeInt::build(0xffff, 0xffffffffffffffff),
+         std::nullopt},
+        DECIMAL(38, 5));
+    testCast(
+        longFlat,
+        makeNullableFlatVector<T>(
+            {-1e33, 0, 1e33, 1.2089258196146293E19, std::nullopt}));
+
+    testCast(
+        makeNullableFlatVector<int128_t>(
+            {HugeInt::build(0, 299250000)}, DECIMAL(20, 4)),
+        makeNullableFlatVector<T>({29925.0}));
+
+    for (int scale = 0; scale <= 18; ++scale) {
+      int64_t unscaledValue = 123456789123456789l;
+      const int precision = 18;
+      auto rowSize =
+          facebook::velox::DecimalUtil::maxStringViewSize(precision, scale);
+      char buffer[rowSize];
+      memset(buffer, 0, rowSize);
+      auto size = facebook::velox::DecimalUtil::castToString<int64_t>(
+          unscaledValue, scale, rowSize, buffer);
+
+      T expect = util::Converter<SimpleTypeTrait<T>::typeKind>::tryCast(
+                     StringView(buffer, size))
+                     .value();
+      testCast(
+          makeNullableFlatVector<int64_t>({val}, DECIMAL(precision, scale)),
+          makeNullableFlatVector<T>({expect}));
+    }
+  }
 };
 
 TEST_F(SparkCastExprTest, date) {
@@ -161,6 +226,11 @@ TEST_F(SparkCastExprTest, decimalToIntegral) {
   testDecimalToIntegralCasts<int32_t>();
   testDecimalToIntegralCasts<int16_t>();
   testDecimalToIntegralCasts<int8_t>();
+}
+
+TEST_F(SparkCastExprTest, decimalToFloat) {
+  testDecimalToFloatCasts<float>();
+  testDecimalToFloatCasts<double>();
 }
 
 TEST_F(SparkCastExprTest, invalidDate) {

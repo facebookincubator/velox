@@ -18,6 +18,7 @@
 #include <folly/init/Init.h>
 
 #include "velox/benchmarks/ExpressionBenchmarkBuilder.h"
+#include "velox/functions/sparksql/registration/Register.h"
 
 using namespace facebook;
 
@@ -28,6 +29,8 @@ int main(int argc, char** argv) {
   memory::MemoryManager::initialize({});
 
   ExpressionBenchmarkBuilder benchmarkBuilder;
+  functions::sparksql::registerFunctions("");
+
   const vector_size_t vectorSize = 1000;
   auto vectorMaker = benchmarkBuilder.vectorMaker();
   auto emptyInput = vectorMaker.flatVector<std::string>(

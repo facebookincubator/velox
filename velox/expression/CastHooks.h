@@ -57,6 +57,26 @@ class CastHooks {
   // Returns the options to cast from timestamp to string.
   virtual const TimestampToStringOptions& timestampToStringOptions() const = 0;
 
+  virtual Expected<float> castShortDecimalToReal(
+      int64_t unscaledValue,
+      uint8_t precision,
+      uint8_t scale) const = 0;
+
+  virtual Expected<float> castLongDecimalToReal(
+      int128_t unscaledValue,
+      uint8_t precision,
+      uint8_t scale) const = 0;
+
+  virtual Expected<double> castShortDecimalToDouble(
+      int64_t unscaledValue,
+      uint8_t precision,
+      uint8_t scale) const = 0;
+
+  virtual Expected<double> castLongDecimalToDouble(
+      int128_t unscaledValue,
+      uint8_t precision,
+      uint8_t scale) const = 0;
+
   // Returns whether to cast to int by truncate.
   virtual bool truncate() const = 0;
 

@@ -131,6 +131,54 @@ const TimestampToStringOptions& PrestoCastHooks::timestampToStringOptions()
   return options_;
 }
 
+namespace {
+template <typename FromNative, TypeKind To>
+Expected<typename TypeTraits<To>::NativeType>
+castDecimalToFloatingPointInternal(FromNative unscaledVaule, uint8_t scale) {
+  using ToNative = typename TypeTraits<To>::NativeType;
+  const auto scaleFactor = DecimalUtil::kPowersOfTen[scale];
+  const auto output =
+      util::Converter<To>::tryCast(unscaledVaule)
+          .thenOrThrow(folly::identity, [&](const Status& status) {
+            VELOX_USER_FAIL("{}", status.message());
+          });
+  ToNative result = output / scaleFactor;
+  return result;
+}
+} // namespace
+
+Expected<float> PrestoCastHooks::castShortDecimalToReal(
+    int64_t unscaledValue,
+    uint8_t /* unused */,
+    uint8_t scale) const {
+  return castDecimalToFloatingPointInternal<int64_t, TypeKind::REAL>(
+      unscaledValue, scale);
+}
+
+Expected<float> PrestoCastHooks::castLongDecimalToReal(
+    int128_t unscaledValue,
+    uint8_t /* unused */,
+    uint8_t scale) const {
+  return castDecimalToFloatingPointInternal<int128_t, TypeKind::REAL>(
+      unscaledValue, scale);
+}
+
+Expected<double> PrestoCastHooks::castShortDecimalToDouble(
+    int64_t unscaledValue,
+    uint8_t /* unused */,
+    uint8_t scale) const {
+  return castDecimalToFloatingPointInternal<int64_t, TypeKind::DOUBLE>(
+      unscaledValue, scale);
+}
+
+Expected<double> PrestoCastHooks::castLongDecimalToDouble(
+    int128_t unscaledValue,
+    uint8_t /* unused */,
+    uint8_t scale) const {
+  return castDecimalToFloatingPointInternal<int128_t, TypeKind::DOUBLE>(
+      unscaledValue, scale);
+}
+
 PolicyType PrestoCastHooks::getPolicy() const {
   return legacyCast_ ? PolicyType::LegacyCastPolicy
                      : PolicyType::PrestoCastPolicy;
