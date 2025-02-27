@@ -45,7 +45,42 @@ class IExpr {
     return alias_;
   }
 
+  std::optional<std::string>& alias() {
+    return alias_;
+  }
+
+  // Allow IExpr and descendents to be compared for equality.
+  virtual bool operator==(const IExpr& other) const {
+    return alias_ == other.alias_ && this->equals(other);
+  }
+
+  inline bool operator!=(const IExpr& other) const {
+    return !(*this == other);
+  }
+
+  friend std::ostream& operator<<(std::ostream& os, const IExpr& obj) {
+    return os << obj.toString();
+  }
+
  protected:
+  // The actual equality comparison method to be specialized by subclasses.
+  virtual bool equals(const IExpr& other) const = 0;
+
+  // Helper function to compare vectors of expression pointers (not the pointers
+  // themselves).
+  static bool equal(
+      const std::vector<ExprPtr>& input1,
+      const std::vector<ExprPtr>& input2) {
+    return std::equal(
+        input1.begin(),
+        input1.end(),
+        input2.begin(),
+        input2.end(),
+        [](const ExprPtr& item1, const ExprPtr& item2) -> bool {
+          return *item1 == *item2;
+        });
+  }
+
   static const std::vector<std::shared_ptr<const IExpr>>& EMPTY() {
     static const std::vector<std::shared_ptr<const IExpr>> empty{};
     return empty;
