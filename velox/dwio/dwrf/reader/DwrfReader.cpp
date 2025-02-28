@@ -797,8 +797,7 @@ DwrfReader::DwrfReader(
   // code. So we rename column names in the file schema to match table schema.
   // We test the options to have 'fileSchema' (actually table schema) as most
   // of the unit tests fail to provide it.
-  if ((!readerBase_->readerOptions().useColumnNamesForColumnMapping() ||
-       readerBase_->isOldSchema()) &&
+  if ((!readerBase_->readerOptions().useColumnNamesForColumnMapping()) &&
       (readerBase_->readerOptions().fileSchema() != nullptr)) {
     updateColumnNamesFromTableSchema();
   }
