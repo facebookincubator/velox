@@ -22,15 +22,28 @@ SparkSpecialFormSignatureGenerator::getSignaturesForCast() const {
   std::vector<exec::FunctionSignaturePtr> signatures =
       SpecialFormSignatureGenerator::getSignaturesForCast();
 
-  // Cast tinyint/smallint/integer/bigint as varbinary is supported in Spark.
+  // Cast integer types as varbinary is supported in Spark.
   for (auto fromType : {"tinyint", "smallint", "integer", "bigint"}) {
     signatures.push_back(makeCastSignature(fromType, "varbinary"));
   }
 
-  // Cast tinyint/smallint/integer/bigint as timestamp is supported in Spark.
-  for (auto fromType : {"tinyint", "smallint", "integer", "bigint"}) {
+  // Cast the below types as timestamp is supported in Spark.
+  for (auto fromType :
+       {"boolean",
+        "tinyint",
+        "smallint",
+        "integer",
+        "bigint",
+        "real",
+        "double"}) {
     signatures.push_back(makeCastSignature(fromType, "timestamp"));
   }
+
+  // Cast timestamp as integer types is supported in Spark.
+  for (auto toType : {"tinyint", "smallint", "integer", "bigint"}) {
+    signatures.push_back(makeCastSignature("timestamp", toType));
+  }
+
   return signatures;
 }
 
