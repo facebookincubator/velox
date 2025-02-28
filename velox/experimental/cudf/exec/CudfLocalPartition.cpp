@@ -35,6 +35,7 @@ CudfLocalPartition::CudfLocalPartition(
           operatorId,
           planNode->id(),
           "CudfLocalPartition"),
+      NvtxHelper(nvtx3::rgb{255, 215, 0}, std::stoi(planNode->id())),
       queues_{
           ctx->task->getLocalExchangeQueues(ctx->splitGroupId, planNode->id())},
       numPartitions_{queues_.size()} {
@@ -98,6 +99,7 @@ CudfLocalPartition::CudfLocalPartition(
 }
 
 void CudfLocalPartition::addInput(RowVectorPtr input) {
+  VELOX_NVTX_OPERATOR_FUNC_RANGE();
   prepareForInput(input);
   auto cudfVector = std::dynamic_pointer_cast<CudfVector>(input);
   VELOX_CHECK(cudfVector, "Input must be a CudfVector");
