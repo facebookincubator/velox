@@ -27,13 +27,13 @@ on:
         default: 'main'
       numThreads:
         description: 'Number of threads'
-        default: 8
+        default: 16
       maxHighMemJobs:
         description: 'Number of high memory jobs'
-        default: 2
+        default: 8
       maxLinkJobs:
         description: 'Maximum number of link jobs'
-        default: 2
+        default: 4
       extraCMakeFlags:
         description: 'Additional CMake flags'
         default: ''
@@ -47,7 +47,7 @@ permissions:
 
 jobs:
   compile:
-    runs-on: 8-core-ubuntu-22.04
+    runs-on: 16-core-ubuntu
     timeout-minutes: 120
     env:
       CCACHE_DIR: "${{ github.workspace }}/ccache/"
