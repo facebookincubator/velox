@@ -51,8 +51,7 @@ std::unique_ptr<cudf::table> concatenateTables(
 
 // Concatenate a vector of cuDF tables into a single table.
 // This function joins the streams owned by individual tables on the passed
-// stream. Synchronizing the passed stream is sufficient to ensure
-// materialization of all input tables
+// stream. Inputs are not safe to use after calling this function.
 std::unique_ptr<cudf::table> getConcatenatedTable(
     std::vector<CudfVectorPtr>& tables,
     rmm::cuda_stream_view stream);

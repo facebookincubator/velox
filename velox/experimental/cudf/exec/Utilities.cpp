@@ -139,8 +139,10 @@ std::unique_ptr<cudf::table> getConcatenatedTable(
     return tables[0]->release();
   }
 
-  return cudf::concatenate(
+  auto output = cudf::concatenate(
       tableViews, stream, cudf::get_current_device_resource_ref());
+  stream.synchronize();
+  return output;
 }
 
 } // namespace facebook::velox::cudf_velox

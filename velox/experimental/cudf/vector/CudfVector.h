@@ -55,6 +55,10 @@ class CudfVector : public RowVector {
     return std::move(table_);
   }
 
+  cudf::table_view getTableView() const {
+    return table_->view();
+  }
+
  private:
   std::unique_ptr<cudf::table> table_;
   rmm::cuda_stream_view stream_;
