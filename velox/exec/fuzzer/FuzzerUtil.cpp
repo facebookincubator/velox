@@ -145,7 +145,6 @@ std::shared_ptr<connector::ConnectorSplit> makeConnectorSplit(
       std::numeric_limits<uint64_t>::max(),
       partitionKeys,
       tableBucketNumber,
-      std::nullopt,
       /*customSplitInfo=*/std::unordered_map<std::string, std::string>{},
       /*extraFileInfo=*/nullptr,
       /*serdeParameters=*/std::unordered_map<std::string, std::string>{},
