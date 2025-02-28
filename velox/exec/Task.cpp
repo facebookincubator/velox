@@ -30,6 +30,7 @@
 #include "velox/exec/NestedLoopJoinBuild.h"
 #include "velox/exec/OperatorUtils.h"
 #include "velox/exec/OutputBufferManager.h"
+#include "velox/exec/PlanNodeStats.h"
 #include "velox/exec/Task.h"
 #include "velox/exec/TraceUtil.h"
 
@@ -2431,6 +2432,14 @@ ContinueFuture Task::taskDeletionFuture() {
       fmt::format("Task::taskDeletionFuture {}", taskId_));
   taskDeletionPromises_.emplace_back(std::move(promise));
   return std::move(future);
+}
+
+std::string Task::printPlanWithStats(bool includeCustomStats) const {
+  if (planFragment_.planNode) {
+    return exec::printPlanWithStats(
+        *planFragment_.planNode, taskStats_, includeCustomStats);
+  }
+  return "";
 }
 
 std::string Task::toString() const {
