@@ -268,7 +268,7 @@ Mathematical Functions
 
 .. spark:function:: sign(x) -> double
 
-    Returns the signum function of ``x``. Supported type for ``x`` is DOUBLE.
+    Returns the signum of ``x``. Supported type for ``x`` is DOUBLE.
     It returns:
     * 0.0 if the argument is 0.0,
     * 1.0 if the argument is greater than 0.0,
