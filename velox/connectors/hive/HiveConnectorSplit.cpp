@@ -200,7 +200,6 @@ std::shared_ptr<HiveConnectorSplit> HiveConnectorSplit::create(
       length,
       partitionKeys,
       tableBucketNumber,
-      bucketConversion,
       customSplitInfo,
       extraFileInfo,
       serdeParameters,
@@ -208,7 +207,8 @@ std::shared_ptr<HiveConnectorSplit> HiveConnectorSplit::create(
       cacheable,
       infoColumns,
       properties,
-      rowIdProperties);
+      rowIdProperties,
+      bucketConversion);
 }
 
 // static
