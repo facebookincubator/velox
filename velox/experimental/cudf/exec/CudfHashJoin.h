@@ -26,6 +26,7 @@
 #include <cudf/join.hpp>
 #include <cudf/table/table.hpp>
 
+#include "velox/experimental/cudf/exec/NvtxHelper.h"
 #include "velox/experimental/cudf/vector/CudfVector.h"
 
 #include <string>
@@ -45,7 +46,7 @@ class CudfHashJoinBridge : public exec::JoinBridge {
   std::optional<hash_type> hashObject_;
 };
 
-class CudfHashJoinBuild : public exec::Operator {
+class CudfHashJoinBuild : public exec::Operator, public NvtxHelper {
  public:
   CudfHashJoinBuild(
       int32_t operatorId,
@@ -70,7 +71,7 @@ class CudfHashJoinBuild : public exec::Operator {
   ContinueFuture future_{ContinueFuture::makeEmpty()};
 };
 
-class CudfHashJoinProbe : public exec::Operator {
+class CudfHashJoinProbe : public exec::Operator, public NvtxHelper {
  public:
   using hash_type = CudfHashJoinBridge::hash_type;
 
