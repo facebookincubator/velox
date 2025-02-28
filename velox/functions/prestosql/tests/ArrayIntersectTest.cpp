@@ -735,3 +735,50 @@ TEST_F(ArrayIntersectTest, nullInDictionary) {
       makeNullableArrayVector<int64_t>({{{1}}, std::nullopt, {{7}}});
   testExpr(expected, "array_intersect(c0)", {arrays});
 }
+
+TEST_F(ArrayIntersectTest, unknownArrays) {
+  auto array1 = makeNullableArrayVector<UnknownValue>(
+      {{std::nullopt, std::nullopt}, {std::nullopt}, {}});
+
+  auto array2 = makeNullableArrayVector<UnknownValue>(
+      {{std::nullopt, std::nullopt}, {std::nullopt}, {std::nullopt}});
+
+  auto expected = makeNullableArrayVector<UnknownValue>(
+      std::vector<std::vector<std::optional<UnknownValue>>>{
+          {std::nullopt}, {std::nullopt}, {}});
+
+  testExpr(expected, "array_intersect(C0, C1)", {array1, array2});
+  testExpr(expected, "array_intersect(C1, C0)", {array1, array2});
+}
+
+TEST_F(ArrayIntersectTest, unknownNestedArrays) {
+  using innerArrayType = std::vector<std::optional<UnknownValue>>;
+  using outerArrayType =
+      std::vector<std::optional<std::vector<std::optional<UnknownValue>>>>;
+
+  innerArrayType a1{std::nullopt, std::nullopt, std::nullopt};
+  innerArrayType a2{std::nullopt};
+
+  innerArrayType b1{std::nullopt, std::nullopt, {}};
+  innerArrayType b2{std::nullopt};
+  innerArrayType b3{
+      std::nullopt,
+      std::nullopt,
+      std::nullopt,
+      std::nullopt,
+  };
+
+  innerArrayType c1{std::nullopt, std::nullopt};
+  innerArrayType c2{std::nullopt, std::nullopt};
+
+  outerArrayType row1{{a1}, {a2}};
+  outerArrayType row2{{b1}, {b2}, {b3}};
+  outerArrayType row3{{c1}, {c2}};
+  outerArrayType row4{{a1}, {{}}};
+  auto arrayVector = makeNullableNestedArrayVector<UnknownValue>(
+      {{row1}, {row2}, {row3}, {row4}});
+  auto expected = makeNullableArrayVector<UnknownValue>(
+      std::vector<std::vector<std::optional<UnknownValue>>>{
+          {std::nullopt}, {std::nullopt}, {std::nullopt}, {}});
+  testExpr(expected, "array_intersect(C0)", {arrayVector});
+}
