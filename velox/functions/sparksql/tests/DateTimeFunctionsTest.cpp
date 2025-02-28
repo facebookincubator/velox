@@ -847,13 +847,19 @@ TEST_F(DateTimeFunctionsTest, getTimestamp) {
       getTimestamp("2023-07-13 21:34", "yyyy-MM-dd HH:II"),
       "Specifier I is not supported");
 
+
+  enableLegacyFormatter();
   // Returns null for invalid datetime format when legacy date formatter is
   // used.
-  enableLegacyFormatter();
+
   // Empty format.
   EXPECT_EQ(getTimestamp("0", ""), std::nullopt);
   // Unsupported specifier.
   EXPECT_EQ(getTimestamp("0", "l"), std::nullopt);
+
+  EXPECT_EQ(
+      getTimestamp("1970-01-01 00:00:00.2", "yyyy-MM-dd HH:mm:ss.SSS"),
+      Timestamp::fromMillis(2));
 }
 
 TEST_F(DateTimeFunctionsTest, hour) {
