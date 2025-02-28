@@ -22,60 +22,107 @@ namespace facebook::velox::dwrf {
 namespace {
 
 template <TypeKind T>
-class SchemaType {};
+class DwrfSchemaType {};
 
-#define CREATE_TYPE_TRAIT(Kind, SchemaKind)       \
+template <TypeKind T>
+class OrcSchemaType {};
+
+#define CREATE_TYPE_TRAIT_DWRF(Kind, SchemaKind)  \
   template <>                                     \
-  struct SchemaType<TypeKind::Kind> {             \
+  struct DwrfSchemaType<TypeKind::Kind> {         \
     static constexpr proto::Type_Kind kind =      \
         proto::Type_Kind::Type_Kind_##SchemaKind; \
   };
 
-CREATE_TYPE_TRAIT(BOOLEAN, BOOLEAN)
-CREATE_TYPE_TRAIT(TINYINT, BYTE)
-CREATE_TYPE_TRAIT(SMALLINT, SHORT)
-CREATE_TYPE_TRAIT(INTEGER, INT)
-CREATE_TYPE_TRAIT(BIGINT, LONG)
-CREATE_TYPE_TRAIT(REAL, FLOAT)
-CREATE_TYPE_TRAIT(DOUBLE, DOUBLE)
-CREATE_TYPE_TRAIT(VARCHAR, STRING)
-CREATE_TYPE_TRAIT(VARBINARY, BINARY)
-CREATE_TYPE_TRAIT(TIMESTAMP, TIMESTAMP)
-CREATE_TYPE_TRAIT(ARRAY, LIST)
-CREATE_TYPE_TRAIT(MAP, MAP)
-CREATE_TYPE_TRAIT(ROW, STRUCT)
+CREATE_TYPE_TRAIT_DWRF(BOOLEAN, BOOLEAN)
+CREATE_TYPE_TRAIT_DWRF(TINYINT, BYTE)
+CREATE_TYPE_TRAIT_DWRF(SMALLINT, SHORT)
+CREATE_TYPE_TRAIT_DWRF(INTEGER, INT)
+CREATE_TYPE_TRAIT_DWRF(BIGINT, LONG)
+CREATE_TYPE_TRAIT_DWRF(REAL, FLOAT)
+CREATE_TYPE_TRAIT_DWRF(DOUBLE, DOUBLE)
+CREATE_TYPE_TRAIT_DWRF(VARCHAR, STRING)
+CREATE_TYPE_TRAIT_DWRF(VARBINARY, BINARY)
+CREATE_TYPE_TRAIT_DWRF(TIMESTAMP, TIMESTAMP)
+CREATE_TYPE_TRAIT_DWRF(ARRAY, LIST)
+CREATE_TYPE_TRAIT_DWRF(MAP, MAP)
+CREATE_TYPE_TRAIT_DWRF(ROW, STRUCT)
 
-#undef CREATE_TYPE_TRAIT
+#undef CREATE_TYPE_TRAIT_DWRF
+
+#define CREATE_TYPE_TRAIT_ORC(Kind, SchemaKind)        \
+  template <>                                          \
+  struct OrcSchemaType<TypeKind::Kind> {               \
+    static constexpr proto::orc::Type_Kind kind =      \
+        proto::orc::Type_Kind::Type_Kind_##SchemaKind; \
+  };
+
+CREATE_TYPE_TRAIT_ORC(BOOLEAN, BOOLEAN)
+CREATE_TYPE_TRAIT_ORC(TINYINT, BYTE)
+CREATE_TYPE_TRAIT_ORC(SMALLINT, SHORT)
+CREATE_TYPE_TRAIT_ORC(INTEGER, INT)
+CREATE_TYPE_TRAIT_ORC(BIGINT, LONG)
+CREATE_TYPE_TRAIT_ORC(REAL, FLOAT)
+CREATE_TYPE_TRAIT_ORC(DOUBLE, DOUBLE)
+CREATE_TYPE_TRAIT_ORC(VARCHAR, STRING)
+CREATE_TYPE_TRAIT_ORC(VARBINARY, BINARY)
+CREATE_TYPE_TRAIT_ORC(TIMESTAMP, TIMESTAMP)
+CREATE_TYPE_TRAIT_ORC(ARRAY, LIST)
+CREATE_TYPE_TRAIT_ORC(MAP, MAP)
+CREATE_TYPE_TRAIT_ORC(ROW, STRUCT)
+
+#undef CREATE_TYPE_TRAIT_ORC
 
 } // namespace
 
 void ProtoUtils::writeType(
     const Type& type,
-    proto::Footer& footer,
-    proto::Type* parent) {
-  auto self = footer.add_types();
+    FooterWriteWrapper& footer,
+    TypeWriteWrapper* parent) {
+  auto self = footer.addTypes();
   if (parent) {
-    parent->add_subtypes(footer.types_size() - 1);
+    parent->addSubtypes(footer.typesSize() - 1);
   }
-  auto kind =
-      VELOX_STATIC_FIELD_DYNAMIC_DISPATCH(SchemaType, kind, type.kind());
-  self->set_kind(kind);
+
+  if (footer.format() == DwrfFormat::kDwrf) {
+    auto kind =
+        VELOX_STATIC_FIELD_DYNAMIC_DISPATCH(DwrfSchemaType, kind, type.kind());
+    auto typeKindWrapper = TypeKindWrapper(&kind);
+    self.setKind(typeKindWrapper);
+  } else {
+    proto::orc::Type_Kind kind;
+    if (type.isDate()) {
+      kind = proto::orc::Type_Kind::Type_Kind_DATE;
+    } else if (type.isDecimal()) {
+      kind = proto::orc::Type_Kind::Type_Kind_DECIMAL;
+      auto [precision, scale] = getDecimalPrecisionScale(type);
+      self.setPrecision(precision);
+      self.setScale(scale);
+    } else {
+      kind =
+          VELOX_STATIC_FIELD_DYNAMIC_DISPATCH(OrcSchemaType, kind, type.kind());
+    }
+
+    auto typeKindWrapper = TypeKindWrapper(&kind);
+    self.setKind(typeKindWrapper);
+  }
+
   switch (type.kind()) {
     case TypeKind::ROW: {
       auto& row = type.asRow();
       for (size_t i = 0; i < row.size(); ++i) {
-        self->add_fieldnames(row.nameOf(i));
-        writeType(*row.childAt(i), footer, self);
+        self.addFieldnames(row.nameOf(i));
+        writeType(*row.childAt(i), footer, &self);
       }
       break;
     }
     case TypeKind::ARRAY:
-      writeType(*type.asArray().elementType(), footer, self);
+      writeType(*type.asArray().elementType(), footer, &self);
       break;
     case TypeKind::MAP: {
       auto& map = type.asMap();
-      writeType(*map.keyType(), footer, self);
-      writeType(*map.valueType(), footer, self);
+      writeType(*map.keyType(), footer, &self);
+      writeType(*map.valueType(), footer, &self);
       break;
     }
     default:

@@ -22,6 +22,8 @@ velox_add_library(
   EncryptionSpecification.cpp
   FileMetadata.cpp
   IntEncoder.cpp
+  RLEv2Util.cpp
+  RLEEncoderv2.cpp
   RLEv1.cpp
   RLEv2.cpp
   Statistics.cpp

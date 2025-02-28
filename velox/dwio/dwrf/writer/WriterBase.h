@@ -24,8 +24,12 @@ namespace facebook::velox::dwrf {
 
 class WriterBase {
  public:
-  explicit WriterBase(std::unique_ptr<dwio::common::FileSink> sink)
-      : sink_{std::move(sink)} {
+  explicit WriterBase(
+      std::unique_ptr<dwio::common::FileSink> sink,
+      dwio::common::FileFormat fileFormat = dwio::common::FileFormat::DWRF)
+      : sink_{std::move(sink)},
+        fileFormat_{fileFormat},
+        arena_(std::make_unique<google::protobuf::Arena>()) {
     VELOX_CHECK_NOT_NULL(sink_);
   }
 
@@ -69,7 +73,9 @@ class WriterBase {
   }
 
   // protected:
-  void writeFooter(const Type& type);
+  uint64_t writeMetadata();
+
+  void writeFooter(const Type& type, uint64_t metadataLength = 0);
 
   void initContext(
       const std::shared_ptr<const Config>& config,
@@ -80,6 +86,7 @@ class WriterBase {
     context_ = std::make_unique<WriterContext>(
         config,
         std::move(pool),
+        fileFormat_,
         sink_->metricsLog(),
         sessionTimezone,
         adjustTimestampToTimezone,
@@ -87,7 +94,19 @@ class WriterBase {
     writerSink_ = std::make_unique<WriterSink>(
         *sink_,
         context_->getMemoryPool(MemoryUsageCategory::OUTPUT_STREAM),
-        context_->getConfigs());
+        context_->getConfigs(),
+        fileFormat_);
+
+    if (fileFormat_ == dwio::common::FileFormat::DWRF) {
+      auto dwrfFooter_ =
+          google::protobuf::Arena::CreateMessage<proto::Footer>(arena_.get());
+      footer_ = std::make_unique<FooterWriteWrapper>(dwrfFooter_);
+    } else {
+      auto orcFooter_ =
+          google::protobuf::Arena::CreateMessage<proto::orc::Footer>(
+              arena_.get());
+      footer_ = std::make_unique<FooterWriteWrapper>(orcFooter_);
+    }
   }
 
   void initBuffers();
@@ -107,7 +126,7 @@ class WriterBase {
     auto holder = context_->newDataBufferHolder();
     auto stream = context_->newStream(kind, *holder);
 
-    t.SerializeToZeroCopyStream(stream.get());
+    t->SerializeToZeroCopyStream(stream.get());
     stream->flush();
 
     writerSink_->addBuffers(*holder);
@@ -131,24 +150,28 @@ class WriterBase {
     }
   }
 
-  proto::StripeInformation& addStripeInfo() {
-    auto stripe = footer_.add_stripes();
-    stripe->set_numberofrows(context_->stripeRowCount());
+  StripeInformationWriteWrapper addStripeInfo() {
+    auto stripe = footer_->addStripes();
+    stripe.setNumberOfRows(context_->stripeRowCount());
     if (context_->stripeRawSize() > 0 || context_->stripeRowCount() == 0) {
       // ColumnTransformWriter, when rewriting presto written
       // file does not have rawSize.
-      stripe->set_rawdatasize(context_->stripeRawSize());
+      stripe.setRawDataSize(context_->stripeRawSize());
     }
 
     auto* checksum = writerSink_->getChecksum();
     if (checksum != nullptr) {
-      stripe->set_checksum(checksum->getDigest());
+      stripe.setChecksum(checksum->getDigest());
     }
-    return *stripe;
+    return stripe;
   }
 
-  proto::Footer& getFooter() {
+  std::unique_ptr<FooterWriteWrapper>& getFooter() {
     return footer_;
+  }
+
+  proto::orc::Metadata& getMetadata() {
+    return metadata_;
   }
 
   void validateStreamSize(
@@ -170,8 +193,11 @@ class WriterBase {
   std::unique_ptr<WriterContext> context_;
   std::unique_ptr<dwio::common::FileSink> sink_;
   std::unique_ptr<WriterSink> writerSink_;
-  proto::Footer footer_;
+  std::unique_ptr<FooterWriteWrapper> footer_;
+  proto::orc::Metadata metadata_;
   std::unordered_map<std::string, std::string> userMetadata_;
+  dwio::common::FileFormat fileFormat_;
+  std::unique_ptr<google::protobuf::Arena> arena_;
 
   friend class WriterTest;
   VELOX_FRIEND_TEST(WriterBaseTest, FlushWriterSinkUponClose);

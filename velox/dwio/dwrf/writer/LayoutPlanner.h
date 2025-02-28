@@ -87,14 +87,15 @@ class EncodingContainer {
 class EncodingManager : public EncodingContainer {
  public:
   explicit EncodingManager(
-      const encryption::EncryptionHandler& encryptionHandler);
+      const encryption::EncryptionHandler& encryptionHandler,
+      dwio::common::FileFormat fileFormat);
   virtual ~EncodingManager() override = default;
 
-  proto::ColumnEncoding& addEncodingToFooter(uint32_t nodeId);
-  proto::Stream* addStreamToFooter(uint32_t nodeId, uint32_t& currentIndex);
+  ColumnEncodingWriteWrapper addEncodingToFooter(uint32_t nodeId);
+  StreamWriteWrapper addStreamToFooter(uint32_t nodeId, uint32_t& currentIndex);
   std::string* addEncryptionGroupToFooter();
   proto::StripeEncryptionGroup getEncryptionGroup(uint32_t i);
-  const proto::StripeFooter& getFooter() const;
+  const StripeFooterWriteWrapper& getFooter() const;
 
   EncodingIter begin() const override;
   EncodingIter end() const override;
@@ -103,7 +104,8 @@ class EncodingManager : public EncodingContainer {
   void initEncryptionGroups();
 
   const encryption::EncryptionHandler& encryptionHandler_;
-  proto::StripeFooter footer_;
+  std::unique_ptr<StripeFooterWriteWrapper> footer_;
+  std::unique_ptr<google::protobuf::Arena> arena_;
   std::vector<proto::StripeEncryptionGroup> encryptionGroups_;
 };
 
@@ -131,6 +133,7 @@ class LayoutPlanner {
   virtual ~LayoutPlanner() = default;
 
   virtual LayoutResult plan(
+      dwio::common::FileFormat format,
       const EncodingContainer& encoding,
       StreamList streamList) const;
 

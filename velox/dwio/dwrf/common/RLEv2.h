@@ -21,10 +21,181 @@
 #include "velox/dwio/common/DataBuffer.h"
 #include "velox/dwio/common/IntDecoder.h"
 #include "velox/dwio/common/exception/Exception.h"
+#include "velox/dwio/dwrf/common/IntEncoder.h"
 
 #include <vector>
 
 namespace facebook::velox::dwrf {
+struct FixedBitSizes {
+  enum FBS {
+    ONE = 0,
+    TWO,
+    THREE,
+    FOUR,
+    FIVE,
+    SIX,
+    SEVEN,
+    EIGHT,
+    NINE,
+    TEN,
+    ELEVEN,
+    TWELVE,
+    THIRTEEN,
+    FOURTEEN,
+    FIFTEEN,
+    SIXTEEN,
+    SEVENTEEN,
+    EIGHTEEN,
+    NINETEEN,
+    TWENTY,
+    TWENTYONE,
+    TWENTYTWO,
+    TWENTYTHREE,
+    TWENTYFOUR,
+    TWENTYSIX,
+    TWENTYEIGHT,
+    THIRTY,
+    THIRTYTWO,
+    FORTY,
+    FORTYEIGHT,
+    FIFTYSIX,
+    SIXTYFOUR,
+    SIZE
+  };
+};
+
+enum EncodingType { SHORT_REPEAT = 0, DIRECT = 1, PATCHED_BASE = 2, DELTA = 3 };
+
+constexpr int32_t MAX_LITERAL_SIZE = 512;
+constexpr int32_t MIN_REPEAT = 3;
+constexpr int32_t HIST_LEN = 32;
+constexpr int32_t MAX_SHORT_REPEAT_LENGTH = 10;
+
+struct EncodingOption {
+  EncodingType encoding;
+  int64_t fixedDelta;
+  int64_t gapVsPatchListCount;
+  int64_t zigzagLiteralsCount;
+  int64_t baseRedLiteralsCount;
+  int64_t adjDeltasCount;
+  uint32_t zzBits90p;
+  uint32_t zzBits100p;
+  uint32_t brBits95p;
+  uint32_t brBits100p;
+  uint32_t bitsDeltaMax;
+  uint32_t patchWidth;
+  uint32_t patchGapWidth;
+  uint32_t patchLength;
+  int64_t min;
+  bool isFixedDelta;
+};
+
+template <bool isSigned>
+class RleEncoderV2 : public IntEncoder<isSigned> {
+ public:
+  explicit RleEncoderV2(
+      std::unique_ptr<BufferedOutputStream> outStream,
+      bool alignedBitpacking = true);
+
+  ~RleEncoderV2() override = default;
+
+  // For 64 bit Integers, only signed type is supported. writeVuLong only
+  // supports int64_t and it needs to support uint64_t before this method
+  // can support uint64_t overload.
+  uint64_t add(
+      const int64_t* data,
+      const common::Ranges& ranges,
+      const uint64_t* nulls) override {
+    return addImpl(data, ranges, nulls);
+  }
+
+  uint64_t add(
+      const int32_t* data,
+      const common::Ranges& ranges,
+      const uint64_t* nulls) override {
+    return addImpl(data, ranges, nulls);
+  }
+
+  uint64_t add(
+      const uint32_t* data,
+      const common::Ranges& ranges,
+      const uint64_t* nulls) override {
+    return addImpl(data, ranges, nulls);
+  }
+
+  uint64_t add(
+      const int16_t* data,
+      const common::Ranges& ranges,
+      const uint64_t* nulls) override {
+    return addImpl(data, ranges, nulls);
+  }
+
+  uint64_t add(
+      const uint16_t* data,
+      const common::Ranges& ranges,
+      const uint64_t* nulls) override {
+    return addImpl(data, ranges, nulls);
+  }
+
+  template <typename T>
+  uint64_t
+  addImpl(const T* data, const common::Ranges& ranges, const uint64_t* nulls);
+
+  void writeValue(int64_t value) override;
+
+  /**
+   * Flushing underlying BufferedOutputStream
+   */
+  uint64_t flush() override;
+
+  void recordPosition(PositionRecorder& recorder, int32_t strideIndex = -1)
+      const override {
+    IntEncoder<isSigned>::recordPosition(recorder, strideIndex);
+    recorder.add(static_cast<uint64_t>(numLiterals_), strideIndex);
+  }
+
+ private:
+  const bool alignedBitPacking_;
+  uint32_t fixedRunLength_{};
+  uint32_t variableRunLength_{};
+  int64_t prevDelta_;
+  int32_t histgram_[HIST_LEN]{};
+
+  // The four list below should actually belong to EncodingOption since it only
+  // holds temporal values in write(int64_t val), it is move here for
+  // performance consideration.
+  std::array<int64_t, MAX_LITERAL_SIZE> gapVsPatchList_;
+  std::array<int64_t, MAX_LITERAL_SIZE> zigzagLiterals_;
+  std::array<int64_t, MAX_LITERAL_SIZE> baseRedLiterals_;
+  std::array<int64_t, MAX_LITERAL_SIZE> adjDeltas_;
+
+  std::array<int64_t, MAX_LITERAL_SIZE> literals_;
+  int32_t numLiterals_;
+
+  uint32_t getOpCode(EncodingType encoding);
+  int64_t* prepareForDirectOrPatchedBase(EncodingOption& option);
+  void determineEncoding(EncodingOption& option);
+  void computeZigZagLiterals(EncodingOption& option);
+  void preparePatchedBlob(EncodingOption& option);
+
+  void writeInts(
+      const int64_t* input,
+      uint32_t offset,
+      size_t len,
+      uint32_t bitSize);
+  void initializeLiterals(int64_t val);
+  void writeValues(EncodingOption& option);
+  void writeShortRepeatValues(EncodingOption& option);
+  void writeDirectValues(EncodingOption& option);
+  void writePatchedBasedValues(EncodingOption& option);
+  void writeDeltaValues(EncodingOption& option);
+  uint32_t percentileBits(
+      int64_t* data,
+      size_t offset,
+      size_t length,
+      double p,
+      bool reuseHist = false);
+};
 
 template <bool isSigned>
 class RleDecoderV2 : public dwio::common::IntDecoder<isSigned> {

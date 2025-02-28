@@ -56,23 +56,27 @@ class Writer : public dwio::common::Writer {
   Writer(
       const WriterOptions& options,
       std::unique_ptr<dwio::common::FileSink> sink,
-      memory::MemoryPool& parentPool)
+      memory::MemoryPool& parentPool,
+      dwio::common::FileFormat fileFormat = dwio::common::FileFormat::DWRF)
       : Writer{
             std::move(sink),
             options,
             parentPool.addAggregateChild(fmt::format(
                 "{}.dwrf_{}",
                 parentPool.name(),
-                folly::to<std::string>(folly::Random::rand64())))} {}
+                folly::to<std::string>(folly::Random::rand64()))),
+            fileFormat} {}
 
   Writer(
       std::unique_ptr<dwio::common::FileSink> sink,
       const WriterOptions& options,
-      std::shared_ptr<memory::MemoryPool> pool);
+      std::shared_ptr<memory::MemoryPool> pool,
+      dwio::common::FileFormat fileFormat = dwio::common::FileFormat::DWRF);
 
   Writer(
       std::unique_ptr<dwio::common::FileSink> sink,
-      const WriterOptions& options);
+      const WriterOptions& options,
+      dwio::common::FileFormat fileFormat = dwio::common::FileFormat::DWRF);
 
   ~Writer() override = default;
 
@@ -134,7 +138,7 @@ class Writer : public dwio::common::Writer {
     return writerBase_->getContext();
   }
 
-  const proto::Footer& getFooter() const {
+  const std::unique_ptr<FooterWriteWrapper>& getFooter() const {
     return writerBase_->getFooter();
   }
 

@@ -68,8 +68,9 @@ class ByteRleColumnWriter : public BaseColumnWriter {
   uint64_t write(const VectorPtr& slice, const common::Ranges& ranges) override;
 
   void flush(
-      std::function<proto::ColumnEncoding&(uint32_t)> encodingFactory,
-      std::function<void(proto::ColumnEncoding&)> encodingOverride) override {
+      std::function<ColumnEncodingWriteWrapper(uint32_t)> encodingFactory,
+      std::function<void(ColumnEncodingWriteWrapper&)> encodingOverride)
+      override {
     BaseColumnWriter::flush(encodingFactory, encodingOverride);
     data_->flush();
   }
@@ -248,8 +249,9 @@ class IntegerColumnWriter : public BaseColumnWriter {
   }
 
   void flush(
-      std::function<proto::ColumnEncoding&(uint32_t)> encodingFactory,
-      std::function<void(proto::ColumnEncoding&)> encodingOverride) override {
+      std::function<ColumnEncodingWriteWrapper(uint32_t)> encodingFactory,
+      std::function<void(ColumnEncodingWriteWrapper&)> encodingOverride)
+      override {
     tryAbandonDictionaries(false);
     initStreamWriters(useDictionaryEncoding_);
 
@@ -287,12 +289,14 @@ class IntegerColumnWriter : public BaseColumnWriter {
 
   // FIXME: call base class set encoding first to deal with sequence and
   // whatnot.
-  void setEncoding(proto::ColumnEncoding& encoding) const override {
+  void setEncoding(ColumnEncodingWriteWrapper& encoding) const override {
     BaseColumnWriter::setEncoding(encoding);
     if (useDictionaryEncoding_) {
-      encoding.set_kind(
-          proto::ColumnEncoding_Kind::ColumnEncoding_Kind_DICTIONARY);
-      encoding.set_dictionarysize(finalDictionarySize_);
+      auto columnEncodingKind =
+          proto::ColumnEncoding_Kind::ColumnEncoding_Kind_DICTIONARY;
+      encoding.setKind(ColumnEncodingKindWrapper(&columnEncodingKind));
+
+      encoding.setDictionarySize(finalDictionarySize_);
     }
   }
 
@@ -655,21 +659,100 @@ void IntegerColumnWriter<T>::convertToDirectEncoding() {
           std::placeholders::_1));
 }
 
+template <typename T>
+class OrcIntegerColumnWriter : public BaseColumnWriter {
+ public:
+  OrcIntegerColumnWriter(
+      WriterContext& context,
+      const TypeWithId& type,
+      const uint32_t sequence,
+      std::function<void(IndexBuilder&)> onRecordPosition)
+      : BaseColumnWriter{context, type, sequence, onRecordPosition, RleVersion_2},
+        data_{createRleEncoder</* isSigned = */ true>(
+            RleVersion_2,
+            newStream(StreamKind::StreamKind_DATA),
+            context.getConfig(Config::USE_VINTS),
+            LONG_BYTE_SIZE)} {
+    reset();
+  }
+
+  uint64_t write(const VectorPtr& slice, const common::Ranges& ranges) override;
+
+  void flush(
+      std::function<ColumnEncodingWriteWrapper(uint32_t)> encodingFactory,
+      std::function<void(ColumnEncodingWriteWrapper&)> encodingOverride)
+      override {
+    BaseColumnWriter::flush(encodingFactory, encodingOverride);
+    data_->flush();
+  }
+
+  void recordPosition() override {
+    BaseColumnWriter::recordPosition();
+    data_->recordPosition(*indexBuilder_);
+  }
+
+ private:
+  std::unique_ptr<IntEncoder<true>> data_;
+};
+
+template <typename T>
+uint64_t OrcIntegerColumnWriter<T>::write(
+    const VectorPtr& slice,
+    const common::Ranges& ranges) {
+  auto localDecoded = decode(slice, ranges);
+  auto& decodedVector = localDecoded.get();
+  writeNulls(decodedVector, ranges);
+
+  size_t count = 0;
+  if (decodedVector.mayHaveNulls()) {
+    for (auto& pos : ranges) {
+      if (!decodedVector.isNullAt(pos)) {
+        auto val = decodedVector.template valueAt<T>(pos);
+        data_->writeValue(val);
+        ++count;
+      }
+    }
+  } else {
+    for (auto& pos : ranges) {
+      auto val = decodedVector.template valueAt<T>(pos);
+      data_->writeValue(val);
+      ++count;
+    }
+  }
+
+  if (type_.type()->isDate()) {
+    StatisticsBuilderUtils::addValues(
+        dynamic_cast<DateStatisticsBuilder&>(*indexStatsBuilder_),
+        decodedVector,
+        ranges);
+  } else {
+    StatisticsBuilderUtils::addValues<T>(
+        dynamic_cast<IntegerStatisticsBuilder&>(*indexStatsBuilder_),
+        decodedVector,
+        ranges);
+  }
+
+  auto rawSize = count * sizeof(T) + (ranges.size() - count) * NULL_SIZE;
+  indexStatsBuilder_->increaseRawSize(rawSize);
+  return rawSize;
+}
+
 class TimestampColumnWriter : public BaseColumnWriter {
  public:
   TimestampColumnWriter(
       WriterContext& context,
       const TypeWithId& type,
       const uint32_t sequence,
-      std::function<void(IndexBuilder&)> onRecordPosition)
-      : BaseColumnWriter{context, type, sequence, onRecordPosition},
+      std::function<void(IndexBuilder&)> onRecordPosition,
+      RleVersion rleVersion)
+      : BaseColumnWriter{context, type, sequence, onRecordPosition, rleVersion},
         seconds_{createRleEncoder</* isSigned = */ true>(
-            RleVersion_1,
+            rleVersion,
             newStream(StreamKind::StreamKind_DATA),
             context.getConfig(Config::USE_VINTS),
             LONG_BYTE_SIZE)},
         nanos_{createRleEncoder</* isSigned = */ false>(
-            RleVersion_1,
+            rleVersion,
             newStream(StreamKind::StreamKind_NANO_DATA),
             context.getConfig(Config::USE_VINTS),
             LONG_BYTE_SIZE)} {
@@ -679,8 +762,9 @@ class TimestampColumnWriter : public BaseColumnWriter {
   uint64_t write(const VectorPtr& slice, const common::Ranges& ranges) override;
 
   void flush(
-      std::function<proto::ColumnEncoding&(uint32_t)> encodingFactory,
-      std::function<void(proto::ColumnEncoding&)> encodingOverride) override {
+      std::function<ColumnEncodingWriteWrapper(uint32_t)> encodingFactory,
+      std::function<void(ColumnEncodingWriteWrapper&)> encodingOverride)
+      override {
     BaseColumnWriter::flush(encodingFactory, encodingOverride);
     seconds_->flush();
     nanos_->flush();
@@ -729,6 +813,9 @@ class DecimalColumnWriter : public BaseColumnWriter {
         "Unexpected vector type: {}.",
         slice->type()->toString());
 
+    auto& statsBuilder =
+        dynamic_cast<DecimalStatisticsBuilder&>(*indexStatsBuilder_);
+
     // Always decode to reduce the number of branches. Fast paths for flat and
     // constant encodings can be added for further optimization.
     auto localDecoded = decode(slice, ranges);
@@ -742,6 +829,7 @@ class DecimalColumnWriter : public BaseColumnWriter {
           const auto val = decodedVector.valueAt<int64_t>(pos);
           unscaledValues_->writeValue(val);
           scales_->writeValue(scale_);
+          statsBuilder.addValues(val);
         }
         count += ranges.size();
       } else {
@@ -750,6 +838,7 @@ class DecimalColumnWriter : public BaseColumnWriter {
             const auto val = decodedVector.valueAt<int64_t>(pos);
             unscaledValues_->writeValue(val);
             scales_->writeValue(scale_);
+            statsBuilder.addValues(val);
             ++count;
           }
         }
@@ -760,6 +849,7 @@ class DecimalColumnWriter : public BaseColumnWriter {
           const auto val = decodedVector.valueAt<int128_t>(pos);
           unscaledValues_->writeHugeInt(val);
           scales_->writeValue(scale_);
+          statsBuilder.addValues(val);
         }
         count += ranges.size();
       } else {
@@ -768,28 +858,28 @@ class DecimalColumnWriter : public BaseColumnWriter {
             const auto val = decodedVector.valueAt<int128_t>(pos);
             unscaledValues_->writeHugeInt(val);
             scales_->writeValue(scale_);
+            statsBuilder.addValues(val);
             ++count;
           }
         }
       }
     }
 
-    indexStatsBuilder_->increaseValueCount(count);
-    if (count != ranges.size()) {
-      indexStatsBuilder_->setHasNull();
-    }
-
     const uint32_t decimalSize =
         isShortDecimal_ ? 2 * LONG_BYTE_SIZE : 3 * LONG_BYTE_SIZE;
     const auto rawSize =
         count * decimalSize + (ranges.size() - count) * NULL_SIZE;
-    indexStatsBuilder_->increaseRawSize(rawSize);
+    if (decodedVector.mayHaveNulls()) {
+      statsBuilder.setHasNull();
+    }
+    statsBuilder.increaseRawSize(rawSize);
     return rawSize;
   }
 
   void flush(
-      std::function<proto::ColumnEncoding&(uint32_t)> encodingFactory,
-      std::function<void(proto::ColumnEncoding&)> encodingOverride) override {
+      std::function<ColumnEncodingWriteWrapper(uint32_t)> encodingFactory,
+      std::function<void(ColumnEncodingWriteWrapper&)> encodingOverride)
+      override {
     BaseColumnWriter::flush(encodingFactory, encodingOverride);
     unscaledValues_->flush();
     scales_->flush();
@@ -878,11 +968,17 @@ uint64_t TimestampColumnWriter::write(
     }
   }
 
-  indexStatsBuilder_->increaseValueCount(count);
-  if (count != ranges.size()) {
-    indexStatsBuilder_->setHasNull();
+  if (context_.fileFormat() == dwio::common::FileFormat::ORC) {
+    StatisticsBuilderUtils::addValues(
+        dynamic_cast<TimestampStatisticsBuilder&>(*indexStatsBuilder_),
+        decodedVector,
+        ranges);
+  } else {
+    indexStatsBuilder_->increaseValueCount(count);
+    if (count != ranges.size()) {
+      indexStatsBuilder_->setHasNull();
+    }
   }
-
   // Seconds is Long, Nanos is int.
   constexpr uint32_t TimeStampSize =
       LONG_BYTE_SIZE + dwio::common::INT_BYTE_SIZE;
@@ -901,8 +997,9 @@ class StringColumnWriter : public BaseColumnWriter {
       WriterContext& context,
       const TypeWithId& type,
       const uint32_t sequence,
-      std::function<void(IndexBuilder&)> onRecordPosition)
-      : BaseColumnWriter{context, type, sequence, onRecordPosition},
+      std::function<void(IndexBuilder&)> onRecordPosition,
+      RleVersion rleVersion)
+      : BaseColumnWriter{context, type, sequence, onRecordPosition, rleVersion},
         data_{nullptr},
         dataDirect_{nullptr},
         dataDirectLength_{nullptr},
@@ -954,8 +1051,9 @@ class StringColumnWriter : public BaseColumnWriter {
   }
 
   void flush(
-      std::function<proto::ColumnEncoding&(uint32_t)> encodingFactory,
-      std::function<void(proto::ColumnEncoding&)> encodingOverride) override {
+      std::function<ColumnEncodingWriteWrapper(uint32_t)> encodingFactory,
+      std::function<void(ColumnEncodingWriteWrapper&)> encodingOverride)
+      override {
     tryAbandonDictionaries(false);
     initStreamWriters(useDictionaryEncoding_);
 
@@ -977,14 +1075,16 @@ class StringColumnWriter : public BaseColumnWriter {
       // TODO: T46365785 It would be nice if the suppression
       // could be pushed down to the index builder as well so we don't have to
       // micromanage when and whether to write specific streams.
-      if (UNLIKELY(finalDictionarySize_ == dictEncoderSize)) {
-        suppressStream(StreamKind::StreamKind_STRIDE_DICTIONARY);
-        suppressStream(StreamKind::StreamKind_STRIDE_DICTIONARY_LENGTH);
-        suppressStream(StreamKind::StreamKind_IN_DICTIONARY);
-      } else {
-        strideDictionaryData_->flush();
-        strideDictionaryDataLength_->flush();
-        inDictionary_->flush();
+      if (context_.fileFormat() == dwio::common::FileFormat::DWRF) {
+        if (UNLIKELY(finalDictionarySize_ == dictEncoderSize)) {
+          suppressStream(StreamKind::StreamKind_STRIDE_DICTIONARY);
+          suppressStream(StreamKind::StreamKind_STRIDE_DICTIONARY_LENGTH);
+          suppressStream(StreamKind::StreamKind_IN_DICTIONARY);
+        } else {
+          strideDictionaryData_->flush();
+          strideDictionaryDataLength_->flush();
+          inDictionary_->flush();
+        }
       }
       dictionaryData_->flush();
       dictionaryDataLength_->flush();
@@ -1000,18 +1100,29 @@ class StringColumnWriter : public BaseColumnWriter {
 
   // FIXME: call base class set encoding first to deal with sequence and
   // whatnot.
-  void setEncoding(proto::ColumnEncoding& encoding) const override {
+  void setEncoding(ColumnEncodingWriteWrapper& encoding) const override {
     BaseColumnWriter::setEncoding(encoding);
     if (useDictionaryEncoding_) {
-      encoding.set_kind(
-          proto::ColumnEncoding_Kind::ColumnEncoding_Kind_DICTIONARY);
-      encoding.set_dictionarysize(finalDictionarySize_);
+      if (encoding.format() == DwrfFormat::kDwrf) {
+        auto columnEncodingKind =
+            proto::ColumnEncoding_Kind::ColumnEncoding_Kind_DICTIONARY;
+        encoding.setKind(ColumnEncodingKindWrapper(&columnEncodingKind));
+      } else {
+        auto columnEncodingKind = rleVersion_ == RleVersion_1
+            ? proto::orc::ColumnEncoding_Kind::ColumnEncoding_Kind_DICTIONARY
+            : proto::orc::ColumnEncoding_Kind::
+                  ColumnEncoding_Kind_DICTIONARY_V2;
+        encoding.setKind(ColumnEncodingKindWrapper(&columnEncodingKind));
+      }
+
+      encoding.setDictionarySize(finalDictionarySize_);
     }
   }
 
   void createIndexEntry() override {
     hasNull_ = hasNull_ || indexStatsBuilder_->hasNull().value();
     fileStatsBuilder_->merge(*indexStatsBuilder_, /*ignoreSize=*/true);
+    stripeStatsBuilder_->merge(*indexStatsBuilder_, /*ignoreSize=*/true);
     // Add entry with stats for either case.
     indexBuilder_->addEntry(*indexStatsBuilder_);
     indexStatsBuilder_->reset();
@@ -1083,45 +1194,56 @@ class StringColumnWriter : public BaseColumnWriter {
 
   void ensureValidStreamWriters(bool dictEncoding) {
     // Ensure we have exactly one valid data stream.
-    VELOX_CHECK(
-        (dictEncoding && data_ && dictionaryData_ && dictionaryDataLength_ &&
-         strideDictionaryData_ && strideDictionaryDataLength_ &&
-         inDictionary_ && !dataDirect_ && !dataDirectLength_) ||
-        (!dictEncoding && !data_ && !dictionaryData_ &&
-         !dictionaryDataLength_ && !strideDictionaryData_ &&
-         !strideDictionaryDataLength_ && !inDictionary_ && dataDirect_ &&
-         dataDirectLength_));
+    if (context_.fileFormat() == dwio::common::FileFormat::DWRF) {
+      VELOX_CHECK(
+          (dictEncoding && data_ && dictionaryData_ && dictionaryDataLength_ &&
+           strideDictionaryData_ && strideDictionaryDataLength_ &&
+           inDictionary_ && !dataDirect_ && !dataDirectLength_) ||
+          (!dictEncoding && !data_ && !dictionaryData_ &&
+           !dictionaryDataLength_ && !strideDictionaryData_ &&
+           !strideDictionaryDataLength_ && !inDictionary_ && dataDirect_ &&
+           dataDirectLength_));
+    } else {
+      VELOX_CHECK(
+          (dictEncoding && data_ && dictionaryData_ && dictionaryDataLength_ &&
+           !dataDirect_ && !dataDirectLength_) ||
+          (!dictEncoding && !data_ && !dictionaryData_ &&
+           !dictionaryDataLength_ && dataDirect_ && dataDirectLength_));
+    }
   }
 
   void initStreamWriters(bool dictEncoding) {
     if (!data_ && !dataDirect_) {
       if (dictEncoding) {
         data_ = createRleEncoder</* isSigned = */ false>(
-            RleVersion_1,
+            rleVersion_,
             newStream(StreamKind::StreamKind_DATA),
             getConfig(Config::USE_VINTS),
             sizeof(uint32_t));
         dictionaryData_ = std::make_unique<AppendOnlyBufferedStream>(
             newStream(StreamKind::StreamKind_DICTIONARY_DATA));
         dictionaryDataLength_ = createRleEncoder</* isSigned = */ false>(
-            RleVersion_1,
+            rleVersion_,
             newStream(StreamKind::StreamKind_LENGTH),
             getConfig(Config::USE_VINTS),
             sizeof(uint32_t));
-        inDictionary_ = createBooleanRleEncoder(
-            newStream(StreamKind::StreamKind_IN_DICTIONARY));
-        strideDictionaryData_ = std::make_unique<AppendOnlyBufferedStream>(
-            newStream(StreamKind::StreamKind_STRIDE_DICTIONARY));
-        strideDictionaryDataLength_ = createRleEncoder</* isSigned = */ false>(
-            RleVersion_1,
-            newStream(StreamKind::StreamKind_STRIDE_DICTIONARY_LENGTH),
-            getConfig(Config::USE_VINTS),
-            sizeof(uint32_t));
+        if (context_.fileFormat() == dwio::common::FileFormat::DWRF) {
+          inDictionary_ = createBooleanRleEncoder(
+              newStream(StreamKind::StreamKind_IN_DICTIONARY));
+          strideDictionaryData_ = std::make_unique<AppendOnlyBufferedStream>(
+              newStream(StreamKind::StreamKind_STRIDE_DICTIONARY));
+          strideDictionaryDataLength_ =
+              createRleEncoder</* isSigned = */ false>(
+                  RleVersion_1,
+                  newStream(StreamKind::StreamKind_STRIDE_DICTIONARY_LENGTH),
+                  getConfig(Config::USE_VINTS),
+                  sizeof(uint32_t));
+        }
       } else {
         dataDirect_ = std::make_unique<AppendOnlyBufferedStream>(
             newStream(StreamKind::StreamKind_DATA));
         dataDirectLength_ = createRleEncoder</* isSigned = */ false>(
-            RleVersion_1,
+            rleVersion_,
             newStream(StreamKind::StreamKind_LENGTH),
             getConfig(Config::USE_VINTS),
             sizeof(uint32_t));
@@ -1329,7 +1451,7 @@ void StringColumnWriter::populateDictionaryEncodingStreams() {
       pool,
       sort_,
       DictionaryEncodingUtils::frequencyOrdering,
-      true,
+      context_.fileFormat() == dwio::common::FileFormat::DWRF,
       lookupTable,
       inDict,
       strideDictCounts,
@@ -1481,8 +1603,9 @@ class FloatColumnWriter : public BaseColumnWriter {
   uint64_t write(const VectorPtr& slice, const common::Ranges& ranges) override;
 
   void flush(
-      std::function<proto::ColumnEncoding&(uint32_t)> encodingFactory,
-      std::function<void(proto::ColumnEncoding&)> encodingOverride) override {
+      std::function<ColumnEncodingWriteWrapper(uint32_t)> encodingFactory,
+      std::function<void(ColumnEncodingWriteWrapper&)> encodingOverride)
+      override {
     BaseColumnWriter::flush(encodingFactory, encodingOverride);
     data_.flush();
   }
@@ -1598,11 +1721,12 @@ class BinaryColumnWriter : public BaseColumnWriter {
       WriterContext& context,
       const TypeWithId& type,
       const uint32_t sequence,
-      std::function<void(IndexBuilder&)> onRecordPosition)
-      : BaseColumnWriter{context, type, sequence, onRecordPosition},
+      std::function<void(IndexBuilder&)> onRecordPosition,
+      RleVersion rleVersion)
+      : BaseColumnWriter{context, type, sequence, onRecordPosition, rleVersion},
         data_{newStream(StreamKind::StreamKind_DATA)},
         lengths_{createRleEncoder</* isSigned */ false>(
-            RleVersion_1,
+            rleVersion,
             newStream(StreamKind::StreamKind_LENGTH),
             context.getConfig(Config::USE_VINTS),
             dwio::common::INT_BYTE_SIZE)} {
@@ -1612,8 +1736,9 @@ class BinaryColumnWriter : public BaseColumnWriter {
   uint64_t write(const VectorPtr& slice, const common::Ranges& ranges) override;
 
   void flush(
-      std::function<proto::ColumnEncoding&(uint32_t)> encodingFactory,
-      std::function<void(proto::ColumnEncoding&)> encodingOverride) override {
+      std::function<ColumnEncodingWriteWrapper(uint32_t)> encodingFactory,
+      std::function<void(ColumnEncodingWriteWrapper&)> encodingOverride)
+      override {
     BaseColumnWriter::flush(encodingFactory, encodingOverride);
     data_.flush();
     lengths_->flush();
@@ -1726,8 +1851,9 @@ class StructColumnWriter : public BaseColumnWriter {
   uint64_t write(const VectorPtr& slice, const common::Ranges& ranges) override;
 
   void flush(
-      std::function<proto::ColumnEncoding&(uint32_t)> encodingFactory,
-      std::function<void(proto::ColumnEncoding&)> encodingOverride) override {
+      std::function<ColumnEncodingWriteWrapper(uint32_t)> encodingFactory,
+      std::function<void(ColumnEncodingWriteWrapper&)> encodingOverride)
+      override {
     BaseColumnWriter::flush(encodingFactory, encodingOverride);
     for (auto& c : children_) {
       c->flush(encodingFactory);
@@ -1842,10 +1968,11 @@ class ListColumnWriter : public BaseColumnWriter {
       WriterContext& context,
       const TypeWithId& type,
       const uint32_t sequence,
-      std::function<void(IndexBuilder&)> onRecordPosition)
-      : BaseColumnWriter{context, type, sequence, onRecordPosition},
+      std::function<void(IndexBuilder&)> onRecordPosition,
+      RleVersion rleVersion)
+      : BaseColumnWriter{context, type, sequence, onRecordPosition, rleVersion},
         lengths_{createRleEncoder</* isSigned = */ false>(
-            RleVersion_1,
+            rleVersion,
             newStream(StreamKind::StreamKind_LENGTH),
             context.getConfig(Config::USE_VINTS),
             dwio::common::INT_BYTE_SIZE)} {
@@ -1855,8 +1982,9 @@ class ListColumnWriter : public BaseColumnWriter {
   uint64_t write(const VectorPtr& slice, const common::Ranges& ranges) override;
 
   void flush(
-      std::function<proto::ColumnEncoding&(uint32_t)> encodingFactory,
-      std::function<void(proto::ColumnEncoding&)> encodingOverride) override {
+      std::function<ColumnEncodingWriteWrapper(uint32_t)> encodingFactory,
+      std::function<void(ColumnEncodingWriteWrapper&)> encodingOverride)
+      override {
     BaseColumnWriter::flush(encodingFactory, encodingOverride);
     lengths_->flush();
     children_.at(0)->flush(encodingFactory);
@@ -1969,10 +2097,11 @@ class MapColumnWriter : public BaseColumnWriter {
       WriterContext& context,
       const TypeWithId& type,
       const uint32_t sequence,
-      std::function<void(IndexBuilder&)> onRecordPosition)
-      : BaseColumnWriter{context, type, sequence, onRecordPosition},
+      std::function<void(IndexBuilder&)> onRecordPosition,
+      RleVersion rleVersion)
+      : BaseColumnWriter{context, type, sequence, onRecordPosition, rleVersion},
         lengths_{createRleEncoder</* isSigned = */ false>(
-            RleVersion_1,
+            rleVersion,
             newStream(StreamKind::StreamKind_LENGTH),
             context.getConfig(Config::USE_VINTS),
             dwio::common::INT_BYTE_SIZE)} {
@@ -1982,8 +2111,9 @@ class MapColumnWriter : public BaseColumnWriter {
   uint64_t write(const VectorPtr& slice, const common::Ranges& ranges) override;
 
   void flush(
-      std::function<proto::ColumnEncoding&(uint32_t)> encodingFactory,
-      std::function<void(proto::ColumnEncoding&)> encodingOverride) override {
+      std::function<ColumnEncodingWriteWrapper(uint32_t)> encodingFactory,
+      std::function<void(ColumnEncodingWriteWrapper&)> encodingOverride)
+      override {
     BaseColumnWriter::flush(encodingFactory, encodingOverride);
     lengths_->flush();
     children_.at(0)->flush(encodingFactory);
@@ -2098,8 +2228,7 @@ std::unique_ptr<BaseColumnWriter> BaseColumnWriter::create(
     WriterContext& context,
     const TypeWithId& type,
     uint32_t sequence,
-    std::function<void(IndexBuilder&)> onRecordPosition,
-    DwrfFormat format) {
+    std::function<void(IndexBuilder&)> onRecordPosition) {
   const auto flatMapEnabled = context.getConfig(Config::FLATTEN_MAP) &&
       type.parent() != nullptr && (type.parent()->id() == 0);
   bool isFlatMapColumn{false};
@@ -2136,6 +2265,12 @@ std::unique_ptr<BaseColumnWriter> BaseColumnWriter::create(
     }
   }
 
+  // DWRF uses RleVersion_1 to write data by default,
+  // while ORC uses RleVersion_2 to write data by default.
+  auto rleVersion = context.fileFormat() == dwio::common::FileFormat::DWRF
+      ? RleVersion_1
+      : RleVersion_2;
+
   switch (type.type()->kind()) {
     case TypeKind::BOOLEAN:
       return std::make_unique<ByteRleColumnWriter<bool>>(
@@ -2144,22 +2279,39 @@ std::unique_ptr<BaseColumnWriter> BaseColumnWriter::create(
       return std::make_unique<ByteRleColumnWriter<int8_t>>(
           context, type, sequence, &createByteRleEncoder, onRecordPosition);
     case TypeKind::SMALLINT:
-      return std::make_unique<IntegerColumnWriter<int16_t>>(
-          context, type, sequence, onRecordPosition);
-    case TypeKind::INTEGER:
-      return std::make_unique<IntegerColumnWriter<int32_t>>(
-          context, type, sequence, onRecordPosition);
-    case TypeKind::BIGINT: {
-      if (format == DwrfFormat::kOrc && type.type()->isDecimal()) {
-        return std::make_unique<DecimalColumnWriter>(
+      if (context.fileFormat() == dwio::common::FileFormat::DWRF) {
+        return std::make_unique<IntegerColumnWriter<int16_t>>(
             context, type, sequence, onRecordPosition);
+      } else {
+        return std::make_unique<OrcIntegerColumnWriter<int16_t>>(
+            context, type, sequence, onRecordPosition);
+      }
+    case TypeKind::INTEGER:
+      if (context.fileFormat() == dwio::common::FileFormat::DWRF) {
+        return std::make_unique<IntegerColumnWriter<int32_t>>(
+            context, type, sequence, onRecordPosition);
+      } else {
+        return std::make_unique<OrcIntegerColumnWriter<int32_t>>(
+            context, type, sequence, onRecordPosition);
+      }
+    case TypeKind::BIGINT: {
+      if (context.fileFormat() == dwio::common::FileFormat::ORC) {
+        if (type.type()->isDecimal()) {
+          return std::make_unique<DecimalColumnWriter>(
+              context, type, sequence, onRecordPosition);
+        } else {
+          return std::make_unique<OrcIntegerColumnWriter<int64_t>>(
+              context, type, sequence, onRecordPosition);
+        }
       }
       return std::make_unique<IntegerColumnWriter<int64_t>>(
           context, type, sequence, onRecordPosition);
     }
     case TypeKind::HUGEINT: {
       VELOX_CHECK_EQ(
-          format, DwrfFormat::kOrc, "Decimal is not supported for DWRF.");
+          context.fileFormat(),
+          dwio::common::FileFormat::ORC,
+          "Decimal is not supported for DWRF.");
       return std::make_unique<DecimalColumnWriter>(
           context, type, sequence, onRecordPosition);
     }
@@ -2171,13 +2323,13 @@ std::unique_ptr<BaseColumnWriter> BaseColumnWriter::create(
           context, type, sequence, onRecordPosition);
     case TypeKind::VARCHAR:
       return std::make_unique<StringColumnWriter>(
-          context, type, sequence, onRecordPosition);
+          context, type, sequence, onRecordPosition, rleVersion);
     case TypeKind::VARBINARY:
       return std::make_unique<BinaryColumnWriter>(
-          context, type, sequence, onRecordPosition);
+          context, type, sequence, onRecordPosition, rleVersion);
     case TypeKind::TIMESTAMP:
       return std::make_unique<TimestampColumnWriter>(
-          context, type, sequence, onRecordPosition);
+          context, type, sequence, onRecordPosition, rleVersion);
     case TypeKind::ROW: {
       auto ret = std::make_unique<StructColumnWriter>(
           context, type, sequence, onRecordPosition);
@@ -2198,7 +2350,7 @@ std::unique_ptr<BaseColumnWriter> BaseColumnWriter::create(
             context, type, sequence);
       }
       auto ret = std::make_unique<MapColumnWriter>(
-          context, type, sequence, onRecordPosition);
+          context, type, sequence, onRecordPosition, rleVersion);
       ret->children_.push_back(create(context, *type.childAt(0), sequence));
       ret->children_.push_back(create(context, *type.childAt(1), sequence));
       return ret;
@@ -2206,7 +2358,7 @@ std::unique_ptr<BaseColumnWriter> BaseColumnWriter::create(
     case TypeKind::ARRAY: {
       VELOX_CHECK_EQ(type.size(), 1, "Array should have exactly one child");
       auto ret = std::make_unique<ListColumnWriter>(
-          context, type, sequence, onRecordPosition);
+          context, type, sequence, onRecordPosition, rleVersion);
       ret->children_.push_back(create(context, *type.childAt(0), sequence));
       return ret;
     }
