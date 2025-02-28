@@ -55,7 +55,6 @@ struct HiveConnectorSplit : public connector::ConnectorSplit {
   const std::unordered_map<std::string, std::optional<std::string>>
       partitionKeys;
   std::optional<int32_t> tableBucketNumber;
-  std::optional<HiveBucketConversion> bucketConversion;
   std::unordered_map<std::string, std::string> customSplitInfo;
   std::shared_ptr<std::string> extraFileInfo;
   std::unordered_map<std::string, std::string> serdeParameters;
@@ -69,6 +68,8 @@ struct HiveConnectorSplit : public connector::ConnectorSplit {
   std::optional<FileProperties> properties;
 
   std::optional<RowIdProperties> rowIdProperties;
+
+  std::optional<HiveBucketConversion> bucketConversion;
 
   HiveConnectorSplit(
       const std::string& connectorId,
