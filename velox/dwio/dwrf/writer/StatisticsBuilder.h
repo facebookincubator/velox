@@ -242,8 +242,9 @@ class BooleanStatisticsBuilder : public StatisticsBuilder,
   }
 };
 
-class IntegerStatisticsBuilder : public StatisticsBuilder,
-                                 public dwio::common::IntegerColumnStatistics {
+class IntegerStatisticsBuilder
+    : public StatisticsBuilder,
+      public dwio::common::IntegerColumnStatistics<> {
  public:
   explicit IntegerStatisticsBuilder(const StatisticsBuilderOptions& options)
       : StatisticsBuilder{options} {
