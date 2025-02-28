@@ -91,6 +91,7 @@ CudfHashJoinBuild::CudfHashJoinBuild(
           operatorId,
           joinNode->id(),
           "CudfHashJoinBuild"),
+      NvtxHelper(nvtx3::rgb{65, 105, 225}, operatorId), // Royal Blue
       joinNode_(joinNode) {
   if (cudfDebugEnabled()) {
     std::cout << "CudfHashJoinBuild constructor" << std::endl;
@@ -124,7 +125,7 @@ void CudfHashJoinBuild::noMoreInput() {
   if (cudfDebugEnabled()) {
     std::cout << "Calling CudfHashJoinBuild::noMoreInput" << std::endl;
   }
-  NVTX3_FUNC_RANGE();
+  VELOX_NVTX_OPERATOR_FUNC_RANGE();
   Operator::noMoreInput();
   std::vector<ContinuePromise> promises;
   std::vector<std::shared_ptr<exec::Driver>> peers;
@@ -215,6 +216,7 @@ CudfHashJoinProbe::CudfHashJoinProbe(
           operatorId,
           joinNode->id(),
           "CudfHashJoinProbe"),
+      NvtxHelper(nvtx3::rgb{0, 128, 128}, operatorId), // Teal
       joinNode_(joinNode) {
   if (cudfDebugEnabled()) {
     std::cout << "CudfHashJoinProbe constructor" << std::endl;
@@ -233,7 +235,8 @@ RowVectorPtr CudfHashJoinProbe::getOutput() {
   if (cudfDebugEnabled()) {
     std::cout << "Calling CudfHashJoinProbe::getOutput" << std::endl;
   }
-  NVTX3_FUNC_RANGE();
+  VELOX_NVTX_OPERATOR_FUNC_RANGE();
+
   if (!input_) {
     return nullptr;
   }
