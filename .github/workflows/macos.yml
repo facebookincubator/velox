@@ -84,7 +84,6 @@ jobs:
 
       - name: Configure Build
         env:
-          folly_SOURCE: BUNDLED #brew folly does not have int128
           fmt_SOURCE: BUNDLED #brew fmt11 is not supported
         run: |
             ccache -sz -M 5Gi
