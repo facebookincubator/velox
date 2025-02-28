@@ -214,6 +214,8 @@ class E2EFilterTestBase : public testing::Test {
       const dwio::common::ReaderOptions& opts,
       std::unique_ptr<dwio::common::BufferedInput> input) = 0;
 
+  virtual void setUpReaderOptions(dwio::common::ReaderOptions& opts) {}
+
   virtual void setUpRowReaderOptions(
       dwio::common::RowReaderOptions& opts,
       const std::shared_ptr<ScanSpec>& spec) {
