@@ -45,7 +45,9 @@ class E2EWriterTestUtil {
           nullptr,
       std::function<std::unique_ptr<LayoutPlanner>(
           const dwio::common::TypeWithId&)> layoutPlannerFactory = nullptr,
-      const int64_t writerMemoryCap = std::numeric_limits<int64_t>::max());
+      const int64_t writerMemoryCap = std::numeric_limits<int64_t>::max(),
+      const dwio::common::FileFormat fileFormat =
+          dwio::common::FileFormat::DWRF);
 
   /**
    * Writes data and returns the same writer so that the caller can control
@@ -81,7 +83,9 @@ class E2EWriterTestUtil {
           nullptr,
       std::function<std::unique_ptr<LayoutPlanner>(
           const dwio::common::TypeWithId&)> layoutPlannerFactory = nullptr,
-      const int64_t writerMemoryCap = std::numeric_limits<int64_t>::max());
+      const int64_t writerMemoryCap = std::numeric_limits<int64_t>::max(),
+      const dwio::common::FileFormat fileFormat =
+          dwio::common::FileFormat::DWRF);
 
   /**
    * Creates a writer with the supplied configuration and check the IO
@@ -102,7 +106,9 @@ class E2EWriterTestUtil {
       std::function<std::unique_ptr<LayoutPlanner>(
           const dwio::common::TypeWithId&)> layoutPlannerFactory = nullptr,
       const int64_t writerMemoryCap = std::numeric_limits<int64_t>::max(),
-      const bool verifyContent = true);
+      const bool verifyContent = true,
+      const dwio::common::FileFormat fileFormat =
+          dwio::common::FileFormat::DWRF);
 
   static std::vector<VectorPtr> generateBatches(
       const std::shared_ptr<const Type>& type,
