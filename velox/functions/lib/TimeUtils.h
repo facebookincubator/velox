@@ -15,11 +15,14 @@
  */
 #pragma once
 
+#include <boost/algorithm/string/case_conv.hpp>
 #include <velox/type/Timestamp.h>
 #include "velox/core/QueryConfig.h"
+#include "velox/expression/ComplexViewTypes.h"
 #include "velox/external/date/date.h"
 #include "velox/external/date/iso_week.h"
 #include "velox/functions/Macros.h"
+#include "velox/functions/lib/DateTimeFormatter.h"
 #include "velox/type/tz/TimeZoneMap.h"
 
 namespace facebook::velox::functions {
@@ -123,4 +126,91 @@ struct InitSessionTimezone {
     timeZone_ = getTimeZoneFromConfig(config);
   }
 };
+
+/// Converts string as date time unit. Throws for invalid input string.
+///
+/// @param unitString The input string to represent date time unit.
+/// @param throwIfInvalid Whether to throw an exception for invalid input
+/// string.
+/// @param allowMicro Whether to allow microsecond.
+/// @param allowAbbreviated Whether to allow abbreviated unit string.
+std::optional<DateTimeUnit> fromDateTimeUnitString(
+    const StringView& unitString,
+    bool throwIfInvalid,
+    bool allowMicro = false,
+    bool allowAbbreviated = false);
+
+/// Adjusts the given date time object to the start of the specified date time
+/// unit (e.g., year, quarter, month, week, day, hour, minute).
+void adjustDateTime(std::tm& dateTime, const DateTimeUnit& unit);
+
+/// Returns timestamp with seconds adjusted to the nearest lower multiple of the
+/// specified interval. If the given seconds is negative and not an exact
+/// multiple of the interval, it adjusts further down.
+FOLLY_ALWAYS_INLINE Timestamp
+adjustEpoch(int64_t seconds, int64_t intervalSeconds) {
+  int64_t s = seconds / intervalSeconds;
+  if (seconds < 0 && seconds % intervalSeconds) {
+    s = s - 1;
+  }
+  int64_t truncatedSeconds = s * intervalSeconds;
+  return Timestamp(truncatedSeconds, 0);
+}
+
+// Returns timestamp truncated to the specified unit.
+FOLLY_ALWAYS_INLINE Timestamp truncateTimestamp(
+    const Timestamp& timestamp,
+    DateTimeUnit unit,
+    const tz::TimeZone* timeZone) {
+  Timestamp result;
+  switch (unit) {
+    // For seconds ,millisecond, microsecond we just truncate the nanoseconds
+    // part of the timestamp; no timezone conversion required.
+    case DateTimeUnit::kMicrosecond:
+      return Timestamp(
+          timestamp.getSeconds(), timestamp.getNanos() / 1000 * 1000);
+
+    case DateTimeUnit::kMillisecond:
+      return Timestamp(
+          timestamp.getSeconds(), timestamp.getNanos() / 1000000 * 1000000);
+
+    case DateTimeUnit::kSecond:
+      return Timestamp(timestamp.getSeconds(), 0);
+
+    // Same for minutes; timezones and daylight savings time are at least in
+    // the granularity of 30 mins, so we can just truncate the epoch directly.
+    case DateTimeUnit::kMinute:
+      return adjustEpoch(timestamp.getSeconds(), 60);
+
+    // Hour truncation has to handle the corner case of daylight savings time
+    // boundaries. Since conversions from local timezone to UTC may be
+    // ambiguous, we need to be carefull about the roundtrip of converting to
+    // local time and back. So what we do is to calculate the truncation delta
+    // in UTC, then applying it to the input timestamp.
+    case DateTimeUnit::kHour: {
+      auto epochToAdjust = getSeconds(timestamp, timeZone);
+      auto secondsDelta =
+          epochToAdjust - adjustEpoch(epochToAdjust, 60 * 60).getSeconds();
+      return Timestamp(timestamp.getSeconds() - secondsDelta, 0);
+    }
+
+    // For the truncations below, we may first need to convert to the local
+    // timestamp, truncate, then convert back to GMT.
+    case DateTimeUnit::kDay:
+      result = adjustEpoch(getSeconds(timestamp, timeZone), 24 * 60 * 60);
+      break;
+
+    default:
+      auto dateTime = getDateTime(timestamp, timeZone);
+      adjustDateTime(dateTime, unit);
+      result = Timestamp(Timestamp::calendarUtcToEpoch(dateTime), 0);
+      break;
+  }
+
+  if (timeZone != nullptr) {
+    result.toGMT(*timeZone);
+  }
+  return result;
+}
+
 } // namespace facebook::velox::functions
