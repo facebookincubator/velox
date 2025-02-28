@@ -847,7 +847,6 @@ TEST_F(DateTimeFunctionsTest, getTimestamp) {
       getTimestamp("2023-07-13 21:34", "yyyy-MM-dd HH:II"),
       "Specifier I is not supported");
 
-
   enableLegacyFormatter();
   // Returns null for invalid datetime format when legacy date formatter is
   // used.
