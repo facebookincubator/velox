@@ -41,6 +41,7 @@
 #include <thrust/copy.h>
 #include <thrust/execution_policy.h>
 
+#include "velox/experimental/cudf/exec/NvtxHelper.h"
 #include "velox/experimental/cudf/exec/Utilities.h"
 #include "velox/experimental/cudf/exec/VeloxCudfInterop.h"
 
@@ -282,7 +283,7 @@ struct copy_to_device {
 // Vector to column
 // template<bool is_table=true>
 std::unique_ptr<cudf::table> to_cudf_table(const RowVectorPtr& leftBatch) {
-  NVTX3_FUNC_RANGE();
+  VELOX_NVTX_FUNC_RANGE();
   // cudf type dispatcher to copy data from velox vector to cudf column
   using cudf_col_ptr = std::unique_ptr<cudf::column>;
   std::vector<cudf_col_ptr> cudf_columns;
@@ -340,7 +341,7 @@ struct copy_to_host {
 VectorPtr to_velox_column(
     const cudf::column_view& col,
     memory::MemoryPool* pool) {
-  NVTX3_FUNC_RANGE();
+  VELOX_NVTX_PRETTY_FUNC_RANGE();
   auto velox_type = cudf_type_id_to_velox_type(col.type().id());
   if (cudfDebugEnabled()) {
     std::cout << "Converting to_velox_column: " << velox_type->toString()
@@ -355,7 +356,7 @@ RowVectorPtr to_velox_column(
     const cudf::table_view& table,
     memory::MemoryPool* pool,
     std::string name_prefix) {
-  NVTX3_FUNC_RANGE();
+  VELOX_NVTX_PRETTY_FUNC_RANGE();
   std::vector<VectorPtr> children;
   std::vector<std::string> names;
   for (auto& col : table) {

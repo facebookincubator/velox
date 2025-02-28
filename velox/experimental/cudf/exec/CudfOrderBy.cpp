@@ -22,9 +22,8 @@
 #include <cudf/table/table.hpp>
 #include <cudf/utilities/default_stream.hpp>
 
-#include <nvtx3/nvtx3.hpp>
-
 #include "velox/experimental/cudf/exec/CudfOrderBy.h"
+#include "velox/experimental/cudf/exec/NvtxHelper.h"
 #include "velox/experimental/cudf/exec/Utilities.h"
 #include "velox/experimental/cudf/exec/VeloxCudfInterop.h"
 
@@ -40,6 +39,7 @@ CudfOrderBy::CudfOrderBy(
           operatorId,
           orderByNode->id(),
           "CudfOrderBy"),
+      NvtxHelper(nvtx3::rgb{64, 224, 208}, operatorId), // Turquoise
       orderByNode_(orderByNode) {
   maxOutputRows_ = outputBatchRows(std::nullopt);
   sort_keys_.reserve(orderByNode->sortingKeys().size());
@@ -80,7 +80,7 @@ void CudfOrderBy::noMoreInput() {
   // TODO: Get total row count, batch output
   // maxOutputRows_ = outputBatchRows(total_row_count);
 
-  NVTX3_FUNC_RANGE();
+  VELOX_NVTX_OPERATOR_FUNC_RANGE();
 
   if (inputs_.empty()) {
     return;
