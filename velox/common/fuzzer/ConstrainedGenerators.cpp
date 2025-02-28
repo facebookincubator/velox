@@ -139,8 +139,8 @@ folly::dynamic JsonInputGenerator::convertVariantToDynamic(
   }
 }
 
-std::vector<std::string> getControlCharacters() {
-  static std::vector<std::string> controlCharacters = {
+const std::vector<std::string>& getControlCharacters() {
+  static const std::vector<std::string> controlCharacters = {
       "\x00",   "\x01",   "\x02",   "\x03",   "\x04",   "\x05",   "\x06",
       "\x07",   "\x08",   "\x09",   "\x0A",   "\x0B",   "\x0C",   "\x0D",
       "\x0E",   "\x0F",   "\x10",   "\x11",   "\x12",   "\x13",   "\x14",
@@ -156,7 +156,7 @@ std::vector<std::string> getControlCharacters() {
 
 void JsonInputGenerator::makeRandomVariation(std::string json) {
   if (coinToss(rng_, 0.1)) {
-    const auto controlCharacters = getControlCharacters();
+    const auto& controlCharacters = getControlCharacters();
     const auto index = rand<uint32_t>(rng_, 0, controlCharacters.size() - 1);
     const auto& controlCharacter = controlCharacters[index];
     const auto indexToInsert = rand<uint32_t>(rng_, 0, json.size());
@@ -164,6 +164,48 @@ void JsonInputGenerator::makeRandomVariation(std::string json) {
   } else if (coinToss(rng_, 0.1)) {
     const auto size = rand<uint32_t>(rng_, 0, json.size());
     json.resize(size);
+  }
+}
+
+StringEscapingInputGenerator::StringEscapingInputGenerator(
+    size_t seed,
+    const TypePtr& type,
+    double nullRatio,
+    std::shared_ptr<RandomInputGenerator<StringView>> randomStrGenerator)
+    : AbstractInputGenerator(seed, type, nullptr, nullRatio),
+      randomStrGenerator_(std::move(randomStrGenerator)) {}
+
+variant StringEscapingInputGenerator::generate() {
+  if (coinToss(rng_, nullRatio_)) {
+    return variant::null(type_->kind());
+  }
+  auto optionalVariant = randomStrGenerator_->generate();
+  if (!optionalVariant.hasValue()) {
+    return variant::null(type_->kind());
+  }
+
+  std::string randonStr = optionalVariant.value<TypeKind::VARCHAR>();
+  makeRandomVariation(randonStr);
+  return variant(std::move(randonStr));
+}
+
+void StringEscapingInputGenerator::makeRandomVariation(std::string& randonStr) {
+  if (coinToss(rng_, 0.5)) {
+    const auto& controlCharacters = getControlCharacters();
+    const auto index = rand<uint32_t>(rng_, 0, controlCharacters.size() - 1);
+    const auto& controlCharacter = controlCharacters[index];
+    const auto indexToInsert = rand<uint32_t>(rng_, 0, randonStr.size());
+    randonStr.insert(indexToInsert, controlCharacter);
+  } else if (coinToss(rng_, 0.1)) {
+    const auto size = rand<uint32_t>(rng_, 0, randonStr.size());
+    randonStr.resize(size);
+  } else if (!randonStr.empty() && coinToss(rng_, 0.1)) {
+    const auto start = rand<uint32_t>(rng_, 0, randonStr.size() - 1);
+    randonStr = randonStr.substr(start);
+  } else if (coinToss(rng_, 0.5)) {
+    // Add escaped string test cases
+    // make the string suitable for representation as a C string literal
+    randonStr = folly::cEscape<std::string>(randonStr);
   }
 }
 
