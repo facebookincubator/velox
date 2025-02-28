@@ -51,6 +51,14 @@ void SpecialFormSignatureGenerator::addCastFromFloatingPointSignatures(
   }
 }
 
+void SpecialFormSignatureGenerator::addCastFromDecimalSignatures(
+    const std::string& toType,
+    std::vector<exec::FunctionSignaturePtr>& signatures) const {
+  for (const auto& fromType : kDecimalTypes_) {
+    signatures.push_back(makeCastSignature(fromType, toType));
+  }
+}
+
 void SpecialFormSignatureGenerator::addCastFromVarcharSignature(
     const std::string& toType,
     std::vector<exec::FunctionSignaturePtr>& signatures) const {
@@ -169,6 +177,7 @@ SpecialFormSignatureGenerator::getCommonSignaturesForCast() const {
   for (const auto& toType : kIntegralTypes_) {
     addCastFromIntegralSignatures(toType, signatures);
     addCastFromFloatingPointSignatures(toType, signatures);
+    addCastFromDecimalSignatures(toType, signatures);
     addCastFromVarcharSignature(toType, signatures);
   }
 
@@ -176,12 +185,22 @@ SpecialFormSignatureGenerator::getCommonSignaturesForCast() const {
   for (const auto& toType : kFloatingPointTypes_) {
     addCastFromIntegralSignatures(toType, signatures);
     addCastFromFloatingPointSignatures(toType, signatures);
+    addCastFromDecimalSignatures(toType, signatures);
+    addCastFromVarcharSignature(toType, signatures);
+  }
+
+  // To decimal type.
+  for (const auto& toType : kDecimalTypes_) {
+    addCastFromIntegralSignatures(toType, signatures);
+    addCastFromFloatingPointSignatures(toType, signatures);
+    addCastFromDecimalSignatures(toType, signatures);
     addCastFromVarcharSignature(toType, signatures);
   }
 
   // To varchar type.
   addCastFromIntegralSignatures("varchar", signatures);
   addCastFromFloatingPointSignatures("varchar", signatures);
+  addCastFromDecimalSignatures("varchar", signatures);
   addCastFromVarcharSignature("varchar", signatures);
   addCastFromDateSignature("varchar", signatures);
   addCastFromTimestampSignature("varchar", signatures);
@@ -216,6 +235,11 @@ SpecialFormSignatureGenerator::getSignaturesForCast() const {
   for (auto i = 0; i < size; ++i) {
     auto from = signatures[i]->argumentTypes()[0].baseName();
     auto to = signatures[i]->returnType().baseName();
+
+    // Signature parsing of nested decimal type is not supported.
+    if (from == "DECIMAL" || to == "DECIMAL") {
+      continue;
+    }
 
     signatures.push_back(makeCastSignature(
         fmt::format("array({})", from), fmt::format("array({})", to)));
