@@ -73,7 +73,8 @@ TEST_F(AggregationFunctionRegTest, orderSensitive) {
       "count_if",
       "geometric_mean",
       "histogram",
-      "reduce_agg"};
+      "reduce_agg",
+      "tdigest_agg"};
   aggregate::prestosql::registerAllAggregateFunctions();
   for (const auto& entry : nonOrderSensitiveFunctions) {
     ASSERT_FALSE(exec::getAggregateFunctionMetadata(entry).orderSensitive);
@@ -106,6 +107,8 @@ TEST_F(AggregationFunctionRegTest, prestoSupportedSignatures) {
   EXPECT_EQ(aggrFuncMapBase[kBitwiseAnd].signatures.size(), 1);
   EXPECT_EQ(aggrFuncMapBase[kBitwiseOr].signatures.size(), 1);
   EXPECT_EQ(aggrFuncMapBase[kBitwiseXor].signatures.size(), 1);
+
+  EXPECT_EQ(aggrFuncMapBase[kTDigestAgg].signatures.size(), 3);
 
   // Revert to previous state.
   clearAndCheckRegistry();
