@@ -73,7 +73,8 @@ class HiveConfig {
       "hive_orc_use_column_names";
 
   /// Always maps nested column using names even if kOrcUseColumnNames disabled.
-  static constexpr const char* kOrcUseNestedColumnNames = "hive.orc.use-nested-column-names";
+  static constexpr const char* kOrcUseNestedColumnNames =
+      "hive.orc.use-nested-column-names";
 
   /// Maps table field names to file field names using names, not indices.
   static constexpr const char* kParquetUseColumnNames =
