@@ -21,9 +21,8 @@
 #include <cudf/table/table.hpp>
 #include <cudf/utilities/default_stream.hpp>
 
-#include <nvtx3/nvtx3.hpp>
-
 #include "velox/experimental/cudf/exec/CudfConversion.h"
+#include "velox/experimental/cudf/exec/NvtxHelper.h"
 #include "velox/experimental/cudf/exec/Utilities.h"
 #include "velox/experimental/cudf/exec/VeloxCudfInterop.h"
 #include "velox/experimental/cudf/vector/CudfVector.h"
@@ -36,7 +35,7 @@ namespace {
 RowVectorPtr mergeRowVectors(
     const std::vector<RowVectorPtr>& results,
     velox::memory::MemoryPool* pool) {
-  NVTX3_FUNC_RANGE();
+  VELOX_NVTX_FUNC_RANGE();
   auto totalCount = 0;
   for (const auto& result : results) {
     totalCount += result->size();
@@ -71,11 +70,11 @@ CudfFromVelox::CudfFromVelox(
           outputType,
           operatorId,
           planNodeId,
-          "CudfFromVelox") {}
+          "CudfFromVelox"),
+      NvtxHelper(nvtx3::rgb{255, 140, 0}, operatorId) {} // Orange
 
 void CudfFromVelox::addInput(RowVectorPtr input) {
-  nvtx3::scoped_range r{planNodeId() + "CudfFromVelox::" + __func__};
-  NVTX3_FUNC_RANGE();
+  VELOX_NVTX_OPERATOR_FUNC_RANGE();
   if (input != nullptr) {
     if (input->size() > 0) {
       // Materialize lazy vectors
@@ -92,8 +91,7 @@ void CudfFromVelox::addInput(RowVectorPtr input) {
 }
 
 RowVectorPtr CudfFromVelox::getOutput() {
-  nvtx3::scoped_range r{planNodeId() + "CudfFromVelox::" + __func__};
-  NVTX3_FUNC_RANGE();
+  VELOX_NVTX_OPERATOR_FUNC_RANGE();
   auto const target_output_size = preferred_gpu_batch_size_rows();
   auto const exit_early = finished_ or
       (current_output_size_ < target_output_size and not noMoreInput_) or
@@ -151,7 +149,8 @@ CudfToVelox::CudfToVelox(
           outputType,
           operatorId,
           planNodeId,
-          "CudfToVelox") {}
+          "CudfToVelox"),
+      NvtxHelper(nvtx3::rgb{148, 0, 211}, operatorId) {} // Purple
 
 void CudfToVelox::addInput(RowVectorPtr input) {
   // Accumulate inputs
@@ -163,8 +162,7 @@ void CudfToVelox::addInput(RowVectorPtr input) {
 }
 
 RowVectorPtr CudfToVelox::getOutput() {
-  nvtx3::scoped_range r{planNodeId() + "CudfToVelox::" + __func__};
-  NVTX3_FUNC_RANGE();
+  VELOX_NVTX_OPERATOR_FUNC_RANGE();
   if (finished_ || inputs_.empty()) {
     finished_ = noMoreInput_ && inputs_.empty();
     return nullptr;

@@ -22,6 +22,7 @@
 #include "velox/exec/FilterProject.h"
 #include "velox/exec/Operator.h"
 #include "velox/experimental/cudf/exec/ExpressionEvaluator.h"
+#include "velox/experimental/cudf/exec/NvtxHelper.h"
 #include "velox/experimental/cudf/vector/CudfVector.h"
 #include "velox/expression/Expr.h"
 #include "velox/vector/ComplexVector.h"
@@ -31,7 +32,7 @@
 namespace facebook::velox::cudf_velox {
 
 // TODO: Does not support Filter yet.
-class CudfFilterProject : public exec::Operator {
+class CudfFilterProject : public exec::Operator, public NvtxHelper {
  public:
   CudfFilterProject(
       int32_t operatorId,

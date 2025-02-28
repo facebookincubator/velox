@@ -57,6 +57,7 @@ CudfFilterProject::CudfFilterProject(
           operatorId,
           project ? project->id() : filter->id(),
           "CudfFilterProject"),
+      NvtxHelper(nvtx3::rgb{220, 20, 60}, operatorId), // Crimson
       hasFilter_(filter != nullptr),
       project_(project),
       filter_(filter) {
@@ -82,6 +83,8 @@ void CudfFilterProject::addInput(RowVectorPtr input) {
 }
 
 RowVectorPtr CudfFilterProject::getOutput() {
+  VELOX_NVTX_OPERATOR_FUNC_RANGE();
+
   if (allInputProcessed()) {
     return nullptr;
   }
