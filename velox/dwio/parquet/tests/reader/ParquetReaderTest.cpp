@@ -1849,7 +1849,7 @@ TEST_F(ParquetReaderTest, columnStatistics) {
     EXPECT_EQ(stats->getNumberOfValues(), 5);
     EXPECT_FALSE(stats->hasNull().value());
     auto* intStats =
-        dynamic_cast<dwio::common::IntegerColumnStatistics*>(stats.get());
+        dynamic_cast<dwio::common::IntegerColumnStatistics<>*>(stats.get());
     ASSERT_NE(intStats, nullptr);
     EXPECT_EQ(intStats->getMinimum(), 1);
     EXPECT_EQ(intStats->getMaximum(), 5);
@@ -1900,7 +1900,7 @@ TEST_F(ParquetReaderTest, columnStatisticsWithNulls) {
   EXPECT_EQ(stats->getNumberOfValues(), 3);
   EXPECT_TRUE(stats->hasNull().value());
   auto* intStats =
-      dynamic_cast<dwio::common::IntegerColumnStatistics*>(stats.get());
+      dynamic_cast<dwio::common::IntegerColumnStatistics<>*>(stats.get());
   ASSERT_NE(intStats, nullptr);
   EXPECT_EQ(intStats->getMinimum(), 1);
   EXPECT_EQ(intStats->getMaximum(), 5);
@@ -1936,7 +1936,7 @@ TEST_F(ParquetReaderTest, columnStatisticsMultipleRowGroups) {
   EXPECT_EQ(stats->getNumberOfValues(), 10);
   EXPECT_FALSE(stats->hasNull().value());
   auto* intStats =
-      dynamic_cast<dwio::common::IntegerColumnStatistics*>(stats.get());
+      dynamic_cast<dwio::common::IntegerColumnStatistics<>*>(stats.get());
   ASSERT_NE(intStats, nullptr);
   // Global min/max across all row groups.
   EXPECT_EQ(intStats->getMinimum(), 1);

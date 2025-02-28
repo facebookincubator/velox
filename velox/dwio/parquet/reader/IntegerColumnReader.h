@@ -78,6 +78,13 @@ class IntegerColumnReader : public dwio::common::SelectiveIntegerColumnReader {
         offset,
         rows,
         nullptr);
+    if (scanSpec_->filter()) {
+      VELOX_USER_CHECK(
+          canPushdownFilterOn(),
+          "Filter pushdown is not accepted. Requested type: {}, file type: {}.",
+          requestedType_->toString(),
+          fileType_->type()->toString());
+    }
     readCommon<IntegerColumnReader, true>(rows);
     readOffset_ += rows.back() + 1;
   }
@@ -94,11 +101,7 @@ class IntegerColumnReader : public dwio::common::SelectiveIntegerColumnReader {
   void rescaleDecimalValues(
       const ParquetTypeWithId& fileType,
       VectorPtr& result) {
-    int32_t requestedScale = getDecimalPrecisionScale(*requestedType_).second;
-    int32_t fileScale = fileType.type()->isDecimal()
-        ? getDecimalPrecisionScale(*fileType.type()).second
-        : 0;
-    int32_t scaleAdjust = requestedScale - fileScale;
+    int32_t scaleAdjust = scaleToAdjust(fileType.type(), requestedType_);
     VELOX_USER_CHECK_GE(
         scaleAdjust,
         0,
@@ -124,10 +127,10 @@ class IntegerColumnReader : public dwio::common::SelectiveIntegerColumnReader {
     }
   }
 
-  /// Multiplies all non-null values in result by multiplier.
-  /// Overflow is impossible because convertType validates precInc >= scaleInc,
-  /// guaranteeing that originalValue * 10^scaleAdjust fits within the target
-  /// precision.
+  // Multiplies all non-null values in result by multiplier.
+  // Overflow is impossible because convertType validates precInc >= scaleInc,
+  // guaranteeing that originalValue * 10^scaleAdjust fits within the target
+  // precision.
   template <typename T>
   void applyDecimalScaleMultiplier(const VectorPtr& result, T multiplier)
       const {
@@ -146,6 +149,34 @@ class IntegerColumnReader : public dwio::common::SelectiveIntegerColumnReader {
         }
       }
     }
+  }
+
+  int32_t scaleToAdjust(const TypePtr& fileType, const TypePtr& requestedType)
+      const {
+    int32_t requestedScale = getDecimalPrecisionScale(*requestedType).second;
+    int32_t fileScale =
+        fileType->isDecimal() ? getDecimalPrecisionScale(*fileType).second : 0;
+    return requestedScale - fileScale;
+  }
+
+  bool canPushdownFilterOn() {
+    VELOX_CHECK(scanSpec_->filter());
+    if (requestedType_->isDecimal() &&
+        scaleToAdjust(fileType_->type(), requestedType_) != 0) {
+      // Cannot push down filters if rescaling is needed, because the filter
+      // values are not rescaled and thus cannot be correctly compared to the
+      // file values.
+      switch (scanSpec_->filter()->kind()) {
+        case common::FilterKind::kAlwaysFalse:
+        case common::FilterKind::kAlwaysTrue:
+        case common::FilterKind::kIsNull:
+        case common::FilterKind::kIsNotNull:
+          break;
+        default:
+          return false;
+      }
+    }
+    return true;
   }
 };
 
