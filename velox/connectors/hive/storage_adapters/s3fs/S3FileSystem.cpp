@@ -107,12 +107,12 @@ class S3ReadFile final : public ReadFile {
       uint64_t offset,
       uint64_t length,
       void* buffer,
-      io::IoStatistics* stats) const override {
+      File::IoStats* stats) const override {
     preadInternal(offset, length, static_cast<char*>(buffer));
     return {static_cast<char*>(buffer), length};
   }
 
-  std::string pread(uint64_t offset, uint64_t length, io::IoStatistics* stats)
+  std::string pread(uint64_t offset, uint64_t length, File::IoStats* stats)
       const override {
     std::string result(length, 0);
     char* position = result.data();
@@ -123,7 +123,7 @@ class S3ReadFile final : public ReadFile {
   uint64_t preadv(
       uint64_t offset,
       const std::vector<folly::Range<char*>>& buffers,
-      io::IoStatistics* stats) const override {
+      File::IoStats* stats) const override {
     // 'buffers' contains Ranges(data, size)  with some gaps (data = nullptr) in
     // between. This call must populate the ranges (except gap ranges)
     // sequentially starting from 'offset'. AWS S3 GetObject does not support
