@@ -505,6 +505,11 @@ class QueryConfig {
   static constexpr const char* kShuffleCompressionKind =
       "shuffle_compression_codec";
 
+  /// Specifies whether the expression compiler should ignore errors encountered
+  /// during constant folding or return a FailFunction instead.
+  static constexpr const char* kConstantFoldErrorWithFailFunction =
+      "constant_fold_error_with_fail_function";
+
   bool selectiveNimbleReaderEnabled() const {
     return get<bool>(kSelectiveNimbleReaderEnabled, false);
   }
@@ -928,6 +933,10 @@ class QueryConfig {
 
   std::string shuffleCompressionKind() const {
     return get<std::string>(kShuffleCompressionKind, "none");
+  }
+
+  bool constantFoldErrorWithFailFunction() const {
+    return get<bool>(kConstantFoldErrorWithFailFunction, false);
   }
 
   template <typename T>
