@@ -171,7 +171,11 @@ void DwrfData::filterRowGroups(
         ColumnStatisticsWrapper(&entry.statistics()), *dwrfContext);
     if (filter &&
         !testFilter(
-            filter, columnStats.get(), rowGroupSize, fileType_->type())) {
+            filter,
+            columnStats.get(),
+            rowGroupSize,
+            fileType_->type(),
+            dwio::common::FileFormat::DWRF)) {
       VLOG(1) << "Drop stride " << i << " on " << scanSpec.toString();
       bits::setBit(result.filterResult.data(), i);
       continue;
@@ -183,7 +187,8 @@ void DwrfData::filterRowGroups(
               metadataFilter,
               columnStats.get(),
               rowGroupSize,
-              fileType_->type())) {
+              fileType_->type(),
+              dwio::common::FileFormat::DWRF)) {
         bits::setBit(
             result.metadataFilterResults[metadataFiltersStartIndex + j]
                 .second.data(),
