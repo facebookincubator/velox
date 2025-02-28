@@ -266,6 +266,17 @@ Mathematical Functions
 
     Returns the secant of ``x``.
 
+.. spark:function:: sign(x) -> double
+
+    Returns the signum of ``x``. Supported type for ``x`` is DOUBLE.
+    It returns:
+    * 0.0 if the argument is 0.0,
+    * 1.0 if the argument is greater than 0.0,
+    * -1.0 if the argument is less than 0.0,
+    * NaN if the argument is NaN,
+    * 1.0 if the argument is +Infinity,
+    * -1.0 if the argument is -Infinity.
+
 .. spark:function:: sinh(x) -> double
 
     Returns hyperbolic sine of ``x``.
