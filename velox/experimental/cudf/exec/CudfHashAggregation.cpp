@@ -16,6 +16,7 @@
 
 #include "CudfHashAggregation.h"
 
+#include "velox/exec/Aggregate.h"
 #include "velox/exec/PrefixSort.h"
 #include "velox/exec/Task.h"
 #include "velox/experimental/cudf/exec/Utilities.h"
