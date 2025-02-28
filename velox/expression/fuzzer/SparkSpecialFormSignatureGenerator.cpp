@@ -27,8 +27,10 @@ SparkSpecialFormSignatureGenerator::getSignaturesForCast() const {
     signatures.push_back(makeCastSignature(fromType, "varbinary"));
   }
 
-  // Cast tinyint/smallint/integer/bigint as timestamp is supported in Spark.
-  for (auto fromType : {"tinyint", "smallint", "integer", "bigint"}) {
+  // Cast tinyint/smallint/integer/bigint/real/double as timestamp is supported
+  // in Spark.
+  for (auto fromType :
+       {"tinyint", "smallint", "integer", "bigint", "real", "double"}) {
     signatures.push_back(makeCastSignature(fromType, "timestamp"));
   }
   return signatures;
