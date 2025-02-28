@@ -1,0 +1,45 @@
+# Copyright (c) Facebook, Inc. and its affiliates.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+add_library(velox_functions_remote_server_base RemoteFunctionBaseService.cpp)
+target_link_libraries(
+  velox_functions_remote_server_base velox_expression velox_type_fbhive)
+
+add_library(velox_functions_remote_thrift_server
+            RemoteFunctionThriftService.cpp)
+
+target_link_libraries(
+  velox_functions_remote_thrift_server
+  PUBLIC remote_function_thrift velox_functions_remote_get_serde
+         velox_functions_remote_server_base)
+
+add_executable(velox_functions_remote_thrift_server_main
+               RemoteFunctionThriftServiceMain.cpp)
+
+target_link_libraries(
+  velox_functions_remote_thrift_server_main
+  velox_functions_remote_thrift_server velox_functions_prestosql)
+
+if(${VELOX_BUILD_TESTING})
+  add_library(velox_functions_remote_server_rest RemoteFunctionRestService.cpp)
+  target_link_libraries(
+    velox_functions_remote_server_rest velox_presto_serializer
+    velox_functions_remote_server_base)
+
+  add_executable(velox_functions_remote_server_rest_main
+                 RemoteFunctionRestServiceMain.cpp)
+  target_link_libraries(
+    velox_functions_remote_server_rest_main velox_functions_remote_server_rest
+    velox_functions_prestosql velox_exec_test_lib)
+endif()

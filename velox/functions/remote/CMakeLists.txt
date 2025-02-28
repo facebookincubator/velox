@@ -14,7 +14,6 @@
 
 add_subdirectory(if)
 add_subdirectory(client)
-add_subdirectory(server)
 add_subdirectory(utils)
 if(${VELOX_ENABLE_BENCHMARKS})
   add_subdirectory(benchmarks)
