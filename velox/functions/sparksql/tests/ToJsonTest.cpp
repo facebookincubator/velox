@@ -28,7 +28,7 @@ class ToJsonTest : public SparkFunctionBaseTest {
  protected:
   core::CallTypedExprPtr createToJson(const TypePtr& inputType) {
     std::vector<core::TypedExprPtr> inputs = {
-      std::make_shared<core::FieldAccessTypedExpr>(inputType, "c0")};
+        std::make_shared<core::FieldAccessTypedExpr>(inputType, "c0")};
     return std::make_shared<const core::CallTypedExpr>(
         VARCHAR(), std::move(inputs), "to_json");
   }
@@ -41,8 +41,8 @@ class ToJsonTest : public SparkFunctionBaseTest {
 
 TEST_F(ToJsonTest, basicStruct) {
   auto input = makeRowVector({"a"}, {makeFlatVector<int64_t>({1, 2, 3})});
-  auto expected = makeFlatVector<std::string>(
-    {R"({"a":1})", R"({"a":2})", R"({"a":3})"});
+  auto expected =
+      makeFlatVector<std::string>({R"({"a":1})", R"({"a":2})", R"({"a":3})"});
   testToJson(input, expected);
 }
 
@@ -53,16 +53,15 @@ TEST_F(ToJsonTest, basicArray) {
 }
 
 TEST_F(ToJsonTest, basicMap) {
-  auto input = makeMapVector<std::string, int64_t>(
-      {{{"a", 1}}, {{"b", 2}}, {{"c", 3}}});
-  auto expected = makeFlatVector<std::string>(
-      {R"({"a":1})", R"({"b":2})", R"({"c":3})"});
+  auto input =
+      makeMapVector<std::string, int64_t>({{{"a", 1}}, {{"b", 2}}, {{"c", 3}}});
+  auto expected =
+      makeFlatVector<std::string>({R"({"a":1})", R"({"b":2})", R"({"c":3})"});
   testToJson(input, expected);
 }
 
 TEST_F(ToJsonTest, basicBool) {
-  auto data = makeNullableFlatVector<bool>(
-      {true, false, std::nullopt});
+  auto data = makeNullableFlatVector<bool>({true, false, std::nullopt});
   auto input = makeRowVector({"a"}, {data});
   auto expected = makeFlatVector<std::string>(
       {R"({"a":true})", R"({"a":false})", R"({"a":null})"});
@@ -70,7 +69,8 @@ TEST_F(ToJsonTest, basicBool) {
 }
 
 TEST_F(ToJsonTest, basicString) {
-  auto data = makeNullableFlatVector<std::string>({"str1", "str2", std::nullopt, "str\"3\"", std::nullopt});
+  auto data = makeNullableFlatVector<std::string>(
+      {"str1", "str2", std::nullopt, "str\"3\"", std::nullopt});
   auto input = makeRowVector({"a"}, {data});
   auto expected = makeFlatVector<std::string>(
       {R"({"a":"str1"})",
@@ -82,7 +82,8 @@ TEST_F(ToJsonTest, basicString) {
 }
 
 TEST_F(ToJsonTest, basicTinyInt) {
-  auto data = makeNullableFlatVector<int8_t>({0, 127, 128, -128, -129, std::nullopt});
+  auto data =
+      makeNullableFlatVector<int8_t>({0, 127, 128, -128, -129, std::nullopt});
   auto input = makeRowVector({"a"}, {data});
   auto expected = makeFlatVector<std::string>(
       {R"({"a":0})",
@@ -98,15 +99,13 @@ TEST_F(ToJsonTest, basicSmallInt) {
   auto data = makeNullableFlatVector<int16_t>({0, 32768, -32769, std::nullopt});
   auto input = makeRowVector({"a"}, {data});
   auto expected = makeFlatVector<std::string>(
-      {R"({"a":0})",
-       R"({"a":-32768})",
-       R"({"a":32767})",
-       R"({"a":null})"});
+      {R"({"a":0})", R"({"a":-32768})", R"({"a":32767})", R"({"a":null})"});
   testToJson(input, expected);
 }
 
 TEST_F(ToJsonTest, basicInt) {
-  auto data = makeNullableFlatVector<int32_t>({0, 2147483648, -2147483649, std::nullopt});
+  auto data = makeNullableFlatVector<int32_t>(
+      {0, 2147483648, -2147483649, std::nullopt});
   auto input = makeRowVector({"a"}, {data});
   auto expected = makeFlatVector<std::string>(
       {R"({"a":0})",
@@ -193,10 +192,8 @@ TEST_F(ToJsonTest, basicDate) {
 
 TEST_F(ToJsonTest, nestedComplexType) {
   auto data1 = makeNullableFlatVector<std::string>({"str1", "str2", "str3"});
-  auto data2 = makeNullableArrayVector<int64_t>({
-      {1, 2, 3},
-      {},
-      {std::nullopt}});
+  auto data2 =
+      makeNullableArrayVector<int64_t>({{1, 2, 3}, {}, {std::nullopt}});
   auto data3 = makeMapVector<std::string, int64_t>(
       {{{"key1", 1}}, {{"key2", 2}}, {{"key3", 3}}});
   auto input = makeRowVector({"a", "b", "c"}, {data1, data2, data3});

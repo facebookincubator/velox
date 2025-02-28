@@ -27,11 +27,13 @@
 namespace facebook::velox::functions::sparksql {
 namespace {
 
-template<typename T>
-std::enable_if_t<std::is_integral_v<T>, size_t>
-append(T value, char* const buffer) {
+template <typename T>
+std::enable_if_t<std::is_integral_v<T>, size_t> append(
+    T value,
+    char* const buffer) {
   const auto oute = buffer + folly::to_ascii_size_max_decimal<uint64_t> + 1;
-  auto uvalue = value < 0 ? ~static_cast<uint64_t>(value) + 1 : static_cast<uint64_t>(value);
+  auto uvalue = value < 0 ? ~static_cast<uint64_t>(value) + 1
+                          : static_cast<uint64_t>(value);
   size_t p = 0;
   char* writtenPosition = buffer;
   if (value < 0) {
@@ -42,14 +44,14 @@ append(T value, char* const buffer) {
   return p;
 }
 
-template<typename T>
-std::enable_if_t<std::is_floating_point_v<T>, size_t>
-append(T value, char* const buffer) {
+template <typename T>
+std::enable_if_t<std::is_floating_point_v<T>, size_t> append(
+    T value,
+    char* const buffer) {
   std::string result;
   if (FOLLY_UNLIKELY(std::isinf(value) || std::isnan(value))) {
     result = fmt::format(
-        "\"{}\"",
-        util::Converter<TypeKind::VARCHAR>::tryCast(value).value());
+        "\"{}\"", util::Converter<TypeKind::VARCHAR>::tryCast(value).value());
   } else {
     result = util::Converter<TypeKind::VARCHAR>::tryCast(value).value();
   }
@@ -57,7 +59,7 @@ append(T value, char* const buffer) {
   return result.size();
 }
 
-template<TypeKind kind, typename T>
+template <TypeKind kind, typename T>
 size_t convertToString(
     T value,
     char* const buffer,
@@ -66,7 +68,7 @@ size_t convertToString(
   VELOX_FAIL("{} is not supported in to_json.", type->toString());
 }
 
-template<>
+template <>
 size_t convertToString<TypeKind::BOOLEAN>(
     bool value,
     char* const buffer,
@@ -81,7 +83,7 @@ size_t convertToString<TypeKind::BOOLEAN>(
   return size;
 }
 
-template<>
+template <>
 size_t convertToString<TypeKind::TINYINT>(
     int8_t value,
     char* const buffer,
@@ -90,7 +92,7 @@ size_t convertToString<TypeKind::TINYINT>(
   return append(value, buffer);
 }
 
-template<>
+template <>
 size_t convertToString<TypeKind::SMALLINT>(
     int16_t value,
     char* const buffer,
@@ -99,7 +101,7 @@ size_t convertToString<TypeKind::SMALLINT>(
   return append(value, buffer);
 }
 
-template<>
+template <>
 size_t convertToString<TypeKind::INTEGER>(
     int32_t value,
     char* const buffer,
@@ -107,13 +109,14 @@ size_t convertToString<TypeKind::INTEGER>(
     const TypePtr& type) {
   if (type->isDate()) {
     std::string stringValue = DATE()->toString(value);
-    return snprintf(buffer, stringValue.size() + 3, "\"%s\"", stringValue.c_str());
+    return snprintf(
+        buffer, stringValue.size() + 3, "\"%s\"", stringValue.c_str());
   } else {
     return append(value, buffer);
   }
 }
 
-template<>
+template <>
 size_t convertToString<TypeKind::BIGINT>(
     int64_t value,
     char* const buffer,
@@ -128,7 +131,7 @@ size_t convertToString<TypeKind::BIGINT>(
   }
 }
 
-template<>
+template <>
 size_t convertToString<TypeKind::HUGEINT>(
     int128_t value,
     char* const buffer,
@@ -145,7 +148,7 @@ size_t convertToString<TypeKind::HUGEINT>(
   return p;
 }
 
-template<>
+template <>
 size_t convertToString<TypeKind::REAL>(
     float value,
     char* const buffer,
@@ -154,7 +157,7 @@ size_t convertToString<TypeKind::REAL>(
   return append(value, buffer);
 }
 
-template<>
+template <>
 size_t convertToString<TypeKind::DOUBLE>(
     double value,
     char* const buffer,
@@ -163,7 +166,7 @@ size_t convertToString<TypeKind::DOUBLE>(
   return append(value, buffer);
 }
 
-template<>
+template <>
 size_t convertToString<TypeKind::VARCHAR>(
     StringView value,
     char* const buffer,
@@ -176,7 +179,7 @@ size_t convertToString<TypeKind::VARCHAR>(
   return size + 2;
 }
 
-template<>
+template <>
 size_t convertToString<TypeKind::TIMESTAMP>(
     Timestamp value,
     char* const buffer,
@@ -184,12 +187,14 @@ size_t convertToString<TypeKind::TIMESTAMP>(
     const TypePtr& type) {
   // Spark converts Timestamp in ISO8601 format by default.
   static const auto formatter =
-      functions::buildJodaDateTimeFormatter("yyyy-MM-dd'T'HH:mm:ss.SSSZZ").value();
+      functions::buildJodaDateTimeFormatter("yyyy-MM-dd'T'HH:mm:ss.SSSZZ")
+          .value();
   const auto* timeZone =
       getTimeZoneFromConfig(context.execCtx()->queryCtx()->queryConfig());
   const auto maxResultSize = formatter->maxResultSize(timeZone);
   *buffer = '"';
-  const auto resultSize = formatter->format(value, timeZone, maxResultSize, buffer + 1, false, "Z");
+  const auto resultSize =
+      formatter->format(value, timeZone, maxResultSize, buffer + 1, false, "Z");
   *(buffer + resultSize + 1) = '"';
   return resultSize + 2;
 }
@@ -203,12 +208,12 @@ size_t estimateRowSize(const TypePtr& type) {
   } else if constexpr (std::is_same_v<T, Timestamp>) {
     // yyyy-MM-dd'T'HH:mm:ss.SSSZZ
     return 40;
-  }  else if (type->isDate()) {
+  } else if (type->isDate()) {
     // yyyy-MM-dd.
     return 12;
   } else {
     // For variable-length types, the initial size is set to 10.
-    return  10;
+    return 10;
   }
 }
 
@@ -227,7 +232,8 @@ void toJson(
   auto inputVector = input.as<SimpleVector<T>>();
 
   size_t rowSize = estimateRowSize<T>(inputVector->type());
-  Buffer* buffer = flatResult.getBufferWithSpace(rows.countSelected() * rowSize);
+  Buffer* buffer =
+      flatResult.getBufferWithSpace(rows.countSelected() * rowSize);
   char* rawBuffer = buffer->asMutable<char>() + buffer->size();
   context.applyToSelectedNoThrow(rows, [&](auto row) {
     if (inputVector->isNullAt(row)) {
@@ -306,7 +312,7 @@ struct AsJson {
       if (!exec::PeeledEncoding::isPeelable(input->encoding())) {
         serialize(context, input, rows, json_);
       } else {
-        exec::withContextSaver([&](exec::ContextSaver& saver){
+        exec::withContextSaver([&](exec::ContextSaver& saver) {
           exec::LocalSelectivityVector newRowsHodler(*context.execCtx());
 
           exec::LocalDecodedVector localDecoded(context);
@@ -367,12 +373,7 @@ struct AsJson {
     auto flatJsonStrings = result->as<FlatVector<StringView>>();
 
     VELOX_DYNAMIC_TYPE_DISPATCH_ALL(
-        toJson,
-        input->typeKind(),
-        *input,
-        context,
-        baseRows,
-        *flatJsonStrings);
+        toJson, input->typeKind(), *input, context, baseRows, *flatJsonStrings);
   }
 
   // Combine exceptions in oldErrors into context.errors_ with a transformation
@@ -492,8 +493,7 @@ void toJsonFromArray(
 
   auto elementToTopLevelRows = functions::getElementToTopLevelRows(
       elements->size(), rows, inputArray, context.pool());
-  AsJson elementsAsJson{
-      context, elements, elementsRows, elementToTopLevelRows};
+  AsJson elementsAsJson{context, elements, elementsRows, elementToTopLevelRows};
 
   // Estimates an upperbound of the total length of all Json strings for the
   // input according to the length of all elements Json strings and the
@@ -573,10 +573,8 @@ void toJsonFromMap(
   auto elementToTopLevelRows = functions::getElementToTopLevelRows(
       mapKeys->size(), rows, inputMap, context.pool());
 
-  AsJson keysAsJson{
-      context, mapKeys, elementsRows, elementToTopLevelRows};
-  AsJson valuesAsJson{
-      context, mapValues, elementsRows, elementToTopLevelRows};
+  AsJson keysAsJson{context, mapKeys, elementsRows, elementToTopLevelRows};
+  AsJson valuesAsJson{context, mapValues, elementsRows, elementToTopLevelRows};
 
   // Estimates an upperbound of the total length of all Json strings for the
   // input according to the length of all elements Json strings and the
@@ -627,7 +625,8 @@ void toJsonFromMap(
       if (it != sortedKeys.begin()) {
         proxy.append(","_sv);
       }
-      std::string keyFormat = mapType.childAt(0)->isVarchar() ? "{}:" : "\"{}\":";
+      std::string keyFormat =
+          mapType.childAt(0)->isVarchar() ? "{}:" : "\"{}\":";
       proxy.append(fmt::format(keyFormat, it->first));
       valuesAsJson.append(it->second, proxy);
     }
@@ -648,7 +647,8 @@ class ToJsonFunction final : public exec::VectorFunction {
     VELOX_USER_CHECK_EQ(args.size(), 1, "to_json takes one argument.");
     auto kind = args[0]->typeKind();
     VELOX_USER_CHECK(
-        kind == TypeKind::ROW || kind == TypeKind::ARRAY || kind == TypeKind::MAP,
+        kind == TypeKind::ROW || kind == TypeKind::ARRAY ||
+            kind == TypeKind::MAP,
         "to_json only support ROW/ARRAY/MAP inputs.");
     context.ensureWritable(rows, outputType, result);
     result->clearNulls(rows);
