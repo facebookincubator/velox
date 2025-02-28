@@ -208,8 +208,9 @@ class Reader {
       const RowReaderOptions& options = {}) const = 0;
 
   static TypePtr updateColumnNames(
-      const TypePtr& fileType,
-      const TypePtr& tableType);
+      const RowTypePtr& fileType,
+      const RowTypePtr& tableType,
+      bool recursive = true);
 };
 
 } // namespace facebook::velox::dwio::common

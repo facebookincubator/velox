@@ -807,8 +807,11 @@ DwrfReader::DwrfReader(
 void DwrfReader::updateColumnNamesFromTableSchema() {
   const auto& tableSchema = readerBase_->readerOptions().fileSchema();
   const auto& fileSchema = readerBase_->schema();
+
+  auto updateRecursive =
+      !readerBase_->readerOptions().useNestedColumnNamesForColumnMapping();
   readerBase_->setSchema(std::dynamic_pointer_cast<const RowType>(
-      updateColumnNames(fileSchema, tableSchema)));
+      updateColumnNames(fileSchema, tableSchema, updateRecursive)));
 }
 
 std::unique_ptr<StripeInformation> DwrfReader::getStripe(
