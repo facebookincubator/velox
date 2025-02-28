@@ -474,19 +474,22 @@ TEST_F(VectorMakerTest, nestedArrayVectorFromJson) {
        "null",
        "[[1,2,3],[],[4,5]]"});
 
+  const auto arrayElement = [](std::vector<std::optional<int32_t>> data)
+      -> std::optional<std::vector<std::optional<int32_t>>> { return {data}; };
+
   VectorPtr expectedVector = maker_.arrayVectorNullable<int32_t>({
-      {{1, 2}},
-      {{2, 3, 4}},
-      {{std::nullopt, 7}},
-      {{1, 3, 7, 9}},
-      {{}},
-      {{std::nullopt}},
-      {{1, 2, std::nullopt}},
-      {{}},
+      arrayElement({1, 2}),
+      arrayElement({2, 3, 4}),
+      arrayElement({std::nullopt, 7}),
+      arrayElement({1, 3, 7, 9}),
+      arrayElement({}),
       std::nullopt,
-      {{1, 2, 3}},
-      {{}},
-      {{4, 5}},
+      arrayElement({1, 2, std::nullopt}),
+      arrayElement({}),
+      std::nullopt,
+      arrayElement({1, 2, 3}),
+      arrayElement({}),
+      arrayElement({4, 5}),
   });
 
   VectorPtr elementsOfArrayVector = arrayVector->elements();
