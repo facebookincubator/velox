@@ -16,8 +16,6 @@
 
 #include "velox/connectors/hive/iceberg/IcebergSplit.h"
 
-#include <utility>
-
 #include "velox/connectors/hive/iceberg/IcebergDeleteFile.h"
 
 namespace facebook::velox::connector::hive::iceberg {
