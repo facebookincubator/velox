@@ -4135,6 +4135,46 @@ TEST_F(HashJoinTest, dynamicFilters) {
         })
         .run();
   }
+
+  // Disable filter push-down by setting filterPushdown to false.
+  {
+    core::PlanNodeId probeScanId;
+    core::PlanNodeId joinId;
+    auto op = PlanBuilder(planNodeIdGenerator, pool_.get())
+                  .tableScan(
+                      probeType,
+                      {} /*subfieldFilters*/,
+                      "" /*remainingFilter*/,
+                      nullptr /*dataColumns*/,
+                      {} /*assignments*/,
+                      false /*filterPushdown*/)
+                  .capturePlanNodeId(probeScanId)
+                  .hashJoin(
+                      {"c0"},
+                      {"u_c0"},
+                      buildSide,
+                      "",
+                      {"c0", "c1", "u_c1"},
+                      core::JoinType::kInner)
+                  .capturePlanNodeId(joinId)
+                  .project({"c0", "c1 + 1", "c1 + u_c1"})
+                  .planNode();
+
+    HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
+        .planNode(std::move(op))
+        .makeInputSplits(makeInputSplits(probeScanId))
+        .referenceQuery(
+            "SELECT t.c0, t.c1 + 1, t.c1 + u.c1 FROM t, u WHERE t.c0 = u.c0")
+        .verifier([&](const std::shared_ptr<Task>& task, bool hasSpill) {
+          SCOPED_TRACE(fmt::format("hasSpill:{}", hasSpill));
+          auto planStats = toPlanStats(task->taskStats());
+          ASSERT_EQ(0, getFiltersProduced(task, 1).sum);
+          ASSERT_EQ(0, getFiltersAccepted(task, 0).sum);
+          ASSERT_EQ(getInputPositions(task, 1), numRowsProbe * numSplits);
+          ASSERT_TRUE(planStats.at(probeScanId).dynamicFilterStats.empty());
+        })
+        .run();
+  }
 }
 
 TEST_F(HashJoinTest, dynamicFiltersStatsWithChainedJoins) {

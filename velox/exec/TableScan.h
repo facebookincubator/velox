@@ -15,6 +15,7 @@
  */
 #pragma once
 
+#include "velox/connectors/hive/TableHandle.h"
 #include "velox/core/PlanNode.h"
 #include "velox/exec/Operator.h"
 #include "velox/exec/ScaledScanController.h"
@@ -45,7 +46,15 @@ class TableScan : public SourceOperator {
   void close() override;
 
   bool canAddDynamicFilter() const override {
-    return connector_->canAddDynamicFilter();
+    std::shared_ptr<connector::hive::HiveTableHandle> hiveTableHandle_ =
+        std::dynamic_pointer_cast<connector::hive::HiveTableHandle>(
+            tableHandle_);
+    if (hiveTableHandle_ == nullptr) {
+      return connector_->canAddDynamicFilter();
+    } else {
+      return connector_->canAddDynamicFilter() &&
+          hiveTableHandle_->isFilterPushdownEnabled();
+    }
   }
 
   void addDynamicFilter(

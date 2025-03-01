@@ -114,7 +114,8 @@ PlanBuilder& PlanBuilder::tableScan(
     const RowTypePtr& dataColumns,
     const std::unordered_map<
         std::string,
-        std::shared_ptr<connector::ColumnHandle>>& assignments) {
+        std::shared_ptr<connector::ColumnHandle>>& assignments,
+    bool filterPushdown) {
   return TableScanBuilder(*this)
       .outputType(outputType)
       .assignments(assignments)
@@ -122,6 +123,7 @@ PlanBuilder& PlanBuilder::tableScan(
       .remainingFilter(remainingFilter)
       .dataColumns(dataColumns)
       .assignments(assignments)
+      .filterPushdown(filterPushdown)
       .endTableScan();
 }
 
@@ -134,7 +136,8 @@ PlanBuilder& PlanBuilder::tableScan(
     const RowTypePtr& dataColumns,
     const std::unordered_map<
         std::string,
-        std::shared_ptr<connector::ColumnHandle>>& assignments) {
+        std::shared_ptr<connector::ColumnHandle>>& assignments,
+    bool filterPushdown) {
   return TableScanBuilder(*this)
       .tableName(tableName)
       .outputType(outputType)
@@ -143,6 +146,7 @@ PlanBuilder& PlanBuilder::tableScan(
       .remainingFilter(remainingFilter)
       .dataColumns(dataColumns)
       .assignments(assignments)
+      .filterPushdown(filterPushdown)
       .endTableScan();
 }
 
@@ -258,7 +262,7 @@ core::PlanNodePtr PlanBuilder::TableScanBuilder::build(core::PlanNodeId id) {
     tableHandle_ = std::make_shared<HiveTableHandle>(
         connectorId_,
         tableName_,
-        true,
+        filterPushdown_,
         std::move(filters),
         remainingFilterExpr,
         dataColumns_);
