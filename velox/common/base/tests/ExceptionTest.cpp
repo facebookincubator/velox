@@ -16,6 +16,7 @@
 
 #include <fmt/format.h>
 #include <folly/Random.h>
+#include <gflags/gflags.h>
 #include <gtest/gtest.h>
 
 #include "velox/common/base/Exceptions.h"
