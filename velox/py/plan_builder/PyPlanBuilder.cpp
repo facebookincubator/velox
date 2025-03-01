@@ -314,6 +314,7 @@ PyPlanBuilder& PyPlanBuilder::tpchGen(
     const std::string& tableName,
     const std::vector<std::string>& columns,
     double scaleFactor,
+    int32_t textPoolSizeMb,
     size_t numParts,
     const std::string& connectorId) {
   // If `columns` is empty, get all columns from `table`.
@@ -322,6 +323,7 @@ PyPlanBuilder& PyPlanBuilder::tpchGen(
       table,
       columns.empty() ? tpch::getTableSchema(table)->names() : columns,
       scaleFactor,
+      textPoolSizeMb,
       connectorId);
 
   // Generate one split per part.

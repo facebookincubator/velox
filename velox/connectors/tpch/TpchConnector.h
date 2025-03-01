@@ -44,10 +44,12 @@ class TpchTableHandle : public ConnectorTableHandle {
   explicit TpchTableHandle(
       std::string connectorId,
       velox::tpch::Table table,
-      double scaleFactor = 1.0)
+      double scaleFactor = 1.0,
+      int32_t textPoolSizeMb = 10)
       : ConnectorTableHandle(std::move(connectorId)),
         table_(table),
-        scaleFactor_(scaleFactor) {
+        scaleFactor_(scaleFactor),
+        textPoolSizeMb_(textPoolSizeMb) {
     VELOX_CHECK_GE(scaleFactor, 0, "Tpch scale factor must be non-negative");
   }
 
@@ -63,9 +65,16 @@ class TpchTableHandle : public ConnectorTableHandle {
     return scaleFactor_;
   }
 
+  int32_t getTextPoolSizeMb() const {
+    return textPoolSizeMb_;
+  }
+
  private:
   const velox::tpch::Table table_;
   double scaleFactor_;
+  // For correct query results matching with Presto, use 300 MB for the
+  // text pool size instead of the default 10 MB.
+  int32_t textPoolSizeMb_;
 };
 
 class TpchDataSource : public DataSource {
@@ -109,6 +118,9 @@ class TpchDataSource : public DataSource {
 
   velox::tpch::Table tpchTable_;
   double scaleFactor_{1.0};
+  // For correct query results matching with Presto, use 300 MB for the
+  // text pool size instead of the default 10 MB.
+  int32_t textPoolSizeMb_{10};
   size_t tpchTableRowCount_{0};
   RowTypePtr outputType_;
 

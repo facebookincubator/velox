@@ -28,24 +28,33 @@ RowVectorPtr getTpchData(
     size_t maxRows,
     size_t offset,
     double scaleFactor,
+    int32_t textPoolSizeMb,
     memory::MemoryPool* pool) {
   switch (table) {
     case Table::TBL_PART:
-      return velox::tpch::genTpchPart(pool, maxRows, offset, scaleFactor);
+      return velox::tpch::genTpchPart(
+          pool, maxRows, offset, scaleFactor, textPoolSizeMb);
     case Table::TBL_SUPPLIER:
-      return velox::tpch::genTpchSupplier(pool, maxRows, offset, scaleFactor);
+      return velox::tpch::genTpchSupplier(
+          pool, maxRows, offset, scaleFactor, textPoolSizeMb);
     case Table::TBL_PARTSUPP:
-      return velox::tpch::genTpchPartSupp(pool, maxRows, offset, scaleFactor);
+      return velox::tpch::genTpchPartSupp(
+          pool, maxRows, offset, scaleFactor, textPoolSizeMb);
     case Table::TBL_CUSTOMER:
-      return velox::tpch::genTpchCustomer(pool, maxRows, offset, scaleFactor);
+      return velox::tpch::genTpchCustomer(
+          pool, maxRows, offset, scaleFactor, textPoolSizeMb);
     case Table::TBL_ORDERS:
-      return velox::tpch::genTpchOrders(pool, maxRows, offset, scaleFactor);
+      return velox::tpch::genTpchOrders(
+          pool, maxRows, offset, scaleFactor, textPoolSizeMb);
     case Table::TBL_LINEITEM:
-      return velox::tpch::genTpchLineItem(pool, maxRows, offset, scaleFactor);
+      return velox::tpch::genTpchLineItem(
+          pool, maxRows, offset, scaleFactor, textPoolSizeMb);
     case Table::TBL_NATION:
-      return velox::tpch::genTpchNation(pool, maxRows, offset, scaleFactor);
+      return velox::tpch::genTpchNation(
+          pool, maxRows, offset, scaleFactor, textPoolSizeMb);
     case Table::TBL_REGION:
-      return velox::tpch::genTpchRegion(pool, maxRows, offset, scaleFactor);
+      return velox::tpch::genTpchRegion(
+          pool, maxRows, offset, scaleFactor, textPoolSizeMb);
   }
   return nullptr;
 }
@@ -71,6 +80,7 @@ TpchDataSource::TpchDataSource(
       tpchTableHandle, "TableHandle must be an instance of TpchTableHandle");
   tpchTable_ = tpchTableHandle->getTable();
   scaleFactor_ = tpchTableHandle->getScaleFactor();
+  textPoolSizeMb_ = tpchTableHandle->getTextPoolSizeMb();
   tpchTableRowCount_ = getRowCount(tpchTable_, scaleFactor_);
 
   auto tpchTableSchema = getTableSchema(tpchTableHandle->getTable());
@@ -159,8 +169,8 @@ std::optional<RowVectorPtr> TpchDataSource::next(
   }
 
   size_t maxRows = std::min(size, (splitEnd_ - splitOffset_));
-  auto outputVector =
-      getTpchData(tpchTable_, maxRows, splitOffset_, scaleFactor_, pool_);
+  auto outputVector = getTpchData(
+      tpchTable_, maxRows, splitOffset_, scaleFactor_, textPoolSizeMb_, pool_);
 
   // If the split is exhausted.
   if (!outputVector || outputVector->size() == 0) {

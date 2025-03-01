@@ -97,6 +97,46 @@ TEST_F(TpchConnectorTest, simple) {
       makeFlatVector<int64_t>({0, 1, 1, 1, 4}),
       // n_comment
       makeFlatVector<StringView>({
+          "furiously regular requests. platelets affix furious",
+          "instructions wake quickly. final deposits haggle. final, silent theodolites ",
+          "asymptotes use fluffily quickly bold instructions. slyly bold dependencies sleep carefully pending accounts",
+          "ss deposits wake across the pending foxes. packages after the carefully bold requests integrate caref",
+          "usly ironic, pending foxes. even, special instructions nag. sly, final foxes detect slyly fluffily ",
+      }),
+  });
+  test::assertEqualVectors(expected, output);
+}
+
+// Simple scan of first 5 rows of "nation" with text pool size 300 MB.
+// Presto uses 300 MB for its text pool size.
+TEST_F(TpchConnectorTest, simpleTextPoolSize300MB) {
+  int32_t textPoolSizeMb = 300;
+  auto plan = PlanBuilder()
+                  .tpchTableScan(
+                      Table::TBL_NATION,
+                      {"n_nationkey", "n_name", "n_regionkey", "n_comment"},
+                      1.0,
+                      textPoolSizeMb,
+                      kTpchConnectorId)
+                  .limit(0, 5, false)
+                  .planNode();
+
+  auto output = getResults(plan, {makeTpchSplit()});
+  auto expected = makeRowVector({
+      // n_nationkey
+      makeFlatVector<int64_t>({0, 1, 2, 3, 4}),
+      // n_name
+      makeFlatVector<StringView>({
+          "ALGERIA",
+          "ARGENTINA",
+          "BRAZIL",
+          "CANADA",
+          "EGYPT",
+      }),
+      // n_regionkey
+      makeFlatVector<int64_t>({0, 1, 1, 1, 4}),
+      // n_comment
+      makeFlatVector<StringView>({
           " haggle. carefully final deposits detect slyly agai",
           "al foxes promise slyly according to the regular accounts. bold requests alon",
           "y alongside of the pending deposits. carefully special packages are about the ironic forges. slyly special ",
