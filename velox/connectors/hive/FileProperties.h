@@ -32,6 +32,8 @@ namespace facebook::velox {
 struct FileProperties {
   std::optional<int64_t> fileSize;
   std::optional<int64_t> modificationTime;
+  std::optional<int64_t> readRangeHint{std::nullopt};
+  std::optional<std::string> extraFileInfo{std::nullopt};
 };
 
 } // namespace facebook::velox
