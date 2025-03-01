@@ -138,7 +138,8 @@ ExprPtr AtLeastNNonNullsCallToSpecialForm::constructSpecialForm(
     const TypePtr& type,
     std::vector<ExprPtr>&& compiledChildren,
     bool trackCpuUsage,
-    const core::QueryConfig& /*config*/) {
+    const core::QueryConfig& /*config*/,
+    memory::MemoryPool* /*pool*/) {
   VELOX_USER_CHECK_GT(
       compiledChildren.size(),
       1,

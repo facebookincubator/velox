@@ -15,6 +15,7 @@
  */
 #include "velox/expression/ConjunctExpr.h"
 #include "velox/expression/BooleanMix.h"
+#include "velox/expression/ConstantExpr.h"
 #include "velox/expression/FieldReference.h"
 #include "velox/expression/ScopedVarSetter.h"
 
@@ -415,18 +416,126 @@ TypePtr ConjunctCallToSpecialForm::resolveType(
   return ConjunctExpr::resolveType(argTypes);
 }
 
+ExprPtr ConjunctCallToSpecialForm::optimizeAnd(
+    std::vector<ExprPtr>& compiledChildren,
+    memory::MemoryPool* pool) {
+  ExprPtr nullChild = nullptr;
+  bool allInputsConstant = true;
+  auto numChildren = compiledChildren.size();
+  for (vector_size_t i = numChildren - 1; i >= 0; i--) {
+    if (auto constantExpr = std::dynamic_pointer_cast<exec::ConstantExpr>(
+            compiledChildren[i])) {
+      if (constantExpr->value()->isNullAt(0)) {
+        nullChild = constantExpr;
+      } else if (
+          auto constVector =
+              constantExpr->value()->as<ConstantVector<bool>>()) {
+        if (!constVector->valueAt(0)) {
+          return constantExpr;
+        } else {
+          compiledChildren.erase(compiledChildren.begin() + i);
+        }
+      }
+    } else {
+      allInputsConstant = false;
+    }
+  }
+
+  if (allInputsConstant && nullChild) {
+    return nullChild;
+  } else if (compiledChildren.empty()) {
+    auto result =
+        std::make_shared<ConstantVector<bool>>(pool, 1, false, BOOLEAN(), true);
+    return std::make_shared<exec::ConstantExpr>(result);
+  } else if (compiledChildren.size() == 1) {
+    return compiledChildren.front();
+  }
+  return nullptr;
+}
+
+ExprPtr ConjunctCallToSpecialForm::optimizeOr(
+    std::vector<ExprPtr>& compiledChildren,
+    memory::MemoryPool* pool) {
+  ExprPtr nullChild = nullptr;
+  bool allInputsConstant = true;
+  auto numChildren = compiledChildren.size();
+  for (vector_size_t i = numChildren - 1; i >= 0; i--) {
+    if (auto constantExpr = std::dynamic_pointer_cast<exec::ConstantExpr>(
+            compiledChildren[i])) {
+      if (constantExpr->value()->isNullAt(0)) {
+        nullChild = constantExpr;
+      } else if (
+          auto constVector =
+              constantExpr->value()->as<ConstantVector<bool>>()) {
+        if (constVector->valueAt(0)) {
+          return constantExpr;
+        } else {
+          compiledChildren.erase(compiledChildren.begin() + i);
+        }
+      }
+    } else {
+      allInputsConstant = false;
+    }
+  }
+
+  if (allInputsConstant && nullChild) {
+    return nullChild;
+  } else if (compiledChildren.empty()) {
+    auto result = std::make_shared<ConstantVector<bool>>(
+        pool, 1, false, BOOLEAN(), false);
+    return std::make_shared<exec::ConstantExpr>(result);
+  } else if (compiledChildren.size() == 1) {
+    return compiledChildren.front();
+  }
+  return nullptr;
+}
+
+// During expression compilation, the inputs to 'AND', 'OR' conjunct expressions
+// could be constant folded to 'true' or 'false'. For instance, the inputs to
+// expression '(1 = 2) and (2 != 3)' are compiled with constant folding enabled
+// to 'false' and 'true'. When a conjunct expression is compiled, certain
+// optimizations are possible when the inputs are constants. When 'AND' conjunct
+// expression has 'false' as an input, it is simplified to a constant boolean
+// expression with value 'false'. When 'OR' conjunct expression has 'true' as an
+// input, it is simplified to a constant boolean expression with value 'true'.
+// Similarly, inputs to 'AND' and 'OR' conjunct expressions that are 'true' or
+// 'false' respectively will be pruned from the conjunct expression.
+//
+// If all inputs to 'AND' conjunct expression are constant, none of the inputs
+// is 'false', and if any of the inputs is NULL, the expression is simplified
+// to NULL. If all inputs to OR conjunct expression are constant, none of the
+// inputs is 'true', and if any of the inputs is NULL, the expression is
+// simplified to NULL. These optimizations are applied when compiling conjunct
+// expressions.
+// Result of 'a AND b', 'a OR b' when either a or b is NULL:
+//   a      b      a AND b    a OR b
+// TRUE    NULL     NULL       TRUE
+// FALSE   NULL     FALSE      NULL
+// NULL    TRUE     NULL       TRUE
+// NULL    FALSE    FALSE      NULL
+// NULL    NULL     NULL       NULL
+// Reference:
+// https://prestodb.io/docs/current/functions/logical.html#effect-of-null-on-logical-operators
 ExprPtr ConjunctCallToSpecialForm::constructSpecialForm(
     const TypePtr& type,
     std::vector<ExprPtr>&& compiledChildren,
     bool /* trackCpuUsage */,
-    const core::QueryConfig& /*config*/) {
-  bool inputsSupportFlatNoNullsFastPath =
-      Expr::allSupportFlatNoNullsFastPath(compiledChildren);
+    const core::QueryConfig& /*config*/,
+    memory::MemoryPool* pool) {
+  auto children = std::move(compiledChildren);
+  if (isAnd_) {
+    if (auto result = optimizeAnd(children, pool)) {
+      return result;
+    }
+  } else {
+    if (auto result = optimizeOr(children, pool)) {
+      return result;
+    }
+  }
 
+  bool inputsSupportFlatNoNullsFastPath =
+      Expr::allSupportFlatNoNullsFastPath(children);
   return std::make_shared<ConjunctExpr>(
-      type,
-      std::move(compiledChildren),
-      isAnd_,
-      inputsSupportFlatNoNullsFastPath);
+      type, std::move(children), isAnd_, inputsSupportFlatNoNullsFastPath);
 }
 } // namespace facebook::velox::exec

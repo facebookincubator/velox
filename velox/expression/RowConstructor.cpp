@@ -35,7 +35,8 @@ ExprPtr RowConstructorCallToSpecialForm::constructSpecialForm(
     const TypePtr& type,
     std::vector<ExprPtr>&& compiledChildren,
     bool trackCpuUsage,
-    const core::QueryConfig& config) {
+    const core::QueryConfig& config,
+    memory::MemoryPool* /*pool*/) {
   auto [function, metadata] = vectorFunctionFactories().withRLock(
       [&config](auto& functionMap) -> std::pair<
                                        std::shared_ptr<VectorFunction>,

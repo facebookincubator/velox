@@ -350,7 +350,8 @@ exec::ExprPtr ConcatWsCallToSpecialForm::constructSpecialForm(
     const TypePtr& type,
     std::vector<exec::ExprPtr>&& args,
     bool trackCpuUsage,
-    const core::QueryConfig& config) {
+    const core::QueryConfig& config,
+    memory::MemoryPool* pool) {
   auto numArgs = args.size();
   VELOX_USER_CHECK_GE(
       numArgs,

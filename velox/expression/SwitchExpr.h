@@ -80,7 +80,8 @@ class SwitchCallToSpecialForm : public FunctionCallToSpecialForm {
       const TypePtr& type,
       std::vector<ExprPtr>&& compiledChildren,
       bool trackCpuUsage,
-      const core::QueryConfig& config) override;
+      const core::QueryConfig& config,
+      memory::MemoryPool* pool) override;
 };
 
 class IfCallToSpecialForm : public SwitchCallToSpecialForm {

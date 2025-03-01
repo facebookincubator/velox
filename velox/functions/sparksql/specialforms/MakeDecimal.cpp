@@ -146,7 +146,8 @@ exec::ExprPtr MakeDecimalCallToSpecialForm::constructSpecialForm(
     const TypePtr& type,
     std::vector<exec::ExprPtr>&& args,
     bool trackCpuUsage,
-    const core::QueryConfig& /*config*/) {
+    const core::QueryConfig& /*config*/,
+    memory::MemoryPool* /*pool*/) {
   VELOX_USER_CHECK(
       type->isDecimal(),
       "The result type of make_decimal should be decimal type.");

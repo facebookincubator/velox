@@ -36,7 +36,8 @@ class FunctionCallToSpecialForm {
       const TypePtr& type,
       std::vector<ExprPtr>&& compiledChildren,
       bool trackCpuUsage,
-      const core::QueryConfig& config) = 0;
+      const core::QueryConfig& config,
+      memory::MemoryPool* pool) = 0;
 };
 
 /// Returns the output Type of the SpecialForm associated with the functionName
@@ -54,7 +55,8 @@ ExprPtr constructSpecialForm(
     const TypePtr& type,
     std::vector<ExprPtr>&& compiledChildren,
     bool trackCpuUsage,
-    const core::QueryConfig& config);
+    const core::QueryConfig& config,
+    memory::MemoryPool* pool);
 
 /// Returns true iff a FunctionCallToSpeicalForm object has been registered for
 /// the given functionName.

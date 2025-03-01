@@ -275,7 +275,8 @@ ExprPtr SwitchCallToSpecialForm::constructSpecialForm(
     const TypePtr& type,
     std::vector<ExprPtr>&& compiledChildren,
     bool /* trackCpuUsage */,
-    const core::QueryConfig& /*config*/) {
+    const core::QueryConfig& /*config*/,
+    memory::MemoryPool* /*pool*/) {
   bool inputsSupportFlatNoNullsFastPath =
       Expr::allSupportFlatNoNullsFastPath(compiledChildren);
   return std::make_shared<SwitchExpr>(

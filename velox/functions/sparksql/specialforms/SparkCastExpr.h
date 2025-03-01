@@ -46,7 +46,8 @@ class SparkCastCallToSpecialForm : public exec::CastCallToSpecialForm {
       const TypePtr& type,
       std::vector<exec::ExprPtr>&& compiledChildren,
       bool trackCpuUsage,
-      const core::QueryConfig& config) override;
+      const core::QueryConfig& config,
+      memory::MemoryPool* pool) override;
 };
 
 class SparkTryCastCallToSpecialForm : public exec::TryCastCallToSpecialForm {
@@ -55,6 +56,7 @@ class SparkTryCastCallToSpecialForm : public exec::TryCastCallToSpecialForm {
       const TypePtr& type,
       std::vector<exec::ExprPtr>&& compiledChildren,
       bool trackCpuUsage,
-      const core::QueryConfig& config) override;
+      const core::QueryConfig& config,
+      memory::MemoryPool* pool) override;
 };
 } // namespace facebook::velox::functions::sparksql
