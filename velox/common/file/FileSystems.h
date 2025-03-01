@@ -29,6 +29,9 @@ class ConfigBase;
 }
 class ReadFile;
 class WriteFile;
+namespace filesystems::File {
+class IoStats;
+}
 } // namespace facebook::velox
 
 namespace facebook::velox::filesystems {
@@ -69,6 +72,15 @@ struct FileOptions {
   /// S3.
   std::optional<std::unordered_map<std::string, std::string>> properties{
       std::nullopt};
+
+  File::IoStats* stats{nullptr};
+
+  /// A raw string that client can encode as anything they want to describe the
+  /// file.
+  std::optional<std::string> extraFileInfo{std::nullopt};
+
+  /// A hint to the file system for which region of the file should be read.
+  std::optional<int64_t> readRangeHint{std::nullopt};
 };
 
 /// Defines directory options
