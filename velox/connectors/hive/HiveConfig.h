@@ -44,9 +44,6 @@ class HiveConfig {
 
   /// Maximum number of (bucketed) partitions per a single table writer
   /// instance.
-  ///
-  /// TODO: remove hive_orc_use_column_names since it doesn't exist in presto,
-  /// right now this is only used for testing.
   static constexpr const char* kMaxPartitionsPerWriters =
       "max-partitions-per-writers";
   static constexpr const char* kMaxPartitionsPerWritersSession =
@@ -102,10 +99,15 @@ class HiveConfig {
 
   /// The max coalesce bytes for a request.
   static constexpr const char* kMaxCoalescedBytes = "max-coalesced-bytes";
+  static constexpr const char* kMaxCoalescedBytesSession =
+      "max-coalesced-bytes";
 
-  /// The max coalesce distance bytes for combining requests.
-  static constexpr const char* kMaxCoalescedDistanceBytes =
-      "max-coalesced-distance-bytes";
+  /// The max merge distance to combine read requests.
+  /// Note: The session property name differs from the constant name for
+  /// backward compatibility with Presto.
+  static constexpr const char* kMaxCoalescedDistance = "max-coalesced-distance";
+  static constexpr const char* kMaxCoalescedDistanceSession =
+      "orc_max_merge_distance";
 
   /// The number of prefetch rowgroups
   static constexpr const char* kPrefetchRowGroups = "prefetch-rowgroups";
@@ -113,6 +115,7 @@ class HiveConfig {
   /// The total size in bytes for a direct coalesce request. Up to 8MB load
   /// quantum size is supported when SSD cache is enabled.
   static constexpr const char* kLoadQuantum = "load-quantum";
+  static constexpr const char* kLoadQuantumSession = "load-quantum";
 
   /// Maximum number of entries in the file handle cache.
   static constexpr const char* kNumCacheFileHandles = "num_cached_file_handles";
@@ -129,48 +132,6 @@ class HiveConfig {
   /// The threshold of file size in bytes when the whole file is fetched with
   /// meta data together. Optimization to decrease the small IO requests
   static constexpr const char* kFilePreloadThreshold = "file-preload-threshold";
-
-  /// Maximum stripe size in orc writer.
-  static constexpr const char* kOrcWriterMaxStripeSize =
-      "hive.orc.writer.stripe-max-size";
-  static constexpr const char* kOrcWriterMaxStripeSizeSession =
-      "orc_optimized_writer_max_stripe_size";
-
-  /// Maximum dictionary memory that can be used in orc writer.
-  static constexpr const char* kOrcWriterMaxDictionaryMemory =
-      "hive.orc.writer.dictionary-max-memory";
-  static constexpr const char* kOrcWriterMaxDictionaryMemorySession =
-      "orc_optimized_writer_max_dictionary_memory";
-
-  /// Configs to control dictionary encoding.
-  static constexpr const char* kOrcWriterIntegerDictionaryEncodingEnabled =
-      "hive.orc.writer.integer-dictionary-encoding-enabled";
-  static constexpr const char*
-      kOrcWriterIntegerDictionaryEncodingEnabledSession =
-          "orc_optimized_writer_integer_dictionary_encoding_enabled";
-  static constexpr const char* kOrcWriterStringDictionaryEncodingEnabled =
-      "hive.orc.writer.string-dictionary-encoding-enabled";
-  static constexpr const char*
-      kOrcWriterStringDictionaryEncodingEnabledSession =
-          "orc_optimized_writer_string_dictionary_encoding_enabled";
-
-  /// Enables historical based stripe size estimation after compression.
-  static constexpr const char* kOrcWriterLinearStripeSizeHeuristics =
-      "hive.orc.writer.linear-stripe-size-heuristics";
-  static constexpr const char* kOrcWriterLinearStripeSizeHeuristicsSession =
-      "orc_writer_linear_stripe_size_heuristics";
-
-  /// Minimal number of items in an encoded stream.
-  static constexpr const char* kOrcWriterMinCompressionSize =
-      "hive.orc.writer.min-compression-size";
-  static constexpr const char* kOrcWriterMinCompressionSizeSession =
-      "orc_writer_min_compression_size";
-
-  /// The compression level to use with ZLIB and ZSTD.
-  static constexpr const char* kOrcWriterCompressionLevel =
-      "hive.orc.writer.compression-level";
-  static constexpr const char* kOrcWriterCompressionLevelSession =
-      "orc_optimized_writer_compression_level";
 
   /// Config used to create write files. This config is provided to underlying
   /// file system through hive connector and data sink. The config is free form.
@@ -203,8 +164,18 @@ class HiveConfig {
   static constexpr const char* kReadTimestampUnitSession =
       "hive.reader.timestamp_unit";
 
-  static constexpr const char* kCacheNoRetention = "cache.no_retention";
-  static constexpr const char* kCacheNoRetentionSession = "cache.no_retention";
+  static constexpr const char* kReadTimestampPartitionValueAsLocalTime =
+      "hive.reader.timestamp-partition-value-as-local-time";
+  static constexpr const char* kReadTimestampPartitionValueAsLocalTimeSession =
+      "hive.reader.timestamp_partition_value_as_local_time";
+
+  static constexpr const char* kReadStatsBasedFilterReorderDisabled =
+      "hive.reader.stats-based-filter-reorder-disabled";
+  static constexpr const char* kReadStatsBasedFilterReorderDisabledSession =
+      "hive.reader.stats_based_filter_reorder_disabled";
+
+  static constexpr const char* kLocalDataPath = "hive_local_data_path";
+  static constexpr const char* kLocalFileFormat = "hive_local_file_format";
 
   InsertExistingPartitionsBehavior insertExistingPartitionsBehavior(
       const config::ConfigBase* session) const;
@@ -234,44 +205,19 @@ class HiveConfig {
 
   bool ignoreMissingFiles(const config::ConfigBase* session) const;
 
-  int64_t maxCoalescedBytes() const;
+  int64_t maxCoalescedBytes(const config::ConfigBase* session) const;
 
-  int32_t maxCoalescedDistanceBytes() const;
+  int32_t maxCoalescedDistanceBytes(const config::ConfigBase* session) const;
 
   int32_t prefetchRowGroups() const;
 
-  int32_t loadQuantum() const;
+  int32_t loadQuantum(const config::ConfigBase* session) const;
 
   int32_t numCacheFileHandles() const;
 
   bool isFileHandleCacheEnabled() const;
 
   uint64_t fileWriterFlushThresholdBytes() const;
-
-  uint64_t orcWriterMaxStripeSize(const config::ConfigBase* session) const;
-
-  uint64_t orcWriterMaxDictionaryMemory(
-      const config::ConfigBase* session) const;
-
-  bool isOrcWriterIntegerDictionaryEncodingEnabled(
-      const config::ConfigBase* session) const;
-
-  bool isOrcWriterStringDictionaryEncodingEnabled(
-      const config::ConfigBase* session) const;
-
-  bool orcWriterLinearStripeSizeHeuristics(
-      const config::ConfigBase* session) const;
-
-  uint64_t orcWriterMinCompressionSize(const config::ConfigBase* session) const;
-
-  std::optional<uint8_t> orcWriterCompressionLevel(
-      const config::ConfigBase* session) const;
-
-  uint8_t orcWriterZLIBCompressionLevel(
-      const config::ConfigBase* session) const;
-
-  uint8_t orcWriterZSTDCompressionLevel(
-      const config::ConfigBase* session) const;
 
   std::string writeFileCreateConfig() const;
 
@@ -289,12 +235,23 @@ class HiveConfig {
   // Returns the timestamp unit used when reading timestamps from files.
   uint8_t readTimestampUnit(const config::ConfigBase* session) const;
 
-  /// Returns true to evict out a query scanned data out of in-memory cache
-  /// right after the access, and also skip staging to the ssd cache. This helps
-  /// to prevent the cache space pollution from the one-time table scan by large
-  /// batch query when mixed running with interactive query which has high data
-  /// locality.
-  bool cacheNoRetention(const config::ConfigBase* session) const;
+  // Whether to read timestamp partition value as local time. If false, read as
+  // UTC.
+  bool readTimestampPartitionValueAsLocalTime(
+      const config::ConfigBase* session) const;
+
+  /// Returns true if the stats based filter reorder for read is disabled.
+  bool readStatsBasedFilterReorderDisabled(
+      const config::ConfigBase* session) const;
+
+  /// Returns the file system path containing local data. If non-empty,
+  /// initializes LocalHiveConnectorMetadata to provide metadata for the tables
+  /// in the directory.
+  std::string hiveLocalDataPath() const;
+
+  /// Returns the name of the file format to use in interpreting the contents of
+  /// hiveLocalDataPath().
+  std::string hiveLocalFileFormat() const;
 
   HiveConfig(std::shared_ptr<const config::ConfigBase> config) {
     VELOX_CHECK_NOT_NULL(

@@ -137,7 +137,7 @@ class CountAggregate : public SimpleNumericAggregate<bool, int64_t, int64_t> {
       folly::Range<const vector_size_t*> indices) override {
     for (auto i : indices) {
       // result of count is never null
-      *value<int64_t>(groups[i]) = (int64_t)0;
+      *value<int64_t>(groups[i]) = static_cast<int64_t>(0);
     }
   }
 
@@ -182,7 +182,7 @@ void registerCountAggregate(
             argTypes.size(), 1, "{} takes at most one argument", name);
         return std::make_unique<CountAggregate>();
       },
-      {false /*orderSensitive*/},
+      {false /*orderSensitive*/, false /*companionFunction*/},
       withCompanionFunctions,
       overwrite);
 }

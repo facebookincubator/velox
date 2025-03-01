@@ -13,9 +13,9 @@
 # limitations under the License.
 
 add_subdirectory(utils)
-velox_add_library(velox_dwio_faulty_file_sink FaultyFileSink.cpp)
-velox_link_libraries(velox_dwio_faulty_file_sink velox_file_test_utils
-                     velox_dwio_common)
+add_library(velox_dwio_faulty_file_sink FaultyFileSink.cpp)
+target_link_libraries(
+  velox_dwio_faulty_file_sink velox_file_test_utils velox_dwio_common)
 
 # There is an issue with the VTT symbol for the InlineExecutor from folly when
 # building on Linux with Clang15. It is not created and results in a SEGV when
@@ -62,6 +62,7 @@ target_link_libraries(
   velox_dwio_common_test
   velox_dwio_common_test_utils
   velox_temp_path
+  velox_global_config
   velox_vector_test_lib
   Boost::regex
   velox_link_libs
@@ -75,39 +76,43 @@ target_link_libraries(
   fmt::fmt
   protobuf::libprotobuf)
 
-add_executable(velox_dwio_common_data_buffer_benchmark DataBufferBenchmark.cpp)
-
-target_link_libraries(
-  velox_dwio_common_data_buffer_benchmark
-  velox_dwio_common
-  velox_memory
-  velox_dwio_common_exception
-  Folly::folly
-  ${FOLLY_BENCHMARK})
-
-add_executable(velox_dwio_common_int_decoder_benchmark IntDecoderBenchmark.cpp)
-target_link_libraries(
-  velox_dwio_common_int_decoder_benchmark
-  velox_dwio_common_exception
-  velox_exception
-  velox_dwio_dwrf_common
-  Folly::folly
-  ${FOLLY_BENCHMARK})
-
-if(VELOX_ENABLE_ARROW AND VELOX_ENABLE_BENCHMARKS)
-  add_subdirectory(Lemire/FastPFor)
-  add_executable(velox_dwio_common_bitpack_decoder_benchmark
-                 BitPackDecoderBenchmark.cpp)
-
-  target_compile_options(velox_dwio_common_bitpack_decoder_benchmark
-                         PRIVATE -Wno-deprecated-declarations)
+if(VELOX_ENABLE_BENCHMARKS)
+  add_executable(velox_dwio_common_data_buffer_benchmark
+                 DataBufferBenchmark.cpp)
 
   target_link_libraries(
-    velox_dwio_common_bitpack_decoder_benchmark
+    velox_dwio_common_data_buffer_benchmark
     velox_dwio_common
-    arrow
-    velox_fastpforlib
-    duckdb_static
+    velox_memory
+    velox_dwio_common_exception
     Folly::folly
-    ${FOLLY_BENCHMARK})
+    Folly::follybenchmark)
+
+  add_executable(velox_dwio_common_int_decoder_benchmark
+                 IntDecoderBenchmark.cpp)
+  target_link_libraries(
+    velox_dwio_common_int_decoder_benchmark
+    velox_dwio_common_exception
+    velox_exception
+    velox_dwio_dwrf_common
+    Folly::folly
+    Folly::follybenchmark)
+
+  if(VELOX_ENABLE_ARROW)
+    add_subdirectory(Lemire/FastPFor)
+    add_executable(velox_dwio_common_bitpack_decoder_benchmark
+                   BitPackDecoderBenchmark.cpp)
+
+    target_compile_options(velox_dwio_common_bitpack_decoder_benchmark
+                           PRIVATE -Wno-deprecated-declarations)
+
+    target_link_libraries(
+      velox_dwio_common_bitpack_decoder_benchmark
+      velox_dwio_common
+      arrow
+      velox_fastpforlib
+      duckdb_static
+      Folly::folly
+      Folly::follybenchmark)
+  endif()
 endif()

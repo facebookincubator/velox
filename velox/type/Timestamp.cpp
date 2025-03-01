@@ -66,7 +66,7 @@ void Timestamp::toGMT(const tz::TimeZone& zone) {
     // Invalid argument means we hit a conversion not supported by
     // external/date. Need to throw a RuntimeError so that try() statements do
     // not suppress it.
-    VELOX_FAIL(e.what());
+    VELOX_FAIL_UNSUPPORTED_INPUT_UNCATCHABLE(e.what());
   }
   seconds_ = sysSeconds.count();
 }
@@ -217,6 +217,7 @@ StringView Timestamp::tmToStringView(
     }
     const auto [endPosition, errorCode] =
         std::to_chars(position + offset, position + offset + numDigits, value);
+    std::ignore = endPosition;
     VELOX_DCHECK_EQ(
         errorCode,
         std::errc(),

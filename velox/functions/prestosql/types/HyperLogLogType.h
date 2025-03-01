@@ -17,7 +17,6 @@
 
 #include "velox/type/SimpleFunctionApi.h"
 #include "velox/type/Type.h"
-#include "velox/vector/VectorTypeUtils.h"
 
 namespace facebook::velox {
 
@@ -70,19 +69,5 @@ struct HyperLogLogT {
 };
 
 using HyperLogLog = CustomType<HyperLogLogT>;
-
-class HyperLogLogTypeFactories : public CustomTypeFactories {
- public:
-  TypePtr getType() const override {
-    return HYPERLOGLOG();
-  }
-
-  // HyperLogLog should be treated as Varbinary during type castings.
-  exec::CastOperatorPtr getCastOperator() const override {
-    return nullptr;
-  }
-};
-
-void registerHyperLogLogType();
 
 } // namespace facebook::velox

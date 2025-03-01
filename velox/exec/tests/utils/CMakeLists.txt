@@ -17,22 +17,6 @@ add_library(velox_temp_path TempFilePath.cpp TempDirectoryPath.cpp)
 target_link_libraries(
   velox_temp_path velox_exception)
 
-add_library(velox_cursor Cursor.cpp)
-target_link_libraries(
-  velox_cursor
-  velox_core
-  velox_exception
-  velox_expression
-  velox_dwio_common
-  velox_dwio_dwrf_reader
-  velox_dwio_dwrf_writer
-  velox_type_fbhive
-  velox_hive_connector
-  velox_tpch_connector
-  velox_presto_serializer
-  velox_functions_prestosql
-  velox_aggregates)
-
 add_library(
   velox_exec_test_lib
   AssertQueryBuilder.cpp
@@ -43,6 +27,7 @@ add_library(
   PlanBuilder.cpp
   QueryAssertions.cpp
   SumNonPODAggregate.cpp
+  TestIndexStorageConnector.cpp
   TpchQueryBuilder.cpp
   VectorTestUtil.cpp
   PortUtil.cpp
@@ -51,6 +36,7 @@ add_library(
 target_link_libraries(
   velox_exec_test_lib
   velox_vector_test_lib
+  velox_vector_fuzzer
   velox_temp_path
   velox_cursor
   velox_core
@@ -68,6 +54,7 @@ target_link_libraries(
   velox_tpch_connector
   velox_presto_serializer
   velox_functions_prestosql
+  velox_flag_definitions
   velox_aggregates)
 
 if(${VELOX_BUILD_RUNNER})
@@ -82,8 +69,6 @@ if(${VELOX_BUILD_RUNNER})
     velox_file_test_utils
     velox_hive_connector
     velox_tpch_connector
-    velox_dwio_parquet_reader
-    velox_dwio_parquet_writer
     velox_local_runner)
 
 endif()

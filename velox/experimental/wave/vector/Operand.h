@@ -168,9 +168,8 @@ struct KernelError {
   /// message is compleemented by 'number' (kInt64Param) or
   /// 'ptr'kStringParam) (k. If kNoParam the string is the only error
   /// info.
-  const char* messageAndTag{nullptr};
-  int64_t number;
-  char* ptr;
+  int32_t messageEnum{0};
+  int64_t extra;
 };
 
 /// Describes the location of an instruction's return state in the
@@ -192,6 +191,8 @@ struct InstructionStatus {
 };
 
 /// Returns the number of active rows in 'status' for 'numBlocks'.
+#ifndef __CUDACC_RTC__
 int32_t statusNumRows(const BlockStatus* status, int32_t numBlocks);
+#endif
 
 } // namespace facebook::velox::wave

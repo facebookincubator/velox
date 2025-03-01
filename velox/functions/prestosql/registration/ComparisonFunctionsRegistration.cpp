@@ -14,11 +14,13 @@
  * limitations under the License.
  */
 #include "velox/functions/Registerer.h"
-#include "velox/functions/lib/RegistrationHelpers.h"
 #include "velox/functions/prestosql/Comparisons.h"
+#include "velox/functions/prestosql/types/IPAddressRegistration.h"
 #include "velox/functions/prestosql/types/IPAddressType.h"
+#include "velox/functions/prestosql/types/IPPrefixRegistration.h"
+#include "velox/functions/prestosql/types/IPPrefixType.h"
+#include "velox/functions/prestosql/types/TimestampWithTimeZoneRegistration.h"
 #include "velox/functions/prestosql/types/TimestampWithTimeZoneType.h"
-#include "velox/type/Type.h"
 
 namespace facebook::velox::functions {
 namespace {
@@ -40,6 +42,7 @@ void registerComparisonFunctions(const std::string& prefix) {
   // independent of DateTimeFunctions
   registerTimestampWithTimeZoneType();
   registerIPAddressType();
+  registerIPPrefixType();
 
   registerNonSimdizableScalar<EqFunction, bool>({prefix + "eq"});
   VELOX_REGISTER_VECTOR_FUNCTION(udf_simd_comparison_eq, prefix + "eq");
@@ -52,20 +55,22 @@ void registerComparisonFunctions(const std::string& prefix) {
 
   registerNonSimdizableScalar<LtFunction, bool>({prefix + "lt"});
   VELOX_REGISTER_VECTOR_FUNCTION(udf_simd_comparison_lt, prefix + "lt");
-  registerFunction<LtFunction, bool, Generic<T1>, Generic<T1>>({prefix + "lt"});
+  registerFunction<LtFunction, bool, Orderable<T1>, Orderable<T1>>(
+      {prefix + "lt"});
 
   registerNonSimdizableScalar<GtFunction, bool>({prefix + "gt"});
   VELOX_REGISTER_VECTOR_FUNCTION(udf_simd_comparison_gt, prefix + "gt");
-  registerFunction<GtFunction, bool, Generic<T1>, Generic<T1>>({prefix + "gt"});
+  registerFunction<GtFunction, bool, Orderable<T1>, Orderable<T1>>(
+      {prefix + "gt"});
 
   registerNonSimdizableScalar<LteFunction, bool>({prefix + "lte"});
   VELOX_REGISTER_VECTOR_FUNCTION(udf_simd_comparison_lte, prefix + "lte");
-  registerFunction<LteFunction, bool, Generic<T1>, Generic<T1>>(
+  registerFunction<LteFunction, bool, Orderable<T1>, Orderable<T1>>(
       {prefix + "lte"});
 
   registerNonSimdizableScalar<GteFunction, bool>({prefix + "gte"});
   VELOX_REGISTER_VECTOR_FUNCTION(udf_simd_comparison_gte, prefix + "gte");
-  registerFunction<GteFunction, bool, Generic<T1>, Generic<T1>>(
+  registerFunction<GteFunction, bool, Orderable<T1>, Orderable<T1>>(
       {prefix + "gte"});
 
   registerFunction<DistinctFromFunction, bool, Generic<T1>, Generic<T1>>(
@@ -120,6 +125,8 @@ void registerComparisonFunctions(const std::string& prefix) {
       TimestampWithTimezone,
       TimestampWithTimezone>({prefix + "between"});
   registerFunction<BetweenFunction, bool, IPAddress, IPAddress, IPAddress>(
+      {prefix + "between"});
+  registerFunction<BetweenFunction, bool, IPPrefix, IPPrefix, IPPrefix>(
       {prefix + "between"});
 }
 

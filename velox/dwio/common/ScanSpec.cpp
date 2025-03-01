@@ -48,13 +48,17 @@ bool ScanSpec::compareTimeToDropValue(
     const std::shared_ptr<ScanSpec>& left,
     const std::shared_ptr<ScanSpec>& right) {
   if (left->hasFilter() && right->hasFilter()) {
-    if (left->selectivity_.numIn() || right->selectivity_.numIn()) {
+    if (!disableStatsBasedFilterReorder_ &&
+        (left->selectivity_.numIn() || right->selectivity_.numIn())) {
       return left->selectivity_.timeToDropValue() <
           right->selectivity_.timeToDropValue();
     }
     // Integer filters are before other filters if there is no
     // history data.
     if (left->filter_ && right->filter_) {
+      if (left->filter_->kind() == right->filter_->kind()) {
+        return left->fieldName_ < right->fieldName_;
+      }
       return left->filter_->kind() < right->filter_->kind();
     }
     // If hasFilter() is true but 'filter_' is nullptr, we have a filter
@@ -67,6 +71,7 @@ bool ScanSpec::compareTimeToDropValue(
     }
     return left->fieldName_ < right->fieldName_;
   }
+
   if (left->hasFilter()) {
     return true;
   }
@@ -77,9 +82,20 @@ bool ScanSpec::compareTimeToDropValue(
 }
 
 uint64_t ScanSpec::newRead() {
+  // NOTE: in case of split preload, a new split might see zero reads but
+  // non-empty filter stats. Hence we need to avoid stats triggered filter
+  // reordering even on the first read if 'disableStatsBasedFilterReorder_' is
+  // set.
   if (numReads_ == 0 ||
-      !std::is_sorted(
-          children_.begin(), children_.end(), compareTimeToDropValue)) {
+      (!disableStatsBasedFilterReorder_ &&
+       !std::is_sorted(
+           children_.begin(),
+           children_.end(),
+           [this](
+               const std::shared_ptr<ScanSpec>& left,
+               const std::shared_ptr<ScanSpec>& right) {
+             return compareTimeToDropValue(left, right);
+           }))) {
     reorder();
   }
   return ++numReads_;
@@ -91,7 +107,14 @@ void ScanSpec::reorder() {
   }
   // Make sure 'stableChildren_' is initialized.
   stableChildren();
-  std::sort(children_.begin(), children_.end(), compareTimeToDropValue);
+  std::sort(
+      children_.begin(),
+      children_.end(),
+      [this](
+          const std::shared_ptr<ScanSpec>& left,
+          const std::shared_ptr<ScanSpec>& right) {
+        return compareTimeToDropValue(left, right);
+      });
 }
 
 void ScanSpec::enableFilterInSubTree(bool value) {
@@ -130,6 +153,19 @@ bool ScanSpec::hasFilter() const {
     }
   }
   hasFilter_ = false;
+  return false;
+}
+
+bool ScanSpec::hasFilterApplicableToConstant() const {
+  if (filter_) {
+    return true;
+  }
+  for (auto& child : children_) {
+    if (!child->isArrayElementOrMapEntry_ &&
+        child->hasFilterApplicableToConstant()) {
+      return true;
+    }
+  }
   return false;
 }
 
@@ -368,9 +404,15 @@ std::string ScanSpec::toString() const {
     out << fieldName_;
     if (filter_) {
       out << " filter " << filter_->toString();
+      if (filterDisabled_) {
+        out << " disabled";
+      }
     }
     if (isConstant()) {
       out << " constant";
+    }
+    if (deltaUpdate_) {
+      out << " deltaUpdate_=" << deltaUpdate_;
     }
     if (!metadataFilters_.empty()) {
       out << " metadata_filters(" << metadataFilters_.size() << ")";
@@ -471,9 +513,9 @@ void filterSimpleVectorRows(
     Filter& filter,
     vector_size_t size,
     uint64_t* result) {
+  VELOX_CHECK(size == 0 || result);
   using T = typename TypeTraits<kKind>::NativeType;
   auto* simpleVector = vector.asChecked<SimpleVector<T>>();
-  VELOX_CHECK_NOT_NULL(simpleVector);
   bits::forEachSetBit(result, 0, size, [&](auto i) {
     if (simpleVector->isNullAt(i)) {
       if (!filter.testNull()) {
@@ -521,11 +563,8 @@ void filterRows(
 } // namespace
 
 void ScanSpec::applyFilter(const BaseVector& vector, uint64_t* result) const {
-  if (!hasFilter()) {
-    return;
-  }
-  if (auto* filter = this->filter()) {
-    filterRows(vector, *filter, vector.size(), result);
+  if (filter_) {
+    filterRows(vector, *filter_, vector.size(), result);
   }
   if (!vector.type()->isRow()) {
     // Filter on MAP or ARRAY children are pruning, and won't affect correctness

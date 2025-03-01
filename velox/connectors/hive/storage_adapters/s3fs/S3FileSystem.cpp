@@ -103,13 +103,17 @@ class S3ReadFile final : public ReadFile {
     VELOX_CHECK_GE(length_, 0);
   }
 
-  std::string_view pread(uint64_t offset, uint64_t length, void* buffer)
-      const override {
+  std::string_view pread(
+      uint64_t offset,
+      uint64_t length,
+      void* buffer,
+      File::IoStats* stats) const override {
     preadInternal(offset, length, static_cast<char*>(buffer));
     return {static_cast<char*>(buffer), length};
   }
 
-  std::string pread(uint64_t offset, uint64_t length) const override {
+  std::string pread(uint64_t offset, uint64_t length, File::IoStats* stats)
+      const override {
     std::string result(length, 0);
     char* position = result.data();
     preadInternal(offset, length, position);
@@ -118,7 +122,8 @@ class S3ReadFile final : public ReadFile {
 
   uint64_t preadv(
       uint64_t offset,
-      const std::vector<folly::Range<char*>>& buffers) const override {
+      const std::vector<folly::Range<char*>>& buffers,
+      File::IoStats* stats) const override {
     // 'buffers' contains Ranges(data, size)  with some gaps (data = nullptr) in
     // between. This call must populate the ranges (except gap ranges)
     // sequentially starting from 'offset'. AWS S3 GetObject does not support
@@ -212,6 +217,21 @@ Aws::Utils::Logging::LogLevel inferS3LogLevel(std::string_view logLevel) {
     return Aws::Utils::Logging::LogLevel::Debug;
   }
   return Aws::Utils::Logging::LogLevel::Fatal;
+}
+
+// Supported values are "Always", "RequestDependent", "Never"(default).
+Aws::Client::AWSAuthV4Signer::PayloadSigningPolicy inferPayloadSign(
+    std::string sign) {
+  // Convert to upper case.
+  std::transform(sign.begin(), sign.end(), sign.begin(), [](unsigned char c) {
+    return std::toupper(c);
+  });
+  if (sign == "ALWAYS") {
+    return Aws::Client::AWSAuthV4Signer::PayloadSigningPolicy::Always;
+  } else if (sign == "REQUESTDEPENDENT") {
+    return Aws::Client::AWSAuthV4Signer::PayloadSigningPolicy::RequestDependent;
+  }
+  return Aws::Client::AWSAuthV4Signer::PayloadSigningPolicy::Never;
 }
 } // namespace
 
@@ -524,13 +544,22 @@ class S3FileSystem::Impl {
  public:
   Impl(const S3Config& s3Config) {
     VELOX_CHECK(getAwsInstance()->isInitialized(), "S3 is not initialized");
-    Aws::Client::ClientConfiguration clientConfig;
-    clientConfig.endpointOverride = s3Config.endpoint();
+    Aws::S3::S3ClientConfiguration clientConfig;
+    if (s3Config.endpoint().has_value()) {
+      clientConfig.endpointOverride = s3Config.endpoint().value();
+    }
+
+    if (s3Config.endpointRegion().has_value()) {
+      clientConfig.region = s3Config.endpointRegion().value();
+    }
 
     if (s3Config.useProxyFromEnv()) {
-      auto proxyConfig = S3ProxyConfigurationBuilder(s3Config.endpoint())
-                             .useSsl(s3Config.useSSL())
-                             .build();
+      auto proxyConfig =
+          S3ProxyConfigurationBuilder(
+              s3Config.endpoint().has_value() ? s3Config.endpoint().value()
+                                              : "")
+              .useSsl(s3Config.useSSL())
+              .build();
       if (proxyConfig.has_value()) {
         clientConfig.proxyScheme = Aws::Http::SchemeMapper::FromString(
             proxyConfig.value().scheme().c_str());
@@ -572,13 +601,14 @@ class S3FileSystem::Impl {
       clientConfig.retryStrategy = retryStrategy.value();
     }
 
+    clientConfig.useVirtualAddressing = s3Config.useVirtualAddressing();
+    clientConfig.payloadSigningPolicy =
+        inferPayloadSign(s3Config.payloadSigningPolicy());
+
     auto credentialsProvider = getCredentialsProvider(s3Config);
 
     client_ = std::make_shared<Aws::S3::S3Client>(
-        credentialsProvider,
-        clientConfig,
-        Aws::Client::AWSAuthV4Signer::PayloadSigningPolicy::Never,
-        s3Config.useVirtualAddressing());
+        credentialsProvider, nullptr /* endpointProvider */, clientConfig);
     ++fileSystemCount;
   }
 

@@ -15,11 +15,13 @@
  */
 
 #include "velox/tool/trace/TableScanReplayer.h"
+
 #include "velox/connectors/hive/HiveConnectorSplit.h"
 #include "velox/exec/OperatorTraceReader.h"
 #include "velox/exec/TraceUtil.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
+#include "velox/tool/trace/TraceReplayTaskRunner.h"
 
 using namespace facebook::velox;
 using namespace facebook::velox::exec;
@@ -27,14 +29,13 @@ using namespace facebook::velox::exec::test;
 
 namespace facebook::velox::tool::trace {
 
-RowVectorPtr TableScanReplayer::run() {
-  const auto plan = createPlan();
-  return exec::test::AssertQueryBuilder(plan)
-      .maxDrivers(driverIds_.size())
-      .configs(queryConfigs_)
-      .connectorSessionProperties(connectorConfigs_)
-      .splits(getSplits())
-      .copyResults(memory::MemoryManager::getInstance()->tracePool());
+RowVectorPtr TableScanReplayer::run(bool copyResults) {
+  TraceReplayTaskRunner traceTaskRunner(createPlan(), createQueryCtx());
+  auto [task, result] = traceTaskRunner.maxDrivers(driverIds_.size())
+                            .splits(replayPlanNodeId_, getSplits())
+                            .run(copyResults);
+  printStats(task);
+  return result;
 }
 
 core::PlanNodePtr TableScanReplayer::createPlanNode(

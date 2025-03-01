@@ -47,6 +47,10 @@ class S3Config {
   /// Log granularity of AWS C++ SDK.
   static constexpr const char* kS3LogLevel = "hive.s3.log-level";
 
+  /// Payload signing policy.
+  static constexpr const char* kS3PayloadSigningPolicy =
+      "hive.s3.payload-signing-policy";
+
   /// S3FileSystem default identity.
   static constexpr const char* kDefaultS3Identity = "s3-default-identity";
 
@@ -54,6 +58,7 @@ class S3Config {
   enum class Keys {
     kBegin,
     kEndpoint = kBegin,
+    kEndpointRegion,
     kAccessKey,
     kSecretKey,
     kPathStyleAccess,
@@ -80,7 +85,9 @@ class S3Config {
         Keys,
         std::pair<std::string_view, std::optional<std::string_view>>>
         config = {
-            {Keys::kEndpoint, std::make_pair("endpoint", "")},
+            {Keys::kEndpoint, std::make_pair("endpoint", std::nullopt)},
+            {Keys::kEndpointRegion,
+             std::make_pair("endpoint.region", std::nullopt)},
             {Keys::kAccessKey, std::make_pair("aws-access-key", std::nullopt)},
             {Keys::kSecretKey, std::make_pair("aws-secret-key", std::nullopt)},
             {Keys::kPathStyleAccess,
@@ -108,10 +115,10 @@ class S3Config {
       std::string_view bucket,
       std::shared_ptr<const config::ConfigBase> config);
 
-  /// Identity is used as a key for the S3FileSystem instance map.
-  /// This will be the bucket endpoint or the base endpoint or the
-  /// default identity in that order.
-  static std::string identity(
+  /// cacheKey is used as a key for the S3FileSystem instance map.
+  /// This will be the bucket endpoint or the base endpoint if they exist plus
+  /// bucket name.
+  static std::string cacheKey(
       std::string_view bucket,
       std::shared_ptr<const config::ConfigBase> config);
 
@@ -132,9 +139,12 @@ class S3Config {
 
   /// The S3 storage endpoint server. This can be used to connect to an
   /// S3-compatible storage system instead of AWS.
-  std::string endpoint() const {
-    return config_.find(Keys::kEndpoint)->second.value();
+  std::optional<std::string> endpoint() const {
+    return config_.find(Keys::kEndpoint)->second;
   }
+
+  /// The S3 storage endpoint region.
+  std::optional<std::string> endpointRegion() const;
 
   /// Access key to use.
   std::optional<std::string> accessKey() const {
@@ -214,8 +224,13 @@ class S3Config {
     return folly::to<bool>(value);
   }
 
+  std::string payloadSigningPolicy() const {
+    return payloadSigningPolicy_;
+  }
+
  private:
   std::unordered_map<Keys, std::optional<std::string>> config_;
+  std::string payloadSigningPolicy_;
 };
 
 } // namespace facebook::velox::filesystems

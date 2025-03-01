@@ -18,15 +18,18 @@
 #include <unordered_set>
 
 #include "velox/exec/fuzzer/PrestoQueryRunner.h"
-#include "velox/expression/fuzzer/ArgGenerator.h"
+#include "velox/expression/fuzzer/ArgTypesGenerator.h"
+#include "velox/expression/fuzzer/ArgValuesGenerators.h"
+#include "velox/expression/fuzzer/ExpressionFuzzer.h"
 #include "velox/expression/fuzzer/FuzzerRunner.h"
-#include "velox/functions/prestosql/fuzzer/DivideArgGenerator.h"
-#include "velox/functions/prestosql/fuzzer/FloorAndRoundArgGenerator.h"
-#include "velox/functions/prestosql/fuzzer/ModulusArgGenerator.h"
-#include "velox/functions/prestosql/fuzzer/MultiplyArgGenerator.h"
-#include "velox/functions/prestosql/fuzzer/PlusMinusArgGenerator.h"
+#include "velox/expression/fuzzer/SpecialFormSignatureGenerator.h"
+#include "velox/functions/prestosql/fuzzer/DivideArgTypesGenerator.h"
+#include "velox/functions/prestosql/fuzzer/FloorAndRoundArgTypesGenerator.h"
+#include "velox/functions/prestosql/fuzzer/ModulusArgTypesGenerator.h"
+#include "velox/functions/prestosql/fuzzer/MultiplyArgTypesGenerator.h"
+#include "velox/functions/prestosql/fuzzer/PlusMinusArgTypesGenerator.h"
 #include "velox/functions/prestosql/fuzzer/SortArrayTransformer.h"
-#include "velox/functions/prestosql/fuzzer/TruncateArgGenerator.h"
+#include "velox/functions/prestosql/fuzzer/TruncateArgTypesGenerator.h"
 #include "velox/functions/prestosql/registration/RegistrationFunctions.h"
 
 DEFINE_int64(
@@ -50,8 +53,11 @@ DEFINE_uint32(
 
 using namespace facebook::velox::exec::test;
 using facebook::velox::exec::test::PrestoQueryRunner;
-using facebook::velox::fuzzer::ArgGenerator;
+using facebook::velox::fuzzer::ArgTypesGenerator;
+using facebook::velox::fuzzer::ArgValuesGenerator;
+using facebook::velox::fuzzer::ExpressionFuzzer;
 using facebook::velox::fuzzer::FuzzerRunner;
+using facebook::velox::fuzzer::JsonParseArgValuesGenerator;
 using facebook::velox::test::ReferenceQueryRunner;
 
 int main(int argc, char** argv) {
@@ -104,15 +110,16 @@ int main(int argc, char** argv) {
   };
   size_t initialSeed = FLAGS_seed == 0 ? std::time(nullptr) : FLAGS_seed;
 
-  std::unordered_map<std::string, std::shared_ptr<ArgGenerator>> argGenerators =
-      {{"plus", std::make_shared<PlusMinusArgGenerator>()},
-       {"minus", std::make_shared<PlusMinusArgGenerator>()},
-       {"multiply", std::make_shared<MultiplyArgGenerator>()},
-       {"divide", std::make_shared<DivideArgGenerator>()},
-       {"floor", std::make_shared<FloorAndRoundArgGenerator>()},
-       {"round", std::make_shared<FloorAndRoundArgGenerator>()},
-       {"mod", std::make_shared<ModulusArgGenerator>()},
-       {"truncate", std::make_shared<TruncateArgGenerator>()}};
+  std::unordered_map<std::string, std::shared_ptr<ArgTypesGenerator>>
+      argTypesGenerators = {
+          {"plus", std::make_shared<PlusMinusArgTypesGenerator>()},
+          {"minus", std::make_shared<PlusMinusArgTypesGenerator>()},
+          {"multiply", std::make_shared<MultiplyArgTypesGenerator>()},
+          {"divide", std::make_shared<DivideArgTypesGenerator>()},
+          {"floor", std::make_shared<FloorAndRoundArgTypesGenerator>()},
+          {"round", std::make_shared<FloorAndRoundArgTypesGenerator>()},
+          {"mod", std::make_shared<ModulusArgTypesGenerator>()},
+          {"truncate", std::make_shared<TruncateArgTypesGenerator>()}};
 
   std::unordered_map<std::string, std::shared_ptr<ExprTransformer>>
       exprTransformers = {
@@ -121,10 +128,80 @@ int main(int argc, char** argv) {
           {"map_keys", std::make_shared<SortArrayTransformer>()},
           {"map_values", std::make_shared<SortArrayTransformer>()}};
 
+  std::unordered_map<std::string, std::shared_ptr<ArgValuesGenerator>>
+      argValuesGenerators = {
+          {"json_parse", std::make_shared<JsonParseArgValuesGenerator>()}};
+
   std::shared_ptr<facebook::velox::memory::MemoryPool> rootPool{
       facebook::velox::memory::memoryManager()->addRootPool()};
   std::shared_ptr<ReferenceQueryRunner> referenceQueryRunner{nullptr};
   if (!FLAGS_presto_url.empty()) {
+    // Add additional functions to skip since we are now querying Presto
+    // directly and are aware of certain failures.
+    skipFunctions.insert({
+        "cast(real) -> varchar", // https://github.com/facebookincubator/velox/issues/11034
+        "round", // https://github.com/facebookincubator/velox/issues/10634
+        "json_size", // https://github.com/facebookincubator/velox/issues/10700
+        "bitwise_right_shift_arithmetic", // https://github.com/facebookincubator/velox/issues/10841
+        "map_size_with", // https://github.com/facebookincubator/velox/issues/10964
+        "binomial_cdf", // https://github.com/facebookincubator/velox/issues/10702
+        "inverse_laplace_cdf", // https://github.com/facebookincubator/velox/issues/10699
+        "gamma_cdf", // https://github.com/facebookincubator/velox/issues/10749
+        "inverse_normal_cdf", // https://github.com/facebookincubator/velox/issues/10836
+        "regr_avgx", // https://github.com/facebookincubator/velox/issues/10610
+        "is_json_scalar", // https://github.com/facebookincubator/velox/issues/10748
+        "json_extract_scalar", // https://github.com/facebookincubator/velox/issues/10698
+        "rtrim", // https://github.com/facebookincubator/velox/issues/10973
+        "split", // https://github.com/facebookincubator/velox/issues/10867
+        "array_intersect", // https://github.com/facebookincubator/velox/issues/10740
+        "f_cdf", // https://github.com/facebookincubator/velox/issues/10633
+        "truncate", // https://github.com/facebookincubator/velox/issues/10628
+        "url_extract_query", // https://github.com/facebookincubator/velox/issues/10659
+        "laplace_cdf", // https://github.com/facebookincubator/velox/issues/10974
+        "inverse_beta_cdf", // https://github.com/facebookincubator/velox/issues/11802
+        "conjunct", // https://github.com/facebookincubator/velox/issues/10678
+        "url_extract_host", // https://github.com/facebookincubator/velox/issues/10578
+        "weibull_cdf", // https://github.com/facebookincubator/velox/issues/10977
+        "zip_with", // https://github.com/facebookincubator/velox/issues/10844
+        "url_extract_path", // https://github.com/facebookincubator/velox/issues/10579
+        "bitwise_shift_left", // https://github.com/facebookincubator/velox/issues/10870
+        "split_part", // https://github.com/facebookincubator/velox/issues/10839
+        "bitwise_arithmetic_shift_right", // https://github.com/facebookincubator/velox/issues/10750
+        "date_format", // https://github.com/facebookincubator/velox/issues/10968
+        "substr", // https://github.com/facebookincubator/velox/issues/10660
+        "cauchy_cdf", // https://github.com/facebookincubator/velox/issues/10976
+        "covar_pop", // https://github.com/facebookincubator/velox/issues/10627
+        "lpad", // https://github.com/facebookincubator/velox/issues/10757
+        "format_datetime", // https://github.com/facebookincubator/velox/issues/10779
+        "inverse_cauchy_cdf", // https://github.com/facebookincubator/velox/issues/10840
+        "array_position", // https://github.com/facebookincubator/velox/issues/10580
+        "url_extract_fragment", // https://github.com/facebookincubator/velox/issues/12324
+        "url_extract_protocol", // https://github.com/facebookincubator/velox/issues/12325
+        "chi_squared_cdf", // https://github.com/facebookincubator/velox/issues/12327
+        "bitwise_left_shift", // https://github.com/facebookincubator/velox/issues/12330
+        "log2", // https://github.com/facebookincubator/velox/issues/12338
+        "bitwise_right_shift", // https://github.com/facebookincubator/velox/issues/12339
+        "word_stem", // https://github.com/facebookincubator/velox/issues/12341
+        "rpad", // https://github.com/facebookincubator/velox/issues/12343
+        "json_extract", // https://github.com/facebookincubator/velox/issues/12344
+        "to_ieee754_32", // https://github.com/facebookincubator/velox/issues/12345
+        "beta_cdf", // https://github.com/facebookincubator/velox/issues/12346
+        "wilson_interval_upper", // https://github.com/facebookincubator/velox/issues/12347
+        "json_parse", // https://github.com/facebookincubator/velox/issues/12371
+        "to_ieee754_64", // https://github.com/facebookincubator/velox/issues/12372
+        // No default Hive type provided for unsupported Hive type: json
+        "json_format",
+        "json_array_length",
+        "json_array_get",
+        "json_array_contains",
+        "clamp", // Function clamp not registered
+        "current_date", // Non-deterministic
+        "xxhash64_internal",
+        "combine_hash_internal",
+        "map_keys_by_top_n_values", // requires
+                                    // https://github.com/prestodb/presto/pull/24570
+    });
+
     referenceQueryRunner = std::make_shared<PrestoQueryRunner>(
         rootPool.get(),
         FLAGS_presto_url,
@@ -138,6 +215,9 @@ int main(int argc, char** argv) {
       exprTransformers,
       {{"session_timezone", "America/Los_Angeles"},
        {"adjust_timestamp_to_session_timezone", "true"}},
-      argGenerators,
-      referenceQueryRunner);
+      argTypesGenerators,
+      argValuesGenerators,
+      referenceQueryRunner,
+      std::make_shared<
+          facebook::velox::fuzzer::SpecialFormSignatureGenerator>());
 }

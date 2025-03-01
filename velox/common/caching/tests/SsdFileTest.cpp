@@ -17,12 +17,14 @@
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/common/caching/FileIds.h"
 #include "velox/common/caching/tests/CacheTestUtil.h"
+#include "velox/common/config/GlobalConfig.h"
 #include "velox/common/file/FileSystems.h"
 #include "velox/common/file/tests/FaultyFileSystem.h"
 #include "velox/common/memory/Memory.h"
 #include "velox/exec/tests/utils/TempDirectoryPath.h"
 
 #include <fcntl.h>
+#include <folly/executors/IOThreadPoolExecutor.h>
 #include <folly/executors/QueuedImmediateExecutor.h>
 #include <glog/logging.h>
 #include <gtest/gtest.h>
@@ -72,7 +74,7 @@ class SsdFileTest : public testing::Test {
       bool disableFileCow = false,
       bool enableFaultInjection = false) {
     // tmpfs does not support O_DIRECT, so turn this off for testing.
-    FLAGS_ssd_odirect = false;
+    config::globalConfig().useSsdODirect = false;
     cache_ = AsyncDataCache::create(memory::memoryManager()->allocator());
     cacheHelper_ =
         std::make_unique<test::AsyncDataCacheTestHelper>(cache_.get());
@@ -93,23 +95,19 @@ class SsdFileTest : public testing::Test {
       bool checksumEnabled = false,
       bool checksumReadVerificationEnabled = false,
       bool disableFileCow = false) {
-    const auto maxNumRegions = static_cast<int32_t>(
-        bits::roundUp(ssdBytes, SsdFile::kRegionSize) / SsdFile::kRegionSize);
     SsdFile::Config config(
         fmt::format("{}/ssdtest", tempDirectory_->getPath()),
         0, // shardId
-        maxNumRegions,
+        bits::roundUp(ssdBytes, SsdFile::kRegionSize) / SsdFile::kRegionSize,
         checkpointIntervalBytes,
         disableFileCow,
         checksumEnabled,
-        checksumReadVerificationEnabled);
+        checksumReadVerificationEnabled,
+        ssdExecutor());
     ssdFile_ = std::make_unique<SsdFile>(config);
     if (ssdFile_ != nullptr) {
       ssdFileHelper_ =
           std::make_unique<test::SsdFileTestHelper>(ssdFile_.get());
-      ASSERT_EQ(
-          ssdFileHelper_->writeFileSize(),
-          maxNumRegions * ssdFile_->kRegionSize);
     }
   }
 
@@ -170,6 +168,12 @@ class SsdFileTest : public testing::Test {
         }
       }
     }
+  }
+
+  static folly::IOThreadPoolExecutor* ssdExecutor() {
+    static std::unique_ptr<folly::IOThreadPoolExecutor> ssdExecutor =
+        std::make_unique<folly::IOThreadPoolExecutor>(20);
+    return ssdExecutor.get();
   }
 
   // Gets consecutive entries from file 'fileId' starting at 'startOffset' with
@@ -324,7 +328,7 @@ TEST_F(SsdFileTest, writeAndRead) {
   constexpr int64_t kSsdSize = 16 * SsdFile::kRegionSize;
   std::vector<TestEntry> allEntries;
   initializeCache(kSsdSize);
-  FLAGS_ssd_verify_write = true;
+  config::globalConfig().verifySsdWrite = true;
   for (auto startOffset = 0; startOffset <= kSsdSize - SsdFile::kRegionSize;
        startOffset += SsdFile::kRegionSize) {
     auto pins =
@@ -399,7 +403,7 @@ TEST_F(SsdFileTest, checkpoint) {
   constexpr int64_t kSsdSize = 16 * SsdFile::kRegionSize;
   const uint64_t checkpointIntervalBytes = 5 * SsdFile::kRegionSize;
   const auto fileNameAlt = StringIdLease(fileIds(), "fileInStorageAlt");
-  FLAGS_ssd_verify_write = true;
+  config::globalConfig().verifySsdWrite = true;
   initializeCache(kSsdSize, checkpointIntervalBytes);
 
   std::vector<TestEntry> allEntries;
@@ -495,7 +499,7 @@ TEST_F(SsdFileTest, checkpoint) {
 TEST_F(SsdFileTest, fileCorruption) {
   constexpr int64_t kSsdSize = 16 * SsdFile::kRegionSize;
   const uint64_t checkpointIntervalBytes = 5 * SsdFile::kRegionSize;
-  FLAGS_ssd_verify_write = true;
+  config::globalConfig().verifySsdWrite = true;
 
   const auto populateCache = [&](std::vector<TestEntry>& entries) {
     entries.clear();
@@ -551,7 +555,7 @@ TEST_F(SsdFileTest, fileCorruption) {
   // Corrupt the Checkpoint file. Cache cannot be recovered. All entries are
   // lost.
   ssdFile_->checkpoint(true);
-  corruptSsdFile(ssdFile_->getCheckpointFilePath());
+  corruptSsdFile(ssdFile_->checkpointFilePath());
   stats.clear();
   ssdFile_->updateStats(stats);
   EXPECT_EQ(stats.readCheckpointErrors, 0);
@@ -567,7 +571,7 @@ TEST_F(SsdFileTest, fileCorruption) {
 TEST_F(SsdFileTest, recoverFromCheckpointWithChecksum) {
   constexpr int64_t kSsdSize = 4 * SsdFile::kRegionSize;
   const uint64_t checkpointIntervalBytes = 3 * SsdFile::kRegionSize;
-  FLAGS_ssd_verify_write = true;
+  config::globalConfig().verifySsdWrite = true;
 
   // Test if cache data can be recovered with different settings.
   struct {
@@ -666,7 +670,7 @@ TEST_F(SsdFileTest, recoverFromCheckpointWithChecksum) {
       ASSERT_EQ(statsAfterRecover.entriesCached, stats.entriesCached);
     } else {
       ASSERT_EQ(statsAfterRecover.bytesCached, 0);
-      ASSERT_EQ(statsAfterRecover.regionsCached, 0);
+      ASSERT_EQ(statsAfterRecover.regionsCached, stats.regionsCached);
       ASSERT_EQ(statsAfterRecover.entriesCached, 0);
     }
 

@@ -26,6 +26,21 @@
 #include <filesystem>
 #include "velox/experimental/wave/jit/Headers.h"
 #include "velox/external/jitify/jitify.hpp"
+DEFINE_bool(cuda_G, false, "Enable -G for NVRTC");
+
+DEFINE_int32(
+    cuda_O,
+#ifndef NDEBUG
+    0
+#else
+    3
+#endif
+    ,
+    "-O level for NVRTC");
+
+#ifndef VELOX_OSS_BUILD
+#include "velox/facebook/NvrtcUtil.h"
+#endif
 
 namespace facebook::velox::wave {
 
@@ -75,10 +90,19 @@ void addFlag(
   data.push_back(std::move(str));
 }
 
+#ifdef VELOX_OSS_BUILD
+void getDefaultNvrtcOptions(std::vector<std::string>& data) {
+  constexpr const char* kUsrLocalCuda = "/usr/local/cuda/include";
+  LOG(INFO) << "Using " << kUsrLocalCuda;
+  addFlag("-I", kUsrLocalCuda, strlen(kUsrLocalCuda), data);
+}
+#endif
+
 // Gets compiler options from the environment and appends  them  to 'data'.
 void getNvrtcOptions(std::vector<std::string>& data) {
   const char* includes = getenv("WAVE_NVRTC_INCLUDE_PATH");
   if (includes && strlen(includes) > 0) {
+    LOG(INFO) << "Found env NVRTC include path: " << includes;
     for (;;) {
       const char* end = strchr(includes, ':');
       if (!end) {
@@ -89,53 +113,7 @@ void getNvrtcOptions(std::vector<std::string>& data) {
       includes = end + 1;
     }
   } else {
-    std::string currentPath = std::filesystem::current_path().c_str();
-    LOG(INFO) << "Looking for Cuda includes. cwd=" << currentPath
-              << " Cuda=" << __CUDA_API_VER_MAJOR__ << "."
-              << __CUDA_API_VER_MINOR__;
-    auto pathCStr = currentPath.c_str();
-    if (auto fbsource = strstr(pathCStr, "fbsource")) {
-      // fbcode has cuda includes in fbsource/third-party/cuda/...
-      try {
-        auto fbsourcePath =
-            std::string(pathCStr, fbsource - pathCStr + strlen("fbsource")) +
-            "/third-party/cuda";
-        LOG(INFO) << "Guessing fbsource path =" << fbsourcePath;
-        auto tempPath = fmt::format("/tmp/cuda.{}", getpid());
-        auto command = fmt::format(
-            "(cd {}; du |grep \"{}\\.{}.*x64-linux.*/cuda$\" |grep -v thrust) >{}",
-            fbsourcePath,
-            __CUDA_API_VER_MAJOR__,
-            __CUDA_API_VER_MINOR__,
-            tempPath);
-        LOG(INFO) << "Running " << command;
-        system(command.c_str());
-        std::ifstream result(tempPath);
-        std::string line;
-        if (!std::getline(result, line)) {
-          LOG(ERROR) << "Cuda includes not found in fbcode/third-party";
-          return;
-        }
-        LOG(INFO) << "Got cuda line: " << line;
-        // Now trim the size and the trailing /cuda from the line.
-        const char* start = strstr(line.c_str(), "./");
-        if (!start) {
-          LOG(ERROR) << "Line " << line << " does not have ./";
-          return;
-        }
-        auto path = fbsourcePath + "/" + (start + 2);
-        // We add the cwd + the found path minus the trailing /cuda.
-        addFlag("-I", path.c_str(), path.size() - 5, data);
-      } catch (const std::exception& e) {
-        LOG(ERROR) << "Failed to infer fbcode Cuda include path: " << e.what();
-      }
-    } else {
-      addFlag(
-          "-I",
-          "/usr/local/cuda/include",
-          strlen("/usr/local/cuda/include"),
-          data);
-    }
+    getDefaultNvrtcOptions(data);
   }
   const char* flags = getenv("WAVE_NVRTC_FLAGS");
   if (flags && strlen(flags)) {
@@ -229,12 +207,28 @@ void ensureInit() {
       "} \n";
 
   waveNvrtcFlags.push_back("-std=c++17");
-#ifndef NDEBUG
-  waveNvrtcFlags.push_back("-G");
-#else
-  // waveNvrtcFlags.push_back("-O3");
-#endif
+  if (FLAGS_cuda_O) {
+    char str[10];
+    sprintf(str, "-O%d", FLAGS_cuda_O);
+    waveNvrtcFlags.push_back("-Xptxas");
+    waveNvrtcFlags.push_back(std::string(str));
+  }
+  if (FLAGS_cuda_G) {
+    waveNvrtcFlags.push_back("-G");
+  }
   getNvrtcOptions(waveNvrtcFlags);
+  auto device = currentDevice();
+  bool hasArch = false;
+  for (auto& flag : waveNvrtcFlags) {
+    if (strstr(flag.c_str(), "-arch") != nullptr) {
+      hasArch = true;
+      break;
+    }
+  }
+  if (!hasArch) {
+    waveNvrtcFlags.push_back(fmt::format(
+        "--gpu-architecture=compute_{}{}", device->major, device->minor));
+  }
   ::jitify::detail::detect_and_add_cuda_arch(waveNvrtcFlags);
 
   static jitify::JitCache kernel_cache;
@@ -247,11 +241,20 @@ void ensureInit() {
     makeNTS(str);
     waveNvrtcFlagsString.push_back(str.data());
   }
-
+  LOG(INFO) << "NVRTC flags: ";
+  for (auto i = 0; i < waveNvrtcFlagsString.size(); ++i) {
+    LOG(INFO) << waveNvrtcFlagsString[i];
+  }
+  LOG(INFO) << "device=" << device->toString();
   inited = true;
 }
 
 } // namespace
+
+// static
+void CompiledModule::initialize() {
+  ensureInit();
+}
 
 std::shared_ptr<CompiledModule> CompiledModule::create(const KernelSpec& spec) {
   ensureInit();
@@ -368,6 +371,7 @@ KernelInfo CompiledModuleImpl::info(int32_t kernelIdx) {
   cuFuncGetAttribute(&info.numRegs, CU_FUNC_ATTRIBUTE_NUM_REGS, f);
   cuFuncGetAttribute(
       &info.sharedMemory, CU_FUNC_ATTRIBUTE_SHARED_SIZE_BYTES, f);
+  cuFuncGetAttribute(&info.localMemory, CU_FUNC_ATTRIBUTE_LOCAL_SIZE_BYTES, f);
   cuFuncGetAttribute(
       &info.maxThreadsPerBlock, CU_FUNC_ATTRIBUTE_MAX_THREADS_PER_BLOCK, f);
   int32_t max;

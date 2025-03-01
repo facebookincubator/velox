@@ -88,13 +88,11 @@ std::optional<int32_t> RowVector::compare(
     vector_size_t otherIndex,
     CompareFlags flags) const {
   auto otherRow = other->wrappedVector()->as<RowVector>();
-  if (otherRow->encoding() != VectorEncoding::Simple::ROW) {
-    VELOX_CHECK(
-        false,
-        "Compare of ROW and non-ROW {} and {}",
-        BaseVector::toString(),
-        otherRow->BaseVector::toString());
-  }
+  VELOX_CHECK(
+      otherRow->encoding() == VectorEncoding::Simple::ROW,
+      "Compare of ROW and non-ROW {} and {}",
+      BaseVector::toString(),
+      otherRow->BaseVector::toString());
 
   bool isNull = isNullAt(index);
   bool otherNull = other->isNullAt(otherIndex);
@@ -118,13 +116,14 @@ std::optional<int32_t> RowVector::compare(
     if (!child || !otherChild) {
       return child ? 1 : -1; // Absent child counts as less.
     }
-    if (child->typeKind() != otherChild->typeKind()) {
-      VELOX_CHECK(
-          false,
-          "Compare of different child types: {} and {}",
-          BaseVector::toString(),
-          other->BaseVector::toString());
-    }
+
+    VELOX_CHECK_EQ(
+        child->typeKind(),
+        otherChild->typeKind(),
+        "Compare of different child types: {} and {}",
+        BaseVector::toString(),
+        other->BaseVector::toString());
+
     auto wrappedOtherIndex = other->wrappedIndex(otherIndex);
     auto result = child->compare(
         otherChild->loadedVector(), index, wrappedOtherIndex, flags);
@@ -322,15 +321,16 @@ void RowVector::copyRanges(
     return;
   }
 
-  auto minTargetIndex = std::numeric_limits<vector_size_t>::max();
   auto maxTargetIndex = std::numeric_limits<vector_size_t>::min();
-  applyToEachRange(ranges, [&](auto targetIndex, auto sourceIndex, auto count) {
-    minTargetIndex = std::min(minTargetIndex, targetIndex);
-    maxTargetIndex = std::max(maxTargetIndex, targetIndex + count);
-  });
-
-  SelectivityVector rows(maxTargetIndex);
-  rows.setValidRange(0, minTargetIndex, false);
+  applyToEachRange(
+      ranges, [&](auto targetIndex, auto /*sourceIndex*/, auto count) {
+        maxTargetIndex = std::max(maxTargetIndex, targetIndex + count);
+      });
+  SelectivityVector rows(maxTargetIndex, false);
+  applyToEachRange(
+      ranges, [&](auto targetIndex, auto /*sourceIndex*/, auto count) {
+        rows.setValidRange(targetIndex, targetIndex + count, true);
+      });
   rows.updateBounds();
   for (auto i = 0; i < children_.size(); ++i) {
     BaseVector::ensureWritable(
@@ -582,7 +582,7 @@ void ArrayVectorBase::copyRangesImpl(
     applyToEachRange(
         ranges, [&](auto targetIndex, auto sourceIndex, auto count) {
           if (count > 0) {
-            VELOX_DCHECK(BaseVector::length_ >= targetIndex + count);
+            VELOX_DCHECK_GE(BaseVector::length_, targetIndex + count);
             totalCount += count;
           }
         });
@@ -665,9 +665,7 @@ void RowVector::resize(vector_size_t newSize, bool setNotNull) {
   // Resize all the children.
   for (auto& child : children_) {
     if (child != nullptr) {
-      if (child->isLazy()) {
-        VELOX_FAIL("Resize on a lazy vector is not allowed");
-      }
+      VELOX_CHECK(!child->isLazy(), "Resize on a lazy vector is not allowed");
 
       // If we are just reducing the size of the vector, its safe
       // to skip uniqueness check since effectively we are just changing
@@ -690,24 +688,17 @@ struct Wrapper {
   BufferPtr indices;
 };
 
-void combineWrappers(
-    std::vector<Wrapper>& wrappers,
+template <typename F>
+void forEachCombinedIndex(
+    const std::vector<Wrapper>& wrappers,
     vector_size_t size,
-    memory::MemoryPool* pool) {
-  std::vector<BufferPtr> wrapInfos(wrappers.size());
+    F&& f) {
   std::vector<const vector_size_t*> sourceIndices(wrappers.size());
-  uint64_t* rawNulls = nullptr;
   for (int i = 0; i < wrappers.size(); ++i) {
-    wrapInfos[i] = wrappers[i].dictionary->wrapInfo();
-    VELOX_CHECK_NOT_NULL(wrapInfos[i]);
-    sourceIndices[i] = wrapInfos[i]->as<vector_size_t>();
-    if (!rawNulls && wrappers[i].dictionary->nulls()) {
-      wrappers.back().nulls = allocateNulls(size, pool);
-      rawNulls = wrappers.back().nulls->asMutable<uint64_t>();
-    }
+    auto& wrapInfo = wrappers[i].dictionary->wrapInfo();
+    VELOX_CHECK_NOT_NULL(wrapInfo);
+    sourceIndices[i] = wrapInfo->as<vector_size_t>();
   }
-  wrappers.back().indices = allocateIndices(size, pool);
-  auto* rawIndices = wrappers.back().indices->asMutable<vector_size_t>();
   for (vector_size_t j = 0; j < size; ++j) {
     auto index = j;
     bool isNull = false;
@@ -718,12 +709,55 @@ void combineWrappers(
       }
       index = sourceIndices[i][index];
     }
-    if (isNull) {
-      bits::setNull(rawNulls, j);
-    } else {
-      rawIndices[j] = index;
+    f(j, index, isNull);
+  }
+}
+
+void combineWrappers(
+    std::vector<Wrapper>& wrappers,
+    vector_size_t size,
+    memory::MemoryPool* pool) {
+  uint64_t* rawNulls = nullptr;
+  for (int i = 0; i < wrappers.size(); ++i) {
+    if (!rawNulls && wrappers[i].dictionary->nulls()) {
+      wrappers.back().nulls = allocateNulls(size, pool);
+      rawNulls = wrappers.back().nulls->asMutable<uint64_t>();
+      break;
     }
   }
+  wrappers.back().indices = allocateIndices(size, pool);
+  auto* rawIndices = wrappers.back().indices->asMutable<vector_size_t>();
+  forEachCombinedIndex(
+      wrappers,
+      size,
+      [&](vector_size_t outer, vector_size_t inner, bool isNull) {
+        if (isNull) {
+          bits::setNull(rawNulls, outer);
+        } else {
+          rawIndices[outer] = inner;
+        }
+      });
+}
+
+BufferPtr combineNulls(
+    const std::vector<Wrapper>& wrappers,
+    vector_size_t size,
+    const uint64_t* valueNulls,
+    memory::MemoryPool* pool) {
+  if (wrappers.size() == 1 && !valueNulls) {
+    return wrappers[0].dictionary->nulls();
+  }
+  auto nulls = allocateNulls(size, pool);
+  auto* rawNulls = nulls->asMutable<uint64_t>();
+  forEachCombinedIndex(
+      wrappers,
+      size,
+      [&](vector_size_t outer, vector_size_t inner, bool isNull) {
+        if (isNull || (valueNulls && bits::isBitNull(valueNulls, inner))) {
+          bits::setNull(rawNulls, outer);
+        }
+      });
+  return nulls;
 }
 
 VectorPtr wrapInDictionary(
@@ -768,9 +802,11 @@ VectorPtr pushDictionaryToRowVectorLeavesImpl(
     }
     case VectorEncoding::Simple::ROW: {
       VELOX_CHECK_EQ(values->typeKind(), TypeKind::ROW);
+      auto nulls = values->nulls();
       for (auto& wrapper : wrappers) {
         if (wrapper.dictionary->nulls()) {
-          return wrapInDictionary(wrappers, size, values, pool);
+          nulls = combineNulls(wrappers, size, values->rawNulls(), pool);
+          break;
         }
       }
       auto children = values->asUnchecked<RowVector>()->children();
@@ -781,11 +817,7 @@ VectorPtr pushDictionaryToRowVectorLeavesImpl(
         }
       }
       return std::make_shared<RowVector>(
-          pool,
-          values->type(),
-          values->nulls(),
-          values->size(),
-          std::move(children));
+          pool, values->type(), std::move(nulls), size, std::move(children));
     }
     case VectorEncoding::Simple::DICTIONARY: {
       Wrapper wrapper{values, nullptr, nullptr};
@@ -1028,13 +1060,13 @@ std::optional<int32_t> ArrayVector::compare(
 
   auto otherArray = otherValue->asUnchecked<ArrayVector>();
   auto otherElements = otherArray->elements_.get();
-  if (elements_->typeKind() != otherElements->typeKind()) {
-    VELOX_CHECK(
-        false,
-        "Compare of arrays of different element type: {} and {}",
-        BaseVector::toString(),
-        otherArray->BaseVector::toString());
-  }
+
+  VELOX_CHECK_EQ(
+      elements_->typeKind(),
+      otherElements->typeKind(),
+      "Compare of arrays of different element type: {} and {}",
+      BaseVector::toString(),
+      otherArray->BaseVector::toString());
 
   if (flags.equalsOnly &&
       rawSizes_[index] != otherArray->rawSizes_[wrappedOtherIndex]) {
@@ -1250,8 +1282,7 @@ std::optional<int32_t> MapVector::compare(
 
   if (keys_->typeKind() != otherMap->keys_->typeKind() ||
       values_->typeKind() != otherMap->values_->typeKind()) {
-    VELOX_CHECK(
-        false,
+    VELOX_FAIL(
         "Compare of maps of different key/value types: {} and {}",
         BaseVector::toString(),
         otherMap->BaseVector::toString());
@@ -1328,7 +1359,7 @@ void MapVector::canonicalize(
   // threads. The keys and values do not have to be uniquely owned
   // since they are not mutated but rather transposed, which is
   // non-destructive.
-  VELOX_CHECK(map.use_count() == 1);
+  VELOX_CHECK_EQ(map.use_count(), 1);
   BufferPtr indices;
   vector_size_t* indicesRange;
   for (auto i = 0; i < map->BaseVector::length_; ++i) {
@@ -1697,7 +1728,7 @@ MapVectorPtr MapVector::updateImpl(
 
 MapVectorPtr MapVector::update(const std::vector<MapVectorPtr>& others) const {
   VELOX_CHECK(!others.empty());
-  VELOX_CHECK(others.size() < std::numeric_limits<int8_t>::max());
+  VELOX_CHECK_LT(others.size(), std::numeric_limits<int8_t>::max());
   for (auto& other : others) {
     VELOX_CHECK_EQ(size(), other->size());
   }

@@ -15,6 +15,9 @@
  */
 #pragma once
 
+#define XXH_INLINE_ALL
+#include <xxhash.h>
+
 #include <string_view>
 #include "velox/expression/ComplexViewTypes.h"
 #include "velox/functions/lib/DateTimeFormatter.h"
@@ -1269,8 +1272,13 @@ struct DateAddFunction : public TimestampWithTimezoneSupport<T> {
         result = Timestamp(
             resultTimestamp.getSeconds() + offset, resultTimestamp.getNanos());
       } else {
-        resultTimestamp.toGMT(*sessionTimeZone_);
-        result = resultTimestamp;
+        result = Timestamp(
+            sessionTimeZone_
+                ->correct_nonexistent_time(
+                    std::chrono::seconds(resultTimestamp.getSeconds()))
+                .count(),
+            resultTimestamp.getNanos());
+        result.toGMT(*sessionTimeZone_);
       }
     } else {
       result = addToTimestamp(timestamp, unit, (int32_t)value);
@@ -1520,7 +1528,8 @@ struct FromIso8601Timestamp {
       return castResult.error();
     }
 
-    auto [ts, timeZone] = castResult.value();
+    auto [ts, timeZone, offsetMillis] = castResult.value();
+    VELOX_DCHECK(!offsetMillis.has_value());
     // Input string may not contain a timezone - if so, it is interpreted in
     // session timezone.
     if (!timeZone) {
@@ -1871,6 +1880,20 @@ struct ToMillisecondFunction {
       out_type<int64_t>& result,
       const arg_type<IntervalDayTime>& millis) {
     result = millis;
+  }
+};
+
+/// xxhash64(Date) → bigint
+/// Return a xxhash64 of input Date
+template <typename T>
+struct XxHash64DateFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  FOLLY_ALWAYS_INLINE
+  void call(out_type<int64_t>& result, const arg_type<Date>& input) {
+    // Casted to int64_t to feed into XXH64
+    auto date_input = static_cast<int64_t>(input);
+    result = XXH64(&date_input, sizeof(date_input), 0);
   }
 };
 

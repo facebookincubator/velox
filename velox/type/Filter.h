@@ -29,6 +29,7 @@
 #include "velox/common/base/SimdUtil.h"
 #include "velox/common/serialization/Serializable.h"
 #include "velox/type/StringView.h"
+#include "velox/type/Subfield.h"
 #include "velox/type/Type.h"
 
 namespace facebook::velox::common {
@@ -60,6 +61,8 @@ enum class FilterKind {
 
 class Filter;
 using FilterPtr = std::unique_ptr<Filter>;
+
+using SubfieldFilters = std::unordered_map<Subfield, std::unique_ptr<Filter>>;
 
 /**
  * A simple filter (e.g. comparison with literal) that can be applied
@@ -151,7 +154,7 @@ class Filter : public velox::ISerializable {
     VELOX_UNSUPPORTED("{}: testInt64() is not supported.", toString());
   }
 
-  virtual bool testInt128(int128_t /* unused */) const {
+  virtual bool testInt128(const int128_t& /* unused */) const {
     VELOX_UNSUPPORTED("{}: testInt128() is not supported.", toString());
   }
 
@@ -191,7 +194,7 @@ class Filter : public velox::ISerializable {
     VELOX_UNSUPPORTED("{}: testBytes() is not supported.", toString());
   }
 
-  virtual bool testTimestamp(Timestamp /* unused */) const {
+  virtual bool testTimestamp(const Timestamp& /* unused */) const {
     VELOX_UNSUPPORTED("{}: testTimestamp() is not supported.", toString());
   }
 
@@ -229,8 +232,10 @@ class Filter : public velox::ISerializable {
     VELOX_UNSUPPORTED("{}: testInt64Range() is not supported.", toString());
   }
 
-  virtual bool
-  testInt128Range(int128_t /*min*/, int128_t /*max*/, bool /*hasNull*/) const {
+  virtual bool testInt128Range(
+      const int128_t& /*min*/,
+      const int128_t& /*max*/,
+      bool /*hasNull*/) const {
     VELOX_UNSUPPORTED("{}: testInt128Range() is not supported.", toString());
   }
 
@@ -250,8 +255,8 @@ class Filter : public velox::ISerializable {
   }
 
   virtual bool testTimestampRange(
-      Timestamp /*min*/,
-      Timestamp /*max*/,
+      const Timestamp& /*min*/,
+      const Timestamp& /*max*/,
       bool /*hasNull*/) const {
     VELOX_UNSUPPORTED("{}: testTimestampRange() is not supported.", toString());
   }
@@ -323,7 +328,14 @@ class AlwaysFalse final : public Filter {
     return false;
   }
 
-  bool testInt128(int128_t /* unused */) const final {
+  bool testInt128Range(
+      const int128_t& /*min*/,
+      const int128_t& /*max*/,
+      bool /*hasNull*/) const final {
+    return false;
+  }
+
+  bool testInt128(const int128_t& /* unused */) const final {
     return false;
   }
 
@@ -356,8 +368,8 @@ class AlwaysFalse final : public Filter {
   }
 
   bool testTimestampRange(
-      Timestamp /*min*/,
-      Timestamp /*max*/,
+      const Timestamp& /*min*/,
+      const Timestamp& /*max*/,
       bool /*hasNull*/) const final {
     return false;
   }
@@ -402,12 +414,19 @@ class AlwaysTrue final : public Filter {
     return true;
   }
 
-  bool testInt128(int128_t /* unused */) const final {
+  bool testInt128(const int128_t& /* unused */) const final {
     return true;
   }
 
   bool testInt64Range(int64_t /*min*/, int64_t /*max*/, bool /*hasNull*/)
       const final {
+    return true;
+  }
+
+  bool testInt128Range(
+      const int128_t& /*min*/,
+      const int128_t& /*max*/,
+      bool /*hasNull*/) const final {
     return true;
   }
 
@@ -440,8 +459,8 @@ class AlwaysTrue final : public Filter {
   }
 
   bool testTimestampRange(
-      Timestamp /*min*/,
-      Timestamp /*max*/,
+      const Timestamp& /*min*/,
+      const Timestamp& /*max*/,
       bool /*hasNull*/) const final {
     return true;
   }
@@ -482,12 +501,19 @@ class IsNull final : public Filter {
     return false;
   }
 
-  bool testInt128(int128_t /* unused */) const final {
+  bool testInt128(const int128_t& /* unused */) const final {
     return false;
   }
 
   bool testInt64Range(int64_t /*min*/, int64_t /*max*/, bool hasNull)
       const final {
+    return hasNull;
+  }
+
+  bool testInt128Range(
+      const int128_t& /*min*/,
+      const int128_t& /*max*/,
+      bool hasNull) const final {
     return hasNull;
   }
 
@@ -512,7 +538,7 @@ class IsNull final : public Filter {
     return false;
   }
 
-  bool testTimestamp(Timestamp /* unused */) const final {
+  bool testTimestamp(const Timestamp& /* unused */) const final {
     return false;
   }
 
@@ -523,8 +549,10 @@ class IsNull final : public Filter {
     return hasNull;
   }
 
-  bool testTimestampRange(Timestamp /*min*/, Timestamp /*max*/, bool hasNull)
-      const final {
+  bool testTimestampRange(
+      const Timestamp& /*min*/,
+      const Timestamp& /*max*/,
+      bool hasNull) const final {
     return hasNull;
   }
 
@@ -561,12 +589,19 @@ class IsNotNull final : public Filter {
     return true;
   }
 
-  bool testInt128(int128_t /* unused */) const final {
+  bool testInt128(const int128_t& /* unused */) const final {
     return true;
   }
 
   bool testInt64Range(int64_t /*min*/, int64_t /*max*/, bool /*hasNull*/)
       const final {
+    return true;
+  }
+
+  bool testInt128Range(
+      const int128_t& /*min*/,
+      const int128_t& /*max*/,
+      bool /*hasNull*/) const final {
     return true;
   }
 
@@ -591,7 +626,7 @@ class IsNotNull final : public Filter {
     return true;
   }
 
-  bool testTimestamp(Timestamp /* unused */) const final {
+  bool testTimestamp(const Timestamp& /* unused */) const final {
     return true;
   }
 
@@ -603,8 +638,8 @@ class IsNotNull final : public Filter {
   }
 
   bool testTimestampRange(
-      Timestamp /*min*/,
-      Timestamp /*max*/,
+      const Timestamp& /*min*/,
+      const Timestamp& /*max*/,
       bool /*hasNull*/) const final {
     return true;
   }
@@ -759,7 +794,7 @@ class BigintRange final : public Filter {
 
   std::unique_ptr<Filter> mergeWith(const Filter* other) const final;
 
-  std::string toString() const final {
+  std::string toString() const override {
     return fmt::format(
         "BigintRange: [{}, {}] {}",
         lower_,
@@ -838,7 +873,7 @@ class NegatedBigintRange final : public Filter {
 
   std::unique_ptr<Filter> mergeWith(const Filter* other) const final;
 
-  std::string toString() const final {
+  std::string toString() const override {
     return "Negated" + nonNegated_->toString();
   }
 
@@ -853,7 +888,7 @@ class HugeintRange final : public Filter {
   /// @param lower Lowest value in the rejected range, inclusive.
   /// @param upper Highest value in the range, inclusive.
   /// @param nullAllowed Null values are passing the filter if true.
-  HugeintRange(int128_t lower, int128_t upper, bool nullAllowed)
+  HugeintRange(const int128_t& lower, const int128_t& upper, bool nullAllowed)
       : Filter(true, nullAllowed, FilterKind::kHugeintRange),
         lower_(lower),
         upper_(upper) {}
@@ -872,11 +907,12 @@ class HugeintRange final : public Filter {
     }
   }
 
-  bool testInt128(int128_t value) const final {
+  bool testInt128(const int128_t& value) const final {
     return value >= lower_ && value <= upper_;
   }
 
-  bool testInt128Range(int128_t min, int128_t max, bool hasNull) const final {
+  bool testInt128Range(const int128_t& min, const int128_t& max, bool hasNull)
+      const final {
     if (hasNull && nullAllowed_) {
       return true;
     }
@@ -892,7 +928,7 @@ class HugeintRange final : public Filter {
     return upper_;
   }
 
-  std::string toString() const final {
+  std::string toString() const override {
     return fmt::format(
         "HugeintRange: [{}, {}] {}",
         lower_,
@@ -973,7 +1009,7 @@ class BigintValuesUsingHashTable final : public Filter {
     return hashTable_;
   }
 
-  std::string toString() const final {
+  std::string toString() const override {
     return fmt::format(
         "BigintValuesUsingHashTable: [{}, {}] {}",
         min_,
@@ -1003,8 +1039,8 @@ class BigintValuesUsingHashTable final : public Filter {
 class HugeintValuesUsingHashTable final : public Filter {
  public:
   HugeintValuesUsingHashTable(
-      const int128_t min,
-      const int128_t max,
+      const int128_t& min,
+      const int128_t& max,
       const std::vector<int128_t>& values,
       const bool nullAllowed);
 
@@ -1030,9 +1066,9 @@ class HugeintValuesUsingHashTable final : public Filter {
     }
   }
 
-  bool testInt128(int128_t value) const final;
+  bool testInt128(const int128_t& value) const final;
 
-  bool testingEquals(const Filter& other) const override;
+  bool testingEquals(const Filter& other) const final;
 
  private:
   const int128_t min_;
@@ -1160,7 +1196,7 @@ class NegatedBigintValuesUsingHashTable final : public Filter {
     return nonNegated_->values();
   }
 
-  std::string toString() const final {
+  std::string toString() const override {
     return fmt::format(
         "NegatedBigintValuesUsingHashTable: [{}, {}] {}",
         nonNegated_->min(),
@@ -1436,7 +1472,7 @@ class FloatingPointRange final : public AbstractRange {
     }
   }
 
-  std::string toString() const final;
+  std::string toString() const override;
 
   bool testingEquals(const Filter& other) const final;
 
@@ -1624,7 +1660,7 @@ class BytesRange final : public AbstractRange {
     }
   }
 
-  std::string toString() const final {
+  std::string toString() const override {
     return fmt::format(
         "BytesRange: {}{}, {}{} {}",
         (lowerUnbounded_ || lowerExclusive_) ? "(" : "[",
@@ -1732,7 +1768,7 @@ class NegatedBytesRange final : public Filter {
         *this, nullAllowed.value_or(nullAllowed_));
   }
 
-  std::string toString() const final {
+  std::string toString() const override {
     return "Negated" + nonNegated_->toString();
   }
 
@@ -1820,7 +1856,7 @@ class TimestampRange : public Filter {
     }
   }
 
-  std::string toString() const final {
+  std::string toString() const override {
     return fmt::format(
         "TimestampRange: [{}, {}] {}",
         lower_.toString(),
@@ -1828,12 +1864,14 @@ class TimestampRange : public Filter {
         nullAllowed_ ? "with nulls" : "no nulls");
   }
 
-  bool testTimestamp(Timestamp value) const override {
+  bool testTimestamp(const Timestamp& value) const final {
     return value >= lower_ && value <= upper_;
   }
 
-  bool testTimestampRange(Timestamp min, Timestamp max, bool hasNull)
-      const final {
+  bool testTimestampRange(
+      const Timestamp& min,
+      const Timestamp& max,
+      bool hasNull) const final {
     if (hasNull && nullAllowed_) {
       return true;
     }
@@ -2067,7 +2105,7 @@ class MultiRange final : public Filter {
 
   bool testBytes(const char* value, int32_t length) const final;
 
-  bool testTimestamp(Timestamp value) const final;
+  bool testTimestamp(const Timestamp& value) const final;
 
   bool testLength(int32_t length) const final;
 
@@ -2082,7 +2120,7 @@ class MultiRange final : public Filter {
     return filters_;
   }
 
-  std::unique_ptr<Filter> mergeWith(const Filter* other) const override final;
+  std::unique_ptr<Filter> mergeWith(const Filter* other) const final;
 
   bool testingEquals(const Filter& other) const final;
 

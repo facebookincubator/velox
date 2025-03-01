@@ -29,6 +29,8 @@ if [[ "$OSTYPE" == darwin* ]]; then
   export INSTALL_PREFIX=${INSTALL_PREFIX:-"$(pwd)/deps-install"}
 fi
 
+WGET_OPTIONS=${WGET_OPTIONS:-""}
+
 function install_aws_deps {
   local AWS_REPO_NAME="aws/aws-sdk-cpp"
   local AWS_SDK_VERSION="1.11.321"
@@ -50,7 +52,7 @@ function install_aws_deps {
       # minio will have to approved under the Privacy & Security on MacOS on first use.
       MINIO_OS="darwin"
     fi
-    wget https://dl.min.io/server/minio/release/${MINIO_OS}-${MINIO_ARCH}/archive/minio.RELEASE.2022-05-26T05-48-41Z -O ${MINIO_BINARY}
+    wget ${WGET_OPTIONS} https://dl.min.io/server/minio/release/${MINIO_OS}-${MINIO_ARCH}/archive/minio.RELEASE.2022-05-26T05-48-41Z -O ${MINIO_BINARY}
     chmod +x ./${MINIO_BINARY}
     mv ./${MINIO_BINARY} /usr/local/bin/
   fi
@@ -151,20 +153,11 @@ function install_azure-storage-sdk-cpp {
 }
 
 function install_hdfs_deps {
-  github_checkout apache/hawq master
-  libhdfs3_dir=hawq/depends/libhdfs3
-  if [[ "$OSTYPE" == darwin* ]]; then
-     sed -i '' -e "/FIND_PACKAGE(GoogleTest REQUIRED)/d" $DEPENDENCY_DIR/$libhdfs3_dir/CMakeLists.txt
-     sed -i '' -e "s/dumpversion/dumpfullversion/" $DEPENDENCY_DIR/$libhdfs3_dir/CMakeLists.txt
-  fi
-
   if [[ "$OSTYPE" == linux-gnu* ]]; then
-    sed -i "/FIND_PACKAGE(GoogleTest REQUIRED)/d" $DEPENDENCY_DIR/$libhdfs3_dir/CMakeLists.txt
-    sed -i "s/dumpversion/dumpfullversion/" $DEPENDENCY_DIR/$libhdfs3_dir/CMake/Platform.cmake
     # Dependencies for Hadoop testing
     wget_and_untar https://archive.apache.org/dist/hadoop/common/hadoop-3.3.0/hadoop-3.3.0.tar.gz hadoop
     cp -a ${DEPENDENCY_DIR}/hadoop /usr/local/
-    wget -P /usr/local/hadoop/share/hadoop/common/lib/ https://repo1.maven.org/maven2/junit/junit/4.11/junit-4.11.jar
+    wget ${WGET_OPTIONS} -P /usr/local/hadoop/share/hadoop/common/lib/ https://repo1.maven.org/maven2/junit/junit/4.11/junit-4.11.jar
 
     LINUX_DISTRIBUTION=$(. /etc/os-release && echo ${ID})
     if [[ "$LINUX_DISTRIBUTION" == "ubuntu" || "$LINUX_DISTRIBUTION" == "debian" ]]; then
@@ -173,7 +166,6 @@ function install_hdfs_deps {
       yum install -y java-1.8.0-openjdk-devel
     fi
   fi
-  cmake_install_dir $libhdfs3_dir
 }
 
 (mkdir -p "${DEPENDENCY_DIR}") || exit

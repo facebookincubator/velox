@@ -11,13 +11,19 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+if(${VELOX_BUILD_TESTING})
+  add_subdirectory(tests)
+endif()
 
-add_subdirectory(tests)
+velox_add_library(velox_multifragment_plan MultiFragmentPlan.cpp)
+velox_link_libraries(velox_multifragment_plan velox_common_base velox_memory
+                     velox_core)
 
-velox_add_library(velox_local_runner LocalRunner.cpp LocalSchema.cpp Runner.cpp)
+velox_add_library(velox_local_runner LocalRunner.cpp Runner.cpp)
 
 velox_link_libraries(
   velox_local_runner
+  velox_multifragment_plan
   velox_common_base
   velox_memory
   velox_hive_connector

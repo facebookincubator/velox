@@ -115,6 +115,7 @@ IcebergSplitReaderBenchmark::makeIcebergSplit(
       std::nullopt,
       customSplitInfo,
       nullptr,
+      /*cacheable=*/true,
       deleteFiles);
 }
 
@@ -294,6 +295,8 @@ void IcebergSplitReaderBenchmark::readSingleColumn(
   const RowTypePtr readerOutputType;
   const std::shared_ptr<io::IoStatistics> ioStats =
       std::make_shared<io::IoStatistics>();
+  const std::shared_ptr<filesystems::File::IoStats> fsStats =
+      std::make_shared<filesystems::File::IoStats>();
 
   std::shared_ptr<memory::MemoryPool> root =
       memory::memoryManager()->addRootPool(
@@ -339,6 +342,7 @@ void IcebergSplitReaderBenchmark::readSingleColumn(
             hiveConfig,
             rowType,
             ioStats,
+            fsStats,
             &fileHandleFactory,
             nullptr,
             scanSpec);

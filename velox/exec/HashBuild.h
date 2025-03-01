@@ -25,6 +25,7 @@
 #include "velox/expression/Expr.h"
 
 namespace facebook::velox::exec {
+class HashBuildSpiller;
 
 /// Builds a hash table for use in HashProbe. This is the final
 /// Operator in a build side Driver. The build side pipeline has
@@ -44,17 +45,14 @@ class HashBuild final : public Operator {
     /// The yield state that voluntarily yield cpu after running too long when
     /// processing input from spilled file.
     kYield = 2,
-    /// The state that waits for the pending group spill to finish. This state
-    /// only applies if disk spilling is enabled.
-    kWaitForSpill = 3,
     /// The state that waits for the hash tables to be merged together.
-    kWaitForBuild = 4,
+    kWaitForBuild = 3,
     /// The state that waits for the hash probe to finish before start to build
     /// the hash table for one of previously spilled partition. This state only
     /// applies if disk spilling is enabled.
-    kWaitForProbe = 5,
+    kWaitForProbe = 4,
     /// The finishing state.
-    kFinish = 6,
+    kFinish = 5,
   };
   static std::string stateName(State state);
 
@@ -279,7 +277,7 @@ class HashBuild final : public Operator {
   // This can be nullptr if either spilling is not allowed or it has been
   // transferred to the last hash build operator while in kWaitForBuild state or
   // it has been cleared to set up a new one for recursive spilling.
-  std::unique_ptr<Spiller> spiller_;
+  std::unique_ptr<HashBuildSpiller> spiller_;
 
   // Used to read input from previously spilled data for restoring.
   std::unique_ptr<UnorderedStreamReader<BatchStream>> spillInputReader_;
@@ -311,6 +309,40 @@ inline std::ostream& operator<<(std::ostream& os, HashBuild::State state) {
   os << HashBuild::stateName(state);
   return os;
 }
+
+class HashBuildSpiller : public SpillerBase {
+ public:
+  static constexpr std::string_view kType = "HashBuildSpiller";
+
+  HashBuildSpiller(
+      core::JoinType joinType,
+      RowContainer* container,
+      RowTypePtr rowType,
+      HashBitRange bits,
+      const common::SpillConfig* spillConfig,
+      folly::Synchronized<common::SpillStats>* spillStats);
+
+  /// Invoked to spill all the rows stored in the row container of the hash
+  /// build.
+  void spill();
+
+  /// Invoked to spill a given partition from the input vector 'spillVector'.
+  void spill(uint32_t partition, const RowVectorPtr& spillVector);
+
+ private:
+  void extractSpill(folly::Range<char**> rows, RowVectorPtr& resultPtr)
+      override;
+
+  bool needSort() const override {
+    return false;
+  }
+
+  std::string type() const override {
+    return std::string(kType);
+  }
+
+  const bool spillProbeFlag_;
+};
 } // namespace facebook::velox::exec
 
 template <>

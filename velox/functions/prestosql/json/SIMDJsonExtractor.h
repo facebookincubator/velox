@@ -29,32 +29,46 @@ namespace facebook::velox::functions {
 
 class SIMDJsonExtractor {
  public:
+  /**
+   * Extract element(s) from a JSON object using the given path.
+   * @param json: A json string of type simdjson::padded_string
+   * @param path: Path to locate a JSON object. Following operators are
+   * supported.
+   *              "$"      Root member of a JSON structure no matter if it's an
+   *                       object, an array, or a scalar.
+   *              "."      Child operator to get a child object.
+   *              "[]"     Subscript operator for array or object.
+   *              "*"      Wildcard operator, gets all the elements of an array
+   *                       or all values in an object.
+   * @param consumer: Function to consume the extracted elements. Should be able
+   *                  to take an argument that can either be a
+   *                  simdjson::ondemand::document or a
+   *                  simdjson::ondemand::value. Note: If the consumer holds
+   *                  onto string_view(s) generated from applying
+   *                  simdjson::to_json_string to the arguments, then those
+   *                  string_view(s) will reference the original `json`
+   *                  padded_string and remain valid as long as it remains
+   *                  in scope.
+   * @param isDefinitePath is an output param that will get set to
+   *                       false if a token is evaluated which can return
+   *                       multiple results like '*'.
+   * @return Return simdjson::SUCCESS on success.
+   *         If any errors are encountered parsing the JSON, returns the error.
+   */
   template <typename TConsumer>
   simdjson::error_code extract(
-      simdjson::ondemand::value& json,
+      const simdjson::padded_string& json,
       TConsumer& consumer,
-      size_t tokenStartIndex = 0);
+      bool& isDefinitePath);
 
   /// Returns true if this extractor was initialized with the trivial path "$".
   bool isRootOnlyPath() {
     return tokens_.empty();
   }
 
-  /// Returns true if this extractor was initialized with a path that's
-  /// guaranteed to match at most one entry.
-  bool isDefinitePath() {
-    for (const auto& token : tokens_) {
-      if (token == "*") {
-        return false;
-      }
-    }
-
-    return true;
-  }
-
   /// Use this method to get an instance of SIMDJsonExtractor given a JSON path.
-  /// Given the nature of the cache, it's important this is only used by
-  /// the callers of simdJsonExtract.
+  /// Uses a thread local cache, therefore the caller must ensure the returned
+  /// instance is not passed between threads.
   static SIMDJsonExtractor& getInstance(folly::StringPiece path);
 
  private:
@@ -66,6 +80,13 @@ class SIMDJsonExtractor {
   }
 
   bool tokenize(const std::string& path);
+
+  template <typename TConsumer>
+  simdjson::error_code extract(
+      simdjson::ondemand::value& json,
+      TConsumer& consumer,
+      bool& isDefinitePath,
+      size_t tokenStartIndex = 0);
 
   // Max number of extractors cached in extractorCache.
   static const uint32_t kMaxCacheSize{32};
@@ -85,8 +106,32 @@ simdjson::error_code extractArray(
 
 template <typename TConsumer>
 simdjson::error_code SIMDJsonExtractor::extract(
+    const simdjson::padded_string& paddedJson,
+    TConsumer& consumer,
+    bool& isDefinitePath) {
+  SIMDJSON_ASSIGN_OR_RAISE(auto jsonDoc, simdjsonParse(paddedJson));
+  SIMDJSON_ASSIGN_OR_RAISE(auto isScalar, jsonDoc.is_scalar());
+  if (isScalar) {
+    // Note, we cannot convert this to a value as this is not supported if the
+    // object is a scalar.
+    if (isRootOnlyPath()) {
+      return consumer(jsonDoc);
+    }
+    VELOX_CHECK_GT(tokens_.size(), 0);
+    if (tokens_[0] == "*") {
+      isDefinitePath = false;
+    }
+    return simdjson::SUCCESS;
+  }
+  SIMDJSON_ASSIGN_OR_RAISE(auto value, jsonDoc.get_value());
+  return extract(value, consumer, isDefinitePath, 0);
+}
+
+template <typename TConsumer>
+simdjson::error_code SIMDJsonExtractor::extract(
     simdjson::ondemand::value& json,
     TConsumer& consumer,
+    bool& isDefinitePath,
     size_t tokenStartIndex) {
   simdjson::ondemand::value input = json;
   // Temporary extraction result holder.
@@ -95,8 +140,29 @@ simdjson::error_code SIMDJsonExtractor::extract(
   for (int tokenIndex = tokenStartIndex; tokenIndex < tokens_.size();
        tokenIndex++) {
     auto& token = tokens_[tokenIndex];
+    if (token == "*") {
+      isDefinitePath = false;
+    }
     if (input.type() == simdjson::ondemand::json_type::object) {
-      SIMDJSON_TRY(extractObject(input, token, result));
+      if (token == "*") {
+        SIMDJSON_ASSIGN_OR_RAISE(auto jsonObj, input.get_object());
+        for (auto field : jsonObj) {
+          simdjson::ondemand::value val = field.value();
+          if (tokenIndex == tokens_.size() - 1) {
+            // If this is the last token in the path, consume each element in
+            // the object.
+            SIMDJSON_TRY(consumer(val));
+          } else {
+            // If not, then recursively call the extract function on each
+            // element in the object.
+            SIMDJSON_TRY(
+                extract(val, consumer, isDefinitePath, tokenIndex + 1));
+          }
+        }
+        return simdjson::SUCCESS;
+      } else {
+        SIMDJSON_TRY(extractObject(input, token, result));
+      }
     } else if (input.type() == simdjson::ondemand::json_type::array) {
       if (token == "*") {
         for (auto child : input.get_array()) {
@@ -107,10 +173,10 @@ simdjson::error_code SIMDJsonExtractor::extract(
           } else {
             // If not, then recursively call the extract function on each
             // element in the array.
-            SIMDJSON_TRY(extract(child.value(), consumer, tokenIndex + 1));
+            SIMDJSON_TRY(extract(
+                child.value(), consumer, isDefinitePath, tokenIndex + 1));
           }
         }
-
         return simdjson::SUCCESS;
       } else {
         SIMDJSON_TRY(extractArray(input, token, result));
@@ -126,41 +192,4 @@ simdjson::error_code SIMDJsonExtractor::extract(
 
   return consumer(input);
 };
-
-/**
- * Extract element(s) from a JSON object using the given path.
- * @param json: A JSON object
- * @param path: Path to locate a JSON object. Following operators are supported.
- *              "$"      Root member of a JSON structure no matter if it's an
- *                       object, an array, or a scalar.
- *              "."      Child operator to get a child object.
- *              "[]"     Subscript operator for array.
- *              "*"      Wildcard for [], get all the elements of an array.
- * @param consumer: Function to consume the extracted elements. Should be able
- *                  to take an argument that can either be a
- *                  simdjson::ondemand::document or a simdjson::ondemand::value.
- *                  Note that once consumer returns, it should be assumed that
- *                  the argument passed in is no longer valid, so do not attempt
- *                  to store it as is in the consumer.
- * @return Return simdjson::SUCCESS on success.
- *         If any errors are encountered parsing the JSON, returns the error.
- */
-template <typename TConsumer>
-simdjson::error_code simdJsonExtract(
-    const velox::StringView& json,
-    SIMDJsonExtractor& extractor,
-    TConsumer&& consumer) {
-  simdjson::padded_string paddedJson(json.data(), json.size());
-  SIMDJSON_ASSIGN_OR_RAISE(auto jsonDoc, simdjsonParse(paddedJson));
-
-  if (extractor.isRootOnlyPath()) {
-    // If the path is just to return the original object, call consumer on the
-    // document.  Note, we cannot convert this to a value as this is not
-    // supported if the object is a scalar.
-    return consumer(jsonDoc);
-  }
-  SIMDJSON_ASSIGN_OR_RAISE(auto value, jsonDoc.get_value());
-  return extractor.extract(value, std::forward<TConsumer>(consumer));
-}
-
 } // namespace facebook::velox::functions

@@ -560,6 +560,8 @@ StopReason Driver::runInternal(
         }
 
         withDeltaCpuWallTimer(op, &OperatorStats::isBlockedTiming, [&]() {
+          TestValue::adjust(
+              "facebook::velox::exec::Driver::runInternal::isBlocked", op);
           CALL_OPERATOR(
               blockingReason_ = op->isBlocked(&future),
               op,
@@ -615,27 +617,27 @@ StopReason Driver::runInternal(
             });
             pushdownFilters(i);
             if (intermediateResult) {
-              withDeltaCpuWallTimer(op, &OperatorStats::addInputTiming, [&]() {
-                {
-                  auto lockedStats = nextOp->stats().wlock();
-                  lockedStats->addInputVector(
-                      resultBytes, intermediateResult->size());
-                }
-                nextOp->traceInput(intermediateResult);
-                TestValue::adjust(
-                    "facebook::velox::exec::Driver::runInternal::addInput",
-                    nextOp);
+              withDeltaCpuWallTimer(
+                  nextOp, &OperatorStats::addInputTiming, [&]() {
+                    {
+                      auto lockedStats = nextOp->stats().wlock();
+                      lockedStats->addInputVector(
+                          resultBytes, intermediateResult->size());
+                    }
+                    nextOp->traceInput(intermediateResult);
+                    TestValue::adjust(
+                        "facebook::velox::exec::Driver::runInternal::addInput",
+                        nextOp);
 
-                CALL_OPERATOR(
-                    nextOp->addInput(intermediateResult),
-                    nextOp,
-                    curOperatorId_ + 1,
-                    kOpMethodAddInput);
-
-                // The next iteration will see if operators_[i + 1] has
-                // output now that it got input.
-                i += 2;
-              });
+                    CALL_OPERATOR(
+                        nextOp->addInput(intermediateResult),
+                        nextOp,
+                        curOperatorId_ + 1,
+                        kOpMethodAddInput);
+                  });
+              // The next iteration will see if operators_[i + 1] has
+              // output now that it got input.
+              i += 2;
               continue;
             } else {
               stop = task()->shouldStop();
@@ -671,7 +673,7 @@ StopReason Driver::runInternal(
               });
               if (finished) {
                 withDeltaCpuWallTimer(
-                    op, &OperatorStats::finishTiming, [this, &nextOp]() {
+                    nextOp, &OperatorStats::finishTiming, [this, &nextOp]() {
                       TestValue::adjust(
                           "facebook::velox::exec::Driver::runInternal::noMoreInput",
                           nextOp);
@@ -1101,21 +1103,6 @@ StopReason Driver::blockDriver(
   return StopReason::kBlock;
 }
 
-SuspendedSection::SuspendedSection(Driver* driver) : driver_(driver) {
-  if (driver->task()->enterSuspended(driver->state()) != StopReason::kNone) {
-    VELOX_FAIL("Terminate detected when entering suspended section");
-  }
-}
-
-SuspendedSection::~SuspendedSection() {
-  if (driver_->task()->leaveSuspended(driver_->state()) != StopReason::kNone) {
-    LOG(WARNING)
-        << "Terminate detected when leaving suspended section for driver "
-        << driver_->driverCtx()->driverId << " from task "
-        << driver_->task()->taskId();
-  }
-}
-
 std::string Driver::label() const {
   return fmt::format("<Driver {}:{}>", task()->taskId(), ctx_->driverId);
 }
@@ -1140,14 +1127,18 @@ std::string blockingReasonToString(BlockingReason reason) {
       return "kWaitForMemory";
     case BlockingReason::kWaitForConnector:
       return "kWaitForConnector";
-    case BlockingReason::kWaitForSpill:
-      return "kWaitForSpill";
     case BlockingReason::kYield:
       return "kYield";
     case BlockingReason::kWaitForArbitration:
       return "kWaitForArbitration";
+    case BlockingReason::kWaitForScanScaleUp:
+      return "kWaitForScanScaleUp";
+    case BlockingReason::kWaitForIndexLookup:
+      return "kWaitForIndexLookup";
+    default:
+      VELOX_UNREACHABLE(
+          fmt::format("Unknown blocking reason {}", static_cast<int>(reason)));
   }
-  VELOX_UNREACHABLE();
 }
 
 DriverThreadContext* driverThreadContext() {

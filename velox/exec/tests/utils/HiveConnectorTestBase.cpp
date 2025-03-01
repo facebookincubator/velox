@@ -24,8 +24,6 @@
 #include "velox/dwio/dwrf/reader/DwrfReader.h"
 #include "velox/dwio/dwrf/writer/FlushPolicy.h"
 #include "velox/dwio/dwrf/writer/Writer.h"
-#include "velox/dwio/parquet/RegisterParquetReader.h"
-#include "velox/dwio/parquet/RegisterParquetWriter.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 
 namespace facebook::velox::exec::test {
@@ -51,8 +49,6 @@ void HiveConnectorTestBase::SetUp() {
   dwio::common::registerFileSinks();
   dwrf::registerDwrfReaderFactory();
   dwrf::registerDwrfWriterFactory();
-  parquet::registerParquetReaderFactory();
-  parquet::registerParquetWriterFactory();
 }
 
 void HiveConnectorTestBase::TearDown() {
@@ -61,8 +57,6 @@ void HiveConnectorTestBase::TearDown() {
   ioExecutor_.reset();
   dwrf::unregisterDwrfReaderFactory();
   dwrf::unregisterDwrfWriterFactory();
-  parquet::unregisterParquetReaderFactory();
-  parquet::unregisterParquetWriterFactory();
   connector::unregisterConnector(kHiveConnectorId);
   connector::unregisterConnectorFactory(
       connector::hive::HiveConnectorFactory::kHiveConnectorName);
@@ -256,11 +250,13 @@ HiveConnectorTestBase::makeHiveConnectorSplit(
     const std::string& filePath,
     uint64_t start,
     uint64_t length,
-    int64_t splitWeight) {
+    int64_t splitWeight,
+    bool cacheable) {
   return HiveConnectorSplitBuilder(filePath)
       .start(start)
       .length(length)
       .splitWeight(splitWeight)
+      .cacheable(cacheable)
       .build();
 }
 
@@ -288,7 +284,8 @@ HiveConnectorTestBase::makeHiveInsertTableHandle(
     std::shared_ptr<connector::hive::LocationHandle> locationHandle,
     const dwio::common::FileFormat tableStorageFormat,
     const std::optional<common::CompressionKind> compressionKind,
-    const std::shared_ptr<dwio::common::WriterOptions>& writerOptions) {
+    const std::shared_ptr<dwio::common::WriterOptions>& writerOptions,
+    const bool ensureFiles) {
   return makeHiveInsertTableHandle(
       tableColumnNames,
       tableColumnTypes,
@@ -298,7 +295,8 @@ HiveConnectorTestBase::makeHiveInsertTableHandle(
       tableStorageFormat,
       compressionKind,
       {},
-      writerOptions);
+      writerOptions,
+      ensureFiles);
 }
 
 // static
@@ -312,7 +310,8 @@ HiveConnectorTestBase::makeHiveInsertTableHandle(
     const dwio::common::FileFormat tableStorageFormat,
     const std::optional<common::CompressionKind> compressionKind,
     const std::unordered_map<std::string, std::string>& serdeParameters,
-    const std::shared_ptr<dwio::common::WriterOptions>& writerOptions) {
+    const std::shared_ptr<dwio::common::WriterOptions>& writerOptions,
+    const bool ensureFiles) {
   std::vector<std::shared_ptr<const connector::hive::HiveColumnHandle>>
       columnHandles;
   std::vector<std::string> bucketedBy;
@@ -369,7 +368,8 @@ HiveConnectorTestBase::makeHiveInsertTableHandle(
       bucketProperty,
       compressionKind,
       serdeParameters,
-      writerOptions);
+      writerOptions,
+      ensureFiles);
 }
 
 std::shared_ptr<connector::hive::HiveColumnHandle>

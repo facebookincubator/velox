@@ -15,8 +15,8 @@
  */
 
 #include "velox/functions/lib/aggregates/tests/utils/AggregationTestBase.h"
-#include "velox/functions/sparksql/Register.h"
 #include "velox/functions/sparksql/aggregates/Register.h"
+#include "velox/functions/sparksql/registration/Register.h"
 
 using namespace facebook::velox::functions::aggregate::test;
 
@@ -258,6 +258,24 @@ TEST_F(CollectSetAggregateTest, rowWithNestedNull) {
 
   testAggregations(
       {data}, {}, {"collect_set(c0)"}, {"spark_array_sort(a0)"}, {expected});
+}
+
+TEST_F(CollectSetAggregateTest, unknownType) {
+  auto data = makeRowVector({
+      makeNullConstant(TypeKind::UNKNOWN, 3),
+  });
+
+  auto expected = makeRowVector({
+      makeArrayVectorFromJson<int32_t>({"[]"}),
+  });
+  testAggregations({data}, {}, {"collect_set(c0)"}, {}, {expected});
+
+  // The grouping key is of UNKONWN type.
+  expected = makeRowVector({
+      makeNullConstant(TypeKind::UNKNOWN, 1),
+      makeArrayVectorFromJson<int32_t>({"[]"}),
+  });
+  testAggregations({data}, {"c0"}, {"collect_set(c0)"}, {}, {expected});
 }
 
 } // namespace

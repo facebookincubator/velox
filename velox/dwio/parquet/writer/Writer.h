@@ -103,11 +103,12 @@ struct WriterOptions : public dwio::common::WriterOptions {
       columnCompressionsMap;
 
   /// Timestamp unit for Parquet write through Arrow bridge.
-  /// Default if not specified: TimestampUnit::kNano (9).
-  std::optional<TimestampUnit> parquetWriteTimestampUnit;
+  /// Default if not specified: TimestampPrecision::kNanoseconds (9).
+  std::optional<TimestampPrecision> parquetWriteTimestampUnit;
   /// Timestamp time zone for Parquet write through Arrow bridge.
   std::optional<std::string> parquetWriteTimestampTimeZone;
   bool writeInt96AsTimestamp = false;
+  std::optional<bool> useParquetDataPageV2;
 
   // Parsing session and hive configs.
 
@@ -117,6 +118,15 @@ struct WriterOptions : public dwio::common::WriterOptions {
       "hive.parquet.writer.timestamp_unit";
   static constexpr const char* kParquetHiveConnectorWriteTimestampUnit =
       "hive.parquet.writer.timestamp-unit";
+  static constexpr const char* kParquetSessionDataPageVersion =
+      "hive.parquet.writer.datapage_version";
+  static constexpr const char* kParquetHiveConnectorDataPageVersion =
+      "hive.parquet.writer.datapage-version";
+
+  // Process hive connector and session configs.
+  void processConfigs(
+      const config::ConfigBase& connectorConfig,
+      const config::ConfigBase& session) override;
 };
 
 // Writes Velox vectors into  a DataSink using Arrow Parquet writer.

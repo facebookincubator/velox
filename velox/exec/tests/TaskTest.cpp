@@ -24,11 +24,11 @@
 #include "velox/common/memory/tests/SharedArbitratorTestUtil.h"
 #include "velox/common/testutil/TestValue.h"
 #include "velox/connectors/hive/HiveConnectorSplit.h"
+#include "velox/exec/Cursor.h"
 #include "velox/exec/OutputBufferManager.h"
 #include "velox/exec/PlanNodeStats.h"
 #include "velox/exec/Values.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
-#include "velox/exec/tests/utils/Cursor.h"
 #include "velox/exec/tests/utils/HiveConnectorTestBase.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
 #include "velox/exec/tests/utils/QueryAssertions.h"
@@ -1241,7 +1241,7 @@ DEBUG_ONLY_TEST_F(TaskTest, liveStats) {
   EXPECT_EQ(numBatches, operatorStats.outputVectors);
   // isBlocked() should be called at least twice for each batch
   EXPECT_LE(2 * numBatches, operatorStats.isBlockedTiming.count);
-  EXPECT_EQ(2, operatorStats.finishTiming.count);
+  EXPECT_EQ(1, operatorStats.finishTiming.count);
   // No operators with background CPU time yet.
   EXPECT_EQ(0, operatorStats.backgroundTiming.count);
 
@@ -1543,7 +1543,9 @@ DEBUG_ONLY_TEST_F(TaskPauseTest, resumeFuture) {
   observeThread.join();
 
   ASSERT_EQ(task_->numTotalDrivers(), 1);
-  ASSERT_EQ(task_->numFinishedDrivers(), 1);
+  while (task_->numFinishedDrivers() != 1) {
+    std::this_thread::sleep_for(std::chrono::milliseconds(100)); // NOLINT
+  }
   ASSERT_EQ(task_->numRunningDrivers(), 0);
 }
 
@@ -2297,9 +2299,9 @@ DEBUG_ONLY_TEST_F(TaskTest, taskReclaimFailure) {
 
   const std::string spillTableError{"spillTableError"};
   SCOPED_TESTVALUE_SET(
-      "facebook::velox::exec::Spiller",
-      std::function<void(Spiller*)>(
-          [&](Spiller* /*unused*/) { VELOX_FAIL(spillTableError); }));
+      "facebook::velox::exec::SpillerBase",
+      std::function<void(SpillerBase*)>(
+          [&](SpillerBase* /*unused*/) { VELOX_FAIL(spillTableError); }));
 
   TestScopedSpillInjection injection(100);
   const auto spillDirectory = exec::test::TempDirectoryPath::create();
@@ -2412,5 +2414,30 @@ DEBUG_ONLY_TEST_F(TaskTest, taskCancellation) {
 
   task.reset();
   waitForAllTasksToBeDeleted();
+}
+
+TEST_F(TaskTest, finishTiming) {
+  auto data = makeRowVector({
+      makeFlatVector<int64_t>(1'000, [](auto row) { return row; }),
+  });
+  core::PlanNodeId projectId;
+  core::PlanNodeId orderById;
+  auto plan = PlanBuilder()
+                  .values({data, data})
+                  .project({"c0"})
+                  .capturePlanNodeId(projectId)
+                  .orderBy({"c0 DESC NULLS LAST"}, false)
+                  .capturePlanNodeId(orderById)
+                  .planFragment();
+
+  auto [task, _] = executeSerial(plan);
+  auto taskStats = exec::toPlanStats(task->taskStats());
+  auto& projectStats = taskStats.at(projectId);
+  auto& orderByStats = taskStats.at(orderById);
+  // Since the sort is executed in the 'noMoreInput' function of the OrderBy
+  // operator, the finish time of the OrderBy operator should be greater than
+  // that of the Project operator.
+  ASSERT_GT(
+      orderByStats.finishTiming.wallNanos, projectStats.finishTiming.wallNanos);
 }
 } // namespace facebook::velox::exec::test

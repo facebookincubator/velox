@@ -48,9 +48,11 @@ class PartitionedOutputReplayer final : public OperatorReplayerBase {
       VectorSerde::Kind serdeKind,
       const std::string& operatorType,
       const std::string& driverIds,
+      uint64_t queryCapacity,
+      folly::Executor* executor,
       const ConsumerCallBack& consumerCb = [](auto partition, auto page) {});
 
-  RowVectorPtr run() override;
+  RowVectorPtr run(bool /*unused*/) override;
 
  private:
   core::PlanNodePtr createPlanNode(

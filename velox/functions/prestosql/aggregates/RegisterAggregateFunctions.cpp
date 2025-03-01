@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 #include "velox/functions/prestosql/aggregates/RegisterAggregateFunctions.h"
-#include "velox/exec/Aggregate.h"
+#include "velox/functions/prestosql/types/JsonRegistration.h"
 
 namespace facebook::velox::aggregate::prestosql {
 
@@ -44,6 +44,10 @@ extern void registerBitwiseXorAggregate(
     bool onlyPrestoSignatures,
     bool overwrite);
 extern void registerChecksumAggregate(
+    const std::string& prefix,
+    bool withCompanionFunctions,
+    bool overwrite);
+extern void registerClassificationFunctions(
     const std::string& prefix,
     bool withCompanionFunctions,
     bool overwrite);
@@ -151,6 +155,7 @@ void registerAllAggregateFunctions(
     bool withCompanionFunctions,
     bool onlyPrestoSignatures,
     bool overwrite) {
+  registerJsonType();
   registerApproxDistinctAggregates(prefix, withCompanionFunctions, overwrite);
   registerApproxMostFrequentAggregate(
       prefix, withCompanionFunctions, overwrite);
@@ -165,6 +170,7 @@ void registerAllAggregateFunctions(
   registerBoolAggregates(prefix, withCompanionFunctions, overwrite);
   registerCentralMomentsAggregates(prefix, withCompanionFunctions, overwrite);
   registerChecksumAggregate(prefix, withCompanionFunctions, overwrite);
+  registerClassificationFunctions(prefix, withCompanionFunctions, overwrite);
   registerCountAggregate(prefix, withCompanionFunctions, overwrite);
   registerCountIfAggregate(prefix, withCompanionFunctions, overwrite);
   registerCovarianceAggregates(prefix, withCompanionFunctions, overwrite);

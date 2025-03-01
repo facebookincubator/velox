@@ -17,6 +17,7 @@
 #pragma once
 
 #include "velox/common/base/RandomUtil.h"
+#include "velox/common/file/FileSystems.h"
 #include "velox/connectors/hive/FileHandle.h"
 #include "velox/dwio/common/Options.h"
 #include "velox/dwio/common/Reader.h"
@@ -62,6 +63,7 @@ class SplitReader {
       const std::shared_ptr<const HiveConfig>& hiveConfig,
       const RowTypePtr& readerOutputType,
       const std::shared_ptr<io::IoStatistics>& ioStats,
+      const std::shared_ptr<filesystems::File::IoStats>& fsStats,
       FileHandleFactory* fileHandleFactory,
       folly::Executor* executor,
       const std::shared_ptr<common::ScanSpec>& scanSpec);
@@ -95,6 +97,10 @@ class SplitReader {
 
   void setConnectorQueryCtx(const ConnectorQueryCtx* connectorQueryCtx);
 
+  const RowTypePtr& readerOutputType() const {
+    return readerOutputType_;
+  }
+
   std::string toString() const;
 
  protected:
@@ -107,13 +113,23 @@ class SplitReader {
       const std::shared_ptr<const HiveConfig>& hiveConfig,
       const RowTypePtr& readerOutputType,
       const std::shared_ptr<io::IoStatistics>& ioStats,
+      const std::shared_ptr<filesystems::File::IoStats>& fsStats,
       FileHandleFactory* fileHandleFactory,
       folly::Executor* executor,
       const std::shared_ptr<common::ScanSpec>& scanSpec);
 
   /// Create the dwio::common::Reader object baseReader_, which will be used to
   /// read the data file's metadata and schema
-  void createReader(std::shared_ptr<common::MetadataFilter> metadataFilter);
+  void createReader();
+
+  // Adjust the scan spec according to the current split, then return the
+  // adapted row type.
+  RowTypePtr getAdaptedRowType() const;
+
+  // Check if the filters pass on the column statistics.  When delta update is
+  // present, the corresonding filter should be disabled before calling this
+  // function.
+  bool filterOnStats(dwio::common::RuntimeStatistics& runtimeStats) const;
 
   /// Check if the hiveSplit_ is empty. The split is considered empty when
   ///   1) The data file is missing but the user chooses to ignore it
@@ -125,19 +141,23 @@ class SplitReader {
 
   /// Create the dwio::common::RowReader object baseRowReader_, which owns the
   /// ColumnReaders that will be used to read the data
-  void createRowReader();
+  void createRowReader(
+      std::shared_ptr<common::MetadataFilter> metadataFilter,
+      RowTypePtr rowType);
 
+ private:
   /// Different table formats may have different meatadata columns.
   /// This function will be used to update the scanSpec for these columns.
-  virtual std::vector<TypePtr> adaptColumns(
+  std::vector<TypePtr> adaptColumns(
       const RowTypePtr& fileType,
-      const std::shared_ptr<const velox::RowType>& tableSchema);
+      const std::shared_ptr<const velox::RowType>& tableSchema) const;
 
   void setPartitionValue(
       common::ScanSpec* spec,
       const std::string& partitionKey,
       const std::optional<std::string>& value) const;
 
+ protected:
   std::shared_ptr<const HiveConnectorSplit> hiveSplit_;
   const std::shared_ptr<const HiveTableHandle> hiveTableHandle_;
   const std::unordered_map<
@@ -146,8 +166,9 @@ class SplitReader {
   const ConnectorQueryCtx* connectorQueryCtx_;
   const std::shared_ptr<const HiveConfig> hiveConfig_;
 
-  const RowTypePtr readerOutputType_;
+  RowTypePtr readerOutputType_;
   const std::shared_ptr<io::IoStatistics> ioStats_;
+  const std::shared_ptr<filesystems::File::IoStats> fsStats_;
   FileHandleFactory* const fileHandleFactory_;
   folly::Executor* const executor_;
   memory::MemoryPool* const pool_;

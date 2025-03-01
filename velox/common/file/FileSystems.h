@@ -16,6 +16,7 @@
 #pragma once
 
 #include "velox/common/base/Exceptions.h"
+#include "velox/common/base/RuntimeMetrics.h"
 #include "velox/common/memory/MemoryPool.h"
 
 #include <functional>
@@ -58,12 +59,16 @@ struct FileOptions {
   /// NOTE: this only applies for write open file.
   bool shouldThrowOnFileAlreadyExists{true};
 
-  /// Whether to buffer the write data in file system client or not. For local
+  /// Whether to buffer the data in file system client or not. For local
   /// filesystem on Unix-like operating system, this corresponds to the direct
   /// IO mode if set.
-  ///
-  /// NOTE: this only applies for write open file.
-  bool bufferWrite{true};
+  bool bufferIo{true};
+
+  /// Property bag to set onto files/directories. Think something similar to
+  /// ioctl(2). For other remote filesystems, this can be PutObjectTagging in
+  /// S3.
+  std::optional<std::unordered_map<std::string, std::string>> properties{
+      std::nullopt};
 };
 
 /// Defines directory options
@@ -79,6 +84,56 @@ struct DirectoryOptions : FileOptions {
       "make-directory-config"};
 };
 
+struct FileSystemOptions {
+  /// As for now, only local file system respects this option. It implements
+  /// async read by using a background cpu executor. Some filesystem might has
+  /// native async read-ahead support.
+  bool readAheadEnabled{false};
+};
+
+/// Free form statistics for a file system. The keys are arbitrary strings, and
+/// values are RuntimeMetric. The underlying filesystem implementation can use
+/// this class to record observability about filesystem operations.
+namespace File {
+class IoStats {
+ public:
+  IoStats() = default;
+
+  void addCounter(const std::string& name, RuntimeCounter counter) {
+    auto locked = stats_.wlock();
+    auto it = locked->find(name);
+    if (it == locked->end()) {
+      auto [ptr, inserted] = locked->emplace(name, RuntimeMetric(counter.unit));
+      VELOX_CHECK(inserted);
+      ptr->second.addValue(counter.value);
+    } else {
+      VELOX_CHECK_EQ(it->second.unit, counter.unit);
+      it->second.addValue(counter.value);
+    }
+  }
+
+  void merge(const IoStats& other) {
+    auto otherStats = other.stats();
+    auto locked = stats_.wlock();
+    for (const auto& [name, metric] : otherStats) {
+      auto it = locked->find(name);
+      if (it == locked->end()) {
+        locked->emplace(name, metric);
+      } else {
+        it->second.merge(metric);
+      }
+    }
+  }
+
+  folly::F14FastMap<std::string, RuntimeMetric> stats() const {
+    return stats_.copy();
+  }
+
+ private:
+  folly::Synchronized<folly::F14FastMap<std::string, RuntimeMetric>> stats_;
+};
+} // namespace File
+
 /// An abstract FileSystem
 class FileSystem {
  public:
@@ -91,7 +146,7 @@ class FileSystem {
 
   /// Returns the file path without the fs scheme prefix such as "local:" prefix
   /// for local file system.
-  virtual std::string_view extractPath(std::string_view path) {
+  virtual std::string_view extractPath(std::string_view path) const {
     VELOX_NYI();
   }
 
@@ -119,6 +174,11 @@ class FileSystem {
   /// Returns true if the file exists.
   virtual bool exists(std::string_view path) = 0;
 
+  /// Returns true if it is a directory.
+  virtual bool isDirectory(std::string_view path) const {
+    VELOX_UNSUPPORTED("isDirectory not implemented");
+  }
+
   /// Returns the list of files or folders in a path. Currently, this method
   /// will be used for testing, but we will need change this to an iterator
   /// output method to avoid potential heavy output if there are many entries in
@@ -133,6 +193,22 @@ class FileSystem {
   /// Remove a directory (all the files and sub-directories underneath
   /// recursively). Throws velox exception on failure.
   virtual void rmdir(std::string_view path) = 0;
+
+  /// Sets the property for a directory. The user provides the key-value pairs
+  /// inside 'properties' field of options. Throws velox exception on failure.
+  virtual void setDirectoryProperty(
+      std::string_view /*path*/,
+      const DirectoryOptions& options = {}) {
+    VELOX_UNSUPPORTED("setDirectoryProperty not implemented");
+  }
+
+  /// Gets the property for a directory. If no property is found, std::nullopt
+  /// is returned. Throws velox exception on failure.
+  virtual std::optional<std::string> getDirectoryProperty(
+      std::string_view /*path*/,
+      std::string_view /*propertyKey*/) {
+    VELOX_UNSUPPORTED("getDirectoryProperty not implemented");
+  }
 
  protected:
   std::shared_ptr<const config::ConfigBase> config_;
@@ -158,6 +234,7 @@ void registerFileSystem(
         std::string_view)> fileSystemGenerator);
 
 /// Register the local filesystem.
-void registerLocalFileSystem();
+void registerLocalFileSystem(
+    const FileSystemOptions& options = FileSystemOptions());
 
 } // namespace facebook::velox::filesystems

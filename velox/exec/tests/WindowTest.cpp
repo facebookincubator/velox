@@ -504,7 +504,6 @@ TEST_F(WindowTest, nagativeFrameArg) {
 
   auto sizeAt = [](vector_size_t row) { return row % 5; };
   auto keyAt = [](vector_size_t row) { return row % 11; };
-  auto valueAt = [](vector_size_t row) { return row % 13; };
   auto keys = makeArrayVector<float>(size, sizeAt, keyAt);
   auto data = makeRowVector(
       {"c0", "c1", "p0", "p1", "k0", "row_number"},
@@ -660,7 +659,7 @@ DEBUG_ONLY_TEST_F(WindowTest, reserveMemorySort) {
     const auto plan = usePrefixSort ? prefixSortPlan : nonPrefixSortPlan;
     velox::common::PrefixSortConfig prefixSortConfig =
         velox::common::PrefixSortConfig{
-            std::numeric_limits<int32_t>::max(), 130};
+            std::numeric_limits<int32_t>::max(), 130, 12};
     auto sortWindowBuild = std::make_unique<SortWindowBuild>(
         plan,
         pool_.get(),

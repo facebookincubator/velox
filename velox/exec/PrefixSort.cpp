@@ -34,13 +34,18 @@ FOLLY_ALWAYS_INLINE void encodeRowColumn(
     char* row,
     char* prefixBuffer) {
   std::optional<T> value;
-  if (RowContainer::isNullAt(row, rowColumn.nullByte(), rowColumn.nullMask())) {
-    value = std::nullopt;
-  } else {
+  if (!prefixSortLayout.normalizedKeyHasNullByte[index] ||
+      !RowContainer::isNullAt(
+          row, rowColumn.nullByte(), rowColumn.nullMask())) {
     value = *(reinterpret_cast<T*>(row + rowColumn.offset()));
+  } else {
+    value = std::nullopt;
   }
   prefixSortLayout.encoders[index].encode(
-      value, prefixBuffer + prefixSortLayout.prefixOffsets[index]);
+      value,
+      prefixBuffer + prefixSortLayout.prefixOffsets[index],
+      prefixSortLayout.encodeSizes[index],
+      prefixSortLayout.normalizedKeyHasNullByte[index]);
 }
 
 FOLLY_ALWAYS_INLINE void extractRowColumnToPrefix(
@@ -86,6 +91,13 @@ FOLLY_ALWAYS_INLINE void extractRowColumnToPrefix(
           prefixSortLayout, index, rowColumn, row, prefixBuffer);
       return;
     }
+    case TypeKind::VARCHAR:
+      [[fallthrough]];
+    case TypeKind::VARBINARY: {
+      encodeRowColumn<StringView>(
+          prefixSortLayout, index, rowColumn, row, prefixBuffer);
+      return;
+    }
     default:
       VELOX_UNSUPPORTED(
           "prefix-sort does not support type kind: {}",
@@ -126,31 +138,55 @@ compareByWord(uint64_t* left, uint64_t* right, int32_t bytes) {
 
 } // namespace
 
-PrefixSortLayout PrefixSortLayout::makeSortLayout(
+// static.
+PrefixSortLayout PrefixSortLayout::generate(
     const std::vector<TypePtr>& types,
+    const std::vector<bool>& columnHasNulls,
     const std::vector<CompareFlags>& compareFlags,
-    uint32_t maxNormalizedKeySize) {
+    uint32_t maxNormalizedKeySize,
+    uint32_t maxStringPrefixLength,
+    const std::vector<std::optional<uint32_t>>& maxStringLengths) {
   const uint32_t numKeys = types.size();
+  std::vector<bool> normalizedKeyHasNullByte;
+  normalizedKeyHasNullByte.reserve(numKeys);
   std::vector<uint32_t> prefixOffsets;
   prefixOffsets.reserve(numKeys);
+  std::vector<uint32_t> encodeSizes;
+  encodeSizes.reserve(numKeys);
   std::vector<PrefixSortEncoder> encoders;
   encoders.reserve(numKeys);
 
   // Calculate encoders and prefix-offsets, and stop the loop if a key that
-  // cannot be normalized is encountered.
+  // cannot be normalized is encountered or only partial data of a key is
+  // normalized.
   uint32_t normalizedKeySize{0};
   uint32_t numNormalizedKeys{0};
+
+  bool lastPrefixKeyPartial{false};
   for (auto i = 0; i < numKeys; ++i) {
-    const std::optional<uint32_t> encodedSize =
-        PrefixSortEncoder::encodedSize(types[i]->kind());
+    const std::optional<uint32_t> encodedSize = PrefixSortEncoder::encodedSize(
+        types[i]->kind(),
+        maxStringLengths[i].has_value()
+            ? std::min(maxStringLengths[i].value(), maxStringPrefixLength)
+            : maxStringPrefixLength,
+        columnHasNulls[i]);
     if (!encodedSize.has_value() ||
         normalizedKeySize + encodedSize.value() > maxNormalizedKeySize) {
       break;
     }
     prefixOffsets.push_back(normalizedKeySize);
     encoders.push_back({compareFlags[i].ascending, compareFlags[i].nullsFirst});
+    encodeSizes.push_back(encodedSize.value());
+    normalizedKeyHasNullByte.push_back(columnHasNulls[i]);
     normalizedKeySize += encodedSize.value();
     ++numNormalizedKeys;
+    if ((types[i]->kind() == TypeKind::VARCHAR ||
+         types[i]->kind() == TypeKind::VARBINARY) &&
+        (!maxStringLengths[i].has_value() ||
+         maxStringPrefixLength < maxStringLengths[i].value())) {
+      lastPrefixKeyPartial = true;
+      break;
+    }
   }
 
   const auto numPaddingBytes = alignmentPadding(normalizedKeySize, kAlignment);
@@ -164,9 +200,51 @@ PrefixSortLayout PrefixSortLayout::makeSortLayout(
       compareFlags,
       numNormalizedKeys != 0,
       numNormalizedKeys < numKeys,
+      /*nonPrefixSortStartIndex=*/
+      lastPrefixKeyPartial ? numNormalizedKeys - 1 : numNormalizedKeys,
+      std::move(normalizedKeyHasNullByte),
       std::move(prefixOffsets),
+      std::move(encodeSizes),
       std::move(encoders),
       numPaddingBytes};
+}
+
+// static.
+void PrefixSortLayout::optimizeSortKeysOrder(
+    const RowTypePtr& rowType,
+    std::vector<IdentityProjection>& keyColumnProjections) {
+  std::vector<std::optional<uint32_t>> encodedKeySizes(
+      rowType->size(), std::nullopt);
+  for (const auto& projection : keyColumnProjections) {
+    // Set maxStringPrefixLength to UINT_MAX - 1 to ensure VARCHAR columns are
+    // placed after all other supported types and before un-supported types.
+    encodedKeySizes[projection.inputChannel] = PrefixSortEncoder::encodedSize(
+        rowType->childAt(projection.inputChannel)->kind(), UINT_MAX - 1, true);
+  }
+
+  std::sort(
+      keyColumnProjections.begin(),
+      keyColumnProjections.end(),
+      [&](const IdentityProjection& lhs, const IdentityProjection& rhs) {
+        const auto& lhsEncodedSize = encodedKeySizes[lhs.inputChannel];
+        const auto& rhsEncodedSize = encodedKeySizes[rhs.inputChannel];
+        if (lhsEncodedSize.has_value() && !rhsEncodedSize.has_value()) {
+          return true;
+        }
+        if (!lhsEncodedSize.has_value() && rhsEncodedSize.has_value()) {
+          return false;
+        }
+        if (lhsEncodedSize.has_value() && rhsEncodedSize.has_value()) {
+          if (lhsEncodedSize.value() < rhsEncodedSize.value()) {
+            return true;
+          }
+          if (lhsEncodedSize.value() > rhsEncodedSize.value()) {
+            return false;
+          }
+        }
+        // Tie breaks with the original key column order.
+        return lhs.outputChannel < rhs.outputChannel;
+      });
 }
 
 FOLLY_ALWAYS_INLINE int PrefixSort::compareAllNormalizedKeys(
@@ -185,7 +263,8 @@ int PrefixSort::comparePartNormalizedKeys(char* left, char* right) {
   // If prefixes are equal, compare the remaining sort keys with rowContainer.
   char* leftRow = getRowAddrFromPrefixBuffer(left);
   char* rightRow = getRowAddrFromPrefixBuffer(right);
-  for (auto i = sortLayout_.numNormalizedKeys; i < sortLayout_.numKeys; ++i) {
+  for (auto i = sortLayout_.nonPrefixSortStartIndex; i < sortLayout_.numKeys;
+       ++i) {
     result = rowContainer_->compare(
         leftRow, rightRow, i, sortLayout_.compareFlags[i]);
     if (result != 0) {
@@ -236,12 +315,11 @@ uint32_t PrefixSort::maxRequiredBytes(
     const std::vector<CompareFlags>& compareFlags,
     const velox::common::PrefixSortConfig& config,
     memory::MemoryPool* pool) {
-  if (rowContainer->numRows() < config.threshold) {
+  if (rowContainer->numRows() < config.minNumRows) {
     return 0;
   }
-  VELOX_CHECK_EQ(rowContainer->keyTypes().size(), compareFlags.size());
-  const auto sortLayout = PrefixSortLayout::makeSortLayout(
-      rowContainer->keyTypes(), compareFlags, config.maxNormalizedKeySize);
+  const auto sortLayout =
+      generateSortLayout(rowContainer, compareFlags, config);
   if (!sortLayout.hasNormalizedKeys) {
     return 0;
   }
@@ -303,7 +381,14 @@ void PrefixSort::sortInternal(
     PrefixSortRunner sortRunner(entrySize, swapBuffer->asMutable<char>());
     auto* prefixBufferStart = prefixBuffer;
     auto* prefixBufferEnd = prefixBuffer + numRows * entrySize;
-    if (sortLayout_.hasNonNormalizedKey) {
+    if (sortLayout_.numNormalizedKeys > 0) {
+      addThreadLocalRuntimeStat(
+          PrefixSort::kNumPrefixSortKeys,
+          RuntimeCounter(
+              sortLayout_.numNormalizedKeys, RuntimeCounter::Unit::kNone));
+    }
+    if (sortLayout_.hasNonNormalizedKey ||
+        sortLayout_.nonPrefixSortStartIndex < sortLayout_.numNormalizedKeys) {
       sortRunner.quickSort(
           prefixBufferStart, prefixBufferEnd, [&](char* lhs, char* rhs) {
             return comparePartNormalizedKeys(lhs, rhs);

@@ -35,12 +35,16 @@ class FaultyReadFile : public ReadFile {
     return delegatedFile_->size();
   }
 
-  std::string_view pread(uint64_t offset, uint64_t length, void* buf)
-      const override;
+  std::string_view pread(
+      uint64_t offset,
+      uint64_t length,
+      void* buf,
+      filesystems::File::IoStats* stats = nullptr) const override;
 
   uint64_t preadv(
       uint64_t offset,
-      const std::vector<folly::Range<char*>>& buffers) const override;
+      const std::vector<folly::Range<char*>>& buffers,
+      filesystems::File::IoStats* stats = nullptr) const override;
 
   uint64_t memoryUsage() const override {
     return delegatedFile_->memoryUsage();
@@ -67,7 +71,8 @@ class FaultyReadFile : public ReadFile {
 
   folly::SemiFuture<uint64_t> preadvAsync(
       uint64_t offset,
-      const std::vector<folly::Range<char*>>& buffers) const override;
+      const std::vector<folly::Range<char*>>& buffers,
+      filesystems::File::IoStats* stats = nullptr) const override;
 
  private:
   const std::string path_;
@@ -103,9 +108,9 @@ class FaultyWriteFile : public WriteFile {
 
   void close() override;
 
-  uint64_t size() const override {
-    return delegatedFile_->size();
-  }
+  uint64_t size() const override;
+
+  const std::string getName() const override;
 
  private:
   const std::string path_;

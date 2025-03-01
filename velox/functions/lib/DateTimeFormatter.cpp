@@ -60,6 +60,7 @@ struct Date {
   bool isYearOfEra = false; // Year of era cannot be zero or negative.
   bool hasYear = false; // Whether year was explicitly specified.
   bool hasDayOfWeek = false; // Whether dayOfWeek was explicitly specified.
+  bool hasWeek = false; // Whether week was explicitly specified.
 
   int32_t hour = 0;
   int32_t minute = 0;
@@ -626,7 +627,7 @@ int64_t parseHalfDayOfDay(const char* cur, const char* end, Date& date) {
 std::string formatFractionOfSecond(
     uint16_t subseconds,
     size_t minRepresentDigits) {
-  char toAdd[minRepresentDigits > 3 ? minRepresentDigits + 1 : 4];
+  std::string toAdd(minRepresentDigits > 3 ? minRepresentDigits : 3, '0');
 
   if (subseconds < 10) {
     toAdd[0] = '0';
@@ -642,11 +643,7 @@ std::string formatFractionOfSecond(
     toAdd[0] = char((subseconds / 100) % 10 + '0');
   }
 
-  if (minRepresentDigits > 3) {
-    memset(toAdd + 3, '0', minRepresentDigits - 3);
-  }
-
-  toAdd[minRepresentDigits] = '\0';
+  toAdd.resize(minRepresentDigits);
   return toAdd;
 }
 
@@ -874,9 +871,7 @@ int32_t parseFromPattern(
       return -1;
     }
     cur += size;
-    if (!date.weekOfMonthDateFormat) {
-      date.weekDateFormat = true;
-    }
+    date.hasDayOfWeek = true;
     date.dayOfYearFormat = false;
     if (!date.hasYear) {
       date.hasYear = true;
@@ -904,9 +899,7 @@ int32_t parseFromPattern(
       int count = 0;
       while (cur < end && cur < startPos + maxDigitConsume &&
              characterIsDigit(*cur)) {
-        if (count < 3) {
-          number = number * 10 + (*cur - '0');
-        }
+        number = number * 10 + (*cur - '0');
         ++cur;
         ++count;
       }
@@ -1101,6 +1094,7 @@ int32_t parseFromPattern(
           return -1;
         }
         date.year = number;
+        date.hasWeek = true;
         date.weekDateFormat = true;
         date.dayOfYearFormat = false;
         date.centuryFormat = false;
@@ -1113,6 +1107,7 @@ int32_t parseFromPattern(
           return -1;
         }
         date.week = number;
+        date.hasWeek = true;
         date.weekDateFormat = true;
         date.dayOfYearFormat = false;
         date.weekOfMonthDateFormat = false;
@@ -1188,6 +1183,7 @@ uint32_t DateTimeFormatter::maxResultSize(const tz::TimeZone* timezone) const {
         // 9 is the max size of elements in weekdaysFull or monthsFull.
         size += token.pattern.minRepresentDigits <= 3 ? 3 : 9;
         break;
+      case DateTimeFormatSpecifier::WEEK_YEAR:
       case DateTimeFormatSpecifier::YEAR:
         // Timestamp is in [-32767-01-01, 32767-12-31] range.
         size += token.pattern.minRepresentDigits == 2
@@ -1244,8 +1240,6 @@ uint32_t DateTimeFormatter::maxResultSize(const tz::TimeZone* timezone) const {
           size += 32;
         }
         break;
-      // Not supported.
-      case DateTimeFormatSpecifier::WEEK_YEAR:
       default:
         VELOX_UNSUPPORTED(
             "Date format specifier is not supported: {}",
@@ -1347,8 +1341,14 @@ int32_t DateTimeFormatter::format(
           result += piece.length();
         } break;
 
+        case DateTimeFormatSpecifier::WEEK_YEAR:
         case DateTimeFormatSpecifier::YEAR: {
           auto year = static_cast<signed>(calDate.year());
+          if (token.pattern.specifier == DateTimeFormatSpecifier::WEEK_YEAR) {
+            const auto isoWeek = date::iso_week::year_weeknum_weekday{calDate};
+            year = isoWeek.year().ok() ? static_cast<signed>(isoWeek.year())
+                                       : year;
+          }
           if (token.pattern.minRepresentDigits == 2) {
             year = std::abs(year);
             auto twoDigitYear = year % 100;
@@ -1360,7 +1360,7 @@ int32_t DateTimeFormatter::format(
                 result);
           } else {
             result += padContent(
-                static_cast<signed>(calDate.year()),
+                year,
                 '0',
                 token.pattern.minRepresentDigits,
                 maxResultEnd,
@@ -1542,7 +1542,6 @@ int32_t DateTimeFormatter::format(
               result);
           break;
         }
-        case DateTimeFormatSpecifier::WEEK_YEAR:
         default:
           VELOX_UNSUPPORTED(
               "format is not supported for specifier {}",
@@ -1639,6 +1638,10 @@ Expected<DateTimeResult> DateTimeFormatter::parse(
 
   // Convert the parsed date/time into a timestamp.
   Expected<int64_t> daysSinceEpoch;
+
+  // Ensure you use week date format only when you have year and at least week.
+  date.weekDateFormat = date.hasYear && date.hasWeek;
+
   if (date.weekDateFormat) {
     daysSinceEpoch =
         util::daysSinceEpochFromWeekDate(date.year, date.week, date.dayOfWeek);

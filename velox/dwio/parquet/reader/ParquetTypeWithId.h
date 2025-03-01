@@ -17,8 +17,8 @@
 #pragma once
 
 #include "velox/dwio/common/TypeWithId.h"
+#include "velox/dwio/parquet/common/LevelConversion.h"
 #include "velox/dwio/parquet/thrift/ParquetThriftTypes.h"
-#include "velox/dwio/parquet/writer/arrow/LevelConversion.h"
 
 namespace facebook::velox::parquet {
 
@@ -43,6 +43,7 @@ class ParquetTypeWithId : public dwio::common::TypeWithId {
       std::string name,
       std::optional<thrift::Type::type> parquetType,
       std::optional<thrift::LogicalType> logicalType,
+      std::optional<thrift::ConvertedType::type> convertedType,
       uint32_t maxRepeat,
       uint32_t maxDefine,
       bool isOptional,
@@ -54,6 +55,7 @@ class ParquetTypeWithId : public dwio::common::TypeWithId {
         name_(name),
         parquetType_(parquetType),
         logicalType_(std::move(logicalType)),
+        convertedType_(convertedType),
         maxRepeat_(maxRepeat),
         maxDefine_(maxDefine),
         isOptional_(isOptional),
@@ -76,13 +78,15 @@ class ParquetTypeWithId : public dwio::common::TypeWithId {
   }
 
   /// Fills 'info' and returns the mode for interpreting levels.
-  LevelMode makeLevelInfo(arrow::LevelInfo& info) const;
+  LevelMode makeLevelInfo(LevelInfo& info) const;
 
-  std::vector<std::unique_ptr<ParquetTypeWithId::TypeWithId>> moveChildren() &&;
+  std::vector<std::unique_ptr<ParquetTypeWithId::TypeWithId>> moveChildren()
+      const&&;
 
   const std::string name_;
   const std::optional<thrift::Type::type> parquetType_;
   const std::optional<thrift::LogicalType> logicalType_;
+  const std::optional<thrift::ConvertedType::type> convertedType_;
   const uint32_t maxRepeat_;
   const uint32_t maxDefine_;
   const bool isOptional_;

@@ -19,13 +19,12 @@
 namespace facebook::velox::fuzzer {
 
 namespace {
-template <typename T>
-void saveStdVector(const std::vector<T>& list, std::ostream& out) {
+void saveStdVector(const std::vector<int>& list, std::ostream& out) {
   // Size of the vector
   size_t size = list.size();
   out.write((char*)&(size), sizeof(size));
   out.write(
-      reinterpret_cast<const char*>(list.data()), list.size() * sizeof(T));
+      reinterpret_cast<const char*>(list.data()), list.size() * sizeof(int));
 }
 
 template <typename T>
@@ -158,43 +157,27 @@ void compareVectors(
   LOG(INFO) << "Two vectors match.";
 }
 
-RowVectorPtr applyCommonDictionaryLayer(
-    const RowVectorPtr& rowVector,
-    const InputRowMetadata& inputRowMetadata) {
-  if (inputRowMetadata.columnsToWrapInCommonDictionary.empty()) {
-    return rowVector;
+RowVectorPtr mergeRowVectors(
+    const std::vector<RowVectorPtr>& results,
+    velox::memory::MemoryPool* pool) {
+  auto totalCount = 0;
+  for (const auto& result : results) {
+    totalCount += result->size();
   }
-  auto size = rowVector->size();
-  auto& nulls = inputRowMetadata.commonDictionaryNulls;
-  auto& indices = inputRowMetadata.commonDictionaryIndices;
-  if (nulls) {
-    VELOX_CHECK_LE(bits::nbytes(size), nulls->size());
+  auto copy =
+      BaseVector::create<RowVector>(results[0]->type(), totalCount, pool);
+  auto copyCount = 0;
+  for (const auto& result : results) {
+    copy->copy(result.get(), copyCount, 0, result->size());
+    copyCount += result->size();
   }
-  VELOX_CHECK_LE(size, indices->size() / sizeof(vector_size_t));
-  std::vector<VectorPtr> newInputs;
-  int listIndex = 0;
-  auto& columnsToWrap = inputRowMetadata.columnsToWrapInCommonDictionary;
-  for (int idx = 0; idx < rowVector->childrenSize(); idx++) {
-    auto& child = rowVector->childAt(idx);
-    VELOX_CHECK_NOT_NULL(child);
-    if (listIndex < columnsToWrap.size() && idx == columnsToWrap[listIndex]) {
-      newInputs.push_back(
-          BaseVector::wrapInDictionary(nulls, indices, size, child));
-      listIndex++;
-    } else {
-      newInputs.push_back(child);
-    }
-  }
-  return std::make_shared<RowVector>(
-      rowVector->pool(), rowVector->type(), nullptr, size, newInputs);
+  return copy;
 }
 
 void InputRowMetadata::saveToFile(const char* filePath) const {
   std::ofstream outputFile(filePath, std::ofstream::binary);
   saveStdVector(columnsToWrapInLazy, outputFile);
   saveStdVector(columnsToWrapInCommonDictionary, outputFile);
-  writeOptionalBuffer(commonDictionaryIndices, outputFile);
-  writeOptionalBuffer(commonDictionaryNulls, outputFile);
   outputFile.close();
 }
 
@@ -205,13 +188,51 @@ InputRowMetadata InputRowMetadata::restoreFromFile(
   std::ifstream in(filePath, std::ifstream::binary);
   ret.columnsToWrapInLazy = restoreStdVector<int>(in);
   if (in.peek() != EOF) {
-    // this allows reading old files that only saved columnsToWrapInLazy.
+    // this check allows reading old files that only saved columnsToWrapInLazy.
     ret.columnsToWrapInCommonDictionary = restoreStdVector<int>(in);
-    ret.commonDictionaryIndices = readOptionalBuffer(in, pool);
-    ret.commonDictionaryNulls = readOptionalBuffer(in, pool);
   }
   in.close();
   return ret;
+}
+
+void ExprBank::insert(const core::TypedExprPtr& expression) {
+  auto typeString = expression->type()->toString();
+  if (typeToExprsByLevel_.find(typeString) == typeToExprsByLevel_.end()) {
+    typeToExprsByLevel_.insert(
+        {typeString, ExprsIndexedByLevel(maxLevelOfNesting_ + 1)});
+  }
+  auto& expressionsByLevel = typeToExprsByLevel_[typeString];
+  int nestingLevel = getNestedLevel(expression);
+  VELOX_CHECK_LE(nestingLevel, maxLevelOfNesting_);
+  expressionsByLevel[nestingLevel].push_back(expression);
+}
+
+core::TypedExprPtr ExprBank::getRandomExpression(
+    const facebook::velox::TypePtr& returnType,
+    int uptoLevelOfNesting) {
+  VELOX_CHECK_LE(uptoLevelOfNesting, maxLevelOfNesting_);
+  auto typeString = returnType->toString();
+  if (typeToExprsByLevel_.find(typeString) == typeToExprsByLevel_.end()) {
+    return nullptr;
+  }
+  auto& expressionsByLevel = typeToExprsByLevel_[typeString];
+  int totalToConsider = 0;
+  for (int i = 0; i <= uptoLevelOfNesting; i++) {
+    totalToConsider += expressionsByLevel[i].size();
+  }
+  if (totalToConsider > 0) {
+    int choice = boost::random::uniform_int_distribution<uint32_t>(
+        0, totalToConsider - 1)(rng_);
+    for (int i = 0; i <= uptoLevelOfNesting; i++) {
+      if (choice >= expressionsByLevel[i].size()) {
+        choice -= expressionsByLevel[i].size();
+        continue;
+      }
+      return expressionsByLevel[i][choice];
+    }
+    VELOX_CHECK(false, "Should have found an expression.");
+  }
+  return nullptr;
 }
 
 } // namespace facebook::velox::fuzzer

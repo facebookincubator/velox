@@ -59,7 +59,8 @@ class TestConnectorFactory : public connector::ConnectorFactory {
   std::shared_ptr<Connector> newConnector(
       const std::string& id,
       std::shared_ptr<const config::ConfigBase> /*config*/,
-      folly::Executor* /*executor*/ = nullptr) override {
+      folly::Executor* /*ioExecutor*/ = nullptr,
+      folly::Executor* /*cpuExecutor*/ = nullptr) override {
     return std::make_shared<TestConnector>(id);
   }
 };
@@ -94,5 +95,26 @@ TEST_F(ConnectorTest, getAllConnectors) {
       unregisterConnectorFactory(TestConnectorFactory::kConnectorFactoryName));
   EXPECT_FALSE(
       unregisterConnectorFactory(TestConnectorFactory::kConnectorFactoryName));
+}
+
+TEST_F(ConnectorTest, connectorSplit) {
+  {
+    const ConnectorSplit split("test", 100, true);
+    ASSERT_EQ(split.connectorId, "test");
+    ASSERT_EQ(split.splitWeight, 100);
+    ASSERT_EQ(split.cacheable, true);
+    ASSERT_EQ(
+        split.toString(),
+        "[split: connector id test, weight 100, cacheable true]");
+  }
+  {
+    const ConnectorSplit split("test", 50, false);
+    ASSERT_EQ(split.connectorId, "test");
+    ASSERT_EQ(split.splitWeight, 50);
+    ASSERT_EQ(split.cacheable, false);
+    ASSERT_EQ(
+        split.toString(),
+        "[split: connector id test, weight 50, cacheable false]");
+  }
 }
 } // namespace facebook::velox::connector

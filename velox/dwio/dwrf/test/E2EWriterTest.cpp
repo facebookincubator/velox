@@ -605,7 +605,7 @@ TEST_F(E2EWriterTest, TooManyFlatMapKeys) {
   config->set(dwrf::Config::MAP_FLAT_COLS, {0});
   config->set(dwrf::Config::MAP_FLAT_MAX_KEYS, keyLimit);
 
-  EXPECT_THROW(
+  VELOX_ASSERT_THROW(
       dwrf::E2EWriterTestUtil::testWriter(
           *pool,
           type,
@@ -613,7 +613,7 @@ TEST_F(E2EWriterTest, TooManyFlatMapKeys) {
           1,
           1,
           config),
-      exception::LoggedException);
+      "");
 }
 
 TEST_F(E2EWriterTest, FlatMapBackfill) {
@@ -845,8 +845,7 @@ TEST_F(E2EWriterTest, FlatMapConfigNotMapColumn) {
       "map_val:map<bigint,double>,"
       ">");
 
-  EXPECT_THROW(
-      { testFlatMapConfig(type, {0}, {}); }, exception::LoggedException);
+  VELOX_ASSERT_THROW(testFlatMapConfig(type, {0}, {}), "");
 }
 
 TEST_F(E2EWriterTest, mapStatsSingleStride) {
@@ -1366,8 +1365,7 @@ TEST_F(E2EEncryptionTest, ReadWithoutKey) {
     RowReaderOptions rowReaderOpts;
     rowReaderOpts.select(
         std::make_shared<ColumnSelector>(type, std::vector<uint64_t>{1}));
-    ASSERT_THROW(
-        reader->createRowReader(rowReaderOpts), exception::LoggedException);
+    VELOX_ASSERT_THROW(reader->createRowReader(rowReaderOpts), "");
   }
 }
 
@@ -1960,7 +1958,6 @@ TEST_F(E2EWriterTest, memoryReclaimAfterClose) {
     VELOX_ASSERT_THROW(writer->flush(), "Writer is not running");
 
     memory::MemoryReclaimer::Stats stats;
-    const auto oldCapacity = writerPool->capacity();
     writerPool->reclaim(1L << 30, 0, stats);
     if (testData.abort || !testData.canReclaim) {
       ASSERT_EQ(stats.numNonReclaimableAttempts, 0);

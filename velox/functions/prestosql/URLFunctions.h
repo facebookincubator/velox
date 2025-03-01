@@ -15,7 +15,6 @@
  */
 #pragma once
 
-#include <boost/regex.hpp>
 #include "velox/external/utf8proc/utf8procImpl.h"
 #include "velox/functions/Macros.h"
 #include "velox/functions/lib/Utf8Utils.h"
@@ -24,6 +23,8 @@
 namespace facebook::velox::functions {
 
 namespace detail {
+
+/// Encoded replacement character strings.
 constexpr std::array<std::string_view, 6> kEncodedReplacementCharacterStrings =
     {"%EF%BF%BD",
      "%EF%BF%BD%EF%BF%BD",
@@ -31,18 +32,6 @@ constexpr std::array<std::string_view, 6> kEncodedReplacementCharacterStrings =
      "%EF%BF%BD%EF%BF%BD%EF%BF%BD%EF%BF%BD",
      "%EF%BF%BD%EF%BF%BD%EF%BF%BD%EF%BF%BD%EF%BF%BD",
      "%EF%BF%BD%EF%BF%BD%EF%BF%BD%EF%BF%BD%EF%BF%BD%EF%BF%BD"};
-constexpr std::array<std::string_view, 6> kDecodedReplacementCharacterStrings{
-    "\xef\xbf\xbd",
-    "\xef\xbf\xbd\xef\xbf\xbd",
-    "\xef\xbf\xbd\xef\xbf\xbd\xef\xbf\xbd",
-    "\xef\xbf\xbd\xef\xbf\xbd\xef\xbf\xbd\xef\xbf\xbd",
-    "\xef\xbf\xbd\xef\xbf\xbd\xef\xbf\xbd\xef\xbf\xbd\xef\xbf\xbd",
-    "\xef\xbf\xbd\xef\xbf\xbd\xef\xbf\xbd\xef\xbf\xbd\xef\xbf\xbd\xef\xbf\xbd"};
-
-FOLLY_ALWAYS_INLINE StringView submatch(const boost::cmatch& match, int idx) {
-  const auto& sub = match[idx];
-  return StringView(sub.first, sub.length());
-}
 
 FOLLY_ALWAYS_INLINE unsigned char toHex(unsigned char c) {
   return c < 10 ? (c + '0') : (c + 'A' - 10);
@@ -52,29 +41,6 @@ FOLLY_ALWAYS_INLINE void charEscape(unsigned char c, char* output) {
   output[0] = '%';
   output[1] = toHex(c / 16);
   output[2] = toHex(c % 16);
-}
-
-template <typename T>
-FOLLY_ALWAYS_INLINE bool isMultipleInvalidSequences(
-    const T& inputBuffer,
-    size_t inputIndex) {
-  return
-      // 0xe0 followed by a value less than 0xe0 or 0xf0 followed by a
-      // value less than 0x90 is considered an overlong encoding.
-      (inputBuffer[inputIndex] == '\xe0' &&
-       (inputBuffer[inputIndex + 1] & 0xe0) == 0x80) ||
-      (inputBuffer[inputIndex] == '\xf0' &&
-       (inputBuffer[inputIndex + 1] & 0xf0) == 0x80) ||
-      // 0xf4 followed by a byte >= 0x90 looks valid to
-      // tryGetUtf8CharLength, but is actually outside the range of valid
-      // code points.
-      (inputBuffer[inputIndex] == '\xf4' &&
-       (inputBuffer[inputIndex + 1] & 0xf0) != 0x80) ||
-      // The bytes 0xf5-0xff, 0xc0, and 0xc1 look like the start of
-      // multi-byte code points to tryGetUtf8CharLength, but are not part of
-      // any valid code point.
-      (unsigned char)inputBuffer[inputIndex] > 0xf4 ||
-      inputBuffer[inputIndex] == '\xc0' || inputBuffer[inputIndex] == '\xc1';
 }
 
 /// Escapes ``input`` by encoding it so that it can be safely included in
@@ -161,11 +127,17 @@ FOLLY_ALWAYS_INLINE char decodeByte(const char* p, const char* end) {
     p += 2;
 
     char* endptr;
-    char val = strtol(buf, &endptr, 16);
+    auto val = strtol(buf, &endptr, 16);
 
-    if (endptr != buf + 2) {
-      VELOX_USER_FAIL("Illegal hex characters in escape (%) pattern: {}", buf);
-    }
+    VELOX_USER_CHECK(
+        endptr == buf + 2 && !std::isspace(buf[0]) && !std::isspace(buf[1]),
+        "Illegal hex characters in escape (%) pattern: {}",
+        buf);
+
+    VELOX_USER_CHECK_GE(
+        val,
+        0,
+        "Illegal hex characters in escape (%) pattern - negative value");
 
     return val;
   } else {
@@ -201,7 +173,7 @@ FOLLY_ALWAYS_INLINE void urlUnescape(
       } else if (charLength < 0) {
         // This isn't the start of a valid UTF-8 character, write out the
         // replacement character.
-        const auto& replacementString = kDecodedReplacementCharacterStrings[0];
+        const auto& replacementString = kReplacementCharacterStrings[0];
         std::memcpy(
             outputBuffer, replacementString.data(), replacementString.length());
         outputBuffer += replacementString.length();
@@ -239,8 +211,8 @@ FOLLY_ALWAYS_INLINE void urlUnescape(
           size_t charLength = outputBuffer - charStart;
           size_t replaceCharactersToWriteOut =
               isMultipleInvalidSequences(charStart, 0) ? charLength : 1;
-          const auto& replacementString = kDecodedReplacementCharacterStrings
-              [replaceCharactersToWriteOut - 1];
+          const auto& replacementString =
+              kReplacementCharacterStrings[replaceCharactersToWriteOut - 1];
 
           outputBuffer = charStart;
           std::memcpy(
@@ -435,15 +407,6 @@ struct UrlExtractParameterFunction {
     }
 
     if (!uri.query.empty()) {
-      // Parse query string.
-      static const boost::regex kQueryParamRegex(
-          "(^|&)" // start of query or start of parameter "&"
-          "([^=&]*)=?" // parameter name and "=" if value is expected
-          "([^&]*)" // parameter value (allows "=" to appear)
-          "(?=(&|$))" // forward reference, next should be end of query or
-                      // start of next parameter
-      );
-
       StringView query = uri.query;
       std::string unescapedQuery;
       if (uri.queryHasEncoded) {
@@ -451,19 +414,9 @@ struct UrlExtractParameterFunction {
         query = StringView(unescapedQuery);
       }
 
-      const boost::cregex_iterator begin(
-          query.data(), query.data() + query.size(), kQueryParamRegex);
-      boost::cregex_iterator end;
-
-      for (auto it = begin; it != end; ++it) {
-        if (it->length(2) != 0 && (*it)[2].matched) { // key shouldnt be empty.
-          auto key = detail::submatch((*it), 2);
-          if (param.compare(key) == 0) {
-            auto value = detail::submatch((*it), 3);
-            result.copy_from(value);
-            return true;
-          }
-        }
+      if (const auto value = extractParameter(query, param)) {
+        result.copy_from(value.value());
+        return true;
       }
     }
 

@@ -312,6 +312,41 @@ TEST_F(DateTimeFunctionsTest, unixTimestampCustomFormat) {
       unixTimestamp("2022-12-12 asd 07:45:31", "yyyy-MM-dd 'asd HH:mm:ss"));
 }
 
+TEST_F(DateTimeFunctionsTest, unixTimestampTimestampInput) {
+  const auto unixTimestamp = [&](std::optional<Timestamp> timestamp) {
+    return evaluateOnce<int64_t>("unix_timestamp(c0)", timestamp);
+  };
+  EXPECT_EQ(0, unixTimestamp(Timestamp(0, 0)));
+  EXPECT_EQ(1, unixTimestamp(Timestamp(1, 990)));
+  EXPECT_EQ(61, unixTimestamp(Timestamp(61, 0)));
+  EXPECT_EQ(-1, unixTimestamp(Timestamp(-1, 0)));
+  EXPECT_EQ(1739933174, unixTimestamp(Timestamp(1739933174, 0)));
+  EXPECT_EQ(-1739933174, unixTimestamp(Timestamp(-1739933174, 0)));
+  EXPECT_EQ(kMax, unixTimestamp(Timestamp(kMax, 0)));
+  EXPECT_EQ(kMin, unixTimestamp(Timestamp(kMin, 0)));
+}
+
+TEST_F(DateTimeFunctionsTest, unixTimestampDateInput) {
+  const auto unixTimestamp = [&](std::optional<int32_t> date) {
+    return evaluateOnce<int64_t>("unix_timestamp(c0)", {DATE()}, date);
+  };
+  EXPECT_EQ(0, unixTimestamp(parseDate("1970-01-01")));
+  EXPECT_EQ(1727740800, unixTimestamp(parseDate("2024-10-01")));
+  EXPECT_EQ(-126065894400, unixTimestamp(parseDate("-2025-02-18")));
+  setQueryTimeZone("America/Los_Angeles");
+  EXPECT_EQ(1727766000, unixTimestamp(parseDate("2024-10-01")));
+  EXPECT_EQ(-126065866022, unixTimestamp(parseDate("-2025-02-18")));
+
+  // Test invalid inputs.
+  VELOX_ASSERT_THROW(
+      unixTimestamp(kMax), "Timepoint is outside of supported year range");
+  VELOX_ASSERT_THROW(
+      unixTimestamp(kMin), "Timepoint is outside of supported year range");
+  VELOX_ASSERT_THROW(
+      unixTimestamp(parseDate("2045-12-31")),
+      "Unable to convert timezone 'America/Los_Angeles' past 2037-11-01 09:00:00");
+}
+
 // unix_timestamp and to_unix_timestamp are aliases.
 TEST_F(DateTimeFunctionsTest, toUnixTimestamp) {
   std::optional<StringView> dateStr = "1970-01-01 08:32:11"_sv;
@@ -337,19 +372,18 @@ TEST_F(DateTimeFunctionsTest, makeDate) {
   EXPECT_EQ(makeDate(1920, 1, 25), parseDate("1920-01-25"));
   EXPECT_EQ(makeDate(-10, 1, 30), parseDate("-0010-01-30"));
 
-  auto errorMessage = fmt::format("Date out of range: {}-12-15", kMax);
-  VELOX_ASSERT_THROW(makeDate(kMax, 12, 15), errorMessage);
+  EXPECT_EQ(makeDate(kMax, 12, 15), std::nullopt);
 
   constexpr const int32_t kJodaMaxYear{292278994};
-  VELOX_ASSERT_THROW(makeDate(kJodaMaxYear - 10, 12, 15), "Integer overflow");
+  EXPECT_EQ(makeDate(kJodaMaxYear - 10, 12, 15), std::nullopt);
 
-  VELOX_ASSERT_THROW(makeDate(2021, 13, 1), "Date out of range: 2021-13-1");
-  VELOX_ASSERT_THROW(makeDate(2022, 3, 35), "Date out of range: 2022-3-35");
+  EXPECT_EQ(makeDate(2021, 13, 1), std::nullopt);
+  EXPECT_EQ(makeDate(2022, 3, 35), std::nullopt);
 
-  VELOX_ASSERT_THROW(makeDate(2023, 4, 31), "Date out of range: 2023-4-31");
+  EXPECT_EQ(makeDate(2023, 4, 31), std::nullopt);
   EXPECT_EQ(makeDate(2023, 3, 31), parseDate("2023-03-31"));
 
-  VELOX_ASSERT_THROW(makeDate(2023, 2, 29), "Date out of range: 2023-2-29");
+  EXPECT_EQ(makeDate(2023, 2, 29), std::nullopt);
   EXPECT_EQ(makeDate(2023, 3, 29), parseDate("2023-03-29"));
 }
 

@@ -40,6 +40,7 @@ folly::dynamic HiveConnectorSplit::serialize() const {
   obj["name"] = "HiveConnectorSplit";
   obj["connectorId"] = connectorId;
   obj["splitWeight"] = splitWeight;
+  obj["cacheable"] = cacheable;
   obj["filePath"] = filePath;
   obj["fileFormat"] = dwio::common::toString(fileFormat);
   obj["start"] = start;
@@ -56,6 +57,20 @@ folly::dynamic HiveConnectorSplit::serialize() const {
       ? folly::dynamic(tableBucketNumber.value())
       : nullptr;
 
+  if (bucketConversion.has_value()) {
+    folly::dynamic bucketConversionObj = folly::dynamic::object;
+    bucketConversionObj["tableBucketCount"] =
+        bucketConversion->tableBucketCount;
+    bucketConversionObj["partitionBucketCount"] =
+        bucketConversion->partitionBucketCount;
+    folly::dynamic bucketColumnHandlesArray = folly::dynamic::array;
+    for (const auto& handle : bucketConversion->bucketColumnHandles) {
+      bucketColumnHandlesArray.push_back(handle->serialize());
+    }
+    bucketConversionObj["bucketColumnHandles"] = bucketColumnHandlesArray;
+    obj["bucketConversion"] = bucketConversionObj;
+  }
+
   folly::dynamic customSplitInfoObj = folly::dynamic::object;
   for (const auto& [key, value] : customSplitInfo) {
     customSplitInfoObj[key] = value;
@@ -69,6 +84,12 @@ folly::dynamic HiveConnectorSplit::serialize() const {
     serdeParametersObj[key] = value;
   }
   obj["serdeParameters"] = serdeParametersObj;
+
+  folly::dynamic storageParametersObj = folly::dynamic::object;
+  for (const auto& [key, value] : storageParameters) {
+    storageParametersObj[key] = value;
+  }
+  obj["storageParameters"] = storageParametersObj;
 
   folly::dynamic infoColumnsObj = folly::dynamic::object;
   for (const auto& [key, value] : infoColumns) {
@@ -103,6 +124,7 @@ std::shared_ptr<HiveConnectorSplit> HiveConnectorSplit::create(
     const folly::dynamic& obj) {
   const auto connectorId = obj["connectorId"].asString();
   const auto splitWeight = obj["splitWeight"].asInt();
+  const bool cacheable = obj["cacheable"].asBool();
   const auto filePath = obj["filePath"].asString();
   const auto fileFormat =
       dwio::common::toFileFormat(obj["fileFormat"].asString());
@@ -120,6 +142,23 @@ std::shared_ptr<HiveConnectorSplit> HiveConnectorSplit::create(
       ? std::nullopt
       : std::optional<int32_t>(obj["tableBucketNumber"].asInt());
 
+  std::optional<HiveBucketConversion> bucketConversion = std::nullopt;
+  if (obj.count("bucketConversion")) {
+    const auto& bucketConversionObj = obj["bucketConversion"];
+    std::vector<std::shared_ptr<HiveColumnHandle>> bucketColumnHandles;
+    for (const auto& bucketColumnHandleObj :
+         bucketConversionObj["bucketColumnHandles"]) {
+      bucketColumnHandles.push_back(std::const_pointer_cast<HiveColumnHandle>(
+          ISerializable::deserialize<HiveColumnHandle>(bucketColumnHandleObj)));
+    }
+    bucketConversion = HiveBucketConversion{
+        .tableBucketCount = static_cast<int32_t>(
+            bucketConversionObj["tableBucketCount"].asInt()),
+        .partitionBucketCount = static_cast<int32_t>(
+            bucketConversionObj["partitionBucketCount"].asInt()),
+        .bucketColumnHandles = bucketColumnHandles};
+  }
+
   std::unordered_map<std::string, std::string> customSplitInfo;
   for (const auto& [key, value] : obj["customSplitInfo"].items()) {
     customSplitInfo[key.asString()] = value.asString();
@@ -131,6 +170,10 @@ std::shared_ptr<HiveConnectorSplit> HiveConnectorSplit::create(
   std::unordered_map<std::string, std::string> serdeParameters;
   for (const auto& [key, value] : obj["serdeParameters"].items()) {
     serdeParameters[key.asString()] = value.asString();
+  }
+  std::unordered_map<std::string, std::string> storageParameters;
+  for (const auto& [key, value] : obj["storageParameters"].items()) {
+    storageParameters[key.asString()] = value.asString();
   }
 
   std::unordered_map<std::string, std::string> infoColumns;
@@ -170,10 +213,13 @@ std::shared_ptr<HiveConnectorSplit> HiveConnectorSplit::create(
       customSplitInfo,
       extraFileInfo,
       serdeParameters,
+      storageParameters,
       splitWeight,
+      cacheable,
       infoColumns,
       properties,
-      rowIdProperties);
+      rowIdProperties,
+      bucketConversion);
 }
 
 // static

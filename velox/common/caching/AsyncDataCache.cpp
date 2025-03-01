@@ -518,7 +518,9 @@ void CacheShard::updateStats(CacheStats& stats) {
     if (!entry || !entry->key_.fileNum.hasValue()) {
       ++stats.numEmptyEntries;
       continue;
-    } else if (entry->isExclusive()) {
+    }
+
+    if (entry->isExclusive()) {
       stats.exclusivePinnedBytes +=
           entry->data().byteSize() + entry->tinyData_.capacity();
       ++stats.numExclusive;
@@ -527,10 +529,12 @@ void CacheShard::updateStats(CacheStats& stats) {
           entry->data().byteSize() + entry->tinyData_.capacity();
       ++stats.numShared;
     }
+
     if (entry->isPrefetch_) {
       ++stats.numPrefetch;
       stats.prefetchBytes += entry->size();
     }
+
     ++stats.numEntries;
     stats.tinySize += entry->tinyData_.size();
     stats.tinyPadding += entry->tinyData_.capacity() - entry->tinyData_.size();
@@ -606,7 +610,7 @@ bool CacheShard::removeFileEntries(
       }
 
       numAgedOut_++;
-      pagesRemoved += (int64_t)cacheEntry->data().numPages();
+      pagesRemoved += static_cast<int64_t>(cacheEntry->data().numPages());
 
       toFree.push_back(std::move(cacheEntry->data()));
       removeEntryLocked(cacheEntry.get());
@@ -864,7 +868,7 @@ uint64_t AsyncDataCache::shrink(uint64_t targetBytes) {
 }
 
 bool AsyncDataCache::canTryAllocate(
-    int32_t numPages,
+    MachinePageCount numPages,
     const memory::Allocation& acquired) const {
   if (numPages <= acquired.numPages()) {
     return true;
@@ -1059,7 +1063,8 @@ CoalesceIoStats readPins(
       [&](int32_t size, std::vector<folly::Range<char*>>& ranges) {
         // This hack allows us to store the size of the gap in the Range,
         // without actually allocating a buffer for it.
-        ranges.push_back(folly::Range<char*>(nullptr, (char*)(uint64_t)size));
+        ranges.push_back(folly::Range<char*>(
+            nullptr, reinterpret_cast<char*>(static_cast<uint64_t>(size))));
       },
       std::move(readFunc));
 }
