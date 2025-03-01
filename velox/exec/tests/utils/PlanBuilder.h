@@ -1207,6 +1207,22 @@ class PlanBuilder {
       int32_t limit,
       bool generateRowNumber);
 
+  /// Add a TopNRowNumberNode to compute single rank window function with
+  /// a limit applied to sorted partitions.
+  PlanBuilder& topNRank(
+      const std::vector<std::string>& partitionKeys,
+      const std::vector<std::string>& sortingKeys,
+      int32_t limit,
+      bool generateRank);
+
+  /// Add a TopNRowNumberNode to compute single dense_rank window function with
+  /// a limit applied to sorted partitions.
+  PlanBuilder& topNDenseRank(
+      const std::vector<std::string>& partitionKeys,
+      const std::vector<std::string>& sortingKeys,
+      int32_t limit,
+      bool generateRank);
+
   /// Add a MarkDistinctNode to compute aggregate mask channel
   /// @param markerKey Name of output mask channel
   /// @param distinctKeys List of columns to be marked distinct.
@@ -1367,6 +1383,13 @@ class PlanBuilder {
   PlanBuilder& window(
       const std::vector<std::string>& windowFunctions,
       bool inputSorted);
+
+  PlanBuilder& topNRowNumberBase(
+      core::TopNRowNumberNode::RankFunction function,
+      const std::vector<std::string>& partitionKeys,
+      const std::vector<std::string>& sortingKeys,
+      int32_t limit,
+      bool generateRowNumber);
 
  protected:
   core::PlanNodePtr planNode_;
