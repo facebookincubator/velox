@@ -360,4 +360,21 @@ class JsonInputGenerator : public AbstractInputGenerator {
   folly::json::serialization_opts opts_;
 };
 
+class StringEscapingInputGenerator : public AbstractInputGenerator {
+ public:
+  StringEscapingInputGenerator(
+      size_t seed,
+      const TypePtr& type,
+      double nullRatio,
+      std::unique_ptr<AbstractInputGenerator>&& randomStrGenerator);
+
+  ~StringEscapingInputGenerator() override = default;
+
+  variant generate() override;
+
+ private:
+  void makeRandomVariation(std::string& str);
+  std::unique_ptr<AbstractInputGenerator> randomStrGenerator_;
+};
+
 } // namespace facebook::velox::fuzzer
