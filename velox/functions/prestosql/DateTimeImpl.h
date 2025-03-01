@@ -470,4 +470,35 @@ int64_t diffDate(
       Timestamp((int64_t)fromDate * util::kSecsPerDay, 0),
       Timestamp((int64_t)toDate * util::kSecsPerDay, 0));
 }
+
+FOLLY_ALWAYS_INLINE std::chrono::milliseconds valueOfTimeUnitToMillis(
+    const double value,
+    std::string_view unit) {
+  if (unit == "ns") {
+    std::chrono::duration<double, std::nano> chronoNanos{value};
+    return std::chrono::round<std::chrono::milliseconds>(chronoNanos);
+  } else if (unit == "us") {
+    std::chrono::duration<double, std::micro> chronoMicros{value};
+    return std::chrono::round<std::chrono::milliseconds>(chronoMicros);
+  } else if (unit == "ms") {
+    std::chrono::duration<double, std::milli> chronoMillis{value};
+    return std::chrono::round<std::chrono::milliseconds>(chronoMillis);
+  } else if (unit == "s") {
+    std::chrono::duration<double, std::ratio<1>> chronoSeconds{value};
+    return std::chrono::round<std::chrono::milliseconds>(chronoSeconds);
+  } else if (unit == "m") {
+    std::chrono::duration<double, std::ratio<60>> chronoMinutes{value};
+    return std::chrono::round<std::chrono::milliseconds>(chronoMinutes);
+  } else if (unit == "h") {
+    std::chrono::duration<double, std::ratio<3600>> chronoHours{value};
+    return std::chrono::round<std::chrono::milliseconds>(chronoHours);
+  } else if (unit == "d") {
+    std::chrono::duration<double, std::ratio<86400>> chronoDays{value};
+    return std::chrono::round<std::chrono::milliseconds>(chronoDays);
+  } else {
+    VELOX_USER_FAIL("Unknown time unit: {}", unit);
+  }
+  VELOX_UNREACHABLE();
+}
+
 } // namespace facebook::velox::functions
