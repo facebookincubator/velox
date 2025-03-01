@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-velox_add_library(velox_tpch_connector OBJECT TpchConnector.cpp)
+velox_add_library(velox_tpch_connector OBJECT TpchConnector.cpp TpchConfig.cpp)
 
 velox_link_libraries(velox_tpch_connector velox_connector velox_tpch_gen
                      fmt::fmt)
