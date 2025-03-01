@@ -55,6 +55,10 @@ jobs:
             file: "scripts/ubuntu-22.04-cpp.dockerfile"
             args: ""
             tags: "ghcr.io/facebookincubator/velox-dev:ubuntu-22.04"
+          - name: Dev CUDA
+            file: "scripts/ubuntu-22.04-cuda-12.8-cpp.dockerfile"
+            args: ""
+            tags: "ghcr.io/facebookincubator/velox-dev:ubuntu-22.04-cuda-12.8"
 
     steps:
       - name: Login to GitHub Container Registry
