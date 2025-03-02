@@ -200,6 +200,7 @@ int main(int argc, char** argv) {
         "combine_hash_internal",
         "map_keys_by_top_n_values", // requires
                                     // https://github.com/prestodb/presto/pull/24570
+        "array_join", // https://github.com/facebookincubator/velox/issues/12452
     });
 
     referenceQueryRunner = std::make_shared<PrestoQueryRunner>(
