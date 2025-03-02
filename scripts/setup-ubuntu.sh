@@ -72,7 +72,7 @@ function install_gcc11_if_needed {
   fi
 }
 
-FB_OS_VERSION="v2024.07.01.00"
+FB_OS_VERSION="v2024.07.15.00"
 FMT_VERSION="10.1.1"
 BOOST_VERSION="boost-1.84.0"
 THRIFT_VERSION="v0.16.0"
