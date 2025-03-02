@@ -560,13 +560,6 @@ void configureReaderOptions(
     case dwio::common::FileFormat::ORC: {
       useColumnNamesForColumnMapping =
           hiveConfig->isOrcUseColumnNames(sessionProperties);
-
-      auto forcePositionalIt = tableParameters.find("force_positional");
-      if (forcePositionalIt != tableParameters.end() &&
-          folly::to<bool>(forcePositionalIt->second)) {
-        useColumnNamesForColumnMapping = false;
-      }
-
       readerOptions.setUseNestedColumnNamesForColumnMapping(
           hiveConfig->isOrcUseNestedColumnNames());
       break;
