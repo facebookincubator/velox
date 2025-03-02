@@ -208,8 +208,8 @@ class Reader {
       const RowReaderOptions& options = {}) const = 0;
 
   static TypePtr updateColumnNames(
-      const RowTypePtr& fileType,
-      const RowTypePtr& tableType,
+      const TypePtr& fileType,
+      const TypePtr& tableType,
       bool recursive = true);
 };
 

@@ -278,9 +278,11 @@ TypePtr updateColumnNamesImpl(
 } // namespace
 
 TypePtr Reader::updateColumnNames(
-    const RowTypePtr& fileType,
-    const RowTypePtr& tableType,
+    const TypePtr& fileType,
+    const TypePtr& tableType,
     bool recursive) {
+  VELOX_CHECK(fileType->isRow());
+  VELOX_CHECK(tableType->isRow());
   return updateColumnNamesImpl<RowType>(fileType, tableType, recursive);
 }
 
