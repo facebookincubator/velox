@@ -19,8 +19,8 @@
 #include <bitset>
 
 #include <fmt/core.h>
+#include <folly/String.h>
 #include <folly/container/Array.h>
-
 #include "velox/common/base/Exceptions.h"
 
 namespace facebook {

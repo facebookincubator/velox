@@ -17,6 +17,8 @@
 #include "velox/expression/TypeSignature.h"
 #include "velox/common/base/Exceptions.h"
 
+#include "folly/String.h"
+
 namespace facebook::velox::exec {
 void toAppend(
     const facebook::velox::exec::TypeSignature& signature,

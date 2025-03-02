@@ -16,10 +16,11 @@
 
 #pragma once
 
-#include <folly/synchronization/CallOnce.h>
-
 #include <string>
+#include <unordered_set>
 #include <vector>
+
+#include <folly/synchronization/CallOnce.h>
 
 namespace facebook::velox::process {
 

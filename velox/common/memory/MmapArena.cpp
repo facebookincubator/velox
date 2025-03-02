@@ -16,7 +16,10 @@
 
 #include "velox/common/memory/MmapArena.h"
 
+#include "folly/String.h"
+
 #include <sys/mman.h>
+
 #include "velox/common/base/BitUtil.h"
 #include "velox/common/memory/Memory.h"
 
