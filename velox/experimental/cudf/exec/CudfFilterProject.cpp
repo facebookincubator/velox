@@ -20,7 +20,10 @@
 #include "velox/type/Type.h"
 #include "velox/vector/ConstantVector.h"
 
+#include <cudf/aggregation.hpp>
 #include <cudf/datetime.hpp>
+#include <cudf/reduction.hpp>
+#include <cudf/stream_compaction.hpp>
 #include <cudf/strings/attributes.hpp>
 #include <cudf/strings/contains.hpp>
 #include <cudf/strings/slice.hpp>
@@ -61,11 +64,10 @@ CudfFilterProject::CudfFilterProject(
       hasFilter_(filter != nullptr),
       project_(project),
       filter_(filter) {
-  // If Filter is present, ctor fails.
-  VELOX_CHECK(!hasFilter_, "Filter not supported yet");
   resultProjections_ = *(info.resultProjections);
   identityProjections_ = std::move(identityProjections);
-  const auto& inputType = project_->sources()[0]->outputType();
+  const auto& inputType = hasFilter_ ? filter_->sources()[0]->outputType()
+                                     : project_->sources()[0]->outputType();
 
   // convert to AST
   if (cudfDebugEnabled()) {
@@ -75,7 +77,14 @@ CudfFilterProject::CudfFilterProject(
       debug_print_tree(expr);
     }
   }
-  expressionEvaluator_ = ExpressionEvaluator(info.exprs->exprs(), inputType);
+  std::vector<std::shared_ptr<velox::exec::Expr>> projectExprs;
+  if (hasFilter_) {
+    // First expr is Filter, rest are Project
+    filterEvaluator_ = ExpressionEvaluator({info.exprs->exprs()[0]}, inputType);
+    projectExprs = {info.exprs->exprs().begin() + 1, info.exprs->exprs().end()};
+  }
+  projectEvaluator_ = ExpressionEvaluator(
+      hasFilter_ ? projectExprs : info.exprs->exprs(), inputType);
 }
 
 void CudfFilterProject::addInput(RowVectorPtr input) {
@@ -98,6 +107,10 @@ RowVectorPtr CudfFilterProject::getOutput() {
   auto stream = cudf_input->stream();
   auto input_table_columns = cudf_input->release()->release();
 
+  if (hasFilter_) {
+    filter(input_table_columns, stream);
+  }
+
   // Evaluate the expressions
   auto output_columns = project(input_table_columns, stream);
 
@@ -118,29 +131,38 @@ RowVectorPtr CudfFilterProject::getOutput() {
   }
   return cudf_output;
 }
-  auto output_columns = project(input_table_columns, stream);
 
-  auto output_table = std::make_unique<cudf::table>(std::move(output_columns));
-  stream.synchronize();
-  auto const num_columns = output_table->num_columns();
-  auto const size = output_table->num_rows();
-  if (cudfDebugEnabled()) {
-    std::cout << "cudfProject Output: " << size << " rows, " << num_columns
-              << " columns " << std::endl;
+void CudfFilterProject::filter(
+    std::vector<std::unique_ptr<cudf::column>>& input_table_columns,
+    rmm::cuda_stream_view stream) {
+  // Evaluate the Filter
+  auto filter_columns = filterEvaluator_.compute(
+      input_table_columns, stream, cudf::get_current_device_resource_ref());
+  auto filter_column = filter_columns[0]->view();
+  // is all true in filter_column
+  auto is_all_true = cudf::reduce(
+      filter_column,
+      *cudf::make_all_aggregation<cudf::reduce_aggregation>(),
+      cudf::data_type(cudf::type_id::BOOL8),
+      stream,
+      cudf::get_current_device_resource_ref());
+  using ScalarType = cudf::scalar_type_t<bool>;
+  auto result = static_cast<ScalarType*>(is_all_true.get());
+  // If filter is not all true, apply the filter
+  if (!(result->is_valid() && result->value())) {
+    // Apply the Filter
+    auto filter_table =
+        std::make_unique<cudf::table>(std::move(input_table_columns));
+    auto filtered_table =
+        cudf::apply_boolean_mask(*filter_table, filter_column, stream);
+    input_table_columns = filtered_table->release();
   }
-
-  auto cudf_output = std::make_shared<CudfVector>(
-      input_->pool(), outputType_, size, std::move(output_table), stream);
-  input_.reset();
-  if (num_columns == 0 or size == 0) {
-    return nullptr;
-  }
-  return cudf_output;
 }
+
 std::vector<std::unique_ptr<cudf::column>> CudfFilterProject::project(
     std::vector<std::unique_ptr<cudf::column>>& input_table_columns,
     rmm::cuda_stream_view stream) {
-  auto columns = expressionEvaluator_.compute(
+  auto columns = projectEvaluator_.compute(
       input_table_columns, stream, cudf::get_current_device_resource_ref());
 
   // Rearrange columns to match outputType_
