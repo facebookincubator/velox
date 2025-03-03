@@ -90,6 +90,7 @@ jobs:
 
       - run: mkdir -p ccache
       - name: "Restore ccache"
+        if: false 
         uses: actions/cache/restore@v3
         id: restore-cache
         with:
@@ -124,19 +125,14 @@ jobs:
           CIBW_ENVIRONMENT_PASS_LINUX: CCACHE_DIR BUILD_VERSION
           CIBW_TEST_EXTRAS: "tests"
           CIBW_TEST_COMMAND: "cd {project}/pyvelox && python -m unittest -v"
-          CCACHE_DIR: "${{ matrix.os != 'macos-11' && '/output' || github.workspace }}/ccache"
           CIBW_TEST_SKIP: "*"
+          # CCACHE_DIR: "${{ matrix.os != 'macos-11' && '/output' || github.workspace }}/ccache"
           BUILD_VERSION: "${{ inputs.version || steps.version.outputs.build_version }}"
         with:
           output-dir: wheelhouse
 
-      - name: "Move ccache to workspace"
-        if: matrix.os != 'macos-11'
-        run: |
-          mkdir -p ccache
-          cp -R ./wheelhouse/ccache/* ccache
-
       - name: "Save ccache"
+        if: false
         uses: actions/cache/save@v3
         id: cache
         with:
