@@ -35,6 +35,7 @@ CudfLocalPartition::CudfLocalPartition(
           operatorId,
           planNode->id(),
           "CudfLocalPartition"),
+      NvtxHelper(nvtx3::rgb{255, 215, 0}, std::stoi(planNode->id())),
       queues_{
           ctx->task->getLocalExchangeQueues(ctx->splitGroupId, planNode->id())},
       numPartitions_{queues_.size()} {
@@ -75,30 +76,20 @@ CudfLocalPartition::CudfLocalPartition(
         partitionKeyIndices_.push_back(fieldIndex);
       }
     }
-
-    std::cout << "Partition key indices: ";
-    for (const auto& idx : partitionKeyIndices_) {
-      std::cout << idx << " ";
-    }
-    std::cout << std::endl;
   }
   VELOX_CHECK(numPartitions_ == 1 || partitionKeyIndices_.size() > 0);
 
   // DM: Since we're replacing the LocalPartition with CudfLocalPartition, the
   // number of producers is already set. Adding producer only adds to a counter
   // which we don't have to do again.
-
+  // Normally, this is what we'd have to do:
   // for (auto& queue : queues_) {
   //   queue->addProducer();
-  // }
-  // if (numPartitions_ > 0) {
-  //   indexBuffers_.resize(numPartitions_);
-  //   rawIndices_.resize(numPartitions_);
   // }
 }
 
 void CudfLocalPartition::addInput(RowVectorPtr input) {
-  prepareForInput(input);
+  VELOX_NVTX_OPERATOR_FUNC_RANGE();
   auto cudfVector = std::dynamic_pointer_cast<CudfVector>(input);
   VELOX_CHECK(cudfVector, "Input must be a CudfVector");
   auto stream = cudfVector->stream();
@@ -165,23 +156,6 @@ void CudfLocalPartition::addInput(RowVectorPtr input) {
       futures_.push_back(std::move(future));
     }
   }
-}
-
-void CudfLocalPartition::prepareForInput(RowVectorPtr& input) {
-  // DM: This might not do anything because CudfVector sets children to nullptr.
-  // eh, whatever :shrug:
-  {
-    auto lockedStats = stats_.wlock();
-    lockedStats->addOutputVector(input->estimateFlatSize(), input->size());
-  }
-
-  // Lazy vectors must be loaded or processed to ensure the late materialized in
-  // order.
-  // DM: We don't have to do this because we're expecting cudf tables which are
-  // already loaded.
-  // for (auto& child : input->children()) {
-  //   child->loadedVector();
-  // }
 }
 
 exec::BlockingReason CudfLocalPartition::isBlocked(ContinueFuture* future) {
