@@ -71,7 +71,7 @@ folly::dynamic HiveConnectorSplit::serialize() const {
     obj["bucketConversion"] = bucketConversionObj;
   } else {
     obj["bucketConversion"] = nullptr;
-    }
+  }
 
   folly::dynamic customSplitInfoObj = folly::dynamic::object;
   for (const auto& [key, value] : customSplitInfo) {
