@@ -99,6 +99,47 @@ RowVectorPtr CudfFilterProject::getOutput() {
   auto input_table_columns = cudf_input->release()->release();
 
   // Evaluate the expressions
+  auto output_columns = project(input_table_columns, stream);
+
+  auto output_table = std::make_unique<cudf::table>(std::move(output_columns));
+  stream.synchronize();
+  auto const num_columns = output_table->num_columns();
+  auto const size = output_table->num_rows();
+  if (cudfDebugEnabled()) {
+    std::cout << "cudfProject Output: " << size << " rows, " << num_columns
+              << " columns " << std::endl;
+  }
+
+  auto cudf_output = std::make_shared<CudfVector>(
+      input_->pool(), outputType_, size, std::move(output_table), stream);
+  input_.reset();
+  if (num_columns == 0 or size == 0) {
+    return nullptr;
+  }
+  return cudf_output;
+}
+  auto output_columns = project(input_table_columns, stream);
+
+  auto output_table = std::make_unique<cudf::table>(std::move(output_columns));
+  stream.synchronize();
+  auto const num_columns = output_table->num_columns();
+  auto const size = output_table->num_rows();
+  if (cudfDebugEnabled()) {
+    std::cout << "cudfProject Output: " << size << " rows, " << num_columns
+              << " columns " << std::endl;
+  }
+
+  auto cudf_output = std::make_shared<CudfVector>(
+      input_->pool(), outputType_, size, std::move(output_table), stream);
+  input_.reset();
+  if (num_columns == 0 or size == 0) {
+    return nullptr;
+  }
+  return cudf_output;
+}
+std::vector<std::unique_ptr<cudf::column>> CudfFilterProject::project(
+    std::vector<std::unique_ptr<cudf::column>>& input_table_columns,
+    rmm::cuda_stream_view stream) {
   auto columns = expressionEvaluator_.compute(
       input_table_columns, stream, cudf::get_current_device_resource_ref());
 
@@ -136,22 +177,7 @@ RowVectorPtr CudfFilterProject::getOutput() {
     inputChannelCount[identity.inputChannel]--;
   }
 
-  auto output_table = std::make_unique<cudf::table>(std::move(output_columns));
-  stream.synchronize();
-  auto const num_columns = output_table->num_columns();
-  auto const size = output_table->num_rows();
-  if (cudfDebugEnabled()) {
-    std::cout << "cudfProject Output: " << size << " rows, " << num_columns
-              << " columns " << std::endl;
-  }
-
-  auto cudf_output = std::make_shared<CudfVector>(
-      input_->pool(), outputType_, size, std::move(output_table), stream);
-  input_.reset();
-  if (num_columns == 0 or size == 0) {
-    return nullptr;
-  }
-  return cudf_output;
+  return output_columns;
 }
 
 bool CudfFilterProject::allInputProcessed() {

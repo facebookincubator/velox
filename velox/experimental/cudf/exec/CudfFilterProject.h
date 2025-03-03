@@ -50,6 +50,11 @@ class CudfFilterProject : public exec::Operator, public NvtxHelper {
 
   RowVectorPtr getOutput() override;
 
+
+  std::vector<std::unique_ptr<cudf::column>> project(
+      std::vector<std::unique_ptr<cudf::column>>& input_table_columns,
+      rmm::cuda_stream_view stream);
+
   exec::BlockingReason isBlocked(ContinueFuture* /*future*/) override {
     return exec::BlockingReason::kNotBlocked;
   }
