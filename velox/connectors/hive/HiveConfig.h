@@ -74,8 +74,10 @@ class HiveConfig {
   static constexpr const char* kOrcUseColumnNamesSession =
       "hive_orc_use_column_names";
 
-  /// Always maps nested column using names even if kOrcUseColumnNames disabled.
+  /// Maps nested column using names if kOrcUseColumnNames disabled.
   static constexpr const char* kOrcUseNestedColumnNames =
+      "hive.orc.use-nested-column-names";
+  static constexpr const char* kOrcUseNestedColumnNamesSession =
       "hive.orc.use-nested-column-names";
 
   /// Maps table field names to file field names using names, not indices.
@@ -204,7 +206,7 @@ class HiveConfig {
 
   bool isOrcUseColumnNames(const config::ConfigBase* session) const;
 
-  bool isOrcUseNestedColumnNames() const;
+  bool isOrcUseNestedColumnNames(const config::ConfigBase* session) const;
 
   bool isParquetUseColumnNames(const config::ConfigBase* session) const;
 

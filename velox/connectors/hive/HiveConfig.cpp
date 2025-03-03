@@ -93,8 +93,10 @@ bool HiveConfig::isOrcUseColumnNames(const config::ConfigBase* session) const {
       kOrcUseColumnNamesSession, config_->get<bool>(kOrcUseColumnNames, false));
 }
 
-bool HiveConfig::isOrcUseNestedColumnNames() const {
-  return config_->get<bool>(kOrcUseNestedColumnNames, false);
+bool HiveConfig::isOrcUseNestedColumnNames(const config::ConfigBase* session) const {
+  return session->get<bool>(
+      kOrcUseNestedColumnNamesSession,
+      config_->get<bool>(kOrcUseNestedColumnNames, false));
 }
 
 bool HiveConfig::isParquetUseColumnNames(
