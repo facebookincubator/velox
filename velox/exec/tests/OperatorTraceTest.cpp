@@ -1148,4 +1148,38 @@ TEST_F(OperatorTraceTest, canTrace) {
     ASSERT_EQ(testData.canTrace, trace::canTrace(testData.operatorType));
   }
 }
+
+TEST_F(OperatorTraceTest, deleteData) {
+  std::vector<RowVectorPtr> inputVectors = {
+      vectorFuzzer_.fuzzInputFlatRow(dataType_)};
+  createDuckDbTable(inputVectors);
+
+  std::string planNodeId;
+  const auto traceDirPath = TempDirectoryPath::create();
+  auto plan = PlanBuilder()
+                  .values(inputVectors)
+                  .singleAggregation({"a"}, {"count(1)"})
+                  .capturePlanNodeId(planNodeId)
+                  .planNode();
+
+  // Create trace data.
+  AssertQueryBuilder(duckDbQueryRunner_)
+      .plan(plan)
+      .config(core::QueryConfig::kQueryTraceEnabled, true)
+      .config(core::QueryConfig::kQueryTraceDir, traceDirPath->getPath())
+      .config(core::QueryConfig::kQueryTraceMaxBytes, 10UL << 10)
+      .config(core::QueryConfig::kQueryTraceTaskRegExp, ".*")
+      .config(core::QueryConfig::kQueryTraceNodeIds, planNodeId)
+      .assertResults("SELECT a, count(1) FROM tmp GROUP BY 1");
+
+  // Delete trace data.
+  AssertQueryBuilder(duckDbQueryRunner_)
+      .plan(plan)
+      .config(core::QueryConfig::kQueryTraceDeleteEnabled, true)
+      .config(core::QueryConfig::kQueryTraceDir, traceDirPath->getPath())
+      .assertResults("SELECT a, count(1) FROM tmp GROUP BY 1");
+
+  std::this_thread::sleep_for(std::chrono::seconds(1));
+  ASSERT_FALSE(std::filesystem::exists(traceDirPath->getPath()));
+}
 } // namespace facebook::velox::exec::trace::test
