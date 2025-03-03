@@ -51,8 +51,6 @@ class CudfLocalPartition : public exec::Operator, public NvtxHelper {
   bool isFinished() override;
 
  protected:
-  void prepareForInput(RowVectorPtr& input);
-
   const std::vector<std::shared_ptr<exec::LocalExchangeQueue>> queues_;
   const size_t numPartitions_;
 

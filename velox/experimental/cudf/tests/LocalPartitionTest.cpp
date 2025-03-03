@@ -49,22 +49,6 @@ class LocalPartitionTest : public HiveConnectorTestBase {
     return filePaths;
   }
 
-  void verifyExchangeSourceOperatorStats(
-      const std::shared_ptr<exec::Task>& task,
-      int expectedPositions,
-      int expectedVectors,
-      int expectedDrivers) {
-    // auto stats = task->taskStats().pipelineStats[0].operatorStats.front();
-    // ASSERT_EQ(stats.inputPositions, expectedPositions);
-    // ASSERT_EQ(stats.inputVectors, expectedVectors);
-    // ASSERT_EQ(stats.numDrivers, expectedDrivers);
-    // ASSERT_TRUE(stats.inputBytes > 0);
-
-    // ASSERT_EQ(stats.outputPositions, stats.inputPositions);
-    // ASSERT_EQ(stats.outputVectors, stats.inputVectors);
-    // ASSERT_EQ(stats.inputBytes, stats.outputBytes);
-  }
-
   void assertTaskReferenceCount(
       const std::shared_ptr<exec::Task>& task,
       int expected) {
@@ -115,7 +99,6 @@ TEST_F(LocalPartitionTest, gather) {
                 .planNode();
 
   auto task = assertQuery(op, "SELECT -71, 152");
-  verifyExchangeSourceOperatorStats(task, 300, 3, 1);
 
   auto filePaths = writeToFiles(vectors);
 
@@ -147,7 +130,6 @@ TEST_F(LocalPartitionTest, gather) {
   }
 
   task = queryBuilder.assertResults("SELECT -71, 152");
-  verifyExchangeSourceOperatorStats(task, 300, 3, 1);
 }
 
 TEST_F(LocalPartitionTest, partition) {
@@ -180,7 +162,7 @@ TEST_F(LocalPartitionTest, partition) {
                         scanAggNode(),
                         scanAggNode(),
                     })
-                .partialAggregation({"c0"}, {"max(c0)"})
+                .finalAggregation()
                 .planNode();
 
   createDuckDbTable(vectors);
@@ -197,312 +179,7 @@ TEST_F(LocalPartitionTest, partition) {
 
   auto task =
       queryBuilder.assertResults("SELECT c0, max(c0) FROM tmp GROUP BY 1");
-  verifyExchangeSourceOperatorStats(task, 300, 6, 2);
 }
-
-#if 0
-TEST_F(LocalPartitionTest, blockingOnLocalExchangeQueue) {
-  auto localExchangeBufferSize = "1024";
-  auto baseVector = vectorMaker_.flatVector<int64_t>(
-      10240, [](auto row) { return row / 10; });
-  // Make a small flat vector of one row and roughly 8 bytes that is
-  // smaller than the localExchangeBufferSize.
-  auto smallInput = vectorMaker_.rowVector(
-      {"c0"}, {makeFlatVector<int64_t>(1, folly::identity)});
-  // Make a small dictionary vector of one row with a base vector larger than
-  // the localExchangeBufferSize.
-  auto dictionaryInput = vectorMaker_.rowVector(
-      {"c0"}, {wrapInDictionary(makeIndices({0}), baseVector)});
-  // Make a large dictionary vector of 1024 rows and roughly 8KB that is larger
-  // than the localExchangeBufferSize.
-  auto largeInput = vectorMaker_.rowVector(
-      {"c0"},
-      {wrapInDictionary(
-          makeIndices(baseVector->size(), [](auto row) { return row; }),
-          baseVector)});
-
-  struct {
-    RowVectorPtr input;
-    int64_t numBlocked;
-
-    std::string debugString() const {
-      return fmt::format(
-          "inputBatchBytes: {}, numBlocked: {}",
-          input->estimateFlatSize(),
-          numBlocked);
-    }
-  } testSettings[] = {
-      {smallInput, 0}, // Small input will not make LocalPartition blocked.
-      {dictionaryInput, 1}, // Large dictiionary values will make LocalPartition
-                            // blocked.
-      {largeInput, 1}}; // Large input will make LocalPartition blocked.
-
-  for (const auto& test : testSettings) {
-    SCOPED_TRACE(test.debugString());
-
-    createDuckDbTable({test.input});
-
-    auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
-    core::PlanNodeId nodeId;
-    auto plan = PlanBuilder(planNodeIdGenerator)
-                    .localPartition(
-                        {"c0"},
-                        {PlanBuilder(planNodeIdGenerator)
-                             .values({test.input})
-                             .planNode()})
-                    .capturePlanNodeId(nodeId)
-                    .singleAggregation({"c0"}, {"count(1)"})
-                    .planNode();
-    auto task = AssertQueryBuilder(duckDbQueryRunner_)
-                    .plan(plan)
-                    .maxDrivers(4)
-                    .config(
-                        core::QueryConfig::kMaxLocalExchangeBufferSize,
-                        localExchangeBufferSize)
-                    .assertResults("SELECT c0, count(1) FROM tmp GROUP BY c0");
-    ASSERT_EQ(
-        exec::toPlanStats(task->taskStats())
-            .at(nodeId)
-            .customStats["blockedWaitForConsumerTimes"]
-            .sum,
-        test.numBlocked);
-  }
-}
-
-TEST_F(LocalPartitionTest, multipleExchanges) {
-  std::vector<RowVectorPtr> vectors = {
-      makeRowVector({
-          makeFlatSequence<int32_t>(0, 100),
-          makeFlatSequence<int64_t>(0, 7, 100),
-      }),
-      makeRowVector({
-          makeFlatSequence<int32_t>(53, 100),
-          makeFlatSequence<int64_t>(0, 11, 100),
-      }),
-      makeRowVector({
-          makeFlatSequence<int32_t>(-71, 100),
-          makeFlatSequence<int64_t>(0, 13, 100),
-      }),
-  };
-
-  auto filePaths = writeToFiles(vectors);
-
-  auto rowType = asRowType(vectors[0]->type());
-
-  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
-  std::vector<core::PlanNodeId> scanNodeIds;
-
-  auto tableScanNode = [&]() {
-    auto node = PlanBuilder(planNodeIdGenerator).tableScan(rowType).planNode();
-    scanNodeIds.push_back(node->id());
-    return node;
-  };
-
-  // Make a plan with 2 local exchanges. UNION ALL results of 3 table scans.
-  // Group by 0, 1 and compute counts. Group by 0 and compute counts and sums.
-  // First exchange re-partitions the results of table scan on two keys. Second
-  // exchange re-partitions the results on just the first key.
-  auto op = PlanBuilder(planNodeIdGenerator)
-                .localPartition(
-                    {"c0"},
-                    {PlanBuilder(planNodeIdGenerator)
-                         .localPartition(
-                             {"c0", "c1"},
-                             {
-                                 tableScanNode(),
-                                 tableScanNode(),
-                                 tableScanNode(),
-                             })
-                         .partialAggregation({"c0", "c1"}, {"count(1)"})
-                         .planNode()})
-                .partialAggregation({"c0"}, {"count(1)", "sum(a0)"})
-                .planNode();
-
-  createDuckDbTable(vectors);
-
-  AssertQueryBuilder queryBuilder(op, duckDbQueryRunner_);
-  for (auto i = 0; i < filePaths.size(); ++i) {
-    queryBuilder.split(
-        scanNodeIds[i], makeHiveConnectorSplit(filePaths[i]->getPath()));
-  }
-
-  queryBuilder.maxDrivers(2).assertResults(
-      "SELECT c0, count(1), sum(cnt) FROM ("
-      "   SELECT c0, c1, count(1) as cnt FROM tmp GROUP BY 1, 2"
-      ") t GROUP BY 1");
-}
-
-TEST_F(LocalPartitionTest, earlyCompletion) {
-  std::vector<RowVectorPtr> data = {
-      makeRowVector({makeFlatSequence(3, 100)}),
-      makeRowVector({makeFlatSequence(7, 100)}),
-      makeRowVector({makeFlatSequence(11, 100)}),
-      makeRowVector({makeFlatSequence(13, 100)}),
-  };
-
-  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
-  auto plan =
-      PlanBuilder(planNodeIdGenerator)
-          .localPartition(
-              {}, {PlanBuilder(planNodeIdGenerator).values(data).planNode()})
-          .limit(0, 2, true)
-          .planNode();
-
-  auto task = assertQuery(plan, "VALUES (3), (4)");
-
-  verifyExchangeSourceOperatorStats(task, 100, 1, 1);
-
-  // Make sure there is only one reference to Task left, i.e. no Driver is
-  // blocked forever.
-  assertTaskReferenceCount(task, 1);
-}
-
-TEST_F(LocalPartitionTest, earlyCancelation) {
-  std::vector<RowVectorPtr> data = {
-      makeRowVector({makeFlatSequence(3, 100)}),
-      makeRowVector({makeFlatSequence(7, 100)}),
-      makeRowVector({makeFlatSequence(11, 100)}),
-      makeRowVector({makeFlatSequence(13, 100)}),
-  };
-
-  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
-  auto plan =
-      PlanBuilder(planNodeIdGenerator)
-          .localPartition(
-              {}, {PlanBuilder(planNodeIdGenerator).values(data).planNode()})
-          .limit(0, 2'000, true)
-          .planNode();
-
-  CursorParameters params;
-  params.planNode = plan;
-  // Make sure results are queued one batch at a time.
-  params.bufferedBytes = 100;
-
-  auto cursor = TaskCursor::create(params);
-  const auto& task = cursor->task();
-
-  // Fetch first batch of data.
-  ASSERT_TRUE(cursor->moveNext());
-  ASSERT_EQ(100, cursor->current()->size());
-
-  // Cancel the task.
-  task->requestCancel();
-
-  // Fetch the remaining results. This will throw since only one vector can be
-  // buffered in the cursor.
-  try {
-    while (cursor->moveNext()) {
-      ;
-      FAIL() << "Expected a throw due to cancellation";
-    }
-  } catch (const std::exception&) {
-  }
-
-  // Wait for task to transition to final state.
-  waitForTaskCompletion(task, exec::TaskState::kCanceled);
-
-  // Make sure there is only one reference to Task left, i.e. no Driver is
-  // blocked forever.
-  assertTaskReferenceCount(task, 1);
-}
-
-TEST_F(LocalPartitionTest, producerError) {
-  std::vector<RowVectorPtr> data = {
-      makeRowVector({makeFlatSequence(3, 100)}),
-      makeRowVector({makeFlatSequence(7, 100)}),
-      makeRowVector({makeFlatSequence(-11, 100)}),
-      makeRowVector({makeFlatSequence(-13, 100)}),
-  };
-
-  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
-  auto plan = PlanBuilder(planNodeIdGenerator)
-                  .localPartition(
-                      {},
-                      {PlanBuilder(planNodeIdGenerator)
-                           .values(data)
-                           .project({"7 / c0"})
-                           .planNode()})
-                  .limit(0, 2'000, true)
-                  .planNode();
-
-  CursorParameters params;
-  params.planNode = plan;
-
-  auto cursor = TaskCursor::create(params);
-  const auto& task = cursor->task();
-
-  // Expect division by zero error.
-  ASSERT_THROW(while (cursor->moveNext()) { ; }, VeloxException);
-
-  // Wait for task to transition to failed state.
-  waitForTaskCompletion(task, exec::TaskState::kFailed);
-
-  // Make sure there is only one reference to Task left, i.e. no Driver is
-  // blocked forever.
-  assertTaskReferenceCount(task, 1);
-}
-
-TEST_F(LocalPartitionTest, unionAll) {
-  auto data1 = makeRowVector(
-      {"d0", "d1"},
-      {makeFlatVector<int32_t>({10, 11}),
-       makeFlatVector<StringView>({"x", "y"})});
-  auto data2 = makeRowVector(
-      {"e0", "e1"},
-      {makeFlatVector<int32_t>({20, 21}),
-       makeFlatVector<StringView>({"z", "w"})});
-
-  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
-  auto plan = PlanBuilder(planNodeIdGenerator)
-                  .localPartition(
-                      {},
-                      {PlanBuilder(planNodeIdGenerator)
-                           .values({data1})
-                           .project({"d0 as c0", "d1 as c1"})
-                           .planNode(),
-                       PlanBuilder(planNodeIdGenerator)
-                           .values({data2})
-                           .project({"e0 as c0", "e1 as c1"})
-                           .planNode()})
-                  .planNode();
-
-  assertQuery(
-      plan,
-      "WITH t1 AS (VALUES (10, 'x'), (11, 'y')), "
-      "t2 AS (VALUES (20, 'z'), (21, 'w')) "
-      "SELECT * FROM t1 UNION ALL SELECT * FROM t2");
-}
-
-TEST_F(LocalPartitionTest, unionAllLocalExchange) {
-  auto data1 = makeRowVector({"d0"}, {makeFlatVector<StringView>({"x"})});
-  auto data2 = makeRowVector({"e0"}, {makeFlatVector<StringView>({"y"})});
-
-  for (bool serialExecutionMode : {false, true}) {
-    SCOPED_TRACE(fmt::format("serialExecutionMode {}", serialExecutionMode));
-    auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
-    AssertQueryBuilder(duckDbQueryRunner_)
-        .serialExecution(serialExecutionMode)
-        .plan(PlanBuilder(planNodeIdGenerator)
-                  .localPartitionRoundRobin(
-                      {PlanBuilder(planNodeIdGenerator)
-                           .values({data1})
-                           .project({"d0 as c0"})
-                           .planNode(),
-                       PlanBuilder(planNodeIdGenerator)
-                           .values({data2})
-                           .project({"e0 as c0"})
-                           .planNode()})
-                  .project({"length(c0)"})
-                  .planNode())
-        .assertResults(
-            "SELECT length(c0) FROM ("
-            "   SELECT * FROM (VALUES ('x')) as t1(c0) UNION ALL "
-            "   SELECT * FROM (VALUES ('y')) as t2(c0)"
-            ")");
-  }
-}
-
-#endif
 
 } // namespace
 } // namespace facebook::velox::exec::test
