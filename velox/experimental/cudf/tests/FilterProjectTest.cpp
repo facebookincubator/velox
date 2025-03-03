@@ -28,6 +28,15 @@ using namespace facebook::velox::common::testutil;
 
 namespace {
 
+template <typename T>
+T get_col_value(
+    const std::vector<RowVectorPtr>& input,
+    int col,
+    int32_t index) {
+  return input[0]->as<RowVector>()->childAt(col)->as<FlatVector<T>>()->valueAt(
+      index);
+}
+
 class CudfFilterProjectTest : public OperatorTestBase {
  protected:
   void SetUp() override {
@@ -255,6 +264,115 @@ class CudfFilterProjectTest : public OperatorTestBase {
     runTest(plan, "SELECT c0 BETWEEN 1 AND 100 AS result FROM tmp");
   }
 
+  void testMultiInputAndOperation(const std::vector<RowVectorPtr>& input) {
+    // Create a plan with multiple AND operations
+    auto c2Value = get_col_value<StringView>(input, 2, 1).str();
+    auto plan = PlanBuilder()
+                    .values(input)
+                    .project(
+                        {"c0 > 1000 AND c0 < 20000 AND c2 = '" + c2Value +
+                         "' AS result"})
+                    .planNode();
+
+    // Run the test
+    runTest(
+        plan,
+        "SELECT c0 > 1000 AND c0 < 20000 AND c2 = '" + c2Value +
+            "' AS result FROM tmp");
+  }
+
+  void testMultiInputOrOperation(const std::vector<RowVectorPtr>& input) {
+    // Create a plan with multiple OR operations
+    auto c2Value = get_col_value<StringView>(input, 2, 1).str();
+    auto plan = PlanBuilder()
+                    .values(input)
+                    .project(
+                        {"c0 > 16000 OR c0 < 8000 OR c1 = 2.0 OR c2 = '" +
+                         c2Value + "' AS result"})
+                    .planNode();
+
+    // Run the test
+    runTest(
+        plan,
+        "SELECT c0 > 16000 OR c0 < 8000 OR c1 = 2.0 OR c2 = '" + c2Value +
+            "' AS result FROM tmp");
+  }
+
+  void testIntegerInOperation(const std::vector<RowVectorPtr>& input) {
+    // Create a plan with an IN operation for integers
+    std::vector<int32_t> c0Values;
+    for (int32_t i = 0; i < 5; i++) {
+      c0Values.push_back(get_col_value<int32_t>(input, 0, i));
+    }
+    std::string c0ValuesStr;
+    for (size_t i = 0; i < c0Values.size(); ++i) {
+      c0ValuesStr += std::to_string(c0Values[i]) + ",";
+    }
+    c0ValuesStr.pop_back();
+    auto plan = PlanBuilder(pool_.get())
+                    .values(input)
+                    .project({"c0 IN (" + c0ValuesStr + ") AS result"})
+                    .planNode();
+
+    // Run the test
+    runTest(plan, "SELECT c0 IN (" + c0ValuesStr + ") AS result FROM tmp");
+  }
+
+  void testDoubleInOperation(const std::vector<RowVectorPtr>& input) {
+    // Create a plan with an IN operation for doubles
+    std::vector<double> c1Values;
+    for (int32_t i = 0; i < 4; i++) {
+      c1Values.push_back(get_col_value<double>(input, 1, i));
+    }
+    std::string c1ValuesStr;
+    for (size_t i = 0; i < c1Values.size(); ++i) {
+      c1ValuesStr += std::to_string(c1Values[i]) + ",";
+    }
+    c1ValuesStr.pop_back();
+    auto plan = PlanBuilder(pool_.get())
+                    .values(input)
+                    .project({"c1 IN (" + c1ValuesStr + ") AS result"})
+                    .planNode();
+
+    // Run the test
+    runTest(plan, "SELECT c1 IN (" + c1ValuesStr + ") AS result FROM tmp");
+  }
+
+  void testStringInOperation(const std::vector<RowVectorPtr>& input) {
+    // Create a plan with an IN operation for strings
+    std::vector<StringView> c2Values;
+    for (int32_t i = 0; i < 3; i++) {
+      c2Values.push_back(get_col_value<StringView>(input, 2, i));
+    }
+    std::string c2ValuesStr;
+    for (size_t i = 0; i < c2Values.size(); ++i) {
+      c2ValuesStr += "'" + c2Values[i].str() + "',";
+    }
+    c2ValuesStr.pop_back();
+    auto plan = PlanBuilder(pool_.get())
+                    .values(input)
+                    .project({"c2 IN (" + c2ValuesStr + ") AS result"})
+                    .planNode();
+
+    // Run the test
+    runTest(plan, "SELECT c2 IN (" + c2ValuesStr + ") AS result FROM tmp");
+  }
+
+  void testMixedInOperation(const std::vector<RowVectorPtr>& input) {
+    // Create a plan that combines multiple IN operations
+    auto plan =
+        PlanBuilder(pool_.get())
+            .values(input)
+            .project(
+                {"c0 IN (1, 2, 3) OR c1 IN (1.5, 2.5) OR c2 IN ('test1', 'test2') AS result"})
+            .planNode();
+
+    // Run the test
+    runTest(
+        plan,
+        "SELECT c0 IN (1, 2, 3) OR c1 IN (1.5, 2.5) OR c2 IN ('test1', 'test2') AS result FROM tmp");
+  }
+
   void runTest(core::PlanNodePtr planNode, const std::string& duckDbSql) {
     SCOPED_TRACE("run without spilling");
     assertQuery(planNode, duckDbSql);
@@ -435,6 +553,54 @@ TEST_F(CudfFilterProjectTest, betweenOperation) {
   createDuckDbTable(vectors);
 
   testBetweenOperation(vectors);
+}
+
+TEST_F(CudfFilterProjectTest, multiInputAndOperation) {
+  vector_size_t batchSize = 1000;
+  auto vectors = makeVectors(rowType_, 2, batchSize);
+  createDuckDbTable(vectors);
+
+  testMultiInputAndOperation(vectors);
+}
+
+TEST_F(CudfFilterProjectTest, multiInputOrOperation) {
+  vector_size_t batchSize = 1000;
+  auto vectors = makeVectors(rowType_, 2, batchSize);
+  createDuckDbTable(vectors);
+
+  testMultiInputOrOperation(vectors);
+}
+
+TEST_F(CudfFilterProjectTest, integerInOperation) {
+  vector_size_t batchSize = 1000;
+  auto vectors = makeVectors(rowType_, 2, batchSize);
+  createDuckDbTable(vectors);
+
+  testIntegerInOperation(vectors);
+}
+
+TEST_F(CudfFilterProjectTest, doubleInOperation) {
+  vector_size_t batchSize = 1000;
+  auto vectors = makeVectors(rowType_, 2, batchSize);
+  createDuckDbTable(vectors);
+
+  testDoubleInOperation(vectors);
+}
+
+TEST_F(CudfFilterProjectTest, stringInOperation) {
+  vector_size_t batchSize = 1000;
+  auto vectors = makeVectors(rowType_, 2, batchSize);
+  createDuckDbTable(vectors);
+
+  testStringInOperation(vectors);
+}
+
+TEST_F(CudfFilterProjectTest, mixedInOperation) {
+  vector_size_t batchSize = 1000;
+  auto vectors = makeVectors(rowType_, 2, batchSize);
+  createDuckDbTable(vectors);
+
+  testMixedInOperation(vectors);
 }
 
 } // namespace
