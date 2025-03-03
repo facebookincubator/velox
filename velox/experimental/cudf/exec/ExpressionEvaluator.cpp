@@ -162,7 +162,10 @@ struct AstContext {
   std::vector<std::unique_ptr<cudf::scalar>>& scalars;
   const RowTypePtr& inputRowSchema;
   std::vector<PrecomputeInstruction>& precompute_instructions;
+  
   cudf::ast::expression const& push_expr_to_tree(
+      const std::shared_ptr<velox::exec::Expr>& expr);
+  cudf::ast::expression const& multiple_inputs_to_pair_wise(
       const std::shared_ptr<velox::exec::Expr>& expr);
   static bool can_be_evaluated(const std::shared_ptr<velox::exec::Expr>& expr);
 };
@@ -191,6 +194,47 @@ bool AstContext::can_be_evaluated(
       nullptr;
 }
 
+// and/or could have more than 2 inputs,
+// convert to pair wise and/or in this function
+cudf::ast::expression const& AstContext::multiple_inputs_to_pair_wise(
+    const std::shared_ptr<velox::exec::Expr>& expr) {
+  using op = cudf::ast::ast_operator;
+  using operation = cudf::ast::operation;
+  using velox::exec::ConstantExpr;
+  using velox::exec::FieldReference;
+
+  const auto& name = expr->name();
+  auto len = expr->inputs().size();
+  // push all inputs to tree
+  std::vector<const cudf::ast::expression*> expr_vec;
+  for (size_t i = 0; i < len; i += 2) {
+    if (i + 1 >= len) {
+      expr_vec.push_back(&push_expr_to_tree(expr->inputs()[i]));
+      break;
+    }
+    auto const& op1 = push_expr_to_tree(expr->inputs()[i]);
+    auto const& op2 = push_expr_to_tree(expr->inputs()[i + 1]);
+    auto& tree_node = tree.push(operation{binary_ops.at(name), op1, op2});
+    expr_vec.push_back(&tree_node);
+  }
+  // now reduce expr_vec pairwise to create a balanced tree
+  while (expr_vec.size() > 1) {
+    std::vector<const cudf::ast::expression*> new_expr_vec;
+    for (size_t i = 0; i < expr_vec.size(); i += 2) {
+      if (i + 1 >= expr_vec.size()) {
+        new_expr_vec.push_back(expr_vec[i]);
+        break;
+      }
+      auto const& op1 = expr_vec[i];
+      auto const& op2 = expr_vec[i + 1];
+      auto& tree_node = tree.push(operation{binary_ops.at(name), *op1, *op2});
+      new_expr_vec.push_back(&tree_node);
+    }
+    expr_vec = std::move(new_expr_vec);
+  }
+  return tree.back();
+}
+
 cudf::ast::expression const& AstContext::push_expr_to_tree(
     const std::shared_ptr<velox::exec::Expr>& expr) {
   using op = cudf::ast::ast_operator;
@@ -208,6 +252,9 @@ cudf::ast::expression const& AstContext::push_expr_to_tree(
     // convert to cudf scalar
     return tree.push(createLiteral(value, scalars));
   } else if (binary_ops.find(name) != binary_ops.end()) {
+    if (len > 2 and (name == "and" or name == "or")) {
+      return multiple_inputs_to_pair_wise(expr);
+    }
     VELOX_CHECK_EQ(len, 2);
     auto const& op1 = push_expr_to_tree(expr->inputs()[0]);
     auto const& op2 = push_expr_to_tree(expr->inputs()[1]);

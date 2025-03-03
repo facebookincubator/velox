@@ -28,6 +28,15 @@ using namespace facebook::velox::common::testutil;
 
 namespace {
 
+template <typename T>
+T get_col_value(
+    const std::vector<RowVectorPtr>& input,
+    int col,
+    int32_t index) {
+  return input[0]->as<RowVector>()->childAt(col)->as<FlatVector<T>>()->valueAt(
+      index);
+}
+
 class CudfFilterProjectTest : public OperatorTestBase {
  protected:
   void SetUp() override {
@@ -255,6 +264,81 @@ class CudfFilterProjectTest : public OperatorTestBase {
     runTest(plan, "SELECT c0 BETWEEN 1 AND 100 AS result FROM tmp");
   }
 
+  void testMultiInputAndOperation(const std::vector<RowVectorPtr>& input) {
+    // Create a plan with multiple AND operations
+    auto c2Value = get_col_value<StringView>(input, 2, 1).str();
+    auto plan = PlanBuilder()
+                    .values(input)
+                    .project(
+                        {"c0 > 1000 AND c0 < 20000 AND c2 = '" + c2Value +
+                         "' AS result"})
+                    .planNode();
+
+    // Run the test
+    runTest(
+        plan,
+        "SELECT c0 > 1000 AND c0 < 20000 AND c2 = '" + c2Value +
+            "' AS result FROM tmp");
+  }
+
+  void testMultiInputOrOperation(const std::vector<RowVectorPtr>& input) {
+    // Create a plan with multiple OR operations
+    auto c2Value = get_col_value<StringView>(input, 2, 1).str();
+    auto plan = PlanBuilder()
+                    .values(input)
+                    .project(
+                        {"c0 > 16000 OR c0 < 8000 OR c1 = 2.0 OR c2 = '" +
+                         c2Value + "' AS result"})
+                    .planNode();
+
+    // Run the test
+    runTest(
+        plan,
+        "SELECT c0 > 16000 OR c0 < 8000 OR c1 = 2.0 OR c2 = '" + c2Value +
+            "' AS result FROM tmp");
+  }
+    auto plan = PlanBuilder()
+                    .values(input)
+                    .project({"c0 BETWEEN 1 AND 100 AS result"})
+                    .planNode();
+
+    // Run the test
+    runTest(plan, "SELECT c0 BETWEEN 1 AND 100 AS result FROM tmp");
+  }
+
+  void testMultiInputAndOperation(const std::vector<RowVectorPtr>& input) {
+    // Create a plan with multiple AND operations
+    auto c2Value = get_col_value<StringView>(input, 2, 1).str();
+    auto plan = PlanBuilder()
+                    .values(input)
+                    .project(
+                        {"c0 > 1000 AND c0 < 20000 AND c2 = '" + c2Value +
+                         "' AS result"})
+                    .planNode();
+
+    // Run the test
+    runTest(
+        plan,
+        "SELECT c0 > 1000 AND c0 < 20000 AND c2 = '" + c2Value +
+            "' AS result FROM tmp");
+  }
+
+  void testMultiInputOrOperation(const std::vector<RowVectorPtr>& input) {
+    // Create a plan with multiple OR operations
+    auto c2Value = get_col_value<StringView>(input, 2, 1).str();
+    auto plan = PlanBuilder()
+                    .values(input)
+                    .project(
+                        {"c0 > 16000 OR c0 < 8000 OR c1 = 2.0 OR c2 = '" +
+                         c2Value + "' AS result"})
+                    .planNode();
+
+    // Run the test
+    runTest(
+        plan,
+        "SELECT c0 > 16000 OR c0 < 8000 OR c1 = 2.0 OR c2 = '" + c2Value +
+            "' AS result FROM tmp");
+  }
   void runTest(core::PlanNodePtr planNode, const std::string& duckDbSql) {
     SCOPED_TRACE("run without spilling");
     assertQuery(planNode, duckDbSql);
@@ -353,6 +437,22 @@ TEST_F(CudfFilterProjectTest, yearFunction) {
   // Set timestamp values directly
   for (auto& vector : vectors) {
     auto timestampVector = vector->childAt(2)->asFlatVector<Timestamp>();
+TEST_F(CudfFilterProjectTest, multiInputAndOperation) {
+  vector_size_t batchSize = 1000;
+  auto vectors = makeVectors(rowType_, 2, batchSize);
+  createDuckDbTable(vectors);
+
+  testMultiInputAndOperation(vectors);
+}
+
+TEST_F(CudfFilterProjectTest, multiInputOrOperation) {
+  vector_size_t batchSize = 1000;
+  auto vectors = makeVectors(rowType_, 2, batchSize);
+  createDuckDbTable(vectors);
+
+  testMultiInputOrOperation(vectors);
+}
+
     for (vector_size_t i = 0; i < batchSize; ++i) {
       // Set to 2024-03-14 12:34:56
       Timestamp ts(1710415496, 0); // seconds, nanos
@@ -435,6 +535,22 @@ TEST_F(CudfFilterProjectTest, betweenOperation) {
   createDuckDbTable(vectors);
 
   testBetweenOperation(vectors);
+}
+
+TEST_F(CudfFilterProjectTest, multiInputAndOperation) {
+  vector_size_t batchSize = 1000;
+  auto vectors = makeVectors(rowType_, 2, batchSize);
+  createDuckDbTable(vectors);
+
+  testMultiInputAndOperation(vectors);
+}
+
+TEST_F(CudfFilterProjectTest, multiInputOrOperation) {
+  vector_size_t batchSize = 1000;
+  auto vectors = makeVectors(rowType_, 2, batchSize);
+  createDuckDbTable(vectors);
+
+  testMultiInputOrOperation(vectors);
 }
 
 } // namespace
