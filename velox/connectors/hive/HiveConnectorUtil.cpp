@@ -561,7 +561,7 @@ void configureReaderOptions(
       useColumnNamesForColumnMapping =
           hiveConfig->isOrcUseColumnNames(sessionProperties);
       readerOptions.setUseNestedColumnNamesForColumnMapping(
-          hiveConfig->isOrcUseNestedColumnNames());
+          hiveConfig->isOrcUseNestedColumnNames(sessionProperties));
       break;
     }
     case dwio::common::FileFormat::PARQUET: {
