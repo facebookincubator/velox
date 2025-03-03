@@ -76,12 +76,6 @@ CudfLocalPartition::CudfLocalPartition(
         partitionKeyIndices_.push_back(fieldIndex);
       }
     }
-
-    std::cout << "Partition key indices: ";
-    for (const auto& idx : partitionKeyIndices_) {
-      std::cout << idx << " ";
-    }
-    std::cout << std::endl;
   }
   VELOX_CHECK(numPartitions_ == 1 || partitionKeyIndices_.size() > 0);
 

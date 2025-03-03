@@ -166,7 +166,6 @@ TEST_F(LocalPartitionTest, partition) {
                 .planNode();
 
   createDuckDbTable(vectors);
-  std::cout << op->toString(true, true) << std::endl;
 
   AssertQueryBuilder queryBuilder(op, duckDbQueryRunner_);
   queryBuilder.maxDrivers(2);
