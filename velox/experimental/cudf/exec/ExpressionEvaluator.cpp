@@ -580,6 +580,7 @@ std::vector<std::unique_ptr<cudf::column>> ExpressionEvaluator::compute(
     std::vector<std::unique_ptr<cudf::column>>& input_table_columns,
     rmm::cuda_stream_view stream,
     rmm::device_async_resource_ref mr) {
+  auto num_columns = input_table_columns.size();
   addPrecomputedColumns(
       input_table_columns, precompute_instructions_, scalars_, stream);
   auto ast_input_table =
@@ -601,6 +602,7 @@ std::vector<std::unique_ptr<cudf::column>> ExpressionEvaluator::compute(
     }
   }
   input_table_columns = ast_input_table->release();
+  input_table_columns.resize(num_columns);
   return columns;
 }
 
