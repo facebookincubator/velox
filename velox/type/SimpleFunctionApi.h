@@ -220,11 +220,12 @@ struct Varchar {
   Varchar() {}
 };
 
+using L0 = IntegerVariable<std::numeric_limits<int>::max()>;
 using L1 = IntegerVariable<1>;
 using L2 = IntegerVariable<2>;
 using L3 = IntegerVariable<3>;
 
-template <typename L>
+template <typename L = L0>
 struct VarcharN {
  private:
   VarcharN() {}
