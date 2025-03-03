@@ -202,8 +202,8 @@ bool CompileState::compile() {
               get_plan_node(filterProjectOp->planNodeId()));
       auto filter_plan_node = std::dynamic_pointer_cast<const core::FilterNode>(
           get_plan_node(filterProjectOp->planNodeId()));
-      // If filter doesn't exist then project should definitely exist so this
-      // should never hit
+      // If filter only, filter node only exists.
+      // If project only, or filter and project, project node only exists.
       VELOX_CHECK(project_plan_node != nullptr or filter_plan_node != nullptr);
       replace_op.push_back(std::make_unique<CudfFilterProject>(
           id, ctx, info, id_projections, filter_plan_node, project_plan_node));
