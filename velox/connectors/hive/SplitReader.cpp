@@ -295,7 +295,8 @@ bool SplitReader::filterOnStats(
           baseReader_.get(),
           hiveSplit_->filePath,
           hiveSplit_->partitionKeys,
-          *partitionKeys_)) {
+          *partitionKeys_,
+          hiveSplit_->fileFormat)) {
     return true;
   }
   ++runtimeStats.skippedSplits;
