@@ -2004,7 +2004,7 @@ TEST_F(TableScanTest, partitionedTableTimestampKey) {
       {"c0", regularColumn("c0", BIGINT())},
       {"c1", regularColumn("c1", DOUBLE())}};
 
-  auto sql = [&](const std::string& sqlTempl, bool asLocalTime) {
+  auto sql = [&](const std::string& sqlTemplate, bool asLocalTime) {
     auto t =
         util::fromTimestampString(
             StringView(partitionValue), util::TimestampParseMode::kPrestoCast)
@@ -2015,10 +2015,10 @@ TEST_F(TableScanTest, partitionedTableTimestampKey) {
       t.toGMT(Timestamp::defaultTimezone());
     }
     std::string partitionValueStr = "'" + t.toString() + "'";
-    return fmt::format(sqlTempl, partitionValueStr);
+    return fmt::format(sqlTemplate, partitionValueStr);
   };
 
-  auto expect = [&](PlanNodePtr plan, const std::string& sqlTempl) {
+  auto expect = [&](PlanNodePtr plan, const std::string& sqlTemplate) {
     // Read timestamp partition value as local time.
     AssertQueryBuilder(plan, duckDbQueryRunner_)
         .connectorSessionProperty(
@@ -2027,7 +2027,7 @@ TEST_F(TableScanTest, partitionedTableTimestampKey) {
                 kReadTimestampPartitionValueAsLocalTimeSession,
             "true")
         .splits({split})
-        .assertResults(sql(sqlTempl, true));
+        .assertResults(sql(sqlTemplate, true));
 
     // Read timestamp partition value as UTC.
     AssertQueryBuilder(plan, duckDbQueryRunner_)
@@ -2037,7 +2037,7 @@ TEST_F(TableScanTest, partitionedTableTimestampKey) {
                 kReadTimestampPartitionValueAsLocalTimeSession,
             "false")
         .splits({split})
-        .assertResults(sql(sqlTempl, false));
+        .assertResults(sql(sqlTemplate, false));
   };
 
   expect(
