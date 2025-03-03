@@ -29,6 +29,7 @@ Mathematical Functions
 .. spark:function:: atan2(y, x) -> double
 
     Returns the arc tangent of ``y / x``. For compatibility with Spark, returns 0 for the following corner cases:
+
     * atan2(0.0, 0.0)
     * atan2(-0.0, -0.0)
     * atan2(-0.0, 0.0)
@@ -270,6 +271,7 @@ Mathematical Functions
 
     Returns the signum of ``x``. Supported type for ``x`` is DOUBLE.
     It returns:
+
     * 0.0 if the argument is 0.0,
     * 1.0 if the argument is greater than 0.0,
     * -1.0 if the argument is less than 0.0,
