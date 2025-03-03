@@ -791,6 +791,10 @@ TEST_F(DateTimeFunctionsTest, getTimestamp) {
   EXPECT_EQ(
       getTimestamp("1970-01-01 00:00:00.010", "yyyy-MM-dd HH:mm:ss.SSS"),
       Timestamp::fromMillis(10));
+  // Representing milliseconds with one digit.
+  EXPECT_EQ(
+      getTimestamp("1970-01-01 00:00:00.2", "yyyy-MM-dd HH:mm:ss.SSS"),
+      Timestamp::fromMillis(200));
   auto milliSeconds = (6 * 60 * 60 + 10 * 60 + 59) * 1000 + 19;
   EXPECT_EQ(
       getTimestamp("1970-01-01 06:10:59.019", "yyyy-MM-dd HH:mm:ss.SSS"),
@@ -856,6 +860,7 @@ TEST_F(DateTimeFunctionsTest, getTimestamp) {
   // Unsupported specifier.
   EXPECT_EQ(getTimestamp("0", "l"), std::nullopt);
 
+  // Representing milliseconds with one digit.
   EXPECT_EQ(
       getTimestamp("1970-01-01 00:00:00.2", "yyyy-MM-dd HH:mm:ss.SSS"),
       Timestamp::fromMillis(2));
