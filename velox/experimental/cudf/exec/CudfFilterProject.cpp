@@ -61,13 +61,13 @@ CudfFilterProject::CudfFilterProject(
           project ? project->id() : filter->id(),
           "CudfFilterProject"),
       NvtxHelper(nvtx3::rgb{220, 20, 60}, operatorId), // Crimson
-      hasFilter_(filter != nullptr),
+      hasFilter_(info.hasFilter),
       project_(project),
       filter_(filter) {
   resultProjections_ = *(info.resultProjections);
   identityProjections_ = std::move(identityProjections);
-  const auto& inputType = hasFilter_ ? filter_->sources()[0]->outputType()
-                                     : project_->sources()[0]->outputType();
+  const auto inputType = project_ ? project_->sources()[0]->outputType()
+                                  : filter_->sources()[0]->outputType();
 
   // convert to AST
   if (cudfDebugEnabled()) {
@@ -110,8 +110,6 @@ RowVectorPtr CudfFilterProject::getOutput() {
   if (hasFilter_) {
     filter(input_table_columns, stream);
   }
-
-  // Evaluate the expressions
   auto output_columns = project(input_table_columns, stream);
 
   auto output_table = std::make_unique<cudf::table>(std::move(output_columns));
