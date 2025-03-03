@@ -20,6 +20,7 @@
 #include "velox/core/PlanNode.h"
 #include "velox/exec/Driver.h"
 #include "velox/exec/Operator.h"
+#include "velox/experimental/cudf/exec/NvtxHelper.h"
 #include "velox/experimental/cudf/vector/CudfVector.h"
 #include "velox/vector/ComplexVector.h"
 
@@ -27,7 +28,7 @@
 
 namespace facebook::velox::cudf_velox {
 
-class CudfOrderBy : public exec::Operator {
+class CudfOrderBy : public exec::Operator, public NvtxHelper {
  public:
   CudfOrderBy(
       int32_t operatorId,

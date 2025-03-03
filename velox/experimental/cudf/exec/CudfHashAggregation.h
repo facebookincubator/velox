@@ -16,13 +16,14 @@
 #pragma once
 
 #include "velox/exec/Operator.h"
+#include "velox/experimental/cudf/exec/NvtxHelper.h"
 #include "velox/experimental/cudf/vector/CudfVector.h"
 
 #include <cudf/groupby.hpp>
 
 namespace facebook::velox::cudf_velox {
 
-class CudfHashAggregation : public exec::Operator {
+class CudfHashAggregation : public exec::Operator, public NvtxHelper {
  public:
   struct Aggregator {
     core::AggregationNode::Step step;

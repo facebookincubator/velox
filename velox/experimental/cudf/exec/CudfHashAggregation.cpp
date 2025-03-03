@@ -16,6 +16,7 @@
 
 #include "CudfHashAggregation.h"
 
+#include "velox/exec/Aggregate.h"
 #include "velox/exec/PrefixSort.h"
 #include "velox/exec/Task.h"
 #include "velox/experimental/cudf/exec/Utilities.h"
@@ -449,6 +450,7 @@ CudfHashAggregation::CudfHashAggregation(
           aggregationNode->canSpill(driverCtx->queryConfig())
               ? driverCtx->makeSpillConfig(operatorId)
               : std::nullopt),
+      NvtxHelper(nvtx3::rgb{34, 139, 34}, operatorId), // Forest Green
       aggregationNode_(aggregationNode),
       isPartialOutput_(exec::isPartialOutput(aggregationNode->step())),
       isGlobal_(aggregationNode->groupingKeys().empty()),
@@ -610,6 +612,8 @@ RowVectorPtr CudfHashAggregation::getDistinctKeys(
 }
 
 RowVectorPtr CudfHashAggregation::getOutput() {
+  VELOX_NVTX_OPERATOR_FUNC_RANGE();
+
   if (finished_) {
     return nullptr;
   }
