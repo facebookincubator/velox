@@ -93,6 +93,8 @@ void registerSimpleFunctions(const std::string& prefix) {
   };
   registerFunction<TrimFunction, VarcharN<L2>, VarcharN<L1>>(
       {prefix + "trim"}, constraints);
+  registerFunction<TrimFunction, Varchar, Varchar>(
+        {prefix + "trim"});
   registerFunction<TrimFunction, Varchar, Varchar, Varchar>({prefix + "trim"});
   registerFunction<LTrimFunction, Varchar, Varchar>({prefix + "ltrim"});
   registerFunction<LTrimFunction, Varchar, Varchar, Varchar>(

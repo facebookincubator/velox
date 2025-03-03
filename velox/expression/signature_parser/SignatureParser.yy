@@ -69,7 +69,7 @@ type_with_spaces : type_with_spaces WORD { $1.push_back($2); $$ = std::move($1);
 decimal_type : DECIMAL LPAREN WORD COMMA WORD RPAREN { $$ = std::make_shared<exec::TypeSignature>(exec::TypeSignature($1, { exec::TypeSignature($3, {}), exec::TypeSignature($5, {}) })); }
              ;
 
-varchar_type : VARCHAR { $$ = std::make_shared<exec::TypeSignature>(exec::TypeSignature($1, { } )); }
+varchar_type : VARCHAR { $$ = std::make_shared<exec::TypeSignature>(exec::TypeSignature($1, { exec::TypeSignature(std::to_string(std::numeric_limits<size_t>::max()), {}) } )); }
              | VARCHAR LPAREN WORD RPAREN { $$ = std::make_shared<exec::TypeSignature>(exec::TypeSignature($1, { exec::TypeSignature($3, {}) } )); }
              ;
 
