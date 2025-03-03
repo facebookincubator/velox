@@ -110,24 +110,24 @@ inline void registerArrayRemoveFunctions(const std::string& prefix) {
 }
 
 template <typename T>
-inline void registerArrayUnionFunctions(const std::string& prefix) {
+inline void registerArrayUnionFunction(const std::string& prefix) {
   registerFunction<ArrayUnionFunction, Array<T>, Array<T>, Array<T>>(
       {prefix + "array_union"});
 }
 
 inline void registerArrayUnionFunctions(const std::string& prefix) {
-  registerArrayUnionFunctions<int8_t>(prefix);
-  registerArrayUnionFunctions<int16_t>(prefix);
-  registerArrayUnionFunctions<int32_t>(prefix);
-  registerArrayUnionFunctions<int64_t>(prefix);
-  registerArrayUnionFunctions<int128_t>(prefix);
-  registerArrayUnionFunctions<float>(prefix);
-  registerArrayUnionFunctions<double>(prefix);
-  registerArrayUnionFunctions<bool>(prefix);
-  registerArrayUnionFunctions<Timestamp>(prefix);
-  registerArrayUnionFunctions<Date>(prefix);
-  registerArrayUnionFunctions<Varbinary>(prefix);
-  registerArrayUnionFunctions<Generic<T1>>(prefix);
+  registerArrayUnionFunction<int8_t>(prefix);
+  registerArrayUnionFunction<int16_t>(prefix);
+  registerArrayUnionFunction<int32_t>(prefix);
+  registerArrayUnionFunction<int64_t>(prefix);
+  registerArrayUnionFunction<int128_t>(prefix);
+  registerArrayUnionFunction<float>(prefix);
+  registerArrayUnionFunction<double>(prefix);
+  registerArrayUnionFunction<bool>(prefix);
+  registerArrayUnionFunction<Timestamp>(prefix);
+  registerArrayUnionFunction<Date>(prefix);
+  registerArrayUnionFunction<Varbinary>(prefix);
+  registerArrayUnionFunction<Generic<T1>>(prefix);
 }
 
 void registerArrayFunctions(const std::string& prefix) {
