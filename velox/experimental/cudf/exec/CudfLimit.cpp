@@ -86,16 +86,17 @@ RowVectorPtr CudfLimit::getOutput() {
 
     remainingOffset_ = 0;
     remainingLimit_ -= outputSize;
-    input_ = nullptr;
     if (remainingLimit_ == 0) {
       finished_ = true;
     }
-    return std::make_shared<cudf_velox::CudfVector>(
+    auto output = std::make_shared<cudf_velox::CudfVector>(
         input_->pool(),
         input_->type(),
         outputSize,
         std::move(materializedTable),
         cudfInput->stream());
+    input_.reset();
+    return output;
   }
 
   if (remainingLimit_ <= inputSize) {
