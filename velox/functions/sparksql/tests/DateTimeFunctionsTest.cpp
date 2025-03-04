@@ -1033,6 +1033,54 @@ TEST_F(DateTimeFunctionsTest, makeYMInterval) {
       fromYear(-178956971), "Integer overflow in make_ym_interval(-178956971)");
 }
 
+TEST_F(DateTimeFunctionsTest, makeDTInterval) {
+  const auto fromDaysHoursMinutesSeconds =
+      [&](std::optional<int32_t> days,
+          std::optional<int32_t> hours = std::nullopt,
+          std::optional<int32_t> minutes = std::nullopt,
+          std::optional<int32_t> seconds = std::nullopt) {
+    std::string expr;
+    if (!days.has_value() && !hours.has_value() && !minutes.has_value() && !seconds.has_value()) {
+      expr = "make_dt_interval()";
+    } else if (days.has_value() && !hours.has_value() && !minutes.has_value() && !seconds.has_value()) {
+      expr = fmt::format("make_dt_interval({})", *days);
+    } else if (days.has_value() && hours.has_value() && !minutes.has_value() && !seconds.has_value()) {
+      expr = fmt::format("make_dt_interval({}, {})", *days, *hours);
+    } else if (days.has_value() && hours.has_value() && minutes.has_value() && !seconds.has_value()) {
+      expr = fmt::format("make_dt_interval({}, {}, {})", *days, *hours, *minutes);
+    } else {
+      expr = fmt::format("make_dt_interval({}, {}, {}, {})",
+                         days.value_or(0),
+                         hours.value_or(0),
+                         minutes.value_or(0),
+                         seconds.value_or(0));
+    }
+    auto result = evaluateOnce<int64_t>(expr, {}, {}, nullptr, {INTERVAL_DAY_TIME()});
+    VELOX_CHECK(result.has_value());
+    return INTERVAL_DAY_TIME()->valueToString(*result);
+  };
+
+  EXPECT_EQ(fromDaysHoursMinutesSeconds(std::nullopt), "0d0h0m0s");
+  EXPECT_EQ(fromDaysHoursMinutesSeconds(1), "1d0h0m0s");
+  EXPECT_EQ(fromDaysHoursMinutesSeconds(0), "0d0h0m0s");
+  EXPECT_EQ(fromDaysHoursMinutesSeconds(-1), "-1d0h0m0s");
+  EXPECT_EQ(fromDaysHoursMinutesSeconds(1, 2), "1d2h0m0s");
+  EXPECT_EQ(fromDaysHoursMinutesSeconds(1, 2, 3), "1d2h3m0s");
+  EXPECT_EQ(fromDaysHoursMinutesSeconds(1, 2, 3, 4), "1d2h3m4s");
+  EXPECT_EQ(fromDaysHoursMinutesSeconds(10, 23, 59, 59), "10d23h59m59s");
+  {
+    auto result = evaluateOnce<int64_t>(
+        "make_dt_interval()", makeRowVector(ROW({}), 1), std::nullopt, {INTERVAL_DAY_TIME()});
+    VELOX_CHECK(result.has_value());
+    EXPECT_EQ(INTERVAL_DAY_TIME()->valueToString(*result), "0d0h0m0s");
+  }
+  VELOX_ASSERT_THROW(fromDaysHoursMinutesSeconds(30000000),
+                     "Integer overflow in make_dt_interval(30000000, 0, 0, 0)");
+  VELOX_ASSERT_THROW(fromDaysHoursMinutesSeconds(-30000000, -10),
+                     "Integer overflow in make_dt_interval(-30000000, -10, 0, 0)");
+}
+
+
 TEST_F(DateTimeFunctionsTest, yearOfWeek) {
   const auto yearOfWeek = [&](std::optional<int32_t> date) {
     return evaluateOnce<int32_t>("year_of_week(c0)", DATE(), date);

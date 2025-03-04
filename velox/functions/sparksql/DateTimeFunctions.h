@@ -808,6 +808,55 @@ struct MakeYMIntervalFunction {
 };
 
 template <typename T>
+struct MakeDTIntervalFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  FOLLY_ALWAYS_INLINE void call(out_type<IntervalDayTime>& result) {
+    return call(result, 0, 0, 0, 0);
+  }
+
+  FOLLY_ALWAYS_INLINE void call(out_type<IntervalDayTime>& result, const int32_t& days) {
+    return call(result, days, 0, 0, 0);
+  }
+
+  FOLLY_ALWAYS_INLINE void call(out_type<IntervalDayTime>& result, const int32_t& days, const int32_t& hours) {
+    return call(result, days, hours, 0, 0);
+  }
+
+  FOLLY_ALWAYS_INLINE void call(out_type<IntervalDayTime>& result, const int32_t& days, const int32_t& hours, const int32_t& minutes) {
+    return call(result, days, hours, minutes, 0);
+  }
+
+  FOLLY_ALWAYS_INLINE void call(
+      out_type<IntervalDayTime>& result,
+      const int32_t days,
+      const int32_t hours,
+      const int32_t minutes,
+      const int32_t seconds) {
+
+    static constexpr int64_t MICROS_PER_SECOND = 1'000'000;
+    static constexpr int64_t MICROS_PER_MINUTE = MICROS_PER_SECOND * 60;
+    static constexpr int64_t MICROS_PER_HOUR = MICROS_PER_MINUTE * 60;
+    static constexpr int64_t MICROS_PER_DAY = MICROS_PER_HOUR * 24;
+
+    auto totalMicros = (int64_t)days * MICROS_PER_DAY +
+                       (int64_t)hours * MICROS_PER_HOUR +
+                       (int64_t)minutes * MICROS_PER_MINUTE +
+                       (int64_t)seconds;
+
+    VELOX_USER_CHECK_EQ(
+        totalMicros,
+        (int64_t)totalMicros,
+        "Integer overflow in make_dt_interval({}, {}, {}, {})",
+        days,
+        hours,
+        minutes,
+        seconds);
+    result = totalMicros;
+  }
+};
+
+template <typename T>
 struct UnixSecondsFunction {
   VELOX_DEFINE_FUNCTION_TYPES(T);
 
