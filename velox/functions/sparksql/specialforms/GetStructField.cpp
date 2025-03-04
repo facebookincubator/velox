@@ -20,10 +20,10 @@
 namespace facebook::velox::functions::sparksql {
 namespace {
 
-// Returns the value of nested field in the input ``args``.
-// The input ``args`` must be of row type and nested complex type is allowed.
-// The field position is specified by ``ordinal``.
-// If ``ordinal`` is negative or greater than the children size of input,
+// Returns the value of nested field in the input struct.
+// The input must be of row type and nested complex type is allowed.
+// The subfield position is specified by ``ordinal``.
+// If 'ordinal' is negative or greater than the children size of input,
 // exception is thrown.
 class GetStructFieldFunction : public exec::VectorFunction {
  public:
@@ -37,13 +37,10 @@ class GetStructFieldFunction : public exec::VectorFunction {
       VectorPtr& result) const override {
     exec::LocalDecodedVector decoded(context, *args[0], rows);
     auto rowData = decoded->base()->as<RowVector>();
-    VELOX_USER_CHECK_GE(
-        ordinal_, 0, "Invalid ordinal. Should be greater than 0.");
     VELOX_USER_CHECK_LT(
         ordinal_,
         rowData->childrenSize(),
-        "Invalid ordinal. Should be small than the children size of input row vector {}.",
-        rowData->childrenSize());
+        "Invalid ordinal. Should be smaller than the children size of input row vector.");
     if (decoded->isIdentityMapping()) {
       result = rowData->childAt(ordinal_);
     } else {
@@ -53,7 +50,7 @@ class GetStructFieldFunction : public exec::VectorFunction {
   }
 
  private:
-  // The ordinal to select child from the struct
+  // The position to select subfield from the struct.
   const int32_t ordinal_;
 };
 
@@ -69,7 +66,8 @@ exec::ExprPtr GetStructFieldCallToSpecialForm::constructSpecialForm(
     std::vector<exec::ExprPtr>&& args,
     bool trackCpuUsage,
     const core::QueryConfig& /*config*/) {
-  VELOX_USER_CHECK_EQ(args.size(), 2, "get_struct_field expects two argument.");
+  VELOX_USER_CHECK_EQ(
+      args.size(), 2, "get_struct_field expects two arguments.");
 
   VELOX_USER_CHECK_EQ(
       args[0]->type()->kind(),
@@ -92,8 +90,10 @@ exec::ExprPtr GetStructFieldCallToSpecialForm::constructSpecialForm(
       constantExpr->value()->asUnchecked<ConstantVector<int32_t>>();
   VELOX_USER_CHECK(
       !constantVector->isNullAt(0),
-      "The second argument of get_struct_field is non-nullable.");
+      "The second argument of get_struct_field should be non-nullable.");
   auto ordinal = constantVector->valueAt(0);
+
+  VELOX_USER_CHECK_GE(ordinal, 0, "Invalid ordinal. Should be greater than 0.");
 
   auto getStructFieldFunction =
       std::make_shared<GetStructFieldFunction>(ordinal);
