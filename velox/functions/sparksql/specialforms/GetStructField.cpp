@@ -22,7 +22,7 @@ namespace {
 
 // Returns the value of nested field in the input struct.
 // The input must be of row type and nested complex type is allowed.
-// The subfield position is specified by ``ordinal``.
+// The subfield position is specified by 'ordinal'.
 // If 'ordinal' is negative or greater than the children size of input,
 // exception is thrown.
 class GetStructFieldFunction : public exec::VectorFunction {
