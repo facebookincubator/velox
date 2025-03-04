@@ -21,6 +21,7 @@
 #include "velox/exec/JoinBridge.h"
 #include "velox/exec/Operator.h"
 #include "velox/exec/Task.h"
+#include "velox/expression/FieldReference.h"
 #include "velox/vector/ComplexVector.h"
 
 #include <cudf/concatenate.hpp>
@@ -31,6 +32,7 @@
 #include <nvtx3/nvtx3.hpp>
 
 #include "velox/experimental/cudf/exec/CudfHashJoin.h"
+#include "velox/experimental/cudf/exec/ExpressionEvaluator.h"
 #include "velox/experimental/cudf/exec/Utilities.h"
 #include "velox/experimental/cudf/exec/VeloxCudfInterop.h"
 #include "velox/experimental/cudf/vector/CudfVector.h"
@@ -334,8 +336,78 @@ RowVectorPtr CudfHashJoinProbe::getOutput() {
   if (joinNode_->isInnerJoin()) {
     // TODO filter check inside.
     // left = probe, right = build
-    std::tie(left_join_indices, right_join_indices) = hb->inner_join(
-        left_table->view().select(left_key_indices), std::nullopt, stream);
+    if (joinNode_->filter()) {
+      // simplify expression
+      exec::ExprSet exprs({joinNode_->filter()}, operatorCtx_->execCtx());
+      VELOX_CHECK_EQ(exprs.exprs().size(), 1);
+
+      auto& expr_fields = exprs.distinctFields();
+
+      // extract the columns from the probe table which are mentioned in
+      // distinct fields
+      std::vector<cudf::size_type> left_columns_to_gather;
+      for (auto& field_ref : expr_fields) {
+        if (probeType->containsChild(field_ref->field())) {
+          left_columns_to_gather.push_back(
+              probeType->getChildIdx(field_ref->field()));
+        }
+      }
+
+      // extract the columns from the build table which are mentioned in
+      // distinct fields
+      std::vector<cudf::size_type> right_columns_to_gather;
+      for (auto& field_ref : expr_fields) {
+        if (buildType->containsChild(field_ref->field())) {
+          right_columns_to_gather.push_back(
+              buildType->getChildIdx(field_ref->field()));
+        }
+      }
+
+      // TODO (dm): refactor. We want to avoid any work done in hash_join object
+      // creation when using mixed join.
+      // get right table
+      auto right_table_view = right_table->view();
+
+      // get tables that contain equality comparison columns
+      auto left_equality_cols = left_table->view().select(left_key_indices);
+      auto right_equality_cols = right_table_view.select(right_key_indices);
+
+      // get tables that contain conditional comparison columns
+      // Or maybe guess what, fuck it. We'll pass the entire table. The ast will
+      // handle finding the required columns. This is required because we build
+      // the ast with whole row schema and the column locations in that schema
+      // translate to column locations in whole tables
+      // TODO (dm): Sanitize these^ comments.
+      // auto left_conditional_cols =
+      //     left_table->view().select(left_columns_to_gather);
+      // auto right_conditional_cols =
+      //     right_table_view.select(right_columns_to_gather);
+
+      // create ast tree
+      cudf::ast::tree tree;
+      std::vector<std::unique_ptr<cudf::scalar>> scalars;
+      std::vector<PrecomputeInstruction> precompute_instructions;
+      auto& expr = create_ast_tree(
+          exprs.exprs()[0],
+          tree,
+          scalars,
+          probeType,
+          buildType,
+          precompute_instructions);
+
+      std::tie(left_join_indices, right_join_indices) = mixed_inner_join(
+          left_equality_cols,
+          right_equality_cols,
+          left_table->view(),
+          right_table_view,
+          expr,
+          cudf::null_equality::EQUAL,
+          std::nullopt,
+          stream);
+    } else {
+      std::tie(left_join_indices, right_join_indices) = hb->inner_join(
+          left_table->view().select(left_key_indices), std::nullopt, stream);
+    }
   } else if (joinNode_->isLeftJoin()) {
     // left = probe, right = build
     std::tie(left_join_indices, right_join_indices) = hb->left_join(
