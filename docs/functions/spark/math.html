@@ -80,11 +80,13 @@
 <dl class="spark function">
 <dt class="sig sig-object spark" id="atan2">
 <span class="sig-name descname"><span class="pre">atan2</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">y</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">x</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">double</span></span></span><a class="headerlink" href="#atan2" title="Link to this definition">¶</a></dt>
-<dd><p>Returns the arc tangent of <code class="docutils literal notranslate"><span class="pre">y</span> <span class="pre">/</span> <span class="pre">x</span></code>. For compatibility with Spark, returns 0 for the following corner cases:
-* atan2(0.0, 0.0)
-* atan2(-0.0, -0.0)
-* atan2(-0.0, 0.0)
-* atan2(0.0, -0.0)</p>
+<dd><p>Returns the arc tangent of <code class="docutils literal notranslate"><span class="pre">y</span> <span class="pre">/</span> <span class="pre">x</span></code>. For compatibility with Spark, returns 0 for the following corner cases:</p>
+<ul class="simple">
+<li><p>atan2(0.0, 0.0)</p></li>
+<li><p>atan2(-0.0, -0.0)</p></li>
+<li><p>atan2(-0.0, 0.0)</p></li>
+<li><p>atan2(0.0, -0.0)</p></li>
+</ul>
 </dd></dl>
 
 <dl class="spark function">
@@ -404,6 +406,21 @@ Supported types for <code class="docutils literal notranslate"><span class="pre"
 </dd></dl>
 
 <dl class="spark function">
+<dt class="sig sig-object spark" id="sign">
+<span class="sig-name descname"><span class="pre">sign</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">double</span></span></span><a class="headerlink" href="#sign" title="Link to this definition">¶</a></dt>
+<dd><p>Returns the signum of <code class="docutils literal notranslate"><span class="pre">x</span></code>. Supported type for <code class="docutils literal notranslate"><span class="pre">x</span></code> is DOUBLE.
+It returns:</p>
+<ul class="simple">
+<li><p>0.0 if the argument is 0.0,</p></li>
+<li><p>1.0 if the argument is greater than 0.0,</p></li>
+<li><p>-1.0 if the argument is less than 0.0,</p></li>
+<li><p>NaN if the argument is NaN,</p></li>
+<li><p>1.0 if the argument is +Infinity,</p></li>
+<li><p>-1.0 if the argument is -Infinity.</p></li>
+</ul>
+</dd></dl>
+
+<dl class="spark function">
 <dt class="sig sig-object spark" id="sinh">
 <span class="sig-name descname"><span class="pre">sinh</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">double</span></span></span><a class="headerlink" href="#sinh" title="Link to this definition">¶</a></dt>
 <dd><p>Returns hyperbolic sine of <code class="docutils literal notranslate"><span class="pre">x</span></code>.</p>
@@ -533,6 +550,7 @@ Otherwise, the function will return NULL.</p>
 <li><a class="reference internal" href="#rint"><code class="docutils literal notranslate"><span class="pre">rint()</span></code></a></li>
 <li><a class="reference internal" href="#round"><code class="docutils literal notranslate"><span class="pre">round()</span></code></a></li>
 <li><a class="reference internal" href="#sec"><code class="docutils literal notranslate"><span class="pre">sec()</span></code></a></li>
+<li><a class="reference internal" href="#sign"><code class="docutils literal notranslate"><span class="pre">sign()</span></code></a></li>
 <li><a class="reference internal" href="#sinh"><code class="docutils literal notranslate"><span class="pre">sinh()</span></code></a></li>
 <li><a class="reference internal" href="#subtract"><code class="docutils literal notranslate"><span class="pre">subtract()</span></code></a></li>
 <li><a class="reference internal" href="#id7"><code class="docutils literal notranslate"><span class="pre">subtract()</span></code></a></li>
