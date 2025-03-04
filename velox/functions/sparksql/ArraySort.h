@@ -26,7 +26,7 @@ std::shared_ptr<exec::VectorFunction> makeArraySortAsc(
 
 // Sorts an array in descending order. The first argument is the array to sort,
 // and the second argument is a lambda function that maps the array elements
-// to the values to be sorted by
+// to the values to be sorted by.
 //
 // This function is only used in rewriteArraySortCall.
 std::shared_ptr<exec::VectorFunction> makeArraySortDesc(

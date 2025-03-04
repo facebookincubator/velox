@@ -181,22 +181,21 @@ Array Functions
         SELECT array_sort(array(4.0, NULL, float('nan'), 3.0)); -- [3.0, 4.0, NaN, NULL]
         SELECT array_sort(array(array(), array(1, 3, NULL), array(NULL, 6), NULL, array(2, 1))); -- [[], [NULL, 6], [1, 3, NULL], [2, 1], NULL]
 
-.. spark:function:: array_sort(array(T), function(T,U)) -> array(T)
+.. spark:function:: array_sort(array(E), function(E,U)) -> array(E)
     :noindex:
 
     Returns the array sorted by values computed using specified lambda in ascending order. ``U`` must be an orderable type.
     NULL and NaN elements returned by the lambda function will be placed at the end of the returned array, with NaN elements appearing before NULL elements.
-    This function is not supported in Spark and is only used inside Velox for rewriting :spark:func:`array_sort(array(T), function(T,T,U)) -> array(T)` as :spark:func:`array_sort(array(T), function(T,U)) -> array(T)`. ::
+    This function is not supported in Spark and is only used inside Velox for rewriting :spark:func:`array_sort(array(E), function(E,E,U)) -> array(E)` as :spark:func:`array_sort(array(E), function(E,U)) -> array(E)`. ::
 
-.. spark:function:: array_sort(array(T), function(T,T,U)) -> array(T)
+.. spark:function:: array_sort(array(E), function(E,E,U)) -> array(E)
     :noindex:
     
     Returns the array sorted by values computed using specified lambda in ascending
     order. ``U`` must be an orderable type.
     The function attempts to analyze the lambda function and rewrite it into a simpler call that 
-    specifies the sort-by expression (like :spark:func:`array_sort(array(T), function(T,U)) -> array(T)`). For example, ``(left, right) -> if(length(left) > length(right), 1, if(length(left) < length(right), -1, 0))`` will be rewritten to ``x -> length(x)``. If rewrite is not possible, a user error will be thrown.
-    If the rewritten function returns NULL, the corresponding element will be placed at the end.
-    Please note that due to this rewrite optimization, there is a difference in NULL handling logic between Spark and Velox. In Velox, NULL elements are always placed at the end of the returned array, whereas in Spark, it depends on the comparison logic to compare NULL with other elements. ::
+    specifies the sort-by expression (like :spark:func:`array_sort(array(E), function(E,U)) -> array(E)`). For example, ``(left, right) -> if(length(left) > length(right), 1, if(length(left) < length(right), -1, 0))`` will be rewritten to ``x -> length(x)``. If rewrite is not possible, a user error will be thrown.
+    If the rewritten function returns NULL, the corresponding element will be placed at the end the returned array. Please note that due to this rewrite optimization, the NULL handling logics between Spark and Velox differ. In Spark, the position of NULL element is determined by the comparison of NULL with other elements. ::
 
         SELECT array_sort(array('cat', 'leopard', 'mouse'), (left, right) -> if(length(left) > length(right), 1, if(length(left) < length(right), -1, 0))); -- ['cat', 'mouse', 'leopard']
         select array_sort(array("abcd123", "abcd", NULL, "abc"), (left, right) -> if(length(left) > length(right), 1, if(length(left) < length(right), -1, 0))); -- ["abc", "abcd", "abcd123", NULL]
