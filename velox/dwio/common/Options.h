@@ -573,9 +573,6 @@ class ReaderOptions : public io::ReaderOptions {
   }
 
   bool useNestedColumnNamesForColumnMapping() const {
-    if (useNestedColumnNamesForColumnMapping_) {
-      VELOX_CHECK(!useColumnNamesForColumnMapping_);
-    }
     return useNestedColumnNamesForColumnMapping_;
   }
 
