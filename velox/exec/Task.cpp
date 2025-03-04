@@ -2435,11 +2435,9 @@ ContinueFuture Task::taskDeletionFuture() {
 }
 
 std::string Task::printPlanWithStats(bool includeCustomStats) const {
-  if (planFragment_.planNode) {
-    return exec::printPlanWithStats(
-        *planFragment_.planNode, taskStats_, includeCustomStats);
-  }
-  return "";
+  VELOX_CHECK_NOT_NULL(planFragment_.planNode, "PlanFragment has no planNode");
+  return exec::printPlanWithStats(
+      *planFragment_.planNode, taskStats_, includeCustomStats);
 }
 
 std::string Task::toString() const {

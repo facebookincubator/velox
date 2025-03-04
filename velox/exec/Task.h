@@ -116,6 +116,10 @@ class Task : public std::enable_shared_from_this<Task> {
     spillDirectoryCallback_ = std::move(spillDirectoryCallback);
   }
 
+  /// Returns human-friendly representation of the plan augmented with runtime
+  /// statistics. The implementation invokes exec::printPlanWithStats().
+  ///
+  /// @param includeCustomStats If true, prints operator-specific counters.
   std::string printPlanWithStats(bool includeCustomStats = false) const;
 
   std::string toString() const;
