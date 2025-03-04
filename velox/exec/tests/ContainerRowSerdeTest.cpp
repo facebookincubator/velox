@@ -324,7 +324,11 @@ TEST_F(ContainerRowSerdeTest, nested) {
   testRoundTrip(data);
 
   auto nestedArray = makeNullableNestedArrayVector<std::string>(
-      {{{{{"1", "2"}}, {{"3", "4"}}}}, {{}}, {{std::nullopt, {}}}});
+      {{{{{"1", "2"}}, {{"3", "4"}}}},
+       std::make_optional<
+           std::vector<std::optional<std::vector<std::optional<std::string>>>>>(
+           {}),
+       {{std::nullopt, {}}}});
 
   testRoundTrip(nestedArray);
 

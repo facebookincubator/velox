@@ -536,7 +536,7 @@ TEST_F(ArrayPositionTest, array) {
        {{{d}, {e}}},
        {{{d}, {a}, {b}}},
        {{{c}, {e}}},
-       {{{{}}}},
+       {{{std::vector<std::optional<int64_t>>{}}}},
        {{{std::vector<std::optional<int64_t>>{std::nullopt}}}}});
 
   auto testPositionOfArray =
@@ -844,7 +844,7 @@ TEST_F(ArrayPositionTest, arrayWithInstance) {
        {{{d}, {e}}},
        {{{d}, {a}, {a}}},
        {{{c}, {c}}},
-       {{{{}}}},
+       {{{std::vector<std::optional<int64_t>>{}}}},
        {{{std::vector<std::optional<int64_t>>{std::nullopt}}}}});
 
   auto testPositionOfArray =

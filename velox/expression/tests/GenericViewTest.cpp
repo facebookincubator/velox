@@ -38,7 +38,7 @@ class GenericViewTest : public functions::test::FunctionBaseTest {
       std::vector<std::optional<std::vector<std::optional<int64_t>>>>;
 
   array_data_t arrayData1 = {
-      {{}},
+      std::make_optional<std::vector<std::optional<int64_t>>>({}),
       {{{{std::nullopt}}}},
       {{std::nullopt, 1}},
       {{std::nullopt, std::nullopt, std::nullopt}},
@@ -56,7 +56,7 @@ class GenericViewTest : public functions::test::FunctionBaseTest {
   };
 
   array_data_t arrayData2 = {
-      {{}},
+      std::make_optional<std::vector<std::optional<int64_t>>>({}),
       {{{{std::nullopt}}}},
       {{std::nullopt, 1}},
       {{std::nullopt, std::nullopt, std::nullopt}},

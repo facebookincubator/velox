@@ -190,7 +190,7 @@ TEST_F(CompactRowTest, rowSizeArrayOfBigint) {
       makeNullableArrayVector<int64_t>({
           {{1, 2, std::nullopt, 3}},
           {{4, 5}},
-          {{}},
+          std::make_optional<std::vector<std::optional<int64_t>>>({}),
           std::nullopt,
           {{6}},
       }),
@@ -249,7 +249,7 @@ TEST_F(CompactRowTest, rowSizeArrayOfStrings) {
   data = makeRowVector({
       makeNullableArrayVector<std::string>({
           {{"a", "Abc", std::nullopt}},
-          {{}},
+          std::make_optional<std::vector<std::optional<std::string>>>({}),
           std::nullopt,
           {{"a", std::nullopt, "Longer string", "abc"}},
       }),
@@ -404,7 +404,7 @@ TEST_F(CompactRowTest, arrayOfBigint) {
           {{std::nullopt, 6}},
           {{std::nullopt}},
           std::nullopt,
-          {{}},
+          std::make_optional<std::vector<std::optional<int64_t>>>({}),
       }),
   });
 
@@ -430,7 +430,7 @@ TEST_F(CompactRowTest, arrayOfTimestamp) {
           {{std::nullopt, ts(6)}},
           {{std::nullopt}},
           std::nullopt,
-          {{}},
+          std::make_optional<std::vector<std::optional<Timestamp>>>({}),
       }),
   });
 
@@ -439,7 +439,7 @@ TEST_F(CompactRowTest, arrayOfTimestamp) {
 
 TEST_F(CompactRowTest, arrayOfString) {
   auto data = makeRowVector({
-      makeArrayVector<std::string>({
+      makeArrayVector<std::string>(std::vector<std::vector<std::string>>{
           {"a", "abc", "Longer test string"},
           {"b", "Abc 12345 ...test", "foo"},
           {},
@@ -457,7 +457,7 @@ TEST_F(CompactRowTest, arrayOfString) {
             "Abc 12345 ...test",
             std::nullopt,
             "foo"}},
-          {{}},
+          std::make_optional<std::vector<std::optional<std::string>>>({}),
           {{std::nullopt}},
           std::nullopt,
       }),
