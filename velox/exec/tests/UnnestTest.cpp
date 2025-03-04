@@ -483,29 +483,29 @@ TEST_P(UnnestTest, basicArrayWithOuter) {
   createDuckDbTable({vector});
 
   // isOuter = true.
-  auto op2 = PlanBuilder()
-                 .values({vector})
-                 .unnest({"c0"}, {"c1"}, std::nullopt, /* isOuter = */ true)
-                 .planNode();
-  auto params2 = makeCursorParameters(op2);
-  auto expected2 = makeRowVector({
+  auto op = PlanBuilder()
+                .values({vector})
+                .unnest({"c0"}, {"c1"}, std::nullopt, /* isOuter = */ true)
+                .planNode();
+  auto params = makeCursorParameters(op);
+  auto expected = makeRowVector({
       makeFlatVector<int64_t>({1, 1, 1, 2, 3}),
       makeNullableFlatVector<int64_t>({1, 2, std::nullopt, std::nullopt, 3}),
   });
-  assertQuery(params2, expected2);
+  assertQuery(params, expected);
 
   // ordinal = true && isOuter = true.
-  auto op3 = PlanBuilder()
-                 .values({vector})
-                 .unnest({"c0"}, {"c1"}, "ordinal", /* isOuter = */ true)
-                 .planNode();
-  auto params3 = makeCursorParameters(op3);
-  auto expected3 = makeRowVector({
+  op = PlanBuilder()
+           .values({vector})
+           .unnest({"c0"}, {"c1"}, "ordinal", /* isOuter = */ true)
+           .planNode();
+  params = makeCursorParameters(op);
+  expected = makeRowVector({
       makeFlatVector<int64_t>({1, 1, 1, 2, 3}),
       makeNullableFlatVector<int64_t>({1, 2, std::nullopt, std::nullopt, 3}),
       makeNullableFlatVector<int64_t>({1, 2, 3, std::nullopt, 1}),
   });
-  assertQuery(params3, expected3);
+  assertQuery(params, expected);
 }
 
 VELOX_INSTANTIATE_TEST_SUITE_P(

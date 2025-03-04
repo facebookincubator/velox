@@ -1950,8 +1950,8 @@ class UnnestNode : public PlanNode {
   /// names must appear in the same order as unnestVariables.
   /// @param ordinalityName Optional name for the ordinality columns. If not
   /// present, ordinality column is not produced.
-  /// @param isOuter If true, emit null data for empty array/map or array/map
-  /// with null elements. Used in SparkSQL's explode_outer.
+  /// @param isOuter If true, emit null data if the array/map is null or empty.
+  /// Used in SparkSQL's explode_outer.
   UnnestNode(
       const PlanNodeId& id,
       std::vector<FieldAccessTypedExprPtr> replicateVariables,

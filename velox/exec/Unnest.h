@@ -109,8 +109,7 @@ class Unnest : public Operator {
 
   // Calculate the max number of elements of each row after unnested.
   // @param numRows The number of input rows.
-  // @param isOuter Whether we should generate a null element.
-  // if the array/map is null or empty then null is produced.
+  // @param isOuter If true, emit null data if the array/map is null or empty.
   template <bool isOuter>
   void countMaxNumElementsPerRow(vector_size_t numRows);
 
@@ -152,7 +151,12 @@ class Unnest : public Operator {
   // Next 'input_' row to process in getOutput().
   vector_size_t nextInputRow_{0};
 
+  // Used when 'isOuter_' is true, to denote whether the ordinality vector is null
+  // at each result row.
   std::vector<bool> rawOrdinalityIsNull_;
+
+  // When true, null is produced for null or empty values in unnested array/map.
+  // Otherwise ignore null or empty values.
   const bool isOuter_;
 };
 } // namespace facebook::velox::exec
