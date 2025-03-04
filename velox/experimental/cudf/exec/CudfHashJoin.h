@@ -102,6 +102,14 @@ class CudfHashJoinProbe : public exec::Operator, public NvtxHelper {
  private:
   std::shared_ptr<const core::HashJoinNode> joinNode_;
   std::optional<hash_type> hashObject_;
+  cudf::ast::tree tree_;
+  std::vector<std::unique_ptr<cudf::scalar>> scalars_;
+  std::vector<cudf::size_type> left_key_indices_;
+  std::vector<cudf::size_type> right_key_indices_;
+  std::vector<cudf::size_type> left_column_indices_to_gather_;
+  std::vector<cudf::size_type> right_column_indices_to_gather_;
+  std::vector<size_t> left_column_output_indices_;
+  std::vector<size_t> right_column_output_indices_;
   bool finished_{false};
 };
 
