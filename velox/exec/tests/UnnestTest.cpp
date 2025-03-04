@@ -70,7 +70,7 @@ TEST_P(UnnestTest, arrayWithOrdinality) {
       {{{1, 2, std::nullopt, 4}},
        std::nullopt,
        {{5, 6}},
-       {{}},
+       std::make_optional<std::vector<std::optional<int32_t>>>({}),
        {{{{std::nullopt}}}},
        {{7, 8, 9}}});
   auto vector = makeRowVector(

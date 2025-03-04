@@ -244,7 +244,9 @@ TEST_F(XxHash64Test, map) {
       xxhash64(mapOfArrays));
 
   auto mapWithNullArrays = createMapOfArraysVector<int64_t, int64_t>(
-      {{{1, std::nullopt}}, {{2, {{4, 5, std::nullopt}}}}, {{3, {{}}}}});
+      {{{1, std::nullopt}},
+       {{2, {{4, 5, std::nullopt}}}},
+       {{3, std::make_optional<std::vector<std::optional<int64_t>>>({})}}});
   assertEqualVectors(
       makeFlatVector<int64_t>(
           {-7001672635703045582, 7217681953522744649, 3188756510806108107}),

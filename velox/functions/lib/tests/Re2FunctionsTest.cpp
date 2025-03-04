@@ -1223,19 +1223,31 @@ TEST_F(Re2FunctionsTest, regexExtractAllNoMatch) {
   const std::vector<std::optional<int32_t>> noGroupId = {};
   const std::vector<std::optional<int32_t>> groupIds0 = {0};
 
-  testRe2ExtractAll({""}, {"[0-9]+"}, noGroupId, {{{}}});
-  testRe2ExtractAll({"(╯°□°)╯︵ ┻━┻"}, {"[0-9]+"}, noGroupId, {{{}}});
-  testRe2ExtractAll({"abcde"}, {"[0-9]+"}, groupIds0, {{{}}});
+  testRe2ExtractAll(
+      {""},
+      {"[0-9]+"},
+      noGroupId,
+      {std::make_optional<std::vector<std::string>>({})});
+  testRe2ExtractAll(
+      {"(╯°□°)╯︵ ┻━┻"},
+      {"[0-9]+"},
+      noGroupId,
+      {std::make_optional<std::vector<std::string>>({})});
+  testRe2ExtractAll(
+      {"abcde"},
+      {"[0-9]+"},
+      groupIds0,
+      {std::make_optional<std::vector<std::string>>({})});
   testRe2ExtractAll(
       {"rYBKVn6DnfSI2an4is4jbvf4btGpV"},
       {"81jnp58n31BtMdlUsP1hiF4QWSYv411"},
       noGroupId,
-      {{{}}});
+      {std::make_optional<std::vector<std::string>>({})});
   testRe2ExtractAll(
       {"rYBKVn6DnfSI2an4is4jbvf4btGpV"},
       {"81jnp58n31BtMdlUsP1hiF4QWSYv411"},
       groupIds0,
-      {{{}}});
+      {std::make_optional<std::vector<std::string>>({})});
 
   // Test empty pattern.
   testRe2ExtractAll<int32_t>(

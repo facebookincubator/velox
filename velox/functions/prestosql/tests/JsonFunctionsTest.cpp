@@ -1133,7 +1133,7 @@ TEST_F(JsonFunctionsTest, jsonStringToArrayCast) {
   auto expected = makeNullableArrayVector<StringView>(
       {{{"red"_sv, "blue"_sv}},
        {{std::nullopt, std::nullopt, "purple"_sv}},
-       {{}},
+       std::make_optional<std::vector<std::optional<StringView>>>({}),
        std::nullopt});
 
   checkInternalFn(

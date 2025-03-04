@@ -825,7 +825,8 @@ TEST_F(JsonCastTest, unsupportedTypes) {
       "Map keys cannot be null.");
 
   // Map keys cannot be complex type.
-  auto arrayKeyVector = makeNullableArrayVector<int64_t>({{1}, {2}});
+  auto arrayKeyVector = makeNullableArrayVector<int64_t>(
+      std::vector<std::vector<std::optional<int64_t>>>{{1}, {2}});
   auto arrayKeyMap = std::make_shared<MapVector>(
       pool(),
       MAP(ARRAY(BIGINT()), BIGINT()),
@@ -837,7 +838,9 @@ TEST_F(JsonCastTest, unsupportedTypes) {
       valueVector);
   VELOX_ASSERT_THROW(
       evaluateCast(
-          MAP(ARRAY(BIGINT()), BIGINT()), JSON(), makeRowVector({arrayKeyMap})),
+          MAP(ARRAY(BIGINT()), BIGINT()),
+          JSON(),
+          makeRowVector(std::vector<VectorPtr>{arrayKeyMap})),
       "Cannot cast MAP<ARRAY<BIGINT>,BIGINT> to JSON");
 
   // Map keys of json type must not be null.
@@ -1087,7 +1090,7 @@ TEST_F(JsonCastTest, toArray) {
   auto expected = makeNullableArrayVector<StringView>(
       {{{"red"_sv, "blue"_sv}},
        {{std::nullopt, std::nullopt, "purple"_sv}},
-       {{}},
+       std::make_optional<std::vector<std::optional<StringView>>>({}),
        std::nullopt});
 
   testCast(data, expected);
@@ -1116,7 +1119,8 @@ TEST_F(JsonCastTest, toMap) {
   auto expected = makeNullableMapVector<StringView, StringView>(
       {{{{"blue"_sv, "2.2"_sv}, {"red"_sv, "1"_sv}}},
        {{{"purple"_sv, std::nullopt}, {"yellow"_sv, "4"_sv}}},
-       {{}},
+       std::make_optional<
+           std::vector<std::pair<StringView, std::optional<StringView>>>>({}),
        std::nullopt});
 
   testCast(data, expected);
@@ -1131,7 +1135,8 @@ TEST_F(JsonCastTest, toMap) {
   expected = makeNullableMapVector<int64_t, double>(
       {{{{101, 1.1}, {102, 2.0}}},
        {{{103, std::nullopt}, {104, 4.0}}},
-       {{}},
+       std::make_optional<
+           std::vector<std::pair<int64_t, std::optional<double>>>>({}),
        std::nullopt});
 
   testCast(data, expected);
@@ -1289,8 +1294,10 @@ TEST_F(JsonCastTest, toNested) {
   auto arrayExpected = makeNullableNestedArrayVector<StringView>(
       {{{{{"1"_sv, "2"_sv}}, {{"3"_sv}}}},
        {{{{std::nullopt, std::nullopt, "4"_sv}}}},
-       {{{{}}}},
-       {{}}});
+       {{std::make_optional<std::vector<std::optional<StringView>>>({})}},
+       std::make_optional<
+           std::vector<std::optional<std::vector<std::optional<StringView>>>>>(
+           {})});
 
   testCast(array, arrayExpected);
 

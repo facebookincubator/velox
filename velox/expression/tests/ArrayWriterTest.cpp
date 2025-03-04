@@ -538,7 +538,7 @@ TEST_F(ArrayWriterTest, copyFromNestedArray) {
   vectorWriter.finish();
 
   using array_type = std::optional<std::vector<std::optional<int64_t>>>;
-  array_type array1 = {{}};
+  array_type array1 = std::make_optional<array_type::value_type>({});
   array_type array2 = {{1, 2, 3, 4}};
   array_type array3 = {{1}};
 
