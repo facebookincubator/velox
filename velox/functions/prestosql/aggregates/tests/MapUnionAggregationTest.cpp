@@ -255,7 +255,8 @@ TEST_F(MapUnionTest, nulls) {
       makeNullableMapVector<int64_t, int64_t>({
           {{{1, 10}, {2, 20}, {3, 33}, {4, 44}, {5, 55}}},
           std::nullopt,
-          {{}},
+          std::make_optional<
+              std::vector<std::pair<int64_t, std::optional<int64_t>>>>({}),
       }),
   });
 

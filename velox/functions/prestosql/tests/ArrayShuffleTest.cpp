@@ -226,7 +226,7 @@ TEST_F(ArrayShuffleTest, nestedArrays) {
   innerArrayType c{6, 7, 8};
   outerArrayType row1{{a}, {b}};
   outerArrayType row2{std::nullopt, std::nullopt, {a}, {b}, {c}};
-  outerArrayType row3{{{}}};
+  outerArrayType row3{std::make_optional<innerArrayType>({})};
   outerArrayType row4{{{std::nullopt}}};
   auto input =
       makeNullableNestedArrayVector<int64_t>({{row1}, {row2}, {row3}, {row4}});

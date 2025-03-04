@@ -3175,7 +3175,7 @@ TEST_F(VectorTest, containsNullAtArrays) {
   auto data = makeNullableArrayVector<int32_t>({
       {{1, 2}},
       {{1, 2, std::nullopt, 3}},
-      {{}},
+      std::make_optional<std::vector<std::optional<int32_t>>>({}),
       std::nullopt,
       {{1, 2, 3, 4}},
   });
@@ -3192,7 +3192,8 @@ TEST_F(VectorTest, containsNullAtMaps) {
       {{{1, 10}, {2, 20}}},
       {{{3, 30}}},
       {{{1, 10}, {2, 20}, {3, std::nullopt}, {4, 40}}},
-      {{}},
+      std::make_optional<
+          std::vector<std::pair<int32_t, std::optional<int64_t>>>>({}),
       std::nullopt,
       {{{1, 10}, {2, 20}, {3, 30}, {4, 40}}},
   });
@@ -3228,7 +3229,7 @@ TEST_F(VectorTest, containsNullAtStructs) {
           makeNullableArrayVector<int64_t>({
               {{1, 2}},
               {{1, 2, std::nullopt, 3}},
-              {{}},
+              std::make_optional<std::vector<std::optional<int64_t>>>({}),
               {{1, 2, 3}},
               std::nullopt,
               {{1, 2, 3, 4, 5}},
@@ -3706,7 +3707,8 @@ TEST_F(VectorTest, getLargeStringBuffer) {
 TEST_F(VectorTest, mapUpdate) {
   auto base = makeNullableMapVector<int64_t, int64_t>({
       {{{1, 1}, {2, 1}}},
-      {{}},
+      std::make_optional<
+          std::vector<std::pair<int64_t, std::optional<int64_t>>>>({}),
       {{{3, 1}}},
       std::nullopt,
       {{{4, 1}}},
@@ -3714,7 +3716,8 @@ TEST_F(VectorTest, mapUpdate) {
   auto update = makeNullableMapVector<int64_t, int64_t>({
       {{{2, 2}, {3, 2}}},
       {{{4, 2}}},
-      {{}},
+      std::make_optional<
+          std::vector<std::pair<int64_t, std::optional<int64_t>>>>({}),
       {{{5, 2}}},
       std::nullopt,
   });
@@ -3781,7 +3784,8 @@ TEST_F(VectorTest, mapUpdateNullMapValue) {
 TEST_F(VectorTest, mapUpdateMultipleUpdates) {
   auto base = makeNullableMapVector<int64_t, int64_t>({
       {{{1, 1}, {2, 1}}},
-      {{}},
+      std::make_optional<
+          std::vector<std::pair<int64_t, std::optional<int64_t>>>>({}),
       {{{3, 1}}},
       std::nullopt,
       {{{4, 1}}},
@@ -3790,16 +3794,20 @@ TEST_F(VectorTest, mapUpdateMultipleUpdates) {
       makeNullableMapVector<int64_t, int64_t>({
           {{{2, 2}, {3, 2}}},
           {{{4, 2}}},
-          {{}},
+          std::make_optional<
+              std::vector<std::pair<int64_t, std::optional<int64_t>>>>({}),
           {{{5, 2}}},
           std::nullopt,
       }),
       makeNullableMapVector<int64_t, int64_t>({
           {{{3, 3}, {4, 3}}},
           std::nullopt,
-          {{}},
-          {{}},
-          {{}},
+          std::make_optional<
+              std::vector<std::pair<int64_t, std::optional<int64_t>>>>({}),
+          std::make_optional<
+              std::vector<std::pair<int64_t, std::optional<int64_t>>>>({}),
+          std::make_optional<
+              std::vector<std::pair<int64_t, std::optional<int64_t>>>>({}),
       }),
   };
   auto expected = makeNullableMapVector<int64_t, int64_t>({
