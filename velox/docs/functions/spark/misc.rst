@@ -17,9 +17,9 @@ Miscellaneous Functions
 
 .. spark:function:: get_struct_field(input, ordinal) -> T
 
-    Returns the value of nested field in the ``input``.
-    ``input`` must be of row type and nested complex type is allowed.
-    The field position is specified by ``ordinal``.
+    Returns the value of nested subfield in the ``input`` struct.
+    The ``input`` must be of row type and nested complex type is allowed.
+    The subfield position is specified by ``ordinal``.
     If ``ordinal`` is negative or greater than the children size of ``input``,
     exception is thrown.
 
