@@ -443,13 +443,13 @@ the return type, the remaining template parameters are argument types. Aliases
 parameter allows developers to specify multiple names for the same function,
 but each function registration needs to provide at least one name. The “ceil”
 function defined above can be registered using the following function call:</p>
-<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="n">registerFunction</span><span class="o">&lt;</span><span class="n">CeilFunction</span><span class="p">,</span><span class="w"> </span><span class="kt">double</span><span class="p">,</span><span class="w"> </span><span class="kt">double</span><span class="o">&gt;</span><span class="p">({</span><span class="s">&quot;ceil&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;ceiling&quot;</span><span class="p">);</span>
+<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="n">registerFunction</span><span class="o">&lt;</span><span class="n">CeilFunction</span><span class="p">,</span><span class="w"> </span><span class="kt">double</span><span class="p">,</span><span class="w"> </span><span class="kt">double</span><span class="o">&gt;</span><span class="p">({</span><span class="s">&quot;ceil&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;ceiling&quot;</span><span class="p">});</span>
 </pre></div>
 </div>
 <p>Here, we register the CeilFunction function that takes a double and returns a
 double. If we want to allow the ceil function to be called on float inputs,
 we need to call registerFunction again:</p>
-<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="n">registerFunction</span><span class="o">&lt;</span><span class="n">CeilFunction</span><span class="p">,</span><span class="w"> </span><span class="kt">float</span><span class="p">,</span><span class="w"> </span><span class="kt">float</span><span class="o">&gt;</span><span class="p">({</span><span class="s">&quot;ceil&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;ceiling&quot;</span><span class="p">);</span>
+<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="n">registerFunction</span><span class="o">&lt;</span><span class="n">CeilFunction</span><span class="p">,</span><span class="w"> </span><span class="kt">float</span><span class="p">,</span><span class="w"> </span><span class="kt">float</span><span class="o">&gt;</span><span class="p">({</span><span class="s">&quot;ceil&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;ceiling&quot;</span><span class="p">});</span>
 </pre></div>
 </div>
 <p>We need to call registerFunction for each signature we want to support.</p>
