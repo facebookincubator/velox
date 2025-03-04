@@ -18,6 +18,7 @@
 
 #include "velox/common/hyperloglog/DenseHll.h"
 #include "velox/common/hyperloglog/HllUtils.h"
+#include "velox/common/hyperloglog/Murmur3Hash128.h"
 #include "velox/common/hyperloglog/SparseHll.h"
 #include "velox/common/memory/HashStringAllocator.h"
 #include "velox/exec/Aggregate.h"
@@ -109,32 +110,51 @@ struct HllAccumulator {
   DenseHll denseHll_;
 };
 
-template <typename T>
+template <typename T, bool HllAsFinalResult>
 inline uint64_t hashOne(T value) {
-  return XXH64(&value, sizeof(T), 0);
+  if constexpr (HllAsFinalResult) {
+    if constexpr (std::is_same_v<T, int64_t>) {
+      return common::hll::Murmur3Hash128::hash64ForLong(value, 0);
+    } else if constexpr (std::is_same_v<T, double>) {
+      return common::hll::Murmur3Hash128::hash64ForLong(
+          *reinterpret_cast<int64_t*>(&value), 0);
+    }
+    return common::hll::Murmur3Hash128::hash64(&value, sizeof(T), 0);
+  } else {
+    return XXH64(&value, sizeof(T), 0);
+  }
 }
 
 // Use timestamp.toMillis() to compute hash value.
 template <>
-inline uint64_t hashOne<Timestamp>(Timestamp value) {
-  return hashOne(value.toMillis());
+inline uint64_t hashOne<Timestamp, false>(Timestamp value) {
+  return hashOne<int64_t, false>(value.toMillis());
 }
 
 template <>
-inline uint64_t hashOne<StringView>(StringView value) {
+inline uint64_t hashOne<Timestamp, true>(Timestamp /*value*/) {
+  VELOX_UNREACHABLE("approx_set(timestamp) is not supported.");
+}
+
+template <>
+inline uint64_t hashOne<StringView, false>(StringView value) {
   return XXH64(value.data(), value.size(), 0);
 }
 
-template <typename T>
+template <>
+inline uint64_t hashOne<StringView, true>(StringView value) {
+  return common::hll::Murmur3Hash128::hash64(value.data(), value.size(), 0);
+}
+
+template <typename T, bool HllAsFinalResult>
 class ApproxDistinctAggregate : public exec::Aggregate {
  public:
   explicit ApproxDistinctAggregate(
       const TypePtr& resultType,
-      bool hllAsFinalResult,
       bool hllAsRawInput,
       double defaultError)
       : exec::Aggregate(resultType),
-        hllAsFinalResult_{hllAsFinalResult},
+        hllAsFinalResult_{HllAsFinalResult},
         hllAsRawInput_{hllAsRawInput},
         indexBitLength_{common::hll::toIndexBitLength(defaultError)} {}
 
@@ -229,7 +249,7 @@ class ApproxDistinctAggregate : public exec::Aggregate {
         clearNull(group);
         accumulator->setIndexBitLength(indexBitLength_);
 
-        auto hash = hashOne(decodedValue_.valueAt<T>(row));
+        auto hash = hashOne<T, HllAsFinalResult>(decodedValue_.valueAt<T>(row));
         accumulator->append(hash);
       });
     }
@@ -278,7 +298,7 @@ class ApproxDistinctAggregate : public exec::Aggregate {
         clearNull(group);
         accumulator->setIndexBitLength(indexBitLength_);
 
-        auto hash = hashOne(decodedValue_.valueAt<T>(row));
+        auto hash = hashOne<T, HllAsFinalResult>(decodedValue_.valueAt<T>(row));
         accumulator->append(hash);
       });
     }
@@ -432,8 +452,13 @@ std::unique_ptr<exec::Aggregate> createApproxDistinct(
     bool hllAsRawInput,
     double defaultError) {
   using T = typename TypeTraits<kind>::NativeType;
-  return std::make_unique<ApproxDistinctAggregate<T>>(
-      resultType, hllAsFinalResult, hllAsRawInput, defaultError);
+  if (hllAsFinalResult) {
+    return std::make_unique<ApproxDistinctAggregate<T, true>>(
+        resultType, hllAsRawInput, defaultError);
+  } else {
+    return std::make_unique<ApproxDistinctAggregate<T, false>>(
+        resultType, hllAsRawInput, defaultError);
+  }
 }
 
 exec::AggregateRegistrationResult registerApproxDistinct(
@@ -453,21 +478,23 @@ exec::AggregateRegistrationResult registerApproxDistinct(
                              .argumentType("hyperloglog")
                              .build());
   } else {
-    for (const auto& inputType : {
-             "boolean",
-             "tinyint",
-             "smallint",
-             "integer",
-             "bigint",
-             "hugeint",
-             "real",
-             "double",
-             "varchar",
-             "varbinary",
-             "timestamp",
-             "date",
-             "unknown",
-         }) {
+    auto inputTypes = hllAsFinalResult
+        ? std::vector<std::string>{"bigint", "double", "varchar", "unknown"}
+        : std::vector<std::string>{
+              "boolean",
+              "tinyint",
+              "smallint",
+              "integer",
+              "bigint",
+              "hugeint",
+              "real",
+              "double",
+              "varchar",
+              "varbinary",
+              "timestamp",
+              "date",
+              "unknown"};
+    for (const auto& inputType : inputTypes) {
       signatures.push_back(exec::AggregateFunctionSignatureBuilder()
                                .returnType(returnType)
                                .intermediateType("varbinary")
@@ -508,8 +535,15 @@ exec::AggregateRegistrationResult registerApproxDistinct(
           const core::QueryConfig& /*config*/)
           -> std::unique_ptr<exec::Aggregate> {
         if (argTypes[0]->isUnKnown()) {
-          return std::make_unique<ApproxDistinctAggregate<UnknownValue>>(
-              resultType, hllAsFinalResult, hllAsRawInput, defaultError);
+          if (hllAsFinalResult) {
+            return std::make_unique<
+                ApproxDistinctAggregate<UnknownValue, true>>(
+                resultType, hllAsRawInput, defaultError);
+          } else {
+            return std::make_unique<
+                ApproxDistinctAggregate<UnknownValue, false>>(
+                resultType, hllAsRawInput, defaultError);
+          }
         }
         return VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(
             createApproxDistinct,
