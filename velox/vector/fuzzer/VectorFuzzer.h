@@ -145,7 +145,7 @@ class VectorFuzzer {
     fuzzer::DataSpec dataSpec{false, false};
   };
 
-  //
+  // Spurious warnings in GCC 13
   VELOX_SUPPRESS_STRINGOP_OVERFLOW_WARNING
   VectorFuzzer(
       const VectorFuzzer::Options& options,

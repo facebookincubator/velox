@@ -1270,7 +1270,7 @@ TEST_F(JsonCastTest, toNested) {
   auto arrayExpected = makeNullableNestedArrayVector<StringView>(
       {{{{{"1"_sv, "2"_sv}}, {{"3"_sv}}}},
        {{{{std::nullopt, std::nullopt, "4"_sv}}}},
-       {{{{}}}},
+       {{std::make_optional<std::vector<std::optional<StringView>>>({})}},
        std::make_optional<
            std::vector<std::optional<std::vector<std::optional<StringView>>>>>(
            {})});

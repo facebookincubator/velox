@@ -69,7 +69,8 @@ class ArrayCombinationsTest : public FunctionBaseTest {
         {{
             {{0, 1, std::nullopt, 3}},
         }},
-        {{}},
+        std::make_optional<
+            std::vector<std::optional<std::vector<std::optional<T>>>>>({}),
     });
     testExpr(
         expected, "combinations(C0, C1)", {arrayVector, comboLengthVector});
