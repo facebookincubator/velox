@@ -52,7 +52,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-22.04, macos-13, macos-14]
+        os: [8-core-ubuntu, macos-13, macos-14]
     steps:
       - uses: actions/checkout@v3
         with:
@@ -106,7 +106,7 @@ jobs:
           bash scripts/setup-macos.sh install_folly
 
       - name: "Create sdist"
-        if: matrix.os == 'ubuntu-22.04'
+        if: matrix.os == '8-core-ubuntu'
         env:
           BUILD_VERSION: "${{ inputs.version || steps.version.outputs.build_version }}"
         run: |
