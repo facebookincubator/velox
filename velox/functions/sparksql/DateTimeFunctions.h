@@ -534,11 +534,8 @@ struct DateFromUnixDateFunction {
   }
 };
 
-/// Truncates a timestamp to a specified time unit.
-///
-/// @param format The time unit to truncate to
-/// @param timestamp The timestamp to truncate
-/// @return The truncated timestamp, or null if the format is invalid
+/// Truncates a timestamp to a specified time unit. Return null if the
+/// format is invalid, microseconds and abbreviated unit string are allowed.
 template <typename T>
 struct DateTruncFunction {
   VELOX_DEFINE_FUNCTION_TYPES(T);
@@ -554,8 +551,11 @@ struct DateTruncFunction {
       out_type<Timestamp>& result,
       const arg_type<Varchar>& format,
       const arg_type<Timestamp>& timestamp) {
-    std::optional<DateTimeUnit> unitOption =
-        fromDateTimeUnitString(format, /*throwIfInvalid=*/false, true, true);
+    std::optional<DateTimeUnit> unitOption = fromDateTimeUnitString(
+        format,
+        /*throwIfInvalid=*/false,
+        /*allowMicro=*/true,
+        /*allowAbbreviated=*/true);
     // Return null if unit is illegal.
     if (!unitOption.has_value()) {
       return false;
