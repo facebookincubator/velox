@@ -95,9 +95,7 @@ TEST_F(ArrayConcatTest, arity) {
 
   testExpression("concat(c0)", {array1}, array1);
 
-  VectorPtr expected;
-
-  expected = makeArrayVector<int64_t>(
+  VectorPtr expected = makeArrayVector<int64_t>(
       {{1, 2, 3, 4, 9, 8, 123, 42}, {3, 4, 5, 55}, {7, 8, 9, 777, 10, 20, 30}});
   testExpression("concat(c0, c1, c2)", {array1, array2, array3}, expected);
 
