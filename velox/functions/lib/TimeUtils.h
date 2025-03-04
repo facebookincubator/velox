@@ -158,59 +158,8 @@ adjustEpoch(int64_t seconds, int64_t intervalSeconds) {
 }
 
 // Returns timestamp truncated to the specified unit.
-FOLLY_ALWAYS_INLINE Timestamp truncateTimestamp(
+Timestamp truncateTimestamp(
     const Timestamp& timestamp,
     DateTimeUnit unit,
-    const tz::TimeZone* timeZone) {
-  Timestamp result;
-  switch (unit) {
-    // For seconds ,millisecond, microsecond we just truncate the nanoseconds
-    // part of the timestamp; no timezone conversion required.
-    case DateTimeUnit::kMicrosecond:
-      return Timestamp(
-          timestamp.getSeconds(), timestamp.getNanos() / 1000 * 1000);
-
-    case DateTimeUnit::kMillisecond:
-      return Timestamp(
-          timestamp.getSeconds(), timestamp.getNanos() / 1000000 * 1000000);
-
-    case DateTimeUnit::kSecond:
-      return Timestamp(timestamp.getSeconds(), 0);
-
-    // Same for minutes; timezones and daylight savings time are at least in
-    // the granularity of 30 mins, so we can just truncate the epoch directly.
-    case DateTimeUnit::kMinute:
-      return adjustEpoch(timestamp.getSeconds(), 60);
-
-    // Hour truncation has to handle the corner case of daylight savings time
-    // boundaries. Since conversions from local timezone to UTC may be
-    // ambiguous, we need to be carefull about the roundtrip of converting to
-    // local time and back. So what we do is to calculate the truncation delta
-    // in UTC, then applying it to the input timestamp.
-    case DateTimeUnit::kHour: {
-      auto epochToAdjust = getSeconds(timestamp, timeZone);
-      auto secondsDelta =
-          epochToAdjust - adjustEpoch(epochToAdjust, 60 * 60).getSeconds();
-      return Timestamp(timestamp.getSeconds() - secondsDelta, 0);
-    }
-
-    // For the truncations below, we may first need to convert to the local
-    // timestamp, truncate, then convert back to GMT.
-    case DateTimeUnit::kDay:
-      result = adjustEpoch(getSeconds(timestamp, timeZone), 24 * 60 * 60);
-      break;
-
-    default:
-      auto dateTime = getDateTime(timestamp, timeZone);
-      adjustDateTime(dateTime, unit);
-      result = Timestamp(Timestamp::calendarUtcToEpoch(dateTime), 0);
-      break;
-  }
-
-  if (timeZone != nullptr) {
-    result.toGMT(*timeZone);
-  }
-  return result;
-}
-
+    const tz::TimeZone* timeZone);
 } // namespace facebook::velox::functions
