@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+#include "velox/common/base/tests/GTestUtils.h"
 #include "velox/exec/PlanNodeStats.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/HiveConnectorTestBase.h"
@@ -374,4 +375,53 @@ TEST_F(PrintPlanWithStatsTest, tableWriterWithTableScan) {
        {"        storageReadBytes [ ]* sum: .+, count: 1, min: .+, max: .+"},
        {"        totalRemainingFilterTime\\s+sum: .+, count: .+, min: .+, max: .+"},
        {"        totalScanTime    [ ]* sum: .+, count: .+, min: .+, max: .+"}});
+}
+
+TEST_F(PrintPlanWithStatsTest, taskAPI) {
+  // Test nullptr PlanNode.
+  core::PlanFragment planFragment;
+  auto taskWithNoPlanNode = exec::Task::create(
+      "taskId",
+      planFragment,
+      0,
+      core::QueryCtx::create(),
+      exec::Task::ExecutionMode::kSerial);
+  VELOX_ASSERT_THROW(
+      taskWithNoPlanNode->printPlanWithStats(), "PlanFragment has no planNode");
+
+  // Test various task states.
+  auto checkOutput = [](exec::Task* task) {
+    compareOutputs(
+        ::testing::UnitTest::GetInstance()->current_test_info()->name(),
+        task->printPlanWithStats(),
+        {{"-- Aggregation\\[1\\]\\[SINGLE \\[c0\\] a0 := sum\\(ROW\\[\"c1\"\\]\\)\\] -> c0:BIGINT, a0:BIGINT"},
+         {"   Output: .+, Cpu time: .+, Wall time: .+, Blocked wall time: .+, Peak memory: .+, Memory allocations: .+, CPU breakdown: B/I/O/F (.+/.+/.+/.+)"},
+         {"  -- TableScan\\[0\\]\\[table: hive_table\\] -> c0:BIGINT, c1:BIGINT"},
+         {"     Input: .+, Output: .+, Cpu time: .+, Wall time: .+, Blocked wall time: .+, Peak memory: .+, Memory allocations: .+, CPU breakdown: B/I/O/F (.+/.+/.+/.+)"}});
+  };
+
+  const auto data = makeRowVector({
+      makeFlatVector<int64_t>(50, [](auto row) { return row; }),
+      makeFlatVector<int64_t>(50, [](auto row) { return row; }),
+  });
+
+  const auto plan = PlanBuilder()
+                        .tableScan(asRowType(data->type()))
+                        .singleAggregation({"c0"}, {"sum(c1)"}, {})
+                        .planFragment();
+
+  auto task = exec::Task::create(
+      "task",
+      std::move(plan),
+      0,
+      core::QueryCtx::create(driverExecutor_.get()),
+      exec::Task::ExecutionMode::kParallel);
+  checkOutput(task.get());
+
+  task->start(4, 1);
+  checkOutput(task.get());
+
+  task->requestAbort();
+  ASSERT_TRUE(waitForTaskAborted(task.get()));
+  checkOutput(task.get());
 }

@@ -149,7 +149,9 @@ std::unordered_map<core::PlanNodeId, SplitsState> buildSplitStates(
     const std::shared_ptr<const core::PlanNode>& planNode) {
   std::unordered_set<core::PlanNodeId> allIds;
   std::unordered_map<core::PlanNodeId, SplitsState> splitStateMap;
-  buildSplitStates(planNode.get(), allIds, splitStateMap);
+  if (planNode.get() != nullptr) {
+    buildSplitStates(planNode.get(), allIds, splitStateMap);
+  }
   return splitStateMap;
 }
 
