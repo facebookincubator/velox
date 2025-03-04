@@ -103,7 +103,7 @@ jobs:
         if: startsWith(matrix.os, 'macos')
         run: |
           export INSTALL_PREFIX="$GITHUB_WORKSPACE/dependencies"
-          echo "INSTALL_PREFIX=$INSTALL_PREFIX" >> $GITHUB_ENV
+          echo "CMAKE_PREFIX_PATH=$INSTALL_PREFIX" >> $GITHUB_ENV
           bash scripts/setup-macos.sh 
 
       - name: "Create sdist"
@@ -123,7 +123,7 @@ jobs:
           CIBW_BUILD: ${{ github.event_name == 'pull_request' && 'cp312-*' || 'cp312-*' }}
           CIBW_SKIP: "*musllinux* cp36-*"
           CIBW_MANYLINUX_X86_64_IMAGE: "ghcr.io/facebookincubator/velox-dev:pyvelox"
-          CIBW_ENVIRONMENT_PASS_LINUX: "CCACHE_DIR BUILD_VERSION INSTALL_PREFIX"
+          CIBW_ENVIRONMENT_PASS_LINUX: "CCACHE_DIR BUILD_VERSION CMAKE_PREFIX_PATH"
           CIBW_TEST_EXTRAS: "tests"
           CIBW_TEST_COMMAND: "cd {project}/pyvelox && python -m unittest -v"
           CIBW_TEST_SKIP: "*"

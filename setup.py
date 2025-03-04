@@ -134,7 +134,6 @@ class CMakeBuild(build_ext):
         cmake_args = [
             "-DVELOX_BUILD_TESTING=OFF",
             "-DVELOX_MONO_LIBRARY=ON",
-            "-DVELOX_ENABLE_CCACHE=OFF", # ccache fails to hit in cibuildwheel
             f"-DCMAKE_LIBRARY_OUTPUT_DIRECTORY={extdir}",
             f"-DCMAKE_BUILD_TYPE={cfg}",
             f"-DCMAKE_INSTALL_PREFIX={extdir}",
