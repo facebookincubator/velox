@@ -131,9 +131,9 @@ Expected<std::unique_ptr<Codec>> Codec::create(
   std::unique_ptr<Codec> codec;
   switch (kind) {
 #ifdef VELOX_ENABLE_COMPRESSION_LZ4
-    case CompressionKind_LZ4:
+    case CompressionKind_LZ4: {
       if (auto options = dynamic_cast<const Lz4CodecOptions*>(&codecOptions)) {
-        switch (options->type) {
+        switch (options->lz4Type) {
           case Lz4CodecOptions::kLz4Frame:
             codec = makeLz4FrameCodec(compressionLevel);
             break;
@@ -148,7 +148,7 @@ Expected<std::unique_ptr<Codec>> Codec::create(
         // By default, create LZ4 Frame codec.
         codec = makeLz4FrameCodec(compressionLevel);
       }
-      break;
+    } break;
 #endif
     default:
       break;
@@ -214,10 +214,6 @@ Codec::makeStreamingDecompressor() {
 }
 
 int32_t Codec::compressionLevel() const {
-  return kUseDefaultCompressionLevel;
-}
-
-std::string Codec::name() const {
-  return compressionKindToString(compressionKind());
+  return kDefaultCompressionLevel;
 }
 } // namespace facebook::velox::common

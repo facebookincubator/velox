@@ -26,128 +26,23 @@
 namespace facebook::velox::common {
 
 struct Lz4CodecOptions : CodecOptions {
-  enum Type { kLz4Frame, kLz4Raw, kLz4Hadoop };
+  enum Lz4Type { kLz4Frame, kLz4Raw, kLz4Hadoop };
 
   Lz4CodecOptions(
-      Type type,
-      int32_t compressionLevel = kUseDefaultCompressionLevel)
-      : CodecOptions(compressionLevel), type(type) {}
+      Lz4Type lz4Type,
+      int32_t compressionLevel = kDefaultCompressionLevel)
+      : CodecOptions(compressionLevel), lz4Type(lz4Type) {}
 
-  Type type;
-};
-
-class Lz4CodecBase : public Codec {
- public:
-  explicit Lz4CodecBase(int32_t compressionLevel);
-
-  int32_t minimumCompressionLevel() const override;
-
-  int32_t maximumCompressionLevel() const override;
-
-  int32_t defaultCompressionLevel() const override;
-
-  int32_t compressionLevel() const override;
-
-  CompressionKind compressionKind() const override;
-
- protected:
-  const int32_t compressionLevel_;
-};
-
-class Lz4FrameCodec : public Lz4CodecBase {
- public:
-  explicit Lz4FrameCodec(int32_t compressionLevel);
-
-  uint64_t maxCompressedLength(uint64_t inputLength) override;
-
-  Expected<uint64_t> compress(
-      const uint8_t* input,
-      uint64_t inputLength,
-      uint8_t* output,
-      uint64_t outputLength) override;
-
-  Expected<uint64_t> decompress(
-      const uint8_t* input,
-      uint64_t inputLength,
-      uint8_t* output,
-      uint64_t outputLength) override;
-
-  bool supportsStreamingCompression() const override;
-
-  Expected<std::shared_ptr<StreamingCompressor>> makeStreamingCompressor()
-      override;
-
-  Expected<std::shared_ptr<StreamingDecompressor>> makeStreamingDecompressor()
-      override;
-
- protected:
-  const LZ4F_preferences_t prefs_;
-};
-
-class Lz4RawCodec : public Lz4CodecBase {
- public:
-  explicit Lz4RawCodec(int32_t compressionLevel);
-
-  uint64_t maxCompressedLength(uint64_t inputLength) override;
-
-  Expected<uint64_t> compress(
-      const uint8_t* input,
-      uint64_t inputLength,
-      uint8_t* output,
-      uint64_t outputLength) override;
-
-  Expected<uint64_t> decompress(
-      const uint8_t* input,
-      uint64_t inputLength,
-      uint8_t* output,
-      uint64_t outputLength) override;
-
-  std::string name() const override;
-};
-
-/// The Hadoop Lz4Codec source code can be found here:
-/// https://github.com/apache/hadoop/blob/trunk/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-nativetask/src/main/native/src/codec/Lz4Codec.cc
-class Lz4HadoopCodec : public Lz4RawCodec, public HadoopCompressionFormat {
- public:
-  Lz4HadoopCodec();
-
-  uint64_t maxCompressedLength(uint64_t inputLength) override;
-
-  Expected<uint64_t> compress(
-      const uint8_t* input,
-      uint64_t inputLength,
-      uint8_t* output,
-      uint64_t outputLength) override;
-
-  Expected<uint64_t> decompress(
-      const uint8_t* input,
-      uint64_t inputLength,
-      uint8_t* output,
-      uint64_t outputLength) override;
-
-  int32_t minimumCompressionLevel() const override;
-
-  int32_t maximumCompressionLevel() const override;
-
-  int32_t defaultCompressionLevel() const override;
-
-  std::string name() const override;
-
- private:
-  Expected<uint64_t> decompressInternal(
-      const uint8_t* input,
-      uint64_t inputLength,
-      uint8_t* output,
-      uint64_t outputLength) override;
+  Lz4Type lz4Type;
 };
 
 // Lz4 frame format codec.
 std::unique_ptr<Codec> makeLz4FrameCodec(
-    int32_t compressionLevel = kUseDefaultCompressionLevel);
+    int32_t compressionLevel = kDefaultCompressionLevel);
 
 // Lz4 "raw" format codec.
 std::unique_ptr<Codec> makeLz4RawCodec(
-    int32_t compressionLevel = kUseDefaultCompressionLevel);
+    int32_t compressionLevel = kDefaultCompressionLevel);
 
 // Lz4 "Hadoop" format codec (Lz4 raw codec prefixed with lengths header).
 std::unique_ptr<Codec> makeLz4HadoopCodec();

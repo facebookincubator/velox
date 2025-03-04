@@ -27,9 +27,7 @@ constexpr int32_t kLz4MinCompressionLevel = 1;
 constexpr int32_t kLegacyLz4MaxCompressionLevel = 12;
 #endif
 
-static inline Status lz4Error(
-    const char* prefixMessage,
-    LZ4F_errorCode_t errorCode) {
+Status lz4Error(const char* prefixMessage, LZ4F_errorCode_t errorCode) {
   return Status::IOError(prefixMessage, LZ4F_getErrorName(errorCode));
 }
 
@@ -45,6 +43,115 @@ LZ4F_preferences_t defaultPreferences(int32_t compressionLevel) {
   return prefs;
 }
 } // namespace
+
+class Lz4CodecBase : public Codec {
+ public:
+  explicit Lz4CodecBase(int32_t compressionLevel);
+
+  int32_t minCompressionLevel() const override;
+
+  int32_t maxCompressionLevel() const override;
+
+  int32_t defaultCompressionLevel() const override;
+
+  int32_t compressionLevel() const override;
+
+  CompressionKind compressionKind() const override;
+
+ protected:
+  const int32_t compressionLevel_;
+};
+
+class Lz4FrameCodec : public Lz4CodecBase {
+ public:
+  explicit Lz4FrameCodec(int32_t compressionLevel);
+
+  uint64_t maxCompressedLength(uint64_t inputLength) override;
+
+  Expected<uint64_t> compress(
+      const uint8_t* input,
+      uint64_t inputLength,
+      uint8_t* output,
+      uint64_t outputLength) override;
+
+  Expected<uint64_t> decompress(
+      const uint8_t* input,
+      uint64_t inputLength,
+      uint8_t* output,
+      uint64_t outputLength) override;
+
+  bool supportsStreamingCompression() const override;
+
+  Expected<std::shared_ptr<StreamingCompressor>> makeStreamingCompressor()
+      override;
+
+  Expected<std::shared_ptr<StreamingDecompressor>> makeStreamingDecompressor()
+      override;
+
+  std::string_view name() const override {
+    return "lz4";
+  }
+
+ protected:
+  const LZ4F_preferences_t prefs_;
+};
+
+class Lz4RawCodec : public Lz4CodecBase {
+ public:
+  explicit Lz4RawCodec(int32_t compressionLevel);
+
+  uint64_t maxCompressedLength(uint64_t inputLength) override;
+
+  Expected<uint64_t> compress(
+      const uint8_t* input,
+      uint64_t inputLength,
+      uint8_t* output,
+      uint64_t outputLength) override;
+
+  Expected<uint64_t> decompress(
+      const uint8_t* input,
+      uint64_t inputLength,
+      uint8_t* output,
+      uint64_t outputLength) override;
+
+  std::string_view name() const override;
+};
+
+/// The Hadoop Lz4Codec source code can be found here:
+/// https://github.com/apache/hadoop/blob/trunk/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-nativetask/src/main/native/src/codec/Lz4Codec.cc
+class Lz4HadoopCodec : public Lz4RawCodec, public HadoopCompressionFormat {
+ public:
+  Lz4HadoopCodec();
+
+  uint64_t maxCompressedLength(uint64_t inputLength) override;
+
+  Expected<uint64_t> compress(
+      const uint8_t* input,
+      uint64_t inputLength,
+      uint8_t* output,
+      uint64_t outputLength) override;
+
+  Expected<uint64_t> decompress(
+      const uint8_t* input,
+      uint64_t inputLength,
+      uint8_t* output,
+      uint64_t outputLength) override;
+
+  int32_t minCompressionLevel() const override;
+
+  int32_t maxCompressionLevel() const override;
+
+  int32_t defaultCompressionLevel() const override;
+
+  std::string_view name() const override;
+
+ private:
+  Expected<uint64_t> decompressInternal(
+      const uint8_t* input,
+      uint64_t inputLength,
+      uint8_t* output,
+      uint64_t outputLength) override;
+};
 
 class LZ4Compressor : public StreamingCompressor {
  public:
@@ -62,7 +169,7 @@ class LZ4Compressor : public StreamingCompressor {
 
   Expected<FlushResult> flush(uint8_t* output, uint64_t outputLength) override;
 
-  Expected<EndResult> end(uint8_t* output, uint64_t outputLength) override;
+  Expected<EndResult> finalize(uint8_t* output, uint64_t outputLength) override;
 
  protected:
   Status
@@ -184,7 +291,7 @@ Expected<StreamingCompressor::FlushResult> LZ4Compressor::flush(
   return FlushResult{bytesWritten, false};
 }
 
-Expected<StreamingCompressor::EndResult> LZ4Compressor::end(
+Expected<StreamingCompressor::EndResult> LZ4Compressor::finalize(
     uint8_t* output,
     uint64_t outputLength) {
   auto outputSize = static_cast<size_t>(outputLength);
@@ -279,15 +386,15 @@ bool LZ4Decompressor::isFinished() {
 
 Lz4CodecBase::Lz4CodecBase(int32_t compressionLevel)
     : compressionLevel_(
-          compressionLevel == kUseDefaultCompressionLevel
+          compressionLevel == kDefaultCompressionLevel
               ? kLz4DefaultCompressionLevel
               : compressionLevel) {}
 
-int32_t Lz4CodecBase::minimumCompressionLevel() const {
+int32_t Lz4CodecBase::minCompressionLevel() const {
   return kLz4MinCompressionLevel;
 }
 
-int32_t Lz4CodecBase::maximumCompressionLevel() const {
+int32_t Lz4CodecBase::maxCompressionLevel() const {
 #if (defined(LZ4_VERSION_NUMBER) && LZ4_VERSION_NUMBER < 10800)
   return kLegacyLz4MaxCompressionLevel;
 #else
@@ -434,7 +541,7 @@ Expected<uint64_t> Lz4RawCodec::decompress(
   return static_cast<uint64_t>(decompressedSize);
 }
 
-std::string Lz4RawCodec::name() const {
+std::string_view Lz4RawCodec::name() const {
   return "lz4_raw";
 }
 
@@ -487,19 +594,19 @@ Expected<uint64_t> Lz4HadoopCodec::decompress(
   return Lz4RawCodec::decompress(input, inputLength, output, outputLength);
 }
 
-int32_t Lz4HadoopCodec::minimumCompressionLevel() const {
-  return kUseDefaultCompressionLevel;
+int32_t Lz4HadoopCodec::minCompressionLevel() const {
+  return kDefaultCompressionLevel;
 }
 
-int32_t Lz4HadoopCodec::maximumCompressionLevel() const {
-  return kUseDefaultCompressionLevel;
+int32_t Lz4HadoopCodec::maxCompressionLevel() const {
+  return kDefaultCompressionLevel;
 }
 
 int32_t Lz4HadoopCodec::defaultCompressionLevel() const {
-  return kUseDefaultCompressionLevel;
+  return kDefaultCompressionLevel;
 }
 
-std::string Lz4HadoopCodec::name() const {
+std::string_view Lz4HadoopCodec::name() const {
   return "lz4_hadoop";
 }
 

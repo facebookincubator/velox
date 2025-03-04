@@ -46,90 +46,30 @@ std::string compressionKindToString(CompressionKind kind);
 
 CompressionKind stringToCompressionKind(const std::string& kind);
 
-constexpr uint64_t DEFAULT_COMPRESSION_BLOCK_SIZE = 256 * 1024;
+static constexpr uint64_t kDefaultCompressionBlockSize = 256 * 1024;
 
-static constexpr int32_t kUseDefaultCompressionLevel =
+static constexpr int32_t kDefaultCompressionLevel =
     std::numeric_limits<int32_t>::min();
 
-class StreamingCompressor {
- public:
-  virtual ~StreamingCompressor() = default;
-
-  struct CompressResult {
-    uint64_t bytesRead;
-    uint64_t bytesWritten;
-    bool outputTooSmall;
-  };
-
-  struct FlushResult {
-    uint64_t bytesWritten;
-    bool outputTooSmall;
-  };
-
-  struct EndResult {
-    uint64_t bytesWritten;
-    bool outputTooSmall;
-  };
-
-  /// Compress some input.
-  /// If CompressResult.outputTooSmall is true on return, compress() should be
-  /// called again with a larger output buffer, such as doubling its size.
-  virtual Expected<CompressResult> compress(
-      const uint8_t* input,
-      uint64_t inputLength,
-      uint8_t* output,
-      uint64_t outputLength) = 0;
-
-  /// Flush part of the compressed output.
-  /// If FlushResult.outputTooSmall is true on return, flush() should be called
-  /// again with a larger output buffer, such as doubling its size.
-  virtual Expected<FlushResult> flush(
-      uint8_t* output,
-      uint64_t outputLength) = 0;
-
-  /// End compressing, doing whatever is necessary to end the stream, and
-  /// flushing the compressed output.
-  /// If EndResult.outputTooSmall is true on return, end() should be called
-  /// again with a larger output buffer, such as doubling its size.
-  /// Otherwise, the StreamingCompressor should not be used anymore.
-  virtual Expected<EndResult> end(uint8_t* output, uint64_t outputLength) = 0;
-};
-
-class StreamingDecompressor {
- public:
-  virtual ~StreamingDecompressor() = default;
-
-  struct DecompressResult {
-    uint64_t bytesRead;
-    uint64_t bytesWritten;
-    bool outputTooSmall;
-  };
-
-  /// Decompress some input.
-  /// If DecompressResult.outputTooSmall is true on return, decompress() should
-  /// be called again with a larger output buffer, such as doubling its size.
-  virtual Expected<DecompressResult> decompress(
-      const uint8_t* input,
-      uint64_t inputLength,
-      uint8_t* output,
-      uint64_t outputLength) = 0;
-
-  // Return whether the compressed stream is finished.
-  virtual bool isFinished() = 0;
-
-  // Reinitialize decompressor, making it ready for a new compressed stream.
-  virtual Status reset() = 0;
-};
+class StreamingCompressor;
+class StreamingDecompressor;
 
 struct CodecOptions {
   int32_t compressionLevel;
 
-  CodecOptions(int32_t compressionLevel = kUseDefaultCompressionLevel)
+  CodecOptions(int32_t compressionLevel = kDefaultCompressionLevel)
       : compressionLevel(compressionLevel) {}
 
   virtual ~CodecOptions() = default;
 };
 
+/// Codec interface for compression and decompression.
+/// The Codec class provides a common interface for various compression
+/// algorithms to support one-shot compression and decompression.
+///
+/// For codecs that support streaming compression and decompression, the
+/// makeStreamingCompressor() and makeStreamingDecompressor() functions can be
+/// used to create streaming compressor and decompressor instances.
 class Codec {
  public:
   virtual ~Codec() = default;
@@ -158,12 +98,12 @@ class Codec {
   /// Return the smallest supported compression level.
   /// If the codec doesn't support compression level,
   /// `kUseDefaultCompressionLevel` will be returned.
-  virtual int32_t minimumCompressionLevel() const = 0;
+  virtual int32_t minCompressionLevel() const = 0;
 
   /// Return the largest supported compression level.
   /// If the codec doesn't support compression level,
   /// `kUseDefaultCompressionLevel` will be returned.
-  virtual int32_t maximumCompressionLevel() const = 0;
+  virtual int32_t maxCompressionLevel() const = 0;
 
   /// Return the default compression level.
   /// If the codec doesn't support compression level,
@@ -244,12 +184,96 @@ class Codec {
   virtual int32_t compressionLevel() const;
 
   // The name of this Codec's compression type.
-  virtual std::string name() const;
+  virtual std::string_view name() const = 0;
 
  private:
   // Initializes the codec's resources.
   virtual Status init();
 };
+
+/// Base class for streaming compressors. Unlike one-shot compression, streaming
+/// compression can compress data with arbitrary length and write the compressed
+/// data through multiple calls to compress().
+/// The caller is responsible for providing a sufficiently large output buffer
+/// for compress(), flush(), and finalize(), and checking the `outputTooSmall`
+/// from the returned result. If `outputTooSmall` is true, the caller should
+/// provide a larger output buffer and call the corresponding function again.
+class StreamingCompressor {
+ public:
+  virtual ~StreamingCompressor() = default;
+
+  struct CompressResult {
+    uint64_t bytesRead;
+    uint64_t bytesWritten;
+    bool outputTooSmall;
+  };
+
+  struct FlushResult {
+    uint64_t bytesWritten;
+    bool outputTooSmall;
+  };
+
+  struct EndResult : FlushResult {};
+
+  /// Compress some input.
+  /// If CompressResult.outputTooSmall is true on return, compress() should be
+  /// called again with a larger output buffer, such as doubling its size.
+  virtual Expected<CompressResult> compress(
+      const uint8_t* input,
+      uint64_t inputLength,
+      uint8_t* output,
+      uint64_t outputLength) = 0;
+
+  /// Flush part of the compressed output.
+  /// If FlushResult.outputTooSmall is true on return, flush() should be called
+  /// again with a larger output buffer, such as doubling its size.
+  virtual Expected<FlushResult> flush(
+      uint8_t* output,
+      uint64_t outputLength) = 0;
+
+  /// End compressing, doing whatever is necessary to end the stream, and
+  /// flushing the compressed output.
+  /// If EndResult.outputTooSmall is true on return, end() should be called
+  /// again with a larger output buffer, such as doubling its size.
+  /// Otherwise, the StreamingCompressor should not be used anymore.
+  virtual Expected<EndResult> finalize(
+      uint8_t* output,
+      uint64_t outputLength) = 0;
+};
+
+/// Base class for streaming decompressors. Streaming decompression can process
+/// data with arbitrary length and write the decompressed data through multiple
+/// calls to decompress().
+/// The caller is responsible for providing a sufficiently large output buffer
+/// for decompress(), and checking the `outputTooSmall` in the returned result.
+/// If `outputTooSmall` is true, the caller should provide a larger output
+/// buffer and call decompress() again.
+class StreamingDecompressor {
+ public:
+  virtual ~StreamingDecompressor() = default;
+
+  struct DecompressResult {
+    uint64_t bytesRead;
+    uint64_t bytesWritten;
+    bool outputTooSmall;
+  };
+
+  /// Decompress some input.
+  /// If DecompressResult.outputTooSmall is true on return, decompress() should
+  /// be called again with a larger output buffer, such as doubling its size.
+  virtual Expected<DecompressResult> decompress(
+      const uint8_t* input,
+      uint64_t inputLength,
+      uint8_t* output,
+      uint64_t outputLength) = 0;
+
+  // Return whether the compressed stream is finished.
+  virtual bool isFinished() = 0;
+
+  // Reinitialize decompressor, making it ready for a new compressed stream.
+  virtual Status reset() = 0;
+};
+
 } // namespace facebook::velox::common
 
 template <>

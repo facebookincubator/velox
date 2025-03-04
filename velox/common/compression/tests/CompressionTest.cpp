@@ -52,12 +52,12 @@ struct TestParams {
 
 std::vector<TestParams> generateLz4TestParams() {
   std::vector<TestParams> params;
-  for (auto type :
+  for (auto lz4Type :
        {Lz4CodecOptions::kLz4Raw,
         Lz4CodecOptions::kLz4Frame,
         Lz4CodecOptions::kLz4Hadoop}) {
     params.emplace_back(
-        CompressionKind_LZ4, std::make_shared<Lz4CodecOptions>(type));
+        CompressionKind_LZ4, std::make_shared<Lz4CodecOptions>(lz4Type));
   }
   // Add default CodecOptions.
   params.emplace_back(CompressionKind_LZ4);
@@ -197,7 +197,7 @@ void streamingCompress(
     do {
       int64_t outputLength = compressed.size() - compressedSize;
       uint8_t* output = compressed.data() + compressedSize;
-      auto endResult = compressor->end(output, outputLength)
+      auto endResult = compressor->finalize(output, outputLength)
                            .thenOrThrow(folly::identity, throwsNotOk);
       ASSERT_LE(endResult.bytesWritten, outputLength);
       compressedSize += endResult.bytesWritten;
@@ -395,8 +395,8 @@ TEST_P(CodecTest, specifyCompressionLevel) {
 
   for (const auto& compressionLevel :
        {codecDefault->defaultCompressionLevel(),
-        codecDefault->minimumCompressionLevel(),
-        codecDefault->maximumCompressionLevel()}) {
+        codecDefault->minCompressionLevel(),
+        codecDefault->maxCompressionLevel()}) {
     auto codec = Codec::create(kind, compressionLevel)
                      .thenOrThrow(folly::identity, throwsNotOk);
     checkCodecRoundtrip(codec, data);
@@ -521,7 +521,7 @@ TEST(CodecTestInvalid, invalidKind) {
   ASSERT_FALSE(Codec::isAvailable(kind));
 
   VELOX_ASSERT_ERROR_STATUS(
-      Codec::create(kind, kUseDefaultCompressionLevel).error(),
+      Codec::create(kind, kDefaultCompressionLevel).error(),
       StatusCode::kInvalid,
       fmt::format(
           "Support for codec '{}' is either not built or not implemented.",
