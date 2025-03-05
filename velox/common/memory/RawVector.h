@@ -19,6 +19,7 @@
 #include <folly/Range.h>
 #include "velox/common/base/BitUtil.h"
 #include "velox/common/base/SimdUtil.h"
+#include "velox/common/memory/MemoryPool.h"
 
 #include <type_traits>
 
@@ -37,13 +38,15 @@ class raw_vector {
 
   raw_vector() = default;
 
+  explicit raw_vector(memory::MemoryPool* pool) : pool_(pool) {}
+
   explicit raw_vector(int32_t size) {
     resize(size);
   }
 
   ~raw_vector() {
-    if (data_) {
-      freeData(data_);
+    if (data_ != nullptr) {
+      free();
     }
   }
 
@@ -56,25 +59,35 @@ class raw_vector {
     *this = std::move(other);
   }
 
-  // Moves 'other' to this, leaves 'other' empty, as after default
-  // construction.
+  // Copies 'other' to this, leaves 'other' unchanged.
   void operator=(const raw_vector<T>& other) {
-    resize(other.size());
-    if (other.data_) {
-      memcpy(
-          data_,
-          other.data(),
-          bits::roundUp(size_ * sizeof(T), simd::kPadding));
+    if (this != &other) {
+      if (pool_ != other.pool_) {
+        free();
+        pool_ = other.pool_;
+      }
+      resize(other.size());
+      if (other.data_) {
+        memcpy(
+            data_,
+            other.data(),
+            bits::roundUp(size_ * sizeof(T), simd::kPadding));
+      }
     }
   }
 
+  // Moves 'other' to this, leaves 'other' empty, as after default
+  // construction.
   void operator=(raw_vector<T>&& other) noexcept {
+    free();
     data_ = other.data_;
     size_ = other.size_;
     capacity_ = other.capacity_;
+    pool_ = other.pool_;
     other.data_ = nullptr;
     other.size_ = 0;
     other.capacity_ = 0;
+    other.pool_ = nullptr;
   }
 
   bool empty() const {
@@ -127,12 +140,14 @@ class raw_vector {
 
   void reserve(int32_t size) {
     if (capacity_ < size) {
-      T* newData = allocateData(size, capacity_);
+      T* newData = allocateData(size);
+      const auto newCapacity = calculateCapacity(size);
       if (data_) {
         memcpy(newData, data_, size_ * sizeof(T));
-        freeData(data_);
+        free();
       }
       data_ = newData;
+      capacity_ = newCapacity;
     }
   }
 
@@ -157,44 +172,78 @@ class raw_vector {
   }
 
  private:
-  // Adds 'bytes' to the address 'pointer'.
-  inline T* addBytes(T* pointer, int32_t bytes) {
-    return reinterpret_cast<T*>(reinterpret_cast<uint64_t>(pointer) + bytes);
+  // Returns a pointer that is offset by 'offset' bytes from 'pointer'.
+  inline T* getPointerWithOffset(T* pointer, int32_t offset) const {
+    return reinterpret_cast<T*>(reinterpret_cast<uint64_t>(pointer) + offset);
+  }
+
+  // Returns the pointer that points to the start of the allocated raw buffer
+  // that accommodates both paddings and 'data_'.
+  inline T* buffer() const {
+    return getPointerWithOffset(data_, -simd::kPadding);
+  }
+
+  // Returns the bytes of the allocated raw buffer.
+  inline int32_t bufferSize() const {
+    return capacity_ * sizeof(T) + 2 * simd::kPadding;
+  }
+
+  // Returns the corresponding capacity given the number of elements size of the
+  // container.
+  inline int32_t calculateCapacity(int32_t size) const {
+    return (paddedSize(sizeof(T) * size) - 2 * simd::kPadding) / sizeof(T);
   }
 
   // Size with one full width SIMD load worth data above and below, rounded to
   // power of 2.
-  int32_t paddedSize(int32_t size) {
+  inline int32_t paddedSize(int32_t size) const {
     return bits::nextPowerOfTwo(size + (2 * simd::kPadding));
   }
 
-  T* allocateData(int32_t size, int32_t& capacity) {
+  T* allocateData(int32_t size) {
     auto bytes = paddedSize(sizeof(T) * size);
-    auto ptr = reinterpret_cast<T*>(aligned_alloc(simd::kPadding, bytes));
+    T* buffer;
+    if (pool_ != nullptr) {
+      buffer = reinterpret_cast<T*>(pool_->allocate(bytes, simd::kPadding));
+    } else {
+      buffer = reinterpret_cast<T*>(aligned_alloc(simd::kPadding, bytes));
+    }
     // Clear the word below the pointer so that we do not get read of
     // uninitialized when reading a partial word that extends below
     // the pointer.
     *reinterpret_cast<int64_t*>(
-        addBytes(ptr, simd::kPadding - sizeof(int64_t))) = 0;
-    capacity = (bytes - 2 * simd::kPadding) / sizeof(T);
-    return addBytes(ptr, simd::kPadding);
+        getPointerWithOffset(buffer, simd::kPadding - sizeof(int64_t))) = 0;
+    capacity_ = (bytes - 2 * simd::kPadding) / sizeof(T);
+    return getPointerWithOffset(buffer, simd::kPadding);
   }
 
-  void freeData(T* data) {
-    if (data_) {
-      ::free(addBytes(data, -simd::kPadding));
+  void free() {
+    if (data_ != nullptr) {
+      if (pool_ != nullptr) {
+        pool_->free(buffer(), bufferSize());
+      } else {
+        ::free(buffer());
+      }
     }
+    data_ = nullptr;
   }
 
   FOLLY_NOINLINE void grow(int32_t size) {
-    T* newData = allocateData(size, capacity_);
-    if (data_) {
+    auto* newData = allocateData(size);
+    const auto newCapacity = calculateCapacity(size);
+    if (data_ != nullptr) {
       memcpy(newData, data_, size_ * sizeof(T));
-      freeData(data_);
+      free();
     }
     data_ = newData;
+    capacity_ = newCapacity;
   }
 
+  memory::MemoryPool* pool_{nullptr};
+
+  // The data_ pointer points to the start of the data. The actual allocated raw
+  // buffer is larger than it. The layout is as follows:
+  // | padding | data_ | padding |
   T* data_{nullptr};
   int32_t size_{0};
   int32_t capacity_{0};
