@@ -879,6 +879,9 @@ UnnestNode::UnnestNode(
 }
 
 void UnnestNode::addDetails(std::stringstream& stream) const {
+  if (isOuter_) {
+    stream << "OUTER ";
+  }
   addFields(stream, unnestVariables_);
 }
 
