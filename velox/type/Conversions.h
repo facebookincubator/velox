@@ -23,6 +23,7 @@
 #include <type_traits>
 #include "velox/common/base/Exceptions.h"
 #include "velox/common/base/Status.h"
+#include "velox/common/base/CountBits.h"
 #include "velox/type/CppToType.h"
 #include "velox/type/TimestampConversion.h"
 #include "velox/type/Type.h"
@@ -578,12 +579,7 @@ struct Converter<TypeKind::VARCHAR, void, TPolicy> {
         normalizeStandardNotation(str);
         return str;
       }
-      // Precision of float is at most 8 significant decimal digits. Precision
-      // of double is at most 17 significant decimal digits.
-      auto str =
-          fmt::format(std::is_same_v<T, float> ? "{:.7E}" : "{:.16E}", val);
-      normalizeScientificNotation(str);
-      return str;
+      return castScientificNotation(val);
     }
 
     return folly::to<std::string>(val);
@@ -601,6 +597,62 @@ struct Converter<TypeKind::VARCHAR, void, TPolicy> {
 
   static Expected<std::string> tryCast(const bool& val) {
     return val ? "true" : "false";
+  }
+
+  /// Convert floating number to scientific notation. Only accpet abs(value)
+  /// less equal then 10E-3 or great equal than 10E7. Otherwise, the result is
+  /// undefined.
+  template <typename T>
+  static std::string castScientificNotation(T value) {
+    static_assert(std::is_floating_point_v<T>);
+    static char digits[10] = {'0', '1', '2', '3', '4', '5', '6', '7', '8', '9'};
+
+    auto dec = fmt::detail::dragonbox::to_decimal(value);
+
+    // Ensure the significand part contains at least two digits for decimal
+    // point.
+    if (dec.significand < 10) {
+      dec.significand *= 10;
+      dec.exponent -= 1;
+    }
+
+    // Calc digit size
+    auto significand_size = countDigits(dec.significand);
+    dec.exponent += significand_size - 1;
+    auto exp_size = countDigits(std::abs(dec.exponent));
+
+    std::string buf;
+    buf.resize(
+        significand_size + exp_size + (value < 0) + (dec.exponent < 0) + 2);
+
+    int pos = 0;
+
+    // Push sign
+    if (value < 0) {
+      buf[pos++] = '-';
+    }
+
+    // Push significand part
+    pos += significand_size;
+    for (; dec.significand > 9; dec.significand /= 10) {
+      buf[pos--] = digits[dec.significand % 10];
+    }
+    buf[pos--] = '.';
+    buf[pos--] = digits[dec.significand % 10];
+    pos += significand_size + 2;
+
+    // Push exponent part
+    buf[pos++] = 'E';
+    if (dec.exponent < 0) {
+      buf[pos++] = '-';
+      dec.exponent = -dec.exponent;
+    }
+    pos += exp_size - 1;
+    for (; dec.exponent > 0; dec.exponent /= 10) {
+      buf[pos--] = digits[dec.exponent % 10];
+    }
+
+    return buf;
   }
 
   /// Normalize the given floating-point standard notation string in place, by

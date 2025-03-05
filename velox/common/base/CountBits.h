@@ -19,7 +19,8 @@
 namespace facebook::velox {
 
 // Copied from format.h of fmt.
-FOLLY_ALWAYS_INLINE int countDigits(__uint128_t n) {
+template <typename T>
+FOLLY_ALWAYS_INLINE int countDigits(T n) {
   int count = 1;
   for (;;) {
     if (n < 10) {

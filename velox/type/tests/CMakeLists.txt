@@ -123,4 +123,15 @@ if(VELOX_ENABLE_BENCHMARKS)
     GTest::gtest_main
     gflags::gflags
     glog::glog)
+
+  add_executable(velox_floating_point_benchmark FloatingPointBenchmark.cpp)
+  target_link_libraries(
+    velox_floating_point_benchmark
+    velox_type
+    Folly::folly
+    Folly::follybenchmark
+    GTest::gtest
+    GTest::gtest_main
+    gflags::gflags
+    glog::glog)
 endif()
