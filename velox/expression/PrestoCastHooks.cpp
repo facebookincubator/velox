@@ -165,9 +165,8 @@ const TimestampToStringOptions& PrestoCastHooks::timestampToStringOptions()
 
 namespace {
 template <typename FromNative, TypeKind To>
-Expected<typename TypeTraits<To>::NativeType> doCastDecimalToFloatingPoint(
-    FromNative unscaledVaule,
-    uint8_t scale) {
+Expected<typename TypeTraits<To>::NativeType>
+castDecimalToFloatingPointInternal(FromNative unscaledVaule, uint8_t scale) {
   using ToNative = typename TypeTraits<To>::NativeType;
   const auto scaleFactor = DecimalUtil::kPowersOfTen[scale];
   const auto output =
@@ -184,7 +183,7 @@ Expected<float> PrestoCastHooks::castShortDecimalToReal(
     int64_t unscaledValue,
     uint8_t /* unused */,
     uint8_t scale) const {
-  return doCastDecimalToFloatingPoint<int64_t, TypeKind::REAL>(
+  return castDecimalToFloatingPointInternal<int64_t, TypeKind::REAL>(
       unscaledValue, scale);
 }
 
@@ -192,7 +191,7 @@ Expected<float> PrestoCastHooks::castLongDecimalToReal(
     int128_t unscaledValue,
     uint8_t /* unused */,
     uint8_t scale) const {
-  return doCastDecimalToFloatingPoint<int128_t, TypeKind::REAL>(
+  return castDecimalToFloatingPointInternal<int128_t, TypeKind::REAL>(
       unscaledValue, scale);
 }
 
@@ -200,7 +199,7 @@ Expected<double> PrestoCastHooks::castShortDecimalToDouble(
     int64_t unscaledValue,
     uint8_t /* unused */,
     uint8_t scale) const {
-  return doCastDecimalToFloatingPoint<int64_t, TypeKind::DOUBLE>(
+  return castDecimalToFloatingPointInternal<int64_t, TypeKind::DOUBLE>(
       unscaledValue, scale);
 }
 
@@ -208,7 +207,7 @@ Expected<double> PrestoCastHooks::castLongDecimalToDouble(
     int128_t unscaledValue,
     uint8_t /* unused */,
     uint8_t scale) const {
-  return doCastDecimalToFloatingPoint<int128_t, TypeKind::DOUBLE>(
+  return castDecimalToFloatingPointInternal<int128_t, TypeKind::DOUBLE>(
       unscaledValue, scale);
 }
 

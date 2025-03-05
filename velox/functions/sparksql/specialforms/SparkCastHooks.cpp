@@ -105,12 +105,17 @@ StringView SparkCastHooks::removeWhiteSpaces(const StringView& view) const {
 
 namespace {
 
+// Aligns with Spark, which uses BigDecimal in Java.
+// Reference:
+// https://github.com/openjdk/jdk8u-dev/blob/20e72d16f569e823a9ecdd9951a742b4397ca978/jdk/src/share/classes/java/math/BigDecimal.java#L3294
 template <typename T>
 struct FloatingTraits {};
 
 template <>
 struct FloatingTraits<float> {
   static constexpr int64_t kMaxExact = 1L << 22;
+
+  // Powers of 10 which can be represented exactly in float.
   static constexpr float kPowersOfTen[] = {
       1.0e0f,
       1.0e1f,
@@ -130,6 +135,8 @@ struct FloatingTraits<float> {
 template <>
 struct FloatingTraits<double> {
   static constexpr int64_t kMaxExact = 1L << 52;
+
+  // Powers of 10 which can be represented exactly in double.
   static constexpr double kPowersOfTen[] = {
       1.0e0,  1.0e1,  1.0e2,  1.0e3,  1.0e4,  1.0e5,  1.0e6,  1.0e7,
       1.0e8,  1.0e9,  1.0e10, 1.0e11, 1.0e12, 1.0e13, 1.0e14, 1.0e15,
@@ -184,8 +191,8 @@ Expected<T> SparkCastHooks::doCastDecimalToFloatingType(
   }
 
   if (scale < FloatingTraits<T>::kPowersOfTenSize &&
-      facebook::velox::functions::sparksql::DecimalUtil::absValue<FromNative>(
-          unscaledValue) < FloatingTraits<T>::kMaxExact) {
+      DecimalUtil::absValue<FromNative>(unscaledValue) <
+          FloatingTraits<T>::kMaxExact) {
     return static_cast<T>(unscaledValue) /
         FloatingTraits<T>::kPowersOfTen[scale];
   }
