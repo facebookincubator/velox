@@ -285,7 +285,8 @@ HiveConnectorTestBase::makeHiveInsertTableHandle(
     const dwio::common::FileFormat tableStorageFormat,
     const std::optional<common::CompressionKind> compressionKind,
     const std::shared_ptr<dwio::common::WriterOptions>& writerOptions,
-    const bool ensureFiles) {
+    const bool ensureFiles,
+    const std::vector<std::string>& partitionKeyOrder) {
   return makeHiveInsertTableHandle(
       tableColumnNames,
       tableColumnTypes,
@@ -296,7 +297,8 @@ HiveConnectorTestBase::makeHiveInsertTableHandle(
       compressionKind,
       {},
       writerOptions,
-      ensureFiles);
+      ensureFiles,
+      partitionKeyOrder);
 }
 
 // static
@@ -311,7 +313,8 @@ HiveConnectorTestBase::makeHiveInsertTableHandle(
     const std::optional<common::CompressionKind> compressionKind,
     const std::unordered_map<std::string, std::string>& serdeParameters,
     const std::shared_ptr<dwio::common::WriterOptions>& writerOptions,
-    const bool ensureFiles) {
+    const bool ensureFiles,
+    const std::vector<std::string>& partitionKeyOrder) {
   std::vector<std::shared_ptr<const connector::hive::HiveColumnHandle>>
       columnHandles;
   std::vector<std::string> bucketedBy;
@@ -370,7 +373,7 @@ HiveConnectorTestBase::makeHiveInsertTableHandle(
       serdeParameters,
       writerOptions,
       ensureFiles,
-      partitionedBy);
+      partitionKeyOrder);
 }
 
 std::shared_ptr<connector::hive::HiveColumnHandle>

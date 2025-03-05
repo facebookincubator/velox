@@ -246,13 +246,11 @@ class HiveInsertTableHandle : public ConnectorInsertTableHandle {
           partitionKeyOrder_.begin(), partitionKeyOrder_.end());
       for (const auto& inputColumn : inputColumns_) {
         if (inputColumn->isPartitionKey()) {
-          VELOX_CHECK(partitionKeyNames.erase(inputColumn->name()) == 1);
+          VELOX_CHECK(
+              partitionKeyNames.erase(inputColumn->name()) == 1,
+              "partitionKeyOrder does not contain the partition key.");
         }
       }
-
-      VELOX_CHECK(
-          partitionKeyNames.empty(),
-          "Ensure the partitionKeyOrder contains all the partition keys in inputColumns_");
     }
   }
 
