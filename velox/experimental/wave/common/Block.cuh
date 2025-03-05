@@ -16,10 +16,13 @@
 
 #pragma once
 
+#include <breeze/functions/store.h>
+#include <breeze/platforms/platform.h>
+#include <breeze/utils/types.h>
+#include <breeze/platforms/cuda.cuh>
 #include <cub/block/block_radix_sort.cuh>
 #include <cub/block/block_reduce.cuh>
 #include <cub/block/block_scan.cuh>
-#include <cub/block/block_store.cuh>
 #include "velox/experimental/wave/common/CudaUtil.cuh"
 
 /// Utilities for  booleans and indices and thread blocks.
@@ -161,6 +164,8 @@ void __device__ blockSort(
     Key* keyOut,
     Value* valueOut,
     char* smem) {
+  using namespace breeze::functions;
+  using namespace breeze::utils;
   using Sort = cub::BlockRadixSort<Key, kBlockSize, kItemsPerThread, Value>;
 
   // Per-thread tile items
@@ -182,10 +187,17 @@ void __device__ blockSort(
 
   Sort(*temp_storage).SortBlockedToStriped(keys, values);
 
-  // Store output in striped fashion
-  cub::StoreDirectStriped<kBlockSize>(
-      threadIdx.x, valueOut + blockOffset, values);
-  cub::StoreDirectStriped<kBlockSize>(threadIdx.x, keyOut + blockOffset, keys);
+  // Store a striped arrangement of output across the thread block into a linear
+  // segment of items
+  CudaPlatform<kBlockSize, kWarpThreads> p;
+  BlockStore<kBlockSize, kItemsPerThread>(
+      p,
+      make_slice<THREAD, STRIPED>(values),
+      make_slice<GLOBAL>(valueOut + blockOffset));
+  BlockStore<kBlockSize, kItemsPerThread>(
+      p,
+      make_slice<THREAD, STRIPED>(keys),
+      make_slice<GLOBAL>(keyOut + blockOffset));
   __syncthreads();
 }
 
