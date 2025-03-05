@@ -84,6 +84,32 @@ TEST_F(UuidFunctionsTest, castAsVarchar) {
   ASSERT_EQ(size, uniqueUuids.size());
 }
 
+TEST_F(UuidFunctionsTest, castAsVarbinary) {
+  const vector_size_t size = 1'000;
+  auto uuids =
+      evaluate<FlatVector<int128_t>>("uuid()", makeRowVector(ROW({}), size));
+
+  auto result = evaluate<FlatVector<StringView>>(
+      "cast(c0 as varbinary)", makeRowVector({uuids}));
+
+  // Verify that CAST results as the same as boost::lexical_cast. We do not use
+  // boost::lexical_cast to implement CAST because it is too slow.
+  auto expected = makeFlatVector<std::string>(
+      size,
+      [&](auto row) {
+        const auto uuid = DecimalUtil::bigEndian(uuids->valueAt(row));
+
+        boost::uuids::uuid u;
+        memcpy(&u, &uuid, 16);
+
+        return boost::lexical_cast<std::string>(u);
+      },
+      nullptr,
+      VARBINARY());
+
+  velox::test::assertEqualVectors(expected, result);
+}
+
 TEST_F(UuidFunctionsTest, castRoundTrip) {
   auto strings = makeFlatVector<std::string>({
       "33355449-2c7d-43d7-967a-f53cd23215ad",
