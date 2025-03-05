@@ -17,12 +17,12 @@
 #pragma once
 
 #include <breeze/functions/reduce.h>
+#include <breeze/functions/scan.h>
+#include <breeze/functions/sort.h>
 #include <breeze/functions/store.h>
 #include <breeze/platforms/platform.h>
 #include <breeze/utils/types.h>
 #include <breeze/platforms/cuda.cuh>
-#include <cub/block/block_radix_sort.cuh>
-#include <cub/block/block_scan.cuh>
 #include "velox/experimental/wave/common/CudaUtil.cuh"
 
 /// Utilities for  booleans and indices and thread blocks.
@@ -141,8 +141,12 @@ template <
     int32_t kItemsPerThread,
     typename Key,
     typename Value>
-using RadixSort =
-    typename cub::BlockRadixSort<Key, kBlockSize, kItemsPerThread, Value>;
+using RadixSort = typename breeze::functions::BlockRadixSort<
+    CudaPlatform<kBlockSize, kWarpThreads>,
+    kItemsPerThread,
+    /*RADIX_BITS=*/8,
+    Key,
+    Value>;
 
 template <
     int32_t kBlockSize,
@@ -151,7 +155,7 @@ template <
     typename Value>
 inline int32_t __host__ __device__ blockSortSharedSize() {
   return sizeof(
-      typename RadixSort<kBlockSize, kItemsPerThread, Key, Value>::TempStorage);
+      typename RadixSort<kBlockSize, kItemsPerThread, Key, Value>::Scratch);
 }
 
 template <
@@ -169,7 +173,9 @@ void __device__ blockSort(
     char* smem) {
   using namespace breeze::functions;
   using namespace breeze::utils;
-  using Sort = cub::BlockRadixSort<Key, kBlockSize, kItemsPerThread, Value>;
+
+  CudaPlatform<kBlockSize, kWarpThreads> p;
+  using RadixSortT = RadixSort<kBlockSize, kItemsPerThread, Key, Value>;
 
   // Per-thread tile items
   Key keys[kItemsPerThread];
@@ -178,28 +184,37 @@ void __device__ blockSort(
   // Our current block's offset
   int blockOffset = 0;
 
-  // Load items into a blocked arrangement
+  constexpr int32_t kWarpItems = kWarpThreads * kItemsPerThread;
+  static_assert(
+      (kBlockSize % kWarpThreads) == 0,
+      "kBlockSize must be a multiple of kWarpThreads");
+
+  // Load items into a warp-striped arrangement
+  int32_t threadOffset = p.warp_idx() * kWarpItems + p.lane_idx();
   for (auto i = 0; i < kItemsPerThread; ++i) {
-    auto idx = blockOffset + i * kBlockSize + threadIdx.x;
+    auto idx = blockOffset + threadOffset + i * kWarpThreads;
     values[i] = valueGetter(idx);
     keys[i] = keyGetter(idx);
   }
 
   __syncthreads();
-  auto* temp_storage = reinterpret_cast<typename Sort::TempStorage*>(smem);
+  auto* temp_storage = reinterpret_cast<typename RadixSortT::Scratch*>(smem);
 
-  Sort(*temp_storage).SortBlockedToStriped(keys, values);
+  RadixSortT::Sort(
+      p,
+      make_slice<THREAD, WARP_STRIPED>(keys),
+      make_slice<THREAD, WARP_STRIPED>(values),
+      make_slice(temp_storage).template reinterpret<SHARED>());
 
-  // Store a striped arrangement of output across the thread block into a linear
-  // segment of items
-  CudaPlatform<kBlockSize, kWarpThreads> p;
+  // Store a warp-striped arrangement of output across the thread block into a
+  // linear segment of items
   BlockStore<kBlockSize, kItemsPerThread>(
       p,
-      make_slice<THREAD, STRIPED>(values),
+      make_slice<THREAD, WARP_STRIPED>(values),
       make_slice<GLOBAL>(valueOut + blockOffset));
   BlockStore<kBlockSize, kItemsPerThread>(
       p,
-      make_slice<THREAD, STRIPED>(keys),
+      make_slice<THREAD, WARP_STRIPED>(keys),
       make_slice<GLOBAL>(keyOut + blockOffset));
   __syncthreads();
 }
