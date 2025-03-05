@@ -131,8 +131,8 @@ class LoggedException : public velox::VeloxException {
     DWIO_WARN(__VA_ARGS__);
 
 /*
- * Use ENFORCE(expr) or ENFORCE(expr, message) whenever you want to
- * make sure that expr is nonzero. If it is zero, an exception is
+ * Use DWIO_ENFORCE_CUSTOM(expr) or DWIO_ENFORCE_CUSTOM(expr, message) whenever
+ * you want to make sure that expr is nonzero. If it is zero, an exception is
  * thrown. The type yielded by ENFORCE is the same as expr, so it acts
  * like an identity function, which makes it convenient to insert
  * anywhere. For example:
@@ -140,14 +140,20 @@ class LoggedException : public velox::VeloxException {
  * auto file = ENFORCE(fopen("file.txt", "r"), "Can't find file.txt");
  * auto p = ENFORCE(dynamic_cast<Type*>(pointer));
  *
- * In case the expression is nonzero, the message, if any, is not
- * evaluated so you can plant in there a costly string concatenation:
+ * The message is lazily evaluated, you can use a costly string concatenation if
+ * needed:
  *
  * string fn = "file.txt"
  * auto file = ENFORCE(fopen(fn.c_str(), "r"), "Can't find " + fn);
  *
- * The ENFORCE macro stores the file, name, and function into the
- * FBException thrown.
+ * Variadic message arguments are converted to strings and concatenated
+ * together using folly::to<std::string>() into a single error message:
+ *
+ * DWIO_ENSURE(false, "a", "b", "c") will throw an exception with the message
+ * "abc".
+ *
+ * This macro adds the file name, line number and the expression into the
+ * thrown VeloxException.
  */
 #define DWIO_ENFORCE_CUSTOM(                            \
     exception, expression, errorSource, errorCode, ...) \
@@ -196,24 +202,24 @@ containing information about the file, line, and function where it happened.
 #define DWIO_ENSURE_NOT_NULL(p, ...) \
   DWIO_ENSURE(p != nullptr, "[Null pointer] : ", ##__VA_ARGS__);
 
-#define DWIO_ENSURE_NE(l, r, ...)       \
-  DWIO_ENSURE(                          \
-      l != r,                           \
-      "[Range Constraint Violation : ", \
-      l,                                \
-      "!=",                             \
-      r,                                \
-      "] : ",                           \
+#define DWIO_ENSURE_NE(l, r, ...)          \
+  DWIO_ENSURE(                             \
+      l != r,                              \
+      "[Equality Constraint Violation : ", \
+      l,                                   \
+      "!=",                                \
+      r,                                   \
+      "] : ",                              \
       ##__VA_ARGS__);
 
-#define DWIO_ENSURE_EQ(l, r, ...)       \
-  DWIO_ENSURE(                          \
-      l == r,                           \
-      "[Range Constraint Violation : ", \
-      l,                                \
-      "==",                             \
-      r,                                \
-      "] : ",                           \
+#define DWIO_ENSURE_EQ(l, r, ...)          \
+  DWIO_ENSURE(                             \
+      l == r,                              \
+      "[Equality Constraint Violation : ", \
+      l,                                   \
+      "==",                                \
+      r,                                   \
+      "] : ",                              \
       ##__VA_ARGS__);
 
 #define DWIO_ENSURE_LT(l, r, ...)       \
