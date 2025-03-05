@@ -16,12 +16,12 @@
 
 #pragma once
 
+#include <breeze/functions/reduce.h>
 #include <breeze/functions/store.h>
 #include <breeze/platforms/platform.h>
 #include <breeze/utils/types.h>
 #include <breeze/platforms/cuda.cuh>
 #include <cub/block/block_radix_sort.cuh>
-#include <cub/block/block_reduce.cuh>
 #include <cub/block/block_scan.cuh>
 #include "velox/experimental/wave/common/CudaUtil.cuh"
 
@@ -121,15 +121,20 @@ __device__ inline void bool256ToIndices(
 
 template <int32_t blockSize, typename T, typename Getter>
 __device__ inline void blockSum(Getter getter, void* shmem, T* result) {
-  typedef cub::BlockReduce<T, blockSize> BlockReduceT;
+  using namespace breeze::functions;
+  using namespace breeze::utils;
 
-  auto* temp = reinterpret_cast<typename BlockReduceT::TempStorage*>(shmem);
+  CudaPlatform<blockSize, kWarpThreads> p;
+  using BlockReduceT = BlockReduce<decltype(p), T>;
+
+  auto* temp = reinterpret_cast<typename BlockReduceT::Scratch*>(shmem);
   T data[1];
   data[0] = getter();
-  T aggregate = BlockReduceT(*temp).Reduce(data, cub::Sum());
-
-  if (threadIdx.x == 0) {
-    result[blockIdx.x] = aggregate;
+  T aggregate =
+      BlockReduceT::template Reduce<ReduceOpAdd, /*kItemsPerThread=*/1>(
+          p, make_slice(data), make_slice(temp).template reinterpret<SHARED>());
+  if (p.thread_idx() == 0) {
+    result[p.block_idx()] = aggregate;
   }
 }
 
