@@ -101,6 +101,8 @@ jobs:
 
       - name: Install macOS dependencies
         if: startsWith(matrix.os, 'macos')
+        env:
+          MACOSX_DEPLOYMENT_TARGET: "13.0"
         run: |
           export INSTALL_PREFIX="$GITHUB_WORKSPACE/dependencies"
           echo "CMAKE_PREFIX_PATH=$INSTALL_PREFIX" >> $GITHUB_ENV
@@ -117,9 +119,8 @@ jobs:
       - name: Build wheels
         uses: pypa/cibuildwheel@v2.23.0
         env:
-          # required for preadv/pwritev
-          MACOSX_DEPLOYMENT_TARGET: "11.0"
-          CIBW_ARCHS: "x86_64"
+          MACOSX_DEPLOYMENT_TARGET: "13.0"
+          CIBW_ARCHS: "native"
           # Only build for 3.12 for now
           CIBW_BUILD: ${{ github.event_name == 'pull_request' && 'cp312-*' || 'cp312-*' }}
           CIBW_SKIP: "*musllinux* cp36-*"
