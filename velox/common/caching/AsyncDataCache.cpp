@@ -297,6 +297,7 @@ bool CoalescedLoad::loadOrFuture(
     state_ = State::kLoading;
   }
 
+  LOG(INFO) << "[LOG] ### In AsyncDataCache.loadOrFuture - Caching Check: ssdSavable=" << ssdSavable;
   // Outside of 'mutex_'.
   try {
     const auto pins = loadData(/*prefetch=*/wait == nullptr);

@@ -491,6 +491,7 @@ void CachedBufferedInput::readRegions(
       if (load->state() == CoalescedLoad::State::kPlanned) {
         executor_->add(
             [pendingLoad = load, ssdSavable = !options_.noCacheRetention()]() {
+              LOG(INFO) << "### In CachedBufferedInput.readRegions - Caching Check: ssdSaveable=" << ssdSavable;
               process::TraceContext trace("Read Ahead");
               pendingLoad->loadOrFuture(nullptr, ssdSavable);
             });
