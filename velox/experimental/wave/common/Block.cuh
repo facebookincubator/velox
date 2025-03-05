@@ -76,8 +76,7 @@ boolBlockToIndices(Getter getter, unsigned start, T* indices, void* shmem, T& si
 }
 
 inline int32_t __device__ __host__ bool256ToIndicesSize() {
-  return sizeof(typename cub::WarpScan<uint16_t>::TempStorage) +
-      33 * sizeof(uint16_t);
+  return 33 * sizeof(uint16_t);
 }
 
 /// Returns indices of set bits for 256 one byte flags. 'getter8' is
@@ -92,7 +91,7 @@ __device__ inline void bool256ToIndices(
     T* indices,
     T& size,
     char* smem) {
-  using Scan = cub::WarpScan<uint16_t>;
+  CudaPlatform<kWarpThreads, kWarpThreads> p;
   auto* smem16 = reinterpret_cast<uint16_t*>(smem);
   auto group = threadIdx.x / 8;
   uint64_t bits = getter8(group) & 0x0101010101010101;
@@ -101,10 +100,8 @@ __device__ inline void bool256ToIndices(
   }
   __syncthreads();
   if (threadIdx.x < 32) {
-    auto* temp = reinterpret_cast<typename Scan::TempStorage*>((smem + 72));
     uint16_t data = smem16[threadIdx.x];
-    uint16_t result;
-    Scan(*temp).ExclusiveSum(data, result);
+    uint16_t result = p.scan_add(data) - data;
     smem16[threadIdx.x] = result;
     if (threadIdx.x == 31) {
       size = data + result;
