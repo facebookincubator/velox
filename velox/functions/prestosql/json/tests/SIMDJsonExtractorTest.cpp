@@ -77,9 +77,14 @@ class SIMDJsonExtractorTest : public testing::Test {
     EXPECT_EQ(expected->size(), res.size())
         << "with json " << json << " and path " << path;
     for (int i = 0; i < res.size(); i++) {
-      EXPECT_EQ(folly::parseJson(expected->at(i)), folly::parseJson(res.at(i)))
-          << "Encountered different values at position " << i << " with json "
-          << json << " and path " << path;
+      try {
+        EXPECT_EQ(
+            folly::parseJson(expected->at(i)), folly::parseJson(res.at(i)))
+            << "Encountered different values at position " << i << " with json "
+            << json << " and path " << path;
+      } catch (std::exception& e) {
+        EXPECT_TRUE(false) << "Unable to parse json: " << res.at(i);
+      }
     }
   }
 
@@ -337,7 +342,7 @@ TEST_F(SIMDJsonExtractorTest, fullScalarTest) {
   // Test numeric path expression matches arrays and objects
   testExtractScalar("[0, 1, 2]", "$.1", "1");
   testExtractScalar("[0, 1, 2]", "$[1]", "1");
-  testExtractScalar("[0, 1, 2]", "$[\"1\"]", "1");
+  testExtractScalar("[0, 1, 2]", "$[\"1\"]", std::nullopt);
   testExtractScalar("{\"0\" : 0, \"1\" : 1, \"2\" : 2 }", "$.1", "1");
   testExtractScalar("{\"0\" : 0, \"1\" : 1, \"2\" : 2 }", "$[1]", "1");
   testExtractScalar("{\"0\" : 0, \"1\" : 1, \"2\" : 2 }", "$[\"1\"]", "1");
@@ -428,7 +433,7 @@ TEST_F(SIMDJsonExtractorTest, fullJsonValueTest) {
   // Test numeric path expression matches arrays and objects
   testExtract("[0, 1, 2]", "$.1", "1");
   testExtract("[0, 1, 2]", "$[1]", "1");
-  testExtract("[0, 1, 2]", "$[\"1\"]", "1");
+  testExtract("[0, 1, 2]", "$[\"1\"]", std::nullopt);
   testExtract("{\"0\" : 0, \"1\" : 1, \"2\" : 2 }", "$.1", "1");
   testExtract("{\"0\" : 0, \"1\" : 1, \"2\" : 2 }", "$[1]", "1");
   testExtract("{\"0\" : 0, \"1\" : 1, \"2\" : 2 }", "$[\"1\"]", "1");
@@ -561,6 +566,51 @@ TEST_F(SIMDJsonExtractorTest, invalidJson) {
   // Inner object is invalid.
   json = "{\"foo\": [\"bar\", \"baz]}";
   EXPECT_NE(simdJsonExtract(json, "$.foo[0]", consumer), simdjson::SUCCESS);
+}
+
+TEST_F(SIMDJsonExtractorTest, specialCases) {
+  // Identifier_or_index or identifier types used on an object.
+  std::string json = R"DELIM({"0" : {"bar" : [1, 2]}})DELIM";
+  testExtract(json, "$[0].bar", "[1, 2]");
+  testExtract(json, "$[\'0\'].bar", "[1, 2]");
+  testExtract(json, "$[\"0\"].bar", "[1, 2]");
+  testExtract(json, "$.0.bar", "[1, 2]");
+  testExtract(json, "$.\'0\'.bar", std::nullopt);
+
+  // Identifier_or_index or identifier types used on an array.
+  json = R"DELIM([{"bar" : [1, 2]}, {"foo" : [3, 4]}])DELIM";
+  testExtract(json, "$[0].bar", "[1, 2]");
+  testExtract(json, "$[\'0\'].bar", std::nullopt);
+  testExtract(json, "$[\"0\"].bar", std::nullopt);
+  testExtract(json, "$.0.bar", "[1, 2]");
+  testExtract(json, "$.\'0\'.bar", std::nullopt);
+
+  // Dot notation absorbing special tokens like double quotes.
+  json = R"DELIM({"\"0\"" : {"bar" : [1, 2]}})DELIM";
+  testExtract(json, "$.0.bar", std::nullopt);
+  testExtract(json, "$.\"0\".bar", "[1, 2]");
+
+  // Identifier_or_index used to extract from both array and object at the same
+  // depth in a json.
+  json = R"DELIM([{"0": "obj"}, ["array0", "array1"]])DELIM";
+  testExtract(json, "$.*.0", std::vector<std::string>{"\"obj\"", "\"array0\""});
+  testExtract(
+      json, "$.*.[0]", std::vector<std::string>{"\"obj\"", "\"array0\""});
+  testExtract(json, "$.*.[\'0\']", std::vector<std::string>{"\"obj\""});
+  testExtract(json, "$.*.[\"0\"]", std::vector<std::string>{"\"obj\""});
+
+  // '*' being used both as a wildcard and as a string.
+  json = R"DELIM([{"*": "obj"}, ["array0", "array1"]])DELIM";
+  testExtract(
+      json,
+      "$.*.*",
+      std::vector<std::string>{"\"obj\"", "\"array0\"", "\"array1\""});
+  testExtract(
+      json,
+      "$.*.[*]",
+      std::vector<std::string>{"\"obj\"", "\"array0\"", "\"array1\""});
+  testExtract(json, "$.*.['*']", std::vector<std::string>{"\"obj\""});
+  testExtract(json, "$.*.[\"*\"]", std::vector<std::string>{"\"obj\""});
 }
 
 } // namespace
