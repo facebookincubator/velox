@@ -591,7 +591,8 @@ class TableWriteTest : public HiveConnectorTestBase {
       const std::string& outputDirectoryPath,
       const std::vector<std::string>& partitionedBy,
       const std::shared_ptr<HiveBucketProperty> bucketProperty,
-      const std::optional<CompressionKind> compressionKind = {}) {
+      const std::optional<CompressionKind> compressionKind = {},
+      const std::vector<std::string>& partitionedKeyOrder = {}) {
     return std::make_shared<core::InsertTableHandle>(
         kHiveConnectorId,
         makeHiveInsertTableHandle(
@@ -602,7 +603,11 @@ class TableWriteTest : public HiveConnectorTestBase {
             makeLocationHandle(
                 outputDirectoryPath, std::nullopt, outputTableType),
             fileFormat_,
-            compressionKind));
+            compressionKind,
+            {},
+            nullptr,
+            false,
+            partitionedKeyOrder));
   }
 
   // Returns a table insert plan node.
@@ -618,7 +623,8 @@ class TableWriteTest : public HiveConnectorTestBase {
           connector::hive::LocationHandle::TableType::kNew,
       const CommitStrategy& outputCommitStrategy = CommitStrategy::kNoCommit,
       bool aggregateResult = true,
-      std::shared_ptr<core::AggregationNode> aggregationNode = nullptr) {
+      std::shared_ptr<core::AggregationNode> aggregationNode = nullptr,
+      const std::vector<std::string>& partitionedKeyOrder = {}) {
     return createInsertPlan(
         inputPlan,
         inputPlan.planNode()->outputType(),
@@ -631,7 +637,8 @@ class TableWriteTest : public HiveConnectorTestBase {
         outputTableType,
         outputCommitStrategy,
         aggregateResult,
-        aggregationNode);
+        aggregationNode,
+        partitionedKeyOrder);
   }
 
   PlanNodePtr createInsertPlan(
@@ -647,7 +654,8 @@ class TableWriteTest : public HiveConnectorTestBase {
           connector::hive::LocationHandle::TableType::kNew,
       const CommitStrategy& outputCommitStrategy = CommitStrategy::kNoCommit,
       bool aggregateResult = true,
-      std::shared_ptr<core::AggregationNode> aggregationNode = nullptr) {
+      std::shared_ptr<core::AggregationNode> aggregationNode = nullptr,
+      const std::vector<std::string>& partitionedKeyOrder = {}) {
     if (numTableWriters == 1) {
       return createInsertPlanWithSingleWriter(
           inputPlan,
@@ -672,7 +680,8 @@ class TableWriteTest : public HiveConnectorTestBase {
           outputTableType,
           outputCommitStrategy,
           aggregateResult,
-          aggregationNode);
+          aggregationNode,
+          partitionedKeyOrder);
     } else {
       return createInsertPlanForBucketTable(
           inputPlan,
@@ -685,7 +694,8 @@ class TableWriteTest : public HiveConnectorTestBase {
           outputTableType,
           outputCommitStrategy,
           aggregateResult,
-          aggregationNode);
+          aggregationNode,
+          partitionedKeyOrder);
     }
   }
 
@@ -755,7 +765,8 @@ class TableWriteTest : public HiveConnectorTestBase {
       const connector::hive::LocationHandle::TableType& outputTableType,
       const CommitStrategy& outputCommitStrategy,
       bool aggregateResult,
-      std::shared_ptr<core::AggregationNode> aggregationNode) {
+      std::shared_ptr<core::AggregationNode> aggregationNode,
+      const std::vector<std::string>& partitionedKeyOrder = {}) {
     // Since we might do column rename, so generate bucket property based on
     // the data type from 'inputPlan'.
     std::vector<std::string> bucketColumns;
@@ -782,7 +793,8 @@ class TableWriteTest : public HiveConnectorTestBase {
                     outputDirectoryPath,
                     partitionedBy,
                     bucketProperty,
-                    compressionKind),
+                    compressionKind,
+                    partitionedKeyOrder),
                 false,
                 outputCommitStrategy))
             .capturePlanNodeId(tableWriteNodeId_)
@@ -822,7 +834,8 @@ class TableWriteTest : public HiveConnectorTestBase {
       const connector::hive::LocationHandle::TableType& outputTableType,
       const CommitStrategy& outputCommitStrategy,
       bool aggregateResult,
-      std::shared_ptr<core::AggregationNode> aggregationNode) {
+      std::shared_ptr<core::AggregationNode> aggregationNode,
+      const std::vector<std::string>& partitionedKeyOrder = {}) {
     auto insertPlan = inputPlan;
     if (scaleWriter_) {
       if (!partitionedBy.empty()) {
@@ -843,7 +856,8 @@ class TableWriteTest : public HiveConnectorTestBase {
                 outputDirectoryPath,
                 partitionedBy,
                 nullptr,
-                compressionKind),
+                compressionKind,
+                partitionedKeyOrder),
             false,
             outputCommitStrategy))
         .capturePlanNodeId(tableWriteNodeId_)
@@ -2127,9 +2141,13 @@ TEST_P(AllTableWriterTest, commitStrategies) {
 
 TEST_P(PartitionedTableWriterTest, specialPartitionName) {
   std::function<void(
-      const std::vector<std::string>&, const std::vector<TypePtr>)>
+      const std::vector<std::string>&,
+      const std::vector<std::string>&,
+      const std::vector<TypePtr>)>
       testSpecialPartitionName = [&](const std::vector<std::string>&
                                          partitionKeys,
+                                     const std::vector<std::string>&
+                                         partitionKeyOrder,
                                      const std::vector<TypePtr>
                                          partitionTypes) {
         const int32_t numPartitions = 50;
@@ -2191,57 +2209,85 @@ TEST_P(PartitionedTableWriterTest, specialPartitionName) {
         }
 
         auto outputDirectory = TempDirectoryPath::create();
-        auto plan = createInsertPlan(
-            PlanBuilder().tableScan(rowType),
-            rowType,
-            outputDirectory->getPath(),
-            partitionKeys,
-            bucketProperty_,
-            compressionKind_,
-            getNumWriters(),
-            connector::hive::LocationHandle::TableType::kNew,
-            commitStrategy_);
 
-        auto task =
-            assertQuery(plan, inputFilePaths, "SELECT count(*) FROM tmp");
+        if (partitionKeys.size() != partitionKeyOrder.size()) {
+          VELOX_ASSERT_THROW(
+              createInsertPlan(
+                  PlanBuilder().tableScan(rowType),
+                  rowType,
+                  outputDirectory->getPath(),
+                  partitionKeys,
+                  bucketProperty_,
+                  compressionKind_,
+                  getNumWriters(),
+                  connector::hive::LocationHandle::TableType::kNew,
+                  commitStrategy_,
+                  true,
+                  nullptr,
+                  partitionKeyOrder),
+              "partitionKeyOrder does not contain the partition key.");
+        } else {
+          auto plan = createInsertPlan(
+              PlanBuilder().tableScan(rowType),
+              rowType,
+              outputDirectory->getPath(),
+              partitionKeys,
+              bucketProperty_,
+              compressionKind_,
+              getNumWriters(),
+              connector::hive::LocationHandle::TableType::kNew,
+              commitStrategy_,
+              true,
+              nullptr,
+              partitionKeyOrder);
+          auto task =
+              assertQuery(plan, inputFilePaths, "SELECT count(*) FROM tmp");
 
-        std::set<std::string> actualPartitionDirectories =
-            getLeafSubdirectories(outputDirectory->getPath());
+          std::set<std::string> actualPartitionDirectories =
+              getLeafSubdirectories(outputDirectory->getPath());
 
-        std::set<std::string> expectedPartitionDirectories;
-        const std::vector<std::string> expectedCharsAfterEscape = {
-            "%22",
-            "%23",
-            "%25",
-            "%27",
-            "%2A",
-            "%2F",
-            "%3A",
-            "%3D",
-            "%3F",
-            "%5C",
-            "%7F",
-            "%7B",
-            "%5B",
-            "%5D",
-            "%5E"};
-        for (auto i = 0; i < numPartitions; ++i) {
-          // url encoded
-          std::string partitionName;
-          if (partitionKeys == std::vector<std::string>{"p0", "p1"}) {
-            partitionName = fmt::format(
-                "p0={}/p1=str_{}{}", i, i, expectedCharsAfterEscape.at(i % 15));
-          } else if (partitionKeys == std::vector<std::string>{"p1", "p0"}) {
-            partitionName = fmt::format(
-                "p1=str_{}{}/p0={}", i, expectedCharsAfterEscape.at(i % 15), i);
+          std::set<std::string> expectedPartitionDirectories;
+          const std::vector<std::string> expectedCharsAfterEscape = {
+              "%22",
+              "%23",
+              "%25",
+              "%27",
+              "%2A",
+              "%2F",
+              "%3A",
+              "%3D",
+              "%3F",
+              "%5C",
+              "%7F",
+              "%7B",
+              "%5B",
+              "%5D",
+              "%5E"};
+          for (auto i = 0; i < numPartitions; ++i) {
+            // url encoded
+            std::string partitionName;
+            if (partitionKeys == std::vector<std::string>{"p0", "p1"}) {
+              partitionName = fmt::format(
+                  "p0={}/p1=str_{}{}",
+                  i,
+                  i,
+                  expectedCharsAfterEscape.at(i % 15));
+            } else if (partitionKeys == std::vector<std::string>{"p1", "p0"}) {
+              partitionName = fmt::format(
+                  "p1=str_{}{}/p0={}",
+                  i,
+                  expectedCharsAfterEscape.at(i % 15),
+                  i);
+            }
+            expectedPartitionDirectories.emplace(
+                fs::path(outputDirectory->getPath()) / partitionName);
           }
-          expectedPartitionDirectories.emplace(
-              fs::path(outputDirectory->getPath()) / partitionName);
+          EXPECT_EQ(actualPartitionDirectories, expectedPartitionDirectories);
         }
-        EXPECT_EQ(actualPartitionDirectories, expectedPartitionDirectories);
       };
-  testSpecialPartitionName({"p0", "p1"}, {VARCHAR(), INTEGER()});
-  testSpecialPartitionName({"p1", "p0"}, {INTEGER(), VARCHAR()});
+  testSpecialPartitionName({"p0", "p1"}, {"p0", "p1"}, {VARCHAR(), INTEGER()});
+  testSpecialPartitionName({"p1", "p0"}, {"p1", "p0"}, {INTEGER(), VARCHAR()});
+  testSpecialPartitionName({"p1", "p0"}, {"p1"}, {INTEGER(), VARCHAR()});
 }
 
 TEST_P(PartitionedTableWriterTest, multiplePartitions) {
