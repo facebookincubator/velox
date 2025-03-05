@@ -17,8 +17,8 @@ add_library(
   CudfConversion.cpp
   CudfFilterProject.cpp
   CudfHashAggregation.cpp
-  CudfLocalPartition.cpp
   CudfHashJoin.cpp
+  CudfLocalPartition.cpp
   CudfOrderBy.cpp
   ExpressionEvaluator.cpp
   ToCudf.cpp

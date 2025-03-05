@@ -61,8 +61,8 @@ set_tests_properties(velox_cudf_order_by_test PROPERTIES LABELS cuda_driver
                                                          TIMEOUT 3000)
 set_tests_properties(velox_cudf_aggregation_test PROPERTIES LABELS cuda_driver
                                                             TIMEOUT 3000)
-set_tests_properties(velox_cudf_local_partition_test
-                     PROPERTIES LABELS cuda_driver TIMEOUT 3000)
+set_tests_properties(velox_cudf_local_partition_test PROPERTIES LABELS cuda_driver
+                                                         TIMEOUT 3000)
 set_tests_properties(velox_cudf_table_scan_test PROPERTIES LABELS cuda_driver
                                                            TIMEOUT 3000)
 set_tests_properties(velox_cudf_table_write_test PROPERTIES LABELS cuda_driver

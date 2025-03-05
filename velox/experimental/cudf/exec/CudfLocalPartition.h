@@ -17,15 +17,17 @@
 
 #include "velox/exec/LocalPartition.h"
 #include "velox/exec/Operator.h"
+#include "velox/experimental/cudf/exec/NvtxHelper.h"
 
 namespace facebook::velox::cudf_velox {
 
-class CudfLocalPartition : public exec::Operator {
+class CudfLocalPartition : public exec::Operator, public NvtxHelper {
  public:
   CudfLocalPartition(
       int32_t operatorId,
       exec::DriverCtx* driverCtx,
       const std::shared_ptr<const core::LocalPartitionNode>& planNode);
+
   std::string toString() const override {
     return fmt::format("LocalPartition({})", numPartitions_);
   }
@@ -49,8 +51,6 @@ class CudfLocalPartition : public exec::Operator {
   bool isFinished() override;
 
  protected:
-  void prepareForInput(RowVectorPtr& input);
-
   const std::vector<std::shared_ptr<exec::LocalExchangeQueue>> queues_;
   const size_t numPartitions_;
 

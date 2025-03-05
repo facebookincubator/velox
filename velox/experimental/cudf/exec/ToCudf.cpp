@@ -118,9 +118,6 @@ bool CompileState::compile() {
     return true;
   };
 
-  // TODO (dm): The logic to figure out whether to put a conversion before or
-  // after the replced operators needs a second go over after adding local
-  // exchange.
   auto is_supported_gpu_operator =
       [is_filter_project_supported, is_join_supported, is_table_scan_supported](
           const exec::Operator* op) {
