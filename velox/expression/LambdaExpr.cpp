@@ -122,9 +122,9 @@ class ExprCallable : public Callable {
       VELOX_DCHECK(!isLazyNotLoaded(*values));
       if (wrapCapture) {
         values = BaseVector::wrapInDictionary(
-            BufferPtr(nullptr), wrapCapture, size, values);
+            BufferPtr(nullptr), wrapCapture, size, std::move(values));
       }
-      allVectors.push_back(values);
+      allVectors.push_back(std::move(values));
     }
 
     auto row = std::make_shared<RowVector>(
@@ -262,7 +262,7 @@ void LambdaExpr::evalSpecialForm(
     VELOX_CHECK(result->encoding() == VectorEncoding::Simple::FUNCTION);
     functions = std::static_pointer_cast<FunctionVector>(result);
   }
-  functions->addFunction(callable, rows);
+  functions->addFunction(std::move(callable), rows);
 }
 
 void LambdaExpr::makeTypeWithCapture(EvalCtx& context) {
