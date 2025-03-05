@@ -211,6 +211,16 @@ int main(int argc, char** argv) {
           "cast_bigint_as_short_decimal", "cast (bigint as decimal(18,6))")
       .addExpression(
           "cast_bigint_as_long_decimal", "cast (bigint as decimal(38,16))")
+      .addExpression("cast_decimal_as_float", "cast (decimal as float)")
+      .addExpression("cast_decimal_as_double", "cast (decimal as double)")
+      .addExpression(
+          "cast_short_decimal_as_float", "cast (short_decimal as float)")
+      .addExpression(
+          "cast_short_decimal_as_double", "cast (short_decimal as double)")
+      .addExpression(
+          "cast_long_decimal_as_float", "cast (long_decimal as float)")
+      .addExpression(
+          "cast_long_decimal_as_double", "cast (long_decimal as double)")
       .withIterations(100)
       .disableTesting();
 
