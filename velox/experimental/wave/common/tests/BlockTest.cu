@@ -399,7 +399,8 @@ void __global__ __launch_bounds__(1024) hashTestKernel(
       int32_t end = begin + probe->numRows[blockIdx.x];
 
       for (auto i = begin + threadIdx.x; i < end; i += blockDim.x) {
-        table->updatingProbe<TestingRow>(i, cub::LaneId(), i < end, ops);
+        table->updatingProbe<TestingRow>(
+            i, threadIdx.x % kWarpThreads, i < end, ops);
       }
       break;
     }

@@ -242,7 +242,7 @@ void __device__ partitionRows(
   CudaPlatform<kBlockSize, kWarpThreads> p;
   using BlockScanT = BlockScan<decltype(p), int32_t, /*kItemsPerThread=*/1>;
   auto warp = threadIdx.x / kWarpThreads;
-  auto lane = cub::LaneId();
+  auto lane = threadIdx.x % kWarpThreads;
   extern __shared__ __align__(16) char smem[];
   auto* counters = reinterpret_cast<uint32_t*>(
       numPartitions <= kBlockSize ? smem
