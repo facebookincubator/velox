@@ -76,8 +76,7 @@ boolBlockToIndices(Getter getter, T start, T* indices, void* shmem, T& size) {
 }
 
 inline int32_t __device__ __host__ bool256ToIndicesSize() {
-  return sizeof(typename cub::WarpScan<uint16_t>::TempStorage) +
-      33 * sizeof(uint16_t);
+  return 33 * sizeof(uint16_t);
 }
 
 /// Returns indices of set bits for 256 one byte flags. 'getter8' is
@@ -88,7 +87,7 @@ inline int32_t __device__ __host__ bool256ToIndicesSize() {
 template <typename T, typename Getter8>
 __device__ inline void
 bool256ToIndices(Getter8 getter8, T start, T* indices, T& size, char* smem) {
-  using Scan = cub::WarpScan<uint16_t>;
+  CudaPlatform<kWarpThreads, kWarpThreads> p;
   auto* smem16 = reinterpret_cast<uint16_t*>(smem);
   int32_t group = threadIdx.x / 8;
   uint64_t bits = getter8(group) & 0x0101010101010101;
@@ -97,10 +96,8 @@ bool256ToIndices(Getter8 getter8, T start, T* indices, T& size, char* smem) {
   }
   __syncthreads();
   if (threadIdx.x < 32) {
-    auto* temp = reinterpret_cast<typename Scan::TempStorage*>((smem + 72));
     uint16_t data = smem16[threadIdx.x];
-    uint16_t result;
-    Scan(*temp).ExclusiveSum(data, result);
+    uint16_t result = p.scan_add(data) - data;
     smem16[threadIdx.x] = result;
     if (threadIdx.x == 31) {
       size = data + result;
@@ -320,10 +317,8 @@ void __device__ partitionRows(
 template <typename T, int32_t kBlockSize>
 inline __device__ T exclusiveSum(T input, T* total, T* temp) {
   constexpr int32_t kNumWarps = kBlockSize / kWarpThreads;
-  using Scan = cub::WarpScan<T>;
-  T sum;
-  Scan(*reinterpret_cast<typename Scan::TempStorage*>(temp))
-      .ExclusiveSum(input, sum);
+  CudaPlatform<kBlockSize, kWarpThreads> p;
+  T sum = p.scan_add(input) - input;
   if (kBlockSize == kWarpThreads) {
     if (total) {
       if (threadIdx.x == kWarpThreads - 1) {
@@ -337,11 +332,8 @@ inline __device__ T exclusiveSum(T input, T* total, T* temp) {
     temp[threadIdx.x / kWarpThreads] = input + sum;
   }
   __syncthreads();
-  using InnerScan = cub::WarpScan<T, kNumWarps>;
   T warpSum = threadIdx.x < kNumWarps ? temp[threadIdx.x] : 0;
-  T blockSum;
-  InnerScan(*reinterpret_cast<typename InnerScan::TempStorage*>(temp))
-      .ExclusiveSum(warpSum, blockSum);
+  T blockSum = p.scan_add(warpSum) - warpSum;
   if (threadIdx.x < kNumWarps) {
     temp[threadIdx.x] = blockSum;
     if (total && threadIdx.x == kNumWarps - 1) {
@@ -359,10 +351,8 @@ inline __device__ T exclusiveSum(T input, T* total, T* temp) {
 template <typename T, int32_t kBlockSize>
 inline __device__ T inclusiveSum(T input, T* total, T* temp) {
   constexpr int32_t kNumWarps = kBlockSize / kWarpThreads;
-  using Scan = cub::WarpScan<T>;
-  T sum;
-  Scan(*reinterpret_cast<typename Scan::TempStorage*>(temp))
-      .InclusiveSum(input, sum);
+  CudaPlatform<kBlockSize, kWarpThreads> p;
+  T sum = p.scan_add(input);
   if (kBlockSize <= kWarpThreads) {
     if (total != nullptr) {
       if (threadIdx.x == kBlockSize - 1) {
@@ -377,11 +367,8 @@ inline __device__ T inclusiveSum(T input, T* total, T* temp) {
   }
   __syncthreads();
   constexpr int32_t kInnerWidth = kNumWarps < 2 ? 2 : kNumWarps;
-  using InnerScan = cub::WarpScan<T, kInnerWidth>;
   T warpSum = threadIdx.x < kInnerWidth ? temp[threadIdx.x] : 0;
-  T blockSum;
-  InnerScan(*reinterpret_cast<typename InnerScan::TempStorage*>(temp))
-      .ExclusiveSum(warpSum, blockSum);
+  T blockSum = p.scan_add(warpSum) - warpSum;
   if (threadIdx.x < kInnerWidth) {
     temp[threadIdx.x] = blockSum;
   }
