@@ -106,6 +106,13 @@ function install_re2 {
   cmake_install_dir re2 -DRE2_BUILD_TESTING=OFF
 }
 
+function install_gflags {
+  # Remove an older version if present.
+  dnf remove -y gflags
+  wget_and_untar https://github.com/gflags/gflags/archive/${GFLAGS_VERSION}.tar.gz gflags
+  cmake_install_dir gflags -DBUILD_SHARED_LIBS=ON -DBUILD_STATIC_LIBS=ON -DBUILD_gflags_LIB=ON -DLIB_SUFFIX=64
+}
+
 function install_glog {
   wget_and_untar https://github.com/google/glog/archive/${GLOG_VERSION}.tar.gz glog
   cmake_install_dir glog -DBUILD_SHARED_LIBS=ON
