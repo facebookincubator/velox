@@ -37,6 +37,28 @@ struct RadixSortTraits {
   static ATTR T from_bit_ordered(T value);
 };
 
+// specialization for T=short
+template <>
+struct RadixSortTraits<short> {
+  static ATTR short to_bit_ordered(short value) {
+    return value ^ (1 << utils::Msb<short>::VALUE);
+  }
+  static ATTR short from_bit_ordered(short value) {
+    return value ^ (1 << utils::Msb<short>::VALUE);
+  }
+};
+
+// specialization for T=unsigned short
+template <>
+struct RadixSortTraits<unsigned short> {
+  static ATTR unsigned short to_bit_ordered(unsigned short value) {
+    return value;
+  }
+  static ATTR unsigned short from_bit_ordered(unsigned short value) {
+    return value;
+  }
+};
+
 // specialization for T=int
 template <>
 struct RadixSortTraits<int> {
