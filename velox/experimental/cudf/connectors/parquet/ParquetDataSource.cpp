@@ -121,14 +121,13 @@ std::optional<RowVectorPtr> ParquetDataSource::next(
   }
 
   // cudfTable_ = concatenateTables(std::move(readTables));
-  auto stream = cudfGlobalStreamPool().get_stream();
 
   // Apply remaining filter if present
   if (remainingFilterExprSet_) {
     auto cudf_table_columns = cudfTable_->release();
     auto const original_num_columns = cudf_table_columns.size();
     auto compute_columns = cudfExpressionEvaluator_.compute(
-        cudf_table_columns, stream, cudf::get_current_device_resource_ref());
+        cudf_table_columns, stream_, cudf::get_current_device_resource_ref());
     std::vector<std::unique_ptr<cudf::column>> original_columns;
     original_columns.reserve(original_num_columns);
     for (size_t i = 0; i < original_num_columns; ++i) {
@@ -139,7 +138,7 @@ std::optional<RowVectorPtr> ParquetDataSource::next(
     cudfTable_ = cudf::apply_boolean_mask(
         *original_table,
         *compute_columns[0],
-        stream,
+        stream_,
         cudf::get_current_device_resource_ref());
   }
 
@@ -148,10 +147,10 @@ std::optional<RowVectorPtr> ParquetDataSource::next(
   auto sz = cudfTable_->num_rows();
   auto output = cudfIsRegistered()
       ? std::make_shared<CudfVector>(
-            pool_, outputType_, sz, std::move(cudfTable_), stream)
+            pool_, outputType_, sz, std::move(cudfTable_), stream_)
       : with_arrow::to_velox_column(
-            currentCudfTableView_, pool_, columnNames, stream);
-  stream.synchronize();
+            currentCudfTableView_, pool_, columnNames, stream_);
+  stream_.synchronize();
 
   // Reset internal tables
   resetCudfTableAndView();
@@ -233,11 +232,14 @@ ParquetDataSource::createSplitReader() {
     readerOptions.set_filter(subfield_tree_.back());
   }
 
+  // is this right location to get the stream?
+  stream_ = cudfGlobalStreamPool().get_stream();
   // Create a parquet reader
   return std::make_unique<cudf::io::chunked_parquet_reader>(
       ParquetConfig_->maxChunkReadLimit(),
       ParquetConfig_->maxPassReadLimit(),
-      readerOptions);
+      readerOptions,
+      stream_);
 }
 
 void ParquetDataSource::resetSplit() {
