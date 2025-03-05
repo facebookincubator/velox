@@ -27,8 +27,6 @@
 
 namespace facebook::velox::wave {
 
-using ScanAlgorithm = cub::BlockScan<int, 256, cub::BLOCK_SCAN_RAKING>;
-
 __global__ void
 boolToIndicesKernel(uint8_t** bools, int32_t** indices, int32_t* sizes) {
   extern __shared__ char smem[];
@@ -50,7 +48,7 @@ void BlockTestStream::testBoolToIndices(
     int32_t** indices,
     int32_t* sizes) {
   CUDA_CHECK(cudaGetLastError());
-  auto tempBytes = sizeof(typename ScanAlgorithm::TempStorage);
+  auto tempBytes = boolToIndicesSharedSize<int, 256>();
   boolToIndicesKernel<<<numBlocks, 256, tempBytes, stream_->stream>>>(
       flags, indices, sizes);
   CUDA_CHECK(cudaGetLastError());
@@ -65,7 +63,7 @@ __global__ void boolToIndicesNoSharedKernel(
 
   uint8_t* blockBools = bools[idx];
   char* smem = reinterpret_cast<char*>(temp) +
-      blockIdx.x * sizeof(typename ScanAlgorithm::TempStorage);
+      blockIdx.x * boolToIndicesSharedSize<int, 256>();
   boolBlockToIndices<256>(
       [&]() { return blockBools[threadIdx.x]; },
       idx * 256,
@@ -88,7 +86,7 @@ void BlockTestStream::testBoolToIndicesNoShared(
 }
 
 int32_t BlockTestStream::boolToIndicesSize() {
-  return sizeof(typename ScanAlgorithm::TempStorage);
+  return boolToIndicesSharedSize<int, 256>();
 }
 
 __global__ void
@@ -162,7 +160,9 @@ void BlockTestStream::testSum64(
     int32_t numBlocks,
     int64_t* numbers,
     int64_t* results) {
-  auto tempBytes = sizeof(typename cub::BlockReduce<int64_t, 256>::TempStorage);
+  CudaPlatform<256, kWarpThreads> p;
+  auto tempBytes = sizeof(
+      typename breeze::functions::BlockReduce<decltype(p), int64_t>::Scratch);
   sum64<<<numBlocks, 256, tempBytes, stream_->stream>>>(numbers, results);
   CUDA_CHECK(cudaGetLastError());
 }
@@ -187,10 +187,8 @@ void __global__ __launch_bounds__(1024)
     testSortNoShared(uint16_t** keys, uint16_t** values, char* smem) {
   auto keyBase = keys[blockIdx.x];
   auto valueBase = values[blockIdx.x];
-  char* tbTemp = smem +
-      blockIdx.x *
-          sizeof(typename cub::BlockRadixSort<uint16_t, 256, 32, uint16_t>::
-                     TempStorage);
+  char* tbTemp =
+      smem + blockIdx.x * blockSortSharedSize<256, 32, uint16_t, uint16_t>();
 
   blockSort<256, 32>(
       [&](auto i) { return keyBase[i]; },
@@ -202,16 +200,14 @@ void __global__ __launch_bounds__(1024)
 }
 
 int32_t BlockTestStream::sort16SharedSize() {
-  return sizeof(
-      typename cub::BlockRadixSort<uint16_t, 256, 32, uint16_t>::TempStorage);
+  return blockSortSharedSize<256, 32, uint16_t, uint16_t>();
 }
 
 void BlockTestStream::testSort16(
     int32_t numBlocks,
     uint16_t** keys,
     uint16_t** values) {
-  auto tempBytes = sizeof(
-      typename cub::BlockRadixSort<uint16_t, 256, 32, uint16_t>::TempStorage);
+  auto tempBytes = blockSortSharedSize<256, 32, uint16_t, uint16_t>();
 
   testSort<<<numBlocks, 256, tempBytes, stream_->stream>>>(keys, values);
 }
@@ -400,7 +396,8 @@ void __global__ __launch_bounds__(1024) hashTestKernel(
       int32_t end = begin + probe->numRows[blockIdx.x];
 
       for (auto i = begin + threadIdx.x; i < end; i += blockDim.x) {
-        table->updatingProbe<TestingRow>(i, cub::LaneId(), i < end, ops);
+        table->updatingProbe<TestingRow>(
+            i, threadIdx.x % kWarpThreads, i < end, ops);
       }
       break;
     }
