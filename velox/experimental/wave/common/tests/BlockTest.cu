@@ -187,10 +187,8 @@ void __global__ __launch_bounds__(1024)
     testSortNoShared(uint16_t** keys, uint16_t** values, char* smem) {
   auto keyBase = keys[blockIdx.x];
   auto valueBase = values[blockIdx.x];
-  char* tbTemp = smem +
-      blockIdx.x *
-          sizeof(typename cub::BlockRadixSort<uint16_t, 256, 32, uint16_t>::
-                     TempStorage);
+  char* tbTemp =
+      smem + blockIdx.x * blockSortSharedSize<256, 32, uint16_t, uint16_t>();
 
   blockSort<256, 32>(
       [&](auto i) { return keyBase[i]; },
@@ -202,16 +200,14 @@ void __global__ __launch_bounds__(1024)
 }
 
 int32_t BlockTestStream::sort16SharedSize() {
-  return sizeof(
-      typename cub::BlockRadixSort<uint16_t, 256, 32, uint16_t>::TempStorage);
+  return blockSortSharedSize<256, 32, uint16_t, uint16_t>();
 }
 
 void BlockTestStream::testSort16(
     int32_t numBlocks,
     uint16_t** keys,
     uint16_t** values) {
-  auto tempBytes = sizeof(
-      typename cub::BlockRadixSort<uint16_t, 256, 32, uint16_t>::TempStorage);
+  auto tempBytes = blockSortSharedSize<256, 32, uint16_t, uint16_t>();
 
   testSort<<<numBlocks, 256, tempBytes, stream_->stream>>>(keys, values);
 }
