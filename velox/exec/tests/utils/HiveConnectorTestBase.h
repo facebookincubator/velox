@@ -193,7 +193,8 @@ class HiveConnectorTestBase : public OperatorTestBase {
       const std::unordered_map<std::string, std::string>& serdeParameters = {},
       const std::shared_ptr<dwio::common::WriterOptions>& writerOptions =
           nullptr,
-      const bool ensureFiles = false);
+      const bool ensureFiles = false,
+      const std::vector<std::string>& partitionKeyOrder = {});
 
   static std::shared_ptr<connector::hive::HiveInsertTableHandle>
   makeHiveInsertTableHandle(
@@ -206,7 +207,8 @@ class HiveConnectorTestBase : public OperatorTestBase {
       const std::optional<common::CompressionKind> compressionKind = {},
       const std::shared_ptr<dwio::common::WriterOptions>& writerOptions =
           nullptr,
-      const bool ensureFiles = false);
+      const bool ensureFiles = false,
+      const std::vector<std::string>& partitionKeyOrder = {});
 
   static std::shared_ptr<connector::hive::HiveColumnHandle> regularColumn(
       const std::string& name,
