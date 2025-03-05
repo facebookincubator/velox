@@ -15,6 +15,7 @@
  */
 
 #include "velox/functions/sparksql/specialforms/GetStructField.h"
+#include <vector/ComplexVector.h>
 #include "velox/expression/ConstantExpr.h"
 
 namespace facebook::velox::functions::sparksql {
@@ -37,10 +38,6 @@ class GetStructFieldFunction : public exec::VectorFunction {
       VectorPtr& result) const override {
     exec::LocalDecodedVector decoded(context, *args[0], rows);
     auto rowData = decoded->base()->as<RowVector>();
-    VELOX_USER_CHECK_LT(
-        ordinal_,
-        rowData->childrenSize(),
-        "Invalid ordinal. Should be smaller than the children size of input row vector.");
     if (decoded->isIdentityMapping()) {
       result = rowData->childAt(ordinal_);
     } else {
@@ -91,9 +88,14 @@ exec::ExprPtr GetStructFieldCallToSpecialForm::constructSpecialForm(
   VELOX_USER_CHECK(
       !constantVector->isNullAt(0),
       "The second argument of get_struct_field should be non-nullable.");
+
   auto ordinal = constantVector->valueAt(0);
 
   VELOX_USER_CHECK_GE(ordinal, 0, "Invalid ordinal. Should be greater than 0.");
+  VELOX_USER_CHECK_LT(
+      ordinal,
+      args[0]->as<RowVector>()->childrenSize(),
+      "Invalid ordinal. Should be smaller than the children size of input row vector.");
 
   auto getStructFieldFunction =
       std::make_shared<GetStructFieldFunction>(ordinal);
