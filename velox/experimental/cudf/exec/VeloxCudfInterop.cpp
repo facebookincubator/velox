@@ -18,10 +18,9 @@
 #include "velox/type/Type.h"
 #include "velox/vector/BaseVector.h"
 #include "velox/vector/ComplexVector.h"
+#include "velox/vector/DictionaryVector.h"
 #include "velox/vector/FlatVector.h"
 #include "velox/vector/arrow/Bridge.h"
-
-#include "velox/vector/tests/utils/VectorMaker.h"
 
 #include <cudf/column/column.hpp>
 #include <cudf/column/column_factories.hpp>
@@ -358,15 +357,24 @@ RowVectorPtr to_velox_column(
     std::string name_prefix) {
   VELOX_NVTX_PRETTY_FUNC_RANGE();
   std::vector<VectorPtr> children;
-  std::vector<std::string> names;
+  std::vector<std::string> childNames;
+  std::vector<std::shared_ptr<const Type>> childTypes;
+  children.reserve(table.num_columns());
+  childNames.reserve(table.num_columns());
   for (auto& col : table) {
-    auto velox_col = to_velox_column(col, pool);
-    children.push_back(std::move(velox_col));
-    names.push_back(name_prefix + std::to_string(names.size()));
+    children.push_back(to_velox_column(col, pool));
+    childNames.push_back(name_prefix + std::to_string(childNames.size()));
   }
-  auto vcol =
-      test::VectorMaker{pool}.rowVector(std::move(names), std::move(children));
-  return vcol;
+
+  childTypes.reserve(children.size());
+  for (const auto& child : children) {
+    childTypes.push_back(child->type());
+  }
+  auto rowType = ROW(std::move(childNames), std::move(childTypes));
+  const size_t vectorSize = children.empty() ? 0 : children.front()->size();
+
+  return std::make_shared<RowVector>(
+      pool, rowType, BufferPtr(nullptr), vectorSize, children);
 }
 
 namespace with_arrow {
