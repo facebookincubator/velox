@@ -32,43 +32,44 @@ namespace facebook::velox::wave {
 /// Converts an array of flags to an array of indices of set flags. The first
 /// index is given by 'start'. The number of indices is returned in 'size', i.e.
 /// this is 1 + the index of the last set flag.
-template <
-    typename T,
-    int32_t blockSize,
-    cub::BlockScanAlgorithm Algorithm = cub::BLOCK_SCAN_RAKING>
+template <typename T, int32_t blockSize>
 inline int32_t __device__ __host__ boolToIndicesSharedSize() {
-  typedef cub::BlockScan<T, blockSize, Algorithm> BlockScanT;
+  using namespace breeze::functions;
 
-  return sizeof(typename BlockScanT::TempStorage);
+  using PlatformT = CudaPlatform<blockSize, kWarpThreads>;
+  using BlockScanT = BlockScan<PlatformT, T, /*kItemsPerThread=*/1>;
+
+  return sizeof(typename BlockScanT::Scratch);
 }
 
 /// Converts an array of flags to an array of indices of set flags. The first
 /// index is given by 'start'. The number of indices is returned in 'size', i.e.
 /// this is 1 + the index of the last set flag.
-template <
-    int32_t blockSize,
-    typename T,
-    cub::BlockScanAlgorithm Algorithm = cub::BLOCK_SCAN_RAKING,
-    typename Getter>
-__device__ inline void boolBlockToIndices(
-    Getter getter,
-    unsigned start,
-    T* indices,
-    void* shmem,
-    T& size) {
-  typedef cub::BlockScan<T, blockSize, Algorithm> BlockScanT;
+template <int32_t blockSize, typename T, typename Getter>
+__device__ inline void
+boolBlockToIndices(Getter getter, unsigned start, T* indices, void* shmem, T& size) {
+  using namespace breeze::functions;
+  using namespace breeze::utils;
 
-  auto* temp = reinterpret_cast<typename BlockScanT::TempStorage*>(shmem);
+  CudaPlatform<blockSize, kWarpThreads> p;
+  using BlockScanT = BlockScan<decltype(p), T, /*kItemsPerThread=*/1>;
+
+  auto* temp = reinterpret_cast<typename BlockScanT::Scratch*>(shmem);
   T data[1];
   uint8_t flag = getter();
   data[0] = flag;
   __syncthreads();
-  T aggregate;
-  BlockScanT(*temp).ExclusiveSum(data, data, aggregate);
+  // Perform inclusive scan
+  T aggregate = BlockScanT::template Scan<ScanOpAdd>(
+      p,
+      make_slice(data),
+      make_slice(data),
+      make_slice(temp).template reinterpret<SHARED>());
   if (flag) {
-    indices[data[0]] = threadIdx.x + start;
+    T exclusive_result = data[0] - flag;
+    indices[exclusive_result] = threadIdx.x + start;
   }
-  if (threadIdx.x == 0) {
+  if (threadIdx.x == (blockSize - 1)) {
     size = aggregate;
   }
   __syncthreads();
@@ -208,14 +209,16 @@ void __device__ blockSort(
 
 template <int kBlockSize>
 int32_t partitionRowsSharedSize(int32_t numPartitions) {
-  using Scan = cub::BlockScan<int, kBlockSize>;
-  auto scanSize = sizeof(typename Scan::TempStorage) + sizeof(int32_t);
+  using namespace breeze::functions;
+  using PlatformT = CudaPlatform<kBlockSize, kWarpThreads>;
+  using BlockScanT = BlockScan<PlatformT, int32_t, /*kItemsPerThread=*/1>;
+  auto scanSize =
+      max(sizeof(typename BlockScanT::Scratch), sizeof(int32_t) * kBlockSize) +
+      sizeof(int32_t);
   int32_t counterSize = sizeof(int32_t) * numPartitions;
   if (counterSize <= scanSize) {
     return scanSize;
   }
-  static_assert(
-      sizeof(typename Scan::TempStorage) >= sizeof(int32_t) * kBlockSize);
   return scanSize + counterSize; // - kBlockSize * sizeof(int32_t);
 }
 
@@ -236,16 +239,19 @@ void __device__ partitionRows(
     RowNumber* ranks,
     RowNumber* partitionStarts,
     RowNumber* partitionedRows) {
-  using Scan = cub::BlockScan<int32_t, kBlockSize>;
-  constexpr int32_t kWarpThreads = 1 << CUB_LOG_WARP_THREADS(0);
+  using namespace breeze::functions;
+  using namespace breeze::utils;
+
+  CudaPlatform<kBlockSize, kWarpThreads> p;
+  using BlockScanT = BlockScan<decltype(p), int32_t, /*kItemsPerThread=*/1>;
   auto warp = threadIdx.x / kWarpThreads;
   auto lane = cub::LaneId();
   extern __shared__ __align__(16) char smem[];
   auto* counters = reinterpret_cast<uint32_t*>(
       numPartitions <= kBlockSize ? smem
                                   : smem +
-              sizeof(typename Scan::
-                         TempStorage) /*- kBlockSize * sizeof(uint32_t)*/);
+              sizeof(typename BlockScanT::
+                         Scratch) /*- kBlockSize * sizeof(uint32_t)*/);
   for (auto i = threadIdx.x; i < numPartitions; i += kBlockSize) {
     counters[i] = 0;
   }
@@ -273,7 +279,7 @@ void __device__ partitionRows(
   }
   // Prefix sum the counts. All counters must have their final value.
   __syncthreads();
-  auto* temp = reinterpret_cast<typename Scan::TempStorage*>(smem);
+  auto* temp = reinterpret_cast<typename BlockScanT::Scratch*>(smem);
   int32_t* aggregate = reinterpret_cast<int32_t*>(smem);
   for (auto start = 0; start < numPartitions; start += kBlockSize) {
     int32_t localCount[1];
@@ -283,7 +289,11 @@ void __device__ partitionRows(
       // The sum of the previous round is carried over as start of this.
       localCount[0] += *aggregate;
     }
-    Scan(*temp).InclusiveSum(localCount, localCount);
+    BlockScanT::template Scan<ScanOpAdd>(
+        p,
+        make_slice(localCount),
+        make_slice(localCount),
+        make_slice(temp).template reinterpret<SHARED>());
     if (start + threadIdx.x < numPartitions) {
       partitionStarts[start + threadIdx.x] = localCount[0];
     }
