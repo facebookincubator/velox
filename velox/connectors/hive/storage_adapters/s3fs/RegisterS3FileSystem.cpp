@@ -80,7 +80,9 @@ std::shared_ptr<FileSystem> fileSystemGenerator(
 
         auto logLevel =
             properties->get(S3Config::kS3LogLevel, std::string("FATAL"));
-        initializeS3(logLevel);
+        auto logLocation =
+            properties->get(S3Config::kS3LogLocation, std::string(""));
+        initializeS3(logLevel, logLocation);
         auto fs = std::make_shared<S3FileSystem>(bucketName, properties);
         instanceMap.insert({cacheKey, fs});
         return fs;
