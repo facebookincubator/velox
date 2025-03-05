@@ -202,7 +202,8 @@ TypePtr updateColumnNamesImpl(
 template <typename T>
 TypePtr updateColumnNamesImpl(
     const TypePtr& fileType,
-    const TypePtr& tableType) {
+    const TypePtr& tableType,
+    bool recursive = true) {
   const auto fileRowType = std::dynamic_pointer_cast<const T>(fileType);
   const auto tableRowType = std::dynamic_pointer_cast<const T>(tableType);
 
@@ -216,11 +217,15 @@ TypePtr updateColumnNamesImpl(
       break;
     }
 
-    newFileFieldTypes.push_back(updateColumnNamesImpl(
-        fileRowType->childAt(childIdx),
-        tableRowType->childAt(childIdx),
-        fileRowType->nameOf(childIdx),
-        tableRowType->nameOf(childIdx)));
+    if (recursive) {
+      newFileFieldTypes.push_back(updateColumnNamesImpl(
+          fileRowType->childAt(childIdx),
+          tableRowType->childAt(childIdx),
+          fileRowType->nameOf(childIdx),
+          tableRowType->nameOf(childIdx)));
+    } else {
+      newFileFieldTypes.push_back(fileRowType->childAt(childIdx));
+    }
 
     newFileFieldNames.push_back(tableRowType->nameOf(childIdx));
   }
@@ -274,8 +279,11 @@ TypePtr updateColumnNamesImpl(
 
 TypePtr Reader::updateColumnNames(
     const TypePtr& fileType,
-    const TypePtr& tableType) {
-  return updateColumnNamesImpl(fileType, tableType, "", "");
+    const TypePtr& tableType,
+    bool recursive) {
+  VELOX_CHECK(fileType->isRow());
+  VELOX_CHECK(tableType->isRow());
+  return updateColumnNamesImpl<RowType>(fileType, tableType, recursive);
 }
 
 } // namespace facebook::velox::dwio::common
