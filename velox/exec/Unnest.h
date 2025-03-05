@@ -98,7 +98,6 @@ class Unnest : public Operator {
 
   // Generate output for 'rowRange' represented rows.
   // @param rowRange Range of rows to process.
-  template <bool isOuter>
   RowVectorPtr generateOutput(const RowRange& rowRange);
 
   // Invoked by generateOutput function above to generate the repeated output
@@ -106,12 +105,6 @@ class Unnest : public Operator {
   void generateRepeatedColumns(
       const RowRange& rowRange,
       std::vector<VectorPtr>& outputs);
-
-  // Calculate the max number of elements of each row after unnested.
-  // @param numRows The number of input rows.
-  // @param isOuter If true, emit null data if the array/map is null or empty.
-  template <bool isOuter>
-  void countMaxNumElementsPerRow(vector_size_t numRows);
 
   struct UnnestChannelEncoding {
     BufferPtr indices;
@@ -128,7 +121,6 @@ class Unnest : public Operator {
       const RowRange& rowRange);
 
   // Invoked by generateOutput for the ordinality column.
-  template <bool isOuter>
   VectorPtr generateOrdinalityVector(const RowRange& rowRange);
 
   const bool withOrdinality_;
@@ -151,8 +143,8 @@ class Unnest : public Operator {
   // Next 'input_' row to process in getOutput().
   vector_size_t nextInputRow_{0};
 
-  // Used when 'isOuter_' is true, to denote whether the ordinality vector is null
-  // at each result row.
+  // Used when 'isOuter_' is true, to denote whether the ordinality vector is
+  // null at each result row.
   std::vector<bool> rawOrdinalityIsNull_;
 
   // When true, null is produced for null or empty values in unnested array/map.
