@@ -27,8 +27,6 @@
 
 namespace facebook::velox::wave {
 
-using ScanAlgorithm = cub::BlockScan<int, 256, cub::BLOCK_SCAN_RAKING>;
-
 __global__ void
 boolToIndicesKernel(uint8_t** bools, int32_t** indices, int32_t* sizes) {
   extern __shared__ char smem[];
@@ -50,7 +48,7 @@ void BlockTestStream::testBoolToIndices(
     int32_t** indices,
     int32_t* sizes) {
   CUDA_CHECK(cudaGetLastError());
-  auto tempBytes = sizeof(typename ScanAlgorithm::TempStorage);
+  auto tempBytes = boolToIndicesSharedSize<int, 256>();
   boolToIndicesKernel<<<numBlocks, 256, tempBytes, stream_->stream>>>(
       flags, indices, sizes);
   CUDA_CHECK(cudaGetLastError());
@@ -65,7 +63,7 @@ __global__ void boolToIndicesNoSharedKernel(
 
   uint8_t* blockBools = bools[idx];
   char* smem = reinterpret_cast<char*>(temp) +
-      blockIdx.x * sizeof(typename ScanAlgorithm::TempStorage);
+      blockIdx.x * boolToIndicesSharedSize<int, 256>();
   boolBlockToIndices<256>(
       [&]() { return blockBools[threadIdx.x]; },
       idx * 256,
@@ -88,7 +86,7 @@ void BlockTestStream::testBoolToIndicesNoShared(
 }
 
 int32_t BlockTestStream::boolToIndicesSize() {
-  return sizeof(typename ScanAlgorithm::TempStorage);
+  return boolToIndicesSharedSize<int, 256>();
 }
 
 __global__ void
