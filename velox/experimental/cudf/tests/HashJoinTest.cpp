@@ -1102,4 +1102,42 @@ TEST_F(HashJoinTest, multipleBuildColumns) {
   // test("t_k2 > 9");
 }
 
+TEST_F(HashJoinTest, filter) {
+  // Left side keys are [0, 1, 2,..10].
+  // Use 3-rd column as row number to allow for asserting the order of
+  // results.
+  std::vector<RowVectorPtr> probeVectors =
+      makeBatches(1, [&](int32_t /*unused*/) {
+        return makeRowVector(
+            {"c0", "c1", "row_number"},
+            {
+                makeFlatVector<int32_t>(77, [](auto row) { return row % 11; }),
+                makeFlatVector<double>(77, [](auto row) { return row; }),
+                makeFlatVector<int32_t>(77, [](auto row) { return row; }),
+            });
+      });
+
+  std::vector<RowVectorPtr> buildVectors =
+      makeBatches(1, [&](int32_t /*unused*/) {
+        return makeRowVector({
+            makeFlatVector<int32_t>(73, [](auto row) { return row % 5; }),
+            makeFlatVector<double>(73, [](auto row) { return -11 + row * 2; }),
+        });
+      });
+
+  HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
+      .numDrivers(numDrivers_)
+      .probeKeys({"c0"})
+      .probeVectors(std::move(probeVectors))
+      .buildKeys({"u_c0"})
+      .buildVectors(std::move(buildVectors))
+      .checkSpillStats(false)
+      .buildProjections({"c0 AS u_c0", "c1 AS u_c1"})
+      .joinFilter("c1 < (0.7 * u_c1)")
+      .joinOutputLayout({"row_number", "c0", "c1", "u_c1"})
+      .referenceQuery(
+          "SELECT t.row_number, t.c0, t.c1, u.c1 FROM t, u WHERE t.c0 = u.c0 AND t.c1 < (0.7 * u.c1)")
+      .run();
+}
+
 } // namespace
