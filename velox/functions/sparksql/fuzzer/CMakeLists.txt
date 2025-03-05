@@ -105,6 +105,7 @@ target_link_libraries(
   velox_aggregation_fuzzer
   velox_aggregation_fuzzer_base
   velox_functions_spark_aggregates
+  velox_dwio_parquet_writer
   velox_spark_query_runner
   velox_fuzzer_util
   velox_window
