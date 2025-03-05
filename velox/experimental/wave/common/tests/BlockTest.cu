@@ -162,7 +162,9 @@ void BlockTestStream::testSum64(
     int32_t numBlocks,
     int64_t* numbers,
     int64_t* results) {
-  auto tempBytes = sizeof(typename cub::BlockReduce<int64_t, 256>::TempStorage);
+  CudaPlatform<256, kWarpThreads> p;
+  auto tempBytes = sizeof(
+      typename breeze::functions::BlockReduce<decltype(p), int64_t>::Scratch);
   sum64<<<numBlocks, 256, tempBytes, stream_->stream>>>(numbers, results);
   CUDA_CHECK(cudaGetLastError());
 }
