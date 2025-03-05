@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-add_executable(velox_cudf_hash_test HashJoinTest.cpp Main.cpp)
+add_executable(velox_cudf_hash_join_test HashJoinTest.cpp Main.cpp)
 add_executable(velox_cudf_order_by_test Main.cpp OrderByTest.cpp)
 add_executable(velox_cudf_aggregation_test Main.cpp AggregationTest.cpp)
 add_executable(velox_cudf_table_scan_test Main.cpp TableScanTest.cpp)
@@ -21,8 +21,8 @@ add_executable(velox_cudf_local_partition_test Main.cpp LocalPartitionTest.cpp)
 add_executable(velox_cudf_filter_project_test Main.cpp FilterProjectTest.cpp)
 
 add_test(
-  NAME velox_cudf_hash_test
-  COMMAND velox_cudf_hash_test
+  NAME velox_cudf_hash_join_test
+  COMMAND velox_cudf_hash_join_test
   WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR})
 
 add_test(
@@ -55,8 +55,8 @@ add_test(
   COMMAND velox_cudf_filter_project_test
   WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR})
 
-set_tests_properties(velox_cudf_hash_test PROPERTIES LABELS cuda_driver TIMEOUT
-                                                     3000)
+set_tests_properties(velox_cudf_hash_join_test PROPERTIES LABELS cuda_driver
+                                                          TIMEOUT 3000)
 set_tests_properties(velox_cudf_order_by_test PROPERTIES LABELS cuda_driver
                                                          TIMEOUT 3000)
 set_tests_properties(velox_cudf_aggregation_test PROPERTIES LABELS cuda_driver
@@ -71,7 +71,7 @@ set_tests_properties(velox_cudf_filter_project_test
                      PROPERTIES LABELS cuda_driver TIMEOUT 3000)
 
 target_link_libraries(
-  velox_cudf_hash_test
+  velox_cudf_hash_join_test
   velox_cudf_exec
   velox_exec
   velox_exec_test_lib
