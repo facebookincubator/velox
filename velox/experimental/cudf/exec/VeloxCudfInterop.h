@@ -29,12 +29,15 @@ namespace facebook::velox::cudf_velox {
 cudf::type_id velox_to_cudf_type_id(const TypePtr& type);
 TypePtr cudf_type_id_to_velox_type(cudf::type_id type_id);
 
-std::unique_ptr<cudf::table> to_cudf_table(
-    const facebook::velox::RowVectorPtr& leftBatch);
+[[deprecated(
+    "Use with_arrow::to_cudf_table instead")]] std::unique_ptr<cudf::table>
+to_cudf_table(const facebook::velox::RowVectorPtr& leftBatch);
 facebook::velox::VectorPtr to_velox_column(
     const cudf::column_view& col,
     facebook::velox::memory::MemoryPool* pool);
-facebook::velox::RowVectorPtr to_velox_column(
+[[deprecated(
+    "Use with_arrow::to_velox_column instead")]] facebook::velox::RowVectorPtr
+to_velox_column(
     const cudf::table_view& table,
     facebook::velox::memory::MemoryPool* pool,
     std::string name_prefix = "c");
