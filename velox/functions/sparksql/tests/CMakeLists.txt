@@ -43,6 +43,7 @@ add_executable(
   LeastGreatestTest.cpp
   MakeDecimalTest.cpp
   MakeTimestampTest.cpp
+  MapConcatTest.cpp
   MapTest.cpp
   MaskTest.cpp
   MightContainTest.cpp
