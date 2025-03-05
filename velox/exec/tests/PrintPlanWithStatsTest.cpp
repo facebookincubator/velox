@@ -378,17 +378,6 @@ TEST_F(PrintPlanWithStatsTest, tableWriterWithTableScan) {
 }
 
 TEST_F(PrintPlanWithStatsTest, taskAPI) {
-  // Test nullptr PlanNode.
-  core::PlanFragment planFragment;
-  auto taskWithNoPlanNode = exec::Task::create(
-      "taskId",
-      planFragment,
-      0,
-      core::QueryCtx::create(),
-      exec::Task::ExecutionMode::kSerial);
-  VELOX_ASSERT_THROW(
-      taskWithNoPlanNode->printPlanWithStats(), "PlanFragment has no planNode");
-
   // Test various task states.
   auto checkOutput = [](exec::Task* task) {
     compareOutputs(
@@ -401,8 +390,8 @@ TEST_F(PrintPlanWithStatsTest, taskAPI) {
   };
 
   const auto data = makeRowVector({
-      makeFlatVector<int64_t>(50, [](auto row) { return row; }),
-      makeFlatVector<int64_t>(50, [](auto row) { return row; }),
+      makeFlatVector<int64_t>(50, folly::identity),
+      makeFlatVector<int64_t>(50, folly::identity),
   });
 
   const auto plan = PlanBuilder()

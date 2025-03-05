@@ -149,9 +149,7 @@ std::unordered_map<core::PlanNodeId, SplitsState> buildSplitStates(
     const std::shared_ptr<const core::PlanNode>& planNode) {
   std::unordered_set<core::PlanNodeId> allIds;
   std::unordered_map<core::PlanNodeId, SplitsState> splitStateMap;
-  if (planNode.get() != nullptr) {
-    buildSplitStates(planNode.get(), allIds, splitStateMap);
-  }
+  buildSplitStates(planNode.get(), allIds, splitStateMap);
   return splitStateMap;
 }
 
@@ -249,6 +247,7 @@ std::shared_ptr<Task> Task::create(
     Consumer consumer,
     int32_t memoryArbitrationPriority,
     std::function<void(std::exception_ptr)> onError) {
+  VELOX_CHECK_NOT_NULL(planFragment.planNode);
   return Task::create(
       taskId,
       std::move(planFragment),
@@ -271,6 +270,7 @@ std::shared_ptr<Task> Task::create(
     ConsumerSupplier consumerSupplier,
     int32_t memoryArbitrationPriority,
     std::function<void(std::exception_ptr)> onError) {
+  VELOX_CHECK_NOT_NULL(planFragment.planNode);
   auto task = std::shared_ptr<Task>(new Task(
       taskId,
       std::move(planFragment),
@@ -2437,7 +2437,6 @@ ContinueFuture Task::taskDeletionFuture() {
 }
 
 std::string Task::printPlanWithStats(bool includeCustomStats) const {
-  VELOX_CHECK_NOT_NULL(planFragment_.planNode, "PlanFragment has no planNode");
   return exec::printPlanWithStats(
       *planFragment_.planNode, taskStats_, includeCustomStats);
 }
@@ -2452,10 +2451,7 @@ std::string Task::toString() const {
     out << "Error: " << errorMessageLocked() << std::endl;
   }
 
-  if (planFragment_.planNode) {
-    out << "Plan:\n"
-        << planFragment_.planNode->toString(true, true) << std::endl;
-  }
+  out << "Plan:\n" << planFragment_.planNode->toString(true, true) << std::endl;
 
   size_t numRemainingDrivers{0};
   for (const auto& driver : drivers_) {
@@ -2531,9 +2527,7 @@ folly::dynamic Task::toJson() const {
     obj["exception"] = errorMessageLocked();
   }
 
-  if (planFragment_.planNode) {
-    obj["plan"] = planFragment_.planNode->toString(true, true);
-  }
+  obj["plan"] = planFragment_.planNode->toString(true, true);
 
   folly::dynamic drivers = folly::dynamic::object;
   for (auto i = 0; i < drivers_.size(); ++i) {

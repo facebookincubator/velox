@@ -138,6 +138,11 @@ class Task : public std::enable_shared_from_this<Task> {
     return taskId_;
   }
 
+  /// Returns plan fragment specified in the constructor.
+  const core::PlanFragment& planFragment() const {
+    return planFragment_;
+  }
+
   const int destination() const {
     return destination_;
   }
