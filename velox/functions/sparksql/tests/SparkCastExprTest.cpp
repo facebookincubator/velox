@@ -113,12 +113,13 @@ class SparkCastExprTest : public functions::test::CastBaseTest {
   template <typename T>
   void testTimestampToIntegralCast() {
     testCast(
-        makeNullableFlatVector<Timestamp>(
-            {Timestamp(0, 0),
-             Timestamp(1, 0),
-             Timestamp(std::numeric_limits<T>::max(), 0),
-             Timestamp(std::numeric_limits<T>::min(), 0)}),
-        makeNullableFlatVector<T>({
+        makeFlatVector<Timestamp>({
+            Timestamp(0, 0),
+            Timestamp(1, 0),
+            Timestamp(std::numeric_limits<T>::max(), 0),
+            Timestamp(std::numeric_limits<T>::min(), 0),
+        }),
+        makeFlatVector<T>({
             0,
             1,
             std::numeric_limits<T>::max(),
@@ -127,13 +128,14 @@ class SparkCastExprTest : public functions::test::CastBaseTest {
   }
 
   template <typename T>
-  void testTimestampToIntegralCastOverflow(
-      std::vector<std::optional<T>> expected) {
+  void testTimestampToIntegralCastOverflow(std::vector<T> expected) {
     testCast(
-        makeNullableFlatVector<Timestamp>(
-            {Timestamp(9223372036854, 775'807'000),
-             Timestamp(-9223372036855, 224'192'000)}),
-        makeNullableFlatVector<T>(expected));
+        makeFlatVector<Timestamp>({
+            Timestamp(2147483647, 0),
+            Timestamp(9223372036854, 775'807'000),
+            Timestamp(-9223372036855, 224'192'000),
+        }),
+        makeFlatVector<T>(expected));
   }
 };
 
@@ -338,7 +340,7 @@ TEST_F(SparkCastExprTest, intToTimestamp) {
 TEST_F(SparkCastExprTest, timestampToInt) {
   // Cast timestamp as bigint.
   testCast(
-      makeNullableFlatVector<Timestamp>({
+      makeFlatVector<Timestamp>({
           Timestamp(0, 0),
           Timestamp(1, 0),
           Timestamp(10, 0),
@@ -356,7 +358,7 @@ TEST_F(SparkCastExprTest, timestampToInt) {
           Timestamp(9223372036854, 775'807'000),
           Timestamp(-9223372036855, 224'192'000),
       }),
-      makeNullableFlatVector<int64_t>({
+      makeFlatVector<int64_t>({
           0,
           1,
           10,
@@ -385,9 +387,21 @@ TEST_F(SparkCastExprTest, timestampToInt) {
   testTimestampToIntegralCast<int32_t>();
 
   // Cast overflowed timestamp as tinyint/smallint/integer.
-  testTimestampToIntegralCastOverflow<int8_t>({-10, 9});
-  testTimestampToIntegralCastOverflow<int16_t>({23286, -23287});
-  testTimestampToIntegralCastOverflow<int32_t>({2077252342, -2077252343});
+  testTimestampToIntegralCastOverflow<int8_t>({
+      -1,
+      -10,
+      9,
+  });
+  testTimestampToIntegralCastOverflow<int16_t>({
+      -1,
+      23286,
+      -23287,
+  });
+  testTimestampToIntegralCastOverflow<int32_t>({
+      2147483647,
+      2077252342,
+      -2077252343,
+  });
 }
 
 TEST_F(SparkCastExprTest, doubleToTimestamp) {
