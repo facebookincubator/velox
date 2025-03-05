@@ -860,4 +860,69 @@ struct MillisToTimestampFunction {
   }
 };
 
+template <typename TExec>
+struct TruncFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(TExec);
+
+  FOLLY_ALWAYS_INLINE void initialize(
+      const std::vector<TypePtr>& /*inputTypes*/,
+      const core::QueryConfig& /*config*/,
+      const arg_type<Date>* /*date*/,
+      const arg_type<Varchar>* unitString) {
+    if (unitString != nullptr) {
+      unit_ = getDateTimeUnit(*unitString, true, DateTimeUnit::kWeek, false);
+    }
+  }
+
+  FOLLY_ALWAYS_INLINE void call(
+      out_type<Date>& result,
+      const arg_type<Date>& date,
+      const arg_type<Varchar>& unitString) {
+    DateTimeUnit unit = unit_.has_value()
+        ? unit_.value()
+        : getDateTimeUnit(unitString, true, DateTimeUnit::kWeek, true).value();
+
+    auto dateTime = getDateTime(date);
+    adjustDateTime(dateTime, unit);
+
+    result = Timestamp::calendarUtcToEpoch(dateTime) / kSecondsInDay;
+  }
+
+ private:
+  std::optional<DateTimeUnit> unit_;
+};
+
+template <typename TExec>
+struct DateTruncFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(TExec);
+
+  FOLLY_ALWAYS_INLINE void initialize(
+      const std::vector<TypePtr>& /*inputTypes*/,
+      const core::QueryConfig& config,
+      const arg_type<Varchar>* unitString,
+      const arg_type<Timestamp>* /*timestamp*/) {
+    timeZone_ = getTimeZoneFromConfig(config);
+
+    if (unitString != nullptr) {
+      unit_ =
+          getDateTimeUnit(*unitString, true, DateTimeUnit::kMicrosecond, false);
+    }
+  }
+
+  FOLLY_ALWAYS_INLINE void call(
+      out_type<Timestamp>& result,
+      const arg_type<Varchar>& unitString,
+      const arg_type<Timestamp>& timestamp) {
+    DateTimeUnit unit = unit_.has_value()
+        ? unit_.value()
+        : getDateTimeUnit(unitString, true, DateTimeUnit::kMicrosecond, true)
+              .value();
+    result = truncateTimestamp(timestamp, unit, timeZone_);
+  }
+
+ private:
+  const tz::TimeZone* timeZone_{nullptr};
+  std::optional<DateTimeUnit> unit_;
+};
+
 } // namespace facebook::velox::functions::sparksql
