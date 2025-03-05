@@ -338,17 +338,14 @@ CudfHashJoinProbe::CudfHashJoinProbe(
     //     right_table_view.select(right_columns_to_gather);
 
     // create ast tree
-    std::vector<PrecomputeInstruction> precompute_instructions;
     create_ast_tree(
         exprs.exprs()[0],
         tree_,
         scalars_,
         probeType,
         buildType,
-        precompute_instructions);
-    if (precompute_instructions.size() > 0) {
-      VELOX_NYI("Precompute instructions are not supported yet");
-    }
+        left_precompute_instructions_,
+        right_precompute_instructions_);
   }
 }
 
@@ -406,15 +403,34 @@ RowVectorPtr CudfHashJoinProbe::getOutput() {
   std::unique_ptr<rmm::device_uvector<cudf::size_type>> left_join_indices;
   std::unique_ptr<rmm::device_uvector<cudf::size_type>> right_join_indices;
 
+  auto left_table_view = left_table->view();
+  auto right_table_view = right_table->view();
+
+  // TODO (dm): Check if releasing the tables affects the table views we use
+  // later in the call
+  auto left_input_cols = left_table->release();
+  auto right_input_cols = right_table->release();
+
+  // TODO (dm): refactor
+  if (joinNode_->filter()) {
+    addPrecomputedColumns(
+        left_input_cols, left_precompute_instructions_, scalars_, stream);
+    addPrecomputedColumns(
+        right_input_cols, right_precompute_instructions_, scalars_, stream);
+  }
+  // expression cols need to be reassembled into the table views
+  cudf::table left_table_for_exprs(std::move(left_input_cols));
+  cudf::table right_table_for_exprs(std::move(right_input_cols));
+
   if (joinNode_->isInnerJoin()) {
     // TODO filter check inside.
     // left = probe, right = build
     if (joinNode_->filter()) {
       std::tie(left_join_indices, right_join_indices) = mixed_inner_join(
-          left_table->view().select(left_key_indices_),
-          right_table->view().select(right_key_indices_),
-          left_table->view(),
-          right_table->view(),
+          left_table_view.select(left_key_indices_),
+          right_table_view.select(right_key_indices_),
+          left_table_for_exprs,
+          right_table_for_exprs,
           tree_.back(),
           cudf::null_equality::EQUAL,
           std::nullopt,
@@ -467,9 +483,8 @@ RowVectorPtr CudfHashJoinProbe::getOutput() {
       ? cudf::device_span<cudf::size_type const>{*right_join_indices}
       : cudf::device_span<cudf::size_type const>{};
 
-  auto left_input = left_table->view().select(left_column_indices_to_gather_);
-  auto right_input =
-      right_table->view().select(right_column_indices_to_gather_);
+  auto left_input = left_table_view.select(left_column_indices_to_gather_);
+  auto right_input = right_table_view.select(right_column_indices_to_gather_);
 
   auto left_indices_col = cudf::column_view{left_indices_span};
   auto right_indices_col = cudf::column_view{right_indices_span};

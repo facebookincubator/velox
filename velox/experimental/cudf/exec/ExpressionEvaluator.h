@@ -56,7 +56,8 @@ cudf::ast::expression const& create_ast_tree(
     std::vector<std::unique_ptr<cudf::scalar>>& scalars,
     const RowTypePtr& leftRowSchema,
     const RowTypePtr& rightRowSchema,
-    std::vector<PrecomputeInstruction>& precompute_instructions);
+    std::vector<PrecomputeInstruction>& left_precompute_instructions,
+    std::vector<PrecomputeInstruction>& right_precompute_instructions);
 
 void addPrecomputedColumns(
     std::vector<std::unique_ptr<cudf::column>>& input_table_columns,

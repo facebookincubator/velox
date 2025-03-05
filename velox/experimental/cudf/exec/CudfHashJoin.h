@@ -25,6 +25,7 @@
 
 #include <cudf/join.hpp>
 #include <cudf/table/table.hpp>
+#include <experimental/cudf/exec/ExpressionEvaluator.h>
 
 #include "velox/experimental/cudf/exec/NvtxHelper.h"
 #include "velox/experimental/cudf/vector/CudfVector.h"
@@ -102,8 +103,13 @@ class CudfHashJoinProbe : public exec::Operator, public NvtxHelper {
  private:
   std::shared_ptr<const core::HashJoinNode> joinNode_;
   std::optional<hash_type> hashObject_;
+
+  // Filter related members
   cudf::ast::tree tree_;
+  std::vector<PrecomputeInstruction> left_precompute_instructions_;
+  std::vector<PrecomputeInstruction> right_precompute_instructions_;
   std::vector<std::unique_ptr<cudf::scalar>> scalars_;
+
   std::vector<cudf::size_type> left_key_indices_;
   std::vector<cudf::size_type> right_key_indices_;
   std::vector<cudf::size_type> left_column_indices_to_gather_;
