@@ -291,11 +291,7 @@ void CastExpr::applyCastKernel(
         FromKind == TypeKind::TIMESTAMP) {
       using To = typename TypeTraits<ToKind>::NativeType;
       const auto castResult = hooks_->castTimestampToInt(inputRowValue);
-      if (castResult.hasError()) {
-        setError(castResult.error().message());
-      } else {
-        result->set(row, static_cast<To>(castResult.value()));
-      }
+      setResultOrError(castResult, row);
       return;
     }
 
