@@ -25,6 +25,8 @@ namespace {
 
 using namespace dbgen;
 
+static int32_t globalTextPoolSizeMb = 10;
+
 // DBGenBackend is a singleton that controls access to the DBGEN C functions,
 // and ensures that the required structures are properly initialized and
 // destructed.
@@ -37,7 +39,7 @@ class DBGenBackend {
     // structures required by dbgen are populated.
     DBGenContext dbgenCtx;
     load_dists(
-        300 * 1024 * 1024,
+        globalTextPoolSizeMb * 1024 * 1024,
         &dbgenCtx); // 300 MB buffer size for text generation.
   }
   ~DBGenBackend() {
@@ -50,7 +52,8 @@ static folly::Singleton<DBGenBackend> DBGenBackendSingleton;
 
 } // namespace
 
-DBGenIterator::DBGenIterator(double scaleFactor) {
+DBGenIterator::DBGenIterator(double scaleFactor, int32_t textPoolSizeMb) {
+  globalTextPoolSizeMb = textPoolSizeMb;
   auto dbgenBackend = DBGenBackendSingleton.try_get();
   VELOX_CHECK_NOT_NULL(dbgenBackend, "Unable to initialize dbgen's dbgunk.");
   VELOX_CHECK_GE(scaleFactor, 0, "Tpch scale factor must be non-negative");
