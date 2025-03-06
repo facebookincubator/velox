@@ -263,9 +263,23 @@ RowVectorPtr NestedLoopJoinProbe::generateOutput() {
     finishProbeInput();
   }
 
-  if (output_ != nullptr && output_->size() == 0) {
-    output_ = nullptr;
+  // For non cross-join mode, we need to re-use output_ and avoid calling
+  // prepareOutput to create new output for each probe row, especially when
+  // buildTable is very small. Here we re-use the output_ if the input_ has
+  // remaining probe rows and the output_ is not fully filled.
+  if (!isCrossJoin()) {
+    if (input_ != nullptr && numOutputRows_ < outputBatchSize_) {
+      return nullptr;
+    }
   }
+  if (output_ != nullptr) {
+    if (numOutputRows_ > 0) {
+      output_->resize(numOutputRows_);
+    } else {
+      output_ = nullptr;
+    }
+  }
+
   return std::move(output_);
 }
 
@@ -357,9 +371,6 @@ bool NestedLoopJoinProbe::addToOutput() {
   // Check if the current probed row needs to be added as a mismatch (for left
   // and full outer joins).
   checkProbeMismatchRow();
-  if (output_ != nullptr) {
-    output_->resize(numOutputRows_);
-  }
 
   // Signals that all input has been generated for the probeRow and build
   // vectors; safe to move to the next probe record.
