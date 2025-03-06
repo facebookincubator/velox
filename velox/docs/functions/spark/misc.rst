@@ -15,6 +15,14 @@ Miscellaneous Functions
         SELECT at_least_n_non_nulls(2, 0, 1.0, NULL);  -- true
         SELECT at_least_n_non_nulls(2, 0, array(NULL), NULL);  -- true
 
+.. spark:function:: get_struct_field(input, ordinal) -> T
+
+    Returns the value of nested subfield in the ``input`` struct.
+    The ``input`` must be of row type and nested complex type is allowed.
+    The subfield position is specified by ``ordinal``.
+    If ``ordinal`` is negative or greater than the children size of ``input``,
+    exception is thrown.
+
 .. spark:function:: monotonically_increasing_id() -> bigint
 
     Returns monotonically increasing 64-bit integers. The generated ID is
