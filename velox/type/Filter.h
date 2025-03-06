@@ -28,6 +28,7 @@
 #include "velox/common/base/Exceptions.h"
 #include "velox/common/base/SimdUtil.h"
 #include "velox/common/serialization/Serializable.h"
+#include "velox/type/DecimalUtil.h"
 #include "velox/type/StringView.h"
 #include "velox/type/Subfield.h"
 #include "velox/type/Type.h"
@@ -100,6 +101,10 @@ class Filter : public velox::ISerializable {
    */
   virtual bool isDeterministic() const {
     return deterministic_;
+  }
+
+  const bool nullAllowed() const {
+    return nullAllowed_;
   }
 
   /**
@@ -1893,10 +1898,6 @@ class TimestampRange : public Filter {
     return upper_;
   }
 
-  const bool nullAllowed() const {
-    return nullAllowed_;
-  }
-
   bool testingEquals(const Filter& other) const final;
 
  private:
@@ -2178,5 +2179,11 @@ std::unique_ptr<Filter> createHugeintValues(
 std::unique_ptr<Filter> createNegatedBigintValues(
     const std::vector<int64_t>& values,
     bool nullAllowed);
+
+// Rescales the bounds and values of a decimal filter from one type to another.
+std::unique_ptr<Filter> rescaleDecimalFilter(
+    const Filter* filter,
+    const TypePtr& fromType,
+    const TypePtr& toType);
 
 } // namespace facebook::velox::common

@@ -90,7 +90,8 @@ void SelectiveColumnReader::getFlatValues(
     const RowSet& rows,
     VectorPtr* result,
     const TypePtr& type,
-    bool isFinal) {
+    bool isFinal,
+    std::function<TVector(T)> convert) {
   VELOX_CHECK_NE(valueSize_, kNoValueSize);
   VELOX_CHECK(mayGetValues_);
   if (isFinal) {
@@ -115,11 +116,11 @@ void SelectiveColumnReader::getFlatValues(
   }
 
   if (valueSize_ == sizeof(TVector)) {
-    compactScalarValues<TVector, TVector>(rows, isFinal);
+    compactScalarValues<TVector, TVector>(rows, isFinal, convert);
   } else if (sizeof(T) >= sizeof(TVector)) {
-    compactScalarValues<T, TVector>(rows, isFinal);
+    compactScalarValues<T, TVector>(rows, isFinal, convert);
   } else {
-    upcastScalarValues<T, TVector>(rows);
+    upcastScalarValues<T, TVector>(rows, convert);
   }
   valueSize_ = sizeof(TVector);
   if (isFlatMapValue_) {
@@ -155,10 +156,13 @@ void SelectiveColumnReader::getFlatValues<int8_t, bool>(
     const RowSet& rows,
     VectorPtr* result,
     const TypePtr& type,
-    bool isFinal);
+    bool isFinal,
+    std::function<bool(int8_t)> /*unused*/);
 
 template <typename T, typename TVector>
-void SelectiveColumnReader::upcastScalarValues(const RowSet& rows) {
+void SelectiveColumnReader::upcastScalarValues(
+    const RowSet& rows,
+    std::function<TVector(T)> convert) {
   VELOX_CHECK_LE(rows.size(), numValues_);
   VELOX_CHECK(!rows.empty());
   if (!values_) {
@@ -194,7 +198,8 @@ void SelectiveColumnReader::upcastScalarValues(const RowSet& rows) {
     }
 
     VELOX_DCHECK(sourceRows[i] == nextRow);
-    buf[rowIndex] = typedSourceValues[i];
+    buf[rowIndex] =
+        convert ? convert(typedSourceValues[i]) : typedSourceValues[i];
     if (moveNullsFrom && rowIndex != i) {
       bits::setBit(rawResultNulls_, rowIndex, bits::isBitSet(moveNullsFrom, i));
     }
@@ -215,10 +220,13 @@ void SelectiveColumnReader::upcastScalarValues(const RowSet& rows) {
 template <typename T, typename TVector>
 void SelectiveColumnReader::compactScalarValues(
     const RowSet& rows,
-    bool isFinal) {
+    bool isFinal,
+    std::function<TVector(T)> convert) {
   VELOX_CHECK_LE(rows.size(), numValues_);
   VELOX_CHECK(!rows.empty());
-  if (!values_ || (rows.size() == numValues_ && sizeof(T) == sizeof(TVector))) {
+  if ((!values_ ||
+       (rows.size() == numValues_ && sizeof(T) == sizeof(TVector))) &&
+      convert == nullptr) {
     if (values_) {
       values_->setSize(numValues_ * sizeof(T));
     }
@@ -253,7 +261,8 @@ void SelectiveColumnReader::compactScalarValues(
     }
 
     VELOX_DCHECK_EQ(sourceRows[i], nextRow);
-    typedDestValues[rowIndex] = typedSourceValues[i];
+    typedDestValues[rowIndex] =
+        convert ? convert(typedSourceValues[i]) : typedSourceValues[i];
     if (moveNullsFrom && rowIndex != i) {
       bits::setBit(rawResultNulls_, rowIndex, bits::isBitSet(moveNullsFrom, i));
     }
@@ -275,7 +284,8 @@ void SelectiveColumnReader::compactScalarValues(
 template <>
 void SelectiveColumnReader::compactScalarValues<bool, bool>(
     const RowSet& rows,
-    bool isFinal);
+    bool isFinal,
+    std::function<bool(bool)> convert);
 
 inline int32_t sizeOfIntKind(TypeKind kind) {
   switch (kind) {
