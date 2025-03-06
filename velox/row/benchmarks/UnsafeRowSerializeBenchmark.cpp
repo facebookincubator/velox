@@ -45,7 +45,7 @@ class SerializeBenchmark {
     UnsafeRowFast fast(data);
     auto totalSize = computeTotalSize(fast, rowType, data->size());
     auto buffer = AlignedBuffer::allocate<char>(totalSize, pool());
-    auto serialized = serializeFast(fast, data->size(), buffer);
+    auto serialized = serialize(fast, data->size(), buffer);
     suspender.dismiss();
 
     auto copy = UnsafeRowFast::deserialize(serialized, rowType, pool());
@@ -144,7 +144,7 @@ class SerializeBenchmark {
     return totalSize;
   }
 
-  std::vector<char*> serializeFast(
+  std::vector<char*> serialize(
       UnsafeRowFast& unsafeRow,
       vector_size_t numRows,
       BufferPtr& buffer) {
