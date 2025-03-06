@@ -145,11 +145,14 @@ class VectorFuzzer {
     fuzzer::DataSpec dataSpec{false, false};
   };
 
+  // Spurious warnings in GCC 13
+  VELOX_SUPPRESS_STRINGOP_OVERFLOW_WARNING
   VectorFuzzer(
       const VectorFuzzer::Options& options,
       memory::MemoryPool* pool,
       size_t seed = 123456)
       : opts_(options), pool_(pool), rng_(seed) {}
+  VELOX_UNSUPPRESS_STRINGOP_OVERFLOW_WARNING
 
   void setOptions(const VectorFuzzer::Options& options) {
     opts_ = options;
