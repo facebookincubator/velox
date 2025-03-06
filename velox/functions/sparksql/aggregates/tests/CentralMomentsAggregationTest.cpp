@@ -48,7 +48,9 @@ class CentralMomentsAggregationTest : public AggregationTestBase {
     PlanBuilder builder(pool());
     builder.values({input});
     builder.singleAggregation({}, {fmt::format("spark_{}(c0)", agg)});
-    AssertQueryBuilder(builder.planNode()).config("spark.legacy_statistical_aggregate", "true").assertResults({expected});
+    AssertQueryBuilder(builder.planNode())
+        .config("spark.legacy_statistical_aggregate", "true")
+        .assertResults({expected});
   }
 };
 
