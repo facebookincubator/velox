@@ -27,9 +27,10 @@ using namespace facebook::velox;
 int main(int argc, char** argv) {
   folly::Init init(&argc, &argv);
   memory::MemoryManager::initialize({});
-  functions::sparksql::registerFunctions("");
 
   ExpressionBenchmarkBuilder benchmarkBuilder;
+  functions::sparksql::registerFunctions("");
+
   const vector_size_t vectorSize = 1000;
   auto vectorMaker = benchmarkBuilder.vectorMaker();
   auto emptyInput = vectorMaker.flatVector<std::string>(
