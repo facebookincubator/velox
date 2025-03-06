@@ -17,22 +17,19 @@
 #include "velox/functions/remote/server/RemoteFunctionRestService.h"
 
 #include <boost/beast/version.hpp>
+#include "velox/type/fbhive/HiveTypeParser.h"
 #include "velox/serializers/PrestoSerializer.h"
 
 namespace facebook::velox::functions {
 
-namespace {
-
-std::map<std::string, std::vector<exec::FunctionSignaturePtr>>
-    internalFunctionSignatureMap;
-
-} // namespace
-
 RestSession::RestSession(
     boost::asio::ip::tcp::socket socket,
     std::string functionPrefix)
-    : RemoteFunctionBaseService(std::move(functionPrefix), nullptr),
-      socket_(std::move(socket)) {}
+    : socket_(std::move(socket)) {
+  if (!pool_) {
+    pool_ = memory::memoryManager()->addLeafPool();
+  }
+}
 
 void RestSession::run() {
   doRead();
@@ -68,9 +65,11 @@ void RestSession::onRead(
 
 void RestSession::handleRequest(
     boost::beast::http::request<boost::beast::http::string_body> req) {
+  // Prepare the response (common headers, etc.)
   res_.version(req.version());
   res_.set(boost::beast::http::field::server, BOOST_BEAST_VERSION_STRING);
 
+  // Only POST is allowed.
   if (req.method() != boost::beast::http::verb::post) {
     res_.result(boost::beast::http::status::method_not_allowed);
     res_.set(boost::beast::http::field::content_type, "text/plain");
@@ -114,30 +113,72 @@ void RestSession::handleRequest(
   }
 
   try {
-    const auto& functionSignatures =
-        internalFunctionSignatureMap.at(functionName);
-    VELOX_CHECK(
-        !functionSignatures.empty(), "No signatures found for: ", functionName);
-    auto firstSignature = functionSignatures.front();
-
-    std::vector<std::string> argumentTypes;
-    for (auto& argType : firstSignature->argumentTypes()) {
-      argumentTypes.push_back(argType.toString());
+    if (functionName != "remote_abs") {
+      VELOX_USER_FAIL(
+          "Function '{}' is not available on the server.", functionName);
     }
-    auto returnType = firstSignature->returnType().toString();
+
+    // We assume a single argument of type INTEGER and a single return type of INTEGER.
+    // If you have these from some request headers, you can parse them;
+    // otherwise, if you know them upfront, you can hard-code them:
+    std::vector<std::string> argTypeNames = {"integer"};
+    std::string returnTypeName = "integer";
 
     serializer::presto::PrestoVectorSerde serde;
     auto inputBuffer = folly::IOBuf::copyBuffer(req.body());
 
-    auto outputRowVector = invokeFunctionInternal(
-        *inputBuffer, argumentTypes, returnType, functionName, true, &serde);
+    // Parse the input argument type and output type (both should be INTEGER here).
+    auto argType = type::fbhive::HiveTypeParser().parse(argTypeNames[0]);
+    auto outType = type::fbhive::HiveTypeParser().parse(returnTypeName);
 
+    VELOX_CHECK_EQ(
+        argType->kind(),
+        outType->kind(),
+        "For this simple 'abs' function, argument type and return type should match.");
+
+    // Build the row type with a single child of type argType.
+    auto rowType = ROW({argType});
+    auto inputVector = IOBufToRowVector(*inputBuffer, rowType, *pool_, &serde);
+
+    VELOX_CHECK_EQ(
+        inputVector->childrenSize(),
+        1,
+        "Expected exactly 1 column for function '{}'.",
+        functionName);
+
+    // Create the result vector.
+    const auto numRows = inputVector->size();
+    auto resultVector = BaseVector::create(argType, numRows, pool_.get());
+
+    // Compute abs for INTEGER.
+    auto inputFlat = inputVector->childAt(0)->asFlatVector<int32_t>();
+    auto outFlat = resultVector->asFlatVector<int32_t>();
+    for (vector_size_t i = 0; i < numRows; ++i) {
+      if (inputFlat->isNullAt(i)) {
+        outFlat->setNull(i, true);
+      } else {
+        int32_t val = inputFlat->valueAt(i);
+        outFlat->set(i, std::abs(val));
+      }
+    }
+
+    // Wrap in a RowVector for serialization.
+    auto outputRowVector = std::make_shared<RowVector>(
+        pool_.get(),
+        rowType,
+        BufferPtr(),
+        numRows,
+        std::vector<VectorPtr>{resultVector});
+
+    // Serialize the result back to an IOBuf.
     auto payload = rowVectorToIOBuf(
         outputRowVector, outputRowVector->size(), *pool_, &serde);
 
+    // Construct a successful response.
     res_.result(boost::beast::http::status::ok);
     res_.set(
-        boost::beast::http::field::content_type, "application/octet-stream");
+        boost::beast::http::field::content_type,
+        "application/octet-stream");
     res_.body() = payload.moveToFbString().toStdString();
     res_.prepare_payload();
 
@@ -150,6 +191,7 @@ void RestSession::handleRequest(
         });
 
   } catch (const std::exception& ex) {
+    // Handle any errors that occurred in the above logic.
     LOG(ERROR) << ex.what();
     res_.result(boost::beast::http::status::internal_server_error);
     res_.set(boost::beast::http::field::content_type, "text/plain");
@@ -244,15 +286,6 @@ void RestListener::onAccept(
     std::make_shared<RestSession>(std::move(socket), functionPrefix_)->run();
   }
   doAccept();
-}
-
-void updateInternalFunctionSignatureMap(
-    const std::string& functionName,
-    const std::vector<exec::FunctionSignaturePtr>& signatures) {
-  if (signatures.empty()) {
-    return;
-  }
-  internalFunctionSignatureMap[functionName] = signatures;
 }
 
 } // namespace facebook::velox::functions

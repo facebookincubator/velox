@@ -24,18 +24,10 @@
 
 namespace facebook::velox::functions {
 
-/// @brief Updates the internal server-side function signature map.
-/// This can be called wherever registerRemoteFunction is invoked
-/// to keep the RestService map in sync.
-void updateInternalFunctionSignatureMap(
-    const std::string& functionName,
-    const std::vector<exec::FunctionSignaturePtr>& signatures);
-
 /// @brief Manages an individual HTTP session.
 /// Handles reading HTTP requests, processing them, and sending responses.
 /// This class re-hosts Velox functions and allows testing their functionality.
-class RestSession : public std::enable_shared_from_this<RestSession>,
-                    public RemoteFunctionBaseService {
+class RestSession : public std::enable_shared_from_this<RestSession>{
  public:
   RestSession(boost::asio::ip::tcp::socket socket, std::string functionPrefix);
 
@@ -66,6 +58,7 @@ class RestSession : public std::enable_shared_from_this<RestSession>,
   boost::beast::flat_buffer buffer_;
   boost::beast::http::request<boost::beast::http::string_body> req_;
   boost::beast::http::response<boost::beast::http::string_body> res_;
+  std::shared_ptr<memory::MemoryPool> pool_;
 };
 
 /// @brief Listens for incoming TCP connections and creates sessions.

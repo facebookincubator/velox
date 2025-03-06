@@ -79,7 +79,6 @@ class RemoteFunction : public exec::VectorFunction {
       exec::EvalCtx& context,
       VectorPtr& result) const override {
     try {
-      applyThriftRemote(rows, args, outputType, context, result);
       std::visit(
           [&](auto&& loc) {
             using T = std::decay_t<decltype(loc)>;
