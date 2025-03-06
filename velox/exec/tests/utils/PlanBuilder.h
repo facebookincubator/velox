@@ -1160,10 +1160,13 @@ class PlanBuilder {
   /// @param ordinalColumn An optional name for the 'ordinal' column to produce.
   /// This column contains the index of the element of the unnested array or
   /// map. If not specified, the output will not contain this column.
+  /// @param isOuter If true, emit null data if the array/map is null or empty.
+  /// Used in SparkSQL's explode_outer.
   PlanBuilder& unnest(
       const std::vector<std::string>& replicateColumns,
       const std::vector<std::string>& unnestColumns,
-      const std::optional<std::string>& ordinalColumn = std::nullopt);
+      const std::optional<std::string>& ordinalColumn = std::nullopt,
+      bool isOuter = false);
 
   /// Add a WindowNode to compute one or more windowFunctions.
   /// @param windowFunctions A list of one or more window function SQL like
