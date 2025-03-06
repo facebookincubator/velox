@@ -76,6 +76,15 @@ class HiveConnectorSerDeTest : public exec::test::HiveConnectorTestBase {
     }
 
     ASSERT_EQ(split.tableBucketNumber, clone->tableBucketNumber);
+    if (split.bucketConversion.has_value()) {
+      ASSERT_TRUE(clone->bucketConversion.has_value());
+      ASSERT_EQ(
+          clone->bucketConversion.value().tableBucketCount,
+          split.bucketConversion.value().tableBucketCount);
+      ASSERT_EQ(
+          clone->bucketConversion.value().partitionBucketCount,
+          split.bucketConversion.value().partitionBucketCount);
+    }
     ASSERT_EQ(split.customSplitInfo.size(), clone->customSplitInfo.size());
     for (const auto& [key, value] : split.customSplitInfo) {
       ASSERT_EQ(value, clone->customSplitInfo.at(key));
@@ -128,7 +137,9 @@ TEST_F(HiveConnectorSerDeTest, hiveTableHandle) {
           .build(),
       parseExpr("c1 > c4 and c3 = true", rowType),
       "hive_table",
-      ROW({"c0", "c1"}, {BIGINT(), VARCHAR()}));
+      ROW({"c0", "c1"}, {BIGINT(), VARCHAR()}),
+      true,
+      {{dwio::common::TableParameter::kSkipHeaderLineCount, "1"}});
   testSerde(*tableHandle);
 }
 
@@ -222,6 +233,7 @@ TEST_F(HiveConnectorSerDeTest, hiveInsertTableHandle) {
 TEST_F(HiveConnectorSerDeTest, hiveConnectorSplit) {
   const auto connectorId = "testSerde";
   constexpr auto splitWeight = 1;
+  constexpr bool cacheable = false;
   constexpr auto filePath = "/testSerde/p";
   constexpr auto fileFormat = dwio::common::FileFormat::DWRF;
   constexpr auto start = 0;
@@ -234,6 +246,8 @@ TEST_F(HiveConnectorSerDeTest, hiveConnectorSplit) {
   const auto extraFileInfo = std::make_shared<std::string>("testSerdeFileInfo");
   const std::unordered_map<std::string, std::string> serdeParameters{
       {"k1", "1"}, {"k2", "v2"}};
+  const std::unordered_map<std::string, std::string> storageParameters{
+      {"k3", "3"}, {"k5", "v4"}};
   const std::unordered_map<std::string, std::string> infoColumns{
       {"c0", "0"}, {"c1", "1"}};
   FileProperties fileProperties{
@@ -252,10 +266,13 @@ TEST_F(HiveConnectorSerDeTest, hiveConnectorSplit) {
       customSplitInfo,
       extraFileInfo,
       serdeParameters,
+      storageParameters,
       splitWeight,
+      cacheable,
       infoColumns,
       properties,
       rowIdProperties);
+  ASSERT_EQ(split1.cacheable, cacheable);
   testSerde(split1);
 
   const auto split2 = HiveConnectorSplit(
@@ -269,11 +286,20 @@ TEST_F(HiveConnectorSerDeTest, hiveConnectorSplit) {
       customSplitInfo,
       nullptr,
       {},
+      {},
       splitWeight,
+      !cacheable,
       {},
       std::nullopt,
       std::nullopt);
+  ASSERT_EQ(split2.cacheable, !cacheable);
   testSerde(split2);
+
+  auto split3 = HiveConnectorSplit(connectorId, filePath, fileFormat);
+  std::vector<std::shared_ptr<HiveColumnHandle>> handles;
+  handles.push_back(makeColumnHandle("c0", INTEGER(), {}));
+  split3.bucketConversion = {16, 2, std::move(handles)};
+  testSerde(split3);
 }
 
 } // namespace

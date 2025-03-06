@@ -15,7 +15,6 @@
  */
 #pragma once
 
-#include "velox/expression/CastExpr.h"
 #include "velox/type/SimpleFunctionApi.h"
 #include "velox/type/Type.h"
 
@@ -72,7 +71,5 @@ struct UuidT {
 };
 
 using Uuid = CustomType<UuidT>;
-
-void registerUuidType();
 
 } // namespace facebook::velox

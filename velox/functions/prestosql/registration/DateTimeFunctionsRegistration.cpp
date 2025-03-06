@@ -14,9 +14,9 @@
  * limitations under the License.
  */
 
-#include "velox/expression/VectorFunction.h"
 #include "velox/functions/Registerer.h"
 #include "velox/functions/prestosql/DateTimeFunctions.h"
+#include "velox/functions/prestosql/types/TimestampWithTimeZoneRegistration.h"
 
 namespace facebook::velox::functions {
 namespace {
@@ -283,6 +283,9 @@ void registerSimpleFunctions(const std::string& prefix) {
 
   registerFunction<ToMillisecondFunction, int64_t, IntervalDayTime>(
       {prefix + "to_milliseconds"});
+
+  registerFunction<XxHash64DateFunction, int64_t, Date>(
+      {prefix + "xxhash64_internal"});
 }
 } // namespace
 

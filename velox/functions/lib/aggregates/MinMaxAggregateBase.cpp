@@ -113,10 +113,14 @@ class SimpleNumericMaxAggregate : public SimpleNumericMinMaxAggregate<T> {
       const std::vector<VectorPtr>& args,
       bool mayPushdown) override {
     if constexpr (BaseAggregate::template kMayPushdown<T>) {
-      if (mayPushdown && args[0]->isLazy()) {
-        BaseAggregate::template pushdown<
-            velox::aggregate::MinMaxHook<T, false>>(groups, rows, args[0]);
-        return;
+      if (!args[0]->type()->isDecimal()) {
+        if (mayPushdown && args[0]->isLazy()) {
+          BaseAggregate::template pushdown<
+              velox::aggregate::MinMaxHook<T, false>>(groups, rows, args[0]);
+          return;
+        }
+      } else {
+        mayPushdown = false;
       }
     } else {
       mayPushdown = false;
@@ -210,10 +214,14 @@ class SimpleNumericMinAggregate : public SimpleNumericMinMaxAggregate<T> {
       const std::vector<VectorPtr>& args,
       bool mayPushdown) override {
     if constexpr (BaseAggregate::template kMayPushdown<T>) {
-      if (mayPushdown && args[0]->isLazy()) {
-        BaseAggregate::template pushdown<velox::aggregate::MinMaxHook<T, true>>(
-            groups, rows, args[0]);
-        return;
+      if (!args[0]->type()->isDecimal()) {
+        if (mayPushdown && args[0]->isLazy()) {
+          BaseAggregate::template pushdown<
+              velox::aggregate::MinMaxHook<T, true>>(groups, rows, args[0]);
+          return;
+        }
+      } else {
+        mayPushdown = false;
       }
     } else {
       mayPushdown = false;
@@ -388,6 +396,12 @@ class MinMaxAggregateBase : public exec::Aggregate {
       return;
     }
 
+    const CompareFlags compareFlags{
+        true, // nullsFirst
+        true, // ascending
+        false, // equalsOnly
+        nullHandlingMode};
+
     rows.applyToSelected([&](vector_size_t i) {
       if (velox::functions::checkNestedNulls(
               decoded, indices, i, throwOnNestedNulls_)) {
@@ -396,7 +410,7 @@ class MinMaxAggregateBase : public exec::Aggregate {
 
       auto accumulator = value<SingleValueAccumulator>(groups[i]);
       if (!accumulator->hasValue() ||
-          compareTest(compare(accumulator, decoded, i, nullHandlingMode))) {
+          compareTest(compare(accumulator, decoded, i, compareFlags))) {
         accumulator->write(baseVector, indices[i], allocator_);
       }
     });
@@ -413,6 +427,11 @@ class MinMaxAggregateBase : public exec::Aggregate {
     DecodedVector decoded(*arg, rows, true);
     auto indices = decoded.indices();
     auto baseVector = decoded.base();
+    const CompareFlags compareFlags{
+        true, // nullsFirst
+        true, // ascending
+        false, // equalsOnly
+        nullHandlingMode};
 
     if (decoded.isConstantMapping()) {
       if (velox::functions::checkNestedNulls(
@@ -422,7 +441,7 @@ class MinMaxAggregateBase : public exec::Aggregate {
 
       auto accumulator = value<SingleValueAccumulator>(group);
       if (!accumulator->hasValue() ||
-          compareTest(compare(accumulator, decoded, 0, nullHandlingMode))) {
+          compareTest(compare(accumulator, decoded, 0, compareFlags))) {
         accumulator->write(baseVector, indices[0], allocator_);
       }
       return;
@@ -435,7 +454,7 @@ class MinMaxAggregateBase : public exec::Aggregate {
         return;
       }
       if (!accumulator->hasValue() ||
-          compareTest(compare(accumulator, decoded, i, nullHandlingMode))) {
+          compareTest(compare(accumulator, decoded, i, compareFlags))) {
         accumulator->write(baseVector, indices[i], allocator_);
       }
     });

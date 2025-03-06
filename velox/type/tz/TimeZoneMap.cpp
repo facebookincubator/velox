@@ -250,9 +250,9 @@ void validateRangeImpl(time_point<TDuration> timePoint) {
     // VeloxRuntimeError to avoid it being suppressed by TRY().
     VELOX_FAIL_UNSUPPORTED_INPUT_UNCATCHABLE(
         "Timepoint is outside of supported year range: [{}, {}], got {}",
-        (int)kMinYear,
-        (int)kMaxYear,
-        (int)year);
+        static_cast<int>(kMinYear),
+        static_cast<int>(kMaxYear),
+        static_cast<int>(year));
   }
 }
 
@@ -424,6 +424,21 @@ int16_t getTimeZoneID(int32_t offsetMinutes) {
   }
 }
 
+std::vector<int16_t> getTimeZoneIDs() {
+  const auto& timeZoneDatabase = getTimeZoneDatabase();
+
+  std::vector<int16_t> ids;
+  ids.reserve(timeZoneDatabase.size());
+
+  for (int16_t i = 0; i < timeZoneDatabase.size(); ++i) {
+    if (timeZoneDatabase[i] != nullptr) {
+      ids.push_back(i);
+    }
+  }
+
+  return ids;
+}
+
 TimeZone::seconds TimeZone::to_sys(
     TimeZone::seconds timestamp,
     TimeZone::TChoose choose) const {
@@ -443,6 +458,24 @@ TimeZone::seconds TimeZone::to_local(TimeZone::seconds timestamp) const {
 TimeZone::milliseconds TimeZone::to_local(
     TimeZone::milliseconds timestamp) const {
   return toLocalImpl(timestamp, tz_, offset_);
+}
+
+TimeZone::seconds TimeZone::correct_nonexistent_time(
+    TimeZone::seconds timestamp) const {
+  // If this is an offset time zone.
+  if (tz_ == nullptr) {
+    return timestamp;
+  }
+
+  const auto localInfo = tz_->get_info(date::local_time<seconds>{timestamp});
+
+  if (localInfo.result != date::local_info::nonexistent) {
+    return timestamp;
+  }
+
+  const auto adjustment = localInfo.second.offset - localInfo.first.offset;
+
+  return timestamp + adjustment;
 }
 
 std::string TimeZone::getShortName(

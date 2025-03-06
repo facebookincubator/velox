@@ -18,6 +18,7 @@
 
 #include <folly/json.h>
 
+#include <numeric>
 #include "velox/common/base/Exceptions.h"
 #include "velox/common/file/File.h"
 #include "velox/common/file/FileSystems.h"
@@ -36,13 +37,24 @@ std::string findLastPathNode(const std::string& path) {
 }
 } // namespace
 
-void createTraceDirectory(const std::string& traceDir) {
+void createTraceDirectory(
+    const std::string& traceDir,
+    const std::string& directoryConfig) {
   try {
     const auto fs = filesystems::getFileSystem(traceDir, nullptr);
     if (fs->exists(traceDir)) {
       fs->rmdir(traceDir);
     }
-    fs->mkdir(traceDir);
+
+    filesystems::DirectoryOptions options;
+    // If the trace directory config is set, we shall create the directory with
+    // the provided config.
+    if (!directoryConfig.empty()) {
+      options.values.emplace(
+          filesystems::DirectoryOptions::kMakeDirectoryConfig.toString(),
+          directoryConfig);
+    }
+    fs->mkdir(traceDir, options);
   } catch (const std::exception& e) {
     VELOX_FAIL(
         "Failed to create trace directory '{}' with error: {}",
@@ -100,7 +112,7 @@ std::string getOpTraceDirectory(
 std::string getOpTraceDirectory(
     const std::string& nodeTraceDir,
     uint32_t pipelineId,
-    int driverId) {
+    uint32_t driverId) {
   return fmt::format("{}/{}/{}", nodeTraceDir, pipelineId, driverId);
 }
 
@@ -144,6 +156,31 @@ folly::dynamic getTaskMetadata(
   } catch (const std::exception& e) {
     VELOX_FAIL(
         "Failed to get the query metadata from '{}' with error: {}",
+        taskMetaFilePath,
+        e.what());
+  }
+}
+
+std::string getNodeName(
+    const std::string& nodeId,
+    const std::string& taskMetaFilePath,
+    const std::shared_ptr<filesystems::FileSystem>& fs,
+    memory::MemoryPool* pool) {
+  try {
+    const auto file = fs->openFileForRead(taskMetaFilePath);
+    VELOX_CHECK_NOT_NULL(file);
+    const auto taskMeta = file->pread(0, file->size());
+    VELOX_USER_CHECK(!taskMeta.empty());
+    folly::dynamic metaObj = folly::parseJson(taskMeta);
+    const auto planFragment = ISerializable::deserialize<core::PlanNode>(
+        metaObj[TraceTraits::kPlanNodeKey], pool);
+    const auto* traceNode = core::PlanNode::findFirstNode(
+        planFragment.get(),
+        [&nodeId](const core::PlanNode* node) { return node->id() == nodeId; });
+    return std::string(traceNode->name());
+  } catch (const std::exception& e) {
+    VELOX_FAIL(
+        "Failed to get the trace node name from '{}' with error: {}",
         taskMetaFilePath,
         e.what());
   }
@@ -207,11 +244,13 @@ std::vector<uint32_t> listDriverIds(
   return driverIds;
 }
 
-size_t getNumDrivers(
-    const std::string& nodeTraceDir,
-    uint32_t pipelineId,
-    const std::shared_ptr<filesystems::FileSystem>& fs) {
-  return listDriverIds(nodeTraceDir, pipelineId, fs).size();
+std::vector<uint32_t> extractDriverIds(const std::string& driverIds) {
+  std::vector<uint32_t> driverIdList;
+  if (driverIds.empty()) {
+    return driverIdList;
+  }
+  folly::split(",", driverIds, driverIdList);
+  return driverIdList;
 }
 
 bool canTrace(const std::string& operatorType) {

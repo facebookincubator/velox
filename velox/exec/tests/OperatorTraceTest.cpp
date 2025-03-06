@@ -233,6 +233,10 @@ TEST_F(OperatorTraceTest, traceData) {
     ASSERT_EQ(summary.opType, "Aggregation");
     ASSERT_GT(summary.peakMemory, 0);
     ASSERT_EQ(summary.inputRows, testData.numTracedBatches * 16);
+    ASSERT_GT(summary.inputBytes, 0);
+    ASSERT_EQ(summary.rawInputRows, 0);
+    ASSERT_EQ(summary.rawInputBytes, 0);
+    ASSERT_FALSE(summary.numSplits.has_value());
 
     const auto reader = OperatorTraceInputReader(opTraceDir, dataType_, pool());
     RowVectorPtr actual;
@@ -297,7 +301,6 @@ TEST_F(OperatorTraceTest, traceMetadata) {
       expectedConnectorProperties);
   auto writer = trace::TaskTraceMetadataWriter(outputDir->getPath(), pool());
   writer.write(queryCtx, planNode);
-
   std::unordered_map<std::string, std::string> acutalQueryConfigs;
   std::unordered_map<std::string, std::unordered_map<std::string, std::string>>
       actualConnectorProperties;
@@ -458,7 +461,7 @@ TEST_F(OperatorTraceTest, error) {
             .copyResults(pool()),
         "Query trace enabled but the trace dir is not set");
   }
-  // Duplicate trace plan node ids.
+  // No trace task regexp.
   {
     const auto queryConfigs = std::unordered_map<std::string, std::string>{
         {core::QueryConfig::kQueryTraceEnabled, "true"},
@@ -556,9 +559,11 @@ TEST_F(OperatorTraceTest, traceTableWriter) {
   for (const auto& testData : testSettings) {
     SCOPED_TRACE(testData.debugString());
     const auto outputDir = TempDirectoryPath::create();
+    core::PlanNodeId tableWriteNodeId;
     const auto planNode = PlanBuilder()
                               .values(inputVectors)
                               .tableWrite(outputDir->getPath())
+                              .capturePlanNodeId(tableWriteNodeId)
                               .planNode();
     const auto testDir = TempDirectoryPath::create();
     const auto traceRoot =
@@ -576,7 +581,7 @@ TEST_F(OperatorTraceTest, traceTableWriter) {
               .config(
                   core::QueryConfig::kQueryTraceTaskRegExp,
                   testData.taskRegExpr)
-              .config(core::QueryConfig::kQueryTraceNodeIds, "1")
+              .config(core::QueryConfig::kQueryTraceNodeIds, tableWriteNodeId)
               .copyResults(pool(), task),
           "Query exceeded per-query local trace limit of");
       continue;
@@ -587,12 +592,11 @@ TEST_F(OperatorTraceTest, traceTableWriter) {
         .config(core::QueryConfig::kQueryTraceDir, traceRoot)
         .config(core::QueryConfig::kQueryTraceMaxBytes, testData.maxTracedBytes)
         .config(core::QueryConfig::kQueryTraceTaskRegExp, testData.taskRegExpr)
-        .config(core::QueryConfig::kQueryTraceNodeIds, "1")
+        .config(core::QueryConfig::kQueryTraceNodeIds, tableWriteNodeId)
         .copyResults(pool(), task);
 
     const auto taskTraceDir = getTaskTraceDirectory(traceRoot, *task);
     const auto fs = filesystems::getFileSystem(taskTraceDir, nullptr);
-
     if (testData.taskRegExpr == "wrong id") {
       ASSERT_FALSE(fs->exists(traceRoot));
       continue;
@@ -601,8 +605,12 @@ TEST_F(OperatorTraceTest, traceTableWriter) {
     // Query metadata file should exist.
     const auto traceMetaFilePath = getTaskTraceMetaFilePath(taskTraceDir);
     ASSERT_TRUE(fs->exists(traceMetaFilePath));
+    ASSERT_EQ(
+        "TableWrite",
+        getNodeName(tableWriteNodeId, traceMetaFilePath, fs, pool()));
 
-    const auto opTraceDir = getOpTraceDirectory(taskTraceDir, "1", 0, 0);
+    const auto opTraceDir =
+        getOpTraceDirectory(taskTraceDir, tableWriteNodeId, 0, 0);
 
     ASSERT_EQ(fs->list(opTraceDir).size(), 2);
 
@@ -704,6 +712,8 @@ TEST_F(OperatorTraceTest, filterProject) {
     // Query metadata file should exist.
     const auto traceMetaFilePath = getTaskTraceMetaFilePath(taskTraceDir);
     ASSERT_TRUE(fs->exists(traceMetaFilePath));
+    ASSERT_EQ(
+        "Project", getNodeName(projectNodeId, traceMetaFilePath, fs, pool()));
 
     const auto opTraceDir =
         getOpTraceDirectory(taskTraceDir, projectNodeId, 0, 0);
@@ -1073,6 +1083,8 @@ TEST_F(OperatorTraceTest, hashJoin) {
     // Query metadata file should exist.
     const auto traceMetaFilePath = getTaskTraceMetaFilePath(taskTraceDir);
     ASSERT_TRUE(fs->exists(traceMetaFilePath));
+    ASSERT_EQ(
+        "HashJoin", getNodeName(hashJoinNodeId, traceMetaFilePath, fs, pool()));
 
     for (uint32_t pipelineId = 0; pipelineId < 2; ++pipelineId) {
       const auto opTraceProbeDir =

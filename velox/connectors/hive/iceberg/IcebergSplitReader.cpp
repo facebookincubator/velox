@@ -33,6 +33,7 @@ IcebergSplitReader::IcebergSplitReader(
     const std::shared_ptr<const HiveConfig>& hiveConfig,
     const RowTypePtr& readerOutputType,
     const std::shared_ptr<io::IoStatistics>& ioStats,
+    const std::shared_ptr<filesystems::File::IoStats>& fsStats,
     FileHandleFactory* const fileHandleFactory,
     folly::Executor* executor,
     const std::shared_ptr<common::ScanSpec>& scanSpec)
@@ -44,6 +45,7 @@ IcebergSplitReader::IcebergSplitReader(
           hiveConfig,
           readerOutputType,
           ioStats,
+          fsStats,
           fileHandleFactory,
           executor,
           scanSpec),
@@ -55,14 +57,18 @@ IcebergSplitReader::IcebergSplitReader(
 void IcebergSplitReader::prepareSplit(
     std::shared_ptr<common::MetadataFilter> metadataFilter,
     dwio::common::RuntimeStatistics& runtimeStats) {
-  createReader(std::move(metadataFilter));
+  createReader();
+  if (emptySplit_) {
+    return;
+  }
+  auto rowType = getAdaptedRowType();
 
   if (checkIfSplitIsEmpty(runtimeStats)) {
     VELOX_CHECK(emptySplit_);
     return;
   }
 
-  createRowReader();
+  createRowReader(std::move(metadataFilter), std::move(rowType));
 
   std::shared_ptr<const HiveIcebergSplit> icebergSplit =
       std::dynamic_pointer_cast<const HiveIcebergSplit>(hiveSplit_);
@@ -83,6 +89,7 @@ void IcebergSplitReader::prepareSplit(
                 executor_,
                 hiveConfig_,
                 ioStats_,
+                fsStats_,
                 runtimeStats,
                 splitOffset_,
                 hiveSplit_->connectorId));

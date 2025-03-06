@@ -24,6 +24,10 @@ namespace facebook::velox::cache {
 #define VELOX_SSD_CACHE_LOG(severity) \
   LOG(severity) << VELOX_SSD_CACHE_LOG_PREFIX
 
+namespace test {
+class SsdCacheTestHelper;
+}
+
 class SsdCache {
  public:
   struct Config {
@@ -164,15 +168,6 @@ class SsdCache {
   /// test and Prestissimo worker operation.
   void waitForWriteToFinish();
 
-  /// Deletes backing files. Used in testing.
-  void testingDeleteFiles();
-
-  /// Deletes checkpoint files. Used in testing.
-  void testingDeleteCheckpoints();
-
-  /// Returns the total size of eviction log files. Used by test only.
-  uint64_t testingTotalLogEvictionFilesSize();
-
  private:
   void checkNotShutdownLocked() {
     VELOX_CHECK(
@@ -191,6 +186,8 @@ class SsdCache {
   // Count of shards with unfinished writes.
   std::atomic_int32_t writesInProgress_{0};
   bool shutdown_{false};
+
+  friend class test::SsdCacheTestHelper;
 };
 
 } // namespace facebook::velox::cache

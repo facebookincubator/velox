@@ -605,7 +605,7 @@ TEST_F(E2EWriterTest, TooManyFlatMapKeys) {
   config->set(dwrf::Config::MAP_FLAT_COLS, {0});
   config->set(dwrf::Config::MAP_FLAT_MAX_KEYS, keyLimit);
 
-  EXPECT_THROW(
+  VELOX_ASSERT_THROW(
       dwrf::E2EWriterTestUtil::testWriter(
           *pool,
           type,
@@ -613,7 +613,7 @@ TEST_F(E2EWriterTest, TooManyFlatMapKeys) {
           1,
           1,
           config),
-      exception::LoggedException);
+      "");
 }
 
 TEST_F(E2EWriterTest, FlatMapBackfill) {
@@ -845,8 +845,7 @@ TEST_F(E2EWriterTest, FlatMapConfigNotMapColumn) {
       "map_val:map<bigint,double>,"
       ">");
 
-  EXPECT_THROW(
-      { testFlatMapConfig(type, {0}, {}); }, exception::LoggedException);
+  VELOX_ASSERT_THROW(testFlatMapConfig(type, {0}, {}), "");
 }
 
 TEST_F(E2EWriterTest, mapStatsSingleStride) {
@@ -1366,8 +1365,7 @@ TEST_F(E2EEncryptionTest, ReadWithoutKey) {
     RowReaderOptions rowReaderOpts;
     rowReaderOpts.select(
         std::make_shared<ColumnSelector>(type, std::vector<uint64_t>{1}));
-    ASSERT_THROW(
-        reader->createRowReader(rowReaderOpts), exception::LoggedException);
+    VELOX_ASSERT_THROW(reader->createRowReader(rowReaderOpts), "");
   }
 }
 
@@ -1735,11 +1733,7 @@ DEBUG_ONLY_TEST_F(E2EWriterTest, memoryReclaimOnWrite) {
     const auto oldReservedBytes = writerPool->reservedBytes();
     const auto oldUsedBytes = writerPool->usedBytes();
     {
-      auto arbitrationStructs =
-          memory::test::ArbitrationTestStructs::createArbitrationTestStructs(
-              writerPool);
-      memory::ScopedMemoryArbitrationContext arbitrationCtx(
-          writerPool.get(), arbitrationStructs.operation.get());
+      memory::ScopedMemoryArbitrationContext arbitrationCtx(writerPool.get());
       writerPool->reclaim(1L << 30, 0, stats);
     }
     ASSERT_EQ(stats.numNonReclaimableAttempts, 0);
@@ -1778,11 +1772,7 @@ DEBUG_ONLY_TEST_F(E2EWriterTest, memoryReclaimOnWrite) {
       writer->testingNonReclaimableSection() = false;
       stats.numNonReclaimableAttempts = 0;
       {
-        auto arbitrationStructs =
-            memory::test::ArbitrationTestStructs::createArbitrationTestStructs(
-                writerPool);
-        memory::ScopedMemoryArbitrationContext arbitrationCtx(
-            writerPool.get(), arbitrationStructs.operation.get());
+        memory::ScopedMemoryArbitrationContext arbitrationCtx(writerPool.get());
         const auto reclaimedBytes = writerPool->reclaim(1L << 30, 0, stats);
         ASSERT_GT(reclaimedBytes, 0);
       }
@@ -1968,7 +1958,6 @@ TEST_F(E2EWriterTest, memoryReclaimAfterClose) {
     VELOX_ASSERT_THROW(writer->flush(), "Writer is not running");
 
     memory::MemoryReclaimer::Stats stats;
-    const auto oldCapacity = writerPool->capacity();
     writerPool->reclaim(1L << 30, 0, stats);
     if (testData.abort || !testData.canReclaim) {
       ASSERT_EQ(stats.numNonReclaimableAttempts, 0);
@@ -2124,11 +2113,7 @@ DEBUG_ONLY_TEST_F(E2EWriterTest, memoryReclaimThreshold) {
           *writerPool, reclaimableBytes));
       ASSERT_GT(reclaimableBytes, 0);
       {
-        auto arbitrationStructs =
-            memory::test::ArbitrationTestStructs::createArbitrationTestStructs(
-                writerPool);
-        memory::ScopedMemoryArbitrationContext arbitrationCtx(
-            writerPool.get(), arbitrationStructs.operation.get());
+        memory::ScopedMemoryArbitrationContext arbitrationCtx(writerPool.get());
         ASSERT_GT(writerPool->reclaim(1L << 30, 0, stats), 0);
       }
       ASSERT_GT(stats.reclaimExecTimeUs, 0);
@@ -2138,11 +2123,7 @@ DEBUG_ONLY_TEST_F(E2EWriterTest, memoryReclaimThreshold) {
           *writerPool, reclaimableBytes));
       ASSERT_EQ(reclaimableBytes, 0);
       {
-        auto arbitrationStructs =
-            memory::test::ArbitrationTestStructs::createArbitrationTestStructs(
-                writerPool);
-        memory::ScopedMemoryArbitrationContext arbitrationCtx(
-            writerPool.get(), arbitrationStructs.operation.get());
+        memory::ScopedMemoryArbitrationContext arbitrationCtx(writerPool.get());
         ASSERT_EQ(writerPool->reclaim(1L << 30, 0, stats), 0);
       }
       ASSERT_EQ(stats.numNonReclaimableAttempts, 0);

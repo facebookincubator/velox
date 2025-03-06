@@ -119,23 +119,6 @@ void FlatVector<StringView>::set(vector_size_t idx, StringView value) {
   }
 }
 
-/// For types that requires buffer allocation this should be called only if
-/// value is inlined or if value is already allocated in a buffer within the
-/// vector. Used by StringWriter to allow UDFs to write directly into the
-/// buffers and avoid copying.
-template <>
-void FlatVector<StringView>::setNoCopy(
-    const vector_size_t idx,
-    const StringView& value) {
-  VELOX_DCHECK_LT(idx, BaseVector::length_);
-  ensureValues();
-  VELOX_DCHECK(!values_->isView());
-  if (BaseVector::nulls_) {
-    BaseVector::setNull(idx, false);
-  }
-  rawValues_[idx] = value;
-}
-
 template <>
 void FlatVector<StringView>::acquireSharedStringBuffers(
     const BaseVector* source) {
@@ -332,6 +315,80 @@ void FlatVector<StringView>::copy(
         asciiInfo.writeLockedAsciiComputedRows()->deselect(rows);
       }
     }
+  }
+}
+
+// For strings if backing memory pool is not the same as the vector pool, we
+// need to perform a deep copy and reconstruct the string views against the
+// updated stringBuffers.
+template <>
+VectorPtr FlatVector<StringView>::copyPreserveEncodings(
+    velox::memory::MemoryPool* pool) const {
+  const auto allocPool = pool ? pool : BaseVector::pool_;
+  // If the backing memory pool is the same as the vector pool
+  // we can do a shallow copy as string buffers can be shared.
+  if (pool == BaseVector::pool_) {
+    return std::make_shared<FlatVector<StringView>>(
+        allocPool,
+        BaseVector::type_,
+        AlignedBuffer::copy(allocPool, BaseVector::nulls_),
+        BaseVector::length_,
+        AlignedBuffer::copy(allocPool, values_),
+        std::vector<BufferPtr>(stringBuffers_),
+        SimpleVector<StringView>::stats_,
+        BaseVector::distinctValueCount_,
+        BaseVector::nullCount_,
+        SimpleVector<StringView>::isSorted_,
+        BaseVector::representedByteCount_,
+        BaseVector::storageByteCount_);
+  } else {
+    size_t totalBytes = 0;
+    auto newValuesBuffer =
+        AlignedBuffer::allocate<StringView>(BaseVector::size(), allocPool);
+    auto* rawCopyValues = newValuesBuffer->asMutable<StringView>();
+    // Copy non Null StringViews to value buffer.
+    for (vector_size_t i = 0; i < BaseVector::size(); i++) {
+      if (!BaseVector::isNullAt(i)) {
+        auto v = valueAt(i);
+        if (v.isInline()) {
+          rawCopyValues[i] = v;
+        } else {
+          totalBytes += v.size();
+        }
+      }
+    }
+
+    std::vector<BufferPtr> newStringBuffers;
+    if (totalBytes > 0) {
+      newStringBuffers.emplace_back(
+          AlignedBuffer::allocate<char>(totalBytes, allocPool));
+      char* rawBuffer = newStringBuffers.back()->asMutable<char>();
+
+      for (vector_size_t i = 0; i < BaseVector::size(); i++) {
+        if (!BaseVector::isNullAt(i)) {
+          auto v = valueAt(i);
+          if (!v.isInline()) {
+            memcpy(rawBuffer, v.data(), v.size());
+            rawCopyValues[i] = StringView(rawBuffer, v.size());
+            rawBuffer += v.size();
+          }
+        }
+      }
+    }
+
+    return std::make_shared<FlatVector<StringView>>(
+        allocPool,
+        BaseVector::type_,
+        AlignedBuffer::copy(allocPool, BaseVector::nulls_),
+        BaseVector::length_,
+        newValuesBuffer,
+        std::move(newStringBuffers),
+        SimpleVector<StringView>::stats_,
+        BaseVector::distinctValueCount_,
+        BaseVector::nullCount_,
+        SimpleVector<StringView>::isSorted_,
+        BaseVector::representedByteCount_,
+        BaseVector::storageByteCount_);
   }
 }
 

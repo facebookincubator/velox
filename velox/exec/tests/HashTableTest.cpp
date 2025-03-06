@@ -547,7 +547,14 @@ class HashTableTest : public testing::TestWithParam<bool>,
     ASSERT_EQ(table->hashMode(), mode);
     std::vector<char*> rows(nullValues.size());
     BaseHashTable::NullKeyRowsIterator iter;
-    auto numRows = table->listNullKeyRows(&iter, rows.size(), rows.data());
+    std::vector<std::unique_ptr<VectorHasher>> probeHashers;
+    probeHashers.push_back(std::make_unique<VectorHasher>(keys->type(), 0));
+    auto nullKeyProbeInput = BaseVector::create(keys->type(), 1, pool());
+    nullKeyProbeInput->setNull(0, true);
+    SelectivityVector selectivity(1);
+    probeHashers[0]->decode(*nullKeyProbeInput, selectivity);
+    auto numRows =
+        table->listNullKeyRows(&iter, rows.size(), rows.data(), probeHashers);
     ASSERT_EQ(numRows, nullValues.size());
     auto actual =
         BaseVector::create<FlatVector<int64_t>>(BIGINT(), numRows, pool());
@@ -558,7 +565,9 @@ class HashTableTest : public testing::TestWithParam<bool>,
       nullValues.erase(it);
     }
     ASSERT_TRUE(nullValues.empty());
-    ASSERT_EQ(0, table->listNullKeyRows(&iter, rows.size(), rows.data()));
+    ASSERT_EQ(
+        0,
+        table->listNullKeyRows(&iter, rows.size(), rows.data(), probeHashers));
   }
 
   // Bitmap of positions in batches_ that end up in the table.
@@ -887,6 +896,7 @@ TEST_P(HashTableTest, listJoinResultsSize) {
   }
 
   struct TestParam {
+    std::optional<int64_t> estimatedRowSize;
     std::vector<vector_size_t> varSizeListColumns;
     std::vector<vector_size_t> fixedSizeListColumns;
     uint64_t maxBytes;
@@ -894,6 +904,10 @@ TEST_P(HashTableTest, listJoinResultsSize) {
 
     std::string debugString() const {
       std::stringstream ss;
+      ss << "estimatedRowSize "
+         << (estimatedRowSize.has_value()
+                 ? std::to_string(estimatedRowSize.value())
+                 : "null");
       ss << "varSizeListColumns ";
       ss << "[";
       for (auto i = 0; i < varSizeListColumns.size(); i++) {
@@ -918,14 +932,17 @@ TEST_P(HashTableTest, listJoinResultsSize) {
   // Key types: BIGINT, VARCHAR, ROW(BIGINT, VARCHAR)
   // Dependent types: BIGINT, VARCHAR
   std::vector<TestParam> testParams{
-      {{}, {0}, 1024, 128},
-      {{1}, {}, 2048, 20},
-      {{1}, {}, 1 << 20, 1024},
-      {{1}, {}, 1 << 14, 154},
-      {{1}, {0}, 2048, 18},
-      {{}, {0, 3}, 1024, 64},
-      {{2}, {}, 2048, 17},
-      {{1, 2, 4}, {0, 3}, 1 << 14, 66}};
+      {std::nullopt, {}, {0}, 1024, 128},
+      {std::nullopt, {1}, {}, 2048, 20},
+      {std::nullopt, {1}, {}, 1 << 20, 1024},
+      {std::nullopt, {1}, {}, 1 << 14, 154},
+      {std::nullopt, {1}, {0}, 2048, 18},
+      {std::nullopt, {}, {0, 3}, 1024, 64},
+      {std::nullopt, {2}, {}, 2048, 17},
+      {std::nullopt, {1, 2, 4}, {0, 3}, 1 << 14, 66},
+      {std::nullopt, {2}, {}, 2048, 17},
+      {std::make_optional(128), {}, {0}, 1024, 8},
+      {std::make_optional(0), {1}, {0}, 1024, 1024}};
   for (const auto& testParam : testParams) {
     SCOPED_TRACE(testParam.debugString());
     uint64_t fixedColumnSizeSum{0};
@@ -934,7 +951,8 @@ TEST_P(HashTableTest, listJoinResultsSize) {
     }
     BaseHashTable::JoinResultIterator iter(
         std::vector<vector_size_t>(testParam.varSizeListColumns),
-        fixedColumnSizeSum);
+        fixedColumnSizeSum,
+        testParam.estimatedRowSize);
     iter.reset(lookup);
     auto numRows = table->listJoinResults(
         iter, true, inputRows, outputRows, testParam.maxBytes);

@@ -529,11 +529,118 @@ bool tryParseTimeString(
   return true;
 }
 
-// Parses a variety of timestamp strings, depending on the value of `parseMode`.
-// Consumes as much of the string as it can and sets `result` to the
-// timestamp from whatever it successfully parses. `pos` is set to the position
-// of first character that was not consumed. Returns true if it successfully
-// parsed at least a date, `result` is only set if true is returned.
+// String format is [+/-]hh:mm:ss.MMM
+// * minutes, seconds, and milliseconds are optional.
+// * all separators are optional.
+// * . may be replaced with ,
+bool tryParsePrestoTimeOffsetString(
+    const char* buf,
+    size_t len,
+    size_t& pos,
+    int64_t& result) {
+  static constexpr int sep = ':';
+  int32_t hour = 0, min = 0, sec = 0, millis = 0;
+  pos = 0;
+  result = 0;
+
+  if (len == 0) {
+    return false;
+  }
+
+  if (buf[pos] != '+' && buf[pos] != '-') {
+    return false;
+  }
+
+  bool positive = buf[pos++] == '+';
+
+  if (pos >= len) {
+    return false;
+  }
+
+  // Read the hours.
+  if (!parseDoubleDigit(buf, len, pos, hour)) {
+    return false;
+  }
+  if (hour < 0 || hour >= 24) {
+    return false;
+  }
+
+  result += hour * kMillisPerHour;
+
+  if (pos >= len || (buf[pos] != sep && !characterIsDigit(buf[pos]))) {
+    result *= positive ? 1 : -1;
+    return pos == len;
+  }
+
+  // Skip the separator.
+  if (buf[pos] == sep) {
+    pos++;
+  }
+
+  // Read the minutes.
+  if (!parseDoubleDigit(buf, len, pos, min)) {
+    return false;
+  }
+  if (min < 0 || min >= 60) {
+    return false;
+  }
+
+  result += min * kMillisPerMinute;
+
+  if (pos >= len || (buf[pos] != sep && !characterIsDigit(buf[pos]))) {
+    result *= positive ? 1 : -1;
+    return pos == len;
+  }
+
+  // Skip the separator.
+  if (buf[pos] == sep) {
+    pos++;
+  }
+
+  // Try to read seconds.
+  if (!parseDoubleDigit(buf, len, pos, sec)) {
+    return false;
+  }
+  if (sec < 0 || sec >= 60) {
+    return false;
+  }
+
+  result += sec * kMillisPerSecond;
+
+  if (pos >= len ||
+      (buf[pos] != '.' && buf[pos] != ',' && !characterIsDigit(buf[pos]))) {
+    result *= positive ? 1 : -1;
+    return pos == len;
+  }
+
+  // Skip the decimal.
+  if (buf[pos] == '.' || buf[pos] == ',') {
+    pos++;
+  }
+
+  // Try to read microseconds.
+  if (pos >= len) {
+    return false;
+  }
+
+  // We expect milliseconds.
+  int32_t mult = 100;
+  for (; pos < len && mult > 0 && characterIsDigit(buf[pos]);
+       pos++, mult /= 10) {
+    millis += (buf[pos] - '0') * mult;
+  }
+
+  result += millis;
+  result *= positive ? 1 : -1;
+  return pos == len;
+}
+
+// Parses a variety of timestamp strings, depending on the value of
+// `parseMode`. Consumes as much of the string as it can and sets `result` to
+// the timestamp from whatever it successfully parses. `pos` is set to the
+// position of first character that was not consumed. Returns true if it
+// successfully parsed at least a date, `result` is only set if true is
+// returned.
 bool tryParseTimestampString(
     const char* buf,
     size_t len,
@@ -564,7 +671,8 @@ bool tryParseTimestampString(
                  len,
                  pos,
                  daysSinceEpoch,
-                 parseMode == TimestampParseMode::kIso8601
+                 parseMode == TimestampParseMode::kIso8601 ||
+                         parseMode == TimestampParseMode::kSparkCast
                      ? ParseMode::kSparkCast
                      : ParseMode::kNonStrict)) {
     return false;
@@ -583,8 +691,8 @@ bool tryParseTimestampString(
   if (!tryParseTimeString(
           buf + pos, len - pos, timePos, microsSinceMidnight, parseMode)) {
     // The rest of the string is not a valid time, but it could be relevant to
-    // the caller (e.g. it could be a time zone), return the date we parsed and
-    // let them decide what to do with the rest.
+    // the caller (e.g. it could be a time zone), return the date we parsed
+    // and let them decide what to do with the rest.
     result = fromDatetime(daysSinceEpoch, 0);
     return true;
   }
@@ -857,8 +965,7 @@ fromTimestampString(const char* str, size_t len, TimestampParseMode parseMode) {
   return resultTimestamp;
 }
 
-Expected<std::pair<Timestamp, const tz::TimeZone*>>
-fromTimestampWithTimezoneString(
+Expected<ParsedTimestampWithTimeZone> fromTimestampWithTimezoneString(
     const char* str,
     size_t len,
     TimestampParseMode parseMode) {
@@ -870,6 +977,7 @@ fromTimestampWithTimezoneString(
   }
 
   const tz::TimeZone* timeZone = nullptr;
+  std::optional<int64_t> offset = std::nullopt;
 
   if (pos < len && parseMode != TimestampParseMode::kIso8601 &&
       characterIsSpace(str[pos])) {
@@ -894,8 +1002,16 @@ fromTimestampWithTimezoneString(
     std::string_view timeZoneName(str + pos, timezonePos - pos);
 
     if ((timeZone = tz::locateZone(timeZoneName, false)) == nullptr) {
-      return folly::makeUnexpected(
-          Status::UserError("Unknown timezone value: \"{}\"", timeZoneName));
+      int64_t offsetMillis = 0;
+      size_t offsetPos = 0;
+      if (parseMode == TimestampParseMode::kPrestoCast &&
+          tryParsePrestoTimeOffsetString(
+              str + pos, timezonePos - pos, offsetPos, offsetMillis)) {
+        offset = offsetMillis;
+      } else {
+        return folly::makeUnexpected(
+            Status::UserError("Unknown timezone value: \"{}\"", timeZoneName));
+      }
     }
 
     // Skip any spaces at the end.
@@ -908,7 +1024,35 @@ fromTimestampWithTimezoneString(
       return folly::makeUnexpected(parserError(str, len));
     }
   }
-  return std::make_pair(resultTimestamp, timeZone);
+  return {{resultTimestamp, timeZone, offset}};
+}
+
+Timestamp fromParsedTimestampWithTimeZone(
+    ParsedTimestampWithTimeZone parsed,
+    const tz::TimeZone* sessionTimeZone) {
+  if (parsed.timeZone) {
+    parsed.timestamp.toGMT(*parsed.timeZone);
+  } else if (parsed.offsetMillis.has_value()) {
+    auto seconds = parsed.timestamp.getSeconds();
+    // use int128_t to avoid overflow.
+    __int128_t nanos = parsed.timestamp.getNanos();
+    seconds -= parsed.offsetMillis.value() / util::kMillisPerSecond;
+    nanos -= (parsed.offsetMillis.value() % util::kMillisPerSecond) *
+        util::kNanosPerMicro * util::kMicrosPerMsec;
+    if (nanos < 0) {
+      seconds -= 1;
+      nanos += Timestamp::kNanosInSecond;
+    } else if (nanos > Timestamp::kMaxNanos) {
+      seconds += 1;
+      nanos -= Timestamp::kNanosInSecond;
+    }
+    parsed.timestamp = Timestamp(seconds, nanos);
+  } else {
+    if (sessionTimeZone) {
+      parsed.timestamp.toGMT(*sessionTimeZone);
+    }
+  }
+  return parsed.timestamp;
 }
 
 int32_t toDate(const Timestamp& timestamp, const tz::TimeZone* timeZone_) {

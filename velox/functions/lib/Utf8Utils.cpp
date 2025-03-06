@@ -18,10 +18,6 @@
 #include "velox/external/utf8proc/utf8procImpl.h"
 
 namespace facebook::velox::functions {
-namespace {
-
-// Returns the length of a UTF-8 character indicated by the first byte. Returns
-// -1 for invalid UTF-8 first byte.
 int firstByteCharLength(const char* u_input) {
   auto u = (const unsigned char*)u_input;
   unsigned char u0 = u[0];
@@ -59,11 +55,14 @@ int firstByteCharLength(const char* u_input) {
   return -1;
 }
 
-} // namespace
-
-int32_t tryGetCharLength(const char* input, int64_t size) {
+int32_t
+tryGetUtf8CharLength(const char* input, int64_t size, int32_t& codePoint) {
   VELOX_DCHECK_NOT_NULL(input);
   VELOX_DCHECK_GT(size, 0);
+
+  // Set codePoint to an impossible value so it's obvious if anyone forgets to
+  // check the return value before using it.
+  codePoint = -1;
 
   auto charLength = firstByteCharLength(input);
   if (charLength < 0) {
@@ -72,6 +71,7 @@ int32_t tryGetCharLength(const char* input, int64_t size) {
 
   if (charLength == 1) {
     // Normal ASCII: 0xxx_xxxx.
+    codePoint = input[0];
     return 1;
   }
 
@@ -89,7 +89,7 @@ int32_t tryGetCharLength(const char* input, int64_t size) {
 
   if (charLength == 2) {
     // 110x_xxxx 10xx_xxxx
-    int codePoint = ((firstByte & 0b00011111) << 6) | (secondByte & 0b00111111);
+    codePoint = ((firstByte & 0b00011111) << 6) | (secondByte & 0b00111111);
     // Fail if overlong encoding.
     return codePoint < 0x80 ? -2 : 2;
   }
@@ -106,7 +106,7 @@ int32_t tryGetCharLength(const char* input, int64_t size) {
 
   if (charLength == 3) {
     // 1110_xxxx 10xx_xxxx 10xx_xxxx
-    int codePoint = ((firstByte & 0b00001111) << 12) |
+    codePoint = ((firstByte & 0b00001111) << 12) |
         ((secondByte & 0b00111111) << 6) | (thirdByte & 0b00111111);
 
     // Surrogates are invalid.
@@ -132,7 +132,7 @@ int32_t tryGetCharLength(const char* input, int64_t size) {
 
   if (charLength == 4) {
     // 1111_0xxx 10xx_xxxx 10xx_xxxx 10xx_xxxx
-    int codePoint = ((firstByte & 0b00000111) << 18) |
+    codePoint = ((firstByte & 0b00000111) << 18) |
         ((secondByte & 0b00111111) << 12) | ((thirdByte & 0b00111111) << 6) |
         (forthByte & 0b00111111);
     // Fail if overlong encoding or above upper bound of Unicode.
@@ -171,6 +171,54 @@ int32_t tryGetCharLength(const char* input, int64_t size) {
   }
   // for longer sequence, which can't happen.
   return -1;
+}
+
+size_t replaceInvalidUTF8Characters(
+    char* outputBuffer,
+    const char* input,
+    int32_t len) {
+  size_t inputIndex = 0;
+  size_t outputIndex = 0;
+
+  while (inputIndex < len) {
+    if (IS_ASCII(input[inputIndex])) {
+      outputBuffer[outputIndex++] = input[inputIndex++];
+    } else {
+      // Unicode
+      int32_t codePoint;
+      const auto charLength =
+          tryGetUtf8CharLength(input + inputIndex, len - inputIndex, codePoint);
+      if (charLength > 0) {
+        std::memcpy(outputBuffer + outputIndex, input + inputIndex, charLength);
+        outputIndex += charLength;
+        inputIndex += charLength;
+      } else {
+        const auto& replacementCharacterString =
+            getInvalidUTF8ReplacementString(
+                input + inputIndex, len - inputIndex, -charLength);
+        std::memcpy(
+            outputBuffer + outputIndex,
+            replacementCharacterString.data(),
+            replacementCharacterString.size());
+        outputIndex += replacementCharacterString.size();
+        inputIndex += -charLength;
+      }
+    }
+  }
+
+  return outputIndex;
+}
+
+template <>
+void replaceInvalidUTF8Characters(
+    std::string& out,
+    const char* input,
+    int32_t len) {
+  auto maxLen = len * kReplacementCharacterStrings[0].size();
+  out.resize(maxLen);
+  auto outputBuffer = out.data();
+  auto outputIndex = replaceInvalidUTF8Characters(outputBuffer, input, len);
+  out.resize(outputIndex);
 }
 
 } // namespace facebook::velox::functions

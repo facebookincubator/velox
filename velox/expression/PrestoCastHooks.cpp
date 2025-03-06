@@ -49,25 +49,17 @@ Expected<Timestamp> PrestoCastHooks::castStringToTimestamp(
     return folly::makeUnexpected(conversionResult.error());
   }
 
-  auto result = conversionResult.value();
-
-  // If the parsed string has timezone information, convert the timestamp at
-  // GMT at that time. For example, "1970-01-01 00:00:00 -00:01" is 60 seconds
-  // at GMT.
-  if (result.second != nullptr) {
-    result.first.toGMT(*result.second);
-
-  }
-  // If no timezone information is available in the input string, check if we
-  // should understand it as being at the session timezone, and if so, convert
-  // to GMT.
-  else if (options_.timeZone != nullptr) {
-    result.first.toGMT(*options_.timeZone);
-  }
-  return result.first;
+  return util::fromParsedTimestampWithTimeZone(
+      conversionResult.value(), options_.timeZone);
 }
 
 Expected<Timestamp> PrestoCastHooks::castIntToTimestamp(int64_t seconds) const {
+  return folly::makeUnexpected(
+      Status::UserError("Conversion to Timestamp is not supported"));
+}
+
+Expected<std::optional<Timestamp>> PrestoCastHooks::castDoubleToTimestamp(
+    double seconds) const {
   return folly::makeUnexpected(
       Status::UserError("Conversion to Timestamp is not supported"));
 }

@@ -81,11 +81,13 @@ class ColumnStatistics {
       std::optional<uint64_t> valueCount,
       std::optional<bool> hasNull,
       std::optional<uint64_t> rawSize,
-      std::optional<uint64_t> size)
+      std::optional<uint64_t> size,
+      std::optional<int64_t> numDistinct = std::nullopt)
       : valueCount_(valueCount),
         hasNull_(hasNull),
         rawSize_(rawSize),
-        size_(size) {}
+        size_(size),
+        numDistinct_(numDistinct) {}
 
   virtual ~ColumnStatistics() = default;
 
@@ -123,6 +125,16 @@ class ColumnStatistics {
     return size_;
   }
 
+  std::optional<uint64_t> numDistinct() const {
+    return numDistinct_;
+  }
+
+  void setNumDistinct(int64_t count) {
+    VELOX_CHECK(
+        !numDistinct_.has_value(), "numDistinct_ can be set only once.");
+    numDistinct_ = count;
+  }
+
   /**
    * return string representation of this stats object
    */
@@ -145,6 +157,7 @@ class ColumnStatistics {
   std::optional<bool> hasNull_;
   std::optional<uint64_t> rawSize_;
   std::optional<uint64_t> size_;
+  std::optional<uint64_t> numDistinct_;
 };
 
 /**
@@ -535,16 +548,39 @@ struct RuntimeStatistics {
   // Number of strides (row groups) skipped based on statistics.
   int64_t skippedStrides{0};
 
+  int64_t footerBufferOverread{0};
+
+  int64_t numStripes{0};
+
   ColumnReaderStatistics columnReaderStatistics;
 
   std::unordered_map<std::string, RuntimeCounter> toMap() {
-    return {
-        {"skippedSplits", RuntimeCounter(skippedSplits)},
-        {"skippedSplitBytes",
-         RuntimeCounter(skippedSplitBytes, RuntimeCounter::Unit::kBytes)},
-        {"skippedStrides", RuntimeCounter(skippedStrides)},
-        {"flattenStringDictionaryValues",
-         RuntimeCounter(columnReaderStatistics.flattenStringDictionaryValues)}};
+    std::unordered_map<std::string, RuntimeCounter> result;
+    if (skippedSplits > 0) {
+      result.emplace("skippedSplits", RuntimeCounter(skippedSplits));
+    }
+    if (skippedSplitBytes > 0) {
+      result.emplace(
+          "skippedSplitBytes",
+          RuntimeCounter(skippedSplitBytes, RuntimeCounter::Unit::kBytes));
+    }
+    if (skippedStrides > 0) {
+      result.emplace("skippedStrides", RuntimeCounter(skippedStrides));
+    }
+    if (footerBufferOverread > 0) {
+      result.emplace(
+          "footerBufferOverread",
+          RuntimeCounter(footerBufferOverread, RuntimeCounter::Unit::kBytes));
+    }
+    if (numStripes > 0) {
+      result.emplace("numStripes", RuntimeCounter(numStripes));
+    }
+    if (columnReaderStatistics.flattenStringDictionaryValues > 0) {
+      result.emplace(
+          "flattenStringDictionaryValues",
+          RuntimeCounter(columnReaderStatistics.flattenStringDictionaryValues));
+    }
+    return result;
   }
 };
 

@@ -24,10 +24,6 @@
 
 namespace facebook::velox::wave {
 
-AbstractWrap* Project::findWrap() const {
-  return filterWrap_;
-}
-
 std::vector<AdvanceResult> Project::canAdvance(WaveStream& stream) {
   auto& controls = stream.launchControls(id_);
   if (controls.empty()) {
@@ -132,14 +128,25 @@ void Project::schedule(WaveStream& stream, int32_t maxRows) {
               control->deviceData->as<char>(),
               control->deviceData->size());
           stream.setState(WaveStream::State::kParallel);
+          stream.checkExecutables();
           {
             PrintTime c("expr");
-            reinterpret_cast<WaveKernelStream*>(out)->call(
-                out,
-                exes.size() * blocksPerExe,
-                control->sharedMemorySize,
-                control->params);
+            auto* kernel = exes[0]->programShared->kernel();
+            VELOX_CHECK_NOT_NULL(kernel);
+            auto numBranches = exes[0]->programShared->numBranches();
+            void* params = &control->params;
+            // The count of TBs is the BlockStatus count ceil
+            // numRowsPerThread, i.e. 11 blocks with 4 rows per thread
+            // is 3. The TBs in the launch is this times the number of
+            // program branches.
+            auto numTBs = numBranches *
+                bits::roundUp(control->params.numBlocks,
+                              control->params.numRowsPerThread) /
+                control->params.numRowsPerThread;
+            kernel->launch(
+                0, numTBs, kBlockSize, control->sharedMemorySize, out, &params);
           }
+          stream.checkExecutables();
         });
     isContinue = false;
   }
@@ -148,7 +155,6 @@ void Project::schedule(WaveStream& stream, int32_t maxRows) {
 void Project::finalize(CompileState& state) {
   for (auto& level : levels_) {
     for (auto& program : level) {
-      program->prepareForDevice(state.arena());
       for (auto& pair : program->output()) {
         if (true /*isProjected(id)*/) {
           computedSet_.add(pair.first->id);

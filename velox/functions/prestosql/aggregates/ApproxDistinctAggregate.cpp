@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 #define XXH_INLINE_ALL
-#include <xxhash.h>
+#include <xxhash.h> // @manual=third-party//xxHash:xxhash
 
 #include "velox/common/hyperloglog/DenseHll.h"
 #include "velox/common/hyperloglog/HllUtils.h"
@@ -23,7 +23,7 @@
 #include "velox/exec/Aggregate.h"
 #include "velox/expression/FunctionSignature.h"
 #include "velox/functions/prestosql/aggregates/AggregateNames.h"
-#include "velox/functions/prestosql/types/HyperLogLogType.h"
+#include "velox/functions/prestosql/types/HyperLogLogRegistration.h"
 #include "velox/vector/DecodedVector.h"
 #include "velox/vector/FlatVector.h"
 

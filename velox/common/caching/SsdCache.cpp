@@ -23,7 +23,6 @@
 #include "velox/common/time/Timer.h"
 
 #include <filesystem>
-#include <numeric>
 
 using facebook::velox::common::testutil::TestValue;
 
@@ -37,7 +36,7 @@ SsdCache::SsdCache(const Config& config)
   // Make sure the given path of Ssd files has the prefix for local file system.
   // Local file system would be derived based on the prefix.
   VELOX_CHECK(
-      filePrefix_.find('/') == 0,
+      filePrefix_.find('/') == 0 || filePrefix_.find("faulty:/") == 0,
       "Ssd path '{}' does not start with '/' that points to local file system.",
       filePrefix_);
   VELOX_CHECK_NOT_NULL(executor_);
@@ -220,27 +219,6 @@ void SsdCache::clear() {
   for (auto& file : files_) {
     file->clear();
   }
-}
-
-void SsdCache::testingDeleteFiles() {
-  for (auto& file : files_) {
-    file->testingDeleteFile();
-  }
-}
-
-void SsdCache::testingDeleteCheckpoints() {
-  for (auto& file : files_) {
-    file->deleteCheckpoint();
-  }
-}
-
-uint64_t SsdCache::testingTotalLogEvictionFilesSize() {
-  uint64_t size = 0;
-  for (auto& file : files_) {
-    std::filesystem::path p{file->getEvictLogFilePath()};
-    size += std::filesystem::file_size(p);
-  }
-  return size;
 }
 
 void SsdCache::waitForWriteToFinish() {

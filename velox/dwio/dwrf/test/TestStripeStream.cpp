@@ -38,8 +38,12 @@ class RecordingInputStream : public facebook::velox::InMemoryReadFile {
  public:
   RecordingInputStream() : InMemoryReadFile(std::string()) {}
 
-  std::string_view pread(uint64_t offset, uint64_t length, void* buf)
-      const override {
+  std::string_view pread(
+      uint64_t offset,
+      uint64_t length,
+      void* buf,
+      facebook::velox::filesystems::File::IoStats* stats =
+          nullptr) const override {
     reads_.push_back({offset, length});
     return {static_cast<char*>(buf), length};
   }
@@ -134,6 +138,7 @@ TEST_F(StripeStreamTest, planReads) {
           std::move(is),
           *pool_,
           MetricsLog::voidLog(),
+          nullptr,
           nullptr,
           BufferedInput::kMaxMergeDistance,
           true),

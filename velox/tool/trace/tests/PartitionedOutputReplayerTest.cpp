@@ -159,8 +159,11 @@ TEST_P(PartitionedOutputReplayerTest, defaultConsumer) {
                       originalTask->taskId(),
                       planNodeId,
                       GetParam(),
-                      "PartitionedOutput")
-                      .run());
+                      "PartitionedOutput",
+                      "",
+                      0,
+                      executor_.get())
+                      .run(false));
 }
 
 TEST_P(PartitionedOutputReplayerTest, basic) {
@@ -251,10 +254,13 @@ TEST_P(PartitionedOutputReplayerTest, basic) {
           planNodeId,
           GetParam(),
           "PartitionedOutput",
+          "",
+          0,
+          executor_.get(),
           [&](auto partition, auto page) {
             replayedPartitionedResults[partition].push_back(std::move(page));
           })
-          .run();
+          .run(false);
 
       ASSERT_EQ(replayedPartitionedResults.size(), testParam.numPartitions);
       for (uint32_t partition = 0; partition < testParam.numPartitions;

@@ -26,7 +26,7 @@
 /// to ensure that the client instrumentation of remote function execution works
 /// as expected.
 ///
-/// It currently listens on a local unix domain socket controleed by the flag
+/// It currently listens on a local unix domain socket controlled by the flag
 /// below.
 
 DEFINE_string(
@@ -44,6 +44,7 @@ using ::apache::thrift::ThriftServer;
 
 int main(int argc, char* argv[]) {
   folly::Init init{&argc, &argv, false};
+  memory::MemoryManager::initialize({});
   FLAGS_logtostderr = true;
 
   // Always registers all Presto functions and make them available under a

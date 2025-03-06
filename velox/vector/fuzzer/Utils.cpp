@@ -16,12 +16,8 @@
 
 #include "velox/vector/fuzzer/Utils.h"
 
-namespace facebook::velox::generator_spec_utils {
-
-bool coinToss(FuzzerGenerator& rng, double threshold) {
-  static std::uniform_real_distribution<> dist(0.0, 1.0);
-  return dist(rng) < threshold;
-}
+namespace facebook::velox {
+namespace generator_spec_utils {
 
 vector_size_t getRandomIndex(FuzzerGenerator& rng, vector_size_t maxIndex) {
   std::uniform_int_distribution<vector_size_t> indexGenerator(
@@ -36,7 +32,7 @@ BufferPtr generateNullsBuffer(
     double nullProbability) {
   NullsBuilder builder{vectorSize, pool};
   for (size_t i = 0; i < vectorSize; ++i) {
-    if (coinToss(rng, nullProbability)) {
+    if (fuzzer::coinToss(rng, nullProbability)) {
       builder.setNull(i);
     }
   }
@@ -59,4 +55,5 @@ BufferPtr generateIndicesBuffer(
   return indices;
 }
 
-} // namespace facebook::velox::generator_spec_utils
+} // namespace generator_spec_utils
+} // namespace facebook::velox

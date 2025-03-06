@@ -22,6 +22,7 @@ add_executable(
   ConcurrentCounterTest.cpp
   ExceptionTest.cpp
   FsTest.cpp
+  IndexedPriorityQueueTest.cpp
   RangeTest.cpp
   RawVectorTest.cpp
   RuntimeMetricsTest.cpp
@@ -29,6 +30,7 @@ add_executable(
   ScratchTest.cpp
   SemaphoreTest.cpp
   SimdUtilTest.cpp
+  SkewedPartitionBalancerTest.cpp
   SpillConfigTest.cpp
   SpillStatsTest.cpp
   StatsReporterTest.cpp

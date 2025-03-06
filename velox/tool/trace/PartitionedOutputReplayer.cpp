@@ -111,8 +111,19 @@ PartitionedOutputReplayer::PartitionedOutputReplayer(
     const std::string& nodeId,
     VectorSerde::Kind serdeKind,
     const std::string& operatorType,
+    const std::string& driverIds,
+    uint64_t queryCapacity,
+    folly::Executor* executor,
     const ConsumerCallBack& consumerCb)
-    : OperatorReplayerBase(traceDir, queryId, taskId, nodeId, operatorType),
+    : OperatorReplayerBase(
+          traceDir,
+          queryId,
+          taskId,
+          nodeId,
+          operatorType,
+          driverIds,
+          queryCapacity,
+          executor),
       originalNode_(dynamic_cast<const core::PartitionedOutputNode*>(
           core::PlanNode::findFirstNode(
               planFragment_.get(),
@@ -127,14 +138,14 @@ PartitionedOutputReplayer::PartitionedOutputReplayer(
       std::make_shared<folly::NamedThreadFactory>("Consumer"));
 }
 
-RowVectorPtr PartitionedOutputReplayer::run() {
-  auto task = Task::create(
+RowVectorPtr PartitionedOutputReplayer::run(bool /*unused*/) {
+  const auto task = Task::create(
       "local://partitioned-output-replayer",
       core::PlanFragment{createPlan()},
       0,
       createQueryContext(queryConfigs_, executor_.get()),
       Task::ExecutionMode::kParallel);
-  task->start(maxDrivers_);
+  task->start(driverIds_.size());
 
   consumeAllData(
       bufferManager_,
@@ -143,6 +154,7 @@ RowVectorPtr PartitionedOutputReplayer::run() {
       executor_.get(),
       consumerExecutor_.get(),
       consumerCb_);
+  printStats(task);
   return nullptr;
 }
 

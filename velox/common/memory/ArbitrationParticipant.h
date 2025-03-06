@@ -47,10 +47,13 @@ class ScopedArbitrationParticipant;
 /// apply a wait timeout by checking arbitrationCtx thread local variable. If a
 /// local arbitration is ongoing on the current locking thread, timeout will
 /// automatically be applied.
-class ArbitrationOperationTimedLock {
+///
+/// NOTE: TSAN is incompatible with std::timed_mutex when used with timeout. So
+/// in TSAN build a trivial lock is implemented.
+class ArbitrationTimedLock {
  public:
-  explicit ArbitrationOperationTimedLock(std::timed_mutex& mutex);
-  ~ArbitrationOperationTimedLock();
+  ArbitrationTimedLock(std::timed_mutex& mutex, uint64_t timeoutNs);
+  ~ArbitrationTimedLock();
 
  private:
   std::timed_mutex& mutex_;

@@ -94,6 +94,17 @@ uint64_t SharedArbitrator::ExtraConfig::memoryPoolReservedCapacity(
       config::CapacityUnit::BYTE);
 }
 
+uint64_t SharedArbitrator::ExtraConfig::maxMemoryArbitrationTimeNs(
+    const std::unordered_map<std::string, std::string>& configs) {
+  return std::chrono::duration_cast<std::chrono::nanoseconds>(
+             config::toDuration(getConfig<std::string>(
+                 configs,
+                 kMaxMemoryArbitrationTime,
+                 std::string(kDefaultMaxMemoryArbitrationTime))))
+      .count();
+}
+
+// TODO: Remove after name change complete
 uint64_t SharedArbitrator::ExtraConfig::memoryReclaimMaxWaitTimeNs(
     const std::unordered_map<std::string, std::string>& configs) {
   return std::chrono::duration_cast<std::chrono::nanoseconds>(
@@ -206,7 +217,7 @@ SharedArbitrator::SharedArbitrator(const Config& config)
       reservedCapacity_(ExtraConfig::reservedCapacity(config.extraConfigs)),
       checkUsageLeak_(ExtraConfig::checkUsageLeak(config.extraConfigs)),
       maxArbitrationTimeNs_(
-          ExtraConfig::memoryReclaimMaxWaitTimeNs(config.extraConfigs)),
+          ExtraConfig::maxMemoryArbitrationTimeNs(config.extraConfigs)),
       participantConfig_(
           ExtraConfig::memoryPoolInitialCapacity(config.extraConfigs),
           ExtraConfig::memoryPoolReservedCapacity(config.extraConfigs),
@@ -249,7 +260,7 @@ SharedArbitrator::SharedArbitrator(const Config& config)
       std::thread::hardware_concurrency() * memoryReclaimThreadsHwMultiplier_);
   memoryReclaimExecutor_ = std::make_unique<folly::CPUThreadPoolExecutor>(
       numReclaimThreads,
-      std::make_shared<folly::NamedThreadFactory>("MeomryReclaim"));
+      std::make_shared<folly::NamedThreadFactory>("MemoryReclaim"));
   VELOX_MEM_LOG(INFO) << "Start memory reclaim executor with "
                       << numReclaimThreads << " threads";
 
@@ -1341,7 +1352,7 @@ SharedArbitrator::ScopedArbitration::ScopedArbitration(
     ArbitrationOperation* operation)
     : arbitrator_(arbitrator),
       operation_(operation),
-      arbitrationCtx_(operation->participant()->pool(), operation),
+      arbitrationCtx_(operation->participant()->pool()),
       startTime_(std::chrono::steady_clock::now()) {
   VELOX_CHECK_NOT_NULL(arbitrator_);
   VELOX_CHECK_NOT_NULL(operation_);

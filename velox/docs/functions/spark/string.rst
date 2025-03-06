@@ -25,6 +25,25 @@ String Functions
     If ``n < 0``, the result is an empty string.
     If ``n >= 256``, the result is equivalent to chr(``n % 256``).
 
+.. spark:function:: concat_ws(separator, [string/array<string>], ...) -> varchar
+
+   Returns the concatenation result for ``string`` and all elements in ``array<string>``, separated
+   by ``separator``. The first argument is ``separator`` whose type is VARCHAR. Then, this function
+   can take variable number of remaining arguments , and it allows mixed use of ``string`` type and
+   ``array<string>`` type. Skips NULL argument or NULL array element during the concatenation. If
+   ``separator`` is NULL, returns NULL, regardless of the following inputs. For non-NULL ``separator``,
+   if no remaining input exists or all remaining inputs are NULL, returns an empty string. ::
+
+        SELECT concat_ws('~', 'a', 'b', 'c'); -- 'a~b~c'
+        SELECT concat_ws('~', ['a', 'b', 'c'], ['d']); -- 'a~b~c~d'
+        SELECT concat_ws('~', 'a', ['b', 'c']); -- 'a~b~c'
+        SELECT concat_ws('~', '', [''], ['a', '']); -- '~~a~'
+        SELECT concat_ws(NULL, 'a'); -- NULL
+        SELECT concat_ws('~'); -- ''
+        SELECT concat_ws('~', NULL, [NULL], 'a', 'b'); -- 'a~b'
+        SELECT concat_ws('~', NULL, NULL); -- ''
+        SELECT concat_ws('~', [NULL]); -- ''
+
 .. spark:function:: contains(left, right) -> boolean
 
     Returns true if 'right' is found in 'left'. Otherwise, returns false. ::
@@ -111,6 +130,35 @@ String Functions
         SELECT levenshtein('kitten', 'sitting'); -- 3
         SELECT levenshtein('kitten', 'sitting', 10); -- 3
         SELECT levenshtein('kitten', 'sitting', 2); -- -1
+
+.. spark:function:: locate(substring, string, start) -> integer
+
+    Returns the 1-based position of the first occurrence of ``substring`` in given ``string``
+    after position ``start``. The search is from the beginning of ``string`` to the end.
+    ``start`` is the starting character position in ``string`` to search for the ``substring``.
+    ``start`` is 1-based and must be at least 1 and at most the characters number of ``string``.
+    The following rules on special values are applied to follow Spark's implementation.
+    They are listed in order of priority:
+
+    Returns 0 if ``start`` is NULL. Returns NULL if ``substring`` or ``string`` is NULL.
+    Returns 0 if ``start`` is less than 1.
+    Returns 1 if ``substring`` is empty.
+    Returns 0 if ``start`` is greater than the characters number of ``string``.
+    Returns 0 if ``substring`` is not found in ``string``. ::
+
+        SELECT locate('aa', 'aaads', 1); -- 1
+        SELECT locate('aa', 'aaads', -1); -- 0
+        SELECT locate('aa', 'aaads', 2); -- 2
+        SELECT locate('aa', 'aaads', 6); -- 0
+        SELECT locate('aa', 'aaads', NULL); -- 0
+        SELECT locate('', 'aaads', 1); -- 1
+        SELECT locate('', 'aaads', 9); -- 1
+        SELECT locate('', 'aaads', -1); -- 0
+        SELECT locate('', '', 1); -- 1
+        SELECT locate('aa', '', 1); -- 0
+        SELECT locate(NULL, NULL, NULL); -- 0
+        SELECT locate(NULL, NULL, 1); -- NULL
+        SELECT locate('\u4FE1', '\u4FE1\u5FF5,\u4FE1\u7231,\u4FE1\u5E0C\u671B', 2); -- 4
 
 .. spark:function:: lower(string) -> string
 

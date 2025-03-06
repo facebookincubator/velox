@@ -28,8 +28,19 @@ class AggregationReplayer : public OperatorReplayerBase {
       const std::string& queryId,
       const std::string& taskId,
       const std::string& nodeId,
-      const std::string& operatorType)
-      : OperatorReplayerBase(traceDir, queryId, taskId, nodeId, operatorType) {}
+      const std::string& operatorType,
+      const std::string& driverIds,
+      uint64_t queryCapacity,
+      folly::Executor* executor)
+      : OperatorReplayerBase(
+            traceDir,
+            queryId,
+            taskId,
+            nodeId,
+            operatorType,
+            driverIds,
+            queryCapacity,
+            executor) {}
 
  private:
   core::PlanNodePtr createPlanNode(

@@ -14,8 +14,13 @@
 
 add_subdirectory(utils)
 
-add_executable(velox_wave_exec_test FilterProjectTest.cpp TableScanTest.cpp
-                                    AggregationTest.cpp Main.cpp)
+add_executable(
+  velox_wave_exec_test
+  FilterProjectTest.cpp
+  TableScanTest.cpp
+  AggregationTest.cpp
+  BarrierTest.cpp
+  Main.cpp)
 
 target_link_libraries(
   velox_wave_exec_test
@@ -82,8 +87,8 @@ if(${VELOX_ENABLE_BENCHMARKS})
     GTest::gtest
     GTest::gtest_main
     GTest::gmock
-    ${FOLLY_BENCHMARK}
     Folly::folly
+    Folly::follybenchmark
     gflags::gflags
     glog::glog
     fmt::fmt

@@ -24,6 +24,9 @@
 #include "velox/vector/VectorTypeUtils.h"
 
 namespace facebook::velox::exec {
+namespace test {
+class RowContainerTestHelper;
+}
 
 using NextRowVector = std::vector<char*, StlAllocator<char*>>;
 
@@ -163,6 +166,82 @@ class RowColumn {
     return nullMask() << 1;
   }
 
+  /// Aggregated stats of a column in the 'RowContainer'.
+  class Stats {
+   public:
+    Stats() = default;
+
+    void addCellSize(int32_t bytes) {
+      if (UNLIKELY(nonNullCount_ == 0)) {
+        minBytes_ = bytes;
+        maxBytes_ = bytes;
+      } else {
+        minBytes_ = std::min(minBytes_, bytes);
+        maxBytes_ = std::max(maxBytes_, bytes);
+      }
+      sumBytes_ += bytes;
+      ++nonNullCount_;
+    }
+
+    void addNullCell() {
+      ++nullCount_;
+    }
+
+    void removeOrUpdateCellStats(int32_t bytes, bool wasNull, bool setToNull);
+
+    int32_t maxBytes() const {
+      return maxBytes_;
+    }
+
+    int32_t minBytes() const {
+      return minBytes_;
+    }
+
+    uint64_t sumBytes() const {
+      return sumBytes_;
+    }
+
+    uint64_t avgBytes() const {
+      if (nonNullCount_ == 0) {
+        return 0;
+      }
+      return sumBytes_ / nonNullCount_;
+    }
+
+    uint32_t nonNullCount() const {
+      return nonNullCount_;
+    }
+
+    uint32_t nullCount() const {
+      return nullCount_;
+    }
+
+    uint32_t numCells() const {
+      return nullCount_ + nonNullCount_;
+    }
+
+    void invalidateMinMaxColumnStats() {
+      minMaxStatsValid_ = false;
+    }
+
+    bool minMaxColumnStatsValid() const {
+      return minMaxStatsValid_;
+    }
+
+    /// Merges multiple aggregated stats of the same column into a single one.
+    static Stats merge(const std::vector<Stats>& statsList);
+
+   private:
+    // Aggregated stats for non-null rows of the column.
+    int32_t minBytes_{0};
+    int32_t maxBytes_{0};
+    bool minMaxStatsValid_{true};
+    uint64_t sumBytes_{0};
+
+    uint32_t nonNullCount_{0};
+    uint32_t nullCount_{0};
+  };
+
  private:
   static uint64_t PackOffsets(int32_t offset, int32_t nullOffset) {
     if (nullOffset == kNotNullOffset) {
@@ -252,6 +331,7 @@ class RowContainer {
   /// a row with uninitialized keys for aggregates with no-op partial
   /// aggregation.
   void setAllNull(char* row) {
+    removeOrUpdateRowColumnStats(row, /*setToNull=*/true);
     if (!nullOffsets_.empty()) {
       memset(row + nullByte(nullOffsets_[0]), 0xff, initialNulls_.size());
       bits::clearBit(row, freeFlagOffset_);
@@ -294,7 +374,7 @@ class RowContainer {
   /// Stores the 'index'th value in 'decoded' into 'row' at 'columnIndex'.
   void store(
       const DecodedVector& decoded,
-      vector_size_t index,
+      vector_size_t rowIndex,
       char* row,
       int32_t columnIndex);
 
@@ -743,13 +823,23 @@ class RowContainer {
     return types_;
   }
 
+  /// Returns the aggregated column stats of the column with given
+  /// 'columnIndex'. nullopt will be returned if the column stats was previous
+  /// invalidated. Any row erase operations will invalidate column stats.
+  std::optional<RowColumn::Stats> columnStats(int32_t columnIndex) const;
+
+  uint32_t columnNullCount(int32_t columnIndex) const {
+    return rowColumnsStats_[columnIndex].nullCount();
+  }
+
   const auto& keyTypes() const {
     return keyTypes_;
   }
 
-  /// Returns true if specified column may have nulls, false otherwise.
+  /// Returns true if specified column has nulls, false otherwise.
   inline bool columnHasNulls(int32_t columnIndex) const {
-    return columnHasNulls_[columnIndex];
+    return columnStats(columnIndex)->numCells() > 0 &&
+        columnStats(columnIndex)->nullCount() > 0;
   }
 
   const std::vector<Accumulator>& accumulators() const {
@@ -760,17 +850,24 @@ class RowContainer {
     return *stringAllocator_;
   }
 
-  /// Checks that row and free row counts match and that free list membership is
-  /// consistent with free flag.
-  void checkConsistency() const;
-
   static inline bool
   isNullAt(const char* row, int32_t nullByte, uint8_t nullMask) {
     return (row[nullByte] & nullMask) != 0;
   }
 
-  static inline bool isNullAt(const char* row, RowColumn rowColumn) {
+  static inline bool isNullAt(const char* row, const RowColumn& rowColumn) {
     return (row[rowColumn.nullByte()] & rowColumn.nullMask()) != 0;
+  }
+
+  /// Returns true if the value at rowColumn in row is NaN.
+  template <
+      typename T,
+      std::enable_if_t<std::is_floating_point_v<T>, int32_t> = 0>
+  static inline bool isNanAt(const char* row, const RowColumn& rowColumn) {
+    if (isNullAt(row, rowColumn.nullByte(), rowColumn.nullMask())) {
+      return false;
+    }
+    return std::isnan(valueAt<T>(row, rowColumn.offset()));
   }
 
   /// Creates a container to store a partition number for each row in this row
@@ -909,6 +1006,13 @@ class RowContainer {
     }
   }
 
+  /// Removes or updates the column stats of a given row by updating each column
+  /// stats.
+  /// @param row - Points to the row to be removed or updated.
+  /// @param setToNull - If true, the row stats is set to a null row,
+  /// otherwise, the stats is erased from the columns stats.
+  void removeOrUpdateRowColumnStats(const char* row, bool setToNull);
+
   char*& nextFree(char* row) const {
     return *reinterpret_cast<char**>(row + kNextFreeOffset);
   }
@@ -921,43 +1025,44 @@ class RowContainer {
   template <TypeKind Kind>
   inline void storeWithNulls(
       const DecodedVector& decoded,
-      vector_size_t index,
+      vector_size_t rowIndex,
       bool isKey,
       char* row,
       int32_t offset,
       int32_t nullByte,
       uint8_t nullMask,
-      int32_t column) {
+      int32_t columnIndex) {
     using T = typename TypeTraits<Kind>::NativeType;
-    if (decoded.isNullAt(index)) {
+    if (decoded.isNullAt(rowIndex)) {
       row[nullByte] |= nullMask;
       // Do not leave an uninitialized value in the case of a
       // null. This is an error with valgrind/asan.
       *reinterpret_cast<T*>(row + offset) = T();
-      updateColumnHasNulls(column, true);
       return;
     }
     if constexpr (std::is_same_v<T, StringView>) {
       RowSizeTracker tracker(row[rowSizeOffset_], *stringAllocator_);
-      stringAllocator_->copyMultipart(decoded.valueAt<T>(index), row, offset);
+      stringAllocator_->copyMultipart(
+          decoded.valueAt<T>(rowIndex), row, offset);
     } else {
-      *reinterpret_cast<T*>(row + offset) = decoded.valueAt<T>(index);
+      *reinterpret_cast<T*>(row + offset) = decoded.valueAt<T>(rowIndex);
     }
   }
 
   template <TypeKind Kind>
   inline void storeNoNulls(
       const DecodedVector& decoded,
-      vector_size_t index,
+      vector_size_t rowIndex,
       bool isKey,
-      char* group,
+      char* row,
       int32_t offset) {
     using T = typename TypeTraits<Kind>::NativeType;
     if constexpr (std::is_same_v<T, StringView>) {
-      RowSizeTracker tracker(group[rowSizeOffset_], *stringAllocator_);
-      stringAllocator_->copyMultipart(decoded.valueAt<T>(index), group, offset);
+      RowSizeTracker tracker(row[rowSizeOffset_], *stringAllocator_);
+      stringAllocator_->copyMultipart(
+          decoded.valueAt<T>(rowIndex), row, offset);
     } else {
-      *reinterpret_cast<T*>(group + offset) = decoded.valueAt<T>(index);
+      *reinterpret_cast<T*>(row + offset) = decoded.valueAt<T>(rowIndex);
     }
   }
 
@@ -973,6 +1078,7 @@ class RowContainer {
     for (int32_t i = 0; i < rows.size(); ++i) {
       storeWithNulls<Kind>(
           decoded, i, isKey, rows[i], offset, nullByte, nullMask, column);
+      updateColumnStats(decoded, i, rows[i], column);
     }
   }
 
@@ -981,9 +1087,11 @@ class RowContainer {
       const DecodedVector& decoded,
       folly::Range<char**> rows,
       bool isKey,
-      int32_t offset) {
+      int32_t offset,
+      int32_t column) {
     for (int32_t i = 0; i < rows.size(); ++i) {
       storeNoNulls<Kind>(decoded, i, isKey, rows[i], offset);
+      updateColumnStats(decoded, i, rows[i], column);
     }
   }
 
@@ -1000,7 +1108,7 @@ class RowContainer {
     auto maxRows = numRows + resultOffset;
     VELOX_DCHECK_LE(maxRows, result->size());
 
-    BufferPtr& nullBuffer = result->mutableNulls(maxRows);
+    BufferPtr& nullBuffer = result->mutableNulls(maxRows, true);
     auto nulls = nullBuffer->asMutable<uint64_t>();
     BufferPtr valuesBuffer = result->mutableValues(maxRows);
     [[maybe_unused]] auto values = valuesBuffer->asMutableRange<T>();
@@ -1060,7 +1168,7 @@ class RowContainer {
     }
   }
 
-  static std::unique_ptr<ByteInputStream> prepareRead(
+  static HashStringAllocator::InputStream prepareRead(
       const char* row,
       int32_t offset);
 
@@ -1291,7 +1399,7 @@ class RowContainer {
         result->setNull(resultIndex, true);
       } else {
         auto stream = prepareRead(row, offset);
-        ContainerRowSerde::deserialize(*stream, resultIndex, result.get());
+        ContainerRowSerde::deserialize(stream, resultIndex, result.get());
       }
     }
   }
@@ -1374,10 +1482,21 @@ class RowContainer {
 
   void freeRowsExtraMemory(folly::Range<char**> rows, bool freeNextRowVector);
 
-  // Updates the specific column's columnHasNulls_ flag, if 'hasNulls' is true.
-  // columnHasNulls_ flag is false by default.
-  inline void updateColumnHasNulls(int32_t columnIndex, bool hasNulls) {
-    columnHasNulls_[columnIndex] = columnHasNulls_[columnIndex] || hasNulls;
+  inline void updateColumnStats(
+      const DecodedVector& decoded,
+      vector_size_t rowIndex,
+      char* row,
+      int32_t columnIndex);
+
+  // Updates column stats for serialized row.
+  inline void updateColumnStats(char* row, int32_t columnIndex);
+
+  // Min/max column stats do not support row erasures. This
+  // method is called whenever a row is erased.
+  void invalidateMinMaxColumnStats() {
+    for (auto columnStats : rowColumnsStats_) {
+      columnStats.invalidateMinMaxColumnStats();
+    }
   }
 
   const std::vector<TypePtr> keyTypes_;
@@ -1385,9 +1504,8 @@ class RowContainer {
   const bool isJoinBuild_;
   // True if normalized keys are enabled in initial state.
   const bool hasNormalizedKeys_;
-  const std::unique_ptr<HashStringAllocator> stringAllocator_;
 
-  std::vector<bool> columnHasNulls_;
+  const std::unique_ptr<HashStringAllocator> stringAllocator_;
 
   // Indicates if we can add new row to this row container. It is set to false
   // after user calls 'getRowPartitions()' to create 'rowPartitions' object for
@@ -1413,6 +1531,9 @@ class RowContainer {
   // Offset and null indicator offset of non-aggregate fields as a single word.
   // Corresponds pairwise to 'types_'.
   std::vector<RowColumn> rowColumns_;
+  // Aggregated column stats(e.g. min/max size) for non-aggregate
+  // fields. Index aligns with 'rowColumns_'.
+  std::vector<RowColumn::Stats> rowColumnsStats_;
   // Bit offset of the probed flag for a full or right outer join  payload. 0 if
   // not applicable.
   int32_t probedFlagOffset_ = 0;
@@ -1444,6 +1565,8 @@ class RowContainer {
   memory::AllocationPool rows_;
 
   int alignment_ = 1;
+
+  friend class test::RowContainerTestHelper;
 };
 
 template <>
@@ -1456,102 +1579,101 @@ inline int128_t RowContainer::valueAt<int128_t>(
 template <>
 inline void RowContainer::storeWithNulls<TypeKind::ROW>(
     const DecodedVector& decoded,
-    vector_size_t index,
+    vector_size_t rowIndex,
     bool isKey,
     char* row,
     int32_t offset,
     int32_t nullByte,
     uint8_t nullMask,
-    int32_t column) {
+    int32_t columnIndex) {
   storeComplexType(
-      decoded, index, isKey, row, offset, nullByte, nullMask, column);
+      decoded, rowIndex, isKey, row, offset, nullByte, nullMask, columnIndex);
 }
 
 template <>
 inline void RowContainer::storeNoNulls<TypeKind::ROW>(
     const DecodedVector& decoded,
-    vector_size_t index,
+    vector_size_t rowIndex,
     bool isKey,
     char* row,
     int32_t offset) {
-  storeComplexType(decoded, index, isKey, row, offset);
+  storeComplexType(decoded, rowIndex, isKey, row, offset);
 }
 
 template <>
 inline void RowContainer::storeWithNulls<TypeKind::ARRAY>(
     const DecodedVector& decoded,
-    vector_size_t index,
+    vector_size_t rowIndex,
     bool isKey,
     char* row,
     int32_t offset,
     int32_t nullByte,
     uint8_t nullMask,
-    int32_t column) {
+    int32_t columnIndex) {
   storeComplexType(
-      decoded, index, isKey, row, offset, nullByte, nullMask, column);
+      decoded, rowIndex, isKey, row, offset, nullByte, nullMask, columnIndex);
 }
 
 template <>
 inline void RowContainer::storeNoNulls<TypeKind::ARRAY>(
     const DecodedVector& decoded,
-    vector_size_t index,
+    vector_size_t rowIndex,
     bool isKey,
     char* row,
     int32_t offset) {
-  storeComplexType(decoded, index, isKey, row, offset);
+  storeComplexType(decoded, rowIndex, isKey, row, offset);
 }
 
 template <>
 inline void RowContainer::storeWithNulls<TypeKind::MAP>(
     const DecodedVector& decoded,
-    vector_size_t index,
+    vector_size_t rowIndex,
     bool isKey,
     char* row,
     int32_t offset,
     int32_t nullByte,
     uint8_t nullMask,
-    int32_t column) {
+    int32_t columnIndex) {
   storeComplexType(
-      decoded, index, isKey, row, offset, nullByte, nullMask, column);
+      decoded, rowIndex, isKey, row, offset, nullByte, nullMask, columnIndex);
 }
 
 template <>
 inline void RowContainer::storeNoNulls<TypeKind::MAP>(
     const DecodedVector& decoded,
-    vector_size_t index,
+    vector_size_t rowIndex,
     bool isKey,
     char* row,
     int32_t offset) {
-  storeComplexType(decoded, index, isKey, row, offset);
+  storeComplexType(decoded, rowIndex, isKey, row, offset);
 }
 
 template <>
 inline void RowContainer::storeWithNulls<TypeKind::HUGEINT>(
     const DecodedVector& decoded,
-    vector_size_t index,
+    vector_size_t rowIndex,
     bool /*isKey*/,
     char* row,
     int32_t offset,
     int32_t nullByte,
     uint8_t nullMask,
-    int32_t column) {
-  if (decoded.isNullAt(index)) {
+    int32_t columnIndex) {
+  if (decoded.isNullAt(rowIndex)) {
     row[nullByte] |= nullMask;
     memset(row + offset, 0, sizeof(int128_t));
-    updateColumnHasNulls(column, true);
     return;
   }
-  HugeInt::serialize(decoded.valueAt<int128_t>(index), row + offset);
+  HugeInt::serialize(decoded.valueAt<int128_t>(rowIndex), row + offset);
 }
 
 template <>
 inline void RowContainer::storeNoNulls<TypeKind::HUGEINT>(
     const DecodedVector& decoded,
-    vector_size_t index,
+    vector_size_t rowIndex,
     bool /*isKey*/,
     char* row,
     int32_t offset) {
-  HugeInt::serialize(decoded.valueAt<int128_t>(index), row + offset);
+  HugeInt::serialize(decoded.valueAt<int128_t>(rowIndex), row + offset);
 }
 
 template <>

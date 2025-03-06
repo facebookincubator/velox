@@ -74,6 +74,25 @@ DEFINE_string(
     "vectors and expression SQL strings. This flag is ignored if "
     "velox_save_input_on_expression_any_failure_path is set.");
 
+DEFINE_bool(
+    force_eval_simplified,
+    false,
+    "Whether to overwrite queryCtx and force the "
+    "use of simplified expression evaluation path.");
+
+DEFINE_bool(
+    velox_experimental_save_input_on_fatal_signal,
+    false,
+    "This is an experimental flag only to be used for debugging "
+    "purposes. If set to true, serializes the input vector data and "
+    "all the SQL expressions in the ExprSet that is currently "
+    "executing, whenever a fatal signal is encountered. Enabling "
+    "this flag makes the signal handler async signal unsafe, so it "
+    "should only be used for debugging purposes. The vector and SQLs "
+    "are serialized to files in directories specified by either "
+    "'velox_save_input_on_expression_any_failure_path' or "
+    "'velox_save_input_on_expression_system_failure_path'");
+
 // TODO: deprecate this once all the memory leak issues have been fixed in
 // existing meta internal use cases.
 DEFINE_bool(
@@ -100,3 +119,15 @@ DEFINE_bool(
     "exception. This is only used by test to control the test error output size");
 
 DEFINE_bool(velox_memory_use_hugepages, true, "Use explicit huge pages");
+
+DEFINE_int32(
+    cache_prefetch_min_pct,
+    80,
+    "Minimum percentage of actual uses over references to a column for prefetching. No prefetch if > 100");
+
+DEFINE_bool(velox_ssd_odirect, true, "Use O_DIRECT for SSD cache IO");
+
+DEFINE_bool(
+    velox_ssd_verify_write,
+    false,
+    "Read back data after writing to SSD");

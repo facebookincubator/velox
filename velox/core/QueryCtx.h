@@ -115,7 +115,7 @@ class QueryCtx : public std::enable_shared_from_this<QueryCtx> {
 
   /// Checks if the associated query is under memory arbitration or not. The
   /// function returns true if it is and set future which is fulfilled when the
-  /// the memory arbiration finishes.
+  /// memory arbitration finishes.
   bool checkUnderArbitration(ContinueFuture* future);
 
   /// Updates the aggregated spill bytes of this query, and throws if exceeds
@@ -170,8 +170,9 @@ class QueryCtx : public std::enable_shared_from_this<QueryCtx> {
    protected:
     MemoryReclaimer(
         const std::shared_ptr<QueryCtx>& queryCtx,
-        memory::MemoryPool* pool)
-        : queryCtx_(queryCtx), pool_(pool) {
+        memory::MemoryPool* pool,
+        int32_t priority = 0)
+        : memory::MemoryReclaimer(priority), queryCtx_(queryCtx), pool_(pool) {
       VELOX_CHECK_NOT_NULL(pool_);
     }
 

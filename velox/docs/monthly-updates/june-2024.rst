@@ -1,0 +1,142 @@
+****************
+June 2024 Update
+****************
+
+This month has **261** commits from **58** authors. Below are some of the highlights.
+
+Documentation
+=============
+
+* Document :doc:`Timestamp and Timezone Management </develop/timestamp>`.
+
+Core Library
+============
+
+* Add UUID Presto type.
+* Add options to configure saving data to SSD cache. :pr:`10056`
+* Add support for spill read ahead. :pr:`10008`
+* Fix Joins with filters on LazyVectors. :pr:`10045`
+* Fix incorrect results due to lazy evaluation of remaining filter. :pr:`10072`
+
+Presto Functions
+================
+
+* Add :func:`regexp_split`, :func:`regexp_replace`, :func:`to_milliseconds`,
+  :func:`from_iso8601_timestamp`, :func:`json_array_get`,
+  :func:`map_remove_null_values`, :func:`array_cum_sum`, :func:`normalize`,
+  :func:`inverse_normal_cdf`, :func:`lpad`, :func:`rpad`, :func:`fail`,
+  :func:`map_top_n_keys` functions.
+* Add support for TS_WITH_TZ +/- INTERVAL function.
+* Add support for INTERVAL input to :func:`year`, :func:`month`, :func:`hour`,
+  :func:`minute`, :func:`second`, :func:`millisecond`, comparison functions.
+* Add support for CAST(TIMESTAMP WITH TIMEZONE AS VARCHAR).
+* Add support for CAST(DATE AS TIMESTAMP WITH TIMEZONE).
+* Add support for CAST(TIMESTAMP WITH TIMEZONE AS DATE).
+* Add support for trailing spaces in CAST(VARCHAR as DATE).
+* Add support for negative array index, single-quoted keys, paths without leading "$"
+  JsonPath argument in JSON functions such as :func:`json_extract`.
+* Add support for DECIMAL in :func:`modulus` function.
+* Add support for DATETIME unit 'week' in :func:`date_add` and :func:`date_diff` functions.
+* Add support for TIMESTAMP input in :func:`to_iso8601` function.
+* Add support for variable pattern and replacement in :func:`regexp_replace` function.
+* Add support for INTERVAL and TIMESTAMP WITH TIMEZONE to between function.
+* Fix parsing of 'March' and 'MARCH' input in :func:`date_parse` function.
+* Add support for complex types to :func:`distinct_from`, :func:`array_distinct`,
+  :func:`histogram` functions.
+* Add support for VARBINARY to :func:`concat`, :func:`from_base64`, :func:`substr` functions.
+* Add support for REAL, DECIMAL to :func:`truncate` function.
+* Add support for :func:`from_unixtime(unixtime, hours, minutes)` function.
+* Add support for TIMESTAMP WITH TIME ZONE input to :func:`least`, :func:`greatest`, :func:`minus` functions.
+* Add support for BOOLEAN input to :func:`approx_most_frequent` function.
+* Fix :func:`json_array_contains` for NaN, Infinity, -Infinity arguments. :pr:`10023`
+* Fix :func:`min`, :func:`max` handling for NaN, Infinity, -Infinity arguments. :pr:`9931`
+
+Spark Functions
+===============
+
+* Add :spark:func:`log` function.
+* Add support for DECIMAL input to :spark:func:`greatest` and :spark:func:`least` functions.
+* Add support for complex types to :spark:func:`equalto` and :spark:func:`equalnullsafe` functions.
+* Add support for FLOAT and DOUBLE types to :spark:func:`mod` function.
+* Fix :spark:func:`in` for NaN inputs.
+
+Hive Connector
+==============
+
+* Add "cache.no_retention" session config to allow a query not retain data in the AsyncDataCache
+  and skip SSD Cache.
+* Add retry for S3 filesystem.
+* Add support for ORC file-format Reader.
+
+Performance and Correctness
+===========================
+
+* Add benchmark of casting string to double.
+* Add benchmark for Iceberg SplitReader.
+* Parallelize spilling by partitioning. :pr:`9938`
+* Optimize merge-join by using vectorization and conditional use of dictionary encoding. :pr:`9763`
+* SIMD-ize comparisons for DATE type.
+
+Build System
+============
+
+* Add support for Centos9 Stream + GCC12.
+* Update fbos deps to v2024.05.20.00.
+
+Credits
+=======
+::
+
+     1	Amit Dutta - Meta
+     3	Andrii Rosa - Meta
+     1	Ankita Victor - Microsoft
+     1	Athmaja N - IBM
+     8	Bikramjeet Vig - Meta
+     2	Christian Zentgraf - IBM
+     1	Daniel Hunte - Meta
+     1	Daniel Jonathan Hunte - Meta
+    13	Deepak Majeti - IBM
+     1	Deepashree Gandhi - IBM
+     1	Huameng (Michael) Jiang - Meta
+     1	Jacob Khaliqi
+     5	Jacob Wujciak-Jens - Voltron Data
+     3	Jia Ke - Intel
+     7	Jialiang Tan
+    17	Jimmy Lu - Meta
+     7	Ke
+    24	Kevin Wilfong - Meta
+     3	Krishna Pai - Meta
+     1	Kunal Kataria - Meta
+    56	Masha Basmanova - Meta
+     1	NEUpanning
+     4	Orri Erling - Meta
+     5	PHILO-HE - Intel
+     9	Pedro Eugenio Rocha Pedreira - Meta
+     3	Pramod Satya - IBM
+     1	Pranjal Shankhdhar - Meta
+     1	Pratik Joseph Dabre
+     1	Reetika Agrawal - IBM
+     3	Sandino Flores - Intel
+     7	Wei He - Meta
+     1	Yoav Helfman - Meta
+    11	Zac Wen - Meta
+     1	Zhenyuan Zhao - Meta
+     1	aditi-pandit - IBM
+     1	chenweiguo.vc - ByteDance
+     1	deepthydavis - IBM
+     4	duanmeng - Tencent
+     1	gaoyangxiaozhu
+     1	joey.ljy - Alibaba Inc
+     1	liangyongyuan - Xiaomi
+     4	lingbin - Alibaba Inc
+     3	mwish
+     1	rexan
+     2	rui-mo - Intel
+     1	soumyaduriseti - IBM
+     1	wjameswu - Tencent
+     8	wypb - Tencent
+    16	xiaoxmeng - Meta
+     1	yan ma - Intel
+     1	yangshijie.2024 - ByteDance
+     4	yanngyoung - Tencent
+     5	zhli1142015 - Microsoft

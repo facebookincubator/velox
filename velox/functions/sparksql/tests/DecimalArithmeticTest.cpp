@@ -37,13 +37,15 @@ class DecimalArithmeticTest : public SparkFunctionBaseTest {
       const std::string& functionName,
       const VectorPtr& expected,
       const std::vector<VectorPtr>& inputs) {
-    VELOX_USER_CHECK_EQ(
+    VELOX_USER_CHECK_GE(
         inputs.size(),
-        2,
-        "Two input vectors are needed for arithmetic function test.");
-    std::vector<core::TypedExprPtr> inputExprs = {
-        std::make_shared<core::FieldAccessTypedExpr>(inputs[0]->type(), "c0"),
-        std::make_shared<core::FieldAccessTypedExpr>(inputs[1]->type(), "c1")};
+        1,
+        "At least one input vector is needed for arithmetic function test.");
+    std::vector<core::TypedExprPtr> inputExprs;
+    for (int i = 0; i < inputs.size(); ++i) {
+      inputExprs.emplace_back(std::make_shared<core::FieldAccessTypedExpr>(
+          inputs[i]->type(), fmt::format("c{}", i)));
+    }
     auto expr = std::make_shared<const core::CallTypedExpr>(
         expected->type(), std::move(inputExprs), functionName);
     assertEqualVectors(expected, evaluate(expr, makeRowVector(inputs)));
@@ -516,6 +518,174 @@ TEST_F(DecimalArithmeticTest, divide) {
       makeConstant<int128_t>(std::nullopt, 1, DECIMAL(38, 6)),
       {makeConstant<int128_t>(DecimalUtil::kLongDecimalMax, 1, DECIMAL(38, 0)),
        makeConstant<int64_t>(1, 1, DECIMAL(3, 2))});
+}
+
+TEST_F(DecimalArithmeticTest, denyPrecisionLoss) {
+  const std::string denyPrecisionLoss = "_deny_precision_loss";
+  testArithmeticFunction(
+      "add" + denyPrecisionLoss,
+      makeFlatVector(
+          std::vector<int128_t>{21232100, 29998888, 42345678, 42135632},
+          DECIMAL(38, 7)),
+      {makeFlatVector(
+           std::vector<int128_t>{11232100, 9998888, 12345678, 2135632},
+           DECIMAL(38, 7)),
+       makeFlatVector(std::vector<int64_t>{1, 2, 3, 4}, DECIMAL(10, 0))});
+
+  // Overflow when scaling up the whole part.
+  testArithmeticFunction(
+      "add" + denyPrecisionLoss,
+      makeNullableLongDecimalVector(
+          {"null", "null", "null", "null"}, DECIMAL(38, 7)),
+      {makeNullableLongDecimalVector(
+           {"-99999999999999999999999999999999990000",
+            "99999999999999999999999999999999999000",
+            "-99999999999999999999999999999999999900",
+            "99999999999999999999999999999999999990"},
+           DECIMAL(38, 3)),
+       makeFlatVector(
+           std::vector<int128_t>{-100, 9999999, -999900, 99999},
+           DECIMAL(38, 7))});
+
+  testArithmeticFunction(
+      "subtract" + denyPrecisionLoss,
+      makeFlatVector(
+          std::vector<int128_t>{1232100, -10001112, -17654322, -37864368},
+          DECIMAL(38, 7)),
+      {makeFlatVector(
+           std::vector<int128_t>{11232100, 9998888, 12345678, 2135632},
+           DECIMAL(38, 7)),
+       makeFlatVector(std::vector<int64_t>{1, 2, 3, 4}, DECIMAL(10, 0))});
+
+  testArithmeticFunction(
+      "multiply" + denyPrecisionLoss,
+      makeConstant<int128_t>(60501, 1, DECIMAL(38, 10)),
+      {makeConstant<int128_t>(201, 1, DECIMAL(20, 5)),
+       makeConstant<int128_t>(301, 1, DECIMAL(20, 5))});
+
+  // diff > 0
+  testArithmeticFunction(
+      "divide" + denyPrecisionLoss,
+      makeConstant<int128_t>(
+          HugeInt::parse("5" + std::string(18, '0')), 1, DECIMAL(38, 18)),
+      {makeConstant<int128_t>(500, 1, DECIMAL(20, 2)),
+       makeConstant<int64_t>(1000, 1, DECIMAL(17, 3))});
+  // diff < 0
+  testArithmeticFunction(
+      "divide" + denyPrecisionLoss,
+      makeConstant<int128_t>(
+          HugeInt::parse("5" + std::string(10, '0')), 1, DECIMAL(31, 10)),
+      {makeConstant<int128_t>(500, 1, DECIMAL(20, 2)),
+       makeConstant<int64_t>(1000, 1, DECIMAL(7, 3))});
+}
+
+TEST_F(DecimalArithmeticTest, unaryMinus) {
+  testArithmeticFunction(
+      "unaryminus",
+      makeFlatVector<int64_t>(
+          {1111,
+           -1112,
+           9999,
+           0,
+           -DecimalUtil::kShortDecimalMin,
+           -DecimalUtil::kShortDecimalMax},
+          DECIMAL(18, 9)),
+      {makeFlatVector<int64_t>(
+          {-1111,
+           1112,
+           -9999,
+           0,
+           DecimalUtil::kShortDecimalMin,
+           DecimalUtil::kShortDecimalMax},
+          DECIMAL(18, 9))});
+
+  testArithmeticFunction(
+      "unaryminus",
+      makeFlatVector<int128_t>(
+          {11111111,
+           -11112112,
+           99999999,
+           -DecimalUtil::kLongDecimalMax,
+           -DecimalUtil::kLongDecimalMin},
+          DECIMAL(38, 19)),
+      {makeFlatVector<int128_t>(
+          {-11111111,
+           11112112,
+           -99999999,
+           DecimalUtil::kLongDecimalMax,
+           DecimalUtil::kLongDecimalMin},
+          DECIMAL(38, 19))});
+}
+
+TEST_F(DecimalArithmeticTest, ceil) {
+  // short DECIMAL -> short DECIMAL.
+  testArithmeticFunction(
+      "ceil",
+      {makeFlatVector<int64_t>({0, 1, 0, 1, 0, 1, 0, 1, 0}, DECIMAL(2, 0))},
+      {makeFlatVector<int64_t>(
+          {0, 1, -1, 49, -49, 50, -50, 99, -99}, DECIMAL(3, 2))});
+  testArithmeticFunction(
+      "ceil",
+      {makeFlatVector<int64_t>(
+          {123, -123, 124, -123, 124, -123, 124, -123, 124, -123, 124, -123},
+          DECIMAL(4, 0))},
+      {makeFlatVector<int64_t>(
+          {12300,
+           -12300,
+           12301,
+           -12301,
+           12345,
+           -12345,
+           12349,
+           -12349,
+           12350,
+           -12350,
+           12399,
+           -12399},
+          DECIMAL(5, 2))});
+  testArithmeticFunction(
+      "ceil",
+      {makeFlatVector<int64_t>(
+          {DecimalUtil::kShortDecimalMax, DecimalUtil::kShortDecimalMin},
+          DECIMAL(18, 0))},
+      {makeFlatVector<int64_t>(
+          {DecimalUtil::kShortDecimalMax, DecimalUtil::kShortDecimalMin},
+          DECIMAL(18, 0))});
+
+  // long DECIMAL -> long DECIMAL.
+  testArithmeticFunction(
+      "ceil",
+      {makeFlatVector<int128_t>({0, 1, 0, 1, 0, 1, 0, 1, 0}, DECIMAL(19, 0))},
+      {makeFlatVector<int128_t>(
+          {0, 1, -1, 49, -49, 50, -50, 99, -99}, DECIMAL(20, 2))});
+  testArithmeticFunction(
+      "ceil",
+      {makeFlatVector<int128_t>(
+          {DecimalUtil::kPowersOfTen[33], -DecimalUtil::kPowersOfTen[33] + 1},
+          DECIMAL(34, 0))},
+      {makeFlatVector<int128_t>(
+          {DecimalUtil::kLongDecimalMax, DecimalUtil::kLongDecimalMin},
+          DECIMAL(38, 5))});
+  testArithmeticFunction(
+      "ceil",
+      {makeFlatVector<int128_t>(
+          {DecimalUtil::kLongDecimalMax, DecimalUtil::kLongDecimalMin},
+          DECIMAL(38, 0))},
+      {makeFlatVector<int128_t>(
+          {DecimalUtil::kLongDecimalMax, DecimalUtil::kLongDecimalMin},
+          DECIMAL(38, 0))});
+
+  // long DECIMAL -> short DECIMAL.
+  testArithmeticFunction(
+      "ceil",
+      {makeFlatVector<int64_t>({1, 1, 0, 0, 0}, DECIMAL(1, 0))},
+      {makeFlatVector<int128_t>(
+          {1234567890123456789,
+           5000000000000000000,
+           -9000000000000000000,
+           -1000000000000000000,
+           0},
+          DECIMAL(19, 19))});
 }
 } // namespace
 } // namespace facebook::velox::functions::sparksql::test

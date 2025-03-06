@@ -15,6 +15,10 @@
  */
 #pragma once
 
+#include <optional>
+#include <set>
+#include <unordered_map>
+
 #include "velox/exec/fuzzer/ReferenceQueryRunner.h"
 
 namespace facebook::velox::exec::test {
@@ -46,20 +50,18 @@ class DuckQueryRunner : public ReferenceQueryRunner {
   /// Assumes that source of AggregationNode or Window Node is 'tmp' table.
   std::optional<std::string> toSql(const core::PlanNodePtr& plan) override;
 
-  /// Creates 'tmp' table with 'input' data and runs 'sql' query. Returns
-  /// results according to 'resultType' schema.
-  std::multiset<std::vector<velox::variant>> execute(
-      const std::string& sql,
-      const std::vector<RowVectorPtr>& input,
-      const RowTypePtr& resultType) override;
-
-  std::multiset<std::vector<velox::variant>> execute(
-      const std::string& sql,
-      const std::vector<RowVectorPtr>& probeInput,
-      const std::vector<RowVectorPtr>& buildInput,
-      const RowTypePtr& resultType) override;
+  // Converts 'plan' into an SQL query and executes it. Result is returned as a
+  // MaterializedRowMultiset with the ReferenceQueryErrorCode::kSuccess if
+  // successful, or an std::nullopt with a ReferenceQueryErrorCode if the query
+  // fails.
+  std::pair<
+      std::optional<std::multiset<std::vector<velox::variant>>>,
+      ReferenceQueryErrorCode>
+  execute(const core::PlanNodePtr& plan) override;
 
  private:
+  using ReferenceQueryRunner::toSql;
+
   std::optional<std::string> toSql(
       const std::shared_ptr<const core::AggregationNode>& aggregationNode);
 
@@ -73,10 +75,7 @@ class DuckQueryRunner : public ReferenceQueryRunner {
       const std::shared_ptr<const core::RowNumberNode>& rowNumberNode);
 
   std::optional<std::string> toSql(
-      const std::shared_ptr<const core::HashJoinNode>& joinNode);
-
-  std::optional<std::string> toSql(
-      const std::shared_ptr<const core::NestedLoopJoinNode>& joinNode);
+      const std::shared_ptr<const core::TopNRowNumberNode>& topNRowNumberNode);
 
   std::unordered_set<std::string> aggregateFunctionNames_;
 };

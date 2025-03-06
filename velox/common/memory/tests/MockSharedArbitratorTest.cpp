@@ -92,7 +92,8 @@ class MockTask : public std::enable_shared_from_this<MockTask> {
 
   class MemoryReclaimer : public memory::MemoryReclaimer {
    public:
-    MemoryReclaimer(const std::shared_ptr<MockTask>& task) : task_(task) {}
+    MemoryReclaimer(const std::shared_ptr<MockTask>& task)
+        : memory::MemoryReclaimer(0), task_(task) {}
 
     static std::unique_ptr<MemoryReclaimer> create(
         const std::shared_ptr<MockTask>& task) {
@@ -178,7 +179,8 @@ class MockMemoryOperator {
         bool reclaimable,
         ReclaimInjectionCallback reclaimInjectCb = nullptr,
         ArbitrationInjectionCallback arbitrationInjectCb = nullptr)
-        : op_(op),
+        : memory::MemoryReclaimer(0),
+          op_(op),
           reclaimable_(reclaimable),
           reclaimInjectCb_(std::move(reclaimInjectCb)),
           arbitrationInjectCb_(std::move(arbitrationInjectCb)) {}
@@ -479,7 +481,7 @@ class MockSharedArbitrationTest : public testing::Test {
          folly::to<std::string>(globalArbitrationReclaimPct)},
         {std::string(ExtraConfig::kMemoryReclaimThreadsHwMultiplier),
          folly::to<std::string>(memoryReclaimThreadsHwMultiplier)},
-        {std::string(ExtraConfig::kMemoryReclaimMaxWaitTime),
+        {std::string(ExtraConfig::kMaxMemoryArbitrationTime),
          folly::to<std::string>(arbitrationTimeoutNs) + "ns"},
         {std::string(ExtraConfig::kGlobalArbitrationEnabled),
          folly::to<std::string>(globalArtbitrationEnabled)},
@@ -576,7 +578,7 @@ TEST_F(MockSharedArbitrationTest, extraConfigs) {
       SharedArbitrator::ExtraConfig::memoryPoolInitialCapacity(emptyConfigs),
       256 << 20);
   ASSERT_EQ(
-      SharedArbitrator::ExtraConfig::memoryReclaimMaxWaitTimeNs(emptyConfigs),
+      SharedArbitrator::ExtraConfig::maxMemoryArbitrationTimeNs(emptyConfigs),
       300'000'000'000UL);
   ASSERT_EQ(
       SharedArbitrator::ExtraConfig::globalArbitrationEnabled(emptyConfigs),
@@ -616,7 +618,7 @@ TEST_F(MockSharedArbitrationTest, extraConfigs) {
   configs[std::string(
       SharedArbitrator::ExtraConfig::kMemoryPoolReservedCapacity)] = "200B";
   configs[std::string(
-      SharedArbitrator::ExtraConfig::kMemoryReclaimMaxWaitTime)] = "5000ms";
+      SharedArbitrator::ExtraConfig::kMaxMemoryArbitrationTime)] = "5000ms";
   configs[std::string(
       SharedArbitrator::ExtraConfig::kGlobalArbitrationEnabled)] = "true";
   configs[std::string(SharedArbitrator::ExtraConfig::kCheckUsageLeak)] =
@@ -643,8 +645,8 @@ TEST_F(MockSharedArbitrationTest, extraConfigs) {
   ASSERT_EQ(
       SharedArbitrator::ExtraConfig::memoryPoolReservedCapacity(configs), 200);
   ASSERT_EQ(
-      SharedArbitrator::ExtraConfig::memoryReclaimMaxWaitTimeNs(configs),
-      5'000'000'000);
+      SharedArbitrator::ExtraConfig::maxMemoryArbitrationTimeNs(configs),
+      5'000'000'000UL);
   ASSERT_TRUE(SharedArbitrator::ExtraConfig::globalArbitrationEnabled(configs));
   ASSERT_FALSE(SharedArbitrator::ExtraConfig::checkUsageLeak(configs));
   ASSERT_EQ(
@@ -674,7 +676,7 @@ TEST_F(MockSharedArbitrationTest, extraConfigs) {
   configs[std::string(
       SharedArbitrator::ExtraConfig::kMemoryPoolReservedCapacity)] = "invalid";
   configs[std::string(
-      SharedArbitrator::ExtraConfig::kMemoryReclaimMaxWaitTime)] = "invalid";
+      SharedArbitrator::ExtraConfig::kMaxMemoryArbitrationTime)] = "invalid";
   configs[std::string(
       SharedArbitrator::ExtraConfig::kGlobalArbitrationEnabled)] = "invalid";
   configs[std::string(SharedArbitrator::ExtraConfig::kCheckUsageLeak)] =
@@ -707,7 +709,7 @@ TEST_F(MockSharedArbitrationTest, extraConfigs) {
       SharedArbitrator::ExtraConfig::memoryPoolReservedCapacity(configs),
       "Invalid capacity string 'invalid'");
   VELOX_ASSERT_THROW(
-      SharedArbitrator::ExtraConfig::memoryReclaimMaxWaitTimeNs(configs),
+      SharedArbitrator::ExtraConfig::maxMemoryArbitrationTimeNs(configs),
       "Invalid duration 'invalid'");
   VELOX_ASSERT_THROW(
       SharedArbitrator::ExtraConfig::globalArbitrationEnabled(configs),

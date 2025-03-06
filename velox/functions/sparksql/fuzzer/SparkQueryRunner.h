@@ -20,11 +20,14 @@
 #include "grpc++/create_channel.h"
 #include "grpc++/security/credentials.h"
 #include "spark/connect/base.grpc.pb.h"
+#include "velox/common/fuzzer/Utils.h"
 #include "velox/common/memory/Memory.h"
 #include "velox/exec/fuzzer/ReferenceQueryRunner.h"
 #include "velox/vector/ComplexVector.h"
 
 namespace facebook::velox::functions::sparksql::fuzzer {
+
+using facebook::velox::fuzzer::DataSpec;
 
 /// Query runner that uses Spark as a reference database. It converts Velox
 /// query plan to Spark SQL and executes it in Spark. The results are returned
@@ -88,6 +91,8 @@ class SparkQueryRunner : public velox::exec::test::ReferenceQueryRunner {
   std::vector<velox::RowVectorPtr> execute(const std::string& sql) override;
 
  private:
+  using ReferenceQueryRunner::toSql;
+
   // Generates a random UUID string for Spark. It must be of the format
   // '00112233-4455-6677-8899-aabbccddeeff'.
   std::string generateUUID();

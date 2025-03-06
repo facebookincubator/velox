@@ -820,7 +820,7 @@ BigintValuesUsingHashTable::BigintValuesUsingHashTable(
   // Size the hash table to be 2+x the entry count, e.g. 10 entries
   // gets 1 << log2 of 50 == 32. The filter is expected to fail often so we
   // wish to increase the chance of hitting empty on first probe.
-  auto size = 1u << (uint32_t)std::log2(values.size() * 5);
+  auto size = 1u << static_cast<uint32_t>(std::log2(values.size() * 5));
   hashTable_.resize(size + kPaddingElements);
   sizeMask_ = size - 1;
   std::fill(hashTable_.begin(), hashTable_.end(), kEmptyMarker);
@@ -991,8 +991,8 @@ FilterPtr HugeintValuesUsingHashTable::create(const folly::dynamic& obj) {
 }
 
 HugeintValuesUsingHashTable::HugeintValuesUsingHashTable(
-    const int128_t min,
-    const int128_t max,
+    const int128_t& min,
+    const int128_t& max,
     const std::vector<int128_t>& values,
     const bool nullAllowed)
     : Filter(true, nullAllowed, FilterKind::kHugeintValuesUsingHashTable),
@@ -1005,7 +1005,7 @@ HugeintValuesUsingHashTable::HugeintValuesUsingHashTable(
   }
 }
 
-bool HugeintValuesUsingHashTable::testInt128(int128_t value) const {
+bool HugeintValuesUsingHashTable::testInt128(const int128_t& value) const {
   return values_.contains(value);
 }
 
@@ -1152,7 +1152,7 @@ std::unique_ptr<Filter> createBigintValuesFilter(
   bool overflow = __builtin_sub_overflow(max, min, &range);
   if (LIKELY(!overflow)) {
     // all accepted/rejected values form one contiguous block
-    if ((uint64_t)range + 1 == values.size()) {
+    if (static_cast<uint64_t>(range) + 1 == values.size()) {
       if (negated) {
         return std::make_unique<NegatedBigintRange>(min, max, nullAllowed);
       }
@@ -1469,7 +1469,7 @@ bool MultiRange::testBytes(const char* value, int32_t length) const {
   return false;
 }
 
-bool MultiRange::testTimestamp(Timestamp timestamp) const {
+bool MultiRange::testTimestamp(const Timestamp& timestamp) const {
   for (const auto& filter : filters_) {
     if (filter->testTimestamp(timestamp)) {
       return true;

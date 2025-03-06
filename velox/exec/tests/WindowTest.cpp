@@ -504,7 +504,6 @@ TEST_F(WindowTest, nagativeFrameArg) {
 
   auto sizeAt = [](vector_size_t row) { return row % 5; };
   auto keyAt = [](vector_size_t row) { return row % 11; };
-  auto valueAt = [](vector_size_t row) { return row % 13; };
   auto keys = makeArrayVector<float>(size, sizeAt, keyAt);
   auto data = makeRowVector(
       {"c0", "c1", "p0", "p1", "k0", "row_number"},
@@ -660,7 +659,7 @@ DEBUG_ONLY_TEST_F(WindowTest, reserveMemorySort) {
     const auto plan = usePrefixSort ? prefixSortPlan : nonPrefixSortPlan;
     velox::common::PrefixSortConfig prefixSortConfig =
         velox::common::PrefixSortConfig{
-            std::numeric_limits<int32_t>::max(), 130};
+            std::numeric_limits<int32_t>::max(), 130, 12};
     auto sortWindowBuild = std::make_unique<SortWindowBuild>(
         plan,
         pool_.get(),
@@ -689,6 +688,66 @@ DEBUG_ONLY_TEST_F(WindowTest, reserveMemorySort) {
     } else {
       ASSERT_FALSE(hasReserveMemory);
     }
+  }
+}
+
+TEST_F(WindowTest, NaNFrameBound) {
+  const auto kNan = std::numeric_limits<double>::quiet_NaN();
+  auto data = makeRowVector(
+      {"c0", "s0", "off0", "off1"},
+      {
+          makeFlatVector<int64_t>({1, 2, 3, 4}),
+          makeFlatVector<double>({1.0, 2.0, 3.0, kNan}),
+          makeFlatVector<double>({0.1, 2.0, 1.9, kNan}),
+          makeFlatVector<double>({kNan, 2.0, kNan, kNan}),
+      });
+
+  const auto makeFrames = [](const std::string& call) {
+    std::vector<std::string> frames;
+
+    std::vector<std::string> orders{"asc", "desc"};
+    std::vector<std::string> bounds{"preceding", "following"};
+    for (const std::string& order : orders) {
+      for (const std::string& startBound : bounds) {
+        for (const std::string& endBound : bounds) {
+          // Frames starting from following and ending at preceding are not
+          // allowed.
+          if (startBound == "following" && endBound == "preceding") {
+            continue;
+          }
+          frames.push_back(fmt::format(
+              "{} over (order by s0 {} range between off0 {} and off1 {})",
+              call,
+              order,
+              startBound,
+              endBound));
+          frames.push_back(fmt::format(
+              "{} over (order by s0 {} range between off1 {} and off0 {})",
+              call,
+              order,
+              startBound,
+              endBound));
+        }
+      }
+    }
+    return frames;
+  };
+
+  auto expected = makeRowVector(
+      {makeNullableFlatVector<int64_t>({std::nullopt, 2, std::nullopt, 4})});
+  for (const auto& frame : makeFrames("sum(c0)")) {
+    auto plan =
+        PlanBuilder().values({data}).window({frame}).project({"w0"}).planNode();
+    AssertQueryBuilder(plan).assertResults(expected);
+  }
+
+  // rank() should not be affected by the frames, so added this test to ensure
+  // rank() produces correct results even if the frame bounds contain NaN.
+  expected = makeRowVector({makeFlatVector<int64_t>({1, 2, 3, 4})});
+  for (const auto& frame : makeFrames("rank()")) {
+    auto plan =
+        PlanBuilder().values({data}).window({frame}).project({"w0"}).planNode();
+    AssertQueryBuilder(plan).assertResults(expected);
   }
 }
 

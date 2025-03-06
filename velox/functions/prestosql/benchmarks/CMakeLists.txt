@@ -18,7 +18,7 @@ set(BENCHMARK_DEPENDENCIES_NO_FUNC
     velox_exec_test_lib
     gflags::gflags
     Folly::folly
-    ${FOLLY_BENCHMARK}
+    Folly::follybenchmark
     velox_benchmark_builder)
 
 set(BENCHMARK_DEPENDENCIES
@@ -61,7 +61,7 @@ add_executable(velox_functions_prestosql_benchmarks_string_ascii_utf_functions
                StringAsciiUTFFunctionBenchmarks.cpp)
 target_link_libraries(
   velox_functions_prestosql_benchmarks_string_ascii_utf_functions
-  ${BENCHMARK_DEPENDENCIES})
+  ${BENCHMARK_DEPENDENCIES} velox_common_fuzzer_util)
 
 add_executable(velox_functions_prestosql_benchmarks_not NotBenchmark.cpp)
 target_link_libraries(

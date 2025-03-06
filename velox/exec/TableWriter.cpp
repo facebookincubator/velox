@@ -63,18 +63,31 @@ TableWriter::TableWriter(
       planNodeId(),
       connectorPool_,
       spillConfig_.has_value() ? &(spillConfig_.value()) : nullptr);
+  setTypeMappings(tableWriteNode);
+}
 
-  auto names = tableWriteNode->columnNames();
-  auto types = tableWriteNode->columns()->children();
+void TableWriter::setTypeMappings(
+    const std::shared_ptr<const core::TableWriteNode>& tableWriteNode) {
+  auto outputNames = tableWriteNode->columnNames();
+  auto outputTypes = tableWriteNode->columns()->children();
 
   const auto& inputType = tableWriteNode->sources()[0]->outputType();
 
-  inputMapping_.reserve(types.size());
+  // Ids that map input to output columns.
+  inputMapping_.reserve(outputTypes.size());
+  std::vector<TypePtr> inputTypes;
+
+  // Generate mappings between input and output types. Note that column names
+  // must match, but in some case the types won't, for example, when writing a
+  // struct (ROW) as a flat map (MAP).
   for (const auto& name : tableWriteNode->columns()->names()) {
-    inputMapping_.emplace_back(inputType->getChildIdx(name));
+    auto idx = inputType->getChildIdx(name);
+    inputMapping_.emplace_back(idx);
+    inputTypes.emplace_back(inputType->childAt(idx));
   }
 
-  mappedType_ = ROW(std::move(names), std::move(types));
+  mappedOutputType_ = ROW(folly::copy(outputNames), std::move(outputTypes));
+  mappedInputType_ = ROW(std::move(outputNames), std::move(inputTypes));
 }
 
 void TableWriter::initialize() {
@@ -88,7 +101,7 @@ void TableWriter::initialize() {
 
 void TableWriter::createDataSink() {
   dataSink_ = connector_->createDataSink(
-      mappedType_,
+      mappedOutputType_,
       insertTableHandle_,
       connectorQueryCtx_.get(),
       commitStrategy_);
@@ -135,7 +148,7 @@ void TableWriter::addInput(RowVectorPtr input) {
 
   const auto mappedInput = std::make_shared<RowVector>(
       input->pool(),
-      mappedType_,
+      mappedInputType_,
       input->nulls(),
       input->size(),
       mappedChildren,
@@ -212,7 +225,7 @@ RowVectorPtr TableWriter::getOutput() {
   // 1. Set rows column.
   FlatVectorPtr<int64_t> writtenRowsVector =
       BaseVector::create<FlatVector<int64_t>>(BIGINT(), numOutputRows, pool());
-  writtenRowsVector->set(0, (int64_t)numWrittenRows_);
+  writtenRowsVector->set(0, static_cast<int64_t>(numWrittenRows_));
   for (int idx = 1; idx < numOutputRows; ++idx) {
     writtenRowsVector->setNull(idx, true);
   }
@@ -272,8 +285,10 @@ void TableWriter::updateStats(const connector::DataSink::Stats& stats) {
       VELOX_CHECK(stats.spillStats.empty());
       return;
     }
-    lockedStats->addRuntimeStat(
-        "numWrittenFiles", RuntimeCounter(stats.numWrittenFiles));
+    if (stats.numWrittenFiles != 0) {
+      lockedStats->addRuntimeStat(
+          "numWrittenFiles", RuntimeCounter(stats.numWrittenFiles));
+    }
     lockedStats->addRuntimeStat(
         "writeIOTime",
         RuntimeCounter(

@@ -29,6 +29,8 @@
 #include "velox/functions/prestosql/fuzzer/ApproxPercentileInputGenerator.h"
 #include "velox/functions/prestosql/fuzzer/ApproxPercentileResultVerifier.h"
 #include "velox/functions/prestosql/fuzzer/ArbitraryResultVerifier.h"
+#include "velox/functions/prestosql/fuzzer/AverageResultVerifier.h"
+#include "velox/functions/prestosql/fuzzer/ClassificationAggregationInputGenerator.h"
 #include "velox/functions/prestosql/fuzzer/MapUnionSumInputGenerator.h"
 #include "velox/functions/prestosql/fuzzer/MinMaxByResultVerifier.h"
 #include "velox/functions/prestosql/fuzzer/MinMaxInputGenerator.h"
@@ -62,6 +64,8 @@ DEFINE_uint32(
     "Timeout in milliseconds for HTTP requests made to reference DB, "
     "such as Presto. Example: --req_timeout_ms=2000");
 
+// Any change made in the file should be reflected in
+// the FB-internal aggregation fuzzer test too:
 namespace facebook::velox::exec::test {
 namespace {
 
@@ -76,7 +80,16 @@ getCustomInputGenerators() {
       {"approx_set", std::make_shared<ApproxDistinctInputGenerator>()},
       {"approx_percentile", std::make_shared<ApproxPercentileInputGenerator>()},
       {"map_union_sum", std::make_shared<MapUnionSumInputGenerator>()},
-  };
+      {"classification_fall_out",
+       std::make_shared<ClassificationAggregationInputGenerator>()},
+      {"classification_precision",
+       std::make_shared<ClassificationAggregationInputGenerator>()},
+      {"classification_recall",
+       std::make_shared<ClassificationAggregationInputGenerator>()},
+      {"classification_miss_rate",
+       std::make_shared<ClassificationAggregationInputGenerator>()},
+      {"classification_thresholds",
+       std::make_shared<ClassificationAggregationInputGenerator>()}};
 }
 
 } // namespace
@@ -118,21 +131,18 @@ int main(int argc, char** argv) {
       // Lambda functions are not supported yet.
       "reduce_agg",
       "max_data_size_for_stats",
-      "map_union_sum",
       "approx_set",
       "any_value",
-      // Presto 0.288 makes set_agg and set_union not respect order-by on
-      // inputs. Presto 0.289
-      // re-enables the order-by for them. So skip these two functions until we
-      // compare
-      // Velox result against Presto 0.289 or later versions.
-      "set_agg",
-      "set_union",
+  };
+
+  static const std::unordered_set<std::string> functionsRequireSortedInput = {
+      "tdigest_agg",
   };
 
   using facebook::velox::exec::test::ApproxDistinctResultVerifier;
   using facebook::velox::exec::test::ApproxPercentileResultVerifier;
   using facebook::velox::exec::test::ArbitraryResultVerifier;
+  using facebook::velox::exec::test::AverageResultVerifier;
   using facebook::velox::exec::test::MinMaxByResultVerifier;
   using facebook::velox::exec::test::setupReferenceQueryRunner;
   using facebook::velox::exec::test::TransformResultVerifier;
@@ -172,6 +182,7 @@ int main(int argc, char** argv) {
           {"map_union_sum", makeMapVerifier()},
           {"max_by", std::make_shared<MinMaxByResultVerifier>(false)},
           {"min_by", std::make_shared<MinMaxByResultVerifier>(true)},
+          {"avg", std::make_shared<AverageResultVerifier>()},
           {"multimap_agg",
            TransformResultVerifier::create(
                "transform_values({}, (k, v) -> \"$internal$canonicalize\"(v))")},
@@ -190,6 +201,7 @@ int main(int argc, char** argv) {
   Options options;
   options.onlyFunctions = FLAGS_only;
   options.skipFunctions = skipFunctions;
+  options.functionsRequireSortedInput = functionsRequireSortedInput;
   options.customVerificationFunctions = customVerificationFunctions;
   options.customInputGenerators =
       facebook::velox::exec::test::getCustomInputGenerators();

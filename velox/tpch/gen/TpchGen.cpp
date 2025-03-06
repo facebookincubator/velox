@@ -78,7 +78,7 @@ std::vector<VectorPtr> allocateVectors(
 }
 
 double decimalToDouble(int64_t value) {
-  return (double)value * 0.01;
+  return static_cast<double>(value) * 0.01;
 }
 
 int32_t toDate(std::string_view stringDate) {
@@ -454,7 +454,7 @@ RowVectorPtr genTpchLineItem(
 
       lineNumberVector->set(lineItemCount + l, line.lcnt);
 
-      quantityVector->set(lineItemCount + l, decimalToDouble(line.quantity));
+      quantityVector->set(lineItemCount + l, line.quantity);
       extendedPriceVector->set(lineItemCount + l, decimalToDouble(line.eprice));
       discountVector->set(lineItemCount + l, decimalToDouble(line.discount));
       taxVector->set(lineItemCount + l, decimalToDouble(line.tax));

@@ -21,6 +21,7 @@
 #include "velox/exec/Spill.h"
 
 namespace facebook::velox::exec {
+class HashBuildSpiller;
 
 namespace test {
 class HashJoinBridgeTestHelper;
@@ -174,9 +175,10 @@ bool isLeftNullAwareJoinWithFilter(
 class HashJoinMemoryReclaimer final : public MemoryReclaimer {
  public:
   static std::unique_ptr<memory::MemoryReclaimer> create(
-      std::shared_ptr<HashJoinBridge> joinBridge) {
+      std::shared_ptr<HashJoinBridge> joinBridge,
+      int32_t priority = 0) {
     return std::unique_ptr<memory::MemoryReclaimer>(
-        new HashJoinMemoryReclaimer(joinBridge));
+        new HashJoinMemoryReclaimer(joinBridge, priority));
   }
 
   uint64_t reclaim(
@@ -186,9 +188,10 @@ class HashJoinMemoryReclaimer final : public MemoryReclaimer {
       memory::MemoryReclaimer::Stats& stats) final;
 
  private:
-  explicit HashJoinMemoryReclaimer(
-      const std::shared_ptr<HashJoinBridge>& joinBridge)
-      : MemoryReclaimer(), joinBridge_(joinBridge) {}
+  HashJoinMemoryReclaimer(
+      const std::shared_ptr<HashJoinBridge>& joinBridge,
+      int32_t priority)
+      : MemoryReclaimer(priority), joinBridge_(joinBridge) {}
   std::weak_ptr<HashJoinBridge> joinBridge_;
 };
 
@@ -207,19 +210,20 @@ RowTypePtr hashJoinTableType(
     const std::shared_ptr<const core::HashJoinNode>& joinNode);
 
 struct HashJoinTableSpillResult {
-  Spiller* spiller{nullptr};
+  HashBuildSpiller* spiller{nullptr};
   const std::exception_ptr error{nullptr};
 
   explicit HashJoinTableSpillResult(std::exception_ptr _error)
       : error(_error) {}
-  explicit HashJoinTableSpillResult(Spiller* _spiller) : spiller(_spiller) {}
+  explicit HashJoinTableSpillResult(HashBuildSpiller* _spiller)
+      : spiller(_spiller) {}
 };
 
 /// Invoked to spill the hash table from a set of spillers. If 'spillExecutor'
 /// is provided, then we do parallel spill. This is used by hash build to spill
 /// a partially built hash join table.
 std::vector<std::unique_ptr<HashJoinTableSpillResult>> spillHashJoinTable(
-    const std::vector<Spiller*>& spillers,
+    const std::vector<HashBuildSpiller*>& spillers,
     const common::SpillConfig* spillConfig);
 
 /// Invoked to spill 'table' and returns spilled partitions. This is used by

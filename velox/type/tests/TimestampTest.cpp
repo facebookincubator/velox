@@ -18,6 +18,7 @@
 #include <random>
 
 #include "velox/common/base/tests/GTestUtils.h"
+#include "velox/common/testutil/RandomSeed.h"
 #include "velox/type/Timestamp.h"
 #include "velox/type/tz/TimeZoneMap.h"
 
@@ -154,6 +155,8 @@ TEST(TimestampTest, arithmeticOverflow) {
           0));
   ASSERT_NO_THROW(Timestamp::minMillis().toMillis());
   ASSERT_NO_THROW(Timestamp::maxMillis().toMillis());
+  ASSERT_NO_THROW(Timestamp(-9223372036855, 224'192'000).toMicros());
+  ASSERT_NO_THROW(Timestamp(9223372036854, 775'807'000).toMicros());
 }
 
 TEST(TimestampTest, toAppend) {
@@ -259,16 +262,6 @@ TEST(TimestampTest, toStringPrestoCastBehavior) {
 
 namespace {
 
-uint64_t randomSeed() {
-  if (const char* env = getenv("VELOX_TEST_USE_RANDOM_SEED")) {
-    auto seed = std::random_device{}();
-    LOG(INFO) << "Random seed: " << seed;
-    return seed;
-  } else {
-    return 42;
-  }
-}
-
 std::string toStringAlt(
     const Timestamp& t,
     TimestampToStringOptions::Precision precision) {
@@ -308,7 +301,7 @@ bool checkUtcToEpoch(int year, int mon, int mday, int hour, int min, int sec) {
 } // namespace
 
 TEST(TimestampTest, compareWithToStringAlt) {
-  std::default_random_engine gen(randomSeed());
+  std::default_random_engine gen(common::testutil::getRandomSeed(42));
   std::uniform_int_distribution<int64_t> distSec(
       Timestamp::kMinSeconds, Timestamp::kMaxSeconds);
   std::uniform_int_distribution<uint64_t> distNano(0, Timestamp::kMaxNanos);
@@ -349,7 +342,7 @@ TEST(TimestampTest, utcToEpoch) {
 }
 
 TEST(TimestampTest, utcToEpochRandomInputs) {
-  std::default_random_engine gen(randomSeed());
+  std::default_random_engine gen(common::testutil::getRandomSeed(42));
   std::uniform_int_distribution<int32_t> dist(INT32_MIN, INT32_MAX);
   for (int i = 0; i < 10'000; ++i) {
     checkUtcToEpoch(

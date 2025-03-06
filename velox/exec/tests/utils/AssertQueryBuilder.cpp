@@ -57,6 +57,12 @@ AssertQueryBuilder& AssertQueryBuilder::maxDrivers(int32_t maxDrivers) {
   return *this;
 }
 
+AssertQueryBuilder& AssertQueryBuilder::maxQueryCapacity(
+    int64_t maxQueryCapacity) {
+  params_.maxQueryCapacity = maxQueryCapacity;
+  return *this;
+}
+
 AssertQueryBuilder& AssertQueryBuilder::destination(int32_t destination) {
   params_.destination = destination;
   return *this;
@@ -247,6 +253,16 @@ RowVectorPtr AssertQueryBuilder::copyResults(
   return copy;
 }
 
+uint64_t AssertQueryBuilder::runWithoutResults(std::shared_ptr<Task>& task) {
+  auto [cursor, results] = readCursor();
+  uint64_t count = 0;
+  for (const auto& result : results) {
+    count += result->size();
+  }
+  task = cursor->task();
+  return count;
+}
+
 std::pair<std::unique_ptr<TaskCursor>, std::vector<RowVectorPtr>>
 AssertQueryBuilder::readCursor() {
   VELOX_CHECK_NOT_NULL(params_.planNode);
@@ -256,15 +272,19 @@ AssertQueryBuilder::readCursor() {
       // NOTE: the destructor of 'executor_' will wait for all the async task
       // activities to finish on AssertQueryBuilder dtor.
       static std::atomic<uint64_t> cursorQueryId{0};
+      const std::string queryId =
+          fmt::format("TaskCursorQuery_{}", cursorQueryId++);
+      auto queryPool = memory::memoryManager()->addRootPool(
+          queryId, params_.maxQueryCapacity);
       params_.queryCtx = core::QueryCtx::create(
           executor_.get(),
           core::QueryConfig({}),
           std::
               unordered_map<std::string, std::shared_ptr<config::ConfigBase>>{},
           cache::AsyncDataCache::getInstance(),
+          std::move(queryPool),
           nullptr,
-          nullptr,
-          fmt::format("TaskCursorQuery_{}", cursorQueryId++));
+          queryId);
     }
   }
   if (!configs_.empty()) {

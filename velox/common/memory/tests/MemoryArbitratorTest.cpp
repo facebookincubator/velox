@@ -505,7 +505,8 @@ class MockLeafMemoryReclaimer : public MemoryReclaimer {
       std::atomic<uint64_t>& totalUsedBytes,
       bool reclaimable = true,
       bool* underArbitration = nullptr)
-      : reclaimable_(reclaimable),
+      : MemoryReclaimer(0),
+        reclaimable_(reclaimable),
         underArbitration_(underArbitration),
         totalUsedBytes_(totalUsedBytes) {}
 
@@ -805,7 +806,7 @@ TEST_F(MemoryReclaimerTest, orderedReclaim) {
   uint64_t reclaimableBytes{0};
   // 'expectedReclaimableUnits' is the expected allocation unit per each child
   // pool after each round of memory reclaim. And we expect the memory reclaimer
-  // always reclaim from the child with most meomry usage.
+  // always reclaim from the child with most memory usage.
   auto verify = [&](const std::vector<int>& expectedReclaimableUnits) {
     root->reclaimer()->reclaimableBytes(*root, reclaimableBytes);
     ASSERT_EQ(reclaimableBytes, totalAllocUnits * allocUnitBytes) << "total";
@@ -943,7 +944,7 @@ TEST_F(MemoryReclaimerTest, skipNonReclaimableChild) {
   uint64_t reclaimableBytes{0};
   // 'expectedReclaimableUnits' is the expected allocation unit per each child
   // pool after each round of memory reclaim. And we expect the memory reclaimer
-  // always reclaim from the child with most meomry usage.
+  // always reclaim from the child with most memory usage.
   auto verify = [&](const std::vector<int>& expectedReclaimableUnits) {
     uint64_t expectedTotalReclaimableBytes{0};
     for (int i = 0; i < numChildren; ++i) {
@@ -990,19 +991,13 @@ TEST_F(MemoryReclaimerTest, arbitrationContext) {
   ASSERT_FALSE(isSpillMemoryPool(leafChild2.get()));
   ASSERT_TRUE(memoryArbitrationContext() == nullptr);
   {
-    auto arbitrationStructs =
-        test::ArbitrationTestStructs::createArbitrationTestStructs(leafChild1);
-    ScopedMemoryArbitrationContext arbitrationContext(
-        leafChild1.get(), arbitrationStructs.operation.get());
+    ScopedMemoryArbitrationContext arbitrationContext(leafChild1.get());
     ASSERT_TRUE(memoryArbitrationContext() != nullptr);
     ASSERT_EQ(memoryArbitrationContext()->requestorName, leafChild1->name());
   }
   ASSERT_TRUE(memoryArbitrationContext() == nullptr);
   {
-    auto arbitrationStructs =
-        test::ArbitrationTestStructs::createArbitrationTestStructs(leafChild2);
-    ScopedMemoryArbitrationContext arbitrationContext(
-        leafChild2.get(), arbitrationStructs.operation.get());
+    ScopedMemoryArbitrationContext arbitrationContext(leafChild2.get());
     ASSERT_TRUE(memoryArbitrationContext() != nullptr);
     ASSERT_EQ(memoryArbitrationContext()->requestorName, leafChild2->name());
   }
@@ -1010,21 +1005,13 @@ TEST_F(MemoryReclaimerTest, arbitrationContext) {
   std::thread nonAbitrationThread([&]() {
     ASSERT_TRUE(memoryArbitrationContext() == nullptr);
     {
-      auto arbitrationStructs =
-          test::ArbitrationTestStructs::createArbitrationTestStructs(
-              leafChild1);
-      ScopedMemoryArbitrationContext arbitrationContext(
-          leafChild1.get(), arbitrationStructs.operation.get());
+      ScopedMemoryArbitrationContext arbitrationContext(leafChild1.get());
       ASSERT_TRUE(memoryArbitrationContext() != nullptr);
       ASSERT_EQ(memoryArbitrationContext()->requestorName, leafChild1->name());
     }
     ASSERT_TRUE(memoryArbitrationContext() == nullptr);
     {
-      auto arbitrationStructs =
-          test::ArbitrationTestStructs::createArbitrationTestStructs(
-              leafChild2);
-      ScopedMemoryArbitrationContext arbitrationContext(
-          leafChild2.get(), arbitrationStructs.operation.get());
+      ScopedMemoryArbitrationContext arbitrationContext(leafChild2.get());
       ASSERT_TRUE(memoryArbitrationContext() != nullptr);
       ASSERT_EQ(memoryArbitrationContext()->requestorName, leafChild2->name());
     }

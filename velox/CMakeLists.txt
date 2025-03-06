@@ -58,6 +58,10 @@ add_subdirectory(connectors)
 
 if(${VELOX_ENABLE_EXEC})
   add_subdirectory(exec)
+  # Disable runner from pyvelox builds
+  if(${VELOX_BUILD_RUNNER})
+    add_subdirectory(runner)
+  endif()
 endif()
 
 if(${VELOX_ENABLE_DUCKDB})
@@ -67,6 +71,11 @@ endif()
 if(${VELOX_ENABLE_GPU})
   add_subdirectory(experimental/gpu)
   add_subdirectory(experimental/wave)
+  add_subdirectory(external/jitify)
+endif()
+
+if(${VELOX_BUILD_PYTHON_PACKAGE})
+  add_subdirectory(py)
 endif()
 
 # substrait converter

@@ -107,6 +107,11 @@ void toCallInputsSql(
         auto concatArg =
             std::dynamic_pointer_cast<const core::ConcatTypedExpr>(input)) {
       sql << toConcatSql(concatArg);
+    } else if (
+        auto dereferenceArg =
+            std::dynamic_pointer_cast<const core::DereferenceTypedExpr>(
+                input)) {
+      sql << toDereferenceSql(dereferenceArg);
     } else {
       VELOX_NYI("Unsupported input expression: {}.", input->toString());
     }
@@ -127,6 +132,7 @@ const std::unordered_map<std::string, std::string>& binaryOperatorMap() {
   static std::unordered_map<std::string, std::string> binaryOperatorMap{
       {"plus", "+"},
       {"subtract", "-"},
+      {"minus", "-"},
       {"multiply", "*"},
       {"divide", "/"},
       {"eq", "="},
@@ -188,6 +194,18 @@ std::string toCallSql(const core::CallTypedExprPtr& call) {
     sql << "ARRAY[";
     toCallInputsSql(call->inputs(), sql);
     sql << "]";
+  } else if (call->name() == "between") {
+    const auto& inputs = call->inputs();
+    VELOX_CHECK_EQ(inputs.size(), 3);
+    toCallInputsSql({inputs[0]}, sql);
+    sql << " between ";
+    toCallInputsSql({inputs[1]}, sql);
+    sql << " and ";
+    toCallInputsSql({inputs[2]}, sql);
+  } else if (call->name() == "row_constructor") {
+    sql << "row(";
+    toCallInputsSql(call->inputs(), sql);
+    sql << ")";
   } else {
     // Regular function call syntax.
     sql << call->name() << "(";
@@ -215,6 +233,13 @@ std::string toConcatSql(const core::ConcatTypedExprPtr& concat) {
   sql << "concat(";
   toCallInputsSql(concat->inputs(), sql);
   sql << ")";
+  return sql.str();
+}
+
+std::string toDereferenceSql(const core::DereferenceTypedExprPtr& dereference) {
+  std::stringstream sql;
+  toCallInputsSql(dereference->inputs(), sql);
+  sql << "." << dereference->name();
   return sql.str();
 }
 

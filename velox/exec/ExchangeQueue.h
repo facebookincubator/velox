@@ -81,6 +81,14 @@ class SerializedPage {
 /// for input.
 class ExchangeQueue {
  public:
+  explicit ExchangeQueue(
+      int32_t numberOfConsumers,
+      uint64_t minOutputBatchBytes)
+      : numberOfConsumers_{numberOfConsumers},
+        minOutputBatchBytes_{minOutputBatchBytes} {
+    VELOX_CHECK_GE(numberOfConsumers, 1);
+  }
+
   ~ExchangeQueue() {
     clearAllPromises();
   }
@@ -119,8 +127,12 @@ class ExchangeQueue {
   ///
   /// The data may be compressed, in which case 'maxBytes' applies to compressed
   /// size.
-  std::vector<std::unique_ptr<SerializedPage>>
-  dequeueLocked(uint32_t maxBytes, bool* atEnd, ContinueFuture* future);
+  std::vector<std::unique_ptr<SerializedPage>> dequeueLocked(
+      int consumerId,
+      uint32_t maxBytes,
+      bool* atEnd,
+      ContinueFuture* future,
+      ContinuePromise* stalePromise);
 
   /// Returns the total bytes held by SerializedPages in 'this'.
   int64_t totalBytes() const {
@@ -166,6 +178,11 @@ class ExchangeQueue {
     return {};
   }
 
+  void addPromiseLocked(
+      int consumerId,
+      ContinueFuture* future,
+      ContinuePromise* stalePromise);
+
   void clearAllPromises() {
     std::vector<ContinuePromise> promises;
     {
@@ -176,7 +193,14 @@ class ExchangeQueue {
   }
 
   std::vector<ContinuePromise> clearAllPromisesLocked() {
-    return std::move(promises_);
+    std::vector<ContinuePromise> promises(promises_.size());
+    auto it = promises_.begin();
+    while (it != promises_.end()) {
+      promises.push_back(std::move(it->second));
+      it = promises_.erase(it);
+    }
+    VELOX_CHECK(promises_.empty());
+    return promises;
   }
 
   static void clearPromises(std::vector<ContinuePromise>& promises) {
@@ -185,6 +209,11 @@ class ExchangeQueue {
     }
   }
 
+  int64_t minOutputBatchBytesLocked() const;
+
+  const int32_t numberOfConsumers_;
+  const uint64_t minOutputBatchBytes_;
+
   int numCompleted_{0};
   int numSources_{0};
   bool noMoreSources_{false};
@@ -192,7 +221,9 @@ class ExchangeQueue {
 
   std::mutex mutex_;
   std::deque<std::unique_ptr<SerializedPage>> queue_;
-  std::vector<ContinuePromise> promises_;
+  // The map from consumer id to the waiting promise
+  folly::F14FastMap<int, ContinuePromise> promises_;
+
   // When set, all promises will be realized and the next dequeue will
   // throw an exception with this message.
   std::string error_;

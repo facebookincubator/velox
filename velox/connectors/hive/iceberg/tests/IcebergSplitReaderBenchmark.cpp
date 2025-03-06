@@ -16,7 +16,6 @@
 
 #include "velox/connectors/hive/iceberg/tests/IcebergSplitReaderBenchmark.h"
 #include <filesystem>
-#include "velox/exec/tests/utils/PrefixSortUtils.h"
 
 using namespace facebook::velox;
 using namespace facebook::velox::dwio;
@@ -116,6 +115,7 @@ IcebergSplitReaderBenchmark::makeIcebergSplit(
       std::nullopt,
       customSplitInfo,
       nullptr,
+      /*cacheable=*/true,
       deleteFiles);
 }
 
@@ -295,6 +295,8 @@ void IcebergSplitReaderBenchmark::readSingleColumn(
   const RowTypePtr readerOutputType;
   const std::shared_ptr<io::IoStatistics> ioStats =
       std::make_shared<io::IoStatistics>();
+  const std::shared_ptr<filesystems::File::IoStats> fsStats =
+      std::make_shared<filesystems::File::IoStats>();
 
   std::shared_ptr<memory::MemoryPool> root =
       memory::memoryManager()->addRootPool(
@@ -312,7 +314,7 @@ void IcebergSplitReaderBenchmark::readSingleColumn(
           connectorPool.get(),
           connectorSessionProperties_.get(),
           nullptr,
-          exec::test::defaultPrefixSortConfig(),
+          common::PrefixSortConfig(),
           nullptr,
           nullptr,
           "query.IcebergSplitReader",
@@ -340,6 +342,7 @@ void IcebergSplitReaderBenchmark::readSingleColumn(
             hiveConfig,
             rowType,
             ioStats,
+            fsStats,
             &fileHandleFactory,
             nullptr,
             scanSpec);

@@ -21,14 +21,16 @@ if(VELOX_ENABLE_ABFS)
     velox_abfs
     PRIVATE
     AbfsFileSystem.cpp
-    AbfsUtils.cpp
+    AbfsConfig.cpp
     AbfsWriteFile.cpp)
+
   velox_link_libraries(
     velox_abfs
     PUBLIC velox_file
            velox_core
            velox_hive_config
            velox_dwio_common_exception
+           Azure::azure-identity
            Azure::azure-storage-blobs
            Azure::azure-storage-files-datalake
            Folly::folly

@@ -15,15 +15,14 @@
  */
 #include "velox/common/file/FileSystems.h"
 
-namespace velox::filesystems::arrow::io::internal {
-class LibHdfsShim;
-}
-
 namespace facebook::velox::filesystems {
 
 struct HdfsServiceEndpoint {
-  HdfsServiceEndpoint(const std::string& hdfsHost, const std::string& hdfsPort)
-      : host(hdfsHost), port(hdfsPort) {}
+  HdfsServiceEndpoint(
+      const std::string& hdfsHost,
+      const std::string& hdfsPort,
+      bool isViewfs = false)
+      : host(hdfsHost), port(hdfsPort), isViewfs(isViewfs) {}
 
   /// In HDFS HA mode, the identity is a nameservice ID with no port, e.g.,
   /// the identity is nameservice_id for
@@ -36,6 +35,7 @@ struct HdfsServiceEndpoint {
 
   const std::string host;
   const std::string port;
+  bool isViewfs;
 };
 
 /**
@@ -78,7 +78,8 @@ class HdfsFileSystem : public FileSystem {
     VELOX_UNSUPPORTED("list for HDFS not implemented");
   }
 
-  void mkdir(std::string_view path) override {
+  void mkdir(std::string_view path, const DirectoryOptions& options = {})
+      override {
     VELOX_UNSUPPORTED("mkdir for HDFS not implemented");
   }
 
@@ -96,6 +97,8 @@ class HdfsFileSystem : public FileSystem {
       const config::ConfigBase* config);
 
   static std::string_view kScheme;
+
+  static std::string_view kViewfsScheme;
 
  protected:
   class Impl;

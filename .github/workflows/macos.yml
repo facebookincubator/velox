@@ -44,6 +44,7 @@ concurrency:
 
 jobs:
   macos-build:
+    if: ${{ github.repository == 'facebookincubator/velox' }}
     name: "${{ matrix.os }}"
     strategy:
       fail-fast: false
@@ -53,7 +54,7 @@ jobs:
         os: [macos-13, macos-14]
     runs-on: ${{ matrix.os }}
     env:
-      CCACHE_DIR: '${{ github.workspace }}/.ccache'
+      CCACHE_DIR: '${{ github.workspace }}/ccache'
       # The arm runners have only 7GB RAM
       BUILD_TYPE: "${{ matrix.os ==  'macos-14' && 'Release' || 'Debug' }}"
       INSTALL_PREFIX: "/tmp/deps-install"
@@ -94,6 +95,7 @@ jobs:
                 -DENABLE_ALL_WARNINGS=1 \
                 -DVELOX_ENABLE_PARQUET=ON \
                 -DVELOX_MONO_LIBRARY=ON \
+                -DVELOX_BUILD_SHARED=ON \
                 -DCMAKE_BUILD_TYPE=$BUILD_TYPE
 
       - name: Build

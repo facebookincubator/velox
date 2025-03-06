@@ -188,7 +188,6 @@ RowContainer::RowContainer(
     if (nullableKeys_) {
       ++nullOffset;
     }
-    columnHasNulls_.push_back(false);
   }
   // Make offset at least sizeof pointer so that there is space for a
   // free list next pointer below the bit at 'freeFlagOffset_'.
@@ -217,7 +216,6 @@ RowContainer::RowContainer(
     nullOffsets_.push_back(nullOffset);
     ++nullOffset;
     isVariableWidth |= !type->isFixedWidth();
-    columnHasNulls_.push_back(false);
   }
   if (hasProbedFlag) {
     nullOffsets_.push_back(nullOffset);
@@ -283,6 +281,7 @@ RowContainer::RowContainer(
       ++nullOffsetsPos;
     }
   }
+  rowColumnsStats_.resize(types_.size());
 }
 
 RowContainer::~RowContainer() {
@@ -335,10 +334,30 @@ char* RowContainer::initializeRow(char* row, bool reuse) {
   return row;
 }
 
+void RowContainer::removeOrUpdateRowColumnStats(
+    const char* row,
+    bool setToNull) {
+  // Update row column stats accordingly
+  for (auto i = 0; i < types_.size(); i++) {
+    if (isNullAt(row, columnAt(i))) {
+      rowColumnsStats_[i].removeOrUpdateCellStats(0, true, setToNull);
+    } else if (types_[i]->isFixedWidth()) {
+      rowColumnsStats_[i].removeOrUpdateCellStats(
+          fixedSizeAt(i), false, setToNull);
+    } else {
+      rowColumnsStats_[i].removeOrUpdateCellStats(
+          variableSizeAt(row, i), false, setToNull);
+    }
+  }
+  invalidateMinMaxColumnStats();
+}
+
 void RowContainer::eraseRows(folly::Range<char**> rows) {
   freeRowsExtraMemory(rows, /*freeNextRowVector=*/true);
   for (auto* row : rows) {
     VELOX_CHECK(!bits::isBitSet(row, freeFlagOffset_), "Double free of row");
+    removeOrUpdateRowColumnStats(row, /*setToNull=*/false);
+
     bits::setBit(row, freeFlagOffset_);
     nextFree(row) = firstFreeRow_;
     firstFreeRow_ = row;
@@ -424,33 +443,6 @@ void RowContainer::freeVariableWidthFields(folly::Range<char**> rows) {
   }
 }
 
-void RowContainer::checkConsistency() const {
-  constexpr int32_t kBatch = 1000;
-  std::vector<char*> rows(kBatch);
-
-  RowContainerIterator iter;
-  int64_t allocatedRows = 0;
-  for (;;) {
-    int64_t numRows = listRows(&iter, kBatch, rows.data());
-    if (!numRows) {
-      break;
-    }
-    for (auto i = 0; i < numRows; ++i) {
-      auto row = rows[i];
-      VELOX_CHECK(!bits::isBitSet(row, freeFlagOffset_));
-      ++allocatedRows;
-    }
-  }
-
-  size_t numFree = 0;
-  for (auto free = firstFreeRow_; free; free = nextFree(free)) {
-    ++numFree;
-    VELOX_CHECK(bits::isBitSet(free, freeFlagOffset_));
-  }
-  VELOX_CHECK_EQ(numFree, numFreeRows_);
-  VELOX_CHECK_EQ(allocatedRows, numRows_);
-}
-
 void RowContainer::freeAggregates(folly::Range<char**> rows) {
   for (auto& accumulator : accumulators_) {
     accumulator.destroy(rows);
@@ -491,37 +483,120 @@ void RowContainer::freeRowsExtraMemory(
   numRows_ -= rows.size();
 }
 
+void RowColumn::Stats::removeOrUpdateCellStats(
+    int32_t bytes,
+    bool wasNull,
+    bool setToNull) {
+  // we only update nullCount, nonNullCount, and numBytes
+  // when the cell is removed. Because min/max need the
+  // full column data and not recorded in stats.
+  if (wasNull) {
+    VELOX_DCHECK_EQ(bytes, 0);
+    if (!setToNull) {
+      --nullCount_;
+    }
+  } else {
+    --nonNullCount_;
+    sumBytes_ -= bytes;
+    if (setToNull) {
+      ++nullCount_;
+    }
+  }
+  invalidateMinMaxColumnStats();
+}
+
+// static
+RowColumn::Stats RowColumn::Stats::merge(
+    const std::vector<RowColumn::Stats>& statsList) {
+  RowColumn::Stats mergedStats;
+  for (const auto& stats : statsList) {
+    if (mergedStats.numCells() == 0) {
+      mergedStats.minBytes_ = stats.minBytes_;
+      mergedStats.maxBytes_ = stats.maxBytes_;
+    } else {
+      mergedStats.minBytes_ = std::min(mergedStats.minBytes_, stats.minBytes_);
+      mergedStats.maxBytes_ = std::max(mergedStats.maxBytes_, stats.maxBytes_);
+    }
+    mergedStats.nullCount_ += stats.nullCount_;
+    mergedStats.nonNullCount_ += stats.nonNullCount_;
+    mergedStats.sumBytes_ += stats.sumBytes_;
+  }
+  return mergedStats;
+}
+
+std::optional<RowColumn::Stats> RowContainer::columnStats(
+    int32_t columnIndex) const {
+  if (rowColumnsStats_.empty()) {
+    return std::nullopt;
+  }
+  return rowColumnsStats_[columnIndex];
+}
+
+void RowContainer::updateColumnStats(
+    const DecodedVector& decoded,
+    vector_size_t rowIndex,
+    char* row,
+    int32_t columnIndex) {
+  if (rowColumnsStats_.empty()) {
+    // Column stats have been invalidated.
+    return;
+  }
+
+  auto& columnStats = rowColumnsStats_[columnIndex];
+  if (decoded.isNullAt(rowIndex)) {
+    columnStats.addNullCell();
+  } else if (types_[columnIndex]->isFixedWidth()) {
+    columnStats.addCellSize(fixedSizeAt(columnIndex));
+  } else {
+    columnStats.addCellSize(variableSizeAt(row, columnIndex));
+  }
+}
+
+void RowContainer::updateColumnStats(char* row, int32_t columnIndex) {
+  const bool nullColumn = isNullAt(row, rowColumns_[columnIndex]);
+
+  auto& columnStats = rowColumnsStats_[columnIndex];
+  if (nullColumn) {
+    columnStats.addNullCell();
+  } else if (types_[columnIndex]->isFixedWidth()) {
+    columnStats.addCellSize(fixedSizeAt(columnIndex));
+  } else {
+    columnStats.addCellSize(variableSizeAt(row, columnIndex));
+  }
+}
+
 void RowContainer::store(
     const DecodedVector& decoded,
-    vector_size_t index,
+    vector_size_t rowIndex,
     char* row,
-    int32_t column) {
+    int32_t columnIndex) {
   auto numKeys = keyTypes_.size();
-  bool isKey = column < numKeys;
+  bool isKey = columnIndex < numKeys;
   if (isKey && !nullableKeys_) {
     VELOX_DYNAMIC_TYPE_DISPATCH(
         storeNoNulls,
-        typeKinds_[column],
+        typeKinds_[columnIndex],
         decoded,
-        index,
+        rowIndex,
         isKey,
         row,
-        offsets_[column]);
+        offsets_[columnIndex]);
   } else {
     VELOX_DCHECK(isKey || accumulators_.empty());
-    auto rowColumn = rowColumns_[column];
+    auto rowColumn = rowColumns_[columnIndex];
     VELOX_DYNAMIC_TYPE_DISPATCH_ALL(
         storeWithNulls,
-        typeKinds_[column],
+        typeKinds_[columnIndex],
         decoded,
-        index,
+        rowIndex,
         isKey,
         row,
         rowColumn.offset(),
         rowColumn.nullByte(),
         rowColumn.nullMask(),
-        column);
+        columnIndex);
   }
+  updateColumnStats(decoded, rowIndex, row, columnIndex);
 }
 
 void RowContainer::store(
@@ -537,9 +612,10 @@ void RowContainer::store(
         decoded,
         rows,
         isKey,
-        offsets_[column]);
+        offsets_[column],
+        column);
   } else {
-    const auto rowColumn = rowColumns_[column];
+    const auto& rowColumn = rowColumns_[column];
     VELOX_DYNAMIC_TYPE_DISPATCH_ALL(
         storeWithNullsBatch,
         typeKinds_[column],
@@ -553,19 +629,19 @@ void RowContainer::store(
   }
 }
 
-std::unique_ptr<ByteInputStream> RowContainer::prepareRead(
+HashStringAllocator::InputStream RowContainer::prepareRead(
     const char* row,
     int32_t offset) {
   const auto& view = reinterpret_cast<const std::string_view*>(row + offset);
   // We set 'stream' to range over the ranges that start at the Header
   // immediately below the first character in the std::string_view.
-  return HashStringAllocator::prepareRead(
+  return HashStringAllocator::InputStream(
       HashStringAllocator::headerOf(view->data()));
 }
 
 int32_t RowContainer::variableSizeAt(const char* row, column_index_t column)
     const {
-  const auto rowColumn = rowColumns_[column];
+  const auto& rowColumn = rowColumns_[column];
 
   if (isNullAt(row, rowColumn)) {
     return 0;
@@ -608,9 +684,9 @@ int32_t RowContainer::extractVariableSizeAt(
                 .size() >= value.size()) {
       ::memcpy(output + 4, value.data(), size);
     } else {
-      auto stream = HashStringAllocator::prepareRead(
+      HashStringAllocator::InputStream stream(
           HashStringAllocator::headerOf(value.data()));
-      stream->readBytes(output + 4, size);
+      stream.ByteInputStream::readBytes(output + 4, size);
     }
     return 4 + size;
   }
@@ -621,7 +697,7 @@ int32_t RowContainer::extractVariableSizeAt(
   auto stream = prepareRead(row, rowColumn.offset());
 
   ::memcpy(output, &size, 4);
-  stream->readBytes(output + 4, size);
+  stream.ByteInputStream::readBytes(output + 4, size);
 
   return 4 + size;
 }
@@ -735,7 +811,7 @@ void RowContainer::storeSerializedRow(
     vector_size_t index,
     char* row) {
   VELOX_CHECK(!vector.isNullAt(index));
-  auto serialized = vector.valueAt(index);
+  const auto serialized = vector.valueAt(index);
   size_t offset = 0;
 
   ::memcpy(row + rowColumns_[0].nullByte(), serialized.data(), flagBytes_);
@@ -752,6 +828,7 @@ void RowContainer::storeSerializedRow(
       const auto size = storeVariableSizeAt(serialized.data() + offset, row, i);
       offset += size;
     }
+    updateColumnStats(row, i);
   }
 }
 
@@ -767,9 +844,9 @@ void RowContainer::extractString(
     return;
   }
   auto rawBuffer = values->getRawStringBufferWithSpace(value.size());
-  auto stream = HashStringAllocator::prepareRead(
+  HashStringAllocator::InputStream stream(
       HashStringAllocator::headerOf(value.data()));
-  stream->readBytes(rawBuffer, value.size());
+  stream.ByteInputStream::readBytes(rawBuffer, value.size());
   values->setNoCopy(index, StringView(rawBuffer, value.size()));
 }
 
@@ -785,7 +862,6 @@ void RowContainer::storeComplexType(
   if (decoded.isNullAt(index)) {
     VELOX_DCHECK(nullMask);
     row[nullByte] |= nullMask;
-    updateColumnHasNulls(column, true);
     return;
   }
   RowSizeTracker tracker(row[rowSizeOffset_], *stringAllocator_);
@@ -820,7 +896,7 @@ int RowContainer::compareComplexType(
   VELOX_DCHECK(flags.nullAsValue(), "not supported null handling mode");
 
   auto stream = prepareRead(row, offset);
-  return ContainerRowSerde::compare(*stream, decoded, index, flags);
+  return ContainerRowSerde::compare(stream, decoded, index, flags);
 }
 
 int32_t RowContainer::compareStringAsc(StringView left, StringView right) {
@@ -841,7 +917,7 @@ int32_t RowContainer::compareComplexType(
 
   auto leftStream = prepareRead(left, leftOffset);
   auto rightStream = prepareRead(right, rightOffset);
-  return ContainerRowSerde::compare(*leftStream, *rightStream, type, flags);
+  return ContainerRowSerde::compare(leftStream, rightStream, type, flags);
 }
 
 int32_t RowContainer::compareComplexType(
@@ -882,7 +958,7 @@ void RowContainer::hashTyped(
           Kind == TypeKind::ROW || Kind == TypeKind::ARRAY ||
           Kind == TypeKind::MAP) {
         auto in = prepareRead(row, offset);
-        hash = ContainerRowSerde::hash(*in, type);
+        hash = ContainerRowSerde::hash(in, type);
       } else if constexpr (typeProvidesCustomComparison) {
         hash = static_cast<const CanProvideCustomComparisonType<Kind>*>(type)
                    ->hash(valueAt<T>(row, offset));
@@ -958,6 +1034,9 @@ void RowContainer::clear() {
   normalizedKeySize_ = originalNormalizedKeySize_;
   numFreeRows_ = 0;
   firstFreeRow_ = nullptr;
+
+  rowColumnsStats_.clear();
+  rowColumnsStats_.resize(types_.size());
 }
 
 void RowContainer::setProbedFlag(char** rows, int32_t numRows) {

@@ -16,6 +16,7 @@
 
 #pragma once
 
+#include "velox/core/QueryCtx.h"
 #include "velox/expression/CastHooks.h"
 
 namespace facebook::velox::functions::sparksql {
@@ -23,6 +24,8 @@ namespace facebook::velox::functions::sparksql {
 // This class provides cast hooks following Spark semantics.
 class SparkCastHooks : public exec::CastHooks {
  public:
+  explicit SparkCastHooks(const velox::core::QueryConfig& config);
+
   // TODO: Spark hook allows more string patterns than Presto.
   Expected<Timestamp> castStringToTimestamp(
       const StringView& view) const override;
@@ -30,6 +33,11 @@ class SparkCastHooks : public exec::CastHooks {
   /// When casting integral value as timestamp, the input is treated as the
   /// number of seconds since the epoch (1970-01-01 00:00:00 UTC).
   Expected<Timestamp> castIntToTimestamp(int64_t seconds) const override;
+
+  /// When casting double as timestamp, the input is treated as
+  /// the number of seconds since the epoch (1970-01-01 00:00:00 UTC).
+  Expected<std::optional<Timestamp>> castDoubleToTimestamp(
+      double value) const override;
 
   /// 1) Removes all leading and trailing UTF8 white-spaces before cast. 2) Uses
   /// non-standard cast mode to cast from string to date.
@@ -49,15 +57,34 @@ class SparkCastHooks : public exec::CastHooks {
   /// whitespaces before cast.
   StringView removeWhiteSpaces(const StringView& view) const override;
 
-  /// 1) Does not follow 'isLegacyCast' and session timezone. 2) The conversion
-  /// precision is microsecond. 3) Does not append trailing zeros. 4) Adds a
-  /// positive sign at first if the year exceeds 9999.
-  const TimestampToStringOptions& timestampToStringOptions() const override;
+  const TimestampToStringOptions& timestampToStringOptions() const override {
+    return timestampToStringOptions_;
+  }
 
   bool truncate() const override {
     return true;
   }
 
   exec::PolicyType getPolicy() const override;
+
+ private:
+  // Casts a number to a timestamp. The number is treated as the number of
+  // seconds since the epoch (1970-01-01 00:00:00 UTC).
+  // Supports integer and floating-point types.
+  template <typename T>
+  Expected<Timestamp> castNumberToTimestamp(T seconds) const;
+
+  const core::QueryConfig& config_;
+
+  /// 1) Does not follow 'isLegacyCast'. 2) The conversion precision is
+  /// microsecond. 3) Does not append trailing zeros. 4) Adds a positive
+  /// sign at first if the year exceeds 9999. 5) Respects the configured
+  /// session timezone.
+  TimestampToStringOptions timestampToStringOptions_ = {
+      .precision = TimestampToStringOptions::Precision::kMicroseconds,
+      .leadingPositiveSign = true,
+      .skipTrailingZeros = true,
+      .zeroPaddingYear = true,
+      .dateTimeSeparator = ' '};
 };
 } // namespace facebook::velox::functions::sparksql

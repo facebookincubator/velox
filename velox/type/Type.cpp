@@ -160,6 +160,11 @@ std::vector<TypePtr> deserializeChildTypes(const folly::dynamic& obj) {
 } // namespace
 
 TypePtr Type::create(const folly::dynamic& obj) {
+  if (obj.find("ref") != obj.items().end()) {
+    const auto id = obj["ref"].asInt();
+    return deserializedTypeCache().get(id);
+  }
+
   std::vector<TypePtr> childTypes;
   if (obj.find("cTypes") != obj.items().end()) {
     childTypes = deserializeChildTypes(obj);
@@ -171,7 +176,12 @@ TypePtr Type::create(const folly::dynamic& obj) {
   }
   // Checks if 'typeName' specifies a custom type.
   if (customTypeExists(typeName)) {
-    return getCustomType(typeName);
+    std::vector<TypeParameter> params;
+    params.reserve(childTypes.size());
+    for (auto& child : childTypes) {
+      params.emplace_back(child);
+    }
+    return getCustomType(typeName, params);
   }
 
   // 'typeName' must be a built-in type.
@@ -212,8 +222,7 @@ void Type::registerSerDe() {
   auto& registry = velox::DeserializationRegistryForSharedPtr();
   registry.Register(
       Type::getClassName(),
-      static_cast<std::shared_ptr<const Type> (*)(const folly::dynamic&)>(
-          Type::create));
+      static_cast<TypePtr (*)(const folly::dynamic&)>(Type::create));
 
   registry.Register("IntervalDayTimeType", IntervalDayTimeType::deserialize);
   registry.Register(
@@ -376,14 +385,6 @@ std::unique_ptr<std::vector<TypeParameter>> RowType::makeParameters() const {
       createTypeParameters(children_));
 }
 
-uint32_t RowType::size() const {
-  return children_.size();
-}
-
-const TypePtr& RowType::childAt(uint32_t idx) const {
-  return children_.at(idx);
-}
-
 namespace {
 template <typename T>
 std::string makeFieldNotFoundErrorMessage(
@@ -429,7 +430,7 @@ bool RowType::containsChild(std::string_view name) const {
   return std::find(names_.begin(), names_.end(), name) != names_.end();
 }
 
-uint32_t RowType::getChildIdx(const std::string& name) const {
+uint32_t RowType::getChildIdx(std::string_view name) const {
   auto index = getChildIdxIfExists(name);
   if (!index.has_value()) {
     VELOX_USER_FAIL(makeFieldNotFoundErrorMessage(name, names_));
@@ -438,7 +439,7 @@ uint32_t RowType::getChildIdx(const std::string& name) const {
 }
 
 std::optional<uint32_t> RowType::getChildIdxIfExists(
-    const std::string& name) const {
+    std::string_view name) const {
   for (uint32_t i = 0; i < names_.size(); i++) {
     if (names_.at(i) == name) {
       return i;
@@ -527,12 +528,115 @@ std::string RowType::toString() const {
   return ss.str();
 }
 
+std::optional<int32_t> SerializedTypeCache::get(const Type& type) const {
+  auto it = cache_.find(&type);
+  if (it != cache_.end()) {
+    return it->second.first;
+  }
+
+  return std::nullopt;
+}
+
+int32_t SerializedTypeCache::put(const Type& type, folly::dynamic serialized) {
+  const int32_t id = cache_.size();
+
+  std::pair<int32_t, folly::dynamic> value{id, std::move(serialized)};
+  const bool ok = cache_.emplace(&type, std::move(value)).second;
+  VELOX_CHECK(ok);
+
+  return id;
+}
+
+folly::dynamic SerializedTypeCache::serialize() {
+  // Make sure to serialize the cache in the same order as it was
+  // populated.
+  std::vector<std::pair<int32_t, const folly::dynamic*>> cacheEntries;
+  for (const auto& [_, pair] : cache_) {
+    cacheEntries.emplace_back(std::make_pair<int32_t, const folly::dynamic*>(
+        (int32_t)pair.first, &pair.second));
+  }
+
+  std::sort(cacheEntries.begin(), cacheEntries.end(), [](auto& a, auto& b) {
+    return a.first < b.first;
+  });
+
+  folly::dynamic keys = folly::dynamic::array;
+  folly::dynamic values = folly::dynamic::array;
+
+  for (const auto& pair : cacheEntries) {
+    keys.push_back(pair.first);
+    values.push_back(*pair.second);
+  }
+
+  folly::dynamic cacheObj = folly::dynamic::object;
+  cacheObj["keys"] = keys;
+  cacheObj["values"] = values;
+
+  return cacheObj;
+}
+
+SerializedTypeCache& serializedTypeCache() {
+  thread_local SerializedTypeCache cache;
+  return cache;
+}
+
+void DeserializedTypeCache::deserialize(const folly::dynamic& obj) {
+  VELOX_CHECK(cache_.empty());
+
+  const auto& keys = obj["keys"];
+  const auto size = keys.size();
+
+  const auto& values = obj["values"];
+  VELOX_CHECK_EQ(size, values.size());
+  for (auto i = 0; i < size; ++i) {
+    auto type = velox::ISerializable::deserialize<Type>(values[i]);
+    const bool ok = cache_.emplace(keys[i].asInt(), type).second;
+    VELOX_CHECK(ok);
+  }
+}
+
+const TypePtr& DeserializedTypeCache::get(int32_t id) const {
+  auto it = cache_.find(id);
+  VELOX_CHECK(it != cache_.end());
+  return it->second;
+}
+
+DeserializedTypeCache& deserializedTypeCache() {
+  thread_local DeserializedTypeCache cache;
+  return cache;
+}
+
+namespace {
+folly::dynamic makeTypeRef(int32_t id) {
+  folly::dynamic ref = folly::dynamic::object;
+  ref["name"] = "Type";
+  ref["ref"] = id;
+  return ref;
+}
+} // namespace
+
 folly::dynamic RowType::serialize() const {
+  auto& cache = serializedTypeCache();
+  const bool useCache =
+      cache.isEnabled() && size() >= cache.options().minRowTypeSize;
+
+  if (useCache) {
+    if (auto id = cache.get(*this)) {
+      return makeTypeRef(id.value());
+    }
+  }
+
   folly::dynamic obj = folly::dynamic::object;
   obj["name"] = "Type";
   obj["type"] = TypeTraits<TypeKind::ROW>::name;
   obj["names"] = velox::ISerializable::serialize(names_);
   obj["cTypes"] = velox::ISerializable::serialize(children_);
+
+  if (useCache) {
+    const auto id = cache.put(*this, std::move(obj));
+    return makeTypeRef(id);
+  }
+
   return obj;
 }
 
@@ -720,6 +824,12 @@ std::shared_ptr<const OpaqueType> OpaqueType::deserializeExtra(
   return nullptr;
 }
 
+void OpaqueType::clearSerializationRegistry() {
+  auto& registry = OpaqueSerdeRegistry::get();
+  registry.mapping.clear();
+  registry.reverse.clear();
+}
+
 void OpaqueType::registerSerializationTypeErased(
     const std::shared_ptr<const OpaqueType>& type,
     const std::string& persistentName,
@@ -873,6 +983,33 @@ bool Type::containsUnknown() const {
   return false;
 }
 
+std::string Type::toSummaryString(TypeSummaryOptions options) const {
+  std::ostringstream out;
+  out << kindName();
+
+  const auto cnt = std::min(options.maxChildren, size());
+  if (cnt > 0) {
+    out << "(";
+    for (auto i = 0; i < cnt; ++i) {
+      if (i > 0) {
+        out << ", ";
+      }
+      out << childAt(i)->kindName();
+    }
+
+    if (cnt < size()) {
+      out << ", ..." << (size() - cnt) << " more";
+    }
+    out << ")";
+  } else {
+    if (kind_ == TypeKind::ROW) {
+      out << "(" << size() << ")";
+    }
+  }
+
+  return out.str();
+}
+
 namespace {
 
 std::unordered_map<std::string, std::unique_ptr<const CustomTypeFactories>>&
@@ -934,10 +1071,12 @@ getTypeFactories(const std::string& name) {
   return nullptr;
 }
 
-TypePtr getCustomType(const std::string& name) {
+TypePtr getCustomType(
+    const std::string& name,
+    const std::vector<TypeParameter>& parameters) {
   auto factories = getTypeFactories(name);
   if (factories) {
-    return factories->getType();
+    return factories->getType(parameters);
   }
 
   return nullptr;
@@ -947,6 +1086,21 @@ exec::CastOperatorPtr getCustomTypeCastOperator(const std::string& name) {
   auto factories = getTypeFactories(name);
   if (factories) {
     return factories->getCastOperator();
+  }
+
+  return nullptr;
+}
+
+CustomTypeFactories::~CustomTypeFactories() = default;
+
+AbstractInputGenerator::~AbstractInputGenerator() = default;
+
+AbstractInputGeneratorPtr getCustomTypeInputGenerator(
+    const std::string& name,
+    const InputGeneratorConfig& config) {
+  auto factories = getTypeFactories(name);
+  if (factories) {
+    return factories->getInputGenerator(config);
   }
 
   return nullptr;
@@ -1215,7 +1369,7 @@ TypePtr getType(
     return parametricBuiltinTypes().at(name)(parameters);
   }
 
-  return getCustomType(name);
+  return getCustomType(name, parameters);
 }
 
 std::type_index getTypeIdForOpaqueTypeAlias(const std::string& name) {
@@ -1235,5 +1389,4 @@ std::string getOpaqueAliasForTypeId(std::type_index typeIndex) {
       typeIndex.name());
   return it->second;
 }
-
 } // namespace facebook::velox

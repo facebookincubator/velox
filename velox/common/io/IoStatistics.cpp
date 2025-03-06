@@ -119,9 +119,12 @@ void IoStatistics::merge(const IoStatistics& other) {
   ramHit_.merge(other.ramHit_);
   ssdRead_.merge(other.ssdRead_);
   queryThreadIoLatency_.merge(other.queryThreadIoLatency_);
-  std::lock_guard<std::mutex> l(operationStatsMutex_);
-  for (auto& item : other.operationStats_) {
-    operationStats_[item.first].merge(item.second);
+  {
+    const auto& otherOperationStats = other.operationStats();
+    std::lock_guard<std::mutex> l(operationStatsMutex_);
+    for (auto& item : otherOperationStats) {
+      operationStats_[item.first].merge(item.second);
+    }
   }
 }
 

@@ -142,8 +142,10 @@ class BaseHashTable {
   struct JoinResultIterator {
     JoinResultIterator(
         std::vector<vector_size_t>&& _varSizeListColumns,
-        uint64_t _fixedSizeListColumnsSizeSum)
-        : varSizeListColumns(std::move(_varSizeListColumns)),
+        uint64_t _fixedSizeListColumnsSizeSum,
+        std::optional<uint64_t> _estimatedRowSize)
+        : estimatedRowSize(_estimatedRowSize),
+          varSizeListColumns(std::move(_varSizeListColumns)),
           fixedSizeListColumnsSizeSum(_fixedSizeListColumnsSizeSum) {}
 
     void reset(const HashLookup& lookup) {
@@ -151,12 +153,15 @@ class BaseHashTable {
       hits = &lookup.hits;
       lastRowIndex = 0;
       lastDuplicateRowIndex = 0;
+      outputBatchBytes = 0;
     }
 
     bool atEnd() const {
       return !rows || lastRowIndex == rows->size();
     }
 
+    /// The row size estimation of the projected output columns, if applicable.
+    const std::optional<uint64_t> estimatedRowSize;
     /// The indexes of the build side projected columns that are variable sized.
     const std::vector<vector_size_t> varSizeListColumns;
     /// The per row total bytes of the build side projected columns that are
@@ -168,6 +173,9 @@ class BaseHashTable {
 
     vector_size_t lastRowIndex{0};
     vector_size_t lastDuplicateRowIndex{0};
+    /// The total bytes of the output batch produced by a list join call. It is
+    /// reset on the next call.
+    uint64_t outputBatchBytes{0};
   };
 
   struct RowsIterator {
@@ -275,8 +283,11 @@ class BaseHashTable {
 
   /// Returns all rows with null keys.  Used by null-aware joins (e.g. anti or
   /// left semi project).
-  virtual int32_t
-  listNullKeyRows(NullKeyRowsIterator* iter, int32_t maxRows, char** rows) = 0;
+  virtual int32_t listNullKeyRows(
+      NullKeyRowsIterator* iter,
+      int32_t maxRows,
+      char** rows,
+      const std::vector<std::unique_ptr<VectorHasher>>& hashers) = 0;
 
   virtual void prepareJoinTable(
       std::vector<std::unique_ptr<BaseHashTable>> tables,
@@ -527,7 +538,8 @@ class HashTable : public BaseHashTable {
   int32_t listNullKeyRows(
       NullKeyRowsIterator* iter,
       int32_t maxRows,
-      char** rows) override;
+      char** rows,
+      const std::vector<std::unique_ptr<VectorHasher>>& hashers) override;
 
   void clear(bool freeTable) override;
 
@@ -635,18 +647,6 @@ class HashTable : public BaseHashTable {
   /// purpose.
   void checkConsistency() const;
 
-  auto& testingOtherTables() const {
-    return otherTables_;
-  }
-
-  uint64_t testingRehashSize() const {
-    return rehashSize();
-  }
-
-  char** testingTable() const {
-    return table_;
-  }
-
   void extractColumn(
       folly::Range<char* const*> rows,
       int32_t columnIndex,
@@ -657,6 +657,18 @@ class HashTable : public BaseHashTable {
         rows_->columnAt(columnIndex),
         columnHasNulls_[columnIndex],
         result);
+  }
+
+  auto& testingOtherTables() const {
+    return otherTables_;
+  }
+
+  uint64_t testingRehashSize() const {
+    return rehashSize();
+  }
+
+  char** testingTable() const {
+    return table_;
   }
 
  private:
@@ -897,6 +909,13 @@ class HashTable : public BaseHashTable {
   inline uint64_t joinProjectedVarColumnsSize(
       const std::vector<vector_size_t>& columns,
       const char* row) const;
+
+  // The exact same as joinProjectedVarColumnsSize(const
+  // std::vector<vector_size_t>&, const char*) with the exception that this
+  // function takes in vector of rows instead of an individual row.
+  inline uint64_t joinProjectedVarColumnsSize(
+      const std::vector<vector_size_t>& columns,
+      NextRowVector*& rows) const;
 
   // Adds a row to a hash join table in kArray hash mode. Returns true if a new
   // entry was made and false if the row was added to an existing set of rows

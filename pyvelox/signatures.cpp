@@ -19,8 +19,8 @@
 #include "velox/functions/FunctionRegistry.h"
 #include "velox/functions/prestosql/aggregates/RegisterAggregateFunctions.h"
 #include "velox/functions/prestosql/registration/RegistrationFunctions.h"
-#include "velox/functions/sparksql/Register.h"
 #include "velox/functions/sparksql/aggregates/Register.h"
+#include "velox/functions/sparksql/registration/Register.h"
 
 namespace facebook::velox::py {
 
@@ -106,7 +106,7 @@ void addSignatureBindings(py::module& m, bool asModuleLocalDefinitions) {
 
   m.def(
       "get_function_signatures",
-      &getFunctionSignatures,
+      []() { return getFunctionSignatures(); },
       py::return_value_policy::reference,
       "Returns a dictionary of the current signatures.");
 

@@ -34,10 +34,12 @@ velox_add_library(
   RawVector.cpp
   RuntimeMetrics.cpp
   SimdUtil.cpp
+  SkewedPartitionBalancer.cpp
   SpillConfig.cpp
   SpillStats.cpp
   StatsReporter.cpp
-  SuccinctPrinter.cpp)
+  SuccinctPrinter.cpp
+  TraceConfig.cpp)
 
 velox_link_libraries(
   velox_common_base
@@ -60,8 +62,7 @@ velox_link_libraries(
   velox_process
   glog::glog
   Folly::folly
-  fmt::fmt
-  gflags::gflags)
+  fmt::fmt)
 
 velox_add_library(velox_status Status.cpp)
 velox_link_libraries(

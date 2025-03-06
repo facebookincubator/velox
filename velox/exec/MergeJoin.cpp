@@ -628,6 +628,11 @@ bool MergeJoin::addToOutputForRightJoin() {
         auto leftEnd = l == numLefts - 1 ? leftMatch_->endIndex : left->size();
 
         if (prepareOutput(left, right)) {
+          // Differently from left joins, for right joins we need to load lazies
+          // (from the left) whenever we detect we have to move to the next
+          // right batch, since this means that we will produce this buffer, but
+          // we may have subsequent matches.
+          loadColumns(left, *operatorCtx_->execCtx());
           output_->resize(outputSize_);
           leftMatch_->setCursor(l, leftStart);
           rightMatch_->setCursor(r, i);
@@ -782,7 +787,7 @@ RowVectorPtr MergeJoin::getOutput() {
               }
             }
             rightIndex_ = firstNonNullIndex;
-            if (rightIndex_ == rightInput_->size()) {
+            if (finishedRightBatch()) {
               // Ran out of rows on the right side.
               rightInput_ = nullptr;
             }
@@ -884,12 +889,11 @@ RowVectorPtr MergeJoin::doGetOutput() {
             return std::move(output_);
           }
           addOutputRowForLeftJoin(input_, index_);
-
           ++index_;
-          if (index_ == input_->size()) {
-            // Ran out of rows on the left side.
+
+          if (finishedLeftBatch()) {
             input_ = nullptr;
-            return nullptr;
+            return produceOutput();
           }
         }
       }
@@ -911,11 +915,10 @@ RowVectorPtr MergeJoin::doGetOutput() {
           if (outputSize_ == outputBatchSize_) {
             return std::move(output_);
           }
-
           addOutputRowForRightJoin(rightInput_, rightIndex_);
 
           ++rightIndex_;
-          if (rightIndex_ == rightInput_->size()) {
+          if (finishedRightBatch()) {
             // Ran out of rows on the right side.
             rightInput_ = nullptr;
             return nullptr;
@@ -940,12 +943,11 @@ RowVectorPtr MergeJoin::doGetOutput() {
             return std::move(output_);
           }
           addOutputRowForLeftJoin(input_, index_);
-
           ++index_;
-          if (index_ == input_->size()) {
-            // Ran out of rows on the left side.
+
+          if (finishedLeftBatch()) {
             input_ = nullptr;
-            return nullptr;
+            return produceOutput();
           }
         }
       }
@@ -1021,10 +1023,9 @@ RowVectorPtr MergeJoin::doGetOutput() {
         index_ = firstNonNull(input_, leftKeys_, index_ + 1);
       }
 
-      if (index_ == input_->size()) {
-        // Ran out of rows on the left side.
+      if (finishedLeftBatch()) {
         input_ = nullptr;
-        return nullptr;
+        return produceOutput();
       }
       compareResult = compare();
     }
@@ -1042,17 +1043,15 @@ RowVectorPtr MergeJoin::doGetOutput() {
         if (outputSize_ == outputBatchSize_) {
           return std::move(output_);
         }
-
         addOutputRowForRightJoin(rightInput_, rightIndex_);
         ++rightIndex_;
       } else {
         rightIndex_ = firstNonNull(rightInput_, rightKeys_, rightIndex_ + 1);
       }
 
-      if (rightIndex_ == rightInput_->size()) {
-        // Ran out of rows on the right side.
+      if (finishedRightBatch()) {
         rightInput_ = nullptr;
-        return nullptr;
+        return produceOutput();
       }
       compareResult = compare();
     }
@@ -1105,7 +1104,7 @@ RowVectorPtr MergeJoin::doGetOutput() {
         rightIndex_ = firstNonNull(rightInput_, rightKeys_, endRightIndex);
       }
 
-      if (rightIndex_ == rightInput_->size()) {
+      if (finishedRightBatch()) {
         // Ran out of rows on the right side.
         rightInput_ = nullptr;
       }

@@ -18,6 +18,7 @@
 
 #include <chrono>
 #include <string>
+#include <vector>
 
 namespace facebook::velox::date {
 class time_zone;
@@ -62,6 +63,9 @@ int16_t getTimeZoneID(std::string_view timeZone, bool failOnError = true);
 /// Returns the timeZoneID for a given offset in minutes. The offset must be in
 /// [-14:00, +14:00] range.
 int16_t getTimeZoneID(int32_t offsetMinutes);
+
+/// Returns all valid time zone IDs.
+std::vector<int16_t> getTimeZoneIDs();
 
 // Validates that the time point can be safely used by the external date
 // library.
@@ -142,6 +146,14 @@ class TimeZone {
   /// susceptible to the error above.
   seconds to_local(seconds timestamp) const;
   milliseconds to_local(milliseconds timestamp) const;
+
+  /// If a local time is nonexistent, i.e. refers to a time that exists in the
+  /// gap during a time zone conversion, this returns the time adjusted by
+  /// the difference between the two time zones, so that it lies in the later
+  /// time zone.
+  ///
+  /// If the local time exists then the same time is returned.
+  seconds correct_nonexistent_time(seconds timestamp) const;
 
   const std::string& name() const {
     return timeZoneName_;

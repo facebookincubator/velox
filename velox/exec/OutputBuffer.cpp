@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 #include "velox/exec/OutputBuffer.h"
+#include "velox/common/testutil/TestValue.h"
 #include "velox/core/QueryConfig.h"
 #include "velox/exec/Task.h"
 
@@ -475,6 +476,9 @@ bool OutputBuffer::enqueue(
     }
 
     if (bufferedBytes_ >= maxSize_ && future) {
+      common::testutil::TestValue::adjust(
+          "facebook::velox::exec::OutputBuffer::enqueue", this);
+
       promises_.emplace_back("OutputBuffer::enqueue");
       *future = promises_.back().getSemiFuture();
       blocked = true;
@@ -597,6 +601,9 @@ void OutputBuffer::checkIfDone(bool oneDriverFinished) {
           finished.push_back(buffer->getAndClearNotify());
         }
       }
+
+      common::testutil::TestValue::adjust(
+          "facebook::velox::exec::OutputBuffer::checkIfDone", this);
     }
   }
 
@@ -777,7 +784,7 @@ std::string OutputBuffer::toStringLocked() const {
 }
 
 double OutputBuffer::getUtilization() const {
-  return bufferedBytes_ / (double)maxSize_;
+  return bufferedBytes_ / static_cast<double>(maxSize_);
 }
 
 bool OutputBuffer::isOverutilized() const {

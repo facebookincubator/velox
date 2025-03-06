@@ -39,6 +39,7 @@ using IoStatisticsPtr = std::shared_ptr<IoStatistics>;
 struct TestRegion {
   int32_t offset;
   int32_t length;
+  bool read = true;
 };
 
 class DirectBufferedInputTest : public testing::Test {
@@ -53,8 +54,9 @@ class DirectBufferedInputTest : public testing::Test {
     executor_ = std::make_unique<folly::IOThreadPoolExecutor>(10, 10);
     ioStats_ = std::make_shared<IoStatistics>();
     fileIoStats_ = std::make_shared<IoStatistics>();
+    fsStats_ = std::make_shared<facebook::velox::filesystems::File::IoStats>();
     tracker_ = std::make_shared<cache::ScanTracker>("", nullptr, kLoadQuantum);
-    file_ = std::make_shared<TestReadFile>(11, 100 << 20, fileIoStats_);
+    file_ = std::make_shared<TestReadFile>(11, 100 << 20, fsStats_);
     opts_ = std::make_unique<dwio::common::ReaderOptions>(pool_.get());
     opts_->setLoadQuantum(kLoadQuantum);
   }
@@ -71,6 +73,7 @@ class DirectBufferedInputTest : public testing::Test {
         tracker_,
         2,
         ioStats_,
+        fsStats_,
         executor_.get(),
         *opts_);
   }
@@ -92,7 +95,7 @@ class DirectBufferedInputTest : public testing::Test {
     }
     input->load(LogType::FILE);
     for (auto i = 0; i < regions.size(); ++i) {
-      if (regions[i].length > 0) {
+      if (regions[i].read && regions[i].length > 0) {
         checkRead(streams[i].get(), regions[i]);
       }
     }
@@ -128,6 +131,7 @@ class DirectBufferedInputTest : public testing::Test {
   std::shared_ptr<cache::ScanTracker> tracker_;
   std::shared_ptr<IoStatistics> ioStats_;
   std::shared_ptr<IoStatistics> fileIoStats_;
+  std::shared_ptr<facebook::velox::filesystems::File::IoStats> fsStats_;
   std::unique_ptr<folly::IOThreadPoolExecutor> executor_;
   std::shared_ptr<memory::MemoryPool> pool_{
       memory::memoryManager()->addLeafPool()};
@@ -185,4 +189,9 @@ TEST_F(DirectBufferedInputTest, basic) {
   // The first reads in 2 parts and does not coalesce to the second, which reads
   // in one part.
   testLoads({{1000, 9000000}, {9010000, 1000000}}, 3);
+}
+
+TEST_F(DirectBufferedInputTest, noRedownloadCoalescedPrefetch) {
+  testLoads({{100, 100}, {201, 1, false}, {202, 100}}, 1);
+  testLoads({{100, 100}, {201, 1, true}, {202, 100}}, 1);
 }

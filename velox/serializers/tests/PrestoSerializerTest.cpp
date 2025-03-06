@@ -14,13 +14,16 @@
  * limitations under the License.
  */
 #include "velox/serializers/PrestoSerializer.h"
+#include <boost/random/uniform_int_distribution.hpp>
 #include <folly/Random.h>
 #include <gtest/gtest.h>
 #include <vector>
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/common/memory/ByteStream.h"
-#include "velox/common/time/Timer.h"
+#include "velox/functions/prestosql/types/IPAddressType.h"
+#include "velox/functions/prestosql/types/IPPrefixType.h"
 #include "velox/functions/prestosql/types/TimestampWithTimeZoneType.h"
+#include "velox/serializers/PrestoVectorLexer.h"
 #include "velox/vector/fuzzer/VectorFuzzer.h"
 #include "velox/vector/tests/utils/VectorTestBase.h"
 
@@ -31,6 +34,42 @@ struct SerializeStats {
   int64_t actualSize{0};
   int64_t estimatedSize{0};
 };
+
+class Foo {
+ public:
+  explicit Foo(int64_t id) : id_(id) {}
+
+  int64_t id() const {
+    return id_;
+  }
+
+  static std::shared_ptr<Foo> create(int64_t id) {
+    // Return the same instance if the id is already in the map, to make
+    // the operator== work with the instance before and after serde.
+    if (instances_.find(id) != instances_.end()) {
+      return instances_[id];
+    }
+    instances_[id] = std::make_shared<Foo>(id);
+    return instances_[id];
+  }
+
+  static std::string serialize(const std::shared_ptr<Foo>& foo) {
+    return std::to_string(foo->id_);
+  }
+
+  static std::shared_ptr<Foo> deserialize(const std::string& serialized) {
+    if (serialized == "") {
+      return nullptr;
+    }
+    return create(std::stoi(serialized));
+  }
+
+ private:
+  int64_t id_;
+  static std::unordered_map<int64_t, std::shared_ptr<Foo>> instances_;
+};
+
+std::unordered_map<int64_t, std::shared_ptr<Foo>> Foo::instances_;
 
 class PrestoSerializerTest
     : public ::testing::TestWithParam<common::CompressionKind>,
@@ -45,6 +84,10 @@ class PrestoSerializerTest
 
   void SetUp() override {
     serde_ = std::make_unique<serializer::presto::PrestoVectorSerde>();
+  }
+
+  void TearDown() override {
+    OpaqueType::clearSerializationRegistry();
   }
 
   void sanityCheckEstimateSerializedSize(const RowVectorPtr& rowVector) {
@@ -79,7 +122,7 @@ class PrestoSerializerTest
     const bool preserveEncodings =
         serdeOptions == nullptr ? false : serdeOptions->preserveEncodings;
     serializer::presto::PrestoVectorSerde::PrestoOptions paramOptions{
-        useLosslessTimestamp, kind, nullsFirst, preserveEncodings};
+        useLosslessTimestamp, kind, 0.8, nullsFirst, preserveEncodings};
 
     return paramOptions;
   }
@@ -176,21 +219,24 @@ class PrestoSerializerTest
       // Unsupported options
       return;
     }
-    std::vector<serializer::presto::PrestoVectorSerde::Token> tokens;
+    std::vector<serializer::presto::Token> tokens;
     const auto status = serializer::presto::PrestoVectorSerde::lex(
         input, tokens, &paramOptions);
     EXPECT_TRUE(status.ok()) << status.message();
+
     size_t tokenLengthSum = 0;
-    for (auto const& token : tokens) {
-      tokenLengthSum += token.length;
-    }
-    for (auto const& token : tokens) {
+    for (size_t i = 0; i < tokens.size(); ++i) {
+      const auto& token = tokens[i];
+
       // The lexer should not produce empty tokens
       EXPECT_NE(token.length, 0);
-    }
-    for (size_t i = 1; i < tokens.size(); ++i) {
-      // The lexer should merge consecutive tokens of the same type
-      EXPECT_NE(tokens[i].tokenType, tokens[i - 1].tokenType);
+      // Compute tokenLengthSum to validate with input.size().
+      tokenLengthSum += token.length;
+
+      if (i > 0) {
+        // The lexer should merge consecutive tokens of the same type
+        EXPECT_NE(token.tokenType, tokens[i - 1].tokenType);
+      }
     }
     EXPECT_EQ(tokenLengthSum, input.size());
   }
@@ -198,11 +244,13 @@ class PrestoSerializerTest
   RowVectorPtr deserialize(
       const RowTypePtr& rowType,
       const std::string& input,
-      const serializer::presto::PrestoVectorSerde::PrestoOptions*
-          serdeOptions) {
+      const serializer::presto::PrestoVectorSerde::PrestoOptions* serdeOptions,
+      bool skipLexer = false) {
     auto byteStream = toByteStream(input);
     auto paramOptions = getParamSerdeOptions(serdeOptions);
-    validateLexer(input, paramOptions);
+    if (!skipLexer) {
+      validateLexer(input, paramOptions);
+    }
     RowVectorPtr result;
     serde_->deserialize(
         byteStream.get(), pool_.get(), rowType, &result, 0, &paramOptions);
@@ -770,6 +818,16 @@ class PrestoSerializerTest
          makeMapVector<StringView, int32_t>({})});
   }
 
+  void testDeserializeSingleColumn(
+      const std::string& serializedData,
+      const VectorPtr& expected) {
+    auto byteStream = toByteStream(serializedData);
+    VectorPtr deserialized;
+    serde_->deserializeSingleColumn(
+        byteStream.get(), pool(), expected->type(), &deserialized, nullptr);
+    assertEqualVectors(expected, deserialized);
+  }
+
   std::unique_ptr<serializer::presto::PrestoVectorSerde> serde_;
   folly::Random::DefaultGenerator rng_;
 };
@@ -825,6 +883,19 @@ TEST_P(PrestoSerializerTest, emptyPage) {
   assertEqualVectors(deserialized, rowVector);
 }
 
+TEST_P(PrestoSerializerTest, invalidPage) {
+  auto rowVector = makeEmptyTestVector();
+
+  std::ostringstream out;
+  serialize(rowVector, &out, nullptr);
+
+  auto invalidPage = ""; // empty string
+  auto rowType = asRowType(rowVector->type());
+  VELOX_ASSERT_THROW(
+      deserialize(rowType, invalidPage, nullptr, true /*skipLexer*/),
+      "PrestoPage header is invalid: 0 bytes for header");
+}
+
 TEST_P(PrestoSerializerTest, initMemory) {
   const auto numRows = 100;
   auto testFunc = [&](TypePtr type, int64_t expectedBytes) {
@@ -837,19 +908,21 @@ TEST_P(PrestoSerializerTest, initMemory) {
     ASSERT_EQ(pool_->usedBytes() - poolMemUsage, expectedBytes);
   };
 
-  testFunc(BOOLEAN(), 0);
-  testFunc(TINYINT(), 0);
-  testFunc(SMALLINT(), 0);
-  testFunc(INTEGER(), 0);
-  testFunc(BIGINT(), 0);
-  testFunc(REAL(), 0);
-  testFunc(DOUBLE(), 0);
-  testFunc(VARCHAR(), 0);
-  testFunc(TIMESTAMP(), 0);
+  // 8192 for slab allocation for 64-bit header + 384 for memory pool allocated
+  // std structures
+  testFunc(BOOLEAN(), 8576);
+  testFunc(TINYINT(), 8576);
+  testFunc(SMALLINT(), 8576);
+  testFunc(INTEGER(), 8576);
+  testFunc(BIGINT(), 8576);
+  testFunc(REAL(), 8576);
+  testFunc(DOUBLE(), 8576);
+  testFunc(VARCHAR(), 8576);
+  testFunc(TIMESTAMP(), 8576);
   // For nested types, 2 pages allocation quantum for first offset (0).
-  testFunc(ROW({VARCHAR()}), 8192);
-  testFunc(ARRAY(INTEGER()), 8192);
-  testFunc(MAP(VARCHAR(), INTEGER()), 8192);
+  testFunc(ROW({VARCHAR()}), 8960);
+  testFunc(ARRAY(INTEGER()), 8960);
+  testFunc(MAP(VARCHAR(), INTEGER()), 9280);
 }
 
 TEST_P(PrestoSerializerTest, serializeNoRowsSelected) {
@@ -1090,6 +1163,89 @@ TEST_P(PrestoSerializerTest, longDecimal) {
 
   // Add some nulls.
   for (auto i = 0; i < 102; i += 7) {
+    vector->setNull(i, true);
+  }
+  testRoundTrip(vector);
+}
+
+TEST_P(PrestoSerializerTest, ipprefix) {
+  std::vector<int128_t> randomIpAddresss;
+  randomIpAddresss.reserve(100);
+  for (auto i = 0; i < 100; i++) {
+    randomIpAddresss.push_back(
+        HugeInt::build(folly::Random::rand64(), folly::Random::rand64()));
+  }
+  auto ipaddress = makeFlatVector<int128_t>(
+      100,
+      [&](auto row) { return randomIpAddresss.at(row); },
+      /* isNullAt */ nullptr,
+      IPADDRESS());
+
+  auto prefix = makeFlatVector<int8_t>(
+      100,
+      [&](auto row) {
+        if (randomIpAddresss.at(row) >= 4294967296) {
+          return folly::Random::rand32(33, 65);
+        }
+        return folly::Random::rand32(0, 33);
+      },
+      /* isNullAt */ nullptr,
+      TINYINT());
+
+  auto vector = std::make_shared<RowVector>(
+      pool_.get(),
+      IPPREFIX(),
+      BufferPtr(nullptr),
+      100,
+      std::vector<VectorPtr>{ipaddress, prefix});
+
+  testRoundTrip(vector);
+
+  // Add some nulls.
+  for (auto i = 0; i < 100; i += 7) {
+    vector->setNull(i, true);
+  }
+  testRoundTrip(vector);
+
+  // Test that if the vector is wrapped, we can still properly
+  // deserialize the ipprefix type
+  auto oneIndex = makeIndices(100, [](auto row) { return row; });
+  auto wrappedVector = makeRowVector({
+      BaseVector::wrapInDictionary(
+          makeNulls(100, [](auto row) { return row % 2 == 0; }),
+          oneIndex,
+          100,
+          vector),
+  });
+  testRoundTrip(wrappedVector);
+}
+
+TEST_P(PrestoSerializerTest, ipaddress) {
+  auto ipaddress = makeFlatVector<int128_t>(
+      100,
+      [](auto row) {
+        return HugeInt::build(folly::Random::rand64(), folly::Random::rand64());
+      },
+      /* isNullAt */ nullptr,
+      IPADDRESS());
+
+  testRoundTrip(ipaddress);
+
+  // Add some nulls.
+  for (auto i = 0; i < 100; i += 7) {
+    ipaddress->setNull(i, true);
+  }
+  testRoundTrip(ipaddress);
+}
+
+TEST_P(PrestoSerializerTest, uuid) {
+  auto vector = makeFlatVector<int128_t>(
+      200, [](vector_size_t row) { return (int128_t)0xD1 << row % 120; });
+
+  testRoundTrip(vector);
+
+  // Add some nulls.
+  for (auto i = 0; i < vector->size(); i += 7) {
     vector->setNull(i, true);
   }
   testRoundTrip(vector);
@@ -1339,6 +1495,40 @@ TEST_P(PrestoSerializerTest, encodedRoundtrip) {
   }
 }
 
+TEST_P(PrestoSerializerTest, opaqueBatchVectorSerializer) {
+  OpaqueType::registerSerialization<Foo>(
+      "Foo", Foo::serialize, Foo::deserialize);
+  auto inputVector = makeFlatVector<std::shared_ptr<void>>(
+      3,
+      [](vector_size_t row) { return Foo::create(row + 10); },
+      [](vector_size_t row) { return row == 1; },
+      OPAQUE<Foo>());
+  auto inputRowVector = makeRowVector({inputVector});
+
+  std::ostringstream out;
+  serializeBatch(inputRowVector, &out, nullptr);
+
+  auto rowType = asRowType(inputRowVector->type());
+  auto deserialized = deserialize(rowType, out.str(), nullptr);
+  assertEqualVectors(inputRowVector, deserialized);
+}
+
+TEST_P(PrestoSerializerTest, opaqueInteractiveVectorSerializer) {
+  OpaqueType::registerSerialization<Foo>(
+      "Foo", Foo::serialize, Foo::deserialize);
+  auto inputVector = makeFlatVector<std::shared_ptr<void>>(
+      3,
+      [](vector_size_t row) { return Foo::create(row + 10); },
+      [](vector_size_t row) { return row == 1; },
+      OPAQUE<Foo>());
+  auto inputRowVector = makeRowVector({inputVector});
+
+  std::ostringstream out;
+  VELOX_ASSERT_THROW(
+      serialize(inputRowVector, &out, nullptr),
+      "Opaque type support is not implemented");
+}
+
 TEST_P(PrestoSerializerTest, encodedConcatenation) {
   // Slow test, run only for no compression.
   if (GetParam() != common::CompressionKind::CompressionKind_NONE) {
@@ -1533,14 +1723,16 @@ INSTANTIATE_TEST_SUITE_P(
         common::CompressionKind::CompressionKind_LZ4,
         common::CompressionKind::CompressionKind_GZIP));
 
-TEST_F(PrestoSerializerTest, deserializeSingleColumn) {
-  // Verify that deserializeSingleColumn API can handle all supported types.
-  static const size_t kPrestoPageHeaderBytes = 21;
-  static const size_t kNumOfColumnsSerializedBytes = sizeof(int32_t);
-  static const size_t kBytesToTrim =
-      kPrestoPageHeaderBytes + kNumOfColumnsSerializedBytes;
+TEST_F(PrestoSerializerTest, serdeSingleColumn) {
+  // The difference between serialized data obtained from
+  // PrestoIterativeVectorSerializer and serializeSingleColumn() is the
+  // PrestoPage header and number of columns section in the serialized data.
+  auto testSerializeRoundTrip = [&](const VectorPtr& vector) {
+    static const size_t kPrestoPageHeaderBytes = 21;
+    static const size_t kNumOfColumnsSerializedBytes = sizeof(int32_t);
+    static const size_t kBytesToTrim =
+        kPrestoPageHeaderBytes + kNumOfColumnsSerializedBytes;
 
-  auto testRoundTripSingleColumn = [&](const VectorPtr& vector) {
     auto rowVector = makeRowVector({vector});
     // Serialize to PrestoPage format.
     std::ostringstream output;
@@ -1559,14 +1751,17 @@ TEST_F(PrestoSerializerTest, deserializeSingleColumn) {
     // Remove the PrestoPage header and Number of columns section from the
     // serialized data.
     std::string input = output.str().substr(kBytesToTrim);
-
-    auto byteStream = toByteStream(input);
-    VectorPtr deserialized;
-    serde_->deserializeSingleColumn(
-        byteStream.get(), pool(), vector->type(), &deserialized, nullptr);
-    assertEqualVectors(vector, deserialized);
+    testDeserializeSingleColumn(input, vector);
   };
 
+  auto testSerializeSingleColumnRoundTrip = [&](const VectorPtr& vector) {
+    std::ostringstream output;
+    serde_->serializeSingleColumn(vector, nullptr, pool_.get(), &output);
+    const auto serialized = output.str();
+    testDeserializeSingleColumn(serialized, vector);
+  };
+
+  // Verify that (de)serializeSingleColumn API can handle all supported types.
   std::vector<TypePtr> typesToTest = {
       BOOLEAN(),
       TINYINT(),
@@ -1577,6 +1772,7 @@ TEST_F(PrestoSerializerTest, deserializeSingleColumn) {
       DOUBLE(),
       VARCHAR(),
       TIMESTAMP(),
+      OPAQUE<Foo>(),
       ROW({VARCHAR(), INTEGER()}),
       ARRAY(INTEGER()),
       ARRAY(INTEGER()),
@@ -1600,11 +1796,26 @@ TEST_F(PrestoSerializerTest, deserializeSingleColumn) {
   LOG(ERROR) << "Seed: " << seed;
   SCOPED_TRACE(fmt::format("seed: {}", seed));
   VectorFuzzer fuzzer(opts, pool_.get(), seed);
+  fuzzer.registerOpaqueTypeGenerator<Foo>([](FuzzerGenerator& rng) {
+    int64_t id = boost::random::uniform_int_distribution<int64_t>(1, 10)(rng);
+    return Foo::create(id);
+  });
+  OpaqueType::registerSerialization<Foo>(
+      "Foo", Foo::serialize, Foo::deserialize);
 
   for (const auto& type : typesToTest) {
     SCOPED_TRACE(fmt::format("Type: {}", type->toString()));
     auto data = fuzzer.fuzz(type);
-    testRoundTripSingleColumn(data);
+
+    // Test deserializeSingleColumn() round trip with serialized data obtained
+    // by PrestoIterativeVectorSerializer. This serialized data includes the
+    // PrestoPage header and number of columns, which is removed for testing.
+    testSerializeRoundTrip(data);
+
+    // Test serializeSingleColumn() round trip with deserializeSingleColumn(),
+    // both of these functions do not consider the PrestoPage header and number
+    // of columns when (de)serializing the data.
+    testSerializeSingleColumnRoundTrip(data);
   }
 }
 

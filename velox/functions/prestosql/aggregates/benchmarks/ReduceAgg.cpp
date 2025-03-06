@@ -17,7 +17,7 @@
 #include <folly/init/Init.h>
 #include <string>
 
-#include "velox/exec/tests/utils/Cursor.h"
+#include "velox/exec/Cursor.h"
 #include "velox/exec/tests/utils/HiveConnectorTestBase.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
 #include "velox/vector/fuzzer/VectorFuzzer.h"
@@ -190,7 +190,7 @@ class ReduceAggBenchmark : public HiveConnectorTestBase {
         std::move(plan),
         0,
         core::QueryCtx::create(executor_.get()),
-        exec::Task::ExecutionMode::kParallel);
+        exec::Task::ExecutionMode::kSerial);
 
     task->addSplit(
         "0", exec::Split(makeHiveConnectorSplit(filePath_->getPath())));

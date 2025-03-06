@@ -46,7 +46,7 @@ class IntDecoder {
         numBytes_(numBytes),
         bigEndian_(bigEndian) {}
 
-  /// Constructs for use in Parquet /Alphawhere the buffer is always preloaded.
+  /// Constructs for use in Parquet where the buffer is always preloaded.
   IntDecoder(const char* start, const char* end)
       : bufferStart_(start), bufferEnd_(end), useVInts_(false), numBytes_(0) {}
 
@@ -149,6 +149,9 @@ class IntDecoder {
 
   template <typename T>
   T readInt();
+
+  // Reads Int96 timestamp composed of days and nanos as int128_t.
+  int128_t readInt96();
 
   template <typename T>
   T readVInt();
@@ -438,10 +441,27 @@ inline T IntDecoder<isSigned>::readInt() {
     return readLittleEndianFromBigEndian<T>();
   } else {
     if constexpr (std::is_same_v<T, int128_t>) {
+      if (numBytes_ == 8) {
+        return readLongLE();
+      }
+      if (numBytes_ == 12) {
+        VELOX_DCHECK(!useVInts_, "Int96 should not be VInt encoded.");
+        return readInt96();
+      }
       VELOX_NYI();
     }
     return readLongLE();
   }
+}
+
+template <bool isSigned>
+inline int128_t IntDecoder<isSigned>::readInt96() {
+  int128_t result = 0;
+  for (int i = 0; i < 12; ++i) {
+    auto ch = readByte();
+    result |= static_cast<uint128_t>(ch & BASE_256_MASK) << (i * 8);
+  }
+  return result;
 }
 
 template <bool isSigned>
