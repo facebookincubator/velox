@@ -20,7 +20,7 @@ source $SCRIPTDIR/setup-versions.sh
 VELOX_BUILD_SHARED=${VELOX_BUILD_SHARED:-"OFF"} #Build folly and gflags shared for use in libvelox.so.
 CMAKE_BUILD_TYPE="${BUILD_TYPE:-Release}"
 DEPENDENCY_DIR=${DEPENDENCY_DIR:-$(pwd)}
-
+BUILD_GEOS="${BUILD_GEOS:-true}"
 BUILD_DUCKDB="${BUILD_DUCKDB:-true}"
 
 USE_CLANG="${USE_CLANG:-false}"
@@ -187,6 +187,13 @@ function install_stemmer {
     ${SUDO} cp libstemmer.a ${INSTALL_PREFIX}/lib/
     ${SUDO} cp include/libstemmer.h ${INSTALL_PREFIX}/include/
   )
+}
+
+function install_geos {
+  if [[ "$BUILD_GEOS" == "true" ]]; then
+    wget_and_untar https://github.com/libgeos/geos/archive/${GEOS_VERSION}.tar.gz geos
+    cmake_install_dir geos -DBUILD_TESTING=OFF
+  fi
 }
 
 # Adapters that can be installed.
