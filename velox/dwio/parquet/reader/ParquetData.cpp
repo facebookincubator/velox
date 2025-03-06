@@ -17,15 +17,65 @@
 #include "velox/dwio/parquet/reader/ParquetData.h"
 
 #include "velox/dwio/common/BufferedInput.h"
+#include "velox/dwio/parquet/common/ParquetBloomFilter.h"
 #include "velox/dwio/parquet/reader/ParquetStatsContext.h"
 
 namespace facebook::velox::parquet {
+
+using thrift::RowGroup;
+
+namespace {
+bool isFilterRangeCoversStatsRange(
+    common::Filter* filter,
+    dwio::common::ColumnStatistics* stats,
+    const TypePtr& type) {
+  switch (type->kind()) {
+    case TypeKind::BIGINT:
+    case TypeKind::INTEGER:
+    case TypeKind::SMALLINT:
+    case TypeKind::TINYINT: {
+      auto intStats =
+          dynamic_cast<dwio::common::IntegerColumnStatistics*>(stats);
+      if (!intStats) {
+        return false;
+      }
+
+      int64_t min =
+          intStats->getMinimum().value_or(std::numeric_limits<int64_t>::min());
+      int64_t max =
+          intStats->getMaximum().value_or(std::numeric_limits<int64_t>::max());
+
+      switch (filter->kind()) {
+        case common::FilterKind::kBigintRange:
+          return static_cast<common::BigintRange*>(filter)->lower() <= min &&
+              max <= static_cast<common::BigintRange*>(filter)->upper();
+        case common::FilterKind::kBigintMultiRange: {
+          common::BigintMultiRange* multiRangeFilter =
+              static_cast<common::BigintMultiRange*>(filter);
+          auto numRanges = multiRangeFilter->ranges().size();
+          if (numRanges > 0) {
+            return multiRangeFilter->ranges()[0]->lower() <= min &&
+                max <= multiRangeFilter->ranges()[numRanges - 1]->upper();
+          }
+          break;
+        }
+        default:
+          return false;
+      }
+      break;
+    }
+    default:
+      return false;
+  }
+  return false;
+}
+} // namespace
 
 std::unique_ptr<dwio::common::FormatData> ParquetParams::toFormatData(
     const std::shared_ptr<const dwio::common::TypeWithId>& type,
     const common::ScanSpec& /*scanSpec*/) {
   return std::make_unique<ParquetData>(
-      type, metaData_, pool(), sessionTimezone_);
+      type, metaData_, pool(), sessionTimezone_, parquetReadBloomFilter_);
 }
 
 void ParquetData::filterRowGroups(
@@ -47,6 +97,7 @@ void ParquetData::filterRowGroups(
     result.filterResult.resize(nwords);
   }
   auto metadataFiltersStartIndex = result.metadataFilterResults.size();
+
   for (int i = 0; i < scanSpec.numMetadataFilters(); ++i) {
     result.metadataFilterResults.emplace_back(
         scanSpec.metadataFilterNodeAt(i), std::vector<uint64_t>(nwords));
@@ -80,12 +131,31 @@ bool ParquetData::rowGroupMatches(uint32_t rowGroupId, common::Filter* filter) {
     return true;
   }
 
+  bool needsToCheckBloomFilter = true;
   auto columnChunk = rowGroup.columnChunk(column);
   if (columnChunk.hasStatistics()) {
     auto columnStats =
         columnChunk.getColumnStatistics(type, rowGroup.numRows());
-    return testFilter(filter, columnStats.get(), rowGroup.numRows(), type);
+    if (!testFilter(filter, columnStats.get(), rowGroup.numRows(), type)) {
+      return false;
+    }
+
+    // We can avoid testing bloom filter unnecessarily if we know that the
+    // filter (min,max) range is a superset of the stats (min,max) range. For
+    // example, if the filter is "COL between 1 and 20" and the column stats
+    // range is (5,10), then we have to read the whole row group and hence avoid
+    // bloom filter test.
+    needsToCheckBloomFilter = parquetReadBloomFilter_ &&
+        !isFilterRangeCoversStatsRange(filter, columnStats.get(), type);
   }
+
+  if (needsToCheckBloomFilter &&
+      rowGroup.columnChunk(column).hasBloomFilterOffset()) {
+    std::unique_ptr<common::AbstractBloomFilter> parquetBloomFilter =
+        std::make_unique<ParquetBloomFilter>(getBloomFilter(rowGroupId));
+    return filter->testBloomFilter(*parquetBloomFilter, *type);
+  }
+
   return true;
 }
 
@@ -146,6 +216,63 @@ std::pair<int64_t, int64_t> ParquetData::getRowGroupRegion(
       : rowGroup.totalByteSize();
 
   return {fileOffset, length};
+}
+
+void ParquetData::setBloomFilterInputStream(
+    uint32_t rowGroupId,
+    dwio::common::BufferedInput& bufferedInput) {
+  bloomFilterInputStreams_.resize(fileMetaDataPtr_.numRowGroups());
+  if (bloomFilterInputStreams_[rowGroupId] != nullptr) {
+    return;
+  }
+  auto rowGroup = fileMetaDataPtr_.rowGroup(rowGroupId);
+  auto colChunk = rowGroup.columnChunk(type_->column());
+
+  if (!colChunk.hasBloomFilterOffset()) {
+    return;
+  }
+
+  VELOX_CHECK(
+      !colChunk.hasCryptoMetadata(), "Cannot read encrypted bloom filter yet");
+
+  auto bloomFilterOffset = colChunk.bloomFilterOffset();
+  auto fileSize = bufferedInput.getInputStream()->getLength();
+  VELOX_CHECK_GT(
+      fileSize,
+      bloomFilterOffset,
+      "file size {} less or equal than bloom offset {}",
+      fileSize,
+      bloomFilterOffset);
+
+  auto id = dwio::common::StreamIdentifier(type_->column());
+  bloomFilterInputStreams_[rowGroupId] = bufferedInput.enqueue(
+      {static_cast<uint64_t>(bloomFilterOffset), fileSize - bloomFilterOffset},
+      &id);
+}
+
+std::shared_ptr<BloomFilter> ParquetData::getBloomFilter(uint32_t rowGroupId) {
+  auto columnBloomFilterIter = columnBloomFilterMap_.find(rowGroupId);
+  if (columnBloomFilterIter != columnBloomFilterMap_.end()) {
+    return columnBloomFilterIter->second;
+  }
+
+  VELOX_CHECK_LT(
+      rowGroupId,
+      fileMetaDataPtr_.numRowGroups(),
+      "Invalid row group ordinal: {}",
+      rowGroupId);
+
+  if (bloomFilterInputStreams_[rowGroupId] == nullptr) {
+    return nullptr;
+  }
+
+  auto bloomFilter = BlockSplitBloomFilter::deserialize(
+      bloomFilterInputStreams_[rowGroupId].get(), pool_);
+
+  auto blockSplitBloomFilter =
+      std::make_shared<BlockSplitBloomFilter>(std::move(bloomFilter));
+  columnBloomFilterMap_[rowGroupId] = blockSplitBloomFilter;
+  return blockSplitBloomFilter;
 }
 
 } // namespace facebook::velox::parquet

@@ -210,6 +210,15 @@ bool ColumnChunkMetaDataPtr::hasDictionaryPageOffset() const {
       thriftColumnChunkPtr(ptr_)->meta_data.__isset.dictionary_page_offset;
 }
 
+bool ColumnChunkMetaDataPtr::hasBloomFilterOffset() const {
+  return hasMetadata() &&
+      thriftColumnChunkPtr(ptr_)->meta_data.__isset.bloom_filter_offset;
+}
+
+bool ColumnChunkMetaDataPtr::hasCryptoMetadata() const {
+  return thriftColumnChunkPtr(ptr_)->__isset.crypto_metadata;
+}
+
 std::unique_ptr<dwio::common::ColumnStatistics>
 ColumnChunkMetaDataPtr::getColumnStatistics(
     const TypePtr type,
@@ -226,6 +235,11 @@ int64_t ColumnChunkMetaDataPtr::dataPageOffset() const {
 int64_t ColumnChunkMetaDataPtr::dictionaryPageOffset() const {
   VELOX_CHECK(hasDictionaryPageOffset());
   return thriftColumnChunkPtr(ptr_)->meta_data.dictionary_page_offset;
+}
+
+int64_t ColumnChunkMetaDataPtr::bloomFilterOffset() const {
+  VELOX_CHECK(hasBloomFilterOffset());
+  return thriftColumnChunkPtr(ptr_)->meta_data.bloom_filter_offset;
 }
 
 common::CompressionKind ColumnChunkMetaDataPtr::compression() const {

@@ -33,6 +33,33 @@ namespace facebook::velox::parquet {
 
 class ParquetTestBase : public testing::Test,
                         public velox::test::VectorTestBase {
+ public:
+  static dwio::common::RowReaderOptions getReaderOpts(
+      const RowTypePtr& rowType,
+      bool fileColumnNamesReadAsLowerCase = false) {
+    dwio::common::RowReaderOptions rowReaderOpts;
+    rowReaderOpts.select(
+        std::make_shared<facebook::velox::dwio::common::ColumnSelector>(
+            rowType,
+            rowType->names(),
+            nullptr,
+            fileColumnNamesReadAsLowerCase));
+
+    return rowReaderOpts;
+  }
+
+  static std::string getExampleFilePath(const std::string& fileName) {
+    return test::getDataFilePath(
+        "velox/dwio/parquet/tests/reader", "../examples/" + fileName);
+  }
+
+  static std::shared_ptr<velox::common::ScanSpec> makeScanSpec(
+      const RowTypePtr& rowType) {
+    auto scanSpec = std::make_shared<velox::common::ScanSpec>("");
+    scanSpec->addAllChildFields(*rowType);
+    return scanSpec;
+  }
+
  protected:
   static void SetUpTestCase() {
     memory::MemoryManager::testingSetInstance({});
@@ -70,27 +97,6 @@ class ParquetTestBase : public testing::Test,
         std::move(input), opts);
   }
 
-  dwio::common::RowReaderOptions getReaderOpts(
-      const RowTypePtr& rowType,
-      bool fileColumnNamesReadAsLowerCase = false) {
-    dwio::common::RowReaderOptions rowReaderOpts;
-    rowReaderOpts.select(
-        std::make_shared<facebook::velox::dwio::common::ColumnSelector>(
-            rowType,
-            rowType->names(),
-            nullptr,
-            fileColumnNamesReadAsLowerCase));
-
-    return rowReaderOpts;
-  }
-
-  std::shared_ptr<velox::common::ScanSpec> makeScanSpec(
-      const RowTypePtr& rowType) {
-    auto scanSpec = std::make_shared<velox::common::ScanSpec>("");
-    scanSpec->addAllChildFields(*rowType);
-    return scanSpec;
-  }
-
   using FilterMap =
       std::unordered_map<std::string, std::unique_ptr<velox::common::Filter>>;
 
@@ -115,7 +121,7 @@ class ParquetTestBase : public testing::Test,
       memory::MemoryPool& memoryPool) {
     uint64_t total = 0;
     VectorPtr result = BaseVector::create(outputType, 0, &memoryPool);
-    while (total < expected->size()) {
+    do {
       auto part = reader.next(1000, result);
       if (part > 0) {
         assertEqualVectorPart(expected, result, total);
@@ -123,7 +129,7 @@ class ParquetTestBase : public testing::Test,
       } else {
         break;
       }
-    }
+    } while (total < expected->size());
     EXPECT_EQ(total, expected->size());
     EXPECT_EQ(reader.next(1000, result), 0);
   }
@@ -133,7 +139,9 @@ class ParquetTestBase : public testing::Test,
       const std::string& /* fileName */,
       const RowTypePtr& fileSchema,
       FilterMap filters,
-      const RowVectorPtr& expected) {
+      const RowVectorPtr& expected,
+      std::shared_ptr<facebook::velox::dwio::common::RuntimeStatistics>
+          runtimeStats = nullptr) {
     auto scanSpec = makeScanSpec(fileSchema);
     for (auto&& [column, filter] : filters) {
       scanSpec->getOrCreateChild(velox::common::Subfield(column))
@@ -145,6 +153,9 @@ class ParquetTestBase : public testing::Test,
     auto rowReader = reader->createRowReader(rowReaderOpts);
     assertReadWithReaderAndExpected(
         fileSchema, *rowReader, expected, *leafPool_);
+    if (runtimeStats != nullptr) {
+      rowReader->updateRuntimeStats(*runtimeStats);
+    }
   }
 
   std::unique_ptr<dwio::common::FileSink> createSink(
@@ -184,11 +195,6 @@ class ParquetTestBase : public testing::Test,
       batches.emplace_back(fuzzer.fuzzInputFlatRow(rowType));
     }
     return batches;
-  }
-
-  std::string getExampleFilePath(const std::string& fileName) {
-    return test::getDataFilePath(
-        "velox/dwio/parquet/tests/reader", "../examples/" + fileName);
   }
 
   static constexpr uint64_t kRowsInRowGroup = 10'000;

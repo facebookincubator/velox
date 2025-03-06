@@ -37,6 +37,12 @@ class ColumnChunkMetaDataPtr {
   /// Check the presence of the dictionary page offset in ColumnChunk metadata.
   bool hasDictionaryPageOffset() const;
 
+  // Check the presence of the bloom filter offset in ColumnChunk metadata
+  bool hasBloomFilterOffset() const;
+
+  // Check the presence of crypto metadata in ColumnChunk metadata
+  bool hasCryptoMetadata() const;
+
   /// Return the ColumnChunk statistics.
   std::unique_ptr<dwio::common::ColumnStatistics> getColumnStatistics(
       const TypePtr type,
@@ -51,6 +57,8 @@ class ColumnChunkMetaDataPtr {
   /// The dictionary page offset.
   /// Must check for its presence using hasDictionaryPageOffset().
   int64_t dictionaryPageOffset() const;
+
+  int64_t bloomFilterOffset() const;
 
   /// The compression.
   common::CompressionKind compression() const;

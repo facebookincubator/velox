@@ -107,6 +107,13 @@ bool HiveConfig::isFileColumnNamesReadAsLowerCase(
       config_->get<bool>(kFileColumnNamesReadAsLowerCase, false));
 }
 
+bool HiveConfig::isParquetReadBloomFilter(
+    const config::ConfigBase* session) const {
+  return session->get<bool>(
+      kParquetReadBloomFilterSession,
+      config_->get<bool>(kParquetReadBloomFilter, false));
+}
+
 bool HiveConfig::isPartitionPathAsLowerCase(
     const config::ConfigBase* session) const {
   return session->get<bool>(kPartitionPathAsLowerCaseSession, true);

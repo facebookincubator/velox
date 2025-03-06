@@ -26,22 +26,24 @@ namespace facebook::velox::parquet {
 
 class XxHasher : public Hasher {
  public:
-  uint64_t hash(int32_t value) const override;
-  uint64_t hash(int64_t value) const override;
-  uint64_t hash(float value) const override;
-  uint64_t hash(double value) const override;
-  uint64_t hash(const ByteArray* value) const override;
+  uint64_t hashInt32(int32_t value) const override;
+  uint64_t hashInt64(int64_t value) const override;
+  uint64_t hashFloat(float value) const override;
+  uint64_t hashDouble(double value) const override;
+  uint64_t hashByteArray(const ByteArray* value) const override;
 
-  void hashes(const int32_t* values, int numValues, uint64_t* hashes)
+  void hashesInt32(const int32_t* values, int numValues, uint64_t* hashes)
       const override;
-  void hashes(const int64_t* values, int numValues, uint64_t* hashes)
+  void hashesInt64(const int64_t* values, int numValues, uint64_t* hashes)
       const override;
-  void hashes(const float* values, int numValues, uint64_t* hashes)
+  void hashesFloat(const float* values, int numValues, uint64_t* hashes)
       const override;
-  void hashes(const double* values, int numValues, uint64_t* hashes)
+  void hashesDouble(const double* values, int numValues, uint64_t* hashes)
       const override;
-  virtual void hashes(const ByteArray* values, int numValues, uint64_t* hashes)
-      const override;
+  virtual void hashesByteArray(
+      const ByteArray* values,
+      int numValues,
+      uint64_t* hashes) const override;
 
   static constexpr int kParquetBloomXxHashSeed = 0;
 };

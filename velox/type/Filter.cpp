@@ -280,6 +280,24 @@ bool BigintRange::testingEquals(const Filter& other) const {
       (upper_ == otherBigintRange->upper_);
 }
 
+bool BigintRange::testBloomFilter(
+    const AbstractBloomFilter& bloomFilter,
+    const velox::Type& type) const {
+  // Don't test bloom filter for a wider range
+  if ((upper_ - lower_) > kMaxBloomFilterChecks)
+    return true;
+
+  switch (type.kind()) {
+    case TypeKind::INTEGER:
+      return bloomFilter.mightContainInt32Range(lower32_, upper32_);
+    case TypeKind::BIGINT:
+      return bloomFilter.mightContainInt64Range(lower_, upper_);
+    default:
+      return true;
+  }
+  return false;
+}
+
 folly::dynamic NegatedBigintRange::serialize() const {
   auto obj = Filter::serializeBase("NegatedBigintRange");
   obj["lower"] = nonNegated_->lower();
@@ -389,6 +407,26 @@ bool BigintValuesUsingHashTable::testingEquals(const Filter& other) const {
   return true;
 }
 
+bool BigintValuesUsingHashTable::testBloomFilter(
+    const AbstractBloomFilter& bloomFilter,
+    const velox::Type& type) const {
+  // Limit checks to IN-list with upto 10 values.
+  if (values_.size() > kMaxBloomFilterChecks) {
+    return true;
+  }
+
+  // For IN-list, if any value matches, return true.
+  switch (type.kind()) {
+    case TypeKind::INTEGER:
+      return bloomFilter.mightContainInt32Values(values_);
+    case TypeKind::BIGINT:
+      return bloomFilter.mightContainInt64Values(values_);
+    default:
+      return true;
+  }
+  return false;
+}
+
 folly::dynamic BigintValuesUsingBitmask::serialize() const {
   auto obj = Filter::serializeBase("BigintValuesUsingBitmask");
   obj["min"] = min_;
@@ -433,6 +471,25 @@ bool BigintValuesUsingBitmask::testingEquals(const Filter& other) const {
   }
 
   return true;
+}
+
+bool BigintValuesUsingBitmask::testBloomFilter(
+    const AbstractBloomFilter& bloomFilter,
+    const velox::Type& type) const {
+  // Limit checks to only maxBloomFilterChecks values
+  if (bitmask_.size() > kMaxBloomFilterChecks) {
+    return true;
+  }
+
+  switch (type.kind()) {
+    case TypeKind::INTEGER:
+      return bloomFilter.mightContainInt32Values(values());
+    case TypeKind::BIGINT:
+      return bloomFilter.mightContainInt64Values(values());
+    default:
+      return true;
+  }
+  return false;
 }
 
 folly::dynamic NegatedBigintValuesUsingHashTable::serialize() const {
@@ -569,6 +626,15 @@ bool BytesRange::testingEquals(const Filter& other) const {
       singleValue_ == otherBytesRange->singleValue_;
 }
 
+bool BytesRange::testBloomFilter(
+    const AbstractBloomFilter& bloomFilter,
+    const velox::Type& type) const {
+  if (!singleValue_) {
+    return true;
+  }
+  return bloomFilter.mightContainString(lower_);
+}
+
 folly::dynamic NegatedBytesRange::serialize() const {
   auto obj = Filter::serializeBase("NegatedBytesRange");
   obj["nonNegated"] = nonNegated_->serialize();
@@ -645,6 +711,18 @@ bool BytesValues::testingEquals(const Filter& other) const {
   return true;
 }
 
+bool BytesValues::testBloomFilter(
+    const AbstractBloomFilter& bloomFilter,
+    const velox::Type& type) const {
+  // For IN-list, if any value matches, return true.
+  // Limit checks to IN-list with only 10 values.
+  if (values_.size() > kMaxBloomFilterChecks) {
+    return true;
+  }
+
+  return bloomFilter.mightContainStringValues(values_);
+}
+
 folly::dynamic BigintMultiRange::serialize() const {
   auto obj = Filter::serializeBase("BigintMultiRange");
   folly::dynamic arr = folly::dynamic::array;
@@ -685,6 +763,29 @@ bool BigintMultiRange::testingEquals(const Filter& other) const {
   }
 
   return true;
+}
+
+bool BigintMultiRange::testBloomFilter(
+    const AbstractBloomFilter& bloomFilter,
+    const velox::Type& type) const {
+  int numRange = 0;
+  // Limit number of values to check to maxBloomFilterChecks.
+  std::for_each(
+      ranges_.begin(),
+      ranges_.end(),
+      [&numRange](const std::unique_ptr<BigintRange>& range) {
+        numRange = numRange + range->upper() - range->lower() + 1;
+      });
+  if (numRange > kMaxBloomFilterChecks) {
+    return true;
+  }
+
+  for (auto& range : ranges_) {
+    if (range->testBloomFilter(bloomFilter, type)) {
+      return true;
+    }
+  }
+  return false;
 }
 
 folly::dynamic NegatedBytesValues::serialize() const {
@@ -1846,6 +1947,7 @@ std::unique_ptr<Filter> BigintRange::mergeWith(const Filter* other) const {
     case FilterKind::kNegatedBigintValuesUsingBitmask:
     case FilterKind::kNegatedBigintValuesUsingHashTable: {
       bool bothNullAllowed = nullAllowed_ && other->testNull();
+      bool unused = false;
       if (!other->testInt64Range(lower_, upper_, false)) {
         return nullOrFalse(bothNullAllowed);
       }

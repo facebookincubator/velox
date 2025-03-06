@@ -42,51 +42,59 @@ void XxHashesHelper(
 
 } // namespace
 
-uint64_t XxHasher::hash(int32_t value) const {
+uint64_t XxHasher::hashInt32(int32_t value) const {
   return XxHashHelper(value, kParquetBloomXxHashSeed);
 }
 
-uint64_t XxHasher::hash(int64_t value) const {
+uint64_t XxHasher::hashInt64(int64_t value) const {
   return XxHashHelper(value, kParquetBloomXxHashSeed);
 }
 
-uint64_t XxHasher::hash(float value) const {
+uint64_t XxHasher::hashFloat(float value) const {
   return XxHashHelper(value, kParquetBloomXxHashSeed);
 }
 
-uint64_t XxHasher::hash(double value) const {
+uint64_t XxHasher::hashDouble(double value) const {
   return XxHashHelper(value, kParquetBloomXxHashSeed);
 }
 
-uint64_t XxHasher::hash(const ByteArray* value) const {
+uint64_t XxHasher::hashByteArray(const ByteArray* value) const {
   return XXH64(
       reinterpret_cast<const void*>(value->ptr),
       value->len,
       kParquetBloomXxHashSeed);
 }
 
-void XxHasher::hashes(const int32_t* values, int numValues, uint64_t* hashes)
+void XxHasher::hashesInt32(
+    const int32_t* values,
+    int numValues,
+    uint64_t* hashes) const {
+  XxHashesHelper(values, kParquetBloomXxHashSeed, numValues, hashes);
+}
+
+void XxHasher::hashesInt64(
+    const int64_t* values,
+    int numValues,
+    uint64_t* hashes) const {
+  XxHashesHelper(values, kParquetBloomXxHashSeed, numValues, hashes);
+}
+
+void XxHasher::hashesFloat(const float* values, int numValues, uint64_t* hashes)
     const {
   XxHashesHelper(values, kParquetBloomXxHashSeed, numValues, hashes);
 }
 
-void XxHasher::hashes(const int64_t* values, int numValues, uint64_t* hashes)
-    const {
+void XxHasher::hashesDouble(
+    const double* values,
+    int numValues,
+    uint64_t* hashes) const {
   XxHashesHelper(values, kParquetBloomXxHashSeed, numValues, hashes);
 }
 
-void XxHasher::hashes(const float* values, int numValues, uint64_t* hashes)
-    const {
-  XxHashesHelper(values, kParquetBloomXxHashSeed, numValues, hashes);
-}
-
-void XxHasher::hashes(const double* values, int numValues, uint64_t* hashes)
-    const {
-  XxHashesHelper(values, kParquetBloomXxHashSeed, numValues, hashes);
-}
-
-void XxHasher::hashes(const ByteArray* values, int numValues, uint64_t* hashes)
-    const {
+void XxHasher::hashesByteArray(
+    const ByteArray* values,
+    int numValues,
+    uint64_t* hashes) const {
   for (int i = 0; i < numValues; ++i) {
     hashes[i] = XXH64(
         reinterpret_cast<const void*>(values[i].ptr),
