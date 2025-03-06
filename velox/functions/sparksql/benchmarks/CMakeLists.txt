@@ -41,5 +41,5 @@ target_link_libraries(
 
 add_executable(velox_sparksql_benchmarks_cast SparkCastBenchmark.cpp)
 target_link_libraries(
-  velox_sparksql_benchmarks_cast velox_functions_spark
-  velox_benchmark_builder velox_vector_test_lib)
+  velox_sparksql_benchmarks_cast velox_functions_spark velox_benchmark_builder
+  velox_vector_test_lib)
