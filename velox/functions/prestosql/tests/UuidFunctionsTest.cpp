@@ -108,9 +108,19 @@ TEST_F(UuidFunctionsTest, castAsVarbinary) {
       VARBINARY());
 
   velox::test::assertEqualVectors(expected, result);
+
+  // Sanity check results. All strings are unique. Each string is 36 bytes
+  // long.
+  std::unordered_set<std::string> uniqueUuids;
+  for (auto i = 0; i < size; ++i) {
+    const auto uuid = result->valueAt(i).str();
+    ASSERT_EQ(36, uuid.size());
+    ASSERT_TRUE(uniqueUuids.insert(uuid).second);
+  }
+  ASSERT_EQ(size, uniqueUuids.size());
 }
 
-TEST_F(UuidFunctionsTest, castRoundTrip) {
+TEST_F(UuidFunctionsTest, varcharCastRoundTrip) {
   auto strings = makeFlatVector<std::string>({
       "33355449-2c7d-43d7-967a-f53cd23215ad",
       "eed9f812-4b0c-472f-8a10-4ae7bff79a47",
@@ -119,6 +129,23 @@ TEST_F(UuidFunctionsTest, castRoundTrip) {
 
   auto uuids = evaluate("cast(c0 as uuid)", makeRowVector({strings}));
   auto stringsCopy = evaluate("cast(c0 as varchar)", makeRowVector({uuids}));
+  auto uuidsCopy = evaluate("cast(c0 as uuid)", makeRowVector({stringsCopy}));
+
+  velox::test::assertEqualVectors(strings, stringsCopy);
+  velox::test::assertEqualVectors(uuids, uuidsCopy);
+}
+
+TEST_F(UuidFunctionsTest, varbinaryCastRoundTrip) {
+  auto strings = makeFlatVector<std::string>(
+      {
+          "33355449-2c7d-43d7-967a-f53cd23215ad",
+          "eed9f812-4b0c-472f-8a10-4ae7bff79a47",
+          "f768f36d-4f09-4da7-a298-3564d8f3c986",
+      },
+      VARBINARY());
+
+  auto uuids = evaluate("cast(c0 as uuid)", makeRowVector({strings}));
+  auto stringsCopy = evaluate("cast(c0 as varbinary)", makeRowVector({uuids}));
   auto uuidsCopy = evaluate("cast(c0 as uuid)", makeRowVector({stringsCopy}));
 
   velox::test::assertEqualVectors(strings, stringsCopy);
