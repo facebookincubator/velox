@@ -318,6 +318,12 @@ class QueryConfig {
   static constexpr const char* kSparkLegacyDateFormatter =
       "spark.legacy_date_formatter";
 
+  /// if true, statistical aggregation function includes skewness, kurtosis,
+  /// will return std::numeric_limits<double>::quiet_NaN() instead of NULL when
+  /// DivideByZero occurs during expression evaluation.
+  static constexpr const char* kSparkLegacyStatisticalAggregate =
+      "spark.legacy_statistical_aggregate";
+
   /// The number of local parallel table writer operators per task.
   static constexpr const char* kTaskWriterCount = "task_writer_count";
 
@@ -729,6 +735,10 @@ class QueryConfig {
 
   bool sparkLegacyDateFormatter() const {
     return get<bool>(kSparkLegacyDateFormatter, false);
+  }
+
+  bool sparkLegacyStatisticalAggregate() const {
+    return get<bool>(kSparkLegacyStatisticalAggregate, false);
   }
 
   bool exprTrackCpuUsage() const {
