@@ -39,7 +39,7 @@ class SerializeBenchmark {
     VELOX_CHECK_EQ(serialized.size(), data->size());
   }
 
-  void deserializeUnsafeFast(const RowTypePtr& rowType) {
+  void deserializeUnsafe(const RowTypePtr& rowType) {
     folly::BenchmarkSuspender suspender;
     auto data = makeData(rowType);
     UnsafeRowFast fast(data);
@@ -144,24 +144,6 @@ class SerializeBenchmark {
     return totalSize;
   }
 
-  std::vector<std::optional<std::string_view>> serialize(
-      UnsafeRowFast& unsafeRow,
-      vector_size_t numRows,
-      BufferPtr& buffer) {
-    std::vector<std::optional<std::string_view>> serialized;
-    auto rawBuffer = buffer->asMutable<char>();
-
-    size_t offset = 0;
-    for (auto i = 0; i < numRows; ++i) {
-      auto rowSize = unsafeRow.serialize(i, rawBuffer + offset);
-      serialized.push_back(std::string_view(rawBuffer + offset, rowSize));
-      offset += rowSize;
-    }
-
-    VELOX_CHECK_EQ(buffer->size(), offset);
-    return serialized;
-  }
-
   std::vector<char*> serializeFast(
       UnsafeRowFast& unsafeRow,
       vector_size_t numRows,
@@ -241,35 +223,35 @@ class SerializeBenchmark {
       memory::memoryManager()->addLeafPool()};
 };
 
-#define SERDE_BENCHMARKS(name, rowType)                \
-  BENCHMARK(unsafe_serialize_##name) {                 \
-    SerializeBenchmark benchmark;                      \
-    benchmark.serializeUnsafe(rowType);                \
-  }                                                    \
-                                                       \
-  BENCHMARK(compact_serialize_##name) {                \
-    SerializeBenchmark benchmark;                      \
-    benchmark.serializeCompact(rowType);               \
-  }                                                    \
-                                                       \
-  BENCHMARK(container_serialize_##name) {              \
-    SerializeBenchmark benchmark;                      \
-    benchmark.serializeContainer(rowType);             \
-  }                                                    \
-                                                       \
-  BENCHMARK_RELATIVE(unsafe_deserialize_fast_##name) { \
-    SerializeBenchmark benchmark;                      \
-    benchmark.deserializeUnsafeFast(rowType);          \
-  }                                                    \
-                                                       \
-  BENCHMARK(compact_deserialize_##name) {              \
-    SerializeBenchmark benchmark;                      \
-    benchmark.deserializeCompact(rowType);             \
-  }                                                    \
-                                                       \
-  BENCHMARK(container_deserialize_##name) {            \
-    SerializeBenchmark benchmark;                      \
-    benchmark.deserializeContainer(rowType);           \
+#define SERDE_BENCHMARKS(name, rowType)      \
+  BENCHMARK(unsafe_serialize_##name) {       \
+    SerializeBenchmark benchmark;            \
+    benchmark.serializeUnsafe(rowType);      \
+  }                                          \
+                                             \
+  BENCHMARK(compact_serialize_##name) {      \
+    SerializeBenchmark benchmark;            \
+    benchmark.serializeCompact(rowType);     \
+  }                                          \
+                                             \
+  BENCHMARK(container_serialize_##name) {    \
+    SerializeBenchmark benchmark;            \
+    benchmark.serializeContainer(rowType);   \
+  }                                          \
+                                             \
+  BENCHMARK(unsafe_deserialize_##name) {     \
+    SerializeBenchmark benchmark;            \
+    benchmark.deserializeUnsafe(rowType);    \
+  }                                          \
+                                             \
+  BENCHMARK(compact_deserialize_##name) {    \
+    SerializeBenchmark benchmark;            \
+    benchmark.deserializeCompact(rowType);   \
+  }                                          \
+                                             \
+  BENCHMARK(container_deserialize_##name) {  \
+    SerializeBenchmark benchmark;            \
+    benchmark.deserializeContainer(rowType); \
   }
 
 SERDE_BENCHMARKS(
