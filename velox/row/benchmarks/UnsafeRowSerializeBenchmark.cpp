@@ -19,7 +19,6 @@
 #include "velox/common/memory/HashStringAllocator.h"
 #include "velox/exec/ContainerRowSerde.h"
 #include "velox/row/CompactRow.h"
-#include "velox/row/UnsafeRowDeserializers.h"
 #include "velox/row/UnsafeRowFast.h"
 #include "velox/vector/fuzzer/VectorFuzzer.h"
 
@@ -38,19 +37,6 @@ class SerializeBenchmark {
     auto buffer = AlignedBuffer::allocate<char>(totalSize, pool());
     auto serialized = serialize(fast, data->size(), buffer);
     VELOX_CHECK_EQ(serialized.size(), data->size());
-  }
-
-  void deserializeUnsafe(const RowTypePtr& rowType) {
-    folly::BenchmarkSuspender suspender;
-    auto data = makeData(rowType);
-    UnsafeRowFast fast(data);
-    auto totalSize = computeTotalSize(fast, rowType, data->size());
-    auto buffer = AlignedBuffer::allocate<char>(totalSize, pool());
-    auto serialized = serialize(fast, data->size(), buffer);
-    suspender.dismiss();
-
-    auto copy = UnsafeRowDeserializer::deserialize(serialized, rowType, pool());
-    VELOX_CHECK_EQ(copy->size(), data->size());
   }
 
   void deserializeUnsafeFast(const RowTypePtr& rowType) {
@@ -269,11 +255,6 @@ class SerializeBenchmark {
   BENCHMARK(container_serialize_##name) {              \
     SerializeBenchmark benchmark;                      \
     benchmark.serializeContainer(rowType);             \
-  }                                                    \
-                                                       \
-  BENCHMARK(unsafe_deserialize_##name) {               \
-    SerializeBenchmark benchmark;                      \
-    benchmark.deserializeUnsafe(rowType);              \
   }                                                    \
                                                        \
   BENCHMARK_RELATIVE(unsafe_deserialize_fast_##name) { \

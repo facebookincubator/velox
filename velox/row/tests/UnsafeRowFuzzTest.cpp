@@ -19,7 +19,6 @@
 #include <folly/Random.h>
 #include <folly/init/Init.h>
 
-#include "velox/row/UnsafeRowDeserializers.h"
 #include "velox/row/UnsafeRowFast.h"
 #include "velox/vector/fuzzer/VectorFuzzer.h"
 #include "velox/vector/tests/utils/VectorTestBase.h"
@@ -65,7 +64,7 @@ class UnsafeRowFuzzTests : public ::testing::Test {
 
     VectorFuzzer fuzzer(opts, pool_.get());
 
-    const auto iterations = 1;
+    const auto iterations = 200;
     for (size_t i = 0; i < iterations; ++i) {
       clearBuffers();
 
