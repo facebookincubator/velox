@@ -132,12 +132,16 @@ TEST_F(MemoryArbitrationTest, queryMemoryCapacity) {
     auto rootPool =
         manager.addRootPool("root-1", 8L << 20, MemoryReclaimer::create());
     ASSERT_EQ(rootPool->capacity(), 1 << 20);
-    ASSERT_TRUE(manager.arbitrator()->growCapacity(rootPool.get(), 1 << 20));
+    ASSERT_NO_THROW(
+        manager.arbitrator()->growCapacity(rootPool.get(), 1 << 20));
     ASSERT_EQ(rootPool->capacity(), 1 << 20);
-    ASSERT_FALSE(manager.arbitrator()->growCapacity(rootPool.get(), 6 << 20));
+    VELOX_ASSERT_THROW(
+        manager.arbitrator()->growCapacity(rootPool.get(), 6 << 20), "nnn");
     ASSERT_EQ(rootPool->capacity(), 1 << 20);
-    ASSERT_TRUE(manager.arbitrator()->growCapacity(rootPool.get(), 2 << 20));
-    ASSERT_TRUE(manager.arbitrator()->growCapacity(rootPool.get(), 1 << 20));
+    ASSERT_NO_THROW(
+        manager.arbitrator()->growCapacity(rootPool.get(), 2 << 20));
+    ASSERT_NO_THROW(
+        manager.arbitrator()->growCapacity(rootPool.get(), 1 << 20));
     ASSERT_EQ(rootPool->capacity(), 4 << 20);
     ASSERT_EQ(manager.arbitrator()->stats().freeCapacityBytes, 2 << 20);
     ASSERT_EQ(manager.arbitrator()->stats().freeReservedCapacityBytes, 2 << 20);
@@ -341,7 +345,7 @@ class FakeTestArbitrator : public MemoryArbitrator {
 
   void removePool(MemoryPool* /*unused*/) override {}
 
-  bool growCapacity(MemoryPool* /*unused*/, uint64_t /*unused*/) override {
+  void growCapacity(MemoryPool* /*unused*/, uint64_t /*unused*/) override {
     VELOX_NYI();
   }
 
