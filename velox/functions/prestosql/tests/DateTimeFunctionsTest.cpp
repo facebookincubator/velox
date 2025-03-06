@@ -5301,3 +5301,57 @@ TEST_F(DateTimeFunctionsTest, xxHash64FunctionDate) {
   // Y2K
   EXPECT_EQ(-7612541860844473816, xxhash64(parseDate("2000-01-01")));
 }
+
+TEST_F(DateTimeFunctionsTest, parseDuration) {
+  const auto parseDuration = [&](std::optional<std::string> amountUnit) {
+    return evaluateOnce<int64_t>("parse_duration(c0)", VARCHAR(), amountUnit);
+  };
+  // All units
+  int64_t expectedValue = 0;
+  EXPECT_EQ(expectedValue, parseDuration("5.8ns"));
+  expectedValue = 6;
+  EXPECT_EQ(expectedValue, parseDuration("5800000.3ns"));
+  expectedValue = 0;
+  EXPECT_EQ(expectedValue, parseDuration("5.8us"));
+  expectedValue = 5;
+  EXPECT_EQ(expectedValue, parseDuration("5400.3us"));
+  expectedValue = 43;
+  EXPECT_EQ(expectedValue, parseDuration("42.8ms"));
+  expectedValue = 5300;
+  EXPECT_EQ(expectedValue, parseDuration("5.3s"));
+  const int64_t hoursPerDay = 24;
+  const int64_t minutesPerHour = 60;
+  const int64_t secondsPerMinute = 60;
+  expectedValue = 5800 * secondsPerMinute;
+  EXPECT_EQ(expectedValue, parseDuration("5.8m"));
+  expectedValue = 5800 * minutesPerHour * secondsPerMinute;
+  EXPECT_EQ(expectedValue, parseDuration("5.8h"));
+  expectedValue = 3810 * hoursPerDay * minutesPerHour * secondsPerMinute;
+  EXPECT_EQ(expectedValue, parseDuration("3.81d"));
+  // Blank spaces
+  EXPECT_EQ(expectedValue, parseDuration(" 3.81d  "));
+  EXPECT_EQ(expectedValue, parseDuration("3.81  d"));
+  EXPECT_EQ(expectedValue, parseDuration(" 3.81  d  "));
+  // No point
+  expectedValue = 5000 * secondsPerMinute;
+  EXPECT_EQ(expectedValue, parseDuration("5m"));
+  // Input format
+  VELOX_ASSERT_THROW(
+      parseDuration("ab.81d"),
+      "Input duration is not a valid data duration string: ab.81d");
+  VELOX_ASSERT_THROW(
+      parseDuration(".81d"),
+      "Input duration is not a valid data duration string: .81d");
+  VELOX_ASSERT_THROW(
+      parseDuration("3.abd"),
+      "Input duration is not a valid data duration string: 3.abd");
+  VELOX_ASSERT_THROW(
+      parseDuration("3.d"),
+      "Input duration is not a valid data duration string: 3.d");
+  VELOX_ASSERT_THROW(
+      parseDuration("3. d"),
+      "Input duration is not a valid data duration string: 3. d");
+  // Unit format
+  VELOX_ASSERT_THROW(parseDuration("3.81a"), "Unknown time unit: a");
+  VELOX_ASSERT_THROW(parseDuration("3.81as"), "Unknown time unit: as");
+}
