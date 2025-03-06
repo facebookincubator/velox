@@ -247,7 +247,11 @@ arrayInput() {
       // Top level null elements.
       {{A({1, 3}), std::nullopt, A({2, 1})}},
       // Array with null values.
-      {{A({std::nullopt, 6}), A({3, std::nullopt}), A({std::nullopt, 8})}},
+      {{A({std::nullopt, 6}),
+        A({3, std::nullopt}),
+        A({std::nullopt, 8}),
+        std::nullopt,
+        A({})}},
   };
 }
 
@@ -260,7 +264,11 @@ arrayAscNullSmallest() {
       {{std::nullopt, std::nullopt}},
       {{A({1, 3}), A({1, 3, 5}), A({2, 1})}},
       {{std::nullopt, A({1, 3}), A({2, 1})}},
-      {{A({std::nullopt, 6}), A({std::nullopt, 8}), A({3, std::nullopt})}},
+      {{std::nullopt,
+        A({}),
+        A({std::nullopt, 6}),
+        A({std::nullopt, 8}),
+        A({3, std::nullopt})}},
   };
 }
 
@@ -273,7 +281,11 @@ arrayAscNullLargest() {
       {{std::nullopt, std::nullopt}},
       {{A({1, 3}), A({1, 3, 5}), A({2, 1})}},
       {{A({1, 3}), A({2, 1}), std::nullopt}},
-      {{A({3, std::nullopt}), A({std::nullopt, 6}), A({std::nullopt, 8})}},
+      {{A({}),
+        A({3, std::nullopt}),
+        A({std::nullopt, 6}),
+        A({std::nullopt, 8}),
+        std::nullopt}},
   };
 }
 
