@@ -21,9 +21,9 @@
 #include <cctype>
 #include <string>
 #include <type_traits>
+#include "velox/common/base/CountBits.h"
 #include "velox/common/base/Exceptions.h"
 #include "velox/common/base/Status.h"
-#include "velox/common/base/CountBits.h"
 #include "velox/type/CppToType.h"
 #include "velox/type/TimestampConversion.h"
 #include "velox/type/Type.h"
