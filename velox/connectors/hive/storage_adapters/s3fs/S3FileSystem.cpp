@@ -467,19 +467,21 @@ struct AwsInstance {
   }
 
   // Returns true iff the instance was newly initialized with config.
-  bool initialize(std::string_view logLevel) {
+  bool initialize(
+      std::string_view logLevel,
+      std::optional<std::string_view> logLocation) {
     if (isFinalized_.load()) {
       VELOX_FAIL("Attempt to initialize S3 after it has been finalized.");
     }
     if (!isInitialized_.exchange(true)) {
       // Not already initialized.
-      doInitialize(logLevel);
+      doInitialize(logLevel, logLocation);
       return true;
     }
     return false;
   }
 
-  bool isInitialized() {
+  bool isInitialized() const {
     return !isFinalized_ && isInitialized_;
   }
 
@@ -499,14 +501,29 @@ struct AwsInstance {
     }
   }
 
-  std::string getLogLevelName() {
+  std::string getLogLevelName() const {
     return Aws::Utils::Logging::GetLogLevelName(
         awsOptions_.loggingOptions.logLevel);
   }
 
+  std::string getLogPrefix() const {
+    return std::string(awsOptions_.loggingOptions.defaultLogPrefix);
+  }
+
  private:
-  void doInitialize(std::string_view logLevel) {
+  void doInitialize(
+      std::string_view logLevel,
+      std::optional<std::string_view> logLocation) {
     awsOptions_.loggingOptions.logLevel = inferS3LogLevel(logLevel);
+    std::filesystem::path prefix;
+    if (logLocation.has_value()) {
+      prefix = std::string(logLocation.value())
+                   .append("/")
+                   .append(Aws::DEFAULT_LOG_PREFIX);
+      awsOptions_.loggingOptions.defaultLogPrefix = prefix.c_str();
+      VLOG(0) << "Custom S3 log location prefix: "
+              << awsOptions_.loggingOptions.defaultLogPrefix;
+    }
     // In some situations, curl triggers a SIGPIPE signal causing the entire
     // process to be terminated without any notification.
     // This behavior is seen via Prestissimo on AmazonLinux2 on AWS EC2.
@@ -529,8 +546,10 @@ AwsInstance* getAwsInstance() {
   return instance.get();
 }
 
-bool initializeS3(std::string_view logLevel) {
-  return getAwsInstance()->initialize(logLevel);
+bool initializeS3(
+    std::string_view logLevel,
+    std::optional<std::string_view> logLocation) {
+  return getAwsInstance()->initialize(logLevel, logLocation);
 }
 
 static std::atomic<int> fileSystemCount = 0;
@@ -743,6 +762,10 @@ class S3FileSystem::Impl {
     return getAwsInstance()->getLogLevelName();
   }
 
+  std::string getLogPrefix() const {
+    return getAwsInstance()->getLogPrefix();
+  }
+
  private:
   std::shared_ptr<Aws::S3::S3Client> client_;
 };
@@ -757,6 +780,10 @@ S3FileSystem::S3FileSystem(
 
 std::string S3FileSystem::getLogLevelName() const {
   return impl_->getLogLevelName();
+}
+
+std::string S3FileSystem::getLogPrefix() const {
+  return impl_->getLogPrefix();
 }
 
 std::unique_ptr<ReadFile> S3FileSystem::openFileForRead(
