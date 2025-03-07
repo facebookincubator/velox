@@ -85,26 +85,40 @@ jobs:
           # NEXT_VERSION=$(echo $VERSION | awk -F. -v OFS=. '{$NF++ ; print}')
           echo "build_version=${VERSION}a${COMMITS_SINCE_TAG}" >> $GITHUB_OUTPUT
 
-      - run: mkdir -p ccache
       - name: "Restore ccache"
-        if: false 
-        uses: actions/cache/restore@v3
+        # CCache doesn't hit in cibuildwheel
+        if: startsWith(matrix.os, 'macos')
+        uses: apache/infrastructure-actions/stash/restore@3354c1565d4b0e335b78a76aedd82153a9e144d4
         id: restore-cache
         with:
           path: "ccache"
-          key: ccache-wheels-${{ matrix.os }}-${{ github.sha }}
-          restore-keys: |
-            ccache-wheels-${{ matrix.os }}-
+          key: ccache-wheels-${{ matrix.os }}
+
+      - name: "Restore macOS Dependencies"
+        if: startsWith(matrix.os, 'macos')
+        uses: apache/infrastructure-actions/stash/restore@3354c1565d4b0e335b78a76aedd82153a9e144d4
+        id: restore-deps
+        with:
+          path: "dependencies"
+          key: dependencies-pyvelox-${{ matrix.os }}-${{ hashFiles('scripts/setup-macos.sh') }}
 
       - name: Install macOS dependencies
-        if: startsWith(matrix.os, 'macos')
+        if: ${{ startsWith(matrix.os, 'macos') && steps.restore-deps.outputs.stash-hit != 'true' }}
         env:
           MACOSX_DEPLOYMENT_TARGET: "13.0"
         run: |
           export INSTALL_PREFIX="$GITHUB_WORKSPACE/dependencies"
           echo "CMAKE_PREFIX_PATH=$INSTALL_PREFIX" >> $GITHUB_ENV
           echo "DYLD_LIBRARY_PATH=$INSTALL_PREFIX/lib:$DYLD_LIBRARY_PATH" >> $GITHUB_ENV
-          bash scripts/setup-macos.sh 
+          bash scripts/setup-macos.sh
+
+      - name: "Save macOS Dependencies"
+        if: ${{ startsWith(matrix.os, 'macos') && steps.restore-deps.outputs.stash-hit != 'true' }}
+        uses: apache/infrastructure-actions/stash/save@3354c1565d4b0e335b78a76aedd82153a9e144d4
+        with:
+          path: "dependencies"
+          key: dependencies-pyvelox-${{ matrix.os }}-${{ hashFiles('scripts/setup-macos.sh') }}
+          retention-days: 90
 
       - name: "Create sdist"
         if: matrix.os == '8-core-ubuntu'
@@ -122,22 +136,24 @@ jobs:
           CIBW_BUILD: ${{ github.event_name == 'pull_request' && 'cp312-*' || 'cp312-*' }}
           CIBW_SKIP: "*musllinux* cp36-*"
           CIBW_MANYLINUX_X86_64_IMAGE: "ghcr.io/facebookincubator/velox-dev:pyvelox"
-          CIBW_ENVIRONMENT_PASS_LINUX: "CCACHE_DIR BUILD_VERSION CMAKE_PREFIX_PATH"
+          CIBW_ENVIRONMENT_PASS_LINUX:  "BUILD_VERSION"
+          # Don't waste time writing out to cache
+          CIBW_ENVIRONMENT_LINUX: "CCACHE_DISABLE=true"
           CIBW_TEST_EXTRAS: "tests"
           CIBW_TEST_COMMAND: "cd {project}/pyvelox && python -m unittest -v"
           CIBW_TEST_SKIP: "*"
-          # CCACHE_DIR: "${{ matrix.os != 'macos-11' && '/output' || github.workspace }}/ccache"
+          CCACHE_DIR: "${{ github.workspace }}/ccache" 
           BUILD_VERSION: "${{ inputs.version || steps.version.outputs.build_version }}"
         with:
           output-dir: wheelhouse
 
       - name: "Save ccache"
-        if: false
-        uses: actions/cache/save@v3
-        id: cache
+        # CCache doesn't hit in cibuildwheel
+        if: startsWith(matrix.os, 'macos')
+        uses: apache/infrastructure-actions/stash/save@3354c1565d4b0e335b78a76aedd82153a9e144d4
         with:
           path: "ccache"
-          key: ccache-wheels-${{ matrix.os }}-${{ github.sha }}
+          key: ccache-wheels-${{ matrix.os }}
 
       - name: "Rename wheel compatibility tag"
         if: false #startsWith(matrix.os, 'macos')
@@ -148,7 +164,8 @@ jobs:
 
       - uses: actions/upload-artifact@4cec3d8aa04e39d1a68397de0c4cd6fb9dce8ec1 # v4.6.1
         with:
-          name: wheels
+          name: wheels-${{ matrix.os }}
+          retention-days: 5
           path: |
             ./wheelhouse/*.whl
             ./wheelhouse/*.tar.gz
@@ -161,7 +178,8 @@ jobs:
     steps:
       - uses: actions/download-artifact@cc203385981b70ca67e1cc392babf9cc229d5806 # v4.1.9
         with:
-          name: wheels
+          pattern: wheels-*
+          merge-multiple: true
           path: ./wheelhouse
 
       - run: ls wheelhouse
