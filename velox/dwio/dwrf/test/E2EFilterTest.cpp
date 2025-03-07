@@ -15,6 +15,7 @@
  */
 
 #include "velox/common/base/Portability.h"
+#include "velox/common/base/tests/GTestUtils.h"
 #include "velox/common/testutil/TestValue.h"
 #include "velox/dwio/common/tests/utils/E2EFilterTestBase.h"
 #include "velox/dwio/dwrf/reader/DwrfReader.h"
@@ -64,11 +65,11 @@ class E2EFilterTest : public E2EFilterTestBase {
       const TypePtr& type,
       const std::vector<RowVectorPtr>& batches,
       bool forRowGroupSkip = false) override {
-    auto options = createWriterOptions(type);
+    setWriterOptions(type);
     int32_t flushCounter = 0;
     // If we test row group skip, we have all the data in one stripe. For
     // scan, we start  a stripe every 'flushEveryNBatches_' batches.
-    options.flushPolicyFactory = [&]() {
+    options_.flushPolicyFactory = [&]() {
       return std::make_unique<LambdaFlushPolicy>([&]() {
         return forRowGroupSkip ? false
                                : (++flushCounter % flushEveryNBatches_ == 0);
@@ -80,8 +81,8 @@ class E2EFilterTest : public E2EFilterTestBase {
         dwio::common::FileSink::Options{.pool = leafPool_.get()});
     ASSERT_TRUE(sink->isBuffered());
     auto* sinkPtr = sink.get();
-    options.memoryPool = rootPool_.get();
-    writer_ = std::make_unique<dwrf::Writer>(std::move(sink), options);
+    options_.memoryPool = rootPool_.get();
+    writer_ = std::make_unique<dwrf::Writer>(std::move(sink), options_);
     for (auto& batch : batches) {
       writer_->write(batch);
     }
@@ -105,9 +106,10 @@ class E2EFilterTest : public E2EFilterTestBase {
   }
 
   std::unordered_set<std::string> flatMapColumns_;
+  dwrf::WriterOptions options_;
 
  private:
-  dwrf::WriterOptions createWriterOptions(const TypePtr& type) {
+  void setWriterOptions(const TypePtr& type) {
     auto config = std::make_shared<dwrf::Config>();
     config->set(dwrf::Config::COMPRESSION, CompressionKind_NONE);
     config->set(dwrf::Config::USE_VINTS, useVInts_);
@@ -148,10 +150,8 @@ class E2EFilterTest : public E2EFilterTestBase {
       config->set<const std::vector<std::vector<std::string>>>(
           dwrf::Config::MAP_FLAT_COLS_STRUCT_KEYS, mapFlatColsStructKeys);
     }
-    dwrf::WriterOptions options;
-    options.config = config;
-    options.schema = writerSchema;
-    return options;
+    options_.config = config;
+    options_.schema = writerSchema;
   }
 
   std::unique_ptr<dwrf::Writer> writer_;
@@ -225,6 +225,74 @@ TEST_F(E2EFilterTest, byteRle) {
       true,
       {"tiny_val", "bool_val", "tiny_null"},
       20);
+}
+
+DEBUG_ONLY_TEST_F(E2EFilterTest, shortDecimal) {
+  testutil::TestValue::enable();
+  options_.format = DwrfFormat::kOrc;
+  const std::unordered_map<std::string, TypePtr> types = {
+      {"shortdecimal_val:decimal(8, 5)", DECIMAL(8, 5)},
+      {"shortdecimal_val:decimal(10, 5)", DECIMAL(10, 5)},
+      {"shortdecimal_val:decimal(17, 5)", DECIMAL(17, 5)}};
+
+  for (const auto& pair : types) {
+    SCOPED_TESTVALUE_SET(
+        "facebook::velox::dwrf::ReaderBase::convertType",
+        std::function<void(TypePtr*)>(
+            [&](TypePtr* type) { *type = pair.second; }));
+    testWithTypes(
+        pair.first,
+        [&]() {
+          makeIntDistribution<int64_t>(
+              "shortdecimal_val",
+              10, // min
+              100, // max
+              22, // repeats
+              19, // rareFrequency
+              -999, // rareMin
+              30000, // rareMax
+              true);
+        },
+        false,
+        {"shortdecimal_val"},
+        20);
+  }
+  options_.format = DwrfFormat::kDwrf;
+}
+
+DEBUG_ONLY_TEST_F(E2EFilterTest, longDecimal) {
+  testutil::TestValue::enable();
+  options_.format = DwrfFormat::kOrc;
+  const std::unordered_map<std::string, TypePtr> types = {
+      {"longdecimal_val:decimal(30, 10)", DECIMAL(30, 10)},
+      {"longdecimal_val:decimal(37, 15)", DECIMAL(37, 15)}};
+
+  SCOPED_TESTVALUE_SET(
+      "facebook::velox::dwrf::ProtoUtils::writeType",
+      std::function<void(bool*)>([&](bool* kindSet) { *kindSet = true; }));
+  for (const auto& pair : types) {
+    SCOPED_TESTVALUE_SET(
+        "facebook::velox::dwrf::ReaderBase::convertType",
+        std::function<void(TypePtr*)>(
+            [&](TypePtr* type) { *type = pair.second; }));
+    testWithTypes(
+        pair.first,
+        [&]() {
+          makeIntDistribution<int128_t>(
+              "longdecimal_val",
+              10, // min
+              100, // max
+              22, // repeats
+              19, // rareFrequency
+              -999, // rareMin
+              30000, // rareMax
+              true);
+        },
+        false,
+        {"longdecimal_val"},
+        20);
+  }
+  options_.format = DwrfFormat::kDwrf;
 }
 
 TEST_F(E2EFilterTest, floatAndDouble) {
