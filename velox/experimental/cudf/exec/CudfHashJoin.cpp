@@ -326,16 +326,11 @@ CudfHashJoinProbe::CudfHashJoinProbe(
     // TODO (dm): refactor. We want to avoid any work done in hash_join object
     // creation when using mixed join.
 
-    // get tables that contain conditional comparison columns
-    // Or maybe guess what, fuck it. We'll pass the entire table. The ast will
-    // handle finding the required columns. This is required because we build
-    // the ast with whole row schema and the column locations in that schema
-    // translate to column locations in whole tables
-    // TODO (dm): Sanitize these^ comments.
-    // auto left_conditional_cols =
-    //     left_table->view().select(left_columns_to_gather);
-    // auto right_conditional_cols =
-    //     right_table_view.select(right_columns_to_gather);
+    // We don't need to get tables that contain conditional comparison columns
+    // We'll pass the entire table. The ast will handle finding the required
+    // columns. This is required because we build the ast with whole row schema
+    // and the column locations in that schema translate to column locations
+    // in whole tables
 
     // create ast tree
     create_ast_tree(
@@ -437,40 +432,42 @@ RowVectorPtr CudfHashJoinProbe::getOutput() {
           stream);
     } else {
       std::tie(left_join_indices, right_join_indices) = hb->inner_join(
-          left_table->view().select(left_key_indices_), std::nullopt, stream);
+          left_table_view.select(left_key_indices_), std::nullopt, stream);
     }
   } else if (joinNode_->isLeftJoin()) {
     // left = probe, right = build
     std::tie(left_join_indices, right_join_indices) = hb->left_join(
-        left_table->view().select(left_key_indices_), std::nullopt, stream);
+        left_table_view.select(left_key_indices_), std::nullopt, stream);
   } else if (joinNode_->isRightJoin()) {
     std::tie(right_join_indices, left_join_indices) = cudf::left_join(
-        right_table->view().select(right_key_indices_),
-        left_table->view().select(left_key_indices_),
+        right_table_view.select(right_key_indices_),
+        left_table_view.select(left_key_indices_),
         cudf::null_equality::EQUAL,
         stream,
         cudf::get_current_device_resource_ref());
   } else if (joinNode_->isAntiJoin()) {
     // TODO filter check inside.
     left_join_indices = cudf::left_anti_join(
-        left_table->view().select(left_key_indices_),
-        right_table->view().select(right_key_indices_),
+        left_table_view.select(left_key_indices_),
+        right_table_view.select(right_key_indices_),
         cudf::null_equality::EQUAL,
         stream,
         cudf::get_current_device_resource_ref());
   } else if (joinNode_->isLeftSemiFilterJoin()) {
-    left_join_indices = cudf::left_semi_join(
-        left_table->view().select(left_key_indices_),
-        right_table->view().select(right_key_indices_),
-        cudf::null_equality::EQUAL,
+    left_join_indices = cudf::conditional_left_semi_join(
+        left_table_view.select(left_key_indices_),
+        right_table_view.select(right_key_indices_),
+        tree_.back(),
+        std::nullopt,
         stream,
         cudf::get_current_device_resource_ref());
   } else if (joinNode_->isRightSemiFilterJoin()) {
     // TODO filter check inside.
-    right_join_indices = cudf::left_semi_join(
-        right_table->view().select(right_key_indices_),
-        left_table->view().select(left_key_indices_),
-        cudf::null_equality::EQUAL,
+    right_join_indices = cudf::conditional_left_semi_join(
+        right_table_view.select(right_key_indices_),
+        left_table_view.select(left_key_indices_),
+        tree_.back(),
+        std::nullopt,
         stream,
         cudf::get_current_device_resource_ref());
   } else {
