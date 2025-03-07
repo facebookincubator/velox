@@ -19,15 +19,15 @@
 #include <boost/asio.hpp>
 #include <boost/beast/core.hpp>
 #include <boost/beast/http.hpp>
-#include "velox/expression/FunctionSignature.h"
 #include "velox/common/memory/Memory.h"
+#include "velox/expression/FunctionSignature.h"
 
 namespace facebook::velox::functions {
 
 /// @brief Manages an individual HTTP session.
 /// Handles reading HTTP requests, processing them, and sending responses.
 /// This class re-hosts Velox functions and allows testing their functionality.
-class RestSession : public std::enable_shared_from_this<RestSession>{
+class RestSession : public std::enable_shared_from_this<RestSession> {
  public:
   RestSession(boost::asio::ip::tcp::socket socket, std::string functionPrefix);
 

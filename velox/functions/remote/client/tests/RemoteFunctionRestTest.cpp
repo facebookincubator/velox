@@ -30,7 +30,7 @@
 #include "velox/functions/prestosql/StringFunctions.h"
 #include "velox/functions/prestosql/tests/utils/FunctionBaseTest.h"
 #include "velox/functions/remote/client/Remote.h"
-#include "velox/functions/remote/server/RemoteFunctionRestService.h"
+#include "velox/functions/remote/utils/restserver/RemoteFunctionRestService.h"
 
 using ::facebook::velox::test::assertEqualVectors;
 
