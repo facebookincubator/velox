@@ -29,7 +29,8 @@ Map Functions
 .. spark:function:: map_from_arrays(array(K), array(V)) -> map(K,V)
 
     Creates a map with a pair of the given key/value arrays. All elements in keys should not be null.
-    If key size != value size will throw exception that key and value must have the same length.::
+    If key size != value size will throw exception that key and value must have the same length.
+    The policy to deduplicate map keys is following the config `spark.map_key_dedup_policy`. ::
 
         SELECT map_from_arrays(array(1.0, 3.0), array('2', '4')); -- {1.0 -> 2, 3.0 -> 4}
 

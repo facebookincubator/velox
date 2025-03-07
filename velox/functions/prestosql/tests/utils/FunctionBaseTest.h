@@ -61,6 +61,12 @@ class FunctionBaseTest : public testing::Test,
     });
   }
 
+  void setSparkMapKeyDupPolicy(const std::string& value) {
+    queryCtx_->testingOverrideConfigUnsafe({
+      {core::QueryConfig::kSparkMapKeyDedupPolicy, value},
+    });
+  }
+
  protected:
   static void SetUpTestCase();
 
