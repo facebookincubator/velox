@@ -30,6 +30,9 @@ on:
         default: false
   # schedule:
   #   - cron: '15 0 * * *'
+  pull_request:
+    paths:
+      - '.github/workflows/build_pyvelox.yml'
 
 permissions:
   contents: read
