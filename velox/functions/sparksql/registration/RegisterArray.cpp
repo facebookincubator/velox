@@ -101,12 +101,8 @@ inline void registerArrayRemoveFunctions(const std::string& prefix) {
   registerArrayRemoveFunctions<Timestamp>(prefix);
   registerArrayRemoveFunctions<Date>(prefix);
   registerArrayRemoveFunctions<Varbinary>(prefix);
+  registerArrayRemoveFunctions<Varchar>(prefix);
   registerArrayRemoveFunctions<Generic<T1>>(prefix);
-  registerFunction<
-      ArrayRemoveFunctionString,
-      Array<Varchar>,
-      Array<Varchar>,
-      Varchar>({prefix + "array_remove"});
 }
 
 void registerArrayFunctions(const std::string& prefix) {

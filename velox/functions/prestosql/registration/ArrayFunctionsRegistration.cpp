@@ -222,13 +222,9 @@ void registerArrayFunctions(const std::string& prefix) {
   registerArrayRemoveFunctions<bool>(prefix);
   registerArrayRemoveFunctions<Timestamp>(prefix);
   registerArrayRemoveFunctions<Date>(prefix);
+  registerArrayRemoveFunctions<Varchar>(prefix);
   registerArrayRemoveFunctions<Varbinary>(prefix);
   registerArrayRemoveFunctions<Generic<T1>>(prefix);
-  registerFunction<
-      ArrayRemoveFunctionString,
-      Array<Varchar>,
-      Array<Varchar>,
-      Varchar>({prefix + "array_remove"});
 
   registerArrayTrimFunctions<int8_t>(prefix);
   registerArrayTrimFunctions<int16_t>(prefix);

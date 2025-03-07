@@ -1134,6 +1134,8 @@ template <typename T>
 struct ArrayRemoveFunction {
   VELOX_DEFINE_FUNCTION_TYPES(T);
 
+  static constexpr int32_t reuse_strings_from_arg = 0;
+
   // Fast path for primitives.
   template <typename Out, typename In, typename E>
   void call(Out& out, const In& inputArray, E element) {
@@ -1184,27 +1186,4 @@ struct ArrayRemoveFunction {
   }
 };
 
-template <typename T>
-struct ArrayRemoveFunctionString {
-  VELOX_DEFINE_FUNCTION_TYPES(T);
-
-  static constexpr int32_t reuse_strings_from_arg = 0;
-
-  // String version that avoids copy of strings.
-  void call(
-      out_type<Array<Varchar>>& out,
-      const arg_type<Array<Varchar>>& inputArray,
-      const arg_type<Varchar>& element) {
-    for (const auto& item : inputArray) {
-      if (item.has_value()) {
-        auto result = element.compare(item.value());
-        if (result) {
-          out.push_back(item.value());
-        }
-      } else {
-        out.add_null();
-      }
-    }
-  }
-};
 } // namespace facebook::velox::functions
