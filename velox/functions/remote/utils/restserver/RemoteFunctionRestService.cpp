@@ -14,13 +14,13 @@
  * limitations under the License.
  */
 
-#include "velox/functions/remote/server/RemoteFunctionRestService.h"
+#include "velox/functions/remote/utils/restserver/RemoteFunctionRestService.h"
 
 #include <boost/beast/version.hpp>
-#include "velox/type/fbhive/HiveTypeParser.h"
 #include "velox/serializers/PrestoSerializer.h"
-#include "velox/vector/VectorStream.h"
+#include "velox/type/fbhive/HiveTypeParser.h"
 #include "velox/vector/FlatVector.h"
+#include "velox/vector/VectorStream.h"
 
 namespace facebook::velox::functions {
 
@@ -120,8 +120,8 @@ void RestSession::handleRequest(
           "Function '{}' is not available on the server.", functionName);
     }
 
-    // We assume a single argument of type INTEGER and a single return type of INTEGER.
-    // If you have these from some request headers, you can parse them;
+    // We assume a single argument of type INTEGER and a single return type of
+    // INTEGER. If you have these from some request headers, you can parse them;
     // otherwise, if you know them upfront, you can hard-code them:
     std::vector<std::string> argTypeNames = {"integer"};
     std::string returnTypeName = "integer";
@@ -129,7 +129,8 @@ void RestSession::handleRequest(
     serializer::presto::PrestoVectorSerde serde;
     auto inputBuffer = folly::IOBuf::copyBuffer(req.body());
 
-    // Parse the input argument type and output type (both should be INTEGER here).
+    // Parse the input argument type and output type (both should be INTEGER
+    // here).
     auto argType = type::fbhive::HiveTypeParser().parse(argTypeNames[0]);
     auto outType = type::fbhive::HiveTypeParser().parse(returnTypeName);
 
@@ -179,8 +180,7 @@ void RestSession::handleRequest(
     // Construct a successful response.
     res_.result(boost::beast::http::status::ok);
     res_.set(
-        boost::beast::http::field::content_type,
-        "application/octet-stream");
+        boost::beast::http::field::content_type, "application/octet-stream");
     res_.body() = payload.moveToFbString().toStdString();
     res_.prepare_payload();
 
