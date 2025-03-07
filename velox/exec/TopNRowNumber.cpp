@@ -320,14 +320,14 @@ void TopNRowNumber::updateEstimatedOutputRowSize() {
 
 TopNRowNumber::TopRows* TopNRowNumber::nextPartition() {
   if (!table_) {
-    if (!currentPartition_) {
-      currentPartition_ = 0;
+    if (!currentPartitionNumber_) {
+      currentPartitionNumber_ = 0;
       return singlePartition_.get();
     }
     return nullptr;
   }
 
-  if (!currentPartition_) {
+  if (!currentPartitionNumber_) {
     numPartitions_ = table_->listAllRows(
         &partitionIt_,
         partitions_.size(),
@@ -338,38 +338,28 @@ TopNRowNumber::TopRows* TopNRowNumber::nextPartition() {
       return nullptr;
     }
 
-    currentPartition_ = 0;
+    currentPartitionNumber_ = 0;
   } else {
-    ++currentPartition_.value();
-    if (currentPartition_ >= numPartitions_) {
-      currentPartition_.reset();
+    ++currentPartitionNumber_.value();
+    if (currentPartitionNumber_ >= numPartitions_) {
+      currentPartitionNumber_.reset();
       return nextPartition();
     }
   }
 
-  return &currentPartition();
-}
-
-TopNRowNumber::TopRows& TopNRowNumber::currentPartition() {
-  VELOX_CHECK(currentPartition_.has_value());
-
-  if (!table_) {
-    return *singlePartition_;
-  }
-
-  return partitionAt(partitions_[currentPartition_.value()]);
+  return &partitionAt(partitions_[currentPartitionNumber_.value()]);
 }
 
 void TopNRowNumber::appendPartitionRows(
     TopRows& partition,
-    vector_size_t start,
-    vector_size_t size,
+    vector_size_t numRows,
     vector_size_t outputOffset,
     FlatVector<int64_t>* rowNumbers) {
-  // Append 'size' partition rows in reverse order starting from 'start' row.
-  auto rowNumber = partition.rows.size() - start;
-  for (auto i = 0; i < size; ++i) {
-    const auto index = outputOffset + size - i - 1;
+  // The partition.rows priority queue pops rows in order of reverse
+  // row numbers.
+  auto rowNumber = partition.rows.size();
+  for (auto i = 0; i < numRows; ++i) {
+    auto index = outputOffset + i;
     if (rowNumbers) {
       rowNumbers->set(index, rowNumber--);
     }
@@ -432,37 +422,34 @@ RowVectorPtr TopNRowNumber::getOutputFromMemory() {
   }
 
   vector_size_t offset = 0;
-  if (remainingRowsInPartition_ > 0) {
-    auto& partition = currentPartition();
-    auto start = partition.rows.size() - remainingRowsInPartition_;
-    const auto numRows =
-        std::min<vector_size_t>(outputBatchSize_, remainingRowsInPartition_);
-    appendPartitionRows(partition, start, numRows, offset, rowNumbers);
-    offset += numRows;
-    remainingRowsInPartition_ -= numRows;
-  }
-
+  // Continue to output as many remaining partitions as possible.
   while (offset < outputBatchSize_) {
-    auto* partition = nextPartition();
-    if (!partition) {
-      break;
+    // No previous partition to output (since this is the first partition).
+    if (!currentPartition_) {
+      currentPartition_ = nextPartition();
+      if (!currentPartition_) {
+        break;
+      }
     }
 
-    auto numRows = partition->rows.size();
-    if (offset + numRows > outputBatchSize_) {
-      remainingRowsInPartition_ = offset + numRows - outputBatchSize_;
-
-      // Add a subset of partition rows.
-      numRows -= remainingRowsInPartition_;
-      appendPartitionRows(*partition, 0, numRows, offset, rowNumbers);
-      offset += numRows;
+    auto numOutputRowsLeft = outputBatchSize_ - offset;
+    if (currentPartition_->rows.size() > numOutputRowsLeft) {
+      // Only a partial partition can be output in this getOutput() call.
+      // Output as many rows as possible.
+      appendPartitionRows(
+          *currentPartition_, numOutputRowsLeft, offset, rowNumbers);
+      offset += numOutputRowsLeft;
       break;
     }
 
     // Add all partition rows.
-    appendPartitionRows(*partition, 0, numRows, offset, rowNumbers);
-    offset += numRows;
-    remainingRowsInPartition_ = 0;
+    auto numPartitionRows = currentPartition_->rows.size();
+    appendPartitionRows(
+        *currentPartition_, numPartitionRows, offset, rowNumbers);
+    offset += numPartitionRows;
+
+    // Move to the next partition.
+    currentPartition_ = nextPartition();
   }
 
   if (offset == 0) {
