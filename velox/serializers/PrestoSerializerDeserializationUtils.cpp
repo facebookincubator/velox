@@ -37,6 +37,9 @@ std::pair<const uint64_t*, int32_t> getStructNulls(int64_t position) {
 }
 
 bool hasNestedStructs(const TypePtr& type) {
+  if (isIPPrefixType(type)) {
+    return false;
+  }
   if (type->isRow()) {
     return true;
   }
@@ -261,7 +264,8 @@ void readStructNullsColumns(
           source, columnType, useLosslessTimestamp, scratch);
     } else {
       checkTypeEncoding(encoding, columnType);
-      const auto it = readers.find(columnType->kind());
+      const auto it = readers.find(
+          isIPPrefixType(columnType) ? TypeKind::VARCHAR : columnType->kind());
       VELOX_CHECK(
           it != readers.end(),
           "Column reader for type {} is missing",
@@ -407,6 +411,118 @@ void readDecimalValues(
   } else {
     for (vector_size_t row = 0; row < size; ++row) {
       rawValues[offset + row] = readJavaDecimal(source);
+    }
+  }
+}
+
+int128_t readIpAddress(ByteInputStream* source) {
+  // Java stores ipaddress as a binary, and thus the binary
+  // is always in big endian byte order. In Velox, ipaddress
+  // is a custom type with underlying type of int128_t, which
+  // is always stored as little endian byte order. This means
+  // to ensure compatibility between the coordinator and velox,
+  // we need to actually convert the 16 bytes read from coordinator
+  // to little endian.
+  const int128_t beIpIntAddr = source->read<int128_t>();
+  return reverseIpAddressByteOrder(beIpIntAddr);
+}
+
+void readIPPrefixValues(
+    ByteInputStream* source,
+    const TypePtr& type,
+    vector_size_t resultOffset,
+    const uint64_t* incomingNulls,
+    int32_t numIncomingNulls,
+    VectorPtr& result) {
+  VELOX_DCHECK(isIPPrefixType(type));
+
+  // Read # number of rows
+  const int32_t size = source->read<int32_t>();
+  const int32_t numNewValues = sizeWithIncomingNulls(size, numIncomingNulls);
+
+  result->resize(resultOffset + numNewValues);
+
+  // Skip # of offsets since we expect IPPrefix to be fixed width of 17 bytes
+  source->skip(size * sizeof(int32_t));
+
+  // Read the null-byte and null-flag if present.
+  [[maybe_unused]] const auto numNulls = readNulls(
+      source, size, resultOffset, incomingNulls, numIncomingNulls, *result);
+
+  // Read total number of bytes of ipprefix
+  const int32_t ipprefixBytesSum = source->read<int32_t>();
+  if (ipprefixBytesSum == 0) {
+    return;
+  }
+
+  VELOX_DCHECK(
+      (ipprefixBytesSum % ipaddress::kIPPrefixBytes) == 0,
+      fmt::format(
+          "Total sum of ipprefix bytes:{} is not divisible by:{}. rows:{} numNulls:{} totalSize:{}",
+          ipprefixBytesSum,
+          ipaddress::kIPPrefixBytes,
+          size,
+          numNulls,
+          result->size()));
+
+  VELOX_DCHECK(
+      result->size() >= numNulls,
+      fmt::format(
+          "IPPrefix received more nulls:{} than total num of rows:{}.",
+          result->size(),
+          numNulls));
+
+  VELOX_DCHECK(
+      (ipprefixBytesSum == ((size - numNulls) * ipaddress::kIPPrefixBytes)),
+      fmt::format(
+          "IPPrefix received invalid number of non-null bytes. Got:{} Expected:{} rows:{} numNulls:{} totalSize:{} numIncomingNulls={} resultOffset={}.",
+          ipprefixBytesSum,
+          (size - numNulls) * ipaddress::kIPPrefixBytes,
+          size,
+          numNulls,
+          result->size(),
+          numIncomingNulls,
+          resultOffset));
+
+  auto row = result->asChecked<RowVector>();
+  auto ip = row->childAt(0)->asChecked<FlatVector<int128_t>>();
+  auto prefix = row->childAt(1)->asChecked<FlatVector<int8_t>>();
+
+  for (int32_t i = 0; i < numNewValues; ++i) {
+    if (row->isNullAt(resultOffset + i)) {
+      continue;
+    }
+    // Read 16 bytes and reverse the byte order
+    ip->set(resultOffset + i, readIpAddress(source));
+    // Read 1 byte for the prefix order
+    prefix->set(resultOffset + i, source->read<int8_t>());
+  }
+}
+
+void readIpAddressValues(
+    ByteInputStream* source,
+    vector_size_t size,
+    vector_size_t offset,
+    const BufferPtr& nulls,
+    vector_size_t nullCount,
+    const BufferPtr& values) {
+  auto rawValues = values->asMutable<int128_t>();
+  if (nullCount) {
+    checkValuesSize<int128_t>(values, nulls, size, offset);
+
+    vector_size_t toClear = offset;
+    bits::forEachSetBit(
+        nulls->as<uint64_t>(), offset, offset + size, [&](vector_size_t row) {
+          // Set the values between the last non-null and this to type default.
+          for (; toClear < row; ++toClear) {
+            rawValues[toClear] = 0;
+          }
+          rawValues[row] = readIpAddress(source);
+          toClear = row + 1;
+        });
+  } else {
+    for (vector_size_t row = 0; row < size; ++row) {
+      rawValues[offset + row] = readIpAddress(source);
     }
   }
 }
@@ -625,6 +741,16 @@ void read(
         values);
     return;
   }
+  if (isIPAddressType(type)) {
+    readIpAddressValues(
+        source,
+        numNewValues,
+        resultOffset,
+        flatResult->nulls(),
+        nullCount,
+        values);
+    return;
+  }
   readValues<T>(
       source,
       numNewValues,
@@ -644,6 +770,10 @@ void read<StringView>(
     velox::memory::MemoryPool* pool,
     const PrestoVectorSerde::PrestoOptions& opts,
     VectorPtr& result) {
+  if (isIPPrefixType(type)) {
+    return readIPPrefixValues(
+        source, type, resultOffset, incomingNulls, numIncomingNulls, result);
+  }
   const int32_t size = source->read<int32_t>();
   const int32_t numNewValues = sizeWithIncomingNulls(size, numIncomingNulls);
 
@@ -1186,7 +1316,12 @@ void readColumns(
         BaseVector::ensureWritable(
             SelectivityVector::empty(), types[i], pool, columnResult);
       }
-      const auto it = readers.find(columnType->kind());
+
+      // If the column is ipprefix, we need to force the reader to be
+      // varbinary so that we can properly deserialize the data from Java.
+      const auto it = readers.find(
+          isIPPrefixType(columnType) ? TypeKind::VARBINARY
+                                     : columnType->kind());
       VELOX_CHECK(
           it != readers.end(),
           "Column reader for type {} is missing",

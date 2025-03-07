@@ -28,6 +28,7 @@ target_link_libraries(
   velox_exec
   velox_function_registry
   velox_exec_test_lib
+  velox_presto_types
   GTest::gtest
   GTest::gtest_main)
 
@@ -227,16 +228,6 @@ add_executable(velox_memory_arbitration_fuzzer_test
 target_link_libraries(
   velox_memory_arbitration_fuzzer_test velox_memory_arbitration_fuzzer
   GTest::gtest GTest::gtest_main)
-
-# Cache Fuzzer
-add_executable(velox_cache_fuzzer_test CacheFuzzerTest.cpp)
-
-target_link_libraries(
-  velox_cache_fuzzer_test
-  velox_cache_fuzzer
-  velox_fuzzer_util
-  GTest::gtest
-  GTest::gtest_main)
 
 add_executable(velox_exchange_fuzzer_test ExchangeFuzzer.cpp)
 

@@ -24,7 +24,6 @@
 #include "velox/common/memory/MallocAllocator.h"
 #include "velox/common/memory/Memory.h"
 #include "velox/common/memory/SharedArbitrator.h"
-#include "velox/flag_definitions/flags.h"
 
 DECLARE_int32(velox_memory_num_shared_leaf_pools);
 DECLARE_bool(velox_enable_memory_usage_track_in_default_memory_pool);
@@ -45,7 +44,6 @@ class MemoryManagerTest : public testing::Test {
  protected:
   static void SetUpTestCase() {
     SharedArbitrator::registerFactory();
-    translateFlagsToGlobalConfig();
   }
 
   inline static const std::string arbitratorKind_{"SHARED"};
@@ -100,7 +98,14 @@ TEST_F(MemoryManagerTest, ctor) {
     ASSERT_EQ(arbitrator->stats().maxCapacityBytes, kCapacity);
     ASSERT_EQ(
         manager.toString(),
-        "Memory Manager[capacity 4.00GB alignment 64B usedBytes 0B number of pools 3\nList of root pools:\n\t__sys_root__\nMemory Allocator[MALLOC capacity 4.00GB allocated bytes 0 allocated pages 0 mapped pages 0]\nARBITRATOR[SHARED CAPACITY[4.00GB] numRequests 0 numRunning 0 numSucceded 0 numAborted 0 numFailures 0 numNonReclaimableAttempts 0 reclaimedFreeCapacity 0B reclaimedUsedCapacity 0B maxCapacity 4.00GB freeCapacity 4.00GB freeReservedCapacity 0B]]");
+        "Memory Manager[capacity 4.00GB alignment 64B usedBytes 0B number of "
+        "pools 3\nList of root pools:\n\t__sys_root__\nMemory Allocator[MALLOC "
+        "capacity 4.00GB allocated bytes 0 allocated pages 0 mapped pages 0]\n"
+        "ARBITRATOR[SHARED CAPACITY[4.00GB] STATS[numRequests 0 numRunning 0 "
+        "numSucceded 0 numAborted 0 numFailures 0 numNonReclaimableAttempts 0 "
+        "reclaimedFreeCapacity 0B reclaimedUsedCapacity 0B maxCapacity 4.00GB "
+        "freeCapacity 4.00GB freeReservedCapacity 0B] "
+        "CONFIG[kind=SHARED;capacity=4.00GB;arbitrationStateCheckCb=(unset);]]]");
   }
 }
 
@@ -124,7 +129,7 @@ class FakeTestArbitrator : public MemoryArbitrator {
 
   void removePool(MemoryPool* /*unused*/) override {}
 
-  bool growCapacity(MemoryPool* /*unused*/, uint64_t /*unused*/) override {
+  void growCapacity(MemoryPool* /*unused*/, uint64_t /*unused*/) override {
     VELOX_NYI();
   }
 
@@ -372,7 +377,6 @@ TEST_F(MemoryManagerTest, defaultMemoryUsageTracking) {
   for (bool trackDefaultMemoryUsage : {false, true}) {
     FLAGS_velox_enable_memory_usage_track_in_default_memory_pool =
         trackDefaultMemoryUsage;
-    translateFlagsToGlobalConfig();
     MemoryManager manager{};
     auto defaultPool = manager.addLeafPool("defaultMemoryUsageTracking");
     ASSERT_EQ(defaultPool->trackUsage(), trackDefaultMemoryUsage);
