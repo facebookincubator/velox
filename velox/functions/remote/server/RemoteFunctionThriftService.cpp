@@ -15,10 +15,57 @@
  */
 
 #include "velox/functions/remote/server/RemoteFunctionThriftService.h"
-
+#include "velox/common/base/Exceptions.h"
+#include "velox/expression/Expr.h"
 #include "velox/functions/remote/if/GetSerde.h"
+#include "velox/type/fbhive/HiveTypeParser.h"
+#include "velox/vector/VectorStream.h"
 
 namespace facebook::velox::functions {
+namespace {
+
+std::string getFunctionName(
+    const std::string& prefix,
+    const std::string& functionName) {
+  return prefix.empty() ? functionName
+                        : fmt::format("{}.{}", prefix, functionName);
+}
+
+TypePtr deserializeType(const std::string& input) {
+  // Use hive type parser/serializer.
+  return type::fbhive::HiveTypeParser().parse(input);
+}
+
+RowTypePtr deserializeArgTypes(const std::vector<std::string>& argTypes) {
+  const size_t argCount = argTypes.size();
+
+  std::vector<TypePtr> argumentTypes;
+  std::vector<std::string> typeNames;
+  argumentTypes.reserve(argCount);
+  typeNames.reserve(argCount);
+
+  for (size_t i = 0; i < argCount; ++i) {
+    argumentTypes.emplace_back(deserializeType(argTypes[i]));
+    typeNames.emplace_back(fmt::format("c{}", i));
+  }
+  return ROW(std::move(typeNames), std::move(argumentTypes));
+}
+
+} // namespace
+
+std::vector<core::TypedExprPtr> getExpressions(
+    const RowTypePtr& inputType,
+    const TypePtr& returnType,
+    const std::string& functionName) {
+  std::vector<core::TypedExprPtr> inputs;
+  for (size_t i = 0; i < inputType->size(); ++i) {
+    inputs.push_back(std::make_shared<core::FieldAccessTypedExpr>(
+        inputType->childAt(i), inputType->nameOf(i)));
+  }
+
+  return {std::make_shared<core::CallTypedExpr>(
+      returnType, std::move(inputs), functionName)};
+}
 
 void RemoteFunctionServiceHandler::handleErrors(
     apache::thrift::field_ref<remote::RemoteFunctionPage&> result,
@@ -65,25 +112,50 @@ void RemoteFunctionServiceHandler::invokeFunction(
   const auto& functionHandle = request->remoteFunctionHandle().value();
   const auto& inputs = request->inputs().value();
 
+  // Deserialize types and data.
+  auto inputType = deserializeArgTypes(functionHandle.argumentTypes().value());
+  auto outputType = deserializeType(functionHandle.returnType().value());
+
   auto serdeFormat = folly::copy(inputs.pageFormat().value());
   auto serde = getSerde(serdeFormat);
 
-  auto outputRowVector = invokeFunctionInternal(
-      inputs.get_payload(),
-      functionHandle.argumentTypes().value(),
-      functionHandle.returnType().value(),
-      functionHandle.name().value(),
-      request->get_throwOnError(),
-      serde.get());
+  auto inputVector = IOBufToRowVector(
+      inputs.payload().value(), inputType, *pool_, serde.get());
+
+  // Execute the expression.
+  const vector_size_t numRows = inputVector->size();
+  SelectivityVector rows{numRows};
+
+  // Expression boilerplate.
+  auto queryCtx = core::QueryCtx::create();
+  core::ExecCtx execCtx{pool_.get(), queryCtx.get()};
+  exec::ExprSet exprSet{
+      getExpressions(
+          inputType,
+          outputType,
+          getFunctionName(functionPrefix_, functionHandle.name().value())),
+      &execCtx};
+
+  exec::EvalCtx evalCtx(&execCtx, &exprSet, inputVector.get());
+  if (!folly::copy(request->throwOnError().value())) {
+    *evalCtx.mutableThrowOnError() = false;
+  }
+
+  std::vector<VectorPtr> expressionResult;
+  exprSet.eval(rows, evalCtx, expressionResult);
+
+  // Create output vector.
+  auto outputRowVector = std::make_shared<RowVector>(
+      pool_.get(), ROW({outputType}), BufferPtr(), numRows, expressionResult);
 
   auto result = response.result_ref();
   result->rowCount_ref() = outputRowVector->size();
   result->pageFormat_ref() = serdeFormat;
-  result->payload_ref() = rowVectorToIOBuf(
-      outputRowVector, outputRowVector->size(), *pool_, serde.get());
+  result->payload_ref() =
+      rowVectorToIOBuf(outputRowVector, rows.end(), *pool_, serde.get());
 
-  auto evalErrors = getEvalErrors_();
-  if (evalErrors && evalErrors->hasError()) {
+  auto evalErrors = evalCtx.errors();
+  if (evalErrors != nullptr && evalErrors->hasError()) {
     handleErrors(result, evalErrors, serde);
   }
 }

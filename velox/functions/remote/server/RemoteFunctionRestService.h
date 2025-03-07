@@ -20,7 +20,7 @@
 #include <boost/beast/core.hpp>
 #include <boost/beast/http.hpp>
 #include "velox/expression/FunctionSignature.h"
-#include "velox/functions/remote/server/RemoteFunctionBaseService.h"
+#include "velox/common/memory/Memory.h"
 
 namespace facebook::velox::functions {
 
