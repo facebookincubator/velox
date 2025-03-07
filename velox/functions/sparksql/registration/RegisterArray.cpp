@@ -95,17 +95,7 @@ inline void registerArrayMinMaxFunctions(const std::string& prefix) {
 }
 
 inline void registerArrayMinMaxFunctions(const std::string& prefix) {
-  registerArrayMinMaxFunctions<int8_t>(prefix);
-  registerArrayMinMaxFunctions<int16_t>(prefix);
-  registerArrayMinMaxFunctions<int32_t>(prefix);
-  registerArrayMinMaxFunctions<int64_t>(prefix);
-  registerArrayMinMaxFunctions<int128_t>(prefix);
-  registerArrayMinMaxFunctions<float>(prefix);
-  registerArrayMinMaxFunctions<double>(prefix);
-  registerArrayMinMaxFunctions<bool>(prefix);
-  registerArrayMinMaxFunctions<Varchar>(prefix);
-  registerArrayMinMaxFunctions<Timestamp>(prefix);
-  registerArrayMinMaxFunctions<Date>(prefix);
+  REGISTER_SCALAR_FUNCTIONS(registerArrayMinMaxFunctions, prefix);
 }
 
 template <typename T>
@@ -115,23 +105,8 @@ inline void registerArrayRemoveFunctions(const std::string& prefix) {
 }
 
 inline void registerArrayRemoveFunctions(const std::string& prefix) {
-  registerArrayRemoveFunctions<int8_t>(prefix);
-  registerArrayRemoveFunctions<int16_t>(prefix);
-  registerArrayRemoveFunctions<int32_t>(prefix);
-  registerArrayRemoveFunctions<int64_t>(prefix);
-  registerArrayRemoveFunctions<int128_t>(prefix);
-  registerArrayRemoveFunctions<float>(prefix);
-  registerArrayRemoveFunctions<double>(prefix);
-  registerArrayRemoveFunctions<bool>(prefix);
-  registerArrayRemoveFunctions<Timestamp>(prefix);
-  registerArrayRemoveFunctions<Date>(prefix);
-  registerArrayRemoveFunctions<Varbinary>(prefix);
+  REGISTER_SCALAR_FUNCTIONS(registerArrayRemoveFunctions, prefix);
   registerArrayRemoveFunctions<Generic<T1>>(prefix);
-  registerFunction<
-      ArrayRemoveFunctionString,
-      Array<Varchar>,
-      Array<Varchar>,
-      Varchar>({prefix + "array_remove"});
 }
 
 template <typename T>
