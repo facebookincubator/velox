@@ -19,7 +19,6 @@
 #include <folly/Random.h>
 #include <folly/init/Init.h>
 
-#include "velox/row/UnsafeRowDeserializers.h"
 #include "velox/row/UnsafeRowFast.h"
 #include "velox/vector/fuzzer/VectorFuzzer.h"
 #include "velox/vector/tests/utils/VectorTestBase.h"
@@ -47,8 +46,8 @@ class UnsafeRowFuzzTests : public ::testing::Test {
 
   void doTest(
       const RowTypePtr& rowType,
-      std::function<std::vector<std::optional<std::string_view>>(
-          const RowVectorPtr& data)> serializeFunc) {
+      std::function<std::vector<char*>(const RowVectorPtr& data)>
+          serializeFunc) {
     VectorFuzzer::Options opts;
     opts.vectorSize = kNumBuffers;
     opts.nullRatio = 0.1;
@@ -82,7 +81,7 @@ class UnsafeRowFuzzTests : public ::testing::Test {
 
       // Deserialize previous bytes back to row vector
       VectorPtr outputVector =
-          UnsafeRowDeserializer::deserialize(serialized, rowType, pool_.get());
+          UnsafeRowFast::deserialize(serialized, rowType, pool_.get());
 
       assertEqualVectors(inputVector, outputVector);
     }
@@ -164,7 +163,7 @@ TEST_F(UnsafeRowFuzzTests, fast) {
 
   doTest(rowType, [&](const RowVectorPtr& data) {
     const auto numRows = data->size();
-    std::vector<std::optional<std::string_view>> serialized;
+    std::vector<char*> serialized;
     serialized.reserve(numRows);
 
     UnsafeRowFast fast(data);
@@ -189,7 +188,7 @@ TEST_F(UnsafeRowFuzzTests, fast) {
 
       EXPECT_EQ(rowSize, fast.rowSize(i)) << i << ", " << data->toString(i);
 
-      serialized.push_back(std::string_view(buffers_[i], rowSize));
+      serialized.push_back(buffers_[i]);
     }
     return serialized;
   });
