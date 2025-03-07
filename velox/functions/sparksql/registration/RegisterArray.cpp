@@ -89,53 +89,35 @@ inline void registerArrayJoinFunctions(const std::string& prefix) {
 }
 
 template <typename T>
-inline void registerArrayMinMaxFunctions(const std::string& prefix) {
+void registerArrayMinMaxFunctions(const std::string& prefix) {
   registerFunction<ArrayMinFunction, T, Array<T>>({prefix + "array_min"});
   registerFunction<ArrayMaxFunction, T, Array<T>>({prefix + "array_max"});
 }
 
-inline void registerArrayMinMaxFunctions(const std::string& prefix) {
-  REGISTER_SCALAR_FUNCTIONS(registerArrayMinMaxFunctions, prefix);
-}
-
 template <typename T>
-inline void registerArrayRemoveFunctions(const std::string& prefix) {
+void registerArrayRemoveFunctions(const std::string& prefix) {
   registerFunction<ArrayRemoveFunction, Array<T>, Array<T>, T>(
       {prefix + "array_remove"});
 }
 
-inline void registerArrayRemoveFunctions(const std::string& prefix) {
-  REGISTER_SCALAR_FUNCTIONS(registerArrayRemoveFunctions, prefix);
-  registerArrayRemoveFunctions<Generic<T1>>(prefix);
-}
-
 template <typename T>
-inline void registerArrayUnionFunction(const std::string& prefix) {
+void registerArrayUnionFunction(const std::string& prefix) {
   registerFunction<ArrayUnionFunction, Array<T>, Array<T>, Array<T>>(
       {prefix + "array_union"});
-}
-
-inline void registerArrayUnionFunctions(const std::string& prefix) {
-  registerArrayUnionFunction<int8_t>(prefix);
-  registerArrayUnionFunction<int16_t>(prefix);
-  registerArrayUnionFunction<int32_t>(prefix);
-  registerArrayUnionFunction<int64_t>(prefix);
-  registerArrayUnionFunction<int128_t>(prefix);
-  registerArrayUnionFunction<float>(prefix);
-  registerArrayUnionFunction<double>(prefix);
-  registerArrayUnionFunction<bool>(prefix);
-  registerArrayUnionFunction<Timestamp>(prefix);
-  registerArrayUnionFunction<Date>(prefix);
-  registerArrayUnionFunction<Varbinary>(prefix);
-  registerArrayUnionFunction<Varchar>(prefix);
-  registerArrayUnionFunction<Generic<T1>>(prefix);
 }
 
 void registerArrayFunctions(const std::string& prefix) {
   registerArrayConcatFunctions(prefix);
   registerArrayJoinFunctions(prefix);
-  registerArrayMinMaxFunctions(prefix);
-  registerArrayRemoveFunctions(prefix);
+  REGISTER_SCALAR_FUNCTIONS(registerArrayMinMaxFunctions, prefix);
+  REGISTER_SCALAR_FUNCTIONS_WITHOUT_VARCHAR(
+      registerArrayRemoveFunctions, prefix);
+  registerArrayRemoveFunctions<Generic<T1>>(prefix);
+  registerFunction<
+      ArrayRemoveFunctionString,
+      Array<Varchar>,
+      Array<Varchar>,
+      Varchar>({prefix + "array_remove"});
   registerSparkArrayFunctions(prefix);
   // Register array sort functions.
   exec::registerStatefulVectorFunction(
@@ -170,7 +152,8 @@ void registerArrayFunctions(const std::string& prefix) {
       Array<Generic<T1>>,
       Array<Generic<T1>>,
       Generic<T1>>({prefix + "array_append"});
-  registerArrayUnionFunctions(prefix);
+  REGISTER_SCALAR_FUNCTIONS(registerArrayUnionFunction, prefix);
+  registerArrayUnionFunction<Generic<T1>>(prefix);
 }
 
 } // namespace sparksql

@@ -104,6 +104,15 @@ void registerUnaryNumeric(const std::vector<std::string>& aliases) {
     functionName<Date>(prefix);                         \
   }
 
+#define REGISTER_SCALAR_FUNCTIONS_WITHOUT_VARCHAR(functionName, prefix) \
+  {                                                                     \
+    REGISTER_NUMERIC_FUNCTIONS(functionName, prefix)                    \
+    functionName<Varbinary>(prefix);                                    \
+    functionName<bool>(prefix);                                         \
+    functionName<Timestamp>(prefix);                                    \
+    functionName<Date>(prefix);                                         \
+  }
+
 } // namespace
 
 } // namespace facebook::velox::functions
