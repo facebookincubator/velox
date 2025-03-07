@@ -890,7 +890,7 @@ Spark-specific Configuration
    * - spark.legacy_statistical_aggregate
      - bool
      - false
-     - if true, statistical aggregation function includes skewness, kurtosis will return std::numeric_limits<double>::quiet_NaN()
+     - If true, statistical aggregation function includes skewness, kurtosis will return std::numeric_limits<double>::quiet_NaN()
      - instead of NULL when DivideByZero occurs during expression evaluation.
 
 Tracing

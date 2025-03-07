@@ -61,16 +61,12 @@ struct KurtosisResultAccessor {
 
 std::vector<std::shared_ptr<exec::AggregateFunctionSignature>> getSignatures() {
   std::vector<std::shared_ptr<exec::AggregateFunctionSignature>> signatures;
-  std::vector<std::string> inputTypes = {
-      "smallint", "integer", "bigint", "real", "double"};
-  for (const auto& inputType : inputTypes) {
-    signatures.push_back(
-        exec::AggregateFunctionSignatureBuilder()
-            .returnType("double")
-            .intermediateType(CentralMomentsIntermediateResult::type())
-            .argumentType(inputType)
-            .build());
-  }
+  signatures.push_back(
+      exec::AggregateFunctionSignatureBuilder()
+          .returnType("double")
+          .intermediateType(CentralMomentsIntermediateResult::type())
+          .argumentType("double")
+          .build());
   return signatures;
 }
 
@@ -89,36 +85,19 @@ exec::AggregateRegistrationResult registerSkewness(
           const std::vector<TypePtr>& argTypes,
           const TypePtr& resultType,
           const core::QueryConfig& config) -> std::unique_ptr<exec::Aggregate> {
-        VELOX_CHECK_LE(
-            argTypes.size(), 1, "{} takes at most one argument", name);
+        VELOX_CHECK_EQ(argTypes.size(), 1, "{} takes only one argument", name);
         const auto& inputType = argTypes[0];
         if (config.sparkLegacyStatisticalAggregate()) {
           if (exec::isRawInput(step)) {
             switch (inputType->kind()) {
-              case TypeKind::SMALLINT:
-                return std::make_unique<CentralMomentsAggregatesBase<
-                    int16_t,
-                    SkewnessResultAccessor<false>>>(resultType);
-              case TypeKind::INTEGER:
-                return std::make_unique<CentralMomentsAggregatesBase<
-                    int32_t,
-                    SkewnessResultAccessor<false>>>(resultType);
-              case TypeKind::BIGINT:
-                return std::make_unique<CentralMomentsAggregatesBase<
-                    int64_t,
-                    SkewnessResultAccessor<false>>>(resultType);
               case TypeKind::DOUBLE:
                 return std::make_unique<CentralMomentsAggregatesBase<
                     double,
                     SkewnessResultAccessor<false>>>(resultType);
-              case TypeKind::REAL:
-                return std::make_unique<CentralMomentsAggregatesBase<
-                    float,
-                    SkewnessResultAccessor<false>>>(resultType);
               default:
                 VELOX_UNSUPPORTED(
                     "Unsupported input type: {}. "
-                    "Expected SMALLINT, INTEGER, BIGINT, DOUBLE or REAL.",
+                    "Expected DOUBLE.",
                     inputType->toString());
             }
           } else {
@@ -133,30 +112,14 @@ exec::AggregateRegistrationResult registerSkewness(
         } else {
           if (exec::isRawInput(step)) {
             switch (inputType->kind()) {
-              case TypeKind::SMALLINT:
-                return std::make_unique<CentralMomentsAggregatesBase<
-                    int16_t,
-                    SkewnessResultAccessor<true>>>(resultType);
-              case TypeKind::INTEGER:
-                return std::make_unique<CentralMomentsAggregatesBase<
-                    int32_t,
-                    SkewnessResultAccessor<true>>>(resultType);
-              case TypeKind::BIGINT:
-                return std::make_unique<CentralMomentsAggregatesBase<
-                    int64_t,
-                    SkewnessResultAccessor<true>>>(resultType);
               case TypeKind::DOUBLE:
                 return std::make_unique<CentralMomentsAggregatesBase<
                     double,
                     SkewnessResultAccessor<true>>>(resultType);
-              case TypeKind::REAL:
-                return std::make_unique<CentralMomentsAggregatesBase<
-                    float,
-                    SkewnessResultAccessor<true>>>(resultType);
               default:
                 VELOX_UNSUPPORTED(
                     "Unsupported input type: {}. "
-                    "Expected SMALLINT, INTEGER, BIGINT, DOUBLE or REAL.",
+                    "Expected DOUBLE.",
                     inputType->toString());
             }
           } else {
@@ -189,31 +152,14 @@ exec::AggregateRegistrationResult registerKurtosis(
           const std::vector<TypePtr>& argTypes,
           const TypePtr& resultType,
           const core::QueryConfig& config) -> std::unique_ptr<exec::Aggregate> {
-        VELOX_CHECK_LE(
-            argTypes.size(), 1, "{} takes at most one argument", name);
+        VELOX_CHECK_EQ(argTypes.size(), 1, "{} takes only one argument", name);
         const auto& inputType = argTypes[0];
         if (config.sparkLegacyStatisticalAggregate()) {
           if (exec::isRawInput(step)) {
             switch (inputType->kind()) {
-              case TypeKind::SMALLINT:
-                return std::make_unique<CentralMomentsAggregatesBase<
-                    int16_t,
-                    KurtosisResultAccessor<false>>>(resultType);
-              case TypeKind::INTEGER:
-                return std::make_unique<CentralMomentsAggregatesBase<
-                    int32_t,
-                    KurtosisResultAccessor<false>>>(resultType);
-              case TypeKind::BIGINT:
-                return std::make_unique<CentralMomentsAggregatesBase<
-                    int64_t,
-                    KurtosisResultAccessor<false>>>(resultType);
               case TypeKind::DOUBLE:
                 return std::make_unique<CentralMomentsAggregatesBase<
                     double,
-                    KurtosisResultAccessor<false>>>(resultType);
-              case TypeKind::REAL:
-                return std::make_unique<CentralMomentsAggregatesBase<
-                    float,
                     KurtosisResultAccessor<false>>>(resultType);
               default:
                 VELOX_UNSUPPORTED(
@@ -233,25 +179,9 @@ exec::AggregateRegistrationResult registerKurtosis(
         } else {
           if (exec::isRawInput(step)) {
             switch (inputType->kind()) {
-              case TypeKind::SMALLINT:
-                return std::make_unique<CentralMomentsAggregatesBase<
-                    int16_t,
-                    KurtosisResultAccessor<true>>>(resultType);
-              case TypeKind::INTEGER:
-                return std::make_unique<CentralMomentsAggregatesBase<
-                    int32_t,
-                    KurtosisResultAccessor<true>>>(resultType);
-              case TypeKind::BIGINT:
-                return std::make_unique<CentralMomentsAggregatesBase<
-                    int64_t,
-                    KurtosisResultAccessor<true>>>(resultType);
               case TypeKind::DOUBLE:
                 return std::make_unique<CentralMomentsAggregatesBase<
                     double,
-                    KurtosisResultAccessor<true>>>(resultType);
-              case TypeKind::REAL:
-                return std::make_unique<CentralMomentsAggregatesBase<
-                    float,
                     KurtosisResultAccessor<true>>>(resultType);
               default:
                 VELOX_UNSUPPORTED(
