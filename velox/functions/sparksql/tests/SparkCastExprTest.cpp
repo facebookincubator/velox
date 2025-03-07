@@ -131,6 +131,7 @@ class SparkCastExprTest : public functions::test::CastBaseTest {
   void testTimestampToIntegralCastOverflow(std::vector<T> expected) {
     testCast(
         makeFlatVector<Timestamp>({
+            Timestamp(1740470426, 0),
             Timestamp(2147483647, 0),
             Timestamp(9223372036854, 775'807'000),
             Timestamp(-9223372036855, 224'192'000),
@@ -388,16 +389,19 @@ TEST_F(SparkCastExprTest, timestampToInt) {
 
   // Cast overflowed timestamp as tinyint/smallint/integer.
   testTimestampToIntegralCastOverflow<int8_t>({
+      -102,
       -1,
       -10,
       9,
   });
   testTimestampToIntegralCastOverflow<int16_t>({
+      30874,
       -1,
       23286,
       -23287,
   });
   testTimestampToIntegralCastOverflow<int32_t>({
+      1740470426,
       2147483647,
       2077252342,
       -2077252343,
