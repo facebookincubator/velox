@@ -161,7 +161,8 @@ Array Functions
 
 .. spark:function:: concat(array1, array2, ..., arrayN) -> array
 
-    Concatenates the arrays ``array1``, ``array2``, ..., ``arrayN``. This function provides the same functionality as the SQL-standard concatenation operator (``||``).
+    Concatenates the arrays ``array1``, ``array2``, ..., ``arrayN``. All parameters have the same type.
+    This function provides the same functionality as the SQL-standard concatenation operator (``||``).
     Fails if the result array size exceeds INT_MAX - 15. ::
 
         SELECT concat(array(1, 2, 3), array(4, 5), array(6)); -- [1, 2, 3, 4, 5, 6]

@@ -65,6 +65,7 @@ void registerArrayConcatFunctions(const std::string& prefix) {
   registerArrayConcatFunction<float>(prefix);
   registerArrayConcatFunction<double>(prefix);
   registerArrayConcatFunction<bool>(prefix);
+  registerArrayConcatFunction<Varbinary>(prefix);
   registerArrayConcatFunction<Varchar>(prefix);
   registerArrayConcatFunction<Timestamp>(prefix);
   registerArrayConcatFunction<Date>(prefix);

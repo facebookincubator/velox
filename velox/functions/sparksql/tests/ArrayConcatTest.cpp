@@ -37,9 +37,8 @@ TEST_F(ArrayConcatTest, intArray) {
   const auto intArray = makeArrayVector<int64_t>(
       {{1, 2, 3, 4}, {3, 4, 5}, {7, 8, 9}, {10, 20, 30}});
   const auto emptyArray = makeArrayVector<int64_t>({{9, 8}, {}, {777}, {}});
-  VectorPtr expected;
 
-  expected = makeArrayVector<int64_t>({
+  VectorPtr expected = makeArrayVector<int64_t>({
       {1, 2, 3, 4, 9, 8},
       {3, 4, 5},
       {7, 8, 9, 777},
@@ -65,9 +64,8 @@ TEST_F(ArrayConcatTest, nullArray) {
       std::nullopt,
       {{1}},
   });
-  VectorPtr expected;
 
-  expected = makeNullableArrayVector<int64_t>({
+  VectorPtr expected = makeNullableArrayVector<int64_t>({
       {{1, 2, 3, 4, std::nullopt, std::nullopt}},
       std::nullopt,
       {{10, 20, 30, 1}},
