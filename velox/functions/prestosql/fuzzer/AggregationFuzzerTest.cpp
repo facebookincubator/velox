@@ -34,6 +34,7 @@
 #include "velox/functions/prestosql/fuzzer/MapUnionSumInputGenerator.h"
 #include "velox/functions/prestosql/fuzzer/MinMaxByResultVerifier.h"
 #include "velox/functions/prestosql/fuzzer/MinMaxInputGenerator.h"
+#include "velox/functions/prestosql/fuzzer/TDigestAggregateInputGenerator.h"
 #include "velox/functions/prestosql/registration/RegistrationFunctions.h"
 #include "velox/functions/prestosql/window/WindowFunctionsRegistration.h"
 #include "velox/vector/fuzzer/VectorFuzzer.h"
@@ -89,7 +90,8 @@ getCustomInputGenerators() {
       {"classification_miss_rate",
        std::make_shared<ClassificationAggregationInputGenerator>()},
       {"classification_thresholds",
-       std::make_shared<ClassificationAggregationInputGenerator>()}};
+       std::make_shared<ClassificationAggregationInputGenerator>()},
+      {"tdigest_agg", std::make_shared<TDigestAggregateInputGenerator>()}};
 }
 
 } // namespace
@@ -131,9 +133,9 @@ int main(int argc, char** argv) {
       // Lambda functions are not supported yet.
       "reduce_agg",
       "max_data_size_for_stats",
+      "map_union_sum",
       "approx_set",
-      "any_value",
-  };
+      "any_value"};
 
   static const std::unordered_set<std::string> functionsRequireSortedInput = {
       "tdigest_agg",
