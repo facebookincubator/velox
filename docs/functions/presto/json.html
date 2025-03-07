@@ -197,7 +197,9 @@ array). Returns NULL if <code class="docutils literal notranslate"><span class="
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">json_extract</span><span class="p">(</span><span class="n">json</span><span class="p">,</span> <span class="s1">&#39;$.store.book&#39;</span><span class="p">);</span>
 </pre></div>
 </div>
-<p>Current implementation supports limited subset of JSONPath syntax.</p>
+<p>Current implementation supports limited subset of JSONPath syntax.
+If <code class="docutils literal notranslate"><span class="pre">json</span></code> is a varchar then it is expected to conform to <a class="reference external" href="https://datatracker.ietf.org/doc/html/rfc7159.html">RFC 7159</a> and will be converted to its canonical
+format before extraction.</p>
 </dd></dl>
 
 <dl class="py function">
@@ -211,6 +213,9 @@ or string):</p>
 <span class="n">SELECT</span> <span class="n">json_extract_scalar</span><span class="p">(</span><span class="n">json</span><span class="p">,</span> <span class="s1">&#39;$.store.book[0].author&#39;</span><span class="p">);</span>
 </pre></div>
 </div>
+<p>Current implementation supports limited subset of JSONPath syntax.
+If <code class="docutils literal notranslate"><span class="pre">json</span></code> is a varchar then it is expected to conform to <a class="reference external" href="https://datatracker.ietf.org/doc/html/rfc7159.html">RFC 7159</a> and will be converted to its canonical
+format before extraction.</p>
 </dd></dl>
 
 <dl class="py function">
@@ -227,8 +232,9 @@ The JSON value can be a JSON object, a JSON array, a JSON string, a JSON number,
 <dl class="py function">
 <dt class="sig sig-object py" id="json_parse">
 <span class="sig-name descname"><span class="pre">json_parse</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">varchar</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">json</span></span></span><a class="headerlink" href="#json_parse" title="Link to this definition">¶</a></dt>
-<dd><p>expects a JSON text conforming to <a class="reference external" href="https://datatracker.ietf.org/doc/html/rfc7159.html">RFC 7159</a>, and returns the JSON value deserialized from the JSON text.
-The JSON value can be a JSON object, a JSON array, a JSON string, a JSON number, <code class="docutils literal notranslate"><span class="pre">true</span></code>, <code class="docutils literal notranslate"><span class="pre">false</span></code> or <code class="docutils literal notranslate"><span class="pre">null</span></code>:</p>
+<dd><p>Expects a JSON text conforming to <a class="reference external" href="https://datatracker.ietf.org/doc/html/rfc7159.html">RFC 7159</a>, and returns the JSON value (in its canonical form) deserialized
+from the JSON text. The JSON value can be a JSON object, a JSON array, a JSON string, a JSON number, <code class="docutils literal notranslate"><span class="pre">true</span></code>,
+<code class="docutils literal notranslate"><span class="pre">false</span></code> or <code class="docutils literal notranslate"><span class="pre">null</span></code>:</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">json_parse</span><span class="p">(</span><span class="s1">&#39;[1, 2, 3]&#39;</span><span class="p">);</span> <span class="o">--</span> <span class="n">JSON</span> <span class="s1">&#39;[1,2,3]&#39;</span>
 <span class="n">SELECT</span> <span class="n">json_parse</span><span class="p">(</span><span class="s1">&#39;&quot;abc&quot;&#39;</span><span class="p">);</span> <span class="o">--</span> <span class="n">JSON</span> <span class="s1">&#39;&quot;abc&quot;&#39;</span>
 </pre></div>
