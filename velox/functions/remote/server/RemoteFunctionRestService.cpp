@@ -19,6 +19,8 @@
 #include <boost/beast/version.hpp>
 #include "velox/type/fbhive/HiveTypeParser.h"
 #include "velox/serializers/PrestoSerializer.h"
+#include "velox/vector/VectorStream.h"
+#include "velox/vector/FlatVector.h"
 
 namespace facebook::velox::functions {
 
