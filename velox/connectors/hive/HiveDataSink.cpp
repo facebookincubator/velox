@@ -93,6 +93,23 @@ std::vector<column_index_t> getPartitionChannels(
   return channels;
 }
 
+// Returns the column indices of non-partition columns.
+std::vector<column_index_t> getNonPartitionChannels(
+    const std::vector<column_index_t>& partitionChannels,
+    const column_index_t childrenSize) {
+  std::vector<column_index_t> nonPartitionChannels;
+  nonPartitionChannels.reserve(childrenSize - partitionChannels.size());
+
+  for (column_index_t i = 0; i < childrenSize; i++) {
+    if (std::find(partitionChannels.cbegin(), partitionChannels.cend(), i) ==
+        partitionChannels.cend()) {
+      nonPartitionChannels.push_back(i);
+    }
+  }
+
+  return nonPartitionChannels;
+}
+
 std::string makeUuid() {
   return boost::lexical_cast<std::string>(boost::uuids::random_generator()());
 }
@@ -359,6 +376,8 @@ HiveDataSink::HiveDataSink(
                     hiveConfig_->isPartitionPathAsLowerCase(
                         connectorQueryCtx->sessionProperties()))
               : nullptr),
+      nonPartitionChannels_(
+          getNonPartitionChannels(partitionChannels_, inputType_->size())),
       bucketCount_(
           insertTableHandle_->bucketProperty() == nullptr
               ? 0
@@ -400,7 +419,7 @@ HiveDataSink::HiveDataSink(
     sortCompareFlags_.reserve(sortedProperty.size());
     for (int i = 0; i < sortedProperty.size(); ++i) {
       auto columnIndex =
-          getNonPartitionTypes(dataChannels_, inputType_)
+          getNonPartitionTypes(nonPartitionChannels_, inputType_)
               ->getChildIdxIfExists(sortedProperty.at(i)->sortColumn());
       if (columnIndex.has_value()) {
         sortColumnIndices_.push_back(columnIndex.value());
@@ -730,7 +749,11 @@ uint32_t HiveDataSink::appendWriter(const HiveWriterId& id) {
 
   // Only overwrite options in case they were not already provided.
   if (options->schema == nullptr) {
-    options->schema = getNonPartitionTypes(dataChannels_, inputType_);
+    if (!dataChannels_.empty()) {
+      options->schema = getNonPartitionTypes(dataChannels_, inputType_);
+    } else {
+      options->schema = getNonPartitionTypes(nonPartitionChannels_, inputType_);
+    }
   }
 
   if (options->memoryPool == nullptr) {
@@ -885,17 +908,7 @@ void HiveDataSink::splitInputRowsAndEnsureWriters(RowVectorPtr /* input */) {
 
 // Returns the column indices of non-partition data columns.
 std::vector<column_index_t> HiveDataSink::getDataChannels() const {
-  std::vector<column_index_t> dataChannels;
-  dataChannels.reserve(inputType_->size() - partitionChannels_.size());
-
-  for (column_index_t i = 0; i < inputType_->size(); i++) {
-    if (std::find(partitionChannels_.cbegin(), partitionChannels_.cend(), i) ==
-        partitionChannels_.cend()) {
-      dataChannels.push_back(i);
-    }
-  }
-
-  return dataChannels;
+  return nonPartitionChannels_;
 }
 
 std::string HiveDataSink::makePartitionDirectory(
