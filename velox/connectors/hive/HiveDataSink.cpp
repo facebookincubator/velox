@@ -412,6 +412,13 @@ HiveDataSink::HiveDataSink(
       "Unsupported commit strategy: {}",
       commitStrategyToString(commitStrategy_));
 
+  if (insertTableHandle_->ensureFiles()) {
+    VELOX_CHECK(
+        !isPartitioned() && !isBucketed(),
+        "ensureFiles is not supported with bucketing or partition keys in the data");
+    ensureWriter(HiveWriterId::unpartitionedId());
+  }
+
   if (!isBucketed()) {
     return;
   }
@@ -780,14 +787,10 @@ uint32_t HiveDataSink::appendWriter(const HiveWriterId& id) {
         insertTableHandle_->serdeParameters().end());
   }
 
-  options->processConfigs(*hiveConfig_->config(), *connectorSessionProperties);
-
-  const auto& sessionTimeZoneName = connectorQueryCtx_->sessionTimezone();
-  if (!sessionTimeZoneName.empty()) {
-    options->sessionTimezone = tz::locateZone(sessionTimeZoneName);
-  }
+  options->sessionTimezoneName = connectorQueryCtx_->sessionTimezone();
   options->adjustTimestampToTimezone =
       connectorQueryCtx_->adjustTimestampToTimezone();
+  options->processConfigs(*hiveConfig_->config(), *connectorSessionProperties);
 
   // Prevents the memory allocation during the writer creation.
   WRITER_NON_RECLAIMABLE_SECTION_GUARD(writerInfo_.size() - 1);
@@ -1015,6 +1018,8 @@ folly::dynamic HiveInsertTableHandle::serialize() const {
     params[key] = value;
   }
   obj["serdeParameters"] = params;
+
+  obj["ensureFiles"] = ensureFiles_;
   return obj;
 }
 
@@ -1044,13 +1049,17 @@ HiveInsertTableHandlePtr HiveInsertTableHandle::create(
     serdeParameters.emplace(pair.first.asString(), pair.second.asString());
   }
 
+  bool ensureFiles = obj["ensureFiles"].asBool();
+
   return std::make_shared<HiveInsertTableHandle>(
       inputColumns,
       locationHandle,
       storageFormat,
       bucketProperty,
       compressionKind,
-      serdeParameters);
+      serdeParameters,
+      nullptr, // writerOptions is not serializable
+      ensureFiles);
 }
 
 void HiveInsertTableHandle::registerSerDe() {
@@ -1089,10 +1098,11 @@ std::string HiveInsertTableHandle::toString() const {
 
 std::string LocationHandle::toString() const {
   return fmt::format(
-      "LocationHandle [targetPath: {}, writePath: {}, tableType: {},",
+      "LocationHandle [targetPath: {}, writePath: {}, tableType: {}, tableFileName: {}]",
       targetPath_,
       writePath_,
-      tableTypeName(tableType_));
+      tableTypeName(tableType_),
+      targetFileName_);
 }
 
 void LocationHandle::registerSerDe() {
@@ -1106,6 +1116,7 @@ folly::dynamic LocationHandle::serialize() const {
   obj["targetPath"] = targetPath_;
   obj["writePath"] = writePath_;
   obj["tableType"] = tableTypeName(tableType_);
+  obj["targetFileName"] = targetFileName_;
   return obj;
 }
 
@@ -1113,7 +1124,9 @@ LocationHandlePtr LocationHandle::create(const folly::dynamic& obj) {
   auto targetPath = obj["targetPath"].asString();
   auto writePath = obj["writePath"].asString();
   auto tableType = tableTypeFromName(obj["tableType"].asString());
-  return std::make_shared<LocationHandle>(targetPath, writePath, tableType);
+  auto targetFileName = obj["targetFileName"].asString();
+  return std::make_shared<LocationHandle>(
+      targetPath, writePath, tableType, targetFileName);
 }
 
 std::unique_ptr<memory::MemoryReclaimer> HiveDataSink::WriterReclaimer::create(

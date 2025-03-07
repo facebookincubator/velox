@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+#include "velox/common/base/tests/GTestUtils.h"
 #include "velox/common/file/FileSystems.h"
 #include "velox/connectors/hive/HiveConnectorSplit.h"
 #include "velox/connectors/hive/iceberg/IcebergDeleteFile.h"
@@ -102,26 +103,31 @@ class HiveIcebergTest : public HiveConnectorTestBase {
 
   void assertMultipleSplits(
       const std::vector<int64_t>& deletePositions,
-      int32_t splitCount,
-      int32_t numPrefetchSplits) {
+      int32_t fileCount,
+      int32_t numPrefetchSplits,
+      int rowCountPerFile = rowCount,
+      int32_t splitCountPerFile = 1) {
     std::map<std::string, std::vector<int64_t>> rowGroupSizesForFiles;
-    for (int32_t i = 0; i < splitCount; i++) {
+    for (int32_t i = 0; i < fileCount; i++) {
       std::string dataFileName = fmt::format("data_file_{}", i);
-      rowGroupSizesForFiles[dataFileName] = {rowCount};
+      rowGroupSizesForFiles[dataFileName] = {rowCountPerFile};
     }
 
     std::unordered_map<
         std::string,
         std::multimap<std::string, std::vector<int64_t>>>
         deleteFilesForBaseDatafiles;
-    for (int i = 0; i < splitCount; i++) {
+    for (int i = 0; i < fileCount; i++) {
       std::string deleteFileName = fmt::format("delete_file_{}", i);
       deleteFilesForBaseDatafiles[deleteFileName] = {
           {fmt::format("data_file_{}", i), deletePositions}};
     }
 
     assertPositionalDeletes(
-        rowGroupSizesForFiles, deleteFilesForBaseDatafiles, numPrefetchSplits);
+        rowGroupSizesForFiles,
+        deleteFilesForBaseDatafiles,
+        numPrefetchSplits,
+        splitCountPerFile);
   }
 
   std::vector<int64_t> makeRandomIncreasingValues(int64_t begin, int64_t end) {
@@ -169,7 +175,8 @@ class HiveIcebergTest : public HiveConnectorTestBase {
           std::string,
           std::multimap<std::string, std::vector<int64_t>>>&
           deleteFilesForBaseDatafiles,
-      int32_t numPrefetchSplits = 0) {
+      int32_t numPrefetchSplits = 0,
+      int32_t splitCount = 1) {
     // Keep the reference to the deleteFilePath, otherwise the corresponding
     // file will be deleted.
     std::map<std::string, std::shared_ptr<TempFilePath>> dataFilePaths =
@@ -198,18 +205,20 @@ class HiveIcebergTest : public HiveConnectorTestBase {
           // add it to the split
           auto deleteFilePath =
               deleteFilePaths[deleteFileName].second->getPath();
-          IcebergDeleteFile deleteFile(
+          IcebergDeleteFile icebergDeleteFile(
               FileContent::kPositionalDeletes,
               deleteFilePath,
               fileFomat_,
               deleteFilePaths[deleteFileName].first,
               testing::internal::GetFileSize(
                   std::fopen(deleteFilePath.c_str(), "r")));
-          deleteFiles.push_back(deleteFile);
+          deleteFiles.push_back(icebergDeleteFile);
         }
       }
 
-      splits.emplace_back(makeIcebergSplit(baseFilePath, deleteFiles));
+      auto icebergSplits =
+          makeIcebergSplits(baseFilePath, deleteFiles, {}, splitCount);
+      splits.insert(splits.end(), icebergSplits.begin(), icebergSplits.end());
     }
 
     std::string duckdbSql =
@@ -226,6 +235,43 @@ class HiveIcebergTest : public HiveConnectorTestBase {
   }
 
   const static int rowCount = 20000;
+
+ protected:
+  std::shared_ptr<dwrf::Config> config_;
+  std::function<std::unique_ptr<dwrf::DWRFFlushPolicy>()> flushPolicyFactory_;
+
+  std::vector<std::shared_ptr<ConnectorSplit>> makeIcebergSplits(
+      const std::string& dataFilePath,
+      const std::vector<IcebergDeleteFile>& deleteFiles = {},
+      const std::unordered_map<std::string, std::optional<std::string>>&
+          partitionKeys = {},
+      const uint32_t splitCount = 1) {
+    std::unordered_map<std::string, std::string> customSplitInfo;
+    customSplitInfo["table_format"] = "hive-iceberg";
+
+    auto file = filesystems::getFileSystem(dataFilePath, nullptr)
+                    ->openFileForRead(dataFilePath);
+    const int64_t fileSize = file->size();
+    std::vector<std::shared_ptr<ConnectorSplit>> splits;
+    const uint64_t splitSize = std::floor((fileSize) / splitCount);
+
+    for (int i = 0; i < splitCount; ++i) {
+      splits.emplace_back(std::make_shared<HiveIcebergSplit>(
+          kHiveConnectorId,
+          dataFilePath,
+          fileFomat_,
+          i * splitSize,
+          splitSize,
+          partitionKeys,
+          std::nullopt,
+          customSplitInfo,
+          nullptr,
+          /*cacheable=*/true,
+          deleteFiles));
+    }
+
+    return splits;
+  }
 
  private:
   std::map<std::string, std::shared_ptr<TempFilePath>> writeDataFiles(
@@ -327,37 +373,12 @@ class HiveIcebergTest : public HiveConnectorTestBase {
     for (int j = 0; j < vectorSizes.size(); j++) {
       auto data = makeContinuousIncreasingValues(
           startingValue, startingValue + vectorSizes[j]);
-      VectorPtr c0 = vectorMaker_.flatVector<int64_t>(data);
+      VectorPtr c0 = makeFlatVector<int64_t>(data);
       vectors.push_back(makeRowVector({"c0"}, {c0}));
       startingValue += vectorSizes[j];
     }
 
     return vectors;
-  }
-
-  std::shared_ptr<ConnectorSplit> makeIcebergSplit(
-      const std::string& dataFilePath,
-      const std::vector<IcebergDeleteFile>& deleteFiles = {}) {
-    std::unordered_map<std::string, std::optional<std::string>> partitionKeys;
-    std::unordered_map<std::string, std::string> customSplitInfo;
-    customSplitInfo["table_format"] = "hive-iceberg";
-
-    auto file = filesystems::getFileSystem(dataFilePath, nullptr)
-                    ->openFileForRead(dataFilePath);
-    const int64_t fileSize = file->size();
-
-    return std::make_shared<HiveIcebergSplit>(
-        kHiveConnectorId,
-        dataFilePath,
-        fileFomat_,
-        0,
-        fileSize,
-        partitionKeys,
-        std::nullopt,
-        customSplitInfo,
-        nullptr,
-        /*cacheable=*/true,
-        deleteFiles);
   }
 
   std::string getDuckDBQuery(
@@ -478,8 +499,6 @@ class HiveIcebergTest : public HiveConnectorTestBase {
   }
 
   dwio::common::FileFormat fileFomat_{dwio::common::FileFormat::DWRF};
-  std::shared_ptr<dwrf::Config> config_;
-  std::function<std::unique_ptr<dwrf::DWRFFlushPolicy>()> flushPolicyFactory_;
 
   RowTypePtr rowType_{ROW({"c0"}, {BIGINT()})};
   std::shared_ptr<IcebergMetadataColumn> pathColumn_ =
@@ -658,6 +677,102 @@ TEST_F(HiveIcebergTest, positionalDeletesMultipleSplits) {
   assertMultipleSplits(makeRandomIncreasingValues(0, 20000), 10, 3);
   assertMultipleSplits(makeContinuousIncreasingValues(0, 20000), 10, 3);
   assertMultipleSplits({}, 10, 3);
+
+  assertMultipleSplits({1, 2, 3, 4}, 10, 5, 30000, 3);
+  assertPositionalDeletes(
+      {
+          {"data_file_0", {500}},
+          {"data_file_1", {10000, 10000}},
+          {"data_file_2", {500}},
+      },
+      {{"delete_file_1",
+        {{"data_file_1", makeRandomIncreasingValues(0, 20000)}}}},
+      0,
+      3);
+
+  // Include only upper bound(which is exclusive) in delete positions for the
+  // second 10k batch of rows.
+  assertMultipleSplits({1000, 9000, 20000}, 1, 0, 20000, 3);
 }
 
+TEST_F(HiveIcebergTest, testPartitionedRead) {
+  RowTypePtr rowType{ROW({"c0", "ds"}, {BIGINT(), DateType::get()})};
+  std::unordered_map<std::string, std::optional<std::string>> partitionKeys;
+  // Iceberg API sets partition values for dates to daysSinceEpoch, so
+  // in velox, we do not need to convert it to days.
+  // Test query on two partitions ds=17627(2018-04-06), ds=17628(2018-04-07)
+  std::vector<std::shared_ptr<ConnectorSplit>> splits;
+  std::vector<std::shared_ptr<TempFilePath>> dataFilePaths;
+  for (int i = 0; i <= 1; ++i) {
+    std::vector<RowVectorPtr> dataVectors;
+    int32_t daysSinceEpoch = 17627 + i;
+    VectorPtr c0 = makeFlatVector<int64_t>((std::vector<int64_t>){i});
+    VectorPtr ds =
+        makeFlatVector<int32_t>((std::vector<int32_t>){daysSinceEpoch});
+    dataVectors.push_back(makeRowVector({"c0", "ds"}, {c0, ds}));
+
+    auto dataFilePath = TempFilePath::create();
+    dataFilePaths.push_back(dataFilePath);
+    writeToFile(
+        dataFilePath->getPath(), dataVectors, config_, flushPolicyFactory_);
+    partitionKeys["ds"] = std::to_string(daysSinceEpoch);
+    auto icebergSplits =
+        makeIcebergSplits(dataFilePath->getPath(), {}, partitionKeys);
+    splits.insert(splits.end(), icebergSplits.begin(), icebergSplits.end());
+  }
+
+  std::unordered_map<std::string, std::shared_ptr<connector::ColumnHandle>>
+      assignments;
+  assignments.insert(
+      {"c0",
+       std::make_shared<HiveColumnHandle>(
+           "c0",
+           HiveColumnHandle::ColumnType::kRegular,
+           rowType->childAt(0),
+           rowType->childAt(0))});
+
+  std::vector<common::Subfield> requiredSubFields;
+  HiveColumnHandle::ColumnParseParameters columnParseParameters;
+  columnParseParameters.partitionDateValueFormat =
+      HiveColumnHandle::ColumnParseParameters::kDaysSinceEpoch;
+  assignments.insert(
+      {"ds",
+       std::make_shared<HiveColumnHandle>(
+           "ds",
+           HiveColumnHandle::ColumnType::kPartitionKey,
+           rowType->childAt(1),
+           rowType->childAt(1),
+           std::move(requiredSubFields),
+           columnParseParameters)});
+
+  auto plan = PlanBuilder(pool_.get())
+                  .tableScan(rowType, {}, "", nullptr, assignments)
+                  .planNode();
+
+  HiveConnectorTestBase::assertQuery(
+      plan,
+      splits,
+      "SELECT * FROM (VALUES (0, '2018-04-06'), (1, '2018-04-07'))",
+      0);
+
+  // Test filter on non-partitioned non-date column
+  std::vector<std::string> nonPartitionFilters = {"c0 = 1"};
+  plan = PlanBuilder(pool_.get())
+             .tableScan(rowType, nonPartitionFilters, "", nullptr, assignments)
+             .planNode();
+
+  HiveConnectorTestBase::assertQuery(plan, splits, "SELECT 1, '2018-04-07'");
+
+  // Test filter on non-partitioned date column
+  std::vector<std::string> filters = {"ds = date'2018-04-06'"};
+  plan = PlanBuilder(pool_.get()).tableScan(rowType, filters).planNode();
+
+  splits.clear();
+  for (auto& dataFilePath : dataFilePaths) {
+    auto icebergSplits = makeIcebergSplits(dataFilePath->getPath());
+    splits.insert(splits.end(), icebergSplits.begin(), icebergSplits.end());
+  }
+
+  HiveConnectorTestBase::assertQuery(plan, splits, "SELECT 0, '2018-04-06'");
+}
 } // namespace facebook::velox::connector::hive::iceberg

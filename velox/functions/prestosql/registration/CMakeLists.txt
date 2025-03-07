@@ -23,7 +23,9 @@ velox_add_library(
   ComparisonFunctionsRegistration.cpp
   DateTimeFunctionsRegistration.cpp
   GeneralFunctionsRegistration.cpp
+  GeospatialFunctionsRegistration.cpp
   HyperLogFunctionsRegistration.cpp
+  IntegerFunctionsRegistration.cpp
   JsonFunctionsRegistration.cpp
   MapFunctionsRegistration.cpp
   MathematicalFunctionsRegistration.cpp
@@ -31,6 +33,7 @@ velox_add_library(
   ProbabilityTrigonometricFunctionsRegistration.cpp
   RegistrationFunctions.cpp
   StringFunctionsRegistration.cpp
+  TDigestFunctionsRegistration.cpp
   URLFunctionsRegistration.cpp)
 
 # GCC 12 has a bug where it does not respect "pragma ignore" directives and ends

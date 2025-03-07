@@ -2997,7 +2997,7 @@ TEST_F(TableScanTest, bucketConversion) {
   auto makeSplits = [&] {
     std::vector<std::shared_ptr<connector::ConnectorSplit>> splits;
     for (int bucket : selectedBuckets) {
-      std::vector<std::unique_ptr<HiveColumnHandle>> handles;
+      std::vector<std::shared_ptr<HiveColumnHandle>> handles;
       handles.push_back(makeColumnHandle("c0", INTEGER(), {}));
       auto split = makeHiveConnectorSplit(file->getPath());
       split->tableBucketNumber = bucket;
@@ -3079,7 +3079,7 @@ TEST_F(TableScanTest, bucketConversionWithSubfieldPruning) {
   const int selectedBuckets[] = {3, 5, 11};
   std::vector<std::shared_ptr<connector::ConnectorSplit>> splits;
   for (int bucket : selectedBuckets) {
-    std::vector<std::unique_ptr<HiveColumnHandle>> handles;
+    std::vector<std::shared_ptr<HiveColumnHandle>> handles;
     handles.push_back(makeColumnHandle("c0", key->type(), {}));
     auto split = makeHiveConnectorSplit(file->getPath());
     split->tableBucketNumber = bucket;
@@ -4836,39 +4836,69 @@ TEST_F(TableScanTest, varbinaryPartitionKey) {
 
 TEST_F(TableScanTest, timestampPartitionKey) {
   const char* inputs[] = {"2023-10-14 07:00:00.0", "2024-01-06 04:00:00.0"};
-  auto expected = makeRowVector(
-      {"t"},
-      {
-          makeFlatVector<Timestamp>(
-              std::end(inputs) - std::begin(inputs),
-              [&](auto i) {
-                auto t = util::fromTimestampString(
-                             inputs[i], util::TimestampParseMode::kPrestoCast)
-                             .thenOrThrow(
-                                 folly::identity, [&](const Status& status) {
-                                   VELOX_USER_FAIL("{}", status.message());
-                                 });
-                t.toGMT(Timestamp::defaultTimezone());
-                return t;
-              }),
-      });
+  const auto getExpected = [&](bool asLocalTime) {
+    return makeRowVector(
+        {"t"},
+        {
+            makeFlatVector<Timestamp>(
+                std::end(inputs) - std::begin(inputs),
+                [&](auto i) {
+                  auto t = util::fromTimestampString(
+                               inputs[i], util::TimestampParseMode::kPrestoCast)
+                               .thenOrThrow(
+                                   folly::identity, [&](const Status& status) {
+                                     VELOX_USER_FAIL("{}", status.message());
+                                   });
+                  if (asLocalTime) {
+                    t.toGMT(Timestamp::defaultTimezone());
+                  }
+                  return t;
+                }),
+        });
+  };
+
   auto vectors = makeVectors(1, 1);
   auto filePath = TempFilePath::create();
   writeToFile(filePath->getPath(), vectors);
+
+  const auto getSplits = [&]() {
+    std::vector<std::shared_ptr<connector::ConnectorSplit>> splits;
+    for (auto& t : inputs) {
+      splits.push_back(
+          exec::test::HiveConnectorSplitBuilder(filePath->getPath())
+              .partitionKey("t", t)
+              .build());
+    }
+    return splits;
+  };
+
   ColumnHandleMap assignments = {{"t", partitionKey("t", TIMESTAMP())}};
-  std::vector<std::shared_ptr<connector::ConnectorSplit>> splits;
-  for (auto& t : inputs) {
-    splits.push_back(exec::test::HiveConnectorSplitBuilder(filePath->getPath())
-                         .partitionKey("t", t)
-                         .build());
-  }
   auto plan = PlanBuilder()
                   .startTableScan()
                   .outputType(ROW({"t"}, {TIMESTAMP()}))
                   .assignments(assignments)
                   .endTableScan()
                   .planNode();
-  AssertQueryBuilder(plan).splits(std::move(splits)).assertResults(expected);
+
+  // Read timestamp partition value as local time.
+  AssertQueryBuilder(plan)
+      .connectorSessionProperty(
+          kHiveConnectorId,
+          connector::hive::HiveConfig::
+              kReadTimestampPartitionValueAsLocalTimeSession,
+          "true")
+      .splits(getSplits())
+      .assertResults(getExpected(true));
+
+  // Read timestamp partition value as UTC.
+  AssertQueryBuilder(plan)
+      .connectorSessionProperty(
+          kHiveConnectorId,
+          connector::hive::HiveConfig::
+              kReadTimestampPartitionValueAsLocalTimeSession,
+          "false")
+      .splits(getSplits())
+      .assertResults(getExpected(false));
 }
 
 TEST_F(TableScanTest, partitionKeyNotMatchPartitionKeysHandle) {
