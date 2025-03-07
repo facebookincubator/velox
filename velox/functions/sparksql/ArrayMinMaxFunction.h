@@ -106,6 +106,50 @@ struct ArrayMinMaxFunction {
     assign(out, currentValue);
     return true;
   }
+
+  bool compare(
+      exec::GenericView currentValue,
+      exec::GenericView candidateValue) {
+    static constexpr CompareFlags kFlags = {
+        .nullHandlingMode = CompareFlags::NullHandlingMode::kNullAsValue};
+
+    auto compareResult = candidateValue.compare(currentValue, kFlags).value();
+    if constexpr (isMax) {
+      return compareResult > 0;
+    } else {
+      return compareResult < 0;
+    }
+  }
+
+  bool call(
+      out_type<Orderable<T1>>& out,
+      const arg_type<Array<Orderable<T1>>>& array) {
+    // Result is null if array is empty.
+    if (array.size() == 0) {
+      return false;
+    }
+
+    int currentIndex = -1;
+    for (auto i = 0; i < array.size(); i++) {
+      if (array[i].has_value()) {
+        if (currentIndex == -1) {
+          currentIndex = i;
+        } else {
+          auto currentValue = array[currentIndex].value();
+          auto candidateValue = array[i].value();
+          if (compare(currentValue, candidateValue)) {
+            currentIndex = i;
+          }
+        }
+      }
+    }
+    if (currentIndex == -1) {
+      // If array contains only NULL elements, return NULL.
+      return false;
+    }
+    out.copy_from(array[currentIndex].value());
+    return true;
+  }
 };
 
 template <typename TExecCtx>
