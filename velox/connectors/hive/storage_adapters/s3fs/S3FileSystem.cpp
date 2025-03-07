@@ -15,9 +15,11 @@
  */
 
 #include "velox/connectors/hive/storage_adapters/s3fs/S3FileSystem.h"
+#include "velox/common/base/StatsReporter.h"
 #include "velox/common/config/Config.h"
 #include "velox/common/file/File.h"
 #include "velox/connectors/hive/storage_adapters/s3fs/S3Config.h"
+#include "velox/connectors/hive/storage_adapters/s3fs/S3Counters.h"
 #include "velox/connectors/hive/storage_adapters/s3fs/S3Util.h"
 #include "velox/connectors/hive/storage_adapters/s3fs/S3WriteFile.h"
 #include "velox/dwio/common/DataBuffer.h"
@@ -96,7 +98,12 @@ class S3ReadFile final : public ReadFile {
     request.SetBucket(awsString(bucket_));
     request.SetKey(awsString(key_));
 
+    RECORD_METRIC_VALUE(kMetricS3MetadataCalls);
     auto outcome = client_->HeadObject(request);
+    if (!outcome.IsSuccess()) {
+      RECORD_METRIC_VALUE(kMetricS3GetMetadataErrors);
+    }
+    RECORD_METRIC_VALUE(kMetricS3GetMetadataRetries, outcome.GetRetryCount());
     VELOX_CHECK_AWS_OUTCOME(
         outcome, "Failed to get metadata for S3 object", bucket_, key_);
     length_ = outcome.GetResult().GetContentLength();
@@ -107,12 +114,12 @@ class S3ReadFile final : public ReadFile {
       uint64_t offset,
       uint64_t length,
       void* buffer,
-      io::IoStatistics* stats) const override {
+      File::IoStats* stats) const override {
     preadInternal(offset, length, static_cast<char*>(buffer));
     return {static_cast<char*>(buffer), length};
   }
 
-  std::string pread(uint64_t offset, uint64_t length, io::IoStatistics* stats)
+  std::string pread(uint64_t offset, uint64_t length, File::IoStats* stats)
       const override {
     std::string result(length, 0);
     char* position = result.data();
@@ -123,7 +130,7 @@ class S3ReadFile final : public ReadFile {
   uint64_t preadv(
       uint64_t offset,
       const std::vector<folly::Range<char*>>& buffers,
-      io::IoStatistics* stats) const override {
+      File::IoStats* stats) const override {
     // 'buffers' contains Ranges(data, size)  with some gaps (data = nullptr) in
     // between. This call must populate the ranges (except gap ranges)
     // sequentially starting from 'offset'. AWS S3 GetObject does not support
@@ -184,7 +191,14 @@ class S3ReadFile final : public ReadFile {
     request.SetRange(awsString(ss.str()));
     request.SetResponseStreamFactory(
         AwsWriteableStreamFactory(position, length));
+    RECORD_METRIC_VALUE(kMetricS3ActiveConnections);
+    RECORD_METRIC_VALUE(kMetricS3GetObjectCalls);
     auto outcome = client_->GetObject(request);
+    if (!outcome.IsSuccess()) {
+      RECORD_METRIC_VALUE(kMetricS3GetObjectErrors);
+    }
+    RECORD_METRIC_VALUE(kMetricS3GetObjectRetries, outcome.GetRetryCount());
+    RECORD_METRIC_VALUE(kMetricS3ActiveConnections, -1);
     VELOX_CHECK_AWS_OUTCOME(outcome, "Failed to get S3 object", bucket_, key_);
   }
 
@@ -218,6 +232,21 @@ Aws::Utils::Logging::LogLevel inferS3LogLevel(std::string_view logLevel) {
   }
   return Aws::Utils::Logging::LogLevel::Fatal;
 }
+
+// Supported values are "Always", "RequestDependent", "Never"(default).
+Aws::Client::AWSAuthV4Signer::PayloadSigningPolicy inferPayloadSign(
+    std::string sign) {
+  // Convert to upper case.
+  std::transform(sign.begin(), sign.end(), sign.begin(), [](unsigned char c) {
+    return std::toupper(c);
+  });
+  if (sign == "ALWAYS") {
+    return Aws::Client::AWSAuthV4Signer::PayloadSigningPolicy::Always;
+  } else if (sign == "REQUESTDEPENDENT") {
+    return Aws::Client::AWSAuthV4Signer::PayloadSigningPolicy::RequestDependent;
+  }
+  return Aws::Client::AWSAuthV4Signer::PayloadSigningPolicy::Never;
+}
 } // namespace
 
 class S3WriteFile::Impl {
@@ -237,7 +266,13 @@ class S3WriteFile::Impl {
       Aws::S3::Model::HeadObjectRequest request;
       request.SetBucket(awsString(bucket_));
       request.SetKey(awsString(key_));
+      RECORD_METRIC_VALUE(kMetricS3MetadataCalls);
       auto objectMetadata = client_->HeadObject(request);
+      if (!objectMetadata.IsSuccess()) {
+        RECORD_METRIC_VALUE(kMetricS3GetMetadataErrors);
+      }
+      RECORD_METRIC_VALUE(
+          kMetricS3GetObjectRetries, objectMetadata.GetRetryCount());
       VELOX_CHECK(!objectMetadata.IsSuccess(), "S3 object already exists");
     }
 
@@ -305,6 +340,7 @@ class S3WriteFile::Impl {
     if (closed()) {
       return;
     }
+    RECORD_METRIC_VALUE(kMetricS3StartedUploads);
     uploadPart({currentPart_->data(), currentPart_->size()}, true);
     VELOX_CHECK_EQ(uploadState_.partNumber, uploadState_.completedParts.size());
     // Complete the multipart upload.
@@ -318,6 +354,11 @@ class S3WriteFile::Impl {
       request.SetMultipartUpload(std::move(completedUpload));
 
       auto outcome = client_->CompleteMultipartUpload(request);
+      if (outcome.IsSuccess()) {
+        RECORD_METRIC_VALUE(kMetricS3SuccessfulUploads);
+      } else {
+        RECORD_METRIC_VALUE(kMetricS3FailedUploads);
+      }
       VELOX_CHECK_AWS_OUTCOME(
           outcome, "Failed to complete multiple part upload", bucket_, key_);
     }
@@ -529,7 +570,7 @@ class S3FileSystem::Impl {
  public:
   Impl(const S3Config& s3Config) {
     VELOX_CHECK(getAwsInstance()->isInitialized(), "S3 is not initialized");
-    Aws::Client::ClientConfiguration clientConfig;
+    Aws::S3::S3ClientConfiguration clientConfig;
     if (s3Config.endpoint().has_value()) {
       clientConfig.endpointOverride = s3Config.endpoint().value();
     }
@@ -586,13 +627,14 @@ class S3FileSystem::Impl {
       clientConfig.retryStrategy = retryStrategy.value();
     }
 
+    clientConfig.useVirtualAddressing = s3Config.useVirtualAddressing();
+    clientConfig.payloadSigningPolicy =
+        inferPayloadSign(s3Config.payloadSigningPolicy());
+
     auto credentialsProvider = getCredentialsProvider(s3Config);
 
     client_ = std::make_shared<Aws::S3::S3Client>(
-        credentialsProvider,
-        clientConfig,
-        Aws::Client::AWSAuthV4Signer::PayloadSigningPolicy::Never,
-        s3Config.useVirtualAddressing());
+        credentialsProvider, nullptr /* endpointProvider */, clientConfig);
     ++fileSystemCount;
   }
 

@@ -203,7 +203,7 @@ void CastExpr::applyToSelectedNoThrowLocal(
     VectorPtr& result,
     Func&& func) {
   if (setNullInResultAtError()) {
-    rows.template applyToSelected([&](auto row) INLINE_LAMBDA {
+    rows.applyToSelected([&](auto row) INLINE_LAMBDA {
       try {
         func(row);
       } catch (const VeloxException& e) {
@@ -216,7 +216,7 @@ void CastExpr::applyToSelectedNoThrowLocal(
       }
     });
   } else {
-    rows.template applyToSelected([&](auto row) INLINE_LAMBDA {
+    rows.applyToSelected([&](auto row) INLINE_LAMBDA {
       try {
         func(row);
       } catch (const VeloxException& e) {
@@ -286,6 +286,23 @@ void CastExpr::applyCastKernel(
       return;
     }
 
+    if constexpr (
+        (FromKind == TypeKind::DOUBLE || FromKind == TypeKind::REAL) &&
+        ToKind == TypeKind::TIMESTAMP) {
+      const auto castResult =
+          hooks_->castDoubleToTimestamp(static_cast<double>(inputRowValue));
+      if (castResult.hasError()) {
+        setError(castResult.error().message());
+      } else {
+        if (castResult.value().has_value()) {
+          result->set(row, castResult.value().value());
+        } else {
+          result->setNull(row, true);
+        }
+      }
+      return;
+    }
+
     // Optimize empty input strings casting by avoiding throwing exceptions.
     if constexpr (
         FromKind == TypeKind::VARCHAR || FromKind == TypeKind::VARBINARY) {
@@ -341,7 +358,7 @@ void CastExpr::applyCastKernel(
     if constexpr (
         ToKind == TypeKind::VARCHAR || ToKind == TypeKind::VARBINARY) {
       // Write the result output to the output vector
-      auto writer = exec::StringWriter<>(result, row);
+      auto writer = exec::StringWriter(result, row);
       writer.copy_from(output);
       writer.finalize();
     } else {
