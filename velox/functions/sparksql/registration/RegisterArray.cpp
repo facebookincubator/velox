@@ -127,6 +127,7 @@ inline void registerArrayUnionFunctions(const std::string& prefix) {
   registerArrayUnionFunction<Timestamp>(prefix);
   registerArrayUnionFunction<Date>(prefix);
   registerArrayUnionFunction<Varbinary>(prefix);
+  registerArrayUnionFunction<Varchar>(prefix);
   registerArrayUnionFunction<Generic<T1>>(prefix);
 }
 
