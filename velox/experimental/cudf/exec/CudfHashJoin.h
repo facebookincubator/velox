@@ -110,6 +110,8 @@ class CudfHashJoinProbe : public exec::Operator, public NvtxHelper {
   std::vector<PrecomputeInstruction> right_precompute_instructions_;
   std::vector<std::unique_ptr<cudf::scalar>> scalars_;
 
+  bool right_precomputed_{false};
+
   std::vector<cudf::size_type> left_key_indices_;
   std::vector<cudf::size_type> right_key_indices_;
   std::vector<cudf::size_type> left_column_indices_to_gather_;

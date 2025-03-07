@@ -24,6 +24,7 @@
 #include "velox/expression/FieldReference.h"
 #include "velox/vector/ComplexVector.h"
 
+#include <cudf/column/column_view.hpp>
 #include <cudf/concatenate.hpp>
 #include <cudf/copying.hpp>
 #include <cudf/join.hpp>
@@ -333,14 +334,25 @@ CudfHashJoinProbe::CudfHashJoinProbe(
     // in whole tables
 
     // create ast tree
-    create_ast_tree(
-        exprs.exprs()[0],
-        tree_,
-        scalars_,
-        probeType,
-        buildType,
-        left_precompute_instructions_,
-        right_precompute_instructions_);
+    if (joinNode_->isRightSemiFilterJoin()) {
+      create_ast_tree(
+          exprs.exprs()[0],
+          tree_,
+          scalars_,
+          buildType,
+          probeType,
+          right_precompute_instructions_,
+          left_precompute_instructions_);
+    } else {
+      create_ast_tree(
+          exprs.exprs()[0],
+          tree_,
+          scalars_,
+          probeType,
+          buildType,
+          left_precompute_instructions_,
+          right_precompute_instructions_);
+    }
   }
 }
 
@@ -404,18 +416,23 @@ RowVectorPtr CudfHashJoinProbe::getOutput() {
   // TODO (dm): Check if releasing the tables affects the table views we use
   // later in the call
   auto left_input_cols = left_table->release();
-  auto right_input_cols = right_table->release();
 
   // TODO (dm): refactor
+  // right table is precomputed only on first call to probe side. Make it so
+  // that right table is precomputed on build side.
   if (joinNode_->filter()) {
     addPrecomputedColumns(
         left_input_cols, left_precompute_instructions_, scalars_, stream);
-    addPrecomputedColumns(
-        right_input_cols, right_precompute_instructions_, scalars_, stream);
+    if (!right_precomputed_) {
+      auto right_input_cols = right_table->release();
+      addPrecomputedColumns(
+          right_input_cols, right_precompute_instructions_, scalars_, stream);
+      right_table = std::make_unique<cudf::table>(std::move(right_input_cols));
+      right_precomputed_ = true;
+    }
   }
   // expression cols need to be reassembled into the table views
   cudf::table left_table_for_exprs(std::move(left_input_cols));
-  cudf::table right_table_for_exprs(std::move(right_input_cols));
 
   if (joinNode_->isInnerJoin()) {
     // TODO filter check inside.
@@ -425,7 +442,7 @@ RowVectorPtr CudfHashJoinProbe::getOutput() {
           left_table_view.select(left_key_indices_),
           right_table_view.select(right_key_indices_),
           left_table_for_exprs,
-          right_table_for_exprs,
+          *right_table,
           tree_.back(),
           cudf::null_equality::EQUAL,
           std::nullopt,
@@ -454,20 +471,21 @@ RowVectorPtr CudfHashJoinProbe::getOutput() {
         stream,
         cudf::get_current_device_resource_ref());
   } else if (joinNode_->isLeftSemiFilterJoin()) {
-    left_join_indices = cudf::conditional_left_semi_join(
+    left_join_indices = cudf::left_semi_join(
         left_table_view.select(left_key_indices_),
         right_table_view.select(right_key_indices_),
-        tree_.back(),
-        std::nullopt,
+        cudf::null_equality::EQUAL,
         stream,
         cudf::get_current_device_resource_ref());
   } else if (joinNode_->isRightSemiFilterJoin()) {
     // TODO filter check inside.
-    right_join_indices = cudf::conditional_left_semi_join(
+    right_join_indices = cudf::mixed_left_semi_join(
         right_table_view.select(right_key_indices_),
         left_table_view.select(left_key_indices_),
+        *right_table,
+        left_table_for_exprs,
         tree_.back(),
-        std::nullopt,
+        cudf::null_equality::EQUAL,
         stream,
         cudf::get_current_device_resource_ref());
   } else {
