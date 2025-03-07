@@ -972,7 +972,7 @@ void SsdFile::readCheckpoint() {
     // can start here and the writer threads will create the checkpoint file
     // later on flush
     VELOX_SSD_CACHE_LOG(WARNING) << fmt::format(
-        "Error openning checkpoint file {}: Starting without checkpoint",
+        "Error opening checkpoint file {}: Starting without checkpoint",
         e.what());
     return;
   }
