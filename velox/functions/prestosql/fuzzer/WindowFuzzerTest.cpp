@@ -28,6 +28,7 @@
 #include "velox/functions/prestosql/fuzzer/AverageResultVerifier.h"
 #include "velox/functions/prestosql/fuzzer/ClassificationAggregationInputGenerator.h"
 #include "velox/functions/prestosql/fuzzer/MinMaxInputGenerator.h"
+#include "velox/functions/prestosql/fuzzer/TDigestAggregateInputGenerator.h"
 #include "velox/functions/prestosql/fuzzer/WindowOffsetInputGenerator.h"
 #include "velox/functions/prestosql/registration/RegistrationFunctions.h"
 #include "velox/functions/prestosql/window/WindowFunctionsRegistration.h"
@@ -85,7 +86,8 @@ getCustomInputGenerators() {
       {"classification_miss_rate",
        std::make_shared<ClassificationAggregationInputGenerator>()},
       {"classification_thresholds",
-       std::make_shared<ClassificationAggregationInputGenerator>()}};
+       std::make_shared<ClassificationAggregationInputGenerator>()},
+      {"tdigest_agg", std::make_shared<TDigestAggregateInputGenerator>()}};
 }
 
 } // namespace

@@ -17,6 +17,7 @@
 #include "velox/functions/prestosql/aggregates/ArbitraryAggregate.h"
 #include "velox/functions/prestosql/aggregates/ArrayAggAggregate.h"
 #include "velox/functions/prestosql/types/JsonRegistration.h"
+#include "velox/functions/prestosql/types/TDigestRegistration.h"
 
 namespace facebook::velox::aggregate::prestosql {
 
@@ -143,6 +144,10 @@ extern void registerVarianceAggregates(
     const std::string& prefix,
     bool withCompanionFunctions,
     bool overwrite);
+extern void registerTDigestAggregate(
+    const std::string& prefix,
+    bool withCompanionFunctions,
+    bool overwrite);
 
 void registerAllAggregateFunctions(
     const std::string& prefix,
@@ -150,6 +155,7 @@ void registerAllAggregateFunctions(
     bool onlyPrestoSignatures,
     bool overwrite) {
   registerJsonType();
+  registerTDigestType();
   registerApproxDistinctAggregates(prefix, withCompanionFunctions, overwrite);
   registerApproxMostFrequentAggregate(
       prefix, withCompanionFunctions, overwrite);
@@ -187,6 +193,7 @@ void registerAllAggregateFunctions(
   registerSetUnionAggregate(prefix, withCompanionFunctions, overwrite);
   registerSumAggregate(prefix, withCompanionFunctions, overwrite);
   registerVarianceAggregates(prefix, withCompanionFunctions, overwrite);
+  registerTDigestAggregate(prefix, withCompanionFunctions, overwrite);
 }
 
 extern void registerCountDistinctAggregate(

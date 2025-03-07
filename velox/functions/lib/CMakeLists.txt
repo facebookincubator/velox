@@ -39,6 +39,7 @@ velox_add_library(
   StringEncodingUtils.cpp
   SubscriptUtil.cpp
   TimeUtils.cpp
+  TDigest.h
   Utf8Utils.cpp)
 
 velox_link_libraries(
