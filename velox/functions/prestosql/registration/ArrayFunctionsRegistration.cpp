@@ -193,11 +193,22 @@ void registerArrayFunctions(const std::string& prefix) {
       Array<Generic<T1>>,
       Array<Array<Generic<T1>>>>({prefix + "flatten"});
 
-  REGISTER_SCALAR_FUNCTIONS(registerArrayRemoveFunctions, prefix);
+  REGISTER_SCALAR_FUNCTIONS_WITHOUT_VARCHAR(
+      registerArrayRemoveFunctions, prefix);
+  registerFunction<
+      ArrayRemoveFunctionString,
+      Array<Varchar>,
+      Array<Varchar>,
+      Varchar>({prefix + "array_remove"});
   registerArrayRemoveFunctions<Generic<T1>>(prefix);
 
   REGISTER_SCALAR_FUNCTIONS(registerArrayRemoveFunctions, prefix);
-  REGISTER_SCALAR_FUNCTIONS(registerArrayTrimFunctions, prefix);
+  REGISTER_SCALAR_FUNCTIONS_WITHOUT_VARCHAR(registerArrayTrimFunctions, prefix);
+  registerFunction<
+      ArrayTrimFunctionString,
+      Array<Varchar>,
+      Array<Varchar>,
+      int64_t>({prefix + "trim_array"});
   REGISTER_NUMERIC_FUNCTIONS(registerArrayTopNFunction, prefix);
   registerArrayTopNFunction<Varchar>(prefix);
   registerArrayTopNFunction<Timestamp>(prefix);
@@ -205,7 +216,12 @@ void registerArrayFunctions(const std::string& prefix) {
   registerArrayTopNFunction<Varbinary>(prefix);
   registerArrayTopNFunction<Orderable<T1>>(prefix);
 
-  REGISTER_SCALAR_FUNCTIONS(registerArrayRemoveNullFunctions, prefix);
+  REGISTER_SCALAR_FUNCTIONS_WITHOUT_VARCHAR(
+      registerArrayRemoveNullFunctions, prefix);
+  registerFunction<
+      ArrayRemoveNullFunctionString,
+      Array<Varchar>,
+      Array<Varchar>>({prefix + "remove_nulls"});
   registerArrayRemoveNullFunctions<Generic<T1>>(prefix);
 
   REGISTER_SCALAR_FUNCTIONS(registerArrayUnionFunctions, prefix);
