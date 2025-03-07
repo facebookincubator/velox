@@ -93,7 +93,7 @@ class CudfHashJoinProbe : public exec::Operator, public NvtxHelper {
     return joinType == core::JoinType::kInner ||
         joinType == core::JoinType::kLeft ||
         joinType == core::JoinType::kRight ||
-        joinType == core::JoinType::kAnti ||
+        // joinType == core::JoinType::kAnti ||
         joinType == core::JoinType::kLeftSemiFilter ||
         joinType == core::JoinType::kRightSemiFilter;
   }

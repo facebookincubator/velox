@@ -413,26 +413,28 @@ RowVectorPtr CudfHashJoinProbe::getOutput() {
   auto left_table_view = left_table->view();
   auto right_table_view = right_table->view();
 
-  // TODO (dm): Check if releasing the tables affects the table views we use
-  // later in the call
-  auto left_input_cols = left_table->release();
+  // // TODO (dm): Check if releasing the tables affects the table views we use
+  // // later in the call
+  // auto left_input_cols = left_table->release();
 
-  // TODO (dm): refactor
-  // right table is precomputed only on first call to probe side. Make it so
-  // that right table is precomputed on build side.
-  if (joinNode_->filter()) {
-    addPrecomputedColumns(
-        left_input_cols, left_precompute_instructions_, scalars_, stream);
-    if (!right_precomputed_) {
-      auto right_input_cols = right_table->release();
-      addPrecomputedColumns(
-          right_input_cols, right_precompute_instructions_, scalars_, stream);
-      right_table = std::make_unique<cudf::table>(std::move(right_input_cols));
-      right_precomputed_ = true;
-    }
-  }
-  // expression cols need to be reassembled into the table views
-  cudf::table left_table_for_exprs(std::move(left_input_cols));
+  // // TODO (dm): refactor
+  // // right table is precomputed only on first call to probe side. Make it so
+  // // that right table is precomputed on build side.
+  // if (joinNode_->filter()) {
+  //   addPrecomputedColumns(
+  //       left_input_cols, left_precompute_instructions_, scalars_, stream);
+  //   if (!right_precomputed_) {
+  //     auto right_input_cols = right_table->release();
+  //     addPrecomputedColumns(
+  //         right_input_cols, right_precompute_instructions_, scalars_,
+  //         stream);
+  //     right_table =
+  //     std::make_unique<cudf::table>(std::move(right_input_cols));
+  //     right_precomputed_ = true;
+  //   }
+  // }
+  // // expression cols need to be reassembled into the table views
+  // cudf::table left_table_for_exprs(std::move(left_input_cols));
 
   if (joinNode_->isInnerJoin()) {
     // TODO filter check inside.
@@ -441,8 +443,8 @@ RowVectorPtr CudfHashJoinProbe::getOutput() {
       std::tie(left_join_indices, right_join_indices) = mixed_inner_join(
           left_table_view.select(left_key_indices_),
           right_table_view.select(right_key_indices_),
-          left_table_for_exprs,
-          *right_table,
+          left_table_view,
+          right_table_view,
           tree_.back(),
           cudf::null_equality::EQUAL,
           std::nullopt,
@@ -482,8 +484,8 @@ RowVectorPtr CudfHashJoinProbe::getOutput() {
     right_join_indices = cudf::mixed_left_semi_join(
         right_table_view.select(right_key_indices_),
         left_table_view.select(left_key_indices_),
-        *right_table,
-        left_table_for_exprs,
+        right_table_view,
+        left_table_view,
         tree_.back(),
         cudf::null_equality::EQUAL,
         stream,
