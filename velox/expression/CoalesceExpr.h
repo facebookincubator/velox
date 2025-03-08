@@ -53,6 +53,9 @@ class CoalesceCallToSpecialForm : public FunctionCallToSpecialForm {
       std::vector<ExprPtr>&& compiledChildren,
       bool trackCpuUsage,
       const core::QueryConfig& config) override;
+
+ private:
+  ExprPtr optimize(std::vector<ExprPtr>& compiledChildren);
 };
 
 } // namespace facebook::velox::exec
