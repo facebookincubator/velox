@@ -37,7 +37,7 @@ TEST(HiveConfigTest, defaultConfig) {
   ASSERT_EQ(hiveConfig.gcsCredentialsPath(), "");
   ASSERT_FALSE(hiveConfig.isOrcUseColumnNames(emptySession.get()));
   ASSERT_FALSE(hiveConfig.isFileColumnNamesReadAsLowerCase(emptySession.get()));
-
+  ASSERT_FALSE(hiveConfig.isParquetReadBloomFilter(emptySession.get()));
   ASSERT_EQ(hiveConfig.maxCoalescedBytes(emptySession.get()), 128 << 20);
   ASSERT_EQ(
       hiveConfig.maxCoalescedDistanceBytes(emptySession.get()), 512 << 10);
@@ -64,6 +64,7 @@ TEST(HiveConfigTest, overrideConfig) {
       {HiveConfig::kGcsCredentialsPath, "hey"},
       {HiveConfig::kOrcUseColumnNames, "true"},
       {HiveConfig::kFileColumnNamesReadAsLowerCase, "true"},
+      {HiveConfig::kParquetReadBloomFilter, "true"},
       {HiveConfig::kAllowNullPartitionKeys, "false"},
       {HiveConfig::kMaxCoalescedBytes, "100"},
       {HiveConfig::kMaxCoalescedDistance, "100kB"},
@@ -93,6 +94,7 @@ TEST(HiveConfigTest, overrideConfig) {
   ASSERT_EQ(hiveConfig.maxCoalescedBytes(emptySession.get()), 100);
   ASSERT_EQ(
       hiveConfig.maxCoalescedDistanceBytes(emptySession.get()), 100 << 10);
+  ASSERT_TRUE(hiveConfig.isParquetReadBloomFilter(emptySession.get()));
   ASSERT_EQ(hiveConfig.numCacheFileHandles(), 100);
   ASSERT_EQ(hiveConfig.fileHandleExpirationDurationMs(), 200);
   ASSERT_FALSE(hiveConfig.isFileHandleCacheEnabled());
