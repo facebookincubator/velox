@@ -62,7 +62,8 @@ FlatMapColumnWriter<K>::FlatMapColumnWriter(
       valueType_{*type.childAt(1)},
       maxKeyCount_{context_.getConfig(Config::MAP_FLAT_MAX_KEYS)},
       collectMapStats_{context.getConfig(Config::MAP_STATISTICS)} {
-  auto options = StatisticsBuilderOptions::fromConfig(context.getConfigs());
+  auto options = StatisticsBuilderOptions::fromConfig(
+      context.getConfigs(), context.fileFormat());
   keyFileStatsBuilder_ =
       std::unique_ptr<typename TypeInfo<K>::StatisticsBuilder>(
           dynamic_cast<typename TypeInfo<K>::StatisticsBuilder*>(
@@ -84,15 +85,21 @@ FlatMapColumnWriter<K>::FlatMapColumnWriter(
 
 template <TypeKind K>
 void FlatMapColumnWriter<K>::setEncoding(
-    proto::ColumnEncoding& encoding) const {
+    ColumnEncodingWriteWrapper& encoding) const {
   BaseColumnWriter::setEncoding(encoding);
-  encoding.set_kind(proto::ColumnEncoding_Kind::ColumnEncoding_Kind_MAP_FLAT);
+  if (encoding.format() == DwrfFormat::kDwrf) {
+    auto columnEncodingKind =
+        proto::ColumnEncoding_Kind::ColumnEncoding_Kind_MAP_FLAT;
+    encoding.setKind(ColumnEncodingKindWrapper(&columnEncodingKind));
+  } else {
+    VELOX_FAIL("setEncoding ERROR {}.", encoding.format());
+  }
 }
 
 template <TypeKind K>
 void FlatMapColumnWriter<K>::flush(
-    std::function<proto::ColumnEncoding&(uint32_t)> encodingFactory,
-    std::function<void(proto::ColumnEncoding&)> encodingOverride) {
+    std::function<ColumnEncodingWriteWrapper(uint32_t)> encodingFactory,
+    std::function<void(ColumnEncodingWriteWrapper&)> encodingOverride) {
   BaseColumnWriter::flush(encodingFactory, encodingOverride);
 
   for (auto& pair : valueWriters_) {
@@ -136,18 +143,18 @@ void FlatMapColumnWriter<K>::createIndexEntry() {
 
 template <TypeKind K>
 uint64_t FlatMapColumnWriter<K>::writeFileStats(
-    std::function<proto::ColumnStatistics&(uint32_t)> statsFactory) const {
-  auto& stats = statsFactory(id_);
+    std::function<ColumnStatisticsWriteWrapper(uint32_t)> statsFactory) const {
+  auto stats = statsFactory(id_);
   fileStatsBuilder_->toProto(stats);
   uint64_t size = context_.getPhysicalSizeAggregator(id_).getResult();
 
-  auto& keyStats = statsFactory(keyType_.id());
+  auto keyStats = statsFactory(keyType_.id());
   keyFileStatsBuilder_->toProto(keyStats);
   auto keySize = context_.getPhysicalSizeAggregator(keyType_.id()).getResult();
-  keyStats.set_size(keySize);
+  keyStats.setSize(keySize);
 
   valueFileStatsBuilder_->writeFileStats(statsFactory);
-  stats.set_size(size);
+  stats.setSize(size);
   return size;
 }
 
