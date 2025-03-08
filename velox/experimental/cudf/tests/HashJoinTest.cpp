@@ -1140,7 +1140,7 @@ TEST_F(HashJoinTest, filter) {
       .run();
 }
 
-TEST_F(HashJoinTest, rightSemiJoinFilterWithLargeOutput) {
+TEST_F(HashJoinTest, rightSemiJoin) {
   // Build the identical left and right vectors to generate large join
   // outputs.
   std::vector<RowVectorPtr> probeVectors =
@@ -1169,6 +1169,40 @@ TEST_F(HashJoinTest, rightSemiJoinFilterWithLargeOutput) {
       .joinType(core::JoinType::kRightSemiFilter)
       .joinOutputLayout({"u1"})
       .referenceQuery("SELECT u.u1 FROM u WHERE u.u0 IN (SELECT t0 FROM t)")
+      .run();
+}
+
+TEST_F(HashJoinTest, rightSemiJoinFilter) {
+  // Build the identical left and right vectors to generate large join
+  // outputs.
+  std::vector<RowVectorPtr> probeVectors =
+      makeBatches(4, [&](uint32_t /*unused*/) {
+        return makeRowVector(
+            {"t0", "t1"},
+            {makeFlatVector<int32_t>(2048, [](auto row) { return row; }),
+             makeFlatVector<int32_t>(2048, [](auto row) { return row; })});
+      });
+
+  std::vector<RowVectorPtr> buildVectors =
+      makeBatches(4, [&](uint32_t /*unused*/) {
+        return makeRowVector(
+            {"u0", "u1"},
+            {makeFlatVector<int32_t>(2048, [](auto row) { return row; }),
+             makeFlatVector<int32_t>(2048, [](auto row) { return row; })});
+      });
+
+  HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
+      .numDrivers(numDrivers_)
+      .checkSpillStats(false)
+      .probeKeys({"t0"})
+      .probeVectors(std::move(probeVectors))
+      .buildKeys({"u0"})
+      .buildVectors(std::move(buildVectors))
+      .joinType(core::JoinType::kRightSemiFilter)
+      .joinFilter("u0 > 1024")
+      .joinOutputLayout({"u1"})
+      .referenceQuery(
+          "SELECT u.u1 FROM u WHERE u.u0 IN (SELECT t0 FROM t) AND u.u0 > 1024")
       .run();
 }
 
