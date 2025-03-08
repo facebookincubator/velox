@@ -297,7 +297,18 @@ std::optional<std::string> DuckQueryRunner::toSql(
     sql << " as " << projectNode->names()[i];
   }
 
-  sql << " FROM (" << sourceSql.value() << ")";
+  sql << " FROM ";
+
+  // DuckDB doesn't support wrapping table names in parentheses.
+  if (std::dynamic_pointer_cast<const core::ValuesNode>(
+          projectNode->sources()[0]) == nullptr &&
+      std::dynamic_pointer_cast<const core::TableScanNode>(
+          projectNode->sources()[0]) == nullptr) {
+    sql << "(" << sourceSql.value() << ")";
+  } else {
+    sql << sourceSql.value();
+  }
+
   return sql.str();
 }
 
