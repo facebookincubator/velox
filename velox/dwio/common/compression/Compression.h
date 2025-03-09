@@ -84,9 +84,9 @@ struct CompressionOptions {
     struct {
       bool isHadoopFrameFormat;
     } lz4_lzo;
-  } format;
+  } format{};
 
-  uint32_t compressionThreshold;
+  uint32_t compressionThreshold{0};
 };
 
 /**
