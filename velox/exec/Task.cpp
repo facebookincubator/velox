@@ -705,68 +705,57 @@ RowVectorPtr Task::next(ContinueFuture* future) {
   std::vector<ContinueFuture> futures;
   futures.resize(numDrivers);
 
-  for (;;) {
-    int runnableDrivers = 0;
-    int blockedDrivers = 0;
-    for (auto i = 0; i < numDrivers; ++i) {
-      // Holds a reference to driver for access as async task terminate might
-      // remove drivers from 'drivers_' slot.
-      auto driver = getDriver(i);
-      if (driver == nullptr) {
-        // This driver has finished processing.
-        continue;
-      }
-
-      if (!futures[i].isReady()) {
-        // This driver is still blocked.
-        ++blockedDrivers;
-        continue;
-      }
-
-      ContinueFuture blockFuture = ContinueFuture::makeEmpty();
-      if (driverBlockingStates_[i]->blocked(&blockFuture)) {
-        VELOX_CHECK(blockFuture.valid());
-        futures[i] = std::move(blockFuture);
-        // This driver is still blocked.
-        ++blockedDrivers;
-        continue;
-      }
-      ++runnableDrivers;
-
-      ContinueFuture driverFuture = ContinueFuture::makeEmpty();
-      auto result = driver->next(&driverFuture);
-      if (result != nullptr) {
-        VELOX_CHECK(!driverFuture.valid());
-        return result;
-      }
-
-      if (driverFuture.valid()) {
-        driverBlockingStates_[i]->setDriverFuture(driverFuture);
-      }
-
-      if (error()) {
-        std::rethrow_exception(error());
-      }
+  for (auto i = 0; i < numDrivers; ++i) {
+    // Holds a reference to driver for access as async task terminate might
+    // remove drivers from 'drivers_' slot.
+    auto driver = getDriver(i);
+    if (driver == nullptr) {
+      // This driver has finished processing.
+      continue;
     }
 
-    if (runnableDrivers == 0) {
-      if (blockedDrivers > 0) {
-        if (future == nullptr) {
-          VELOX_FAIL(
-              "Cannot make progress as all remaining drivers are blocked and user are not expected to wait.");
-        } else {
-          std::vector<ContinueFuture> notReadyFutures;
-          for (auto& continueFuture : futures) {
-            if (!continueFuture.isReady()) {
-              notReadyFutures.emplace_back(std::move(continueFuture));
-            }
-          }
-          *future = folly::collectAny(std::move(notReadyFutures)).unit();
-        }
-      }
-      return nullptr;
+    if (!futures[i].isReady()) {
+      // This driver is still blocked.
+      continue;
+    }
+
+    ContinueFuture blockFuture = ContinueFuture::makeEmpty();
+    if (driverBlockingStates_[i]->blocked(&blockFuture)) {
+      VELOX_CHECK(blockFuture.valid());
+      futures[i] = std::move(blockFuture);
+      // This driver is still blocked.
+      continue;
+    }
+
+    ContinueFuture driverFuture = ContinueFuture::makeEmpty();
+    auto result = driver->next(&driverFuture);
+    if (result != nullptr) {
+      VELOX_CHECK(!driverFuture.valid());
+      return result;
+    }
+
+    if (driverFuture.valid()) {
+      driverBlockingStates_[i]->setDriverFuture(driverFuture);
+    }
+
+    if (error()) {
+      std::rethrow_exception(error());
     }
   }
+
+  if (future == nullptr) {
+    VELOX_FAIL(
+        "Cannot make progress as all remaining drivers are blocked and user are not expected to wait.");
+  } else {
+    std::vector<ContinueFuture> notReadyFutures;
+    for (auto& continueFuture : futures) {
+      if (!continueFuture.isReady()) {
+        notReadyFutures.emplace_back(std::move(continueFuture));
+      }
+    }
+    *future = folly::collectAny(std::move(notReadyFutures)).unit();
+  }
+  return nullptr;
 }
 
 void Task::start(uint32_t maxDrivers, uint32_t concurrentSplitGroups) {
