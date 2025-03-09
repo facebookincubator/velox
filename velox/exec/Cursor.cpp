@@ -381,10 +381,10 @@ class SingleThreadedTaskCursor : public TaskCursorBase {
     if (next_) {
       return true;
     }
-    if (!task_->isRunning()) {
-      return false;
-    }
     while (true) {
+      if (!task_->isRunning()) {
+        return false;
+      }
       ContinueFuture future = ContinueFuture::makeEmpty();
       RowVectorPtr next = task_->next(&future);
       if (next != nullptr) {
