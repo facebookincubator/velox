@@ -17,18 +17,18 @@
 
 #include "velox/type/SimpleFunctionApi.h"
 #include "velox/type/Type.h"
-#include "velox/vector/VectorTypeUtils.h"
 
 namespace facebook::velox {
 
 class TDigestType : public VarbinaryType {
-  TDigestType() = default;
-
  public:
-  static const std::shared_ptr<const TDigestType>& get() {
-    static const std::shared_ptr<const TDigestType> instance =
-        std::shared_ptr<TDigestType>(new TDigestType());
-
+  static const std::shared_ptr<const TDigestType>& get(
+      const TypePtr& dataType) {
+    // Only TDIGEST(DOUBLE) exists in Presto so we use a singleton to improve
+    // performance.
+    VELOX_CHECK(dataType->isDouble());
+    static const auto instance =
+        std::shared_ptr<const TDigestType>(new TDigestType(DOUBLE()));
     return instance;
   }
 
@@ -41,53 +41,49 @@ class TDigestType : public VarbinaryType {
     return "TDIGEST";
   }
 
+  const std::vector<TypeParameter>& parameters() const override {
+    return parameters_;
+  }
+
   std::string toString() const override {
-    return name();
+    return fmt::format("TDIGEST({})", parameters_[0].type->toString());
   }
 
   folly::dynamic serialize() const override {
     folly::dynamic obj = folly::dynamic::object;
     obj["name"] = "Type";
     obj["type"] = name();
+    folly::dynamic children = folly::dynamic::array;
+    for (auto& param : parameters_) {
+      children.push_back(param.type->serialize());
+    }
+    obj["cTypes"] = children;
     return obj;
   }
+
+ private:
+  explicit TDigestType(const TypePtr& dataType)
+      : parameters_({TypeParameter(dataType)}) {}
+
+  const std::vector<TypeParameter> parameters_;
 };
 
-inline bool isTDigestType(const TypePtr& type) {
-  // Pointer comparison works since this type is a singleton.
-  return TDigestType::get() == type;
-}
-
-inline std::shared_ptr<const TDigestType> TDIGEST() {
-  return TDigestType::get();
+inline std::shared_ptr<const TDigestType> TDIGEST(const TypePtr& dataType) {
+  return TDigestType::get(dataType);
 }
 
 // Type to use for inputs and outputs of simple functions, e.g.
 // arg_type<TDigest> and out_type<TDigest>.
-struct TDigestT {
+template <typename T>
+struct SimpleTDigestT;
+
+template <>
+struct SimpleTDigestT<double> {
   using type = Varbinary;
-  static constexpr const char* typeName = "tdigest";
+  static constexpr const char* typeName = "tdigest(double)";
 };
 
-using TDigest = CustomType<TDigestT>;
-
-class TDigestTypeFactories : public CustomTypeFactories {
- public:
-  TypePtr getType() const override {
-    return TDIGEST();
-  }
-
-  // TDigest should be treated as Varbinary during type castings.
-  exec::CastOperatorPtr getCastOperator() const override {
-    return nullptr;
-  }
-
-  AbstractInputGeneratorPtr getInputGenerator(
-      const InputGeneratorConfig& /*config*/) const override {
-    return nullptr;
-  }
-};
-
-void registerTDigestType();
+template <typename T>
+using SimpleTDigest = CustomType<SimpleTDigestT<T>>;
 
 } // namespace facebook::velox

@@ -31,7 +31,10 @@ class SIMDJsonExtractor {
  public:
   /**
    * Extract element(s) from a JSON object using the given path.
-   * @param json: A JSON object
+   * See class comments in JsonPathTokenizer.h for more details on how json path
+   * is interpreted and has notable differences compared to Jayway (used by
+   * Presto java).
+   * @param json: A json string of type simdjson::padded_string
    * @param path: Path to locate a JSON object. Following operators are
    * supported.
    *              "$"      Root member of a JSON structure no matter if it's an
@@ -40,13 +43,19 @@ class SIMDJsonExtractor {
    *              "[]"     Subscript operator for array or object.
    *              "*"      Wildcard operator, gets all the elements of an array
    *                       or all values in an object.
+   *              ".."     Recursive descent operator, where it visits the input
+   *                       node and each of its descendants such that nodes of
+   * any array are visited in array order, and nodes are visited before their
+   * descendants.
    * @param consumer: Function to consume the extracted elements. Should be able
    *                  to take an argument that can either be a
    *                  simdjson::ondemand::document or a
-   *                  simdjson::ondemand::value. Note that once consumer
-   *                  returns, it should be assumed that the argument passed in
-   *                  is no longer valid, so do not attempt to store it as is
-   *                  in the consumer.
+   *                  simdjson::ondemand::value. Note: If the consumer holds
+   *                  onto string_view(s) generated from applying
+   *                  simdjson::to_json_string to the arguments, then those
+   *                  string_view(s) will reference the original `json`
+   *                  padded_string and remain valid as long as it remains
+   *                  in scope.
    * @param isDefinitePath is an output param that will get set to
    *                       false if a token is evaluated which can return
    *                       multiple results like '*'.
@@ -55,7 +64,7 @@ class SIMDJsonExtractor {
    */
   template <typename TConsumer>
   simdjson::error_code extract(
-      const velox::StringView& json,
+      const simdjson::padded_string& json,
       TConsumer& consumer,
       bool& isDefinitePath);
 
@@ -80,16 +89,26 @@ class SIMDJsonExtractor {
   bool tokenize(const std::string& path);
 
   template <typename TConsumer>
-  simdjson::error_code extract(
+  simdjson::error_code extractInternal(
       simdjson::ondemand::value& json,
       TConsumer& consumer,
       bool& isDefinitePath,
       size_t tokenStartIndex = 0);
 
+  // Implementation for the recursive operator (..) where it visits the input
+  // node and each of its descendants such that nodes of any array are visited
+  // in array order, and nodes are visited before their descendants.
+  template <typename TConsumer>
+  simdjson::error_code visitRecursive(
+      simdjson::ondemand::value& json,
+      TConsumer& consumer,
+      bool& isDefinitePath,
+      size_t startTokenIdx);
+
   // Max number of extractors cached in extractorCache.
   static const uint32_t kMaxCacheSize{32};
 
-  std::vector<std::string> tokens_;
+  std::vector<JsonPathTokenizer::Token> tokens_;
 };
 
 simdjson::error_code extractObject(
@@ -104,10 +123,9 @@ simdjson::error_code extractArray(
 
 template <typename TConsumer>
 simdjson::error_code SIMDJsonExtractor::extract(
-    const velox::StringView& json,
+    const simdjson::padded_string& paddedJson,
     TConsumer& consumer,
     bool& isDefinitePath) {
-  simdjson::padded_string paddedJson(json.data(), json.size());
   SIMDJSON_ASSIGN_OR_RAISE(auto jsonDoc, simdjsonParse(paddedJson));
   SIMDJSON_ASSIGN_OR_RAISE(auto isScalar, jsonDoc.is_scalar());
   if (isScalar) {
@@ -117,17 +135,17 @@ simdjson::error_code SIMDJsonExtractor::extract(
       return consumer(jsonDoc);
     }
     VELOX_CHECK_GT(tokens_.size(), 0);
-    if (tokens_[0] == "*") {
+    if (tokens_[0].selector == JsonPathTokenizer::Selector::WILDCARD) {
       isDefinitePath = false;
     }
     return simdjson::SUCCESS;
   }
   SIMDJSON_ASSIGN_OR_RAISE(auto value, jsonDoc.get_value());
-  return extract(value, consumer, isDefinitePath, 0);
+  return extractInternal(value, consumer, isDefinitePath, 0);
 }
 
 template <typename TConsumer>
-simdjson::error_code SIMDJsonExtractor::extract(
+simdjson::error_code SIMDJsonExtractor::extractInternal(
     simdjson::ondemand::value& json,
     TConsumer& consumer,
     bool& isDefinitePath,
@@ -135,50 +153,57 @@ simdjson::error_code SIMDJsonExtractor::extract(
   simdjson::ondemand::value input = json;
   // Temporary extraction result holder.
   std::optional<simdjson::ondemand::value> result;
-
   for (int tokenIndex = tokenStartIndex; tokenIndex < tokens_.size();
        tokenIndex++) {
     auto& token = tokens_[tokenIndex];
-    if (token == "*") {
+    auto& selector = token.selector;
+    if (selector == JsonPathTokenizer::Selector::WILDCARD ||
+        selector == JsonPathTokenizer::Selector::RECURSIVE) {
       isDefinitePath = false;
     }
     if (input.type() == simdjson::ondemand::json_type::object) {
-      if (token == "*") {
+      if (selector == JsonPathTokenizer::Selector::WILDCARD) {
         SIMDJSON_ASSIGN_OR_RAISE(auto jsonObj, input.get_object());
         for (auto field : jsonObj) {
           simdjson::ondemand::value val = field.value();
           if (tokenIndex == tokens_.size() - 1) {
-            // If this is the last token in the path, consume each element in
-            // the object.
+            // Consume each element in the object.
             SIMDJSON_TRY(consumer(val));
           } else {
-            // If not, then recursively call the extract function on each
-            // element in the object.
+            // If not, then recursively call the extractInternal function on
+            // each element in the object.
             SIMDJSON_TRY(
-                extract(val, consumer, isDefinitePath, tokenIndex + 1));
+                extractInternal(val, consumer, isDefinitePath, tokenIndex + 1));
           }
         }
         return simdjson::SUCCESS;
-      } else {
-        SIMDJSON_TRY(extractObject(input, token, result));
+      } else if (selector == JsonPathTokenizer::Selector::RECURSIVE) {
+        SIMDJSON_TRY(
+            visitRecursive(input, consumer, isDefinitePath, tokenIndex + 1));
+      } else if (
+          selector == JsonPathTokenizer::Selector::KEY ||
+          selector == JsonPathTokenizer::Selector::KEY_OR_INDEX) {
+        SIMDJSON_TRY(extractObject(input, token.value, result));
       }
     } else if (input.type() == simdjson::ondemand::json_type::array) {
-      if (token == "*") {
+      if (selector == JsonPathTokenizer::Selector::WILDCARD) {
         for (auto child : input.get_array()) {
           if (tokenIndex == tokens_.size() - 1) {
-            // If this is the last token in the path, consume each element in
-            // the array.
+            // Consume each element in the object.
             SIMDJSON_TRY(consumer(child.value()));
           } else {
-            // If not, then recursively call the extract function on each
-            // element in the array.
-            SIMDJSON_TRY(extract(
+            // If not, then recursively call the extractInternal function on
+            // each element in the array.
+            SIMDJSON_TRY(extractInternal(
                 child.value(), consumer, isDefinitePath, tokenIndex + 1));
           }
         }
         return simdjson::SUCCESS;
-      } else {
-        SIMDJSON_TRY(extractArray(input, token, result));
+      } else if (selector == JsonPathTokenizer::Selector::RECURSIVE) {
+        SIMDJSON_TRY(
+            visitRecursive(input, consumer, isDefinitePath, tokenIndex + 1));
+      } else if (selector == JsonPathTokenizer::Selector::KEY_OR_INDEX) {
+        SIMDJSON_TRY(extractArray(input, token.value, result));
       }
     }
     if (!result) {
@@ -191,4 +216,54 @@ simdjson::error_code SIMDJsonExtractor::extract(
 
   return consumer(input);
 };
+
+template <typename TConsumer>
+simdjson::error_code SIMDJsonExtractor::visitRecursive(
+    simdjson::ondemand::value& json,
+    TConsumer& consumer,
+    bool& isDefinitePath,
+    size_t startTokenIdx) {
+  // SIMDJson doesn't support iterating and extracting an ondemand value
+  // multiple times which is required for the recursive operator. Therefore, we
+  // need to extract the json string and use it with a new local parser object.
+  // Moreover, since the extracted string was already padded we can avoid
+  // creating a new copy with padding and utilize reusePaddedStringView() to
+  // create a no-copy padded_string_view.
+  SIMDJSON_ASSIGN_OR_RAISE(auto jsonString, simdjson::to_json_string(json));
+  simdjson::padded_string_view paddedJson = reusePaddedStringView(jsonString);
+  simdjson::ondemand::parser localParser;
+  SIMDJSON_ASSIGN_OR_RAISE(auto jsonDoc, localParser.iterate(paddedJson));
+  simdjson::ondemand::value jsonDocVal = jsonDoc.get_value();
+  // Visit the current node.
+  SIMDJSON_TRY(
+      extractInternal(jsonDocVal, consumer, isDefinitePath, startTokenIdx));
+
+  // Reset the local parser for the next round of iteration where we visit the
+  // children.
+  SIMDJSON_ASSIGN_OR_RAISE(jsonDoc, localParser.iterate(paddedJson));
+  jsonDocVal = jsonDoc.get_value();
+  if (jsonDocVal.type() == simdjson::ondemand::json_type::object) {
+    SIMDJSON_ASSIGN_OR_RAISE(auto jsonObj, jsonDocVal.get_object());
+    for (auto field : jsonObj) {
+      simdjson::ondemand::value val = field.value();
+      if (val.type() != simdjson::ondemand::json_type::object &&
+          val.type() != simdjson::ondemand::json_type::array) {
+        continue;
+      }
+      SIMDJSON_TRY(
+          visitRecursive(val, consumer, isDefinitePath, startTokenIdx));
+    }
+  } else if (jsonDocVal.type() == simdjson::ondemand::json_type::array) {
+    for (auto child : jsonDocVal.get_array()) {
+      simdjson::ondemand::value val = child.value();
+      if (val.type() != simdjson::ondemand::json_type::object &&
+          val.type() != simdjson::ondemand::json_type::array) {
+        continue;
+      }
+      SIMDJSON_TRY(
+          visitRecursive(val, consumer, isDefinitePath, startTokenIdx));
+    }
+  }
+  return simdjson::SUCCESS;
+}
 } // namespace facebook::velox::functions

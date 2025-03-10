@@ -245,10 +245,23 @@ PyPlanBuilder& PyPlanBuilder::filter(const std::string& filter) {
   return *this;
 }
 
-PyPlanBuilder& PyPlanBuilder::singleAggregation(
+PyPlanBuilder& PyPlanBuilder::aggregate(
     const std::vector<std::string>& groupingKeys,
     const std::vector<std::string>& aggregations) {
   planBuilder_.singleAggregation(groupingKeys, aggregations);
+  return *this;
+}
+
+PyPlanBuilder& PyPlanBuilder::orderBy(
+    const std::vector<std::string>& keys,
+    bool isPartial) {
+  planBuilder_.orderBy(keys, isPartial);
+  return *this;
+}
+
+PyPlanBuilder&
+PyPlanBuilder::limit(int64_t count, int64_t offset, bool isPartial) {
+  planBuilder_.limit(offset, count, isPartial);
   return *this;
 }
 
@@ -266,6 +279,22 @@ PyPlanBuilder& PyPlanBuilder::mergeJoin(
       filter,
       output,
       joinType);
+  return *this;
+}
+
+PyPlanBuilder& PyPlanBuilder::sortedMerge(
+    const std::vector<std::string>& keys,
+    const std::vector<std::optional<PyPlanNode>>& pySources) {
+  std::vector<core::PlanNodePtr> sources;
+  sources.reserve(pySources.size());
+
+  for (const auto& pySource : pySources) {
+    if (pySource.has_value()) {
+      sources.push_back(pySource->planNode());
+    }
+  }
+
+  planBuilder_.localMerge(keys, std::move(sources));
   return *this;
 }
 

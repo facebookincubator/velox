@@ -15,6 +15,7 @@
  */
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/functions/prestosql/tests/utils/FunctionBaseTest.h"
+#include "velox/functions/prestosql/types/BingTileType.h"
 #include "velox/functions/prestosql/types/HyperLogLogType.h"
 #include "velox/functions/prestosql/types/JsonType.h"
 #include "velox/functions/prestosql/types/TDigestType.h"
@@ -53,11 +54,13 @@ TEST_F(TypeOfTest, basic) {
   EXPECT_EQ("timestamp with time zone", typeOf(TIMESTAMP_WITH_TIME_ZONE()));
   EXPECT_EQ("date", typeOf(DATE()));
 
+  EXPECT_EQ("bingtile", typeOf(BINGTILE()));
+
   EXPECT_EQ("json", typeOf(JSON()));
 
   EXPECT_EQ("HyperLogLog", typeOf(HYPERLOGLOG()));
 
-  EXPECT_EQ("TDigest", typeOf(TDIGEST()));
+  EXPECT_EQ("tdigest(double)", typeOf(TDIGEST(DOUBLE())));
 
   EXPECT_EQ("unknown", typeOf(UNKNOWN()));
 

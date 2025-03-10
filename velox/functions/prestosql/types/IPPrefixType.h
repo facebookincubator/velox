@@ -150,6 +150,4 @@ struct IPPrefixT {
 
 using IPPrefix = CustomType<IPPrefixT>;
 
-void registerIPPrefixType();
-
 } // namespace facebook::velox

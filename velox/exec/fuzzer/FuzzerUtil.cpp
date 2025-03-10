@@ -16,7 +16,6 @@
 #include "velox/exec/fuzzer/FuzzerUtil.h"
 #include <re2/re2.h>
 #include <filesystem>
-#include "velox/common/config/GlobalConfig.h"
 #include "velox/common/memory/SharedArbitrator.h"
 #include "velox/connectors/hive/HiveConnector.h"
 #include "velox/connectors/hive/HiveConnectorSplit.h"
@@ -148,6 +147,7 @@ std::shared_ptr<connector::ConnectorSplit> makeConnectorSplit(
       /*customSplitInfo=*/std::unordered_map<std::string, std::string>{},
       /*extraFileInfo=*/nullptr,
       /*serdeParameters=*/std::unordered_map<std::string, std::string>{},
+      /*storageParameters=*/std::unordered_map<std::string, std::string>{},
       /*splitWeight=*/0,
       /*cacheable=*/true,
       infoColumns);
@@ -344,8 +344,8 @@ void setupMemory(
     int64_t allocatorCapacity,
     int64_t arbitratorCapacity,
     bool enableGlobalArbitration) {
-  config::globalConfig().enableMemoryUsageTrackInDefaultMemoryPool = true;
-  config::globalConfig().memoryLeakCheckEnabled = true;
+  FLAGS_velox_enable_memory_usage_track_in_default_memory_pool = true;
+  FLAGS_velox_memory_leak_check_enabled = true;
   facebook::velox::memory::SharedArbitrator::registerFactory();
   facebook::velox::memory::MemoryManagerOptions options;
   options.allocatorCapacity = allocatorCapacity;
