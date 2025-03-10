@@ -94,6 +94,7 @@ Array Functions
         SELECT array_max(array(-1, -2, NULL)); -- -1
         SELECT array_max(array()); -- NULL
         SELECT array_max(array(-0.0001, -0.0002, -0.0003, float('nan'))); -- NaN
+        SELECT array_max(array(array(1), array(NULL))) -- array(1)
 
 .. spark:function:: array_min(array(E)) -> E
 
@@ -105,8 +106,9 @@ Array Functions
         SELECT array_min(array(-1, -2, NULL)); -- -2
         SELECT array_min(array(NULL, NULL)); -- NULL
         SELECT array_min(array()); -- NULL
-        SELECT array_min(array(4.0, float('nan')]); -- 4.0
+        SELECT array_min(array(4.0, float('nan'))); -- 4.0
         SELECT array_min(array(NULL, float('nan'))); -- NaN
+        SELECT array_min(array(array(1), array(NULL))) -- array(NULL)
 
 .. spark:function:: array_position(x, element) -> bigint
 
