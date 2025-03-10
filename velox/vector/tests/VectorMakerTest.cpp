@@ -479,13 +479,13 @@ TEST_F(VectorMakerTest, nestedArrayVectorFromJson) {
       {{2, 3, 4}},
       {{std::nullopt, 7}},
       {{1, 3, 7, 9}},
-      {{}},
+      std::make_optional<std::vector<std::optional<int32_t>>>({}),
       {{std::nullopt}},
       {{1, 2, std::nullopt}},
-      {{}},
+      std::make_optional<std::vector<std::optional<int32_t>>>({}),
       std::nullopt,
       {{1, 2, 3}},
-      {{}},
+      std::make_optional<std::vector<std::optional<int32_t>>>({}),
       {{4, 5}},
   });
 
