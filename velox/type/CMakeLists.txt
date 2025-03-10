@@ -13,6 +13,7 @@
 # limitations under the License.
 if(${VELOX_BUILD_TESTING})
   add_subdirectory(tests)
+  add_subdirectory(fuzzer)
 endif()
 
 add_subdirectory(parser)
