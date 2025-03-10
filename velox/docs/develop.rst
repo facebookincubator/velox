@@ -33,3 +33,4 @@ This guide is intended for Velox contributors and developers of Velox-based appl
     develop/TpchBenchmark
     develop/window
     develop/dynamic-loading
+    develop/cache
