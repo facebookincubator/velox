@@ -48,30 +48,6 @@ class LocalPartitionTest : public HiveConnectorTestBase {
     }
     return filePaths;
   }
-
-  void assertTaskReferenceCount(
-      const std::shared_ptr<exec::Task>& task,
-      int expected) {
-    // Make sure there is only one reference to Task left, i.e. no Driver is
-    // blocked forever. Wait for a bit if that's not immediately the case.
-    if (task.use_count() > expected) {
-      std::this_thread::sleep_for(std::chrono::seconds(1));
-    }
-    ASSERT_EQ(expected, task.use_count());
-  }
-
-  void waitForTaskCompletion(
-      const std::shared_ptr<exec::Task>& task,
-      exec::TaskState expected) {
-    if (task->state() != expected) {
-      auto& executor = folly::QueuedImmediateExecutor::instance();
-      auto future = task->taskCompletionFuture()
-                        .within(std::chrono::microseconds(1'000'000))
-                        .via(&executor);
-      future.wait();
-      EXPECT_EQ(expected, task->state());
-    }
-  }
 };
 
 TEST_F(LocalPartitionTest, gather) {
