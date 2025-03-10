@@ -107,6 +107,9 @@ int main(int argc, char** argv) {
       // from_unixtime can generate timestamps out of the supported range that
       // make other functions throw VeloxRuntimeErrors.
       "from_unixtime",
+      // Hive does not support JSON type.
+      "array_join(array(json),varchar) -> varchar",
+      "array_join(array(json),varchar,varchar) -> varchar",
   };
   size_t initialSeed = FLAGS_seed == 0 ? std::time(nullptr) : FLAGS_seed;
 
