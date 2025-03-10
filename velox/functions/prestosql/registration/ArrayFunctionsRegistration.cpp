@@ -212,6 +212,7 @@ void registerArrayFunctions(const std::string& prefix) {
   registerArrayRemoveFunctions<Generic<T1>>(prefix);
 
   REGISTER_SCALAR_FUNCTIONS_WITHOUT_VARCHAR(registerArrayTrimFunctions, prefix);
+  registerArrayTrimFunctions<Generic<T1>>(prefix);
   registerFunction<
       ArrayTrimFunctionString,
       Array<Varchar>,
