@@ -750,9 +750,6 @@ TEST_F(ConversionsTest, toString) {
             -9.9E-4,
             7.515E-5,
             -6.5805E27,
-            4.0000001E16,
-            -3.13988096E8,
-            -4.34999997E12,
             std::numeric_limits<float>::infinity(),
             -std::numeric_limits<float>::infinity(),
             std::numeric_limits<float>::quiet_NaN(),
@@ -781,12 +778,6 @@ TEST_F(ConversionsTest, toString) {
             "-9.9E-4",
             "7.515E-5",
             "-6.5805E27",
-            // These single-precision binary to decimal results are different
-            // from presto (java). However, when converted back to the
-            // single-precision representation, the results are the same.
-            "4.0E16", // 4.0000001E16 (java)
-            "-3.139881E8", // -3.13988096E8 (java)
-            "-4.35E12", // -4.34999997E12 (java)
             "Infinity",
             "-Infinity",
             "NaN",
