@@ -29,7 +29,6 @@ and register the remote function, below is the example of registering an absolut
 
 .. note::
 
-   - ``metadata.serdeFormat`` must be set to the PRESTO_PAGE format i.e, ``PageFormat::PRESTO_PAGE``.
    - ``metadata.location`` is the REST endpoint to which Velox will send the function invocation
      requests.
 
