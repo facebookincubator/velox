@@ -334,8 +334,8 @@ class QueryConfig {
       "spark.legacy_date_formatter";
 
   /// If true, statistical aggregation function includes skewness, kurtosis,
-  /// will return std::numeric_limits<double>::quiet_NaN() instead of NULL when
-  /// DivideByZero occurs during expression evaluation.
+  /// will return NaN instead of NULL when dividing by zero during expression
+  /// evaluation.
   static constexpr const char* kSparkLegacyStatisticalAggregate =
       "spark.legacy_statistical_aggregate";
 

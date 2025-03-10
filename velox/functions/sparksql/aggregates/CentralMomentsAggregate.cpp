@@ -21,6 +21,10 @@
 namespace facebook::velox::functions::aggregate::sparksql {
 
 namespace {
+// Calculate the skewness value from m2, count and m3.
+//
+// @tparam nullOnDivideByZero If true, return NULL instead of NaN when dividing
+// by zero during the calculating.
 template <bool nullOnDivideByZero>
 struct SkewnessResultAccessor {
   static bool hasResult(const CentralMomentsAccumulator& accumulator) {
@@ -32,6 +36,9 @@ struct SkewnessResultAccessor {
 
   static double result(const CentralMomentsAccumulator& accumulator) {
     if (accumulator.m2() == 0) {
+      VELOX_USER_CHECK(
+          !nullOnDivideByZero,
+          "If NaN is returned when m2 is 0, nullOnDivideByZero must be false");
       return std::numeric_limits<double>::quiet_NaN();
     }
     return std::sqrt(accumulator.count()) * accumulator.m3() /
@@ -39,6 +46,10 @@ struct SkewnessResultAccessor {
   }
 };
 
+// Calculate the kurtosis value from m2, count and m4.
+//
+// @tparam nullOnDivideByZero If true, return NULL instead of NaN when dividing
+// by zero during the calculating.
 template <bool nullOnDivideByZero>
 struct KurtosisResultAccessor {
   static bool hasResult(const CentralMomentsAccumulator& accumulator) {
@@ -50,6 +61,9 @@ struct KurtosisResultAccessor {
 
   static double result(const CentralMomentsAccumulator& accumulator) {
     if (accumulator.m2() == 0) {
+      VELOX_USER_CHECK(
+          !nullOnDivideByZero,
+          "If NaN is returned when m2 is 0, nullOnDivideByZero must be false");
       return std::numeric_limits<double>::quiet_NaN();
     }
     double count = accumulator.count();
@@ -89,16 +103,15 @@ exec::AggregateRegistrationResult registerSkewness(
         const auto& inputType = argTypes[0];
         if (config.sparkLegacyStatisticalAggregate()) {
           if (exec::isRawInput(step)) {
-            switch (inputType->kind()) {
-              case TypeKind::DOUBLE:
-                return std::make_unique<CentralMomentsAggregatesBase<
-                    double,
-                    SkewnessResultAccessor<false>>>(resultType);
-              default:
-                VELOX_UNSUPPORTED(
-                    "Unsupported input type: {}. "
-                    "Expected DOUBLE.",
-                    inputType->toString());
+            if (inputType->kind() == TypeKind::DOUBLE) {
+              return std::make_unique<CentralMomentsAggregatesBase<
+                  double,
+                  SkewnessResultAccessor<false>>>(resultType);
+            } else {
+              VELOX_UNSUPPORTED(
+                  "Unsupported input type: {}. "
+                  "Expected DOUBLE.",
+                  inputType->toString());
             }
           } else {
             checkAccumulatorRowType(
@@ -111,16 +124,15 @@ exec::AggregateRegistrationResult registerSkewness(
           }
         } else {
           if (exec::isRawInput(step)) {
-            switch (inputType->kind()) {
-              case TypeKind::DOUBLE:
-                return std::make_unique<CentralMomentsAggregatesBase<
-                    double,
-                    SkewnessResultAccessor<true>>>(resultType);
-              default:
-                VELOX_UNSUPPORTED(
-                    "Unsupported input type: {}. "
-                    "Expected DOUBLE.",
-                    inputType->toString());
+            if (inputType->kind() == TypeKind::DOUBLE) {
+              return std::make_unique<CentralMomentsAggregatesBase<
+                  double,
+                  SkewnessResultAccessor<true>>>(resultType);
+            } else {
+              VELOX_UNSUPPORTED(
+                  "Unsupported input type: {}. "
+                  "Expected DOUBLE.",
+                  inputType->toString());
             }
           } else {
             checkAccumulatorRowType(
