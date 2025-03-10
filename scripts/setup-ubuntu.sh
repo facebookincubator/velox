@@ -150,7 +150,8 @@ function install_velox_deps_from_apt {
     bison \
     flex \
     libfl-dev \
-    tzdata
+    tzdata \
+    xxd
 }
 
 function install_fmt {
