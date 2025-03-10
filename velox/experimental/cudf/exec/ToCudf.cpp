@@ -104,12 +104,6 @@ bool CompileState::compile() {
     if (!CudfHashJoinProbe::isSupportedJoinType(plan_node->joinType())) {
       return false;
     }
-    // if (plan_node->isRightSemiFilterJoin()) {
-    //   return false;
-    // }
-    // if (plan_node->filter() != nullptr) {
-    //   return false;
-    // }
     return true;
   };
 
