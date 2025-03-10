@@ -480,7 +480,7 @@ void ParquetDataSink::makeWriterOptions(
 
   const auto& sessionTimeZoneName = connectorQueryCtx_->sessionTimezone();
   if (!sessionTimeZoneName.empty()) {
-    options->sessionTimezone = tz::locateZone(sessionTimeZoneName);
+    options->sessionTimezoneName = sessionTimeZoneName;
   }
   options->adjustTimestampToTimezone =
       connectorQueryCtx_->adjustTimestampToTimezone();

@@ -19,6 +19,7 @@ add_library(
   CudfHashAggregation.cpp
   CudfHashJoin.cpp
   CudfLimit.cpp
+  CudfLocalPartition.cpp
   CudfOrderBy.cpp
   ExpressionEvaluator.cpp
   ToCudf.cpp

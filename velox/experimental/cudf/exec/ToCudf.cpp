@@ -28,6 +28,7 @@
 #include "velox/experimental/cudf/exec/CudfHashAggregation.h"
 #include "velox/experimental/cudf/exec/CudfHashJoin.h"
 #include "velox/experimental/cudf/exec/CudfLimit.h"
+#include "velox/experimental/cudf/exec/CudfLocalPartition.h"
 #include "velox/experimental/cudf/exec/CudfOrderBy.h"
 #include "velox/experimental/cudf/exec/ExpressionEvaluator.h"
 #include "velox/experimental/cudf/exec/Utilities.h"
@@ -111,12 +112,17 @@ bool CompileState::compile() {
     return true;
   };
 
-  auto is_supported_gpu_operator = [is_filter_project_supported,
-                                    is_join_supported](
-                                       const exec::Operator* op) {
-    return is_any_of<exec::OrderBy, exec::HashAggregation, exec::Limit>(op) ||
-        is_filter_project_supported(op) || is_join_supported(op);
-  };
+  auto is_supported_gpu_operator =
+      [is_filter_project_supported,
+       is_join_supported](const exec::Operator* op) {
+        return is_any_of<
+                   exec::OrderBy,
+                   exec::HashAggregation,
+                   exec::Limit,
+                   exec::LocalPartition,
+                   exec::LocalExchange>(op) ||
+            is_filter_project_supported(op) || is_join_supported(op);
+      };
 
   std::vector<bool> is_supported_gpu_operators(operators.size());
   std::transform(
@@ -126,12 +132,20 @@ bool CompileState::compile() {
       is_supported_gpu_operator);
   auto accepts_gpu_input = [is_filter_project_supported,
                             is_join_supported](const exec::Operator* op) {
-    return is_any_of<exec::OrderBy, exec::HashAggregation, exec::Limit>(op) ||
+    return is_any_of<
+               exec::OrderBy,
+               exec::HashAggregation,
+               exec::Limit,
+               exec::LocalPartition>(op) ||
         is_filter_project_supported(op) || is_join_supported(op);
   };
   auto produces_gpu_output = [is_filter_project_supported,
                               is_join_supported](const exec::Operator* op) {
-    return is_any_of<exec::OrderBy, exec::HashAggregation, exec::Limit>(op) ||
+    return is_any_of<
+               exec::OrderBy,
+               exec::HashAggregation,
+               exec::Limit,
+               exec::LocalExchange>(op) ||
         is_filter_project_supported(op) ||
         (is_any_of<exec::HashProbe>(op) && is_join_supported(op));
   };
@@ -213,6 +227,15 @@ bool CompileState::compile() {
           get_plan_node(limitOp->planNodeId()));
       VELOX_CHECK(plan_node != nullptr);
       replace_op.push_back(std::make_unique<CudfLimit>(id, ctx, plan_node));
+      replace_op.back()->initialize()
+    } else if (
+        auto localPartitionOp = dynamic_cast<exec::LocalPartition*>(oper)) {
+      auto plan_node =
+          std::dynamic_pointer_cast<const core::LocalPartitionNode>(
+              get_plan_node(localPartitionOp->planNodeId()));
+      VELOX_CHECK(plan_node != nullptr);
+      replace_op.push_back(
+          std::make_unique<CudfLocalPartition>(id, ctx, plan_node));
       replace_op.back()->initialize();
     }
 
