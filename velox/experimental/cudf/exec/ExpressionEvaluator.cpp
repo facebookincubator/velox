@@ -42,7 +42,8 @@ cudf::ast::literal make_scalar_and_literal(
   using T = typename facebook::velox::KindToFlatVector<kind>::WrapperType;
   auto stream = cudf::get_default_stream();
   auto mr = cudf::get_current_device_resource_ref();
-  auto& type = vector->type();
+  const auto& type = vector->type();
+
   if constexpr (cudf::is_fixed_width<T>()) {
     auto constVector = vector->as<facebook::velox::SimpleVector<T>>();
     VELOX_CHECK_NOT_NULL(constVector, "ConstantVector is null");
@@ -540,16 +541,17 @@ void addPrecomputedColumns(
 ExpressionEvaluator::ExpressionEvaluator(
     const std::vector<std::shared_ptr<velox::exec::Expr>>& exprs,
     const RowTypePtr& inputRowSchema) {
+  exprAst_.reserve(exprs.size());
   for (const auto& expr : exprs) {
     cudf::ast::tree tree;
     create_ast_tree(
         expr, tree, scalars_, inputRowSchema, precompute_instructions_);
-    projectAst_.emplace_back(std::move(tree));
+    exprAst_.emplace_back(std::move(tree));
   }
 }
 
 void ExpressionEvaluator::close() {
-  projectAst_.clear();
+  exprAst_.clear();
   scalars_.clear();
   precompute_instructions_.clear();
 }
@@ -564,7 +566,7 @@ std::vector<std::unique_ptr<cudf::column>> ExpressionEvaluator::compute(
       std::make_unique<cudf::table>(std::move(input_table_columns));
   auto ast_input_table_view = ast_input_table->view();
   std::vector<std::unique_ptr<cudf::column>> columns;
-  for (auto& tree : projectAst_) {
+  for (auto& tree : exprAst_) {
     if (auto col_ref_ptr =
             dynamic_cast<cudf::ast::column_reference const*>(&tree.back())) {
       auto col = std::make_unique<cudf::column>(
