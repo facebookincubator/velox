@@ -17,7 +17,8 @@
 #include "velox/dwio/parquet/reader/ParquetReader.h"
 
 #include <thrift/protocol/TCompactProtocol.h> //@manual
-
+#include "velox/dwio/common/MetricsLog.h"
+#include "velox/dwio/common/TypeUtils.h"
 #include "velox/dwio/parquet/reader/ParquetColumnReader.h"
 #include "velox/dwio/parquet/reader/StructColumnReader.h"
 #include "velox/dwio/parquet/thrift/ThriftTransport.h"
@@ -85,6 +86,10 @@ class ReaderBase {
 
   std::optional<SemanticVersion> version() const {
     return version_;
+  }
+
+  bool isReadBloomFilter() const {
+    return options_.readBloomFilter();
   }
 
   /// Ensures that streams are enqueued and loading for the row group at
@@ -952,7 +957,8 @@ class ParquetRowReader::Impl {
         columnReaderStats_,
         readerBase_->fileMetaData(),
         readerBase->sessionTimezone(),
-        options_.timestampPrecision());
+        options_.timestampPrecision(),
+        readerBase_->isReadBloomFilter());
     requestedType_ = options_.requestedType() ? options_.requestedType()
                                               : readerBase_->schema();
     columnReader_ = ParquetColumnReader::build(
@@ -971,9 +977,22 @@ class ParquetRowReader::Impl {
     }
   }
 
+  const thrift::FileMetaData& fileMetaData() const {
+    return readerBase_->thriftFileMetaData();
+  }
+
   void filterRowGroups() {
     rowGroupIds_.reserve(rowGroups_.size());
     firstRowOfRowGroup_.reserve(rowGroups_.size());
+
+    for (auto child : columnReader_->children()) {
+      auto& parquetData = child->formatData().as<ParquetData>();
+      for (auto i = 0; i < rowGroups_.size(); ++i) {
+        parquetData.setBloomFilterInputStream(i, readerBase_->bufferedInput());
+      }
+    }
+
+    readerBase_->bufferedInput().load(dwio::common::LogType::STRIPE_FOOTER);
 
     ParquetData::FilterRowGroupsResult res;
     columnReader_->filterRowGroups(0, parquetStatsContext_, res);
@@ -1156,6 +1175,10 @@ bool ParquetRowReader::isRowGroupBuffered(int32_t rowGroupIndex) const {
 
 std::optional<size_t> ParquetRowReader::estimatedRowSize() const {
   return impl_->estimatedRowSize();
+}
+
+const thrift::FileMetaData& ParquetRowReader::fileMetaData() const {
+  return impl_->fileMetaData();
 }
 
 ParquetReader::ParquetReader(
