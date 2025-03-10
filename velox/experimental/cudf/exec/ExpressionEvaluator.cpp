@@ -156,6 +156,21 @@ const std::unordered_set<std::string> supported_ops = {
     "substr",
     "like"};
 
+namespace detail {
+
+bool can_be_evaluated(const std::shared_ptr<velox::exec::Expr>& expr) {
+  const auto& name = expr->name();
+  if (supported_ops.count(name) || binary_ops.count(name) ||
+      unary_ops.count(name)) {
+    return std::all_of(
+        expr->inputs().begin(), expr->inputs().end(), can_be_evaluated);
+  }
+  return std::dynamic_pointer_cast<velox::exec::FieldReference>(expr) !=
+      nullptr;
+}
+
+} // namespace detail
+
 struct AstContext {
   // All members are references
   cudf::ast::tree& tree;
@@ -168,7 +183,6 @@ struct AstContext {
   cudf::ast::expression const& add_precompute_instruction(
       std::string const& name,
       std::string const& instruction);
-  static bool can_be_evaluated(const std::shared_ptr<velox::exec::Expr>& expr);
 };
 
 // Create tree from Expr
@@ -198,18 +212,6 @@ cudf::ast::expression const& create_ast_tree(
       {leftRowSchema, rightRowSchema},
       {left_precompute_instructions, right_precompute_instructions}};
   return context.push_expr_to_tree(expr);
-}
-
-bool AstContext::can_be_evaluated(
-    const std::shared_ptr<velox::exec::Expr>& expr) {
-  const auto& name = expr->name();
-  if (supported_ops.count(name) || binary_ops.count(name) ||
-      unary_ops.count(name)) {
-    return std::all_of(
-        expr->inputs().begin(), expr->inputs().end(), can_be_evaluated);
-  }
-  return std::dynamic_pointer_cast<velox::exec::FieldReference>(expr) !=
-      nullptr;
 }
 
 cudf::ast::expression const& AstContext::add_precompute_instruction(
@@ -471,6 +473,6 @@ std::vector<std::unique_ptr<cudf::column>> ExpressionEvaluator::compute(
 
 bool ExpressionEvaluator::can_be_evaluated(
     const std::vector<std::shared_ptr<velox::exec::Expr>>& exprs) {
-  return std::all_of(exprs.begin(), exprs.end(), AstContext::can_be_evaluated);
+  return std::all_of(exprs.begin(), exprs.end(), detail::can_be_evaluated);
 }
 } // namespace facebook::velox::cudf_velox
