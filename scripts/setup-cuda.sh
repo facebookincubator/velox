@@ -13,9 +13,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-SCRIPTDIR=$(dirname "$0")
-source $SCRIPTDIR/setup-helper-functions.sh
-
 # Propagate errors and improve debugging.
 set -eufx -o pipefail
 
