@@ -17,13 +17,13 @@ FROM $image
 
 COPY scripts/setup-helper-functions.sh /
 COPY scripts/setup-adapters.sh /
-COPY scripts/setup-cuda.sh /
+COPY scripts/setup-centos9.sh /
 RUN mkdir build && \
     ( \
       cd build && \
       source /opt/rh/gcc-toolset-12/enable && \
       bash /setup-adapters.sh && \
-      bash /setup-cuda.sh \
+      bash /setup-centos9.sh install_cuda \
     ) && \
     rm -rf build && dnf remove -y conda && dnf clean all
 
