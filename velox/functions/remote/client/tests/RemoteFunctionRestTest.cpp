@@ -65,9 +65,9 @@ class RemoteFunctionRestTest
                              .build()};
 
     auto roundSignature = {exec::FunctionSignatureBuilder()
-                             .returnType("integer")
-                             .argumentType("integer")
-                             .build()};
+                               .returnType("integer")
+                               .argumentType("integer")
+                               .build()};
 
     registerFunctionHelper("remote_abs", absSignature, location_);
     registerFunctionHelper("remote_round", roundSignature, location_);
@@ -143,15 +143,17 @@ TEST_F(RemoteFunctionRestTest, absolute) {
 
 TEST_F(RemoteFunctionRestTest, connectionError) {
   auto inputVector = makeFlatVector<int32_t>({-10, -20});
-  VELOX_ASSERT_THROW(evaluate<SimpleVector<int32_t>>(
-        "remote_wrong_port(c0)", makeRowVector({inputVector})),
-    "Error communicating with server: ");
+  VELOX_ASSERT_THROW(
+      evaluate<SimpleVector<int32_t>>(
+          "remote_wrong_port(c0)", makeRowVector({inputVector})),
+      "Error communicating with server: ");
 }
 
 TEST_F(RemoteFunctionRestTest, functionNotAvailable) {
   auto inputVector = makeFlatVector<int32_t>({-10, -20});
-  VELOX_ASSERT_THROW(evaluate<SimpleVector<int32_t>>(
-      "remote_round(c0)", makeRowVector({inputVector})),
+  VELOX_ASSERT_THROW(
+      evaluate<SimpleVector<int32_t>>(
+          "remote_round(c0)", makeRowVector({inputVector})),
       "Received corrupted serialized page.");
 }
 
