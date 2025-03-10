@@ -215,6 +215,7 @@ jobs:
           path: |
             /tmp/spark_aggregate_fuzzer_repro
 
+# A temporary comment to trigger GCC 13 build.
   linux-join-fuzzer-run:
     runs-on: ubuntu-latest
     needs: compile
