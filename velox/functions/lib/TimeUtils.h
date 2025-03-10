@@ -135,7 +135,7 @@ struct InitSessionTimezone {
 /// @param allowMicro Whether to allow microsecond.
 /// @param allowAbbreviated Whether to allow abbreviated unit string.
 std::optional<DateTimeUnit> fromDateTimeUnitString(
-    const StringView& unitString,
+    StringView unitString,
     bool throwIfInvalid,
     bool allowMicro = false,
     bool allowAbbreviated = false);
@@ -159,7 +159,7 @@ adjustEpoch(int64_t seconds, int64_t intervalSeconds) {
 
 // Returns timestamp truncated to the specified unit.
 Timestamp truncateTimestamp(
-    const Timestamp& timestamp,
+    Timestamp timestamp,
     DateTimeUnit unit,
     const tz::TimeZone* timeZone);
 } // namespace facebook::velox::functions
