@@ -51,6 +51,7 @@ add_executable(
   ArrayUnionTest.cpp
   ArgTypesGeneratorTest.cpp
   BinaryFunctionsTest.cpp
+  BingTileCastTest.cpp
   BitwiseTest.cpp
   CardinalityTest.cpp
   CeilFloorTest.cpp
@@ -77,6 +78,7 @@ add_executable(
   MapTopNTest.cpp
   MapTopNKeysTest.cpp
   MapKeysAndValuesTest.cpp
+  MapKeysByTopNValuesTest.cpp
   MapMatchTest.cpp
   MapTest.cpp
   MapZipWithTest.cpp

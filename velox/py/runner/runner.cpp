@@ -44,6 +44,14 @@ PYBIND11_MODULE(runner, m) {
       }))
       .def("execute", &velox::py::PyLocalRunner::execute)
       .def(
+          "print_plan_with_stats",
+          &velox::py::PyLocalRunner::printPlanWithStats,
+          py::doc(R"(
+         Prints a descriptive debug message containing plan and execution
+         stats. If the task hasn't finished, will print the plan with the
+         current stats.
+          )"))
+      .def(
           "add_file_split",
           &velox::py::PyLocalRunner::addFileSplit,
           py::arg("file"),

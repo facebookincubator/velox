@@ -60,6 +60,7 @@ struct Date {
   bool isYearOfEra = false; // Year of era cannot be zero or negative.
   bool hasYear = false; // Whether year was explicitly specified.
   bool hasDayOfWeek = false; // Whether dayOfWeek was explicitly specified.
+  bool hasWeek = false; // Whether week was explicitly specified.
 
   int32_t hour = 0;
   int32_t minute = 0;
@@ -626,7 +627,7 @@ int64_t parseHalfDayOfDay(const char* cur, const char* end, Date& date) {
 std::string formatFractionOfSecond(
     uint16_t subseconds,
     size_t minRepresentDigits) {
-  char toAdd[minRepresentDigits > 3 ? minRepresentDigits + 1 : 4];
+  std::string toAdd(minRepresentDigits > 3 ? minRepresentDigits : 3, '0');
 
   if (subseconds < 10) {
     toAdd[0] = '0';
@@ -642,11 +643,7 @@ std::string formatFractionOfSecond(
     toAdd[0] = char((subseconds / 100) % 10 + '0');
   }
 
-  if (minRepresentDigits > 3) {
-    memset(toAdd + 3, '0', minRepresentDigits - 3);
-  }
-
-  toAdd[minRepresentDigits] = '\0';
+  toAdd.resize(minRepresentDigits);
   return toAdd;
 }
 
@@ -874,9 +871,7 @@ int32_t parseFromPattern(
       return -1;
     }
     cur += size;
-    if (!date.weekOfMonthDateFormat) {
-      date.weekDateFormat = true;
-    }
+    date.hasDayOfWeek = true;
     date.dayOfYearFormat = false;
     if (!date.hasYear) {
       date.hasYear = true;
@@ -908,7 +903,12 @@ int32_t parseFromPattern(
         ++cur;
         ++count;
       }
-      number *= std::pow(10, 3 - count);
+      // If the number of digits is less than 3, a simple formatter interprets
+      // it as the whole number; otherwise, it pads the number with zeros.
+      if (type != DateTimeFormatterType::STRICT_SIMPLE &&
+          type != DateTimeFormatterType::LENIENT_SIMPLE) {
+        number *= std::pow(10, 3 - count);
+      }
     } else if (
         (curPattern.specifier == DateTimeFormatSpecifier::YEAR ||
          curPattern.specifier == DateTimeFormatSpecifier::YEAR_OF_ERA ||
@@ -1099,6 +1099,7 @@ int32_t parseFromPattern(
           return -1;
         }
         date.year = number;
+        date.hasWeek = true;
         date.weekDateFormat = true;
         date.dayOfYearFormat = false;
         date.centuryFormat = false;
@@ -1111,6 +1112,7 @@ int32_t parseFromPattern(
           return -1;
         }
         date.week = number;
+        date.hasWeek = true;
         date.weekDateFormat = true;
         date.dayOfYearFormat = false;
         date.weekOfMonthDateFormat = false;
@@ -1641,6 +1643,10 @@ Expected<DateTimeResult> DateTimeFormatter::parse(
 
   // Convert the parsed date/time into a timestamp.
   Expected<int64_t> daysSinceEpoch;
+
+  // Ensure you use week date format only when you have year and at least week.
+  date.weekDateFormat = date.hasYear && date.hasWeek;
+
   if (date.weekDateFormat) {
     daysSinceEpoch =
         util::daysSinceEpochFromWeekDate(date.year, date.week, date.dayOfWeek);

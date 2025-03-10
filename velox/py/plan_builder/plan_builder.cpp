@@ -146,8 +146,8 @@ PYBIND11_MODULE(plan_builder, m) {
         SQL expression.
       )"))
       .def(
-          "singleAggregation",
-          &velox::py::PyPlanBuilder::singleAggregation,
+          "aggregate",
+          &velox::py::PyPlanBuilder::aggregate,
           py::arg("grouping_keys") = std::vector<std::string>{},
           py::arg("aggregations") = std::vector<std::string>{},
           py::doc(R"(
@@ -156,6 +156,37 @@ PYBIND11_MODULE(plan_builder, m) {
         Args:
           grouping_keys: List of columns to group by.
           aggregations: List of aggregate expressions.
+      )"))
+      .def(
+          "order_by",
+          &velox::py::PyPlanBuilder::orderBy,
+          py::arg("keys"),
+          py::arg("is_partial") = false,
+          py::doc(R"(
+        Sorts the input based on the values of sorting keys.
+
+        Args:
+          keys: List of columns to order by. The strings can be column names
+                and optionally contain the sort orientation ("col" or
+                "col DESC").
+          is_partial: If this node is sorting partial query results (and hence
+                      can run in parallel in multiple drivers), or final.
+      )"))
+      .def(
+          "limit",
+          &velox::py::PyPlanBuilder::limit,
+          py::arg("count"),
+          py::arg("offset") = 0,
+          py::arg("is_partial") = false,
+          py::doc(R"(
+        Limit how many rows from the input to produce as output.
+
+        Args:
+          count: How many rows to produce, at most.
+          offset: Hoy many rows from the beggining of the input to skip.
+          is_partial: If this is restricting partial results and hence
+                      can be applied once per driver, or if it's applied
+                      to the query output.
       )"))
       .def(
           "merge_join",
@@ -175,6 +206,19 @@ PYBIND11_MODULE(plan_builder, m) {
           right_plan_node: The plan node defined the subplan to join with.
           output: List of columns to be projected out of the join.
           filter: Optional join filter expression.
+      )"))
+      .def(
+          "sorted_merge",
+          &velox::py::PyPlanBuilder::sortedMerge,
+          py::arg("keys"),
+          py::arg("sources"),
+          py::doc(R"(
+        Takes N sorted `source` subtrees and merges them into a sorted output.
+        Assumes that all sources are sorted on `keys`.
+
+        Args:
+          keys: The sorting keys.
+          sources: The list of sources to merge.
       )"))
       .def(
           "tpch_gen",

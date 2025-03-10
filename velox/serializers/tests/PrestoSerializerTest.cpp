@@ -908,19 +908,21 @@ TEST_P(PrestoSerializerTest, initMemory) {
     ASSERT_EQ(pool_->usedBytes() - poolMemUsage, expectedBytes);
   };
 
-  testFunc(BOOLEAN(), 0);
-  testFunc(TINYINT(), 0);
-  testFunc(SMALLINT(), 0);
-  testFunc(INTEGER(), 0);
-  testFunc(BIGINT(), 0);
-  testFunc(REAL(), 0);
-  testFunc(DOUBLE(), 0);
-  testFunc(VARCHAR(), 0);
-  testFunc(TIMESTAMP(), 0);
+  // 8192 for slab allocation for 64-bit header + 384 for memory pool allocated
+  // std structures
+  testFunc(BOOLEAN(), 8576);
+  testFunc(TINYINT(), 8576);
+  testFunc(SMALLINT(), 8576);
+  testFunc(INTEGER(), 8576);
+  testFunc(BIGINT(), 8576);
+  testFunc(REAL(), 8576);
+  testFunc(DOUBLE(), 8576);
+  testFunc(VARCHAR(), 8576);
+  testFunc(TIMESTAMP(), 8576);
   // For nested types, 2 pages allocation quantum for first offset (0).
-  testFunc(ROW({VARCHAR()}), 8192);
-  testFunc(ARRAY(INTEGER()), 8192);
-  testFunc(MAP(VARCHAR(), INTEGER()), 8192);
+  testFunc(ROW({VARCHAR()}), 8960);
+  testFunc(ARRAY(INTEGER()), 8960);
+  testFunc(MAP(VARCHAR(), INTEGER()), 9280);
 }
 
 TEST_P(PrestoSerializerTest, serializeNoRowsSelected) {

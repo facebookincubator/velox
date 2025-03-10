@@ -15,10 +15,13 @@
  */
 
 #include "velox/common/base/tests/GTestUtils.h"
+#include "velox/common/testutil/TestValue.h"
 #include "velox/connectors/Connector.h"
 #include "velox/core/PlanNode.h"
+#include "velox/exec/PlanNodeStats.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/HiveConnectorTestBase.h"
+#include "velox/exec/tests/utils/IndexLookupJoinTestBase.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
 #include "velox/exec/tests/utils/TestIndexStorageConnector.h"
 
@@ -29,7 +32,7 @@ using namespace facebook::velox::common::testutil;
 
 namespace fecebook::velox::exec::test {
 namespace {
-class IndexLookupJoinTest : public HiveConnectorTestBase,
+class IndexLookupJoinTest : public IndexLookupJoinTestBase,
                             public testing::WithParamInterface<bool> {
  protected:
   IndexLookupJoinTest() = default;
@@ -51,13 +54,12 @@ class IndexLookupJoinTest : public HiveConnectorTestBase,
                 connectorCpuExecutor_.get());
     connector::registerConnector(connector);
 
-    // TODO: extend to support multiple key columns.
-    keyType_ = ROW({"u0"}, {BIGINT()});
-    valueType_ = ROW({"u1", "u2", "u3"}, {BIGINT(), BIGINT(), VARCHAR()});
-    tableType_ = ROW(
-        {"u0", "u1", "u2", "u3"}, {BIGINT(), BIGINT(), BIGINT(), VARCHAR()});
+    keyType_ = ROW({"u0", "u1", "u2"}, {BIGINT(), BIGINT(), BIGINT()});
+    valueType_ = ROW({"u3", "u4", "u5"}, {BIGINT(), BIGINT(), VARCHAR()});
+    tableType_ = concat(keyType_, valueType_);
     probeType_ = ROW(
-        {"t0", "t1", "t2", "t3"}, {BIGINT(), BIGINT(), VARCHAR(), BIGINT()});
+        {"t0", "t1", "t2", "t3", "t4", "t5"},
+        {BIGINT(), BIGINT(), BIGINT(), BIGINT(), ARRAY(BIGINT()), VARCHAR()});
 
     TestIndexTableHandle::registerSerDe();
   }
@@ -70,109 +72,19 @@ class IndexLookupJoinTest : public HiveConnectorTestBase,
 
   void testSerde(const core::PlanNodePtr& plan) {
     auto serialized = plan->serialize();
-
     auto copy = ISerializable::deserialize<core::PlanNode>(serialized, pool());
-
     ASSERT_EQ(plan->toString(true, true), copy->toString(true, true));
-  }
-
-  // Generate index lookup table data.
-  // @param numKeys: number of unique keys.
-  // @param numDuplicatePerKey: number of duplicate rows per unique key so the
-  //                            total number of rows in the table is numKeys *
-  //                            numDuplicatePerKey.
-  // @param keyData: output key column vectors. This is used to populate the
-  //                 hash table in the index table.
-  // @param valueData: output value column vectors. This is used to populate the
-  //                   hash table in the index table.
-  // @param tableData: output table column vectors including key and value. This
-  //                   is used to populate duckdb table.
-  void generateIndexTableData(
-      size_t numKeys,
-      size_t numDuplicatePerKey,
-      RowVectorPtr& keyData,
-      RowVectorPtr& valueData,
-      RowVectorPtr& tableData) {
-    const int numRows = numKeys * numDuplicatePerKey;
-    VectorFuzzer::Options opts;
-    opts.vectorSize = numRows;
-    opts.nullRatio = 0.0;
-    VectorFuzzer fuzzer(opts, pool_.get());
-
-    keyData = fuzzer.fuzzInputFlatRow(keyType_);
-    valueData = fuzzer.fuzzInputFlatRow(valueType_);
-    keyData->childAt(0) = makeFlatVector<int64_t>(
-        keyData->size(),
-        [numDuplicatePerKey](auto row) { return row / numDuplicatePerKey; });
-    std::vector<VectorPtr> tableColumns;
-    VELOX_CHECK_EQ(tableType_->size(), keyType_->size() + valueType_->size());
-    tableColumns.reserve(tableType_->size());
-    for (auto i = 0; i < keyType_->size(); ++i) {
-      tableColumns.push_back(keyData->childAt(i));
-    }
-    for (auto i = 0; i < valueType_->size(); ++i) {
-      tableColumns.push_back(valueData->childAt(i));
-    }
-    tableData = makeRowVector(tableType_->names(), tableColumns);
-  }
-
-  // Generate probe input for lookup join.
-  // @param numBatches: number of probe batches.
-  // @param batchSize: number of rows in each probe batch.
-  // @param tableKey: key column vectors of the index table. This is used to set
-  //                  the key range for the probe input with specified lookup
-  //                  match percentage for convenience.
-  // @param matchPct: percentage of rows in the probe input that matches with
-  // the rows in index table.
-  std::vector<RowVectorPtr> generateProbeTableInput(
-      size_t numBatches,
-      size_t batchSize,
-      const RowVectorPtr& tableKey,
-      size_t matchPct) {
-    VELOX_CHECK_LE(matchPct, 100);
-    std::vector<RowVectorPtr> probeInputs;
-    probeInputs.reserve(numBatches);
-    VectorFuzzer::Options opts;
-    opts.vectorSize = batchSize;
-    // TODO: add nullable handling later.
-    opts.nullRatio = 0.0;
-    VectorFuzzer fuzzer(opts, pool_.get());
-    for (int i = 0; i < numBatches; ++i) {
-      probeInputs.push_back(fuzzer.fuzzInputRow(probeType_));
-    }
-
-    if (tableKey->size() == 0) {
-      return probeInputs;
-    }
-
-    // Set the key range for the probe input either within or outside the table
-    // key range based on the specified match percentage.
-    auto* flatKeyVector = tableKey->childAt(0)->asFlatVector<int64_t>();
-    const auto minKey = flatKeyVector->valueAt(0);
-    const auto maxKey = flatKeyVector->valueAt(flatKeyVector->size() - 1);
-    for (int i = 0, row = 0; i < numBatches; ++i) {
-      probeInputs[i]->childAt(0)->loadedVector();
-      BaseVector::flattenVector(probeInputs[i]->childAt(0));
-      auto* flatProbeKeyVector =
-          probeInputs[i]->childAt(0)->asFlatVector<int64_t>();
-      VELOX_CHECK_NOT_NULL(flatProbeKeyVector);
-      for (int j = 0; j < flatProbeKeyVector->size(); ++j, ++row) {
-        if (row % 100 < matchPct) {
-          flatProbeKeyVector->set(j, folly::Random::rand64(minKey, maxKey + 1));
-        } else {
-          flatProbeKeyVector->set(j, maxKey + 1 + folly::Random::rand32());
-        }
-      }
-    }
-    return probeInputs;
   }
 
   // Create index table with the given key and value inputs.
   std::shared_ptr<TestIndexTable> createIndexTable(
+      int numEqualJoinKeys,
       const RowVectorPtr& keyData,
       const RowVectorPtr& valueData) {
-    auto keyType = std::dynamic_pointer_cast<const RowType>(keyData->type());
+    const auto keyType =
+        std::dynamic_pointer_cast<const RowType>(keyData->type());
     VELOX_CHECK_GE(keyType->size(), 1);
+    VELOX_CHECK_GE(keyType->size(), numEqualJoinKeys);
     auto valueType =
         std::dynamic_pointer_cast<const RowType>(valueData->type());
     VELOX_CHECK_GE(valueType->size(), 1);
@@ -180,22 +92,36 @@ class IndexLookupJoinTest : public HiveConnectorTestBase,
     VELOX_CHECK_EQ(numRows, valueData->size());
 
     std::vector<std::unique_ptr<VectorHasher>> hashers;
-    hashers.reserve(keyType->size());
-    for (auto i = 0; i < keyType->size(); ++i) {
+    hashers.reserve(numEqualJoinKeys);
+    std::vector<VectorPtr> keyVectors;
+    keyVectors.reserve(numEqualJoinKeys);
+    for (auto i = 0; i < numEqualJoinKeys; ++i) {
       hashers.push_back(std::make_unique<VectorHasher>(keyType->childAt(i), i));
+      keyVectors.push_back(keyData->childAt(i));
+    }
+
+    std::vector<TypePtr> dependentTypes;
+    std::vector<VectorPtr> dependentVectors;
+    for (int i = numEqualJoinKeys; i < keyType->size(); ++i) {
+      dependentTypes.push_back(keyType->childAt(i));
+      dependentVectors.push_back(keyData->childAt(i));
+    }
+    for (int i = 0; i < valueType->size(); ++i) {
+      dependentTypes.push_back(valueType->childAt(i));
+      dependentVectors.push_back(valueData->childAt(i));
     }
 
     // Create the table.
     auto table = HashTable<false>::createForJoin(
         std::move(hashers),
-        /*dependentTypes=*/valueType->children(),
+        /*dependentTypes=*/dependentTypes,
         /*allowDuplicates=*/true,
         /*hasProbedFlag=*/false,
         /*minTableSizeForParallelJoinBuild=*/1,
         pool_.get());
 
     // Insert data into the row container.
-    auto rowContainer = table->rows();
+    auto* rowContainer = table->rows();
     std::vector<DecodedVector> decodedVectors;
     for (auto& vector : keyData->children()) {
       decodedVectors.emplace_back(*vector);
@@ -204,7 +130,6 @@ class IndexLookupJoinTest : public HiveConnectorTestBase,
       decodedVectors.emplace_back(*vector);
     }
 
-    std::vector<char*> rows;
     for (auto row = 0; row < numRows; ++row) {
       auto* newRow = rowContainer->newRow();
 
@@ -219,25 +144,6 @@ class IndexLookupJoinTest : public HiveConnectorTestBase,
         std::move(keyType), std::move(valueType), std::move(table));
   }
 
-  void createDuckDbTable(
-      const std::string& tableName,
-      const std::vector<RowVectorPtr>& data) {
-    // Change each column with prefix 'c' to simplify the duckdb table column
-    // naming.
-    std::vector<std::string> columnNames;
-    columnNames.reserve(data[0]->type()->size());
-    for (int i = 0; i < data[0]->type()->size(); ++i) {
-      columnNames.push_back(fmt::format("c{}", i));
-    }
-    std::vector<RowVectorPtr> duckDbInputs;
-    duckDbInputs.reserve(data.size());
-    for (const auto& dataVector : data) {
-      duckDbInputs.emplace_back(
-          makeRowVector(columnNames, dataVector->children()));
-    }
-    duckDbQueryRunner_.createTable(tableName, duckDbInputs);
-  }
-
   // Makes index table handle with the specified index table and async lookup
   // flag.
   std::shared_ptr<TestIndexTableHandle> makeIndexTableHandle(
@@ -247,73 +153,8 @@ class IndexLookupJoinTest : public HiveConnectorTestBase,
         kTestIndexConnectorName, indexTable, asyncLookup);
   }
 
-  // Makes index table scan node with the specified index table handle.
-  // @param outputType: the output schema of the index table scan node.
-  // @param scanNodeId: returns the plan node id of the index table scan node.
-  core::TableScanNodePtr makeIndexScanNode(
-      const std::shared_ptr<core::PlanNodeIdGenerator>& planNodeIdGenerator,
-      const std::shared_ptr<TestIndexTableHandle> indexTableHandle,
-      const RowTypePtr& outputType,
-      core::PlanNodeId& scanNodeId) {
-    auto planBuilder = PlanBuilder(planNodeIdGenerator);
-    auto indexTableScan = std::dynamic_pointer_cast<const core::TableScanNode>(
-        PlanBuilder::TableScanBuilder(planBuilder)
-            .tableHandle(indexTableHandle)
-            .outputType(outputType)
-            .endTableScan()
-            .capturePlanNodeId(scanNodeId)
-            .planNode());
-    VELOX_CHECK_NOT_NULL(indexTableScan);
-    return indexTableScan;
-  }
-
-  // Makes output schema from the index table scan node with the specified
-  // column names.
-  RowTypePtr makeScanOutputType(std::vector<std::string> outputNames) {
-    std::vector<TypePtr> types;
-    for (int i = 0; i < outputNames.size(); ++i) {
-      if (valueType_->getChildIdxIfExists(outputNames[i]).has_value()) {
-        types.push_back(valueType_->findChild(outputNames[i]));
-        continue;
-      }
-      types.push_back(keyType_->findChild(outputNames[i]));
-    }
-    return ROW(std::move(outputNames), std::move(types));
-  }
-
-  // Makes lookup join plan with the following parameters:
-  // @param indexScanNode: the index table scan node.
-  // @param probeVectors: the probe input vectors.
-  // @param outputColumns: the output column names of index lookup join.
-  // @param joinType: the join type of index lookup join.
-  // @param joinNodeId: returns the plan node id of the index lookup join node.
-  core::PlanNodePtr makeLookupPlan(
-      const std::shared_ptr<core::PlanNodeIdGenerator>& planNodeIdGenerator,
-      core::TableScanNodePtr indexScanNode,
-      const std::vector<RowVectorPtr>& probeVectors,
-      const std::vector<std::string>& outputColumns,
-      core::JoinType joinType,
-      core::PlanNodeId& joinNodeId) {
-    VELOX_CHECK_EQ(keyType_->size(), 1);
-    return PlanBuilder(planNodeIdGenerator)
-        .values(probeVectors)
-        .indexLookupJoin(
-            {{probeType_->nameOf(0)}},
-            {"u0"},
-            indexScanNode,
-            {},
-            outputColumns,
-            joinType)
-        .capturePlanNodeId(joinNodeId)
-        .planNode();
-  }
-
   const std::unique_ptr<folly::CPUThreadPoolExecutor> connectorCpuExecutor_{
       std::make_unique<folly::CPUThreadPoolExecutor>(128)};
-  RowTypePtr keyType_;
-  RowTypePtr valueType_;
-  RowTypePtr tableType_;
-  RowTypePtr probeType_;
 };
 
 TEST_P(IndexLookupJoinTest, planNodeAndSerde) {
@@ -323,16 +164,24 @@ TEST_P(IndexLookupJoinTest, planNodeAndSerde) {
       kTestIndexConnectorName, nullptr, true);
 
   auto left = makeRowVector(
-      {"t0", "t1", "t2"},
-      {makeFlatVector<int32_t>({1, 2, 3}),
+      {"t0", "t1", "t2", "t3", "t4"},
+      {makeFlatVector<int64_t>({1, 2, 3}),
        makeFlatVector<int64_t>({10, 20, 30}),
-       makeFlatVector<int32_t>({10, 30, 20})});
+       makeFlatVector<int64_t>({10, 30, 20}),
+       makeArrayVector<int64_t>(
+           3,
+           [](auto row) { return row; },
+           [](auto /*unused*/, auto index) { return index; }),
+       makeArrayVector<int64_t>(
+           3,
+           [](auto row) { return row; },
+           [](auto /*unused*/, auto index) { return index; })});
 
   auto right = makeRowVector(
       {"u0", "u1", "u2"},
-      {makeFlatVector<int32_t>({1, 2, 3}),
+      {makeFlatVector<int64_t>({1, 2, 3}),
        makeFlatVector<int64_t>({10, 20, 30}),
-       makeFlatVector<int32_t>({10, 30, 20})});
+       makeFlatVector<int64_t>({10, 30, 20})});
 
   auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
 
@@ -372,21 +221,65 @@ TEST_P(IndexLookupJoinTest, planNodeAndSerde) {
     testSerde(plan);
   }
 
-  // with join conditions.
+  // with in join conditions.
   for (const auto joinType : {core::JoinType::kLeft, core::JoinType::kInner}) {
-    auto plan = PlanBuilder(planNodeIdGenerator)
+    auto plan = PlanBuilder(planNodeIdGenerator, pool_.get())
                     .values({left})
                     .indexLookupJoin(
                         {"t0"},
                         {"u0"},
                         indexTableScan,
-                        {"u1 > t2"},
+                        {"contains(t3, u0)", "contains(t4, u1)"},
                         {"t0", "u1", "t2", "t1"},
                         joinType)
                     .planNode();
     auto indexLookupJoinNode =
         std::dynamic_pointer_cast<const core::IndexLookupJoinNode>(plan);
-    ASSERT_EQ(indexLookupJoinNode->joinConditions().size(), 1);
+    ASSERT_EQ(indexLookupJoinNode->joinConditions().size(), 2);
+    ASSERT_EQ(
+        indexLookupJoinNode->lookupSource()->tableHandle()->connectorId(),
+        kTestIndexConnectorName);
+    testSerde(plan);
+  }
+
+  // with between join conditions.
+  for (const auto joinType : {core::JoinType::kLeft, core::JoinType::kInner}) {
+    auto plan = PlanBuilder(planNodeIdGenerator, pool_.get())
+                    .values({left})
+                    .indexLookupJoin(
+                        {"t0"},
+                        {"u0"},
+                        indexTableScan,
+                        {"u0 between t0 AND t1",
+                         "u1 between t1 AND 10",
+                         "u1 between 10 AND t1"},
+                        {"t0", "u1", "t2", "t1"},
+                        joinType)
+                    .planNode();
+    auto indexLookupJoinNode =
+        std::dynamic_pointer_cast<const core::IndexLookupJoinNode>(plan);
+    ASSERT_EQ(indexLookupJoinNode->joinConditions().size(), 3);
+    ASSERT_EQ(
+        indexLookupJoinNode->lookupSource()->tableHandle()->connectorId(),
+        kTestIndexConnectorName);
+    testSerde(plan);
+  }
+
+  // with mix join conditions.
+  for (const auto joinType : {core::JoinType::kLeft, core::JoinType::kInner}) {
+    auto plan = PlanBuilder(planNodeIdGenerator, pool_.get())
+                    .values({left})
+                    .indexLookupJoin(
+                        {"t0"},
+                        {"u0"},
+                        indexTableScan,
+                        {"contains(t3, u0)", "u1 between 10 AND t1"},
+                        {"t0", "u1", "t2", "t1"},
+                        joinType)
+                    .planNode();
+    auto indexLookupJoinNode =
+        std::dynamic_pointer_cast<const core::IndexLookupJoinNode>(plan);
+    ASSERT_EQ(indexLookupJoinNode->joinConditions().size(), 2);
     ASSERT_EQ(
         indexLookupJoinNode->lookupSource()->tableHandle()->connectorId(),
         kTestIndexConnectorName);
@@ -429,7 +322,7 @@ TEST_P(IndexLookupJoinTest, planNodeAndSerde) {
                 {"t0", "t1"},
                 {"u0"},
                 indexTableScan,
-                {"u1 > t2"},
+                {"contains(t4, u0)"},
                 {"t0", "u1", "t2", "t1"})
             .planNode(),
         "JoinNode requires same number of join keys on left and right sides");
@@ -441,18 +334,21 @@ TEST_P(IndexLookupJoinTest, planNodeAndSerde) {
         PlanBuilder(planNodeIdGenerator)
             .values({left})
             .indexLookupJoin(
-                {}, {}, indexTableScan, {"u1 > t2"}, {"t0", "u1", "t2", "t1"})
+                {},
+                {},
+                indexTableScan,
+                {"contains(t4, u0)"},
+                {"t0", "u1", "t2", "t1"})
             .planNode(),
         "JoinNode requires at least one join key");
   }
 }
 
-TEST_P(IndexLookupJoinTest, basic) {
+TEST_P(IndexLookupJoinTest, equalJoin) {
   struct {
-    int numKeys;
-    int numDuplicatePerKey;
-    int numBatches;
-    int numProbeRowsPerBatch;
+    std::vector<int> keyCardinalities;
+    int numProbeBatches;
+    int numRowsPerProbeBatch;
     int matchPct;
     std::vector<std::string> scanOutputColumns;
     std::vector<std::string> outputColumns;
@@ -461,11 +357,12 @@ TEST_P(IndexLookupJoinTest, basic) {
 
     std::string debugString() const {
       return fmt::format(
-          "numKeys: {}, numDuplicatePerKey: {}, numBatches: {}, numProbeRowsPerBatch: {}, matchPct: {}, scanOutputColumns: {}, outputColumns: {}, joinType: {}, duckDbVerifySql: {}",
-          numKeys,
-          numDuplicatePerKey,
-          numBatches,
-          numProbeRowsPerBatch,
+          "keyCardinalities: {}, numProbeBatches: {}, numRowsPerProbeBatch: {}, matchPct: {}, "
+          "scanOutputColumns: {}, outputColumns: {}, joinType: {},"
+          " duckDbVerifySql: {}",
+          folly::join(",", keyCardinalities),
+          numProbeBatches,
+          numRowsPerProbeBatch,
           matchPct,
           folly::join(",", scanOutputColumns),
           folly::join(",", outputColumns),
@@ -475,86 +372,51 @@ TEST_P(IndexLookupJoinTest, basic) {
   } testSettings[] = {
       // Inner join.
       // 10% match.
-      {100,
-       1,
+      {{100, 1, 1},
        10,
        100,
        10,
-       {"u0", "u1", "u2", "u3"},
-       {"t1", "u1", "u2", "u3"},
+       {"u0", "u1", "u2", "u3", "u5"},
+       {"t1", "u1", "u2", "u3", "u5"},
        core::JoinType::kInner,
-       "SELECT t.c1, u.c1, u.c2, u.c3 FROM t, u WHERE t.c0 = u.c0"},
-      // 10% match with duplicates.
-      {100,
-       4,
-       10,
-       100,
-       10,
-       {"u0", "u1", "u2", "u3"},
-       {"t1", "u1", "u2", "u3"},
-       core::JoinType::kInner,
-       "SELECT t.c1, u.c1, u.c2, u.c3 FROM t, u WHERE t.c0 = u.c0"},
+       "SELECT t.c1, u.c1, u.c2, u.c3, u.c5 FROM t, u WHERE t.c0 = u.c0"},
       // 10% match with larger lookup table.
-      {500,
-       1,
+      {{500, 1, 1},
        10,
        100,
        10,
-       {"u0", "u1", "u2", "u3"},
-       {"t1", "u1", "u2", "u3"},
+       {"u0", "u1", "u2", "u3", "u5"},
+       {"t1", "u1", "u2", "u3", "u5"},
        core::JoinType::kInner,
-       "SELECT t.c1, u.c1, u.c2, u.c3 FROM t, u WHERE t.c0 = u.c0"},
-      {2048,
-       1,
+       "SELECT t.c1, u.c1, u.c2, u.c3, u.c5 FROM t, u WHERE t.c0 = u.c0"},
+      {{2048, 1, 1},
        10,
        100,
        10,
-       {"u0", "u1", "u2", "u3"},
-       {"t1", "u1", "u2", "u3"},
+       {"u0", "u1", "u2", "u3", "u5"},
+       {"t1", "u1", "u2", "u3", "u5"},
        core::JoinType::kInner,
-       "SELECT t.c1, u.c1, u.c2, u.c3 FROM t, u WHERE t.c0 = u.c0"},
-      // 10% match + duplicate with larger lookup table.
-      {500,
-       4,
-       10,
-       100,
-       10,
-       {"u0", "u1", "u2", "u3"},
-       {"t1", "u1", "u2", "u3"},
-       core::JoinType::kInner,
-       "SELECT t.c1, u.c1, u.c2, u.c3 FROM t, u WHERE t.c0 = u.c0"},
-      {2048,
-       4,
-       10,
-       100,
-       10,
-       {"u0", "u1", "u2", "u3"},
-       {"t1", "u1", "u2", "u3"},
-       core::JoinType::kInner,
-       "SELECT t.c1, u.c1, u.c2, u.c3 FROM t, u WHERE t.c0 = u.c0"},
+       "SELECT t.c1, u.c1, u.c2, u.c3, u.c5 FROM t, u WHERE t.c0 = u.c0"},
       // Empty lookup table.
-      {0,
-       1,
+      {{0, 1, 1},
        10,
        100,
        10,
-       {"u0", "u1", "u2", "u3"},
-       {"t1", "u1", "u2", "u3"},
+       {"u0", "u1", "u2", "u3", "u5"},
+       {"t1", "u1", "u2", "u3", "u5"},
        core::JoinType::kInner,
-       "SELECT t.c1, u.c1, u.c2, u.c3 FROM t, u WHERE t.c0 = u.c0"},
+       "SELECT t.c1, u.c1, u.c2, u.c3, u.c5 FROM t, u WHERE t.c0 = u.c0"},
       // No match.
-      {500,
-       4,
+      {{500, 1, 1},
        10,
        100,
        0,
-       {"u0", "u1", "u2", "u3"},
-       {"t1", "u1", "u2", "u3"},
+       {"u0", "u1", "u2", "u3", "u5"},
+       {"t1", "u1", "u2", "u3", "u5"},
        core::JoinType::kInner,
-       "SELECT t.c1, u.c1, u.c2, u.c3 FROM t, u WHERE t.c0 = u.c0"},
-      // 10% match with larger lookup table.
-      {500,
-       1,
+       "SELECT t.c1, u.c1, u.c2, u.c3, u.c5 FROM t, u WHERE t.c0 = u.c0"},
+      // 10% matcvelox::h with larger lookup table.
+      {{500, 1, 1},
        10,
        100,
        10,
@@ -562,348 +424,1268 @@ TEST_P(IndexLookupJoinTest, basic) {
        {"t1", "u1", "u2", "u3"},
        core::JoinType::kInner,
        "SELECT t.c1, u.c1, u.c2, u.c3 FROM t, u WHERE t.c0 = u.c0"},
+      {{2048, 1, 1},
+       10,
+       100,
+       10,
+       {"u0", "u1", "u2", "u3", "u5"},
+       {"t1", "u1", "u2", "u3", "u5"},
+       core::JoinType::kInner,
+       "SELECT t.c1, u.c1, u.c2, u.c3, u.c5 FROM t, u WHERE t.c0 = u.c0"},
       // very few (2%) match with larger lookup table.
-      {500,
-       1,
+      {{500, 1, 1},
        10,
        100,
        2,
-       {"u0", "u1", "u2", "u3"},
-       {"t1", "u1", "u2", "u3"},
+       {"u0", "u1", "u2", "u3", "u5"},
+       {"t1", "u1", "u2", "u3", "u5"},
        core::JoinType::kInner,
-       "SELECT t.c1, u.c1, u.c2, u.c3 FROM t, u WHERE t.c0 = u.c0"},
-      // very few (2%) match + duplicate with larger lookup table.
-      {500,
-       4,
+       "SELECT t.c1, u.c1, u.c2, u.c3, u.c5 FROM t, u WHERE t.c0 = u.c0"},
+      {{2048, 1, 1},
        10,
        100,
        2,
-       {"u0", "u1", "u2", "u3"},
-       {"t1", "u1", "u2", "u3"},
+       {"u0", "u1", "u2", "u3", "u5"},
+       {"t1", "u1", "u2", "u3", "u5"},
        core::JoinType::kInner,
-       "SELECT t.c1, u.c1, u.c2, u.c3 FROM t, u WHERE t.c0 = u.c0"},
+       "SELECT t.c1, u.c1, u.c2, u.c3, u.c5 FROM t, u WHERE t.c0 = u.c0"},
       // All matches with larger lookup table.
-      {500,
-       1,
+      {{500, 1, 1},
        10,
        100,
        2,
-       {"u0", "u1", "u2", "u3"},
-       {"t1", "u1", "u2", "u3"},
+       {"u0", "u1", "u2", "u3", "u5"},
+       {"t1", "u1", "u2", "u3", "u5"},
        core::JoinType::kInner,
-       "SELECT t.c1, u.c1, u.c2, u.c3 FROM t, u WHERE t.c0 = u.c0"},
-      {2048,
-       1,
+       "SELECT t.c1, u.c1, u.c2, u.c3, u.c5 FROM t, u WHERE t.c0 = u.c0"},
+      {{2048, 1, 1},
        10,
        100,
        2,
-       {"u0", "u1", "u2", "u3"},
-       {"t1", "u1", "u2", "u3"},
+       {"u0", "u1", "u2", "u3", "u5"},
+       {"t1", "u1", "u2", "u3", "u5"},
        core::JoinType::kInner,
-       "SELECT t.c1, u.c1, u.c2, u.c3 FROM t, u WHERE t.c0 = u.c0"},
-      // All matches + duplicate with larger lookup table.
-      {500,
-       4,
-       10,
-       100,
-       2,
-       {"u0", "u1", "u2", "u3"},
-       {"t1", "u1", "u2", "u3"},
-       core::JoinType::kInner,
-       "SELECT t.c1, u.c1, u.c2, u.c3 FROM t, u WHERE t.c0 = u.c0"},
-      {2048,
-       4,
-       10,
-       100,
-       2,
-       {"u0", "u1", "u2", "u3"},
-       {"t1", "u1", "u2", "u3"},
-       core::JoinType::kInner,
-       "SELECT t.c1, u.c1, u.c2, u.c3 FROM t, u WHERE t.c0 = u.c0"},
+       "SELECT t.c1, u.c1, u.c2, u.c3, u.c5 FROM t, u WHERE t.c0 = u.c0"},
       // No probe projection.
-      {500,
-       1,
+      {{500, 1, 1},
        10,
        100,
        2,
-       {"u0", "u1", "u2", "u3"},
-       {"u1", "u2", "u3"},
+       {"u0", "u1", "u2", "u3", "u5"},
+       {"u1", "u2", "u3", "u5"},
        core::JoinType::kInner,
-       "SELECT u.c1, u.c2, u.c3 FROM t, u WHERE t.c0 = u.c0"},
-      // No probe projection + duplicate with larger lookup table.
-      {500,
-       4,
-       10,
-       100,
-       2,
-       {"u0", "u1", "u2", "u3"},
-       {"u1", "u2", "u3"},
-       core::JoinType::kInner,
-       "SELECT u.c1, u.c2, u.c3 FROM t, u WHERE t.c0 = u.c0"},
+       "SELECT u.c1, u.c2, u.c3, u.c5 FROM t, u WHERE t.c0 = u.c0"},
       // Probe column reorder in output.
-      {500,
-       4,
+      {{500, 1, 1},
        10,
        100,
        2,
-       {"u0", "u1", "u2", "u3"},
-       {"t2", "t1", "u1", "u2", "u3"},
+       {"u0", "u1", "u2", "u3", "u5"},
+       {"t2", "t1", "u1", "u2", "u3", "u5"},
        core::JoinType::kInner,
-       "SELECT t.c2, t.c1, u.c1, u.c2, u.c3 FROM t, u WHERE t.c0 = u.c0"},
-      // Lookup column reorder in output.
-      {500,
-       4,
+       "SELECT t.c2, t.c1, u.c1, u.c2, u.c3, u.c5 FROM t, u WHERE t.c0 = u.c0"},
+      {{2048, 1, 1},
        10,
        100,
        2,
-       {"u1", "u0", "u2"},
-       {"t1", "u2", "u1", "t2"},
+       {"u0", "u1", "u2", "u3", "u5"},
+       {"t2", "t1", "u1", "u2", "u3", "u5"},
        core::JoinType::kInner,
-       "SELECT t.c1, u.c2, u.c1, t.c2 FROM t, u WHERE t.c0 = u.c0"},
+       "SELECT t.c2, t.c1, u.c1, u.c2, u.c3, u.c5 FROM t, u WHERE t.c0 = u.c0"},
       // Both sides reorder in output.
-      {500,
-       4,
+      {{500, 1, 1},
        10,
        100,
        2,
-       {"u1", "u0", "u2", "u3"},
-       {"t2", "u2", "u3", "t1", "u1"},
+       {"u1", "u0", "u2", "u3", "u5"},
+       {"t2", "u2", "u3", "t1", "u1", "u5"},
        core::JoinType::kInner,
-       "SELECT t.c2, u.c2, u.c3, t.c1, u.c1 FROM t, u WHERE t.c0 = u.c0"},
+       "SELECT t.c2, u.c2, u.c3, t.c1, u.c1, u.c5 FROM t, u WHERE t.c0 = u.c0"},
+      {{2048, 1, 1},
+       10,
+       100,
+       2,
+       {"u1", "u0", "u2", "u3", "u5"},
+       {"t2", "u2", "u3", "t1", "u1", "u5"},
+       core::JoinType::kInner,
+       "SELECT t.c2, u.c2, u.c3, t.c1, u.c1, u.c5 FROM t, u WHERE t.c0 = u.c0"},
       // With probe key colums.
-      {500,
-       4,
-       10,
+      {{500, 1, 1},
+       2,
        100,
        2,
-       {"u1", "u0", "u2", "u3"},
-       {"t2", "u2", "u3", "t1", "u1", "t0"},
+       {"u1", "u0", "u2", "u3", "u5"},
+       {"t2", "u2", "u3", "t1", "u1", "t0", "u5"},
        core::JoinType::kInner,
-       "SELECT t.c2, u.c2, u.c3, t.c1, u.c1, t.c0 FROM t, u WHERE t.c0 = u.c0"},
+       "SELECT t.c2, u.c2, u.c3, t.c1, u.c1, t.c0, u.c5 FROM t, u WHERE t.c0 = u.c0"},
+      {{2048, 1, 1},
+       2,
+       100,
+       2,
+       {"u1", "u0", "u2", "u3", "u5"},
+       {"t2", "u2", "u3", "t1", "u1", "t0", "u5"},
+       core::JoinType::kInner,
+       "SELECT t.c2, u.c2, u.c3, t.c1, u.c1, t.c0, u.c5 FROM t, u WHERE t.c0 = u.c0"},
+      // Project key columns from lookup table.
+      {{2048, 1, 1},
+       10,
+       100,
+       50,
+       {"u1", "u0", "u2", "u3"},
+       {"t2", "u2", "u3", "t1", "u1", "u0"},
+       core::JoinType::kInner,
+       "SELECT t.c2, u.c2, u.c3, t.c1, u.c1, u.c0 FROM t, u WHERE t.c0 = u.c0"},
+      {{100, 1, 1},
+       10,
+       100,
+       50,
+       {"u1", "u0", "u2", "u3"},
+       {"t2", "u2", "u3", "t1", "u1", "u0"},
+       core::JoinType::kInner,
+       "SELECT t.c2, u.c2, u.c3, t.c1, u.c1, u.c0 FROM t, u WHERE t.c0 = u.c0"},
+      {{2048, 1, 1},
+       10,
+       2048,
+       100,
+       {"u0", "u1", "u2", "u3"},
+       {"t1", "u1", "u2", "u3"},
+       core::JoinType::kInner,
+       "SELECT t.c1, u.c1, u.c2, u.c3 FROM t, u WHERE t.c0 = u.c0"},
 
       // Left join.
       // 10% match.
-      {100,
-       1,
+      {{100, 1, 1},
        10,
        100,
        10,
-       {"u0", "u1", "u2", "u3"},
-       {"t1", "u1", "u2", "u3"},
+       {"u0", "u1", "u2", "u3", "u5"},
+       {"t1", "u1", "u2", "u3", "u5"},
        core::JoinType::kLeft,
-       "SELECT t.c1, u.c1, u.c2, u.c3 FROM t LEFT JOIN u ON t.c0 = u.c0"},
-      // 10% match with duplicates.
-      {100,
-       4,
-       10,
-       100,
-       10,
-       {"u0", "u1", "u2", "u3"},
-       {"t1", "u1", "u2", "u3"},
-       core::JoinType::kLeft,
-       "SELECT t.c1, u.c1, u.c2, u.c3 FROM t LEFT JOIN u ON t.c0 = u.c0"},
-      // 10% match with larger lookup table.
-      {500,
-       1,
-       10,
-       100,
-       10,
-       {"u0", "u1", "u2", "u3"},
-       {"t1", "u1", "u2", "u3"},
-       core::JoinType::kLeft,
-       "SELECT t.c1, u.c1, u.c2, u.c3 FROM t LEFT JOIN u ON t.c0 = u.c0"},
-      // 10% match + duplicate with larger lookup table.
-      {500,
-       4,
-       10,
-       100,
-       10,
-       {"u0", "u1", "u2", "u3"},
-       {"t1", "u1", "u2", "u3"},
-       core::JoinType::kLeft,
-       "SELECT t.c1, u.c1, u.c2, u.c3 FROM t LEFT JOIN u ON t.c0 = u.c0"},
+       "SELECT t.c1, u.c1, u.c2, u.c3, u.c5 FROM t LEFT JOIN u ON t.c0 = u.c0"},
 
-      // Empty lookup table.
-      {0,
-       1,
+      // 10% match with larger lookup table.
+      {{500, 1, 1},
        10,
        100,
        10,
-       {"u0", "u1", "u2", "u3"},
-       {"t1", "u1", "u2", "u3"},
+       {"u0", "u1", "u2", "u3", "u5"},
+       {"t1", "u1", "u2", "u3", "u5"},
        core::JoinType::kLeft,
-       "SELECT t.c1, u.c1, u.c2, u.c3 FROM t LEFT JOIN u ON t.c0 = u.c0"},
+       "SELECT t.c1, u.c1, u.c2, u.c3, u.c5 FROM t LEFT JOIN u ON t.c0 = u.c0"},
+      {{2048, 1, 1},
+       10,
+       100,
+       10,
+       {"u0", "u1", "u2", "u3", "u5"},
+       {"t1", "u1", "u2", "u3", "u5"},
+       core::JoinType::kLeft,
+       "SELECT t.c1, u.c1, u.c2, u.c3, u.c5 FROM t LEFT JOIN u ON t.c0 = u.c0"},
+      // Empty lookup table.
+      {{0, 1, 1},
+       10,
+       100,
+       10,
+       {"u0", "u1", "u2", "u3", "u5"},
+       {"t1", "u1", "u2", "u3", "u5"},
+       core::JoinType::kLeft,
+       "SELECT t.c1, u.c1, u.c2, u.c3, u.c5 FROM t LEFT JOIN u ON t.c0 = u.c0"},
       // No match.
-      {500,
-       4,
+      {{500, 1, 1},
        10,
        100,
        0,
-       {"u0", "u1", "u2", "u3"},
-       {"t1", "u1", "u2", "u3"},
+       {"u0", "u1", "u2", "u3", "u5"},
+       {"t1", "u1", "u2", "u3", "u5"},
        core::JoinType::kLeft,
-       "SELECT t.c1, u.c1, u.c2, u.c3 FROM t LEFT JOIN u ON t.c0 = u.c0"},
+       "SELECT t.c1, u.c1, u.c2, u.c3, u.c5 FROM t LEFT JOIN u ON t.c0 = u.c0"},
       // 10% match with larger lookup table.
-      {500,
-       1,
+      {{500, 1, 1},
        10,
        100,
        10,
-       {"u0", "u1", "u2", "u3"},
-       {"t1", "u1", "u2", "u3"},
+       {"u0", "u1", "u2", "u3", "u5"},
+       {"t1", "u1", "u2", "u3", "u5"},
        core::JoinType::kLeft,
-       "SELECT t.c1, u.c1, u.c2, u.c3 FROM t LEFT JOIN u ON t.c0 = u.c0"},
+       "SELECT t.c1, u.c1, u.c2, u.c3, u.c5 FROM t LEFT JOIN u ON t.c0 = u.c0"},
       // very few (2%) match with larger lookup table.
-      {500,
-       1,
+      {{500, 1, 1},
        10,
        100,
        2,
-       {"u0", "u1", "u2", "u3"},
-       {"t1", "u1", "u2", "u3"},
+       {"u0", "u1", "u2", "u3", "u5"},
+       {"t1", "u1", "u2", "u3", "u5"},
        core::JoinType::kLeft,
-       "SELECT t.c1, u.c1, u.c2, u.c3 FROM t LEFT JOIN u ON t.c0 = u.c0"},
-      {2048,
-       1,
+       "SELECT t.c1, u.c1, u.c2, u.c3, u.c5 FROM t LEFT JOIN u ON t.c0 = u.c0"},
+      {{2048, 1, 1},
        10,
        100,
        2,
-       {"u0", "u1", "u2", "u3"},
-       {"t1", "u1", "u2", "u3"},
+       {"u0", "u1", "u2", "u3", "u5"},
+       {"t1", "u1", "u2", "u3", "u5"},
        core::JoinType::kLeft,
-       "SELECT t.c1, u.c1, u.c2, u.c3 FROM t LEFT JOIN u ON t.c0 = u.c0"},
-      // very few (2%) match + duplicate with larger lookup table.
-      {500,
-       4,
-       10,
-       100,
-       2,
-       {"u0", "u1", "u2", "u3"},
-       {"t1", "u1", "u2", "u3"},
-       core::JoinType::kLeft,
-       "SELECT t.c1, u.c1, u.c2, u.c3 FROM t LEFT JOIN u ON t.c0 = u.c0"},
+       "SELECT t.c1, u.c1, u.c2, u.c3, u.c5 FROM t LEFT JOIN u ON t.c0 = u.c0"},
       // All matches with larger lookup table.
-      {500,
-       1,
+      {{500, 1, 1},
        10,
        100,
        2,
-       {"u0", "u1", "u2", "u3"},
-       {"t1", "u1", "u2", "u3"},
+       {"u0", "u1", "u2", "u3", "u5"},
+       {"t1", "u1", "u2", "u3", "u5"},
        core::JoinType::kLeft,
-       "SELECT t.c1, u.c1, u.c2, u.c3 FROM t LEFT JOIN u ON t.c0 = u.c0"},
-      {2048,
-       1,
+       "SELECT t.c1, u.c1, u.c2, u.c3, u.c5 FROM t LEFT JOIN u ON t.c0 = u.c0"},
+      {{2048, 1, 1},
        10,
        100,
        2,
-       {"u0", "u1", "u2", "u3"},
-       {"t1", "u1", "u2", "u3"},
+       {"u0", "u1", "u2", "u3", "u5"},
+       {"t1", "u1", "u2", "u3", "u5"},
        core::JoinType::kLeft,
-       "SELECT t.c1, u.c1, u.c2, u.c3 FROM t LEFT JOIN u ON t.c0 = u.c0"},
-      // All matches + duplicate with larger lookup table.
-      {500,
-       4,
-       10,
-       100,
-       2,
-       {"u0", "u1", "u2", "u3"},
-       {"t1", "u1", "u2", "u3"},
-       core::JoinType::kLeft,
-       "SELECT t.c1, u.c1, u.c2, u.c3 FROM t LEFT JOIN u ON t.c0 = u.c0"},
-      {2048,
-       4,
-       10,
-       100,
-       2,
-       {"u0", "u1", "u2", "u3"},
-       {"t1", "u1", "u2", "u3"},
-       core::JoinType::kLeft,
-       "SELECT t.c1, u.c1, u.c2, u.c3 FROM t LEFT JOIN u ON t.c0 = u.c0"},
+       "SELECT t.c1, u.c1, u.c2, u.c3, u.c5 FROM t LEFT JOIN u ON t.c0 = u.c0"},
       // Probe column reorder in output.
-      {500,
-       4,
+      {{500, 1, 1},
        10,
        100,
        2,
-       {"u0", "u1", "u2", "u3"},
-       {"t2", "t1", "u1", "u2", "u3"},
+       {"u0", "u1", "u2", "u3", "u5"},
+       {"t2", "t1", "u1", "u2", "u3", "u5"},
        core::JoinType::kLeft,
-       "SELECT t.c2, t.c1, u.c1, u.c2, u.c3 FROM t LEFT JOIN u ON t.c0 = u.c0"},
+       "SELECT t.c2, t.c1, u.c1, u.c2, u.c3, u.c5 FROM t LEFT JOIN u ON t.c0 = u.c0"},
       // Lookup column reorder in output.
-      {500,
-       4,
+      {{500, 1, 1},
        10,
        100,
        2,
-       {"u1", "u0", "u2"},
-       {"t1", "u2", "u1", "t2"},
+       {"u1", "u0", "u2", "u5"},
+       {"t1", "u2", "u1", "t2", "u5"},
        core::JoinType::kLeft,
-       "SELECT t.c1, u.c2, u.c1, t.c2 FROM t LEFT JOIN u ON t.c0 = u.c0"},
+       "SELECT t.c1, u.c2, u.c1, t.c2, u.c5 FROM t LEFT JOIN u ON t.c0 = u.c0"},
       // Both sides reorder in output.
-      {500,
-       4,
+      {{500, 1, 1},
        10,
        100,
        2,
-       {"u1", "u0", "u2", "u3"},
-       {"t2", "u2", "u3", "t1", "u1"},
+       {"u1", "u0", "u2", "u3", "u5"},
+       {"t2", "u2", "u3", "t1", "u1", "u5"},
        core::JoinType::kLeft,
-       "SELECT t.c2, u.c2, u.c3, t.c1, u.c1 FROM t LEFT JOIN u ON t.c0 = u.c0"},
+       "SELECT t.c2, u.c2, u.c3, t.c1, u.c1, u.c5 FROM t LEFT JOIN u ON t.c0 = u.c0"},
       // With probe key colums.
-      {500,
-       4,
+      {{500, 1, 1},
        10,
        100,
        2,
-       {"u1", "u0", "u2", "u3"},
-       {"t2", "u2", "u3", "t1", "u1", "t0"},
+       {"u1", "u0", "u2", "u3", "u5"},
+       {"t2", "u2", "u3", "t1", "u1", "t0", "u5"},
        core::JoinType::kLeft,
-       "SELECT t.c2, u.c2, u.c3, t.c1, u.c1, t.c0 FROM t LEFT JOIN u ON t.c0 = u.c0"},
-  };
+       "SELECT t.c2, u.c2, u.c3, t.c1, u.c1, t.c0, u.c5 FROM t LEFT JOIN u ON t.c0 = u.c0"},
+      // With lookup key colums.
+      {{500, 1, 1},
+       10,
+       100,
+       2,
+       {"u1", "u0", "u2", "u3", "u5"},
+       {"t2", "u2", "u3", "t1", "u1", "u0"},
+       core::JoinType::kLeft,
+       "SELECT t.c2, u.c2, u.c3, t.c1, u.c1, u.c0 FROM t LEFT JOIN u ON t.c0 = u.c0"},
+      {{2048, 1, 1},
+       10,
+       2048,
+       100,
+       {"u0", "u1", "u2", "u3"},
+       {"t1", "u1", "u2", "u3"},
+       core::JoinType::kLeft,
+       "SELECT t.c1, u.c1, u.c2, u.c3 FROM t LEFT JOIN u ON t.c0 = u.c0"}};
   for (const auto& testData : testSettings) {
     SCOPED_TRACE(testData.debugString());
 
-    RowVectorPtr keyData;
-    RowVectorPtr valueData;
-    RowVectorPtr tableData;
-    generateIndexTableData(
-        testData.numKeys,
-        testData.numDuplicatePerKey,
-        keyData,
-        valueData,
-        tableData);
-    const std::vector<RowVectorPtr> probeVectors = generateProbeTableInput(
-        testData.numBatches,
-        testData.numProbeRowsPerBatch,
-        keyData,
+    SequenceTableData tableData;
+    generateIndexTableData(testData.keyCardinalities, tableData, pool_);
+    auto probeVectors = generateProbeInput(
+        testData.numProbeBatches,
+        testData.numRowsPerProbeBatch,
+        tableData,
+        pool_,
+        {"t0", "t1", "t2"},
+        {},
+        {},
         testData.matchPct);
 
     createDuckDbTable("t", probeVectors);
-    createDuckDbTable("u", {tableData});
+    createDuckDbTable("u", {tableData.tableData});
 
-    const auto indexTable = createIndexTable(keyData, valueData);
+    const auto indexTable = createIndexTable(
+        /*numEqualJoinKeys=*/3, tableData.keyData, tableData.valueData);
     const auto indexTableHandle = makeIndexTableHandle(indexTable, GetParam());
     auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
     core::PlanNodeId indexScanNodeId;
+    std::unordered_map<std::string, std::shared_ptr<connector::ColumnHandle>>
+        columnHandles;
     const auto indexScanNode = makeIndexScanNode(
         planNodeIdGenerator,
         indexTableHandle,
         makeScanOutputType(testData.scanOutputColumns),
-        indexScanNodeId);
+        indexScanNodeId,
+        columnHandles);
 
     core::PlanNodeId joinNodeId;
     auto plan = makeLookupPlan(
         planNodeIdGenerator,
         indexScanNode,
         probeVectors,
-        testData.outputColumns,
+        {"t0", "t1", "t2"},
+        {"u0", "u1", "u2"},
+        {},
         testData.joinType,
+        testData.outputColumns,
         joinNodeId);
     AssertQueryBuilder(duckDbQueryRunner_)
         .plan(plan)
         .assertResults(testData.duckDbVerifySql);
   }
+}
+
+TEST_P(IndexLookupJoinTest, betweenJoinCondition) {
+  struct {
+    std::vector<int> keyCardinalities;
+    int numProbeBatches;
+    int numProbeRowsPerBatch;
+    std::string betweenCondition;
+    int betweenMatchPct;
+    std::vector<std::string> lookupOutputColumns;
+    std::vector<std::string> outputColumns;
+    core::JoinType joinType;
+    std::string duckDbVerifySql;
+
+    std::string debugString() const {
+      return fmt::format(
+          "keyCardinalities: {}, numProbeBatches: {}, numProbeRowsPerBatch: {}, betweenCondition: {}, betweenMatchPct: {}, lookupOutputColumns: {}, outputColumns: {}, joinType: {}, duckDbVerifySql: {}",
+          folly::join(",", keyCardinalities),
+          numProbeBatches,
+          numProbeRowsPerBatch,
+          betweenCondition,
+          betweenMatchPct,
+          folly::join(",", lookupOutputColumns),
+          folly::join(",", outputColumns),
+          core::joinTypeName(joinType),
+          duckDbVerifySql);
+    }
+  } testSettings[] = {// Inner join.
+                      // 10% match.
+                      {{50, 1, 10},
+                       1,
+                       100,
+                       "u2 between t2 and t3",
+                       10,
+                       {"u0", "u1", "u2", "u3"},
+                       {"t0", "t1", "t2", "t3", "u3", "t5"},
+                       core::JoinType::kInner,
+                       "SELECT t.c0, t.c1, t.c2, t.c3, u.c3, t.c5 FROM t, u WHERE t.c0 = u.c0 AND t.c1 = u.c1 AND u.c2 BETWEEN t.c2 AND t.c3"},
+                      {{50, 1, 10},
+                       1,
+                       100,
+                       "u2 between 0 and t3",
+                       10,
+                       {"u0", "u1", "u2", "u3"},
+                       {"t0", "t1", "t2", "t3", "u3", "t5"},
+                       core::JoinType::kInner,
+                       "SELECT t.c0, t.c1, t.c2, t.c3, u.c3, t.c5 FROM t, u WHERE t.c0 = u.c0 AND t.c1 = u.c1 AND u.c2 BETWEEN 0 AND t.c3"},
+                      {{50, 1, 10},
+                       1,
+                       100,
+                       "u2 between t2 and 1",
+                       10,
+                       {"u0", "u1", "u2", "u3"},
+                       {"t0", "t1", "t2", "t3", "u3", "t5"},
+                       core::JoinType::kInner,
+                       "SELECT t.c0, t.c1, t.c2, t.c3, u.c3, t.c5 FROM t, u WHERE t.c0 = u.c0 AND t.c1 = u.c1 AND u.c2 BETWEEN t.c2 AND 1"},
+                      // 10% match with larger lookup table.
+                      {{256, 1, 10},
+                       10,
+                       100,
+                       "u2 between t2 and t3",
+                       10,
+                       {"u0", "u1", "u2", "u3"},
+                       {"t0", "t1", "t2", "t3", "u3", "t5"},
+                       core::JoinType::kInner,
+                       "SELECT t.c0, t.c1, t.c2, t.c3, u.c3, t.c5 FROM t, u WHERE t.c0 = u.c0 AND t.c1 = u.c1 AND u.c2 BETWEEN t.c2 AND t.c3"},
+                      {{256, 1, 10},
+                       10,
+                       100,
+                       "u2 between 0 and t3",
+                       10,
+                       {"u0", "u1", "u2", "u3"},
+                       {"t0", "t1", "t2", "t3", "u3", "t5"},
+                       core::JoinType::kInner,
+                       "SELECT t.c0, t.c1, t.c2, t.c3, u.c3, t.c5 FROM t, u WHERE t.c0 = u.c0 AND t.c1 = u.c1 AND u.c2 BETWEEN 0 AND t.c3"},
+                      {{256, 1, 10},
+                       10,
+                       100,
+                       "u2 between t2 and 1",
+                       10,
+                       {"u0", "u1", "u2", "u3"},
+                       {"t0", "t1", "t2", "t3", "u3", "t5"},
+                       core::JoinType::kInner,
+                       "SELECT t.c0, t.c1, t.c2, t.c3, u.c3, t.c5 FROM t, u WHERE t.c0 = u.c0 AND t.c1 = u.c1 AND u.c2 BETWEEN t.c2 AND 1"},
+                      // Empty lookup table.
+                      {{0, 1, 10},
+                       10,
+                       100,
+                       "u2 between t2 and t3",
+                       10,
+                       {"u0", "u1", "u2", "u3"},
+                       {"t0", "t1", "t2", "t3", "u3", "t5"},
+                       core::JoinType::kInner,
+                       "SELECT t.c0, t.c1, t.c2, t.c3, u.c3, t.c5 FROM t, u WHERE t.c0 = u.c0 AND t.c1 = u.c1 AND u.c2 BETWEEN t.c2 AND t.c3"},
+                      // No match.
+                      {{50, 1, 10},
+                       10,
+                       100,
+                       "u2 between t2 and t3",
+                       0,
+                       {"u0", "u1", "u2", "u3"},
+                       {"t0", "t1", "t2", "t3", "u3", "t5"},
+                       core::JoinType::kInner,
+                       "SELECT t.c0, t.c1, t.c2, t.c3, u.c3, t.c5 FROM t, u WHERE t.c0 = u.c0 AND t.c1 = u.c1 AND u.c2 BETWEEN t.c2 AND t.c3"},
+                      {{50, 1, 10},
+                       10,
+                       100,
+                       "u2 between 0 and t3",
+                       0,
+                       {"u0", "u1", "u2", "u3"},
+                       {"t0", "t1", "t2", "t3", "u3", "t5"},
+                       core::JoinType::kInner,
+                       "SELECT t.c0, t.c1, t.c2, t.c3, u.c3, t.c5 FROM t, u WHERE t.c0 = u.c0 AND t.c1 = u.c1 AND u.c2 BETWEEN 0 AND t.c3"},
+                      {{50, 1, 10},
+                       10,
+                       100,
+                       "u2 between t2 and 0",
+                       0,
+                       {"u0", "u1", "u2", "u3"},
+                       {"t0", "t1", "t2", "t3", "u3", "t5"},
+                       core::JoinType::kInner,
+                       "SELECT t.c0, t.c1, t.c2, t.c3, u.c3, t.c5 FROM t, u WHERE t.c0 = u.c0 AND t.c1 = u.c1 AND u.c2 BETWEEN t.c2 AND 0"},
+                      // very few (2%) match with larger lookup table.
+                      {{50, 1, 10},
+                       10,
+                       100,
+                       "u2 between t2 and t3",
+                       2,
+                       {"u0", "u1", "u2", "u3"},
+                       {"t0", "t1", "t2", "t3", "u3", "t5"},
+                       core::JoinType::kInner,
+                       "SELECT t.c0, t.c1, t.c2, t.c3, u.c3, t.c5 FROM t, u WHERE t.c0 = u.c0 AND t.c1 = u.c1 AND u.c2 BETWEEN t.c2 AND t.c3"},
+                      {{256, 1, 10},
+                       10,
+                       100,
+                       "u2 between t2 and t3",
+                       2,
+                       {"u0", "u1", "u2", "u3"},
+                       {"t0", "t1", "t2", "t3", "u3", "t5"},
+                       core::JoinType::kInner,
+                       "SELECT t.c0, t.c1, t.c2, t.c3, u.c3, t.c5 FROM t, u WHERE t.c0 = u.c0 AND t.c1 = u.c1 AND u.c2 BETWEEN t.c2 AND t.c3"},
+                      // All matches
+                      {{50, 1, 10},
+                       10,
+                       100,
+                       "u2 between t2 and t3",
+                       100,
+                       {"u0", "u1", "u2", "u3"},
+                       {"t0", "t1", "t2", "t3", "u3", "t5"},
+                       core::JoinType::kInner,
+                       "SELECT t.c0, t.c1, t.c2, t.c3, u.c3, t.c5 FROM t, u WHERE t.c0 = u.c0 AND t.c1 = u.c1 AND u.c2 BETWEEN t.c2 AND t.c3"},
+                      // All matches with larger lookup table.
+                      {{256, 1, 10},
+                       10,
+                       100,
+                       "u2 between t2 and t3",
+                       100,
+                       {"u0", "u1", "u2", "u3"},
+                       {"t0", "t1", "t2", "t3", "u3", "t5"},
+                       core::JoinType::kInner,
+                       "SELECT t.c0, t.c1, t.c2, t.c3, u.c3, t.c5 FROM t, u WHERE t.c0 = u.c0 AND t.c1 = u.c1 AND u.c2 BETWEEN t.c2 AND t.c3"},
+                      {{256, 1, 10},
+                       10,
+                       100,
+                       "u2 between 0 and t3",
+                       100,
+                       {"u0", "u1", "u2", "u3"},
+                       {"t0", "t1", "t2", "t3", "u3", "t5"},
+                       core::JoinType::kInner,
+                       "SELECT t.c0, t.c1, t.c2, t.c3, u.c3, t.c5 FROM t, u WHERE t.c0 = u.c0 AND t.c1 = u.c1 AND u.c2 BETWEEN 0 AND t.c3"},
+                      {{256, 1, 10},
+                       10,
+                       100,
+                       "u2 between t2 and 10",
+                       100,
+                       {"u0", "u1", "u2", "u3"},
+                       {"t0", "t1", "t2", "t3", "u3", "t5"},
+                       core::JoinType::kInner,
+                       "SELECT t.c0, t.c1, t.c2, t.c3, u.c3, t.c5 FROM t, u WHERE t.c0 = u.c0 AND t.c1 = u.c1 AND u.c2 BETWEEN t.c2 AND 10"},
+                      // No probe projection.
+                      {{50, 1, 10},
+                       10,
+                       100,
+                       "u2 between t2 and t3",
+                       10,
+                       {"u0", "u1", "u2", "u3", "u5"},
+                       {"u1", "u0", "u3", "u5"},
+                       core::JoinType::kInner,
+                       "SELECT u.c1, u.c0, u.c3, u.c5 FROM t, u WHERE t.c0 = u.c0 AND t.c1 = u.c1 AND u.c2 BETWEEN t.c2 AND t.c3"},
+                      // Probe column reorder in output.
+                      {{50, 1, 10},
+                       10,
+                       100,
+                       "u2 between t2 and t3",
+                       10,
+                       {"u0", "u1", "u2", "u3", "u5"},
+                       {"t2", "t1", "u1", "u3", "u5"},
+                       core::JoinType::kInner,
+                       "SELECT t.c2, t.c1, u.c1, u.c3, u.c5 FROM t, u WHERE t.c0 = u.c0 AND t.c1 = u.c1 AND u.c2 BETWEEN t.c2 AND t.c3"},
+                      // Both sides reorder in output.
+                      {{50, 1, 10},
+                       10,
+                       100,
+                       "u2 between t2 and t3",
+                       10,
+                       {"u1", "u0", "u2", "u3", "u5"},
+                       {"t2", "u3", "t1", "u1", "u5"},
+                       core::JoinType::kInner,
+                       "SELECT t.c2, u.c3, t.c1, u.c1, u.c5 FROM t, u WHERE t.c0 = u.c0 AND t.c1 = u.c1 AND u.c2 BETWEEN t.c2 AND t.c3"},
+                      // With probe key colums.
+                      {{50, 1, 10},
+                       2,
+                       100,
+                       "u2 between t2 and t3",
+                       10,
+                       {"u1", "u0", "u2", "u3", "u5"},
+                       {"t2", "u3", "t1", "u1", "u0", "u5"},
+                       core::JoinType::kInner,
+                       "SELECT t.c2, u.c3, t.c1, u.c1, u.c0, u.c5 FROM t, u WHERE t.c0 = u.c0 AND t.c1 = u.c1 AND u.c2 BETWEEN t.c2 AND t.c3"},
+
+                      // Left join.
+                      // 10% match.
+                      {{50, 1, 10},
+                       10,
+                       100,
+                       "u2 between t2 and t3",
+                       10,
+                       {"u0", "u1", "u2", "u3"},
+                       {"t0", "t1", "t2", "t3", "u3", "t5"},
+                       core::JoinType::kLeft,
+                       "SELECT t.c0, t.c1, t.c2, t.c3, u.c3, t.c5 FROM t LEFT JOIN u ON t.c0 = u.c0 AND t.c1 = u.c1 AND u.c2 BETWEEN t.c2 AND t.c3"},
+                      {{50, 1, 10},
+                       10,
+                       100,
+                       "u2 between 0 and t3",
+                       10,
+                       {"u0", "u1", "u2", "u3"},
+                       {"t0", "t1", "t2", "t3", "u3", "t5"},
+                       core::JoinType::kLeft,
+                       "SELECT t.c0, t.c1, t.c2, t.c3, u.c3, t.c5 FROM t LEFT JOIN u ON t.c0 = u.c0 AND t.c1 = u.c1 AND u.c2 BETWEEN 0 AND t.c3"},
+                      {{50, 1, 10},
+                       10,
+                       100,
+                       "u2 between t2 and 1",
+                       10,
+                       {"u0", "u1", "u2", "u3"},
+                       {"t0", "t1", "t2", "t3", "u3", "t5"},
+                       core::JoinType::kLeft,
+                       "SELECT t.c0, t.c1, t.c2, t.c3, u.c3, t.c5 FROM t LEFT JOIN u ON t.c0 = u.c0 AND t.c1 = u.c1 AND u.c2 BETWEEN t.c2 AND 1"},
+                      // 10% match with larger lookup table.
+                      {{256, 1, 10},
+                       10,
+                       100,
+                       "u2 between t2 and t3",
+                       10,
+                       {"u0", "u1", "u2", "u3"},
+                       {"t0", "t1", "t2", "t3", "u3", "t5"},
+                       core::JoinType::kLeft,
+                       "SELECT t.c0, t.c1, t.c2, t.c3, u.c3, t.c5 FROM t LEFT JOIN u ON t.c0 = u.c0 AND t.c1 = u.c1 AND u.c2 BETWEEN t.c2 AND t.c3"},
+                      {{256, 1, 10},
+                       10,
+                       100,
+                       "u2 between 0 and t3",
+                       10,
+                       {"u0", "u1", "u2", "u3"},
+                       {"t0", "t1", "t2", "t3", "u3", "t5"},
+                       core::JoinType::kLeft,
+                       "SELECT t.c0, t.c1, t.c2, t.c3, u.c3, t.c5 FROM t LEFT JOIN u ON t.c0 = u.c0 AND t.c1 = u.c1 AND u.c2 BETWEEN 0 AND t.c3"},
+                      {{256, 1, 10},
+                       10,
+                       100,
+                       "u2 between t2 and 1",
+                       10,
+                       {"u0", "u1", "u2", "u3"},
+                       {"t0", "t1", "t2", "t3", "u3", "t5"},
+                       core::JoinType::kLeft,
+                       "SELECT t.c0, t.c1, t.c2, t.c3, u.c3, t.c5 FROM t LEFT JOIN u ON t.c0 = u.c0 AND t.c1 = u.c1 AND u.c2 BETWEEN t.c2 AND 1"},
+                      // Empty lookup table.
+                      {{0, 1, 10},
+                       10,
+                       100,
+                       "u2 between t2 and t3",
+                       10,
+                       {"u0", "u1", "u2", "u3"},
+                       {"t0", "t1", "t2", "t3", "u3", "t5"},
+                       core::JoinType::kLeft,
+                       "SELECT t.c0, t.c1, t.c2, t.c3, u.c3, t.c5 FROM t LEFT JOIN u ON t.c0 = u.c0 AND t.c1 = u.c1 AND u.c2 BETWEEN t.c2 AND t.c3"},
+                      // No match.
+                      {{50, 1, 10},
+                       10,
+                       100,
+                       "u2 between t2 and t3",
+                       0,
+                       {"u0", "u1", "u2", "u3"},
+                       {"t0", "t1", "t2", "t3", "u3", "t5"},
+                       core::JoinType::kLeft,
+                       "SELECT t.c0, t.c1, t.c2, t.c3, u.c3, t.c5 FROM t LEFT JOIN u ON t.c0 = u.c0 AND t.c1 = u.c1 AND u.c2 BETWEEN t.c2 AND t.c3"},
+                      {{50, 1, 10},
+                       10,
+                       100,
+                       "u2 between 0 and t3",
+                       0,
+                       {"u0", "u1", "u2", "u3"},
+                       {"t0", "t1", "t2", "t3", "u3", "t5"},
+                       core::JoinType::kLeft,
+                       "SELECT t.c0, t.c1, t.c2, t.c3, u.c3, t.c5 FROM t LEFT JOIN u ON t.c0 = u.c0 AND t.c1 = u.c1 AND u.c2 BETWEEN 0 AND t.c3"},
+                      {{50, 1, 10},
+                       10,
+                       100,
+                       "u2 between t2 and 0",
+                       0,
+                       {"u0", "u1", "u2", "u3"},
+                       {"t0", "t1", "t2", "t3", "u3", "t5"},
+                       core::JoinType::kLeft,
+                       "SELECT t.c0, t.c1, t.c2, t.c3, u.c3, t.c5 FROM t LEFT JOIN u ON t.c0 = u.c0 AND t.c1 = u.c1 AND u.c2 BETWEEN t.c2 AND 0"},
+                      // very few (2%) match with larger lookup table.
+                      {{50, 1, 10},
+                       10,
+                       100,
+                       "u2 between t2 and t3",
+                       2,
+                       {"u0", "u1", "u2", "u3"},
+                       {"t0", "t1", "t2", "t3", "u3", "t5"},
+                       core::JoinType::kLeft,
+                       "SELECT t.c0, t.c1, t.c2, t.c3, u.c3, t.c5 FROM t LEFT JOIN u ON t.c0 = u.c0 AND t.c1 = u.c1 AND u.c2 BETWEEN t.c2 AND t.c3"},
+                      {{256, 1, 10},
+                       10,
+                       100,
+                       "u2 between t2 and t3",
+                       2,
+                       {"u0", "u1", "u2", "u3"},
+                       {"t0", "t1", "t2", "t3", "u3", "t5"},
+                       core::JoinType::kLeft,
+                       "SELECT t.c0, t.c1, t.c2, t.c3, u.c3, t.c5 FROM t LEFT JOIN u ON t.c0 = u.c0 AND t.c1 = u.c1 AND u.c2 BETWEEN t.c2 AND t.c3"},
+                      // All matches.
+                      {{50, 1, 10},
+                       10,
+                       100,
+                       "u2 between t2 and t3",
+                       2,
+                       {"u0", "u1", "u2", "u3"},
+                       {"t0", "t1", "t2", "t3", "u3", "t5"},
+                       core::JoinType::kLeft,
+                       "SELECT t.c0, t.c1, t.c2, t.c3, u.c3, t.c5 FROM t LEFT JOIN u ON t.c0 = u.c0 AND t.c1 = u.c1 AND u.c2 BETWEEN t.c2 AND t.c3"},
+                      // All matches with larger lookup table.
+                      {{256, 1, 10},
+                       10,
+                       100,
+                       "u2 between t2 and t3",
+                       2,
+                       {"u0", "u1", "u2", "u3"},
+                       {"t0", "t1", "t2", "t3", "u3", "t5"},
+                       core::JoinType::kLeft,
+                       "SELECT t.c0, t.c1, t.c2, t.c3, u.c3, t.c5 FROM t LEFT JOIN u ON t.c0 = u.c0 AND t.c1 = u.c1 AND u.c2 BETWEEN t.c2 AND t.c3"},
+                      {{256, 1, 10},
+                       10,
+                       100,
+                       "u2 between 0 and t3",
+                       2,
+                       {"u0", "u1", "u2", "u3"},
+                       {"t0", "t1", "t2", "t3", "u3", "t5"},
+                       core::JoinType::kLeft,
+                       "SELECT t.c0, t.c1, t.c2, t.c3, u.c3, t.c5 FROM t LEFT JOIN u ON t.c0 = u.c0 AND t.c1 = u.c1 AND u.c2 BETWEEN 0 AND t.c3"},
+                      {{256, 1, 10},
+                       10,
+                       100,
+                       "u2 between t2 and 10",
+                       2,
+                       {"u0", "u1", "u2", "u3"},
+                       {"t0", "t1", "t2", "t3", "u3", "t5"},
+                       core::JoinType::kLeft,
+                       "SELECT t.c0, t.c1, t.c2, t.c3, u.c3, t.c5 FROM t LEFT JOIN u ON t.c0 = u.c0 AND t.c1 = u.c1 AND u.c2 BETWEEN t.c2 AND 10"},
+                      // Probe column reorder in output.
+                      {{50, 1, 10},
+                       10,
+                       100,
+                       "u2 between t2 and t3",
+                       2,
+                       {"u0", "u1", "u2", "u3", "u5"},
+                       {"t2", "t1", "u1", "u3", "u5"},
+                       core::JoinType::kLeft,
+                       "SELECT t.c2, t.c1, u.c1, u.c3, u.c5 FROM t LEFT JOIN u ON t.c0 = u.c0 AND t.c1 = u.c1 AND u.c2 BETWEEN t.c2 AND t.c3"},
+                      // Both sides reorder in output.
+                      {{50, 1, 10},
+                       10,
+                       100,
+                       "u2 between t2 and t3",
+                       2,
+                       {"u1", "u0", "u2", "u3", "u5"},
+                       {"t2", "u3", "t1", "u1", "u5"},
+                       core::JoinType::kLeft,
+                       "SELECT t.c2, u.c3, t.c1, u.c1, u.c5 FROM t LEFT JOIN u ON t.c0 = u.c0 AND t.c1 = u.c1 AND u.c2 BETWEEN t.c2 AND t.c3"},
+                      // With probe key colums.
+                      {{50, 1, 10},
+                       2,
+                       100,
+                       "u2 between t2 and t3",
+                       2,
+                       {"u1", "u0", "u2", "u3", "u5"},
+                       {"t2", "u3", "t1", "u1", "u0", "u5"},
+                       core::JoinType::kLeft,
+                       "SELECT t.c2, u.c3, t.c1, u.c1, u.c0, u.c5 FROM t LEFT JOIN u ON t.c0 = u.c0 AND t.c1 = u.c1 AND u.c2 BETWEEN t.c2 AND t.c3"}};
+  for (const auto& testData : testSettings) {
+    SCOPED_TRACE(testData.debugString());
+
+    SequenceTableData tableData;
+    generateIndexTableData(testData.keyCardinalities, tableData, pool_);
+    auto probeVectors = generateProbeInput(
+        testData.numProbeBatches,
+        testData.numProbeRowsPerBatch,
+        tableData,
+        pool_,
+        {"t0", "t1"},
+        {},
+        {{"t2", "t3"}},
+        /*eqaulityMatchPct=*/80,
+        /*inColumns=*/std::nullopt,
+        testData.betweenMatchPct);
+
+    createDuckDbTable("t", probeVectors);
+    createDuckDbTable("u", {tableData.tableData});
+
+    const auto indexTable = createIndexTable(
+        /*numEqualJoinKeys=*/2, tableData.keyData, tableData.valueData);
+    const auto indexTableHandle = makeIndexTableHandle(indexTable, GetParam());
+    auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+    core::PlanNodeId indexScanNodeId;
+    std::unordered_map<std::string, std::shared_ptr<connector::ColumnHandle>>
+        columnHandles;
+    const auto indexScanNode = makeIndexScanNode(
+        planNodeIdGenerator,
+        indexTableHandle,
+        makeScanOutputType(testData.lookupOutputColumns),
+        indexScanNodeId,
+        columnHandles);
+
+    core::PlanNodeId joinNodeId;
+    auto plan = makeLookupPlan(
+        planNodeIdGenerator,
+        indexScanNode,
+        probeVectors,
+        {"t0", "t1"},
+        {"u0", "u1"},
+        {testData.betweenCondition},
+        testData.joinType,
+        testData.outputColumns,
+        joinNodeId);
+    AssertQueryBuilder(duckDbQueryRunner_)
+        .plan(plan)
+        .assertResults(testData.duckDbVerifySql);
+  }
+}
+
+TEST_P(IndexLookupJoinTest, inJoinCondition) {
+  struct {
+    std::vector<int> keyCardinalities;
+    int numProbeBatches;
+    int numProbeRowsPerBatch;
+    std::string inCondition;
+    int inMatchPct;
+    std::vector<std::string> lookupOutputColumns;
+    std::vector<std::string> outputColumns;
+    core::JoinType joinType;
+    std::string duckDbVerifySql;
+
+    std::string debugString() const {
+      return fmt::format(
+          "keyCardinalities: {}: numProbeBatches: {}, numProbeRowsPerBatch: {}, inCondition: {}, inMatchPct: {}, lookupOutputColumns: {}, outputColumns: {}, joinType: {}, duckDbVerifySql: {}",
+          folly::join(",", keyCardinalities),
+          numProbeBatches,
+          numProbeRowsPerBatch,
+          inCondition,
+          inMatchPct,
+          folly::join(",", lookupOutputColumns),
+          folly::join(",", outputColumns),
+          core::joinTypeName(joinType),
+          duckDbVerifySql);
+    }
+  } testSettings[] = {
+      // Inner join.
+      // 10% match.
+      {{50, 1, 10},
+       1,
+       100,
+       "contains(t4, u2)",
+       10,
+       {"u0", "u1", "u2", "u3"},
+       {"t0", "t1", "t2", "t3", "u3", "t5"},
+       core::JoinType::kInner,
+       "SELECT t.c0, t.c1, t.c2, t.c3, u.c3, t.c5 FROM t, u WHERE t.c0 = u.c0 AND t.c1 = u.c1 AND array_contains(t.c4, u.c2)"},
+      // 10% match with larger lookup table.
+      {{256, 1, 10},
+       10,
+       100,
+       "contains(t4, u2)",
+       10,
+       {"u0", "u1", "u2", "u3"},
+       {"t0", "t1", "t2", "t3", "u3", "t5"},
+       core::JoinType::kInner,
+       "SELECT t.c0, t.c1, t.c2, t.c3, u.c3, t.c5 FROM t, u WHERE t.c0 = u.c0 AND t.c1 = u.c1 AND array_contains(t.c4, u.c2)"},
+      // Empty lookup table.
+      {{0, 1, 10},
+       10,
+       100,
+       "contains(t4, u2)",
+       10,
+       {"u0", "u1", "u2", "u3"},
+       {"t0", "t1", "t2", "t3", "u3", "t5"},
+       core::JoinType::kInner,
+       "SELECT t.c0, t.c1, t.c2, t.c3, u.c3, t.c5 FROM t, u WHERE t.c0 = u.c0 AND t.c1 = u.c1 AND array_contains(t.c4, u.c2)"},
+      // No match.
+      {{50, 1, 10},
+       10,
+       100,
+       "contains(t4, u2)",
+       0,
+       {"u0", "u1", "u2", "u3"},
+       {"t0", "t1", "t2", "t3", "u3", "t5"},
+       core::JoinType::kInner,
+       "SELECT t.c0, t.c1, t.c2, t.c3, u.c3, t.c5 FROM t, u WHERE t.c0 = u.c0 AND t.c1 = u.c1 AND array_contains(t.c4, u.c2)"},
+      // very few (2%) match with larger lookup table.
+      {{50, 1, 10},
+       10,
+       100,
+       "contains(t4, u2)",
+       2,
+       {"u0", "u1", "u2", "u3"},
+       {"t0", "t1", "t2", "t3", "u3", "t5"},
+       core::JoinType::kInner,
+       "SELECT t.c0, t.c1, t.c2, t.c3, u.c3, t.c5 FROM t, u WHERE t.c0 = u.c0 AND t.c1 = u.c1 AND array_contains(t.c4, u.c2)"},
+      {{256, 1, 10},
+       10,
+       100,
+       "contains(t4, u2)",
+       2,
+       {"u0", "u1", "u2", "u3"},
+       {"t0", "t1", "t2", "t3", "u3", "t5"},
+       core::JoinType::kInner,
+       "SELECT t.c0, t.c1, t.c2, t.c3, u.c3, t.c5 FROM t, u WHERE t.c0 = u.c0 AND t.c1 = u.c1 AND array_contains(t.c4, u.c2)"},
+      // All matches
+      {{50, 1, 10},
+       10,
+       100,
+       "contains(t4, u2)",
+       100,
+       {"u0", "u1", "u2", "u3"},
+       {"t0", "t1", "t2", "t3", "u3", "t5"},
+       core::JoinType::kInner,
+       "SELECT t.c0, t.c1, t.c2, t.c3, u.c3, t.c5 FROM t, u WHERE t.c0 = u.c0 AND t.c1 = u.c1 AND array_contains(t.c4, u.c2)"},
+      // All matches with larger lookup table.
+      {{256, 1, 10},
+       10,
+       100,
+       "contains(t4, u2)",
+       100,
+       {"u0", "u1", "u2", "u3"},
+       {"t0", "t1", "t2", "t3", "u3", "t5"},
+       core::JoinType::kInner,
+       "SELECT t.c0, t.c1, t.c2, t.c3, u.c3, t.c5 FROM t, u WHERE t.c0 = u.c0 AND t.c1 = u.c1 AND array_contains(t.c4, u.c2)"},
+      // No probe projection.
+      {{50, 1, 10},
+       10,
+       100,
+       "contains(t4, u2)",
+       10,
+       {"u0", "u1", "u2", "u3", "u5"},
+       {"u1", "u0", "u3", "u5"},
+       core::JoinType::kInner,
+       "SELECT u.c1, u.c0, u.c3, u.c5 FROM t, u WHERE t.c0 = u.c0 AND t.c1 = u.c1 AND array_contains(t.c4, u.c2)"},
+      // Probe column reorder in output.
+      {{50, 1, 10},
+       10,
+       100,
+       "contains(t4, u2)",
+       10,
+       {"u0", "u1", "u2", "u3", "u5"},
+       {"t2", "t1", "u1", "u3", "u5"},
+       core::JoinType::kInner,
+       "SELECT t.c2, t.c1, u.c1, u.c3, u.c5 FROM t, u WHERE t.c0 = u.c0 AND t.c1 = u.c1 AND array_contains(t.c4, u.c2)"},
+      // Both sides reorder in output.
+      {{50, 1, 10},
+       10,
+       100,
+       "contains(t4, u2)",
+       10,
+       {"u1", "u0", "u2", "u3", "u5"},
+       {"t2", "u3", "t1", "u1", "u5"},
+       core::JoinType::kInner,
+       "SELECT t.c2, u.c3, t.c1, u.c1, u.c5 FROM t, u WHERE t.c0 = u.c0 AND t.c1 = u.c1 AND array_contains(t.c4, u.c2)"},
+      // With probe key colums.
+      {{50, 1, 10},
+       2,
+       100,
+       "contains(t4, u2)",
+       10,
+       {"u1", "u0", "u2", "u3", "u5"},
+       {"t2", "u3", "t1", "u1", "u0", "u5"},
+       core::JoinType::kInner,
+       "SELECT t.c2, u.c3, t.c1, u.c1, u.c0, u.c5 FROM t, u WHERE t.c0 = u.c0 AND t.c1 = u.c1 AND array_contains(t.c4, u.c2)"},
+
+      // Left join.
+      // 10% match.
+      {{50, 1, 10},
+       10,
+       100,
+       "contains(t4, u2)",
+       10,
+       {"u0", "u1", "u2", "u3"},
+       {"t0", "t1", "t2", "t3", "u3", "t5"},
+       core::JoinType::kLeft,
+       "SELECT t.c0, t.c1, t.c2, t.c3, u.c3, t.c5 FROM t LEFT JOIN u ON t.c0 = u.c0 AND t.c1 = u.c1 AND array_contains(t.c4, u.c2)"},
+      // 10% match with larger lookup table.
+      {{256, 1, 10},
+       10,
+       100,
+       "contains(t4, u2)",
+       10,
+       {"u0", "u1", "u2", "u3"},
+       {"t0", "t1", "t2", "t3", "u3", "t5"},
+       core::JoinType::kLeft,
+       "SELECT t.c0, t.c1, t.c2, t.c3, u.c3, t.c5 FROM t LEFT JOIN u ON t.c0 = u.c0 AND t.c1 = u.c1 AND array_contains(t.c4, u.c2)"},
+      {{256, 1, 10},
+       10,
+       100,
+       "contains(t4, u2)",
+       10,
+       {"u0", "u1", "u2", "u3"},
+       {"t0", "t1", "t2", "t3", "u3", "t5"},
+       core::JoinType::kLeft,
+       "SELECT t.c0, t.c1, t.c2, t.c3, u.c3, t.c5 FROM t LEFT JOIN u ON t.c0 = u.c0 AND t.c1 = u.c1 AND array_contains(t.c4, u.c2)"},
+      // Empty lookup table.
+      {{0, 1, 10},
+       10,
+       100,
+       "contains(t4, u2)",
+       10,
+       {"u0", "u1", "u2", "u3"},
+       {"t0", "t1", "t2", "t3", "u3", "t5"},
+       core::JoinType::kLeft,
+       "SELECT t.c0, t.c1, t.c2, t.c3, u.c3, t.c5 FROM t LEFT JOIN u ON t.c0 = u.c0 AND t.c1 = u.c1 AND array_contains(t.c4, u.c2)"},
+      // No match.
+      {{50, 1, 10},
+       10,
+       100,
+       "contains(t4, u2)",
+       0,
+       {"u0", "u1", "u2", "u3"},
+       {"t0", "t1", "t2", "t3", "u3", "t5"},
+       core::JoinType::kLeft,
+       "SELECT t.c0, t.c1, t.c2, t.c3, u.c3, t.c5 FROM t LEFT JOIN u ON t.c0 = u.c0 AND t.c1 = u.c1 AND array_contains(t.c4, u.c2)"},
+      // very few (2%) match with larger lookup table.
+      {{50, 1, 10},
+       10,
+       100,
+       "contains(t4, u2)",
+       2,
+       {"u0", "u1", "u2", "u3"},
+       {"t0", "t1", "t2", "t3", "u3", "t5"},
+       core::JoinType::kLeft,
+       "SELECT t.c0, t.c1, t.c2, t.c3, u.c3, t.c5 FROM t LEFT JOIN u ON t.c0 = u.c0 AND t.c1 = u.c1 AND array_contains(t.c4, u.c2)"},
+      {{256, 1, 10},
+       10,
+       100,
+       "contains(t4, u2)",
+       2,
+       {"u0", "u1", "u2", "u3"},
+       {"t0", "t1", "t2", "t3", "u3", "t5"},
+       core::JoinType::kLeft,
+       "SELECT t.c0, t.c1, t.c2, t.c3, u.c3, t.c5 FROM t LEFT JOIN u ON t.c0 = u.c0 AND t.c1 = u.c1 AND array_contains(t.c4, u.c2)"},
+      // All matches.
+      {{50, 1, 10},
+       10,
+       100,
+       "contains(t4, u2)",
+       2,
+       {"u0", "u1", "u2", "u3"},
+       {"t0", "t1", "t2", "t3", "u3", "t5"},
+       core::JoinType::kLeft,
+       "SELECT t.c0, t.c1, t.c2, t.c3, u.c3, t.c5 FROM t LEFT JOIN u ON t.c0 = u.c0 AND t.c1 = u.c1 AND array_contains(t.c4, u.c2)"},
+      // All matches with larger lookup table.
+      {{256, 1, 10},
+       10,
+       100,
+       "contains(t4, u2)",
+       2,
+       {"u0", "u1", "u2", "u3"},
+       {"t0", "t1", "t2", "t3", "u3", "t5"},
+       core::JoinType::kLeft,
+       "SELECT t.c0, t.c1, t.c2, t.c3, u.c3, t.c5 FROM t LEFT JOIN u ON t.c0 = u.c0 AND t.c1 = u.c1 AND array_contains(t.c4, u.c2)"},
+      // Probe column reorder in output.
+      {{50, 1, 10},
+       10,
+       100,
+       "contains(t4, u2)",
+       2,
+       {"u0", "u1", "u2", "u3", "u5"},
+       {"t2", "t1", "u1", "u3", "u5"},
+       core::JoinType::kLeft,
+       "SELECT t.c2, t.c1, u.c1, u.c3, u.c5 FROM t LEFT JOIN u ON t.c0 = u.c0 AND t.c1 = u.c1 AND array_contains(t.c4, u.c2)"},
+      // Both sides reorder in output.
+      {{50, 1, 10},
+       10,
+       100,
+       "contains(t4, u2)",
+       2,
+       {"u1", "u0", "u2", "u3", "u5"},
+       {"t2", "u3", "t1", "u1", "u5"},
+       core::JoinType::kLeft,
+       "SELECT t.c2, u.c3, t.c1, u.c1, u.c5 FROM t LEFT JOIN u ON t.c0 = u.c0 AND t.c1 = u.c1 AND array_contains(t.c4, u.c2)"},
+      // With probe key colums.
+      {{50, 1, 10},
+       2,
+       100,
+       "contains(t4, u2)",
+       2,
+       {"u1", "u0", "u2", "u3", "u5"},
+       {"t2", "u3", "t1", "u1", "u0", "u5"},
+       core::JoinType::kLeft,
+       "SELECT t.c2, u.c3, t.c1, u.c1, u.c0, u.c5 FROM t LEFT JOIN u ON t.c0 = u.c0 AND t.c1 = u.c1 AND array_contains(t.c4, u.c2)"}};
+
+  for (const auto& testData : testSettings) {
+    SCOPED_TRACE(testData.debugString());
+
+    SequenceTableData tableData;
+    generateIndexTableData(testData.keyCardinalities, tableData, pool_);
+    auto probeVectors = generateProbeInput(
+        testData.numProbeBatches,
+        testData.numProbeRowsPerBatch,
+        tableData,
+        pool_,
+        {"t0", "t1"},
+        {{"t4"}},
+        {},
+        /*eqaulityMatchPct=*/80,
+        testData.inMatchPct);
+
+    createDuckDbTable("t", probeVectors);
+    createDuckDbTable("u", {tableData.tableData});
+
+    const auto indexTable = createIndexTable(
+        /*numEqualJoinKeys=*/2, tableData.keyData, tableData.valueData);
+    const auto indexTableHandle = makeIndexTableHandle(indexTable, GetParam());
+    auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+    core::PlanNodeId indexScanNodeId;
+    std::unordered_map<std::string, std::shared_ptr<connector::ColumnHandle>>
+        columnHandles;
+    const auto indexScanNode = makeIndexScanNode(
+        planNodeIdGenerator,
+        indexTableHandle,
+        makeScanOutputType(testData.lookupOutputColumns),
+        indexScanNodeId,
+        columnHandles);
+
+    core::PlanNodeId joinNodeId;
+    auto plan = makeLookupPlan(
+        planNodeIdGenerator,
+        indexScanNode,
+        probeVectors,
+        {"t0", "t1"},
+        {"u0", "u1"},
+        {testData.inCondition},
+        testData.joinType,
+        testData.outputColumns,
+        joinNodeId);
+    AssertQueryBuilder(duckDbQueryRunner_)
+        .plan(plan)
+        .assertResults(testData.duckDbVerifySql);
+  }
+}
+
+DEBUG_ONLY_TEST_P(IndexLookupJoinTest, connectorError) {
+  SequenceTableData tableData;
+  generateIndexTableData({100, 1, 1}, tableData, pool_);
+  const std::vector<RowVectorPtr> probeVectors = generateProbeInput(
+      20, 100, tableData, pool_, {"t0", "t1", "t2"}, {}, {}, 100);
+
+  const std::string errorMsg{"injectedError"};
+  std::atomic_int lookupCount{0};
+  SCOPED_TESTVALUE_SET(
+      "facebook::velox::exec::test::TestIndexSource::ResultIterator::syncLookup",
+      std::function<void(void*)>([&](void*) {
+        // Triggers error in the middle.
+        if (lookupCount++ == 10) {
+          VELOX_FAIL(errorMsg);
+        }
+      }));
+
+  const auto indexTable = createIndexTable(
+      /*numEqualJoinKeys=*/3, tableData.keyData, tableData.valueData);
+  const auto indexTableHandle = makeIndexTableHandle(indexTable, GetParam());
+  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  core::PlanNodeId indexScanNodeId;
+  std::unordered_map<std::string, std::shared_ptr<connector::ColumnHandle>>
+      columnHandles;
+  const auto indexScanNode = makeIndexScanNode(
+      planNodeIdGenerator,
+      indexTableHandle,
+      makeScanOutputType({"u0", "u1", "u2", "u5"}),
+      indexScanNodeId,
+      columnHandles);
+
+  core::PlanNodeId joinNodeId;
+  auto plan = makeLookupPlan(
+      planNodeIdGenerator,
+      indexScanNode,
+      probeVectors,
+      {"t0", "t1", "t2"},
+      {"u0", "u1", "u2"},
+      {},
+      core::JoinType::kInner,
+      {"u0", "u1", "u2", "t5"},
+      joinNodeId);
+  VELOX_ASSERT_THROW(
+      AssertQueryBuilder(plan).copyResults(pool_.get()), errorMsg);
+}
+
+TEST_P(IndexLookupJoinTest, outputBatchSize) {
+  SequenceTableData tableData;
+  generateIndexTableData({3'000, 1, 1}, tableData, pool_);
+
+  struct {
+    int numProbeBatches;
+    int numRowsPerProbeBatch;
+    int maxBatchRows;
+    int numExpectedOutputBatch;
+
+    std::string debugString() const {
+      return fmt::format(
+          "numProbeBatches: {}, numRowsPerProbeBatch: {}, maxBatchRows: {}, numExpectedOutputBatch: {}",
+          numProbeBatches,
+          numRowsPerProbeBatch,
+          maxBatchRows,
+          numExpectedOutputBatch);
+    }
+  } testSettings[] = {
+      {10, 100, 10, 100},
+      {10, 500, 10, 500},
+      {10, 1, 200, 10},
+      {1, 500, 10, 50},
+      {1, 300, 10, 30},
+      {1, 500, 200, 3},
+      {10, 200, 200, 10},
+      {10, 500, 300, 20},
+      {10, 50, 1, 500}};
+
+  for (const auto& testData : testSettings) {
+    SCOPED_TRACE(testData.debugString());
+
+    const auto probeVectors = generateProbeInput(
+        testData.numProbeBatches,
+        testData.numRowsPerProbeBatch,
+        tableData,
+        pool_,
+        {"t0", "t1", "t2"},
+        {},
+        {},
+        /*equalMatchPct=*/100);
+
+    createDuckDbTable("t", probeVectors);
+    createDuckDbTable("u", {tableData.tableData});
+
+    const auto indexTable = createIndexTable(
+        /*numEqualJoinKeys=*/3, tableData.keyData, tableData.valueData);
+    const auto indexTableHandle = makeIndexTableHandle(indexTable, GetParam());
+    auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+    core::PlanNodeId indexScanNodeId;
+    std::unordered_map<std::string, std::shared_ptr<connector::ColumnHandle>>
+        columnHandles;
+    const auto indexScanNode = makeIndexScanNode(
+        planNodeIdGenerator,
+        indexTableHandle,
+        makeScanOutputType({"u0", "u1", "u2", "u5"}),
+        indexScanNodeId,
+        columnHandles);
+
+    core::PlanNodeId joinNodeId;
+    auto plan = makeLookupPlan(
+        planNodeIdGenerator,
+        indexScanNode,
+        probeVectors,
+        {"t0", "t1", "t2"},
+        {"u0", "u1", "u2"},
+        {},
+        core::JoinType::kInner,
+        {"t4", "u5"},
+        joinNodeId);
+    const auto task =
+        AssertQueryBuilder(duckDbQueryRunner_)
+            .plan(plan)
+            .config(
+                core::QueryConfig::kPreferredOutputBatchRows,
+                std::to_string(testData.maxBatchRows))
+            .config(
+                core::QueryConfig::kPreferredOutputBatchBytes,
+                std::to_string(1ULL << 30))
+            .assertResults(
+                "SELECT t.c4, u.c5 FROM t, u WHERE t.c0 = u.c0 AND t.c1 = u.c1 AND t.c2 = u.c2");
+    ASSERT_EQ(
+        toPlanStats(task->taskStats()).at(joinNodeId).outputVectors,
+        testData.numExpectedOutputBatch);
+  }
+}
+
+TEST_P(IndexLookupJoinTest, joinFuzzer) {
+  SequenceTableData tableData;
+  generateIndexTableData({1024, 1, 1}, tableData, pool_);
+  const auto probeVectors =
+      generateProbeInput(50, 256, tableData, pool_, {"t0", "t1", "t2"});
+
+  createDuckDbTable("t", probeVectors);
+  createDuckDbTable("u", {tableData.tableData});
+
+  const auto indexTable = createIndexTable(
+      /*numEqualJoinKeys=*/1, tableData.keyData, tableData.valueData);
+  const auto indexTableHandle = makeIndexTableHandle(indexTable, GetParam());
+  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  core::PlanNodeId indexScanNodeId;
+  auto scanOutput = tableType_->names();
+  std::random_device rd;
+  std::mt19937 g(rd());
+  std::shuffle(scanOutput.begin(), scanOutput.end(), g);
+  std::unordered_map<std::string, std::shared_ptr<connector::ColumnHandle>>
+      columnHandles;
+  const auto indexScanNode = makeIndexScanNode(
+      planNodeIdGenerator,
+      indexTableHandle,
+      makeScanOutputType(scanOutput),
+      indexScanNodeId,
+      columnHandles);
+
+  core::PlanNodeId joinNodeId;
+  auto plan = makeLookupPlan(
+      planNodeIdGenerator,
+      indexScanNode,
+      probeVectors,
+      {"t0"},
+      {"u0"},
+      {"contains(t4, u1)", "u2 between t1 and t2"},
+      core::JoinType::kInner,
+      {"u0", "u4", "t0", "t1", "t4"},
+      joinNodeId);
+  AssertQueryBuilder(duckDbQueryRunner_)
+      .plan(plan)
+      .assertResults(
+          "SELECT u.c0, u.c1, u.c2, u.c3, u.c4, u.c5, t.c0, t.c1, t.c2, t.c3, t.c4, t.c5 FROM t, u WHERE t.c0 = u.c0 AND array_contains(t.c4, u.c1) AND u.c2 BETWEEN t.c1 AND t.c2");
 }
 } // namespace
 

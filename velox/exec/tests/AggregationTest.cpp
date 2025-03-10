@@ -963,8 +963,13 @@ TEST_F(AggregationTest, partialDistinctWithAbandon) {
 }
 
 TEST_F(AggregationTest, distinctWithGroupingKeysReordered) {
-  rowType_ = ROW(
-      {"c0", "c1", "c2", "c3"}, {BIGINT(), INTEGER(), VARCHAR(), VARCHAR()});
+  rowType_ =
+      ROW({"c0", "c1", "c2", "c3", "c4"},
+          {BIGINT(),
+           VARCHAR(),
+           INTEGER(),
+           ROW({"a0", "a1", "a2"}, {VARCHAR(), BOOLEAN(), BIGINT()}),
+           BOOLEAN()});
 
   const int vectorSize = 2'000;
   VectorFuzzer::Options options;
@@ -983,19 +988,21 @@ TEST_F(AggregationTest, distinctWithGroupingKeysReordered) {
   // Distinct aggregation with grouping key with larger prefix encoded size
   // first.
   auto spillDirectory = exec::test::TempDirectoryPath::create();
-  auto task = AssertQueryBuilder(duckDbQueryRunner_)
-                  .config(QueryConfig::kAbandonPartialAggregationMinRows, 100)
-                  .config(QueryConfig::kAbandonPartialAggregationMinPct, 50)
-                  .spillDirectory(spillDirectory->getPath())
-                  .config(QueryConfig::kSpillEnabled, true)
-                  .config(QueryConfig::kAggregationSpillEnabled, true)
-                  .config(QueryConfig::kSpillPrefixSortEnabled, true)
-                  .maxDrivers(1)
-                  .plan(PlanBuilder()
-                            .values(vectors)
-                            .singleAggregation({"c2", "c0"}, {})
-                            .planNode())
-                  .assertResults("SELECT distinct c2, c0 FROM tmp");
+  TestScopedSpillInjection scopedSpillInjection(100);
+  auto task =
+      AssertQueryBuilder(duckDbQueryRunner_)
+          .config(QueryConfig::kAbandonPartialAggregationMinRows, 100)
+          .config(QueryConfig::kAbandonPartialAggregationMinPct, 50)
+          .spillDirectory(spillDirectory->getPath())
+          .config(QueryConfig::kSpillEnabled, true)
+          .config(QueryConfig::kAggregationSpillEnabled, true)
+          .config(QueryConfig::kSpillPrefixSortEnabled, true)
+          .maxDrivers(1)
+          .plan(PlanBuilder()
+                    .values(vectors)
+                    .singleAggregation({"c4", "c1", "c3", "c2", "c0"}, {})
+                    .planNode())
+          .assertResults("SELECT distinct c4, c1, c3, c2, c0 FROM tmp");
 }
 
 TEST_F(AggregationTest, largeValueRangeArray) {
@@ -1241,7 +1248,7 @@ TEST_F(AggregationTest, memoryAllocations) {
   // Verify memory allocations. Aggregation should make 2 allocations: 1 for the
   // RowContainer holding single accumulator and 1 for the result.
   auto planStats = toPlanStats(task->taskStats());
-  ASSERT_EQ(2, planStats.at(aggNodeId).numMemoryAllocations);
+  ASSERT_EQ(5, planStats.at(aggNodeId).numMemoryAllocations);
 
   plan = PlanBuilder()
              .values(data)
@@ -1257,7 +1264,7 @@ TEST_F(AggregationTest, memoryAllocations) {
   // hash table, 1 for the RowContainer holding accumulators, 2 for results (1
   // for values of the grouping key column, 1 for sum column).
   planStats = toPlanStats(task->taskStats());
-  ASSERT_EQ(4, planStats.at(aggNodeId).numMemoryAllocations);
+  ASSERT_EQ(7, planStats.at(aggNodeId).numMemoryAllocations);
 }
 
 TEST_F(AggregationTest, groupingSets) {
@@ -2439,8 +2446,9 @@ DEBUG_ONLY_TEST_F(AggregationTest, reclaimDuringInputProcessing) {
       ASSERT_GT(reclaimerStats_.reclaimExecTimeUs, 0);
       ASSERT_GT(reclaimerStats_.reclaimedBytes, 0);
       reclaimerStats_.reset();
-      // We expect all the memory has been freed from the hash table.
-      ASSERT_EQ(op->pool()->usedBytes(), 0);
+      // We expect all the memory has been freed from the hash table, except for
+      // the ones used by raw_vector.
+      ASSERT_EQ(op->pool()->usedBytes(), 28672);
     } else {
       {
         memory::ScopedMemoryArbitrationContext ctx(op->pool());

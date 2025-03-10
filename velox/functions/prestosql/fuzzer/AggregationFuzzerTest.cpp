@@ -64,6 +64,8 @@ DEFINE_uint32(
     "Timeout in milliseconds for HTTP requests made to reference DB, "
     "such as Presto. Example: --req_timeout_ms=2000");
 
+// Any change made in the file should be reflected in
+// the FB-internal aggregation fuzzer test too:
 namespace facebook::velox::exec::test {
 namespace {
 
@@ -133,6 +135,10 @@ int main(int argc, char** argv) {
       "any_value",
   };
 
+  static const std::unordered_set<std::string> functionsRequireSortedInput = {
+      "tdigest_agg",
+  };
+
   using facebook::velox::exec::test::ApproxDistinctResultVerifier;
   using facebook::velox::exec::test::ApproxPercentileResultVerifier;
   using facebook::velox::exec::test::ArbitraryResultVerifier;
@@ -195,6 +201,7 @@ int main(int argc, char** argv) {
   Options options;
   options.onlyFunctions = FLAGS_only;
   options.skipFunctions = skipFunctions;
+  options.functionsRequireSortedInput = functionsRequireSortedInput;
   options.customVerificationFunctions = customVerificationFunctions;
   options.customInputGenerators =
       facebook::velox::exec::test::getCustomInputGenerators();

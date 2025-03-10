@@ -115,6 +115,4 @@ struct IPAddressT {
 
 using IPAddress = CustomType<IPAddressT, /*providesCustomComparison*/ true>;
 
-void registerIPAddressType();
-
 } // namespace facebook::velox
