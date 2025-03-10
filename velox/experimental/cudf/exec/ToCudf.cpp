@@ -336,9 +336,6 @@ void registerCudf() {
   }
   auto mr = cudf_velox::create_memory_resource(mr_mode);
 
-  void* pinned = nullptr;
-  cudaMallocHost(&pinned, 1 << 30);
-
   cudf::set_current_device_resource(mr.get());
   cudfDriverAdapter cda{mr};
   exec::DriverAdapter cudfAdapter{"cuDF", cda, cda};
