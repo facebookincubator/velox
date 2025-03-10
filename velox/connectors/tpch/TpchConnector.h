@@ -17,6 +17,7 @@
 
 #include "velox/common/config/Config.h"
 #include "velox/connectors/Connector.h"
+#include "velox/connectors/tpch/TpchConfig.h"
 #include "velox/connectors/tpch/TpchConnectorSplit.h"
 #include "velox/tpch/gen/TpchGen.h"
 
@@ -76,6 +77,7 @@ class TpchDataSource : public DataSource {
       const std::unordered_map<
           std::string,
           std::shared_ptr<connector::ColumnHandle>>& columnHandles,
+      const std::shared_ptr<TpchConfig>& tpchConfig,
       velox::memory::MemoryPool* pool);
 
   void addSplit(std::shared_ptr<ConnectorSplit> split) override;
@@ -101,6 +103,9 @@ class TpchDataSource : public DataSource {
     // TODO: Which stats do we want to expose here?
     return {};
   }
+
+ protected:
+  const std::shared_ptr<TpchConfig> tpchConfig_;
 
  private:
   bool isLineItem() const;
@@ -135,7 +140,12 @@ class TpchConnector final : public Connector {
       const std::string& id,
       std::shared_ptr<const config::ConfigBase> config,
       folly::Executor* /*executor*/)
-      : Connector(id) {}
+      : Connector(id), tpchConfig_(std::make_shared<TpchConfig>(config)) {}
+
+  const std::shared_ptr<const config::ConfigBase>& connectorConfig()
+      const override {
+    return tpchConfig_->config();
+  }
 
   std::unique_ptr<DataSource> createDataSource(
       const std::shared_ptr<const RowType>& outputType,
@@ -148,6 +158,7 @@ class TpchConnector final : public Connector {
         outputType,
         tableHandle,
         columnHandles,
+        tpchConfig_,
         connectorQueryCtx->memoryPool());
   }
 
@@ -159,6 +170,9 @@ class TpchConnector final : public Connector {
       CommitStrategy /*commitStrategy*/) override final {
     VELOX_NYI("TpchConnector does not support data sink.");
   }
+
+ protected:
+  const std::shared_ptr<TpchConfig> tpchConfig_;
 };
 
 class TpchConnectorFactory : public ConnectorFactory {
