@@ -118,7 +118,9 @@ class RemoteFunction : public exec::VectorFunction {
               remoteRowVector, rows.end(), *context.pool(), serde_.get()));
 
       std::unique_ptr<folly::IOBuf> responseBody = restClient_->invokeFunction(
-          std::get<std::string>(metadata_.location), std::move(requestBody));
+          std::get<std::string>(metadata_.location),
+          std::move(requestBody),
+          metadata_.serdeFormat);
 
       auto outputRowVector = IOBufToRowVector(
           *responseBody, ROW({outputType}), *context.pool(), serde_.get());

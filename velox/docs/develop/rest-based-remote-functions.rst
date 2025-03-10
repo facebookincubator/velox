@@ -12,7 +12,7 @@ Registration
 ------------
 Before you can call the remote function in a query, you need to register it with Velox.
 Here is an example of how to create the necessary metadata, build the function signature,
-and register the remote function, below is the example of registering an absolute function :
+and register the remote function. Below is an example of registering an absolute function:
 
 .. code-block:: c++
 
@@ -29,28 +29,32 @@ and register the remote function, below is the example of registering an absolut
 
 .. note::
 
-   - ``metadata.serdeFormat`` must be set to the PRESTO_PAGE format i.e, ``PageFormat::PRESTO_PAGE``.
    - ``metadata.location`` is the REST endpoint to which Velox will send the function invocation
-     requests.
+     requests (POST requests).
 
 Query Execution
 ---------------
-Once the remote function is registered, it can be used in velox expressions.
+Once the remote function is registered, it can be used in Velox expressions.
 During query execution:
 
-1. Velox packs the function input arguments into a request payload using the
-   PrestoVectorSerde format.
+1. Velox packs the function input arguments into a request payload using
+   ``metadata.serdeFormat``.
 2. This request is sent to the REST endpoint specified in ``metadata.location``.
-3. The remote service executes the function and returns a response payload, also serialized
-   in the PrestoVectorSerde format.
-4. Velox then deserializes the result payload and proceeds with further query processing.
+3. The remote service executes the function and returns a response payload,
+   also serialized in ``metadata.serdeFormat``.
+4. Velox then deserializes the result payload and proceeds with further
+   query processing.
 
 Serialization Details
 ---------------------
 The request and response payloads are transferred using a ``folly::IOBuf`` under the hood.
-Because the format is ``PageFormat::PRESTO_PAGE``, the serialization and deserialization
-are done by the PrestoVectorSerde implementation. This means that the remote function server
-must be able to understand the Presto page format and return the results in the same format.
+Serialization and deserialization are purely based on the SerDe (serializer-deserializer)
+provided during the function registration process. The server assumes that any data it processes
+has been serialized and deserialized according to the SerDe logic, without needing additional
+hints or metadata.
+
+.. note::
+   - Serialization - Deserialization information is passed as headers in the HTTP request.
 
 Summary
 -------
@@ -59,4 +63,5 @@ Using REST-based remote functions in Velox involves two major steps:
 1. **Registration**: Provide the remote server's endpoint and other metadata via
    ``registerRemoteFunction()`` so that Velox knows how to connect and what format to use.
 2. **Execution**: During query execution, Velox serializes function inputs, sends them
-   to the remote server, and deserializes the results.
+   to the remote server, and deserializes the results in the ``serdeFormat`` provided at the time
+   of function registration.

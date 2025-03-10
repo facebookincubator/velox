@@ -26,7 +26,8 @@ namespace facebook::velox::functions {
 
 std::unique_ptr<IOBuf> RestClient::invokeFunction(
     const std::string& fullUrl,
-    std::unique_ptr<IOBuf> requestPayload) {
+    std::unique_ptr<IOBuf> requestPayload,
+    remote::PageFormat serdeFormat) {
   IOBufQueue inputBufQueue(IOBufQueue::cacheChainLength());
   inputBufQueue.append(std::move(requestPayload));
 
@@ -36,11 +37,20 @@ std::unique_ptr<IOBuf> RestClient::invokeFunction(
         reinterpret_cast<const char*>(range.data()), range.size());
   }
 
+  std::string contentType;
+  switch (serdeFormat) {
+    case remote::PageFormat::SPARK_UNSAFE_ROW:
+      contentType = "application/X-spark-unsafe-row";
+      break;
+    case remote::PageFormat::PRESTO_PAGE:
+    default:
+      contentType = "application/X-presto-pages";
+      break;
+  }
+
   cpr::Response response = cpr::Post(
       cpr::Url{fullUrl},
-      cpr::Header{
-          {"Content-Type", "application/X-presto-pages"},
-          {"Accept", "application/X-presto-pages"}},
+      cpr::Header{{"Content-Type", contentType}, {"Accept", contentType}},
       cpr::Body{requestBody});
 
   if (response.error) {
