@@ -19,6 +19,28 @@ namespace facebook::velox::exec {
 
 namespace {
 
+#define RANK_FUNCTION_DISPATCH(TEMPLATE_FUNC, functionKind, ...)             \
+  [&]() {                                                                    \
+    switch (functionKind) {                                                  \
+      case core::TopNRowNumberNode::RankFunction::kRowNumber: {              \
+        return TEMPLATE_FUNC<                                                \
+            core::TopNRowNumberNode::RankFunction::kRowNumber>(__VA_ARGS__); \
+      }                                                                      \
+      case core::TopNRowNumberNode::RankFunction::kRank: {                   \
+        return TEMPLATE_FUNC<core::TopNRowNumberNode::RankFunction::kRank>(  \
+            __VA_ARGS__);                                                    \
+      }                                                                      \
+      case core::TopNRowNumberNode::RankFunction::kDenseRank: {              \
+        return TEMPLATE_FUNC<                                                \
+            core::TopNRowNumberNode::RankFunction::kDenseRank>(__VA_ARGS__); \
+      }                                                                      \
+      default:                                                               \
+        VELOX_FAIL(                                                          \
+            "not a rank function kind: {}",                                  \
+            core::TopNRowNumberNode::rankFunctionName(functionKind));        \
+    }                                                                        \
+  }()
+
 std::vector<column_index_t> reorderInputChannels(
     const RowTypePtr& inputType,
     const std::vector<core::FieldAccessTypedExprPtr>& partitionKeys,
@@ -113,9 +135,11 @@ TopNRowNumber::TopNRowNumber(
           node->canSpill(driverCtx->queryConfig())
               ? driverCtx->makeSpillConfig(operatorId)
               : std::nullopt),
+      rankFunction_(node->rankFunction()),
       limit_{node->limit()},
       generateRowNumber_{node->generateRowNumber()},
       numPartitionKeys_{node->partitionKeys().size()},
+      numSortingKeys_{node->sortingKeys().size()},
       inputChannels_{reorderInputChannels(
           node->inputType(),
           node->partitionKeys(),
@@ -208,11 +232,12 @@ void TopNRowNumber::addInput(RowVectorPtr input) {
     // Process input rows. For each row, lookup the partition. If number of rows
     // in that partition is less than limit, add the new row. Otherwise, check
     // if row should replace an existing row or be discarded.
-    for (auto i = 0; i < numInput; ++i) {
-      auto& partition = partitionAt(lookup_->hits[i]);
-      processInputRow(i, partition);
-    }
+    RANK_FUNCTION_DISPATCH(processInputRowLoop, rankFunction_, numInput, true);
 
+    // It is determined that the TopNRowNumber (as a partial) is not rejecting
+    // enough input rows to make the duplicate detection worthwhile. Hence,
+    // abandon the processing at this partial TopN and let the final TopN do
+    // the processing.
     if (abandonPartialEarly()) {
       abandonedPartial_ = true;
       addRuntimeStat("abandonedPartial", RuntimeCounter(1));
@@ -222,9 +247,7 @@ void TopNRowNumber::addInput(RowVectorPtr input) {
       outputRows_.resize(outputBatchSize_);
     }
   } else {
-    for (auto i = 0; i < numInput; ++i) {
-      processInputRow(i, *singlePartition_);
-    }
+    RANK_FUNCTION_DISPATCH(processInputRowLoop, rankFunction_, numInput, false);
   }
 }
 
@@ -249,25 +272,150 @@ void TopNRowNumber::initializeNewPartitions() {
   }
 }
 
+template <>
+void TopNRowNumber::processRowBelowLimit<
+    core::TopNRowNumberNode::RankFunction::kRank>(
+    vector_size_t index,
+    TopRows& partition) {
+  auto& topRows = partition.rows;
+  if (topRows.empty()) {
+    partition.topRank = 1;
+  } else {
+    // rank assigns all peer rows the same rank, but the rank increments by
+    // the number of peers when moving between peers. So when adding a new
+    // row:
+    // If row == top rank then top rank is unchanged.
+    // If row < top rank then top rank += 1.
+    // If row > top, then rank += number of peers of top rank.
+    auto topRow = topRows.top();
+    auto result = comparator_.compare(decodedVectors_, index, topRow);
+    if (result > 0) {
+      partition.topRank += 1;
+    } else if (result < 0) {
+      partition.topRank += partition.numTopRankRows();
+    }
+  }
+}
+
+template <>
+void TopNRowNumber::processRowBelowLimit<
+    core::TopNRowNumberNode::RankFunction::kDenseRank>(
+    vector_size_t index,
+    TopRows& partition) {
+  // dense_rank accumulates the row in the partition, but will have the same
+  // rank as all its other peer rows. So the top top rank is
+  // incremented only if the row is not a duplicate of any existing row.
+  if (!partition.isDuplicate(decodedVectors_, index)) {
+    partition.topRank++;
+  }
+}
+
+template <>
+void TopNRowNumber::processRowBelowLimit<
+    core::TopNRowNumberNode::RankFunction::kRowNumber>(
+    vector_size_t index,
+    TopRows& partition) {
+  // row_number accumulates rows in the partition and the top rank is
+  // incremented by 1 as row_number increases by 1 at successive row.
+  partition.topRank++;
+}
+
+template <>
+char* TopNRowNumber::processRowAboveLimit<
+    core::TopNRowNumberNode::RankFunction::kRank>(
+    vector_size_t index,
+    TopRows& partition) {
+  auto& topRows = partition.rows;
+
+  // For rank, the new row gets assigned its rank as per its position. But the
+  // ranks of all subsequent rows increment by 1. So we can remove the rows
+  // at the top rank as its rank > limit now.
+  // But the new top rank depends on the number of peer rows of the new top
+  // rank, and if the new row also has the same value as the top rank row.
+  char* topRow = partition.removeTopRankRows();
+  char* newRow = data_->initializeRow(topRow, true /* reuse */);
+  if (topRows.empty()) {
+    partition.topRank = 1;
+  } else {
+    auto numNewTopRankRows = partition.numTopRankRows();
+    topRow = topRows.top();
+    if (comparator_.compare(decodedVectors_, index, topRow) == 0) {
+      partition.topRank = topRows.size() - numNewTopRankRows + 1;
+    } else {
+      partition.topRank = topRows.size() - numNewTopRankRows + 2;
+    }
+  }
+  return newRow;
+}
+
+template <>
+char* TopNRowNumber::processRowAboveLimit<
+    core::TopNRowNumberNode::RankFunction::kDenseRank>(
+    vector_size_t index,
+    TopRows& partition) {
+  char* newRow = nullptr;
+  // For dense_rank:
+  // i) If the row is a peer of an existing row, then it
+  // has the same rank as it. The ranks of other rows are unchanged.
+  // ii) If the row is a new value, then it is assigned a rank as per its
+  // position, and the ranks of all subsequent rows +=1. So the current top
+  // rank rows can be removed from the queue as their new rank > limit.
+  if (!partition.isDuplicate(decodedVectors_, index)) {
+    char* topRow = partition.removeTopRankRows();
+    newRow = data_->initializeRow(topRow, true /* reuse */);
+  } else {
+    newRow = data_->newRow();
+  }
+  return newRow;
+}
+
+template <>
+char* TopNRowNumber::processRowAboveLimit<
+    core::TopNRowNumberNode::RankFunction::kRowNumber>(
+    vector_size_t /*index*/,
+    TopRows& partition) {
+  // The new row < top rank, so it is added to the queue and the top rank row
+  // is popped as its row_number is > limit now.
+  auto& topRows = partition.rows;
+  char* topRow = topRows.top();
+  topRows.pop();
+  return data_->initializeRow(topRow, true /* reuse */);
+}
+
+template <core::TopNRowNumberNode::RankFunction TRank>
 void TopNRowNumber::processInputRow(vector_size_t index, TopRows& partition) {
   auto& topRows = partition.rows;
 
   char* newRow = nullptr;
-  if (topRows.size() < limit_) {
+  if (partition.topRank < limit_) {
+    // THe rows need to be added to the partition queue to accumulate to the
+    // limit needed.
     newRow = data_->newRow();
+    processRowBelowLimit<TRank>(index, partition);
   } else {
+    // The partition has now accumulated >= limit rows. So the new rows can be
+    // rejected or replace existing rows based on the order_by values.
     char* topRow = topRows.top();
-
-    if (!comparator_(decodedVectors_, index, topRow)) {
-      // Drop this input row.
+    auto result = comparator_.compare(decodedVectors_, index, topRow);
+    // The new row is higher than the top rank so far. So this row is ignored
+    // by all the functions.
+    if (result < 0) {
       return;
     }
-
-    // Replace existing row.
-    topRows.pop();
-
-    // Reuse the topRow's memory.
-    newRow = data_->initializeRow(topRow, true /* reuse */);
+    // This row has the same value as the top rank row. row_number rejects
+    // such rows, but are added to the queue for rank and dense_rank. The top
+    // rank remains unchanged.
+    if (result == 0) {
+      if (rankFunction_ == core::TopNRowNumberNode::RankFunction::kRowNumber) {
+        return;
+      }
+      newRow = data_->newRow();
+    }
+    // This row is smaller than the top rank row and should be added to the
+    // queue. Each function has its own special handling for this case.
+    if (result > 0) {
+      newRow = processRowAboveLimit<TRank>(index, partition);
+    }
   }
 
   for (auto col = 0; col < decodedVectors_.size(); ++col) {
@@ -275,6 +423,19 @@ void TopNRowNumber::processInputRow(vector_size_t index, TopRows& partition) {
   }
 
   topRows.push(newRow);
+}
+
+template <core::TopNRowNumberNode::RankFunction TRank>
+void TopNRowNumber::processInputRowLoop(vector_size_t numInput, bool doLookup) {
+  if (doLookup) {
+    for (auto i = 0; i < numInput; ++i) {
+      processInputRow<TRank>(i, partitionAt(lookup_->hits[i]));
+    }
+  } else {
+    for (auto i = 0; i < numInput; ++i) {
+      processInputRow<TRank>(i, *singlePartition_);
+    }
+  }
 }
 
 void TopNRowNumber::noMoreInput() {
@@ -318,16 +479,34 @@ void TopNRowNumber::updateEstimatedOutputRowSize() {
   }
 }
 
+vector_size_t TopNRowNumber::fixTopRank(TopRows& partition) {
+  if (rankFunction_ == core::TopNRowNumberNode::RankFunction::kRank) {
+    if (partition.topRank > limit_) {
+      partition.removeTopRankRows();
+      auto numNewTopRankRows = partition.numTopRankRows();
+      partition.topRank = partition.rows.size() - numNewTopRankRows + 1;
+    }
+  }
+
+  return partition.topRank;
+}
+
 TopNRowNumber::TopRows* TopNRowNumber::nextPartition() {
+  auto setNextRankAndPeer = [&](TopRows& partition) {
+    nextRank_ = fixTopRank(partition);
+    numPeers_ = 1;
+  };
+
   if (!table_) {
-    if (!currentPartition_) {
-      currentPartition_ = 0;
+    if (!currentPartitionNumber_) {
+      currentPartitionNumber_ = 0;
+      setNextRankAndPeer(*singlePartition_);
       return singlePartition_.get();
     }
     return nullptr;
   }
 
-  if (!currentPartition_) {
+  if (!currentPartitionNumber_) {
     numPartitions_ = table_->listAllRows(
         &partitionIt_,
         partitions_.size(),
@@ -337,44 +516,66 @@ TopNRowNumber::TopRows* TopNRowNumber::nextPartition() {
       // No more partitions.
       return nullptr;
     }
-
-    currentPartition_ = 0;
+    currentPartitionNumber_ = 0;
   } else {
-    ++currentPartition_.value();
-    if (currentPartition_ >= numPartitions_) {
-      currentPartition_.reset();
+    ++currentPartitionNumber_.value();
+    if (currentPartitionNumber_ >= numPartitions_) {
+      currentPartitionNumber_.reset();
       return nextPartition();
     }
   }
 
-  return &currentPartition();
+  auto partition = &partitionAt(partitions_[currentPartitionNumber_.value()]);
+  setNextRankAndPeer(*partition);
+  return partition;
 }
 
-TopNRowNumber::TopRows& TopNRowNumber::currentPartition() {
-  VELOX_CHECK(currentPartition_.has_value());
-
-  if (!table_) {
-    return *singlePartition_;
+template <core::TopNRowNumberNode::RankFunction TRank>
+void TopNRowNumber::computeNextRankInMemory(
+    const TopRows& partition,
+    vector_size_t outputIndex) {
+  if constexpr (TRank == core::TopNRowNumberNode::RankFunction::kRowNumber) {
+    nextRank_ -= 1;
+    return;
   }
 
-  return partitionAt(partitions_[currentPartition_.value()]);
+  // This is the logic for rank() and dense_rank().
+  // Is the next row a peer of the current one ? If yes, then the rank is
+  // unchanged, but the number of peers incremented.
+  if (comparator_.compare(outputRows_[outputIndex], partition.rows.top()) ==
+      0) {
+    numPeers_ += 1;
+    return;
+  }
+
+  // The new row is not a peer of the current one. So dense_rank drops the
+  // rank by 1, but rank drops it by the number of peers (which is then reset).
+  if constexpr (TRank == core::TopNRowNumberNode::RankFunction::kDenseRank) {
+    nextRank_ -= 1;
+  } else {
+    nextRank_ -= numPeers_;
+    numPeers_ = 1;
+  }
 }
 
+template <core::TopNRowNumberNode::RankFunction TRank>
 void TopNRowNumber::appendPartitionRows(
     TopRows& partition,
-    vector_size_t start,
-    vector_size_t size,
+    vector_size_t numRows,
     vector_size_t outputOffset,
-    FlatVector<int64_t>* rowNumbers) {
-  // Append 'size' partition rows in reverse order starting from 'start' row.
-  auto rowNumber = partition.rows.size() - start;
-  for (auto i = 0; i < size; ++i) {
-    const auto index = outputOffset + size - i - 1;
-    if (rowNumbers) {
-      rowNumbers->set(index, rowNumber--);
+    FlatVector<int64_t>* rankValues) {
+  // The partition.rows priority queue pops rows in order of reverse
+  // ranks. Output rows based on nextRank_ and update it with each row.
+  for (auto i = 0; i < numRows; ++i) {
+    auto index = outputOffset + i;
+    if (rankValues) {
+      rankValues->set(index, nextRank_);
     }
     outputRows_[index] = partition.rows.top();
     partition.rows.pop();
+    if (!partition.rows.empty()) {
+      computeNextRankInMemory<TRank>(partition, index);
+    }
   }
 }
 
@@ -390,7 +591,7 @@ RowVectorPtr TopNRowNumber::getOutput() {
       return output;
     }
 
-    // We may have input accumulated in 'data_'.
+    // There could be older rows accumulated in 'data_'.
     if (data_->numRows() > 0) {
       return getOutputFromMemory();
     }
@@ -398,7 +599,7 @@ RowVectorPtr TopNRowNumber::getOutput() {
     if (noMoreInput_) {
       finished_ = true;
     }
-
+    // There is no data to return at this moment.
     return nullptr;
   }
 
@@ -406,9 +607,11 @@ RowVectorPtr TopNRowNumber::getOutput() {
     return nullptr;
   }
 
+  // All the input data is received, so the operator can start producing
+  // output.
   RowVectorPtr output;
   if (merge_ != nullptr) {
-    output = getOutputFromSpill();
+    output = RANK_FUNCTION_DISPATCH(getOutputFromSpill, rankFunction_);
   } else {
     output = getOutputFromMemory();
   }
@@ -432,37 +635,44 @@ RowVectorPtr TopNRowNumber::getOutputFromMemory() {
   }
 
   vector_size_t offset = 0;
-  if (remainingRowsInPartition_ > 0) {
-    auto& partition = currentPartition();
-    auto start = partition.rows.size() - remainingRowsInPartition_;
-    const auto numRows =
-        std::min<vector_size_t>(outputBatchSize_, remainingRowsInPartition_);
-    appendPartitionRows(partition, start, numRows, offset, rowNumbers);
-    offset += numRows;
-    remainingRowsInPartition_ -= numRows;
-  }
-
+  // Continue to output as many remaining partitions as possible.
   while (offset < outputBatchSize_) {
-    auto* partition = nextPartition();
-    if (!partition) {
-      break;
+    // No previous partition to output (since this is the first partition).
+    if (!currentPartition_) {
+      currentPartition_ = nextPartition();
+      if (!currentPartition_) {
+        break;
+      }
     }
 
-    auto numRows = partition->rows.size();
-    if (offset + numRows > outputBatchSize_) {
-      remainingRowsInPartition_ = offset + numRows - outputBatchSize_;
-
-      // Add a subset of partition rows.
-      numRows -= remainingRowsInPartition_;
-      appendPartitionRows(*partition, 0, numRows, offset, rowNumbers);
-      offset += numRows;
+    auto numOutputRowsLeft = outputBatchSize_ - offset;
+    if (currentPartition_->rows.size() > numOutputRowsLeft) {
+      // Only a partial partition can be output in this getOutput() call.
+      // Output as many rows as possible.
+      RANK_FUNCTION_DISPATCH(
+          appendPartitionRows,
+          rankFunction_,
+          *currentPartition_,
+          numOutputRowsLeft,
+          offset,
+          rowNumbers);
+      offset += numOutputRowsLeft;
       break;
     }
 
     // Add all partition rows.
-    appendPartitionRows(*partition, 0, numRows, offset, rowNumbers);
-    offset += numRows;
-    remainingRowsInPartition_ = 0;
+    auto numPartitionRows = currentPartition_->rows.size();
+    RANK_FUNCTION_DISPATCH(
+        appendPartitionRows,
+        rankFunction_,
+        *currentPartition_,
+        numPartitionRows,
+        offset,
+        rowNumbers);
+    offset += numPartitionRows;
+
+    // Move to the next partition.
+    currentPartition_ = nextPartition();
   }
 
   if (offset == 0) {
@@ -487,13 +697,15 @@ RowVectorPtr TopNRowNumber::getOutputFromMemory() {
   return output;
 }
 
-bool TopNRowNumber::isNewPartition(
+bool TopNRowNumber::compareSpillRowColumns(
     const RowVectorPtr& output,
     vector_size_t index,
-    SpillMergeStream* next) {
+    const SpillMergeStream* next,
+    vector_size_t startColumn,
+    vector_size_t endColumn) {
   VELOX_CHECK_GT(index, 0);
 
-  for (auto i = 0; i < numPartitionKeys_; ++i) {
+  for (auto i = startColumn; i < endColumn; ++i) {
     if (!output->childAt(inputChannels_[i])
              ->equalValueAt(
                  next->current().childAt(i).get(),
@@ -505,22 +717,78 @@ bool TopNRowNumber::isNewPartition(
   return false;
 }
 
-void TopNRowNumber::setupNextOutput(
+bool TopNRowNumber::isNewPartition(
     const RowVectorPtr& output,
-    int32_t rowNumber) {
+    vector_size_t index,
+    const SpillMergeStream* next) {
+  return compareSpillRowColumns(output, index, next, 0, numPartitionKeys_);
+}
+
+bool TopNRowNumber::isNewPeer(
+    const RowVectorPtr& output,
+    vector_size_t index,
+    const SpillMergeStream* next) {
+  return compareSpillRowColumns(
+      output,
+      index,
+      next,
+      numPartitionKeys_,
+      numPartitionKeys_ + numSortingKeys_);
+}
+
+template <core::TopNRowNumberNode::RankFunction TRank>
+void TopNRowNumber::computeNextRankInSpill(
+    const RowVectorPtr& output,
+    vector_size_t index,
+    const SpillMergeStream* next) {
+  if (isNewPartition(output, index, next)) {
+    nextRank_ = 1;
+    numPeers_ = 1;
+    return;
+  }
+
+  // The rank always += 1 for row_number.
+  if constexpr (TRank == core::TopNRowNumberNode::RankFunction::kRowNumber) {
+    nextRank_ += 1;
+    return;
+  }
+
+  // The function is either rank or dense_rank.
+  // This row belongs to the same partition as the previous row. However,
+  // it should be determined if it is a peer row as well. If peer, then rank
+  // is not increased.
+  if (!isNewPeer(output, index, next)) {
+    numPeers_ += 1;
+    return;
+  }
+
+  // The row is not a peer, so increment the rank and peers accordingly.
+  if constexpr (TRank == core::TopNRowNumberNode::RankFunction::kDenseRank) {
+    nextRank_ += 1;
+    numPeers_ = 1;
+    return;
+  }
+
+  // rank function
+  nextRank_ += numPeers_;
+  numPeers_ = 1;
+}
+
+template <core::TopNRowNumberNode::RankFunction TRank>
+void TopNRowNumber::setupNextOutput(const RowVectorPtr& output) {
+  auto resetNextRankAndPeer = [this]() {
+    nextRank_ = 1;
+    numPeers_ = 1;
+  };
+
   auto* lookAhead = merge_->next();
   if (lookAhead == nullptr) {
-    nextRowNumber_ = 0;
+    resetNextRankAndPeer();
     return;
   }
 
-  if (isNewPartition(output, output->size(), lookAhead)) {
-    nextRowNumber_ = 0;
-    return;
-  }
-
-  nextRowNumber_ = rowNumber;
-  if (nextRowNumber_ < limit_) {
+  computeNextRankInSpill<TRank>(output, output->size(), lookAhead);
+  if (nextRank_ <= limit_) {
     return;
   }
 
@@ -528,16 +796,17 @@ void TopNRowNumber::setupNextOutput(
   lookAhead->pop();
   while (auto* next = merge_->next()) {
     if (isNewPartition(output, output->size(), next)) {
-      nextRowNumber_ = 0;
+      resetNextRankAndPeer();
       return;
     }
     next->pop();
   }
 
   // This partition is the last partition.
-  nextRowNumber_ = 0;
+  resetNextRankAndPeer();
 }
 
+template <core::TopNRowNumberNode::RankFunction TRank>
 RowVectorPtr TopNRowNumber::getOutputFromSpill() {
   VELOX_CHECK_NOT_NULL(merge_);
 
@@ -545,37 +814,33 @@ RowVectorPtr TopNRowNumber::getOutputFromSpill() {
   // All rows from the same partition will appear together.
   // We'll identify partition boundaries by comparing partition keys of the
   // current row with the previous row. When new partition starts, we'll reset
-  // row number to zero. Once row number reaches the 'limit_', we'll start
+  // nextRank_ and numPeers_. Once rank reaches the 'limit_', we'll start
   // dropping rows until the next partition starts.
   // We'll emit output every time we accumulate 'outputBatchSize_' rows.
-
   auto output =
       BaseVector::create<RowVector>(outputType_, outputBatchSize_, pool());
-  FlatVector<int64_t>* rowNumbers = nullptr;
+  FlatVector<int64_t>* rankValues = nullptr;
   if (generateRowNumber_) {
-    rowNumbers = output->children().back()->as<FlatVector<int64_t>>();
+    rankValues = output->children().back()->as<FlatVector<int64_t>>();
   }
 
   // Index of the next row to append to output.
   vector_size_t index = 0;
 
-  // Row number of the next row in the current partition.
-  vector_size_t rowNumber = nextRowNumber_;
-  VELOX_CHECK_LT(rowNumber, limit_);
+  VELOX_CHECK_LE(nextRank_, limit_);
   for (;;) {
     auto next = merge_->next();
     if (next == nullptr) {
       break;
     }
 
-    // Check if this row comes from a new partition.
-    if (index > 0 && isNewPartition(output, index, next)) {
-      rowNumber = 0;
+    if (index > 0) {
+      computeNextRankInSpill<TRank>(output, index, next);
     }
 
     // Copy this row to the output buffer if this partition has
     // < limit_ rows output.
-    if (rowNumber < limit_) {
+    if (nextRank_ <= limit_) {
       for (auto i = 0; i < inputChannels_.size(); ++i) {
         output->childAt(inputChannels_[i])
             ->copy(
@@ -584,12 +849,10 @@ RowVectorPtr TopNRowNumber::getOutputFromSpill() {
                 next->currentIndex(),
                 1);
       }
-      if (rowNumbers) {
-        // Row numbers start with 1.
-        rowNumbers->set(index, rowNumber + 1);
+      if (rankValues) {
+        rankValues->set(index, nextRank_);
       }
       ++index;
-      ++rowNumber;
     }
 
     // Pop this row from the spill.
@@ -600,8 +863,9 @@ RowVectorPtr TopNRowNumber::getOutputFromSpill() {
       // Prepare the next batch :
       // i) If 'limit_' is reached for this partition, then skip the rows
       // until the next partition.
-      // ii) If the next row is from a new partition, then reset rowNumber_.
-      setupNextOutput(output, rowNumber);
+      // ii) If the next row is from a new partition, then reset nextRank_.
+      setupNextOutput<TRank>(output);
+
       return output;
     }
   }
@@ -765,4 +1029,66 @@ void TopNRowNumber::setupSpiller() {
       &spillConfig_.value(),
       &spillStats_);
 }
+
+// Using the underlying vector of the priority queue for the algorithms to
+// check duplicates and count the number of top rank rows. This makes the
+// algorithms O(n). By maintaining hash-map of size of each order_by value ,
+// the algorithms can be made O(1). However, it would be memory inefficient
+// to setup the maps for each partition.
+// TODO : Use a benchmark to evaluate either approach.
+namespace {
+template <class T, class S, class C>
+S& PriorityQueueVector(std::priority_queue<T, S, C>& q) {
+  struct PrivateQueue : private std::priority_queue<T, S, C> {
+    static S& Container(std::priority_queue<T, S, C>& q) {
+      return q.*&PrivateQueue::c;
+    }
+  };
+  return PrivateQueue::Container(q);
+}
+} // namespace
+
+char* TopNRowNumber::TopRows::removeTopRankRows() {
+  VELOX_CHECK(!rows.empty());
+
+  char* topRow = rows.top();
+  rows.pop();
+
+  while (!rows.empty()) {
+    char* newTopRow = rows.top();
+    if (rowComparator.compare(topRow, newTopRow) != 0) {
+      return topRow;
+    }
+    rows.pop();
+  }
+  return topRow;
+}
+
+vector_size_t TopNRowNumber::TopRows::numTopRankRows() {
+  VELOX_CHECK(!rows.empty());
+  char* topRow = rows.top();
+  vector_size_t numRows = 0;
+  const std::vector<char*, StlAllocator<char*>> partitionRowsVector =
+      PriorityQueueVector(rows);
+  for (const char* row : partitionRowsVector) {
+    if (rowComparator.compare(topRow, row) == 0) {
+      numRows += 1;
+    }
+  }
+  return numRows;
+}
+
+bool TopNRowNumber::TopRows::isDuplicate(
+    const std::vector<DecodedVector>& decodedVectors,
+    vector_size_t index) {
+  const std::vector<char*, StlAllocator<char*>> partitionRowsVector =
+      PriorityQueueVector(rows);
+  for (const char* row : partitionRowsVector) {
+    if (rowComparator.compare(decodedVectors, index, row) == 0) {
+      return true;
+    }
+  }
+  return false;
+}
+
 } // namespace facebook::velox::exec
