@@ -251,8 +251,6 @@ class AggregationFuzzerBase {
 
   void printSignatureStats();
 
-  void logVectors(const std::vector<RowVectorPtr>& vectors);
-
   const std::unordered_map<std::string, std::shared_ptr<ResultVerifier>>
       customVerificationFunctions_;
   const std::unordered_map<std::string, std::shared_ptr<InputGenerator>>
@@ -320,15 +318,6 @@ std::vector<std::string> makeNames(size_t n);
 void persistReproInfo(
     const std::vector<AggregationFuzzerBase::PlanWithSplits>& plans,
     const std::string& basePath);
-
-// Returns a PrestoQueryRunner instance if prestoUrl is non-empty. Otherwise,
-// returns a DuckQueryRunner instance and set disabled aggregation functions
-// properly.
-std::unique_ptr<ReferenceQueryRunner> setupReferenceQueryRunner(
-    memory::MemoryPool* aggregatePool,
-    const std::string& prestoUrl,
-    const std::string& runnerName,
-    const uint32_t& reqTimeoutMs);
 
 // Returns the function name used in a WindowNode. The input `node` should be a
 // pointer to a WindowNode.

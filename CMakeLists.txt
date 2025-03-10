@@ -79,6 +79,8 @@ option(
 option(VELOX_MONO_LIBRARY "Build single unified library." OFF)
 option(ENABLE_ALL_WARNINGS "Enable -Wall and -Wextra compiler warnings." ON)
 option(VELOX_BUILD_SHARED "Build Velox as shared libraries." OFF)
+option(VELOX_SKIP_WAVE_BRANCH_KERNEL_TEST "Disable Wave branch kernel test."
+       OFF)
 # While it's possible to build both in one go we currently want to build either
 # static or shared.
 cmake_dependent_option(
@@ -138,6 +140,7 @@ option(VELOX_ENABLE_ABFS "Build Abfs Connector" OFF)
 option(VELOX_ENABLE_HDFS "Build Hdfs Connector" OFF)
 option(VELOX_ENABLE_PARQUET "Enable Parquet support" ON)
 option(VELOX_ENABLE_ARROW "Enable Arrow support" OFF)
+option(VELOX_ENABLE_GEO "Enable Geospatial support" OFF)
 option(VELOX_ENABLE_REMOTE_FUNCTIONS "Enable remote function support" OFF)
 option(VELOX_ENABLE_CCACHE "Use ccache if installed." ON)
 
@@ -203,6 +206,7 @@ if(${VELOX_BUILD_PYTHON_PACKAGE})
   set(VELOX_ENABLE_AGGREGATES ON)
   set(VELOX_ENABLE_SPARK_FUNCTIONS ON)
   set(VELOX_BUILD_RUNNER OFF)
+  set(VELOX_BUILD_TEST_UTILS ON) # required for velox_exec_test_lib
 endif()
 
 if(${VELOX_ENABLE_DUCKDB})
@@ -231,6 +235,7 @@ if(VELOX_ENABLE_CCACHE
     message(STATUS "Using ccache: ${CCACHE_FOUND}")
     set(CMAKE_C_COMPILER_LAUNCHER ${CCACHE_FOUND})
     set(CMAKE_CXX_COMPILER_LAUNCHER ${CCACHE_FOUND})
+    set(CMAKE_CUDA_COMPILER_LAUNCHER ${CCACHE_FOUND})
     # keep comments as they might matter to the compiler
     set(ENV{CCACHE_COMMENTS} "1")
   endif()
@@ -502,7 +507,7 @@ if(${VELOX_BUILD_MINIMAL_WITH_DWIO}
 
   # Locate or build protobuf.
   velox_set_source(Protobuf)
-  velox_resolve_dependency(Protobuf CONFIG 3.21.7 REQUIRED)
+  velox_resolve_dependency(Protobuf 3.21.7 REQUIRED)
   include_directories(${Protobuf_INCLUDE_DIRS})
 endif()
 
@@ -603,7 +608,7 @@ if(NOT VELOX_DISABLE_GOOGLETEST)
   velox_set_source(GTest)
   velox_resolve_dependency(GTest)
   set(VELOX_GTEST_INCUDE_DIR
-      "${gtest_SOURCE_DIR}/googletest/include"
+      "${gtest_SOURCE_DIR}/include"
       PARENT_SCOPE)
 endif()
 
@@ -633,6 +638,11 @@ endif()
 if(VELOX_ENABLE_ARROW)
   velox_set_source(Arrow)
   velox_resolve_dependency(Arrow)
+endif()
+
+if(VELOX_ENABLE_GEO)
+  velox_set_source(geos)
+  velox_resolve_dependency(geos)
 endif()
 
 add_subdirectory(velox)
