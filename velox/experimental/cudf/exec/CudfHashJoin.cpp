@@ -454,9 +454,20 @@ RowVectorPtr CudfHashJoinProbe::getOutput() {
           left_table_view.select(left_key_indices_), std::nullopt, stream);
     }
   } else if (joinNode_->isLeftJoin()) {
-    // left = probe, right = build
-    std::tie(left_join_indices, right_join_indices) = hb->left_join(
-        left_table_view.select(left_key_indices_), std::nullopt, stream);
+    if (joinNode_->filter()) {
+      std::tie(left_join_indices, right_join_indices) = cudf::mixed_left_join(
+          left_table_view.select(left_key_indices_),
+          right_table_view.select(right_key_indices_),
+          left_table_view,
+          right_table_view,
+          tree_.back(),
+          cudf::null_equality::EQUAL,
+          std::nullopt,
+          stream);
+    } else {
+      std::tie(left_join_indices, right_join_indices) = hb->left_join(
+          left_table_view.select(left_key_indices_), std::nullopt, stream);
+    }
   } else if (joinNode_->isRightJoin()) {
     std::tie(right_join_indices, left_join_indices) = cudf::left_join(
         right_table_view.select(right_key_indices_),

@@ -1025,19 +1025,17 @@ TEST_F(HashJoinTest, multipleProbeColumns) {
   };
   test("");
 
-  // TODO: Use a trivial case where the filter is always true.
+  // Trivial case where the filter is always true.
   test("t_k1>0");
 
-  // TODO: Add support for nontrivial filters.
-
   // Alternate rows pass this filter and last row of a batch fails.
-  // test("t_k1=1");
+  test("t_k1=1");
 
   // All rows fail this filter.
-  // test("t_k1=5");
+  test("t_k1=5");
 
   // All rows in the second batch pass this filter.
-  // test("t_k2 > 9");
+  test("t_k2 > 9");
 }
 
 TEST_F(HashJoinTest, multipleBuildColumns) {
