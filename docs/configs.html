@@ -235,6 +235,12 @@ run on a thread before yield. If it is zero, then it no limit.</p></td>
 trade CPU for network IO efficiency. The supported compression codecs
 are: zlib, snappy, lzo, zstd, lz4 and gzip. none means no compression.</p></td>
 </tr>
+<tr class="row-odd"><td><p>throw_exception_on_duplicate_map_keys</p></td>
+<td><p>bool</p></td>
+<td><p>false</p></td>
+<td><p>By default, if a key is found in multiple given maps, that key’s value in the resulting map comes from the last one of those maps.
+If true, throws exception when duplicate keys are found. This configuration is needed by Spark functions <cite>CreateMap</cite>, <cite>MapFromArrays</cite>, <cite>MapFromEntries</cite>, <cite>StringToMap</cite>, <cite>MapConcat</cite>, <cite>TransformKeys</cite>.</p></td>
+</tr>
 </tbody>
 </table>
 </section>
