@@ -15,6 +15,7 @@
 add_executable(
   velox_functions_spark_test
   ArithmeticTest.cpp
+  ArrayAppendTest.cpp
   ArrayFlattenTest.cpp
   ArrayGetTest.cpp
   ArrayInsertTest.cpp
@@ -22,7 +23,7 @@ add_executable(
   ArrayMinTest.cpp
   ArraySortTest.cpp
   ArrayShuffleTest.cpp
-  ArgGeneratorTest.cpp
+  ArgTypesGeneratorTest.cpp
   AtLeastNNonNullsTest.cpp
   BitwiseTest.cpp
   ComparisonsTest.cpp
@@ -33,9 +34,11 @@ add_executable(
   DecimalRoundTest.cpp
   DecimalUtilTest.cpp
   ElementAtTest.cpp
+  FromJsonTest.cpp
   GetJsonObjectTest.cpp
   HashTest.cpp
   InTest.cpp
+  JsonArrayLengthTest.cpp
   JsonObjectKeysTest.cpp
   LeastGreatestTest.cpp
   MakeDecimalTest.cpp

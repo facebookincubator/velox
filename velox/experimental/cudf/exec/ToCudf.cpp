@@ -243,6 +243,12 @@ bool CompileState::compile() {
       replace_op.push_back(std::make_unique<CudfFilterProject>(
           id, ctx, info, id_projections, filter_plan_node, project_plan_node));
       replace_op.back()->initialize();
+    } else if (auto limitOp = dynamic_cast<exec::Limit*>(oper)) {
+      auto plan_node = std::dynamic_pointer_cast<const core::LimitNode>(
+          get_plan_node(limitOp->planNodeId()));
+      VELOX_CHECK(plan_node != nullptr);
+      replace_op.push_back(std::make_unique<CudfLimit>(id, ctx, plan_node));
+      replace_op.back()->initialize()
     } else if (
         auto localPartitionOp = dynamic_cast<exec::LocalPartition*>(oper)) {
       auto plan_node =
@@ -251,12 +257,6 @@ bool CompileState::compile() {
       VELOX_CHECK(plan_node != nullptr);
       replace_op.push_back(
           std::make_unique<CudfLocalPartition>(id, ctx, plan_node));
-      replace_op.back()->initialize();
-    } else if (auto limitOp = dynamic_cast<exec::Limit*>(oper)) {
-      auto plan_node = std::dynamic_pointer_cast<const core::LimitNode>(
-          get_plan_node(limitOp->planNodeId()));
-      VELOX_CHECK(plan_node != nullptr);
-      replace_op.push_back(std::make_unique<CudfLimit>(id, ctx, plan_node));
       replace_op.back()->initialize();
     }
 
