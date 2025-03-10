@@ -84,7 +84,7 @@ void testCastToVarchar(
     // Old java (< 19) may produce longer or incorrect decimal.
     // See https://bugs.openjdk.org/browse/JDK-4511638.
     // e.g.
-    // Actual       | JDK <= 18            | JDK 19   
+    // Actual       | JDK <= 18            | JDK 19
     // 7.5371334E25 | 7.5371335E25         | 7.5371334E25  # incorrect
     // 1.0E23       | 9.999999999999999E22 | 1.0E23        # longer
     if (buggyJavaVersion) {

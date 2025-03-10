@@ -17,14 +17,12 @@ find_package(Java COMPONENTS Development)
 if(Java_Development_FOUND)
   add_custom_command(
     OUTPUT FloatGenerator.class
-    COMMAND ${Java_JAVAC_EXECUTABLE} -d ${CMAKE_CURRENT_BINARY_DIR} ${CMAKE_CURRENT_SOURCE_DIR}/FloatGenerator.java
-    DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/FloatGenerator.java
-  )
+    COMMAND ${Java_JAVAC_EXECUTABLE} -d ${CMAKE_CURRENT_BINARY_DIR}
+            ${CMAKE_CURRENT_SOURCE_DIR}/FloatGenerator.java
+    DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/FloatGenerator.java)
   add_custom_target(java_float_generator DEPENDS FloatGenerator.class)
 
-  add_executable(
-    velox_float_to_string_fuzzer
-    FloatToStringFuzzer.cpp)
+  add_executable(velox_float_to_string_fuzzer FloatToStringFuzzer.cpp)
   add_test(float_to_string_fuzzer float_to_string_fuzzer)
 
   target_link_libraries(
@@ -37,8 +35,5 @@ if(Java_Development_FOUND)
     gflags::gflags
     glog::glog)
 
-  add_dependencies(
-    velox_float_to_string_fuzzer
-    java_float_generator
-  )
+  add_dependencies(velox_float_to_string_fuzzer java_float_generator)
 endif()
