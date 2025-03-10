@@ -21,7 +21,7 @@ RUN apt update && \
             lsb-release \
             pip \
             python3
-
+            
 
 ADD scripts /velox/scripts/
 
