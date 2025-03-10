@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-#include "velox/functions/remote/server/RemoteFunctionService.h"
+#include "velox/functions/remote/server/RemoteFunctionThriftService.h"
 #include "velox/common/base/Exceptions.h"
 #include "velox/expression/Expr.h"
 #include "velox/functions/remote/if/GetSerde.h"
@@ -59,8 +59,9 @@ std::vector<core::TypedExprPtr> getExpressions(
     const std::string& functionName) {
   std::vector<core::TypedExprPtr> inputs;
   for (size_t i = 0; i < inputType->size(); ++i) {
-    inputs.push_back(std::make_shared<core::FieldAccessTypedExpr>(
-        inputType->childAt(i), inputType->nameOf(i)));
+    inputs.push_back(
+        std::make_shared<core::FieldAccessTypedExpr>(
+            inputType->childAt(i), inputType->nameOf(i)));
   }
 
   return {std::make_shared<core::CallTypedExpr>(
