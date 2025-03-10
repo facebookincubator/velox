@@ -534,8 +534,8 @@ struct DateFromUnixDateFunction {
   }
 };
 
-/// Truncates a timestamp to a specified time unit. Return null if the
-/// format is invalid, microseconds and abbreviated unit string are allowed.
+/// Truncates a timestamp to a specified time unit. Return NULL if the format is
+/// invalid. Format as abbreviated unit string and "microseconds" are allowed.
 template <typename T>
 struct DateTruncFunction {
   VELOX_DEFINE_FUNCTION_TYPES(T);

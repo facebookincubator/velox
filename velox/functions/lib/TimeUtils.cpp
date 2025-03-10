@@ -27,7 +27,7 @@ const folly::F14FastMap<std::string, int8_t> kDayOfWeekNames{
     {"wednesday", 6}};
 
 std::optional<DateTimeUnit> fromDateTimeUnitString(
-    const StringView& unitString,
+    StringView unitString,
     bool throwIfInvalid,
     bool allowMicro,
     bool allowAbbreviated) {
@@ -147,7 +147,7 @@ void adjustDateTime(std::tm& dateTime, const DateTimeUnit& unit) {
 }
 
 Timestamp truncateTimestamp(
-    const Timestamp& timestamp,
+    Timestamp timestamp,
     DateTimeUnit unit,
     const tz::TimeZone* timeZone) {
   Timestamp result;
