@@ -425,7 +425,6 @@ VectorPtr newConstant(
 
 VectorPtr newDictionary(
     const EncodedVectorCopyOptions& options,
-    const VectorPtr& source,
     const folly::Range<const BaseVector::CopyRange*>& ranges,
     DecodedVector& decodedSource,
     const VectorPtr& sourceBase) {
@@ -1048,7 +1047,7 @@ void copyImpl(
     return;
   }
   if (!decodedSource.isIdentityMapping()) {
-    target = newDictionary(options, source, ranges, decodedSource, sourceBase);
+    target = newDictionary(options, ranges, decodedSource, sourceBase);
     return;
   }
   switch (source->encoding()) {
