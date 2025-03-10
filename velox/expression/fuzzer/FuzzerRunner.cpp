@@ -15,6 +15,7 @@
  */
 
 #include "velox/expression/fuzzer/FuzzerRunner.h"
+
 #include "velox/expression/fuzzer/ExpressionFuzzer.h"
 
 DEFINE_int32(steps, 10, "Number of expressions to generate and execute.");
@@ -234,8 +235,10 @@ int FuzzerRunner::run(
     const std::unordered_map<std::string, std::shared_ptr<ExprTransformer>>&
         exprTransformers,
     const std::unordered_map<std::string, std::string>& queryConfigs,
-    const std::unordered_map<std::string, std::shared_ptr<ArgGenerator>>&
-        argGenerators,
+    const std::unordered_map<std::string, std::shared_ptr<ArgTypesGenerator>>&
+        argTypesGenerators,
+    const std::unordered_map<std::string, std::shared_ptr<ArgValuesGenerator>>&
+        argValuesGenerators,
     std::shared_ptr<exec::test::ReferenceQueryRunner> referenceQueryRunner,
     const std::shared_ptr<SpecialFormSignatureGenerator>&
         specialFormSignatureGenerator) {
@@ -244,7 +247,8 @@ int FuzzerRunner::run(
       skipFunctions,
       exprTransformers,
       queryConfigs,
-      argGenerators,
+      argTypesGenerators,
+      argValuesGenerators,
       referenceQueryRunner,
       specialFormSignatureGenerator);
   return RUN_ALL_TESTS();
@@ -257,8 +261,10 @@ void FuzzerRunner::runFromGtest(
     const std::unordered_map<std::string, std::shared_ptr<ExprTransformer>>&
         exprTransformers,
     const std::unordered_map<std::string, std::string>& queryConfigs,
-    const std::unordered_map<std::string, std::shared_ptr<ArgGenerator>>&
-        argGenerators,
+    const std::unordered_map<std::string, std::shared_ptr<ArgTypesGenerator>>&
+        argTypesGenerators,
+    const std::unordered_map<std::string, std::shared_ptr<ArgValuesGenerator>>&
+        argValuesGenerators,
     std::shared_ptr<exec::test::ReferenceQueryRunner> referenceQueryRunner,
     const std::shared_ptr<SpecialFormSignatureGenerator>&
         specialFormSignatureGenerator) {
@@ -271,6 +277,8 @@ void FuzzerRunner::runFromGtest(
   // Insert generated signatures of special forms into the signature map.
   specialFormSignatureGenerator->appendSpecialForms(
       signatures, options.expressionFuzzerOptions.specialForms);
-  ExpressionFuzzerVerifier(signatures, seed, options, argGenerators).go();
+  ExpressionFuzzerVerifier(
+      signatures, seed, options, argTypesGenerators, argValuesGenerators)
+      .go();
 }
 } // namespace facebook::velox::fuzzer

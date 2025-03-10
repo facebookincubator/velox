@@ -26,12 +26,12 @@ class ConstrainedVectorGenerator {
   ConstrainedVectorGenerator() = delete;
 
   static VectorPtr generateConstant(
-      const std::shared_ptr<AbstractInputGenerator>& customGenerator,
+      const AbstractInputGeneratorPtr& customGenerator,
       vector_size_t size,
       memory::MemoryPool* pool);
 
   static VectorPtr generateFlat(
-      const std::shared_ptr<AbstractInputGenerator>& customGenerator,
+      const AbstractInputGeneratorPtr& customGenerator,
       vector_size_t size,
       memory::MemoryPool* pool);
 };
