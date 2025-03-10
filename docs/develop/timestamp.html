@@ -140,7 +140,7 @@ for Linux.</p>
 <p>In Velox, Timezone conversions are done using std::chrono. Starting in C++20,
 std::chrono <a class="reference external" href="https://en.cppreference.com/w/cpp/chrono/time_zone">supports conversion of timestamp across timezones</a>.
 To support older versions of the C++ standard, in Velox we vendor an
-implementation of this API at <a class="reference external" href="https://github.com/facebookincubator/velox/tree/main/velox/external/date">velox/external/date/</a>.
+implementation of this API at <a class="reference external" href="https://github.com/facebookincubator/velox/tree/main/velox/external/tzdb">velox/external/tzdb/</a>.
 This class handles timezone conversions by leveraging APIs provided by the
 operating system, based on the tzdata database installed locally. If systems
 happen to have inconsistent or older versions of the tzdata database, Velox’s
