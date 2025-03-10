@@ -21,7 +21,11 @@ Miscellaneous Functions
     The ``input`` must be of row type and nested complex type is allowed.
     The subfield position is specified by ``ordinal``.
     If ``ordinal`` is negative or greater than the children size of ``input``,
-    exception is thrown.
+    exception is thrown. ::
+
+        SELECT get_struct_field(from_json('{"a": 1, "b": [1, 2, 3]}'), 0); -- 1
+        SELECT get_struct_field(from_json('{"a": 1, "b": [1, 2, 3]}'), 1); -- array(1,2,3)
+        SELECT get_struct_field(from_json('{"a": 1, "b": [1, 2, 3]}'), 2); -- throws exception
 
 .. spark:function:: monotonically_increasing_id() -> bigint
 
