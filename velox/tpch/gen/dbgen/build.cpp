@@ -87,13 +87,12 @@ static void gen_phone(DSS_HUGE ind, char* target, seed_t* seed) {
   RANDOM(exchg, 100, 999, seed);
   RANDOM(number, 1000, 9999, seed);
 
-  std::string formatted = fmt::format(
-      "{:02d}-{:03d}-{:03d}-{:04d}",
-      static_cast<int>(10 + (ind % NATIONS_MAX)),
-      static_cast<int>(acode),
-      static_cast<int>(exchg),
-      static_cast<int>(number));
-  std::strncpy(target, formatted.c_str(), sizeof(target) - 1);
+  std::string phone = fmt::format("{}-{:03d}-{:03d}-{:04d}",
+                                    10 + (ind % NATIONS_MAX),
+                                    static_cast<int>(acode),
+                                    static_cast<int>(exchg),
+                                    static_cast<int>(number));
+  std::strcpy(target, phone.c_str());
 
   return;
 }
