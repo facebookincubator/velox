@@ -342,6 +342,8 @@ CudfHashJoinProbe::CudfHashJoinProbe(
     // in whole tables
 
     // create ast tree
+    std::vector<PrecomputeInstruction> right_precompute_instructions;
+    std::vector<PrecomputeInstruction> left_precompute_instructions;
     if (joinNode_->isRightSemiFilterJoin()) {
       create_ast_tree(
           exprs.exprs()[0],
@@ -349,8 +351,8 @@ CudfHashJoinProbe::CudfHashJoinProbe(
           scalars_,
           buildType,
           probeType,
-          right_precompute_instructions_,
-          left_precompute_instructions_);
+          right_precompute_instructions,
+          left_precompute_instructions);
     } else {
       create_ast_tree(
           exprs.exprs()[0],
@@ -358,8 +360,12 @@ CudfHashJoinProbe::CudfHashJoinProbe(
           scalars_,
           probeType,
           buildType,
-          left_precompute_instructions_,
-          right_precompute_instructions_);
+          left_precompute_instructions,
+          right_precompute_instructions);
+    }
+    if (left_precompute_instructions.size() > 0 ||
+        right_precompute_instructions.size() > 0) {
+      VELOX_NYI("Filters that require precomputation are not yet supported");
     }
   }
 }
@@ -419,29 +425,6 @@ RowVectorPtr CudfHashJoinProbe::getOutput() {
 
   auto left_table_view = left_table->view();
   auto right_table_view = right_table->view();
-
-  // // TODO (dm): Check if releasing the tables affects the table views we use
-  // // later in the call
-  // auto left_input_cols = left_table->release();
-
-  // // TODO (dm): refactor
-  // // right table is precomputed only on first call to probe side. Make it so
-  // // that right table is precomputed on build side.
-  // if (joinNode_->filter()) {
-  //   addPrecomputedColumns(
-  //       left_input_cols, left_precompute_instructions_, scalars_, stream);
-  //   if (!right_precomputed_) {
-  //     auto right_input_cols = right_table->release();
-  //     addPrecomputedColumns(
-  //         right_input_cols, right_precompute_instructions_, scalars_,
-  //         stream);
-  //     right_table =
-  //     std::make_unique<cudf::table>(std::move(right_input_cols));
-  //     right_precomputed_ = true;
-  //   }
-  // }
-  // // expression cols need to be reassembled into the table views
-  // cudf::table left_table_for_exprs(std::move(left_input_cols));
 
   if (joinNode_->isInnerJoin()) {
     // left = probe, right = build

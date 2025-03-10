@@ -106,8 +106,6 @@ class CudfHashJoinProbe : public exec::Operator, public NvtxHelper {
 
   // Filter related members
   cudf::ast::tree tree_;
-  std::vector<PrecomputeInstruction> left_precompute_instructions_;
-  std::vector<PrecomputeInstruction> right_precompute_instructions_;
   std::vector<std::unique_ptr<cudf::scalar>> scalars_;
 
   bool right_precomputed_{false};
