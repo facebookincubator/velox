@@ -189,9 +189,20 @@ void CudfHashJoinBuild::noMoreInput() {
         buildType->getChildIdx(rightKeys[i]->name()));
   }
 
-  auto hashObject = std::make_shared<cudf::hash_join>(
-      tbl->view().select(build_key_indices), cudf::null_equality::EQUAL);
-  VELOX_CHECK_NOT_NULL(hashObject);
+  // Only need to construct hash_join object if it's an inner join or left join
+  // and doesn't have a filter. All other cases use a standalone function in
+  // cudf
+  bool buildHashJoin = (joinNode_->isInnerJoin() || joinNode_->isLeftJoin()) &&
+      !joinNode_->filter();
+  auto hashObject = (buildHashJoin) ? std::make_shared<cudf::hash_join>(
+                                          tbl->view().select(build_key_indices),
+                                          cudf::null_equality::EQUAL,
+                                          stream)
+                                    : nullptr;
+  if (buildHashJoin) {
+    VELOX_CHECK_NOT_NULL(hashObject);
+  }
+
   if (cudfDebugEnabled()) {
     if (hashObject != nullptr) {
       printf("hashObject is not nullptr %p\n", hashObject.get());
@@ -324,9 +335,6 @@ CudfHashJoinProbe::CudfHashJoinProbe(
     exec::ExprSet exprs({joinNode_->filter()}, operatorCtx_->execCtx());
     VELOX_CHECK_EQ(exprs.exprs().size(), 1);
 
-    // TODO (dm): refactor. We want to avoid any work done in hash_join object
-    // creation when using mixed join.
-
     // We don't need to get tables that contain conditional comparison columns
     // We'll pass the entire table. The ast will handle finding the required
     // columns. This is required because we build the ast with whole row schema
@@ -393,7 +401,6 @@ RowVectorPtr CudfHashJoinProbe::getOutput() {
   auto& right_table = hashObject_.value().first;
   auto& hb = hashObject_.value().second;
   VELOX_CHECK_NOT_NULL(right_table);
-  VELOX_CHECK_NOT_NULL(hb);
   if (cudfDebugEnabled()) {
     if (right_table != nullptr)
       printf(
@@ -437,7 +444,6 @@ RowVectorPtr CudfHashJoinProbe::getOutput() {
   // cudf::table left_table_for_exprs(std::move(left_input_cols));
 
   if (joinNode_->isInnerJoin()) {
-    // TODO filter check inside.
     // left = probe, right = build
     if (joinNode_->filter()) {
       std::tie(left_join_indices, right_join_indices) = mixed_inner_join(
@@ -450,6 +456,7 @@ RowVectorPtr CudfHashJoinProbe::getOutput() {
           std::nullopt,
           stream);
     } else {
+      VELOX_CHECK_NOT_NULL(hb);
       std::tie(left_join_indices, right_join_indices) = hb->inner_join(
           left_table_view.select(left_key_indices_), std::nullopt, stream);
     }
@@ -465,6 +472,7 @@ RowVectorPtr CudfHashJoinProbe::getOutput() {
           std::nullopt,
           stream);
     } else {
+      VELOX_CHECK_NOT_NULL(hb);
       std::tie(left_join_indices, right_join_indices) = hb->left_join(
           left_table_view.select(left_key_indices_), std::nullopt, stream);
     }
