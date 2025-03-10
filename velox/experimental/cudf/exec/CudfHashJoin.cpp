@@ -484,12 +484,24 @@ RowVectorPtr CudfHashJoinProbe::getOutput() {
           cudf::get_current_device_resource_ref());
     }
   } else if (joinNode_->isLeftSemiFilterJoin()) {
-    left_join_indices = cudf::left_semi_join(
-        left_table_view.select(left_key_indices_),
-        right_table_view.select(right_key_indices_),
-        cudf::null_equality::EQUAL,
-        stream,
-        cudf::get_current_device_resource_ref());
+    if (joinNode_->filter()) {
+      left_join_indices = cudf::mixed_left_semi_join(
+          left_table_view.select(left_key_indices_),
+          right_table_view.select(right_key_indices_),
+          left_table_view,
+          right_table_view,
+          tree_.back(),
+          cudf::null_equality::EQUAL,
+          stream,
+          cudf::get_current_device_resource_ref());
+    } else {
+      left_join_indices = cudf::left_semi_join(
+          left_table_view.select(left_key_indices_),
+          right_table_view.select(right_key_indices_),
+          cudf::null_equality::EQUAL,
+          stream,
+          cudf::get_current_device_resource_ref());
+    }
   } else if (joinNode_->isRightSemiFilterJoin()) {
     if (joinNode_->filter()) {
       right_join_indices = cudf::mixed_left_semi_join(

@@ -1140,7 +1140,7 @@ TEST_F(HashJoinTest, filter) {
       .run();
 }
 
-TEST_F(HashJoinTest, rightSemiJoin) {
+TEST_F(HashJoinTest, SemiJoin) {
   // Build the identical left and right vectors to generate large join
   // outputs.
   std::vector<RowVectorPtr> probeVectors =
@@ -1159,20 +1159,39 @@ TEST_F(HashJoinTest, rightSemiJoin) {
              makeFlatVector<int32_t>(2048, [](auto row) { return row; })});
       });
 
-  HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
-      .numDrivers(numDrivers_)
-      .checkSpillStats(false)
-      .probeKeys({"t0"})
-      .probeVectors(std::move(probeVectors))
-      .buildKeys({"u0"})
-      .buildVectors(std::move(buildVectors))
-      .joinType(core::JoinType::kRightSemiFilter)
-      .joinOutputLayout({"u1"})
-      .referenceQuery("SELECT u.u1 FROM u WHERE u.u0 IN (SELECT t0 FROM t)")
-      .run();
+  {
+    auto testProbeVectors = probeVectors;
+    auto testBuildVectors = buildVectors;
+    HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
+        .numDrivers(numDrivers_)
+        .checkSpillStats(false)
+        .probeKeys({"t0"})
+        .probeVectors(std::move(testProbeVectors))
+        .buildKeys({"u0"})
+        .buildVectors(std::move(testBuildVectors))
+        .joinType(core::JoinType::kLeftSemiFilter)
+        .joinOutputLayout({"t1"})
+        .referenceQuery("SELECT t.t1 FROM t WHERE t.t0 IN (SELECT u0 FROM u)")
+        .run();
+  }
+  {
+    auto testProbeVectors = probeVectors;
+    auto testBuildVectors = buildVectors;
+    HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
+        .numDrivers(numDrivers_)
+        .checkSpillStats(false)
+        .probeKeys({"t0"})
+        .probeVectors(std::move(testProbeVectors))
+        .buildKeys({"u0"})
+        .buildVectors(std::move(testBuildVectors))
+        .joinType(core::JoinType::kRightSemiFilter)
+        .joinOutputLayout({"u1"})
+        .referenceQuery("SELECT u.u1 FROM u WHERE u.u0 IN (SELECT t0 FROM t)")
+        .run();
+  }
 }
 
-TEST_F(HashJoinTest, rightSemiJoinFilter) {
+TEST_F(HashJoinTest, SemiJoinFilter) {
   // Build the identical left and right vectors to generate large join
   // outputs.
   std::vector<RowVectorPtr> probeVectors =
@@ -1191,19 +1210,40 @@ TEST_F(HashJoinTest, rightSemiJoinFilter) {
              makeFlatVector<int32_t>(2048, [](auto row) { return row; })});
       });
 
-  HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
-      .numDrivers(numDrivers_)
-      .checkSpillStats(false)
-      .probeKeys({"t0"})
-      .probeVectors(std::move(probeVectors))
-      .buildKeys({"u0"})
-      .buildVectors(std::move(buildVectors))
-      .joinType(core::JoinType::kRightSemiFilter)
-      .joinFilter("u0 > 1024")
-      .joinOutputLayout({"u1"})
-      .referenceQuery(
-          "SELECT u.u1 FROM u WHERE u.u0 IN (SELECT t0 FROM t) AND u.u0 > 1024")
-      .run();
+  {
+    auto testProbeVectors = probeVectors;
+    auto testBuildVectors = buildVectors;
+    HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
+        .numDrivers(numDrivers_)
+        .checkSpillStats(false)
+        .probeKeys({"t0"})
+        .probeVectors(std::move(testProbeVectors))
+        .buildKeys({"u0"})
+        .buildVectors(std::move(testBuildVectors))
+        .joinType(core::JoinType::kLeftSemiFilter)
+        .joinFilter("t0 > 1024")
+        .joinOutputLayout({"t1"})
+        .referenceQuery(
+            "SELECT t.t1 FROM t WHERE t.t0 IN (SELECT u0 FROM u) AND t.t0 > 1024")
+        .run();
+  }
+  {
+    auto testProbeVectors = probeVectors;
+    auto testBuildVectors = buildVectors;
+    HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
+        .numDrivers(numDrivers_)
+        .checkSpillStats(false)
+        .probeKeys({"t0"})
+        .probeVectors(std::move(testProbeVectors))
+        .buildKeys({"u0"})
+        .buildVectors(std::move(testBuildVectors))
+        .joinType(core::JoinType::kRightSemiFilter)
+        .joinFilter("u0 > 1024")
+        .joinOutputLayout({"u1"})
+        .referenceQuery(
+            "SELECT u.u1 FROM u WHERE u.u0 IN (SELECT t0 FROM t) AND u.u0 > 1024")
+        .run();
+  }
 }
 
 TEST_F(HashJoinTest, AntiJoin) {
