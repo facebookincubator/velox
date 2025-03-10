@@ -102,7 +102,7 @@ Valid examples
 From timestamp
 ^^^^^^^^^^^^^
 
-Casting a timestamp to an integer returns the number of seconds since the epoch (1970-01-01 00:00:00 UTC).
+Casting a timestamp from microseconds to seconds by dividing by the number of microseconds in a second and rounding down to the nearest second since the epoch (1970-01-01 00:00:00 UTC).
 
 Valid examples
 
