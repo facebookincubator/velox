@@ -1206,6 +1206,83 @@ TEST_F(HashJoinTest, rightSemiJoinFilter) {
       .run();
 }
 
+TEST_F(HashJoinTest, AntiJoin) {
+  std::vector<RowVectorPtr> probeVectors =
+      makeBatches(5, [&](uint32_t /*unused*/) {
+        return makeRowVector({
+            makeFlatVector<int32_t>(1'000, [](auto row) { return row % 11; }),
+            makeFlatVector<int32_t>(1'000, [](auto row) { return row; }),
+        });
+      });
+
+  std::vector<RowVectorPtr> buildVectors =
+      makeBatches(5, [&](uint32_t /*unused*/) {
+        return makeRowVector({
+            makeFlatVector<int32_t>(1'234, [](auto row) { return row % 5; }),
+        });
+      });
+
+  {
+    auto testProbeVectors = probeVectors;
+    auto testBuildVectors = buildVectors;
+    HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
+        .numDrivers(numDrivers_)
+        .probeKeys({"c0"})
+        .probeVectors(std::move(testProbeVectors))
+        .buildKeys({"c0"})
+        .buildVectors(std::move(testBuildVectors))
+        .joinType(core::JoinType::kAnti)
+        .nullAware(true)
+        .joinOutputLayout({"c1"})
+        .referenceQuery(
+            "SELECT t.c1 FROM t WHERE t.c0 NOT IN (SELECT c0 FROM u)")
+        .checkSpillStats(false)
+        .run();
+  }
+}
+
+TEST_F(HashJoinTest, AntiJoinWithFilter) {
+  auto probeVectors = makeBatches(4, [&](int32_t /*unused*/) {
+    return makeRowVector(
+        {"t0", "t1"},
+        {
+            makeFlatVector<int32_t>({1, 2}),
+            makeFlatVector<int32_t>({0, 1, 2}),
+        });
+  });
+  auto buildVectors = makeBatches(4, [&](int32_t /*unused*/) {
+    return makeRowVector(
+        {"u0", "u1"},
+        {
+            makeFlatVector<int32_t>({2, 3}),
+            makeFlatVector<int32_t>({0, 2, 3}),
+        });
+  });
+
+  std::vector<std::string> filters({"u1 > t1", "u1 * t1 > 0"});
+  for (const std::string& filter : filters) {
+    const auto referenceSql = fmt::format(
+        "SELECT t.* FROM t WHERE t0 NOT IN (SELECT u0 FROM u WHERE {})",
+        filter);
+
+    auto testProbeVectors = probeVectors;
+    auto testBuildVectors = buildVectors;
+    HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
+        .numDrivers(numDrivers_)
+        .probeKeys({"t0"})
+        .probeVectors(std::move(testProbeVectors))
+        .buildKeys({"u0"})
+        .buildVectors(std::move(testBuildVectors))
+        .joinType(core::JoinType::kAnti)
+        .nullAware(true)
+        .joinFilter(filter)
+        .joinOutputLayout({"t0", "t1"})
+        .referenceQuery(referenceSql)
+        .checkSpillStats(false)
+        .run();
+  }
+}
+
 TEST_F(HashJoinTest, filterWithPrecompute) {
   // Left side keys are [0, 1, 2,..10].
   // Use 3-rd column as row number to allow for asserting the order of
