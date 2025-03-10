@@ -176,9 +176,18 @@ void registerArrayFunctions(const std::string& prefix) {
       widthBucketArraySignature(),
       makeWidthBucketArray);
 
-  REGISTER_SCALAR_FUNCTIONS(registerArrayMinMaxFunctions, prefix);
+  REGISTER_NUMERIC_FUNCTIONS(registerArrayMinMaxFunctions, prefix);
+  registerArrayMinMaxFunctions<bool>(prefix);
+  registerArrayMinMaxFunctions<Varchar>(prefix);
+  registerArrayMinMaxFunctions<Timestamp>(prefix);
+  registerArrayMinMaxFunctions<Date>(prefix);
   registerArrayMinMaxFunctions<Orderable<T1>>(prefix);
-  REGISTER_SCALAR_FUNCTIONS(registerArrayJoinFunctions, prefix);
+
+  REGISTER_NUMERIC_FUNCTIONS(registerArrayJoinFunctions, prefix);
+  registerArrayJoinFunctions<bool>(prefix);
+  registerArrayJoinFunctions<Varchar>(prefix);
+  registerArrayJoinFunctions<Timestamp>(prefix);
+  registerArrayJoinFunctions<Date>(prefix);
   registerArrayJoinFunctions<Json>(prefix);
 
   registerFunction<ArrayAverageFunction, double, Array<double>>(
@@ -201,13 +210,13 @@ void registerArrayFunctions(const std::string& prefix) {
       Varchar>({prefix + "array_remove"});
   registerArrayRemoveFunctions<Generic<T1>>(prefix);
 
-  REGISTER_SCALAR_FUNCTIONS(registerArrayRemoveFunctions, prefix);
   REGISTER_SCALAR_FUNCTIONS_WITHOUT_VARCHAR(registerArrayTrimFunctions, prefix);
   registerFunction<
       ArrayTrimFunctionString,
       Array<Varchar>,
       Array<Varchar>,
       int64_t>({prefix + "trim_array"});
+
   REGISTER_NUMERIC_FUNCTIONS(registerArrayTopNFunction, prefix);
   registerArrayTopNFunction<Varchar>(prefix);
   registerArrayTopNFunction<Timestamp>(prefix);
