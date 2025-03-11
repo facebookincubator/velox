@@ -74,7 +74,7 @@ class HiveConfig {
   static constexpr const char* kOrcUseColumnNamesSession =
       "hive_orc_use_column_names";
 
-  /// Maps nested column using names if kOrcUseColumnNames disabled.
+  /// Maps nested field using names. And map top-level field using indices.
   static constexpr const char* kOrcUseNestedColumnNames =
       "hive.orc.use-nested-column-names";
   static constexpr const char* kOrcUseNestedColumnNamesSession =
