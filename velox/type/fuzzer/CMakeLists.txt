@@ -27,7 +27,6 @@ if(Java_Development_FOUND)
 
   target_link_libraries(
     velox_float_to_string_fuzzer
-    Boost::headers
     fmt::fmt
     velox_type
     GTest::gtest

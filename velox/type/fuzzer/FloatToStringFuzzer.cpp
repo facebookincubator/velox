@@ -20,50 +20,53 @@
 #include <iostream>
 #include <tuple>
 #include <vector>
-#include "boost/process.hpp"
 #include "fmt/core.h"
 #include "gtest/gtest.h"
-
-namespace bp = boost::process;
 
 namespace {
 template <typename T>
 std::tuple<bool, std::vector<T>, std::vector<std::string>>
 generateFloatTestCases(int count) {
-  auto workDir = std::filesystem::canonical("/proc/self/exe").parent_path();
-  bp::ipstream pipeStream;
-  bp::child c(
-      fmt::format(
-          "java FloatGenerator {} {}",
-          std::is_same_v<T, double> ? "double" : "float",
-          count),
-      bp::start_dir(workDir.string()),
-      bp::std_out > pipeStream);
+  auto javaClassPath =
+      std::filesystem::canonical("/proc/self/exe").parent_path();
+  auto cmd = fmt::format(
+      "java -cp {} FloatGenerator {} {}",
+      javaClassPath,
+      std::is_same_v<T, double> ? "double" : "float",
+      count);
 
-  std::string buggyJavaVersion;
+  // popen and read output
+  std::unique_ptr<FILE, decltype(&pclose)> pipe(popen(cmd.data(), "r"), pclose);
+  char buf[128];
+  auto tryReadLine = [&](const char* exception) {
+    if (std::fgets(buf, sizeof(buf), pipe.get()) == nullptr) {
+      throw std::runtime_error(exception);
+    }
+    return std::string_view(buf, strlen(buf) - 1);
+  };
+
+  // read buggyJavaVersion
+  bool buggyJavaVersion = tryReadLine("read buggyJavaVersion") == "true";
+
+  // read values and expect results
   std::vector<T> values;
   std::vector<std::string> expects;
   values.reserve(count);
   expects.reserve(count);
+  for (int i = 0; i < count; i++) {
+    expects.emplace_back(tryReadLine("read expected result"));
 
-  pipeStream >> buggyJavaVersion;
-
-  std::conditional_t<std::is_same_v<T, double>, int64_t, int32_t> carrierInt;
-  std::string expect;
-
-  while (pipeStream >> expect >> carrierInt) {
-    values.emplace_back(reinterpret_cast<const T&>(carrierInt));
-    expects.emplace_back(expect);
+    std::string carrierIntStr(tryReadLine("read value"));
+    if constexpr (std::is_same_v<T, double>) {
+      auto carrierInt = std::stol(carrierIntStr);
+      values.emplace_back(reinterpret_cast<const T&>(carrierInt));
+    } else {
+      auto carrierInt = std::stoi(carrierIntStr);
+      values.emplace_back(reinterpret_cast<const T&>(carrierInt));
+    }
   }
 
-  c.wait();
-  int result = c.exit_code();
-  if (result != 0) {
-    throw std::runtime_error(
-        fmt::format("Process exited with code: {}", result));
-  }
-
-  return {buggyJavaVersion == "true", values, expects};
+  return {buggyJavaVersion, values, expects};
 }
 
 template <typename T>
