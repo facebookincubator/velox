@@ -182,6 +182,26 @@ TEST_F(S3FileSystemTest, logLevel) {
   checkLogLevelName("INFO");
 }
 
+TEST_F(S3FileSystemTest, logPrefix) {
+  // From aws-cpp-sdk-core/include/aws/core/Aws.h .
+  std::string_view kDefaultPrefix = "aws_sdk_";
+  std::unordered_map<std::string, std::string> config;
+  auto checkLogPrefix = [&config](std::string_view expected) {
+    auto s3Config =
+        std::make_shared<const config::ConfigBase>(std::move(config));
+    filesystems::S3FileSystem s3fs("", s3Config);
+    EXPECT_EQ(s3fs.getLogPrefix(), expected);
+  };
+
+  // Test is configured with the default.
+  checkLogPrefix(kDefaultPrefix);
+
+  // S3 log location is set once during initialization.
+  // It does not change with a new config.
+  config["hive.s3.log-location"] = "/home/foobar";
+  checkLogPrefix(kDefaultPrefix);
+}
+
 TEST_F(S3FileSystemTest, writeFileAndRead) {
   const auto bucketName = "writedata";
   const auto file = "test.txt";
