@@ -23,12 +23,7 @@
 #include "velox/exec/Operator.h"
 #include "velox/exec/OrderBy.h"
 #include "velox/experimental/cudf/exec/CudfConversion.h"
-#include "velox/experimental/cudf/exec/CudfFilterProject.h"
-#include "velox/experimental/cudf/exec/CudfHashAggregation.h"
-#include "velox/experimental/cudf/exec/CudfHashJoin.h"
-#include "velox/experimental/cudf/exec/CudfLocalPartition.h"
 #include "velox/experimental/cudf/exec/CudfOrderBy.h"
-#include "velox/experimental/cudf/exec/ExpressionEvaluator.h"
 #include "velox/experimental/cudf/exec/Utilities.h"
 
 #include <cudf/detail/nvtx/ranges.hpp>
@@ -232,11 +227,6 @@ void registerCudf() {
   CUDF_FUNC_RANGE();
   cudaFree(0); // to init context.
 
-  if (cudfDebugEnabled()) {
-    std::cout << "Registering CudfHashJoinBridgeTranslator" << std::endl;
-  }
-  exec::Operator::registerOperator(
-      std::make_unique<CudfHashJoinBridgeTranslator>());
   if (cudfDebugEnabled()) {
     std::cout << "Registering cudfDriverAdapter" << std::endl;
   }
