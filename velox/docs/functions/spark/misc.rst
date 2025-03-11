@@ -23,9 +23,8 @@ Miscellaneous Functions
     If ``ordinal`` is negative or greater than the children size of ``input``,
     exception is thrown. ::
 
-        SELECT get_struct_field(from_json('{"a": 1, "b": [1, 2, 3]}'), 0); -- 1
-        SELECT get_struct_field(from_json('{"a": 1, "b": [1, 2, 3]}'), 1); -- array(1,2,3)
-        SELECT get_struct_field(from_json('{"a": 1, "b": [1, 2, 3]}'), 2); -- throws exception
+        SELECT from_json('{"a": 1, "b": [1, 2, 3]}', 'a INT, b ARRAY<INT>').a; -- 1
+        SELECT from_json('{"a": 1, "b": [1, 2, 3]}', 'a INT, b ARRAY<INT>').b; -- array(1,2,3)
 
 .. spark:function:: monotonically_increasing_id() -> bigint
 
