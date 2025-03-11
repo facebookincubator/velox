@@ -83,43 +83,9 @@ bool CompileState::compile() {
     return *it;
   };
 
-  auto is_filter_project_supported = [](const exec::Operator* op) {
-    if (auto filter_project_op = dynamic_cast<const exec::FilterProject*>(op)) {
-      auto info = filter_project_op->exprsAndProjection();
-      return !info.hasFilter &&
-          ExpressionEvaluator::can_be_evaluated(info.exprs->exprs());
-    }
-    return false;
+  auto is_supported_gpu_operator = [](const exec::Operator* op) {
+    return is_any_of<exec::OrderBy>(op);
   };
-
-  auto is_join_supported = [get_plan_node](const exec::Operator* op) {
-    if (!is_any_of<exec::HashBuild, exec::HashProbe>(op)) {
-      return false;
-    }
-    auto plan_node = std::dynamic_pointer_cast<const core::HashJoinNode>(
-        get_plan_node(op->planNodeId()));
-    if (!plan_node) {
-      return false;
-    }
-    if (!plan_node->isInnerJoin()) {
-      return false;
-    }
-    if (plan_node->filter() != nullptr) {
-      return false;
-    }
-    return true;
-  };
-
-  auto is_supported_gpu_operator =
-      [is_filter_project_supported,
-       is_join_supported](const exec::Operator* op) {
-        return is_any_of<
-                   exec::OrderBy,
-                   exec::HashAggregation,
-                   exec::LocalPartition,
-                   exec::LocalExchange>(op) ||
-            is_filter_project_supported(op) || is_join_supported(op);
-      };
 
   std::vector<bool> is_supported_gpu_operators(operators.size());
   std::transform(
@@ -127,20 +93,13 @@ bool CompileState::compile() {
       operators.end(),
       is_supported_gpu_operators.begin(),
       is_supported_gpu_operator);
-  auto accepts_gpu_input = [is_filter_project_supported,
-                            is_join_supported](const exec::Operator* op) {
-    return is_any_of<
-               exec::OrderBy,
-               exec::HashAggregation,
-               exec::LocalPartition>(op) ||
-        is_filter_project_supported(op) || is_join_supported(op);
+
+  auto accepts_gpu_input = [](const exec::Operator* op) {
+    return is_any_of<exec::OrderBy>(op);
   };
-  auto produces_gpu_output = [is_filter_project_supported,
-                              is_join_supported](const exec::Operator* op) {
-    return is_any_of<exec::OrderBy, exec::HashAggregation, exec::LocalExchange>(
-               op) ||
-        is_filter_project_supported(op) ||
-        (is_any_of<exec::HashProbe>(op) && is_join_supported(op));
+
+  auto produces_gpu_output = [](const exec::Operator* op) {
+    return is_any_of<exec::OrderBy>(op);
   };
 
   int32_t operatorsOffset = 0;
@@ -166,28 +125,7 @@ bool CompileState::compile() {
       replace_op.back()->initialize();
     }
 
-    // This is used to denote if the current operator is kept or replaced.
-    auto keep_operator = 0;
-    if (is_join_supported(oper)) {
-      if (auto joinBuildOp = dynamic_cast<exec::HashBuild*>(oper)) {
-        auto plan_node = std::dynamic_pointer_cast<const core::HashJoinNode>(
-            get_plan_node(joinBuildOp->planNodeId()));
-        VELOX_CHECK(plan_node != nullptr);
-        // From-Velox (optional)
-        replace_op.push_back(
-            std::make_unique<CudfHashJoinBuild>(id, ctx, plan_node));
-        replace_op.back()->initialize();
-      } else if (auto joinProbeOp = dynamic_cast<exec::HashProbe*>(oper)) {
-        auto plan_node = std::dynamic_pointer_cast<const core::HashJoinNode>(
-            get_plan_node(joinProbeOp->planNodeId()));
-        VELOX_CHECK(plan_node != nullptr);
-        // From-Velox (optional)
-        replace_op.push_back(
-            std::make_unique<CudfHashJoinProbe>(id, ctx, plan_node));
-        replace_op.back()->initialize();
-        // To-Velox (optional)
-      }
-    } else if (auto orderByOp = dynamic_cast<exec::OrderBy*>(oper)) {
+    if (auto orderByOp = dynamic_cast<exec::OrderBy*>(oper)) {
       auto id = orderByOp->operatorId();
       auto plan_node = std::dynamic_pointer_cast<const core::OrderByNode>(
           get_plan_node(orderByOp->planNodeId()));
@@ -196,34 +134,6 @@ bool CompileState::compile() {
       replace_op.push_back(std::make_unique<CudfOrderBy>(id, ctx, plan_node));
       replace_op.back()->initialize();
       // To-velox (optional)
-    } else if (auto hashAggOp = dynamic_cast<exec::HashAggregation*>(oper)) {
-      auto plan_node = std::dynamic_pointer_cast<const core::AggregationNode>(
-          get_plan_node(hashAggOp->planNodeId()));
-      VELOX_CHECK(plan_node != nullptr);
-      replace_op.push_back(
-          std::make_unique<CudfHashAggregation>(id, ctx, plan_node));
-      replace_op.back()->initialize();
-    } else if (is_filter_project_supported(oper)) {
-      auto filterProjectOp = dynamic_cast<exec::FilterProject*>(oper);
-      auto info = filterProjectOp->exprsAndProjection();
-      auto& id_projections = filterProjectOp->identityProjections();
-      auto plan_node = std::dynamic_pointer_cast<const core::ProjectNode>(
-          get_plan_node(filterProjectOp->planNodeId()));
-      // If filter doesn't exist then project should definitely exist so this
-      // should never hit
-      VELOX_CHECK(plan_node != nullptr);
-      replace_op.push_back(std::make_unique<CudfFilterProject>(
-          id, ctx, info, id_projections, nullptr, plan_node));
-      replace_op.back()->initialize();
-    } else if (
-        auto localPartitionOp = dynamic_cast<exec::LocalPartition*>(oper)) {
-      auto plan_node =
-          std::dynamic_pointer_cast<const core::LocalPartitionNode>(
-              get_plan_node(localPartitionOp->planNodeId()));
-      VELOX_CHECK(plan_node != nullptr);
-      replace_op.push_back(
-          std::make_unique<CudfLocalPartition>(id, ctx, plan_node));
-      replace_op.back()->initialize();
     }
 
     if (next_operator_is_not_gpu and produces_gpu_output(oper)) {
@@ -234,11 +144,10 @@ bool CompileState::compile() {
     }
 
     if (not replace_op.empty()) {
-      operatorsOffset +=
-          replace_op.size() - 1 + keep_operator; // Check this "- 1"
+      operatorsOffset += replace_op.size() - 1;
       [[maybe_unused]] auto replaced = driverFactory_.replaceOperators(
           driver_,
-          replacingOperatorIndex + keep_operator,
+          replacingOperatorIndex,
           replacingOperatorIndex + 1,
           std::move(replace_op));
       replacements_made = true;
