@@ -64,9 +64,8 @@ jobs:
         run: |
             source velox/scripts/setup-ubuntu.sh 
             install_apt_deps 
-            export SUDO=" "
             run_and_time install_fmt
-            run_and_time install_protobuf
+            # run_and_time install_protobuf
             run_and_time install_boost
             run_and_time install_folly
             run_and_time install_stemmer
