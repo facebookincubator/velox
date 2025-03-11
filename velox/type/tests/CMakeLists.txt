@@ -131,7 +131,5 @@ if(VELOX_ENABLE_BENCHMARKS)
     Folly::folly
     Folly::follybenchmark
     GTest::gtest
-    GTest::gtest_main
-    gflags::gflags
-    glog::glog)
+    GTest::gtest_main)
 endif()

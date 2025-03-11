@@ -30,9 +30,7 @@ if(Java_Development_FOUND)
     fmt::fmt
     velox_type
     GTest::gtest
-    GTest::gtest_main
-    gflags::gflags
-    glog::glog)
+    GTest::gtest_main)
 
   add_dependencies(velox_float_to_string_fuzzer java_float_generator)
 endif()
