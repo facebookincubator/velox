@@ -2210,84 +2210,63 @@ TEST_P(PartitionedTableWriterTest, specialPartitionName) {
 
         auto outputDirectory = TempDirectoryPath::create();
 
-        if (partitionKeys.size() != partitionKeyOrder.size()) {
-          VELOX_ASSERT_THROW(
-              createInsertPlan(
-                  PlanBuilder().tableScan(rowType),
-                  rowType,
-                  outputDirectory->getPath(),
-                  partitionKeys,
-                  bucketProperty_,
-                  compressionKind_,
-                  getNumWriters(),
-                  connector::hive::LocationHandle::TableType::kNew,
-                  commitStrategy_,
-                  true,
-                  nullptr,
-                  partitionKeyOrder),
-              "partitionKeyOrder does not contain the partition key.");
-        } else {
-          auto plan = createInsertPlan(
-              PlanBuilder().tableScan(rowType),
-              rowType,
-              outputDirectory->getPath(),
-              partitionKeys,
-              bucketProperty_,
-              compressionKind_,
-              getNumWriters(),
-              connector::hive::LocationHandle::TableType::kNew,
-              commitStrategy_,
-              true,
-              nullptr,
-              partitionKeyOrder);
-          auto task =
-              assertQuery(plan, inputFilePaths, "SELECT count(*) FROM tmp");
+        auto plan = createInsertPlan(
+            PlanBuilder().tableScan(rowType),
+            rowType,
+            outputDirectory->getPath(),
+            partitionKeys,
+            bucketProperty_,
+            compressionKind_,
+            getNumWriters(),
+            connector::hive::LocationHandle::TableType::kNew,
+            commitStrategy_,
+            true,
+            nullptr,
+            partitionKeyOrder);
+        auto task =
+            assertQuery(plan, inputFilePaths, "SELECT count(*) FROM tmp");
 
-          std::set<std::string> actualPartitionDirectories =
-              getLeafSubdirectories(outputDirectory->getPath());
+        std::set<std::string> actualPartitionDirectories =
+            getLeafSubdirectories(outputDirectory->getPath());
 
-          std::set<std::string> expectedPartitionDirectories;
-          const std::vector<std::string> expectedCharsAfterEscape = {
-              "%22",
-              "%23",
-              "%25",
-              "%27",
-              "%2A",
-              "%2F",
-              "%3A",
-              "%3D",
-              "%3F",
-              "%5C",
-              "%7F",
-              "%7B",
-              "%5B",
-              "%5D",
-              "%5E"};
-          for (auto i = 0; i < numPartitions; ++i) {
-            // url encoded
-            std::string partitionName;
-            if (partitionKeys == std::vector<std::string>{"p0", "p1"}) {
-              partitionName = fmt::format(
-                  "p0={}/p1=str_{}{}",
-                  i,
-                  i,
-                  expectedCharsAfterEscape.at(i % 15));
-            } else if (partitionKeys == std::vector<std::string>{"p1", "p0"}) {
-              partitionName = fmt::format(
-                  "p1=str_{}{}/p0={}",
-                  i,
-                  expectedCharsAfterEscape.at(i % 15),
-                  i);
-            }
-            expectedPartitionDirectories.emplace(
-                fs::path(outputDirectory->getPath()) / partitionName);
+        std::set<std::string> expectedPartitionDirectories;
+        const std::vector<std::string> expectedCharsAfterEscape = {
+            "%22",
+            "%23",
+            "%25",
+            "%27",
+            "%2A",
+            "%2F",
+            "%3A",
+            "%3D",
+            "%3F",
+            "%5C",
+            "%7F",
+            "%7B",
+            "%5B",
+            "%5D",
+            "%5E"};
+        for (auto i = 0; i < numPartitions; ++i) {
+          // url encoded
+          std::string partitionName;
+          if (partitionKeys == std::vector<std::string>{"p0", "p1"}) {
+            partitionName = fmt::format(
+                "p0={}/p1=str_{}{}", i, i, expectedCharsAfterEscape.at(i % 15));
+          } else if (partitionKeys == std::vector<std::string>{"p1", "p0"}) {
+            partitionName = fmt::format(
+                "p1=str_{}{}/p0={}", i, expectedCharsAfterEscape.at(i % 15), i);
           }
-          EXPECT_EQ(actualPartitionDirectories, expectedPartitionDirectories);
+          expectedPartitionDirectories.emplace(
+              fs::path(outputDirectory->getPath()) / partitionName);
         }
+        EXPECT_EQ(actualPartitionDirectories, expectedPartitionDirectories);
       };
   testSpecialPartitionName({"p0", "p1"}, {"p0", "p1"}, {VARCHAR(), INTEGER()});
   testSpecialPartitionName({"p1", "p0"}, {"p1", "p0"}, {INTEGER(), VARCHAR()});
-  testSpecialPartitionName({"p1", "p0"}, {"p1"}, {INTEGER(), VARCHAR()});
+
+  VELOX_ASSERT_THROW(
+      testSpecialPartitionName({"p1", "p0"}, {"p1"}, {INTEGER(), VARCHAR()}),
+      "partitionKeyOrder does not contain the partition key");
 }
 
 TEST_P(PartitionedTableWriterTest, multiplePartitions) {

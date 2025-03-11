@@ -85,7 +85,7 @@ std::vector<column_index_t> getPartitionChannels(
 
   if (insertTableHandle->partitionKeyOrder().size() > 0) {
     auto partitionKeys = insertTableHandle->partitionKeyOrder();
-    for (auto partitionKeyName : partitionKeys) {
+    for (const auto& partitionKeyName : partitionKeys) {
       for (column_index_t j = 0; j < insertTableHandle->inputColumns().size();
            j++) {
         if (insertTableHandle->inputColumns()[j]->name() == partitionKeyName) {

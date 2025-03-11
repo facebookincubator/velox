@@ -248,7 +248,7 @@ class HiveInsertTableHandle : public ConnectorInsertTableHandle {
         if (inputColumn->isPartitionKey()) {
           VELOX_CHECK(
               partitionKeyNames.erase(inputColumn->name()) == 1,
-              "partitionKeyOrder does not contain the partition key.");
+              "partitionKeyOrder does not contain the partition key");
         }
       }
     }
