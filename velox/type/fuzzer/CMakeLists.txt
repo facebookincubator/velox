@@ -23,7 +23,7 @@ if(Java_Development_FOUND)
   add_custom_target(java_float_generator DEPENDS FloatGenerator.class)
 
   add_executable(velox_float_to_string_fuzzer FloatToStringFuzzer.cpp)
-  add_test(float_to_string_fuzzer float_to_string_fuzzer)
+  add_test(velox_float_to_string_fuzzer velox_float_to_string_fuzzer)
 
   target_link_libraries(
     velox_float_to_string_fuzzer
