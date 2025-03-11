@@ -1,0 +1,199 @@
+/*
+ * Copyright (c) Facebook, Inc. and its affiliates.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+#include "velox/exec/Driver.h"
+#include "velox/exec/Operator.h"
+#include "velox/vector/ComplexVector.h"
+
+#include <cudf/concatenate.hpp>
+#include <cudf/table/table.hpp>
+#include <cudf/utilities/default_stream.hpp>
+
+#include "velox/experimental/cudf/exec/CudfConversion.h"
+#include "velox/experimental/cudf/exec/NvtxHelper.h"
+#include "velox/experimental/cudf/exec/Utilities.h"
+#include "velox/experimental/cudf/exec/VeloxCudfInterop.h"
+#include "velox/experimental/cudf/vector/CudfVector.h"
+
+namespace facebook::velox::cudf_velox {
+
+namespace {
+// Concatenate multiple RowVectors into a single RowVector.
+// Copied from AggregationFuzzer.cpp.
+RowVectorPtr mergeRowVectors(
+    const std::vector<RowVectorPtr>& results,
+    velox::memory::MemoryPool* pool) {
+  VELOX_NVTX_FUNC_RANGE();
+  auto totalCount = 0;
+  for (const auto& result : results) {
+    totalCount += result->size();
+  }
+  auto copy =
+      BaseVector::create<RowVector>(results[0]->type(), totalCount, pool);
+  auto copyCount = 0;
+  for (const auto& result : results) {
+    copy->copy(result.get(), copyCount, 0, result->size());
+    copyCount += result->size();
+  }
+  return copy;
+}
+
+cudf::size_type preferred_gpu_batch_size_rows() {
+  constexpr cudf::size_type default_gpu_batch_size_rows = 100000;
+  const char* env_cudf_gpu_batch_size_rows =
+      std::getenv("VELOX_CUDF_GPU_BATCH_SIZE_ROWS");
+  return env_cudf_gpu_batch_size_rows != nullptr
+      ? std::stoi(env_cudf_gpu_batch_size_rows)
+      : default_gpu_batch_size_rows;
+}
+} // namespace
+
+CudfFromVelox::CudfFromVelox(
+    int32_t operatorId,
+    RowTypePtr outputType,
+    exec::DriverCtx* driverCtx,
+    std::string planNodeId)
+    : exec::Operator(
+          driverCtx,
+          outputType,
+          operatorId,
+          planNodeId,
+          "CudfFromVelox"),
+      NvtxHelper(nvtx3::rgb{255, 140, 0}, operatorId) {} // Orange
+
+void CudfFromVelox::addInput(RowVectorPtr input) {
+  VELOX_NVTX_OPERATOR_FUNC_RANGE();
+  if (input != nullptr) {
+    if (input->size() > 0) {
+      // Materialize lazy vectors
+      for (auto& child : input->children()) {
+        child->loadedVector();
+      }
+      input->loadedVector();
+
+      // Accumulate inputs
+      inputs_.push_back(input);
+      current_output_size_ += input->size();
+    }
+  }
+}
+
+RowVectorPtr CudfFromVelox::getOutput() {
+  VELOX_NVTX_OPERATOR_FUNC_RANGE();
+  auto const target_output_size = preferred_gpu_batch_size_rows();
+  auto const exit_early = finished_ or
+      (current_output_size_ < target_output_size and not noMoreInput_) or
+      inputs_.empty();
+  finished_ = noMoreInput_;
+  if (exit_early) {
+    return nullptr;
+  }
+
+  // Combine all input RowVectors into a single RowVector and clear inputs
+  auto input = mergeRowVectors(inputs_, inputs_[0]->pool());
+  inputs_.clear();
+  current_output_size_ = 0;
+
+  // Early return if no input
+  if (input->size() == 0) {
+    return nullptr;
+  }
+
+  // Get a stream from the global stream pool
+  auto stream = cudfGlobalStreamPool().get_stream();
+
+  // Convert RowVector to cudf table
+  auto tbl = with_arrow::to_cudf_table(input, input->pool(), stream);
+
+  stream.synchronize();
+
+  VELOX_CHECK_NOT_NULL(tbl);
+
+  if (cudfDebugEnabled()) {
+    std::cout << "CudfFromVelox table number of columns: " << tbl->num_columns()
+              << std::endl;
+    std::cout << "CudfFromVelox table number of rows: " << tbl->num_rows()
+              << std::endl;
+  }
+
+  // Return a CudfVector that owns the cudf table
+  auto const size = tbl->num_rows();
+  return std::make_shared<CudfVector>(
+      input->pool(), outputType_, size, std::move(tbl), stream);
+}
+
+void CudfFromVelox::close() {
+  cudf::get_default_stream().synchronize();
+  exec::Operator::close();
+}
+
+CudfToVelox::CudfToVelox(
+    int32_t operatorId,
+    RowTypePtr outputType,
+    exec::DriverCtx* driverCtx,
+    std::string planNodeId)
+    : exec::Operator(
+          driverCtx,
+          outputType,
+          operatorId,
+          planNodeId,
+          "CudfToVelox"),
+      NvtxHelper(nvtx3::rgb{148, 0, 211}, operatorId) {} // Purple
+
+void CudfToVelox::addInput(RowVectorPtr input) {
+  // Accumulate inputs
+  if (input->size() > 0) {
+    auto cudf_input = std::dynamic_pointer_cast<CudfVector>(input);
+    VELOX_CHECK_NOT_NULL(cudf_input);
+    inputs_.push_back(std::move(cudf_input));
+  }
+}
+
+RowVectorPtr CudfToVelox::getOutput() {
+  VELOX_NVTX_OPERATOR_FUNC_RANGE();
+  if (finished_ || inputs_.empty()) {
+    finished_ = noMoreInput_ && inputs_.empty();
+    return nullptr;
+  }
+
+  auto stream = inputs_.front()->stream();
+  std::unique_ptr<cudf::table> tbl = inputs_.front()->release();
+  inputs_.pop_front();
+
+  VELOX_CHECK_NOT_NULL(tbl);
+  if (cudfDebugEnabled()) {
+    std::cout << "CudfToVelox table number of columns: " << tbl->num_columns()
+              << std::endl;
+    std::cout << "CudfToVelox table number of rows: " << tbl->num_rows()
+              << std::endl;
+  }
+  if (tbl->num_rows() == 0) {
+    return nullptr;
+  }
+  RowVectorPtr output =
+      with_arrow::to_velox_column(tbl->view(), pool(), "", stream);
+  stream.synchronize();
+  finished_ = noMoreInput_ && inputs_.empty();
+  output->setType(outputType_);
+  return output;
+}
+
+void CudfToVelox::close() {
+  exec::Operator::close();
+  // TODO: Release stored inputs if needed
+  // TODO: Release cudf memory resources
+}
+
+} // namespace facebook::velox::cudf_velox
