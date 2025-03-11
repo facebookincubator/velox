@@ -62,8 +62,16 @@ jobs:
       - name: "Install dependencies"
         if: ${{ steps.restore-deps.outputs.stash-hit != 'true' }}
         run: |
-            mkdir -p $INSTALL_PREFIX # make sure dir exists so it's not created by root
-            source velox/scripts/setup-ubuntu.sh && install_apt_deps && install_velox_deps
+            source velox/scripts/setup-ubuntu.sh 
+            install_apt_deps 
+            export SUDO=" "
+            run_and_time install_fmt
+            run_and_time install_protobuf
+            run_and_time install_boost
+            run_and_time install_folly
+            run_and_time install_stemmer
+            run_and_time install_thrift
+            run_and_time install_arrow
 
       - name: "Save Dependencies"
         if: ${{ steps.restore-deps.outputs.stash-hit != 'true' }}
