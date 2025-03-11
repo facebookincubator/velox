@@ -260,7 +260,7 @@ function install_thrift {
 
   CXX_FLAGS="$EXTRA_CXXFLAGS" cmake_install_dir thrift \
     -DBUILD_SHARED_LIBS=OFF \
-    -DBUILD_COMPILER=OFF \
+    -DBUILD_COMPILER=ON \
     -DBUILD_EXAMPLES=OFF \
     -DBUILD_TUTORIALS=OFF \
     -DCMAKE_DEBUG_POSTFIX= \
