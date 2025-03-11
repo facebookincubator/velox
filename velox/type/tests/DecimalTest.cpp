@@ -397,6 +397,8 @@ TEST(DecimalTest, rescaleDouble) {
       10.03, DECIMAL(38, 18), HugeInt::parse("1003" + zeros(16)));
   assertRescaleDouble(0.034567890, DECIMAL(38, 18), 34'567'890'000'000'000);
   assertRescaleDouble(
+      0.03456789, DECIMAL(38, 33), HugeInt::parse("3456789" + zeros(25)));
+  assertRescaleDouble(
       0.999999999999999, DECIMAL(38, 18), 999'999'999'999'999'000);
   assertRescaleDouble(
       0.123456789123123, DECIMAL(38, 18), 123'456'789'123'123'000);
