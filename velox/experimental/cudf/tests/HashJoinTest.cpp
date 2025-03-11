@@ -1040,7 +1040,7 @@ TEST_F(HashJoinTest, multipleProbeColumns) {
   // Test with flip join sides.
   test("", true);
 
-  test("u_k1=1", true);
+  test("t_k1=1", true);
 }
 
 TEST_F(HashJoinTest, multipleBuildColumns) {
