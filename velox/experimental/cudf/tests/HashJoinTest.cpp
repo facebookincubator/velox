@@ -995,7 +995,7 @@ TEST_F(HashJoinTest, multipleProbeColumns) {
   createDuckDbTable("u", {buildVectors});
   auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
 
-  auto test = [&](const std::string& filter) {
+  auto test = [&](const std::string& filter, bool flipJoin = false) {
     auto plan = PlanBuilder(planNodeIdGenerator)
                     .values(probeVectors, true)
                     .hashJoin(
@@ -1010,7 +1010,7 @@ TEST_F(HashJoinTest, multipleProbeColumns) {
                     .planNode();
 
     HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
-        .planNode(plan)
+        .planNode(flipJoin ? flipJoinSides(plan) : plan)
         .injectSpill(false)
         .checkSpillStats(false)
         .maxSpillLevel(0)
@@ -1036,6 +1036,11 @@ TEST_F(HashJoinTest, multipleProbeColumns) {
 
   // All rows in the second batch pass this filter.
   test("t_k2 > 9");
+
+  // Test with flip join sides.
+  test("", true);
+
+  test("u_k1=1", true);
 }
 
 TEST_F(HashJoinTest, multipleBuildColumns) {
@@ -1084,20 +1089,6 @@ TEST_F(HashJoinTest, multipleBuildColumns) {
         .run();
   };
   test("");
-
-  // TODO: Use a trivial case where the filter is always true.
-  test("t_k1>0");
-
-  // TODO: Add support for nontrivial filters.
-
-  // Alternate rows pass this filter and last row of a batch fails.
-  // test("t_k1=1");
-
-  // All rows fail this filter.
-  // test("t_k1=5");
-
-  // All rows in the second batch pass this filter.
-  // test("t_k2 > 9");
 }
 
 TEST_F(HashJoinTest, filter) {
