@@ -55,9 +55,9 @@ std::unique_ptr<IOBuf> RestClient::invokeFunction(
 
   if (response.error) {
     VELOX_FAIL(fmt::format(
-          "Error communicating with server: {} URL: {}",
-          response.error.message,
-          fullUrl));
+        "Error communicating with server: {} URL: {}",
+        response.error.message,
+        fullUrl));
   }
 
   auto outputBuf = IOBuf::copyBuffer(response.text);
