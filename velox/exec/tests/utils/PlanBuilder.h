@@ -178,10 +178,12 @@ class PlanBuilder {
   /// and scale factor.
   /// @param columnNames The columns to be returned from that table.
   /// @param scaleFactor The TPC-H scale factor.
+  /// @param connectorId The TPC-H connector id.
   PlanBuilder& tpchTableScan(
       tpch::Table table,
-      std::vector<std::string>&& columnNames,
-      double scaleFactor = 1);
+      std::vector<std::string> columnNames,
+      double scaleFactor = 1,
+      std::string_view connectorId = kTpchDefaultConnectorId);
 
   /// Helper class to build a custom TableScanNode.
   /// Uses a planBuilder instance to get the next plan id, memory pool, and
@@ -416,6 +418,13 @@ class PlanBuilder {
       return *this;
     }
 
+    /// @param ensureFiles When set the Task will always output a file, even if
+    /// it's empty.
+    TableWriterBuilder& ensureFiles(const bool ensureFiles) {
+      ensureFiles_ = ensureFiles;
+      return *this;
+    }
+
     /// Stop the TableWriterBuilder.
     PlanBuilder& endTableWriter() {
       planBuilder_.planNode_ = build(planBuilder_.nextPlanNodeId());
@@ -445,6 +454,8 @@ class PlanBuilder {
 
     dwio::common::FileFormat fileFormat_{dwio::common::FileFormat::DWRF};
     common::CompressionKind compressionKind_{common::CompressionKind_NONE};
+
+    bool ensureFiles_{false};
   };
 
   /// Start a TableWriterBuilder.
@@ -638,6 +649,8 @@ class PlanBuilder {
   /// output data files.
   /// @param schema Output schema to be passed to the writer. By default use the
   /// output of the previous operator.
+  /// @param ensureFiles When this option is set the HiveDataSink will always
+  /// create a file even if there is no data.
   PlanBuilder& tableWrite(
       const std::string& outputDirectoryPath,
       const std::vector<std::string>& partitionBy,
@@ -653,7 +666,8 @@ class PlanBuilder {
       const std::shared_ptr<dwio::common::WriterOptions>& options = nullptr,
       const std::string& outputFileName = "",
       const common::CompressionKind = common::CompressionKind_NONE,
-      const RowTypePtr& schema = nullptr);
+      const RowTypePtr& schema = nullptr,
+      const bool ensureFiles = false);
 
   /// Add a TableWriteMergeNode.
   PlanBuilder& tableWriteMerge(
@@ -1117,7 +1131,15 @@ class PlanBuilder {
   /// @param right The right input source with index lookup support.
   /// @param joinCondition SQL expressions as the join conditions. Each join
   /// condition must use columns from both sides. For the right side, it can
-  /// only use one index column.
+  /// only use one index column. Currently we support "in" and "between" join
+  /// conditions:
+  /// "in" condition is written as SQL expression as "contains(a, b)" where "b"
+  /// is the index column from right side and "a" is the condition column from
+  /// left side. "b" has type T and "a" has type ARRAT(T).
+  /// "between" condition is written as SQL expression as "a between b and c"
+  /// where "a" is the index column from right side and "b", "c" are either
+  /// condition column from left side or a constant but at least one of them
+  /// must not be constant. They all have the same type.
   /// @param joinType Type of the join supported: inner, left.
   ///
   /// See hashJoin method for the description of the other parameters.

@@ -162,6 +162,27 @@ class JsonFunctionsTest : public functions::test::FunctionBaseTest {
     exprSet.eval(rows, evalCtx, result);
     velox::test::assertEqualVectors(expected, result[0]);
   };
+
+  // Utility function to evaluate json_extract both with and without constant
+  // inputs. Ensures that the results are same in both cases. 'wrapInTry' is
+  // used to test the cases where json_extract throws a user error and verify
+  // that they are captured by the TRY operator. The inputs are expected to have
+  // only one row.
+  std::optional<std::string>
+  jsonExtract(VectorPtr json, VectorPtr path, bool wrapInTry = false) {
+    std::string expr =
+        !wrapInTry ? "json_extract(c0, c1)" : "try(json_extract(c0, c1))";
+
+    auto result = evaluateOnce<std::string>(expr, makeRowVector({json, path}));
+    auto resultConstantInput = evaluateOnce<std::string>(
+        expr,
+        makeRowVector(
+            {BaseVector::wrapInConstant(1, 0, json),
+             BaseVector::wrapInConstant(1, 0, path)}));
+    EXPECT_EQ(result, resultConstantInput)
+        << "Equal results expected for constant and non constant inputs";
+    return result;
+  }
 };
 
 TEST_F(JsonFunctionsTest, jsonFormat) {
@@ -231,6 +252,7 @@ TEST_F(JsonFunctionsTest, jsonParse) {
   EXPECT_EQ(jsonParse(R"(["k1", "v1"])"), R"(["k1","v1"])");
   testJsonParse(R"({ "abc" : "\/"})", R"({"abc":"/"})");
   testJsonParse(R"({ "abc" : "\\/"})", R"({"abc":"\\/"})");
+  testJsonParse("{\"\\\\\":null, \"\\\\\":null}", R"({"\\":null,"\\":null})");
   testJsonParse(R"({ "abc" : [1, 2, 3, 4    ]})", R"({"abc":[1,2,3,4]})");
   // Test out with unicodes and empty keys.
   testJsonParse(
@@ -373,6 +395,118 @@ TEST_F(JsonFunctionsTest, jsonParse) {
 
     velox::test::assertEqualVectors(expected, result);
   }
+
+  // Test try with invalid json unicode sequences.
+  {
+    data = makeRowVector({makeFlatVector<StringView>({
+        // The logic for sorting keys checks the validity of escape sequences
+        // and will throw a user error if unicode sequences are invalid.
+        R"({"k\\i":"abc","k2":"xyz\u4FE"})", // invalid json
+        // Add a second value to ensure the state is cleared.
+        R"([{"k1": "v1" }, {"k2": "v2" }])" // valid json
+    })});
+
+    result = evaluate("try(json_parse(c0))", data);
+
+    expected = makeNullableFlatVector<StringView>(
+        {std::nullopt, R"([{"k1":"v1"},{"k2":"v2"}])"}, JSON());
+
+    velox::test::assertEqualVectors(expected, result);
+  }
+
+  // Test try going through fast path for
+  // constants.
+  {
+    data = makeRowVector(
+        {makeConstant(R"({\"k\\i\":\"abc\",\"k2\":\"xyz\u4FE\"})", 3)});
+
+    result = evaluate("try(json_parse(c0))", data);
+
+    expected = makeNullableFlatVector<StringView>(
+        {std::nullopt, std::nullopt, std::nullopt}, JSON());
+
+    velox::test::assertEqualVectors(expected, result);
+  }
+
+  // Test reusing ExprSet after user exception thrown.
+  {
+    // A batch with an invalid value that will throw a user error.
+    auto data1 = makeRowVector(
+        {makeConstant(R"({\"k\\i\":\"abc\",\"k2\":\"xyz\u4FE\"})", 3)});
+
+    // A batch with valid values.
+    auto data2 = makeRowVector({makeFlatVector<StringView>(
+        {R"([{"k1": "v1" }, {"k2": "v2" }])",
+         R"([{"k3": "v3" }, {"k4": "v4" }])"})});
+
+    auto typedExpr = makeTypedExpr("json_parse(c0)", asRowType(data1->type()));
+    exec::ExprSet exprSet({typedExpr}, &execCtx_);
+
+    VELOX_ASSERT_USER_THROW(evaluate(exprSet, data1), "Invalid escape digit");
+
+    expected = makeNullableFlatVector<StringView>(
+        {R"([{"k1":"v1"},{"k2":"v2"}])", R"([{"k3":"v3"},{"k4":"v4"}])"},
+        JSON());
+
+    result = evaluate(exprSet, data2);
+    velox::test::assertEqualVectors(expected, result);
+  }
+
+  // Test reusing ExprSet after user exception thrown in fast path for
+  // constants.
+  {
+    // A batch with an invalid value that will throw a user error.
+    auto data1 = makeRowVector({makeFlatVector<StringView>({
+        // The logic for sorting keys checks the validity of escape sequences
+        // and will throw a user error if unicode sequences are invalid.
+        R"({"k\\i":"abc","k2":"xyz\u4FE"})", // invalid json
+        // Add a second value to ensure the state is cleared.
+        R"([{"k1": "v1" }, {"k2": "v2" }])" // valid json
+    })});
+
+    // A batch with valid values.
+    auto data2 = makeRowVector({makeFlatVector<StringView>(
+        {R"([{"k1": "v1" }, {"k2": "v2" }])",
+         R"([{"k3": "v3" }, {"k4": "v4" }])"})});
+
+    auto typedExpr = makeTypedExpr("json_parse(c0)", asRowType(data1->type()));
+    exec::ExprSet exprSet({typedExpr}, &execCtx_);
+
+    VELOX_ASSERT_USER_THROW(evaluate(exprSet, data1), "Invalid escape digit");
+
+    expected = makeNullableFlatVector<StringView>(
+        {R"([{"k1":"v1"},{"k2":"v2"}])", R"([{"k3":"v3"},{"k4":"v4"}])"},
+        JSON());
+
+    result = evaluate(exprSet, data2);
+    velox::test::assertEqualVectors(expected, result);
+  }
+
+  // Test with escape sequences in keys.
+  {
+    // Invalid escape sequence in key should be ignored.
+    testJsonParse(
+        R"({"\\&page=20": "a", "\\&page=26": "c"})",
+        R"({"\\&page=20":"a","\\&page=26":"c"})");
+
+    // Valid escape sequence in key should be parsed correctly.
+    testJsonParse(
+        R"({"\b&page=20": "a", "\\&page=26": "c"})",
+        R"({"\b&page=20":"a","\\&page=26":"c"})");
+
+    testJsonParse(
+        R"({"\/&page=20": "a", "\/&page=26": "c"})",
+        R"({"/&page=20":"a","/&page=26":"c"})");
+
+    testJsonParse(
+        R"({"\/&\"\f\r\n": "a", "\/&page=26": "c"})",
+        R"({"/&\"\f\r\n":"a","/&page=26":"c"})");
+  }
+
+  // Test with incomplete unicode escape sequences.
+  VELOX_ASSERT_USER_THROW(
+      jsonParse("\"\\u1234\\u89\""),
+      "Invalid escape sequence at the end of string");
 }
 
 TEST_F(JsonFunctionsTest, canonicalization) {
@@ -824,11 +958,11 @@ TEST_F(JsonFunctionsTest, invalidPath) {
 
 TEST_F(JsonFunctionsTest, jsonExtract) {
   auto jsonExtract = [&](std::optional<std::string> json,
-                         const std::string& path) {
-    return evaluateOnce<std::string>(
-        "json_extract(c0, c1)",
-        makeRowVector(
-            {makeJsonVector(json), makeFlatVector<std::string>({path})}));
+                         const std::string& path,
+                         bool wrapInTry = false) {
+    auto jsonInput = makeJsonVector(json);
+    auto pathInput = makeFlatVector<std::string>({path});
+    return JsonFunctionsTest::jsonExtract(jsonInput, pathInput, wrapInTry);
   };
 
   EXPECT_EQ(
@@ -884,9 +1018,49 @@ TEST_F(JsonFunctionsTest, jsonExtract) {
   EXPECT_EQ("[]", jsonExtract(R"({"a": [{"b": 123}]})", "$.a[*].c"));
   EXPECT_EQ(std::nullopt, jsonExtract(R"({"a": [{"b": 123}]})", "$.a[0].c"));
 
+  // Wildcard on empty object and array
+  EXPECT_EQ("[]", jsonExtract("{\"a\": {}", "$.a.[*]"));
+  EXPECT_EQ("[]", jsonExtract("{\"a\": []}", "$.a.[*]"));
+
+  // Calling wildcard on a scalar
+  EXPECT_EQ("[]", jsonExtract(R"({"a": {"b": [123, 456]}})", "$.a.b.[0].[*]"));
+  EXPECT_EQ("[]", jsonExtract("1", "$.*"));
+
+  // Scalar json
+  EXPECT_EQ("1", jsonExtract("1", "$"));
+  EXPECT_EQ(std::nullopt, jsonExtract("1", "$.foo"));
+  EXPECT_EQ(std::nullopt, jsonExtract("1", "$.[0]"));
+  // Scalar 'null' json
+  EXPECT_EQ("null", jsonExtract("null", "$"));
+  EXPECT_EQ(std::nullopt, jsonExtract("null", "$.foo"));
+  EXPECT_EQ(std::nullopt, jsonExtract("null", "$.[0]"));
+
+  // Recursive opearator
+  EXPECT_EQ("[8.95,12.99,8.99,22.99,19.95]", jsonExtract(kJson, "$..price"));
+  EXPECT_EQ(
+      "[8.95,12.99,8.99,22.99,19.95,8.95,12.99,8.99,22.99,19.95,8.95,12.99,8.99,22.99]",
+      jsonExtract(kJson, "$..*..price"));
+  EXPECT_EQ("[]", jsonExtract(kJson, "$..nonExistentKey"));
+  EXPECT_EQ(std::nullopt, jsonExtract(kJson, "$.nonExistentKey..price"));
+  EXPECT_EQ(
+      std::nullopt, jsonExtract(R"({"a": {"b": [123, 456]}})", "$.a.c..[0]"));
+
+  // Calling Recursive opearator on a scalar
+  EXPECT_EQ("[]", jsonExtract(R"({"a": {"b": [123, 456]}})", "$.a.b.[0]..[0]"));
+  EXPECT_EQ("[]", jsonExtract("1", "$..key"));
+
+  // non-definite paths that end up being evaluated vs. not evaluated
+  EXPECT_EQ(
+      "[123,456]", jsonExtract(R"({"a": {"b": [123, 456]}})", "$.a.b[*]"));
+  EXPECT_EQ(
+      std::nullopt, jsonExtract(R"({"a": {"b": [123, 456]}})", "$.a.c[*]"));
+  EXPECT_EQ(
+      "[[123, 456]]", jsonExtract(R"({"a": {"b": [123, 456]}})", "$.a..b"));
+  EXPECT_EQ("[]", jsonExtract(R"({"a": {"b": [123, 456]}})", "$.a..c"));
+  EXPECT_EQ(std::nullopt, jsonExtract(R"({"a": {"b": [123, 456]}})", "$.c..b"));
+
   // TODO The following paths are supported by Presto via Jayway, but do not
   // work in Velox yet. Figure out how to add support for these.
-  VELOX_ASSERT_THROW(jsonExtract(kJson, "$..price"), "Invalid JSON path");
   VELOX_ASSERT_THROW(
       jsonExtract(kJson, "$.store.book[?(@.price < 10)].title"),
       "Invalid JSON path");
@@ -894,6 +1068,49 @@ TEST_F(JsonFunctionsTest, jsonExtract) {
   VELOX_ASSERT_THROW(
       jsonExtract(kJson, "concat($..category)"), "Invalid JSON path");
   VELOX_ASSERT_THROW(jsonExtract(kJson, "$.store.keys()"), "Invalid JSON path");
+
+  // Ensure User errors are captured in try() and not thrown.
+  EXPECT_EQ(
+      std::nullopt,
+      jsonExtract(kJson, "$.store.book[?(@.price <10)].title", true));
+  EXPECT_EQ(std::nullopt, jsonExtract(kJson, "max($..price)", true));
+  EXPECT_EQ(std::nullopt, jsonExtract(kJson, "concat($..category)", true));
+  EXPECT_EQ(std::nullopt, jsonExtract(kJson, "$.store.keys()", true));
+}
+
+TEST_F(JsonFunctionsTest, jsonExtractVarcharInput) {
+  auto jsonExtract = [&](std::optional<std::string> json,
+                         const std::string& path,
+                         bool wrapInTry = false) {
+    std::optional<StringView> s = json.has_value()
+        ? std::make_optional(StringView(json.value()))
+        : std::nullopt;
+    auto varcharInput = makeNullableFlatVector<std::string>({s}, VARCHAR());
+    auto pathInput = makeFlatVector<std::string>({path});
+    return JsonFunctionsTest::jsonExtract(varcharInput, pathInput, wrapInTry);
+  };
+
+  // Valid json
+  EXPECT_EQ(
+      R"({"x":{"a":1,"b":2}})",
+      jsonExtract(R"({"x": {"a" : 1, "b" : 2} })", "$"));
+  EXPECT_EQ(
+      R"({"a":1,"b":2})", jsonExtract(R"({"x": {"a" : 1, "b" : 2} })", "$.x"));
+
+  // Invalid JSON
+  EXPECT_EQ(std::nullopt, jsonExtract(R"({"x": {"a" : 1, "b" : "2""} })", "$"));
+  // Non-canonicalized json
+  EXPECT_EQ(
+      R"({"x":{"a":1,"b":2}})",
+      jsonExtract(R"({"x": {"b" : 2, "a" : 1} })", "$"));
+  // Input has escape characters
+  EXPECT_EQ(
+      R"({"x":{"a":"/1","b":"/2"}})",
+      jsonExtract(R"({"x": {"a" : "\/1", "b" : "\/2"} })", "$"));
+  // Invalid path
+  VELOX_ASSERT_THROW(jsonExtract(kJson, "$.book[1:2]"), "Invalid JSON path");
+  // Ensure User error is captured in try() and not thrown.
+  EXPECT_EQ(std::nullopt, jsonExtract(kJson, "$.book[1:2]", true));
 }
 
 // The following tests ensure that the internal json functions

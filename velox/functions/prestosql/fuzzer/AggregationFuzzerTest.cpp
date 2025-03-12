@@ -64,6 +64,8 @@ DEFINE_uint32(
     "Timeout in milliseconds for HTTP requests made to reference DB, "
     "such as Presto. Example: --req_timeout_ms=2000");
 
+// Any change made in the file should be reflected in
+// the FB-internal aggregation fuzzer test too:
 namespace facebook::velox::exec::test {
 namespace {
 
@@ -129,9 +131,11 @@ int main(int argc, char** argv) {
       // Lambda functions are not supported yet.
       "reduce_agg",
       "max_data_size_for_stats",
-      "map_union_sum",
-      "approx_set",
       "any_value",
+  };
+
+  static const std::unordered_set<std::string> functionsRequireSortedInput = {
+      "tdigest_agg",
   };
 
   using facebook::velox::exec::test::ApproxDistinctResultVerifier;
@@ -164,7 +168,7 @@ int main(int argc, char** argv) {
       customVerificationFunctions = {
           // Order-dependent functions.
           {"approx_distinct", std::make_shared<ApproxDistinctResultVerifier>()},
-          {"approx_set", nullptr},
+          {"approx_set", std::make_shared<ApproxDistinctResultVerifier>(true)},
           {"approx_percentile",
            std::make_shared<ApproxPercentileResultVerifier>()},
           {"arbitrary", std::make_shared<ArbitraryResultVerifier>()},
@@ -196,6 +200,7 @@ int main(int argc, char** argv) {
   Options options;
   options.onlyFunctions = FLAGS_only;
   options.skipFunctions = skipFunctions;
+  options.functionsRequireSortedInput = functionsRequireSortedInput;
   options.customVerificationFunctions = customVerificationFunctions;
   options.customInputGenerators =
       facebook::velox::exec::test::getCustomInputGenerators();

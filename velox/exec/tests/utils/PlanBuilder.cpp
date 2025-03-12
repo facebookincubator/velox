@@ -65,6 +65,46 @@ std::shared_ptr<HiveBucketProperty> buildHiveBucketProperty(
       bucketTypes,
       sortBy);
 }
+
+core::IndexJoinConditionPtr parseJoinCondition(
+    const std::string& joinCondition,
+    const RowTypePtr& rowType,
+    const parse::ParseOptions& options,
+    memory::MemoryPool* pool) {
+  const auto joinConditionExpr =
+      parseExpr(joinCondition, rowType, options, pool);
+  const auto typedCallExpr =
+      std::dynamic_pointer_cast<const core::CallTypedExpr>(joinConditionExpr);
+  VELOX_CHECK_NOT_NULL(typedCallExpr);
+  if (typedCallExpr->name() == "contains") {
+    VELOX_CHECK_EQ(typedCallExpr->inputs().size(), 2);
+    auto keyColumnExpr =
+        std::dynamic_pointer_cast<const core::FieldAccessTypedExpr>(
+            typedCallExpr->inputs()[1]);
+    VELOX_CHECK_NOT_NULL(keyColumnExpr);
+    auto conditionColumnExpr =
+        std::dynamic_pointer_cast<const core::FieldAccessTypedExpr>(
+            typedCallExpr->inputs()[0]);
+    VELOX_CHECK_NOT_NULL(conditionColumnExpr);
+    return std::make_shared<core::InIndexJoinCondition>(
+        std::move(keyColumnExpr), std::move(conditionColumnExpr));
+  }
+
+  if (typedCallExpr->name() == "between") {
+    VELOX_CHECK_EQ(typedCallExpr->inputs().size(), 3);
+    auto keyColumnExpr =
+        std::dynamic_pointer_cast<const core::FieldAccessTypedExpr>(
+            typedCallExpr->inputs()[0]);
+    VELOX_CHECK_NOT_NULL(keyColumnExpr);
+    const auto& lowerExpr = typedCallExpr->inputs()[1];
+    const auto& upperExpr = typedCallExpr->inputs()[2];
+    return std::make_shared<core::BetweenIndexJoinCondition>(
+        std::move(keyColumnExpr), lowerExpr, upperExpr);
+  }
+  VELOX_USER_FAIL(
+      "Invalid index join condition: {}, and we only support in and between conditions",
+      joinCondition);
+}
 } // namespace
 
 PlanBuilder& PlanBuilder::tableScan(
@@ -108,8 +148,9 @@ PlanBuilder& PlanBuilder::tableScan(
 
 PlanBuilder& PlanBuilder::tpchTableScan(
     tpch::Table table,
-    std::vector<std::string>&& columnNames,
-    double scaleFactor) {
+    std::vector<std::string> columnNames,
+    double scaleFactor,
+    std::string_view connectorId) {
   std::unordered_map<std::string, std::shared_ptr<connector::ColumnHandle>>
       assignmentsMap;
   std::vector<TypePtr> outputTypes;
@@ -127,7 +168,7 @@ PlanBuilder& PlanBuilder::tpchTableScan(
   return TableScanBuilder(*this)
       .outputType(rowType)
       .tableHandle(std::make_shared<connector::tpch::TpchTableHandle>(
-          std::string(kTpchDefaultConnectorId), table, scaleFactor))
+          std::string(connectorId), table, scaleFactor))
       .assignments(assignmentsMap)
       .endTableScan();
 }
@@ -266,14 +307,15 @@ core::PlanNodePtr PlanBuilder::TableWriterBuilder::build(core::PlanNodeId id) {
           buildHiveBucketProperty(outputType, bucketCount_, bucketedBy_, sortBy_);
     }
 
-    auto hiveHandle = std::make_shared<connector::hive::HiveInsertTableHandle>(
-        columnHandles,
-        locationHandle,
-        fileFormat_,
-        bucketProperty,
-        compressionKind_,
-        serdeParameters_,
-        options_);
+  auto hiveHandle = std::make_shared<connector::hive::HiveInsertTableHandle>(
+      columnHandles,
+      locationHandle,
+      fileFormat_,
+      bucketProperty,
+      compressionKind_,
+      serdeParameters_,
+      options_,
+      ensureFiles_);
 
     insertHandle_ =
       std::make_shared<core::InsertTableHandle>(connectorId_, hiveHandle);
@@ -512,7 +554,8 @@ PlanBuilder& PlanBuilder::tableWrite(
     const std::shared_ptr<dwio::common::WriterOptions>& options,
     const std::string& outputFileName,
     const common::CompressionKind compressionKind,
-    const RowTypePtr& schema) {
+    const RowTypePtr& schema,
+    const bool ensureFiles) {
   return TableWriterBuilder(*this)
       .outputDirectoryPath(outputDirectoryPath)
       .outputFileName(outputFileName)
@@ -527,6 +570,7 @@ PlanBuilder& PlanBuilder::tableWrite(
       .serdeParameters(serdeParameters)
       .options(options)
       .compressionKind(compressionKind)
+      .ensureFiles(ensureFiles)
       .endTableWriter();
 }
 
@@ -1590,11 +1634,11 @@ PlanBuilder& PlanBuilder::indexLookupJoin(
   auto leftKeyFields = fields(planNode_->outputType(), leftKeys);
   auto rightKeyFields = fields(right->outputType(), rightKeys);
 
-  std::vector<core::TypedExprPtr> joinConditionExprs{};
-  joinConditionExprs.reserve(joinConditions.size());
+  std::vector<core::IndexJoinConditionPtr> joinConditionPtrs{};
+  joinConditionPtrs.reserve(joinConditions.size());
   for (const auto& joinCondition : joinConditions) {
-    joinConditionExprs.push_back(
-        parseExpr(joinCondition, inputType, options_, pool_));
+    joinConditionPtrs.push_back(
+        parseJoinCondition(joinCondition, inputType, options_, pool_));
   }
 
   planNode_ = std::make_shared<core::IndexLookupJoinNode>(
@@ -1602,7 +1646,7 @@ PlanBuilder& PlanBuilder::indexLookupJoin(
       joinType,
       std::move(leftKeyFields),
       std::move(rightKeyFields),
-      std::move(joinConditionExprs),
+      std::move(joinConditionPtrs),
       std::move(planNode_),
       right,
       std::move(outputType));

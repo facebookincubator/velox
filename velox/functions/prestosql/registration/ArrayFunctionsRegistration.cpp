@@ -24,6 +24,7 @@
 #include "velox/functions/prestosql/ArrayFunctions.h"
 #include "velox/functions/prestosql/ArraySort.h"
 #include "velox/functions/prestosql/WidthBucketArray.h"
+#include "velox/functions/prestosql/types/JsonRegistration.h"
 
 namespace facebook::velox::functions {
 extern void registerArrayConcatFunctions(const std::string& prefix);
@@ -95,6 +96,12 @@ template <typename T>
 inline void registerArrayTrimFunctions(const std::string& prefix) {
   registerFunction<ArrayTrimFunction, Array<T>, Array<T>, int64_t>(
       {prefix + "trim_array"});
+}
+
+template <typename T>
+inline void registerArrayTopNFunction(const std::string& prefix) {
+  registerFunction<ArrayTopNFunction, Array<T>, Array<T>, int32_t>(
+      {prefix + "array_top_n"});
 }
 
 template <typename T>
@@ -193,6 +200,7 @@ void registerArrayFunctions(const std::string& prefix) {
   registerArrayJoinFunctions<Timestamp>(prefix);
   registerArrayJoinFunctions<Date>(prefix);
   registerArrayJoinFunctions<Json>(prefix);
+  registerArrayJoinFunctions<UnknownValue>(prefix);
 
   registerFunction<ArrayAverageFunction, double, Array<double>>(
       {prefix + "array_average"});
@@ -240,6 +248,19 @@ void registerArrayFunctions(const std::string& prefix) {
       Array<Varchar>,
       Array<Varchar>,
       int64_t>({prefix + "trim_array"});
+
+  registerArrayTopNFunction<int8_t>(prefix);
+  registerArrayTopNFunction<int16_t>(prefix);
+  registerArrayTopNFunction<int32_t>(prefix);
+  registerArrayTopNFunction<int64_t>(prefix);
+  registerArrayTopNFunction<int128_t>(prefix);
+  registerArrayTopNFunction<float>(prefix);
+  registerArrayTopNFunction<double>(prefix);
+  registerArrayTopNFunction<Varchar>(prefix);
+  registerArrayTopNFunction<Timestamp>(prefix);
+  registerArrayTopNFunction<Date>(prefix);
+  registerArrayTopNFunction<Varbinary>(prefix);
+  registerArrayTopNFunction<Orderable<T1>>(prefix);
 
   registerArrayRemoveNullFunctions<int8_t>(prefix);
   registerArrayRemoveNullFunctions<int16_t>(prefix);

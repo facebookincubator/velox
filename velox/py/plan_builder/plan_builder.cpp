@@ -83,7 +83,7 @@ PYBIND11_MODULE(plan_builder, m) {
           py::arg("aliases") = py::dict{},
           py::arg("subfields") = py::dict{},
           py::arg("row_index") = "",
-          py::arg("connector_id") = "prism",
+          py::arg("connector_id") = "hive",
           py::arg("input_files") = std::nullopt,
           py::doc(R"(
         Adds a table scan node to the plan.
@@ -104,6 +104,22 @@ PYBIND11_MODULE(plan_builder, m) {
           connector_id: ID of the connector to use for this scan.
           input_files: If defined, uses as the input files so that no splits
                       will need to be added later.
+      )"))
+      .def(
+          "table_write",
+          &velox::py::PyPlanBuilder::tableWrite,
+          py::arg("output_file"),
+          py::arg("connector_id") = "hive",
+          py::arg("output_schema") = std::nullopt,
+          py::doc(R"(
+        Adds a table write node to the plan.
+
+        Args:
+          output_file: Name of the file to be written.
+          connector_id: ID of the connector to use for this scan.
+          output_schema: An optional RowType containing the schema to be
+                         written to the file. By default write the schema
+                         produced by the operator upstream.
       )"))
       .def(
           "values",
@@ -130,8 +146,8 @@ PYBIND11_MODULE(plan_builder, m) {
         SQL expression.
       )"))
       .def(
-          "singleAggregation",
-          &velox::py::PyPlanBuilder::singleAggregation,
+          "aggregate",
+          &velox::py::PyPlanBuilder::aggregate,
           py::arg("grouping_keys") = std::vector<std::string>{},
           py::arg("aggregations") = std::vector<std::string>{},
           py::doc(R"(
@@ -140,6 +156,37 @@ PYBIND11_MODULE(plan_builder, m) {
         Args:
           grouping_keys: List of columns to group by.
           aggregations: List of aggregate expressions.
+      )"))
+      .def(
+          "order_by",
+          &velox::py::PyPlanBuilder::orderBy,
+          py::arg("keys"),
+          py::arg("is_partial") = false,
+          py::doc(R"(
+        Sorts the input based on the values of sorting keys.
+
+        Args:
+          keys: List of columns to order by. The strings can be column names
+                and optionally contain the sort orientation ("col" or
+                "col DESC").
+          is_partial: If this node is sorting partial query results (and hence
+                      can run in parallel in multiple drivers), or final.
+      )"))
+      .def(
+          "limit",
+          &velox::py::PyPlanBuilder::limit,
+          py::arg("count"),
+          py::arg("offset") = 0,
+          py::arg("is_partial") = false,
+          py::doc(R"(
+        Limit how many rows from the input to produce as output.
+
+        Args:
+          count: How many rows to produce, at most.
+          offset: Hoy many rows from the beggining of the input to skip.
+          is_partial: If this is restricting partial results and hence
+                      can be applied once per driver, or if it's applied
+                      to the query output.
       )"))
       .def(
           "merge_join",
@@ -159,5 +206,43 @@ PYBIND11_MODULE(plan_builder, m) {
           right_plan_node: The plan node defined the subplan to join with.
           output: List of columns to be projected out of the join.
           filter: Optional join filter expression.
+      )"))
+      .def(
+          "sorted_merge",
+          &velox::py::PyPlanBuilder::sortedMerge,
+          py::arg("keys"),
+          py::arg("sources"),
+          py::doc(R"(
+        Takes N sorted `source` subtrees and merges them into a sorted output.
+        Assumes that all sources are sorted on `keys`.
+
+        Args:
+          keys: The sorting keys.
+          sources: The list of sources to merge.
+      )"))
+      .def(
+          "tpch_gen",
+          &velox::py::PyPlanBuilder::tpchGen,
+          py::arg("table_name"),
+          py::arg("columns") = std::vector<std::string>{},
+          py::arg("scale_factor") = 1,
+          py::arg("num_parts") = 1,
+          py::arg("connector_id") = "tpch",
+          py::doc(R"(
+        Generates TPC-H data on the fly using dbgen. Note that generating data
+        on the fly is not terribly efficient, so for performance evaluation one
+        should generate data using this node, write it to output storage files,
+        (Parquet, ORC, or similar), then benchmark a query plan that reads
+        those files.
+
+        Args:
+          table_name: The TPC-H table name to generate data for.
+          columns: The columns from `table_name` to generate data for. If
+                   empty (the default), generate data for all columns.
+          scale_factor: TPC-H scale factor to use - controls the amount of
+                        data generated.
+          num_parts: How many splits to generate. This controls the parallelism
+                     and the number of output files to be generated.
+          connector_id: ID of the connector to use for this scan.
       )"));
 }

@@ -17,7 +17,6 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
-#include "velox/expression/Expr.h"
 #include "velox/expression/FunctionSignature.h"
 #include "velox/expression/RegisterSpecialForm.h"
 #include "velox/expression/VectorFunction.h"
@@ -27,6 +26,7 @@
 #include "velox/functions/prestosql/aggregates/RegisterAggregateFunctions.h"
 #include "velox/functions/prestosql/registration/RegistrationFunctions.h"
 #include "velox/functions/prestosql/tests/utils/FunctionBaseTest.h"
+#include "velox/functions/prestosql/types/IPPrefixRegistration.h"
 #include "velox/functions/prestosql/types/IPPrefixType.h"
 #include "velox/functions/tests/RegistryTestUtil.h"
 #include "velox/type/Type.h"
@@ -81,6 +81,10 @@ inline void registerTestFunctions() {
   VELOX_REGISTER_VECTOR_FUNCTION(udf_vector_func_three, "vector_func_three");
   VELOX_REGISTER_VECTOR_FUNCTION(udf_vector_func_four, "vector_func_four");
 }
+
+inline void registerTestVectorFunctionOne(const std::string& functionName) {
+  VELOX_REGISTER_VECTOR_FUNCTION(udf_vector_func_one, functionName);
+}
 } // namespace
 
 class FunctionRegistryTest : public testing::Test {
@@ -106,6 +110,72 @@ class FunctionRegistryTest : public testing::Test {
     }
   }
 };
+
+TEST_F(FunctionRegistryTest, removeFunction) {
+  const std::string functionName = "func_to_remove";
+  auto checkFunctionExists = [&](const std::string& name,
+                                 bool vectorFuncSignatures,
+                                 bool simpleFuncSignatures) {
+    EXPECT_EQ(
+        getFunctionSignatures(name).size(),
+        vectorFuncSignatures + simpleFuncSignatures);
+    EXPECT_EQ(getVectorFunctionSignatures().count(name), vectorFuncSignatures);
+    EXPECT_EQ(
+        exec::simpleFunctions().getFunctionSignatures(name).size(),
+        simpleFuncSignatures);
+  };
+
+  checkFunctionExists(functionName, 0, 0);
+
+  // Only vector function registered
+  registerTestVectorFunctionOne(functionName);
+  checkFunctionExists(functionName, 1, 0);
+  removeFunction(functionName);
+  checkFunctionExists(functionName, 0, 0);
+
+  // Only simple function registered
+  registerFunction<FuncOne, Varchar, Varchar>(
+      std::vector<std::string>{functionName});
+  checkFunctionExists(functionName, 0, 1);
+  removeFunction(functionName);
+  checkFunctionExists(functionName, 0, 0);
+
+  // Both vector and simple function registered
+  registerTestVectorFunctionOne(functionName);
+  registerFunction<FuncOne, Varchar, Varchar>(
+      std::vector<std::string>{functionName});
+  checkFunctionExists(functionName, 1, 1);
+  removeFunction(functionName);
+  checkFunctionExists(functionName, 0, 0);
+}
+
+TEST_F(FunctionRegistryTest, getFunctionSignaturesByName) {
+  {
+    auto signatures = getFunctionSignatures("func_one");
+    ASSERT_EQ(signatures.size(), 1);
+    ASSERT_EQ(
+        signatures.at(0)->toString(),
+        exec::FunctionSignatureBuilder()
+            .returnType("varchar")
+            .argumentType("varchar")
+            .build()
+            ->toString());
+  }
+
+  {
+    auto signatures = getFunctionSignatures("vector_func_one");
+    ASSERT_EQ(signatures.size(), 1);
+    ASSERT_EQ(
+        signatures.at(0)->toString(),
+        exec::FunctionSignatureBuilder()
+            .returnType("bigint")
+            .argumentType("varchar")
+            .build()
+            ->toString());
+  }
+
+  ASSERT_TRUE(getFunctionSignatures("non-existent-function").empty());
+}
 
 TEST_F(FunctionRegistryTest, getFunctionSignatures) {
   auto functionSignatures = getFunctionSignatures();

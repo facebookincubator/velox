@@ -18,6 +18,7 @@
 #include <pybind11/stl.h>
 #include "velox/py/lib/PyInit.h"
 
+#include "velox/py/runner/PyConnectors.h"
 #include "velox/py/runner/PyLocalRunner.h"
 
 namespace py = pybind11;
@@ -43,6 +44,14 @@ PYBIND11_MODULE(runner, m) {
       }))
       .def("execute", &velox::py::PyLocalRunner::execute)
       .def(
+          "print_plan_with_stats",
+          &velox::py::PyLocalRunner::printPlanWithStats,
+          py::doc(R"(
+         Prints a descriptive debug message containing plan and execution
+         stats. If the task hasn't finished, will print the plan with the
+         current stats.
+          )"))
+      .def(
           "add_file_split",
           &velox::py::PyLocalRunner::addFileSplit,
           py::arg("file"),
@@ -59,6 +68,50 @@ PYBIND11_MODULE(runner, m) {
           connector_id: The id of the connector used by the scan.
           )"));
 
-  // Ensure all tasks created by this module have finished.
-  m.add_object("_cleanup", py::capsule(&velox::py::drainAllTasks));
+  m.def(
+       "register_hive",
+       &velox::py::registerHive,
+       pybind11::arg("connector_name") = "hive",
+       pybind11::arg("configs") =
+           std::unordered_map<std::string, std::string>{},
+       py::doc(R"(
+        "Initialize and register Hive connector.
+
+        Args:
+          connector_name: Name to use for the registered connector.
+          configs: A dictionary containing connector configs.
+      )"))
+      .def(
+          "register_tpch",
+          &velox::py::registerTpch,
+          pybind11::arg("connector_name") = "tpch",
+          pybind11::arg("configs") =
+              std::unordered_map<std::string, std::string>{},
+          py::doc(R"(
+        "Initialize and register TPC-H connector.
+
+        Args:
+          connector_name: Name to use for the registered connector.
+          configs: A dictionary containing connector configs.
+      )"))
+      .def(
+          "unregister",
+          &velox::py::unregister,
+          pybind11::arg("connector_name"),
+          py::doc(R"(
+        "Unregister connector.
+
+        Args:
+          connector_name: Name of the connector to unregister.",
+      )"));
+
+  // When the module gets unloaded, first ensure all tasks created by this
+  // module have finished, then unregister all connectors that have been
+  // registered by this module. We need to explicity unregister them to prevent
+  // the connectors and their nested structures from being destructed after
+  // other global and static resources are destructed.
+  m.add_object("_cleanup", py::capsule([]() {
+                 velox::py::drainAllTasks();
+                 velox::py::unregisterAll();
+               }));
 }

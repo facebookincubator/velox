@@ -21,6 +21,8 @@
 #include "velox/core/PlanNode.h"
 #include "velox/dwio/common/Options.h"
 #include "velox/dwio/dwrf/writer/Writer.h"
+#include "velox/exec/PlanNodeStats.h"
+#include "velox/exec/Spill.h"
 #include "velox/py/vector/PyVector.h"
 
 namespace facebook::velox::py {
@@ -41,7 +43,7 @@ std::mutex& taskRegistryLock() {
 namespace py = pybind11;
 
 PyVector PyTaskIterator::Iterator::operator*() const {
-  return PyVector{vector_};
+  return PyVector{vector_, outputPool_};
 }
 
 void PyTaskIterator::Iterator::advance() {
@@ -56,7 +58,8 @@ PyLocalRunner::PyLocalRunner(
     const PyPlanNode& pyPlanNode,
     const std::shared_ptr<memory::MemoryPool>& pool,
     const std::shared_ptr<folly::CPUThreadPoolExecutor>& executor)
-    : pool_(pool),
+    : rootPool_(pool),
+      outputPool_(memory::memoryManager()->addLeafPool()),
       executor_(executor),
       planNode_(pyPlanNode.planNode()),
       scanFiles_(pyPlanNode.scanFiles()) {
@@ -69,11 +72,12 @@ PyLocalRunner::PyLocalRunner(
       core::QueryConfig(configs),
       {},
       cache::AsyncDataCache::getInstance(),
-      pool_);
+      rootPool_);
 
   cursor_ = exec::TaskCursor::create({
       .planNode = planNode_,
       .queryCtx = queryCtx,
+      .outputPool = outputPool_,
   });
 }
 
@@ -93,9 +97,9 @@ py::iterator PyLocalRunner::execute() {
   }
 
   // Add any files passed by the client during plan building.
-  for (const auto& [scanId, scanPair] : *scanFiles_) {
-    for (const auto& inputFile : scanPair.second) {
-      addFileSplit(inputFile, scanId, scanPair.first);
+  for (auto& [scanId, splits] : *scanFiles_) {
+    for (auto& split : splits) {
+      cursor_->task()->addSplit(scanId, exec::Split(std::move(split)));
     }
     cursor_->task()->noMoreSplits(scanId);
   }
@@ -105,8 +109,13 @@ py::iterator PyLocalRunner::execute() {
     taskRegistry().push_back(cursor_->task());
   }
 
-  pyIterator_ = std::make_shared<PyTaskIterator>(cursor_);
+  pyIterator_ = std::make_shared<PyTaskIterator>(cursor_, outputPool_);
   return py::make_iterator(pyIterator_->begin(), pyIterator_->end());
+}
+
+std::string PyLocalRunner::printPlanWithStats() const {
+  return exec::printPlanWithStats(
+      *planNode_, cursor_->task()->taskStats(), true);
 }
 
 void drainAllTasks() {

@@ -18,7 +18,9 @@
 
 #include <folly/executors/GlobalExecutor.h>
 #include <pybind11/stl.h>
+#include "velox/connectors/hive/HiveConnectorSplit.h"
 #include "velox/connectors/hive/TableHandle.h"
+#include "velox/connectors/tpch/TpchConnectorSplit.h"
 #include "velox/core/PlanNode.h"
 #include "velox/dwio/dwrf/RegisterDwrfReader.h"
 #include "velox/dwio/dwrf/RegisterDwrfWriter.h"
@@ -29,6 +31,7 @@
 #include "velox/functions/prestosql/registration/RegistrationFunctions.h"
 #include "velox/parse/TypeResolver.h"
 #include "velox/py/vector/PyVector.h"
+#include "velox/tpch/gen/TpchGen.h"
 
 namespace facebook::velox::py {
 
@@ -41,6 +44,8 @@ void registerAllResourcesOnce() {
 
   velox::dwrf::registerDwrfWriterFactory();
   velox::dwrf::registerDwrfReaderFactory();
+
+  velox::dwio::common::LocalFileSink::registerFactory();
 
   velox::parse::registerTypeResolver();
 
@@ -94,8 +99,33 @@ std::optional<PyPlanNode> PyPlanBuilder::planNode() const {
   return std::nullopt;
 }
 
+PyPlanBuilder& PyPlanBuilder::tableWrite(
+    const PyFile& outputFile,
+    const std::string& connectorId,
+    const std::optional<PyType>& outputSchema) {
+  exec::test::PlanBuilder::TableWriterBuilder builder(planBuilder_);
+
+  // Try to convert the output type.
+  RowTypePtr outputRowSchema;
+
+  if (outputSchema != std::nullopt) {
+    outputRowSchema = asRowType(outputSchema->type());
+
+    if (outputRowSchema == nullptr) {
+      throw std::runtime_error("Output schema must be a ROW().");
+    }
+    builder.outputType(outputRowSchema);
+  }
+
+  builder.outputFileName(outputFile.filePath())
+      .fileFormat(outputFile.fileFormat())
+      .connectorId(connectorId)
+      .endTableWriter();
+  return *this;
+}
+
 PyPlanBuilder& PyPlanBuilder::tableScan(
-    const velox::py::PyType& outputSchema,
+    const PyType& outputSchema,
     const py::dict& aliases,
     const py::dict& subfields,
     const std::string& rowIndexColumnName,
@@ -174,9 +204,16 @@ PyPlanBuilder& PyPlanBuilder::tableScan(
       .connectorId(connectorId)
       .endTableScan();
 
-  // Store the id of the scan along with any files that were passed.
-  (*scanFiles_)[planBuilder_.planNode()->id()] =
-      std::make_pair(connectorId, inputFiles.value_or(std::vector<PyFile>{}));
+  // Store the id of the scan and the respective splits.
+  std::vector<std::shared_ptr<connector::ConnectorSplit>> splits;
+  if (inputFiles.has_value()) {
+    for (const auto& inputFile : *inputFiles) {
+      splits.push_back(std::make_shared<connector::hive::HiveConnectorSplit>(
+          connectorId, inputFile.filePath(), inputFile.fileFormat()));
+    }
+  }
+
+  (*scanFiles_)[planBuilder_.planNode()->id()] = std::move(splits);
   return *this;
 }
 
@@ -208,10 +245,23 @@ PyPlanBuilder& PyPlanBuilder::filter(const std::string& filter) {
   return *this;
 }
 
-PyPlanBuilder& PyPlanBuilder::singleAggregation(
+PyPlanBuilder& PyPlanBuilder::aggregate(
     const std::vector<std::string>& groupingKeys,
     const std::vector<std::string>& aggregations) {
   planBuilder_.singleAggregation(groupingKeys, aggregations);
+  return *this;
+}
+
+PyPlanBuilder& PyPlanBuilder::orderBy(
+    const std::vector<std::string>& keys,
+    bool isPartial) {
+  planBuilder_.orderBy(keys, isPartial);
+  return *this;
+}
+
+PyPlanBuilder&
+PyPlanBuilder::limit(int64_t count, int64_t offset, bool isPartial) {
+  planBuilder_.limit(offset, count, isPartial);
   return *this;
 }
 
@@ -229,6 +279,47 @@ PyPlanBuilder& PyPlanBuilder::mergeJoin(
       filter,
       output,
       joinType);
+  return *this;
+}
+
+PyPlanBuilder& PyPlanBuilder::sortedMerge(
+    const std::vector<std::string>& keys,
+    const std::vector<std::optional<PyPlanNode>>& pySources) {
+  std::vector<core::PlanNodePtr> sources;
+  sources.reserve(pySources.size());
+
+  for (const auto& pySource : pySources) {
+    if (pySource.has_value()) {
+      sources.push_back(pySource->planNode());
+    }
+  }
+
+  planBuilder_.localMerge(keys, std::move(sources));
+  return *this;
+}
+
+PyPlanBuilder& PyPlanBuilder::tpchGen(
+    const std::string& tableName,
+    const std::vector<std::string>& columns,
+    double scaleFactor,
+    size_t numParts,
+    const std::string& connectorId) {
+  // If `columns` is empty, get all columns from `table`.
+  auto table = tpch::fromTableName(tableName);
+  planBuilder_.tpchTableScan(
+      table,
+      columns.empty() ? tpch::getTableSchema(table)->names() : columns,
+      scaleFactor,
+      connectorId);
+
+  // Generate one split per part.
+  std::vector<std::shared_ptr<connector::ConnectorSplit>> splits;
+  for (size_t i = 0; i < numParts; ++i) {
+    splits.push_back(std::make_shared<connector::tpch::TpchConnectorSplit>(
+        connectorId, numParts, i));
+  }
+
+  (*scanFiles_)[planBuilder_.planNode()->id()] = std::move(splits);
   return *this;
 }
 

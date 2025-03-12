@@ -18,9 +18,9 @@
 #include <folly/Range.h>
 
 #include "velox/common/base/RuntimeMetrics.h"
-#include "velox/common/base/Scratch.h"
 #include "velox/common/compression/Compression.h"
 #include "velox/common/memory/ByteStream.h"
+#include "velox/common/memory/Scratch.h"
 #include "velox/common/memory/StreamArena.h"
 #include "velox/vector/ComplexVector.h"
 
@@ -31,18 +31,6 @@ class ByteStream;
 struct IndexRange {
   vector_size_t begin;
   vector_size_t size;
-};
-
-/// A flavor of IndexRange that allows us to add artificial nulls. This is
-/// useful when for example, when flatteneing a DictionaryVector, the
-/// DictionaryVector may introduce nulls that do not exist in the values Vector,
-/// and so need to get introduced artificially.
-struct IndexRangeWithNulls {
-  vector_size_t begin;
-  vector_size_t size;
-
-  /// Whether we should "pretend" the values in this range are null.
-  bool isNull;
 };
 
 namespace row {
