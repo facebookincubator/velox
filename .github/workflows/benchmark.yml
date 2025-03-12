@@ -53,20 +53,24 @@ jobs:
           submodules: 'recursive'
           persist-credentials: false
 
-      - name: "Restore Dependencies"
+      - name: Restore Dependencies
         uses: actions/cache/restore@d4323d4df104b026a6aa633fdb11d772146be0bf # v4.2.2
         id: restore-deps
         with:
           path: "${{ env.INSTALL_PREFIX }}"
           key: dependencies-benchmark-${{ hashFiles('velox/scripts/setup-ubuntu.sh') }}
 
-      - name: "Install dependencies"
+      - name: Install apt dependencies
+        run: |
+            source velox/scripts/setup-ubuntu.sh 
+            install_apt_deps 
+
+      - name: Install compiled dependencies
         if: ${{ steps.restore-deps.outputs.cache-hit != 'true' }}
         env:
           CCACHE_DISABLE: "true"
         run: |
             source velox/scripts/setup-ubuntu.sh 
-            install_apt_deps 
             run_and_time install_fmt
             run_and_time install_protobuf
             run_and_time install_boost
@@ -75,14 +79,14 @@ jobs:
             run_and_time install_thrift
             run_and_time install_arrow
 
-      - name: "Save Dependencies"
+      - name: Save Dependencies
         if: ${{ steps.restore-deps.outputs.cache-hit != 'true' }}
         uses: actions/cache/save@d4323d4df104b026a6aa633fdb11d772146be0bf # v4.2.2
         with:
           path: "${{ env.INSTALL_PREFIX }}"
           key: dependencies-benchmark-${{ hashFiles('velox/scripts/setup-ubuntu.sh') }}
 
-      - name: "Restore ccache"
+      - name: Restore ccache
         uses: apache/infrastructure-actions/stash/restore@3354c1565d4b0e335b78a76aedd82153a9e144d4
         id: restore-cache
         with:
@@ -106,23 +110,23 @@ jobs:
         run: |
           ccache -vs
 
-      - name: "Save ccache"
+      - name: Save ccache"
         uses: apache/infrastructure-actions/stash/save@3354c1565d4b0e335b78a76aedd82153a9e144d4
         with:
           path: "ccache"
           key: ccache-benchmark
 
-      - name: "Install benchmark dependencies"
+      - name: Install benchmark dependencies
         run: |
           python3 -m pip install -r velox/scripts/benchmark-requirements.txt
 
-      - name: "Run Benchmarks - Contender"
+      - name: Run Benchmarks - Contender
         working-directory: 'velox'
         run: |
             make benchmarks-basic-run \
                 EXTRA_BENCHMARK_FLAGS="--binary_path ${BINARY_DIR}/contender/ --output_path ${CONTENDER_OUTPUT_PATH}"
 
-      - name: "Upload result artifact"
+      - name: Upload result artifact
         uses: actions/upload-artifact@4cec3d8aa04e39d1a68397de0c4cd6fb9dce8ec1 # v4.6.1
         with:
           path: "benchmark-results"
@@ -155,10 +159,10 @@ jobs:
         cache: 'pip'
         cache-dependency-path: "velox/scripts/*"
 
-    - name: "Install dependencies"
+    - name: Install dependencies
       run: pip install -r velox/scripts/benchmark-requirements.txt
 
-    - name: "Upload results"
+    - name: Upload results
       env:
         CONBENCH_URL: "https://velox-conbench.voltrondata.run/"
         CONBENCH_MACHINE_INFO_NAME: "GitHub-runner-8-core"
@@ -173,13 +177,13 @@ jobs:
           --sha "$CONBENCH_PROJECT_COMMIT" \
           --output_dir "/tmp/artifacts/contender/"
 
-    - name: "Check the status of the upload"
+    - name: Check the status of the upload
       # Status functions like failure() only work in `if:`
       if: failure()
       id: status
       run: echo "failed=true" >> $GITHUB_OUTPUT
 
-    - name: "Create a GitHub Status on the contender commit (whether the upload was successful)"
+    - name: Create a GitHub Status on the contender commit (whether the upload was successful)
       uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea # v7.0.1
       if: ${{ !cancelled() && steps.extract.conclusion != 'failure' }}
       with:
