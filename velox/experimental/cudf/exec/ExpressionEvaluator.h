@@ -78,7 +78,7 @@ class ExpressionEvaluator {
       const std::vector<std::shared_ptr<velox::exec::Expr>>& exprs);
 
  private:
-  std::vector<cudf::ast::tree> projectAst_;
+  std::vector<cudf::ast::tree> exprAst_;
   std::vector<std::unique_ptr<cudf::scalar>> scalars_;
   // instruction on dependent column to get new column index on non-ast
   // supported operations in expressions
