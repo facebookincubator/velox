@@ -21,8 +21,10 @@
 #include "velox/exec/JoinBridge.h"
 #include "velox/exec/Operator.h"
 #include "velox/exec/Task.h"
+#include "velox/expression/FieldReference.h"
 #include "velox/vector/ComplexVector.h"
 
+#include <cudf/column/column_view.hpp>
 #include <cudf/concatenate.hpp>
 #include <cudf/copying.hpp>
 #include <cudf/join.hpp>
@@ -31,6 +33,7 @@
 #include <nvtx3/nvtx3.hpp>
 
 #include "velox/experimental/cudf/exec/CudfHashJoin.h"
+#include "velox/experimental/cudf/exec/ExpressionEvaluator.h"
 #include "velox/experimental/cudf/exec/Utilities.h"
 #include "velox/experimental/cudf/exec/VeloxCudfInterop.h"
 #include "velox/experimental/cudf/vector/CudfVector.h"
@@ -174,9 +177,20 @@ void CudfHashJoinBuild::noMoreInput() {
         buildType->getChildIdx(rightKeys[i]->name()));
   }
 
-  auto hashObject = std::make_shared<cudf::hash_join>(
-      tbl->view().select(build_key_indices), cudf::null_equality::EQUAL);
-  VELOX_CHECK_NOT_NULL(hashObject);
+  // Only need to construct hash_join object if it's an inner join or left join
+  // and doesn't have a filter. All other cases use a standalone function in
+  // cudf
+  bool buildHashJoin = (joinNode_->isInnerJoin() || joinNode_->isLeftJoin()) &&
+      !joinNode_->filter();
+  auto hashObject = (buildHashJoin) ? std::make_shared<cudf::hash_join>(
+                                          tbl->view().select(build_key_indices),
+                                          cudf::null_equality::EQUAL,
+                                          stream)
+                                    : nullptr;
+  if (buildHashJoin) {
+    VELOX_CHECK_NOT_NULL(hashObject);
+  }
+
   if (cudfDebugEnabled()) {
     if (hashObject != nullptr) {
       printf("hashObject is not nullptr %p\n", hashObject.get());
@@ -212,7 +226,7 @@ CudfHashJoinProbe::CudfHashJoinProbe(
     std::shared_ptr<const core::HashJoinNode> joinNode)
     : exec::Operator(
           driverCtx,
-          nullptr, // joinNode->sources(),
+          joinNode->outputType(),
           operatorId,
           joinNode->id(),
           "CudfHashJoinProbe"),
@@ -220,6 +234,127 @@ CudfHashJoinProbe::CudfHashJoinProbe(
       joinNode_(joinNode) {
   if (cudfDebugEnabled()) {
     std::cout << "CudfHashJoinProbe constructor" << std::endl;
+  }
+  auto probeType = joinNode_->sources()[0]->outputType();
+  auto buildType = joinNode_->sources()[1]->outputType();
+  auto const& leftKeys = joinNode_->leftKeys(); // probe keys
+  auto const& rightKeys = joinNode_->rightKeys(); // build keys
+
+  if (cudfDebugEnabled()) {
+    for (int i = 0; i < probeType->names().size(); i++) {
+      std::cout << "Left column " << i << ": " << probeType->names()[i]
+                << std::endl;
+    }
+
+    for (int i = 0; i < buildType->names().size(); i++) {
+      std::cout << "Right column " << i << ": " << buildType->names()[i]
+                << std::endl;
+    }
+
+    for (int i = 0; i < leftKeys.size(); i++) {
+      std::cout << "Left key " << i << ": " << leftKeys[i]->name() << " "
+                << leftKeys[i]->type()->kind() << std::endl;
+    }
+
+    for (int i = 0; i < rightKeys.size(); i++) {
+      std::cout << "Right key " << i << ": " << rightKeys[i]->name() << " "
+                << rightKeys[i]->type()->kind() << std::endl;
+    }
+  }
+
+  auto const probe_table_num_columns = probeType->size();
+  left_key_indices_ = std::vector<cudf::size_type>(leftKeys.size());
+  for (size_t i = 0; i < left_key_indices_.size(); i++) {
+    left_key_indices_[i] = static_cast<cudf::size_type>(
+        probeType->getChildIdx(leftKeys[i]->name()));
+    VELOX_CHECK_LT(left_key_indices_[i], probe_table_num_columns);
+  }
+  auto const build_table_num_columns = buildType->size();
+  right_key_indices_ = std::vector<cudf::size_type>(rightKeys.size());
+  for (size_t i = 0; i < right_key_indices_.size(); i++) {
+    right_key_indices_[i] = static_cast<cudf::size_type>(
+        buildType->getChildIdx(rightKeys[i]->name()));
+    VELOX_CHECK_LT(right_key_indices_[i], build_table_num_columns);
+  }
+
+  auto outputType = joinNode_->outputType();
+  left_column_indices_to_gather_ = std::vector<cudf::size_type>();
+  right_column_indices_to_gather_ = std::vector<cudf::size_type>();
+  left_column_output_indices_ = std::vector<size_t>();
+  right_column_output_indices_ = std::vector<size_t>();
+  for (int i = 0; i < outputType->names().size(); i++) {
+    auto const output_name = outputType->names()[i];
+    if (cudfDebugEnabled()) {
+      std::cout << "Output column " << i << ": " << output_name << std::endl;
+    }
+    auto channel = probeType->getChildIdxIfExists(output_name);
+    if (channel.has_value()) {
+      left_column_indices_to_gather_.push_back(
+          static_cast<cudf::size_type>(channel.value()));
+      left_column_output_indices_.push_back(i);
+      continue;
+    }
+    channel = buildType->getChildIdxIfExists(output_name);
+    if (channel.has_value()) {
+      right_column_indices_to_gather_.push_back(
+          static_cast<cudf::size_type>(channel.value()));
+      right_column_output_indices_.push_back(i);
+      continue;
+    }
+    VELOX_FAIL(
+        "Join field {} not in probe or build input", outputType->children()[i]);
+  }
+
+  if (cudfDebugEnabled()) {
+    for (int i = 0; i < left_column_indices_to_gather_.size(); i++) {
+      std::cout << "Left index to gather " << i << ": "
+                << left_column_indices_to_gather_[i] << std::endl;
+    }
+
+    for (int i = 0; i < right_column_indices_to_gather_.size(); i++) {
+      std::cout << "Right index to gather " << i << ": "
+                << right_column_indices_to_gather_[i] << std::endl;
+    }
+  }
+
+  // Setup filter in case it exists
+  if (joinNode_->filter()) {
+    // simplify expression
+    exec::ExprSet exprs({joinNode_->filter()}, operatorCtx_->execCtx());
+    VELOX_CHECK_EQ(exprs.exprs().size(), 1);
+
+    // We don't need to get tables that contain conditional comparison columns
+    // We'll pass the entire table. The ast will handle finding the required
+    // columns. This is required because we build the ast with whole row schema
+    // and the column locations in that schema translate to column locations
+    // in whole tables
+
+    // create ast tree
+    std::vector<PrecomputeInstruction> right_precompute_instructions;
+    std::vector<PrecomputeInstruction> left_precompute_instructions;
+    if (joinNode_->isRightSemiFilterJoin() || joinNode_->isRightJoin()) {
+      create_ast_tree(
+          exprs.exprs()[0],
+          tree_,
+          scalars_,
+          buildType,
+          probeType,
+          right_precompute_instructions,
+          left_precompute_instructions);
+    } else {
+      create_ast_tree(
+          exprs.exprs()[0],
+          tree_,
+          scalars_,
+          probeType,
+          buildType,
+          left_precompute_instructions,
+          right_precompute_instructions);
+    }
+    if (left_precompute_instructions.size() > 0 ||
+        right_precompute_instructions.size() > 0) {
+      VELOX_NYI("Filters that require precomputation are not yet supported");
+    }
   }
 }
 
@@ -254,40 +389,12 @@ RowVectorPtr CudfHashJoinProbe::getOutput() {
               << std::endl;
   }
 
-  auto probeType = joinNode_->sources()[0]->outputType();
-  auto buildType = joinNode_->sources()[1]->outputType();
-  auto const& leftKeys = joinNode_->leftKeys(); // probe keys
-  auto const& rightKeys = joinNode_->rightKeys(); // build keys
-
-  if (cudfDebugEnabled()) {
-    for (int i = 0; i < probeType->names().size(); i++) {
-      std::cout << "Left column " << i << ": " << probeType->names()[i]
-                << std::endl;
-    }
-
-    for (int i = 0; i < buildType->names().size(); i++) {
-      std::cout << "Right column " << i << ": " << buildType->names()[i]
-                << std::endl;
-    }
-
-    for (int i = 0; i < leftKeys.size(); i++) {
-      std::cout << "Left key " << i << ": " << leftKeys[i]->name() << " "
-                << leftKeys[i]->type()->kind() << std::endl;
-    }
-
-    for (int i = 0; i < rightKeys.size(); i++) {
-      std::cout << "Right key " << i << ": " << rightKeys[i]->name() << " "
-                << rightKeys[i]->type()->kind() << std::endl;
-    }
-  }
-
   // TODO pass the input pool !!!
   // TODO: We should probably subset columns before calling to_cudf_table?
   // Maybe that isn't a problem if we fuse operators together.
   auto& right_table = hashObject_.value().first;
   auto& hb = hashObject_.value().second;
   VELOX_CHECK_NOT_NULL(right_table);
-  VELOX_CHECK_NOT_NULL(hb);
   if (cudfDebugEnabled()) {
     if (right_table != nullptr)
       printf(
@@ -301,63 +408,109 @@ RowVectorPtr CudfHashJoinProbe::getOutput() {
           hashObject_.has_value());
   }
 
-  auto const probe_table_num_columns = left_table->num_columns();
-  auto left_key_indices = std::vector<cudf::size_type>(leftKeys.size());
-  for (size_t i = 0; i < left_key_indices.size(); i++) {
-    left_key_indices[i] = static_cast<cudf::size_type>(
-        probeType->getChildIdx(leftKeys[i]->name()));
-    VELOX_CHECK_LT(left_key_indices[i], probe_table_num_columns);
-  }
-  auto const build_table_num_columns = right_table->num_columns();
-  auto right_key_indices = std::vector<cudf::size_type>(rightKeys.size());
-  for (size_t i = 0; i < right_key_indices.size(); i++) {
-    right_key_indices[i] = static_cast<cudf::size_type>(
-        buildType->getChildIdx(rightKeys[i]->name()));
-    VELOX_CHECK_LT(right_key_indices[i], build_table_num_columns);
-  }
-
   std::unique_ptr<rmm::device_uvector<cudf::size_type>> left_join_indices;
   std::unique_ptr<rmm::device_uvector<cudf::size_type>> right_join_indices;
 
+  auto left_table_view = left_table->view();
+  auto right_table_view = right_table->view();
+
   if (joinNode_->isInnerJoin()) {
-    // TODO filter check inside.
     // left = probe, right = build
-    std::tie(left_join_indices, right_join_indices) = hb->inner_join(
-        left_table->view().select(left_key_indices), std::nullopt, stream);
+    if (joinNode_->filter()) {
+      std::tie(left_join_indices, right_join_indices) = mixed_inner_join(
+          left_table_view.select(left_key_indices_),
+          right_table_view.select(right_key_indices_),
+          left_table_view,
+          right_table_view,
+          tree_.back(),
+          cudf::null_equality::EQUAL,
+          std::nullopt,
+          stream);
+    } else {
+      VELOX_CHECK_NOT_NULL(hb);
+      std::tie(left_join_indices, right_join_indices) = hb->inner_join(
+          left_table_view.select(left_key_indices_), std::nullopt, stream);
+    }
   } else if (joinNode_->isLeftJoin()) {
-    // left = probe, right = build
-    std::tie(left_join_indices, right_join_indices) = hb->left_join(
-        left_table->view().select(left_key_indices), std::nullopt, stream);
+    if (joinNode_->filter()) {
+      std::tie(left_join_indices, right_join_indices) = cudf::mixed_left_join(
+          left_table_view.select(left_key_indices_),
+          right_table_view.select(right_key_indices_),
+          left_table_view,
+          right_table_view,
+          tree_.back(),
+          cudf::null_equality::EQUAL,
+          std::nullopt,
+          stream);
+    } else {
+      VELOX_CHECK_NOT_NULL(hb);
+      std::tie(left_join_indices, right_join_indices) = hb->left_join(
+          left_table_view.select(left_key_indices_), std::nullopt, stream);
+    }
   } else if (joinNode_->isRightJoin()) {
     std::tie(right_join_indices, left_join_indices) = cudf::left_join(
-        right_table->view().select(right_key_indices),
-        left_table->view().select(left_key_indices),
+        right_table_view.select(right_key_indices_),
+        left_table_view.select(left_key_indices_),
         cudf::null_equality::EQUAL,
         stream,
         cudf::get_current_device_resource_ref());
   } else if (joinNode_->isAntiJoin()) {
-    // TODO filter check inside.
-    left_join_indices = cudf::left_anti_join(
-        left_table->view().select(left_key_indices),
-        right_table->view().select(right_key_indices),
-        cudf::null_equality::EQUAL,
-        stream,
-        cudf::get_current_device_resource_ref());
+    if (joinNode_->filter()) {
+      left_join_indices = cudf::mixed_left_anti_join(
+          left_table_view.select(left_key_indices_),
+          right_table_view.select(right_key_indices_),
+          left_table_view,
+          right_table_view,
+          tree_.back(),
+          cudf::null_equality::EQUAL,
+          stream,
+          cudf::get_current_device_resource_ref());
+    } else {
+      left_join_indices = cudf::left_anti_join(
+          left_table_view.select(left_key_indices_),
+          right_table_view.select(right_key_indices_),
+          cudf::null_equality::EQUAL,
+          stream,
+          cudf::get_current_device_resource_ref());
+    }
   } else if (joinNode_->isLeftSemiFilterJoin()) {
-    left_join_indices = cudf::left_semi_join(
-        left_table->view().select(left_key_indices),
-        right_table->view().select(right_key_indices),
-        cudf::null_equality::EQUAL,
-        stream,
-        cudf::get_current_device_resource_ref());
+    if (joinNode_->filter()) {
+      left_join_indices = cudf::mixed_left_semi_join(
+          left_table_view.select(left_key_indices_),
+          right_table_view.select(right_key_indices_),
+          left_table_view,
+          right_table_view,
+          tree_.back(),
+          cudf::null_equality::EQUAL,
+          stream,
+          cudf::get_current_device_resource_ref());
+    } else {
+      left_join_indices = cudf::left_semi_join(
+          left_table_view.select(left_key_indices_),
+          right_table_view.select(right_key_indices_),
+          cudf::null_equality::EQUAL,
+          stream,
+          cudf::get_current_device_resource_ref());
+    }
   } else if (joinNode_->isRightSemiFilterJoin()) {
-    // TODO filter check inside.
-    right_join_indices = cudf::left_semi_join(
-        right_table->view().select(right_key_indices),
-        left_table->view().select(left_key_indices),
-        cudf::null_equality::EQUAL,
-        stream,
-        cudf::get_current_device_resource_ref());
+    if (joinNode_->filter()) {
+      right_join_indices = cudf::mixed_left_semi_join(
+          right_table_view.select(right_key_indices_),
+          left_table_view.select(left_key_indices_),
+          right_table_view,
+          left_table_view,
+          tree_.back(),
+          cudf::null_equality::EQUAL,
+          stream,
+          cudf::get_current_device_resource_ref());
+    } else {
+      right_join_indices = cudf::left_semi_join(
+          right_table_view.select(right_key_indices_),
+          left_table_view.select(left_key_indices_),
+          cudf::null_equality::EQUAL,
+          stream,
+          cudf::get_current_device_resource_ref());
+    }
   } else {
     VELOX_FAIL("Unsupported join type: ", joinNode_->joinType());
   }
@@ -368,48 +521,8 @@ RowVectorPtr CudfHashJoinProbe::getOutput() {
       ? cudf::device_span<cudf::size_type const>{*right_join_indices}
       : cudf::device_span<cudf::size_type const>{};
 
-  auto outputType = joinNode_->outputType();
-  auto left_column_indices_to_gather = std::vector<cudf::size_type>();
-  auto right_column_indices_to_gather = std::vector<cudf::size_type>();
-  auto left_column_output_indices = std::vector<size_t>();
-  auto right_column_output_indices = std::vector<size_t>();
-  for (int i = 0; i < outputType->names().size(); i++) {
-    auto const output_name = outputType->names()[i];
-    if (cudfDebugEnabled()) {
-      std::cout << "Output column " << i << ": " << output_name << std::endl;
-    }
-    auto channel = probeType->getChildIdxIfExists(output_name);
-    if (channel.has_value()) {
-      left_column_indices_to_gather.push_back(
-          static_cast<cudf::size_type>(channel.value()));
-      left_column_output_indices.push_back(i);
-      continue;
-    }
-    channel = buildType->getChildIdxIfExists(output_name);
-    if (channel.has_value()) {
-      right_column_indices_to_gather.push_back(
-          static_cast<cudf::size_type>(channel.value()));
-      right_column_output_indices.push_back(i);
-      continue;
-    }
-    VELOX_FAIL(
-        "Join field {} not in probe or build input", outputType->children()[i]);
-  }
-
-  if (cudfDebugEnabled()) {
-    for (int i = 0; i < left_column_indices_to_gather.size(); i++) {
-      std::cout << "Left index to gather " << i << ": "
-                << left_column_indices_to_gather[i] << std::endl;
-    }
-
-    for (int i = 0; i < right_column_indices_to_gather.size(); i++) {
-      std::cout << "Right index to gather " << i << ": "
-                << right_column_indices_to_gather[i] << std::endl;
-    }
-  }
-
-  auto left_input = left_table->view().select(left_column_indices_to_gather);
-  auto right_input = right_table->view().select(right_column_indices_to_gather);
+  auto left_input = left_table_view.select(left_column_indices_to_gather_);
+  auto right_input = right_table_view.select(right_column_indices_to_gather_);
 
   auto left_indices_col = cudf::column_view{left_indices_span};
   auto right_indices_col = cudf::column_view{right_indices_span};
@@ -429,12 +542,12 @@ RowVectorPtr CudfHashJoinProbe::getOutput() {
   auto left_cols = left_result->release();
   auto right_cols = right_result->release();
   auto joined_cols =
-      std::vector<std::unique_ptr<cudf::column>>(outputType->names().size());
-  for (int i = 0; i < left_column_output_indices.size(); i++) {
-    joined_cols[left_column_output_indices[i]] = std::move(left_cols[i]);
+      std::vector<std::unique_ptr<cudf::column>>(outputType_->names().size());
+  for (int i = 0; i < left_column_output_indices_.size(); i++) {
+    joined_cols[left_column_output_indices_[i]] = std::move(left_cols[i]);
   }
-  for (int i = 0; i < right_column_output_indices.size(); i++) {
-    joined_cols[right_column_output_indices[i]] = std::move(right_cols[i]);
+  for (int i = 0; i < right_column_output_indices_.size(); i++) {
+    joined_cols[right_column_output_indices_[i]] = std::move(right_cols[i]);
   }
   auto cudf_output = std::make_unique<cudf::table>(std::move(joined_cols));
   stream.synchronize();
@@ -447,7 +560,7 @@ RowVectorPtr CudfHashJoinProbe::getOutput() {
     return nullptr;
   }
   return std::make_shared<CudfVector>(
-      pool(), outputType, size, std::move(cudf_output), stream);
+      pool(), outputType_, size, std::move(cudf_output), stream);
 }
 
 exec::BlockingReason CudfHashJoinProbe::isBlocked(ContinueFuture* future) {

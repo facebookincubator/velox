@@ -1025,19 +1025,17 @@ TEST_F(HashJoinTest, multipleProbeColumns) {
   };
   test("");
 
-  // TODO: Use a trivial case where the filter is always true.
+  // Trivial case where the filter is always true.
   test("t_k1>0");
 
-  // TODO: Add support for nontrivial filters.
-
   // Alternate rows pass this filter and last row of a batch fails.
-  // test("t_k1=1");
+  test("t_k1=1");
 
   // All rows fail this filter.
-  // test("t_k1=5");
+  test("t_k1=5");
 
   // All rows in the second batch pass this filter.
-  // test("t_k2 > 9");
+  test("t_k2 > 9");
 }
 
 TEST_F(HashJoinTest, multipleBuildColumns) {
@@ -1100,6 +1098,227 @@ TEST_F(HashJoinTest, multipleBuildColumns) {
 
   // All rows in the second batch pass this filter.
   // test("t_k2 > 9");
+}
+
+TEST_F(HashJoinTest, filter) {
+  // Left side keys are [0, 1, 2,..10].
+  // Use 3-rd column as row number to allow for asserting the order of
+  // results.
+  std::vector<RowVectorPtr> probeVectors =
+      makeBatches(1, [&](int32_t /*unused*/) {
+        return makeRowVector(
+            {"c0", "c1", "row_number"},
+            {
+                makeFlatVector<int32_t>(77, [](auto row) { return row % 11; }),
+                makeFlatVector<double>(77, [](auto row) { return row; }),
+                makeFlatVector<int32_t>(77, [](auto row) { return row; }),
+            });
+      });
+
+  std::vector<RowVectorPtr> buildVectors =
+      makeBatches(1, [&](int32_t /*unused*/) {
+        return makeRowVector({
+            makeFlatVector<int32_t>(73, [](auto row) { return row % 5; }),
+            makeFlatVector<double>(73, [](auto row) { return -11 + row * 2; }),
+        });
+      });
+
+  HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
+      .numDrivers(numDrivers_)
+      .probeKeys({"c0"})
+      .probeVectors(std::move(probeVectors))
+      .buildKeys({"u_c0"})
+      .buildVectors(std::move(buildVectors))
+      .checkSpillStats(false)
+      .buildProjections({"c0 AS u_c0", "c1 AS u_c1"})
+      .joinFilter("c1 < (0.7 * u_c1)")
+      .joinOutputLayout({"row_number", "c0", "c1", "u_c1"})
+      .referenceQuery(
+          "SELECT t.row_number, t.c0, t.c1, u.c1 FROM t, u WHERE t.c0 = u.c0 AND t.c1 < (0.7 * u.c1)")
+      .run();
+}
+
+TEST_F(HashJoinTest, SemiJoin) {
+  // Build the identical left and right vectors to generate large join
+  // outputs.
+  std::vector<RowVectorPtr> probeVectors =
+      makeBatches(4, [&](uint32_t /*unused*/) {
+        return makeRowVector(
+            {"t0", "t1"},
+            {makeFlatVector<int32_t>(2048, [](auto row) { return row; }),
+             makeFlatVector<int32_t>(2048, [](auto row) { return row; })});
+      });
+
+  std::vector<RowVectorPtr> buildVectors =
+      makeBatches(4, [&](uint32_t /*unused*/) {
+        return makeRowVector(
+            {"u0", "u1"},
+            {makeFlatVector<int32_t>(2048, [](auto row) { return row; }),
+             makeFlatVector<int32_t>(2048, [](auto row) { return row; })});
+      });
+
+  {
+    auto testProbeVectors = probeVectors;
+    auto testBuildVectors = buildVectors;
+    HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
+        .numDrivers(numDrivers_)
+        .checkSpillStats(false)
+        .probeKeys({"t0"})
+        .probeVectors(std::move(testProbeVectors))
+        .buildKeys({"u0"})
+        .buildVectors(std::move(testBuildVectors))
+        .joinType(core::JoinType::kLeftSemiFilter)
+        .joinOutputLayout({"t1"})
+        .referenceQuery("SELECT t.t1 FROM t WHERE t.t0 IN (SELECT u0 FROM u)")
+        .run();
+  }
+  {
+    auto testProbeVectors = probeVectors;
+    auto testBuildVectors = buildVectors;
+    HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
+        .numDrivers(numDrivers_)
+        .checkSpillStats(false)
+        .probeKeys({"t0"})
+        .probeVectors(std::move(testProbeVectors))
+        .buildKeys({"u0"})
+        .buildVectors(std::move(testBuildVectors))
+        .joinType(core::JoinType::kRightSemiFilter)
+        .joinOutputLayout({"u1"})
+        .referenceQuery("SELECT u.u1 FROM u WHERE u.u0 IN (SELECT t0 FROM t)")
+        .run();
+  }
+}
+
+TEST_F(HashJoinTest, SemiJoinFilter) {
+  // Build the identical left and right vectors to generate large join
+  // outputs.
+  std::vector<RowVectorPtr> probeVectors =
+      makeBatches(4, [&](uint32_t /*unused*/) {
+        return makeRowVector(
+            {"t0", "t1"},
+            {makeFlatVector<int32_t>(2048, [](auto row) { return row; }),
+             makeFlatVector<int32_t>(2048, [](auto row) { return row; })});
+      });
+
+  std::vector<RowVectorPtr> buildVectors =
+      makeBatches(4, [&](uint32_t /*unused*/) {
+        return makeRowVector(
+            {"u0", "u1"},
+            {makeFlatVector<int32_t>(2048, [](auto row) { return row; }),
+             makeFlatVector<int32_t>(2048, [](auto row) { return row; })});
+      });
+
+  {
+    auto testProbeVectors = probeVectors;
+    auto testBuildVectors = buildVectors;
+    HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
+        .numDrivers(numDrivers_)
+        .checkSpillStats(false)
+        .probeKeys({"t0"})
+        .probeVectors(std::move(testProbeVectors))
+        .buildKeys({"u0"})
+        .buildVectors(std::move(testBuildVectors))
+        .joinType(core::JoinType::kLeftSemiFilter)
+        .joinFilter("t0 > 1024")
+        .joinOutputLayout({"t1"})
+        .referenceQuery(
+            "SELECT t.t1 FROM t WHERE t.t0 IN (SELECT u0 FROM u) AND t.t0 > 1024")
+        .run();
+  }
+  {
+    auto testProbeVectors = probeVectors;
+    auto testBuildVectors = buildVectors;
+    HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
+        .numDrivers(numDrivers_)
+        .checkSpillStats(false)
+        .probeKeys({"t0"})
+        .probeVectors(std::move(testProbeVectors))
+        .buildKeys({"u0"})
+        .buildVectors(std::move(testBuildVectors))
+        .joinType(core::JoinType::kRightSemiFilter)
+        .joinFilter("u0 > 1024")
+        .joinOutputLayout({"u1"})
+        .referenceQuery(
+            "SELECT u.u1 FROM u WHERE u.u0 IN (SELECT t0 FROM t) AND u.u0 > 1024")
+        .run();
+  }
+}
+
+TEST_F(HashJoinTest, AntiJoin) {
+  std::vector<RowVectorPtr> probeVectors =
+      makeBatches(5, [&](uint32_t /*unused*/) {
+        return makeRowVector({
+            makeFlatVector<int32_t>(1'000, [](auto row) { return row % 11; }),
+            makeFlatVector<int32_t>(1'000, [](auto row) { return row; }),
+        });
+      });
+
+  std::vector<RowVectorPtr> buildVectors =
+      makeBatches(5, [&](uint32_t /*unused*/) {
+        return makeRowVector({
+            makeFlatVector<int32_t>(1'234, [](auto row) { return row % 5; }),
+        });
+      });
+
+  {
+    auto testProbeVectors = probeVectors;
+    auto testBuildVectors = buildVectors;
+    HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
+        .numDrivers(numDrivers_)
+        .probeKeys({"c0"})
+        .probeVectors(std::move(testProbeVectors))
+        .buildKeys({"c0"})
+        .buildVectors(std::move(testBuildVectors))
+        .joinType(core::JoinType::kAnti)
+        .nullAware(true)
+        .joinOutputLayout({"c1"})
+        .referenceQuery(
+            "SELECT t.c1 FROM t WHERE t.c0 NOT IN (SELECT c0 FROM u)")
+        .checkSpillStats(false)
+        .run();
+  }
+}
+
+TEST_F(HashJoinTest, AntiJoinWithFilter) {
+  auto probeVectors = makeBatches(4, [&](int32_t /*unused*/) {
+    return makeRowVector(
+        {"t0", "t1"},
+        {
+            makeFlatVector<int32_t>({1, 2}),
+            makeFlatVector<int32_t>({0, 1, 2}),
+        });
+  });
+  auto buildVectors = makeBatches(4, [&](int32_t /*unused*/) {
+    return makeRowVector(
+        {"u0", "u1"},
+        {
+            makeFlatVector<int32_t>({2, 3}),
+            makeFlatVector<int32_t>({0, 2, 3}),
+        });
+  });
+
+  std::vector<std::string> filters({"u1 > t1", "u1 * t1 > 0"});
+  for (const std::string& filter : filters) {
+    const auto referenceSql = fmt::format(
+        "SELECT t.* FROM t WHERE t0 NOT IN (SELECT u0 FROM u WHERE {})",
+        filter);
+
+    auto testProbeVectors = probeVectors;
+    auto testBuildVectors = buildVectors;
+    HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
+        .numDrivers(numDrivers_)
+        .probeKeys({"t0"})
+        .probeVectors(std::move(testProbeVectors))
+        .buildKeys({"u0"})
+        .buildVectors(std::move(testBuildVectors))
+        .joinType(core::JoinType::kAnti)
+        .nullAware(true)
+        .joinFilter(filter)
+        .joinOutputLayout({"t0", "t1"})
+        .referenceQuery(referenceSql)
+        .checkSpillStats(false)
+        .run();
+  }
 }
 
 } // namespace
