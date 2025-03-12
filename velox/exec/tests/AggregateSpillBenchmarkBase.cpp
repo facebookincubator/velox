@@ -90,9 +90,7 @@ void AggregateSpillBenchmarkBase::printStats() const {
   LOG(INFO) << numInputVectors_ << " vectors each with " << inputVectorSize_
             << " rows have been processed";
   const auto memStats = memory::spillMemoryPool()->stats();
-  LOG(INFO) << "peak memory usage[" << succinctBytes(memStats.peakBytes)
-            << "] cumulative memory usage["
-            << succinctBytes(memStats.cumulativeBytes) << "]";
+  LOG(INFO) << "peak memory usage[" << succinctBytes(memStats.peakBytes) << "]";
   LOG(INFO) << spiller_->stats().toString();
   // List files under file path.
   SpillPartitionSet partitionSet;
