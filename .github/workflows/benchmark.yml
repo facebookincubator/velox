@@ -77,7 +77,7 @@ jobs:
         uses: actions/cache/save@d4323d4df104b026a6aa633fdb11d772146be0bf # v4.2.2
         with:
           path: "${{ env.INSTALL_PREFIX }}"
-          key: dependencies-${{ hashFiles('velox/scripts/setup-ubuntu.sh') }}
+          key: dependencies-benchmark-${{ hashFiles('velox/scripts/setup-ubuntu.sh') }}
 
       - name: "Restore ccache"
         uses: apache/infrastructure-actions/stash/restore@3354c1565d4b0e335b78a76aedd82153a9e144d4
