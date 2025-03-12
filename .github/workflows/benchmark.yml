@@ -53,19 +53,19 @@ jobs:
           persist-credentials: false
 
       - name: "Restore Dependencies"
-        uses: apache/infrastructure-actions/stash/restore@3354c1565d4b0e335b78a76aedd82153a9e144d4
+        uses: actions/cache/restore@d4323d4df104b026a6aa633fdb11d772146be0bf # v4.2.2
         id: restore-deps
         with:
           path: "${{ env.INSTALL_PREFIX }}"
-          key: dependencies-benchmark-${{ hashFiles('scripts/setup-ubuntu.sh') }}
+          key: dependencies-benchmark-${{ hashFiles('velox/scripts/setup-ubuntu.sh') }}
 
       - name: "Install dependencies"
-        if: ${{ steps.restore-deps.outputs.stash-hit != 'true' }}
+        if: ${{ steps.restore-deps.outputs.cache-hit != 'true' }}
         run: |
             source velox/scripts/setup-ubuntu.sh 
             install_apt_deps 
             run_and_time install_fmt
-            # run_and_time install_protobuf
+            run_and_time install_protobuf
             run_and_time install_boost
             run_and_time install_folly
             run_and_time install_stemmer
@@ -73,12 +73,11 @@ jobs:
             run_and_time install_arrow
 
       - name: "Save Dependencies"
-        if: ${{ steps.restore-deps.outputs.stash-hit != 'true' }}
-        uses: apache/infrastructure-actions/stash/save@3354c1565d4b0e335b78a76aedd82153a9e144d4
+        if: ${{ steps.restore-deps.outputs.cache-hit != 'true' }}
+        uses: actions/cache/save@d4323d4df104b026a6aa633fdb11d772146be0bf # v4.2.2
         with:
           path: "${{ env.INSTALL_PREFIX }}"
-          key: dependencies-${{ hashFiles('scripts/setup-ubuntu.sh') }}
-          retention-days: 90
+          key: dependencies-${{ hashFiles('velox/scripts/setup-ubuntu.sh') }}
 
       - name: "Restore ccache"
         uses: apache/infrastructure-actions/stash/restore@3354c1565d4b0e335b78a76aedd82153a9e144d4
