@@ -128,7 +128,7 @@ jobs:
   upload:
     runs-on: ubuntu-latest
     needs: benchmark
-    if: github.event_name == 'push'
+    # if: github.event_name == 'push'
     permissions:
       actions: read
       statuses: write
@@ -167,6 +167,7 @@ jobs:
         ./velox/scripts/benchmark-runner.py upload \
           --run_id "$RUN_ID" \
           --sha "$CONBENCH_PROJECT_COMMIT" \
+          --pr_number 12605 \
           --output_dir "/tmp/artifacts/contender/"
 
     - name: "Check the status of the upload"
