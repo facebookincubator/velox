@@ -34,13 +34,12 @@ class GetStructFieldTest : public SparkFunctionBaseTest {
     std::vector<core::TypedExprPtr> inputs = {
         std::make_shared<const core::FieldAccessTypedExpr>(input->type(), "c0"),
         std::make_shared<core::ConstantTypedExpr>(INTEGER(), variant(ordinal))};
-    auto resultType = expected->type();
     auto expr = std::make_shared<const core::CallTypedExpr>(
-        resultType, std::move(inputs), "get_struct_field");
+        expected->type(), std::move(inputs), "get_struct_field");
 
     // Input is flat.
     auto result = evaluate(expr, makeRowVector({input}));
-    ::facebook::velox::test::assertEqualVectors(expected, result);
+    assertEqualVectors(expected, result);
 
     // Input is dictionary or constant encoding.
     testEncodings(expr, {input}, expected);
