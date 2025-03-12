@@ -191,8 +191,7 @@ std::vector<cudf::ast::literal> createLiteralsFromArray(
             elements->type()->toString());
       }
     } else {
-      VELOX_FAIL("Expected ARRAY encoding but got: {}");
-      // vector->encoding());
+      VELOX_FAIL("Expected ARRAY encoding");
     }
   } else {
     VELOX_FAIL("Expected constant vector for IN list");
