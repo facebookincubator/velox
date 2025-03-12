@@ -61,6 +61,8 @@ jobs:
 
       - name: "Install dependencies"
         if: ${{ steps.restore-deps.outputs.cache-hit != 'true' }}
+        env:
+          CCACHE_DISABLE: "true"
         run: |
             source velox/scripts/setup-ubuntu.sh 
             install_apt_deps 
@@ -83,6 +85,7 @@ jobs:
         uses: apache/infrastructure-actions/stash/restore@3354c1565d4b0e335b78a76aedd82153a9e144d4
         id: restore-cache
         with:
+          clean: true
           path: "ccache"
           key: ccache-benchmark
 
