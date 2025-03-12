@@ -276,6 +276,8 @@ RowVectorPtr TableScan::getOutput() {
       RowVectorPtr data = std::move(dataOptional).value();
       if (data != nullptr) {
         if (data->size() > 0) {
+          LOG(ERROR) << "TableScan::getOutput: ioTimeUs: " << ioTimeUs
+                     << " size " << data->size();
           lockedStats->addInputVector(data->estimateFlatSize(), data->size());
           constexpr int kMaxSelectiveBatchSizeMultiplier = 4;
           maxFilteringRatio_ = std::max(
