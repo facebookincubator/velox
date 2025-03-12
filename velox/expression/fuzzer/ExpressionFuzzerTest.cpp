@@ -85,6 +85,12 @@ int main(int argc, char** argv) {
       "cardinality",
       "element_at",
       "width_bucket",
+      // Fuzzer and the underlying engine are confused about TDigest functions
+      // (since TDigest is a user defined type), and tries to pass a
+      // VARBINARY (since TDigest's implementation uses an
+      // alias to VARBINARY).
+      "value_at_quantile",
+      "values_at_quantiles",
       // Fuzzer cannot generate valid 'comparator' lambda.
       "array_sort(array(T),constant function(T,T,bigint)) -> array(T)",
       "split_to_map(varchar,varchar,varchar,function(varchar,varchar,varchar,varchar)) -> map(varchar,varchar)",
@@ -107,7 +113,8 @@ int main(int argc, char** argv) {
       // from_unixtime can generate timestamps out of the supported range that
       // make other functions throw VeloxRuntimeErrors.
       "from_unixtime",
-  };
+      // JSON not supported, Real doesn't match exactly, etc.
+      "array_join"};
   size_t initialSeed = FLAGS_seed == 0 ? std::time(nullptr) : FLAGS_seed;
 
   std::unordered_map<std::string, std::shared_ptr<ArgTypesGenerator>>

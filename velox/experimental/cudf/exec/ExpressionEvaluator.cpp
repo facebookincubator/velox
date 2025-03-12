@@ -42,7 +42,8 @@ cudf::ast::literal make_scalar_and_literal(
   using T = typename facebook::velox::KindToFlatVector<kind>::WrapperType;
   auto stream = cudf::get_default_stream();
   auto mr = cudf::get_current_device_resource_ref();
-  auto& type = vector->type();
+  const auto& type = vector->type();
+
   if constexpr (cudf::is_fixed_width<T>()) {
     auto constVector = vector->as<facebook::velox::SimpleVector<T>>();
     VELOX_CHECK_NOT_NULL(constVector, "ConstantVector is null");
@@ -190,8 +191,7 @@ std::vector<cudf::ast::literal> createLiteralsFromArray(
             elements->type()->toString());
       }
     } else {
-      VELOX_FAIL("Expected ARRAY encoding but got: {}");
-      // vector->encoding());
+      VELOX_FAIL("Expected ARRAY encoding");
     }
   } else {
     VELOX_FAIL("Expected constant vector for IN list");
@@ -271,41 +271,19 @@ bool AstContext::can_be_evaluated(
 // convert to pair wise and/or in this function
 cudf::ast::expression const& AstContext::multiple_inputs_to_pair_wise(
     const std::shared_ptr<velox::exec::Expr>& expr) {
-  using op = cudf::ast::ast_operator;
   using operation = cudf::ast::operation;
-  using velox::exec::ConstantExpr;
-  using velox::exec::FieldReference;
 
   const auto& name = expr->name();
   auto len = expr->inputs().size();
-  // push all inputs to tree
-  std::vector<const cudf::ast::expression*> expr_vec;
-  for (size_t i = 0; i < len; i += 2) {
-    if (i + 1 >= len) {
-      expr_vec.push_back(&push_expr_to_tree(expr->inputs()[i]));
-      break;
-    }
-    auto const& op1 = push_expr_to_tree(expr->inputs()[i]);
-    auto const& op2 = push_expr_to_tree(expr->inputs()[i + 1]);
-    auto& tree_node = tree.push(operation{binary_ops.at(name), op1, op2});
-    expr_vec.push_back(&tree_node);
+  // Create a simple chain of operations
+  auto result = &push_expr_to_tree(expr->inputs()[0]);
+
+  // Chain the rest of the inputs sequentially
+  for (size_t i = 1; i < len; i++) {
+    auto const& next_input = push_expr_to_tree(expr->inputs()[i]);
+    result = &tree.push(operation{binary_ops.at(name), *result, next_input});
   }
-  // now reduce expr_vec pairwise to create a balanced tree
-  while (expr_vec.size() > 1) {
-    std::vector<const cudf::ast::expression*> new_expr_vec;
-    for (size_t i = 0; i < expr_vec.size(); i += 2) {
-      if (i + 1 >= expr_vec.size()) {
-        new_expr_vec.push_back(expr_vec[i]);
-        break;
-      }
-      auto const& op1 = expr_vec[i];
-      auto const& op2 = expr_vec[i + 1];
-      auto& tree_node = tree.push(operation{binary_ops.at(name), *op1, *op2});
-      new_expr_vec.push_back(&tree_node);
-    }
-    expr_vec = std::move(new_expr_vec);
-  }
-  return tree.back();
+  return *result;
 }
 
 cudf::ast::expression const& AstContext::push_expr_to_tree(
@@ -562,16 +540,17 @@ void addPrecomputedColumns(
 ExpressionEvaluator::ExpressionEvaluator(
     const std::vector<std::shared_ptr<velox::exec::Expr>>& exprs,
     const RowTypePtr& inputRowSchema) {
+  exprAst_.reserve(exprs.size());
   for (const auto& expr : exprs) {
     cudf::ast::tree tree;
     create_ast_tree(
         expr, tree, scalars_, inputRowSchema, precompute_instructions_);
-    projectAst_.emplace_back(std::move(tree));
+    exprAst_.emplace_back(std::move(tree));
   }
 }
 
 void ExpressionEvaluator::close() {
-  projectAst_.clear();
+  exprAst_.clear();
   scalars_.clear();
   precompute_instructions_.clear();
 }
@@ -587,7 +566,7 @@ std::vector<std::unique_ptr<cudf::column>> ExpressionEvaluator::compute(
       std::make_unique<cudf::table>(std::move(input_table_columns));
   auto ast_input_table_view = ast_input_table->view();
   std::vector<std::unique_ptr<cudf::column>> columns;
-  for (auto& tree : projectAst_) {
+  for (auto& tree : exprAst_) {
     if (auto col_ref_ptr =
             dynamic_cast<cudf::ast::column_reference const*>(&tree.back())) {
       auto col = std::make_unique<cudf::column>(

@@ -31,4 +31,9 @@ void registerArrayAggAggregate(
     bool withCompanionFunctions = true,
     bool overwrite = true);
 
+void registerInternalArrayAggAggregate(
+    const std::string& prefix,
+    bool withCompanionFunctions,
+    bool overwrite);
+
 } // namespace facebook::velox::aggregate::prestosql
