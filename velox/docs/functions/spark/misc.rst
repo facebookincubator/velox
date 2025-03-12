@@ -19,9 +19,8 @@ Miscellaneous Functions
 
     Returns the value of nested subfield at position ``ordinal`` in the input ``struct``.
     The input must be of row type and nested complex type is allowed.
-    The subfield position is specified by ``ordinal``.
-    If ``ordinal`` is negative or greater than the children size of ``struct``,
-    exception is thrown. ::
+    The ``ordinal`` is 0-based, and if ``ordinal`` is negative or greater than or equal to
+    the children size of ``struct``, exception is thrown. ::
 
         SELECT from_json('{"a": 1, "b": [1, 2, 3]}', 'a INT, b ARRAY<INT>').a; -- 1
         SELECT from_json('{"a": 1, "b": [1, 2, 3]}', 'a INT, b ARRAY<INT>').b; -- array(1,2,3)
