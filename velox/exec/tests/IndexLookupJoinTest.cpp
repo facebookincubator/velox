@@ -164,24 +164,28 @@ TEST_P(IndexLookupJoinTest, planNodeAndSerde) {
       kTestIndexConnectorName, nullptr, true);
 
   auto left = makeRowVector(
-      {"t0", "t1", "t2", "t3", "t4"},
+      {"t0", "t1", "t2", "t3", "t4", "t5"},
+      {
+          makeFlatVector<int64_t>({1, 2, 3}),
+          makeFlatVector<int64_t>({10, 20, 30}),
+          makeFlatVector<int64_t>({10, 30, 20}),
+          makeArrayVector<int64_t>(
+              3,
+              [](auto row) { return row; },
+              [](auto /*unused*/, auto index) { return index; }),
+          makeArrayVector<int64_t>(
+              3,
+              [](auto row) { return row; },
+              [](auto /*unused*/, auto index) { return index; }),
+          makeFlatVector<std::string>({"foo", "bar", "baz"}),
+      });
+
+  auto right = makeRowVector(
+      {"u0", "u1", "u2", "u3"},
       {makeFlatVector<int64_t>({1, 2, 3}),
        makeFlatVector<int64_t>({10, 20, 30}),
        makeFlatVector<int64_t>({10, 30, 20}),
-       makeArrayVector<int64_t>(
-           3,
-           [](auto row) { return row; },
-           [](auto /*unused*/, auto index) { return index; }),
-       makeArrayVector<int64_t>(
-           3,
-           [](auto row) { return row; },
-           [](auto /*unused*/, auto index) { return index; })});
-
-  auto right = makeRowVector(
-      {"u0", "u1", "u2"},
-      {makeFlatVector<int64_t>({1, 2, 3}),
-       makeFlatVector<int64_t>({10, 20, 30}),
-       makeFlatVector<int64_t>({10, 30, 20})});
+       makeFlatVector<std::string>({"foo", "bar", "baz"})});
 
   auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
 
@@ -341,6 +345,21 @@ TEST_P(IndexLookupJoinTest, planNodeAndSerde) {
                 {"t0", "u1", "t2", "t1"})
             .planNode(),
         "JoinNode requires at least one join key");
+  }
+
+  // Unsupported join key type.
+  {
+    VELOX_ASSERT_THROW(
+        PlanBuilder(planNodeIdGenerator)
+            .values({left})
+            .indexLookupJoin(
+                {"t5"},
+                {"u3"},
+                indexTableScan,
+                {"t5 between 'foo' AND u3"},
+                {"t0", "u1", "t2", "t1"})
+            .planNode(),
+        "Unsupported index lookup join condition key type");
   }
 }
 

@@ -1902,6 +1902,14 @@ class IndexLookupJoinNode : public AbstractJoinNode {
         isSupported(joinType_),
         "Unsupported index lookup join type {}",
         joinTypeName(joinType_));
+    for (const auto& condition : joinConditions_) {
+      const auto keyType = condition->key->type();
+      VELOX_USER_CHECK(
+          (keyType->isSmallint() || keyType->isInteger() ||
+           keyType->isBigint() || keyType->isHugeint()),
+          "Unsupported index lookup join condition key type {}",
+          keyType);
+    }
   }
 
   const TableScanNodePtr& lookupSource() const {
