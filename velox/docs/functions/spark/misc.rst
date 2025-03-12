@@ -15,12 +15,12 @@ Miscellaneous Functions
         SELECT at_least_n_non_nulls(2, 0, 1.0, NULL);  -- true
         SELECT at_least_n_non_nulls(2, 0, array(NULL), NULL);  -- true
 
-.. spark:function:: get_struct_field(input, ordinal) -> T
+.. spark:function:: get_struct_field(struct, ordinal) -> T
 
-    Returns the value of nested subfield in the ``input`` struct.
-    The ``input`` must be of row type and nested complex type is allowed.
+    Returns the value of nested subfield at position ``ordinal`` in the input ``struct``.
+    The input must be of row type and nested complex type is allowed.
     The subfield position is specified by ``ordinal``.
-    If ``ordinal`` is negative or greater than the children size of ``input``,
+    If ``ordinal`` is negative or greater than the children size of ``struct``,
     exception is thrown. ::
 
         SELECT from_json('{"a": 1, "b": [1, 2, 3]}', 'a INT, b ARRAY<INT>').a; -- 1
