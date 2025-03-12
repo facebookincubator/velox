@@ -14,12 +14,13 @@
  * limitations under the License.
  */
 
+#include <cstdio>
+
 #include <boost/asio.hpp>
 #include <folly/SocketAddress.h>
 #include <folly/init/Init.h>
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
-#include <cstdio>
 
 #include "velox/common/base/Exceptions.h"
 #include "velox/common/base/tests/GTestUtils.h"

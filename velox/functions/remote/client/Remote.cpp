@@ -102,10 +102,8 @@ class RemoteFunction : public exec::VectorFunction {
       const TypePtr& outputType,
       const exec::EvalCtx& context,
       VectorPtr& result) const {
+    VELOX_DCHECK_NOT_NULL(restClient_, "Rest Client not initialized properly.");
     try {
-      VELOX_DCHECK_NOT_NULL(
-          restClient_, "Rest Client not initialized properly.");
-
       auto remoteRowVector = std::make_shared<RowVector>(
           context.pool(),
           remoteInputType_,
