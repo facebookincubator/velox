@@ -56,4 +56,38 @@ struct ValuesAtQuantilesFunction {
   }
 };
 
+template <typename T>
+struct MergeTDigestFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+  FOLLY_ALWAYS_INLINE void call(
+      out_type<SimpleTDigest<double>>& result,
+      const arg_type<Array<SimpleTDigest<double>>>& input) {
+    TDigest<> digest;
+    std::vector<int16_t> positions;
+    bool hasValidInput = false;
+    for (auto i = 0; i < input.size(); i++) {
+      if (!input[i].has_value()) {
+        continue;
+      }
+      hasValidInput = true;
+      const auto& tdigest = input[i].value();
+      digest.mergeDeserialized(positions, tdigest.data());
+    }
+    if (!hasValidInput) {
+      return;
+    }
+    digest.compress(positions);
+    int64_t size = digest.serializedByteSize();
+    if (size == 0) {
+      // result = TDIGEST(DOUBLE());
+      return;
+    }
+    std::vector<char> buffer;
+    buffer.resize(size);
+    digest.serialize(buffer.data());
+    result = buffer;
+    // result = velox::StringView(buffer.data(), size);
+  }
+};
+
 } // namespace facebook::velox::functions
