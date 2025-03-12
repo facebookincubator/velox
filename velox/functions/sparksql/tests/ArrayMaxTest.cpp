@@ -111,8 +111,12 @@ TEST_F(ArrayMaxTest, complexTypes) {
       makeArrayVectorFromJson<int64_t>({"[1, 3, 1]"}));
 
   testExpression(
-      makeNestedArrayVectorFromJson<int64_t>(
-          {"[[1, null], [null, 2], [null, null]]"}),
+      makeNestedArrayVectorFromJson<double>(
+          {"[[2.0, null], [null, 2.0], [NaN, 1.0]]"}),
+      makeArrayVectorFromJson<double>({"[NaN, 1.0]"}));
+
+  testExpression(
+      makeNestedArrayVectorFromJson<int64_t>({"[[1, null], [null, 2], [1]]"}),
       makeArrayVectorFromJson<int64_t>({"[1, null]"}));
 
   testExpression(

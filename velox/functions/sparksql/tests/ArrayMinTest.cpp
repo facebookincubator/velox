@@ -117,6 +117,10 @@ TEST_F(ArrayMinTest, complexTypes) {
       makeArrayVectorFromJson<int64_t>({"[null, null]"}));
 
   testExpression(
+      makeNestedArrayVectorFromJson<int64_t>({"[[1, null], [1, 2], [1]]"}),
+      makeArrayVectorFromJson<int64_t>({"[1]"}));
+
+  testExpression(
       makeNestedArrayVectorFromJson<int64_t>({"[[1], [null], []]"}),
       makeArrayVectorFromJson<int64_t>({"[]"}));
 
