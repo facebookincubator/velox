@@ -160,5 +160,5 @@ target_link_libraries(
   velox_test_util
   gtest
   gtest_main)
-  
+
 add_subdirectory(utils)

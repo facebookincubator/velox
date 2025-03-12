@@ -274,9 +274,6 @@ core::PlanNodePtr PlanBuilder::TableScanBuilder::build(core::PlanNodeId id) {
     }
     subfieldExprs = std::move(combinedSubfieldExprs);
   }
-  if (!subfieldExprs.empty()) {
-    std::cout << "subfieldExprs: " << subfieldExprs[0]->toString() << std::endl;
-  }
   core::TypedExprPtr subfieldFilterExpr =
       subfieldExprs.empty() ? nullptr : subfieldExprs[0];
   core::TypedExprPtr remainingFilterExpr;
