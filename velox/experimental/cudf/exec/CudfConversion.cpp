@@ -121,13 +121,6 @@ RowVectorPtr CudfFromVelox::getOutput() {
 
   VELOX_CHECK_NOT_NULL(tbl);
 
-  if (cudfDebugEnabled()) {
-    std::cout << "CudfFromVelox table number of columns: " << tbl->num_columns()
-              << std::endl;
-    std::cout << "CudfFromVelox table number of rows: " << tbl->num_rows()
-              << std::endl;
-  }
-
   // Return a CudfVector that owns the cudf table
   auto const size = tbl->num_rows();
   return std::make_shared<CudfVector>(
@@ -173,12 +166,6 @@ RowVectorPtr CudfToVelox::getOutput() {
   inputs_.pop_front();
 
   VELOX_CHECK_NOT_NULL(tbl);
-  if (cudfDebugEnabled()) {
-    std::cout << "CudfToVelox table number of columns: " << tbl->num_columns()
-              << std::endl;
-    std::cout << "CudfToVelox table number of rows: " << tbl->num_rows()
-              << std::endl;
-  }
   if (tbl->num_rows() == 0) {
     return nullptr;
   }

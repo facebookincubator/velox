@@ -61,9 +61,6 @@ CudfOrderBy::CudfOrderBy(
             ? cudf::null_order::BEFORE
             : cudf::null_order::AFTER);
   }
-  if (cudfDebugEnabled()) {
-    std::cout << "Number of Sort keys: " << sort_keys_.size() << std::endl;
-  }
 }
 
 void CudfOrderBy::addInput(RowVectorPtr input) {
@@ -94,12 +91,6 @@ void CudfOrderBy::noMoreInput() {
   inputs_.clear();
 
   VELOX_CHECK_NOT_NULL(tbl);
-  if (cudfDebugEnabled()) {
-    std::cout << "Sort input table number of columns: " << tbl->num_columns()
-              << std::endl;
-    std::cout << "Sort input table number of rows: " << tbl->num_rows()
-              << std::endl;
-  }
 
   auto keys = tbl->view().select(sort_keys_);
   auto values = tbl->view();

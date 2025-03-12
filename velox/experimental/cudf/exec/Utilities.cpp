@@ -90,11 +90,6 @@ cudf::detail::cuda_stream_pool& cudfGlobalStreamPool() {
   return cudf::detail::global_cuda_stream_pool();
 };
 
-bool cudfDebugEnabled() {
-  const char* env_cudf_debug = std::getenv("VELOX_CUDF_DEBUG");
-  return env_cudf_debug != nullptr && std::stoi(env_cudf_debug);
-}
-
 std::unique_ptr<cudf::table> concatenateTables(
     std::vector<std::unique_ptr<cudf::table>> tables,
     rmm::cuda_stream_view stream) {
