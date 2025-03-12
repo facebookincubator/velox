@@ -723,7 +723,7 @@ TEST_P(IndexLookupJoinTest, equalJoin) {
   for (const auto& testData : testSettings) {
     SCOPED_TRACE(testData.debugString());
 
-    SequenceTableData tableData;
+    IndexTableData tableData;
     generateIndexTableData(testData.keyCardinalities, tableData, pool_);
     auto probeVectors = generateProbeInput(
         testData.numProbeBatches,
@@ -1176,7 +1176,7 @@ TEST_P(IndexLookupJoinTest, betweenJoinCondition) {
   for (const auto& testData : testSettings) {
     SCOPED_TRACE(testData.debugString());
 
-    SequenceTableData tableData;
+    IndexTableData tableData;
     generateIndexTableData(testData.keyCardinalities, tableData, pool_);
     auto probeVectors = generateProbeInput(
         testData.numProbeBatches,
@@ -1498,7 +1498,7 @@ TEST_P(IndexLookupJoinTest, inJoinCondition) {
   for (const auto& testData : testSettings) {
     SCOPED_TRACE(testData.debugString());
 
-    SequenceTableData tableData;
+    IndexTableData tableData;
     generateIndexTableData(testData.keyCardinalities, tableData, pool_);
     auto probeVectors = generateProbeInput(
         testData.numProbeBatches,
@@ -1550,7 +1550,7 @@ TEST_P(IndexLookupJoinTest, inJoinCondition) {
 }
 
 DEBUG_ONLY_TEST_P(IndexLookupJoinTest, connectorError) {
-  SequenceTableData tableData;
+  IndexTableData tableData;
   generateIndexTableData({100, 1, 1}, tableData, pool_);
   const std::vector<RowVectorPtr> probeVectors = generateProbeInput(
       20, 100, tableData, pool_, {"t0", "t1", "t2"}, {}, {}, 100);
@@ -1601,7 +1601,7 @@ DEBUG_ONLY_TEST_P(IndexLookupJoinTest, prefetch) {
     // This test only works for async lookup.
     return;
   }
-  SequenceTableData tableData;
+  IndexTableData tableData;
   generateIndexTableData({100, 1, 1}, tableData, pool_);
   const int numProbeBatches{20};
   ASSERT_GT(numProbeBatches, GetParam().numPrefetches);
@@ -1669,7 +1669,7 @@ DEBUG_ONLY_TEST_P(IndexLookupJoinTest, prefetch) {
 }
 
 TEST_P(IndexLookupJoinTest, outputBatchSize) {
-  SequenceTableData tableData;
+  IndexTableData tableData;
   generateIndexTableData({3'000, 1, 1}, tableData, pool_);
 
   struct {
@@ -1760,7 +1760,7 @@ TEST_P(IndexLookupJoinTest, outputBatchSize) {
 }
 
 TEST_P(IndexLookupJoinTest, joinFuzzer) {
-  SequenceTableData tableData;
+  IndexTableData tableData;
   generateIndexTableData({1024, 1, 1}, tableData, pool_);
   const auto probeVectors =
       generateProbeInput(50, 256, tableData, pool_, {"t0", "t1", "t2"});

@@ -25,7 +25,7 @@ class IndexLookupJoinTestBase
  protected:
   IndexLookupJoinTestBase() = default;
 
-  struct SequenceTableData {
+  struct IndexTableData {
     facebook::velox::RowVectorPtr keyData;
     facebook::velox::RowVectorPtr valueData;
     facebook::velox::RowVectorPtr tableData;
@@ -56,7 +56,7 @@ class IndexLookupJoinTestBase
   std::vector<facebook::velox::RowVectorPtr> generateProbeInput(
       size_t numBatches,
       size_t batchSize,
-      SequenceTableData& tableData,
+      IndexTableData& tableData,
       std::shared_ptr<facebook::velox::memory::MemoryPool>& pool,
       const std::vector<std::string>& probeJoinKeys,
       const std::vector<std::string> inColumns = {},
@@ -117,7 +117,7 @@ class IndexLookupJoinTestBase
   // index column.
   void generateIndexTableData(
       const std::vector<int>& keyCardinalities,
-      SequenceTableData& tableData,
+      IndexTableData& tableData,
       std::shared_ptr<facebook::velox::memory::MemoryPool>& pool);
 
   // Makes output schema from the index table scan node with the specified
