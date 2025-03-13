@@ -41,7 +41,6 @@ CudfOrderBy::CudfOrderBy(
           "CudfOrderBy"),
       NvtxHelper(nvtx3::rgb{64, 224, 208}, operatorId), // Turquoise
       orderByNode_(orderByNode) {
-  maxOutputRows_ = outputBatchRows(std::nullopt);
   sort_keys_.reserve(orderByNode->sortingKeys().size());
   column_order_.reserve(orderByNode->sortingKeys().size());
   null_order_.reserve(orderByNode->sortingKeys().size());
@@ -74,8 +73,6 @@ void CudfOrderBy::addInput(RowVectorPtr input) {
 
 void CudfOrderBy::noMoreInput() {
   exec::Operator::noMoreInput();
-  // TODO: Get total row count, batch output
-  // maxOutputRows_ = outputBatchRows(total_row_count);
 
   VELOX_NVTX_OPERATOR_FUNC_RANGE();
 

@@ -130,6 +130,7 @@ RowVectorPtr CudfFromVelox::getOutput() {
 void CudfFromVelox::close() {
   cudf::get_default_stream().synchronize();
   exec::Operator::close();
+  inputs_.clear();
 }
 
 CudfToVelox::CudfToVelox(
@@ -179,8 +180,7 @@ RowVectorPtr CudfToVelox::getOutput() {
 
 void CudfToVelox::close() {
   exec::Operator::close();
-  // TODO: Release stored inputs if needed
-  // TODO: Release cudf memory resources
+  inputs_.clear();
 }
 
 } // namespace facebook::velox::cudf_velox

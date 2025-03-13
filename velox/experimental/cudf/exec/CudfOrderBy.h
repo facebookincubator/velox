@@ -63,7 +63,6 @@ class CudfOrderBy : public exec::Operator, public NvtxHelper {
   std::vector<cudf::order> column_order_;
   std::vector<cudf::null_order> null_order_;
   bool finished_{false};
-  uint32_t maxOutputRows_;
 };
 
 } // namespace facebook::velox::cudf_velox
