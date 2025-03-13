@@ -98,6 +98,19 @@ in the subnet specified by <code class="docutils literal notranslate"><span clas
 </div>
 </dd></dl>
 
+<dl class="py function">
+<dt class="sig sig-object py" id="ip_prefix_collapse">
+<span class="sig-name descname"><span class="pre">ip_prefix_collapse</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">array(ip_prefix))</span> <span class="pre">-&gt;</span> <span class="pre">array(ip_prefix</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#ip_prefix_collapse" title="Link to this definition">¶</a></dt>
+<dd><p>Returns the minimal CIDR representation of the input <code class="docutils literal notranslate"><span class="pre">IPPREFIX</span></code> array. Every <code class="docutils literal notranslate"><span class="pre">IPPREFIX</span></code>
+in the input array must be the same IP version (that is, only IPv4 or only IPv6) or the
+query will fail and raise an error.</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">IP_PREFIX_COLLAPSE</span><span class="p">(</span><span class="n">ARRAY</span><span class="p">[</span><span class="n">IPPREFIX</span> <span class="s1">&#39;192.168.0.0/24&#39;</span><span class="p">,</span> <span class="n">IPPREFIX</span> <span class="s1">&#39;192.168.1.0/24&#39;</span><span class="p">]);</span> <span class="o">--</span> <span class="p">[{</span><span class="mf">192.168.0.0</span><span class="o">/</span><span class="mi">23</span><span class="p">}]</span>
+<span class="n">SELECT</span> <span class="n">IP_PREFIX_COLLAPSE</span><span class="p">(</span><span class="n">ARRAY</span><span class="p">[</span><span class="n">IPPREFIX</span> <span class="s1">&#39;2620:10d:c090::/48&#39;</span><span class="p">,</span> <span class="n">IPPREFIX</span> <span class="s1">&#39;2620:10d:c091::/48&#39;</span><span class="p">]);</span> <span class="o">--</span> <span class="p">[{</span><span class="mi">2620</span><span class="p">:</span><span class="mi">10</span><span class="n">d</span><span class="p">:</span><span class="n">c090</span><span class="p">::</span><span class="o">/</span><span class="mi">47</span><span class="p">}]</span>
+<span class="n">SELECT</span> <span class="n">IP_PREFIX_COLLAPSE</span><span class="p">(</span><span class="n">ARRAY</span><span class="p">[</span><span class="n">IPPREFIX</span> <span class="s1">&#39;192.168.1.0/24&#39;</span><span class="p">,</span> <span class="n">IPPREFIX</span> <span class="s1">&#39;192.168.0.0/24&#39;</span><span class="p">,</span> <span class="n">IPPREFIX</span> <span class="s1">&#39;192.168.2.0/24&#39;</span><span class="p">,</span> <span class="n">IPPREFIX</span> <span class="s1">&#39;192.168.9.0/24&#39;</span><span class="p">]);</span> <span class="o">--</span> <span class="p">[{</span><span class="mf">192.168.0.0</span><span class="o">/</span><span class="mi">23</span><span class="p">},</span> <span class="p">{</span><span class="mf">192.168.2.0</span><span class="o">/</span><span class="mi">24</span><span class="p">},</span> <span class="p">{</span><span class="mf">192.168.9.0</span><span class="o">/</span><span class="mi">24</span><span class="p">}]</span>
+</pre></div>
+</div>
+</dd></dl>
+
 </section>
 
 
@@ -117,6 +130,7 @@ in the subnet specified by <code class="docutils literal notranslate"><span clas
 <li><a class="reference internal" href="#ip_subnet_range"><code class="docutils literal notranslate"><span class="pre">ip_subnet_range()</span></code></a></li>
 <li><a class="reference internal" href="#is_subnet_of"><code class="docutils literal notranslate"><span class="pre">is_subnet_of()</span></code></a></li>
 <li><a class="reference internal" href="#id0"><code class="docutils literal notranslate"><span class="pre">is_subnet_of()</span></code></a></li>
+<li><a class="reference internal" href="#ip_prefix_collapse"><code class="docutils literal notranslate"><span class="pre">ip_prefix_collapse()</span></code></a></li>
 </ul>
 </li>
 </ul>
