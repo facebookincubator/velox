@@ -20,7 +20,6 @@
 #include <breeze/platforms/platform.h>
 #include <breeze/utils/types.h>
 #include <breeze/platforms/cuda.cuh>
-#include <cub/cub.cuh> // @manual
 #include "velox/experimental/wave/common/Bits.cuh"
 #include "velox/experimental/wave/common/Block.cuh"
 
@@ -551,11 +550,15 @@ __device__ void decodeMainlyConstant(GpuDecode& plan) {
   }
 }
 
+// First thread returns total sum.
 template <int kBlockSize, typename T, typename U>
 __device__ T sum(const U* values, int size) {
-  using Reduce = cub::BlockReduce<T, kBlockSize>;
+  using namespace breeze::functions;
+  using namespace breeze::utils;
+  CudaPlatform<kBlockSize, kWarpThreads> p;
+  using BlockReduceT = BlockReduce<decltype(p), T>;
   extern __shared__ char smem[];
-  auto* reduceStorage = reinterpret_cast<typename Reduce::TempStorage*>(smem);
+  auto* reduceStorage = reinterpret_cast<typename BlockReduceT::Scratch*>(smem);
   T total = 0;
   for (int i = 0; i < size; i += kBlockSize) {
     auto numValid = min(size - i, kBlockSize);
@@ -563,7 +566,11 @@ __device__ T sum(const U* values, int size) {
     if (threadIdx.x < numValid) {
       value = values[i + threadIdx.x];
     }
-    total += Reduce(*reduceStorage).Sum(value, numValid);
+    total += BlockReduceT::template Reduce<ReduceOpAdd, /*kItemsPerThread=*/1>(
+        p,
+        make_slice(&value),
+        make_slice(reduceStorage).template reinterpret<SHARED>(),
+        numValid);
     __syncthreads();
   }
   return total;
@@ -1282,7 +1289,9 @@ __global__ void decodeGlobal(GpuDecode* plan) {
 
 template <int32_t kBlockSize>
 int32_t sharedMemorySizeForDecode(DecodeStep step) {
-  using Reduce32 = cub::BlockReduce<int32_t, kBlockSize>;
+  using namespace breeze::functions;
+  using PlatformT = CudaPlatform<kBlockSize, kWarpThreads>;
+  using BlockReduceT = BlockReduce<PlatformT, int32_t>;
   using BlockScanStorageT = BlockScanStorage<kBlockSize>;
   switch (step) {
     case DecodeStep::kSelective32:
@@ -1296,7 +1305,7 @@ int32_t sharedMemorySizeForDecode(DecodeStep step) {
       break;
 
     case DecodeStep::kRleTotalLength:
-      return sizeof(typename Reduce32::TempStorage);
+      return sizeof(typename BlockReduceT::Scratch);
     case DecodeStep::kMainlyConstant:
     case DecodeStep::kRleBool:
     case DecodeStep::kRle:
