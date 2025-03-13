@@ -229,7 +229,7 @@ bool CompileState::compile() {
           get_plan_node(limitOp->planNodeId()));
       VELOX_CHECK(plan_node != nullptr);
       replace_op.push_back(std::make_unique<CudfLimit>(id, ctx, plan_node));
-      replace_op.back()->initialize()
+      replace_op.back()->initialize();
     } else if (
         auto localPartitionOp = dynamic_cast<exec::LocalPartition*>(oper)) {
       auto plan_node =
