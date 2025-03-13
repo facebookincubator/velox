@@ -52,8 +52,9 @@ struct BetweenFunctionUuid {
       const arg_type<Uuid>& value,
       const arg_type<Uuid>& low,
       const arg_type<Uuid>& high) {
-    result = static_cast<uint128_t>(value) >= static_cast<uint128_t>(low) &&
-        static_cast<uint128_t>(value) <= static_cast<uint128_t>(high);
+    auto castValue = static_cast<uint128_t>(value);
+    result = castValue >= static_cast<uint128_t>(low) &&
+        castValue <= static_cast<uint128_t>(high);
   }
 };
 
