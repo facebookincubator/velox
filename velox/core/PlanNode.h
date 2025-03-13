@@ -2196,13 +2196,16 @@ class UnnestNode : public PlanNode {
   /// names must appear in the same order as unnestVariables.
   /// @param ordinalityName Optional name for the ordinality columns. If not
   /// present, ordinality column is not produced.
+  /// @param isOuter If true, emit null data if the array/map is null or empty.
+  /// Used in SparkSQL's explode_outer.
   UnnestNode(
       const PlanNodeId& id,
       std::vector<FieldAccessTypedExprPtr> replicateVariables,
       std::vector<FieldAccessTypedExprPtr> unnestVariables,
       const std::vector<std::string>& unnestNames,
       const std::optional<std::string>& ordinalityName,
-      const PlanNodePtr& source);
+      const PlanNodePtr& source,
+      bool isOuter = false);
 
   /// The order of columns in the output is: replicated columns (in the order
   /// specified), unnested columns (in the order specified, for maps: key
@@ -2227,6 +2230,10 @@ class UnnestNode : public PlanNode {
     return withOrdinality_;
   }
 
+  bool isOuter() const {
+    return isOuter_;
+  }
+
   std::string_view name() const override {
     return "Unnest";
   }
@@ -2242,6 +2249,7 @@ class UnnestNode : public PlanNode {
   const std::vector<FieldAccessTypedExprPtr> unnestVariables_;
   const bool withOrdinality_;
   const std::vector<PlanNodePtr> sources_;
+  const bool isOuter_;
   RowTypePtr outputType_;
 };
 
