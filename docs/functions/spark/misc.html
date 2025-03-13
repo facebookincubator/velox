@@ -58,6 +58,19 @@ Nested nulls in complex type values are handled as non-nulls.</p>
 </dd></dl>
 
 <dl class="spark function">
+<dt class="sig sig-object spark" id="get_struct_field">
+<span class="sig-name descname"><span class="pre">get_struct_field</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">struct</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">ordinal</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">T</span></span></span><a class="headerlink" href="#get_struct_field" title="Link to this definition">¶</a></dt>
+<dd><p>Returns the value of nested subfield at position <code class="docutils literal notranslate"><span class="pre">ordinal</span></code> in the input <code class="docutils literal notranslate"><span class="pre">struct</span></code>.
+The input must be of row type and nested complex type is allowed.
+The <code class="docutils literal notranslate"><span class="pre">ordinal</span></code> is 0-based, and if <code class="docutils literal notranslate"><span class="pre">ordinal</span></code> is negative or greater than or equal to
+the children size of <code class="docutils literal notranslate"><span class="pre">struct</span></code>, exception is thrown.</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">from_json</span><span class="p">(</span><span class="s1">&#39;{&quot;a&quot;: 1, &quot;b&quot;: [1, 2, 3]}&#39;</span><span class="p">,</span> <span class="s1">&#39;a INT, b ARRAY&lt;INT&gt;&#39;</span><span class="p">)</span><span class="o">.</span><span class="n">a</span><span class="p">;</span> <span class="o">--</span> <span class="mi">1</span>
+<span class="n">SELECT</span> <span class="n">from_json</span><span class="p">(</span><span class="s1">&#39;{&quot;a&quot;: 1, &quot;b&quot;: [1, 2, 3]}&#39;</span><span class="p">,</span> <span class="s1">&#39;a INT, b ARRAY&lt;INT&gt;&#39;</span><span class="p">)</span><span class="o">.</span><span class="n">b</span><span class="p">;</span> <span class="o">--</span> <span class="n">array</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span><span class="mi">2</span><span class="p">,</span><span class="mi">3</span><span class="p">)</span>
+</pre></div>
+</div>
+</dd></dl>
+
+<dl class="spark function">
 <dt class="sig sig-object spark" id="monotonically_increasing_id">
 <span class="sig-name descname"><span class="pre">monotonically_increasing_id</span></span><span class="sig-paren">(</span><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">bigint</span></span></span><a class="headerlink" href="#monotonically_increasing_id" title="Link to this definition">¶</a></dt>
 <dd><p>Returns monotonically increasing 64-bit integers. The generated ID is
@@ -115,6 +128,7 @@ from Pseudo-Random Numbers with the seed by combining user-specified
     <ul>
 <li><a class="reference internal" href="#">Miscellaneous Functions</a><ul>
 <li><a class="reference internal" href="#at_least_n_non_nulls"><code class="docutils literal notranslate"><span class="pre">at_least_n_non_nulls()</span></code></a></li>
+<li><a class="reference internal" href="#get_struct_field"><code class="docutils literal notranslate"><span class="pre">get_struct_field()</span></code></a></li>
 <li><a class="reference internal" href="#monotonically_increasing_id"><code class="docutils literal notranslate"><span class="pre">monotonically_increasing_id()</span></code></a></li>
 <li><a class="reference internal" href="#raise_error"><code class="docutils literal notranslate"><span class="pre">raise_error()</span></code></a></li>
 <li><a class="reference internal" href="#spark_partition_id"><code class="docutils literal notranslate"><span class="pre">spark_partition_id()</span></code></a></li>
