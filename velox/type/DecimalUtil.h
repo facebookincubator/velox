@@ -271,16 +271,11 @@ class DecimalUtil {
       if (isOverflow) {
         return Status::UserError("Result overflows.");
       }
-    } else if (fractionDigits > scale) {
+    } else {
       const auto scalingFactor =
           DecimalUtil::kPowersOfTen[fractionDigits - scale];
-      const TOutput remainder = rescaledValue % scalingFactor;
-      rescaledValue /= scalingFactor;
-      if (rescaledValue >= 0 && remainder >= scalingFactor / 2) {
-        ++rescaledValue;
-      } else if (remainder <= -scalingFactor / 2) {
-        --rescaledValue;
-      }
+      divideWithRoundUp<TOutput, TOutput, int128_t>(
+          rescaledValue, rescaledValue, scalingFactor, false, 0, 0);
     }
 
     if (!valueInPrecisionRange<TOutput>(rescaledValue, precision)) {
