@@ -603,4 +603,178 @@ TEST_F(CudfFilterProjectTest, mixedInOperation) {
   testMixedInOperation(vectors);
 }
 
+TEST_F(CudfFilterProjectTest, simpleFilter) {
+  vector_size_t batchSize = 1000;
+  auto vectors = makeVectors(rowType_, 2, batchSize);
+  createDuckDbTable(vectors);
+
+  // Create a plan with a simple filter
+  auto plan = PlanBuilder()
+                  .values(vectors)
+                  .filter("c0 > 500")
+                  .project({"c0", "c1", "c2"})
+                  .planNode();
+
+  // Run the test
+  assertQuery(plan, "SELECT c0, c1, c2 FROM tmp WHERE c0 > 500");
+}
+
+TEST_F(CudfFilterProjectTest, filterWithProject) {
+  vector_size_t batchSize = 1000;
+  auto vectors = makeVectors(rowType_, 2, batchSize);
+  createDuckDbTable(vectors);
+
+  // Create a plan with filter and project
+  auto plan =
+      PlanBuilder()
+          .values(vectors)
+          .filter("c0 > 500")
+          .project({"c0 + 2 as doubled", "c1 + 1.0 as incremented", "c2"})
+          .planNode();
+
+  // Run the test
+  assertQuery(
+      plan,
+      "SELECT c0 + 2 as doubled, c1 + 1.0 as incremented, c2 FROM tmp WHERE c0 > 500");
+}
+
+TEST_F(CudfFilterProjectTest, complexFilter) {
+  vector_size_t batchSize = 1000;
+  auto vectors = makeVectors(rowType_, 2, batchSize);
+  createDuckDbTable(vectors);
+
+  // Create a plan with a complex filter condition
+  auto plan = PlanBuilder()
+                  .values(vectors)
+                  .filter("c0 > 500 AND c1 < 0.5 AND c2 LIKE '%test%'")
+                  .project({"c0", "c1", "c2"})
+                  .planNode();
+
+  // Run the test
+  assertQuery(
+      plan,
+      "SELECT c0, c1, c2 FROM tmp WHERE c0 > 500 AND c1 < 0.5 AND c2 LIKE '%test%'");
+}
+
+TEST_F(CudfFilterProjectTest, filterWithNullValues) {
+  vector_size_t batchSize = 1000;
+  auto vectors = makeVectors(rowType_, 2, batchSize);
+
+  // Add some null values to the vectors
+  for (auto& vector : vectors) {
+    auto c0Vector = vector->childAt(0)->asFlatVector<int32_t>();
+    auto c1Vector = vector->childAt(1)->asFlatVector<double>();
+    for (vector_size_t i = 0; i < batchSize; i += 10) {
+      c0Vector->setNull(i, true);
+      c1Vector->setNull(i, true);
+    }
+  }
+
+  createDuckDbTable(vectors);
+
+  // Create a plan with filter that handles null values
+  auto plan = PlanBuilder()
+                  .values(vectors)
+                  .filter("c0 IS NOT NULL AND c1 IS NOT NULL")
+                  .project({"c0", "c1", "c2"})
+                  .planNode();
+
+  // Run the test
+  assertQuery(
+      plan,
+      "SELECT c0, c1, c2 FROM tmp WHERE c0 IS NOT NULL AND c1 IS NOT NULL");
+}
+
+TEST_F(CudfFilterProjectTest, filterWithOrCondition) {
+  vector_size_t batchSize = 1000;
+  auto vectors = makeVectors(rowType_, 2, batchSize);
+  createDuckDbTable(vectors);
+
+  // Create a plan with OR condition in filter
+  auto plan = PlanBuilder()
+                  .values(vectors)
+                  .filter("c0 > 500 OR c1 < 0.5")
+                  .project({"c0", "c1", "c2"})
+                  .planNode();
+
+  // Run the test
+  assertQuery(plan, "SELECT c0, c1, c2 FROM tmp WHERE c0 > 500 OR c1 < 0.5");
+}
+
+TEST_F(CudfFilterProjectTest, filterWithInCondition) {
+  vector_size_t batchSize = 1000;
+  auto vectors = makeVectors(rowType_, 2, batchSize);
+  createDuckDbTable(vectors);
+
+  // Create a plan with IN condition in filter
+  auto plan = PlanBuilder(pool_.get())
+                  .values(vectors)
+                  .filter("c0 IN (100, 200, 300, 400, 500)")
+                  .project({"c0", "c1", "c2"})
+                  .planNode();
+
+  // Run the test
+  assertQuery(
+      plan, "SELECT c0, c1, c2 FROM tmp WHERE c0 IN (100, 200, 300, 400, 500)");
+}
+
+TEST_F(CudfFilterProjectTest, filterWithBetweenCondition) {
+  vector_size_t batchSize = 1000;
+  auto vectors = makeVectors(rowType_, 2, batchSize);
+  createDuckDbTable(vectors);
+
+  // Create a plan with BETWEEN condition in filter
+  auto plan = PlanBuilder()
+                  .values(vectors)
+                  .filter("c0 BETWEEN 100 AND 500")
+                  .project({"c0", "c1", "c2"})
+                  .planNode();
+
+  // Run the test
+  assertQuery(plan, "SELECT c0, c1, c2 FROM tmp WHERE c0 BETWEEN 100 AND 500");
+}
+
+TEST_F(CudfFilterProjectTest, filterWithStringOperations) {
+  vector_size_t batchSize = 1000;
+  auto vectors = makeVectors(rowType_, 2, batchSize);
+  createDuckDbTable(vectors);
+
+  // Create a plan with string operations in filter
+  auto plan = PlanBuilder()
+                  .values(vectors)
+                  .filter("LENGTH(c2) > 5")
+                  .project({"c0", "c1", "c2"})
+                  .planNode();
+
+  // Run the test
+  assertQuery(plan, "SELECT c0, c1, c2 FROM tmp WHERE LENGTH(c2) > 5");
+}
+
+TEST_F(CudfFilterProjectTest, filterWithoutProject) {
+  vector_size_t batchSize = 1000;
+  auto vectors = makeVectors(rowType_, 2, batchSize);
+  createDuckDbTable(vectors);
+
+  // Create a plan with only filter (no projection)
+  auto plan =
+      PlanBuilder().values(vectors).filter("c0 > 500 AND c1 < 0.5").planNode();
+
+  // Run the test - should return all columns without modification
+  assertQuery(plan, "SELECT c0, c1, c2 FROM tmp WHERE c0 > 500 AND c1 < 0.5");
+}
+
+TEST_F(CudfFilterProjectTest, filterWithEmptyResult) {
+  vector_size_t batchSize = 1000;
+  auto vectors = makeVectors(rowType_, 2, batchSize);
+  createDuckDbTable(vectors);
+
+  // Create a plan with a filter that should return no rows
+  auto plan = PlanBuilder()
+                  .values(vectors)
+                  .filter("c0 < 0 AND c0 > 1000") // Impossible condition
+                  .planNode();
+
+  // Run the test - should return empty result
+  assertQuery(plan, "SELECT c0, c1, c2 FROM tmp WHERE c0 < 0 AND c0 > 1000");
+}
 } // namespace

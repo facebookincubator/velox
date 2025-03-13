@@ -50,6 +50,14 @@ class CudfFilterProject : public exec::Operator, public NvtxHelper {
 
   RowVectorPtr getOutput() override;
 
+  void filter(
+      std::vector<std::unique_ptr<cudf::column>>& input_table_columns,
+      rmm::cuda_stream_view stream);
+
+  std::vector<std::unique_ptr<cudf::column>> project(
+      std::vector<std::unique_ptr<cudf::column>>& input_table_columns,
+      rmm::cuda_stream_view stream);
+
   exec::BlockingReason isBlocked(ContinueFuture* /*future*/) override {
     return exec::BlockingReason::kNotBlocked;
   }
@@ -58,7 +66,8 @@ class CudfFilterProject : public exec::Operator, public NvtxHelper {
 
   void close() override {
     Operator::close();
-    expressionEvaluator_.close();
+    projectEvaluator_.close();
+    filterEvaluator_.close();
   }
 
  private:
@@ -69,7 +78,8 @@ class CudfFilterProject : public exec::Operator, public NvtxHelper {
   // initialization, they will be reset, and initialized_ will be set to true.
   std::shared_ptr<const core::ProjectNode> project_;
   std::shared_ptr<const core::FilterNode> filter_;
-  ExpressionEvaluator expressionEvaluator_;
+  ExpressionEvaluator projectEvaluator_;
+  ExpressionEvaluator filterEvaluator_;
 
   std::vector<velox::exec::IdentityProjection> resultProjections_;
   std::vector<velox::exec::IdentityProjection> identityProjections_;
