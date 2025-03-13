@@ -18,7 +18,8 @@ add_library(
   DuckQueryRunner.cpp
   PrestoQueryRunner.cpp
   FuzzerUtil.cpp
-  ToSQLUtil.cpp)
+  ToSQLUtil.cpp
+  PrestoQueryRunnerIntermediateTypeTransforms.cpp)
 
 target_link_libraries(
   velox_fuzzer_util
