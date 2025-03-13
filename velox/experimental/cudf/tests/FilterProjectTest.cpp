@@ -777,5 +777,4 @@ TEST_F(CudfFilterProjectTest, filterWithEmptyResult) {
   // Run the test - should return empty result
   assertQuery(plan, "SELECT c0, c1, c2 FROM tmp WHERE c0 < 0 AND c0 > 1000");
 }
-
 } // namespace
