@@ -31,7 +31,6 @@ using namespace facebook::velox::exec;
 using namespace facebook::velox::exec::test;
 using namespace facebook::velox::common::testutil;
 
-using facebook::velox::test::BatchMaker;
 namespace {
 
 class OrderByTest : public OperatorTestBase {
@@ -312,106 +311,11 @@ TEST_F(OrderByTest, varfields) {
           return StringView::makeInline(std::to_string(row));
         },
         nullEvery(17));
-    // TODO: Add support for array/map in createDuckDbTable and verify
-    // that we can sort by array/map as well.
     vectors.push_back(makeRowVector({c0, c1, c2}));
   }
   createDuckDbTable(vectors);
 
   testSingleKey(vectors, "c2");
 }
-
-#if 0
-// flattening for scalar types unsupported in arrow!
-TEST_F(OrderByTest, unknown) {
-  vector_size_t size = 1'000;
-  auto vector = makeRowVector({
-      makeFlatVector<int64_t>(size, [](auto row) { return row % 7; }),
-      BaseVector::createNullConstant(UNKNOWN(), size, pool()),
-  });
-
-  // Exclude "UNKNOWN" column as DuckDB doesn't understand UNKNOWN type
-  createDuckDbTable(
-      {makeRowVector({vector->childAt(0)}),
-       makeRowVector({vector->childAt(0)})});
-
-  core::PlanNodeId orderById;
-  auto plan = PlanBuilder()
-                  .values({vector, vector})
-                  .orderBy({"c0 DESC NULLS LAST"}, false)
-                  .capturePlanNodeId(orderById)
-                  .planNode();
-  runTest(
-      plan,
-      orderById,
-      "SELECT *, null FROM tmp ORDER BY c0 DESC NULLS LAST",
-      {0});
-}
-
-/// Verifies output batch rows of OrderBy
-TEST_F(OrderByTest, outputBatchRows) {
-  struct {
-    int numRowsPerBatch;
-    int preferredOutBatchBytes;
-    int maxOutBatchRows;
-    int expectedOutputVectors;
-
-    // TODO: add output size check with spilling enabled
-    std::string debugString() const {
-      return fmt::format(
-          "numRowsPerBatch:{}, preferredOutBatchBytes:{}, maxOutBatchRows:{}, expectedOutputVectors:{}",
-          numRowsPerBatch,
-          preferredOutBatchBytes,
-          maxOutBatchRows,
-          expectedOutputVectors);
-    }
-  } testSettings[] = {
-      {1024, 1, 100, 1024},
-      // estimated size per row is ~2092, set preferredOutBatchBytes to 20920,
-      // so each batch has 10 rows, so it would return 100 batches
-      {1000, 20920, 100, 100},
-      // same as above, but maxOutBatchRows is 1, so it would return 1000
-      // batches
-      {1000, 20920, 1, 1000}};
-
-  for (const auto& testData : testSettings) {
-    SCOPED_TRACE(testData.debugString());
-    const vector_size_t batchSize = testData.numRowsPerBatch;
-    std::vector<RowVectorPtr> rowVectors;
-    auto c0 = makeFlatVector<int64_t>(
-        batchSize, [&](vector_size_t row) { return row; }, nullEvery(5));
-    auto c1 = makeFlatVector<double>(
-        batchSize, [&](vector_size_t row) { return row; }, nullEvery(11));
-    std::vector<VectorPtr> vectors;
-    vectors.push_back(c0);
-    for (int i = 0; i < 256; ++i) {
-      vectors.push_back(c1);
-    }
-    rowVectors.push_back(makeRowVector(vectors));
-    createDuckDbTable(rowVectors);
-
-    core::PlanNodeId orderById;
-    auto plan = PlanBuilder()
-                    .values(rowVectors)
-                    .orderBy({fmt::format("{} ASC NULLS LAST", "c0")}, false)
-                    .capturePlanNodeId(orderById)
-                    .planNode();
-    auto queryCtx = core::QueryCtx::create(executor_.get());
-    queryCtx->testingOverrideConfigUnsafe(
-        {{core::QueryConfig::kPreferredOutputBatchBytes,
-          std::to_string(testData.preferredOutBatchBytes)},
-         {core::QueryConfig::kMaxOutputBatchRows,
-          std::to_string(testData.maxOutBatchRows)}});
-    CursorParameters params;
-    params.planNode = plan;
-    params.queryCtx = queryCtx;
-    auto task = assertQueryOrdered(
-        params, "SELECT * FROM tmp ORDER BY c0 ASC NULLS LAST", {0});
-    EXPECT_EQ(
-        testData.expectedOutputVectors,
-        toPlanStats(task->taskStats()).at(orderById).outputVectors);
-  }
-}
-#endif
 
 } // namespace
