@@ -27,14 +27,101 @@ namespace facebook::velox::exec {
 
 namespace {
 
+#define BUILD_TOPN(nodename)                                          \
+  planBuilder.values(values)                                          \
+      .nodename(partitionKeys, sortingKeys, limit, generateRowNumber) \
+      .planNode()
+
+#define BUILD_TOPN_PLANNODEID(nodename)                               \
+  planBuilder.values(values)                                          \
+      .nodename(partitionKeys, sortingKeys, limit, generateRowNumber) \
+      .capturePlanNodeId(planNodeId)                                  \
+      .planNode()
+
+#define BUILD_TOPN_PARTIAL_FINAL(nodename)                \
+  planBuilder.values(values)                              \
+      .nodename(partitionKeys, sortingKeys, limit, false) \
+      .capturePlanNodeId(planNodeId)                      \
+      .nodename(partitionKeys, sortingKeys, limit, true)  \
+      .planNode()
+
 class TopNRowNumberTest : public OperatorTestBase {
  protected:
-  TopNRowNumberTest() {
+  explicit TopNRowNumberTest(core::TopNRowNumberNode::RankFunction function)
+      : function_(function) {}
+
+  void SetUp() override {
+    exec::test::OperatorTestBase::SetUp();
     filesystems::registerLocalFileSystem();
   }
+
+ protected:
+  const core::PlanNodePtr& topnNode(
+      PlanBuilder& planBuilder,
+      const std::vector<RowVectorPtr>& values,
+      const std::vector<std::string>& partitionKeys,
+      const std::vector<std::string>& sortingKeys,
+      int32_t limit,
+      bool generateRowNumber) {
+    switch (function_) {
+      case core::TopNRowNumberNode::RankFunction::kRowNumber:
+        return BUILD_TOPN(topNRowNumber);
+      case core::TopNRowNumberNode::RankFunction::kRank:
+        return BUILD_TOPN(topNRank);
+      case core::TopNRowNumberNode::RankFunction::kDenseRank:
+        return BUILD_TOPN(topNDenseRank);
+    }
+    VELOX_UNREACHABLE();
+  }
+
+  const core::PlanNodePtr& topnNodeId(
+      PlanBuilder& planBuilder,
+      core::PlanNodeId& planNodeId,
+      const std::vector<RowVectorPtr>& values,
+      const std::vector<std::string>& partitionKeys,
+      const std::vector<std::string>& sortingKeys,
+      int32_t limit,
+      bool generateRowNumber) {
+    switch (function_) {
+      case core::TopNRowNumberNode::RankFunction::kRowNumber:
+        return BUILD_TOPN_PLANNODEID(topNRowNumber);
+      case core::TopNRowNumberNode::RankFunction::kRank:
+        return BUILD_TOPN_PLANNODEID(topNRank);
+      case core::TopNRowNumberNode::RankFunction::kDenseRank:
+        return BUILD_TOPN_PLANNODEID(topNDenseRank);
+    }
+    VELOX_UNREACHABLE();
+  }
+
+  const core::PlanNodePtr& topnNodePartialFinal(
+      PlanBuilder& planBuilder,
+      core::PlanNodeId& planNodeId,
+      const std::vector<RowVectorPtr>& values,
+      const std::vector<std::string>& partitionKeys,
+      const std::vector<std::string>& sortingKeys,
+      int32_t limit) {
+    switch (function_) {
+      case core::TopNRowNumberNode::RankFunction::kRowNumber:
+        return BUILD_TOPN_PARTIAL_FINAL(topNRowNumber);
+      case core::TopNRowNumberNode::RankFunction::kRank:
+        return BUILD_TOPN_PARTIAL_FINAL(topNRank);
+      case core::TopNRowNumberNode::RankFunction::kDenseRank:
+        return BUILD_TOPN_PARTIAL_FINAL(topNDenseRank);
+    }
+    VELOX_UNREACHABLE();
+  }
+
+  const core::TopNRowNumberNode::RankFunction function_;
 };
 
-TEST_F(TopNRowNumberTest, basic) {
+class MultiTopNRowNumberTest : public TopNRowNumberTest,
+                               public testing::WithParamInterface<
+                                   core::TopNRowNumberNode::RankFunction> {
+ public:
+  MultiTopNRowNumberTest() : TopNRowNumberTest(GetParam()) {}
+};
+
+TEST_P(MultiTopNRowNumberTest, basic) {
   auto data = makeRowVector({
       // Partitioning key.
       makeFlatVector<int64_t>({1, 1, 2, 2, 1, 2, 1}),
@@ -48,40 +135,37 @@ TEST_F(TopNRowNumberTest, basic) {
 
   auto testLimit = [&](auto limit) {
     // Emit row numbers.
-    auto plan = PlanBuilder()
-                    .values({data})
-                    .topNRowNumber({"c0"}, {"c1"}, limit, true)
-                    .planNode();
+    auto planBuilder = PlanBuilder();
+    auto plan = topnNode(planBuilder, {data}, {"c0"}, {"c1"}, limit, true);
     assertQuery(
         plan,
         fmt::format(
-            "SELECT * FROM (SELECT *, row_number() over (partition by c0 order by c1) as rn FROM tmp) "
+            "SELECT * FROM (SELECT *, {}() over (partition by c0 order by c1) as rn FROM tmp) "
             " WHERE rn <= {}",
+            core::TopNRowNumberNode::rankFunctionName(function_),
             limit));
 
     // Do not emit row numbers.
-    plan = PlanBuilder()
-               .values({data})
-               .topNRowNumber({"c0"}, {"c1"}, limit, false)
-               .planNode();
+    auto planBuilder2 = PlanBuilder();
+    plan = topnNode(planBuilder2, {data}, {"c0"}, {"c1"}, limit, false);
 
     assertQuery(
         plan,
         fmt::format(
-            "SELECT c0, c1, c2 FROM (SELECT *, row_number() over (partition by c0 order by c1) as rn FROM tmp) "
+            "SELECT c0, c1, c2 FROM (SELECT *, {}() over (partition by c0 order by c1) as rn FROM tmp) "
             " WHERE rn <= {}",
+            core::TopNRowNumberNode::rankFunctionName(function_),
             limit));
 
     // No partitioning keys.
-    plan = PlanBuilder()
-               .values({data})
-               .topNRowNumber({}, {"c1"}, limit, true)
-               .planNode();
+    auto planBuilder3 = PlanBuilder();
+    plan = topnNode(planBuilder3, {data}, {}, {"c1"}, limit, true);
     assertQuery(
         plan,
         fmt::format(
-            "SELECT * FROM (SELECT *, row_number() over (order by c1) as rn FROM tmp) "
+            "SELECT * FROM (SELECT *, {}() over (order by c1) as rn FROM tmp) "
             " WHERE rn <= {}",
+            core::TopNRowNumberNode::rankFunctionName(function_),
             limit));
   };
 
@@ -91,7 +175,7 @@ TEST_F(TopNRowNumberTest, basic) {
   testLimit(5);
 }
 
-TEST_F(TopNRowNumberTest, largeOutput) {
+TEST_P(MultiTopNRowNumberTest, largeOutput) {
   // Make 10 vectors. Use different types for partitioning key, sorting key and
   // data. Use order of columns different from partitioning keys, followed by
   // sorting keys, followed by data.
@@ -117,15 +201,14 @@ TEST_F(TopNRowNumberTest, largeOutput) {
   auto testLimit = [&](auto limit) {
     SCOPED_TRACE(fmt::format("Limit: {}", limit));
     core::PlanNodeId topNRowNumberId;
-    auto plan = PlanBuilder()
-                    .values(data)
-                    .topNRowNumber({"p"}, {"s"}, limit, true)
-                    .capturePlanNodeId(topNRowNumberId)
-                    .planNode();
+    auto planBuilder = PlanBuilder();
+    auto plan = topnNodeId(
+        planBuilder, topNRowNumberId, data, {"p"}, {"s"}, limit, true);
 
     auto sql = fmt::format(
-        "SELECT * FROM (SELECT *, row_number() over (partition by p order by s) as rn FROM tmp) "
+        "SELECT * FROM (SELECT *, {}() over (partition by p order by s) as rn FROM tmp) "
         " WHERE rn <= {}",
+        core::TopNRowNumberNode::rankFunctionName(function_),
         limit);
     AssertQueryBuilder(plan, duckDbQueryRunner_)
         .config(core::QueryConfig::kPreferredOutputBatchBytes, "1024")
@@ -152,16 +235,15 @@ TEST_F(TopNRowNumberTest, largeOutput) {
     }
 
     // No partitioning keys.
-    plan = PlanBuilder()
-               .values(data)
-               .topNRowNumber({}, {"s"}, limit, true)
-               .planNode();
+    auto planBuilder2 = PlanBuilder();
+    plan = topnNode(planBuilder2, data, {}, {"s"}, limit, true);
 
     AssertQueryBuilder(plan, duckDbQueryRunner_)
         .config(core::QueryConfig::kPreferredOutputBatchBytes, "1024")
         .assertResults(fmt::format(
-            "SELECT * FROM (SELECT *, row_number() over (order by s) as rn FROM tmp) "
+            "SELECT * FROM (SELECT *, {}() over (order by s) as rn FROM tmp) "
             " WHERE rn <= {}",
+            core::TopNRowNumberNode::rankFunctionName(function_),
             limit));
   };
 
@@ -172,7 +254,7 @@ TEST_F(TopNRowNumberTest, largeOutput) {
   testLimit(2000);
 }
 
-TEST_F(TopNRowNumberTest, manyPartitions) {
+TEST_P(MultiTopNRowNumberTest, manyPartitions) {
   const vector_size_t size = 10'000;
   auto data = split(
       makeRowVector(
@@ -201,15 +283,14 @@ TEST_F(TopNRowNumberTest, manyPartitions) {
   auto testLimit = [&](auto limit, size_t outputBatchBytes = 1024) {
     SCOPED_TRACE(fmt::format("Limit: {}", limit));
     core::PlanNodeId topNRowNumberId;
-    auto plan = PlanBuilder()
-                    .values(data)
-                    .topNRowNumber({"p"}, {"s"}, limit, true)
-                    .capturePlanNodeId(topNRowNumberId)
-                    .planNode();
+    auto planBuilder = PlanBuilder();
+    auto plan = topnNodeId(
+        planBuilder, topNRowNumberId, data, {"p"}, {"s"}, limit, true);
 
     auto sql = fmt::format(
-        "SELECT * FROM (SELECT *, row_number() over (partition by p order by s) as rn FROM tmp) "
+        "SELECT * FROM (SELECT *, {}() over (partition by p order by s) as rn FROM tmp) "
         " WHERE rn <= {}",
+        core::TopNRowNumberNode::rankFunctionName(function_),
         limit);
     assertQuery(plan, sql);
 
@@ -243,7 +324,74 @@ TEST_F(TopNRowNumberTest, manyPartitions) {
   testLimit(1, 1);
 }
 
-TEST_F(TopNRowNumberTest, abandonPartialEarly) {
+TEST_P(MultiTopNRowNumberTest, fewPartitions) {
+  const vector_size_t size = 10'000;
+  auto data = split(
+      makeRowVector(
+          {"d", "s", "p"},
+          {
+              // Data. Make it a constant to avoid ordering issues.
+              makeConstant((int64_t)123'456, size),
+              // Sorting key. Ensure enough repetition as we are testing
+              // rank and dense_rank. Also, the sorting keys flip between
+              // the top rank value and lower ones to test the logic in
+              // fixTopRank function.
+              makeFlatVector<int64_t>(
+                  size,
+                  [](auto row) { return (row % 10) * 10; },
+                  [](auto row) { return (row % 50) == 0; }),
+              // Partitioning key. Each partition has 2000 rows.
+              makeFlatVector<int64_t>(size, [](auto row) { return row % 5; }),
+          }),
+      10);
+
+  createDuckDbTable(data);
+
+  auto spillDirectory = exec::test::TempDirectoryPath::create();
+
+  auto testLimit = [&](auto limit, size_t outputBatchBytes = 1024) {
+    SCOPED_TRACE(fmt::format("Limit: {}", limit));
+    core::PlanNodeId topNRowNumberId;
+    auto planBuilder = PlanBuilder();
+    auto plan = topnNodeId(
+        planBuilder, topNRowNumberId, data, {"p"}, {"s"}, limit, true);
+
+    auto sql = fmt::format(
+        "SELECT * FROM (SELECT *, {}() over (partition by p order by s) as rn FROM tmp) "
+        " WHERE rn <= {}",
+        core::TopNRowNumberNode::rankFunctionName(function_),
+        limit);
+    assertQuery(plan, sql);
+
+    // Spilling.
+    {
+      TestScopedSpillInjection scopedSpillInjection(100);
+      auto task =
+          AssertQueryBuilder(plan, duckDbQueryRunner_)
+              .config(
+                  core::QueryConfig::kPreferredOutputBatchBytes,
+                  fmt::format("{}", outputBatchBytes))
+              .config(core::QueryConfig::kSpillEnabled, "true")
+              .config(core::QueryConfig::kTopNRowNumberSpillEnabled, "true")
+              .spillDirectory(spillDirectory->getPath())
+              .assertResults(sql);
+
+      auto taskStats = exec::toPlanStats(task->taskStats());
+      const auto& stats = taskStats.at(topNRowNumberId);
+
+      ASSERT_GT(stats.spilledBytes, 0);
+      ASSERT_GT(stats.spilledRows, 0);
+      ASSERT_GT(stats.spilledFiles, 0);
+      ASSERT_GT(stats.spilledPartitions, 0);
+    }
+  };
+
+  testLimit(10);
+  testLimit(20);
+  testLimit(100);
+}
+
+TEST_P(MultiTopNRowNumberTest, abandonPartialEarly) {
   auto data = makeRowVector(
       {"p", "s"},
       {
@@ -255,21 +403,19 @@ TEST_F(TopNRowNumberTest, abandonPartialEarly) {
 
   core::PlanNodeId topNRowNumberId;
   auto runPlan = [&](int32_t minRows) {
-    auto plan = PlanBuilder()
-                    .values(split(data, 10))
-                    .topNRowNumber({"p"}, {"s"}, 99, false)
-                    .capturePlanNodeId(topNRowNumberId)
-                    .topNRowNumber({"p"}, {"s"}, 99, true)
-                    .planNode();
+    auto planBuilder = PlanBuilder();
+    auto plan = topnNodePartialFinal(
+        planBuilder, topNRowNumberId, split(data, 10), {"p"}, {"s"}, 99);
     auto task =
         AssertQueryBuilder(plan, duckDbQueryRunner_)
             .config(
                 core::QueryConfig::kAbandonPartialTopNRowNumberMinRows,
                 fmt::format("{}", minRows))
             .config(core::QueryConfig::kAbandonPartialTopNRowNumberMinPct, "80")
-            .assertResults(
-                "SELECT * FROM (SELECT *, row_number() over (partition by p order by s) as rn FROM tmp) "
-                "WHERE rn <= 99");
+            .assertResults(fmt::format(
+                "SELECT * FROM (SELECT *, {}() over (partition by p order by s) as rn FROM tmp) "
+                "WHERE rn <= 99",
+                core::TopNRowNumberNode::rankFunctionName(function_)));
 
     return exec::toPlanStats(task->taskStats());
   };
@@ -291,7 +437,7 @@ TEST_F(TopNRowNumberTest, abandonPartialEarly) {
   }
 }
 
-TEST_F(TopNRowNumberTest, planNodeValidation) {
+TEST_P(MultiTopNRowNumberTest, planNodeValidation) {
   auto data = makeRowVector(
       ROW({"a", "b", "c", "d", "e"},
           {
@@ -306,10 +452,8 @@ TEST_F(TopNRowNumberTest, planNodeValidation) {
   auto plan = [&](const std::vector<std::string>& partitionKeys,
                   const std::vector<std::string>& sortingKeys,
                   int32_t limit = 10) {
-    PlanBuilder()
-        .values({data})
-        .topNRowNumber(partitionKeys, sortingKeys, limit, true)
-        .planNode();
+    auto planBuilder = PlanBuilder();
+    topnNode(planBuilder, {data}, partitionKeys, sortingKeys, limit, true);
   };
 
   VELOX_ASSERT_THROW(
@@ -334,15 +478,14 @@ TEST_F(TopNRowNumberTest, planNodeValidation) {
       plan({"a", "b"}, {"c"}, 0), "Limit must be greater than zero");
 }
 
-TEST_F(TopNRowNumberTest, maxSpillBytes) {
+TEST_P(MultiTopNRowNumberTest, maxSpillBytes) {
   const auto rowType =
       ROW({"c0", "c1", "c2"}, {INTEGER(), INTEGER(), VARCHAR()});
   const auto vectors = createVectors(rowType, 1024, 15 << 20);
   auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
-  auto plan = PlanBuilder(planNodeIdGenerator)
-                  .values(vectors)
-                  .topNRowNumber({"c0"}, {"c1"}, 100, true)
-                  .planNode();
+  auto planBuilder = PlanBuilder(planNodeIdGenerator);
+  auto plan = topnNode(planBuilder, vectors, {"c0"}, {"c1"}, 100, true);
+
   struct {
     int32_t maxSpilledBytes;
     bool expectedExceedLimit;
@@ -382,7 +525,7 @@ TEST_F(TopNRowNumberTest, maxSpillBytes) {
 
 // This test verifies that TopNRowNumber operator reclaim all the memory after
 // spill.
-DEBUG_ONLY_TEST_F(TopNRowNumberTest, memoryUsageCheckAfterReclaim) {
+DEBUG_ONLY_TEST_P(MultiTopNRowNumberTest, memoryUsageCheckAfterReclaim) {
   std::atomic_int inputCount{0};
   SCOPED_TESTVALUE_SET(
       "facebook::velox::exec::Driver::runInternal::addInput",
@@ -425,15 +568,14 @@ DEBUG_ONLY_TEST_F(TopNRowNumberTest, memoryUsageCheckAfterReclaim) {
   auto spillDirectory = exec::test::TempDirectoryPath::create();
 
   core::PlanNodeId topNRowNumberId;
-  auto plan = PlanBuilder()
-                  .values(data)
-                  .topNRowNumber({"p"}, {"s"}, 1'000, true)
-                  .capturePlanNodeId(topNRowNumberId)
-                  .planNode();
+  auto planBuilder = PlanBuilder();
+  auto plan =
+      topnNodeId(planBuilder, topNRowNumberId, data, {"p"}, {"s"}, 1'000, true);
 
-  const auto sql =
-      "SELECT * FROM (SELECT *, row_number() over (partition by p order by s) as rn FROM tmp) "
-      " WHERE rn <= 1000";
+  const auto sql = fmt::format(
+      "SELECT * FROM (SELECT *, {}() over (partition by p order by s) as rn FROM tmp) "
+      " WHERE rn <= 1000",
+      core::TopNRowNumberNode::rankFunctionName(function_));
   auto task = AssertQueryBuilder(plan, duckDbQueryRunner_)
                   .config(core::QueryConfig::kSpillEnabled, "true")
                   .config(core::QueryConfig::kTopNRowNumberSpillEnabled, "true")
@@ -451,7 +593,7 @@ DEBUG_ONLY_TEST_F(TopNRowNumberTest, memoryUsageCheckAfterReclaim) {
 
 // This test verifies that TopNRowNumber operator can be closed twice which
 // might be triggered by memory pool abort.
-DEBUG_ONLY_TEST_F(TopNRowNumberTest, doubleClose) {
+DEBUG_ONLY_TEST_P(MultiTopNRowNumberTest, doubleClose) {
   const std::string errorMessage("doubleClose");
   SCOPED_TESTVALUE_SET(
       "facebook::velox::exec::Driver::runInternal::noMoreInput",
@@ -485,17 +627,24 @@ DEBUG_ONLY_TEST_F(TopNRowNumberTest, doubleClose) {
       10);
 
   core::PlanNodeId topNRowNumberId;
-  auto plan = PlanBuilder()
-                  .values(data)
-                  .topNRowNumber({"p"}, {"s"}, 1'000, true)
-                  .capturePlanNodeId(topNRowNumberId)
-                  .planNode();
+  auto planBuilder = PlanBuilder();
+  auto plan =
+      topnNodeId(planBuilder, topNRowNumberId, data, {"p"}, {"s"}, 1'000, true);
 
-  const auto sql =
-      "SELECT * FROM (SELECT *, row_number() over (partition by p order by s) as rn FROM tmp) "
-      " WHERE rn <= 1000";
+  const auto sql = fmt::format(
+      "SELECT * FROM (SELECT *, {}() over (partition by p order by s) as rn FROM tmp) "
+      " WHERE rn <= 1000",
+      core::TopNRowNumberNode::rankFunctionName(function_));
 
   VELOX_ASSERT_THROW(assertQuery(plan, sql), errorMessage);
 }
+
+VELOX_INSTANTIATE_TEST_SUITE_P(
+    TopNRowNumberTest,
+    MultiTopNRowNumberTest,
+    testing::ValuesIn(std::vector<core::TopNRowNumberNode::RankFunction>(
+        {core::TopNRowNumberNode::RankFunction::kRowNumber,
+         core::TopNRowNumberNode::RankFunction::kRank,
+         core::TopNRowNumberNode::RankFunction::kDenseRank})));
 } // namespace
 } // namespace facebook::velox::exec
