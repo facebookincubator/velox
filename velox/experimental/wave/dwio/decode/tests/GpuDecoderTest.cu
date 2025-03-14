@@ -708,15 +708,12 @@ class GpuDecoderTest : public ::testing::Test {
     auto bits = allocate<uint8_t>(numWords * 8);
     fillRandomBits(bits.get(), 0.5, numWords * 64);
     auto result = allocate<int32_t>(numWords * 64 / stride);
-    // One int per warp.
-    auto temp = allocate<int32_t>(8);
     DecodePrograms programs;
     programs.programs.emplace_back();
     programs.programs.back().push_back(std::make_unique<GpuDecode>());
     auto opPtr = programs.programs.back().front().get();
     opPtr->step = DecodeStep::kCountBits;
     auto& op = opPtr->data.countBits;
-    opPtr->temp = temp.get();
     op.bits = bits.get();
     op.numBits = numWords * 64;
     op.resultStride = stride;
