@@ -12,19 +12,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-add_executable(velox_dwio_orc_reader_test ReaderTest.cpp)
-add_test(
-  NAME velox_dwio_orc_reader_test
-  COMMAND velox_dwio_orc_reader_test
-  WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR})
+velox_add_library(velox_dwio_orc_writer OrcWriter.cpp)
 
-target_link_libraries(
-  velox_dwio_orc_reader_test
-  velox_dwrf_test_utils
-  velox_dwio_common_test_utils
-  GTest::gtest
-  GTest::gtest_main
-  GTest::gmock)
-
-file(COPY ${CMAKE_CURRENT_SOURCE_DIR}/examples
-     DESTINATION ${CMAKE_CURRENT_BINARY_DIR})
+velox_link_libraries(velox_dwio_orc_writer velox_dwio_dwrf_writer)

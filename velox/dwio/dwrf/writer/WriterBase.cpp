@@ -20,56 +20,92 @@
 
 namespace facebook::velox::dwrf {
 
-void WriterBase::writeFooter(const Type& type) {
+uint64_t WriterBase::writeMetadata() {
+  if (fileFormat_ == dwio::common::FileFormat::ORC) {
+    auto pos = writerSink_->size();
+    writeProto(&metadata_);
+    return writerSink_->size() - pos;
+  }
+
+  return 0;
+}
+
+void WriterBase::writeFooter(const Type& type, uint64_t metadataLength) {
   auto pos = writerSink_->size();
-  footer_.set_headerlength(ORC_MAGIC_LEN);
-  footer_.set_contentlength(pos - ORC_MAGIC_LEN);
+  footer_->setHeaderLength(ORC_MAGIC_LEN);
+  footer_->setContentLength(pos - ORC_MAGIC_LEN);
   writerSink_->setMode(WriterSink::Mode::None);
 
   // write cache when available
   auto cacheSize = writerSink_->getCacheSize();
-  if (cacheSize > 0) {
+  if (fileFormat_ == dwio::common::FileFormat::DWRF && cacheSize > 0) {
     writerSink_->writeCache();
     for (auto& i : writerSink_->getCacheOffsets()) {
-      footer_.add_stripecacheoffsets(i);
+      footer_->addStripeCacheOffsets(i);
     }
     pos = writerSink_->size();
   }
 
-  ProtoUtils::writeType(type, footer_);
-  DWIO_ENSURE_EQ(footer_.types_size(), footer_.statistics_size());
+  ProtoUtils::writeType(type, *footer_);
+  DWIO_ENSURE_EQ(footer_->typesSize(), footer_->statisticsSize());
   auto writerVersion =
       static_cast<uint32_t>(context_->getConfig(Config::WRITER_VERSION));
   writeUserMetadata(writerVersion);
-  footer_.set_numberofrows(context_->fileRowCount());
-  footer_.set_rowindexstride(context_->indexStride());
+  footer_->setNumberOfRows(context_->fileRowCount());
+  footer_->setRowIndexStride(context_->indexStride());
 
   if (context_->fileRawSize() > 0 || context_->fileRowCount() == 0) {
     // ColumnTransformWriter, when rewriting presto written file does not have
     // rawSize.
-    footer_.set_rawdatasize(context_->fileRawSize());
+    footer_->setRawDataSize(context_->fileRawSize());
   }
-  auto* checksum = writerSink_->getChecksum();
-  footer_.set_checksumalgorithm(
-      (checksum != nullptr) ? checksum->getType()
-                            : proto::ChecksumAlgorithm::NULL_);
-  writeProto(footer_);
+
+  // 0 = ORC Java
+  // 1 = ORC C++
+  // 2 = Presto
+  // 3 = Scritchley Go from https://github.com/scritchley/orc
+  // 4 = Trino
+  // 5 = CUDF
+  footer_->setWriter(2);
+
+  std::unique_ptr<PostScriptWriteWrapper> ps;
+  if (fileFormat_ == dwio::common::FileFormat::DWRF) {
+    auto* checksum = writerSink_->getChecksum();
+    footer_->setCheckSumAlgorithm(
+        (checksum != nullptr) ? checksum->getType()
+                              : proto::ChecksumAlgorithm::NULL_);
+    writeProto(footer_->getDwrfPtr());
+
+    auto dwrfPostScript =
+        google::protobuf::Arena::CreateMessage<proto::PostScript>(arena_.get());
+    ps = std::make_unique<PostScriptWriteWrapper>(dwrfPostScript);
+  } else {
+    writeProto(footer_->getOrcPtr());
+
+    auto orcPostScript =
+        google::protobuf::Arena::CreateMessage<proto::orc::PostScript>(
+            arena_.get());
+    ps = std::make_unique<PostScriptWriteWrapper>(orcPostScript);
+  }
   const auto footerLength = writerSink_->size() - pos;
 
   // write postscript
   pos = writerSink_->size();
-  proto::PostScript ps;
-  ps.set_writerversion(writerVersion);
-  ps.set_footerlength(footerLength);
-  ps.set_compression(
-      static_cast<proto::CompressionKind>(context_->compression()));
+
+  ps->setWriterVersion(writerVersion);
+  // ORC File Version: 0.12
+  ps->addVersion(0);
+  ps->addVersion(12);
+  ps->setFooterLength(footerLength);
+  ps->setCompression(context_->compression());
   if (context_->compression() !=
       common::CompressionKind::CompressionKind_NONE) {
-    ps.set_compressionblocksize(context_->compressionBlockSize());
+    ps->setCompressionBlockSize(context_->compressionBlockSize());
   }
-  ps.set_cachemode(
-      static_cast<proto::StripeCacheMode>(writerSink_->getCacheMode()));
-  ps.set_cachesize(cacheSize);
+
+  ps->setCacheMode(writerSink_->getCacheMode());
+  ps->setCacheSize(cacheSize);
+  ps->setMetaDataLength(metadataLength);
   writeProto(ps, common::CompressionKind::CompressionKind_NONE);
   auto psLength = writerSink_->size() - pos;
   DWIO_ENSURE_LE(psLength, 0xff, "PostScript is too large: ", psLength);
@@ -85,9 +121,9 @@ void WriterBase::writeUserMetadata(uint32_t writerVersion) {
       folly::to<std::string>(writerVersion);
   userMetadata_[std::string{WRITER_HOSTNAME_KEY}] = process::getHostName();
   std::for_each(userMetadata_.begin(), userMetadata_.end(), [&](auto& pair) {
-    auto item = footer_.add_metadata();
-    item->set_name(pair.first);
-    item->set_value(pair.second);
+    auto item = footer_->addMetadata();
+    item.setName(pair.first);
+    item.setValue(pair.second);
   });
 }
 

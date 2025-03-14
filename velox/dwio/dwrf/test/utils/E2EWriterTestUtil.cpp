@@ -36,7 +36,8 @@ namespace facebook::velox::dwrf {
     std::function<std::unique_ptr<DWRFFlushPolicy>()> flushPolicyFactory,
     std::function<std::unique_ptr<LayoutPlanner>(const TypeWithId&)>
         layoutPlannerFactory,
-    const int64_t writerMemoryCap) {
+    const int64_t writerMemoryCap,
+    const dwio::common::FileFormat fileFormat) {
   // write file to memory
   dwrf::WriterOptions options;
   options.config = config;
@@ -46,7 +47,10 @@ namespace facebook::velox::dwrf {
   options.layoutPlannerFactory = layoutPlannerFactory;
 
   return std::make_unique<dwrf::Writer>(
-      std::move(sink), options, velox::memory::memoryManager()->addRootPool());
+      std::move(sink),
+      options,
+      velox::memory::memoryManager()->addRootPool(),
+      fileFormat);
 }
 
 /* static */ std::unique_ptr<Writer> E2EWriterTestUtil::writeData(
@@ -70,14 +74,16 @@ namespace facebook::velox::dwrf {
     std::function<std::unique_ptr<DWRFFlushPolicy>()> flushPolicyFactory,
     std::function<std::unique_ptr<LayoutPlanner>(const TypeWithId&)>
         layoutPlannerFactory,
-    const int64_t writerMemoryCap) {
+    const int64_t writerMemoryCap,
+    const dwio::common::FileFormat fileFormat) {
   auto writer = createWriter(
       std::move(sink),
       type,
       config,
       std::move(flushPolicyFactory),
       std::move(layoutPlannerFactory),
-      writerMemoryCap);
+      writerMemoryCap,
+      fileFormat);
   return writeData(std::move(writer), batches);
 }
 
@@ -94,7 +100,8 @@ namespace facebook::velox::dwrf {
     std::function<std::unique_ptr<LayoutPlanner>(const TypeWithId&)>
         layoutPlannerFactory,
     const int64_t writerMemoryCap,
-    const bool verifyContent) {
+    const bool verifyContent,
+    const dwio::common::FileFormat fileFormat) {
   // write file to memory
   auto sink = std::make_unique<MemorySink>(
       200 * 1024 * 1024, FileSink::Options{.pool = &pool});
@@ -108,13 +115,15 @@ namespace facebook::velox::dwrf {
       config,
       flushPolicyFactory,
       layoutPlannerFactory,
-      writerMemoryCap);
+      writerMemoryCap,
+      fileFormat);
   // read it back and compare
   auto readFile = std::make_shared<InMemoryReadFile>(
       std::string(sinkPtr->data(), sinkPtr->size()));
   auto input = std::make_unique<BufferedInput>(readFile, pool);
 
   dwio::common::ReaderOptions readerOpts{&pool};
+  readerOpts.setFileFormat(fileFormat);
   RowReaderOptions rowReaderOpts;
   auto reader = std::make_unique<DwrfReader>(readerOpts, std::move(input));
   EXPECT_GE(numStripesUpper, reader->getNumberOfStripes());
