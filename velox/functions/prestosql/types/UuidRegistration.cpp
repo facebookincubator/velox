@@ -43,9 +43,10 @@ class UuidCastOperator : public exec::CastOperator {
       VectorPtr& result) const override {
     context.ensureWritable(rows, resultType, result);
 
-    if (input.typeKind() == TypeKind::VARCHAR ||
-        input.typeKind() == TypeKind::VARBINARY) {
+    if (input.typeKind() == TypeKind::VARCHAR) {
       castFromString(input, context, rows, *result);
+    } else if (input.typeKind() == TypeKind::VARBINARY) {
+      castFromVarbinary(input, context, rows, *result);
     } else {
       VELOX_UNSUPPORTED(
           "Cast from {} to UUID not yet supported", input.type()->toString());
@@ -60,9 +61,10 @@ class UuidCastOperator : public exec::CastOperator {
       VectorPtr& result) const override {
     context.ensureWritable(rows, resultType, result);
 
-    if (resultType->kind() == TypeKind::VARCHAR ||
-        resultType->kind() == TypeKind::VARBINARY) {
+    if (resultType->kind() == TypeKind::VARCHAR) {
       castToString(input, context, rows, *result);
+    } else if (resultType->kind() == TypeKind::VARBINARY) {
+      castToVarbinary(input, context, rows, *result);
     } else {
       VELOX_UNSUPPORTED(
           "Cast from UUID to {} not yet supported", resultType->toString());
@@ -116,6 +118,28 @@ class UuidCastOperator : public exec::CastOperator {
     });
   }
 
+  static void castToVarbinary(
+      const BaseVector& input,
+      exec::EvalCtx& context,
+      const SelectivityVector& rows,
+      BaseVector& result) {
+    auto* flatResult = result.as<FlatVector<StringView>>();
+    const auto* uuids = input.as<SimpleVector<int128_t>>();
+
+    context.applyToSelectedNoThrow(rows, [&](auto row) {
+      // Ensure UUID bytes are big endian.
+      const auto uuid = DecimalUtil::bigEndian(uuids->valueAt(row));
+      const auto* uuidBytes = reinterpret_cast<const uint8_t*>(&uuid);
+
+      exec::StringWriter result(flatResult, row);
+      result.resize(16);
+
+      memcpy(result.data(), uuidBytes, 16);
+
+      result.finalize();
+    });
+  }
+
   static void castFromString(
       const BaseVector& input,
       exec::EvalCtx& context,
@@ -133,6 +157,25 @@ class UuidCastOperator : public exec::CastOperator {
       memcpy(&u, &uuid, 16);
 
       // Convert a big endian value from Boost to native byte-order.
+      u = DecimalUtil::bigEndian(u);
+
+      flatResult->set(row, u);
+    });
+  }
+
+  static void castFromVarbinary(
+      const BaseVector& input,
+      exec::EvalCtx& context,
+      const SelectivityVector& rows,
+      BaseVector& result) {
+    auto* flatResult = result.as<FlatVector<int128_t>>();
+    const auto* uuidBinaries = input.as<SimpleVector<StringView>>();
+
+    context.applyToSelectedNoThrow(rows, [&](auto row) {
+      const auto uuidBinary = uuidBinaries->valueAt(row);
+
+      int128_t u;
+      memcpy(&u, uuidBinary.data(), 16);
       u = DecimalUtil::bigEndian(u);
 
       flatResult->set(row, u);
