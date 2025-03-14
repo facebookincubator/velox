@@ -1176,6 +1176,7 @@ TEST_F(DateTimeFunctionsTest, dateTrunc) {
 
   EXPECT_EQ(std::nullopt, dateTrunc("second", std::nullopt));
   EXPECT_EQ(std::nullopt, dateTrunc("", Timestamp(0, 0)));
+  EXPECT_EQ(std::nullopt, dateTrunc("y", Timestamp(0, 0)));
   EXPECT_EQ(Timestamp(0, 0), dateTrunc("second", Timestamp(0, 0)));
   EXPECT_EQ(Timestamp(0, 0), dateTrunc("second", Timestamp(0, 123)));
   EXPECT_EQ(Timestamp(-1, 0), dateTrunc("second", Timestamp(-1, 0)));
