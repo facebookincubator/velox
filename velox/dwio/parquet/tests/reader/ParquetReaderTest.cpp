@@ -1182,6 +1182,135 @@ TEST_F(ParquetReaderTest, bloomFilterInteger) {
       readerOpts,
       runtimeStats3);
   EXPECT_EQ(runtimeStats3->skippedStrides, 1);
+
+  // Test with IN filter with nulls, column has no nulls, so should do
+  // bloom filter checks and skip rowgroup.
+  int32Filters.insert({"i32", exec::in({610, 4000}, true)});
+  std::shared_ptr<RuntimeStatistics> runtimeStats4 =
+      std::make_shared<RuntimeStatistics>();
+  assertReadWithFilters(
+      fileName,
+      schema,
+      std::move(int32Filters),
+      makeRowVector({}),
+      readerOpts,
+      runtimeStats4);
+  EXPECT_EQ(runtimeStats4->skippedStrides, 1);
+}
+
+TEST_F(ParquetReaderTest, bloomFilterTestNulls) {
+  // This file has int32 column 'i' with bloom filter defined and column values
+  // are all nulls.
+  std::string fileName = "parq_all_nulls.parquet";
+  auto schema = ROW({"i"}, {INTEGER()});
+
+  facebook::velox::dwio::common::ReaderOptions readerOpts{leafPool_.get()};
+  readerOpts.setReadBloomFilter(true);
+  FilterMap filters;
+  {
+    // Test with column with all null values and filter with null check.
+    // Should read the rowgroup as cannot read bloom filter.
+    filters.insert({"i", exec::in({1, 2}, true)});
+    auto expected = makeRowVector({makeNullableFlatVector<int32_t>(
+        {std::nullopt,
+         std::nullopt,
+         std::nullopt,
+         std::nullopt,
+         std::nullopt,
+         std::nullopt,
+         std::nullopt,
+         std::nullopt,
+         std::nullopt,
+         std::nullopt})});
+    std::shared_ptr<RuntimeStatistics> runtimeStats =
+        std::make_shared<RuntimeStatistics>();
+    assertReadWithFilters(
+        fileName,
+        schema,
+        std::move(filters),
+        expected,
+        readerOpts,
+        runtimeStats);
+    // Column has all nulls, so bloom filter can't be checked, rowgroup has to
+    // be read
+    EXPECT_EQ(runtimeStats->skippedStrides, 0);
+  }
+
+  // This file has int32 column 'i' with values 1 to 10 with 4,5 missing and two
+  // nulls
+  fileName = "parq_few_nulls.parquet";
+
+  {
+    // The filter has null and column has nulls and bloom filter can't be used
+    // so, rowgroup would need to be read. 4,5 are missing, but nulls are
+    // present. So expect two nulls in result.
+    filters.insert({"i", exec::in({4, 5}, true)});
+    auto expected = makeRowVector(
+        {makeNullableFlatVector<int32_t>({std::nullopt, std::nullopt})});
+    std::shared_ptr<RuntimeStatistics> runtimeStats1 =
+        std::make_shared<RuntimeStatistics>();
+    assertReadWithFilters(
+        fileName,
+        schema,
+        std::move(filters),
+        expected,
+        readerOpts,
+        runtimeStats1);
+    EXPECT_EQ(runtimeStats1->skippedStrides, 0);
+  }
+
+  {
+    // Filter has no null check, so bloom filter can be checked.
+    // Result would be empty since values are not present in the column.
+    // Rowgroup would be skipped after bloom filter check.
+    filters.insert({"i", exec::in({4, 5})});
+    auto expected = makeRowVector({});
+    std::shared_ptr<RuntimeStatistics> runtimeStats2 =
+        std::make_shared<RuntimeStatistics>();
+    assertReadWithFilters(
+        fileName,
+        schema,
+        std::move(filters),
+        expected,
+        readerOpts,
+        runtimeStats2);
+    EXPECT_EQ(runtimeStats2->skippedStrides, 1);
+  }
+
+  {
+    // Filter has null check and column also has nulls. So, bloom filter can't
+    // be checked. Rowgroup has to be read.
+    filters.insert({"i", exec::in({1, 2}, true)});
+    auto expected = makeRowVector(
+        {makeNullableFlatVector<int32_t>({1, 2, std::nullopt, std::nullopt})});
+    std::shared_ptr<RuntimeStatistics> runtimeStats3 =
+        std::make_shared<RuntimeStatistics>();
+    assertReadWithFilters(
+        fileName,
+        schema,
+        std::move(filters),
+        expected,
+        readerOpts,
+        runtimeStats3);
+    EXPECT_EQ(runtimeStats3->skippedStrides, 0);
+  }
+
+  {
+    // Column has nulls but filter has no null check, so bloom filter can be
+    // checked and rowgroup will be read too since it has values 1,2.
+    filters.insert({"i", exec::in({1, 2})});
+    auto expected = makeRowVector({makeFlatVector<int32_t>({1, 2})});
+    std::shared_ptr<RuntimeStatistics> runtimeStats4 =
+        std::make_shared<RuntimeStatistics>();
+    assertReadWithFilters(
+        fileName,
+        schema,
+        std::move(filters),
+        expected,
+        readerOpts,
+        runtimeStats4);
+    EXPECT_EQ(runtimeStats4->skippedStrides, 0);
+  }
 }
 
 TEST_F(ParquetReaderTest, doubleFilters) {

@@ -25,10 +25,25 @@ namespace facebook::velox::parquet {
 using thrift::RowGroup;
 
 namespace {
-bool isFilterRangeCoversStatsRange(
+bool isBloomFilterCheckRequired(
     common::Filter* filter,
     dwio::common::ColumnStatistics* stats,
+    uint64_t totalRows,
     const TypePtr& type) {
+  bool mayHaveNull{true};
+
+  if (stats->getNumberOfValues().has_value()) {
+    if (stats->getNumberOfValues().value() == 0) {
+      // Column is all null. No need to test bloom filter.
+      return false;
+    }
+    mayHaveNull = stats->getNumberOfValues().value() < totalRows;
+  }
+
+  if (mayHaveNull && filter->testNull()) {
+    return false;
+  }
+
   switch (type->kind()) {
     case TypeKind::BIGINT:
     case TypeKind::INTEGER:
@@ -37,7 +52,7 @@ bool isFilterRangeCoversStatsRange(
       auto intStats =
           dynamic_cast<dwio::common::IntegerColumnStatistics*>(stats);
       if (!intStats) {
-        return false;
+        return true;
       }
 
       int64_t min =
@@ -47,27 +62,30 @@ bool isFilterRangeCoversStatsRange(
 
       switch (filter->kind()) {
         case common::FilterKind::kBigintRange:
-          return static_cast<common::BigintRange*>(filter)->lower() <= min &&
-              max <= static_cast<common::BigintRange*>(filter)->upper();
+          if (static_cast<common::BigintRange*>(filter)->lower() <= min &&
+              max <= static_cast<common::BigintRange*>(filter)->upper()) {
+            return false;
+          }
+          break;
         case common::FilterKind::kBigintMultiRange: {
           common::BigintMultiRange* multiRangeFilter =
               static_cast<common::BigintMultiRange*>(filter);
           auto numRanges = multiRangeFilter->ranges().size();
-          if (numRanges > 0) {
-            return multiRangeFilter->ranges()[0]->lower() <= min &&
-                max <= multiRangeFilter->ranges()[numRanges - 1]->upper();
+          if (numRanges > 0 && multiRangeFilter->ranges()[0]->lower() <= min &&
+              max <= multiRangeFilter->ranges()[numRanges - 1]->upper()) {
+            return false;
           }
           break;
         }
         default:
-          return false;
+          return true;
       }
       break;
     }
     default:
-      return false;
+      return true;
   }
-  return false;
+  return true;
 }
 } // namespace
 
@@ -144,9 +162,12 @@ bool ParquetData::rowGroupMatches(uint32_t rowGroupId, common::Filter* filter) {
     // filter (min,max) range is a superset of the stats (min,max) range. For
     // example, if the filter is "COL between 1 and 20" and the column stats
     // range is (5,10), then we have to read the whole row group and hence avoid
-    // bloom filter test.
-    needsToCheckBloomFilter = parquetReadBloomFilter_ &&
-        !isFilterRangeCoversStatsRange(filter, columnStats.get(), type);
+    // bloom filter test. Can also avoid if column has all nulls/may have nulls
+    // and filter allows nulls.
+    needsToCheckBloomFilter =
+        parquetReadBloomFilter_ &&
+        isBloomFilterCheckRequired(
+            filter, columnStats.get(), rowGroup.numRows(), type);
   }
 
   if (needsToCheckBloomFilter &&
