@@ -41,7 +41,7 @@ std::vector<facebook::velox::RowVectorPtr>
 IndexLookupJoinTestBase::generateProbeInput(
     size_t numBatches,
     size_t batchSize,
-    SequenceTableData& tableData,
+    IndexTableData& tableData,
     std::shared_ptr<facebook::velox::memory::MemoryPool>& pool,
     const std::vector<std::string>& probeJoinKeys,
     const std::vector<std::string> inColumns,
@@ -270,7 +270,7 @@ IndexLookupJoinTestBase::makeIndexScanNode(
 
 void IndexLookupJoinTestBase::generateIndexTableData(
     const std::vector<int>& keyCardinalities,
-    SequenceTableData& tableData,
+    IndexTableData& tableData,
     std::shared_ptr<facebook::velox::memory::MemoryPool>& pool) {
   VELOX_CHECK_EQ(keyCardinalities.size(), keyType_->size());
   const auto numRows = getNumRows(keyCardinalities);
