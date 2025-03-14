@@ -1012,32 +1012,24 @@ __device__ void setRowCountNoFilter(GpuDecode::RowCountNoFilter& op) {
 }
 
 template <int32_t kBlockSize, int32_t kWidth>
-inline __device__ void reduceCase(
-    int32_t cnt,
-    int32_t nthLoop,
-    int32_t numResults,
-    int32_t* results,
-    int32_t* temp) {
+inline __device__ void
+reduceCase(int32_t cnt, int32_t nthLoop, int32_t numResults, int32_t* results) {
   static_assert(kWidth == 4 || kWidth == 8 || kWidth == 16 || kWidth == 32);
-  using Reduce = cub::WarpReduce<int32_t, kWidth>;
-  auto sum =
-      Reduce(*reinterpret_cast<typename Reduce::TempStorage*>(temp)).Sum(cnt);
-  constexpr int32_t kResultsPerLoop = kBlockSize / kWidth;
-
-  if ((threadIdx.x & (kWidth - 1)) == 0) {
-    temp[threadIdx.x / kWidth] = sum;
-  }
-  __syncthreads();
-  // Add up the temps.
-  sum = threadIdx.x < kResultsPerLoop ? temp[threadIdx.x] : 0;
-  if (threadIdx.x == 0 && nthLoop > 0) {
-    sum += results[nthLoop * kResultsPerLoop - 1];
-  }
-  auto result = inclusiveSum<int32_t, kBlockSize / kWidth>(
-      threadIdx.x < kResultsPerLoop ? sum : 0, nullptr, temp);
-  auto resultIdx = threadIdx.x + nthLoop * kResultsPerLoop;
-  if (resultIdx < numResults) {
-    results[resultIdx] = result;
+  using BlockScan = cub::BlockScan<int32_t, kBlockSize>;
+  extern __shared__ char smem[];
+  auto* scanStorage = reinterpret_cast<typename BlockScan::TempStorage*>(smem);
+  int32_t result;
+  BlockScan(*scanStorage).InclusiveSum(cnt, result);
+  // Every kWidth thread provides a result.
+  if ((threadIdx.x & (kWidth - 1)) == (kWidth - 1)) {
+    constexpr int32_t kResultsPerLoop = kBlockSize / kWidth;
+    auto resultIdx = threadIdx.x / kWidth + nthLoop * kResultsPerLoop;
+    if (resultIdx < numResults) {
+      if (nthLoop != 0) {
+        result += results[nthLoop * kResultsPerLoop - 1];
+      }
+      results[resultIdx] = result;
+    }
   }
 }
 
@@ -1065,32 +1057,28 @@ __device__ void countBits(GpuDecode& step) {
             cnt,
             i / (64 * kBlockSize),
             numResults,
-            reinterpret_cast<int32_t*>(step.result),
-            step.temp);
+            reinterpret_cast<int32_t*>(step.result));
         break;
       case 512:
         reduceCase<kBlockSize, 8>(
             cnt,
             i / (64 * kBlockSize),
             numResults,
-            reinterpret_cast<int32_t*>(step.result),
-            step.temp);
+            reinterpret_cast<int32_t*>(step.result));
         break;
       case 1024:
         reduceCase<kBlockSize, 16>(
             cnt,
             i / (64 * kBlockSize),
             numResults,
-            reinterpret_cast<int32_t*>(step.result),
-            step.temp);
+            reinterpret_cast<int32_t*>(step.result));
         break;
       case 2048:
         reduceCase<kBlockSize, 32>(
             cnt,
             i / (64 * kBlockSize),
             numResults,
-            reinterpret_cast<int32_t*>(step.result),
-            step.temp);
+            reinterpret_cast<int32_t*>(step.result));
         break;
     }
   }
@@ -1239,7 +1227,6 @@ int32_t sharedMemorySizeForDecode(DecodeStep step) {
     case DecodeStep::kCompact64:
     case DecodeStep::kTrivial:
     case DecodeStep::kDictionaryOnBitpack:
-    case DecodeStep::kCountBits:
     case DecodeStep::kSparseBool:
     case DecodeStep::kRowCountNoFilter:
       return 0;
@@ -1253,6 +1240,7 @@ int32_t sharedMemorySizeForDecode(DecodeStep step) {
     case DecodeStep::kVarint:
     case DecodeStep::kMakeScatterIndices:
     case DecodeStep::kLengthToOffset:
+    case DecodeStep::kCountBits:
       return sizeof(typename BlockScan32::TempStorage);
     default:
       assert(false); // Undefined.
