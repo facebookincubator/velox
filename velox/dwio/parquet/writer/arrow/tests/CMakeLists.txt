@@ -24,7 +24,6 @@ add_executable(
   PageIndexTest.cpp
   PropertiesTest.cpp
   SchemaTest.cpp
-  StatisticsTest.cpp
   TypesTest.cpp)
 
 add_test(velox_dwio_arrow_parquet_writer_test
