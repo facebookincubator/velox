@@ -1,0 +1,333 @@
+/*
+ * Copyright (c) Facebook, Inc. and its affiliates.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+#include <expression/ComplexViewTypes.h>
+#include <functions/lib/DateTimeFormatter.h>
+#include <functions/lib/TimeUtils.h>
+#include <functions/prestosql/json/JsonStringUtil.h>
+#include <velox/type/DecimalUtil.h>
+
+namespace facebook::velox::functions::sparksql {
+namespace {
+
+struct JsonOptions {
+  JsonOptions(const tz::TimeZone* _tz) : defaultTimeZone(_tz) {}
+
+  const tz::TimeZone* defaultTimeZone;
+};
+
+template <typename T>
+std::enable_if_t<std::is_integral_v<T>, void> append(
+    T value,
+    std::string& result) {
+  const size_t len = folly::to_ascii_size_max_decimal<uint64_t> + 1;
+  char buffer[len];
+  auto uvalue = value < 0 ? ~static_cast<uint64_t>(value) + 1
+                          : static_cast<uint64_t>(value);
+  size_t p = 0;
+  char* writtenPosition = buffer;
+  if (value < 0) {
+    *writtenPosition++ = '-';
+    p += 1;
+  };
+  p += folly::to_ascii_decimal(writtenPosition, buffer + len, uvalue);
+  result.append(buffer, p);
+}
+
+template <typename T>
+std::enable_if_t<std::is_floating_point_v<T>, void> append(
+    T value,
+    std::string& result) {
+  if (FOLLY_UNLIKELY(std::isinf(value) || std::isnan(value))) {
+    result.append(fmt::format(
+        "\"{}\"", util::Converter<TypeKind::VARCHAR>::tryCast(value).value()));
+  } else {
+    result.append(util::Converter<TypeKind::VARCHAR>::tryCast(value).value());
+  }
+}
+
+// Forward declarations for explicit specializations.
+template <TypeKind kind>
+void toJson(
+    const exec::GenericView& input,
+    std::string& result,
+    const JsonOptions& options);
+
+template <>
+void toJson<TypeKind::ROW>(
+    const exec::GenericView& input,
+    std::string& result,
+    const JsonOptions& options);
+
+template <>
+void toJson<TypeKind::ARRAY>(
+    const exec::GenericView& input,
+    std::string& result,
+    const JsonOptions& options);
+
+template <>
+void toJson<TypeKind::MAP>(
+    const exec::GenericView& input,
+    std::string& result,
+    const JsonOptions& options);
+
+// Primary specialization for unsupported types.
+template <TypeKind kind>
+void toJson(
+    const exec::GenericView& input,
+    std::string& result,
+    const JsonOptions& options) {
+  VELOX_FAIL("{} is not supported in to_json.", kind);
+}
+
+// Convert primitive-type input to Json string.
+template <>
+void toJson<TypeKind::BOOLEAN>(
+    const exec::GenericView& input,
+    std::string& result,
+    const JsonOptions& options) {
+  auto value = input.castTo<bool>();
+  static const char TRUE[] = "true";
+  static const char FALSE[] = "false";
+  result.append(value ? TRUE : FALSE);
+}
+
+template <>
+void toJson<TypeKind::TINYINT>(
+    const exec::GenericView& input,
+    std::string& result,
+    const JsonOptions& options) {
+  auto value = input.castTo<int8_t>();
+  append(value, result);
+}
+
+template <>
+void toJson<TypeKind::SMALLINT>(
+    const exec::GenericView& input,
+    std::string& result,
+    const JsonOptions& options) {
+  auto value = input.castTo<int16_t>();
+  append(value, result);
+}
+
+template <>
+void toJson<TypeKind::INTEGER>(
+    const exec::GenericView& input,
+    std::string& result,
+    const JsonOptions& options) {
+  auto value = input.castTo<int32_t>();
+  if (input.type()->isDate()) {
+    result.append("\"").append(DATE()->toString(value)).append("\"");
+  } else {
+    append(value, result);
+  }
+}
+
+template <>
+void toJson<TypeKind::BIGINT>(
+    const exec::GenericView& input,
+    std::string& result,
+    const JsonOptions& options) {
+  auto value = input.castTo<int64_t>();
+  if (input.type()->isDecimal()) {
+    auto [precision, scale] = getDecimalPrecisionScale(*input.type());
+    const size_t maxSize = DecimalUtil::maxStringViewSize(precision, scale);
+    char buffer[maxSize];
+    size_t len = DecimalUtil::castToString(value, scale, maxSize, buffer);
+    result.append(buffer, len);
+  } else {
+    append(value, result);
+  }
+}
+
+template <>
+void toJson<TypeKind::HUGEINT>(
+    const exec::GenericView& input,
+    std::string& result,
+    const JsonOptions& options) {
+  auto value = input.castTo<int128_t>();
+  const size_t maxSize = folly::detail::digitsEnough<uint128_t>() + 1;
+  char buffer[maxSize];
+  size_t p;
+  if (value < 0) {
+    *buffer = '-';
+    p = 1 +
+        folly::detail::unsafeTelescope128(buffer + 1, buffer + maxSize, -value);
+  } else {
+    p = folly::detail::unsafeTelescope128(buffer, buffer + maxSize, value);
+  }
+  result.append(buffer, p);
+}
+
+template <>
+void toJson<TypeKind::REAL>(
+    const exec::GenericView& input,
+    std::string& result,
+    const JsonOptions& options) {
+  auto value = input.castTo<float>();
+  append(value, result);
+}
+
+template <>
+void toJson<TypeKind::DOUBLE>(
+    const exec::GenericView& input,
+    std::string& result,
+    const JsonOptions& options) {
+  auto value = input.castTo<double>();
+  append(value, result);
+}
+
+template <>
+void toJson<TypeKind::VARCHAR>(
+    const exec::GenericView& input,
+    std::string& result,
+    const JsonOptions& options) {
+  auto value = input.castTo<Varchar>();
+  const size_t length = normalizedSizeForJsonCast(value.data(), value.size());
+  char buffer[length];
+  normalizeForJsonCast(value.data(), length, buffer);
+  result.append("\"").append(buffer, length).append("\"");
+}
+
+template <>
+void toJson<TypeKind::TIMESTAMP>(
+    const exec::GenericView& input,
+    std::string& result,
+    const JsonOptions& options) {
+  auto value = input.castTo<Timestamp>();
+  // Spark converts Timestamp in ISO8601 format by default.
+  static const auto formatter =
+      functions::buildJodaDateTimeFormatter("yyyy-MM-dd'T'HH:mm:ss.SSSZZ")
+          .value();
+  const auto maxSize = formatter->maxResultSize(options.defaultTimeZone);
+  char buffer[maxSize];
+  auto size = formatter->format(
+      value, options.defaultTimeZone, maxSize, buffer, false, "Z");
+  result.append("\"").append(buffer, size).append("\"");
+}
+
+// Convert complex-type input to Json string.
+template <>
+void toJson<TypeKind::ROW>(
+    const exec::GenericView& input,
+    std::string& result,
+    const JsonOptions& options) {
+  auto rowType = std::static_pointer_cast<const RowType>(input.type());
+  auto row = input.castTo<DynamicRow>();
+  result.append("{");
+  for (int i = 0; i < rowType->size(); i++) {
+    if (i > 0) {
+      result.append(",");
+    }
+    result.append("\"");
+    result.append(rowType->nameOf(i));
+    result.append("\":");
+    auto data = row.at(i);
+    if (data.has_value()) {
+      VELOX_DYNAMIC_TYPE_DISPATCH_ALL(
+          toJson, data->kind(), data.value(), result, options);
+    } else {
+      result.append("null");
+    }
+  }
+  result.append("}");
+}
+
+template <>
+void toJson<TypeKind::ARRAY>(
+    const exec::GenericView& input,
+    std::string& result,
+    const JsonOptions& options) {
+  auto arrayView = input.castTo<Array<Any>>();
+  result.append("[");
+  for (int i = 0; i < arrayView.size(); i++) {
+    if (i > 0) {
+      result.append(",");
+    }
+    if (arrayView[i].has_value()) {
+      auto element = arrayView[i].value();
+      VELOX_DYNAMIC_TYPE_DISPATCH_ALL(
+          toJson, element.kind(), element, result, options);
+    } else {
+      result.append("null");
+    }
+  }
+  result.append("]");
+}
+
+template <>
+void toJson<TypeKind::MAP>(
+    const exec::GenericView& input,
+    std::string& result,
+    const JsonOptions& options) {
+  auto mapView = input.castTo<Map<Any, Any>>();
+  result.append("{");
+  for (int i = 0; i < mapView.size(); i++) {
+    if (i > 0) {
+      result.append(",");
+    }
+    auto element = mapView.atIndex(i);
+    auto key = element.first;
+    auto value = element.second;
+    bool isKeyVarchar = key.kind() == TypeKind::VARCHAR;
+    if (!isKeyVarchar) {
+      result.append("\"");
+    }
+    VELOX_DYNAMIC_TYPE_DISPATCH_ALL(toJson, key.kind(), key, result, options);
+    result.append(isKeyVarchar ? ":" : "\":");
+    if (value.has_value()) {
+      VELOX_DYNAMIC_TYPE_DISPATCH_ALL(
+          toJson, value.value().kind(), value.value(), result, options);
+    } else {
+      result.append("null");
+    }
+  }
+  result.append("}");
+}
+
+template <typename T>
+struct ToJsonFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  FOLLY_ALWAYS_INLINE void initialize(
+      const std::vector<TypePtr>& inputTypes,
+      const core::QueryConfig& config,
+      const void* /*unusde*/) {
+    auto kind = inputTypes[0]->kind();
+    VELOX_CHECK(
+        inputTypes[0]->isRow() || inputTypes[0]->isArray() ||
+            inputTypes[0]->isMap(),
+        "to_json function only supports ROW/ARRAY/MAP");
+    tz_ = getTimeZoneFromConfig(config);
+  }
+
+  FOLLY_ALWAYS_INLINE bool call(
+      out_type<Varchar>& result,
+      const arg_type<Generic<T1>>& input) {
+    std::string res;
+    VELOX_DYNAMIC_TYPE_DISPATCH_ALL(
+        toJson, input.kind(), input, res, JsonOptions(tz_));
+    result.resize(res.size());
+    std::memcpy(result.data(), res.c_str(), res.size());
+    return true;
+  }
+
+ private:
+  const tz::TimeZone* tz_;
+};
+
+} // namespace
+} // namespace facebook::velox::functions::sparksql

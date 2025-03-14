@@ -40,23 +40,34 @@ class ToJsonTest : public SparkFunctionBaseTest {
 };
 
 TEST_F(ToJsonTest, basicStruct) {
-  auto input = makeRowVector({"a"}, {makeFlatVector<int64_t>({1, 2, 3})});
-  auto expected =
-      makeFlatVector<std::string>({R"({"a":1})", R"({"a":2})", R"({"a":3})"});
+  auto input = makeRowVector(
+      {"a", "b"},
+      {makeNullableFlatVector<int64_t>({1, std::nullopt, 3, std::nullopt}),
+       makeNullableFlatVector<double>({1.1, 2.2, std::nullopt, std::nullopt})});
+  auto expected = makeFlatVector<std::string>(
+      {R"({"a":1,"b":1.1})",
+       R"({"a":null,"b":2.2})",
+       R"({"a":3,"b":null})",
+       R"({"a":null,"b":null})"});
   testToJson(input, expected);
 }
 
 TEST_F(ToJsonTest, basicArray) {
-  auto input = makeArrayVector<int64_t>({{1}, {2, 3}, {}});
-  auto expected = makeFlatVector<std::string>({R"([1])", R"([2,3])", R"([])"});
+  auto input = makeNullableArrayVector<int64_t>(
+      {{{1}}, {{2, std::nullopt, 3}}, {{}}, std::nullopt});
+  auto expected = makeNullableFlatVector<std::string>(
+      {R"([1])", R"([2,null,3])", R"([])", std::nullopt});
   testToJson(input, expected);
 }
 
 TEST_F(ToJsonTest, basicMap) {
-  auto input =
-      makeMapVector<std::string, int64_t>({{{"a", 1}}, {{"b", 2}}, {{"c", 3}}});
-  auto expected =
-      makeFlatVector<std::string>({R"({"a":1})", R"({"b":2})", R"({"c":3})"});
+  auto input = makeNullableMapVector<std::string, int64_t>(
+      {{{{"a", 1}, {"b", 2}, {"c", 3}}},
+       std::nullopt,
+       {{}},
+       {{{"a", 1}, {"b", std::nullopt}}}});
+  auto expected = makeNullableFlatVector<std::string>(
+      {R"({"a":1,"b":2,"c":3})", std::nullopt, R"({})", R"({"a":1,"b":null})"});
   testToJson(input, expected);
 }
 
@@ -112,6 +123,36 @@ TEST_F(ToJsonTest, basicInt) {
        R"({"a":-2147483648})",
        R"({"a":2147483647})",
        R"({"a":null})"});
+  testToJson(input, expected);
+}
+
+TEST_F(ToJsonTest, basicBigInt) {
+  auto data = makeNullableFlatVector<int64_t>(
+      {std::nullopt, 0, 1, INT64_MAX, INT64_MIN});
+  auto input = makeRowVector({"a"}, {data});
+  auto expected = makeFlatVector<std::string>(
+      {R"({"a":null})",
+       R"({"a":0})",
+       R"({"a":1})",
+       R"({"a":9223372036854775807})",
+       R"({"a":-9223372036854775808})"});
+  testToJson(input, expected);
+}
+
+TEST_F(ToJsonTest, basicHugeInt) {
+  auto data = makeNullableFlatVector<int128_t>(
+      {std::nullopt,
+       0,
+       1,
+       static_cast<int128_t>(INT64_MAX) + 1,
+       static_cast<int128_t>(INT64_MIN) - 1});
+  auto input = makeRowVector({"a"}, {data});
+  auto expected = makeFlatVector<std::string>(
+      {R"({"a":null})",
+       R"({"a":0})",
+       R"({"a":1})",
+       R"({"a":9223372036854775808})",
+       R"({"a":-9223372036854775809})"});
   testToJson(input, expected);
 }
 
@@ -194,13 +235,15 @@ TEST_F(ToJsonTest, nestedComplexType) {
   auto data1 = makeNullableFlatVector<std::string>({"str1", "str2", "str3"});
   auto data2 =
       makeNullableArrayVector<int64_t>({{1, 2, 3}, {}, {std::nullopt}});
-  auto data3 = makeMapVector<std::string, int64_t>(
-      {{{"key1", 1}}, {{"key2", 2}}, {{"key3", 3}}});
+  auto data3 = makeNullableMapVector<std::string, int64_t>(
+      {{{{"key1", 1}, {"key2", 2}, {"key3", 3}}},
+       std::nullopt,
+       {{{"key4", 1}, {"key5", std::nullopt}}}});
   auto input = makeRowVector({"a", "b", "c"}, {data1, data2, data3});
   auto expected = makeFlatVector<std::string>(
-      {R"({"a":"str1","b":[1,2,3],"c":{"key1":1}})",
-       R"({"a":"str2","b":[],"c":{"key2":2}})",
-       R"({"a":"str3","b":[null],"c":{"key3":3}})"});
+      {R"({"a":"str1","b":[1,2,3],"c":{"key1":1,"key2":2,"key3":3}})",
+       R"({"a":"str2","b":[],"c":null})",
+       R"({"a":"str3","b":[null],"c":{"key4":1,"key5":null}})"});
   testToJson(input, expected);
 }
 } // namespace

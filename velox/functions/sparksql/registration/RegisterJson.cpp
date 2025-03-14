@@ -18,6 +18,7 @@
 #include "velox/functions/lib/RegistrationHelpers.h"
 #include "velox/functions/sparksql/GetJsonObject.h"
 #include "velox/functions/sparksql/JsonObjectKeys.h"
+#include "velox/functions/sparksql/ToJson.h"
 
 namespace facebook::velox::functions::sparksql {
 
@@ -28,7 +29,7 @@ void registerJsonFunctions(const std::string& prefix) {
       {prefix + "json_object_keys"});
   registerFunction<JsonArrayLengthFunction, int32_t, Varchar>(
       {prefix + "json_array_length"});
-  VELOX_REGISTER_VECTOR_FUNCTION(udf_to_json, prefix + "to_json");
+  registerFunction<ToJsonFunction, Varchar, Generic<T1>>({prefix + "to_json"});
 }
 
 } // namespace facebook::velox::functions::sparksql
