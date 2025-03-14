@@ -1,0 +1,135 @@
+<!DOCTYPE html>
+
+<html lang="en" data-content_root="../../">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="viewport" content="width=device-width, initial-scale=1" />
+
+    <title>Geospatial Operators &#8212; Velox  documentation</title>
+    <link rel="stylesheet" type="text/css" href="../../_static/pygments.css?v=a746c00c" />
+    <link rel="stylesheet" type="text/css" href="../../_static/nature.css?v=279e0f84" />
+    <script src="../../_static/documentation_options.js?v=5929fcd5"></script>
+    <script src="../../_static/doctools.js?v=9bcbadda"></script>
+    <script src="../../_static/sphinx_highlight.js?v=dc90522c"></script>
+    <link rel="index" title="Index" href="../../genindex.html" />
+    <link rel="search" title="Search" href="../../search.html" /> 
+  </head><body>
+    <div class="related" role="navigation" aria-label="Related">
+      <h3>Navigation</h3>
+      <ul>
+        <li class="right" style="margin-right: 10px">
+          <a href="../../genindex.html" title="General Index"
+             accesskey="I">index</a></li>
+        <li class="nav-item nav-item-0"><a href="../../index.html">Velox  documentation</a> &#187;</li>
+        <li class="nav-item nav-item-this"><a href="">Geospatial Operators</a></li> 
+      </ul>
+    </div>  
+
+    <div class="document">
+      <div class="documentwrapper">
+        <div class="bodywrapper">
+          <div class="body" role="main">
+            
+  <section id="geospatial-operators">
+<h1>Geospatial Operators<a class="headerlink" href="#geospatial-operators" title="Link to this heading">¶</a></h1>
+<section id="bing-tile-functions">
+<h2>Bing Tile Functions<a class="headerlink" href="#bing-tile-functions" title="Link to this heading">¶</a></h2>
+<p>Bing tiles are a convenient quad-tree representation of the WGS84 projection of
+Earth’s surface.  They can be used to partition geospatial data, perform quick
+proximity or intersection checks, and more.  Each tile is defined by a <cite>zoom</cite>
+level (how far down the quad-tree the tile lives), and an <cite>x</cite> and <cite>y</cite> coordinate
+specifying where it is in that <cite>zoom</cite> level.  Velox supports <cite>zoom</cite> levels from
+0 to 23.  For a given zoom level, <cite>x</cite> and <cite>y</cite> must be between 0 and <cite>2**zoom -
+1</cite> inclusive.  Lower <cite>x</cite> values are west of higher <cite>x</cite> values, and lower <cite>y</cite>
+values are north of higher <cite>y</cite> values.</p>
+<p>Bing tiles can be cast to and from an efficient BIGINT representation. While every
+Bing tile can be cast to a valid BIGINT, not every BIGINT is a valid Bing tile, so
+casting BIGINT to BINGTILE may fail.</p>
+<dl class="simple">
+<dt>::</dt><dd><p>CAST(CAST(tile AS BIGINT) AS BINGTILE)</p>
+</dd>
+</dl>
+<p>See <a class="reference external" href="https://learn.microsoft.com/en-us/bingmaps/articles/bing-maps-tile-system">https://learn.microsoft.com/en-us/bingmaps/articles/bing-maps-tile-system</a>
+for more details.</p>
+<dl class="py function">
+<dt class="sig sig-object py" id="bing_tile">
+<span class="sig-name descname"><span class="pre">bing_tile</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">integer</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">y</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">integer</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">zoom_level</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">tinyint</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">tile:</span> <span class="pre">BingTile</span></span></span><a class="headerlink" href="#bing_tile" title="Link to this definition">¶</a></dt>
+<dd><p>Creates a Bing tile object from <cite>x</cite>, <cite>y</cite> coordinates and a <cite>zoom_level</cite>.
+Zoom levels from 0 to 23 are supported, with valid <cite>x</cite> and <cite>y</cite> coordinates
+described above.  Invalid parameters will return a User Error.</p>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="bing_tile_coordinates">
+<span class="sig-name descname"><span class="pre">bing_tile_coordinates</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">tile:</span> <span class="pre">BingTile)</span> <span class="pre">-&gt;</span> <span class="pre">coords:</span> <span class="pre">row(integer</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">integer</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#bing_tile_coordinates" title="Link to this definition">¶</a></dt>
+<dd><p>Returns the <cite>x</cite>, <cite>y</cite> coordinates of a given Bing tile as <cite>row(x, y)</cite>.</p>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="bing_tile_zoom_level">
+<span class="sig-name descname"><span class="pre">bing_tile_zoom_level</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">tile</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">BingTile</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">zoom_level:</span> <span class="pre">tinyint</span></span></span><a class="headerlink" href="#bing_tile_zoom_level" title="Link to this definition">¶</a></dt>
+<dd><p>Returns the zoom level of a given Bing tile.</p>
+</dd></dl>
+
+</section>
+</section>
+
+
+            <div class="clearer"></div>
+          </div>
+        </div>
+      </div>
+      <div class="sphinxsidebar" role="navigation" aria-label="Main">
+        <div class="sphinxsidebarwrapper">
+  <div>
+    <h3><a href="../../index.html">Table of Contents</a></h3>
+    <ul>
+<li><a class="reference internal" href="#">Geospatial Operators</a><ul>
+<li><a class="reference internal" href="#bing-tile-functions">Bing Tile Functions</a><ul>
+<li><a class="reference internal" href="#bing_tile"><code class="docutils literal notranslate"><span class="pre">bing_tile()</span></code></a></li>
+<li><a class="reference internal" href="#bing_tile_coordinates"><code class="docutils literal notranslate"><span class="pre">bing_tile_coordinates()</span></code></a></li>
+<li><a class="reference internal" href="#bing_tile_zoom_level"><code class="docutils literal notranslate"><span class="pre">bing_tile_zoom_level()</span></code></a></li>
+</ul>
+</li>
+</ul>
+</li>
+</ul>
+
+  </div>
+  <div role="note" aria-label="source link">
+    <h3>This Page</h3>
+    <ul class="this-page-menu">
+      <li><a href="../../_sources/functions/presto/geospatial.rst.txt"
+            rel="nofollow">Show Source</a></li>
+    </ul>
+   </div>
+<search id="searchbox" style="display: none" role="search">
+  <h3 id="searchlabel">Quick search</h3>
+    <div class="searchformwrapper">
+    <form class="search" action="../../search.html" method="get">
+      <input type="text" name="q" aria-labelledby="searchlabel" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false"/>
+      <input type="submit" value="Go" />
+    </form>
+    </div>
+</search>
+<script>document.getElementById('searchbox').style.display = "block"</script>
+        </div>
+      </div>
+      <div class="clearer"></div>
+    </div>
+    <div class="related" role="navigation" aria-label="Related">
+      <h3>Navigation</h3>
+      <ul>
+        <li class="right" style="margin-right: 10px">
+          <a href="../../genindex.html" title="General Index"
+             >index</a></li>
+        <li class="nav-item nav-item-0"><a href="../../index.html">Velox  documentation</a> &#187;</li>
+        <li class="nav-item nav-item-this"><a href="">Geospatial Operators</a></li> 
+      </ul>
+    </div>
+    <div class="footer" role="contentinfo">
+    &#169; Copyright TBD.
+      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 8.2.3.
+    </div>
+  </body>
+</html>
