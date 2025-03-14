@@ -32,12 +32,12 @@ library(purrr)
 cd <- cachem::cache_disk(rappdirs::user_cache_dir("velox-bm-report"))
 mgh <- memoise::memoise(gh::gh, cache = cd)
 mruns <- memoise::memoise(conbenchcoms::runs, cache = cd)
-mresults <- memoise::memoise(conbenchcoms::benchmark_results, cache = cd)
+lookback_days <- 30
+latest_results <- \(x) conbenchcoms::benchmark_results(x,earliest_timestamp = lubridate::now() - lubridate::days(lookback_days))
 
-# Get latest runs of build-metric job 
+# Get latest runs of build-metric job
 runs <- mgh(
   "GET /repos/facebookincubator/velox/actions/workflows/build-metrics.yml/runs",
-  status = "success",
   branch = "main"
 ) |> jsonlite::toJSON()
 
@@ -50,19 +50,31 @@ newest_sha <- runs |>
 run_shas <- runs |>
   jqr::jq("[.workflow_runs[].head_sha]") |>
   jsonlite::fromJSON()
+
 run_ids <- mruns(run_shas) |>
   filter(commit.branch == "facebookincubator:main", substr(id, 1, 2) == "BM") |>
   pull(id)
 
+# Speed up local dev by saving 'results' as conbench requests can't be memoised
+if (file.exists('/tmp/benchmark_results.rds') ){
+  load('/tmp/benchmark_results.rds')
+} else {
 # Fetch the result and do clean/format the data
 results <- run_ids |>
-  purrr::map_df(mresults) |>
+  purrr::map_df(mresults)
+}
+
+results <- results |>
   mutate(
     timestamp = lubridate::as_datetime(timestamp),
     stats.data = unlist(stats.data),
     type = case_when(
-      startsWith(run_id, "BM-debug") ~ "debug",
+      grepl( "^BM-.*debug.*", run_id) ~ "debug",
       .default = "release"
+    ),
+    linkage = case_when(
+        grepl("^BM-(static-|)[dr].*", run_id) ~ "static",
+        startsWith(run_id, "BM-shared") ~ "shared",
     )
   )
 ```
@@ -72,7 +84,7 @@ theme_set(theme_minimal(base_size = 12) %+replace%
   theme(
     plot.title.position = "plot",
     strip.text = element_text(size = 12)
-  ))
+  ) + theme(panel.spacing = unit(4, "lines")))
 
 format_tags <- function(x) {
   x |>
@@ -97,10 +109,11 @@ times_plot <- results |>
     y = stats.data,
     group = interaction(tags.name, type), color = tags.name
   )) +
-  facet_wrap(~type) +
+  facet_wrap(vars(type, linkage), scales= "free_y") +
   geom_line() +
-  geom_point() +
-  scale_y_time() +
+  geom_point(aes(text= paste("Duration: ", prettyunits::pretty_sec(stats.data), "<br>", 
+                         "Date: ", timestamp, "<br>"))) +
+  scale_y_time(labels = function(x) strftime(x, "%H:%M")) +
   scale_x_datetime() +
   labs(
     title = "Velox Build Times",
@@ -108,7 +121,7 @@ times_plot <- results |>
     y = "Time in Minutes"
   ) +
   scale_color_viridis_d()
-ggplotly(times_plot) |>
+ggplotly(times_plot, tooltip = c("text")) |>
   layout(legend = list(title = list(text = "Tags Name<br>"))) ## needed because theme legend specs don't work with ggplotly
 ```
 
@@ -118,7 +131,6 @@ compile_times <- results |>
   filter(tags.suite == "compiling", commit.sha == newest_sha) |>
   mutate(
     stats.data = lubridate::dseconds(stats.data),
-    tags.name = glue::glue("`{tags.name}`")
   )
 ```
 
@@ -131,7 +143,7 @@ compile_times <- results |>
 ```{r compile-times-release}
 # Select and format the data to be displayed in the release compile time table
 compile_times |>
-  filter(type == "release") |>
+  filter(type == "release", linkage == "static") |>
   select(tags.name, stats.data) |>
   arrange(desc(stats.data)) |>
   gt() |>
@@ -140,7 +152,7 @@ compile_times |>
     `stats.data` = "Time"
   ) |>
   cols_align(align = "left", columns = everything()) |>
-  tab_header(title = "Release") |>
+  tab_header(title = "Release Static") |>
   fmt_markdown(columns = "tags.name") |>
   opt_interactive(use_page_size_select = TRUE, use_search = TRUE)
 ```
@@ -156,7 +168,7 @@ compile_times |>
 ```{r compile-times-debug}
 # Select and format the data to be displayed in the debug compile time table
 compile_times |>
-  filter(type == "debug") |>
+  filter(type == "release", linkage == "shared") |>
   select(tags.name, stats.data) |>
   arrange(desc(stats.data)) |>
   gt() |>
@@ -165,7 +177,7 @@ compile_times |>
     `stats.data` = "Time"
   ) |>
   cols_align(align = "left", columns = everything()) |>
-  tab_header(title = "Debug") |>
+  tab_header(title = "Release Shared") |>
   fmt_markdown(columns = "tags.name") |>
   opt_interactive(use_page_size_select = TRUE, use_search = TRUE)
 ```
@@ -194,7 +206,7 @@ link_times <- results |>
 ```{r link-times-release}
 # Select and format the data to be displayed in the release link time table
 link_times |>
-  filter(type == "release") |>
+  filter(type == "release", linkage == "static") |>
   select(tags.name, stats.data) |>
   arrange(desc(stats.data)) |>
   gt() |>
@@ -203,7 +215,7 @@ link_times |>
     `stats.data` = "Time"
   ) |>
   cols_align(align = "left", columns = everything()) |>
-  tab_header(title = "Release") |>
+  tab_header(title = "Release Static") |>
   fmt_markdown(columns = "tags.name") |>
   opt_interactive(use_page_size_select = TRUE, use_search = TRUE)
 ```
@@ -219,7 +231,7 @@ link_times |>
 ```{r link-times-debug}
 # Select and format the data to be displayed in the debug link time table
 link_times |>
-  filter(type == "debug") |>
+  filter(type == "release", linkage == "shared") |>
   select(tags.name, stats.data) |>
   arrange(desc(stats.data)) |>
   gt() |>
@@ -228,7 +240,7 @@ link_times |>
     `stats.data` = "Time"
   ) |>
   cols_align(align = "left", columns = everything()) |>
-  tab_header(title = "Link Times - Debug") |>
+  tab_header(title = "Link Times - Release Shared") |>
   fmt_markdown(columns = "tags.name") |>
   opt_interactive(use_page_size_select = TRUE, use_search = TRUE)
 ```
@@ -249,22 +261,23 @@ size_formatter <- function(x) {
 
 # Prepare object size data
 object_sizes <- results |>
-  filter(endsWith(tags.source, "size"), commit.sha == newest_sha)  |>
-  mutate(
-    tags.name = glue::glue("`{tags.name}`")
-  )
+  filter(endsWith(tags.source, "size"), commit.sha == newest_sha)
 
 # Filter the data and layout the size overview plots
 sizes_plot <- results |>
   filter(tags.suite == "executable", startsWith(tags.name, "total_")) |>
+  mutate(
+    tags.name = format_tags(tags.name),
+  ) |> 
   ggplot(aes(
     x = timestamp,
     y = stats.data,
     group = interaction(tags.name, type), color = tags.name
   )) +
-  facet_wrap(~type) +
+  facet_wrap(vars(type, linkage), scales = "free_y") +
   geom_line() +
-  geom_point() +
+  geom_point(aes(text= paste("Size: ", prettyunits::pretty_bytes(stats.data), "<br>", 
+                         "Date: ", timestamp, "<br>"))) +
   scale_y_continuous(labels = size_formatter()) +
   scale_x_datetime() +
   labs(
@@ -273,11 +286,11 @@ sizes_plot <- results |>
     y = "Size"
   ) +
   scale_color_viridis_d()
-ggplotly(sizes_plot) |>
+ggplotly(sizes_plot, tooltip = c("text")) |>
   layout(legend = list(title = list(text = "Tags Name<br>"))) ## needed because theme legend specs don't work with ggplotly
 ```
 
-### Object Sizes 
+### Object Sizes
 :::: {.columns}
 
 ::: {.column width="49%"}
