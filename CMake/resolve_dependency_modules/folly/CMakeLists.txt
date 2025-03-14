@@ -14,9 +14,9 @@
 project(Folly)
 cmake_minimum_required(VERSION 3.28)
 
-set(VELOX_FOLLY_BUILD_VERSION v2024.07.01.00)
+set(VELOX_FOLLY_BUILD_VERSION v2024.07.15.00)
 set(VELOX_FOLLY_BUILD_SHA256_CHECKSUM
-    e78584ab7ba9a687285f2849bc0141e2422a5c808ad6ab3558c83d85975e25ed)
+    fbed82092b4e25aabcb5f665a35b16076c28f8bd30b63209649420f90df2dbb6)
 set(VELOX_FOLLY_SOURCE_URL
     "https://github.com/facebook/folly/releases/download/${VELOX_FOLLY_BUILD_VERSION}/folly-${VELOX_FOLLY_BUILD_VERSION}.tar.gz"
 )
@@ -38,8 +38,10 @@ FetchContent_Declare(
   folly
   URL ${VELOX_FOLLY_SOURCE_URL}
   URL_HASH ${VELOX_FOLLY_BUILD_SHA256_CHECKSUM}
-  PATCH_COMMAND git apply ${CMAKE_CURRENT_LIST_DIR}/folly-no-export.patch
-                ${glog_patch} OVERRIDE_FIND_PACKAGE SYSTEM EXCLUDE_FROM_ALL)
+  PATCH_COMMAND
+    git apply ${CMAKE_CURRENT_LIST_DIR}/folly-no-export.patch && git apply
+    ${CMAKE_CURRENT_LIST_DIR}/fix-thread-local.patch ${glog_patch}
+    OVERRIDE_FIND_PACKAGE SYSTEM EXCLUDE_FROM_ALL)
 
 set(BUILD_SHARED_LIBS ${VELOX_BUILD_SHARED})
 
