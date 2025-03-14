@@ -576,14 +576,6 @@ Each query can override the config by setting corresponding query session proper
      - 1MB
      - Define the estimation of footer size in ORC and Parquet format. The footer data includes version, schema, and meta data for every columns which may or may not need to be fetched later.
        The parameter controls the size when footer is fetched each time. Bigger value can decrease the IO requests but may fetch more useless meta data.
-   * - cache.no_retention
-     - cache.no_retention
-     - bool
-     - false
-     - If true, evict out a query scanned data out of in-memory cache right after the access,
-       and also skip staging to the ssd cache. This helps to prevent the cache space pollution
-       from the one-time table scan by large batch query when mixed running with interactive
-       query which has high data locality.
    * - hive.reader.stats_based_filter_reorder_disabaled
      - hive.reader.stats_based_filter_reorder_disabaled
      - bool
@@ -924,3 +916,83 @@ Tracing
      - integer
      - 0
      - The max trace bytes limit. Tracing is disabled if zero.
+
+Async Data Cache (In-Memory Cache) and SSD Cache
+------------------------------------------------
+.. list-table::
+   :widths: 30 10 10 70
+   :header-rows: 1
+
+   * - Property Name
+     - Type
+     - Default Value
+     - Description
+   * - async-data-cache-enabled
+     - bool
+     - true
+     - If true, enable async data cache.
+   * - async-cache-ssd-gb
+     - integer
+     - 0
+     - The size of the SSD.
+   * - async-cache-ssd-path
+     - string
+     - /mnt/flash/async_cache.
+     - The directory that is mounted onto SSD.
+   * - async-cache-max-ssd-write-ratio
+     - double
+     - 0.7
+     - The max ratio of the number of in-memory cache entries being written to SSD cache over the total number of cache entries. This is to control SSD cache write rate, and once the ratio exceeds this threshold, then we stop writing to SSD cache.
+   * - async-cache-ssd-savable-ratio
+     - double
+     - 0.125
+     - The min ratio of SSD savable (in-memory) cache space over the total cache space. Once the ratio exceeds this limit, we start writing SSD savable cache entries into SSD cache.
+   * - async-cache-min-ssd-savable-bytes
+     - integer
+     - 16777216 (16 MB)
+     - Min SSD savable (in-memory) cache space to start writing SSD savable cache entries into SSD cache. NOTE: we only write to SSD cache when both async-cache-max-ssd-write-ratio and async-cache-ssd-savable-ratio conditions are satisfied.
+   * - async-cache-persistence-interval
+     - string
+     - 0s
+     - The interval for persisting in-memory cache to SSD. Setting this config to a non-zero value will activate periodic cache persistence. The following time units are supported: ns, us, ms, s, m, h, d.
+   * - async-cache-ssd-disable-file-cow
+     - bool
+     - false
+     - In file systems, such as btrfs, supporting cow (copy on write), the ssd cache can use all ssd space and stop working. To prevent that, use this option to disable cow for cache files.
+   * - ssd-cache-checksum-enabled
+     - bool
+     - false
+     - When enabled, a CRC-based checksum is calculated for each cache entry written to SSD. The checksum is stored in the next checkpoint file.
+   * - ssd-cache-read-verification-enabled
+     - bool
+     - false
+     - When enabled, the checksum is recalculated and verified against the stored value when cache data is loaded from the SSD.
+   * - cache.velox.ttl-enabled
+     - bool
+     - false
+     - Enable TTL for AsyncDataCache and SSD cache.
+   * - cache.velox.ttl-threshold
+     - string
+     - 2d
+     - TTL duration for AsyncDataCache and SSD cache entries. The following time units are supported: ns, us, ms, s, m, h, d.
+   * - cache.velox.ttl-check-interval
+     - string
+     - 1h
+     - The periodic duration to apply cache TTL and evict AsyncDataCache and SSD cache entries.
+   * - cache.no_retention
+     - bool
+     - false
+     - If true, evict out a query scanned data out of in-memory cache right after the access,
+       and also skip staging to the ssd cache. This helps to prevent the cache space pollution
+       from the one-time table scan by large batch query when mixed running with interactive
+       query which has high data locality. Set the ``hive.node_scheduler_affinity`` session 
+       property to ``NO_PREFERENCE`` to turn cache.no_retention ON. Set the 
+       ``hive.node_scheduler_affinity`` session property to ``SOFT_AFFINITY`` 
+       or ``HARD_AFFINITY`` to turn cache.no_retention OFF.
+   * - query-data-cache-enabled-default
+     - bool
+     - true
+     - If ``true``, SSD cache is enabled by default and is disabled only if ``node_selection_strategy`` 
+       is present and set to ``NO_PREFERENCE``. Otherwise, SSD cache is disabled by default and is 
+       enabled if ``node_selection_strategy`` is present and set to 
+       ``SOFT_AFFINITY`` or ``HARD_AFFINITY``.
