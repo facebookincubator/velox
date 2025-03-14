@@ -27,7 +27,6 @@ RowSet read(
     SelectiveColumnReader* fieldReader,
     uint64_t version,
     RowSet rows,
-    raw_vector<vector_size_t>& selectedRows,
     ValueHook* hook) {
   VELOX_CHECK_EQ(
       version,
@@ -44,12 +43,12 @@ RowSet read(
   } else {
     // rows is a set of indices into outputRows. There has been a
     // selection between creation and loading.
-    selectedRows.resize(rows.size());
-    VELOX_DCHECK(!selectedRows.empty());
+    VELOX_DCHECK(!rows.empty());
+    fieldReader->lazySelectedRows().resize(rows.size());
     for (auto i = 0; i < rows.size(); ++i) {
-      selectedRows[i] = outputRows[rows[i]];
+      fieldReader->lazySelectedRows()[i] = outputRows[rows[i]];
     }
-    effectiveRows = selectedRows;
+    effectiveRows = fieldReader->lazySelectedRows();
   }
 
   structReader->advanceFieldReader(fieldReader, offset);
@@ -153,9 +152,7 @@ void ColumnLoader::loadInternal(
              ->debugString();
        },
        structReader_});
-  raw_vector<vector_size_t> selectedRows;
-  auto effectiveRows =
-      read(structReader_, fieldReader_, version_, rows, selectedRows, hook);
+  auto effectiveRows = read(structReader_, fieldReader_, version_, rows, hook);
   if (!hook) {
     fieldReader_->getValues(effectiveRows, result);
     if (((rows.back() + 1) < resultSize) ||
@@ -186,10 +183,8 @@ void DeltaUpdateColumnLoader::loadInternal(
   // method return.
   VELOX_CHECK(!scanSpec->hasFilter());
   scanSpec->setValueHook(nullptr);
-  raw_vector<vector_size_t> selectedRows;
-  RowSet effectiveRows;
-  effectiveRows =
-      read(structReader_, fieldReader_, version_, rows, selectedRows, nullptr);
+  auto effectiveRows =
+      read(structReader_, fieldReader_, version_, rows, nullptr);
   fieldReader_->getValues(effectiveRows, result);
   scanSpec->deltaUpdate()->update(effectiveRows, *result);
   if (hook) {

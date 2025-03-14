@@ -186,6 +186,10 @@ class SelectiveColumnReader {
     return useOutputRows() ? outputRows_ : inputRows_;
   }
 
+  raw_vector<vector_size_t>& lazySelectedRows() {
+    return lazySelectedRows_;
+  }
+
   // Advances to 'offset', so that the next item to be read is the
   // offset-th from the start of stripe.
   virtual void seekTo(int64_t offset, bool readsNullsOnly);
@@ -649,6 +653,8 @@ class SelectiveColumnReader {
   // The rows to process in read(). References memory supplied by
   // caller. The values must remain live until the next call to read().
   RowSet inputRows_;
+  // Rows selected during lazy loading.
+  raw_vector<vector_size_t> lazySelectedRows_;
   // Rows passing the filter in readWithVisitor. Must stay constant between
   // consecutive calls to read().
   raw_vector<vector_size_t> outputRows_;
