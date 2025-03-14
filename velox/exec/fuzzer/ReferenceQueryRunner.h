@@ -107,15 +107,6 @@ class ReferenceQueryRunner {
     return true;
   }
 
-  /// Executes SQL query returned by the 'toSql' method using 'input' data.
-  /// Converts results using 'resultType' schema.
-  virtual std::multiset<std::vector<velox::variant>> execute(
-      const std::string& /*sql*/,
-      const std::vector<velox::RowVectorPtr>& /*input*/,
-      const velox::RowTypePtr& /*resultType*/) {
-    VELOX_UNSUPPORTED();
-  }
-
   // Converts 'plan' into an SQL query and executes it. Result is returned as
   // a MaterializedRowMultiset with the ReferenceQueryErrorCode::kSuccess if
   // successful, or an std::nullopt with a ReferenceQueryErrorCode if the
@@ -147,19 +138,10 @@ class ReferenceQueryRunner {
     VELOX_UNSUPPORTED();
   }
 
-  /// Returns true if 'executeVector' can be called to get results as Velox
-  /// Vector.
+  /// Returns true if 'executeAndReturnVector' can be called to get results as
+  /// Velox Vector.
   virtual bool supportsVeloxVectorResults() const {
     return false;
-  }
-
-  /// Similar to 'execute' but returns results in RowVector format.
-  /// Caller should ensure 'supportsVeloxVectorResults' returns true.
-  virtual std::vector<RowVectorPtr> executeVector(
-      const std::string& /*sql*/,
-      const std::vector<RowVectorPtr>& /*input*/,
-      const RowTypePtr& /*resultType*/) {
-    VELOX_UNSUPPORTED();
   }
 
   virtual std::vector<velox::RowVectorPtr> execute(const std::string& /*sql*/) {
