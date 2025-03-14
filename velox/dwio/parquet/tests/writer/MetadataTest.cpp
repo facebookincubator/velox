@@ -26,8 +26,10 @@
 #include "velox/dwio/parquet/writer/arrow/Statistics.h"
 #include "velox/dwio/parquet/writer/arrow/ThriftInternal.h"
 #include "velox/dwio/parquet/writer/arrow/Types.h"
-#include "velox/dwio/parquet/writer/arrow/tests/FileReader.h"
 #include "velox/dwio/parquet/writer/arrow/tests/TestUtil.h"
+
+#include "velox/dwio/parquet/reader/ParquetReader.h"
+#include "velox/exec/tests/utils/TempFilePath.h"
 
 namespace facebook::velox::parquet::arrow {
 namespace metadata {
@@ -394,21 +396,42 @@ TEST(Metadata, TestAddKeyValueMetadata) {
       file_writer->AddKeyValueMetadata(kv_meta_ignored), ParquetException);
 
   PARQUET_ASSIGN_OR_THROW(auto buffer, sink->Finish());
-  auto source = std::make_shared<::arrow::io::BufferReader>(buffer);
-  auto file_reader = ParquetFileReader::Open(source);
 
-  ASSERT_NE(nullptr, file_reader->metadata());
-  ASSERT_NE(nullptr, file_reader->metadata()->key_value_metadata());
-  auto read_kv_meta = file_reader->metadata()->key_value_metadata();
-
+  // Write the buffer to a temp file
+  auto temp_file = exec::test::TempFilePath::create();
+  auto file_path = temp_file->getPath();
+  auto local_write_file =
+      std::make_unique<LocalWriteFile>(file_path, false, false);
+  auto buffer_reader = std::make_shared<::arrow::io::BufferReader>(buffer);
+  auto buffer_to_string = buffer_reader->buffer()->ToString();
+  local_write_file->append(buffer_to_string);
+  local_write_file->close();
+  memory::MemoryManager::testingSetInstance({});
+  std::shared_ptr<facebook::velox::memory::MemoryPool> root_pool;
+  std::shared_ptr<facebook::velox::memory::MemoryPool> leaf_pool;
+  root_pool = memory::memoryManager()->addRootPool("MetadataTest");
+  leaf_pool = root_pool->addLeafChild("MetadataTest");
+  dwio::common::ReaderOptions readerOptions{leaf_pool.get()};
+  auto input = std::make_unique<dwio::common::BufferedInput>(
+      std::make_shared<LocalReadFile>(file_path), readerOptions.memoryPool());
+  auto reader =
+      std::make_unique<ParquetReader>(std::move(input), readerOptions);
+  ASSERT_NE(0, reader->fileMetaData().keyValueMetadataSize());
   // Verify keys that were added before file writer was closed are present.
   for (int i = 1; i <= 3; ++i) {
-    auto index = std::to_string(i);
-    PARQUET_ASSIGN_OR_THROW(auto value, read_kv_meta->Get("test_key_" + index));
+    auto key = reader->fileMetaData().keyValueMetadataKey(i - 1);
+    auto value = reader->fileMetaData().keyValueMetadataValue(i - 1);
+
+    auto index = std::to_string(i + 1);
+    if (i == 3) {
+      index = std::to_string(1);
+    }
+
+    EXPECT_EQ("test_key_" + index, key);
     EXPECT_EQ("test_value_" + index, value);
   }
   // Verify keys that were added after file writer was closed are not present.
-  EXPECT_FALSE(read_kv_meta->Contains("test_key_4"));
+  EXPECT_FALSE(reader->fileMetaData().keyValueMetadataContains("test_key_4"));
 }
 
 // TODO: disabled as they require Arrow parquet data dir.
@@ -498,15 +521,33 @@ TEST(Metadata, TestSortingColumns) {
   file_writer->Close();
 
   PARQUET_ASSIGN_OR_THROW(auto buffer, sink->Finish());
-  auto source = std::make_shared<::arrow::io::BufferReader>(buffer);
-  auto file_reader = ParquetFileReader::Open(source);
 
-  ASSERT_NE(nullptr, file_reader->metadata());
-  ASSERT_EQ(1, file_reader->metadata()->num_row_groups());
-  auto row_group_reader = file_reader->RowGroup(0);
-  auto* row_group_read_metadata = row_group_reader->metadata();
-  ASSERT_NE(nullptr, row_group_read_metadata);
-  EXPECT_EQ(sorting_columns, row_group_read_metadata->sorting_columns());
+  // Write the buffer to a temp file
+  auto temp_file = exec::test::TempFilePath::create();
+  auto file_path = temp_file->getPath();
+  auto local_write_file =
+      std::make_unique<LocalWriteFile>(file_path, false, false);
+  auto buffer_reader = std::make_shared<::arrow::io::BufferReader>(buffer);
+  auto buffer_to_string = buffer_reader->buffer()->ToString();
+  local_write_file->append(buffer_to_string);
+  local_write_file->close();
+  memory::MemoryManager::testingSetInstance({});
+  std::shared_ptr<facebook::velox::memory::MemoryPool> root_pool;
+  std::shared_ptr<facebook::velox::memory::MemoryPool> leaf_pool;
+  root_pool = memory::memoryManager()->addRootPool("MetadataTest");
+  leaf_pool = root_pool->addLeafChild("MetadataTest");
+  dwio::common::ReaderOptions readerOptions{leaf_pool.get()};
+  auto input = std::make_unique<dwio::common::BufferedInput>(
+      std::make_shared<LocalReadFile>(file_path), readerOptions.memoryPool());
+  auto reader =
+      std::make_unique<ParquetReader>(std::move(input), readerOptions);
+  ASSERT_EQ(1, reader->fileMetaData().numRowGroups());
+  auto row_group = reader->fileMetaData().rowGroup(0);
+  EXPECT_EQ(sorting_columns[0].column_idx, row_group.sortingColumnIdx(0));
+  EXPECT_EQ(
+      sorting_columns[0].descending, row_group.sortingColumnDescending(0));
+  EXPECT_EQ(
+      sorting_columns[0].nulls_first, row_group.sortingColumnNullsFirst(0));
 }
 
 TEST(ApplicationVersion, Basics) {
