@@ -1898,6 +1898,64 @@ TEST_F(MockSharedArbitrationTest, globalArbitrationWithoutSpill) {
       "Memory pool aborted to reclaim used memory");
 }
 
+TEST_F(MockSharedArbitrationTest, globalArbitrationSmallParticipantLargeGrow) {
+  // This test tests global arbitration takes into consideration the additional
+  // attempting grow capacity when selecting abort partitipants.
+  const int64_t kMemoryCapacity = 512 << 20;
+  const uint64_t kMemoryPoolInitCapacity = kMemoryCapacity / 2;
+  setupMemory(
+      kMemoryCapacity,
+      0,
+      kMemoryPoolInitCapacity,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      kMemoryCapacity, // Set abort capacity limit to differenciate capacity.
+      0,
+      kMemoryReclaimThreadsHwMultiplier,
+      nullptr,
+      true,
+      5 * 60 * 1'000'000'000UL,
+      true);
+
+  auto task0 = addTask(kMemoryCapacity);
+  auto* op0 = task0->addMemoryOp(false);
+  op0->allocate(kMemoryCapacity / 2);
+
+  // task1 has 256MB in second abort capacity limit bucket.
+  auto task1 = addTask(kMemoryCapacity / 2);
+  auto* op1 = task1->addMemoryOp(true);
+  op1->allocate(kMemoryCapacity / 2);
+  ASSERT_EQ(task0->capacity(), kMemoryCapacity / 2);
+
+  std::unordered_map<std::string, RuntimeMetric> runtimeStats;
+  auto statsWriter = std::make_unique<TestRuntimeStatWriter>(runtimeStats);
+  setThreadLocalRunTimeStatWriter(statsWriter.get());
+
+  // task0 has 256MB + 256MB (attempt) = 512MB in top abort capacity limit
+  // bucket, which shall be evaluated first, and hence killed by global
+  // arbitration.
+  VELOX_ASSERT_THROW(op0->allocate(kMemoryCapacity / 2), "aborted");
+
+  ASSERT_EQ(
+      runtimeStats[SharedArbitrator::kMemoryArbitrationWallNanos].count, 1);
+  ASSERT_GT(runtimeStats[SharedArbitrator::kMemoryArbitrationWallNanos].sum, 0);
+  ASSERT_EQ(
+      runtimeStats[SharedArbitrator::kGlobalArbitrationWaitCount].count, 1);
+  ASSERT_EQ(runtimeStats[SharedArbitrator::kGlobalArbitrationWaitCount].sum, 1);
+  ASSERT_EQ(runtimeStats[SharedArbitrator::kLocalArbitrationCount].count, 0);
+
+  ASSERT_TRUE(task1->error() == nullptr);
+  ASSERT_EQ(task1->capacity(), kMemoryCapacity / 2);
+  ASSERT_TRUE(task0->error() != nullptr);
+  VELOX_ASSERT_THROW(
+      std::rethrow_exception(task0->error()),
+      "Memory pool aborted to reclaim used memory");
+}
+
 DEBUG_ONLY_TEST_F(MockSharedArbitrationTest, multipleGlobalRuns) {
   const int64_t memoryCapacity = 512 << 20;
   const uint64_t memoryPoolInitCapacity = memoryCapacity / 2;
