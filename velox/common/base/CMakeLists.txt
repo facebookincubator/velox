@@ -38,6 +38,7 @@ velox_add_library(
   SpillStats.cpp
   StatsReporter.cpp
   SuccinctPrinter.cpp
+  memchr.S
   TraceConfig.cpp)
 
 velox_link_libraries(
