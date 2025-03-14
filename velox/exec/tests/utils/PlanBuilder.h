@@ -349,8 +349,9 @@ class PlanBuilder {
       return *this;
     }
 
-    /// @param insertHandle TableInsertHandle (optional). Other builder arguments such as
-    /// the `connectorId`, `outputDirectoryPath`, `fileFormat` and so on will be ignored.
+    /// @param insertHandle TableInsertHandle (optional). Other builder
+    /// arguments such as the `connectorId`, `outputDirectoryPath`, `fileFormat`
+    /// and so on will be ignored.
     TableWriterBuilder& insertHandle(
         std::shared_ptr<core::InsertTableHandle> insertHandle) {
       insertHandle_ = std::move(insertHandle);
