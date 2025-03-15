@@ -31,6 +31,7 @@
 #include "velox/type/StringView.h"
 #include "velox/type/Subfield.h"
 #include "velox/type/Type.h"
+#include "velox/vector/BaseVector.h"
 
 namespace facebook::velox::common {
 
@@ -2257,6 +2258,40 @@ static inline bool applyFilter(TFilter& filter, folly::StringPiece value) {
 template <typename TFilter>
 static inline bool applyFilter(TFilter& filter, StringView value) {
   return filter.testBytes(value.data(), value.size());
+}
+
+// Read 'size' values from 'valuesVector' starting at 'offset', de-duplicate
+// remove nulls and sort. Return a list of unique non-null values sorted in
+// ascending order and a boolean indicating whether there were any null values.
+template <typename T, typename U>
+std::pair<std::vector<T>, bool> deDuplicateValues(
+    const VectorPtr& valuesVector,
+    vector_size_t offset,
+    vector_size_t size) {
+  auto simpleValues = valuesVector->as<SimpleVector<U>>();
+
+  bool hasNull = false;
+  std::vector<T> values;
+  values.reserve(size);
+
+  for (auto i = offset; i < offset + size; i++) {
+    if (simpleValues->isNullAt(i)) {
+      hasNull = true;
+    } else {
+      if constexpr (std::is_same_v<U, Timestamp>) {
+        values.emplace_back(simpleValues->valueAt(i).toMillis());
+      } else {
+        values.emplace_back(simpleValues->valueAt(i));
+      }
+    }
+  }
+
+  // In-place sort, remove duplicates, and later std::move to save memory
+  std::sort(values.begin(), values.end());
+  auto last = std::unique(values.begin(), values.end());
+  values.resize(std::distance(values.begin(), last));
+
+  return {std::move(values), hasNull};
 }
 
 // Creates a hash or bitmap based IN filter depending on value distribution.
