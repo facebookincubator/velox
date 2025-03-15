@@ -163,21 +163,6 @@ function install_arrow {
     -DBOOST_ROOT=${INSTALL_PREFIX}
 }
 
-function install_thrift {
-  wget_and_untar https://github.com/apache/thrift/archive/${THRIFT_VERSION}.tar.gz thrift
-  (
-    cd ${DEPENDENCY_DIR}/thrift
-    ./bootstrap.sh
-    EXTRA_CXXFLAGS="-O3 -fPIC"
-    # Clang will generate warnings and they need to be suppressed, otherwise the build will fail.
-    if [[ ${USE_CLANG} != "false" ]]; then
-      EXTRA_CXXFLAGS="-O3 -fPIC -Wno-inconsistent-missing-override -Wno-unused-but-set-variable"
-    fi
-    ./configure --prefix=${INSTALL_PREFIX} --enable-tests=no --enable-tutorial=no --with-boost=${INSTALL_PREFIX} CXXFLAGS="${EXTRA_CXXFLAGS}"
-    make "-j${NPROC}" install
-  )
-}
-
 function install_stemmer {
   wget_and_untar https://snowballstem.org/dist/libstemmer_c-${STEMMER_VERSION}.tar.gz stemmer
   (

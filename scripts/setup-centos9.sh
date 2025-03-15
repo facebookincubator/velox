@@ -46,6 +46,21 @@ function install_clang15 {
   dnf_install clang15 gcc-toolset-13-libatomic-devel
 }
 
+function install_thrift {
+   wget_and_untar https://github.com/apache/thrift/archive/${THRIFT_VERSION}.tar.gz thrift
+   (
+     cd ${DEPENDENCY_DIR}/thrift
+     ./bootstrap.sh
+     EXTRA_CXXFLAGS="-O3 -fPIC"
+     # Clang will generate warnings and they need to be suppressed, otherwise the build will fail.
+     if [[ ${USE_CLANG} != "false" ]]; then
+       EXTRA_CXXFLAGS="-O3 -fPIC -Wno-inconsistent-missing-override -Wno-unused-but-set-variable"
+     fi
+     ./configure --prefix=${INSTALL_PREFIX} --enable-tests=no --enable-tutorial=no --with-boost=${INSTALL_PREFIX} CXXFLAGS="${EXTRA_CXXFLAGS}"
+     make "-j${NPROC}" install
+   )
+}
+
 # Install packages required for build.
 function install_build_prerequisites {
   dnf update -y
@@ -82,10 +97,10 @@ function install_cuda {
   dnf config-manager --add-repo https://developer.download.nvidia.com/compute/cuda/repos/rhel9/x86_64/cuda-rhel9.repo
   local dashed="$(echo $1 | tr '.' '-')"
   dnf install -y \
-      cuda-compat-$dashed \
-      cuda-driver-devel-$dashed \
-      cuda-minimal-build-$dashed \
-      cuda-nvrtc-devel-$dashed
+    cuda-compat-$dashed \
+    cuda-driver-devel-$dashed \
+    cuda-minimal-build-$dashed \
+    cuda-nvrtc-devel-$dashed
 }
 
 function install_s3 {
