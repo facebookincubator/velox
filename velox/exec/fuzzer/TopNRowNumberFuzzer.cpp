@@ -249,7 +249,7 @@ void TopNRowNumberFuzzer::runSingleIteration() {
   altPlans.push_back(std::move(defaultPlan));
 
   const auto tableScanDir = exec::test::TempDirectoryPath::create();
-  if (isTableScanSupported(input[0]->type())) {
+  if (test::isTableScanSupported(input[0]->type())) {
     altPlans.push_back(makePlanWithTableScan(
         partitionKeys,
         allSortKeys,
