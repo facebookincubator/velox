@@ -26,6 +26,7 @@ namespace facebook::velox::connector::hive {
       case TypeKind::SMALLINT:                                              \
       case TypeKind::INTEGER:                                               \
       case TypeKind::BIGINT:                                                \
+      case TypeKind::TIMESTAMP:                                             \
       case TypeKind::VARCHAR:                                               \
       case TypeKind::VARBINARY:                                             \
         return VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(                          \
@@ -52,17 +53,38 @@ std::pair<std::string, std::string> makePartitionKeyValueString(
     const BaseVector* partitionVector,
     vector_size_t row,
     const std::string& name,
-    bool isDate) {
+    const tz::TimeZone* sessionTimezone) {
   using T = typename TypeTraits<Kind>::NativeType;
   if (partitionVector->as<SimpleVector<T>>()->isNullAt(row)) {
     return std::make_pair(name, "");
   }
-  if (isDate) {
+  if (partitionVector->type()->isDate()) {
     return std::make_pair(
         name,
         DATE()->toString(
             partitionVector->as<SimpleVector<int32_t>>()->valueAt(row)));
   }
+
+  if constexpr (std::is_same_v<T, Timestamp>) {
+    auto timestamp =
+        partitionVector->as<SimpleVector<Timestamp>>()->valueAt(row);
+    // Hive timestamp partitions are saved in the file path in the format of
+    // yyyy-MM-dd[ HH:mm[:ss[.SSS|.SSSSSS|.SSSSSSSSS]]]
+    // Here we store it in yyyy-MM-dd HH:mm:ss.SSS format, just like the
+    // presto engine
+    TimestampToStringOptions options;
+    options.precision = TimestampToStringOptions::Precision::kMilliseconds;
+    options.zeroPaddingYear = true;
+    options.dateTimeSeparator = ' ';
+    if (sessionTimezone) {
+      timestamp.toTimezone(*sessionTimezone);
+    } else {
+      timestamp.toTimezone(Timestamp::defaultTimezone());
+    }
+
+    return std::make_pair(name, timestamp.toString(options));
+  }
+
   return std::make_pair(
       name,
       makePartitionValueString(
@@ -73,7 +95,8 @@ std::pair<std::string, std::string> makePartitionKeyValueString(
 
 std::vector<std::pair<std::string, std::string>> extractPartitionKeyValues(
     const RowVectorPtr& partitionsVector,
-    vector_size_t row) {
+    vector_size_t row,
+    const tz::TimeZone* sessionTimezone) {
   std::vector<std::pair<std::string, std::string>> partitionKeyValues;
   for (auto i = 0; i < partitionsVector->childrenSize(); i++) {
     partitionKeyValues.push_back(PARTITION_TYPE_DISPATCH(
@@ -82,7 +105,7 @@ std::vector<std::pair<std::string, std::string>> extractPartitionKeyValues(
         partitionsVector->childAt(i)->loadedVector(),
         row,
         asRowType(partitionsVector->type())->nameOf(i),
-        partitionsVector->childAt(i)->type()->isDate()));
+        sessionTimezone));
   }
   return partitionKeyValues;
 }
