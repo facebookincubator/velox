@@ -1121,7 +1121,8 @@ class Task : public std::enable_shared_from_this<Task> {
   std::vector<std::shared_ptr<Driver>> drivers_;
 
   // Tracks the blocking state for each driver under serialized execution mode.
-  class DriverBlockingState {
+  class DriverBlockingState
+      : public enable_shared_from_this<DriverBlockingState> {
    public:
     explicit DriverBlockingState(const Driver* driver) : driver_(driver) {
       VELOX_CHECK_NOT_NULL(driver_);
@@ -1150,7 +1151,7 @@ class Task : public std::enable_shared_from_this<Task> {
   };
 
   // Tracks the driver blocking state under serialized execution mode.
-  std::vector<std::unique_ptr<DriverBlockingState>> driverBlockingStates_;
+  std::vector<std::shared_ptr<DriverBlockingState>> driverBlockingStates_;
 
   // When Drivers are closed by the Task, there is a chance that race and/or
   // bugs can cause such Drivers to be held forever, in turn holding a pointer

@@ -696,7 +696,7 @@ RowVectorPtr Task::next(ContinueFuture* future) {
     driverBlockingStates_.reserve(drivers_.size());
     for (auto i = 0; i < drivers_.size(); ++i) {
       driverBlockingStates_.emplace_back(
-          std::make_unique<DriverBlockingState>(drivers_[i].get()));
+          std::make_shared<DriverBlockingState>(drivers_[i].get()));
     }
   }
 
@@ -3239,31 +3239,31 @@ void Task::DriverBlockingState::setDriverFuture(ContinueFuture& driverFuture) {
   }
   std::move(driverFuture)
       .via(&folly::InlineExecutor::instance())
-      .thenValue(
-          [&, driverHolder = driver_->shared_from_this()](auto&& /* unused */) {
-            std::vector<std::unique_ptr<ContinuePromise>> promises;
-            {
-              std::lock_guard<std::mutex> l(mutex_);
-              VELOX_CHECK(blocked_);
-              VELOX_CHECK_NULL(error_);
-              promises = std::move(promises_);
-              blocked_ = false;
-            }
-            for (auto& promise : promises) {
-              promise->setValue();
-            }
-          })
+      .thenValue([this, holder = shared_from_this()](auto&& /* unused */) {
+        std::vector<std::unique_ptr<ContinuePromise>> promises;
+        {
+          std::lock_guard<std::mutex> l(mutex_);
+          VELOX_CHECK(blocked_);
+          VELOX_CHECK_NULL(error_);
+          promises = std::move(promises_);
+          blocked_ = false;
+        }
+        for (auto& promise : promises) {
+          promise->setValue();
+        }
+      })
       .thenError(
           folly::tag_t<std::exception>{},
-          [&, driverHolder = driver_->shared_from_this()](
-              std::exception const& e) {
+          [this,
+           holder = shared_from_this(),
+           taskId = driver_->task()->taskId()](std::exception const& e) {
             std::lock_guard<std::mutex> l(mutex_);
             VELOX_CHECK(blocked_);
             VELOX_CHECK_NULL(error_);
             try {
               VELOX_FAIL(
                   "A driver future from task {} was realized with error: {}",
-                  driver_->task()->taskId(),
+                  taskId,
                   e.what());
             } catch (const VeloxException&) {
               error_ = std::current_exception();
