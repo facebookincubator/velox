@@ -18,8 +18,10 @@
 
 #include "velox/dwio/common/Reader.h"
 #include "velox/dwio/common/ReaderFactory.h"
+#include "velox/dwio/parquet/common/BloomFilter.h"
 #include "velox/dwio/parquet/reader/Metadata.h"
 #include "velox/dwio/parquet/reader/ParquetStatsContext.h"
+#include "velox/dwio/parquet/reader/ParquetTypeWithId.h"
 
 namespace facebook::velox::dwio::common {
 
@@ -35,6 +37,8 @@ enum class ParquetMetricsType { HEADER, FILE_METADATA, FILE, BLOCK, TEST };
 class StructColumnReader;
 
 class ReaderBase;
+
+class BloomFilterReader;
 
 /// Implements the RowReader interface for Parquet.
 class ParquetRowReader : public dwio::common::RowReader {
@@ -59,6 +63,8 @@ class ParquetRowReader : public dwio::common::RowReader {
   void resetFilterCaches() override;
 
   std::optional<size_t> estimatedRowSize() const override;
+
+  const thrift::FileMetaData& fileMetaData() const;
 
   bool allPrefetchIssued() const override {
     //  Allow opening the next split while this is reading.
