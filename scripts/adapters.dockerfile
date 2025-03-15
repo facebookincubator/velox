@@ -23,7 +23,7 @@ RUN mkdir build && \
     ( \
       cd build && \
       source /opt/rh/gcc-toolset-12/enable && \
-      bash /setup-centos9.sh install_adapters \
+      bash /setup-centos9.sh install_adapters && \
       source /setup-centos9.sh && \
       install_cuda 12.8 \
     ) && \
