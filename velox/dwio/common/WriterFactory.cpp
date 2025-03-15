@@ -32,13 +32,11 @@ WriterFactoriesMap& writerFactories() {
 bool registerWriterFactory(std::shared_ptr<WriterFactory> factory) {
   [[maybe_unused]] const bool ok =
       writerFactories().insert({factory->fileFormat(), factory}).second;
-// TODO: enable the check after Prestissimo adds to register the dwrf writer.
-#if 0
+  // TODO: enable the check after Prestissimo adds to register the dwrf writer.
   VELOX_CHECK(
       ok,
       "WriterFactory is already registered for format {}",
       toString(factory->fileFormat()));
-#endif
   return true;
 }
 
