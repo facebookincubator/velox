@@ -14,7 +14,6 @@
 project(Arrow)
 
 if(VELOX_ENABLE_ARROW)
-  find_package(Thrift)
   if(Thrift_FOUND)
     set(THRIFT_SOURCE "SYSTEM")
   else()
@@ -40,6 +39,15 @@ if(VELOX_ENABLE_ARROW)
       -DARROW_BUILD_STATIC=ON
       -DThrift_SOURCE=${THRIFT_SOURCE}
       -DCMAKE_PREFIX_PATH=${CMAKE_PREFIX_PATH})
+  # If Thrift is not installed but the Boost libs are installed the Thrift build
+  # might fail with missing boost dependency. Boost_FOUND is also set if Boost
+  # was bundled but the variable Boost_LIBRARY_DIRS is not set.
+  if(Boost_FOUND
+     AND NOT Thrift_FOUND
+     AND EXISTS ${Boost_LIBRARY_DIRS})
+    cmake_path(GET Boost_LIBRARY_DIRS PARENT_PATH Boost_ROOT_PATH)
+    list(APPEND ARROW_CMAKE_ARGS -DBOOST_ROOT=${Boost_ROOT_PATH})
+  endif()
   set(ARROW_LIBDIR ${ARROW_PREFIX}/install/${CMAKE_INSTALL_LIBDIR})
 
   add_library(thrift STATIC IMPORTED GLOBAL)
