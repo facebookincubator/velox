@@ -3239,7 +3239,7 @@ void Task::DriverBlockingState::setDriverFuture(ContinueFuture& driverFuture) {
   }
   std::move(driverFuture)
       .via(&folly::InlineExecutor::instance())
-      .thenValue([&, holder = shared_from_this()](auto&& /* unused */) {
+      .thenValue([this, holder = shared_from_this()](auto&& /* unused */) {
         std::vector<std::unique_ptr<ContinuePromise>> promises;
         {
           std::lock_guard<std::mutex> l(mutex_);
@@ -3254,8 +3254,9 @@ void Task::DriverBlockingState::setDriverFuture(ContinueFuture& driverFuture) {
       })
       .thenError(
           folly::tag_t<std::exception>{},
-          [&, holder = shared_from_this(), taskId = driver_->task()->taskId()](
-              std::exception const& e) {
+          [this,
+           holder = shared_from_this(),
+           taskId = driver_->task()->taskId()](std::exception const& e) {
             std::lock_guard<std::mutex> l(mutex_);
             VELOX_CHECK(blocked_);
             VELOX_CHECK_NULL(error_);
