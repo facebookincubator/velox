@@ -27,7 +27,11 @@ cd <- cachem::cache_disk(rappdirs::user_cache_dir("velox-bm-report"))
 mgh <- memoise::memoise(gh::gh, cache = cd)
 mruns <- memoise::memoise(conbenchcoms::runs, cache = cd)
 lookback_days <- 30
-latest_results <- \(x) conbenchcoms::benchmark_results(x, earliest_timestamp = lubridate::now() - lubridate::days(lookback_days))
+latest_results <- function(x) {
+  conbenchcoms::benchmark_results(x,
+    earliest_timestamp = lubridate::now() - lubridate::days(lookback_days)
+  )
+}
 
 # Get latest runs of build-metric job
 runs <- mgh(
@@ -57,7 +61,7 @@ if (file.exists("/tmp/benchmark_results.rds")) {
   # as the conbench api only allows for the results of a single run to be
   # fetched at a time = 120 sequential requests
   results <- run_ids |>
-    purrr::map_df(mresults)
+    purrr::map_df(latest_results)
 }
 
 results <- results |>
