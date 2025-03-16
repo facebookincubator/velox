@@ -73,12 +73,11 @@ exec::AggregateRegistrationResult registerCentralMoments(
             return std::make_unique<
                 CentralMomentsAggregatesBase<double, TResultAccessor>>(
                 resultType);
-          } else {
-            VELOX_UNSUPPORTED(
-                "Unsupported input type: {}. "
-                "Expected SMALLINT, INTEGER, BIGINT, DOUBLE or REAL.",
-                inputType->toString());
           }
+          VELOX_UNSUPPORTED(
+              "Unsupported input type: {}. "
+              "Expected DOUBLE.",
+              inputType->toString());
         } else {
           checkAccumulatorRowType(
               inputType,
