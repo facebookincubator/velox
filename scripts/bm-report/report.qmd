@@ -5,11 +5,11 @@ execute:
   warning: false
 format:
   dashboard:
-    logo: https://velox-lib.io/img/logo.svg
+    logo: https://velox-lib.io/img/velox-logo-white.png
     expandable: true
     scrolling: true
     self-contained: true
-    theme: cosmo
+    theme: zephyr
 ---
 
 
