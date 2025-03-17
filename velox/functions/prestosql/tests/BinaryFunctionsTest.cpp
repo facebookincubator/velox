@@ -315,6 +315,57 @@ TEST_F(BinaryFunctionsTest, xxhash64) {
       hexToDec("D73C92CF24E6EC82"), xxhash64("more_than_12_characters_string"));
 }
 
+TEST_F(BinaryFunctionsTest, fnv1_32) {
+  const auto fnv1_32 = [&](std::optional<std::string> value) {
+    return evaluateOnce<int64_t>("fnv1_32(c0)", VARBINARY(), std::move(value));
+  };
+
+  EXPECT_EQ(-2128831035, fnv1_32(""));
+  EXPECT_EQ(std::nullopt, fnv1_32(std::nullopt));
+
+  EXPECT_EQ(1186288931, fnv1_32("hashme"));
+  EXPECT_EQ(-1225100953, fnv1_32("hello"));
+  EXPECT_EQ(1018752721, fnv1_32("ABC "));
+  EXPECT_EQ(-1175367161, fnv1_32("       "));
+  EXPECT_EQ(495597071, fnv1_32("special_#@,$|%/^~?{}+-"));
+  EXPECT_EQ(-497927534, fnv1_32("1234567890"));
+  EXPECT_EQ(-793433141, fnv1_32("more_than_12_characters_string"));
+}
+
+TEST_F(BinaryFunctionsTest, fnv1_64) {
+  const auto fnv1_64 = [&](std::optional<std::string> value) {
+    return evaluateOnce<int64_t>("fnv1_64(c0)", VARBINARY(), std::move(value));
+  };
+
+  EXPECT_EQ(-3750763034362895579, fnv1_64(""));
+  EXPECT_EQ(std::nullopt, fnv1_64(std::nullopt));
+
+  EXPECT_EQ(-8283365273186809917, fnv1_64("hashme"));
+  EXPECT_EQ(8883723591023973575, fnv1_64("hello"));
+  EXPECT_EQ(1818665342854515697, fnv1_64("ABC "));
+  EXPECT_EQ(-5297705717274092345, fnv1_64("       "));
+  EXPECT_EQ(-4245322807918809073, fnv1_64("special_#@,$|%/^~?{}+-"));
+  EXPECT_EQ(1126012111659584914, fnv1_64("1234567890"));
+  EXPECT_EQ(-8509102626467302869, fnv1_64("more_than_12_characters_string"));
+}
+
+TEST_F(BinaryFunctionsTest, fnv1a_64) {
+  const auto fnv1a_64 = [&](std::optional<std::string> value) {
+    return evaluateOnce<int64_t>("fnv1a_64(c0)", VARBINARY(), std::move(value));
+  };
+
+  EXPECT_EQ(-3750763034362895579, fnv1a_64(""));
+  EXPECT_EQ(std::nullopt, fnv1a_64(std::nullopt));
+
+  EXPECT_EQ(4520530899586740515, fnv1a_64("hashme"));
+  EXPECT_EQ(-6615550055289275125, fnv1a_64("hello"));
+  EXPECT_EQ(-7809245552128983311, fnv1a_64("ABC "));
+  EXPECT_EQ(-8193175652585562873, fnv1a_64("       "));
+  EXPECT_EQ(-4605116656913079461, fnv1a_64("special_#@,$|%/^~?{}+-"));
+  EXPECT_EQ(7156503584078541220, fnv1a_64("1234567890"));
+  EXPECT_EQ(-1689701394669249229, fnv1a_64("more_than_12_characters_string"));
+}
+
 TEST_F(BinaryFunctionsTest, toHex) {
   const auto toHex = [&](std::optional<std::string> value) {
     return evaluateOnce<std::string>("to_hex(cast(c0 as varbinary))", value);
