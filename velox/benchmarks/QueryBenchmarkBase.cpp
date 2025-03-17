@@ -35,7 +35,7 @@ DEFINE_bool(
 DEFINE_bool(include_results, false, "Include results in the output");
 DEFINE_int32(num_drivers, 4, "Number of drivers");
 
-DEFINE_int32(num_splits_per_file, 1, "Number of splits per file");
+DEFINE_int32(num_splits_per_file, 10, "Number of splits per file");
 DEFINE_int32(
     cache_gb,
     0,
@@ -321,7 +321,7 @@ QueryBenchmarkBase::run(const TpchPlan& tpchPlan) {
           std::to_string(FLAGS_preferred_output_batch_rows);
       params.queryConfigs[core::QueryConfig::kMaxOutputBatchRows] =
           std::to_string(FLAGS_max_output_batch_rows);
-      const int numSplitsPerFile = 1;
+      const int numSplitsPerFile = FLAGS_num_splits_per_file;
 
       bool noMoreSplits = false;
       auto addSplits = [&](exec::Task* task) {
@@ -333,7 +333,8 @@ QueryBenchmarkBase::run(const TpchPlan& tpchPlan) {
                    facebook::velox::connector::getAllConnectors().count(
                        cudf_velox::exec::test::kParquetConnectorId) > 0 &&
                    facebook::velox::cudf_velox::isEnabledcudfTableScan())
-                  ? listCudfSplits(path, numSplitsPerFile, tpchPlan)
+                  ? listCudfSplits(
+                        path, 1 /* numSplitsPerFile = 1 for cudf */, tpchPlan)
                   : listSplits(path, numSplitsPerFile, tpchPlan);
               for (auto split : splits) {
                 task->addSplit(entry.first, exec::Split(std::move(split)));
