@@ -19,20 +19,13 @@
 #include "velox/expression/SignatureBinder.h"
 #include "velox/expression/type_calculation/TypeCalculation.h"
 #include "velox/type/Type.h"
+#include "velox/type/parser/ParserUtil.h"
 
 namespace facebook::velox::exec {
 
 namespace {
 bool isAny(const TypeSignature& typeSignature) {
   return typeSignature.baseName() == "any";
-}
-
-/// Returns true only if 'str' contains digits.
-bool isPositiveInteger(const std::string& str) {
-  return !str.empty() &&
-      std::find_if(str.begin(), str.end(), [](unsigned char c) {
-        return !std::isdigit(c);
-      }) == str.end();
 }
 
 std::string buildCalculation(

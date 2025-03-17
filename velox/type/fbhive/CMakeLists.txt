@@ -14,7 +14,7 @@
 
 velox_add_library(velox_type_fbhive HiveTypeParser.cpp HiveTypeSerializer.cpp)
 
-velox_link_libraries(velox_type_fbhive velox_type)
+velox_link_libraries(velox_type_fbhive velox_type velox_type_parser)
 
 if(${VELOX_BUILD_TESTING})
   add_subdirectory(tests)
