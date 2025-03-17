@@ -31,7 +31,7 @@ class PrefixSortEncoder {
       : ascending_(ascending), nullsFirst_(nullsFirst){};
 
   /// Encode native primitive types(such as uint64_t, int64_t, uint32_t,
-  /// int32_t, uint16_t, int16_t, float, double, Timestamp).
+  /// int32_t, uint16_t, int16_t, int8_t, float, double, Timestamp).
   /// 1. The first byte of the encoded result is null byte. The value is 0 if
   ///    (nulls first and value is null) or (nulls last and value is not null).
   ///    Otherwise, the value is 1. If this column has no null values, we can
@@ -58,7 +58,7 @@ class PrefixSortEncoder {
   }
 
   /// @tparam T Type of value. Supported type are: uint64_t, int64_t, uint32_t,
-  /// int32_t, int16_t, uint16_t, float, double, Timestamp.
+  /// int32_t, int16_t, uint16_t, int8_t, uint8_t, float, double, Timestamp.
   template <typename T>
   FOLLY_ALWAYS_INLINE void
   encodeNoNulls(T value, char* dest, uint32_t encodeSize) const;
@@ -84,6 +84,7 @@ class PrefixSortEncoder {
 #define SCALAR_CASE(kind) \
   case TypeKind::kind:    \
     return nullByteSize + sizeof(TypeTraits<TypeKind::kind>::NativeType);
+      SCALAR_CASE(TINYINT)
       SCALAR_CASE(SMALLINT)
       SCALAR_CASE(INTEGER)
       SCALAR_CASE(BIGINT)
@@ -181,6 +182,26 @@ FOLLY_ALWAYS_INLINE void PrefixSortEncoder::encodeNoNulls(
     char* dest,
     uint32_t encodeSize) const {
   encodeNoNulls(static_cast<uint16_t>(value ^ (1u << 15)), dest, encodeSize);
+}
+
+template <>
+FOLLY_ALWAYS_INLINE void PrefixSortEncoder::encodeNoNulls(
+    uint8_t value,
+    char* dest,
+    uint32_t /*encodeSize*/) const {
+  auto& v = *reinterpret_cast<uint8_t*>(dest);
+  v = value;
+  if (!ascending_) {
+    v = ~v;
+  }
+}
+
+template <>
+FOLLY_ALWAYS_INLINE void PrefixSortEncoder::encodeNoNulls(
+    int8_t value,
+    char* dest,
+    uint32_t encodeSize) const {
+  encodeNoNulls(static_cast<uint8_t>(value ^ (1u << 7)), dest, encodeSize);
 }
 
 template <>

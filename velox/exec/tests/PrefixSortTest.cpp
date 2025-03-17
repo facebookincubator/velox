@@ -403,10 +403,10 @@ TEST_F(PrefixSortTest, optimizeSortKeysOrder) {
       {ROW({BIGINT(), SMALLINT(), VARCHAR()}), {0, 1, 2}, {1, 0, 2}},
       {ROW({TINYINT(), BIGINT(), VARCHAR(), TINYINT(), INTEGER(), VARCHAR()}),
        {2, 1, 0, 4, 5, 3},
-       {4, 1, 2, 5, 0, 3}},
+       {0, 3, 4, 1, 2, 5}},
       {ROW({INTEGER(), BIGINT(), VARCHAR(), TINYINT(), INTEGER(), VARCHAR()}),
        {5, 4, 3, 2, 1, 0},
-       {4, 0, 1, 5, 2, 3}}};
+       {3, 4, 0, 1, 5, 2}}};
 
   for (const auto& testData : testSettings) {
     SCOPED_TRACE(testData.debugString());

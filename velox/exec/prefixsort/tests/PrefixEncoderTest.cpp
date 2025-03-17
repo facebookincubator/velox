@@ -359,6 +359,17 @@ TEST_F(PrefixEncoderTest, encode) {
   }
 
   {
+    uint8_t ascExpected = 0x11;
+    uint8_t descExpected = 0xee;
+    testEncode<uint8_t>(0x11, (char*)&ascExpected, (char*)&descExpected);
+  }
+  {
+    int8_t ascExpected = 0x91;
+    int8_t descExpected = 0x6e;
+    testEncode<int8_t>(0x11, (char*)&ascExpected, (char*)&descExpected);
+  }
+
+  {
     uint32_t ascExpected = 0x0050c3c7;
     uint32_t descExpected = 0xffaf3c38;
     testEncode<float>(100000.00, (char*)&ascExpected, (char*)&descExpected);
@@ -512,13 +523,19 @@ TEST_F(PrefixEncoderTest, compare) {
   testCompare<uint64_t>();
   testCompare<uint32_t>();
   testCompare<uint16_t>();
+  testCompare<uint8_t>();
   testCompare<int64_t>();
   testCompare<int32_t>();
   testCompare<int16_t>();
+  testCompare<int8_t>();
   testCompare<int128_t>();
   testCompare<float>();
   testCompare<double>();
   testCompare<Timestamp>();
+}
+
+TEST_F(PrefixEncoderTest, fuzzyTinyInt) {
+  testFuzz<TypeKind::TINYINT>();
 }
 
 TEST_F(PrefixEncoderTest, fuzzySmallInt) {

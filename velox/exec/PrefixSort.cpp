@@ -56,6 +56,11 @@ FOLLY_ALWAYS_INLINE void extractRowColumnToPrefix(
     char* row,
     char* prefixBuffer) {
   switch (typeKind) {
+    case TypeKind::TINYINT: {
+      encodeRowColumn<int8_t>(
+          prefixSortLayout, index, rowColumn, row, prefixBuffer);
+      return;
+    }
     case TypeKind::SMALLINT: {
       encodeRowColumn<int16_t>(
           prefixSortLayout, index, rowColumn, row, prefixBuffer);
