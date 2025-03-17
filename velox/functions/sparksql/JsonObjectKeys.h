@@ -20,13 +20,13 @@
 
 namespace facebook::velox::functions::sparksql {
 
-  inline bool is_fatal(simdjson::error_code error) noexcept {
-    // simdjson::INCOMPLETE_ARRAY_OR_OBJECT and simdjson::TAPE_ERROR
-    // indicate a fatal error and follow from the fact that
-    // the document is not valid JSON.
-    return error == simdjson::error_code::TAPE_ERROR ||
-        error == simdjson::error_code::INCOMPLETE_ARRAY_OR_OBJECT;
-  }
+inline bool is_fatal(simdjson::error_code error) noexcept {
+  // simdjson::INCOMPLETE_ARRAY_OR_OBJECT and simdjson::TAPE_ERROR
+  // indicate a fatal error and follow from the fact that
+  // the document is not valid JSON.
+  return error == simdjson::error_code::TAPE_ERROR ||
+      error == simdjson::error_code::INCOMPLETE_ARRAY_OR_OBJECT;
+}
 
 /// json_object_keys(jsonString) -> array(string)
 ///
@@ -60,7 +60,8 @@ struct JsonObjectKeysFunction {
 
     for (auto field : jsonObject) {
       if (is_fatal(field.error())) {
-        // On-Demand only fully validates the values used and the structure leading to it.
+        // On-Demand only fully validates the values used and the structure
+        // leading to it.
         return false;
       }
       out.add_item().copy_from(std::string_view(field.unescaped_key()));
