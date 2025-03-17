@@ -102,10 +102,7 @@ bool CompileState::compile() {
     if (!plan_node) {
       return false;
     }
-    if (!plan_node->isInnerJoin()) {
-      return false;
-    }
-    if (plan_node->filter() != nullptr) {
+    if (!CudfHashJoinProbe::isSupportedJoinType(plan_node->joinType())) {
       return false;
     }
     return true;
@@ -353,6 +350,7 @@ void registerCudf() {
     std::cout << "Setting cuDF memory resource to " << mr_mode << std::endl;
   }
   auto mr = cudf_velox::create_memory_resource(mr_mode);
+
   cudf::set_current_device_resource(mr.get());
   cudfDriverAdapter cda{mr};
   exec::DriverAdapter cudfAdapter{"cuDF", cda, cda};
