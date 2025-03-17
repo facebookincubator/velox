@@ -41,6 +41,8 @@ TEST_F(JsonObjectKeysTest, basic) {
   assertEqualVectors(jsonObjectKeys(R"(1)"), expected);
   assertEqualVectors(jsonObjectKeys(R"("hello")"), expected);
   assertEqualVectors(jsonObjectKeys(R"("")"), expected);
+  assertEqualVectors(jsonObjectKeys(R"({"key": 45, "random_string"})"), expected);
+  assertEqualVectors(jsonObjectKeys(R"([{1, 2, 3}])"), expected);
 }
 
 } // namespace
