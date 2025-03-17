@@ -241,6 +241,12 @@ are: zlib, snappy, lzo, zstd, lz4 and gzip. none means no compression.</p></td>
 <td><p>By default, if a key is found in multiple given maps, that key’s value in the resulting map comes from the last one of those maps.
 If true, throws exception when duplicate keys are found. This configuration is needed by Spark functions <cite>CreateMap</cite>, <cite>MapFromArrays</cite>, <cite>MapFromEntries</cite>, <cite>StringToMap</cite>, <cite>MapConcat</cite>, <cite>TransformKeys</cite>.</p></td>
 </tr>
+<tr class="row-even"><td><p>index_lookup_join_max_prefetch_batches</p></td>
+<td><p>integer</p></td>
+<td><p>0</p></td>
+<td><p>Specifies the max number of input batches to prefetch to do index lookup ahead. If it is zero,
+then process one input batch at a time.</p></td>
+</tr>
 </tbody>
 </table>
 </section>
