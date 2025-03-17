@@ -878,9 +878,9 @@ struct TranslateFunction {
   FOLLY_ALWAYS_INLINE void initialize(
       const std::vector<TypePtr>& /*inputTypes*/,
       const core::QueryConfig& /*config*/,
-      const arg_type<Varchar>* /*string*/,
-      const arg_type<Varchar>* match,
-      const arg_type<Varchar>* replace) {
+      const optional_arg_type<Varchar>* /*string*/,
+      const optional_arg_type<Varchar>* match,
+      const optional_arg_type<Varchar>* replace) {
     if (match != nullptr && replace != nullptr) {
       isConstantDictionary_ = true;
     }
