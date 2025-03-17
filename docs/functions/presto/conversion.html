@@ -1132,6 +1132,21 @@ Prefix length for IPv4 is 32 and for IPv6 it is 128.</p>
 </div>
 </section>
 </section>
+<section id="data-size-functions">
+<h2>Data Size Functions<a class="headerlink" href="#data-size-functions" title="Link to this heading">¶</a></h2>
+<dl class="py function">
+<dt class="sig sig-object py" id="parse_presto_data_size">
+<span class="sig-name descname"><span class="pre">parse_presto_data_size</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">string</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#parse_presto_data_size" title="Link to this definition">¶</a></dt>
+<dd><p>Parses <code class="docutils literal notranslate"><span class="pre">string</span></code> of format <code class="docutils literal notranslate"><span class="pre">value</span> <span class="pre">unit</span></code> into a number, where <code class="docutils literal notranslate"><span class="pre">value</span></code> is the fractional number of unit values:</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">parse_presto_data_size</span><span class="p">(</span><span class="s1">&#39;1B&#39;</span><span class="p">);</span> <span class="o">--</span> <span class="mi">1</span>
+<span class="n">SELECT</span> <span class="n">parse_presto_data_size</span><span class="p">(</span><span class="s1">&#39;1kB&#39;</span><span class="p">);</span> <span class="o">--</span> <span class="mi">1024</span>
+<span class="n">SELECT</span> <span class="n">parse_presto_data_size</span><span class="p">(</span><span class="s1">&#39;1MB&#39;</span><span class="p">);</span> <span class="o">--</span> <span class="mi">1048576</span>
+<span class="n">SELECT</span> <span class="n">parse_presto_data_size</span><span class="p">(</span><span class="s1">&#39;2.3MB&#39;</span><span class="p">);</span> <span class="o">--</span> <span class="mi">2411724</span>
+</pre></div>
+</div>
+</dd></dl>
+
+</section>
 <section id="miscellaneous">
 <h2>Miscellaneous<a class="headerlink" href="#miscellaneous" title="Link to this heading">¶</a></h2>
 <dl class="py function">
@@ -1230,6 +1245,10 @@ Prefix length for IPv4 is 32 and for IPv6 it is 128.</p>
 <li><a class="reference internal" href="#cast-to-ipprefix">Cast to IPPREFIX</a><ul>
 <li><a class="reference internal" href="#id25">From VARCHAR</a></li>
 <li><a class="reference internal" href="#id28">From IPADDRESS</a></li>
+</ul>
+</li>
+<li><a class="reference internal" href="#data-size-functions">Data Size Functions</a><ul>
+<li><a class="reference internal" href="#parse_presto_data_size"><code class="docutils literal notranslate"><span class="pre">parse_presto_data_size()</span></code></a></li>
 </ul>
 </li>
 <li><a class="reference internal" href="#miscellaneous">Miscellaneous</a><ul>
