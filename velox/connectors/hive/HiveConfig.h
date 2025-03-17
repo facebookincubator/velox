@@ -74,6 +74,12 @@ class HiveConfig {
   static constexpr const char* kOrcUseColumnNamesSession =
       "hive_orc_use_column_names";
 
+  /// Maps nested field using names. And map top-level field using indices.
+  static constexpr const char* kOrcUseNestedColumnNames =
+      "hive.orc.use-nested-column-names";
+  static constexpr const char* kOrcUseNestedColumnNamesSession =
+      "hive.orc.use-nested-column-names";
+
   /// Maps table field names to file field names using names, not indices.
   static constexpr const char* kParquetUseColumnNames =
       "hive.parquet.use-column-names";
@@ -199,6 +205,8 @@ class HiveConfig {
   std::optional<std::string> gcsMaxRetryTime() const;
 
   bool isOrcUseColumnNames(const config::ConfigBase* session) const;
+
+  bool isOrcUseNestedColumnNames(const config::ConfigBase* session) const;
 
   bool isParquetUseColumnNames(const config::ConfigBase* session) const;
 
