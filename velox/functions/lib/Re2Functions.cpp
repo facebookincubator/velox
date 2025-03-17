@@ -1015,7 +1015,7 @@ class LikeGeneric final : public exec::VectorFunction {
       context.applyToSelectedNoThrow(rows, [&](auto row) {
         vectorWriter.setOffset(row);
         auto escapeChar = escapeReader[row];
-        VELOX_USER_CHECK_EQ(
+        VELOX_USER_CHECK_LE(
             escapeChar.size(), 1, "Escape string must be a single character");
         vectorWriter.current() = applyRow(
             inputReader[row], patternReader[row], escapeChar.data()[0]);
@@ -2237,7 +2237,7 @@ std::shared_ptr<exec::VectorFunction> makeLike(
     //
     // [1].https://github.com/facebookincubator/velox/issues/8363
     try {
-      VELOX_USER_CHECK_EQ(
+      VELOX_USER_CHECK_LE(
           constantEscape->valueAt(0).size(),
           1,
           "Escape string must be a single character");
