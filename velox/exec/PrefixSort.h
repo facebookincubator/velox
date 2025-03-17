@@ -187,8 +187,8 @@ class PrefixSort {
       if (keyTypes[i]->kind() == TypeKind::VARBINARY ||
           keyTypes[i]->kind() == TypeKind::VARCHAR) {
         const auto stats = rowContainer->columnStats(i);
-        if (stats.has_value()) {
-          maxStringLength = stats.value().maxBytes();
+        if (stats.minMaxColumnStatsValid()) {
+          maxStringLength = stats.maxBytes();
         }
       }
       maxStringLengths.emplace_back(maxStringLength);
