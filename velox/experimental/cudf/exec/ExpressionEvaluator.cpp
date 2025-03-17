@@ -19,6 +19,7 @@
 #include "velox/expression/FieldReference.h"
 #include "velox/type/Type.h"
 #include "velox/vector/BaseVector.h"
+#include "velox/vector/ComplexVector.h"
 #include "velox/vector/ConstantVector.h"
 #include "velox/vector/VectorTypeUtils.h"
 
@@ -36,15 +37,17 @@ namespace {
 template <TypeKind kind>
 cudf::ast::literal make_scalar_and_literal(
     const VectorPtr& vector,
-    std::vector<std::unique_ptr<cudf::scalar>>& scalars) {
+    std::vector<std::unique_ptr<cudf::scalar>>& scalars,
+    size_t at_index = 0) {
   using T = typename facebook::velox::KindToFlatVector<kind>::WrapperType;
   auto stream = cudf::get_default_stream();
   auto mr = cudf::get_current_device_resource_ref();
-  auto& type = vector->type();
-  auto constVector = vector->as<facebook::velox::ConstantVector<T>>();
-  T value = constVector->valueAt(0);
+  const auto& type = vector->type();
+
   if constexpr (cudf::is_fixed_width<T>()) {
-    VELOX_CHECK(vector->isConstantEncoding());
+    auto constVector = vector->as<facebook::velox::SimpleVector<T>>();
+    VELOX_CHECK_NOT_NULL(constVector, "ConstantVector is null");
+    T value = constVector->valueAt(at_index);
     // check if decimal (unsupported by ast), if interval, if date
     if (type->isShortDecimal()) {
       VELOX_FAIL("Short decimal not supported");
@@ -105,10 +108,8 @@ cudf::ast::literal make_scalar_and_literal(
     }
     VELOX_FAIL("Unsupported base type for literal");
   } else if (kind == TypeKind::VARCHAR) {
-    VELOX_CHECK(vector->isConstantEncoding());
-    auto constVector =
-        vector->as<facebook::velox::ConstantVector<StringView>>();
-    auto value = constVector->valueAt(0);
+    auto constVector = vector->as<facebook::velox::SimpleVector<StringView>>();
+    auto value = constVector->valueAt(at_index);
     std::string_view stringValue = static_cast<std::string_view>(value);
     scalars.emplace_back(
         std::make_unique<cudf::string_scalar>(stringValue, true, stream, mr));
@@ -116,16 +117,87 @@ cudf::ast::literal make_scalar_and_literal(
         *static_cast<cudf::string_scalar*>(scalars.back().get())};
   } else {
     // TODO for non-numeric types too.
-    VELOX_NYI("Non-numeric types not yet implemented");
+    VELOX_NYI(
+        "Non-numeric types not yet implemented for kind " +
+        mapTypeKindToName(kind));
   }
 }
 
 cudf::ast::literal createLiteral(
     const VectorPtr& vector,
-    std::vector<std::unique_ptr<cudf::scalar>>& scalars) {
+    std::vector<std::unique_ptr<cudf::scalar>>& scalars,
+    size_t at_index = 0) {
   const auto kind = vector->typeKind();
   return VELOX_DYNAMIC_TYPE_DISPATCH_ALL(
-      make_scalar_and_literal, kind, std::move(vector), scalars);
+      make_scalar_and_literal, kind, std::move(vector), scalars, at_index);
+}
+
+// Helper function to extract literals from array elements based on type
+void extractArrayLiterals(
+    const ArrayVector* arrayVector,
+    std::vector<cudf::ast::literal>& literals,
+    std::vector<std::unique_ptr<cudf::scalar>>& scalars,
+    vector_size_t offset,
+    vector_size_t size) {
+  auto elements = arrayVector->elements();
+
+  for (auto i = offset; i < offset + size; ++i) {
+    if (elements->isNullAt(i)) {
+      // Skip null values for IN expressions
+      continue;
+    } else {
+      literals.emplace_back(createLiteral(elements, scalars, i));
+    }
+  }
+}
+
+// Function to create literals from an array vector
+std::vector<cudf::ast::literal> createLiteralsFromArray(
+    const VectorPtr& vector,
+    std::vector<std::unique_ptr<cudf::scalar>>& scalars) {
+  std::vector<cudf::ast::literal> literals;
+
+  // Check if it's a constant vector containing an array
+  if (vector->isConstantEncoding()) {
+    auto constantVector = vector->asUnchecked<ConstantVector<ComplexType>>();
+    if (constantVector->isNullAt(0)) {
+      // Return empty vector for null array
+      return literals;
+    }
+
+    auto valueVector = constantVector->valueVector();
+    if (valueVector->encoding() == VectorEncoding::Simple::ARRAY) {
+      auto arrayVector = valueVector->as<ArrayVector>();
+      auto index = constantVector->index();
+      auto size = arrayVector->sizeAt(index);
+      if (size == 0) {
+        // Return empty vector for empty array
+        return literals;
+      }
+
+      auto offset = arrayVector->offsetAt(index);
+      auto elements = arrayVector->elements();
+
+      // Handle different element types
+      if (elements->isScalar()) {
+        literals.reserve(size);
+        extractArrayLiterals(arrayVector, literals, scalars, offset, size);
+      } else if (elements->typeKind() == TypeKind::ARRAY) {
+        // Nested arrays not supported in IN expressions
+        VELOX_FAIL("Nested arrays not supported in IN expressions");
+      } else {
+        VELOX_FAIL(
+            "Unsupported element type in array: {}",
+            elements->type()->toString());
+      }
+    } else {
+      VELOX_FAIL("Expected ARRAY encoding");
+    }
+  } else {
+    VELOX_FAIL("Expected constant vector for IN list");
+  }
+
+  return literals;
 }
 } // namespace
 
@@ -149,6 +221,7 @@ const std::map<std::string, op> unary_ops = {{"not", op::NOT}};
 const std::unordered_set<std::string> supported_ops = {
     "literal",
     "between",
+    "in",
     "cast",
     "switch",
     "year",
@@ -182,6 +255,9 @@ struct AstContext {
   cudf::ast::expression const& add_precompute_instruction(
       std::string const& name,
       std::string const& instruction);
+  cudf::ast::expression const& multiple_inputs_to_pair_wise(
+      const std::shared_ptr<velox::exec::Expr>& expr);
+  static bool can_be_evaluated(const std::shared_ptr<velox::exec::Expr>& expr);
 };
 
 // Create tree from Expr
@@ -231,6 +307,25 @@ cudf::ast::expression const& AstContext::add_precompute_instruction(
   VELOX_FAIL("Field not found, " + name);
 }
 
+// and/or could have more than 2 inputs,
+// convert to pair wise and/or in this function
+cudf::ast::expression const& AstContext::multiple_inputs_to_pair_wise(
+    const std::shared_ptr<velox::exec::Expr>& expr) {
+  using operation = cudf::ast::operation;
+
+  const auto& name = expr->name();
+  auto len = expr->inputs().size();
+  // Create a simple chain of operations
+  auto result = &push_expr_to_tree(expr->inputs()[0]);
+
+  // Chain the rest of the inputs sequentially
+  for (size_t i = 1; i < len; i++) {
+    auto const& next_input = push_expr_to_tree(expr->inputs()[i]);
+    result = &tree.push(operation{binary_ops.at(name), *result, next_input});
+  }
+  return *result;
+}
+
 cudf::ast::expression const& AstContext::push_expr_to_tree(
     const std::shared_ptr<velox::exec::Expr>& expr) {
   using op = cudf::ast::ast_operator;
@@ -245,9 +340,13 @@ cudf::ast::expression const& AstContext::push_expr_to_tree(
     auto c = dynamic_cast<ConstantExpr*>(expr.get());
     VELOX_CHECK_NOT_NULL(c, "literal expression should be ConstantExpr");
     auto value = c->value();
+    VELOX_CHECK(value->isConstantEncoding());
     // convert to cudf scalar
     return tree.push(createLiteral(value, scalars));
   } else if (binary_ops.find(name) != binary_ops.end()) {
+    if (len > 2 and (name == "and" or name == "or")) {
+      return multiple_inputs_to_pair_wise(expr);
+    }
     VELOX_CHECK_EQ(len, 2);
     auto const& op1 = push_expr_to_tree(expr->inputs()[0]);
     auto const& op2 = push_expr_to_tree(expr->inputs()[1]);
@@ -266,6 +365,45 @@ cudf::ast::expression const& AstContext::push_expr_to_tree(
         tree.push(operation{op::GREATER_EQUAL, value, lower});
     auto const& le_upper = tree.push(operation{op::LESS_EQUAL, value, upper});
     return tree.push(operation{op::NULL_LOGICAL_AND, ge_lower, le_upper});
+  } else if (name == "in") {
+    // number of inputs is variable. >=2
+    VELOX_CHECK_EQ(len, 2);
+    // actually len is 2, second input is ARRAY
+    auto const& op1 = push_expr_to_tree(expr->inputs()[0]);
+    auto c = dynamic_cast<ConstantExpr*>(expr->inputs()[1].get());
+    VELOX_CHECK_NOT_NULL(c, "literal expression should be ConstantExpr");
+    auto value = c->value();
+    VELOX_CHECK_NOT_NULL(value, "ConstantExpr value is null");
+
+    // Use the new createLiteralsFromArray function to get literals
+    auto literals = createLiteralsFromArray(value, scalars);
+
+    // Create equality expressions for each literal and OR them together
+    std::vector<const cudf::ast::expression*> expr_vec;
+    for (auto& literal : literals) {
+      auto const& opi = tree.push(std::move(literal));
+      auto const& logical_node = tree.push(operation{op::EQUAL, op1, opi});
+      expr_vec.push_back(&logical_node);
+    }
+
+    // Handle empty IN list case
+    if (expr_vec.empty()) {
+      // FAIL
+      VELOX_FAIL("Empty IN list");
+      // Return FALSE for empty IN list
+      // auto falseValue = std::make_shared<ConstantVector<bool>>(
+      //     value->pool(), 1, false, TypeKind::BOOLEAN, false);
+      // return tree.push(createLiteral(falseValue, scalars));
+    }
+
+    // OR all logical nodes
+    auto* result = expr_vec[0];
+    for (size_t i = 1; i < expr_vec.size(); i++) {
+      auto const& tree_node =
+          tree.push(operation{op::NULL_LOGICAL_OR, *result, *expr_vec[i]});
+      result = &tree_node;
+    }
+    return *result;
   } else if (name == "cast") {
     VELOX_CHECK_EQ(len, 1);
     auto const& op1 = push_expr_to_tree(expr->inputs()[0]);
@@ -428,16 +566,17 @@ void addPrecomputedColumns(
 ExpressionEvaluator::ExpressionEvaluator(
     const std::vector<std::shared_ptr<velox::exec::Expr>>& exprs,
     const RowTypePtr& inputRowSchema) {
+  exprAst_.reserve(exprs.size());
   for (const auto& expr : exprs) {
     cudf::ast::tree tree;
     create_ast_tree(
         expr, tree, scalars_, inputRowSchema, precompute_instructions_);
-    projectAst_.emplace_back(std::move(tree));
+    exprAst_.emplace_back(std::move(tree));
   }
 }
 
 void ExpressionEvaluator::close() {
-  projectAst_.clear();
+  exprAst_.clear();
   scalars_.clear();
   precompute_instructions_.clear();
 }
@@ -446,13 +585,14 @@ std::vector<std::unique_ptr<cudf::column>> ExpressionEvaluator::compute(
     std::vector<std::unique_ptr<cudf::column>>& input_table_columns,
     rmm::cuda_stream_view stream,
     rmm::device_async_resource_ref mr) {
+  auto num_columns = input_table_columns.size();
   addPrecomputedColumns(
       input_table_columns, precompute_instructions_, scalars_, stream);
   auto ast_input_table =
       std::make_unique<cudf::table>(std::move(input_table_columns));
   auto ast_input_table_view = ast_input_table->view();
   std::vector<std::unique_ptr<cudf::column>> columns;
-  for (auto& tree : projectAst_) {
+  for (auto& tree : exprAst_) {
     if (auto col_ref_ptr =
             dynamic_cast<cudf::ast::column_reference const*>(&tree.back())) {
       auto col = std::make_unique<cudf::column>(
@@ -467,6 +607,7 @@ std::vector<std::unique_ptr<cudf::column>> ExpressionEvaluator::compute(
     }
   }
   input_table_columns = ast_input_table->release();
+  input_table_columns.resize(num_columns);
   return columns;
 }
 

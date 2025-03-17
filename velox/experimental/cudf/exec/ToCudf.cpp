@@ -20,12 +20,14 @@
 #include "velox/exec/HashAggregation.h"
 #include "velox/exec/HashBuild.h"
 #include "velox/exec/HashProbe.h"
+#include "velox/exec/Limit.h"
 #include "velox/exec/Operator.h"
 #include "velox/exec/OrderBy.h"
 #include "velox/experimental/cudf/exec/CudfConversion.h"
 #include "velox/experimental/cudf/exec/CudfFilterProject.h"
 #include "velox/experimental/cudf/exec/CudfHashAggregation.h"
 #include "velox/experimental/cudf/exec/CudfHashJoin.h"
+#include "velox/experimental/cudf/exec/CudfLimit.h"
 #include "velox/experimental/cudf/exec/CudfLocalPartition.h"
 #include "velox/experimental/cudf/exec/CudfOrderBy.h"
 #include "velox/experimental/cudf/exec/ExpressionEvaluator.h"
@@ -86,8 +88,7 @@ bool CompileState::compile() {
   auto is_filter_project_supported = [](const exec::Operator* op) {
     if (auto filter_project_op = dynamic_cast<const exec::FilterProject*>(op)) {
       auto info = filter_project_op->exprsAndProjection();
-      return !info.hasFilter &&
-          ExpressionEvaluator::can_be_evaluated(info.exprs->exprs());
+      return ExpressionEvaluator::can_be_evaluated(info.exprs->exprs());
     }
     return false;
   };
@@ -113,6 +114,7 @@ bool CompileState::compile() {
         return is_any_of<
                    exec::OrderBy,
                    exec::HashAggregation,
+                   exec::Limit,
                    exec::LocalPartition,
                    exec::LocalExchange>(op) ||
             is_filter_project_supported(op) || is_join_supported(op);
@@ -129,13 +131,17 @@ bool CompileState::compile() {
     return is_any_of<
                exec::OrderBy,
                exec::HashAggregation,
+               exec::Limit,
                exec::LocalPartition>(op) ||
         is_filter_project_supported(op) || is_join_supported(op);
   };
   auto produces_gpu_output = [is_filter_project_supported,
                               is_join_supported](const exec::Operator* op) {
-    return is_any_of<exec::OrderBy, exec::HashAggregation, exec::LocalExchange>(
-               op) ||
+    return is_any_of<
+               exec::OrderBy,
+               exec::HashAggregation,
+               exec::Limit,
+               exec::LocalExchange>(op) ||
         is_filter_project_supported(op) ||
         (is_any_of<exec::HashProbe>(op) && is_join_supported(op));
   };
@@ -204,13 +210,22 @@ bool CompileState::compile() {
       auto filterProjectOp = dynamic_cast<exec::FilterProject*>(oper);
       auto info = filterProjectOp->exprsAndProjection();
       auto& id_projections = filterProjectOp->identityProjections();
-      auto plan_node = std::dynamic_pointer_cast<const core::ProjectNode>(
+      auto project_plan_node =
+          std::dynamic_pointer_cast<const core::ProjectNode>(
+              get_plan_node(filterProjectOp->planNodeId()));
+      auto filter_plan_node = std::dynamic_pointer_cast<const core::FilterNode>(
           get_plan_node(filterProjectOp->planNodeId()));
-      // If filter doesn't exist then project should definitely exist so this
-      // should never hit
-      VELOX_CHECK(plan_node != nullptr);
+      // If filter only, filter node only exists.
+      // If project only, or filter and project, project node only exists.
+      VELOX_CHECK(project_plan_node != nullptr or filter_plan_node != nullptr);
       replace_op.push_back(std::make_unique<CudfFilterProject>(
-          id, ctx, info, id_projections, nullptr, plan_node));
+          id, ctx, info, id_projections, filter_plan_node, project_plan_node));
+      replace_op.back()->initialize();
+    } else if (auto limitOp = dynamic_cast<exec::Limit*>(oper)) {
+      auto plan_node = std::dynamic_pointer_cast<const core::LimitNode>(
+          get_plan_node(limitOp->planNodeId()));
+      VELOX_CHECK(plan_node != nullptr);
+      replace_op.push_back(std::make_unique<CudfLimit>(id, ctx, plan_node));
       replace_op.back()->initialize();
     } else if (
         auto localPartitionOp = dynamic_cast<exec::LocalPartition*>(oper)) {

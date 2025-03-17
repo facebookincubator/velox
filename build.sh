@@ -16,7 +16,7 @@
 set -euo pipefail
 
 # Run this to launch the CUDA container:
-# docker-compose run -e NUM_THREADS=$(nproc) --rm ubuntu-cuda-cpp /bin/bash
+# docker-compose run -e NUM_THREADS=$(nproc) --rm adapters-cuda /bin/bash
 # Then invoke ./build.sh to build with GPU support and run tests.
 
 # Run a GPU build and test
