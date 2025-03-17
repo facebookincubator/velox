@@ -39,14 +39,14 @@ create_memory_resource(std::string_view mode);
 [[nodiscard]] cudf::detail::cuda_stream_pool& cudfGlobalStreamPool();
 
 // Concatenate a vector of cuDF tables into a single table
-std::unique_ptr<cudf::table> concatenateTables(
+[[nodiscard]] std::unique_ptr<cudf::table> concatenateTables(
     std::vector<std::unique_ptr<cudf::table>> tables,
     rmm::cuda_stream_view stream);
 
 // Concatenate a vector of cuDF tables into a single table.
 // This function joins the streams owned by individual tables on the passed
 // stream. Inputs are not safe to use after calling this function.
-std::unique_ptr<cudf::table> getConcatenatedTable(
+[[nodiscard]] std::unique_ptr<cudf::table> getConcatenatedTable(
     std::vector<CudfVectorPtr>& tables,
     rmm::cuda_stream_view stream);
 

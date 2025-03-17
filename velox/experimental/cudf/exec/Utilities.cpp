@@ -14,10 +14,6 @@
  * limitations under the License.
  */
 
-#include <cstdlib>
-#include <memory>
-#include <string_view>
-
 #include "velox/experimental/cudf/exec/Utilities.h"
 
 #include <common/base/Exceptions.h>
@@ -36,32 +32,36 @@
 #include <cudf/utilities/error.hpp>
 #include <cudf/utilities/memory_resource.hpp>
 
+#include <cstdlib>
+#include <memory>
+#include <string_view>
+
 namespace facebook::velox::cudf_velox {
 
 namespace {
-auto make_cuda_mr() {
+[[nodiscard]] auto make_cuda_mr() {
   return std::make_shared<rmm::mr::cuda_memory_resource>();
 }
 
-auto make_pool_mr() {
+[[nodiscard]] auto make_pool_mr() {
   return rmm::mr::make_owning_wrapper<rmm::mr::pool_memory_resource>(
       make_cuda_mr(), rmm::percent_of_free_device_memory(50));
 }
 
-auto make_async_mr() {
+[[nodiscard]] auto make_async_mr() {
   return std::make_shared<rmm::mr::cuda_async_memory_resource>();
 }
 
-auto make_managed_mr() {
+[[nodiscard]] auto make_managed_mr() {
   return std::make_shared<rmm::mr::managed_memory_resource>();
 }
 
-auto make_arena_mr() {
+[[nodiscard]] auto make_arena_mr() {
   return rmm::mr::make_owning_wrapper<rmm::mr::arena_memory_resource>(
       make_cuda_mr());
 }
 
-auto make_managed_pool_mr() {
+[[nodiscard]] auto make_managed_pool_mr() {
   return rmm::mr::make_owning_wrapper<rmm::mr::pool_memory_resource>(
       make_managed_mr(), rmm::percent_of_free_device_memory(50));
 }
@@ -105,7 +105,7 @@ std::unique_ptr<cudf::table> concatenateTables(
       tables.begin(),
       tables.end(),
       std::back_inserter(tableViews),
-      [&](auto const& tbl) { return tbl->view(); });
+      [&](const auto& tbl) { return tbl->view(); });
   return cudf::concatenate(
       tableViews, stream, cudf::get_current_device_resource_ref());
 }
@@ -122,7 +122,7 @@ std::unique_ptr<cudf::table> getConcatenatedTable(
   inputStreams.reserve(tables.size());
   tableViews.reserve(tables.size());
 
-  for (auto const& table : tables) {
+  for (const auto& table : tables) {
     VELOX_CHECK_NOT_NULL(table);
     tableViews.push_back(table->getTableView());
     inputStreams.push_back(table->stream());

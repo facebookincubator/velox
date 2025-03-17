@@ -13,9 +13,6 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#include "velox/exec/Driver.h"
-#include "velox/exec/Operator.h"
-#include "velox/vector/ComplexVector.h"
 
 #include <cudf/concatenate.hpp>
 #include <cudf/sorting.hpp>
