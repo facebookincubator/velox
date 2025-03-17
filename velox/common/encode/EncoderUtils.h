@@ -75,14 +75,13 @@ constexpr bool checkReverseIndex(
 
 template <typename ReverseIndexType>
 Status base64ReverseLookup(
-     char encodedChar,
-     const ReverseIndexType& reverseIndex,
-     uint8_t& reverseLookupValue) {
+    char encodedChar,
+    const ReverseIndexType& reverseIndex,
+    uint8_t& reverseLookupValue) {
   reverseLookupValue = reverseIndex[static_cast<uint8_t>(encodedChar)];
   if (reverseLookupValue >= 0x40) {
-    return Status::UserError(fmt::format(
-        "decode() - contains invalid character '{}'",
-        encodedChar));
+    return Status::UserError(
+        fmt::format("decode() - contains invalid character '{}'", encodedChar));
   }
   return Status::OK();
 }

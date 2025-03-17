@@ -20,7 +20,7 @@
 
 namespace facebook::velox::encoding {
 class EncoderUtilsTest : public ::testing::Test {
-protected:
+ protected:
   const int binaryBlockByteSize = 3;
   const int encodedBlockByteSize = 4;
 };
@@ -41,26 +41,49 @@ TEST_F(EncoderUtilsTest, CalculateDecodedSizeTest) {
   size_t decodedSize = 0;
 
   EXPECT_EQ(
-      calculateDecodedSize("abcdabcd", inputSize, decodedSize, binaryBlockByteSize, encodedBlockByteSize),
+      calculateDecodedSize(
+          "abcdabcd",
+          inputSize,
+          decodedSize,
+          binaryBlockByteSize,
+          encodedBlockByteSize),
       Status::OK());
   EXPECT_EQ(decodedSize, 6);
 
   inputSize = 8;
   EXPECT_EQ(
-      calculateDecodedSize("abcdab==", inputSize, decodedSize, binaryBlockByteSize, encodedBlockByteSize),
+      calculateDecodedSize(
+          "abcdab==",
+          inputSize,
+          decodedSize,
+          binaryBlockByteSize,
+          encodedBlockByteSize),
       Status::OK());
   EXPECT_EQ(decodedSize, 4);
 
   EXPECT_EQ(
-      calculateDecodedSize("abcdab=", inputSize, decodedSize, binaryBlockByteSize, encodedBlockByteSize),
+      calculateDecodedSize(
+          "abcdab=",
+          inputSize,
+          decodedSize,
+          binaryBlockByteSize,
+          encodedBlockByteSize),
       Status::UserError("decode() - invalid input string length."));
 }
 
 TEST_F(EncoderUtilsTest, CalculateEncodedSizeTest) {
-  EXPECT_EQ(calculateEncodedSize(3, true, binaryBlockByteSize, encodedBlockByteSize), 4);
-  EXPECT_EQ(calculateEncodedSize(3, false, binaryBlockByteSize, encodedBlockByteSize), 4);
-  EXPECT_EQ(calculateEncodedSize(6, true, binaryBlockByteSize, encodedBlockByteSize), 8);
-  EXPECT_EQ(calculateEncodedSize(0, true, binaryBlockByteSize, encodedBlockByteSize), 0);
+  EXPECT_EQ(
+      calculateEncodedSize(3, true, binaryBlockByteSize, encodedBlockByteSize),
+      4);
+  EXPECT_EQ(
+      calculateEncodedSize(3, false, binaryBlockByteSize, encodedBlockByteSize),
+      4);
+  EXPECT_EQ(
+      calculateEncodedSize(6, true, binaryBlockByteSize, encodedBlockByteSize),
+      8);
+  EXPECT_EQ(
+      calculateEncodedSize(0, true, binaryBlockByteSize, encodedBlockByteSize),
+      0);
 }
 
 TEST_F(EncoderUtilsTest, Base64ReverseLookupTest) {
@@ -71,13 +94,11 @@ TEST_F(EncoderUtilsTest, Base64ReverseLookupTest) {
   uint8_t reverseLookupValue = 0;
 
   EXPECT_EQ(
-      base64ReverseLookup('A', reverseIndex, reverseLookupValue),
-      Status::OK());
+      base64ReverseLookup('A', reverseIndex, reverseLookupValue), Status::OK());
   EXPECT_EQ(reverseLookupValue, 0);
 
   EXPECT_EQ(
-      base64ReverseLookup('B', reverseIndex, reverseLookupValue),
-      Status::OK());
+      base64ReverseLookup('B', reverseIndex, reverseLookupValue), Status::OK());
   EXPECT_EQ(reverseLookupValue, 1);
 
   EXPECT_EQ(
@@ -86,7 +107,8 @@ TEST_F(EncoderUtilsTest, Base64ReverseLookupTest) {
 }
 
 TEST_F(EncoderUtilsTest, CheckForwardIndexTest) {
-  constexpr std::string_view charset = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+  constexpr std::string_view charset =
+      "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
   std::array<uint8_t, 64> reverseIndex{};
 
   for (size_t i = 0; i < charset.size(); ++i) {
@@ -97,14 +119,16 @@ TEST_F(EncoderUtilsTest, CheckForwardIndexTest) {
 }
 
 TEST_F(EncoderUtilsTest, FindCharacterInCharsetTest) {
-  constexpr std::string_view charset = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+  constexpr std::string_view charset =
+      "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
 
   EXPECT_TRUE(findCharacterInCharset(charset, 0, 'A'));
   EXPECT_FALSE(findCharacterInCharset(charset, 0, 'z'));
 }
 
 TEST_F(EncoderUtilsTest, CheckReverseIndexTest) {
-  constexpr std::string_view charset = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+  constexpr std::string_view charset =
+      "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
   std::array<uint8_t, 256> reverseIndex{};
 
   reverseIndex.fill(255);
