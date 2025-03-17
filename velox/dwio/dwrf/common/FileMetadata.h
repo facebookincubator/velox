@@ -955,6 +955,11 @@ class StripeInformationWriteWrapper : public ProtoWriteWrapperBase {
                                  : orcPtr()->set_footerlength(footerLength);
   }
 
+  void setGroupSize(uint64_t groupSize) {
+    VELOX_CHECK_EQ(format_, DwrfFormat::kDwrf);
+    dwrfPtr()->set_groupsize(groupSize);
+  }
+
   std::string* addKeyMetadata() {
     VELOX_CHECK_EQ(format_, DwrfFormat::kDwrf);
     return dwrfPtr()->add_keymetadata();
@@ -1425,6 +1430,12 @@ class FooterWriteWrapper : public ProtoWriteWrapperBase {
                                         : orcPtr()->numberofrows();
   }
 
+  // DWRF-specific fields
+  uint64_t rawDataSize() const {
+    VELOX_CHECK_EQ(format_, DwrfFormat::kDwrf);
+    return dwrfPtr()->rawdatasize();
+  }
+
   inline int stripesSize() const {
     VELOX_CHECK_EQ(format_, DwrfFormat::kDwrf);
     return dwrfPtr()->stripes_size();
@@ -1433,6 +1444,13 @@ class FooterWriteWrapper : public ProtoWriteWrapperBase {
   inline proto::Encryption* mutableEncryption() {
     VELOX_CHECK_EQ(format_, DwrfFormat::kDwrf);
     return dwrfPtr()->mutable_encryption();
+  }
+
+  const ::google::protobuf::RepeatedPtrField<
+      ::facebook::velox::dwrf::proto::ColumnStatistics>&
+  statistics() const {
+    VELOX_CHECK_EQ(format_, DwrfFormat::kDwrf);
+    return dwrfPtr()->statistics();
   }
 
  private:
