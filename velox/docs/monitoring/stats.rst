@@ -131,6 +131,24 @@ These stats are reported only by TableWriter operator
      -
      - The number of times that we scale writers for a non-partitioned table.
 
+LookupIndexJoin
+---------------
+These stats are reported only by IndexLookupJoin operator
+
+.. list-table::
+   :widths: 50 25 50
+   :header-rows: 1
+
+   * - Stats
+     - Unit
+     - Description
+   * - lookupWallNanos
+     - nanos
+     - The walltime in nanoseconds that the index connector do the lookup.
+   * - lookupCpuNanos
+     - nanos
+     - The cpu time in nanoseconds that the index connector do the lookup.
+
 Spilling
 --------
 These stats are reported by operators that support spilling.

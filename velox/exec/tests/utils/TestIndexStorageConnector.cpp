@@ -17,6 +17,9 @@
 #include "velox/exec/tests/utils/TestIndexStorageConnector.h"
 
 #include "velox/common/testutil/TestValue.h"
+#include "velox/common/time/CpuWallTimer.h"
+#include "velox/exec/IndexLookupJoin.h"
+#include "velox/exec/OperatorUtils.h"
 #include "velox/expression/Expr.h"
 #include "velox/expression/FieldReference.h"
 
@@ -24,7 +27,7 @@ using facebook::velox::common::testutil::TestValue;
 namespace facebook::velox::exec::test {
 namespace {
 core::TypedExprPtr toJoinConditionExpr(
-    const std::vector<std::shared_ptr<core::IndexJoinCondition>>&
+    const std::vector<std::shared_ptr<core::IndexLookupCondition>>&
         joinConditions,
     const std::shared_ptr<TestIndexTable>& indexTable,
     const RowTypePtr& inputType,
@@ -41,7 +44,8 @@ core::TypedExprPtr toJoinConditionExpr(
     auto indexColumnExpr = std::make_shared<core::FieldAccessTypedExpr>(
         keyType->findChild(condition->key->name()), condition->key->name());
     if (auto inCondition =
-            std::dynamic_pointer_cast<core::InIndexJoinCondition>(condition)) {
+            std::dynamic_pointer_cast<core::InIndexLookupCondition>(
+                condition)) {
       conditionExprs.push_back(std::make_shared<const core::CallTypedExpr>(
           BOOLEAN(),
           std::vector<core::TypedExprPtr>{
@@ -50,7 +54,7 @@ core::TypedExprPtr toJoinConditionExpr(
       continue;
     }
     if (auto betweenCondition =
-            std::dynamic_pointer_cast<core::BetweenIndexJoinCondition>(
+            std::dynamic_pointer_cast<core::BetweenIndexLookupCondition>(
                 condition)) {
       conditionExprs.push_back(std::make_shared<const core::CallTypedExpr>(
           BOOLEAN(),
@@ -201,6 +205,24 @@ void TestIndexSource::initOutputProjections() {
   VELOX_CHECK_EQ(lookupOutputProjections_.size(), outputType_->size());
 }
 
+void TestIndexSource::recordCpuTiming(const CpuWallTiming& timing) {
+  VELOX_CHECK_EQ(timing.count, 1);
+  std::lock_guard<std::mutex> l(mutex_);
+  addOperatorRuntimeStats(
+      IndexLookupJoin::kConnectorLookupWallTime,
+      RuntimeCounter(timing.wallNanos, RuntimeCounter::Unit::kNanos),
+      runtimeStats_);
+  addOperatorRuntimeStats(
+      IndexLookupJoin::kConnectorLookupCpuTime,
+      RuntimeCounter(timing.cpuNanos, RuntimeCounter::Unit::kNanos),
+      runtimeStats_);
+}
+
+std::unordered_map<std::string, RuntimeMetric> TestIndexSource::runtimeStats() {
+  std::lock_guard<std::mutex> l(mutex_);
+  return runtimeStats_;
+}
+
 TestIndexSource::ResultIterator::ResultIterator(
     std::shared_ptr<TestIndexSource> source,
     const LookupRequest& request,
@@ -278,8 +300,14 @@ void TestIndexSource::ResultIterator::asyncLookup(
   auto asyncPromise =
       std::make_shared<ContinuePromise>(std::move(lookupPromise));
   executor_->add([this, size, promise = std::move(asyncPromise)]() mutable {
+    TestValue::adjust(
+        "facebook::velox::exec::test::TestIndexSource::ResultIterator::asyncLookup",
+        this);
     VELOX_CHECK(!asyncResult_.has_value());
     VELOX_CHECK(hasPendingRequest_);
+    TestValue::adjust(
+        "facebook::velox::exec::test::TestIndexSource::ResultIterator::asyncLookup",
+        this);
     SCOPE_EXIT {
       hasPendingRequest_ = false;
       promise->setValue();
@@ -295,6 +323,11 @@ TestIndexSource::ResultIterator::syncLookup(vector_size_t size) {
     return nullptr;
   }
 
+  CpuWallTiming timing;
+  SCOPE_EXIT {
+    source_->recordCpuTiming(timing);
+  };
+  CpuWallTimer timer{timing};
   try {
     TestValue::adjust(
         "facebook::velox::exec::test::TestIndexSource::ResultIterator::syncLookup",
@@ -355,6 +388,7 @@ void TestIndexSource::ResultIterator::evalJoinConditions() {
     return;
   }
 
+  std::lock_guard<std::mutex> l(source_->mutex_);
   const auto conditionInput = createConditionInput();
   source_->connectorQueryCtx_->expressionEvaluator()->evaluate(
       source_->conditionExprSet_.get(),
@@ -412,7 +446,7 @@ TestIndexConnector::TestIndexConnector(
 std::shared_ptr<connector::IndexSource> TestIndexConnector::createIndexSource(
     const RowTypePtr& inputType,
     size_t numJoinKeys,
-    const std::vector<core::IndexJoinConditionPtr>& joinConditions,
+    const std::vector<core::IndexLookupConditionPtr>& joinConditions,
     const RowTypePtr& outputType,
     const std::shared_ptr<connector::ConnectorTableHandle>& tableHandle,
     const std::unordered_map<

@@ -52,7 +52,7 @@ namespace {
 #define CHECKED_GROW(pool, growBytes, reservationBytes) \
   try {                                                 \
     checkedGrow(pool, growBytes, reservationBytes);     \
-  } catch (const VeloxRuntimeError& e) {                \
+  } catch (const VeloxRuntimeError&) {                  \
     freeCapacity(growBytes);                            \
     throw;                                              \
   }
@@ -130,17 +130,6 @@ uint64_t SharedArbitrator::ExtraConfig::maxMemoryArbitrationTimeNs(
                  configs,
                  kMaxMemoryArbitrationTime,
                  std::string(kDefaultMaxMemoryArbitrationTime))))
-      .count();
-}
-
-// TODO: Remove after name change complete
-uint64_t SharedArbitrator::ExtraConfig::memoryReclaimMaxWaitTimeNs(
-    const std::unordered_map<std::string, std::string>& configs) {
-  return std::chrono::duration_cast<std::chrono::nanoseconds>(
-             config::toDuration(getConfig<std::string>(
-                 configs,
-                 kMemoryReclaimMaxWaitTime,
-                 std::string(kDefaultMemoryReclaimMaxWaitTime))))
       .count();
 }
 

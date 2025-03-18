@@ -41,11 +41,8 @@ class SelectiveRepeatedColumnReader : public SelectiveColumnReader {
       FormatParams& params,
       velox::common::ScanSpec& scanSpec,
       std::shared_ptr<const dwio::common::TypeWithId> type)
-      : SelectiveColumnReader(
-            requestedType,
-            std::move(type),
-            params,
-            scanSpec) {}
+      : SelectiveColumnReader(requestedType, std::move(type), params, scanSpec),
+        nestedRowsHolder_(memoryPool_) {}
 
   /// Reads 'numLengths' next lengths into 'result'. If 'nulls' is
   /// non-null, each kNull bit signifies a null with a length of 0 to
@@ -72,6 +69,21 @@ class SelectiveRepeatedColumnReader : public SelectiveColumnReader {
   // Apply filter on parent level.  Child filtering should be handled separately
   // in subclasses.
   RowSet applyFilter(const RowSet& rows);
+
+  vector_size_t prunedLengthAt(vector_size_t i) const {
+    return std::min(scanSpec_->maxArrayElementsCount(), allLengths_[i]);
+  }
+
+  static vector_size_t
+  advanceNestedRows(const RowSet& rows, vector_size_t i, vector_size_t last) {
+    while (i + 16 < rows.size() && rows[i + 16] < last) {
+      i += 16;
+    }
+    while (i < rows.size() && rows[i] < last) {
+      ++i;
+    }
+    return i;
+  }
 
   BufferPtr allLengthsHolder_;
   vector_size_t* allLengths_;
