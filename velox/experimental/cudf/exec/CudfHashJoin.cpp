@@ -332,7 +332,7 @@ CudfHashJoinProbe::CudfHashJoinProbe(
     // create ast tree
     std::vector<PrecomputeInstruction> right_precompute_instructions;
     std::vector<PrecomputeInstruction> left_precompute_instructions;
-    if (joinNode_->isRightSemiFilterJoin() || joinNode_->isRightJoin()) {
+    if (joinNode_->isRightJoin() || joinNode_->isRightSemiFilterJoin()) {
       create_ast_tree(
           exprs.exprs()[0],
           tree_,
@@ -448,12 +448,24 @@ RowVectorPtr CudfHashJoinProbe::getOutput() {
           left_table_view.select(left_key_indices_), std::nullopt, stream);
     }
   } else if (joinNode_->isRightJoin()) {
-    std::tie(right_join_indices, left_join_indices) = cudf::left_join(
-        right_table_view.select(right_key_indices_),
-        left_table_view.select(left_key_indices_),
-        cudf::null_equality::EQUAL,
-        stream,
-        cudf::get_current_device_resource_ref());
+    if (joinNode_->filter()) {
+      std::tie(right_join_indices, left_join_indices) = cudf::mixed_left_join(
+          right_table_view.select(right_key_indices_),
+          left_table_view.select(left_key_indices_),
+          right_table_view,
+          left_table_view,
+          tree_.back(),
+          cudf::null_equality::EQUAL,
+          std::nullopt,
+          stream);
+    } else {
+      std::tie(right_join_indices, left_join_indices) = cudf::left_join(
+          right_table_view.select(right_key_indices_),
+          left_table_view.select(left_key_indices_),
+          cudf::null_equality::EQUAL,
+          stream,
+          cudf::get_current_device_resource_ref());
+    }
   } else if (joinNode_->isAntiJoin()) {
     if (joinNode_->filter()) {
       left_join_indices = cudf::mixed_left_anti_join(

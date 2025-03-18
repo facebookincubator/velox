@@ -245,12 +245,9 @@ bool can_be_evaluated(const std::shared_ptr<velox::exec::Expr>& expr) {
 } // namespace detail
 
 struct AstContext {
-  // All members are references
   cudf::ast::tree& tree;
   std::vector<std::unique_ptr<cudf::scalar>>& scalars;
-  cudf::ast::expression const& multiple_inputs_to_pair_wise(
-      const std::shared_ptr<velox::exec::Expr>& expr);
-  const std::vector<std::reference_wrapper<const RowTypePtr>> inputRowSchema;
+  const std::vector<RowTypePtr> inputRowSchema;
   const std::vector<std::reference_wrapper<std::vector<PrecomputeInstruction>>>
       precompute_instructions;
   cudf::ast::expression const& push_expr_to_tree(
@@ -258,6 +255,9 @@ struct AstContext {
   cudf::ast::expression const& add_precompute_instruction(
       std::string const& name,
       std::string const& instruction);
+  cudf::ast::expression const& multiple_inputs_to_pair_wise(
+      const std::shared_ptr<velox::exec::Expr>& expr);
+  static bool can_be_evaluated(const std::shared_ptr<velox::exec::Expr>& expr);
 };
 
 // Create tree from Expr
