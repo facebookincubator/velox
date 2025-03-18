@@ -18,6 +18,7 @@
 
 #ifndef __CUDACC_RTC__
 #include <string.h>
+#include <string>
 #endif
 #include <cstdint>
 
@@ -137,6 +138,8 @@ struct AllocationRange {
   bool empty() {
     return capacity == 0;
   }
+
+  std::string toString(int32_t rowSize);
 #endif
   bool fixedFull{true};
   bool variableFull{true};
@@ -190,6 +193,8 @@ struct HashPartitionAllocator {
     target = ranges[0].trimFixed(target);
     ranges[1].trimFixed(target);
   }
+
+  std::string toString();
 #endif
 
   const int32_t rowSize{0};
