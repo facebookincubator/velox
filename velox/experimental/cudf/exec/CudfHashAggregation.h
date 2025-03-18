@@ -125,6 +125,12 @@ class CudfHashAggregation : public exec::Operator, public NvtxHelper {
   bool ignoreNullKeys_;
 
   std::vector<cudf_velox::CudfVectorPtr> inputs_;
+
+  // This is for final aggregation to keep reducing the amount of memory it has
+  // to hold on to. It will try to
+  void computeInterimGroupby();
+  std::unique_ptr<cudf::table> partial_output_;
+  rmm::cuda_stream_view stream_;
 };
 
 } // namespace facebook::velox::cudf_velox
