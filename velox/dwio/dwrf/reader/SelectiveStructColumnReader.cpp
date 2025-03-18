@@ -31,6 +31,7 @@ SelectiveStructColumnReader::SelectiveStructColumnReader(
     common::ScanSpec& scanSpec,
     bool isRoot)
     : SelectiveStructColumnReaderBase(
+          columnReaderOptions,
           requestedType,
           fileType,
           params,
