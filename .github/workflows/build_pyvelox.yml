@@ -86,8 +86,6 @@ jobs:
           echo "build_version=${VERSION}a${COMMITS_SINCE_TAG}" >> $GITHUB_OUTPUT
 
       - name: "Restore ccache"
-        # CCache doesn't hit in cibuildwheel
-        if: startsWith(matrix.os, 'macos')
         uses: apache/infrastructure-actions/stash/restore@3354c1565d4b0e335b78a76aedd82153a9e144d4
         id: restore-cache
         with:
@@ -138,18 +136,17 @@ jobs:
           CIBW_MANYLINUX_X86_64_IMAGE: "ghcr.io/facebookincubator/velox-dev:pyvelox"
           CIBW_ENVIRONMENT_PASS_LINUX:  "BUILD_VERSION"
           # Don't waste time writing out to cache
-          CIBW_ENVIRONMENT_LINUX: "CCACHE_DISABLE=true"
+          CIBW_ENVIRONMENT_LINUX: "CCACHE_DIR=/host${{ github.workspace }}/ccache"
           CIBW_TEST_EXTRAS: "tests"
           CIBW_TEST_COMMAND: "cd {project}/pyvelox && python -m unittest -v"
           CIBW_TEST_SKIP: "*"
+          # for macos
           CCACHE_DIR: "${{ github.workspace }}/ccache" 
           BUILD_VERSION: "${{ inputs.version || steps.version.outputs.build_version }}"
         with:
           output-dir: wheelhouse
 
       - name: "Save ccache"
-        # CCache doesn't hit in cibuildwheel
-        if: startsWith(matrix.os, 'macos')
         uses: apache/infrastructure-actions/stash/save@3354c1565d4b0e335b78a76aedd82153a9e144d4
         with:
           path: "ccache"
