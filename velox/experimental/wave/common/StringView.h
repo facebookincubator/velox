@@ -17,8 +17,8 @@
 #pragma once
 
 #include <assert.h>
-#include <stdint.h>
 #include "velox/experimental/wave/common/CompilerDefines.h"
+#include "velox/experimental/wave/common/StdInt.h"
 
 namespace facebook::velox::wave {
 

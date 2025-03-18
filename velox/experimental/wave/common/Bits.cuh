@@ -16,9 +16,9 @@
 
 #pragma once
 
-#include <cstdint>
 #include "velox/experimental/wave/common/BitUtil.cuh"
 #include "velox/experimental/wave/common/Scan.cuh"
+#include "velox/experimental/wave/common/StdInt.h"
 
 namespace facebook::velox::wave {
 

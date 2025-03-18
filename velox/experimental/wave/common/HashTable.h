@@ -19,7 +19,7 @@
 #ifndef __CUDACC_RTC__
 #include <string.h>
 #endif
-#include <cstdint>
+#include "velox/experimental/wave/common/StdInt.h"
 
 /// Structs for tagged GPU hash table. Can be inclued in both Velox .cpp and
 /// .cu.

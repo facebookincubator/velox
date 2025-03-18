@@ -39,6 +39,7 @@ stringify "velox/experimental/wave/common/StringView.cuh" >> $JIT/Headers.h
 stringify "velox/experimental/wave/common/StringView.h" >> $JIT/Headers.h
 stringify "velox/experimental/wave/common/Hash.h" >> $JIT/Headers.h
 stringify "velox/experimental/wave/common/CompilerDefines.h" >> $JIT/Headers.h
+stringify "velox/experimental/wave/common/StdInt.h" >> $JIT/Headers.h
 
 echo "}" >> $JIT/Headers.h
 
