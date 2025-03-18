@@ -1148,3 +1148,31 @@ TEST(TypeTest, toSummaryString) {
       "ROW(BOOLEAN, INTEGER, VARCHAR, ARRAY, MAP, ROW)",
       rowType->toSummaryString({.maxChildren = 10}));
 }
+
+TEST(TypeTest, typeCheck) {
+  EXPECT_TRUE(INTEGER()->isInteger());
+  EXPECT_TRUE(BIGINT()->isBigint());
+  EXPECT_TRUE(HUGEINT()->isHugeint());
+
+  EXPECT_TRUE(DATE()->isDate());
+  EXPECT_FALSE(DATE()->isInteger());
+
+  // Short decimal.
+  const auto shortDecimal = DECIMAL(10, 5);
+  EXPECT_TRUE(shortDecimal->isDecimal());
+  EXPECT_TRUE(shortDecimal->isShortDecimal());
+  EXPECT_FALSE(shortDecimal->isLongDecimal());
+  EXPECT_FALSE(shortDecimal->isBigint());
+  // Long decimal.
+  const auto longDecimal = DECIMAL(30, 5);
+  EXPECT_TRUE(longDecimal->isDecimal());
+  EXPECT_TRUE(longDecimal->isLongDecimal());
+  EXPECT_FALSE(longDecimal->isShortDecimal());
+  EXPECT_FALSE(longDecimal->isHugeint());
+
+  EXPECT_TRUE(INTERVAL_YEAR_MONTH()->isIntervalYearMonth());
+  EXPECT_FALSE(INTERVAL_YEAR_MONTH()->isInteger());
+
+  EXPECT_TRUE(INTERVAL_DAY_TIME()->isIntervalDayTime());
+  EXPECT_FALSE(INTERVAL_DAY_TIME()->isBigint());
+}
