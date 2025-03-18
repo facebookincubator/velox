@@ -300,9 +300,7 @@ class DataSource {
 
   /// Close this data source. The function will be called once
   /// TableScan::close() is being called.
-  virtual void close() {
-
-  }
+  virtual void close() {}
 };
 
 class IndexSource {
