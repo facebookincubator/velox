@@ -329,13 +329,14 @@ DwrfRowReader::DwrfRowReader(
     makeProjectedNodes(*getReader().schemaWithId(), *projectedNodes_);
   }
 
+  // Reader options must be configured before calling 'getUnitLoader()',
+  // which triggers 'SelectiveDwrfReader::build'.
+  columnReaderOptions_ = dwio::common::makeColumnReaderOptions(
+      readerBaseShared()->readerOptions());
   unitLoader_ = getUnitLoader();
   if (!emptyFile()) {
     getReader().loadCache();
   }
-
-  columnReaderOptions_ = dwio::common::makeColumnReaderOptions(
-      readerBaseShared()->readerOptions());
 }
 
 std::unique_ptr<ColumnReader>& DwrfRowReader::getColumnReader() {
