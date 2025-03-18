@@ -100,6 +100,14 @@ jobs:
           path: "dependencies"
           key: dependencies-pyvelox-${{ matrix.os }}-${{ hashFiles('scripts/setup-macos.sh') }}
 
+      - name: Install macOS dependencies from brew
+        if: startsWith(matrix.os, 'macos')
+        run: |
+            source scripts/setup-macos.sh
+            install_build_prerequisites
+            install_velox_deps_from_brew
+
+
       - name: Install macOS dependencies
         if: ${{ startsWith(matrix.os, 'macos') && steps.restore-deps.outputs.stash-hit != 'true' }}
         env:
