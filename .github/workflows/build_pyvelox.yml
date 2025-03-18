@@ -135,8 +135,10 @@ jobs:
           CIBW_SKIP: "*musllinux* cp36-*"
           CIBW_MANYLINUX_X86_64_IMAGE: "ghcr.io/facebookincubator/velox-dev:pyvelox"
           CIBW_ENVIRONMENT_PASS_LINUX:  "BUILD_VERSION"
+          CIBW_BEFORE_ALL: "ccache -sz"
           # Don't waste time writing out to cache
           CIBW_ENVIRONMENT_LINUX: "CCACHE_DIR=/host${{ github.workspace }}/ccache"
+          CIBW_BEFORE_TEST: "ccache -s"
           CIBW_TEST_EXTRAS: "tests"
           CIBW_TEST_COMMAND: "cd {project}/pyvelox && python -m unittest -v"
           CIBW_TEST_SKIP: "*"
