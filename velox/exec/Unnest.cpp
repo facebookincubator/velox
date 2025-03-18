@@ -30,7 +30,8 @@ Unnest::Unnest(
           unnestNode->id(),
           "Unnest"),
       withOrdinality_(unnestNode->withOrdinality()),
-      maxOutputSize_(outputBatchRows()) {
+      maxOutputSize_(outputBatchRows()),
+      isOuter_(unnestNode->isOuter()) {
   const auto& inputType = unnestNode->sources()[0]->outputType();
   const auto& unnestVariables = unnestNode->unnestVariables();
   for (const auto& variable : unnestVariables) {
@@ -72,7 +73,9 @@ void Unnest::addInput(RowVectorPtr input) {
   rawSizes_.resize(unnestChannels_.size());
   rawOffsets_.resize(unnestChannels_.size());
   rawIndices_.resize(unnestChannels_.size());
-
+  if (isOuter_) {
+    rawOrdinalityIsNull_.resize(size, false);
+  }
   for (auto channel = 0; channel < unnestChannels_.size(); ++channel) {
     const auto& unnestVector = input_->childAt(unnestChannels_[channel]);
 
@@ -97,10 +100,19 @@ void Unnest::addInput(RowVectorPtr input) {
     auto* currentIndices = rawIndices_[channel];
     for (auto row = 0; row < size; ++row) {
       if (!currentDecoded.isNullAt(row)) {
-        const auto unnestSize = currentSizes[currentIndices[row]];
+        auto unnestSize = currentSizes[currentIndices[row]];
+        if (isOuter_) {
+          if (unnestSize == 0) {
+            unnestSize = 1;
+            rawOrdinalityIsNull_[row] = true;
+          }
+        }
         if (rawMaxSizes_[row] < unnestSize) {
           rawMaxSizes_[row] = unnestSize;
         }
+      } else if (isOuter_) {
+        rawMaxSizes_[row] = 1;
+        rawOrdinalityIsNull_[row] = true;
       }
     }
   }
@@ -127,6 +139,7 @@ RowVectorPtr Unnest::getOutput() {
   }
 
   const auto output = generateOutput(rowRange);
+
   if (rowRange.lastRowEnd.has_value()) {
     // The last row is not processed completely.
     firstRowStart_ = rowRange.lastRowEnd.value();
@@ -268,10 +281,17 @@ VectorPtr Unnest::generateOrdinalityVector(const RowRange& range) {
 
   VELOX_DCHECK_GT(range.size, 0);
 
+  vector_size_t index = 0;
   range.forEachRow(
-      [&](vector_size_t /*row*/, vector_size_t start, vector_size_t size) {
+      [&](vector_size_t row, vector_size_t start, vector_size_t size) {
+        if (isOuter_) {
+          if (rawOrdinalityIsNull_[row]) {
+            ordinalityVector->setNull(index, true);
+          }
+        }
         std::iota(rawOrdinality, rawOrdinality + size, start + 1);
         rawOrdinality += size;
+        index += size;
       },
       rawMaxSizes_,
       firstRowStart_);
