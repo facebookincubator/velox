@@ -954,8 +954,8 @@ TEST_P(MemoryPoolTest, customizedGetPreferredSize) {
       checkedPlus<size_t>(size, AlignedBuffer::kPaddedSize);
   {
     setupMemory({
-        .getPreferredSize = [](int64_t size) { return size; },
         .allocatorCapacity = kMemoryCapBytes,
+        .getPreferredSize = [](int64_t size) { return size; },
     });
     MemoryManager& manager = *getMemoryManager();
     auto root = manager.addRootPool("same size");
@@ -980,8 +980,8 @@ TEST_P(MemoryPoolTest, customizedGetPreferredSize) {
 
   {
     setupMemory({
-        .getPreferredSize = [](int64_t size) { return size * 2; },
         .allocatorCapacity = kMemoryCapBytes,
+        .getPreferredSize = [](int64_t size) { return size * 2; },
     });
     MemoryManager& manager = *getMemoryManager();
     auto root = manager.addRootPool("double size");
@@ -1009,8 +1009,8 @@ TEST_P(MemoryPoolTest, customizedGetPreferredSize) {
   // Invalid preferred size callback.
   {
     setupMemory({
-        .getPreferredSize = [](int64_t size) { return size - 1; },
         .allocatorCapacity = kMemoryCapBytes,
+        .getPreferredSize = [](int64_t size) { return size - 1; },
     });
     MemoryManager& manager = *getMemoryManager();
     auto root = manager.addRootPool("bad sizer");
