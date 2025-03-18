@@ -297,6 +297,12 @@ class DataSource {
   virtual std::shared_ptr<wave::WaveDataSource> toWaveDataSource() {
     VELOX_UNSUPPORTED();
   }
+
+  /// Close this data source. The function will be called once
+  /// TableScan::close() is being called.
+  virtual void close() {
+
+  }
 };
 
 class IndexSource {
