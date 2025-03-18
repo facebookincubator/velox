@@ -46,7 +46,7 @@ jobs:
     name: Build wheels on ${{ matrix.os }}
     runs-on: ${{ matrix.os }}
     strategy:
-      fail-fast: false
+      fail-fast: true
       matrix:
         os: [8-core-ubuntu, macos-13, macos-14]
     steps:
@@ -103,19 +103,19 @@ jobs:
       - name: Install macOS dependencies from brew
         if: startsWith(matrix.os, 'macos')
         run: |
+            export INSTALL_PREFIX="$GITHUB_WORKSPACE/dependencies"
+            echo "CMAKE_PREFIX_PATH=$INSTALL_PREFIX" >> $GITHUB_ENV
+            echo "DYLD_LIBRARY_PATH=$INSTALL_PREFIX/lib:$DYLD_LIBRARY_PATH" >> $GITHUB_ENV
+
             source scripts/setup-macos.sh
             install_build_prerequisites
             install_velox_deps_from_brew
-
 
       - name: Install macOS dependencies
         if: ${{ startsWith(matrix.os, 'macos') && steps.restore-deps.outputs.stash-hit != 'true' }}
         env:
           MACOSX_DEPLOYMENT_TARGET: "13.0"
         run: |
-          export INSTALL_PREFIX="$GITHUB_WORKSPACE/dependencies"
-          echo "CMAKE_PREFIX_PATH=$INSTALL_PREFIX" >> $GITHUB_ENV
-          echo "DYLD_LIBRARY_PATH=$INSTALL_PREFIX/lib:$DYLD_LIBRARY_PATH" >> $GITHUB_ENV
           bash scripts/setup-macos.sh
 
       - name: "Save macOS Dependencies"
