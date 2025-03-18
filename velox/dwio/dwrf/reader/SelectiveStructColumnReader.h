@@ -25,12 +25,14 @@ class SelectiveStructColumnReaderBase
     : public dwio::common::SelectiveStructColumnReaderBase {
  public:
   SelectiveStructColumnReaderBase(
+      const dwio::common::ColumnReaderOptions& columnReaderOptions,
       const TypePtr& requestedType,
       const std::shared_ptr<const dwio::common::TypeWithId>& fileType,
       DwrfParams& params,
       common::ScanSpec& scanSpec,
       bool isRoot = false)
       : dwio::common::SelectiveStructColumnReaderBase(
+            columnReaderOptions,
             requestedType,
             fileType,
             params,
