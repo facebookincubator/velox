@@ -954,8 +954,8 @@ TEST_P(MemoryPoolTest, customizedGetPreferredSize) {
       checkedPlus<size_t>(size, AlignedBuffer::kPaddedSize);
   {
     setupMemory({
-        .getPreferredSize = [](int64_t size) { return size; },
         .allocatorCapacity = kMemoryCapBytes,
+        .getPreferredSize = [](int64_t size) { return size; },
     });
     MemoryManager& manager = *getMemoryManager();
     auto root = manager.addRootPool("same size");
@@ -980,8 +980,8 @@ TEST_P(MemoryPoolTest, customizedGetPreferredSize) {
 
   {
     setupMemory({
-        .getPreferredSize = [](int64_t size) { return size * 2; },
         .allocatorCapacity = kMemoryCapBytes,
+        .getPreferredSize = [](int64_t size) { return size * 2; },
     });
     MemoryManager& manager = *getMemoryManager();
     auto root = manager.addRootPool("double size");
@@ -1009,8 +1009,8 @@ TEST_P(MemoryPoolTest, customizedGetPreferredSize) {
   // Invalid preferred size callback.
   {
     setupMemory({
-        .getPreferredSize = [](int64_t size) { return size - 1; },
         .allocatorCapacity = kMemoryCapBytes,
+        .getPreferredSize = [](int64_t size) { return size - 1; },
     });
     MemoryManager& manager = *getMemoryManager();
     auto root = manager.addRootPool("bad sizer");
@@ -3928,9 +3928,13 @@ TEST_P(MemoryPoolTest, abort) {
       ASSERT_TRUE(rootPool->aborted());
 
       // Allocate more buffer to trigger reservation increment at the root.
-      { VELOX_ASSERT_THROW(leafPool->allocate(capacity / 2), ""); }
+      {
+        VELOX_ASSERT_THROW(leafPool->allocate(capacity / 2), "");
+      }
       // Allocate more buffer to trigger memory arbitration at the root.
-      { VELOX_ASSERT_THROW(leafPool->allocate(capacity * 2), ""); }
+      {
+        VELOX_ASSERT_THROW(leafPool->allocate(capacity * 2), "");
+      }
       // Allocate without trigger memory reservation increment.
       void* buf2 = leafPool->allocate(128);
       ASSERT_EQ(leafPool->usedBytes(), 256);
