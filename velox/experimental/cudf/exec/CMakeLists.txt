@@ -34,6 +34,7 @@ target_link_libraries(
   velox_cudf_exec
   cudf::cudf
   arrow
+  velox_cudf_vector
   velox_arrow_bridge
   velox_exception
   velox_common_base
