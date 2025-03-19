@@ -73,6 +73,27 @@ Aws::IOStreamFactory AwsWriteableStreamFactory(void* data, int64_t nbytes) {
   return [=]() { return Aws::New<StringViewStream>("", data, nbytes); };
 }
 
+folly::Synchronized<
+    std::unordered_map<std::string, AWSCredentialsProviderFactory>>&
+credentialsProviderFactories() {
+  static folly::Synchronized<
+      std::unordered_map<std::string, AWSCredentialsProviderFactory>>
+      factories;
+  return factories;
+}
+
+std::shared_ptr<Aws::Auth::AWSCredentialsProvider> getCredentialsProviderByName(
+    const std::string& providerName,
+    const S3Config& s3Config) {
+  auto it = credentialsProviderFactories()->find(providerName);
+  VELOX_CHECK(
+      it != credentialsProviderFactories()->end(),
+      "CredentialsProviderFactory for '{}' not registered",
+      providerName);
+  const auto& factory = it->second;
+  return factory(s3Config);
+}
+
 class S3ReadFile final : public ReadFile {
  public:
   S3ReadFile(std::string_view path, Aws::S3::S3Client* client)
@@ -586,6 +607,16 @@ void finalizeS3() {
   getAwsInstance()->finalize();
 }
 
+void registerAWSCredentialsProvider(
+    std::string providerName,
+    AWSCredentialsProviderFactory factory) {
+  VELOX_CHECK(
+      !providerName.empty(), "CredentialsProviderFactory name cannot be empty");
+  credentialsProviderFactories().withWLock([&](auto& factories) {
+    factories.insert({providerName, std::move(factory)});
+  });
+}
+
 class S3FileSystem::Impl {
  public:
   Impl(const S3Config& s3Config) {
@@ -691,6 +722,13 @@ class S3FileSystem::Impl {
   // Return an AWSCredentialsProvider based on the config.
   std::shared_ptr<Aws::Auth::AWSCredentialsProvider> getCredentialsProvider(
       const S3Config& s3Config) const {
+    auto credentialsProvider = s3Config.credentialsProvider();
+    if (credentialsProvider.has_value()) {
+      const auto& name = credentialsProvider.value();
+      // Create the credentials provider using the registered factory.
+      return getCredentialsProviderByName(name, s3Config);
+    }
+
     auto accessKey = s3Config.accessKey();
     auto secretKey = s3Config.secretKey();
     const auto iamRole = s3Config.iamRole();

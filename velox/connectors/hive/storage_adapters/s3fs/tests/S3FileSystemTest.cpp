@@ -18,6 +18,7 @@
 #include "velox/connectors/hive/storage_adapters/s3fs/S3WriteFile.h"
 #include "velox/connectors/hive/storage_adapters/s3fs/tests/S3Test.h"
 
+#include <aws/core/auth/AWSCredentialsProvider.h>
 #include <gtest/gtest.h>
 
 namespace facebook::velox::filesystems {
@@ -41,6 +42,16 @@ class S3FileSystemTest : public S3Test {
 
   std::string_view kLogLocation_ = "/tmp/foobar/";
 };
+
+class MyCredentialsProvider : public Aws::Auth::AWSCredentialsProvider {
+ public:
+  MyCredentialsProvider() = default;
+
+  Aws::Auth::AWSCredentials GetAWSCredentials() override {
+    return Aws::Auth::AWSCredentials();
+  }
+};
+
 } // namespace
 
 TEST_F(S3FileSystemTest, writeAndRead) {
@@ -287,5 +298,36 @@ TEST_F(S3FileSystemTest, invalidConnectionSettings) {
   hiveConfig = minioServer_->hiveConfig({{"hive.s3.socket-timeout", "abc"}});
   VELOX_ASSERT_THROW(
       filesystems::S3FileSystem("", hiveConfig), "Invalid duration");
+}
+
+TEST_F(S3FileSystemTest, registerCredentialProviderFactories) {
+  const auto credentialProvider = "my-credential-provider";
+  const auto invalidCredentialProvider = "invalid-credential-provider";
+  registerAWSCredentialsProvider(
+      credentialProvider, [](const S3Config& config) {
+        return std::make_shared<MyCredentialsProvider>();
+      });
+
+  auto hiveConfig = minioServer_->hiveConfig(
+      {{"hive.s3.credentials-provider", credentialProvider}});
+  ASSERT_NO_THROW(filesystems::S3FileSystem("", hiveConfig));
+
+  // Configure with unregistered credential provider.
+  hiveConfig = minioServer_->hiveConfig(
+      {{"hive.s3.credentials-provider", invalidCredentialProvider}});
+  VELOX_ASSERT_THROW(
+      filesystems::S3FileSystem({"", hiveConfig}),
+      fmt::format(
+          "CredentialsProviderFactory for '{}' not registered",
+          invalidCredentialProvider));
+
+  // Register invalid credentials provider name.
+  VELOX_ASSERT_THROW(
+      registerAWSCredentialsProvider(
+          "",
+          [](const S3Config& config) {
+            return std::make_shared<MyCredentialsProvider>();
+          }),
+      "CredentialsProviderFactory name cannot be empty");
 }
 } // namespace facebook::velox::filesystems
