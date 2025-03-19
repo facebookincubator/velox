@@ -2018,7 +2018,18 @@ TEST_F(TableScanTest, partitionedTableTimestampKey) {
     return fmt::format(sqlTemplate, partitionValueStr);
   };
 
-  auto expect = [&](PlanNodePtr plan, const char* sqlTemplate) {
+  {
+    auto plan =
+        PlanBuilder()
+            .startTableScan()
+            .tableName("hive_table")
+            .outputType(
+                ROW({"pkey", "c0", "c1"}, {partitionType, BIGINT(), DOUBLE()}))
+            .assignments(assignments)
+            .endTableScan()
+            .planNode();
+    constexpr char* sqlTemplate = "SELECT {}, * FROM tmp";
+
     // Read timestamp partition value as local time.
     AssertQueryBuilder(plan, duckDbQueryRunner_)
         .connectorSessionProperty(
@@ -2038,51 +2049,104 @@ TEST_F(TableScanTest, partitionedTableTimestampKey) {
             "false")
         .splits({split})
         .assertResults(sql(sqlTemplate, false));
-  };
+  }
 
-  expect(
-      PlanBuilder()
-          .startTableScan()
-          .tableName("hive_table")
-          .outputType(
-              ROW({"pkey", "c0", "c1"}, {partitionType, BIGINT(), DOUBLE()}))
-          .assignments(assignments)
-          .endTableScan()
-          .planNode(),
-      "SELECT {}, * FROM tmp");
+  {
+    auto plan =
+        PlanBuilder()
+            .startTableScan()
+            .tableName("hive_table")
+            .outputType(
+                ROW({"c0", "pkey", "c1"}, {BIGINT(), partitionType, DOUBLE()}))
+            .assignments(assignments)
+            .endTableScan()
+            .planNode();
+    constexpr char* sqlTemplate = "SELECT c0, {}, c1 FROM tmp";
 
-  expect(
-      PlanBuilder()
-          .startTableScan()
-          .tableName("hive_table")
-          .outputType(
-              ROW({"c0", "pkey", "c1"}, {BIGINT(), partitionType, DOUBLE()}))
-          .assignments(assignments)
-          .endTableScan()
-          .planNode(),
-      "SELECT c0, {}, c1 FROM tmp");
+    // Read timestamp partition value as local time.
+    AssertQueryBuilder(plan, duckDbQueryRunner_)
+        .connectorSessionProperty(
+            kHiveConnectorId,
+            connector::hive::HiveConfig::
+                kReadTimestampPartitionValueAsLocalTimeSession,
+            "true")
+        .splits({split})
+        .assertResults(sql(sqlTemplate, true));
 
-  expect(
-      PlanBuilder()
-          .startTableScan()
-          .tableName("hive_table")
-          .outputType(
-              ROW({"c0", "c1", "pkey"}, {BIGINT(), DOUBLE(), partitionType}))
-          .assignments(assignments)
-          .endTableScan()
-          .planNode(),
-      "SELECT c0, c1, {} FROM tmp");
+    // Read timestamp partition value as UTC.
+    AssertQueryBuilder(plan, duckDbQueryRunner_)
+        .connectorSessionProperty(
+            kHiveConnectorId,
+            connector::hive::HiveConfig::
+                kReadTimestampPartitionValueAsLocalTimeSession,
+            "false")
+        .splits({split})
+        .assertResults(sql(sqlTemplate, false));
+  }
 
-  // Select only partition key.
-  expect(
-      PlanBuilder()
-          .startTableScan()
-          .tableName("hive_table")
-          .outputType(ROW({"pkey"}, {partitionType}))
-          .assignments({{"pkey", partitionKey("pkey", partitionType)}})
-          .endTableScan()
-          .planNode(),
-      "SELECT {} FROM tmp");
+  {
+    auto plan =
+        PlanBuilder()
+            .startTableScan()
+            .tableName("hive_table")
+            .outputType(
+                ROW({"c0", "c1", "pkey"}, {BIGINT(), DOUBLE(), partitionType}))
+            .assignments(assignments)
+            .endTableScan()
+            .planNode();
+    constexpr char* sqlTemplate = "SELECT c0, c1, {} FROM tmp";
+    // Read timestamp partition value as local time.
+    AssertQueryBuilder(plan, duckDbQueryRunner_)
+        .connectorSessionProperty(
+            kHiveConnectorId,
+            connector::hive::HiveConfig::
+                kReadTimestampPartitionValueAsLocalTimeSession,
+            "true")
+        .splits({split})
+        .assertResults(sql(sqlTemplate, true));
+
+    // Read timestamp partition value as UTC.
+    AssertQueryBuilder(plan, duckDbQueryRunner_)
+        .connectorSessionProperty(
+            kHiveConnectorId,
+            connector::hive::HiveConfig::
+                kReadTimestampPartitionValueAsLocalTimeSession,
+            "false")
+        .splits({split})
+        .assertResults(sql(sqlTemplate, false));
+  }
+
+  {
+    // Select only partition key.
+    auto plan =
+        PlanBuilder()
+            .startTableScan()
+            .tableName("hive_table")
+            .outputType(ROW({"pkey"}, {partitionType}))
+            .assignments({{"pkey", partitionKey("pkey", partitionType)}})
+            .endTableScan()
+            .planNode();
+    constexpr char* sqlTemplate = "SELECT {} FROM tmp";
+    // Read timestamp partition value as local time.
+    AssertQueryBuilder(plan, duckDbQueryRunner_)
+        .connectorSessionProperty(
+            kHiveConnectorId,
+            connector::hive::HiveConfig::
+                kReadTimestampPartitionValueAsLocalTimeSession,
+            "true")
+        .splits({split})
+        .assertResults(sql(sqlTemplate, true));
+
+    // Read timestamp partition value as UTC.
+    AssertQueryBuilder(plan, duckDbQueryRunner_)
+        .connectorSessionProperty(
+            kHiveConnectorId,
+            connector::hive::HiveConfig::
+                kReadTimestampPartitionValueAsLocalTimeSession,
+            "false")
+        .splits({split})
+        .assertResults(sql(sqlTemplate, false));
+  }
 
   // Test partition filter on TIMESTAMP column.
   {
