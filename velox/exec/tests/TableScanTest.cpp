@@ -2028,7 +2028,7 @@ TEST_F(TableScanTest, partitionedTableTimestampKey) {
             .assignments(assignments)
             .endTableScan()
             .planNode();
-    constexpr std::string sqlTemplate = "SELECT {}, * FROM tmp";
+    const char* sqlTemplate = "SELECT {}, * FROM tmp";
 
     // Read timestamp partition value as local time.
     AssertQueryBuilder(plan, duckDbQueryRunner_)
@@ -2061,7 +2061,7 @@ TEST_F(TableScanTest, partitionedTableTimestampKey) {
             .assignments(assignments)
             .endTableScan()
             .planNode();
-    constexpr std::string sqlTemplate = "SELECT c0, {}, c1 FROM tmp";
+    const char* sqlTemplate = "SELECT c0, {}, c1 FROM tmp";
 
     // Read timestamp partition value as local time.
     AssertQueryBuilder(plan, duckDbQueryRunner_)
@@ -2094,7 +2094,7 @@ TEST_F(TableScanTest, partitionedTableTimestampKey) {
             .assignments(assignments)
             .endTableScan()
             .planNode();
-    constexpr std::string sqlTemplate = "SELECT c0, c1, {} FROM tmp";
+    const char* sqlTemplate = "SELECT c0, c1, {} FROM tmp";
     // Read timestamp partition value as local time.
     AssertQueryBuilder(plan, duckDbQueryRunner_)
         .connectorSessionProperty(
@@ -2126,7 +2126,7 @@ TEST_F(TableScanTest, partitionedTableTimestampKey) {
             .assignments({{"pkey", partitionKey("pkey", partitionType)}})
             .endTableScan()
             .planNode();
-    constexpr std::string sqlTemplate = "SELECT {} FROM tmp";
+    const char* sqlTemplate = "SELECT {} FROM tmp";
     // Read timestamp partition value as local time.
     AssertQueryBuilder(plan, duckDbQueryRunner_)
         .connectorSessionProperty(
