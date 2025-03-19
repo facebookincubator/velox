@@ -201,7 +201,15 @@ void registerCudf() {
 }
 
 void unregisterCudf() {
-  exec::DriverFactory::adapters.clear();
+  exec::DriverFactory::adapters.erase(
+      std::remove_if(
+          exec::DriverFactory::adapters.begin(),
+          exec::DriverFactory::adapters.end(),
+          [](const exec::DriverAdapter& adapter) {
+            return adapter.label == "cuDF";
+          }),
+      exec::DriverFactory::adapters.end());
+
   _cudfIsRegistered = false;
 }
 
