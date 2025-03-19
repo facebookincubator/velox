@@ -56,10 +56,22 @@ TEST_F(ArrayCompactTest, basicArray) {
 
 TEST_F(ArrayCompactTest, complexArray) {
   const auto array = makeNestedArrayVectorFromJson<int32_t>(
-      {"[[1, 2, null], [null], [3, null, 4, null]]"});
+      {"[[1, 2, null], [null], [3, null, 4, null]]",
+       "[[1, null, 2], null, [3, null, 4, null]]",
+       "[[1, 2], [], [null, 3, 4]]",
+       "[null, [1,2]]",
+       "[[], [1, 2]]",
+       "[[1, 2], null]",
+       "[[1, 2], []]"});
 
   auto expected = makeNestedArrayVectorFromJson<int32_t>(
-      {"[[1, 2, null], [3, null, 4, null]]"});
+      {"[[1, 2, null], [null], [3, null, 4, null]]",
+       "[[1, null, 2], [3, null, 4, null]]",
+       "[[1, 2], [], [null, 3, 4]]",
+       "[[1, 2]]",
+       "[[], [1, 2]]",
+       "[[1, 2]]",
+       "[[1, 2], []]"});
 
   testExpression("array_compact(c0)", {array}, expected);
 }
