@@ -18,6 +18,7 @@
 
 #include <thrift/protocol/TCompactProtocol.h> //@manual
 
+#include <arrow/io/api.h>
 #include "velox/dwio/parquet/reader/ParquetColumnReader.h"
 #include "velox/dwio/parquet/reader/StructColumnReader.h"
 #include "velox/dwio/parquet/thrift/ThriftTransport.h"
@@ -866,10 +867,12 @@ std::shared_ptr<const RowType> ReaderBase::createRowType(
   std::vector<TypePtr> childTypes;
   for (auto& child : children) {
     auto childName = static_cast<const ParquetTypeWithId&>(*child).name_;
+    auto childt = static_cast<const ParquetTypeWithId&>(*child).parquetType_;
     if (fileColumnNamesReadAsLowerCase) {
       folly::toLowerAscii(childName);
     }
     childNames.push_back(std::move(childName));
+    // childTypes.push_back(childt);
     childTypes.push_back(child->type());
   }
   return TypeFactory<TypeKind::ROW>::create(
@@ -1185,4 +1188,7 @@ FileMetaDataPtr ParquetReader::fileMetaData() const {
   return readerBase_->fileMetaData();
 }
 
+const thrift::FileMetaData& ParquetReader::thriftFileMetaData() const {
+  return readerBase_->thriftFileMetaData();
+}
 } // namespace facebook::velox::parquet
