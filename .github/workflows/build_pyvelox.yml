@@ -148,8 +148,7 @@ jobs:
           CIBW_ENVIRONMENT_LINUX: "CCACHE_DIR=/host${{ github.workspace }}/ccache"
           CIBW_BEFORE_TEST: "ccache -s"
           CIBW_TEST_EXTRAS: "tests"
-          CIBW_TEST_COMMAND: "cd {project}/pyvelox && python -m unittest -v"
-          CIBW_TEST_SKIP: "*"
+          CIBW_TEST_COMMAND: "echo Adding tests later." #"cd {project}/pyvelox && python -m unittest -v"
           # for macos
           CCACHE_DIR: "${{ github.workspace }}/ccache" 
           BUILD_VERSION: "${{ inputs.version || steps.version.outputs.build_version }}"
