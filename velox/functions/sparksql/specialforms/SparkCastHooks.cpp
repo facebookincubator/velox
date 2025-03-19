@@ -16,8 +16,6 @@
 
 #include "velox/functions/sparksql/specialforms/SparkCastHooks.h"
 #include "velox/functions/lib/string/StringImpl.h"
-#include "velox/functions/sparksql/DecimalUtil.h"
-#include "velox/type/DecimalUtil.h"
 #include "velox/type/TimestampConversion.h"
 #include "velox/type/tz/TimeZoneMap.h"
 
@@ -110,114 +108,6 @@ StringView SparkCastHooks::removeWhiteSpaces(const StringView& view) const {
   stringImpl::trimUnicodeWhiteSpace<true, true, StringView, StringView>(
       output, view);
   return output;
-}
-
-namespace {
-
-// Aligns with Spark, which uses BigDecimal in Java.
-// Reference:
-// https://github.com/openjdk/jdk8u-dev/blob/20e72d16f569e823a9ecdd9951a742b4397ca978/jdk/src/share/classes/java/math/BigDecimal.java#L3294
-template <typename T>
-struct FloatingTraits {};
-
-template <>
-struct FloatingTraits<float> {
-  static constexpr int64_t kMaxExact = 1L << 22;
-
-  // Powers of 10 which can be represented exactly in float.
-  static constexpr float kPowersOfTen[] = {
-      1.0e0f,
-      1.0e1f,
-      1.0e2f,
-      1.0e3f,
-      1.0e4f,
-      1.0e5f,
-      1.0e6f,
-      1.0e7f,
-      1.0e8f,
-      1.0e9f,
-      1.0e10f};
-  static constexpr size_t kPowersOfTenSize =
-      sizeof(kPowersOfTen) / sizeof(kPowersOfTen[0]);
-};
-
-template <>
-struct FloatingTraits<double> {
-  static constexpr int64_t kMaxExact = 1L << 52;
-
-  // Powers of 10 which can be represented exactly in double.
-  static constexpr double kPowersOfTen[] = {
-      1.0e0,  1.0e1,  1.0e2,  1.0e3,  1.0e4,  1.0e5,  1.0e6,  1.0e7,
-      1.0e8,  1.0e9,  1.0e10, 1.0e11, 1.0e12, 1.0e13, 1.0e14, 1.0e15,
-      1.0e16, 1.0e17, 1.0e18, 1.0e19, 1.0e20, 1.0e21, 1.0e22};
-  static constexpr size_t kPowersOfTenSize =
-      sizeof(kPowersOfTen) / sizeof(kPowersOfTen[0]);
-};
-
-} // namespace
-
-Expected<float> SparkCastHooks::castShortDecimalToReal(
-    int64_t unscaledValue,
-    uint8_t precision,
-    uint8_t scale) const {
-  return doCastDecimalToFloatingType<int64_t, float>(
-      unscaledValue, precision, scale);
-}
-
-Expected<float> SparkCastHooks::castLongDecimalToReal(
-    int128_t unscaledValue,
-    uint8_t precision,
-    uint8_t scale) const {
-  return doCastDecimalToFloatingType<int128_t, float>(
-      unscaledValue, precision, scale);
-}
-
-Expected<double> SparkCastHooks::castShortDecimalToDouble(
-    int64_t unscaledValue,
-    uint8_t precision,
-    uint8_t scale) const {
-  return doCastDecimalToFloatingType<int64_t, double>(
-      unscaledValue, precision, scale);
-}
-Expected<double> SparkCastHooks::castLongDecimalToDouble(
-    int128_t unscaledValue,
-    uint8_t precision,
-    uint8_t scale) const {
-  return doCastDecimalToFloatingType<int128_t, double>(
-      unscaledValue, precision, scale);
-}
-
-template <typename FromNative, typename T>
-Expected<T> SparkCastHooks::doCastDecimalToFloatingType(
-    FromNative unscaledValue,
-    uint8_t precision,
-    uint8_t scale) const {
-  static_assert(
-      std::is_same_v<T, float> || std::is_same_v<T, double>,
-      "T must be either float or double");
-  if (scale == 0) {
-    return static_cast<T>(unscaledValue);
-  }
-
-  if (scale < FloatingTraits<T>::kPowersOfTenSize &&
-      DecimalUtil::absValue<FromNative>(unscaledValue) <
-          FloatingTraits<T>::kMaxExact) {
-    return static_cast<T>(unscaledValue) /
-        FloatingTraits<T>::kPowersOfTen[scale];
-  }
-
-  // Cast decimal to string, then string to floating
-  auto rowSize =
-      facebook::velox::DecimalUtil::maxStringViewSize(precision, scale);
-  char buffer[rowSize];
-  memset(buffer, 0, rowSize);
-  auto size = facebook::velox::DecimalUtil::castToString<FromNative>(
-      unscaledValue, scale, rowSize, buffer);
-  if constexpr (std::is_same_v<T, float>) {
-    return SparkCastHooks::castStringToReal(StringView(buffer, size));
-  } else {
-    return SparkCastHooks::castStringToDouble(StringView(buffer, size));
-  }
 }
 
 exec::PolicyType SparkCastHooks::getPolicy() const {

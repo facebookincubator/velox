@@ -516,41 +516,47 @@ VectorPtr CastExpr::applyDecimalToFloatCast(
   auto resultBuffer = result->asUnchecked<FlatVector<To>>()->mutableRawValues();
   const auto precisionScale = getDecimalPrecisionScale(*fromType);
   const auto simpleInput = input.as<SimpleVector<FromNativeType>>();
-  applyToSelectedNoThrowLocal(context, rows, result, [&](int row) {
-    auto unscaledValue = simpleInput->valueAt(row);
+  const auto scaleFactor = DecimalUtil::kPowersOfTen[precisionScale.second];
 
-    Expected<To> expect;
-    if constexpr (
-        std::is_same_v<FromNativeType, int64_t> && ToKind == TypeKind::REAL) {
-      expect = hooks_->castShortDecimalToReal(
-          unscaledValue, precisionScale.first, precisionScale.second);
-    } else if constexpr (
-        std::is_same_v<FromNativeType, int128_t> && ToKind == TypeKind::REAL) {
-      expect = hooks_->castLongDecimalToReal(
-          unscaledValue, precisionScale.first, precisionScale.second);
-    } else if constexpr (
-        std::is_same_v<FromNativeType, int64_t> && ToKind == TypeKind::DOUBLE) {
-      expect = hooks_->castShortDecimalToDouble(
-          unscaledValue, precisionScale.first, precisionScale.second);
-    } else {
-      expect = hooks_->castLongDecimalToDouble(
-          unscaledValue, precisionScale.first, precisionScale.second);
-    }
+  if constexpr (ToKind == TypeKind::REAL) {
+    // Optimized path for float
+    applyToSelectedNoThrowLocal(context, rows, result, [&](int row) {
+      const auto output =
+          util::Converter<TypeKind::DOUBLE>::tryCast(simpleInput->valueAt(row))
+              .thenOrThrow(folly::identity, [&](const Status& status) {
+                VELOX_USER_FAIL("{}", status.message());
+              });
+      resultBuffer[row] = output / scaleFactor;
+    });
+  } else {
+    // Cast decimal to string, then string to double
+    const auto scale = precisionScale.second;
+    auto rowSize = DecimalUtil::maxStringViewSize(precisionScale.first, scale);
+    char buffer[rowSize];
 
-    if (expect) {
-      resultBuffer[row] = expect.value();
-    } else {
-      if (setNullInResultAtError()) {
-        result->setNull(row, true);
+    applyToSelectedNoThrowLocal(context, rows, result, [&](int row) {
+      auto unscaledValue = simpleInput->valueAt(row);
+
+      if (scale == 0) {
+        resultBuffer[row] = static_cast<To>(unscaledValue);
+      } else if (
+          scale < DecimalUtil::kDoublePowersOfTenSize &&
+          DecimalUtil::absValue<FromNativeType>(unscaledValue) <
+              DecimalUtil::kDoubleMaxExact) {
+        resultBuffer[row] =
+            static_cast<To>(unscaledValue) / DecimalUtil::kPowersOfTen[scale];
       } else {
-        context.setVeloxExceptionError(
-            row,
-            std::make_exception_ptr(VeloxUserError(
-                std::current_exception(), expect.error().message(), false)));
+        memset(buffer, 0, rowSize);
+        auto size = DecimalUtil::castToString<FromNativeType>(
+            unscaledValue, scale, rowSize, buffer);
+        resultBuffer[row] =
+            util::Converter<ToKind>::tryCast(StringView(buffer, size))
+                .thenOrThrow(folly::identity, [&](const Status& status) {
+                  VELOX_USER_FAIL("{}", status.message());
+                });
       }
-      return;
-    }
-  });
+    });
+  }
   return result;
 }
 

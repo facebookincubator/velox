@@ -495,5 +495,31 @@ class DecimalUtil {
   }
 
   static constexpr __uint128_t kOverflowMultiplier = ((__uint128_t)1 << 127);
+
+  // Returns the abs value of input value.
+  template <class T, typename = std::enable_if_t<std::is_same_v<T, int64_t>>>
+  FOLLY_ALWAYS_INLINE static uint64_t absValue(int64_t a) {
+    return a < 0 ? static_cast<uint64_t>(-a) : static_cast<uint64_t>(a);
+  }
+
+  // Returns the abs value of input value.
+  template <class T, typename = std::enable_if_t<std::is_same_v<T, int128_t>>>
+  FOLLY_ALWAYS_INLINE static uint128_t absValue(int128_t a) {
+    return a < 0 ? static_cast<uint128_t>(-a) : static_cast<uint128_t>(a);
+  }
+
+  // Aligns with Spark and Presto, which uses BigDecimal in Java.
+  // Reference:
+  // https://github.com/openjdk/jdk8u-dev/blob/20e72d16f569e823a9ecdd9951a742b4397ca978/jdk/src/share/classes/java/math/BigDecimal.java#L3294
+  // https://github.com/prestodb/presto/blob/master/presto-main/src/main/java/com/facebook/presto/type/DecimalCasts.java#L447
+  static constexpr int64_t kDoubleMaxExact = 1L << 52;
+
+  // Powers of 10 which can be represented exactly in double.
+  static constexpr double kDoublePowersOfTen[] = {
+      1.0e0,  1.0e1,  1.0e2,  1.0e3,  1.0e4,  1.0e5,  1.0e6,  1.0e7,
+      1.0e8,  1.0e9,  1.0e10, 1.0e11, 1.0e12, 1.0e13, 1.0e14, 1.0e15,
+      1.0e16, 1.0e17, 1.0e18, 1.0e19, 1.0e20, 1.0e21, 1.0e22};
+  static constexpr size_t kDoublePowersOfTenSize =
+      sizeof(kPowersOfTen) / sizeof(kPowersOfTen[0]);
 }; // DecimalUtil
 } // namespace facebook::velox

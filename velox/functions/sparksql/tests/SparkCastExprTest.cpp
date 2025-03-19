@@ -170,7 +170,28 @@ class SparkCastExprTest : public functions::test::CastBaseTest {
                      StringView(buffer, size))
                      .value();
       testCast(
-          makeNullableFlatVector<int64_t>({val}, DECIMAL(precision, scale)),
+          makeNullableFlatVector<int64_t>(
+              {unscaledValue}, DECIMAL(precision, scale)),
+          makeNullableFlatVector<T>({expect}));
+    }
+
+    for (int scale = 0; scale <= 38; ++scale) {
+      int128_t unscaledValue =
+          HugeInt::parse("12345678912345678912345678912345678912");
+      const int precision = 38;
+      auto rowSize =
+          facebook::velox::DecimalUtil::maxStringViewSize(precision, scale);
+      char buffer[rowSize];
+      memset(buffer, 0, rowSize);
+      auto size = facebook::velox::DecimalUtil::castToString<int128_t>(
+          unscaledValue, scale, rowSize, buffer);
+
+      T expect = util::Converter<SimpleTypeTrait<T>::typeKind>::tryCast(
+                     StringView(buffer, size))
+                     .value();
+      testCast(
+          makeNullableFlatVector<int128_t>(
+              {unscaledValue}, DECIMAL(precision, scale)),
           makeNullableFlatVector<T>({expect}));
     }
   }

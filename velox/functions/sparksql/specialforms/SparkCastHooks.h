@@ -57,23 +57,6 @@ class SparkCastHooks : public exec::CastHooks {
   /// whitespaces before cast.
   StringView removeWhiteSpaces(const StringView& view) const override;
 
-  Expected<float> castShortDecimalToReal(
-      int64_t unscaledValue,
-      uint8_t precision,
-      uint8_t scale) const override;
-  Expected<float> castLongDecimalToReal(
-      int128_t unscaledValue,
-      uint8_t precision,
-      uint8_t scale) const override;
-  Expected<double> castShortDecimalToDouble(
-      int64_t unscaledValue,
-      uint8_t precision,
-      uint8_t scale) const override;
-  Expected<double> castLongDecimalToDouble(
-      int128_t unscaledValue,
-      uint8_t precision,
-      uint8_t scale) const override;
-
   const TimestampToStringOptions& timestampToStringOptions() const override {
     return timestampToStringOptions_;
   }
@@ -90,12 +73,6 @@ class SparkCastHooks : public exec::CastHooks {
   // Supports integer and floating-point types.
   template <typename T>
   Expected<Timestamp> castNumberToTimestamp(T seconds) const;
-
-  template <typename FromNative, typename T>
-  Expected<T> doCastDecimalToFloatingType(
-      FromNative unscaledValue,
-      uint8_t precision,
-      uint8_t scale) const;
 
   const core::QueryConfig& config_;
 
