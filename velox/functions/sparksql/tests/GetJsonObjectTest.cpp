@@ -119,5 +119,16 @@ TEST_F(GetJsonObjectTest, nullResult) {
       std::nullopt);
 }
 
+TEST_F(GetJsonObjectTest, wildcard) {
+  EXPECT_EQ(getJsonObject(R"(["a": "1", "a": "2"])", "$[*]"), R"(["a": "1", "a": "2"])");
+  EXPECT_EQ(getJsonObject(R"(["a": "1", "a": "2"])", "$[*].a"), R"(["1", "2"])");
+  EXPECT_EQ(getJsonObject(R"(["a": "1", "a": "2"])", "$[*][0]"), std::nullopt);
+  EXPECT_EQ(getJsonObject(R"([[{"a": "1"}, "a1"], [{"a": "2"}, "a2"]])", "$[*][0]"), R"([{"a": "1"}, {"a": "2"}])");
+  EXPECT_EQ(getJsonObject(R"({"id": [{"a": "1"}, {"a": "2"}]})", "$id"), R"([{"a": "1"}, {"a": "2"}])");
+  EXPECT_EQ(getJsonObject(R"({"id": [{"a": "1"}, {"a": "2"}]})", "$id[*]"), R"([{"a": "1"}, {"a": "2"}])");
+  EXPECT_EQ(getJsonObject(R"({"id": [{"a": "1"}, {"a": "2"}]})", "$id[*][0]"), std::nullopt);
+  EXPECT_EQ(getJsonObject(R"({"id": [{"a": "1"}, {"a": "2"}]})", "$id[*].a"), R"(["1", "2"])");
+}
+
 } // namespace
 } // namespace facebook::velox::functions::sparksql::test
