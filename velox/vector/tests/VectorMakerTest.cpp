@@ -18,6 +18,7 @@
 
 #include "velox/common/base/VeloxException.h"
 #include "velox/common/memory/Memory.h"
+#include "velox/common/testutil/OptionalEmpty.h"
 #include "velox/vector/tests/utils/VectorMaker.h"
 #include "velox/vector/tests/utils/VectorTestBase.h"
 
@@ -479,13 +480,13 @@ TEST_F(VectorMakerTest, nestedArrayVectorFromJson) {
       {{2, 3, 4}},
       {{std::nullopt, 7}},
       {{1, 3, 7, 9}},
-      std::make_optional<std::vector<std::optional<int32_t>>>({}),
+      common::testutil::optionalEmpty,
       {{std::nullopt}},
       {{1, 2, std::nullopt}},
-      std::make_optional<std::vector<std::optional<int32_t>>>({}),
+      common::testutil::optionalEmpty,
       std::nullopt,
       {{1, 2, 3}},
-      std::make_optional<std::vector<std::optional<int32_t>>>({}),
+      common::testutil::optionalEmpty,
       {{4, 5}},
   });
 

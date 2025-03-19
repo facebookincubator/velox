@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+#include "velox/common/testutil/OptionalEmpty.h"
 #include "velox/functions/sparksql/tests/SparkFunctionBaseTest.h"
 
 #include <stdint.h>
@@ -233,7 +234,7 @@ TEST_F(HashTest, map) {
   auto mapWithNullArrays = createMapOfArraysVector<int64_t, int64_t>(
       {{{1, std::nullopt}},
        {{2, {{4, 5, std::nullopt}}}},
-       {{3, std::make_optional<std::vector<std::optional<int64_t>>>({})}}});
+       {{3, common::testutil::optionalEmpty}}});
   assertEqualVectors(
       makeFlatVector<int32_t>({-1712319331, 2060637564, 519220707}),
       hash(mapWithNullArrays));

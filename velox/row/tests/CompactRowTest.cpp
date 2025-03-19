@@ -16,6 +16,7 @@
 
 #include <gtest/gtest.h>
 
+#include "velox/common/testutil/OptionalEmpty.h"
 #include "velox/row/CompactRow.h"
 #include "velox/vector/fuzzer/VectorFuzzer.h"
 #include "velox/vector/tests/utils/VectorTestBase.h"
@@ -190,7 +191,7 @@ TEST_F(CompactRowTest, rowSizeArrayOfBigint) {
       makeNullableArrayVector<int64_t>({
           {{1, 2, std::nullopt, 3}},
           {{4, 5}},
-          std::make_optional<std::vector<std::optional<int64_t>>>({}),
+          common::testutil::optionalEmpty,
           std::nullopt,
           {{6}},
       }),
@@ -249,7 +250,7 @@ TEST_F(CompactRowTest, rowSizeArrayOfStrings) {
   data = makeRowVector({
       makeNullableArrayVector<std::string>({
           {{"a", "Abc", std::nullopt}},
-          std::make_optional<std::vector<std::optional<std::string>>>({}),
+          common::testutil::optionalEmpty,
           std::nullopt,
           {{"a", std::nullopt, "Longer string", "abc"}},
       }),
@@ -404,7 +405,7 @@ TEST_F(CompactRowTest, arrayOfBigint) {
           {{std::nullopt, 6}},
           {{std::nullopt}},
           std::nullopt,
-          std::make_optional<std::vector<std::optional<int64_t>>>({}),
+          common::testutil::optionalEmpty,
       }),
   });
 
@@ -430,7 +431,7 @@ TEST_F(CompactRowTest, arrayOfTimestamp) {
           {{std::nullopt, ts(6)}},
           {{std::nullopt}},
           std::nullopt,
-          std::make_optional<std::vector<std::optional<Timestamp>>>({}),
+          common::testutil::optionalEmpty,
       }),
   });
 
@@ -457,7 +458,7 @@ TEST_F(CompactRowTest, arrayOfString) {
             "Abc 12345 ...test",
             std::nullopt,
             "foo"}},
-          std::make_optional<std::vector<std::optional<std::string>>>({}),
+          common::testutil::optionalEmpty,
           {{std::nullopt}},
           std::nullopt,
       }),

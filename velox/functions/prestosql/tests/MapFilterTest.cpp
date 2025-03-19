@@ -15,6 +15,7 @@
  */
 
 #include "velox/common/base/tests/GTestUtils.h"
+#include "velox/common/testutil/OptionalEmpty.h"
 #include "velox/dwio/common/tests/utils/BatchMaker.h"
 #include "velox/functions/prestosql/tests/utils/FunctionBaseTest.h"
 
@@ -269,8 +270,7 @@ TEST_F(MapFilterTest, try) {
       {{{{1, 2}, {2, 3}}},
        std::nullopt,
        {{{7, 8}}},
-       std::make_optional<
-           std::vector<std::pair<int64_t, std::optional<int64_t>>>>({})});
+       common::testutil::optionalEmpty});
   assertEqualVectors(expected, result);
 }
 

@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 #include "velox/common/base/tests/GTestUtils.h"
+#include "velox/common/testutil/OptionalEmpty.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/functions/lib/aggregates/tests/utils/AggregationTestBase.h"
 
@@ -30,9 +31,7 @@ class MapUnionSumTest : public AggregationTestBase {};
 TEST_F(MapUnionSumTest, global) {
   auto data = makeRowVector({
       makeNullableMapVector<int64_t, int64_t>({
-          std::make_optional<
-              std::vector<std::pair<int64_t, std::optional<int64_t>>>>(
-              {}), // empty map
+          common::testutil::optionalEmpty, // empty map
           std::nullopt, // null map
           {{{1, 10}, {2, 20}}},
           {{{1, 11}, {3, 30}, {4, 40}}},
@@ -64,9 +63,7 @@ TEST_F(MapUnionSumTest, globalVarcharKey) {
 
   auto data = makeRowVector({
       makeNullableMapVector<StringView, int64_t>({
-          std::make_optional<
-              std::vector<std::pair<StringView, std::optional<int64_t>>>>(
-              {}), // empty map
+          common::testutil::optionalEmpty, // empty map
           std::nullopt, // null map
           {{{keys[0], 10}, {keys[1], 20}}},
           {{{keys[0], 11}, {keys[2], 30}, {keys[3], 40}}},
@@ -123,11 +120,9 @@ TEST_F(MapUnionSumTest, nullAndEmptyMaps) {
   auto emptyAndNullMaps = makeRowVector({
       makeNullableMapVector<int64_t, int64_t>({
           std::nullopt,
-          std::make_optional<
-              std::vector<std::pair<int64_t, std::optional<int64_t>>>>({}),
+          common::testutil::optionalEmpty,
           std::nullopt,
-          std::make_optional<
-              std::vector<std::pair<int64_t, std::optional<int64_t>>>>({}),
+          common::testutil::optionalEmpty,
       }),
   });
 

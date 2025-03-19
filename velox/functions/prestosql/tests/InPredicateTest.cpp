@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 #include "velox/common/base/tests/GTestUtils.h"
+#include "velox/common/testutil/OptionalEmpty.h"
 #include "velox/functions/lib/DateTimeFormatter.h"
 #include "velox/functions/prestosql/tests/utils/FunctionBaseTest.h"
 #include "velox/functions/prestosql/types/TimestampWithTimeZoneType.h"
@@ -953,7 +954,7 @@ TEST_F(InPredicateTest, arrays) {
   auto data = makeRowVector({
       makeNullableArrayVector<int32_t>({
           {{1, 2, 3}},
-          std::make_optional<std::vector<std::optional<int32_t>>>({}),
+          common::testutil::optionalEmpty,
           {{1, 3}},
           std::nullopt,
           {{2, 4, 5, 6}},

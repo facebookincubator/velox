@@ -15,6 +15,7 @@
  */
 
 #include "velox/common/base/tests/GTestUtils.h"
+#include "velox/common/testutil/OptionalEmpty.h"
 #include "velox/functions/prestosql/tests/utils/FunctionBaseTest.h"
 
 using namespace facebook::velox;
@@ -42,8 +43,7 @@ class ArrayCombinationsTest : public FunctionBaseTest {
         {{{{std::vector<std::optional<T>>()}}},
          {{{{0, 1, 2}}, {{0, 1, 3}}, {{0, 2, 3}}, {{1, 2, 3}}}},
          {{{{0, 1, 2, 3}}}},
-         std::make_optional<
-             std::vector<std::optional<std::vector<std::optional<T>>>>>({})});
+         common::testutil::optionalEmpty});
     testExpr(
         expected, "combinations(C0, C1)", {arrayVector, comboLengthVector});
   }
@@ -69,8 +69,7 @@ class ArrayCombinationsTest : public FunctionBaseTest {
         {{
             {{0, 1, std::nullopt, 3}},
         }},
-        std::make_optional<
-            std::vector<std::optional<std::vector<std::optional<T>>>>>({}),
+        common::testutil::optionalEmpty,
     });
     testExpr(
         expected, "combinations(C0, C1)", {arrayVector, comboLengthVector});
@@ -177,8 +176,7 @@ TEST_F(ArrayCombinationsTest, inlineVarcharArrays) {
          {{"bb", "aa", "aa", "ddd"}},
          {{"bb", "cc", "aa", "ddd"}},
          {{"aa", "cc", "aa", "ddd"}}}},
-       std::make_optional<
-           std::vector<std::optional<std::vector<std::optional<S>>>>>({})});
+       common::testutil::optionalEmpty});
   testExpr(expected, "combinations(C0, C1)", {arrayVector, comboLengthVector});
 }
 
@@ -225,8 +223,7 @@ TEST_F(ArrayCombinationsTest, varcharArrays) {
            "yellow rose flowers",
            "red shiny car ahead",
            "purple is an elegant color"}}}},
-       std::make_optional<
-           std::vector<std::optional<std::vector<std::optional<S>>>>>({})});
+       common::testutil::optionalEmpty});
   testExpr(expected, "combinations(C0, C1)", {arrayVector, comboLengthVector});
 }
 
@@ -249,8 +246,7 @@ TEST_F(ArrayCombinationsTest, boolNullableArrays) {
          {{false, true, true, true}},
          {{false, false, true, true}},
          {{true, false, true, true}}}},
-       std::make_optional<
-           std::vector<std::optional<std::vector<std::optional<bool>>>>>({})});
+       common::testutil::optionalEmpty});
   testExpr(expected, "combinations(C0, C1)", {arrayVector, comboLengthVector});
 }
 
@@ -273,7 +269,6 @@ TEST_F(ArrayCombinationsTest, boolArrays) {
          {{false, true, true, true}},
          {{false, false, true, true}},
          {{true, false, true, true}}}},
-       std::make_optional<
-           std::vector<std::optional<std::vector<std::optional<bool>>>>>({})});
+       common::testutil::optionalEmpty});
   testExpr(expected, "combinations(C0, C1)", {arrayVector, comboLengthVector});
 }

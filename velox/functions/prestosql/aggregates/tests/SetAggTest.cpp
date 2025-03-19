@@ -13,6 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+#include "velox/common/testutil/OptionalEmpty.h"
 #include "velox/functions/lib/aggregates/tests/utils/AggregationTestBase.h"
 #include "velox/functions/prestosql/registration/RegistrationFunctions.h"
 #include "velox/functions/prestosql/types/TimestampWithTimeZoneType.h"
@@ -525,7 +526,7 @@ TEST_F(SetAggTest, arrayNestedNulls) {
   });
 
   auto expected = makeRowVector({makeNullableNestedArrayVector<int32_t>(
-      {{{std::make_optional<std::vector<std::optional<int32_t>>>({}),
+      {{{common::testutil::optionalEmpty,
          {{1, 2}},
          {{2, 3}},
          {{3, std::nullopt}},
@@ -544,8 +545,7 @@ TEST_F(SetAggTest, arrayNestedNulls) {
   expected = makeRowVector(
       {makeFlatVector<int32_t>({1, 2, 3, 4}),
        makeNullableNestedArrayVector<int32_t>(
-           {{{{std::make_optional<std::vector<std::optional<int32_t>>>({}),
-               {{1, 2}}}},
+           {{{{common::testutil::optionalEmpty, {{1, 2}}}},
              {{{{6, 7}}, {{std::nullopt, 7}}}},
              {{{{2, 3}}, {{3, std::nullopt}}}},
              {{{{8, 9}}, {{std::nullopt, std::nullopt}}}}}})});

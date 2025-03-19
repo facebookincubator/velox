@@ -16,6 +16,7 @@
 
 #include <optional>
 #include "velox/common/base/tests/GTestUtils.h"
+#include "velox/common/testutil/OptionalEmpty.h"
 #include "velox/functions/prestosql/tests/utils/FunctionBaseTest.h"
 #include "velox/functions/prestosql/types/TimestampWithTimeZoneType.h"
 
@@ -536,7 +537,7 @@ TEST_F(ArrayPositionTest, array) {
        {{{d}, {e}}},
        {{{d}, {a}, {b}}},
        {{{c}, {e}}},
-       {{{std::vector<std::optional<int64_t>>{}}}},
+       {{common::testutil::optionalEmpty}},
        {{{std::vector<std::optional<int64_t>>{std::nullopt}}}}});
 
   auto testPositionOfArray =
@@ -844,7 +845,7 @@ TEST_F(ArrayPositionTest, arrayWithInstance) {
        {{{d}, {e}}},
        {{{d}, {a}, {a}}},
        {{{c}, {c}}},
-       {{{std::vector<std::optional<int64_t>>{}}}},
+       {{common::testutil::optionalEmpty}},
        {{{std::vector<std::optional<int64_t>>{std::nullopt}}}}});
 
   auto testPositionOfArray =

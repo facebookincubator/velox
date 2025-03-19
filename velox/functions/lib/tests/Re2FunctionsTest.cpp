@@ -24,6 +24,7 @@
 
 #include "velox/common/base/VeloxException.h"
 #include "velox/common/base/tests/GTestUtils.h"
+#include "velox/common/testutil/OptionalEmpty.h"
 #include "velox/functions/prestosql/tests/utils/FunctionBaseTest.h"
 #include "velox/parse/TypeResolver.h"
 #include "velox/type/StringView.h"
@@ -1224,30 +1225,24 @@ TEST_F(Re2FunctionsTest, regexExtractAllNoMatch) {
   const std::vector<std::optional<int32_t>> groupIds0 = {0};
 
   testRe2ExtractAll(
-      {""},
-      {"[0-9]+"},
-      noGroupId,
-      {std::make_optional<std::vector<std::string>>({})});
+      {""}, {"[0-9]+"}, noGroupId, {common::testutil::optionalEmpty});
   testRe2ExtractAll(
       {"(╯°□°)╯︵ ┻━┻"},
       {"[0-9]+"},
       noGroupId,
-      {std::make_optional<std::vector<std::string>>({})});
+      {common::testutil::optionalEmpty});
   testRe2ExtractAll(
-      {"abcde"},
-      {"[0-9]+"},
-      groupIds0,
-      {std::make_optional<std::vector<std::string>>({})});
+      {"abcde"}, {"[0-9]+"}, groupIds0, {common::testutil::optionalEmpty});
   testRe2ExtractAll(
       {"rYBKVn6DnfSI2an4is4jbvf4btGpV"},
       {"81jnp58n31BtMdlUsP1hiF4QWSYv411"},
       noGroupId,
-      {std::make_optional<std::vector<std::string>>({})});
+      {common::testutil::optionalEmpty});
   testRe2ExtractAll(
       {"rYBKVn6DnfSI2an4is4jbvf4btGpV"},
       {"81jnp58n31BtMdlUsP1hiF4QWSYv411"},
       groupIds0,
-      {std::make_optional<std::vector<std::string>>({})});
+      {common::testutil::optionalEmpty});
 
   // Test empty pattern.
   testRe2ExtractAll<int32_t>(
