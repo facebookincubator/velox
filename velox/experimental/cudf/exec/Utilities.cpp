@@ -16,7 +16,11 @@
 
 #include "velox/experimental/cudf/exec/Utilities.h"
 
-#include <common/base/Exceptions.h>
+#include <cudf/concatenate.hpp>
+#include <cudf/detail/utilities/stream_pool.hpp>
+#include <cudf/utilities/default_stream.hpp>
+#include <cudf/utilities/error.hpp>
+#include <cudf/utilities/memory_resource.hpp>
 
 #include <rmm/mr/device/arena_memory_resource.hpp>
 #include <rmm/mr/device/cuda_async_memory_resource.hpp>
@@ -26,11 +30,7 @@
 #include <rmm/mr/device/owning_wrapper.hpp>
 #include <rmm/mr/device/pool_memory_resource.hpp>
 
-#include <cudf/concatenate.hpp>
-#include <cudf/detail/utilities/stream_pool.hpp>
-#include <cudf/utilities/default_stream.hpp>
-#include <cudf/utilities/error.hpp>
-#include <cudf/utilities/memory_resource.hpp>
+#include <common/base/Exceptions.h>
 
 #include <cstdlib>
 #include <memory>

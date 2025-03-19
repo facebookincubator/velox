@@ -14,6 +14,10 @@
  * limitations under the License.
  */
 
+#include "velox/experimental/cudf/exec/NvtxHelper.h"
+#include "velox/experimental/cudf/exec/Utilities.h"
+#include "velox/experimental/cudf/exec/VeloxCudfInterop.h"
+
 #include "velox/common/memory/Memory.h"
 #include "velox/type/Type.h"
 #include "velox/vector/BaseVector.h"
@@ -40,16 +44,12 @@
 #include <thrust/copy.h>
 #include <thrust/execution_policy.h>
 
-#include "velox/experimental/cudf/exec/NvtxHelper.h"
-#include "velox/experimental/cudf/exec/Utilities.h"
-#include "velox/experimental/cudf/exec/VeloxCudfInterop.h"
-
-#include <functional>
-#include <numeric>
-
 #include <arrow/c/bridge.h>
 #include <arrow/io/interfaces.h>
 #include <arrow/table.h>
+
+#include <functional>
+#include <numeric>
 
 namespace facebook::velox::cudf_velox {
 

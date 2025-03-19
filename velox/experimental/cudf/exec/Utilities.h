@@ -16,14 +16,15 @@
 
 #pragma once
 
-#include <memory>
-#include <string_view>
-
 #include "velox/experimental/cudf/vector/CudfVector.h"
 
 #include <cudf/detail/utilities/stream_pool.hpp>
 #include <cudf/table/table.hpp>
+
 #include <rmm/mr/device/device_memory_resource.hpp>
+
+#include <memory>
+#include <string_view>
 
 namespace facebook::velox::cudf_velox {
 

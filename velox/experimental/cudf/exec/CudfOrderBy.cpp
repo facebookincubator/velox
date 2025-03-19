@@ -14,15 +14,15 @@
  * limitations under the License.
  */
 
-#include <cudf/concatenate.hpp>
-#include <cudf/sorting.hpp>
-#include <cudf/table/table.hpp>
-#include <cudf/utilities/default_stream.hpp>
-
 #include "velox/experimental/cudf/exec/CudfOrderBy.h"
 #include "velox/experimental/cudf/exec/NvtxHelper.h"
 #include "velox/experimental/cudf/exec/Utilities.h"
 #include "velox/experimental/cudf/exec/VeloxCudfInterop.h"
+
+#include <cudf/concatenate.hpp>
+#include <cudf/sorting.hpp>
+#include <cudf/table/table.hpp>
+#include <cudf/utilities/default_stream.hpp>
 
 namespace facebook::velox::cudf_velox {
 

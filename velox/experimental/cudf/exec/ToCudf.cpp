@@ -14,7 +14,11 @@
  * limitations under the License.
  */
 
+#include "velox/experimental/cudf/exec/CudfConversion.h"
+#include "velox/experimental/cudf/exec/CudfOrderBy.h"
 #include "velox/experimental/cudf/exec/ToCudf.h"
+#include "velox/experimental/cudf/exec/Utilities.h"
+
 #include "velox/exec/Driver.h"
 #include "velox/exec/FilterProject.h"
 #include "velox/exec/HashAggregation.h"
@@ -22,9 +26,6 @@
 #include "velox/exec/HashProbe.h"
 #include "velox/exec/Operator.h"
 #include "velox/exec/OrderBy.h"
-#include "velox/experimental/cudf/exec/CudfConversion.h"
-#include "velox/experimental/cudf/exec/CudfOrderBy.h"
-#include "velox/experimental/cudf/exec/Utilities.h"
 
 #include <cudf/detail/nvtx/ranges.hpp>
 
