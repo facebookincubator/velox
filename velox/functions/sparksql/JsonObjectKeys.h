@@ -62,13 +62,11 @@ struct JsonObjectKeysFunction {
   }
 
  private:
-  // TODO: After upgrade simdjson, we could replace with simdjson function
-  // relevant simdjson function:
+  // TODO: After upgrade simdjson v3.12.3, we could replace with simdjson
+  // function relevant simdjson function:
   // https://github.com/simdjson/simdjson/blob/master/include/simdjson/error-inl.h#L10-L12
-  bool isFatal(simdjson::error_code error) noexcept {
-    // simdjson::INCOMPLETE_ARRAY_OR_OBJECT and simdjson::TAPE_ERROR
-    // indicate a fatal error and follow from the fact that
-    // the document is not valid JSON.
+  FOLLY_ALWAYS_INLINE bool isFatal(simdjson::error_code error) noexcept {
+    // Indicates the document is not valid JSON.
     return error == simdjson::error_code::TAPE_ERROR ||
         error == simdjson::error_code::INCOMPLETE_ARRAY_OR_OBJECT;
   }
