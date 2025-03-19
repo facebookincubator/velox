@@ -73,34 +73,6 @@ class UuidCastOperator : public exec::CastOperator {
 
  private:
   template <TypeKind KIND>
-  static void castFromTypeKind(
-      const BaseVector& input,
-      exec::EvalCtx& context,
-      const SelectivityVector& rows,
-      BaseVector& result) {
-    auto* flatResult = result.as<FlatVector<int128_t>>();
-    const auto* uuidInput = input.as<SimpleVector<StringView>>();
-
-    context.applyToSelectedNoThrow(rows, [&](auto row) {
-      const auto uuidValue = uuidInput->valueAt(row);
-
-      int128_t u;
-
-      if (KIND == TypeKind::VARCHAR) {
-        auto uuid = boost::lexical_cast<boost::uuids::uuid>(uuidValue);
-        memcpy(&u, &uuid, 16);
-      } else if (KIND == TypeKind::VARBINARY) {
-        memcpy(&u, uuidValue.data(), 16);
-      }
-
-      // Convert a big endian value from Boost to native byte-order.
-      u = DecimalUtil::bigEndian(u);
-
-      flatResult->set(row, u);
-    });
-  }
-
-  template <TypeKind KIND>
   static void castToTypeKind(
       const BaseVector& input,
       exec::EvalCtx& context,
@@ -148,6 +120,34 @@ class UuidCastOperator : public exec::CastOperator {
       }
 
       writer.finalize();
+    });
+  }
+
+  template <TypeKind KIND>
+  static void castFromTypeKind(
+      const BaseVector& input,
+      exec::EvalCtx& context,
+      const SelectivityVector& rows,
+      BaseVector& result) {
+    auto* flatResult = result.as<FlatVector<int128_t>>();
+    const auto* uuidInput = input.as<SimpleVector<StringView>>();
+
+    context.applyToSelectedNoThrow(rows, [&](auto row) {
+      const auto uuidValue = uuidInput->valueAt(row);
+
+      int128_t u;
+
+      if (KIND == TypeKind::VARCHAR) {
+        auto uuid = boost::lexical_cast<boost::uuids::uuid>(uuidValue);
+        memcpy(&u, &uuid, 16);
+      } else if (KIND == TypeKind::VARBINARY) {
+        memcpy(&u, uuidValue.data(), 16);
+      }
+
+      // Convert a big endian value from Boost to native byte-order.
+      u = DecimalUtil::bigEndian(u);
+
+      flatResult->set(row, u);
     });
   }
 };
