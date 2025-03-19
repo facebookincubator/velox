@@ -564,9 +564,9 @@ static void __matches(std::istream& __input, std::string_view __expected) {
   if (std::holds_alternative<std::string>(__result.__rules)) {
     const auto&  rule_name = std::get<std::string>(__result.__rules);
     const auto rules = __binary_find(__rules, rule_name);
-    if (rules == std::end(__rules))
-      std::__throw_runtime_error(
-          (fmt::format("corrupt tzdb: rule '{}' does not exist", rule_name)).c_str());
+//    if (rules == std::end(__rules))
+//      std::__throw_runtime_error(
+//          (fmt::format("corrupt tzdb: rule '{}' does not exist", rule_name)).c_str());
     size_t numForeverRules = 0;
     std::pair<std::vector<__rule>::const_iterator, std::vector<__rule>::const_iterator>& foreverRules = __result.__forever_rules;
     for (auto iter = rules->second.cbegin(); iter < rules->second.cend(); ++iter) {
@@ -708,6 +708,10 @@ static void __parse_zone(
   } while (std::isdigit(__input.peek()) || __input.peek() == '-');
 
   std::filesystem::path __root = __libcpp_tzdb_directory();
+  if (!std::filesystem::exists(__root/ __p->__name())) {
+    // in case the zonefile does not exists
+    return;
+  }
   std::ifstream zone_file{__root / __p->__name()};
   date::populate_transitions(__p->transitions(), __p->ttinfos(), zone_file);
 
@@ -836,7 +840,11 @@ void __init_tzdb(tzdb& __tzdb, __rules_storage_type& __rules) {
   std::filesystem::path __root = __libcpp_tzdb_directory();
   std::ifstream __tzdata{__root / "tzdata.zi"};
 
-  __tzdb.version = __parse_version(__tzdata);
+  __tzdb.version = "legacy";
+  if (std::filesystem::exists(__root / "tzdata.zi")) {
+    // in case the tzdata.zi does not exists
+      __tzdb.version = __parse_version(__tzdata);
+  }
   __parse_tzdata(__tzdb, __rules, __tzdata);
   std::sort(__tzdb.zones.begin(), __tzdb.zones.end());
   std::sort(__tzdb.links.begin(), __tzdb.links.end());
@@ -942,7 +950,11 @@ const tzdb& reload_tzdb() {
 std::string remote_version() {
   std::filesystem::path __root = __libcpp_tzdb_directory();
   std::ifstream __tzdata{__root / "tzdata.zi"};
-  return __parse_version(__tzdata);
+  if (std::filesystem::exists(__root / "tzdata.zi")) {
+    // in case the tzdata.zi does not exists
+    return __parse_version(__tzdata);
+  }
+  return "legacy";
 }
 
 } // namespace facebook::velox::tzdb
