@@ -56,7 +56,7 @@ namespace facebook::velox::cudf_velox {
 namespace with_arrow {
 
 std::unique_ptr<cudf::table> to_cudf_table(
-    const facebook::velox::RowVectorPtr& veloxTable, // BaseVector or RowVector?
+    const facebook::velox::RowVectorPtr& veloxTable,
     facebook::velox::memory::MemoryPool* pool,
     rmm::cuda_stream_view stream) {
   // Need to flattenDictionary and flattenConstant, otherwise we observe issues

@@ -34,10 +34,14 @@
 
 namespace facebook::velox::cudf_velox {
 
+namespace {
+
 template <class... Deriveds, class Base>
 bool is_any_of(const Base* p) {
   return ((dynamic_cast<const Deriveds*>(p) != nullptr) || ...);
 }
+
+} // namespace
 
 static bool _cudfIsRegistered = false;
 
@@ -109,10 +113,8 @@ bool CompileState::compile() {
       auto plan_node = std::dynamic_pointer_cast<const core::OrderByNode>(
           get_plan_node(orderByOp->planNodeId()));
       VELOX_CHECK(plan_node != nullptr);
-      // From-velox (optional)
       replace_op.push_back(std::make_unique<CudfOrderBy>(id, ctx, plan_node));
       replace_op.back()->initialize();
-      // To-velox (optional)
     }
 
     if (next_operator_is_not_gpu and produces_gpu_output(oper)) {
@@ -176,13 +178,17 @@ struct cudfDriverAdapter {
 };
 
 void registerCudf() {
+  if (cudfIsRegistered()) {
+    return;
+  }
+
   const char* env_cudf_disabled = std::getenv("VELOX_CUDF_DISABLED");
   if (env_cudf_disabled != nullptr && std::stoi(env_cudf_disabled)) {
     return;
   }
 
   CUDF_FUNC_RANGE();
-  cudaFree(0); // to init context.
+  cudaFree(0); // Initialize CUDA context at startup
 
   const char* env_cudf_mr = std::getenv("VELOX_CUDF_MEMORY_RESOURCE");
   auto mr_mode = env_cudf_mr != nullptr ? env_cudf_mr : "async";

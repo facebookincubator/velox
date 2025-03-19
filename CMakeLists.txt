@@ -227,7 +227,8 @@ find_package(OpenSSL REQUIRED)
 
 if(VELOX_ENABLE_CCACHE
    AND NOT CMAKE_C_COMPILER_LAUNCHER
-   AND NOT CMAKE_CXX_COMPILER_LAUNCHER)
+   AND NOT CMAKE_CXX_COMPILER_LAUNCHER
+   AND NOT CMAKE_CUDA_COMPILER_LAUNCHER)
 
   find_program(CCACHE_FOUND ccache)
 
@@ -463,6 +464,9 @@ else()
   set(glog_SOURCE SYSTEM)
 endif()
 velox_resolve_dependency(glog)
+
+velox_set_source(fmt)
+velox_resolve_dependency(fmt 9.0.0)
 
 if(${VELOX_BUILD_MINIMAL_WITH_DWIO} OR ${VELOX_ENABLE_HIVE_CONNECTOR})
   # DWIO needs all sorts of stream compression libraries.
