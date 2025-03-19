@@ -82,6 +82,10 @@ class TDigest {
   /// @param quantile Quantile in [0, 1] to be estimated.
   double estimateQuantile(double quantile) const;
 
+  /// Estimate the quantile for a given value
+  /// @param value to be estimated.
+  double getCdf(double quantile);
+
   /// Calculate the size needed for serialization.
   int64_t serializedByteSize() const;
 
@@ -112,6 +116,7 @@ class TDigest {
  private:
   static constexpr int8_t kSerializationVersion = 1;
   static constexpr double kEpsilon = 1e-3;
+  int activeCentroids_ = 0;
 
   void mergeNewValues(std::vector<int16_t>& positions, double compression);
 
@@ -171,6 +176,7 @@ void TDigest<A>::add(
   max_ = std::max(max_, value);
   weights_.push_back(weight);
   means_.push_back(value);
+  activeCentroids_++; // Update activeCentroids
   if (weights_.size() >= maxBufferSize_) {
     mergeNewValues(positions, 2 * compression_);
   }
@@ -294,6 +300,7 @@ void TDigest<A>::mergeImpl(
   means_.resize(numMerged_);
   min_ = std::min(min_, means_.front());
   max_ = std::max(max_, means_.back());
+  activeCentroids_ = numMerged_;
 }
 
 template <typename A>
@@ -366,6 +373,100 @@ double TDigest<A>::estimateQuantile(double quantile) const {
   auto z1 = index - totalWeight - weights_.back() / 2;
   auto z2 = weights_.back() / 2 - z1;
   return weightedAverageSorted(means_.back(), z1, max_, z2);
+}
+
+template <typename A>
+double TDigest<A>::getCdf(double x) {
+  auto totalWeight = std::accumulate(weights_.begin(), weights_.end(), 0.0);
+  if (activeCentroids_ == 0) {
+    return std::numeric_limits<double>::quiet_NaN();
+  }
+  if (activeCentroids_ == 1) {
+    double width = max_ - min_;
+    if (x < min_) {
+      return 0.0;
+    }
+    if (x > max_) {
+      return 1.0;
+    }
+    if (x - min_ <= width) {
+      return 0.5;
+    }
+    return (x - min_) / (max_ - min_);
+  }
+  int n = activeCentroids_;
+  if (x < min_) {
+    return 0.0;
+  }
+
+  if (x > max_) {
+    return 1.0;
+  }
+
+  if (x < means_[0]) {
+    if (means_[0] - min_ > 0) {
+      if (x == min_) {
+        return 0.5 / totalWeight;
+      }
+      return (1 + (x - min_) / (means_[0] - min_) * (weights_[0] / 2 - 1)) /
+          totalWeight;
+    }
+    return 0.0;
+  }
+
+  if (x > means_[n - 1]) {
+    if (max_ - means_[n - 1] > 0) {
+      if (x == max_) {
+        return 1 - 0.5 / totalWeight;
+      }
+      double dq =
+          (1 +
+           (max_ - x) / (max_ - means_[n - 1]) * (weights_[n - 1] / 2 - 1)) /
+          totalWeight;
+      return 1 - dq;
+    }
+    return 1.0;
+  }
+
+  double weightSoFar = 0;
+  for (int it = 0; it < n - 1; it++) {
+    if (means_[it] == x) {
+      double dw = 0;
+      while (it < n && means_[it] == x) {
+        dw += weights_[it];
+        it++;
+      }
+      return (weightSoFar + dw / 2) / totalWeight;
+    } else if (means_[it] <= x && x < means_[it + 1]) {
+      if (means_[it + 1] - means_[it] > 0) {
+        double leftExcludedW = 0;
+        double rightExcludedW = 0;
+        if (weights_[it] == 1) {
+          if (weights_[it + 1] == 1) {
+            return (weightSoFar + 1) / totalWeight;
+          } else {
+            leftExcludedW = 0.5;
+          }
+        } else if (weights_[it + 1] == 1) {
+          rightExcludedW = 0.5;
+        }
+        double dw = (weights_[it] + weights_[it + 1]) / 2;
+        double left = means_[it];
+        double right = means_[it + 1];
+        double dwNoSingleton = dw - leftExcludedW - rightExcludedW;
+        double base = weightSoFar + weights_[it] / 2 + leftExcludedW;
+        return (base + dwNoSingleton * (x - left) / (right - left)) /
+            totalWeight;
+      } else {
+        double dw = (weights_[it] + weights_[it + 1]) / 2;
+        return (weightSoFar + dw) / totalWeight;
+      }
+    } else {
+      weightSoFar += weights_[it];
+    }
+  }
+
+  return 1 - 0.5 / totalWeight;
 }
 
 namespace tdigest::detail {
