@@ -44,7 +44,7 @@ TEST_F(JsonObjectKeysTest, basic) {
   assertEqualVectors(
       jsonObjectKeys(R"({"key": 45, "random_string"})"), expected);
   assertEqualVectors(jsonObjectKeys(R"([{1, 2, 3}])"), expected);
-  // test with UNCLOSED_STRING error of simdjson
+  // Test with UNCLOSED_STRING error of simdjson.
   assertEqualVectors(jsonObjectKeys(R"({"key: 45})"), expected);
   assertEqualVectors(
       jsonObjectKeys(R"({ "pie": true, "cherry": [1, 2, 3 })"), expected);
