@@ -14,6 +14,15 @@
 list(APPEND CMAKE_PREFIX_PATH "${CUDAToolkit_LIBRARY_DIR}/cmake")
 find_package(CUB REQUIRED)
 
+add_executable(velox_gpu_double_buffer_process_test DoubleBufferProcessTest.cu)
+target_link_libraries(
+  velox_gpu_double_buffer_process_test
+  Folly::folly
+  gflags::gflags
+  glog::glog
+  CUB::CUB
+  CUDA::cudart)
+
 add_executable(velox_gpu_hash_table_test HashTableTest.cu)
 target_link_libraries(
   velox_gpu_hash_table_test
