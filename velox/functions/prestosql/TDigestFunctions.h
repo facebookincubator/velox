@@ -56,4 +56,20 @@ struct ValuesAtQuantilesFunction {
   }
 };
 
+template <typename T>
+struct QuantileAtValueFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  FOLLY_ALWAYS_INLINE void call(
+      out_type<double>& result,
+      const arg_type<SimpleTDigest<double>>& input,
+      const arg_type<double>& value) {
+    TDigest<> digest;
+    std::vector<int16_t> positions;
+    digest.mergeDeserialized(positions, input.data());
+    digest.compress(positions);
+    result = digest.getCdf(value);
+  }
+};
+
 } // namespace facebook::velox::functions
