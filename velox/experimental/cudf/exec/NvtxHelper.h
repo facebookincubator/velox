@@ -17,6 +17,7 @@
 #pragma once
 
 #include <nvtx3/nvtx3.hpp>
+
 #include <optional>
 
 namespace facebook::velox::cudf_velox {
