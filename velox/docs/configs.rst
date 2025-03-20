@@ -910,7 +910,7 @@ Tracing
      - Description
    * - query_trace_enabled
      - bool
-     - true
+     - false
      - If true, enable query tracing.
    * - query_trace_dir
      - string
