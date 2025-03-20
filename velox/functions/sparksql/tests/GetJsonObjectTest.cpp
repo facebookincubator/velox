@@ -120,14 +120,45 @@ TEST_F(GetJsonObjectTest, nullResult) {
 }
 
 TEST_F(GetJsonObjectTest, wildcard) {
-  EXPECT_EQ(getJsonObject(R"(["a": "1", "a": "2"])", "$[*]"), R"(["a": "1", "a": "2"])");
-  EXPECT_EQ(getJsonObject(R"(["a": "1", "a": "2"])", "$[*].a"), R"(["1", "2"])");
-  EXPECT_EQ(getJsonObject(R"(["a": "1", "a": "2"])", "$[*][0]"), std::nullopt);
-  EXPECT_EQ(getJsonObject(R"([[{"a": "1"}, "a1"], [{"a": "2"}, "a2"]])", "$[*][0]"), R"([{"a": "1"}, {"a": "2"}])");
-  EXPECT_EQ(getJsonObject(R"({"id": [{"a": "1"}, {"a": "2"}]})", "$id"), R"([{"a": "1"}, {"a": "2"}])");
-  EXPECT_EQ(getJsonObject(R"({"id": [{"a": "1"}, {"a": "2"}]})", "$id[*]"), R"([{"a": "1"}, {"a": "2"}])");
-  EXPECT_EQ(getJsonObject(R"({"id": [{"a": "1"}, {"a": "2"}]})", "$id[*][0]"), std::nullopt);
-  EXPECT_EQ(getJsonObject(R"({"id": [{"a": "1"}, {"a": "2"}]})", "$id[*].a"), R"(["1", "2"])");
+  EXPECT_EQ(
+      getJsonObject(R"([{"a": "1"}, {"a": "2"}])", "$[*]"),
+      R"([{"a": "1"}, {"a": "2"}])");
+  EXPECT_EQ(
+      getJsonObject(R"([{"a": "1"}, {"a": "2"}])", "$[*].a"), R"(["1","2"])");
+  EXPECT_EQ(
+      getJsonObject(R"([{"a": "1"}, {"a": "2"}])", "$[*][0]"), std::nullopt);
+  EXPECT_EQ(
+      getJsonObject(R"([[{"a": "1"}, "a1"], [{"a": "2"}, "a2"]])", "$[*][0]"),
+      R"([{"a": "1"},{"a": "2"}])");
+  EXPECT_EQ(
+      getJsonObject(R"({"id": [{"a": "1"}, {"a": "2"}]})", "$[*]"),
+      std::nullopt);
+  EXPECT_EQ(
+      getJsonObject(R"({"id": [{"a": "1"}, {"a": "2"}]})", "$.id[*]"),
+      R"([{"a": "1"}, {"a": "2"}])");
+  EXPECT_EQ(
+      getJsonObject(R"({"id": [{"a": "1"}, {"a": "2"}]})", "$.id[*][0]"),
+      std::nullopt);
+  EXPECT_EQ(
+      getJsonObject(R"({"id": [{"a": "1"}, {"a": "2"}]})", "$.id[*].a"),
+      R"(["1","2"])");
+
+  // One element as result, no bracket.
+  EXPECT_EQ(getJsonObject(R"({"id": [{"a": 1}]})", "$.id[*].a"), "1");
+  EXPECT_EQ(getJsonObject(R"({"id": [{"a": ""}]})", "$.id[*].a"), "");
+  EXPECT_EQ(
+      getJsonObject(R"({"id": [{"a": "1"}, {"b": "2"}]})", "$.id[*].a"), "1");
+  EXPECT_EQ(
+      getJsonObject(R"({"id": [{"a": "v1.0"}, {"b": "v2.0"}]})", "$.id[*].a"),
+      "v1.0");
+  EXPECT_EQ(getJsonObject(R"({"id": [[1, 2]]})", "$.id[*][0]"), "1");
+  // Key is not found.
+  EXPECT_EQ(getJsonObject(R"({"id": [{"a": 1}]})", "$.id[*].b"), std::nullopt);
+
+  EXPECT_EQ(
+      getJsonObject(R"({"id": [{"a": 1}, {"a": 2}]})", "$.id[*].a"), "[1,2]");
+  EXPECT_EQ(
+      getJsonObject(R"({"id": [[1, 2], [3, 4]]})", "$.id[*][0]"), "[1,3]");
 }
 
 } // namespace
