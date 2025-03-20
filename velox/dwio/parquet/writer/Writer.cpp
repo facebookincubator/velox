@@ -142,7 +142,9 @@ std::shared_ptr<WriterProperties> getArrowParquetWriterOptions(
         getArrowParquetCompression(columnCompressionValues.second));
   }
   properties = properties->encoding(options.encoding);
-  properties = properties->data_pagesize(options.dataPageSize);
+  properties =
+      properties->data_pagesize(options.dataPageSize.value_or(
+        facebook::velox::parquet::arrow::kDefaultDataPageSize));
   properties = properties->max_row_group_length(
       static_cast<int64_t>(flushPolicy->rowsInRowGroup()));
   properties = properties->codec_options(options.codecOptions);
@@ -255,6 +257,34 @@ std::optional<bool> getParquetDataPageVersion(
       return true;
     } else {
       VELOX_FAIL("Unsupported parquet datapage version {}", version.value());
+    }
+  }
+  return std::nullopt;
+}
+
+std::optional<int64_t> getParquetPageSize(
+    const config::ConfigBase& config,
+    const char* configKey) {
+  if (const auto pageSize = config.get<std::string>(configKey)) {
+    std::string trimmed;
+    // Remove spaces if any
+    std::remove_copy_if(pageSize->begin(), pageSize->end(), std::back_inserter(trimmed), ::isspace);
+    size_t firstNonDigitPos{0};
+    while (firstNonDigitPos < trimmed.size() && std::isdigit(trimmed[firstNonDigitPos])) {
+      firstNonDigitPos++;
+    }
+    int64_t value = std::stoll(trimmed.substr(0, firstNonDigitPos));
+    std::string unit = trimmed.substr(firstNonDigitPos);
+    if (unit.empty() || "B" == unit) {
+      return value;
+    } else if ("KB" == unit) {
+      return value * 1'024;
+    } else if ("MB" == unit) {
+      return value * 1'024 * 1'024;
+    } else if ("GB" == unit) {
+      return value * 1'024 * 1'024 * 1'024;
+    } else {
+      VELOX_FAIL("Unsupported parquet page size unit {}", unit);
     }
   }
   return std::nullopt;
@@ -497,6 +527,15 @@ void WriterOptions::processConfigs(
         ? getParquetDataPageVersion(session, kParquetSessionDataPageVersion)
         : getParquetDataPageVersion(
               connectorConfig, kParquetHiveConnectorDataPageVersion);
+  }
+
+  if (!dataPageSize) {
+    dataPageSize =
+        getParquetPageSize(session, kParquetSessionWritePageSize)
+            .has_value()
+        ? getParquetPageSize(session, kParquetSessionWritePageSize)
+        : getParquetPageSize(connectorConfig,
+          kParquetHiveConnectorWritePageSize);
   }
 }
 
