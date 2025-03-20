@@ -23,6 +23,7 @@
 #include "velox/functions/sparksql/ArrayFlattenFunction.h"
 #include "velox/functions/sparksql/ArrayInsert.h"
 #include "velox/functions/sparksql/ArrayMinMaxFunction.h"
+#include "velox/functions/sparksql/ArrayPrepend.h"
 #include "velox/functions/sparksql/ArraySort.h"
 
 namespace facebook::velox::functions {
@@ -196,6 +197,11 @@ void registerArrayFunctions(const std::string& prefix) {
       Array<Generic<T1>>,
       Generic<T1>>({prefix + "array_append"});
   registerArrayUnionFunctions(prefix);
+  registerFunction<
+      ArrayPrependFunction,
+      Array<Generic<T1>>,
+      Array<Generic<T1>>,
+      Generic<T1>>({prefix + "array_prepend"});
 }
 
 } // namespace sparksql
