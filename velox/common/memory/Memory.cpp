@@ -20,9 +20,10 @@
 
 #include "velox/common/base/Counters.h"
 #include "velox/common/base/StatsReporter.h"
-#include "velox/common/config/GlobalConfig.h"
 #include "velox/common/memory/MallocAllocator.h"
 #include "velox/common/memory/MmapAllocator.h"
+
+DECLARE_int32(velox_memory_num_shared_leaf_pools);
 
 namespace facebook::velox::memory {
 namespace {
@@ -78,7 +79,7 @@ std::vector<std::shared_ptr<MemoryPool>> createSharedLeafMemoryPools(
   VELOX_CHECK_EQ(sysPool.name(), kSysRootName);
   std::vector<std::shared_ptr<MemoryPool>> leafPools;
   const size_t numSharedPools =
-      std::max(1, config::globalConfig().memoryNumSharedLeafPools);
+      std::max(1, FLAGS_velox_memory_num_shared_leaf_pools);
   leafPools.reserve(numSharedPools);
   for (size_t i = 0; i < numSharedPools; ++i) {
     leafPools.emplace_back(
@@ -96,6 +97,7 @@ MemoryManager::MemoryManager(const MemoryManagerOptions& options)
       debugEnabled_(options.debugEnabled),
       coreOnAllocationFailureEnabled_(options.coreOnAllocationFailureEnabled),
       disableMemoryPoolTracking_(options.disableMemoryPoolTracking),
+      getPreferredSize_(options.getPreferredSize),
       poolDestructionCb_([&](MemoryPool* pool) { dropPool(pool); }),
       sysRoot_{std::make_shared<MemoryPoolImpl>(
           this,
@@ -111,7 +113,8 @@ MemoryManager::MemoryManager(const MemoryManagerOptions& options)
               .trackUsage = options.trackDefaultUsage,
               .debugEnabled = options.debugEnabled,
               .coreOnAllocationFailureEnabled =
-                  options.coreOnAllocationFailureEnabled})},
+                  options.coreOnAllocationFailureEnabled,
+              .getPreferredSize = getPreferredSize_})},
       spillPool_{addLeafPool("__sys_spilling__")},
       cachePool_{addLeafPool("__sys_caching__")},
       tracePool_{addLeafPool("__sys_tracing__")},
@@ -129,7 +132,7 @@ MemoryManager::MemoryManager(const MemoryManagerOptions& options)
       sysRoot_->name());
   VELOX_CHECK_EQ(
       sharedLeafPools_.size(),
-      std::max(1, config::globalConfig().memoryNumSharedLeafPools));
+      std::max(1, FLAGS_velox_memory_num_shared_leaf_pools));
 }
 
 MemoryManager::~MemoryManager() {
@@ -246,6 +249,7 @@ std::shared_ptr<MemoryPool> MemoryManager::addRootPool(
   options.trackUsage = true;
   options.debugEnabled = debugEnabled_;
   options.coreOnAllocationFailureEnabled = coreOnAllocationFailureEnabled_;
+  options.getPreferredSize = getPreferredSize_;
 
   auto pool = createRootPool(poolName, reclaimer, options);
   if (!disableMemoryPoolTracking_) {
@@ -255,7 +259,7 @@ std::shared_ptr<MemoryPool> MemoryManager::addRootPool(
         VELOX_FAIL("Duplicate root pool name found: {}", poolName);
       }
       pools_.emplace(poolName, pool);
-    } catch (const VeloxRuntimeError& ex) {
+    } catch (const VeloxRuntimeError&) {
       arbitrator_->removePool(pool.get());
       throw;
     }

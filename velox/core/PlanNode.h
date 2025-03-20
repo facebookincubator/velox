@@ -128,7 +128,7 @@ struct PlanSummaryOptions {
   /// summary. Each field has a name and a type. The amount of type information
   /// is controlled by 'maxChildTypes' option. Use 0 to include only the number
   /// of output fields.
-  size_t maxOutputFileds = 5;
+  size_t maxOutputFields = 5;
 
   /// For a given output type, maximum number of child types to include in the
   /// summary. By default, only top-level type is included: BIGINT, ARRAY, MAP,
@@ -1768,6 +1768,68 @@ class MergeJoinNode : public AbstractJoinNode {
   static PlanNodePtr create(const folly::dynamic& obj, void* context);
 };
 
+struct IndexLookupCondition : public ISerializable {
+  /// References to an index table column.
+  FieldAccessTypedExprPtr key;
+
+  explicit IndexLookupCondition(FieldAccessTypedExprPtr _key)
+      : key(std::move(_key)) {}
+
+  folly::dynamic serialize() const override;
+
+  virtual std::string toString() const = 0;
+};
+using IndexLookupConditionPtr = std::shared_ptr<IndexLookupCondition>;
+
+/// Represents IN-LIST index lookup condition: contains('list', 'key'). 'list'
+/// can be either a probe input column or a constant list with type of
+/// ARRAY(typeof('key')).
+struct InIndexLookupCondition : public IndexLookupCondition {
+  /// References to either a probe input column or a constant list.
+  TypedExprPtr list;
+
+  InIndexLookupCondition(FieldAccessTypedExprPtr _key, TypedExprPtr _list)
+      : IndexLookupCondition(std::move(_key)), list(std::move(_list)) {}
+
+  folly::dynamic serialize() const override;
+
+  std::string toString() const override;
+
+  static IndexLookupConditionPtr create(
+      const folly::dynamic& obj,
+      void* context);
+};
+using InIndexLookupConditionPtr = std::shared_ptr<InIndexLookupCondition>;
+
+/// Represents BETWEEN index lookup condition: 'key' between 'lower' and
+/// 'upper'. 'lower' and 'upper' have the same type of 'key'.
+struct BetweenIndexLookupCondition : public IndexLookupCondition {
+  /// The between bound either reference to a probe input column or a constant
+  /// value.
+  ///
+  /// NOTE: the bounds are inclusive.
+  TypedExprPtr lower;
+  TypedExprPtr upper;
+
+  BetweenIndexLookupCondition(
+      FieldAccessTypedExprPtr _key,
+      TypedExprPtr _lower,
+      TypedExprPtr _upper)
+      : IndexLookupCondition(std::move(_key)),
+        lower(std::move(_lower)),
+        upper(std::move(_upper)) {}
+
+  folly::dynamic serialize() const override;
+
+  std::string toString() const override;
+
+  static IndexLookupConditionPtr create(
+      const folly::dynamic& obj,
+      void* context);
+};
+using BetweenIndexLookupConditionPtr =
+    std::shared_ptr<BetweenIndexLookupCondition>;
+
 /// Represents index lookup join. Translates to an exec::IndexLookupJoin
 /// operator. Assumes the right input is a table scan source node that provides
 /// indexed table lookup for the left input with the specified join keys and
@@ -1796,8 +1858,8 @@ class MergeJoinNode : public AbstractJoinNode {
 ///    maybe some more)
 /// - 'leftKeys' is a list of one key 't.sid'
 /// - 'rightKeys' is a list of one key 'u.sid'
-/// - 'joinConditions' is a list of one expression: contains(t.event_list,
-///    u.event_type)
+/// - 'joinConditions' specifies one condition: contains(t.event_list,
+///   u.event_type)
 /// - 'outputType' contains 3 columns : t.sid, t.day_ts, u.event_type
 ///
 class IndexLookupJoinNode : public AbstractJoinNode {
@@ -1809,7 +1871,7 @@ class IndexLookupJoinNode : public AbstractJoinNode {
       JoinType joinType,
       const std::vector<FieldAccessTypedExprPtr>& leftKeys,
       const std::vector<FieldAccessTypedExprPtr>& rightKeys,
-      const std::vector<TypedExprPtr>& joinConditions,
+      const std::vector<IndexLookupConditionPtr>& joinConditions,
       PlanNodePtr left,
       TableScanNodePtr right,
       RowTypePtr outputType)
@@ -1849,7 +1911,7 @@ class IndexLookupJoinNode : public AbstractJoinNode {
     return lookupSourceNode_;
   }
 
-  const std::vector<TypedExprPtr>& joinConditions() const {
+  const std::vector<IndexLookupConditionPtr>& joinConditions() const {
     return joinConditions_;
   }
 
@@ -1869,7 +1931,7 @@ class IndexLookupJoinNode : public AbstractJoinNode {
 
   const TableScanNodePtr lookupSourceNode_;
 
-  const std::vector<TypedExprPtr> joinConditions_;
+  const std::vector<IndexLookupConditionPtr> joinConditions_;
 };
 
 /// Represents inner/outer nested loop joins. Translates to an

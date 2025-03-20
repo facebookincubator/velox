@@ -59,6 +59,8 @@ DEFINE_uint32(
     "Timeout in milliseconds for HTTP requests made to reference DB, "
     "such as Presto. Example: --req_timeout_ms=2000");
 
+// Any change made in the file should be reflected in
+// the FB-internal window fuzzer test too.
 namespace facebook::velox::exec::test {
 namespace {
 
@@ -139,7 +141,7 @@ int main(int argc, char** argv) {
       customVerificationFunctions = {
           // Approx functions.
           {"approx_distinct", std::make_shared<ApproxDistinctResultVerifier>()},
-          {"approx_set", nullptr},
+          {"approx_set", std::make_shared<ApproxDistinctResultVerifier>(true)},
           {"approx_percentile",
            std::make_shared<ApproxPercentileResultVerifier>()},
           {"approx_most_frequent", nullptr},

@@ -260,7 +260,7 @@ class BlockingState {
   ContinueFuture future_;
   Operator* operator_;
   BlockingReason reason_;
-  uint64_t sinceMicros_;
+  uint64_t sinceUs_;
 
   static std::atomic_uint64_t numBlockedDrivers_;
 };
@@ -370,14 +370,18 @@ class Driver : public std::enable_shared_from_this<Driver> {
   /// Run the pipeline until it produces a batch of data or gets blocked.
   /// Return the data produced or nullptr if pipeline finished processing and
   /// will not produce more data. Return nullptr and set 'future' if
-  /// pipeline got blocked.
+  /// pipeline got blocked. 'blockingOp' and 'blockingReason' are set if the
+  /// driver is blocked by an operator.
   ///
   /// This API supports execution of a Task synchronously in the caller's
   /// thread. The caller must use either this API or 'enqueue', but not both.
   /// When using 'enqueue', the last operator in the pipeline (sink) must not
   /// return any data from Operator::getOutput(). When using 'next', the last
   /// operator must produce data that will be returned to caller.
-  RowVectorPtr next(ContinueFuture* future);
+  RowVectorPtr next(
+      ContinueFuture* future,
+      Operator*& blockingOp,
+      BlockingReason& blockingReason);
 
   /// Invoked to initialize the operators from this driver once on its first
   /// execution.
@@ -409,7 +413,7 @@ class Driver : public std::enable_shared_from_this<Driver> {
 
   /// Checks if the associated query is under memory arbitration or not. The
   /// function returns true if it is and set future which is fulfilled when the
-  /// the memory arbiration finishes.
+  /// memory arbitration finishes.
   bool checkUnderArbitration(ContinueFuture* future);
 
   void initializeOperatorStats(std::vector<OperatorStats>& stats);

@@ -215,31 +215,32 @@ void ExpressionFuzzerVerifier::logStats() {
     return left.second.numProcessedRows > right.second.numProcessedRows;
   });
   int maxEntriesLimit = std::min<size_t>(10, entries.size());
-  LOG(INFO) << "==============================> Top " << maxEntriesLimit
-            << " by number of rows processed";
-  LOG(INFO)
+  LOG(ERROR) << "==============================> Top " << maxEntriesLimit
+             << " by number of rows processed";
+  LOG(ERROR)
       << "Format: functionName numTimesSelected proportionOfTimesSelected "
          "numProcessedRows";
   for (int i = 0; i < maxEntriesLimit; i++) {
-    LOG(INFO) << entries[i].first << " " << entries[i].second.numTimesSelected
-              << " " << std::fixed << std::setprecision(2)
-              << (entries[i].second.numTimesSelected * 100.00) / totalSelections
-              << "% " << entries[i].second.numProcessedRows;
+    LOG(ERROR) << entries[i].first << " " << entries[i].second.numTimesSelected
+               << " " << std::fixed << std::setprecision(2)
+               << (entries[i].second.numTimesSelected * 100.00) /
+            totalSelections
+               << "% " << entries[i].second.numProcessedRows;
   }
 
-  LOG(INFO) << "==============================> Bottom " << maxEntriesLimit
-            << " by number of rows processed";
-  LOG(INFO)
+  LOG(ERROR) << "==============================> Bottom " << maxEntriesLimit
+             << " by number of rows processed";
+  LOG(ERROR)
       << "Format: functionName numTimesSelected proportionOfTimesSelected "
          "numProcessedRows";
   for (int i = 0; i < maxEntriesLimit; i++) {
     int idx = entries.size() - 1 - i;
-    LOG(INFO) << entries[idx].first << " "
-              << entries[idx].second.numTimesSelected << " " << std::fixed
-              << std::setprecision(2)
-              << (entries[idx].second.numTimesSelected * 100.00) /
+    LOG(ERROR) << entries[idx].first << " "
+               << entries[idx].second.numTimesSelected << " " << std::fixed
+               << std::setprecision(2)
+               << (entries[idx].second.numTimesSelected * 100.00) /
             totalSelections
-              << "% " << entries[idx].second.numProcessedRows;
+               << "% " << entries[idx].second.numProcessedRows;
   }
 
   // sort by numTimesSelected
@@ -247,16 +248,16 @@ void ExpressionFuzzerVerifier::logStats() {
     return left.second.numTimesSelected > right.second.numTimesSelected;
   });
 
-  LOG(INFO) << "==============================> All stats sorted by number "
-               "of times the function was chosen";
-  LOG(INFO)
+  LOG(ERROR) << "==============================> All stats sorted by number "
+                "of times the function was chosen";
+  LOG(ERROR)
       << "Format: functionName numTimesSelected proportionOfTimesSelected "
          "numProcessedRows";
   for (auto& elem : entries) {
-    LOG(INFO) << elem.first << " " << elem.second.numTimesSelected << " "
-              << std::fixed << std::setprecision(2)
-              << (elem.second.numTimesSelected * 100.00) / totalSelections
-              << "% " << elem.second.numProcessedRows;
+    LOG(ERROR) << elem.first << " " << elem.second.numTimesSelected << " "
+               << std::fixed << std::setprecision(2)
+               << (elem.second.numTimesSelected * 100.00) / totalSelections
+               << "% " << elem.second.numProcessedRows;
   }
 }
 
@@ -292,11 +293,13 @@ void ExpressionFuzzerVerifier::retryWithTry(
   }
 
   std::vector<ResultOrError> tryResults;
+  std::vector<test::ExpressionVerifier::VerificationState>
+      tryVerificationStates;
 
   // The function throws if anything goes wrong except
   // UNSUPPORTED_INPUT_UNCATCHABLE errors.
   try {
-    tryResults = verifier_.verify(
+    std::tie(tryResults, tryVerificationStates) = verifier_.verify(
         tryPlans,
         inputsToRetry,
         resultVector ? BaseVector::copy(*resultVector) : nullptr,
@@ -370,7 +373,10 @@ void ExpressionFuzzerVerifier::go() {
 
   auto startTime = std::chrono::system_clock::now();
   size_t i = 0;
+  size_t totalTestCases = 0;
   size_t numFailed = 0;
+  size_t numVerified = 0;
+  size_t numReferenceUnsupported = 0;
 
   // TODO: some expression will throw exception for NaN input, eg: IN
   // predicate for floating point. remove this constraint once that are fixed
@@ -401,12 +407,18 @@ void ExpressionFuzzerVerifier::go() {
 
     auto [inputTestCases, inputRowMetadata] =
         generateInput(inputType, *vectorFuzzer_, inputGenerators);
+    totalTestCases += inputTestCases.size();
+    for (auto j = 0; j < inputTestCases.size(); ++j) {
+      VLOG(1) << "Input test case " << j << ": ";
+      exec::test::logVectors({inputTestCases[j].inputVector});
+    }
 
     auto resultVectors = generateResultVectors(plans);
     std::vector<fuzzer::ResultOrError> results;
+    std::vector<test::ExpressionVerifier::VerificationState> verificationStates;
 
     try {
-      results = verifier_.verify(
+      std::tie(results, verificationStates) = verifier_.verify(
           plans,
           inputTestCases,
           resultVectors ? BaseVector::copy(*resultVectors) : nullptr,
@@ -429,12 +441,10 @@ void ExpressionFuzzerVerifier::go() {
     // cannot throw. Expressions that throw UNSUPPORTED_INPUT_UNCATCHABLE
     // errors are not supported.
     std::vector<fuzzer::InputTestCase> inputsToRetry;
-    bool anyInputsThrew = false;
     bool anyInputsThrewButRetryable = false;
     for (int j = 0; j < results.size(); j++) {
       auto& result = results[j];
       if (result.exceptionPtr) {
-        anyInputsThrew = true;
         if (!result.unsupportedInputUncatchableError && options_.retryWithTry) {
           anyInputsThrewButRetryable = true;
           inputsToRetry.push_back(inputTestCases[j]);
@@ -445,9 +455,21 @@ void ExpressionFuzzerVerifier::go() {
         // executed.
         inputsToRetry.push_back(inputTestCases[j]);
       }
-    }
-    if (anyInputsThrew) {
-      ++numFailed;
+
+      auto& verificationState = verificationStates[j];
+      switch (verificationState) {
+        case test::ExpressionVerifier::VerificationState::
+            kVerifiedAgainstReference:
+          ++numVerified;
+          break;
+        case test::ExpressionVerifier::VerificationState::
+            kReferencePathUnsupported:
+          ++numReferenceUnsupported;
+          break;
+        case test::ExpressionVerifier::VerificationState::kBothPathsThrow:
+          ++numFailed;
+          break;
+      }
     }
     if (anyInputsThrewButRetryable) {
       LOG(INFO)
@@ -461,8 +483,13 @@ void ExpressionFuzzerVerifier::go() {
   }
   logStats();
 
-  LOG(ERROR) << "Total iterations: " << i;
-  LOG(ERROR) << "Total failed: " << numFailed;
+  LOG(ERROR) << "Total test cases: " << totalTestCases;
+  LOG(ERROR) << "Total test cases verified in the reference DB: "
+             << numVerified;
+  LOG(ERROR) << "Total test cases failed in both Velox and the reference DB: "
+             << numFailed;
+  LOG(ERROR) << "Total test cases unsupported in the reference DB: "
+             << numReferenceUnsupported;
 }
 
 } // namespace facebook::velox::fuzzer

@@ -13,13 +13,16 @@
 # limitations under the License.
 velox_add_library(
   velox_presto_types
-  HyperLogLogType.cpp
-  JsonType.cpp
-  TDigestType.cpp
-  TimestampWithTimeZoneType.cpp
-  UuidType.cpp
-  IPAddressType.cpp
-  IPPrefixType.cpp)
+  BingTileRegistration.cpp
+  BingTileType.cpp
+  HyperLogLogRegistration.cpp
+  IPAddressRegistration.cpp
+  IPPrefixRegistration.cpp
+  JsonCastOperator.cpp
+  JsonRegistration.cpp
+  TDigestRegistration.cpp
+  TimestampWithTimeZoneRegistration.cpp
+  UuidRegistration.cpp)
 
 velox_link_libraries(
   velox_presto_types
@@ -29,8 +32,11 @@ velox_link_libraries(
   velox_functions_util
   velox_functions_json
   velox_functions_lib_date_time_formatter
-  velox_constrained_input_generators)
+  velox_constrained_input_generators
+  velox_presto_types_fuzzer_utils)
 
 if(${VELOX_BUILD_TESTING})
   add_subdirectory(tests)
 endif()
+
+add_subdirectory(fuzzer_utils)

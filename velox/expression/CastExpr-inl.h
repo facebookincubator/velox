@@ -19,7 +19,6 @@
 #include "velox/common/base/Exceptions.h"
 #include "velox/core/CoreTypeSystem.h"
 #include "velox/expression/StringWriter.h"
-#include "velox/external/date/tz.h"
 #include "velox/type/Type.h"
 #include "velox/vector/SelectivityVector.h"
 
@@ -203,7 +202,7 @@ void CastExpr::applyToSelectedNoThrowLocal(
     VectorPtr& result,
     Func&& func) {
   if (setNullInResultAtError()) {
-    rows.template applyToSelected([&](auto row) INLINE_LAMBDA {
+    rows.applyToSelected([&](auto row) INLINE_LAMBDA {
       try {
         func(row);
       } catch (const VeloxException& e) {
@@ -216,7 +215,7 @@ void CastExpr::applyToSelectedNoThrowLocal(
       }
     });
   } else {
-    rows.template applyToSelected([&](auto row) INLINE_LAMBDA {
+    rows.applyToSelected([&](auto row) INLINE_LAMBDA {
       try {
         func(row);
       } catch (const VeloxException& e) {
@@ -283,6 +282,23 @@ void CastExpr::applyCastKernel(
       const auto castResult =
           hooks_->castIntToTimestamp((int64_t)inputRowValue);
       setResultOrError(castResult, row);
+      return;
+    }
+
+    if constexpr (
+        (FromKind == TypeKind::DOUBLE || FromKind == TypeKind::REAL) &&
+        ToKind == TypeKind::TIMESTAMP) {
+      const auto castResult =
+          hooks_->castDoubleToTimestamp(static_cast<double>(inputRowValue));
+      if (castResult.hasError()) {
+        setError(castResult.error().message());
+      } else {
+        if (castResult.value().has_value()) {
+          result->set(row, castResult.value().value());
+        } else {
+          result->setNull(row, true);
+        }
+      }
       return;
     }
 

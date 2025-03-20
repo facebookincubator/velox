@@ -62,7 +62,7 @@ class ExchangeClientTest
     if (!isRegisteredVectorSerde()) {
       velox::serializer::presto::PrestoVectorSerde::registerVectorSerde();
     }
-    bufferManager_ = OutputBufferManager::getInstance().lock();
+    bufferManager_ = OutputBufferManager::getInstanceRef();
 
     common::testutil::TestValue::enable();
   }
@@ -418,7 +418,7 @@ TEST_P(ExchangeClientTest, sourceTimeout) {
   // Wait until all sources have timed out at least once.
   auto deadline = std::chrono::system_clock::now() +
       3 * kNumSources *
-          std::chrono::seconds(ExchangeClient::kRequestDataSizesMaxWait);
+          std::chrono::seconds(client->requestDataSizesMaxWaitSec());
   while (std::chrono::system_clock::now() < deadline) {
     {
       std::lock_guard<std::mutex> l(mutex);

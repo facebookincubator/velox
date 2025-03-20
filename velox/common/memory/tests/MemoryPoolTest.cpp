@@ -18,6 +18,7 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
+#include "velox/common/base/CheckedArithmetic.h"
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/common/caching/AsyncDataCache.h"
 #include "velox/common/caching/SsdCache.h"
@@ -722,13 +723,7 @@ TEST_P(MemoryPoolTest, memoryCapExceptions) {
         ASSERT_EQ(error_source::kErrorSourceRuntime.c_str(), ex.errorSource());
         ASSERT_EQ(error_code::kMemCapExceeded.c_str(), ex.errorCode());
         ASSERT_TRUE(ex.isRetriable());
-        ASSERT_EQ(
-            "Exceeded memory pool capacity after attempt to grow capacity "
-            "through arbitration. Requestor pool name 'static_quota', request "
-            "size 136.00MB, current usage 0B, memory pool capacity 128.00MB, "
-            "memory pool max capacity 128.00MB, memory manager capacity "
-            "128.00MB\nMemoryCapExceptions usage 0B reserved 0B peak 0B\n",
-            ex.message());
+        ASSERT_EQ("Exceeded memory pool capacity.", ex.message());
       }
     }
   }
@@ -950,6 +945,91 @@ TEST_P(MemoryPoolTest, getPreferredSize) {
   EXPECT_EQ(32, pool.preferredSize(25));
   EXPECT_EQ(1024 * 1536, pool.preferredSize(1024 * 1024 + 1));
   EXPECT_EQ(1024 * 1024 * 2, pool.preferredSize(1024 * 1536 + 1));
+}
+
+TEST_P(MemoryPoolTest, customizedGetPreferredSize) {
+  const auto kMemoryCapBytes = 1ULL << 30;
+  const int32_t size = 1024 * 7;
+  const int32_t bufferAlignedSize =
+      checkedPlus<size_t>(size, AlignedBuffer::kPaddedSize);
+  {
+    setupMemory({
+        .allocatorCapacity = kMemoryCapBytes,
+        .getPreferredSize = [](int64_t size) { return size; },
+    });
+    MemoryManager& manager = *getMemoryManager();
+    auto root = manager.addRootPool("same size");
+    ASSERT_EQ(root->preferredSize(1), 1);
+    ASSERT_EQ(root->preferredSize(2), 2);
+    ASSERT_EQ(root->preferredSize(4), 4);
+    ASSERT_EQ(root->preferredSize(7), 7);
+    ASSERT_EQ(root->preferredSize(1'000), 1'000);
+    auto leafPool = root->addLeafChild("same size");
+    ASSERT_EQ(leafPool->preferredSize(1), 1);
+    ASSERT_EQ(leafPool->preferredSize(2), 2);
+    ASSERT_EQ(leafPool->preferredSize(4), 4);
+    ASSERT_EQ(leafPool->preferredSize(7), 7);
+    ASSERT_EQ(leafPool->preferredSize(1'000), 1'000);
+
+    BufferPtr buffer = AlignedBuffer::allocate<char>(size, leafPool.get(), 'i');
+    ASSERT_EQ(buffer->as<char>()[0], 'i');
+    ASSERT_EQ(buffer->size(), size);
+    ASSERT_EQ(buffer->capacity(), size);
+    ASSERT_EQ(leafPool->usedBytes(), bits::roundUp(bufferAlignedSize, 64));
+  }
+
+  {
+    setupMemory({
+        .allocatorCapacity = kMemoryCapBytes,
+        .getPreferredSize = [](int64_t size) { return size * 2; },
+    });
+    MemoryManager& manager = *getMemoryManager();
+    auto root = manager.addRootPool("double size");
+    ASSERT_EQ(root->preferredSize(1), 2);
+    ASSERT_EQ(root->preferredSize(2), 4);
+    ASSERT_EQ(root->preferredSize(4), 8);
+    ASSERT_EQ(root->preferredSize(7), 14);
+    ASSERT_EQ(root->preferredSize(1'000), 2'000);
+    auto leafPool = root->addLeafChild("double size");
+    ASSERT_EQ(leafPool->preferredSize(1), 2);
+    ASSERT_EQ(leafPool->preferredSize(2), 4);
+    ASSERT_EQ(leafPool->preferredSize(4), 8);
+    ASSERT_EQ(leafPool->preferredSize(7), 14);
+    ASSERT_EQ(leafPool->preferredSize(1'000), 2'000);
+
+    BufferPtr buffer = AlignedBuffer::allocate<char>(size, leafPool.get(), 'i');
+    ASSERT_EQ(buffer->as<char>()[0], 'i');
+    ASSERT_EQ(buffer->size(), size);
+    ASSERT_EQ(
+        buffer->capacity(),
+        bits::roundUp(bufferAlignedSize * 2, 64) - AlignedBuffer::kPaddedSize);
+    ASSERT_EQ(leafPool->usedBytes(), bits::roundUp(bufferAlignedSize * 2, 64));
+  }
+
+  // Invalid preferred size callback.
+  {
+    setupMemory({
+        .allocatorCapacity = kMemoryCapBytes,
+        .getPreferredSize = [](int64_t size) { return size - 1; },
+    });
+    MemoryManager& manager = *getMemoryManager();
+    auto root = manager.addRootPool("bad sizer");
+    VELOX_ASSERT_THROW(root->preferredSize(1), "");
+    VELOX_ASSERT_THROW(root->preferredSize(2), "");
+    VELOX_ASSERT_THROW(root->preferredSize(4), "");
+    VELOX_ASSERT_THROW(root->preferredSize(7), "");
+    VELOX_ASSERT_THROW(root->preferredSize(1'000), "");
+    auto leafPool = root->addLeafChild("bad sizer");
+    VELOX_ASSERT_THROW(leafPool->preferredSize(1), "");
+    VELOX_ASSERT_THROW(leafPool->preferredSize(2), "");
+    VELOX_ASSERT_THROW(leafPool->preferredSize(4), "");
+    VELOX_ASSERT_THROW(leafPool->preferredSize(7), "");
+    VELOX_ASSERT_THROW(leafPool->preferredSize(1'000), "");
+
+    VELOX_ASSERT_THROW(
+        AlignedBuffer::allocate<char>(size, leafPool.get(), 'i'), "");
+    ASSERT_EQ(leafPool->stats().usedBytes, 0);
+  }
 }
 
 TEST_P(MemoryPoolTest, getPreferredSizeOverflow) {
@@ -3190,7 +3270,6 @@ struct Buffer {
 
 TEST_P(MemoryPoolTest, memoryUsageUpdateCheck) {
   constexpr int64_t kMaxSize = 1 << 30; // 1GB
-  //  setupMemory({.allocatorCapacity = kMaxSize});
   setupMemory(
       {.allocatorCapacity = kMaxSize,
        .allocationSizeThresholdWithReservation = false,
@@ -3920,6 +3999,13 @@ TEST_P(MemoryPoolTest, allocationWithCoveredCollateral) {
 VELOX_INSTANTIATE_TEST_SUITE_P(
     MemoryPoolTestSuite,
     MemoryPoolTest,
-    testing::ValuesIn(MemoryPoolTest::getTestParams()));
+    testing::ValuesIn(MemoryPoolTest::getTestParams()),
+    [](const testing::TestParamInfo<TestParam>& info) {
+      return fmt::format(
+          "{}_{}_{}",
+          info.param.threadSafe ? "threadsafe" : "nontheadsafe",
+          info.param.useCache ? "withCache" : "withoutCache",
+          info.param.useMmap ? "useMmap" : "useMalloc");
+    });
 
 } // namespace facebook::velox::memory

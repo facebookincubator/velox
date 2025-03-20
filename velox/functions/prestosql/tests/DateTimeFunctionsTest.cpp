@@ -18,7 +18,7 @@
 #include <xxhash.h>
 
 #include "velox/common/base/tests/GTestUtils.h"
-#include "velox/external/date/tz.h"
+#include "velox/external/tzdb/zoned_time.h"
 #include "velox/functions/prestosql/tests/utils/FunctionBaseTest.h"
 #include "velox/functions/prestosql/types/TimestampWithTimeZoneType.h"
 #include "velox/type/tz/TimeZoneMap.h"
@@ -150,9 +150,9 @@ class DateTimeFunctionsTest : public functions::test::FunctionBaseTest {
     return parseDate(date::format(
         "%Y-%m-%d",
         timeZone.has_value()
-            ? date::make_zoned(
+            ? tzdb::zoned_time(
                   timeZone.value(), std::chrono::system_clock::now())
-            : std::chrono::system_clock::now()));
+            : tzdb::zoned_time(std::chrono::system_clock::now())));
   }
 };
 
@@ -4530,6 +4530,12 @@ TEST_F(DateTimeFunctionsTest, dateParse) {
   EXPECT_EQ(
       Timestamp(-66600, 0), dateParse("1969-12-31+11:00", "%Y-%m-%d+%H:%i"));
 
+  setQueryTimeZone("America/Los_Angeles");
+  // Tests if it uses weekdateformat if %v not present but %a is present.
+  EXPECT_EQ(
+      Timestamp(1730707200, 0),
+      dateParse("04-Nov-2024 (Mon)", "%d-%b-%Y (%a)"));
+
   VELOX_ASSERT_THROW(dateParse("", "%y+"), "Invalid date format: ''");
   VELOX_ASSERT_THROW(dateParse("1", "%y+"), "Invalid date format: '1'");
   VELOX_ASSERT_THROW(dateParse("116", "%y+"), "Invalid date format: '116'");
@@ -4760,18 +4766,9 @@ TEST_F(DateTimeFunctionsTest, castDateForDateFunction) {
       castDateTest(Timestamp(
           -18297 * kSecondsInDay + kSecondsInDay - 1, kNanosInSecond - 1)));
 
-  // Trying to convert a very large timestamp should fail as velox/external/date
-  // can't convert past year 2037. Note that the correct result here should be
-  // 376358 ('3000-06-08'), and not 376357 ('3000-06-07').
-  VELOX_ASSERT_THROW(
-      castDateTest(Timestamp(32517359891, 0)), "Unable to convert timezone");
-
-  // Ensure timezone conversion failures leak through try().
-  const auto tryTest = [&](std::optional<Timestamp> timestamp) {
-    return evaluateOnce<int32_t>("try(cast(c0 as date))", timestamp);
-  };
-  VELOX_ASSERT_RUNTIME_THROW(
-      tryTest(Timestamp(32517359891, 0)), "Unable to convert timezone");
+  // Timestamps in the distant future in different DST time zones.
+  EXPECT_EQ(376358, castDateTest(Timestamp(32517359891, 0)));
+  EXPECT_EQ(376231, castDateTest(Timestamp(32506387200, 0)));
 }
 
 TEST_F(DateTimeFunctionsTest, currentDateWithTimezone) {
@@ -5294,4 +5291,81 @@ TEST_F(DateTimeFunctionsTest, xxHash64FunctionDate) {
   EXPECT_EQ(3856043376106280085, xxhash64(parseDate("9999-12-31")));
   // Y2K
   EXPECT_EQ(-7612541860844473816, xxhash64(parseDate("2000-01-01")));
+}
+
+TEST_F(DateTimeFunctionsTest, parseDuration) {
+  const auto parseDuration = [&](std::optional<std::string> amountUnit) {
+    return evaluateOnce<int64_t>(
+        "parse_duration(c0)", VARCHAR(), std::move(amountUnit));
+  };
+  // All units
+  int64_t expectedValue = 0;
+  EXPECT_EQ(expectedValue, parseDuration("5.8ns"));
+  expectedValue = 6;
+  EXPECT_EQ(expectedValue, parseDuration("5800000.3ns"));
+  expectedValue = 0;
+  EXPECT_EQ(expectedValue, parseDuration("5.8us"));
+  expectedValue = 5;
+  EXPECT_EQ(expectedValue, parseDuration("5400.3us"));
+  expectedValue = 43;
+  EXPECT_EQ(expectedValue, parseDuration("42.8ms"));
+  expectedValue = 5300;
+  EXPECT_EQ(expectedValue, parseDuration("5.3s"));
+  const int64_t hoursPerDay = 24;
+  const int64_t minutesPerHour = 60;
+  const int64_t secondsPerMinute = 60;
+  expectedValue = 5800 * secondsPerMinute;
+  EXPECT_EQ(expectedValue, parseDuration("5.8m"));
+  expectedValue = 5800 * minutesPerHour * secondsPerMinute;
+  EXPECT_EQ(expectedValue, parseDuration("5.8h"));
+  expectedValue = 3810 * hoursPerDay * minutesPerHour * secondsPerMinute;
+  EXPECT_EQ(expectedValue, parseDuration("3.81d"));
+  // Blank spaces
+  EXPECT_EQ(expectedValue, parseDuration(" 3.81d  "));
+  EXPECT_EQ(expectedValue, parseDuration("3.81  d"));
+  EXPECT_EQ(expectedValue, parseDuration(" 3.81  d  "));
+  // No point
+  expectedValue = 5000 * secondsPerMinute;
+  EXPECT_EQ(expectedValue, parseDuration("5m"));
+  // Too large
+  std::string maxDoubleValue =
+      std::to_string(std::numeric_limits<double>::max());
+  std::string tooLargeDuration = maxDoubleValue + "s";
+  VELOX_ASSERT_THROW(
+      parseDuration(tooLargeDuration),
+      "Value in s unit is too large to be represented in ms unit as an int64_t");
+  tooLargeDuration = maxDoubleValue + "ms";
+  VELOX_ASSERT_THROW(
+      parseDuration(tooLargeDuration),
+      "Value in ms unit is too large to be represented in ms unit as an int64_t");
+  std::string outOfRangeValue = "1" + maxDoubleValue;
+  std::string outOfRangeDuration = outOfRangeValue + "ms";
+  VELOX_ASSERT_THROW(
+      parseDuration(outOfRangeDuration),
+      "Input duration value is out of range for double: " + outOfRangeValue);
+  // Input format
+  VELOX_ASSERT_THROW(
+      parseDuration("ab.81d"),
+      "Input duration is not a valid data duration string: ab.81d");
+  VELOX_ASSERT_THROW(
+      parseDuration(".81d"),
+      "Input duration is not a valid data duration string: .81d");
+  VELOX_ASSERT_THROW(
+      parseDuration("3.abd"),
+      "Input duration is not a valid data duration string: 3.abd");
+  VELOX_ASSERT_THROW(
+      parseDuration("3.d"),
+      "Input duration is not a valid data duration string: 3.d");
+  VELOX_ASSERT_THROW(
+      parseDuration("3. d"),
+      "Input duration is not a valid data duration string: 3. d");
+  VELOX_ASSERT_THROW(
+      parseDuration("1.23e5ms"),
+      "Input duration is not a valid data duration string: 1.23e5ms");
+  VELOX_ASSERT_THROW(
+      parseDuration("1.23E5ms"),
+      "Input duration is not a valid data duration string: 1.23E5ms");
+  // Unit format
+  VELOX_ASSERT_THROW(parseDuration("3.81a"), "Unknown time unit: a");
+  VELOX_ASSERT_THROW(parseDuration("3.81as"), "Unknown time unit: as");
 }

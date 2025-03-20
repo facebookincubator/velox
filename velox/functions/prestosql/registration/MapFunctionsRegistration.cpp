@@ -19,8 +19,8 @@
 #include "velox/functions/lib/MapConcat.h"
 #include "velox/functions/prestosql/Map.h"
 #include "velox/functions/prestosql/MapFunctions.h"
+#include "velox/functions/prestosql/MapKeysByTopNValues.h"
 #include "velox/functions/prestosql/MapNormalize.h"
-#include "velox/functions/prestosql/MapRemoveNullValues.h"
 #include "velox/functions/prestosql/MapSubset.h"
 #include "velox/functions/prestosql/MapTopN.h"
 #include "velox/functions/prestosql/MapTopNKeys.h"
@@ -118,8 +118,14 @@ void registerMapFunctions(const std::string& prefix) {
   registerFunction<
       MapTopNKeysFunction,
       Array<Orderable<T1>>,
-      Map<Orderable<T1>, Orderable<T2>>,
+      Map<Orderable<T1>, Generic<T2>>,
       int64_t>({prefix + "map_top_n_keys"});
+
+  registerFunction<
+      MapKeysByTopNValuesFunction,
+      Array<Orderable<T1>>,
+      Map<Orderable<T1>, Orderable<T2>>,
+      int64_t>({prefix + "map_keys_by_top_n_values"});
 
   registerMapSubset(prefix);
 

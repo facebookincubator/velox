@@ -61,6 +61,18 @@ class HiveConnectorTestBase : public OperatorTestBase {
       const std::function<std::unique_ptr<dwrf::DWRFFlushPolicy>()>&
           flushPolicyFactory = nullptr);
 
+  // Creates a directory using matching file system based on directoryPath.
+  // No throw when directory already exists.
+  void createDirectory(const std::string& directoryPath);
+
+  // Removes a directory using matching file system based on directoryPath.
+  // No op when directory does not exist.
+  void removeDirectory(const std::string& directoryPath);
+
+  // Removes a file using matching file system based on filePath.
+  // No op when file does not exist.
+  void removeFile(const std::string& filePath);
+
   std::vector<RowVectorPtr> makeVectors(
       const RowTypePtr& rowType,
       int32_t numVectors,
@@ -120,14 +132,17 @@ class HiveConnectorTestBase : public OperatorTestBase {
       const core::TypedExprPtr& remainingFilter = nullptr,
       const std::string& tableName = "hive_table",
       const RowTypePtr& dataColumns = nullptr,
-      bool filterPushdownEnabled = true) {
+      bool filterPushdownEnabled = true,
+      const std::unordered_map<std::string, std::string>& tableParameters =
+          {}) {
     return std::make_shared<connector::hive::HiveTableHandle>(
         kHiveConnectorId,
         tableName,
         filterPushdownEnabled,
         std::move(subfieldFilters),
         remainingFilter,
-        dataColumns);
+        dataColumns,
+        tableParameters);
   }
 
   /// @param name Column name.

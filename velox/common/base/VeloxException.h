@@ -23,6 +23,7 @@
 #include <folly/FixedString.h>
 #include <folly/String.h>
 #include <folly/synchronization/CallOnce.h>
+#include <gflags/gflags.h>
 #include <glog/logging.h>
 
 #include "velox/common/process/StackTrace.h"
@@ -88,10 +89,14 @@ inline constexpr auto kNotImplemented = "NOT_IMPLEMENTED"_fs;
 /// An error raised when memory pool exceeds limits.
 inline constexpr auto kMemCapExceeded = "MEM_CAP_EXCEEDED"_fs;
 
+/// An error raised when memory request failed due to arbitration failures. This
+/// is normally caused by insufficient global memory resource.
+inline constexpr auto kMemArbitrationFailure = "MEM_ARBITRATION_FAILURE"_fs;
+
 /// An error raised when memory pool is aborted.
 inline constexpr auto kMemAborted = "MEM_ABORTED"_fs;
 
-/// An error raised when memory arbitration is timed out.
+/// An error raised when memory arbitration times out.
 inline constexpr auto kMemArbitrationTimeout = "MEM_ARBITRATION_TIMEOUT"_fs;
 
 /// Error caused by memory allocation failure (inclusive of allocator memory cap
@@ -103,6 +108,9 @@ inline constexpr auto kNoCacheSpace = "NO_CACHE_SPACE"_fs;
 
 /// An error raised when spill bytes exceeds limits.
 inline constexpr auto kSpillLimitExceeded = "SPILL_LIMIT_EXCEEDED"_fs;
+
+/// An error raised to indicate any general failure happened during spilling.
+inline constexpr auto kGenericSpillFailure = "GENERIC_SPILL_FAILURE"_fs;
 
 /// An error raised when trace bytes exceeds limits.
 inline constexpr auto kTraceLimitExceeded = "TRACE_LIMIT_EXCEEDED"_fs;

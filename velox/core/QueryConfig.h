@@ -505,6 +505,21 @@ class QueryConfig {
   static constexpr const char* kShuffleCompressionKind =
       "shuffle_compression_codec";
 
+  /// If a key is found in multiple given maps, by default that key's value in
+  /// the resulting map comes from the last one of those maps. When true, throw
+  /// exception on duplicate map key.
+  static constexpr const char* kThrowExceptionOnDuplicateMapKeys =
+      "throw_exception_on_duplicate_map_keys";
+
+  /// Specifies the max number of input batches to prefetch to do index lookup
+  /// ahead. If it is zero, then process one input batch at a time.
+  static constexpr const char* kIndexLookupJoinMaxPrefetchBatches =
+      "index_lookup_join_max_prefetch_batches";
+
+  // Max wait time for exchange request in seconds.
+  static constexpr const char* kRequestDataSizesMaxWaitSec =
+      "request_data_sizes_max_wait_sec";
+
   bool selectiveNimbleReaderEnabled() const {
     return get<bool>(kSelectiveNimbleReaderEnabled, false);
   }
@@ -926,8 +941,20 @@ class QueryConfig {
     return get<double>(kTableScanScaleUpMemoryUsageRatio, 0.7);
   }
 
+  uint32_t indexLookupJoinMaxPrefetchBatches() const {
+    return get<uint32_t>(kIndexLookupJoinMaxPrefetchBatches, 0);
+  }
+
   std::string shuffleCompressionKind() const {
     return get<std::string>(kShuffleCompressionKind, "none");
+  }
+
+  int32_t requestDataSizesMaxWaitSec() const {
+    return get<int32_t>(kRequestDataSizesMaxWaitSec, 10);
+  }
+
+  bool throwExceptionOnDuplicateMapKeys() const {
+    return get<bool>(kThrowExceptionOnDuplicateMapKeys, false);
   }
 
   template <typename T>

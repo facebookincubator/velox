@@ -87,13 +87,6 @@ class SharedArbitrator : public memory::MemoryArbitrator {
     static uint64_t maxMemoryArbitrationTimeNs(
         const std::unordered_map<std::string, std::string>& configs);
 
-    // TODO: Remove after name change complete
-    static constexpr std::string_view kMemoryReclaimMaxWaitTime{
-        "memory-reclaim-max-wait-time"};
-    static constexpr std::string_view kDefaultMemoryReclaimMaxWaitTime{"5m"};
-    static uint64_t memoryReclaimMaxWaitTimeNs(
-        const std::unordered_map<std::string, std::string>& configs);
-
     /// When shrinking capacity, the shrink bytes will be adjusted in a way such
     /// that AFTER shrink, the stricter (whichever is smaller) of the following
     /// conditions is met, in order to better fit the pool's current memory
@@ -194,7 +187,7 @@ class SharedArbitrator : public memory::MemoryArbitrator {
     /// memory pools.
     static constexpr std::string_view kGlobalArbitrationEnabled{
         "global-arbitration-enabled"};
-    static constexpr bool kDefaultGlobalArbitrationEnabled{false};
+    static constexpr bool kDefaultGlobalArbitrationEnabled{true};
     static bool globalArbitrationEnabled(
         const std::unordered_map<std::string, std::string>& configs);
 
@@ -249,7 +242,7 @@ class SharedArbitrator : public memory::MemoryArbitrator {
 
   void removePool(MemoryPool* pool) final;
 
-  bool growCapacity(MemoryPool* pool, uint64_t requestBytes) final;
+  void growCapacity(MemoryPool* pool, uint64_t requestBytes) final;
 
   /// NOTE: only support shrinking away all the unused free capacity for now.
   uint64_t shrinkCapacity(MemoryPool* pool, uint64_t requestBytes) final;
@@ -352,7 +345,7 @@ class SharedArbitrator : public memory::MemoryArbitrator {
 
   // Run arbitration to grow capacity for 'op'. The function returns true on
   // success.
-  bool growCapacity(ArbitrationOperation& op);
+  void growCapacity(ArbitrationOperation& op);
 
   // Invoked to start execution of 'op'. It waits for the serialized execution
   // on the same arbitration participant and returns when 'op' is ready to run.
@@ -415,9 +408,9 @@ class SharedArbitrator : public memory::MemoryArbitrator {
 
   // Invoked to run global arbitration to reclaim free or used memory from other
   // queries. The global arbitration run is protected by the exclusive lock of
-  // 'arbitrationLock_' for serial execution mode. The function returns true on
-  // success, false on failure.
-  bool startAndWaitGlobalArbitration(ArbitrationOperation& op);
+  // 'arbitrationLock_' for serial execution mode. The function throws on
+  // failure.
+  void startAndWaitGlobalArbitration(ArbitrationOperation& op);
 
   // Invoked to get stats of candidate participants for arbitration. If
   // 'freeCapacityOnly' is true, then we only get reclaimable free capacity from
@@ -595,6 +588,8 @@ class SharedArbitrator : public memory::MemoryArbitrator {
       uint64_t arbitrationTimeNs,
       uint64_t arbitrationBytes);
 
+  const uint64_t capacity_;
+  const MemoryArbitrationStateCheckCB arbitrationStateCheckCb_;
   const uint64_t reservedCapacity_;
   const bool checkUsageLeak_;
   const uint64_t maxArbitrationTimeNs_;

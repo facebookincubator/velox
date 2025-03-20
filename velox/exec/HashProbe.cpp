@@ -158,7 +158,7 @@ void HashProbe::initialize() {
   }
 
   VELOX_CHECK_NULL(lookup_);
-  lookup_ = std::make_unique<HashLookup>(hashers_);
+  lookup_ = std::make_unique<HashLookup>(hashers_, pool());
   auto buildType = joinNode_->sources()[1]->outputType();
   auto tableType = makeTableType(buildType.get(), joinNode_->rightKeys());
   if (joinNode_->filter()) {
@@ -992,7 +992,9 @@ RowVectorPtr HashProbe::getOutputInternal(bool toSpillOutput) {
   if (isFinished()) {
     return nullptr;
   }
-  checkRunning();
+  VELOX_CHECK(
+      isRunning() || isWaitingForPeers(),
+      fmt::format("Invalid state {}", state_));
 
   if (!toSpillOutput) {
     // Avoid memory reservation if it is triggered by memory arbitration to
@@ -1179,7 +1181,7 @@ bool HashProbe::maybeReadSpillOutput() {
 
 RowVectorPtr HashProbe::createFilterInput(vector_size_t size) {
   std::vector<VectorPtr> filterColumns(filterInputType_->size());
-  for (auto projection : filterInputProjections_) {
+  for (const auto& projection : filterInputProjections_) {
     if (projectedInputColumns_.find(projection.inputChannel) !=
         projectedInputColumns_.end()) {
       // If the column is projected to the output, ensure it's loaded if it's
@@ -1380,11 +1382,13 @@ SelectivityVector HashProbe::evalFilterForNullAwareJoin(
   }
 
   if (buildSideHasNullKeys_) {
+    prepareNullKeyProbeHashers();
     BaseHashTable::NullKeyRowsIterator iter;
     nullKeyProbeRows.deselect(filterPassedRows);
     applyFilterOnTableRowsForNullAwareJoin(
         nullKeyProbeRows, filterPassedRows, [&](char** data, int32_t maxRows) {
-          return table_->listNullKeyRows(&iter, maxRows, data);
+          return table_->listNullKeyRows(
+              &iter, maxRows, data, nullKeyProbeHashers_);
         });
   }
   BaseHashTable::RowsIterator iter;
@@ -1397,6 +1401,22 @@ SelectivityVector HashProbe::evalFilterForNullAwareJoin(
   filterPassedRows.updateBounds();
 
   return filterPassedRows;
+}
+
+void HashProbe::prepareNullKeyProbeHashers() {
+  if (nullKeyProbeHashers_.empty()) {
+    nullKeyProbeHashers_ =
+        createVectorHashers(probeType_, joinNode_->leftKeys());
+    // Null-aware joins allow only one join key.
+    VELOX_CHECK_EQ(nullKeyProbeHashers_.size(), 1);
+    if (table_->hashMode() == BaseHashTable::HashMode::kHash) {
+      nullKeyProbeInput_ =
+          BaseVector::create(nullKeyProbeHashers_[0]->type(), 1, pool());
+      nullKeyProbeInput_->setNull(0, true);
+      SelectivityVector selectivity(1);
+      nullKeyProbeHashers_[0]->decode(*nullKeyProbeInput_, selectivity);
+    }
+  }
 }
 
 int32_t HashProbe::evalFilter(int32_t numRows) {
@@ -1683,6 +1703,10 @@ bool HashProbe::isRunning() const {
   return state_ == ProbeOperatorState::kRunning;
 }
 
+bool HashProbe::isWaitingForPeers() const {
+  return state_ == ProbeOperatorState::kWaitForPeers;
+}
+
 void HashProbe::checkRunning() const {
   VELOX_CHECK(isRunning(), probeOperatorStateName(state_));
 }
@@ -1692,9 +1716,10 @@ void HashProbe::setRunning() {
 }
 
 bool HashProbe::nonReclaimableState() const {
-  return (state_ != ProbeOperatorState::kRunning) || nonReclaimableSection_ ||
-      (inputSpiller_ != nullptr) || (table_ == nullptr) ||
-      (table_->numDistinct() == 0);
+  return (state_ != ProbeOperatorState::kRunning &&
+          state_ != ProbeOperatorState::kWaitForPeers) ||
+      nonReclaimableSection_ || (inputSpiller_ != nullptr) ||
+      (table_ == nullptr) || (table_->numDistinct() == 0);
 }
 
 void HashProbe::ensureOutputFits() {

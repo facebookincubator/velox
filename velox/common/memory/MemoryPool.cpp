@@ -27,6 +27,13 @@
 
 #include <re2/re2.h>
 
+DEFINE_bool(
+    velox_memory_pool_capacity_transfer_across_tasks,
+    false,
+    "Whether allow to memory capacity transfer between memory pools from different tasks, which might happen in use case like Spark-Gluten");
+
+DECLARE_bool(velox_suppress_memory_capacity_exceeding_error_message);
+
 using facebook::velox::common::testutil::TestValue;
 
 namespace facebook::velox::memory {
@@ -220,10 +227,15 @@ MemoryPool::MemoryPool(
       trackUsage_(options.trackUsage),
       threadSafe_(options.threadSafe),
       debugEnabled_(options.debugEnabled),
-      coreOnAllocationFailureEnabled_(options.coreOnAllocationFailureEnabled) {
+      coreOnAllocationFailureEnabled_(options.coreOnAllocationFailureEnabled),
+      getPreferredSize_(
+          options.getPreferredSize == nullptr
+              ? [](size_t size) { return MemoryPool::getPreferredSize(size); }
+              : options.getPreferredSize) {
   VELOX_CHECK(!isRoot() || !isLeaf());
   VELOX_CHECK_GT(
       maxCapacity_, 0, "Memory pool {} max capacity can't be zero", name_);
+  VELOX_CHECK_NOT_NULL(getPreferredSize_);
   MemoryAllocator::alignmentCheck(0, alignment_);
 }
 
@@ -327,6 +339,7 @@ std::shared_ptr<MemoryPool> MemoryPool::addLeafChild(
       name,
       MemoryPool::Kind::kLeaf,
       threadSafe,
+      getPreferredSize_,
       std::move(_reclaimer));
   children_.emplace(name, child);
   return child;
@@ -356,6 +369,7 @@ std::shared_ptr<MemoryPool> MemoryPool::addAggregateChild(
       name,
       MemoryPool::Kind::kAggregate,
       true,
+      getPreferredSize_,
       std::move(_reclaimer));
   children_.emplace(name, child);
   return child;
@@ -388,6 +402,13 @@ std::exception_ptr MemoryPool::abortError() const {
 }
 
 size_t MemoryPool::preferredSize(size_t size) {
+  const auto preferredSize = getPreferredSize_(size);
+  VELOX_CHECK_GE(preferredSize, size);
+  return preferredSize;
+}
+
+// static.
+size_t MemoryPool::getPreferredSize(size_t size) {
   if (size < 8) {
     return 8;
   }
@@ -479,7 +500,23 @@ MemoryPool::Stats MemoryPoolImpl::statsLocked() const {
   return stats;
 }
 
-void* MemoryPoolImpl::allocate(int64_t size) {
+void* MemoryPoolImpl::allocate(
+    int64_t size,
+    std::optional<uint32_t> alignment) {
+  if (alignment.has_value()) {
+    const auto alignmentValue = alignment.value();
+    if (FOLLY_UNLIKELY(
+            !(bits::isPowerOfTwo(alignmentValue) &&
+              alignmentValue <= alignment_))) {
+      VELOX_UNSUPPORTED(
+          "Memory pool only supports fixed alignment allocations. Requested "
+          "alignment {} must already be aligned with this memory pool's fixed "
+          "alignment {}.",
+          alignmentValue,
+          alignment_);
+    }
+  }
+
   CHECK_AND_INC_MEM_OP_STATS(Allocs);
   const auto alignedSize = sizeAlign(size);
   reserve(alignedSize);
@@ -716,6 +753,7 @@ std::shared_ptr<MemoryPool> MemoryPoolImpl::genChild(
     const std::string& name,
     Kind kind,
     bool threadSafe,
+    const std::function<size_t(size_t)>& getPreferredSize,
     std::unique_ptr<MemoryReclaimer> reclaimer) {
   return std::make_shared<MemoryPoolImpl>(
       manager_,
@@ -728,7 +766,8 @@ std::shared_ptr<MemoryPool> MemoryPoolImpl::genChild(
           .trackUsage = trackUsage_,
           .threadSafe = threadSafe,
           .debugEnabled = debugEnabled_,
-          .coreOnAllocationFailureEnabled = coreOnAllocationFailureEnabled_});
+          .coreOnAllocationFailureEnabled = coreOnAllocationFailureEnabled_,
+          .getPreferredSize = getPreferredSize});
 }
 
 bool MemoryPoolImpl::maybeReserve(uint64_t increment) {
@@ -810,7 +849,7 @@ void MemoryPoolImpl::reserveThreadSafe(uint64_t size, bool reserveOnly) {
   }
 }
 
-bool MemoryPoolImpl::incrementReservationThreadSafe(
+void MemoryPoolImpl::incrementReservationThreadSafe(
     MemoryPool* requestor,
     uint64_t size) {
   VELOX_CHECK(threadSafe_);
@@ -820,59 +859,39 @@ bool MemoryPoolImpl::incrementReservationThreadSafe(
   // first. If it exceeds the capacity and can't grow, the root memory pool will
   // throw an exception to fail the request.
   if (parent_ != nullptr) {
-    if (!toImpl(parent_)->incrementReservationThreadSafe(requestor, size)) {
-      return false;
-    }
+    toImpl(parent_)->incrementReservationThreadSafe(requestor, size);
   }
 
   if (maybeIncrementReservation(size)) {
-    return true;
+    return;
   }
 
   VELOX_CHECK_NULL(parent_);
 
-  if (growCapacity(requestor, size)) {
-    TestValue::adjust(
-        "facebook::velox::memory::MemoryPoolImpl::incrementReservationThreadSafe::AfterGrowCallback",
-        this);
-    // NOTE: if memory arbitration succeeds, it should have already committed
-    // the reservation 'size' in the root memory pool.
-    return true;
-  }
-  VELOX_MEM_POOL_CAP_EXCEEDED(fmt::format(
-      "Exceeded memory pool capacity after attempt to grow capacity "
-      "through arbitration. Requestor pool name '{}', request size {}, current "
-      "usage {}, memory pool capacity {}, memory pool max capacity {}, memory "
-      "manager capacity {}\n{}",
-      requestor->name(),
-      succinctBytes(size),
-      succinctBytes(requestor->usedBytes()),
-      capacityToString(capacity()),
-      capacityToString(maxCapacity_),
-      capacityToString(manager_->capacity()),
-      treeMemoryUsage()));
+  growCapacity(requestor, size);
+  TestValue::adjust(
+      "facebook::velox::memory::MemoryPoolImpl::incrementReservationThreadSafe::AfterGrowCallback",
+      this);
+  // NOTE: if memory arbitration succeeds, it should have already committed
+  // the reservation 'size' in the root memory pool.
 }
 
-bool MemoryPoolImpl::growCapacity(MemoryPool* requestor, uint64_t size) {
+void MemoryPoolImpl::growCapacity(MemoryPool* requestor, uint64_t size) {
   VELOX_CHECK(requestor->isLeaf());
   ++numCapacityGrowths_;
 
-  bool success{false};
   {
     MemoryPoolArbitrationSection arbitrationSection(requestor);
-    success = arbitrator_->growCapacity(this, size);
+    arbitrator_->growCapacity(this, size);
   }
   // The memory pool might have been aborted during the time it leaves the
   // arbitration no matter the arbitration succeed or not.
   if (FOLLY_UNLIKELY(aborted())) {
-    if (success) {
-      // Release the reservation committed by the memory arbitration on success.
-      decrementReservation(size);
-    }
+    // Release the reservation committed by the memory arbitration on success.
+    decrementReservation(size);
     VELOX_CHECK_NOT_NULL(abortError());
     std::rethrow_exception(abortError());
   }
-  return success;
 }
 
 bool MemoryPoolImpl::maybeIncrementReservation(uint64_t size) {
@@ -964,7 +983,7 @@ std::string MemoryPoolImpl::treeMemoryUsage(bool skipEmptyPool) const {
   if (parent_ != nullptr) {
     return parent_->treeMemoryUsage(skipEmptyPool);
   }
-  if (config::globalConfig().suppressMemoryCapacityExceedingErrorMessage) {
+  if (FLAGS_velox_suppress_memory_capacity_exceeding_error_message) {
     return "";
   }
   std::stringstream out;

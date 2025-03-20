@@ -15,7 +15,7 @@
  */
 #pragma once
 
-#include "velox/common/base/Scratch.h"
+#include "velox/common/memory/Scratch.h"
 #include "velox/common/memory/StreamArena.h"
 #include "velox/type/Type.h"
 
@@ -191,18 +191,9 @@ class ByteInputStream {
       current_->position += sizeof(T);
       return folly::loadUnaligned<T>(source);
     }
-    // The number straddles two buffers. We read byte by byte and make a
-    // little-endian uint64_t. The bytes can be cast to any integer or floating
-    // point type since the wire format has the machine byte order.
-    static_assert(sizeof(T) <= sizeof(uint64_t));
-    union {
-      uint64_t bits;
-      T typed;
-    } value{};
-    for (int32_t i = 0; i < sizeof(T); ++i) {
-      value.bits |= static_cast<uint64_t>(readByte()) << (i * 8);
-    }
-    return value.typed;
+    T value;
+    readBytes(&value, sizeof(T));
+    return value;
   }
 
   template <typename Char>
@@ -222,7 +213,6 @@ class ByteInputStream {
  protected:
   // Points to the current buffered byte range.
   ByteRange* current_{nullptr};
-  std::vector<ByteRange> ranges_;
 };
 
 /// Read-only input stream backed by a set of buffers.
@@ -268,6 +258,8 @@ class BufferInputStream : public ByteInputStream {
   const std::vector<ByteRange>& ranges() const {
     return ranges_;
   }
+
+  std::vector<ByteRange> ranges_;
 };
 
 template <>
@@ -360,7 +352,14 @@ class ByteOutputStream {
 
   template <typename T>
   void append(folly::Range<const T*> values) {
-    static_assert(std::is_trivially_copyable_v<T>);
+    static_assert(
+        std::is_trivially_copyable_v<T> ||
+        std::is_same_v<T, std::shared_ptr<void>>);
+
+    if (std::is_same_v<T, std::shared_ptr<void>>) {
+      VELOX_FAIL("Cannot serialize OPAQUE data");
+    }
+
     if (current_->position + sizeof(T) * values.size() > current_->size) {
       appendStringView(std::string_view(
           reinterpret_cast<const char*>(&values[0]),
@@ -509,6 +508,7 @@ class ByteOutputStream {
   bool isNegated_ = false;
 
   std::vector<ByteRange> ranges_;
+
   // The total number of bytes allocated from 'arena_' in 'ranges_'.
   int64_t allocatedBytes_{0};
 
@@ -524,12 +524,6 @@ class ByteOutputStream {
   template <typename T>
   friend class AppendWindow;
 };
-
-template <>
-inline void ByteOutputStream::append(
-    folly::Range<const std::shared_ptr<void>*> /*values*/) {
-  VELOX_FAIL("Cannot serialize OPAQUE data");
-}
 
 /// A scoped wrapper that provides 'size' T's of writable space in 'stream'.
 /// Normally gives an address into 'stream's buffer but can use 'scratch' to

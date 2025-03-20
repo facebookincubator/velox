@@ -198,7 +198,7 @@ size_t normalizedSizeForJsonCast(const char* input, size_t length) {
 
 namespace {
 
-int32_t parseHex(const std::string_view& hexString) {
+FOLLY_ALWAYS_INLINE int32_t parseHex(std::string_view hexString) {
   int32_t result = 0;
   for (auto c : hexString) {
     result = (result << 4) + digitToHex(c);
@@ -235,7 +235,7 @@ int32_t getEscapedChar(std::string_view view, size_t& pos) {
         pos++;
         return '/';
       case 'u': {
-        if (pos + 5 > view.size()) {
+        if (pos + 6 > view.size()) {
           VELOX_USER_FAIL("Invalid escape sequence at the end of string");
         }
 
@@ -262,6 +262,9 @@ int32_t getEscapedChar(std::string_view view, size_t& pos) {
       case 't':
         pos += 2;
         return '\t';
+      case '\\':
+        pos += 2;
+        return '\\';
 
       default:
         // Presto java ignores bad escape sequences.
@@ -346,7 +349,7 @@ size_t normalizeForJsonParse(const char* input, size_t length, char* output) {
           continue;
         case 'u': {
           VELOX_USER_CHECK(
-              start + 5 <= end, "Invalid escape sequence at the end of string");
+              start + 6 <= end, "Invalid escape sequence at the end of string");
 
           // Read 4 hex digits.
           auto codePoint = parseHex(std::string_view(start + 2, 4));
@@ -439,7 +442,7 @@ size_t normalizedSizeForJsonParse(const char* input, size_t length) {
           continue;
         case 'u': {
           VELOX_USER_CHECK(
-              start + 5 <= end, "Invalid escape sequence at the end of string");
+              start + 6 <= end, "Invalid escape sequence at the end of string");
           auto codePoint = parseHex(std::string_view(start + 2, 4));
           if (isHighSurrogate(codePoint) || isLowSurrogate(codePoint) ||
               isSpecialCode(codePoint)) {
@@ -493,6 +496,159 @@ size_t normalizedSizeForJsonParse(const char* input, size_t length) {
     }
   }
   return outSize;
+}
+
+size_t unescapeSizeForJsonCast(const char* input, size_t length) {
+  auto* start = input;
+  auto* end = input + length;
+  size_t outSize = 0;
+  while (start < end) {
+    if (FOLLY_UNLIKELY(*start == '\\')) {
+      VELOX_USER_CHECK(
+          start + 1 != end, "Invalid escape sequence at the end of string");
+      switch (*(start + 1)) {
+        case '/':
+          ++outSize;
+          start += 2;
+          continue;
+        case 'u': {
+          VELOX_USER_CHECK(
+              start + 6 <= end, "Invalid escape sequence at the end of string");
+          auto codePoint = parseHex(std::string_view(start + 2, 4));
+          if (isHighSurrogate(codePoint)) {
+            // Skip the next 6 characters.
+            start += 6;
+            // Read the next 6 characters.
+            if (start + 6 > end) {
+              VELOX_USER_FAIL("Invalid escape sequence at the end of string");
+            }
+            auto lowCodePoint = parseHex(std::string_view(start + 2, 4));
+            if (!isLowSurrogate(lowCodePoint)) {
+              VELOX_USER_FAIL("Invalid escape sequence at the end of string");
+            }
+            outSize += 4;
+            start += 6;
+            continue;
+          } else {
+            unsigned char buf[4];
+            auto increment = utf8proc_encode_char(codePoint, buf);
+            outSize += increment;
+          }
+          start += 6;
+          continue;
+        }
+        default:
+          outSize += 2;
+          start += 2;
+          continue;
+      }
+    }
+    if (FOLLY_LIKELY(IS_ASCII(*start))) {
+      ++outSize;
+      ++start;
+      continue;
+    }
+    int32_t codePoint;
+    auto count = tryGetUtf8CharLength(start, end - start, codePoint);
+    switch (count) {
+      case 2:
+      case 3:
+      case 4:
+        outSize += count;
+        start += count;
+        continue;
+      default: {
+        // Invalid character.
+        VELOX_DCHECK_LT(count, 0);
+        count = -count;
+        const auto& replacement =
+            getInvalidUTF8ReplacementString(start, end - start, count);
+        outSize += replacement.size();
+        start += count;
+      }
+    }
+  }
+  return outSize;
+}
+
+void unescapeForJsonCast(const char* input, size_t length, char* output) {
+  char* pos = output;
+  auto* start = input;
+  auto* end = input + length;
+
+  while (start < end) {
+    if (FOLLY_UNLIKELY(*start == '\\')) {
+      VELOX_USER_CHECK(
+          start + 1 != end, "Invalid escape sequence at the end of string");
+      switch (*(start + 1)) {
+        case '/':
+          *pos++ = '/';
+          start += 2;
+          continue;
+        case 'u': {
+          VELOX_USER_CHECK(
+              start + 6 <= end, "Invalid escape sequence at the end of string");
+          auto codePoint = parseHex(std::string_view(start + 2, 4));
+          if (isHighSurrogate(codePoint)) {
+            // Skip the next 6 characters.
+            start += 6;
+            // Read the next 6 characters.
+            if (start + 6 > end) {
+              VELOX_USER_FAIL("Invalid escape sequence at the end of string");
+            }
+            auto lowCodePoint = parseHex(std::string_view(start + 2, 4));
+            if (!isLowSurrogate(lowCodePoint)) {
+              VELOX_USER_FAIL("Invalid escape sequence at the end of string");
+            }
+            auto convertedPoint = (codePoint - 0xD800) * 0x400 +
+                (lowCodePoint - 0xDC00) + 0x10000;
+            auto increment = utf8proc_encode_char(
+                convertedPoint, reinterpret_cast<unsigned char*>(pos));
+            pos += increment;
+            start += 6;
+            continue;
+          } else {
+            auto increment = utf8proc_encode_char(
+                codePoint, reinterpret_cast<unsigned char*>(pos));
+            pos += increment;
+          }
+          start += 6;
+          continue;
+        }
+        default:
+          *pos++ = *start;
+          *pos++ = *(start + 1);
+          start += 2;
+          continue;
+      }
+    }
+    if (FOLLY_LIKELY(IS_ASCII(*start))) {
+      *pos++ = *start++;
+      continue;
+    }
+    int32_t codePoint;
+    auto count = tryGetUtf8CharLength(start, end - start, codePoint);
+    switch (count) {
+      case 2:
+      case 3:
+      case 4: {
+        memcpy(pos, reinterpret_cast<const char*>(start), count);
+        pos += count;
+        start += count;
+        continue;
+      }
+      default: {
+        // Invalid character.
+        VELOX_DCHECK_LT(count, 0);
+        count = -count;
+        const auto& replacement =
+            getInvalidUTF8ReplacementString(start, end - start, count);
+        std::memcpy(pos, replacement.data(), replacement.size());
+        pos += replacement.size();
+        start += count;
+      }
+    }
+  }
 }
 
 } // namespace facebook::velox

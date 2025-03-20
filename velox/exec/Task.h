@@ -116,6 +116,12 @@ class Task : public std::enable_shared_from_this<Task> {
     spillDirectoryCallback_ = std::move(spillDirectoryCallback);
   }
 
+  /// Returns human-friendly representation of the plan augmented with runtime
+  /// statistics. The implementation invokes exec::printPlanWithStats().
+  ///
+  /// @param includeCustomStats If true, prints operator-specific counters.
+  std::string printPlanWithStats(bool includeCustomStats = false) const;
+
   std::string toString() const;
 
   folly::dynamic toJson() const;
@@ -130,6 +136,11 @@ class Task : public std::enable_shared_from_this<Task> {
   /// Returns task ID specified in the constructor.
   const std::string& taskId() const {
     return taskId_;
+  }
+
+  /// Returns plan fragment specified in the constructor.
+  const core::PlanFragment& planFragment() const {
+    return planFragment_;
   }
 
   const int destination() const {
@@ -1112,13 +1123,17 @@ class Task : public std::enable_shared_from_this<Task> {
   // Tracks the blocking state for each driver under serialized execution mode.
   class DriverBlockingState {
    public:
-    explicit DriverBlockingState(const Driver* driver) : driver_(driver) {
+    explicit DriverBlockingState(Driver* driver) : driver_(driver) {
       VELOX_CHECK_NOT_NULL(driver_);
     }
 
     /// Sets driver future by setting the continuation callback via inline
-    /// executor.
-    void setDriverFuture(ContinueFuture& diverFuture);
+    /// executor. 'driverOp' and 'blockingReason' are set if the driver is
+    /// blocked by an operator.
+    void setDriverFuture(
+        ContinueFuture& diverFuture,
+        Operator* driverOp,
+        BlockingReason blockingReason);
 
     /// Indicates if the associated driver is blocked or not. If blocked,
     /// 'future' is set which becomes realized when the driver is unblocked.
@@ -1127,13 +1142,23 @@ class Task : public std::enable_shared_from_this<Task> {
     bool blocked(ContinueFuture* future);
 
    private:
-    const Driver* const driver_;
+    void clearLocked();
+
+    Driver* const driver_;
 
     mutable std::mutex mutex_;
     // Indicates if the associated driver is blocked or not.
     bool blocked_{false};
     // Sets the driver future error if not null.
     std::exception_ptr error_{nullptr};
+    // If not null, set to the current blocking operator which should only be
+    // set if 'blocked_' is true.
+    Operator* op_{nullptr};
+    // Sets to blocking reason 'op_', and cleared when the driver is resumed.
+    BlockingReason blockingReason_{BlockingReason::kNotBlocked};
+    // Sets to the time that driver was blocked, and cleared when the driver is
+    // resumed.
+    uint64_t blockStartUs_{0};
     // Promises to fulfill when the driver is unblocked.
     std::vector<std::unique_ptr<ContinuePromise>> promises_;
   };

@@ -125,13 +125,15 @@ class CMakeBuild(build_ext):
             extdir += os.path.sep
 
         if "DEBUG" in os.environ:
-            cfg = "Debug" if os.environ["DEBUG"] == "1" else "Release"
+            cfg = "Debug" if os.environ["DEBUG"] == "1" else "MinSizeRel"
         else:
-            cfg = "Debug" if self.debug else "Release"
+            cfg = "Debug" if self.debug else "MinSizeRel"
 
         exec_path = sys.executable
 
         cmake_args = [
+            "-DVELOX_BUILD_TESTING=OFF",
+            "-DVELOX_MONO_LIBRARY=ON",
             f"-DCMAKE_LIBRARY_OUTPUT_DIRECTORY={extdir}",
             f"-DCMAKE_BUILD_TYPE={cfg}",
             f"-DCMAKE_INSTALL_PREFIX={extdir}",

@@ -106,7 +106,7 @@ build:					#: Build the software based in BUILD_DIR and BUILD_TYPE variables
 
 debug:					#: Build with debugging symbols
 	$(MAKE) cmake BUILD_DIR=debug BUILD_TYPE=Debug
-	$(MAKE) build BUILD_DIR=debug -j ${NUM_THREADS}
+	$(MAKE) build BUILD_DIR=debug
 
 release:				#: Build the release version
 	$(MAKE) cmake BUILD_DIR=release BUILD_TYPE=Release && \
@@ -143,12 +143,14 @@ dwio_debug:			#: Minimal build with dwio debugging symbols.
 benchmarks-basic-build:
 	$(MAKE) release EXTRA_CMAKE_FLAGS=" ${EXTRA_CMAKE_FLAGS} \
                                             -DVELOX_BUILD_TESTING=OFF \
-                                            -DVELOX_ENABLE_BENCHMARKS_BASIC=ON"
+                                            -DVELOX_ENABLE_BENCHMARKS_BASIC=ON \
+					    -DVELOX_BUILD_RUNNER=OFF"
 
 benchmarks-build:
 	$(MAKE) release EXTRA_CMAKE_FLAGS=" ${EXTRA_CMAKE_FLAGS} \
                                             -DVELOX_BUILD_TESTING=OFF \
-                                            -DVELOX_ENABLE_BENCHMARKS=ON"
+                                            -DVELOX_ENABLE_BENCHMARKS=ON \
+					    -DVELOX_BUILD_RUNNER=OFF"
 
 benchmarks-basic-run:
 	scripts/benchmark-runner.py run \
