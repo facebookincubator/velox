@@ -214,6 +214,27 @@ std::string toCallSql(const core::CallTypedExprPtr& call) {
     sql << "row(";
     toCallInputsSql(call->inputs(), sql);
     sql << ")";
+  } else if (call->name() == "is_null") {
+    const auto& inputs = call->inputs();
+    VELOX_CHECK_EQ(inputs.size(), 1);
+    toCallInputsSql({inputs[0]}, sql);
+    sql << " is null ";
+  } else if (call->name() == "switch") {
+    const auto& inputs = call->inputs();
+    sql << " case ";
+    size_t inputSize = inputs.size();
+    size_t inputIndex = 0;
+    while (inputIndex < inputSize - 1) {
+      sql << " when ";
+      toCallInputsSql({inputs[inputIndex++]}, sql);
+      sql << " then ";
+      toCallInputsSql({inputs[inputIndex++]}, sql);
+    }
+    if (inputIndex < inputSize) {
+      sql << " else ";
+      toCallInputsSql({inputs[inputIndex]}, sql);
+    }
+    sql << " end ";
   } else {
     // Regular function call syntax.
     sql << call->name() << "(";
@@ -273,10 +294,10 @@ std::string toConstantSql(const core::ConstantTypedExprPtr& constant) {
     // instead.
     sql << fmt::format("cast(null as {})", toTypeSql(constant->type()));
   } else if (constant->type()->isVarchar() || constant->type()->isVarbinary()) {
-    sql << fmt::format(
-        "{} '{}'",
-        toTypeSql(constant->type()),
-        escape(constant->valueVector()->toString(0)));
+    std::string str = constant->hasValueVector()
+        ? constant->valueVector()->toString(0)
+        : constant->value().value<std::string>();
+    sql << fmt::format("{} '{}'", toTypeSql(constant->type()), escape(str));
   } else if (constant->type()->isPrimitiveType()) {
     sql << fmt::format(
         "{} '{}'", toTypeSql(constant->type()), constant->toString());

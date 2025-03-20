@@ -1460,11 +1460,13 @@ TEST_F(MysqlDateTimeTest, formatYear) {
       formatMysqlDateTime("%Y", fromTimestampString("-1-01-01"), timezone),
       "-0001");
   EXPECT_THROW(
-      formatMysqlDateTime("%Y", fromTimestampString("-99999-01-01"), timezone),
-      VeloxRuntimeError);
+      formatMysqlDateTime(
+          "%Y", fromTimestampString("-292275056-01-01"), timezone),
+      VeloxUserError);
   EXPECT_THROW(
-      formatMysqlDateTime("%Y", fromTimestampString("99999-01-01"), timezone),
-      VeloxRuntimeError);
+      formatMysqlDateTime(
+          "%Y", fromTimestampString("292278995-01-01"), timezone),
+      VeloxUserError);
 }
 
 TEST_F(MysqlDateTimeTest, formatMonthDay) {
