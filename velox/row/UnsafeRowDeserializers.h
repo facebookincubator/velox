@@ -24,17 +24,17 @@ namespace facebook::velox::row {
 /// For backward compability, keep this API.
 struct UnsafeRowDeserializer {
   /**
-     * Deserializes a complex element type to its Vector representation.
-     * @param data A string_view over a given element in the UnsafeRow.
-     * @param type the element type.
-     * @param pool the memory pool to allocate Vectors from
-     *data to a array.
-     * @return a VectorPtr
-     */
+   * Deserializes a complex element type to its Vector representation.
+   * @param data A string_view over a given element in the UnsafeRow.
+   * @param type the element type.
+   * @param pool the memory pool to allocate Vectors from
+   *data to a array.
+   * @return a VectorPtr
+   */
   static VectorPtr deserializeOne(
-    std::optional<std::string_view> data,
-    const TypePtr& type,
-    memory::MemoryPool* pool) {
+      std::optional<std::string_view> data,
+      const TypePtr& type,
+      memory::MemoryPool* pool) {
     std::vector<std::optional<std::string_view>> vectors{data};
     return deserialize(vectors, type, pool);
   }
@@ -58,7 +58,8 @@ struct UnsafeRowDeserializer {
       const char* ptr = row.value().data();
       dataPtrs.emplace_back(const_cast<char*>(ptr));
     }
-    return UnsafeRowFast::deserialize(dataPtrs, asRowType(type), pool);;
+    return UnsafeRowFast::deserialize(dataPtrs, asRowType(type), pool);
+    ;
   }
 };
-}
+} // namespace facebook::velox::row
