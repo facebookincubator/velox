@@ -97,7 +97,8 @@ class MemoryArbitrator {
 
     std::string toString() const {
       std::stringstream ss;
-      for (const auto& extraConfig : extraConfigs) {
+      auto orderedConfig = std::map(extraConfigs.begin(), extraConfigs.end());
+      for (const auto& extraConfig : orderedConfig) {
         ss << extraConfig.first << "=" << extraConfig.second << ";";
       }
       return fmt::format(
@@ -404,7 +405,7 @@ class MemoryReclaimer {
   virtual void abort(MemoryPool* pool, const std::exception_ptr& error);
 
  protected:
-  explicit MemoryReclaimer(int32_t priority) : priority_(priority){};
+  explicit MemoryReclaimer(int32_t priority) : priority_(priority) {};
 
  private:
   const int32_t priority_;

@@ -604,17 +604,17 @@ TEST_F(MockSharedArbitrationTest, configToString) {
       arbitratorConfig.toString(),
       "kind=SHARED;capacity=1.00KB;"
       "arbitrationStateCheckCb=(unset);"
-      "global-arbitration-without-spill=true;"
-      "memory-reclaim-threads-hw-multiplier=1.0;"
       "check-usage-leak=false;"
+      "global-arbitration-abort-time-ratio=0.8;"
       "global-arbitration-enabled=true;"
-      "max-memory-arbitration-time=5000ms;"
       "global-arbitration-memory-reclaim-pct=30;"
+      "global-arbitration-without-spill=true;"
+      "max-memory-arbitration-time=5000ms;"
       "memory-pool-abort-capacity-limit=256mb;"
+      "memory-pool-initial-capacity=512MB;"
       "memory-pool-min-reclaim-bytes=64mb;"
       "memory-pool-reserved-capacity=200B;"
-      "memory-pool-initial-capacity=512MB;"
-      "global-arbitration-abort-time-ratio=0.8;"
+      "memory-reclaim-threads-hw-multiplier=1.0;"
       "reserved-capacity=100B;");
 }
 
