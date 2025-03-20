@@ -1456,13 +1456,12 @@ TEST_F(Re2FunctionsTest, invalidEscapeChar) {
       evaluate("like(c0 ,'AA', 'AA')", rowVector),
       "Escape string must be a single character");
 
-  VELOX_ASSERT_THROW(
-      evaluate("like(c0 ,'AA', '')", rowVector),
-      "Escape string must be a single character");
+  // Can pass, empty escape char is allowed.
+  evaluate("like(c0 ,'AA', '')", rowVector);
+
   {
     auto result = evaluate("try(like(c0 , c1, c2))", rowVector);
-    auto expected =
-        makeNullableFlatVector<bool>({std::nullopt, std::nullopt, false});
+    auto expected = makeNullableFlatVector<bool>({std::nullopt, true, false});
     assertEqualVectors(expected, result);
   }
 
