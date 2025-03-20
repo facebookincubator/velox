@@ -102,7 +102,7 @@ Valid examples
 From timestamp
 ^^^^^^^^^^^^^
 
-Casting a timestamp from microseconds to seconds by dividing by the number of microseconds in a second and rounding down to the nearest second since the epoch (1970-01-01 00:00:00 UTC).
+Casting timestamp as integral types returns the number of seconds by converting timestamp as microseconds, dividing by the number of microseconds in a second, and then rounding down to the nearest second since the epoch (1970-01-01 00:00:00 UTC).
 
 Valid examples
 
@@ -116,7 +116,6 @@ Valid examples
   SELECT cast(cast('2025-02-25 08:00:26.88' as timestamp) as integer); -- 1740470426
   SELECT cast(cast('2025-02-25 08:00:26.88' as timestamp) as smallint); -- 30874
   SELECT cast(cast('2025-02-25 08:00:26.88' as timestamp) as tinyint); -- -102
-  SELECT cast(cast(NULL as timestamp) as bigint); -- NULL
 
 Cast to Boolean
 ---------------
