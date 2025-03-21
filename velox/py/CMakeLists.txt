@@ -12,6 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+add_library(velox_py_init OBJECT lib/PyInit.cpp)
+
 # velox.py.type library:
 velox_add_library(velox_py_type_lib type/PyType.cpp)
 velox_link_libraries(velox_py_type_lib velox_type pybind11::module)
@@ -45,6 +47,7 @@ velox_link_libraries(
   velox_py_plan_builder_lib
   velox_py_type_lib
   velox_py_vector_lib
+  velox_py_init
   velox_vector
   velox_core
   velox_cursor
@@ -72,6 +75,7 @@ velox_link_libraries(
   velox_py_local_runner_lib
   velox_py_type_lib
   velox_py_vector_lib
+  velox_py_init
   velox_vector
   velox_core
   velox_cursor
