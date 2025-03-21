@@ -75,7 +75,11 @@ struct KurtosisResultAccessor {
   }
 };
 
-std::vector<std::shared_ptr<exec::AggregateFunctionSignature>> getSignatures() {
+template <template <bool> typename TResultAccessor>
+exec::AggregateRegistrationResult registerCentralMoments(
+    const std::string& name,
+    bool withCompanionFunctions,
+    bool overwrite) {
   std::vector<std::shared_ptr<exec::AggregateFunctionSignature>> signatures;
   signatures.push_back(
       exec::AggregateFunctionSignatureBuilder()
@@ -83,15 +87,6 @@ std::vector<std::shared_ptr<exec::AggregateFunctionSignature>> getSignatures() {
           .intermediateType(CentralMomentsIntermediateResult::type())
           .argumentType("double")
           .build());
-  return signatures;
-}
-
-exec::AggregateRegistrationResult registerSkewness(
-    const std::string& name,
-    bool withCompanionFunctions,
-    bool overwrite) {
-  std::vector<std::shared_ptr<exec::AggregateFunctionSignature>> signatures =
-      getSignatures();
 
   return exec::registerAggregateFunction(
       name,
@@ -106,9 +101,9 @@ exec::AggregateRegistrationResult registerSkewness(
         if (config.sparkLegacyStatisticalAggregate()) {
           if (exec::isRawInput(step)) {
             if (inputType->kind() == TypeKind::DOUBLE) {
-              return std::make_unique<CentralMomentsAggregatesBase<
-                  double,
-                  SkewnessResultAccessor<false>>>(resultType);
+              return std::make_unique<
+                  CentralMomentsAggregatesBase<double, TResultAccessor<false>>>(
+                  resultType);
             }
             VELOX_UNSUPPORTED(
                 "Unsupported input type: {}. "
@@ -121,14 +116,14 @@ exec::AggregateRegistrationResult registerSkewness(
                 "(count:bigint, m1:double, m2:double, m3:double, m4:double) struct");
             return std::make_unique<CentralMomentsAggregatesBase<
                 int64_t /*unused*/,
-                SkewnessResultAccessor<false>>>(resultType);
+                TResultAccessor<false>>>(resultType);
           }
         } else {
           if (exec::isRawInput(step)) {
             if (inputType->kind() == TypeKind::DOUBLE) {
-              return std::make_unique<CentralMomentsAggregatesBase<
-                  double,
-                  SkewnessResultAccessor<true>>>(resultType);
+              return std::make_unique<
+                  CentralMomentsAggregatesBase<double, TResultAccessor<true>>>(
+                  resultType);
             }
             VELOX_UNSUPPORTED(
                 "Unsupported input type: {}. "
@@ -141,70 +136,7 @@ exec::AggregateRegistrationResult registerSkewness(
                 "(count:bigint, m1:double, m2:double, m3:double, m4:double) struct");
             return std::make_unique<CentralMomentsAggregatesBase<
                 int64_t /*unused*/,
-                SkewnessResultAccessor<true>>>(resultType);
-          }
-        }
-      },
-      withCompanionFunctions,
-      overwrite);
-}
-
-exec::AggregateRegistrationResult registerKurtosis(
-    const std::string& name,
-    bool withCompanionFunctions,
-    bool overwrite) {
-  std::vector<std::shared_ptr<exec::AggregateFunctionSignature>> signatures =
-      getSignatures();
-
-  return exec::registerAggregateFunction(
-      name,
-      std::move(signatures),
-      [name](
-          core::AggregationNode::Step step,
-          const std::vector<TypePtr>& argTypes,
-          const TypePtr& resultType,
-          const core::QueryConfig& config) -> std::unique_ptr<exec::Aggregate> {
-        VELOX_CHECK_EQ(argTypes.size(), 1, "{} takes only one argument", name);
-        const auto& inputType = argTypes[0];
-        if (config.sparkLegacyStatisticalAggregate()) {
-          if (exec::isRawInput(step)) {
-            if (inputType->kind() == TypeKind::DOUBLE) {
-              return std::make_unique<CentralMomentsAggregatesBase<
-                  double,
-                  KurtosisResultAccessor<false>>>(resultType);
-            }
-            VELOX_UNSUPPORTED(
-                "Unsupported input type: {}. "
-                "Expected DOUBLE.",
-                inputType->toString());
-          } else {
-            checkAccumulatorRowType(
-                inputType,
-                "Input type for final aggregation must be "
-                "(count:bigint, m1:double, m2:double, m3:double, m4:double) struct");
-            return std::make_unique<CentralMomentsAggregatesBase<
-                int64_t /*unused*/,
-                KurtosisResultAccessor<false>>>(resultType);
-          }
-        } else {
-          if (exec::isRawInput(step)) {
-            if (inputType->kind() == TypeKind::DOUBLE) {
-              return std::make_unique<CentralMomentsAggregatesBase<
-                  double,
-                  KurtosisResultAccessor<true>>>(resultType);
-            }
-            VELOX_UNSUPPORTED(
-                "Unsupported input type: {}. "
-                "Expected DOUBLE.",
-                inputType->toString());
-          } else {
-            checkAccumulatorRowType(
-                inputType,
-                "Input type for final aggregation must be "
-                "(count:bigint, m1:double, m2:double, m3:double, m4:double) struct");
-            return std::make_unique<CentralMomentsAggregatesBase<
-                int64_t /*unused*/,
-                KurtosisResultAccessor<true>>>(resultType);
+                TResultAccessor<true>>>(resultType);
           }
         }
       },
@@ -217,8 +149,10 @@ void registerCentralMomentsAggregate(
     const std::string& prefix,
     bool withCompanionFunctions,
     bool overwrite) {
-  registerSkewness(prefix + "skewness", withCompanionFunctions, overwrite);
-  registerKurtosis(prefix + "kurtosis", withCompanionFunctions, overwrite);
+  registerCentralMoments<SkewnessResultAccessor>(
+      prefix + "skewness", withCompanionFunctions, overwrite);
+  registerCentralMoments<KurtosisResultAccessor>(
+      prefix + "kurtosis", withCompanionFunctions, overwrite);
 }
 
 } // namespace facebook::velox::functions::aggregate::sparksql
