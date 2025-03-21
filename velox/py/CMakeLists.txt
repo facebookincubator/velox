@@ -90,3 +90,17 @@ pybind11_add_module(runner MODULE runner/runner.cpp)
 target_link_libraries(
   runner
   PRIVATE velox_py_local_runner_lib)
+
+# 'arrow' target already exists
+pybind11_add_module(arrow_module MODULE arrow/arrow.cpp)
+set_target_properties(
+  arrow_module
+  PROPERTIES OUTPUT_NAME "arrow")
+target_link_libraries(
+  arrow_module
+  PRIVATE
+    velox_py_init
+    velox_py_vector_lib
+    velox_arrow_bridge
+    arrow
+    pybind11::module)
