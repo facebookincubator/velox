@@ -15,18 +15,29 @@
 ARG image=ghcr.io/facebookincubator/velox-dev:centos9
 FROM $image
 
+COPY scripts/setup-helper-functions.sh /
+COPY scripts/setup-adapters.sh /
 COPY scripts/setup-centos9.sh /
 COPY scripts/setup-common.sh /
 COPY scripts/setup-versions.sh /
 COPY scripts/setup-helper-functions.sh /
+#RUN mkdir build && \
+#    ( \
+#      cd build && \
+#      source /opt/rh/gcc-toolset-12/enable && \
+#      bash /setup-centos9.sh install_adapters && \
+#      source /setup-centos9.sh install_cuda 12.8 \
+#    ) && \
+#    rm -rf build && dnf remove -y conda && dnf clean all
 RUN mkdir build && \
-    ( \
-      cd build && \
-      source /opt/rh/gcc-toolset-12/enable && \
-      bash /setup-centos9.sh install_adapters && \
-      source /setup-centos9.sh install_cuda 12.8 \
-    ) && \
-    rm -rf build && dnf remove -y conda && dnf clean all
+     ( \
+       cd build && \
+       source /opt/rh/gcc-toolset-12/enable && \
+       bash /setup-adapters.sh && \
+       source /setup-centos9.sh && \
+       install_cuda 12.8 \
+     ) && \
+     rm -rf build && dnf remove -y conda && dnf clean all
 
 # put CUDA binaries on the PATH
 ENV PATH /usr/local/cuda/bin:${PATH}
