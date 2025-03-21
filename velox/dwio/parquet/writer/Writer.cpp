@@ -145,6 +145,9 @@ std::shared_ptr<WriterProperties> getArrowParquetWriterOptions(
   properties =
       properties->data_pagesize(options.dataPageSize.value_or(
         facebook::velox::parquet::arrow::kDefaultDataPageSize));
+  properties =
+      properties->write_batch_size(options.batchSize.value_or(
+        facebook::velox::parquet::arrow::DEFAULT_WRITE_BATCH_SIZE));
   properties = properties->max_row_group_length(
       static_cast<int64_t>(flushPolicy->rowsInRowGroup()));
   properties = properties->codec_options(options.codecOptions);
@@ -285,6 +288,22 @@ std::optional<int64_t> getParquetPageSize(
       return value * 1'024 * 1'024 * 1'024;
     } else {
       VELOX_FAIL("Unsupported parquet page size unit {}", unit);
+    }
+  }
+  return std::nullopt;
+}
+
+std::optional<int64_t> getParquetBatchSize(
+    const config::ConfigBase& config,
+    const char* configKey) {
+  if (const auto batchSize = config.get<std::string>(configKey)) {
+    try {
+      int64_t value = std::stoll(batchSize.value());  // assuming batchSize is std::optional<std::string>
+      return value;
+    } catch (const std::invalid_argument& e) {
+      VELOX_FAIL("Write batch size is not a number {}", batchSize.value());
+    } catch (const std::out_of_range& e) {
+      VELOX_FAIL("Write batch size is out of range for int64_t {}", batchSize.value());
     }
   }
   return std::nullopt;
@@ -536,6 +555,15 @@ void WriterOptions::processConfigs(
         ? getParquetPageSize(session, kParquetSessionWritePageSize)
         : getParquetPageSize(connectorConfig,
           kParquetHiveConnectorWritePageSize);
+  }
+
+  if (!batchSize) {
+    batchSize =
+        getParquetBatchSize(session, kParquetSessionWriteBatchSize)
+            .has_value()
+        ? getParquetBatchSize(session, kParquetSessionWriteBatchSize)
+        : getParquetBatchSize(connectorConfig,
+          kParquetHiveConnectorWriteBatchSize);
   }
 }
 
