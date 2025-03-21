@@ -14,7 +14,7 @@
 
 import unittest
 
-from velox.py.file import PARQUET, DWRF, NIMBLE, ORC, JSON, TEXT, File
+from pyvelox.file import PARQUET, DWRF, NIMBLE, ORC, JSON, TEXT, File
 
 
 class TestPyVeloxFile(unittest.TestCase):

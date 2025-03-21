@@ -18,7 +18,7 @@
 
 from typing import Iterator, Optional
 
-from velox.py.vector import Vector
+from pyvelox.vector import Vector
 
 
 class LocalRunner:

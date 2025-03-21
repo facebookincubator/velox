@@ -31,7 +31,7 @@ PYBIND11_MODULE(plan_builder, m) {
   velox::py::registerAllResources();
 
   // Need types to specify table scan schema output.
-  py::module::import("velox.py.type");
+  py::module::import("pyvelox.type");
 
   // PlanNode should not be created from Python directly (no registered
   // constructor).

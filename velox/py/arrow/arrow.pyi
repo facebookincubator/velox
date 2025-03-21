@@ -18,7 +18,7 @@
 
 from typing import List
 
-from velox.py.vector import Vector
+from pyvelox.vector import Vector
 from pyarrow import Array
 
 def to_velox(array: Array) -> Vector: ...

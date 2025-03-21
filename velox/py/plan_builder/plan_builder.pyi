@@ -19,8 +19,8 @@
 from enum import Enum
 from typing import List, Dict, Type, Optional
 
-from velox.py.file import File
-from velox.py.type import Type
+from pyvelox.file import File
+from pyvelox.type import Type
 
 
 class JoinType(Enum):

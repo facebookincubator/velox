@@ -17,8 +17,8 @@
 import unittest
 import pyarrow
 
-from velox.py.arrow import to_velox, to_arrow
-from velox.py.type import DOUBLE
+from pyvelox.arrow import to_velox, to_arrow
+from pyvelox.type import DOUBLE
 
 
 class TestPyVeloxVector(unittest.TestCase):

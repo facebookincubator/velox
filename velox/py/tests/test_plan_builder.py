@@ -14,8 +14,8 @@
 
 import unittest
 
-from velox.py.type import BIGINT, ROW
-from velox.py.plan_builder import PlanBuilder, PlanNode
+from pyvelox.type import BIGINT, ROW
+from pyvelox.plan_builder import PlanBuilder, PlanNode
 
 
 class TestPyVeloxPlanBuidler(unittest.TestCase):

@@ -13,17 +13,18 @@
 # limitations under the License.
 
 import json
-import unittest
 import os
-import pyarrow
 import random
 import tempfile
+import unittest
 
-from velox.py.arrow import to_velox
-from velox.py.plan_builder import PlanBuilder
-from velox.py.file import DWRF
-from velox.py.type import BIGINT, ROW, DOUBLE, VARCHAR
-from velox.py.runner import LocalRunner, register_hive, register_tpch, unregister
+import pyarrow
+
+from pyvelox.arrow import to_velox
+from pyvelox.file import DWRF
+from pyvelox.plan_builder import PlanBuilder
+from pyvelox.runner import LocalRunner, register_hive, register_tpch, unregister
+from pyvelox.type import BIGINT, DOUBLE, ROW, VARCHAR
 
 
 class TestPyVeloxRunner(unittest.TestCase):

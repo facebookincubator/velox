@@ -15,7 +15,7 @@
 # pyre-unsafe
 
 import unittest
-from velox.py.type import (
+from pyvelox.type import (
     Type,
     BIGINT,
     INTEGER,
