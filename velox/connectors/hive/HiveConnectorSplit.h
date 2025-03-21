@@ -111,6 +111,8 @@ struct HiveConnectorSplit : public connector::ConnectorSplit {
         rowIdProperties(_rowIdProperties),
         bucketConversion(_bucketConversion) {}
 
+  ~HiveConnectorSplit() {}
+
   std::string toString() const override;
 
   std::string getFileName() const;
