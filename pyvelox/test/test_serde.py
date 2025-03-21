@@ -17,7 +17,7 @@ import tempfile
 import unittest
 from os import path
 
-import pyvelox.pyvelox as pv
+import pyvelox.legacy as pv
 
 
 class TestVeloxVectorSaver(unittest.TestCase):
