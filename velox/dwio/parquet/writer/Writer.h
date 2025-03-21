@@ -148,6 +148,14 @@ class Writer : public dwio::common::Writer {
       const WriterOptions& options,
       RowTypePtr schema);
 
+  Writer(
+      std::unique_ptr<dwio::common::FileSink> sink,
+      const WriterOptions& options,
+      std::shared_ptr<memory::MemoryPool> pool,
+      RowTypePtr schema,
+      std::vector<facebook::velox::parquet::arrow::SortingColumn>
+          sortingColumns);
+
   ~Writer() override = default;
 
   static bool isCodecAvailable(common::CompressionKind compression);
@@ -156,6 +164,8 @@ class Writer : public dwio::common::Writer {
   void write(const VectorPtr& data) override;
 
   void flush() override;
+
+  void addKVMeta(std::shared_ptr<::arrow::KeyValueMetadata> kvMeta);
 
   // Forces a row group boundary before the data added by next write().
   void newRowGroup(int32_t numRows);
@@ -170,6 +180,9 @@ class Writer : public dwio::common::Writer {
   void close() override;
 
   void abort() override;
+
+  void setSortingColumns(
+      std::vector<facebook::velox::parquet::arrow::SortingColumn> sc);
 
  private:
   // Sets the memory reclaimers for all the memory pools used by this writer.
