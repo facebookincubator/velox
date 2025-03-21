@@ -265,6 +265,15 @@ value. Arbitrary functions are not supported.</p>
 </dd></dl>
 
 <dl class="py function">
+<dt class="sig sig-object py" id="split_to_multimap">
+<span class="sig-name descname"><span class="pre">split_to_multimap</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">string</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">entryDelimiter</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">keyValueDelimiter</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">map&lt;varchar,</span> <span class="pre">array&lt;varchar&gt;&gt;</span></span></span><a class="headerlink" href="#split_to_multimap" title="Link to this definition">¶</a></dt>
+<dd><p>Splits <code class="docutils literal notranslate"><span class="pre">string</span></code> by <code class="docutils literal notranslate"><span class="pre">entryDelimiter</span></code> and <code class="docutils literal notranslate"><span class="pre">keyValueDelimiter</span></code> and returns a map containing an array of values for each unique key.
+<code class="docutils literal notranslate"><span class="pre">entryDelimiter</span></code> splits <code class="docutils literal notranslate"><span class="pre">string</span></code> into key-value pairs. <code class="docutils literal notranslate"><span class="pre">keyValueDelimiter</span></code> splits each pair into key and value.
+The values for each key will be in the same order as they appeared in <code class="docutils literal notranslate"><span class="pre">string</span></code>.</p>
+<p>Note that <code class="docutils literal notranslate"><span class="pre">entryDelimiter</span></code> and <code class="docutils literal notranslate"><span class="pre">keyValueDelimiter</span></code> are interpreted literally, i.e., as full string matches.</p>
+</dd></dl>
+
+<dl class="py function">
 <dt class="sig sig-object py" id="starts_with">
 <span class="sig-name descname"><span class="pre">starts_with</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">string</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">substring</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">boolean</span></span></span><a class="headerlink" href="#starts_with" title="Link to this definition">¶</a></dt>
 <dd><p>Returns whether <code class="docutils literal notranslate"><span class="pre">string</span></code> starts with <code class="docutils literal notranslate"><span class="pre">substring</span></code>.</p>
@@ -611,6 +620,7 @@ specifying <code class="docutils literal notranslate"><span class="pre">form</sp
 <li><a class="reference internal" href="#split_part"><code class="docutils literal notranslate"><span class="pre">split_part()</span></code></a></li>
 <li><a class="reference internal" href="#split_to_map"><code class="docutils literal notranslate"><span class="pre">split_to_map()</span></code></a></li>
 <li><a class="reference internal" href="#id0"><code class="docutils literal notranslate"><span class="pre">split_to_map()</span></code></a></li>
+<li><a class="reference internal" href="#split_to_multimap"><code class="docutils literal notranslate"><span class="pre">split_to_multimap()</span></code></a></li>
 <li><a class="reference internal" href="#starts_with"><code class="docutils literal notranslate"><span class="pre">starts_with()</span></code></a></li>
 <li><a class="reference internal" href="#strpos"><code class="docutils literal notranslate"><span class="pre">strpos()</span></code></a></li>
 <li><a class="reference internal" href="#strrpos"><code class="docutils literal notranslate"><span class="pre">strrpos()</span></code></a></li>
