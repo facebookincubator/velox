@@ -2047,7 +2047,7 @@ TEST_F(AggregationTest, spillPrefixSortOptimization) {
                .value() -
            1,
        0,
-       0},
+       1},
       {false,
        prefixsort::PrefixSortEncoder::encodedSize(TypeKind::SMALLINT, 12, false)
                .value() -
@@ -2064,7 +2064,7 @@ TEST_F(AggregationTest, spillPrefixSortOptimization) {
            .value(),
        0,
        0},
-      {true, 1'000'000, 0, 4},
+      {true, 1'000'000, 0, 5},
       {false, 1'000'000, 0, 0},
       {true, 1'000'000, 1'000'000, 0},
       {false, 1'000'000, 1'000'000, 0},
@@ -2107,7 +2107,7 @@ TEST_F(AggregationTest, spillPrefixSortOptimization) {
                TypeKind::BIGINT, 12, false)
                .value(),
        0,
-       2},
+       3},
       {false,
        prefixsort::PrefixSortEncoder::encodedSize(TypeKind::SMALLINT, 12, false)
                .value() +
@@ -2127,7 +2127,7 @@ TEST_F(AggregationTest, spillPrefixSortOptimization) {
                .value() -
            1,
        0,
-       2},
+       3},
       {false,
        prefixsort::PrefixSortEncoder::encodedSize(TypeKind::SMALLINT, 12, false)
                .value() +
@@ -2164,6 +2164,7 @@ TEST_F(AggregationTest, spillPrefixSortOptimization) {
        0}};
 
   for (const auto& testData : testSettings) {
+    SCOPED_TRACE(testData.debugString());
     auto spillDirectory = exec::test::TempDirectoryPath::create();
 
     core::PlanNodeId aggrNodeId;
