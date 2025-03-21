@@ -57,9 +57,9 @@ class CudfOrderBy : public exec::Operator, public NvtxHelper {
   CudfVectorPtr outputTable_;
   std::shared_ptr<const core::OrderByNode> orderByNode_;
   std::vector<CudfVectorPtr> inputs_;
-  std::vector<cudf::size_type> sort_keys_;
-  std::vector<cudf::order> column_order_;
-  std::vector<cudf::null_order> null_order_;
+  std::vector<cudf::size_type> sortKeys_;
+  std::vector<cudf::order> columnOrder_;
+  std::vector<cudf::null_order> nullOrder_;
   bool finished_{false};
 };
 

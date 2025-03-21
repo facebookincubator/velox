@@ -55,7 +55,7 @@ namespace facebook::velox::cudf_velox {
 
 namespace with_arrow {
 
-std::unique_ptr<cudf::table> to_cudf_table(
+std::unique_ptr<cudf::table> toCudfTable(
     const facebook::velox::RowVectorPtr& veloxTable,
     facebook::velox::memory::MemoryPool* pool,
     rmm::cuda_stream_view stream) {
@@ -87,7 +87,7 @@ std::unique_ptr<cudf::table> to_cudf_table(
 
 namespace {
 
-void to_signed_int_format(char* format) {
+void toSignedIntFormat(char* format) {
   VELOX_CHECK_NOT_NULL(format);
   switch (format[0]) {
     case 'C':
@@ -112,18 +112,18 @@ void to_signed_int_format(char* format) {
 
 // Changes all unsigned indices to signed indices for dictionary columns from
 // cudf which uses unsigned indices, but velox uses signed indices.
-void fix_dictionary_indices(ArrowSchema& arrowSchema) {
+void fixDictionaryIndices(ArrowSchema& arrowSchema) {
   if (arrowSchema.dictionary != nullptr) {
-    to_signed_int_format(const_cast<char*>(arrowSchema.format));
-    fix_dictionary_indices(*arrowSchema.dictionary);
+    toSignedIntFormat(const_cast<char*>(arrowSchema.format));
+    fixDictionaryIndices(*arrowSchema.dictionary);
   }
   for (size_t i = 0; i < arrowSchema.n_children; ++i) {
     VELOX_CHECK_NOT_NULL(arrowSchema.children[i]);
-    fix_dictionary_indices(*arrowSchema.children[i]);
+    fixDictionaryIndices(*arrowSchema.children[i]);
   }
 }
 
-RowVectorPtr to_velox_column(
+RowVectorPtr toVeloxColumn(
     const cudf::table_view& table,
     memory::MemoryPool* pool,
     const std::vector<cudf::column_metadata>& metadata,
@@ -133,25 +133,25 @@ RowVectorPtr to_velox_column(
 
   auto arrowSchema = cudf::to_arrow_schema(table, metadata);
   // Hack to convert unsigned indices to signed indices for dictionary columns
-  fix_dictionary_indices(*arrowSchema);
+  fixDictionaryIndices(*arrowSchema);
 
   auto veloxTable = importFromArrowAsOwner(*arrowSchema, arrowArray, pool);
   // BaseVector to RowVector
-  auto casted_ptr =
+  auto castedPtr =
       std::dynamic_pointer_cast<facebook::velox::RowVector>(veloxTable);
-  VELOX_CHECK_NOT_NULL(casted_ptr);
-  return casted_ptr;
+  VELOX_CHECK_NOT_NULL(castedPtr);
+  return castedPtr;
 }
 
 template <typename Iterator>
 std::vector<cudf::column_metadata>
-get_metadata(Iterator begin, Iterator end, const std::string& name_prefix) {
+getMetadata(Iterator begin, Iterator end, const std::string& namePrefix) {
   std::vector<cudf::column_metadata> metadata;
   int i = 0;
   for (auto c = begin; c < end; c++) {
-    metadata.push_back(cudf::column_metadata(name_prefix + std::to_string(i)));
-    metadata.back().children_meta = get_metadata(
-        c->child_begin(), c->child_end(), name_prefix + std::to_string(i));
+    metadata.push_back(cudf::column_metadata(namePrefix + std::to_string(i)));
+    metadata.back().children_meta = getMetadata(
+        c->child_begin(), c->child_end(), namePrefix + std::to_string(i));
     i++;
   }
   return metadata;
@@ -159,16 +159,16 @@ get_metadata(Iterator begin, Iterator end, const std::string& name_prefix) {
 
 } // namespace
 
-facebook::velox::RowVectorPtr to_velox_column(
+facebook::velox::RowVectorPtr toVeloxColumn(
     const cudf::table_view& table,
     facebook::velox::memory::MemoryPool* pool,
-    std::string name_prefix,
+    std::string namePrefix,
     rmm::cuda_stream_view stream) {
-  auto metadata = get_metadata(table.begin(), table.end(), name_prefix);
-  return to_velox_column(table, pool, metadata, stream);
+  auto metadata = getMetadata(table.begin(), table.end(), namePrefix);
+  return toVeloxColumn(table, pool, metadata, stream);
 }
 
-RowVectorPtr to_velox_column(
+RowVectorPtr toVeloxColumn(
     const cudf::table_view& table,
     memory::MemoryPool* pool,
     const std::vector<std::string>& columnNames,
@@ -177,7 +177,7 @@ RowVectorPtr to_velox_column(
   for (auto name : columnNames) {
     metadata.emplace_back(cudf::column_metadata(name));
   }
-  return to_velox_column(table, pool, metadata, stream);
+  return toVeloxColumn(table, pool, metadata, stream);
 }
 
 } // namespace with_arrow

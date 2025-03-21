@@ -32,7 +32,7 @@ namespace facebook::velox::cudf_velox {
  * @brief Creates a memory resource based on the given mode.
  */
 [[nodiscard]] std::shared_ptr<rmm::mr::device_memory_resource>
-create_memory_resource(std::string_view mode);
+createMemoryResource(std::string_view mode);
 
 /**
  * @brief Returns the global CUDA stream pool used by cudf.

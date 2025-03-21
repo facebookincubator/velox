@@ -25,18 +25,18 @@
 #include <cudf/types.hpp>
 
 namespace facebook::velox::cudf_velox::with_arrow {
-std::unique_ptr<cudf::table> to_cudf_table(
+std::unique_ptr<cudf::table> toCudfTable(
     const facebook::velox::RowVectorPtr& veloxTable,
     facebook::velox::memory::MemoryPool* pool,
     rmm::cuda_stream_view stream);
 
-facebook::velox::RowVectorPtr to_velox_column(
+facebook::velox::RowVectorPtr toVeloxColumn(
     const cudf::table_view& table,
     facebook::velox::memory::MemoryPool* pool,
-    std::string name_prefix,
+    std::string namePrefix,
     rmm::cuda_stream_view stream);
 
-facebook::velox::RowVectorPtr to_velox_column(
+facebook::velox::RowVectorPtr toVeloxColumn(
     const cudf::table_view& table,
     facebook::velox::memory::MemoryPool* pool,
     const std::vector<std::string>& columnNames,

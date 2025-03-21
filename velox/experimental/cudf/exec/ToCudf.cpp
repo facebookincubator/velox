@@ -38,13 +38,11 @@ namespace facebook::velox::cudf_velox {
 namespace {
 
 template <class... Deriveds, class Base>
-bool is_any_of(const Base* p) {
+bool isAnyOf(const Base* p) {
   return ((dynamic_cast<const Deriveds*>(p) != nullptr) || ...);
 }
 
 } // namespace
-
-static bool _cudfIsRegistered = false;
 
 bool CompileState::compile() {
   auto operators = driver_.operators();
@@ -54,11 +52,11 @@ bool CompileState::compile() {
   // them during the transformation.
   driver_.initializeOperators();
 
-  bool replacements_made = false;
+  bool replacementsMade = false;
   auto ctx = driver_.driverCtx();
 
   // Get plan node by id lookup.
-  auto get_plan_node = [&](const core::PlanNodeId& id) {
+  auto getPlanNode = [&](const core::PlanNodeId& id) {
     auto it =
         std::find_if(nodes.cbegin(), nodes.cend(), [&id](const auto& node) {
           return node->id() == id;
@@ -67,84 +65,84 @@ bool CompileState::compile() {
     return *it;
   };
 
-  auto is_supported_gpu_operator = [](const exec::Operator* op) {
-    return is_any_of<exec::OrderBy>(op);
+  auto isSupportedGpuOperator = [](const exec::Operator* op) {
+    return isAnyOf<exec::OrderBy>(op);
   };
 
-  std::vector<bool> is_supported_gpu_operators(operators.size());
+  std::vector<bool> isSupportedGpuOperators(operators.size());
   std::transform(
       operators.begin(),
       operators.end(),
-      is_supported_gpu_operators.begin(),
-      is_supported_gpu_operator);
+      isSupportedGpuOperators.begin(),
+      isSupportedGpuOperator);
 
-  auto accepts_gpu_input = [](const exec::Operator* op) {
-    return is_any_of<exec::OrderBy>(op);
+  auto acceptsGpuInput = [](const exec::Operator* op) {
+    return isAnyOf<exec::OrderBy>(op);
   };
 
-  auto produces_gpu_output = [](const exec::Operator* op) {
-    return is_any_of<exec::OrderBy>(op);
+  auto producesGpuOutput = [](const exec::Operator* op) {
+    return isAnyOf<exec::OrderBy>(op);
   };
 
   int32_t operatorsOffset = 0;
   for (int32_t operatorIndex = 0; operatorIndex < operators.size();
        ++operatorIndex) {
-    std::vector<std::unique_ptr<exec::Operator>> replace_op;
+    std::vector<std::unique_ptr<exec::Operator>> replaceOp;
 
     exec::Operator* oper = operators[operatorIndex];
     auto replacingOperatorIndex = operatorIndex + operatorsOffset;
     VELOX_CHECK(oper);
 
-    bool const previous_operator_is_not_gpu =
-        (operatorIndex > 0 and !is_supported_gpu_operators[operatorIndex - 1]);
-    bool const next_operator_is_not_gpu =
+    bool const kPreviousOperatorIsNotGpu =
+        (operatorIndex > 0 and !isSupportedGpuOperators[operatorIndex - 1]);
+    bool const kNextOperatorIsNotGpu =
         (operatorIndex < operators.size() - 1 and
-         !is_supported_gpu_operators[operatorIndex + 1]);
+         !isSupportedGpuOperators[operatorIndex + 1]);
 
     auto id = oper->operatorId();
-    if (previous_operator_is_not_gpu and accepts_gpu_input(oper)) {
-      auto plan_node = get_plan_node(oper->planNodeId());
-      replace_op.push_back(std::make_unique<CudfFromVelox>(
-          id, plan_node->outputType(), ctx, plan_node->id() + "-from-velox"));
-      replace_op.back()->initialize();
+    if (kPreviousOperatorIsNotGpu and acceptsGpuInput(oper)) {
+      auto planNode = getPlanNode(oper->planNodeId());
+      replaceOp.push_back(std::make_unique<CudfFromVelox>(
+          id, planNode->outputType(), ctx, planNode->id() + "-from-velox"));
+      replaceOp.back()->initialize();
     }
 
     if (auto orderByOp = dynamic_cast<exec::OrderBy*>(oper)) {
       auto id = orderByOp->operatorId();
-      auto plan_node = std::dynamic_pointer_cast<const core::OrderByNode>(
-          get_plan_node(orderByOp->planNodeId()));
-      VELOX_CHECK(plan_node != nullptr);
-      replace_op.push_back(std::make_unique<CudfOrderBy>(id, ctx, plan_node));
-      replace_op.back()->initialize();
+      auto planNode = std::dynamic_pointer_cast<const core::OrderByNode>(
+          getPlanNode(orderByOp->planNodeId()));
+      VELOX_CHECK(planNode != nullptr);
+      replaceOp.push_back(std::make_unique<CudfOrderBy>(id, ctx, planNode));
+      replaceOp.back()->initialize();
     }
 
-    if (next_operator_is_not_gpu and produces_gpu_output(oper)) {
-      auto plan_node = get_plan_node(oper->planNodeId());
-      replace_op.push_back(std::make_unique<CudfToVelox>(
-          id, plan_node->outputType(), ctx, plan_node->id() + "-to-velox"));
-      replace_op.back()->initialize();
+    if (kNextOperatorIsNotGpu and producesGpuOutput(oper)) {
+      auto planNode = getPlanNode(oper->planNodeId());
+      replaceOp.push_back(std::make_unique<CudfToVelox>(
+          id, planNode->outputType(), ctx, planNode->id() + "-to-velox"));
+      replaceOp.back()->initialize();
     }
 
-    if (not replace_op.empty()) {
-      operatorsOffset += replace_op.size() - 1;
+    if (not replaceOp.empty()) {
+      operatorsOffset += replaceOp.size() - 1;
       [[maybe_unused]] auto replaced = driverFactory_.replaceOperators(
           driver_,
           replacingOperatorIndex,
           replacingOperatorIndex + 1,
-          std::move(replace_op));
-      replacements_made = true;
+          std::move(replaceOp));
+      replacementsMade = true;
     }
   }
 
-  return replacements_made;
+  return replacementsMade;
 }
 
-struct cudfDriverAdapter {
+struct CudfDriverAdapter {
   std::shared_ptr<rmm::mr::device_memory_resource> mr_;
   std::shared_ptr<std::vector<std::shared_ptr<core::PlanNode const>>>
       planNodes_;
 
-  cudfDriverAdapter(std::shared_ptr<rmm::mr::device_memory_resource> mr)
+  CudfDriverAdapter(std::shared_ptr<rmm::mr::device_memory_resource> mr)
       : mr_(mr) {
     planNodes_ =
         std::make_shared<std::vector<std::shared_ptr<core::PlanNode const>>>();
@@ -178,27 +176,29 @@ struct cudfDriverAdapter {
   }
 };
 
+static bool isCudfRegistered = false;
+
 void registerCudf() {
   if (cudfIsRegistered()) {
     return;
   }
 
-  const char* env_cudf_disabled = std::getenv("VELOX_CUDF_DISABLED");
-  if (env_cudf_disabled != nullptr && std::stoi(env_cudf_disabled)) {
+  const char* envCudfDisabled = std::getenv("VELOX_CUDF_DISABLED");
+  if (envCudfDisabled != nullptr && std::stoi(envCudfDisabled)) {
     return;
   }
 
   CUDF_FUNC_RANGE();
-  cudaFree(0); // Initialize CUDA context at startup
+  cudaFree(nullptr); // Initialize CUDA context at startup
 
-  const char* env_cudf_mr = std::getenv("VELOX_CUDF_MEMORY_RESOURCE");
-  auto mr_mode = env_cudf_mr != nullptr ? env_cudf_mr : "async";
-  auto mr = cudf_velox::create_memory_resource(mr_mode);
+  const char* envCudfMr = std::getenv("VELOX_CUDF_MEMORY_RESOURCE");
+  auto mrMode = envCudfMr != nullptr ? envCudfMr : "async";
+  auto mr = cudf_velox::createMemoryResource(mrMode);
   cudf::set_current_device_resource(mr.get());
-  cudfDriverAdapter cda{mr};
+  CudfDriverAdapter cda{mr};
   exec::DriverAdapter cudfAdapter{"cuDF", cda, cda};
   exec::DriverFactory::registerAdapter(cudfAdapter);
-  _cudfIsRegistered = true;
+  isCudfRegistered = true;
 }
 
 void unregisterCudf() {
@@ -211,11 +211,11 @@ void unregisterCudf() {
           }),
       exec::DriverFactory::adapters.end());
 
-  _cudfIsRegistered = false;
+  isCudfRegistered = false;
 }
 
 bool cudfIsRegistered() {
-  return _cudfIsRegistered;
+  return isCudfRegistered;
 }
 
 } // namespace facebook::velox::cudf_velox

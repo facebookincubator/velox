@@ -59,7 +59,7 @@ class CudfFromVelox : public exec::Operator, public NvtxHelper {
 
  private:
   std::vector<RowVectorPtr> inputs_;
-  std::size_t current_output_size_ = 0;
+  std::size_t currentOutputSize_ = 0;
   bool finished_ = false;
 };
 

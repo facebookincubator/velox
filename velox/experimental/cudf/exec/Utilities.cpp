@@ -39,48 +39,48 @@
 namespace facebook::velox::cudf_velox {
 
 namespace {
-[[nodiscard]] auto make_cuda_mr() {
+[[nodiscard]] auto makeCudaMr() {
   return std::make_shared<rmm::mr::cuda_memory_resource>();
 }
 
-[[nodiscard]] auto make_pool_mr() {
+[[nodiscard]] auto makePoolMr() {
   return rmm::mr::make_owning_wrapper<rmm::mr::pool_memory_resource>(
-      make_cuda_mr(), rmm::percent_of_free_device_memory(50));
+      makeCudaMr(), rmm::percent_of_free_device_memory(50));
 }
 
-[[nodiscard]] auto make_async_mr() {
+[[nodiscard]] auto makeAsyncMr() {
   return std::make_shared<rmm::mr::cuda_async_memory_resource>();
 }
 
-[[nodiscard]] auto make_managed_mr() {
+[[nodiscard]] auto makeManagedMr() {
   return std::make_shared<rmm::mr::managed_memory_resource>();
 }
 
-[[nodiscard]] auto make_arena_mr() {
+[[nodiscard]] auto makeArenaMr() {
   return rmm::mr::make_owning_wrapper<rmm::mr::arena_memory_resource>(
-      make_cuda_mr());
+      makeCudaMr());
 }
 
-[[nodiscard]] auto make_managed_pool_mr() {
+[[nodiscard]] auto makeManagedPoolMr() {
   return rmm::mr::make_owning_wrapper<rmm::mr::pool_memory_resource>(
-      make_managed_mr(), rmm::percent_of_free_device_memory(50));
+      makeManagedMr(), rmm::percent_of_free_device_memory(50));
 }
 } // namespace
 
-std::shared_ptr<rmm::mr::device_memory_resource> create_memory_resource(
+std::shared_ptr<rmm::mr::device_memory_resource> createMemoryResource(
     std::string_view mode) {
   if (mode == "cuda")
-    return make_cuda_mr();
+    return makeCudaMr();
   if (mode == "pool")
-    return make_pool_mr();
+    return makePoolMr();
   if (mode == "async")
-    return make_async_mr();
+    return makeAsyncMr();
   if (mode == "arena")
-    return make_arena_mr();
+    return makeArenaMr();
   if (mode == "managed")
-    return make_managed_mr();
+    return makeManagedMr();
   if (mode == "managed_pool")
-    return make_managed_pool_mr();
+    return makeManagedPoolMr();
   throw cudf::logic_error(
       "Unknown memory resource mode: " + std::string(mode) +
       "\nExpecting: cuda, pool, async, arena, managed, or managed_pool");
