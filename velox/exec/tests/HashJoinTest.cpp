@@ -6575,7 +6575,8 @@ TEST_F(HashJoinTest, antiJoinAbandonBuildNoDupHashEarly) {
 }
 
 TEST_F(HashJoinTest, semiJoinDeduplicateResetCapacity) {
-  const int vectorSize = 10, batches = 210;
+  const int32_t vectorSize = 10;
+  const int32_t batches = 210;
   auto probeVectors = makeBatches(batches, [&](int32_t /*unused*/) {
     return makeRowVector({
         // Join Key is double -> VectorHasher::typeKindSupportsValueIds will
