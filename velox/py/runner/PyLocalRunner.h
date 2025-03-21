@@ -31,7 +31,7 @@ class PyTaskIterator;
 /// A C++ wrapper to allow Python clients to execute plans using TaskCursor.
 ///
 /// @param pyPlanNode The plan to be executed (created using
-/// velox.py.plan_builder).
+/// pyvelox.plan_builder).
 /// @param pool The memory pool to pass to the task.
 /// @param executor The executor that will be used by drivers.
 class PyLocalRunner {
@@ -78,7 +78,7 @@ class PyLocalRunner {
   std::shared_ptr<memory::MemoryPool> outputPool_;
   std::shared_ptr<folly::CPUThreadPoolExecutor> executor_;
 
-  // The plan node to be executed (created using velox.py.plan_builder).
+  // The plan node to be executed (created using pyvelox.plan_builder).
   core::PlanNodePtr planNode_;
 
   // The task cursor that executed the Velox Task.

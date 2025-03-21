@@ -36,7 +36,7 @@ namespace py = pybind11;
 PYBIND11_MODULE(arrow, m) {
   using namespace facebook;
 
-  py::module::import("velox.py.vector");
+  py::module::import("pyvelox.vector");
 
   arrow::py::import_pyarrow();
   velox::py::initializeVeloxMemory();
@@ -44,7 +44,7 @@ PYBIND11_MODULE(arrow, m) {
   static auto rootPool = velox::memory::memoryManager()->addRootPool();
   static auto leafPool = rootPool->addLeafChild("py_velox_arrow_pool");
 
-  /// Converts a pyarrow.Array into a velox.py.vector.Vector using Velox's arrow
+  /// Converts a pyarrow.Array into a pyvelox.vector.Vector using Velox's arrow
   /// bridge.
   m.def("to_velox", [](py::object& batchObject) {
     ArrowSchema schema;
@@ -76,7 +76,7 @@ PYBIND11_MODULE(arrow, m) {
         velox::importFromArrowAsViewer(schema, data, leafPool.get()), leafPool};
   });
 
-  /// Converts a velox.py.vector.Vector to a pyarrow.Array using Velox's arrow
+  /// Converts a pyvelox.vector.Vector to a pyarrow.Array using Velox's arrow
   /// bridge.
   m.def("to_arrow", [](velox::py::PyVector& vector) {
     ArrowSchema schema;

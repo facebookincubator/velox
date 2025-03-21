@@ -35,7 +35,7 @@ PYBIND11_MODULE(runner, m) {
       std::thread::hardware_concurrency());
 
   // execute() returns an iterator to Vectors.
-  py::module::import("velox.py.vector");
+  py::module::import("pyvelox.vector");
 
   py::class_<velox::py::PyLocalRunner>(m, "LocalRunner")
       // Only expose the plan node through the Python API.
