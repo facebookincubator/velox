@@ -282,7 +282,7 @@ static void addExpressionBindings(
             std::vector<VectorPtr> inputs;
             names.reserve(name_input_map.size());
             inputs.reserve(name_input_map.size());
-            for (const std::pair<std::string, VectorPtr>& pair :
+            for (const std::pair<const std::string, VectorPtr>& pair :
                  name_input_map) {
               names.push_back(pair.first);
               inputs.push_back(pair.second);
