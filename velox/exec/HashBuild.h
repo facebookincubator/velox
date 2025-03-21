@@ -248,6 +248,8 @@ class HashBuild final : public Operator {
 
   // Container for the rows being accumulated.
   std::unique_ptr<BaseHashTable> table_;
+
+  // Used for building hash table while adding input rows.
   std::unique_ptr<HashLookup> lookup_;
 
   // Key channels in 'input_'
@@ -279,7 +281,10 @@ class HashBuild final : public Operator {
 
   // Indicates whether drop duplicate rows. Rows containing duplicate keys
   // can be removed for left semi and anti join.
-  bool dropDuplicates_{false};
+  const bool dropDuplicates_;
+
+  // Whether to abandon building a HashTable without duplicates in HashBuild
+  // addInput phase for left semi/anti join.
   bool abandonBuildNoDupHash_{false};
 
   // The type used to spill hash table which might attach a boolean column to
@@ -331,6 +336,7 @@ class HashBuild final : public Operator {
   // Minimum number of rows to see before deciding to give up build no
   // duplicates hash table.
   const int32_t abandonBuildNoDupHashMinRows_;
+
   // Min unique rows pct for give up build no duplicates hash table. If more
   // than this many rows are unique, build hash table in addInput phase is not
   // worthwhile.

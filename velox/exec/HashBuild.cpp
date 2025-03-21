@@ -65,6 +65,7 @@ HashBuild::HashBuild(
       joinBridge_(operatorCtx_->task()->getHashJoinBridgeLocked(
           operatorCtx_->driverCtx()->splitGroupId,
           planNodeId())),
+      dropDuplicates_(joinNode_->canDropDuplicates()),
       keyChannelMap_(joinNode_->rightKeys().size()),
       abandonBuildNoDupHashMinRows_(
           driverCtx->queryConfig().abandonBuildNoDupHashMinRows()),
@@ -86,8 +87,6 @@ HashBuild::HashBuild(
     keyChannelMap_[channel] = i;
     keyChannels_.emplace_back(channel);
   }
-
-  dropDuplicates_ = joinNode_->canDropDuplicates();
 
   // Identify the non-key build side columns and make a decoder for each.
   const int32_t numDependents = inputType->size() - numKeys;
@@ -1275,6 +1274,6 @@ void HashBuildSpiller::extractSpill(
 bool HashBuild::abandonBuildNoDupHashEarly(int64_t numDistinct) const {
   VELOX_CHECK(dropDuplicates_);
   return numHashInputRows_ > abandonBuildNoDupHashMinRows_ &&
-      100 * numDistinct / numHashInputRows_ >= abandonBuildNoDupHashMinPct_;
+      numDistinct / numHashInputRows_ >= abandonBuildNoDupHashMinPct_ / 100;
 }
 } // namespace facebook::velox::exec
