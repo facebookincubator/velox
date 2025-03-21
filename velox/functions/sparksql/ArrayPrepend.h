@@ -26,6 +26,9 @@ template <typename TExec>
 struct ArrayPrependFunction {
   VELOX_DEFINE_FUNCTION_TYPES(TExec);
 
+  // Results refer to the first input strings parameter buffer.
+  static constexpr int32_t reuse_strings_from_arg = 0;
+
   FOLLY_ALWAYS_INLINE bool callNullable(
       out_type<Array<Generic<T1>>>& out,
       const arg_type<Array<Generic<T1>>>* array,
