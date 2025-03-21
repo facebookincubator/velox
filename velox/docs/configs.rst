@@ -900,8 +900,8 @@ Spark-specific Configuration
    * - spark.legacy_statistical_aggregate
      - bool
      - false
-     - If true, statistical aggregation function includes skewness, kurtosis will return std::numeric_limits<double>::quiet_NaN()
-     - instead of NULL when dividing by zero during expression evaluation. It is worth noting that Spark statistical aggregation functions
+     - If true, statistical aggregation function includes skewness, kurtosis will return NaN instead of NULL
+     - when dividing by zero during expression evaluation. It is worth noting that Spark statistical aggregation functions
      - including stddev, stddev_samp, variance, var_samp, covar_samp, corr should also respect this configuration,
      - although they have not been supported yet.
 
