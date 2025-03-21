@@ -1134,6 +1134,9 @@ template <typename T>
 struct ArrayCompactFunction {
   VELOX_DEFINE_FUNCTION_TYPES(T);
 
+  // Results refer to the first input strings parameter buffer.
+  static constexpr int32_t reuse_strings_from_arg = 0;
+
   template <typename Out, typename In>
   void call(Out& out, const In& inputArray) {
     for (const auto& item : inputArray) {
