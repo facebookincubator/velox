@@ -15,8 +15,9 @@
  */
 
 #include "velox/functions/sparksql/aggregates/CentralMomentsAggregate.h"
-#include <limits>
 #include "velox/functions/lib/aggregates/CentralMomentsAggregatesBase.h"
+
+#include <limits>
 
 namespace facebook::velox::functions::aggregate::sparksql {
 
@@ -37,7 +38,7 @@ struct SkewnessResultAccessor {
 
   static double result(const CentralMomentsAccumulator& accumulator) {
     if (accumulator.m2() == 0) {
-      VELOX_USER_CHECK(
+      VELOX_CHECK(
           !nullOnDivideByZero,
           "If NaN is returned when m2 is 0, nullOnDivideByZero must be false");
       return std::numeric_limits<double>::quiet_NaN();
@@ -63,7 +64,7 @@ struct KurtosisResultAccessor {
 
   static double result(const CentralMomentsAccumulator& accumulator) {
     if (accumulator.m2() == 0) {
-      VELOX_USER_CHECK(
+      VELOX_CHECK(
           !nullOnDivideByZero,
           "If NaN is returned when m2 is 0, nullOnDivideByZero must be false");
       return std::numeric_limits<double>::quiet_NaN();
