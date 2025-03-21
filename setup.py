@@ -134,6 +134,7 @@ class CMakeBuild(build_ext):
         cmake_args = [
             "-DVELOX_BUILD_TESTING=OFF",
             "-DVELOX_MONO_LIBRARY=ON",
+            "-DVELOX_BUILD_SHARED=ON",
             f"-DCMAKE_LIBRARY_OUTPUT_DIRECTORY={extdir}",
             f"-DCMAKE_BUILD_TYPE={cfg}",
             f"-DCMAKE_INSTALL_PREFIX={extdir}",
@@ -201,6 +202,6 @@ setup(
     ],
     packages=find_packages() + find_packages(where="./test"),
     zip_safe=False,
-    ext_modules=[Extension(name="pyvelox.pyvelox", sources=[])],
+    ext_modules=[Extension(name="pyvelox.legacy", sources=[])],
     cmdclass={"build_ext": CMakeBuild, "clean": clean, "build": BuildCommand},
 )

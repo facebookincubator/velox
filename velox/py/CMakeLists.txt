@@ -12,39 +12,45 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# velox.py.type library:
-velox_add_library(velox_py_type_lib type/PyType.cpp)
-velox_link_libraries(velox_py_type_lib velox_type pybind11::module)
+add_library(velox_py_init OBJECT lib/PyInit.cpp)
+
+# pyvelox.type library:
+add_library(velox_py_type_lib type/PyType.cpp)
+target_link_libraries(
+  velox_py_type_lib velox_type pybind11::module)
 
 pybind11_add_module(type MODULE type/type.cpp)
 target_link_libraries(
   type
   PRIVATE velox_py_type_lib)
 
-# velox.py.file library:
-velox_add_library(velox_py_file_lib file/PyFile.cpp)
-velox_link_libraries(velox_py_file_lib velox_dwio_common pybind11::module)
+# pyvelox.file library:
+add_library(velox_py_file_lib file/PyFile.cpp)
+target_link_libraries(
+  velox_py_file_lib velox_dwio_common pybind11::module)
 
 pybind11_add_module(file MODULE file/file.cpp)
 target_link_libraries(
   file
   PRIVATE velox_py_file_lib)
 
-# velox.py.vector library:
-velox_add_library(velox_py_vector_lib vector/PyVector.cpp)
-velox_link_libraries(velox_py_vector_lib velox_vector pybind11::module)
+# pyvelox.vector library:
+add_library(velox_py_vector_lib vector/PyVector.cpp)
+target_link_libraries(
+  velox_py_vector_lib velox_vector pybind11::module)
 
 pybind11_add_module(vector MODULE vector/vector.cpp)
 target_link_libraries(
   vector
   PRIVATE velox_py_vector_lib)
 
-# velox.py.plan_builder library:
-velox_add_library(velox_py_plan_builder_lib plan_builder/PyPlanBuilder.cpp)
-velox_link_libraries(
+# pyvelox.plan_builder library:
+add_library(velox_py_plan_builder_lib plan_builder/PyPlanBuilder.cpp)
+target_link_libraries(
   velox_py_plan_builder_lib
   velox_py_type_lib
   velox_py_vector_lib
+  velox_py_init
   velox_vector
   velox_core
   velox_cursor
@@ -65,13 +71,14 @@ target_link_libraries(
   plan_builder
   PRIVATE velox_py_plan_builder_lib)
 
-# velox.py.runner library:
-velox_add_library(velox_py_local_runner_lib runner/PyLocalRunner.cpp
-                  runner/PyConnectors.cpp)
-velox_link_libraries(
+# pyvelox.runner library:
+add_library(velox_py_local_runner_lib runner/PyLocalRunner.cpp
+                                      runner/PyConnectors.cpp)
+target_link_libraries(
   velox_py_local_runner_lib
   velox_py_type_lib
   velox_py_vector_lib
+  velox_py_init
   velox_vector
   velox_core
   velox_cursor
