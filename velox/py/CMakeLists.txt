@@ -14,7 +14,7 @@
 
 add_library(velox_py_init OBJECT lib/PyInit.cpp)
 
-# velox.py.type library:
+# pyvelox.type library:
 add_library(velox_py_type_lib type/PyType.cpp)
 target_link_libraries(
   velox_py_type_lib velox_type pybind11::module)
@@ -24,7 +24,7 @@ target_link_libraries(
   type
   PRIVATE velox_py_type_lib)
 
-# velox.py.file library:
+# pyvelox.file library:
 add_library(velox_py_file_lib file/PyFile.cpp)
 target_link_libraries(
   velox_py_file_lib velox_dwio_common pybind11::module)
@@ -34,7 +34,7 @@ target_link_libraries(
   file
   PRIVATE velox_py_file_lib)
 
-# velox.py.vector library:
+# pyvelox.vector library:
 add_library(velox_py_vector_lib vector/PyVector.cpp)
 target_link_libraries(
   velox_py_vector_lib velox_vector pybind11::module)
@@ -44,7 +44,7 @@ target_link_libraries(
   vector
   PRIVATE velox_py_vector_lib)
 
-# velox.py.plan_builder library:
+# pyvelox.plan_builder library:
 add_library(velox_py_plan_builder_lib plan_builder/PyPlanBuilder.cpp)
 target_link_libraries(
   velox_py_plan_builder_lib
@@ -71,7 +71,7 @@ target_link_libraries(
   plan_builder
   PRIVATE velox_py_plan_builder_lib)
 
-# velox.py.runner library:
+# pyvelox.runner library:
 add_library(velox_py_local_runner_lib runner/PyLocalRunner.cpp
                                       runner/PyConnectors.cpp)
 target_link_libraries(

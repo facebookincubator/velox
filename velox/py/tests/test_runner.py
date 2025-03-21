@@ -17,11 +17,11 @@ import unittest
 import pyarrow
 import tempfile
 
-from velox.py.arrow import to_velox
-from velox.py.plan_builder import PlanBuilder
-from velox.py.file import DWRF
-from velox.py.type import BIGINT, ROW
-from velox.py.runner import LocalRunner, register_hive, register_tpch, unregister
+from pyvelox.arrow import to_velox
+from pyvelox.plan_builder import PlanBuilder
+from pyvelox.file import DWRF
+from pyvelox.type import BIGINT, ROW
+from pyvelox.runner import LocalRunner, register_hive, register_tpch, unregister
 
 
 class TestPyVeloxRunner(unittest.TestCase):
