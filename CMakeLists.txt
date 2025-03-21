@@ -390,6 +390,14 @@ if(VELOX_ENABLE_GPU)
   endif()
   find_package(CUDAToolkit REQUIRED)
   if(VELOX_ENABLE_CUDF)
+    foreach(arch ${CMAKE_CUDA_ARCHITECTURES})
+      if(arch LESS 70)
+        message(
+          FATAL_ERROR
+            "CUDA architecture ${arch} is below 70. CUDF requires Volta (SM 70) or newer GPUs."
+        )
+      endif()
+    endforeach()
     set(VELOX_ENABLE_ARROW ON)
     velox_set_source(cudf)
     velox_resolve_dependency(cudf)
