@@ -134,6 +134,7 @@ class CMakeBuild(build_ext):
         cmake_args = [
             "-DVELOX_BUILD_TESTING=OFF",
             "-DVELOX_MONO_LIBRARY=ON",
+            "-DVELOX_BUILD_SHARED=ON",
             f"-DCMAKE_LIBRARY_OUTPUT_DIRECTORY={extdir}",
             f"-DCMAKE_BUILD_TYPE={cfg}",
             f"-DCMAKE_INSTALL_PREFIX={extdir}",
