@@ -570,24 +570,35 @@ TEST_F(PlanNodeSerdeTest, scan) {
   testSerde(plan);
 }
 
+#define TOPN_SERDE_TEST(funcname)                        \
+  auto plan = PlanBuilder()                              \
+                  .values({data_})                       \
+                  .funcname({}, {"c0", "c2"}, 10, false) \
+                  .planNode();                           \
+  testSerde(plan);                                       \
+                                                         \
+  plan = PlanBuilder()                                   \
+             .values({data_})                            \
+             .funcname({}, {"c0", "c2"}, 10, true)       \
+             .planNode();                                \
+  testSerde(plan);                                       \
+                                                         \
+  plan = PlanBuilder()                                   \
+             .values({data_})                            \
+             .funcname({"c0"}, {"c1", "c2"}, 10, false)  \
+             .planNode();                                \
+  testSerde(plan);
+
 TEST_F(PlanNodeSerdeTest, topNRowNumber) {
-  auto plan = PlanBuilder()
-                  .values({data_})
-                  .topNRowNumber({}, {"c0", "c2"}, 10, false)
-                  .planNode();
-  testSerde(plan);
+  TOPN_SERDE_TEST(topNRowNumber);
+}
 
-  plan = PlanBuilder()
-             .values({data_})
-             .topNRowNumber({}, {"c0", "c2"}, 10, true)
-             .planNode();
-  testSerde(plan);
+TEST_F(PlanNodeSerdeTest, topNRank) {
+  TOPN_SERDE_TEST(topNRank);
+}
 
-  plan = PlanBuilder()
-             .values({data_})
-             .topNRowNumber({"c0"}, {"c1", "c2"}, 10, false)
-             .planNode();
-  testSerde(plan);
+TEST_F(PlanNodeSerdeTest, topNDemseRank) {
+  TOPN_SERDE_TEST(topNDenseRank);
 }
 
 TEST_F(PlanNodeSerdeTest, write) {
