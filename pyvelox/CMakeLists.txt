@@ -16,7 +16,7 @@ if(VELOX_BUILD_PYTHON_PACKAGE)
   message("Creating pyvelox module")
   # Define our Python module:
   pybind11_add_module(
-    pyvelox
+    legacy
     MODULE
     complex.cpp
     conversion.cpp
@@ -25,19 +25,19 @@ if(VELOX_BUILD_PYTHON_PACKAGE)
     signatures.cpp)
 
   target_link_libraries(
-    pyvelox
-    PRIVATE velox_type
-            velox_vector
-            velox_core
-            velox_exec
-            velox_parse_parser
-            velox_functions_prestosql
-            velox_functions_spark
-            velox_aggregates
-            velox_functions_spark_aggregates)
+    legacy
+    PRIVATE
+      velox_type
+      velox_vector
+      velox_core
+      velox_exec
+      velox_parse_parser
+      velox_functions_prestosql
+      velox_functions_spark
+      velox_aggregates
+      velox_functions_spark_aggregates)
 
-  target_include_directories(pyvelox SYSTEM
-                             PRIVATE ${CMAKE_CURRENT_LIST_DIR}/..)
-  target_compile_definitions(pyvelox PRIVATE -DCREATE_PYVELOX_MODULE)
-  install(TARGETS pyvelox LIBRARY DESTINATION .)
+  target_include_directories(legacy SYSTEM PRIVATE ${CMAKE_CURRENT_LIST_DIR}/..)
+  target_compile_definitions(legacy PRIVATE -DCREATE_PYVELOX_MODULE)
+  install(TARGETS legacy LIBRARY DESTINATION .)
 endif()

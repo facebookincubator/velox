@@ -54,7 +54,7 @@ void addSerdeBindings(py::module& m, bool asModuleLocalDefinitions) {
         Examples
         --------
 
-        >>> import pyvelox.pyvelox as pv
+        >>> import pyvelox.legacy as pv
         >>> vec = pv.from_list([1, 2, 3])
         >>> pv.save_vector(vec, '/tmp/flatvector.bin')
       )delimiter",
@@ -78,9 +78,9 @@ void addSerdeBindings(py::module& m, bool asModuleLocalDefinitions) {
         Examples
         --------
 
-        >>> import pyvelox.pyvelox as pv
+        >>> import pyvelox.legacy as pv
         >>> pv.load_vector('/tmp/flatvector.bin')
-        <pyvelox.pyvelox.FlatVector_BIGINT object at 0x7f8f6f818bb0>
+        <pyvelox.legacy.FlatVector_BIGINT object at 0x7f8f6f818bb0>
       )delimiter",
       py::arg("file_path"));
 }
