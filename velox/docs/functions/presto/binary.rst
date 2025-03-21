@@ -8,8 +8,8 @@ Binary Functions
 
 .. function:: from_base64(string) -> varbinary
 
-    Decodes a Base64-encoded ``string`` back into its original binary form. 
-    This function is capable of handling both fully padded and non-padded Base64 encoded strings. 
+    Decodes a Base64-encoded ``string`` back into its original binary form.
+    This function is capable of handling both fully padded and non-padded Base64 encoded strings.
     Partially padded Base64 strings are not supported and will result in an error.
 
     Examples
@@ -77,12 +77,12 @@ Binary Functions
 
 .. function:: lpad(binary, size, padbinary) -> varbinary
     :noindex:
-    
+
     Left pads ``binary`` to ``size`` bytes with ``padbinary``.
     If ``size`` is less than the length of ``binary``, the result is
     truncated to ``size`` characters. ``size`` must not be negative
     and ``padbinary`` must be non-empty. ``size`` has a maximum value of 1 MiB.
-    In the case of ``size`` being smaller than the length of ``binary``, 
+    In the case of ``size`` being smaller than the length of ``binary``,
     ``binary`` will be truncated from the right to fit the ``size``.
 
 .. function:: md5(binary) -> varbinary
@@ -96,9 +96,9 @@ Binary Functions
     If ``size`` is less than the length of ``binary``, the result is
     truncated to ``size`` characters. ``size`` must not be negative
     and ``padbinary`` must be non-empty. ``size`` has a maximum value of 1 MiB.
-    In the case of ``size`` being smaller than the length of ``binary``, 
+    In the case of ``size`` being smaller than the length of ``binary``,
     ``binary`` will be truncated from the right to fit the ``size``.
-    
+
 .. function:: sha1(binary) -> varbinary
 
     Computes the SHA-1 hash of ``binary``.
@@ -150,3 +150,15 @@ Binary Functions
 .. function:: xxhash64(binary) -> varbinary
 
     Computes the xxhash64 hash of ``binary``.
+
+.. function:: fnv1_32(binary) -> bigint
+
+    Computes the 4-byte fnv1 hash of ``binary``.
+
+.. function:: fnv1_64(binary) -> bigint
+
+    Computes the 8-byte fnv1 hash of ``binary``.
+
+.. function:: fnv1a_64(binary) -> bigint
+
+    Computes the 8-byte fnv1a hash of ``binary``.
