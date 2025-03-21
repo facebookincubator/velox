@@ -3970,7 +3970,7 @@ make_time(const std::chrono::duration<Rep, Period>& d)
     return hh_mm_ss<std::chrono::duration<Rep, Period>>(d);
 }
 
-#if defined(__cpp_lib_format)
+#if defined(_LIBCPP_VERSION) && _LIBCPP_VERSION >= 170004
 
 // already have operator<<
 
@@ -3997,6 +3997,7 @@ operator<<(std::basic_ostream<CharT, Traits>& os, const sys_days& dp)
 {
     return os << year_month_day(dp);
 }
+#endif
 
 template <class CharT, class Traits, class Duration>
 inline
@@ -4005,8 +4006,6 @@ operator<<(std::basic_ostream<CharT, Traits>& os, const local_time<Duration>& ut
 {
     return (os << sys_time<Duration>{ut.time_since_epoch()});
 }
-
-#endif
 
 namespace detail
 {
