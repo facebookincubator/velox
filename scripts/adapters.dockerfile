@@ -30,14 +30,14 @@ COPY scripts/setup-helper-functions.sh /
 #    ) && \
 #    rm -rf build && dnf remove -y conda && dnf clean all
 RUN mkdir build && \
-     ( \
-       cd build && \
-       source /opt/rh/gcc-toolset-12/enable && \
-       bash /setup-adapters.sh && \
-       source /setup-centos9.sh && \
-       install_cuda 12.8 \
-     ) && \
-     rm -rf build && dnf remove -y conda && dnf clean all
+    ( \
+      cd build && \
+      source /opt/rh/gcc-toolset-12/enable && \
+      bash /setup-adapters.sh && \
+      source /setup-centos9.sh && \
+      install_cuda 12.8 \
+    ) && \
+    rm -rf build && dnf remove -y conda && dnf clean all
 
 # put CUDA binaries on the PATH
 ENV PATH /usr/local/cuda/bin:${PATH}
