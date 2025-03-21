@@ -28,24 +28,33 @@ RowVectorPtr getTpchData(
     size_t maxRows,
     size_t offset,
     double scaleFactor,
-    memory::MemoryPool* pool) {
+    memory::MemoryPool* pool,
+    int32_t textPoolSizeMb) {
   switch (table) {
     case Table::TBL_PART:
-      return velox::tpch::genTpchPart(pool, maxRows, offset, scaleFactor);
+      return velox::tpch::genTpchPart(
+          pool, maxRows, offset, scaleFactor, textPoolSizeMb);
     case Table::TBL_SUPPLIER:
-      return velox::tpch::genTpchSupplier(pool, maxRows, offset, scaleFactor);
+      return velox::tpch::genTpchSupplier(
+          pool, maxRows, offset, scaleFactor, textPoolSizeMb);
     case Table::TBL_PARTSUPP:
-      return velox::tpch::genTpchPartSupp(pool, maxRows, offset, scaleFactor);
+      return velox::tpch::genTpchPartSupp(
+          pool, maxRows, offset, scaleFactor, textPoolSizeMb);
     case Table::TBL_CUSTOMER:
-      return velox::tpch::genTpchCustomer(pool, maxRows, offset, scaleFactor);
+      return velox::tpch::genTpchCustomer(
+          pool, maxRows, offset, scaleFactor, textPoolSizeMb);
     case Table::TBL_ORDERS:
-      return velox::tpch::genTpchOrders(pool, maxRows, offset, scaleFactor);
+      return velox::tpch::genTpchOrders(
+          pool, maxRows, offset, scaleFactor, textPoolSizeMb);
     case Table::TBL_LINEITEM:
-      return velox::tpch::genTpchLineItem(pool, maxRows, offset, scaleFactor);
+      return velox::tpch::genTpchLineItem(
+          pool, maxRows, offset, scaleFactor, textPoolSizeMb);
     case Table::TBL_NATION:
-      return velox::tpch::genTpchNation(pool, maxRows, offset, scaleFactor);
+      return velox::tpch::genTpchNation(
+          pool, maxRows, offset, scaleFactor, textPoolSizeMb);
     case Table::TBL_REGION:
-      return velox::tpch::genTpchRegion(pool, maxRows, offset, scaleFactor);
+      return velox::tpch::genTpchRegion(
+          pool, maxRows, offset, scaleFactor, textPoolSizeMb);
   }
   return nullptr;
 }
@@ -63,8 +72,9 @@ TpchDataSource::TpchDataSource(
     const std::unordered_map<
         std::string,
         std::shared_ptr<connector::ColumnHandle>>& columnHandles,
+    const std::shared_ptr<TpchConfig>& tpchConfig,
     velox::memory::MemoryPool* pool)
-    : pool_(pool) {
+    : tpchConfig_(tpchConfig), pool_(pool) {
   auto tpchTableHandle =
       std::dynamic_pointer_cast<TpchTableHandle>(tableHandle);
   VELOX_CHECK_NOT_NULL(
@@ -159,8 +169,9 @@ std::optional<RowVectorPtr> TpchDataSource::next(
   }
 
   size_t maxRows = std::min(size, (splitEnd_ - splitOffset_));
-  auto outputVector =
-      getTpchData(tpchTable_, maxRows, splitOffset_, scaleFactor_, pool_);
+  auto textPoolSizeMb = tpchConfig_->textPoolSizeMb();
+  auto outputVector = getTpchData(
+      tpchTable_, maxRows, splitOffset_, scaleFactor_, pool_, textPoolSizeMb);
 
   // If the split is exhausted.
   if (!outputVector || outputVector->size() == 0) {

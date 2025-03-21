@@ -358,7 +358,8 @@ RowVectorPtr genTpchOrders(
     memory::MemoryPool* pool,
     size_t maxRows,
     size_t offset,
-    double scaleFactor) {
+    double scaleFactor,
+    int32_t textPoolSizeMb) {
   // Create schema and allocate vectors.
   auto ordersRowType = getTableSchema(Table::TBL_ORDERS);
   size_t vectorSize = getVectorSize(
@@ -375,7 +376,7 @@ RowVectorPtr genTpchOrders(
   auto shipPriorityVector = children[7]->asFlatVector<int32_t>();
   auto commentVector = children[8]->asFlatVector<StringView>();
 
-  DBGenIterator dbgenIt(scaleFactor);
+  DBGenIterator dbgenIt(scaleFactor, textPoolSizeMb);
   dbgenIt.initOrder(offset);
   order_t order;
 
@@ -403,7 +404,8 @@ RowVectorPtr genTpchLineItem(
     memory::MemoryPool* pool,
     size_t maxOrderRows,
     size_t ordersOffset,
-    double scaleFactor) {
+    double scaleFactor,
+    int32_t textPoolSizeMb) {
   // We control the buffer size based on the orders table, then allocate the
   // underlying buffer using the worst case (orderVectorSize * 7).
   size_t orderVectorSize = getVectorSize(
@@ -433,7 +435,7 @@ RowVectorPtr genTpchLineItem(
   auto shipModeVector = children[14]->asFlatVector<StringView>();
   auto commentVector = children[15]->asFlatVector<StringView>();
 
-  DBGenIterator dbgenIt(scaleFactor);
+  DBGenIterator dbgenIt(scaleFactor, textPoolSizeMb);
   dbgenIt.initOrder(ordersOffset);
   order_t order;
 
@@ -493,7 +495,8 @@ RowVectorPtr genTpchPart(
     memory::MemoryPool* pool,
     size_t maxRows,
     size_t offset,
-    double scaleFactor) {
+    double scaleFactor,
+    int32_t textPoolSizeMb) {
   // Create schema and allocate vectors.
   auto partRowType = getTableSchema(Table::TBL_PART);
   size_t vectorSize =
@@ -510,7 +513,7 @@ RowVectorPtr genTpchPart(
   auto retailPriceVector = children[7]->asFlatVector<double>();
   auto commentVector = children[8]->asFlatVector<StringView>();
 
-  DBGenIterator dbgenIt(scaleFactor);
+  DBGenIterator dbgenIt(scaleFactor, textPoolSizeMb);
   dbgenIt.initPart(offset);
   part_t part;
 
@@ -537,7 +540,8 @@ RowVectorPtr genTpchSupplier(
     memory::MemoryPool* pool,
     size_t maxRows,
     size_t offset,
-    double scaleFactor) {
+    double scaleFactor,
+    int32_t textPoolSizeMb) {
   // Create schema and allocate vectors.
   auto supplierRowType = getTableSchema(Table::TBL_SUPPLIER);
   size_t vectorSize = getVectorSize(
@@ -552,7 +556,7 @@ RowVectorPtr genTpchSupplier(
   auto acctbalVector = children[5]->asFlatVector<double>();
   auto commentVector = children[6]->asFlatVector<StringView>();
 
-  DBGenIterator dbgenIt(scaleFactor);
+  DBGenIterator dbgenIt(scaleFactor, textPoolSizeMb);
   dbgenIt.initSupplier(offset);
   supplier_t supp;
 
@@ -581,7 +585,8 @@ RowVectorPtr genTpchPartSupp(
     memory::MemoryPool* pool,
     size_t maxRows,
     size_t offset,
-    double scaleFactor) {
+    double scaleFactor,
+    int32_t textPoolSizeMb) {
   // Create schema and allocate vectors.
   auto partSuppRowType = getTableSchema(Table::TBL_PARTSUPP);
   size_t vectorSize = getVectorSize(
@@ -594,7 +599,7 @@ RowVectorPtr genTpchPartSupp(
   auto supplyCostVector = children[3]->asFlatVector<double>();
   auto commentVector = children[4]->asFlatVector<StringView>();
 
-  DBGenIterator dbgenIt(scaleFactor);
+  DBGenIterator dbgenIt(scaleFactor, textPoolSizeMb);
   part_t part;
 
   // The iteration logic is a bit more complicated as partsupp records are
@@ -641,7 +646,8 @@ RowVectorPtr genTpchCustomer(
     memory::MemoryPool* pool,
     size_t maxRows,
     size_t offset,
-    double scaleFactor) {
+    double scaleFactor,
+    int32_t textPoolSizeMb) {
   // Create schema and allocate vectors.
   auto customerRowType = getTableSchema(Table::TBL_CUSTOMER);
   size_t vectorSize = getVectorSize(
@@ -657,7 +663,7 @@ RowVectorPtr genTpchCustomer(
   auto mktSegmentVector = children[6]->asFlatVector<StringView>();
   auto commentVector = children[7]->asFlatVector<StringView>();
 
-  DBGenIterator dbgenIt(scaleFactor);
+  DBGenIterator dbgenIt(scaleFactor, textPoolSizeMb);
   dbgenIt.initCustomer(offset);
   customer_t cust;
 
@@ -688,7 +694,8 @@ RowVectorPtr genTpchNation(
     memory::MemoryPool* pool,
     size_t maxRows,
     size_t offset,
-    double scaleFactor) {
+    double scaleFactor,
+    int32_t textPoolSizeMb) {
   // Create schema and allocate vectors.
   auto nationRowType = getTableSchema(Table::TBL_NATION);
   size_t vectorSize = getVectorSize(
@@ -700,7 +707,7 @@ RowVectorPtr genTpchNation(
   auto regionKeyVector = children[2]->asFlatVector<int64_t>();
   auto commentVector = children[3]->asFlatVector<StringView>();
 
-  DBGenIterator dbgenIt(scaleFactor);
+  DBGenIterator dbgenIt(scaleFactor, textPoolSizeMb);
   dbgenIt.initNation(offset);
   code_t code;
 
@@ -722,7 +729,8 @@ RowVectorPtr genTpchRegion(
     memory::MemoryPool* pool,
     size_t maxRows,
     size_t offset,
-    double scaleFactor) {
+    double scaleFactor,
+    int32_t textPoolSizeMb) {
   // Create schema and allocate vectors.
   auto regionRowType = getTableSchema(Table::TBL_REGION);
   size_t vectorSize = getVectorSize(
@@ -733,7 +741,7 @@ RowVectorPtr genTpchRegion(
   auto nameVector = children[1]->asFlatVector<StringView>();
   auto commentVector = children[2]->asFlatVector<StringView>();
 
-  DBGenIterator dbgenIt(scaleFactor);
+  DBGenIterator dbgenIt(scaleFactor, textPoolSizeMb);
   dbgenIt.initRegion(offset);
   code_t code;
 
