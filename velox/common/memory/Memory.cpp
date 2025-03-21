@@ -236,7 +236,8 @@ std::shared_ptr<MemoryPoolImpl> MemoryManager::createRootPool(
 std::shared_ptr<MemoryPool> MemoryManager::addRootPool(
     const std::string& name,
     int64_t maxCapacity,
-    std::unique_ptr<MemoryReclaimer> reclaimer) {
+    std::unique_ptr<MemoryReclaimer> reclaimer,
+    const std::string& debugAllocationTrackingRegex) {
   std::string poolName = name;
   if (poolName.empty()) {
     static std::atomic<int64_t> poolId{0};
@@ -248,6 +249,7 @@ std::shared_ptr<MemoryPool> MemoryManager::addRootPool(
   options.maxCapacity = maxCapacity;
   options.trackUsage = true;
   options.debugEnabled = debugEnabled_;
+  options.debugAllocationTrackingRegex = debugAllocationTrackingRegex;
   options.coreOnAllocationFailureEnabled = coreOnAllocationFailureEnabled_;
   options.getPreferredSize = getPreferredSize_;
 

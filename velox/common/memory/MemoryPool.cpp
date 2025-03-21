@@ -443,7 +443,7 @@ MemoryPoolImpl::MemoryPoolImpl(
       manager_{memoryManager},
       allocator_{manager_->allocator()},
       arbitrator_{manager_->arbitrator()},
-      debugPoolNameRegex_(debugEnabled_ ? *(debugPoolNameRegex().rlock()) : ""),
+      debugAllocationTrackingRegex_(options.debugAllocationTrackingRegex),
       reclaimer_(std::move(reclaimer)),
       // The memory manager sets the capacity through grow() according to the
       // actually used memory arbitration policy.
@@ -772,6 +772,7 @@ std::shared_ptr<MemoryPool> MemoryPoolImpl::genChild(
           .trackUsage = trackUsage_,
           .threadSafe = threadSafe,
           .debugEnabled = debugEnabled_,
+          .debugAllocationTrackingRegex = debugAllocationTrackingRegex_,
           .coreOnAllocationFailureEnabled = coreOnAllocationFailureEnabled_,
           .getPreferredSize = getPreferredSize});
 }
@@ -1188,11 +1189,11 @@ void MemoryPoolImpl::testingSetReservation(int64_t bytes) {
 }
 
 bool MemoryPoolImpl::needRecordDbg(bool /* isAlloc */) {
-  if (!debugPoolNameRegex_.empty()) {
-    return RE2::FullMatch(name_, debugPoolNameRegex_);
+  if (debugAllocationTrackingRegex_.empty()) {
+    return false;
   }
+  return RE2::FullMatch(name_, debugAllocationTrackingRegex_);
   // TODO(jtan6): Add sample based condition support.
-  return true;
 }
 
 void MemoryPoolImpl::recordAllocDbg(const void* addr, uint64_t size) {
