@@ -91,12 +91,12 @@ void CudfFromVelox::addInput(RowVectorPtr input) {
 
 RowVectorPtr CudfFromVelox::getOutput() {
   VELOX_NVTX_OPERATOR_FUNC_RANGE();
-  const auto kTargetOutputSize = preferredGpuBatchSizeRows();
-  const auto kExitEarly = finished_ or
-      (currentOutputSize_ < kTargetOutputSize and not noMoreInput_) or
+  const auto targetOutputSize = preferredGpuBatchSizeRows();
+  const auto exitEarly = finished_ or
+      (currentOutputSize_ < targetOutputSize and not noMoreInput_) or
       inputs_.empty();
   finished_ = noMoreInput_;
-  if (kExitEarly) {
+  if (exitEarly) {
     return nullptr;
   }
 
@@ -121,9 +121,9 @@ RowVectorPtr CudfFromVelox::getOutput() {
   VELOX_CHECK_NOT_NULL(tbl);
 
   // Return a CudfVector that owns the cudf table
-  const auto kSize = tbl->num_rows();
+  const auto size = tbl->num_rows();
   return std::make_shared<CudfVector>(
-      input->pool(), outputType_, kSize, std::move(tbl), stream);
+      input->pool(), outputType_, size, std::move(tbl), stream);
 }
 
 void CudfFromVelox::close() {

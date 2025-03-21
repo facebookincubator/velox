@@ -42,12 +42,12 @@ CudfOrderBy::CudfOrderBy(
   columnOrder_.reserve(orderByNode->sortingKeys().size());
   nullOrder_.reserve(orderByNode->sortingKeys().size());
   for (int i = 0; i < orderByNode->sortingKeys().size(); ++i) {
-    const auto kChannel =
+    const auto channel =
         exec::exprToChannel(orderByNode->sortingKeys()[i].get(), outputType_);
     VELOX_CHECK(
-        kChannel != kConstantChannel,
+        channel != kConstantChannel,
         "OrderBy doesn't allow constant sorting keys");
-    sortKeys_.push_back(kChannel);
+    sortKeys_.push_back(channel);
     auto const& sortingOrder = orderByNode->sortingOrders()[i];
     columnOrder_.push_back(
         sortingOrder.isAscending() ? cudf::order::ASCENDING
