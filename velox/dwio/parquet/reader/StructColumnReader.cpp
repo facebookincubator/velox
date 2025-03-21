@@ -38,8 +38,8 @@ StructColumnReader::StructColumnReader(
           fileType,
           params,
           scanSpec,
-          /*isRoot=*/false,
-          useColumnNames) {
+          useColumnNames,
+          /*isRoot=*/false) {
   auto& childSpecs = scanSpec_->stableChildren();
   std::vector<column_index_t> missingFields;
   for (auto i = 0; i < childSpecs.size(); ++i) {
@@ -70,8 +70,7 @@ StructColumnReader::StructColumnReader(
     childSpecs[i]->setSubscript(children_.size() - 1);
   }
 
-  // Missing fields are not empty only when using column names for column
-  // mapping.
+  // missingFields is not empty only when using useColumnNames = true.
   if (missingFields.size() > 0) {
     // Set the struct as null if all the subfields in the requested type are
     // missing and the number of subfields is more than one.

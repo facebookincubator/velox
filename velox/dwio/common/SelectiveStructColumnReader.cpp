@@ -449,7 +449,7 @@ void SelectiveStructColumnReaderBase::recordParentNullsInChildren(
 
 bool SelectiveStructColumnReaderBase::isChildMissing(
     const velox::common::ScanSpec& childSpec) const {
-  const bool canMissingChild =
+  return
       // The below check is trying to determine if this is a missing field in a
       // struct that should be constant null.
       (!isRoot_ && // If we're in the root struct channel is meaningless in this
@@ -463,17 +463,10 @@ bool SelectiveStructColumnReaderBase::isChildMissing(
        fileType_->type()->kind() !=
            TypeKind::MAP // If this is the case it means this is a flat map,
                          // so it can't have "missing" fields.
-      );
-
-  bool isMissing;
-  if (useColumnNames_) {
-    VELOX_CHECK_EQ(fileType_->type()->kind(), TypeKind::ROW);
-    isMissing =
-        !asRowType(fileType_->type())->containsChild(childSpec.fieldName());
-  } else {
-    isMissing = childSpec.channel() >= fileType_->size();
-  }
-  return canMissingChild && isMissing;
+       ) &&
+      (useColumnNames_
+           ? !asRowType(fileType_->type())->containsChild(childSpec.fieldName())
+           : childSpec.channel() >= fileType_->size());
 }
 
 void SelectiveStructColumnReaderBase::getValues(
