@@ -1,0 +1,4 @@
+{"bytes1": [0, 1, 2, 3, 4], "string1": "foo"}
+{"bytes1": [0, 1, 2, 3], "string1": "bar"}
+{"bytes1": [0, 1, 2, 3, 4, 5], "string1": null}
+{"bytes1": null, "string1": "hi"}
