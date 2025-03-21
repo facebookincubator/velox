@@ -51,6 +51,7 @@ SelectiveColumnReader::SelectiveColumnReader(
       fileType_(fileType),
       formatData_(params.toFormatData(fileType, scanSpec)),
       scanSpec_(&scanSpec),
+      lazySelectedRows_(memoryPool_),
       outputRows_(memoryPool_),
       valueRows_(memoryPool_),
       outerNonNullRows_(memoryPool_),
