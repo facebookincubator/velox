@@ -13,7 +13,7 @@
 # limitations under the License.
 
 import pyarrow as pa
-import pyvelox.pyvelox as pv
+import pyvelox.legacy as pv
 import unittest
 
 
