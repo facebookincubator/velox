@@ -107,3 +107,13 @@ target_link_libraries(
     velox_arrow_bridge
     arrow
     pybind11::module)
+
+# python related headers are now bundled with pyarrow not arrow
+execute_process(
+  COMMAND "${Python_EXECUTABLE}" -c
+          "import pyarrow; print(pyarrow.get_include())"
+  OUTPUT_VARIABLE PYARROW_INCLUDE_DIR
+  OUTPUT_STRIP_TRAILING_WHITESPACE COMMAND_ERROR_IS_FATAL ANY)
+
+target_include_directories(arrow_module PRIVATE ${PYARROW_INCLUDE_DIR})
+
