@@ -107,6 +107,7 @@ class MemoryPool : public std::enable_shared_from_this<MemoryPool> {
   struct Options {
     /// Specifies the memory allocation alignment through this memory pool.
     uint16_t alignment{MemoryAllocator::kMaxAlignment};
+
     /// Specifies the max memory capacity of this memory pool.
     int64_t maxCapacity{kMaxMemory};
 
@@ -134,6 +135,12 @@ class MemoryPool : public std::enable_shared_from_this<MemoryPool> {
     /// If true, tracks the allocation and free call stacks to detect the source
     /// of memory leak for testing purpose.
     bool debugEnabled{FLAGS_velox_memory_pool_debug_enabled};
+
+    /// Regex for filtering on memory pool name when 'debugEnabled' is true.
+    /// This allows us to only track the callsites of memory allocations for
+    /// memory pools whose name matches the specified regular expression. Empty
+    /// string means no match for all.
+    std::string debugAllocationTrackingRegex{""};
 
     /// Terminates the process and generates a core file on an allocation
     /// failure
@@ -722,10 +729,6 @@ class MemoryPoolImpl : public MemoryPool {
     return debugAllocRecords_;
   }
 
-  static void setDebugPoolNameRegex(const std::string& regex) {
-    debugPoolNameRegex() = regex;
-  }
-
  private:
   void enterArbitration() override;
 
@@ -742,11 +745,6 @@ class MemoryPoolImpl : public MemoryPool {
   FOLLY_ALWAYS_INLINE static MemoryPoolImpl* toImpl(
       const std::shared_ptr<MemoryPool>& pool) {
     return static_cast<MemoryPoolImpl*>(pool.get());
-  }
-
-  static folly::Synchronized<std::string>& debugPoolNameRegex() {
-    static folly::Synchronized<std::string> debugPoolNameRegex_;
-    return debugPoolNameRegex_;
   }
 
   std::shared_ptr<MemoryPool> genChild(
@@ -1001,8 +999,9 @@ class MemoryPoolImpl : public MemoryPool {
 
   // Regex for filtering on 'name_' when debug mode is enabled. This allows us
   // to only track the callsites of memory allocations for memory pools whose
-  // name matches the specified regular expression 'debugPoolNameRegex_'.
-  const std::string debugPoolNameRegex_;
+  // name matches the specified regular expression
+  // 'debugAllocationTrackingRegex_'.
+  const std::string debugAllocationTrackingRegex_;
 
   // Serializes updates on 'reservationBytes_', 'usedReservationBytes_'
   // and 'minReservationBytes_' to make reservation decision on a consistent

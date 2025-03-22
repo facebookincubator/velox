@@ -214,10 +214,14 @@ class MemoryManager {
   /// Creates a root memory pool with specified 'name' and 'maxCapacity'. If
   /// 'name' is missing, the memory manager generates a default name internally
   /// to ensure uniqueness.
+  /// When debug is enabled for this memory manager,
+  /// 'debugAllocationTrackingRegex' is used to match the memory pools that need
+  /// allocation callsites tracking.
   std::shared_ptr<MemoryPool> addRootPool(
       const std::string& name = "",
       int64_t maxCapacity = kMaxMemory,
-      std::unique_ptr<MemoryReclaimer> reclaimer = nullptr);
+      std::unique_ptr<MemoryReclaimer> reclaimer = nullptr,
+      const std::string& debugAllocationTrackingRegex = "");
 
   /// Creates a leaf memory pool for direct memory allocation use with specified
   /// 'name'. If 'name' is missing, the memory manager generates a default name
