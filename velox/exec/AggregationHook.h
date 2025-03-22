@@ -45,7 +45,7 @@ class AggregationHook : public ValueHook {
 
  protected:
   inline char* findGroup(vector_size_t row) {
-    return groups_[row];
+    return groups_[currentRow_++];
   }
 
   inline bool clearNull(char* group) {
