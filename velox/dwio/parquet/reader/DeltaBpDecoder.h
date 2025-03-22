@@ -60,6 +60,9 @@ class DeltaBpDecoder {
             skip<false>(toSkip, current, nullptr);
           }
           if (atEnd) {
+            if constexpr (Visitor::kHasHook) {
+              visitor.setNumValues(visitor.numRows());
+            }
             return;
           }
         }
@@ -73,6 +76,9 @@ class DeltaBpDecoder {
         current += toSkip;
       }
       if (atEnd) {
+        if constexpr (Visitor::kHasHook) {
+          visitor.setNumValues(visitor.numRows());
+        }
         return;
       }
     }
