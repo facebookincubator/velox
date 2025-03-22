@@ -24,6 +24,23 @@ Valid examples:
   SELECT cast(1234 as tinyint); -- -46
   SELECT cast(1234567 as smallint); -- -10617
 
+From interval year month
+^^^^^^^^^^^^^^^^^^^^^^^
+
+Casting from interval year month to integer returns the total number of months in the interval.
+The conversion is straightforward where 1 year = 12 months.
+
+Valid examples:
+
+::
+
+  SELECT cast(INTERVAL '1' YEAR as integer); -- 12
+  SELECT cast(INTERVAL '2' YEAR as integer); -- 24
+  SELECT cast(INTERVAL '1' MONTH as integer); -- 1
+  SELECT cast(INTERVAL '1-2' YEAR TO MONTH as integer); -- 14
+  SELECT cast(INTERVAL '-1' YEAR as integer); -- -12
+  SELECT cast(INTERVAL '-1-2' YEAR TO MONTH as integer); -- -14
+
 From floating-point types
 ^^^^^^^^^^^^^^^^^^^^^^^^^
 

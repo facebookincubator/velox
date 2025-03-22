@@ -2785,5 +2785,14 @@ TEST_F(CastExprTest, intervalDayTimeToVarchar) {
       "Cast from VARCHAR to INTERVAL DAY TO SECOND is not supported");
 }
 
+TEST_F(CastExprTest, intervalYearMonthToInteger) {
+  testCast<int32_t, int32_t>(
+      "int",
+      {12, 0, -24, std::numeric_limits<int32_t>::max(), std::numeric_limits<int32_t>::min(), std::nullopt},
+      {12, 0, -24, std::numeric_limits<int32_t>::max(), std::numeric_limits<int32_t>::min(), std::nullopt},
+      INTERVAL_YEAR_MONTH(),
+      INTEGER());
+}
+
 } // namespace
 } // namespace facebook::velox::test
