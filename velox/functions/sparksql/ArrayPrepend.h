@@ -33,11 +33,7 @@ struct ArrayPrependFunction {
   template <typename Out, typename In, typename E>
   FOLLY_ALWAYS_INLINE void call(Out& out, const In& array, E element) {
     out.reserve(array.size() + 1);
-    if (element.has_value()) {
-      out.push_back(element.value());
-    } else {
-      out.add_null();
-    }
+    out.push_back(element);
     out.add_items(array);
   }
 
@@ -47,11 +43,7 @@ struct ArrayPrependFunction {
       const arg_type<Array<Generic<T1>>>& array,
       const arg_type<Generic<T1>>& element) {
     out.reserve(array.size() + 1);
-    if (element.has_value()) {
-      out.push_back(element.value());
-    } else {
-      out.add_null();
-    }
+    out.push_back(element);
     out.add_items(array);
   }
 };
