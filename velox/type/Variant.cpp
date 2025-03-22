@@ -263,7 +263,8 @@ std::string variant::toJson(const TypePtr& type) const {
     }
     case TypeKind::VARBINARY: {
       auto& str = value<TypeKind::VARBINARY>();
-      auto encoded = encoding::Base64::encode(str);
+      auto encoded =
+          encoding::Base64::encode(std::string_view(str.data(), str.size()));
       return '"' + encoded + '"';
     }
     case TypeKind::VARCHAR: {
@@ -389,7 +390,8 @@ std::string variant::toJsonUnsafe(const TypePtr& type) const {
     }
     case TypeKind::VARBINARY: {
       auto& str = value<TypeKind::VARBINARY>();
-      auto encoded = encoding::Base64::encode(str);
+      auto encoded =
+          encoding::Base64::encode(std::string_view(str.data(), str.size()));
       return '"' + encoded + '"';
     }
     case TypeKind::VARCHAR: {
@@ -507,8 +509,9 @@ folly::dynamic variant::serialize() const {
     }
     case TypeKind::VARBINARY: {
       auto& str = value<TypeKind::VARBINARY>();
-      objValue = encoding::Base64::encode(str);
-      break;
+      auto encoded =
+          encoding::Base64::encode(std::string_view(str.data(), str.size()));
+      return '"' + encoded + '"';
     }
 
     case TypeKind::TINYINT: {
