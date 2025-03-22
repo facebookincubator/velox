@@ -440,6 +440,10 @@ void TableScan::addDynamicFilter(
 void TableScan::close() {
   Operator::close();
 
+  if (dataSource_ != nullptr) {
+    dataSource_->close();
+  }
+
   if (scaledController_ == nullptr) {
     return;
   }
