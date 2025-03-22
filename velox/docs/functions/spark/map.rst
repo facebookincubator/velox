@@ -46,6 +46,12 @@ Map Functions
 
         SELECT map_from_arrays(array(1.0, 3.0), array('2', '4')); -- {1.0 -> 2, 3.0 -> 4}
 
+.. spark:function:: map_from_entries(array(row(K, V))) -> map(K, V)
+
+    Returns a map created from the given array of entries. Keys are not allowed to be null or to contain nulls. ::
+
+        SELECT map_from_entries(ARRAY(ROW(1, 'a'), ROW(2, 'b')));; -- {1 -> 'x', 2 -> 'y'}
+
 .. spark:function:: map_keys(x(K,V)) -> array(K)
 
     Returns all the keys in the map ``x``.
