@@ -21,15 +21,12 @@
 
 [build-system]
 requires = [
-  "setuptools>=42",
+  "scikit-build-core>=0.10",
   "setuptools_scm[toml]>=8",
-  "wheel",
-  "cffi",
   "pyarrow",
-  "typing-inspect",
-  "tabulate"
+  "pybind11",
 ]
-build-backend = "setuptools.build_meta"
+build-backend = "scikit_build_core.build"
 
 [project]
 name = "pyvelox"
@@ -37,7 +34,7 @@ dynamic = ["version"]
 description = "Python bindings and extensions for Velox"
 readme = "pyvelox/README.md"
 requires-python = ">=3.9"
-license = { text = "Apache License 2.0" }
+license = "Apache-2.0"
 authors = [
   { name = "Meta", email = "velox@fb.com" }
 ]
@@ -54,7 +51,6 @@ dependencies = [
 classifiers = [
   "Intended Audience :: Developers",
   "Intended Audience :: Science/Research",
-  "License :: OSI Approved :: Apache Software License",
   "Operating System :: POSIX :: Linux",
   "Programming Language :: C++",
   "Programming Language :: Python :: 3.9",
@@ -67,16 +63,28 @@ classifiers = [
 [project.urls]
 homepage = "https://github.com/facebookincubator/velox"
 
-[tool.setuptools.packages.find]
-where = [".", "./tests"]
+[tool.scikit-build]
+metadata.version.provider = "scikit_build_core.metadata.setuptools_scm"
+ninja.make-fallback = false
+wheel.packages = ["pyvelox"]
 
-# [tool.setuptools.package-data]
-# "*" = ["*.txt", "*.cmake"]
-# "CMake" = ["**/*"]
-# "third_party" = ["**/*"]
-# "velox" = ["**/*"]
-# "pyvelox" = ["**/*"]
-# "scripts" = ["**/*"]
+[tool.scikit-build.sdist]
+include = ["velox/", "pyvelox/", "CMake/", "scripts/setup-helper-functions.sh"]
+exclude = [".github/", "velox/docs", "velox/experimental"]
+
+# TODO reuse of already build velox with VELOX_BUILD_DIR
+[tool.scikit-build.cmake]
+version = ">=3.28"
+build-type = "MinSizeRel"
+
+[tool.scikit-build.cmake.define]
+  VELOX_BUILD_PYTHON_PACKAGE = true
+  VELOX_BUILD_TESTING = false
+  VELOX_MONO_LIBRARY = true
+  VELOX_BUILD_SHARED = true
+  # f"-DCMAKE_LIBRARY_OUTPUT_DIRECTORY={extdir}",
+  # f"-DCMAKE_INSTALL_PREFIX={extdir}",
+  # CMAKE_VERBOSE_MAKEFILE
 
 [tool.setuptools_scm]
 root = '.'
@@ -84,3 +92,19 @@ version_file = 'pyvelox/_generated_version.py'
 version_scheme = 'guess-next-dev'
 git_describe_command = 'git describe --dirty --tags --long --match "pyvelox-v[0-9]*.*"'
 fallback_version = '0.2.0a'
+
+[toolcibuildwheel]
+build = "cp312-*"
+skip = "*musllinux* cp36-* cp38-*"
+archs = "native"
+manylinux-x86_64-image = "ghcr.io/facebookincubator/velox-dev:pyvelox"
+before-all = "ccache -sz"
+before-test = "cacche -s"
+test-skip = "*"
+test-command = "echo adding tests later"
+
+[tool.cibuildwheel.linux]
+repair-wheel-command = "auditwheel repair --exclude 'libarrow*' --exclude 'libparquet*' -w {dest_dir} {wheel}"
+
+# [tool.cibuildwheel.macos]
+# repair-wheel-command = "delocate-wheel --require-archs {delocate_archs} -w {dest_dir} -v {wheel}"
