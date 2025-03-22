@@ -261,6 +261,11 @@ RowVectorPtr NestedLoopJoinProbe::generateOutput() {
   // Try to advance the probe cursor; call finish if no more probe input.
   if (advanceProbe()) {
     finishProbeInput();
+    if (numOutputRows_ == 0) {
+      // output_ can only be re-used across probe rows within the same input_.
+      // Here we have to abandon the emtpy output_ with memory allocated.
+      output_ = nullptr;
+    }
   }
 
   if (!readyToProduceOutput()) {
