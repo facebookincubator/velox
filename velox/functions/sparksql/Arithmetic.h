@@ -606,4 +606,44 @@ struct CheckedDivideFunction {
     return Status::OK();
   }
 };
+
+template <typename T>
+struct FactorialFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  static constexpr int64_t LOWER_BOUND = 0;
+  static constexpr int64_t UPPER_BOUND = 20;
+
+  static constexpr int64_t kFactorials[21] = {
+      1,
+      1,
+      2,
+      6,
+      24,
+      120,
+      720,
+      5040,
+      40320,
+      362880,
+      3628800,
+      39916800,
+      479001600,
+      6227020800L,
+      87178291200L,
+      1307674368000L,
+      20922789888000L,
+      355687428096000L,
+      6402373705728000L,
+      121645100408832000L,
+      2432902008176640000L};
+
+  FOLLY_ALWAYS_INLINE bool call(int64_t& result, const int32_t input) {
+    if (input < LOWER_BOUND || input > UPPER_BOUND) {
+      return false;
+    }
+    result = kFactorials[input];
+    return true;
+  }
+};
+
 } // namespace facebook::velox::functions::sparksql

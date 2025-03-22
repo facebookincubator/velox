@@ -125,6 +125,7 @@ void registerMathFunctions(const std::string& prefix) {
   registerBinaryNumeric<CheckedSubtractFunction>({prefix + "checked_subtract"});
   registerBinaryNumeric<CheckedMultiplyFunction>({prefix + "checked_multiply"});
   registerBinaryNumeric<CheckedDivideFunction>({prefix + "checked_divide"});
+  registerFunction<FactorialFunction, int64_t, int32_t>({prefix + "factorial"});
 }
 
 } // namespace facebook::velox::functions::sparksql
