@@ -136,6 +136,7 @@ function get_cxx_flags {
       Neoverse_N1="d0c"
       Neoverse_N2="d49"
       Neoverse_V1="d40"
+      Neoverse_V2="d4f"
       if [ -f "$ARM_CPU_FILE" ]; then
         hex_ARM_CPU_DETECT=`cat $ARM_CPU_FILE`
         # PartNum, [15:4]: The primary part number such as Neoverse N1/N2 core.
@@ -147,11 +148,34 @@ function get_cxx_flags {
           echo -n "-mcpu=neoverse-n2 "
         elif [ "$ARM_CPU_PRODUCT" = "$Neoverse_V1" ]; then
           echo -n "-mcpu=neoverse-v1 "
+        elif [ "$ARM_CPU_PRODUCT" = "$Neoverse_V2" ]; then
+          echo -n "-mcpu=neoverse-v2 "
         else
           echo -n "-march=armv8-a+crc+crypto "
         fi
       else
         echo -n ""
+      fi
+
+    if [[ $(grep "sve" /proc/cpuinfo) ]]; then
+        ARCH_FLAGS="-march=armv8-a+sve"
+            SVE_VECTOR_BITS=$(
+              gcc $ARCH_FLAGS -o detect_sve_vector -xc++ - -lstdc++ <<EOF
+              #include <arm_sve.h>
+              #include <iostream>
+              int main() {
+                  std::cout << svcntb() * 8 << std::endl;
+                  return 0;
+        }
+EOF
+          ./detect_sve_vector 2>/dev/null
+        )
+
+        if [[ $SVE_VECTOR_BITS ]]; then
+          echo -n "-msve-vector-bits=$SVE_VECTOR_BITS -DSVE_BITS=$SVE_VECTOR_BITS"
+        fi
+
+        rm -f detect_sve_vector
       fi
     ;;
   *)
@@ -211,6 +235,7 @@ function cmake_install {
   cmake -Wno-dev ${CMAKE_OPTIONS} -B"${BINARY_DIR}" \
     -GNinja \
     -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
+    -DCMAKE_CXX_STANDARD=17 \
     "${INSTALL_PREFIX+-DCMAKE_PREFIX_PATH=}${INSTALL_PREFIX-}" \
     "${INSTALL_PREFIX+-DCMAKE_INSTALL_PREFIX=}${INSTALL_PREFIX-}" \
     -DCMAKE_CXX_FLAGS="$COMPILER_FLAGS" \
@@ -220,4 +245,3 @@ function cmake_install {
   cmake --build "${BINARY_DIR}" "-j ${NPROC}" || { echo 'build failed' ; exit 1; }
   ${SUDO} cmake --install "${BINARY_DIR}"
 }
-
