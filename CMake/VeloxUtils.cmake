@@ -64,6 +64,15 @@ function(velox_add_library TARGET)
   list(REMOVE_ITEM ARGN STATIC)
   list(REMOVE_ITEM ARGN SHARED)
   list(REMOVE_ITEM ARGN INTERFACE)
+
+  # Set LANGUAGE property for assembly files
+  foreach(src IN LISTS ARGN)
+    if(src MATCHES "\\.S$")
+      set_source_files_properties(${src} PROPERTIES LANGUAGE ASM)
+        set_source_files_properties(${src} PROPERTIES COMPILE_FLAGS "-mcpu=neoverse-v2+crypto+sve2-sm4+sve2-aes+sve2-sha3")
+    endif()
+  endforeach()
+
   # Propagate to the underlying add_library and then install the target.
   if(VELOX_MONO_LIBRARY)
     if(TARGET velox)
