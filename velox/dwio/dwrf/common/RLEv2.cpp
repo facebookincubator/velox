@@ -22,43 +22,6 @@ namespace facebook::velox::dwrf {
 
 using memory::MemoryPool;
 
-struct FixedBitSizes {
-  enum FBS {
-    ONE = 0,
-    TWO,
-    THREE,
-    FOUR,
-    FIVE,
-    SIX,
-    SEVEN,
-    EIGHT,
-    NINE,
-    TEN,
-    ELEVEN,
-    TWELVE,
-    THIRTEEN,
-    FOURTEEN,
-    FIFTEEN,
-    SIXTEEN,
-    SEVENTEEN,
-    EIGHTEEN,
-    NINETEEN,
-    TWENTY,
-    TWENTYONE,
-    TWENTYTWO,
-    TWENTYTHREE,
-    TWENTYFOUR,
-    TWENTYSIX,
-    TWENTYEIGHT,
-    THIRTY,
-    THIRTYTWO,
-    FORTY,
-    FORTYEIGHT,
-    FIFTYSIX,
-    SIXTYFOUR
-  };
-};
-
 inline uint32_t decodeBitWidth(uint32_t n) {
   if (n <= FixedBitSizes::TWENTYFOUR) {
     return n + 1;
