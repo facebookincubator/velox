@@ -158,7 +158,7 @@ inline void registerArrayUnionFunctions(const std::string& prefix) {
 
 template <typename T>
 inline void registerArrayCompactFunction(const std::string& prefix) {
-  registerFunction<ArrayCompactFunction, Array<T>, Array<T>>(
+  registerFunction<ArrayRemoveNullFunction, Array<T>, Array<T>>(
       {prefix + "array_compact"});
 }
 
