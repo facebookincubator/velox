@@ -158,6 +158,28 @@ inline void registerArrayUnionFunctions(const std::string& prefix) {
   registerArrayUnionFunction<Generic<T1>>(prefix);
 }
 
+template <typename T>
+inline void registerArrayCompactFunction(const std::string& prefix) {
+  registerFunction<ArrayRemoveNullFunction, Array<T>, Array<T>>(
+      {prefix + "array_compact"});
+}
+
+inline void registerArrayCompactFunctions(const std::string& prefix) {
+  registerArrayCompactFunction<int8_t>(prefix);
+  registerArrayCompactFunction<int16_t>(prefix);
+  registerArrayCompactFunction<int32_t>(prefix);
+  registerArrayCompactFunction<int64_t>(prefix);
+  registerArrayCompactFunction<int128_t>(prefix);
+  registerArrayCompactFunction<float>(prefix);
+  registerArrayCompactFunction<double>(prefix);
+  registerArrayCompactFunction<bool>(prefix);
+  registerArrayCompactFunction<Timestamp>(prefix);
+  registerArrayCompactFunction<Date>(prefix);
+  registerArrayCompactFunction<Varbinary>(prefix);
+  registerArrayCompactFunction<Varchar>(prefix);
+  registerArrayCompactFunction<Generic<T1>>(prefix);
+}
+
 void registerArrayFunctions(const std::string& prefix) {
   registerArrayConcatFunctions(prefix);
   registerArrayJoinFunctions(prefix);
@@ -198,6 +220,7 @@ void registerArrayFunctions(const std::string& prefix) {
       Array<Generic<T1>>,
       Generic<T1>>({prefix + "array_append"});
   registerArrayUnionFunctions(prefix);
+  registerArrayCompactFunctions(prefix);
 }
 
 } // namespace sparksql
