@@ -162,7 +162,7 @@ class Base64 {
       const char* input,
       size_t inputSize,
       char* outputBuffer,
-      size_t outputSize,
+      size_t& outputSize,
       const ReverseIndex& reverseIndex);
 
   VELOX_FRIEND_TEST(Base64Test, checksPadding);

@@ -417,7 +417,7 @@ Status Base64::decodeImpl(
     const char* input,
     size_t inputSize,
     char* outputBuffer,
-    size_t outputSize,
+    size_t& outputSize,
     const ReverseIndex& reverseIndex) {
   if (inputSize == 0) {
     return Status::OK();
@@ -433,6 +433,7 @@ Status Base64::decodeImpl(
         "Base64::decode() - invalid output string: "
         "output string is too small.");
   }
+  outputSize = decodedSize.value();
 
   // Handle full groups of 4 characters
   for (; inputSize > 4; inputSize -= 4, input += 4, outputBuffer += 3) {
@@ -526,22 +527,18 @@ std::string Base64::decodeUrl(folly::StringPiece encodedText) {
 void Base64::decodeUrl(
     const std::pair<const char*, int32_t>& payload,
     std::string& decodedOutput) {
-  size_t inputSize = payload.second;
-  auto decodedSize = calculateDecodedSize(payload.first, inputSize);
-  if (decodedSize.hasError()) {
-    VELOX_USER_FAIL(decodedSize.error().message());
-  }
-
-  decodedOutput.resize(decodedSize.value());
+  size_t decodedSize = (payload.second + 3) / 4 * 3;
+  decodedOutput.resize(decodedSize, '\0');
   Status status = decodeImpl(
       payload.first,
       payload.second,
       decodedOutput.data(),
-      decodedOutput.size(),
+      decodedSize,
       kBase64UrlReverseIndexTable);
   if (!status.ok()) {
     VELOX_USER_FAIL(status.message());
   }
+  decodedOutput.resize(decodedSize);
 }
 
 } // namespace facebook::velox::encoding
