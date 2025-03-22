@@ -321,8 +321,16 @@ bool NestedLoopJoinProbe::addToOutput() {
     }
 
     // Only re-calculate the filter if we have a new build vector.
-    if (buildRow_ == 0) {
+    if (buildRow_ == 0 && joinCondition_ != nullptr) {
       evaluateJoinFilter(currentBuild);
+    }
+
+    if (isLeftSemiProjectJoin(joinType_)) {
+      output_ = getOutputLeftSemiJoinImpl();
+      numOutputRows_ = 1;
+      ++buildIndex_;
+      buildRow_ = 0;
+      return false;
     }
 
     // Iterate over the filter results. For each match, add an output record.
@@ -352,6 +360,14 @@ bool NestedLoopJoinProbe::addToOutput() {
     copyBuildValues(currentBuild);
     ++buildIndex_;
     buildRow_ = 0;
+  }
+
+  if (isLeftSemiProjectJoin(joinType_) && isBuildSideEmpty()) {
+      output_ = getOutputLeftSemiJoinImpl();
+      numOutputRows_ = 1;
+      ++buildIndex_;
+      buildRow_ = 0;
+      return true;
   }
 
   // Check if the current probed row needs to be added as a mismatch (for left
@@ -684,4 +700,46 @@ RowVectorPtr NestedLoopJoinProbe::getBuildMismatchedOutput(
       pool(), outputType_, nullptr, numUnmatched, std::move(projectedChildren));
 }
 
+RowVectorPtr NestedLoopJoinProbe::getOutputLeftSemiJoinImpl() {
+  VELOX_CHECK_NOT_NULL(input_);
+
+  bool matched = false;
+  numOutputRows_ = 0;
+
+  if (isBuildSideEmpty()) {
+    matched = false;
+  } else if (joinCondition_ == nullptr) {
+    matched = true;
+  } else {
+    for (auto i = buildRow_; i < decodedFilterResult_.size(); ++i) {
+      if (isJoinConditionMatch(i)) {
+        matched = true;
+        break;
+      }
+    }
+  }
+  return makeSingleOutputRow(matched);
+}
+
+RowVectorPtr NestedLoopJoinProbe::makeSingleOutputRow(bool matched) {
+  auto matchVector = BaseVector::create(BOOLEAN(), /*size=*/1, pool());
+  auto flatMatch = matchVector->as<FlatVector<bool>>();
+  flatMatch->set(0, matched);
+
+  std::vector<VectorPtr> outputChildren(outputType_->size());
+  for (auto& projection : identityProjections_) {
+    auto indices = allocateIndices(/*size=*/1, pool());
+    indices->asMutable<vector_size_t>()[0] = probeRow_;
+    outputChildren[projection.outputChannel] = BaseVector::wrapInDictionary(
+        nullptr, indices, 1, input_->childAt(projection.inputChannel));
+  }
+
+  int matchChannel = outputType_->size() - 1;
+  outputChildren[matchChannel] = matchVector;
+
+  auto singleRow =
+      std::make_shared<RowVector>(pool(), outputType_, nullptr, 1, outputChildren);
+
+  return singleRow;
+}
 } // namespace facebook::velox::exec
