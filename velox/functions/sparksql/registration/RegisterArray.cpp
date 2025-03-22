@@ -136,6 +136,27 @@ inline void registerArrayRemoveFunctions(const std::string& prefix) {
 }
 
 template <typename T>
+inline void registerArrayPrependFunctions(const std::string& prefix) {
+  registerFunction<ArrayPrependFunction, Array<T>, Array<T>, T>(
+      {prefix + "array_prepend"});
+}
+
+inline void registerArrayPrependFunctions(const std::string& prefix) {
+  registerArrayPrependFunctions<int8_t>(prefix);
+  registerArrayPrependFunctions<int16_t>(prefix);
+  registerArrayPrependFunctions<int32_t>(prefix);
+  registerArrayPrependFunctions<int64_t>(prefix);
+  registerArrayPrependFunctions<int128_t>(prefix);
+  registerArrayPrependFunctions<float>(prefix);
+  registerArrayPrependFunctions<double>(prefix);
+  registerArrayPrependFunctions<bool>(prefix);
+  registerArrayPrependFunctions<Timestamp>(prefix);
+  registerArrayPrependFunctions<Date>(prefix);
+  registerArrayPrependFunctions<Varbinary>(prefix);
+  registerArrayPrependFunctions<Generic<T1>>(prefix);
+}
+
+template <typename T>
 inline void registerArrayUnionFunction(const std::string& prefix) {
   registerFunction<ArrayUnionFunction, Array<T>, Array<T>, Array<T>>(
       {prefix + "array_union"});
@@ -162,6 +183,7 @@ void registerArrayFunctions(const std::string& prefix) {
   registerArrayJoinFunctions(prefix);
   registerArrayMinMaxFunctions(prefix);
   registerArrayRemoveFunctions(prefix);
+  registerArrayPrependFunctions(prefix);
   registerSparkArrayFunctions(prefix);
   // Register array sort functions.
   exec::registerStatefulVectorFunction(
@@ -197,11 +219,6 @@ void registerArrayFunctions(const std::string& prefix) {
       Array<Generic<T1>>,
       Generic<T1>>({prefix + "array_append"});
   registerArrayUnionFunctions(prefix);
-  registerFunction<
-      ArrayPrependFunction,
-      Array<Generic<T1>>,
-      Array<Generic<T1>>,
-      Generic<T1>>({prefix + "array_prepend"});
 }
 
 } // namespace sparksql

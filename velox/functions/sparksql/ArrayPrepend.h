@@ -29,17 +29,30 @@ struct ArrayPrependFunction {
   // Results refer to the first input strings parameter buffer.
   static constexpr int32_t reuse_strings_from_arg = 0;
 
-  FOLLY_ALWAYS_INLINE bool callNullable(
-      out_type<Array<Generic<T1>>>& out,
-      const arg_type<Array<Generic<T1>>>* array,
-      const arg_type<Generic<T1>>* element) {
-    if (array == nullptr) {
-      return false;
-    }
+  // Fast path for primitives.
+  template <typename Out, typename In, typename E>
+  FOLLY_ALWAYS_INLINE void call(Out& out, const In& array, E element) {
     out.reserve(array->size() + 1);
-    element ? out.push_back(*element) : out.add_null();
-    out.add_items(*array);
-    return true;
+    if (element.has_value()) {
+      out.push_back(element.value());
+    } else {
+      out.add_null();
+    }
+    out.add_items(array);
+  }
+
+  // Generic implementation.
+  FOLLY_ALWAYS_INLINE void call(
+      out_type<Array<Generic<T1>>>& out,
+      const arg_type<Array<Generic<T1>>>& array,
+      const arg_type<Generic<T1>>& element) {
+    out.reserve(array->size() + 1);
+    if (element.has_value()) {
+      out.push_back(element.value());
+    } else {
+      out.add_null();
+    }
+    out.add_items(array);
   }
 };
 
