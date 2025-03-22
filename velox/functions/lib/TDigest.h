@@ -101,6 +101,10 @@ class TDigest {
   /// @param input The input serialization.
   void mergeDeserialized(std::vector<int16_t>& positions, const char* input);
 
+  /// Scale the tdigest by given factor
+  /// @param scaleFactor The factor to scale weight by.
+  void scale(double scaleFactor);
+
   /// Returns the total sum of all values added to this digest.
   double sum() const;
 
@@ -321,8 +325,8 @@ double TDigest<A>::estimateQuantile(double quantile) const {
   if (index > totalWeight - 1) {
     return max_;
   }
-  // If the right-most centroid has more than one sample, we still know that one
-  // sample occurred at max so we can do some interpolation.
+  // If the right-most centroid has more than one sample, we still know that
+  // one sample occurred at max so we can do some interpolation.
   if (weights_.back() > 1 && totalWeight - index <= weights_.back() / 2) {
     return max_ -
         (totalWeight - index - 1) / (weights_.back() / 2 - 1) *
@@ -366,6 +370,13 @@ double TDigest<A>::estimateQuantile(double quantile) const {
   auto z1 = index - totalWeight - weights_.back() / 2;
   auto z2 = weights_.back() / 2 - z1;
   return weightedAverageSorted(means_.back(), z1, max_, z2);
+}
+
+template <typename A>
+void TDigest<A>::scale(double scaleFactor) {
+  for (auto& weight : weights_) {
+    weight *= scaleFactor;
+  }
 }
 
 namespace tdigest::detail {
