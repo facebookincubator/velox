@@ -92,6 +92,7 @@ int main(int argc, char** argv) {
       "value_at_quantile",
       "values_at_quantiles",
       "merge_tdigest",
+      "scale_tdigest",
       // Fuzzer cannot generate valid 'comparator' lambda.
       "array_sort(array(T),constant function(T,T,bigint)) -> array(T)",
       "split_to_map(varchar,varchar,varchar,function(varchar,varchar,varchar,varchar)) -> map(varchar,varchar)",
