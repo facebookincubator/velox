@@ -40,6 +40,18 @@ class CentralMomentsAggregationTest : public AggregationTestBase {
     builder.singleAggregation({}, {fmt::format("spark_{}(c0)", agg)});
     AssertQueryBuilder(builder.planNode()).assertResults({expected});
   }
+
+  void testLegacyCenteralMomentsAggResult(
+      const std::string& agg,
+      const RowVectorPtr& input,
+      const RowVectorPtr& expected) {
+    PlanBuilder builder(pool());
+    builder.values({input});
+    builder.singleAggregation({}, {fmt::format("spark_{}(c0)", agg)});
+    AssertQueryBuilder(builder.planNode())
+        .config("spark.legacy_statistical_aggregate", "true")
+        .assertResults({expected});
+  }
 };
 
 TEST_F(CentralMomentsAggregationTest, skewnessHasResult) {
@@ -54,6 +66,19 @@ TEST_F(CentralMomentsAggregationTest, skewnessHasResult) {
   expected = makeRowVector({makeNullableFlatVector<double>(
       std::vector<std::optional<double>>{std::nullopt})});
   testCenteralMomentsAggResult(agg, input, expected);
+
+  // Output NULL when m2 equals 0.
+  input = makeRowVector({makeFlatVector<double>({1, 1})});
+  expected = makeRowVector({makeNullableFlatVector<double>(
+      std::vector<std::optional<double>>{std::nullopt})});
+  testCenteralMomentsAggResult(agg, input, expected);
+
+  // Output NaN when m2 equals 0 for legacy aggregate.
+  input = makeRowVector({makeFlatVector<double>({1, 1})});
+  expected = makeRowVector(
+      {makeNullableFlatVector<double>(std::vector<std::optional<double>>{
+          std::numeric_limits<double>::quiet_NaN()})});
+  testLegacyCenteralMomentsAggResult(agg, input, expected);
 }
 
 TEST_F(CentralMomentsAggregationTest, pearsonKurtosis) {
@@ -78,6 +103,13 @@ TEST_F(CentralMomentsAggregationTest, pearsonKurtosis) {
   expected = makeRowVector({makeNullableFlatVector<double>(
       std::vector<std::optional<double>>{std::nullopt})});
   testCenteralMomentsAggResult(agg, input, expected);
+
+  // Output NaN when m2 equals 0 for legacy aggregate.
+  input = makeRowVector({makeFlatVector<double>({1, 1})});
+  expected = makeRowVector(
+      {makeNullableFlatVector<double>(std::vector<std::optional<double>>{
+          std::numeric_limits<double>::quiet_NaN()})});
+  testLegacyCenteralMomentsAggResult(agg, input, expected);
 }
 
 } // namespace

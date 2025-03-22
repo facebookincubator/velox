@@ -17,26 +17,58 @@
 #include "velox/functions/sparksql/aggregates/CentralMomentsAggregate.h"
 #include "velox/functions/lib/aggregates/CentralMomentsAggregatesBase.h"
 
+#include <limits>
+
 namespace facebook::velox::functions::aggregate::sparksql {
 
 namespace {
+// Calculate the skewness value from m2, count and m3.
+//
+// @tparam nullOnDivideByZero If true, return NULL instead of NaN when dividing
+// by zero during the calculating.
+template <bool nullOnDivideByZero>
 struct SkewnessResultAccessor {
   static bool hasResult(const CentralMomentsAccumulator& accumulator) {
-    return accumulator.count() >= 1 && accumulator.m2() != 0;
+    if constexpr (nullOnDivideByZero) {
+      return accumulator.count() >= 1 && accumulator.m2() != 0;
+    } else {
+      return accumulator.count() >= 1;
+    }
   }
 
   static double result(const CentralMomentsAccumulator& accumulator) {
+    if (accumulator.m2() == 0) {
+      VELOX_CHECK(
+          !nullOnDivideByZero,
+          "If NaN is returned when m2 is 0, nullOnDivideByZero must be false");
+      return std::numeric_limits<double>::quiet_NaN();
+    }
     return std::sqrt(accumulator.count()) * accumulator.m3() /
         std::pow(accumulator.m2(), 1.5);
   }
 };
 
+// Calculate the kurtosis value from m2, count and m4.
+//
+// @tparam nullOnDivideByZero If true, return NULL instead of NaN when dividing
+// by zero during the calculating.
+template <bool nullOnDivideByZero>
 struct KurtosisResultAccessor {
   static bool hasResult(const CentralMomentsAccumulator& accumulator) {
-    return accumulator.count() >= 1 && accumulator.m2() != 0;
+    if constexpr (nullOnDivideByZero) {
+      return accumulator.count() >= 1 && accumulator.m2() != 0;
+    } else {
+      return accumulator.count() >= 1;
+    }
   }
 
   static double result(const CentralMomentsAccumulator& accumulator) {
+    if (accumulator.m2() == 0) {
+      VELOX_CHECK(
+          !nullOnDivideByZero,
+          "If NaN is returned when m2 is 0, nullOnDivideByZero must be false");
+      return std::numeric_limits<double>::quiet_NaN();
+    }
     double count = accumulator.count();
     double m2 = accumulator.m2();
     double m4 = accumulator.m4();
@@ -44,7 +76,7 @@ struct KurtosisResultAccessor {
   }
 };
 
-template <typename TResultAccessor>
+template <template <bool> typename TResultAccessor>
 exec::AggregateRegistrationResult registerCentralMoments(
     const std::string& name,
     bool withCompanionFunctions,
@@ -64,28 +96,49 @@ exec::AggregateRegistrationResult registerCentralMoments(
           core::AggregationNode::Step step,
           const std::vector<TypePtr>& argTypes,
           const TypePtr& resultType,
-          const core::QueryConfig& /*config*/)
-          -> std::unique_ptr<exec::Aggregate> {
+          const core::QueryConfig& config) -> std::unique_ptr<exec::Aggregate> {
         VELOX_CHECK_EQ(argTypes.size(), 1, "{} takes only one argument", name);
         const auto& inputType = argTypes[0];
-        if (exec::isRawInput(step)) {
-          if (inputType->kind() == TypeKind::DOUBLE) {
-            return std::make_unique<
-                CentralMomentsAggregatesBase<double, TResultAccessor>>(
-                resultType);
+        if (config.sparkLegacyStatisticalAggregate()) {
+          if (exec::isRawInput(step)) {
+            if (inputType->kind() == TypeKind::DOUBLE) {
+              return std::make_unique<
+                  CentralMomentsAggregatesBase<double, TResultAccessor<false>>>(
+                  resultType);
+            }
+            VELOX_UNSUPPORTED(
+                "Unsupported input type: {}. "
+                "Expected DOUBLE.",
+                inputType->toString());
+          } else {
+            checkAccumulatorRowType(
+                inputType,
+                "Input type for final aggregation must be "
+                "(count:bigint, m1:double, m2:double, m3:double, m4:double) struct");
+            return std::make_unique<CentralMomentsAggregatesBase<
+                int64_t /*unused*/,
+                TResultAccessor<false>>>(resultType);
           }
-          VELOX_UNSUPPORTED(
-              "Unsupported input type: {}. "
-              "Expected DOUBLE.",
-              inputType->toString());
         } else {
-          checkAccumulatorRowType(
-              inputType,
-              "Input type for final aggregation must be "
-              "(count:bigint, m1:double, m2:double, m3:double, m4:double) struct");
-          return std::make_unique<CentralMomentsAggregatesBase<
-              int64_t /*unused*/,
-              TResultAccessor>>(resultType);
+          if (exec::isRawInput(step)) {
+            if (inputType->kind() == TypeKind::DOUBLE) {
+              return std::make_unique<
+                  CentralMomentsAggregatesBase<double, TResultAccessor<true>>>(
+                  resultType);
+            }
+            VELOX_UNSUPPORTED(
+                "Unsupported input type: {}. "
+                "Expected DOUBLE.",
+                inputType->toString());
+          } else {
+            checkAccumulatorRowType(
+                inputType,
+                "Input type for final aggregation must be "
+                "(count:bigint, m1:double, m2:double, m3:double, m4:double) struct");
+            return std::make_unique<CentralMomentsAggregatesBase<
+                int64_t /*unused*/,
+                TResultAccessor<true>>>(resultType);
+          }
         }
       },
       withCompanionFunctions,
