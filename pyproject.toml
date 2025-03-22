@@ -1,0 +1,86 @@
+# Copyright (c) Facebook, Inc. and its affiliates.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+#!/usr/bin/env python
+# Copyright (c) Meta Platforms, Inc. and affiliates.
+# All rights reserved.
+#
+# This source code is licensed under the BSD-style license found in the
+# LICENSE file in the root directory of this source tree.
+
+[build-system]
+requires = [
+  "setuptools>=42",
+  "setuptools_scm[toml]>=8",
+  "wheel",
+  "cffi",
+  "pyarrow",
+  "typing-inspect",
+  "tabulate"
+]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "pyvelox"
+dynamic = ["version"]
+description = "Python bindings and extensions for Velox"
+readme = "pyvelox/README.md"
+requires-python = ">=3.9"
+license = { text = "Apache License 2.0" }
+authors = [
+  { name = "Meta", email = "velox@fb.com" }
+]
+maintainers = [
+  { name = "Meta", email = "velox@fb.com" }
+]
+dependencies = [
+  "cffi",
+  "typing",
+  "tabulate",
+  "typing-inspect",
+  "pyarrow"
+]
+classifiers = [
+  "Intended Audience :: Developers",
+  "Intended Audience :: Science/Research",
+  "License :: OSI Approved :: Apache Software License",
+  "Operating System :: POSIX :: Linux",
+  "Programming Language :: C++",
+  "Programming Language :: Python :: 3.9",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: Implementation :: CPython"
+]
+
+[project.urls]
+homepage = "https://github.com/facebookincubator/velox"
+
+[tool.setuptools.packages.find]
+where = [".", "./tests"]
+
+# [tool.setuptools.package-data]
+# "*" = ["*.txt", "*.cmake"]
+# "CMake" = ["**/*"]
+# "third_party" = ["**/*"]
+# "velox" = ["**/*"]
+# "pyvelox" = ["**/*"]
+# "scripts" = ["**/*"]
+
+[tool.setuptools_scm]
+root = '.'
+version_file = 'pyvelox/_generated_version.py'
+version_scheme = 'guess-next-dev'
+git_describe_command = 'git describe --dirty --tags --long --match "pyvelox-v[0-9]*.*"'
+fallback_version = '0.2.0a'
