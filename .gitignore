@@ -324,3 +324,6 @@ src/amalgamation/
 velox/docs/sphinx/source/README_generated_*
 velox/docs/bindings/python/_generate/*
 scripts/bm-report/report.html
+
+# Tpcds connector
+velox/velox/tpcds/gen/dsdgen/include/tpcds_idx.hpp
