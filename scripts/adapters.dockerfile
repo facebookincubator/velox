@@ -33,8 +33,8 @@ RUN mkdir build && \
     ( \
       cd build && \
       source /opt/rh/gcc-toolset-12/enable && \
-      bash /setup-adapters.sh && \
-      source /setup-centos9.sh && \
+      source /setup-centos9.sh  \
+      install_adapters && \
       install_cuda 12.8 \
     ) && \
     rm -rf build && dnf remove -y conda && dnf clean all
