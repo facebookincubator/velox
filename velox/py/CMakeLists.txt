@@ -101,19 +101,45 @@ set_target_properties(
   PROPERTIES OUTPUT_NAME "arrow")
 target_link_libraries(
   arrow_module
-  PRIVATE
-    velox_py_init
-    velox_py_vector_lib
-    velox_arrow_bridge
-    arrow
-    pybind11::module)
+  PRIVATE velox_py_init velox_py_vector_lib velox_arrow_bridge pybind11::module)
 
 # python related headers are now bundled with pyarrow not arrow
 execute_process(
-  COMMAND "${Python_EXECUTABLE}" -c
+  COMMAND "${PYTHON_EXECUTABLE}" -c
           "import pyarrow; print(pyarrow.get_include())"
   OUTPUT_VARIABLE PYARROW_INCLUDE_DIR
   OUTPUT_STRIP_TRAILING_WHITESPACE COMMAND_ERROR_IS_FATAL ANY)
 
-target_include_directories(arrow_module PRIVATE ${PYARROW_INCLUDE_DIR})
+execute_process(
+  COMMAND
+    python -c "
+import pyarrow as pa
+# creates symlinks without SOABI extension
+# so plain libarrow.so can be found
+pa.create_library_symlinks()
 
+paths = pa.get_library_dirs()
+names = pa.get_libraries()
+
+lib_paths = []
+for path in paths:
+    for name in names:
+        lib_paths.append(f'{path}/lib{name}.so')
+
+print(';'.join(lib_paths))
+"
+  OUTPUT_VARIABLE PYARROW_LIBS
+  OUTPUT_STRIP_TRAILING_WHITESPACE COMMAND_ERROR_IS_FATAL ANY)
+
+set_property(
+  TARGET arrow_module
+  PROPERTY INSTALL_RPATH "$ORIGIN/../../pyarrow"
+  APPEND)
+set_target_properties(
+  arrow_module
+  PROPERTIES INSTALL_RPATH_USE_LINK_PATH FALSE)
+
+target_include_directories(arrow_module PRIVATE ${PYARROW_INCLUDE_DIR})
+target_link_libraries(
+  arrow_module
+  PRIVATE ${PYARROW_LIBS})
