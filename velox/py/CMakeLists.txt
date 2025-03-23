@@ -129,11 +129,6 @@ print(';'.join(lib_paths))
   OUTPUT_VARIABLE PYARROW_LIBS
   OUTPUT_STRIP_TRAILING_WHITESPACE COMMAND_ERROR_IS_FATAL ANY)
 
-set_property(
-  TARGET arrow_module
-  PROPERTY INSTALL_RPATH "\$ORIGIN/../pyarrow"
-  APPEND)
-
 set_target_properties(
   arrow_module
   type
@@ -143,6 +138,11 @@ set_target_properties(
   runner
   legacy
   PROPERTIES INSTALL_RPATH "\$ORIGIN" INSTALL_RPATH_USE_LINK_PATH TRUE)
+
+set_property(
+  TARGET arrow_module
+  PROPERTY INSTALL_RPATH "\$ORIGIN/../pyarrow"
+  APPEND)
 
 target_link_libraries(
   arrow_module
