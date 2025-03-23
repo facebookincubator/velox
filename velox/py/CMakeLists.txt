@@ -96,12 +96,10 @@ target_link_libraries(
 
 # 'arrow' target already exists
 pybind11_add_module(arrow_module MODULE arrow/arrow.cpp)
+
 set_target_properties(
   arrow_module
   PROPERTIES OUTPUT_NAME "arrow")
-target_link_libraries(
-  arrow_module
-  PRIVATE velox_py_init velox_py_vector_lib velox_arrow_bridge pybind11::module)
 
 # python related headers are now bundled with pyarrow not arrow
 execute_process(
@@ -133,16 +131,29 @@ print(';'.join(lib_paths))
 
 set_property(
   TARGET arrow_module
-  PROPERTY INSTALL_RPATH "$ORIGIN/../../pyarrow"
+  PROPERTY INSTALL_RPATH "\$ORIGIN/../pyarrow"
   APPEND)
+
 set_target_properties(
   arrow_module
-  PROPERTIES INSTALL_RPATH_USE_LINK_PATH FALSE)
+  type
+  file
+  vector
+  plan_builder
+  runner
+  legacy
+  PROPERTIES INSTALL_RPATH "\$ORIGIN" INSTALL_RPATH_USE_LINK_PATH TRUE)
 
-target_include_directories(arrow_module PRIVATE ${PYARROW_INCLUDE_DIR})
 target_link_libraries(
   arrow_module
-  PRIVATE ${PYARROW_LIBS})
+  PRIVATE
+    velox_py_init
+    velox_py_vector_lib
+    velox_arrow_bridge
+    ${PYARROW_LIBS}
+    pybind11::module)
+
+target_include_directories(arrow_module PRIVATE ${PYARROW_INCLUDE_DIR})
 
 install(
   TARGETS
