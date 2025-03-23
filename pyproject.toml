@@ -79,6 +79,10 @@ build-type = "MinSizeRel"
   VELOX_MONO_LIBRARY = true
   VELOX_BUILD_SHARED = true
 
+[[tool.scikit-build.overrides]]
+if.env.DEBUG = true # 1 maps to true
+cmake.build-type = "Debug"
+
 [tool.setuptools_scm]
 root = '.'
 version_file = 'pyvelox/_generated_version.py'
