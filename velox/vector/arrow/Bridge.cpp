@@ -1302,6 +1302,9 @@ TypePtr importFromArrowImpl(
       if (format[1] == 'i' && format[2] == 'M') {
         return INTERVAL_YEAR_MONTH();
       }
+      if (format[1] == 'i' && format[2] == 'D') {
+        return INTERVAL_DAY_TIME();
+      }
       break;
 
     case 'd':

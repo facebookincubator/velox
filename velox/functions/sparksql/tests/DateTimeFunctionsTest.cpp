@@ -1169,5 +1169,69 @@ TEST_F(DateTimeFunctionsTest, timestampToMillis) {
   EXPECT_EQ(timestampToMillis("-292275055-05-16 16:47:04.192"), kMinBigint);
 }
 
+TEST_F(DateTimeFunctionsTest, makeDTInterval) {
+
+  {
+    auto result = evaluateOnce<int64_t>(
+        "make_dt_interval()",
+        makeRowVector(ROW({}), 1),
+        std::nullopt,
+        INTERVAL_DAY_TIME());
+    ASSERT_TRUE(result.has_value());
+    EXPECT_EQ(*result, 0);
+  }
+
+  {
+    auto result = evaluateOnce<int64_t>(
+        "make_dt_interval(c0)",
+        std::optional<int32_t>(1));
+    ASSERT_TRUE(result.has_value());
+    EXPECT_EQ(*result, 86400000000);
+  }
+
+  {
+    auto result = evaluateOnce<int64_t>(
+        "make_dt_interval(c0, c1)",
+        std::optional<int32_t>(1),
+        std::optional<int32_t>(2));
+    ASSERT_TRUE(result.has_value());
+    EXPECT_EQ(*result, 93600000000);
+  }
+
+{
+  int64_t decimalMicros;
+  auto status = velox::DecimalUtil::rescaleFloatingPoint<double, int64_t>(
+      4.5, 10, 6, decimalMicros);
+  VELOX_CHECK(status.ok(), "Decimal conversion failed: {}", status.message());
+
+  auto result = evaluateOnce<int64_t>(
+      "make_dt_interval(c0, c1, c2, c3)",
+      {INTEGER(), INTEGER(), INTEGER(), DECIMAL(10, 6)},
+      std::optional<int32_t>(1),
+      std::optional<int32_t>(2),
+      std::optional<int32_t>(3),
+      std::optional<int64_t>(decimalMicros));
+  ASSERT_TRUE(result.has_value());
+  EXPECT_EQ(*result, 93784500000);
+}
+
+{
+  int64_t decimalMicros;
+  auto status = velox::DecimalUtil::rescaleFloatingPoint<double, int64_t>(
+      -4.5, 10, 6, decimalMicros);
+  VELOX_CHECK(status.ok(), "Decimal conversion failed: {}", status.message());
+
+  auto result = evaluateOnce<int64_t>(
+      "make_dt_interval(c0, c1, c2, c3)",
+      {INTEGER(), INTEGER(), INTEGER(), DECIMAL(10, 6)},
+      std::optional<int32_t>(-1),
+      std::optional<int32_t>(-2),
+      std::optional<int32_t>(-3),
+      std::optional<int64_t>(decimalMicros));
+  ASSERT_TRUE(result.has_value());
+  EXPECT_EQ(*result, -93784500000);
+}
+}
+
 } // namespace
 } // namespace facebook::velox::functions::sparksql::test
