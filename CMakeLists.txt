@@ -483,6 +483,7 @@ velox_resolve_dependency(re2)
 
 if(${VELOX_BUILD_PYTHON_PACKAGE})
   velox_set_source(pybind11)
+  set(PYBIND11_FINDPYTHON ON)
   velox_resolve_dependency(pybind11 2.10.0)
   add_subdirectory(pyvelox)
 endif()

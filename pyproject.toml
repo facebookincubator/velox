@@ -1,3 +1,4 @@
+#!/usr/bin/env python
 # Copyright (c) Facebook, Inc. and its affiliates.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -11,13 +12,6 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-
-#!/usr/bin/env python
-# Copyright (c) Meta Platforms, Inc. and affiliates.
-# All rights reserved.
-#
-# This source code is licensed under the BSD-style license found in the
-# LICENSE file in the root directory of this source tree.
 
 [build-system]
 requires = [
@@ -66,7 +60,9 @@ homepage = "https://github.com/facebookincubator/velox"
 [tool.scikit-build]
 metadata.version.provider = "scikit_build_core.metadata.setuptools_scm"
 ninja.make-fallback = false
+install.components = ["pyvelox_libraries"]
 wheel.packages = ["pyvelox"]
+wheel.exclude = ["*.h*", "*.cpp", "CMakeLists.txt", "test/*"]
 
 [tool.scikit-build.sdist]
 include = ["velox/", "pyvelox/", "CMake/", "scripts/setup-helper-functions.sh"]
@@ -82,9 +78,6 @@ build-type = "MinSizeRel"
   VELOX_BUILD_TESTING = false
   VELOX_MONO_LIBRARY = true
   VELOX_BUILD_SHARED = true
-  # f"-DCMAKE_LIBRARY_OUTPUT_DIRECTORY={extdir}",
-  # f"-DCMAKE_INSTALL_PREFIX={extdir}",
-  # CMAKE_VERBOSE_MAKEFILE
 
 [tool.setuptools_scm]
 root = '.'
@@ -93,7 +86,7 @@ version_scheme = 'guess-next-dev'
 git_describe_command = 'git describe --dirty --tags --long --match "pyvelox-v[0-9]*.*"'
 fallback_version = '0.2.0a'
 
-[toolcibuildwheel]
+[tool.cibuildwheel]
 build = "cp312-*"
 skip = "*musllinux* cp36-* cp38-*"
 archs = "native"
@@ -104,7 +97,7 @@ test-skip = "*"
 test-command = "echo adding tests later"
 
 [tool.cibuildwheel.linux]
-repair-wheel-command = "auditwheel repair --exclude 'libarrow*' --exclude 'libparquet*' -w {dest_dir} {wheel}"
+repair-wheel-command = "auditwheel repair --exclude 'libarrow*' --exclude 'libparquet*' --exclude 'libvelox*' -w {dest_dir} {wheel}"
 
 # [tool.cibuildwheel.macos]
 # repair-wheel-command = "delocate-wheel --require-archs {delocate_archs} -w {dest_dir} -v {wheel}"
