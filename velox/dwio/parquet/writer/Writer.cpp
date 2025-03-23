@@ -260,7 +260,7 @@ std::optional<bool> isParquetEnableDictionary(
     } else if ("false" == enableDictionary) {
       return false;
     } else {
-      VELOX_FAIL("Unsupported enable dictionary flag (true/false): {}", enableDictionary);
+      VELOX_FAIL("Unsupported enable dictionary flag (true/false): {}", enableDictionary.value());
     }
   }
   return std::nullopt;
@@ -554,7 +554,7 @@ void WriterOptions::processConfigs(
             .has_value()
         ? getParquetPageSize(session, kParquetSessionDictionaryPageSizeLimit)
         : getParquetPageSize(
-              connectorConfig, kParquetSessionDictionaryPageSizeLimit);
+              connectorConfig, kParquetHiveConnectorDictionaryPageSizeLimit);
   }
 
   if (!useParquetDataPageV2) {
