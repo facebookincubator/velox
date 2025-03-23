@@ -39,5 +39,6 @@ if(VELOX_BUILD_PYTHON_PACKAGE)
 
   target_include_directories(legacy SYSTEM PRIVATE ${CMAKE_CURRENT_LIST_DIR}/..)
   target_compile_definitions(legacy PRIVATE -DCREATE_PYVELOX_MODULE)
-  install(TARGETS legacy LIBRARY DESTINATION pyvelox COMPONENT pyvelox_libraries)
+  install(TARGETS legacy LIBRARY DESTINATION pyvelox
+                                 COMPONENT pyvelox_libraries)
 endif()
