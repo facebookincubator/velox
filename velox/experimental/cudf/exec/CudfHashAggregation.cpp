@@ -150,7 +150,8 @@ struct CountAggregator : cudf_velox::CudfHashAggregation::Aggregator {
       rmm::cuda_stream_view stream) override {
     // cudf produces int32 for count(0) but velox expects int64
     auto col = std::move(results[output_idx].results[0]);
-    if (constant != nullptr &&
+    // wtf is this? do we not need to cast int32 to int64 when counting columns?
+    if (/* constant != nullptr && */
         col->type() == cudf::data_type(cudf::type_id::INT32)) {
       col = cudf::cast(*col, cudf::data_type(cudf::type_id::INT64), stream);
     }
@@ -454,7 +455,8 @@ CudfHashAggregation::CudfHashAggregation(
       aggregationNode_(aggregationNode),
       isPartialOutput_(exec::isPartialOutput(aggregationNode->step())),
       isGlobal_(aggregationNode->groupingKeys().empty()),
-      isDistinct_(!isGlobal_ && aggregationNode->aggregates().empty()) {}
+      isDistinct_(!isGlobal_ && aggregationNode->aggregates().empty()),
+      step(aggregationNode->step()) {}
 
 void CudfHashAggregation::initialize() {
   Operator::initialize();
@@ -471,6 +473,10 @@ void CudfHashAggregation::initialize() {
 
   numAggregates_ = aggregationNode_->aggregates().size();
   aggregators_ = toAggregators(*aggregationNode_, *operatorCtx_);
+  final_aggregators_ = toAggregators(*aggregationNode_, *operatorCtx_);
+  for (auto& aggregator : final_aggregators_) {
+    aggregator->step = core::AggregationNode::Step::kFinal;
+  }
 
   // Check that aggregate result type match the output type.
   // TODO (dm): This is output schema validation. In velox CPU, it's done using
@@ -515,17 +521,66 @@ void CudfHashAggregation::setupGroupingKeyChannelProjections(
       groupingKeyOutputChannels.begin(), groupingKeyOutputChannels.end(), 0);
 }
 
-void CudfHashAggregation::addInput(RowVectorPtr input) {
-  // Accumulate inputs
-  if (input->size() > 0) {
-    auto cudf_input = std::dynamic_pointer_cast<cudf_velox::CudfVector>(input);
-    VELOX_CHECK_NOT_NULL(cudf_input);
-    inputs_.push_back(std::move(cudf_input));
+void CudfHashAggregation::computeInterimGroupbyPartial(
+    std::unique_ptr<cudf::table> tbl) {
+  auto groupby_on_input = doGroupByAggregation(
+      std::move(tbl), aggregators_, rmm::cuda_stream_default);
+
+  // If we already have partial output, concatenate the new results with it
+  if (partial_output_) {
+    // Create a vector of tables to concatenate
+    std::vector<cudf::table_view> tables_to_concat;
+    tables_to_concat.push_back(partial_output_->view());
+    tables_to_concat.push_back(groupby_on_input->getTableView());
+
+    // Concatenate the tables
+    auto concatenated_table =
+        cudf::concatenate(tables_to_concat, rmm::cuda_stream_default);
+
+    // Now we have to groupby again but this time with final aggregation
+    // style.
+    auto compacted_output = doGroupByAggregation(
+        std::move(concatenated_table),
+        final_aggregators_,
+        rmm::cuda_stream_default);
+    partial_output_ = compacted_output->release();
+  } else {
+    // First time processing, just store the result
+    partial_output_ = groupby_on_input->release();
   }
 }
 
-RowVectorPtr CudfHashAggregation::doGroupByAggregation(
+void CudfHashAggregation::addInput(RowVectorPtr input) {
+  // For every input, we'll do a groupby and compact results with the existing
+  // interim groupby results
+  // - If this is partial agg, we'll do a groupby on the
+  // new batch and then compact with the existing partial output and groupby
+  // again but final style (at least for count)
+  // - If this is final agg, we can simply concatenate incoming batch with the
+  // interim results and then do 1 groupby
+  // Right now, for Q13, I'm going to let final aggregation be as it is.
+  if (step != core::AggregationNode::Step::kPartial) {
+    if (input->size() > 0) {
+      auto cudf_input =
+          std::dynamic_pointer_cast<cudf_velox::CudfVector>(input);
+      VELOX_CHECK_NOT_NULL(cudf_input);
+      inputs_.push_back(std::move(cudf_input));
+    }
+    return;
+  }
+  // Now it's only partial aggregation
+
+  // we need to do a groupby on the new batch and then compact with
+  // the existing partial output
+  auto cudf_input = std::dynamic_pointer_cast<cudf_velox::CudfVector>(input);
+  VELOX_CHECK_NOT_NULL(cudf_input);
+
+  computeInterimGroupbyPartial(cudf_input->release());
+}
+
+CudfVectorPtr CudfHashAggregation::doGroupByAggregation(
     std::unique_ptr<cudf::table> tbl,
+    std::vector<std::unique_ptr<Aggregator>>& aggregators,
     rmm::cuda_stream_view stream) {
   auto groupby_key_view = tbl->select(
       groupingKeyInputChannels_.begin(), groupingKeyInputChannels_.end());
@@ -540,7 +595,7 @@ RowVectorPtr CudfHashAggregation::doGroupByAggregation(
                       : cudf::null_policy::INCLUDE);
 
   std::vector<cudf::groupby::aggregation_request> requests;
-  for (auto& aggregator : aggregators_) {
+  for (auto& aggregator : aggregators) {
     aggregator->addGroupbyRequest(tbl->view(), requests);
   }
 
@@ -569,6 +624,16 @@ RowVectorPtr CudfHashAggregation::doGroupByAggregation(
   }
 
   auto num_rows = result_table->num_rows();
+
+  static std::mutex printMutex;
+  {
+    std::lock_guard<std::mutex> lock(printMutex);
+    std::cout << "Plan node id: " << operatorCtx_->planNodeId()
+              << " operator type: " << operatorCtx_->operatorType()
+              << " Driver " << operatorCtx_->driverCtx()->driverId
+              << " num rows before aggregation: " << tbl->num_rows()
+              << " num rows after aggregation: " << num_rows << std::endl;
+  }
 
   return std::make_shared<cudf_velox::CudfVector>(
       pool(), outputType_, num_rows, std::move(result_table), stream);
@@ -611,7 +676,8 @@ RowVectorPtr CudfHashAggregation::getDistinctKeys(
       pool(), outputType_, num_rows, std::move(result), stream);
 }
 
-void CudfHashAggregation::computeInterimGroupby() {
+void CudfHashAggregation::computeInterimGroupbyFinal() {
+#if 0
   // We're going to do a groupby on whatever we have received so far.
   // This is to reduce the amount of memory we have to hold on to.
   auto stream = cudfGlobalStreamPool().get_stream();
@@ -646,15 +712,29 @@ void CudfHashAggregation::computeInterimGroupby() {
   partial_output_ =
       std::dynamic_pointer_cast<cudf_velox::CudfVector>(result)->release();
   stream_ = stream;
+#endif
 }
 
 RowVectorPtr CudfHashAggregation::getOutput() {
   VELOX_NVTX_OPERATOR_FUNC_RANGE();
 
+  if (isPartialOutput_) {
+    if (not noMoreInput_) {
+      return nullptr;
+    }
+    if (!partial_output_ && finished_) {
+      return nullptr;
+    }
+    auto num_rows = partial_output_->num_rows();
+    return std::make_shared<cudf_velox::CudfVector>(
+        pool(), outputType_, num_rows, std::move(partial_output_), stream_);
+  }
+
   if (finished_) {
     return nullptr;
   }
 
+#if 0
   if (!isPartialOutput_) {
     // For final aggs, keep computing groupby using whatever we have received so
     // far.
@@ -662,7 +742,7 @@ RowVectorPtr CudfHashAggregation::getOutput() {
     // have OOM issues.
     // TODO (dm): Ideally this should be done in addInput()
     if (not inputs_.empty()) {
-      computeInterimGroupby();
+      computeInterimGroupbyFinal();
     }
     if (noMoreInput_) {
       finished_ = true;
@@ -673,6 +753,7 @@ RowVectorPtr CudfHashAggregation::getOutput() {
       return nullptr;
     }
   }
+#endif
 
   if (!isPartialOutput_ && !noMoreInput_) {
     // Final aggregation has to wait for all batches to arrive so we cannot
@@ -697,8 +778,17 @@ RowVectorPtr CudfHashAggregation::getOutput() {
 
   VELOX_CHECK_NOT_NULL(tbl);
 
+  static std::mutex printMutex;
+  {
+    std::lock_guard<std::mutex> lock(printMutex);
+    std::cout << "Plan node id: " << operatorCtx_->planNodeId()
+              << " operator type: " << operatorCtx_->operatorType()
+              << " Driver " << operatorCtx_->driverCtx()->driverId
+              << " table size: " << tbl->num_rows() << std::endl;
+  }
+
   if (!isGlobal_) {
-    return doGroupByAggregation(std::move(tbl), stream);
+    return doGroupByAggregation(std::move(tbl), aggregators_, stream);
   } else if (isDistinct_) {
     return getDistinctKeys(std::move(tbl), stream);
   } else {

@@ -93,8 +93,9 @@ class CudfHashAggregation : public exec::Operator, public NvtxHelper {
       std::vector<column_index_t>& groupingKeyInputChannels,
       std::vector<column_index_t>& groupingKeyOutputChannels) const;
 
-  RowVectorPtr doGroupByAggregation(
+  CudfVectorPtr doGroupByAggregation(
       std::unique_ptr<cudf::table> tbl,
+      std::vector<std::unique_ptr<Aggregator>>& aggregators,
       rmm::cuda_stream_view stream);
   RowVectorPtr doGlobalAggregation(
       std::unique_ptr<cudf::table> tbl,
@@ -108,6 +109,7 @@ class CudfHashAggregation : public exec::Operator, public NvtxHelper {
 
   std::shared_ptr<const core::AggregationNode> aggregationNode_;
   std::vector<std::unique_ptr<Aggregator>> aggregators_;
+  std::vector<std::unique_ptr<Aggregator>> final_aggregators_;
 
   // Partial aggregation is the first phase of aggregation. e.g. count(*) when
   // in partial phase will do a count_agg but in the final phase will do a sum
@@ -119,6 +121,8 @@ class CudfHashAggregation : public exec::Operator, public NvtxHelper {
   // aggregations
   const bool isDistinct_;
 
+  const core::AggregationNode::Step step;
+
   bool finished_ = false;
 
   size_t numAggregates_;
@@ -128,7 +132,12 @@ class CudfHashAggregation : public exec::Operator, public NvtxHelper {
 
   // This is for final aggregation to keep reducing the amount of memory it has
   // to hold on to. It will try to
-  void computeInterimGroupby();
+  void computeInterimGroupbyFinal();
+
+  // This is for partial aggregation to keep reducing the amount of memory it
+  // has to hold on to.
+  void computeInterimGroupbyPartial(std::unique_ptr<cudf::table> tbl);
+
   std::unique_ptr<cudf::table> partial_output_;
   rmm::cuda_stream_view stream_;
 };
