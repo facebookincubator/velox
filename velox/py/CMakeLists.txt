@@ -143,3 +143,14 @@ target_include_directories(arrow_module PRIVATE ${PYARROW_INCLUDE_DIR})
 target_link_libraries(
   arrow_module
   PRIVATE ${PYARROW_LIBS})
+
+install(
+  TARGETS
+    arrow_module
+    type
+    file
+    vector
+    plan_builder
+    runner
+    velox
+  LIBRARY DESTINATION pyvelox COMPONENT pyvelox_libraries)
