@@ -16,6 +16,7 @@
 #include "velox/functions/lib/RegistrationHelpers.h"
 #include "velox/functions/prestosql/DateTimeFunctions.h"
 #include "velox/functions/sparksql/DateTimeFunctions.h"
+#include "velox/functions/sparksql/IntervalFunctions.h"
 
 namespace facebook::velox::functions::sparksql {
 
@@ -83,6 +84,16 @@ void registerDatetimeFunctions(const std::string& prefix) {
       {prefix + "make_ym_interval"});
   registerFunction<MakeYMIntervalFunction, IntervalYearMonth, int32_t, int32_t>(
       {prefix + "make_ym_interval"});
+  registerFunction<MakeDTIntervalFunction, IntervalDayTime>(
+        {prefix + "make_dt_interval"});
+  registerFunction<MakeDTIntervalFunction, IntervalDayTime, int32_t>(
+        {prefix + "make_dt_interval"});
+  registerFunction<MakeDTIntervalFunction, IntervalDayTime, int32_t, int32_t>(
+        {prefix + "make_dt_interval"});
+  registerFunction<MakeDTIntervalFunction, IntervalDayTime, int32_t, int32_t, int32_t>(
+        {prefix + "make_dt_interval"});
+  registerFunction<MakeDTIntervalFunction, IntervalDayTime, int32_t, int32_t, int32_t, ShortDecimal<P1,S1>>(
+      {prefix + "make_dt_interval"});
   VELOX_REGISTER_VECTOR_FUNCTION(udf_make_timestamp, prefix + "make_timestamp");
   registerFunction<TimestampToMicrosFunction, int64_t, Timestamp>(
       {prefix + "unix_micros"});

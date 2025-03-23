@@ -163,6 +163,23 @@ These functions support TIMESTAMP and DATE input types.
         SELECT make_ym_interval(2); -- 2-0
         SELECT make_ym_interval(); -- 0-0
 
+.. spark:function:: make_dt_interval([days[, hours[, minutes[, seconds]]]]) -> interval day to second
+
+    Make day-time interval from ``days``, ``hours``, ``minutes`` and ``seconds`` fields.
+    All parameters can be zero, positive or negative.
+    Throws an error when inputs lead to int overflow.
+    The interval is stored internally as microseconds. ::
+
+        SELECT make_dt_interval(1, 2, 30, 0); -- 1 02:30:00.000000
+        SELECT make_dt_interval(1, 0, 0, 0); -- 1 00:00:00.000000
+        SELECT make_dt_interval(-1, 1, 0, 0); -- -0 23:00:00.000000
+        SELECT make_dt_interval(1, 25, 0, 0); -- 2 01:00:00.000000
+        SELECT make_dt_interval(1, 0, 60, 0); -- 1 01:00:00.000000
+        SELECT make_dt_interval(1, 0, 0, 1.5); -- 1 00:00:01.500000
+        SELECT make_dt_interval(1, 0, 0, -1.5); -- 0 23:59:58.500000
+        SELECT make_dt_interval(1); -- 1 00:00:00.000000
+        SELECT make_dt_interval(); -- 0 00:00:00.000000
+
 .. spark:function:: minute(timestamp) -> integer
 
     Returns the minutes of ``timestamp``.::
