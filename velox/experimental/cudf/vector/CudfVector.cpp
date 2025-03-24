@@ -16,35 +16,75 @@
 
 #include "velox/experimental/cudf/vector/CudfVector.h"
 
-#include <cudf/reduction.hpp>
+#include <cudf/null_mask.hpp>
+#include <cudf/strings/strings_column_view.hpp>
 #include <cudf/table/table_view.hpp>
-#include <cudf/transform.hpp>
 
 #include <cmath>
 
 namespace facebook::velox::cudf_velox {
 namespace {
-static int64_t estimate_size(
+
+static std::size_t estimateSize(
+    cudf::column_view const& view,
+    rmm::cuda_stream_view stream);
+
+struct ColumnSizeEstimator {
+  rmm::cuda_stream_view stream_;
+  ColumnSizeEstimator(rmm::cuda_stream_view stream) : stream_(stream) {}
+  // fixed width types
+  template <typename T, std::enable_if_t<cudf::is_fixed_width<T>()>* = nullptr>
+  std::size_t operator()(cudf::column_view const& view) const {
+    using storageT = cudf::device_storage_type_t<T>;
+    auto bytes = view.size() * sizeof(storageT);
+    if (view.nullable()) {
+      bytes += cudf::bitmask_allocation_size_bytes(view.size());
+    }
+    return bytes;
+  }
+  // dictionary, string, list, struct
+  template <
+      typename T,
+      std::enable_if_t<not cudf::is_fixed_width<T>()>* = nullptr>
+  std::size_t operator()(cudf::column_view const& view) const {
+    auto bytes = 0;
+    if constexpr (std::is_same_v<T, cudf::string_view>) {
+      auto const strings_view = cudf::strings_column_view(view);
+      auto const chars_size = strings_view.chars_size(stream_);
+      bytes += chars_size;
+    }
+    auto num_children = view.num_children();
+    for (auto i = 0; i < num_children; ++i) {
+      // recursive call
+      bytes += estimateSize(view.child(i), stream_);
+    }
+    if (view.nullable()) {
+      bytes += cudf::bitmask_allocation_size_bytes(view.size());
+    }
+    return bytes;
+  }
+};
+
+std::size_t estimateSize(
+    cudf::column_view const& view,
+    rmm::cuda_stream_view stream) {
+  return cudf::type_dispatcher(view.type(), ColumnSizeEstimator{stream}, view);
+}
+
+static std::size_t estimateSize(
     cudf::table_view const& view,
     rmm::cuda_stream_view stream) {
-  // Compute the size in bits for each row.
-  auto const row_sizes = cudf::row_bit_count(view, stream);
-  // Accumulate the row sizes to compute a sum.
-  auto const agg = cudf::make_sum_aggregation<cudf::reduce_aggregation>();
-  cudf::data_type sum_dtype{cudf::type_id::INT64};
-  auto const total_size_scalar =
-      cudf::reduce(*row_sizes, *agg, sum_dtype, stream);
-  auto const total_size_in_bits =
-      static_cast<cudf::numeric_scalar<int64_t>*>(total_size_scalar.get())
-          ->value(stream);
-  // Convert the size in bits to the size in bytes.
-  return static_cast<int64_t>(
-      std::ceil(static_cast<double>(total_size_in_bits) / 8));
+  auto bytes = 0;
+  for (auto const& column : view) {
+    bytes += estimateSize(column, stream);
+  }
+  return bytes;
 }
+
 } // namespace
 
 uint64_t CudfVector::estimateFlatSize() const {
-  return estimate_size(table_->view(), stream_);
+  return estimateSize(table_->view(), stream_);
 }
 
 } // namespace facebook::velox::cudf_velox
