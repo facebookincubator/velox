@@ -2004,7 +2004,7 @@ TEST_F(TableScanTest, partitionedTableTimestampKey) {
       {"c0", regularColumn("c0", BIGINT())},
       {"c1", regularColumn("c1", DOUBLE())}};
 
-  TimeStamp ts =
+  Timestamp ts =
       util::fromTimestampString(
           StringView(partitionValue), util::TimestampParseMode::kPrestoCast)
           .thenOrThrow(folly::identity, [&](const Status& status) {
@@ -2013,7 +2013,7 @@ TEST_F(TableScanTest, partitionedTableTimestampKey) {
   // Read timestamp partition value as UTC.
   std::string tsValue = "'" + ts.toString() + "'";
 
-  TimeStamp tsAsLocalTime = ts;
+  Timestamp tsAsLocalTime = ts;
   tsAsLocalTime.toGMT(Timestamp::defaultTimezone());
   // Read timestamp partition value as local time.
   std::string tsValueAsLocal = "'" + tsAsLocalTime.toString() + "'";
@@ -2158,7 +2158,7 @@ TEST_F(TableScanTest, partitionedTableTimestampKey) {
     };
 
     auto expect = [&](bool asLocalTime) {
-      AssertQueryBuilder(planWithSubfilter, duckDbQueryRunner_)
+      AssertQueryBuilder(planWithSubfilter(asLocalTime), duckDbQueryRunner_)
           .connectorSessionProperty(
               kHiveConnectorId,
               connector::hive::HiveConfig::
