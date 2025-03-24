@@ -36,10 +36,6 @@ maintainers = [
   { name = "Meta", email = "velox@fb.com" }
 ]
 dependencies = [
-  "cffi",
-  "typing",
-  "tabulate",
-  "typing-inspect",
   "pyarrow"
 ]
 classifiers = [
