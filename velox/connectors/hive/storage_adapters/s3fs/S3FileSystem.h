@@ -17,9 +17,11 @@
 #pragma once
 
 #include "velox/common/file/FileSystems.h"
-#include "velox/connectors/hive/storage_adapters/s3fs/S3Config.h"
 
-#include <aws/core/auth/AWSCredentialsProvider.h>
+namespace Aws::Auth {
+// Forward-declare the AWSCredentialsProvider class from the AWS SDK.
+class AWSCredentialsProvider;
+} // namespace Aws::Auth
 
 namespace facebook::velox::filesystems {
 
@@ -29,13 +31,15 @@ bool initializeS3(
 
 void finalizeS3();
 
+class S3Config;
+
 using AWSCredentialsProviderFactory =
     std::function<std::shared_ptr<Aws::Auth::AWSCredentialsProvider>(
         const S3Config& config)>;
 
-void registerAWSCredentialsProvider(
-    std::string providerName,
-    AWSCredentialsProviderFactory provider);
+void registerCredentialsProvider(
+    const std::string& providerName,
+    const AWSCredentialsProviderFactory& factory);
 
 /// Implementation of S3 filesystem and file interface.
 /// We provide a registration method for read and write files so the appropriate

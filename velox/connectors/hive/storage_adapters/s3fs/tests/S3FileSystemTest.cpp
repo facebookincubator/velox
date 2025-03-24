@@ -14,11 +14,14 @@
  * limitations under the License.
  */
 
+#include <aws/core/auth/AWSCredentials.h>
+#include <aws/core/auth/AWSCredentialsProvider.h>
+
 #include "velox/common/memory/Memory.h"
+#include "velox/connectors/hive/storage_adapters/s3fs/RegisterS3FileSystem.h"
 #include "velox/connectors/hive/storage_adapters/s3fs/S3WriteFile.h"
 #include "velox/connectors/hive/storage_adapters/s3fs/tests/S3Test.h"
 
-#include <aws/core/auth/AWSCredentialsProvider.h>
 #include <gtest/gtest.h>
 
 namespace facebook::velox::filesystems {
@@ -301,25 +304,22 @@ TEST_F(S3FileSystemTest, invalidConnectionSettings) {
 }
 
 TEST_F(S3FileSystemTest, registerCredentialProviderFactories) {
-  const auto credentialProvider = "my-credential-provider";
-  const auto invalidCredentialProvider = "invalid-credential-provider";
+  const std::string credentialProvider = "my-credential-provider";
+  const std::string invalidCredentialProvider = "invalid-credential-provider";
   registerAWSCredentialsProvider(
       credentialProvider, [](const S3Config& config) {
         return std::make_shared<MyCredentialsProvider>();
       });
 
   auto hiveConfig = minioServer_->hiveConfig(
-      {{"hive.s3.credentials-provider", credentialProvider}});
+      {{"hive.s3.aws-credentials-provider", credentialProvider}});
   ASSERT_NO_THROW(filesystems::S3FileSystem("", hiveConfig));
 
-  // Configure with unregistered credential provider.
+  // Configure with unregistered credential provider will use the default code
+  // path to create the credentials provider based on the configuration.
   hiveConfig = minioServer_->hiveConfig(
-      {{"hive.s3.credentials-provider", invalidCredentialProvider}});
-  VELOX_ASSERT_THROW(
-      filesystems::S3FileSystem({"", hiveConfig}),
-      fmt::format(
-          "CredentialsProviderFactory for '{}' not registered",
-          invalidCredentialProvider));
+      {{"hive.s3.aws-credentials-provider", invalidCredentialProvider}});
+  ASSERT_NO_THROW(filesystems::S3FileSystem("", hiveConfig));
 
   // Register invalid credentials provider name.
   VELOX_ASSERT_THROW(
