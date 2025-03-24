@@ -75,7 +75,7 @@ if(${VELOX_ENABLE_GPU})
   add_subdirectory(external/jitify)
 endif()
 
-if(${VELOX_BUILD_PYTHON_PACKAGE})
+if(${VELOX_BUILD_PYTHON_PACKAGE} AND NOT VELOX_PYTHON_LEGACY_ONLY)
   add_subdirectory(py)
 endif()
 
