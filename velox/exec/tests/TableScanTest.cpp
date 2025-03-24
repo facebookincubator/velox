@@ -2004,19 +2004,19 @@ TEST_F(TableScanTest, partitionedTableTimestampKey) {
       {"c0", regularColumn("c0", BIGINT())},
       {"c1", regularColumn("c1", DOUBLE())}};
 
-  auto sql = [&](const char* sqlTemplate, bool asLocalTime) {
-    auto t =
-        util::fromTimestampString(
-            StringView(partitionValue), util::TimestampParseMode::kPrestoCast)
-            .thenOrThrow(folly::identity, [&](const Status& status) {
-              VELOX_USER_FAIL("{}", status.message());
-            });
-    if (asLocalTime) {
-      t.toGMT(Timestamp::defaultTimezone());
-    }
-    std::string partitionValueStr = "'" + t.toString() + "'";
-    return fmt::format(sqlTemplate, partitionValueStr);
-  };
+  TimeStamp ts =
+      util::fromTimestampString(
+          StringView(partitionValue), util::TimestampParseMode::kPrestoCast)
+          .thenOrThrow(folly::identity, [&](const Status& status) {
+            VELOX_USER_FAIL("{}", status.message());
+          });
+  // Read timestamp partition value as UTC.
+  std::string tsValue = "'" + ts.toString() + "'";
+
+  TimeStamp tsAsLocalTime = ts;
+  tsAsLocalTime.toGMT(Timestamp::defaultTimezone());
+  // Read timestamp partition value as local time.
+  std::string tsValueAsLocal = "'" + tsAsLocalTime.toString() + "'";
 
   {
     auto plan =
@@ -2028,27 +2028,21 @@ TEST_F(TableScanTest, partitionedTableTimestampKey) {
             .assignments(assignments)
             .endTableScan()
             .planNode();
-    const char* sqlTemplate = "SELECT {}, * FROM tmp";
 
-    // Read timestamp partition value as local time.
-    AssertQueryBuilder(plan, duckDbQueryRunner_)
-        .connectorSessionProperty(
-            kHiveConnectorId,
-            connector::hive::HiveConfig::
-                kReadTimestampPartitionValueAsLocalTimeSession,
-            "true")
-        .splits({split})
-        .assertResults(sql(sqlTemplate, true));
+    auto expect = [&](bool asLocalTime) {
+      AssertQueryBuilder(plan, duckDbQueryRunner_)
+          .connectorSessionProperty(
+              kHiveConnectorId,
+              connector::hive::HiveConfig::
+                  kReadTimestampPartitionValueAsLocalTimeSession,
+              "true")
+          .splits({split})
+          .assertResults(fmt::format(
+              "SELECT {}, * FROM tmp", asLocalTime ? tsValueAsLocal : tsValue));
+    };
 
-    // Read timestamp partition value as UTC.
-    AssertQueryBuilder(plan, duckDbQueryRunner_)
-        .connectorSessionProperty(
-            kHiveConnectorId,
-            connector::hive::HiveConfig::
-                kReadTimestampPartitionValueAsLocalTimeSession,
-            "false")
-        .splits({split})
-        .assertResults(sql(sqlTemplate, false));
+    expect(true);
+    expect(false);
   }
 
   {
@@ -2061,27 +2055,20 @@ TEST_F(TableScanTest, partitionedTableTimestampKey) {
             .assignments(assignments)
             .endTableScan()
             .planNode();
-    const char* sqlTemplate = "SELECT c0, {}, c1 FROM tmp";
 
-    // Read timestamp partition value as local time.
-    AssertQueryBuilder(plan, duckDbQueryRunner_)
-        .connectorSessionProperty(
-            kHiveConnectorId,
-            connector::hive::HiveConfig::
-                kReadTimestampPartitionValueAsLocalTimeSession,
-            "true")
-        .splits({split})
-        .assertResults(sql(sqlTemplate, true));
-
-    // Read timestamp partition value as UTC.
-    AssertQueryBuilder(plan, duckDbQueryRunner_)
-        .connectorSessionProperty(
-            kHiveConnectorId,
-            connector::hive::HiveConfig::
-                kReadTimestampPartitionValueAsLocalTimeSession,
-            "false")
-        .splits({split})
-        .assertResults(sql(sqlTemplate, false));
+    auto expect = [&](bool asLocalTime) {
+      AssertQueryBuilder(plan, duckDbQueryRunner_)
+          .connectorSessionProperty(
+              kHiveConnectorId,
+              connector::hive::HiveConfig::
+                  kReadTimestampPartitionValueAsLocalTimeSession,
+              "true")
+          .splits({split})
+          .assertResults(fmt::format(
+              "SELECT {}, * FROM tmp", asLocalTime ? tsValueAsLocal : tsValue));
+    };
+    expect(true);
+    expect(false);
   }
 
   {
@@ -2094,26 +2081,21 @@ TEST_F(TableScanTest, partitionedTableTimestampKey) {
             .assignments(assignments)
             .endTableScan()
             .planNode();
-    const char* sqlTemplate = "SELECT c0, c1, {} FROM tmp";
-    // Read timestamp partition value as local time.
-    AssertQueryBuilder(plan, duckDbQueryRunner_)
-        .connectorSessionProperty(
-            kHiveConnectorId,
-            connector::hive::HiveConfig::
-                kReadTimestampPartitionValueAsLocalTimeSession,
-            "true")
-        .splits({split})
-        .assertResults(sql(sqlTemplate, true));
 
-    // Read timestamp partition value as UTC.
-    AssertQueryBuilder(plan, duckDbQueryRunner_)
-        .connectorSessionProperty(
-            kHiveConnectorId,
-            connector::hive::HiveConfig::
-                kReadTimestampPartitionValueAsLocalTimeSession,
-            "false")
-        .splits({split})
-        .assertResults(sql(sqlTemplate, false));
+    auto expect = [&](bool asLocalTime) {
+      AssertQueryBuilder(plan, duckDbQueryRunner_)
+          .connectorSessionProperty(
+              kHiveConnectorId,
+              connector::hive::HiveConfig::
+                  kReadTimestampPartitionValueAsLocalTimeSession,
+              "true")
+          .splits({split})
+          .assertResults(fmt::format(
+              "SELECT c0, c1, {} FROM tmp",
+              asLocalTime ? tsValueAsLocal : tsValue));
+    };
+    expect(true);
+    expect(false);
   }
 
   {
@@ -2126,31 +2108,25 @@ TEST_F(TableScanTest, partitionedTableTimestampKey) {
             .assignments({{"pkey", partitionKey("pkey", partitionType)}})
             .endTableScan()
             .planNode();
-    const char* sqlTemplate = "SELECT {} FROM tmp";
-    // Read timestamp partition value as local time.
-    AssertQueryBuilder(plan, duckDbQueryRunner_)
-        .connectorSessionProperty(
-            kHiveConnectorId,
-            connector::hive::HiveConfig::
-                kReadTimestampPartitionValueAsLocalTimeSession,
-            "true")
-        .splits({split})
-        .assertResults(sql(sqlTemplate, true));
 
-    // Read timestamp partition value as UTC.
-    AssertQueryBuilder(plan, duckDbQueryRunner_)
-        .connectorSessionProperty(
-            kHiveConnectorId,
-            connector::hive::HiveConfig::
-                kReadTimestampPartitionValueAsLocalTimeSession,
-            "false")
-        .splits({split})
-        .assertResults(sql(sqlTemplate, false));
+    auto expect = [&](bool asLocalTime) {
+      AssertQueryBuilder(plan, duckDbQueryRunner_)
+          .connectorSessionProperty(
+              kHiveConnectorId,
+              connector::hive::HiveConfig::
+                  kReadTimestampPartitionValueAsLocalTimeSession,
+              "true")
+          .splits({split})
+          .assertResults(fmt::format(
+              "SELECT {} FROM tmp", asLocalTime ? tsValueAsLocal : tsValue));
+    };
+    expect(true);
+    expect(false);
   }
 
   // Test partition filter on TIMESTAMP column.
   {
-    auto planNodeWithSubfilter = [&](bool asLocalTime) {
+    auto planWithSubfilter = [&](bool asLocalTime) {
       auto outputType =
           ROW({"pkey", "c0", "c1"}, {TIMESTAMP(), BIGINT(), DOUBLE()});
       common::SubfieldFilters filters;
@@ -2181,25 +2157,19 @@ TEST_F(TableScanTest, partitionedTableTimestampKey) {
           .planNode();
     };
 
-    // Read timestamp partition value as local time.
-    AssertQueryBuilder(planNodeWithSubfilter(true), duckDbQueryRunner_)
-        .connectorSessionProperty(
-            kHiveConnectorId,
-            connector::hive::HiveConfig::
-                kReadTimestampPartitionValueAsLocalTimeSession,
-            "true")
-        .splits({split})
-        .assertResults(sql("SELECT {}, * FROM tmp", true));
-
-    // Read timestamp partition value as UTC.
-    AssertQueryBuilder(planNodeWithSubfilter(false), duckDbQueryRunner_)
-        .connectorSessionProperty(
-            kHiveConnectorId,
-            connector::hive::HiveConfig::
-                kReadTimestampPartitionValueAsLocalTimeSession,
-            "false")
-        .splits({split})
-        .assertResults(sql("SELECT {}, * FROM tmp", false));
+    auto expect = [&](bool asLocalTime) {
+      AssertQueryBuilder(planWithSubfilter, duckDbQueryRunner_)
+          .connectorSessionProperty(
+              kHiveConnectorId,
+              connector::hive::HiveConfig::
+                  kReadTimestampPartitionValueAsLocalTimeSession,
+              "true")
+          .splits({split})
+          .assertResults(fmt::format(
+              "SELECT {}, * FROM tmp", asLocalTime ? tsValueAsLocal : tsValue));
+    };
+    expect(true);
+    expect(false);
   }
 }
 
