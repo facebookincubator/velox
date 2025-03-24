@@ -760,9 +760,9 @@ PlanBuilder& PlanBuilder::finalAggregation() {
   if (!exec::isRawInput(aggNode->step())) {
     // If aggregation node is not the partial aggregation, keep looking again.
     aggNode = findPartialAggregation(aggNode->sources()[0].get());
+    VELOX_CHECK_NOT_NULL(aggNode);
   }
 
-  VELOX_CHECK_NOT_NULL(aggNode);
   VELOX_CHECK(exec::isRawInput(aggNode->step()));
   VELOX_CHECK(exec::isPartialOutput(aggNode->step()));
 
