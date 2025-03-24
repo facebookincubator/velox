@@ -271,7 +271,6 @@ core::PlanNodePtr PlanBuilder::TableScanBuilder::build(core::PlanNodeId id) {
               cudf_velox::exec::test::kParquetConnectorId,
               tableName_,
               /*filterPushdownEnabled*/ false,
-              remainingFilterExpr,
               dataColumns_);
     } else {
       tableHandle_ = std::make_shared<HiveTableHandle>(

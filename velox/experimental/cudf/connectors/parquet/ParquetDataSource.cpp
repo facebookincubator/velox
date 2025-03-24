@@ -52,8 +52,7 @@ ParquetDataSource::ParquetDataSource(
       executor_(executor),
       connectorQueryCtx_(connectorQueryCtx),
       pool_(connectorQueryCtx->memoryPool()),
-      outputType_(outputType),
-      expressionEvaluator_(connectorQueryCtx->expressionEvaluator()) {
+      outputType_(outputType) {
   // Set up column projection if needed
   auto readColumnTypes = outputType_->children();
   for (const auto& outputName : outputType_->names()) {
@@ -74,14 +73,6 @@ ParquetDataSource::ParquetDataSource(
 
   // Create empty IOStats for later use
   ioStats_ = std::make_shared<io::IoStatistics>();
-
-  // Create remaining filter
-  auto remainingFilter = tableHandle_->remainingFilter();
-  if (remainingFilter) {
-    remainingFilterExprSet_ = expressionEvaluator_->compile(remainingFilter);
-    // auto& remainingFilterExpr = remainingFilterExprSet_->expr(0);
-    // Get column names and subfields from remaining filter? required?
-  }
 }
 
 std::optional<RowVectorPtr> ParquetDataSource::next(
