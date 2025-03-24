@@ -113,7 +113,7 @@ class S3Config {
             {Keys::kUseProxyFromEnv,
              std::make_pair("use-proxy-from-env", "false")},
             {Keys::kCredentialsProvider,
-             std::make_pair("credentials-provider", std::nullopt)},
+             std::make_pair("aws-credentials-provider", std::nullopt)},
         };
     return config;
   }
