@@ -45,11 +45,9 @@ find_library(
 
 set(pyarrow_LIBARROW ${_libarrow})
 set(pyarrow_LIBARROW_PYTHON ${_libarrow_py})
-set(pyarrow_LIBRARIES ${pyarrow_LIBARROW} ${pyarrow_LIBARROW_PYTHON})
 set(pyarrow_INCLUDE_DIR ${_pyarrow_include_dir})
 
 mark_as_advanced(_libarrow _libarrow_py _pyarrow_include_dir _pyarrow_lib_dir)
-
 
 include(FindPackageHandleStandardArgs)
 find_package_handle_standard_args(
@@ -62,9 +60,10 @@ if(pyarrow_FOUND)
     set_target_properties(
       pyarrow::dev
       PROPERTIES
+        IMPORTED_LINK_INTERFACE_LANGUAGES "CXX"
+        IMPORTED_LOCATION "${pyarrow_LIBARROW_PYTHON}"
         INTERFACE_INCLUDE_DIRECTORIES "${pyarrow_INCLUDE_DIR}"
-        IMPORTED_LOCATION "${pyarrow_LIBRARIES}"
-        IMPORTED_LINK_INTERFACE_LANGUAGES "CXX")
+        INTERFACE_LINK_LIBRARIES "${pyarrow_LIBARROW}")
 
   endif()
 endif()
