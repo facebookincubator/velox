@@ -40,6 +40,7 @@ extern void registerDataSizeFunctions(const std::string& prefix);
 extern void registerMapAllowingDuplicates(
     const std::string& name,
     const std::string& prefix);
+extern void registerGeometryFunctions(const std::string& prefix);
 extern void registerGeospatialFunctions(const std::string& prefix);
 extern void registerInternalArrayFunctions();
 
@@ -82,6 +83,10 @@ void registerIntegerFunctions(const std::string& prefix) {
   functions::registerIntegerFunctions(prefix);
 }
 
+void registerGeometryFunctions(const std::string& prefix) {
+  functions::registerGeometryFunctions(prefix);
+}
+
 void registerGeospatialFunctions(const std::string& prefix) {
   functions::registerGeospatialFunctions(prefix);
 }
@@ -120,6 +125,7 @@ void registerAllScalarFunctions(const std::string& prefix) {
   registerHyperLogFunctions(prefix);
   registerTDigestFunctions(prefix);
   registerIntegerFunctions(prefix);
+  registerGeometryFunctions(prefix);
   registerGeospatialFunctions(prefix);
   registerGeneralFunctions(prefix);
   registerDateTimeFunctions(prefix);
