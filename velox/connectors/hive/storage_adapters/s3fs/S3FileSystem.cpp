@@ -612,8 +612,13 @@ void registerCredentialsProvider(
     const AWSCredentialsProviderFactory& factory) {
   VELOX_CHECK(
       !providerName.empty(), "CredentialsProviderFactory name cannot be empty");
-  credentialsProviderFactories().withWLock(
-      [&](auto& factories) { factories.insert({providerName, factory}); });
+  credentialsProviderFactories().withWLock([&](auto& factories) {
+    VELOX_CHECK(
+        factories.find(providerName) == factories.end(),
+        "CredentialsProviderFactory {} already registered",
+        providerName);
+    factories.insert({providerName, factory});
+  });
 }
 
 class S3FileSystem::Impl {
