@@ -827,6 +827,7 @@ jobs:
                 --duration_sec $DURATION \
                 --minloglevel=0 \
                 --stderrthreshold=2 \
+                --req_timeout_ms 50000 \
                 --log_dir=/tmp/topn_row_fuzzer_repro/logs \
                 --presto_url=http://127.0.0.1:8080 \
             && echo -e "\n\TopN Row number fuzzer run finished successfully."
