@@ -762,6 +762,7 @@ PlanBuilder& PlanBuilder::finalAggregation() {
     aggNode = findPartialAggregation(aggNode->sources()[0].get());
   }
 
+  VELOX_CHECK_NOT_NULL(aggNode);
   VELOX_CHECK(exec::isRawInput(aggNode->step()));
   VELOX_CHECK(exec::isPartialOutput(aggNode->step()));
 
