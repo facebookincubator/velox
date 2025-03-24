@@ -25,13 +25,13 @@
 #include "velox/exec/TableWriter.h"
 #include "velox/exec/WindowFunction.h"
 #include "velox/exec/tests/utils/TempDirectoryPath.h"
+#include "velox/experimental/cudf/exec/Utilities.h"
 #include "velox/expression/Expr.h"
 #include "velox/expression/ExprToSubfieldFilter.h"
 #include "velox/expression/FunctionCallToSpecialForm.h"
 #include "velox/expression/SignatureBinder.h"
 #include "velox/parse/Expressions.h"
 #include "velox/parse/TypeResolver.h"
-#include "velox/experimental/cudf/exec/Utilities.h"
 
 #include "velox/experimental/cudf/connectors/parquet/ParquetTableHandle.h"
 #include "velox/experimental/cudf/exec/ToCudf.h"
@@ -262,6 +262,8 @@ core::PlanNodePtr PlanBuilder::TableScanBuilder::build(core::PlanNodeId id) {
   if (!tableHandle_) {
     // if cudfIsRegistered, then use cudftableScan tableHandle_ here.
     if (facebook::velox::cudf_velox::cudfIsRegistered() &&
+        facebook::velox::connector::getAllConnectors().count(
+            cudf_velox::exec::test::kParquetConnectorId) > 0 &&
         facebook::velox::cudf_velox::isEnabledcudfTableScan()) {
       // TODO error out if it has filters.
       tableHandle_ =

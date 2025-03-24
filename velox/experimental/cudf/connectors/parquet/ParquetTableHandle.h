@@ -20,9 +20,9 @@
 #include <vector>
 
 #include "velox/connectors/Connector.h"
-#include "velox/type/Type.h"
 #include "velox/core/Expressions.h"
 #include "velox/expression/Expr.h"
+#include "velox/type/Type.h"
 
 #include <cudf/types.hpp>
 

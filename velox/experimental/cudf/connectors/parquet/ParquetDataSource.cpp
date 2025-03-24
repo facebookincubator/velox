@@ -96,9 +96,7 @@ std::optional<RowVectorPtr> ParquetDataSource::next(
     return nullptr;
   }
 
-  // Vector to store read tables
-  auto readTables = std::vector<std::unique_ptr<cudf::table>>{};
-  // Read chunks until num_rows > size or no more chunks left.
+  // Read a table chunk
   if (splitReader_->has_next()) {
     auto [table, metadata] = splitReader_->read_chunk();
     cudfTable_ = std::move(table);
@@ -110,18 +108,16 @@ std::optional<RowVectorPtr> ParquetDataSource::next(
     }
   }
 
-  // cudfTable_ = concatenateTables(std::move(readTables));
   currentCudfTableView_ = cudfTable_->view();
 
   // Output RowVectorPtr
-  auto stream = cudfGlobalStreamPool().get_stream();
   auto sz = cudfTable_->num_rows();
   auto output = cudfIsRegistered()
       ? std::make_shared<CudfVector>(
-            pool_, outputType_, sz, std::move(cudfTable_), stream)
+            pool_, outputType_, sz, std::move(cudfTable_), stream_)
       : with_arrow::to_velox_column(
-            currentCudfTableView_, pool_, columnNames, stream);
-  stream.synchronize();
+            currentCudfTableView_, pool_, columnNames, stream_);
+  stream_.synchronize();
 
   // Reset internal tables
   resetCudfTableAndView();
@@ -190,6 +186,7 @@ ParquetDataSource::createSplitReader() {
   if (readColumnNames_.size()) {
     readerOptions.set_columns(readColumnNames_);
   }
+  stream_ = cudfGlobalStreamPool().get_stream();
 
   // Create a parquet reader
   return std::make_unique<cudf::io::chunked_parquet_reader>(

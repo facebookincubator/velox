@@ -102,7 +102,11 @@ class ParquetConnectorTestBase
       const RowTypePtr& dataColumns = nullptr,
       bool filterPushdownEnabled = false) {
     return std::make_shared<connector::parquet::ParquetTableHandle>(
-        kParquetConnectorId, tableName, filterPushdownEnabled, nullptr, dataColumns);
+        kParquetConnectorId,
+        tableName,
+        filterPushdownEnabled,
+        nullptr,
+        dataColumns);
   }
 
   /// @param name Column name.

@@ -100,6 +100,7 @@ class ParquetDataSource : public DataSource {
   // cuDF Parquet reader stuff.
   cudf::io::parquet_reader_options readerOptions_;
   std::unique_ptr<cudf::io::chunked_parquet_reader> splitReader_;
+  rmm::cuda_stream_view stream_;
 
   // cuDF Table not fully converted and returned to `RowVectorPtr` in the last
   // `next()` call.
