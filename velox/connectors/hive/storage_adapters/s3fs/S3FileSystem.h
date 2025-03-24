@@ -19,6 +19,8 @@
 #include "velox/common/file/FileSystems.h"
 #include "velox/connectors/hive/storage_adapters/s3fs/S3Config.h"
 
+#include <aws/core/auth/AWSCredentialsProvider.h>
+
 namespace facebook::velox::filesystems {
 
 bool initializeS3(
@@ -26,6 +28,14 @@ bool initializeS3(
     std::optional<std::string_view> logLocation = std::nullopt);
 
 void finalizeS3();
+
+using AWSCredentialsProviderFactory =
+    std::function<std::shared_ptr<Aws::Auth::AWSCredentialsProvider>(
+        const S3Config& config)>;
+
+void registerAWSCredentialsProvider(
+    std::string providerName,
+    AWSCredentialsProviderFactory provider);
 
 /// Implementation of S3 filesystem and file interface.
 /// We provide a registration method for read and write files so the appropriate
