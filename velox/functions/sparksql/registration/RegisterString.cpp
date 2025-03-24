@@ -15,6 +15,7 @@
  */
 #include "velox/expression/SpecialFormRegistry.h"
 #include "velox/functions/lib/Re2Functions.h"
+#include "velox/functions/lib/RegistrationHelpers.h"
 #include "velox/functions/prestosql/StringFunctions.h"
 #include "velox/functions/prestosql/URLFunctions.h"
 #include "velox/functions/sparksql/ConcatWs.h"
@@ -22,6 +23,7 @@
 #include "velox/functions/sparksql/Split.h"
 #include "velox/functions/sparksql/String.h"
 #include "velox/functions/sparksql/StringToMap.h"
+#include "velox/functions/sparksql/ToPrettyString.h"
 
 namespace facebook::velox::functions {
 void registerSparkStringFunctions(const std::string& prefix) {
@@ -32,6 +34,28 @@ void registerSparkStringFunctions(const std::string& prefix) {
 }
 
 namespace sparksql {
+
+void registerToPrettyStringFunctions(const std::string& prefix) {
+  const std::vector<std::string> aliases = {prefix + "to_pretty_string"};
+  registerUnaryIntegralWithTReturn<ToPrettyStringFunction, Varchar>(aliases);
+  registerUnaryFloatingPointWithReturn<ToPrettyStringFunction, Varchar>(
+      aliases);
+  registerFunction<ToPrettyStringFunction, Varchar, bool>(aliases);
+  registerFunction<ToPrettyStringFunction, Varchar, Varchar>(aliases);
+  registerFunction<ToPrettyStringVarbinaryFunction, Varchar, Varbinary>(
+      aliases);
+  registerFunction<ToPrettyStringFunction, Varchar, Date>(aliases);
+  registerFunction<ToPrettyStringTimestampFunction, Varchar, Timestamp>(
+      aliases);
+  registerFunction<ToPrettyStringFunction, Varchar, UnknownValue>(aliases);
+  registerFunction<
+      ToPrettyStringDecimalFunction,
+      Varchar,
+      ShortDecimal<P1, S1>>(aliases);
+  registerFunction<ToPrettyStringDecimalFunction, Varchar, LongDecimal<P1, S1>>(
+      aliases);
+}
+
 void registerStringFunctions(const std::string& prefix) {
   registerSparkStringFunctions(prefix);
   registerFunction<StartsWithFunction, bool, Varchar, Varchar>(
@@ -147,6 +171,8 @@ void registerStringFunctions(const std::string& prefix) {
   registerFunctionCallToSpecialForm(
       ConcatWsCallToSpecialForm::kConcatWs,
       std::make_unique<ConcatWsCallToSpecialForm>());
+
+  registerToPrettyStringFunctions(prefix);
 }
 } // namespace sparksql
 } // namespace facebook::velox::functions
