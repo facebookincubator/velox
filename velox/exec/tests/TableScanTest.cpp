@@ -2065,7 +2065,8 @@ TEST_F(TableScanTest, partitionedTableTimestampKey) {
               "true")
           .splits({split})
           .assertResults(fmt::format(
-              "SELECT {}, * FROM tmp", asLocalTime ? tsValueAsLocal : tsValue));
+              "SELECT c0, {}, c1 FROM tmp",
+              asLocalTime ? tsValueAsLocal : tsValue));
     };
     expect(true);
     expect(false);
