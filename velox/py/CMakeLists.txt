@@ -100,10 +100,17 @@ find_package(pyarrow)
 # 'arrow' target already exists
 pybind11_add_module(arrow_module MODULE arrow/arrow.cpp)
 
+if(APPLE)
+  set(_origin @loader_path)
+else()
+  set(_origin "\$ORIGIN")
+endif()
+
 set_target_properties(
   arrow_module
   PROPERTIES OUTPUT_NAME "arrow")
 
+# Set the rpath so linker looks within pyvelox package for libs
 set_target_properties(
   arrow_module
   type
@@ -112,11 +119,13 @@ set_target_properties(
   plan_builder
   runner
   legacy
-  PROPERTIES INSTALL_RPATH "\$ORIGIN" INSTALL_RPATH_USE_LINK_PATH TRUE)
+  PROPERTIES INSTALL_RPATH "${_origin}" INSTALL_RPATH_USE_LINK_PATH TRUE)
 
+# This ensures the dynamic linker can find libarrow* dependencies at runtime
+# from the installed pyarrow package without requiring LD_LIBRARY_PATH to be set
 set_property(
   TARGET arrow_module
-  PROPERTY INSTALL_RPATH "\$ORIGIN/../pyarrow"
+  PROPERTY INSTALL_RPATH "${_origin}/../pyarrow"
   APPEND)
 
 target_link_libraries(
