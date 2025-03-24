@@ -144,5 +144,29 @@ TYPED_TEST(AtomicCompareExchangeTest, compare_exchange) {
   ASSERT_EQ(*was_changed, true);
 }
 
+inline __device__ AtomicMutex<MemoryScope::kDevice>* asDeviceAtomicMutex(
+    int* ptr) {
+  return reinterpret_cast<AtomicMutex<MemoryScope::kDevice>*>(ptr);
+}
+
+__global__ void mutexKernel(int* mtx, int* out) {
+  asDeviceAtomicMutex(mtx)->acquire();
+  *out += 1;
+  asDeviceAtomicMutex(mtx)->release();
+}
+
+TEST(AtomicMutexTest, basic) {
+  auto* allocator = getAllocator(getDevice());
+  auto mutex = allocator->allocate<int>();
+  *mutex = 1;
+  auto output = allocator->allocate<int>();
+  *output = 0;
+  mutexKernel<<<4, 8>>>(mutex.get(), output.get());
+  ASSERT_EQ(cudaGetLastError(), cudaSuccess);
+  ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
+  ASSERT_EQ(*mutex, 1);
+  ASSERT_EQ(*output, 32);
+}
+
 } // namespace
 } // namespace facebook::velox::wave
