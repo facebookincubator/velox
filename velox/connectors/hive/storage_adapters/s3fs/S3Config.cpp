@@ -21,24 +21,20 @@
 
 namespace facebook::velox::filesystems {
 
-std::string S3Config::identity(
+std::string S3Config::cacheKey(
     std::string_view bucket,
     std::shared_ptr<const config::ConfigBase> config) {
   auto bucketEndpoint = bucketConfigKey(Keys::kEndpoint, bucket);
   if (config->valueExists(bucketEndpoint)) {
-    auto value = config->get<std::string>(bucketEndpoint);
-    if (value.has_value()) {
-      return value.value();
-    }
+    return fmt::format(
+        "{}-{}", config->get<std::string>(bucketEndpoint).value(), bucket);
   }
   auto baseEndpoint = baseConfigKey(Keys::kEndpoint);
   if (config->valueExists(baseEndpoint)) {
-    auto value = config->get<std::string>(baseEndpoint);
-    if (value.has_value()) {
-      return value.value();
-    }
+    return fmt::format(
+        "{}-{}", config->get<std::string>(baseEndpoint).value(), bucket);
   }
-  return kDefaultS3Identity;
+  return std::string(bucket);
 }
 
 S3Config::S3Config(
@@ -73,15 +69,18 @@ S3Config::S3Config(
       }
     }
   }
+  payloadSigningPolicy_ =
+      properties->get<std::string>(kS3PayloadSigningPolicy, "Never");
 }
 
 std::optional<std::string> S3Config::endpointRegion() const {
   auto region = config_.find(Keys::kEndpointRegion)->second;
   if (!region.has_value()) {
-    // If region is not set, try inferring from the endpoint.
+    // If region is not set, try inferring from the endpoint value for AWS
+    // endpoints.
     auto endpointValue = endpoint();
     if (endpointValue.has_value()) {
-      region = parseStandardRegionName(endpointValue.value());
+      region = parseAWSStandardRegionName(endpointValue.value());
     }
   }
   return region;

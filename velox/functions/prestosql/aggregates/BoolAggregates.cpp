@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+#include "velox/functions/prestosql/aggregates/BoolAggregates.h"
 #include "velox/exec/Aggregate.h"
 #include "velox/expression/FunctionSignature.h"
 #include "velox/functions/lib/aggregates/SimpleNumericAggregate.h"
@@ -209,7 +210,7 @@ exec::AggregateRegistrationResult registerBool(
             inputType->kindName());
         return std::make_unique<T>();
       },
-      {false /*orderSensitive*/},
+      {false /*orderSensitive*/, false /*companionFunction*/},
       withCompanionFunctions,
       overwrite);
 }

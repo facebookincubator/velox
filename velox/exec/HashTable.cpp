@@ -54,8 +54,10 @@ HashTable<ignoreNullKeys>::HashTable(
     uint32_t minTableSizeForParallelJoinBuild,
     memory::MemoryPool* pool)
     : BaseHashTable(std::move(hashers)),
+      pool_(pool),
       minTableSizeForParallelJoinBuild_(minTableSizeForParallelJoinBuild),
-      isJoinBuild_(isJoinBuild) {
+      isJoinBuild_(isJoinBuild),
+      buildPartitionBounds_(raw_vector<PartitionBoundIndexType>(pool)) {
   std::vector<TypePtr> keys;
   for (auto& hasher : hashers_) {
     keys.push_back(hasher->type());
@@ -1818,6 +1820,21 @@ inline uint64_t HashTable<ignoreNullKeys>::joinProjectedVarColumnsSize(
 }
 
 template <bool ignoreNullKeys>
+inline uint64_t HashTable<ignoreNullKeys>::joinProjectedVarColumnsSize(
+    const std::vector<vector_size_t>& columns,
+    NextRowVector*& rows) const {
+  uint64_t totalBytes{0};
+  for (const auto& column : columns) {
+    if (!rows_->columnTypes()[column]->isFixedWidth()) {
+      for (const auto* row : *rows) {
+        totalBytes += rows_->variableSizeAt(row, column);
+      }
+    }
+  }
+  return totalBytes;
+}
+
+template <bool ignoreNullKeys>
 int32_t HashTable<ignoreNullKeys>::listJoinResults(
     JoinResultIterator& iter,
     bool includeMisses,
@@ -1825,7 +1842,7 @@ int32_t HashTable<ignoreNullKeys>::listJoinResults(
     folly::Range<char**> hits,
     uint64_t maxBytes) {
   VELOX_CHECK_LE(inputRows.size(), hits.size());
-
+  iter.outputBatchBytes = 0;
   if (iter.estimatedRowSize.has_value() && !hasDuplicates_) {
     // When there is no duplicates, and row size is estimable, we are able to
     // go through fast path.
@@ -1835,7 +1852,6 @@ int32_t HashTable<ignoreNullKeys>::listJoinResults(
 
   size_t numOut = 0;
   auto maxOut = inputRows.size();
-  uint64_t totalBytes{0};
   while (iter.lastRowIndex < iter.rows->size()) {
     auto row = (*iter.rows)[iter.lastRowIndex];
     auto hit = (*iter.hits)[row]; // NOLINT
@@ -1858,7 +1874,7 @@ int32_t HashTable<ignoreNullKeys>::listJoinResults(
       hits[numOut] = hit;
       numOut++;
       iter.lastRowIndex++;
-      totalBytes += iter.estimatedRowSize.has_value()
+      iter.outputBatchBytes += iter.estimatedRowSize.has_value()
           ? iter.estimatedRowSize.value()
           : (joinProjectedVarColumnsSize(iter.varSizeListColumns, hit) +
              iter.fixedSizeListColumnsSizeSum);
@@ -1874,21 +1890,20 @@ int32_t HashTable<ignoreNullKeys>::listJoinResults(
       iter.lastDuplicateRowIndex += num;
       numOut += num;
       if (iter.estimatedRowSize.has_value()) {
-        totalBytes += iter.estimatedRowSize.value() * numRows;
+        iter.outputBatchBytes += iter.estimatedRowSize.value() * numRows;
       } else {
-        for (const auto* dupRow : *rows) {
-          totalBytes +=
-              joinProjectedVarColumnsSize(iter.varSizeListColumns, dupRow) +
-              iter.fixedSizeListColumnsSizeSum;
-        }
-        totalBytes += (iter.fixedSizeListColumnsSizeSum * numRows);
+        iter.outputBatchBytes +=
+            joinProjectedVarColumnsSize(iter.varSizeListColumns, rows);
+        iter.outputBatchBytes +=
+            (iter.fixedSizeListColumnsSizeSum * rows->size());
+        iter.outputBatchBytes += (iter.fixedSizeListColumnsSizeSum * numRows);
       }
       if (iter.lastDuplicateRowIndex >= numRows) {
         iter.lastDuplicateRowIndex = 0;
         iter.lastRowIndex++;
       }
     }
-    if (numOut >= maxOut || totalBytes >= maxBytes) {
+    if (numOut >= maxOut || iter.outputBatchBytes >= maxBytes) {
       return numOut;
     }
   }
@@ -1952,6 +1967,7 @@ int32_t HashTable<ignoreNullKeys>::listJoinResultsFastPath(
   }
 
   iter.lastRowIndex = i;
+  iter.outputBatchBytes += numOut * iter.estimatedRowSize.value();
   return numOut;
 }
 
@@ -2020,11 +2036,14 @@ template <>
 int32_t HashTable<false>::listNullKeyRows(
     NullKeyRowsIterator* iter,
     int32_t maxRows,
-    char** rows) {
+    char** rows,
+    const std::vector<std::unique_ptr<VectorHasher>>& hashers) {
   if (!iter->initialized) {
     VELOX_CHECK_GT(nextOffset_, 0);
+    // Null-aware joins allow only one join key.
     VELOX_CHECK_EQ(hashers_.size(), 1);
-    HashLookup lookup(hashers_);
+    VELOX_CHECK_EQ(hashers_.size(), hashers.size());
+    HashLookup lookup(hashers, pool_);
     if (hashMode_ == HashMode::kHash) {
       lookup.hashes.push_back(VectorHasher::kNullHash);
     } else {
@@ -2062,8 +2081,11 @@ int32_t HashTable<false>::listNullKeyRows(
 }
 
 template <>
-int32_t
-HashTable<true>::listNullKeyRows(NullKeyRowsIterator*, int32_t, char**) {
+int32_t HashTable<true>::listNullKeyRows(
+    NullKeyRowsIterator*,
+    int32_t,
+    char**,
+    const std::vector<std::unique_ptr<VectorHasher>>&) {
   VELOX_UNREACHABLE();
 }
 

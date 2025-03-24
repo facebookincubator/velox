@@ -21,14 +21,13 @@
 #include <stdlib.h>
 #include <cstdint>
 #include <cstring>
-#include <sstream>
-#include <string>
 #include <string_view>
 #include <vector>
 #include "folly/CPortability.h"
 #include "folly/Likely.h"
 #include "velox/common/base/Exceptions.h"
 #include "velox/external/md5/md5.h"
+#include "velox/functions/lib/Utf8Utils.h"
 #include "velox/functions/lib/string/StringCore.h"
 #include "velox/type/StringView.h"
 
@@ -62,20 +61,6 @@ FOLLY_ALWAYS_INLINE bool lower(TOutString& output, const TInString& input) {
         lowerUnicode(output.data(), output.size(), input.data(), input.size());
     output.resize(size);
   }
-  return true;
-}
-
-/// Inplace ascii lower
-template <typename T>
-FOLLY_ALWAYS_INLINE bool lowerAsciiInPlace(T& str) {
-  lowerAscii(str.data(), str.data(), str.size());
-  return true;
-}
-
-/// Inplace ascii upper
-template <typename T>
-FOLLY_ALWAYS_INLINE bool upperAsciiInPlace(T& str) {
-  upperAscii(str.data(), str.data(), str.size());
   return true;
 }
 
@@ -431,23 +416,50 @@ FOLLY_ALWAYS_INLINE int endsWithUnicodeWhiteSpace(
   return -1;
 }
 
-template <typename TOutString, typename TInString>
+template <bool isAscii, typename TOutString, typename TInString>
 FOLLY_ALWAYS_INLINE bool splitPart(
     TOutString& output,
     const TInString& input,
     const TInString& delimiter,
     const int64_t& index) {
+  VELOX_USER_CHECK_GT(index, 0, "Index must be greater than zero");
+
   std::string_view delim = std::string_view(delimiter.data(), delimiter.size());
   std::string_view inputSv = std::string_view(input.data(), input.size());
   int64_t iteration = 1;
   size_t curPos = 0;
   if (delim.size() == 0) {
-    if (index == 1) {
-      output.setNoCopy(StringView(input.data(), input.size()));
+    if constexpr (isAscii) {
+      if (index > input.size()) {
+        return false;
+      }
+
+      output.setNoCopy(StringView(input.data() + (index - 1), 1));
       return true;
+    } else {
+      int codePoint = 0;
+      while (curPos < inputSv.size()) {
+        auto codePointSize = tryGetUtf8CharLength(
+            input.data() + curPos, input.size() - curPos, codePoint);
+        VELOX_USER_CHECK(
+            codePointSize > 0 && codePointSize <= input.size() - curPos,
+            "Invalid UTF-8 encoding in characters: {}",
+            StringView(
+                input.data() + curPos,
+                std::min(input.size() - curPos, curPos + 12)));
+        if (iteration == index) {
+          output.setNoCopy(StringView(input.data() + curPos, codePointSize));
+          return true;
+        }
+
+        curPos += codePointSize;
+        iteration++;
+      }
+
+      return false;
     }
-    return false;
   }
+
   while (curPos <= inputSv.size()) {
     size_t start = curPos;
     curPos = inputSv.find(delim, curPos);

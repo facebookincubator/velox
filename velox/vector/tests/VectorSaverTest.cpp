@@ -19,8 +19,13 @@
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/exec/tests/utils/TempDirectoryPath.h"
 #include "velox/exec/tests/utils/TempFilePath.h"
+#include "velox/functions/prestosql/types/HyperLogLogRegistration.h"
 #include "velox/functions/prestosql/types/HyperLogLogType.h"
+#include "velox/functions/prestosql/types/JsonRegistration.h"
 #include "velox/functions/prestosql/types/JsonType.h"
+#include "velox/functions/prestosql/types/TDigestRegistration.h"
+#include "velox/functions/prestosql/types/TDigestType.h"
+#include "velox/functions/prestosql/types/TimestampWithTimeZoneRegistration.h"
 #include "velox/functions/prestosql/types/TimestampWithTimeZoneType.h"
 #include "velox/vector/fuzzer/VectorFuzzer.h"
 #include "velox/vector/tests/utils/VectorTestBase.h"
@@ -37,6 +42,7 @@ class VectorSaverTest : public testing::Test, public VectorTestBase {
     registerJsonType();
     registerHyperLogLogType();
     registerTimestampWithTimeZoneType();
+    registerTDigestType();
   }
 
   void SetUp() override {
@@ -265,6 +271,7 @@ TEST_F(VectorSaverTest, types) {
   testTypeRoundTrip(JSON());
   testTypeRoundTrip(HYPERLOGLOG());
   testTypeRoundTrip(TIMESTAMP_WITH_TIME_ZONE());
+  testTypeRoundTrip(TDIGEST(DOUBLE()));
 }
 
 TEST_F(VectorSaverTest, selectivityVector) {

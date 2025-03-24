@@ -33,9 +33,10 @@ enum CompressionKind {
   CompressionKind_MAX = INT64_MAX
 };
 
-std::unique_ptr<folly::io::Codec> compressionKindToCodec(CompressionKind kind);
+std::unique_ptr<folly::compression::Codec> compressionKindToCodec(
+    CompressionKind kind);
 
-CompressionKind codecTypeToCompressionKind(folly::io::CodecType type);
+CompressionKind codecTypeToCompressionKind(folly::compression::CodecType type);
 
 /// Get the name of the CompressionKind.
 std::string compressionKindToString(CompressionKind kind);

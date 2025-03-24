@@ -47,6 +47,10 @@ namespace facebook::velox::core {
 class ITypedExpr;
 }
 
+namespace facebook::velox::core {
+struct IndexJoinCondition;
+}
+
 namespace facebook::velox::connector {
 
 class DataSource;
@@ -186,6 +190,10 @@ class DataSink {
     uint64_t numWrittenBytes{0};
     uint32_t numWrittenFiles{0};
     uint64_t writeIOTimeUs{0};
+    uint64_t numCompressedBytes{0};
+    uint64_t wallRecodeTimeNs{0};
+    uint64_t compressionTimeNs{0};
+
     common::SpillStats spillStats;
 
     bool empty() const;
@@ -354,7 +362,9 @@ class IndexSource {
     /// to complete before calling 'next' again.
     virtual std::optional<std::unique_ptr<LookupResult>> next(
         vector_size_t size,
-        velox::ContinueFuture& future) = 0;
+        velox::ContinueFuture& future) {
+      VELOX_UNSUPPORTED();
+    }
   };
 
   virtual std::shared_ptr<LookupResultIterator> lookup(
@@ -582,8 +592,8 @@ class Connector {
   /// Here,
   /// - 'inputType' is ROW{t.sid, t.event_list}
   /// - 'numJoinKeys' is 1 since only t.sid is used in join equi-clauses.
-  /// - 'joinConditions' is list of one expression: contains(t.event_list,
-  ///    u.event_type)
+  /// - 'joinConditions' specifies the join condition: contains(t.event_list,
+  ///   u.event_type)
   /// - 'outputType' is ROW{u.event_value}
   /// - 'tableHandle' specifies the metadata of the index table.
   /// - 'columnHandles' is a map from 'u.event_type' (in 'joinConditions') and
@@ -594,7 +604,7 @@ class Connector {
   virtual std::shared_ptr<IndexSource> createIndexSource(
       const RowTypePtr& inputType,
       size_t numJoinKeys,
-      const std::vector<std::shared_ptr<const core::ITypedExpr>>&
+      const std::vector<std::shared_ptr<core::IndexJoinCondition>>&
           joinConditions,
       const RowTypePtr& outputType,
       const std::shared_ptr<ConnectorTableHandle>& tableHandle,

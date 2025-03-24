@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+#include "velox/functions/prestosql/aggregates/CountIfAggregate.h"
 #include "velox/exec/Aggregate.h"
 #include "velox/expression/FunctionSignature.h"
 #include "velox/functions/prestosql/aggregates/AggregateNames.h"
@@ -206,7 +207,7 @@ void registerCountIfAggregate(
 
         return std::make_unique<CountIfAggregate>();
       },
-      {false /*orderSensitive*/},
+      {false /*orderSensitive*/, false /*companionFunction*/},
       withCompanionFunctions,
       overwrite);
 }

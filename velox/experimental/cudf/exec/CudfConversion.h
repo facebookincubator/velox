@@ -22,6 +22,7 @@
 
 #include <cudf/table/table.hpp>
 
+#include "velox/experimental/cudf/exec/NvtxHelper.h"
 #include "velox/experimental/cudf/vector/CudfVector.h"
 
 #include <deque>
@@ -30,7 +31,7 @@
 
 namespace facebook::velox::cudf_velox {
 
-class CudfFromVelox : public exec::Operator {
+class CudfFromVelox : public exec::Operator, public NvtxHelper {
  public:
   CudfFromVelox(
       int32_t operatorId,
@@ -62,7 +63,7 @@ class CudfFromVelox : public exec::Operator {
   bool finished_ = false;
 };
 
-class CudfToVelox : public exec::Operator {
+class CudfToVelox : public exec::Operator, public NvtxHelper {
  public:
   CudfToVelox(
       int32_t operatorId,

@@ -36,6 +36,7 @@ export CFLAGS=${CXXFLAGS//"-std=c++17"/} # Used by LZO.
 CMAKE_BUILD_TYPE="${BUILD_TYPE:-Release}"
 VELOX_BUILD_SHARED=${VELOX_BUILD_SHARED:-"OFF"} #Build folly and gflags shared for use in libvelox.so.
 BUILD_DUCKDB="${BUILD_DUCKDB:-true}"
+BUILD_GEOS="${BUILD_GEOS:-true}"
 USE_CLANG="${USE_CLANG:-false}"
 export INSTALL_PREFIX=${INSTALL_PREFIX:-"/usr/local"}
 DEPENDENCY_DIR=${DEPENDENCY_DIR:-$(pwd)/deps-download}
@@ -48,6 +49,7 @@ THRIFT_VERSION="v0.16.0"
 ARROW_VERSION="15.0.0"
 STEMMER_VERSION="2.2.0"
 DUCKDB_VERSION="v0.8.1"
+GEOS_VERSION="3.13.0"
 
 function dnf_install {
   dnf install -y -q --setopt=install_weak_deps=False "$@"
@@ -66,7 +68,7 @@ function install_build_prerequisites {
   dnf_install ninja-build cmake ccache gcc-toolset-12 git wget which
   dnf_install autoconf automake python3-devel pip libtool
 
-  pip install cmake==3.28.3
+  pip install cmake==3.30.4
 
   if [[ ${USE_CLANG} != "false" ]]; then
     install_clang15
@@ -175,7 +177,7 @@ function install_mvfst {
 }
 
 function install_duckdb {
-  if $BUILD_DUCKDB ; then
+  if [[ "$BUILD_DUCKDB" == "true" ]]; then
     echo 'Building DuckDB'
     wget_and_untar https://github.com/duckdb/duckdb/archive/refs/tags/${DUCKDB_VERSION}.tar.gz duckdb
     cmake_install_dir duckdb -DBUILD_UNITTESTS=OFF -DENABLE_SANITIZER=OFF -DENABLE_UBSAN=OFF -DBUILD_SHELL=OFF -DEXPORT_DLL_SYMBOLS=OFF -DCMAKE_BUILD_TYPE=Release
@@ -233,7 +235,18 @@ function install_cuda {
   # See https://developer.nvidia.com/cuda-downloads
   dnf config-manager --add-repo https://developer.download.nvidia.com/compute/cuda/repos/rhel9/x86_64/cuda-rhel9.repo
   local dashed="$(echo $1 | tr '.' '-')"
-  dnf install -y cuda-nvcc-$dashed cuda-cudart-devel-$dashed cuda-nvrtc-devel-$dashed cuda-driver-devel-$dashed
+  dnf install -y \
+    cuda-compat-$dashed \
+    cuda-driver-devel-$dashed \
+    cuda-minimal-build-$dashed \
+    cuda-nvrtc-devel-$dashed
+}
+
+function install_geos {
+  if [[ "$BUILD_GEOS" == "true" ]]; then
+    wget_and_untar https://github.com/libgeos/geos/archive/${GEOS_VERSION}.tar.gz geos
+    cmake_install_dir geos -DBUILD_TESTING=OFF
+  fi
 }
 
 function install_velox_deps {
@@ -255,6 +268,7 @@ function install_velox_deps {
   run_and_time install_stemmer
   run_and_time install_thrift
   run_and_time install_arrow
+  run_and_time install_geos
 }
 
 (return 2> /dev/null) && return # If script was sourced, don't run commands.

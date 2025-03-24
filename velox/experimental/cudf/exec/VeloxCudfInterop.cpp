@@ -18,10 +18,9 @@
 #include "velox/type/Type.h"
 #include "velox/vector/BaseVector.h"
 #include "velox/vector/ComplexVector.h"
+#include "velox/vector/DictionaryVector.h"
 #include "velox/vector/FlatVector.h"
 #include "velox/vector/arrow/Bridge.h"
-
-#include "velox/vector/tests/utils/VectorMaker.h"
 
 #include <cudf/column/column.hpp>
 #include <cudf/column/column_factories.hpp>
@@ -41,6 +40,7 @@
 #include <thrust/copy.h>
 #include <thrust/execution_policy.h>
 
+#include "velox/experimental/cudf/exec/NvtxHelper.h"
 #include "velox/experimental/cudf/exec/Utilities.h"
 #include "velox/experimental/cudf/exec/VeloxCudfInterop.h"
 
@@ -282,7 +282,7 @@ struct copy_to_device {
 // Vector to column
 // template<bool is_table=true>
 std::unique_ptr<cudf::table> to_cudf_table(const RowVectorPtr& leftBatch) {
-  NVTX3_FUNC_RANGE();
+  VELOX_NVTX_FUNC_RANGE();
   // cudf type dispatcher to copy data from velox vector to cudf column
   using cudf_col_ptr = std::unique_ptr<cudf::column>;
   std::vector<cudf_col_ptr> cudf_columns;
@@ -340,7 +340,7 @@ struct copy_to_host {
 VectorPtr to_velox_column(
     const cudf::column_view& col,
     memory::MemoryPool* pool) {
-  NVTX3_FUNC_RANGE();
+  VELOX_NVTX_PRETTY_FUNC_RANGE();
   auto velox_type = cudf_type_id_to_velox_type(col.type().id());
   if (cudfDebugEnabled()) {
     std::cout << "Converting to_velox_column: " << velox_type->toString()
@@ -355,17 +355,26 @@ RowVectorPtr to_velox_column(
     const cudf::table_view& table,
     memory::MemoryPool* pool,
     std::string name_prefix) {
-  NVTX3_FUNC_RANGE();
+  VELOX_NVTX_PRETTY_FUNC_RANGE();
   std::vector<VectorPtr> children;
-  std::vector<std::string> names;
+  std::vector<std::string> childNames;
+  std::vector<std::shared_ptr<const Type>> childTypes;
+  children.reserve(table.num_columns());
+  childNames.reserve(table.num_columns());
   for (auto& col : table) {
-    auto velox_col = to_velox_column(col, pool);
-    children.push_back(std::move(velox_col));
-    names.push_back(name_prefix + std::to_string(names.size()));
+    children.push_back(to_velox_column(col, pool));
+    childNames.push_back(name_prefix + std::to_string(childNames.size()));
   }
-  auto vcol =
-      test::VectorMaker{pool}.rowVector(std::move(names), std::move(children));
-  return vcol;
+
+  childTypes.reserve(children.size());
+  for (const auto& child : children) {
+    childTypes.push_back(child->type());
+  }
+  auto rowType = ROW(std::move(childNames), std::move(childTypes));
+  const size_t vectorSize = children.empty() ? 0 : children.front()->size();
+
+  return std::make_shared<RowVector>(
+      pool, rowType, BufferPtr(nullptr), vectorSize, children);
 }
 
 namespace with_arrow {
@@ -458,6 +467,20 @@ RowVectorPtr to_velox_column(
   return casted_ptr;
 }
 
+template <typename Iterator>
+std::vector<cudf::column_metadata>
+get_metadata(Iterator begin, Iterator end, const std::string& name_prefix) {
+  std::vector<cudf::column_metadata> metadata;
+  int i = 0;
+  for (auto c = begin; c < end; c++) {
+    metadata.push_back(cudf::column_metadata(name_prefix + std::to_string(i)));
+    metadata.back().children_meta = get_metadata(
+        c->child_begin(), c->child_end(), name_prefix + std::to_string(i));
+    i++;
+  }
+  return metadata;
+}
+
 } // namespace
 
 facebook::velox::RowVectorPtr to_velox_column(
@@ -465,10 +488,7 @@ facebook::velox::RowVectorPtr to_velox_column(
     facebook::velox::memory::MemoryPool* pool,
     std::string name_prefix,
     rmm::cuda_stream_view stream) {
-  std::vector<cudf::column_metadata> metadata;
-  for (auto i = 0; i < table.num_columns(); i++) {
-    metadata.push_back(cudf::column_metadata(name_prefix + std::to_string(i)));
-  }
+  auto metadata = get_metadata(table.begin(), table.end(), name_prefix);
   return to_velox_column(table, pool, metadata, stream);
 }
 

@@ -62,6 +62,9 @@ jobs:
             install_cuda ${CUDA_VERSION}
           fi
 
+          # TODO: Install a newer cmake here until we update the images upstream
+          pip install cmake==3.30.4
+
       - uses: assignUser/stash/restore@v1
         with:
           token: '${{ secrets.ARTIFACT_CACHE_TOKEN }}'

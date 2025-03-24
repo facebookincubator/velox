@@ -25,7 +25,9 @@
 
 #include <cudf/join.hpp>
 #include <cudf/table/table.hpp>
+#include <experimental/cudf/exec/ExpressionEvaluator.h>
 
+#include "velox/experimental/cudf/exec/NvtxHelper.h"
 #include "velox/experimental/cudf/vector/CudfVector.h"
 
 #include <string>
@@ -45,7 +47,7 @@ class CudfHashJoinBridge : public exec::JoinBridge {
   std::optional<hash_type> hashObject_;
 };
 
-class CudfHashJoinBuild : public exec::Operator {
+class CudfHashJoinBuild : public exec::Operator, public NvtxHelper {
  public:
   CudfHashJoinBuild(
       int32_t operatorId,
@@ -70,7 +72,7 @@ class CudfHashJoinBuild : public exec::Operator {
   ContinueFuture future_{ContinueFuture::makeEmpty()};
 };
 
-class CudfHashJoinProbe : public exec::Operator {
+class CudfHashJoinProbe : public exec::Operator, public NvtxHelper {
  public:
   using hash_type = CudfHashJoinBridge::hash_type;
 
@@ -87,11 +89,33 @@ class CudfHashJoinProbe : public exec::Operator {
 
   exec::BlockingReason isBlocked(ContinueFuture* future) override;
 
+  static bool isSupportedJoinType(core::JoinType joinType) {
+    return joinType == core::JoinType::kInner ||
+        joinType == core::JoinType::kLeft ||
+        joinType == core::JoinType::kRight ||
+        joinType == core::JoinType::kAnti ||
+        joinType == core::JoinType::kLeftSemiFilter ||
+        joinType == core::JoinType::kRightSemiFilter;
+  }
+
   bool isFinished() override;
 
  private:
   std::shared_ptr<const core::HashJoinNode> joinNode_;
   std::optional<hash_type> hashObject_;
+
+  // Filter related members
+  cudf::ast::tree tree_;
+  std::vector<std::unique_ptr<cudf::scalar>> scalars_;
+
+  bool right_precomputed_{false};
+
+  std::vector<cudf::size_type> left_key_indices_;
+  std::vector<cudf::size_type> right_key_indices_;
+  std::vector<cudf::size_type> left_column_indices_to_gather_;
+  std::vector<cudf::size_type> right_column_indices_to_gather_;
+  std::vector<size_t> left_column_output_indices_;
+  std::vector<size_t> right_column_output_indices_;
   bool finished_{false};
 };
 

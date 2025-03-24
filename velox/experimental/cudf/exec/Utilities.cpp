@@ -120,4 +120,34 @@ std::unique_ptr<cudf::table> concatenateTables(
       tableViews, stream, cudf::get_current_device_resource_ref());
 }
 
+std::unique_ptr<cudf::table> getConcatenatedTable(
+    std::vector<CudfVectorPtr>& tables,
+    rmm::cuda_stream_view stream) {
+  // Check for empty vector
+  VELOX_CHECK_GT(tables.size(), 0);
+
+  auto inputStreams = std::vector<rmm::cuda_stream_view>();
+  auto tableViews = std::vector<cudf::table_view>();
+
+  inputStreams.reserve(tables.size());
+  tableViews.reserve(tables.size());
+
+  for (auto const& table : tables) {
+    VELOX_CHECK_NOT_NULL(table);
+    tableViews.push_back(table->getTableView());
+    inputStreams.push_back(table->stream());
+  }
+
+  cudf::detail::join_streams(inputStreams, stream);
+
+  if (tables.size() == 1) {
+    return tables[0]->release();
+  }
+
+  auto output = cudf::concatenate(
+      tableViews, stream, cudf::get_current_device_resource_ref());
+  stream.synchronize();
+  return output;
+}
+
 } // namespace facebook::velox::cudf_velox

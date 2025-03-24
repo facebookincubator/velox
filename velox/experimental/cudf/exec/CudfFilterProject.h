@@ -21,6 +21,8 @@
 #include "velox/exec/Driver.h"
 #include "velox/exec/FilterProject.h"
 #include "velox/exec/Operator.h"
+#include "velox/experimental/cudf/exec/ExpressionEvaluator.h"
+#include "velox/experimental/cudf/exec/NvtxHelper.h"
 #include "velox/experimental/cudf/vector/CudfVector.h"
 #include "velox/expression/Expr.h"
 #include "velox/vector/ComplexVector.h"
@@ -30,7 +32,7 @@
 namespace facebook::velox::cudf_velox {
 
 // TODO: Does not support Filter yet.
-class CudfFilterProject : public exec::Operator {
+class CudfFilterProject : public exec::Operator, public NvtxHelper {
  public:
   CudfFilterProject(
       int32_t operatorId,
@@ -48,6 +50,14 @@ class CudfFilterProject : public exec::Operator {
 
   RowVectorPtr getOutput() override;
 
+  void filter(
+      std::vector<std::unique_ptr<cudf::column>>& input_table_columns,
+      rmm::cuda_stream_view stream);
+
+  std::vector<std::unique_ptr<cudf::column>> project(
+      std::vector<std::unique_ptr<cudf::column>>& input_table_columns,
+      rmm::cuda_stream_view stream);
+
   exec::BlockingReason isBlocked(ContinueFuture* /*future*/) override {
     return exec::BlockingReason::kNotBlocked;
   }
@@ -56,9 +66,8 @@ class CudfFilterProject : public exec::Operator {
 
   void close() override {
     Operator::close();
-    projectAst_.clear();
-    scalars_.clear();
-    precompute_instructions_.clear();
+    projectEvaluator_.close();
+    filterEvaluator_.close();
   }
 
  private:
@@ -69,12 +78,8 @@ class CudfFilterProject : public exec::Operator {
   // initialization, they will be reset, and initialized_ will be set to true.
   std::shared_ptr<const core::ProjectNode> project_;
   std::shared_ptr<const core::FilterNode> filter_;
-  std::vector<cudf::ast::tree> projectAst_;
-  std::vector<std::unique_ptr<cudf::scalar>> scalars_;
-  // instruction on dependent column to get new column index on non-ast
-  // supported operations in expressions
-  // <dependent_column_index, "instruction", new_column_index>
-  std::vector<std::tuple<int, std::string, int>> precompute_instructions_;
+  ExpressionEvaluator projectEvaluator_;
+  ExpressionEvaluator filterEvaluator_;
 
   std::vector<velox::exec::IdentityProjection> resultProjections_;
   std::vector<velox::exec::IdentityProjection> identityProjections_;

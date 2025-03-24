@@ -13,6 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+#include "velox/functions/prestosql/aggregates/CountAggregate.h"
 #include "velox/common/base/Exceptions.h"
 #include "velox/expression/FunctionSignature.h"
 #include "velox/functions/lib/aggregates/SumAggregateBase.h"
@@ -182,7 +183,7 @@ void registerCountAggregate(
             argTypes.size(), 1, "{} takes at most one argument", name);
         return std::make_unique<CountAggregate>();
       },
-      {false /*orderSensitive*/},
+      {false /*orderSensitive*/, false /*companionFunction*/},
       withCompanionFunctions,
       overwrite);
 }

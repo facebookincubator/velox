@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+#include "velox/functions/prestosql/aggregates/AverageAggregate.h"
 #include "velox/functions/lib/aggregates/AverageAggregateBase.h"
 #include "velox/functions/prestosql/aggregates/AggregateNames.h"
 
@@ -155,7 +156,7 @@ void registerAverageAggregate(
           }
         }
       },
-      {false /*orderSensitive*/},
+      {false /*orderSensitive*/, false /*companionFunction*/},
       withCompanionFunctions,
       overwrite);
 }

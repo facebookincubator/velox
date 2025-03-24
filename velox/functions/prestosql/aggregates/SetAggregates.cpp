@@ -13,6 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+#include "velox/functions/prestosql/aggregates/SetAggregates.h"
 #include "velox/functions/lib/aggregates/SetBaseAggregate.h"
 #include "velox/functions/prestosql/aggregates/AggregateNames.h"
 
@@ -208,6 +209,8 @@ std::unique_ptr<exec::Aggregate> create(
       [[fallthrough]];
     case TypeKind::ROW:
       return std::make_unique<Aggregate<ComplexType>>(resultType);
+    case TypeKind::UNKNOWN:
+      return std::make_unique<Aggregate<UnknownValue>>(resultType);
     default:
       VELOX_UNREACHABLE(
           "Unexpected type {}", mapTypeKindToName(inputType->kind()));
@@ -302,6 +305,8 @@ void registerSetAggAggregate(
             [[fallthrough]];
           case TypeKind::ROW:
             return std::make_unique<SetAggAggregate<ComplexType>>(resultType);
+          case TypeKind::UNKNOWN:
+            return std::make_unique<SetAggAggregate<UnknownValue>>(resultType);
           default:
             VELOX_UNREACHABLE(
                 "Unexpected type {}", mapTypeKindToName(typeKind));

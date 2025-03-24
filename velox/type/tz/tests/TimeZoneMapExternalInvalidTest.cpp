@@ -16,10 +16,9 @@
 
 #include <gtest/gtest.h>
 
-#include "velox/common/base/Exceptions.h"
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/common/testutil/TestValue.h"
-#include "velox/external/date/tz.h"
+#include "velox/external/tzdb/exception.h"
 #include "velox/type/tz/TimeZoneMap.h"
 
 namespace facebook::velox::tz {
@@ -36,10 +35,10 @@ DEBUG_ONLY_TEST(TimeZoneMapExternalInvalidTest, externalInvalid) {
       std::function<void(std::string_view * tz_name)>(
           [&](std::string_view* tz_name) -> void {
             if (*tz_name == testZone) {
-              // Emulates an invalid_timezone error thrown from external API
-              // date::locate_zone. In real scenarios, this could happen when
+              // Emulates an invalid_time_zone error thrown from external API
+              // tzdb::locate_zone. In real scenarios, this could happen when
               // the timezone is not found in operating system's timezone list.
-              throw date::invalid_timezone(std::string(*tz_name));
+              throw tzdb::invalid_time_zone(std::string(*tz_name));
             }
           }));
 

@@ -13,6 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+#include "velox/functions/prestosql/aggregates/ReduceAgg.h"
 #include "velox/core/QueryCtx.h"
 #include "velox/exec/Aggregate.h"
 #include "velox/expression/Expr.h"
@@ -817,7 +818,7 @@ void registerReduceAgg(
           const core::QueryConfig& config) -> std::unique_ptr<exec::Aggregate> {
         return std::make_unique<ReduceAgg>(resultType);
       },
-      {false /*orderSensitive*/},
+      {false /*orderSensitive*/, false /*companionFunction*/},
       withCompanionFunctions,
       overwrite);
 }
