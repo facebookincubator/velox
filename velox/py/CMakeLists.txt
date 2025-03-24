@@ -103,7 +103,7 @@ set_target_properties(
 
 # python related headers are now bundled with pyarrow not arrow
 execute_process(
-  COMMAND "${PYTHON_EXECUTABLE}" -c
+  COMMAND "${Python_EXECUTABLE}" -c
           "import pyarrow; print(pyarrow.get_include())"
   OUTPUT_VARIABLE PYARROW_INCLUDE_DIR
   OUTPUT_STRIP_TRAILING_WHITESPACE COMMAND_ERROR_IS_FATAL ANY)
