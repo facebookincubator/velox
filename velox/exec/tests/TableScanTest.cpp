@@ -2035,7 +2035,7 @@ TEST_F(TableScanTest, partitionedTableTimestampKey) {
               kHiveConnectorId,
               connector::hive::HiveConfig::
                   kReadTimestampPartitionValueAsLocalTimeSession,
-              "true")
+              asLocalTime ? "true" : "false")
           .splits({split})
           .assertResults(fmt::format(
               "SELECT {}, * FROM tmp", asLocalTime ? tsValueAsLocal : tsValue));
@@ -2062,7 +2062,7 @@ TEST_F(TableScanTest, partitionedTableTimestampKey) {
               kHiveConnectorId,
               connector::hive::HiveConfig::
                   kReadTimestampPartitionValueAsLocalTimeSession,
-              "true")
+              asLocalTime ? "true" : "false")
           .splits({split})
           .assertResults(fmt::format(
               "SELECT c0, {}, c1 FROM tmp",
@@ -2089,7 +2089,7 @@ TEST_F(TableScanTest, partitionedTableTimestampKey) {
               kHiveConnectorId,
               connector::hive::HiveConfig::
                   kReadTimestampPartitionValueAsLocalTimeSession,
-              "true")
+              asLocalTime ? "true" : "false")
           .splits({split})
           .assertResults(fmt::format(
               "SELECT c0, c1, {} FROM tmp",
@@ -2116,7 +2116,7 @@ TEST_F(TableScanTest, partitionedTableTimestampKey) {
               kHiveConnectorId,
               connector::hive::HiveConfig::
                   kReadTimestampPartitionValueAsLocalTimeSession,
-              "true")
+              asLocalTime ? "true" : "false")
           .splits({split})
           .assertResults(fmt::format(
               "SELECT {} FROM tmp", asLocalTime ? tsValueAsLocal : tsValue));
@@ -2164,7 +2164,7 @@ TEST_F(TableScanTest, partitionedTableTimestampKey) {
               kHiveConnectorId,
               connector::hive::HiveConfig::
                   kReadTimestampPartitionValueAsLocalTimeSession,
-              "true")
+              asLocalTime ? "true" : "false")
           .splits({split})
           .assertResults(fmt::format(
               "SELECT {}, * FROM tmp", asLocalTime ? tsValueAsLocal : tsValue));
