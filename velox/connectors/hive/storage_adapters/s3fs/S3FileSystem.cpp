@@ -73,6 +73,10 @@ Aws::IOStreamFactory AwsWriteableStreamFactory(void* data, int64_t nbytes) {
   return [=]() { return Aws::New<StringViewStream>("", data, nbytes); };
 }
 
+using AWSCredentialsProviderFactory =
+    std::function<std::shared_ptr<Aws::Auth::AWSCredentialsProvider>(
+        const S3Config& config)>;
+
 folly::Synchronized<
     std::unordered_map<std::string, AWSCredentialsProviderFactory>>&
 credentialsProviderFactories() {
@@ -85,7 +89,7 @@ credentialsProviderFactories() {
 std::shared_ptr<Aws::Auth::AWSCredentialsProvider> getCredentialsProviderByName(
     const std::string& providerName,
     const S3Config& s3Config) {
-  auto it = credentialsProviderFactories()->find(providerName);
+  const auto it = credentialsProviderFactories()->find(providerName);
   VELOX_CHECK(
       it != credentialsProviderFactories()->end(),
       "CredentialsProviderFactory for '{}' not registered",

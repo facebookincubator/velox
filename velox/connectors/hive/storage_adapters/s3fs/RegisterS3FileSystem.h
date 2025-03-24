@@ -20,6 +20,11 @@
 #include <memory>
 #include <string>
 
+#ifdef VELOX_ENABLE_S3
+#include <aws/core/auth/AWSCredentialsProvider.h>
+#include "velox/connectors/hive/storage_adapters/s3fs/S3Config.h"
+#endif
+
 namespace facebook::velox::config {
 class ConfigBase;
 }
@@ -43,5 +48,15 @@ void registerS3Metrics();
 /// This could lead to a segmentation fault during the program exit.
 /// Ref https://github.com/aws/aws-sdk-cpp/issues/1550#issuecomment-1412601061
 void finalizeS3FileSystem();
+
+#ifdef VELOX_ENABLE_S3
+using AWSCredentialsProviderFactory =
+    std::function<std::shared_ptr<Aws::Auth::AWSCredentialsProvider>(
+        const S3Config& config)>;
+
+void registerAWSCredentialsProvider(
+    std::string providerName,
+    AWSCredentialsProviderFactory provider);
+#endif
 
 } // namespace facebook::velox::filesystems
