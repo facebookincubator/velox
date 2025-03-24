@@ -114,4 +114,46 @@ struct Atomic {
   }
 };
 
+template <MemoryScope Scope = MemoryScope::kDevice>
+struct AtomicMutex {
+  Atomic<int, Scope> __value;
+
+  AtomicMutex(const AtomicMutex&) = delete;
+  AtomicMutex& operator=(const AtomicMutex&) = delete;
+  AtomicMutex& operator=(const AtomicMutex&) volatile = delete;
+
+  WAVE_DEVICE_HOST explicit constexpr AtomicMutex() noexcept = default;
+  WAVE_DEVICE_HOST constexpr explicit inline AtomicMutex(int value) noexcept
+      : __value(value) {}
+
+  WAVE_DEVICE_HOST void acquire() {
+    constexpr int kPollingCount = 5;
+    constexpr int kInitialBackoffStepNs = 10;
+
+    int count = 0;
+    int step_ns = kInitialBackoffStepNs + threadIdx.x % 32;
+    for (;;) {
+      int available = __value.template load<MemoryOrder::kAcquire>();
+      while (available) {
+        if (__value.template compare_exchange<MemoryOrder::kAcquire>(
+                available, 0)) {
+          return;
+        }
+      }
+      if (count < kPollingCount) {
+        count += 1;
+        continue;
+      }
+#if defined(__CUDA_ARCH__)
+      __nanosleep(step_ns);
+      step_ns *= 2;
+#endif
+    }
+  }
+
+  WAVE_DEVICE_HOST void release() {
+    __value.template store<MemoryOrder::kRelease>(1);
+  }
+};
+
 } // namespace facebook::velox::wave
