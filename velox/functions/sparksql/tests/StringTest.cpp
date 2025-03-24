@@ -1055,5 +1055,111 @@ TEST_F(StringTest, empty2Null) {
   EXPECT_EQ(empty2Null(""), std::nullopt);
   EXPECT_EQ(empty2Null("abc"), "abc");
 }
+
+TEST_F(StringTest, varcharTypeWriteSideCheck) {
+  const auto varcharTypeWriteSideCheck =
+      [&](const std::optional<std::string>& input,
+          const std::optional<int32_t>& limit) {
+        return evaluateOnce<std::string>(
+            "varchar_type_write_side_check(c0, c1)", input, limit);
+      };
+
+  // Basic cases - string length <= limit
+  EXPECT_EQ(varcharTypeWriteSideCheck("abc", 3), "abc");
+  EXPECT_EQ(varcharTypeWriteSideCheck("ab", 3), "ab");
+  EXPECT_EQ(varcharTypeWriteSideCheck("", 5), "");
+
+  // Cases with trailing spaces
+  // Edge cases - input string is longer than limit but trims to exactly limit
+  EXPECT_EQ(varcharTypeWriteSideCheck("abc  ", 3), "abc");
+  EXPECT_EQ(varcharTypeWriteSideCheck("abc  ", 4), "abc ");
+  EXPECT_EQ(varcharTypeWriteSideCheck("abc  ", 5), "abc  ");
+
+  // Unicode string cases with trailing spaces
+  EXPECT_EQ(varcharTypeWriteSideCheck("世界   ", 2), "世界");
+  EXPECT_EQ(varcharTypeWriteSideCheck("世界", 2), "世界");
+
+  // Error cases - string length > limit even after trimming trailing spaces
+  EXPECT_THROW(varcharTypeWriteSideCheck("abcd", 3), VeloxUserError);
+  EXPECT_THROW(varcharTypeWriteSideCheck("世界人", 2), VeloxUserError);
+  EXPECT_THROW(varcharTypeWriteSideCheck("abc def", 5), VeloxUserError);
+
+  // Null input cases
+  EXPECT_EQ(varcharTypeWriteSideCheck(std::nullopt, 5), std::nullopt);
+
+  // Edge cases - limit is zero
+  EXPECT_THROW(varcharTypeWriteSideCheck("abc", 0), VeloxUserError);
+  EXPECT_EQ(varcharTypeWriteSideCheck("   ", 0), "");
+
+  // Edge cases - limit is negative
+  EXPECT_THROW(varcharTypeWriteSideCheck("abc", -1), VeloxRuntimeError);
+
+  // Edge cases - input string is all spaces
+  EXPECT_EQ(varcharTypeWriteSideCheck("   ", 2), "  ");
+  EXPECT_EQ(varcharTypeWriteSideCheck("   ", 3), "   ");
+  EXPECT_EQ(varcharTypeWriteSideCheck("   ", 1), " ");
+}
+
+TEST_F(StringTest, charTypeWriteSideCheck) {
+  const auto charTypeWriteSideCheck =
+      [&](const std::optional<std::string>& input,
+          const std::optional<int32_t>& limit) {
+        return evaluateOnce<std::string>(
+            "char_type_write_side_check(c0, c1)", input, limit);
+      };
+
+  // Case 1: String length equals limit (return as-is)
+  EXPECT_EQ(charTypeWriteSideCheck("abc", 3), "abc");
+  EXPECT_EQ(charTypeWriteSideCheck("世界", 2), "世界");
+  EXPECT_EQ(charTypeWriteSideCheck("a世", 2), "a世");
+
+  // Case 2: String length < limit (pad with spaces to reach limit)
+  EXPECT_EQ(charTypeWriteSideCheck("a", 3), "a  ");
+  EXPECT_EQ(charTypeWriteSideCheck("ab", 3), "ab ");
+  EXPECT_EQ(charTypeWriteSideCheck("", 3), "   ");
+  EXPECT_EQ(charTypeWriteSideCheck("世", 3), "世  ");
+  EXPECT_EQ(charTypeWriteSideCheck("世界", 3), "世界 ");
+
+  // Case 3: String length > limit (try trimming trailing spaces)
+  // Case 3a: Successful trimming (exactly fits after trimming)
+  EXPECT_EQ(charTypeWriteSideCheck("abc  ", 3), "abc");
+  EXPECT_EQ(charTypeWriteSideCheck("世界   ", 2), "世界");
+  EXPECT_EQ(charTypeWriteSideCheck("a世  ", 2), "a世");
+
+  // Case 3b: Successful trimming (fits with room to spare after trimming)
+  EXPECT_EQ(charTypeWriteSideCheck("a   ", 2), "a "); // Only trim what's needed
+  EXPECT_EQ(charTypeWriteSideCheck("世   ", 2), "世 ");
+
+  // Case 3c: Failed trimming (still too long after trimming all trailing
+  // spaces)
+  EXPECT_THROW(charTypeWriteSideCheck("abcd", 3), VeloxUserError);
+  EXPECT_THROW(charTypeWriteSideCheck("世界人", 2), VeloxUserError);
+  EXPECT_THROW(charTypeWriteSideCheck("a世界b", 3), VeloxUserError);
+
+  // Edge cases
+  // Null input
+  EXPECT_EQ(charTypeWriteSideCheck(std::nullopt, 5), std::nullopt);
+
+  // Limit is zero
+  EXPECT_EQ(charTypeWriteSideCheck("", 0), "");
+  EXPECT_THROW(charTypeWriteSideCheck("a", 0), VeloxUserError);
+  EXPECT_EQ(charTypeWriteSideCheck(" ", 0), "");
+
+  // Limit is negative
+  EXPECT_THROW(charTypeWriteSideCheck("abc", -1), VeloxRuntimeError);
+}
+
+TEST_F(StringTest, readSideCharPadding) {
+  const auto readSideCharPadding = [&](const std::optional<std::string>& input,
+                                       const std::optional<int32_t>& limit) {
+    return evaluateOnce<std::string>("read_side_padding(c0, c1)", input, limit);
+  };
+
+  // pad 0x20 spaces to limit.
+  EXPECT_EQ(readSideCharPadding("a", 3), "a  ");
+  EXPECT_EQ(readSideCharPadding("世界", 3), "世界 ");
+  EXPECT_EQ(readSideCharPadding("a世", 3), "a世 ");
+}
+
 } // namespace
 } // namespace facebook::velox::functions::sparksql::test
