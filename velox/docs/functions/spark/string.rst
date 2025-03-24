@@ -458,6 +458,15 @@ String Functions
         SELECT substring_index('aaaaa', 'aa', 5); -- "aaaaa"
         SELECT substring_index('aaaaa', 'aa', -5); -- "aaaaa"
 
+.. spark:function:: to_pretty_string(x) -> varchar
+    Returns pretty string for ``x``. All scalar types are supported.
+    Adjusts the timestamp input to the given time zone if set through ``session_timezone`` config.
+    The result is different from that of casting ``x`` as string in the following aspects.
+
+    - It prints null input as "NULL" rather than producing null output.
+
+    - It prints binary values using the hex format.
+
 .. spark:function:: translate(string, match, replace) -> varchar
 
     Returns a new translated string. It translates the character in ``string`` by a
