@@ -298,7 +298,6 @@ class DataSource {
     VELOX_UNSUPPORTED();
   }
 
-
   /// Invoked by table scan close to cancel any inflight async operations
   /// running inside the data source. This is the best effort and the actual
   /// connector implementation decides how to support the cancellation if
