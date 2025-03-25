@@ -117,7 +117,7 @@ struct Timestamp {
 
   /// Creates a timestamp from the number of days since the Julian epoch
   /// and the number of nanoseconds.
-  static Timestamp fromDaysAndNanos(int32_t days, int64_t nanos);
+  static Timestamp fromDaysAndNanos(uint64_t days, uint64_t nanos);
 
   // date is the number of days since unix epoch.
   static Timestamp fromDate(int32_t date);
