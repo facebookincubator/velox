@@ -8,25 +8,58 @@ GitHub issue. We'd love to hear thoughts and feedback.**
 
 ## Prerequisites
 
-You will need Python 3.7 or later. Also, we highly recommend installing an [Miniconda](https://docs.conda.io/en/latest/miniconda.html#latest-miniconda-installer-links) environment.
+You will need Python 3.9 or later. We recommend using `uv` for Python Environment Management [uv](https://github.com/astral-sh/uv) is a fast Python package installer and environment manager written in Rust.
+Here's how to use it:
 
-First, set up an environment. If you are using conda, create a conda environment:
-```
-conda create --name pyveloxenv python=3.7
-conda activate pyveloxenv
-```
+1. **Install uv**:
+   ```bash
+   brew install uv
+   # or
+   pipx uv
+   # or
+   curl -LsSf https://astral.sh/uv/install.sh | sh
+   ```
+
+2. **Create a virtual environment**:
+   ```bash
+   uv venv --python=3.12
+   ```
+   This creates a venv in the current directory. You can specify a path:
+   ```bash
+   uv venv --python=3.12 /path/to/venv
+   ```
+
+3. **Activate the environment**:
+   ```bash
+   source .venv/bin/activate
+   ```
+
+4. **Installing packages**:
+   ```bash
+   uv pip install pyvelox
+   ```
+   
+   Or from a requirements file:
+   ```bash
+   uv pip install -r requirements.txt
+   ```
+
 
 ### Install PyVelox
 
 You can install PyVelox from pypi without the need to build it from source as we provide wheels for Linux and macOS (x86_64):
 ```
-pip install pyvelox
+uv pip install pyvelox
 ```
 
 ### From Source
 
-You will need Python 3.7 or later and a C++17 compiler to build PyVelox from source.
+You will need Python 3.9 or later and a C++17 compiler to build PyVelox from source.
 
+First, set up a virtual environment and activate it. Now install the build requirements to enable editable builds: 
+```
+uv pip install pyarrow scikit-build-core setuptools_scm[toml]
+```
 
 #### Install Dependencies
 
@@ -41,7 +74,7 @@ Run the script referenced [here](https://github.com/facebookincubator/velox#sett
 
 #### Build PyVelox
 
-For local development, you can build with debug mode:
+For local development, you can build an editable debug build with automatic rebuilds:
 ```
 make python-build
 ```
