@@ -131,23 +131,16 @@ jobs:
         env:
           BUILD_VERSION: "${{ inputs.version || steps.version.outputs.build_version }}"
         run: |
-          python setup.py sdist --dist-dir wheelhouse
+          uv build --sdist --out-dir wheelhouse
 
       - name: Build wheels
         uses: pypa/cibuildwheel@6cccd09a31908ffd175b012fb8bf4e1dbda3bc6c # v2
         env:
           BUILD_VERSION: "${{ inputs.version || steps.version.outputs.build_version }}"
-          CIBW_ARCHS: "native"
           # Only build for 3.12 for now
           CIBW_BUILD: ${{ github.event_name == 'pull_request' && 'cp312-*' || 'cp312-*' }}
-          CIBW_SKIP: "*musllinux* cp36-* cp38-*"
-          CIBW_MANYLINUX_X86_64_IMAGE: "ghcr.io/facebookincubator/velox-dev:pyvelox"
           CIBW_ENVIRONMENT_PASS_LINUX:  "BUILD_VERSION"
-          CIBW_BEFORE_ALL: "ccache -sz"
           CIBW_ENVIRONMENT_LINUX: "CCACHE_DIR=/host${{ github.workspace }}/ccache"
-          CIBW_BEFORE_TEST: "ccache -s"
-          CIBW_TEST_EXTRAS: "tests"
-          CIBW_TEST_COMMAND: "echo Adding tests later." #"cd {project}/pyvelox && python -m unittest -v"
           # for macos
           MACOSX_DEPLOYMENT_TARGET: ${{ matrix.os == 'macos-14' && '14' || '13' }}
           CCACHE_DIR: "${{ github.workspace }}/ccache" 
