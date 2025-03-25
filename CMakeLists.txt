@@ -631,6 +631,8 @@ if(VELOX_ENABLE_ARROW)
 endif()
 
 if(VELOX_ENABLE_GEO)
+  add_definitions(-DVELOX_ENABLE_GEO)
+
   velox_set_source(geos)
   velox_resolve_dependency(geos)
 endif()
