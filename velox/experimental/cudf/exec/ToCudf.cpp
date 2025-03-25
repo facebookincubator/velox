@@ -93,21 +93,21 @@ bool CompileState::compile() {
     auto replacingOperatorIndex = operatorIndex + operatorsOffset;
     VELOX_CHECK(oper);
 
-    bool const kPreviousOperatorIsNotGpu =
+    const bool previousOperatorIsNotGpu =
         (operatorIndex > 0 and !isSupportedGpuOperators[operatorIndex - 1]);
-    bool const kNextOperatorIsNotGpu =
+    const bool nextOperatorIsNotGpu =
         (operatorIndex < operators.size() - 1 and
          !isSupportedGpuOperators[operatorIndex + 1]);
 
     auto id = oper->operatorId();
-    if (kPreviousOperatorIsNotGpu and acceptsGpuInput(oper)) {
+    if (previousOperatorIsNotGpu and acceptsGpuInput(oper)) {
       auto planNode = getPlanNode(oper->planNodeId());
       replaceOp.push_back(std::make_unique<CudfFromVelox>(
           id, planNode->outputType(), ctx, planNode->id() + "-from-velox"));
       replaceOp.back()->initialize();
     }
 
-    if (auto orderByOp = dynamic_cast<exec::OrderBy*>(oper)) {
+    if (auto* orderByOp = dynamic_cast<exec::OrderBy*>(oper)) {
       auto id = orderByOp->operatorId();
       auto planNode = std::dynamic_pointer_cast<const core::OrderByNode>(
           getPlanNode(orderByOp->planNodeId()));
@@ -116,7 +116,7 @@ bool CompileState::compile() {
       replaceOp.back()->initialize();
     }
 
-    if (kNextOperatorIsNotGpu and producesGpuOutput(oper)) {
+    if (nextOperatorIsNotGpu and producesGpuOutput(oper)) {
       auto planNode = getPlanNode(oper->planNodeId());
       replaceOp.push_back(std::make_unique<CudfToVelox>(
           id, planNode->outputType(), ctx, planNode->id() + "-to-velox"));
