@@ -139,13 +139,11 @@ bool CompileState::compile() {
 
 struct CudfDriverAdapter {
   std::shared_ptr<rmm::mr::device_memory_resource> mr_;
-  std::shared_ptr<std::vector<std::shared_ptr<core::PlanNode const>>>
-      planNodes_;
+  std::shared_ptr<std::vector<core::PlanNodePtr>> planNodes_;
 
   CudfDriverAdapter(std::shared_ptr<rmm::mr::device_memory_resource> mr)
       : mr_(mr) {
-    planNodes_ =
-        std::make_shared<std::vector<std::shared_ptr<core::PlanNode const>>>();
+    planNodes_ = std::make_shared<std::vector<core::PlanNodePtr>>();
   }
 
   // Call operator needed by DriverAdapter
@@ -196,7 +194,7 @@ void registerCudf() {
   auto mr = cudf_velox::createMemoryResource(mrMode);
   cudf::set_current_device_resource(mr.get());
   CudfDriverAdapter cda{mr};
-  exec::DriverAdapter cudfAdapter{"cuDF", cda, cda};
+  exec::DriverAdapter cudfAdapter{kCudfAdapterName, cda, cda};
   exec::DriverFactory::registerAdapter(cudfAdapter);
   isCudfRegistered = true;
 }
@@ -207,7 +205,7 @@ void unregisterCudf() {
           exec::DriverFactory::adapters.begin(),
           exec::DriverFactory::adapters.end(),
           [](const exec::DriverAdapter& adapter) {
-            return adapter.label == "cuDF";
+            return adapter.label == kCudfAdapterName;
           }),
       exec::DriverFactory::adapters.end());
 
