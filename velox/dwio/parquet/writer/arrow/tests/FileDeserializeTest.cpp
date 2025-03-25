@@ -25,6 +25,7 @@
 #include "velox/dwio/parquet/writer/arrow/Exception.h"
 #include "velox/dwio/parquet/writer/arrow/FileWriter.h"
 #include "velox/dwio/parquet/writer/arrow/ThriftInternal.h"
+#include "velox/dwio/parquet/writer/arrow/tests/ParquetTestFile.h"
 #include "velox/dwio/parquet/writer/arrow/tests/TestUtil.h"
 
 #include "arrow/testing/gtest_util.h"
@@ -32,20 +33,6 @@
 
 namespace facebook::velox::parquet::arrow {
 using namespace facebook::velox::common::testutil;
-namespace {
-void writeToFile(
-    std::shared_ptr<TempFilePath> filePath,
-    std::shared_ptr<arrow::Buffer> buffer) {
-  auto localWriteFile =
-      std::make_unique<LocalWriteFile>(filePath->getPath(), false, false);
-  auto bufferReader = std::make_shared<::arrow::io::BufferReader>(buffer);
-  auto bufferToString = bufferReader->buffer()->ToString();
-  localWriteFile->append(bufferToString);
-  localWriteFile->close();
-}
-} // namespace
-
-using ::arrow::io::BufferReader;
 
 // Adds page statistics occupying a certain amount of bytes (for testing very.
 // large page headers)
@@ -978,10 +965,9 @@ TEST_F(TestPageSerde, DataPageV2CrcCheckNonExistent) {
 class TestParquetFileReader : public ::testing::Test {
  public:
   void assertInvalidFileThrows(const std::shared_ptr<Buffer>& buffer) {
-    auto reader = std::make_shared<BufferReader>(buffer);
     // Write the buffer to a temp file path.
     auto filePath = common::testutil::TempFilePath::create();
-    writeToFile(filePath, buffer);
+    test::ParquetTestFile::write(filePath, buffer);
     memory::MemoryManager::testingSetInstance(memory::MemoryManager::Options{});
     std::shared_ptr<facebook::velox::memory::MemoryPool> rootPool =
         memory::memoryManager()->addRootPool("MetadataTest");
@@ -1038,10 +1024,9 @@ TEST_F(TestParquetFileReader, IncompleteMetadata) {
 
   ASSERT_OK_AND_ASSIGN(auto buffer, stream->Finish());
 
-  auto reader = std::make_shared<BufferReader>(buffer);
   // Write the buffer to a temp file path.
   auto filePath = TempFilePath::create();
-  writeToFile(filePath, buffer);
+  test::ParquetTestFile::write(filePath, buffer);
   memory::MemoryManager::testingSetInstance(memory::MemoryManager::Options{});
   std::shared_ptr<facebook::velox::memory::MemoryPool> rootPool =
       memory::memoryManager()->addRootPool("MetadataTest");
