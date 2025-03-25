@@ -185,9 +185,8 @@ bool CompileState::compile() {
     auto keep_operator = 0;
     // TableScan
     if (is_table_scan_supported(oper)) {
-      auto scanOp = dynamic_cast<exec::TableScan*>(oper);
       auto plan_node = std::dynamic_pointer_cast<const core::TableScanNode>(
-          get_plan_node(scanOp->planNodeId()));
+          get_plan_node(oper->planNodeId()));
       VELOX_CHECK(plan_node != nullptr);
       keep_operator = 1;
     } else if (is_join_supported(oper)) {
@@ -385,7 +384,7 @@ void unregisterCudf() {
   _cudfIsRegistered = false;
 }
 
-bool cudfIsRegistered() {
+bool isCudfRegistered() {
   return _cudfIsRegistered;
 }
 

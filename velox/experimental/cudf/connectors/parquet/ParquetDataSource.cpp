@@ -106,26 +106,21 @@ std::optional<RowVectorPtr> ParquetDataSource::next(
     return nullptr;
   }
 
-  // Vector to store read tables
-  auto readTables = std::vector<std::unique_ptr<cudf::table>>{};
-  // Read chunks until num_rows > size or no more chunks left.
-  if (splitReader_->has_next()) {
-    auto [table, metadata] = splitReader_->read_chunk();
-    cudfTable_ = std::move(table);
-    // Fill in the column names if reading the first chunk.
-    if (columnNames.empty()) {
-      for (auto schema : metadata.schema_info) {
-        columnNames.emplace_back(schema.name);
-      }
+  // Read a table chunk
+  auto [table, metadata] = splitReader_->read_chunk();
+  auto cudfTable_ = std::move(table);
+  // Fill in the column names if reading the first chunk.
+  if (columnNames.empty()) {
+    for (auto schema : metadata.schema_info) {
+      columnNames.emplace_back(schema.name);
     }
   }
-
-  // cudfTable_ = concatenateTables(std::move(readTables));
 
   // Apply remaining filter if present
   if (remainingFilterExprSet_) {
     auto cudf_table_columns = cudfTable_->release();
     auto const original_num_columns = cudf_table_columns.size();
+    // May add computed columns to cudf_table_columns
     auto compute_columns = cudfExpressionEvaluator_.compute(
         cudf_table_columns, stream_, cudf::get_current_device_resource_ref());
     std::vector<std::unique_ptr<cudf::column>> original_columns;
@@ -143,17 +138,13 @@ std::optional<RowVectorPtr> ParquetDataSource::next(
   }
 
   // Output RowVectorPtr
-  currentCudfTableView_ = cudfTable_->view();
-  auto sz = cudfTable_->num_rows();
-  auto output = cudfIsRegistered()
+  const auto nrows = cudfTable_->num_rows();
+  auto output = isCudfRegistered()
       ? std::make_shared<CudfVector>(
-            pool_, outputType_, sz, std::move(cudfTable_), stream_)
+            pool_, outputType_, nrows, std::move(cudfTable_), stream_)
       : with_arrow::to_velox_column(
-            currentCudfTableView_, pool_, columnNames, stream_);
+            cudfTable_->view(), pool_, columnNames, stream_);
   stream_.synchronize();
-
-  // Reset internal tables
-  resetCudfTableAndView();
 
   // Check if conversion yielded a nullptr
   VELOX_CHECK_NOT_NULL(output, "Cudf to Velox conversion yielded a nullptr");
@@ -179,11 +170,6 @@ void ParquetDataSource::addSplit(std::shared_ptr<ConnectorSplit> split) {
   // Clear columnNames if not empty
   if (not columnNames.empty()) {
     columnNames.clear();
-  }
-
-  // Reset cudfTable and views if not already reset
-  if (cudfTable_) {
-    resetCudfTableAndView();
   }
 
   // Create a `cudf::io::chunked_parquet_reader` SplitReader
@@ -231,26 +217,20 @@ ParquetDataSource::createSplitReader() {
     VELOX_CHECK_EQ(precompute_instructions_.size(), 0);
     readerOptions.set_filter(subfield_tree_.back());
   }
-
-  // is this right location to get the stream?
   stream_ = cudfGlobalStreamPool().get_stream();
   // Create a parquet reader
   return std::make_unique<cudf::io::chunked_parquet_reader>(
       ParquetConfig_->maxChunkReadLimit(),
       ParquetConfig_->maxPassReadLimit(),
       readerOptions,
-      stream_);
+      stream_,
+      cudf::get_current_device_resource_ref());
 }
 
 void ParquetDataSource::resetSplit() {
   split_.reset();
   splitReader_.reset();
   columnNames.clear();
-}
-
-void ParquetDataSource::resetCudfTableAndView() {
-  cudfTable_.reset();
-  currentCudfTableView_ = cudf::table_view{};
 }
 
 } // namespace facebook::velox::cudf_velox::connector::parquet
