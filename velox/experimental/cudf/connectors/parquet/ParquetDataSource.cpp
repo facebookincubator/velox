@@ -103,7 +103,7 @@ std::optional<RowVectorPtr> ParquetDataSource::next(
 
   // Output RowVectorPtr
   auto sz = cudfTable_->num_rows();
-  auto output = cudfIsRegistered()
+  auto output = isCudfRegistered()
       ? std::make_shared<CudfVector>(
             pool_, outputType_, sz, std::move(cudfTable_), stream_)
       : with_arrow::to_velox_column(

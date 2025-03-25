@@ -384,7 +384,7 @@ void unregisterCudf() {
   _cudfIsRegistered = false;
 }
 
-bool cudfIsRegistered() {
+bool isCudfRegistered() {
   return _cudfIsRegistered;
 }
 
