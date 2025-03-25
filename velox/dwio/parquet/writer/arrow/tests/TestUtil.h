@@ -36,6 +36,7 @@
 #include "velox/dwio/parquet/writer/arrow/Encoding.h"
 #include "velox/dwio/parquet/writer/arrow/Platform.h"
 #include "velox/dwio/parquet/writer/arrow/tests/ColumnReader.h"
+#include "velox/exec/tests/utils/TempFilePath.h"
 
 // https://github.com/google/googletest/pull/2904 might not be available
 // In our version of gtest/gmock.
@@ -76,6 +77,11 @@ const char* getDataDir();
 std::string getBadDataDir();
 
 std::string getDataFile(const std::string& filename, bool isGood = true);
+
+// Write an Arrow buffer to a temporary file path
+void writeToFile(
+    std::shared_ptr<exec::test::TempFilePath> filePath,
+    std::shared_ptr<::arrow::Buffer> buffer);
 
 template <typename T>
 static inline void assertVectorEqual(

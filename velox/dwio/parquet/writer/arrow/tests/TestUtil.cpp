@@ -27,6 +27,7 @@
 #include <utility>
 #include <vector>
 
+#include "velox/common/file/LocalFile.h"
 #include "velox/dwio/parquet/writer/arrow/ColumnPage.h"
 #include "velox/dwio/parquet/writer/arrow/ColumnWriter.h"
 #include "velox/dwio/parquet/writer/arrow/Encoding.h"
@@ -67,6 +68,17 @@ std::string getDataFile(const std::string& filename, bool isGood) {
 
   ss << "/" << filename;
   return ss.str();
+}
+
+void writeToFile(
+    std::shared_ptr<exec::test::TempFilePath> filePath,
+    std::shared_ptr<::arrow::Buffer> buffer) {
+  auto localWriteFile =
+      std::make_unique<LocalWriteFile>(filePath->getPath(), false, false);
+  auto bufferReader = std::make_shared<::arrow::io::BufferReader>(buffer);
+  auto bufferToString = bufferReader->buffer()->ToString();
+  localWriteFile->append(bufferToString);
+  localWriteFile->close();
 }
 
 void randomBytes(int n, uint32_t seed, std::vector<uint8_t>* out) {
