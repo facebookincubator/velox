@@ -102,9 +102,11 @@ repair-wheel-command = """auditwheel repair \
                           -w {dest_dir} {wheel}\
                        """
 
-[tool.cibuildwheel.macos]
+[tool.cibuildwheel.macos] 
+# delocate doesn't take globs and needs the full basename
 repair-wheel-command = """delocate-wheel \
                           --exclude 'libarrow' \
+                          --exclude 'libarrow_python' \
                           --exclude 'libparquet' \
                           --exclude 'libvelox' \
                           --require-archs {delocate_archs} \
