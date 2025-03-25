@@ -22,7 +22,8 @@ BENCHMARKS_DUMP_DIR=dumps
 TREAT_WARNINGS_AS_ERRORS ?= 1
 ENABLE_WALL ?= 1
 PYTHON_VENV ?= .venv
-PIP ?= $(shell command -v uv > /dev/null 2>&1 && echo "uv pip" || echo "$(PYTHON_EXECUTABLE) -m pip")
+PIP ?= $(shell command -v uv > /dev/null 2>&1 && echo "uv pip" || echo "python3 -m pip")
+VENV ?= $(shell command -v uv > /dev/null 2>&1 && echo "uv venv" || echo "python3 -m venv")
 
 # Option to make a minimal build. By default set to "OFF"; set to
 # "ON" to only build a minimal set of components. This may override
@@ -173,34 +174,20 @@ fuzzertest: debug
 			--logtostderr=1 \
 			--minloglevel=0
 
-format-fix: 			#: Fix formatting issues in the main branch
-ifneq ("$(wildcard ${PYTHON_VENV}/pyvenv.cfg)","")
-	source ${PYTHON_VENV}/bin/activate; scripts/check.py format main --fix
-else
+format-fix: python-venv			#: Fix formatting issues in the main branch
+	source $(PYTHON_VENV)/bin/activate; \
 	scripts/check.py format main --fix
-endif
 
-format-check: 			#: Check for formatting issues on the main branch
-	clang-format --version
-ifneq ("$(wildcard ${PYTHON_VENV}/pyvenv.cfg)","")
-	source ${PYTHON_VENV}/bin/activate; scripts/check.py format main
-else
+format-check: python-venv #: Check for formatting issues on the main branch
+	source $(PYTHON_VENV)/bin/activate; \
+	clang-format --version; \
 	scripts/check.py format main
-endif
 
-header-fix:			#: Fix license header issues in the current branch
-ifneq ("$(wildcard ${PYTHON_VENV}/pyvenv.cfg)","")
-	source ${PYTHON_VENV}/bin/activate; scripts/check.py header main --fix
-else
-	scripts/check.py header main --fix
-endif
+header-fix: python-venv #: Fix license header issues in the current branch
+	scripts/check.py header main --fix && deactivate
 
-header-check:			#: Check for license header issues on the main branch
-ifneq ("$(wildcard ${PYTHON_VENV}/pyvenv.cfg)","")
-	source ${PYTHON_VENV}/bin/activate; scripts/check.py header main
-else
+header-check: python-venv-active			#: Check for license header issues on the main branch
 	scripts/check.py header main
-endif
 
 circleci-container:			#: Build the linux container for CircleCi
 	$(MAKE) linux-container CONTAINER_NAME=circleci
@@ -220,8 +207,40 @@ help:					#: Show the help messages
 	awk '/^[-a-z]+:/' | \
 	awk -F: '{ printf("%-20s   %s\n", $$1, $$NF) }'
 
-python-build:
+python-venv:
+	@if [ ! -f ${PYTHON_VENV}/pyvenv.cfg ]; then \
+		${VENV} $(PYTHON_VENV); \
+	fi
+
+check-pip-version: python-venv # We need a recent pip for '-C'
+	if [ "$(PIP)" == "uv pip" ]; then \
+		exit 0; \
+	fi; \
+	source .venv/bin/activate; \
+	found=0; \
+	for pydir in $(PYTHON_VENV)/lib/python*/site-packages; do \
+		if [ -d "$$pydir" ]; then \
+			for dir in $$pydir/pip-*dist-info; do \
+				if [ -d "$$dir" ]; then \
+					version=$$(echo "$$dir" | sed -E 's/.*pip-([0-9]+(\.[0-9]+)*).*/\1/'); \
+					major_version=$$(echo "$$version" | cut -d. -f1); \
+					if [ "$$major_version" -ge 25 ]; then \
+						found=1; \
+						break 2; \
+					fi; \
+				fi; \
+			done; \
+		fi; \
+	done; \
+	if [ $$found -eq 0 ]; then \
+		$(PIP) install --upgrade pip; \
+	fi; \
+
+python-build: check-pip-version
+	source .venv/bin/activate; \
+	$(PIP) install pyarrow scikit_build_core setuptools_scm[toml]; \
 	${PIP} install --no-build-isolation -Ccmake.build-type=Debug -Ceditable.rebuild=true -Cbuild.tool-args="-j${NUM_THREADS}" -ve.
 
-python-test:
-	${PYTHON_EXECUTABLE} -m unittest -v
+python-test: python-venv
+	source .venv/bin/activate; \
+	python3 -m unittest -v
