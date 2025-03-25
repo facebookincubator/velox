@@ -106,6 +106,8 @@ class ParquetReader : public dwio::common::Reader {
 
   FileMetaDataPtr fileMetaData() const;
 
+  const thrift::FileMetaData& thriftFileMetaData() const;
+
  private:
   std::shared_ptr<ReaderBase> readerBase_;
 };
