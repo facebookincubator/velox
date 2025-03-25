@@ -29,15 +29,9 @@ description = "Python bindings and extensions for Velox"
 readme = "pyvelox/README.md"
 requires-python = ">=3.9"
 license = "Apache-2.0"
-authors = [
-  { name = "Meta", email = "velox@fb.com" }
-]
-maintainers = [
-  { name = "Meta", email = "velox@fb.com" }
-]
-dependencies = [
-  "pyarrow"
-]
+authors = [{ name = "Meta", email = "velox@fb.com" }]
+maintainers = [{ name = "Meta", email = "velox@fb.com" }]
+dependencies = ["pyarrow"]
 classifiers = [
   "Intended Audience :: Developers",
   "Intended Audience :: Science/Research",
@@ -47,13 +41,14 @@ classifiers = [
   "Programming Language :: Python :: 3.10",
   "Programming Language :: Python :: 3.11",
   "Programming Language :: Python :: 3.12",
-  "Programming Language :: Python :: Implementation :: CPython"
+  "Programming Language :: Python :: Implementation :: CPython",
 ]
 
 [project.urls]
 homepage = "https://github.com/facebookincubator/velox"
 
 [tool.scikit-build]
+build-dir = "_build/python"
 metadata.version.provider = "scikit_build_core.metadata.setuptools_scm"
 ninja.make-fallback = false
 install.components = ["pyvelox_libraries"]
@@ -70,17 +65,16 @@ version = ">=3.28"
 build-type = "MinSizeRel"
 
 [tool.scikit-build.cmake.define]
-  VELOX_BUILD_PYTHON_PACKAGE = true
-  VELOX_BUILD_TESTING = false
-  VELOX_MONO_LIBRARY = true
-  VELOX_BUILD_SHARED = true
+VELOX_BUILD_PYTHON_PACKAGE = true
+VELOX_PYTHON_LEGACY_ONLY = { env = "PYVELOX_LEGACY_ONLY", default = "OFF" }
+VELOX_BUILD_TESTING = false
+VELOX_MONO_LIBRARY = true
+VELOX_BUILD_SHARED = true
+MAX_HIGH_MEM_JOBS = { env = "MAX_HIGH_MEM_JOBS", default = "" }
+MAX_HIGH_LINK_JOBS = { env = "MAX_HIGH_LINK_JOBS", default = "" }
 
 [[tool.scikit-build.overrides]]
-if.env.DEBUG = true # 1 maps to true
-cmake.build-type = "Debug"
-
-[[tool.scikit-build.overrides]]
-if.env.DEBUG = true # 1 maps to true
+if.env.DEBUG = true        # 1 maps to true
 cmake.build-type = "Debug"
 
 [tool.setuptools_scm]
@@ -101,7 +95,18 @@ test-skip = "*"
 test-command = "echo adding tests later"
 
 [tool.cibuildwheel.linux]
-repair-wheel-command = "auditwheel repair --exclude 'libarrow*' --exclude 'libparquet*' --exclude 'libvelox*' -w {dest_dir} {wheel}"
+repair-wheel-command = """auditwheel repair \
+                          --exclude 'libarrow*' \
+                          --exclude 'libparquet*' \
+                          --exclude 'libvelox*' \
+                          -w {dest_dir} {wheel}\
+                       """
 
-# [tool.cibuildwheel.macos]
-# repair-wheel-command = "delocate-wheel --require-archs {delocate_archs} -w {dest_dir} -v {wheel}"
+[tool.cibuildwheel.macos]
+repair-wheel-command = """delocate-wheel \
+                          --exclude 'libarrow*' \
+                          --exclude 'libparquet*' \
+                          --exclude 'libvelox*' \
+                          --require-archs {delocate_archs} \
+                          -w {dest_dir} -v {wheel}\
+                       """
