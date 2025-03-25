@@ -95,7 +95,7 @@ target_link_libraries(
   PRIVATE velox_py_local_runner_lib)
 
 # pyarrow has to be installed
-find_package(pyarrow)
+find_package(pyarrow REQUIRED)
 
 # 'arrow' target already exists
 pybind11_add_module(arrow_module MODULE arrow/arrow.cpp)
