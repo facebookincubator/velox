@@ -210,6 +210,11 @@ bool ColumnChunkMetaDataPtr::hasDictionaryPageOffset() const {
       thriftColumnChunkPtr(ptr_)->meta_data.__isset.dictionary_page_offset;
 }
 
+bool ColumnChunkMetaDataPtr::hasIndexPage() const {
+  return hasMetadata() &&
+      thriftColumnChunkPtr(ptr_)->meta_data.__isset.index_page_offset;
+}
+
 std::unique_ptr<dwio::common::ColumnStatistics>
 ColumnChunkMetaDataPtr::getColumnStatistics(
     const TypePtr type,
