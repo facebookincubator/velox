@@ -224,5 +224,4 @@ python-build:
 	${PIP} install --no-build-isolation -Ccmake.build-type=Debug -Ceditable.rebuild=true -Cbuild.tool-args="-j${NUM_THREADS}" -ve.
 
 python-test:
-	$(MAKE) python-build
 	${PYTHON_EXECUTABLE} -m unittest -v
