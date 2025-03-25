@@ -25,7 +25,6 @@
 #include "velox/vector/ComplexVector.h"
 
 #include <cudf/column/column_view.hpp>
-#include <cudf/concatenate.hpp>
 #include <cudf/copying.hpp>
 #include <cudf/join.hpp>
 #include <cudf/utilities/default_stream.hpp>

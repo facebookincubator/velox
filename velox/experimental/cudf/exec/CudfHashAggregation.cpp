@@ -25,7 +25,6 @@
 
 #include <cudf/binaryop.hpp>
 #include <cudf/column/column_factories.hpp>
-#include <cudf/concatenate.hpp>
 #include <cudf/reduction.hpp>
 #include <cudf/stream_compaction.hpp>
 #include <cudf/unary.hpp>
