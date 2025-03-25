@@ -104,9 +104,9 @@ repair-wheel-command = """auditwheel repair \
 
 [tool.cibuildwheel.macos]
 repair-wheel-command = """delocate-wheel \
-                          --exclude 'libarrow*' \
-                          --exclude 'libparquet*' \
-                          --exclude 'libvelox*' \
+                          --exclude 'libarrow' \
+                          --exclude 'libparquet' \
+                          --exclude 'libvelox' \
                           --require-archs {delocate_archs} \
                           -w {dest_dir} -v {wheel}\
                        """
