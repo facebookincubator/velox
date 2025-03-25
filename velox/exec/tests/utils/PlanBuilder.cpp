@@ -25,12 +25,17 @@
 #include "velox/exec/TableWriter.h"
 #include "velox/exec/WindowFunction.h"
 #include "velox/exec/tests/utils/TempDirectoryPath.h"
+#include "velox/experimental/cudf/exec/Utilities.h"
 #include "velox/expression/Expr.h"
 #include "velox/expression/ExprToSubfieldFilter.h"
 #include "velox/expression/FunctionCallToSpecialForm.h"
 #include "velox/expression/SignatureBinder.h"
 #include "velox/parse/Expressions.h"
 #include "velox/parse/TypeResolver.h"
+
+#include "velox/experimental/cudf/connectors/parquet/ParquetTableHandle.h"
+#include "velox/experimental/cudf/exec/ToCudf.h"
+#include "velox/experimental/cudf/tests/utils/ParquetConnectorTestBase.h"
 
 using namespace facebook::velox;
 using namespace facebook::velox::connector;
@@ -255,13 +260,27 @@ core::PlanNodePtr PlanBuilder::TableScanBuilder::build(core::PlanNodeId id) {
   }
 
   if (!tableHandle_) {
-    tableHandle_ = std::make_shared<HiveTableHandle>(
-        connectorId_,
-        tableName_,
-        true,
-        std::move(filters),
-        remainingFilterExpr,
-        dataColumns_);
+    // if isCudfRegistered, then use cudftableScan tableHandle_ here.
+    if (facebook::velox::cudf_velox::isCudfRegistered() &&
+        facebook::velox::connector::getAllConnectors().count(
+            cudf_velox::exec::test::kParquetConnectorId) > 0 &&
+        facebook::velox::cudf_velox::isEnabledcudfTableScan()) {
+      // TODO error out if it has filters.
+      tableHandle_ =
+          std::make_shared<cudf_velox::connector::parquet::ParquetTableHandle>(
+              cudf_velox::exec::test::kParquetConnectorId,
+              tableName_,
+              /*filterPushdownEnabled*/ false,
+              dataColumns_);
+    } else {
+      tableHandle_ = std::make_shared<HiveTableHandle>(
+          connectorId_,
+          tableName_,
+          true,
+          std::move(filters),
+          remainingFilterExpr,
+          dataColumns_);
+    }
   }
   return std::make_shared<core::TableScanNode>(
       id, outputType_, tableHandle_, assignments_);

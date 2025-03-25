@@ -86,13 +86,14 @@ class ParquetConnectorTestBase
       const std::string& filePath,
       int64_t splitWeight = 0);
 
-  std::vector<std::shared_ptr<facebook::velox::connector::ConnectorSplit>>
+  static std::vector<
+      std::shared_ptr<facebook::velox::connector::ConnectorSplit>>
   makeParquetConnectorSplits(
       const std::vector<
           std::shared_ptr<facebook::velox::exec::test::TempFilePath>>&
           filePaths);
 
-  std::vector<std::shared_ptr<connector::parquet::ParquetConnectorSplit>>
+  static std::vector<std::shared_ptr<connector::parquet::ParquetConnectorSplit>>
   makeParquetConnectorSplits(const std::string& filePath, uint32_t splitCount);
 
   static std::shared_ptr<connector::parquet::ParquetTableHandle>

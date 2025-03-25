@@ -95,6 +95,11 @@ bool cudfDebugEnabled() {
   return env_cudf_debug != nullptr && std::stoi(env_cudf_debug);
 }
 
+bool isEnabledcudfTableScan() {
+  const char* env_cudf_debug = std::getenv("VELOX_CUDF_TABLE_SCAN");
+  return env_cudf_debug != nullptr && std::stoi(env_cudf_debug);
+}
+
 std::unique_ptr<cudf::table> concatenateTables(
     std::vector<std::unique_ptr<cudf::table>> tables,
     rmm::cuda_stream_view stream) {

@@ -23,6 +23,7 @@
 #include "velox/exec/Limit.h"
 #include "velox/exec/Operator.h"
 #include "velox/exec/OrderBy.h"
+#include "velox/exec/TableScan.h"
 #include "velox/experimental/cudf/exec/CudfConversion.h"
 #include "velox/experimental/cudf/exec/CudfFilterProject.h"
 #include "velox/experimental/cudf/exec/CudfHashAggregation.h"
@@ -85,6 +86,14 @@ bool CompileState::compile() {
     return *it;
   };
 
+  bool const is_parquet_connector_registered =
+      facebook::velox::connector::getAllConnectors().count("test-parquet") > 0;
+  auto is_table_scan_supported =
+      [is_parquet_connector_registered](const exec::Operator* op) {
+        return is_any_of<exec::TableScan>(op) &&
+            is_parquet_connector_registered && isEnabledcudfTableScan();
+      };
+
   auto is_filter_project_supported = [](const exec::Operator* op) {
     if (auto filter_project_op = dynamic_cast<const exec::FilterProject*>(op)) {
       auto info = filter_project_op->exprsAndProjection();
@@ -109,15 +118,16 @@ bool CompileState::compile() {
   };
 
   auto is_supported_gpu_operator =
-      [is_filter_project_supported,
-       is_join_supported](const exec::Operator* op) {
+      [is_filter_project_supported, is_join_supported, is_table_scan_supported](
+          const exec::Operator* op) {
         return is_any_of<
                    exec::OrderBy,
                    exec::HashAggregation,
                    exec::Limit,
                    exec::LocalPartition,
                    exec::LocalExchange>(op) ||
-            is_filter_project_supported(op) || is_join_supported(op);
+            is_filter_project_supported(op) || is_join_supported(op) ||
+            is_table_scan_supported(op);
       };
 
   std::vector<bool> is_supported_gpu_operators(operators.size());
@@ -135,16 +145,18 @@ bool CompileState::compile() {
                exec::LocalPartition>(op) ||
         is_filter_project_supported(op) || is_join_supported(op);
   };
-  auto produces_gpu_output = [is_filter_project_supported,
-                              is_join_supported](const exec::Operator* op) {
-    return is_any_of<
-               exec::OrderBy,
-               exec::HashAggregation,
-               exec::Limit,
-               exec::LocalExchange>(op) ||
-        is_filter_project_supported(op) ||
-        (is_any_of<exec::HashProbe>(op) && is_join_supported(op));
-  };
+  auto produces_gpu_output =
+      [is_filter_project_supported, is_join_supported, is_table_scan_supported](
+          const exec::Operator* op) {
+        return is_any_of<
+                   exec::OrderBy,
+                   exec::HashAggregation,
+                   exec::Limit,
+                   exec::LocalExchange>(op) ||
+            is_filter_project_supported(op) ||
+            (is_any_of<exec::HashProbe>(op) && is_join_supported(op)) ||
+            (is_table_scan_supported(op));
+      };
 
   int32_t operatorsOffset = 0;
   for (int32_t operatorIndex = 0; operatorIndex < operators.size();
@@ -171,7 +183,13 @@ bool CompileState::compile() {
 
     // This is used to denote if the current operator is kept or replaced.
     auto keep_operator = 0;
-    if (is_join_supported(oper)) {
+    // TableScan
+    if (is_table_scan_supported(oper)) {
+      auto plan_node = std::dynamic_pointer_cast<const core::TableScanNode>(
+          get_plan_node(oper->planNodeId()));
+      VELOX_CHECK(plan_node != nullptr);
+      keep_operator = 1;
+    } else if (is_join_supported(oper)) {
       if (auto joinBuildOp = dynamic_cast<exec::HashBuild*>(oper)) {
         auto plan_node = std::dynamic_pointer_cast<const core::HashJoinNode>(
             get_plan_node(joinBuildOp->planNodeId()));
@@ -366,7 +384,7 @@ void unregisterCudf() {
   _cudfIsRegistered = false;
 }
 
-bool cudfIsRegistered() {
+bool isCudfRegistered() {
   return _cudfIsRegistered;
 }
 
