@@ -13,7 +13,9 @@
 # limitations under the License.
 
 add_library(velox_py_init lib/PyInit.cpp)
-target_link_libraries(velox_py_init PRIVATE velox_memory)
+target_link_libraries(
+  velox_py_init
+  PRIVATE velox_memory)
 
 # pyvelox.type library:
 add_library(velox_py_type_lib type/PyType.cpp)
