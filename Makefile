@@ -174,20 +174,34 @@ fuzzertest: debug
 			--logtostderr=1 \
 			--minloglevel=0
 
-format-fix: python-venv			#: Fix formatting issues in the main branch
-	source $(PYTHON_VENV)/bin/activate; \
+format-fix: 			#: Fix formatting issues in the main branch
+ifneq ("$(wildcard ${PYTHON_VENV}/pyvenv.cfg)","")
+	source ${PYTHON_VENV}/bin/activate; scripts/check.py format main --fix
+else
 	scripts/check.py format main --fix
+endif
 
-format-check: python-venv #: Check for formatting issues on the main branch
-	source $(PYTHON_VENV)/bin/activate; \
-	clang-format --version; \
+format-check: 			#: Check for formatting issues on the main branch
+	clang-format --version
+ifneq ("$(wildcard ${PYTHON_VENV}/pyvenv.cfg)","")
+	source ${PYTHON_VENV}/bin/activate; scripts/check.py format main
+else
 	scripts/check.py format main
+endif
 
-header-fix: python-venv #: Fix license header issues in the current branch
-	scripts/check.py header main --fix && deactivate
+header-fix:			#: Fix license header issues in the current branch
+ifneq ("$(wildcard ${PYTHON_VENV}/pyvenv.cfg)","")
+	source ${PYTHON_VENV}/bin/activate; scripts/check.py header main --fix
+else
+	scripts/check.py header main --fix
+endif
 
-header-check: python-venv-active			#: Check for license header issues on the main branch
+header-check:			#: Check for license header issues on the main branch
+ifneq ("$(wildcard ${PYTHON_VENV}/pyvenv.cfg)","")
+	source ${PYTHON_VENV}/bin/activate; scripts/check.py header main
+else
 	scripts/check.py header main
+endif
 
 circleci-container:			#: Build the linux container for CircleCi
 	$(MAKE) linux-container CONTAINER_NAME=circleci
