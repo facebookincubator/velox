@@ -102,13 +102,6 @@ class ParquetDataSource : public DataSource {
   std::unique_ptr<cudf::io::chunked_parquet_reader> splitReader_;
   rmm::cuda_stream_view stream_;
 
-  // cuDF Table not fully converted and returned to `RowVectorPtr` in the last
-  // `next()` call.
-  std::unique_ptr<cudf::table> cudfTable_;
-  // View of the currently available portion of the `cudfTable_` to be
-  // converted to `RowVectorPtr` in subsequent `next()` call.
-  cudf::table_view currentCudfTableView_;
-
   // Table column names read from the Parquet file
   std::vector<std::string> columnNames;
 

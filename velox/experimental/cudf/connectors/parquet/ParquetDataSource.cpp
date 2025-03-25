@@ -88,30 +88,23 @@ std::optional<RowVectorPtr> ParquetDataSource::next(
   }
 
   // Read a table chunk
-  if (splitReader_->has_next()) {
-    auto [table, metadata] = splitReader_->read_chunk();
-    cudfTable_ = std::move(table);
-    // Fill in the column names if reading the first chunk.
-    if (columnNames.empty()) {
-      for (auto schema : metadata.schema_info) {
-        columnNames.emplace_back(schema.name);
-      }
+  auto [table, metadata] = splitReader_->read_chunk();
+  auto cudfTable_ = std::move(table);
+  // Fill in the column names if reading the first chunk.
+  if (columnNames.empty()) {
+    for (auto schema : metadata.schema_info) {
+      columnNames.emplace_back(schema.name);
     }
   }
 
-  currentCudfTableView_ = cudfTable_->view();
-
   // Output RowVectorPtr
-  auto sz = cudfTable_->num_rows();
+  auto nrows = cudfTable_->num_rows();
   auto output = isCudfRegistered()
       ? std::make_shared<CudfVector>(
-            pool_, outputType_, sz, std::move(cudfTable_), stream_)
+            pool_, outputType_, nrows, std::move(cudfTable_), stream_)
       : with_arrow::to_velox_column(
-            currentCudfTableView_, pool_, columnNames, stream_);
+            cudfTable_->view(), pool_, columnNames, stream_);
   stream_.synchronize();
-
-  // Reset internal tables
-  resetCudfTableAndView();
 
   // Check if conversion yielded a nullptr
   VELOX_CHECK_NOT_NULL(output, "Cudf to Velox conversion yielded a nullptr");
@@ -137,11 +130,6 @@ void ParquetDataSource::addSplit(std::shared_ptr<ConnectorSplit> split) {
   // Clear columnNames if not empty
   if (not columnNames.empty()) {
     columnNames.clear();
-  }
-
-  // Reset cudfTable and views if not already reset
-  if (cudfTable_) {
-    resetCudfTableAndView();
   }
 
   // Create a `cudf::io::chunked_parquet_reader` SplitReader
@@ -183,18 +171,15 @@ ParquetDataSource::createSplitReader() {
   return std::make_unique<cudf::io::chunked_parquet_reader>(
       ParquetConfig_->maxChunkReadLimit(),
       ParquetConfig_->maxPassReadLimit(),
-      readerOptions);
+      readerOptions,
+      stream_,
+      cudf::get_current_device_resource_ref());
 }
 
 void ParquetDataSource::resetSplit() {
   split_.reset();
   splitReader_.reset();
   columnNames.clear();
-}
-
-void ParquetDataSource::resetCudfTableAndView() {
-  cudfTable_.reset();
-  currentCudfTableView_ = cudf::table_view{};
 }
 
 } // namespace facebook::velox::cudf_velox::connector::parquet
