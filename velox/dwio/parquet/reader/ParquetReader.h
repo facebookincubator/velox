@@ -19,6 +19,7 @@
 #include "velox/dwio/common/Reader.h"
 #include "velox/dwio/common/ReaderFactory.h"
 #include "velox/dwio/parquet/reader/Metadata.h"
+#include "velox/dwio/parquet/reader/ParquetStatsContext.h"
 
 namespace facebook::velox::dwio::common {
 
@@ -102,6 +103,8 @@ class ParquetReader : public dwio::common::Reader {
       const dwio::common::RowReaderOptions& options = {}) const override;
 
   FileMetaDataPtr fileMetaData() const;
+
+  const thrift::FileMetaData& thriftFileMetaData() const;
 
  private:
   std::shared_ptr<ReaderBase> readerBase_;
