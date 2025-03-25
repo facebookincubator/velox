@@ -23,18 +23,6 @@
 namespace facebook::velox {
 
 // static
-Timestamp Timestamp::fromDaysAndNanos(int32_t days, int64_t nanos) {
-  int64_t seconds =
-      (days - kJulianToUnixEpochDays) * kSecondsInDay + nanos / kNanosInSecond;
-  int64_t remainingNanos = nanos % kNanosInSecond;
-  if (remainingNanos < 0) {
-    remainingNanos += kNanosInSecond;
-    seconds--;
-  }
-  return Timestamp(seconds, remainingNanos);
-}
-
-// static
 Timestamp Timestamp::fromDate(int32_t date) {
   int64_t seconds = (int64_t)date * kSecondsInDay;
   return Timestamp(seconds, 0);
