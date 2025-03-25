@@ -74,18 +74,16 @@ CudfFromVelox::CudfFromVelox(
 
 void CudfFromVelox::addInput(RowVectorPtr input) {
   VELOX_NVTX_OPERATOR_FUNC_RANGE();
-  if (input != nullptr) {
-    if (input->size() > 0) {
-      // Materialize lazy vectors
-      for (auto& child : input->children()) {
-        child->loadedVector();
-      }
-      input->loadedVector();
-
-      // Accumulate inputs
-      inputs_.push_back(input);
-      currentOutputSize_ += input->size();
+  if (input->size() > 0) {
+    // Materialize lazy vectors
+    for (auto& child : input->children()) {
+      child->loadedVector();
     }
+    input->loadedVector();
+
+    // Accumulate inputs
+    inputs_.push_back(input);
+    currentOutputSize_ += input->size();
   }
 }
 

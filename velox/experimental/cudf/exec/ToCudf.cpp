@@ -155,7 +155,7 @@ struct CudfDriverAdapter {
   }
 
   // Iterate recursively and store them in the planNodes_.
-  void storePlanNodes(const std::shared_ptr<const core::PlanNode>& planNode) {
+  void storePlanNodes(const core::PlanNodePtr& planNode) {
     const auto& sources = planNode->sources();
     for (int32_t i = 0; i < sources.size(); ++i) {
       storePlanNodes(sources[i]);
