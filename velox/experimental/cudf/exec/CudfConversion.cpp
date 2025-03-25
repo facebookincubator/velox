@@ -36,7 +36,7 @@ RowVectorPtr mergeRowVectors(
     const std::vector<RowVectorPtr>& results,
     velox::memory::MemoryPool* pool) {
   VELOX_NVTX_FUNC_RANGE();
-  auto totalCount = 0;
+  vector_size_t totalCount = 0;
   for (const auto& result : results) {
     totalCount += result->size();
   }
@@ -54,8 +54,15 @@ cudf::size_type preferredGpuBatchSizeRows() {
   constexpr cudf::size_type kDefaultGpuBatchSizeRows = 100000;
   const char* envCudfGpuBatchSizeRows =
       std::getenv("VELOX_CUDF_GPU_BATCH_SIZE_ROWS");
-  return envCudfGpuBatchSizeRows != nullptr ? std::stoi(envCudfGpuBatchSizeRows)
-                                            : kDefaultGpuBatchSizeRows;
+  const auto batchSize = envCudfGpuBatchSizeRows != nullptr
+      ? std::stoll(envCudfGpuBatchSizeRows)
+      : kDefaultGpuBatchSizeRows;
+  VELOX_CHECK_GT(batchSize, 0, "VELOX_CUDF_GPU_BATCH_SIZE_ROWS must be > 0");
+  VELOX_CHECK_LE(
+      batchSize,
+      std::numeric_limits<vector_size_t>::max(),
+      "VELOX_CUDF_GPU_BATCH_SIZE_ROWS must be <= max(vector_size_t)");
+  return batchSize;
 }
 } // namespace
 
@@ -90,18 +97,35 @@ void CudfFromVelox::addInput(RowVectorPtr input) {
 RowVectorPtr CudfFromVelox::getOutput() {
   VELOX_NVTX_OPERATOR_FUNC_RANGE();
   const auto targetOutputSize = preferredGpuBatchSizeRows();
-  const auto exitEarly = finished_ or
+
+  finished_ = noMoreInput_ && inputs_.empty();
+
+  if (finished_ or
       (currentOutputSize_ < targetOutputSize and not noMoreInput_) or
-      inputs_.empty();
-  finished_ = noMoreInput_;
-  if (exitEarly) {
+      inputs_.empty()) {
     return nullptr;
   }
 
-  // Combine all input RowVectors into a single RowVector and clear inputs
-  auto input = mergeRowVectors(inputs_, inputs_[0]->pool());
-  inputs_.clear();
-  currentOutputSize_ = 0;
+  // Select inputs that don't exceed the max vector size limit
+  std::vector<RowVectorPtr> selectedInputs;
+  vector_size_t totalSize = 0;
+  auto const maxVectorSize = std::numeric_limits<vector_size_t>::max();
+
+  for (const auto& input : inputs_) {
+    if (totalSize + input->size() <= maxVectorSize) {
+      selectedInputs.push_back(input);
+      totalSize += input->size();
+    } else {
+      break;
+    }
+  }
+
+  // Combine selected RowVectors into a single RowVector
+  auto input = mergeRowVectors(selectedInputs, inputs_[0]->pool());
+
+  // Remove processed inputs
+  inputs_.erase(inputs_.begin(), inputs_.begin() + selectedInputs.size());
+  currentOutputSize_ -= totalSize;
 
   // Early return if no input
   if (input->size() == 0) {
