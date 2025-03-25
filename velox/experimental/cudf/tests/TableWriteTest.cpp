@@ -29,7 +29,7 @@
 #include "velox/experimental/cudf/connectors/parquet/ParquetConnectorSplit.h"
 #include "velox/experimental/cudf/connectors/parquet/ParquetDataSource.h"
 #include "velox/experimental/cudf/connectors/parquet/ParquetTableHandle.h"
-#include "velox/experimental/cudf/exec/Utilities.h"
+#include "velox/experimental/cudf/exec/ToCudf.h"
 #include "velox/experimental/cudf/tests/utils/CudfPlanBuilder.h"
 #include "velox/experimental/cudf/tests/utils/ParquetConnectorTestBase.h"
 

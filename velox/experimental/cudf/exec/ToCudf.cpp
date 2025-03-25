@@ -388,4 +388,15 @@ bool isCudfRegistered() {
   return _cudfIsRegistered;
 }
 
+bool cudfDebugEnabled() {
+  const char* env_cudf_debug = std::getenv("VELOX_CUDF_DEBUG");
+  return env_cudf_debug != nullptr && std::stoi(env_cudf_debug);
+}
+
+bool isEnabledcudfTableScan() {
+  const char* env_cudf_debug = std::getenv("VELOX_CUDF_TABLE_SCAN");
+  return env_cudf_debug != nullptr && std::stoi(env_cudf_debug);
+}
+
+
 } // namespace facebook::velox::cudf_velox

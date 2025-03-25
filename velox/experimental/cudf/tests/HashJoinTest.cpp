@@ -31,7 +31,6 @@
 #include "velox/exec/tests/utils/TempDirectoryPath.h"
 #include "velox/exec/tests/utils/VectorTestUtil.h"
 #include "velox/experimental/cudf/exec/ToCudf.h"
-#include "velox/experimental/cudf/exec/Utilities.h"
 #include "velox/vector/fuzzer/VectorFuzzer.h"
 
 using namespace facebook::velox;

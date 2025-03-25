@@ -19,7 +19,6 @@
 #include "velox/exec/tests/utils/PlanBuilder.h"
 #include "velox/experimental/cudf/exec/CudfFilterProject.h"
 #include "velox/experimental/cudf/exec/ToCudf.h"
-#include "velox/experimental/cudf/exec/Utilities.h"
 
 using namespace facebook::velox;
 using namespace facebook::velox::exec;

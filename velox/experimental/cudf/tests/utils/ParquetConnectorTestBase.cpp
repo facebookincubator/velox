@@ -30,7 +30,6 @@
 #include "velox/dwio/dwrf/writer/FlushPolicy.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 
-#include "velox/experimental/cudf/exec/Utilities.h"
 #include "velox/experimental/cudf/exec/VeloxCudfInterop.h"
 #include "velox/experimental/cudf/tests/utils/ParquetConnectorTestBase.h"
 #include "velox/experimental/cudf/vector/CudfVector.h"

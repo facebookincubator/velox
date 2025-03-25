@@ -41,7 +41,7 @@
 #include <thrust/execution_policy.h>
 
 #include "velox/experimental/cudf/exec/NvtxHelper.h"
-#include "velox/experimental/cudf/exec/Utilities.h"
+#include "velox/experimental/cudf/exec/ToCudf.h"
 #include "velox/experimental/cudf/exec/VeloxCudfInterop.h"
 
 #include <functional>

@@ -49,4 +49,17 @@ void unregisterCudf();
 /// Returns true if cuDF is registered.
 bool isCudfRegistered();
 
+/**
+ * @brief Returns true if the VELOX_CUDF_DEBUG environment variable is set to a
+ * nonzero value.
+ */
+bool cudfDebugEnabled();
+
+/**
+ * @brief Returns true if the VELOX_CUDF_TABLE_SCAN environment variable is set
+ * to a nonzero value.
+ */
+bool isEnabledcudfTableScan();
+
+
 } // namespace facebook::velox::cudf_velox

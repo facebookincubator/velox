@@ -13,11 +13,6 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-
-#include <cstdlib>
-#include <memory>
-#include <string_view>
-
 #include "velox/experimental/cudf/exec/Utilities.h"
 
 #include <common/base/Exceptions.h>
@@ -35,6 +30,10 @@
 #include <cudf/utilities/default_stream.hpp>
 #include <cudf/utilities/error.hpp>
 #include <cudf/utilities/memory_resource.hpp>
+
+#include <cstdlib>
+#include <memory>
+#include <string_view>
 
 namespace facebook::velox::cudf_velox {
 
@@ -89,16 +88,6 @@ std::shared_ptr<rmm::mr::device_memory_resource> create_memory_resource(
 cudf::detail::cuda_stream_pool& cudfGlobalStreamPool() {
   return cudf::detail::global_cuda_stream_pool();
 };
-
-bool cudfDebugEnabled() {
-  const char* env_cudf_debug = std::getenv("VELOX_CUDF_DEBUG");
-  return env_cudf_debug != nullptr && std::stoi(env_cudf_debug);
-}
-
-bool isEnabledcudfTableScan() {
-  const char* env_cudf_debug = std::getenv("VELOX_CUDF_TABLE_SCAN");
-  return env_cudf_debug != nullptr && std::stoi(env_cudf_debug);
-}
 
 std::unique_ptr<cudf::table> concatenateTables(
     std::vector<std::unique_ptr<cudf::table>> tables,
