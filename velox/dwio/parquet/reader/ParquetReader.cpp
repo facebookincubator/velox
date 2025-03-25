@@ -1192,4 +1192,7 @@ FileMetaDataPtr ParquetReader::fileMetaData() const {
   return readerBase_->fileMetaData();
 }
 
+const thrift::FileMetaData& ParquetReader::thriftFileMetaData() const {
+  return readerBase_->thriftFileMetaData();
+}
 } // namespace facebook::velox::parquet
