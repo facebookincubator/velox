@@ -59,8 +59,6 @@ class CudfVector : public RowVector {
     return std::move(table_);
   }
 
-  uint64_t estimateFlatSize() const override;
-
  private:
   std::unique_ptr<cudf::table> table_;
   rmm::cuda_stream_view stream_;

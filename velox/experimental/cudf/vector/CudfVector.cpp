@@ -16,35 +16,6 @@
 
 #include "velox/experimental/cudf/vector/CudfVector.h"
 
-#include <cudf/reduction.hpp>
-#include <cudf/table/table_view.hpp>
-#include <cudf/transform.hpp>
-
-#include <cmath>
-
 namespace facebook::velox::cudf_velox {
-namespace {
-static int64_t estimate_size(
-    cudf::table_view const& view,
-    rmm::cuda_stream_view stream) {
-  // Compute the size in bits for each row.
-  auto const row_sizes = cudf::row_bit_count(view, stream);
-  // Accumulate the row sizes to compute a sum.
-  auto const agg = cudf::make_sum_aggregation<cudf::reduce_aggregation>();
-  cudf::data_type sum_dtype{cudf::type_id::INT64};
-  auto const total_size_scalar =
-      cudf::reduce(*row_sizes, *agg, sum_dtype, stream);
-  auto const total_size_in_bits =
-      static_cast<cudf::numeric_scalar<int64_t>*>(total_size_scalar.get())
-          ->value(stream);
-  // Convert the size in bits to the size in bytes.
-  return static_cast<int64_t>(
-      std::ceil(static_cast<double>(total_size_in_bits) / 8));
-}
-} // namespace
-
-uint64_t CudfVector::estimateFlatSize() const {
-  return estimate_size(table_->view(), stream_);
-}
 
 } // namespace facebook::velox::cudf_velox
