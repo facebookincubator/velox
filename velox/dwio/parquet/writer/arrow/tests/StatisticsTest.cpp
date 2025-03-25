@@ -39,18 +39,6 @@ using schema::NodePtr;
 using schema::PrimitiveNode;
 
 namespace test {
-namespace {
-void writeToFile(
-    std::shared_ptr<TempFilePath> filePath,
-    std::shared_ptr<::arrow::Buffer> buffer) {
-  auto localWriteFile =
-      std::make_unique<LocalWriteFile>(filePath->getPath(), false, false);
-  auto bufferReader = std::make_shared<::arrow::io::BufferReader>(buffer);
-  auto bufferToString = bufferReader->buffer()->ToString();
-  localWriteFile->append(bufferToString);
-  localWriteFile->close();
-}
-} // namespace
 
 // ----------------------------------------------------------------------.
 // Test Comparators.

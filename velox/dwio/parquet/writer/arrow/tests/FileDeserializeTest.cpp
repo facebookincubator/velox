@@ -31,18 +31,6 @@
 
 namespace facebook::velox::parquet::arrow {
 using namespace facebook::velox::common::testutil;
-namespace {
-void writeToFile(
-    std::shared_ptr<TempFilePath> filePath,
-    std::shared_ptr<arrow::Buffer> buffer) {
-  auto localWriteFile =
-      std::make_unique<LocalWriteFile>(filePath->getPath(), false, false);
-  auto bufferReader = std::make_shared<::arrow::io::BufferReader>(buffer);
-  auto bufferToString = bufferReader->buffer()->ToString();
-  localWriteFile->append(bufferToString);
-  localWriteFile->close();
-}
-} // namespace
 
 using ::arrow::io::BufferReader;
 
@@ -965,7 +953,7 @@ class TestParquetFileReader : public ::testing::Test {
     auto reader = std::make_shared<BufferReader>(buffer);
     // Write the buffer to a temp file path.
     auto filePath = common::testutil::TempFilePath::create();
-    writeToFile(filePath, buffer);
+    test::writeToFile(filePath, buffer);
     memory::MemoryManager::testingSetInstance(memory::MemoryManager::Options{});
     std::shared_ptr<facebook::velox::memory::MemoryPool> rootPool =
         memory::memoryManager()->addRootPool("MetadataTest");
@@ -1021,7 +1009,7 @@ TEST_F(TestParquetFileReader, IncompleteMetadata) {
   auto reader = std::make_shared<BufferReader>(buffer);
   // Write the buffer to a temp file path.
   auto filePath = TempFilePath::create();
-  writeToFile(filePath, buffer);
+  test::writeToFile(filePath, buffer);
   memory::MemoryManager::testingSetInstance(memory::MemoryManager::Options{});
   std::shared_ptr<facebook::velox::memory::MemoryPool> rootPool =
       memory::memoryManager()->addRootPool("MetadataTest");
