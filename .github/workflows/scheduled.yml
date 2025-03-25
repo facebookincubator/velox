@@ -96,7 +96,7 @@ jobs:
       CCACHE_DIR: "${{ github.workspace }}/ccache"
       NUM_THREADS: "${{ inputs.numThreads || 16 }}"
       MAX_HIGH_MEM_JOBS: "${{ inputs.maxHighMemJobs || 8 }}" 
-      MAX_LINK_JOBS: ${{ inputs.maxLinkJobs || 4 }}"
+      MAX_LINK_JOBS: "${{ inputs.maxLinkJobs || 4 }}"
       SKBUILD_BUILD_DIR: "_build/debug"
       PYVELOX_LEGACY_ONLY: "ON"
 
