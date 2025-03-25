@@ -533,7 +533,7 @@ getParquetDecompressionOptions(common::CompressionKind kind) {
     options.format.zlib.windowBits =
         dwio::common::compression::Compressor::PARQUET_ZLIB_WINDOW_BITS;
   } else if (
-      kind == common::CompressionKind_LZ4 ||
+      kind == common::CompressionKind_LZ4_HADOOP ||
       kind == common::CompressionKind_LZO) {
     options.format.lz4_lzo.isHadoopFrameFormat = true;
   }
