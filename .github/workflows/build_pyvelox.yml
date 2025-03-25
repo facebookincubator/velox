@@ -131,6 +131,7 @@ jobs:
         env:
           BUILD_VERSION: "${{ inputs.version || steps.version.outputs.build_version }}"
         run: |
+          pipx install uv
           uv build --sdist --out-dir wheelhouse
 
       - name: Build wheels
