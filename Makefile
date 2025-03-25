@@ -22,6 +22,7 @@ BENCHMARKS_DUMP_DIR=dumps
 TREAT_WARNINGS_AS_ERRORS ?= 1
 ENABLE_WALL ?= 1
 PYTHON_VENV ?= .venv
+PIP ?= $(shell command -v uv > /dev/null 2>&1 && echo "uv pip" || echo "$(PYTHON_EXECUTABLE) -m pip")
 
 # Option to make a minimal build. By default set to "OFF"; set to
 # "ON" to only build a minimal set of components. This may override
@@ -83,7 +84,7 @@ CPU_TARGET ?= "avx"
 FUZZER_SEED ?= 123456
 FUZZER_DURATION_SEC ?= 60
 
-PYTHON_EXECUTABLE ?= $(shell which python)
+PYTHON_EXECUTABLE ?= $(shell which python3)
 
 all: release			#: Build the release version
 
@@ -219,12 +220,9 @@ help:					#: Show the help messages
 	awk '/^[-a-z]+:/' | \
 	awk -F: '{ printf("%-20s   %s\n", $$1, $$NF) }'
 
-python-clean:
-	DEBUG=1 ${PYTHON_EXECUTABLE} setup.py clean
-
 python-build:
-	DEBUG=1 CMAKE_BUILD_PARALLEL_LEVEL=${NUM_THREADS} ${PYTHON_EXECUTABLE} -m pip install -e .$(extras) --verbose
+	${PIP} install --no-build-isolation -Ccmake.build-type=Debug -Ceditable.rebuild=true -Cbuild.tool-args="-j${NUM_THREADS}" -ve.
 
 python-test:
-	$(MAKE) python-build extras="[tests]"
-	DEBUG=1 ${PYTHON_EXECUTABLE} -m unittest -v
+	$(MAKE) python-build
+	${PYTHON_EXECUTABLE} -m unittest -v
