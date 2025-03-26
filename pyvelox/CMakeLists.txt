@@ -41,4 +41,6 @@ if(VELOX_BUILD_PYTHON_PACKAGE)
   target_compile_definitions(legacy PRIVATE -DCREATE_PYVELOX_MODULE)
   install(TARGETS legacy LIBRARY DESTINATION pyvelox
                                  COMPONENT pyvelox_libraries)
+  set_target_properties(legacy PROPERTIES INSTALL_RPATH "${_origin}/;${CMAKE_BINARY_DIR}/lib"
+                                          INSTALL_RPATH_USE_LINK_PATH TRUE)
 endif()
