@@ -367,6 +367,41 @@ betweenHugeint(int128_t min, int128_t max, bool nullAllowed = false) {
   return std::make_unique<common::HugeintRange>(min, max, nullAllowed);
 }
 
+inline std::unique_ptr<common::NegatedHugeintRange> notEqualHugeint(
+    int128_t value,
+    bool nullAllowed = false) {
+  return std::make_unique<common::NegatedHugeintRange>(
+      value, value, nullAllowed);
+}
+
+inline std::unique_ptr<common::NegatedHugeintRange>
+notBetweenHugeint(int128_t min, int128_t max, bool nullAllowed = false) {
+  return std::make_unique<common::NegatedHugeintRange>(min, max, nullAllowed);
+}
+
+inline std::unique_ptr<common::NegatedHugeintRange> notGreaterThanHugeint(
+    int128_t min,
+    bool nullAllowed = false) {
+  return std::make_unique<common::NegatedHugeintRange>(
+      min + 1, std::numeric_limits<int128_t>::max(), nullAllowed);
+}
+
+inline std::unique_ptr<common::NegatedHugeintValuesUsingHashTable> notInHugeint(
+    const std::vector<int128_t>& values,
+    bool nullAllowed = false) {
+  int128_t min = values[0];
+  int128_t max = values[0];
+  for (auto i = 1; i < values.size(); ++i) {
+    if (values[i] > max) {
+      max = values[i];
+    } else if (values[i] < min) {
+      min = values[i];
+    }
+  }
+  return std::make_unique<common::NegatedHugeintValuesUsingHashTable>(
+      min, max, values, nullAllowed);
+}
+
 std::pair<common::Subfield, std::unique_ptr<common::Filter>> toSubfieldFilter(
     const core::TypedExprPtr& expr,
     core::ExpressionEvaluator*);
