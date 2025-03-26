@@ -13,6 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+#include "velox/functions/lib/ArrayFunctions.h"
 #include "velox/functions/lib/ArrayShuffle.h"
 #include "velox/functions/lib/RegistrationHelpers.h"
 #include "velox/functions/lib/Repeat.h"
@@ -176,8 +177,11 @@ inline void registerArrayCompactFunctions(const std::string& prefix) {
   registerArrayCompactFunction<Timestamp>(prefix);
   registerArrayCompactFunction<Date>(prefix);
   registerArrayCompactFunction<Varbinary>(prefix);
-  registerArrayCompactFunction<Varchar>(prefix);
   registerArrayCompactFunction<Generic<T1>>(prefix);
+  registerFunction<
+      ArrayRemoveNullFunctionString,
+      Array<Varchar>,
+      Array<Varchar>>({prefix + "array_compact"});
 }
 
 void registerArrayFunctions(const std::string& prefix) {
