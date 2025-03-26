@@ -15,7 +15,7 @@
  */
 
 #include "velox/exec/Task.h"
-#include "folly/experimental/EventCount.h"
+#include "folly/synchronization/EventCount.h"
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/common/file/tests/FaultyFileSystem.h"
 #include "velox/common/future/VeloxPromise.h"
