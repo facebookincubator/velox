@@ -106,13 +106,6 @@ function install_re2 {
   cmake_install_dir re2 -DRE2_BUILD_TESTING=OFF
 }
 
-function install_gflags {
-  # Remove an older version if present.
-  dnf remove -y gflags
-  wget_and_untar https://github.com/gflags/gflags/archive/${GFLAGS_VERSION}.tar.gz gflags
-  cmake_install_dir gflags -DBUILD_SHARED_LIBS=ON -DBUILD_STATIC_LIBS=ON -DBUILD_gflags_LIB=ON -DLIB_SUFFIX=64
-}
-
 function install_glog {
   wget_and_untar https://github.com/google/glog/archive/${GLOG_VERSION}.tar.gz glog
   cmake_install_dir glog -DBUILD_SHARED_LIBS=ON
@@ -161,6 +154,33 @@ function install_arrow {
     -DCMAKE_BUILD_TYPE=Release \
     -DARROW_BUILD_STATIC=ON \
     -DBOOST_ROOT=${INSTALL_PREFIX}
+}
+
+function install_thrift {
+   wget_and_untar https://github.com/apache/thrift/archive/${THRIFT_VERSION}.tar.gz thrift
+
+   EXTRA_CXXFLAGS="-O3 -fPIC"
+   # Clang will generate warnings and they need to be suppressed, otherwise the build will fail.
+   if [[ ${USE_CLANG} != "false" ]]; then
+     EXTRA_CXXFLAGS="-O3 -fPIC -Wno-inconsistent-missing-override -Wno-unused-but-set-variable"
+   fi
+
+   CXX_FLAGS="$EXTRA_CXXFLAGS" cmake_install_dir thrift \
+     -DBUILD_SHARED_LIBS=OFF \
+     -DBUILD_COMPILER=ON \
+     -DBUILD_EXAMPLES=OFF \
+     -DBUILD_TUTORIALS=OFF \
+     -DCMAKE_DEBUG_POSTFIX= \
+     -DWITH_AS3=OFF \
+     -DWITH_CPP=ON \
+     -DWITH_C_GLIB=OFF \
+     -DWITH_JAVA=OFF \
+     -DWITH_JAVASCRIPT=OFF \
+     -DWITH_LIBEVENT=OFF \
+     -DWITH_NODEJS=OFF \
+     -DWITH_PYTHON=OFF \
+     -DWITH_QT5=OFF \
+     -DWITH_ZLIB=OFF
 }
 
 function install_stemmer {

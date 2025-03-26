@@ -46,21 +46,6 @@ function install_clang15 {
   dnf_install clang15 gcc-toolset-13-libatomic-devel
 }
 
-function install_thrift {
-   wget_and_untar https://github.com/apache/thrift/archive/${THRIFT_VERSION}.tar.gz thrift
-   (
-     cd ${DEPENDENCY_DIR}/thrift
-     ./bootstrap.sh
-     EXTRA_CXXFLAGS="-O3 -fPIC"
-     # Clang will generate warnings and they need to be suppressed, otherwise the build will fail.
-     if [[ ${USE_CLANG} != "false" ]]; then
-       EXTRA_CXXFLAGS="-O3 -fPIC -Wno-inconsistent-missing-override -Wno-unused-but-set-variable"
-     fi
-     ./configure --prefix=${INSTALL_PREFIX} --enable-tests=no --enable-tutorial=no --with-boost=${INSTALL_PREFIX} CXXFLAGS="${EXTRA_CXXFLAGS}"
-     make "-j${NPROC}" install
-   )
-}
-
 # Install packages required for build.
 function install_build_prerequisites {
   dnf update -y
@@ -82,7 +67,7 @@ function install_velox_deps_from_dnf {
   dnf_install libevent-devel \
     openssl-devel re2-devel libzstd-devel lz4-devel double-conversion-devel \
     libdwarf-devel elfutils-libelf-devel curl-devel libicu-devel bison flex \
-    libsodium-devel zlib-devel gtest-devel gmock-devel gflags-devel
+    libsodium-devel zlib-devel gtest-devel gmock-devel
 
   # install sphinx for doc gen
   pip install sphinx sphinx-tabs breathe sphinx_rtd_theme
@@ -90,6 +75,13 @@ function install_velox_deps_from_dnf {
 
 function install_conda {
   dnf_install conda
+}
+
+function install_gflags {
+  # Remove an older version if present.
+  dnf remove -y gflags
+  wget_and_untar https://github.com/gflags/gflags/archive/${GFLAGS_VERSION}.tar.gz gflags
+  cmake_install_dir gflags -DBUILD_SHARED_LIBS=ON -DBUILD_STATIC_LIBS=ON -DBUILD_gflags_LIB=ON -DLIB_SUFFIX=64
 }
 
 function install_cuda {
