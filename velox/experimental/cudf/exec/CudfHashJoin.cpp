@@ -14,29 +14,16 @@
  * limitations under the License.
  */
 
-// For custom hash join operator
-#include "velox/core/Expressions.h"
-#include "velox/core/PlanNode.h"
-#include "velox/exec/Driver.h"
-#include "velox/exec/JoinBridge.h"
-#include "velox/exec/Operator.h"
-#include "velox/exec/Task.h"
-#include "velox/expression/FieldReference.h"
-#include "velox/vector/ComplexVector.h"
-
-#include <cudf/column/column_view.hpp>
-#include <cudf/copying.hpp>
-#include <cudf/join.hpp>
-#include <cudf/utilities/default_stream.hpp>
-
-#include <nvtx3/nvtx3.hpp>
-
 #include "velox/experimental/cudf/exec/CudfHashJoin.h"
+#include "velox/exec/Task.h"
 #include "velox/experimental/cudf/exec/ExpressionEvaluator.h"
 #include "velox/experimental/cudf/exec/ToCudf.h"
 #include "velox/experimental/cudf/exec/Utilities.h"
-#include "velox/experimental/cudf/exec/VeloxCudfInterop.h"
-#include "velox/experimental/cudf/vector/CudfVector.h"
+
+#include <cudf/copying.hpp>
+#include <cudf/utilities/default_stream.hpp>
+
+#include <nvtx3/nvtx3.hpp>
 
 namespace facebook::velox::cudf_velox {
 

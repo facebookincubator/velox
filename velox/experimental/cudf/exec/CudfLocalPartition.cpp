@@ -14,14 +14,12 @@
  * limitations under the License.
  */
 
+#include "velox/experimental/cudf/exec/CudfLocalPartition.h"
 #include "velox/exec/Task.h"
+#include "velox/experimental/cudf/vector/CudfVector.h"
 
 #include <cudf/copying.hpp>
 #include <cudf/partitioning.hpp>
-
-#include "CudfLocalPartition.h"
-
-#include "velox/experimental/cudf/vector/CudfVector.h"
 
 namespace facebook::velox::cudf_velox {
 

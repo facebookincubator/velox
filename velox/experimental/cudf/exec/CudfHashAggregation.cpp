@@ -14,8 +14,7 @@
  * limitations under the License.
  */
 
-#include "CudfHashAggregation.h"
-
+#include "velox/experimental/cudf/exec/CudfHashAggregation.h"
 #include "velox/exec/Aggregate.h"
 #include "velox/exec/PrefixSort.h"
 #include "velox/exec/Task.h"
@@ -28,6 +27,7 @@
 #include <cudf/reduction.hpp>
 #include <cudf/stream_compaction.hpp>
 #include <cudf/unary.hpp>
+
 #include <optional>
 
 namespace {

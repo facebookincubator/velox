@@ -29,8 +29,6 @@
 #include <cudf/table/table.hpp>
 #include <cudf/transform.hpp>
 
-#include <sstream>
-
 namespace facebook::velox::cudf_velox {
 namespace {
 template <TypeKind kind>

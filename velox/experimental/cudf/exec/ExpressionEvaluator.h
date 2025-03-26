@@ -19,12 +19,11 @@
 #include "velox/core/Expressions.h"
 #include "velox/expression/Expr.h"
 #include "velox/type/Type.h"
-#include "velox/vector/ComplexVector.h"
 
 #include <cudf/ast/expressions.hpp>
 
 #include <memory>
-#include <tuple>
+#include <string>
 #include <vector>
 
 namespace facebook::velox::cudf_velox {

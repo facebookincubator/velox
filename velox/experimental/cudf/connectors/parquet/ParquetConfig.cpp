@@ -17,9 +17,7 @@
 #include "velox/experimental/cudf/connectors/parquet/ParquetConfig.h"
 #include "velox/common/base/Exceptions.h"
 #include "velox/common/config/Config.h"
-#include "velox/core/QueryConfig.h"
 
-#include <boost/algorithm/string.hpp>
 
 #include <cudf/types.hpp>
 

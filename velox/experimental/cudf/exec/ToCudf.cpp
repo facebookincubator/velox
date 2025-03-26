@@ -398,5 +398,4 @@ bool isEnabledcudfTableScan() {
   return env_cudf_debug != nullptr && std::stoi(env_cudf_debug);
 }
 
-
 } // namespace facebook::velox::cudf_velox

@@ -16,7 +16,6 @@
 
 #pragma once
 
-#include "velox/exec/Driver.h"
 #include "velox/exec/Operator.h"
 
 namespace facebook::velox::cudf_velox {
@@ -60,6 +59,5 @@ bool cudfDebugEnabled();
  * to a nonzero value.
  */
 bool isEnabledcudfTableScan();
-
 
 } // namespace facebook::velox::cudf_velox
