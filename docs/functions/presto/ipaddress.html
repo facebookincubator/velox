@@ -111,6 +111,18 @@ query will fail and raise an error.</p>
 </div>
 </dd></dl>
 
+<dl class="py function">
+<dt class="sig sig-object py" id="ip_prefix_subnets">
+<span class="sig-name descname"><span class="pre">ip_prefix_subnets</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">ip_prefix</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">prefix_length</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#ip_prefix_subnets" title="Link to this definition">¶</a></dt>
+<dd><p>Returns the subnets of <code class="docutils literal notranslate"><span class="pre">ip_prefix</span></code> of size <code class="docutils literal notranslate"><span class="pre">prefix_length</span></code>. <code class="docutils literal notranslate"><span class="pre">prefix_length</span></code> must be valid ([0, 32] for IPv4
+and [0, 128] for IPv6) or the query will fail and raise an error. An empty array is returned if <code class="docutils literal notranslate"><span class="pre">prefix_length</span></code>
+is shorter (that is, less specific) than <code class="docutils literal notranslate"><span class="pre">ip_prefix</span></code>.</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">IP_PREFIX_SUBNETS</span><span class="p">(</span><span class="n">IPPREFIX</span> <span class="s1">&#39;192.168.1.0/24&#39;</span><span class="p">,</span> <span class="mi">25</span><span class="p">);</span> <span class="o">--</span> <span class="p">[{</span><span class="mf">192.168.1.0</span><span class="o">/</span><span class="mi">25</span><span class="p">},</span> <span class="p">{</span><span class="mf">192.168.1.128</span><span class="o">/</span><span class="mi">25</span><span class="p">}]</span>
+<span class="n">SELECT</span> <span class="n">IP_PREFIX_SUBNETS</span><span class="p">(</span><span class="n">IPPREFIX</span> <span class="s1">&#39;2a03:2880:c000::/34&#39;</span><span class="p">,</span> <span class="mi">36</span><span class="p">);</span> <span class="o">--</span> <span class="p">[{</span><span class="mi">2</span><span class="n">a03</span><span class="p">:</span><span class="mi">2880</span><span class="p">:</span><span class="n">c000</span><span class="p">::</span><span class="o">/</span><span class="mi">36</span><span class="p">},</span> <span class="p">{</span><span class="mi">2</span><span class="n">a03</span><span class="p">:</span><span class="mi">2880</span><span class="p">:</span><span class="n">d000</span><span class="p">::</span><span class="o">/</span><span class="mi">36</span><span class="p">},</span> <span class="p">{</span><span class="mi">2</span><span class="n">a03</span><span class="p">:</span><span class="mi">2880</span><span class="p">:</span><span class="n">e000</span><span class="p">::</span><span class="o">/</span><span class="mi">36</span><span class="p">},</span> <span class="p">{</span><span class="mi">2</span><span class="n">a03</span><span class="p">:</span><span class="mi">2880</span><span class="p">:</span><span class="n">f000</span><span class="p">::</span><span class="o">/</span><span class="mi">36</span><span class="p">}]</span>
+</pre></div>
+</div>
+</dd></dl>
+
 </section>
 
 
@@ -131,6 +143,7 @@ query will fail and raise an error.</p>
 <li><a class="reference internal" href="#is_subnet_of"><code class="docutils literal notranslate"><span class="pre">is_subnet_of()</span></code></a></li>
 <li><a class="reference internal" href="#id0"><code class="docutils literal notranslate"><span class="pre">is_subnet_of()</span></code></a></li>
 <li><a class="reference internal" href="#ip_prefix_collapse"><code class="docutils literal notranslate"><span class="pre">ip_prefix_collapse()</span></code></a></li>
+<li><a class="reference internal" href="#ip_prefix_subnets"><code class="docutils literal notranslate"><span class="pre">ip_prefix_subnets()</span></code></a></li>
 </ul>
 </li>
 </ul>
