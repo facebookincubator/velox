@@ -46,7 +46,8 @@ class UnsafeRowFuzzTests : public ::testing::Test {
 
   void doTest(
       const RowTypePtr& rowType,
-      std::function<std::vector<char*>(const RowVectorPtr& data)> serializeFunc) {
+      std::function<std::vector<char*>(const RowVectorPtr& data)>
+          serializeFunc) {
     VectorFuzzer::Options opts;
     opts.vectorSize = kNumBuffers;
     opts.nullRatio = 0.1;
