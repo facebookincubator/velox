@@ -103,10 +103,9 @@ repair-wheel-command = """auditwheel repair \
                        """
 
 [tool.cibuildwheel.macos] 
-# delocate doesn't take globs and needs the full basename
+before-build = "pip install --upgrade git+https://github.com/assignUser/delocate@fix-exclude"
 repair-wheel-command = """delocate-wheel \
                           --exclude 'libarrow' \
-                          --exclude 'libarrow_python' \
                           --exclude 'libparquet' \
                           --exclude 'libvelox' \
                           --require-archs {delocate_archs} \
