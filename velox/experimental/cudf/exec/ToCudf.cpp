@@ -35,6 +35,7 @@
 
 DEFINE_bool(velox_cudf_enabled, true, "Enable cuDF-Velox acceleration");
 DEFINE_string(velox_cudf_memory_resource, "async", "Memory resource for cuDF");
+DEFINE_bool(velox_cudf_debug, false, "Enable debug printing");
 
 namespace facebook::velox::cudf_velox {
 
@@ -50,6 +51,15 @@ bool isAnyOf(const Base* p) {
 bool CompileState::compile() {
   auto operators = driver_.operators();
   auto& nodes = planNodes_;
+
+  if (FLAGS_velox_cudf_debug) {
+    std::cout << "Operators before adapting for cuDF:" << std::endl;
+    std::cout << "Number of operators: " << operators.size() << std::endl;
+    for (auto& op : operators) {
+      std::cout << "  Operator: ID " << op->operatorId() << ": "
+                << op->toString() << std::endl;
+    }
+  }
 
   // Make sure operator states are initialized.  We will need to inspect some of
   // them during the transformation.
@@ -134,6 +144,16 @@ bool CompileState::compile() {
           replacingOperatorIndex + 1,
           std::move(replaceOp));
       replacementsMade = true;
+    }
+  }
+
+  if (FLAGS_velox_cudf_debug) {
+    std::cout << "Operators after adapting for cuDF:" << std::endl;
+    operators = driver_.operators();
+    std::cout << "Number of new operators: " << operators.size() << std::endl;
+    for (auto& op : operators) {
+      std::cout << "  Operator: ID " << op->operatorId() << ": "
+                << op->toString() << std::endl;
     }
   }
 
