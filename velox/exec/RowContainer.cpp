@@ -520,15 +520,12 @@ RowColumn::Stats RowColumn::Stats::merge(
     mergedStats.nullCount_ += stats.nullCount_;
     mergedStats.nonNullCount_ += stats.nonNullCount_;
     mergedStats.sumBytes_ += stats.sumBytes_;
+    mergedStats.minMaxStatsValid_ &= stats.minMaxStatsValid_;
   }
   return mergedStats;
 }
 
-std::optional<RowColumn::Stats> RowContainer::columnStats(
-    int32_t columnIndex) const {
-  if (rowColumnsStats_.empty()) {
-    return std::nullopt;
-  }
+RowColumn::Stats RowContainer::columnStats(int32_t columnIndex) const {
   return rowColumnsStats_[columnIndex];
 }
 
@@ -537,11 +534,6 @@ void RowContainer::updateColumnStats(
     vector_size_t rowIndex,
     char* row,
     int32_t columnIndex) {
-  if (rowColumnsStats_.empty()) {
-    // Column stats have been invalidated.
-    return;
-  }
-
   auto& columnStats = rowColumnsStats_[columnIndex];
   if (decoded.isNullAt(rowIndex)) {
     columnStats.addNullCell();
