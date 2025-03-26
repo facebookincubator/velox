@@ -28,6 +28,6 @@ class TimestampWithTimeZoneInputGenerator : public AbstractInputGenerator {
   variant generate() override;
 
  private:
-  const std::vector<int16_t> timeZoneIds_;
+  std::vector<int16_t> timeZoneIds_;
 };
 } // namespace facebook::velox::fuzzer
