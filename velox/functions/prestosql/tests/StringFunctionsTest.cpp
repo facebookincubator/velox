@@ -2229,6 +2229,14 @@ TEST_F(StringFunctionsTest, normalize) {
       "Normalization form must be one of [NFD, NFC, NFKD, NFKC]");
 }
 
+TEST_F(StringFunctionsTest, bitLength) {
+  const auto runBitLength = [&](std::optional<std::string> value) {
+    return evaluateOnce<int64_t>("bit_length(c0)", value);
+  };
+  EXPECT_EQ(8, runBitLength("3"));
+  EXPECT_EQ(40, runBitLength("ab中"));
+}
+
 TEST_F(StringFunctionsTest, trail) {
   auto trail = [&](std::optional<std::string> string,
                    std::optional<int32_t> N) {
