@@ -154,6 +154,20 @@ TEST_P(RemoteFunctionTest, simple) {
   auto expected = makeFlatVector<int64_t>({2, 4, 6, 8, 10});
   assertEqualVectors(expected, results);
 }
+TEST_P(RemoteFunctionTest, simpleWithSelectivity) {
+  auto inputVector = makeFlatVector<int64_t>({1, 2, 3, 4, 5});
+  SelectivityVector rows(inputVector->size());
+  rows.setValid(0, false);
+  rows.setValid(1, false);
+  auto results = evaluate<DictionaryVector<int64_t>>(
+      "remote_plus(c0, c0)", makeRowVector({inputVector}), rows);
+
+  auto expected = makeFlatVector<int64_t>({-1, -1, 6, 8, 10});
+  // The first 2 elements are not evaluated, and should be set as null.
+  expected->setNull(0, true);
+  expected->setNull(1, true);
+  assertEqualVectors(expected, results);
+}
 
 TEST_P(RemoteFunctionTest, string) {
   auto inputVector =
