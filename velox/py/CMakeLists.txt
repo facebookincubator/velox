@@ -122,7 +122,7 @@ set_target_properties(
   plan_builder
   runner
   legacy
-  PROPERTIES INSTALL_RPATH "${_origin}" INSTALL_RPATH_USE_LINK_PATH TRUE)
+  PROPERTIES INSTALL_RPATH "${_origin}/" INSTALL_RPATH_USE_LINK_PATH TRUE)
 
 # This ensures the dynamic linker can find libarrow* dependencies at runtime
 # from the installed pyarrow package without requiring LD_LIBRARY_PATH to be set
