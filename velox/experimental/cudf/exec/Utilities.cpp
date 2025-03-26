@@ -81,7 +81,7 @@ std::shared_ptr<rmm::mr::device_memory_resource> createMemoryResource(
     return makeManagedMr();
   if (mode == "managed_pool")
     return makeManagedPoolMr();
-  throw cudf::logic_error(
+  VELOX_FAIL(
       "Unknown memory resource mode: " + std::string(mode) +
       "\nExpecting: cuda, pool, async, arena, managed, or managed_pool");
 }

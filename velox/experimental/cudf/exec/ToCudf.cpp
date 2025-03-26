@@ -53,8 +53,8 @@ bool CompileState::compile() {
   auto& nodes = planNodes_;
 
   if (FLAGS_velox_cudf_debug) {
-    std::cout << "Operators before adapting for cuDF:" << std::endl;
-    std::cout << "Number of operators: " << operators.size() << std::endl;
+    std::cout << "Operators before adapting for cuDF: count ["
+              << operators.size() << "]" << std::endl;
     for (auto& op : operators) {
       std::cout << "  Operator: ID " << op->operatorId() << ": "
                 << op->toString() << std::endl;
@@ -148,9 +148,9 @@ bool CompileState::compile() {
   }
 
   if (FLAGS_velox_cudf_debug) {
-    std::cout << "Operators after adapting for cuDF:" << std::endl;
     operators = driver_.operators();
-    std::cout << "Number of new operators: " << operators.size() << std::endl;
+    std::cout << "Operators after adapting for cuDF: count ["
+              << operators.size() << "]" << std::endl;
     for (auto& op : operators) {
       std::cout << "  Operator: ID " << op->operatorId() << ": "
                 << op->toString() << std::endl;

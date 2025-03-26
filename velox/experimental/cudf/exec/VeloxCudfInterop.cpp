@@ -105,9 +105,8 @@ void toSignedIntFormat(char* format) {
     default:
       return;
   }
-  printf(
-      "Warning: arrowSchema.format: %s, unsigned is treated as signed indices\n",
-      format);
+  LOG(WARNING) << "arrowSchema.format: " << format
+               << ", unsigned is treated as signed indices";
 }
 
 // Changes all unsigned indices to signed indices for dictionary columns from
