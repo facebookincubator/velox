@@ -15,19 +15,7 @@
  */
 #pragma once
 
-#include <type_traits>
-
-#include "velox/expression/ComplexViewTypes.h"
-#include "velox/expression/PrestoCastHooks.h"
-#include "velox/functions/Udf.h"
-#include "velox/functions/lib/CheckedArithmetic.h"
-#include "velox/functions/lib/ComparatorUtil.h"
-#include "velox/functions/prestosql/json/SIMDJsonUtil.h"
-#include "velox/functions/prestosql/types/JsonType.h"
-#include "velox/type/Conversions.h"
-#include "velox/type/FloatingPointUtil.h"
-
-#include <queue>
+#include "velox/functions/Macros.h"
 
 namespace facebook::velox::functions {
 
