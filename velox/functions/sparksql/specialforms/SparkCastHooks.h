@@ -57,6 +57,7 @@ class SparkCastHooks : public exec::CastHooks {
   /// whitespaces before cast.
   StringView removeWhiteSpaces(const StringView& view) const override;
 
+  // Supports Spark boolean to timestamp cast.
   Expected<Timestamp> castBooleanToTimestamp(bool seconds) const override;
 
   const TimestampToStringOptions& timestampToStringOptions() const override {

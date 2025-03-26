@@ -826,8 +826,8 @@ TEST_F(SparkCastExprTest, bigintToBinary) {
 
 TEST_F(SparkCastExprTest, boolToTimestamp) {
   testCast(
-      makeNullableFlatVector<bool>({true, false}),
-      makeNullableFlatVector<Timestamp>({
+      makeFlatVector<bool>({true, false}),
+      makeFlatVector<Timestamp>({
           Timestamp(0, 1000),
           Timestamp(0, 0),
       }));

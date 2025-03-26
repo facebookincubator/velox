@@ -78,8 +78,6 @@ Expected<std::optional<Timestamp>> SparkCastHooks::castDoubleToTimestamp(
 }
 
 Expected<Timestamp> SparkCastHooks::castBooleanToTimestamp(bool val) const {
-  // Spark true evaluates to 1970-01-01 00:00:00.000001 and false to epoch (0 microseconds).
-  // Use fromMicrosNoError to interpret '1' as 1 microsecond offset from epoch.
   return Timestamp::fromMicrosNoError(val ? 1 : 0);
 }
 
