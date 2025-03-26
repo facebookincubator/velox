@@ -33,6 +33,9 @@
 
 #include <iostream>
 
+DEFINE_bool(velox_cudf_enabled, true, "Enable cuDF-Velox acceleration");
+DEFINE_string(velox_cudf_memory_resource, "async", "Memory resource for cuDF");
+
 namespace facebook::velox::cudf_velox {
 
 namespace {
@@ -176,21 +179,18 @@ struct CudfDriverAdapter {
 
 static bool isCudfRegistered = false;
 
-void registerCudf() {
+void registerCudf(const CudfOptions& options) {
   if (cudfIsRegistered()) {
     return;
   }
-
-  const char* envCudfDisabled = std::getenv("VELOX_CUDF_DISABLED");
-  if (envCudfDisabled != nullptr && std::stoi(envCudfDisabled)) {
+  if (!options.cudfEnabled) {
     return;
   }
 
   CUDF_FUNC_RANGE();
   cudaFree(nullptr); // Initialize CUDA context at startup
 
-  const char* envCudfMr = std::getenv("VELOX_CUDF_MEMORY_RESOURCE");
-  auto mrMode = envCudfMr != nullptr ? envCudfMr : "async";
+  const std::string mrMode = options.cudfMemoryResource;
   auto mr = cudf_velox::createMemoryResource(mrMode);
   cudf::set_current_device_resource(mr.get());
   CudfDriverAdapter cda{mr};

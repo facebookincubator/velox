@@ -19,6 +19,11 @@
 #include "velox/exec/Driver.h"
 #include "velox/exec/Operator.h"
 
+#include <gflags/gflags.h>
+
+DECLARE_bool(velox_cudf_enabled);
+DECLARE_string(velox_cudf_memory_resource);
+
 namespace facebook::velox::cudf_velox {
 
 static const std::string kCudfAdapterName = "cuDF";
@@ -44,8 +49,16 @@ class CompileState {
   const std::vector<core::PlanNodePtr>& planNodes_;
 };
 
+struct CudfOptions {
+  bool cudfEnabled = FLAGS_velox_cudf_enabled;
+  std::string cudfMemoryResource = FLAGS_velox_cudf_memory_resource;
+  static CudfOptions defaultOptions() {
+    return CudfOptions();
+  }
+};
+
 /// Registers adapter to add cuDF operators to Drivers.
-void registerCudf();
+void registerCudf(const CudfOptions& options = CudfOptions::defaultOptions());
 void unregisterCudf();
 
 /// Returns true if cuDF is registered.
