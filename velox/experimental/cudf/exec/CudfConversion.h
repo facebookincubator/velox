@@ -17,9 +17,9 @@
 #pragma once
 
 #include "velox/exec/Operator.h"
-#include "velox/vector/ComplexVector.h"
 #include "velox/experimental/cudf/exec/NvtxHelper.h"
 #include "velox/experimental/cudf/vector/CudfVector.h"
+#include "velox/vector/ComplexVector.h"
 
 #include <deque>
 #include <memory>

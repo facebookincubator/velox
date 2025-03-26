@@ -18,7 +18,6 @@
 #include "velox/common/base/Exceptions.h"
 #include "velox/common/config/Config.h"
 
-
 #include <cudf/types.hpp>
 
 #include <optional>
