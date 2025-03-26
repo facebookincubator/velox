@@ -15,6 +15,7 @@
  */
 #include "velox/functions/lib/MapConcat.h"
 #include "velox/functions/lib/RegistrationHelpers.h"
+#include "velox/functions/lib/TransformKeys.h"
 #include "velox/functions/sparksql/Size.h"
 
 namespace facebook::velox::functions {
@@ -43,6 +44,7 @@ void registerMapFunctions(const std::string& prefix) {
   // This is the semantics of spark.sql.ansi.enabled = false.
   registerElementAtFunction(prefix + "element_at", true);
   registerSize(prefix + "size");
+  registerTransformKeysFunction(prefix + "transform_keys");
 }
 } // namespace sparksql
 } // namespace facebook::velox::functions
