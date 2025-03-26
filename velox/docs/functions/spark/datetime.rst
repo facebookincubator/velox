@@ -51,6 +51,13 @@ These functions support TIMESTAMP and DATE input types.
         SELECT date_from_unix_date(1); -- '1970-01-02'
         SELECT date_from_unix_date(-1); -- '1969-12-31'
 
+.. spark:function:: date_trunc(unit_string, ts) -> timestamp
+
+    Returns timestamp ``ts`` truncated to the unit specified by the format model ``unit_string``. ::
+
+        SELECT date_trunc('YEAR', '2025-02-15 12:05:30.127127'); -- '2025-01-01 00:00:00.000'
+        SELECT date_trunc('HOUR', '2025-02-15 12:05:30.127127'); -- '2025-02-15 12:00:00.000'
+
 .. spark:function:: date_sub(start_date, num_days) -> date
 
     Returns the date that is ``num_days`` before ``start_date``. According to the inputs,
@@ -272,6 +279,13 @@ These functions support TIMESTAMP and DATE input types.
     Returns the timestamp value from the given timezone to UTC timezone. ::
 
         SELECT to_utc_timestamp('2015-07-24 00:00:00', 'America/Los_Angeles'); -- '2015-07-24 07:00:00'
+
+.. spark:function:: trunc(date, unit_string) -> date
+
+    Returns ``date`` with the time portion of the day truncated to the unit specified by the format model ``unit_string``. ::
+
+        SELECT trunc('2025-02-15', 'MONTH'); -- '2025-02-01'
+        SELECT trunc('2025-02-15', 'QUARTER'); -- '2025-01-01'
 
 .. spark:function:: unix_date(date) -> integer
 
