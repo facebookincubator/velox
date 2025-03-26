@@ -95,7 +95,7 @@ jobs:
     env:
       CCACHE_DIR: "${{ github.workspace }}/ccache"
       NUM_THREADS: "${{ inputs.numThreads || 16 }}"
-      MAX_HIGH_MEM_JOBS: "${{ inputs.maxHighMemJobs || 8 }}" 
+      MAX_HIGH_MEM_JOBS: "${{ inputs.maxHighMemJobs || 8 }}"
       MAX_LINK_JOBS: "${{ inputs.maxLinkJobs || 4 }}"
       SKBUILD_BUILD_DIR: "_build/debug"
       PYVELOX_LEGACY_ONLY: "ON"
@@ -153,7 +153,7 @@ jobs:
       - name: Ensure Stash Dirs Exists
         working-directory: ${{ github.workspace }}
         run: |
-          mkdir -p '${{ env.CCACHE_DIR }}'
+          mkdir -p '$CCACHE_DIR'
           mkdir -p /tmp/signatures
 
       - name: Checkout Main
@@ -199,8 +199,15 @@ jobs:
 
       - name: Build
         env:
-          EXTRA_CMAKE_FLAGS: "-DVELOX_ENABLE_ARROW=ON -DVELOX_BUILD_PYTHON_PACKAGE=ON -DVELOX_PYTHON_LEGACY_ONLY=ON ${{ inputs.extraCMakeFlags }}"
+          EXTRA_CMAKE_FLAGS: >
+            -DVELOX_ENABLE_ARROW=ON \
+            -DVELOX_MONO_LIBRARY=ON \
+            -DVELOX_BUILD_PYTHON_PACKAGE=ON \
+            -DVELOX_PYTHON_LEGACY_ONLY=ON \
+            ${{ inputs.extraCMakeFlags }} 
         run: |
+          make python-venv
+          source .venv/bin/activate
           make debug
 
 
