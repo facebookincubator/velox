@@ -68,17 +68,17 @@ struct ArrayRemoveNullFunctionString {
       out_type<Array<Varchar>>& out,
       const arg_type<Array<Varchar>>& inputArray) {
     if (inputArray.mayHaveNulls()) {
-      for (const auto& value : inputArray.skipNulls()) {
+      for (const auto& element : inputArray.skipNulls()) {
         auto& newItem = out.add_item();
-        newItem.setNoCopy(value);
+        newItem.setNoCopy(element);
       }
       return;
     }
 
     // No nulls, skip reading nullity.
-    for (const auto& value : inputArray) {
+    for (const auto& element : inputArray) {
       auto& newItem = out.add_item();
-      newItem.setNoCopy(value);
+      newItem.setNoCopy(element.value());
     }
   }
 };
