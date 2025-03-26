@@ -33,6 +33,8 @@ namespace facebook::velox::cudf_velox {
 
 class CudfFromVelox : public exec::Operator, public NvtxHelper {
  public:
+  static constexpr const char* kGpuBatchSizeRows = "velox.cudf.gpu_batch_size_rows";
+
   CudfFromVelox(
       int32_t operatorId,
       RowTypePtr outputType,
