@@ -16,6 +16,7 @@
 #pragma once
 
 #include <folly/hash/Checksum.h>
+#include <folly/hash/Hash.h>
 #define XXH_INLINE_ALL
 #include <xxhash.h>
 
@@ -57,6 +58,50 @@ struct XxHash64Function {
     // Resizing output and copy
     result.resize(kLen);
     std::memcpy(result.data(), &hash, kLen);
+  }
+};
+
+/// fnv1_32(varbinary) → integer
+/// Return a 4-byte fnv1 hash of input varbinary.
+/// The return type is 8-byte integer to maintain compatibility with the
+/// existing Java implementation and Presto's open-source query language.
+template <typename T>
+struct Fnv1_32Function {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  FOLLY_ALWAYS_INLINE
+  void call(out_type<int64_t>& result, const arg_type<Varbinary>& input) {
+    // Use default seed.
+    result = static_cast<int32_t>(
+        folly::hash::fnv32_buf(input.data(), input.size()));
+  }
+};
+
+/// fnv1_64(varbinary) → bigint
+/// Return an 8-byte fnv1 hash of input varbinary.
+template <typename T>
+struct Fnv1_64Function {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  FOLLY_ALWAYS_INLINE
+  void call(out_type<int64_t>& result, const arg_type<Varbinary>& input) {
+    // Use default seed.
+    result = static_cast<int64_t>(
+        folly::hash::fnv64_buf(input.data(), input.size()));
+  }
+};
+
+/// fnv1a_64(varbinary) → bigint
+/// Return an 8-byte fnv1a hash of input varbinary.
+template <typename T>
+struct Fnv1a_64Function {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  FOLLY_ALWAYS_INLINE
+  void call(out_type<int64_t>& result, const arg_type<Varbinary>& input) {
+    // Use default seed.
+    result = static_cast<int64_t>(
+        folly::hash::fnva64_buf(input.data(), input.size()));
   }
 };
 
