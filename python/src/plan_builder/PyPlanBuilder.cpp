@@ -14,11 +14,11 @@
  * limitations under the License.
  */
 
-#include "python/plan_builder/PyPlanBuilder.h"
+#include "python/src/plan_builder/PyPlanBuilder.h"
 
 #include <folly/executors/GlobalExecutor.h>
 #include <pybind11/stl.h>
-#include "python/vector/PyVector.h"
+#include "python/src/vector/PyVector.h"
 #include "velox/connectors/hive/HiveConnectorSplit.h"
 #include "velox/connectors/hive/TableHandle.h"
 #include "velox/connectors/tpch/TpchConnectorSplit.h"

@@ -14,7 +14,7 @@
 
 import unittest
 
-import pyvelox.legacy as pv
+import pyvelox as pv
 
 
 class TestFunctionSignatures(unittest.TestCase):

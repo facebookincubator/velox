@@ -17,10 +17,10 @@
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
 
-#include "python/init/PyInit.h"
-#include "python/plan_builder/PyPlanBuilder.h"
-#include "python/type/PyType.h"
-#include "python/vector/PyVector.h"
+#include "python/src/init/PyInit.h"
+#include "python/src/plan_builder/PyPlanBuilder.h"
+#include "python/src/type/PyType.h"
+#include "python/src/vector/PyVector.h"
 
 namespace py = pybind11;
 

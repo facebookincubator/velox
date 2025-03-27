@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-#include "python/init/PyInit.h"
+#include "python/src/init/PyInit.h"
 #include "velox/common/memory/Memory.h"
 
 namespace facebook::velox::py {

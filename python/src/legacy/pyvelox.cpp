@@ -301,7 +301,7 @@ PYBIND11_MODULE(legacy, m) {
       PyVelox's legacy native code module
       --------------------------
 
-      .. currentmodule:: pyvelox.legacy
+      .. currentmodule:: pyvelox
 
       .. autosummary::
          :toctree: _generate

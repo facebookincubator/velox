@@ -14,26 +14,11 @@
  * limitations under the License.
  */
 
-#include <pybind11/pybind11.h>
+#include "python/src/type/PyType.h"
 #include <pybind11/stl.h>
 
-#include "python/file/PyFile.h"
+namespace facebook::velox::py {
 
 namespace py = pybind11;
 
-PYBIND11_MODULE(file, m) {
-  using namespace facebook;
-
-  // File wrapper abstraction.
-  py::class_<velox::py::PyFile>(m, "File").def(
-      "__str__", &velox::py::PyFile::toString, py::doc(R"(
-        Returns a short and recursive description of the file.
-      )"));
-
-  m.def("PARQUET", &velox::py::PyFile::createParquet);
-  m.def("DWRF", &velox::py::PyFile::createDwrf);
-  m.def("NIMBLE", &velox::py::PyFile::createNimble);
-  m.def("ORC", &velox::py::PyFile::createOrc);
-  m.def("JSON", &velox::py::PyFile::createJson);
-  m.def("TEXT", &velox::py::PyFile::createText);
-}
+} // namespace facebook::velox::py

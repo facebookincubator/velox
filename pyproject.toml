@@ -52,11 +52,11 @@ build-dir = "_build/python"
 metadata.version.provider = "scikit_build_core.metadata.setuptools_scm"
 ninja.make-fallback = false
 install.components = ["pyvelox_libraries"]
-wheel.packages = ["pyvelox"]
+wheel.packages = ["python/pyvelox"]
 wheel.exclude = ["*.h*", "*.cpp", "CMakeLists.txt", "test/*"]
 
 [tool.scikit-build.sdist]
-include = ["scripts/setup-helper-functions.sh", "python/_version.py"]
+include = ["scripts/setup-helper-functions.sh"]
 exclude = [
   ".github/",
   "velox/docs",
