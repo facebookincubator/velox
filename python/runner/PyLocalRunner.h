@@ -21,8 +21,8 @@
 #include "velox/core/PlanNode.h"
 #include "velox/exec/Cursor.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
-#include "velox/py/plan_builder/PyPlanBuilder.h"
-#include "velox/py/type/PyType.h"
+#include "python/plan_builder/PyPlanBuilder.h"
+#include "python/type/PyType.h"
 
 namespace facebook::velox::py {
 

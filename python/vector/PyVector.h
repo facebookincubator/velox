@@ -17,7 +17,7 @@
 #pragma once
 
 #include <pybind11/embed.h>
-#include "velox/py/type/PyType.h"
+#include "python/type/PyType.h"
 #include "velox/vector/BaseVector.h"
 
 namespace facebook::velox::py {

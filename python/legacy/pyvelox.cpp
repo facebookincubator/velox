@@ -296,7 +296,6 @@ static void addExpressionBindings(
       });
 }
 
-#ifdef CREATE_PYVELOX_MODULE
 PYBIND11_MODULE(legacy, m) {
   m.doc() = R"pbdoc(
       PyVelox's legacy native code module
@@ -315,5 +314,4 @@ PYBIND11_MODULE(legacy, m) {
   addConversionBindings(m);
   m.attr("__version__") = "dev";
 }
-#endif
 } // namespace facebook::velox::py

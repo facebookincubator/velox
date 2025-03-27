@@ -14,11 +14,23 @@
  * limitations under the License.
  */
 
-#include "velox/py/type/PyType.h"
-#include <pybind11/stl.h>
+#include "python/init/PyInit.h"
+#include "velox/common/memory/Memory.h"
 
 namespace facebook::velox::py {
 
-namespace py = pybind11;
+folly::once_flag initOnceFlag;
+
+void initializeVeloxMemoryOnce() {
+  // Enable full Velox stack trace when exceptions are thrown.
+  FLAGS_velox_exception_user_stacktrace_enabled = true;
+
+  velox::memory::initializeMemoryManager({});
+}
+
+void initializeVeloxMemory() {
+  // Initialize Velox once per process.
+  folly::call_once(initOnceFlag, initializeVeloxMemoryOnce);
+}
 
 } // namespace facebook::velox::py
