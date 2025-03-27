@@ -315,6 +315,11 @@ class Task : public std::enable_shared_from_this<Task> {
   /// occurred.
   std::string errorMessage() const;
 
+  /// Returns the split related stats of the task by copy as other threads might
+  /// be updating the structure. This is a light weight call as compared to
+  /// 'taskStats()'.
+  TaskSplitsStats taskSplitsStats() const;
+
   /// Returns Task Stats by copy as other threads might be updating the
   /// structure.
   TaskStats taskStats() const;
