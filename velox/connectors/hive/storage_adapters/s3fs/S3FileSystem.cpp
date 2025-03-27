@@ -86,14 +86,16 @@ std::optional<std::shared_ptr<Aws::Auth::AWSCredentialsProvider>>
 getCredentialsProviderByName(
     const std::string& providerName,
     const S3Config& s3Config) {
-  return credentialsProviderFactories().withRLock([&](const auto& factories) {
-    const auto it = factories->find(providerName);
-    if (it == factories->end()) {
-      return std::nullopt;
-    }
-    const auto& factory = it->second;
-    return factory(s3Config);
-  });
+  return credentialsProviderFactories().withRLock(
+      [&](const auto& factories)
+          -> std::optional<std::shared_ptr<Aws::Auth::AWSCredentialsProvider>> {
+        const auto it = factories.find(providerName);
+        if (it == factories.end()) {
+          return std::nullopt;
+        }
+        const auto& factory = it->second;
+        return factory(s3Config);
+      });
 }
 
 class S3ReadFile final : public ReadFile {
