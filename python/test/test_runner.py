@@ -21,7 +21,13 @@ from pyvelox.arrow import to_velox
 from pyvelox.plan_builder import PlanBuilder
 from pyvelox.file import DWRF
 from pyvelox.type import BIGINT, ROW
-from pyvelox.runner import LocalRunner, register_hive, register_tpch, unregister, unregister_all
+from pyvelox.runner import (
+    LocalRunner,
+    register_hive,
+    register_tpch,
+    unregister,
+    unregister_all,
+)
 
 
 class TestPyVeloxRunner(unittest.TestCase):
