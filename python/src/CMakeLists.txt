@@ -34,19 +34,12 @@ target_link_libraries(
     velox_aggregates
     velox_functions_spark_aggregates)
 
-
 if(VELOX_PYTHON_LEGACY_ONLY)
   # Only build the legacy module for CI
   return()
 endif()
 
 add_library(velox_py_init init/PyInit.cpp)
-target_sources(velox_py_init
-  PUBLIC
-    FILE_SET HEADERS
-    BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}
-    FILES init/PyInit.h
-)
 
 target_link_libraries(
   velox_py_init
