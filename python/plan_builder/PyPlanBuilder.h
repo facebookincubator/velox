@@ -16,10 +16,10 @@
 
 #pragma once
 
-#include "velox/core/PlanNode.h"
-#include "velox/exec/tests/utils/PlanBuilder.h"
 #include "python/file/PyFile.h"
 #include "python/type/PyType.h"
+#include "velox/core/PlanNode.h"
+#include "velox/exec/tests/utils/PlanBuilder.h"
 
 namespace facebook::velox::py {
 
