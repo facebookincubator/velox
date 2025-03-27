@@ -548,6 +548,8 @@ class Type : public Tree<const TypePtr>, public velox::ISerializable {
   /// Recursive kind match (uses only TypeKind).
   bool kindEquals(const std::shared_ptr<const Type>& other) const;
 
+  bool equivalentWithSimilarDecimal(const Type& other) const;
+
   template <TypeKind KIND, typename... CHILDREN>
   static std::shared_ptr<const typename TypeTraits<KIND>::ImplType> create(
       CHILDREN... children) {

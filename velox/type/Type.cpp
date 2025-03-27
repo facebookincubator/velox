@@ -672,6 +672,33 @@ bool Type::kindEquals(const TypePtr& other) const {
   return true;
 }
 
+bool Type::equivalentWithSimilarDecimal(const Type& other) const {
+  if (&other == this) {
+    return true;
+  }
+  if (!Type::hasSameTypeId(other)) {
+    return false;
+  }
+  const auto& otherTyped = other.asRow();
+  if (otherTyped.size() != size()) {
+    return false;
+  }
+  for (size_t i = 0; i < size(); ++i) {
+    if (otherTyped.childAt(i)->isDecimal()) {
+      auto presicisonScaleSchema =
+          getDecimalPrecisionScale(*otherTyped.childAt(i));
+      auto precisionScaleData = getDecimalPrecisionScale(*childAt(i));
+      if (presicisonScaleSchema.first < precisionScaleData.first ||
+          presicisonScaleSchema.second != precisionScaleData.second) {
+        return false;
+      }
+    } else if (!childAt(i)->equivalent(*otherTyped.childAt(i))) {
+      return false;
+    }
+  }
+  return true;
+}
+
 bool MapType::equivalent(const Type& other) const {
   if (&other == this) {
     return true;

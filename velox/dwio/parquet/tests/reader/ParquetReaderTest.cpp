@@ -801,6 +801,44 @@ TEST_F(ParquetReaderTest, parseIntDecimal) {
   }
 }
 
+TEST_F(ParquetReaderTest, scaleDecimal) {
+  // decimal_scale.parquet one column (col0: DECIMAL(10,4)) and
+  // 5 rows.
+  // The physical type of the decimal column:
+  //   col0: int64
+  // Data in column was inserted with lower scale but got rescaled to match
+  // table scale of 4
+  //   a: [12.3400, 1200.0000, 120.3400, 12.3456, 123456.7891]
+  auto rowType = ROW({"col0"}, {DECIMAL(10, 4)});
+  dwio::common::ReaderOptions readerOpts{leafPool_.get()};
+  const std::string decimal_scale(getExampleFilePath("decimal_scale.parquet"));
+
+  auto reader = createReader(decimal_scale, readerOpts);
+  RowReaderOptions rowReaderOpts;
+  rowReaderOpts.setScanSpec(makeScanSpec(rowType));
+  auto rowReader = reader->createRowReader(rowReaderOpts);
+
+  EXPECT_EQ(reader->numberOfRows(), 5ULL);
+
+  auto type = reader->typeWithId();
+  EXPECT_EQ(type->size(), 1ULL);
+  auto col0 = type->childAt(0);
+  EXPECT_EQ(col0->type()->kind(), TypeKind::BIGINT);
+
+  int64_t expectValues[5] = {123400, 12000000, 1203400, 123456, 1234567891};
+  auto result = BaseVector::create(rowType, 1, leafPool_.get());
+  rowReader->next(5, result);
+  EXPECT_EQ(result->size(), 5ULL);
+  auto decimals = result->as<RowVector>();
+  auto a = decimals->childAt(0)
+               ->loadedVector()
+               ->asFlatVector<int64_t>()
+               ->rawValues();
+  for (int i = 0; i < 5; i++) {
+    EXPECT_EQ(a[i], expectValues[i]);
+  }
+}
+
 TEST_F(ParquetReaderTest, parseMapKeyValueAsMap) {
   // map_key_value.parquet holds a single map column (key: VARCHAR, b: BIGINT)
   // and 1 row that contains 8 map entries. It is with older version of Parquet
