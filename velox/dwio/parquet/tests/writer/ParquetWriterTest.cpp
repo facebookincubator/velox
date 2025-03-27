@@ -26,6 +26,7 @@
 #include "velox/dwio/parquet/RegisterParquetWriter.h" // @manual
 #include "velox/dwio/parquet/reader/PageReader.h"
 #include "velox/dwio/parquet/tests/ParquetTestBase.h"
+#include "velox/dwio/parquet/writer/arrow/tests/FileReader.h"
 #include "velox/exec/Cursor.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
@@ -659,6 +660,55 @@ TEST_F(ParquetWriterTest, updateWriterOptionsFromHiveConfig) {
   ASSERT_EQ(
       options.parquetWriteTimestampUnit.value(),
       TimestampPrecision::kMilliseconds);
+}
+
+TEST_F(ParquetWriterTest, decimalTypeHandling) {
+  const int64_t kRows = 100;
+  dwio::common::ReaderOptions readerOptions{leafPool_.get()};
+
+  auto schema = ROW({"c0", "c1"}, {DECIMAL(10, 2), DECIMAL(38, 10)});
+
+  auto data = makeRowVector(
+      {makeFlatVector<int64_t>(
+           kRows,
+           [](auto row) { return row * 10000 + 9999; },
+           nullptr,
+           DECIMAL(10, 2)),
+       makeFlatVector<int128_t>(
+           kRows,
+           [](auto row) { return HugeInt::build(row, row * 1000000000LL); },
+           nullptr,
+           DECIMAL(38, 10))});
+
+  auto* sinkPtr = write(data);
+
+  // Use Arrow Parquet reader to verify all decimal columns have correct
+  // precision and scale
+  auto arrowSource = std::make_shared<::arrow::io::BufferReader>(
+      reinterpret_cast<const uint8_t*>(sinkPtr->data()), sinkPtr->size());
+  auto arrowFileReader =
+      facebook::velox::parquet::arrow::ParquetFileReader::Open(arrowSource);
+  auto arrowSchema = arrowFileReader->metadata()->schema();
+
+  auto c0 = std::static_pointer_cast<
+      const facebook::velox::parquet::arrow::DecimalLogicalType>(
+      arrowSchema->Column(0)->logical_type());
+  EXPECT_EQ(c0->precision(), 10);
+  EXPECT_EQ(c0->scale(), 2);
+
+  auto c1 = std::static_pointer_cast<
+      const facebook::velox::parquet::arrow::DecimalLogicalType>(
+      arrowSchema->Column(1)->logical_type());
+  EXPECT_EQ(c1->precision(), 38);
+  EXPECT_EQ(c1->scale(), 10);
+
+  // Verify data round-trips correctly
+  auto reader = createReaderInMemory(*sinkPtr, readerOptions);
+  ASSERT_EQ(reader->numberOfRows(), kRows);
+  ASSERT_EQ(*reader->rowType(), *schema);
+
+  auto rowReader = createRowReaderWithSchema(std::move(reader), schema);
+  assertReadWithReaderAndExpected(schema, *rowReader, data, *leafPool_);
 }
 
 #ifdef VELOX_ENABLE_PARQUET
