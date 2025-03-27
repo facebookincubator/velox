@@ -279,6 +279,17 @@ std::shared_ptr<::arrow::Field> updateFieldNameAndIdRecursive(
         arrowMapType->item_field(), *mapType.valueType(), valueSetting);
     newField = newField->WithType(
         std::make_shared<::arrow::MapType>(newKeyField, newValueField));
+  } else if (type.isDecimal()) {
+    // Parquet type is set from the column type rather than inferred from the
+    // field data.
+    auto precisionScale = getDecimalPrecisionScale(type);
+    if (!name.empty()) {
+      auto newField = field->WithName(name);
+      return newField->WithType(
+          ::arrow::decimal(precisionScale.first, precisionScale.second));
+    }
+    return field->WithType(
+        ::arrow::decimal(precisionScale.first, precisionScale.second));
   }
 
   return newField;
@@ -486,10 +497,6 @@ dwio::common::StripeProgress getStripeProgress(
  * This method assumes each input `ColumnarBatch` have same schema.
  */
 void Writer::write(const VectorPtr& data) {
-  VELOX_USER_CHECK(
-      data->type()->equivalent(*schema_),
-      "The file schema type should be equal with the input rowvector type.");
-
   VectorPtr exportData = data;
   if (needFlatten(exportData)) {
     BaseVector::flattenVector(exportData);
