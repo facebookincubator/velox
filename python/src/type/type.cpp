@@ -17,7 +17,7 @@
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
 
-#include "python/type/PyType.h"
+#include "python/src/type/PyType.h"
 
 namespace py = pybind11;
 

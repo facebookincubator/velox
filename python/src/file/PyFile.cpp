@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-#include "python/file/PyFile.h"
+#include "python/src/file/PyFile.h"
 #include <fmt/format.h>
 #include <folly/String.h>
 #include "velox/dwio/common/ReaderFactory.h"

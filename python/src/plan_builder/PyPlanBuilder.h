@@ -16,8 +16,8 @@
 
 #pragma once
 
-#include "python/file/PyFile.h"
-#include "python/type/PyType.h"
+#include "python/src/file/PyFile.h"
+#include "python/src/type/PyType.h"
 #include "velox/core/PlanNode.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
 

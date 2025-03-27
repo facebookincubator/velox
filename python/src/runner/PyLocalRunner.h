@@ -18,8 +18,8 @@
 
 #include <pybind11/embed.h>
 
-#include "python/plan_builder/PyPlanBuilder.h"
-#include "python/type/PyType.h"
+#include "python/src/plan_builder/PyPlanBuilder.h"
+#include "python/src/type/PyType.h"
 #include "velox/core/PlanNode.h"
 #include "velox/exec/Cursor.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"

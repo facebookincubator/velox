@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-#include "python/vector/PyVector.h"
+#include "python/src/vector/PyVector.h"
 #include "velox/vector/ComplexVector.h"
 #include "velox/vector/VectorPrinter.h"
 
