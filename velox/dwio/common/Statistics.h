@@ -22,6 +22,7 @@
 #include "velox/common/base/Exceptions.h"
 #include "velox/common/base/RuntimeMetrics.h"
 #include "velox/dwio/common/exception/Exception.h"
+#include "velox/type/Type.h"
 
 namespace facebook::velox::dwio::common {
 
@@ -391,6 +392,174 @@ class IntegerColumnStatistics : public virtual ColumnStatistics {
   std::optional<int64_t> min_;
   std::optional<int64_t> max_;
   std::optional<int64_t> sum_;
+};
+
+/**
+ * Statistics for all of the date columns
+ */
+class DateColumnStatistics : public virtual ColumnStatistics {
+ public:
+  DateColumnStatistics(
+      std::optional<uint64_t> valueCount,
+      std::optional<bool> hasNull,
+      std::optional<uint64_t> rawSize,
+      std::optional<uint64_t> size,
+      std::optional<int32_t> min,
+      std::optional<int32_t> max)
+      : ColumnStatistics(valueCount, hasNull, rawSize, size),
+        min_(min),
+        max_(max) {}
+
+  DateColumnStatistics(
+      const ColumnStatistics& colStats,
+      std::optional<int32_t> min,
+      std::optional<int32_t> max)
+      : ColumnStatistics(colStats), min_(min), max_(max) {}
+
+  ~DateColumnStatistics() override = default;
+
+  /**
+   * Get optional smallest value in the column. Only defined if
+   * getNumberOfValues is non-zero.
+   */
+  std::optional<int32_t> getMinimum() const {
+    return min_;
+  }
+
+  /**
+   * Get optional largest value in the column. Only defined if getNumberOfValues
+   * is non-zero.
+   */
+  std::optional<int32_t> getMaximum() const {
+    return max_;
+  }
+
+  std::string toString() const override {
+    return folly::to<std::string>(
+        ColumnStatistics::toString(),
+        ", min: ",
+        (min_.has_value() ? folly::to<std::string>(min_.value()) : "unknown"),
+        ", max: ",
+        (max_.has_value() ? folly::to<std::string>(max_.value()) : "unknown"));
+  }
+
+ protected:
+  DateColumnStatistics() {}
+
+  std::optional<int32_t> min_;
+  std::optional<int32_t> max_;
+};
+
+/**
+ * Statistics for all of the timestamp columns
+ */
+class TimestampColumnStatistics : public virtual ColumnStatistics {
+ public:
+  TimestampColumnStatistics(
+      std::optional<uint64_t> valueCount,
+      std::optional<bool> hasNull,
+      std::optional<uint64_t> rawSize,
+      std::optional<uint64_t> size,
+      std::optional<int64_t> min,
+      std::optional<int64_t> max)
+      : ColumnStatistics(valueCount, hasNull, rawSize, size),
+        min_(min),
+        max_(max) {}
+
+  TimestampColumnStatistics(
+      const ColumnStatistics& colStats,
+      std::optional<int64_t> min,
+      std::optional<int64_t> max)
+      : ColumnStatistics(colStats), min_(min), max_(max) {}
+
+  ~TimestampColumnStatistics() override = default;
+
+  /**
+   * Get optional smallest value in the column. Only defined if
+   * getNumberOfValues is non-zero.
+   */
+  std::optional<int64_t> getMinimum() const {
+    return min_;
+  }
+
+  /**
+   * Get optional largest value in the column. Only defined if getNumberOfValues
+   * is non-zero.
+   */
+  std::optional<int64_t> getMaximum() const {
+    return max_;
+  }
+
+  std::string toString() const override {
+    return folly::to<std::string>(
+        ColumnStatistics::toString(),
+        ", min: ",
+        (min_.has_value() ? folly::to<std::string>(min_.value()) : "unknown"),
+        ", max: ",
+        (max_.has_value() ? folly::to<std::string>(max_.value()) : "unknown"));
+  }
+
+ protected:
+  TimestampColumnStatistics() {}
+
+  std::optional<int64_t> min_;
+  std::optional<int64_t> max_;
+};
+
+/**
+ * Statistics for all of the decimal columns
+ */
+class DecimalColumnStatistics : public virtual ColumnStatistics {
+ public:
+  DecimalColumnStatistics(
+      std::optional<uint64_t> valueCount,
+      std::optional<bool> hasNull,
+      std::optional<uint64_t> rawSize,
+      std::optional<uint64_t> size,
+      std::optional<int128_t> min,
+      std::optional<int128_t> max)
+      : ColumnStatistics(valueCount, hasNull, rawSize, size),
+        min_(min),
+        max_(max) {}
+
+  DecimalColumnStatistics(
+      const ColumnStatistics& colStats,
+      std::optional<int128_t> min,
+      std::optional<int128_t> max)
+      : ColumnStatistics(colStats), min_(min), max_(max) {}
+
+  ~DecimalColumnStatistics() override = default;
+
+  /**
+   * Get optional smallest value in the column. Only defined if
+   * getNumberOfValues is non-zero.
+   */
+  std::optional<int128_t> getMinimum() const {
+    return min_;
+  }
+
+  /**
+   * Get optional largest value in the column. Only defined if getNumberOfValues
+   * is non-zero.
+   */
+  std::optional<int128_t> getMaximum() const {
+    return max_;
+  }
+
+  std::string toString() const override {
+    return folly::to<std::string>(
+        ColumnStatistics::toString(),
+        ", min: ",
+        (min_.has_value() ? folly::to<std::string>(min_.value()) : "unknown"),
+        ", max: ",
+        (max_.has_value() ? folly::to<std::string>(max_.value()) : "unknown"));
+  }
+
+ protected:
+  DecimalColumnStatistics() {}
+
+  std::optional<int128_t> min_;
+  std::optional<int128_t> max_;
 };
 
 /**
