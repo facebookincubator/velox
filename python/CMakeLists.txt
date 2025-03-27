@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-pybind11_add_module(
+pyvelox_add_module(
   legacy
   MODULE
   legacy/complex.cpp
@@ -34,13 +34,6 @@ target_link_libraries(
     velox_aggregates
     velox_functions_spark_aggregates)
 
-target_include_directories(legacy SYSTEM PRIVATE ${CMAKE_CURRENT_LIST_DIR}/..)
-install(TARGETS legacy LIBRARY DESTINATION pyvelox COMPONENT pyvelox_libraries)
-set_target_properties(
-  legacy
-  PROPERTIES INSTALL_RPATH "${_origin}/;${CMAKE_BINARY_DIR}/lib"
-             INSTALL_RPATH_USE_LINK_PATH TRUE)
-
 if(VELOX_PYTHON_LEGACY_ONLY)
   # Only build the legacy module for CI
   return()
@@ -56,7 +49,7 @@ add_library(velox_py_type_lib type/PyType.cpp)
 target_link_libraries(
   velox_py_type_lib velox_type pybind11::module)
 
-pybind11_add_module(type MODULE type/type.cpp)
+pyvelox_add_module(type MODULE type/type.cpp)
 target_link_libraries(
   type
   PRIVATE velox_py_type_lib)
@@ -66,7 +59,7 @@ add_library(velox_py_file_lib file/PyFile.cpp)
 target_link_libraries(
   velox_py_file_lib velox_dwio_common pybind11::module)
 
-pybind11_add_module(file MODULE file/file.cpp)
+pyvelox_add_module(file MODULE file/file.cpp)
 target_link_libraries(
   file
   PRIVATE velox_py_file_lib)
@@ -76,7 +69,7 @@ add_library(velox_py_vector_lib vector/PyVector.cpp)
 target_link_libraries(
   velox_py_vector_lib velox_vector pybind11::module)
 
-pybind11_add_module(vector MODULE vector/vector.cpp)
+pyvelox_add_module(vector MODULE vector/vector.cpp)
 target_link_libraries(
   vector
   PRIVATE velox_py_vector_lib)
@@ -105,7 +98,7 @@ target_link_libraries(
   Folly::folly
   pybind11::module)
 
-pybind11_add_module(plan_builder MODULE plan_builder/plan_builder.cpp)
+pyvelox_add_module(plan_builder MODULE plan_builder/plan_builder.cpp)
 target_link_libraries(
   plan_builder
   PRIVATE velox_py_plan_builder_lib)
@@ -130,7 +123,7 @@ target_link_libraries(
   velox_dwio_dwrf_writer
   pybind11::module)
 
-pybind11_add_module(runner MODULE runner/runner.cpp)
+pyvelox_add_module(runner MODULE runner/runner.cpp)
 target_link_libraries(
   runner
   PRIVATE velox_py_local_runner_lib)
@@ -139,28 +132,10 @@ target_link_libraries(
 find_package(pyarrow REQUIRED)
 
 # 'arrow' target already exists
-pybind11_add_module(arrow_module MODULE arrow/arrow.cpp)
-
-if(APPLE)
-  set(_origin @loader_path)
-else()
-  set(_origin "\$ORIGIN")
-endif()
-
+pyvelox_add_module(arrow_module MODULE arrow/arrow.cpp)
 set_target_properties(
   arrow_module
   PROPERTIES OUTPUT_NAME "arrow")
-
-# Set the rpath so linker looks within pyvelox package for libs
-set_target_properties(
-  arrow_module
-  type
-  file
-  vector
-  plan_builder
-  runner
-  legacy
-  PROPERTIES INSTALL_RPATH "${_origin}/" INSTALL_RPATH_USE_LINK_PATH TRUE)
 
 # This ensures the dynamic linker can find libarrow* dependencies at runtime
 # from the installed pyarrow package without requiring LD_LIBRARY_PATH to be set
@@ -177,14 +152,3 @@ target_link_libraries(
     velox_arrow_bridge
     pyarrow::dev
     pybind11::module)
-
-install(
-  TARGETS
-    arrow_module
-    type
-    file
-    vector
-    plan_builder
-    runner
-    velox
-  LIBRARY DESTINATION pyvelox COMPONENT pyvelox_libraries)

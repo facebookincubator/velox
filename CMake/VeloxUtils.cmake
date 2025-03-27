@@ -13,6 +13,22 @@
 # limitations under the License.
 include_guard(GLOBAL)
 
+function(pyvelox_add_module TARGET)
+  pybind11_add_module(${TARGET} ${ARGN})
+  if(APPLE)
+    set(_origin @loader_path)
+  else()
+    set(_origin "\$ORIGIN")
+  endif()
+
+  # Set the rpath so linker looks within pyvelox package for libs
+  set_target_properties(
+    ${TARGET} PROPERTIES INSTALL_RPATH "${_origin}/;${CMAKE_BINARY_DIR}/lib"
+                         INSTALL_RPATH_USE_LINK_PATH TRUE)
+  install(TARGETS ${TARGET} LIBRARY DESTINATION pyvelox
+                                    COMPONENT pyvelox_libraries)
+endfunction()
+
 # TODO use file sets
 function(velox_install_library_headers)
   # Find any headers and install them relative to the source tree in include.
@@ -69,6 +85,8 @@ function(velox_add_library TARGET)
     if(TARGET velox)
       # Target already exists, append sources to it.
       target_sources(velox PRIVATE ${ARGN})
+      install(TARGETS velox LIBRARY DESTINATION pyvelox
+                                    COMPONENT pyvelox_libraries)
     else()
       set(_type STATIC)
       if(VELOX_BUILD_SHARED)
