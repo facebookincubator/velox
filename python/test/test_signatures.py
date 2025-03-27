@@ -48,7 +48,7 @@ class TestFunctionSignatures(unittest.TestCase):
             "(__user_T1,array(__user_T1)) -> array(__user_T1)",
         )
         self.assertEqual(str(concat_signatures[-1].return_type()), "varchar")
-        self.assertEqual(str(concat_signatures[-1]), "(varchar,varchar...) -> varchar")
+        self.assertEqual(str(concat_signatures[-1]), "(varchar,varchar,varchar...) -> varchar")
 
     def test_function_prefix(self):
         pv.clear_signatures()
