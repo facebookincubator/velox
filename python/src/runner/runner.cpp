@@ -127,7 +127,9 @@ PYBIND11_MODULE(runner, m) {
 
         Args:
           connector_name: Name of the connector to unregister.",
-      )"));
+      )"))
+      .def("unregister_all", &velox::py::unregisterAll, py::doc(R"(
+        "Unregister all registerd connectors.)"));
 
   // When the module gets unloaded, first ensure all tasks created by this
   // module have finished, then unregister all connectors that have been

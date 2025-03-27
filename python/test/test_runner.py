@@ -19,15 +19,27 @@ import tempfile
 import unittest
 
 import pyarrow
-
 from pyvelox.arrow import to_velox
 from pyvelox.file import DWRF
 from pyvelox.plan_builder import PlanBuilder
-from pyvelox.runner import LocalRunner, register_hive, register_tpch, unregister
+from pyvelox.runner import (
+    LocalRunner,
+    register_hive,
+    register_tpch,
+    unregister,
+    unregister_all,
+)
 from pyvelox.type import BIGINT, DOUBLE, ROW, VARCHAR
 
 
 class TestPyVeloxRunner(unittest.TestCase):
+    # prevent
+    def setUp(self) -> None:
+        unregister_all()
+
+    def tearDown(self) -> None:
+        unregister_all()
+
     def test_runner_empty(self):
         plan_builder = PlanBuilder().values()
         runner = LocalRunner(plan_builder.get_plan_node())
