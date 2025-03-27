@@ -82,20 +82,18 @@ credentialsProviderFactories() {
   return factories;
 }
 
-std::optional<std::shared_ptr<Aws::Auth::AWSCredentialsProvider>>
-getCredentialsProviderByName(
+std::shared_ptr<Aws::Auth::AWSCredentialsProvider> getCredentialsProviderByName(
     const std::string& providerName,
     const S3Config& s3Config) {
-  return credentialsProviderFactories().withRLock(
-      [&](const auto& factories)
-          -> std::optional<std::shared_ptr<Aws::Auth::AWSCredentialsProvider>> {
-        const auto it = factories.find(providerName);
-        if (it == factories.end()) {
-          return std::nullopt;
-        }
-        const auto& factory = it->second;
-        return factory(s3Config);
-      });
+  return credentialsProviderFactories().withRLock([&](const auto& factories) {
+    const auto it = factories.find(providerName);
+    VELOX_CHECK(
+        it != factories.end(),
+        "CredentialsProviderFactory for '{}' not registered",
+        providerName);
+    const auto& factory = it->second;
+    return factory(s3Config);
+  });
 }
 
 class S3ReadFile final : public ReadFile {
@@ -619,7 +617,7 @@ void registerCredentialsProvider(
   credentialsProviderFactories().withWLock([&](auto& factories) {
     VELOX_CHECK(
         factories.find(providerName) == factories.end(),
-        "CredentialsProviderFactory {} already registered",
+        "CredentialsProviderFactory '{}' already registered",
         providerName);
     factories.insert({providerName, factory});
   });
@@ -730,14 +728,11 @@ class S3FileSystem::Impl {
   // Return an AWSCredentialsProvider based on the config.
   std::shared_ptr<Aws::Auth::AWSCredentialsProvider> getCredentialsProvider(
       const S3Config& s3Config) const {
-    auto credentialsProviderName = s3Config.credentialsProvider();
-    if (credentialsProviderName.has_value()) {
-      const auto& name = credentialsProviderName.value();
+    auto credentialsProvider = s3Config.credentialsProvider();
+    if (credentialsProvider.has_value()) {
+      const auto& name = credentialsProvider.value();
       // Create the credentials provider using the registered factory.
-      auto credentialsProvider = getCredentialsProviderByName(name, s3Config);
-      if (credentialsProvider.has_value()) {
-        return credentialsProvider.value();
-      }
+      return getCredentialsProviderByName(name, s3Config);
     }
 
     auto accessKey = s3Config.accessKey();

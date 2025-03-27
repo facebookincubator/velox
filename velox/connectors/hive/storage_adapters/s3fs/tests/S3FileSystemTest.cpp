@@ -315,11 +315,12 @@ TEST_F(S3FileSystemTest, registerCredentialProviderFactories) {
       {{"hive.s3.aws-credentials-provider", credentialsProvider}});
   ASSERT_NO_THROW(filesystems::S3FileSystem("", hiveConfig));
 
-  // Configure with unregistered credential provider will use the default code
-  // path to create the credentials provider based on the configuration.
+  // Configure with unregistered credential provider.
   hiveConfig = minioServer_->hiveConfig(
       {{"hive.s3.aws-credentials-provider", invalidCredentialsProvider}});
-  ASSERT_NO_THROW(filesystems::S3FileSystem("", hiveConfig));
+  VELOX_ASSERT_THROW(
+      filesystems::S3FileSystem({"", hiveConfig}),
+      "CredentialsProviderFactory for 'invalid-credentials-provider' not registered");
 
   // Register invalid credentials provider name.
   VELOX_ASSERT_THROW(
@@ -337,8 +338,6 @@ TEST_F(S3FileSystemTest, registerCredentialProviderFactories) {
           [](const S3Config& config) {
             return std::make_shared<MyCredentialsProvider>();
           }),
-      fmt::format(
-          "CredentialsProviderFactory {} already registered",
-          credentialsProvider));
+      "CredentialsProviderFactory 'my-credentials-provider' already registered");
 }
 } // namespace facebook::velox::filesystems
