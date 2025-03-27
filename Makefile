@@ -253,7 +253,7 @@ check-pip-version: python-venv # We need a recent pip for '-C'
 python-build: check-pip-version
 	source .venv/bin/activate; \
 	$(PIP) install pyarrow scikit_build_core setuptools_scm[toml]; \
-	${PIP} install --no-build-isolation -Ccmake.build-type=Debug -Ceditable.rebuild=true -Cbuild.tool-args="-j${NUM_THREADS}" -ve.
+	${PIP} install --no-build-isolation -Ccmake.build-type=Debug -Cbuild.tool-args="-j${NUM_THREADS}" -v .
 
 python-test: python-venv
 	source .venv/bin/activate; \
