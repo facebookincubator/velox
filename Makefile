@@ -255,6 +255,6 @@ python-build: check-pip-version
 	$(PIP) install pyarrow scikit_build_core setuptools_scm[toml]; \
 	${PIP} install --no-build-isolation -Ccmake.build-type=Debug -Cbuild.tool-args="-j${NUM_THREADS}" -v .
 
-python-test: python-venv
+python-test: python-build
 	source .venv/bin/activate; \
-	python3 -m unittest -v
+	python3 -m unittest discover -v -s python/test
