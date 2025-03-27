@@ -1400,14 +1400,14 @@ void Task::addRemoteSplit(
 std::unique_ptr<ContinuePromise> Task::addSplitLocked(
     SplitsState& splitsState,
     exec::Split&& split) {
-  ++taskStats_.numTotalSplits;
-  ++taskStats_.numQueuedSplits;
+  ++taskStats_.splitsStats.numTotalSplits;
+  ++taskStats_.splitsStats.numQueuedSplits;
 
   if (split.connectorSplit) {
     VELOX_CHECK_NULL(split.connectorSplit->dataSource);
     if (splitsState.sourceIsTableScan) {
-      ++taskStats_.numQueuedTableScanSplits;
-      taskStats_.queuedTableScanSplitWeights +=
+      ++taskStats_.splitsStats.numQueuedTableScanSplits;
+      taskStats_.splitsStats.queuedTableScanSplitWeights +=
           split.connectorSplit->splitWeight;
     }
   }
@@ -1561,7 +1561,8 @@ bool Task::checkNoMoreSplitGroupsLocked() {
 }
 
 bool Task::isAllSplitsFinishedLocked() {
-  return (taskStats_.numFinishedSplits == taskStats_.numTotalSplits) &&
+  return (taskStats_.splitsStats.numFinishedSplits ==
+          taskStats_.splitsStats.numTotalSplits) &&
       allNodesReceivedNoMoreSplitsMessageLocked();
 }
 
@@ -1633,13 +1634,14 @@ exec::Split Task::getSplitLocked(
   auto split = std::move(splitsStore.splits[readySplitIndex]);
   splitsStore.splits.erase(splitsStore.splits.begin() + readySplitIndex);
 
-  --taskStats_.numQueuedSplits;
-  ++taskStats_.numRunningSplits;
+  --taskStats_.splitsStats.numQueuedSplits;
+  ++taskStats_.splitsStats.numRunningSplits;
   if (forTableScan && split.connectorSplit) {
-    --taskStats_.numQueuedTableScanSplits;
-    ++taskStats_.numRunningTableScanSplits;
-    taskStats_.queuedTableScanSplitWeights -= split.connectorSplit->splitWeight;
-    taskStats_.runningTableScanSplitWeights +=
+    --taskStats_.splitsStats.numQueuedTableScanSplits;
+    ++taskStats_.splitsStats.numRunningTableScanSplits;
+    taskStats_.splitsStats.queuedTableScanSplitWeights -=
+        split.connectorSplit->splitWeight;
+    taskStats_.splitsStats.runningTableScanSplitWeights +=
         split.connectorSplit->splitWeight;
   }
   taskStats_.lastSplitStartTimeMs = getCurrentTimeMs();
@@ -1683,11 +1685,11 @@ void Task::addScaledScanControllerLocked(
 
 void Task::splitFinished(bool fromTableScan, int64_t splitWeight) {
   std::lock_guard<std::timed_mutex> l(mutex_);
-  ++taskStats_.numFinishedSplits;
-  --taskStats_.numRunningSplits;
+  ++taskStats_.splitsStats.numFinishedSplits;
+  --taskStats_.splitsStats.numRunningSplits;
   if (fromTableScan) {
-    --taskStats_.numRunningTableScanSplits;
-    taskStats_.runningTableScanSplitWeights -= splitWeight;
+    --taskStats_.splitsStats.numRunningTableScanSplits;
+    taskStats_.splitsStats.runningTableScanSplitWeights -= splitWeight;
   }
   if (isAllSplitsFinishedLocked()) {
     taskStats_.executionEndTimeMs = getCurrentTimeMs();
@@ -1699,11 +1701,11 @@ void Task::multipleSplitsFinished(
     int32_t numSplits,
     int64_t splitsWeight) {
   std::lock_guard<std::timed_mutex> l(mutex_);
-  taskStats_.numFinishedSplits += numSplits;
-  taskStats_.numRunningSplits -= numSplits;
+  taskStats_.splitsStats.numFinishedSplits += numSplits;
+  taskStats_.splitsStats.numRunningSplits -= numSplits;
   if (fromTableScan) {
-    taskStats_.numRunningTableScanSplits -= numSplits;
-    taskStats_.runningTableScanSplitWeights -= splitsWeight;
+    taskStats_.splitsStats.numRunningTableScanSplits -= numSplits;
+    taskStats_.splitsStats.runningTableScanSplitWeights -= splitsWeight;
   }
   if (isAllSplitsFinishedLocked()) {
     taskStats_.executionEndTimeMs = getCurrentTimeMs();
@@ -2242,6 +2244,11 @@ void Task::addDriverStats(int pipelineId, DriverStats stats) {
   std::lock_guard<std::timed_mutex> l(mutex_);
   VELOX_CHECK(0 <= pipelineId && pipelineId < taskStats_.pipelineStats.size());
   taskStats_.pipelineStats[pipelineId].driverStats.push_back(std::move(stats));
+}
+
+TaskSplitsStats Task::taskSplitsStats() const {
+  std::lock_guard<std::timed_mutex> l(mutex_);
+  return taskStats_.splitsStats;
 }
 
 TaskStats Task::taskStats() const {
