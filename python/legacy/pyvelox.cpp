@@ -312,5 +312,6 @@ PYBIND11_MODULE(legacy, m) {
   addSignatureBindings(m);
   addSerdeBindings(m);
   addConversionBindings(m);
+  m.attr("__version__") = STRINGIZE(PYVELOX_VERSION);
 }
 } // namespace facebook::velox::py

@@ -56,7 +56,7 @@ wheel.packages = ["pyvelox"]
 wheel.exclude = ["*.h*", "*.cpp", "CMakeLists.txt", "test/*"]
 
 [tool.scikit-build.sdist]
-include = ["scripts/setup-helper-functions.sh"]
+include = ["scripts/setup-helper-functions.sh", "python/_version.py"]
 exclude = [
   ".github/",
   "velox/docs",
@@ -101,7 +101,6 @@ cmake.define.VELOX_ENABLE_ARROW = true
 
 [tool.setuptools_scm]
 root = '.'
-version_file = '_version.py'
 version_scheme = 'guess-next-dev'
 git_describe_command = 'git describe --dirty --tags --long --match "pyvelox-v[0-9]*.*"'
 fallback_version = '0.2.0a'

@@ -21,6 +21,13 @@ function(pyvelox_add_module TARGET)
     set(_origin "\$ORIGIN")
   endif()
 
+  if(DEFINED SKBUILD_PROJECT_VERSION_FULL)
+    target_compile_definitions(
+      ${TARGET} PRIVATE PYVELOX_VERSION=${SKBUILD_PROJECT_VERSION_FULL})
+  else()
+    target_compile_definitions(${TARGET} PRIVATE PYVELOX_VERSION=dev)
+  endif()
+
   # Set the rpath so linker looks within pyvelox package for libs
   set_target_properties(
     ${TARGET} PROPERTIES INSTALL_RPATH "${_origin}/;${CMAKE_BINARY_DIR}/lib"
