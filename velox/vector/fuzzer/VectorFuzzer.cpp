@@ -318,6 +318,13 @@ VectorPtr VectorFuzzer::fuzzConstant(
     const TypePtr& type,
     vector_size_t size,
     const AbstractInputGeneratorPtr& customGenerator) {
+  AbstractInputGeneratorPtr customInputGenerator = customGenerator;
+
+  if (customInputGenerator == nullptr && customTypeExists(type->name())) {
+    InputGeneratorConfig config{rand<uint32_t>(rng_), opts_.nullRatio};
+    customInputGenerator = getCustomTypeInputGenerator(type->name(), config);
+  }
+
   // For constants, there are two possible cases:
   // - generate a regular constant vector (only for primitive types).
   // - generate a random vector and wrap it using a constant vector.
@@ -337,7 +344,7 @@ VectorPtr VectorFuzzer::fuzzConstant(
           size,
           rng_,
           opts_,
-          customGenerator);
+          customInputGenerator);
     }
   }
 
@@ -385,9 +392,16 @@ VectorPtr VectorFuzzer::fuzzFlat(
     const TypePtr& type,
     vector_size_t size,
     const AbstractInputGeneratorPtr& customGenerator) {
-  if (customGenerator) {
+  auto inputGenerator = customGenerator;
+
+  if (!inputGenerator && customTypeExists(type->name())) {
+    InputGeneratorConfig config{rand<uint32_t>(rng_), opts_.nullRatio};
+    inputGenerator = getCustomTypeInputGenerator(type->name(), config);
+  }
+
+  if (inputGenerator) {
     return fuzzer::ConstrainedVectorGenerator::generateFlat(
-        customGenerator, size, pool_);
+        inputGenerator, size, pool_);
   }
 
   // Primitive types.
