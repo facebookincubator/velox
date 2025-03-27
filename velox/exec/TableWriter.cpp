@@ -69,15 +69,19 @@ TableWriter::TableWriter(
 void TableWriter::setTypeMappings(
     const std::shared_ptr<const core::TableWriteNode>& tableWriteNode) {
   auto outputNames = tableWriteNode->columnNames();
-  auto outputTypes = tableWriteNode->columns()->children();
+  auto hiveColumnHandleDataTypes = tableWriteNode->insertTableHandle()
+                                       ->connectorInsertTableHandle()
+                                       ->getHiveColumnHandleDataType();
+  std::vector<TypePtr> tableTypes;
+  tableTypes.emplace_back(hiveColumnHandleDataTypes);
 
   const auto& inputType = tableWriteNode->sources()[0]->outputType();
 
   // Ids that map input to output columns.
-  inputMapping_.reserve(outputTypes.size());
+  inputMapping_.reserve(tableTypes.size());
   std::vector<TypePtr> inputTypes;
 
-  // Generate mappings between input and output types. Note that column names
+  // Generate mappings between input and table types. Note that column names
   // must match, but in some case the types won't, for example, when writing a
   // struct (ROW) as a flat map (MAP).
   for (const auto& name : tableWriteNode->columns()->names()) {
@@ -86,7 +90,7 @@ void TableWriter::setTypeMappings(
     inputTypes.emplace_back(inputType->childAt(idx));
   }
 
-  mappedOutputType_ = ROW(folly::copy(outputNames), std::move(outputTypes));
+  mappedOutputType_ = ROW(folly::copy(outputNames), std::move(tableTypes));
   mappedInputType_ = ROW(std::move(outputNames), std::move(inputTypes));
 }
 

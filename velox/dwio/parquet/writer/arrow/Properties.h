@@ -323,10 +323,10 @@ class PARQUET_EXPORT WriterProperties {
           write_batch_size_(DEFAULT_WRITE_BATCH_SIZE),
           max_row_group_length_(DEFAULT_MAX_ROW_GROUP_LENGTH),
           pagesize_(kDefaultDataPageSize),
-          version_(ParquetVersion::PARQUET_2_6),
+          version_(ParquetVersion::PARQUET_1_0),
           data_page_version_(ParquetDataPageVersion::V1),
           created_by_(
-              std::string("parquet-mr version 2.6.0 (build ") +
+              std::string("parquet-mr version 1.13.1 (build ") +
               DEFAULT_CREATED_BY + ")"),
           store_decimal_as_integer_(false),
           page_checksum_enabled_(false) {}

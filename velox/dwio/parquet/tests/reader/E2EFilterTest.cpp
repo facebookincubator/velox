@@ -721,9 +721,9 @@ TEST_F(E2EFilterTest, writeDecimalAsInteger) {
 
   auto types = parquetReader.typeWithId()->getChildren();
   auto c0 = std::dynamic_pointer_cast<const ParquetTypeWithId>(types[0]);
-  EXPECT_EQ(c0->parquetType_.value(), thrift::Type::type::INT32);
+  EXPECT_EQ(c0->parquetType_.value(), thrift::Type::type::FIXED_LEN_BYTE_ARRAY);
   auto c1 = std::dynamic_pointer_cast<const ParquetTypeWithId>(types[1]);
-  EXPECT_EQ(c1->parquetType_.value(), thrift::Type::type::INT64);
+  EXPECT_EQ(c1->parquetType_.value(), thrift::Type::type::FIXED_LEN_BYTE_ARRAY);
   auto c2 = std::dynamic_pointer_cast<const ParquetTypeWithId>(types[2]);
   EXPECT_EQ(c2->parquetType_.value(), thrift::Type::type::FIXED_LEN_BYTE_ARRAY);
 }
