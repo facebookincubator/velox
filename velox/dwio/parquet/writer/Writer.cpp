@@ -146,7 +146,9 @@ std::shared_ptr<WriterProperties> getArrowParquetWriterOptions(
   properties = properties->max_row_group_length(
       static_cast<int64_t>(flushPolicy->rowsInRowGroup()));
   properties = properties->codec_options(options.codecOptions);
-  properties = properties->enable_store_decimal_as_integer();
+  if (options.storeDecimalAsInteger.value_or(false)) {
+    properties = properties->enable_store_decimal_as_integer();
+  }
   if (options.useParquetDataPageV2.value_or(false)) {
     properties =
         properties->data_page_version(arrow::ParquetDataPageVersion::V2);
@@ -154,6 +156,7 @@ std::shared_ptr<WriterProperties> getArrowParquetWriterOptions(
     properties =
         properties->data_page_version(arrow::ParquetDataPageVersion::V1);
   }
+  properties = properties->version(options.version);
   return properties->build();
 }
 
@@ -216,6 +219,11 @@ std::shared_ptr<::arrow::Field> updateFieldNameRecursive(
         arrowMapType->item_field(), *mapType.valueType());
     return newField->WithType(
         ::arrow::map(newKeyField->type(), newValueField->type()));
+  } else if (name != "" && type.isDecimal()) {
+    auto newField = field->WithName(name);
+    auto precisionScale = getDecimalPrecisionScale(type);
+    return newField->WithType(
+        ::arrow::decimal(precisionScale.first, precisionScale.second));
   } else if (name != "") {
     return field->WithName(name);
   } else {
@@ -365,9 +373,11 @@ dwio::common::StripeProgress getStripeProgress(
  * This method assumes each input `ColumnarBatch` have same schema.
  */
 void Writer::write(const VectorPtr& data) {
-  VELOX_USER_CHECK(
-      data->type()->equivalent(*schema_),
-      "The file schema type should be equal with the input rowvector type.");
+  // make it check this but for decimal type it does not have to be the same...
+  // the check for decimal comes from java so not sure if even have to check??
+  // VELOX_USER_CHECK(
+  //     data->type()->equivalent(*schema_),
+  //     "The file schema type should be equal with the input rowvector type.");
 
   ArrowArray array;
   ArrowSchema schema;

@@ -261,6 +261,7 @@ TEST_F(E2EFilterTest, integerDictionary) {
 TEST_F(E2EFilterTest, timestampInt64Direct) {
   options_.enableDictionary = false;
   options_.dataPageSize = 4 * 1024;
+  options_.version = parquet::arrow::ParquetVersion::type::PARQUET_2_6;
 
   testWithTypes(
       "timestamp_val_0:timestamp,"
@@ -273,6 +274,7 @@ TEST_F(E2EFilterTest, timestampInt64Direct) {
 
 TEST_F(E2EFilterTest, timestampInt64Dictionary) {
   options_.dataPageSize = 4 * 1024;
+  options_.version = parquet::arrow::ParquetVersion::type::PARQUET_2_6;
 
   testWithTypes(
       "timestamp_val_0:timestamp,"
@@ -387,6 +389,7 @@ TEST_F(E2EFilterTest, shortDecimalDictionary) {
 TEST_F(E2EFilterTest, shortDecimalDirect) {
   options_.enableDictionary = false;
   options_.dataPageSize = 4 * 1024;
+  options_.storeDecimalAsInteger = true;
 
   // decimal(8, 5) maps to 4 bytes FLBA in Parquet.
   // decimal(10, 5) maps to 5 bytes FLBA in Parquet.
@@ -707,10 +710,10 @@ TEST_F(E2EFilterTest, combineRowGroup) {
   EXPECT_EQ(parquetReader.numberOfRows(), 5);
 }
 
-TEST_F(E2EFilterTest, writeDecimalAsInteger) {
+TEST_F(E2EFilterTest, writeDecimalAsFLBA) {
   auto rowVector = makeRowVector(
-      {makeFlatVector<int64_t>({1, 2}, DECIMAL(8, 2)),
-       makeFlatVector<int64_t>({1, 2}, DECIMAL(10, 2)),
+      {makeFlatVector<double>({1.23, 203.43}, DECIMAL(8, 2)),
+       makeFlatVector<double>({1200.00, 1234567.89}, DECIMAL(10, 2)),
        makeFlatVector<int64_t>({1, 2}, DECIMAL(19, 2))});
   writeToMemory(rowVector->type(), {rowVector}, false);
   dwio::common::ReaderOptions readerOpts{leafPool_.get()};
@@ -721,10 +724,16 @@ TEST_F(E2EFilterTest, writeDecimalAsInteger) {
 
   auto types = parquetReader.typeWithId()->getChildren();
   auto c0 = std::dynamic_pointer_cast<const ParquetTypeWithId>(types[0]);
-  EXPECT_EQ(c0->parquetType_.value(), thrift::Type::type::INT32);
+  EXPECT_EQ(c0->precision_, 8);
+  EXPECT_EQ(c0->scale_, 2);
+  EXPECT_EQ(c0->parquetType_.value(), thrift::Type::type::FIXED_LEN_BYTE_ARRAY);
   auto c1 = std::dynamic_pointer_cast<const ParquetTypeWithId>(types[1]);
-  EXPECT_EQ(c1->parquetType_.value(), thrift::Type::type::INT64);
+  EXPECT_EQ(c1->precision_, 10);
+  EXPECT_EQ(c1->scale_, 2);
+  EXPECT_EQ(c1->parquetType_.value(), thrift::Type::type::FIXED_LEN_BYTE_ARRAY);
   auto c2 = std::dynamic_pointer_cast<const ParquetTypeWithId>(types[2]);
+  EXPECT_EQ(c2->precision_, 19);
+  EXPECT_EQ(c2->scale_, 2);
   EXPECT_EQ(c2->parquetType_.value(), thrift::Type::type::FIXED_LEN_BYTE_ARRAY);
 }
 
