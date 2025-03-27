@@ -293,6 +293,9 @@ class MemoryManager {
     return sharedLeafPools_;
   }
 
+  //  Returns the shared references to all the alive memory pools in 'pools_'.
+  std::vector<std::shared_ptr<MemoryPool>> getAlivePools() const;
+
  private:
   std::shared_ptr<MemoryPoolImpl> createRootPool(
       std::string poolName,
@@ -301,8 +304,6 @@ class MemoryManager {
 
   void dropPool(MemoryPool* pool);
 
-  //  Returns the shared references to all the alive memory pools in 'pools_'.
-  std::vector<std::shared_ptr<MemoryPool>> getAlivePools() const;
 
   const std::shared_ptr<MemoryAllocator> allocator_;
 

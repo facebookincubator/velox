@@ -87,3 +87,7 @@ endif()
 if(${VELOX_BUILD_TESTING})
   add_subdirectory(tool)
 endif()
+
+if(${VELOX_ENABLE_JNI_BINDINGS})
+  add_subdirectory(jni)
+endif()
