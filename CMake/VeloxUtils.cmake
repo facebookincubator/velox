@@ -12,14 +12,17 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 include_guard(GLOBAL)
-
-function(pyvelox_add_module TARGET)
-  pybind11_add_module(${TARGET} ${ARGN})
+function(get_rpath_origin VAR)
   if(APPLE)
     set(_origin @loader_path)
   else()
     set(_origin "\$ORIGIN")
   endif()
+  set(${VAR} ${_origin} PARENT_SCOPE)
+endfunction()
+
+function(pyvelox_add_module TARGET)
+  pybind11_add_module(${TARGET} ${ARGN})
 
   if(DEFINED SKBUILD_PROJECT_VERSION_FULL)
     target_compile_definitions(
@@ -29,6 +32,7 @@ function(pyvelox_add_module TARGET)
   endif()
 
   # Set the rpath so linker looks within pyvelox package for libs
+  get_rpath_origin(_origin)
   set_target_properties(
     ${TARGET} PROPERTIES INSTALL_RPATH "${_origin}/;${CMAKE_BINARY_DIR}/lib"
                          INSTALL_RPATH_USE_LINK_PATH TRUE)
