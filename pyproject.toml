@@ -119,7 +119,7 @@ skip = "*musllinux* cp36-* cp38-*"
 archs = "native"
 manylinux-x86_64-image = "ghcr.io/facebookincubator/velox-dev:pyvelox"
 before-all = "ccache -sz"
-before-test = "cacche -s"
+before-test = "ccache -s"
 test-command = "python -m unittest discover -s {project}/python/test"
 
 [tool.cibuildwheel.linux]
@@ -131,6 +131,8 @@ repair-wheel-command = """auditwheel repair \
                        """
 
 [tool.cibuildwheel.macos]
+# delocate skips the excluded libs instead of just ignoring it as a dependency
+# see matthew-brett/delocate/issues/207
 before-build = "pip install --upgrade git+https://github.com/assignUser/delocate@fix-exclude"
 repair-wheel-command = """delocate-wheel \
                           --exclude 'libarrow' \

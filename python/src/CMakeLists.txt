@@ -140,6 +140,7 @@ set_target_properties(
 
 # This ensures the dynamic linker can find libarrow* dependencies at runtime
 # from the installed pyarrow package without requiring LD_LIBRARY_PATH to be set
+get_rpath_origin(_origin)
 set_property(
   TARGET arrow_module
   PROPERTY INSTALL_RPATH "${_origin}/../pyarrow"
