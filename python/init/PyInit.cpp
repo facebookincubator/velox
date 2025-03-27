@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-#include "velox/py/lib/PyInit.h"
+#include "python/init/PyInit.h"
 #include "velox/common/memory/Memory.h"
 #include "velox/connectors/hive/HiveConnectorSplit.h"
 #include "velox/connectors/hive/HiveDataSink.h"

@@ -16,10 +16,10 @@
 
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
-#include "velox/py/lib/PyInit.h"
+#include "python/init/PyInit.h"
 
-#include "velox/py/runner/PyConnectors.h"
-#include "velox/py/runner/PyLocalRunner.h"
+#include "python/runner/PyConnectors.h"
+#include "python/runner/PyLocalRunner.h"
 
 namespace py = pybind11;
 

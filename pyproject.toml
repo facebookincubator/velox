@@ -26,7 +26,7 @@ build-backend = "scikit_build_core.build"
 name = "pyvelox"
 dynamic = ["version"]
 description = "Python bindings and extensions for Velox"
-readme = "pyvelox/README.md"
+readme = "README.md"
 requires-python = ">=3.9"
 license = "Apache-2.0"
 authors = [{ name = "Meta", email = "velox@fb.com" }]
@@ -56,8 +56,23 @@ wheel.packages = ["pyvelox"]
 wheel.exclude = ["*.h*", "*.cpp", "CMakeLists.txt", "test/*"]
 
 [tool.scikit-build.sdist]
-include = ["velox/", "pyvelox/", "CMake/", "scripts/setup-helper-functions.sh"]
-exclude = [".github/", "velox/docs", "velox/experimental"]
+include = ["scripts/setup-helper-functions.sh"]
+exclude = [
+  ".github/",
+  "velox/docs",
+  "velox/experimental",
+  "website",
+  "docs",
+  "static",
+  "scripts",
+  "*.md",
+  "ccache",
+  "Makefile",
+  "docker-compose.yml",
+  "license.header",
+  ".clang-format",
+  ".cmake-format.yaml",
+]
 
 # TODO reuse of already build velox with VELOX_BUILD_DIR
 [tool.scikit-build.cmake]
@@ -85,7 +100,7 @@ cmake.define.VELOX_ENABLE_ARROW = true
 
 [tool.setuptools_scm]
 root = '.'
-version_file = 'pyvelox/_generated_version.py'
+version_file = '_version.py'
 version_scheme = 'guess-next-dev'
 git_describe_command = 'git describe --dirty --tags --long --match "pyvelox-v[0-9]*.*"'
 fallback_version = '0.2.0a'

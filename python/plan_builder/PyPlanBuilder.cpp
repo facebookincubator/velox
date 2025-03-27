@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-#include "velox/py/plan_builder/PyPlanBuilder.h"
+#include "python/plan_builder/PyPlanBuilder.h"
 
 #include <folly/executors/GlobalExecutor.h>
 #include <pybind11/stl.h>
@@ -30,7 +30,7 @@
 #include "velox/functions/prestosql/aggregates/RegisterAggregateFunctions.h"
 #include "velox/functions/prestosql/registration/RegistrationFunctions.h"
 #include "velox/parse/TypeResolver.h"
-#include "velox/py/vector/PyVector.h"
+#include "python/vector/PyVector.h"
 #include "velox/tpch/gen/TpchGen.h"
 
 namespace facebook::velox::py {

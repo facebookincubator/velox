@@ -17,8 +17,8 @@
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
 
-#include "velox/py/file/PyFile.h"
-#include "velox/py/lib/PyInit.h"
+#include "python/file/PyFile.h"
+#include "python/lib/PyInit.h"
 
 namespace py = pybind11;
 

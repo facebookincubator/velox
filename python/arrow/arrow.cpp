@@ -23,8 +23,8 @@
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
 
-#include "velox/py/lib/PyInit.h"
-#include "velox/py/vector/PyVector.h"
+#include "python/init/PyInit.h"
+#include "python/vector/PyVector.h"
 #include "velox/vector/arrow/Bridge.h"
 
 namespace py = pybind11;

@@ -12,7 +12,41 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-add_library(velox_py_init lib/PyInit.cpp)
+pybind11_add_module(
+  legacy
+  MODULE
+  legacy/complex.cpp
+  legacy/conversion.cpp
+  legacy/pyvelox.cpp
+  legacy/serde.cpp
+  legacy/signatures.cpp)
+
+target_link_libraries(
+  legacy
+  PRIVATE
+    velox_type
+    velox_vector
+    velox_core
+    velox_exec
+    velox_parse_parser
+    velox_functions_prestosql
+    velox_functions_spark
+    velox_aggregates
+    velox_functions_spark_aggregates)
+
+target_include_directories(legacy SYSTEM PRIVATE ${CMAKE_CURRENT_LIST_DIR}/..)
+install(TARGETS legacy LIBRARY DESTINATION pyvelox COMPONENT pyvelox_libraries)
+set_target_properties(
+  legacy
+  PROPERTIES INSTALL_RPATH "${_origin}/;${CMAKE_BINARY_DIR}/lib"
+             INSTALL_RPATH_USE_LINK_PATH TRUE)
+
+if(VELOX_PYTHON_LEGACY_ONLY)
+  # Only build the legacy module for CI
+  return()
+endif()
+
+add_library(velox_py_init init/PyInit.h init/PyInit.cpp)
 target_link_libraries(
   velox_py_init
   PRIVATE velox_memory)
@@ -49,6 +83,8 @@ target_link_libraries(
 
 # pyvelox.plan_builder library:
 add_library(velox_py_plan_builder_lib plan_builder/PyPlanBuilder.cpp)
+target_include_directories(velox_py_plan_builder_lib
+                           PUBLIC ${PROJECT_SOURCE_DIR}/velox/external/xxhash)
 target_link_libraries(
   velox_py_plan_builder_lib
   velox_py_type_lib
@@ -77,6 +113,8 @@ target_link_libraries(
 # pyvelox.runner library:
 add_library(velox_py_local_runner_lib runner/PyLocalRunner.cpp
                                       runner/PyConnectors.cpp)
+target_include_directories(velox_py_local_runner_lib
+                           PUBLIC ${PROJECT_SOURCE_DIR}/velox/external/xxhash)
 target_link_libraries(
   velox_py_local_runner_lib
   velox_py_type_lib

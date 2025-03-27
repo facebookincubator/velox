@@ -492,7 +492,6 @@ if(${VELOX_BUILD_PYTHON_PACKAGE})
     REQUIRED)
   velox_set_source(pybind11)
   velox_resolve_dependency(pybind11 2.10.0)
-  add_subdirectory(pyvelox)
 endif()
 
 # DWIO (ORC/DWRF) and Substrait depend on protobuf.
@@ -644,3 +643,7 @@ if(VELOX_ENABLE_GEO)
 endif()
 
 add_subdirectory(velox)
+
+if(VELOX_BUILD_PYTHON_PACKAGE)
+  add_subdirectory(python)
+endif()

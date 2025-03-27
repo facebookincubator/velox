@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-#include "velox/py/runner/PyLocalRunner.h"
+#include "python/runner/PyLocalRunner.h"
 
 #include <pybind11/stl.h>
 #include "velox/connectors/hive/HiveConnectorSplit.h"
@@ -23,7 +23,7 @@
 #include "velox/dwio/dwrf/writer/Writer.h"
 #include "velox/exec/PlanNodeStats.h"
 #include "velox/exec/Spill.h"
-#include "velox/py/vector/PyVector.h"
+#include "python/vector/PyVector.h"
 
 namespace facebook::velox::py {
 namespace {
