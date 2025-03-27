@@ -92,12 +92,18 @@ MAX_HIGH_LINK_JOBS = { env = "MAX_HIGH_LINK_JOBS", default = "" }
 if.env.DEBUG = true        # 1 maps to true
 cmake.build-type = "Debug"
 
-# These settings are for use with signature verification in CI
 [[tool.scikit-build.overrides]]
+# These settings are for use with signature verification in CI
 if.env.VELOX_PYTHON_LEGACY_ONLY = 'ON'
 cmake.define.VELOX_PYTHON_LEGACY_ONLY = true
 cmake.define.VELOX_BUILD_SHARED = false
 cmake.define.VELOX_ENABLE_ARROW = true
+
+[[tool.scikit-build.overrides]]
+# The pyvelox cibw image compiler throws cpp 20 warnings we 
+# have yet to fix see #10866
+if.env.CIBUILDWHEEL = true
+cmake.define.TREAT_WARNINGS_AS_ERRORS = false
 
 [tool.setuptools_scm]
 root = '.'
