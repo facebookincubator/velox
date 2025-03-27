@@ -30,7 +30,6 @@
 
 namespace facebook::velox::py {
 
-folly::once_flag initOnceFlag;
 folly::once_flag registerOnceFlag;
 
 void registerAllResourcesOnce() {
@@ -66,16 +65,12 @@ void registerAllResources() {
   folly::call_once(registerOnceFlag, registerAllResourcesOnce);
 }
 
-void initializeVeloxMemoryOnce() {
-  // Enable full Velox stack trace when exceptions are thrown.
-  FLAGS_velox_exception_user_stacktrace_enabled = true;
-
-  velox::memory::initializeMemoryManager({});
-}
-
 void initializeVeloxMemory() {
-  // Initialize Velox once per process.
-  folly::call_once(initOnceFlag, initializeVeloxMemoryOnce);
+  if (not velox::memory::MemoryManager::testInstance()) {
+    // Enable full Velox stack trace when exceptions are thrown.
+    FLAGS_velox_exception_user_stacktrace_enabled = true;
+    velox::memory::initializeMemoryManager({});
+  }
 }
 
 } // namespace facebook::velox::py
