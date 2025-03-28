@@ -77,7 +77,7 @@ exclude = [
 # TODO reuse of already build velox with VELOX_BUILD_DIR
 [tool.scikit-build.cmake]
 version = ">=3.28"
-build-type = "MinSizeRel"
+build-type = "Release"
 
 [tool.scikit-build.cmake.define]
 VELOX_BUILD_PYTHON_PACKAGE = true
