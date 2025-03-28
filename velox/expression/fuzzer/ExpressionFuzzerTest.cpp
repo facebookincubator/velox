@@ -85,13 +85,6 @@ int main(int argc, char** argv) {
       "cardinality",
       "element_at",
       "width_bucket",
-      // Fuzzer and the underlying engine are confused about TDigest functions
-      // (since TDigest is a user defined type), and tries to pass a
-      // VARBINARY (since TDigest's implementation uses an
-      // alias to VARBINARY).
-      "value_at_quantile",
-      "values_at_quantiles",
-      "merge_tdigest",
       // Fuzzer cannot generate valid 'comparator' lambda.
       "array_sort(array(T),constant function(T,T,bigint)) -> array(T)",
       "split_to_map(varchar,varchar,varchar,function(varchar,varchar,varchar,varchar)) -> map(varchar,varchar)",
