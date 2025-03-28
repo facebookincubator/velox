@@ -554,7 +554,7 @@ void FlatVector<T>::resizeValues(
       memcpy(dst, src, len);
     } else {
       const vector_size_t previousSize = BaseVector::length_;
-      auto* rawOldValues = newValues->asMutable<T>();
+      auto* rawOldValues = values_->as<T>();
       auto* rawNewValues = newValues->asMutable<T>();
       const auto len = std::min<vector_size_t>(newSize, previousSize);
       for (vector_size_t row = 0; row < len; ++row) {
