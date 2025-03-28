@@ -145,6 +145,7 @@ TEST_F(UnsafeRowFuzzTests, fast) {
       MAP(INTEGER(), MAP(BIGINT(), DOUBLE())),
       MAP(VARCHAR(), BOOLEAN()),
       MAP(INTEGER(), MAP(BIGINT(), ARRAY(REAL()))),
+      MAP(INTEGER(), ROW({ARRAY(INTEGER()), INTEGER()})),
       // Timestamp and date types.
       TIMESTAMP(),
       DATE(),

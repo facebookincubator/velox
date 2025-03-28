@@ -1083,9 +1083,13 @@ RowVectorPtr deserializeRows(
       std::vector<char*> nestedData(numRows);
       std::vector<size_t> nestedOffsets(numRows, 0);
       for (auto row = 0; row < numRows; ++row) {
-        const auto offset =
-            readInt32(data[row] + offsets[row] + sizeof(int32_t));
-        nestedData[row] = data[row] + offset;
+        const auto isTopLevelNull =
+            rawNulls != nullptr && bits::isBitNull(rawNulls, row);
+        if (!isTopLevelNull) {
+          const auto offset =
+              readInt32(data[row] + offsets[row] + sizeof(int32_t));
+          nestedData[row] = data[row] + offset;
+        }
         offsets[row] += kFieldWidth;
       }
       auto field =
