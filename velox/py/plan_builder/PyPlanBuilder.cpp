@@ -25,6 +25,8 @@
 #include "velox/dwio/dwrf/RegisterDwrfReader.h"
 #include "velox/dwio/dwrf/RegisterDwrfWriter.h"
 #include "velox/dwio/dwrf/writer/Writer.h"
+#include "velox/dwio/parquet/RegisterParquetReader.h"
+#include "velox/dwio/parquet/RegisterParquetWriter.h"
 #include "velox/exec/Cursor.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
 #include "velox/functions/prestosql/aggregates/RegisterAggregateFunctions.h"
@@ -42,8 +44,12 @@ folly::once_flag registerOnceFlag;
 void registerAllResourcesOnce() {
   velox::filesystems::registerLocalFileSystem();
 
+  // Register file readers and writers.
   velox::dwrf::registerDwrfWriterFactory();
   velox::dwrf::registerDwrfReaderFactory();
+
+  velox::parquet::registerParquetWriterFactory();
+  velox::parquet::registerParquetReaderFactory();
 
   velox::dwio::common::LocalFileSink::registerFactory();
 
