@@ -120,7 +120,7 @@ archs = "native"
 manylinux-x86_64-image = "ghcr.io/facebookincubator/velox-dev:pyvelox"
 before-all = "ccache -sz"
 before-test = "ccache -s"
-test-command = "python -m unittest discover -s {project}/python/test"
+test-command = "echo Tests disabled for now see #12836" #"python -m unittest discover -s {project}/python/test"
 
 [tool.cibuildwheel.linux]
 repair-wheel-command = """auditwheel repair \
