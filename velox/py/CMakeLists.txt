@@ -57,6 +57,8 @@ velox_link_libraries(
   velox_dwio_dwrf_reader
   velox_dwio_dwrf_common
   velox_dwio_dwrf_writer
+  velox_dwio_parquet_reader
+  velox_dwio_parquet_writer
   Folly::folly
   pybind11::module)
 
