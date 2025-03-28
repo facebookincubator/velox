@@ -50,6 +50,23 @@ void addBenchmark(
   }
 }
 
+std::vector<RowTypePtr> tinyintRowTypes(bool noPayload) {
+  if (noPayload) {
+    return {
+        ROW({TINYINT()}),
+        ROW({TINYINT(), TINYINT()}),
+        ROW({TINYINT(), TINYINT(), TINYINT()}),
+        ROW({TINYINT(), TINYINT(), TINYINT(), TINYINT()}),
+    };
+  }
+  return {
+      ROW({TINYINT(), VARCHAR(), VARCHAR()}),
+      ROW({TINYINT(), TINYINT(), VARCHAR(), VARCHAR()}),
+      ROW({TINYINT(), TINYINT(), TINYINT(), VARCHAR(), VARCHAR()}),
+      ROW({TINYINT(), TINYINT(), TINYINT(), TINYINT(), VARCHAR(), VARCHAR()}),
+  };
+}
+
 std::vector<RowTypePtr> smallintRowTypes(bool noPayload) {
   if (noPayload) {
     return {
@@ -161,6 +178,51 @@ void largeVarchar(const OrderByBenchmarkFunction& benchmarkFunc) {
       benchmarkFunc);
 }
 
+void tinyint(
+    bool noPayload,
+    int numIterations,
+    const std::vector<vector_size_t>& batchSizes,
+    const OrderByBenchmarkFunction& benchmarkFunc) {
+  const std::vector<RowTypePtr> rowTypes = tinyintRowTypes(noPayload);
+  const std::vector<int> numKeys = {1, 2, 3, 4};
+  addBenchmark(
+      noPayload ? "no-payload" : "payload",
+      "tinyint",
+      batchSizes,
+      rowTypes,
+      numKeys,
+      numIterations,
+      benchmarkFunc);
+}
+
+void smallTinyint(const OrderByBenchmarkFunction& benchmarkFunc) {
+  // For small dateset, iterations need to be large enough to ensure that the
+  // benchmark runs for enough time.
+  const auto iterations = 100'000;
+  const std::vector<vector_size_t> batchSizes = {10, 50, 100, 500};
+  tinyint(true, iterations, batchSizes, benchmarkFunc);
+}
+
+void smallTinyintWithPayload(const OrderByBenchmarkFunction& benchmarkFunc) {
+  const auto iterations = 100'000;
+  const std::vector<vector_size_t> batchSizes = {10, 50, 100, 500};
+  tinyint(false, iterations, batchSizes, benchmarkFunc);
+}
+
+void largeTinyint(const OrderByBenchmarkFunction& benchmarkFunc) {
+  const auto iterations = 10;
+  const std::vector<vector_size_t> batchSizes = {
+      1'000, 10'000, 100'000, 1'000'000};
+  tinyint(true, iterations, batchSizes, benchmarkFunc);
+}
+
+void largeTinyintWithPayloads(const OrderByBenchmarkFunction& benchmarkFunc) {
+  const auto iterations = 10;
+  const std::vector<vector_size_t> batchSizes = {
+      1'000, 10'000, 100'000, 1'000'000};
+  tinyint(false, iterations, batchSizes, benchmarkFunc);
+}
+
 void smallint(
     bool noPayload,
     int numIterations,
@@ -229,5 +291,9 @@ void OrderByBenchmarkUtil::addBenchmarks(
   largeSmallint(benchmarkFunc);
   smallSmallintWithPayload(benchmarkFunc);
   largeSmallintWithPayloads(benchmarkFunc);
+  smallTinyint(benchmarkFunc);
+  largeTinyint(benchmarkFunc);
+  smallTinyintWithPayload(benchmarkFunc);
+  largeTinyintWithPayloads(benchmarkFunc);
 }
 } // namespace facebook::velox::exec
