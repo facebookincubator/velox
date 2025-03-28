@@ -44,7 +44,8 @@ class DwrfUnit : public LoadUnit {
       uint32_t stripeIndex,
       std::shared_ptr<dwio::common::ColumnSelector> columnSelector,
       const std::shared_ptr<BitSet>& projectedNodes,
-      RowReaderOptions options)
+      RowReaderOptions options,
+      bool useColumnNames)
       : stripeReaderBase_{stripeReaderBase},
         strideIndexProvider_{strideIndexProvider},
         columnReaderStatistics_{&columnReaderStatistics},
@@ -53,7 +54,8 @@ class DwrfUnit : public LoadUnit {
         projectedNodes_{projectedNodes},
         options_{std::move(options)},
         stripeInfo_{
-            stripeReaderBase.getReader().footer().stripes(stripeIndex_)} {}
+            stripeReaderBase.getReader().footer().stripes(stripeIndex_)},
+        useColumnNames_{useColumnNames} {}
 
   ~DwrfUnit() override = default;
 
@@ -91,6 +93,9 @@ class DwrfUnit : public LoadUnit {
   const std::shared_ptr<BitSet> projectedNodes_;
   const RowReaderOptions options_;
   const StripeInformationWrapper stripeInfo_;
+
+  // Whether to use names for mapping table field names to file field names.
+  const bool useColumnNames_;
 
   // Mutables
   bool preloaded_;
@@ -166,6 +171,7 @@ void DwrfUnit::ensureDecoders() {
         streamLabels,
         *columnReaderStatistics_,
         scanSpec,
+        useColumnNames_,
         flatMapContext,
         /*isRoot=*/true);
     selectiveColumnReader_->setIsTopLevel();
@@ -328,7 +334,8 @@ std::unique_ptr<dwio::common::UnitLoader> DwrfRowReader::getUnitLoader() {
         stripe,
         columnSelector_,
         projectedNodes_,
-        options_));
+        options_,
+        readerBaseShared()->readerOptions().useColumnNamesForColumnMapping()));
   }
   std::shared_ptr<UnitLoaderFactory> unitLoaderFactory =
       options_.unitLoaderFactory();
