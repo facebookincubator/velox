@@ -49,17 +49,31 @@ void logInputs(const std::vector<fuzzer::InputTestCase>& inputTestCases) {
 
 core::PlanNodePtr makeProjectionPlan(
     const RowVectorPtr& input,
-    const std::vector<core::TypedExprPtr>& projections) {
+    const std::vector<core::TypedExprPtr>& projections,
+    const std::vector<core::TypedExprPtr>& transformProjections) {
   std::vector<std::string> names{projections.size()};
   for (auto i = 0; i < names.size(); ++i) {
     names[i] = fmt::format("p{}", i);
   }
+
   std::vector<RowVectorPtr> inputs{input};
+  core::PlanNodePtr source =
+      std::make_shared<core::ValuesNode>("values", inputs);
+
+  std::vector<std::string> transformNames(transformProjections.size());
+  // If we need to transform types into intermediate types, add an extra
+  // ProjectNode to do it.
+  if (!transformProjections.empty()) {
+    VELOX_CHECK_EQ(transformProjections.size(), input->children().size());
+    for (auto i = 0; i < transformNames.size(); ++i) {
+      transformNames[i] = input->type()->asRow().nameOf(i);
+    }
+    source = std::make_shared<core::ProjectNode>(
+        "transform", transformNames, transformProjections, source);
+  }
+
   return std::make_shared<core::ProjectNode>(
-      "project",
-      names,
-      projections,
-      std::make_shared<core::ValuesNode>("values", inputs));
+      "project", names, projections, source);
 }
 
 bool defaultNullRowsSkipped(const exec::ExprSet& exprSet) {
@@ -150,6 +164,30 @@ ExpressionVerifier::verify(
   VectorPtr copiedResult;
   std::string sql = "";
 
+  std::vector<fuzzer::InputTestCase> transformedInputTestCases;
+  std::vector<core::TypedExprPtr> transformPlans;
+
+  if (referenceQueryRunner_ == nullptr) {
+    transformedInputTestCases = inputTestCases;
+  } else {
+    // Check if we need to transform types into intermediate types (if we don't
+    // the projections will be no-ops).
+    std::vector<RowVectorPtr> input;
+    for (const auto& testCase : inputTestCases) {
+      input.push_back(testCase.inputVector);
+    }
+    auto [transformedInputs, transformProjections] =
+        referenceQueryRunner_->inputProjections(input);
+    for (const auto& expr : transformProjections) {
+      transformPlans.push_back(core::Expressions::inferTypes(
+          expr, transformedInputs[0]->type(), execCtx_->pool()));
+    }
+    for (int i = 0; i < transformedInputs.size(); ++i) {
+      transformedInputTestCases.push_back(fuzzer::InputTestCase{
+          transformedInputs[i], inputTestCases[i].activeRows});
+    }
+  }
+
   // Complex constants that aren't all expressible in sql
   std::vector<VectorPtr> complexConstants;
   // Deep copy to preserve the initial state of result vector.
@@ -189,7 +227,7 @@ ExpressionVerifier::verify(
   exec::ExprSetSimplified exprSetSimplified(plans, execCtx_);
 
   int testCaseItr = 0;
-  for (auto [rowVector, rows] : inputTestCases) {
+  for (auto [rowVector, rows] : transformedInputTestCases) {
     LOG(INFO) << "Executing test case: " << testCaseItr++;
     // Execute expression plan using both common and simplified evals.
     std::vector<VectorPtr> commonEvalResult;
@@ -222,10 +260,27 @@ ExpressionVerifier::verify(
     // error by default nulls.
     bool defaultNull{false};
     try {
-      auto inputRowVector = rowVector;
+      RowVectorPtr inputRowVector = rowVector;
+
+      // If we need to transform types into intermediate types, do so here
+      // before we evaluate exprSetCommon.
+      if (!transformPlans.empty()) {
+        exec::ExprSet transformExprSet = createExprSetCommon(
+            transformPlans, execCtx_, options_.disableConstantFolding);
+        exec::EvalCtx transformEvalCtx(
+            execCtx_, &transformExprSet, inputRowVector.get());
+        std::vector<VectorPtr> transformEvalResult;
+        transformExprSet.eval(rows, transformEvalCtx, transformEvalResult);
+        inputRowVector =
+            VectorMaker(execCtx_->pool())
+                .rowVector(
+                    inputTestCases[0].inputVector->type()->asRow().names(),
+                    transformEvalResult);
+      }
+
       VectorPtr copiedInput;
       inputRowVector = VectorFuzzer::fuzzRowChildrenToLazy(
-          rowVector, inputRowMetadata.columnsToWrapInLazy);
+          inputRowVector, inputRowMetadata.columnsToWrapInLazy);
       if (inputRowMetadata.columnsToWrapInLazy.empty()) {
         // Copy loads lazy vectors so only do this when there are no lazy
         // inputs.
@@ -292,7 +347,8 @@ ExpressionVerifier::verify(
     if (referenceQueryRunner_ != nullptr) {
       VLOG(1) << "Execute with reference DB.";
       auto inputRowVector = reduceToSelectedRows(rowVector, rows);
-      auto projectionPlan = makeProjectionPlan(inputRowVector, plans);
+      auto projectionPlan =
+          makeProjectionPlan(inputRowVector, plans, transformPlans);
       auto referenceResultOrError =
           computeReferenceResults(projectionPlan, referenceQueryRunner_.get());
 

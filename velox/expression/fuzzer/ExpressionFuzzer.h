@@ -340,6 +340,8 @@ class ExpressionFuzzer {
 
   std::vector<std::string> supportedFunctions_;
 
+  std::vector<TypePtr> supportedScalarTypes_;
+
   State state_;
 
   // Maps from function name to a specific generator of argument types.
