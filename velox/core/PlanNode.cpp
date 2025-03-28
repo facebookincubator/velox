@@ -720,8 +720,8 @@ folly::dynamic ValuesNode::serialize() const {
 
   auto serializedData = out.str();
 
-  obj["data"] =
-      encoding::Base64::encode(serializedData.data(), serializedData.size());
+  obj["data"] = encoding::Base64::encode(
+      std::string_view(serializedData.data(), serializedData.size()));
   obj["parallelizable"] = parallelizable_;
   obj["repeatTimes"] = repeatTimes_;
   return obj;
