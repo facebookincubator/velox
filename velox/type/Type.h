@@ -385,12 +385,15 @@ struct TypeTraits<TypeKind::OPAQUE> {
 template <TypeKind KIND>
 struct TypeFactory;
 
-#define VELOX_FLUENT_CAST(NAME, KIND)                                     \
+#define VELOX_TYPE_AS(NAME, KIND)                                         \
   const typename TypeTraits<TypeKind::KIND>::ImplType& as##NAME() const { \
     return this->as<TypeKind::KIND>();                                    \
-  }                                                                       \
-  bool is##NAME() const {                                                 \
-    return this->kind() == TypeKind::KIND;                                \
+  }
+
+#define VELOX_FLUENT_CAST(NAME, KIND)      \
+  VELOX_TYPE_AS(NAME, KIND)                \
+  bool is##NAME() const {                  \
+    return this->kind() == TypeKind::KIND; \
   }
 
 class Type;
@@ -549,9 +552,14 @@ class Type : public Tree<const TypePtr>, public velox::ISerializable {
   VELOX_FLUENT_CAST(Boolean, BOOLEAN)
   VELOX_FLUENT_CAST(Tinyint, TINYINT)
   VELOX_FLUENT_CAST(Smallint, SMALLINT)
-  VELOX_FLUENT_CAST(Integer, INTEGER)
-  VELOX_FLUENT_CAST(Bigint, BIGINT)
-  VELOX_FLUENT_CAST(Hugeint, HUGEINT)
+
+  VELOX_TYPE_AS(Integer, INTEGER)
+  VELOX_TYPE_AS(Bigint, BIGINT)
+  VELOX_TYPE_AS(Hugeint, HUGEINT)
+  bool isInteger() const;
+  bool isBigint() const;
+  bool isHugeint() const;
+
   VELOX_FLUENT_CAST(Real, REAL)
   VELOX_FLUENT_CAST(Double, DOUBLE)
   VELOX_FLUENT_CAST(Varchar, VARCHAR)
@@ -599,6 +607,7 @@ class Type : public Tree<const TypePtr>, public velox::ISerializable {
   VELOX_DEFINE_CLASS_NAME(Type)
 };
 
+#undef VELOX_TYPE_AS
 #undef VELOX_FLUENT_CAST
 
 template <TypeKind KIND, typename = void>
@@ -733,6 +742,18 @@ template <TypeKind KIND>
 const std::shared_ptr<const ScalarType<KIND>> ScalarType<KIND>::create() {
   static const auto instance = std::make_shared<const ScalarType<KIND>>();
   return instance;
+}
+
+FOLLY_ALWAYS_INLINE bool Type::isInteger() const {
+  return typeid(*this) == typeid(ScalarType<TypeKind::INTEGER>);
+}
+
+FOLLY_ALWAYS_INLINE bool Type::isBigint() const {
+  return typeid(*this) == typeid(ScalarType<TypeKind::BIGINT>);
+}
+
+FOLLY_ALWAYS_INLINE bool Type::isHugeint() const {
+  return typeid(*this) == typeid(ScalarType<TypeKind::HUGEINT>);
 }
 
 /// This class represents the fixed-point numbers.
