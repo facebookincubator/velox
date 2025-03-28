@@ -16,32 +16,34 @@
 
 #pragma once
 
-#include "velox/experimental/wave/common/StdInt.h"
-
-namespace facebook::velox {
-class Type;
-}
+#ifndef __CUDACC_RTC__
+#include <cstdint>
+#endif
 
 namespace facebook::velox::wave {
 
-struct PhysicalType {
-  enum Kind {
-    kInt8,
-    kInt16,
-    kInt32,
-    kInt64,
-    kInt128,
-    kFloat32,
-    kFloat64,
-    kString,
-    kArray,
-    kMap,
-    kRow,
-  } kind;
-  int32_t numChildren;
-  PhysicalType** children;
-};
-
-PhysicalType fromCpuType(const Type&);
+#ifdef __CUDACC_RTC__
+using int8_t = char;
+using uint8_t = unsigned char;
+using int16_t = short;
+using uint16_t = unsigned short;
+using int32_t = int;
+using uint32_t = unsigned int;
+using int64_t = long long;
+using uint64_t = unsigned long long;
+using size_t = unsigned long;
+using uintptr_t = unsigned long long;
+#else
+using int8_t = std::int8_t;
+using uint8_t = std::uint8_t;
+using int16_t = std::int16_t;
+using uint16_t = std::uint16_t;
+using int32_t = std::int32_t;
+using uint32_t = std::uint32_t;
+using int64_t = std::int64_t;
+using uint64_t = std::uint64_t;
+using size_t = std::size_t;
+using uintptr_t = std::uintptr_t;
+#endif
 
 } // namespace facebook::velox::wave

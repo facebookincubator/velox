@@ -16,8 +16,8 @@
 
 #pragma once
 
-#include <cstdint>
 #include "velox/experimental/wave/common/HashTable.h"
+#include "velox/experimental/wave/common/StdInt.h"
 #include "velox/experimental/wave/exec/ErrorCode.h"
 #include "velox/experimental/wave/vector/Operand.h"
 

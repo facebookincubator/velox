@@ -16,7 +16,7 @@
 
 #pragma once
 
-#include <cstdint>
+#include "velox/experimental/wave/common/StdInt.h"
 
 /// Types for device side access to device vectors. Separate header
 /// independent of Velox headers, included for both host and device

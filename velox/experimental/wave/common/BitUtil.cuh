@@ -16,7 +16,7 @@
 
 #pragma once
 
-#include <stdint.h>
+#include "velox/experimental/wave/common/StdInt.h"
 
 namespace facebook::velox::wave {
 
