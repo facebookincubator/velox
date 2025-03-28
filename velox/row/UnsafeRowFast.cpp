@@ -1087,7 +1087,7 @@ RowVectorPtr deserializeRows(
             rawNulls != nullptr && bits::isBitNull(rawNulls, row);
         if (!isTopLevelNull) {
           const auto offset =
-            readInt32(data[row] + offsets[row] + sizeof(int32_t));
+              readInt32(data[row] + offsets[row] + sizeof(int32_t));
           nestedData[row] = data[row] + offset;
         }
         offsets[row] += kFieldWidth;
