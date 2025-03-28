@@ -66,7 +66,9 @@ class SplitReader {
       const std::shared_ptr<filesystems::File::IoStats>& fsStats,
       FileHandleFactory* fileHandleFactory,
       folly::Executor* executor,
-      const std::shared_ptr<common::ScanSpec>& scanSpec);
+      const std::shared_ptr<common::ScanSpec>& scanSpec,
+      core::ExpressionEvaluator* expressionEvaluator,
+      std::atomic<uint64_t>& totalRemainingFilterTime);
 
   virtual ~SplitReader() = default;
 
