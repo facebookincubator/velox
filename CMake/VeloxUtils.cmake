@@ -18,7 +18,9 @@ function(get_rpath_origin VAR)
   else()
     set(_origin "\$ORIGIN")
   endif()
-  set(${VAR} ${_origin} PARENT_SCOPE)
+  set(${VAR}
+      ${_origin}
+      PARENT_SCOPE)
 endfunction()
 
 function(pyvelox_add_module TARGET)
