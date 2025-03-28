@@ -1556,4 +1556,168 @@ struct Empty2NullFunction {
   }
 };
 
+template <typename TOutString, typename TInString>
+FOLLY_ALWAYS_INLINE void trimTrailingSpaces(
+    TOutString& output,
+    const TInString& inputStr,
+    const int32_t& numChars,
+    const int32_t& limit) {
+  auto numTailSpacesToTrim = numChars - limit;
+  VELOX_CHECK_GT(numTailSpacesToTrim, 0);
+
+  // The pointer uses are alright
+  auto curPos = inputStr.end() - 1;
+  auto trimTo = inputStr.end() - numTailSpacesToTrim;
+
+  while (curPos >= trimTo && stringImpl::isAsciiSpace(*curPos)) {
+    curPos--;
+  }
+  // get num of chars.
+  auto trimmedSize = stringImpl::lengthUnicode(
+      inputStr.data(), std::distance(inputStr.begin(), curPos + 1));
+
+  if (trimmedSize > limit) {
+    VELOX_USER_FAIL("Exceeds char/varchar type length limitation: '{}'", limit);
+  } else {
+    output.setNoCopy(StringView(
+        inputStr.data(), std::distance(inputStr.begin(), curPos + 1)));
+  }
+}
+
+template <typename T>
+struct VarcharTypeWriteSideCheckFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  // Results refer to strings in the first argument.
+  static constexpr int32_t reuse_strings_from_arg = 0;
+
+  // ASCII input always produces ASCII result.
+  static constexpr bool is_default_ascii_behavior = true;
+
+  template <bool isAscii>
+  FOLLY_ALWAYS_INLINE void doCall(
+      out_type<Varchar>& result,
+      const arg_type<Varchar>& input,
+      const int32_t& limit) {
+    VELOX_CHECK_GE(limit, 0);
+
+    auto numCharacters = stringImpl::length<isAscii>(input);
+    if (numCharacters <= limit) {
+      result.setNoCopy(input);
+      return;
+    } else {
+      // The num of space that should be trimmed anyway.
+      trimTrailingSpaces(result, input, numCharacters, limit);
+    }
+  }
+
+  FOLLY_ALWAYS_INLINE void call(
+      out_type<Varchar>& result,
+      const arg_type<Varchar>& input,
+      const int32_t& limit) {
+    doCall<false>(result, input, limit);
+  }
+
+  FOLLY_ALWAYS_INLINE void callAscii(
+      out_type<Varchar>& result,
+      const arg_type<Varchar>& input,
+      const int32_t& limit) {
+    doCall<true>(result, input, limit);
+  }
+};
+
+template <typename T>
+struct CharTypeWriteSideCheckFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+  // Results refer to strings in the first argument.
+  static constexpr int32_t reuse_strings_from_arg = 0;
+
+  // ASCII input always produces ASCII result.
+  static constexpr bool is_default_ascii_behavior = true;
+
+  template <bool isAscii>
+  FOLLY_ALWAYS_INLINE void doCall(
+      out_type<Varchar>& result,
+      const arg_type<Varchar>& input,
+      const int32_t& limit) {
+    VELOX_CHECK_GE(limit, 0);
+
+    auto numCharacters = stringImpl::length<isAscii>(input);
+
+    if (numCharacters == limit) {
+      result.setNoCopy(input);
+      return;
+    } else if (numCharacters < limit) {
+      // rpad spaces(0x20) to limit
+      stringImpl::pad<false /*lpad*/, false /*isAscii*/>(
+          result, input, limit, {" "});
+    } else {
+      // The num of space that should be trimmed anyway.
+      trimTrailingSpaces(result, input, numCharacters, limit);
+    }
+  }
+
+  FOLLY_ALWAYS_INLINE void call(
+      out_type<Varchar>& result,
+      const arg_type<Varchar>& input,
+      const int32_t& limit) {
+    doCall<false>(result, input, limit);
+  }
+
+  FOLLY_ALWAYS_INLINE void callAscii(
+      out_type<Varchar>& result,
+      const arg_type<Varchar>& input,
+      const int32_t& limit) {
+    doCall<true>(result, input, limit);
+  }
+};
+
+// readSidePadding
+template <typename T>
+struct ReadSidePaddingFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  // Results refer to strings in the first argument.
+  static constexpr int32_t reuse_strings_from_arg = 0;
+
+  // ASCII input always produces ASCII result.
+  static constexpr bool is_default_ascii_behavior = true;
+
+  template <bool isAscii>
+  FOLLY_ALWAYS_INLINE void doCall(
+      out_type<Varchar>& result,
+      const arg_type<Varchar>& input,
+      const int32_t& limit) {
+    VELOX_CHECK_GE(limit, 0);
+
+    auto numCharacters = stringImpl::length<isAscii>(input);
+
+    if (numCharacters == limit) {
+      result.setNoCopy(input);
+      return;
+    } else if (numCharacters < limit) {
+      int64_t padStringCharLength = stringImpl::length<false>(StringView(" "));
+      // rpad spaces(0x20) to limit
+      stringImpl::pad<false /*lpad*/, false /*isAscii*/>(
+          result, input, limit, {" "});
+    } else {
+      result.setNoCopy(input);
+    }
+  }
+
+  FOLLY_ALWAYS_INLINE void call(
+      out_type<Varchar>& result,
+      const arg_type<Varchar>& input,
+      const int32_t& limit) {
+    doCall<false>(result, input, limit);
+  }
+
+  FOLLY_ALWAYS_INLINE void callAscii(
+      out_type<Varchar>& result,
+      const arg_type<Varchar>& input,
+      const int32_t& limit) {
+    doCall<true>(result, input, limit);
+  }
+};
+
 } // namespace facebook::velox::functions::sparksql
