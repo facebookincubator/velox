@@ -103,7 +103,7 @@ void E2EFilterTestBase::readWithoutFilter(
   // The spec must stay live over the lifetime of the reader.
   setUpRowReaderOptions(rowReaderOpts, spec);
   OwnershipChecker ownershipChecker;
-  auto rowReader = reader->createRowReader(rowReaderOpts);
+  auto rowReader = reader->createRowReader(hiveConfig_, rowReaderOpts);
 
   auto batchIndex = 0;
   auto rowIndex = 0;
@@ -161,7 +161,7 @@ void E2EFilterTestBase::readWithFilter(
     VLOG(1) << "numDeletedRows=" << mutationSpec.deletedRows.size();
   }
   OwnershipChecker ownershipChecker;
-  auto rowReader = reader->createRowReader(rowReaderOpts);
+  auto rowReader = reader->createRowReader(hiveConfig_, rowReaderOpts);
   runtimeStats_ = dwio::common::RuntimeStatistics();
   auto rowIndex = 0;
   auto resultBatch = BaseVector::create(rowType_, 1, leafPool_.get());
@@ -518,7 +518,7 @@ void E2EFilterTestBase::testMetadataFilterImpl(
   auto reader = makeReader(readerOpts, std::move(input));
   setUpRowReaderOptions(rowReaderOpts, spec);
   rowReaderOpts.setMetadataFilter(metadataFilter);
-  auto rowReader = reader->createRowReader(rowReaderOpts);
+  auto rowReader = reader->createRowReader(hiveConfig_, rowReaderOpts);
   auto result = BaseVector::create(batches[0]->type(), 1, leafPool_.get());
   int64_t originalIndex = 0;
   auto nextExpectedIndex = [&]() -> int64_t {
@@ -713,7 +713,7 @@ void E2EFilterTestBase::testSubfieldsPruning() {
       std::make_shared<InMemoryReadFile>(sinkData_), readerOpts.memoryPool());
   auto reader = makeReader(readerOpts, std::move(input));
   setUpRowReaderOptions(rowReaderOpts, spec);
-  auto rowReader = reader->createRowReader(rowReaderOpts);
+  auto rowReader = reader->createRowReader(hiveConfig_, rowReaderOpts);
   auto result = BaseVector::create(batches[0]->type(), 1, leafPool_.get());
   int totalIndex = 0;
   while (rowReader->next(10, result)) {
@@ -784,7 +784,7 @@ void E2EFilterTestBase::testMutationCornerCases() {
   spec->addAllChildFields(*rowType);
   RowReaderOptions rowReaderOpts;
   setUpRowReaderOptions(rowReaderOpts, spec);
-  auto rowReader = reader->createRowReader(rowReaderOpts);
+  auto rowReader = reader->createRowReader(hiveConfig_, rowReaderOpts);
   auto result = BaseVector::create(rowType, 0, leafPool_.get());
   constexpr int kReadBatchSize = 10;
   auto nwords = bits::nwords(kReadBatchSize);
@@ -840,7 +840,7 @@ void E2EFilterTestBase::testMutationCornerCases() {
   // No child reader.
   spec = std::make_shared<common::ScanSpec>("<root>");
   setUpRowReaderOptions(rowReaderOpts, spec);
-  rowReader = reader->createRowReader(rowReaderOpts);
+  rowReader = reader->createRowReader(hiveConfig_, rowReaderOpts);
   result = BaseVector::create(ROW({}), 0, leafPool_.get());
   totalScanned = 0;
   for (;;) {

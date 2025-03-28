@@ -106,7 +106,7 @@ class E2EWriterTest : public testing::Test {
     dwio::common::ReaderOptions readerOpts{leafPool_.get()};
     RowReaderOptions rowReaderOpts;
     auto reader = createReader(*sinkPtr, readerOpts);
-    auto rowReader = reader->createRowReader(rowReaderOpts);
+    auto rowReader = reader->createRowReader(hiveConfig_, rowReaderOpts);
     auto dwrfRowReader = dynamic_cast<dwrf::DwrfRowReader*>(rowReader.get());
     bool preload = true;
     std::unordered_set<uint32_t> actualNodeIds;
@@ -168,7 +168,7 @@ class E2EWriterTest : public testing::Test {
     dwio::common::ReaderOptions readerOpts{leafPool_.get()};
     RowReaderOptions rowReaderOpts;
     auto reader = createReader(*sinkPtr, readerOpts);
-    auto rowReader = reader->createRowReader(rowReaderOpts);
+    auto rowReader = reader->createRowReader(hiveConfig_, rowReaderOpts);
 
     auto dwrfRowReader = dynamic_cast<dwrf::DwrfRowReader*>(rowReader.get());
     bool preload = true;
@@ -266,6 +266,10 @@ class E2EWriterTest : public testing::Test {
 
   std::shared_ptr<MemoryPool> rootPool_;
   std::shared_ptr<MemoryPool> leafPool_;
+  std::shared_ptr<connector::hive::HiveConfig> hiveConfig_ =
+      std::make_shared<connector::hive::HiveConfig>(
+          std::make_shared<config::ConfigBase>(
+              std::unordered_map<std::string, std::string>()));
 };
 
 // This test can be run to generate test files. Run it with following command
@@ -568,7 +572,7 @@ TEST_F(E2EWriterTest, PresentStreamIsSuppressedOnFlatMap) {
   dwio::common::ReaderOptions readerOpts{leafPool_.get()};
   RowReaderOptions rowReaderOpts;
   auto reader = createReader(*sinkPtr, readerOpts);
-  auto rowReader = reader->createRowReader(rowReaderOpts);
+  auto rowReader = reader->createRowReader(hiveConfig_, rowReaderOpts);
   auto dwrfRowReader = dynamic_cast<dwrf::DwrfRowReader*>(rowReader.get());
   bool preload = true;
   std::unordered_set<uint32_t> actualNodeIds;
@@ -1150,7 +1154,7 @@ class E2EEncryptionTest : public E2EWriterTest {
   void validateFileContent(
       const ::facebook::velox::dwrf::DwrfReader& reader) const {
     RowReaderOptions rowReaderOpts;
-    auto rowReader = reader.createRowReader(rowReaderOpts);
+    auto rowReader = reader.createRowReader(hiveConfig_, rowReaderOpts);
     // make sure size estimate works
     ASSERT_GT(rowReader->estimatedRowSize(), 0);
     VectorPtr batch;
@@ -1182,6 +1186,10 @@ class E2EEncryptionTest : public E2EWriterTest {
   size_t batchCount_{10};
   size_t flushInterval_{3};
   std::vector<VectorPtr> batches_;
+  std::shared_ptr<connector::hive::HiveConfig> hiveConfig_ =
+      std::make_shared<connector::hive::HiveConfig>(
+          std::make_shared<config::ConfigBase>(
+              std::unordered_map<std::string, std::string>()));
 };
 
 TEST_F(E2EEncryptionTest, EncryptRoot) {
@@ -1218,7 +1226,7 @@ TEST_F(E2EEncryptionTest, EncryptRoot) {
   }
 
   RowReaderOptions rowReaderOpts;
-  auto rowReader = reader->createRowReader(rowReaderOpts);
+  auto rowReader = reader->createRowReader(hiveConfig_, rowReaderOpts);
 
   // make sure stripe footer doesn't have any stream/encoding
   auto dwrfRowReader =
@@ -1300,7 +1308,7 @@ TEST_F(E2EEncryptionTest, EncryptSelectedFields) {
   }
 
   RowReaderOptions rowReaderOpts;
-  auto rowReader = reader->createRowReader(rowReaderOpts);
+  auto rowReader = reader->createRowReader(hiveConfig_, rowReaderOpts);
 
   // make sure stripe footer doesn't have any stream/encoding
   auto dwrfRowReader = dynamic_cast<dwrf::DwrfRowReader*>(rowReader.get());
@@ -1355,7 +1363,7 @@ TEST_F(E2EEncryptionTest, ReadWithoutKey) {
     RowReaderOptions rowReaderOpts;
     rowReaderOpts.select(
         std::make_shared<ColumnSelector>(type, std::vector<uint64_t>{0}));
-    auto rowReader = reader->createRowReader(rowReaderOpts);
+    auto rowReader = reader->createRowReader(hiveConfig_, rowReaderOpts);
     VectorPtr batch;
     ASSERT_TRUE(rowReader->next(1, batch));
   }
@@ -1365,7 +1373,7 @@ TEST_F(E2EEncryptionTest, ReadWithoutKey) {
     RowReaderOptions rowReaderOpts;
     rowReaderOpts.select(
         std::make_shared<ColumnSelector>(type, std::vector<uint64_t>{1}));
-    VELOX_ASSERT_THROW(reader->createRowReader(rowReaderOpts), "");
+    VELOX_ASSERT_THROW(reader->createRowReader(hiveConfig_, rowReaderOpts), "");
   }
 }
 

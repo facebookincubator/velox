@@ -53,7 +53,8 @@ class DwrfRowReader : public StrideIndexProvider,
    */
   DwrfRowReader(
       const std::shared_ptr<ReaderBase>& reader,
-      const dwio::common::RowReaderOptions& options);
+      const dwio::common::RowReaderOptions& options,
+      const std::shared_ptr<const connector::hive::HiveConfig>& hiveConfig);
 
   ~DwrfRowReader() override = default;
 
@@ -176,6 +177,7 @@ class DwrfRowReader : public StrideIndexProvider,
   std::unique_ptr<dwio::common::UnitLoader> getUnitLoader();
 
   const dwio::common::RowReaderOptions options_;
+  std::shared_ptr<const connector::hive::HiveConfig> hiveConfig_;
   // column selector
   const std::shared_ptr<dwio::common::ColumnSelector> columnSelector_;
   const std::function<void(std::chrono::high_resolution_clock::duration)>
@@ -325,9 +327,11 @@ class DwrfReader : public dwio::common::Reader {
       int32_t stripeIx = -1);
 
   std::unique_ptr<dwio::common::RowReader> createRowReader(
+      const std::shared_ptr<const connector::hive::HiveConfig>& hiveConfig,
       const dwio::common::RowReaderOptions& options = {}) const override;
 
   std::unique_ptr<DwrfRowReader> createDwrfRowReader(
+      const std::shared_ptr<const connector::hive::HiveConfig>& hiveConfig,
       const dwio::common::RowReaderOptions& options = {}) const;
 
   /**

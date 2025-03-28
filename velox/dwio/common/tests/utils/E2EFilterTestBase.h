@@ -376,6 +376,10 @@ class E2EFilterTestBase : public testing::Test {
   bool testRowGroupSkip_ = true;
   uint32_t seed_ = 1;
   uint64_t readSize_ = 1000;
+  std::shared_ptr<connector::hive::HiveConfig> hiveConfig_ =
+      std::make_shared<connector::hive::HiveConfig>(
+          std::make_shared<config::ConfigBase>(
+              std::unordered_map<std::string, std::string>()));
 };
 
 } // namespace facebook::velox::dwio::common

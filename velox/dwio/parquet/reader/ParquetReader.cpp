@@ -1184,6 +1184,7 @@ ParquetReader::typeWithId() const {
 }
 
 std::unique_ptr<dwio::common::RowReader> ParquetReader::createRowReader(
+    const std::shared_ptr<const connector::hive::HiveConfig>& hiveConfig,
     const dwio::common::RowReaderOptions& options) const {
   return std::make_unique<ParquetRowReader>(readerBase_, options);
 }

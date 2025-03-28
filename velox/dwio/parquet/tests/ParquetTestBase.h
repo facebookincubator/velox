@@ -142,7 +142,7 @@ class ParquetTestBase : public testing::Test,
 
     auto rowReaderOpts = getReaderOpts(fileSchema);
     rowReaderOpts.setScanSpec(scanSpec);
-    auto rowReader = reader->createRowReader(rowReaderOpts);
+    auto rowReader = reader->createRowReader(hiveConfig_, rowReaderOpts);
     assertReadWithReaderAndExpected(
         fileSchema, *rowReader, expected, *leafPool_);
   }
@@ -196,5 +196,9 @@ class ParquetTestBase : public testing::Test,
   std::shared_ptr<memory::MemoryPool> rootPool_;
   std::shared_ptr<memory::MemoryPool> leafPool_;
   std::shared_ptr<exec::test::TempDirectoryPath> tempPath_;
+  std::shared_ptr<connector::hive::HiveConfig> hiveConfig_ =
+      std::make_shared<connector::hive::HiveConfig>(
+          std::make_shared<config::ConfigBase>(
+              std::unordered_map<std::string, std::string>()));
 };
 } // namespace facebook::velox::parquet

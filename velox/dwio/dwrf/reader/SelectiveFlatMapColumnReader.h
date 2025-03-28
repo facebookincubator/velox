@@ -16,6 +16,7 @@
 
 #pragma once
 
+#include "velox/connectors/hive/HiveConfig.h"
 #include "velox/dwio/common/SelectiveColumnReader.h"
 #include "velox/dwio/dwrf/reader/DwrfData.h"
 
@@ -23,6 +24,7 @@ namespace facebook::velox::dwrf {
 
 std::unique_ptr<dwio::common::SelectiveColumnReader>
 createSelectiveFlatMapColumnReader(
+    const std::shared_ptr<const connector::hive::HiveConfig>& hiveConfig,
     const TypePtr& requestedType,
     const std::shared_ptr<const dwio::common::TypeWithId>& fileType,
     DwrfParams&,

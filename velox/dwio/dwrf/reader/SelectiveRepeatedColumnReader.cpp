@@ -49,6 +49,7 @@ FlatMapContext flatMapContextFromEncodingKey(const EncodingKey& encodingKey) {
 }
 
 SelectiveListColumnReader::SelectiveListColumnReader(
+    const std::shared_ptr<const connector::hive::HiveConfig>& hiveConfig,
     const TypePtr& requestedType,
     const std::shared_ptr<const dwio::common::TypeWithId>& fileType,
     DwrfParams& params,
@@ -75,11 +76,16 @@ SelectiveListColumnReader::SelectiveListColumnReader(
       params.runtimeStatistics(),
       flatMapContextFromEncodingKey(encodingKey));
   child_ = SelectiveDwrfReader::build(
-      childType, fileType_->childAt(0), childParams, *scanSpec_->children()[0]);
+      hiveConfig,
+      childType,
+      fileType_->childAt(0),
+      childParams,
+      *scanSpec_->children()[0]);
   children_ = {child_.get()};
 }
 
 SelectiveMapColumnReader::SelectiveMapColumnReader(
+    const std::shared_ptr<const connector::hive::HiveConfig>& hiveConfig,
     const TypePtr& requestedType,
     const std::shared_ptr<const dwio::common::TypeWithId>& fileType,
     DwrfParams& params,
@@ -108,6 +114,7 @@ SelectiveMapColumnReader::SelectiveMapColumnReader(
       params.runtimeStatistics(),
       flatMapContextFromEncodingKey(encodingKey));
   keyReader_ = SelectiveDwrfReader::build(
+      hiveConfig,
       keyType,
       fileType_->childAt(0),
       keyParams,
@@ -120,6 +127,7 @@ SelectiveMapColumnReader::SelectiveMapColumnReader(
       params.runtimeStatistics(),
       flatMapContextFromEncodingKey(encodingKey));
   elementReader_ = SelectiveDwrfReader::build(
+      hiveConfig,
       valueType,
       fileType_->childAt(1),
       elementParams,

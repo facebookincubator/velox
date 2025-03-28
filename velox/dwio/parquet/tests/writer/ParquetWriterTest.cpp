@@ -63,7 +63,7 @@ class ParquetWriterTest : public ParquetTestBase {
     auto rowReaderOpts = getReaderOpts(rowType);
     auto scanSpec = makeScanSpec(rowType);
     rowReaderOpts.setScanSpec(scanSpec);
-    auto rowReader = reader->createRowReader(rowReaderOpts);
+    auto rowReader = reader->createRowReader(hiveConfig_, rowReaderOpts);
     return rowReader;
   };
 

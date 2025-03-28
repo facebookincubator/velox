@@ -144,7 +144,11 @@ class ColumnReaderTestBase {
         scanSpec = scanSpec_.get();
       }
       makeFieldSpecs("", 0, rowType, scanSpec);
+      auto hiveConfig = std::make_shared<const connector::hive::HiveConfig>(
+          std::make_shared<config::ConfigBase>(
+              std::unordered_map<std::string, std::string>()));
       selectiveColumnReader_ = SelectiveDwrfReader::build(
+          hiveConfig,
           cs.getSchema(),
           fileTypeWithId,
           streams_,

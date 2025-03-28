@@ -40,6 +40,10 @@ inline std::string getExamplesFilePath(const std::string& fileName) {
   return test::getDataFilePath("velox/dwio/orc/test", "examples/" + fileName);
 }
 
+std::shared_ptr<connector::hive::HiveConfig> hiveConfig_ =
+    std::make_shared<connector::hive::HiveConfig>(
+        std::make_shared<config::ConfigBase>(
+            std::unordered_map<std::string, std::string>()));
 } // namespace
 
 TEST_F(OrcReaderTest, testOrcReaderSimple) {
@@ -52,7 +56,7 @@ TEST_F(OrcReaderTest, testOrcReaderSimple) {
       createFileBufferedInput(simpleTest, readerOpts.memoryPool()), readerOpts);
 
   RowReaderOptions rowReaderOptions;
-  auto rowReader = reader->createRowReader(rowReaderOptions);
+  auto rowReader = reader->createRowReader(hiveConfig_, rowReaderOptions);
 
   VectorPtr batch;
   const std::string stringPrefix{"row "};
@@ -98,7 +102,7 @@ TEST_F(OrcReaderTest, testOrcReaderVarchar) {
       createFileBufferedInput(varcharOrc, readerOpts.memoryPool()), readerOpts);
 
   RowReaderOptions rowReaderOptions;
-  auto rowReader = reader->createRowReader(rowReaderOptions);
+  auto rowReader = reader->createRowReader(hiveConfig_, rowReaderOptions);
 
   VectorPtr batch;
   int counter = 0;
@@ -129,7 +133,7 @@ TEST_F(OrcReaderTest, testOrcReaderDate) {
       createFileBufferedInput(dateOrc, readerOpts.memoryPool()), readerOpts);
 
   RowReaderOptions rowReaderOptions;
-  auto rowReader = reader->createRowReader(rowReaderOptions);
+  auto rowReader = reader->createRowReader(hiveConfig_, rowReaderOptions);
 
   VectorPtr batch;
   int year = 1900;
@@ -174,7 +178,7 @@ TEST_F(OrcReaderTest, testOrcReadAllType) {
       createFileBufferedInput(dateOrc, readerOpts.memoryPool()), readerOpts);
 
   RowReaderOptions rowReaderOptions;
-  auto rowReader = reader->createRowReader(rowReaderOptions);
+  auto rowReader = reader->createRowReader(hiveConfig_, rowReaderOptions);
 
   VectorPtr batch;
   while (rowReader->next(500, batch)) {
@@ -256,7 +260,7 @@ TEST_F(OrcReaderTest, testOrcRlev2) {
 
   RowReaderOptions rowReaderOptions;
   rowReaderOptions.setScanSpec(spec);
-  auto rowReader = reader->createRowReader(rowReaderOptions);
+  auto rowReader = reader->createRowReader(hiveConfig_, rowReaderOptions);
 
   auto batch = BaseVector::create(schema, 0, &readerOpts.memoryPool());
   while (rowReader->next(500, batch)) {

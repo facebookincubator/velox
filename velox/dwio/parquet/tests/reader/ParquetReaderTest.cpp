@@ -38,7 +38,7 @@ class ParquetReaderTest : public ParquetTestBase {
         std::make_shared<facebook::velox::dwio::common::ColumnSelector>(
             rowType, rowType->names()));
     rowReaderOpts.setScanSpec(makeScanSpec(rowType));
-    auto rowReader = reader->createRowReader(rowReaderOpts);
+    auto rowReader = reader->createRowReader(hiveConfig_, rowReaderOpts);
     return rowReader;
   }
 
@@ -87,7 +87,7 @@ TEST_F(ParquetReaderTest, parseSample) {
   auto rowReaderOpts = getReaderOpts(sampleSchema());
   auto scanSpec = makeScanSpec(sampleSchema());
   rowReaderOpts.setScanSpec(scanSpec);
-  auto rowReader = reader->createRowReader(rowReaderOpts);
+  auto rowReader = reader->createRowReader(hiveConfig_, rowReaderOpts);
   auto expected = makeRowVector({
       makeFlatVector<int64_t>(20, [](auto row) { return row + 1; }),
       makeFlatVector<double>(20, [](auto row) { return row + 1; }),
@@ -322,7 +322,7 @@ TEST_F(ParquetReaderTest, parseSampleRange1) {
   auto scanSpec = makeScanSpec(sampleSchema());
   rowReaderOpts.setScanSpec(scanSpec);
   rowReaderOpts.range(0, 200);
-  auto rowReader = reader->createRowReader(rowReaderOpts);
+  auto rowReader = reader->createRowReader(hiveConfig_, rowReaderOpts);
   auto expected = makeRowVector({
       makeFlatVector<int64_t>(10, [](auto row) { return row + 1; }),
       makeFlatVector<double>(10, [](auto row) { return row + 1; }),
@@ -341,7 +341,7 @@ TEST_F(ParquetReaderTest, parseSampleRange2) {
   auto scanSpec = makeScanSpec(sampleSchema());
   rowReaderOpts.setScanSpec(scanSpec);
   rowReaderOpts.range(200, 500);
-  auto rowReader = reader->createRowReader(rowReaderOpts);
+  auto rowReader = reader->createRowReader(hiveConfig_, rowReaderOpts);
   auto expected = makeRowVector({
       makeFlatVector<int64_t>(10, [](auto row) { return row + 11; }),
       makeFlatVector<double>(10, [](auto row) { return row + 11; }),
@@ -360,7 +360,7 @@ TEST_F(ParquetReaderTest, parseSampleEmptyRange) {
   auto scanSpec = makeScanSpec(sampleSchema());
   rowReaderOpts.setScanSpec(scanSpec);
   rowReaderOpts.range(300, 10);
-  auto rowReader = reader->createRowReader(rowReaderOpts);
+  auto rowReader = reader->createRowReader(hiveConfig_, rowReaderOpts);
 
   VectorPtr result;
   EXPECT_EQ(rowReader->next(1000, result), 0);
@@ -487,7 +487,7 @@ TEST_F(ParquetReaderTest, parseInt) {
   auto rowReaderOpts = getReaderOpts(intSchema());
   auto scanSpec = makeScanSpec(intSchema());
   rowReaderOpts.setScanSpec(scanSpec);
-  auto rowReader = reader->createRowReader(rowReaderOpts);
+  auto rowReader = reader->createRowReader(hiveConfig_, rowReaderOpts);
 
   auto expected = makeRowVector({
       makeFlatVector<int32_t>(10, [](auto row) { return row + 100; }),
@@ -530,7 +530,7 @@ TEST_F(ParquetReaderTest, parseUnsignedInt1) {
   rowReaderOpts.select(std::make_shared<dwio::common::ColumnSelector>(
       rowType, rowType->names()));
   rowReaderOpts.setScanSpec(makeScanSpec(rowType));
-  auto rowReader = reader->createRowReader(rowReaderOpts);
+  auto rowReader = reader->createRowReader(hiveConfig_, rowReaderOpts);
 
   auto expected = makeRowVector(
       {makeFlatVector<uint8_t>({255, 2, 3}),
@@ -624,7 +624,7 @@ TEST_F(ParquetReaderTest, parseDate) {
   auto rowReaderOpts = getReaderOpts(dateSchema());
   auto scanSpec = makeScanSpec(dateSchema());
   rowReaderOpts.setScanSpec(scanSpec);
-  auto rowReader = reader->createRowReader(rowReaderOpts);
+  auto rowReader = reader->createRowReader(hiveConfig_, rowReaderOpts);
   auto expected = makeRowVector({
       makeFlatVector<int32_t>(25, [](auto row) { return row - 5; }),
   });
@@ -674,7 +674,7 @@ TEST_F(ParquetReaderTest, projectNoColumns) {
   auto reader = createReader(getExampleFilePath("sample.parquet"), readerOpts);
   RowReaderOptions rowReaderOpts;
   rowReaderOpts.setScanSpec(makeScanSpec(rowType));
-  auto rowReader = reader->createRowReader(rowReaderOpts);
+  auto rowReader = reader->createRowReader(hiveConfig_, rowReaderOpts);
   auto result = BaseVector::create(rowType, 1, leafPool_.get());
   constexpr int kBatchSize = 100;
   ASSERT_TRUE(rowReader->next(kBatchSize, result));
@@ -700,7 +700,7 @@ TEST_F(ParquetReaderTest, parseIntDecimal) {
   auto reader = createReader(decimal_dict, readerOpts);
   RowReaderOptions rowReaderOpts;
   rowReaderOpts.setScanSpec(makeScanSpec(rowType));
-  auto rowReader = reader->createRowReader(rowReaderOpts);
+  auto rowReader = reader->createRowReader(hiveConfig_, rowReaderOpts);
 
   EXPECT_EQ(reader->numberOfRows(), 6ULL);
 
@@ -770,7 +770,7 @@ TEST_F(ParquetReaderTest, parseMapKeyValueAsMap) {
   auto rowReaderOpts = getReaderOpts(fileSchema);
   auto scanSpec = makeScanSpec(fileSchema);
   rowReaderOpts.setScanSpec(scanSpec);
-  auto rowReader = reader->createRowReader(rowReaderOpts);
+  auto rowReader = reader->createRowReader(hiveConfig_, rowReaderOpts);
 
   auto expected = makeRowVector({vectorMaker_.mapVector<std::string, int64_t>(
       {{{"0", 0},
@@ -821,7 +821,7 @@ TEST_F(ParquetReaderTest, parseRowArrayTest) {
            ARRAY(ROW({"someId"}, {INTEGER()}))});
   auto rowReaderOpts = getReaderOpts(outputRowType);
   rowReaderOpts.setScanSpec(makeScanSpec(outputRowType));
-  auto rowReader = reader->createRowReader(rowReaderOpts);
+  auto rowReader = reader->createRowReader(hiveConfig_, rowReaderOpts);
   VectorPtr result = BaseVector::create(outputRowType, 0, &*leafPool_);
 
   ASSERT_TRUE(rowReader->next(1, result));
@@ -1088,7 +1088,7 @@ TEST_F(ParquetReaderTest, filterRowGroups) {
   auto reader = createReader(decimal_dict, readerOpts);
   RowReaderOptions rowReaderOpts;
   rowReaderOpts.setScanSpec(makeScanSpec(rowType));
-  auto rowReader = reader->createRowReader(rowReaderOpts);
+  auto rowReader = reader->createRowReader(hiveConfig_, rowReaderOpts);
 
   EXPECT_EQ(reader->numberOfRows(), 10ULL);
 }
@@ -1122,7 +1122,7 @@ TEST_F(ParquetReaderTest, preloadSmallFile) {
   auto rowReaderOpts = getReaderOpts(sampleSchema());
   auto scanSpec = makeScanSpec(sampleSchema());
   rowReaderOpts.setScanSpec(scanSpec);
-  auto rowReader = reader->createRowReader(rowReaderOpts);
+  auto rowReader = reader->createRowReader(hiveConfig_, rowReaderOpts);
 
   // Ensure the input is small parquet file.
   const auto fileSize = file->size();
@@ -1167,7 +1167,7 @@ TEST_F(ParquetReaderTest, prefetchRowGroups) {
 
     RowReaderOptions rowReaderOpts;
     rowReaderOpts.setScanSpec(makeScanSpec(rowType));
-    auto rowReader = reader->createRowReader(rowReaderOpts);
+    auto rowReader = reader->createRowReader(hiveConfig_, rowReaderOpts);
     auto parquetRowReader = dynamic_cast<ParquetRowReader*>(rowReader.get());
 
     constexpr int kBatchSize = 1000;
@@ -1217,7 +1217,7 @@ TEST_F(ParquetReaderTest, testEmptyRowGroups) {
   auto rowReaderOpts = getReaderOpts(fileSchema);
   auto scanSpec = makeScanSpec(fileSchema);
   rowReaderOpts.setScanSpec(scanSpec);
-  auto rowReader = reader->createRowReader(rowReaderOpts);
+  auto rowReader = reader->createRowReader(hiveConfig_, rowReaderOpts);
 
   auto expected = makeRowVector({makeFlatVector<int32_t>({0, 3, 3, 3, 3})});
 
@@ -1241,7 +1241,7 @@ TEST_F(ParquetReaderTest, testEnumType) {
   auto fileSchema = ROW({"test"}, {VARCHAR()});
   auto rowReaderOpts = getReaderOpts(fileSchema);
   rowReaderOpts.setScanSpec(makeScanSpec(fileSchema));
-  auto rowReader = reader->createRowReader(rowReaderOpts);
+  auto rowReader = reader->createRowReader(hiveConfig_, rowReaderOpts);
 
   auto expected =
       makeRowVector({makeFlatVector<StringView>({"FOO", "BAR", "FOO"})});
@@ -1266,7 +1266,7 @@ TEST_F(ParquetReaderTest, readVarbinaryFromFLBA) {
   auto selectedType = ROW({"flba_field"}, {VARBINARY()});
   auto rowReaderOpts = getReaderOpts(selectedType);
   rowReaderOpts.setScanSpec(makeScanSpec(selectedType));
-  auto rowReader = reader->createRowReader(rowReaderOpts);
+  auto rowReader = reader->createRowReader(hiveConfig_, rowReaderOpts);
 
   auto expected = std::string(1024, '*');
   VectorPtr result = BaseVector::create(selectedType, 0, &(*leafPool_));
@@ -1299,7 +1299,7 @@ TEST_F(ParquetReaderTest, readBinaryAsStringFromNation) {
 
   auto rowReaderOpts = getReaderOpts(outputRowType);
   rowReaderOpts.setScanSpec(makeScanSpec(outputRowType));
-  auto rowReader = reader->createRowReader(rowReaderOpts);
+  auto rowReader = reader->createRowReader(hiveConfig_, rowReaderOpts);
 
   auto expected = std::string("ALGERIA");
   VectorPtr result = BaseVector::create(outputRowType, 0, &(*leafPool_));
@@ -1333,7 +1333,7 @@ TEST_F(ParquetReaderTest, readComplexType) {
 
   auto rowReaderOpts = getReaderOpts(outputRowType);
   rowReaderOpts.setScanSpec(makeScanSpec(outputRowType));
-  auto rowReader = reader->createRowReader(rowReaderOpts);
+  auto rowReader = reader->createRowReader(hiveConfig_, rowReaderOpts);
 
   VectorPtr result = BaseVector::create(outputRowType, 0, &(*leafPool_));
   rowReader->next(1, result);
@@ -1375,7 +1375,7 @@ TEST_F(ParquetReaderTest, readFixedLenBinaryAsStringFromUuid) {
 
   auto rowReaderOpts = getReaderOpts(outputRowType);
   rowReaderOpts.setScanSpec(makeScanSpec(outputRowType));
-  auto rowReader = reader->createRowReader(rowReaderOpts);
+  auto rowReader = reader->createRowReader(hiveConfig_, rowReaderOpts);
 
   auto expected = std::string("5468454a-363f-ccc8-7d0b-76072a75dfaa");
   VectorPtr result = BaseVector::create(outputRowType, 0, &(*leafPool_));
@@ -1404,7 +1404,7 @@ TEST_F(ParquetReaderTest, testV2PageWithZeroMaxDefRep) {
   auto outputRowType = ROW({"regionkey"}, {BIGINT()});
   auto rowReaderOpts = getReaderOpts(outputRowType);
   rowReaderOpts.setScanSpec(makeScanSpec(outputRowType));
-  auto rowReader = reader->createRowReader(rowReaderOpts);
+  auto rowReader = reader->createRowReader(hiveConfig_, rowReaderOpts);
 
   auto expected = makeRowVector({makeFlatVector<int64_t>({0, 1, 2, 3, 4})});
 
@@ -1437,7 +1437,7 @@ TEST_F(ParquetReaderTest, arrayOfMapOfIntKeyArrayValue) {
   RowReaderOptions rowReaderOpts;
   auto rowType = ROW({"test"}, {ARRAY(MAP(VARCHAR(), ARRAY(INTEGER())))});
   rowReaderOpts.setScanSpec(makeScanSpec(rowType));
-  auto rowReader = reader->createRowReader(rowReaderOpts);
+  auto rowReader = reader->createRowReader(hiveConfig_, rowReaderOpts);
   auto result = BaseVector::create(rowType, 10, leafPool_.get());
   constexpr int kBatchSize = 1000;
   while (rowReader->next(kBatchSize, result)) {
@@ -1470,7 +1470,7 @@ TEST_F(ParquetReaderTest, arrayOfMapOfIntKeyStructValue) {
   RowReaderOptions rowReaderOpts;
   auto rowType = reader->rowType();
   rowReaderOpts.setScanSpec(makeScanSpec(rowType));
-  auto rowReader = reader->createRowReader(rowReaderOpts);
+  auto rowReader = reader->createRowReader(hiveConfig_, rowReaderOpts);
   auto result = BaseVector::create(rowType, 10, leafPool_.get());
   constexpr int kBatchSize = 1000;
   while (rowReader->next(kBatchSize, result)) {
@@ -1551,7 +1551,7 @@ TEST_F(ParquetReaderTest, struct_of_array_of_array) {
               {"stringarrayfield", "intarrayfield"},
               {ARRAY(ARRAY(VARCHAR())), ARRAY(ARRAY(INTEGER()))})});
   rowReaderOpts.setScanSpec(makeScanSpec(rowType));
-  auto rowReader = reader->createRowReader(rowReaderOpts);
+  auto rowReader = reader->createRowReader(hiveConfig_, rowReaderOpts);
   auto result = BaseVector::create(rowType, 10, leafPool_.get());
   constexpr int kBatchSize = 1000;
   while (rowReader->next(kBatchSize, result)) {
@@ -1570,7 +1570,7 @@ TEST_F(ParquetReaderTest, testLzoDataPage) {
       {ROW({"intfield", "stringarrayfield"}, {INTEGER(), ARRAY(VARCHAR())})});
   auto rowReaderOpts = getReaderOpts(outputRowType);
   rowReaderOpts.setScanSpec(makeScanSpec(outputRowType));
-  auto rowReader = reader->createRowReader(rowReaderOpts);
+  auto rowReader = reader->createRowReader(hiveConfig_, rowReaderOpts);
 
   VectorPtr result = BaseVector::create(outputRowType, 0, &*leafPool_);
   rowReader->next(23'547ULL, result);
@@ -1605,7 +1605,7 @@ TEST_F(ParquetReaderTest, testEmptyV2DataPage) {
 
   auto rowReaderOpts = getReaderOpts(outputRowType);
   rowReaderOpts.setScanSpec(makeScanSpec(outputRowType));
-  auto rowReader = reader->createRowReader(rowReaderOpts);
+  auto rowReader = reader->createRowReader(hiveConfig_, rowReaderOpts);
 
   auto expected = makeRowVector({makeFlatVector<float>(
       30001, [](auto /*row*/) { return 1; }, nullEvery(1))});

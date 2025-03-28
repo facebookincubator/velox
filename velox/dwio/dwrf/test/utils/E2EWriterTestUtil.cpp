@@ -120,7 +120,11 @@ namespace facebook::velox::dwrf {
   EXPECT_GE(numStripesUpper, reader->getNumberOfStripes());
   EXPECT_LE(numStripesLower, reader->getNumberOfStripes());
 
-  auto rowReader = reader->createRowReader(rowReaderOpts);
+  auto hiveConfig = std::make_shared<const connector::hive::HiveConfig>(
+      std::make_shared<config::ConfigBase>(
+          std::unordered_map<std::string, std::string>()));
+
+  auto rowReader = reader->createRowReader(hiveConfig, rowReaderOpts);
   auto dwrfRowReader = dynamic_cast<DwrfRowReader*>(rowReader.get());
 
   size_t dictEncodingCount = 0;

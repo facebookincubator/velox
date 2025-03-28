@@ -233,9 +233,13 @@ TEST_P(OrcReaderFilterTestP, tests) {
   scanSpec->childByName(GetParam().columnName)
       ->setFilter(GetParam().filter->clone());
 
+  auto hiveConfig = std::make_shared<const connector::hive::HiveConfig>(
+      std::make_shared<config::ConfigBase>(
+          std::unordered_map<std::string, std::string>()));
+
   RowReaderOptions rowReaderOpts;
   rowReaderOpts.setScanSpec(scanSpec);
-  auto rowReader = reader->createRowReader(rowReaderOpts);
+  auto rowReader = reader->createRowReader(hiveConfig, rowReaderOpts);
   auto batch = BaseVector::create(schema, 0, &readerOpts.memoryPool());
 
   rowReader->next(10, batch);
