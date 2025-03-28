@@ -311,6 +311,47 @@ cappedByteLengthUnicode(const char* input, size_t size, int64_t maxChars) {
   return utf8Position;
 }
 
+extern "C" {
+    void *__memchr_aarch64 (const void *, int, size_t);
+}
+constexpr size_t custom_find_impl(
+    const char* str, size_t str_len,
+    const char* substr, size_t substr_len,
+    size_t start_pos
+) noexcept
+{
+    if (substr_len == 0)
+        return start_pos <= str_len ? start_pos : std::string_view::npos;
+
+    if (start_pos >= str_len)
+        return std::string_view::npos;
+
+    const char first_char = substr[0];
+    const char* current = str + start_pos;
+    const char* const end = str + str_len;
+    size_t remaining = str_len - start_pos;
+
+    while (remaining >= substr_len)
+    {
+        // Use optimized memchr variant
+        current = static_cast<const char*>(
+            __memchr_aarch64(current, first_char, remaining - substr_len + 1)
+        );
+
+        if (!current)
+            return std::string_view::npos;
+
+        // Compare full substring
+        if (std::char_traits<char>::compare(current, substr, substr_len) == 0)
+            return current - str;
+
+        current++;
+        remaining = end - current;
+    }
+    return std::string_view::npos;
+}
+
+
 /// Returns the start byte index of the Nth instance of subString in
 /// string. Search starts from startPosition. Positions start with 0. If not
 /// found, -1 is returned. To facilitate finding overlapping strings, the
@@ -326,7 +367,8 @@ static inline int64_t findNthInstanceByteIndexFromStart(
     return -1;
   }
 
-  auto byteIndex = string.find(subString, startPosition);
+  auto byteIndex = custom_find_impl(std::string_view(string).data(), static_cast<size_t>(std::string_view(string).size()),
+                                    std::string_view(subString).data(), static_cast<size_t>(std::string_view(subString).size()),(size_t)0);
   // Not found
   if (byteIndex == std::string_view::npos) {
     return -1;
