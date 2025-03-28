@@ -170,7 +170,8 @@ std::string toCallSql(const core::CallTypedExprPtr& call) {
     sql << "(";
     VELOX_CHECK_EQ(call->inputs().size(), 1);
     toCallInputsSql({call->inputs()[0]}, sql);
-    sql << fmt::format(" is{} null)", call->name() == "not_null" ? " not" : "");
+    sql << fmt::format(" is{} null", call->name() == "not_null" ? " not" : "");
+    sql << ")";
   } else if (call->name() == "in") {
     VELOX_CHECK_GE(call->inputs().size(), 2);
     toCallInputsSql({call->inputs()[0]}, sql);
