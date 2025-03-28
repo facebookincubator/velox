@@ -67,6 +67,7 @@ struct KeyNode {
 
 template <typename T>
 std::vector<KeyNode<T>> getKeyNodes(
+    const std::shared_ptr<const connector::hive::HiveConfig>& hiveConfig,
     const TypePtr& requestedType,
     const std::shared_ptr<const dwio::common::TypeWithId>& fileType,
     DwrfParams& params,
@@ -145,7 +146,11 @@ std::vector<KeyNode<T>> getKeyNodes(
                 .inMapDecoder = inMapDecoder.get(),
                 .keySelectionCallback = nullptr});
         auto reader = SelectiveDwrfReader::build(
-            requestedValueType, dataValueType, childParams, *childSpec);
+            hiveConfig,
+            requestedValueType,
+            dataValueType,
+            childParams,
+            *childSpec);
         keyNodes.emplace_back(
             key, sequence, std::move(reader), std::move(inMapDecoder));
       });
@@ -166,6 +171,7 @@ template <typename T>
 class SelectiveFlatMapAsStructReader : public SelectiveStructColumnReaderBase {
  public:
   SelectiveFlatMapAsStructReader(
+      const std::shared_ptr<const connector::hive::HiveConfig>& hiveConfig,
       const TypePtr& requestedType,
       const std::shared_ptr<const dwio::common::TypeWithId>& fileType,
       DwrfParams& params,
@@ -174,9 +180,15 @@ class SelectiveFlatMapAsStructReader : public SelectiveStructColumnReaderBase {
             requestedType,
             fileType,
             params,
-            scanSpec),
-        keyNodes_(
-            getKeyNodes<T>(requestedType, fileType, params, scanSpec, true)) {
+            scanSpec,
+            /*useColumnNames=*/true),
+        keyNodes_(getKeyNodes<T>(
+            hiveConfig,
+            requestedType,
+            fileType,
+            params,
+            scanSpec,
+            true)) {
     VELOX_CHECK(
         !keyNodes_.empty(),
         "For struct encoding, keys to project must be configured");
@@ -198,6 +210,7 @@ template <typename T>
 class SelectiveFlatMapReader : public SelectiveStructColumnReaderBase {
  public:
   SelectiveFlatMapReader(
+      const std::shared_ptr<const connector::hive::HiveConfig>& hiveConfig,
       const TypePtr& requestedType,
       const std::shared_ptr<const dwio::common::TypeWithId>& fileType,
       DwrfParams& params,
@@ -206,10 +219,17 @@ class SelectiveFlatMapReader : public SelectiveStructColumnReaderBase {
             requestedType,
             fileType,
             params,
-            scanSpec),
+            scanSpec,
+            /*TODO*/ true),
         flatMap_(
             *this,
-            getKeyNodes<T>(requestedType, fileType, params, scanSpec, false)) {}
+            getKeyNodes<T>(
+                hiveConfig,
+                requestedType,
+                fileType,
+                params,
+                scanSpec,
+                false)) {}
 
   void read(int64_t offset, const RowSet& rows, const uint64_t* incomingNulls)
       override {
@@ -227,16 +247,17 @@ class SelectiveFlatMapReader : public SelectiveStructColumnReaderBase {
 
 template <typename T>
 std::unique_ptr<dwio::common::SelectiveColumnReader> createReader(
+    const std::shared_ptr<const connector::hive::HiveConfig>& hiveConfig,
     const TypePtr& requestedType,
     const std::shared_ptr<const dwio::common::TypeWithId>& fileType,
     DwrfParams& params,
     common::ScanSpec& scanSpec) {
   if (scanSpec.isFlatMapAsStruct()) {
     return std::make_unique<SelectiveFlatMapAsStructReader<T>>(
-        requestedType, fileType, params, scanSpec);
+        hiveConfig, requestedType, fileType, params, scanSpec);
   } else {
     return std::make_unique<SelectiveFlatMapReader<T>>(
-        requestedType, fileType, params, scanSpec);
+        hiveConfig, requestedType, fileType, params, scanSpec);
   }
 }
 
@@ -244,6 +265,7 @@ std::unique_ptr<dwio::common::SelectiveColumnReader> createReader(
 
 std::unique_ptr<dwio::common::SelectiveColumnReader>
 createSelectiveFlatMapColumnReader(
+    const std::shared_ptr<const connector::hive::HiveConfig>& hiveConfig,
     const TypePtr& requestedType,
     const std::shared_ptr<const dwio::common::TypeWithId>& fileType,
     DwrfParams& params,
@@ -251,17 +273,21 @@ createSelectiveFlatMapColumnReader(
   auto kind = fileType->childAt(0)->type()->kind();
   switch (kind) {
     case TypeKind::TINYINT:
-      return createReader<int8_t>(requestedType, fileType, params, scanSpec);
+      return createReader<int8_t>(
+          hiveConfig, requestedType, fileType, params, scanSpec);
     case TypeKind::SMALLINT:
-      return createReader<int16_t>(requestedType, fileType, params, scanSpec);
+      return createReader<int16_t>(
+          hiveConfig, requestedType, fileType, params, scanSpec);
     case TypeKind::INTEGER:
-      return createReader<int32_t>(requestedType, fileType, params, scanSpec);
+      return createReader<int32_t>(
+          hiveConfig, requestedType, fileType, params, scanSpec);
     case TypeKind::BIGINT:
-      return createReader<int64_t>(requestedType, fileType, params, scanSpec);
+      return createReader<int64_t>(
+          hiveConfig, requestedType, fileType, params, scanSpec);
     case TypeKind::VARBINARY:
     case TypeKind::VARCHAR:
       return createReader<StringView>(
-          requestedType, fileType, params, scanSpec);
+          hiveConfig, requestedType, fileType, params, scanSpec);
     default:
       VELOX_UNSUPPORTED("Not supported key type: {}", kind);
   }

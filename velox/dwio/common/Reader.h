@@ -21,6 +21,7 @@
 #include <optional>
 #include <string>
 
+#include "velox/connectors/hive/HiveConfig.h"
 #include "velox/dwio/common/InputStream.h"
 #include "velox/dwio/common/Mutation.h"
 #include "velox/dwio/common/Options.h"
@@ -205,6 +206,7 @@ class Reader {
    * @return Row reader
    */
   virtual std::unique_ptr<RowReader> createRowReader(
+      const std::shared_ptr<const connector::hive::HiveConfig>& hiveConfig,
       const RowReaderOptions& options = {}) const = 0;
 
   static TypePtr updateColumnNames(

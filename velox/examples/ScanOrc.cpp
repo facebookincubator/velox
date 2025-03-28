@@ -59,7 +59,10 @@ int main(int argc, char** argv) {
 
   VectorPtr batch;
   RowReaderOptions rowReaderOptions;
-  auto rowReader = reader->createRowReader(rowReaderOptions);
+  auto hiveConfig = std::make_shared<const connector::hive::HiveConfig>(
+      std::make_shared<config::ConfigBase>(
+          std::unordered_map<std::string, std::string>()));
+  auto rowReader = reader->createRowReader(hiveConfig, rowReaderOptions);
   while (rowReader->next(500, batch)) {
     auto rowVector = batch->as<RowVector>();
     for (vector_size_t i = 0; i < rowVector->size(); ++i) {

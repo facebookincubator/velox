@@ -197,7 +197,10 @@ TEST_P(E2EReaderTest, SharedDictionaryFlatmapReadAsStruct) {
     rowReaderOptions.setFlatmapNodeIdsAsStruct(structEncodingMap);
   }
 
-  auto rowReader = reader->createRowReader(rowReaderOptions);
+  auto hiveConfig = std::make_shared<const connector::hive::HiveConfig>(
+      std::make_shared<config::ConfigBase>(
+          std::unordered_map<std::string, std::string>()));
+  auto rowReader = reader->createRowReader(hiveConfig, rowReaderOptions);
 
   VectorPtr batch;
   while (rowReader->next(100, batch)) {

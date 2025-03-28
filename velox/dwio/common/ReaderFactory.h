@@ -18,6 +18,7 @@
 
 #include <memory>
 
+#include "velox/connectors/hive/HiveConfig.h"
 #include "velox/dwio/common/BufferedInput.h"
 #include "velox/dwio/common/Options.h"
 #include "velox/dwio/common/Reader.h"

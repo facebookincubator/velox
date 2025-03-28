@@ -44,7 +44,8 @@ class DwrfUnit : public LoadUnit {
       uint32_t stripeIndex,
       std::shared_ptr<dwio::common::ColumnSelector> columnSelector,
       const std::shared_ptr<BitSet>& projectedNodes,
-      RowReaderOptions options)
+      RowReaderOptions options,
+      const std::shared_ptr<const connector::hive::HiveConfig>& hiveConfig)
       : stripeReaderBase_{stripeReaderBase},
         strideIndexProvider_{strideIndexProvider},
         columnReaderStatistics_{&columnReaderStatistics},
@@ -53,7 +54,8 @@ class DwrfUnit : public LoadUnit {
         projectedNodes_{projectedNodes},
         options_{std::move(options)},
         stripeInfo_{
-            stripeReaderBase.getReader().footer().stripes(stripeIndex_)} {}
+            stripeReaderBase.getReader().footer().stripes(stripeIndex_)},
+        hiveConfig_{hiveConfig} {}
 
   ~DwrfUnit() override = default;
 
@@ -91,6 +93,7 @@ class DwrfUnit : public LoadUnit {
   const std::shared_ptr<BitSet> projectedNodes_;
   const RowReaderOptions options_;
   const StripeInformationWrapper stripeInfo_;
+  std::shared_ptr<const connector::hive::HiveConfig> hiveConfig_;
 
   // Mutables
   bool preloaded_;
@@ -160,6 +163,7 @@ void DwrfUnit::ensureDecoders() {
 
   if (scanSpec) {
     selectiveColumnReader_ = SelectiveDwrfReader::build(
+        hiveConfig_,
         options_.requestedType() ? options_.requestedType() : fileType->type(),
         fileType,
         *stripeStreams_,
@@ -227,9 +231,11 @@ void makeProjectedNodes(
 
 DwrfRowReader::DwrfRowReader(
     const std::shared_ptr<ReaderBase>& reader,
-    const RowReaderOptions& opts)
+    const RowReaderOptions& opts,
+    const std::shared_ptr<const connector::hive::HiveConfig>& hiveConfig)
     : StripeReaderBase(reader),
       options_(opts),
+      hiveConfig_(hiveConfig),
       columnSelector_{
           options_.scanSpec() != nullptr
               ? nullptr
@@ -328,7 +334,8 @@ std::unique_ptr<dwio::common::UnitLoader> DwrfRowReader::getUnitLoader() {
         stripe,
         columnSelector_,
         projectedNodes_,
-        options_));
+        options_,
+        hiveConfig_));
   }
   std::shared_ptr<UnitLoaderFactory> unitLoaderFactory =
       options_.unitLoaderFactory();
@@ -1008,13 +1015,16 @@ uint64_t DwrfReader::getMemoryUse(
 }
 
 std::unique_ptr<dwio::common::RowReader> DwrfReader::createRowReader(
+    const std::shared_ptr<const connector::hive::HiveConfig>& hiveConfig,
     const RowReaderOptions& opts) const {
-  return createDwrfRowReader(opts);
+  return createDwrfRowReader(hiveConfig, opts);
 }
 
 std::unique_ptr<DwrfRowReader> DwrfReader::createDwrfRowReader(
+    const std::shared_ptr<const connector::hive::HiveConfig>& hiveConfig,
     const RowReaderOptions& opts) const {
-  auto rowReader = std::make_unique<DwrfRowReader>(readerBase_, opts);
+  auto rowReader =
+      std::make_unique<DwrfRowReader>(readerBase_, opts, hiveConfig);
   if (opts.eagerFirstStripeLoad()) {
     // Load the first stripe on construction so that readers created in
     // background have a reader tree and can preload the first

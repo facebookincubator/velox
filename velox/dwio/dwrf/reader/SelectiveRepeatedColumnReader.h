@@ -16,6 +16,7 @@
 
 #pragma once
 
+#include "velox/connectors/hive/HiveConfig.h"
 #include "velox/dwio/common/BufferUtil.h"
 #include "velox/dwio/common/SelectiveColumnReaderInternal.h"
 #include "velox/dwio/common/SelectiveRepeatedColumnReader.h"
@@ -28,6 +29,7 @@ class SelectiveListColumnReader
     : public dwio::common::SelectiveListColumnReader {
  public:
   SelectiveListColumnReader(
+      const std::shared_ptr<const connector::hive::HiveConfig>& hiveConfig,
       const TypePtr& requestedType,
       const std::shared_ptr<const dwio::common::TypeWithId>& fileType,
       DwrfParams& params,
@@ -61,6 +63,7 @@ class SelectiveListColumnReader
 class SelectiveMapColumnReader : public dwio::common::SelectiveMapColumnReader {
  public:
   SelectiveMapColumnReader(
+      const std::shared_ptr<const connector::hive::HiveConfig>& hiveConfig,
       const TypePtr& requestedType,
       const std::shared_ptr<const dwio::common::TypeWithId>& fileType,
       DwrfParams& params,
