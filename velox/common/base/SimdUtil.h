@@ -175,7 +175,6 @@ struct Batch128 {
   }
 };
 
-
 namespace detail {
 template <typename T, typename IndexType, typename A, int kSizeT = sizeof(T)>
 struct Gather;
@@ -233,7 +232,6 @@ gather(const T* base, Batch128<IndexType> vindex, const A& arch = {}) {
   using Impl = detail::Gather<T, IndexType, A>;
   return Impl::template apply<kScale>(base, vindex.data, arch);
 }
-
 
 // Same as 'gather' above except the indices are read from memory.
 template <

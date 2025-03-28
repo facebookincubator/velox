@@ -730,7 +730,7 @@ inline xsimd::batch<int64_t> cvtU32toI64(simd::Batch128<int32_t> values) {
   int64_t element_2 = static_cast<uint32_t>(values.data[1]);
   int64_t element_3 = static_cast<uint32_t>(values.data[2]);
   int64_t element_4 = static_cast<uint32_t>(values.data[3]);
-  return xsimd::batch<int64_t>(element_1,element_2,element_3,element_4);
+  return xsimd::batch<int64_t>(element_1, element_2, element_3, element_4);
 }
 #elif XSIMD_WITH_SSE2 || XSIMD_WITH_NEON || (XSIMD_WITH_SVE && SVE_BITS == 128)
 inline xsimd::batch<int64_t> cvtU32toI64(simd::Batch64<int32_t> values) {
@@ -922,7 +922,8 @@ class DictionaryColumnVisitor
           reinterpret_cast<const int32_t*>(filterCache() - 3),
           indices);
       auto cache_bits = xsimd::batch_bool<int32_t>(cache != 0);
-      auto shifted_bits = xsimd::batch_bool<int32_t>(((cache & (kUnknown << 24)) << 1) != 0);
+      auto shifted_bits =
+          xsimd::batch_bool<int32_t>(((cache & (kUnknown << 24)) << 1) != 0);
       auto passed = simd::toBitMask(cache_bits);
       auto unknowns = simd::toBitMask(shifted_bits);
       if (UNLIKELY(unknowns)) {
@@ -1314,7 +1315,8 @@ class StringDictionaryColumnVisitor
         cache = simd::gather<int32_t, int32_t, 1>(base, indices);
       }
       auto cache_bits = xsimd::batch_bool<int32_t>(cache != 0);
-      auto shifted_bits = xsimd::batch_bool<int32_t>(((cache & (kUnknown << 24)) << 1) != 0);
+      auto shifted_bits =
+          xsimd::batch_bool<int32_t>(((cache & (kUnknown << 24)) << 1) != 0);
       auto passed = simd::toBitMask(cache_bits);
       auto unknowns = simd::toBitMask(shifted_bits);
       if (UNLIKELY(unknowns)) {
