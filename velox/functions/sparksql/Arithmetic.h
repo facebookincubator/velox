@@ -25,6 +25,7 @@
 #include "velox/common/base/Status.h"
 #include "velox/functions/Macros.h"
 #include "velox/functions/lib/ToHex.h"
+#include "velox/functions/sparksql/Factorial.h"
 
 namespace facebook::velox::functions::sparksql {
 
@@ -606,4 +607,5 @@ struct CheckedDivideFunction {
     return Status::OK();
   }
 };
+
 } // namespace facebook::velox::functions::sparksql
