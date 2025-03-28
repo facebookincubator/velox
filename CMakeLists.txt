@@ -527,6 +527,8 @@ if(VELOX_ENABLE_REMOTE_FUNCTIONS)
   find_package(fizz CONFIG REQUIRED)
   find_package(wangle CONFIG REQUIRED)
   find_package(FBThrift CONFIG REQUIRED)
+  set(cpr_SOURCE BUNDLED)
+  velox_resolve_dependency(cpr)
 endif()
 
 if(VELOX_ENABLE_GCS)
