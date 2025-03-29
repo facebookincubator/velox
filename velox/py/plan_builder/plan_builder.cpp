@@ -233,6 +233,7 @@ PYBIND11_MODULE(plan_builder, m) {
           py::arg("table_name"),
           py::arg("columns") = std::vector<std::string>{},
           py::arg("scale_factor") = 1,
+          py::arg("text_pool_size_mb") = 10,
           py::arg("num_parts") = 1,
           py::arg("connector_id") = "tpch",
           py::doc(R"(
@@ -248,6 +249,9 @@ PYBIND11_MODULE(plan_builder, m) {
                    empty (the default), generate data for all columns.
           scale_factor: TPC-H scale factor to use - controls the amount of
                         data generated.
+          text_pool_size_mb: The TPCH-H text pool size in MB. For correct query
+                             results matching with Presto, use 300 MB for the
+                             text pool size instead of the default 10 MB.
           num_parts: How many splits to generate. This controls the parallelism
                      and the number of output files to be generated.
           connector_id: ID of the connector to use for this scan.

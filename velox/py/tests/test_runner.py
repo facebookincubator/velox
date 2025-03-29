@@ -206,6 +206,7 @@ class TestPyVeloxRunner(unittest.TestCase):
                 table_name="lineitem",
                 connector_id="tpch",
                 scale_factor=0.001,
+                text_pool_size_mb=10,
                 num_parts=num_output_files,
             ).table_write(
                 output_path=DWRF(temp_dir),
