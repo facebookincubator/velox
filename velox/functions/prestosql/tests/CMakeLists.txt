@@ -40,7 +40,6 @@ add_executable(
   ArrayNoneMatchTest.cpp
   ArrayNormalizeTest.cpp
   ArrayPositionTest.cpp
-  ArrayRemoveNullsTest.cpp
   ArrayRemoveTest.cpp
   ArrayShuffleTest.cpp
   ArraySortTest.cpp

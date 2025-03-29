@@ -42,8 +42,13 @@ TEST_F(ArrayRemoveNullsTest, simpleString) {
 
 TEST_F(ArrayRemoveNullsTest, simpleInt) {
   auto input = makeNullableArrayVector<int>(
-      {{1, std::nullopt, std::nullopt, 3}, {1, 3}});
-  auto expected = makeNullableArrayVector<int>({{1, 3}, {1, 3}});
+      {{1, std::nullopt, std::nullopt, 3},
+       {1, 3},
+       {std::nullopt},
+       {},
+       std::nullopt});
+  auto expected =
+      makeNullableArrayVector<int>({{1, 3}, {1, 3}, {}, {}, std::nullopt});
   testArrayRemoveNull(expected, input);
 }
 

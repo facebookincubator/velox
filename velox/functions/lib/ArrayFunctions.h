@@ -19,6 +19,14 @@
 
 namespace facebook::velox::functions {
 
+/// This class implements the remove_nulls function of presto and array_compact
+/// function of spark.
+///
+/// DEFINITION:
+/// presto: remove_nulls(array(E)) -> array(E)
+/// spark: array_compact(array(E)) -> array(E)
+/// Remove all null elements from array. Returns NULL as result if array is
+/// NULL.
 template <typename T>
 struct ArrayRemoveNullFunction {
   VELOX_DEFINE_FUNCTION_TYPES(T);
@@ -57,6 +65,8 @@ struct ArrayRemoveNullFunction {
   }
 };
 
+/// This class implements the String version of the ArrayRemoveNullFunction.
+/// It optimizes performance by avoiding the copying of strings.
 template <typename T>
 struct ArrayRemoveNullFunctionString {
   VELOX_DEFINE_FUNCTION_TYPES(T);
