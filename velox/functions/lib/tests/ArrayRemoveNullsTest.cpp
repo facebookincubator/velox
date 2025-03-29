@@ -42,13 +42,8 @@ TEST_F(ArrayRemoveNullsTest, simpleString) {
 
 TEST_F(ArrayRemoveNullsTest, simpleInt) {
   auto input = makeNullableArrayVector<int>(
-      {{1, std::nullopt, std::nullopt, 3},
-       {1, 3},
-       {std::nullopt},
-       {},
-       std::nullopt});
-  auto expected =
-      makeNullableArrayVector<int>({{1, 3}, {1, 3}, {}, {}, std::nullopt});
+      {{1, std::nullopt, std::nullopt, 3}, {1, 3}});
+  auto expected = makeNullableArrayVector<int>({{1, 3}, {1, 3}});
   testArrayRemoveNull(expected, input);
 }
 
@@ -73,6 +68,13 @@ TEST_F(ArrayRemoveNullsTest, complexType) {
   array_type earray2 = {{1, std::nullopt, 2}};
   auto expected =
       makeNullableNestedArrayVector<int32_t>({{{earray1, earray2}}});
+  testArrayRemoveNull(expected, input);
+}
+
+TEST_F(ArrayRemoveNullsTest, nullArray) {
+  const auto input = makeArrayVectorFromJson<int64_t>({"[null], [], null"});
+
+  auto expected = makeArrayVectorFromJson<int64_t>({"[]", "[]", "null"});
   testArrayRemoveNull(expected, input);
 }
 
