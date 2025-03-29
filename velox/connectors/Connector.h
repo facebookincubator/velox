@@ -155,6 +155,8 @@ class ConnectorInsertTableHandle : public ISerializable {
 
   virtual std::string toString() const = 0;
 
+  virtual const TypePtr& getHiveColumnHandleDataType() const = 0;
+
   folly::dynamic serialize() const override {
     VELOX_NYI();
   }
