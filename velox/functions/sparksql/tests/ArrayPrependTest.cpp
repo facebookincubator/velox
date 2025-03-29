@@ -63,7 +63,7 @@ TEST_F(ArrayPrependTest, nullArrays) {
       "array_prepend(c0, c1)", {arrayVector, elementVector}, expected);
 }
 
-TESTT_F(ArrayPrependTest, complexArray) {
+TEST_F(ArrayPrependTest, complexArray) {
   const auto arrayVector = makeNestedArrayVectorFromJson<int32_t>(
       {"[[1, 2, null], [null], [3, null, 4, null]]",
        "[[1, null, 2], null, [3, null, 4, null]]",
@@ -73,7 +73,7 @@ TESTT_F(ArrayPrependTest, complexArray) {
        "[[1, 2], null]",
        "[[1, 2], []]"});
 
-  VectorPtr elementVector = makeArrayVectorFromJson<int64_t>(
+  VectorPtr elementVector = makeArrayVectorFromJson<int32_t>(
       {"[1, 2, 3]",
        "[5]",
        "null",
