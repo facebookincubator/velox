@@ -60,6 +60,12 @@ described above.  Invalid parameters will return a User Error.</p>
 </dd></dl>
 
 <dl class="py function">
+<dt class="sig sig-object py" id="id0">
+<span class="sig-name descname"><span class="pre">bing_tile</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">quadKey</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">varchar</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">tile:</span> <span class="pre">BingTile</span></span></span><a class="headerlink" href="#id0" title="Link to this definition">¶</a></dt>
+<dd><p>Creates a Bing tile object from a quadkey. An invalid quadkey will return a User Error.</p>
+</dd></dl>
+
+<dl class="py function">
 <dt class="sig sig-object py" id="bing_tile_coordinates">
 <span class="sig-name descname"><span class="pre">bing_tile_coordinates</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">tile:</span> <span class="pre">BingTile)</span> <span class="pre">-&gt;</span> <span class="pre">coords:</span> <span class="pre">row(integer</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">integer</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#bing_tile_coordinates" title="Link to this definition">¶</a></dt>
 <dd><p>Returns the <cite>x</cite>, <cite>y</cite> coordinates of a given Bing tile as <cite>row(x, y)</cite>.</p>
@@ -79,8 +85,8 @@ exception if tile is at zoom level 0.</p>
 </dd></dl>
 
 <dl class="py function">
-<dt class="sig sig-object py" id="id0">
-<span class="sig-name descname"><span class="pre">bing_tile_parent</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">tile</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">parentZoom</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">parent:</span> <span class="pre">BingTile</span></span></span><a class="headerlink" href="#id0" title="Link to this definition">¶</a></dt>
+<dt class="sig sig-object py" id="id1">
+<span class="sig-name descname"><span class="pre">bing_tile_parent</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">tile</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">parentZoom</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">parent:</span> <span class="pre">BingTile</span></span></span><a class="headerlink" href="#id1" title="Link to this definition">¶</a></dt>
 <dd><p>Returns the parent of the Bing tile at the specified lower zoom level.
 Throws an exception if parentZoom is less than 0, or parentZoom is greater
 than the tile’s zoom.</p>
@@ -94,8 +100,8 @@ exception if tile is at max zoom level.</p>
 </dd></dl>
 
 <dl class="py function">
-<dt class="sig sig-object py" id="id1">
-<span class="sig-name descname"><span class="pre">bing_tile_children</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">tile</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">childZoom)</span> <span class="pre">-&gt;</span> <span class="pre">children:</span> <span class="pre">array(BingTile</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#id1" title="Link to this definition">¶</a></dt>
+<dt class="sig sig-object py" id="id2">
+<span class="sig-name descname"><span class="pre">bing_tile_children</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">tile</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">childZoom)</span> <span class="pre">-&gt;</span> <span class="pre">children:</span> <span class="pre">array(BingTile</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#id2" title="Link to this definition">¶</a></dt>
 <dd><p>Returns the children of the Bing tile at the specified higher zoom level.
 Throws an exception if childZoom is greater than the max zoom level, or
 childZoom is less than the tile’s zoom.  The order is deterministic but not
@@ -118,12 +124,13 @@ specified.</p>
 <li><a class="reference internal" href="#">Geospatial Operators</a><ul>
 <li><a class="reference internal" href="#bing-tile-functions">Bing Tile Functions</a><ul>
 <li><a class="reference internal" href="#bing_tile"><code class="docutils literal notranslate"><span class="pre">bing_tile()</span></code></a></li>
+<li><a class="reference internal" href="#id0"><code class="docutils literal notranslate"><span class="pre">bing_tile()</span></code></a></li>
 <li><a class="reference internal" href="#bing_tile_coordinates"><code class="docutils literal notranslate"><span class="pre">bing_tile_coordinates()</span></code></a></li>
 <li><a class="reference internal" href="#bing_tile_zoom_level"><code class="docutils literal notranslate"><span class="pre">bing_tile_zoom_level()</span></code></a></li>
 <li><a class="reference internal" href="#bing_tile_parent"><code class="docutils literal notranslate"><span class="pre">bing_tile_parent()</span></code></a></li>
-<li><a class="reference internal" href="#id0"><code class="docutils literal notranslate"><span class="pre">bing_tile_parent()</span></code></a></li>
+<li><a class="reference internal" href="#id1"><code class="docutils literal notranslate"><span class="pre">bing_tile_parent()</span></code></a></li>
 <li><a class="reference internal" href="#bing_tile_children"><code class="docutils literal notranslate"><span class="pre">bing_tile_children()</span></code></a></li>
-<li><a class="reference internal" href="#id1"><code class="docutils literal notranslate"><span class="pre">bing_tile_children()</span></code></a></li>
+<li><a class="reference internal" href="#id2"><code class="docutils literal notranslate"><span class="pre">bing_tile_children()</span></code></a></li>
 </ul>
 </li>
 </ul>
