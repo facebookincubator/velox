@@ -367,8 +367,6 @@ class VarianceAggregate : public exec::Aggregate {
   DecodedVector decodedPartial_;
 };
 
-void checkSumCountRowType(
-    const TypePtr& type,
-    const std::string& errorMessage);
+void checkSumCountRowType(const TypePtr& type, const std::string& errorMessage);
 
 } // namespace facebook::velox::functions::aggregate
