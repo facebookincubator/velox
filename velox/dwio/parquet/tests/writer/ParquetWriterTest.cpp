@@ -156,6 +156,9 @@ TEST_F(ParquetWriterTest, testPageSizeAndBatchSizeConfiguration) {
   parquet::WriterOptions writerOptions;
   writerOptions.memoryPool = leafPool_.get();
 
+  // We use 97 as the batch size to test, because 97 is a prime, if the number
+  // of values in each page can be divided by 97, it means the batch size is
+  // applied (default is 1024)
   std::unordered_map<std::string, std::string> configFromFile = {
     {parquet::WriterOptions::kParquetHiveConnectorWritePageSize, "2KB"},
     {parquet::WriterOptions::kParquetHiveConnectorWriteBatchSize, "97"},
@@ -207,7 +210,7 @@ TEST_F(ParquetWriterTest, testPageSizeAndBatchSizeConfiguration) {
   EXPECT_EQ(header.type, thrift::PageType::type::DATA_PAGE);
   // We don't use compressor here
   EXPECT_EQ(header.uncompressed_page_size, header.compressed_page_size);
-  // 1KB < 1485B < 2KB, which means the page size is applied (default is 1KB)
+  // 1485B < 2KB < 1MB, which means the page size is applied (default is 1MB)
   EXPECT_EQ(header.compressed_page_size, 1485);
   // 1067 % 97 == 0, which means the batch size is applied (default is 1024)
   EXPECT_EQ(header.data_page_header.num_values, 1067);
