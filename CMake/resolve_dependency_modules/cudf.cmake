@@ -53,13 +53,6 @@ set(BUILD_TESTS OFF)
 set(CUDF_BUILD_TESTUTIL OFF)
 set(BUILD_SHARED_LIBS ON)
 
-# cudf sets all warnings as errors, and therefore fails to compile with velox
-# expanded set of warnings. We selectively disable problematic warnings just for
-# cudf
-string(
-  APPEND CMAKE_CXX_FLAGS
-  " -Wno-non-virtual-dtor -Wno-missing-field-initializers -Wno-deprecated-copy")
-
 FetchContent_Declare(
   rapids-cmake
   URL ${VELOX_rapids_cmake_SOURCE_URL}
@@ -87,5 +80,13 @@ FetchContent_Declare(
   UPDATE_DISCONNECTED 1)
 
 FetchContent_MakeAvailable(cudf)
+
+# cudf sets all warnings as errors, and therefore fails to compile with velox
+# expanded set of warnings. We selectively disable problematic warnings just for
+# cudf
+target_compile_options(
+  cudf PRIVATE -Wno-non-virtual-dtor -Wno-missing-field-initializers
+               -Wno-deprecated-copy)
+
 unset(BUILD_SHARED_LIBS)
 endblock()
