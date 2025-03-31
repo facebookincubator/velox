@@ -18,6 +18,13 @@
 
 #include "velox/exec/Operator.h"
 
+#include <gflags/gflags.h>
+
+DECLARE_bool(velox_cudf_enabled);
+DECLARE_string(velox_cudf_memory_resource);
+DECLARE_bool(velox_cudf_debug);
+DECLARE_bool(velox_cudf_table_scan);
+
 namespace facebook::velox::cudf_velox {
 
 class CompileState {
@@ -41,22 +48,28 @@ class CompileState {
   const std::vector<std::shared_ptr<core::PlanNode const>>& planNodes_;
 };
 
+struct CudfOptions {
+  bool cudfEnabled = FLAGS_velox_cudf_enabled;
+  std::string cudfMemoryResource = FLAGS_velox_cudf_memory_resource;
+  static CudfOptions defaultOptions() {
+    return CudfOptions();
+  }
+};
+
 /// Registers adapter to add cuDF operators to Drivers.
-void registerCudf();
+void registerCudf(const CudfOptions& options = CudfOptions::defaultOptions());
 void unregisterCudf();
 
 /// Returns true if cuDF is registered.
 bool isCudfRegistered();
 
 /**
- * @brief Returns true if the VELOX_CUDF_DEBUG environment variable is set to a
- * nonzero value.
+ * @brief Returns true if the velox_cudf_debug flag is set to true.
  */
 bool cudfDebugEnabled();
 
 /**
- * @brief Returns true if the VELOX_CUDF_TABLE_SCAN environment variable is set
- * to a nonzero value.
+ * @brief Returns true if the velox_cudf_table_scan flag is set to true.
  */
 bool isEnabledcudfTableScan();
 

@@ -40,6 +40,11 @@
 
 #include <iostream>
 
+DEFINE_bool(velox_cudf_enabled, true, "Enable cuDF-Velox acceleration");
+DEFINE_string(velox_cudf_memory_resource, "async", "Memory resource for cuDF");
+DEFINE_bool(velox_cudf_debug, false, "Enable cuDF-Velox debug logging");
+DEFINE_bool(velox_cudf_table_scan, true, "Enable cuDF table scan");
+
 namespace facebook::velox::cudf_velox {
 
 template <class... Deriveds, class Base>
@@ -344,9 +349,11 @@ struct cudfDriverAdapter {
   }
 };
 
-void registerCudf() {
-  const char* env_cudf_disabled = std::getenv("VELOX_CUDF_DISABLED");
-  if (env_cudf_disabled != nullptr && std::stoi(env_cudf_disabled)) {
+void registerCudf(const CudfOptions& options) {
+  if (isCudfRegistered()) {
+    return;
+  }
+  if (!options.cudfEnabled) {
     return;
   }
 
@@ -362,8 +369,7 @@ void registerCudf() {
     std::cout << "Registering cudfDriverAdapter" << std::endl;
   }
 
-  const char* env_cudf_mr = std::getenv("VELOX_CUDF_MEMORY_RESOURCE");
-  auto mr_mode = env_cudf_mr != nullptr ? env_cudf_mr : "async";
+  const std::string mr_mode = options.cudfMemoryResource;
   if (cudfDebugEnabled()) {
     std::cout << "Setting cuDF memory resource to " << mr_mode << std::endl;
   }
@@ -389,13 +395,11 @@ bool isCudfRegistered() {
 }
 
 bool cudfDebugEnabled() {
-  const char* env_cudf_debug = std::getenv("VELOX_CUDF_DEBUG");
-  return env_cudf_debug != nullptr && std::stoi(env_cudf_debug);
+  return FLAGS_velox_cudf_debug;
 }
 
 bool isEnabledcudfTableScan() {
-  const char* env_cudf_debug = std::getenv("VELOX_CUDF_TABLE_SCAN");
-  return env_cudf_debug != nullptr && std::stoi(env_cudf_debug);
+  return FLAGS_velox_cudf_table_scan;
 }
 
 } // namespace facebook::velox::cudf_velox

@@ -44,13 +44,17 @@ RowVectorPtr mergeRowVectors(
   return copy;
 }
 
-cudf::size_type preferred_gpu_batch_size_rows() {
-  constexpr cudf::size_type default_gpu_batch_size_rows = 100000;
-  const char* env_cudf_gpu_batch_size_rows =
-      std::getenv("VELOX_CUDF_GPU_BATCH_SIZE_ROWS");
-  return env_cudf_gpu_batch_size_rows != nullptr
-      ? std::stoi(env_cudf_gpu_batch_size_rows)
-      : default_gpu_batch_size_rows;
+cudf::size_type preferredGpuBatchSizeRows(
+    const facebook::velox::core::QueryConfig& queryConfig) {
+  constexpr cudf::size_type kDefaultGpuBatchSizeRows = 100000;
+  const auto batchSize = queryConfig.get<int32_t>(
+      CudfFromVelox::kGpuBatchSizeRows, kDefaultGpuBatchSizeRows);
+  VELOX_CHECK_GT(batchSize, 0, "cudf_gpu_batch_size_rows must be > 0");
+  VELOX_CHECK_LE(
+      batchSize,
+      std::numeric_limits<vector_size_t>::max(),
+      "cudf_gpu_batch_size_rows must be <= max(vector_size_t)");
+  return batchSize;
 }
 } // namespace
 
@@ -86,7 +90,8 @@ void CudfFromVelox::addInput(RowVectorPtr input) {
 
 RowVectorPtr CudfFromVelox::getOutput() {
   VELOX_NVTX_OPERATOR_FUNC_RANGE();
-  auto const target_output_size = preferred_gpu_batch_size_rows();
+  auto const target_output_size =
+      preferredGpuBatchSizeRows(operatorCtx_->driverCtx()->queryConfig());
   auto const exit_early = finished_ or
       (current_output_size_ < target_output_size and not noMoreInput_) or
       inputs_.empty();
