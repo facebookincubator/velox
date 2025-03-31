@@ -333,7 +333,8 @@ void SplitReader::createRowReader(
       hiveConfig_,
       connectorQueryCtx_->sessionProperties(),
       baseRowReaderOpts_);
-  baseRowReader_ = baseReader_->createRowReader(baseRowReaderOpts_);
+  baseRowReader_ =
+      baseReader_->createRowReader(hiveConfig_, baseRowReaderOpts_);
 }
 
 std::vector<TypePtr> SplitReader::adaptColumns(

@@ -16,6 +16,7 @@
 
 #pragma once
 
+#include "velox/connectors/hive/HiveConfig.h"
 #include "velox/dwio/common/SelectiveStructColumnReader.h"
 #include "velox/dwio/dwrf/reader/DwrfData.h"
 
@@ -81,6 +82,7 @@ class SelectiveStructColumnReaderBase
 class SelectiveStructColumnReader : public SelectiveStructColumnReaderBase {
  public:
   SelectiveStructColumnReader(
+      const std::shared_ptr<const connector::hive::HiveConfig>& hiveConfig,
       const TypePtr& requestedType,
       const std::shared_ptr<const dwio::common::TypeWithId>& fileType,
       DwrfParams& params,

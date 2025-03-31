@@ -138,7 +138,8 @@ PositionalDeleteFileReader::PositionalDeleteFileReader(
       deleteRowReaderOpts);
 
   deleteRowReader_.reset();
-  deleteRowReader_ = deleteReader->createRowReader(deleteRowReaderOpts);
+  deleteRowReader_ =
+      deleteReader->createRowReader(hiveConfig_, deleteRowReaderOpts);
 }
 
 void PositionalDeleteFileReader::readDeletePositions(

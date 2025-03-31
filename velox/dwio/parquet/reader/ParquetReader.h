@@ -102,6 +102,7 @@ class ParquetReader : public dwio::common::Reader {
       const override;
 
   std::unique_ptr<dwio::common::RowReader> createRowReader(
+      const std::shared_ptr<const connector::hive::HiveConfig>& hiveConfig,
       const dwio::common::RowReaderOptions& options = {}) const override;
 
   FileMetaDataPtr fileMetaData() const;

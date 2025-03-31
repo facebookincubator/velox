@@ -67,10 +67,13 @@ std::vector<std::optional<StringView>> getDataFromFile() {
   facebook::velox::dwio::common::ReaderOptions readerOptions{pool.get()};
   facebook::velox::parquet::ParquetReader reader =
       createReader(sample, readerOptions);
+  auto hiveConfig = std::make_shared<connector::hive::HiveConfig>(
+      std::make_shared<config::ConfigBase>(
+          std::unordered_map<std::string, std::string>()));
   auto rowReaderOpts = getReaderOpts(rowType);
   auto scanSpec = makeScanSpec(rowType);
   rowReaderOpts.setScanSpec(scanSpec);
-  auto rowReader = reader.createRowReader(rowReaderOpts);
+  auto rowReader = reader.createRowReader(hiveConfig, rowReaderOpts);
   auto data = BaseVector::create(rowType, 50000, pool.get());
   rowReader->next(50000, data);
   auto querySigCol =

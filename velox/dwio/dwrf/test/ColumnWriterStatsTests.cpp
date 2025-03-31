@@ -194,10 +194,14 @@ class ColumnWriterStatsTest : public ::testing::Test {
         std::make_shared<facebook::velox::InMemoryReadFile>(std::move(data));
     auto input = std::make_unique<BufferedInput>(readFile, *leafPool_);
 
+    auto hiveConfig = std::make_shared<const connector::hive::HiveConfig>(
+        std::make_shared<config::ConfigBase>(
+            std::unordered_map<std::string, std::string>()));
+
     dwio::common::ReaderOptions readerOpts{leafPool_.get()};
     RowReaderOptions rowReaderOpts;
     auto reader = std::make_unique<DwrfReader>(readerOpts, std::move(input));
-    return reader->createRowReader(rowReaderOpts);
+    return reader->createRowReader(hiveConfig, rowReaderOpts);
   }
 
   void verifyTypeStats(

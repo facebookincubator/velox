@@ -104,12 +104,15 @@ std::unique_ptr<RowReader> ParquetReaderBenchmark::createReader(
   std::unique_ptr<Reader> reader =
       std::make_unique<ParquetReader>(std::move(input), readerOpts);
 
+  auto hiveConfig = std::make_shared<connector::hive::HiveConfig>(
+      std::make_shared<config::ConfigBase>(
+          std::unordered_map<std::string, std::string>()));
   dwio::common::RowReaderOptions rowReaderOpts;
   rowReaderOpts.select(
       std::make_shared<facebook::velox::dwio::common::ColumnSelector>(
           rowType, rowType->names()));
   rowReaderOpts.setScanSpec(scanSpec);
-  auto rowReader = reader->createRowReader(rowReaderOpts);
+  auto rowReader = reader->createRowReader(hiveConfig, rowReaderOpts);
 
   return rowReader;
 }
