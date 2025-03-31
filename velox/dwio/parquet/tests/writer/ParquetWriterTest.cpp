@@ -147,6 +147,72 @@ TEST_F(ParquetWriterTest, compression) {
   assertReadWithReaderAndExpected(schema, *rowReader, data, *leafPool_);
 };
 
+TEST_F(ParquetWriterTest, testPageSizeAndBatchSizeConfiguration) {
+  // Create an in-memory writer.
+  auto sink = std::make_unique<MemorySink>(
+      200 * 1024 * 1024,
+      dwio::common::FileSink::Options{.pool = leafPool_.get()});
+  auto sinkPtr = sink.get();
+  parquet::WriterOptions writerOptions;
+  writerOptions.memoryPool = leafPool_.get();
+
+  std::unordered_map<std::string, std::string> configFromFile = {
+    {parquet::WriterOptions::kParquetHiveConnectorWritePageSize, "2KB"},
+    {parquet::WriterOptions::kParquetHiveConnectorWriteBatchSize, "97"},
+  };
+  std::unordered_map<std::string, std::string> sessionProperties = {
+    {parquet::WriterOptions::kParquetSessionWritePageSize, "2KB"},
+    {parquet::WriterOptions::kParquetSessionWriteBatchSize, "97"},
+  };
+  auto connectorConfig = config::ConfigBase(std::move(configFromFile));
+  auto connectorSessionProperties =
+      config::ConfigBase(std::move(sessionProperties));
+
+  auto schema = ROW({"c0"}, {SMALLINT()});
+  constexpr int64_t kRows = 10'000;
+  const auto data = makeRowVector({
+      makeFlatVector<int16_t>(kRows, [](auto row) { return row + 1; }),
+  });
+
+  writerOptions.processConfigs(
+            connectorConfig, connectorSessionProperties);
+  auto writer = std::make_unique<parquet::Writer>(
+      std::move(sink), writerOptions, rootPool_, schema);
+  writer->write(data);
+  writer->close();
+
+  // Read to identify DataPage used.
+  dwio::common::ReaderOptions readerOptions{leafPool_.get()};
+  auto reader = createReaderInMemory(*sinkPtr, readerOptions);
+
+  auto colChunkPtr = reader->fileMetaData().rowGroup(0).columnChunk(0);
+  std::string_view sinkData(sinkPtr->data(), sinkPtr->size());
+
+  auto readFile = std::make_shared<InMemoryReadFile>(sinkData);
+  auto file = std::make_shared<ReadFileInputStream>(std::move(readFile));
+
+  auto inputStream = std::make_unique<SeekableFileInputStream>(
+      std::move(file),
+      colChunkPtr.dataPageOffset(),
+      150,
+      *leafPool_,
+      LogType::TEST);
+  auto pageReader = std::make_unique<PageReader>(
+      std::move(inputStream),
+      *leafPool_,
+      colChunkPtr.compression(),
+      colChunkPtr.totalCompressedSize());
+  auto header = pageReader->readPageHeader();
+  // We use the default version of data page (V1)
+  EXPECT_EQ(header.type, thrift::PageType::type::DATA_PAGE);
+  // We don't use compressor here
+  EXPECT_EQ(header.uncompressed_page_size, header.compressed_page_size);
+  // 1KB < 1485B < 2KB, which means the page size is applied (default is 1KB)
+  EXPECT_EQ(header.compressed_page_size, 1485);
+  // 1067 % 97 == 0, which means the batch size is applied (default is 1024)
+  EXPECT_EQ(header.data_page_header.num_values, 1067);
+}
+
 TEST_F(ParquetWriterTest, toggleDataPageVersion) {
   auto schema = ROW({"c0"}, {INTEGER()});
   const int64_t kRows = 1;
