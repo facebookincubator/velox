@@ -768,8 +768,8 @@ Each query can override the config by setting corresponding query session proper
    * - hive.s3.aws-credentials-provider
      - string
      -
-     - Specifies the user-defined AWSCredentialsProvider. The provider must be registered using "registerAWSCredentialsProvider" before it
-       can be used.
+     - A custom credential provider, if specified, will be used to create the client in favor of other authentication mechanisms.
+       The provider must be registered using "registerAWSCredentialsProvider" before it can be used.
 
 Bucket Level Configuration
 """"""""""""""""""""""""""
