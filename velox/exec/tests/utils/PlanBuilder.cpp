@@ -263,7 +263,7 @@ core::PlanNodePtr PlanBuilder::TableScanBuilder::build(core::PlanNodeId id) {
     if (facebook::velox::cudf_velox::isCudfRegistered() &&
         facebook::velox::connector::getAllConnectors().count(
             cudf_velox::exec::test::kParquetConnectorId) > 0 &&
-        facebook::velox::cudf_velox::isEnabledcudfTableScan()) {
+        facebook::velox::cudf_velox::cudfTableScanEnabled()) {
       // TODO error out if it has filters.
       tableHandle_ =
           std::make_shared<cudf_velox::connector::parquet::ParquetTableHandle>(

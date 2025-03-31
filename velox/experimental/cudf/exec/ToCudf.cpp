@@ -96,7 +96,7 @@ bool CompileState::compile() {
   auto is_table_scan_supported =
       [is_parquet_connector_registered](const exec::Operator* op) {
         return is_any_of<exec::TableScan>(op) &&
-            is_parquet_connector_registered && isEnabledcudfTableScan();
+            is_parquet_connector_registered && cudfTableScanEnabled();
       };
 
   auto is_filter_project_supported = [](const exec::Operator* op) {
@@ -398,7 +398,7 @@ bool cudfDebugEnabled() {
   return FLAGS_velox_cudf_debug;
 }
 
-bool isEnabledcudfTableScan() {
+bool cudfTableScanEnabled() {
   return FLAGS_velox_cudf_table_scan;
 }
 

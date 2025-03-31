@@ -71,6 +71,6 @@ bool cudfDebugEnabled();
 /**
  * @brief Returns true if the velox_cudf_table_scan flag is set to true.
  */
-bool isEnabledcudfTableScan();
+bool cudfTableScanEnabled();
 
 } // namespace facebook::velox::cudf_velox
