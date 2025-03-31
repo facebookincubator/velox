@@ -23,6 +23,7 @@
 #include "velox/expression/SpecialForm.h"
 #include "velox/expression/VectorWriters.h"
 #include "velox/functions/lib/string/StringCore.h"
+#include "velox/functions/lib/string/StringImpl.h"
 #include "velox/functions/prestosql/json/SIMDJsonUtil.h"
 
 using namespace facebook::velox::exec;
@@ -128,19 +129,25 @@ struct ExtractJsonTypeImpl {
           if (!days.hasError()) {
             day = days.value();
           } else {
-            // remove 'GMT'.
-            std::string dateStr;
-            dateStr.reserve(s.size());
-            auto size = stringCore::replace<true /*ignoreEmptyReplaced*/>(
-                dateStr.data(),
-                std::string_view(s.data(), s.size()),
-                kGMT,
-                std::string_view(),
-                false);
-            days = util::fromDateString(
-                StringView(dateStr.data(), size), util::ParseMode::kSparkCast);
-            if (!days.hasError()) {
-              day = days.value();
+            if (stringImpl::stringPosition<true /*isAscii*/>(
+                    std::string_view(s.data(), s.size()), kGMT, 1) > 0) {
+              // remove 'GMT'.
+              std::string dateStr;
+              dateStr.reserve(s.size());
+              auto size = stringCore::replace<true /*ignoreEmptyReplaced*/>(
+                  dateStr.data(),
+                  std::string_view(s.data(), s.size()),
+                  kGMT,
+                  std::string_view(),
+                  false);
+              days = util::fromDateString(
+                  StringView(dateStr.data(), size),
+                  util::ParseMode::kSparkCast);
+              if (!days.hasError()) {
+                day = days.value();
+              } else {
+                return simdjson::INCORRECT_TYPE;
+              }
             } else {
               return simdjson::INCORRECT_TYPE;
             }
