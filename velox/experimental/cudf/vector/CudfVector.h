@@ -15,13 +15,11 @@
  */
 #pragma once
 
-#include "velox/buffer/Buffer.h"
-#include "velox/common/memory/MemoryPool.h"
 #include "velox/vector/ComplexVector.h"
-#include "velox/vector/TypeAliases.h"
 
 #include <cudf/table/table.hpp>
-#include <cudf/utilities/default_stream.hpp>
+
+#include <rmm/cuda_stream_view.hpp>
 
 #include <memory>
 #include <utility>

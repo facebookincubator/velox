@@ -16,11 +16,8 @@
 
 #include "velox/experimental/cudf/vector/CudfVector.h"
 
-#include <cudf/null_mask.hpp>
-#include <cudf/strings/strings_column_view.hpp>
-#include <cudf/table/table_view.hpp>
-
-#include <cmath>
+#include <cudf/column/column.hpp>
+#include <cudf/table/table.hpp>
 
 namespace facebook::velox::cudf_velox {
 namespace {
