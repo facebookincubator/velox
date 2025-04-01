@@ -1560,24 +1560,23 @@ template <typename TOutString, typename TInString>
 FOLLY_ALWAYS_INLINE void trimTrailingSpaces(
     TOutString& output,
     const TInString& inputStr,
-    const int32_t& numChars,
-    const int32_t& limit) {
+    int32_t numChars,
+    int32_t limit) {
   auto numTailSpacesToTrim = numChars - limit;
-  VELOX_CHECK_GT(numTailSpacesToTrim, 0);
+  VELOX_USER_CHECK_GT(numTailSpacesToTrim, 0);
 
-  // The pointer uses are alright
   auto curPos = inputStr.end() - 1;
   auto trimTo = inputStr.end() - numTailSpacesToTrim;
 
   while (curPos >= trimTo && stringImpl::isAsciiSpace(*curPos)) {
     curPos--;
   }
-  // get num of chars.
-  auto trimmedSize = stringImpl::lengthUnicode(
-      inputStr.data(), std::distance(inputStr.begin(), curPos + 1));
+  // Get num of chars.
+  auto numTrimmedSpace = std::distance(curPos + 1, inputStr.end());
+  auto trimmedSize = numChars - numTrimmedSpace;
 
   if (trimmedSize > limit) {
-    VELOX_USER_FAIL("Exceeds char/varchar type length limitation: '{}'", limit);
+    VELOX_USER_FAIL("Exceeds char/varchar type length limitation: {}", limit);
   } else {
     output.setNoCopy(StringView(
         inputStr.data(), std::distance(inputStr.begin(), curPos + 1)));
@@ -1598,15 +1597,14 @@ struct VarcharTypeWriteSideCheckFunction {
   FOLLY_ALWAYS_INLINE void doCall(
       out_type<Varchar>& result,
       const arg_type<Varchar>& input,
-      const int32_t& limit) {
-    VELOX_CHECK_GE(limit, 0);
+      int32_t limit) {
+    VELOX_USER_CHECK_GE(limit, 0);
 
     auto numCharacters = stringImpl::length<isAscii>(input);
     if (numCharacters <= limit) {
       result.setNoCopy(input);
       return;
     } else {
-      // The num of space that should be trimmed anyway.
       trimTrailingSpaces(result, input, numCharacters, limit);
     }
   }
@@ -1614,14 +1612,14 @@ struct VarcharTypeWriteSideCheckFunction {
   FOLLY_ALWAYS_INLINE void call(
       out_type<Varchar>& result,
       const arg_type<Varchar>& input,
-      const int32_t& limit) {
+      int32_t limit) {
     doCall<false>(result, input, limit);
   }
 
   FOLLY_ALWAYS_INLINE void callAscii(
       out_type<Varchar>& result,
       const arg_type<Varchar>& input,
-      const int32_t& limit) {
+      int32_t limit) {
     doCall<true>(result, input, limit);
   }
 };
@@ -1639,8 +1637,8 @@ struct CharTypeWriteSideCheckFunction {
   FOLLY_ALWAYS_INLINE void doCall(
       out_type<Varchar>& result,
       const arg_type<Varchar>& input,
-      const int32_t& limit) {
-    VELOX_CHECK_GE(limit, 0);
+      int32_t limit) {
+    VELOX_USER_CHECK_GE(limit, 0);
 
     auto numCharacters = stringImpl::length<isAscii>(input);
 
@@ -1648,7 +1646,7 @@ struct CharTypeWriteSideCheckFunction {
       result.setNoCopy(input);
       return;
     } else if (numCharacters < limit) {
-      // rpad spaces(0x20) to limit
+      // rpad spaces(0x20) to limit.
       stringImpl::pad<false /*lpad*/, false /*isAscii*/>(
           result, input, limit, {" "});
     } else {
@@ -1660,19 +1658,18 @@ struct CharTypeWriteSideCheckFunction {
   FOLLY_ALWAYS_INLINE void call(
       out_type<Varchar>& result,
       const arg_type<Varchar>& input,
-      const int32_t& limit) {
+      int32_t limit) {
     doCall<false>(result, input, limit);
   }
 
   FOLLY_ALWAYS_INLINE void callAscii(
       out_type<Varchar>& result,
       const arg_type<Varchar>& input,
-      const int32_t& limit) {
+      int32_t limit) {
     doCall<true>(result, input, limit);
   }
 };
 
-// readSidePadding
 template <typename T>
 struct ReadSidePaddingFunction {
   VELOX_DEFINE_FUNCTION_TYPES(T);
@@ -1687,19 +1684,14 @@ struct ReadSidePaddingFunction {
   FOLLY_ALWAYS_INLINE void doCall(
       out_type<Varchar>& result,
       const arg_type<Varchar>& input,
-      const int32_t& limit) {
-    VELOX_CHECK_GE(limit, 0);
+      int32_t limit) {
+    VELOX_USER_CHECK_GE(limit, 0);
 
     auto numCharacters = stringImpl::length<isAscii>(input);
 
-    if (numCharacters == limit) {
-      result.setNoCopy(input);
-      return;
-    } else if (numCharacters < limit) {
-      int64_t padStringCharLength = stringImpl::length<false>(StringView(" "));
-      // rpad spaces(0x20) to limit
-      stringImpl::pad<false /*lpad*/, false /*isAscii*/>(
-          result, input, limit, {" "});
+    if (numCharacters < limit) {
+      // rpad spaces(0x20) to limit.
+      stringImpl::pad<false /*lpad*/, isAscii>(result, input, limit, {" "});
     } else {
       result.setNoCopy(input);
     }
@@ -1708,14 +1700,14 @@ struct ReadSidePaddingFunction {
   FOLLY_ALWAYS_INLINE void call(
       out_type<Varchar>& result,
       const arg_type<Varchar>& input,
-      const int32_t& limit) {
+      int32_t limit) {
     doCall<false>(result, input, limit);
   }
 
   FOLLY_ALWAYS_INLINE void callAscii(
       out_type<Varchar>& result,
       const arg_type<Varchar>& input,
-      const int32_t& limit) {
+      int32_t limit) {
     doCall<true>(result, input, limit);
   }
 };

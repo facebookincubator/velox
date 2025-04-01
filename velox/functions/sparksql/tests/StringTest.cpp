@@ -1080,19 +1080,27 @@ TEST_F(StringTest, varcharTypeWriteSideCheck) {
   EXPECT_EQ(varcharTypeWriteSideCheck("世界", 2), "世界");
 
   // Error cases - string length > limit even after trimming trailing spaces
-  EXPECT_THROW(varcharTypeWriteSideCheck("abcd", 3), VeloxUserError);
-  EXPECT_THROW(varcharTypeWriteSideCheck("世界人", 2), VeloxUserError);
-  EXPECT_THROW(varcharTypeWriteSideCheck("abc def", 5), VeloxUserError);
+  VELOX_ASSERT_USER_THROW(
+      varcharTypeWriteSideCheck("abcd", 3),
+      "Exceeds char/varchar type length limitation: 3");
+  VELOX_ASSERT_USER_THROW(
+      varcharTypeWriteSideCheck("世界人", 2),
+      "Exceeds char/varchar type length limitation: 2");
+  VELOX_ASSERT_USER_THROW(
+      varcharTypeWriteSideCheck("abc def", 5),
+      "Exceeds char/varchar type length limitation: 5");
 
   // Null input cases
   EXPECT_EQ(varcharTypeWriteSideCheck(std::nullopt, 5), std::nullopt);
 
   // Edge cases - limit is zero
-  EXPECT_THROW(varcharTypeWriteSideCheck("abc", 0), VeloxUserError);
+  VELOX_ASSERT_USER_THROW(
+      varcharTypeWriteSideCheck("abc", 0),
+      "Exceeds char/varchar type length limitation: 0");
   EXPECT_EQ(varcharTypeWriteSideCheck("   ", 0), "");
 
   // Edge cases - limit is negative
-  EXPECT_THROW(varcharTypeWriteSideCheck("abc", -1), VeloxRuntimeError);
+  VELOX_ASSERT_USER_THROW(varcharTypeWriteSideCheck("abc", -1), "(-1 vs. 0)");
 
   // Edge cases - input string is all spaces
   EXPECT_EQ(varcharTypeWriteSideCheck("   ", 2), "  ");
@@ -1132,9 +1140,15 @@ TEST_F(StringTest, charTypeWriteSideCheck) {
 
   // Case 3c: Failed trimming (still too long after trimming all trailing
   // spaces)
-  EXPECT_THROW(charTypeWriteSideCheck("abcd", 3), VeloxUserError);
-  EXPECT_THROW(charTypeWriteSideCheck("世界人", 2), VeloxUserError);
-  EXPECT_THROW(charTypeWriteSideCheck("a世界b", 3), VeloxUserError);
+  VELOX_ASSERT_USER_THROW(
+      charTypeWriteSideCheck("abcd", 3),
+      "Exceeds char/varchar type length limitation: 3");
+  VELOX_ASSERT_USER_THROW(
+      charTypeWriteSideCheck("世界人", 2),
+      "Exceeds char/varchar type length limitation: 2");
+  VELOX_ASSERT_USER_THROW(
+      charTypeWriteSideCheck("a世界b", 3),
+      "Exceeds char/varchar type length limitation: 3");
 
   // Edge cases
   // Null input
@@ -1142,11 +1156,13 @@ TEST_F(StringTest, charTypeWriteSideCheck) {
 
   // Limit is zero
   EXPECT_EQ(charTypeWriteSideCheck("", 0), "");
-  EXPECT_THROW(charTypeWriteSideCheck("a", 0), VeloxUserError);
+  VELOX_ASSERT_USER_THROW(
+      charTypeWriteSideCheck("a", 0),
+      "Exceeds char/varchar type length limitation: 0");
   EXPECT_EQ(charTypeWriteSideCheck(" ", 0), "");
 
   // Limit is negative
-  EXPECT_THROW(charTypeWriteSideCheck("abc", -1), VeloxRuntimeError);
+  VELOX_ASSERT_USER_THROW(charTypeWriteSideCheck("abc", -1), "(-1 vs. 0)");
 }
 
 TEST_F(StringTest, readSideCharPadding) {
