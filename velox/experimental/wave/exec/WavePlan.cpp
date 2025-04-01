@@ -472,7 +472,6 @@ bool CompileState::tryPlanOperator(
     addSegment(BoundaryType::kAggregation, node, nullptr);
     auto step = makeStep<AggregateProbe>();
     auto* state = newState(StateKind::kGroupBy, node->id(), "");
-    auto aggregationStep = node->step();
     step->state = state;
     step->id = ++aggCounter_;
     step->rows = newOperand(BIGINT(), "rows");
@@ -503,7 +502,7 @@ bool CompileState::tryPlanOperator(
         }
       }
       auto* func = makeStep<AggregateUpdate>();
-      func->step = aggregationStep;
+      func->step = agg->step();
       func->name = agg.call->name();
       func->accumulatorIdx = i;
       func->rows = step->rows;
