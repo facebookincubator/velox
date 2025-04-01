@@ -102,59 +102,7 @@ struct ExtractJsonTypeImpl {
     static simdjson::error_code
     apply(Input value, exec::GenericWriter& writer, bool /*isRoot*/) {
       if (writer.type() == DATE()) {
-        SIMDJSON_ASSIGN_OR_RAISE(auto type, value.type());
-        std::string_view s;
-        switch (type) {
-          case simdjson::ondemand::json_type::string: {
-            SIMDJSON_ASSIGN_OR_RAISE(s, value.get_string());
-            break;
-          }
-          default:
-            return simdjson::INCORRECT_TYPE;
-        }
-        int32_t day = 0;
-        // If there are fewer than four digits, the value is treated as the
-        // number of days since 1970-01-01.
-        if (s.size() < 4) {
-          auto result =
-              folly::tryTo<int32_t>(std::string_view(s.data(), s.size()));
-          if (!result.hasError()) {
-            day = result.value();
-          } else {
-            return simdjson::INCORRECT_TYPE;
-          }
-        } else {
-          auto days =
-              util::fromDateString(StringView(s), util::ParseMode::kSparkCast);
-          if (!days.hasError()) {
-            day = days.value();
-          } else {
-            if (stringImpl::stringPosition<true /*isAscii*/>(
-                    std::string_view(s.data(), s.size()), kGMT, 1) > 0) {
-              // remove 'GMT'.
-              std::string dateStr;
-              dateStr.reserve(s.size());
-              auto size = stringCore::replace<true /*ignoreEmptyReplaced*/>(
-                  dateStr.data(),
-                  std::string_view(s.data(), s.size()),
-                  kGMT,
-                  std::string_view(),
-                  false);
-              days = util::fromDateString(
-                  StringView(dateStr.data(), size),
-                  util::ParseMode::kSparkCast);
-              if (!days.hasError()) {
-                day = days.value();
-              } else {
-                return simdjson::INCORRECT_TYPE;
-              }
-            } else {
-              return simdjson::INCORRECT_TYPE;
-            }
-          }
-        }
-        writer.castTo<int32_t>() = day;
-        return simdjson::SUCCESS;
+        return castJsonToDate(value, writer);
       } else {
         return castJsonToInt<int32_t>(value, writer);
       }
@@ -324,6 +272,62 @@ struct ExtractJsonTypeImpl {
       return simdjson::SUCCESS;
     }
   };
+
+  static simdjson::error_code castJsonToDate(
+      Input value,
+      exec::GenericWriter& writer) {
+    SIMDJSON_ASSIGN_OR_RAISE(auto type, value.type());
+    std::string_view s;
+    switch (type) {
+      case simdjson::ondemand::json_type::string: {
+        SIMDJSON_ASSIGN_OR_RAISE(s, value.get_string());
+        break;
+      }
+      default:
+        return simdjson::INCORRECT_TYPE;
+    }
+    int32_t day = 0;
+    // If there are fewer than four digits, the value is treated as the
+    // number of days since 1970-01-01.
+    if (s.size() < 4) {
+      auto result = folly::tryTo<int32_t>(std::string_view(s.data(), s.size()));
+      if (!result.hasError()) {
+        day = result.value();
+      } else {
+        return simdjson::INCORRECT_TYPE;
+      }
+    } else {
+      auto days =
+          util::fromDateString(StringView(s), util::ParseMode::kSparkCast);
+      if (!days.hasError()) {
+        day = days.value();
+      } else {
+        if (stringImpl::stringPosition<true /*isAscii*/>(
+                std::string_view(s.data(), s.size()), kGMT, 1) > 0) {
+          // remove 'GMT'.
+          std::string dateStr;
+          dateStr.reserve(s.size());
+          auto size = stringCore::replace<true /*ignoreEmptyReplaced*/>(
+              dateStr.data(),
+              std::string_view(s.data(), s.size()),
+              kGMT,
+              std::string_view(),
+              false);
+          days = util::fromDateString(
+              StringView(dateStr.data(), size), util::ParseMode::kSparkCast);
+          if (!days.hasError()) {
+            day = days.value();
+          } else {
+            return simdjson::INCORRECT_TYPE;
+          }
+        } else {
+          return simdjson::INCORRECT_TYPE;
+        }
+      }
+    }
+    writer.castTo<int32_t>() = day;
+    return simdjson::SUCCESS;
+  }
 
   template <typename T>
   static simdjson::error_code castJsonToInt(
