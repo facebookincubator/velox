@@ -117,7 +117,8 @@ TEST_F(ParquetReaderTest, parseEmptyNestedList) {
   //
   // All 1000 rows in one row group.
   // Data is in RLE_DICTIONARY Snappy format.
-  const std::string sample(getExampleFilePath("parse_empty_nested_list.parquet"));
+  const std::string sample(
+      getExampleFilePath("parse_empty_nested_list.parquet"));
 
   dwio::common::ReaderOptions readerOptions{leafPool_.get()};
   auto reader = createReader(sample, readerOptions);
@@ -146,40 +147,21 @@ TEST_F(ParquetReaderTest, parseEmptyNestedList) {
   EXPECT_EQ(childMsgA->childByName("b"), childMsgAB);
 
   // Ensure actual data can be read
-  auto schema = ROW({
-    "msg"
-  }, {
-    ROW({
-      "a"
-    }, {
-      ROW({
-        "b"
-      }, {
-        ARRAY(INTEGER())
-      })
-    })
-  });
+  auto schema = ROW({"msg"}, {ROW({"a"}, {ROW({"b"}, {ARRAY(INTEGER())})})});
   auto rowReaderOpts = getReaderOpts(schema);
   auto scanSpec = makeScanSpec(schema);
   rowReaderOpts.setScanSpec(scanSpec);
   auto rowReader = reader->createRowReader(rowReaderOpts);
 
-  auto expected = makeRowVector({
-      makeRowVector({
-          makeRowVector({
-              makeArrayVector<int32_t>(
-                1000,
-                // Create empty list
-                [](auto) { return 0; },
-                [](auto) { return 0; },
-                [](auto) { return false; }
-              )
-          })
-      })
-  });
+  auto expected =
+      makeRowVector({makeRowVector({makeRowVector({makeArrayVector<int32_t>(
+          1000,
+          // Create empty list
+          [](auto) { return 0; },
+          [](auto) { return 0; },
+          [](auto) { return false; })})})});
 
-  assertReadWithReaderAndExpected(
-      schema, *rowReader, expected, *leafPool_);
+  assertReadWithReaderAndExpected(schema, *rowReader, expected, *leafPool_);
 }
 
 TEST_F(ParquetReaderTest, parseUnannotatedList) {
