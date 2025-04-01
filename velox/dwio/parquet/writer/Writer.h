@@ -125,7 +125,7 @@ struct WriterOptions : public dwio::common::WriterOptions {
   static constexpr const char* kParquetHiveConnectorEnableDictionary =
       "hive.parquet.writer.enable-dictionary";
   static constexpr const char* kParquetSessionDictionaryPageSizeLimit =
-    "hive.parquet.writer.dictionary_page_size_limit";
+      "hive.parquet.writer.dictionary_page_size_limit";
   static constexpr const char* kParquetHiveConnectorDictionaryPageSizeLimit =
       "hive.parquet.writer.dictionary-page-size-limit";
   static constexpr const char* kParquetSessionDataPageVersion =

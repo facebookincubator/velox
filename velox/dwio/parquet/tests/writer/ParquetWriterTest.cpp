@@ -105,12 +105,13 @@ TEST_F(ParquetWriterTest, dictionaryEncodingWithDictionaryPageSize) {
   // page size limit, the default is 1MB (same as data page default size) then
   // there will be only one data page contains all data encoded with dictionary
   std::unordered_map<std::string, std::string> configFromFile = {
-    {parquet::WriterOptions::kParquetHiveConnectorEnableDictionary, "true"},
-    {parquet::WriterOptions::kParquetHiveConnectorDictionaryPageSizeLimit, "1B"},
+      {parquet::WriterOptions::kParquetHiveConnectorEnableDictionary, "true"},
+      {parquet::WriterOptions::kParquetHiveConnectorDictionaryPageSizeLimit,
+       "1B"},
   };
   std::unordered_map<std::string, std::string> sessionProperties = {
-    {parquet::WriterOptions::kParquetSessionEnableDictionary, "true"},
-    {parquet::WriterOptions::kParquetSessionDictionaryPageSizeLimit, "1B"},
+      {parquet::WriterOptions::kParquetSessionEnableDictionary, "true"},
+      {parquet::WriterOptions::kParquetSessionDictionaryPageSizeLimit, "1B"},
   };
   auto connectorConfig = config::ConfigBase(std::move(configFromFile));
   auto connectorSessionProperties =
@@ -122,8 +123,7 @@ TEST_F(ParquetWriterTest, dictionaryEncodingWithDictionaryPageSize) {
       makeFlatVector<int16_t>(kRows, [](auto row) { return row + 1; }),
   });
 
-  writerOptions.processConfigs(
-            connectorConfig, connectorSessionProperties);
+  writerOptions.processConfigs(connectorConfig, connectorSessionProperties);
   auto writer = std::make_unique<parquet::Writer>(
       std::move(sink), writerOptions, rootPool_, schema);
   writer->write(data);
@@ -146,9 +146,8 @@ TEST_F(ParquetWriterTest, dictionaryEncodingWithDictionaryPageSize) {
   // the declaration of configFromFile)
   auto inputStream = std::make_unique<SeekableFileInputStream>(
       std::move(file),
-      colChunkPtr.dataPageOffset()
-      + kFirstDataPageCompressedSize
-      + kFirstDataPageHeaderSize,
+      colChunkPtr.dataPageOffset() + kFirstDataPageCompressedSize +
+          kFirstDataPageHeaderSize,
       150,
       *leafPool_,
       LogType::TEST);
@@ -175,10 +174,10 @@ TEST_F(ParquetWriterTest, dictionaryEncodingOff) {
   writerOptions.memoryPool = leafPool_.get();
 
   std::unordered_map<std::string, std::string> configFromFile = {
-    {parquet::WriterOptions::kParquetHiveConnectorEnableDictionary, "false"},
+      {parquet::WriterOptions::kParquetHiveConnectorEnableDictionary, "false"},
   };
   std::unordered_map<std::string, std::string> sessionProperties = {
-    {parquet::WriterOptions::kParquetSessionEnableDictionary, "false"},
+      {parquet::WriterOptions::kParquetSessionEnableDictionary, "false"},
   };
   auto connectorConfig = config::ConfigBase(std::move(configFromFile));
   auto connectorSessionProperties =
@@ -190,8 +189,7 @@ TEST_F(ParquetWriterTest, dictionaryEncodingOff) {
       makeFlatVector<int16_t>(kRows, [](auto row) { return row + 1; }),
   });
 
-  writerOptions.processConfigs(
-            connectorConfig, connectorSessionProperties);
+  writerOptions.processConfigs(connectorConfig, connectorSessionProperties);
   auto writer = std::make_unique<parquet::Writer>(
       std::move(sink), writerOptions, rootPool_, schema);
   writer->write(data);

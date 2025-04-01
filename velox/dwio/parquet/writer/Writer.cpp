@@ -131,15 +131,15 @@ std::shared_ptr<WriterProperties> getArrowParquetWriterOptions(
     const std::unique_ptr<DefaultFlushPolicy>& flushPolicy) {
   auto builder = WriterProperties::Builder();
   WriterProperties::Builder* properties = &builder;
-  if (options.enableDictionary.value_or(facebook::velox::parquet::arrow::DEFAULT_IS_DICTIONARY_ENABLED)) {
+  if (options.enableDictionary.value_or(
+          facebook::velox::parquet::arrow::DEFAULT_IS_DICTIONARY_ENABLED)) {
     properties = properties->enable_dictionary();
   } else {
     properties = properties->disable_dictionary();
   }
-  properties =
-      properties->dictionary_pagesize_limit(
-        options.dictionaryPageSizeLimit.value_or(
-            facebook::velox::parquet::arrow::DEFAULT_DICTIONARY_PAGE_SIZE_LIMIT));
+  properties = properties->dictionary_pagesize_limit(
+      options.dictionaryPageSizeLimit.value_or(
+          facebook::velox::parquet::arrow::DEFAULT_DICTIONARY_PAGE_SIZE_LIMIT));
   properties = properties->compression(getArrowParquetCompression(
       options.compressionKind.value_or(common::CompressionKind_NONE)));
   for (const auto& columnCompressionValues : options.columnCompressionsMap) {
@@ -263,7 +263,9 @@ std::optional<bool> isParquetEnableDictionary(
     } else if ("false" == enableDictionary) {
       return false;
     } else {
-      VELOX_FAIL("Unsupported enable dictionary flag (true/false): {}", enableDictionary.value());
+      VELOX_FAIL(
+          "Unsupported enable dictionary flag (true/false): {}",
+          enableDictionary.value());
     }
   }
   return std::nullopt;
@@ -275,9 +277,14 @@ std::optional<int64_t> getParquetPageSize(
   if (const auto pageSize = config.get<std::string>(configKey)) {
     std::string trimmed;
     // Remove spaces if any
-    std::remove_copy_if(pageSize->begin(), pageSize->end(), std::back_inserter(trimmed), ::isspace);
+    std::remove_copy_if(
+        pageSize->begin(),
+        pageSize->end(),
+        std::back_inserter(trimmed),
+        ::isspace);
     size_t firstNonDigitPos{0};
-    while (firstNonDigitPos < trimmed.size() && std::isdigit(trimmed[firstNonDigitPos])) {
+    while (firstNonDigitPos < trimmed.size() &&
+           std::isdigit(trimmed[firstNonDigitPos])) {
       firstNonDigitPos++;
     }
     int64_t value = std::stoll(trimmed.substr(0, firstNonDigitPos));
