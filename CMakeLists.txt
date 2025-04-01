@@ -14,6 +14,14 @@
 cmake_minimum_required(VERSION 3.28)
 message(STATUS "Building using CMake version: ${CMAKE_VERSION}")
 
+# Check for SVE support
+execute_process(COMMAND lscpu OUTPUT_VARIABLE LSCPU_OUTPUT)
+string(FIND "${LSCPU_OUTPUT}" "sve" SVE_FOUND)
+if(NOT SVE_FOUND EQUAL -1)
+    set(CMAKE_C_COMPILER "/usr/bin/gcc-12" CACHE STRING "C Compiler" FORCE)
+    set(CMAKE_CXX_COMPILER "/usr/bin/g++-12" CACHE STRING "C++ Compiler" FORCE)
+endif()
+
 # The policy allows us to change options without caching.
 cmake_policy(SET CMP0077 NEW)
 set(CMAKE_POLICY_DEFAULT_CMP0077 NEW)
