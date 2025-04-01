@@ -50,10 +50,10 @@ def generate_tpch_data(
             "output_files": List[str],  # List of generated file paths
         }
     """
-    output_path = os.path.join(path, table)
+    output_path = os.path.abspath(os.path.join(path, table))
 
     if not os.path.exists(output_path):
-        os.mkdir(output_path)
+        os.makedirs(output_path)
     elif os.listdir(output_path):
         raise Exception(f"Refusing to write to non-empty directory '{output_path}'.")
 
