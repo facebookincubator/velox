@@ -502,7 +502,7 @@ bool CompileState::tryPlanOperator(
         }
       }
       auto* func = makeStep<AggregateUpdate>();
-      func->step = agg->step();
+      func->step = agg.step();
       func->name = agg.call->name();
       func->accumulatorIdx = i;
       func->rows = step->rows;
