@@ -57,6 +57,10 @@ def generate_tpch_data(
     elif os.listdir(output_path):
         raise Exception(f"Refusing to write to non-empty directory '{output_path}'.")
 
+    # Hack to prevent an extension from being thrown when the function is run multiple times in the same python session,
+    # register_* should handle this or there needs to be a function to check if a connector exits
+    unregister(TPCH_CONNECTOR_NAME)
+    unregister(HIVE_CONNECTOR_NAME)
     register_tpch(TPCH_CONNECTOR_NAME)
     register_hive(HIVE_CONNECTOR_NAME)
 
