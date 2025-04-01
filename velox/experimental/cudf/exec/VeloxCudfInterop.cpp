@@ -14,42 +14,16 @@
  * limitations under the License.
  */
 
-#include "velox/experimental/cudf/exec/NvtxHelper.h"
 #include "velox/experimental/cudf/exec/ToCudf.h"
 #include "velox/experimental/cudf/exec/VeloxCudfInterop.h"
 
-#include "velox/common/memory/Memory.h"
-#include "velox/type/Type.h"
-#include "velox/vector/BaseVector.h"
-#include "velox/vector/ComplexVector.h"
-#include "velox/vector/DictionaryVector.h"
-#include "velox/vector/FlatVector.h"
 #include "velox/vector/arrow/Bridge.h"
 
-#include <cudf/column/column.hpp>
-#include <cudf/column/column_factories.hpp>
-#include <cudf/detail/utilities/vector_factories.hpp>
 #include <cudf/interop.hpp>
-#include <cudf/strings/string_view.hpp>
-#include <cudf/table/table.hpp>
-#include <cudf/types.hpp>
-#include <cudf/utilities/error.hpp>
-#include <cudf/utilities/type_dispatcher.hpp>
-
-#include <rmm/cuda_stream_view.hpp>
-#include <rmm/device_buffer.hpp>
-#include <rmm/mr/device/per_device_resource.hpp>
-
-#include <nvtx3/nvtx3.hpp>
-#include <thrust/copy.h>
-#include <thrust/execution_policy.h>
 
 #include <arrow/c/bridge.h>
 #include <arrow/io/interfaces.h>
 #include <arrow/table.h>
-
-#include <functional>
-#include <numeric>
 
 namespace facebook::velox::cudf_velox {
 

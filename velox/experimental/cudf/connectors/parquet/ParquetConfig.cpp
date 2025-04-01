@@ -21,7 +21,6 @@
 #include <cudf/types.hpp>
 
 #include <optional>
-#include <string>
 
 namespace facebook::velox::cudf_velox::connector::parquet {
 

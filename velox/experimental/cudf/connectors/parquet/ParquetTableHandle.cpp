@@ -14,14 +14,12 @@
  * limitations under the License.
  */
 
-#include <string>
-#include <vector>
+#include "velox/experimental/cudf/connectors/parquet/ParquetTableHandle.h"
 
 #include "velox/connectors/Connector.h"
-#include "velox/experimental/cudf/connectors/parquet/ParquetTableHandle.h"
 #include "velox/type/Type.h"
 
-#include <cudf/types.hpp>
+#include <string>
 
 namespace facebook::velox::cudf_velox::connector::parquet {
 

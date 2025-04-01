@@ -29,8 +29,6 @@
 #include <cudf/stream_compaction.hpp>
 #include <cudf/unary.hpp>
 
-#include <optional>
-
 namespace {
 
 using namespace facebook::velox;

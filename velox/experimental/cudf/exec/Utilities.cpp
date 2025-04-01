@@ -32,10 +32,6 @@
 
 #include <common/base/Exceptions.h>
 
-#include <cstdlib>
-#include <memory>
-#include <string_view>
-
 namespace facebook::velox::cudf_velox {
 
 namespace {

@@ -14,26 +14,21 @@
  * limitations under the License.
  */
 
-#include <filesystem>
-#include <limits>
-#include <memory>
-#include <string>
-
 #include "velox/experimental/cudf/connectors/parquet/ParquetConfig.h"
 #include "velox/experimental/cudf/connectors/parquet/ParquetConnectorSplit.h"
 #include "velox/experimental/cudf/connectors/parquet/ParquetDataSource.h"
 #include "velox/experimental/cudf/connectors/parquet/ParquetTableHandle.h"
-
 #include "velox/experimental/cudf/exec/ToCudf.h"
 #include "velox/experimental/cudf/exec/Utilities.h"
 #include "velox/experimental/cudf/exec/VeloxCudfInterop.h"
 #include "velox/experimental/cudf/vector/CudfVector.h"
 
-#include <cudf/copying.hpp>
 #include <cudf/io/parquet.hpp>
 #include <cudf/io/types.hpp>
-#include <cudf/table/table.hpp>
-#include <cudf/table/table_view.hpp>
+
+#include <filesystem>
+#include <memory>
+#include <string>
 
 namespace facebook::velox::cudf_velox::connector::parquet {
 

@@ -14,9 +14,9 @@
  * limitations under the License.
  */
 
-#include <string>
-
 #include "velox/experimental/cudf/connectors/parquet/ParquetConnectorSplit.h"
+
+#include <string>
 
 namespace facebook::velox::cudf_velox::connector::parquet {
 

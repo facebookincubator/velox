@@ -28,8 +28,6 @@
 #include <cudf/join.hpp>
 #include <cudf/table/table.hpp>
 
-#include <string>
-
 namespace facebook::velox::cudf_velox {
 
 class CudfHashJoinBridge : public exec::JoinBridge {
