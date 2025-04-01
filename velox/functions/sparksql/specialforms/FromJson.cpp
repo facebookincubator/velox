@@ -290,7 +290,7 @@ struct ExtractJsonTypeImpl {
     // If the value has fewer than four digits, it is interpreted as the number
     // of days since January 1, 1970.
     if (s.size() < 4) {
-      auto result = folly::tryTo<int32_t>(std::string_view(s.data(), s.size()));
+      auto result = folly::tryTo<int32_t>(s);
       if (!result.hasError()) {
         day = result.value();
       } else {
