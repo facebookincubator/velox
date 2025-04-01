@@ -35,6 +35,8 @@
 #include "velox/exec/tests/utils/PlanBuilder.h"
 #include "velox/exec/tests/utils/TempDirectoryPath.h"
 
+#include <re2/re2.h>
+
 #include <string>
 
 using namespace facebook::velox;
