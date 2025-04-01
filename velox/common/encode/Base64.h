@@ -97,10 +97,6 @@ class Base64 {
       std::string_view input,
       std::string& output,
       const ReverseIndex& reverseIndex);
-
-  VELOX_FRIEND_TEST(Base64Test, checksPadding);
-  VELOX_FRIEND_TEST(Base64Test, countsPaddingCorrectly);
-  VELOX_FRIEND_TEST(Base64Test, calculateDecodedSizeProperSize);
 };
 
 } // namespace facebook::velox::encoding

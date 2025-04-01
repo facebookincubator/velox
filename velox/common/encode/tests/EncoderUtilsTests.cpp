@@ -36,41 +36,6 @@ TEST_F(EncoderUtilsTest, numPadding) {
   EXPECT_EQ(2, numPadding("AB=="));
 }
 
-TEST_F(EncoderUtilsTest, CalculateDecodedSizeTest) {
-  size_t inputSize = 8;
-  size_t decodedSize = 0;
-
-  EXPECT_EQ(
-      calculateDecodedSize(
-          "abcdabcd",
-          inputSize,
-          decodedSize,
-          binaryBlockByteSize,
-          encodedBlockByteSize),
-      Status::OK());
-  EXPECT_EQ(decodedSize, 6);
-
-  inputSize = 8;
-  EXPECT_EQ(
-      calculateDecodedSize(
-          "abcdab==",
-          inputSize,
-          decodedSize,
-          binaryBlockByteSize,
-          encodedBlockByteSize),
-      Status::OK());
-  EXPECT_EQ(decodedSize, 4);
-
-  EXPECT_EQ(
-      calculateDecodedSize(
-          "abcdab=",
-          inputSize,
-          decodedSize,
-          binaryBlockByteSize,
-          encodedBlockByteSize),
-      Status::UserError("decode() - invalid input string length."));
-}
-
 TEST_F(EncoderUtilsTest, CalculateEncodedSizeTest) {
   EXPECT_EQ(
       calculateEncodedSize(3, true, binaryBlockByteSize, encodedBlockByteSize),
@@ -86,57 +51,22 @@ TEST_F(EncoderUtilsTest, CalculateEncodedSizeTest) {
       0);
 }
 
-TEST_F(EncoderUtilsTest, Base64ReverseLookupTest) {
+TEST_F(EncoderUtilsTest, BaseReverseLookupTest) {
   std::array<uint8_t, 256> reverseIndex{};
   reverseIndex.fill(255);
   reverseIndex['A'] = 0;
   reverseIndex['B'] = 1;
-  uint8_t reverseLookupValue = 0;
+  uint8_t reverseLookupValue = 2;
 
   EXPECT_EQ(
-      base64ReverseLookup('A', reverseIndex, reverseLookupValue), Status::OK());
-  EXPECT_EQ(reverseLookupValue, 0);
+    reverseLookup('A', reverseIndex, reverseLookupValue).value(), 0);
 
   EXPECT_EQ(
-      base64ReverseLookup('B', reverseIndex, reverseLookupValue), Status::OK());
-  EXPECT_EQ(reverseLookupValue, 1);
+    reverseLookup('B', reverseIndex, reverseLookupValue).value(), 1);
 
   EXPECT_EQ(
-      base64ReverseLookup('Z', reverseIndex, reverseLookupValue),
-      Status::UserError("decode() - contains invalid character 'Z'"));
-}
-
-TEST_F(EncoderUtilsTest, CheckForwardIndexTest) {
-  constexpr std::string_view charset =
-      "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-  std::array<uint8_t, 64> reverseIndex{};
-
-  for (size_t i = 0; i < charset.size(); ++i) {
-    reverseIndex[static_cast<uint8_t>(charset[i])] = i;
-  }
-
-  EXPECT_TRUE(checkForwardIndex(63, charset, reverseIndex));
-}
-
-TEST_F(EncoderUtilsTest, FindCharacterInCharsetTest) {
-  constexpr std::string_view charset =
-      "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-
-  EXPECT_TRUE(findCharacterInCharset(charset, 0, 'A'));
-  EXPECT_FALSE(findCharacterInCharset(charset, 0, 'z'));
-}
-
-TEST_F(EncoderUtilsTest, CheckReverseIndexTest) {
-  constexpr std::string_view charset =
-      "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-  std::array<uint8_t, 256> reverseIndex{};
-
-  reverseIndex.fill(255);
-  for (size_t i = 0; i < charset.size(); ++i) {
-    reverseIndex[static_cast<uint8_t>(charset[i])] = i;
-  }
-
-  EXPECT_TRUE(checkReverseIndex(255, charset, reverseIndex));
+      reverseLookup('Z', reverseIndex, reverseLookupValue).error(),
+      Status::UserError("decode() - invalid input string: invalid character 'Z'"));
 }
 
 } // namespace facebook::velox::encoding
