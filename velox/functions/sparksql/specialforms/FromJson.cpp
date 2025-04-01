@@ -287,8 +287,8 @@ struct ExtractJsonTypeImpl {
         return simdjson::INCORRECT_TYPE;
     }
     int32_t day = 0;
-    // If there are fewer than four digits, the value is treated as the
-    // number of days since 1970-01-01.
+    // If the value has fewer than four digits, it is interpreted as the number
+    // of days since January 1, 1970.
     if (s.size() < 4) {
       auto result = folly::tryTo<int32_t>(std::string_view(s.data(), s.size()));
       if (!result.hasError()) {
@@ -302,19 +302,13 @@ struct ExtractJsonTypeImpl {
       if (!days.hasError()) {
         day = days.value();
       } else {
-        if (stringImpl::stringPosition<true /*isAscii*/>(
-                std::string_view(s.data(), s.size()), kGMT, 1) > 0) {
-          // remove 'GMT'.
-          std::string dateStr;
-          dateStr.reserve(s.size());
+        if (stringImpl::stringPosition<true /*isAscii*/>(s, kGMT, 1) > 0) {
+          // Remove 'GMT'.
+          char dateStr[s.size()];
           auto size = stringCore::replace<true /*ignoreEmptyReplaced*/>(
-              dateStr.data(),
-              std::string_view(s.data(), s.size()),
-              kGMT,
-              std::string_view(),
-              false);
+              dateStr, s, kGMT, std::string_view(), false);
           days = util::fromDateString(
-              StringView(dateStr.data(), size), util::ParseMode::kSparkCast);
+              StringView(dateStr, size), util::ParseMode::kSparkCast);
           if (!days.hasError()) {
             day = days.value();
           } else {
