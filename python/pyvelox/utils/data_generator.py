@@ -19,43 +19,55 @@ import logging
 import os
 import sys
 
-from velox.py.file import File
-from velox.py.plan_builder import PlanBuilder
-from velox.py.runner import LocalRunner, register_hive, register_tpch
-
+from pyvelox.file import File
+from pyvelox.plan_builder import PlanBuilder
+from pyvelox.runner import LocalRunner, register_hive, register_tpch
 
 TPCH_CONNECTOR_NAME = "tpch"
 HIVE_CONNECTOR_NAME = "hive"
 
 
-def generate_data(args) -> int:
+def generate_tpch_data(
+    path: str, table="lineitem", num_files=8, scale_factor=0.001, file_format="dwrf"
+) -> dict:
     """
     Runs PyVelox query plan that generate TPC-H data using the TpchConnector
     in Velox, and writes to a given set of output files.
+
+    Args:
+        path: The directory where generated files will be stored, has to be empty
+        table: The TPC-H table to generate
+        num_files: Number of output files to generate
+        scale_factor: TPC-H scale factor for the given table
+        file_format: The file format to use for the written files
+
+    Returns:
+        A dictionary containing stats about the generated data:
+        {
+            "row_count": int,  # Total number of rows written
+            "file_count": int,  # Number of files generated
+            "output_path": str,  # Full path to the output directory
+            "output_files": List[str],  # List of generated file paths
+        }
     """
-    output_path = os.path.join(args.path, args.table)
+    output_path = os.path.join(path, table)
 
     if not os.path.exists(output_path):
         os.mkdir(output_path)
     elif os.listdir(output_path):
         raise Exception(f"Refusing to write to non-empty directory '{output_path}'.")
 
-    logging.info(
-        f"Generating TPC-H '{args.table}' using scale factor "
-        f"{args.scale_factor} - ({args.num_files} output files)."
-    )
-
     register_tpch(TPCH_CONNECTOR_NAME)
     register_hive(HIVE_CONNECTOR_NAME)
 
     plan_builder = PlanBuilder()
     plan_builder.tpch_gen(
-        table_name=args.table,
+        table_name=table,
         connector_id=TPCH_CONNECTOR_NAME,
-        scale_factor=args.scale_factor,
-        num_parts=args.num_files,
+        scale_factor=scale_factor,
+        num_parts=num_files,
     ).table_write(
-        output_path=File(path=output_path, format_str=args.file_format),
+        output_path=File(path=output_path, format_str=file_format),
         connector_id=HIVE_CONNECTOR_NAME,
     )
 
@@ -64,7 +76,7 @@ def generate_data(args) -> int:
     output_files = []
     row_count = 0
 
-    for vector in runner.execute(max_drivers=args.num_files):
+    for vector in runner.execute(max_drivers=num_files):
         # Parse table writer's output to extract file names and other stats.
         output_json = json.loads(vector.child_at(1)[1])
 
@@ -78,17 +90,18 @@ def generate_data(args) -> int:
 
     file_num = 0
     for output_file in output_files:
-        os.rename(
-            output_file,
-            os.path.join(output_path, f"{args.table}-{file_num}.{args.file_format}"),
-        )
+        new_path = os.path.join(output_path, f"{table}-{file_num}.{file_format}")
+        os.rename(output_file, new_path)
         file_num += 1
 
     file_count = len(output_files)
-    logging.info(
-        f"Written {row_count} records to {file_count} output files at '{output_path}'"
-    )
-    return 0
+
+    return {
+        "row_count": row_count,
+        "file_count": file_count,
+        "output_path": output_path,
+        "output_files": output_files,
+    }
 
 
 def parse_args() -> argparse.Namespace:
@@ -128,10 +141,22 @@ def parse_args() -> argparse.Namespace:
 
 
 def main() -> int:
+    args = parse_args()
     logging.basicConfig(
         level=logging.INFO, format="%(asctime)-s %(levelname)s:%(lineno)d: %(message)s"
     )
-    return generate_data(parse_args())
+    logging.info(
+        f"Generating TPC-H '{args.table}' using scale factor "
+        f"{args.scale_factor} - ({args.num_files} output files)."
+    )
+
+    result = generate_tpch_data(**vars(args))
+
+    logging.info(
+        f"Written {result.row_count} records to {result.file_count} output files at '{result.output_path}'"
+    )
+
+    return 0 if result else 1
 
 
 if __name__ == "__main__":
