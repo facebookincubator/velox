@@ -157,7 +157,6 @@ static_assert(
 //         kBase64UrlReverseIndexTable),
 //     "kBase64UrlReverseIndexTable has incorrect entries.");
 
-// Implementation of Base64 encoding and decoding functions.
 // static
 template <class T>
 std::string Base64::encodeImpl(
@@ -202,12 +201,13 @@ void Base64::encodeImpl(
     bool includePadding,
     std::string& output) {
   auto inputSize = input.size();
+  output.clear();
   if (inputSize == 0) {
     return;
   }
 
   size_t encodedSize = calculateEncodedSize(inputSize, includePadding);
-  output.reserve(output.size() + encodedSize);
+  output.reserve(encodedSize);
 
   auto inputIterator = input.begin();
 
@@ -249,66 +249,17 @@ void Base64::encodeImpl(
 }
 
 // static
-std::string Base64::encode(folly::StringPiece input) {
+std::string Base64::encode(std::string_view input) {
   return encodeImpl(input, kBase64Charset, true);
 }
 
 // static
 std::string Base64::encode(const char* input, size_t inputSize) {
-  return encode(folly::StringPiece(input, inputSize));
-}
-
-namespace {
-
-// This is a quick and simple iterator implementation for an IOBuf so that the
-// template that uses iterators can work on IOBuf chains. It only implements
-// postfix increment because that is all the algorithm needs, and it is a no-op
-// since the read<>() function already increments the cursor.
-class IOBufWrapper {
- private:
-  class Iterator {
-   public:
-    explicit Iterator(const folly::IOBuf* inputBuffer) : cursor_(inputBuffer) {}
-
-    Iterator& operator++(int32_t) {
-      // This is a no-op since reading from the Cursor has already moved the
-      // position.
-      return *this;
-    }
-
-    uint8_t operator*() {
-      // This will read _and_ increment the cursor.
-      return cursor_.read<uint8_t>();
-    }
-
-   private:
-    folly::io::Cursor cursor_;
-  };
-
- public:
-  explicit IOBufWrapper(const folly::IOBuf* inputBuffer)
-      : input_(inputBuffer) {}
-  size_t size() const {
-    return input_->computeChainDataLength();
-  }
-
-  Iterator begin() const {
-    return Iterator(input_);
-  }
-
- private:
-  const folly::IOBuf* input_;
-};
-
-} // namespace
-
-// static
-std::string Base64::encode(const folly::IOBuf* inputBuffer) {
-  return encodeImpl(IOBufWrapper(inputBuffer), kBase64Charset, true);
+  return encodeImpl(std::string_view(input, inputSize), kBase64Charset, true);
 }
 
 // static
-std::string Base64::decode(folly::StringPiece input) {
+std::string Base64::decode(std::string_view input) {
   std::string output;
   auto status = decodeImpl(input, output, kBase64ReverseIndexTable);
   if (!status.ok()) {
@@ -323,19 +274,6 @@ Status Base64::decode(std::string_view input, std::string& output) {
 }
 
 // static
-void Base64::decode(const char* input, size_t inputSize, char* output) {
-  std::string_view inputView(input, inputSize);
-  std::string tempOutput;
-
-  auto status = decodeImpl(inputView, tempOutput, kBase64ReverseIndexTable);
-  if (!status.ok()) {
-    VELOX_USER_FAIL(status.message());
-  }
-
-  std::memcpy(output, tempOutput.data(), tempOutput.size());
-}
-
-// static
 Expected<uint8_t> Base64::base64ReverseLookup(
     char encodedChar,
     const ReverseIndex& reverseIndex) {
@@ -346,29 +284,6 @@ Expected<uint8_t> Base64::base64ReverseLookup(
         encodedChar));
   }
   return reverseLookupValue;
-}
-
-// static
-Status Base64::decode(
-    const char* input,
-    size_t inputSize,
-    char* output,
-    size_t outputSize) {
-  std::string_view inputView(input, inputSize);
-  std::string outputBuffer;
-  outputBuffer.reserve(outputSize);
-
-  auto status = decodeImpl(inputView, outputBuffer, kBase64ReverseIndexTable);
-  if (!status.ok()) {
-    return status;
-  }
-
-  if (outputBuffer.size() > outputSize) {
-    return Status::UserError("Output buffer too small");
-  }
-  std::memcpy(output, outputBuffer.data(), outputBuffer.size());
-
-  return Status::OK();
 }
 
 // static
@@ -422,8 +337,8 @@ Status Base64::decodeImpl(
     std::string_view input,
     std::string& output,
     const ReverseIndex& reverseIndex) {
+  output.clear();
   if (input.empty()) {
-    output.clear();
     return Status::OK();
   }
 
@@ -432,12 +347,8 @@ Status Base64::decodeImpl(
   if (decodedSize.hasError()) {
     return decodedSize.error();
   }
-
-  output.clear();
   output.reserve(decodedSize.value());
-
   const char* inputPointer = input.data();
-
   // Handle full groups of 4 characters
   for (; inputSize > 4; inputSize -= 4, inputPointer += 4) {
     // Each character of the 4 encodes 6 bits of the original, grab each with
@@ -488,7 +399,6 @@ Status Base64::decodeImpl(
           return reverseLookupValue.error();
         }
         decodedBlock |= reverseLookupValue.value();
-
         output.push_back(static_cast<char>(decodedBlock & 0xFF));
       }
     }
@@ -498,19 +408,8 @@ Status Base64::decodeImpl(
 }
 
 // static
-std::string Base64::encodeUrl(folly::StringPiece input) {
+std::string Base64::encodeUrl(std::string_view input) {
   return encodeImpl(input, kBase64UrlCharset, false);
-}
-
-// static
-std::string Base64::encodeUrl(const char* input, size_t inputSize) {
-  return encodeImpl(
-      folly::StringPiece(input, inputSize), kBase64UrlCharset, false);
-}
-
-// static
-std::string Base64::encodeUrl(const folly::IOBuf* inputBuffer) {
-  return encodeImpl(IOBufWrapper(inputBuffer), kBase64UrlCharset, false);
 }
 
 // static
@@ -519,24 +418,13 @@ Status Base64::decodeUrl(std::string_view input, std::string& output) {
 }
 
 // static
-std::string Base64::decodeUrl(folly::StringPiece input) {
+std::string Base64::decodeUrl(std::string_view input) {
   std::string output;
   auto status = decodeImpl(input, output, kBase64UrlReverseIndexTable);
   if (!status.ok()) {
     VELOX_USER_FAIL(status.message());
   }
   return output;
-}
-
-// static
-void Base64::decodeUrl(
-    const std::pair<const char*, int32_t>& input,
-    std::string& output) {
-  std::string_view inputView(input.first, input.second);
-  auto status = decodeImpl(inputView, output, kBase64UrlReverseIndexTable);
-  if (!status.ok()) {
-    VELOX_USER_FAIL(status.message());
-  }
 }
 
 } // namespace facebook::velox::encoding

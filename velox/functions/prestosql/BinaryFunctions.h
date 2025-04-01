@@ -283,9 +283,9 @@ struct ToBase64Function {
       out_type<Varchar>& result,
       const arg_type<Varbinary>& input) {
     std::string output;
-    std::string_view inputView{
+    std::string_view inputString{
         reinterpret_cast<const char*>(input.data()), input.size()};
-    encoding::Base64::encode(inputView, output);
+    encoding::Base64::encode(inputString, output);
     result = output;
   }
 };
@@ -340,9 +340,9 @@ struct ToBase64UrlFunction {
       out_type<Varchar>& result,
       const arg_type<Varbinary>& input) {
     std::string output;
-    std::string_view inputView{
+    std::string_view inputString{
         reinterpret_cast<const char*>(input.data()), input.size()};
-    encoding::Base64::encodeUrl(inputView, output);
+    encoding::Base64::encodeUrl(inputString, output);
     result = output;
   }
 };

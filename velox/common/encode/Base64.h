@@ -44,60 +44,32 @@ class Base64 {
   /// Encodes the specified number of characters from the 'input'.
   static std::string encode(const char* input, size_t inputSize);
 
-  /// Encodes the specified text.
-  static std::string encode(folly::StringPiece input);
-
-  /// Encodes the specified IOBuf data.
-  static std::string encode(const folly::IOBuf* inputBuffer);
+  /// Encodes the specified input.
+  static std::string encode(std::string_view input);
 
   /// Encodes the specified number of characters from the 'input' and writes the
-  /// result to the 'outputBuffer'. The output must have enough space as
-  /// returned by the calculateEncodedSize().
+  /// result to the 'output'.
   static void encode(std::string_view input, std::string& outputBuffer);
 
-  /// Encodes the specified number of characters from the 'input' using URL
-  /// encoding.
-  static std::string encodeUrl(const char* input, size_t inputSize);
-
-  /// Encodes the specified text using URL encoding.
-  static std::string encodeUrl(folly::StringPiece input);
-
-  /// Encodes the specified IOBuf data using URL encoding.
-  static std::string encodeUrl(const folly::IOBuf* inputBuffer);
+  /// Encodes the specified input using URL encoding.
+  static std::string encodeUrl(std::string_view input);
 
   /// Encodes the specified number of characters from the 'input' and writes the
-  /// result to the 'outputBuffer' using URL encoding. The output must have
-  /// enough space as returned by the calculateEncodedSize().
-  static void encodeUrl(std::string_view input, std::string& outputBuffer);
+  /// result to the 'output' using URL encoding.
+  static void encodeUrl(std::string_view input, std::string& output);
 
   /// Decodes the input Base64 encoded string.
-  static std::string decode(folly::StringPiece input);
+  static std::string decode(std::string_view input);
 
   /// Decodes the specified encoded payload and writes the result to the
   /// 'output'.
   static Status decode(std::string_view input, std::string& output);
 
-  /// Decodes the specified number of characters from the 'input' and writes the
-  /// result to the 'outputBuffer'. The output must have enough space as
-  /// returned by the calculateDecodedSize().
-  static void decode(const char* input, size_t inputSize, char* output);
-
-  /// Decodes the specified number of characters from the 'input' and writes the
-  /// result to the 'outputBuffer'.
-  static Status
-  decode(const char* input, size_t inputSize, char* output, size_t outputSize);
-
   /// Decodes the input Base64 URL encoded string.
-  static std::string decodeUrl(folly::StringPiece input);
-
-  /// Decodes the specified URL encoded payload and writes the result to the
-  /// 'output'.
-  static void decodeUrl(
-      const std::pair<const char*, int32_t>& input,
-      std::string& output);
+  static std::string decodeUrl(std::string_view input);
 
   /// Decodes the specified number of characters from the 'input' using URL
-  /// encoding and writes the result to the 'outputBuffer'
+  /// encoding and writes the result to the 'output'
   static Status decodeUrl(std::string_view input, std::string& output);
 
  private:
