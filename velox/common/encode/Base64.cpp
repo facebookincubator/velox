@@ -15,10 +15,11 @@
  */
 #include "velox/common/encode/Base64.h"
 
+#include <cstdint>
+
 #include <folly/Portability.h>
 #include <folly/container/Foreach.h>
 #include <folly/io/Cursor.h>
-#include <cstdint>
 
 #include "velox/common/base/Exceptions.h"
 
@@ -163,11 +164,9 @@ std::string Base64::encodeImpl(
     const T& input,
     const Charset& charset,
     bool includePadding) {
-  size_t encodedSize = calculateEncodedSize(input.size(), includePadding);
-  std::string encodedResult;
-  encodedResult.resize(encodedSize);
-  encodeImpl(input, charset, includePadding, encodedResult.data());
-  return encodedResult;
+  std::string output;
+  encodeImpl(input, charset, includePadding, output);
+  return output;
 }
 
 // static
@@ -186,15 +185,13 @@ size_t Base64::calculateEncodedSize(size_t inputSize, bool withPadding) {
 }
 
 // static
-void Base64::encode(const char* input, size_t inputSize, char* output) {
-  encodeImpl(
-      folly::StringPiece(input, inputSize), kBase64Charset, true, output);
+void Base64::encode(std::string_view input, std::string& output) {
+  encodeImpl(input, kBase64Charset, true, output);
 }
 
 // static
-void Base64::encodeUrl(const char* input, size_t inputSize, char* output) {
-  encodeImpl(
-      folly::StringPiece(input, inputSize), kBase64UrlCharset, true, output);
+void Base64::encodeUrl(std::string_view input, std::string& output) {
+  encodeImpl(input, kBase64UrlCharset, true, output);
 }
 
 // static
@@ -203,54 +200,57 @@ void Base64::encodeImpl(
     const T& input,
     const Charset& charset,
     bool includePadding,
-    char* outputBuffer) {
+    std::string& output) {
   auto inputSize = input.size();
   if (inputSize == 0) {
     return;
   }
 
-  auto outputPointer = outputBuffer;
+  size_t encodedSize = calculateEncodedSize(inputSize, includePadding);
+  output.reserve(output.size() + encodedSize);
+
   auto inputIterator = input.begin();
 
   // For each group of 3 bytes (24 bits) in the input, split that into
   // 4 groups of 6 bits and encode that using the supplied charset lookup
   for (; inputSize > 2; inputSize -= 3) {
-    uint32_t inputBlock = static_cast<uint8_t>(*inputIterator++) << 16;
-    inputBlock |= static_cast<uint8_t>(*inputIterator++) << 8;
+    uint32_t inputBlock = (static_cast<uint8_t>(*inputIterator++) << 16);
+    inputBlock |= (static_cast<uint8_t>(*inputIterator++) << 8);
     inputBlock |= static_cast<uint8_t>(*inputIterator++);
 
-    *outputPointer++ = charset[(inputBlock >> 18) & 0x3f];
-    *outputPointer++ = charset[(inputBlock >> 12) & 0x3f];
-    *outputPointer++ = charset[(inputBlock >> 6) & 0x3f];
-    *outputPointer++ = charset[inputBlock & 0x3f];
+    output.push_back(charset[(inputBlock >> 18) & 0x3F]);
+    output.push_back(charset[(inputBlock >> 12) & 0x3F]);
+    output.push_back(charset[(inputBlock >> 6) & 0x3F]);
+    output.push_back(charset[inputBlock & 0x3F]);
   }
 
   if (inputSize > 0) {
     // We have either 1 or 2 input bytes left.  Encode this similar to the
     // above (assuming 0 for all other bytes).  Optionally append the '='
     // character if it is requested.
-    uint32_t inputBlock = static_cast<uint8_t>(*inputIterator++) << 16;
-    *outputPointer++ = charset[(inputBlock >> 18) & 0x3f];
+    uint32_t inputBlock = (static_cast<uint8_t>(*inputIterator++) << 16);
+    output.push_back(charset[(inputBlock >> 18) & 0x3F]);
+
     if (inputSize > 1) {
-      inputBlock |= static_cast<uint8_t>(*inputIterator) << 8;
-      *outputPointer++ = charset[(inputBlock >> 12) & 0x3f];
-      *outputPointer++ = charset[(inputBlock >> 6) & 0x3f];
+      inputBlock |= (static_cast<uint8_t>(*inputIterator) << 8);
+      output.push_back(charset[(inputBlock >> 12) & 0x3F]);
+      output.push_back(charset[(inputBlock >> 6) & 0x3F]);
       if (includePadding) {
-        *outputPointer = kPadding;
+        output.push_back(kPadding);
       }
     } else {
-      *outputPointer++ = charset[(inputBlock >> 12) & 0x3f];
+      output.push_back(charset[(inputBlock >> 12) & 0x3F]);
       if (includePadding) {
-        *outputPointer++ = kPadding;
-        *outputPointer = kPadding;
+        output.push_back(kPadding);
+        output.push_back(kPadding);
       }
     }
   }
 }
 
 // static
-std::string Base64::encode(folly::StringPiece text) {
-  return encodeImpl(text, kBase64Charset, true);
+std::string Base64::encode(folly::StringPiece input) {
+  return encodeImpl(input, kBase64Charset, true);
 }
 
 // static
@@ -308,36 +308,31 @@ std::string Base64::encode(const folly::IOBuf* inputBuffer) {
 }
 
 // static
-std::string Base64::decode(folly::StringPiece encodedText) {
-  std::string decodedResult;
-  decode(std::make_pair(encodedText.data(), encodedText.size()), decodedResult);
-  return decodedResult;
-}
-
-// static
-void Base64::decode(
-    const std::pair<const char*, int32_t>& payload,
-    std::string& decodedOutput) {
-  size_t inputSize = payload.second;
-  auto decodedSize = calculateDecodedSize(payload.first, inputSize);
-  if (decodedSize.hasError()) {
-    VELOX_USER_FAIL(decodedSize.error().message());
-  }
-  decodedOutput.resize(decodedSize.value());
-  auto status = decode(
-      payload.first, inputSize, decodedOutput.data(), decodedOutput.size());
+std::string Base64::decode(folly::StringPiece input) {
+  std::string output;
+  auto status = decodeImpl(input, output, kBase64ReverseIndexTable);
   if (!status.ok()) {
     VELOX_USER_FAIL(status.message());
   }
+  return output;
 }
 
 // static
-void Base64::decode(const char* input, size_t inputSize, char* outputBuffer) {
-  size_t outputSize = inputSize / 4 * 3;
-  auto status = decode(input, inputSize, outputBuffer, outputSize);
+Status Base64::decode(std::string_view input, std::string& output) {
+  return decodeImpl(input, output, kBase64ReverseIndexTable);
+}
+
+// static
+void Base64::decode(const char* input, size_t inputSize, char* output) {
+  std::string_view inputView(input, inputSize);
+  std::string tempOutput;
+
+  auto status = decodeImpl(inputView, tempOutput, kBase64ReverseIndexTable);
   if (!status.ok()) {
     VELOX_USER_FAIL(status.message());
   }
+
+  std::memcpy(output, tempOutput.data(), tempOutput.size());
 }
 
 // static
@@ -359,24 +354,33 @@ Status Base64::decode(
     size_t inputSize,
     char* output,
     size_t outputSize) {
-  auto decodedSize = decodeImpl(
-      input, inputSize, output, outputSize, kBase64ReverseIndexTable);
-  if (decodedSize.hasError()) {
-    return decodedSize.error();
+  std::string_view inputView(input, inputSize);
+  std::string outputBuffer;
+  outputBuffer.reserve(outputSize);
+
+  auto status = decodeImpl(inputView, outputBuffer, kBase64ReverseIndexTable);
+  if (!status.ok()) {
+    return status;
   }
+
+  if (outputBuffer.size() > outputSize) {
+    return Status::UserError("Output buffer too small");
+  }
+  std::memcpy(output, outputBuffer.data(), outputBuffer.size());
+
   return Status::OK();
 }
 
 // static
 Expected<size_t> Base64::calculateDecodedSize(
-    const char* input,
+    std::string_view input,
     size_t& inputSize) {
   if (inputSize == 0) {
     return 0;
   }
 
   // Check if the input string is padded
-  if (isPadded(input, inputSize)) {
+  if (isPadded(input)) {
     // If padded, ensure that the string length is a multiple of the encoded
     // block size
     if (inputSize % kEncodedBlockByteSize != 0) {
@@ -387,7 +391,7 @@ Expected<size_t> Base64::calculateDecodedSize(
 
     auto decodedSize =
         (inputSize * kBinaryBlockByteSize) / kEncodedBlockByteSize;
-    auto paddingCount = numPadding(input, inputSize);
+    auto paddingCount = numPadding(input);
     inputSize -= paddingCount;
 
     // Adjust the needed size by deducting the bytes corresponding to the
@@ -414,44 +418,43 @@ Expected<size_t> Base64::calculateDecodedSize(
 }
 
 // static
-Expected<size_t> Base64::decodeImpl(
-    const char* input,
-    size_t inputSize,
-    char* outputBuffer,
-    size_t outputSize,
+Status Base64::decodeImpl(
+    std::string_view input,
+    std::string& output,
     const ReverseIndex& reverseIndex) {
-  if (inputSize == 0) {
-    return 0;
+  if (input.empty()) {
+    output.clear();
+    return Status::OK();
   }
 
+  size_t inputSize = input.size();
   auto decodedSize = calculateDecodedSize(input, inputSize);
   if (decodedSize.hasError()) {
-    return folly::makeUnexpected(decodedSize.error());
+    return decodedSize.error();
   }
 
-  if (outputSize < decodedSize.value()) {
-    return folly::makeUnexpected(
-        Status::UserError("Base64::decode() - invalid output string: "
-                          "output string is too small."));
-  }
-  outputSize = decodedSize.value();
+  output.clear();
+  output.reserve(decodedSize.value());
+
+  const char* inputPointer = input.data();
 
   // Handle full groups of 4 characters
-  for (; inputSize > 4; inputSize -= 4, input += 4, outputBuffer += 3) {
+  for (; inputSize > 4; inputSize -= 4, inputPointer += 4) {
     // Each character of the 4 encodes 6 bits of the original, grab each with
     // the appropriate shifts to rebuild the original and then split that back
     // into the original 8-bit bytes.
     uint32_t decodedBlock = 0;
     for (int i = 0; i < 4; ++i) {
-      auto reverseLookupValue = base64ReverseLookup(input[i], reverseIndex);
+      auto reverseLookupValue =
+          base64ReverseLookup(inputPointer[i], reverseIndex);
       if (reverseLookupValue.hasError()) {
-        return folly::makeUnexpected(reverseLookupValue.error());
+        return reverseLookupValue.error();
       }
       decodedBlock |= reverseLookupValue.value() << (18 - 6 * i);
     }
-    outputBuffer[0] = static_cast<char>((decodedBlock >> 16) & 0xff);
-    outputBuffer[1] = static_cast<char>((decodedBlock >> 8) & 0xff);
-    outputBuffer[2] = static_cast<char>(decodedBlock & 0xff);
+    output.push_back(static_cast<char>((decodedBlock >> 16) & 0xFF));
+    output.push_back(static_cast<char>((decodedBlock >> 8) & 0xFF));
+    output.push_back(static_cast<char>(decodedBlock & 0xFF));
   }
 
   // Handle the last 2-4 characters. This is similar to the above, but the
@@ -461,44 +464,48 @@ Expected<size_t> Base64::decodeImpl(
 
     // Process the first two characters
     for (int i = 0; i < 2; ++i) {
-      auto reverseLookupValue = base64ReverseLookup(input[i], reverseIndex);
+      auto reverseLookupValue =
+          base64ReverseLookup(inputPointer[i], reverseIndex);
       if (reverseLookupValue.hasError()) {
-        return folly::makeUnexpected(reverseLookupValue.error());
+        return reverseLookupValue.error();
       }
       decodedBlock |= reverseLookupValue.value() << (18 - 6 * i);
     }
-    outputBuffer[0] = static_cast<char>((decodedBlock >> 16) & 0xff);
+    output.push_back(static_cast<char>((decodedBlock >> 16) & 0xFF));
 
     if (inputSize > 2) {
-      auto reverseLookupValue = base64ReverseLookup(input[2], reverseIndex);
+      auto reverseLookupValue =
+          base64ReverseLookup(inputPointer[2], reverseIndex);
       if (reverseLookupValue.hasError()) {
-        return folly::makeUnexpected(reverseLookupValue.error());
+        return reverseLookupValue.error();
       }
       decodedBlock |= reverseLookupValue.value() << 6;
-      outputBuffer[1] = static_cast<char>((decodedBlock >> 8) & 0xff);
+      output.push_back(static_cast<char>((decodedBlock >> 8) & 0xFF));
 
       if (inputSize > 3) {
-        auto reverseLookupValue = base64ReverseLookup(input[3], reverseIndex);
+        reverseLookupValue = base64ReverseLookup(inputPointer[3], reverseIndex);
         if (reverseLookupValue.hasError()) {
-          return folly::makeUnexpected(reverseLookupValue.error());
+          return reverseLookupValue.error();
         }
         decodedBlock |= reverseLookupValue.value();
-        outputBuffer[2] = static_cast<char>(decodedBlock & 0xff);
+
+        output.push_back(static_cast<char>(decodedBlock & 0xFF));
       }
     }
   }
 
-  return decodedSize.value();
+  return Status::OK();
 }
 
 // static
-std::string Base64::encodeUrl(folly::StringPiece text) {
-  return encodeImpl(text, kBase64UrlCharset, false);
+std::string Base64::encodeUrl(folly::StringPiece input) {
+  return encodeImpl(input, kBase64UrlCharset, false);
 }
 
 // static
 std::string Base64::encodeUrl(const char* input, size_t inputSize) {
-  return encodeUrl(folly::StringPiece(input, inputSize));
+  return encodeImpl(
+      folly::StringPiece(input, inputSize), kBase64UrlCharset, false);
 }
 
 // static
@@ -507,43 +514,29 @@ std::string Base64::encodeUrl(const folly::IOBuf* inputBuffer) {
 }
 
 // static
-Status Base64::decodeUrl(
-    const char* input,
-    size_t inputSize,
-    char* outputBuffer,
-    size_t outputSize) {
-  auto decodedSize = decodeImpl(
-      input, inputSize, outputBuffer, outputSize, kBase64UrlReverseIndexTable);
-  if (decodedSize.hasError()) {
-    return decodedSize.error();
-  }
-  return Status::OK();
+Status Base64::decodeUrl(std::string_view input, std::string& output) {
+  return decodeImpl(input, output, kBase64UrlReverseIndexTable);
 }
 
 // static
-std::string Base64::decodeUrl(folly::StringPiece encodedText) {
-  std::string decodedOutput;
-  decodeUrl(
-      std::make_pair(encodedText.data(), encodedText.size()), decodedOutput);
-  return decodedOutput;
+std::string Base64::decodeUrl(folly::StringPiece input) {
+  std::string output;
+  auto status = decodeImpl(input, output, kBase64UrlReverseIndexTable);
+  if (!status.ok()) {
+    VELOX_USER_FAIL(status.message());
+  }
+  return output;
 }
 
 // static
 void Base64::decodeUrl(
-    const std::pair<const char*, int32_t>& payload,
-    std::string& decodedOutput) {
-  size_t expectedDecodedSize = (payload.second + 3) / 4 * 3;
-  decodedOutput.resize(expectedDecodedSize, '\0');
-  auto decodedSize = decodeImpl(
-      payload.first,
-      payload.second,
-      decodedOutput.data(),
-      expectedDecodedSize,
-      kBase64UrlReverseIndexTable);
-  if (decodedSize.hasError()) {
-    VELOX_USER_FAIL(decodedSize.error().message());
+    const std::pair<const char*, int32_t>& input,
+    std::string& output) {
+  std::string_view inputView(input.first, input.second);
+  auto status = decodeImpl(inputView, output, kBase64UrlReverseIndexTable);
+  if (!status.ok()) {
+    VELOX_USER_FAIL(status.message());
   }
-  decodedOutput.resize(decodedSize.value());
 }
 
 } // namespace facebook::velox::encoding
