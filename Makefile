@@ -227,28 +227,14 @@ python-venv:
 	fi
 
 check-pip-version: python-venv # We need a recent pip for '-C'
-	if [ "$(PIP)" == "uv pip" ]; then \
+	@if [ "$(PIP)" == "uv pip" ]; then \
 		exit 0; \
 	fi; \
 	source .venv/bin/activate; \
-	found=0; \
-	for pydir in $(PYTHON_VENV)/lib/python*/site-packages; do \
-		if [ -d "$$pydir" ]; then \
-			for dir in $$pydir/pip-*dist-info; do \
-				if [ -d "$$dir" ]; then \
-					version=$$(echo "$$dir" | sed -E 's/.*pip-([0-9]+(\.[0-9]+)*).*/\1/'); \
-					major_version=$$(echo "$$version" | cut -d. -f1); \
-					if [ "$$major_version" -ge 25 ]; then \
-						found=1; \
-						break 2; \
-					fi; \
-				fi; \
-			done; \
-		fi; \
-	done; \
-	if [ $$found -eq 0 ]; then \
+	pip_version=$$($(PIP) --version | sed -E 's/pip ([0-9]+)\.([0-9]+).*/\1/'); \
+	if [ "$$pip_version" -lt 25 ]; then \
 		$(PIP) install --upgrade pip; \
-	fi; \
+	fi
 
 python-build: check-pip-version
 	source .venv/bin/activate; \
