@@ -16,11 +16,12 @@
 
 #pragma once
 
-#include "velox/connectors/Connector.h"
 #include "velox/experimental/cudf/connectors/parquet/ParquetConfig.h"
 #include "velox/experimental/cudf/connectors/parquet/ParquetDataSink.h"
 #include "velox/experimental/cudf/connectors/parquet/ParquetDataSource.h"
 #include "velox/experimental/cudf/connectors/parquet/ParquetTableHandle.h"
+
+#include "velox/connectors/Connector.h"
 
 #include <cudf/io/parquet.hpp>
 #include <cudf/io/types.hpp>

@@ -14,11 +14,11 @@
  * limitations under the License.
  */
 
-#include "velox/dwio/common/Options.h"
-#include "velox/exec/tests/utils/PlanBuilder.h"
-
 #include "velox/experimental/cudf/connectors/parquet/ParquetDataSink.h"
 #include "velox/experimental/cudf/tests/utils/ParquetConnectorTestBase.h"
+
+#include "velox/dwio/common/Options.h"
+#include "velox/exec/tests/utils/PlanBuilder.h"
 
 #include <string>
 

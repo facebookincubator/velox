@@ -15,6 +15,7 @@
  */
 
 #include "velox/experimental/cudf/connectors/parquet/ParquetConfig.h"
+
 #include "velox/common/base/Exceptions.h"
 #include "velox/common/config/Config.h"
 

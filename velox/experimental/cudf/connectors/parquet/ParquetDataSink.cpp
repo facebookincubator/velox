@@ -14,18 +14,18 @@
  * limitations under the License.
  */
 
-#include "velox/common/base/Counters.h"
-#include "velox/common/base/Fs.h"
-#include "velox/common/base/StatsReporter.h"
-#include "velox/dwio/common/Options.h"
-#include "velox/exec/OperatorUtils.h"
-
 #include "velox/experimental/cudf/connectors/parquet/ParquetConfig.h"
 #include "velox/experimental/cudf/connectors/parquet/ParquetDataSink.h"
 #include "velox/experimental/cudf/connectors/parquet/ParquetTableHandle.h"
 #include "velox/experimental/cudf/exec/Utilities.h"
 #include "velox/experimental/cudf/exec/VeloxCudfInterop.h"
 #include "velox/experimental/cudf/vector/CudfVector.h"
+
+#include "velox/common/base/Counters.h"
+#include "velox/common/base/Fs.h"
+#include "velox/common/base/StatsReporter.h"
+#include "velox/dwio/common/Options.h"
+#include "velox/exec/OperatorUtils.h"
 
 #include <cudf/copying.hpp>
 #include <cudf/io/parquet.hpp>
