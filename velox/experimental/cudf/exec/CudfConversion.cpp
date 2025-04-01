@@ -30,7 +30,7 @@ RowVectorPtr mergeRowVectors(
     const std::vector<RowVectorPtr>& results,
     velox::memory::MemoryPool* pool) {
   VELOX_NVTX_FUNC_RANGE();
-  auto totalCount = 0;
+  vector_size_t totalCount = 0;
   for (const auto& result : results) {
     totalCount += result->size();
   }
@@ -73,37 +73,52 @@ CudfFromVelox::CudfFromVelox(
 
 void CudfFromVelox::addInput(RowVectorPtr input) {
   VELOX_NVTX_OPERATOR_FUNC_RANGE();
-  if (input != nullptr) {
-    if (input->size() > 0) {
-      // Materialize lazy vectors
-      for (auto& child : input->children()) {
-        child->loadedVector();
-      }
-      input->loadedVector();
-
-      // Accumulate inputs
-      inputs_.push_back(input);
-      current_output_size_ += input->size();
+  if (input and input->size() > 0) {
+    // Materialize lazy vectors
+    for (auto& child : input->children()) {
+      child->loadedVector();
     }
+    input->loadedVector();
+
+    // Accumulate inputs
+    inputs_.push_back(input);
+    currentOutputSize_ += input->size();
   }
 }
 
 RowVectorPtr CudfFromVelox::getOutput() {
   VELOX_NVTX_OPERATOR_FUNC_RANGE();
-  auto const target_output_size =
+  const auto targetOutputSize =
       preferredGpuBatchSizeRows(operatorCtx_->driverCtx()->queryConfig());
-  auto const exit_early = finished_ or
-      (current_output_size_ < target_output_size and not noMoreInput_) or
-      inputs_.empty();
-  finished_ = noMoreInput_;
-  if (exit_early) {
+
+  finished_ = noMoreInput_ && inputs_.empty();
+
+  if (finished_ or
+      (currentOutputSize_ < targetOutputSize and not noMoreInput_) or
+      inputs_.empty()) {
     return nullptr;
   }
 
-  // Combine all input RowVectors into a single RowVector and clear inputs
-  auto input = mergeRowVectors(inputs_, inputs_[0]->pool());
-  inputs_.clear();
-  current_output_size_ = 0;
+  // Select inputs that don't exceed the max vector size limit
+  std::vector<RowVectorPtr> selectedInputs;
+  vector_size_t totalSize = 0;
+  auto const maxVectorSize = std::numeric_limits<vector_size_t>::max();
+
+  for (const auto& input : inputs_) {
+    if (totalSize + input->size() <= maxVectorSize) {
+      selectedInputs.push_back(input);
+      totalSize += input->size();
+    } else {
+      break;
+    }
+  }
+
+  // Combine selected RowVectors into a single RowVector
+  auto input = mergeRowVectors(selectedInputs, inputs_[0]->pool());
+
+  // Remove processed inputs
+  inputs_.erase(inputs_.begin(), inputs_.begin() + selectedInputs.size());
+  currentOutputSize_ -= totalSize;
 
   // Early return if no input
   if (input->size() == 0) {
@@ -114,7 +129,7 @@ RowVectorPtr CudfFromVelox::getOutput() {
   auto stream = cudfGlobalStreamPool().get_stream();
 
   // Convert RowVector to cudf table
-  auto tbl = with_arrow::to_cudf_table(input, input->pool(), stream);
+  auto tbl = with_arrow::toCudfTable(input, input->pool(), stream);
 
   stream.synchronize();
 
@@ -123,12 +138,12 @@ RowVectorPtr CudfFromVelox::getOutput() {
   if (cudfDebugEnabled()) {
     std::cout << "CudfFromVelox table number of columns: " << tbl->num_columns()
               << std::endl;
-    std::cout << "CudfFromVelox table number of rows: " << tbl->num_rows()
+    std::cout << "CudfFromVelox table nxxwumber of rows: " << tbl->num_rows()
               << std::endl;
   }
 
   // Return a CudfVector that owns the cudf table
-  auto const size = tbl->num_rows();
+  const auto size = tbl->num_rows();
   return std::make_shared<CudfVector>(
       input->pool(), outputType_, size, std::move(tbl), stream);
 }
@@ -136,6 +151,7 @@ RowVectorPtr CudfFromVelox::getOutput() {
 void CudfFromVelox::close() {
   cudf::get_default_stream().synchronize();
   exec::Operator::close();
+  inputs_.clear();
 }
 
 CudfToVelox::CudfToVelox(
@@ -154,9 +170,9 @@ CudfToVelox::CudfToVelox(
 void CudfToVelox::addInput(RowVectorPtr input) {
   // Accumulate inputs
   if (input->size() > 0) {
-    auto cudf_input = std::dynamic_pointer_cast<CudfVector>(input);
-    VELOX_CHECK_NOT_NULL(cudf_input);
-    inputs_.push_back(std::move(cudf_input));
+    auto cudfInput = std::dynamic_pointer_cast<CudfVector>(input);
+    VELOX_CHECK_NOT_NULL(cudfInput);
+    inputs_.push_back(std::move(cudfInput));
   }
 }
 
@@ -182,7 +198,7 @@ RowVectorPtr CudfToVelox::getOutput() {
     return nullptr;
   }
   RowVectorPtr output =
-      with_arrow::to_velox_column(tbl->view(), pool(), "", stream);
+      with_arrow::toVeloxColumn(tbl->view(), pool(), "", stream);
   stream.synchronize();
   finished_ = noMoreInput_ && inputs_.empty();
   output->setType(outputType_);
@@ -191,8 +207,7 @@ RowVectorPtr CudfToVelox::getOutput() {
 
 void CudfToVelox::close() {
   exec::Operator::close();
-  // TODO: Release stored inputs if needed
-  // TODO: Release cudf memory resources
+  inputs_.clear();
 }
 
 } // namespace facebook::velox::cudf_velox

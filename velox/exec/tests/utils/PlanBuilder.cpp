@@ -259,8 +259,8 @@ core::PlanNodePtr PlanBuilder::TableScanBuilder::build(core::PlanNodeId id) {
   }
 
   if (!tableHandle_) {
-    // if isCudfRegistered, then use cudftableScan tableHandle_ here.
-    if (facebook::velox::cudf_velox::isCudfRegistered() &&
+    // if cudfIsRegistered, then use cudftableScan tableHandle_ here.
+    if (facebook::velox::cudf_velox::cudfIsRegistered() &&
         facebook::velox::connector::getAllConnectors().count(
             cudf_velox::exec::test::kParquetConnectorId) > 0 &&
         facebook::velox::cudf_velox::cudfTableScanEnabled()) {

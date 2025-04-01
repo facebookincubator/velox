@@ -14,16 +14,6 @@
  * limitations under the License.
  */
 
-#include "folly/dynamic.h"
-#include "velox/common/base/Fs.h"
-#include "velox/common/testutil/TestValue.h"
-#include "velox/dwio/common/WriterFactory.h"
-#include "velox/exec/PlanNodeStats.h"
-#include "velox/exec/TableWriter.h"
-#include "velox/exec/tests/utils/AssertQueryBuilder.h"
-#include "velox/exec/tests/utils/PlanBuilder.h"
-#include "velox/exec/tests/utils/TempDirectoryPath.h"
-
 #include "velox/experimental/cudf/connectors/parquet/ParquetConfig.h"
 #include "velox/experimental/cudf/connectors/parquet/ParquetConnector.h"
 #include "velox/experimental/cudf/connectors/parquet/ParquetConnectorSplit.h"
@@ -33,10 +23,21 @@
 #include "velox/experimental/cudf/tests/utils/CudfPlanBuilder.h"
 #include "velox/experimental/cudf/tests/utils/ParquetConnectorTestBase.h"
 
-#include <re2/re2.h>
-#include <string>
+#include "folly/dynamic.h"
+#include "velox/common/base/Fs.h"
+#include "velox/common/testutil/TestValue.h"
 #include "velox/dwio/common/Options.h"
+#include "velox/dwio/common/WriterFactory.h"
+#include "velox/exec/PlanNodeStats.h"
+#include "velox/exec/TableWriter.h"
 #include "velox/exec/tests/utils/ArbitratorTestUtil.h"
+#include "velox/exec/tests/utils/AssertQueryBuilder.h"
+#include "velox/exec/tests/utils/PlanBuilder.h"
+#include "velox/exec/tests/utils/TempDirectoryPath.h"
+
+#include <re2/re2.h>
+
+#include <string>
 
 using namespace facebook::velox;
 using namespace facebook::velox::core;

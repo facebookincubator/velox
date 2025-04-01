@@ -16,12 +16,13 @@
 
 #pragma once
 
+#include "velox/experimental/cudf/exec/NvtxHelper.h"
+#include "velox/experimental/cudf/vector/CudfVector.h"
+
 #include "velox/core/Expressions.h"
 #include "velox/core/PlanNode.h"
 #include "velox/exec/JoinBridge.h"
 #include "velox/exec/Operator.h"
-#include "velox/experimental/cudf/exec/NvtxHelper.h"
-#include "velox/experimental/cudf/vector/CudfVector.h"
 #include "velox/vector/ComplexVector.h"
 
 #include <cudf/join.hpp>

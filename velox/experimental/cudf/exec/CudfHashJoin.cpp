@@ -15,10 +15,11 @@
  */
 
 #include "velox/experimental/cudf/exec/CudfHashJoin.h"
-#include "velox/exec/Task.h"
 #include "velox/experimental/cudf/exec/ExpressionEvaluator.h"
 #include "velox/experimental/cudf/exec/ToCudf.h"
 #include "velox/experimental/cudf/exec/Utilities.h"
+
+#include "velox/exec/Task.h"
 
 #include <cudf/copying.hpp>
 #include <cudf/utilities/default_stream.hpp>

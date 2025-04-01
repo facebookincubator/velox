@@ -19,6 +19,7 @@
 #include "velox/exec/tests/utils/HiveConnectorTestBase.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
 #include "velox/experimental/cudf/exec/ToCudf.h"
+
 namespace facebook::velox::exec::test {
 namespace {
 

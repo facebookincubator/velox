@@ -20,6 +20,7 @@
 
 #include <cudf/detail/utilities/stream_pool.hpp>
 #include <cudf/table/table.hpp>
+
 #include <rmm/mr/device/device_memory_resource.hpp>
 
 #include <memory>
@@ -31,7 +32,7 @@ namespace facebook::velox::cudf_velox {
  * @brief Creates a memory resource based on the given mode.
  */
 [[nodiscard]] std::shared_ptr<rmm::mr::device_memory_resource>
-create_memory_resource(std::string_view mode);
+createMemoryResource(std::string_view mode);
 
 /**
  * @brief Returns the global CUDA stream pool used by cudf.
@@ -39,14 +40,14 @@ create_memory_resource(std::string_view mode);
 [[nodiscard]] cudf::detail::cuda_stream_pool& cudfGlobalStreamPool();
 
 // Concatenate a vector of cuDF tables into a single table
-std::unique_ptr<cudf::table> concatenateTables(
+[[nodiscard]] std::unique_ptr<cudf::table> concatenateTables(
     std::vector<std::unique_ptr<cudf::table>> tables,
     rmm::cuda_stream_view stream);
 
 // Concatenate a vector of cuDF tables into a single table.
 // This function joins the streams owned by individual tables on the passed
 // stream. Inputs are not safe to use after calling this function.
-std::unique_ptr<cudf::table> getConcatenatedTable(
+[[nodiscard]] std::unique_ptr<cudf::table> getConcatenatedTable(
     std::vector<CudfVectorPtr>& tables,
     rmm::cuda_stream_view stream);
 

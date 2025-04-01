@@ -17,6 +17,7 @@
 #pragma once
 
 #include <nvtx3/nvtx3.hpp>
+
 #include <optional>
 
 namespace facebook::velox::cudf_velox {
@@ -34,11 +35,11 @@ class NvtxHelper {
 /**
  * @brief Tag type for Velox's NVTX domain.
  */
-struct velox_domain {
+struct VeloxDomain {
   static constexpr char const* name{"velox"};
 };
 
-using nvtx_registered_string_t = nvtx3::registered_string_in<velox_domain>;
+using NvtxRegisteredStringT = nvtx3::registered_string_in<VeloxDomain>;
 
 #define VELOX_NVTX_OPERATOR_FUNC_RANGE()                                         \
   static_assert(                                                                 \
@@ -46,21 +47,21 @@ using nvtx_registered_string_t = nvtx3::registered_string_in<velox_domain>;
           value,                                                                 \
       "VELOX_NVTX_OPERATOR_FUNC_RANGE can only be used"                          \
       " in Operators derived from NvtxHelper");                                  \
-  static nvtx_registered_string_t const nvtx3_func_name__{                       \
+  static NvtxRegisteredStringT const nvtx3_func_name__{                          \
       std::string(__func__) + " " + std::string(__PRETTY_FUNCTION__)};           \
   static ::nvtx3::event_attributes const nvtx3_func_attr__{                    \
       this->payload_.has_value() ?                                             \
           ::nvtx3::event_attributes{nvtx3_func_name__, this->color_,           \
                                    nvtx3::payload{this->payload_.value()}} :   \
           ::nvtx3::event_attributes{nvtx3_func_name__, this->color_}}; \
-  ::nvtx3::scoped_range_in<velox_domain> const nvtx3_range__{nvtx3_func_attr__};
+  ::nvtx3::scoped_range_in<VeloxDomain> const nvtx3_range__{nvtx3_func_attr__};
 
 #define VELOX_NVTX_PRETTY_FUNC_RANGE()                                         \
-  static nvtx_registered_string_t const nvtx3_func_name__{                     \
+  static NvtxRegisteredStringT const nvtx3_func_name__{                        \
       std::string(__func__) + " " + std::string(__PRETTY_FUNCTION__)};         \
   static ::nvtx3::event_attributes const nvtx3_func_attr__{nvtx3_func_name__}; \
-  ::nvtx3::scoped_range_in<velox_domain> const nvtx3_range__{nvtx3_func_attr__};
+  ::nvtx3::scoped_range_in<VeloxDomain> const nvtx3_range__{nvtx3_func_attr__};
 
-#define VELOX_NVTX_FUNC_RANGE() NVTX3_FUNC_RANGE_IN(velox_domain)
+#define VELOX_NVTX_FUNC_RANGE() NVTX3_FUNC_RANGE_IN(VeloxDomain)
 
 } // namespace facebook::velox::cudf_velox

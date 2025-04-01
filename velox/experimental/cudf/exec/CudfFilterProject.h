@@ -16,12 +16,13 @@
 
 #pragma once
 
+#include "velox/experimental/cudf/exec/ExpressionEvaluator.h"
+#include "velox/experimental/cudf/exec/NvtxHelper.h"
+
 #include "velox/core/Expressions.h"
 #include "velox/core/PlanNode.h"
 #include "velox/exec/FilterProject.h"
 #include "velox/exec/Operator.h"
-#include "velox/experimental/cudf/exec/ExpressionEvaluator.h"
-#include "velox/experimental/cudf/exec/NvtxHelper.h"
 #include "velox/vector/ComplexVector.h"
 
 namespace facebook::velox::cudf_velox {

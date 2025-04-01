@@ -35,6 +35,9 @@
 # Breeze
 #velox/experimental/breeze @dreveman
 
+# cuDF
+velox/experimental/cudf @bdice @karthikeyann @devavret
+
 # Parquet
 #velox/dwio/parquet/ @majetideepak
 

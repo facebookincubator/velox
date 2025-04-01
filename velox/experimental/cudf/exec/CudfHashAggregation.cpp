@@ -15,11 +15,12 @@
  */
 
 #include "velox/experimental/cudf/exec/CudfHashAggregation.h"
+#include "velox/experimental/cudf/exec/Utilities.h"
+#include "velox/experimental/cudf/exec/VeloxCudfInterop.h"
+
 #include "velox/exec/Aggregate.h"
 #include "velox/exec/PrefixSort.h"
 #include "velox/exec/Task.h"
-#include "velox/experimental/cudf/exec/Utilities.h"
-#include "velox/experimental/cudf/exec/VeloxCudfInterop.h"
 #include "velox/expression/Expr.h"
 
 #include <cudf/binaryop.hpp>

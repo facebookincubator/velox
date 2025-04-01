@@ -13,9 +13,9 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#include <re2/re2.h>
+#include "velox/experimental/cudf/exec/ToCudf.h"
+#include "velox/experimental/cudf/exec/Utilities.h"
 
-#include <fmt/format.h>
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/core/QueryConfig.h"
 #include "velox/dwio/common/tests/utils/BatchMaker.h"
@@ -23,14 +23,15 @@
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/OperatorTestBase.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
-#include "velox/experimental/cudf/exec/ToCudf.h"
+
+#include <fmt/format.h>
+#include <re2/re2.h>
 
 using namespace facebook::velox;
 using namespace facebook::velox::exec;
 using namespace facebook::velox::exec::test;
 using namespace facebook::velox::common::testutil;
 
-using facebook::velox::test::BatchMaker;
 namespace {
 
 class OrderByTest : public OperatorTestBase {

@@ -189,8 +189,8 @@ def get_commit(files):
     if files == "commit":
         return "HEAD^"
 
-    if files == "main" or files == "master":
-        return util.run(f"git merge-base origin/{files} HEAD")[1]
+    if files == "main" or files == "master" or files == "velox-cudf":
+        return util.run(f"git merge-base rapids/{files} HEAD")[1]
 
     return ""
 
@@ -242,6 +242,7 @@ def add_options(parser):
     tree_parser.add_argument("path", default="")
 
     branch_parser = add_check_options(files, "main")
+    branch_parser = add_check_options(files, "velox-cudf")
     branch_parser = add_check_options(files, "master")
     commit_parser = add_check_options(files, "commit")
 

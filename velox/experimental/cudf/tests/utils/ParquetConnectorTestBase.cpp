@@ -164,8 +164,7 @@ void ParquetConnectorTestBase::writeToFile(
     VELOX_CHECK_NOT_NULL(vector);
     if (vector->size()) {
       auto stream = cudf::get_default_stream();
-      auto cudfTable =
-          with_arrow::to_cudf_table(vector, vector->pool(), stream);
+      auto cudfTable = with_arrow::toCudfTable(vector, vector->pool(), stream);
       stream.synchronize();
       cudfTables.emplace_back(std::move(cudfTable));
     }
@@ -202,7 +201,7 @@ void ParquetConnectorTestBase::writeToFile(
   auto const sinkInfo = cudf::io::sink_info(filePath);
   VELOX_CHECK_NOT_NULL(vector);
   auto stream = cudf::get_default_stream();
-  auto cudfTable = with_arrow::to_cudf_table(vector, vector->pool(), stream);
+  auto cudfTable = with_arrow::toCudfTable(vector, vector->pool(), stream);
   stream.synchronize();
   auto tableInputMetadata = cudf::io::table_input_metadata(cudfTable->view());
   fillColumnNames(tableInputMetadata, prefix);

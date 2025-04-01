@@ -16,8 +16,9 @@
 
 #pragma once
 
-#include "velox/exec/Operator.h"
 #include "velox/experimental/cudf/exec/NvtxHelper.h"
+
+#include "velox/exec/Operator.h"
 
 namespace facebook::velox::cudf_velox {
 class CudfLimit : public exec::Operator, public NvtxHelper {

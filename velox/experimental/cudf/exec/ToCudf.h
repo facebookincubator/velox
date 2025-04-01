@@ -27,12 +27,14 @@ DECLARE_bool(velox_cudf_table_scan);
 
 namespace facebook::velox::cudf_velox {
 
+static const std::string kCudfAdapterName = "cuDF";
+
 class CompileState {
  public:
   CompileState(
       const exec::DriverFactory& driverFactory,
       exec::Driver& driver,
-      std::vector<std::shared_ptr<core::PlanNode const>>& planNodes)
+      std::vector<core::PlanNodePtr>& planNodes)
       : driverFactory_(driverFactory), driver_(driver), planNodes_(planNodes) {}
 
   exec::Driver& driver() {
@@ -45,7 +47,7 @@ class CompileState {
 
   const exec::DriverFactory& driverFactory_;
   exec::Driver& driver_;
-  const std::vector<std::shared_ptr<core::PlanNode const>>& planNodes_;
+  const std::vector<core::PlanNodePtr>& planNodes_;
 };
 
 struct CudfOptions {
@@ -61,7 +63,7 @@ void registerCudf(const CudfOptions& options = CudfOptions::defaultOptions());
 void unregisterCudf();
 
 /// Returns true if cuDF is registered.
-bool isCudfRegistered();
+bool cudfIsRegistered();
 
 /**
  * @brief Returns true if the velox_cudf_debug flag is set to true.
