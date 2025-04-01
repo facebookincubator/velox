@@ -98,13 +98,13 @@ TEST_F(Base64Test, calculateDecodedSizeProperSize) {
 }
 
 TEST_F(Base64Test, checksPadding) {
-  EXPECT_TRUE(Base64::isPadded("ABC=", 4));
-  EXPECT_FALSE(Base64::isPadded("ABC", 3));
+  EXPECT_TRUE(Base64::isPadded("ABC="));
+  EXPECT_FALSE(Base64::isPadded("ABC"));
 }
 
 TEST_F(Base64Test, countsPaddingCorrectly) {
-  EXPECT_EQ(0, Base64::numPadding("ABC", 3));
-  EXPECT_EQ(1, Base64::numPadding("ABC=", 4));
-  EXPECT_EQ(2, Base64::numPadding("AB==", 4));
+  EXPECT_EQ(0, Base64::numPadding("ABC"));
+  EXPECT_EQ(1, Base64::numPadding("ABC="));
+  EXPECT_EQ(2, Base64::numPadding("AB=="));
 }
 } // namespace facebook::velox::encoding
