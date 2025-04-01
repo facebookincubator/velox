@@ -1167,5 +1167,68 @@ TEST_F(DateTimeFunctionsTest, timestampToMillis) {
   EXPECT_EQ(timestampToMillis("-292275055-05-16 16:47:04.192"), kMinBigint);
 }
 
+TEST_F(DateTimeFunctionsTest, truncFunction) {
+  const auto trunc = [&](const StringView& dateString,
+                         const StringView& unitString) {
+    return evaluateOnce<int32_t>(
+        "trunc(c0, c1)",
+        {DATE(), VARCHAR()},
+        std::make_optional(parseDate(dateString)),
+        std::make_optional(unitString));
+  };
+  EXPECT_EQ(trunc("2025-02-15", "WEEK"), parseDate("2025-02-10"));
+  EXPECT_EQ(trunc("2025-02-15", "MONTH"), parseDate("2025-02-01"));
+  EXPECT_EQ(trunc("2025-02-15", "MON"), parseDate("2025-02-01"));
+  EXPECT_EQ(trunc("2025-02-15", "MM"), parseDate("2025-02-01"));
+  EXPECT_EQ(trunc("2025-02-15", "QUARTER"), parseDate("2025-01-01"));
+  EXPECT_EQ(trunc("2025-02-15", "YEAR"), parseDate("2025-01-01"));
+  EXPECT_EQ(trunc("2025-02-15", "YYYY"), parseDate("2025-01-01"));
+  EXPECT_EQ(trunc("2025-02-15", "YY"), parseDate("2025-01-01"));
+  EXPECT_EQ(trunc("2025-02-15", "DD"), std::nullopt);
+  EXPECT_EQ(trunc("2025-02-15", "YYYYYYY"), std::nullopt);
+}
+
+TEST_F(DateTimeFunctionsTest, dateTruncFunction) {
+  const auto dateTrunc = [&](const StringView& unitString,
+                             const StringView& timestamp) {
+    return evaluateOnce<Timestamp>(
+        "date_trunc(c0, c1)",
+        std::make_optional(unitString),
+        std::make_optional(parseTimestamp(timestamp)));
+  };
+
+  EXPECT_EQ(
+      dateTrunc("MICROSECOND", "2025-02-15 12:05:30.127127"),
+      parseTimestamp("2025-02-15 12:05:30.127127"));
+  EXPECT_EQ(
+      dateTrunc("MILLISECOND", "2025-02-15 12:05:30.127127"),
+      parseTimestamp("2025-02-15 12:05:30.127"));
+  EXPECT_EQ(
+      dateTrunc("SECOND", "2025-02-15 12:05:30.127127"),
+      parseTimestamp("2025-02-15 12:05:30.000"));
+  EXPECT_EQ(
+      dateTrunc("MINUTE", "2025-02-15 12:05:30.127127"),
+      parseTimestamp("2025-02-15 12:05:00.000"));
+  EXPECT_EQ(
+      dateTrunc("HOUR", "2025-02-15 12:05:30.127127"),
+      parseTimestamp("2025-02-15 12:00:00.000"));
+  EXPECT_EQ(
+      dateTrunc("DAY", "2025-02-15 12:05:30.127127"),
+      parseTimestamp("2025-02-15 00:00:00.000"));
+  EXPECT_EQ(
+      dateTrunc("WEEK", "2025-02-15 12:05:30.127127"),
+      parseTimestamp("2025-02-10 00:00:00.000"));
+  EXPECT_EQ(
+      dateTrunc("MONTH", "2025-02-15 12:05:30.127127"),
+      parseTimestamp("2025-02-01 00:00:00.000"));
+  EXPECT_EQ(
+      dateTrunc("QUARTER", "2025-02-15 12:05:30.127127"),
+      parseTimestamp("2025-01-01 00:00:00.000"));
+  EXPECT_EQ(
+      dateTrunc("YEAR", "2025-02-15 12:05:30.127127"),
+      parseTimestamp("2025-01-01 00:00:00.000"));
+  EXPECT_EQ(dateTrunc("YYYYYYY", "2025-02-15 12:05:30.127127"), std::nullopt);
+}
+
 } // namespace
 } // namespace facebook::velox::functions::sparksql::test
