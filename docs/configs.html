@@ -1019,6 +1019,12 @@ Legacy mode only enables throttled retry for transient errors.
 Standard mode is built on top of legacy mode and has throttled retry enabled for throttling errors apart from transient errors.
 Adaptive retry mode dynamically limits the rate of AWS requests to maximize success rate.</p></td>
 </tr>
+<tr class="row-even"><td><p>hive.s3.aws-credentials-provider</p></td>
+<td><p>string</p></td>
+<td></td>
+<td><p>A custom credential provider, if specified, will be used to create the client in favor of other authentication mechanisms.
+The provider must be registered using “registerAWSCredentialsProvider” before it can be used.</p></td>
+</tr>
 </tbody>
 </table>
 <section id="bucket-level-configuration">
