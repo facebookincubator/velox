@@ -142,12 +142,10 @@ std::shared_ptr<WriterProperties> getArrowParquetWriterOptions(
         getArrowParquetCompression(columnCompressionValues.second));
   }
   properties = properties->encoding(options.encoding);
-  properties =
-      properties->data_pagesize(options.dataPageSize.value_or(
-        facebook::velox::parquet::arrow::kDefaultDataPageSize));
-  properties =
-      properties->write_batch_size(options.batchSize.value_or(
-        facebook::velox::parquet::arrow::DEFAULT_WRITE_BATCH_SIZE));
+  properties = properties->data_pagesize(options.dataPageSize.value_or(
+      facebook::velox::parquet::arrow::kDefaultDataPageSize));
+  properties = properties->write_batch_size(options.batchSize.value_or(
+      facebook::velox::parquet::arrow::DEFAULT_WRITE_BATCH_SIZE));
   properties = properties->max_row_group_length(
       static_cast<int64_t>(flushPolicy->rowsInRowGroup()));
   properties = properties->codec_options(options.codecOptions);
@@ -271,9 +269,14 @@ std::optional<int64_t> getParquetPageSize(
   if (const auto pageSize = config.get<std::string>(configKey)) {
     std::string trimmed;
     // Remove spaces if any
-    std::remove_copy_if(pageSize->begin(), pageSize->end(), std::back_inserter(trimmed), ::isspace);
+    std::remove_copy_if(
+        pageSize->begin(),
+        pageSize->end(),
+        std::back_inserter(trimmed),
+        ::isspace);
     size_t firstNonDigitPos{0};
-    while (firstNonDigitPos < trimmed.size() && std::isdigit(trimmed[firstNonDigitPos])) {
+    while (firstNonDigitPos < trimmed.size() &&
+           std::isdigit(trimmed[firstNonDigitPos])) {
       firstNonDigitPos++;
     }
     int64_t value = std::stoll(trimmed.substr(0, firstNonDigitPos));
@@ -298,12 +301,15 @@ std::optional<int64_t> getParquetBatchSize(
     const char* configKey) {
   if (const auto batchSize = config.get<std::string>(configKey)) {
     try {
-      int64_t value = std::stoll(batchSize.value());  // assuming batchSize is std::optional<std::string>
+      int64_t value = std::stoll(
+          batchSize
+              .value()); // assuming batchSize is std::optional<std::string>
       return value;
     } catch (const std::invalid_argument& e) {
       VELOX_FAIL("Write batch size is not a number {}", batchSize.value());
     } catch (const std::out_of_range& e) {
-      VELOX_FAIL("Write batch size is out of range for int64_t {}", batchSize.value());
+      VELOX_FAIL(
+          "Write batch size is out of range for int64_t {}", batchSize.value());
     }
   }
   return std::nullopt;
@@ -550,20 +556,18 @@ void WriterOptions::processConfigs(
 
   if (!dataPageSize) {
     dataPageSize =
-        getParquetPageSize(session, kParquetSessionWritePageSize)
-            .has_value()
+        getParquetPageSize(session, kParquetSessionWritePageSize).has_value()
         ? getParquetPageSize(session, kParquetSessionWritePageSize)
-        : getParquetPageSize(connectorConfig,
-          kParquetHiveConnectorWritePageSize);
+        : getParquetPageSize(
+              connectorConfig, kParquetHiveConnectorWritePageSize);
   }
 
   if (!batchSize) {
     batchSize =
-        getParquetBatchSize(session, kParquetSessionWriteBatchSize)
-            .has_value()
+        getParquetBatchSize(session, kParquetSessionWriteBatchSize).has_value()
         ? getParquetBatchSize(session, kParquetSessionWriteBatchSize)
-        : getParquetBatchSize(connectorConfig,
-          kParquetHiveConnectorWriteBatchSize);
+        : getParquetBatchSize(
+              connectorConfig, kParquetHiveConnectorWriteBatchSize);
   }
 }
 

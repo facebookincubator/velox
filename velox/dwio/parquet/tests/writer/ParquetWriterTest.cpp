@@ -160,12 +160,12 @@ TEST_F(ParquetWriterTest, testPageSizeAndBatchSizeConfiguration) {
   // of values in each page can be divided by 97, it means the batch size is
   // applied (default is 1024)
   std::unordered_map<std::string, std::string> configFromFile = {
-    {parquet::WriterOptions::kParquetHiveConnectorWritePageSize, "2KB"},
-    {parquet::WriterOptions::kParquetHiveConnectorWriteBatchSize, "97"},
+      {parquet::WriterOptions::kParquetHiveConnectorWritePageSize, "2KB"},
+      {parquet::WriterOptions::kParquetHiveConnectorWriteBatchSize, "97"},
   };
   std::unordered_map<std::string, std::string> sessionProperties = {
-    {parquet::WriterOptions::kParquetSessionWritePageSize, "2KB"},
-    {parquet::WriterOptions::kParquetSessionWriteBatchSize, "97"},
+      {parquet::WriterOptions::kParquetSessionWritePageSize, "2KB"},
+      {parquet::WriterOptions::kParquetSessionWriteBatchSize, "97"},
   };
   auto connectorConfig = config::ConfigBase(std::move(configFromFile));
   auto connectorSessionProperties =
@@ -177,8 +177,7 @@ TEST_F(ParquetWriterTest, testPageSizeAndBatchSizeConfiguration) {
       makeFlatVector<int16_t>(kRows, [](auto row) { return row + 1; }),
   });
 
-  writerOptions.processConfigs(
-            connectorConfig, connectorSessionProperties);
+  writerOptions.processConfigs(connectorConfig, connectorSessionProperties);
   auto writer = std::make_unique<parquet::Writer>(
       std::move(sink), writerOptions, rootPool_, schema);
   writer->write(data);
