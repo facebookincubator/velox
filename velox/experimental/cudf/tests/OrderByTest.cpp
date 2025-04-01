@@ -25,7 +25,6 @@
 #include "velox/exec/tests/utils/PlanBuilder.h"
 
 #include <fmt/format.h>
-#include <re2/re2.h>
 
 using namespace facebook::velox;
 using namespace facebook::velox::exec;
