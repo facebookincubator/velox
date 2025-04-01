@@ -43,6 +43,8 @@ std::string compressionKindToString(CompressionKind kind);
 
 CompressionKind stringToCompressionKind(const std::string& kind);
 
+bool isSupportedCompression(const std::string& kind);
+
 constexpr uint64_t DEFAULT_COMPRESSION_BLOCK_SIZE = 256 * 1024;
 
 } // namespace facebook::velox::common
