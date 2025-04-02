@@ -293,7 +293,7 @@ core::PlanNodePtr PlanBuilder::TableScanBuilder::build(core::PlanNodeId id) {
           std::make_shared<cudf_velox::connector::parquet::ParquetTableHandle>(
               cudf_velox::exec::test::kParquetConnectorId,
               tableName_,
-              /*filterPushdownEnabled*/ false,
+              subfieldFilterExpr != nullptr,
               subfieldFilterExpr,
               remainingFilterExpr,
               dataColumns_);

@@ -23,6 +23,7 @@
 #include "velox/experimental/cudf/connectors/parquet/ParquetConnectorSplit.h"
 #include "velox/experimental/cudf/connectors/parquet/ParquetDataSource.h"
 #include "velox/experimental/cudf/connectors/parquet/ParquetTableHandle.h"
+#include "velox/expression/FieldReference.h"
 
 #include "velox/experimental/cudf/exec/ToCudf.h"
 #include "velox/experimental/cudf/exec/Utilities.h"
@@ -58,6 +59,7 @@ ParquetDataSource::ParquetDataSource(
       expressionEvaluator_(connectorQueryCtx->expressionEvaluator()) {
   // Set up column projection if needed
   auto readColumnTypes = outputType_->children();
+  std::vector<std::string> readColumnNames;
   for (const auto& outputName : outputType_->names()) {
     auto it = columnHandles.find(outputName);
     VELOX_CHECK(
@@ -66,7 +68,7 @@ ParquetDataSource::ParquetDataSource(
         outputName);
 
     auto* handle = static_cast<const ParquetColumnHandle*>(it->second.get());
-    readColumnNames_.emplace_back(handle->name());
+    readColumnNames.emplace_back(handle->name());
   }
 
   // Dynamic cast tableHandle to ParquetTableHandle
@@ -81,16 +83,42 @@ ParquetDataSource::ParquetDataSource(
   auto subfieldFilter = tableHandle_->subfieldFilterExpr();
   if (subfieldFilter) {
     subfieldFilterExprSet_ = expressionEvaluator_->compile(subfieldFilter);
+    // add to readColumnNames
+    for (const auto& name : subfieldFilterExprSet_->distinctFields()) {
+      // check if name is already in readColumnNames_
+      if (std::find(
+              readColumnNames_.begin(),
+              readColumnNames_.end(),
+              name->field()) == readColumnNames_.end()) {
+        readColumnNames.emplace_back(name->field());
+        readColumnTypes.emplace_back(name->type());
+      }
+    }
   }
 
   // Create remaining filter
   auto remainingFilter = tableHandle_->remainingFilter();
   if (remainingFilter) {
     remainingFilterExprSet_ = expressionEvaluator_->compile(remainingFilter);
-    cudfExpressionEvaluator_ = velox::cudf_velox::ExpressionEvaluator(
-        remainingFilterExprSet_->exprs(), outputType_);
     // TODO(kn): Get column names and subfields from remaining filter and add to
     // readColumnNames_
+    for (const auto& name : remainingFilterExprSet_->distinctFields()) {
+      // check if name is already in readColumnNames_
+      if (std::find(
+              readColumnNames_.begin(),
+              readColumnNames_.end(),
+              name->field()) == readColumnNames_.end()) {
+        readColumnNames.emplace_back(name->field());
+        readColumnTypes.emplace_back(name->type());
+      }
+    }
+  }
+  readColumnNames_ = readColumnNames;
+  readerOutputType_ =
+      ROW(std::move(readColumnNames), std::move(readColumnTypes));
+  if (remainingFilter) {
+    cudfExpressionEvaluator_ = velox::cudf_velox::ExpressionEvaluator(
+        remainingFilterExprSet_->exprs(), readerOutputType_);
   }
 }
 
@@ -118,32 +146,46 @@ std::optional<RowVectorPtr> ParquetDataSource::next(
 
   // Apply remaining filter if present
   if (remainingFilterExprSet_) {
-    auto cudf_table_columns = cudfTable_->release();
-    auto const original_num_columns = cudf_table_columns.size();
-    // May add computed columns to cudf_table_columns
-    auto compute_columns = cudfExpressionEvaluator_.compute(
-        cudf_table_columns, stream_, cudf::get_current_device_resource_ref());
-    std::vector<std::unique_ptr<cudf::column>> original_columns;
-    original_columns.reserve(original_num_columns);
-    for (size_t i = 0; i < original_num_columns; ++i) {
-      original_columns.push_back(std::move(cudf_table_columns[i]));
-    }
-    auto original_table =
-        std::make_unique<cudf::table>(std::move(original_columns));
+    auto cudfTableColumns = cudfTable_->release();
+    const auto originalNumColumns = cudfTableColumns.size();
+    // May add computed columns to cudfTableColumns
+    auto computedColumns = cudfExpressionEvaluator_.compute(
+        cudfTableColumns, stream_, cudf::get_current_device_resource_ref());
+    std::vector<std::unique_ptr<cudf::column>> originalColumns;
+    originalColumns.reserve(originalNumColumns);
+    std::move(
+        cudfTableColumns.begin(),
+        cudfTableColumns.begin() + originalNumColumns,
+        std::back_inserter(originalColumns));
+    auto originalTable =
+        std::make_unique<cudf::table>(std::move(originalColumns));
     cudfTable_ = cudf::apply_boolean_mask(
-        *original_table,
-        *compute_columns[0],
+        *originalTable,
+        *computedColumns[0],
         stream_,
         cudf::get_current_device_resource_ref());
   }
 
   // Output RowVectorPtr
-  const auto nrows = cudfTable_->num_rows();
+  const auto nRows = cudfTable_->num_rows();
+
+  // keep only outputType_.size() columns in cudfTable_
+  if (outputType_->size() < cudfTable_->num_columns()) {
+    auto cudfTableColumns = cudfTable_->release();
+    std::vector<std::unique_ptr<cudf::column>> originalColumns;
+    originalColumns.reserve(outputType_->size());
+    std::move(
+        cudfTableColumns.begin(),
+        cudfTableColumns.begin() + outputType_->size(),
+        std::back_inserter(originalColumns));
+    cudfTable_ = std::make_unique<cudf::table>(std::move(originalColumns));
+  }
+
   auto output = isCudfRegistered()
       ? std::make_shared<CudfVector>(
-            pool_, outputType_, nrows, std::move(cudfTable_), stream_)
+            pool_, outputType_, nRows, std::move(cudfTable_), stream_)
       : with_arrow::to_velox_column(
-            cudfTable_->view(), pool_, columnNames, stream_);
+            cudfTable_->view(), pool_, outputType_->names(), stream_);
   stream_.synchronize();
 
   // Check if conversion yielded a nullptr
@@ -207,15 +249,15 @@ ParquetDataSource::createSplitReader() {
   }
   if (subfieldFilterExprSet_) {
     auto subfieldFilterExpr = subfieldFilterExprSet_->expr(0);
-    std::vector<PrecomputeInstruction> precompute_instructions_;
+    std::vector<PrecomputeInstruction> precomputeInstructions;
     create_ast_tree(
         subfieldFilterExpr,
-        subfield_tree_,
-        subfield_scalars_,
-        outputType_,
-        precompute_instructions_);
-    VELOX_CHECK_EQ(precompute_instructions_.size(), 0);
-    readerOptions.set_filter(subfield_tree_.back());
+        subfieldTree_,
+        subfieldScalars_,
+        readerOutputType_,
+        precomputeInstructions);
+    VELOX_CHECK_EQ(precomputeInstructions.size(), 0);
+    readerOptions.set_filter(subfieldTree_.back());
   }
   stream_ = cudfGlobalStreamPool().get_stream();
   // Create a parquet reader
