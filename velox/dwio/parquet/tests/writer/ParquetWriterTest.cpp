@@ -15,6 +15,7 @@
  */
 
 #include <arrow/type.h>
+#include <dwio/parquet/writer/arrow/tests/TestUtil.h>
 #include <folly/init/Init.h>
 
 #include "velox/common/base/tests/GTestUtils.h"
@@ -249,39 +250,47 @@ TEST_F(ParquetWriterTest, testPageSizeAndBatchSizeConfiguration) {
 
   // Test incorrect page size config
 
+  const std::string invalidPageSizeAndBatchSizeValue{"NaN"};
   const std::unordered_map<std::string, std::string>
       incorrectPageSizeConfigFromFile = {
-          {parquet::WriterOptions::kParquetHiveConnectorWritePageSize, "NaN"},
+          {parquet::WriterOptions::kParquetHiveConnectorWritePageSize,
+           invalidPageSizeAndBatchSizeValue},
       };
   const std::unordered_map<std::string, std::string>
       incorrectPageSizeSessionPropertiesFromFile = {
-          {parquet::WriterOptions::kParquetSessionWritePageSize, "NaN"},
+          {parquet::WriterOptions::kParquetSessionWritePageSize,
+           invalidPageSizeAndBatchSizeValue},
       };
 
   // Values cannot be parsed so that the exception is thrown
-  EXPECT_THROW(
+  VELOX_ASSERT_THROW(
       testPageSizeAndBatchSizeToGetPageHeader(
           incorrectPageSizeConfigFromFile,
           incorrectPageSizeSessionPropertiesFromFile),
-      VeloxUserError);
+      fmt::format(
+          "Invalid capacity string '{}'", invalidPageSizeAndBatchSizeValue))
 
   // Test incorrect batch size config
 
   const std::unordered_map<std::string, std::string>
       incorrectBatchSizeConfigFromFile = {
-          {parquet::WriterOptions::kParquetHiveConnectorWriteBatchSize, "NaN"},
+          {parquet::WriterOptions::kParquetHiveConnectorWriteBatchSize,
+           invalidPageSizeAndBatchSizeValue},
       };
   const std::unordered_map<std::string, std::string>
       incorrectBatchSizeSessionPropertiesFromFile = {
-          {parquet::WriterOptions::kParquetSessionWriteBatchSize, "NaN"},
+          {parquet::WriterOptions::kParquetSessionWriteBatchSize,
+           invalidPageSizeAndBatchSizeValue},
       };
 
   // Values cannot be parsed so that the exception is thrown
-  EXPECT_THROW(
+  VELOX_ASSERT_THROW(
       testPageSizeAndBatchSizeToGetPageHeader(
           incorrectBatchSizeConfigFromFile,
           incorrectBatchSizeSessionPropertiesFromFile),
-      folly::ConversionError);
+      fmt::format(
+          "Invalid parquet writer batch size: Invalid leading character: \"{}\"",
+          invalidPageSizeAndBatchSizeValue));
 }
 
 TEST_F(ParquetWriterTest, toggleDataPageVersion) {

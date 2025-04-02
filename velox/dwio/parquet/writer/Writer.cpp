@@ -275,8 +275,12 @@ std::optional<int64_t> getParquetPageSize(
 std::optional<int64_t> getParquetBatchSize(
     const config::ConfigBase& config,
     const char* configKey) {
-  if (const auto batchSize = config.get<int64_t>(configKey)) {
-    return batchSize.value();
+  try {
+    if (const auto batchSize = config.get<int64_t>(configKey)) {
+      return batchSize.value();
+    }
+  } catch (const folly::ConversionError& e) {
+    VELOX_USER_FAIL("Invalid parquet writer batch size: {}", e.what());
   }
   return std::nullopt;
 }
