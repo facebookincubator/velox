@@ -145,23 +145,22 @@ TEST_F(ParquetWriterTest, dictionaryEncodingWithDictionaryPageSize) {
               colChunkPtr.compression(),
               colChunkPtr.totalCompressedSize());
           return pageReader->readPageHeader();
-        } else {
-          constexpr int64_t kFirstDataPageCompressedSize = 1291;
-          constexpr int64_t kFirstDataPageHeaderSize = 48;
-          auto inputStream = std::make_unique<SeekableFileInputStream>(
-              std::move(file),
-              colChunkPtr.dataPageOffset() + kFirstDataPageCompressedSize +
-                  kFirstDataPageHeaderSize,
-              150,
-              *leafPool_,
-              LogType::TEST);
-          auto pageReader = std::make_unique<PageReader>(
-              std::move(inputStream),
-              *leafPool_,
-              colChunkPtr.compression(),
-              colChunkPtr.totalCompressedSize());
-          return pageReader->readPageHeader();
         }
+        constexpr int64_t kFirstDataPageCompressedSize = 1291;
+        constexpr int64_t kFirstDataPageHeaderSize = 48;
+        auto inputStream = std::make_unique<SeekableFileInputStream>(
+            std::move(file),
+            colChunkPtr.dataPageOffset() + kFirstDataPageCompressedSize +
+                kFirstDataPageHeaderSize,
+            150,
+            *leafPool_,
+            LogType::TEST);
+        auto pageReader = std::make_unique<PageReader>(
+            std::move(inputStream),
+            *leafPool_,
+            colChunkPtr.compression(),
+            colChunkPtr.totalCompressedSize());
+        return pageReader->readPageHeader();
       };
 
   // Test default config (i.e., no explicit config)
@@ -213,24 +212,45 @@ TEST_F(ParquetWriterTest, dictionaryEncodingWithDictionaryPageSize) {
   // The second data page will fall back to PLAIN encoding
   EXPECT_EQ(normalHeader.data_page_header.encoding, thrift::Encoding::PLAIN);
 
-  // Test incorrect config
+  // Test incorrect enable dictionary config
 
-  const std::unordered_map<std::string, std::string> incorrectConfigFromFile = {
-      {parquet::WriterOptions::kParquetHiveConnectorEnableDictionary, "NaB"},
-      {parquet::WriterOptions::kParquetHiveConnectorDictionaryPageSizeLimit,
-       "NaN"},
-  };
   const std::unordered_map<std::string, std::string>
-      incorrectSessionProperties = {
+      incorrectEnableDictionaryConfigFromFile = {
+          {parquet::WriterOptions::kParquetHiveConnectorEnableDictionary,
+           "NaB"},
+      };
+  const std::unordered_map<std::string, std::string>
+      incorrectEnableDictionarySessionProperties = {
           {parquet::WriterOptions::kParquetSessionEnableDictionary, "NaB"},
+      };
+
+  // Values cannot be parsed so that the exception is thrown
+  EXPECT_THROW(
+      testEnableDictionaryAndDictionaryPageSizeToGetPageHeader(
+          incorrectEnableDictionaryConfigFromFile,
+          incorrectEnableDictionarySessionProperties,
+          true),
+      folly::ConversionError);
+
+  // Test incorrect dictionary page size config
+  const std::unordered_map<std::string, std::string>
+      incorrectDictionaryPageSizeConfigFromFile = {
+          {parquet::WriterOptions::kParquetHiveConnectorDictionaryPageSizeLimit,
+           "NaN"},
+      };
+  const std::unordered_map<std::string, std::string>
+      incorrectDictionaryPageSizeSessionProperties = {
           {parquet::WriterOptions::kParquetSessionDictionaryPageSizeLimit,
            "NaN"},
       };
 
+  // Values cannot be parsed so that the exception is thrown
   EXPECT_THROW(
       testEnableDictionaryAndDictionaryPageSizeToGetPageHeader(
-          incorrectConfigFromFile, incorrectSessionProperties, true),
-      folly::ConversionError);
+          incorrectDictionaryPageSizeConfigFromFile,
+          incorrectDictionaryPageSizeSessionProperties,
+          true),
+      VeloxUserError);
 }
 
 TEST_F(ParquetWriterTest, dictionaryEncodingOff) {
