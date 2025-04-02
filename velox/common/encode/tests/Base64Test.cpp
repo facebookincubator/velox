@@ -16,6 +16,7 @@
 
 #include "velox/common/encode/Base64.h"
 
+#include <common/encode/EncoderUtils.h>
 #include <gtest/gtest.h>
 #include "velox/common/base/Exceptions.h"
 #include "velox/common/base/tests/GTestUtils.h"
@@ -49,54 +50,47 @@ TEST_F(Base64Test, fromBase64) {
 }
 
 TEST_F(Base64Test, calculateDecodedSizeProperSize) {
-  size_t encoded_size{0};
-
-  encoded_size = 20;
+  size_t encodedSize = 20;
   EXPECT_EQ(
-      13, Base64::calculateDecodedSize("SGVsbG8sIFdvcmxkIQ==", encoded_size));
-  EXPECT_EQ(18, encoded_size);
+      13,
+      calculateDecodedSize("SGVsbG8sIFdvcmxkIQ==", encodedSize, 3, 4).value());
+  EXPECT_EQ(18, encodedSize);
 
-  encoded_size = 18;
+  encodedSize = 18;
   EXPECT_EQ(
-      13, Base64::calculateDecodedSize("SGVsbG8sIFdvcmxkIQ", encoded_size));
-  EXPECT_EQ(18, encoded_size);
+      13,
+      calculateDecodedSize("SGVsbG8sIFdvcmxkIQ", encodedSize, 3, 4).value());
+  EXPECT_EQ(18, encodedSize);
 
-  encoded_size = 21;
-  VELOX_ASSERT_THROW(
-      Base64::calculateDecodedSize("SGVsbG8sIFdvcmxkIQ==", encoded_size),
-      "Base64::decode() - invalid input string: string length cannot be 1 more than a multiple of 4.");
-
-  encoded_size = 32;
+  encodedSize = 21;
   EXPECT_EQ(
-      23,
-      Base64::calculateDecodedSize(
-          "QmFzZTY0IGVuY29kaW5nIGlzIGZ1bi4=", encoded_size));
-  EXPECT_EQ(31, encoded_size);
+      Status::UserError("decode() - invalid input string length."),
+      calculateDecodedSize("SGVsbG8sIFdvcmxkIQ===", encodedSize, 3, 4).error());
 
-  encoded_size = 31;
+  encodedSize = 32;
   EXPECT_EQ(
       23,
-      Base64::calculateDecodedSize(
-          "QmFzZTY0IGVuY29kaW5nIGlzIGZ1bi4", encoded_size));
-  EXPECT_EQ(31, encoded_size);
+      calculateDecodedSize(
+          "QmFzZTY0IGVuY29kaW5nIGlzIGZ1bi4=", encodedSize, 3, 4)
+          .value());
+  EXPECT_EQ(31, encodedSize);
 
-  encoded_size = 16;
-  EXPECT_EQ(10, Base64::calculateDecodedSize("MTIzNDU2Nzg5MA==", encoded_size));
-  EXPECT_EQ(14, encoded_size);
+  encodedSize = 31;
+  EXPECT_EQ(
+      23,
+      calculateDecodedSize("QmFzZTY0IGVuY29kaW5nIGlzIGZ1bi4", encodedSize, 3, 4)
+          .value());
+  EXPECT_EQ(31, encodedSize);
 
-  encoded_size = 14;
-  EXPECT_EQ(10, Base64::calculateDecodedSize("MTIzNDU2Nzg5MA", encoded_size));
-  EXPECT_EQ(14, encoded_size);
+  encodedSize = 16;
+  EXPECT_EQ(
+      10, calculateDecodedSize("MTIzNDU2Nzg5MA==", encodedSize, 3, 4).value());
+  EXPECT_EQ(14, encodedSize);
+
+  encodedSize = 14;
+  EXPECT_EQ(
+      10, calculateDecodedSize("MTIzNDU2Nzg5MA", encodedSize, 3, 4).value());
+  EXPECT_EQ(14, encodedSize);
 }
 
-TEST_F(Base64Test, checksPadding) {
-  EXPECT_TRUE(Base64::isPadded("ABC=", 4));
-  EXPECT_FALSE(Base64::isPadded("ABC", 3));
-}
-
-TEST_F(Base64Test, countsPaddingCorrectly) {
-  EXPECT_EQ(0, Base64::numPadding("ABC", 3));
-  EXPECT_EQ(1, Base64::numPadding("ABC=", 4));
-  EXPECT_EQ(2, Base64::numPadding("AB==", 4));
-}
 } // namespace facebook::velox::encoding
