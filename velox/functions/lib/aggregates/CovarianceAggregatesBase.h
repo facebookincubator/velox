@@ -138,7 +138,9 @@ class CovarIntermediateResult {
         meanY_{mutableRawValues<double>(rowVector, indices.meanY)},
         c2_{mutableRawValues<double>(rowVector, indices.c2)} {}
 
-  static std::string type();
+  static std::string type() {
+    return "row(double,bigint,double,double)";
+  }
 
   void set(vector_size_t row, const CovarAccumulator& accumulator);
 
@@ -321,7 +323,7 @@ class CovarianceAggregate : public exec::Aggregate {
   }
 
   void extractValues(char** groups, int32_t numGroups, VectorPtr* result)
-  override {
+      override {
     auto vector = (*result)->as<FlatVector<T>>();
     VELOX_CHECK(vector);
     vector->resize(numGroups);
@@ -345,7 +347,7 @@ class CovarianceAggregate : public exec::Aggregate {
   }
 
   void extractAccumulators(char** groups, int32_t numGroups, VectorPtr* result)
-  override {
+      override {
     auto rowVector = (*result)->as<RowVector>();
     rowVector->resize(numGroups);
     for (auto& child : rowVector->children()) {

@@ -144,10 +144,6 @@ void CovarIntermediateResult::set(vector_size_t row, const CovarAccumulator& acc
   c2_[row] = accumulator.c2();
 }
 
-std::string CorrIntermediateResult::type() {
-  return "row(double,bigint,double,double)";
-}
-
 void CorrAccumulator::update(double x, double y) {
   double oldMeanX = meanX();
   double oldMeanY = meanY();
