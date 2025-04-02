@@ -14,12 +14,6 @@
  * limitations under the License.
  */
 
-#include "velox/common/base/Counters.h"
-#include "velox/common/base/Fs.h"
-#include "velox/common/base/StatsReporter.h"
-#include "velox/dwio/common/Options.h"
-#include "velox/exec/OperatorUtils.h"
-
 #include "velox/experimental/cudf/connectors/parquet/ParquetConfig.h"
 #include "velox/experimental/cudf/connectors/parquet/ParquetDataSink.h"
 #include "velox/experimental/cudf/connectors/parquet/ParquetTableHandle.h"
@@ -27,7 +21,12 @@
 #include "velox/experimental/cudf/exec/VeloxCudfInterop.h"
 #include "velox/experimental/cudf/vector/CudfVector.h"
 
-#include <cudf/concatenate.hpp>
+#include "velox/common/base/Counters.h"
+#include "velox/common/base/Fs.h"
+#include "velox/common/base/StatsReporter.h"
+#include "velox/dwio/common/Options.h"
+#include "velox/exec/OperatorUtils.h"
+
 #include <cudf/copying.hpp>
 #include <cudf/io/parquet.hpp>
 #include <cudf/io/types.hpp>
@@ -158,7 +157,7 @@ void ParquetDataSink::appendData(RowVectorPtr input) {
 
   // Convert the input RowVectorPtr to cudf::table
   auto stream = cudfGlobalStreamPool().get_stream();
-  auto cudfInput = with_arrow::to_cudf_table(input, input->pool(), stream);
+  auto cudfInput = with_arrow::toCudfTable(input, input->pool(), stream);
   stream.synchronize();
   VELOX_CHECK_NOT_NULL(
       cudfInput, "Failed to convert input RowVectorPtr to cudf::table");

@@ -13,24 +13,17 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
 #include "velox/experimental/cudf/exec/CudfFilterProject.h"
-#include "velox/experimental/cudf/exec/Utilities.h"
-#include "velox/expression/ConstantExpr.h"
-#include "velox/expression/FieldReference.h"
-#include "velox/type/Type.h"
-#include "velox/vector/ConstantVector.h"
+#include "velox/experimental/cudf/exec/ToCudf.h"
+#include "velox/experimental/cudf/vector/CudfVector.h"
+
+#include "velox/expression/Expr.h"
 
 #include <cudf/aggregation.hpp>
-#include <cudf/datetime.hpp>
 #include <cudf/reduction.hpp>
 #include <cudf/stream_compaction.hpp>
-#include <cudf/strings/attributes.hpp>
-#include <cudf/strings/contains.hpp>
-#include <cudf/strings/slice.hpp>
-#include <cudf/table/table.hpp>
-#include <cudf/transform.hpp>
 
-#include <sstream>
 #include <unordered_map>
 
 namespace facebook::velox::cudf_velox {

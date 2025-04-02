@@ -16,17 +16,25 @@
 
 #pragma once
 
-#include "velox/exec/Driver.h"
 #include "velox/exec/Operator.h"
 
+#include <gflags/gflags.h>
+
+DECLARE_bool(velox_cudf_enabled);
+DECLARE_string(velox_cudf_memory_resource);
+DECLARE_bool(velox_cudf_debug);
+DECLARE_bool(velox_cudf_table_scan);
+
 namespace facebook::velox::cudf_velox {
+
+static const std::string kCudfAdapterName = "cuDF";
 
 class CompileState {
  public:
   CompileState(
       const velox::exec::DriverFactory& driverFactory,
       velox::exec::Driver& driver,
-      std::vector<std::shared_ptr<velox::core::PlanNode const>>& planNodes)
+      std::vector<velox::core::PlanNodePtr>& planNodes)
       : driverFactory_(driverFactory), driver_(driver), planNodes_(planNodes) {}
 
   velox::exec::Driver& driver() {
@@ -39,14 +47,32 @@ class CompileState {
 
   const velox::exec::DriverFactory& driverFactory_;
   velox::exec::Driver& driver_;
-  const std::vector<std::shared_ptr<velox::core::PlanNode const>>& planNodes_;
+  const std::vector<velox::core::PlanNodePtr>& planNodes_;
+};
+
+struct CudfOptions {
+  bool cudfEnabled = FLAGS_velox_cudf_enabled;
+  std::string cudfMemoryResource = FLAGS_velox_cudf_memory_resource;
+  static CudfOptions defaultOptions() {
+    return CudfOptions();
+  }
 };
 
 /// Registers adapter to add cuDF operators to Drivers.
-void registerCudf();
+void registerCudf(const CudfOptions& options = CudfOptions::defaultOptions());
 void unregisterCudf();
 
 /// Returns true if cuDF is registered.
-bool isCudfRegistered();
+bool cudfIsRegistered();
+
+/**
+ * @brief Returns true if the velox_cudf_debug flag is set to true.
+ */
+bool cudfDebugEnabled();
+
+/**
+ * @brief Returns true if the velox_cudf_table_scan flag is set to true.
+ */
+bool cudfTableScanEnabled();
 
 } // namespace facebook::velox::cudf_velox

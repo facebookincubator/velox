@@ -14,24 +14,20 @@
  * limitations under the License.
  */
 
-#include <fmt/ranges.h>
+#include "velox/experimental/cudf/connectors/parquet/ParquetConfig.h"
+#include "velox/experimental/cudf/connectors/parquet/ParquetConnector.h"
+#include "velox/experimental/cudf/connectors/parquet/ParquetConnectorSplit.h"
+#include "velox/experimental/cudf/connectors/parquet/ParquetDataSource.h"
+#include "velox/experimental/cudf/connectors/parquet/ParquetTableHandle.h"
+#include "velox/experimental/cudf/tests/utils/ParquetConnectorTestBase.h"
+#include "velox/expression/ExprToSubfieldFilter.h"
+#include "velox/exec/tests/utils/HiveConnectorTestBase.h"
 
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/common/file/tests/FaultyFile.h"
 #include "velox/common/file/tests/FaultyFileSystem.h"
 #include "velox/common/memory/MemoryArbitrator.h"
 #include "velox/common/testutil/TestValue.h"
-
-#include "velox/experimental/cudf/connectors/parquet/ParquetConfig.h"
-#include "velox/experimental/cudf/connectors/parquet/ParquetConnector.h"
-#include "velox/experimental/cudf/connectors/parquet/ParquetConnectorSplit.h"
-#include "velox/experimental/cudf/connectors/parquet/ParquetDataSource.h"
-#include "velox/experimental/cudf/connectors/parquet/ParquetTableHandle.h"
-#include "velox/experimental/cudf/exec/Utilities.h"
-#include "velox/experimental/cudf/tests/utils/ParquetConnectorTestBase.h"
-#include "velox/expression/ExprToSubfieldFilter.h"
-#include "velox/exec/tests/utils/HiveConnectorTestBase.h"
-
 #include "velox/exec/Exchange.h"
 #include "velox/exec/PlanNodeStats.h"
 #include "velox/exec/TableScan.h"
@@ -40,6 +36,8 @@
 #include "velox/exec/tests/utils/PlanBuilder.h"
 #include "velox/exec/tests/utils/TempDirectoryPath.h"
 #include "velox/type/Type.h"
+
+#include <fmt/ranges.h>
 
 using namespace facebook::velox;
 using namespace facebook::velox::core;

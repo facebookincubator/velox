@@ -16,14 +16,11 @@
 
 #pragma once
 
-#include "velox/exec/Driver.h"
-#include "velox/exec/Operator.h"
-#include "velox/vector/ComplexVector.h"
-
-#include <cudf/table/table.hpp>
-
 #include "velox/experimental/cudf/exec/NvtxHelper.h"
 #include "velox/experimental/cudf/vector/CudfVector.h"
+
+#include "velox/exec/Operator.h"
+#include "velox/vector/ComplexVector.h"
 
 #include <deque>
 #include <memory>
@@ -33,6 +30,9 @@ namespace facebook::velox::cudf_velox {
 
 class CudfFromVelox : public exec::Operator, public NvtxHelper {
  public:
+  static constexpr const char* kGpuBatchSizeRows =
+      "velox.cudf.gpu_batch_size_rows";
+
   CudfFromVelox(
       int32_t operatorId,
       RowTypePtr outputType,
@@ -59,7 +59,7 @@ class CudfFromVelox : public exec::Operator, public NvtxHelper {
 
  private:
   std::vector<RowVectorPtr> inputs_;
-  std::size_t current_output_size_ = 0;
+  std::size_t currentOutputSize_ = 0;
   bool finished_ = false;
 };
 

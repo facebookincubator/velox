@@ -15,6 +15,11 @@
  */
 #pragma once
 
+#include "velox/experimental/cudf/connectors/parquet/ParquetConfig.h"
+#include "velox/experimental/cudf/connectors/parquet/ParquetConnectorSplit.h"
+#include "velox/experimental/cudf/connectors/parquet/ParquetTableHandle.h"
+#include "velox/experimental/cudf/connectors/parquet/WriterOptions.h"
+
 #include "velox/common/compression/Compression.h"
 #include "velox/connectors/Connector.h"
 #include "velox/dwio/common/Options.h"
@@ -22,11 +27,6 @@
 #include "velox/dwio/common/WriterFactory.h"
 #include "velox/exec/MemoryReclaimer.h"
 #include "velox/type/Type.h"
-
-#include "velox/experimental/cudf/connectors/parquet/ParquetConfig.h"
-#include "velox/experimental/cudf/connectors/parquet/ParquetConnectorSplit.h"
-#include "velox/experimental/cudf/connectors/parquet/ParquetTableHandle.h"
-#include "velox/experimental/cudf/connectors/parquet/WriterOptions.h"
 
 #include <cudf/io/parquet.hpp>
 #include <cudf/io/types.hpp>
