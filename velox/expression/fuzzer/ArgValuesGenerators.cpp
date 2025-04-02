@@ -183,4 +183,55 @@ std::vector<core::TypedExprPtr> PhoneNumberArgValuesGenerator::generate(
   }
   return inputExpressions;
 }
+
+std::vector<core::TypedExprPtr> CastVarcharAndJsonArgValuesGenerator::generate(
+    const CallableSignature& signature,
+    const VectorFuzzer::Options& options,
+    FuzzerGenerator& rng,
+    ExpressionFuzzerState& state) {
+  VELOX_CHECK_EQ(signature.args.size(), 1);
+  populateInputTypesAndNames(signature, state);
+  std::vector<core::TypedExprPtr> inputExpressions;
+
+  // Use default input generation for non-varchar inputs.
+  if (signature.args[0]->kind() != TypeKind::VARCHAR) {
+    state.customInputGenerators_.emplace_back(nullptr);
+    inputExpressions.emplace_back(nullptr);
+  }
+  // Use custom input generation for varchar.
+  // This will be used to test casting to primitive and complex types.
+  else {
+    const auto representedType = facebook::velox::randType(rng, 0);
+    const auto seed = rand<uint32_t>(rng);
+    const auto nullRatio = options.nullRatio;
+
+    // Populate state.customInputGenerators_ and inputExpressions for inputs
+    // that require custom input generators. Casting to complex type should
+    // require JSON as input. Primitive conversion should require VARCHAR.
+    if (signature.returnType->kind() == TypeKind::ROW ||
+        signature.returnType->kind() == TypeKind::ARRAY ||
+        signature.returnType->kind() == TypeKind::MAP) {
+      state.customInputGenerators_.emplace_back(
+          std::make_shared<fuzzer::JsonInputGenerator>(
+              seed,
+              signature.args[0],
+              nullRatio,
+              fuzzer::getRandomInputGenerator(seed, representedType, nullRatio),
+              true));
+    } else {
+      state.customInputGenerators_.emplace_back(
+          std::make_shared<fuzzer::CastVarcharInputGenerator>(
+              seed, signature.args[0], nullRatio, signature.returnType));
+    }
+
+    VELOX_CHECK_GE(signature.args.size(), 1);
+    inputExpressions.emplace_back(std::make_shared<core::FieldAccessTypedExpr>(
+        signature.args[0],
+        signature.args.size() == 1
+            ? state.inputRowNames_.back()
+            : state.inputRowNames_[state.inputRowNames_.size() - 2]));
+  }
+
+  return inputExpressions;
+}
 } // namespace facebook::velox::fuzzer
