@@ -247,23 +247,41 @@ TEST_F(ParquetWriterTest, testPageSizeAndBatchSizeConfiguration) {
   // 1067 % 97 == 0, which means the batch size is applied (default is 1024)
   EXPECT_EQ(normalHeader.data_page_header.num_values, 1067);
 
-  // Test incorrect config
+  // Test incorrect page size config
 
-  const std::unordered_map<std::string, std::string> incorrectConfigFromFile = {
-      {parquet::WriterOptions::kParquetHiveConnectorWritePageSize, "NaN"},
-      {parquet::WriterOptions::kParquetHiveConnectorWriteBatchSize, "NaN"},
-  };
   const std::unordered_map<std::string, std::string>
-      incorrectSessionPropertiesFromFile = {
+      incorrectPageSizeConfigFromFile = {
+          {parquet::WriterOptions::kParquetHiveConnectorWritePageSize, "NaN"},
+      };
+  const std::unordered_map<std::string, std::string>
+      incorrectPageSizeSessionPropertiesFromFile = {
           {parquet::WriterOptions::kParquetSessionWritePageSize, "NaN"},
+      };
+
+  // Values cannot be parsed so that the exception is thrown
+  EXPECT_THROW(
+      testPageSizeAndBatchSizeToGetPageHeader(
+          incorrectPageSizeConfigFromFile,
+          incorrectPageSizeSessionPropertiesFromFile),
+      VeloxUserError);
+
+  // Test incorrect batch size config
+
+  const std::unordered_map<std::string, std::string>
+      incorrectBatchSizeConfigFromFile = {
+          {parquet::WriterOptions::kParquetHiveConnectorWriteBatchSize, "NaN"},
+      };
+  const std::unordered_map<std::string, std::string>
+      incorrectBatchSizeSessionPropertiesFromFile = {
           {parquet::WriterOptions::kParquetSessionWriteBatchSize, "NaN"},
       };
 
   // Values cannot be parsed so that the exception is thrown
   EXPECT_THROW(
       testPageSizeAndBatchSizeToGetPageHeader(
-          incorrectConfigFromFile, incorrectSessionPropertiesFromFile),
-      VeloxUserError, folly::ConversionError);
+          incorrectBatchSizeConfigFromFile,
+          incorrectBatchSizeSessionPropertiesFromFile),
+      folly::ConversionError);
 }
 
 TEST_F(ParquetWriterTest, toggleDataPageVersion) {
