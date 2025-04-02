@@ -40,7 +40,6 @@ struct JsonObjectKeysFunction {
     }
 
     // The result is NULL if the given string is not a valid JSON string.
-    // such as "invalid json"
     if (isFatal(jsonDoc.type().error())) {
       return false;
     }
