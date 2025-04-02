@@ -53,48 +53,43 @@ TEST_F(Base64Test, calculateDecodedSizeProperSize) {
   size_t encodedSize = 20;
   EXPECT_EQ(
       13,
-      calculateDecodedSize("SGVsbG8sIFdvcmxkIQ==", encodedSize,3,4)
-          .value());
+      calculateDecodedSize("SGVsbG8sIFdvcmxkIQ==", encodedSize, 3, 4).value());
   EXPECT_EQ(18, encodedSize);
 
   encodedSize = 18;
   EXPECT_EQ(
       13,
-      calculateDecodedSize("SGVsbG8sIFdvcmxkIQ", encodedSize,3,4).value());
+      calculateDecodedSize("SGVsbG8sIFdvcmxkIQ", encodedSize, 3, 4).value());
   EXPECT_EQ(18, encodedSize);
 
   encodedSize = 21;
   EXPECT_EQ(
-      Status::UserError(
-          "decode() - invalid input string length."),
-      calculateDecodedSize("SGVsbG8sIFdvcmxkIQ===", encodedSize,3,4)
-          .error());
+      Status::UserError("decode() - invalid input string length."),
+      calculateDecodedSize("SGVsbG8sIFdvcmxkIQ===", encodedSize, 3, 4).error());
 
   encodedSize = 32;
   EXPECT_EQ(
       23,
       calculateDecodedSize(
-          "QmFzZTY0IGVuY29kaW5nIGlzIGZ1bi4=", encodedSize,3,4)
+          "QmFzZTY0IGVuY29kaW5nIGlzIGZ1bi4=", encodedSize, 3, 4)
           .value());
   EXPECT_EQ(31, encodedSize);
 
   encodedSize = 31;
   EXPECT_EQ(
       23,
-      calculateDecodedSize(
-          "QmFzZTY0IGVuY29kaW5nIGlzIGZ1bi4", encodedSize,3,4)
+      calculateDecodedSize("QmFzZTY0IGVuY29kaW5nIGlzIGZ1bi4", encodedSize, 3, 4)
           .value());
   EXPECT_EQ(31, encodedSize);
 
   encodedSize = 16;
   EXPECT_EQ(
-      10,
-      calculateDecodedSize("MTIzNDU2Nzg5MA==", encodedSize,3,4).value());
+      10, calculateDecodedSize("MTIzNDU2Nzg5MA==", encodedSize, 3, 4).value());
   EXPECT_EQ(14, encodedSize);
 
   encodedSize = 14;
   EXPECT_EQ(
-      10, calculateDecodedSize("MTIzNDU2Nzg5MA", encodedSize,3,4).value());
+      10, calculateDecodedSize("MTIzNDU2Nzg5MA", encodedSize, 3, 4).value());
   EXPECT_EQ(14, encodedSize);
 }
 
