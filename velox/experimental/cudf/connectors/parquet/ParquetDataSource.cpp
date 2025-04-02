@@ -181,7 +181,7 @@ std::optional<RowVectorPtr> ParquetDataSource::next(
   auto output = cudfIsRegistered()
       ? std::make_shared<CudfVector>(
             pool_, outputType_, nRows, std::move(cudfTable_), stream_)
-      : with_arrow::to_velox_column(
+      : with_arrow::toVeloxColumn(
             cudfTable_->view(), pool_, outputType_->names(), stream_);
   stream_.synchronize();
 
