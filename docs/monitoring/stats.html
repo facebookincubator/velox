@@ -265,6 +265,14 @@ remote storage.</p></td>
 <td><p>The cpu time in nanoseconds that the index connector process response from storages
 client for followup processing by index join operator.</p></td>
 </tr>
+<tr class="row-odd"><td><p>clientlookupWaitWallNanos</p></td>
+<td><p>nanos</p></td>
+<td><p>The walltime in nanoseconds that the storage client wait for the lookup from remote storage.</p></td>
+</tr>
+<tr class="row-even"><td><p>clientNumStorageRequests</p></td>
+<td><p>nanos</p></td>
+<td><p>The number of split requests sent to remote storage for a client lookup request.</p></td>
+</tr>
 <tr class="row-odd"><td><p>clientRequestProcessCpuNanos</p></td>
 <td><p>nanos</p></td>
 <td><p>The cpu time in nanoseconds that the storage client process request for remote
