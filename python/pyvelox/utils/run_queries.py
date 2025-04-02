@@ -17,10 +17,10 @@ import argparse
 import logging
 import os
 
-from velox.py.file import File
-from velox.py.plan_builder import PlanBuilder, JoinType
-from velox.py.runner import LocalRunner, register_hive
-from velox.py.type import BIGINT, DATE, DOUBLE, ROW, VARCHAR
+from pyvelox.file import File
+from pyvelox.plan_builder import PlanBuilder, JoinType
+from pyvelox.runner import LocalRunner, register_hive
+from pyvelox.type import BIGINT, DATE, DOUBLE, ROW, VARCHAR
 
 
 HIVE_CONNECTOR_NAME = "hive"
