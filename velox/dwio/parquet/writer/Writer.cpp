@@ -275,13 +275,8 @@ std::optional<int64_t> getParquetPageSize(
 std::optional<int64_t> getParquetBatchSize(
     const config::ConfigBase& config,
     const char* configKey) {
-  if (const auto batchSize = config.get<std::string>(configKey)) {
-    try {
-      int64_t value = folly::to<int64_t>(batchSize.value());
-      return value;
-    } catch (const folly::ConversionError& e) {
-      VELOX_FAIL("Write batch size is not a number {}", batchSize.value());
-    }
+  if (const auto batchSize = config.get<int64_t>(configKey)) {
+    return batchSize.value();
   }
   return std::nullopt;
 }

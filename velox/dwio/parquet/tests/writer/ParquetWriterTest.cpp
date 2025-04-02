@@ -148,7 +148,7 @@ TEST_F(ParquetWriterTest, compression) {
 };
 
 TEST_F(ParquetWriterTest, testPageSizeAndBatchSizeConfiguration) {
-  auto schema = ROW({"c0"}, {SMALLINT()});
+  const auto schema = ROW({"c0"}, {SMALLINT()});
   constexpr int64_t kRows = 10'000;
   const auto data = makeRowVector({
       makeFlatVector<int16_t>(kRows, [](auto row) { return row + 1; }),
@@ -208,7 +208,7 @@ TEST_F(ParquetWriterTest, testPageSizeAndBatchSizeConfiguration) {
   const std::unordered_map<std::string, std::string>
       defaultSessionPropertiesFromFile;
 
-  auto defaultHeader = testPageSizeAndBatchSizeToGetPageHeader(
+  const auto defaultHeader = testPageSizeAndBatchSizeToGetPageHeader(
       defaultConfigFromFile, defaultSessionPropertiesFromFile);
   // We use the default version of data page (V1)
   EXPECT_EQ(defaultHeader.type, thrift::PageType::type::DATA_PAGE);
@@ -235,7 +235,7 @@ TEST_F(ParquetWriterTest, testPageSizeAndBatchSizeConfiguration) {
       {parquet::WriterOptions::kParquetSessionWritePageSize, "2KB"},
       {parquet::WriterOptions::kParquetSessionWriteBatchSize, "97"},
   };
-  auto normalHeader = testPageSizeAndBatchSizeToGetPageHeader(
+  const auto normalHeader = testPageSizeAndBatchSizeToGetPageHeader(
       normalConfigFromFile, normalSessionProperties);
   // We use the default version of data page (V1)
   EXPECT_EQ(normalHeader.type, thrift::PageType::type::DATA_PAGE);
@@ -263,7 +263,7 @@ TEST_F(ParquetWriterTest, testPageSizeAndBatchSizeConfiguration) {
   EXPECT_THROW(
       testPageSizeAndBatchSizeToGetPageHeader(
           incorrectConfigFromFile, incorrectSessionPropertiesFromFile),
-      VeloxUserError);
+      VeloxUserError, folly::ConversionError);
 }
 
 TEST_F(ParquetWriterTest, toggleDataPageVersion) {
