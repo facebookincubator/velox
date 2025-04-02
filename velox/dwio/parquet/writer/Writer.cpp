@@ -257,16 +257,8 @@ std::optional<std::string> getTimestampTimeZone(
 std::optional<bool> isParquetEnableDictionary(
     const config::ConfigBase& config,
     const char* configKey) {
-  if (const auto enableDictionary = config.get<std::string>(configKey)) {
-    if ("true" == enableDictionary) {
-      return true;
-    } else if ("false" == enableDictionary) {
-      return false;
-    } else {
-      VELOX_FAIL(
-          "Unsupported enable dictionary flag (true/false): {}",
-          enableDictionary.value());
-    }
+  if (const auto enableDictionary = config.get<bool>(configKey)) {
+    return enableDictionary.value();
   }
   return std::nullopt;
 }
@@ -275,31 +267,7 @@ std::optional<int64_t> getParquetPageSize(
     const config::ConfigBase& config,
     const char* configKey) {
   if (const auto pageSize = config.get<std::string>(configKey)) {
-    std::string trimmed;
-    // Remove spaces if any
-    std::remove_copy_if(
-        pageSize->begin(),
-        pageSize->end(),
-        std::back_inserter(trimmed),
-        ::isspace);
-    size_t firstNonDigitPos{0};
-    while (firstNonDigitPos < trimmed.size() &&
-           std::isdigit(trimmed[firstNonDigitPos])) {
-      firstNonDigitPos++;
-    }
-    int64_t value = std::stoll(trimmed.substr(0, firstNonDigitPos));
-    std::string unit = trimmed.substr(firstNonDigitPos);
-    if (unit.empty() || "B" == unit) {
-      return value;
-    } else if ("KB" == unit) {
-      return value * 1'024;
-    } else if ("MB" == unit) {
-      return value * 1'024 * 1'024;
-    } else if ("GB" == unit) {
-      return value * 1'024 * 1'024 * 1'024;
-    } else {
-      VELOX_FAIL("Unsupported parquet page size unit {}", unit);
-    }
+    return config::toCapacity(pageSize.value(), config::CapacityUnit::BYTE);
   }
   return std::nullopt;
 }
