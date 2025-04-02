@@ -24,11 +24,15 @@ namespace facebook::velox::cudf_velox {
 class NvtxHelper {
  public:
   NvtxHelper();
-  NvtxHelper(nvtx3::color color, std::optional<int64_t> payload = std::nullopt)
-      : color_(color), payload_(payload) {}
+  NvtxHelper(
+      nvtx3::color color,
+      std::optional<int64_t> payload = std::nullopt,
+      std::optional<std::string> extra_info = std::nullopt)
+      : color_(color), payload_(payload), extra_info_(extra_info) {}
 
   nvtx3::color color_{nvtx3::rgb{125, 125, 125}}; // Gray
   std::optional<int64_t> payload_{};
+  std::optional<std::string> extra_info_{};
 };
 
 /**
@@ -80,13 +84,15 @@ constexpr std::string_view extractClassAndFunction(
           value,                                                               \
       "VELOX_NVTX_OPERATOR_FUNC_RANGE can only be used"                        \
       " in Operators derived from NvtxHelper");                                \
-  static nvtx_registered_string_t const nvtx3_func_name__{                     \
+  static std::string const nvtx3_func_name__{                                  \
       std::string(extractClassAndFunction(__PRETTY_FUNCTION__))};              \
+  std::string const nvtx3_func_extra_info__{                                   \
+      nvtx3_func_name__ + " " + this->extra_info_.value_or("")};               \
   ::nvtx3::event_attributes const nvtx3_func_attr__{                    \
       this->payload_.has_value() ?                                             \
-          ::nvtx3::event_attributes{nvtx3_func_name__, this->color_,           \
+          ::nvtx3::event_attributes{nvtx3_func_extra_info__, this->color_,           \
                                    nvtx3::payload{this->payload_.value()}} :   \
-          ::nvtx3::event_attributes{nvtx3_func_name__, this->color_}};      \
+          ::nvtx3::event_attributes{nvtx3_func_extra_info__, this->color_}};      \
   ::nvtx3::scoped_range_in<velox_domain> const nvtx3_range__{nvtx3_func_attr__};
 
 #define VELOX_NVTX_PRETTY_FUNC_RANGE()                                         \

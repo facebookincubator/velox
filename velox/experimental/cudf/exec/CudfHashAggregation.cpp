@@ -450,7 +450,10 @@ CudfHashAggregation::CudfHashAggregation(
           aggregationNode->canSpill(driverCtx->queryConfig())
               ? driverCtx->makeSpillConfig(operatorId)
               : std::nullopt),
-      NvtxHelper(nvtx3::rgb{34, 139, 34}, operatorId), // Forest Green
+      NvtxHelper(
+          nvtx3::rgb{34, 139, 34}, // Forest Green
+          operatorId,
+          fmt::format("[{}]", aggregationNode->id())),
       aggregationNode_(aggregationNode),
       isPartialOutput_(exec::isPartialOutput(aggregationNode->step())),
       isGlobal_(aggregationNode->groupingKeys().empty()),
