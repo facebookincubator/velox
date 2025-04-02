@@ -214,43 +214,50 @@ TEST_F(ParquetWriterTest, dictionaryEncodingWithDictionaryPageSize) {
 
   // Test incorrect enable dictionary config
 
+  const std::string invalidEnableDictionaryValue{"NaB"};
   const std::unordered_map<std::string, std::string>
       incorrectEnableDictionaryConfigFromFile = {
           {parquet::WriterOptions::kParquetHiveConnectorEnableDictionary,
-           "NaB"},
+           invalidEnableDictionaryValue},
       };
   const std::unordered_map<std::string, std::string>
       incorrectEnableDictionarySessionProperties = {
-          {parquet::WriterOptions::kParquetSessionEnableDictionary, "NaB"},
+          {parquet::WriterOptions::kParquetSessionEnableDictionary,
+           invalidEnableDictionaryValue},
       };
 
   // Values cannot be parsed so that the exception is thrown
-  EXPECT_THROW(
+  VELOX_ASSERT_THROW(
       testEnableDictionaryAndDictionaryPageSizeToGetPageHeader(
           incorrectEnableDictionaryConfigFromFile,
           incorrectEnableDictionarySessionProperties,
           true),
-      folly::ConversionError);
+      fmt::format(
+          "Invalid parquet writer enable dictionary option: Non-whitespace character found after end of conversion: \"{}\"",
+          invalidEnableDictionaryValue.substr(1)));
 
   // Test incorrect dictionary page size config
+
+  const std::string invalidDictionaryPageSizeValue{"NaN"};
   const std::unordered_map<std::string, std::string>
       incorrectDictionaryPageSizeConfigFromFile = {
           {parquet::WriterOptions::kParquetHiveConnectorDictionaryPageSizeLimit,
-           "NaN"},
+           invalidDictionaryPageSizeValue},
       };
   const std::unordered_map<std::string, std::string>
       incorrectDictionaryPageSizeSessionProperties = {
           {parquet::WriterOptions::kParquetSessionDictionaryPageSizeLimit,
-           "NaN"},
+           invalidDictionaryPageSizeValue},
       };
 
   // Values cannot be parsed so that the exception is thrown
-  EXPECT_THROW(
+  VELOX_ASSERT_THROW(
       testEnableDictionaryAndDictionaryPageSizeToGetPageHeader(
           incorrectDictionaryPageSizeConfigFromFile,
           incorrectDictionaryPageSizeSessionProperties,
           true),
-      VeloxUserError);
+      fmt::format(
+          "Invalid capacity string '{}'", invalidDictionaryPageSizeValue));
 }
 
 TEST_F(ParquetWriterTest, dictionaryEncodingOff) {

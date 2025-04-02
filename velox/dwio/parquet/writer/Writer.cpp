@@ -257,8 +257,13 @@ std::optional<std::string> getTimestampTimeZone(
 std::optional<bool> isParquetEnableDictionary(
     const config::ConfigBase& config,
     const char* configKey) {
-  if (const auto enableDictionary = config.get<bool>(configKey)) {
-    return enableDictionary.value();
+  try {
+    if (const auto enableDictionary = config.get<bool>(configKey)) {
+      return enableDictionary.value();
+    }
+  } catch (const folly::ConversionError& e) {
+    VELOX_USER_FAIL(
+        "Invalid parquet writer enable dictionary option: {}", e.what());
   }
   return std::nullopt;
 }
