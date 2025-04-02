@@ -148,71 +148,122 @@ TEST_F(ParquetWriterTest, compression) {
 };
 
 TEST_F(ParquetWriterTest, testPageSizeAndBatchSizeConfiguration) {
-  // Create an in-memory writer.
-  auto sink = std::make_unique<MemorySink>(
-      200 * 1024 * 1024,
-      dwio::common::FileSink::Options{.pool = leafPool_.get()});
-  auto sinkPtr = sink.get();
-  parquet::WriterOptions writerOptions;
-  writerOptions.memoryPool = leafPool_.get();
-
-  // We use 97 as the batch size to test, because 97 is a prime, if the number
-  // of values in each page can be divided by 97, it means the batch size is
-  // applied (default is 1024)
-  std::unordered_map<std::string, std::string> configFromFile = {
-      {parquet::WriterOptions::kParquetHiveConnectorWritePageSize, "2KB"},
-      {parquet::WriterOptions::kParquetHiveConnectorWriteBatchSize, "97"},
-  };
-  std::unordered_map<std::string, std::string> sessionProperties = {
-      {parquet::WriterOptions::kParquetSessionWritePageSize, "2KB"},
-      {parquet::WriterOptions::kParquetSessionWriteBatchSize, "97"},
-  };
-  auto connectorConfig = config::ConfigBase(std::move(configFromFile));
-  auto connectorSessionProperties =
-      config::ConfigBase(std::move(sessionProperties));
-
   auto schema = ROW({"c0"}, {SMALLINT()});
   constexpr int64_t kRows = 10'000;
   const auto data = makeRowVector({
       makeFlatVector<int16_t>(kRows, [](auto row) { return row + 1; }),
   });
 
-  writerOptions.processConfigs(connectorConfig, connectorSessionProperties);
-  auto writer = std::make_unique<parquet::Writer>(
-      std::move(sink), writerOptions, rootPool_, schema);
-  writer->write(data);
-  writer->close();
+  // Write Parquet test data, then read and return the DataPage
+  // (thrift::PageType::type) used.
+  const auto testPageSizeAndBatchSizeToGetPageHeader =
+      [&](std::unordered_map<std::string, std::string> configFromFile,
+          std::unordered_map<std::string, std::string> sessionProperties) {
+        // Create an in-memory writer.
+        auto sink = std::make_unique<MemorySink>(
+            200 * 1024 * 1024,
+            dwio::common::FileSink::Options{.pool = leafPool_.get()});
+        auto sinkPtr = sink.get();
+        parquet::WriterOptions writerOptions;
+        writerOptions.memoryPool = leafPool_.get();
 
-  // Read to identify DataPage used.
-  dwio::common::ReaderOptions readerOptions{leafPool_.get()};
-  auto reader = createReaderInMemory(*sinkPtr, readerOptions);
+        auto connectorConfig = config::ConfigBase(std::move(configFromFile));
+        auto connectorSessionProperties =
+            config::ConfigBase(std::move(sessionProperties));
 
-  auto colChunkPtr = reader->fileMetaData().rowGroup(0).columnChunk(0);
-  std::string_view sinkData(sinkPtr->data(), sinkPtr->size());
+        writerOptions.processConfigs(
+            connectorConfig, connectorSessionProperties);
+        auto writer = std::make_unique<parquet::Writer>(
+            std::move(sink), writerOptions, rootPool_, schema);
+        writer->write(data);
+        writer->close();
 
-  auto readFile = std::make_shared<InMemoryReadFile>(sinkData);
-  auto file = std::make_shared<ReadFileInputStream>(std::move(readFile));
+        // Read to identify DataPage used.
+        dwio::common::ReaderOptions readerOptions{leafPool_.get()};
+        auto reader = createReaderInMemory(*sinkPtr, readerOptions);
 
-  auto inputStream = std::make_unique<SeekableFileInputStream>(
-      std::move(file),
-      colChunkPtr.dataPageOffset(),
-      150,
-      *leafPool_,
-      LogType::TEST);
-  auto pageReader = std::make_unique<PageReader>(
-      std::move(inputStream),
-      *leafPool_,
-      colChunkPtr.compression(),
-      colChunkPtr.totalCompressedSize());
-  auto header = pageReader->readPageHeader();
+        auto colChunkPtr = reader->fileMetaData().rowGroup(0).columnChunk(0);
+        std::string_view sinkData(sinkPtr->data(), sinkPtr->size());
+
+        auto readFile = std::make_shared<InMemoryReadFile>(sinkData);
+        auto file = std::make_shared<ReadFileInputStream>(std::move(readFile));
+
+        auto inputStream = std::make_unique<SeekableFileInputStream>(
+            std::move(file),
+            colChunkPtr.dataPageOffset(),
+            150,
+            *leafPool_,
+            LogType::TEST);
+        auto pageReader = std::make_unique<PageReader>(
+            std::move(inputStream),
+            *leafPool_,
+            colChunkPtr.compression(),
+            colChunkPtr.totalCompressedSize());
+        return pageReader->readPageHeader();
+      };
+
+  // Test default config (i.e., no explicit config)
+
+  const std::unordered_map<std::string, std::string> defaultConfigFromFile;
+  const std::unordered_map<std::string, std::string>
+      defaultSessionPropertiesFromFile;
+
+  auto defaultHeader = testPageSizeAndBatchSizeToGetPageHeader(
+      defaultConfigFromFile, defaultSessionPropertiesFromFile);
   // We use the default version of data page (V1)
-  EXPECT_EQ(header.type, thrift::PageType::type::DATA_PAGE);
+  EXPECT_EQ(defaultHeader.type, thrift::PageType::type::DATA_PAGE);
   // We don't use compressor here
-  EXPECT_EQ(header.uncompressed_page_size, header.compressed_page_size);
+  EXPECT_EQ(
+      defaultHeader.uncompressed_page_size, defaultHeader.compressed_page_size);
+  // The default page size is 1MB, which can actually contains all data in one
+  // page
+  EXPECT_EQ(defaultHeader.compressed_page_size, 17529);
+  // As mentioned above, the default page size can contain all data in one page
+  // so the number of values of the first page equals to the total number
+  EXPECT_EQ(defaultHeader.data_page_header.num_values, kRows);
+
+  // Test normal config
+
+  // We use 97 as the batch size to test, because 97 is a prime, if the number
+  // of values in each page can be divided by 97, it means the batch size is
+  // applied (default is 1024)
+  const std::unordered_map<std::string, std::string> normalConfigFromFile = {
+      {parquet::WriterOptions::kParquetHiveConnectorWritePageSize, "2KB"},
+      {parquet::WriterOptions::kParquetHiveConnectorWriteBatchSize, "97"},
+  };
+  const std::unordered_map<std::string, std::string> normalSessionProperties = {
+      {parquet::WriterOptions::kParquetSessionWritePageSize, "2KB"},
+      {parquet::WriterOptions::kParquetSessionWriteBatchSize, "97"},
+  };
+  auto normalHeader = testPageSizeAndBatchSizeToGetPageHeader(
+      normalConfigFromFile, normalSessionProperties);
+  // We use the default version of data page (V1)
+  EXPECT_EQ(normalHeader.type, thrift::PageType::type::DATA_PAGE);
+  // We don't use compressor here
+  EXPECT_EQ(
+      normalHeader.uncompressed_page_size, normalHeader.compressed_page_size);
   // 1485B < 2KB < 1MB, which means the page size is applied (default is 1MB)
-  EXPECT_EQ(header.compressed_page_size, 1485);
+  EXPECT_EQ(normalHeader.compressed_page_size, 1485);
   // 1067 % 97 == 0, which means the batch size is applied (default is 1024)
-  EXPECT_EQ(header.data_page_header.num_values, 1067);
+  EXPECT_EQ(normalHeader.data_page_header.num_values, 1067);
+
+  // Test incorrect config
+
+  const std::unordered_map<std::string, std::string> incorrectConfigFromFile = {
+      {parquet::WriterOptions::kParquetHiveConnectorWritePageSize, "NaN"},
+      {parquet::WriterOptions::kParquetHiveConnectorWriteBatchSize, "NaN"},
+  };
+  const std::unordered_map<std::string, std::string>
+      incorrectSessionPropertiesFromFile = {
+          {parquet::WriterOptions::kParquetSessionWritePageSize, "NaN"},
+          {parquet::WriterOptions::kParquetSessionWriteBatchSize, "NaN"},
+      };
+
+  // Values cannot be parsed so that the exception is thrown
+  EXPECT_THROW(
+      testPageSizeAndBatchSizeToGetPageHeader(
+          incorrectConfigFromFile, incorrectSessionPropertiesFromFile),
+      VeloxUserError);
 }
 
 TEST_F(ParquetWriterTest, toggleDataPageVersion) {
