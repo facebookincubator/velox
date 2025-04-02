@@ -40,6 +40,40 @@ struct velox_domain {
 
 using nvtx_registered_string_t = nvtx3::registered_string_in<velox_domain>;
 
+/**
+ * @brief Extracts class and function name from a pretty function string.
+ *
+ * This function parses a string like:
+ * "virtual facebook::velox::RowVectorPtr
+ * facebook::velox::cudf_velox::CudfHashAggregation::getOutput()" and returns
+ * "CudfHashAggregation::getOutput"
+ *
+ * @param prettyFunction The string from __PRETTY_FUNCTION__
+ * @return A simplified string in the format "classname::function"
+ */
+constexpr std::string_view extractClassAndFunction(
+    std::string_view prettyFunction) {
+  // Find the last occurrence of "::" before the opening parenthesis
+  auto parenPos = prettyFunction.find('(');
+  if (parenPos == std::string_view::npos) {
+    parenPos = prettyFunction.size();
+  }
+
+  auto lastColonPos = prettyFunction.rfind("::", parenPos);
+  if (lastColonPos == std::string_view::npos) {
+    return prettyFunction.substr(0, parenPos); // No class name found
+  }
+
+  // Find the previous "::" to get the start of the class name
+  auto prevColonPos = prettyFunction.rfind("::", lastColonPos - 1);
+  if (prevColonPos == std::string_view::npos) {
+    return prettyFunction.substr(0, parenPos); // No namespace found
+  }
+
+  // Return the class and function name
+  return prettyFunction.substr(prevColonPos + 2, parenPos - prevColonPos - 2);
+}
+
 #define VELOX_NVTX_OPERATOR_FUNC_RANGE()                                         \
   static_assert(                                                                 \
       std::is_base_of<NvtxHelper, std::remove_pointer<decltype(this)>::type>::   \
@@ -47,7 +81,7 @@ using nvtx_registered_string_t = nvtx3::registered_string_in<velox_domain>;
       "VELOX_NVTX_OPERATOR_FUNC_RANGE can only be used"                          \
       " in Operators derived from NvtxHelper");                                  \
   static nvtx_registered_string_t const nvtx3_func_name__{                       \
-      std::string(__func__) + " " + std::string(__PRETTY_FUNCTION__)};           \
+      std::string(extractClassAndFunction(__PRETTY_FUNCTION__))};                \
   static ::nvtx3::event_attributes const nvtx3_func_attr__{                    \
       this->payload_.has_value() ?                                             \
           ::nvtx3::event_attributes{nvtx3_func_name__, this->color_,           \
