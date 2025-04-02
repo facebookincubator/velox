@@ -312,7 +312,7 @@ cappedByteLengthUnicode(const char* input, size_t size, int64_t maxChars) {
   return utf8Position;
 }
 
-constexpr size_t custom_find_impl(
+constexpr size_t long_string_find(
     const char* str, size_t str_len,
     const char* substr, size_t substr_len,
     size_t start_pos
@@ -332,7 +332,7 @@ constexpr size_t custom_find_impl(
     while (remaining >= substr_len)
     {
         // Use optimized memchr variant
-        current = static_cast<const char*>(folly::__folly_memchr(current, first_char, remaining - substr_len + 1));
+        current = static_cast<const char*>(folly::memchr_long(current, first_char, remaining - substr_len + 1));
 
         if (!current)
             return std::string_view::npos;
@@ -362,7 +362,7 @@ static inline int64_t findNthInstanceByteIndexFromStart(
     return -1;
   }
 
-  auto byteIndex = custom_find_impl(std::string_view(string).data(), static_cast<size_t>(std::string_view(string).size()),
+  auto byteIndex = long_string_find(std::string_view(string).data(), static_cast<size_t>(std::string_view(string).size()),
                                     std::string_view(subString).data(), static_cast<size_t>(std::string_view(subString).size()),(size_t)0);
   // Not found
   if (byteIndex == std::string_view::npos) {
