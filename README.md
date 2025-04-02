@@ -11,12 +11,12 @@
 > work.
 >
 > ### Quickstart
-> This repository contains a utility scripts for quickly building and running
-> Velox with the cuDF backend. To launch the CUDA container:
+> This repository contains scripts for quickly building and running Velox with
+> the cuDF backend. To launch the CUDA container:
 > ```
 > docker-compose run -e NUM_THREADS=$(nproc) --rm adapters-cuda /bin/bash
 > ```
-> Then invoke `./build.sh` to build Velox with GPU support and run tests.
+> Then invoke `./build.sh` to build Velox with cuDF support and run tests.
 
 <img src="static/logo.svg" alt="Velox logo" width="50%" align="center" />
 
