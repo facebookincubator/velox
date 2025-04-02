@@ -58,15 +58,14 @@ TEST_F(EncoderUtilsTest, BaseReverseLookupTest) {
   reverseIndex['B'] = 1;
   uint8_t reverseLookupValue = 2;
 
-  EXPECT_EQ(
-    reverseLookup('A', reverseIndex, reverseLookupValue).value(), 0);
+  EXPECT_EQ(reverseLookup('A', reverseIndex, reverseLookupValue).value(), 0);
 
-  EXPECT_EQ(
-    reverseLookup('B', reverseIndex, reverseLookupValue).value(), 1);
+  EXPECT_EQ(reverseLookup('B', reverseIndex, reverseLookupValue).value(), 1);
 
   EXPECT_EQ(
       reverseLookup('Z', reverseIndex, reverseLookupValue).error(),
-      Status::UserError("decode() - invalid input string: invalid character 'Z'"));
+      Status::UserError(
+          "decode() - invalid input string: invalid character 'Z'"));
 }
 
 } // namespace facebook::velox::encoding
