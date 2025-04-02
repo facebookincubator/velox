@@ -227,7 +227,8 @@ find_package(OpenSSL REQUIRED)
 
 if(VELOX_ENABLE_CCACHE
    AND NOT CMAKE_C_COMPILER_LAUNCHER
-   AND NOT CMAKE_CXX_COMPILER_LAUNCHER)
+   AND NOT CMAKE_CXX_COMPILER_LAUNCHER
+   AND NOT CMAKE_CUDA_COMPILER_LAUNCHER)
 
   find_program(CCACHE_FOUND ccache)
 
@@ -378,11 +379,6 @@ endif()
 
 message("FINAL CMAKE_CXX_FLAGS=${CMAKE_CXX_FLAGS}")
 
-if(NOT TARGET fmt::fmt)
-  velox_set_source(fmt)
-  velox_resolve_dependency(fmt 9.0.0)
-endif()
-
 if(VELOX_ENABLE_GPU)
   enable_language(CUDA)
   # Determine CUDA_ARCHITECTURES automatically.
@@ -396,6 +392,14 @@ if(VELOX_ENABLE_GPU)
   endif()
   find_package(CUDAToolkit REQUIRED)
   if(VELOX_ENABLE_CUDF)
+    foreach(arch ${CMAKE_CUDA_ARCHITECTURES})
+      if(arch LESS 70)
+        message(
+          FATAL_ERROR
+            "CUDA architecture ${arch} is below 70. CUDF requires Volta (SM 70) or newer GPUs."
+        )
+      endif()
+    endforeach()
     set(VELOX_ENABLE_ARROW ON)
     velox_set_source(cudf)
     velox_resolve_dependency(cudf)

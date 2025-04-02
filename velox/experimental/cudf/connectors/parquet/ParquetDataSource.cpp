@@ -14,27 +14,21 @@
  * limitations under the License.
  */
 
-#include <filesystem>
-#include <limits>
-#include <memory>
-#include <string>
-
 #include "velox/experimental/cudf/connectors/parquet/ParquetConfig.h"
 #include "velox/experimental/cudf/connectors/parquet/ParquetConnectorSplit.h"
 #include "velox/experimental/cudf/connectors/parquet/ParquetDataSource.h"
 #include "velox/experimental/cudf/connectors/parquet/ParquetTableHandle.h"
-
 #include "velox/experimental/cudf/exec/ToCudf.h"
 #include "velox/experimental/cudf/exec/Utilities.h"
 #include "velox/experimental/cudf/exec/VeloxCudfInterop.h"
 #include "velox/experimental/cudf/vector/CudfVector.h"
 
-#include <cudf/concatenate.hpp>
-#include <cudf/copying.hpp>
 #include <cudf/io/parquet.hpp>
 #include <cudf/io/types.hpp>
-#include <cudf/table/table.hpp>
-#include <cudf/table/table_view.hpp>
+
+#include <filesystem>
+#include <memory>
+#include <string>
 
 namespace facebook::velox::cudf_velox::connector::parquet {
 
@@ -99,10 +93,10 @@ std::optional<RowVectorPtr> ParquetDataSource::next(
 
   // Output RowVectorPtr
   auto nrows = cudfTable_->num_rows();
-  auto output = isCudfRegistered()
+  auto output = cudfIsRegistered()
       ? std::make_shared<CudfVector>(
             pool_, outputType_, nrows, std::move(cudfTable_), stream_)
-      : with_arrow::to_velox_column(
+      : with_arrow::toVeloxColumn(
             cudfTable_->view(), pool_, columnNames, stream_);
   stream_.synchronize();
 

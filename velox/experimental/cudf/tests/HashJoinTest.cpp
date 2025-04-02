@@ -14,9 +14,8 @@
  * limitations under the License.
  */
 
-#include <re2/re2.h>
+#include "velox/experimental/cudf/exec/ToCudf.h"
 
-#include <fmt/format.h>
 #include "folly/experimental/EventCount.h"
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/common/memory/SharedArbitrator.h"
@@ -30,9 +29,9 @@
 #include "velox/exec/tests/utils/HiveConnectorTestBase.h"
 #include "velox/exec/tests/utils/TempDirectoryPath.h"
 #include "velox/exec/tests/utils/VectorTestUtil.h"
-#include "velox/experimental/cudf/exec/ToCudf.h"
-#include "velox/experimental/cudf/exec/Utilities.h"
 #include "velox/vector/fuzzer/VectorFuzzer.h"
+
+#include <fmt/format.h>
 
 using namespace facebook::velox;
 using namespace facebook::velox::exec;

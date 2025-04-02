@@ -14,13 +14,9 @@
  * limitations under the License.
  */
 
-#include <functional>
-#include <string>
-
-#include <cudf/io/parquet.hpp>
-#include <cudf/io/types.hpp>
-#include <cudf/table/table.hpp>
-#include <cudf/table/table_view.hpp>
+#include "velox/experimental/cudf/exec/VeloxCudfInterop.h"
+#include "velox/experimental/cudf/tests/utils/ParquetConnectorTestBase.h"
+#include "velox/experimental/cudf/vector/CudfVector.h"
 
 #include "velox/common/base/Exceptions.h"
 #include "velox/common/file/FileSystems.h"
@@ -30,10 +26,13 @@
 #include "velox/dwio/dwrf/writer/FlushPolicy.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 
-#include "velox/experimental/cudf/exec/Utilities.h"
-#include "velox/experimental/cudf/exec/VeloxCudfInterop.h"
-#include "velox/experimental/cudf/tests/utils/ParquetConnectorTestBase.h"
-#include "velox/experimental/cudf/vector/CudfVector.h"
+#include <cudf/io/parquet.hpp>
+#include <cudf/io/types.hpp>
+#include <cudf/table/table.hpp>
+#include <cudf/table/table_view.hpp>
+
+#include <functional>
+#include <string>
 
 namespace facebook::velox::cudf_velox::exec::test {
 
@@ -165,8 +164,7 @@ void ParquetConnectorTestBase::writeToFile(
     VELOX_CHECK_NOT_NULL(vector);
     if (vector->size()) {
       auto stream = cudf::get_default_stream();
-      auto cudfTable =
-          with_arrow::to_cudf_table(vector, vector->pool(), stream);
+      auto cudfTable = with_arrow::toCudfTable(vector, vector->pool(), stream);
       stream.synchronize();
       cudfTables.emplace_back(std::move(cudfTable));
     }
@@ -203,7 +201,7 @@ void ParquetConnectorTestBase::writeToFile(
   auto const sinkInfo = cudf::io::sink_info(filePath);
   VELOX_CHECK_NOT_NULL(vector);
   auto stream = cudf::get_default_stream();
-  auto cudfTable = with_arrow::to_cudf_table(vector, vector->pool(), stream);
+  auto cudfTable = with_arrow::toCudfTable(vector, vector->pool(), stream);
   stream.synchronize();
   auto tableInputMetadata = cudf::io::table_input_metadata(cudfTable->view());
   fillColumnNames(tableInputMetadata, prefix);

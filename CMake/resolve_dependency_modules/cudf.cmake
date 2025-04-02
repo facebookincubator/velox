@@ -14,6 +14,30 @@
 
 include_guard(GLOBAL)
 
+set(VELOX_rapids_cmake_VERSION 25.04)
+set(VELOX_rapids_cmake_BUILD_SHA256_CHECKSUM
+    458c14eaff9000067b32d65c8c914f4521090ede7690e16eb57035ce731386db)
+set(VELOX_rapids_cmake_SOURCE_URL
+    "https://github.com/rapidsai/rapids-cmake/archive/7828fc8ff2e9f4fa86099f3c844505c2f47ac672.tar.gz"
+)
+velox_resolve_dependency_url(rapids_cmake)
+
+set(VELOX_rmm_VERSION 25.04)
+set(VELOX_rmm_BUILD_SHA256_CHECKSUM
+    294905094213a2d1fd8e024500359ff871bc52f913a3fbaca3514727c49f62de)
+set(VELOX_rmm_SOURCE_URL
+    "https://github.com/rapidsai/rmm/archive/d8b7dacdeda302d2e37313c02d14ef5e1d1e98ea.tar.gz"
+)
+velox_resolve_dependency_url(rmm)
+
+set(VELOX_kvikio_VERSION 25.04)
+set(VELOX_kvikio_BUILD_SHA256_CHECKSUM
+    4a0b15295d0a397433930bf9a309e4ad2361b25dc7a7b3e6a35d0c9419d0cb62)
+set(VELOX_kvikio_SOURCE_URL
+    "https://github.com/rapidsai/kvikio/archive/5c710f37236bda76e447e929e17b1efbc6c632c3.tar.gz"
+)
+velox_resolve_dependency_url(kvikio)
+
 set(VELOX_cudf_VERSION 25.04)
 set(VELOX_cudf_BUILD_SHA256_CHECKSUM
     e5a1900dfaf23dab2c5808afa17a2d04fa867d2892ecec1cb37908f3b73715c2)
@@ -35,6 +59,25 @@ set(BUILD_SHARED_LIBS ON)
 string(
   APPEND CMAKE_CXX_FLAGS
   " -Wno-non-virtual-dtor -Wno-missing-field-initializers -Wno-deprecated-copy")
+
+FetchContent_Declare(
+  rapids-cmake
+  URL ${VELOX_rapids_cmake_SOURCE_URL}
+  URL_HASH ${VELOX_rapids_cmake_BUILD_SHA256_CHECKSUM}
+  UPDATE_DISCONNECTED 1)
+
+FetchContent_Declare(
+  rmm
+  URL ${VELOX_rmm_SOURCE_URL}
+  URL_HASH ${VELOX_rmm_BUILD_SHA256_CHECKSUM}
+  UPDATE_DISCONNECTED 1)
+
+FetchContent_Declare(
+  kvikio
+  URL ${VELOX_kvikio_SOURCE_URL}
+  URL_HASH ${VELOX_kvikio_BUILD_SHA256_CHECKSUM}
+  SOURCE_SUBDIR cpp
+  UPDATE_DISCONNECTED 1)
 
 FetchContent_Declare(
   cudf

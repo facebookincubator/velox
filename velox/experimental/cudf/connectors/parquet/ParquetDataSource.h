@@ -16,18 +16,18 @@
 
 #pragma once
 
+#include "velox/experimental/cudf/connectors/parquet/ParquetConfig.h"
+#include "velox/experimental/cudf/connectors/parquet/ParquetConnectorSplit.h"
+#include "velox/experimental/cudf/connectors/parquet/ParquetTableHandle.h"
+
 #include "velox/common/base/RandomUtil.h"
 #include "velox/common/io/IoStatistics.h"
 #include "velox/connectors/Connector.h"
 #include "velox/dwio/common/Statistics.h"
-#include "velox/experimental/cudf/connectors/parquet/ParquetConfig.h"
-#include "velox/experimental/cudf/connectors/parquet/ParquetConnectorSplit.h"
-#include "velox/experimental/cudf/connectors/parquet/ParquetTableHandle.h"
 #include "velox/type/Type.h"
 
 #include <cudf/io/parquet.hpp>
 #include <cudf/io/types.hpp>
-#include <cudf/types.hpp>
 
 namespace facebook::velox::cudf_velox::connector::parquet {
 

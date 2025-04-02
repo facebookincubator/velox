@@ -16,15 +16,15 @@
 
 #pragma once
 
-#include <string>
-#include <vector>
-
 #include "velox/connectors/Connector.h"
 #include "velox/core/Expressions.h"
 #include "velox/expression/Expr.h"
 #include "velox/type/Type.h"
 
 #include <cudf/types.hpp>
+
+#include <string>
+#include <vector>
 
 namespace facebook::velox::cudf_velox::connector::parquet {
 
