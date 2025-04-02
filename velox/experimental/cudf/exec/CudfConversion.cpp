@@ -139,7 +139,7 @@ RowVectorPtr CudfFromVelox::getOutput() {
   if (cudfDebugEnabled()) {
     std::cout << "CudfFromVelox table number of columns: " << tbl->num_columns()
               << std::endl;
-    std::cout << "CudfFromVelox table nxxwumber of rows: " << tbl->num_rows()
+    std::cout << "CudfFromVelox table number of rows: " << tbl->num_rows()
               << std::endl;
   }
 
