@@ -110,9 +110,10 @@ class Codec {
   /// `kUseDefaultCompressionLevel` will be returned.
   virtual int32_t defaultCompressionLevel() const = 0;
 
-  /// Performs one-shot compression.
+  /// Performs one-shot compression. The actual compressed length is returned.
   /// `outputLength` must first have been computed using maxCompressedLength().
-  /// The actual compressed length will be written to actualOutputLength.
+  /// `output` must be a valid, non-null pointer, otherwise compression will
+  /// fail.
   /// Note: One-shot compression is not always compatible with streaming
   /// decompression. Depending on the codec (e.g. LZ4), different formats may
   /// be used.
@@ -122,9 +123,12 @@ class Codec {
       uint8_t* output,
       uint64_t outputLength) = 0;
 
-  /// One-shot decompression function.
-  /// `outputLength` must be correct and therefore be obtained in advance.
-  /// The actual decompressed length is returned.
+  /// One-shot decompression function. The actual decompressed length is
+  /// returned.
+  /// `outputLength` must be correct and therefore be obtained in
+  /// advance. `output` may be null **only if** `outputLength` is 0. In all
+  /// other cases, `output` must be a valid, non-null pointer. If `output` is
+  /// null while `outputLength` is non-zero, decompression will fail.
   /// Note: One-shot decompression is not always compatible with streaming
   /// compression. Depending on the codec (e.g. LZ4), different formats may
   /// be used.
