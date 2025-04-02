@@ -427,3 +427,46 @@ String Functions
     Returns string with all characters changed to uppercase. ::
 
         SELECT upper('SparkSql'); -- SPARKSQL
+
+.. spark:function:: varchar_type_write_side_check(input, limit) -> varchar
+   :noindex:
+
+    An implementation for Spark's varcharTypeWriteSideCheck function in CharVarcharCodegenUtils.
+    Ensures length check for ``input`` so that it conforms to Spark's char/varchar semantics.
+    If the number of characters in ``input`` is less than or equal to ``limit``, ``input`` is returned as is.
+    If the number of characters in ``input`` exceeds ``limit``, trailing spaces(0x20) are trimmed to fit the limit.
+    Throws exception if the trimmed string still exceeds ``limit``. ::
+
+        -- Test with SparkSQL that triggers the function
+        create table srcvarchar(id string) stored as parquet;
+        create table tgt(id varchar(3)) stored as parquet;
+        insert into tgt select id from srcvarchar;
+
+.. spark:function:: char_type_write_side_check(input, limit) -> varchar
+   :noindex:
+
+    An implementation for Spark's charTypeWriteSideCheck function in CharVarcharCodegenUtils.
+    Ensures length check for ``input`` so that it conforms to Spark's char/varchar semantics.
+    If the number of characters in ``input`` is equal to ``limit``, ``input`` is returned as is.
+    If the number of characters in ``input`` is less than ``limit``, return ``input`` string with spaces(0x20) right padded to ``limit``.
+    If the number of characters in ``input`` exceeds ``limit``, trailing spaces(0x20) are trimmed to fit the limit.
+    Throws exception if the trimmed string still exceeds ``limit``. ::
+
+        -- Test with SparkSQL that triggers the function
+        create table srcchar(id string) stored as parquet;
+        create table tgt(id char(3)) stored as parquet;
+        insert into tgt select id from srcchar;
+
+.. spark:function:: read_side_padding(input, limit) -> varchar
+   :noindex:
+
+    An implementation for Spark's readSidePadding function available since Spark-3.4.0.
+    Right pads input with 0x20(space) characters to ``limit`` if the number of characters
+    of ``input`` is less than ``limit``.
+    This function follows Spark's implementation and is consistent with Spark's behavior. ::
+
+        -- Test with SparkSQL that triggers the function
+        create table tgt(id char(3)) stored as parquet;
+        insert into tgt values ("a");
+        select id from tgt; -- "a  "
+

@@ -1572,15 +1572,15 @@ FOLLY_ALWAYS_INLINE void trimTrailingSpaces(
     curPos--;
   }
   // Get num of chars.
-  auto numTrimmedSpace = std::distance(curPos + 1, inputStr.end());
-  auto trimmedSize = numChars - numTrimmedSpace;
+  auto trimmedSize = numChars - std::distance(curPos + 1, inputStr.end());
 
-  if (trimmedSize > limit) {
-    VELOX_USER_FAIL("Exceeds char/varchar type length limitation: {}", limit);
-  } else {
-    output.setNoCopy(StringView(
-        inputStr.data(), std::distance(inputStr.begin(), curPos + 1)));
-  }
+  VELOX_USER_CHECK_LE(
+      trimmedSize,
+      limit,
+      "Exceeds char/varchar type length limitation: {}",
+      limit);
+  output.setNoCopy(
+      StringView(inputStr.data(), std::distance(inputStr.begin(), curPos + 1)));
 }
 
 template <typename T>
@@ -1593,6 +1593,21 @@ struct VarcharTypeWriteSideCheckFunction {
   // ASCII input always produces ASCII result.
   static constexpr bool is_default_ascii_behavior = true;
 
+  FOLLY_ALWAYS_INLINE void call(
+      out_type<Varchar>& result,
+      const arg_type<Varchar>& input,
+      int32_t limit) {
+    doCall<false>(result, input, limit);
+  }
+
+  FOLLY_ALWAYS_INLINE void callAscii(
+      out_type<Varchar>& result,
+      const arg_type<Varchar>& input,
+      int32_t limit) {
+    doCall<true>(result, input, limit);
+  }
+
+ private:
   template <bool isAscii>
   FOLLY_ALWAYS_INLINE void doCall(
       out_type<Varchar>& result,
@@ -1608,6 +1623,16 @@ struct VarcharTypeWriteSideCheckFunction {
       trimTrailingSpaces(result, input, numCharacters, limit);
     }
   }
+};
+
+template <typename T>
+struct CharTypeWriteSideCheckFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+  // Results refer to strings in the first argument.
+  static constexpr int32_t reuse_strings_from_arg = 0;
+
+  // ASCII input always produces ASCII result.
+  static constexpr bool is_default_ascii_behavior = true;
 
   FOLLY_ALWAYS_INLINE void call(
       out_type<Varchar>& result,
@@ -1622,17 +1647,8 @@ struct VarcharTypeWriteSideCheckFunction {
       int32_t limit) {
     doCall<true>(result, input, limit);
   }
-};
 
-template <typename T>
-struct CharTypeWriteSideCheckFunction {
-  VELOX_DEFINE_FUNCTION_TYPES(T);
-  // Results refer to strings in the first argument.
-  static constexpr int32_t reuse_strings_from_arg = 0;
-
-  // ASCII input always produces ASCII result.
-  static constexpr bool is_default_ascii_behavior = true;
-
+ private:
   template <bool isAscii>
   FOLLY_ALWAYS_INLINE void doCall(
       out_type<Varchar>& result,
@@ -1647,13 +1663,22 @@ struct CharTypeWriteSideCheckFunction {
       return;
     } else if (numCharacters < limit) {
       // rpad spaces(0x20) to limit.
-      stringImpl::pad<false /*lpad*/, false /*isAscii*/>(
-          result, input, limit, {" "});
+      stringImpl::pad<false /*lpad*/, isAscii>(result, input, limit, {" "});
     } else {
-      // The num of space that should be trimmed anyway.
       trimTrailingSpaces(result, input, numCharacters, limit);
     }
   }
+};
+
+template <typename T>
+struct ReadSidePaddingFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  // Results refer to strings in the first argument.
+  static constexpr int32_t reuse_strings_from_arg = 0;
+
+  // ASCII input always produces ASCII result.
+  static constexpr bool is_default_ascii_behavior = true;
 
   FOLLY_ALWAYS_INLINE void call(
       out_type<Varchar>& result,
@@ -1668,18 +1693,8 @@ struct CharTypeWriteSideCheckFunction {
       int32_t limit) {
     doCall<true>(result, input, limit);
   }
-};
 
-template <typename T>
-struct ReadSidePaddingFunction {
-  VELOX_DEFINE_FUNCTION_TYPES(T);
-
-  // Results refer to strings in the first argument.
-  static constexpr int32_t reuse_strings_from_arg = 0;
-
-  // ASCII input always produces ASCII result.
-  static constexpr bool is_default_ascii_behavior = true;
-
+ private:
   template <bool isAscii>
   FOLLY_ALWAYS_INLINE void doCall(
       out_type<Varchar>& result,
@@ -1695,20 +1710,6 @@ struct ReadSidePaddingFunction {
     } else {
       result.setNoCopy(input);
     }
-  }
-
-  FOLLY_ALWAYS_INLINE void call(
-      out_type<Varchar>& result,
-      const arg_type<Varchar>& input,
-      int32_t limit) {
-    doCall<false>(result, input, limit);
-  }
-
-  FOLLY_ALWAYS_INLINE void callAscii(
-      out_type<Varchar>& result,
-      const arg_type<Varchar>& input,
-      int32_t limit) {
-    doCall<true>(result, input, limit);
   }
 };
 

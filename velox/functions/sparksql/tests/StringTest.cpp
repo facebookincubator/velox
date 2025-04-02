@@ -1064,22 +1064,22 @@ TEST_F(StringTest, varcharTypeWriteSideCheck) {
             "varchar_type_write_side_check(c0, c1)", input, limit);
       };
 
-  // Basic cases - string length <= limit
+  // Basic cases - string length <= limit.
   EXPECT_EQ(varcharTypeWriteSideCheck("abc", 3), "abc");
   EXPECT_EQ(varcharTypeWriteSideCheck("ab", 3), "ab");
   EXPECT_EQ(varcharTypeWriteSideCheck("", 5), "");
 
-  // Cases with trailing spaces
-  // Edge cases - input string is longer than limit but trims to exactly limit
+  // Cases with trailing spaces.
+  // Edge cases - input string is longer than limit but trims to exactly limit.
   EXPECT_EQ(varcharTypeWriteSideCheck("abc  ", 3), "abc");
   EXPECT_EQ(varcharTypeWriteSideCheck("abc  ", 4), "abc ");
   EXPECT_EQ(varcharTypeWriteSideCheck("abc  ", 5), "abc  ");
 
-  // Unicode string cases with trailing spaces
+  // Unicode string cases with trailing spaces.
   EXPECT_EQ(varcharTypeWriteSideCheck("世界   ", 2), "世界");
   EXPECT_EQ(varcharTypeWriteSideCheck("世界", 2), "世界");
 
-  // Error cases - string length > limit even after trimming trailing spaces
+  // Error cases - string length > limit even after trimming trailing spaces.
   VELOX_ASSERT_USER_THROW(
       varcharTypeWriteSideCheck("abcd", 3),
       "Exceeds char/varchar type length limitation: 3");
@@ -1090,19 +1090,19 @@ TEST_F(StringTest, varcharTypeWriteSideCheck) {
       varcharTypeWriteSideCheck("abc def", 5),
       "Exceeds char/varchar type length limitation: 5");
 
-  // Null input cases
+  // Null input cases.
   EXPECT_EQ(varcharTypeWriteSideCheck(std::nullopt, 5), std::nullopt);
 
-  // Edge cases - limit is zero
+  // Edge cases - limit is zero.
   VELOX_ASSERT_USER_THROW(
       varcharTypeWriteSideCheck("abc", 0),
       "Exceeds char/varchar type length limitation: 0");
   EXPECT_EQ(varcharTypeWriteSideCheck("   ", 0), "");
 
-  // Edge cases - limit is negative
+  // Edge cases - limit is negative.
   VELOX_ASSERT_USER_THROW(varcharTypeWriteSideCheck("abc", -1), "(-1 vs. 0)");
 
-  // Edge cases - input string is all spaces
+  // Edge cases - input string is all spaces.
   EXPECT_EQ(varcharTypeWriteSideCheck("   ", 2), "  ");
   EXPECT_EQ(varcharTypeWriteSideCheck("   ", 3), "   ");
   EXPECT_EQ(varcharTypeWriteSideCheck("   ", 1), " ");
@@ -1116,30 +1116,31 @@ TEST_F(StringTest, charTypeWriteSideCheck) {
             "char_type_write_side_check(c0, c1)", input, limit);
       };
 
-  // Case 1: String length equals limit (return as-is)
+  // Case 1: String length equals limit (return as-is).
   EXPECT_EQ(charTypeWriteSideCheck("abc", 3), "abc");
   EXPECT_EQ(charTypeWriteSideCheck("世界", 2), "世界");
   EXPECT_EQ(charTypeWriteSideCheck("a世", 2), "a世");
 
-  // Case 2: String length < limit (pad with spaces to reach limit)
+  // Case 2: String length < limit (pad with spaces to reach limit).
   EXPECT_EQ(charTypeWriteSideCheck("a", 3), "a  ");
   EXPECT_EQ(charTypeWriteSideCheck("ab", 3), "ab ");
   EXPECT_EQ(charTypeWriteSideCheck("", 3), "   ");
   EXPECT_EQ(charTypeWriteSideCheck("世", 3), "世  ");
   EXPECT_EQ(charTypeWriteSideCheck("世界", 3), "世界 ");
 
-  // Case 3: String length > limit (try trimming trailing spaces)
-  // Case 3a: Successful trimming (exactly fits after trimming)
+  // Case 3: String length > limit (try trimming trailing spaces).
+  // Case 3a: Successful trimming (exactly fits after trimming).
   EXPECT_EQ(charTypeWriteSideCheck("abc  ", 3), "abc");
   EXPECT_EQ(charTypeWriteSideCheck("世界   ", 2), "世界");
   EXPECT_EQ(charTypeWriteSideCheck("a世  ", 2), "a世");
 
-  // Case 3b: Successful trimming (fits with room to spare after trimming)
-  EXPECT_EQ(charTypeWriteSideCheck("a   ", 2), "a "); // Only trim what's needed
+  // Case 3b: Successful trimming (has spare space after trimming but fits
+  // limit).
+  EXPECT_EQ(charTypeWriteSideCheck("a   ", 2), "a ");
   EXPECT_EQ(charTypeWriteSideCheck("世   ", 2), "世 ");
 
   // Case 3c: Failed trimming (still too long after trimming all trailing
-  // spaces)
+  // spaces).
   VELOX_ASSERT_USER_THROW(
       charTypeWriteSideCheck("abcd", 3),
       "Exceeds char/varchar type length limitation: 3");
@@ -1150,18 +1151,18 @@ TEST_F(StringTest, charTypeWriteSideCheck) {
       charTypeWriteSideCheck("a世界b", 3),
       "Exceeds char/varchar type length limitation: 3");
 
-  // Edge cases
-  // Null input
+  // Edge cases.
+  // Null input.
   EXPECT_EQ(charTypeWriteSideCheck(std::nullopt, 5), std::nullopt);
 
-  // Limit is zero
+  // Limit is zero.
   EXPECT_EQ(charTypeWriteSideCheck("", 0), "");
   VELOX_ASSERT_USER_THROW(
       charTypeWriteSideCheck("a", 0),
       "Exceeds char/varchar type length limitation: 0");
   EXPECT_EQ(charTypeWriteSideCheck(" ", 0), "");
 
-  // Limit is negative
+  // Limit is negative.
   VELOX_ASSERT_USER_THROW(charTypeWriteSideCheck("abc", -1), "(-1 vs. 0)");
 }
 
