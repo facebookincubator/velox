@@ -53,57 +53,21 @@ struct CorrIndices : public CovarIndices {
 constexpr CorrIndices kCorrIndices{{1, 4, 5, 0}, 2, 3};
 
 struct CovarAccumulator {
-  int64_t count() const {
-    return count_;
-  }
+  int64_t count() const;
 
-  double meanX() const {
-    return meanX_;
-  }
+  double meanX() const;
 
-  double meanY() const {
-    return meanY_;
-  }
+  double meanY() const;
 
-  double c2() const {
-    return c2_;
-  }
+  double c2() const;
 
-  void update(double x, double y) {
-    count_ += 1;
-    double deltaX = x - meanX();
-    meanX_ += deltaX / count();
-    double deltaY = y - meanY();
-    meanY_ += deltaY / count();
-    c2_ += deltaX * (y - meanY());
-  }
+  void update(double x, double y);
 
   void merge(
       int64_t countOther,
       double meanXOther,
       double meanYOther,
-      double c2Other) {
-    if (countOther == 0) {
-      return;
-    }
-    if (count_ == 0) {
-      count_ = countOther;
-      meanX_ = meanXOther;
-      meanY_ = meanYOther;
-      c2_ = c2Other;
-      return;
-    }
-
-    int64_t newCount = countOther + count();
-    double deltaMeanX = meanXOther - meanX();
-    double deltaMeanY = meanYOther - meanY();
-    c2_ += c2Other +
-        deltaMeanX * deltaMeanY * count() * countOther /
-            static_cast<double>(newCount);
-    meanX_ += deltaMeanX * countOther / static_cast<double>(newCount);
-    meanY_ += deltaMeanY * countOther / static_cast<double>(newCount);
-    count_ = newCount;
-  }
+      double c2Other);
 
  private:
   int64_t count_{0};
@@ -113,50 +77,25 @@ struct CovarAccumulator {
 };
 
 struct RegrAccumulator : public CovarAccumulator {
-  double m2X() const {
-    return m2X_;
-  }
+  double m2X() const;
 
-  void update(double x, double y) {
-    double oldMeanX = meanX();
-    CovarAccumulator::update(x, y);
-
-    m2X_ += (x - oldMeanX) * (x - meanX());
-  }
+  void update(double x, double y);
 
   void merge(
       int64_t countOther,
       double meanXOther,
       double meanYOther,
       double c2Other,
-      double m2XOther) {
-    if (countOther == 0) {
-      return;
-    }
-    if (count() == 0) {
-      m2X_ = m2XOther;
-    } else {
-      m2X_ += m2XOther +
-          1.0 * count() / (count() + countOther) * countOther *
-              std::pow(meanX() - meanXOther, 2);
-    }
-    CovarAccumulator::merge(countOther, meanXOther, meanYOther, c2Other);
-  }
+      double m2XOther);
 
  protected:
   double m2X_{0};
 };
 
 struct ExtendedRegrAccumulator : public RegrAccumulator {
-  double m2Y() const {
-    return m2Y_;
-  }
+  double m2Y() const;
 
-  void update(double x, double y) {
-    double oldMeanY = meanY();
-    RegrAccumulator::update(x, y);
-    m2Y_ += (y - oldMeanY) * (y - meanY());
-  }
+  void update(double x, double y);
 
   void merge(
       int64_t countOther,
@@ -164,24 +103,7 @@ struct ExtendedRegrAccumulator : public RegrAccumulator {
       double meanYOther,
       double c2Other,
       double m2XOther,
-      double m2YOther) {
-    if (countOther == 0) {
-      return;
-    }
-    if (count() == 0) {
-      m2X_ = m2XOther;
-      m2Y_ = m2YOther;
-    } else {
-      m2X_ += m2XOther +
-          1.0 * count() / (count() + countOther) * countOther *
-              std::pow(meanX() - meanXOther, 2);
-
-      m2Y_ += m2YOther +
-          1.0 * count() / (count() + countOther) * countOther *
-              std::pow(meanY() - meanYOther, 2);
-    }
-    CovarAccumulator::merge(countOther, meanXOther, meanYOther, c2Other);
-  }
+      double m2YOther);
 
  private:
   double m2Y_{0};
@@ -197,13 +119,7 @@ class CovarIntermediateInput {
         meanY_{asSimpleVector<double>(rowVector, indices.meanY)},
         c2_{asSimpleVector<double>(rowVector, indices.c2)} {}
 
-  void mergeInto(CovarAccumulator& accumulator, vector_size_t row) {
-    accumulator.merge(
-        count_->valueAt(row),
-        meanX_->valueAt(row),
-        meanY_->valueAt(row),
-        c2_->valueAt(row));
-  }
+  void mergeInto(CovarAccumulator& accumulator, vector_size_t row);
 
  protected:
   SimpleVector<int64_t>* count_;
@@ -222,16 +138,9 @@ class CovarIntermediateResult {
         meanY_{mutableRawValues<double>(rowVector, indices.meanY)},
         c2_{mutableRawValues<double>(rowVector, indices.c2)} {}
 
-  static std::string type() {
-    return "row(double,bigint,double,double)";
-  }
+  static std::string type();
 
-  void set(vector_size_t row, const CovarAccumulator& accumulator) {
-    count_[row] = accumulator.count();
-    meanX_[row] = accumulator.meanX();
-    meanY_[row] = accumulator.meanY();
-    c2_[row] = accumulator.c2();
-  }
+  void set(vector_size_t row, const CovarAccumulator& accumulator);
 
  private:
   int64_t* count_;
@@ -249,14 +158,7 @@ struct CorrAccumulator : public CovarAccumulator {
     return m2Y_;
   }
 
-  void update(double x, double y) {
-    double oldMeanX = meanX();
-    double oldMeanY = meanY();
-    CovarAccumulator::update(x, y);
-
-    m2X_ += (x - oldMeanX) * (x - meanX());
-    m2Y_ += (y - oldMeanY) * (y - meanY());
-  }
+  void update(double x, double y);
 
   void merge(
       int64_t countOther,
@@ -264,22 +166,7 @@ struct CorrAccumulator : public CovarAccumulator {
       double meanYOther,
       double c2Other,
       double m2XOther,
-      double m2YOther) {
-    if (countOther == 0) {
-      return;
-    }
-
-    if (count() == 0) {
-      m2X_ = m2XOther;
-      m2Y_ = m2YOther;
-    } else {
-      auto k = 1.0 * count() / (count() + countOther) * countOther;
-      m2X_ += m2XOther + k * std::pow(meanX() - meanXOther, 2);
-      m2Y_ += m2YOther + k * std::pow(meanY() - meanYOther, 2);
-    }
-
-    CovarAccumulator::merge(countOther, meanXOther, meanYOther, c2Other);
-  }
+      double m2YOther);
 
  private:
   double m2X_{0};
@@ -293,15 +180,7 @@ class CorrIntermediateInput : public CovarIntermediateInput {
         m2X_{asSimpleVector<double>(rowVector, kCorrIndices.m2X)},
         m2Y_{asSimpleVector<double>(rowVector, kCorrIndices.m2Y)} {}
 
-  void mergeInto(CorrAccumulator& accumulator, vector_size_t row) {
-    accumulator.merge(
-        count_->valueAt(row),
-        meanX_->valueAt(row),
-        meanY_->valueAt(row),
-        c2_->valueAt(row),
-        m2X_->valueAt(row),
-        m2Y_->valueAt(row));
-  }
+  void mergeInto(CorrAccumulator& accumulator, vector_size_t row);
 
  private:
   SimpleVector<double>* m2X_;
@@ -319,11 +198,7 @@ class CorrIntermediateResult : public CovarIntermediateResult {
     return "row(double,bigint,double,double,double,double)";
   }
 
-  void set(vector_size_t row, const CorrAccumulator& accumulator) {
-    CovarIntermediateResult::set(row, accumulator);
-    m2X_[row] = accumulator.m2X();
-    m2Y_[row] = accumulator.m2Y();
-  }
+  void set(vector_size_t row, const CorrAccumulator& accumulator);
 
  private:
   double* m2X_;
