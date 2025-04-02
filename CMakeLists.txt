@@ -304,7 +304,21 @@ endif()
 # Required so velox code can be used in a dynamic library
 set(CMAKE_POSITION_INDEPENDENT_CODE TRUE)
 
-set(CMAKE_CXX_STANDARD 17)
+# For C++20 support we need GNU GCC11 (or later versions) or Clang/AppleClang 15
+# (or later versions) to get support for the used features.
+if(NOT
+   (("${CMAKE_CXX_COMPILER_ID}" STREQUAL "GNU" AND ${CMAKE_CXX_COMPILER_VERSION}
+                                                   VERSION_GREATER_EQUAL 11)
+    OR (("${CMAKE_CXX_COMPILER_ID}" STREQUAL "Clang"
+         OR "${CMAKE_CXX_COMPILER_ID}" STREQUAL "AppleClang")
+        AND CMAKE_CXX_COMPILER_VERSION VERSION_GREATER_EQUAL 15)))
+  message(
+    FATAL_ERROR
+      "Unsupported compiler ${CMAKE_CXX_COMPILER_ID} with version ${CMAKE_CXX_COMPILER_VERSION} found."
+  )
+endif()
+
+set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED TRUE)
 set(CMAKE_CXX_EXTENSIONS ON) # Big Int is an extension
 
@@ -348,7 +362,8 @@ if(ENABLE_ALL_WARNINGS)
     set(KNOWN_COMPILER_SPECIFIC_WARNINGS
         "-Wno-range-loop-analysis \
          -Wno-mismatched-tags \
-         -Wno-nullability-completeness")
+         -Wno-nullability-completeness \
+         -Wno-ambiguous-reversed-operator")
   elseif(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
     set(KNOWN_COMPILER_SPECIFIC_WARNINGS
         "-Wno-implicit-fallthrough \
@@ -361,6 +376,11 @@ if(ENABLE_ALL_WARNINGS)
          -Wno-unused-result \
          -Wno-format-overflow \
          -Wno-strict-aliasing")
+    # Avoid compiler bug for GCC 12.2.1
+    # https://gcc.gnu.org/bugzilla/show_bug.cgi?id=105329
+    if(CMAKE_CXX_COMPILER_VERSION VERSION_EQUAL "12.2.1")
+      string(APPEND KNOWN_COMPILER_SPECIFIC_WARNINGS " -Wno-restrict")
+    endif()
   endif()
 
   set(KNOWN_WARNINGS
@@ -372,6 +392,13 @@ if(ENABLE_ALL_WARNINGS)
 
   set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wall -Wextra ${KNOWN_WARNINGS}")
 endif()
+
+# Folly is not built with coroutine support (for now) so avoid using the
+# coroutine headers as they pull in symbols that are not found in the folly
+# libraries. These will be removed once we build folly with coroutine support.
+string(APPEND CMAKE_CXX_FLAGS " -DFOLLY_CFG_NO_COROUTINES")
+
+message("FINAL CMAKE_CXX_FLAGS=${CMAKE_CXX_FLAGS}")
 
 if(${VELOX_ENABLE_GPU})
   enable_language(CUDA)
