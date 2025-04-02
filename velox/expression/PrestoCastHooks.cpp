@@ -56,19 +56,19 @@ Expected<Timestamp> PrestoCastHooks::castStringToTimestamp(
 Expected<Timestamp> PrestoCastHooks::castIntToTimestamp(
     int64_t /*seconds*/) const {
   return folly::makeUnexpected(
-      Status::UserError("Conversion to Timestamp is not supported"));
+      Status::UserError("Conversion from Int to Timestamp is not supported"));
 }
 
 Expected<int64_t> PrestoCastHooks::castTimestampToInt(
     Timestamp /*timestamp*/) const {
   return folly::makeUnexpected(
-      Status::UserError("Conversion from Timestamp is not supported"));
+      Status::UserError("Conversion from Timestamp to Int is not supported"));
 }
 
 Expected<std::optional<Timestamp>> PrestoCastHooks::castDoubleToTimestamp(
     double seconds) const {
-  return folly::makeUnexpected(
-      Status::UserError("Conversion to Timestamp is not supported"));
+  return folly::makeUnexpected(Status::UserError(
+      "Conversion from Double to Timestamp is not supported"));
 }
 
 Expected<int32_t> PrestoCastHooks::castStringToDate(
