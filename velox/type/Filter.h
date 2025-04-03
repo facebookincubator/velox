@@ -28,6 +28,7 @@
 #include "velox/common/base/Exceptions.h"
 #include "velox/common/base/SimdUtil.h"
 #include "velox/common/serialization/Serializable.h"
+#include "velox/type/DecimalUtil.h"
 #include "velox/type/StringView.h"
 #include "velox/type/Subfield.h"
 #include "velox/type/Type.h"
@@ -2225,6 +2226,55 @@ static inline bool applyFilter(TFilter& filter, folly::StringPiece value) {
 template <typename TFilter>
 static inline bool applyFilter(TFilter& filter, StringView value) {
   return filter.testBytes(value.data(), value.size());
+}
+
+namespace detail {
+
+template <typename TInput, typename TOutput>
+TOutput rescale(
+    TInput value,
+    uint8_t fromPrecision,
+    uint8_t fromScale,
+    uint8_t toPrecision,
+    uint8_t toScale) {
+  TOutput rescaled;
+  const auto status = DecimalUtil::rescaleWithRoundUp<TInput, TOutput>(
+      value, fromPrecision, fromScale, toPrecision, toScale, rescaled);
+  VELOX_CHECK(status.ok(), status.message());
+  return rescaled;
+}
+
+} // namespace detail
+
+/// Helper for applying filters with type evolution. For decimal value, if the
+/// filter and value types are different, the value is rescaled to the filter
+/// type.
+template <typename TFilter, typename T>
+static inline bool applyTypeEvolutionFilter(
+    TFilter& filter,
+    T value,
+    const TypePtr& filterType,
+    const TypePtr& valueType) {
+  VELOX_CHECK(filterType && valueType);
+  if (filterType->equivalent(*valueType)) {
+    return applyFilter(filter, value);
+  }
+  if constexpr (std::is_same_v<T, int64_t> || std::is_same_v<T, int128_t>) {
+    const auto [fromPrecision, fromScale] =
+        getDecimalPrecisionScale(*valueType);
+    const auto [toPrecision, toScale] = getDecimalPrecisionScale(*filterType);
+
+    if (filterType->isLongDecimal()) {
+      int128_t rescaled = detail::rescale<T, int128_t>(
+          value, fromPrecision, fromScale, toPrecision, toScale);
+      return applyFilter<TFilter, int128_t>(filter, rescaled);
+    }
+
+    int64_t rescaled = detail::rescale<T, int64_t>(
+        value, fromPrecision, fromScale, toPrecision, toScale);
+    return applyFilter<TFilter, int64_t>(filter, rescaled);
+  }
+  return applyFilter(filter, value);
 }
 
 // Creates a hash or bitmap based IN filter depending on value distribution.
