@@ -84,3 +84,18 @@ JSON Functions
         SELECT json_object_keys(''); -- NULL
         SELECT json_object_keys(1); -- NULL
         SELECT json_object_keys('"hello"'); -- NULL
+
+.. spark:function:: to_json(jsonObject) -> jsonString
+
+    Converts a Json object (ROW, ARRAY or MAP) into a JSON string.
+    The current implementation has following limitations.
+
+    * Does not support user provided options. ::
+
+        to_json(ROW(1, "a"), map('option', 'value'))
+
+    Examples of valid inputs are listed as below. ::
+
+        SELECT to_json(ROW(1, "a")); -- {"a":1}
+        SELECT to_json(ARRAY[1, 2, 3]); -- [1,2,3]
+        SELECT to_json(MAP(ARRAY['x', 'y'], ARRAY[1, 2])); -- {"x":1,"y":2}
