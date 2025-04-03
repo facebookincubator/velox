@@ -77,7 +77,7 @@ class ArrayPrependTest : public SparkFunctionBaseTest {
   }
 };
 
-//// Prepend simple-type elements to array.
+// Prepend simple-type elements to array.
 TEST_F(ArrayPrependTest, intArrays) {
   const auto arrayVector = makeArrayVector<int64_t>(
       {{1, 2, 3, 4}, {3, 4, 5}, {7, 8, 9}, {10, 20, 30}});
