@@ -16,25 +16,25 @@ include_guard(GLOBAL)
 
 set(VELOX_rapids_cmake_VERSION 25.04)
 set(VELOX_rapids_cmake_BUILD_SHA256_CHECKSUM
-    458c14eaff9000067b32d65c8c914f4521090ede7690e16eb57035ce731386db)
+    8852a8d9e804aa0c1df5ad5d07dd7e89fb50ffa8985cfbd5f81010c4e3bb11d1)
 set(VELOX_rapids_cmake_SOURCE_URL
-    "https://github.com/rapidsai/rapids-cmake/archive/7828fc8ff2e9f4fa86099f3c844505c2f47ac672.tar.gz"
+    "https://github.com/rapidsai/rapids-cmake/archive/4671b32a4657e8459239b4191e4c391cb28e73cc.tar.gz"
 )
 velox_resolve_dependency_url(rapids_cmake)
 
 set(VELOX_rmm_VERSION 25.04)
 set(VELOX_rmm_BUILD_SHA256_CHECKSUM
-    294905094213a2d1fd8e024500359ff871bc52f913a3fbaca3514727c49f62de)
+    17aa9cf50e37ac0058bd09cb05f01e0c1b788ba5ce3e77fc9f7e386fab54397a)
 set(VELOX_rmm_SOURCE_URL
-    "https://github.com/rapidsai/rmm/archive/d8b7dacdeda302d2e37313c02d14ef5e1d1e98ea.tar.gz"
+    "https://github.com/rapidsai/rmm/archive/7529f921a0bea3587e357be89d127797a4acea37.tar.gz"
 )
 velox_resolve_dependency_url(rmm)
 
 set(VELOX_kvikio_VERSION 25.04)
 set(VELOX_kvikio_BUILD_SHA256_CHECKSUM
-    4a0b15295d0a397433930bf9a309e4ad2361b25dc7a7b3e6a35d0c9419d0cb62)
+    a39ba878ddc7bdd065bb7e4ecf04fd7944c0d51c8ebf8a49b6ee24dacebeb021)
 set(VELOX_kvikio_SOURCE_URL
-    "https://github.com/rapidsai/kvikio/archive/5c710f37236bda76e447e929e17b1efbc6c632c3.tar.gz"
+    "https://github.com/rapidsai/kvikio/archive/0b90bb84872fd2f4709d116d9d60d3741ef577a2.tar.gz"
 )
 velox_resolve_dependency_url(kvikio)
 
