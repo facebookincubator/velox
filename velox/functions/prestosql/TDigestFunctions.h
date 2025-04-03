@@ -25,6 +25,8 @@ namespace facebook::velox::functions {
 template <typename T>
 struct ValueAtQuantileFunction {
   VELOX_DEFINE_FUNCTION_TYPES(T);
+  static constexpr bool is_deterministic = false;
+
   FOLLY_ALWAYS_INLINE void call(
       out_type<double>& result,
       const arg_type<SimpleTDigest<double>>& input,
@@ -40,6 +42,7 @@ struct ValueAtQuantileFunction {
 template <typename T>
 struct ValuesAtQuantilesFunction {
   VELOX_DEFINE_FUNCTION_TYPES(T);
+  static constexpr bool is_deterministic = false;
 
   FOLLY_ALWAYS_INLINE void call(
       out_type<Array<double>>& result,
@@ -59,6 +62,8 @@ struct ValuesAtQuantilesFunction {
 template <typename T>
 struct MergeTDigestFunction {
   VELOX_DEFINE_FUNCTION_TYPES(T);
+  static constexpr bool is_deterministic = false;
+
   FOLLY_ALWAYS_INLINE bool call(
       out_type<SimpleTDigest<double>>& result,
       const arg_type<Array<SimpleTDigest<double>>>& input) {
