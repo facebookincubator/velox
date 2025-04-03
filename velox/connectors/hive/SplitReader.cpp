@@ -56,6 +56,30 @@ VectorPtr newConstantFromString(
         pool, size, false, type, std::move(days));
   }
 
+  if constexpr (std::is_same_v<T, int64_t> || std::is_same_v<T, int128_t>) {
+    if (type->isDecimal()) {
+      auto [precision, scale] = getDecimalPrecisionScale(*type);
+      T result;
+      const auto& str = value.value();
+      if (scale > 0) {
+        size_t idx = 0;
+        if (str.at(idx) == '-') {
+          ++idx;
+        }
+        result = folly::to<T>(std::string_view(
+                     str.c_str(), value->length() - scale - 1)) *
+                DecimalUtil::kPowersOfTen[scale] +
+            folly::to<T>(std::string_view(
+                str.c_str() + value->length() - scale, scale));
+        result = idx > 0 ? -result : result;
+      } else {
+        result = folly::to<T>(str);
+      }
+      return std::make_shared<ConstantVector<T>>(
+          pool, size, false, type, std::move(result));
+    }
+  }
+
   if constexpr (std::is_same_v<T, StringView>) {
     return std::make_shared<ConstantVector<StringView>>(
         pool, size, false, type, StringView(value.value()));
