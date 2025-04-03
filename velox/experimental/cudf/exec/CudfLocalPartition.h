@@ -15,9 +15,10 @@
  */
 #pragma once
 
+#include "velox/experimental/cudf/exec/NvtxHelper.h"
+
 #include "velox/exec/LocalPartition.h"
 #include "velox/exec/Operator.h"
-#include "velox/experimental/cudf/exec/NvtxHelper.h"
 
 namespace facebook::velox::cudf_velox {
 

@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 #include "velox/experimental/cudf/exec/ExpressionEvaluator.h"
-#include "velox/experimental/cudf/exec/Utilities.h"
+
 #include "velox/expression/ConstantExpr.h"
 #include "velox/expression/FieldReference.h"
 #include "velox/type/Type.h"
@@ -29,8 +29,6 @@
 #include <cudf/strings/slice.hpp>
 #include <cudf/table/table.hpp>
 #include <cudf/transform.hpp>
-
-#include <sstream>
 
 namespace facebook::velox::cudf_velox {
 namespace {

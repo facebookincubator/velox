@@ -21,7 +21,6 @@
 #include <cudf/types.hpp>
 
 #include <optional>
-#include <string>
 
 namespace facebook::velox::config {
 class ConfigBase;

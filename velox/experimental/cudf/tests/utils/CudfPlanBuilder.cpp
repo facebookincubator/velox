@@ -14,11 +14,11 @@
  * limitations under the License.
  */
 
+#include "velox/experimental/cudf/tests/utils/CudfPlanBuilder.h"
+
 #include "velox/dwio/common/Options.h"
 #include "velox/exec/TableWriter.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
-
-#include "velox/experimental/cudf/tests/utils/CudfPlanBuilder.h"
 
 namespace facebook::velox::cudf_velox::exec::test {
 

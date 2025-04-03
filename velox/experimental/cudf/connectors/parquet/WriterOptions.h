@@ -15,6 +15,7 @@
  */
 
 #pragma once
+
 #include "velox/dwio/common/Options.h"
 
 #include <cudf/io/parquet.hpp>
@@ -22,7 +23,6 @@
 #include <cudf/types.hpp>
 
 #include <optional>
-#include <string>
 
 namespace facebook::velox::cudf_velox::connector::parquet {
 

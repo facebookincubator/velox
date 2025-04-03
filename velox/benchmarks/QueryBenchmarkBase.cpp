@@ -18,7 +18,7 @@
 
 #include "velox/experimental/cudf/connectors/parquet/ParquetConfig.h"
 #include "velox/experimental/cudf/connectors/parquet/ParquetConnector.h"
-#include "velox/experimental/cudf/exec/Utilities.h"
+#include "velox/experimental/cudf/exec/CudfConversion.h"
 #include "velox/experimental/cudf/tests/utils/ParquetConnectorTestBase.h"
 
 DEFINE_string(data_format, "parquet", "Data format");
@@ -108,6 +108,11 @@ DEFINE_bool(
     use_arrow_schema,
     true,
     "Use arrow schema when reading parquet with cudf.");
+
+DEFINE_int32(
+    cudf_gpu_batch_size_rows,
+    100000,
+    "Preferred output batch size in rows for cudf operators.");
 
 DEFINE_int32(split_preload_per_driver, 1, "Prefetch split metadata");
 
@@ -320,6 +325,8 @@ QueryBenchmarkBase::run(const TpchPlan& tpchPlan) {
           std::to_string(FLAGS_preferred_output_batch_rows);
       params.queryConfigs[core::QueryConfig::kMaxOutputBatchRows] =
           std::to_string(FLAGS_max_output_batch_rows);
+      params.queryConfigs[cudf_velox::CudfFromVelox::kGpuBatchSizeRows] =
+          std::to_string(FLAGS_cudf_gpu_batch_size_rows);
       const int numSplitsPerFile = FLAGS_num_splits_per_file;
 
       bool noMoreSplits = false;
@@ -327,10 +334,10 @@ QueryBenchmarkBase::run(const TpchPlan& tpchPlan) {
         if (!noMoreSplits) {
           for (const auto& entry : tpchPlan.dataFiles) {
             for (const auto& path : entry.second) {
-              auto splits = facebook::velox::cudf_velox::isCudfRegistered() &&
+              auto splits = facebook::velox::cudf_velox::cudfIsRegistered() &&
                       facebook::velox::connector::getAllConnectors().count(
                           cudf_velox::exec::test::kParquetConnectorId) > 0 &&
-                      facebook::velox::cudf_velox::isEnabledcudfTableScan()
+                      facebook::velox::cudf_velox::cudfTableScanEnabled()
                   ? listCudfSplits(
                         path, 1 /* numSplitsPerFile = 1 for cudf */, tpchPlan)
                   : listSplits(path, numSplitsPerFile, tpchPlan);
