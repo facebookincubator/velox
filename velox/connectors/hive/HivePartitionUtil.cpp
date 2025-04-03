@@ -26,6 +26,7 @@ namespace facebook::velox::connector::hive {
       case TypeKind::SMALLINT:                                              \
       case TypeKind::INTEGER:                                               \
       case TypeKind::BIGINT:                                                \
+      case TypeKind::HUGEINT:                                               \
       case TypeKind::VARCHAR:                                               \
       case TypeKind::VARBINARY:                                             \
         return VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(                          \
@@ -63,6 +64,22 @@ std::pair<std::string, std::string> makePartitionKeyValueString(
         DATE()->toString(
             partitionVector->as<SimpleVector<int32_t>>()->valueAt(row)));
   }
+  if constexpr (Kind == TypeKind::BIGINT || Kind == TypeKind::HUGEINT) {
+    if (partitionVector->type()->isDecimal()) {
+      auto [precision, scale] =
+          getDecimalPrecisionScale(*partitionVector->type());
+      const auto maxStringSize =
+          DecimalUtil::maxStringViewSize(precision, scale);
+      char maxString[maxStringSize];
+      auto size = DecimalUtil::castToString(
+          partitionVector->as<SimpleVector<T>>()->valueAt(row),
+          scale,
+          maxStringSize,
+          maxString);
+      return std::make_pair(name, std::string(maxString, size));
+    }
+  }
+
   return std::make_pair(
       name,
       makePartitionValueString(
