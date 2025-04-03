@@ -319,11 +319,7 @@ class ColumnVisitor {
   FOLLY_ALWAYS_INLINE vector_size_t process(T value, bool& atEnd) {
     if (!TFilter::deterministic) {
       const auto previous = currentRow();
-      if (velox::common::applyTypeEvolutionFilter(
-              filter_,
-              value,
-              reader_->requestedType(),
-              reader_->fileType().type())) {
+      if (velox::common::applyFilter(filter_, value)) {
         filterPassed(value);
       } else {
         filterFailed();
@@ -336,11 +332,7 @@ class ColumnVisitor {
     }
 
     // The filter passes or fails and we go to the next row if any.
-    if (velox::common::applyTypeEvolutionFilter(
-            filter_,
-            value,
-            reader_->requestedType(),
-            reader_->fileType().type())) {
+    if (velox::common::applyFilter(filter_, value)) {
       filterPassed(value);
     } else {
       filterFailed();
@@ -810,11 +802,7 @@ class DictionaryColumnVisitor
           filterCache()[value] == FilterResult::kFailure) {
         super::filterFailed();
       } else {
-        if (velox::common::applyTypeEvolutionFilter(
-                super::filter_,
-                valueInDictionary,
-                super::reader_->requestedType(),
-                super::reader_->fileType().type())) {
+        if (velox::common::applyFilter(super::filter_, valueInDictionary)) {
           super::filterPassed(valueInDictionary);
           if (TFilter::deterministic) {
             filterCache()[value] = FilterResult::kSuccess;
@@ -953,11 +941,7 @@ class DictionaryColumnVisitor
         while (bits) {
           int index = bits::getAndClearLastSetBit(bits);
           auto value = reinterpret_cast<const TIndex*>(input)[i + index];
-          if (applyTypeEvolutionFilter(
-                  super::filter_,
-                  dict()[value],
-                  super::reader_->requestedType(),
-                  super::reader_->fileType().type())) {
+          if (applyFilter(super::filter_, dict()[value])) {
             filterCache()[value] = FilterResult::kSuccess;
             passed |= 1 << index;
           } else {
@@ -976,11 +960,7 @@ class DictionaryColumnVisitor
             if (i + index >= numInput) {
               break;
             }
-            if (velox::common::applyTypeEvolutionFilter(
-                    super::filter_,
-                    input[i + index],
-                    super::reader_->requestedType(),
-                    super::reader_->fileType().type())) {
+            if (velox::common::applyFilter(super::filter_, input[i + index])) {
               passed |= 1 << index;
             }
           }
@@ -1258,11 +1238,8 @@ class StringDictionaryColumnVisitor
           DictSuper::filterCache()[index] == FilterResult::kFailure) {
         super::filterFailed();
       } else {
-        if (velox::common::applyTypeEvolutionFilter(
-                super::filter_,
-                valueInDictionary(index),
-                super::reader_->requestedType(),
-                super::reader_->fileType().type())) {
+        if (velox::common::applyFilter(
+                super::filter_, valueInDictionary(index))) {
           super::filterPassed(index);
           if (TFilter::deterministic) {
             DictSuper::filterCache()[index] = FilterResult::kSuccess;
@@ -1362,11 +1339,7 @@ class StringDictionaryColumnVisitor
         while (bits) {
           int index = bits::getAndClearLastSetBit(bits);
           int32_t value = input[i + index];
-          if (applyTypeEvolutionFilter(
-                  super::filter_,
-                  valueInDictionary(value),
-                  super::reader_->requestedType(),
-                  super::reader_->fileType().type())) {
+          if (applyFilter(super::filter_, valueInDictionary(value))) {
             DictSuper::filterCache()[value] = FilterResult::kSuccess;
             passed |= 1 << index;
           } else {
