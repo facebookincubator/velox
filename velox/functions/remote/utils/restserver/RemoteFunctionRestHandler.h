@@ -13,25 +13,69 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-
 #pragma once
 
-#include <memory>
+#include <folly/io/IOBuf.h>
 
+#include "velox/type/Type.h"
+#include "velox/vector/BaseVector.h"
 #include "velox/vector/VectorStream.h"
 
 namespace facebook::velox::functions {
 
 class RemoteFunctionRestHandler {
  public:
+  RemoteFunctionRestHandler(RowTypePtr inputTypes, TypePtr outputType)
+      : inputTypes_{std::move(inputTypes)},
+        outputType_{std::move(outputType)} {}
+
   virtual ~RemoteFunctionRestHandler() = default;
 
-  // Handles the actual function execution
-  virtual void handleRequest(
+  folly::IOBuf handleRequest(
       std::unique_ptr<folly::IOBuf> inputBuffer,
       VectorSerde* serde,
       memory::MemoryPool* pool,
-      std::function<void(folly::IOBuf&&)> sendResponse) = 0;
+      std::string& errorMessage) {
+    auto inputVector =
+        IOBufToRowVector(*inputBuffer, inputTypes_, *pool, serde);
+
+    VELOX_CHECK_EQ(
+        inputVector->childrenSize(),
+        inputTypes_->children().size(),
+        "Mismatched number of columns for remote function handler.");
+
+    const auto numRows = inputVector->size();
+    auto resultVector = BaseVector::create(outputType_, numRows, pool);
+
+    compute(inputVector, resultVector, errorMessage);
+
+    if (!errorMessage.empty()) {
+      return folly::IOBuf();
+    }
+
+    // Wrap result in a RowVector to send back.
+    auto outputRowVector = std::make_shared<RowVector>(
+        pool,
+        ROW({outputType_}),
+        BufferPtr(),
+        numRows,
+        std::vector<VectorPtr>{resultVector});
+
+    auto payload = rowVectorToIOBuf(
+        outputRowVector, outputRowVector->size(), *pool, serde);
+
+    return payload;
+  }
+
+ protected:
+  virtual void compute(
+      const RowVectorPtr& inputVector,
+      const VectorPtr& resultVector,
+      std::string& errorMessage) = 0;
+
+ private:
+  const RowTypePtr inputTypes_;
+  const TypePtr outputType_;
 };
 
 } // namespace facebook::velox::functions

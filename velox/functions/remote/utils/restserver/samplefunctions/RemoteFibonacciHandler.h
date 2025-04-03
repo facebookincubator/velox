@@ -16,13 +16,14 @@
 
 #pragma once
 
+#include <boost/math/special_functions/fibonacci.hpp>
 #include "velox/functions/remote/utils/restserver/RemoteFunctionRestHandler.h"
-#include "velox/type/fbhive/HiveTypeParser.h"
 
 namespace facebook::velox::functions {
-class RemoteStrLenHandler : public RemoteFunctionRestHandler {
+
+class RemoteFibonacciHandler : public RemoteFunctionRestHandler {
  public:
-  RemoteStrLenHandler(RowTypePtr inputTypes, TypePtr outputType)
+  RemoteFibonacciHandler(RowTypePtr inputTypes, TypePtr outputType)
       : RemoteFunctionRestHandler(
             std::move(inputTypes),
             std::move(outputType)) {}
@@ -31,17 +32,17 @@ class RemoteStrLenHandler : public RemoteFunctionRestHandler {
   void compute(
       const RowVectorPtr& inputVector,
       const VectorPtr& resultVector,
-      std::string& errorMessage) {
-    auto inputFlat = inputVector->childAt(0)->asFlatVector<StringView>();
-    auto outFlat = resultVector->asFlatVector<int32_t>();
-    const auto numRows = inputVector->size();
+      std::string& /*errorMessage*/) {
+    auto numFlat = inputVector->childAt(0)->asFlatVector<int64_t>();
+    auto outFlat = resultVector->asFlatVector<int64_t>();
 
+    const auto numRows = inputVector->size();
     for (vector_size_t i = 0; i < numRows; ++i) {
-      if (inputFlat->isNullAt(i)) {
+      if (numFlat->isNullAt(i)) {
         outFlat->setNull(i, true);
       } else {
-        int32_t stringLen = inputFlat->valueAt(i).size();
-        outFlat->set(i, stringLen);
+        int64_t num = numFlat->valueAt(i);
+        outFlat->set(i, boost::math::fibonacci<long long>(num));
       }
     }
   }
