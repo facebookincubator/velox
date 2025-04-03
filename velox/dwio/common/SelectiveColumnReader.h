@@ -544,7 +544,7 @@ class SelectiveColumnReader {
       VectorPtr* result);
 
   /// Returns decimal values for 'rows' rescaled from 'fileType' to
-  /// requestedType' in '*result'.
+  /// 'requestedType' in '*result'.
   void getDecimalValues(
       const RowSet& rows,
       const TypePtr& fileType,
