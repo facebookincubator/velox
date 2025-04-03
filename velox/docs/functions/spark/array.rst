@@ -26,15 +26,15 @@ Array Functions
 
 .. spark:function:: array_compact(array(E) x) -> array(E)
 
-    Removes all null elements from array ``x``. Returns NULL as result if array ``x`` is NULL.
-    If array ``x`` is empty array, returns empty array. If all elements in array ``x`` are NULL,
-    returns empty array. ::
+    Removes all NULL elements from array ``x``. Returns NULL if array ``x`` is NULL.
+    If array ``x`` is empty array, returns empty array. Returns empty array
+    if array ``x`` is empty or all elements in it are NULL. ::
 
         SELECT array_compact(array(1, 2, NULL, 3)); -- [1, 2, 3]
         SELECT array_compact(array()); -- []
         SELECT array_compact(array(NULL)); -- []
         SELECT array_compact(NULL); -- NULL
-        SELECT array_compact(array(1, 2), NULL, array(NULL, 3, 4)); -- [[1, 2], [NULL, 3, 4]]
+        SELECT array_compact(array(array(1, 2), NULL, array(NULL, 3, 4))); -- [[1, 2], [NULL, 3, 4]]
 
 .. spark:function:: array_contains(array(E), value) -> boolean
 

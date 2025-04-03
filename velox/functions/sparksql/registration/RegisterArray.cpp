@@ -13,7 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#include "velox/functions/lib/ArrayFunctions.h"
+#include "velox/functions/lib/ArrayRemoveNullFunction.h"
 #include "velox/functions/lib/ArrayShuffle.h"
 #include "velox/functions/lib/RegistrationHelpers.h"
 #include "velox/functions/lib/Repeat.h"
