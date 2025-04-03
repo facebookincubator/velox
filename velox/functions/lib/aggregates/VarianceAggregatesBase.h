@@ -48,35 +48,13 @@ struct VarianceAccumulator {
     return m2_;
   }
 
-  void update(double value) {
-    count_ += 1;
-    double delta = value - mean();
-    mean_ += delta / count();
-    m2_ += delta * (value - mean());
-  }
+  void update(double value);
 
   inline void merge(const VarianceAccumulator& other) {
     merge(other.count(), other.mean(), other.m2());
   }
 
-  void merge(int64_t countOther, double meanOther, double m2Other) {
-    if (countOther == 0) {
-      return;
-    }
-    if (count_ == 0) {
-      count_ = countOther;
-      mean_ = meanOther;
-      m2_ = m2Other;
-      return;
-    }
-    int64_t newCount = countOther + count();
-    double delta = meanOther - mean();
-    double newMean = mean() + delta / newCount * countOther;
-    m2_ += m2Other +
-        delta * delta * countOther * count() / static_cast<double>(newCount);
-    count_ = newCount;
-    mean_ = newMean;
-  }
+  void merge(int64_t countOther, double meanOther, double m2Other);
 
  private:
   int64_t count_{0};
