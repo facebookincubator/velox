@@ -18,7 +18,6 @@
 #include "velox/experimental/cudf/connectors/parquet/ParquetConnectorSplit.h"
 #include "velox/experimental/cudf/connectors/parquet/ParquetDataSource.h"
 #include "velox/experimental/cudf/connectors/parquet/ParquetTableHandle.h"
-
 #include "velox/experimental/cudf/exec/ToCudf.h"
 #include "velox/experimental/cudf/exec/Utilities.h"
 #include "velox/experimental/cudf/exec/VeloxCudfInterop.h"
@@ -121,7 +120,8 @@ std::optional<RowVectorPtr> ParquetDataSource::next(
   if (remainingFilterExprSet_) {
     auto cudfTableColumns = cudfTable_->release();
     const auto originalNumColumns = cudfTableColumns.size();
-    // Filter may need addtional computed columns which are added to cudfTableColumns
+    // Filter may need addtional computed columns which are added to
+    // cudfTableColumns
     auto filterResult = cudfExpressionEvaluator_.compute(
         cudfTableColumns, stream_, cudf::get_current_device_resource_ref());
     // discard computed columns

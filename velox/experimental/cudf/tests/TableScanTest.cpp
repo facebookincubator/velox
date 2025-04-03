@@ -20,8 +20,6 @@
 #include "velox/experimental/cudf/connectors/parquet/ParquetDataSource.h"
 #include "velox/experimental/cudf/connectors/parquet/ParquetTableHandle.h"
 #include "velox/experimental/cudf/tests/utils/ParquetConnectorTestBase.h"
-#include "velox/expression/ExprToSubfieldFilter.h"
-#include "velox/exec/tests/utils/HiveConnectorTestBase.h"
 
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/common/file/tests/FaultyFile.h"
@@ -32,9 +30,11 @@
 #include "velox/exec/PlanNodeStats.h"
 #include "velox/exec/TableScan.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
+#include "velox/exec/tests/utils/HiveConnectorTestBase.h"
 #include "velox/exec/tests/utils/LocalExchangeSource.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
 #include "velox/exec/tests/utils/TempDirectoryPath.h"
+#include "velox/expression/ExprToSubfieldFilter.h"
 #include "velox/type/Type.h"
 
 #include <fmt/ranges.h>
@@ -296,7 +296,7 @@ TEST_F(TableScanTest, filterPushdown) {
           std::make_shared<core::ConstantTypedExpr>(BIGINT(), int64_t(0)),
       },
       "gte");
-  
+
   auto c3Expr = std::make_shared<core::CallTypedExpr>(
       BOOLEAN(),
       std::vector<core::TypedExprPtr>{
@@ -304,7 +304,7 @@ TEST_F(TableScanTest, filterPushdown) {
           std::make_shared<core::ConstantTypedExpr>(BOOLEAN(), true),
       },
       "eq");
-  
+
   auto subfieldFilterExpr = std::make_shared<core::CallTypedExpr>(
       BOOLEAN(),
       std::vector<core::TypedExprPtr>{
@@ -313,13 +313,11 @@ TEST_F(TableScanTest, filterPushdown) {
       },
       "and");
   auto tableHandle = makeTableHandle(
-      "parquet_table",
-      rowType,
-      true,
-      std::move(subfieldFilterExpr),
-      nullptr);
+      "parquet_table", rowType, true, std::move(subfieldFilterExpr), nullptr);
 
-  auto assignments = facebook::velox::exec::test::HiveConnectorTestBase::allRegularColumns(rowType);
+  auto assignments =
+      facebook::velox::exec::test::HiveConnectorTestBase::allRegularColumns(
+          rowType);
 
   auto task = assertQuery(
       PlanBuilder()
@@ -339,7 +337,9 @@ TEST_F(TableScanTest, filterPushdown) {
 
   // Repeat the same but do not project out the filtered columns.
   assignments.clear();
-  assignments["c0"] = facebook::velox::exec::test::HiveConnectorTestBase::regularColumn("c0", TINYINT());
+  assignments["c0"] =
+      facebook::velox::exec::test::HiveConnectorTestBase::regularColumn(
+          "c0", TINYINT());
   assertQuery(
       PlanBuilder()
           .startTableScan()
@@ -351,7 +351,7 @@ TEST_F(TableScanTest, filterPushdown) {
       filePaths,
       "SELECT c0 FROM tmp WHERE (c1 >= 0 ) AND c3");
 
-  #if 0
+#if 0
   // TODO: zero column non-empty table is not possible in cudf, need to implement.
   // Do the same for count, no columns projected out.
   assignments.clear();
@@ -387,5 +387,5 @@ TEST_F(TableScanTest, filterPushdown) {
           .planNode(),
       filePaths,
       "SELECT count(*) FROM tmp");
-    #endif
+#endif
 }
