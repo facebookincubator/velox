@@ -38,11 +38,11 @@ set(VELOX_kvikio_SOURCE_URL
 )
 velox_resolve_dependency_url(kvikio)
 
-set(VELOX_cudf_VERSION 25.04)
+set(VELOX_cudf_VERSION 25.06)
 set(VELOX_cudf_BUILD_SHA256_CHECKSUM
-    e5a1900dfaf23dab2c5808afa17a2d04fa867d2892ecec1cb37908f3b73715c2)
+    b9e9ebf7593571940aa25320466278e48fc3aea4e6795ebf63ffa41155f8f218)
 set(VELOX_cudf_SOURCE_URL
-    "https://github.com/rapidsai/cudf/archive/4c1c99011da2c23856244e05adda78ba66697105.tar.gz"
+    "https://github.com/rapidsai/cudf/archive/52a7f51d1e845d0fb4faf4577aa6af8fcae7e1fb.tar.gz"
 )
 velox_resolve_dependency_url(cudf)
 
