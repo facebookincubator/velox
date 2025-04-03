@@ -27,8 +27,7 @@ Array Functions
 .. spark:function:: array_compact(array(E) x) -> array(E)
 
     Removes all NULL elements from array ``x``. Returns NULL if array ``x`` is NULL.
-    If array ``x`` is empty array, returns empty array. Returns empty array
-    if array ``x`` is empty or all elements in it are NULL. ::
+    Returns empty array if array ``x`` is empty or all elements in it are NULL. ::
 
         SELECT array_compact(array(1, 2, NULL, 3)); -- [1, 2, 3]
         SELECT array_compact(array()); -- []
