@@ -313,20 +313,20 @@ cappedByteLengthUnicode(const char* input, size_t size, int64_t maxChars) {
 }
 
 constexpr size_t long_string_find(
-    const char* str, size_t str_len,
-    const char* substr, size_t substr_len,
-    size_t start_pos
+    const std::string_view& str, const std::string_view substr, size_t start_pos
 ) noexcept
 {
+    const size_t str_len = str.size();
+    const size_t substr_len = substr.size();
     if (substr_len == 0)
         return start_pos <= str_len ? start_pos : std::string_view::npos;
 
     if (start_pos >= str_len)
         return std::string_view::npos;
 
-    const char first_char = substr[0];
-    const char* current = str + start_pos;
-    const char* const end = str + str_len;
+    const char first_char = substr.data()[0];
+    const char* current = str.data() + start_pos;
+    const char* const end = str.data() + str_len;
     size_t remaining = str_len - start_pos;
 
     while (remaining >= substr_len)
@@ -338,8 +338,8 @@ constexpr size_t long_string_find(
             return std::string_view::npos;
 
         // Compare full substring
-        if (std::char_traits<char>::compare(current, substr, substr_len) == 0)
-            return current - str;
+        if (std::char_traits<char>::compare(current, substr.data(), substr_len) == 0)
+            return current - str.data();
 
         current++;
         remaining = end - current;
@@ -362,8 +362,7 @@ static inline int64_t findNthInstanceByteIndexFromStart(
     return -1;
   }
 
-  auto byteIndex = long_string_find(std::string_view(string).data(), static_cast<size_t>(std::string_view(string).size()),
-                                    std::string_view(subString).data(), static_cast<size_t>(std::string_view(subString).size()),(size_t)0);
+  auto byteIndex = long_string_find(std::string_view(string), std::string_view(subString), (size_t)0);
   // Not found
   if (byteIndex == std::string_view::npos) {
     return -1;
