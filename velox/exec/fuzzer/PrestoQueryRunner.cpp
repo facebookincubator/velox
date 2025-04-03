@@ -462,7 +462,7 @@ bool PrestoQueryRunner::isSupported(const exec::FunctionSignature& signature) {
       usesTypeName(signature, "interval year to month") ||
       usesTypeName(signature, "hugeint") ||
       usesTypeName(signature, "hyperloglog") ||
-      usesTypeName(signature, "tdigest") ||
+      usesInputTypeName(signature, "tdigest") ||
       usesInputTypeName(signature, "json") ||
       usesInputTypeName(signature, "ipaddress") ||
       usesInputTypeName(signature, "ipprefix") ||
