@@ -94,7 +94,7 @@ constexpr std::string_view extractClassAndFunction(
           ::nvtx3::event_attributes{nvtx3_func_extra_info__, this->color_,           \
                                    nvtx3::payload{this->payload_.value()}} :   \
           ::nvtx3::event_attributes{nvtx3_func_extra_info__, this->color_}};      \
-  ::nvtx3::scoped_range_in<velox_domain> const nvtx3_range__{nvtx3_func_attr__};
+  ::nvtx3::scoped_range_in<VeloxDomain> const nvtx3_range__{nvtx3_func_attr__};
 
 #define VELOX_NVTX_PRETTY_FUNC_RANGE()                                         \
   static NvtxRegisteredStringT const nvtx3_func_name__{                        \
