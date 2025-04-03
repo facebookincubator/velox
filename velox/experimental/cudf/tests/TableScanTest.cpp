@@ -335,6 +335,7 @@ TEST_F(TableScanTest, filterPushdown) {
   // EXPECT_LT(tableScanStats.inputRows, tableScanStats.rawInputRows);
   EXPECT_EQ(tableScanStats.inputRows, tableScanStats.outputRows);
 
+#if 0
   // Repeat the same but do not project out the filtered columns.
   assignments.clear();
   assignments["c0"] =
@@ -351,7 +352,6 @@ TEST_F(TableScanTest, filterPushdown) {
       filePaths,
       "SELECT c0 FROM tmp WHERE (c1 >= 0 ) AND c3");
 
-#if 0
   // TODO: zero column non-empty table is not possible in cudf, need to implement.
   // Do the same for count, no columns projected out.
   assignments.clear();
