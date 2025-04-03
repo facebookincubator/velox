@@ -79,7 +79,7 @@ class ParquetTableHandle : public ConnectorTableHandle {
       const core::TypedExprPtr& remainingFilter = nullptr,
       const RowTypePtr& dataColumns = nullptr);
 
-  const std::string& tableName() const {
+  const std::string& name() const override {
     return tableName_;
   }
 

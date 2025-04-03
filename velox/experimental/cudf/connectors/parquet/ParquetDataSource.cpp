@@ -48,7 +48,11 @@ ParquetDataSource::ParquetDataSource(
     folly::Executor* executor,
     const ConnectorQueryCtx* connectorQueryCtx,
     const std::shared_ptr<ParquetConfig>& ParquetConfig)
-    : ParquetConfig_(ParquetConfig),
+    : NvtxHelper(
+          nvtx3::rgb{80, 171, 241}, // Parquet blue,
+          std::nullopt,
+          fmt::format("[{}]", tableHandle->name())),
+      ParquetConfig_(ParquetConfig),
       executor_(executor),
       connectorQueryCtx_(connectorQueryCtx),
       pool_(connectorQueryCtx->memoryPool()),
@@ -122,7 +126,7 @@ ParquetDataSource::ParquetDataSource(
 std::optional<RowVectorPtr> ParquetDataSource::next(
     uint64_t /*size*/,
     velox::ContinueFuture& /* future */) {
-  nvtx3::scoped_range r{std::string("ParquetDataSource::") + __func__};
+  VELOX_NVTX_OPERATOR_FUNC_RANGE();
   // Basic sanity checks
   VELOX_CHECK_NOT_NULL(split_, "No split to process. Call addSplit first.");
   VELOX_CHECK_NOT_NULL(splitReader_, "No split reader present");
