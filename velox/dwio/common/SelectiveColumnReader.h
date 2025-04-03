@@ -549,6 +549,14 @@ class SelectiveColumnReader {
       const TypePtr& requestedType,
       VectorPtr* result);
 
+  /// Returns decimal values for 'rows' rescaled from 'fileType' to
+  /// 'requestedType' in '*result'.
+  void getDecimalValues(
+      const RowSet& rows,
+      const TypePtr& fileType,
+      const TypePtr& requestedType,
+      VectorPtr* result);
+
   /// Returns integer values for 'rows' cast to the width of 'requestedType' in
   /// '*result', the related fileDataType is unsigned int type.
   void getUnsignedIntValues(
@@ -560,18 +568,27 @@ class SelectiveColumnReader {
   // multiple times for consecutive subsets of 'rows'. If 'isFinal' is
   // true, this is free not to maintain the information mapping values
   // to rows. TODO: Consider isFinal as template parameter.
+  // @param convert function to convert values.
   template <typename T, typename TVector>
   void getFlatValues(
       const RowSet& rows,
       VectorPtr* result,
       const TypePtr& type,
-      bool isFinal = false);
+      bool isFinal = false,
+      std::function<TVector(T)> convert = nullptr);
 
+  // @param convert function to convert values.
   template <typename T, typename TVector>
-  void compactScalarValues(const RowSet& rows, bool isFinal);
+  void compactScalarValues(
+      const RowSet& rows,
+      bool isFinal,
+      std::function<TVector(T)> convert = nullptr);
 
+  // @param convert function to convert values.
   template <typename T, typename TVector>
-  void upcastScalarValues(const RowSet& rows);
+  void upcastScalarValues(
+      const RowSet& rows,
+      std::function<TVector(T)> convert = nullptr);
 
   // For complex type column, we need to compact only nulls if the rows are
   // shrinked.  Child fields are handled recursively in their own column

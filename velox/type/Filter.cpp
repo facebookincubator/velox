@@ -2676,4 +2676,104 @@ std::unique_ptr<Filter> NegatedBytesValues::mergeWith(
       VELOX_UNREACHABLE();
   }
 }
+
+namespace {
+
+template <typename TInput, typename TOutput>
+TOutput rescale(
+    TInput value,
+    uint8_t fromPrecision,
+    uint8_t fromScale,
+    uint8_t toPrecision,
+    uint8_t toScale) {
+  TOutput rescaled;
+  const auto status = DecimalUtil::rescaleWithRoundUp<TInput, TOutput>(
+      value, fromPrecision, fromScale, toPrecision, toScale, rescaled);
+  VELOX_CHECK(status.ok(), status.message());
+  return rescaled;
+}
+
+// Rescales the lower and upper values of a range filter from one decimal type
+// to another.
+template <
+    typename TInput,
+    typename TOutput,
+    typename TInputFilter,
+    typename TOutputFilter>
+std::unique_ptr<Filter> rescaleRangeFilter(
+    const Filter* filter,
+    const TypePtr& fromType,
+    const TypePtr& toType) {
+  const auto [fromPrecision, fromScale] = getDecimalPrecisionScale(*fromType);
+  const auto [toPrecision, toScale] = getDecimalPrecisionScale(*toType);
+
+  auto* range = static_cast<const TInputFilter*>(filter);
+  // For rescaling, inclusive range is converted to exclusive range. For filter
+  // creation, the range is then converted back to inclusive range.
+  const auto lower = (range->lower() == std::numeric_limits<TInput>::min())
+      ? std::numeric_limits<TOutput>::min()
+      : rescale<TInput, TOutput>(
+            range->lower() - 1,
+            fromPrecision,
+            fromScale,
+            toPrecision,
+            toScale) +
+          1;
+  const auto upper = (range->upper() == std::numeric_limits<TInput>::max())
+      ? std::numeric_limits<TOutput>::max()
+      : rescale<TInput, TOutput>(
+            range->upper() + 1,
+            fromPrecision,
+            fromScale,
+            toPrecision,
+            toScale) -
+          1;
+  return std::make_unique<TOutputFilter>(lower, upper, range->nullAllowed());
+}
+
+} // namespace
+
+std::unique_ptr<Filter> rescaleDecimalFilter(
+    const Filter* filter,
+    const TypePtr& fromType,
+    const TypePtr& toType) {
+  VELOX_CHECK(fromType->isDecimal() && toType->isDecimal());
+  if (fromType->equivalent(*toType)) {
+    return filter->clone();
+  }
+
+  if (fromType->isShortDecimal()) {
+    switch (filter->kind()) {
+      case FilterKind::kBigintRange: {
+        auto* bigintRange = static_cast<const BigintRange*>(filter);
+        if (toType->isShortDecimal()) {
+          return rescaleRangeFilter<int64_t, int64_t, BigintRange, BigintRange>(
+              filter, fromType, toType);
+        }
+        return rescaleRangeFilter<int64_t, int128_t, BigintRange, HugeintRange>(
+            filter, fromType, toType);
+      }
+      default:
+        return filter->clone();
+    }
+  }
+
+  // From long decimal.
+  switch (filter->kind()) {
+    case FilterKind::kHugeintRange: {
+      auto* hugeintRange = static_cast<const HugeintRange*>(filter);
+      if (toType->isShortDecimal()) {
+        return rescaleRangeFilter<int128_t, int64_t, HugeintRange, BigintRange>(
+            filter, fromType, toType);
+      }
+      return rescaleRangeFilter<int128_t, int128_t, HugeintRange, HugeintRange>(
+          filter, fromType, toType);
+    }
+    default:
+      return filter->clone();
+  }
+
+  return filter->clone();
+}
+
 } // namespace facebook::velox::common

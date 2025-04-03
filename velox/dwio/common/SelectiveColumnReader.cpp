@@ -17,6 +17,25 @@
 #include "velox/dwio/common/SelectiveColumnReaderInternal.h"
 
 namespace facebook::velox::dwio::common {
+namespace {
+
+// Returns a function that rescales a decimal value.
+template <typename T, typename TVector>
+std::function<TVector(T)> createConvertFunction(
+    uint8_t fromPrecision,
+    uint8_t fromScale,
+    uint8_t toPrecision,
+    uint8_t toScale) {
+  return [=](T in) -> TVector {
+    TVector rescaled;
+    const auto status = DecimalUtil::rescaleWithRoundUp<T, TVector>(
+        in, fromPrecision, fromScale, toPrecision, toScale, rescaled);
+    VELOX_CHECK(status.ok(), status.message());
+    return rescaled;
+  };
+}
+
+} // namespace
 
 using dwio::common::TypeWithId;
 
@@ -266,6 +285,48 @@ void SelectiveColumnReader::getIntValues(
   }
 }
 
+void SelectiveColumnReader::getDecimalValues(
+    const RowSet& rows,
+    const TypePtr& fileType,
+    const TypePtr& requestedType,
+    VectorPtr* result) {
+  VELOX_CHECK(fileType->isDecimal());
+  VELOX_CHECK(requestedType->isDecimal());
+  if (fileType->equivalent(*requestedType)) {
+    getIntValues(rows, requestedType, result);
+    return;
+  }
+
+  const auto [fromPrecision, fromScale] = getDecimalPrecisionScale(*fileType);
+  const auto [toPrecision, toScale] = getDecimalPrecisionScale(*requestedType);
+
+  if (fileType->isShortDecimal()) {
+    if (requestedType->isShortDecimal()) {
+      auto convert = createConvertFunction<int64_t, int64_t>(
+          fromPrecision, fromScale, toPrecision, toScale);
+      getFlatValues<int64_t, int64_t>(
+          rows, result, requestedType, /*isFinal=*/false, convert);
+    } else {
+      auto convert = createConvertFunction<int64_t, int128_t>(
+          fromPrecision, fromScale, toPrecision, toScale);
+      getFlatValues<int64_t, int128_t>(
+          rows, result, requestedType, /*isFinal=*/false, convert);
+    }
+  } else {
+    if (requestedType->isShortDecimal()) {
+      auto convert = createConvertFunction<int128_t, int64_t>(
+          fromPrecision, fromScale, toPrecision, toScale);
+      getFlatValues<int128_t, int64_t>(
+          rows, result, requestedType, /*isFinal=*/false, convert);
+    } else {
+      auto convert = createConvertFunction<int128_t, int128_t>(
+          fromPrecision, fromScale, toPrecision, toScale);
+      getFlatValues<int128_t, int128_t>(
+          rows, result, requestedType, /*isFinal=*/false, convert);
+    }
+  }
+}
+
 void SelectiveColumnReader::getUnsignedIntValues(
     const RowSet& rows,
     const TypePtr& requestedType,
@@ -340,7 +401,8 @@ void SelectiveColumnReader::getFlatValues<int8_t, bool>(
     const RowSet& rows,
     VectorPtr* result,
     const TypePtr& type,
-    bool isFinal) {
+    bool isFinal,
+    std::function<bool(int8_t)> /*unused*/) {
   constexpr int32_t kWidth = xsimd::batch<int8_t>::size;
   VELOX_CHECK_EQ(valueSize_, sizeof(int8_t));
   compactScalarValues<int8_t, int8_t>(rows, isFinal);
@@ -374,7 +436,8 @@ void SelectiveColumnReader::getFlatValues<int8_t, bool>(
 template <>
 void SelectiveColumnReader::compactScalarValues<bool, bool>(
     const RowSet& rows,
-    bool isFinal) {
+    bool isFinal,
+    std::function<bool(bool)> convert) {
   if (!values_ || rows.size() == numValues_) {
     if (values_) {
       values_->setSize(bits::nbytes(numValues_));

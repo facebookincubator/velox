@@ -477,6 +477,33 @@ TEST_F(ParquetTableScanTest, countStar) {
   assertQuery(plan, {split}, "SELECT 20");
 }
 
+TEST_F(ParquetTableScanTest, decimalSchemaEvolution) {
+  // decimal.parquet holds two columns (a: DECIMAL(5, 2), b: DECIMAL(20, 5)) and
+  // 20 rows (10 rows per group). Data is in plain uncompressed format:
+  //   a: [100.01 .. 100.20]
+  //   b: [100000000000000.00001 .. 100000000000000.00020]
+  std::vector<int128_t> unscaledShortValues(20);
+  std::iota(unscaledShortValues.begin(), unscaledShortValues.end(), 10001);
+  for (auto i = 0; i < unscaledShortValues.size(); ++i) {
+    unscaledShortValues[i] *= 1000;
+  }
+  loadData(
+      getExampleFilePath("decimal.parquet"),
+      ROW({"a"}, {DECIMAL(19, 5)}),
+      makeRowVector(
+          {"a"},
+          {
+              makeFlatVector(unscaledShortValues, DECIMAL(19, 5)),
+          }));
+
+  assertSelectWithFilter({"a"}, {}, "", "SELECT a FROM tmp");
+  assertSelectWithFilter(
+      {"a"},
+      {"a < 100.07000::DECIMAL(19, 5)"},
+      "",
+      "SELECT a FROM tmp WHERE a < 100.07000");
+}
+
 TEST_F(ParquetTableScanTest, decimalSubfieldFilter) {
   // decimal.parquet holds two columns (a: DECIMAL(5, 2), b: DECIMAL(20, 5)) and
   // 20 rows (10 rows per group). Data is in plain uncompressed format:
