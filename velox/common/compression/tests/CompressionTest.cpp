@@ -99,7 +99,8 @@ void checkCodecRoundtrip(
   auto maxCompressedLen =
       static_cast<size_t>(c1->maxCompressedLength(data.size()));
   std::vector<uint8_t> compressed(maxCompressedLen);
-  std::vector<uint8_t> decompressed(data.size());
+  // Allocate at least 1 byte to ensure data.get() is not nullptr.
+  std::vector<uint8_t> decompressed(data.size() == 0 ? 1 : data.size());
 
   // Compress with codec c1.
   auto compressionLength =
@@ -115,6 +116,7 @@ void checkCodecRoundtrip(
                                   decompressed.data(),
                                   decompressed.size())
                                 .thenOrThrow(folly::identity, throwsNotOk);
+  decompressed.resize(data.size());
   ASSERT_EQ(data, decompressed);
   ASSERT_EQ(data.size(), decompressedLength);
 }
@@ -273,13 +275,15 @@ void checkStreamingCompressor(Codec* codec, const std::vector<uint8_t>& data) {
   const auto& compressor = makeStreamingCompressor(codec);
   streamingCompress(compressor, data, compressed);
 
+  // Allocate at least 1 byte to ensure data.get() is not nullptr.
+  std::vector<uint8_t> decompressed(data.size() == 0 ? 1 : data.size());
   // Check decompressing the compressed data.
-  std::vector<uint8_t> decompressed(data.size());
   ASSERT_NO_THROW(codec->decompress(
       compressed.data(),
       compressed.size(),
       decompressed.data(),
       decompressed.size()));
+  decompressed.resize(data.size());
   ASSERT_EQ(data, decompressed);
 }
 

@@ -125,10 +125,9 @@ class Codec {
 
   /// One-shot decompression function. The actual decompressed length is
   /// returned.
-  /// `outputLength` must be correct and therefore be obtained in
-  /// advance. `output` may be null **only if** `outputLength` is 0. In all
-  /// other cases, `output` must be a valid, non-null pointer. If `output` is
-  /// null while `outputLength` is non-zero, decompression will fail.
+  /// `outputLength` must be correct and therefore be obtained in advance.
+  /// `output` must be a valid, non-null pointer, otherwise decompression will
+  /// fail.
   /// Note: One-shot decompression is not always compatible with streaming
   /// compression. Depending on the codec (e.g. LZ4), different formats may
   /// be used.
