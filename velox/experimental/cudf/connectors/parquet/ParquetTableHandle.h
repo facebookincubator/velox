@@ -77,7 +77,7 @@ class ParquetTableHandle : public ConnectorTableHandle {
       bool filterPushdownEnabled,
       const RowTypePtr& dataColumns = nullptr);
 
-  const std::string& tableName() const {
+  const std::string& name() const override {
     return tableName_;
   }
 

@@ -19,6 +19,7 @@
 #include "velox/experimental/cudf/connectors/parquet/ParquetConfig.h"
 #include "velox/experimental/cudf/connectors/parquet/ParquetConnectorSplit.h"
 #include "velox/experimental/cudf/connectors/parquet/ParquetTableHandle.h"
+#include "velox/experimental/cudf/exec/NvtxHelper.h"
 
 #include "velox/common/base/RandomUtil.h"
 #include "velox/common/io/IoStatistics.h"
@@ -33,7 +34,7 @@ namespace facebook::velox::cudf_velox::connector::parquet {
 
 using namespace facebook::velox::connector;
 
-class ParquetDataSource : public DataSource {
+class ParquetDataSource : public DataSource, public NvtxHelper {
  public:
   ParquetDataSource(
       const std::shared_ptr<const RowType>& outputType,
