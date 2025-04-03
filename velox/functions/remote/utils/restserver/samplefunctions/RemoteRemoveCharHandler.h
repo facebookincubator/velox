@@ -16,13 +16,14 @@
 
 #pragma once
 
+#include <string>
 #include "velox/functions/remote/utils/restserver/RemoteFunctionRestHandler.h"
-#include "velox/type/fbhive/HiveTypeParser.h"
 
 namespace facebook::velox::functions {
-class RemoteStrLenHandler : public RemoteFunctionRestHandler {
+
+class RemoteRemoveCharHandler final : public RemoteFunctionRestHandler {
  public:
-  RemoteStrLenHandler(RowTypePtr inputTypes, TypePtr outputType)
+  RemoteRemoveCharHandler(RowTypePtr inputTypes, TypePtr outputType)
       : RemoteFunctionRestHandler(
             std::move(inputTypes),
             std::move(outputType)) {}
@@ -31,18 +32,28 @@ class RemoteStrLenHandler : public RemoteFunctionRestHandler {
   void compute(
       const RowVectorPtr& inputVector,
       const VectorPtr& resultVector,
-      std::string& errorMessage) {
+      std::string& /*errorMessage*/) override {
     auto inputFlat = inputVector->childAt(0)->asFlatVector<StringView>();
-    auto outFlat = resultVector->asFlatVector<int32_t>();
+    auto removeFlat = inputVector->childAt(1)->asFlatVector<StringView>();
+    auto outFlat = resultVector->asFlatVector<StringView>();
+
     const auto numRows = inputVector->size();
 
     for (vector_size_t i = 0; i < numRows; ++i) {
-      if (inputFlat->isNullAt(i)) {
+      if (inputFlat->isNullAt(i) || removeFlat->isNullAt(i)) {
         outFlat->setNull(i, true);
-      } else {
-        int32_t stringLen = inputFlat->valueAt(i).size();
-        outFlat->set(i, stringLen);
+        continue;
       }
+      std::string src(
+          inputFlat->valueAt(i).data(), inputFlat->valueAt(i).size());
+      const auto removeView = removeFlat->valueAt(i);
+      if (removeView.empty()) {
+        outFlat->set(i, StringView(src));
+        continue;
+      }
+      const char ch = removeView.data()[0];
+      src.erase(std::remove(src.begin(), src.end(), ch), src.end());
+      outFlat->set(i, StringView(src));
     }
   }
 };

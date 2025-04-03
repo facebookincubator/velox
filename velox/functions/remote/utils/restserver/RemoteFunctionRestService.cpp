@@ -17,7 +17,6 @@
 #include "velox/functions/remote/utils/restserver/RemoteFunctionRestService.h"
 
 #include <boost/beast/version.hpp>
-
 #include "velox/serializers/PrestoSerializer.h"
 #include "velox/serializers/UnsafeRowSerializer.h"
 #include "velox/type/fbhive/HiveTypeParser.h"
@@ -77,7 +76,7 @@ void RestSession::handleRequest(
     return;
   }
 
-  if (!ensureValidAccept(req)) {
+  if (!ensureValidAcceptHeader(req)) {
     return;
   }
 
@@ -102,15 +101,13 @@ void RestSession::handleRequest(
     }
     auto inputBuffer = folly::IOBuf::copyBuffer(req.body());
 
-    // Let the handler process the request
-    handlerIt->second->handleRequest(
-        std::move(inputBuffer),
-        serde.get(),
-        pool_.get(),
-        [this](folly::IOBuf&& payload) {
-          sendSuccessResponse(std::move(payload));
-        });
-
+    std::string errorMessage;
+    auto outputBuffer = handlerIt->second->handleRequest(
+        std::move(inputBuffer), serde.get(), pool_.get(), errorMessage);
+    if (!errorMessage.empty()) {
+      VELOX_USER_FAIL(errorMessage);
+    }
+    sendSuccessResponse(std::move(outputBuffer));
   } catch (const std::exception& ex) {
     handleException(ex);
   }
@@ -171,7 +168,7 @@ bool RestSession::ensureValidContentType(
   return false;
 }
 
-bool RestSession::ensureValidAccept(
+bool RestSession::ensureValidAcceptHeader(
     const boost::beast::http::request<boost::beast::http::string_body>& req) {
   auto acceptHeader = req[boost::beast::http::field::accept];
   if (!acceptHeader.empty() &&
@@ -212,7 +209,6 @@ bool RestSession::extractFunctionName(
 }
 
 void RestSession::handleException(const std::exception& ex) {
-  LOG(ERROR) << ex.what();
   sendResponse(
       boost::beast::http::status::internal_server_error,
       "text/plain",
@@ -228,7 +224,6 @@ void RestSession::sendSuccessResponse(folly::IOBuf&& payload) {
       false);
 }
 
-// Initialize static member
 std::unordered_map<std::string, std::shared_ptr<RemoteFunctionRestHandler>>
     RestSession::functionHandlers_;
 

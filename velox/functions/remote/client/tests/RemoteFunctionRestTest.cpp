@@ -21,6 +21,7 @@
 #include <folly/init/Init.h>
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
+#include <vector>
 
 #include "velox/common/base/Exceptions.h"
 #include "velox/common/base/tests/GTestUtils.h"
@@ -28,10 +29,11 @@
 #include "velox/functions/prestosql/tests/utils/FunctionBaseTest.h"
 #include "velox/functions/remote/client/Remote.h"
 #include "velox/functions/remote/utils/restserver/RemoteFunctionRestService.h"
-#include "velox/functions/remote/utils/restserver/samplefunctions/RemoteAbsHandler.h"
-#include "velox/functions/remote/utils/restserver/samplefunctions/RemoteDivHandler.h"
+#include "velox/functions/remote/utils/restserver/samplefunctions/RemoteDoubleDivHandler.h"
+#include "velox/functions/remote/utils/restserver/samplefunctions/RemoteFibonacciHandler.h"
+#include "velox/functions/remote/utils/restserver/samplefunctions/RemoteInverseCdfHandler.h"
+#include "velox/functions/remote/utils/restserver/samplefunctions/RemoteRemoveCharHandler.h"
 #include "velox/functions/remote/utils/restserver/samplefunctions/RemoteStrLenHandler.h"
-#include "velox/functions/remote/utils/restserver/samplefunctions/RemoteStrTrimHandler.h"
 
 using ::facebook::velox::test::assertEqualVectors;
 
@@ -63,17 +65,31 @@ class RemoteFunctionRestTest
   template <typename Handler>
   void registerRemoteFunctionHelper(
       const std::string& functionName,
-      const std::string& returnType,
-      const std::vector<std::string>& argTypes,
+      const std::string& returnTypeName,
+      const std::vector<std::string>& argTypeNames,
       const std::string& baseLocation) const {
     auto signatureBuilder =
-        exec::FunctionSignatureBuilder().returnType(returnType);
-    for (auto& arg : argTypes) {
+        exec::FunctionSignatureBuilder().returnType(returnTypeName);
+    for (const auto& arg : argTypeNames) {
       signatureBuilder.argumentType(arg);
     }
+
+    std::vector<TypePtr> inputTypes;
+    inputTypes.reserve(argTypeNames.size());
+    for (const auto& arg : argTypeNames) {
+      inputTypes.push_back(type::fbhive::HiveTypeParser().parse(arg));
+    }
+
+    auto outputType = type::fbhive::HiveTypeParser().parse(returnTypeName);
     auto finalSignature = signatureBuilder.build();
 
-    auto handler = std::make_shared<Handler>();
+    std::vector<std::string> names;
+    names.reserve(inputTypes.size());
+    for (size_t i = 0; i < inputTypes.size(); ++i) {
+      names.push_back(fmt::format("c{}", i));
+    }
+    auto inputRowTypes = ROW(std::move(names), std::move(inputTypes));
+    auto handler = std::make_shared<Handler>(inputRowTypes, outputType);
     RestSession::registerFunctionHandler(functionName, handler);
 
     RemoteVectorFunctionMetadata metadata;
@@ -83,16 +99,18 @@ class RemoteFunctionRestTest
   }
 
   void registerRemoteFunctions() const {
-    registerRemoteFunctionHelper<RemoteAbsHandler>(
-        "remote_abs", "integer", {"integer"}, location_);
+    registerRemoteFunctionHelper<RemoteFibonacciHandler>(
+        "remote_fibonacci", "bigint", {"bigint"}, location_);
     registerRemoteFunctionHelper<RemoteStrLenHandler>(
         "remote_strlen", "integer", {"varchar"}, location_);
-    registerRemoteFunctionHelper<RemoteStrTrimHandler>(
-        "remote_trim", "varchar", {"varchar"}, location_);
-    registerRemoteFunctionHelper<RemoteDivHandler>(
+    registerRemoteFunctionHelper<RemoteRemoveCharHandler>(
+        "remote_remove_char", "varchar", {"varchar", "varchar"}, location_);
+    registerRemoteFunctionHelper<RemoteInverseCdfHandler>(
+        "remote_inverse_cdf", "double", {"double", "double"}, location_);
+    registerRemoteFunctionHelper<RemoteDoubleDivHandler>(
         "remote_divide", "double", {"double", "double"}, location_);
-    registerRemoteFunctionHelper<RemoteAbsHandler>(
-        "remote_wrong_port", "integer", {"integer"}, wrongLocation_);
+    registerRemoteFunctionHelper<RemoteDoubleDivHandler>(
+        "remote_wrong_port", "double", {"double", "double"}, wrongLocation_);
 
     auto roundSignatures = {exec::FunctionSignatureBuilder()
                                 .returnType("integer")
@@ -150,12 +168,12 @@ class RemoteFunctionRestTest
   std::string wrongLocation_;
 };
 
-TEST_P(RemoteFunctionRestTest, absolute) {
-  auto inputVector = makeFlatVector<int32_t>({-10, -20});
-  auto results = evaluate<SimpleVector<int32_t>>(
-      "remote_abs(c0)", makeRowVector({inputVector}));
+TEST_P(RemoteFunctionRestTest, fibonacci) {
+  auto inputVector = makeFlatVector<int64_t>({10, 20});
+  auto results = evaluate<SimpleVector<int64_t>>(
+      "remote_fibonacci(c0)", makeRowVector({inputVector}));
 
-  auto expected = makeFlatVector<int32_t>({10, 20});
+  auto expected = makeFlatVector<int64_t>({55, 6765});
   assertEqualVectors(expected, results);
 }
 
@@ -169,14 +187,19 @@ TEST_P(RemoteFunctionRestTest, stringLength) {
   assertEqualVectors(expected, results);
 }
 
-TEST_P(RemoteFunctionRestTest, trimWhitespace) {
-  auto inputVector = makeFlatVector<StringView>(
-      {"hello from remote server", "testing remote server"});
+TEST_P(RemoteFunctionRestTest, removeCharactersFromString) {
+  auto input = makeFlatVector<StringView>(
+      {"hello from remote server",
+       "testing remote server",
+       "My file, named 'data_report#2.csv', is located in the folder: C:\\Users\\User\\Documents!  It's quite large (~1.5GB)."});
+  auto charToRemove = makeFlatVector<StringView>({"o", "e", "c"});
   auto results = evaluate<SimpleVector<StringView>>(
-      "remote_trim(c0)", makeRowVector({inputVector}));
+      "remote_remove_char(c0,c1)", makeRowVector({input, charToRemove}));
 
   auto expected = makeFlatVector<StringView>(
-      {"hellofromremoteserver", "testingremoteserver"});
+      {"hell frm remte server",
+       "tsting rmot srvr",
+       "My file, named 'data_report#2.sv', is loated in the folder: C:\\Users\\User\\Douments!  It's quite large (~1.5GB)."});
   assertEqualVectors(expected, results);
 }
 
@@ -195,6 +218,31 @@ TEST_P(RemoteFunctionRestTest, tryException) {
   assertEqualVectors(expected, results);
 }
 
+TEST_P(RemoteFunctionRestTest, inverseCdf) {
+  // remote_divide throws if denominator is 0.
+  auto pVector = makeFlatVector<double>({0.95, 0.95, 0.50, 0.10});
+  auto nuVector = makeFlatVector<double>({4, 1, 10, 2});
+  auto data = makeRowVector({pVector, nuVector});
+  auto results =
+      evaluate<SimpleVector<double>>("remote_inverse_cdf(c0, c1)", data);
+
+  ASSERT_EQ(results->size(), 4);
+  auto expected = makeFlatVector<double>({9.49, 3.84, 9.34, 0.21});
+
+  assertEqualVectors(expected, results);
+}
+
+TEST_P(RemoteFunctionRestTest, serverThrowException) {
+  // remote_divide throws if denominator is 0.
+  auto pVector = makeFlatVector<double>({0, 0});
+  auto nuVector = makeFlatVector<double>({5, 15});
+  auto data = makeRowVector({pVector, nuVector});
+
+  VELOX_ASSERT_THROW(
+      evaluate<SimpleVector<double>>("remote_inverse_cdf(c0, c1)", data),
+      "inverse_chi_squared_cdf: p must be in (0,1)");
+}
+
 TEST_P(RemoteFunctionRestTest, functionNotAvailable) {
   auto inputVector = makeFlatVector<int32_t>({-10, -20});
   VELOX_ASSERT_THROW(
@@ -204,10 +252,11 @@ TEST_P(RemoteFunctionRestTest, functionNotAvailable) {
 }
 
 TEST_P(RemoteFunctionRestTest, connectionError) {
-  auto inputVector = makeFlatVector<int32_t>({-10, -20});
+  auto numeratorVector = makeFlatVector<double>({0, 1, 4, 9, 16, 25, -25});
+  auto denominatorVector = makeFlatVector<double>({0, 1, 2, 3, 4, 0, 2});
+  auto data = makeRowVector({numeratorVector, denominatorVector});
   VELOX_ASSERT_THROW(
-      evaluate<SimpleVector<int32_t>>(
-          "remote_wrong_port(c0)", makeRowVector({inputVector})),
+      evaluate<SimpleVector<double>>("remote_wrong_port(c0,c1)", data),
       "Error communicating with server: ");
 }
 
