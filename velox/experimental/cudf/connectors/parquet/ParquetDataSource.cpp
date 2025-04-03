@@ -18,7 +18,6 @@
 #include "velox/experimental/cudf/connectors/parquet/ParquetConnectorSplit.h"
 #include "velox/experimental/cudf/connectors/parquet/ParquetDataSource.h"
 #include "velox/experimental/cudf/connectors/parquet/ParquetTableHandle.h"
-#include "velox/expression/FieldReference.h"
 
 #include "velox/experimental/cudf/exec/ToCudf.h"
 #include "velox/experimental/cudf/exec/Utilities.h"
@@ -60,7 +59,6 @@ ParquetDataSource::ParquetDataSource(
       expressionEvaluator_(connectorQueryCtx->expressionEvaluator()) {
   // Set up column projection if needed
   auto readColumnTypes = outputType_->children();
-  std::vector<std::string> readColumnNames;
   for (const auto& outputName : outputType_->names()) {
     auto it = columnHandles.find(outputName);
     VELOX_CHECK(
@@ -69,7 +67,7 @@ ParquetDataSource::ParquetDataSource(
         outputName);
 
     auto* handle = static_cast<const ParquetColumnHandle*>(it->second.get());
-    readColumnNames.emplace_back(handle->name());
+    readColumnNames_.emplace_back(handle->name());
   }
 
   // Dynamic cast tableHandle to ParquetTableHandle
@@ -84,42 +82,16 @@ ParquetDataSource::ParquetDataSource(
   auto subfieldFilter = tableHandle_->subfieldFilterExpr();
   if (subfieldFilter) {
     subfieldFilterExprSet_ = expressionEvaluator_->compile(subfieldFilter);
-    // add to readColumnNames
-    for (const auto& name : subfieldFilterExprSet_->distinctFields()) {
-      // check if name is already in readColumnNames_
-      if (std::find(
-              readColumnNames_.begin(),
-              readColumnNames_.end(),
-              name->field()) == readColumnNames_.end()) {
-        readColumnNames.emplace_back(name->field());
-        readColumnTypes.emplace_back(name->type());
-      }
-    }
   }
 
   // Create remaining filter
   auto remainingFilter = tableHandle_->remainingFilter();
   if (remainingFilter) {
     remainingFilterExprSet_ = expressionEvaluator_->compile(remainingFilter);
+    cudfExpressionEvaluator_ = velox::cudf_velox::ExpressionEvaluator(
+        remainingFilterExprSet_->exprs(), outputType_);
     // TODO(kn): Get column names and subfields from remaining filter and add to
     // readColumnNames_
-    for (const auto& name : remainingFilterExprSet_->distinctFields()) {
-      // check if name is already in readColumnNames_
-      if (std::find(
-              readColumnNames_.begin(),
-              readColumnNames_.end(),
-              name->field()) == readColumnNames_.end()) {
-        readColumnNames.emplace_back(name->field());
-        readColumnTypes.emplace_back(name->type());
-      }
-    }
-  }
-  readColumnNames_ = readColumnNames;
-  readerOutputType_ =
-      ROW(std::move(readColumnNames), std::move(readColumnTypes));
-  if (remainingFilter) {
-    cudfExpressionEvaluator_ = velox::cudf_velox::ExpressionEvaluator(
-        remainingFilterExprSet_->exprs(), readerOutputType_);
   }
 }
 
@@ -259,7 +231,7 @@ ParquetDataSource::createSplitReader() {
         subfieldFilterExpr,
         subfieldTree_,
         subfieldScalars_,
-        readerOutputType_,
+        outputType_,
         precomputeInstructions);
     VELOX_CHECK_EQ(precomputeInstructions.size(), 0);
     readerOptions.set_filter(subfieldTree_.back());
