@@ -84,28 +84,28 @@ class ExtractToHook {
   static constexpr bool kSkipNulls = THook::kSkipNulls;
 
   explicit ExtractToHook(ValueHook* hook)
-      : hook_(reinterpret_cast<THook*>(hook)) {}
+      : hook_(*reinterpret_cast<THook*>(hook)) {}
 
   bool acceptsNulls() {
-    return hook_->acceptsNulls();
+    return hook_.acceptsNulls();
   }
 
   template <typename T>
   void addNull(vector_size_t rowIndex) {
-    hook_->addNull(rowIndex);
+    hook_.addNull(rowIndex);
   }
 
   template <typename V>
   void addValue(vector_size_t rowIndex, V value) {
-    hook_->addValueTyped(rowIndex, value);
+    hook_.addValueTyped(rowIndex, value);
   }
 
-  THook& hook() {
-    return *hook_;
+  auto& hook() {
+    return hook_;
   }
 
  private:
-  THook* hook_;
+  THook hook_;
 };
 
 class ExtractToGenericHook {
