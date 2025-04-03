@@ -428,6 +428,7 @@ Expected<uint64_t> Lz4FrameCodec::compress(
     uint64_t inputLength,
     uint8_t* output,
     uint64_t outputLength) {
+  VELOX_CHECK_NOT_NULL(output);
   auto ret = LZ4F_compressFrame(
       output,
       static_cast<size_t>(outputLength),
@@ -444,6 +445,7 @@ Expected<uint64_t> Lz4FrameCodec::decompress(
     uint64_t inputLength,
     uint8_t* output,
     uint64_t outputLength) {
+  VELOX_CHECK_NOT_NULL(output);
   return makeStreamingDecompressor().then(
       [&](const auto& decompressor) -> Expected<uint64_t> {
         uint64_t bytesWritten = 0;
@@ -501,6 +503,7 @@ Expected<uint64_t> Lz4RawCodec::compress(
     uint64_t inputLength,
     uint8_t* output,
     uint64_t outputLength) {
+  VELOX_CHECK_NOT_NULL(output);
   uint64_t compressedSize;
 #ifdef LZ4HC_CLEVEL_MIN
   constexpr int32_t kMinHcClevel = LZ4HC_CLEVEL_MIN;
@@ -531,6 +534,7 @@ Expected<uint64_t> Lz4RawCodec::decompress(
     uint64_t inputLength,
     uint8_t* output,
     uint64_t outputLength) {
+  VELOX_CHECK_NOT_NULL(output);
   auto decompressedSize = LZ4_decompress_safe(
       reinterpret_cast<const char*>(input),
       reinterpret_cast<char*>(output),
@@ -556,6 +560,7 @@ Expected<uint64_t> Lz4HadoopCodec::compress(
     uint64_t inputLength,
     uint8_t* output,
     uint64_t outputLength) {
+  VELOX_CHECK_NOT_NULL(output);
   VELOX_RETURN_UNEXPECTED_IF(
       outputLength < kPrefixLength,
       Status::IOError(
@@ -584,6 +589,7 @@ Expected<uint64_t> Lz4HadoopCodec::decompress(
     uint64_t inputLength,
     uint8_t* output,
     uint64_t outputLength) {
+  VELOX_CHECK_NOT_NULL(output);
   uint64_t decompressedSize;
   if (tryDecompressHadoop(
           input, inputLength, output, outputLength, decompressedSize)) {
