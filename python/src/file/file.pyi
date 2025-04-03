@@ -16,7 +16,7 @@
 
 # pyre-unsafe
 
-from velox.py.type import Type
+from pyvelox.type import Type
 
 
 class File:

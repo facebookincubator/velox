@@ -18,7 +18,7 @@
 #include <pybind11/stl.h>
 
 #include "python/src/file/PyFile.h"
-#include "python/src/lib/PyInit.h"
+#include "python/src/init/PyInit.h"
 
 namespace py = pybind11;
 
@@ -29,7 +29,7 @@ PYBIND11_MODULE(file, m) {
   velox::py::registerAllResources();
 
   // Need types for the get_schema() output.
-  py::module::import("velox.py.type");
+  py::module::import("pyvelox.type");
 
   // File wrapper abstraction.
   py::class_<velox::py::PyFile>(m, "File")

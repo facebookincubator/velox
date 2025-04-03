@@ -18,7 +18,7 @@
 
 #include <string>
 #include "velox/dwio/common/Options.h"
-#include "velox/py/type/PyType.h"
+#include "python/src/type/PyType.h"
 
 namespace facebook::velox::py {
 

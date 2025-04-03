@@ -45,6 +45,9 @@ target_link_libraries(
   velox_py_init
   PRIVATE velox_memory)
 
+target_include_directories(velox_py_init
+                           PUBLIC ${PROJECT_SOURCE_DIR}/velox/external/xxhash)
+
 # pyvelox.type library:
 add_library(velox_py_type_lib type/PyType.cpp)
 target_link_libraries(
@@ -58,7 +61,7 @@ target_link_libraries(
 # pyvelox.file library:
 add_library(velox_py_file_lib file/PyFile.cpp)
 target_link_libraries(
-  velox_py_file_lib velox_dwio_common pybind11::module)
+  velox_py_file_lib velox_dwio_common velox_py_init pybind11::module)
 
 pyvelox_add_module(file MODULE file/file.cpp)
 target_link_libraries(
