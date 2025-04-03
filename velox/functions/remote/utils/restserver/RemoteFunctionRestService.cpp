@@ -77,7 +77,7 @@ void RestSession::handleRequest(
     return;
   }
 
-  if (!ensureValidAccept(req)) {
+  if (!ensureValidAcceptHeader(req)) {
     return;
   }
 
@@ -102,15 +102,10 @@ void RestSession::handleRequest(
     }
     auto inputBuffer = folly::IOBuf::copyBuffer(req.body());
 
-    // Let the handler process the request
-    handlerIt->second->handleRequest(
-        std::move(inputBuffer),
-        serde.get(),
-        pool_.get(),
-        [this](folly::IOBuf&& payload) {
-          sendSuccessResponse(std::move(payload));
-        });
+    auto outputBuffer = handlerIt->second->handleRequest(
+        std::move(inputBuffer), serde.get(), pool_.get());
 
+    sendSuccessResponse(std::move(outputBuffer));
   } catch (const std::exception& ex) {
     handleException(ex);
   }
@@ -171,7 +166,7 @@ bool RestSession::ensureValidContentType(
   return false;
 }
 
-bool RestSession::ensureValidAccept(
+bool RestSession::ensureValidAcceptHeader(
     const boost::beast::http::request<boost::beast::http::string_body>& req) {
   auto acceptHeader = req[boost::beast::http::field::accept];
   if (!acceptHeader.empty() &&
@@ -228,7 +223,6 @@ void RestSession::sendSuccessResponse(folly::IOBuf&& payload) {
       false);
 }
 
-// Initialize static member
 std::unordered_map<std::string, std::shared_ptr<RemoteFunctionRestHandler>>
     RestSession::functionHandlers_;
 

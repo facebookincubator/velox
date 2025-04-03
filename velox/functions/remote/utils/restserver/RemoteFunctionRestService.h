@@ -29,7 +29,8 @@ namespace facebook::velox::functions {
 
 /// @brief Manages an individual HTTP session.
 /// Handles reading HTTP requests, processing them, and sending responses.
-/// This class re-hosts Velox functions and allows testing their functionality.
+/// Inspired by the reference implementation described in:
+/// https://medium.com/@AlexanderObregon/building-restful-apis-with-c-4c8ac63fe8a7
 class RestSession : public std::enable_shared_from_this<RestSession> {
  public:
   RestSession(boost::asio::ip::tcp::socket socket);
@@ -37,12 +38,12 @@ class RestSession : public std::enable_shared_from_this<RestSession> {
   /// Starts the session by initiating a read operation.
   void run();
 
-  // Register a function handler for a given function name
+  /// Register a function handler for a given function name
   static void registerFunctionHandler(
       const std::string& functionName,
       std::shared_ptr<RemoteFunctionRestHandler> handler);
 
-  // Unregister a function handler
+  /// Unregister a function handler
   static void unregisterFunctionHandler(const std::string& functionName);
 
  private:
@@ -92,7 +93,7 @@ class RestSession : public std::enable_shared_from_this<RestSession> {
 
   // Helper to ensure Accept is either "application/X-presto-pages" or
   // "application/X-spark-unsafe-row". Otherwise sends an error response.
-  bool ensureValidAccept(
+  bool ensureValidAcceptHeader(
       const boost::beast::http::request<boost::beast::http::string_body>& req);
 
   // Sends a success response with the given payload.

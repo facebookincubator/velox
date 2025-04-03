@@ -17,33 +17,21 @@
 #pragma once
 
 #include "velox/functions/remote/utils/restserver/RemoteFunctionRestHandler.h"
-#include "velox/type/fbhive/HiveTypeParser.h"
-#include "velox/vector/FlatVector.h"
 
 namespace facebook::velox::functions {
 
 class RemoteStrTrimHandler : public RemoteFunctionRestHandler {
  public:
-  void handleRequest(
-      std::unique_ptr<folly::IOBuf> inputBuffer,
-      VectorSerde* serde,
-      memory::MemoryPool* pool,
-      std::function<void(folly::IOBuf&&)> sendResponse) override {
-    auto argType = type::fbhive::HiveTypeParser().parse({"varchar"});
-    auto outType = type::fbhive::HiveTypeParser().parse("varchar");
+  RemoteStrTrimHandler(RowTypePtr inputTypes, TypePtr outputType)
+      : RemoteFunctionRestHandler(
+            std::move(inputTypes),
+            std::move(outputType)) {}
 
-    auto inputVector =
-        IOBufToRowVector(*inputBuffer, ROW({argType}), *pool, serde);
-    VELOX_CHECK_EQ(
-        inputVector->childrenSize(),
-        1,
-        "Expected exactly 1 column for function 'remote_strlen'.");
-
-    vector_size_t numRows = inputVector->size();
-    auto resultVector = BaseVector::create(outType, numRows, pool);
-
+ protected:
+  void compute(const RowVectorPtr& inputVector, const VectorPtr& resultVector) {
     auto inputFlat = inputVector->childAt(0)->asFlatVector<StringView>();
     auto outFlat = resultVector->asFlatVector<StringView>();
+    const auto numRows = inputVector->size();
 
     for (vector_size_t i = 0; i < numRows; ++i) {
       if (inputFlat->isNullAt(i)) {
@@ -56,18 +44,6 @@ class RemoteStrTrimHandler : public RemoteFunctionRestHandler {
         outFlat->set(i, result.data());
       }
     }
-
-    auto outputRowVector = std::make_shared<RowVector>(
-        pool,
-        ROW({outType}),
-        BufferPtr(),
-        numRows,
-        std::vector<VectorPtr>{resultVector});
-
-    auto payload = rowVectorToIOBuf(
-        outputRowVector, outputRowVector->size(), *pool, serde);
-
-    sendResponse(std::move(payload));
   }
 };
 

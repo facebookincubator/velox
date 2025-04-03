@@ -21,6 +21,7 @@
 #include <folly/init/Init.h>
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
+#include <vector>
 
 #include "velox/common/base/Exceptions.h"
 #include "velox/common/base/tests/GTestUtils.h"
@@ -29,7 +30,7 @@
 #include "velox/functions/remote/client/Remote.h"
 #include "velox/functions/remote/utils/restserver/RemoteFunctionRestService.h"
 #include "velox/functions/remote/utils/restserver/samplefunctions/RemoteAbsHandler.h"
-#include "velox/functions/remote/utils/restserver/samplefunctions/RemoteDivHandler.h"
+#include "velox/functions/remote/utils/restserver/samplefunctions/RemoteDoubleDivHandler.h"
 #include "velox/functions/remote/utils/restserver/samplefunctions/RemoteStrLenHandler.h"
 #include "velox/functions/remote/utils/restserver/samplefunctions/RemoteStrTrimHandler.h"
 
@@ -63,17 +64,31 @@ class RemoteFunctionRestTest
   template <typename Handler>
   void registerRemoteFunctionHelper(
       const std::string& functionName,
-      const std::string& returnType,
-      const std::vector<std::string>& argTypes,
+      const std::string& returnTypeName,
+      const std::vector<std::string>& argTypeNames,
       const std::string& baseLocation) const {
     auto signatureBuilder =
-        exec::FunctionSignatureBuilder().returnType(returnType);
-    for (auto& arg : argTypes) {
+        exec::FunctionSignatureBuilder().returnType(returnTypeName);
+    for (const auto& arg : argTypeNames) {
       signatureBuilder.argumentType(arg);
     }
+
+    std::vector<TypePtr> inputTypes;
+    inputTypes.reserve(argTypeNames.size());
+    for (const auto& arg : argTypeNames) {
+      inputTypes.push_back(type::fbhive::HiveTypeParser().parse(arg));
+    }
+
+    auto outputType = type::fbhive::HiveTypeParser().parse(returnTypeName);
     auto finalSignature = signatureBuilder.build();
 
-    auto handler = std::make_shared<Handler>();
+    std::vector<std::string> names;
+    names.reserve(inputTypes.size());
+    for (size_t i = 0; i < inputTypes.size(); ++i) {
+      names.push_back(fmt::format("c{}", i));
+    }
+    auto inputRowTypes = ROW(std::move(names), std::move(inputTypes));
+    auto handler = std::make_shared<Handler>(inputRowTypes, outputType);
     RestSession::registerFunctionHandler(functionName, handler);
 
     RemoteVectorFunctionMetadata metadata;
@@ -89,7 +104,7 @@ class RemoteFunctionRestTest
         "remote_strlen", "integer", {"varchar"}, location_);
     registerRemoteFunctionHelper<RemoteStrTrimHandler>(
         "remote_trim", "varchar", {"varchar"}, location_);
-    registerRemoteFunctionHelper<RemoteDivHandler>(
+    registerRemoteFunctionHelper<RemoteDoubleDivHandler>(
         "remote_divide", "double", {"double", "double"}, location_);
     registerRemoteFunctionHelper<RemoteAbsHandler>(
         "remote_wrong_port", "integer", {"integer"}, wrongLocation_);
@@ -171,12 +186,16 @@ TEST_P(RemoteFunctionRestTest, stringLength) {
 
 TEST_P(RemoteFunctionRestTest, trimWhitespace) {
   auto inputVector = makeFlatVector<StringView>(
-      {"hello from remote server", "testing remote server"});
+      {"hello from remote server",
+       "testing remote server",
+       "My file, named 'data_report#2.csv', is located in the folder: C:\\Users\\User\\Documents!  It's quite large (~1.5GB)."});
   auto results = evaluate<SimpleVector<StringView>>(
       "remote_trim(c0)", makeRowVector({inputVector}));
 
   auto expected = makeFlatVector<StringView>(
-      {"hellofromremoteserver", "testingremoteserver"});
+      {"hellofromremoteserver",
+       "testingremoteserver",
+       "Myfile,named'data_report#2.csv',islocatedinthefolder:C:\\Users\\User\\Documents!It'squitelarge(~1.5GB)."});
   assertEqualVectors(expected, results);
 }
 

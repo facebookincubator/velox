@@ -20,24 +20,33 @@
 
 namespace facebook::velox::functions {
 
-class RemoteAbsHandler : public RemoteFunctionRestHandler {
+class RemoteDoubleDivHandler : public RemoteFunctionRestHandler {
  public:
-  RemoteAbsHandler(RowTypePtr inputTypes, TypePtr outputType)
+  RemoteDoubleDivHandler(RowTypePtr inputTypes, TypePtr outputType)
       : RemoteFunctionRestHandler(
             std::move(inputTypes),
             std::move(outputType)) {}
 
  protected:
   void compute(const RowVectorPtr& inputVector, const VectorPtr& resultVector) {
-    auto inputFlat = inputVector->childAt(0)->asFlatVector<int32_t>();
-    auto outFlat = resultVector->asFlatVector<int32_t>();
-    const auto numRows = inputVector->size();
+    auto numerator = inputVector->childAt(0)->asFlatVector<double>();
+    auto denominator = inputVector->childAt(1)->asFlatVector<double>();
+    auto outFlat = resultVector->asFlatVector<double>();
 
+    const auto numRows = inputVector->size();
     for (vector_size_t i = 0; i < numRows; ++i) {
-      if (inputFlat->isNullAt(i)) {
+      // If either input is null, output is null.
+      if (numerator->isNullAt(i) || denominator->isNullAt(i)) {
         outFlat->setNull(i, true);
       } else {
-        outFlat->set(i, std::abs(inputFlat->valueAt(i)));
+        double numVal = numerator->valueAt(i);
+        double denVal = denominator->valueAt(i);
+        // If denominator is zero, produce a null.
+        if (denVal == 0.0) {
+          outFlat->setNull(i, true);
+        } else {
+          outFlat->set(i, numVal / denVal);
+        }
       }
     }
   }
