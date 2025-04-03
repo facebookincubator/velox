@@ -149,9 +149,10 @@ std::optional<RowVectorPtr> ParquetDataSource::next(
   if (remainingFilterExprSet_) {
     auto cudfTableColumns = cudfTable_->release();
     const auto originalNumColumns = cudfTableColumns.size();
-    // May add computed columns to cudfTableColumns
-    auto computedColumns = cudfExpressionEvaluator_.compute(
+    // Filter may need addtional computed columns which are added to cudfTableColumns
+    auto filterResult = cudfExpressionEvaluator_.compute(
         cudfTableColumns, stream_, cudf::get_current_device_resource_ref());
+    // discard computed columns
     std::vector<std::unique_ptr<cudf::column>> originalColumns;
     originalColumns.reserve(originalNumColumns);
     std::move(
@@ -160,9 +161,10 @@ std::optional<RowVectorPtr> ParquetDataSource::next(
         std::back_inserter(originalColumns));
     auto originalTable =
         std::make_unique<cudf::table>(std::move(originalColumns));
+    // Keep only rows where the filter is true
     cudfTable_ = cudf::apply_boolean_mask(
         *originalTable,
-        *computedColumns[0],
+        *filterResult[0],
         stream_,
         cudf::get_current_device_resource_ref());
   }
@@ -250,6 +252,8 @@ ParquetDataSource::createSplitReader() {
   }
   if (subfieldFilterExprSet_) {
     auto subfieldFilterExpr = subfieldFilterExprSet_->expr(0);
+    // non-ast instructions in filter is not supported for SubFieldFilter.
+    // precomputeInstructions which are non-ast instructions should be empty.
     std::vector<PrecomputeInstruction> precomputeInstructions;
     create_ast_tree(
         subfieldFilterExpr,
