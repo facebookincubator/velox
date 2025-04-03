@@ -800,7 +800,11 @@ uint64_t variant::hash<TypeKind::MAP>() const {
 
 template <>
 uint64_t variant::hash<TypeKind::OPAQUE>() const {
-  VELOX_NYI();
+  const detail::OpaqueCapsule& capsule = value<TypeKind::OPAQUE>();
+  auto serializeFunction = capsule.type->getSerializeFunc();
+
+  return folly::Hash{}(
+      capsule.type->toString(), serializeFunction(capsule.obj));
 }
 
 uint64_t variant::hash() const {
