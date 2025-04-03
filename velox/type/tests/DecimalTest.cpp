@@ -488,7 +488,7 @@ TEST(DecimalTest, rescaleReal) {
 
   assertRescaleReal(27867.64, DECIMAL(18, 2), 2786764);
   assertRescaleReal(27867.644, DECIMAL(18, 2), 2786764);
-  assertRescaleReal(27867.645, DECIMAL(18, 2), 2786765);
+  assertRescaleReal(27867.645, DECIMAL(18, 2), 2786764);
 
   // Test for overflows.
   std::vector<float> invalidInputs = {

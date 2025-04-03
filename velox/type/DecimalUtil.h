@@ -233,7 +233,7 @@ class DecimalUtil {
 
     uint8_t digits;
     if constexpr (std::is_same_v<TInput, float>) {
-      // A float provides at least 7 digits are precise.
+      // A float provides nearly 7 precise digits.
       digits = 7;
     } else {
       // A double provides from 15 to 17 decimal digits, so at least 15 digits
