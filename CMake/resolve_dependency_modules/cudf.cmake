@@ -16,9 +16,9 @@ include_guard(GLOBAL)
 
 set(VELOX_rapids_cmake_VERSION 25.04)
 set(VELOX_rapids_cmake_BUILD_SHA256_CHECKSUM
-    8852a8d9e804aa0c1df5ad5d07dd7e89fb50ffa8985cfbd5f81010c4e3bb11d1)
+    458c14eaff9000067b32d65c8c914f4521090ede7690e16eb57035ce731386db)
 set(VELOX_rapids_cmake_SOURCE_URL
-    "https://github.com/rapidsai/rapids-cmake/archive/4671b32a4657e8459239b4191e4c391cb28e73cc.tar.gz"
+    "https://github.com/rapidsai/rapids-cmake/archive/7828fc8ff2e9f4fa86099f3c844505c2f47ac672.tar.gz"
 )
 velox_resolve_dependency_url(rapids_cmake)
 
