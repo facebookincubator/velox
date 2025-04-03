@@ -777,13 +777,18 @@ buckets and reports P50, P90, P99, and P100.</p></td>
 <td><p>The time distribution of index lookup time in range of [0, 16s] with 512
 buckets and reports P50, P90, P99, and P100.</p></td>
 </tr>
-<tr class="row-even"><td><p>index_lookup_result_raw_bytes</p></td>
+<tr class="row-even"><td><p>index_lookup_blocked_wait_time_ms</p></td>
+<td><p>Histogram</p></td>
+<td><p>The time distribution of index lookup operator blocked wait time in range
+of [0, 16s] with 512 buckets and reports P50, P90, P99, and P100.</p></td>
+</tr>
+<tr class="row-odd"><td><p>index_lookup_result_raw_bytes</p></td>
 <td><p>Histogram</p></td>
 <td><p>The distribution of index lookup result raw bytes in range of [0, 128MB]
 with 128 buckets. It is configured to report the capacity at P50, P90, P99,
 and P100 percentiles.</p></td>
 </tr>
-<tr class="row-odd"><td><p>index_lookup_result_bytes</p></td>
+<tr class="row-even"><td><p>index_lookup_result_bytes</p></td>
 <td><p>Histogram</p></td>
 <td><p>The distribution of index lookup result bytes in range of [0, 128MB] with
 128 buckets. It is configured to report the capacity at P50, P90, P99, and
