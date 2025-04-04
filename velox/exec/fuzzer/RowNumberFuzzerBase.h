@@ -51,8 +51,6 @@ class RowNumberFuzzerBase {
   virtual ~RowNumberFuzzerBase() = default;
 
  protected:
-  bool isTableScanSupported(const TypePtr& type);
-
   // Runs one test iteration from query plans generations, executions and result
   // verifications.
   virtual void runSingleIteration() = 0;
