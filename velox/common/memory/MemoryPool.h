@@ -408,8 +408,6 @@ class MemoryPool : public std::enable_shared_from_this<MemoryPool> {
     uint64_t reservedBytes{0};
     /// The peak memory usage.
     uint64_t peakBytes{0};
-    /// The accumulative memory usage.
-    uint64_t cumulativeBytes{0};
     /// The number of memory allocations.
     uint64_t numAllocs{0};
     /// The number of memory frees.
@@ -443,7 +441,7 @@ class MemoryPool : public std::enable_shared_from_this<MemoryPool> {
     std::string toString() const;
 
     /// Returns true if the current and reserved bytes are zero.
-    /// Note that peak or cumulative bytes might be non-zero and we are still
+    /// Note that peak bytes might be non-zero and we are still
     /// empty at this moment.
     bool empty() const {
       return usedBytes == 0 && reservedBytes == 0;
@@ -804,7 +802,6 @@ class MemoryPoolImpl : public MemoryPool {
           minReservationBytes_ = tsanAtomicValue(reservationBytes_);
         } else {
           usedReservationBytes_ += size;
-          cumulativeBytes_ += size;
           maybeUpdatePeakBytesLocked(usedReservationBytes_);
         }
         sanityCheckLocked();
@@ -1034,7 +1031,6 @@ class MemoryPoolImpl : public MemoryPool {
   tsan_atomic<int64_t> minReservationBytes_{0};
 
   tsan_atomic<int64_t> peakBytes_{0};
-  tsan_atomic<int64_t> cumulativeBytes_{0};
 
   // Stats counters.
   // The number of memory allocations.
