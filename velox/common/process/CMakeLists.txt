@@ -15,7 +15,6 @@
 velox_add_library(
   velox_process
   ProcessBase.cpp
-  Profiler.cpp
   StackTrace.cpp
   ThreadDebugInfo.cpp
   TraceContext.cpp
