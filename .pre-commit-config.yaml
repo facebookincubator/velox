@@ -30,6 +30,7 @@ repos:
         args: [--markdown-linebreak-ext=md]
       - id: end-of-file-fixer
       - id: check-added-large-files
+        args: [--maxkb=4096]
       - id: check-executables-have-shebangs
       - id: check-shebang-scripts-are-executable
 
