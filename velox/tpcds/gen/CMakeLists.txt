@@ -11,23 +11,31 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-velox_add_library(velox_connector Connector.cpp)
 
-velox_link_libraries(velox_connector velox_common_config velox_vector)
+cmake_policy(SET CMP0079 NEW)
 
-add_subdirectory(fuzzer)
+project(TPCDS)
 
-if(${VELOX_ENABLE_HIVE_CONNECTOR})
-  add_subdirectory(hive)
-endif()
+# Add subdirectories
+add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/dsdgen build)
 
-if(${VELOX_ENABLE_TPCH_CONNECTOR})
-  add_subdirectory(tpch)
-endif()
+velox_add_library(append_info OBJECT utils/append_info-c.cpp)
+target_compile_options(append_info PRIVATE -w)
+velox_link_libraries(append_info velox_vector_test_lib Folly::folly xsimd)
 
-if(${VELOX_ENABLE_TPCDS_CONNECTOR})
-  add_subdirectory(tpcds)
-endif()
+target_link_libraries(
+  dsdgen_c append_info)
+
+velox_add_library(velox_tpcds_gen TpcdsGen.cpp DSDGenIterator.cpp)
+velox_include_directories(velox_tpcds_gen PUBLIC dsdgen/include)
+target_compile_options(velox_tpcds_gen PRIVATE -w)
+velox_link_libraries(
+  velox_tpcds_gen
+  velox_memory
+  velox_vector
+  dsdgen_c
+  append_info
+  fmt::fmt)
 
 if(${VELOX_BUILD_TESTING})
   add_subdirectory(tests)
