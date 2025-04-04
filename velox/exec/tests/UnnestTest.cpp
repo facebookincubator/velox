@@ -476,6 +476,40 @@ TEST_P(UnnestTest, batchSize) {
   ASSERT_EQ(expectedNumVectors, stats.at(unnestId).outputVectors);
 }
 
+TEST_P(UnnestTest, basicArrayWithOuter) {
+  auto vector = makeRowVector({
+      makeFlatVector<int64_t>({1, 2, 3}),
+      makeNullableArrayVector<int64_t>({{1, 2, std::nullopt}, {}, {3}}),
+  });
+
+  createDuckDbTable({vector});
+
+  // isOuter = true.
+  auto op = PlanBuilder()
+                .values({vector})
+                .unnest({"c0"}, {"c1"}, std::nullopt, /* isOuter = */ true)
+                .planNode();
+  auto params = makeCursorParameters(op);
+  auto expected = makeRowVector({
+      makeFlatVector<int64_t>({1, 1, 1, 2, 3}),
+      makeNullableFlatVector<int64_t>({1, 2, std::nullopt, std::nullopt, 3}),
+  });
+  assertQuery(params, expected);
+
+  // ordinal = true && isOuter = true.
+  op = PlanBuilder()
+           .values({vector})
+           .unnest({"c0"}, {"c1"}, "ordinal", /* isOuter = */ true)
+           .planNode();
+  params = makeCursorParameters(op);
+  expected = makeRowVector({
+      makeFlatVector<int64_t>({1, 1, 1, 2, 3}),
+      makeNullableFlatVector<int64_t>({1, 2, std::nullopt, std::nullopt, 3}),
+      makeNullableFlatVector<int64_t>({1, 2, 3, std::nullopt, 1}),
+  });
+  assertQuery(params, expected);
+}
+
 VELOX_INSTANTIATE_TEST_SUITE_P(
     UnnestTest,
     UnnestTest,
