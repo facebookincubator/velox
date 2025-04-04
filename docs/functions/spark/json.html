@@ -129,6 +129,7 @@ returns null.</p>
 <span class="n">SELECT</span> <span class="n">json_object_keys</span><span class="p">(</span><span class="s1">&#39;&#39;</span><span class="p">);</span> <span class="o">--</span> <span class="n">NULL</span>
 <span class="n">SELECT</span> <span class="n">json_object_keys</span><span class="p">(</span><span class="mi">1</span><span class="p">);</span> <span class="o">--</span> <span class="n">NULL</span>
 <span class="n">SELECT</span> <span class="n">json_object_keys</span><span class="p">(</span><span class="s1">&#39;&quot;hello&quot;&#39;</span><span class="p">);</span> <span class="o">--</span> <span class="n">NULL</span>
+<span class="n">SELECT</span> <span class="n">json_object_keys</span><span class="p">(</span><span class="s2">&quot;invalid json&quot;</span><span class="p">);</span> <span class="o">--</span> <span class="n">NULL</span>
 </pre></div>
 </div>
 </dd></dl>
