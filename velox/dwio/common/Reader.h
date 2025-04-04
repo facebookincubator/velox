@@ -209,7 +209,8 @@ class Reader {
 
   static TypePtr updateColumnNames(
       const TypePtr& fileType,
-      const TypePtr& tableType);
+      const TypePtr& tableType,
+      bool recursive = true);
 };
 
 } // namespace facebook::velox::dwio::common
