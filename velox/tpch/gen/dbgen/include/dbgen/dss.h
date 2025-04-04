@@ -119,6 +119,7 @@
 #define RANDOM64(tgt, lower, upper, seed) dss_random64(&tgt, lower, upper, seed)
 
 namespace facebook::velox::tpch::dbgen {
+
 typedef struct {
   long weight;
   char* text;
