@@ -77,18 +77,6 @@ class DecimalUtil {
     return isNegative ? -result : result;
   }
 
-  // Returns the abs value of input value.
-  template <class T, typename = std::enable_if_t<std::is_same_v<T, int64_t>>>
-  FOLLY_ALWAYS_INLINE static uint64_t absValue(int64_t a) {
-    return a < 0 ? static_cast<uint64_t>(-a) : static_cast<uint64_t>(a);
-  }
-
-  // Returns the abs value of input value.
-  template <class T, typename = std::enable_if_t<std::is_same_v<T, int128_t>>>
-  FOLLY_ALWAYS_INLINE static uint128_t absValue(int128_t a) {
-    return a < 0 ? static_cast<uint128_t>(-a) : static_cast<uint128_t>(a);
-  }
-
   /// Multiply a and b, set overflow to true if overflow. The caller should
   /// treat overflow flag first.
   template <class T, typename = std::enable_if_t<std::is_same_v<T, int64_t>>>
@@ -127,9 +115,9 @@ class DecimalUtil {
     };
 
     const int32_t aLeadingZeros = minLeadingZerosAfterRescale(
-        bits::countLeadingZeros(absValue<A>(a)), aRescale);
+        bits::countLeadingZeros(velox::DecimalUtil::absValue<A>(a)), aRescale);
     const int32_t bLeadingZeros = minLeadingZerosAfterRescale(
-        bits::countLeadingZeros(absValue<B>(b)), bRescale);
+        bits::countLeadingZeros(velox::DecimalUtil::absValue<B>(b)), bRescale);
     return std::min(aLeadingZeros, bLeadingZeros);
   }
 
@@ -237,7 +225,7 @@ class DecimalUtil {
 
   template <typename A>
   inline static int32_t maxBitsRequiredAfterScaling(A num, uint8_t aRescale) {
-    auto valueAbs = absValue<A>(num);
+    auto valueAbs = velox::DecimalUtil::absValue<A>(num);
     int32_t numOccupied = sizeof(A) * 8 - bits::countLeadingZeros(valueAbs);
     return numOccupied + kMaxBitsRequiredIncreaseAfterScaling[aRescale];
   }
