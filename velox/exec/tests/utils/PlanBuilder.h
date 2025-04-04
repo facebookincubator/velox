@@ -701,7 +701,7 @@ class PlanBuilder {
         {},
         aggregates,
         masks,
-        core::AggregationNode::Step::kPartial,
+        core::AggregationNode::Aggregate::Step::kPartial,
         false);
   }
 
@@ -725,7 +725,9 @@ class PlanBuilder {
         {},
         aggregates,
         {},
-        core::AggregationNode::Step::kFinal,
+        std::vector{
+            aggregates.size(), core::AggregationNode::Aggregate::Step::kFinal},
+        false,
         false,
         rawInputTypes);
   }
@@ -746,7 +748,7 @@ class PlanBuilder {
         {},
         aggregates,
         {},
-        core::AggregationNode::Step::kIntermediate,
+        core::AggregationNode::Aggregate::Step::kIntermediate,
         false);
   }
 
@@ -762,7 +764,7 @@ class PlanBuilder {
         {},
         aggregates,
         masks,
-        core::AggregationNode::Step::kSingle,
+        core::AggregationNode::Aggregate::Step::kSingle,
         false);
   }
 
@@ -786,7 +788,7 @@ class PlanBuilder {
       const std::vector<std::string>& groupingKeys,
       const std::vector<std::string>& aggregates,
       const std::vector<std::string>& masks,
-      core::AggregationNode::Step step,
+      core::AggregationNode::Aggregate::Step step,
       bool ignoreNullKeys) {
     return aggregation(
         groupingKeys, {}, aggregates, masks, step, ignoreNullKeys);
@@ -803,15 +805,38 @@ class PlanBuilder {
       const std::vector<std::string>& preGroupedKeys,
       const std::vector<std::string>& aggregates,
       const std::vector<std::string>& masks,
-      core::AggregationNode::Step step,
+      core::AggregationNode::Aggregate::Step step,
       bool ignoreNullKeys) {
     return aggregation(
         groupingKeys,
         preGroupedKeys,
         aggregates,
         masks,
-        step,
+        std::vector{aggregates.size(), step},
         ignoreNullKeys,
+        core::AggregationNode::Aggregate::isPartialOutput(step),
+        {});
+  }
+
+  /// Same as above, but also allows to specify steps of each of the passed
+  /// aggregates. Also allows setting the boolean flag 'flushable' to sepcify
+  /// whether flushing is allowed on partial aggregations.
+  PlanBuilder& aggregation(
+      const std::vector<std::string>& groupingKeys,
+      const std::vector<std::string>& preGroupedKeys,
+      const std::vector<std::string>& aggregates,
+      const std::vector<std::string>& masks,
+      const std::vector<core::AggregationNode::Aggregate::Step> steps,
+      bool ignoreNullKeys,
+      bool flushable) {
+    return aggregation(
+        groupingKeys,
+        preGroupedKeys,
+        aggregates,
+        masks,
+        steps,
+        ignoreNullKeys,
+        flushable,
         {});
   }
 
@@ -825,7 +850,7 @@ class PlanBuilder {
         groupingKeys,
         aggregates,
         masks,
-        core::AggregationNode::Step::kPartial,
+        core::AggregationNode::Aggregate::Step::kPartial,
         false);
   }
 
@@ -838,7 +863,7 @@ class PlanBuilder {
         groupingKeys,
         aggregates,
         {},
-        core::AggregationNode::Step::kFinal,
+        core::AggregationNode::Aggregate::Step::kFinal,
         false);
   }
 
@@ -847,7 +872,7 @@ class PlanBuilder {
       const std::vector<std::string>& groupingKeys,
       const std::vector<std::string>& aggregates,
       const std::vector<std::string>& masks,
-      core::AggregationNode::Step step,
+      core::AggregationNode::Aggregate::Step step,
       bool ignoreNullKeys);
 
   /// Add a GroupIdNode using the specified grouping keys, grouping sets,
@@ -1354,7 +1379,7 @@ class PlanBuilder {
       const std::string& name);
 
   core::PlanNodePtr createIntermediateOrFinalAggregation(
-      core::AggregationNode::Step step,
+      core::AggregationNode::Aggregate::Step step,
       const core::AggregationNode* partialAggNode);
 
   struct AggregatesAndNames {
@@ -1365,7 +1390,7 @@ class PlanBuilder {
   AggregatesAndNames createAggregateExpressionsAndNames(
       const std::vector<std::string>& aggregates,
       const std::vector<std::string>& masks,
-      core::AggregationNode::Step step,
+      const std::vector<core::AggregationNode::Aggregate::Step>& steps,
       const std::vector<std::vector<TypePtr>>& rawInputTypes = {});
 
   PlanBuilder& aggregation(
@@ -1373,8 +1398,9 @@ class PlanBuilder {
       const std::vector<std::string>& preGroupedKeys,
       const std::vector<std::string>& aggregates,
       const std::vector<std::string>& masks,
-      core::AggregationNode::Step step,
+      const std::vector<core::AggregationNode::Aggregate::Step>& step,
       bool ignoreNullKeys,
+      bool allowFlush,
       const std::vector<std::vector<TypePtr>>& rawInputTypes);
 
   /// Create WindowNode based on whether input is sorted and then compute the

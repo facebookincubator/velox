@@ -213,7 +213,8 @@ bool containsMap(const TypePtr& type) {
 std::optional<std::string> DuckQueryRunner::toSql(
     const std::shared_ptr<const core::AggregationNode>& aggregationNode) {
   // Assume plan is Aggregation over Values.
-  VELOX_CHECK(aggregationNode->step() == core::AggregationNode::Step::kSingle);
+  VELOX_CHECK(
+      aggregationNode->allRawInput() && aggregationNode->allRawOutput());
 
   for (const auto& agg : aggregationNode->aggregates()) {
     if (aggregateFunctionNames_.count(agg.call->name()) == 0) {

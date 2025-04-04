@@ -449,7 +449,7 @@ class ApproxMostFrequentBooleanAggregate {
 template <TypeKind kKind>
 std::unique_ptr<exec::Aggregate> makeApproxMostFrequentAggregate(
     const std::string& name,
-    core::AggregationNode::Step step,
+    core::AggregationNode::Aggregate::Step step,
     const std::vector<TypePtr>& argTypes,
     const TypePtr& resultType,
     const TypePtr& valueType) {
@@ -504,7 +504,7 @@ void registerApproxMostFrequentAggregate(
       name,
       std::move(signatures),
       [name](
-          core::AggregationNode::Step step,
+          core::AggregationNode::Aggregate::Step step,
           const std::vector<TypePtr>& argTypes,
           const TypePtr& resultType,
           const core::QueryConfig& /*config*/)

@@ -492,15 +492,16 @@ DEBUG_ONLY_TEST_P(
         .copyResults(pool());
   });
 
-  const auto nonSpillPlan = PlanBuilder()
-                                .values(vectors)
-                                .aggregation(
-                                    {"c0", "c1"},
-                                    {"array_agg(c2)"},
-                                    {},
-                                    core::AggregationNode::Step::kPartial,
-                                    false)
-                                .planNode();
+  const auto nonSpillPlan =
+      PlanBuilder()
+          .values(vectors)
+          .aggregation(
+              {"c0", "c1"},
+              {"array_agg(c2)"},
+              {},
+              core::AggregationNode::Aggregate::Step::kPartial,
+              false)
+          .planNode();
   std::thread nonSpillableThread([&]() {
     newQueryBuilder(nonSpillPlan).queryCtx(queryCtx).copyResults(pool());
   });

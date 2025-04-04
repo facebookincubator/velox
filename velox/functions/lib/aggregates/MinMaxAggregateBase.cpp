@@ -581,7 +581,7 @@ exec::AggregateFunctionFactory getMinMaxFunctionFactoryInternal(
     CompareFlags::NullHandlingMode nullHandlingMode,
     TimestampPrecision precision) {
   auto factory = [name, nullHandlingMode, precision](
-                     core::AggregationNode::Step step,
+                     core::AggregationNode::Aggregate::Step step,
                      std::vector<TypePtr> argTypes,
                      const TypePtr& resultType,
                      const core::QueryConfig& /*config*/)

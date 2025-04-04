@@ -296,7 +296,7 @@ void registerArbitraryAggregate(
       names,
       std::move(signatures),
       [name = names.front()](
-          core::AggregationNode::Step step,
+          core::AggregationNode::Aggregate::Step step,
           const std::vector<TypePtr>& argTypes,
           const TypePtr& /*resultType*/,
           const core::QueryConfig& /*config*/)

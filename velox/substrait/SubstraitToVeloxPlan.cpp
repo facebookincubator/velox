@@ -21,11 +21,11 @@
 
 namespace facebook::velox::substrait {
 namespace {
-core::AggregationNode::Step toAggregationStep(
+core::AggregationNode::Aggregate::Step toAggregationStep(
     const ::substrait::AggregateRel& sAgg) {
   if (sAgg.measures().size() == 0) {
     // When only groupings exist, set the phase to be Single.
-    return core::AggregationNode::Step::kSingle;
+    return core::AggregationNode::Aggregate::Step::kSingle;
   }
 
   // Use the first measure to set aggregation phase.
@@ -33,13 +33,13 @@ core::AggregationNode::Step toAggregationStep(
   const auto& aggFunction = firstMeasure.measure();
   switch (aggFunction.phase()) {
     case ::substrait::AGGREGATION_PHASE_INITIAL_TO_INTERMEDIATE:
-      return core::AggregationNode::Step::kPartial;
+      return core::AggregationNode::Aggregate::Step::kPartial;
     case ::substrait::AGGREGATION_PHASE_INTERMEDIATE_TO_INTERMEDIATE:
-      return core::AggregationNode::Step::kIntermediate;
+      return core::AggregationNode::Aggregate::Step::kIntermediate;
     case ::substrait::AGGREGATION_PHASE_INTERMEDIATE_TO_RESULT:
-      return core::AggregationNode::Step::kFinal;
+      return core::AggregationNode::Aggregate::Step::kFinal;
     case ::substrait::AGGREGATION_PHASE_INITIAL_TO_RESULT:
-      return core::AggregationNode::Step::kSingle;
+      return core::AggregationNode::Aggregate::Step::kSingle;
     default:
       VELOX_FAIL("Aggregate phase is not supported.");
   }
@@ -112,7 +112,7 @@ core::PlanNodePtr SubstraitVeloxPlanConverter::processEmit(
 core::PlanNodePtr SubstraitVeloxPlanConverter::toVeloxPlan(
     const ::substrait::AggregateRel& aggRel) {
   auto childNode = convertSingleInput<::substrait::AggregateRel>(aggRel);
-  core::AggregationNode::Step aggStep = toAggregationStep(aggRel);
+  core::AggregationNode::Aggregate::Step aggStep = toAggregationStep(aggRel);
   const auto& inputType = childNode->outputType();
   std::vector<core::FieldAccessTypedExprPtr> veloxGroupingExprs;
 
