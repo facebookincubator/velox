@@ -88,7 +88,7 @@ static void gen_phone(DSS_HUGE ind, char* target, seed_t* seed) {
   RANDOM(number, 1000, 9999, seed);
 
   std::string phone = fmt::format(
-      "{}-{:03d}-{:03d}-{:04d}",
+      "{:02d}-{:03d}-{:03d}-{:04d}",
       10 + (ind % NATIONS_MAX),
       static_cast<int>(acode),
       static_cast<int>(exchg),
@@ -100,11 +100,11 @@ static void gen_phone(DSS_HUGE ind, char* target, seed_t* seed) {
 
 static char** asc_date = NULL;
 
-static char orderSzFormat[100];
-static char custSzFormat[100];
-static char partSzFormat[100];
-static char partSzBrandFormat[100];
-static char suppSzFormat[100];
+static char orderSzFormat[100] = {0};
+static char custSzFormat[100] = {0};
+static char partSzFormat[100] = {0};
+static char partSzBrandFormat[100] = {0};
+static char suppSzFormat[100] = {0};
 
 // Initializes a series of buffers and structures required to generate data.
 // Clients must ensure this function is called before any of the functions
@@ -113,26 +113,11 @@ void init_build_buffers() {
   char** mk_ascdate PROTO((void));
   asc_date = mk_ascdate();
 
-  auto res = sprintf(orderSzFormat, O_CLRK_FMT, 9, &HUGE_FORMAT[1]);
-  if(FOLLY_UNLIKELY(res < 0)) {
-    orderSzFormat[0] = '\0';
-  }
-  res = sprintf(custSzFormat, C_NAME_FMT, 9, &HUGE_FORMAT[1]);
-  if (FOLLY_UNLIKELY(res < 0)) {
-    custSzFormat[0] = '\0';
-  }
-  res = sprintf(partSzFormat, P_MFG_FMT, 1, &HUGE_FORMAT[1]);
-  if (FOLLY_UNLIKELY(res < 0)) {
-    partSzFormat[0] = '\0';
-  }
-  res = sprintf(partSzBrandFormat, P_BRND_FMT, 2, &HUGE_FORMAT[1]);
-  if (FOLLY_UNLIKELY(res < 0)) {
-    partSzBrandFormat[0] = '\0';
-  }
-  res = sprintf(suppSzFormat, S_NAME_FMT, 9, &HUGE_FORMAT[1]);
-  if (FOLLY_UNLIKELY(res < 0)) {
-    suppSzFormat[0] = '\0';
-  }
+  sprintf(orderSzFormat, O_CLRK_FMT, 9, &HUGE_FORMAT[1]);
+  sprintf(custSzFormat, C_NAME_FMT, 9, &HUGE_FORMAT[1]);
+  sprintf(partSzFormat, P_MFG_FMT, 1, &HUGE_FORMAT[1]);
+  sprintf(partSzBrandFormat, P_BRND_FMT, 2, &HUGE_FORMAT[1]);
+  sprintf(suppSzFormat, S_NAME_FMT, 9, &HUGE_FORMAT[1]);
 }
 
 long mk_cust(DSS_HUGE n_cust, customer_t* c, DBGenContext* ctx) {
