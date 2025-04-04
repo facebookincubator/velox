@@ -221,6 +221,22 @@ std::string toCallSql(const core::CallTypedExprPtr& call) {
     sql << "row(";
     toCallInputsSql(call->inputs(), sql);
     sql << ")";
+  } else if (call->name() == "switch") {
+    const auto& inputs = call->inputs();
+    sql << " case ";
+    size_t inputSize = inputs.size();
+    size_t inputIndex = 0;
+    while (inputIndex < inputSize - 1) {
+      sql << " when ";
+      toCallInputsSql({inputs[inputIndex++]}, sql);
+      sql << " then ";
+      toCallInputsSql({inputs[inputIndex++]}, sql);
+    }
+    if (inputIndex < inputSize) {
+      sql << " else ";
+      toCallInputsSql({inputs[inputIndex]}, sql);
+    }
+    sql << " end ";
   } else {
     // Regular function call syntax.
     sql << call->name() << "(";
