@@ -102,6 +102,12 @@ void registerStringFunctions(const std::string& prefix) {
       Varchar,
       Varchar,
       Varchar>({prefix + "str_to_map"});
+  registerFunction<
+      sparksql::StringToMapLastWinFunction,
+      Map<Varchar, Varchar>,
+      Varchar,
+      Varchar,
+      Varchar>({prefix + "str_to_map_last_win"});
   registerFunction<sparksql::LeftFunction, Varchar, Varchar, int32_t>(
       {prefix + "left"});
   registerFunction<sparksql::BitLengthFunction, int32_t, Varchar>(
