@@ -25,6 +25,8 @@
 #include "velox/exec/OperatorUtils.h"
 #include "velox/vector/VectorTypeUtils.h"
 
+DECLARE_int32(velox_hash_batch_size);
+
 using facebook::velox::common::testutil::TestValue;
 
 namespace facebook::velox::exec {
@@ -1031,7 +1033,7 @@ template <bool ignoreNullKeys>
 void HashTable<ignoreNullKeys>::partitionRows(
     HashTable<ignoreNullKeys>& subtable,
     RowPartitions& rowPartitions) {
-  constexpr int32_t kBatch = 1024;
+  int32_t kBatch = FLAGS_velox_hash_batch_size;
   raw_vector<char*> rows(kBatch);
   raw_vector<uint64_t> hashes(kBatch);
   raw_vector<uint8_t> partitions(kBatch);
@@ -1059,7 +1061,7 @@ void HashTable<ignoreNullKeys>::buildJoinPartition(
     uint8_t partition,
     const std::vector<std::unique_ptr<RowPartitions>>& rowPartitions,
     std::vector<char*>& overflow) {
-  constexpr int32_t kBatch = 1024;
+  int32_t kBatch = FLAGS_velox_hash_batch_size;
   raw_vector<char*> rows(kBatch);
   raw_vector<uint64_t> hashes(kBatch);
   const int32_t numPartitions = 1 + otherTables_.size();
@@ -1329,7 +1331,7 @@ void HashTable<ignoreNullKeys>::rehash(
     bool initNormalizedKeys,
     int8_t spillInputStartPartitionBit) {
   ++numRehashes_;
-  constexpr int32_t kHashBatchSize = 1024;
+  int32_t kHashBatchSize = FLAGS_velox_hash_batch_size;
   if (canApplyParallelJoinBuild()) {
     parallelJoinBuild();
     return;
@@ -1391,7 +1393,7 @@ void HashTable<ignoreNullKeys>::setHashMode(
 
 template <bool ignoreNullKeys>
 bool HashTable<ignoreNullKeys>::analyze() {
-  constexpr int32_t kHashBatchSize = 1024;
+  int32_t kHashBatchSize = FLAGS_velox_hash_batch_size;
   // @lint-ignore CLANGTIDY
   char* groups[kHashBatchSize];
   RowContainerIterator iterator;
