@@ -448,9 +448,10 @@ PlanBuilder& PlanBuilder::optionalFilter(const std::string& optionalFilter) {
 
 PlanBuilder& PlanBuilder::filter(const std::string& filter) {
   VELOX_CHECK_NOT_NULL(planNode_, "Filter cannot be the source node");
-  auto expr = parseExpr(filter, planNode_->outputType(), options_, pool_);
-  planNode_ =
-      std::make_shared<core::FilterNode>(nextPlanNodeId(), expr, planNode_);
+  planNode_ = std::make_shared<core::FilterNode>(
+      nextPlanNodeId(),
+      parseExpr(filter, planNode_->outputType(), options_, pool_),
+      planNode_);
   return *this;
 }
 
@@ -1562,6 +1563,10 @@ PlanBuilder& PlanBuilder::nestedLoopJoin(
     core::JoinType joinType) {
   VELOX_CHECK_NOT_NULL(planNode_, "NestedLoopJoin cannot be the source node");
   auto resultType = concat(planNode_->outputType(), right->outputType());
+  if (isLeftSemiProjectJoin(joinType) || isRightSemiProjectJoin(joinType)) {
+    resultType = concat(resultType, ROW({"match"}, {BOOLEAN()}));
+  }
+
   auto outputType = extract(resultType, outputLayout);
 
   core::TypedExprPtr joinConditionExpr{};
@@ -1569,13 +1574,16 @@ PlanBuilder& PlanBuilder::nestedLoopJoin(
     joinConditionExpr = parseExpr(joinCondition, resultType, options_, pool_);
   }
 
+  RowTypePtr finalOutputType;
+  finalOutputType = outputType;
+
   planNode_ = std::make_shared<core::NestedLoopJoinNode>(
       nextPlanNodeId(),
       joinType,
       std::move(joinConditionExpr),
       std::move(planNode_),
       right,
-      outputType);
+      finalOutputType);
   return *this;
 }
 
