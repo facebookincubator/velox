@@ -22,6 +22,8 @@
 #include "velox/expression/EvalCtx.h"
 #include "velox/expression/SpecialForm.h"
 #include "velox/expression/VectorWriters.h"
+#include "velox/functions/lib/string/StringCore.h"
+#include "velox/functions/lib/string/StringImpl.h"
 #include "velox/functions/prestosql/json/SIMDJsonUtil.h"
 
 using namespace facebook::velox::exec;
@@ -99,7 +101,11 @@ struct ExtractJsonTypeImpl {
   struct KindDispatcher<TypeKind::INTEGER, Dummy> {
     static simdjson::error_code
     apply(Input value, exec::GenericWriter& writer, bool /*isRoot*/) {
-      return castJsonToInt<int32_t>(value, writer);
+      if (writer.type() == DATE()) {
+        return castJsonToDate(value, writer);
+      } else {
+        return castJsonToInt<int32_t>(value, writer);
+      }
     }
   };
 
@@ -267,6 +273,56 @@ struct ExtractJsonTypeImpl {
     }
   };
 
+  static simdjson::error_code castJsonToDate(
+      Input value,
+      exec::GenericWriter& writer) {
+    SIMDJSON_ASSIGN_OR_RAISE(auto type, value.type());
+    std::string_view s;
+    switch (type) {
+      case simdjson::ondemand::json_type::string: {
+        SIMDJSON_ASSIGN_OR_RAISE(s, value.get_string());
+        break;
+      }
+      default:
+        return simdjson::INCORRECT_TYPE;
+    }
+    int32_t day = 0;
+    // If the value has fewer than four digits, it is interpreted as the number
+    // of days since January 1, 1970.
+    if (s.size() < 4) {
+      auto result = folly::tryTo<int32_t>(s);
+      if (!result.hasError()) {
+        day = result.value();
+      } else {
+        return simdjson::INCORRECT_TYPE;
+      }
+    } else {
+      auto days =
+          util::fromDateString(StringView(s), util::ParseMode::kSparkCast);
+      if (!days.hasError()) {
+        day = days.value();
+      } else {
+        if (stringImpl::stringPosition<true /*isAscii*/>(s, kGMT, 1) > 0) {
+          // Remove 'GMT'.
+          char dateStr[s.size()];
+          auto size = stringCore::replace<true /*ignoreEmptyReplaced*/>(
+              dateStr, s, kGMT, std::string_view(), false);
+          days = util::fromDateString(
+              StringView(dateStr, size), util::ParseMode::kSparkCast);
+          if (!days.hasError()) {
+            day = days.value();
+          } else {
+            return simdjson::INCORRECT_TYPE;
+          }
+        } else {
+          return simdjson::INCORRECT_TYPE;
+        }
+      }
+    }
+    writer.castTo<int32_t>() = day;
+    return simdjson::SUCCESS;
+  }
+
   template <typename T>
   static simdjson::error_code castJsonToInt(
       Input value,
@@ -358,6 +414,8 @@ struct ExtractJsonTypeImpl {
 
     return fieldIndices;
   }
+
+  constexpr static std::string_view kGMT{"GMT"};
 };
 
 /// @brief Parses a JSON string into the specified data type. Supports ROW,
@@ -517,12 +575,7 @@ bool isSupportedType(const TypePtr& type, bool isRootType) {
       }
       return !isRootType;
     }
-    case TypeKind::INTEGER: {
-      if (type->isDate()) {
-        return false;
-      }
-      return !isRootType;
-    }
+    case TypeKind::INTEGER:
     case TypeKind::BOOLEAN:
     case TypeKind::SMALLINT:
     case TypeKind::TINYINT:
