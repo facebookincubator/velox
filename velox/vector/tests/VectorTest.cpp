@@ -1610,6 +1610,21 @@ TEST_F(VectorTest, rowResize) {
   rowVector = makeRowVector({makeFlatVector<StringView>(10)});
   testRowResize(rowVector, bits::kNull);
 
+  // Test the data correctness after resize.
+  auto flatString = makeFlatVector<StringView>(10);
+  flatString->set(0, StringView("aaa"));
+  flatString->set(4, StringView("eee"));
+  flatString->set(9, StringView("jjj"));
+  rowVector = makeRowVector({std::move(flatString)});
+  // call slice to make a vector which use BufferView as data buffer.
+  auto slice = rowVector->slice(0, 8);
+  testRowResize(slice, bits::kNull);
+  auto child = slice->as<RowVector>()->childAt(0)->as<FlatVector<StringView>>();
+  EXPECT_EQ(child->valueAtFast(0).str(), "aaa");
+  EXPECT_EQ(child->valueAtFast(4).str(), "eee");
+  EXPECT_EQ(child->valueAtFast(9), StringView());
+  EXPECT_EQ(child->valueAtFast(12), StringView());
+
   // Dictionaries.
   rowVector = makeRowVector({BaseVector::wrapInDictionary(
       nullptr,
