@@ -213,7 +213,11 @@ class PrefixSort {
 
   int comparePartNormalizedKeys(char* left, char* right);
 
-  void extractRowAndEncodePrefixKeys(char* row, char* prefixBuffer);
+  template <bool isSingleSortKey>
+  void extractRowAndEncodePrefixKeys(
+      char* row,
+      char* prefixBuffer,
+      std::vector<char*, memory::StlAllocator<char*>>& rows);
 
   // Return the row address refenence in the prefix encoded buffer.
   FOLLY_ALWAYS_INLINE char*& getRowAddrFromPrefixBuffer(
@@ -223,7 +227,24 @@ class PrefixSort {
   }
 
   const RowContainer* const rowContainer_;
+  const bool isSingleSortKey_;
   const PrefixSortLayout sortLayout_;
+
+  /// Null record is placed before nullBoundary_ in std::vector sortedRows.
+  size_t nullBoundary_{0};
+
   memory::MemoryPool* const pool_;
 };
+
+template <>
+void PrefixSort::extractRowAndEncodePrefixKeys<false>(
+    char* row,
+    char* prefixBuffer,
+    std::vector<char*, memory::StlAllocator<char*>>& rows);
+
+template <>
+void PrefixSort::extractRowAndEncodePrefixKeys<true>(
+    char* row,
+    char* prefixBuffer,
+    std::vector<char*, memory::StlAllocator<char*>>& rows);
 } // namespace facebook::velox::exec
