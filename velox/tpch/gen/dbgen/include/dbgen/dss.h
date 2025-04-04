@@ -438,7 +438,7 @@ int dbg_print(int dt, FILE* tgt, void* data, int len, int eol);
 #define PR_DATE(tgt, yr, mn, dy)                                \
   do {                                                          \
     auto res = sprintf(tgt, "19%02ld-%02ld-%02ld", yr, mn, dy); \
-    if (res < 0) {                              \
+    if (res < 0) {                                              \
       tgt[0] = '\0';                                            \
     }                                                           \
   } while (0)
@@ -446,7 +446,7 @@ int dbg_print(int dt, FILE* tgt, void* data, int len, int eol);
 #define PR_DATE(tgt, yr, mn, dy)                                \
   do {                                                          \
     auto res = sprintf(tgt, "19%02ld-%02ld-%02ld", yr, mn, dy); \
-    if (res < 0) {                              \
+    if (res < 0) {                                              \
       tgt[0] = '\0';                                            \
     }                                                           \
   } while (0)
