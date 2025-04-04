@@ -290,4 +290,33 @@ TypePtr IfCallToSpecialForm::resolveType(const std::vector<TypePtr>& argTypes) {
 
   return SwitchCallToSpecialForm::resolveType(argTypes);
 }
+
+ExprPtr IfCallToSpecialForm::optimize(std::vector<ExprPtr>& compiledChildren) {
+  if (auto constantExpr =
+          std::dynamic_pointer_cast<exec::ConstantExpr>(compiledChildren[0])) {
+    if (!constantExpr->value()->isNullAt(0)) {
+      if (constantExpr->value()->as<ConstantVector<bool>>()->valueAt(0)) {
+        return compiledChildren[1];
+      } else {
+        return compiledChildren[2];
+      }
+    } else {
+      return compiledChildren[2];
+    }
+  }
+  return nullptr;
+}
+
+ExprPtr IfCallToSpecialForm::constructSpecialForm(
+    const TypePtr& type,
+    std::vector<ExprPtr>&& compiledChildren,
+    bool trackCpuUsage,
+    const core::QueryConfig& config) {
+  auto children = std::move(compiledChildren);
+  if (auto result = optimize(children)) {
+    return result;
+  }
+  return SwitchCallToSpecialForm::constructSpecialForm(
+      type, std::move(children), trackCpuUsage, config);
+}
 } // namespace facebook::velox::exec
