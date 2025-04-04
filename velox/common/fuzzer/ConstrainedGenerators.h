@@ -387,4 +387,30 @@ class PhoneNumberInputGenerator : public AbstractInputGenerator {
  private:
   std::string generateImpl();
 };
+
+// Input generator to cast a Varchar or Json to a given type T.
+class CastVarcharInputGenerator : public AbstractInputGenerator {
+ public:
+  CastVarcharInputGenerator(
+      size_t seed,
+      const TypePtr& type,
+      double nullRatio,
+      const TypePtr& castToType);
+
+  ~CastVarcharInputGenerator() override;
+
+  variant generate() override;
+
+ private:
+  // Define probabilities for random string variations.
+  double CONTROL_CHARACTER_PROBABILITY = 0.0;
+  double ESCAPE_STRING_PROBABILITY = 0.0;
+  double TRUNCATE_PROBABILITY = 0.1;
+
+  TypePtr castToType_;
+
+  variant generateRandomGarbageString();
+  variant generateValidPrimitiveAsString();
+};
+
 } // namespace facebook::velox::fuzzer
