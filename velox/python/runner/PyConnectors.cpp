@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-#include "python/src/runner/PyConnectors.h"
+#include "velox/python/runner/PyConnectors.h"
 #include "velox/connectors/hive/HiveConnector.h"
 #include "velox/connectors/tpch/TpchConnector.h"
 

@@ -83,3 +83,7 @@ endif()
 if(${VELOX_BUILD_TESTING})
   add_subdirectory(tool)
 endif()
+
+if(VELOX_BUILD_PYTHON_PACKAGE)
+  add_subdirectory(python)
+endif()

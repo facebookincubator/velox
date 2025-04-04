@@ -17,7 +17,7 @@
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
 
-#include "python/src/vector/PyVector.h"
+#include "velox/python/vector/PyVector.h"
 
 namespace py = pybind11;
 

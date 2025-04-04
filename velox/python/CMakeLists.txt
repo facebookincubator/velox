@@ -44,7 +44,7 @@ add_library(velox_py_init init/PyInit.cpp)
 target_link_libraries(
   velox_py_init
   PRIVATE velox_memory)
-
+# This should not be necessary but the xxhash header is not part of any target
 target_include_directories(velox_py_init
                            PUBLIC ${PROJECT_SOURCE_DIR}/velox/external/xxhash)
 

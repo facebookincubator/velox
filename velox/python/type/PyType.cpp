@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-#include "python/src/type/PyType.h"
+#include "velox/python/type/PyType.h"
 #include <pybind11/stl.h>
 
 namespace facebook::velox::py {

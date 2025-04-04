@@ -14,10 +14,10 @@
  * limitations under the License.
  */
 
-#include "python/src/runner/PyLocalRunner.h"
+#include "velox/python/runner/PyLocalRunner.h"
 
 #include <pybind11/stl.h>
-#include "python/src/vector/PyVector.h"
+#include "velox/python/vector/PyVector.h"
 #include "velox/connectors/hive/HiveConnectorSplit.h"
 #include "velox/core/PlanNode.h"
 #include "velox/dwio/common/Options.h"
