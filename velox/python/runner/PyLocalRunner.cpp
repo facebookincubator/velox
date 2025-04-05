@@ -17,13 +17,13 @@
 #include "velox/python/runner/PyLocalRunner.h"
 
 #include <pybind11/stl.h>
-#include "velox/python/vector/PyVector.h"
 #include "velox/connectors/hive/HiveConnectorSplit.h"
 #include "velox/core/PlanNode.h"
 #include "velox/dwio/common/Options.h"
 #include "velox/dwio/dwrf/writer/Writer.h"
 #include "velox/exec/PlanNodeStats.h"
 #include "velox/exec/Spill.h"
+#include "velox/python/vector/PyVector.h"
 
 namespace facebook::velox::py {
 namespace {

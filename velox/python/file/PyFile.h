@@ -17,8 +17,8 @@
 #pragma once
 
 #include <string>
-#include "velox/python/type/PyType.h"
 #include "velox/dwio/common/Options.h"
+#include "velox/python/type/PyType.h"
 
 namespace facebook::velox::py {
 

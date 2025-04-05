@@ -18,11 +18,11 @@
 
 #include <pybind11/embed.h>
 
-#include "velox/python/plan_builder/PyPlanBuilder.h"
-#include "velox/python/type/PyType.h"
 #include "velox/core/PlanNode.h"
 #include "velox/exec/Cursor.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
+#include "velox/python/plan_builder/PyPlanBuilder.h"
+#include "velox/python/type/PyType.h"
 
 namespace facebook::velox::py {
 

@@ -18,7 +18,6 @@
 
 #include <folly/executors/GlobalExecutor.h>
 #include <pybind11/stl.h>
-#include "velox/python/vector/PyVector.h"
 #include "velox/connectors/hive/HiveConnectorSplit.h"
 #include "velox/connectors/hive/TableHandle.h"
 #include "velox/connectors/tpch/TpchConnectorSplit.h"
@@ -31,6 +30,7 @@
 #include "velox/functions/prestosql/aggregates/RegisterAggregateFunctions.h"
 #include "velox/functions/prestosql/registration/RegistrationFunctions.h"
 #include "velox/parse/TypeResolver.h"
+#include "velox/python/vector/PyVector.h"
 #include "velox/tpch/gen/TpchGen.h"
 
 namespace facebook::velox::py {
