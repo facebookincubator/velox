@@ -24,6 +24,7 @@
 #include "velox/dwio/common/Options.h"
 #include "velox/dwio/common/Writer.h"
 #include "velox/dwio/common/WriterFactory.h"
+#include "velox/dwio/parquet/writer/arrow/Properties.h"
 #include "velox/dwio/parquet/writer/arrow/Types.h"
 #include "velox/dwio/parquet/writer/arrow/util/Compression.h"
 #include "velox/vector/ComplexVector.h"
@@ -109,6 +110,9 @@ struct WriterOptions : public dwio::common::WriterOptions {
   std::optional<std::string> parquetWriteTimestampTimeZone;
   bool writeInt96AsTimestamp = false;
   std::optional<bool> useParquetDataPageV2;
+  std::optional<bool> storeDecimalAsInteger;
+  arrow::ParquetVersion::type version =
+      arrow::ParquetVersion::type::PARQUET_1_0;
 
   // Parsing session and hive configs.
 
