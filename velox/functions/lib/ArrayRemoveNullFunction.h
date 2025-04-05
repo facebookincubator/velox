@@ -19,9 +19,6 @@
 
 namespace facebook::velox::functions {
 
-/// This class implements the remove_nulls function of presto and array_compact
-/// function of spark.
-///
 /// DEFINITION:
 /// Presto: remove_nulls(array(E)) -> array(E)
 /// Spark: array_compact(array(E)) -> array(E)
