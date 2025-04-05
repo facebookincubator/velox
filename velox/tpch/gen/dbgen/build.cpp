@@ -34,6 +34,8 @@
 #include "dbgen/dss.h" // @manual
 #include "dbgen/dsstypes.h" // @manual
 
+#include <fmt/core.h>
+#include <folly/Likely.h>
 #include <math.h>
 #include "dbgen/rng64.h" // @manual
 
@@ -85,22 +87,24 @@ static void gen_phone(DSS_HUGE ind, char* target, seed_t* seed) {
   RANDOM(exchg, 100, 999, seed);
   RANDOM(number, 1000, 9999, seed);
 
-  sprintf(target, "%02d", static_cast<int>(10 + (ind % NATIONS_MAX)));
-  sprintf(target + 3, "%03d", static_cast<int>(acode));
-  sprintf(target + 7, "%03d", static_cast<int>(exchg));
-  sprintf(target + 11, "%04d", static_cast<int>(number));
-  target[2] = target[6] = target[10] = '-';
+  std::string phone = fmt::format(
+      "{:02d}-{:03d}-{:03d}-{:04d}",
+      10 + (ind % NATIONS_MAX),
+      static_cast<int>(acode),
+      static_cast<int>(exchg),
+      static_cast<int>(number));
+  std::strcpy(target, phone.c_str());
 
   return;
 }
 
 static char** asc_date = NULL;
 
-static char orderSzFormat[100];
-static char custSzFormat[100];
-static char partSzFormat[100];
-static char partSzBrandFormat[100];
-static char suppSzFormat[100];
+static char orderSzFormat[100] = {0};
+static char custSzFormat[100] = {0};
+static char partSzFormat[100] = {0};
+static char partSzBrandFormat[100] = {0};
+static char suppSzFormat[100] = {0};
 
 // Initializes a series of buffers and structures required to generate data.
 // Clients must ensure this function is called before any of the functions
@@ -120,7 +124,10 @@ long mk_cust(DSS_HUGE n_cust, customer_t* c, DBGenContext* ctx) {
   DSS_HUGE i;
 
   c->custkey = n_cust;
-  sprintf(c->name, custSzFormat, C_NAME_TAG, n_cust);
+  auto res = sprintf(c->name, custSzFormat, C_NAME_TAG, n_cust);
+  if (FOLLY_UNLIKELY(res < 0)) {
+    c->name[0] = '\0';
+  }
   V_STR(C_ADDR_LEN, &ctx->Seed[C_ADDR_SD], c->address);
   c->alen = static_cast<int>(strlen(c->address));
   RANDOM(i, 0, (nations.count - 1), &ctx->Seed[C_NTRG_SD]);
@@ -185,7 +192,10 @@ long mk_order(DSS_HUGE index, order_t* o, DBGenContext* ctx, long upd_num) {
       1,
       MAX((ctx->scale_factor * O_CLRK_SCL), O_CLRK_SCL),
       &ctx->Seed[O_CLRK_SD]);
-  sprintf(o->clerk, orderSzFormat, O_CLRK_TAG, clk_num);
+  auto res = sprintf(o->clerk, orderSzFormat, O_CLRK_TAG, clk_num);
+  if (FOLLY_UNLIKELY(res < 0)) {
+    o->clerk[0] = '\0';
+  }
   TEXT(O_CMNT_LEN, &ctx->Seed[O_CMNT_SD], o->comment);
   o->clen = static_cast<int>(strlen(o->comment));
 #ifdef DEBUG
@@ -266,9 +276,15 @@ long mk_part(DSS_HUGE index, part_t* p, DBGenContext* ctx) {
   agg_str(
       &colors, static_cast<long>(P_NAME_SCL), &ctx->Seed[P_NAME_SD], p->name);
   RANDOM(temp, P_MFG_MIN, P_MFG_MAX, &ctx->Seed[P_MFG_SD]);
-  sprintf(p->mfgr, partSzFormat, P_MFG_TAG, temp);
+  auto res = sprintf(p->mfgr, partSzFormat, P_MFG_TAG, temp);
+  if (FOLLY_UNLIKELY(res < 0)) {
+    p->mfgr[0] = '\0';
+  }
   RANDOM(brnd, P_BRND_MIN, P_BRND_MAX, &ctx->Seed[P_BRND_SD]);
-  sprintf(p->brand, partSzBrandFormat, P_BRND_TAG, (temp * 10 + brnd));
+  res = sprintf(p->brand, partSzBrandFormat, P_BRND_TAG, (temp * 10 + brnd));
+  if (FOLLY_UNLIKELY(res < 0)) {
+    p->brand[0] = '\0';
+  }
   p->tlen = pick_str(&p_types_set, &ctx->Seed[P_TYPE_SD], p->type);
   p->tlen = static_cast<int>(strlen(p_types_set.list[p->tlen].text));
   RANDOM(p->size, P_SIZE_MIN, P_SIZE_MAX, &ctx->Seed[P_SIZE_SD]);
@@ -292,7 +308,10 @@ long mk_supp(DSS_HUGE index, supplier_t* s, DBGenContext* ctx) {
   DSS_HUGE i, bad_press, noise, offset, type;
 
   s->suppkey = index;
-  sprintf(s->name, suppSzFormat, S_NAME_TAG, index);
+  auto res = sprintf(s->name, suppSzFormat, S_NAME_TAG, index);
+  if (FOLLY_UNLIKELY(res < 0)) {
+    s->name[0] = '\0';
+  }
   V_STR(S_ADDR_LEN, &ctx->Seed[S_ADDR_SD], s->address);
   s->alen = static_cast<int>(strlen(s->address));
   RANDOM(i, 0, nations.count - 1, &ctx->Seed[S_NTRG_SD]);
