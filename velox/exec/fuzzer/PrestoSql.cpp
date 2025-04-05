@@ -28,12 +28,6 @@ void appendComma(int32_t i, std::stringstream& sql) {
 
 // Returns the SQL string of the given type.
 std::string toTypeSql(const TypePtr& type) {
-  // Date needs special handling because it is not supported by TypeKind. We
-  // will need to explicitly specify or we are at risk of a date being casted to
-  // an integer and failing.
-  if (type->isDate()) {
-    return "DATE";
-  }
   switch (type->kind()) {
     case TypeKind::ARRAY:
       return fmt::format("ARRAY({})", toTypeSql(type->childAt(0)));
@@ -54,11 +48,9 @@ std::string toTypeSql(const TypePtr& type) {
       sql << ")";
       return sql.str();
     }
-    case TypeKind::VARCHAR:
-      return isJsonType(type) ? "JSON" : "VARCHAR";
     default:
       if (type->isPrimitiveType()) {
-        return mapTypeKindToName(type->kind());
+        return type->name();
       }
       VELOX_UNSUPPORTED("Type is not supported: {}", type->toString());
   }
@@ -218,6 +210,7 @@ std::string toCallSql(const core::CallTypedExprPtr& call) {
     toCallInputsSql(call->inputs(), sql);
     sql << "]";
   } else if (call->name() == "between") {
+    sql << "(";
     const auto& inputs = call->inputs();
     VELOX_CHECK_EQ(inputs.size(), 3);
     toCallInputsSql({inputs[0]}, sql);
@@ -225,6 +218,7 @@ std::string toCallSql(const core::CallTypedExprPtr& call) {
     toCallInputsSql({inputs[1]}, sql);
     sql << " and ";
     toCallInputsSql({inputs[2]}, sql);
+    sql << ")";
   } else if (call->name() == "row_constructor") {
     sql << "row(";
     toCallInputsSql(call->inputs(), sql);
