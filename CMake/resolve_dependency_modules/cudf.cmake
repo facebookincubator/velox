@@ -14,6 +14,9 @@
 
 include_guard(GLOBAL)
 
+# 3.30.4 is the minimum version required by cudf
+cmake_minimum_required(VERSION 3.30.4)
+
 set(VELOX_rapids_cmake_VERSION 25.04)
 set(VELOX_rapids_cmake_BUILD_SHA256_CHECKSUM
     458c14eaff9000067b32d65c8c914f4521090ede7690e16eb57035ce731386db)
