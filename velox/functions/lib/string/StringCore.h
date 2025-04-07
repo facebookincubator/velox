@@ -313,7 +313,7 @@ cappedByteLengthUnicode(const char* input, size_t size, int64_t maxChars) {
 }
 
 constexpr size_t long_string_find(
-    const std::string_view& str, const std::string_view substr, size_t start_pos
+    std::string_view str, const std::string_view substr, size_t start_pos
 ) noexcept
 {
     const size_t str_len = str.size();
@@ -362,7 +362,7 @@ static inline int64_t findNthInstanceByteIndexFromStart(
     return -1;
   }
 
-  auto byteIndex = long_string_find(std::string_view(string), std::string_view(subString), (size_t)0);
+  auto byteIndex = long_string_find(string, subString, (size_t)0);
   // Not found
   if (byteIndex == std::string_view::npos) {
     return -1;
