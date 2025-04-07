@@ -15,9 +15,8 @@
  */
 
 #include "velox/common/fuzzer/ConstrainedGenerators.h"
-
 #include <boost/random/uniform_int_distribution.hpp>
-
+#include <cfloat>
 #include "velox/common/fuzzer/Utils.h"
 
 namespace facebook::velox::fuzzer {
@@ -284,6 +283,80 @@ getRandomInputGenerator(size_t seed, const TypePtr& type, double nullRatio) {
         nullRatio);
   }
   return generator;
+}
+
+// CastVarcharInputGenerator
+CastVarcharInputGenerator::CastVarcharInputGenerator(
+    size_t seed,
+    const TypePtr& type,
+    double nullRatio,
+    const TypePtr& castToType)
+    : AbstractInputGenerator(seed, type, nullptr, nullRatio) {
+  castToType_ = castToType;
+}
+
+CastVarcharInputGenerator::~CastVarcharInputGenerator() = default;
+
+#pragma GCC diagnostic ignored "-Wdeprecated-declarations"
+std::string CastVarcharInputGenerator::generateValidPrimitiveAsString() {
+  switch (castToType_->kind()) {
+    case TypeKind::BOOLEAN:
+      // For boolean let's alternate between true/false and 1/0.
+      if (coinToss(rng_, .5))
+        return (std::to_string(rand<bool>(rng_)));
+      else
+        return (rand<bool>(rng_) ? "true" : "false");
+    case TypeKind::INTEGER:
+      return (std::to_string(rand<int32_t>(rng_, INT32_MIN, INT32_MAX)));
+    case TypeKind::TINYINT:
+      return (std::to_string(rand<int8_t>(rng_, INT8_MIN, INT8_MAX)));
+    case TypeKind::SMALLINT:
+      return (std::to_string(rand<int16_t>(rng_, INT16_MIN, INT16_MAX)));
+    case TypeKind::BIGINT:
+      return (std::to_string(rand<int64_t>(rng_, INT64_MIN, INT64_MAX)));
+    case TypeKind::HUGEINT:
+      return (std::to_string(rand<int128_t>(rng_, INT64_MIN, INT64_MAX)));
+    case TypeKind::REAL:
+      return (std::to_string(rand<float>(rng_, FLT_MIN, FLT_MAX)));
+    case TypeKind::DOUBLE:
+      return (std::to_string(rand<double>(rng_, FLT_MIN, FLT_MAX)));
+    case TypeKind::TIMESTAMP:
+      return (std::to_string(
+          randTimestamp(rng_, FuzzerTimestampPrecision::kMicroSeconds)));
+    case TypeKind::VARCHAR:
+      break; // Switch-block doesn't allow for locally defined variables.
+    default:
+      // cast from varchar doesn't support complex types
+      VELOX_FAIL_UNSUPPORTED_INPUT_UNCATCHABLE(fmt::format(
+          "Type `{}` not supported for cast varchar custom generator",
+          castToType_->kind()));
+  }
+
+  // Generate random string.
+  std::string input;
+  std::wstring_convert<std::codecvt_utf8<char16_t>, char16_t> converter;
+  auto randomStr = randString(
+      rng_, rand<size_t>(rng_, 0, 20), {UTF8CharList::ASCII}, input, converter);
+  return input;
+}
+
+variant CastVarcharInputGenerator::generate() {
+  // Randomly add nulls.
+  if (coinToss(rng_, nullRatio_)) {
+    return variant::null(type_->kind());
+  }
+
+  auto input = generateValidPrimitiveAsString();
+
+  // Randomly generate and insert garbage strings into input data. We
+  // don't want to add too many though to trigger too many exceptions or
+  // else we won't be able to verify output.
+  if (coinToss(rng_, 0.001)) {
+    // control character, escape string, truncate probabilities
+    makeRandomStrVariation(input, rng_, RandomStrVariationOptions{.1, .1, .1});
+  }
+
+  return variant(input);
 }
 
 } // namespace facebook::velox::fuzzer
