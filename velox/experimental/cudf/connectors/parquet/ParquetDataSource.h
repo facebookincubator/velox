@@ -19,6 +19,7 @@
 #include "velox/experimental/cudf/connectors/parquet/ParquetConfig.h"
 #include "velox/experimental/cudf/connectors/parquet/ParquetConnectorSplit.h"
 #include "velox/experimental/cudf/connectors/parquet/ParquetTableHandle.h"
+#include "velox/experimental/cudf/exec/ExpressionEvaluator.h"
 #include "velox/experimental/cudf/exec/NvtxHelper.h"
 
 #include "velox/common/base/RandomUtil.h"
@@ -121,6 +122,16 @@ class ParquetDataSource : public DataSource, public NvtxHelper {
 
   // The row type for the data source output, not including filter-only columns
   const RowTypePtr outputType_;
+
+  // Expression evaluator for remaining filter.
+  core::ExpressionEvaluator* const expressionEvaluator_;
+  std::unique_ptr<exec::ExprSet> remainingFilterExprSet_;
+  velox::cudf_velox::ExpressionEvaluator cudfExpressionEvaluator_;
+
+  // Expression evaluator for subfield filter.
+  std::vector<std::unique_ptr<cudf::scalar>> subfieldScalars_;
+  cudf::ast::tree subfieldTree_;
+  std::unique_ptr<exec::ExprSet> subfieldFilterExprSet_;
 
   dwio::common::RuntimeStatistics runtimeStats_;
 };

@@ -104,11 +104,6 @@ DEFINE_uint64(
     0,
     "Pass read limit for cudf::parquet_chunked_reader.");
 
-DEFINE_bool(
-    use_arrow_schema,
-    true,
-    "Use arrow schema when reading parquet with cudf.");
-
 DEFINE_int32(
     cudf_gpu_batch_size_rows,
     100000,
@@ -242,9 +237,6 @@ void QueryBenchmarkBase::initialize() {
   parquetConfigurationValues
       [cudf_velox::connector::parquet::ParquetConfig::kMaxPassReadLimit] =
           std::to_string(FLAGS_cudf_pass_read_limit);
-  parquetConfigurationValues
-      [cudf_velox::connector::parquet::ParquetConfig::kUseArrowSchema] =
-          std::to_string(FLAGS_use_arrow_schema);
   parquetConfigurationValues[cudf_velox::connector::parquet::ParquetConfig::
                                  kAllowMismatchedParquetSchemas] =
       std::to_string(true);

@@ -31,22 +31,21 @@ queries=${1:-$(seq 1 22)}
 devices=${2:-"cpu gpu"}
 profile=${3:-"false"}
 
-num_drivers=${NUM_DRIVERS:-16}
+num_drivers=${NUM_DRIVERS:-4}
 output_batch_rows=${BATCH_SIZE_ROWS:-100000}
-
-cudf_chunk_read_limit=1024000
+cudf_chunk_read_limit=$((1024 * 1024 * 1024 * 1))
 cudf_pass_read_limit=0
-
+VELOX_CUDF_MEMORY_RESOURCE="async"
 
 for query_number in ${queries}; do
     printf -v query_number '%02d' "${query_number}"
     for device in ${devices}; do
         case "${device}" in
             "cpu")
-                export VELOX_CUDF_DISABLED=1;;
+                num_drivers=${NUM_DRIVERS:-32}
+                VELOX_CUDF_ENABLED=false;;
             "gpu")
-                export VELOX_CUDF_MEMORY_RESOURCE="async"
-                export VELOX_CUDF_DISABLED=0;;
+                VELOX_CUDF_ENABLED=true;;
         esac
         echo "Running query ${query_number} on ${device} with ${num_drivers} drivers."
         # The benchmarks segfault after reporting results, so we disable errors
@@ -63,10 +62,12 @@ for query_number in ${queries}; do
         set +e -x
         ${PROFILE_CMD} \
         ./_build/release/velox/benchmarks/tpch/velox_tpch_benchmark \
-            --data_path=velox-tpch-sf10-data \
+            --data_path=velox-tpch-sf100-data \
             --data_format=parquet \
             --run_query_verbose=${query_number} \
             --num_repeats=1 \
+            --velox_cudf_enabled=${VELOX_CUDF_ENABLED} \
+            --velox_cudf_memory_resource=${VELOX_CUDF_MEMORY_RESOURCE} \
             --num_drivers=${num_drivers} \
             --preferred_output_batch_rows=${output_batch_rows} \
             --max_output_batch-rows=${output_batch_rows} 2>&1 \

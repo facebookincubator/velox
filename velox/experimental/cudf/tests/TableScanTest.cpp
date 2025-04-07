@@ -30,9 +30,11 @@
 #include "velox/exec/PlanNodeStats.h"
 #include "velox/exec/TableScan.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
+#include "velox/exec/tests/utils/HiveConnectorTestBase.h"
 #include "velox/exec/tests/utils/LocalExchangeSource.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
 #include "velox/exec/tests/utils/TempDirectoryPath.h"
+#include "velox/expression/ExprToSubfieldFilter.h"
 #include "velox/type/Type.h"
 
 #include <fmt/ranges.h>
@@ -267,4 +269,123 @@ TEST_F(TableScanTest, columnAliases) {
                 .endTableScan()
                 .planNode();
   assertQuery(op, {filePath}, "SELECT c0 FROM tmp");
+}
+
+TEST_F(TableScanTest, filterPushdown) {
+  auto rowType =
+      ROW({"c0", "c1", "c2", "c3"}, {TINYINT(), BIGINT(), DOUBLE(), BOOLEAN()});
+  auto filePaths = makeFilePaths(10);
+  auto vectors = makeVectors(10, 1'000, rowType);
+  for (int32_t i = 0; i < vectors.size(); i++) {
+    writeToFile(filePaths[i]->getPath(), vectors[i]);
+  }
+  createDuckDbTable(vectors);
+
+  // c1 >= 0 or null and c3 is true
+  // common::SubfieldFilters subfieldFilters =
+  //     SubfieldFiltersBuilder()
+  //         .add("c1", greaterThanOrEqual(0, true))
+  //         .add("c3", std::make_unique<common::BoolValue>(true, false))
+  //         .build();
+  // convert subfieldFilters to a typed expression
+  // c1 >= 0 or null and c3 is true
+  auto c1Expr = std::make_shared<core::CallTypedExpr>(
+      BOOLEAN(),
+      std::vector<core::TypedExprPtr>{
+          std::make_shared<core::FieldAccessTypedExpr>(BIGINT(), "c1"),
+          std::make_shared<core::ConstantTypedExpr>(BIGINT(), int64_t(0)),
+      },
+      "gte");
+
+  auto c3Expr = std::make_shared<core::CallTypedExpr>(
+      BOOLEAN(),
+      std::vector<core::TypedExprPtr>{
+          std::make_shared<core::FieldAccessTypedExpr>(BOOLEAN(), "c3"),
+          std::make_shared<core::ConstantTypedExpr>(BOOLEAN(), true),
+      },
+      "eq");
+
+  auto subfieldFilterExpr = std::make_shared<core::CallTypedExpr>(
+      BOOLEAN(),
+      std::vector<core::TypedExprPtr>{
+          c1Expr,
+          c3Expr,
+      },
+      "and");
+  auto tableHandle = makeTableHandle(
+      "parquet_table", rowType, true, std::move(subfieldFilterExpr), nullptr);
+
+  auto assignments =
+      facebook::velox::exec::test::HiveConnectorTestBase::allRegularColumns(
+          rowType);
+
+  auto task = assertQuery(
+      PlanBuilder()
+          .startTableScan()
+          .outputType(ROW({"c1", "c3", "c0"}, {BIGINT(), BOOLEAN(), TINYINT()}))
+          .tableHandle(tableHandle)
+          .assignments(assignments)
+          .endTableScan()
+          .planNode(),
+      filePaths,
+      "SELECT c1, c3, c0 FROM tmp WHERE (c1 >= 0 ) AND c3");
+
+  auto tableScanStats = getTableScanStats(task);
+  // EXPECT_EQ(tableScanStats.rawInputRows, 10'000);
+  // EXPECT_LT(tableScanStats.inputRows, tableScanStats.rawInputRows);
+  EXPECT_EQ(tableScanStats.inputRows, tableScanStats.outputRows);
+
+#if 0
+  // Repeat the same but do not project out the filtered columns.
+  assignments.clear();
+  assignments["c0"] =
+      facebook::velox::exec::test::HiveConnectorTestBase::regularColumn(
+          "c0", TINYINT());
+  assertQuery(
+      PlanBuilder()
+          .startTableScan()
+          .outputType(ROW({"c0"}, {TINYINT()}))
+          .tableHandle(tableHandle)
+          .assignments(assignments)
+          .endTableScan()
+          .planNode(),
+      filePaths,
+      "SELECT c0 FROM tmp WHERE (c1 >= 0 ) AND c3");
+
+  // TODO: zero column non-empty table is not possible in cudf, need to implement.
+  // Do the same for count, no columns projected out.
+  assignments.clear();
+  assertQuery(
+      PlanBuilder()
+          .startTableScan()
+          .outputType(ROW({}, {}))
+          .tableHandle(tableHandle)
+          .assignments(assignments)
+          .endTableScan()
+          .singleAggregation({}, {"sum(1)"})
+          .planNode(),
+      filePaths,
+      "SELECT count(*) FROM tmp WHERE (c1 >= 0 ) AND c3");
+
+  // Do the same for count, no filter, no projections.
+  assignments.clear();
+  // subfieldFilters.clear(); // Explicitly clear this.
+  tableHandle = makeTableHandle(
+      "parquet_table",
+      rowType,
+      false,
+      nullptr,
+      nullptr);
+  assertQuery(
+      PlanBuilder()
+          .startTableScan()
+          .outputType(ROW({}, {}))
+          .tableHandle(tableHandle)
+          .assignments(assignments)
+          .endTableScan()
+          .singleAggregation({}, {"sum(1)"})
+          .planNode(),
+      filePaths,
+      "SELECT count(*) FROM tmp");
+#endif
 }

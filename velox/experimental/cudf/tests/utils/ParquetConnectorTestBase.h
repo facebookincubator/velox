@@ -101,9 +101,16 @@ class ParquetConnectorTestBase
   makeTableHandle(
       const std::string& tableName = "parquet_table",
       const RowTypePtr& dataColumns = nullptr,
-      bool filterPushdownEnabled = false) {
+      bool filterPushdownEnabled = false,
+      const core::TypedExprPtr& subfieldFilterExpr = nullptr,
+      const core::TypedExprPtr& remainingFilterExpr = nullptr) {
     return std::make_shared<connector::parquet::ParquetTableHandle>(
-        kParquetConnectorId, tableName, filterPushdownEnabled, dataColumns);
+        kParquetConnectorId,
+        tableName,
+        filterPushdownEnabled,
+        subfieldFilterExpr,
+        remainingFilterExpr,
+        dataColumns);
   }
 
   /// @param name Column name.

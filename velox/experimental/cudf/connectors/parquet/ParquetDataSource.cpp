@@ -25,6 +25,10 @@
 
 #include <cudf/io/parquet.hpp>
 #include <cudf/io/types.hpp>
+#include <cudf/stream_compaction.hpp>
+#include <cudf/table/table.hpp>
+#include <cudf/table/table_view.hpp>
+#include <cudf/transform.hpp>
 
 #include <filesystem>
 #include <memory>
@@ -50,7 +54,8 @@ ParquetDataSource::ParquetDataSource(
       executor_(executor),
       connectorQueryCtx_(connectorQueryCtx),
       pool_(connectorQueryCtx->memoryPool()),
-      outputType_(outputType) {
+      outputType_(outputType),
+      expressionEvaluator_(connectorQueryCtx->expressionEvaluator()) {
   // Set up column projection if needed
   auto readColumnTypes = outputType_->children();
   for (const auto& outputName : outputType_->names()) {
@@ -71,6 +76,22 @@ ParquetDataSource::ParquetDataSource(
 
   // Create empty IOStats for later use
   ioStats_ = std::make_shared<io::IoStatistics>();
+
+  // Create subfield filter
+  auto subfieldFilter = tableHandle_->subfieldFilterExpr();
+  if (subfieldFilter) {
+    subfieldFilterExprSet_ = expressionEvaluator_->compile(subfieldFilter);
+  }
+
+  // Create remaining filter
+  auto remainingFilter = tableHandle_->remainingFilter();
+  if (remainingFilter) {
+    remainingFilterExprSet_ = expressionEvaluator_->compile(remainingFilter);
+    cudfExpressionEvaluator_ = velox::cudf_velox::ExpressionEvaluator(
+        remainingFilterExprSet_->exprs(), outputType_);
+    // TODO(kn): Get column names and subfields from remaining filter and add to
+    // readColumnNames_
+  }
 }
 
 std::optional<RowVectorPtr> ParquetDataSource::next(
@@ -95,13 +116,51 @@ std::optional<RowVectorPtr> ParquetDataSource::next(
     }
   }
 
+  // Apply remaining filter if present
+  if (remainingFilterExprSet_) {
+    auto cudfTableColumns = cudfTable_->release();
+    const auto originalNumColumns = cudfTableColumns.size();
+    // Filter may need addtional computed columns which are added to
+    // cudfTableColumns
+    auto filterResult = cudfExpressionEvaluator_.compute(
+        cudfTableColumns, stream_, cudf::get_current_device_resource_ref());
+    // discard computed columns
+    std::vector<std::unique_ptr<cudf::column>> originalColumns;
+    originalColumns.reserve(originalNumColumns);
+    std::move(
+        cudfTableColumns.begin(),
+        cudfTableColumns.begin() + originalNumColumns,
+        std::back_inserter(originalColumns));
+    auto originalTable =
+        std::make_unique<cudf::table>(std::move(originalColumns));
+    // Keep only rows where the filter is true
+    cudfTable_ = cudf::apply_boolean_mask(
+        *originalTable,
+        *filterResult[0],
+        stream_,
+        cudf::get_current_device_resource_ref());
+  }
+
   // Output RowVectorPtr
-  auto nrows = cudfTable_->num_rows();
+  const auto nRows = cudfTable_->num_rows();
+
+  // keep only outputType_.size() columns in cudfTable_
+  if (outputType_->size() < cudfTable_->num_columns()) {
+    auto cudfTableColumns = cudfTable_->release();
+    std::vector<std::unique_ptr<cudf::column>> originalColumns;
+    originalColumns.reserve(outputType_->size());
+    std::move(
+        cudfTableColumns.begin(),
+        cudfTableColumns.begin() + outputType_->size(),
+        std::back_inserter(originalColumns));
+    cudfTable_ = std::make_unique<cudf::table>(std::move(originalColumns));
+  }
+
   auto output = cudfIsRegistered()
       ? std::make_shared<CudfVector>(
-            pool_, outputType_, nrows, std::move(cudfTable_), stream_)
+            pool_, outputType_, nRows, std::move(cudfTable_), stream_)
       : with_arrow::toVeloxColumn(
-            cudfTable_->view(), pool_, columnNames, stream_);
+            cudfTable_->view(), pool_, outputType_->names(), stream_);
   stream_.synchronize();
 
   // Check if conversion yielded a nullptr
@@ -163,8 +222,21 @@ ParquetDataSource::createSplitReader() {
   if (readColumnNames_.size()) {
     readerOptions.set_columns(readColumnNames_);
   }
+  if (subfieldFilterExprSet_) {
+    auto subfieldFilterExpr = subfieldFilterExprSet_->expr(0);
+    // non-ast instructions in filter is not supported for SubFieldFilter.
+    // precomputeInstructions which are non-ast instructions should be empty.
+    std::vector<PrecomputeInstruction> precomputeInstructions;
+    create_ast_tree(
+        subfieldFilterExpr,
+        subfieldTree_,
+        subfieldScalars_,
+        outputType_,
+        precomputeInstructions);
+    VELOX_CHECK_EQ(precomputeInstructions.size(), 0);
+    readerOptions.set_filter(subfieldTree_.back());
+  }
   stream_ = cudfGlobalStreamPool().get_stream();
-
   // Create a parquet reader
   return std::make_unique<cudf::io::chunked_parquet_reader>(
       ParquetConfig_->maxChunkReadLimit(),

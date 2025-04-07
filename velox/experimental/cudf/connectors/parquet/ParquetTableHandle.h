@@ -75,6 +75,8 @@ class ParquetTableHandle : public ConnectorTableHandle {
       std::string connectorId,
       const std::string& tableName,
       bool filterPushdownEnabled,
+      const core::TypedExprPtr& subfieldFilterExpr,
+      const core::TypedExprPtr& remainingFilter = nullptr,
       const RowTypePtr& dataColumns = nullptr);
 
   const std::string& name() const override {
@@ -83,6 +85,14 @@ class ParquetTableHandle : public ConnectorTableHandle {
 
   bool isFilterPushdownEnabled() const {
     return filterPushdownEnabled_;
+  }
+
+  const core::TypedExprPtr& subfieldFilterExpr() const {
+    return subfieldFilterExpr_;
+  }
+
+  const core::TypedExprPtr& remainingFilter() const {
+    return remainingFilter_;
   }
 
   // Schema of the table.  Need this for reading TEXTFILE.
@@ -99,6 +109,10 @@ class ParquetTableHandle : public ConnectorTableHandle {
  private:
   const std::string tableName_;
   const bool filterPushdownEnabled_;
+  // This expression is used for predicate pushdown.
+  const core::TypedExprPtr subfieldFilterExpr_;
+  // This expression is used for post-scan filtering.
+  const core::TypedExprPtr remainingFilter_;
   const RowTypePtr dataColumns_;
 };
 
