@@ -131,3 +131,8 @@ DEFINE_bool(
     velox_ssd_verify_write,
     false,
     "Read back data after writing to SSD");
+
+DEFINE_int32(
+    velox_hash_batch_size,
+    1024,
+    "Number of rows per batch used in preparing hash join table");
