@@ -41,7 +41,7 @@ USE_CLANG="${USE_CLANG:-false}"
 export INSTALL_PREFIX=${INSTALL_PREFIX:-"/usr/local"}
 DEPENDENCY_DIR=${DEPENDENCY_DIR:-$(pwd)/deps-download}
 
-FB_OS_VERSION="v2024.07.01.00"
+FB_OS_VERSION="v2024.07.15.00"
 FMT_VERSION="10.1.1"
 BOOST_VERSION="boost-1.84.0"
 THRIFT_VERSION="v0.16.0"
@@ -232,8 +232,21 @@ function install_arrow {
 
 function install_cuda {
   dnf install -y patch
+  ARCH=$(uname -m)
+  case "$ARCH" in
+    x86_64)
+      CUDA_ARCH="x86_64"
+      ;;
+    aarch64)
+      CUDA_ARCH="sbsa"
+      ;;
+    *)
+      echo "Error: unsupported architecture $ARCH" >&2
+      exit 1
+      ;;
+  esac
   # See https://developer.nvidia.com/cuda-downloads
-  dnf config-manager --add-repo https://developer.download.nvidia.com/compute/cuda/repos/rhel9/x86_64/cuda-rhel9.repo
+  dnf config-manager --add-repo https://developer.download.nvidia.com/compute/cuda/repos/rhel9/${CUDA_ARCH}/cuda-rhel9.repo
   local dashed="$(echo $1 | tr '.' '-')"
   dnf install -y \
     cuda-compat-$dashed \

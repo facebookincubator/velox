@@ -285,9 +285,22 @@ function install_arrow {
 }
 
 function install_cuda {
-  # See https://developer.nvidia.com/cuda-downloads
   if ! dpkg -l cuda-keyring 1>/dev/null; then
-    wget https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2204/x86_64/cuda-keyring_1.1-1_all.deb
+    ARCH=$(uname -m)
+    case "$ARCH" in
+      x86_64)
+        CUDA_ARCH="x86_64"
+        ;;
+      aarch64)
+        CUDA_ARCH="sbsa"
+        ;;
+      *)
+        echo "Error: unsupported architecture $ARCH" >&2
+        exit 1
+        ;;
+    esac
+    # See https://developer.nvidia.com/cuda-downloads
+    wget https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2204/${CUDA_ARCH}/cuda-keyring_1.1-1_all.deb
     $SUDO dpkg -i cuda-keyring_1.1-1_all.deb
     rm cuda-keyring_1.1-1_all.deb
     $SUDO apt update
