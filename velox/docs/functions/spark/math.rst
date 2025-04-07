@@ -141,6 +141,19 @@ Mathematical Functions
     If the argument is negative infinity, then the result is -1.0.
     If the argument is zero, then the result is a zero with the same sign as the argument.
 
+.. spark:function:: factorial(x) -> bigint
+
+    Returns the factorial of integer ``x``, defined as ``x! = x * (x-1) * ... * 1``.
+    The input must be between 0 and 20 inclusive. Returns NULL for values outside this range.
+
+    ::
+
+        SELECT factorial(0); -- 1
+        SELECT factorial(5); -- 120
+        SELECT factorial(20); -- 2432902008176640000
+        SELECT factorial(21); -- NULL
+        SELECT factorial(-1); -- NULL
+
 .. spark:function:: floor(x) -> [same as x]
 
     Returns ``x`` rounded down to the nearest integer.
@@ -338,16 +351,3 @@ Mathematical Functions
         SELECT width_bucket(0.1, 10.0, 0.0, 5); -- 5
         SELECT width_bucket(10.1, 10.0, 0.0, 5); -- 0
         SELECT width_bucket(10.1, 10.0, 10.0, 5); -- NULL
-
-.. spark:function:: factorial(x) -> bigint
-
-    Returns the factorial of integer ``x``, defined as ``x! = x * (x-1) * ... * 1``.
-    The input must be between 0 and 20 inclusive. Returns NULL for values outside this range.
-
-    ::
-
-        SELECT factorial(0); -- 1
-        SELECT factorial(5); -- 120
-        SELECT factorial(20); -- 2432902008176640000
-        SELECT factorial(21); -- NULL
-        SELECT factorial(-1); -- NULL

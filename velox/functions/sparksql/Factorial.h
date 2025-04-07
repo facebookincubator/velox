@@ -19,6 +19,13 @@
 
 namespace facebook::velox::functions::sparksql {
 
+/// Function that calculates the factorial of a non-negative integer.
+///
+/// Supports the factorial of a non-negative integers less than or equal to 20.
+/// For example, 5! = 5 × 4 × 3 × 2 × 1 = 120.
+///
+/// This implementation pre-computes factorials for values 0 to 20 and returns
+/// them from a lookup table for efficiency.
 template <typename T>
 struct FactorialFunction {
   VELOX_DEFINE_FUNCTION_TYPES(T);
@@ -46,7 +53,7 @@ struct FactorialFunction {
       121645100408832000L,
       2432902008176640000L};
 
-  FOLLY_ALWAYS_INLINE bool call(int64_t& result, const int32_t input) {
+  FOLLY_ALWAYS_INLINE bool call(int64_t& result, int32_t input) {
     if (input < 0 || input > 20) {
       return false;
     }
