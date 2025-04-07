@@ -45,12 +45,13 @@ class ColumnWriter {
   virtual void reset() = 0;
 
   virtual void flush(
-      std::function<proto::ColumnEncoding&(uint32_t)> encodingFactory,
-      std::function<void(proto::ColumnEncoding&)> encodingOverride =
-          [](auto& /* e */) {}) = 0;
+      std::function<ColumnEncodingWriteWrapper(uint32_t)> encodingFactory,
+      std::function<void(ColumnEncodingWriteWrapper&)> encodingOverride =
+          [](auto /* e */) {}) = 0;
 
   virtual uint64_t writeFileStats(
-      std::function<proto::ColumnStatistics&(uint32_t)> statsFactory) const = 0;
+      std::function<ColumnStatisticsWriteWrapper(uint32_t)> statsFactory)
+      const = 0;
 
   virtual bool tryAbandonDictionaries(bool force) = 0;
 
@@ -61,11 +62,13 @@ class ColumnWriter {
       const uint32_t sequence)
       : id_{id}, sequence_{sequence}, context_{context} {}
 
-  virtual void setEncoding(proto::ColumnEncoding& encoding) const {
-    encoding.set_kind(proto::ColumnEncoding_Kind::ColumnEncoding_Kind_DIRECT);
-    encoding.set_dictionarysize(0);
-    encoding.set_node(id_);
-    encoding.set_sequence(sequence_);
+  virtual void setEncoding(ColumnEncodingWriteWrapper& columnEncoding) const {
+    auto columnEncodingKind =
+        proto::ColumnEncoding_Kind::ColumnEncoding_Kind_DIRECT;
+    columnEncoding.setKind(ColumnEncodingKindWrapper(&columnEncodingKind));
+    columnEncoding.setDictionarySize(0);
+    columnEncoding.setNode(id_);
+    columnEncoding.setSequence(sequence_);
   }
 
   const uint32_t id_;
@@ -99,9 +102,9 @@ class BaseColumnWriter : public ColumnWriter {
   }
 
   void flush(
-      std::function<proto::ColumnEncoding&(uint32_t)> encodingFactory,
-      std::function<void(proto::ColumnEncoding&)> encodingOverride =
-          [](auto& /* e */) {}) override {
+      std::function<ColumnEncodingWriteWrapper(uint32_t)> encodingFactory,
+      std::function<void(ColumnEncodingWriteWrapper&)> encodingOverride =
+          [](auto /* e */) {}) override {
     if (!isRoot()) {
       present_->flush();
 
@@ -113,21 +116,21 @@ class BaseColumnWriter : public ColumnWriter {
       }
     }
 
-    auto& encoding = encodingFactory(id_);
+    auto encoding = encodingFactory(id_);
     setEncoding(encoding);
     encodingOverride(encoding);
     indexBuilder_->flush();
   }
 
-  uint64_t writeFileStats(std::function<proto::ColumnStatistics&(uint32_t)>
+  uint64_t writeFileStats(std::function<ColumnStatisticsWriteWrapper(uint32_t)>
                               statsFactory) const override {
-    auto& stats = statsFactory(id_);
+    auto stats = statsFactory(id_);
     fileStatsBuilder_->toProto(stats);
     const uint64_t size = context_.getPhysicalSizeAggregator(id_).getResult();
     for (auto& child : children_) {
       child->writeFileStats(statsFactory);
     }
-    stats.set_size(size);
+    stats.setSize(size);
     return size;
   }
 
