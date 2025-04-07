@@ -221,22 +221,30 @@ class SimpleFunctionAdapter : public VectorFunction {
       const std::vector<TypePtr>& inputTypes,
       const core::QueryConfig& config,
       const std::vector<VectorPtr>& packed,
-      const Values*... values) const {
+      const OptionalAccessor<Values>*... values) const {
     if constexpr (POSITION == FUNC::num_args) {
       return (*fn_).initialize(inputTypes, config, values...);
     } else {
       if (packed.at(POSITION) != nullptr) {
         SelectivityVector rows(1);
         DecodedVector decodedVector(*packed.at(POSITION), rows);
-        auto oneReader = VectorReader<arg_at<POSITION>>(&decodedVector);
-        auto oneValue = oneReader[0];
-
+        const auto oneReader = VectorReader<arg_at<POSITION>>(&decodedVector);
+        using temp_type = exec_arg_at<POSITION>;
+        auto accessor = OptionalAccessor<temp_type>(&oneReader, 0);
         unpackInitialize<POSITION + 1>(
-            inputTypes, config, packed, values..., &oneValue);
+              inputTypes,
+              config,
+              packed,
+              values...,
+              &accessor);
       } else {
         using temp_type = exec_arg_at<POSITION>;
         unpackInitialize<POSITION + 1>(
-            inputTypes, config, packed, values..., (const temp_type*)nullptr);
+            inputTypes,
+            config,
+            packed,
+            values...,
+            (const OptionalAccessor<temp_type>*)nullptr);
       }
     }
   }
