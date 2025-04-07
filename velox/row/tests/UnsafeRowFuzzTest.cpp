@@ -304,9 +304,10 @@ TEST_F(UnsafeRowFuzzTests, nestedMaps) {
            {{3, 2, 4, 5}},
            {{6}},
        }),
-       makeNullableFlatVector<int32_t>({1, 2, 3, std::nullopt, 5, 6})});
+       makeNullableFlatVector<int32_t>({1, 2, 3, std::nullopt, 5, 6})},
+       [](auto row) { return row == 3; });
   auto keys = makeFlatVector<int32_t>({1, 2, 3, 4, 5, 6});
-  auto values = makeMapVector({0, 2, 2, 3}, keys, innerMaps, {1});
+  auto values = makeMapVector({0, 2, 2, 3, 4, 5}, keys, innerMaps, {1});
   auto data = makeRowVector({values});
   testRoundTrip(data);
 }
