@@ -74,12 +74,13 @@ class EncryptedStatsTest : public Test {
     auto type = parser.parse("struct<a:int,b:struct<a:int,b:int>,c:int,d:int>");
     auto footer =
         google::protobuf::Arena::CreateMessage<proto::Footer>(&arena_);
+    auto footerWrapper = FooterWriteWrapper(footer);
     // add empty stats to the file
     for (size_t i = 0; i < 7; ++i) {
-      footer->add_statistics()->set_numberofvalues(i);
+      footerWrapper.addStatistics().setNumberOfValues(i);
     }
-    ProtoUtils::writeType(*type, *footer);
-    auto enc = footer->mutable_encryption();
+    ProtoUtils::writeType(*type, footerWrapper);
+    auto enc = footerWrapper.mutableEncryption();
     enc->set_keyprovider(proto::Encryption_KeyProvider_UNKNOWN);
     auto group = enc->add_encryptiongroups();
     group->add_nodes(1);
@@ -107,7 +108,7 @@ class EncryptedStatsTest : public Test {
         *readerPool_,
         std::make_unique<BufferedInput>(readFile, *readerPool_),
         std::make_unique<PostScript>(std::move(ps)),
-        footer,
+        footerWrapper.getDwrfPtr(),
         nullptr,
         std::move(handler));
   }
