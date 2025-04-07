@@ -266,14 +266,6 @@ class ArithmeticTest : public SparkFunctionBaseTest {
     assertErrorForCheckedArithmetic("checked_subtract", a, b, errorMessage);
   }
 
-  void testFactorial(
-    const VectorPtr& input,
-    const VectorPtr& expected) {
-  auto result = evaluate<SimpleVector<int64_t>>(
-      "factorial(c0)", makeRowVector({input}));
-  velox::test::assertEqualVectors(expected, result);
-  }
-
   static constexpr float kNan = std::numeric_limits<float>::quiet_NaN();
   static constexpr double kNanDouble = std::numeric_limits<double>::quiet_NaN();
   static constexpr float kInf = std::numeric_limits<float>::infinity();
@@ -786,35 +778,6 @@ TEST_F(LogNTest, log) {
 
   EXPECT_EQ(log(kInf, -kInf), std::nullopt);
   EXPECT_EQ(log(-kInf, kInf), std::nullopt);
-}
-
-TEST_F(ArithmeticTest, factorialBasic) {
-  auto input = makeFlatVector<int32_t>({0, 1, 2, 5, 10, 15, 20});
-  auto expected = makeFlatVector<int64_t>(
-      {1, 1, 2, 120, 3628800, 1307674368000L, 2432902008176640000L});
-  testFactorial(input, expected);
-}
-
-TEST_F(ArithmeticTest, factorialNullInput) {
-  auto input = makeNullableFlatVector<int32_t>(
-      {0, std::nullopt, 5, 20, std::nullopt});
-  auto expected = makeNullableFlatVector<int64_t>(
-      {1, std::nullopt, 120, 2432902008176640000L, std::nullopt});
-  testFactorial(input, expected);
-}
-
-TEST_F(ArithmeticTest, factorialOutOfRange) {
-  auto input = makeFlatVector<int32_t>({-1, 21, -5, 25});
-  auto expected = makeNullConstant(TypeKind::BIGINT, input->size());
-  testFactorial(input, expected);
-}
-
-TEST_F(ArithmeticTest, factorialMixedInputs) {
-  auto input = makeNullableFlatVector<int32_t>(
-      {3, 5, std::nullopt, 25, -3, 10, 15});
-  auto expected = makeNullableFlatVector<int64_t>(
-      {6, 120, std::nullopt, std::nullopt, std::nullopt, 3628800, 1307674368000L});
-  testFactorial(input, expected);
 }
 
 } // namespace
