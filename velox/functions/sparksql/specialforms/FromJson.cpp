@@ -103,9 +103,8 @@ struct ExtractJsonTypeImpl {
     apply(Input value, exec::GenericWriter& writer, bool /*isRoot*/) {
       if (writer.type() == DATE()) {
         return castJsonToDate(value, writer);
-      } else {
-        return castJsonToInt<int32_t>(value, writer);
       }
+      return castJsonToInt<int32_t>(value, writer);
     }
   };
 
@@ -277,15 +276,11 @@ struct ExtractJsonTypeImpl {
       Input value,
       exec::GenericWriter& writer) {
     SIMDJSON_ASSIGN_OR_RAISE(auto type, value.type());
-    std::string_view s;
-    switch (type) {
-      case simdjson::ondemand::json_type::string: {
-        SIMDJSON_ASSIGN_OR_RAISE(s, value.get_string());
-        break;
-      }
-      default:
-        return simdjson::INCORRECT_TYPE;
+    if (type != simdjson::ondemand::json_type::string) {
+      return simdjson::INCORRECT_TYPE;
     }
+    std::string_view s;
+    SIMDJSON_ASSIGN_OR_RAISE(s, value.get_string()); 
     int32_t day = 0;
     // If the value has fewer than four digits, it is interpreted as the number
     // of days since January 1, 1970.
