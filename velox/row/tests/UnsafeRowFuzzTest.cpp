@@ -29,7 +29,7 @@ namespace {
 
 using namespace facebook::velox::test;
 
-class UnsafeRowFuzzTests : public ::testing::Test {
+class UnsafeRowFuzzTests : public ::testing::Test, public VectorTestBase {
  public:
   static void SetUpTestCase() {
     memory::MemoryManager::testingSetInstance({});
@@ -92,6 +92,64 @@ class UnsafeRowFuzzTests : public ::testing::Test {
         assertEqualVectors(inputVector, outputVector);
       }
     }
+  }
+
+  void testRoundTrip(const RowVectorPtr& data) {
+    SCOPED_TRACE(data->toString());
+
+    auto rowType = asRowType(data->type());
+    auto numRows = data->size();
+    std::vector<size_t> rowSize(numRows);
+    std::vector<size_t> offsets(numRows);
+
+    UnsafeRowFast row(data);
+
+    size_t totalSize = 0;
+    if (auto fixedRowSize = UnsafeRowFast::fixedRowSize(rowType)) {
+      totalSize = fixedRowSize.value() * numRows;
+      for (auto i = 0; i < numRows; ++i) {
+        rowSize[i] = fixedRowSize.value();
+        offsets[i] = fixedRowSize.value() * i;
+      }
+    } else {
+      for (auto i = 0; i < numRows; ++i) {
+        rowSize[i] = row.rowSize(i);
+        offsets[i] = totalSize;
+        totalSize += rowSize[i];
+      }
+    }
+
+    std::vector<vector_size_t> rows(numRows);
+    std::iota(rows.begin(), rows.end(), 0);
+    std::vector<vector_size_t> serializedRowSizes(numRows);
+    std::vector<vector_size_t*> serializedRowSizesPtr(numRows);
+    for (auto i = 0; i < numRows; ++i) {
+      serializedRowSizesPtr[i] = &serializedRowSizes[i];
+    }
+    row.serializedRowSizes(
+        folly::Range(rows.data(), numRows), serializedRowSizesPtr.data());
+    for (auto i = 0; i < numRows; ++i) {
+      // The serialized row includes the size of the row.
+      ASSERT_EQ(serializedRowSizes[i], row.rowSize(i) + sizeof(uint32_t));
+    }
+
+    BufferPtr buffer = AlignedBuffer::allocate<char>(totalSize, pool_.get(), 0);
+    auto* rawBuffer = buffer->asMutable<char>();
+    size_t offset = 0;
+    std::vector<char*> serialized;
+    for (auto i = 0; i < numRows; ++i) {
+      auto size = row.serialize(i, rawBuffer + offset);
+      serialized.push_back(rawBuffer + offset);
+      offset += size;
+
+      VELOX_CHECK_EQ(
+          size, row.rowSize(i), "Row {}: {}", i, data->toString(i));
+    }
+
+    VELOX_CHECK_EQ(offset, totalSize);
+
+    auto copy = UnsafeRowFast::deserialize(serialized, rowType, pool_.get());
+    assertEqualVectors(data, copy);
   }
 
   static constexpr uint64_t kBufferSize = 70 << 10; // 70kb
@@ -234,6 +292,23 @@ TEST_F(UnsafeRowFuzzTests, fast) {
         }
         return serialized;
       });
+}
+
+TEST_F(UnsafeRowFuzzTests, nestedMaps) {
+  auto innerMaps = makeRowVector(
+      {makeNullableArrayVector<int64_t>({
+           {{1, 2, std::nullopt, 3}},
+           {{4, 5}},
+           {{1}},
+           std::nullopt,
+           {{3, 2, 4, 5}},
+           {{6}},
+       }),
+       makeNullableFlatVector<int32_t>({1, 2, 3, std::nullopt, 5, 6})});
+  auto keys = makeFlatVector<int32_t>({1, 2, 3, 4, 5, 6});
+  auto values = makeMapVector({0, 2, 2, 3}, keys, innerMaps, {1});
+  auto data = makeRowVector({values});
+  testRoundTrip(data);
 }
 
 } // namespace
