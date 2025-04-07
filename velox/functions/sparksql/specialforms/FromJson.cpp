@@ -280,7 +280,7 @@ struct ExtractJsonTypeImpl {
       return simdjson::INCORRECT_TYPE;
     }
     std::string_view s;
-    SIMDJSON_ASSIGN_OR_RAISE(s, value.get_string()); 
+    SIMDJSON_ASSIGN_OR_RAISE(s, value.get_string());
     int32_t day = 0;
     // If the value has fewer than four digits, it is interpreted as the number
     // of days since January 1, 1970.
