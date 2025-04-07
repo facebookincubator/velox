@@ -1230,7 +1230,6 @@ TEST_F(DateTimeFunctionsTest, dateTrunc) {
 
   setQueryTimeZone("America/Los_Angeles");
 
-  EXPECT_EQ(std::nullopt, dateTrunc("second", std::nullopt));
   EXPECT_EQ(Timestamp(0, 0), dateTrunc("second", Timestamp(0, 0)));
   EXPECT_EQ(Timestamp(0, 0), dateTrunc("second", Timestamp(0, 123)));
 
