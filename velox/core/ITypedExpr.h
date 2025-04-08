@@ -81,7 +81,7 @@ class ITypedExpr : public ISerializable {
       return false;
     }
     for (int32_t i = 0; i < inputs_.size(); ++i) {
-      if (*inputs_[i] == *other.inputs_[i]) {
+      if (!(*inputs_[i] == *other.inputs_[i])) {
         return false;
       }
     }
