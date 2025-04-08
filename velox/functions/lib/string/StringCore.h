@@ -362,7 +362,7 @@ static inline int64_t findNthInstanceByteIndexFromStart(
     return -1;
   }
 
-  auto byteIndex = long_string_find(string, subString, (size_t)0);
+  auto byteIndex = long_string_find(string, subString, startPosition);
   // Not found
   if (byteIndex == std::string_view::npos) {
     return -1;
