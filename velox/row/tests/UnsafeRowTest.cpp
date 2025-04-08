@@ -29,13 +29,13 @@ namespace {
 
 using namespace facebook::velox::test;
 
-class UnsafeRowFuzzTests : public ::testing::Test, public VectorTestBase {
+class UnsafeRowTests : public ::testing::Test, public VectorTestBase {
  public:
   static void SetUpTestCase() {
     memory::MemoryManager::testingSetInstance({});
   }
 
-  UnsafeRowFuzzTests() {
+  UnsafeRowTests() {
     clearBuffers();
   }
 
@@ -160,7 +160,7 @@ class UnsafeRowFuzzTests : public ::testing::Test, public VectorTestBase {
       memory::memoryManager()->addLeafPool();
 };
 
-TEST_F(UnsafeRowFuzzTests, fast) {
+TEST_F(UnsafeRowTests, fast) {
   auto rowType = ROW({
       BOOLEAN(),
       TINYINT(),
@@ -293,7 +293,7 @@ TEST_F(UnsafeRowFuzzTests, fast) {
       });
 }
 
-TEST_F(UnsafeRowFuzzTests, nestedMaps) {
+TEST_F(UnsafeRowTests, nestedMaps) {
   auto innerMaps = makeRowVector(
       {makeNullableArrayVector<int64_t>({
            {{1, 2, std::nullopt, 3}},
