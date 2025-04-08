@@ -50,7 +50,6 @@ bool isAnyOf(const Base* p) {
 
 bool CompileState::compile() {
   auto operators = driver_.operators();
-  auto& nodes = planNodes_;
 
   if (FLAGS_velox_cudf_debug) {
     std::cout << "Operators before adapting for cuDF: count ["
@@ -70,12 +69,16 @@ bool CompileState::compile() {
 
   // Get plan node by id lookup.
   auto getPlanNode = [&](const core::PlanNodeId& id) {
+    auto& nodes = driverFactory_.planNodes;
     auto it =
         std::find_if(nodes.cbegin(), nodes.cend(), [&id](const auto& node) {
           return node->id() == id;
         });
-    VELOX_CHECK(it != nodes.end());
-    return *it;
+    if (it != nodes.end()) {
+      return *it;
+    }
+    VELOX_CHECK(driverFactory_.consumerNode->id() == id);
+    return driverFactory_.consumerNode;
   };
 
   auto isSupportedGpuOperator = [](const exec::Operator* op) {
@@ -111,7 +114,6 @@ bool CompileState::compile() {
     const bool nextOperatorIsNotGpu =
         (operatorIndex < operators.size() - 1 and
          !isSupportedGpuOperators[operatorIndex + 1]);
-    const bool isLastOperatorOfTask = oper->planNodeId() == nodes.back()->id();
 
     auto id = oper->operatorId();
     if (previousOperatorIsNotGpu and acceptsGpuInput(oper)) {
@@ -130,8 +132,7 @@ bool CompileState::compile() {
       replaceOp.back()->initialize();
     }
 
-    if (producesGpuOutput(oper) and
-        (isLastOperatorOfTask or nextOperatorIsNotGpu)) {
+    if (producesGpuOutput(oper) and nextOperatorIsNotGpu) {
       auto planNode = getPlanNode(oper->planNodeId());
       replaceOp.push_back(std::make_unique<CudfToVelox>(
           id, planNode->outputType(), ctx, planNode->id() + "-to-velox"));
@@ -164,38 +165,15 @@ bool CompileState::compile() {
 
 struct CudfDriverAdapter {
   std::shared_ptr<rmm::mr::device_memory_resource> mr_;
-  std::shared_ptr<std::vector<core::PlanNodePtr>> planNodes_;
 
   CudfDriverAdapter(std::shared_ptr<rmm::mr::device_memory_resource> mr)
-      : mr_(mr) {
-    planNodes_ = std::make_shared<std::vector<core::PlanNodePtr>>();
-  }
+      : mr_(mr) {}
 
   // Call operator needed by DriverAdapter
   bool operator()(const exec::DriverFactory& factory, exec::Driver& driver) {
-    auto state = CompileState(factory, driver, *planNodes_);
-    // Stored planNodes_ from inspect.
+    auto state = CompileState(factory, driver);
     auto res = state.compile();
     return res;
-  }
-
-  // Iterate recursively and store them in the planNodes_.
-  void storePlanNodes(const core::PlanNodePtr& planNode) {
-    const auto& sources = planNode->sources();
-    for (int32_t i = 0; i < sources.size(); ++i) {
-      storePlanNodes(sources[i]);
-    }
-    planNodes_->push_back(planNode);
-  }
-
-  // Call operator needed by plan inspection
-  void operator()(const core::PlanFragment& planFragment) {
-    // signature: std::function<void(const core::PlanFragment&)> inspect;
-    // call: adapter.inspect(planFragment);
-    planNodes_->clear();
-    if (planNodes_) {
-      storePlanNodes(planFragment.planNode);
-    }
   }
 };
 
@@ -216,7 +194,7 @@ void registerCudf(const CudfOptions& options) {
   auto mr = cudf_velox::createMemoryResource(mrMode);
   cudf::set_current_device_resource(mr.get());
   CudfDriverAdapter cda{mr};
-  exec::DriverAdapter cudfAdapter{kCudfAdapterName, cda, cda};
+  exec::DriverAdapter cudfAdapter{kCudfAdapterName, {}, cda};
   exec::DriverFactory::registerAdapter(cudfAdapter);
   isCudfRegistered = true;
 }

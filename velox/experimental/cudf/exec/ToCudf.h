@@ -23,6 +23,7 @@
 
 DECLARE_bool(velox_cudf_enabled);
 DECLARE_string(velox_cudf_memory_resource);
+DECLARE_bool(velox_cudf_debug);
 
 namespace facebook::velox::cudf_velox {
 
@@ -30,11 +31,8 @@ static const std::string kCudfAdapterName = "cuDF";
 
 class CompileState {
  public:
-  CompileState(
-      const exec::DriverFactory& driverFactory,
-      exec::Driver& driver,
-      std::vector<core::PlanNodePtr>& planNodes)
-      : driverFactory_(driverFactory), driver_(driver), planNodes_(planNodes) {}
+  CompileState(const exec::DriverFactory& driverFactory, exec::Driver& driver)
+      : driverFactory_(driverFactory), driver_(driver) {}
 
   exec::Driver& driver() {
     return driver_;
@@ -46,7 +44,6 @@ class CompileState {
 
   const exec::DriverFactory& driverFactory_;
   exec::Driver& driver_;
-  const std::vector<core::PlanNodePtr>& planNodes_;
 };
 
 struct CudfOptions {
