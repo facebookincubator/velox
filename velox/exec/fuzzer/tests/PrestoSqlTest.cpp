@@ -52,5 +52,28 @@ TEST(PrestoSqlTest, toTypeSql) {
       toTypeSql(FUNCTION({INTEGER()}, INTEGER())),
       "Type is not supported: FUNCTION");
 }
+
+TEST(PrestoSqlTest, toCallSql) {
+  // Builds the following expression:
+  // "((c0 between c0 and cast(null as INTEGER)) < c0)"
+  auto inputExpr =
+      std::make_shared<core::FieldAccessTypedExpr>(INTEGER(), "c0");
+  auto nullConstant = std::make_shared<core::ConstantTypedExpr>(
+      INTEGER(), variant::null(TypeKind::INTEGER));
+  auto expression = std::make_shared<core::CallTypedExpr>(
+      INTEGER(),
+      std::vector<core::TypedExprPtr>{
+          std::make_shared<core::CallTypedExpr>(
+              BOOLEAN(),
+              std::vector<core::TypedExprPtr>{
+                  inputExpr, inputExpr, nullConstant},
+              "between"),
+          inputExpr},
+      "lt");
+  EXPECT_EQ(
+      toCallSql(expression),
+      "((c0 between c0 and cast(null as INTEGER)) < c0)");
+}
+
 } // namespace
 } // namespace facebook::velox::exec::test
