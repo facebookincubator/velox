@@ -253,6 +253,7 @@ std::string toCallSql(const core::CallTypedExprPtr& call) {
     toCallInputsSql(call->inputs(), sql);
     sql << "]";
   } else if (call->name() == "between") {
+    sql << "(";
     const auto& inputs = call->inputs();
     VELOX_CHECK_EQ(inputs.size(), 3);
     toCallInputsSql({inputs[0]}, sql);
@@ -260,10 +261,17 @@ std::string toCallSql(const core::CallTypedExprPtr& call) {
     toCallInputsSql({inputs[1]}, sql);
     sql << " and ";
     toCallInputsSql({inputs[2]}, sql);
+    sql << ")";
   } else if (call->name() == "row_constructor") {
     sql << "row(";
     toCallInputsSql(call->inputs(), sql);
     sql << ")";
+  } else if (call->name() == "subscript") {
+    VELOX_CHECK_EQ(call->inputs().size(), 2);
+    toCallInputsSql({call->inputs()[0]}, sql);
+    sql << "[";
+    toCallInputsSql({call->inputs()[1]}, sql);
+    sql << "]";
   } else {
     // Regular function call syntax.
     sql << call->name() << "(";
