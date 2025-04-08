@@ -29,28 +29,17 @@ namespace {
 
 using namespace facebook::velox::test;
 
-class UnsafeRowTests : public ::testing::Test, public VectorTestBase {
+class UnsafeRowTest : public ::testing::Test, public VectorTestBase {
  public:
   static void SetUpTestCase() {
     memory::MemoryManager::testingSetInstance({});
   }
 
-  UnsafeRowTests() {
-    clearBuffers();
-  }
-
-  void clearBuffers() {
-    for (auto& buffer : buffers_) {
-      std::memset(buffer, 0, kBufferSize);
-    }
-  }
-
   template <typename T>
   void doTest(
-      const RowTypePtr& rowType,
-      std::function<std::vector<T>(const RowVectorPtr& data)> serializeFunc) {
+      const RowTypePtr& rowType) {
     VectorFuzzer::Options opts;
-    opts.vectorSize = kNumBuffers;
+    opts.vectorSize = 100;
     opts.nullRatio = 0.1;
     opts.dictionaryHasNulls = false;
     opts.stringVariableLength = true;
@@ -67,8 +56,6 @@ class UnsafeRowTests : public ::testing::Test, public VectorTestBase {
 
     const auto iterations = 200;
     for (size_t i = 0; i < iterations; ++i) {
-      clearBuffers();
-
       auto seed = folly::Random::rand32();
 
       LOG(INFO) << "seed: " << seed;
@@ -76,24 +63,15 @@ class UnsafeRowTests : public ::testing::Test, public VectorTestBase {
 
       fuzzer.reSeed(seed);
       const auto& inputVector = fuzzer.fuzzInputRow(rowType);
+      testRoundTrip<T>(inputVector);
 
-      // Serialize rowVector into bytes.
-      auto serialized = serializeFunc(inputVector);
-      if constexpr (std::is_same_v<T, std::optional<std::string_view>>) {
-        // Deserialize previous bytes back to row vector
-        VectorPtr outputVector = UnsafeRowDeserializer::deserialize(
-            serialized, rowType, pool_.get());
-
-        assertEqualVectors(inputVector, outputVector);
-      } else {
-        VectorPtr outputVector =
-            UnsafeRowFast::deserialize(serialized, rowType, pool_.get());
-
-        assertEqualVectors(inputVector, outputVector);
+      if (Test::HasFailure()) {
+        break;
       }
     }
   }
 
+  template <typename T>
   void testRoundTrip(const RowVectorPtr& data) {
     SCOPED_TRACE(data->toString());
 
@@ -136,7 +114,7 @@ class UnsafeRowTests : public ::testing::Test, public VectorTestBase {
     BufferPtr buffer = AlignedBuffer::allocate<char>(totalSize, pool_.get(), 0);
     auto* rawBuffer = buffer->asMutable<char>();
     size_t offset = 0;
-    std::vector<char*> serialized;
+    std::vector<T> serialized;
     for (auto i = 0; i < numRows; ++i) {
       auto size = row.serialize(i, rawBuffer + offset);
       serialized.push_back(rawBuffer + offset);
@@ -147,20 +125,23 @@ class UnsafeRowTests : public ::testing::Test, public VectorTestBase {
 
     VELOX_CHECK_EQ(offset, totalSize);
 
-    auto copy = UnsafeRowFast::deserialize(serialized, rowType, pool_.get());
-    assertEqualVectors(data, copy);
+    if constexpr (std::is_same_v<T, std::optional<std::string_view>>) {
+      // Deserialize previous bytes back to row vector
+      VectorPtr outputVector = UnsafeRowDeserializer::deserialize(
+          serialized, rowType, pool_.get());
+      assertEqualVectors(data, outputVector);
+    } else {
+      VectorPtr outputVector =
+          UnsafeRowFast::deserialize(serialized, rowType, pool_.get());
+      assertEqualVectors(data, outputVector);
+    }
   }
-
-  static constexpr uint64_t kBufferSize = 70 << 10; // 70kb
-  static constexpr uint64_t kNumBuffers = 100;
-
-  std::array<char[kBufferSize], kNumBuffers> buffers_{};
 
   std::shared_ptr<memory::MemoryPool> pool_ =
       memory::memoryManager()->addLeafPool();
 };
 
-TEST_F(UnsafeRowTests, fast) {
+TEST_F(UnsafeRowTest, fuzz) {
   auto rowType = ROW({
       BOOLEAN(),
       TINYINT(),
@@ -226,74 +207,12 @@ TEST_F(UnsafeRowTests, fast) {
       MAP(BIGINT(), ROW({BOOLEAN(), TINYINT(), REAL()})),
   });
 
-  doTest<char*>(rowType, [&](const RowVectorPtr& data) {
-    const auto numRows = data->size();
-    std::vector<char*> serialized;
-    serialized.reserve(numRows);
 
-    UnsafeRowFast fast(data);
-
-    std::vector<vector_size_t> rows(numRows);
-    std::iota(rows.begin(), rows.end(), 0);
-    std::vector<vector_size_t> serializedRowSizes(numRows);
-    std::vector<vector_size_t*> serializedRowSizesPtr(numRows);
-    for (auto i = 0; i < numRows; ++i) {
-      serializedRowSizesPtr[i] = &serializedRowSizes[i];
-    }
-    fast.serializedRowSizes(
-        folly::Range(rows.data(), numRows), serializedRowSizesPtr.data());
-    for (auto i = 0; i < numRows; ++i) {
-      // The serialized row includes the size of the row.
-      VELOX_CHECK_EQ(serializedRowSizes[i], fast.rowSize(i) + sizeof(uint32_t));
-    }
-
-    for (auto i = 0; i < data->size(); ++i) {
-      auto rowSize = fast.serialize(i, buffers_[i]);
-      VELOX_CHECK_LE(rowSize, kBufferSize);
-
-      EXPECT_EQ(rowSize, fast.rowSize(i)) << i << ", " << data->toString(i);
-
-      serialized.push_back(buffers_[i]);
-    }
-    return serialized;
-  });
-
-  doTest<std::optional<std::string_view>>(
-      rowType, [&](const RowVectorPtr& data) {
-        const auto numRows = data->size();
-        std::vector<std::optional<std::string_view>> serialized;
-        serialized.reserve(numRows);
-
-        UnsafeRowFast fast(data);
-
-        std::vector<vector_size_t> rows(numRows);
-        std::iota(rows.begin(), rows.end(), 0);
-        std::vector<vector_size_t> serializedRowSizes(numRows);
-        std::vector<vector_size_t*> serializedRowSizesPtr(numRows);
-        for (auto i = 0; i < numRows; ++i) {
-          serializedRowSizesPtr[i] = &serializedRowSizes[i];
-        }
-        fast.serializedRowSizes(
-            folly::Range(rows.data(), numRows), serializedRowSizesPtr.data());
-        for (auto i = 0; i < numRows; ++i) {
-          // The serialized row includes the size of the row.
-          VELOX_CHECK_EQ(
-              serializedRowSizes[i], fast.rowSize(i) + sizeof(uint32_t));
-        }
-
-        for (auto i = 0; i < data->size(); ++i) {
-          auto rowSize = fast.serialize(i, buffers_[i]);
-          VELOX_CHECK_LE(rowSize, kBufferSize);
-
-          EXPECT_EQ(rowSize, fast.rowSize(i)) << i << ", " << data->toString(i);
-
-          serialized.push_back(std::string_view(buffers_[i], rowSize));
-        }
-        return serialized;
-      });
+  doTest<std::optional<std::string_view>>(rowType);
+  doTest<char*>(rowType);
 }
 
-TEST_F(UnsafeRowTests, nestedMaps) {
+TEST_F(UnsafeRowTest, nestedMaps) {
   auto innerMaps = makeRowVector(
       {makeNullableArrayVector<int64_t>({
            {{1, 2, std::nullopt, 3}},
@@ -308,7 +227,7 @@ TEST_F(UnsafeRowTests, nestedMaps) {
   auto keys = makeFlatVector<int32_t>({1, 2, 3, 4, 5, 6});
   auto values = makeMapVector({0, 2, 2, 3, 4, 5}, keys, innerMaps, {1});
   auto data = makeRowVector({values});
-  testRoundTrip(data);
+  testRoundTrip<char*>(data);
 }
 
 } // namespace
