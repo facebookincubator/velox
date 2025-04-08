@@ -114,6 +114,8 @@ bool CompileState::compile() {
     const bool nextOperatorIsNotGpu =
         (operatorIndex < operators.size() - 1 and
          !isSupportedGpuOperators[operatorIndex + 1]);
+    const bool isLastOperatorOfTask =
+        driverFactory_.outputDriver and operatorIndex == operators.size() - 1;
 
     auto id = oper->operatorId();
     if (previousOperatorIsNotGpu and acceptsGpuInput(oper)) {
@@ -132,7 +134,8 @@ bool CompileState::compile() {
       replaceOp.back()->initialize();
     }
 
-    if (producesGpuOutput(oper) and nextOperatorIsNotGpu) {
+    if (producesGpuOutput(oper) and
+        (nextOperatorIsNotGpu or isLastOperatorOfTask)) {
       auto planNode = getPlanNode(oper->planNodeId());
       replaceOp.push_back(std::make_unique<CudfToVelox>(
           id, planNode->outputType(), ctx, planNode->id() + "-to-velox"));
