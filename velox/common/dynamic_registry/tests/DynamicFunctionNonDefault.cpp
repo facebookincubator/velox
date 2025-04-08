@@ -39,9 +39,9 @@ struct DynamicFunction {
 extern "C" {
 // In this case, we assume that facebook::velox::registerFunction
 // will be available and resolve when this library gets loaded.
-void registry() {
+void registryNew() {
   facebook::velox::registerFunction<
       facebook::velox::common::dynamicRegistry::DynamicFunction,
-      int64_t>({"dynamic"});
+      int64_t>({"dynamic_non_default"});
 }
 }
