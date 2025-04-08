@@ -36,8 +36,7 @@ class UnsafeRowTest : public ::testing::Test, public VectorTestBase {
   }
 
   template <typename T>
-  void doFuzzTest(
-      const RowTypePtr& rowType) {
+  void doFuzzTest(const RowTypePtr& rowType) {
     VectorFuzzer::Options opts;
     opts.vectorSize = 100;
     opts.nullRatio = 0.1;
