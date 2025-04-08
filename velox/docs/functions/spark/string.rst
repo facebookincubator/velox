@@ -430,7 +430,7 @@ String Functions
 
 .. spark:function:: varchar_type_write_side_check(string, limit) -> varchar
 
-    An implementation for Spark's varcharTypeWriteSideCheck function of CharVarcharCodegenUtils.
+    An implementation for Spark's varcharTypeWriteSideCheck function of class CharVarcharCodegenUtils.
     Removes trailing 0x20(space) characters from ``string`` to fit in the ``limit``, if not fit, throws exception. ::
 
         -- Test with SparkSQL that triggers the function
@@ -440,7 +440,7 @@ String Functions
 
 .. spark:function:: char_type_write_side_check(string, limit) -> varchar
 
-    An implementation for Spark's charTypeWriteSideCheck function of CharVarcharCodegenUtils.
+    An implementation for Spark's charTypeWriteSideCheck function of class CharVarcharCodegenUtils.
     Returns string of length ``limit`` by right padding spaces(0x20) or trailing 0x20(space) characters, throws if not fit in. ::
 
         -- Test with SparkSQL that triggers the function
@@ -450,10 +450,10 @@ String Functions
 
 .. spark:function:: read_side_padding(string, limit) -> varchar
 
-    An implementation for Spark's readSidePadding function available since Spark-3.4.0.
+    An implementation for Spark's readSidePadding function of class CharVarcharCodegenUtils.
     Right pads ``string`` with 0x20(space) characters to ``limit`` when the number of characters
     of ``string`` is less than ``limit``.
-    Returns ``string`` when the number of characters is greater or equal to ``limit``. ::
+    Returns ``string`` when the number of characters is greater than or equal to ``limit``. ::
 
         -- Test with SparkSQL that triggers the function
         create table tgt(id char(3)) stored as parquet;
