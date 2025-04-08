@@ -36,7 +36,7 @@ class UnsafeRowTest : public ::testing::Test, public VectorTestBase {
   }
 
   template <typename T>
-  void doTest(
+  void doFuzzTest(
       const RowTypePtr& rowType) {
     VectorFuzzer::Options opts;
     opts.vectorSize = 100;
@@ -127,8 +127,8 @@ class UnsafeRowTest : public ::testing::Test, public VectorTestBase {
 
     if constexpr (std::is_same_v<T, std::optional<std::string_view>>) {
       // Deserialize previous bytes back to row vector
-      VectorPtr outputVector = UnsafeRowDeserializer::deserialize(
-          serialized, rowType, pool_.get());
+      VectorPtr outputVector =
+          UnsafeRowDeserializer::deserialize(serialized, rowType, pool_.get());
       assertEqualVectors(data, outputVector);
     } else {
       VectorPtr outputVector =
@@ -207,9 +207,8 @@ TEST_F(UnsafeRowTest, fuzz) {
       MAP(BIGINT(), ROW({BOOLEAN(), TINYINT(), REAL()})),
   });
 
-
-  doTest<std::optional<std::string_view>>(rowType);
-  doTest<char*>(rowType);
+  doFuzzTest<std::optional<std::string_view>>(rowType);
+  doFuzzTest<char*>(rowType);
 }
 
 TEST_F(UnsafeRowTest, nestedMaps) {
