@@ -131,9 +131,15 @@ std::shared_ptr<WriterProperties> getArrowParquetWriterOptions(
     const std::unique_ptr<DefaultFlushPolicy>& flushPolicy) {
   auto builder = WriterProperties::Builder();
   WriterProperties::Builder* properties = &builder;
-  if (!options.enableDictionary) {
+  if (options.enableDictionary.value_or(
+          facebook::velox::parquet::arrow::DEFAULT_IS_DICTIONARY_ENABLED)) {
+    properties = properties->enable_dictionary();
+  } else {
     properties = properties->disable_dictionary();
   }
+  properties = properties->dictionary_pagesize_limit(
+      options.dictionaryPageSizeLimit.value_or(
+          facebook::velox::parquet::arrow::DEFAULT_DICTIONARY_PAGE_SIZE_LIMIT));
   properties = properties->compression(getArrowParquetCompression(
       options.compressionKind.value_or(common::CompressionKind_NONE)));
   for (const auto& columnCompressionValues : options.columnCompressionsMap) {
@@ -241,6 +247,29 @@ std::optional<std::string> getTimestampTimeZone(
     const char* configKey) {
   if (const auto timezone = config.get<std::string>(configKey)) {
     return timezone.value();
+  }
+  return std::nullopt;
+}
+
+std::optional<bool> isParquetEnableDictionary(
+    const config::ConfigBase& config,
+    const char* configKey) {
+  try {
+    if (const auto enableDictionary = config.get<bool>(configKey)) {
+      return enableDictionary.value();
+    }
+  } catch (const folly::ConversionError& e) {
+    VELOX_USER_FAIL(
+        "Invalid parquet writer enable dictionary option: {}", e.what());
+  }
+  return std::nullopt;
+}
+
+std::optional<int64_t> getParquetPageSize(
+    const config::ConfigBase& config,
+    const char* configKey) {
+  if (const auto pageSize = config.get<std::string>(configKey)) {
+    return config::toCapacity(pageSize.value(), config::CapacityUnit::BYTE);
   }
   return std::nullopt;
 }
@@ -488,6 +517,24 @@ void WriterOptions::processConfigs(
   }
   if (!parquetWriteTimestampTimeZone) {
     parquetWriteTimestampTimeZone = parquetWriterOptions->sessionTimezoneName;
+  }
+
+  if (!enableDictionary) {
+    enableDictionary =
+        isParquetEnableDictionary(session, kParquetSessionEnableDictionary)
+            .has_value()
+        ? isParquetEnableDictionary(session, kParquetSessionEnableDictionary)
+        : isParquetEnableDictionary(
+              connectorConfig, kParquetHiveConnectorEnableDictionary);
+  }
+
+  if (!dictionaryPageSizeLimit) {
+    dictionaryPageSizeLimit =
+        getParquetPageSize(session, kParquetSessionDictionaryPageSizeLimit)
+            .has_value()
+        ? getParquetPageSize(session, kParquetSessionDictionaryPageSizeLimit)
+        : getParquetPageSize(
+              connectorConfig, kParquetHiveConnectorDictionaryPageSizeLimit);
   }
 
   if (!useParquetDataPageV2) {
