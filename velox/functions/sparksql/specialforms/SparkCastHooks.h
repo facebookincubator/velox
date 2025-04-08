@@ -57,6 +57,10 @@ class SparkCastHooks : public exec::CastHooks {
   /// whitespaces before cast.
   StringView removeWhiteSpaces(const StringView& view) const override;
 
+  // Spark true evaluates to 1970-01-01 00:00:00.000001 and false to epoch (0 microseconds).
+  // Use fromMicrosNoError to interpret '1' as 1 microsecond offset from epoch.
+  Expected<Timestamp> castBooleanToTimestamp(bool seconds) const override;
+
   const TimestampToStringOptions& timestampToStringOptions() const override {
     return timestampToStringOptions_;
   }
