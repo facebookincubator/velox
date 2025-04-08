@@ -61,7 +61,7 @@ TEST(PrestoSqlTest, toCallSql) {
   auto nullConstant = std::make_shared<core::ConstantTypedExpr>(
       INTEGER(), variant::null(TypeKind::INTEGER));
   auto expression = std::make_shared<core::CallTypedExpr>(
-      INTEGER(),
+      BOOLEAN(),
       std::vector<core::TypedExprPtr>{
           std::make_shared<core::CallTypedExpr>(
               BOOLEAN(),
@@ -73,6 +73,16 @@ TEST(PrestoSqlTest, toCallSql) {
   EXPECT_EQ(
       toCallSql(expression),
       "((c0 between c0 and cast(null as INTEGER)) < c0)");
+
+  // Builds susbscript SQL expression
+  expression = std::make_shared<core::CallTypedExpr>(
+      INTEGER(),
+      std::vector<core::TypedExprPtr>{
+          std::make_shared<core::FieldAccessTypedExpr>(
+              ARRAY(INTEGER()), "array"),
+          std::make_shared<core::FieldAccessTypedExpr>(INTEGER(), "c0")},
+      "subscript");
+  EXPECT_EQ(toCallSql(expression), "array[c0]");
 }
 
 } // namespace
