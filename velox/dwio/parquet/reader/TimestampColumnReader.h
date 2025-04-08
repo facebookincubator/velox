@@ -144,9 +144,6 @@ class TimestampColumnReader : public IntegerColumnReader {
       const int128_t encoded = reinterpret_cast<int128_t&>(rawValues[i]);
       if constexpr (std::is_same_v<T, int64_t>) {
         rawValues[i] = toInt64Timestamp(encoded, filePrecision_);
-        if (needsConversion_) {
-          rawValues[i] = rawValues[i].toPrecision(requestedPrecision_);
-        }
       } else if constexpr (std::is_same_v<T, int128_t>) {
         rawValues[i] =
             toInt96Timestamp(encoded).toPrecision(requestedPrecision_);
@@ -202,9 +199,6 @@ class TimestampColumnReader : public IntegerColumnReader {
 
   // The precision of int64_t timestamp in Parquet. Only set when T is int64_t.
   TimestampPrecision filePrecision_;
-
-  // Whether Int64 Timestamp needs to be converted to the requested precision.
-  bool needsConversion_ = false;
 };
 
 } // namespace facebook::velox::parquet
