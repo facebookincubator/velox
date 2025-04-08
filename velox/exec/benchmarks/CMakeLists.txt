@@ -124,3 +124,11 @@ target_link_libraries(
   velox_vector_test_lib
   velox_window
   Folly::follybenchmark)
+
+add_executable(velox_streaming_aggregation_benchmark
+               StreamingAggregationBenchmark.cpp)
+
+target_link_libraries(
+  velox_streaming_aggregation_benchmark
+  velox_exec
+  Folly::follybenchmark)
