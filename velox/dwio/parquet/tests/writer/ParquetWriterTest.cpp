@@ -25,6 +25,7 @@
 #include "velox/dwio/parquet/RegisterParquetWriter.h" // @manual
 #include "velox/dwio/parquet/reader/PageReader.h"
 #include "velox/dwio/parquet/tests/ParquetTestBase.h"
+#include "velox/dwio/parquet/writer/arrow/Properties.h"
 #include "velox/exec/Cursor.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
@@ -482,6 +483,58 @@ TEST_F(ParquetWriterTest, updateWriterOptionsFromHiveConfig) {
   ASSERT_EQ(
       options.parquetWriteTimestampUnit.value(),
       TimestampPrecision::kMilliseconds);
+}
+
+TEST_F(ParquetWriterTest, parquetCreatedBy) {
+  auto schema = ROW({"c0"}, {INTEGER()});
+  const int64_t kRows = 1;
+  const auto data = makeRowVector({
+      makeFlatVector<int32_t>(kRows, [](auto row) { return 987; }),
+  });
+
+  // Write Parquet test data, then read and return the created_by used.
+  const auto testDataPageVersion =
+      [&](std::unordered_map<std::string, std::string> configFromFile,
+          std::unordered_map<std::string, std::string> sessionProperties) {
+        // Create an in-memory writer.
+        auto sink = std::make_unique<MemorySink>(
+            200 * 1024 * 1024,
+            dwio::common::FileSink::Options{.pool = leafPool_.get()});
+        auto sinkPtr = sink.get();
+        parquet::WriterOptions writerOptions;
+        writerOptions.memoryPool = leafPool_.get();
+
+        // Simulate setting of Hive config & connector session properties, then
+        // write test data.
+        auto connectorConfig = config::ConfigBase(std::move(configFromFile));
+        auto connectorSessionProperties =
+            config::ConfigBase(std::move(sessionProperties));
+
+        writerOptions.processConfigs(
+            connectorConfig, connectorSessionProperties);
+
+        auto writer = std::make_unique<parquet::Writer>(
+            std::move(sink), writerOptions, rootPool_, schema);
+        writer->write(data);
+        writer->close();
+
+        // Read to identify DataPage used.
+        dwio::common::ReaderOptions readerOptions{leafPool_.get()};
+        auto reader = createReaderInMemory(*sinkPtr, readerOptions);
+        return reader->fileMetaData().createdBy();
+      };
+
+  // Test default behavior - Should output default string.
+  ASSERT_EQ(
+      testDataPageVersion({}, {}),
+      CREATED_BY_VERSION + std::string(" version ") + VELOX_VERSION);
+
+  // Simulate setting created by version to 1.0 via Hive config from file.
+  std::unordered_map<std::string, std::string> configFromFile = {
+      {parquet::WriterOptions::kParquetHiveConnectorCreatedBy,
+       "parquet-cpp-velox version 1.0"}};
+  ASSERT_EQ(
+      testDataPageVersion(configFromFile, {}), "parquet-cpp-velox version 1.0");
 }
 
 #ifdef VELOX_ENABLE_PARQUET

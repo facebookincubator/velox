@@ -321,4 +321,8 @@ int FileMetaDataPtr::numRowGroups() const {
   return thriftFileMetaDataPtr(ptr_)->row_groups.size();
 }
 
+std::string FileMetaDataPtr::createdBy() const {
+  return thriftFileMetaDataPtr(ptr_)->created_by;
+}
+
 } // namespace facebook::velox::parquet

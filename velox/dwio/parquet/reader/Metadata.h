@@ -134,6 +134,9 @@ class FileMetaDataPtr {
   /// Return the RowGroupMetaData pointer of the corresponding row group index.
   RowGroupMetaDataPtr rowGroup(int index) const;
 
+  /// Return the Parquet writer created_by string.
+  std::string createdBy() const;
+
  private:
   const void* ptr_;
 };
