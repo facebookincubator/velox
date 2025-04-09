@@ -28,12 +28,15 @@ exec::ExprPtr SparkCastCallToSpecialForm::constructSpecialForm(
       1,
       "CAST statements expect exactly 1 argument, received {}.",
       compiledChildren.size());
+  // TODO：​If the upstream has ANSI mode enabled
+  // (spark.sql.ansi.enabled=true), we should set 'nullOnFailure' to false to
+  // maintain compatibility.
   return std::make_shared<SparkCastExpr>(
       type,
       std::move(compiledChildren[0]),
       trackCpuUsage,
-      false,
-      std::make_shared<SparkCastHooks>(config));
+      true,
+      std::make_shared<SparkCastHooks>(config, false));
 }
 
 exec::ExprPtr SparkTryCastCallToSpecialForm::constructSpecialForm(
@@ -51,6 +54,6 @@ exec::ExprPtr SparkTryCastCallToSpecialForm::constructSpecialForm(
       std::move(compiledChildren[0]),
       trackCpuUsage,
       true,
-      std::make_shared<SparkCastHooks>(config));
+      std::make_shared<SparkCastHooks>(config, true));
 }
 } // namespace facebook::velox::functions::sparksql
