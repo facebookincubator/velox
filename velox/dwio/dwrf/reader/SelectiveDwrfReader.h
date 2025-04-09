@@ -26,6 +26,7 @@ namespace facebook::velox::dwrf {
 class SelectiveDwrfReader {
  public:
   static std::unique_ptr<dwio::common::SelectiveColumnReader> build(
+      const dwio::common::ReaderOptions& readerOptions,
       const TypePtr& requestedType,
       const std::shared_ptr<const dwio::common::TypeWithId>& fileType,
       DwrfParams& params,
@@ -35,6 +36,7 @@ class SelectiveDwrfReader {
   /// Compatibility wrapper for tests. Takes the components of DwrfParams as
   /// separate.
   static std::unique_ptr<dwio::common::SelectiveColumnReader> build(
+      const dwio::common::ReaderOptions& readerOptions,
       const TypePtr& requestedType,
       const std::shared_ptr<const dwio::common::TypeWithId>& fileType,
       StripeStreams& stripe,
@@ -44,7 +46,8 @@ class SelectiveDwrfReader {
       FlatMapContext flatMapContext = {},
       bool isRoot = false) {
     auto params = DwrfParams(stripe, streamLabels, stats, flatMapContext);
-    return build(requestedType, fileType, params, *scanSpec, isRoot);
+    return build(
+        readerOptions, requestedType, fileType, params, *scanSpec, isRoot);
   }
 };
 

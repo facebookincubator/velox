@@ -44,7 +44,8 @@ class DwrfUnit : public LoadUnit {
       uint32_t stripeIndex,
       std::shared_ptr<dwio::common::ColumnSelector> columnSelector,
       const std::shared_ptr<BitSet>& projectedNodes,
-      RowReaderOptions options)
+      RowReaderOptions options,
+      const dwio::common::ReaderOptions& readerOptions)
       : stripeReaderBase_{stripeReaderBase},
         strideIndexProvider_{strideIndexProvider},
         columnReaderStatistics_{&columnReaderStatistics},
@@ -52,6 +53,7 @@ class DwrfUnit : public LoadUnit {
         columnSelector_{std::move(columnSelector)},
         projectedNodes_{projectedNodes},
         options_{std::move(options)},
+        readerOptions_{readerOptions},
         stripeInfo_{
             stripeReaderBase.getReader().footer().stripes(stripeIndex_)} {}
 
@@ -90,6 +92,7 @@ class DwrfUnit : public LoadUnit {
   const std::shared_ptr<dwio::common::ColumnSelector> columnSelector_;
   const std::shared_ptr<BitSet> projectedNodes_;
   const RowReaderOptions options_;
+  const dwio::common::ReaderOptions& readerOptions_;
   const StripeInformationWrapper stripeInfo_;
 
   // Mutables
@@ -160,6 +163,7 @@ void DwrfUnit::ensureDecoders() {
 
   if (scanSpec) {
     selectiveColumnReader_ = SelectiveDwrfReader::build(
+        readerOptions_,
         options_.requestedType() ? options_.requestedType() : fileType->type(),
         fileType,
         *stripeStreams_,
@@ -328,7 +332,8 @@ std::unique_ptr<dwio::common::UnitLoader> DwrfRowReader::getUnitLoader() {
         stripe,
         columnSelector_,
         projectedNodes_,
-        options_));
+        options_,
+        readerBaseShared()->readerOptions()));
   }
   std::shared_ptr<UnitLoaderFactory> unitLoaderFactory =
       options_.unitLoaderFactory();
