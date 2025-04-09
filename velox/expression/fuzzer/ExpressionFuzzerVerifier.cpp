@@ -26,6 +26,8 @@
 #include "velox/dwio/dwrf/RegisterDwrfWriter.h"
 #include "velox/exec/fuzzer/FuzzerUtil.h"
 #include "velox/expression/Expr.h"
+#include "velox/expression/ExprCompiler.h"
+#include "velox/expression/ExpressionOptimizer.h"
 #include "velox/expression/FunctionSignature.h"
 #include "velox/expression/ReverseSignatureBinder.h"
 #include "velox/expression/fuzzer/ExpressionFuzzer.h"
@@ -400,6 +402,15 @@ void ExpressionFuzzerVerifier::go() {
     // for floating-point columns and make investigation of failures easier.
     expressions.push_back(
         std::make_shared<core::FieldAccessTypedExpr>(BIGINT(), "row_number"));
+
+    if (options_.expressionFuzzerOptions.enableExpressionOptimizer) {
+      for (auto& expression : expressions) {
+        auto rewritten =
+            exec::rewriteExpression(expression, queryCtx_, pool_.get());
+        expression =
+            expression::constantFold(rewritten, queryCtx_, pool_.get());
+      }
+    }
 
     for (auto& [funcName, count] : selectionStats) {
       exprNameToStats_[funcName].numTimesSelected += count;
