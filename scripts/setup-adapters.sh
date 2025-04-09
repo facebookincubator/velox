@@ -13,9 +13,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-SCRIPTDIR=$(dirname "$0")
-source $SCRIPTDIR/setup-helper-functions.sh
-
 # Propagate errors and improve debugging.
 set -eufx -o pipefail
 
@@ -63,7 +60,11 @@ function install_gcs-sdk-cpp {
   # https://github.com/googleapis/google-cloud-cpp/blob/main/doc/packaging.md#required-libraries
 
   # abseil-cpp
+  ABSOLUTE_SCRIPTDIR=$(realpath ${SCRIPTDIR})
   github_checkout abseil/abseil-cpp 20240116.2 --depth 1
+  if [[ "$OSTYPE" == darwin* ]]; then
+    git apply "${ABSOLUTE_SCRIPTDIR}/../CMake/resolve_dependency_modules/absl/absl-macos.patch"
+  fi
   cmake_install \
     -DABSL_BUILD_TESTING=OFF \
     -DCMAKE_CXX_STANDARD=17 \
