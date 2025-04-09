@@ -14,7 +14,6 @@
  * limitations under the License.
  */
 #include "velox/experimental/cudf/exec/ToCudf.h"
-#include "velox/experimental/cudf/exec/Utilities.h"
 
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/core/QueryConfig.h"
