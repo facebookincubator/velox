@@ -66,6 +66,7 @@ jobs:
       - name: Install Dependencies
         env:
           HOMEBREW_NO_INSTALLED_DEPENDENTS_CHECK: "TRUE"
+          CMAKE_POLICY_VERSION_MINIMUM: "3.5"
         run: |
           source scripts/setup-macos.sh
           install_build_prerequisites
