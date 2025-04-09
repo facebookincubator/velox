@@ -43,7 +43,7 @@ BUILD_GEOS="${BUILD_GEOS:-true}"
 VELOX_BUILD_SHARED=${VELOX_BUILD_SHARED:-"OFF"} #Build folly shared for use in libvelox.so.
 DEPENDENCY_DIR=${DEPENDENCY_DIR:-$(pwd)}
 MACOS_VELOX_DEPS="bison flex gflags glog googletest icu4c libevent libsodium lz4 lzo openssl protobuf@21 snappy xz zstd"
-MACOS_BUILD_DEPS="ninja cmake"
+MACOS_BUILD_DEPS="ninja"
 FB_OS_VERSION="v2024.07.01.00"
 FMT_VERSION="10.1.1"
 BOOST_VERSION="boost-1.84.0"
@@ -87,7 +87,7 @@ function install_build_prerequisites {
     echo "Creating Python Virtual Environment at ${PYTHON_VENV}"
     python3 -m venv ${PYTHON_VENV}
   fi
-  source ${PYTHON_VENV}/bin/activate; pip3 install cmake-format regex pyyaml
+  source ${PYTHON_VENV}/bin/activate; pip3 install cmake-format regex pyyaml cmake==3.31.6
   if [ ! -f /usr/local/bin/ccache ]; then
     curl -L https://github.com/ccache/ccache/releases/download/v4.10.2/ccache-4.10.2-darwin.tar.gz > ccache.tar.gz
     tar -xf ccache.tar.gz

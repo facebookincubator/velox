@@ -87,72 +87,80 @@ FUZZER_DURATION_SEC ?= 60
 
 PYTHON_EXECUTABLE ?= $(shell which python3)
 
+define run_cmd
+	if [ -f "${PYTHON_VENV}/pyvenv.cfg" ]; then \
+		source ${PYTHON_VENV}/bin/activate && $1; \
+	else \
+		$1; \
+	fi
+endef
+
 all: release			#: Build the release version
 
 clean:					#: Delete all build artifacts
 	rm -rf $(BUILD_BASE_DIR)
 
 cmake:					#: Use CMake to create a Makefile build system
+	@$(call run_cmd, \
 	mkdir -p $(BUILD_BASE_DIR)/$(BUILD_DIR) && \
 	cmake  -B \
-		"$(BUILD_BASE_DIR)/$(BUILD_DIR)" \
+		$(BUILD_BASE_DIR)/$(BUILD_DIR) \
 		${CMAKE_FLAGS} \
 		$(GENERATOR) \
-		${EXTRA_CMAKE_FLAGS}
+		${EXTRA_CMAKE_FLAGS} \
+	)
 
 cmake-gpu:
-	$(MAKE) EXTRA_CMAKE_FLAGS="${EXTRA_CMAKE_FLAGS} -DVELOX_ENABLE_GPU=ON" cmake
+	@$(call run_cmd, $(MAKE) EXTRA_CMAKE_FLAGS="${EXTRA_CMAKE_FLAGS} -DVELOX_ENABLE_GPU=ON" cmake)
 
 build:					#: Build the software based in BUILD_DIR and BUILD_TYPE variables
-	cmake --build $(BUILD_BASE_DIR)/$(BUILD_DIR) -j $(NUM_THREADS)
+	@$(call run_cmd, cmake --build $(BUILD_BASE_DIR)/$(BUILD_DIR) -j $(NUM_THREADS))
 
 debug:					#: Build with debugging symbols
-	$(MAKE) cmake BUILD_DIR=debug BUILD_TYPE=Debug
-	$(MAKE) build BUILD_DIR=debug
+	@$(call run_cmd, $(MAKE) cmake BUILD_DIR=debug BUILD_TYPE=Debug)
+	@$(call run_cmd, $(MAKE) build BUILD_DIR=debug)
 
 release:				#: Build the release version
-	$(MAKE) cmake BUILD_DIR=release BUILD_TYPE=Release && \
-	$(MAKE) build BUILD_DIR=release
+	@$(call run_cmd, $(MAKE) cmake BUILD_DIR=release BUILD_TYPE=Release && \
+                     $(MAKE) build BUILD_DIR=release)
 
 minimal_debug:			#: Minimal build with debugging symbols
-	$(MAKE) cmake BUILD_DIR=debug BUILD_TYPE=debug EXTRA_CMAKE_FLAGS="${EXTRA_CMAKE_FLAGS} -DVELOX_BUILD_MINIMAL=ON"
-	$(MAKE) build BUILD_DIR=debug
+	@$(call run_cmd, $(MAKE) cmake BUILD_DIR=debug BUILD_TYPE=debug EXTRA_CMAKE_FLAGS="${EXTRA_CMAKE_FLAGS} -DVELOX_BUILD_MINIMAL=ON")
+	@$(call run_cmd, $(MAKE) build BUILD_DIR=debug)
 
 min_debug: minimal_debug
 
 minimal:				 #: Minimal build
-	$(MAKE) cmake BUILD_DIR=release BUILD_TYPE=release EXTRA_CMAKE_FLAGS="${EXTRA_CMAKE_FLAGS} -DVELOX_BUILD_MINIMAL=ON"
-	$(MAKE) build BUILD_DIR=release
+	@$(call run_cmd, $(MAKE) cmake BUILD_DIR=release BUILD_TYPE=release EXTRA_CMAKE_FLAGS="${EXTRA_CMAKE_FLAGS} -DVELOX_BUILD_MINIMAL=ON")
+	@$(call run_cmd, $(MAKE) build BUILD_DIR=release)
 
 gpu:						 #: Build with GPU support
-	$(MAKE) cmake BUILD_DIR=release BUILD_TYPE=release EXTRA_CMAKE_FLAGS="${EXTRA_CMAKE_FLAGS} -DVELOX_ENABLE_GPU=ON"
-	$(MAKE) build BUILD_DIR=release
+	@$(call run_cmd, $(MAKE) cmake BUILD_DIR=release BUILD_TYPE=release EXTRA_CMAKE_FLAGS="${EXTRA_CMAKE_FLAGS} -DVELOX_ENABLE_GPU=ON")
+	@$(call run_cmd, $(MAKE) build BUILD_DIR=release)
 
 gpu_debug:			 #: Build with debugging symbols and GPU support
-	$(MAKE) cmake BUILD_DIR=debug BUILD_TYPE=debug EXTRA_CMAKE_FLAGS="${EXTRA_CMAKE_FLAGS} -DVELOX_ENABLE_GPU=ON"
-	$(MAKE) build BUILD_DIR=debug
+	@$(call run_cmd, $(MAKE) cmake BUILD_DIR=debug BUILD_TYPE=debug EXTRA_CMAKE_FLAGS="${EXTRA_CMAKE_FLAGS} -DVELOX_ENABLE_GPU=ON")
+	@$(call run_cmd, $(MAKE) build BUILD_DIR=debug)
 
 dwio:						#: Minimal build with dwio enabled.
-	$(MAKE) cmake BUILD_DIR=release BUILD_TYPE=release EXTRA_CMAKE_FLAGS="${EXTRA_CMAKE_FLAGS} \
-																										    							  -DVELOX_BUILD_MINIMAL_WITH_DWIO=ON"
-	$(MAKE) build BUILD_DIR=release
+	@$(call run_cmd, $(MAKE) cmake BUILD_DIR=release BUILD_TYPE=release EXTRA_CMAKE_FLAGS="${EXTRA_CMAKE_FLAGS} -DVELOX_BUILD_MINIMAL_WITH_DWIO=ON")
+	@$(call run_cmd, $(MAKE) build BUILD_DIR=release)
 
 dwio_debug:			#: Minimal build with dwio debugging symbols.
-	$(MAKE) cmake BUILD_DIR=debug BUILD_TYPE=debug EXTRA_CMAKE_FLAGS="${EXTRA_CMAKE_FLAGS} \
-																																	  -DVELOX_BUILD_MINIMAL_WITH_DWIO=ON"
-	$(MAKE) build BUILD_DIR=debug
+	@$(call run_cmd, $(MAKE) cmake BUILD_DIR=debug BUILD_TYPE=debug EXTRA_CMAKE_FLAGS="${EXTRA_CMAKE_FLAGS} -DVELOX_BUILD_MINIMAL_WITH_DWIO=ON")
+	@$(call run_cmd, $(MAKE) build BUILD_DIR=debug)
 
 benchmarks-basic-build:
-	$(MAKE) release EXTRA_CMAKE_FLAGS=" ${EXTRA_CMAKE_FLAGS} \
+	@$(call run_cmd, $(MAKE) release EXTRA_CMAKE_FLAGS=" ${EXTRA_CMAKE_FLAGS} \
                                             -DVELOX_BUILD_TESTING=OFF \
                                             -DVELOX_ENABLE_BENCHMARKS_BASIC=ON \
-					    -DVELOX_BUILD_RUNNER=OFF"
+                                            -DVELOX_BUILD_RUNNER=OFF")
 
 benchmarks-build:
-	$(MAKE) release EXTRA_CMAKE_FLAGS=" ${EXTRA_CMAKE_FLAGS} \
+	@$(call run_cmd, $(MAKE) release EXTRA_CMAKE_FLAGS=" ${EXTRA_CMAKE_FLAGS} \
                                             -DVELOX_BUILD_TESTING=OFF \
                                             -DVELOX_ENABLE_BENCHMARKS=ON \
-					    -DVELOX_BUILD_RUNNER=OFF"
+                                            -DVELOX_BUILD_RUNNER=OFF")
 
 benchmarks-basic-run:
 	scripts/benchmark-runner.py run \
@@ -175,33 +183,17 @@ fuzzertest: debug
 			--minloglevel=0
 
 format-fix: 			#: Fix formatting issues in the main branch
-ifneq ("$(wildcard ${PYTHON_VENV}/pyvenv.cfg)","")
-	source ${PYTHON_VENV}/bin/activate; scripts/check.py format main --fix
-else
-	scripts/check.py format main --fix
-endif
+	@$(call run_cmd, scripts/check.py format main --fix)
 
 format-check: 			#: Check for formatting issues on the main branch
 	clang-format --version
-ifneq ("$(wildcard ${PYTHON_VENV}/pyvenv.cfg)","")
-	source ${PYTHON_VENV}/bin/activate; scripts/check.py format main
-else
-	scripts/check.py format main
-endif
+	@$(call run_cmd, scripts/check.py format main)
 
 header-fix:			#: Fix license header issues in the current branch
-ifneq ("$(wildcard ${PYTHON_VENV}/pyvenv.cfg)","")
-	source ${PYTHON_VENV}/bin/activate; scripts/check.py header main --fix
-else
-	scripts/check.py header main --fix
-endif
+	@$(call run_cmd, scripts/check.py header main --fix)
 
 header-check:			#: Check for license header issues on the main branch
-ifneq ("$(wildcard ${PYTHON_VENV}/pyvenv.cfg)","")
-	source ${PYTHON_VENV}/bin/activate; scripts/check.py header main
-else
-	scripts/check.py header main
-endif
+	@$(call run_cmd, scripts/check.py header main)
 
 circleci-container:			#: Build the linux container for CircleCi
 	$(MAKE) linux-container CONTAINER_NAME=circleci
