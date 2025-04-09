@@ -48,7 +48,7 @@ class ITypedExpr;
 }
 
 namespace facebook::velox::core {
-struct IndexJoinCondition;
+struct IndexLookupCondition;
 }
 
 namespace facebook::velox::connector {
@@ -191,7 +191,7 @@ class DataSink {
     uint32_t numWrittenFiles{0};
     uint64_t writeIOTimeUs{0};
     uint64_t numCompressedBytes{0};
-    uint64_t wallRecodeTimeNs{0};
+    uint64_t recodeTimeNs{0};
     uint64_t compressionTimeNs{0};
 
     common::SpillStats spillStats;
@@ -297,6 +297,12 @@ class DataSource {
   virtual std::shared_ptr<wave::WaveDataSource> toWaveDataSource() {
     VELOX_UNSUPPORTED();
   }
+
+  /// Invoked by table scan close to cancel any inflight async operations
+  /// running inside the data source. This is the best effort and the actual
+  /// connector implementation decides how to support the cancellation if
+  /// needed.
+  virtual void cancel() {}
 };
 
 class IndexSource {
@@ -370,7 +376,7 @@ class IndexSource {
   virtual std::shared_ptr<LookupResultIterator> lookup(
       const LookupRequest& request) = 0;
 
-  virtual std::unordered_map<std::string, RuntimeCounter> runtimeStats() = 0;
+  virtual std::unordered_map<std::string, RuntimeMetric> runtimeStats() = 0;
 };
 
 /// Collection of context data for use in a DataSource, IndexSource or DataSink.
@@ -604,7 +610,7 @@ class Connector {
   virtual std::shared_ptr<IndexSource> createIndexSource(
       const RowTypePtr& inputType,
       size_t numJoinKeys,
-      const std::vector<std::shared_ptr<core::IndexJoinCondition>>&
+      const std::vector<std::shared_ptr<core::IndexLookupCondition>>&
           joinConditions,
       const RowTypePtr& outputType,
       const std::shared_ptr<ConnectorTableHandle>& tableHandle,

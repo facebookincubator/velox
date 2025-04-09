@@ -154,17 +154,17 @@ std::string capacityToString(int64_t capacity) {
   return capacity == kMaxMemory ? "UNLIMITED" : succinctBytes(capacity);
 }
 
-#define DEBUG_RECORD_ALLOC(...)        \
-  if (FOLLY_UNLIKELY(debugEnabled_)) { \
-    recordAllocDbg(__VA_ARGS__);       \
+#define DEBUG_RECORD_ALLOC(...)         \
+  if (FOLLY_UNLIKELY(debugEnabled())) { \
+    recordAllocDbg(__VA_ARGS__);        \
   }
-#define DEBUG_RECORD_FREE(...)         \
-  if (FOLLY_UNLIKELY(debugEnabled_)) { \
-    recordFreeDbg(__VA_ARGS__);        \
+#define DEBUG_RECORD_FREE(...)          \
+  if (FOLLY_UNLIKELY(debugEnabled())) { \
+    recordFreeDbg(__VA_ARGS__);         \
   }
-#define DEBUG_LEAK_CHECK()             \
-  if (FOLLY_UNLIKELY(debugEnabled_)) { \
-    leakCheckDbg();                    \
+#define DEBUG_LEAK_CHECK()              \
+  if (FOLLY_UNLIKELY(debugEnabled())) { \
+    leakCheckDbg();                     \
   }
 } // namespace
 
@@ -226,11 +226,16 @@ MemoryPool::MemoryPool(
       maxCapacity_(parent_ == nullptr ? options.maxCapacity : kMaxMemory),
       trackUsage_(options.trackUsage),
       threadSafe_(options.threadSafe),
-      debugEnabled_(options.debugEnabled),
-      coreOnAllocationFailureEnabled_(options.coreOnAllocationFailureEnabled) {
+      debugOptions_(options.debugOptions),
+      coreOnAllocationFailureEnabled_(options.coreOnAllocationFailureEnabled),
+      getPreferredSize_(
+          options.getPreferredSize == nullptr
+              ? [](size_t size) { return MemoryPool::getPreferredSize(size); }
+              : options.getPreferredSize) {
   VELOX_CHECK(!isRoot() || !isLeaf());
   VELOX_CHECK_GT(
       maxCapacity_, 0, "Memory pool {} max capacity can't be zero", name_);
+  VELOX_CHECK_NOT_NULL(getPreferredSize_);
   MemoryAllocator::alignmentCheck(0, alignment_);
 }
 
@@ -334,6 +339,7 @@ std::shared_ptr<MemoryPool> MemoryPool::addLeafChild(
       name,
       MemoryPool::Kind::kLeaf,
       threadSafe,
+      getPreferredSize_,
       std::move(_reclaimer));
   children_.emplace(name, child);
   return child;
@@ -363,6 +369,7 @@ std::shared_ptr<MemoryPool> MemoryPool::addAggregateChild(
       name,
       MemoryPool::Kind::kAggregate,
       true,
+      getPreferredSize_,
       std::move(_reclaimer));
   children_.emplace(name, child);
   return child;
@@ -395,6 +402,13 @@ std::exception_ptr MemoryPool::abortError() const {
 }
 
 size_t MemoryPool::preferredSize(size_t size) {
+  const auto preferredSize = getPreferredSize_(size);
+  VELOX_CHECK_GE(preferredSize, size);
+  return preferredSize;
+}
+
+// static.
+size_t MemoryPool::getPreferredSize(size_t size) {
   if (size < 8) {
     return 8;
   }
@@ -412,6 +426,12 @@ size_t MemoryPool::preferredSize(size_t size) {
   return lower * 2;
 }
 
+void MemoryPool::setPreferredSize(
+    std::function<size_t(size_t)> getPreferredSizeFunc) {
+  VELOX_CHECK_NOT_NULL(getPreferredSizeFunc);
+  getPreferredSize_ = getPreferredSizeFunc;
+}
+
 MemoryPoolImpl::MemoryPoolImpl(
     MemoryManager* memoryManager,
     const std::string& name,
@@ -423,7 +443,6 @@ MemoryPoolImpl::MemoryPoolImpl(
       manager_{memoryManager},
       allocator_{manager_->allocator()},
       arbitrator_{manager_->arbitrator()},
-      debugPoolNameRegex_(debugEnabled_ ? *(debugPoolNameRegex().rlock()) : ""),
       reclaimer_(std::move(reclaimer)),
       // The memory manager sets the capacity through grow() according to the
       // actually used memory arbitration policy.
@@ -491,7 +510,9 @@ void* MemoryPoolImpl::allocate(
     std::optional<uint32_t> alignment) {
   if (alignment.has_value()) {
     const auto alignmentValue = alignment.value();
-    if (FOLLY_UNLIKELY(alignment_ % alignmentValue != 0)) {
+    if (FOLLY_UNLIKELY(
+            !(bits::isPowerOfTwo(alignmentValue) &&
+              alignmentValue <= alignment_))) {
       VELOX_UNSUPPORTED(
           "Memory pool only supports fixed alignment allocations. Requested "
           "alignment {} must already be aligned with this memory pool's fixed "
@@ -687,7 +708,7 @@ void MemoryPoolImpl::growContiguous(
         toString(),
         allocator_->getAndClearFailureMessage()));
   }
-  if (FOLLY_UNLIKELY(debugEnabled_)) {
+  if (FOLLY_UNLIKELY(debugEnabled())) {
     recordGrowDbg(allocation.data(), allocation.size());
   }
 }
@@ -737,6 +758,7 @@ std::shared_ptr<MemoryPool> MemoryPoolImpl::genChild(
     const std::string& name,
     Kind kind,
     bool threadSafe,
+    const std::function<size_t(size_t)>& getPreferredSize,
     std::unique_ptr<MemoryReclaimer> reclaimer) {
   return std::make_shared<MemoryPoolImpl>(
       manager_,
@@ -748,8 +770,9 @@ std::shared_ptr<MemoryPool> MemoryPoolImpl::genChild(
           .alignment = alignment_,
           .trackUsage = trackUsage_,
           .threadSafe = threadSafe,
-          .debugEnabled = debugEnabled_,
-          .coreOnAllocationFailureEnabled = coreOnAllocationFailureEnabled_});
+          .coreOnAllocationFailureEnabled = coreOnAllocationFailureEnabled_,
+          .getPreferredSize = getPreferredSize,
+          .debugOptions = debugOptions_});
 }
 
 bool MemoryPoolImpl::maybeReserve(uint64_t increment) {
@@ -764,9 +787,9 @@ bool MemoryPoolImpl::maybeReserve(uint64_t increment) {
   } catch (const std::exception&) {
     if (aborted()) {
       // NOTE: we shall throw to stop the query execution if the root memory
-      // pool has been aborted. It is also unsafe to proceed as the memory abort
-      // code path might have already freed up the memory resource of this
-      // operator while it is under memory arbitration.
+      // pool has been aborted. It is also unsafe to proceed as the memory
+      // abort code path might have already freed up the memory resource of
+      // this operator while it is under memory arbitration.
       std::rethrow_exception(std::current_exception());
     }
     return false;
@@ -813,8 +836,8 @@ void MemoryPoolImpl::reserveThreadSafe(uint64_t size, bool reserveOnly) {
     try {
       incrementReservationThreadSafe(this, increment);
     } catch (const std::exception&) {
-      // When race with concurrent memory reservation free, we might end up with
-      // unused reservation but no used reservation if a retry memory
+      // When race with concurrent memory reservation free, we might end up
+      // with unused reservation but no used reservation if a retry memory
       // reservation attempt run into memory capacity exceeded error.
       releaseThreadSafe(0, false);
       std::rethrow_exception(std::current_exception());
@@ -837,9 +860,9 @@ void MemoryPoolImpl::incrementReservationThreadSafe(
   VELOX_CHECK(threadSafe_);
   VELOX_CHECK_GT(size, 0);
 
-  // Propagate the increment to the root memory pool to check the capacity limit
-  // first. If it exceeds the capacity and can't grow, the root memory pool will
-  // throw an exception to fail the request.
+  // Propagate the increment to the root memory pool to check the capacity
+  // limit first. If it exceeds the capacity and can't grow, the root memory
+  // pool will throw an exception to fail the request.
   if (parent_ != nullptr) {
     toImpl(parent_)->incrementReservationThreadSafe(requestor, size);
   }
@@ -1164,15 +1187,16 @@ void MemoryPoolImpl::testingSetReservation(int64_t bytes) {
 }
 
 bool MemoryPoolImpl::needRecordDbg(bool /* isAlloc */) {
-  if (!debugPoolNameRegex_.empty()) {
-    return RE2::FullMatch(name_, debugPoolNameRegex_);
+  VELOX_CHECK(debugEnabled());
+  if (debugOptions_->debugPoolNameRegex.empty()) {
+    return false;
   }
+  return RE2::FullMatch(name_, debugOptions_->debugPoolNameRegex);
   // TODO(jtan6): Add sample based condition support.
-  return true;
 }
 
 void MemoryPoolImpl::recordAllocDbg(const void* addr, uint64_t size) {
-  VELOX_CHECK(debugEnabled_);
+  VELOX_CHECK(debugEnabled());
   if (!needRecordDbg(true)) {
     return;
   }
@@ -1183,7 +1207,7 @@ void MemoryPoolImpl::recordAllocDbg(const void* addr, uint64_t size) {
 }
 
 void MemoryPoolImpl::recordAllocDbg(const Allocation& allocation) {
-  VELOX_CHECK(debugEnabled_);
+  VELOX_CHECK(debugEnabled());
   if (!needRecordDbg(true) || allocation.empty()) {
     return;
   }
@@ -1191,7 +1215,7 @@ void MemoryPoolImpl::recordAllocDbg(const Allocation& allocation) {
 }
 
 void MemoryPoolImpl::recordAllocDbg(const ContiguousAllocation& allocation) {
-  VELOX_CHECK(debugEnabled_);
+  VELOX_CHECK(debugEnabled());
   if (!needRecordDbg(true) || allocation.empty()) {
     return;
   }
@@ -1199,7 +1223,7 @@ void MemoryPoolImpl::recordAllocDbg(const ContiguousAllocation& allocation) {
 }
 
 void MemoryPoolImpl::recordFreeDbg(const void* addr, uint64_t size) {
-  VELOX_CHECK(debugEnabled_);
+  VELOX_CHECK(debugEnabled());
   if (!needRecordDbg(false) || addr == nullptr) {
     return;
   }
@@ -1227,7 +1251,7 @@ void MemoryPoolImpl::recordFreeDbg(const void* addr, uint64_t size) {
 }
 
 void MemoryPoolImpl::recordFreeDbg(const Allocation& allocation) {
-  VELOX_CHECK(debugEnabled_);
+  VELOX_CHECK(debugEnabled());
   if (!needRecordDbg(false) || allocation.empty()) {
     return;
   }
@@ -1235,7 +1259,7 @@ void MemoryPoolImpl::recordFreeDbg(const Allocation& allocation) {
 }
 
 void MemoryPoolImpl::recordFreeDbg(const ContiguousAllocation& allocation) {
-  VELOX_CHECK(debugEnabled_);
+  VELOX_CHECK(debugEnabled());
   if (!needRecordDbg(false) || allocation.empty()) {
     return;
   }
@@ -1243,7 +1267,7 @@ void MemoryPoolImpl::recordFreeDbg(const ContiguousAllocation& allocation) {
 }
 
 void MemoryPoolImpl::recordGrowDbg(const void* addr, uint64_t newSize) {
-  VELOX_CHECK(debugEnabled_);
+  VELOX_CHECK(debugEnabled());
   if (!needRecordDbg(false) || addr == nullptr) {
     return;
   }
@@ -1257,7 +1281,7 @@ void MemoryPoolImpl::recordGrowDbg(const void* addr, uint64_t newSize) {
 }
 
 void MemoryPoolImpl::leakCheckDbg() {
-  VELOX_CHECK(debugEnabled_);
+  VELOX_CHECK(debugEnabled());
   if (debugAllocRecords_.empty()) {
     return;
   }
@@ -1301,12 +1325,12 @@ void MemoryPoolImpl::handleAllocationFailure(
     const std::string& failureMessage) {
   if (coreOnAllocationFailureEnabled_) {
     VELOX_MEM_LOG(ERROR) << failureMessage;
-    // SIGBUS is one of the standard signals in Linux that triggers a core dump
-    // Normally it is raised by the operating system when a misaligned memory
-    // access occurs. On x86 and aarch64 misaligned access is allowed by default
-    // hence this signal should never occur naturally. Raising a signal other
-    // than SIGABRT makes it easier to distinguish an allocation failure from
-    // any other crash
+    // SIGBUS is one of the standard signals in Linux that triggers a core
+    // dump Normally it is raised by the operating system when a misaligned
+    // memory access occurs. On x86 and aarch64 misaligned access is allowed
+    // by default hence this signal should never occur naturally. Raising a
+    // signal other than SIGABRT makes it easier to distinguish an allocation
+    // failure from any other crash
     raise(SIGBUS);
   }
 

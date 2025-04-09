@@ -110,12 +110,14 @@ class ArbitrationParticipant
     double minFreeCapacityRatio;
 
     /// Specifies the minimum bytes to reclaim from a participant at a time. The
-    /// global arbitration also avoids to reclaim from a participant if its
-    /// reclaimable used capacity is less than this threshold. This is to
-    /// prevent inefficient memory reclaim operations on a participant with
-    /// small reclaimable used capacity which could causes a large number of
-    /// small spilled file on disk.
+    /// bigger of the specified bytes of 'minReclaimBytes' and 'minReclaimPct'
+    /// will be applied. The global arbitration also avoids to reclaim from a
+    /// participant if its reclaimable used capacity is less than this
+    /// threshold. This is to prevent inefficient memory reclaim operations on a
+    /// participant with small reclaimable used capacity which could causes a
+    /// large number of small spilled file on disk.
     uint64_t minReclaimBytes;
+    double minReclaimPct;
 
     /// Specifies the starting memory capacity limit for global arbitration to
     /// search for victim participant to reclaim used memory by abort. For
@@ -136,6 +138,7 @@ class ArbitrationParticipant
         uint64_t _minFreeCapacity,
         double _minFreeCapacityRatio,
         uint64_t _minReclaimBytes,
+        double _minReclaimPct,
         uint64_t _abortCapacityLimit);
 
     std::string toString() const;
@@ -260,6 +263,14 @@ class ArbitrationParticipant
   /// waiting operation to start execution if there is one.
   void finishArbitration(ArbitrationOperation* op);
 
+  /// Invoked to set the capacity 'this' participant attempts to grow through
+  /// global arbitration.
+  void setPendingArbitrationGrowCapacity(int64_t growCapacity);
+
+  void clearGlobalArbitrationGrowCapacity();
+
+  int64_t globalArbitrationGrowCapacity() const;
+
   /// Returns true if there is a running arbitration operation on this
   /// participant.
   bool hasRunningOp() const;
@@ -344,9 +355,14 @@ class ArbitrationParticipant
     ArbitrationOperation* op;
     ContinuePromise waitPromise;
   };
-  /// The resume promises of the arbitration operations on this participant
-  /// waiting for serial execution.
+  // The resume promises of the arbitration operations on this participant
+  // waiting for serial execution.
   std::deque<WaitOp> waitOps_;
+
+  // The additional capacity 'this' participant attempts to grow in global
+  // arbitration. This will be used in addition to its current capacity for
+  // abort candidate selection.
+  tsan_atomic<int64_t> globalArbitrationGrowCapacity_{0};
 
   tsan_atomic<uint32_t> numRequests_{0};
   tsan_atomic<uint32_t> numReclaims_{0};

@@ -579,6 +579,10 @@ TEST_F(CastExprTest, stringToTimestamp) {
       "1970-01-02 00:00:00.001 +01:01:01.002",
       // No optional separators
       "1970-01-01 00:00:00 -010101001",
+      // Maximum timestamp.
+      "73326-09-11 20:14:45.247",
+      // Minimum timestamp.
+      "-69387-12-31 23:59:59.999",
       std::nullopt,
   };
 
@@ -610,6 +614,8 @@ TEST_F(CastExprTest, stringToTimestamp) {
       Timestamp(3662, 1000000),
       Timestamp(82738, 999000000),
       Timestamp(3661, 1000000),
+      Timestamp(2251799813685, 247000000),
+      Timestamp(-2251777881601, 999000000),
       std::nullopt,
   };
   testCast<std::string, Timestamp>("timestamp", input, expected);
@@ -624,6 +630,10 @@ TEST_F(CastExprTest, stringToTimestamp) {
       "2000-01-01 12:21:56Z",
       "2000-01-01 12:21:56+01:01:01",
       "2045-12-31 18:00:00",
+      // Maximum timestamp.
+      "73326-09-11 13:14:45.247",
+      // Minimum timestamp.
+      "-69387-12-31 16:07:01.999",
       // Test going back and forth across DST boundaries.
       "2024-03-10 09:59:59 -00:00:02",
       "2024-03-10 10:00:01 +00:00:02",
@@ -634,7 +644,34 @@ TEST_F(CastExprTest, stringToTimestamp) {
       "2100-03-14 10:00:01 +00:00:02",
       "2100-11-07 09:59:59 -00:00:02",
       "2100-11-07 10:00:01 +00:00:02",
-  };
+      // Test going back and forth across DST boundaries in the distant future
+      // in a time zone with DST.
+      "32767-03-12 01:59:00",
+      "32767-03-12 03:00:00",
+      "32767-03-12 03:01:00",
+      "32767-11-05 01:59:00",
+      "32767-11-05 02:00:00",
+      "32767-11-05 02:01:00",
+      // Test going back and forth across DST boundaries in years around when
+      // the forever rules take effect (starting in 2007).
+      "2009-03-08 01:59:00",
+      "2009-03-08 03:00:00",
+      "2009-03-08 03:01:00",
+      "2009-11-01 01:59:00",
+      "2009-11-01 02:00:00",
+      "2009-11-01 02:01:00",
+      "2008-03-09 01:59:00",
+      "2008-03-09 03:00:00",
+      "2008-03-09 03:01:00",
+      "2008-11-02 01:59:00",
+      "2008-11-02 02:00:00",
+      "2008-11-02 02:01:00",
+      "2007-03-11 01:59:00",
+      "2007-03-11 03:00:00",
+      "2007-03-11 03:01:00",
+      "2007-11-04 01:59:00",
+      "2007-11-04 02:00:00",
+      "2007-11-04 02:01:00"};
   expected = {
       Timestamp(28800, 0),
       Timestamp(0, 0),
@@ -643,6 +680,8 @@ TEST_F(CastExprTest, stringToTimestamp) {
       Timestamp(946729316, 0),
       Timestamp(946725655, 0),
       Timestamp(2398384800, 0),
+      Timestamp(2251799813685, 247000000),
+      Timestamp(-2251777881601, 999000000),
       Timestamp(1710064801, 0),
       Timestamp(1710064799, 0),
       Timestamp(1730624401, 0),
@@ -651,7 +690,30 @@ TEST_F(CastExprTest, stringToTimestamp) {
       Timestamp(4108701599, 0),
       Timestamp(4129264801, 0),
       Timestamp(4129264799, 0),
-  };
+      Timestamp(971865511140, 0),
+      Timestamp(971865511200, 0),
+      Timestamp(971865511260, 0),
+      Timestamp(971886070740, 0),
+      Timestamp(971886074400, 0),
+      Timestamp(971886074460, 0),
+      Timestamp(1236506340, 0),
+      Timestamp(1236506400, 0),
+      Timestamp(1236506460, 0),
+      Timestamp(1257065940, 0),
+      Timestamp(1257069600, 0),
+      Timestamp(1257069660, 0),
+      Timestamp(1205056740, 0),
+      Timestamp(1205056800, 0),
+      Timestamp(1205056860, 0),
+      Timestamp(1225616340, 0),
+      Timestamp(1225620000, 0),
+      Timestamp(1225620060, 0),
+      Timestamp(1173607140, 0),
+      Timestamp(1173607200, 0),
+      Timestamp(1173607260, 0),
+      Timestamp(1194166740, 0),
+      Timestamp(1194170400, 0),
+      Timestamp(1194170460, 0)};
   testCast<std::string, Timestamp>("timestamp", input, expected);
 
   // Test invalid inputs.
@@ -661,13 +723,10 @@ TEST_F(CastExprTest, stringToTimestamp) {
       "Cannot cast VARCHAR '1970-01-01T00:00' to TIMESTAMP. Unknown timezone value: \"T00:00\"");
   VELOX_ASSERT_THROW(
       (evaluateOnce<Timestamp, std::string>(
-          "cast(c0 as timestamp)", "201915-04-23 11:46:00.000")),
+          "cast(c0 as timestamp)", "292278994-04-23 11:46:00.000")),
       "Timepoint is outside of supported year range");
-  VELOX_ASSERT_THROW(
-      (evaluateOnce<Timestamp, std::string>(
-          "try_cast(c0 as timestamp)", "201915-04-23 11:46:00.000")),
-      "Timepoint is outside of supported year range");
-  // Only one white space is allowed before the offset string.
+  //   Only one white space is allowed before the offset
+  //   string.
   VELOX_ASSERT_THROW(
       (evaluateOnce<Timestamp, std::string>(
           "cast(c0 as timestamp)", "2000-01-01 00:00:00  +01:01:01")),
