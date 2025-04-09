@@ -292,26 +292,24 @@ struct ExtractJsonTypeImpl {
         return simdjson::INCORRECT_TYPE;
       }
     } else {
-      auto days =
+      auto castResult =
           util::fromDateString(StringView(s), util::ParseMode::kSparkCast);
-      if (!days.hasError()) {
-        day = days.value();
-      } else {
-        if (stringImpl::stringPosition<true /*isAscii*/>(s, kGMT, 1) > 0) {
-          // Remove 'GMT'.
-          char dateStr[s.size()];
-          auto size = stringCore::replace<true /*ignoreEmptyReplaced*/>(
-              dateStr, s, kGMT, std::string_view(), false);
-          days = util::fromDateString(
-              StringView(dateStr, size), util::ParseMode::kSparkCast);
-          if (!days.hasError()) {
-            day = days.value();
-          } else {
-            return simdjson::INCORRECT_TYPE;
-          }
+      if (!castResult.hasError()) {
+        day = castResult.value();
+      } else if (stringImpl::stringPosition<true /*isAscii*/>(s, kGMT, 1) > 0) {
+        // Remove 'GMT'.
+        char dateStr[s.size()];
+        auto size = stringCore::replace<true /*ignoreEmptyReplaced*/>(
+            dateStr, s, kGMT, std::string_view(), false);
+        castResult = util::fromDateString(
+            StringView(dateStr, size), util::ParseMode::kSparkCast);
+        if (!castResult.hasError()) {
+          day = castResult.value();
         } else {
           return simdjson::INCORRECT_TYPE;
         }
+      } else {
+        return simdjson::INCORRECT_TYPE;
       }
     }
     writer.castTo<int32_t>() = day;
