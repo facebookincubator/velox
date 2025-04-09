@@ -65,8 +65,9 @@ bool CompileState::compile() {
   auto operators = driver_.operators();
 
   if (cudfDebugEnabled()) {
-    std::cout << "Number of plan nodes: " << nodes.size() << std::endl;
-    for (auto& node : nodes) {
+    std::cout << "Number of plan nodes: " << driverFactory_.planNodes.size()
+              << std::endl;
+    for (auto& node : driverFactory_.planNodes) {
       std::cout << "  Plan node: ID " << node->id() << ": " << node->toString();
     }
     std::cout << "Operators before adapting for cuDF: count ["
