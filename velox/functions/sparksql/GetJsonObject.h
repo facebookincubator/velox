@@ -47,6 +47,11 @@ struct GetJsonObjectFunction {
     if (!checkJsonPath(jsonPath)) {
       return false;
     }
+    simdjson::dom::parser inner_parser;
+    simdjson::dom::element inner_element;
+    if (inner_parser.parse(json.data(), json.size()).get(inner_element)) {
+      return false;
+    }
     // jsonPath is "$".
     if (jsonPath.size() == 1) {
       result.append(json);
