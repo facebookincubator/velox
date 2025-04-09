@@ -707,6 +707,12 @@ void CastExpr::applyCastPrimitives(
             row, context, inputSimpleVector, resultFlatVector);
       });
       break;
+    case SparkTryCastPolicy:
+      applyToSelectedNoThrowLocal(context, rows, result, [&](int row) {
+        applyCastKernel<ToKind, FromKind, util::SparkTryCastPolicy>(
+            row, context, inputSimpleVector, resultFlatVector);
+      });
+      break;
 
     default:
       VELOX_NYI("Policy {} not yet implemented.", hooks_->getPolicy());
