@@ -65,10 +65,13 @@ std::vector<TestParams> generateLz4TestParams() {
 }
 
 std::vector<uint8_t> makeRandomData(size_t n) {
-  std::vector<uint8_t> data(n);
+  // Allocate at least 1 byte to ensure data.data() is not nullptr.
+  size_t bytes = n == 0 ? 1 : n;
+  std::vector<uint8_t> data(bytes);
   std::default_random_engine engine(42);
   std::uniform_int_distribution<uint8_t> dist(0, 255);
   std::generate(data.begin(), data.end(), [&]() { return dist(engine); });
+  data.resize(n);
   return data;
 }
 

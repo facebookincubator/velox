@@ -112,11 +112,11 @@ class Codec {
 
   /// Performs one-shot compression. The actual compressed length is returned.
   /// `outputLength` must first have been computed using maxCompressedLength().
-  /// `output` must be a valid, non-null pointer, otherwise compression will
-  /// fail.
+  /// `input` and `output` must be valid, non-null pointers, otherwise
+  /// compression will fail.
   /// Note: One-shot compression is not always compatible with streaming
-  /// decompression. Depending on the codec (e.g. LZ4), different formats may
-  /// be used.
+  /// decompression. Depending on the codec (e.g. LZ4), different formats may be
+  /// used.
   virtual Expected<uint64_t> compress(
       const uint8_t* input,
       uint64_t inputLength,
@@ -126,11 +126,11 @@ class Codec {
   /// One-shot decompression function. The actual decompressed length is
   /// returned.
   /// `outputLength` must be correct and therefore be obtained in advance.
-  /// `output` must be a valid, non-null pointer, otherwise decompression will
-  /// fail.
+  /// `input` and `output` must be valid, non-null pointers, otherwise
+  /// decompression will fail.
   /// Note: One-shot decompression is not always compatible with streaming
-  /// compression. Depending on the codec (e.g. LZ4), different formats may
-  /// be used.
+  /// compression. Depending on the codec (e.g. LZ4), different formats may be
+  /// used.
   virtual Expected<uint64_t> decompress(
       const uint8_t* input,
       uint64_t inputLength,
@@ -145,7 +145,6 @@ class Codec {
   /// be written in this call will be written in subsequent calls to this
   /// function. This is useful when fixed-length compression blocks are required
   /// by the caller.
-  /// Note: Only Gzip and Zstd codec supports this function.
   virtual Expected<uint64_t> compressFixedLength(
       const uint8_t* input,
       uint64_t inputLength,
@@ -221,6 +220,8 @@ class StreamingCompressor {
   /// Compress some input.
   /// If CompressResult.outputTooSmall is true on return, compress() should be
   /// called again with a larger output buffer, such as doubling its size.
+  /// `input` and `output` must be valid, non-null pointers, otherwise
+  /// compression will fail.
   virtual Expected<CompressResult> compress(
       const uint8_t* input,
       uint64_t inputLength,
@@ -229,15 +230,17 @@ class StreamingCompressor {
 
   /// Flush part of the compressed output.
   /// If FlushResult.outputTooSmall is true on return, flush() should be called
-  /// again with a larger output buffer, such as doubling its size.
+  /// again with a larger output buffer, such as doubling its size. `output`
+  /// must be a valid, non-null pointer.
   virtual Expected<FlushResult> flush(
       uint8_t* output,
       uint64_t outputLength) = 0;
 
   /// End compressing, doing whatever is necessary to end the stream, and
-  /// flushing the compressed output.
-  /// If EndResult.outputTooSmall is true on return, end() should be called
-  /// again with a larger output buffer, such as doubling its size.
+  /// flushing the compressed output. `output` must be a valid, non-null
+  /// pointer.
+  /// If EndResult.outputTooSmall is true on return, finalize() should be
+  /// called again with a larger output buffer, such as doubling its size.
   /// Otherwise, the StreamingCompressor should not be used anymore.
   virtual Expected<EndResult> finalize(
       uint8_t* output,
@@ -264,6 +267,8 @@ class StreamingDecompressor {
   /// Decompress some input.
   /// If DecompressResult.outputTooSmall is true on return, decompress() should
   /// be called again with a larger output buffer, such as doubling its size.
+  /// `input` and `output` must be valid, non-null pointers, otherwise
+  /// decompression will fail.
   virtual Expected<DecompressResult> decompress(
       const uint8_t* input,
       uint64_t inputLength,

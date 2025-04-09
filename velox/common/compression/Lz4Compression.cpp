@@ -232,6 +232,8 @@ Expected<StreamingCompressor::CompressResult> LZ4Compressor::compress(
     uint64_t inputLength,
     uint8_t* output,
     uint64_t outputLength) {
+  VELOX_CHECK_NOT_NULL(input);
+  VELOX_CHECK_NOT_NULL(output);
   auto inputSize = static_cast<size_t>(inputLength);
   auto outputSize = static_cast<size_t>(outputLength);
   uint64_t bytesWritten = 0;
@@ -263,6 +265,7 @@ Expected<StreamingCompressor::CompressResult> LZ4Compressor::compress(
 Expected<StreamingCompressor::FlushResult> LZ4Compressor::flush(
     uint8_t* output,
     uint64_t outputLength) {
+  VELOX_CHECK_NOT_NULL(output);
   auto outputSize = static_cast<size_t>(outputLength);
   uint64_t bytesWritten = 0;
 
@@ -294,6 +297,7 @@ Expected<StreamingCompressor::FlushResult> LZ4Compressor::flush(
 Expected<StreamingCompressor::EndResult> LZ4Compressor::finalize(
     uint8_t* output,
     uint64_t outputLength) {
+  VELOX_CHECK_NOT_NULL(output);
   auto outputSize = static_cast<size_t>(outputLength);
   uint64_t bytesWritten = 0;
 
@@ -366,6 +370,8 @@ Expected<StreamingDecompressor::DecompressResult> LZ4Decompressor::decompress(
     uint64_t inputLength,
     uint8_t* output,
     uint64_t outputLength) {
+  VELOX_CHECK_NOT_NULL(input);
+  VELOX_CHECK_NOT_NULL(output);
   auto inputSize = static_cast<size_t>(inputLength);
   auto outputSize = static_cast<size_t>(outputLength);
 
@@ -428,6 +434,7 @@ Expected<uint64_t> Lz4FrameCodec::compress(
     uint64_t inputLength,
     uint8_t* output,
     uint64_t outputLength) {
+  VELOX_CHECK_NOT_NULL(input);
   VELOX_CHECK_NOT_NULL(output);
   auto ret = LZ4F_compressFrame(
       output,
@@ -445,6 +452,7 @@ Expected<uint64_t> Lz4FrameCodec::decompress(
     uint64_t inputLength,
     uint8_t* output,
     uint64_t outputLength) {
+  VELOX_CHECK_NOT_NULL(input);
   VELOX_CHECK_NOT_NULL(output);
   return makeStreamingDecompressor().then(
       [&](const auto& decompressor) -> Expected<uint64_t> {
@@ -503,6 +511,7 @@ Expected<uint64_t> Lz4RawCodec::compress(
     uint64_t inputLength,
     uint8_t* output,
     uint64_t outputLength) {
+  VELOX_CHECK_NOT_NULL(input);
   VELOX_CHECK_NOT_NULL(output);
   uint64_t compressedSize;
 #ifdef LZ4HC_CLEVEL_MIN
@@ -534,6 +543,7 @@ Expected<uint64_t> Lz4RawCodec::decompress(
     uint64_t inputLength,
     uint8_t* output,
     uint64_t outputLength) {
+  VELOX_CHECK_NOT_NULL(input);
   VELOX_CHECK_NOT_NULL(output);
   auto decompressedSize = LZ4_decompress_safe(
       reinterpret_cast<const char*>(input),
@@ -560,6 +570,7 @@ Expected<uint64_t> Lz4HadoopCodec::compress(
     uint64_t inputLength,
     uint8_t* output,
     uint64_t outputLength) {
+  VELOX_CHECK_NOT_NULL(input);
   VELOX_CHECK_NOT_NULL(output);
   VELOX_RETURN_UNEXPECTED_IF(
       outputLength < kPrefixLength,
@@ -589,6 +600,7 @@ Expected<uint64_t> Lz4HadoopCodec::decompress(
     uint64_t inputLength,
     uint8_t* output,
     uint64_t outputLength) {
+  VELOX_CHECK_NOT_NULL(input);
   VELOX_CHECK_NOT_NULL(output);
   uint64_t decompressedSize;
   if (tryDecompressHadoop(
