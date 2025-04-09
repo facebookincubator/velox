@@ -3081,7 +3081,7 @@ void FilterNode::accept(
 PlanNodePtr FilterNode::create(const folly::dynamic& obj, void* context) {
   auto source = deserializeSingleSource(obj, context);
 
-  auto filter = ISerializable::deserialize<ITypedExpr>(obj["filter"]);
+  auto filter = ISerializable::deserialize<ITypedExpr>(obj["filter"], context);
   return std::make_shared<FilterNode>(
       deserializePlanNodeId(obj), filter, std::move(source));
 }
