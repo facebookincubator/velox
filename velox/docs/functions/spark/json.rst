@@ -39,8 +39,15 @@ JSON Functions
         SELECT from_json('{"a": {"b": 1}}'); -- {'a'={b=1}} // Output type: ROW({"a"}, {ROW({"b"}, {INTEGER()})})
 
     Note, that since the result type can be inferred from the expression, we do not need 
-    to provide the ``schema`` parameter as required by Spark's ``from_json(jsonString, schema)`` 
-    function.
+    to provide the ``schema`` parameter as required by Spark's from_json function.
+
+    Velox ::
+
+        SELECT from_json('{"a": true}'); -- {'a'=true} // Output type: ROW({"a"}, {BOOLEAN()})
+    
+    Spark ::
+
+        SELECT from_json('{"a": true}', 'a BOOLEAN'); -- {'a'=true}
 
     The current implementation has the following limitations.
 
