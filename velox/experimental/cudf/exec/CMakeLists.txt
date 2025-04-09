@@ -22,11 +22,12 @@ add_library(
 
 target_link_libraries(
   velox_cudf_exec
-  cudf::cudf
-  arrow
-  velox_arrow_bridge
-  velox_exception
-  velox_common_base
-  velox_exec)
+  PUBLIC cudf::cudf
+  PRIVATE
+    arrow
+    velox_arrow_bridge
+    velox_exception
+    velox_common_base
+    velox_exec)
 
 target_compile_options(velox_cudf_exec PRIVATE -Wno-missing-field-initializers)
