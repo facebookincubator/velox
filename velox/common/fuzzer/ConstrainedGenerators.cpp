@@ -19,6 +19,7 @@
 #include <boost/random/uniform_int_distribution.hpp>
 
 #include "velox/common/fuzzer/Utils.h"
+#include "velox/functions/prestosql/types/BingTileType.h"
 
 namespace facebook::velox::fuzzer {
 
@@ -244,6 +245,32 @@ std::string PhoneNumberInputGenerator::generateImpl() {
   makeRandomStrVariation(
       phoneNumber, rng_, RandomStrVariationOptions{0.1, 0.1, 0.1});
   return phoneNumber;
+}
+
+// BingTileInputGenerator
+
+BingTileInputGenerator::BingTileInputGenerator(
+    size_t seed,
+    const TypePtr& type,
+    double nullRatio)
+    : AbstractInputGenerator(seed, type, nullptr, nullRatio) {}
+
+BingTileInputGenerator::~BingTileInputGenerator() = default;
+
+variant BingTileInputGenerator::generate() {
+  if (coinToss(rng_, nullRatio_)) {
+    return variant::null(type_->kind());
+  }
+  int64_t tileInt = generateImpl();
+  return variant(tileInt);
+}
+
+int64_t BingTileInputGenerator::generateImpl() {
+  uint8_t zoom = rand<uint32_t>(rng_, 0, 23);
+  uint32_t maxCoordinate = (1 << zoom) - 1;
+  uint32_t x = rand<uint32_t>(rng_, 0, maxCoordinate);
+  uint32_t y = rand<uint32_t>(rng_, 0, maxCoordinate);
+  return static_cast<int64_t>(BingTileType::bingTileCoordsToInt(x, y, zoom));
 }
 
 // Utility functions
