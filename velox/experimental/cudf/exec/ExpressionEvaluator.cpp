@@ -46,7 +46,6 @@ cudf::ast::literal make_scalar_and_literal(
     auto constVector = vector->as<facebook::velox::SimpleVector<T>>();
     VELOX_CHECK_NOT_NULL(constVector, "ConstantVector is null");
     T value = constVector->valueAt(at_index);
-    // check if decimal (unsupported by ast), if interval, if date
     if (type->isShortDecimal()) {
       VELOX_FAIL("Short decimal not supported");
       /* TODO: enable after rewriting using binary ops
@@ -97,7 +96,8 @@ cudf::ast::literal make_scalar_and_literal(
             *static_cast<cudfScalarType*>(scalars.back().get())};
       }
     } else {
-      // store scalar and use its reference in the literal
+      // Create a numeric scalar of type T, store it in the scalars vector,
+      // and use its reference in the literal expression
       using cudfScalarType = cudf::numeric_scalar<T>;
       scalars.emplace_back(
           std::make_unique<cudfScalarType>(value, true, stream, mr));
@@ -305,8 +305,12 @@ cudf::ast::expression const& AstContext::add_precompute_instruction(
   VELOX_FAIL("Field not found, " + name);
 }
 
-// and/or could have more than 2 inputs,
-// convert to pair wise and/or in this function
+/// Handles logical AND/OR expressions with multiple inputs by converting them
+/// into a chain of binary operations. For example, "a AND b AND c" becomes
+/// "(a AND b) AND c".
+///
+/// @param expr The expression containing multiple inputs for AND/OR operation
+/// @return A reference to the resulting AST expression
 cudf::ast::expression const& AstContext::multiple_inputs_to_pair_wise(
     const std::shared_ptr<velox::exec::Expr>& expr) {
   using operation = cudf::ast::operation;
@@ -324,6 +328,11 @@ cudf::ast::expression const& AstContext::multiple_inputs_to_pair_wise(
   return *result;
 }
 
+/// Pushes an expression into the AST tree and returns a reference to the
+/// resulting expression.
+///
+/// @param expr The expression to push into the AST tree
+/// @return A reference to the resulting AST expression
 cudf::ast::expression const& AstContext::push_expr_to_tree(
     const std::shared_ptr<velox::exec::Expr>& expr) {
   using op = cudf::ast::ast_operator;
@@ -435,18 +444,17 @@ cudf::ast::expression const& AstContext::push_expr_to_tree(
     }
   } else if (name == "year") {
     VELOX_CHECK_EQ(len, 1);
-    // ensure expr->inputs()[0] is a field
+
     auto fieldExpr =
         std::dynamic_pointer_cast<FieldReference>(expr->inputs()[0]);
     VELOX_CHECK_NOT_NULL(fieldExpr, "Expression is not a field");
 
     auto const& col_ref = add_precompute_instruction(fieldExpr->name(), "year");
 
-    // cast to big int
     return tree.push(operation{op::CAST_TO_INT64, col_ref});
   } else if (name == "length") {
     VELOX_CHECK_EQ(len, 1);
-    // ensure expr->inputs()[0] is a field
+
     auto fieldExpr =
         std::dynamic_pointer_cast<FieldReference>(expr->inputs()[0]);
     VELOX_CHECK_NOT_NULL(fieldExpr, "Expression is not a field");
@@ -456,8 +464,9 @@ cudf::ast::expression const& AstContext::push_expr_to_tree(
 
     return tree.push(operation{op::CAST_TO_INT64, col_ref});
   } else if (name == "substr") {
-    // add precompute instruction, special handling col_ref during ast
-    // evaluation
+    // Extract the start and length parameters from the substr function call
+    // and create a precomputed column with the substring operation.
+    // This will be handled during AST evaluation with special column reference.
     VELOX_CHECK_EQ(len, 3);
     auto fieldExpr =
         std::dynamic_pointer_cast<FieldReference>(expr->inputs()[0]);
