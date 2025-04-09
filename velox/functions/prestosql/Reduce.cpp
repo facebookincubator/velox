@@ -430,8 +430,12 @@ VELOX_DECLARE_VECTOR_FUNCTION_WITH_METADATA(
     std::make_unique<ReduceFunction>());
 
 void registerReduceRewrites(const std::string& prefix) {
-  exec::registerExpressionRewrite(
-      [prefix](const auto& expr) { return rewriteReduce(prefix, expr); });
+  exec::registerExpressionRewrite([prefix](
+                                      const core::TypedExprPtr& expr,
+                                      const core::QueryConfig& /*config*/,
+                                      memory::MemoryPool* /*pool*/) {
+    return rewriteReduce(prefix, expr);
+  });
 }
 
 } // namespace facebook::velox::functions

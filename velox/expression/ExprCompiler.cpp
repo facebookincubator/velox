@@ -20,6 +20,7 @@
 #include "velox/expression/ConjunctExpr.h"
 #include "velox/expression/ConstantExpr.h"
 #include "velox/expression/Expr.h"
+#include "velox/expression/ExpressionOptimizer.h"
 #include "velox/expression/FieldReference.h"
 #include "velox/expression/LambdaExpr.h"
 #include "velox/expression/RowConstructor.h"
@@ -35,9 +36,6 @@ namespace {
 
 using core::ITypedExpr;
 using core::TypedExprPtr;
-
-const char* const kAnd = "and";
-const char* const kOr = "or";
 
 struct ITypedExprHasher {
   size_t operator()(const ITypedExpr* expr) const {
@@ -95,16 +93,6 @@ struct Scope {
   }
 };
 
-// Utility method to check eligibility for flattening.
-bool allInputTypesEquivalent(const TypedExprPtr& expr) {
-  const auto& inputs = expr->inputs();
-  for (int i = 1; i < inputs.size(); i++) {
-    if (!inputs[0]->type()->equivalent(*inputs[i]->type())) {
-      return false;
-    }
-  }
-  return true;
-}
 
 std::optional<std::string> shouldFlatten(
     const TypedExprPtr& expr,
@@ -114,47 +102,11 @@ std::optional<std::string> shouldFlatten(
     // inputs are of the same type.
     if (call->name() == kAnd || call->name() == kOr ||
         (flatteningCandidates.count(call->name()) &&
-         allInputTypesEquivalent(expr))) {
+         expression::allInputTypesEquivalent(expr))) {
       return call->name();
     }
   }
   return std::nullopt;
-}
-
-bool isCall(const TypedExprPtr& expr, const std::string& name) {
-  if (auto call = std::dynamic_pointer_cast<const core::CallTypedExpr>(expr)) {
-    return call->name() == name;
-  }
-  return false;
-}
-
-// Recursively flattens nested ANDs, ORs or eligible callable expressions into a
-// vector of their inputs. Recursive flattening ceases exploring an input branch
-// if it encounters either an expression different from 'flattenCall' or its
-// inputs are not the same type.
-// Examples:
-// flattenCall: AND
-// in: a AND (b AND (c AND d))
-// out: [a, b, c, d]
-//
-// flattenCall: OR
-// in: (a OR b) OR (c OR d)
-// out: [a, b, c, d]
-//
-// flattenCall: concat
-// in: (array1, concat(array2, concat(array2, intVal))
-// out: [array1, array2, concat(array2, intVal)]
-void flattenInput(
-    const TypedExprPtr& input,
-    const std::string& flattenCall,
-    std::vector<TypedExprPtr>& flat) {
-  if (isCall(input, flattenCall) && allInputTypesEquivalent(input)) {
-    for (auto& child : input->inputs()) {
-      flattenInput(child, flattenCall, flat);
-    }
-  } else {
-    flat.emplace_back(input);
-  }
 }
 
 ExprPtr getAlreadyCompiled(const ITypedExpr* expr, ExprDedupMap* visited) {
@@ -187,7 +139,7 @@ std::vector<ExprPtr> compileInputs(
     } else {
       if (flattenIf.has_value()) {
         std::vector<TypedExprPtr> flat;
-        flattenInput(input, flattenIf.value(), flat);
+        expression::flattenInput(input, flattenIf.value(), flat);
         for (auto& input_2 : flat) {
           compiledInputs.push_back(compileExpression(
               input_2,
@@ -355,15 +307,6 @@ std::vector<VectorPtr> getConstantInputs(const std::vector<ExprPtr>& exprs) {
     }
   }
   return constants;
-}
-
-core::TypedExprPtr rewriteExpression(const core::TypedExprPtr& expr) {
-  for (auto& rewrite : expressionRewrites()) {
-    if (auto rewritten = rewrite(expr)) {
-      return rewritten;
-    }
-  }
-  return expr;
 }
 
 ExprPtr compileRewrittenExpression(
@@ -535,7 +478,7 @@ ExprPtr compileExpression(
     memory::MemoryPool* pool,
     const std::unordered_set<std::string>& flatteningCandidates,
     bool enableConstantFolding) {
-  auto rewritten = rewriteExpression(expr);
+  auto rewritten = rewriteExpression(expr, config, pool);
   if (rewritten.get() != expr.get()) {
     scope->rewrittenExpressions.push_back(rewritten);
   }
@@ -585,6 +528,18 @@ std::unordered_set<std::string> collectFlatteningCandidates(
   });
 }
 } // namespace
+
+core::TypedExprPtr rewriteExpression(
+    const core::TypedExprPtr& expr,
+    const core::QueryConfig& config,
+    memory::MemoryPool* pool) {
+  for (auto& rewrite : expressionRewrites()) {
+    if (auto rewritten = rewrite(expr, config, pool)) {
+      return rewritten;
+    }
+  }
+  return expr;
+}
 
 std::vector<std::shared_ptr<Expr>> compileExpressions(
     const std::vector<TypedExprPtr>& sources,
