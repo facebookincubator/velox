@@ -27,9 +27,7 @@ JSON Functions
     REAL, DOUBLE, DATE, VARCHAR, ARRAY, MAP and ROW. When casting to ARRAY or MAP, 
     the element type of the array or the value type of the map must be one of 
     these supported types, and for maps, the key type must be VARCHAR. Casting 
-    to ROW supports only JSON objects.
-    Note,  this function's signature differs from Spark's because the result type 
-    is inferred from the expression. ::
+    to ROW supports only JSON objects. ::
         
         SELECT from_json('{"a": true}'); -- {'a'=true} // Output type: ROW({"a"}, {BOOLEAN()})
         SELECT from_json('{"a": 1}'); -- {'a'=1} // Output type: ROW({"a"}, {INTEGER()})
@@ -39,6 +37,10 @@ JSON Functions
         SELECT from_json('["name", "age", "id"]'); -- ['name', 'age', 'id'] // Output type: ARRAY(VARCHAR())
         SELECT from_json('{"a": 1, "b": 2}'); -- {'a'=1, 'b'=2} // Output type: MAP(VARCHAR(),INTEGER())
         SELECT from_json('{"a": {"b": 1}}'); -- {'a'={b=1}} // Output type: ROW({"a"}, {ROW({"b"}, {INTEGER()})})
+
+    Note, that since the result type can be inferred from the expression, we do not need 
+    to provide the ``schema`` parameter as required by Spark's ``from_json(jsonString, schema)`` 
+    function.
 
     The current implementation has the following limitations.
 
