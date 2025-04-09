@@ -220,6 +220,7 @@ int main(int argc, char** argv) {
                                     // https://github.com/prestodb/presto/pull/24570
         "inverse_gamma_cdf", // https://github.com/facebookincubator/velox/issues/12918
         "inverse_binomial_cdf", // D72590033
+        "inverse_poisson_cdf", // D72590447
     });
 
     referenceQueryRunner = std::make_shared<PrestoQueryRunner>(
