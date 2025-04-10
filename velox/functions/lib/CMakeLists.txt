@@ -26,6 +26,8 @@ velox_add_library(velox_functions_lib_date_time_formatter DateTimeFormatter.cpp
 
 velox_link_libraries(velox_functions_lib_date_time_formatter velox_type_tz)
 
+velox_add_library(velox_functions_lib_tdigest TDigest.h)
+
 velox_add_library(
   velox_functions_lib
   ArrayShuffle.cpp
