@@ -443,6 +443,7 @@ PlanNodePtr toVeloxPlan(
 
     auto aggName = translateAggregateName(call->name());
     aggregates.push_back({
+        AggregationNode::Aggregate::Step::kSingle,
         std::make_shared<CallTypedExpr>(call->type(), fieldInputs, aggName),
         rawInputTypes,
         nullptr, // mask
@@ -485,12 +486,12 @@ PlanNodePtr toVeloxPlan(
 
   return std::make_shared<AggregationNode>(
       queryContext.nextNodeId(),
-      AggregationNode::Step::kSingle,
       groupingKeys,
       std::vector<FieldAccessTypedExprPtr>{}, // preGroupedKeys
       names,
       std::move(aggregates),
       false, // ignoreNullKeys
+      false,
       source);
 }
 

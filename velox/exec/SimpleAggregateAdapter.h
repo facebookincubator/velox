@@ -42,7 +42,7 @@ template <typename FUNC>
 class SimpleAggregateAdapter : public Aggregate {
  public:
   explicit SimpleAggregateAdapter(
-      core::AggregationNode::Step step,
+      core::AggregationNode::Aggregate::Step step,
       const std::vector<TypePtr>& argTypes,
       TypePtr resultType)
       : Aggregate(std::move(resultType)), fn_{std::make_unique<FUNC>()} {

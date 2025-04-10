@@ -134,7 +134,7 @@ class StreamingAggregationTest : public OperatorTestBase {
                          "max(c1 order by c2 desc)",
                          "array_agg(c1 order by c2)"},
                         {},
-                        core::AggregationNode::Step::kSingle,
+                        core::AggregationNode::Aggregate::Step::kSingle,
                         false)
                     .planNode();
 
@@ -171,7 +171,7 @@ class StreamingAggregationTest : public OperatorTestBase {
                            "count(distinct c1)",
                            "array_agg(c2)"},
                           {},
-                          core::AggregationNode::Step::kSingle,
+                          core::AggregationNode::Aggregate::Step::kSingle,
                           false)
                       .planNode();
 
@@ -185,12 +185,15 @@ class StreamingAggregationTest : public OperatorTestBase {
     }
 
     {
-      auto plan =
-          PlanBuilder()
-              .values(data)
-              .streamingAggregation(
-                  {"c0"}, {}, {}, core::AggregationNode::Step::kSingle, false)
-              .planNode();
+      auto plan = PlanBuilder()
+                      .values(data)
+                      .streamingAggregation(
+                          {"c0"},
+                          {},
+                          {},
+                          core::AggregationNode::Aggregate::Step::kSingle,
+                          false)
+                      .planNode();
 
       AssertQueryBuilder(plan, duckDbQueryRunner_)
           .config(
@@ -246,7 +249,7 @@ class StreamingAggregationTest : public OperatorTestBase {
                 preGroupedKeys,
                 {"count(1)", "min(c1)", "max(c1)", "sum(c1)", "sumnonpod(1)"},
                 {},
-                core::AggregationNode::Step::kPartial,
+                core::AggregationNode::Aggregate::Step::kPartial,
                 false)
             .finalAggregation()
             .planNode();
@@ -293,7 +296,7 @@ class StreamingAggregationTest : public OperatorTestBase {
                   keys[0]->type()->asRow().names(),
                   {"count(distinct c1)", "array_agg(c1)", "sumnonpod(1)"},
                   {},
-                  core::AggregationNode::Step::kSingle,
+                  core::AggregationNode::Aggregate::Step::kSingle,
                   false)
               .planNode();
 
@@ -325,7 +328,7 @@ class StreamingAggregationTest : public OperatorTestBase {
                           keys[0]->type()->asRow().names(),
                           {},
                           {},
-                          core::AggregationNode::Step::kSingle,
+                          core::AggregationNode::Aggregate::Step::kSingle,
                           false)
                       .planNode();
 

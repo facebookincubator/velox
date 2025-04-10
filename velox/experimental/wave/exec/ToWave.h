@@ -417,7 +417,7 @@ struct AggregateUpdate : public KernelStep {
   std::string toString() const override;
 
   std::string name;
-  core::AggregationNode::Step step;
+  core::AggregationNode::Aggregate::Step step;
   /// The original argument types. Identifies the aggregate.
   std::vector<TypePtr> signature;
 
@@ -542,7 +542,7 @@ struct ReadAggregation : public KernelStep {
   std::unique_ptr<AbstractInstruction> addInstruction(
       CompileState& state) override;
 
-  core::AggregationNode::Step step;
+  core::AggregationNode::Aggregate::Step step;
   AbstractState* state;
   std::vector<AbstractOperand*> keys;
   std::vector<const AggregateUpdate*> funcs;

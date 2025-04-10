@@ -31,7 +31,6 @@ core::PlanNodePtr AggregationReplayer::createPlanNode(
       dynamic_cast<const core::AggregationNode*>(node);
   return std::make_shared<core::AggregationNode>(
       nodeId,
-      aggregationNode->step(),
       aggregationNode->groupingKeys(),
       aggregationNode->preGroupedKeys(),
       aggregationNode->aggregateNames(),
@@ -39,6 +38,7 @@ core::PlanNodePtr AggregationReplayer::createPlanNode(
       aggregationNode->globalGroupingSets(),
       aggregationNode->groupId(),
       aggregationNode->ignoreNullKeys(),
+      aggregationNode->allowFlush(),
       source);
 }
 } // namespace facebook::velox::tool::trace

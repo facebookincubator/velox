@@ -647,7 +647,7 @@ TEST_P(HashTableTest, clearBeforeInsert) {
   core::QueryConfig config({});
   auto aggregate = Aggregate::create(
       "sum",
-      core::AggregationNode::Step::kPartial,
+      core::AggregationNode::Aggregate::Step::kPartial,
       std::vector<TypePtr>{BIGINT()},
       BIGINT(),
       config);

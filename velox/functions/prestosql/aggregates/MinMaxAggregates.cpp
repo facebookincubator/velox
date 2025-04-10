@@ -537,7 +537,7 @@ exec::AggregateRegistrationResult registerMinMax(
       name,
       std::move(signatures),
       [name, registerMin](
-          core::AggregationNode::Step step,
+          core::AggregationNode::Aggregate::Step step,
           std::vector<TypePtr> argTypes,
           const TypePtr& resultType,
           const core::QueryConfig& config) -> std::unique_ptr<exec::Aggregate> {

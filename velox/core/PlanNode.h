@@ -648,23 +648,30 @@ using TableScanNodePtr = std::shared_ptr<const TableScanNode>;
 
 class AggregationNode : public PlanNode {
  public:
-  enum class Step {
-    // raw input in - partial result out
-    kPartial,
-    // partial result in - final result out
-    kFinal,
-    // partial result in - partial result out
-    kIntermediate,
-    // raw input in - final result out
-    kSingle
-  };
-
-  static const char* stepName(Step step);
-
-  static Step stepFromName(const std::string& name);
-
   /// Aggregate function call.
   struct Aggregate {
+    enum class Step {
+      // raw input in - partial result out
+      kPartial,
+      // partial result in - final result out
+      kFinal,
+      // partial result in - partial result out
+      kIntermediate,
+      // raw input in - final result out
+      kSingle
+    };
+
+    static const char* stepName(Step step);
+
+    static Step stepFromName(const std::string& name);
+
+    static bool isPartialInput(Step step);
+
+    static bool isPartialOutput(Step step);
+
+    /// Aggregation setp of the function call.
+    Step step;
+
     /// Function name and input column names.
     CallTypedExprPtr call;
 
@@ -695,12 +702,12 @@ class AggregationNode : public PlanNode {
 
   AggregationNode(
       const PlanNodeId& id,
-      Step step,
       const std::vector<FieldAccessTypedExprPtr>& groupingKeys,
       const std::vector<FieldAccessTypedExprPtr>& preGroupedKeys,
       const std::vector<std::string>& aggregateNames,
       const std::vector<Aggregate>& aggregates,
       bool ignoreNullKeys,
+      bool allowFlush,
       PlanNodePtr source);
 
   /// @param globalGroupingSets Group IDs of the global grouping sets produced
@@ -714,7 +721,6 @@ class AggregationNode : public PlanNode {
   /// row with the default global aggregate value per global grouping set.
   AggregationNode(
       const PlanNodeId& id,
-      Step step,
       const std::vector<FieldAccessTypedExprPtr>& groupingKeys,
       const std::vector<FieldAccessTypedExprPtr>& preGroupedKeys,
       const std::vector<std::string>& aggregateNames,
@@ -722,6 +728,7 @@ class AggregationNode : public PlanNode {
       const std::vector<vector_size_t>& globalGroupingSets,
       const std::optional<FieldAccessTypedExprPtr>& groupId,
       bool ignoreNullKeys,
+      bool allowFlush,
       PlanNodePtr source);
 
   const std::vector<PlanNodePtr>& sources() const override {
@@ -733,10 +740,6 @@ class AggregationNode : public PlanNode {
 
   const RowTypePtr& outputType() const override {
     return outputType_;
-  }
-
-  Step step() const {
-    return step_;
   }
 
   const std::vector<FieldAccessTypedExprPtr>& groupingKeys() const {
@@ -772,6 +775,10 @@ class AggregationNode : public PlanNode {
     return ignoreNullKeys_;
   }
 
+  bool allowFlush() const {
+    return allowFlush_;
+  }
+
   const std::vector<vector_size_t>& globalGroupingSets() const {
     return globalGroupingSets_;
   }
@@ -780,19 +787,75 @@ class AggregationNode : public PlanNode {
     return groupId_;
   }
 
+  bool hasPartialInput() const {
+    if (aggregates_.empty()) {
+      return false;
+    }
+    for (const auto& aggregate : aggregates_) {
+      if (Aggregate::isPartialInput(aggregate.step)) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  bool hasPartialOutput() const {
+    if (aggregates_.empty()) {
+      return false;
+    }
+    for (const auto& aggregate : aggregates_) {
+      if (Aggregate::isPartialOutput(aggregate.step)) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  bool allPartialInput() const {
+    if (aggregates_.empty()) {
+      return false;
+    }
+    for (const auto& aggregate : aggregates_) {
+      if (!Aggregate::isPartialInput(aggregate.step)) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  bool allPartialOutput() const {
+    if (aggregates_.empty()) {
+      return false;
+    }
+    for (const auto& aggregate : aggregates_) {
+      if (!Aggregate::isPartialOutput(aggregate.step)) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  bool hasRawInput() const {
+    return !allPartialInput();
+  }
+
+  bool allRawInput() const {
+    return !hasPartialInput();
+  }
+
+  bool hasRawOutput() const {
+    return !allPartialOutput();
+  }
+
+  bool allRawOutput() const {
+    return !hasPartialOutput();
+  }
+
   std::string_view name() const override {
     return "Aggregation";
   }
 
   bool canSpill(const QueryConfig& queryConfig) const override;
-
-  bool isFinal() const {
-    return step_ == Step::kFinal;
-  }
-
-  bool isSingle() const {
-    return step_ == Step::kSingle;
-  }
 
   folly::dynamic serialize() const override;
 
@@ -801,12 +864,12 @@ class AggregationNode : public PlanNode {
  private:
   void addDetails(std::stringstream& stream) const override;
 
-  const Step step_;
   const std::vector<FieldAccessTypedExprPtr> groupingKeys_;
   const std::vector<FieldAccessTypedExprPtr> preGroupedKeys_;
   const std::vector<std::string> aggregateNames_;
   const std::vector<Aggregate> aggregates_;
   const bool ignoreNullKeys_;
+  const bool allowFlush_;
 
   std::optional<FieldAccessTypedExprPtr> groupId_;
   std::vector<vector_size_t> globalGroupingSets_;
@@ -817,21 +880,22 @@ class AggregationNode : public PlanNode {
 
 inline std::ostream& operator<<(
     std::ostream& out,
-    const AggregationNode::Step& step) {
+    const AggregationNode::Aggregate::Step& step) {
   switch (step) {
-    case AggregationNode::Step::kFinal:
+    case AggregationNode::Aggregate::Step::kFinal:
       return out << "FINAL";
-    case AggregationNode::Step::kIntermediate:
+    case AggregationNode::Aggregate::Step::kIntermediate:
       return out << "INTERMEDIATE";
-    case AggregationNode::Step::kPartial:
+    case AggregationNode::Aggregate::Step::kPartial:
       return out << "PARTIAL";
-    case AggregationNode::Step::kSingle:
+    case AggregationNode::Aggregate::Step::kSingle:
       return out << "SINGLE";
   }
   VELOX_UNREACHABLE();
 }
 
-inline std::string mapAggregationStepToName(const AggregationNode::Step& step) {
+inline std::string mapAggregationStepToName(
+    const AggregationNode::Aggregate::Step& step) {
   std::stringstream ss;
   ss << step;
   return ss.str();
