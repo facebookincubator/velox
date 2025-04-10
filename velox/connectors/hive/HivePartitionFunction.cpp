@@ -26,6 +26,10 @@ int32_t hashInt64(int64_t value) {
   return ((*reinterpret_cast<uint64_t*>(&value)) >> 32) ^ value;
 }
 
+int32_t hashInt128(int128_t value) {
+  return hashInt64(static_cast<uint128_t>(value) >> 64 ^ value);
+}
+
 #if defined(__has_feature)
 #if __has_feature(__address_sanitizer__)
 __attribute__((no_sanitize("integer")))
@@ -81,6 +85,11 @@ inline uint32_t hashOne<TypeKind::REAL>(float value) {
 template <>
 inline uint32_t hashOne<TypeKind::BIGINT>(int64_t value) {
   return hashInt64(value);
+}
+
+template <>
+inline uint32_t hashOne<TypeKind::HUGEINT>(int128_t value) {
+  return hashInt128(value);
 }
 
 template <>
@@ -208,6 +217,16 @@ void HivePartitionFunction::hashTyped<TypeKind::BIGINT>(
     std::vector<uint32_t>& hashes,
     size_t /* poolIndex */) {
   hashPrimitive<TypeKind::BIGINT>(values, rows, mix, hashes);
+}
+
+template <>
+void HivePartitionFunction::hashTyped<TypeKind::HUGEINT>(
+    const DecodedVector& values,
+    const SelectivityVector& rows,
+    bool mix,
+    std::vector<uint32_t>& hashes,
+    size_t /* poolIndex */) {
+  hashPrimitive<TypeKind::HUGEINT>(values, rows, mix, hashes);
 }
 
 template <>
