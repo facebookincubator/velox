@@ -341,6 +341,17 @@ String Functions
         SELECT str_to_map('', ',', ':'); -- {"":NULL}
         SELECT str_to_map('a:1,b:2,c:3', ',', ','); -- {"a:1":NULL,"b:2":NULL,"c:3":NULL}
 
+.. spark:function:: str_to_map_last_win(string, entryDelimiter, keyValueDelimiter) -> map(string, string)
+
+    Similar to ``str_to_map``. However, when duplicate map keys are found for single row's result,
+    the map key that is inserted at last takes precedence. This is consistent when Spark setting conf
+    ``spark.sql.mapKeyDedupPolicy=LAST_WIN``. ::
+
+        SELECT str_to_map_last_win('a:1,b:2,a:3', ',', ':'); -- {"a":"3","b":"2"}
+        SELECT str_to_map_last_win('a', ',', ':'); -- {"a":NULL}
+        SELECT str_to_map_last_win('', ',', ':'); -- {"":NULL}
+        SELECT str_to_map_last_win('a:1,b:2,c:3', ',', ','); -- {"a:1":NULL,"b:2":NULL,"c:3":NULL}
+
 .. spark:function:: substring(string, start) -> varchar
 
     Returns the rest of ``string`` from the starting position ``start``.
