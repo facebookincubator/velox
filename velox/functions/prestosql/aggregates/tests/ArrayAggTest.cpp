@@ -557,5 +557,40 @@ TEST_F(ArrayAggTest, mask) {
   testFunction("simple_array_agg");
 }
 
+TEST_F(ArrayAggTest, clusteredInput) {
+  constexpr int kSize = 1000;
+  auto data = makeRowVector({
+      makeFlatVector<int64_t>(kSize, [](auto i) { return i / 13; }),
+      makeFlatVector<int32_t>(
+          kSize, [](auto i) { return i; }, [](auto i) { return i % 17 == 0; }),
+      makeFlatVector<bool>(kSize, [](auto i) { return i % 11 == 0; }),
+  });
+  createDuckDbTable({data});
+  for (bool mask : {false, true}) {
+    auto builder = PlanBuilder().values({data});
+    std::string expected;
+    if (mask) {
+      builder.partialStreamingAggregation({"c0"}, {"array_agg(c1)"}, {"c2"});
+      expected =
+          "select c0, array_agg(c1) filter (where c2) from tmp group by 1";
+    } else {
+      builder.partialStreamingAggregation({"c0"}, {"array_agg(c1)"});
+      expected = "select c0, array_agg(c1) from tmp group by 1";
+    }
+    auto plan = builder.finalAggregation().planNode();
+    for (int batchRows : {1024, 17}) {
+      for (bool eagerFlush : {false, true}) {
+        SCOPED_TRACE(fmt::format(
+            "mask={} batchRows={} eagerFlush={}", mask, batchRows, eagerFlush));
+        AssertQueryBuilder(plan, duckDbQueryRunner_)
+            .config(core::QueryConfig::kPreferredOutputBatchRows, batchRows)
+            .config(
+                core::QueryConfig::kStreamingAggregationEagerFlush, eagerFlush)
+            .assertResults(expected);
+      }
+    }
+  }
+}
+
 } // namespace
 } // namespace facebook::velox::aggregate::test

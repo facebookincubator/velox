@@ -399,6 +399,26 @@ Spilling
      - 0
      - Percentage of aggregation or join input batches that will be forced to spill for testing. 0 means no extra spilling.
 
+Aggregation
+-----------
+.. list-table::
+   :widths: 20 10 10 70
+   :header-rows: 1
+
+   * - Property Name
+     - Type
+     - Default Value
+     - Description
+   * - streaming_aggregation_eager_flush
+     - bool
+     - false
+     - If this is false (the default), in streaming aggregation, wait until we
+       have enough number of output rows to produce a batch of size specified by
+       Operator::outputBatchRows.  If this is true, we put the rows in output
+       batch, as soon as the corresponding groups are fully aggregated.  This is
+       useful for reducing memory consumption, if the downstream operators are
+       not sensitive to small batch size.
+
 Table Scan
 ------------
 .. list-table::
