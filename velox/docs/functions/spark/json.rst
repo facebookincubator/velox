@@ -27,7 +27,10 @@ JSON Functions
     REAL, DOUBLE, DATE, VARCHAR, ARRAY, MAP and ROW. When casting to ARRAY or MAP, 
     the element type of the array or the value type of the map must be one of 
     these supported types, and for maps, the key type must be VARCHAR. Casting 
-    to ROW supports only JSON objects. ::
+    to ROW supports only JSON objects. 
+    Note that since the result type can be inferred from the expression, in Velox we 
+    do not need to provide the ``schema`` parameter as required by Spark's from_json 
+    function. ::
         
         SELECT from_json('{"a": true}', 'a BOOLEAN'); -- {'a'=true}
         SELECT from_json('{"a": 1}', 'a INT'); -- {'a'=1}
@@ -37,9 +40,6 @@ JSON Functions
         SELECT from_json('["name", "age", "id"]', 'ARRAY<STRING>'); -- ['name', 'age', 'id']
         SELECT from_json('{"a": 1, "b": 2}', 'MAP<STRING, INT>'); -- {'a'=1, 'b'=2}
         SELECT from_json('{"a": {"b": 1}}', 'a STRUCT<b INT>'); -- {'a'={b=1}}
-
-    Note, that since the result type can be inferred from the expression, in velox we do not need 
-    to provide the ``schema`` parameter as required by Spark's from_json function.
 
     The current implementation has the following limitations.
 
