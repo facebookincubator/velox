@@ -643,7 +643,3 @@ if(VELOX_ENABLE_GEO)
 endif()
 
 add_subdirectory(velox)
-
-if(${VELOX_BUILD_PYTHON_PACKAGE})
-  add_subdirectory(python)
-endif()
