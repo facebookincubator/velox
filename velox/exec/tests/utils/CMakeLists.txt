@@ -53,6 +53,7 @@ target_link_libraries(
   velox_type_fbhive
   velox_hive_connector
   velox_tpch_connector
+  velox_tpcds_connector
   velox_presto_serializer
   velox_functions_prestosql
   velox_aggregates)
@@ -69,6 +70,7 @@ if(${VELOX_BUILD_RUNNER})
     velox_file_test_utils
     velox_hive_connector
     velox_tpch_connector
+    velox_tpcds_connector
     velox_local_runner)
 
 endif()
