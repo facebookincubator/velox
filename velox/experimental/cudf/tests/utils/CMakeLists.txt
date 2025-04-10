@@ -26,6 +26,7 @@ target_link_libraries(
   velox_cursor
   cudf::cudf
   velox_cudf_exec
+  velox_cudf_vector
   velox_core
   velox_exception
   velox_expression

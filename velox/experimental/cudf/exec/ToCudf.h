@@ -33,9 +33,8 @@ class CompileState {
  public:
   CompileState(
       const velox::exec::DriverFactory& driverFactory,
-      velox::exec::Driver& driver,
-      std::vector<velox::core::PlanNodePtr>& planNodes)
-      : driverFactory_(driverFactory), driver_(driver), planNodes_(planNodes) {}
+      velox::exec::Driver& driver)
+      : driverFactory_(driverFactory), driver_(driver) {}
 
   velox::exec::Driver& driver() {
     return driver_;
@@ -47,7 +46,6 @@ class CompileState {
 
   const velox::exec::DriverFactory& driverFactory_;
   velox::exec::Driver& driver_;
-  const std::vector<velox::core::PlanNodePtr>& planNodes_;
 };
 
 struct CudfOptions {
