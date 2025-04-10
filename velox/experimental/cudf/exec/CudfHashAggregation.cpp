@@ -485,7 +485,7 @@ void CudfHashAggregation::initialize() {
   // TODO: Set identity projections used by HashProbe to pushdown dynamic
   // filters to table scan.
 
-  // TODO: Add support for grouping sets and group ids
+  // TODO: Add support for grouping sets and group ids.
 
   aggregationNode_.reset();
 }

@@ -97,7 +97,7 @@ cudf::ast::literal make_scalar_and_literal(
       }
     } else {
       // Create a numeric scalar of type T, store it in the scalars vector,
-      // and use its reference in the literal expression
+      // and use its reference in the literal expression.
       using cudfScalarType = cudf::numeric_scalar<T>;
       scalars.emplace_back(
           std::make_unique<cudfScalarType>(value, true, stream, mr));
