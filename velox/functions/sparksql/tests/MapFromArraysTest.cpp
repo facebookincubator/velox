@@ -55,7 +55,10 @@ TEST_F(MapFromArraysTest, Basics) {
 }
 
 TEST_F(MapFromArraysTest, DuplicateKeysLastWin) {
-  setSparkMapKeyDupPolicy("LAST_WIN");
+  // Don't throws exception when duplicate keys are found.
+  queryCtx_->testingOverrideConfigUnsafe({
+      {core::QueryConfig::kThrowExceptionOnDuplicateMapKeys, "false"},
+  });
   auto inputVector1 = makeArrayVector<int32_t>({{1, 1}, {3, 4, 3}});
   auto inputVector2 =
       makeArrayVector<StringView>({{"a", "b"}, {"c", "d", "e"}});
@@ -68,7 +71,10 @@ TEST_F(MapFromArraysTest, DuplicateKeysLastWin) {
 }
 
 TEST_F(MapFromArraysTest, DuplicateKeysThrowException) {
-  setSparkMapKeyDupPolicy("EXCEPTION");
+  // Throws exception when duplicate keys are found.
+  queryCtx_->testingOverrideConfigUnsafe({
+      {core::QueryConfig::kThrowExceptionOnDuplicateMapKeys, "true"},
+  });
   auto inputVector1 = makeArrayVector<int32_t>({{1, 1}, {3, 4, 3}});
   auto inputVector2 =
       makeArrayVector<StringView>({{"a", "b"}, {"c", "d", "e"}});

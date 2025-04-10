@@ -37,7 +37,7 @@
 namespace facebook::velox::functions::sparksql {
 namespace {
 
-template <core::SparkMapKeyDedupPolicy Policy>
+template <bool throwExceptionOnDuplicateMapKeys>
 class MapFromArraysFunction : public exec::VectorFunction {
  public:
   void apply(
@@ -157,7 +157,7 @@ class MapFromArraysFunction : public exec::VectorFunction {
       auto isDuplicatedKey = keysElements->equalValueAt(
           keysElements.get(), sortedIndices[i], sortedIndices[i + 1]);
 
-      if constexpr (Policy == core::SparkMapKeyDedupPolicy::EXCEPTION) {
+      if constexpr (throwExceptionOnDuplicateMapKeys) {
         if (isDuplicatedKey) {
           auto duplicateKey = keysElements->wrappedVector()->toString(
               keysElements->wrappedIndex(sortedIndices[i]));
@@ -180,15 +180,10 @@ std::unique_ptr<exec::VectorFunction> createMapFromArrayFunction(
     const std::string& /*name*/,
     const std::vector<exec::VectorFunctionArg>& /*inputArgs*/,
     const core::QueryConfig& config) {
-  const auto mapKeyDedupPolicy = config.sparkMapKeyDedupPolicy();
-  if (mapKeyDedupPolicy == core::SparkMapKeyDedupPolicy::EXCEPTION) {
-    return std::make_unique<
-        MapFromArraysFunction<core::SparkMapKeyDedupPolicy::EXCEPTION>>();
-  } else if (mapKeyDedupPolicy == core::SparkMapKeyDedupPolicy::LAST_WIN) {
-    return std::make_unique<
-        MapFromArraysFunction<core::SparkMapKeyDedupPolicy::LAST_WIN>>();
+  if (config.throwExceptionOnDuplicateMapKeys()) {
+    return std::make_unique<MapFromArraysFunction<true>>();
   } else {
-    VELOX_UNREACHABLE();
+    return std::make_unique<MapFromArraysFunction<false>>();
   }
 }
 
