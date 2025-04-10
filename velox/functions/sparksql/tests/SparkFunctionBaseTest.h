@@ -37,6 +37,12 @@ class SparkFunctionBaseTest : public FunctionBaseTest {
     queryCtx_->testingOverrideConfigUnsafe(
         {{core::QueryConfig::kSparkPartitionId, std::to_string(partitionId)}});
   }
+
+  void setSparkMapKeyDupPolicy(const std::string& value) {
+    queryCtx_->testingOverrideConfigUnsafe({
+        {core::QueryConfig::kSparkMapKeyDedupPolicy, value},
+    });
+  }
 };
 
 } // namespace facebook::velox::functions::sparksql::test
