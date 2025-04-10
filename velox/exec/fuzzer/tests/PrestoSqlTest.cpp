@@ -52,5 +52,176 @@ TEST(PrestoSqlTest, toTypeSql) {
       toTypeSql(FUNCTION({INTEGER()}, INTEGER())),
       "Type is not supported: FUNCTION");
 }
+
+TEST(PrestoSqlTest, toCallSql) {
+  // Unary operators
+  auto expression = std::make_shared<core::CallTypedExpr>(
+      INTEGER(),
+      std::vector<core::TypedExprPtr>{
+          std::make_shared<core::FieldAccessTypedExpr>(VARCHAR(), "c0")},
+      "negate");
+  EXPECT_EQ(toCallSql(expression), "(- c0)");
+  expression = std::make_shared<core::CallTypedExpr>(
+      INTEGER(),
+      std::vector<core::TypedExprPtr>{
+          std::make_shared<core::FieldAccessTypedExpr>(VARCHAR(), "c0")},
+      "not");
+  EXPECT_EQ(toCallSql(expression), "(not c0)");
+  expression = std::make_shared<core::CallTypedExpr>(
+      INTEGER(),
+      std::vector<core::TypedExprPtr>{
+          std::make_shared<core::FieldAccessTypedExpr>(VARCHAR(), "c0"),
+          std::make_shared<core::FieldAccessTypedExpr>(VARCHAR(), "c0")},
+      "not");
+  VELOX_ASSERT_THROW(toCallSql(expression), "(2 vs. 1)");
+
+  // Binary operators
+  expression = std::make_shared<core::CallTypedExpr>(
+      INTEGER(),
+      std::vector<core::TypedExprPtr>{
+          std::make_shared<core::FieldAccessTypedExpr>(INTEGER(), "c0"),
+          std::make_shared<core::FieldAccessTypedExpr>(INTEGER(), "c1")},
+      "plus");
+  EXPECT_EQ(toCallSql(expression), "(c0 + c1)");
+  expression = std::make_shared<core::CallTypedExpr>(
+      INTEGER(),
+      std::vector<core::TypedExprPtr>{
+          std::make_shared<core::FieldAccessTypedExpr>(INTEGER(), "c0"),
+          std::make_shared<core::FieldAccessTypedExpr>(INTEGER(), "c1"),
+          std::make_shared<core::FieldAccessTypedExpr>(INTEGER(), "c2")},
+      "plus");
+  VELOX_ASSERT_THROW(toCallSql(expression), "(3 vs. 2)");
+
+  // IS NULL or NOT NULL
+  expression = std::make_shared<core::CallTypedExpr>(
+      BOOLEAN(),
+      std::vector<core::TypedExprPtr>{
+          std::make_shared<core::FieldAccessTypedExpr>(INTEGER(), "c0")},
+      "is_null");
+  EXPECT_EQ(toCallSql(expression), "(c0 is null)");
+  expression = std::make_shared<core::CallTypedExpr>(
+      BOOLEAN(),
+      std::vector<core::TypedExprPtr>{
+          std::make_shared<core::FieldAccessTypedExpr>(INTEGER(), "c0")},
+      "not_null");
+  EXPECT_EQ(toCallSql(expression), "(c0 is not null)");
+  expression = std::make_shared<core::CallTypedExpr>(
+      BOOLEAN(),
+      std::vector<core::TypedExprPtr>{
+          std::make_shared<core::FieldAccessTypedExpr>(INTEGER(), "c0"),
+          std::make_shared<core::FieldAccessTypedExpr>(INTEGER(), "c1")},
+      "is_null");
+  VELOX_ASSERT_THROW(toCallSql(expression), "(2 vs. 1)");
+
+  // IN
+  expression = std::make_shared<core::CallTypedExpr>(
+      BOOLEAN(),
+      std::vector<core::TypedExprPtr>{
+          std::make_shared<core::ConstantTypedExpr>(VARCHAR(), "a"),
+          std::make_shared<core::ConstantTypedExpr>(VARCHAR(), "b"),
+          std::make_shared<core::ConstantTypedExpr>(VARCHAR(), "c"),
+          std::make_shared<core::ConstantTypedExpr>(VARCHAR(), "d")},
+      "in");
+  EXPECT_EQ(toCallSql(expression), "'a' in ('b', 'c', 'd')");
+  expression = std::make_shared<core::CallTypedExpr>(
+      BOOLEAN(),
+      std::vector<core::TypedExprPtr>{
+          std::make_shared<core::ConstantTypedExpr>(VARCHAR(), "a")},
+      "in");
+  VELOX_ASSERT_THROW(toCallSql(expression), "(1 vs. 2)");
+
+  // LIKE
+  expression = std::make_shared<core::CallTypedExpr>(
+      BOOLEAN(),
+      std::vector<core::TypedExprPtr>{
+          std::make_shared<core::FieldAccessTypedExpr>(VARCHAR(), "c0"),
+          std::make_shared<core::ConstantTypedExpr>(VARCHAR(), "a")},
+      "like");
+  EXPECT_EQ(toCallSql(expression), "(c0 like 'a')");
+  expression = std::make_shared<core::CallTypedExpr>(
+      BOOLEAN(),
+      std::vector<core::TypedExprPtr>{
+          std::make_shared<core::FieldAccessTypedExpr>(VARCHAR(), "c0"),
+          std::make_shared<core::ConstantTypedExpr>(VARCHAR(), "a"),
+          std::make_shared<core::ConstantTypedExpr>(VARCHAR(), "b")},
+      "like");
+  EXPECT_EQ(toCallSql(expression), "(c0 like 'a' escape 'b')");
+
+  // OR or AND
+  expression = std::make_shared<core::CallTypedExpr>(
+      BOOLEAN(),
+      std::vector<core::TypedExprPtr>{
+          std::make_shared<core::FieldAccessTypedExpr>(VARCHAR(), "c0"),
+          std::make_shared<core::FieldAccessTypedExpr>(VARCHAR(), "c1")},
+      "or");
+  EXPECT_EQ(toCallSql(expression), "(c0 or c1)");
+  expression = std::make_shared<core::CallTypedExpr>(
+      BOOLEAN(),
+      std::vector<core::TypedExprPtr>{
+          std::make_shared<core::FieldAccessTypedExpr>(VARCHAR(), "c0"),
+          std::make_shared<core::FieldAccessTypedExpr>(VARCHAR(), "c1")},
+      "and");
+  EXPECT_EQ(toCallSql(expression), "(c0 and c1)");
+
+  // ARRAY_CONSTRUCTOR
+  expression = std::make_shared<core::CallTypedExpr>(
+      ARRAY(INTEGER()),
+      std::vector<core::TypedExprPtr>{
+          std::make_shared<core::ConstantTypedExpr>(VARCHAR(), "a"),
+          std::make_shared<core::ConstantTypedExpr>(VARCHAR(), "b"),
+          std::make_shared<core::ConstantTypedExpr>(VARCHAR(), "c")},
+      "array_constructor");
+  EXPECT_EQ(toCallSql(expression), "ARRAY['a', 'b', 'c']");
+
+  // BETWEEN
+  expression = std::make_shared<core::CallTypedExpr>(
+      BOOLEAN(),
+      std::vector<core::TypedExprPtr>{
+          std::make_shared<core::FieldAccessTypedExpr>(INTEGER(), "c0"),
+          std::make_shared<core::FieldAccessTypedExpr>(INTEGER(), "c1"),
+          std::make_shared<core::FieldAccessTypedExpr>(INTEGER(), "c2")},
+      "between");
+  EXPECT_EQ(toCallSql(expression), "c0 between c1 and c2");
+
+  // ROW_CONSTRUCTOR
+  expression = std::make_shared<core::CallTypedExpr>(
+      BOOLEAN(),
+      std::vector<core::TypedExprPtr>{
+          std::make_shared<core::ConstantTypedExpr>(VARCHAR(), "a"),
+          std::make_shared<core::ConstantTypedExpr>(VARCHAR(), "b"),
+          std::make_shared<core::ConstantTypedExpr>(VARCHAR(), "c"),
+          std::make_shared<core::ConstantTypedExpr>(VARCHAR(), "d")},
+      "row_constructor");
+  EXPECT_EQ(toCallSql(expression), "row('a', 'b', 'c', 'd')");
+
+  // Builds subscript SQL expression
+  expression = std::make_shared<core::CallTypedExpr>(
+      INTEGER(),
+      std::vector<core::TypedExprPtr>{
+          std::make_shared<core::FieldAccessTypedExpr>(
+              ARRAY(INTEGER()), "array"),
+          std::make_shared<core::FieldAccessTypedExpr>(INTEGER(), "c0")},
+      "subscript");
+  EXPECT_EQ(toCallSql(expression), "array[c0]");
+  expression = std::make_shared<core::CallTypedExpr>(
+      INTEGER(),
+      std::vector<core::TypedExprPtr>{
+          std::make_shared<core::FieldAccessTypedExpr>(
+              ARRAY(INTEGER()), "array"),
+          std::make_shared<core::FieldAccessTypedExpr>(INTEGER(), "c0"),
+          std::make_shared<core::FieldAccessTypedExpr>(INTEGER(), "c1")},
+      "subscript");
+  VELOX_ASSERT_THROW(toCallSql(expression), "(3 vs. 2)");
+
+  // Generic functions
+  expression = std::make_shared<core::CallTypedExpr>(
+      INTEGER(),
+      std::vector<core::TypedExprPtr>{
+          std::make_shared<core::FieldAccessTypedExpr>(ARRAY(INTEGER()), "c0"),
+          std::make_shared<core::FieldAccessTypedExpr>(INTEGER(), "c1")},
+      "array_top_n");
+  EXPECT_EQ(toCallSql(expression), "array_top_n(c0, c1)");
+}
+
 } // namespace
 } // namespace facebook::velox::exec::test
