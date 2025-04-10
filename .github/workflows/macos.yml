@@ -77,6 +77,7 @@ jobs:
           brew unlink protobuf || echo "protobuf not installed"
           brew link --force protobuf@21
           brew uninstall cmake
+          pipx install --force cmake==3.31
 
       - name: Cache ccache
         uses: assignUser/stash/restore@v1
