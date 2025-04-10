@@ -47,28 +47,61 @@ suggestions on the API or use cases you’d like to be covered, please
 open a GitHub issue. We’d love to hear thoughts and feedback.</strong></p>
 <section id="prerequisites">
 <h2>Prerequisites<a class="headerlink" href="#prerequisites" title="Link to this heading">¶</a></h2>
-<p>You will need Python 3.7 or later. Also, we highly recommend installing
-an
-<a class="reference external" href="https://docs.conda.io/en/latest/miniconda.html#latest-miniconda-installer-links">Miniconda</a>
-environment.</p>
-<p>First, set up an environment. If you are using conda, create a conda
-environment:</p>
-<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">conda</span> <span class="n">create</span> <span class="o">--</span><span class="n">name</span> <span class="n">pyveloxenv</span> <span class="n">python</span><span class="o">=</span><span class="mf">3.7</span>
-<span class="n">conda</span> <span class="n">activate</span> <span class="n">pyveloxenv</span>
+<p>You will need Python 3.9 or later. We recommend using <code class="docutils literal notranslate"><span class="pre">uv</span></code> for Python
+Environment Management <a class="reference external" href="https://github.com/astral-sh/uv">uv</a> is a
+fast Python package installer and environment manager written in Rust.
+Here’s how to use it:</p>
+<ol class="arabic">
+<li><p><strong>Install uv</strong>:</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>brew<span class="w"> </span>install<span class="w"> </span>uv
+<span class="c1"># or</span>
+pipx<span class="w"> </span>uv
+<span class="c1"># or</span>
+curl<span class="w"> </span>-LsSf<span class="w"> </span>https://astral.sh/uv/install.sh<span class="w"> </span><span class="p">|</span><span class="w"> </span>sh
 </pre></div>
 </div>
+</li>
+<li><p><strong>Create a virtual environment</strong>:</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>uv<span class="w"> </span>venv<span class="w"> </span>--python<span class="o">=</span><span class="m">3</span>.12
+</pre></div>
+</div>
+<p>This creates a venv in the current directory. You can specify a path:</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>uv<span class="w"> </span>venv<span class="w"> </span>--python<span class="o">=</span><span class="m">3</span>.12<span class="w"> </span>/path/to/venv
+</pre></div>
+</div>
+</li>
+<li><p><strong>Activate the environment</strong>:</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="nb">source</span><span class="w"> </span>.venv/bin/activate
+</pre></div>
+</div>
+</li>
+<li><p><strong>Installing packages</strong>:</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>uv<span class="w"> </span>pip<span class="w"> </span>install<span class="w"> </span>pyvelox
+</pre></div>
+</div>
+<p>Or from a requirements file:</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>uv<span class="w"> </span>pip<span class="w"> </span>install<span class="w"> </span>-r<span class="w"> </span>requirements.txt
+</pre></div>
+</div>
+</li>
+</ol>
 <section id="install-pyvelox">
 <h3>Install PyVelox<a class="headerlink" href="#install-pyvelox" title="Link to this heading">¶</a></h3>
 <p>You can install PyVelox from pypi without the need to build it from
 source as we provide wheels for Linux and macOS (x86_64):</p>
-<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">pip</span> <span class="n">install</span> <span class="n">pyvelox</span>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">uv</span> <span class="n">pip</span> <span class="n">install</span> <span class="n">pyvelox</span>
 </pre></div>
 </div>
 </section>
 <section id="from-source">
 <h3>From Source<a class="headerlink" href="#from-source" title="Link to this heading">¶</a></h3>
-<p>You will need Python 3.7 or later and a C++17 compiler to build PyVelox
+<p>You will need Python 3.9 or later and a C++17 compiler to build PyVelox
 from source.</p>
+<p>First, set up a virtual environment and activate it. Now install the
+build requirements to enable editable builds:</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">uv</span> <span class="n">pip</span> <span class="n">install</span> <span class="n">pyarrow</span> <span class="n">scikit</span><span class="o">-</span><span class="n">build</span><span class="o">-</span><span class="n">core</span> <span class="n">setuptools_scm</span><span class="p">[</span><span class="n">toml</span><span class="p">]</span>
+</pre></div>
+</div>
 <section id="install-dependencies">
 <h4>Install Dependencies<a class="headerlink" href="#install-dependencies" title="Link to this heading">¶</a></h4>
 <p>On macOS</p>
@@ -82,7 +115,8 @@ to install on linux.</p>
 </section>
 <section id="build-pyvelox">
 <h4>Build PyVelox<a class="headerlink" href="#build-pyvelox" title="Link to this heading">¶</a></h4>
-<p>For local development, you can build with debug mode:</p>
+<p>For local development, you can build an editable debug build with
+automatic rebuilds:</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">make</span> <span class="n">python</span><span class="o">-</span><span class="n">build</span>
 </pre></div>
 </div>
