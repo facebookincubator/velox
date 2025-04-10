@@ -91,7 +91,6 @@ int main(int argc, char** argv) {
       // (since TDigest is a user defined type), and tries to pass a
       // VARBINARY (since TDigest's implementation uses an
       // alias to VARBINARY).
-      "values_at_quantiles",
       "merge_tdigest",
       // Fuzzer cannot generate valid 'comparator' lambda.
       "array_sort(array(T),constant function(T,T,bigint)) -> array(T)",
@@ -152,7 +151,9 @@ int main(int argc, char** argv) {
           {"json_parse", std::make_shared<JsonParseArgValuesGenerator>()},
           {"json_extract", std::make_shared<JsonExtractArgValuesGenerator>()},
           {"value_at_quantile",
-           std::make_shared<TDigestArgValuesGenerator>("value_at_quantile")}};
+           std::make_shared<TDigestArgValuesGenerator>("value_at_quantile")},
+          {"values_at_quantiles",
+           std::make_shared<TDigestArgValuesGenerator>("values_at_quantiles")}};
 
   std::shared_ptr<facebook::velox::memory::MemoryPool> rootPool{
       facebook::velox::memory::memoryManager()->addRootPool()};
