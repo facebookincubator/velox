@@ -38,6 +38,7 @@ target_link_libraries(
     velox_arrow_bridge
     velox_exception
     velox_common_base
+    velox_cudf_vector
     velox_exec)
 
 target_compile_options(velox_cudf_exec PRIVATE -Wno-missing-field-initializers)
