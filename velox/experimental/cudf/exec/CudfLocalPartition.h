@@ -30,7 +30,7 @@ class CudfLocalPartition : public exec::Operator, public NvtxHelper {
       const std::shared_ptr<const core::LocalPartitionNode>& planNode);
 
   std::string toString() const override {
-    return fmt::format("LocalPartition({})", numPartitions_);
+    return fmt::format("CudfLocalPartition({})", numPartitions_);
   }
 
   void addInput(RowVectorPtr input) override;

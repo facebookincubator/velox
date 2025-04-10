@@ -238,8 +238,8 @@ struct MeanAggregator : cudf_velox::CudfHashAggregation::Aggregator {
         children.push_back(std::move(sum));
         children.push_back(std::move(count_int64));
 
-        // TODO (dm): handle nulls. this can happen if all values are null in
-        // a group.
+        // TODO: Handle nulls. This can happen if all values are null in a
+        // group.
         return std::make_unique<cudf::column>(
             cudf::data_type(cudf::type_id::STRUCT),
             size,
@@ -255,8 +255,8 @@ struct MeanAggregator : cudf_velox::CudfHashAggregation::Aggregator {
             *sum,
             *count,
             cudf::binary_operator::DIV,
-            // TODO (dm): Change the output type to be dependent on the input
-            // type like in the cudf groupby implementation
+            // TODO: Change the output type to be dependent on the input type
+            // like in the cudf groupby implementation.
             cudf::data_type(cudf::type_id::FLOAT64),
             stream);
         return avg;
@@ -298,7 +298,7 @@ struct MeanAggregator : cudf_velox::CudfHashAggregation::Aggregator {
         auto sum_col =
             cudf::make_column_from_scalar(*sum_result_scalar, 1, stream);
 
-        // libcudf doesn't have a count agg for reduce. what we want is to
+        // libcudf doesn't have a count agg for reduce. What we want is to
         // count the number of valid rows.
         auto count_col = cudf::make_column_from_scalar(
             cudf::numeric_scalar<int64_t>(
@@ -307,7 +307,7 @@ struct MeanAggregator : cudf_velox::CudfHashAggregation::Aggregator {
             1,
             stream);
 
-        // assemble into struct
+        // Assemble into struct as expected by velox.
         auto children = std::vector<std::unique_ptr<cudf::column>>();
         children.push_back(std::move(sum_col));
         children.push_back(std::move(count_col));
@@ -354,7 +354,8 @@ struct MeanAggregator : cudf_velox::CudfHashAggregation::Aggregator {
   }
 
  private:
-  // keep track of where the mean/<sum, count> are in the output
+  // These indices are used to track where the desired result columns
+  // (mean/<sum, count>) are in the output of cudf::groupby::aggregate().
   uint32_t mean_idx;
   uint32_t sum_idx;
   uint32_t count_idx;
@@ -411,9 +412,11 @@ auto toAggregators(
         VELOX_NYI("Constants and lambdas not yet supported");
       }
     }
-    // DM: This above seems to suggest that there can be multiple inputs to an
-    // aggregate. I don't really know which kinds of aggregations support this
-    // so I'm going to ignore it for now.
+    // The loop on aggregate.call->inputs() is taken from
+    // AggregateInfo.cpp::toAggregateInfo(). It seems to suggest that there can
+    // be multiple inputs to an aggregate.
+    // We're postponing properly supporting this for now because the currently
+    // supported aggregation functions in cudf_velox don't use it.
     VELOX_CHECK(agg_inputs.size() == 1);
 
     if (aggregate.distinct) {
@@ -467,21 +470,22 @@ void CudfHashAggregation::initialize() {
 
   auto const numGroupingKeys = groupingKeyOutputChannels_.size();
 
-  // DM: Velox CPU does optimizations related to pre-grouped keys. We can also
-  // do that in cudf. I'm skipping it for now
+  // Velox CPU does optimizations related to pre-grouped keys. This can be
+  // done in cudf by passing sort information to cudf::groupby() constructor.
+  // We're postponing this for now.
 
   numAggregates_ = aggregationNode_->aggregates().size();
   aggregators_ = toAggregators(*aggregationNode_, *operatorCtx_);
 
   // Check that aggregate result type match the output type.
-  // TODO (dm): This is output schema validation. In velox CPU, it's done using
+  // TODO: This is output schema validation. In velox CPU, it's done using
   // output types reported by aggregation functions. We can't do that in cudf
   // groupby.
 
-  // TODO (dm): Set identity projections used by HashProbe to pushdown dynamic
+  // TODO: Set identity projections used by HashProbe to pushdown dynamic
   // filters to table scan.
 
-  // TODO (dm): Add support for grouping sets and group ids
+  // TODO: Add support for grouping sets and group ids.
 
   aggregationNode_.reset();
 }
@@ -533,7 +537,7 @@ RowVectorPtr CudfHashAggregation::doGroupByAggregation(
 
   size_t const num_grouping_keys = groupby_key_view.num_columns();
 
-  // TODO (dm): All other args to groupby are related to sort groupby. We don't
+  // TODO: All other args to groupby are related to sort groupby. We don't
   // support optimizations related to it yet.
   cudf::groupby::groupby group_by_owner(
       groupby_key_view,
