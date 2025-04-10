@@ -59,4 +59,15 @@ TEST_F(CompressionTest, stringToCompressionKind) {
   VELOX_ASSERT_THROW(
       stringToCompressionKind("bz2"), "Not support compression kind bz2");
 }
+
+TEST_F(CompressionTest, isSupportedCompression) {
+  EXPECT_EQ(isSupportedCompression("none"), true);
+  EXPECT_EQ(isSupportedCompression("zlib"), true);
+  EXPECT_EQ(isSupportedCompression("snappy"), true);
+  EXPECT_EQ(isSupportedCompression("lzo"), true);
+  EXPECT_EQ(isSupportedCompression("lz4"), true);
+  EXPECT_EQ(isSupportedCompression("zstd"), true);
+  EXPECT_EQ(isSupportedCompression("gzip"), true);
+  EXPECT_EQ(isSupportedCompression("bz2"), false);
+}
 } // namespace facebook::velox::common
