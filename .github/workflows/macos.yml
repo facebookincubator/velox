@@ -76,6 +76,7 @@ jobs:
           echo "NJOBS=`sysctl -n hw.ncpu`" >> $GITHUB_ENV
           brew unlink protobuf || echo "protobuf not installed"
           brew link --force protobuf@21
+          brew uninstall cmake
 
       - name: Cache ccache
         uses: assignUser/stash/restore@v1
