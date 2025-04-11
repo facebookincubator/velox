@@ -74,7 +74,19 @@ PYBIND11_MODULE(arrow, m) {
     }
     return velox::py::PyVector{
         velox::importFromArrowAsViewer(schema, data, leafPool.get()), leafPool};
-  });
+  }, R"pbdoc(
+Converts an arrow object to a velox vector.
+
+:param vector: Input arrow object.
+
+:examples:
+
+.. doctest::
+
+    >>> array = pyarrow.array([1, 2, 3, 4, 5, 6])
+    >>> vector = to_velox(array)
+
+)pbdoc");
 
   /// Converts a pyvelox.vector.Vector to a pyarrow.Array using Velox's arrow
   /// bridge.
@@ -88,5 +100,18 @@ PYBIND11_MODULE(arrow, m) {
     auto arrowType = *arrow::ImportType(&schema);
     auto arrowArray = *arrow::ImportArray(&data, arrowType);
     return py::reinterpret_steal<py::object>(arrow::py::wrap_array(arrowArray));
-  });
+  }, R"pbdoc(
+Converts a velox vector to an arrow object.
+
+:param vector: Input arrow object.
+
+:examples:
+
+.. doctest::
+
+    >>> import pyvelox.legacy as pv
+    >>> vec = pv.from_list([1, 2, 3, 4, 5])
+    >>> arrow = to_arrow(vec)
+
+)pbdoc");
 }
