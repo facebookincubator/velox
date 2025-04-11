@@ -42,7 +42,8 @@ class StripeLoadKeysTest : public Test {
     HiveTypeParser parser;
     auto type = parser.parse("struct<a:int>");
     footer_ = std::make_unique<proto::Footer>();
-    ProtoUtils::writeType(*type, *footer_);
+    auto footerWrapper = FooterWriteWrapper(footer_.get());
+    ProtoUtils::writeType(*type, footerWrapper);
     auto enc = footer_->mutable_encryption();
     enc->set_keyprovider(proto::Encryption_KeyProvider_UNKNOWN);
     auto group = enc->add_encryptiongroups();
