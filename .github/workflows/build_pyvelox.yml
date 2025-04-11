@@ -86,6 +86,9 @@ jobs:
             source scripts/setup-macos.sh
             install_build_prerequisites
             install_velox_deps_from_brew
+            # CMake 4.0 causes issues with arrows bundled dependencies
+            brew uninstall cmake
+            pipx install --force cmake==3.31
 
       - name: Install macOS dependencies
         if: ${{ startsWith(matrix.os, 'macos') && steps.restore-deps.outputs.stash-hit != 'true' }}
