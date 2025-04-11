@@ -81,6 +81,7 @@ class SelectiveStructColumnReaderBase
 class SelectiveStructColumnReader : public SelectiveStructColumnReaderBase {
  public:
   SelectiveStructColumnReader(
+      const dwio::common::ReaderOptions& readerOptions,
       const TypePtr& requestedType,
       const std::shared_ptr<const dwio::common::TypeWithId>& fileType,
       DwrfParams& params,
