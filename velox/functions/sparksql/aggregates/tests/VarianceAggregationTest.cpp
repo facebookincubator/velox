@@ -50,8 +50,8 @@ class VarianceAggregationTest : public AggregationTestBase {
 };
 
 TEST_F(VarianceAggregationTest, variance) {
-  auto input = makeRowVector({makeFlatVector<double>({2, 4, 4, 4})});
   auto testVarianceAggregate = [&](const std::string& agg) {
+    auto input = makeRowVector({makeFlatVector<double>({2, 4, 4, 4})});
     auto expected =
         makeRowVector({makeFlatVector<double>(std::vector<double>{1.0})});
     testStatisticalAggregate(agg, input, expected);
@@ -85,7 +85,7 @@ TEST_F(VarianceAggregationTest, variance) {
         std::vector<std::optional<double>>{std::nullopt})});
     expected = makeRowVector({makeNullableFlatVector<double>(
         std::vector<std::optional<double>>{std::nullopt})});
-    testStatisticalAggregate(agg, input, expected);
+    testStatisticalAggregate(agg, input, expected, true);
   };
 
   testVarianceAggregate("stddev");
