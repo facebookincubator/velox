@@ -35,7 +35,7 @@ concurrency:
 jobs:
   build_docs:
     name: Build and Push
-    runs-on: ubuntu-latest
+    runs-on: 8-core-ubuntu
     steps:
 
       - name: Checkout
@@ -53,13 +53,24 @@ jobs:
           sudo apt update
           sudo apt install -y pandoc
           pip install sphinx sphinx-tabs breathe sphinx_rtd_theme chardet
+          pipx install uv
+          uv build --sdist --out-dir wheelhouse
+
+      - name: Build wheels
+        uses: pypa/cibuildwheel@6cccd09a31908ffd175b012fb8bf4e1dbda3bc6c # v2
+        env:
+          BUILD_VERSION: "3.12"
+          # Only build for 3.12 for now
+          CIBW_BUILD: ${{ 'cp312-*' }}
+          CIBW_ENVIRONMENT_PASS_LINUX:  "BUILD_VERSION"
+          CIBW_ENVIRONMENT_LINUX: "CCACHE_DIR=/host${{ github.workspace }}/ccache"
+          CCACHE_DIR: "${{ github.workspace }}/ccache"
 
       - name: Build Documentation
         run: |
           cd velox/docs
           make clean
           # pyvelox
-          # Need to build pyvelox package here
           mkdir -p bindings/python
           pandoc ../../python/README.md --from markdown --to rst -s -o bindings/python/README_generated_pyvelox.rst
           # velox
