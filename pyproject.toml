@@ -23,7 +23,7 @@ requires = [
 build-backend = "scikit_build_core.build"
 
 [project]
-name = "pyvelox"
+name = "PyVelox"
 dynamic = ["version"]
 description = "Python bindings and extensions for Velox"
 readme = "README.md"
