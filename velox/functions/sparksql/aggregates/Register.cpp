@@ -21,6 +21,7 @@
 #include "velox/functions/sparksql/aggregates/BloomFilterAggAggregate.h"
 #include "velox/functions/sparksql/aggregates/CentralMomentsAggregate.h"
 #include "velox/functions/sparksql/aggregates/CollectListAggregate.h"
+#include "velox/functions/sparksql/aggregates/CovarianceAggregate.h"
 #include "velox/functions/sparksql/aggregates/RegrReplacementAggregate.h"
 #include "velox/functions/sparksql/aggregates/SumAggregate.h"
 
@@ -64,6 +65,7 @@ void registerAggregateFunctions(
   registerCollectListAggregate(prefix, withCompanionFunctions, overwrite);
   registerRegrReplacementAggregate(prefix, withCompanionFunctions, overwrite);
   registerModeAggregate(prefix, withCompanionFunctions, overwrite);
+  registerCovarianceAggregates(prefix, withCompanionFunctions, overwrite);
 }
 
 std::vector<std::string> listAggregateFunctionNames() {
