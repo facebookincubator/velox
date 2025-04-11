@@ -433,8 +433,10 @@ static void addVectorBindings(
       .value("FUNCTION", velox::VectorEncoding::Simple::FUNCTION);
   py::class_<BaseVector, VectorPtr>(
       m, "BaseVector", py::module_local(asModuleLocalDefinitions))
-      .def("__str__", [](VectorPtr& v) { return v->toString(); },
-           R"pbdoc(Returns str object which represents the content in the vector.
+      .def(
+          "__str__",
+          [](VectorPtr& v) { return v->toString(); },
+          R"pbdoc(Returns str object which represents the content in the vector.
 
 :returns: Representation of vector as a string.
 
@@ -666,8 +668,10 @@ Encoding of the vector.
       >>> dict_vec.encoding()
       <VectorEncodingSimple.DICTIONARY: 2>
 )pbdoc")
-      .def("append", [](VectorPtr& u, VectorPtr& v) { appendVectors(u, v); },
-           R"pbdoc(
+      .def(
+          "append",
+          [](VectorPtr& u, VectorPtr& v) { appendVectors(u, v); },
+          R"pbdoc(
 Appends a vector to the current vector.
 
 :params vector : Union[FlatVector, ConstantVector, DictionaryVector] Appending vector.
@@ -760,7 +764,6 @@ Slicing vector.
           py::arg("start"),
           py::arg("stop"),
           py::arg("step") = 1);
-
 
   py::class_<ArrayVector, ArrayVectorPtr, BaseVector>(
       m, "ArrayVector", py::module_local(asModuleLocalDefinitions))

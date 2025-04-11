@@ -57,7 +57,7 @@ extensions = [
     "sphinx.ext.todo",
     "sphinx.ext.intersphinx",
     "sphinx.ext.autosummary",
-    "sphinx.ext.autodoc"
+    "sphinx.ext.autodoc",
 ]
 
 autosummary_generate = True
