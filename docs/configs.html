@@ -80,16 +80,6 @@ average row size is known and preferred_output_batch_bytes is used to compute th
 <td><p>5000</p></td>
 <td><p>TableScan operator will exit getOutput() method after this many milliseconds even if it has no data to return yet. Zero means ‘no time limit’.</p></td>
 </tr>
-<tr class="row-even"><td><p>abandon_partial_aggregation_min_rows</p></td>
-<td><p>integer</p></td>
-<td><p>100,000</p></td>
-<td><p>Number of input rows to receive before starting to check whether to abandon partial aggregation.</p></td>
-</tr>
-<tr class="row-odd"><td><p>abandon_partial_aggregation_min_pct</p></td>
-<td><p>integer</p></td>
-<td><p>80</p></td>
-<td><p>Abandons partial aggregation if number of groups equals or exceeds this percentage of the number of input rows.</p></td>
-</tr>
 <tr class="row-even"><td><p>abandon_partial_topn_row_number_min_rows</p></td>
 <td><p>integer</p></td>
 <td><p>100,000</p></td>
@@ -541,6 +531,46 @@ value is 3, meaning we only support up to 8-way spill partitioning.ing.</p></td>
 <td><p>integer</p></td>
 <td><p>0</p></td>
 <td><p>Percentage of aggregation or join input batches that will be forced to spill for testing. 0 means no extra spilling.</p></td>
+</tr>
+</tbody>
+</table>
+</section>
+<section id="aggregation">
+<h2>Aggregation<a class="headerlink" href="#aggregation" title="Link to this heading">¶</a></h2>
+<table class="docutils align-default">
+<colgroup>
+<col style="width: 18.2%" />
+<col style="width: 9.1%" />
+<col style="width: 9.1%" />
+<col style="width: 63.6%" />
+</colgroup>
+<thead>
+<tr class="row-odd"><th class="head"><p>Property Name</p></th>
+<th class="head"><p>Type</p></th>
+<th class="head"><p>Default Value</p></th>
+<th class="head"><p>Description</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>abandon_partial_aggregation_min_rows</p></td>
+<td><p>integer</p></td>
+<td><p>100,000</p></td>
+<td><p>Number of input rows to receive before starting to check whether to abandon partial aggregation.</p></td>
+</tr>
+<tr class="row-odd"><td><p>abandon_partial_aggregation_min_pct</p></td>
+<td><p>integer</p></td>
+<td><p>80</p></td>
+<td><p>Abandons partial aggregation if number of groups equals or exceeds this percentage of the number of input rows.</p></td>
+</tr>
+<tr class="row-even"><td><p>streaming_aggregation_eager_flush</p></td>
+<td><p>bool</p></td>
+<td><p>false</p></td>
+<td><p>If this is false (the default), in streaming aggregation, wait until we
+have enough number of output rows to produce a batch of size specified by
+Operator::outputBatchRows.  If this is true, we put the rows in output
+batch, as soon as the corresponding groups are fully aggregated.  This is
+useful for reducing memory consumption, if the downstream operators are
+not sensitive to small batch size.</p></td>
 </tr>
 </tbody>
 </table>
@@ -1288,6 +1318,7 @@ query metadata which includes the query plan and configs etc.</p></td>
 <li><a class="reference internal" href="#expression-evaluation-configuration">Expression Evaluation Configuration</a></li>
 <li><a class="reference internal" href="#memory-management">Memory Management</a></li>
 <li><a class="reference internal" href="#spilling">Spilling</a></li>
+<li><a class="reference internal" href="#aggregation">Aggregation</a></li>
 <li><a class="reference internal" href="#table-scan">Table Scan</a></li>
 <li><a class="reference internal" href="#table-writer">Table Writer</a></li>
 <li><a class="reference internal" href="#hive-connector">Hive Connector</a><ul>
