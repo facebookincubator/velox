@@ -157,6 +157,8 @@ class JoinFuzzer {
       const std::vector<std::string>& buildKeys,
       const std::vector<RowVectorPtr>& probeInput,
       const std::vector<RowVectorPtr>& buildInput,
+      const std::vector<core::ExprPtr>& probeProjections,
+      const std::vector<core::ExprPtr>& buildProjections,
       const std::vector<std::string>& outputColumns,
       const std::string& filter);
 
@@ -166,6 +168,8 @@ class JoinFuzzer {
       const std::vector<std::string>& buildKeys,
       const std::vector<RowVectorPtr>& probeInput,
       const std::vector<RowVectorPtr>& buildInput,
+      const std::vector<core::ExprPtr>& probeProjections,
+      const std::vector<core::ExprPtr>& buildProjections,
       const std::vector<std::string>& outputColumns,
       const std::string& filter);
 
@@ -178,6 +182,8 @@ class JoinFuzzer {
       const std::vector<std::string>& buildKeys,
       const std::vector<RowVectorPtr>& probeInput,
       const std::vector<RowVectorPtr>& buildInput,
+      const std::vector<core::ExprPtr>& probeProjections,
+      const std::vector<core::ExprPtr>& buildProjections,
       const std::vector<std::string>& outputColumns,
       const std::string& filter);
 
@@ -192,6 +198,8 @@ class JoinFuzzer {
       const std::vector<std::string>& buildKeys,
       const std::vector<Split>& probeSplits,
       const std::vector<Split>& buildSplits,
+      const std::vector<core::ExprPtr>& probeProjections,
+      const std::vector<core::ExprPtr>& buildProjections,
       const std::vector<std::string>& outputColumns,
       const std::string& filter);
 
@@ -203,6 +211,8 @@ class JoinFuzzer {
       const std::vector<std::string>& buildKeys,
       const std::vector<Split>& probeSplits,
       const std::vector<Split>& buildSplits,
+      const std::vector<core::ExprPtr>& probeProjections,
+      const std::vector<core::ExprPtr>& buildProjections,
       const std::vector<std::string>& outputColumns,
       const std::string& filter);
 
@@ -217,6 +227,8 @@ class JoinFuzzer {
       const std::vector<std::string>& buildKeys,
       const std::vector<Split>& probeSplits,
       const std::vector<Split>& buildSplits,
+      const std::vector<core::ExprPtr>& probeProjections,
+      const std::vector<core::ExprPtr>& buildProjections,
       const std::vector<std::string>& outputColumns,
       const std::string& filter);
 
@@ -224,6 +236,8 @@ class JoinFuzzer {
       const core::PlanNodePtr& plan,
       const std::vector<RowVectorPtr>& probeInput,
       const std::vector<RowVectorPtr>& buildInput,
+      const std::vector<core::ExprPtr>& probeProjections,
+      const std::vector<core::ExprPtr>& buildProjections,
       std::vector<JoinFuzzer::PlanWithSplits>& plans,
       const std::string& filter);
 
@@ -268,6 +282,8 @@ class JoinFuzzer {
       const std::vector<std::string>& buildKeys,
       const std::vector<RowVectorPtr>& probeInput,
       const std::vector<RowVectorPtr>& buildInput,
+      const std::vector<core::ExprPtr>& probeProjections,
+      const std::vector<core::ExprPtr>& buildProjections,
       const std::vector<std::string>& outputColumns,
       std::vector<PlanWithSplits>& altPlans,
       const std::string& filter);
@@ -302,7 +318,9 @@ class JoinFuzzer {
       const std::vector<std::string>& probeKeys,
       const std::vector<std::string>& buildKeys,
       const std::vector<RowVectorPtr>& probeInput,
-      const std::vector<RowVectorPtr>& buildInput);
+      const std::vector<RowVectorPtr>& buildInput,
+      const std::vector<core::ExprPtr>& probeProjections,
+      const std::vector<core::ExprPtr>& buildProjections);
 
   int32_t randInt(int32_t min, int32_t max) {
     return boost::random::uniform_int_distribution<int32_t>(min, max)(rng_);
@@ -744,21 +762,26 @@ JoinFuzzer::PlanWithSplits JoinFuzzer::makeDefaultPlan(
     const std::vector<std::string>& buildKeys,
     const std::vector<RowVectorPtr>& probeInput,
     const std::vector<RowVectorPtr>& buildInput,
+    const std::vector<core::ExprPtr>& probeProjections,
+    const std::vector<core::ExprPtr>& buildProjections,
     const std::vector<std::string>& outputColumns,
     const std::string& filter) {
   auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
-  auto plan =
-      PlanBuilder(planNodeIdGenerator)
-          .values(probeInput)
-          .hashJoin(
-              probeKeys,
-              buildKeys,
-              PlanBuilder(planNodeIdGenerator).values(buildInput).planNode(),
-              filter,
-              outputColumns,
-              joinType,
-              nullAware)
-          .planNode();
+  auto plan = PlanBuilder(planNodeIdGenerator)
+                  .values(probeInput)
+                  .projectExpressions(probeProjections)
+                  .hashJoin(
+                      probeKeys,
+                      buildKeys,
+                      PlanBuilder(planNodeIdGenerator)
+                          .values(buildInput)
+                          .projectExpressions(buildProjections)
+                          .planNode(),
+                      filter,
+                      outputColumns,
+                      joinType,
+                      nullAware)
+                  .planNode();
   return PlanWithSplits{plan};
 }
 
@@ -771,6 +794,8 @@ JoinFuzzer::PlanWithSplits JoinFuzzer::makeDefaultPlanWithTableScan(
     const std::vector<std::string>& buildKeys,
     const std::vector<Split>& probeSplits,
     const std::vector<Split>& buildSplits,
+    const std::vector<core::ExprPtr>& probeProjections,
+    const std::vector<core::ExprPtr>& buildProjections,
     const std::vector<std::string>& outputColumns,
     const std::string& filter) {
   auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
@@ -779,12 +804,14 @@ JoinFuzzer::PlanWithSplits JoinFuzzer::makeDefaultPlanWithTableScan(
   auto plan = PlanBuilder(planNodeIdGenerator)
                   .tableScan(probeType)
                   .capturePlanNodeId(probeScanId)
+                  .projectExpressions(probeProjections)
                   .hashJoin(
                       probeKeys,
                       buildKeys,
                       PlanBuilder(planNodeIdGenerator)
                           .tableScan(buildType)
                           .capturePlanNodeId(buildScanId)
+                          .projectExpressions(buildProjections)
                           .planNode(),
                       filter,
                       outputColumns,
@@ -815,6 +842,7 @@ JoinFuzzer::PlanWithSplits JoinFuzzer::makeGroupedExecutionPlanWithTableScan(
 
 std::vector<core::PlanNodePtr> makeSources(
     const std::vector<RowVectorPtr>& input,
+    const std::vector<core::ExprPtr>& projections,
     std::shared_ptr<core::PlanNodeIdGenerator>& planNodeIdGenerator) {
   auto numSources = std::min<size_t>(4, input.size());
   std::vector<std::vector<RowVectorPtr>> sourceInputs(numSources);
@@ -824,8 +852,10 @@ std::vector<core::PlanNodePtr> makeSources(
 
   std::vector<core::PlanNodePtr> sourceNodes;
   for (const auto& sourceInput : sourceInputs) {
-    sourceNodes.push_back(
-        PlanBuilder(planNodeIdGenerator).values(sourceInput).planNode());
+    sourceNodes.push_back(PlanBuilder(planNodeIdGenerator)
+                              .values(sourceInput)
+                              .projectExpressions(projections)
+                              .planNode());
   }
 
   return sourceNodes;
@@ -877,23 +907,28 @@ JoinFuzzer::PlanWithSplits JoinFuzzer::makeMergeJoinPlan(
     const std::vector<std::string>& buildKeys,
     const std::vector<RowVectorPtr>& probeInput,
     const std::vector<RowVectorPtr>& buildInput,
+    const std::vector<core::ExprPtr>& probeProjections,
+    const std::vector<core::ExprPtr>& buildProjections,
     const std::vector<std::string>& outputColumns,
     const std::string& filter) {
   auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
-  return JoinFuzzer::PlanWithSplits{PlanBuilder(planNodeIdGenerator)
-                                        .values(probeInput)
-                                        .orderBy(probeKeys, false)
-                                        .mergeJoin(
-                                            probeKeys,
-                                            buildKeys,
-                                            PlanBuilder(planNodeIdGenerator)
-                                                .values(buildInput)
-                                                .orderBy(buildKeys, false)
-                                                .planNode(),
-                                            filter,
-                                            outputColumns,
-                                            joinType)
-                                        .planNode()};
+  return JoinFuzzer::PlanWithSplits{
+      PlanBuilder(planNodeIdGenerator)
+          .values(probeInput)
+          .projectExpressions(probeProjections)
+          .orderBy(probeKeys, false)
+          .mergeJoin(
+              probeKeys,
+              buildKeys,
+              PlanBuilder(planNodeIdGenerator)
+                  .values(buildInput)
+                  .projectExpressions(buildProjections)
+                  .orderBy(buildKeys, false)
+                  .planNode(),
+              filter,
+              outputColumns,
+              joinType)
+          .planNode()};
 }
 
 JoinFuzzer::PlanWithSplits JoinFuzzer::makeNestedLoopJoinPlan(
@@ -902,14 +937,20 @@ JoinFuzzer::PlanWithSplits JoinFuzzer::makeNestedLoopJoinPlan(
     const std::vector<std::string>& buildKeys,
     const std::vector<RowVectorPtr>& probeInput,
     const std::vector<RowVectorPtr>& buildInput,
+    const std::vector<core::ExprPtr>& probeProjections,
+    const std::vector<core::ExprPtr>& buildProjections,
     const std::vector<std::string>& outputColumns,
     const std::string& filter) {
   auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
   return JoinFuzzer::PlanWithSplits{
       PlanBuilder(planNodeIdGenerator)
           .values(probeInput)
+          .projectExpressions(probeProjections)
           .nestedLoopJoin(
-              PlanBuilder(planNodeIdGenerator).values(buildInput).planNode(),
+              PlanBuilder(planNodeIdGenerator)
+                  .values(buildInput)
+                  .projectExpressions(buildProjections)
+                  .planNode(),
               filter,
               outputColumns,
               joinType)
@@ -920,6 +961,8 @@ void JoinFuzzer::makeAlternativePlans(
     const core::PlanNodePtr& plan,
     const std::vector<RowVectorPtr>& probeInput,
     const std::vector<RowVectorPtr>& buildInput,
+    const std::vector<core::ExprPtr>& probeProjections,
+    const std::vector<core::ExprPtr>& buildProjections,
     std::vector<JoinFuzzer::PlanWithSplits>& plans,
     const std::string& filter) {
   auto joinNode = std::dynamic_pointer_cast<const core::HashJoinNode>(plan);
@@ -939,13 +982,13 @@ void JoinFuzzer::makeAlternativePlans(
   plans.push_back(JoinFuzzer::PlanWithSplits{
       PlanBuilder(planNodeIdGenerator)
           .localPartitionRoundRobin(
-              makeSources(probeInput, planNodeIdGenerator))
+              makeSources(probeInput, probeProjections, planNodeIdGenerator))
           .hashJoin(
               probeKeys,
               buildKeys,
               PlanBuilder(planNodeIdGenerator)
-                  .localPartitionRoundRobin(
-                      makeSources(buildInput, planNodeIdGenerator))
+                  .localPartitionRoundRobin(makeSources(
+                      buildInput, buildProjections, planNodeIdGenerator))
                   .planNode(),
               filter,
               outputColumns,
@@ -957,13 +1000,16 @@ void JoinFuzzer::makeAlternativePlans(
   plans.push_back(JoinFuzzer::PlanWithSplits{
       PlanBuilder(planNodeIdGenerator)
           .localPartition(
-              probeKeys, makeSources(probeInput, planNodeIdGenerator))
+              probeKeys,
+              makeSources(probeInput, probeProjections, planNodeIdGenerator))
           .hashJoin(
               probeKeys,
               buildKeys,
               PlanBuilder(planNodeIdGenerator)
                   .localPartition(
-                      buildKeys, makeSources(buildInput, planNodeIdGenerator))
+                      buildKeys,
+                      makeSources(
+                          buildInput, buildProjections, planNodeIdGenerator))
                   .planNode(),
               filter,
               outputColumns,
@@ -979,6 +1025,8 @@ void JoinFuzzer::makeAlternativePlans(
         buildKeys,
         probeInput,
         buildInput,
+        probeProjections,
+        buildProjections,
         outputColumns,
         filter);
     plans.push_back(planWithSplits);
@@ -998,6 +1046,8 @@ void JoinFuzzer::makeAlternativePlans(
         buildKeys,
         probeInput,
         buildInput,
+        probeProjections,
+        buildProjections,
         outputColumns,
         joinCondition);
     plans.push_back(planWithSplits);
@@ -1033,7 +1083,9 @@ RowVectorPtr JoinFuzzer::testCrossProduct(
     const std::vector<std::string>& probeKeys,
     const std::vector<std::string>& buildKeys,
     const std::vector<RowVectorPtr>& probeInput,
-    const std::vector<RowVectorPtr>& buildInput) {
+    const std::vector<RowVectorPtr>& buildInput,
+    const std::vector<core::ExprPtr>& probeProjections,
+    const std::vector<core::ExprPtr>& buildProjections) {
   VELOX_CHECK_GT(probeInput.size(), 0);
   VELOX_CHECK_GT(buildInput.size(), 0);
 
@@ -1049,6 +1101,8 @@ RowVectorPtr JoinFuzzer::testCrossProduct(
       buildKeys,
       probeInput,
       buildInput,
+      probeProjections,
+      buildProjections,
       outputColumns,
       /*filter=*/"");
   const auto expected = execute(plan, /*injectSpill=*/false);
@@ -1084,6 +1138,8 @@ RowVectorPtr JoinFuzzer::testCrossProduct(
         buildKeys,
         probeScanSplits,
         buildScanSplits,
+        probeProjections,
+        buildProjections,
         outputColumns,
         /*filter=*/""));
   }
@@ -1131,17 +1187,22 @@ void JoinFuzzer::verify(core::JoinType joinType) {
   auto probeInput = generateProbeInput(probeKeys, keyTypes);
   auto buildInput = generateBuildInput(probeInput, probeKeys, buildKeys);
 
+  auto [convertedProbeInput, probeProjections] =
+      referenceQueryRunner_->inputProjections(probeInput);
+  auto [convertedBuildInput, buildProjections] =
+      referenceQueryRunner_->inputProjections(buildInput);
+
   // Flatten inputs.
-  auto flatProbeInput = flatten(probeInput);
-  auto flatBuildInput = flatten(buildInput);
+  auto flatProbeInput = flatten(convertedProbeInput);
+  auto flatBuildInput = flatten(convertedBuildInput);
 
   if (VLOG_IS_ON(1)) {
-    VLOG(1) << "Probe input: " << probeInput[0]->toString();
+    VLOG(1) << "Probe input: " << convertedProbeInput[0]->toString();
     for (const auto& v : flatProbeInput) {
       VLOG(1) << std::endl << v->toString(0, v->size());
     }
 
-    VLOG(1) << "Build input: " << buildInput[0]->toString();
+    VLOG(1) << "Build input: " << convertedBuildInput[0]->toString();
     for (const auto& v : flatBuildInput) {
       VLOG(1) << std::endl << v->toString(0, v->size());
     }
@@ -1162,15 +1223,19 @@ void JoinFuzzer::verify(core::JoinType joinType) {
           joinType,
           probeKeys,
           buildKeys,
-          probeInput,
-          buildInput);
+          convertedProbeInput,
+          convertedBuildInput,
+          probeProjections,
+          buildProjections);
       auto flatResult = testCrossProduct(
           tableScanDir->getPath(),
           joinType,
           probeKeys,
           buildKeys,
           flatProbeInput,
-          flatBuildInput);
+          flatBuildInput,
+          probeProjections,
+          buildProjections);
       assertEqualResults({result}, {flatResult});
     }
   }
@@ -1202,8 +1267,10 @@ void JoinFuzzer::verify(core::JoinType joinType) {
       nullAware,
       probeKeys,
       buildKeys,
-      probeInput,
-      buildInput,
+      convertedProbeInput,
+      convertedBuildInput,
+      probeProjections,
+      buildProjections,
       outputColumns,
       filter);
 
@@ -1212,8 +1279,8 @@ void JoinFuzzer::verify(core::JoinType joinType) {
   // If OOM injection is not enabled verify the results against Reference
   // query runner.
   if (!FLAGS_enable_oom_injection) {
-    if (auto referenceResult =
-            computeReferenceResults(defaultPlan.plan, probeInput, buildInput)) {
+    if (auto referenceResult = computeReferenceResults(
+            defaultPlan.plan, convertedProbeInput, convertedBuildInput)) {
       VELOX_CHECK(
           assertEqualResults(
               referenceResult.value(),
@@ -1234,13 +1301,27 @@ void JoinFuzzer::verify(core::JoinType joinType) {
       buildKeys,
       flatProbeInput,
       flatBuildInput,
+      probeProjections,
+      buildProjections,
       outputColumns,
       filter));
 
   makeAlternativePlans(
-      defaultPlan.plan, probeInput, buildInput, altPlans, filter);
+      defaultPlan.plan,
+      convertedProbeInput,
+      convertedBuildInput,
+      probeProjections,
+      buildProjections,
+      altPlans,
+      filter);
   makeAlternativePlans(
-      defaultPlan.plan, flatProbeInput, flatBuildInput, altPlans, filter);
+      defaultPlan.plan,
+      flatProbeInput,
+      flatBuildInput,
+      probeProjections,
+      buildProjections,
+      altPlans,
+      filter);
 
   addPlansWithTableScan(
       tableScanDir->getPath(),
@@ -1250,6 +1331,8 @@ void JoinFuzzer::verify(core::JoinType joinType) {
       buildKeys,
       flatProbeInput,
       flatBuildInput,
+      probeProjections,
+      buildProjections,
       outputColumns,
       altPlans,
       filter);
@@ -1304,6 +1387,8 @@ JoinFuzzer::PlanWithSplits JoinFuzzer::makeMergeJoinPlanWithTableScan(
     const std::vector<std::string>& buildKeys,
     const std::vector<Split>& probeSplits,
     const std::vector<Split>& buildSplits,
+    const std::vector<core::ExprPtr>& probeProjections,
+    const std::vector<core::ExprPtr>& buildProjections,
     const std::vector<std::string>& outputColumns,
     const std::string& filter) {
   auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
@@ -1314,6 +1399,7 @@ JoinFuzzer::PlanWithSplits JoinFuzzer::makeMergeJoinPlanWithTableScan(
       PlanBuilder(planNodeIdGenerator)
           .tableScan(probeType)
           .capturePlanNodeId(probeScanId)
+          .projectExpressions(probeProjections)
           .orderBy(probeKeys, false)
           .mergeJoin(
               probeKeys,
@@ -1321,6 +1407,7 @@ JoinFuzzer::PlanWithSplits JoinFuzzer::makeMergeJoinPlanWithTableScan(
               PlanBuilder(planNodeIdGenerator)
                   .tableScan(buildType)
                   .capturePlanNodeId(buildScanId)
+                  .projectExpressions(buildProjections)
                   .orderBy(buildKeys, false)
                   .planNode(),
               filter,
@@ -1340,6 +1427,8 @@ JoinFuzzer::PlanWithSplits JoinFuzzer::makeNestedLoopJoinPlanWithTableScan(
     const std::vector<std::string>& buildKeys,
     const std::vector<Split>& probeSplits,
     const std::vector<Split>& buildSplits,
+    const std::vector<core::ExprPtr>& probeProjections,
+    const std::vector<core::ExprPtr>& buildProjections,
     const std::vector<std::string>& outputColumns,
     const std::string& filter) {
   auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
@@ -1350,10 +1439,12 @@ JoinFuzzer::PlanWithSplits JoinFuzzer::makeNestedLoopJoinPlanWithTableScan(
       PlanBuilder(planNodeIdGenerator)
           .tableScan(probeType)
           .capturePlanNodeId(probeScanId)
+          .projectExpressions(probeProjections)
           .nestedLoopJoin(
               PlanBuilder(planNodeIdGenerator)
                   .tableScan(buildType)
                   .capturePlanNodeId(buildScanId)
+                  .projectExpressions(buildProjections)
                   .planNode(),
               filter,
               outputColumns,
@@ -1372,6 +1463,8 @@ void JoinFuzzer::addPlansWithTableScan(
     const std::vector<std::string>& buildKeys,
     const std::vector<RowVectorPtr>& probeInput,
     const std::vector<RowVectorPtr>& buildInput,
+    const std::vector<core::ExprPtr>& probeProjections,
+    const std::vector<core::ExprPtr>& buildProjections,
     const std::vector<std::string>& outputColumns,
     std::vector<PlanWithSplits>& altPlans,
     const std::string& filter) {
@@ -1400,6 +1493,8 @@ void JoinFuzzer::addPlansWithTableScan(
       buildKeys,
       probeScanSplits,
       buildScanSplits,
+      probeProjections,
+      buildProjections,
       outputColumns,
       filter);
   plansWithTableScan.push_back(defaultPlan);
@@ -1451,6 +1546,8 @@ void JoinFuzzer::addPlansWithTableScan(
         buildKeys,
         probeScanSplits,
         buildScanSplits,
+        probeProjections,
+        buildProjections,
         outputColumns,
         filter);
     altPlans.push_back(planWithSplits);
@@ -1478,6 +1575,8 @@ void JoinFuzzer::addPlansWithTableScan(
         buildKeys,
         probeScanSplits,
         buildScanSplits,
+        probeProjections,
+        buildProjections,
         outputColumns,
         joinCondition);
     altPlans.push_back(planWithSplits);
