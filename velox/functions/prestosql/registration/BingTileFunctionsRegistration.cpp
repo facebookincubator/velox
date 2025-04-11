@@ -58,9 +58,6 @@ void registerSimpleBingTileFunctions(const std::string& prefix) {
 void registerBingTileFunctions(const std::string& prefix) {
   registerBingTileType();
 
-  // TODO: Remove this once we have GeometryFunctionsRegistration
-  registerGeometryType();
-
   registerSimpleBingTileFunctions(prefix);
 }
 
