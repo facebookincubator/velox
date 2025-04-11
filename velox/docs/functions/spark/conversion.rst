@@ -2,25 +2,26 @@
 Conversion Functions
 ====================
 
-Conversion Functions
---------------------
-
 .. spark:function:: cast(value AS type) -> type
 
-    Explicitly cast a value as a type. As ANSI mode is OFF, an overflow will not cause an error but 
-    instead will “wrap” the result. The ``value`` with an invalid format or invalid characters for 
-    ``type`` will result in a NULL. ::
+    Explicitly cast a ``value`` to a specified ``type``.
+    Behavior when ANSI mode is disabled:
+    
+    * If the ``value`` exceeds the range of the ``type``, no error is raised. Instead, the ``value`` is "wrapped" around.
 
-      SELECT cast(128 as tinyint); -- -128
-      SELECT cast('2012-Oct-23' as date); -- NULL
+    * If the ``value`` has an invalid format or contains characters incompatible with the target ``type``, the cast function returns NULL. ::
+
+        SELECT cast(128 as tinyint); -- -128
+        SELECT cast('2012-Oct-23' as date); -- NULL
 
 .. spark:function:: try_cast(value AS type) -> type
 
     Returns the ``value`` cast to data type ``type`` if possible, or NULL if not possible.
-    try_cast differs from cast function in following cases: If the ``value`` cannot fit within 
-    the domain of ``type`` the result is NULL. ::
+    try_cast differs from cast function in following case: 
+    
+    * If the ``value`` cannot fit within the domain of ``type``, the result is NULL. ::
 
-      SELECT try_cast(128 as tinyint); -- NULL
+        SELECT try_cast(128 as tinyint); -- NULL
 
 Cast from UNKNOWN Type
 ----------------------
