@@ -272,20 +272,34 @@ std::vector<core::TypedExprPtr> TDigestArgValuesGenerator::generate(
   const auto seed = rand<uint32_t>(rng);
   const auto nullRatio = options.nullRatio;
   std::vector<core::TypedExprPtr> inputExpressions;
-  VELOX_CHECK_GE(signature.args.size(), 2);
   if (functionName_ == "value_at_quantile" ||
       functionName_ == "values_at_quantiles") {
+    VELOX_CHECK_GE(signature.args.size(), 2);
+    VELOX_CHECK_GE(state.inputRowNames_.size(), 2);
     // First input: TDigest
     state.customInputGenerators_.emplace_back(
         std::make_shared<fuzzer::TDigestInputGenerator>(
             seed, signature.args[0], nullRatio));
-    VELOX_CHECK_GE(state.inputRowNames_.size(), 2);
     inputExpressions.emplace_back(std::make_shared<core::FieldAccessTypedExpr>(
         signature.args[0],
         state.inputRowNames_[state.inputRowNames_.size() - 2]));
     // Second input: Quantile(s)
     state.customInputGenerators_.emplace_back(nullptr);
     inputExpressions.emplace_back(nullptr);
+  } else if (functionName_ == "merge_tdigest") {
+    VELOX_CHECK_GE(signature.args.size(), 1);
+    VELOX_CHECK_GE(state.inputRowNames_.size(), 1);
+    const auto arraySize = rand<int>(rng, 1, 10);
+    std::vector<core::TypedExprPtr> tdigestArray;
+    for (int i = 0; i < arraySize; ++i) {
+      state.customInputGenerators_.emplace_back(
+          std::make_shared<fuzzer::TDigestInputGenerator>(
+              seed + i, signature.args[0], nullRatio));
+      tdigestArray.emplace_back(std::make_shared<core::FieldAccessTypedExpr>(
+          signature.args[0], state.inputRowNames_[0]));
+    }
+    inputExpressions.insert(
+        inputExpressions.end(), tdigestArray.begin(), tdigestArray.end());
   }
   return inputExpressions;
 }
