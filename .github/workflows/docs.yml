@@ -64,6 +64,7 @@ jobs:
           CIBW_BUILD: ${{ 'cp312-*' }}
           CIBW_ENVIRONMENT_PASS_LINUX:  "BUILD_VERSION"
           CIBW_ENVIRONMENT_LINUX: "CCACHE_DIR=/host${{ github.workspace }}/ccache"
+          CIBW_BEFORE_ALL_LINUX: "pip install cmake==3.31"
           CCACHE_DIR: "${{ github.workspace }}/ccache"
 
       - name: Build Documentation
