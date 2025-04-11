@@ -455,10 +455,7 @@ VectorFunctionFactory getVectorFunctionFactory(
 
     if (auto func = getAggregateFunctionEntry(originalName)) {
       auto fn = func->factory(
-          core::AggregationNode::Step::kFinal,
-          argTypes,
-          resultType,
-          config);
+          core::AggregationNode::Step::kFinal, argTypes, resultType, config);
       VELOX_CHECK_NOT_NULL(fn);
       return std::make_shared<AggregateCompanionAdapter::ExtractFunction>(
           std::move(fn));

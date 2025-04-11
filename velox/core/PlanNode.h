@@ -647,7 +647,7 @@ class TableScanNode : public PlanNode {
 using TableScanNodePtr = std::shared_ptr<const TableScanNode>;
 
 class AggregationNode : public PlanNode {
-public:
+ public:
   enum class Step {
     // raw input in - partial result out
     kPartial,
@@ -660,7 +660,6 @@ public:
   };
   /// Aggregate function call.
   struct Aggregate {
-
     static const char* stepName(Step step);
 
     static Step stepFromName(const std::string& name);
@@ -894,8 +893,7 @@ inline std::ostream& operator<<(
   VELOX_UNREACHABLE();
 }
 
-inline std::string mapAggregationStepToName(
-    const AggregationNode::Step& step) {
+inline std::string mapAggregationStepToName(const AggregationNode::Step& step) {
   std::stringstream ss;
   ss << step;
   return ss.str();

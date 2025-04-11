@@ -725,8 +725,7 @@ class PlanBuilder {
         {},
         aggregates,
         {},
-        std::vector{
-            aggregates.size(), core::AggregationNode::Step::kFinal},
+        std::vector{aggregates.size(), core::AggregationNode::Step::kFinal},
         false,
         false,
         rawInputTypes);

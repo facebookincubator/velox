@@ -97,9 +97,8 @@ std::vector<AggregateInfo> toAggregateInfo(
     const auto& aggResultType = outputType->childAt(index);
     info.function = Aggregate::create(
         aggregate.call->name(),
-        isPartialOutput(aggregate.step)
-            ? core::AggregationNode::Step::kPartial
-            : core::AggregationNode::Step::kSingle,
+        isPartialOutput(aggregate.step) ? core::AggregationNode::Step::kPartial
+                                        : core::AggregationNode::Step::kSingle,
         aggregate.rawInputTypes,
         aggResultType,
         operatorCtx.driverCtx()->queryConfig());

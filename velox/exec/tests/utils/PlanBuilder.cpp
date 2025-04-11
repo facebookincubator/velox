@@ -288,9 +288,7 @@ core::PlanNodePtr PlanBuilder::TableWriterBuilder::build(core::PlanNodeId id) {
     auto aggregatesAndNames = planBuilder_.createAggregateExpressionsAndNames(
         aggregates_,
         {},
-        std::vector{
-            aggregates_.size(),
-            core::AggregationNode::Step::kPartial});
+        std::vector{aggregates_.size(), core::AggregationNode::Step::kPartial});
     aggregationNode = std::make_shared<core::AggregationNode>(
         planBuilder_.nextPlanNodeId(),
         std::vector<core::FieldAccessTypedExprPtr>{}, // groupingKeys

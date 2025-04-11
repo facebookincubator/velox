@@ -164,11 +164,7 @@ class TableWriterReplayerTest : public HiveConnectorTestBase {
       std::shared_ptr<core::AggregationNode> aggNode = nullptr;
       if (aggregationNode == nullptr) {
         aggNode = generateAggregationNode(
-            "c0",
-            nodeId,
-            {},
-            core::AggregationNode::Step::kPartial,
-            source);
+            "c0", nodeId, {}, core::AggregationNode::Step::kPartial, source);
       } else {
         aggNode = aggregationNode;
       }

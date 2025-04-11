@@ -374,8 +374,7 @@ std::unordered_map<V, K> invertMap(const std::unordered_map<K, V>& mapping) {
 } // namespace
 
 // static
-const char* AggregationNode::Aggregate::stepName(
-    AggregationNode::Step step) {
+const char* AggregationNode::Aggregate::stepName(AggregationNode::Step step) {
   static const auto kSteps = stepNames();
   auto it = kSteps.find(step);
   VELOX_CHECK(it != kSteps.end(), "Invalid step {}", static_cast<int>(step));
@@ -392,20 +391,16 @@ AggregationNode::Step AggregationNode::Aggregate::stepFromName(
 }
 
 // static
-bool AggregationNode::Aggregate::isPartialInput(
-    AggregationNode::Step step) {
-  if (step == Step::kIntermediate ||
-      step == Step::kFinal) {
+bool AggregationNode::Aggregate::isPartialInput(AggregationNode::Step step) {
+  if (step == Step::kIntermediate || step == Step::kFinal) {
     return true;
   }
   return false;
 }
 
 // static
-bool AggregationNode::Aggregate::isPartialOutput(
-    AggregationNode::Step step) {
-  if (step == Step::kPartial ||
-      step == Step::kIntermediate) {
+bool AggregationNode::Aggregate::isPartialOutput(AggregationNode::Step step) {
+  if (step == Step::kPartial || step == Step::kIntermediate) {
     return true;
   }
   return false;
