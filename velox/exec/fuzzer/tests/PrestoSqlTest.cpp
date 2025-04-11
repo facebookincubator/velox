@@ -280,7 +280,24 @@ TEST(PrestoSqlTest, toCallSql) {
               std::make_shared<core::FieldAccessTypedExpr>(INTEGER(), "c1"),
               std::make_shared<core::FieldAccessTypedExpr>(INTEGER(), "c2")},
           "between")),
-      "c0 between c1 and c2");
+      "(c0 between c1 and c2)");
+  EXPECT_EQ( // case tests edge case check for ambiguous parantheses processing
+      toCallSql(std::make_shared<core::CallTypedExpr>(
+          BOOLEAN(),
+          std::vector<core::TypedExprPtr>{
+              std::make_shared<core::CallTypedExpr>(
+                  BOOLEAN(),
+                  std::vector<core::TypedExprPtr>{
+                      std::make_shared<core::FieldAccessTypedExpr>(
+                          INTEGER(), "c0"),
+                      std::make_shared<core::FieldAccessTypedExpr>(
+                          INTEGER(), "c0"),
+                      std::make_shared<core::ConstantTypedExpr>(
+                          INTEGER(), variant::null(TypeKind::INTEGER))},
+                  "between"),
+              std::make_shared<core::FieldAccessTypedExpr>(INTEGER(), "c0")},
+          "lt")),
+      "((c0 between c0 and cast(null as INTEGER)) < c0)");
   VELOX_ASSERT_THROW(
       toCallSql(std::make_shared<core::CallTypedExpr>(
           BOOLEAN(), std::vector<core::TypedExprPtr>{}, "between")),
