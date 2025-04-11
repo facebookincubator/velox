@@ -123,9 +123,13 @@ uint64_t QueryCtx::MemoryReclaimer::reclaim(
 
 bool QueryCtx::checkUnderArbitration(ContinueFuture* future) {
   VELOX_CHECK_NOT_NULL(future);
-  std::lock_guard<std::mutex> l(mutex_);
   if (!underArbitration_) {
-    VELOX_CHECK(arbitrationPromises_.empty());
+    return false;
+  }
+
+  std::lock_guard<std::mutex> l(mutex_);
+  // Check again under the lock to avoid data race.
+  if (!underArbitration_) {
     return false;
   }
   arbitrationPromises_.emplace_back("QueryCtx::waitArbitration");
