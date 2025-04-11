@@ -44,6 +44,7 @@ add_executable(
   SimpleFunctionInitTest.cpp
   SimpleFunctionPresetNullsTest.cpp
   SimpleFunctionTest.cpp
+  SpecialFormExprOptimizationTest.cpp
   StringWriterTest.cpp
   TryExprTest.cpp
   VariadicViewTest.cpp
