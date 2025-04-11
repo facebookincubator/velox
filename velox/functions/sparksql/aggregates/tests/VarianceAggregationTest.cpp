@@ -24,6 +24,7 @@ using namespace facebook::velox::functions::aggregate::test;
 namespace facebook::velox::functions::aggregate::sparksql::test {
 
 namespace {
+
 class VarianceAggregationTest : public AggregationTestBase {
  protected:
   void SetUp() override {
@@ -31,7 +32,7 @@ class VarianceAggregationTest : public AggregationTestBase {
     registerAggregateFunctions("spark_");
   }
 
-  void testVarianceAggResult(
+  void testStatisticalAggregate(
       const std::string& agg,
       const RowVectorPtr& input,
       const RowVectorPtr& expected,
@@ -49,44 +50,48 @@ class VarianceAggregationTest : public AggregationTestBase {
 };
 
 TEST_F(VarianceAggregationTest, variance) {
-  auto aggs = {"stddev", "stddev_samp", "variance", "var_samp"};
-  for (const auto& agg : aggs) {
-    auto input = makeRowVector({makeFlatVector<double>({2, 4, 4, 4})});
+  auto input = makeRowVector({makeFlatVector<double>({2, 4, 4, 4})});
+  auto testVarianceAggregate = [&](const std::string& agg) {
     auto expected =
         makeRowVector({makeFlatVector<double>(std::vector<double>{1.0})});
-    testVarianceAggResult(agg, input, expected);
+    testStatisticalAggregate(agg, input, expected);
 
     input = makeRowVector({makeFlatVector<double>({1, 1})});
     expected =
         makeRowVector({makeFlatVector<double>(std::vector<double>{0.0})});
-    testVarianceAggResult(agg, input, expected);
+    testStatisticalAggregate(agg, input, expected);
 
     // Output NULL when count equals 0.
     input = makeRowVector({makeNullableFlatVector<double>(
         std::vector<std::optional<double>>{std::nullopt})});
     expected = makeRowVector({makeNullableFlatVector<double>(
         std::vector<std::optional<double>>{std::nullopt})});
-    testVarianceAggResult(agg, input, expected);
+    testStatisticalAggregate(agg, input, expected);
 
     // Output NULL when count equals 1.
     input = makeRowVector({makeFlatVector<double>(1)});
     expected = makeRowVector({makeNullableFlatVector<double>(
         std::vector<std::optional<double>>{std::nullopt})});
-    testVarianceAggResult(agg, input, expected);
+    testStatisticalAggregate(agg, input, expected);
 
     // Output NaN when m2 equals 1 for legacy aggregate.
     input = makeRowVector({makeFlatVector<double>(1)});
     expected = makeRowVector({makeFlatVector<double>(
         std::vector<double>{std::numeric_limits<double>::quiet_NaN()})});
-    testVarianceAggResult(agg, input, expected, true);
+    testStatisticalAggregate(agg, input, expected, true);
 
     // Output NULL when count equals 0 for legacy aggregate.
     input = makeRowVector({makeNullableFlatVector<double>(
         std::vector<std::optional<double>>{std::nullopt})});
     expected = makeRowVector({makeNullableFlatVector<double>(
         std::vector<std::optional<double>>{std::nullopt})});
-    testVarianceAggResult(agg, input, expected);
-  }
+    testStatisticalAggregate(agg, input, expected);
+  };
+
+  testVarianceAggregate("stddev");
+  testVarianceAggregate("stddev_samp");
+  testVarianceAggregate("variance");
+  testVarianceAggregate("var_samp");
 }
 
 } // namespace
