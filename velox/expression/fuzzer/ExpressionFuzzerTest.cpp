@@ -126,6 +126,11 @@ int main(int argc, char** argv) {
       "bing_tile_quadkey",
       "array_min_by", // https://github.com/facebookincubator/velox/issues/12934
       "array_max_by", // https://github.com/facebookincubator/velox/issues/12934
+      // Geometry functions don't yet have a ValuesGenerator
+      "st_geometryfromtext",
+      "st_geomfrombinary",
+      "st_astext",
+      "st_asbinary",
   };
   size_t initialSeed = FLAGS_seed == 0 ? std::time(nullptr) : FLAGS_seed;
 
