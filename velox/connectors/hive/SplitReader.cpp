@@ -249,8 +249,8 @@ void SplitReader::createReader() {
   try {
     fileHandleCachePtr = fileHandleFactory_->generate(
         hiveSplit_->filePath,
-        hiveSplit_->properties.has_value() ? &*hiveSplit_->properties
-                                           : nullptr);
+        hiveSplit_->properties.has_value() ? &*hiveSplit_->properties : nullptr,
+        fsStats_ ? fsStats_.get() : nullptr);
     VELOX_CHECK_NOT_NULL(fileHandleCachePtr.get());
   } catch (const VeloxRuntimeError& e) {
     if (e.errorCode() == error_code::kFileNotFound &&
@@ -295,7 +295,10 @@ bool SplitReader::filterOnStats(
           baseReader_.get(),
           hiveSplit_->filePath,
           hiveSplit_->partitionKeys,
-          *partitionKeys_)) {
+          *partitionKeys_,
+          hiveConfig_->readTimestampPartitionValueAsLocalTime(
+              connectorQueryCtx_->sessionProperties()))) {
+    ++runtimeStats.processedSplits;
     return true;
   }
   ++runtimeStats.skippedSplits;

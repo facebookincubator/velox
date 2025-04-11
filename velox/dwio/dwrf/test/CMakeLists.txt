@@ -19,7 +19,6 @@ set(TEST_LINK_LIBS
     velox_dwio_dwrf_reader
     velox_dwio_dwrf_writer
     velox_row_fast
-    velox_flag_definitions
     GTest::gtest
     GTest::gtest_main
     GTest::gmock
@@ -257,6 +256,18 @@ add_test(velox_dwio_dwrf_encryption_test velox_dwio_dwrf_encryption_test)
 target_link_libraries(
   velox_dwio_dwrf_encryption_test velox_link_libs Folly::folly
   ${TEST_LINK_LIBS})
+
+add_executable(velox_filemetadata_test FileMetadataTest.cpp)
+add_test(velox_filemetadata_test velox_filemetadata_test)
+
+target_link_libraries(
+  velox_filemetadata_test velox_link_libs ${TEST_LINK_LIBS})
+
+add_executable(velox_common_test CommonTests.cpp)
+add_test(velox_common_test velox_common_test)
+
+target_link_libraries(
+  velox_common_test velox_link_libs ${TEST_LINK_LIBS})
 
 add_executable(velox_dwio_dwrf_stripe_reader_base_test
                StripeReaderBaseTests.cpp)

@@ -15,7 +15,6 @@
  */
 
 #include "velox/functions/Registerer.h"
-#include "velox/functions/lib/JsonArrayLength.h"
 #include "velox/functions/prestosql/JsonFunctions.h"
 #include "velox/functions/prestosql/types/JsonRegistration.h"
 
@@ -32,11 +31,6 @@ void registerJsonFunctions(const std::string& prefix) {
       {prefix + "json_extract_scalar"});
   registerFunction<JsonExtractScalarFunction, Varchar, Varchar, Varchar>(
       {prefix + "json_extract_scalar"});
-
-  registerFunction<JsonExtractFunction, Json, Json, Varchar>(
-      {prefix + "json_extract"});
-  registerFunction<JsonExtractFunction, Json, Varchar, Varchar>(
-      {prefix + "json_extract"});
 
   registerFunction<JsonArrayLengthFunction, int64_t, Json>(
       {prefix + "json_array_length"});
@@ -60,19 +54,18 @@ void registerJsonFunctions(const std::string& prefix) {
   registerFunction<JsonArrayContainsFunction, bool, Varchar, Varchar>(
       {prefix + "json_array_contains"});
 
-  registerFunction<JsonArrayGetFunction, Json, Json, int64_t>(
-      {prefix + "json_array_get"});
-  registerFunction<JsonArrayGetFunction, Json, Varchar, int64_t>(
-      {prefix + "json_array_get"});
-
   registerFunction<JsonSizeFunction, int64_t, Json, Varchar>(
       {prefix + "json_size"});
   registerFunction<JsonSizeFunction, int64_t, Varchar, Varchar>(
       {prefix + "json_size"});
 
+  VELOX_REGISTER_VECTOR_FUNCTION(udf_json_extract, prefix + "json_extract");
+
   VELOX_REGISTER_VECTOR_FUNCTION(udf_json_format, prefix + "json_format");
 
   VELOX_REGISTER_VECTOR_FUNCTION(udf_json_parse, prefix + "json_parse");
+
+  VELOX_REGISTER_VECTOR_FUNCTION(udf_json_array_get, prefix + "json_array_get");
 
   VELOX_REGISTER_VECTOR_FUNCTION(
       udf_$internal$_json_string_to_array,

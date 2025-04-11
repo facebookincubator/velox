@@ -39,7 +39,8 @@ std::string S3Config::cacheKey(
 
 S3Config::S3Config(
     std::string_view bucket,
-    const std::shared_ptr<const config::ConfigBase> properties) {
+    const std::shared_ptr<const config::ConfigBase> properties)
+    : bucket_(bucket) {
   for (int key = static_cast<int>(Keys::kBegin);
        key < static_cast<int>(Keys::kEnd);
        key++) {
@@ -76,10 +77,11 @@ S3Config::S3Config(
 std::optional<std::string> S3Config::endpointRegion() const {
   auto region = config_.find(Keys::kEndpointRegion)->second;
   if (!region.has_value()) {
-    // If region is not set, try inferring from the endpoint.
+    // If region is not set, try inferring from the endpoint value for AWS
+    // endpoints.
     auto endpointValue = endpoint();
     if (endpointValue.has_value()) {
-      region = parseStandardRegionName(endpointValue.value());
+      region = parseAWSStandardRegionName(endpointValue.value());
     }
   }
   return region;

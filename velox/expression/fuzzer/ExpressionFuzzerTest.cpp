@@ -57,6 +57,7 @@ using facebook::velox::fuzzer::ArgTypesGenerator;
 using facebook::velox::fuzzer::ArgValuesGenerator;
 using facebook::velox::fuzzer::ExpressionFuzzer;
 using facebook::velox::fuzzer::FuzzerRunner;
+using facebook::velox::fuzzer::JsonExtractArgValuesGenerator;
 using facebook::velox::fuzzer::JsonParseArgValuesGenerator;
 using facebook::velox::test::ReferenceQueryRunner;
 
@@ -85,6 +86,13 @@ int main(int argc, char** argv) {
       "cardinality",
       "element_at",
       "width_bucket",
+      // Fuzzer and the underlying engine are confused about TDigest functions
+      // (since TDigest is a user defined type), and tries to pass a
+      // VARBINARY (since TDigest's implementation uses an
+      // alias to VARBINARY).
+      "value_at_quantile",
+      "values_at_quantiles",
+      "merge_tdigest",
       // Fuzzer cannot generate valid 'comparator' lambda.
       "array_sort(array(T),constant function(T,T,bigint)) -> array(T)",
       "split_to_map(varchar,varchar,varchar,function(varchar,varchar,varchar,varchar)) -> map(varchar,varchar)",
@@ -107,6 +115,17 @@ int main(int argc, char** argv) {
       // from_unixtime can generate timestamps out of the supported range that
       // make other functions throw VeloxRuntimeErrors.
       "from_unixtime",
+      // JSON not supported, Real doesn't match exactly, etc.
+      "array_join",
+      // BingTiles throw VeloxUserError when zoom/x/y are out of range.
+      "bing_tile",
+      "bing_tile_zoom_level",
+      "bing_tile_coordinates",
+      "bing_tile_parent",
+      "bing_tile_children",
+      "bing_tile_quadkey",
+      "array_min_by", // https://github.com/facebookincubator/velox/issues/12934
+      "array_max_by", // https://github.com/facebookincubator/velox/issues/12934
   };
   size_t initialSeed = FLAGS_seed == 0 ? std::time(nullptr) : FLAGS_seed;
 
@@ -130,7 +149,8 @@ int main(int argc, char** argv) {
 
   std::unordered_map<std::string, std::shared_ptr<ArgValuesGenerator>>
       argValuesGenerators = {
-          {"json_parse", std::make_shared<JsonParseArgValuesGenerator>()}};
+          {"json_parse", std::make_shared<JsonParseArgValuesGenerator>()},
+          {"json_extract", std::make_shared<JsonExtractArgValuesGenerator>()}};
 
   std::shared_ptr<facebook::velox::memory::MemoryPool> rootPool{
       facebook::velox::memory::memoryManager()->addRootPool()};
@@ -200,6 +220,7 @@ int main(int argc, char** argv) {
         "combine_hash_internal",
         "map_keys_by_top_n_values", // requires
                                     // https://github.com/prestodb/presto/pull/24570
+        "inverse_gamma_cdf", // https://github.com/facebookincubator/velox/issues/12918
     });
 
     referenceQueryRunner = std::make_shared<PrestoQueryRunner>(

@@ -21,6 +21,7 @@
 #include "velox/exec/Aggregate.h"
 #include "velox/exec/Strings.h"
 #include "velox/functions/prestosql/aggregates/AggregateNames.h"
+#include "velox/functions/prestosql/aggregates/HistogramAggregate.h"
 #include "velox/vector/FlatVector.h"
 
 namespace facebook::velox::aggregate::prestosql {
@@ -623,6 +624,11 @@ void registerHistogramAggregate(
           case TypeKind::ROW:
             return std::make_unique<HistogramAggregate<ComplexType>>(
                 resultType);
+          case TypeKind::HUGEINT:
+            if (inputType->isLongDecimal()) {
+              return std::make_unique<HistogramAggregate<int128_t>>(resultType);
+            }
+            [[fallthrough]];
           case TypeKind::UNKNOWN:
             return std::make_unique<HistogramAggregate<int8_t>>(resultType);
           default:

@@ -23,16 +23,23 @@ namespace facebook::velox::wave {
 Values::Values(CompileState& state, const core::ValuesNode& values)
     : WaveSourceOperator(state, values.outputType(), values.id()),
       values_(values.values()),
-      roundsLeft_(values.repeatTimes()) {}
+      roundsLeft_(values.repeatTimes()) {
+  for (auto& rv : values_) {
+    auto v = std::static_pointer_cast<BaseVector>(rv);
+    BaseVector::flattenVector(v);
+  }
+}
 
 std::vector<AdvanceResult> Values::canAdvance(WaveStream& stream) {
+  std::vector<AdvanceResult> results;
   if (current_ < values_.size()) {
-    return {{.numRows = values_[current_]->size()}};
+    auto& result = results.emplace_back();
+    result.numRows = values_[current_]->size();
+  } else if (roundsLeft_ > 1) {
+    auto& result = results.emplace_back();
+    result.numRows = values_[0]->size();
   }
-  if (roundsLeft_ > 1) {
-    return {{.numRows = values_[0]->size()}};
-  }
-  return {};
+  return results;
 }
 
 void Values::schedule(WaveStream& stream, int32_t maxRows) {

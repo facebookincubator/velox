@@ -18,9 +18,9 @@
 #include <folly/Range.h>
 
 #include "velox/common/base/RuntimeMetrics.h"
-#include "velox/common/base/Scratch.h"
 #include "velox/common/compression/Compression.h"
 #include "velox/common/memory/ByteStream.h"
+#include "velox/common/memory/Scratch.h"
 #include "velox/common/memory/StreamArena.h"
 #include "velox/vector/ComplexVector.h"
 
@@ -125,6 +125,16 @@ class IterativeVectorSerializer {
   virtual void clear() {
     VELOX_UNSUPPORTED("{}", __FUNCTION__);
   }
+
+  /// Defines the exported runtime stats.
+  /// The number of bytes before compression.
+  static inline const std::string kCompressionInputBytes{
+      "compressionInputBytes"};
+  /// The number of bytes after compression.
+  static inline const std::string kCompressedBytes{"compressedBytes"};
+  /// The number of bytes that skip in-efficient compression.
+  static inline const std::string kCompressionSkippedBytes{
+      "compressionSkippedBytes"};
 
   /// Returns serializer-dependent counters, e.g. about compression, data
   /// distribution, encoding etc.

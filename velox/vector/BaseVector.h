@@ -1079,6 +1079,16 @@ std::string printIndices(
     const BufferPtr& indices,
     vector_size_t maxIndicesToPrint = 10);
 
+template <typename OutputStream>
+OutputStream& operator<<(
+    OutputStream& out,
+    const BaseVector::CopyRange& range) {
+  out << "{sourceIndex=" << range.sourceIndex
+      << " targetIndex=" << range.targetIndex << " count=" << range.count
+      << "}";
+  return out;
+}
+
 } // namespace facebook::velox
 
 namespace folly {
@@ -1113,7 +1123,7 @@ struct fmt::formatter<facebook::velox::VectorEncoding::Simple> {
   auto format(
       const facebook::velox::VectorEncoding::Simple& x,
       FormatContext& ctx) const {
-    return format_to(
+    return fmt::format_to(
         ctx.out(), "{}", facebook::velox::VectorEncoding::mapSimpleToName(x));
   }
 };

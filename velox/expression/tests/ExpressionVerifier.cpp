@@ -253,7 +253,9 @@ ExpressionVerifier::verify(
             "Input after common",
             rows);
       }
+      LOG(INFO) << "Common eval succeeded.";
     } catch (const VeloxException& e) {
+      LOG(INFO) << "Common eval failed.";
       if (e.errorCode() == error_code::kUnsupportedInputUncatchable) {
         unsupportedInputUncatchableError = true;
       } else if (!(canThrow && e.isUserError())) {
@@ -310,12 +312,14 @@ ExpressionVerifier::verify(
             if (exceptionCommonPtr && exceptionReference) {
               verificationStates.push_back(VerificationState::kBothPathsThrow);
             } else {
+              verificationStates.push_back(
+                  VerificationState::kReferencePathUnsupported);
               if (!(defaultNull &&
                     referenceQueryRunner_->runnerType() ==
                         ReferenceQueryRunner::RunnerType::kPrestoQueryRunner)) {
-                LOG(ERROR) << "Only "
-                           << (exceptionCommonPtr ? "common" : "reference")
-                           << " path threw exception:";
+                LOG(ERROR) << fmt::format(
+                    "Only {} path threw exception",
+                    exceptionCommonPtr ? "common" : "reference");
                 if (exceptionCommonPtr) {
                   std::rethrow_exception(exceptionCommonPtr);
                 } else {

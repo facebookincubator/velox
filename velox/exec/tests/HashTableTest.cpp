@@ -198,7 +198,7 @@ class HashTableTest : public testing::TestWithParam<bool>,
     int32_t sequence = 0;
     std::vector<RowVectorPtr> batches;
     auto table = createHashTableForAggregation(tableType, numKeys);
-    auto lookup = std::make_unique<HashLookup>(table->hashers());
+    auto lookup = std::make_unique<HashLookup>(table->hashers(), pool());
     std::vector<char*> allInserted;
     int32_t numErased = 0;
     // We insert 1000 and delete 500.
@@ -455,7 +455,7 @@ class HashTableTest : public testing::TestWithParam<bool>,
   }
 
   void testProbe() {
-    auto lookup = std::make_unique<HashLookup>(topTable_->hashers());
+    auto lookup = std::make_unique<HashLookup>(topTable_->hashers(), pool());
     const auto batchSize = batches_[0]->size();
     SelectivityVector rows(batchSize);
     const auto mode = topTable_->hashMode();
@@ -679,7 +679,7 @@ TEST_P(HashTableTest, clearAfterInsert) {
   }
   for (const bool clearTable : {false, true}) {
     const auto table = createHashTableForAggregation(rowType, numKeys);
-    auto lookup = std::make_unique<HashLookup>(table->hashers());
+    auto lookup = std::make_unique<HashLookup>(table->hashers(), pool());
     for (const auto& batch : inputBatches) {
       lookup->reset(batch->size());
       insertGroups(*batch, *lookup, *table);
@@ -704,7 +704,7 @@ TEST_P(HashTableTest, bestWithReserveOverflow) {
       ROW({"a", "b", "c", "d"}, {BIGINT(), BIGINT(), BIGINT(), BIGINT()});
   const auto numKeys = 4;
   auto table = createHashTableForAggregation(rowType, numKeys);
-  auto lookup = std::make_unique<HashLookup>(table->hashers());
+  auto lookup = std::make_unique<HashLookup>(table->hashers(), pool());
 
   // Make sure rangesWithReserve overflows.
   //  Ranges for keys are: 200K, 200K, 200K, 100K.
@@ -765,7 +765,7 @@ TEST_P(HashTableTest, bestWithReserveOverflow) {
 TEST_P(HashTableTest, enableRangeWhereCan) {
   auto rowType = ROW({"a", "b", "c"}, {BIGINT(), VARCHAR(), VARCHAR()});
   auto table = createHashTableForAggregation(rowType, 3);
-  auto lookup = std::make_unique<HashLookup>(table->hashers());
+  auto lookup = std::make_unique<HashLookup>(table->hashers(), pool());
 
   // Generate 3 keys with the following ranges and number of distinct values
   // (ndv):
@@ -804,7 +804,7 @@ TEST_P(HashTableTest, enableRangeWhereCan) {
 
 TEST_P(HashTableTest, arrayProbeNormalizedKey) {
   auto table = createHashTableForAggregation(ROW({"a"}, {BIGINT()}), 1);
-  auto lookup = std::make_unique<HashLookup>(table->hashers());
+  auto lookup = std::make_unique<HashLookup>(table->hashers(), pool());
 
   for (auto i = 0; i < 200; ++i) {
     auto data = makeRowVector({
@@ -887,7 +887,7 @@ TEST_P(HashTableTest, listJoinResultsSize) {
   outputRowsBuf.resize(kNumRows);
   auto outputRows = folly::Range(outputRowsBuf.data(), kNumRows);
 
-  HashLookup lookup(table->hashers());
+  HashLookup lookup(table->hashers(), pool());
   lookup.rows.reserve(kNumRows);
   lookup.hits.reserve(kNumRows);
   for (auto i = 0; i < kNumRows; i++) {
@@ -968,7 +968,7 @@ TEST_P(HashTableTest, groupBySpill) {
 TEST_P(HashTableTest, checkSizeValidation) {
   auto rowType = ROW({"a"}, {BIGINT()});
   auto table = createHashTableForAggregation(rowType, 1);
-  auto lookup = std::make_unique<HashLookup>(table->hashers());
+  auto lookup = std::make_unique<HashLookup>(table->hashers(), pool());
   auto testHelper = HashTableTestHelper<false>::create(table.get());
 
   // The initial set hash mode with table size of 256K entries.
@@ -1092,20 +1092,20 @@ VELOX_INSTANTIATE_TEST_SUITE_P(
     HashTableTest,
     testing::Values(true, false));
 
-/// This tests an issue only seen when the number of unique entries
-/// in the HashTable, crosses over int32 limit. The HashTable::loadTag()
-/// offset argument was int32 and for positions greater than int32 max,
-/// it would seg fault.
-TEST_P(HashTableTest, offsetOverflowLoadTags) {
-  GTEST_SKIP() << "Skipping as it takes long time to converge,"
-                  " re-enable to reproduce the issue";
-  if (GetParam() == true) {
-    return;
+// This tests an issue only seen when the number of unique entries in the
+// HashTable, crosses over int32 limit. The HashTable::loadTag() offset argument
+// was int32 and for positions greater than int32 max, it would seg fault.
+//
+// Disabled as it takes long time to converge, re-enable to reproduce the
+// issue.
+TEST_P(HashTableTest, DISABLED_offsetOverflowLoadTags) {
+  if (GetParam()) {
+    GTEST_SKIP() << "No need to run this in multi-threaded mode";
   }
   auto rowType = ROW({"a"}, {BIGINT()});
   auto table = createHashTableForAggregation(rowType, rowType->size());
   table->hashMode();
-  auto lookup = std::make_unique<HashLookup>(table->hashers());
+  auto lookup = std::make_unique<HashLookup>(table->hashers(), pool());
   auto batchSize = 1 << 25;
   for (auto i = 0; i < 64; ++i) {
     std::vector<RowVectorPtr> batches;

@@ -195,24 +195,35 @@ std::shared_ptr<const core::IExpr> parseColumnRefExpr(
               colRefExpr.GetTableName(), std::nullopt)});
 }
 
+namespace {
+
+std::optional<int64_t> extractInteger(const core::ConstantExpr& constInput) {
+  if (constInput.value().isNull()) {
+    return std::nullopt;
+  }
+  if (constInput.type()->isBigint()) {
+    return constInput.value().value<int64_t>();
+  } else if (constInput.type()->isInteger()) {
+    return constInput.value().value<int32_t>();
+  }
+  return std::nullopt;
+}
+
+} // namespace
+
 std::shared_ptr<const core::ConstantExpr> tryParseInterval(
     const std::string& functionName,
     const std::shared_ptr<const core::IExpr>& input,
     std::optional<std::string> alias) {
   std::optional<int64_t> value;
+
   if (auto constInput = dynamic_cast<const core::ConstantExpr*>(input.get())) {
-    if (constInput->type()->isBigint() && !constInput->value().isNull()) {
-      value = constInput->value().value<int64_t>();
-    }
+    value = extractInteger(*constInput);
   } else if (
       auto castInput = dynamic_cast<const core::CastExpr*>(input.get())) {
-    if (castInput->type()->isBigint()) {
-      if (auto constInput = dynamic_cast<const core::ConstantExpr*>(
-              castInput->getInput().get())) {
-        if (constInput->type()->isBigint() && !constInput->value().isNull()) {
-          value = constInput->value().value<int64_t>();
-        }
-      }
+    if (auto constInput = dynamic_cast<const core::ConstantExpr*>(
+            castInput->getInput().get())) {
+      value = extractInteger(*constInput);
     }
   }
 
@@ -221,7 +232,10 @@ std::shared_ptr<const core::ConstantExpr> tryParseInterval(
   }
 
   int64_t multiplier;
-  if (functionName == "to_hours") {
+
+  if (functionName == "to_days") {
+    multiplier = 24 * 60 * 60 * 1'000;
+  } else if (functionName == "to_hours") {
     multiplier = 60 * 60 * 1'000;
   } else if (functionName == "to_minutes") {
     multiplier = 60 * 1'000;
@@ -229,10 +243,22 @@ std::shared_ptr<const core::ConstantExpr> tryParseInterval(
     multiplier = 1'000;
   } else if (functionName == "to_milliseconds") {
     multiplier = 1;
-  } else {
-    return nullptr;
   }
-
+  // The other two options are years and months. They are expressed in terms of
+  // number of months, and return a different type (INTERVAL_YEAR_MONTH).
+  else {
+    if (functionName == "to_years") {
+      multiplier = 12;
+    } else if (functionName == "to_months") {
+      multiplier = 1;
+    } else {
+      return nullptr;
+    }
+    return std::make_shared<core::ConstantExpr>(
+        INTERVAL_YEAR_MONTH(),
+        variant((int32_t)(value.value() * multiplier)),
+        alias);
+  }
   return std::make_shared<core::ConstantExpr>(
       INTERVAL_DAY_TIME(), variant(value.value() * multiplier), alias);
 }

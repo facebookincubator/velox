@@ -169,8 +169,8 @@ struct JsonArrayGetFunction {
   }
 };
 
-// jsonExtractScalar(json, json_path) -> varchar
-// Like jsonExtract(), but returns the result value as a string (as opposed
+// json_extract_scalar(json, json_path) -> varchar
+// Like json_extract(), but returns the result value as a string (as opposed
 // to being encoded as JSON). The value referenced by json_path must be a scalar
 // (boolean, number or string)
 template <typename T>
@@ -185,12 +185,13 @@ struct JsonExtractScalarFunction {
   }
 
  private:
-  FOLLY_ALWAYS_INLINE bool callImpl(
+  FOLLY_ALWAYS_INLINE simdjson::error_code callImpl(
       out_type<Varchar>& result,
       const arg_type<Json>& json,
       const arg_type<Varchar>& jsonPath) {
     bool resultPopulated = false;
     std::optional<std::string> resultStr;
+
     auto consumer = [&resultStr, &resultPopulated](auto& v) {
       if (resultPopulated) {
         // We should just get a single value, if we see multiple, it's an error
@@ -225,8 +226,19 @@ struct JsonExtractScalarFunction {
     };
 
     auto& extractor = SIMDJsonExtractor::getInstance(jsonPath);
+
+    // Check for valid json
+    simdjson::padded_string paddedJson(json.data(), json.size());
+    {
+      SIMDJSON_ASSIGN_OR_RAISE(auto jsonDoc, simdjsonParse(paddedJson));
+      simdjson::ondemand::document parsedDoc;
+      if (simdjsonParse(paddedJson).get(parsedDoc)) {
+        return simdjson::TAPE_ERROR;
+      }
+    }
+
     bool isDefinitePath = true;
-    SIMDJSON_TRY(extractor.extract(json, consumer, isDefinitePath));
+    SIMDJSON_TRY(extractor.extract(paddedJson, consumer, isDefinitePath));
 
     if (resultStr.has_value()) {
       result.copy_from(*resultStr);
@@ -234,87 +246,6 @@ struct JsonExtractScalarFunction {
     } else {
       return simdjson::NO_SUCH_FIELD;
     }
-  }
-};
-
-template <typename T>
-struct JsonExtractFunction {
-  VELOX_DEFINE_FUNCTION_TYPES(T);
-
-  bool call(
-      out_type<Json>& result,
-      const arg_type<Json>& json,
-      const arg_type<Varchar>& jsonPath) {
-    return callImpl(result, json, jsonPath) == simdjson::SUCCESS;
-  }
-
- private:
-  simdjson::error_code callImpl(
-      out_type<Json>& result,
-      const arg_type<Json>& json,
-      const arg_type<Varchar>& jsonPath) {
-    static constexpr std::string_view kNullString{"null"};
-    std::string results;
-    size_t resultSize = 0;
-    auto consumer = [&results, &resultSize](auto& v) {
-      // Add the separator for the JSON array.
-      if (resultSize++ > 0) {
-        results += ",";
-      }
-      // We could just convert v to a string using to_json_string directly, but
-      // in that case the JSON wouldn't be parsed (it would just return the
-      // contents directly) and we might miss invalid JSON.
-      SIMDJSON_ASSIGN_OR_RAISE(auto vtype, v.type());
-      switch (vtype) {
-        case simdjson::ondemand::json_type::object: {
-          SIMDJSON_ASSIGN_OR_RAISE(
-              auto jsonStr, simdjson::to_json_string(v.get_object()));
-          results += jsonStr;
-          break;
-        }
-        case simdjson::ondemand::json_type::array: {
-          SIMDJSON_ASSIGN_OR_RAISE(
-              auto jsonStr, simdjson::to_json_string(v.get_array()));
-          results += jsonStr;
-          break;
-        }
-        case simdjson::ondemand::json_type::string:
-        case simdjson::ondemand::json_type::number:
-        case simdjson::ondemand::json_type::boolean: {
-          SIMDJSON_ASSIGN_OR_RAISE(auto jsonStr, simdjson::to_json_string(v));
-          results += jsonStr;
-          break;
-        }
-        case simdjson::ondemand::json_type::null:
-          results += kNullString;
-          break;
-      }
-      return simdjson::SUCCESS;
-    };
-
-    auto& extractor = SIMDJsonExtractor::getInstance(jsonPath);
-    bool isDefinitePath = true;
-    SIMDJSON_TRY(extractor.extract(json, consumer, isDefinitePath));
-
-    if (resultSize == 0) {
-      if (isDefinitePath) {
-        // If the path didn't map to anything in the JSON object, return null.
-        return simdjson::NO_SUCH_FIELD;
-      }
-
-      result.copy_from("[]");
-    } else if (resultSize == 1 && isDefinitePath) {
-      // If there was only one value mapped to by the path, don't wrap it in an
-      // array.
-      result.copy_from(results);
-    } else {
-      // Add the square brackets to make it a valid JSON array.
-      result.reserve(2 + results.size());
-      result.append("[");
-      result.append(results);
-      result.append("]");
-    }
-    return simdjson::SUCCESS;
   }
 };
 
@@ -366,7 +297,8 @@ struct JsonSizeFunction {
 
     auto& extractor = SIMDJsonExtractor::getInstance(jsonPath);
     bool isDefinitePath = true;
-    SIMDJSON_TRY(extractor.extract(json, consumer, isDefinitePath));
+    simdjson::padded_string paddedJson(json.data(), json.size());
+    SIMDJSON_TRY(extractor.extract(paddedJson, consumer, isDefinitePath));
 
     if (resultCount == 0) {
       // If the path didn't map to anything in the JSON object, return null.
@@ -376,6 +308,51 @@ struct JsonSizeFunction {
     result = resultCount == 1 ? singleResultSize : resultCount;
 
     return simdjson::SUCCESS;
+  }
+};
+
+/// json_array_length(jsonString) -> length
+///
+/// Returns the number of elements in the outermost JSON array from jsonString.
+/// If jsonString is not a valid JSON array or NULL, the function returns null.
+/// Presto:
+/// https://prestodb.io/docs/current/functions/json.html#json_array_length-json-bigint
+/// SparkSQL:
+/// https://spark.apache.org/docs/latest/api/sql/index.html#json_array_length
+template <typename T>
+struct JsonArrayLengthFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  template <typename TOutput>
+  FOLLY_ALWAYS_INLINE bool call(TOutput& len, const arg_type<Json>& json) {
+    simdjson::ondemand::document jsonDoc;
+
+    simdjson::padded_string paddedJson(json.data(), json.size());
+    if (simdjsonParse(paddedJson).get(jsonDoc)) {
+      return false;
+    }
+    if (jsonDoc.type().error()) {
+      return false;
+    }
+
+    if (jsonDoc.type() != simdjson::ondemand::json_type::array) {
+      return false;
+    }
+
+    size_t numElements;
+    if (jsonDoc.count_elements().get(numElements)) {
+      return false;
+    }
+
+    VELOX_USER_CHECK_LE(
+        numElements,
+        std::numeric_limits<TOutput>::max(),
+        "The json array length {} is bigger than the max value of output type {}.",
+        numElements,
+        std::numeric_limits<TOutput>::max());
+
+    len = numElements;
+    return true;
   }
 };
 

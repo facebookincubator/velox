@@ -1248,7 +1248,7 @@ TEST_F(AggregationTest, memoryAllocations) {
   // Verify memory allocations. Aggregation should make 2 allocations: 1 for the
   // RowContainer holding single accumulator and 1 for the result.
   auto planStats = toPlanStats(task->taskStats());
-  ASSERT_EQ(2, planStats.at(aggNodeId).numMemoryAllocations);
+  ASSERT_EQ(5, planStats.at(aggNodeId).numMemoryAllocations);
 
   plan = PlanBuilder()
              .values(data)
@@ -1264,7 +1264,7 @@ TEST_F(AggregationTest, memoryAllocations) {
   // hash table, 1 for the RowContainer holding accumulators, 2 for results (1
   // for values of the grouping key column, 1 for sum column).
   planStats = toPlanStats(task->taskStats());
-  ASSERT_EQ(4, planStats.at(aggNodeId).numMemoryAllocations);
+  ASSERT_EQ(7, planStats.at(aggNodeId).numMemoryAllocations);
 }
 
 TEST_F(AggregationTest, groupingSets) {
@@ -1704,6 +1704,71 @@ TEST_F(AggregationTest, outputBatchSizeCheckWithSpill) {
                       .capturePlanNodeId(aggrNodeId)
                       .planNode())
             .assertResults("SELECT c0, array_agg(c1) FROM tmp GROUP BY 1");
+    ASSERT_GT(toPlanStats(task->taskStats()).at(aggrNodeId).spilledBytes, 0);
+    ASSERT_EQ(
+        toPlanStats(task->taskStats()).at(aggrNodeId).outputVectors,
+        testData.expectedNumOutputVectors);
+    OperatorTestBase::deleteTaskAndCheckSpillDirectory(task);
+  }
+}
+
+TEST_F(AggregationTest, outputBatchSizeCheckWithSpillForOrderedAggr) {
+  const int numVectors = 5;
+  const int vectorSize = 20;
+  const std::string strValue(1L << 20, 'a'); // 1MB
+
+  std::vector<RowVectorPtr> vectors;
+  for (int i = 0; i < numVectors; ++i) {
+    vectors.push_back(makeRowVector(
+        {makeFlatVector<int32_t>(vectorSize, [&](auto row) { return row % 5; }),
+         makeFlatVector<StringView>(vectorSize, [&](auto /*unused*/) {
+           return StringView(strValue);
+         })}));
+  }
+  auto rowType = asRowType(vectors.back()->type());
+
+  struct {
+    vector_size_t maxOutputRows;
+    uint32_t maxOutputBytes;
+    uint32_t expectedNumOutputVectors;
+
+    std::string debugString() const {
+      return fmt::format(
+          "maxOutputRows: {}, maxOutputBytes: {}, expectedNumOutputVectors: {}",
+          maxOutputRows,
+          succinctBytes(maxOutputBytes),
+          expectedNumOutputVectors);
+    }
+  } testSettings[] = {
+      {1, std::numeric_limits<uint32_t>::max(), 5},
+      {std::numeric_limits<vector_size_t>::max(), 15L << 20, 5},
+      {std::numeric_limits<vector_size_t>::max(), 35L << 20, 3}};
+
+  for (const auto& testData : testSettings) {
+    SCOPED_TRACE(testData.debugString());
+
+    createDuckDbTable(vectors);
+    auto tempDirectory = exec::test::TempDirectoryPath::create();
+    core::PlanNodeId aggrNodeId;
+    TestScopedSpillInjection scopedSpillInjection(100);
+    auto task =
+        AssertQueryBuilder(duckDbQueryRunner_)
+            .spillDirectory(tempDirectory->getPath())
+            .config(QueryConfig::kSpillEnabled, true)
+            .config(QueryConfig::kAggregationSpillEnabled, true)
+            .config(
+                QueryConfig::kPreferredOutputBatchBytes,
+                std::to_string(testData.maxOutputBytes))
+            .config(
+                QueryConfig::kMaxOutputBatchRows,
+                std::to_string(testData.maxOutputRows))
+            .plan(PlanBuilder()
+                      .values(vectors)
+                      .singleAggregation({"c0"}, {"array_agg(c1 order by c1)"})
+                      .capturePlanNodeId(aggrNodeId)
+                      .planNode())
+            .assertResults(
+                "SELECT c0, array_agg(c1 order by c1) FROM tmp GROUP BY 1");
     ASSERT_GT(toPlanStats(task->taskStats()).at(aggrNodeId).spilledBytes, 0);
     ASSERT_EQ(
         toPlanStats(task->taskStats()).at(aggrNodeId).outputVectors,
@@ -2446,8 +2511,9 @@ DEBUG_ONLY_TEST_F(AggregationTest, reclaimDuringInputProcessing) {
       ASSERT_GT(reclaimerStats_.reclaimExecTimeUs, 0);
       ASSERT_GT(reclaimerStats_.reclaimedBytes, 0);
       reclaimerStats_.reset();
-      // We expect all the memory has been freed from the hash table.
-      ASSERT_EQ(op->pool()->usedBytes(), 0);
+      // We expect all the memory has been freed from the hash table, except for
+      // the ones used by raw_vector.
+      ASSERT_EQ(op->pool()->usedBytes(), 28672);
     } else {
       {
         memory::ScopedMemoryArbitrationContext ctx(op->pool());

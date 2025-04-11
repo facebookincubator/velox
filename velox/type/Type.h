@@ -44,6 +44,11 @@ namespace facebook::velox {
 
 using int128_t = __int128_t;
 
+using column_index_t = uint32_t;
+
+constexpr column_index_t kConstantChannel =
+    std::numeric_limits<column_index_t>::max();
+
 /// Velox type system supports a small set of SQL-compatible composeable types:
 /// BOOLEAN, TINYINT, SMALLINT, INTEGER, BIGINT, HUGEINT, REAL, DOUBLE, VARCHAR,
 /// VARBINARY, TIMESTAMP, ARRAY, MAP, ROW
@@ -572,6 +577,8 @@ class Type : public Tree<const TypePtr>, public velox::ISerializable {
 
   bool containsUnknown() const;
 
+  VELOX_DEFINE_CLASS_NAME(Type)
+
  protected:
   FOLLY_ALWAYS_INLINE bool hasSameTypeId(const Type& other) const {
     return typeid(*this) == typeid(other);
@@ -590,8 +597,6 @@ class Type : public Tree<const TypePtr>, public velox::ISerializable {
  private:
   const TypeKind kind_;
   const bool providesCustomComparison_;
-
-  VELOX_DEFINE_CLASS_NAME(Type)
 };
 
 #undef VELOX_FLUENT_CAST
@@ -617,7 +622,7 @@ class TypeBase : public Type {
     if (providesCustomComparison) {
       VELOX_CHECK(
           kindCanProvideCustomComparison<KIND>::value,
-          "Custom comparisons are only supported for primite types that are fixed width.");
+          "Custom comparisons are only supported for primitive types that are fixed width.");
     }
   }
 

@@ -16,6 +16,7 @@ add_executable(
   velox_functions_spark_test
   ArithmeticTest.cpp
   ArrayAppendTest.cpp
+  ArrayConcatTest.cpp
   ArrayFlattenTest.cpp
   ArrayGetTest.cpp
   ArrayInsertTest.cpp
@@ -23,6 +24,7 @@ add_executable(
   ArrayMinTest.cpp
   ArraySortTest.cpp
   ArrayShuffleTest.cpp
+  ArrayUnionTest.cpp
   ArgTypesGeneratorTest.cpp
   AtLeastNNonNullsTest.cpp
   BitwiseTest.cpp
@@ -36,6 +38,7 @@ add_executable(
   ElementAtTest.cpp
   FromJsonTest.cpp
   GetJsonObjectTest.cpp
+  GetStructFieldTest.cpp
   HashTest.cpp
   InTest.cpp
   JsonArrayLengthTest.cpp
@@ -43,6 +46,7 @@ add_executable(
   LeastGreatestTest.cpp
   MakeDecimalTest.cpp
   MakeTimestampTest.cpp
+  MapConcatTest.cpp
   MapTest.cpp
   MaskTest.cpp
   MightContainTest.cpp
@@ -75,8 +79,7 @@ target_link_libraries(
   fmt::fmt
   GTest::gtest
   GTest::gtest_main
-  GTest::gmock
-  gflags::gflags)
+  GTest::gmock)
 
 add_executable(velox_spark_function_registry_test RegisterTest.cpp)
 

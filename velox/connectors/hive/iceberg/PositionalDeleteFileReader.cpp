@@ -40,6 +40,7 @@ PositionalDeleteFileReader::PositionalDeleteFileReader(
       baseFilePath_(baseFilePath),
       fileHandleFactory_(fileHandleFactory),
       executor_(executor),
+      connectorQueryCtx_(connectorQueryCtx),
       hiveConfig_(hiveConfig),
       ioStats_(ioStats),
       fsStats_(fsStats),
@@ -114,7 +115,9 @@ PositionalDeleteFileReader::PositionalDeleteFileReader(
           deleteReader.get(),
           deleteSplit_->filePath,
           deleteSplit_->partitionKeys,
-          {})) {
+          {},
+          hiveConfig_->readTimestampPartitionValueAsLocalTime(
+              connectorQueryCtx_->sessionProperties()))) {
     // We only count the number of base splits skipped as skippedSplits runtime
     // statistics in Velox.  Skipped delta split is only counted as skipped
     // bytes.
@@ -148,8 +151,7 @@ void PositionalDeleteFileReader::readDeletePositions(
   // batch, excluding boundaries
   int64_t rowNumberUpperBound = splitOffset_ + baseReadOffset + size;
 
-  // Finish unused delete positions from last batch. Note that at this point we
-  // don't know how many rows the base row reader would scan yet.
+  // Finish unused delete positions from last batch.
   if (deletePositionsOutput_ &&
       deletePositionsOffset_ < deletePositionsOutput_->size()) {
     updateDeleteBitmap(
@@ -170,7 +172,6 @@ void PositionalDeleteFileReader::readDeletePositions(
 
   // Read the new delete positions for this batch into deletePositionsOutput_
   // and update the delete bitmap
-
   auto outputType = posColumn_->type;
   RowTypePtr outputRowType = ROW({posColumn_->name}, {posColumn_->type});
   if (!deletePositionsOutput_) {
@@ -248,13 +249,11 @@ void PositionalDeleteFileReader::updateDeleteBitmap(
     deletePositionsOffset_++;
   }
 
-  // There might be multiple delete files for a single base file. The size of
-  // the deleteBitmapBuffer should be the largest position among all delte files
   deleteBitmapBuffer->setSize(std::max(
       static_cast<uint64_t>(deleteBitmapBuffer->size()),
       deletePositionsOffset_ == 0 ||
               (deletePositionsOffset_ < deletePositionsVector->size() &&
-               deletePositions[deletePositionsOffset_] > rowNumberUpperBound)
+               deletePositions[deletePositionsOffset_] >= rowNumberUpperBound)
           ? 0
           : bits::nbytes(
                 deletePositions[deletePositionsOffset_ - 1] + 1 -
