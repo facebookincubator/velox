@@ -94,8 +94,11 @@ jobs:
     timeout-minutes: 120
     env:
       CCACHE_DIR: "${{ github.workspace }}/ccache"
-      LINUX_DISTRO: "ubuntu"
-      MAKEFLAGS: "NUM_THREADS=${{ inputs.numThreads || 16 }} MAX_HIGH_MEM_JOBS=${{ inputs.maxHighMemJobs || 8 }} MAX_LINK_JOBS=${{ inputs.maxLinkJobs || 4 }}"
+      NUM_THREADS: "${{ inputs.numThreads || 16 }}"
+      MAX_HIGH_MEM_JOBS: "${{ inputs.maxHighMemJobs || 8 }}"
+      MAX_LINK_JOBS: "${{ inputs.maxLinkJobs || 4 }}"
+      SKBUILD_BUILD_DIR: "_build/debug"
+      PYVELOX_LEGACY_ONLY: "ON"
 
     defaults:
       run:
@@ -150,7 +153,7 @@ jobs:
       - name: Ensure Stash Dirs Exists
         working-directory: ${{ github.workspace }}
         run: |
-          mkdir -p '${{ env.CCACHE_DIR }}'
+          mkdir -p '$CCACHE_DIR'
           mkdir -p /tmp/signatures
 
       - name: Checkout Main
@@ -164,9 +167,6 @@ jobs:
         if: ${{ github.event_name != 'schedule' && steps.get-sig.outputs.stash-hit != 'true' }}
         working-directory: velox_main
         run: |
-          python3 -m venv .venv
-          source .venv/bin/activate
-
           make python-build
 
       - name: Create Baseline Signatures
@@ -199,10 +199,17 @@ jobs:
 
       - name: Build
         env:
-          EXTRA_CMAKE_FLAGS: "-DVELOX_ENABLE_ARROW=ON -DVELOX_BUILD_PYTHON_PACKAGE=ON ${{ inputs.extraCMakeFlags }}"
+          EXTRA_CMAKE_FLAGS: >
+            -DVELOX_ENABLE_ARROW=ON \
+            -DVELOX_MONO_LIBRARY=ON \
+            -DVELOX_BUILD_PYTHON_PACKAGE=ON \
+            -DVELOX_PYTHON_LEGACY_ONLY=ON \
+            ${{ inputs.extraCMakeFlags }}
         run: |
-          EXTRA_CMAKE_FLAGS="-DPYTHON_EXECUTABLE=$(which python3) $EXTRA_CMAKE_FLAGS"
+          make python-venv
+          source .venv/bin/activate
           make debug
+
 
       - name: Ccache after
         run: ccache -s
@@ -218,13 +225,8 @@ jobs:
 
       - name: Build PyVelox
         if: ${{ github.event_name != 'schedule' }}
-        env:
-          VELOX_BUILD_DIR: "_build/debug"
         run: |
-          python3 -m venv .venv
-          source .venv/bin/activate
-
-          python3 -m pip install -e .
+          make python-build
 
       - name: Create and test new function signatures
         if: ${{ github.event_name != 'schedule' }}
@@ -340,6 +342,13 @@ jobs:
         with:
           name: row_number
           path: velox/_build/debug//velox/exec/fuzzer/velox_row_number_fuzzer
+          retention-days: "${{ env.RETENTION }}"
+
+      - name: Upload topn row number fuzzer
+        uses: actions/upload-artifact@v4
+        with:
+          name: topn_row_number
+          path: velox/_build/debug//velox/exec/fuzzer/velox_topn_row_number_fuzzer
           retention-days: "${{ env.RETENTION }}"
 
       - name: Upload writer fuzzer
@@ -769,6 +778,69 @@ jobs:
             name: row-fuzzer-failure-artifacts
             path: |
               /tmp/row_fuzzer_repro
+
+  presto-java-topn-row-number-fuzzer-run:
+    name: TopNRowNumber Fuzzer
+    runs-on: ubuntu-latest
+    container: ghcr.io/facebookincubator/velox-dev:presto-java
+    needs: compile
+    timeout-minutes: 120
+    env:
+      CCACHE_DIR: "${{ github.workspace }}/ccache/"
+      LINUX_DISTRO: "centos"
+
+    steps:
+
+      - name: Download topn row number fuzzer
+        uses: actions/download-artifact@v4
+        with:
+          name: topn_row_number
+
+      - name: "Checkout Repo"
+        uses: actions/checkout@v4
+        with:
+          path: velox
+          submodules: 'recursive'
+          ref: "${{ inputs.ref }}"
+
+      - name: Fix git permissions
+        # Usually actions/checkout does this but as we run in a container
+        # it doesn't work
+        run: git config --global --add safe.directory ${GITHUB_WORKSPACE}/velox
+
+      - name: Run TopNRowNumber Fuzzer
+        run: |
+          cd velox
+          cp ./scripts/presto/etc/hive.properties $PRESTO_HOME/etc/catalog
+          ls -lR $PRESTO_HOME/etc
+          $PRESTO_HOME/bin/launcher run -v > /tmp/server.log 2>&1 &
+          # Sleep for 60 seconds to allow Presto server to start.
+          sleep 60
+          /opt/presto-cli --server 127.0.0.1:8080 --execute 'CREATE SCHEMA hive.tpch;'
+          cd -
+          cat /proc/sys/vm/max_map_count
+          mkdir -p /tmp/topn_row_fuzzer_repro/logs/
+          chmod -R 777 /tmp/topn_row_fuzzer_repro
+          chmod +x velox_topn_row_number_fuzzer
+          random_seed=${RANDOM}
+          echo "Random seed: ${random_seed}"
+          ./velox_topn_row_number_fuzzer \
+                --seed ${random_seed} \
+                --duration_sec $DURATION \
+                --minloglevel=0 \
+                --stderrthreshold=2 \
+                --req_timeout_ms 50000 \
+                --log_dir=/tmp/topn_row_fuzzer_repro/logs \
+                --presto_url=http://127.0.0.1:8080 \
+            && echo -e "\n\TopN Row number fuzzer run finished successfully."
+
+      - name: Archive topn row number production artifacts
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: topn-row-fuzzer-failure-artifacts
+          path: |
+            /tmp/topn_row_fuzzer_repro
 
   cache-fuzzer-run:
     name: Cache Fuzzer

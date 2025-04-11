@@ -72,6 +72,10 @@ Task Execution
      - The distribution of driver execution time in range of [0, 30s] with
        30 buckets. It is configured to report the latency at P50, P90, P99,
        and P100 percentiles.
+   * - task_batch_process_time_ms
+     - Average
+     - Tracks the averaged task batch processing time. This only applies for
+       sequential task execution mode.
 
 Memory Management
 -----------------
@@ -132,6 +136,9 @@ Memory Management
    * - task_memory_reclaim_wait_timeout_count
      - Count
      - The number of times that the task memory reclaim wait timeouts.
+   * - task_splits_count
+     - Count
+     - The total number of splits received by all tasks.
    * - memory_non_reclaimable_count
      - Count
      - The number of times that the memory reclaim fails because the operator is executing a
@@ -579,6 +586,10 @@ Index Join
      - Histogram
      - The time distribution of index lookup time in range of [0, 16s] with 512
        buckets and reports P50, P90, P99, and P100.
+   * - index_lookup_blocked_wait_time_ms
+     - Histogram
+     - The time distribution of index lookup operator blocked wait time in range
+       of [0, 16s] with 512 buckets and reports P50, P90, P99, and P100.
    * - index_lookup_result_raw_bytes
      - Histogram
      - The distribution of index lookup result raw bytes in range of [0, 128MB]

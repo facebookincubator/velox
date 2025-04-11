@@ -78,7 +78,7 @@ class ExpressionFuzzer {
     //  pool of candidates by a required return type so not all functions may
     //  compete against the same number of functions at every instance. Number
     //  of tickets must be a positive integer. Example: eq=3,floor=5
-    std::string functionTickets = "";
+    std::string functionTickets;
 
     // Chance of adding a null constant to the plan, or null value in a vector
     // (expressed as double from 0 to 1).
@@ -87,7 +87,7 @@ class ExpressionFuzzer {
     // If specified, Fuzzer will only choose functions from this comma separated
     // list of function names (e.g: --only \"split\" or --only
     // \"substr,ltrim\")."
-    std::string useOnlyFunctions = "";
+    std::string useOnlyFunctions;
 
     // Comma-separated list of special forms to use in generated expression.
     // Supported special forms: and, or, coalesce, if, switch, cast.")
@@ -299,23 +299,24 @@ class ExpressionFuzzer {
   // Returns random integer between min and max inclusive.
   int32_t rand32(int32_t min, int32_t max);
 
-  static const inline std::string kTypeParameterName = "T";
-
   const Options options_;
 
   std::vector<CallableSignature> signatures_;
   std::vector<SignatureTemplate> signatureTemplates_;
 
+  // IMPORTANT: this needs to be sanitized because ExpressionFuzzer sanitizes
+  // type names before adding them to the maps below.
+  static const inline std::string kTypeParameterName = exec::sanitizeName("T");
+
   /// Maps the base name of a return type signature to the function names that
-  /// support that return type. Base name could be "T" if the return type is a
-  /// type variable.
+  /// support that return type. Base name could be `kTypeParameterName` if the
+  /// return type is a type variable.
   std::unordered_map<std::string, std::vector<std::string>>
       typeToExpressionList_;
 
   /// Maps the base name of a *concrete* return type signature to the function
   /// names that support that return type. Those names then each further map
-  /// to a list of CallableSignature objects that they support. Base name
-  /// could be "T" if the return type is a type variable.
+  /// to a list of CallableSignature objects that they support.
   std::unordered_map<
       std::string,
       std::unordered_map<std::string, std::vector<const CallableSignature*>>>
@@ -324,7 +325,8 @@ class ExpressionFuzzer {
   /// Maps the base name of a *templated* return type signature to the
   /// function names that support that return type. Those names then each
   /// further map to a list of SignatureTemplate objects that they support.
-  /// Base name could be "T" if the return type is a type variable.
+  /// Base name could be `kTypeParameterName` if the return type is a type
+  /// variable.
   std::unordered_map<
       std::string,
       std::unordered_map<std::string, std::vector<const SignatureTemplate*>>>

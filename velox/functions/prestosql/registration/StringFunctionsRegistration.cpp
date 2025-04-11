@@ -54,6 +54,8 @@ void registerSimpleFunctions(const std::string& prefix) {
       {prefix + "starts_with"});
   registerFunction<EndsWithFunction, bool, Varchar, Varchar>(
       {prefix + "ends_with"});
+  registerFunction<EndsWithFunction, bool, Varchar, UnknownValue>(
+      {prefix + "ends_with"});
 
   registerFunction<TrailFunction, Varchar, Varchar, int32_t>(
       {prefix + "trail"});
@@ -147,6 +149,25 @@ void registerSplitToMap(const std::string& prefix) {
       Varchar,
       Varchar,
       Varchar>({prefix + "split_to_map"});
+
+  registerFunction<
+      SplitToMapFunction,
+      Map<Varchar, Array<Varchar>>,
+      Varchar,
+      UnknownValue,
+      Varchar>({prefix + "split_to_map"});
+  registerFunction<
+      SplitToMapFunction,
+      Map<Varchar, Array<Varchar>>,
+      Varchar,
+      Varchar,
+      UnknownValue>({prefix + "split_to_map"});
+  registerFunction<
+      SplitToMapFunction,
+      Map<Varchar, Array<Varchar>>,
+      Varchar,
+      UnknownValue,
+      UnknownValue>({prefix + "split_to_map"});
 
   exec::registerVectorFunction(
       prefix + "split_to_map",
