@@ -16,6 +16,9 @@
 
 #pragma once
 
+#include <breeze/platforms/cuda.cuh>
+#include <breeze/platforms/platform.h>
+#include <breeze/utils/types.h>
 #include <cub/cub.cuh> // @manual
 #include "velox/experimental/wave/common/Bits.cuh"
 #include "velox/experimental/wave/common/Block.cuh"
@@ -719,6 +722,7 @@ template <
     bool kHasResult,
     typename IndexT = T>
 __device__ void decodeSelective(GpuDecode* op) {
+  using namespace breeze::utils;
   int32_t nthLoop = 0;
   constexpr bool kAlwaysDict = !std::is_same_v<T, IndexT>;
   switch (op->nullMode) {
@@ -761,8 +765,9 @@ __device__ void decodeSelective(GpuDecode* op) {
             int32_t bitIndex = (i + base) * bitWidth + alignOffset;
             int32_t wordIndex = bitIndex >> 6;
             if (false && threadIdx.x < 3) {
-              asm volatile("prefetch.global.L1 [%0];" ::"l"(
-                  &words[wordIndex + 48 + threadIdx.x * 4]));
+              CudaPlatform<kBlockSize, kWarpThreads> p;
+              p.prefetch(
+                  make_slice<GLOBAL>(&words[wordIndex + 48 + threadIdx.x * 4]));
             }
             int32_t bit = bitIndex & 63;
             uint64_t word = words[wordIndex];
