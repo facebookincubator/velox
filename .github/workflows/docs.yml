@@ -59,6 +59,7 @@ jobs:
           cd velox/docs
           make clean
           # pyvelox
+          # Need to build pyvelox package here
           mkdir -p bindings/python
           pandoc ../../python/README.md --from markdown --to rst -s -o bindings/python/README_generated_pyvelox.rst
           # velox
