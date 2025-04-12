@@ -198,6 +198,20 @@ When E is DOUBLE or REAL, NaN value is considered greater than any non-NaN value
 </dd></dl>
 
 <dl class="spark function">
+<dt class="sig sig-object spark" id="array_prepend">
+<span class="sig-name descname"><span class="pre">array_prepend</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">element</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">array</span></span></span><a class="headerlink" href="#array_prepend" title="Link to this definition">¶</a></dt>
+<dd><p>Add the <code class="docutils literal notranslate"><span class="pre">element</span></code> at the beginning of the input array <code class="docutils literal notranslate"><span class="pre">x</span></code>.
+Type of <code class="docutils literal notranslate"><span class="pre">element</span></code> should be the same to the type of elements in the array <code class="docutils literal notranslate"><span class="pre">x</span></code>.
+NULL element is also prepended into the array <code class="docutils literal notranslate"><span class="pre">x</span></code>. Returns NULL when the input array <code class="docutils literal notranslate"><span class="pre">x</span></code> is NULL.</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">array_prepend</span><span class="p">(</span><span class="n">array</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">3</span><span class="p">),</span> <span class="mi">2</span><span class="p">);</span> <span class="o">--</span> <span class="p">[</span><span class="mi">2</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">3</span><span class="p">]</span>
+<span class="n">SELECT</span> <span class="n">array_prepend</span><span class="p">(</span><span class="n">array</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">3</span><span class="p">),</span> <span class="n">NULL</span><span class="p">);</span> <span class="o">--</span> <span class="p">[</span><span class="n">NULL</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">3</span><span class="p">]</span>
+<span class="n">SELECT</span> <span class="n">array_prepend</span><span class="p">(</span><span class="n">NULL</span><span class="p">,</span> <span class="mi">1</span><span class="p">);</span> <span class="o">--</span> <span class="n">NULL</span>
+<span class="n">SELECT</span> <span class="n">array_prepend</span><span class="p">(</span><span class="n">array</span><span class="p">(</span><span class="n">NULL</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">3</span><span class="p">),</span> <span class="mi">1</span><span class="p">);</span> <span class="o">--</span> <span class="p">[</span><span class="mi">1</span><span class="p">,</span> <span class="n">NULL</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">3</span><span class="p">]</span>
+</pre></div>
+</div>
+</dd></dl>
+
+<dl class="spark function">
 <dt class="sig sig-object spark" id="array_remove">
 <span class="sig-name descname"><span class="pre">array_remove</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">element</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">array</span></span></span><a class="headerlink" href="#array_remove" title="Link to this definition">¶</a></dt>
 <dd><p>Remove all elements that equal <code class="docutils literal notranslate"><span class="pre">element</span></code> from array <code class="docutils literal notranslate"><span class="pre">x</span></code>. Returns NULL as result if <code class="docutils literal notranslate"><span class="pre">element</span></code> is NULL.
@@ -454,6 +468,7 @@ longer array, before applying <code class="docutils literal notranslate"><span c
 <li><a class="reference internal" href="#array_max"><code class="docutils literal notranslate"><span class="pre">array_max()</span></code></a></li>
 <li><a class="reference internal" href="#array_min"><code class="docutils literal notranslate"><span class="pre">array_min()</span></code></a></li>
 <li><a class="reference internal" href="#array_position"><code class="docutils literal notranslate"><span class="pre">array_position()</span></code></a></li>
+<li><a class="reference internal" href="#array_prepend"><code class="docutils literal notranslate"><span class="pre">array_prepend()</span></code></a></li>
 <li><a class="reference internal" href="#array_remove"><code class="docutils literal notranslate"><span class="pre">array_remove()</span></code></a></li>
 <li><a class="reference internal" href="#array_repeat"><code class="docutils literal notranslate"><span class="pre">array_repeat()</span></code></a></li>
 <li><a class="reference internal" href="#array_sort"><code class="docutils literal notranslate"><span class="pre">array_sort()</span></code></a></li>
