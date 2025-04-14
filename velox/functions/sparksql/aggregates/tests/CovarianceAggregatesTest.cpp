@@ -24,6 +24,7 @@ using namespace facebook::velox::functions::aggregate::test;
 namespace facebook::velox::functions::aggregate::sparksql::test {
 
 namespace {
+
 class CovarianceAggregatesTest : public AggregationTestBase {
  protected:
   void SetUp() override {

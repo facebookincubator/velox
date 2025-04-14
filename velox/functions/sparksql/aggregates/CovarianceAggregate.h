@@ -2,8 +2,6 @@
 
 #include <string>
 
-#include "velox/exec/Aggregate.h"
-
 namespace facebook::velox::functions::aggregate::sparksql {
 
 void registerCovarianceAggregates(
