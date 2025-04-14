@@ -368,7 +368,8 @@ bool tryParseDateString(
       return true;
     }
 
-    if (buf[pos] == 'T' || buf[pos] == ' ') {
+    //if (buf[pos] == 'T' || buf[pos] == ' ') {
+    if (buf[pos] == ' ') {
       return true;
     }
     return false;
