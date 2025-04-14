@@ -47,10 +47,8 @@ class VarianceAggregationTest : public AggregationTestBase {
             legacy ? "true" : "false")
         .assertResults({expected});
   }
-};
 
-TEST_F(VarianceAggregationTest, variance) {
-  auto testVarianceAggregate = [&](const std::string& agg) {
+  void testVarianceAggregate(const std::string& agg) {
     auto input = makeRowVector({makeFlatVector<double>({2, 4, 4, 4})});
     auto expected =
         makeRowVector({makeFlatVector<double>(std::vector<double>{1.0})});
@@ -86,11 +84,22 @@ TEST_F(VarianceAggregationTest, variance) {
     expected = makeRowVector({makeNullableFlatVector<double>(
         std::vector<std::optional<double>>{std::nullopt})});
     testStatisticalAggregate(agg, input, expected, true);
-  };
+  }
+};
 
+TEST_F(VarianceAggregationTest, stddev) {
   testVarianceAggregate("stddev");
+}
+
+TEST_F(VarianceAggregationTest, stddev_samp) {
   testVarianceAggregate("stddev_samp");
+}
+
+TEST_F(VarianceAggregationTest, variance) {
   testVarianceAggregate("variance");
+}
+
+TEST_F(VarianceAggregationTest, var_samp) {
   testVarianceAggregate("var_samp");
 }
 
