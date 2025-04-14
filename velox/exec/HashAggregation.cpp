@@ -167,7 +167,7 @@ void HashAggregation::setupGroupingKeyChannelProjections(
 
 bool HashAggregation::abandonPartialAggregationEarly(int64_t numOutput) const {
   VELOX_CHECK(
-      groupingSet_->allPartialOutput(),
+      isDistinct_ || groupingSet_->allPartialOutput(),
       "Hash aggregation only supports abandonment when all aggregates' outputs are partial");
   VELOX_CHECK(
       !isGlobal_,
