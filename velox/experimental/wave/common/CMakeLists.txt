@@ -30,7 +30,8 @@ target_link_libraries(
   velox_type
   CUDA::cuda_driver
   CUDA::nvrtc
-  CUDA::cudart)
+  CUDA::cudart
+  breeze_cuda)
 
 target_compile_definitions(velox_wave_common PRIVATE VELOX_OSS_BUILD=1)
 
