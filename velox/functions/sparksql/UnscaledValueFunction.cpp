@@ -41,7 +41,6 @@ class UnscaledValueFunction final : public exec::VectorFunction {
           context.pool(), rows.end(), false, BIGINT(), std::move(value));
     } else {
       auto flatInput = arg->asFlatVector<int64_t>();
-      VELOX_CHECK_LE(rows.end(), flatInput->size());
       localResult = std::make_shared<FlatVector<int64_t>>(
           context.pool(),
           BIGINT(),
