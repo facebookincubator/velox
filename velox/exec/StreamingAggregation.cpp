@@ -276,7 +276,7 @@ void StreamingAggregation::evaluateAggregates() {
       }
     }
 
-    if (core::AggregationNode::Aggregate::isPartialInput(aggregate.step)) {
+    if (isRawInput(aggregate.step)) {
       if (function->supportsAddRawClusteredInput()) {
         function->addRawClusteredInput(
             inputGroups_.data(), rows, args, groupBoundaries_);
