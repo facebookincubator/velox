@@ -119,6 +119,9 @@ These stats are reported only by TableWriter operator
    * - earlyFlushedRawBytes
      - bytes
      - Number of bytes pre-maturely flushed from file writers because of memory reclaiming.
+   * - numPartitionedWriters
+     -
+     - The number of partitioned writers in hive data sink
    * - rebalanceTriggers
      -
      - The number of times that we triggers the rebalance of table partitions
