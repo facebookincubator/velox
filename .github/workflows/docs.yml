@@ -59,7 +59,7 @@ jobs:
           dnf install -y --setopt=install_weak_deps=False pandoc
           pip3 install pipx
           pipx install --force uv cmake==3.31
-          pipx ensurepath
+          echo "PATH="$PATH:/root/.local/bin" >> $GITHUB_ENV
 
       - name: Install Python Dependencies
         run: |
