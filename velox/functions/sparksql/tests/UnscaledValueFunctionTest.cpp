@@ -24,18 +24,44 @@ namespace {
 class UnscaledValueFunctionTest : public SparkFunctionBaseTest {};
 
 TEST_F(UnscaledValueFunctionTest, unscaledValue) {
-  auto testUnscaledValue = [&](const std::vector<int64_t>& unscaledValue,
-                               const TypePtr& decimalType) {
-    auto input = makeFlatVector<int64_t>(unscaledValue, decimalType);
-    auto expected = makeFlatVector<int64_t>(unscaledValue);
+  auto testUnscaledValue = [&](const VectorPtr& input,
+                               const VectorPtr& expected) {
     auto result = evaluate("unscaled_value(c0)", makeRowVector({input}));
     assertEqualVectors(expected, result);
   };
 
-  testUnscaledValue({1000, 2000, -3000, -4000}, DECIMAL(18, 3));
+  auto flatInput =
+      makeFlatVector<int64_t>({1000, 2000, -3000, -4000}, DECIMAL(18, 3));
+  auto flatExpected = makeFlatVector<int64_t>({1000, 2000, -3000, -4000});
+  auto nullableFlatInput =
+      makeNullableFlatVector<int64_t>({0, std::nullopt}, DECIMAL(18, 3));
+  auto nullableFlatExpected =
+      makeNullableFlatVector<int64_t>({0, std::nullopt});
 
-  VELOX_ASSERT_THROW(
-      testUnscaledValue({1000, 2000, -3000, -4000}, DECIMAL(20, 3)),
+  auto constInput = makeConstant<int64_t>(1000, 4, DECIMAL(18, 3));
+  auto constExpected = makeConstant<int64_t>(1000, 4);
+  auto constNullInput = makeConstant<int64_t>(std::nullopt, 4, DECIMAL(18, 3));
+  auto constNullExpected = makeConstant<int64_t>(std::nullopt, 4);
+
+  auto indices = makeIndices(8, [](auto row) { return row % 4; });
+  auto dictInput = wrapInDictionary(indices, 8, flatInput);
+  auto dictExpected = wrapInDictionary(indices, 8, flatExpected);
+  auto dictConstInput = wrapInDictionary(indices, 8, constNullInput);
+  auto dictConstExpected = wrapInDictionary(indices, 8, constNullExpected);
+
+  auto invalidInput = makeFlatVector<int64_t>({0, 0, 0, 0}, DECIMAL(20, 3));
+
+  testUnscaledValue(flatInput, flatExpected);
+  testUnscaledValue(nullableFlatInput, nullableFlatExpected);
+
+  testUnscaledValue(constInput, constExpected);
+  testUnscaledValue(constNullInput, constNullExpected);
+
+  testUnscaledValue(dictInput, dictExpected);
+  testUnscaledValue(dictConstInput, dictConstExpected);
+
+  VELOX_ASSERT_USER_THROW(
+      testUnscaledValue(invalidInput, flatExpected),
       "Expect short decimal type, but got: DECIMAL(20, 3)");
 }
 } // namespace
