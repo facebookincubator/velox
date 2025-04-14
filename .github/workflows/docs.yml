@@ -42,6 +42,7 @@ jobs:
     steps:
 
       - name: "Restore ccache"
+        if: false
         uses: apache/infrastructure-actions/stash/restore@3354c1565d4b0e335b78a76aedd82153a9e144d4
         id: restore-cache
         with:
@@ -59,11 +60,13 @@ jobs:
           dnf install -y --setopt=install_weak_deps=False pandoc
           pip3 install pipx
           pipx install --force uv cmake==3.31
-          echo "PATH=$PATH:/root/.local/bin" >> $GITHUB_ENV
+          echo "PATH=$PATH:/github/home/.local/bin" >> $GITHUB_ENV
 
       - name: Install Python Dependencies
         run: |
+          which uv
           make python-venv
+          which uv
           uv pip install -r scripts/docs-requirements.txt 
           
           # Install pyvelox to generate it's docs
