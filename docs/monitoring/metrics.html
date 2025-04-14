@@ -829,6 +829,64 @@ P100 percentiles.</p></td>
 </tbody>
 </table>
 </section>
+<section id="s3-filesystem">
+<h2>S3 FileSystem<a class="headerlink" href="#s3-filesystem" title="Link to this heading">¶</a></h2>
+<table class="docutils align-default">
+<colgroup>
+<col style="width: 40.0%" />
+<col style="width: 10.0%" />
+<col style="width: 50.0%" />
+</colgroup>
+<thead>
+<tr class="row-odd"><th class="head"><p>Metric Name</p></th>
+<th class="head"><p>Type</p></th>
+<th class="head"><p>Description</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>s3_active_connections</p></td>
+<td><p>Sum</p></td>
+<td><p>The number of connections open for S3 read operations.</p></td>
+</tr>
+<tr class="row-odd"><td><p>s3_started_uploads</p></td>
+<td><p>Count</p></td>
+<td><p>The number of S3 upload calls that were started.</p></td>
+</tr>
+<tr class="row-even"><td><p>s3_successful_uploads</p></td>
+<td><p>Count</p></td>
+<td><p>The number of S3 upload calls that were completed.</p></td>
+</tr>
+<tr class="row-odd"><td><p>s3_failed_uploads</p></td>
+<td><p>Count</p></td>
+<td><p>The number of S3 upload calls that failed.</p></td>
+</tr>
+<tr class="row-even"><td><p>s3_metadata_calls</p></td>
+<td><p>Count</p></td>
+<td><p>The number of S3 head (metadata) calls.</p></td>
+</tr>
+<tr class="row-odd"><td><p>s3_get_metadata_errors</p></td>
+<td><p>Count</p></td>
+<td><p>The number of S3 head (metadata) calls that failed.</p></td>
+</tr>
+<tr class="row-even"><td><p>s3_get_metadata_retries</p></td>
+<td><p>Count</p></td>
+<td><p>The number of retries made during S3 head (metadata) calls.</p></td>
+</tr>
+<tr class="row-odd"><td><p>s3_get_object_calls</p></td>
+<td><p>Count</p></td>
+<td><p>The number of S3 getObject calls.</p></td>
+</tr>
+<tr class="row-even"><td><p>s3_get_object_errors</p></td>
+<td><p>Count</p></td>
+<td><p>The number of S3 getObject calls that failed.</p></td>
+</tr>
+<tr class="row-odd"><td><p>s3_get_object_retries</p></td>
+<td><p>Count</p></td>
+<td><p>The number of retries made during S3 getObject calls.</p></td>
+</tr>
+</tbody>
+</table>
+</section>
 </section>
 
 
@@ -851,6 +909,7 @@ P100 percentiles.</p></td>
 <li><a class="reference internal" href="#hive-connector">Hive Connector</a></li>
 <li><a class="reference internal" href="#index-join">Index Join</a></li>
 <li><a class="reference internal" href="#table-scan">Table Scan</a></li>
+<li><a class="reference internal" href="#s3-filesystem">S3 FileSystem</a></li>
 </ul>
 </li>
 </ul>
