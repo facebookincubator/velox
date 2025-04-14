@@ -37,10 +37,11 @@ class CovarianceAggregatesTest : public AggregationTestBase {
       const RowVectorPtr& input,
       const RowVectorPtr& expected,
       bool legacy = false) {
-    auto plan = PlanBuilder()
-                    .values({input})
-                    .singleAggregation({}, {fmt::format("spark_{}(c0, c1)", agg)})
-                    .planNode();
+    auto plan =
+        PlanBuilder()
+            .values({input})
+            .singleAggregation({}, {fmt::format("spark_{}(c0, c1)", agg)})
+            .planNode();
     AssertQueryBuilder(plan)
         .config(
             core::QueryConfig::kSparkLegacyStatisticalAggregate,

@@ -110,7 +110,13 @@ void ExtendedRegrAccumulator::update(double x, double y) {
   m2Y_ += (y - oldMeanY) * (y - meanY());
 }
 
-void ExtendedRegrAccumulator::merge(int64_t countOther, double meanXOther, double meanYOther, double c2Other, double m2XOther, double m2YOther) {
+void ExtendedRegrAccumulator::merge(
+    int64_t countOther,
+    double meanXOther,
+    double meanYOther,
+    double c2Other,
+    double m2XOther,
+    double m2YOther) {
   if (countOther == 0) {
     return;
   }
@@ -119,17 +125,19 @@ void ExtendedRegrAccumulator::merge(int64_t countOther, double meanXOther, doubl
     m2Y_ = m2YOther;
   } else {
     m2X_ += m2XOther +
-            1.0 * count() / (count() + countOther) * countOther *
+        1.0 * count() / (count() + countOther) * countOther *
             std::pow(meanX() - meanXOther, 2);
 
     m2Y_ += m2YOther +
-            1.0 * count() / (count() + countOther) * countOther *
+        1.0 * count() / (count() + countOther) * countOther *
             std::pow(meanY() - meanYOther, 2);
   }
   CovarAccumulator::merge(countOther, meanXOther, meanYOther, c2Other);
 }
 
-void CovarIntermediateInput::mergeInto(CovarAccumulator& accumulator, vector_size_t row) {
+void CovarIntermediateInput::mergeInto(
+    CovarAccumulator& accumulator,
+    vector_size_t row) {
   accumulator.merge(
       count_->valueAt(row),
       meanX_->valueAt(row),
@@ -137,7 +145,9 @@ void CovarIntermediateInput::mergeInto(CovarAccumulator& accumulator, vector_siz
       c2_->valueAt(row));
 }
 
-void CovarIntermediateResult::set(vector_size_t row, const CovarAccumulator& accumulator) {
+void CovarIntermediateResult::set(
+    vector_size_t row,
+    const CovarAccumulator& accumulator) {
   count_[row] = accumulator.count();
   meanX_[row] = accumulator.meanX();
   meanY_[row] = accumulator.meanY();
@@ -153,7 +163,13 @@ void CorrAccumulator::update(double x, double y) {
   m2Y_ += (y - oldMeanY) * (y - meanY());
 }
 
-void CorrAccumulator::merge(int64_t countOther, double meanXOther, double meanYOther, double c2Other, double m2XOther, double m2YOther) {
+void CorrAccumulator::merge(
+    int64_t countOther,
+    double meanXOther,
+    double meanYOther,
+    double c2Other,
+    double m2XOther,
+    double m2YOther) {
   if (countOther == 0) {
     return;
   }
@@ -170,7 +186,9 @@ void CorrAccumulator::merge(int64_t countOther, double meanXOther, double meanYO
   CovarAccumulator::merge(countOther, meanXOther, meanYOther, c2Other);
 }
 
-void CorrIntermediateInput::mergeInto(CorrAccumulator& accumulator, vector_size_t row) {
+void CorrIntermediateInput::mergeInto(
+    CorrAccumulator& accumulator,
+    vector_size_t row) {
   accumulator.merge(
       count_->valueAt(row),
       meanX_->valueAt(row),
@@ -180,7 +198,9 @@ void CorrIntermediateInput::mergeInto(CorrAccumulator& accumulator, vector_size_
       m2Y_->valueAt(row));
 }
 
-void CorrIntermediateResult::set(vector_size_t row, const CorrAccumulator& accumulator) {
+void CorrIntermediateResult::set(
+    vector_size_t row,
+    const CorrAccumulator& accumulator) {
   CovarIntermediateResult::set(row, accumulator);
   m2X_[row] = accumulator.m2X();
   m2Y_[row] = accumulator.m2Y();
