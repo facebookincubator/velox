@@ -69,6 +69,7 @@ class FilterProjectReplayerTest : public HiveConnectorTestBase {
     connector::hive::LocationHandle::registerSerDe();
     connector::hive::HiveColumnHandle::registerSerDe();
     connector::hive::HiveInsertTableHandle::registerSerDe();
+    connector::hive::HiveInsertFileNameGenerator::registerSerDe();
     connector::hive::HiveConnectorSplit::registerSerDe();
     core::PlanNode::registerSerDe();
     core::ITypedExpr::registerSerDe();
@@ -293,5 +294,31 @@ TEST_F(FilterProjectReplayerTest, projectOnly) {
                               executor_.get())
                               .run();
   assertEqualResults({result}, {replayingResult1, replayingResult2});
+
+  const auto taskTraceDir =
+      exec::trace::getTaskTraceDirectory(traceRoot, *task);
+  const auto opTraceDir =
+      exec::trace::getOpTraceDirectory(taskTraceDir, projectNodeId_, 0, 0);
+  const auto opTraceDataFile = exec::trace::getOpTraceInputFilePath(opTraceDir);
+  auto fs = filesystems::getFileSystem(opTraceDataFile, nullptr);
+  auto file = fs->openFileForWrite(
+      opTraceDataFile,
+      filesystems::FileOptions{
+          .values = {},
+          .fileSize = std::nullopt,
+          .shouldThrowOnFileAlreadyExists = false});
+  file->truncate(0);
+  file->close();
+  auto emptyResult = FilterProjectReplayer(
+                         traceRoot,
+                         task->queryCtx()->queryId(),
+                         task->taskId(),
+                         projectNodeId_,
+                         "FilterProject",
+                         "0",
+                         0,
+                         executor_.get())
+                         .run();
+  ASSERT_EQ(emptyResult->size(), 0);
 }
 } // namespace facebook::velox::tool::trace::test

@@ -113,6 +113,15 @@ class QueryConfig {
   static constexpr const char* kMaxMergeExchangeBufferSize =
       "merge_exchange.max_buffer_size";
 
+  /// The minimum number of bytes to accumulate in the ExchangeQueue
+  /// before unblocking a consumer. This is used to avoid creating tiny
+  /// batches which may have a negative impact on performance when the
+  /// cost of creating vectors is high (for example, when there are many
+  /// columns). To avoid latency degradation, the exchange client unblocks a
+  /// consumer when 1% of the data size observed so far is accumulated.
+  static constexpr const char* kMinExchangeOutputBatchBytes =
+      "min_exchange_output_batch_bytes";
+
   static constexpr const char* kMaxPartialAggregationMemory =
       "max_partial_aggregation_memory";
 
@@ -324,6 +333,12 @@ class QueryConfig {
   static constexpr const char* kSparkLegacyDateFormatter =
       "spark.legacy_date_formatter";
 
+  /// If true, Spark statistical aggregation functions including skewness,
+  /// kurtosis, will return NaN instead of NULL when dividing by zero during
+  /// expression evaluation.
+  static constexpr const char* kSparkLegacyStatisticalAggregate =
+      "spark.legacy_statistical_aggregate";
+
   /// The number of local parallel table writer operators per task.
   static constexpr const char* kTaskWriterCount = "task_writer_count";
 
@@ -442,6 +457,11 @@ class QueryConfig {
       kDebugAggregationApproxPercentileFixedRandomSeed =
           "debug_aggregation_approx_percentile_fixed_random_seed";
 
+  /// When debug is enabled for memory manager, this is used to match the memory
+  /// pools that need allocation callsites tracking. Default to track nothing.
+  static constexpr const char* kDebugMemoryPoolNameRegex =
+      "debug_memory_pool_name_regex";
+
   /// Temporary flag to control whether selective Nimble reader should be used
   /// in this query or not.  Will be removed after the selective Nimble reader
   /// is fully rolled out.
@@ -496,6 +516,32 @@ class QueryConfig {
   static constexpr const char* kShuffleCompressionKind =
       "shuffle_compression_codec";
 
+  /// If a key is found in multiple given maps, by default that key's value in
+  /// the resulting map comes from the last one of those maps. When true, throw
+  /// exception on duplicate map key.
+  static constexpr const char* kThrowExceptionOnDuplicateMapKeys =
+      "throw_exception_on_duplicate_map_keys";
+
+  /// Specifies the max number of input batches to prefetch to do index lookup
+  /// ahead. If it is zero, then process one input batch at a time.
+  static constexpr const char* kIndexLookupJoinMaxPrefetchBatches =
+      "index_lookup_join_max_prefetch_batches";
+
+  // Max wait time for exchange request in seconds.
+  static constexpr const char* kRequestDataSizesMaxWaitSec =
+      "request_data_sizes_max_wait_sec";
+
+  /// If this is false (the default), in streaming aggregation, wait until we
+  /// have enough number of output rows to produce a batch of size specified by
+  /// Operator::outputBatchRows.
+  ///
+  /// If this is true, we put the rows in output batch, as soon as the
+  /// corresponding groups are fully aggregated.  This is useful for reducing
+  /// memory consumption, if the downstream operators are not sensitive to small
+  /// batch size.
+  static constexpr const char* kStreamingAggregationEagerFlush =
+      "streaming_aggregation_eager_flush";
+
   bool selectiveNimbleReaderEnabled() const {
     return get<bool>(kSelectiveNimbleReaderEnabled, false);
   }
@@ -514,6 +560,10 @@ class QueryConfig {
 
   bool debugDisableExpressionsWithLazyInputs() const {
     return get<bool>(kDebugDisableExpressionWithLazyInputs, false);
+  }
+
+  std::string debugMemoryPoolNameRegex() const {
+    return get<std::string>(kDebugMemoryPoolNameRegex, "");
   }
 
   std::optional<uint32_t> debugAggregationApproxPercentileFixedRandomSeed()
@@ -592,6 +642,11 @@ class QueryConfig {
   uint64_t maxMergeExchangeBufferSize() const {
     static constexpr uint64_t kDefault = 128UL << 20;
     return get<uint64_t>(kMaxMergeExchangeBufferSize, kDefault);
+  }
+
+  uint64_t minExchangeOutputBatchBytes() const {
+    static constexpr uint64_t kDefault = 2UL << 20;
+    return get<uint64_t>(kMinExchangeOutputBatchBytes, kDefault);
   }
 
   uint64_t preferredOutputBatchBytes() const {
@@ -817,6 +872,10 @@ class QueryConfig {
     return get<bool>(kSparkLegacyDateFormatter, false);
   }
 
+  bool sparkLegacyStatisticalAggregate() const {
+    return get<bool>(kSparkLegacyStatisticalAggregate, false);
+  }
+
   bool exprTrackCpuUsage() const {
     return get<bool>(kExprTrackCpuUsage, false);
   }
@@ -912,8 +971,24 @@ class QueryConfig {
     return get<double>(kTableScanScaleUpMemoryUsageRatio, 0.7);
   }
 
+  uint32_t indexLookupJoinMaxPrefetchBatches() const {
+    return get<uint32_t>(kIndexLookupJoinMaxPrefetchBatches, 0);
+  }
+
   std::string shuffleCompressionKind() const {
     return get<std::string>(kShuffleCompressionKind, "none");
+  }
+
+  int32_t requestDataSizesMaxWaitSec() const {
+    return get<int32_t>(kRequestDataSizesMaxWaitSec, 10);
+  }
+
+  bool throwExceptionOnDuplicateMapKeys() const {
+    return get<bool>(kThrowExceptionOnDuplicateMapKeys, false);
+  }
+
+  bool streamingAggregationEagerFlush() const {
+    return get<bool>(kStreamingAggregationEagerFlush, false);
   }
 
   template <typename T>

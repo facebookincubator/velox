@@ -19,17 +19,33 @@
 #include <set>
 #include <unordered_map>
 
+#include "velox/common/fuzzer/Utils.h"
 #include "velox/core/PlanNode.h"
 #include "velox/expression/FunctionSignature.h"
 #include "velox/vector/fuzzer/VectorFuzzer.h"
 
 namespace facebook::velox::exec::test {
 
+using fuzzer::DataSpec;
+
 enum ReferenceQueryErrorCode {
   kSuccess,
   kReferenceQueryFail,
   kReferenceQueryUnsupported
 };
+
+FOLLY_ALWAYS_INLINE std::string format_as(ReferenceQueryErrorCode errorCode) {
+  switch (errorCode) {
+    case ReferenceQueryErrorCode::kSuccess:
+      return "kSuccess";
+    case ReferenceQueryErrorCode::kReferenceQueryFail:
+      return "kReferenceQueryFail";
+    case ReferenceQueryErrorCode::kReferenceQueryUnsupported:
+      return "kReferenceQueryUnsupported";
+    default:
+      return "Unknown";
+  }
+}
 
 /// Query runner that uses reference database, i.e. DuckDB, Presto, Spark.
 class ReferenceQueryRunner {
@@ -40,8 +56,8 @@ class ReferenceQueryRunner {
     kSparkQueryRunner
   };
 
-  // @param aggregatePool Used to allocate memory needed for vectors produced by
-  // 'execute' methods.
+  // @param aggregatePool Used to allocate memory needed for vectors produced
+  // by 'execute' methods.
   explicit ReferenceQueryRunner(memory::MemoryPool* aggregatePool)
       : aggregatePool_(aggregatePool) {}
 
@@ -63,32 +79,31 @@ class ReferenceQueryRunner {
   /// reference database.
   virtual std::optional<std::string> toSql(const core::PlanNodePtr& plan) = 0;
 
-  /// Same as the above toSql but for values nodes.
-  virtual std::optional<std::string> toSql(
-      const core::ValuesNodePtr& valuesNode);
-
-  /// Same as the above toSql but for hash join nodes.
-  virtual std::optional<std::string> toSql(
-      const std::shared_ptr<const core::HashJoinNode>& joinNode);
-
-  /// Same as the above toSql but for nested loop join nodes.
-  virtual std::optional<std::string> toSql(
-      const std::shared_ptr<const core::NestedLoopJoinNode>& joinNode);
-
   /// Returns whether a constant expression is supported by the reference
   /// database.
   virtual bool isConstantExprSupported(const core::TypedExprPtr& /*expr*/) {
     return true;
   }
 
-  /// Returns whether types contained in a function signature are all supported
-  /// by the reference database.
+  /// Returns whether types contained in a function signature are all
+  /// supported by the reference database.
   virtual bool isSupported(const exec::FunctionSignature& /*signature*/) {
     return true;
   }
 
-  /// Executes the plan and returns the result along with success or fail error
-  /// code.
+  /// Executes SQL query returned by the 'toSql' method using 'input' data.
+  /// Converts results using 'resultType' schema.
+  virtual std::multiset<std::vector<velox::variant>> execute(
+      const std::string& /*sql*/,
+      const std::vector<velox::RowVectorPtr>& /*input*/,
+      const velox::RowTypePtr& /*resultType*/) {
+    VELOX_UNSUPPORTED();
+  }
+
+  // Converts 'plan' into an SQL query and executes it. Result is returned as
+  // a MaterializedRowMultiset with the ReferenceQueryErrorCode::kSuccess if
+  // successful, or an std::nullopt with a ReferenceQueryErrorCode if the
+  // query fails.
   virtual std::pair<
       std::optional<std::multiset<std::vector<velox::variant>>>,
       ReferenceQueryErrorCode>
@@ -96,12 +111,14 @@ class ReferenceQueryRunner {
     VELOX_UNSUPPORTED();
   }
 
-  /// Executes SQL query returned by the 'toSql' method using 'input' data.
-  /// Converts results using 'resultType' schema.
-  virtual std::multiset<std::vector<velox::variant>> execute(
-      const std::string& sql,
-      const std::vector<RowVectorPtr>& input,
-      const RowTypePtr& resultType) = 0;
+  /// Similar to 'execute' but returns results in RowVector format.
+  /// Caller should ensure 'supportsVeloxVectorResults' returns true.
+  virtual std::pair<
+      std::optional<std::vector<velox::RowVectorPtr>>,
+      ReferenceQueryErrorCode>
+  executeAndReturnVector(const core::PlanNodePtr& /*plan*/) {
+    VELOX_UNSUPPORTED();
+  }
 
   /// Executes SQL query returned by the 'toSql' method using 'probeInput' and
   /// 'buildInput' data for join node.
@@ -139,16 +156,16 @@ class ReferenceQueryRunner {
     VELOX_UNSUPPORTED();
   }
 
- protected:
-  memory::MemoryPool* aggregatePool() {
-    return aggregatePool_;
-  }
-
   bool isSupportedDwrfType(const TypePtr& type);
 
   /// Returns the name of the values node table in the form t_<id>.
-  std::string getTableName(const core::ValuesNodePtr& valuesNode) {
-    return fmt::format("t_{}", valuesNode->id());
+  std::string getTableName(const core::ValuesNode& valuesNode) {
+    return fmt::format("t_{}", valuesNode.id());
+  }
+
+ protected:
+  memory::MemoryPool* aggregatePool() {
+    return aggregatePool_;
   }
 
   // Traverses all nodes in the plan and returns all tables and their names.
@@ -157,7 +174,5 @@ class ReferenceQueryRunner {
 
  private:
   memory::MemoryPool* aggregatePool_;
-
-  std::optional<std::string> joinSourceToSql(const core::PlanNodePtr& planNode);
 };
 } // namespace facebook::velox::exec::test

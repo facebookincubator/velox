@@ -27,6 +27,8 @@ namespace facebook::velox::core {
 
 // static
 Expressions::TypeResolverHook Expressions::resolverHook_;
+// static
+Expressions::FieldAccessHook Expressions::fieldAccessHook_;
 
 namespace {
 
@@ -226,6 +228,12 @@ TypedExprPtr Expressions::inferTypes(
   }
 
   if (auto fae = std::dynamic_pointer_cast<const FieldAccessExpr>(expr)) {
+    if (fieldAccessHook_) {
+      auto result = fieldAccessHook_(fae, children);
+      if (result) {
+        return result;
+      }
+    }
     VELOX_CHECK(
         !fae->getFieldName().empty(), "Anonymous columns are not supported");
     VELOX_CHECK_EQ(
@@ -384,11 +392,9 @@ const exec::FunctionSignature* findLambdaSignature(
 const exec::FunctionSignature* findLambdaSignature(
     const std::shared_ptr<const CallExpr>& callExpr) {
   // Look for a scalar lambda function.
-  auto allSignatures = getFunctionSignatures();
-  auto it = allSignatures.find(callExpr->getFunctionName());
-
-  if (it != allSignatures.end()) {
-    return findLambdaSignature(it->second, callExpr);
+  auto scalarSignatures = getFunctionSignatures(callExpr->getFunctionName());
+  if (!scalarSignatures.empty()) {
+    return findLambdaSignature(scalarSignatures, callExpr);
   }
 
   // Look for an aggregate lambda function.

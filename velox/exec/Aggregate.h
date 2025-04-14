@@ -32,13 +32,17 @@ namespace facebook::velox::exec {
 
 class AggregateFunctionSignature;
 
-// Returns true if aggregation receives raw (unprocessed) input, e.g. partial
-// and single aggregation.
+/// Returns true if aggregation receives raw (unprocessed) input, e.g. partial
+/// and single aggregation.
 bool isRawInput(core::AggregationNode::Step step);
 
-// Returns false if aggregation produces final result, e.g. final
-// and single aggregation.
+/// Returns false if aggregation produces final result, e.g. final
+/// and single aggregation.
 bool isPartialOutput(core::AggregationNode::Step step);
+
+/// Returns true if aggregation receives intermediate states as input,
+/// e.g. intermediate and final aggregation steps.
+bool isPartialInput(core::AggregationNode::Step step);
 
 class Aggregate {
  protected:
@@ -166,6 +170,35 @@ class Aggregate {
       const SelectivityVector& rows,
       const std::vector<VectorPtr>& args,
       bool mayPushdown) = 0;
+
+  /// Called by aggregation operator to set whether the input data is eligible
+  /// for clustered input optimization.  This is turned off, in cases for
+  /// example if the input rows from same group are not contiguous, or the
+  /// aggregate is sorted or distinct.
+  void setClusteredInput(bool value) {
+    clusteredInput_ = value;
+  }
+
+  /// Whether the function itself supports clustered input optimization.
+  ///
+  /// When this returns true, `addRawClusteredInput` should be implemented.
+  virtual bool supportsAddRawClusteredInput() const {
+    return false;
+  }
+
+  /// Fast path for the function when the input rows from same group are
+  /// clustered together. `groups`, `rows`, and `args` are the same as
+  /// `addRawInput`, `groupBoundaries` is the indices into `groups` indicating
+  /// the row after last row of each group.
+  ///
+  /// Will only be called when `supportsAddRawClusteredInput` returns true.
+  virtual void addRawClusteredInput(
+      char** /*groups*/,
+      const SelectivityVector& /*rows*/,
+      const std::vector<VectorPtr>& /*args*/,
+      const folly::Range<const vector_size_t*>& /*groupBoundaries*/) {
+    VELOX_NYI("Unimplemented: {} {}", typeid(*this).name(), __func__);
+  }
 
   // Updates final accumulators from intermediate results.
   // @param groups Pointers to the start of the group rows. These are aligned
@@ -464,6 +497,8 @@ class Aggregate {
   std::vector<vector_size_t> pushdownCustomIndices_;
 
   bool validateIntermediateInputs_ = false;
+
+  bool clusteredInput_ = false;
 };
 
 using AggregateFunctionFactory = std::function<std::unique_ptr<Aggregate>(
@@ -476,6 +511,9 @@ struct AggregateFunctionMetadata {
   /// True if results of the aggregation depend on the order of inputs. For
   /// example, array_agg is order sensitive while count is not.
   bool orderSensitive{true};
+
+  /// Indicates if this is a companion function.
+  bool companionFunction{false};
 };
 /// Register an aggregate function with the specified name and signatures. If
 /// registerCompanionFunctions is true, also register companion aggregate and
@@ -513,6 +551,9 @@ std::vector<AggregateRegistrationResult> registerAggregateFunction(
     const AggregateFunctionMetadata& metadata,
     bool registerCompanionFunctions,
     bool overwrite);
+
+const AggregateFunctionMetadata& getAggregateFunctionMetadata(
+    const std::string& name);
 
 /// Returns signatures of the aggregate function with the specified name.
 /// Returns empty std::optional if function with that name is not found.

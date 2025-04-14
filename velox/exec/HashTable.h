@@ -55,8 +55,14 @@ struct TableInsertPartitionInfo {
 
 /// Contains input and output parameters for groupProbe and joinProbe APIs.
 struct HashLookup {
-  explicit HashLookup(const std::vector<std::unique_ptr<VectorHasher>>& h)
-      : hashers(h) {}
+  HashLookup(
+      const std::vector<std::unique_ptr<VectorHasher>>& h,
+      memory::MemoryPool* pool)
+      : hashers(h),
+        rows(raw_vector<vector_size_t>(pool)),
+        hashes(raw_vector<uint64_t>(pool)),
+        hits(raw_vector<char*>(pool)),
+        normalizedKeys(raw_vector<uint64_t>(pool)) {}
 
   void reset(vector_size_t size) {
     rows.resize(size);
@@ -279,8 +285,11 @@ class BaseHashTable {
 
   /// Returns all rows with null keys.  Used by null-aware joins (e.g. anti or
   /// left semi project).
-  virtual int32_t
-  listNullKeyRows(NullKeyRowsIterator* iter, int32_t maxRows, char** rows) = 0;
+  virtual int32_t listNullKeyRows(
+      NullKeyRowsIterator* iter,
+      int32_t maxRows,
+      char** rows,
+      const std::vector<std::unique_ptr<VectorHasher>>& hashers) = 0;
 
   virtual void prepareJoinTable(
       std::vector<std::unique_ptr<BaseHashTable>> tables,
@@ -531,7 +540,8 @@ class HashTable : public BaseHashTable {
   int32_t listNullKeyRows(
       NullKeyRowsIterator* iter,
       int32_t maxRows,
-      char** rows) override;
+      char** rows,
+      const std::vector<std::unique_ptr<VectorHasher>>& hashers) override;
 
   void clear(bool freeTable) override;
 
@@ -902,6 +912,13 @@ class HashTable : public BaseHashTable {
       const std::vector<vector_size_t>& columns,
       const char* row) const;
 
+  // The exact same as joinProjectedVarColumnsSize(const
+  // std::vector<vector_size_t>&, const char*) with the exception that this
+  // function takes in vector of rows instead of an individual row.
+  inline uint64_t joinProjectedVarColumnsSize(
+      const std::vector<vector_size_t>& columns,
+      NextRowVector*& rows) const;
+
   // Adds a row to a hash join table in kArray hash mode. Returns true if a new
   // entry was made and false if the row was added to an existing set of rows
   // with the same key. 'allocator' is provided for duplicate row vector
@@ -1019,6 +1036,8 @@ class HashTable : public BaseHashTable {
   // buckets would be used.  This would cause the insertion taking very long
   // time and block driver threads.
   void checkHashBitsOverlap(int8_t spillInputStartPartitionBit);
+
+  memory::MemoryPool* const pool_;
 
   // The min table size in row to trigger parallel join table build.
   const uint32_t minTableSizeForParallelJoinBuild_;

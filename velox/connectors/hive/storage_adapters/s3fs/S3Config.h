@@ -47,8 +47,15 @@ class S3Config {
   /// Log granularity of AWS C++ SDK.
   static constexpr const char* kS3LogLevel = "hive.s3.log-level";
 
+  /// Payload signing policy.
+  static constexpr const char* kS3PayloadSigningPolicy =
+      "hive.s3.payload-signing-policy";
+
   /// S3FileSystem default identity.
   static constexpr const char* kDefaultS3Identity = "s3-default-identity";
+
+  /// Log location of AWS C++ SDK.
+  static constexpr const char* kS3LogLocation = "hive.s3.log-location";
 
   /// Keys to identify the config.
   enum class Keys {
@@ -68,6 +75,7 @@ class S3Config {
     kMaxAttempts,
     kRetryMode,
     kUseProxyFromEnv,
+    kCredentialsProvider,
     kEnd
   };
 
@@ -103,7 +111,10 @@ class S3Config {
             {Keys::kMaxAttempts, std::make_pair("max-attempts", std::nullopt)},
             {Keys::kRetryMode, std::make_pair("retry-mode", std::nullopt)},
             {Keys::kUseProxyFromEnv,
-             std::make_pair("use-proxy-from-env", "false")}};
+             std::make_pair("use-proxy-from-env", "false")},
+            {Keys::kCredentialsProvider,
+             std::make_pair("aws-credentials-provider", std::nullopt)},
+        };
     return config;
   }
 
@@ -111,10 +122,10 @@ class S3Config {
       std::string_view bucket,
       std::shared_ptr<const config::ConfigBase> config);
 
-  /// Identity is used as a key for the S3FileSystem instance map.
-  /// This will be the bucket endpoint or the base endpoint or the
-  /// default identity in that order.
-  static std::string identity(
+  /// cacheKey is used as a key for the S3FileSystem instance map.
+  /// This will be the bucket endpoint or the base endpoint if they exist plus
+  /// bucket name.
+  static std::string cacheKey(
       std::string_view bucket,
       std::shared_ptr<const config::ConfigBase> config);
 
@@ -220,8 +231,22 @@ class S3Config {
     return folly::to<bool>(value);
   }
 
+  std::string payloadSigningPolicy() const {
+    return payloadSigningPolicy_;
+  }
+
+  std::string bucket() const {
+    return bucket_;
+  }
+
+  std::optional<std::string> credentialsProvider() const {
+    return config_.find(Keys::kCredentialsProvider)->second;
+  }
+
  private:
   std::unordered_map<Keys, std::optional<std::string>> config_;
+  std::string payloadSigningPolicy_;
+  std::string bucket_;
 };
 
 } // namespace facebook::velox::filesystems

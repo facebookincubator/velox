@@ -357,9 +357,11 @@ TEST_F(E2EFilterTest, floatAndDouble) {
 }
 
 TEST_F(E2EFilterTest, shortDecimalDictionary) {
+  // decimal(8, 5) maps to 4 bytes FLBA in Parquet.
   // decimal(10, 5) maps to 5 bytes FLBA in Parquet.
   // decimal(17, 5) maps to 8 bytes FLBA in Parquet.
   for (const auto& type : {
+           "shortdecimal_val:decimal(8, 5)",
            "shortdecimal_val:decimal(10, 5)",
            "shortdecimal_val:decimal(17, 5)",
        }) {
@@ -386,9 +388,11 @@ TEST_F(E2EFilterTest, shortDecimalDirect) {
   options_.enableDictionary = false;
   options_.dataPageSize = 4 * 1024;
 
+  // decimal(8, 5) maps to 4 bytes FLBA in Parquet.
   // decimal(10, 5) maps to 5 bytes FLBA in Parquet.
   // decimal(17, 5) maps to 8 bytes FLBA in Parquet.
   for (const auto& type : {
+           "shortdecimal_val:decimal(8, 5)",
            "shortdecimal_val:decimal(10, 5)",
            "shortdecimal_val:decimal(17, 5)",
        }) {
@@ -769,6 +773,20 @@ TEST_F(E2EFilterTest, configurableWriteSchema) {
                ROW({"ee", "ff"}, {BIGINT(), BIGINT()})),
            BIGINT()});
   test(type, newType);
+}
+
+TEST_F(E2EFilterTest, booleanRle) {
+  options_.enableDictionary = false;
+  options_.encoding = facebook::velox::parquet::arrow::Encoding::RLE;
+  options_.useParquetDataPageV2 = true;
+
+  testWithTypes(
+      "boolean_val:boolean,"
+      "boolean_null:boolean",
+      [&]() { makeAllNulls("boolean_null"); },
+      false,
+      {"boolean_val"},
+      20);
 }
 
 // Define main so that gflags get processed.

@@ -14,7 +14,11 @@
  * limitations under the License.
  */
 
+#include <aws/core/auth/AWSCredentials.h>
+#include <aws/core/auth/AWSCredentialsProvider.h>
+
 #include "velox/common/memory/Memory.h"
+#include "velox/connectors/hive/storage_adapters/s3fs/RegisterS3FileSystem.h"
 #include "velox/connectors/hive/storage_adapters/s3fs/S3WriteFile.h"
 #include "velox/connectors/hive/storage_adapters/s3fs/tests/S3Test.h"
 
@@ -32,13 +36,25 @@ class S3FileSystemTest : public S3Test {
   void SetUp() override {
     S3Test::SetUp();
     auto hiveConfig = minioServer_->hiveConfig({});
-    filesystems::initializeS3("Info");
+    filesystems::initializeS3("Info", kLogLocation_);
   }
 
   static void TearDownTestSuite() {
     filesystems::finalizeS3();
   }
+
+  std::string_view kLogLocation_ = "/tmp/foobar/";
 };
+
+class MyCredentialsProvider : public Aws::Auth::AWSCredentialsProvider {
+ public:
+  MyCredentialsProvider() = default;
+
+  Aws::Auth::AWSCredentials GetAWSCredentials() override {
+    return Aws::Auth::AWSCredentials();
+  }
+};
+
 } // namespace
 
 TEST_F(S3FileSystemTest, writeAndRead) {
@@ -182,6 +198,27 @@ TEST_F(S3FileSystemTest, logLevel) {
   checkLogLevelName("INFO");
 }
 
+TEST_F(S3FileSystemTest, logLocation) {
+  // From aws-cpp-sdk-core/include/aws/core/Aws.h .
+  std::string_view kDefaultPrefix = "aws_sdk_";
+  std::unordered_map<std::string, std::string> config;
+  auto checkLogPrefix = [&config](std::string_view expected) {
+    auto s3Config =
+        std::make_shared<const config::ConfigBase>(std::move(config));
+    filesystems::S3FileSystem s3fs("", s3Config);
+    EXPECT_EQ(s3fs.getLogPrefix(), expected);
+  };
+
+  const auto expected = fmt::format("{}{}", kLogLocation_, kDefaultPrefix);
+  // Test is configured with the default.
+  checkLogPrefix(expected);
+
+  // S3 log location is set once during initialization.
+  // It does not change with a new config.
+  config["hive.s3.log-location"] = "/home/foobar";
+  checkLogPrefix(expected);
+}
+
 TEST_F(S3FileSystemTest, writeFileAndRead) {
   const auto bucketName = "writedata";
   const auto file = "test.txt";
@@ -264,5 +301,43 @@ TEST_F(S3FileSystemTest, invalidConnectionSettings) {
   hiveConfig = minioServer_->hiveConfig({{"hive.s3.socket-timeout", "abc"}});
   VELOX_ASSERT_THROW(
       filesystems::S3FileSystem("", hiveConfig), "Invalid duration");
+}
+
+TEST_F(S3FileSystemTest, registerCredentialProviderFactories) {
+  const std::string credentialsProvider = "my-credentials-provider";
+  const std::string invalidCredentialsProvider = "invalid-credentials-provider";
+  registerAWSCredentialsProvider(
+      credentialsProvider, [](const S3Config& config) {
+        return std::make_shared<MyCredentialsProvider>();
+      });
+
+  auto hiveConfig = minioServer_->hiveConfig(
+      {{"hive.s3.aws-credentials-provider", credentialsProvider}});
+  ASSERT_NO_THROW(filesystems::S3FileSystem("", hiveConfig));
+
+  // Configure with unregistered credential provider.
+  hiveConfig = minioServer_->hiveConfig(
+      {{"hive.s3.aws-credentials-provider", invalidCredentialsProvider}});
+  VELOX_ASSERT_THROW(
+      filesystems::S3FileSystem({"", hiveConfig}),
+      "CredentialsProviderFactory for 'invalid-credentials-provider' not registered");
+
+  // Register invalid credentials provider name.
+  VELOX_ASSERT_THROW(
+      registerAWSCredentialsProvider(
+          "",
+          [](const S3Config& config) {
+            return std::make_shared<MyCredentialsProvider>();
+          }),
+      "CredentialsProviderFactory name cannot be empty");
+
+  // Register the same credential provider name again.
+  VELOX_ASSERT_THROW(
+      registerAWSCredentialsProvider(
+          credentialsProvider,
+          [](const S3Config& config) {
+            return std::make_shared<MyCredentialsProvider>();
+          }),
+      "CredentialsProviderFactory 'my-credentials-provider' already registered");
 }
 } // namespace facebook::velox::filesystems

@@ -20,10 +20,12 @@ namespace facebook::velox::wave {
 
 void makeKeyMembers(
     const std::vector<AbstractOperand*>& keys,
+    const std::string& prefix,
     std::stringstream& out) {
   for (auto i = 0; i < keys.size(); ++i) {
     auto* key = keys[i];
-    out << cudaTypeName(*key->type) << " key" << i << ";\n";
+    VELOX_CHECK_NOT_NULL(key);
+    out << cudaTypeName(*key->type) << " " << prefix << i << ";\n";
   }
 }
 
@@ -43,39 +45,53 @@ void makeHash(
     CompileState& state,
     const std::vector<AbstractOperand*>& keys,
     bool nullableKeys,
-    std::string nullCode) {
+    std::string nullCode,
+    int32_t id) {
   auto& out = state.generated();
-  out << "  hash = 1;\n";
+  std::string idStr;
+  if (id != -1) {
+    idStr = fmt::format("{}", id);
+  }
+  out << "  hash" << idStr << " = 1;\n";
   for (auto i = 0; i < keys.size(); ++i) {
     auto* op = keys[i];
     state.ensureOperand(op);
+    std::string stmt;
     if (!nullableKeys && !op->notNull) {
-      out << "  if (" << state.isNull(op) << ") { goto nullKey; }\n";
+      stmt = fmt::format(
+          "  if ({}) {{ goto nullKey; }}\n"
+          "   hash{} = hashMix(hash{}, hashValue({}));\n",
+          state.isNull(op),
+          id,
+          id,
+          state.operandValue(op));
     } else {
       if (!keys[i]->notNull) {
-        out << fmt::format(
-            "  if ({}) {{ hash = hashMix(hash, 13); }} else {{ hash = hashMix(hash, hashValue({})); }}\n",
+        stmt = fmt::format(
+            "  if ({}) {{ $h$ = hashMix($h$, 13); }} else {{ $h$ = hashMix($h$, hashValue({})); }}\n",
             state.isNull(op),
             state.operandValue(op));
       } else {
-        out << fmt::format(
-            "  hash = hashMix(hash, hashValue({}));\n", state.operandValue(op));
+        stmt = fmt::format(
+            "  $h$ = hashMix($h$, hashValue({}));\n", state.operandValue(op));
       }
     }
+    out << replaceAll(stmt, "$h$", fmt::format("hash{}", idStr));
   }
   if (!nullableKeys) {
     out << " goto hashDone;\n"
         << " nullKey: laneStatus = ErrorCode::kInactive;\n"
-        << nullCode << "  hashDone: ;\n";
+        << nullCode << "\n  hashDone: ;\n";
   }
 }
 
 void makeCompareLambda(
     CompileState& state,
     const std::vector<AbstractOperand*>& keys,
-    bool nullableKeys) {
+    bool nullableKeys,
+    int32_t id) {
   auto& out = state.generated();
-  out << "  [&](HashRow* row) -> bool {\n";
+  out << "  [&](HashRow" << id << "* row) -> bool {\n";
   if (nullableKeys) {
     out << "   keyNulls = asDeviceAtomic<uint32_t>(&row->nulls0)->load(cuda::memory_order_consume);\n";
     VELOX_CHECK_LE(keys.size(), 32);
@@ -95,7 +111,7 @@ void makeCompareLambda(
   out << "  return true;\n}\n";
 }
 
-std::string nullsInit(
+std::string initRowNullFlags(
     CompileState& state,
     int32_t begin,
     int32_t end,
@@ -103,7 +119,7 @@ std::string nullsInit(
   std::stringstream inits;
   for (auto i = begin; i < end; ++i) {
     inits << fmt::format(
-        "({} ? 0 : {}U)",
+        "({} ? 0 : {}U) {}",
         state.isNull(keys[i]),
         1U << i,
         (i < end - 1 ? " | " : ""));
@@ -114,9 +130,10 @@ std::string nullsInit(
 void makeInitGroupRow(
     CompileState& state,
     const OpVector& keys,
-    const std::vector<const AggregateUpdate*>& aggregates) {
+    const std::vector<const AggregateUpdate*>& aggregates,
+    int32_t id) {
   auto& out = state.generated();
-  out << "  [&](HashRow* row) {\n";
+  out << "  [&](HashRow" << id << "* row) {\n";
   int32_t numNullFlags = aggregates.size() + keys.size();
   for (auto i = 0; i < keys.size(); ++i) {
     auto* op = keys[i];
@@ -138,16 +155,17 @@ void makeInitGroupRow(
   }
   out << fmt::format(
       "  asDeviceAtomic<uint32_t>(&row->nulls0)->store(keyNulls = {}, cuda::memory_order_release);\n",
-      nullsInit(state, 0, keys.size(), keys));
+      initRowNullFlags(state, 0, keys.size(), keys));
   out << "}\n";
 }
 
 void makeRowHash(
     CompileState& state,
     const std::vector<AbstractOperand*>& keys,
-    bool nullableKeys) {
+    bool nullableKeys,
+    int32_t id) {
   auto& out = state.inlines();
-  out << "  uint64_t __device__ hashRow(HashRow* row) {\n"
+  out << "  uint64_t __device__ hashRow(HashRow" << id << "* row) {\n"
       << "  uint64_t hash = 1;\n";
   for (auto i = 0; i < keys.size(); ++i) {
     if (nullableKeys) {
@@ -185,8 +203,9 @@ std::string extractColumn(
   }
   if (!result.notNull) {
     out << fmt::format(
-        "  setNull(operands, {}, blockBase, (row->nulls{} & (1U << {})) == 0);\n",
+        "  setNull(operands, {}, blockBase, ({}->nulls{} & (1U << {})) == 0);\n",
         ordinal,
+        row,
         nthNull / 32,
         nthNull & 31);
   }

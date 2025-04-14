@@ -34,8 +34,9 @@ source $SCRIPTDIR/setup-helper-functions.sh
 # are the same size.
 COMPILER_FLAGS=$(get_cxx_flags)
 export COMPILER_FLAGS
-NPROC=$(getconf _NPROCESSORS_ONLN)
+NPROC=${BUILD_THREADS:-$(getconf _NPROCESSORS_ONLN)}
 BUILD_DUCKDB="${BUILD_DUCKDB:-true}"
+BUILD_GEOS="${BUILD_GEOS:-true}"
 export CMAKE_BUILD_TYPE=Release
 VELOX_BUILD_SHARED=${VELOX_BUILD_SHARED:-"OFF"} #Build folly shared for use in libvelox.so.
 SUDO="${SUDO:-"sudo --preserve-env"}"
@@ -75,9 +76,12 @@ function install_gcc11_if_needed {
 FB_OS_VERSION="v2024.07.01.00"
 FMT_VERSION="10.1.1"
 BOOST_VERSION="boost-1.84.0"
+THRIFT_VERSION="v0.16.0"
+# Note: when updating arrow check if thrift needs an update as well.
 ARROW_VERSION="15.0.0"
 STEMMER_VERSION="2.2.0"
 DUCKDB_VERSION="v0.8.1"
+GEOS_VERSION="3.13.0"
 
 # Install packages required for build.
 function install_build_prerequisites {
@@ -94,13 +98,14 @@ function install_build_prerequisites {
     checkinstall \
     git \
     pkg-config \
+    libtool \
     wget
-  
+
   if [ ! -f ${PYTHON_VENV}/pyvenv.cfg ]; then
     echo "Creating Python Virtual Environment at ${PYTHON_VENV}"
     python3 -m venv ${PYTHON_VENV}
   fi
-  source ${PYTHON_VENV}/bin/activate;   
+  source ${PYTHON_VENV}/bin/activate;
   # Install to /usr/local to make it available to all users.
   ${SUDO} pip3 install cmake==3.28.3
 
@@ -173,13 +178,7 @@ function install_boost {
 
 function install_protobuf {
   wget_and_untar https://github.com/protocolbuffers/protobuf/releases/download/v21.8/protobuf-all-21.8.tar.gz protobuf
-  (
-    cd ${DEPENDENCY_DIR}/protobuf
-    ./configure CXXFLAGS="-fPIC" --prefix=${INSTALL_PREFIX}
-    make "-j${NPROC}"
-    make install
-    ldconfig
-  )
+  cmake_install_dir protobuf -Dprotobuf_BUILD_TESTS=OFF
 }
 
 function install_folly {
@@ -226,7 +225,7 @@ function install_conda {
 }
 
 function install_duckdb {
-  if $BUILD_DUCKDB ; then
+  if [[ "$BUILD_DUCKDB" == "true" ]]; then
     echo 'Building DuckDB'
     wget_and_untar https://github.com/duckdb/duckdb/archive/refs/tags/${DUCKDB_VERSION}.tar.gz duckdb
     cmake_install_dir duckdb -DBUILD_UNITTESTS=OFF -DENABLE_SANITIZER=OFF -DENABLE_UBSAN=OFF -DBUILD_SHELL=OFF -DEXPORT_DLL_SYMBOLS=OFF -DCMAKE_BUILD_TYPE=Release
@@ -244,8 +243,35 @@ function install_stemmer {
   )
 }
 
+function install_thrift {
+  wget_and_untar https://github.com/apache/thrift/archive/${THRIFT_VERSION}.tar.gz thrift
+
+  EXTRA_CXXFLAGS="-O3 -fPIC"
+  # Clang will generate warnings and they need to be suppressed, otherwise the build will fail.
+  if [[ ${USE_CLANG} != "false" ]]; then
+    EXTRA_CXXFLAGS="-O3 -fPIC -Wno-inconsistent-missing-override -Wno-unused-but-set-variable"
+  fi
+
+  CXX_FLAGS="$EXTRA_CXXFLAGS" cmake_install_dir thrift \
+    -DBUILD_SHARED_LIBS=OFF \
+    -DBUILD_COMPILER=ON \
+    -DBUILD_EXAMPLES=OFF \
+    -DBUILD_TUTORIALS=OFF \
+    -DCMAKE_DEBUG_POSTFIX= \
+    -DWITH_AS3=OFF \
+    -DWITH_CPP=ON \
+    -DWITH_C_GLIB=OFF \
+    -DWITH_JAVA=OFF \
+    -DWITH_JAVASCRIPT=OFF \
+    -DWITH_LIBEVENT=OFF \
+    -DWITH_NODEJS=OFF \
+    -DWITH_PYTHON=OFF \
+    -DWITH_QT5=OFF \
+    -DWITH_ZLIB=OFF
+}
+
 function install_arrow {
-  wget_and_untar https://archive.apache.org/dist/arrow/arrow-${ARROW_VERSION}/apache-arrow-${ARROW_VERSION}.tar.gz arrow
+  wget_and_untar https://github.com/apache/arrow/archive/apache-arrow-${ARROW_VERSION}.tar.gz arrow
   cmake_install_dir arrow/cpp \
     -DARROW_PARQUET=OFF \
     -DARROW_WITH_THRIFT=ON \
@@ -261,14 +287,7 @@ function install_arrow {
     -DCMAKE_INSTALL_PREFIX=${INSTALL_PREFIX} \
     -DCMAKE_BUILD_TYPE=Release \
     -DARROW_BUILD_STATIC=ON \
-    -DThrift_SOURCE=BUNDLED \
     -DBOOST_ROOT=${INSTALL_PREFIX}
-
-  (
-    # Install thrift.
-    cd ${DEPENDENCY_DIR}/arrow/cpp/_build/thrift_ep-prefix/src/thrift_ep-build
-    $SUDO cmake --install ./ --prefix ${INSTALL_PREFIX}
-  )
 }
 
 function install_cuda {
@@ -280,7 +299,18 @@ function install_cuda {
     $SUDO apt update
   fi
   local dashed="$(echo $1 | tr '.' '-')"
-  $SUDO apt install -y cuda-nvcc-$dashed cuda-cudart-dev-$dashed cuda-nvrtc-dev-$dashed cuda-driver-dev-$dashed
+  $SUDO apt install -y \
+    cuda-compat-$dashed \
+    cuda-driver-dev-$dashed \
+    cuda-minimal-build-$dashed \
+    cuda-nvrtc-dev-$dashed
+}
+
+function install_geos {
+  if [[ "$BUILD_GEOS" == "true" ]]; then
+    wget_and_untar https://github.com/libgeos/geos/archive/${GEOS_VERSION}.tar.gz geos
+    cmake_install_dir geos -DBUILD_TESTING=OFF
+  fi
 }
 
 function install_velox_deps {
@@ -296,7 +326,9 @@ function install_velox_deps {
   run_and_time install_conda
   run_and_time install_duckdb
   run_and_time install_stemmer
+  run_and_time install_thrift
   run_and_time install_arrow
+  run_and_time install_geos
 }
 
 function install_apt_deps {

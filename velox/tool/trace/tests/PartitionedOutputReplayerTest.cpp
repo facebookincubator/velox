@@ -62,6 +62,7 @@ class PartitionedOutputReplayerTest
     connector::hive::LocationHandle::registerSerDe();
     connector::hive::HiveColumnHandle::registerSerDe();
     connector::hive::HiveInsertTableHandle::registerSerDe();
+    connector::hive::HiveInsertFileNameGenerator::registerSerDe();
     core::PlanNode::registerSerDe();
     core::ITypedExpr::registerSerDe();
     registerPartitionFunctionSerDe();
@@ -120,7 +121,7 @@ class PartitionedOutputReplayerTest
   }
 
   const std::shared_ptr<OutputBufferManager> bufferManager_{
-      exec::OutputBufferManager::getInstance().lock()};
+      exec::OutputBufferManager::getInstanceRef()};
 };
 
 TEST_P(PartitionedOutputReplayerTest, defaultConsumer) {

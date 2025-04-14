@@ -18,6 +18,10 @@
 
 DEPENDENCY_DIR=${DEPENDENCY_DIR:-$(pwd)/deps-download}
 OS_CXXFLAGS=""
+NPROC=${BUILD_THREADS:-$(getconf _NPROCESSORS_ONLN)}
+
+CURL_OPTIONS=${CURL_OPTIONS:-""}
+CMAKE_OPTIONS=${CMAKE_OPTIONS:-""}
 
 function run_and_time {
   time "$@" || (echo "Failed to run $* ." ; exit 1 )
@@ -132,6 +136,7 @@ function get_cxx_flags {
       Neoverse_N1="d0c"
       Neoverse_N2="d49"
       Neoverse_V1="d40"
+      Neoverse_V2="d4f"
       if [ -f "$ARM_CPU_FILE" ]; then
         hex_ARM_CPU_DETECT=`cat $ARM_CPU_FILE`
         # PartNum, [15:4]: The primary part number such as Neoverse N1/N2 core.
@@ -143,6 +148,8 @@ function get_cxx_flags {
           echo -n "-mcpu=neoverse-n2 "
         elif [ "$ARM_CPU_PRODUCT" = "$Neoverse_V1" ]; then
           echo -n "-mcpu=neoverse-v1 "
+        elif [ "$ARM_CPU_PRODUCT" = "$Neoverse_V2" ]; then
+          echo -n "-mcpu=neoverse-v2 "
         else
           echo -n "-march=armv8-a+crc+crypto "
         fi
@@ -172,7 +179,7 @@ function wget_and_untar {
   fi
   mkdir -p "${DIR}"
   pushd "${DIR}"
-  curl -L "${URL}" > $2.tar.gz
+  curl ${CURL_OPTIONS} -L "${URL}" > $2.tar.gz
   tar -xz --strip-components=1 -f $2.tar.gz
   popd
   popd
@@ -204,17 +211,16 @@ function cmake_install {
   COMPILER_FLAGS+=${OS_CXXFLAGS}
 
   # CMAKE_POSITION_INDEPENDENT_CODE is required so that Velox can be built into dynamic libraries \
-  cmake -Wno-dev -B"${BINARY_DIR}" \
+  cmake -Wno-dev ${CMAKE_OPTIONS} -B"${BINARY_DIR}" \
     -GNinja \
     -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
-    -DCMAKE_CXX_STANDARD=17 \
     "${INSTALL_PREFIX+-DCMAKE_PREFIX_PATH=}${INSTALL_PREFIX-}" \
     "${INSTALL_PREFIX+-DCMAKE_INSTALL_PREFIX=}${INSTALL_PREFIX-}" \
     -DCMAKE_CXX_FLAGS="$COMPILER_FLAGS" \
     -DBUILD_TESTING=OFF \
     "$@"
   # Exit if the build fails.
-  cmake --build "${BINARY_DIR}" || { echo 'build failed' ; exit 1; }
+  cmake --build "${BINARY_DIR}" "-j ${NPROC}" || { echo 'build failed' ; exit 1; }
   ${SUDO} cmake --install "${BINARY_DIR}"
 }
 

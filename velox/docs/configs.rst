@@ -31,14 +31,6 @@ Generic Configuration
      - integer
      - 5000
      - TableScan operator will exit getOutput() method after this many milliseconds even if it has no data to return yet. Zero means 'no time limit'.
-   * - abandon_partial_aggregation_min_rows
-     - integer
-     - 100,000
-     - Number of input rows to receive before starting to check whether to abandon partial aggregation.
-   * - abandon_partial_aggregation_min_pct
-     - integer
-     - 80
-     - Abandons partial aggregation if number of groups equals or exceeds this percentage of the number of input rows.
    * - abandon_partial_topn_row_number_min_rows
      - integer
      - 100,000
@@ -89,6 +81,13 @@ Generic Configuration
      - Size of buffer in the exchange client that holds data fetched from other nodes before it is processed.
        A larger buffer can increase network throughput for larger clusters and thus decrease query processing time
        at the expense of reducing the amount of memory available for other usage.
+   * - min_exchange_output_batch_bytes
+     - integer
+     - 2MB
+     - The minimum number of bytes to accumulate in the ExchangeQueue before unblocking a consumer. This is used to avoid
+       creating tiny batches which may have a negative impact on performance when the cost of creating vectors is high
+       (for example, when there are many columns). To avoid latency degradation, the exchange client unblocks a consumer
+       when 1% of the data size observed so far is accumulated.
    * - merge_exchange.max_buffer_size
      - integer
      - 128MB
@@ -154,6 +153,16 @@ Generic Configuration
      - Specifies the compression algorithm type to compress the shuffle data to
        trade CPU for network IO efficiency. The supported compression codecs
        are: zlib, snappy, lzo, zstd, lz4 and gzip. none means no compression.
+   * - throw_exception_on_duplicate_map_keys
+     - bool
+     - false
+     - By default, if a key is found in multiple given maps, that key's value in the resulting map comes from the last one of those maps.
+       If true, throws exception when duplicate keys are found. This configuration is needed by Spark functions `CreateMap`, `MapFromArrays`, `MapFromEntries`, `StringToMap`, `MapConcat`, `TransformKeys`.
+   * - index_lookup_join_max_prefetch_batches
+     - integer
+     - 0
+     - Specifies the max number of input batches to prefetch to do index lookup ahead. If it is zero,
+       then process one input batch at a time.
 
 .. _expression-evaluation-conf:
 
@@ -382,6 +391,34 @@ Spilling
      - 0
      - Percentage of aggregation or join input batches that will be forced to spill for testing. 0 means no extra spilling.
 
+Aggregation
+-----------
+.. list-table::
+   :widths: 20 10 10 70
+   :header-rows: 1
+
+   * - Property Name
+     - Type
+     - Default Value
+     - Description
+   * - abandon_partial_aggregation_min_rows
+     - integer
+     - 100,000
+     - Number of input rows to receive before starting to check whether to abandon partial aggregation.
+   * - abandon_partial_aggregation_min_pct
+     - integer
+     - 80
+     - Abandons partial aggregation if number of groups equals or exceeds this percentage of the number of input rows.
+   * - streaming_aggregation_eager_flush
+     - bool
+     - false
+     - If this is false (the default), in streaming aggregation, wait until we
+       have enough number of output rows to produce a batch of size specified by
+       Operator::outputBatchRows.  If this is true, we put the rows in output
+       batch, as soon as the corresponding groups are fully aggregated.  This is
+       useful for reducing memory consumption, if the downstream operators are
+       not sensitive to small batch size.
+
 Table Scan
 ------------
 .. list-table::
@@ -580,6 +617,11 @@ Each query can override the config by setting corresponding query session proper
        filter execution order is totally determined by the filter type. Otherwise, the file
        reader will dynamically adjust the filter execution order based on the past filter
        execution stats.
+   * - hive.reader.timestamp-partition-value-as-local-time
+     - hive.reader.timestamp_partition_value_as_local_time
+     - bool
+     - true
+     - Reads timestamp partition value as local time if true. Otherwise, reads as UTC.
 
 ``ORC File Format Configuration``
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
@@ -645,6 +687,12 @@ Each query can override the config by setting corresponding query session proper
      - 9
      - Timestamp unit used when writing timestamps into Parquet through Arrow bridge.
        Valid values are 3 (millisecond), 6 (microsecond), and 9 (nanosecond).
+   * - hive.parquet.writer.datapage-version
+     - hive.parquet.writer.datapage_version
+     - string
+     - V1
+     - Data Page version used when writing into Parquet through Arrow bridge.
+       Valid values are "V1" and "V2".
 
 ``Amazon S3 Configuration``
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^
@@ -670,13 +718,13 @@ Each query can override the config by setting corresponding query session proper
      - Default AWS secret key to use.
    * - hive.s3.endpoint
      - string
-     - 
+     -
      - The S3 storage endpoint server. This can be used to connect to an S3-compatible storage system instead of AWS.
    * - hive.s3.endpoint.region
      - string
      - us-east-1
      - The S3 storage endpoint server region. Default is set by the AWS SDK. If not configured, region will be attempted
-       to be parsed from the hive.s3.endpoint value. 
+       to be parsed from the hive.s3.endpoint value.
    * - hive.s3.path-style-access
      - bool
      - false
@@ -689,8 +737,18 @@ Each query can override the config by setting corresponding query session proper
    * - hive.s3.log-level
      - string
      - FATAL
-     - **Allowed values:** "OFF", "FATAL", "ERROR", "WARN", "INFO", "DEBUG", "TRACE"
+     - **Allowed values:** "OFF", "FATAL", "ERROR", "WARN", "INFO", "DEBUG", "TRACE".
        Granularity of logging generated by the AWS C++ SDK library.
+   * - hive.s3.log-location
+     - string
+     - ""
+     - Specifies the path where the log files are created. Generated log files start with "aws_sdk\_" and use the default AWS S3 logger. Example: setting "/tmp" results in files "/tmp/aws_sdk_*".
+   * - hive.s3.payload-signing-policy
+     - string
+     - Never
+     - **Allowed values:** "Always", "RequestDependent", "Never".
+       When set to "Always", the payload checksum is included in the signature calculation.
+       When set to "RequestDependent", the payload checksum is included based on the value returned by "AmazonWebServiceRequest::SignBody()".
    * - hive.s3.iam-role
      - string
      -
@@ -727,6 +785,11 @@ Each query can override the config by setting corresponding query session proper
        Legacy mode only enables throttled retry for transient errors.
        Standard mode is built on top of legacy mode and has throttled retry enabled for throttling errors apart from transient errors.
        Adaptive retry mode dynamically limits the rate of AWS requests to maximize success rate.
+   * - hive.s3.aws-credentials-provider
+     - string
+     -
+     - A custom credential provider, if specified, will be used to create the client in favor of other authentication mechanisms.
+       The provider must be registered using "registerAWSCredentialsProvider" before it can be used.
 
 Bucket Level Configuration
 """"""""""""""""""""""""""
@@ -863,6 +926,12 @@ Spark-specific Configuration
        Joda date formatter performs strict checking of its input and uses different pattern string.
        For example, the 2015-07-22 10:00:00 timestamp cannot be parsed if pattern is yyyy-MM-dd because the parser does not consume whole input.
        Another example is that the 'W' pattern, which means week in month, is not supported. For more differences, see :issue:`10354`.
+   * - spark.legacy_statistical_aggregate
+     - bool
+     - false
+     - If true, Spark statistical aggregation functions including skewness, kurtosis will return NaN instead of NULL
+       when dividing by zero during expression evaluation. Please note that Spark statistical aggregation functions
+       including stddev, stddev_samp, variance, var_samp, covar_samp and corr should be supported to respect this configuration.
 
 Tracing
 --------

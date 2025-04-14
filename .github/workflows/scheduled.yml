@@ -25,6 +25,7 @@ on:
       - "scripts/setup-ubuntu.sh"
       - "scripts/setup-helper-functions.sh"
       - ".github/workflows/scheduled.yml"
+      - "setup.py"
 
   push:
     branches:
@@ -88,13 +89,16 @@ jobs:
     name: Build
     # prevent errors when forks ff their main branch
     if: ${{ github.repository == 'facebookincubator/velox' }}
-    runs-on: 16-core-ubuntu
+    runs-on: 32-core-ubuntu
     container: ghcr.io/facebookincubator/velox-dev:centos9
     timeout-minutes: 120
     env:
       CCACHE_DIR: "${{ github.workspace }}/ccache"
-      LINUX_DISTRO: "ubuntu"
-      MAKEFLAGS: "NUM_THREADS=${{ inputs.numThreads || 16 }} MAX_HIGH_MEM_JOBS=${{ inputs.maxHighMemJobs || 8 }} MAX_LINK_JOBS=${{ inputs.maxLinkJobs || 4 }}"
+      NUM_THREADS: "${{ inputs.numThreads || 16 }}"
+      MAX_HIGH_MEM_JOBS: "${{ inputs.maxHighMemJobs || 8 }}"
+      MAX_LINK_JOBS: "${{ inputs.maxLinkJobs || 4 }}"
+      SKBUILD_BUILD_DIR: "_build/debug"
+      PYVELOX_LEGACY_ONLY: "ON"
 
     defaults:
       run:
@@ -149,7 +153,7 @@ jobs:
       - name: Ensure Stash Dirs Exists
         working-directory: ${{ github.workspace }}
         run: |
-          mkdir -p '${{ env.CCACHE_DIR }}'
+          mkdir -p '$CCACHE_DIR'
           mkdir -p /tmp/signatures
 
       - name: Checkout Main
@@ -163,9 +167,6 @@ jobs:
         if: ${{ github.event_name != 'schedule' && steps.get-sig.outputs.stash-hit != 'true' }}
         working-directory: velox_main
         run: |
-          python3 -m venv .venv
-          source .venv/bin/activate
-
           make python-build
 
       - name: Create Baseline Signatures
@@ -198,10 +199,17 @@ jobs:
 
       - name: Build
         env:
-          EXTRA_CMAKE_FLAGS: "-DVELOX_ENABLE_ARROW=ON -DVELOX_BUILD_PYTHON_PACKAGE=ON ${{ inputs.extraCMakeFlags }}"
+          EXTRA_CMAKE_FLAGS: >
+            -DVELOX_ENABLE_ARROW=ON \
+            -DVELOX_MONO_LIBRARY=ON \
+            -DVELOX_BUILD_PYTHON_PACKAGE=ON \
+            -DVELOX_PYTHON_LEGACY_ONLY=ON \
+            ${{ inputs.extraCMakeFlags }}
         run: |
-          EXTRA_CMAKE_FLAGS="-DPYTHON_EXECUTABLE=$(which python3) $EXTRA_CMAKE_FLAGS"
+          make python-venv
+          source .venv/bin/activate
           make debug
+
 
       - name: Ccache after
         run: ccache -s
@@ -217,13 +225,8 @@ jobs:
 
       - name: Build PyVelox
         if: ${{ github.event_name != 'schedule' }}
-        env:
-          VELOX_BUILD_DIR: "_build/debug"
         run: |
-          python3 -m venv .venv
-          source .venv/bin/activate
-
-          python3 -m pip install -e .
+          make python-build
 
       - name: Create and test new function signatures
         if: ${{ github.event_name != 'schedule' }}
@@ -317,7 +320,21 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: cache_fuzzer
-          path: velox/_build/debug/velox/exec/tests/velox_cache_fuzzer_test
+          path: velox/_build/debug/velox/exec/fuzzer/velox_cache_fuzzer
+          retention-days: "${{ env.RETENTION }}"
+
+      - name: Upload table evolution fuzzer
+        uses: actions/upload-artifact@v4
+        with:
+          name: table_evolution_fuzzer
+          path: velox/_build/debug/velox/exec/tests/velox_table_evolution_fuzzer_test
+          retention-days: "${{ env.RETENTION }}"
+
+      - name: Upload memory arbitration fuzzer
+        uses: actions/upload-artifact@v4
+        with:
+          name: memory_arbitration_fuzzer
+          path: velox/_build/debug/velox/exec/tests/velox_memory_arbitration_fuzzer_test
           retention-days: "${{ env.RETENTION }}"
 
       - name: Upload row number fuzzer
@@ -325,6 +342,13 @@ jobs:
         with:
           name: row_number
           path: velox/_build/debug//velox/exec/fuzzer/velox_row_number_fuzzer
+          retention-days: "${{ env.RETENTION }}"
+
+      - name: Upload topn row number fuzzer
+        uses: actions/upload-artifact@v4
+        with:
+          name: topn_row_number
+          path: velox/_build/debug//velox/exec/fuzzer/velox_topn_row_number_fuzzer
           retention-days: "${{ env.RETENTION }}"
 
       - name: Upload writer fuzzer
@@ -693,12 +717,16 @@ jobs:
             path: |
               /tmp/exchange_fuzzer_repro
 
-  row-number-fuzzer-run:
+  presto-java-row-number-fuzzer-run:
     name: RowNumber Fuzzer
     runs-on: ubuntu-latest
-    container: ghcr.io/facebookincubator/velox-dev:centos9
+    container: ghcr.io/facebookincubator/velox-dev:presto-java
     needs: compile
     timeout-minutes: 120
+    env:
+      CCACHE_DIR: "${{ github.workspace }}/ccache/"
+      LINUX_DISTRO: "centos"
+
     steps:
 
       - name: Download row number fuzzer
@@ -706,8 +734,28 @@ jobs:
         with:
           name: row_number
 
+      - name: "Checkout Repo"
+        uses: actions/checkout@v4
+        with:
+          path: velox
+          submodules: 'recursive'
+          ref: "${{ inputs.ref }}"
+
+      - name: Fix git permissions
+        # Usually actions/checkout does this but as we run in a container
+        # it doesn't work
+        run: git config --global --add safe.directory ${GITHUB_WORKSPACE}/velox
+
       - name: Run RowNumber Fuzzer
         run: |
+          cd velox
+          cp ./scripts/presto/etc/hive.properties $PRESTO_HOME/etc/catalog
+          ls -lR $PRESTO_HOME/etc
+          $PRESTO_HOME/bin/launcher run -v > /tmp/server.log 2>&1 &
+          # Sleep for 60 seconds to allow Presto server to start.
+          sleep 60
+          /opt/presto-cli --server 127.0.0.1:8080 --execute 'CREATE SCHEMA hive.tpch;'
+          cd -
           cat /proc/sys/vm/max_map_count
           mkdir -p /tmp/row_fuzzer_repro/logs/
           chmod -R 777 /tmp/row_fuzzer_repro
@@ -720,6 +768,7 @@ jobs:
                 --minloglevel=0 \
                 --stderrthreshold=2 \
                 --log_dir=/tmp/row_fuzzer_repro/logs \
+                --presto_url=http://127.0.0.1:8080 \
             && echo -e "\n\Row number fuzzer run finished successfully."
 
       - name: Archive row number production artifacts
@@ -730,12 +779,77 @@ jobs:
             path: |
               /tmp/row_fuzzer_repro
 
+  presto-java-topn-row-number-fuzzer-run:
+    name: TopNRowNumber Fuzzer
+    runs-on: ubuntu-latest
+    container: ghcr.io/facebookincubator/velox-dev:presto-java
+    needs: compile
+    timeout-minutes: 120
+    env:
+      CCACHE_DIR: "${{ github.workspace }}/ccache/"
+      LINUX_DISTRO: "centos"
+
+    steps:
+
+      - name: Download topn row number fuzzer
+        uses: actions/download-artifact@v4
+        with:
+          name: topn_row_number
+
+      - name: "Checkout Repo"
+        uses: actions/checkout@v4
+        with:
+          path: velox
+          submodules: 'recursive'
+          ref: "${{ inputs.ref }}"
+
+      - name: Fix git permissions
+        # Usually actions/checkout does this but as we run in a container
+        # it doesn't work
+        run: git config --global --add safe.directory ${GITHUB_WORKSPACE}/velox
+
+      - name: Run TopNRowNumber Fuzzer
+        run: |
+          cd velox
+          cp ./scripts/presto/etc/hive.properties $PRESTO_HOME/etc/catalog
+          ls -lR $PRESTO_HOME/etc
+          $PRESTO_HOME/bin/launcher run -v > /tmp/server.log 2>&1 &
+          # Sleep for 60 seconds to allow Presto server to start.
+          sleep 60
+          /opt/presto-cli --server 127.0.0.1:8080 --execute 'CREATE SCHEMA hive.tpch;'
+          cd -
+          cat /proc/sys/vm/max_map_count
+          mkdir -p /tmp/topn_row_fuzzer_repro/logs/
+          chmod -R 777 /tmp/topn_row_fuzzer_repro
+          chmod +x velox_topn_row_number_fuzzer
+          random_seed=${RANDOM}
+          echo "Random seed: ${random_seed}"
+          ./velox_topn_row_number_fuzzer \
+                --seed ${random_seed} \
+                --duration_sec $DURATION \
+                --minloglevel=0 \
+                --stderrthreshold=2 \
+                --req_timeout_ms 50000 \
+                --log_dir=/tmp/topn_row_fuzzer_repro/logs \
+                --presto_url=http://127.0.0.1:8080 \
+            && echo -e "\n\TopN Row number fuzzer run finished successfully."
+
+      - name: Archive topn row number production artifacts
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: topn-row-fuzzer-failure-artifacts
+          path: |
+            /tmp/topn_row_fuzzer_repro
+
   cache-fuzzer-run:
     name: Cache Fuzzer
     runs-on: ubuntu-latest
     container: ghcr.io/facebookincubator/velox-dev:centos9
     needs: compile
     timeout-minutes: 120
+    # Temporarily disable on PRs till flakiness is fixed #12167
+    if: ${{ github.event_name != 'pull_request' }}
     steps:
 
       - name: Download cache fuzzer
@@ -743,26 +857,94 @@ jobs:
         with:
           name: cache_fuzzer
 
-      - name: Run cache Fuzzer
+      - name: Run Cache Fuzzer
         run: |
-          mkdir -p /tmp/cache_fuzzer_test/logs/
-          chmod -R 777 /tmp/cache_fuzzer_test
-          chmod +x velox_cache_fuzzer_test
-          ./velox_cache_fuzzer_test \
+          mkdir -p /tmp/cache_fuzzer/logs/
+          chmod -R 777 /tmp/cache_fuzzer
+          chmod +x velox_cache_fuzzer
+          ./velox_cache_fuzzer \
                 --seed ${RANDOM} \
                 --duration_sec $DURATION \
                 --minloglevel=0 \
                 --stderrthreshold=2 \
-                --log_dir=/tmp/cache_fuzzer_test/logs \
+                --log_dir=/tmp/cache_fuzzer/logs \
             && echo -e "\n\Cache fuzzer run finished successfully."
 
       - name: Archive Cache production artifacts
         if: ${{ !cancelled() }}
         uses: actions/upload-artifact@v4
         with:
-            name: cache-fuzzer-test-logs
+            name: cache-fuzzer-logs
             path: |
-              /tmp/cache_fuzzer_test
+              /tmp/cache_fuzzer
+
+  table-evolution-fuzzer-run:
+    name: Table Evolution Fuzzer
+    runs-on: ubuntu-latest
+    container: ghcr.io/facebookincubator/velox-dev:centos9
+    needs: compile
+    timeout-minutes: 120
+    steps:
+
+      - name: Download table evolution fuzzer
+        uses: actions/download-artifact@v4
+        with:
+          name: table_evolution_fuzzer
+
+      - name: Run Table Evolution Fuzzer
+        run: |
+          mkdir -p /tmp/table_evolution_fuzzer_test/logs/
+          chmod -R 777 /tmp/table_evolution_fuzzer_test
+          chmod +x velox_table_evolution_fuzzer_test
+          ./velox_table_evolution_fuzzer_test \
+                --seed ${RANDOM} \
+                --duration_sec $DURATION \
+                --minloglevel=0 \
+                --stderrthreshold=2 \
+                --log_dir=/tmp/table_evolution_fuzzer_test/logs \
+            && echo -e "\n\Table evolution fuzzer run finished successfully."
+
+      - name: Archive table evolution production artifacts
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+            name: table-evolution-fuzzer-test-logs
+            path: |
+              /tmp/table_evolution_fuzzer_test
+
+  memory-arbitration-fuzzer-run:
+    name: Memory Arbitration Fuzzer
+    runs-on: ubuntu-latest
+    container: ghcr.io/facebookincubator/velox-dev:centos9
+    needs: compile
+    timeout-minutes: 120
+    steps:
+
+      - name: Download memory arbitration fuzzer
+        uses: actions/download-artifact@v4
+        with:
+          name: memory_arbitration_fuzzer
+
+      - name: Run Memory Arbitration Fuzzer
+        run: |
+          mkdir -p /tmp/memory_arbitration_fuzzer_test/logs/
+          chmod -R 777 /tmp/memory_arbitration_fuzzer_test
+          chmod +x velox_memory_arbitration_fuzzer_test
+          ./velox_memory_arbitration_fuzzer_test \
+                --seed ${RANDOM} \
+                --duration_sec $DURATION \
+                --minloglevel=0 \
+                --stderrthreshold=2 \
+                --log_dir=/tmp/memory_arbitration_fuzzer_test/logs \
+            && echo -e "\n\Memory arbitration fuzzer run finished successfully."
+
+      - name: Archive memory arbitration production artifacts
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+            name: memory-arbitration-fuzzer-test-logs
+            path: |
+              /tmp/memory_arbitration_fuzzer_test
 
   presto-java-aggregation-fuzzer-run:
     name: Aggregation Fuzzer with Presto as source of truth

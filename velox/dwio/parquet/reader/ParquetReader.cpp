@@ -32,7 +32,7 @@ bool isParquetReservedKeyword(
     uint32_t curSchemaIdx) {
   return ((parentSchemaIdx == 0 && curSchemaIdx == 0) || name == "key_value" ||
           name == "key" || name == "value" || name == "list" ||
-          name == "element")
+          name == "element" || name == "bag" || name == "array_element")
       ? true
       : false;
 }
@@ -59,7 +59,7 @@ class ReaderBase {
     return fileLength_;
   }
 
-  const thrift::FileMetaData& thriftFileMetaData() const {
+  thrift::FileMetaData& thriftFileMetaData() const {
     return *fileMetaData_;
   }
 
@@ -1002,7 +1002,18 @@ class ParquetRowReader::Impl {
       if (rowGroupInRange && !isExcluded && !isEmpty) {
         rowGroupIds_.push_back(i);
         firstRowOfRowGroup_.push_back(rowNumber);
+      } else {
+        if (i != 0) {
+          // Clear the metadata of row groups that are not read. This helps
+          // reduce the memory consumption. ColumnChunks consume the most
+          // memory. Skip the 0th RowGroup as it is used by estimatedRowSize().
+          rowGroups_[i].columns.clear();
+        }
+        if (rowGroupInRange) {
+          skippedStrides_++;
+        }
       }
+
       rowNumber += rowGroups_[i].num_rows;
     }
   }
@@ -1058,7 +1069,8 @@ class ParquetRowReader::Impl {
   }
 
   void updateRuntimeStats(dwio::common::RuntimeStatistics& stats) const {
-    stats.skippedStrides += rowGroups_.size() - rowGroupIds_.size();
+    stats.skippedStrides += skippedStrides_;
+    stats.processedStrides += rowGroupIds_.size();
   }
 
   void resetFilterCaches() {
@@ -1093,7 +1105,7 @@ class ParquetRowReader::Impl {
   const dwio::common::RowReaderOptions options_;
 
   // All row groups from file metadata.
-  const std::vector<thrift::RowGroup>& rowGroups_;
+  std::vector<thrift::RowGroup>& rowGroups_;
   // Indices of row groups where stats match filters.
   std::vector<uint32_t> rowGroupIds_;
   std::vector<uint64_t> firstRowOfRowGroup_;
@@ -1101,6 +1113,7 @@ class ParquetRowReader::Impl {
   const thrift::RowGroup* currentRowGroupPtr_{nullptr};
   uint64_t rowsInCurrentRowGroup_;
   uint64_t currentRowInGroup_;
+  uint32_t skippedStrides_{0};
 
   std::unique_ptr<dwio::common::SelectiveColumnReader> columnReader_;
 

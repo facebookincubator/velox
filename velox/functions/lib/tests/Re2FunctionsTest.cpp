@@ -24,6 +24,7 @@
 
 #include "velox/common/base/VeloxException.h"
 #include "velox/common/base/tests/GTestUtils.h"
+#include "velox/common/testutil/OptionalEmpty.h"
 #include "velox/functions/prestosql/tests/utils/FunctionBaseTest.h"
 #include "velox/parse/TypeResolver.h"
 #include "velox/type/StringView.h"
@@ -44,6 +45,13 @@ std::shared_ptr<exec::VectorFunction> makeRegexExtract(
   return makeRe2Extract(name, inputArgs, config, /*emptyNoMatch=*/false);
 }
 
+std::shared_ptr<exec::VectorFunction> makeRegexExtractEmptyNoMatch(
+    const std::string& name,
+    const std::vector<exec::VectorFunctionArg>& inputArgs,
+    const core::QueryConfig& config) {
+  return makeRe2Extract(name, inputArgs, config, /*emptyNoMatch=*/true);
+}
+
 class Re2FunctionsTest : public test::FunctionBaseTest {
  public:
   static void SetUpTestCase() {
@@ -54,6 +62,10 @@ class Re2FunctionsTest : public test::FunctionBaseTest {
         "re2_search", re2SearchSignatures(), makeRe2Search);
     exec::registerStatefulVectorFunction(
         "re2_extract", re2ExtractSignatures(), makeRegexExtract);
+    exec::registerStatefulVectorFunction(
+        "re2_extract_empty_no_match",
+        re2ExtractSignatures(),
+        makeRegexExtractEmptyNoMatch);
     exec::registerStatefulVectorFunction(
         "re2_extract_all", re2ExtractAllSignatures(), makeRe2ExtractAll);
     exec::registerStatefulVectorFunction("like", likeSignatures(), makeLike);
@@ -369,6 +381,9 @@ void testRe2Extract(F&& regexExtract) {
   EXPECT_EQ(regexExtract(std::nullopt, "\\d+", 0), std::nullopt);
   EXPECT_EQ(regexExtract(" 123 ", std::nullopt, 0), std::nullopt);
   EXPECT_EQ(regexExtract(" 123 ", "\\d+", std::nullopt), std::nullopt);
+  // Group case that mismatch.
+  EXPECT_EQ(
+      regexExtract("rat cat\nbat dog", "ra(.)|blah(.)(.)", 2), std::nullopt);
 }
 
 TEST_F(Re2FunctionsTest, regexExtract) {
@@ -377,6 +392,21 @@ TEST_F(Re2FunctionsTest, regexExtract) {
                      std::optional<int> group) {
     return evaluateOnce<std::string>(
         "re2_extract(c0, c1, c2)", str, pattern, group);
+  });
+}
+
+template <typename F>
+void testRe2ExtractEmptyNoMatch(F&& regexExtract) {
+  // Group case that mismatch.
+  EXPECT_EQ(regexExtract("rat cat\nbat dog", "ra(.)|blah(.)(.)", 2), "");
+}
+
+TEST_F(Re2FunctionsTest, regexExtractEmptyNoMatch) {
+  testRe2ExtractEmptyNoMatch([&](std::optional<std::string> str,
+                                 std::optional<std::string> pattern,
+                                 std::optional<int> group) {
+    return evaluateOnce<std::string>(
+        "re2_extract_empty_no_match(c0, c1, c2)", str, pattern, group);
   });
 }
 
@@ -978,9 +1008,9 @@ void Re2FunctionsTest::testRe2ExtractAll(
     const std::vector<std::optional<std::string>>& patterns,
     const std::vector<std::optional<T>>& groupIds,
     const std::vector<std::optional<std::vector<std::string>>>& output) {
-  std::string constantPattern = "";
-  std::string constantGroupId = "";
-  std::string expression = "";
+  std::string constantPattern;
+  std::string constantGroupId;
+  std::string expression;
 
   auto result = [&] {
     auto input = makeFlatVector<StringView>(
@@ -1100,6 +1130,20 @@ TEST_F(Re2FunctionsTest, regexExtractAllConstantPatternConstantGroupId) {
   testRe2ExtractAll(inputs, constantPattern, bigGroupIds, expectedOutputs);
 }
 
+TEST_F(Re2FunctionsTest, regexExtractAllMismatchedGroup) {
+  auto sourceVector =
+      makeFlatVector<std::string>({"rat cat\nbat dog"}, VARCHAR());
+  auto patternVector =
+      makeFlatVector<std::string>({"ra(.)|blah(.)(.)"}, VARCHAR());
+  auto groupIdVector = makeFlatVector<int>(std::vector{2}, INTEGER());
+  auto expectedVector = makeNullableArrayVector<std::string>(
+      std::vector<std::vector<std::optional<std::string>>>{{std::nullopt}});
+  auto result = evaluate(
+      "regexp_extract_all(c0, c1, c2)",
+      makeRowVector({sourceVector, patternVector, groupIdVector}));
+  assertEqualVectors(expectedVector, result);
+}
+
 TEST_F(Re2FunctionsTest, regexExtractAllConstantPatternVariableGroupId) {
   const std::vector<std::optional<std::string>> inputs = {
       "  123a   2b   14m  ",
@@ -1180,19 +1224,25 @@ TEST_F(Re2FunctionsTest, regexExtractAllNoMatch) {
   const std::vector<std::optional<int32_t>> noGroupId = {};
   const std::vector<std::optional<int32_t>> groupIds0 = {0};
 
-  testRe2ExtractAll({""}, {"[0-9]+"}, noGroupId, {{{}}});
-  testRe2ExtractAll({"(╯°□°)╯︵ ┻━┻"}, {"[0-9]+"}, noGroupId, {{{}}});
-  testRe2ExtractAll({"abcde"}, {"[0-9]+"}, groupIds0, {{{}}});
+  testRe2ExtractAll(
+      {""}, {"[0-9]+"}, noGroupId, {common::testutil::optionalEmpty});
+  testRe2ExtractAll(
+      {"(╯°□°)╯︵ ┻━┻"},
+      {"[0-9]+"},
+      noGroupId,
+      {common::testutil::optionalEmpty});
+  testRe2ExtractAll(
+      {"abcde"}, {"[0-9]+"}, groupIds0, {common::testutil::optionalEmpty});
   testRe2ExtractAll(
       {"rYBKVn6DnfSI2an4is4jbvf4btGpV"},
       {"81jnp58n31BtMdlUsP1hiF4QWSYv411"},
       noGroupId,
-      {{{}}});
+      {common::testutil::optionalEmpty});
   testRe2ExtractAll(
       {"rYBKVn6DnfSI2an4is4jbvf4btGpV"},
       {"81jnp58n31BtMdlUsP1hiF4QWSYv411"},
       groupIds0,
-      {{{}}});
+      {common::testutil::optionalEmpty});
 
   // Test empty pattern.
   testRe2ExtractAll<int32_t>(

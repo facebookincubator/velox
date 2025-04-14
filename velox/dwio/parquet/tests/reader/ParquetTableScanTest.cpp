@@ -25,7 +25,6 @@
 #include "velox/exec/tests/utils/HiveConnectorTestBase.h" // @manual
 #include "velox/exec/tests/utils/PlanBuilder.h"
 #include "velox/exec/tests/utils/TempDirectoryPath.h"
-#include "velox/external/date/tz.h"
 #include "velox/type/tests/SubfieldFiltersBuilder.h"
 #include "velox/type/tz/TimeZoneMap.h"
 
@@ -406,6 +405,25 @@ TEST_F(ParquetTableScanTest, lazy) {
   }
   ASSERT_EQ(rows, 20);
   ASSERT_TRUE(waitForTaskCompletion(cursor->task().get()));
+}
+
+TEST_F(ParquetTableScanTest, aggregatePushdown) {
+  auto keysVector = makeFlatVector<int64_t>({1, 4, 0, 3, 2});
+  auto valuesVector = makeFlatVector<int64_t>({8077, 6883, 5805, 10640, 3582});
+  auto outputType = ROW({"c1", "c2", "c3"}, {BIGINT(), BIGINT(), BIGINT()});
+  auto plan = PlanBuilder()
+                  .tableScan(outputType, {"c1 = 1"}, "")
+                  .singleAggregation({"c2"}, {"sum(c3)"})
+                  .planNode();
+  std::vector<std::shared_ptr<connector::ConnectorSplit>> splits;
+  splits.push_back(makeSplit(getExampleFilePath("gcc_data_diff.parquet")));
+  auto result = AssertQueryBuilder(plan).splits(splits).copyResults(pool());
+  ASSERT_EQ(result->size(), 5);
+  auto rows = result->as<RowVector>();
+  ASSERT_TRUE(rows);
+  ASSERT_EQ(rows->childrenSize(), 2);
+  assertEqualVectors(rows->childAt(0), keysVector);
+  assertEqualVectors(rows->childAt(1), valuesVector);
 }
 
 TEST_F(ParquetTableScanTest, countStar) {
@@ -898,49 +916,27 @@ TEST_F(ParquetTableScanTest, timestampPrecisionMicrosecond) {
           kSize, [](auto i) { return Timestamp(i, i * 1'001'001); }),
   });
   auto schema = asRowType(vector->type());
-  auto file = TempFilePath::create();
-  WriterOptions options;
-  options.writeInt96AsTimestamp = true;
-  writeToParquetFile(file->getPath(), {vector}, options);
-  auto plan = PlanBuilder().tableScan(schema).planNode();
+  for (const auto writeInt96 : {true, false}) {
+    auto file = TempFilePath::create();
+    WriterOptions options;
+    options.writeInt96AsTimestamp = writeInt96;
+    writeToParquetFile(file->getPath(), {vector}, options);
+    auto plan = PlanBuilder().tableScan(schema).planNode();
 
-  // Read timestamp data from parquet with microsecond precision.
-  CursorParameters params;
-  std::shared_ptr<folly::Executor> executor =
-      std::make_shared<folly::CPUThreadPoolExecutor>(
-          std::thread::hardware_concurrency());
-  std::shared_ptr<core::QueryCtx> queryCtx =
-      core::QueryCtx::create(executor.get());
-  std::unordered_map<std::string, std::string> session = {
-      {std::string(connector::hive::HiveConfig::kReadTimestampUnitSession),
-       "6"}};
-  queryCtx->setConnectorSessionOverridesUnsafe(
-      kHiveConnectorId, std::move(session));
-  params.queryCtx = queryCtx;
-  params.planNode = plan;
-  const int numSplitsPerFile = 1;
-
-  bool noMoreSplits = false;
-  auto addSplits = [&](exec::Task* task) {
-    if (!noMoreSplits) {
-      auto const splits = HiveConnectorTestBase::makeHiveConnectorSplits(
-          {file->getPath()},
-          numSplitsPerFile,
-          dwio::common::FileFormat::PARQUET);
-      for (const auto& split : splits) {
-        task->addSplit("0", exec::Split(split));
-      }
-      task->noMoreSplits("0");
-    }
-    noMoreSplits = true;
-  };
-  auto result = readCursor(params, addSplits);
-  ASSERT_TRUE(waitForTaskCompletion(result.first->task().get()));
-  auto expected = makeRowVector({
-      makeFlatVector<Timestamp>(
-          kSize, [](auto i) { return Timestamp(i, i * 1'001'000); }),
-  });
-  assertEqualResults({expected}, result.second);
+    // Read timestamp data from parquet with microsecond precision.
+    auto split = makeSplit(file->getPath());
+    auto result =
+        AssertQueryBuilder(plan, duckDbQueryRunner_)
+            .connectorSessionProperty(
+                kHiveConnectorId, HiveConfig::kReadTimestampUnitSession, "6")
+            .split(split)
+            .copyResults(pool());
+    auto expected = makeRowVector({
+        makeFlatVector<Timestamp>(
+            kSize, [](auto i) { return Timestamp(i, i * 1'001'000); }),
+    });
+    assertEqualResults({expected}, {result});
+  }
 }
 
 TEST_F(ParquetTableScanTest, testColumnNotExists) {
@@ -1181,6 +1177,84 @@ TEST_F(ParquetTableScanTest, deltaByteArray) {
       ROW({"a"}, {VARCHAR()}),
       makeRowVector({"a"}, {vector}));
   assertSelect({"a"}, "SELECT a from expected");
+}
+
+TEST_F(ParquetTableScanTest, booleanRle) {
+  WriterOptions options;
+  options.enableDictionary = false;
+  options.encoding = facebook::velox::parquet::arrow::Encoding::RLE;
+  options.useParquetDataPageV2 = true;
+
+  auto allTrue = [](vector_size_t row) -> bool { return true; };
+  auto allFalse = [](vector_size_t row) -> bool { return false; };
+  auto nonNullAtFirst = [](vector_size_t row) -> bool { return row != 0; };
+  auto randomTrueFalse = [](vector_size_t row) -> bool {
+    return std::rand() % 2 == 0;
+  };
+  auto randomNull = [](vector_size_t row) -> bool {
+    return std::rand() % 2 == 0;
+  };
+
+  auto vector = makeRowVector(
+      {"c0", "c1", "c2", "c3", "c4"},
+      {
+          makeFlatVector<bool>(100, allTrue, nonNullAtFirst),
+          makeFlatVector<bool>(100, allFalse, nonNullAtFirst),
+          makeFlatVector<bool>(100, allTrue),
+          makeFlatVector<bool>(100, allFalse),
+          makeFlatVector<bool>(100, randomTrueFalse, randomNull),
+      });
+  auto schema = asRowType(vector->type());
+  auto file = TempFilePath::create();
+  writeToParquetFile(file->getPath(), {vector}, options);
+  loadData(file->getPath(), schema, vector);
+
+  std::shared_ptr<connector::ColumnHandle> c0 = makeColumnHandle(
+      "c0", BOOLEAN(), BOOLEAN(), {}, HiveColumnHandle::ColumnType::kRegular);
+  std::shared_ptr<connector::ColumnHandle> c1 = makeColumnHandle(
+      "c1", BOOLEAN(), BOOLEAN(), {}, HiveColumnHandle::ColumnType::kRegular);
+  std::shared_ptr<connector::ColumnHandle> c2 = makeColumnHandle(
+      "c2", BOOLEAN(), BOOLEAN(), {}, HiveColumnHandle::ColumnType::kRegular);
+  std::shared_ptr<connector::ColumnHandle> c3 = makeColumnHandle(
+      "c3", BOOLEAN(), BOOLEAN(), {}, HiveColumnHandle::ColumnType::kRegular);
+  std::shared_ptr<connector::ColumnHandle> c4 = makeColumnHandle(
+      "c4", BOOLEAN(), BOOLEAN(), {}, HiveColumnHandle::ColumnType::kRegular);
+
+  assertSelect({"c0"}, "SELECT c0 FROM tmp");
+  assertSelect({"c1"}, "SELECT c1 FROM tmp");
+  assertSelect({"c2"}, "SELECT c2 FROM tmp");
+  assertSelect({"c3"}, "SELECT c3 FROM tmp");
+  assertSelect({"c4"}, "SELECT c4 FROM tmp");
+}
+
+TEST_F(ParquetTableScanTest, singleBooleanRle) {
+  WriterOptions options;
+  options.enableDictionary = false;
+  options.encoding = facebook::velox::parquet::arrow::Encoding::RLE;
+  options.useParquetDataPageV2 = true;
+
+  auto vector = makeRowVector(
+      {"c0", "c1", "c2"},
+      {
+          makeFlatVector<bool>(std::vector<bool>{true}),
+          makeFlatVector<bool>(std::vector<bool>{false}),
+          makeNullableFlatVector<bool>({std::nullopt}),
+      });
+  auto schema = asRowType(vector->type());
+  auto file = TempFilePath::create();
+  writeToParquetFile(file->getPath(), {vector}, options);
+  loadData(file->getPath(), schema, vector);
+
+  std::shared_ptr<connector::ColumnHandle> c0 = makeColumnHandle(
+      "c0", BOOLEAN(), BOOLEAN(), {}, HiveColumnHandle::ColumnType::kRegular);
+  std::shared_ptr<connector::ColumnHandle> c1 = makeColumnHandle(
+      "c1", BOOLEAN(), BOOLEAN(), {}, HiveColumnHandle::ColumnType::kRegular);
+  std::shared_ptr<connector::ColumnHandle> c2 = makeColumnHandle(
+      "c2", BOOLEAN(), BOOLEAN(), {}, HiveColumnHandle::ColumnType::kRegular);
+
+  assertSelect({"c0"}, "SELECT c0 FROM tmp");
+  assertSelect({"c1"}, "SELECT c1 FROM tmp");
+  assertSelect({"c2"}, "SELECT c2 FROM tmp");
 }
 
 int main(int argc, char** argv) {

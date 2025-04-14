@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+#include "velox/functions/prestosql/aggregates/ClassificationAggregation.h"
 #include "velox/common/base/IOUtils.h"
 #include "velox/exec/Aggregate.h"
 #include "velox/functions/prestosql/aggregates/AggregateNames.h"
@@ -333,7 +334,7 @@ struct Accumulator {
     double runningFalseWeight = 0;
     double runningTrueWeight = 0;
     int64_t trueWeightIndex = 0;
-    while (trueWeightIndex < trueWeights_.bucketCount() &&
+    while (trueWeightIndex < trueWeights_.size() &&
            totalTrueWeight > runningTrueWeight) {
       auto trueBucketResult = trueWeights_.getBucket(trueWeightIndex);
       auto falseBucketResult = falseWeights_.getBucket(trueWeightIndex);

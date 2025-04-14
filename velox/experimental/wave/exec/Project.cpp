@@ -24,8 +24,20 @@
 
 namespace facebook::velox::wave {
 
-AbstractWrap* Project::findWrap() const {
-  return filterWrap_;
+exec::BlockingReason Project::isBlocked(
+    WaveStream& stream,
+    ContinueFuture* future) {
+  for (int32_t i = levels_.size() - 1; i >= 0; --i) {
+    auto& level = levels_[i];
+    for (auto j = 0; j < level.size(); ++j) {
+      auto* program = level[j].get();
+      auto result = program->isBlocked(stream, future);
+      if (result != exec::BlockingReason::kNotBlocked) {
+        return result;
+      }
+    }
+  }
+  return exec::BlockingReason::kNotBlocked;
 }
 
 std::vector<AdvanceResult> Project::canAdvance(WaveStream& stream) {
@@ -67,10 +79,13 @@ std::vector<AdvanceResult> Project::canAdvance(WaveStream& stream) {
   return {};
 }
 
-void Project::callUpdateStatus(WaveStream& stream, AdvanceResult& advance) {
+void Project::callUpdateStatus(
+    WaveStream& stream,
+    const std::vector<WaveStream*>& otherStreams,
+    AdvanceResult& advance) {
   if (advance.updateStatus) {
     levels_[advance.nthLaunch][advance.programIdx]->callUpdateStatus(
-        stream, advance);
+        stream, otherStreams, advance);
   }
 }
 
@@ -135,24 +150,20 @@ void Project::schedule(WaveStream& stream, int32_t maxRows) {
           stream.checkExecutables();
           {
             PrintTime c("expr");
-            if (auto* kernel = exes[0]->programShared->kernel()) {
-              auto numBranches = exes[0]->programShared->numBranches();
-              void* params = &control->params;
-
-              kernel->launch(
-                  0,
-                  blocksPerExe * numBranches,
-                  kBlockSize,
-                  control->sharedMemorySize,
-                  out,
-                  &params);
-            } else {
-              reinterpret_cast<WaveKernelStream*>(out)->call(
-                  out,
-                  exes.size() * blocksPerExe,
-                  control->sharedMemorySize,
-                  control->params);
-            }
+            auto* kernel = exes[0]->programShared->kernel();
+            VELOX_CHECK_NOT_NULL(kernel);
+            auto numBranches = exes[0]->programShared->numBranches();
+            void* params = &control->params;
+            // The count of TBs is the BlockStatus count ceil
+            // numRowsPerThread, i.e. 11 blocks with 4 rows per thread
+            // is 3. The TBs in the launch is this times the number of
+            // program branches.
+            auto numTBs = numBranches *
+                bits::roundUp(control->params.numBlocks,
+                              control->params.numRowsPerThread) /
+                control->params.numRowsPerThread;
+            kernel->launch(
+                0, numTBs, kBlockSize, control->sharedMemorySize, out, &params);
           }
           stream.checkExecutables();
         });
@@ -160,10 +171,17 @@ void Project::schedule(WaveStream& stream, int32_t maxRows) {
   }
 }
 
+void Project::pipelineFinished(WaveStream& stream) {
+  for (auto& level : levels_) {
+    for (auto& program : level) {
+      program->pipelineFinished(stream);
+    }
+  }
+}
+
 void Project::finalize(CompileState& state) {
   for (auto& level : levels_) {
     for (auto& program : level) {
-      program->prepareForDevice(state.arena());
       for (auto& pair : program->output()) {
         if (true /*isProjected(id)*/) {
           computedSet_.add(pair.first->id);

@@ -256,8 +256,12 @@ class BaseVector {
     return const_cast<uint64_t*>(rawNulls_);
   }
 
-  BufferPtr& mutableNulls(vector_size_t size) {
-    ensureNullsCapacity(size);
+  /// Ensures the vector has capacity for the nulls and returns the shared
+  /// pointer to the buffer containing them.
+  /// Optional parameter 'setNotNull' is passed to ensureNullsCapacity() and is
+  /// used to ensure all the rows will be 'not nulls' if set to true.
+  BufferPtr& mutableNulls(vector_size_t size, bool setNotNull = false) {
+    ensureNullsCapacity(size, setNotNull);
     return nulls_;
   }
 
@@ -426,6 +430,12 @@ class BaseVector {
     vector_size_t sourceIndex;
     vector_size_t targetIndex;
     vector_size_t count;
+
+    /// Whether `next` can be merged with this range to form a new range.
+    bool mergeable(const CopyRange& next) const {
+      return next.sourceIndex == sourceIndex + count &&
+          next.targetIndex == targetIndex + count;
+    }
   };
 
   /// Sets null flags for each row in 'ranges' to 'isNull'.
@@ -1075,6 +1085,16 @@ std::string printIndices(
     const BufferPtr& indices,
     vector_size_t maxIndicesToPrint = 10);
 
+template <typename OutputStream>
+OutputStream& operator<<(
+    OutputStream& out,
+    const BaseVector::CopyRange& range) {
+  out << "{sourceIndex=" << range.sourceIndex
+      << " targetIndex=" << range.targetIndex << " count=" << range.count
+      << "}";
+  return out;
+}
+
 } // namespace facebook::velox
 
 namespace folly {
@@ -1109,7 +1129,7 @@ struct fmt::formatter<facebook::velox::VectorEncoding::Simple> {
   auto format(
       const facebook::velox::VectorEncoding::Simple& x,
       FormatContext& ctx) const {
-    return format_to(
+    return fmt::format_to(
         ctx.out(), "{}", facebook::velox::VectorEncoding::mapSimpleToName(x));
   }
 };

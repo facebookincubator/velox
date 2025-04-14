@@ -35,10 +35,12 @@ struct WarpScan {
 
   };
 
+  int laneId;
+
   static constexpr unsigned int member_mask =
       kNumLanes == 32 ? 0xffffffff : (1 << kNumLanes) - 1;
 
-  WarpScan() = default;
+  __device__ WarpScan() : laneId(LaneId()) {}
 
   __device__ __forceinline__ void exclusiveSum(
       T input, ///< [in] Calling thread's input item.
@@ -60,47 +62,26 @@ struct WarpScan {
     exclusive_output = initial_value + inclusive_output - input;
   }
 
-  __device__ __forceinline__ void ExclusiveSum(
+  __device__ __forceinline__ void exclusiveSum(
       T input,
       T& exclusive_output,
       T initial_value,
       T& warp_aggregate) {
     T inclusive_output;
-    Inclusivesum(input, inclusive_output);
+    inclusivesum(input, inclusive_output);
     warp_aggregate = __shfl_sync(member_mask, inclusive_output, kNumLanes - 1);
     exclusive_output = initial_value + inclusive_output - input;
   }
 
-  __device__ __forceinline__ unsigned int inclusiveSumStep(
-      unsigned int input,
-      int first_lane, ///< [in] Index of first lane in segment
-      int offset) ///< [in] Up-offset to pull from
-  {
-    unsigned int output;
-    int shfl_c = first_lane | SHFL_C; // Shuffle control (mask and first-lane)
-
-    // Use predicate set from SHFL to guard against invalid peers
-    asm volatile(
-        "{"
-        "  .reg .u32 r0;"
-        "  .reg .pred p;"
-        "  shfl.sync.up.b32 r0|p, %1, %2, %3, %5;"
-        "  @p add.u32 r0, r0, %4;"
-        "  mov.u32 %0, r0;"
-        "}"
-        : "=r"(output)
-        : "r"(input), "r"(offset), "r"(shfl_c), "r"(input), "r"(member_mask));
-
-    return output;
-  }
-
   __device__ __forceinline__ void inclusiveSum(T input, T& inclusive_output) {
     inclusive_output = input;
-    int segment_first_lane = 0;
 #pragma unroll
     for (int STEP = 0; STEP < STEPS; STEP++) {
-      inclusive_output =
-          inclusiveSumStep(inclusive_output, segment_first_lane, (1 << STEP));
+      int offset = (1 << STEP);
+      T other = __shfl_up_sync(member_mask, inclusive_output, offset);
+      if (laneId >= offset) {
+        inclusive_output += other;
+      }
     }
   }
 };
@@ -129,5 +110,80 @@ struct WarpReduce {
     return val;
   }
 };
+
+/// Returns the block wide exclusive sum (sum of 'input' for all
+/// lanes below threadIdx.x). If 'total' is non-nullptr, the block
+/// wide sum is returned in '*total'. 'temp' must have
+/// exclusiveSumTempSize() writable bytes aligned for T.
+template <typename T, int32_t kBlockSize>
+inline __device__ T exclusiveSum(T input, T* total, T* temp) {
+  constexpr int32_t kNumWarps = kBlockSize / kWarpThreads;
+  using Scan = WarpScan<T>;
+  T sum;
+  Scan().exclusiveSum(input, sum);
+  if (kBlockSize == kWarpThreads) {
+    if (total) {
+      if (threadIdx.x == kWarpThreads - 1) {
+        *total = input + sum;
+      }
+      __syncthreads();
+    }
+    return sum;
+  }
+  if (detail::isLastInWarp()) {
+    temp[threadIdx.x / kWarpThreads] = input + sum;
+  }
+  __syncthreads();
+  using InnerScan = WarpScan<T, kNumWarps>;
+  T warpSum = threadIdx.x < kNumWarps ? temp[threadIdx.x] : 0;
+  T blockSum;
+  InnerScan().exclusiveSum(warpSum, blockSum);
+  if (threadIdx.x < kNumWarps) {
+    temp[threadIdx.x] = blockSum;
+    if (total && threadIdx.x == kNumWarps - 1) {
+      *total = warpSum + blockSum;
+    }
+  }
+  __syncthreads();
+  return sum + temp[threadIdx.x / kWarpThreads];
+}
+
+/// Returns the block wide inclusive sum (sum of 'input' for all
+/// lanes below threadIdx.x). 'temp' must have
+/// exclusiveSumTempSize() writable bytes aligned for T. '*total' is set to the
+/// TB-wide total if 'total' is not nullptr.
+template <typename T, int32_t kBlockSize>
+inline __device__ T inclusiveSum(T input, T* total, T* temp) {
+  constexpr int32_t kNumWarps = kBlockSize / kWarpThreads;
+  using Scan = WarpScan<T>;
+  T sum;
+  Scan().inclusiveSum(input, sum);
+  if (kBlockSize <= kWarpThreads) {
+    if (total != nullptr) {
+      if (threadIdx.x == kBlockSize - 1) {
+        *total = sum;
+      }
+      __syncthreads();
+    }
+    return sum;
+  }
+  if (detail::isLastInWarp()) {
+    temp[threadIdx.x / kWarpThreads] = sum;
+  }
+  __syncthreads();
+  constexpr int32_t kInnerWidth = kNumWarps < 2 ? 2 : kNumWarps;
+  using InnerScan = WarpScan<T, kInnerWidth>;
+  T warpSum = threadIdx.x < kInnerWidth ? temp[threadIdx.x] : 0;
+  T blockSum;
+  InnerScan().exclusiveSum(warpSum, blockSum);
+  if (threadIdx.x < kInnerWidth) {
+    temp[threadIdx.x] = blockSum;
+  }
+  if (total != nullptr && threadIdx.x == kInnerWidth - 1) {
+    *total = blockSum + warpSum;
+  }
+  __syncthreads();
+  return sum + temp[threadIdx.x / kWarpThreads];
+}
 
 } // namespace facebook::velox::wave

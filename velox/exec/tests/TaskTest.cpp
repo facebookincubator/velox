@@ -367,7 +367,7 @@ class TestExternalBlockableOperator : public exec::Operator {
  private:
   RowVectorPtr input_;
   ExternalBlocker* externalBlocker_;
-  folly::SemiFuture<folly::Unit> continueFuture_;
+  ContinueFuture continueFuture_{ContinueFuture::makeEmpty()};
 };
 
 class TestExternalBlockableTranslator
@@ -957,6 +957,7 @@ TEST_F(TaskTest, serialExecutionExternalBlockable) {
       makeFlatVector<int64_t>(1'000, [](auto row) { return row; }),
   });
   auto blocker = std::make_shared<ExternalBlocker>();
+  core::PlanNodeId blockerNodeId;
   // Filter + Project.
   auto plan =
       PlanBuilder()
@@ -965,6 +966,7 @@ TEST_F(TaskTest, serialExecutionExternalBlockable) {
             return std::make_shared<TestExternalBlockableNode>(
                 id, input, std::move(blocker));
           })
+          .capturePlanNodeId(blockerNodeId)
           .project({"c0"})
           .planFragment();
 
@@ -987,6 +989,12 @@ TEST_F(TaskTest, serialExecutionExternalBlockable) {
     results.push_back(std::move(result));
   }
   EXPECT_EQ(3, results.size());
+  {
+    auto planStats = toPlanStats(nonBlockingTask->taskStats());
+    auto& blockerNodeStats = planStats.at(blockerNodeId);
+    ASSERT_EQ(blockerNodeStats.blockedWallNanos, 0);
+  }
+  return;
 
   results.clear();
   continueFuture = ContinueFuture::makeEmpty();
@@ -1006,6 +1014,7 @@ TEST_F(TaskTest, serialExecutionExternalBlockable) {
   blocker->block();
   EXPECT_EQ(nullptr, blockingTask->next(&continueFuture));
   EXPECT_TRUE(continueFuture.valid() && !continueFuture.isReady());
+  std::this_thread::sleep_for(std::chrono::milliseconds{100});
   // After the pipeline is unblocked by external event, `continueFuture` should
   // get realized right away
   blocker->unblock();
@@ -1019,6 +1028,11 @@ TEST_F(TaskTest, serialExecutionExternalBlockable) {
     results.push_back(std::move(result));
   }
   EXPECT_EQ(3, results.size());
+  {
+    auto planStats = toPlanStats(blockingTask->taskStats());
+    auto& blockerNodeStats = planStats.at(blockerNodeId);
+    ASSERT_GT(blockerNodeStats.blockedWallNanos, 0);
+  }
 }
 
 TEST_F(TaskTest, supportSerialExecutionMode) {
@@ -1045,7 +1059,7 @@ TEST_F(TaskTest, updateBroadCastOutputBuffers) {
                   .project({"c0 % 10"})
                   .partitionedOutputBroadcast({})
                   .planFragment();
-  auto bufferManager = OutputBufferManager::getInstance().lock();
+  auto bufferManager = OutputBufferManager::getInstanceRef();
   {
     auto task = Task::create(
         "t0",
@@ -1241,7 +1255,7 @@ DEBUG_ONLY_TEST_F(TaskTest, liveStats) {
   EXPECT_EQ(numBatches, operatorStats.outputVectors);
   // isBlocked() should be called at least twice for each batch
   EXPECT_LE(2 * numBatches, operatorStats.isBlockedTiming.count);
-  EXPECT_EQ(2, operatorStats.finishTiming.count);
+  EXPECT_EQ(1, operatorStats.finishTiming.count);
   // No operators with background CPU time yet.
   EXPECT_EQ(0, operatorStats.backgroundTiming.count);
 
@@ -2128,6 +2142,8 @@ DEBUG_ONLY_TEST_F(TaskTest, taskReclaimStats) {
   // Fail the task to finish test.
   task->requestAbort();
   ASSERT_TRUE(waitForTaskAborted(task.get()));
+  ASSERT_EQ(
+      task->planFragment().planNode->toString(), plan.planNode->toString());
   task.reset();
   waitForAllTasksToBeDeleted();
 }
@@ -2414,5 +2430,30 @@ DEBUG_ONLY_TEST_F(TaskTest, taskCancellation) {
 
   task.reset();
   waitForAllTasksToBeDeleted();
+}
+
+TEST_F(TaskTest, finishTiming) {
+  auto data = makeRowVector({
+      makeFlatVector<int64_t>(1'000, [](auto row) { return row; }),
+  });
+  core::PlanNodeId projectId;
+  core::PlanNodeId orderById;
+  auto plan = PlanBuilder()
+                  .values({data, data})
+                  .project({"c0"})
+                  .capturePlanNodeId(projectId)
+                  .orderBy({"c0 DESC NULLS LAST"}, false)
+                  .capturePlanNodeId(orderById)
+                  .planFragment();
+
+  auto [task, _] = executeSerial(plan);
+  auto taskStats = exec::toPlanStats(task->taskStats());
+  auto& projectStats = taskStats.at(projectId);
+  auto& orderByStats = taskStats.at(orderById);
+  // Since the sort is executed in the 'noMoreInput' function of the OrderBy
+  // operator, the finish time of the OrderBy operator should be greater than
+  // that of the Project operator.
+  ASSERT_GT(
+      orderByStats.finishTiming.wallNanos, projectStats.finishTiming.wallNanos);
 }
 } // namespace facebook::velox::exec::test

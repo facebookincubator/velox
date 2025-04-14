@@ -53,17 +53,53 @@ void RuntimeMetric::printMetric(std::stringstream& stream) const {
     case RuntimeCounter::Unit::kNanos:
       stream << " sum: " << succinctNanos(sum) << ", count: " << count
              << ", min: " << succinctNanos(min)
-             << ", max: " << succinctNanos(max);
+             << ", max: " << succinctNanos(max)
+             << ", avg: " << succinctNanos(count == 0 ? 0 : sum / count);
       break;
     case RuntimeCounter::Unit::kBytes:
       stream << " sum: " << succinctBytes(sum) << ", count: " << count
              << ", min: " << succinctBytes(min)
-             << ", max: " << succinctBytes(max);
+             << ", max: " << succinctBytes(max)
+             << ", avg: " << succinctBytes(count == 0 ? 0 : sum / count);
       break;
     case RuntimeCounter::Unit::kNone:
+      [[fallthrough]];
     default:
       stream << " sum: " << sum << ", count: " << count << ", min: " << min
-             << ", max: " << max;
+             << ", max: " << max << ", avg: " << (count == 0 ? 0 : sum / count);
+  }
+}
+
+std::string RuntimeMetric::toString() const {
+  switch (unit) {
+    case RuntimeCounter::Unit::kNanos:
+      return fmt::format(
+          "sum:{}, count:{}, min:{}, max:{}, avg: {}",
+          succinctNanos(sum),
+          count,
+          succinctNanos(min),
+          succinctNanos(max),
+          succinctNanos(count == 0 ? 0 : sum / count));
+      break;
+    case RuntimeCounter::Unit::kBytes:
+      return fmt::format(
+          "sum:{}, count:{}, min:{}, max:{}, avg: {}",
+          succinctBytes(sum),
+          count,
+          succinctBytes(min),
+          succinctBytes(max),
+          succinctBytes(count == 0 ? 0 : sum / count));
+      break;
+    case RuntimeCounter::Unit::kNone:
+      [[fallthrough]];
+    default:
+      return fmt::format(
+          "sum:{}, count:{}, min:{}, max:{}, avg: {}",
+          sum,
+          count,
+          min,
+          max,
+          count == 0 ? 0 : sum / count);
   }
 }
 

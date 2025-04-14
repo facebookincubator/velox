@@ -101,6 +101,32 @@ void CompactRowVectorSerde::deserialize(
   *result = row::CompactRow::deserialize(serializedRows, type, pool);
 }
 
+void CompactRowVectorSerde::deserialize(
+    ByteInputStream* source,
+    std::unique_ptr<RowIterator>& sourceRowIterator,
+    uint64_t maxRows,
+    RowTypePtr type,
+    RowVectorPtr* result,
+    velox::memory::MemoryPool* pool,
+    const Options* options) {
+  std::vector<std::string_view> serializedRows;
+  std::vector<std::unique_ptr<std::string>> serializedBuffers;
+  RowDeserializer<std::string_view>::deserialize(
+      source,
+      maxRows,
+      sourceRowIterator,
+      serializedRows,
+      serializedBuffers,
+      options);
+
+  if (serializedRows.empty()) {
+    *result = BaseVector::create<RowVector>(type, 0, pool);
+    return;
+  }
+
+  *result = row::CompactRow::deserialize(serializedRows, type, pool);
+}
+
 // static
 void CompactRowVectorSerde::registerVectorSerde() {
   velox::registerVectorSerde(std::make_unique<CompactRowVectorSerde>());

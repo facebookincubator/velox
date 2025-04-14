@@ -158,6 +158,10 @@ int32_t HiveConfig::numCacheFileHandles() const {
   return config_->get<int32_t>(kNumCacheFileHandles, 20'000);
 }
 
+uint64_t HiveConfig::fileHandleExpirationDurationMs() const {
+  return config_->get<uint64_t>(kFileHandleExpirationDurationMs, 0);
+}
+
 bool HiveConfig::isFileHandleCacheEnabled() const {
   return config_->get<bool>(kEnableFileHandleCache, true);
 }
@@ -205,6 +209,13 @@ uint8_t HiveConfig::readTimestampUnit(const config::ConfigBase* session) const {
       unit == 3 || unit == 6 /*micro*/ || unit == 9 /*nano*/,
       "Invalid timestamp unit.");
   return unit;
+}
+
+bool HiveConfig::readTimestampPartitionValueAsLocalTime(
+    const config::ConfigBase* session) const {
+  return session->get<bool>(
+      kReadTimestampPartitionValueAsLocalTimeSession,
+      config_->get<bool>(kReadTimestampPartitionValueAsLocalTime, true));
 }
 
 bool HiveConfig::readStatsBasedFilterReorderDisabled(

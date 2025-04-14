@@ -40,6 +40,10 @@ void registerDatetimeFunctions(const std::string& prefix) {
       int64_t,
       Varchar,
       Varchar>({prefix + "unix_timestamp", prefix + "to_unix_timestamp"});
+  registerFunction<UnixTimestampParseWithFormatFunction, int64_t, Timestamp>(
+      {prefix + "unix_timestamp", prefix + "to_unix_timestamp"});
+  registerFunction<UnixTimestampParseWithFormatFunction, int64_t, Date>(
+      {prefix + "unix_timestamp", prefix + "to_unix_timestamp"});
   registerFunction<FromUnixtimeFunction, Varchar, int64_t, Varchar>(
       {prefix + "from_unixtime"});
   registerFunction<MakeDateFunction, Date, int32_t, int32_t, int32_t>(
@@ -88,6 +92,8 @@ void registerDatetimeFunctions(const std::string& prefix) {
       {prefix + "unix_millis"});
   registerUnaryIntegralWithTReturn<MillisToTimestampFunction, Timestamp>(
       {prefix + "timestamp_millis"});
+  registerFunction<DateTruncFunction, Timestamp, Varchar, Timestamp>(
+      {prefix + "date_trunc"});
 }
 
 } // namespace facebook::velox::functions::sparksql

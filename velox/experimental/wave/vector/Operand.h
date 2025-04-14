@@ -16,7 +16,7 @@
 
 #pragma once
 
-#include <cstdint>
+#include <stdint.h>
 
 /// Types for device side access to device vectors. Separate header
 /// independent of Velox headers, included for both host and device
@@ -168,9 +168,8 @@ struct KernelError {
   /// message is compleemented by 'number' (kInt64Param) or
   /// 'ptr'kStringParam) (k. If kNoParam the string is the only error
   /// info.
-  const char* messageAndTag{nullptr};
-  int64_t number;
-  char* ptr;
+  int32_t messageEnum{0};
+  int64_t extra;
 };
 
 /// Describes the location of an instruction's return state in the
@@ -185,7 +184,7 @@ struct InstructionStatus {
   // Total size of gridStates. Block level states start after the last grid
   // state.
   uint16_t gridStateSize{0};
-  // Start of per-block status. gridStateSize + gridDim.x * blocksPerThread *
+  // Start of per-block status. gridStateSize + numBlocks *
   // blockState' is the  offset of the first per block status from the end of
   // BlockStatus array.
   uint16_t blockState{0};

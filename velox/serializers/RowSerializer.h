@@ -29,49 +29,15 @@ struct RowGroupHeader {
   int32_t compressedSize;
   bool compressed;
 
-  static RowGroupHeader read(ByteInputStream* source) {
-    RowGroupHeader header;
-    header.uncompressedSize = source->read<int32_t>();
-    header.compressedSize = source->read<int32_t>();
-    header.compressed = source->read<char>();
+  static RowGroupHeader read(ByteInputStream* source);
 
-    VELOX_CHECK_GE(header.uncompressedSize, 0);
-    VELOX_CHECK_GE(header.compressedSize, 0);
+  void write(OutputStream* out);
 
-    return header;
-  }
+  void write(char* out);
 
-  void write(OutputStream* out) {
-    out->write(reinterpret_cast<char*>(&uncompressedSize), sizeof(int32_t));
-    out->write(reinterpret_cast<char*>(&compressedSize), sizeof(int32_t));
-    const char writeValue = compressed ? 1 : 0;
-    out->write(reinterpret_cast<const char*>(&writeValue), sizeof(char));
-  }
+  static size_t size();
 
-  void write(char* out) {
-    ::memcpy(out, reinterpret_cast<char*>(&uncompressedSize), sizeof(int32_t));
-    ::memcpy(
-        out + sizeof(int32_t),
-        reinterpret_cast<char*>(&compressedSize),
-        sizeof(int32_t));
-    const char writeValue = compressed ? 1 : 0;
-    ::memcpy(
-        out + sizeof(int32_t) * 2,
-        reinterpret_cast<const char*>(&writeValue),
-        sizeof(char));
-  }
-
-  static size_t size() {
-    return sizeof(int32_t) * 2 + sizeof(char);
-  }
-
-  std::string debugString() const {
-    return fmt::format(
-        "uncompressedSize: {}, compressedSize: {}, compressed: {}",
-        succinctBytes(uncompressedSize),
-        succinctBytes(compressedSize),
-        compressed);
-  }
+  std::string debugString() const;
 };
 } // namespace detail
 
@@ -205,15 +171,23 @@ class RowSerializer : public IterativeVectorSerializer {
 
   std::unordered_map<std::string, RuntimeCounter> runtimeStats() override {
     std::unordered_map<std::string, RuntimeCounter> map;
-    map.insert(
-        {{"compressedBytes",
-          RuntimeCounter(stats_.compressedBytes, RuntimeCounter::Unit::kBytes)},
-         {"compressionInputBytes",
+    if (stats_.compressionInputBytes != 0) {
+      map.emplace(
+          kCompressionInputBytes,
           RuntimeCounter(
-              stats_.compressionInputBytes, RuntimeCounter::Unit::kBytes)},
-         {"compressionSkippedBytes",
+              stats_.compressionInputBytes, RuntimeCounter::Unit::kBytes));
+    }
+    if (stats_.compressedBytes != 0) {
+      map.emplace(
+          kCompressedBytes,
+          RuntimeCounter(stats_.compressedBytes, RuntimeCounter::Unit::kBytes));
+    }
+    if (stats_.compressionSkippedBytes != 0) {
+      map.emplace(
+          kCompressionSkippedBytes,
           RuntimeCounter(
-              stats_.compressionSkippedBytes, RuntimeCounter::Unit::kBytes)}});
+              stats_.compressionSkippedBytes, RuntimeCounter::Unit::kBytes));
+    }
     return map;
   }
 
@@ -266,7 +240,7 @@ class RowSerializer : public IterativeVectorSerializer {
   }
 
   bool needCompression() const {
-    return codec_->type() != folly::io::CodecType::NO_COMPRESSION;
+    return codec_->type() != folly::compression::CodecType::NO_COMPRESSION;
   }
 
   void flushUncompressed(int32_t size, OutputStream* stream) {
@@ -278,10 +252,51 @@ class RowSerializer : public IterativeVectorSerializer {
   }
 
   const VectorSerde::Options options_;
-  const std::unique_ptr<folly::io::Codec> codec_;
+  const std::unique_ptr<folly::compression::Codec> codec_;
   // Count of forthcoming compressions to skip.
   int32_t numCompressionToSkip_{0};
   CompressionStats stats_;
+};
+
+/// RowIteratorImpl is an iterator to read deserialize rows from an uncompressed
+/// input source. It provides the ability to iterate over the stream by
+/// retrieving a serialized buffer containing one row in each iteration.
+///
+/// Usage:
+/// RowIteratorImpl iterator(source, endOffset);
+/// while (iterator.hasNext()) {
+///   auto next = iterator.next();
+///   ...Process the data in next...
+/// }
+class RowIteratorImpl : public velox::RowIterator {
+ public:
+  /// Constructs a row iterator without source ownership.
+  RowIteratorImpl(ByteInputStream* source, size_t endOffset);
+
+  /// Constructs a row iterator with source ownership.
+  RowIteratorImpl(
+      std::unique_ptr<ByteInputStream> source,
+      std::unique_ptr<folly::IOBuf> buf,
+      size_t endOffset);
+
+  bool hasNext() const override;
+
+  std::unique_ptr<std::string> next() override;
+
+ private:
+  TRowSize readRowSize();
+
+  // Read from the stream until the full row is concatenated.
+  static void concatenatePartialRow(
+      ByteInputStream* source,
+      TRowSize rowSize,
+      std::string& rowBuffer);
+
+  // Stream holder if constructed with source ownership.
+  const std::unique_ptr<ByteInputStream> sourceHolder_;
+
+  // Buffer holder if constructed with source ownership.
+  const std::unique_ptr<folly::IOBuf> bufHolder_;
 };
 
 template <typename SerializeView>
@@ -291,7 +306,11 @@ class RowDeserializer {
       ByteInputStream* source,
       std::vector<SerializeView>& serializedRows,
       std::vector<std::unique_ptr<std::string>>& serializedBuffers,
-      const VectorSerde::Options* options) {
+      const VectorSerde::Options* options,
+      std::function<std::unique_ptr<RowIterator>(ByteInputStream*, size_t)>
+          rowIteratorFactory = [](auto* source, auto endOffset) {
+            return std::make_unique<RowIteratorImpl>(source, endOffset);
+          }) {
     const auto compressionKind = options == nullptr
         ? VectorSerde::Options().compressionKind
         : options->compressionKind;
@@ -321,25 +340,10 @@ class RowDeserializer {
         uncompressedSource = uncompressedStream.get();
       }
       const std::streampos initialSize = uncompressedSource->tellp();
-      while (uncompressedSource->tellp() - initialSize <
-             header.uncompressedSize) {
-        // First read row size in big endian order.
-        const auto rowSize =
-            folly::Endian::big(uncompressedSource->read<TRowSize>());
-
-        auto serializedBuffer = std::make_unique<std::string>();
-        serializedBuffer->reserve(rowSize);
-
-        const auto row = uncompressedSource->nextView(rowSize);
-        serializedBuffer->append(row.data(), row.size());
-        // If we couldn't read the entire row at once, we need to concatenate it
-        // in a different buffer.
-        if (serializedBuffer->size() < rowSize) {
-          concatenatePartialRow(uncompressedSource, rowSize, *serializedBuffer);
-        }
-
-        VELOX_CHECK_EQ(serializedBuffer->size(), rowSize);
-        serializedBuffers.emplace_back(std::move(serializedBuffer));
+      std::unique_ptr<velox::RowIterator> rowIterator = rowIteratorFactory(
+          uncompressedSource, header.uncompressedSize + initialSize);
+      while (rowIterator->hasNext()) {
+        serializedBuffers.emplace_back(rowIterator->next());
         serializedRows.push_back(std::string_view(
             serializedBuffers.back()->data(),
             serializedBuffers.back()->size()));
@@ -347,24 +351,81 @@ class RowDeserializer {
     }
   }
 
- private:
-  // Read from the stream until the full row is concatenated.
-  static void concatenatePartialRow(
+  /// @param maxRows Max number of rows to deserialize
+  /// @param sourceRowIterator The iterator used to start deserializing. If
+  /// nullptr, the method will start to deserialize from 'source'. After
+  /// deserialization, the method will set the iterator ready for the next call
+  /// to continue to iterate. If no more data to deserialize, it will be set to
+  /// nullptr.
+  static uint64_t deserialize(
       ByteInputStream* source,
-      TRowSize rowSize,
-      std::string& rowBuffer) {
-    while (rowBuffer.size() < rowSize) {
-      const std::string_view rowFragment =
-          source->nextView(rowSize - rowBuffer.size());
-      VELOX_CHECK_GT(
-          rowFragment.size(),
-          0,
-          "Unable to read full serialized row. Needed {} but read {} bytes.",
-          rowSize - rowBuffer.size(),
-          rowFragment.size());
-      rowBuffer.append(rowFragment.data(), rowFragment.size());
+      uint64_t maxRows,
+      std::unique_ptr<velox::RowIterator>& sourceRowIterator,
+      std::vector<SerializeView>& serializedRows,
+      std::vector<std::unique_ptr<std::string>>& serializedBuffers,
+      const VectorSerde::Options* options) {
+    auto remainingRows = maxRows;
+    if (sourceRowIterator == nullptr) {
+      VELOX_CHECK(!source->atEnd());
+      sourceRowIterator = createNextRowIter(source, options);
     }
+    while (remainingRows > 0) {
+      while (sourceRowIterator->hasNext()) {
+        serializedBuffers.emplace_back(sourceRowIterator->next());
+        if constexpr (std::is_same_v<SerializeView, std::string_view>) {
+          serializedRows.push_back(std::string_view(
+              serializedBuffers.back()->data(),
+              serializedBuffers.back()->size()));
+        } else {
+          serializedRows.push_back(serializedBuffers.back()->data());
+        }
+        if (--remainingRows == 0) {
+          break;
+        }
+      }
+      if (!sourceRowIterator->hasNext()) {
+        if (source->atEnd()) {
+          // No more data to read.
+          sourceRowIterator.reset();
+          break;
+        }
+        sourceRowIterator = createNextRowIter(source, options);
+      }
+    }
+    return maxRows - remainingRows;
+  }
+
+ private:
+  static std::unique_ptr<velox::RowIterator> createNextRowIter(
+      ByteInputStream* source,
+      const VectorSerde::Options* options) {
+    const auto header = detail::RowGroupHeader::read(source);
+    if (!header.compressed) {
+      return std::make_unique<RowIteratorImpl>(
+          source, header.uncompressedSize + source->tellp());
+    }
+
+    const auto compressionKind = options == nullptr
+        ? VectorSerde::Options().compressionKind
+        : options->compressionKind;
+    VELOX_DCHECK_NE(
+        compressionKind, common::CompressionKind::CompressionKind_NONE);
+    auto compressBuf = folly::IOBuf::create(header.compressedSize);
+    source->readBytes(compressBuf->writableData(), header.compressedSize);
+    compressBuf->append(header.compressedSize);
+
+    // Process chained uncompressed results IOBufs.
+    const auto codec = common::compressionKindToCodec(compressionKind);
+    auto uncompressedBuf =
+        codec->uncompress(compressBuf.get(), header.uncompressedSize);
+
+    auto uncompressedStream = std::make_unique<BufferInputStream>(
+        byteRangesFromIOBuf(uncompressedBuf.get()));
+    const std::streampos initialSize = uncompressedStream->tellp();
+    return std::make_unique<RowIteratorImpl>(
+        std::move(uncompressedStream),
+        std::move(uncompressedBuf),
+        header.uncompressedSize + initialSize);
   }
 };
-
 } // namespace facebook::velox::serializer

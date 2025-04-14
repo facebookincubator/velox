@@ -80,6 +80,30 @@ class HashProbe : public Operator {
     return input_ != nullptr;
   }
 
+  const std::vector<IdentityProjection>& tableOutputProjections() const {
+    return tableOutputProjections_;
+  }
+
+  ExprSet* filterExprSet() const {
+    return filter_.get();
+  }
+
+  /// Returns the type for the hash table row. Build side keys first,
+  /// then dependent build side columns.
+
+  static RowTypePtr makeTableType(
+      const RowType* type,
+      const std::vector<std::shared_ptr<const core::FieldAccessTypedExpr>>&
+          keys);
+
+  ProbeOperatorState testingState() const {
+    return state_;
+  }
+
+  const std::shared_ptr<HashJoinBridge>& joinBridge() const {
+    return joinBridge_;
+  }
+
  private:
   // Indicates if the join type includes misses from the left side in the
   // output.
@@ -94,6 +118,7 @@ class HashProbe : public Operator {
   void setRunning();
   void checkRunning() const;
   bool isRunning() const;
+  bool isWaitingForPeers() const;
 
   // Invoked to wait for the hash table to be built by the hash build operators
   // asynchronously. The function also sets up the internal state for
@@ -164,6 +189,12 @@ class HashProbe : public Operator {
   SelectivityVector evalFilterForNullAwareJoin(
       vector_size_t numRows,
       bool filterPropagateNulls);
+
+  // Prepares the hashers for probing with null keys.
+  // Initializes `nullKeyProbeHashers_` if empty, ensuring it has exactly one
+  // hasher. If the table's hash mode is `kHash`, creates and decodes a null
+  // input vector.
+  void prepareNullKeyProbeHashers();
 
   // Combine the selected probe-side rows with all or null-join-key (depending
   // on the iterator) build side rows and evaluate the filter.  Mark probe rows
@@ -680,6 +711,12 @@ class HashProbe : public Operator {
 
   // The spilled probe partitions remaining to restore.
   SpillPartitionSet inputSpillPartitionSet_;
+
+  // VectorHashers used for listing rows with null keys.
+  std::vector<std::unique_ptr<VectorHasher>> nullKeyProbeHashers_;
+
+  // Input vector used for listing rows with null keys.
+  VectorPtr nullKeyProbeInput_;
 };
 
 inline std::ostream& operator<<(std::ostream& os, ProbeOperatorState state) {

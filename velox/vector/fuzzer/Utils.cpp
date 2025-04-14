@@ -15,128 +15,12 @@
  */
 
 #include "velox/vector/fuzzer/Utils.h"
+#include "velox/common/fuzzer/Utils.h"
+#include "velox/expression/VectorWriters.h"
+#include "velox/vector/NullsBuilder.h"
+#include "velox/vector/TypeAliases.h"
 
 namespace facebook::velox {
-
-bool coinToss(FuzzerGenerator& rng, double threshold) {
-  static std::uniform_real_distribution<> dist(0.0, 1.0);
-  return dist(rng) < threshold;
-}
-
-Timestamp randTimestamp(
-    FuzzerGenerator& rng,
-    FuzzerTimestampPrecision timestampPrecision) {
-  // Generate timestamps only in the valid range to avoid datetime functions,
-  // such as try_cast(varchar as timestamp), throwing VeloxRuntimeError in
-  // fuzzers.
-  constexpr int64_t min = -2'140'671'600;
-  constexpr int64_t max = 2'140'671'600;
-  constexpr int64_t microInSecond = 1'000'000;
-  constexpr int64_t millisInSecond = 1'000;
-  // DWRF requires nano to be in a certain range. Hardcode the value here to
-  // avoid the dependency on DWRF.
-  constexpr int64_t MAX_NANOS = 1'000'000'000;
-
-  switch (timestampPrecision) {
-    case FuzzerTimestampPrecision::kNanoSeconds:
-      return Timestamp(
-          rand<int64_t>(rng, min, max), (rand<int64_t>(rng) % MAX_NANOS));
-    case FuzzerTimestampPrecision::kMicroSeconds:
-      return Timestamp::fromMicros(
-          rand<int64_t>(rng, min, max) * microInSecond +
-          rand<int64_t>(rng, -microInSecond, microInSecond));
-    case FuzzerTimestampPrecision::kMilliSeconds:
-      return Timestamp::fromMillis(
-          rand<int64_t>(rng, min, max) * millisInSecond +
-          rand<int64_t>(rng, -millisInSecond, millisInSecond));
-    case FuzzerTimestampPrecision::kSeconds:
-      return Timestamp(rand<int64_t>(rng, min, max), 0);
-  }
-  return {}; // no-op.
-}
-
-int32_t randDate(FuzzerGenerator& rng) {
-  constexpr int64_t min = -24'450;
-  constexpr int64_t max = 24'450;
-  return rand<int32_t>(rng, min, max);
-}
-
-/// Unicode character ranges. Ensure the vector indexes match the UTF8CharList
-/// enum values.
-///
-/// Source: https://jrgraphix.net/research/unicode_blocks.php
-static const std::vector<std::vector<std::pair<char16_t, char16_t>>>
-    kUTFChatSets{
-        // UTF8CharList::ASCII
-        {
-            {33, 127}, // All ASCII printable chars.
-        },
-        // UTF8CharList::UNICODE_CASE_SENSITIVE
-        {
-            {u'\u0020', u'\u007F'}, // Basic Latin.
-            {u'\u0400', u'\u04FF'}, // Cyrillic.
-        },
-        // UTF8CharList::EXTENDED_UNICODE
-        {
-            {u'\u03F0', u'\u03FF'}, // Greek.
-            {u'\u0100', u'\u017F'}, // Latin Extended A.
-            {u'\u0600', u'\u06FF'}, // Arabic.
-            {u'\u0900', u'\u097F'}, // Devanagari.
-            {u'\u0600', u'\u06FF'}, // Hebrew.
-            {u'\u3040', u'\u309F'}, // Hiragana.
-            {u'\u2000', u'\u206F'}, // Punctuation.
-            {u'\u2070', u'\u209F'}, // Sub/Super Script.
-            {u'\u20A0', u'\u20CF'}, // Currency.
-        },
-        // UTF8CharList::MATHEMATICAL_SYMBOLS
-        {
-            {u'\u2200', u'\u22FF'}, // Math Operators.
-            {u'\u2150', u'\u218F'}, // Number Forms.
-            {u'\u25A0', u'\u25FF'}, // Geometric Shapes.
-            {u'\u27C0', u'\u27EF'}, // Math Symbols.
-            {u'\u2A00', u'\u2AFF'}, // Supplemental.
-        },
-    };
-
-FOLLY_ALWAYS_INLINE char16_t getRandomChar(
-    FuzzerGenerator& rng,
-    const std::vector<std::pair<char16_t, char16_t>>& charSet) {
-  const auto& chars = charSet.size() == 1
-      ? charSet.front()
-      : charSet[rand<uint32_t>(rng) % charSet.size()];
-  auto size = chars.second - chars.first;
-  auto inc = (rand<uint32_t>(rng) % size);
-  char16_t res = chars.first + inc;
-  return res;
-}
-
-#pragma GCC diagnostic push
-#pragma GCC diagnostic ignored "-Wdeprecated-declarations"
-std::string randString(
-    FuzzerGenerator& rng,
-    size_t length,
-    const std::vector<UTF8CharList>& encodings,
-    std::string& buf,
-    std::wstring_convert<std::codecvt_utf8<char16_t>, char16_t>& converter) {
-  buf.clear();
-  std::u16string wbuf;
-  wbuf.resize(length);
-
-  for (size_t i = 0; i < length; ++i) {
-    // First choose a random encoding from the list of input acceptable
-    // encodings.
-    VELOX_CHECK_GE(encodings.size(), 1);
-    const auto& encoding = (encodings.size() == 1)
-        ? encodings.front()
-        : encodings[rand<uint32_t>(rng) % encodings.size()];
-
-    wbuf[i] = getRandomChar(rng, kUTFChatSets[encoding]);
-  }
-  buf.append(converter.to_bytes(wbuf));
-  return buf;
-}
-#pragma GCC diagnostic pop
-
 namespace generator_spec_utils {
 
 vector_size_t getRandomIndex(FuzzerGenerator& rng, vector_size_t maxIndex) {
@@ -152,7 +36,7 @@ BufferPtr generateNullsBuffer(
     double nullProbability) {
   NullsBuilder builder{vectorSize, pool};
   for (size_t i = 0; i < vectorSize; ++i) {
-    if (coinToss(rng, nullProbability)) {
+    if (fuzzer::coinToss(rng, nullProbability)) {
       builder.setNull(i);
     }
   }
@@ -174,7 +58,72 @@ BufferPtr generateIndicesBuffer(
   }
   return indices;
 }
-
 } // namespace generator_spec_utils
 
+namespace fuzzer {
+template <>
+void writeOne<TypeKind::VARCHAR>(
+    const variant& v,
+    exec::GenericWriter& writer) {
+  writer.template castTo<Varchar>() = v.value<TypeKind::VARCHAR>();
+}
+
+template <>
+void writeOne<TypeKind::VARBINARY>(
+    const variant& v,
+    exec::GenericWriter& writer) {
+  writer.template castTo<Varbinary>() = v.value<TypeKind::VARBINARY>();
+}
+
+template <>
+void writeOne<TypeKind::ARRAY>(const variant& v, exec::GenericWriter& writer) {
+  auto& writerTyped = writer.template castTo<Array<Any>>();
+  const auto& elements = v.array();
+  for (const auto& element : elements) {
+    if (element.isNull()) {
+      writerTyped.add_null();
+    } else {
+      VELOX_DYNAMIC_TYPE_DISPATCH(
+          writeOne, element.kind(), element, writerTyped.add_item());
+    }
+  }
+}
+
+template <>
+void writeOne<TypeKind::MAP>(const variant& v, exec::GenericWriter& writer) {
+  auto& writerTyped = writer.template castTo<Map<Any, Any>>();
+  const auto& map = v.map();
+  for (const auto& pair : map) {
+    const auto& key = pair.first;
+    const auto& value = pair.second;
+    VELOX_CHECK(!key.isNull());
+    if (value.isNull()) {
+      VELOX_DYNAMIC_TYPE_DISPATCH(
+          writeOne, key.kind(), key, writerTyped.add_null());
+    } else {
+      auto writers = writerTyped.add_item();
+      VELOX_DYNAMIC_TYPE_DISPATCH(
+          writeOne, key.kind(), key, std::get<0>(writers));
+      VELOX_DYNAMIC_TYPE_DISPATCH(
+          writeOne, value.kind(), value, std::get<1>(writers));
+    }
+  }
+}
+
+template <>
+void writeOne<TypeKind::ROW>(const variant& v, exec::GenericWriter& writer) {
+  auto& writerTyped = writer.template castTo<DynamicRow>();
+  const auto& elements = v.row();
+  column_index_t i = 0;
+  for (const auto& element : elements) {
+    if (element.isNull()) {
+      writerTyped.set_null_at(i);
+    } else {
+      VELOX_DYNAMIC_TYPE_DISPATCH(
+          writeOne, element.kind(), element, writerTyped.get_writer_at(i));
+    }
+    i++;
+  }
+}
+} // namespace fuzzer
 } // namespace facebook::velox

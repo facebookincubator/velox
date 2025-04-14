@@ -147,6 +147,13 @@ std::shared_ptr<WriterProperties> getArrowParquetWriterOptions(
       static_cast<int64_t>(flushPolicy->rowsInRowGroup()));
   properties = properties->codec_options(options.codecOptions);
   properties = properties->enable_store_decimal_as_integer();
+  if (options.useParquetDataPageV2.value_or(false)) {
+    properties =
+        properties->data_page_version(arrow::ParquetDataPageVersion::V2);
+  } else {
+    properties =
+        properties->data_page_version(arrow::ParquetDataPageVersion::V1);
+  }
   return properties->build();
 }
 
@@ -238,6 +245,21 @@ std::optional<std::string> getTimestampTimeZone(
   return std::nullopt;
 }
 
+std::optional<bool> getParquetDataPageVersion(
+    const config::ConfigBase& config,
+    const char* configKey) {
+  if (const auto version = config.get<std::string>(configKey)) {
+    if (version == "V1") {
+      return false;
+    } else if (version == "V2") {
+      return true;
+    } else {
+      VELOX_FAIL("Unsupported parquet datapage version {}", version.value());
+    }
+  }
+  return std::nullopt;
+}
+
 } // namespace
 
 Writer::Writer(
@@ -264,6 +286,8 @@ Writer::Writer(
       static_cast<TimestampUnit>(options.parquetWriteTimestampUnit.value_or(
           TimestampPrecision::kNanoseconds));
   options_.timestampTimeZone = options.parquetWriteTimestampTimeZone;
+  common::testutil::TestValue::adjust(
+      "facebook::velox::parquet::Writer::Writer", &options_);
   arrowContext_->properties =
       getArrowParquetWriterOptions(options, flushPolicy_);
   setMemoryReclaimers();
@@ -463,12 +487,16 @@ void WriterOptions::processConfigs(
         : getTimestampUnit(connectorConfig, kParquetSessionWriteTimestampUnit);
   }
   if (!parquetWriteTimestampTimeZone) {
-    parquetWriteTimestampTimeZone =
-        getTimestampTimeZone(session, core::QueryConfig::kSessionTimezone)
+    parquetWriteTimestampTimeZone = parquetWriterOptions->sessionTimezoneName;
+  }
+
+  if (!useParquetDataPageV2) {
+    useParquetDataPageV2 =
+        getParquetDataPageVersion(session, kParquetSessionDataPageVersion)
             .has_value()
-        ? getTimestampTimeZone(session, core::QueryConfig::kSessionTimezone)
-        : getTimestampTimeZone(
-              connectorConfig, core::QueryConfig::kSessionTimezone);
+        ? getParquetDataPageVersion(session, kParquetSessionDataPageVersion)
+        : getParquetDataPageVersion(
+              connectorConfig, kParquetHiveConnectorDataPageVersion);
   }
 }
 

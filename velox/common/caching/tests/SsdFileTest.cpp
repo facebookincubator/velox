@@ -35,6 +35,9 @@ using namespace facebook::velox::tests::utils;
 
 using facebook::velox::memory::MemoryAllocator;
 
+DECLARE_bool(velox_ssd_odirect);
+DECLARE_bool(velox_ssd_verify_write);
+
 // Represents an entry written to SSD.
 struct TestEntry {
   FileCacheKey key;
@@ -73,7 +76,7 @@ class SsdFileTest : public testing::Test {
       bool disableFileCow = false,
       bool enableFaultInjection = false) {
     // tmpfs does not support O_DIRECT, so turn this off for testing.
-    FLAGS_ssd_odirect = false;
+    FLAGS_velox_ssd_odirect = false;
     cache_ = AsyncDataCache::create(memory::memoryManager()->allocator());
     cacheHelper_ =
         std::make_unique<test::AsyncDataCacheTestHelper>(cache_.get());
@@ -327,7 +330,7 @@ TEST_F(SsdFileTest, writeAndRead) {
   constexpr int64_t kSsdSize = 16 * SsdFile::kRegionSize;
   std::vector<TestEntry> allEntries;
   initializeCache(kSsdSize);
-  FLAGS_ssd_verify_write = true;
+  FLAGS_velox_ssd_verify_write = true;
   for (auto startOffset = 0; startOffset <= kSsdSize - SsdFile::kRegionSize;
        startOffset += SsdFile::kRegionSize) {
     auto pins =
@@ -402,7 +405,7 @@ TEST_F(SsdFileTest, checkpoint) {
   constexpr int64_t kSsdSize = 16 * SsdFile::kRegionSize;
   const uint64_t checkpointIntervalBytes = 5 * SsdFile::kRegionSize;
   const auto fileNameAlt = StringIdLease(fileIds(), "fileInStorageAlt");
-  FLAGS_ssd_verify_write = true;
+  FLAGS_velox_ssd_verify_write = true;
   initializeCache(kSsdSize, checkpointIntervalBytes);
 
   std::vector<TestEntry> allEntries;
@@ -498,7 +501,7 @@ TEST_F(SsdFileTest, checkpoint) {
 TEST_F(SsdFileTest, fileCorruption) {
   constexpr int64_t kSsdSize = 16 * SsdFile::kRegionSize;
   const uint64_t checkpointIntervalBytes = 5 * SsdFile::kRegionSize;
-  FLAGS_ssd_verify_write = true;
+  FLAGS_velox_ssd_verify_write = true;
 
   const auto populateCache = [&](std::vector<TestEntry>& entries) {
     entries.clear();
@@ -570,7 +573,7 @@ TEST_F(SsdFileTest, fileCorruption) {
 TEST_F(SsdFileTest, recoverFromCheckpointWithChecksum) {
   constexpr int64_t kSsdSize = 4 * SsdFile::kRegionSize;
   const uint64_t checkpointIntervalBytes = 3 * SsdFile::kRegionSize;
-  FLAGS_ssd_verify_write = true;
+  FLAGS_velox_ssd_verify_write = true;
 
   // Test if cache data can be recovered with different settings.
   struct {

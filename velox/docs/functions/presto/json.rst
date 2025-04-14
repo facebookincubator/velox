@@ -156,6 +156,8 @@ JSON Functions
         SELECT json_extract(json, '$.store.book');
 
     Current implementation supports limited subset of JSONPath syntax.
+    If ``json`` is a varchar then it is expected to conform to `RFC 7159`_ and will be converted to its canonical
+    format before extraction.
 
     .. _JSONPath: http://goessner.net/articles/JsonPath/
 
@@ -168,6 +170,10 @@ JSON Functions
 
         SELECT json_extract_scalar('[1, 2, 3]', '$[2]');
         SELECT json_extract_scalar(json, '$.store.book[0].author');
+
+    Current implementation supports limited subset of JSONPath syntax.
+    If ``json`` is a varchar then it is expected to conform to `RFC 7159`_ and will be converted to its canonical
+    format before extraction.
 
     .. _JSONPath: http://goessner.net/articles/JsonPath/
 
@@ -183,8 +189,9 @@ JSON Functions
 
 .. function:: json_parse(varchar) -> json
 
-    expects a JSON text conforming to `RFC 7159`_, and returns the JSON value deserialized from the JSON text.
-    The JSON value can be a JSON object, a JSON array, a JSON string, a JSON number, ``true``, ``false`` or ``null``::
+    Expects a JSON text conforming to `RFC 7159`_, and returns the JSON value (in its canonical form) deserialized
+    from the JSON text. The JSON value can be a JSON object, a JSON array, a JSON string, a JSON number, ``true``,
+    ``false`` or ``null``::
 
         SELECT json_parse('[1, 2, 3]'); -- JSON '[1,2,3]'
         SELECT json_parse('"abc"'); -- JSON '"abc"'
@@ -211,4 +218,4 @@ are similar. To create a JSON-typed vector, one can use
 ``BaseVector::create(JSON(), size, pool)`` that creates a flat vector of
 StringViews, i.e. FlatVector<StringView>. Reading and writing to a JSON-typed
 vector are the same as those for VARCHAR vectors, e.g., via
-VectorReader<StringView> and StringWriter<>.
+VectorReader<StringView> and StringWriter.

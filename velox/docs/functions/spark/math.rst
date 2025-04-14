@@ -29,6 +29,7 @@ Mathematical Functions
 .. spark:function:: atan2(y, x) -> double
 
     Returns the arc tangent of ``y / x``. For compatibility with Spark, returns 0 for the following corner cases:
+
     * atan2(0.0, 0.0)
     * atan2(-0.0, -0.0)
     * atan2(-0.0, 0.0)
@@ -64,7 +65,7 @@ Mathematical Functions
 .. spark:function:: ceil(x) -> [same as x]
 
     Returns ``x`` rounded up to the nearest integer.  
-    Supported types are: BIGINT and DOUBLE.
+    Supported types are: BIGINT, DOUBLE and DECIMAL.
 
 .. function:: checked_add(x, y) -> [same as x]
 
@@ -265,6 +266,18 @@ Mathematical Functions
 .. spark:function:: sec(x) -> double
 
     Returns the secant of ``x``.
+
+.. spark:function:: sign(x) -> double
+
+    Returns the signum of ``x``. Supported type for ``x`` is DOUBLE.
+    It returns:
+
+    * 0.0 if the argument is 0.0,
+    * 1.0 if the argument is greater than 0.0,
+    * -1.0 if the argument is less than 0.0,
+    * NaN if the argument is NaN,
+    * 1.0 if the argument is +Infinity,
+    * -1.0 if the argument is -Infinity.
 
 .. spark:function:: sinh(x) -> double
 

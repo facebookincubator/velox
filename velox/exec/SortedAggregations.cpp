@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 #include "velox/exec/SortedAggregations.h"
-#include "velox/common/base/RawVector.h"
+#include "velox/common/memory/RawVector.h"
 
 namespace facebook::velox::exec {
 
@@ -51,10 +51,10 @@ struct RowPointers {
   }
 
   void read(folly::Range<char**> rows) {
-    auto stream = HashStringAllocator::prepareRead(firstBlock);
+    HashStringAllocator::InputStream stream(firstBlock);
 
     for (auto i = 0; i < size; ++i) {
-      rows[i] = reinterpret_cast<char*>(stream->read<uintptr_t>());
+      rows[i] = reinterpret_cast<char*>(stream.read<uintptr_t>());
     }
   }
 };
@@ -403,6 +403,7 @@ void SortedAggregations::extractValues(
         const auto numRows =
             extractSingleGroup(groupRows, *aggregate, aggregateInputs);
         if (numRows == 0) {
+          firstInputColumn += aggregateInputs.size();
           // Mask must be false for all 'groupRows'.
           continue;
         }

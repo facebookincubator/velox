@@ -231,9 +231,12 @@ vector_size_t processEncodedFilterResults(
   auto* rawSelectedBits = filterEvalCtx.getRawSelectedBits(size, pool);
   memset(rawSelectedBits, 0, bits::nbytes(size));
   for (int32_t i = 0; i < size; ++i) {
+    if (!rows.isValid(i)) {
+      continue;
+    }
     auto index = indices[i];
     if ((!nulls || !bits::isBitNull(nulls, i)) &&
-        bits::isBitSet(values, index) && rows.isValid(i)) {
+        bits::isBitSet(values, index)) {
       rawSelected[passed++] = i;
       bits::setBit(rawSelectedBits, i);
     }
@@ -444,12 +447,13 @@ void addOperatorRuntimeStats(
     const std::string& name,
     const RuntimeCounter& value,
     std::unordered_map<std::string, RuntimeMetric>& stats) {
-  if (UNLIKELY(stats.count(name) == 0)) {
-    stats.insert(std::pair(name, RuntimeMetric(value.unit)));
+  auto statIt = stats.find(name);
+  if (UNLIKELY(statIt == stats.end())) {
+    statIt = stats.insert(std::pair(name, RuntimeMetric(value.unit))).first;
   } else {
-    VELOX_CHECK_EQ(stats.at(name).unit, value.unit);
+    VELOX_CHECK_EQ(statIt->second.unit, value.unit);
   }
-  stats.at(name).addValue(value.value);
+  statIt->second.addValue(value.value);
 }
 
 void aggregateOperatorRuntimeStats(

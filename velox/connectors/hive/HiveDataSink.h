@@ -19,6 +19,7 @@
 #include "velox/connectors/Connector.h"
 #include "velox/connectors/hive/HiveConfig.h"
 #include "velox/connectors/hive/PartitionIdGenerator.h"
+#include "velox/connectors/hive/TableHandle.h"
 #include "velox/dwio/common/Options.h"
 #include "velox/dwio/common/Writer.h"
 #include "velox/dwio/common/WriterFactory.h"
@@ -29,8 +30,6 @@ class Writer;
 }
 
 namespace facebook::velox::connector::hive {
-
-class HiveColumnHandle;
 
 class LocationHandle;
 using LocationHandlePtr = std::shared_ptr<const LocationHandle>;
@@ -195,6 +194,40 @@ FOLLY_ALWAYS_INLINE std::ostream& operator<<(
 class HiveInsertTableHandle;
 using HiveInsertTableHandlePtr = std::shared_ptr<HiveInsertTableHandle>;
 
+class FileNameGenerator : public ISerializable {
+ public:
+  virtual ~FileNameGenerator() = default;
+
+  virtual std::pair<std::string, std::string> gen(
+      std::optional<uint32_t> bucketId,
+      const std::shared_ptr<const HiveInsertTableHandle> insertTableHandle,
+      const ConnectorQueryCtx& connectorQueryCtx,
+      bool commitRequired) const = 0;
+
+  virtual std::string toString() const = 0;
+};
+
+class HiveInsertFileNameGenerator : public FileNameGenerator {
+ public:
+  HiveInsertFileNameGenerator() {}
+
+  std::pair<std::string, std::string> gen(
+      std::optional<uint32_t> bucketId,
+      const std::shared_ptr<const HiveInsertTableHandle> insertTableHandle,
+      const ConnectorQueryCtx& connectorQueryCtx,
+      bool commitRequired) const override;
+
+  static void registerSerDe();
+
+  folly::dynamic serialize() const override;
+
+  static std::shared_ptr<HiveInsertFileNameGenerator> deserialize(
+      const folly::dynamic& obj,
+      void* context);
+
+  std::string toString() const override;
+};
+
 /// Represents a request for Hive write.
 class HiveInsertTableHandle : public ConnectorInsertTableHandle {
  public:
@@ -206,18 +239,41 @@ class HiveInsertTableHandle : public ConnectorInsertTableHandle {
       std::optional<common::CompressionKind> compressionKind = {},
       const std::unordered_map<std::string, std::string>& serdeParameters = {},
       const std::shared_ptr<dwio::common::WriterOptions>& writerOptions =
-          nullptr)
+          nullptr,
+      // When this option is set the HiveDataSink will always write a file even
+      // if there's no data. This is useful when the table is bucketed, but the
+      // engine handles ensuring a 1 to 1 mapping from task to bucket.
+      const bool ensureFiles = false,
+      std::shared_ptr<const FileNameGenerator> fileNameGenerator =
+          std::make_shared<const HiveInsertFileNameGenerator>())
       : inputColumns_(std::move(inputColumns)),
         locationHandle_(std::move(locationHandle)),
         storageFormat_(storageFormat),
         bucketProperty_(std::move(bucketProperty)),
         compressionKind_(compressionKind),
         serdeParameters_(serdeParameters),
-        writerOptions_(writerOptions) {
+        writerOptions_(writerOptions),
+        ensureFiles_(ensureFiles),
+        fileNameGenerator_(std::move(fileNameGenerator)) {
     if (compressionKind.has_value()) {
       VELOX_CHECK(
           compressionKind.value() != common::CompressionKind_MAX,
           "Unsupported compression type: CompressionKind_MAX");
+    }
+
+    if (ensureFiles_) {
+      // If ensureFiles is set and either the bucketProperty is set or some
+      // partition keys are in the data, there is not a 1:1 mapping from Task to
+      // files so we can't proactively create writers.
+      VELOX_CHECK(
+          bucketProperty_ == nullptr || bucketProperty_->bucketCount() == 0,
+          "ensureFiles is not supported with bucketing");
+
+      for (const auto& inputColumn : inputColumns_) {
+        VELOX_CHECK(
+            !inputColumn->isPartitionKey(),
+            "ensureFiles is not supported with partition keys in the data");
+      }
     }
   }
 
@@ -248,6 +304,14 @@ class HiveInsertTableHandle : public ConnectorInsertTableHandle {
     return writerOptions_;
   }
 
+  bool ensureFiles() const {
+    return ensureFiles_;
+  }
+
+  const std::shared_ptr<const FileNameGenerator>& fileNameGenerator() const {
+    return fileNameGenerator_;
+  }
+
   bool supportsMultiThreading() const override {
     return true;
   }
@@ -276,6 +340,8 @@ class HiveInsertTableHandle : public ConnectorInsertTableHandle {
   const std::optional<common::CompressionKind> compressionKind_;
   const std::unordered_map<std::string, std::string> serdeParameters_;
   const std::shared_ptr<dwio::common::WriterOptions> writerOptions_;
+  const bool ensureFiles_;
+  const std::shared_ptr<const FileNameGenerator> fileNameGenerator_;
 };
 
 /// Parameters for Hive writers.
@@ -449,6 +515,15 @@ class HiveDataSink : public DataSink {
       const ConnectorQueryCtx* connectorQueryCtx,
       CommitStrategy commitStrategy,
       const std::shared_ptr<const HiveConfig>& hiveConfig);
+
+  HiveDataSink(
+      RowTypePtr inputType,
+      std::shared_ptr<const HiveInsertTableHandle> insertTableHandle,
+      const ConnectorQueryCtx* connectorQueryCtx,
+      CommitStrategy commitStrategy,
+      const std::shared_ptr<const HiveConfig>& hiveConfig,
+      uint32_t bucketCount,
+      std::unique_ptr<core::PartitionFunction> bucketFunction);
 
   static uint32_t maxBucketCount() {
     static const uint32_t kMaxBucketCount = 100'000;
@@ -628,6 +703,9 @@ class HiveDataSink : public DataSink {
 
   // Reusable buffers for bucket id calculations.
   std::vector<uint32_t> bucketIds_;
+
+  // Strategy for naming writer files
+  std::shared_ptr<const FileNameGenerator> fileNameGenerator_;
 };
 
 FOLLY_ALWAYS_INLINE std::ostream& operator<<(

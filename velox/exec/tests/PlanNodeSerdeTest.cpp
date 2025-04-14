@@ -14,7 +14,6 @@
  * limitations under the License.
  */
 #include "velox/exec/PartitionFunction.h"
-#include "velox/exec/WindowFunction.h"
 #include "velox/exec/tests/utils/HiveConnectorTestBase.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
 #include "velox/functions/prestosql/aggregates/RegisterAggregateFunctions.h"
@@ -43,6 +42,7 @@ class PlanNodeSerdeTest : public testing::Test,
     connector::hive::LocationHandle::registerSerDe();
     connector::hive::HiveColumnHandle::registerSerDe();
     connector::hive::HiveInsertTableHandle::registerSerDe();
+    connector::hive::HiveInsertFileNameGenerator::registerSerDe();
     connector::hive::registerHivePartitionFunctionSerDe();
     core::PlanNode::registerSerDe();
     core::ITypedExpr::registerSerDe();
@@ -56,12 +56,31 @@ class PlanNodeSerdeTest : public testing::Test,
   }
 
   void testSerde(const core::PlanNodePtr& plan) {
-    auto serialized = plan->serialize();
+    {
+      const auto serialized = plan->serialize();
+      const auto copy =
+          velox::ISerializable::deserialize<core::PlanNode>(serialized, pool());
+      ASSERT_EQ(plan->toString(true, true), copy->toString(true, true));
+    }
+    {
+      // Test serde with type cache enabled.
+      auto& cache = serializedTypeCache();
+      cache.enable({.minRowTypeSize = 1});
+      SCOPE_EXIT {
+        cache.disable();
+        cache.clear();
+        deserializedTypeCache().clear();
+      };
 
-    auto copy =
-        velox::ISerializable::deserialize<core::PlanNode>(serialized, pool());
+      const auto serialized = plan->serialize();
 
-    ASSERT_EQ(plan->toString(true, true), copy->toString(true, true));
+      const auto serializedCache = cache.serialize();
+      deserializedTypeCache().deserialize(serializedCache);
+
+      const auto copy =
+          velox::ISerializable::deserialize<core::PlanNode>(serialized, pool());
+      ASSERT_EQ(plan->toString(true, true), copy->toString(true, true));
+    }
   }
 
   std::vector<RowVectorPtr> data_;

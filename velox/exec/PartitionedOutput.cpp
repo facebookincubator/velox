@@ -49,7 +49,8 @@ Destination::Destination(
       serdeOptions_(serdeOptions),
       pool_(pool),
       eagerFlush_(eagerFlush),
-      recordEnqueued_(std::move(recordEnqueued)) {
+      recordEnqueued_(std::move(recordEnqueued)),
+      rows_(raw_vector<vector_size_t>(pool)) {
   setTargetSizePct();
 }
 
@@ -190,7 +191,7 @@ PartitionedOutput::PartitionedOutput(
           planNode->inputType(),
           planNode->outputType(),
           planNode->outputType())),
-      bufferManager_(OutputBufferManager::getInstance()),
+      bufferManager_(OutputBufferManager::getInstanceRef()),
       // NOTE: 'bufferReleaseFn_' holds a reference on the associated task to
       // prevent it from deleting while there are output buffers being accessed
       // out of the partitioned output buffer manager such as in Prestissimo,

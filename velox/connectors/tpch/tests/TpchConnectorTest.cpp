@@ -22,6 +22,8 @@
 #include "velox/exec/tests/utils/OperatorTestBase.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
 
+DECLARE_int32(velox_tpch_text_pool_size_mb);
+
 namespace {
 
 using namespace facebook::velox;
@@ -35,6 +37,7 @@ class TpchConnectorTest : public exec::test::OperatorTestBase {
   const std::string kTpchConnectorId = "test-tpch";
 
   void SetUp() override {
+    FLAGS_velox_tpch_text_pool_size_mb = 10;
     OperatorTestBase::SetUp();
     connector::registerConnectorFactory(
         std::make_shared<connector::tpch::TpchConnectorFactory>());
@@ -196,7 +199,14 @@ TEST_F(TpchConnectorTest, lineitemTinyRowCount) {
                   .singleAggregation({}, {"count(1)"})
                   .planNode();
 
-  auto output = getResults(plan, {makeTpchSplit()});
+  std::vector<exec::Split> splits;
+  const size_t numParts = 4;
+
+  for (size_t i = 0; i < numParts; ++i) {
+    splits.push_back(makeTpchSplit(numParts, i));
+  }
+
+  auto output = getResults(plan, std::move(splits));
   EXPECT_EQ(60'175, output->childAt(0)->asFlatVector<int64_t>()->valueAt(0));
 }
 

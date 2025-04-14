@@ -158,10 +158,9 @@ BlockingState::BlockingState(
       future_(std::move(future)),
       operator_(op),
       reason_(reason),
-      sinceMicros_(
-          std::chrono::duration_cast<std::chrono::microseconds>(
-              std::chrono::high_resolution_clock::now().time_since_epoch())
-              .count()) {
+      sinceUs_(std::chrono::duration_cast<std::chrono::microseconds>(
+                   std::chrono::high_resolution_clock::now().time_since_epoch())
+                   .count()) {
   // Set before leaving the thread.
   driver_->state().hasBlockingFuture = true;
   numBlockedDrivers_++;
@@ -179,8 +178,7 @@ void BlockingState::setResume(std::shared_ptr<BlockingState> state) {
 
         std::lock_guard<std::timed_mutex> l(task->mutex());
         if (!driver->state().isTerminated) {
-          state->operator_->recordBlockingTime(
-              state->sinceMicros_, state->reason_);
+          state->operator_->recordBlockingTime(state->sinceUs_, state->reason_);
         }
         VELOX_CHECK(!driver->state().suspended());
         VELOX_CHECK(driver->state().hasBlockingFuture);
@@ -315,7 +313,10 @@ void Driver::pushdownFilters(int operatorIndex) {
   op->clearDynamicFilters();
 }
 
-RowVectorPtr Driver::next(ContinueFuture* future) {
+RowVectorPtr Driver::next(
+    ContinueFuture* future,
+    Operator*& blockingOp,
+    BlockingReason& blockingReason) {
   enqueueInternal();
   auto self = shared_from_this();
   facebook::velox::process::ScopedThreadDebugInfo scopedInfo(
@@ -328,6 +329,8 @@ RowVectorPtr Driver::next(ContinueFuture* future) {
   if (blockingState != nullptr) {
     VELOX_CHECK_NULL(result);
     *future = blockingState->future();
+    blockingOp = blockingState->op();
+    blockingReason = blockingState->reason();
     return nullptr;
   }
 
@@ -560,6 +563,8 @@ StopReason Driver::runInternal(
         }
 
         withDeltaCpuWallTimer(op, &OperatorStats::isBlockedTiming, [&]() {
+          TestValue::adjust(
+              "facebook::velox::exec::Driver::runInternal::isBlocked", op);
           CALL_OPERATOR(
               blockingReason_ = op->isBlocked(&future),
               op,
@@ -615,23 +620,24 @@ StopReason Driver::runInternal(
             });
             pushdownFilters(i);
             if (intermediateResult) {
-              withDeltaCpuWallTimer(op, &OperatorStats::addInputTiming, [&]() {
-                {
-                  auto lockedStats = nextOp->stats().wlock();
-                  lockedStats->addInputVector(
-                      resultBytes, intermediateResult->size());
-                }
-                nextOp->traceInput(intermediateResult);
-                TestValue::adjust(
-                    "facebook::velox::exec::Driver::runInternal::addInput",
-                    nextOp);
+              withDeltaCpuWallTimer(
+                  nextOp, &OperatorStats::addInputTiming, [&]() {
+                    {
+                      auto lockedStats = nextOp->stats().wlock();
+                      lockedStats->addInputVector(
+                          resultBytes, intermediateResult->size());
+                    }
+                    nextOp->traceInput(intermediateResult);
+                    TestValue::adjust(
+                        "facebook::velox::exec::Driver::runInternal::addInput",
+                        nextOp);
 
-                CALL_OPERATOR(
-                    nextOp->addInput(intermediateResult),
-                    nextOp,
-                    curOperatorId_ + 1,
-                    kOpMethodAddInput);
-              });
+                    CALL_OPERATOR(
+                        nextOp->addInput(intermediateResult),
+                        nextOp,
+                        curOperatorId_ + 1,
+                        kOpMethodAddInput);
+                  });
               // The next iteration will see if operators_[i + 1] has
               // output now that it got input.
               i += 2;
@@ -670,7 +676,7 @@ StopReason Driver::runInternal(
               });
               if (finished) {
                 withDeltaCpuWallTimer(
-                    op, &OperatorStats::finishTiming, [this, &nextOp]() {
+                    nextOp, &OperatorStats::finishTiming, [this, &nextOp]() {
                       TestValue::adjust(
                           "facebook::velox::exec::Driver::runInternal::noMoreInput",
                           nextOp);
@@ -1130,6 +1136,8 @@ std::string blockingReasonToString(BlockingReason reason) {
       return "kWaitForArbitration";
     case BlockingReason::kWaitForScanScaleUp:
       return "kWaitForScanScaleUp";
+    case BlockingReason::kWaitForIndexLookup:
+      return "kWaitForIndexLookup";
     default:
       VELOX_UNREACHABLE(
           fmt::format("Unknown blocking reason {}", static_cast<int>(reason)));

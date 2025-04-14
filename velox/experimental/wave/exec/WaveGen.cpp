@@ -20,6 +20,9 @@
 #include "velox/experimental/wave/exec/ToWave.h"
 #include "velox/experimental/wave/exec/Values.h"
 
+DECLARE_bool(wave_print_time);
+DECLARE_bool(cuda_G);
+
 namespace facebook::velox::wave {
 
 thread_local int32_t CompileState::pipelineIdx_;
@@ -103,7 +106,28 @@ int32_t CompileState::declareVariable(const AbstractOperand& op) {
 }
 
 void CompileState::declareNamed(const std::string& line) {
+  if (namedDeclares_.count(line)) {
+    return;
+  }
+  namedDeclares_.insert(line);
   declarations_ << line << std::endl;
+}
+
+void CompileState::declareNamed(
+    const std::string& type,
+    const std::string& name,
+    const std::string& debugInit) {
+  if (namedDeclares_.count(name)) {
+    return;
+  }
+  namedDeclares_.insert(name);
+  declarations_ << "  " << type << " " << name;
+  if (FLAGS_cuda_G) {
+    declarations_ << " = reinterpret_cast<" << type << ">(" << debugInit
+                  << ");\n";
+  } else {
+    declarations_ << ";\n";
+  }
 }
 
 bool CompileState::hasMoreReferences(AbstractOperand* op, int32_t pc) {
@@ -271,8 +295,26 @@ void Compute::generateMain(CompileState& state, int32_t /*syncLable*/) {
   VELOX_CHECK_NOT_NULL(operand->expr);
   auto& flags = state.flags(*operand);
   auto ord = state.declareVariable(*operand);
-  state.functionReferenced(operand);
+  auto md = state.functionReferenced(operand);
   state.generated() << fmt::format("r{} = {}(", ord, operand->expr->name());
+  int32_t grid = 0;
+  int32_t block = 0;
+  auto tryLabel = state.tryErrorLabel();
+  if (continueInstruction) {
+    auto* status = continueInstruction->mutableInstructionStatus();
+    if (status) {
+      grid = status->gridState | (status->gridStateSize << 16);
+      block = status->blockState;
+    }
+  }
+  if (md.maySetShared || md.maySetStatus) {
+    state.generated() << fmt::format(
+                             "shared, laneStatus, {}, {}, {}",
+                             tryLabel.has_value(),
+                             grid,
+                             block)
+                      << (!operand->inputs.empty() ? "," : "");
+  }
   for (auto i = 0; i < operand->inputs.size(); ++i) {
     state.generateOperand(*operand->inputs[i]);
     if (i < operand->inputs.size() - 1) {
@@ -281,6 +323,17 @@ void Compute::generateMain(CompileState& state, int32_t /*syncLable*/) {
   }
   state.generated() << ");\n";
   operand->inRegister = true;
+  if (md.maySetStatus) {
+    if (tryLabel.has_value()) {
+      state.generated() << fmt::format(
+          "  if (laneStatus != ErrorCode::kOk) {{ goto tryNull{};}}\n",
+          tryLabel.value());
+    } else {
+      state.generated() << fmt::format(
+          "  if (laneStatus != ErrorCode::kOk) {{ goto sync{}; }}\n",
+          state.nextSyncLabel());
+    }
+  }
   if (flags.needStore) {
     operand->isStored = true;
     state.generated() << fmt::format(
@@ -306,7 +359,7 @@ std::string Compute::toString() const {
 }
 
 void CompileState::ensureOperand(AbstractOperand* op) {
-  if (op->inRegister) {
+  if (op->inRegister || op->constant || op->literalNull) {
     return;
   }
   auto& flags = this->flags(*op);
@@ -334,10 +387,13 @@ void CompileState::ensureOperand(AbstractOperand* op) {
 }
 
 std::string CompileState::isNull(const AbstractOperand* op) {
-  auto ord = ordinal(*op);
   if (op->notNull) {
     return "false";
   }
+  if (op->literalNull) {
+    return "true";
+  }
+  auto ord = ordinal(*op);
   if (op->inRegister) {
     return fmt::format("(0 == (nulls{} & (1U << {})))", ord / 32, ord & 31);
   }
@@ -345,6 +401,9 @@ std::string CompileState::isNull(const AbstractOperand* op) {
 }
 
 std::string CompileState::operandValue(const AbstractOperand* op) {
+  if (op->constant) {
+    return literalText(*op);
+  }
   VELOX_CHECK(op->inRegister);
   return fmt::format("r{}", ordinal(*op));
 }
@@ -353,10 +412,12 @@ std::string CompileState::generateIsTrue(const AbstractOperand& op) {
   auto ord = ordinal(op);
   if (op.inRegister) {
     if (op.notNull) {
-      generated_ << fmt::format("bool flag{} = r{}", ord, ord);
+      declareNamed(fmt::format("bool flag{};\n", ord));
+      generated_ << fmt::format("flag{} = r{}", ord, ord);
     } else {
+      declareNamed(fmt::format("bool flag{};\n", ord));
       generated_ << fmt::format(
-          "bool flag{} = r{} && !isRegisterNull(nulls{}, {});\n",
+          "flag{} = r{} && !isRegisterNull(nulls{}, {});\n",
           ord,
           ord,
           ord / 32,
@@ -366,13 +427,14 @@ std::string CompileState::generateIsTrue(const AbstractOperand& op) {
     auto& flags = this->flags(op);
     bool mayWrap = this->mayWrap(!flags.wrappedAt);
     if (op.notNull || insideNullPropagating_) {
+      declareNamed(fmt::format("bool flag{};\n", ord));
       generated_ << fmt::format(
-          "bool flag{} = nonNullOperand<bool, {}>(operands, {}, blockBase)",
+          "flag{} = nonNullOperand<bool, {}>(operands, {}, blockBase)",
           ord,
           mayWrap,
           ord);
     } else {
-      generated_ << fmt::format("bool flag{};\n", ord);
+      declareNamed(fmt::format("bool flag{};\n", ord));
       generated_ << fmt::format(
           "if (!valueOrNull<{}, bool>(operands, {}, blockBase, flags{})) {{ flags{} = false; }};\n",
           mayWrap ? "true" : "false",
@@ -384,14 +446,14 @@ std::string CompileState::generateIsTrue(const AbstractOperand& op) {
   return fmt::format("flag{}", ord);
 }
 
-void CompileState::functionReferenced(const AbstractOperand* op) {
+FunctionMetadata CompileState::functionReferenced(const AbstractOperand* op) {
   auto numInput = op->inputs.size();
   std::vector<TypePtr> types;
   types.reserve(numInput);
   for (auto i = 0; i < numInput; ++i) {
     types.push_back(op->expr->inputs()[i]->type());
   }
-  functionReferenced(op->expr->name(), types, op->type);
+  return functionReferenced(op->expr->name(), types, op->type);
 }
 
 void CompileState::addInclude(const std::string& path) {
@@ -403,14 +465,14 @@ void CompileState::addInclude(const std::string& path) {
   includeText_ << line << std::endl;
 }
 
-void CompileState::functionReferenced(
+FunctionMetadata CompileState::functionReferenced(
     const std::string& name,
     const std::vector<TypePtr>& types,
     const TypePtr& resultType) {
   FunctionKey key(name, types);
-
+  auto metadata = waveRegistry().metadata(key);
   if (functions_.count(key)) {
-    return;
+    return metadata;
   }
   functions_.insert(key);
   auto definition = waveRegistry().makeDefinition(key, resultType);
@@ -420,18 +482,23 @@ void CompileState::functionReferenced(
     includeText_ << definition.includeLine << std::endl;
   }
   inlines_ << "inline __device__ " << definition.definition << std::endl;
+  return metadata;
 }
 
 int32_t CompileState::nextWrapId() {
   return ++wrapId_;
 }
 
-int32_t CompileState::wrapLiteral(int32_t nthWrap) {
-  // We take one Operand of each group of Operands that shares a wrappedAt such
-  // that the Operand's lifetime crosses the filter.
+int32_t CompileState::wrapLiteral(const WrapInfo& info, int32_t nthWrap) {
+  // We take one Operand of each group of Operands that shares a
+  // wrappedAt such that the Operand's lifetime crosses the
+  // filter. The wrap that is initialized here is first in the indices
+  // list. Like this the code can init this to nullptr without relying
+  // on the host inniting this.
   CodePosition filter(kernelSeq_, 0, stepIdx_);
   std::unordered_set<int32_t> wraps;
   std::vector<OperandIndex> ordinals;
+  int32_t initializedWrap = -1;
   for (auto& op : operands_) {
     auto& flags = currentCandidate_->flags(op.get());
     if (!flags.lastUse.empty() && !flags.definedIn.empty() &&
@@ -447,10 +514,17 @@ int32_t CompileState::wrapLiteral(int32_t nthWrap) {
       }
       wraps.insert(wrappedAt);
       ordinals.push_back(ordinal(*op));
+      if (wrappedAt == nthWrap) {
+        initializedWrap = ordinals.back();
+      }
     }
   }
   generated_ << fmt::format("const OperandIndex wraps{}[] = {{", nthWrap);
+  generated_ << initializedWrap << (ordinals.size() > 1 ? "," : "");
   for (auto i = 0; i < ordinals.size(); ++i) {
+    if (ordinals[i] == initializedWrap) {
+      continue;
+    }
     generated_ << ordinals[i];
     if (i < ordinals.size() - 1) {
       generated_ << ", ";
@@ -468,14 +542,60 @@ void Filter::generateMain(CompileState& state, int32_t syncLabel) {
       "filterKernel({}, operands, {}, blockBase, shared, laneStatus);\n",
       flagValue,
       state.ordinal(*indices));
-  auto numWraps = state.wrapLiteral(nthWrap);
-  out << fmt::format(
-      "wrapKernel(wraps{}, {}, {}, operands, blockBase, shared);\n",
-      nthWrap,
-      numWraps,
-      state.ordinal(*indices));
-  state.lastPlacedWrap() = nthWrap;
-  state.clearInRegister();
+  state.generateWrap(wrapInfo_, nthWrap, indices);
+}
+
+std::string operandIdArray(
+    CompileState& state,
+    const std::string& name,
+    const std::vector<AbstractOperand*> more) {
+  std::stringstream out;
+  if (more.empty()) {
+    out << "const OperandIndex* " << name << " = nullptr;\n";
+  } else {
+    out << "  const OperandIndex " << name << "[] = {";
+    for (auto i = 0; i < more.size(); ++i) {
+      out << state.ordinal(*more[i]);
+      if (i < more.size() - 1) {
+        out << ", ";
+      }
+    }
+
+    out << "};\n";
+  }
+  return out.str();
+}
+
+void CompileState::generateWrap(
+    WrapInfo& info,
+    int32_t nthWrap,
+    const AbstractOperand* indices) {
+  auto& out = generated_;
+  if (info.needRewind) {
+    out << operandIdArray(
+        *this, fmt::format("wraps{}", nthWrap), info.rewrapped);
+    out << operandIdArray(
+        *this, fmt::format("idxs{}", nthWrap), info.wrapIndices);
+    out << operandIdArray(
+        *this, fmt::format("back{}", nthWrap), info.wrapBackup);
+    out << fmt::format(
+        "wrapKernel({}, wraps{}, idxs{}, back{}, {}, {}, shared);\n",
+        info.wrappedHere ? ordinal(*info.wrappedHere) : kEmpty,
+        nthWrap,
+        nthWrap,
+        nthWrap,
+        info.wrapIndices.size(),
+        ordinal(*indices));
+  } else {
+    auto numWraps = wrapLiteral(info, nthWrap);
+    out << fmt::format(
+        "wrapKernel(wraps{}, {}, {}, operands, blockBase, shared);\n",
+        nthWrap,
+        numWraps,
+        ordinal(*indices));
+  }
+  lastPlacedWrap() = nthWrap;
+  clearInRegister();
 }
 
 void AggregateProbe::generateMain(CompileState& state, int32_t syncLabel) {
@@ -507,22 +627,60 @@ std::unique_ptr<AbstractInstruction> AggregateProbe::addInstruction(
   }
   agg->roundedRowSize = bits::roundUp(offset, 8);
   abstractAggregation = agg.get();
+  agg->continueLabel = continueLabelN;
   return agg;
+}
+
+std::string AggregateProbe::toString() const {
+  std::stringstream out;
+  out << "aggregateProbe {";
+  for (auto& key : keys) {
+    out << key->toString() << " ";
+  }
+  out << "}\n";
+  if (rows) {
+    out << "  row=" << rows->toString() << "\n";
+  }
+  if (!inlinedUpdates.empty()) {
+    out << "  inlined {\n";
+    for (auto& update : inlinedUpdates) {
+      out << update->toString();
+    }
+    out << "\n}\n";
+  }
+
+  return out.str();
 }
 
 void AggregateUpdate::generateMain(CompileState& state, int32_t /*syncLabel*/) {
 }
 
-void ReadAggregation::generateMain(CompileState& state, int32_t /*syncLabel*/) {
+void ReadAggregation::generateMain(CompileState& state, int32_t syncLabel) {
   visitResults([&](auto op) { op->isStored = true; });
   makeAggregateOps(state, *probe, true);
-  makeReadAggregation(state, *this);
+  makeReadAggregation(state, *this, syncLabel);
+}
+
+std::string ReadAggregation::preContinueCode(CompileState& state) {
+  // A read aggregation has all lanes on and marks the ones aftter end as off in
+  // the operator code.
+  return "    laneStatus = ErrorCode::kOk;\n;";
+}
+
+std::string AggregateUpdate::toString() const {
+  std::stringstream out;
+  out << name << "(";
+  for (auto& arg : args) {
+    out << arg->toString() << " ";
+  }
+  out << ")\n";
+  return out.str();
 }
 
 std::unique_ptr<AbstractInstruction> ReadAggregation::addInstruction(
     CompileState& state) {
   return std::make_unique<AbstractReadAggregation>(
-      state.nextSerial(), probe->abstractAggregation);
+      state.nextSerial(), probe->abstractAggregation, continueLabelN);
 }
 
 void writeDebugFile(const KernelSpec& spec) {
@@ -586,9 +744,16 @@ ProgramKey CompileState::makeLevelText(
 
   VELOX_CHECK_EQ(1, level.size(), "Only one program per level supported");
   std::stringstream head;
-  auto kernelName = fmt::format("wavegen{}", ++kernelCounter_);
+  auto kernelName = fmt::format("wavegen{}_{}", startNodeId_, ++kernelCounter_);
   kernelEntryPoints_ = {fmt::format("facebook::velox::wave::{}", kernelName)};
   generated_ << "  GENERATED_PREAMBLE(0);\n";
+  auto& params = currentCandidate_->levelParams[kernelSeq_];
+  int32_t numRegs =
+      params.input.size() + params.local.size() + params.output.size();
+  for (auto i = 0; i < numRegs; i += 32) {
+    generated_ << fmt::format("  nulls{} = ~0;\n", i / 32);
+  }
+
   for (branchIdx_ = 0; branchIdx_ < level.size(); ++branchIdx_) {
     auto& box = level[branchIdx_];
     currentBox_ = &box;
@@ -621,7 +786,7 @@ ProgramKey CompileState::makeLevelText(
       if (needActiveCheck) {
         for (auto next = stepIdx_; next < box.steps.size(); ++next) {
           auto label = box.steps[next]->continueLabel();
-          if (label.has_value()) {
+          if (label.has_value() && box.steps[next]->autoContinueLabel()) {
             generated_ << fmt::format(" continue{}:\n", label.value());
           }
           if (box.steps[next]->isBarrier()) {
@@ -635,7 +800,7 @@ ProgramKey CompileState::makeLevelText(
       auto step = box.steps[stepIdx_];
       sharedSize_ = std::max<int32_t>(sharedSize_, step->sharedMemorySize());
 
-      int32_t syncLabel = -1;
+      int32_t syncLabel = nextSyncLabel_;
       if (step->isBarrier()) {
         syncLabel = nextSyncLabel_;
         ++nextSyncLabel_;
@@ -655,11 +820,8 @@ ProgramKey CompileState::makeLevelText(
              "void __global__ __launch_bounds__(1024) {}(KernelParams params) {{\n",
              kernelName);
 
-  auto& params = currentCandidate_->levelParams[kernelSeq_];
-  int32_t numRegs =
-      params.input.size() + params.local.size() + params.output.size();
   for (auto i = 0; i < numRegs; i += 32) {
-    head << fmt::format(" uint32_t nulls{} = ~0;\n", i / 32);
+    head << fmt::format(" uint32_t nulls{};\n", i / 32);
   }
   head << declarations_.str();
   head << generated_.str();
@@ -670,6 +832,7 @@ ProgramKey CompileState::makeLevelText(
   inlines_ = std::stringstream();
   includeText_ = std::stringstream();
   includes_.clear();
+  namedDeclares_.clear();
   functions_.clear();
   std::vector<AbstractOperand*> input;
   std::vector<AbstractOperand*> local;
@@ -749,26 +912,29 @@ void CompileState::fillExtraWrap(OperandSet& extraWrap) {
 
 void CompileState::makeLevel(std::vector<KernelBox>& level) {
   VELOX_CHECK_EQ(1, level.size(), "Only one program per level supported");
-  std::vector<std::unique_ptr<AbstractInstruction>> instructions;
   int32_t kernelEntryPointCounter = 1;
-  std::unordered_map<int32_t, int32_t> kernelEntryPoints;
   for (branchIdx_ = 0; branchIdx_ < level.size(); ++branchIdx_) {
     currentBox_ = &level[branchIdx_];
     for (stepIdx_ = 0; stepIdx_ < currentBox_->steps.size(); ++stepIdx_) {
       auto instructionUnique =
           currentBox_->steps[stepIdx_]->addInstruction(*this);
       if (instructionUnique) {
-        instructions.push_back(std::move(instructionUnique));
-        auto* instruction = instructions.back().get();
+        currentBox_->instructions.push_back(std::move(instructionUnique));
+        auto* instruction = currentBox_->instructions.back().get();
         instruction->reserveState(instructionStatus_);
         auto* status = instruction->mutableInstructionStatus();
         if (status) {
-          currentBox_->steps[stepIdx_]->status = *status;
+          allStatuses_.push_back(status);
         }
         auto opInst = dynamic_cast<AbstractOperator*>(instruction);
         if (opInst) {
           if (auto* agg = dynamic_cast<AbstractAggregation*>(opInst)) {
-            kernelEntryPoints[agg->continueIdx()] = kernelEntryPointCounter++;
+            currentBox_->kernelEntryPoints_[agg->continueIdx()] =
+                kernelEntryPointCounter++;
+          }
+          if (auto* build = dynamic_cast<AbstractHashBuild*>(opInst)) {
+            currentBox_->kernelEntryPoints_[build->continueIdx()] =
+                kernelEntryPointCounter++;
           }
           AbstractState* state = opInst->state;
           state->instruction = instruction;
@@ -776,14 +942,22 @@ void CompileState::makeLevel(std::vector<KernelBox>& level) {
       }
     }
   }
+}
 
-  programs_.clear();
+void CompileState::makeLevelKernel(std::vector<KernelBox>& level) {
   KernelSpec spec;
+  auto& firstBox = level[0];
   makeLevelText(pipelineIdx_, kernelSeq_, spec);
-  auto kernel = CompiledKernel::getKernel(spec.code, [spec]() { return spec; });
-  // Sync with compilation to serialize compile order.
-  kernel->info(0);
-
+  std::unique_ptr<CompiledKernel> kernel;
+  {
+    PrintTime t("compile");
+    kernel = CompiledKernel::getKernel(spec.code, [spec]() { return spec; });
+    // Sync with compilation to serialize compile order.
+    auto info = kernel->info(0);
+    if (FLAGS_wave_print_time) {
+      t.setComment(info.toString());
+    }
+  }
   auto& params = currentCandidate_->levelParams[kernelSeq_];
   auto numBranches = currentCandidate_->steps[kernelSeq_].size();
   OperandSet extraWrap;
@@ -793,17 +967,8 @@ void CompileState::makeLevel(std::vector<KernelBox>& level) {
     auto* abstractState = operatorStates_[id].get();
     auto programState = std::make_unique<ProgramState>();
     programState->stateId = abstractState->id;
-    auto* abstractInst =
-        reinterpret_cast<AbstractAggregation*>(abstractState->instruction);
     programState->isGlobal = true;
-    programState->create =
-        [inst = abstractInst](
-            WaveStream& stream) -> std::shared_ptr<OperatorState> {
-      auto newState = std::make_shared<AggregateOperatorState>();
-      newState->instruction = inst;
-      stream.makeAggregate(*inst, *newState);
-      return newState;
-    };
+    programState->create = abstractState->instruction->stateCreateFunction();
 
     states.push_back(std::move(programState));
   });
@@ -817,16 +982,18 @@ void CompileState::makeLevel(std::vector<KernelBox>& level) {
       operands_,
       std::move(states),
       std::move(kernel));
-  for (auto& pair : kernelEntryPoints) {
+  for (auto& pair : firstBox.kernelEntryPoints_) {
     program->addEntryPointForSerial(pair.first, pair.second);
   }
-  for (auto& i : instructions) {
-    program->add(std::move(i));
+  for (auto& box : level) {
+    for (auto& i : box.instructions) {
+      program->add(std::move(i));
+    }
   }
   programs_.push_back(std::move(program));
 }
 
-bool emptyLevel(std::vector<KernelBox> level) {
+bool emptyLevel(const std::vector<KernelBox>& level) {
   return level.empty() || level[0].steps.empty();
 }
 
@@ -869,6 +1036,7 @@ void CompileState::generatePrograms() {
     currentCandidate_ = &selectedPipelines_[pipelineIdx_];
     auto& firstStep = currentCandidate_->steps[0][0].steps.front();
     int32_t start = 0;
+    auto firstOperatorIdx = operators_.size();
     if (firstStep->kind() == StepKind::kTableScan) {
       auto& scanStep = firstStep->as<TableScanStep>();
       operators_.push_back(std::make_unique<TableScan>(
@@ -878,6 +1046,9 @@ void CompileState::generatePrograms() {
           std::move(scanStep.defines)));
       start = 1;
     }
+    instructionStatus_ = InstructionStatus();
+    // The error status is first after the BlockStatus array.
+    instructionStatus_.gridState = sizeof(KernelError);
     if (firstStep->kind() == StepKind::kValues) {
       operators_.push_back(
           std::make_unique<Values>(*this, *firstStep->as<ValuesStep>().node));
@@ -894,21 +1065,37 @@ void CompileState::generatePrograms() {
       }
       makeLevel(currentCandidate_->steps[kernelSeq_]);
     }
+
+    instructionStatus_.gridStateSize = instructionStatus_.gridState;
+    for (auto* status : allStatuses_) {
+      status->gridStateSize = instructionStatus_.gridState;
+    }
+    programs_.clear();
+    for (kernelSeq_ = start; kernelSeq_ < currentCandidate_->steps.size();
+         ++kernelSeq_) {
+      if (emptyLevel(currentCandidate_->steps[kernelSeq_])) {
+        continue;
+      }
+      makeLevelKernel(currentCandidate_->steps[kernelSeq_]);
+    }
+
     std::vector<std::vector<ProgramPtr>> levels;
     for (auto& program : programs_) {
       levels.emplace_back();
       levels.back().push_back(std::move(program));
     }
-    if (levels.empty()) {
-      return;
+    if (!levels.empty()) {
+      operators_.push_back(std::make_unique<Project>(
+          *this,
+          selectedPipelines_[pipelineIdx_].outputType,
+          std::move(levels)));
+      currentCandidate_->setOutputIds(
+          this,
+          operators_.back().get(),
+          start,
+          currentCandidate_->steps.size());
     }
-    operators_.push_back(std::make_unique<Project>(
-        *this,
-        selectedPipelines_[pipelineIdx_].outputType,
-        std::move(levels),
-        nullptr));
-    currentCandidate_->setOutputIds(
-        this, operators_.back().get(), start, currentCandidate_->steps.size());
+    operators_.at(firstOperatorIdx)->setInstructionStatus(instructionStatus_);
   }
 }
 

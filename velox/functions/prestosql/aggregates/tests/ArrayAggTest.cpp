@@ -130,6 +130,54 @@ TEST_F(ArrayAggTest, groupBy) {
   testFunction("simple_array_agg", false);
 }
 
+TEST_F(ArrayAggTest, sortGroupByWithAllNullsByMask) {
+  auto data = makeRowVector(
+      {makeNullableFlatVector<int16_t>(
+           {std::nullopt, std::nullopt, 1, 1, 1, 1, 1}),
+       makeNullableFlatVector<int64_t>(
+           {std::nullopt,
+            std::nullopt,
+            std::nullopt,
+            std::nullopt,
+            std::nullopt,
+            std::nullopt,
+            std::nullopt}),
+       makeNullableFlatVector<StringView>(
+           {"hello",
+            std::nullopt,
+            std::nullopt,
+            std::nullopt,
+            std::nullopt,
+            std::nullopt,
+            std::nullopt}),
+       makeNullableFlatVector<int64_t>(
+           {std::nullopt,
+            std::nullopt,
+            std::nullopt,
+            std::nullopt,
+            std::nullopt,
+            std::nullopt,
+            std::nullopt})});
+
+  createDuckDbTable({data});
+  auto plan = PlanBuilder()
+                  .values({data})
+                  .project({"c0", "c1", "c2", "c1 % 2 = 1 as m"})
+                  .singleAggregation(
+                      {"c0"},
+                      {
+                          fmt::format("{}(c1 ORDER BY c2 DESC)", "array_agg"),
+                          "sum(c1)",
+                      },
+                      {"m", "m"})
+                  .planNode();
+
+  AssertQueryBuilder(plan, duckDbQueryRunner_)
+      .assertResults(
+          "SELECT c0, array_agg(c1 ORDER BY c2 DESC) FILTER (WHERE c1 % 2 = 1), sum(c1)  FILTER (WHERE c1 % 2 = 1)"
+          " FROM tmp GROUP BY 1");
+}
+
 TEST_F(ArrayAggTest, sortedGroupBy) {
   auto testFunction = [this](const std::string& functionName) {
     auto data = makeRowVector({
@@ -507,6 +555,47 @@ TEST_F(ArrayAggTest, mask) {
 
   testFunction("array_agg");
   testFunction("simple_array_agg");
+}
+
+TEST_F(ArrayAggTest, clusteredInput) {
+  constexpr int kSize = 1000;
+  for (int batchRows : {kSize, 13}) {
+    std::vector<RowVectorPtr> data;
+    for (int i = 0; i < kSize; i += batchRows) {
+      auto size = std::min(batchRows, kSize - i);
+      data.push_back(makeRowVector({
+          makeFlatVector<int64_t>(size, [&](auto j) { return (i + j) / 17; }),
+          makeFlatVector<int32_t>(
+              size,
+              [&](auto j) { return i + j; },
+              [&](auto j) { return (i + j) % 19 == 0; }),
+          makeFlatVector<bool>(size, [&](auto j) { return (i + j) % 11 == 0; }),
+      }));
+    }
+    createDuckDbTable(data);
+    for (bool mask : {false, true}) {
+      auto builder = PlanBuilder().values(data);
+      std::string expected;
+      if (mask) {
+        builder.partialStreamingAggregation({"c0"}, {"array_agg(c1)"}, {"c2"});
+        expected =
+            "select c0, array_agg(c1) filter (where c2) from tmp group by 1";
+      } else {
+        builder.partialStreamingAggregation({"c0"}, {"array_agg(c1)"});
+        expected = "select c0, array_agg(c1) from tmp group by 1";
+      }
+      auto plan = builder.finalAggregation().planNode();
+      for (bool eagerFlush : {false, true}) {
+        SCOPED_TRACE(fmt::format(
+            "mask={} batchRows={} eagerFlush={}", mask, batchRows, eagerFlush));
+        AssertQueryBuilder(plan, duckDbQueryRunner_)
+            .config(core::QueryConfig::kPreferredOutputBatchRows, batchRows)
+            .config(
+                core::QueryConfig::kStreamingAggregationEagerFlush, eagerFlush)
+            .assertResults(expected);
+      }
+    }
+  }
 }
 
 } // namespace

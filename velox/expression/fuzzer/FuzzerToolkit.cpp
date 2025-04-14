@@ -157,6 +157,23 @@ void compareVectors(
   LOG(INFO) << "Two vectors match.";
 }
 
+RowVectorPtr mergeRowVectors(
+    const std::vector<RowVectorPtr>& results,
+    velox::memory::MemoryPool* pool) {
+  auto totalCount = 0;
+  for (const auto& result : results) {
+    totalCount += result->size();
+  }
+  auto copy =
+      BaseVector::create<RowVector>(results[0]->type(), totalCount, pool);
+  auto copyCount = 0;
+  for (const auto& result : results) {
+    copy->copy(result.get(), copyCount, 0, result->size());
+    copyCount += result->size();
+  }
+  return copy;
+}
+
 void InputRowMetadata::saveToFile(const char* filePath) const {
   std::ofstream outputFile(filePath, std::ofstream::binary);
   saveStdVector(columnsToWrapInLazy, outputFile);
@@ -176,6 +193,46 @@ InputRowMetadata InputRowMetadata::restoreFromFile(
   }
   in.close();
   return ret;
+}
+
+void ExprBank::insert(const core::TypedExprPtr& expression) {
+  auto typeString = expression->type()->toString();
+  if (typeToExprsByLevel_.find(typeString) == typeToExprsByLevel_.end()) {
+    typeToExprsByLevel_.insert(
+        {typeString, ExprsIndexedByLevel(maxLevelOfNesting_ + 1)});
+  }
+  auto& expressionsByLevel = typeToExprsByLevel_[typeString];
+  int nestingLevel = getNestedLevel(expression);
+  VELOX_CHECK_LE(nestingLevel, maxLevelOfNesting_);
+  expressionsByLevel[nestingLevel].push_back(expression);
+}
+
+core::TypedExprPtr ExprBank::getRandomExpression(
+    const facebook::velox::TypePtr& returnType,
+    int uptoLevelOfNesting) {
+  VELOX_CHECK_LE(uptoLevelOfNesting, maxLevelOfNesting_);
+  auto typeString = returnType->toString();
+  if (typeToExprsByLevel_.find(typeString) == typeToExprsByLevel_.end()) {
+    return nullptr;
+  }
+  auto& expressionsByLevel = typeToExprsByLevel_[typeString];
+  int totalToConsider = 0;
+  for (int i = 0; i <= uptoLevelOfNesting; i++) {
+    totalToConsider += expressionsByLevel[i].size();
+  }
+  if (totalToConsider > 0) {
+    int choice = boost::random::uniform_int_distribution<uint32_t>(
+        0, totalToConsider - 1)(rng_);
+    for (int i = 0; i <= uptoLevelOfNesting; i++) {
+      if (choice >= expressionsByLevel[i].size()) {
+        choice -= expressionsByLevel[i].size();
+        continue;
+      }
+      return expressionsByLevel[i][choice];
+    }
+    VELOX_CHECK(false, "Should have found an expression.");
+  }
+  return nullptr;
 }
 
 } // namespace facebook::velox::fuzzer

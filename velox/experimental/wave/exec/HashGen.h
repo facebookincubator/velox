@@ -23,7 +23,9 @@ namespace facebook::velox::wave {
 
 void makeKeyMembers(
     const std::vector<AbstractOperand*>& keys,
+    const std::string& prefix,
     std::stringstream& out);
+
 /// Emits code for loading hash lookup operands and computing a hash
 /// number. 'nullableKeys' is true for group by and false for join. If
 /// 'nullableKeys' is true, 'anyNullCode' is emitted for the case of
@@ -32,14 +34,16 @@ void makeHash(
     CompileState& state,
     const std::vector<AbstractOperand*>& keys,
     bool nullableKeys,
-    std::string anyNullCode = "");
+    std::string anyNullCode = "",
+    int32_t id = -1);
 
 /// Emits a lambda for comparing hash table row with probe keys. 'nullableKeys'
-/// is true for group by. Te signature is [&](HashRow* row) -> bool.
+/// is true for group by. The signature is [&](HashRow* row) -> bool.
 void makeCompareLambda(
     CompileState& state,
     const std::vector<AbstractOperand*>& keys,
-    bool nullableKeys);
+    bool nullableKeys,
+    int32_t id);
 
 /// Emits a lambda to initialize a new group by row or keys of a hash join build
 /// row. 'nullableKeys' is true for group by. The signature is [&](GroupRow*
@@ -47,12 +51,14 @@ void makeCompareLambda(
 void makeInitGroupRow(
     CompileState& state,
     const OpVector& keys,
-    const std::vector<const AggregateUpdate*>& aggregates);
+    const std::vector<const AggregateUpdate*>& aggregates,
+    int32_t id);
 
 void makeRowHash(
     CompileState& state,
     const std::vector<AbstractOperand*>& keys,
-    bool nullableKeys);
+    bool nullableKeys,
+    int32_t id);
 
 std::string extractColumn(
     const std::string& row,
@@ -60,5 +66,14 @@ std::string extractColumn(
     int32_t nthNull,
     int32_t ordinal,
     const AbstractOperand& result);
+
+/// Makes an expression to init null flags for a set of Operands, one
+/// bit per Operand. 'begin' and 'end' are indices into 'keys'. The
+/// range should be <= 32 elements of 'keys'.
+std::string initRowNullFlags(
+    CompileState& state,
+    int32_t begin,
+    int32_t end,
+    const OpVector& keys);
 
 } // namespace facebook::velox::wave

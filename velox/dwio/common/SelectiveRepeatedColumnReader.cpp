@@ -75,27 +75,20 @@ void prepareResult(
   // makeOffsetsAndSizes.  Child vectors are handled in child column readers.
 }
 
-vector_size_t
-advanceNestedRows(const RowSet& rows, vector_size_t i, vector_size_t last) {
-  while (i + 16 < rows.size() && rows[i + 16] < last) {
-    i += 16;
-  }
-  while (i < rows.size() && rows[i] < last) {
-    ++i;
-  }
-  return i;
-}
-
 } // namespace
+
+void SelectiveRepeatedColumnReader::ensureAllLengthsBuffer(vector_size_t size) {
+  if (!allLengthsHolder_ ||
+      allLengthsHolder_->capacity() < size * sizeof(vector_size_t)) {
+    allLengthsHolder_ = allocateIndices(size, memoryPool_);
+    allLengths_ = allLengthsHolder_->asMutable<vector_size_t>();
+  }
+}
 
 void SelectiveRepeatedColumnReader::makeNestedRowSet(
     const RowSet& rows,
     int32_t maxRow) {
-  if (!allLengthsHolder_ ||
-      allLengthsHolder_->capacity() < (maxRow + 1) * sizeof(vector_size_t)) {
-    allLengthsHolder_ = allocateIndices(maxRow + 1, memoryPool_);
-    allLengths_ = allLengthsHolder_->asMutable<vector_size_t>();
-  }
+  ensureAllLengthsBuffer(maxRow + 1);
   auto* nulls = nullsInReadRange_ ? nullsInReadRange_->as<uint64_t>() : nullptr;
   // Reads the lengths, leaves an uninitialized gap for a null
   // map/list. Reading these checks the null mask.
@@ -103,8 +96,7 @@ void SelectiveRepeatedColumnReader::makeNestedRowSet(
   vector_size_t nestedLength{0};
   for (auto row : rows) {
     if (!nulls || !bits::isBitNull(nulls, row)) {
-      nestedLength +=
-          std::min(scanSpec_->maxArrayElementsCount(), allLengths_[row]);
+      nestedLength += prunedLengthAt(row);
     }
   }
   nestedRowsHolder_.resize(nestedLength);
@@ -121,8 +113,7 @@ void SelectiveRepeatedColumnReader::makeNestedRowSet(
     if (nulls && bits::isBitNull(nulls, row)) {
       continue;
     }
-    const auto lengthAtRow =
-        std::min(scanSpec_->maxArrayElementsCount(), allLengths_[row]);
+    const auto lengthAtRow = prunedLengthAt(row);
     std::iota(
         nestedRowsHolder_.data() + nestedRow,
         nestedRowsHolder_.data() + nestedRow + lengthAtRow,

@@ -24,9 +24,13 @@
 #include "velox/type/Type.h"
 #include "velox/vector/BaseVector.h"
 
+namespace facebook::velox::exec {
+class HashJoinBridge;
+}
+
 namespace facebook::velox::wave {
-/// Abstract representation of Wave instructions. These translate to a device
-/// side ThreadBlockProgram right before execution.
+/// Abstract representation of Wave instructions. These translate to a kernel
+/// right before execution.
 
 template <typename T, typename U>
 T addBytes(U* p, int32_t bytes) {
@@ -147,6 +151,15 @@ struct AbstractOperand {
   /// Bit field in register with null flags.
   int32_t registerNullBit{kNoNullBit};
 
+  /// If the value is in a hash table row, this is the operand with the row.
+  AbstractOperand* containerRow{nullptr};
+
+  /// If 'containerRow' is set, this is the field on the row.
+  std::string containerField;
+
+  /// If true, has an element per thread block, not per thread.
+  bool elementPerTB{false};
+
   std::string toString() const;
 };
 
@@ -175,7 +188,11 @@ struct AdvanceResult {
   /// The ordinal of the program in the launch.
   int32_t programIdx{0};
 
-  /// The instruction where to pick up. If not 0, must have 'isRetry' true.
+  /// The label where to pick up.
+  int32_t continueLabel{0};
+
+  // The instruction index in host side Program where to pick up. If not 0, must
+  // have 'isRetry' true.
   int32_t instructionIdx{0};
 
   /// True if continuing execution of a partially executed instruction. false if
@@ -193,12 +210,22 @@ struct AdvanceResult {
   /// Action to run before continue. If the update is visible between
   /// streams/Drivers, use the right sync flag above. No sync needed if e.g.
   /// adding space to a string buffer on the 'stream's' vectors.
-  std::function<void(WaveStream&, AbstractInstruction&)> updateStatus;
+  std::function<void(
+      WaveStream&,
+      const std::vector<WaveStream*>& otherStreams,
+      AbstractInstruction&)>
+      updateStatus{nullptr};
 
   /// Extra token to mark reason for 'syncDrivers', e.g. the host side
   /// handle to a device hash table to rehash.
   void* reason{nullptr};
 };
+
+/// Opcodes for abstract instructions that have a host side representation and
+/// status.
+enum class OpCode { kAggregate, kReadAggregate, kHashBuild, kHashJoinExpand };
+
+class Program;
 
 struct AbstractInstruction {
   AbstractInstruction(OpCode opCode, int32_t serial = -1)
@@ -233,12 +260,25 @@ struct AbstractInstruction {
     return {};
   }
 
+  /// Called on each instruction of a pipeline after the pipeline is
+  /// at end on all Drivers. This will take place on the last stream
+  /// of the last Driver to finish. This can produce a combined result
+  /// like a hash join build side.
+  virtual void pipelineFinished(WaveStream& /*stream*/, Program* /*program*/) {}
+
   virtual bool isSink() const {
     return false;
   }
 
   virtual std::optional<int32_t> stateId() const {
     return std::nullopt;
+  }
+
+  /// Returns a function that sets up a state, e.g. hash table, given a
+  /// WaveStream.
+  virtual std::function<std::shared_ptr<OperatorState>(WaveStream& stream)>
+  stateCreateFunction() {
+    return nullptr;
   }
 
   /// True if assigns 'op'.
@@ -272,108 +312,7 @@ struct AbstractInstruction {
   int32_t serial{-1};
 };
 
-struct AbstractReturn : public AbstractInstruction {
-  AbstractReturn() : AbstractInstruction(OpCode::kReturn) {}
-};
-
-struct AbstractFilter : public AbstractInstruction {
-  AbstractFilter(AbstractOperand* flags, AbstractOperand* indices)
-      : AbstractInstruction(OpCode::kFilter), flags(flags), indices(indices) {}
-
-  AbstractOperand* flags;
-  AbstractOperand* indices;
-
-  std::string toString() const override;
-};
-
-struct AbstractWrap : public AbstractInstruction {
-  AbstractWrap(AbstractOperand* indices, int32_t id)
-      : AbstractInstruction(OpCode::kWrap), indices(indices), id(id) {}
-  AbstractOperand* indices;
-  std::vector<AbstractOperand*> source;
-  std::vector<AbstractOperand*> target;
-
-  const int32_t id;
-  // Offset of array of affected operand indices in the literals section of the
-  // TB program. Filled in by first pass of making the TB program.
-  int32_t literalOffset{-1};
-
-  void addWrap(AbstractOperand* sourceOp, AbstractOperand* targetOp = nullptr) {
-    if (targetOp) {
-      targetOp->wrappedAt = id;
-    } else if (sourceOp->wrappedAt == AbstractOperand::kNoWrap) {
-      sourceOp->wrappedAt = id;
-    }
-
-    for (auto i = 0; i < source.size(); ++i) {
-      // If the operand has the same wrap as another one here, do nothing.
-      if (source[i]->wrappedAt == sourceOp->wrappedAt ||
-          (targetOp && target[i]->wrappedAt == targetOp->wrappedAt)) {
-        return;
-      }
-    }
-    source.push_back(sourceOp);
-    target.push_back(targetOp ? targetOp : sourceOp);
-  }
-
-  std::string toString() const override;
-};
-
-struct AbstractBinary : public AbstractInstruction {
-  AbstractBinary(
-      OpCode opCode,
-      AbstractOperand* left,
-      AbstractOperand* right,
-      AbstractOperand* result,
-      AbstractOperand* predicate = nullptr)
-      : AbstractInstruction(opCode),
-        left(left),
-        right(right),
-        result(result),
-        predicate(predicate) {}
-
-  AbstractOperand* left;
-  AbstractOperand* right;
-  AbstractOperand* result;
-  AbstractOperand* predicate;
-
-  bool isOutput(const AbstractOperand* op) const override {
-    return op == result;
-  }
-
-  std::string toString() const override;
-};
-
-struct AbstractLiteral : public AbstractInstruction {
-  AbstractLiteral(
-      const VectorPtr& constant,
-      AbstractOperand* result,
-      AbstractOperand* predicate)
-      : AbstractInstruction(OpCode::kLiteral),
-        constant(constant),
-        result(result),
-        predicate(predicate) {}
-  VectorPtr constant;
-  AbstractOperand* result;
-  AbstractOperand* predicate;
-};
-
-struct AbstractUnary : public AbstractInstruction {
-  AbstractUnary(
-      OpCode opcode,
-      AbstractOperand* input,
-      AbstractOperand* result,
-      AbstractOperand* predicate = nullptr)
-      : AbstractInstruction(opcode),
-        input(input),
-        result(result),
-        predicate(predicate) {}
-  AbstractOperand* input;
-  AbstractOperand* result;
-  AbstractOperand* predicate;
-};
-
-enum class StateKind : uint8_t { kGroupBy };
+enum class StateKind : uint8_t { kGroupBy, kHashBuild };
 
 /// Represents a shared state operated on by instructions. For example, a
 /// join/group by table, destination buffers for repartition etc. Device side
@@ -408,7 +347,7 @@ struct AbstractOperator : public AbstractInstruction {
       OpCode opCode,
       int32_t serial,
       AbstractState* state,
-      RowTypePtr outputType)
+      RowTypePtr outputType = nullptr)
       : AbstractInstruction(opCode, serial),
         state(state),
         outputType(outputType) {}
@@ -434,12 +373,6 @@ struct AbstractField {
 };
 
 struct AbstractAggInstruction {
-  AggregateOp op;
-
-  // Offset of null indicator byte on accumulator row.
-  int32_t nullOffset;
-  // Offset of accumulator on accumulator row. Aligned at 8.
-  int32_t accumulatorOffset;
   std::vector<AbstractOperand*> args;
   AbstractOperand* result;
 };
@@ -457,7 +390,6 @@ struct AbstractAggregation : public AbstractOperator {
 
   int32_t rowSize() {
     return roundedRowSize;
-    // return aggregates.back().accumulatorOffset + sizeof(int64_t);
   }
 
   bool isSink() const override {
@@ -476,6 +408,9 @@ struct AbstractAggregation : public AbstractOperator {
       OperatorState* state,
       int32_t instructionIdx) const override;
 
+  std::function<std::shared_ptr<OperatorState>(WaveStream& stream)>
+  stateCreateFunction() override;
+
   InstructionStatus instructionStatus;
 
   bool intermediateInput{false};
@@ -483,28 +418,26 @@ struct AbstractAggregation : public AbstractOperator {
   std::vector<AbstractOperand*> keys;
   std::vector<AbstractField> keyFields;
   std::vector<AbstractAggInstruction> aggregates;
-  int32_t stateId;
-  int32_t literalOffset;
-
-  int32_t literalBytes{0};
-  // The data area of the physical instruction. Copied by the reading
-  // instruction.
-  IUpdateAgg* literal{nullptr};
 
   /// Prepare up to this many result reading streams.
   int16_t maxReadStreams{1};
 
   int32_t roundedRowSize{0};
+  int32_t continueLabel{-1};
 };
 
 struct AbstractReadAggregation : public AbstractOperator {
-  AbstractReadAggregation(int32_t serial, AbstractAggregation* aggregation)
+  AbstractReadAggregation(
+      int32_t serial,
+      AbstractAggregation* aggregation,
+      int32_t continueLabel)
       : AbstractOperator(
             OpCode::kReadAggregate,
             serial,
             aggregation->state,
             aggregation->outputType),
-        aggregation(aggregation) {}
+        aggregation(aggregation),
+        continueLabel(continueLabel) {}
 
   AdvanceResult canAdvance(
       WaveStream& stream,
@@ -514,6 +447,71 @@ struct AbstractReadAggregation : public AbstractOperator {
 
   AbstractAggregation* aggregation;
   int32_t literalOffset{0};
+  int32_t continueLabel{-1};
+};
+
+struct AbstractHashBuild : public AbstractOperator {
+  AbstractHashBuild(int32_t serial, AbstractState* state)
+      : AbstractOperator(OpCode::kHashBuild, serial, state) {}
+
+  bool isSink() const override {
+    return true;
+  }
+
+  AdvanceResult canAdvance(
+      WaveStream& stream,
+      LaunchControl* control,
+      OperatorState* state,
+      int32_t instructionIdx) const override;
+
+  void pipelineFinished(WaveStream& stream, Program* program) override;
+
+  std::function<std::shared_ptr<OperatorState>(WaveStream& stream)>
+  stateCreateFunction() override;
+
+  void reserveState(InstructionStatus& state) override;
+
+  InstructionStatus* mutableInstructionStatus() override {
+    return &status;
+  }
+
+  int32_t rowSize() {
+    return roundedRowSize;
+  }
+
+  int32_t roundedRowSize{-1};
+
+  InstructionStatus status;
+  int32_t continueLabel;
+  std::shared_ptr<exec::HashJoinBridge> joinBridge;
+};
+
+struct AbstractHashJoinExpand : public AbstractOperator {
+  AbstractHashJoinExpand(int32_t serial, AbstractState* state)
+      : AbstractOperator(OpCode::kHashJoinExpand, 0, state) {}
+
+  AdvanceResult canAdvance(
+      WaveStream& stream,
+      LaunchControl* control,
+      OperatorState* state,
+      int32_t instructionIdx) const override;
+
+  exec::BlockingReason isBlocked(
+      WaveStream& stream,
+      OperatorState* state,
+      ContinueFuture* future) const override;
+
+  void reserveState(InstructionStatus& state) override;
+
+  InstructionStatus* mutableInstructionStatus() override {
+    return &status;
+  }
+
+  std::string planNodeId;
+  std::shared_ptr<exec::HashJoinBridge> joinBridge;
+
+  InstructionStatus status;
+  int32_t continueLabel;
 };
 
 /// Serializes 'row' to characters interpretable on device.

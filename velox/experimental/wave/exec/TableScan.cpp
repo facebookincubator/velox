@@ -27,7 +27,9 @@ std::atomic<uint64_t> TableScan::ioWaitNanos_;
 
 using exec::BlockingReason;
 
-BlockingReason TableScan::isBlocked(ContinueFuture* future) {
+BlockingReason TableScan::isBlocked(
+    WaveStream& /*stream*/,
+    ContinueFuture* future) {
   if (!dataSource_ || needNewSplit_) {
     nextSplit(future);
     isNewSplit_ = true;
@@ -40,14 +42,18 @@ BlockingReason TableScan::isBlocked(ContinueFuture* future) {
 }
 
 std::vector<AdvanceResult> TableScan::canAdvance(WaveStream& stream) {
+  std::vector<AdvanceResult> results;
   if (!dataSource_ || needNewSplit_) {
-    return {};
+    return results;
   }
+  auto& result = results.emplace_back();
   if (isNewSplit_) {
     isNewSplit_ = false;
-    return {{.numRows = waveDataSource_->canAdvance(stream)}};
+    result.numRows = waveDataSource_->canAdvance(stream);
+  } else {
+    result.numRows = nextAvailableRows_;
   }
-  return {{.numRows = nextAvailableRows_}};
+  return results;
 }
 
 void TableScan::schedule(WaveStream& stream, int32_t maxRows) {

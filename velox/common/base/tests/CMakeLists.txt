@@ -24,10 +24,8 @@ add_executable(
   FsTest.cpp
   IndexedPriorityQueueTest.cpp
   RangeTest.cpp
-  RawVectorTest.cpp
   RuntimeMetricsTest.cpp
   ScopedLockTest.cpp
-  ScratchTest.cpp
   SemaphoreTest.cpp
   SimdUtilTest.cpp
   SkewedPartitionBalancerTest.cpp
@@ -49,7 +47,6 @@ target_link_libraries(
     velox_status
     velox_exception
     velox_temp_path
-    velox_flag_definitions
     Boost::filesystem
     Boost::headers
     Folly::folly
@@ -69,7 +66,6 @@ target_link_libraries(
   velox_common_base
   velox_memory
   Boost::headers
-  gflags::gflags
   glog::glog
   GTest::gtest
   GTest::gtest_main

@@ -24,6 +24,7 @@
 #include "velox/functions/prestosql/ArrayFunctions.h"
 #include "velox/functions/prestosql/ArraySort.h"
 #include "velox/functions/prestosql/WidthBucketArray.h"
+#include "velox/functions/prestosql/types/JsonRegistration.h"
 
 namespace facebook::velox::functions {
 extern void registerArrayConcatFunctions(const std::string& prefix);
@@ -98,6 +99,12 @@ inline void registerArrayTrimFunctions(const std::string& prefix) {
 }
 
 template <typename T>
+inline void registerArrayTopNFunction(const std::string& prefix) {
+  registerFunction<ArrayTopNFunction, Array<T>, Array<T>, int32_t>(
+      {prefix + "array_top_n"});
+}
+
+template <typename T>
 inline void registerArrayRemoveNullFunctions(const std::string& prefix) {
   registerFunction<ArrayRemoveNullFunction, Array<T>, Array<T>>(
       {prefix + "remove_nulls"});
@@ -154,6 +161,9 @@ void registerArrayFunctions(const std::string& prefix) {
   VELOX_REGISTER_VECTOR_FUNCTION(
       udf_array_sort_desc, prefix + "array_sort_desc");
 
+  VELOX_REGISTER_VECTOR_FUNCTION(udf_array_max_by, prefix + "array_max_by");
+  VELOX_REGISTER_VECTOR_FUNCTION(udf_array_min_by, prefix + "array_min_by");
+
   exec::registerExpressionRewrite([prefix](const auto& expr) {
     return rewriteArraySortCall(prefix, expr);
   });
@@ -193,6 +203,7 @@ void registerArrayFunctions(const std::string& prefix) {
   registerArrayJoinFunctions<Timestamp>(prefix);
   registerArrayJoinFunctions<Date>(prefix);
   registerArrayJoinFunctions<Json>(prefix);
+  registerArrayJoinFunctions<UnknownValue>(prefix);
 
   registerFunction<ArrayAverageFunction, double, Array<double>>(
       {prefix + "array_average"});
@@ -240,6 +251,19 @@ void registerArrayFunctions(const std::string& prefix) {
       Array<Varchar>,
       Array<Varchar>,
       int64_t>({prefix + "trim_array"});
+
+  registerArrayTopNFunction<int8_t>(prefix);
+  registerArrayTopNFunction<int16_t>(prefix);
+  registerArrayTopNFunction<int32_t>(prefix);
+  registerArrayTopNFunction<int64_t>(prefix);
+  registerArrayTopNFunction<int128_t>(prefix);
+  registerArrayTopNFunction<float>(prefix);
+  registerArrayTopNFunction<double>(prefix);
+  registerArrayTopNFunction<Varchar>(prefix);
+  registerArrayTopNFunction<Timestamp>(prefix);
+  registerArrayTopNFunction<Date>(prefix);
+  registerArrayTopNFunction<Varbinary>(prefix);
+  registerArrayTopNFunction<Orderable<T1>>(prefix);
 
   registerArrayRemoveNullFunctions<int8_t>(prefix);
   registerArrayRemoveNullFunctions<int16_t>(prefix);
@@ -298,6 +322,7 @@ void registerArrayFunctions(const std::string& prefix) {
   registerArrayHasDuplicatesFunctions<int64_t>(prefix);
   registerArrayHasDuplicatesFunctions<int128_t>(prefix);
   registerArrayHasDuplicatesFunctions<Varchar>(prefix);
+  registerArrayHasDuplicatesFunctions<Json>(prefix);
 
   registerArrayFrequencyFunctions<bool>(prefix);
   registerArrayFrequencyFunctions<int8_t>(prefix);

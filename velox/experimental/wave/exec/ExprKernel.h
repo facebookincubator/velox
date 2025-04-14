@@ -16,7 +16,7 @@
 
 #pragma once
 
-#include <cstdint>
+#include <stdint.h>
 #include "velox/experimental/wave/common/HashTable.h"
 #include "velox/experimental/wave/exec/ErrorCode.h"
 #include "velox/experimental/wave/vector/Operand.h"
@@ -29,68 +29,14 @@
 /// be allocated dynamically at kernel invocation.
 namespace facebook::velox::wave {
 
-/// Opcodes for common instruction set. First all instructions that
-/// do not have operand type variants, then all the ones that
-/// do. For type templated instructions, the case label is opcode *
-/// numTypes + type, so these must be last in oredr not to conflict.
-enum class OpCode {
-  // First all OpCodes that have no operand type specialization.
-  kFilter = 0,
-  kWrap,
-  kLiteral,
-  kNegate,
-  kAggregate,
-  kReadAggregate,
-  kReturn,
-
-  // From here, only OpCodes that have variants for scalar types.
-  kPlus_BIGINT,
-  kLT_BIGINT
-};
-
-constexpr int32_t kLastScalarKind = static_cast<int32_t>(WaveTypeKind::HUGEINT);
-
-struct IBinary {
-  OperandIndex left;
-  OperandIndex right;
-  OperandIndex result;
-  // If set, apply operation to lanes where there is a non-zero byte in this.
-  OperandIndex predicate{kEmpty};
-};
-
-struct IFilter {
-  OperandIndex flags;
-  OperandIndex indices;
-};
-
-struct IWrap {
-  // The indices to wrap on top of 'columns'.
-  OperandIndex indices;
-  int32_t numColumns;
-
-  // The columns to wrap.
-  OperandIndex* columns;
-};
-
-struct ILiteral {
-  OperandIndex literal;
-  OperandIndex result;
-  OperandIndex predicate;
-};
-
-struct INegate {
-  OperandIndex value;
-  OperandIndex result;
-  OperandIndex predicate;
-};
-struct IReturn {};
-
-enum class AggregateOp : uint8_t { kSum };
-
 /// Device-side state for group by
 struct DeviceAggregation {
   /// hash table, nullptr if no grouping keys.
   GpuHashTableBase* table{nullptr};
+
+  /// Device side atomic counting thread blocks working on the state. Assert
+  /// this is 0 at rehash or resupply of allocators.
+  uint32_t debugActiveBlockCounter{0};
 
   // Byte size of a rowm rounded to next 8.
   int32_t rowSize = 0;
@@ -127,54 +73,15 @@ struct AggregationControl {
   int32_t rowSize{0};
 };
 
-struct IUpdateAgg {
-  AggregateOp op;
-  // Offset of null indicator byte on accumulator row.
-  int32_t nullOffset;
-  // Offset of accumulator on accumulator row. Aligned at 8.
-  int32_t accumulatorOffset;
-  OperandIndex arg1{kEmpty};
-  OperandIndex arg2{kEmpty};
-  OperandIndex result{kEmpty};
-};
-
-struct IAggregate {
-  uint16_t numKeys;
-  uint16_t numAggregates;
-  // Serial is used in BlockStatus to identify 'this' for continue.
-  uint8_t serial;
-  /// Index of the state in operator states.
-  uint8_t stateIndex;
-  /// Position of status return block in operator status returned to host.
-  InstructionStatus status;
-  //  'numAggregates' Updates followed by key 'numKeys' key operand indices.
-  IUpdateAgg* aggregates;
-};
-
 struct AggregateReturn {
   /// Count of rows in the table. Triggers rehash when high enough.
   int64_t numDistinct;
 };
 
-struct Instruction {
-  OpCode opCode;
-  union {
-    IBinary binary;
-    IFilter filter;
-    IWrap wrap;
-    ILiteral literal;
-    INegate negate;
-    IAggregate aggregate;
-  } _;
-};
-
-struct ThreadBlockProgram {
-  // Shared memory needed for block. The kernel is launched with max of this
-  // across the ThreadBlockPrograms.
-  int32_t sharedMemorySize{0};
-  int32_t numInstructions;
-  // Array of instructions. Ends in a kReturn.
-  Instruction* instructions;
+// Return status for hash join build. Only indicates if more space is needed.
+struct BuildReturn {
+  // Flag 8 wide for alignment.
+  int64_t needMore{0};
 };
 
 /// Thread block wide status in Wave kernels
@@ -201,6 +108,11 @@ struct WaveShared {
   /// continue. Reset before end of instruction.
   bool hasContinue;
 
+  /// True if doing an extra iteration to increase cardinality in
+  /// non-continue case, e.g. first kernel of 1:n join or unnest
+  /// producing non-first result for an active lane of input.
+  bool localContinue;
+
   /// If true, all threads in block return before starting next instruction.
   bool stop;
   int32_t blockBase;
@@ -209,9 +121,14 @@ struct WaveShared {
   /// '&blockStatus[numBlocks']
   int32_t numBlocks;
 
+  // The branch of a multibranch kernel this block is doing.
+  int16_t programIdx;
+
   /// Number of items in blockStatus covered by each TB.
   int16_t numRowsPerThread;
 
+  /// Iteration counter, =0; < numRowsPerThread.
+  int16_t nthBlock;
   int16_t streamIdx;
 
   // Scratch data area. Size depends on shared memory size for instructions.
@@ -228,10 +145,7 @@ struct KernelParams {
   // branch to follow for the TB at blockIdx.x.
   int32_t* programIdx{nullptr};
 
-  // The TB program for each exe. The subscript is programIdx[blockIdx.x].
-  ThreadBlockProgram** programs{nullptr};
-
-  /// The instruction where to start the execution. If nullptr,
+  /// The label where to start the execution. If nullptr,
   /// 0. Otherwise subscript is programIdx. The active lanes are given
   /// in 'blockStatus'. Used when restarting program at a specific
   /// instruction, e.g. after allocating new memory on host. nullptr means first
@@ -266,6 +180,30 @@ struct KernelParams {
   /// Id of stream <stream ordinal within WaveDriver> + (<driverId of
   /// WaveDriver> * <number of Drivers>.
   int16_t streamIdx{0};
+};
+
+/// grid status for a hash join expand.
+struct HashJoinExpandGridStatus {
+  /// True if any lane in the grid has unfetched data. If true,
+  /// hashJoinExpandBlockstatus has the lane statuses. int32_t to support
+  /// atomics.
+  int32_t anyContinuable{0};
+  int32_t pad{0};
+};
+
+/// Tracks the state of a hash join probe between batches of output. Needed when
+/// the join increases cardinality.
+struct HashJoinExpandBlockStatus {
+  /// The next row in the hash table to look at. nullptr if all hits produced.
+  void* next[kBlockSize];
+};
+
+// Shared memory resident state for hash join expand.
+struct JoinShared {
+  HashJoinExpandGridStatus* gridStatus;
+  HashJoinExpandBlockStatus* blockStatus;
+  int32_t anyNext;
+  int32_t temp[kBlockSize / 32];
 };
 
 } // namespace facebook::velox::wave

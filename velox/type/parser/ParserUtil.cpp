@@ -30,11 +30,24 @@ TypePtr typeFromString(
     upper = "DOUBLE";
   }
   auto inferredType = getType(upper, {});
-  if (failIfNotRegistered) {
-    VELOX_CHECK(
-        inferredType, "Failed to parse type [{}]. Type not registered.", type);
+  if (failIfNotRegistered == true && inferredType == nullptr) {
+    VELOX_UNSUPPORTED("Failed to parse type [{}]. Type not registered.", type);
   }
   return inferredType;
+}
+
+TypePtr customTypeWithChildren(
+    const std::string& name,
+    const std::vector<TypePtr>& children) {
+  std::vector<TypeParameter> params;
+  params.reserve(children.size());
+  for (auto& child : children) {
+    params.emplace_back(child);
+  }
+  auto type = getType(name, params);
+  VELOX_CHECK_NOT_NULL(
+      type, "Failed to parse custom type with children [{}]", name);
+  return type;
 }
 
 std::pair<std::string, std::shared_ptr<const Type>> inferTypeWithSpaces(

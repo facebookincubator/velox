@@ -15,10 +15,15 @@
  */
 #pragma once
 
+#include "velox/exec/HashBitRange.h"
 #include "velox/exec/HashTable.h"
 #include "velox/exec/JoinBridge.h"
 #include "velox/exec/MemoryReclaimer.h"
 #include "velox/exec/Spill.h"
+
+namespace facebook::velox::wave {
+struct HashTableHolder;
+}
 
 namespace facebook::velox::exec {
 class HashBuildSpiller;
@@ -54,6 +59,10 @@ class HashJoinBridge : public JoinBridge {
       bool hasNullKeys,
       HashJoinTableSpillFunc&& tableSpillFunc);
 
+  void setHashTable(
+      std::shared_ptr<wave::HashTableHolder> table,
+      bool hasNullKeys);
+
   /// Invoked by the probe operator to append the spilled hash table partitions
   /// while probing. The function appends the spilled table partitions into
   /// 'spillPartitionSets_' stack. This only applies if the disk spilling is
@@ -79,8 +88,15 @@ class HashJoinBridge : public JoinBridge {
 
     HashBuildResult() : hasNullKeys(true) {}
 
+    HashBuildResult(
+        std::shared_ptr<wave::HashTableHolder> _table,
+        bool _hasNullKeys)
+        : hasNullKeys(_hasNullKeys), waveTable(std::move(_table)) {}
+
     bool hasNullKeys;
     std::shared_ptr<BaseHashTable> table;
+
+    std::shared_ptr<wave::HashTableHolder> waveTable;
 
     /// Restored spill partition id associated with 'table', null if 'table' is
     /// not built from restoration.

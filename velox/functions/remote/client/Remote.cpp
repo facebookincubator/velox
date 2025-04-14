@@ -114,13 +114,13 @@ class RemoteFunction : public exec::VectorFunction {
     }
 
     auto outputRowVector = IOBufToRowVector(
-        remoteResponse.get_result().get_payload(),
+        remoteResponse.result().value().payload().value(),
         ROW({outputType}),
         *context.pool(),
         serde_.get());
     result = outputRowVector->childAt(0);
 
-    if (auto errorPayload = remoteResponse.get_result().errorPayload()) {
+    if (auto errorPayload = remoteResponse.result().value().errorPayload()) {
       auto errorsRowVector = IOBufToRowVector(
           *errorPayload, ROW({VARCHAR()}), *context.pool(), serde_.get());
       auto errorsVector =
@@ -134,7 +134,7 @@ class RemoteFunction : public exec::VectorFunction {
         }
         try {
           throw std::runtime_error(errorsVector->valueAt(i));
-        } catch (const std::exception& ex) {
+        } catch (const std::exception&) {
           context.setError(i, std::current_exception());
         }
       });

@@ -16,8 +16,8 @@
 #include "velox/duckdb/conversion/DuckParser.h"
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/core/PlanNode.h"
-#include "velox/functions/prestosql/types/JsonType.h"
-#include "velox/functions/prestosql/types/TimestampWithTimeZoneType.h"
+#include "velox/functions/prestosql/types/JsonRegistration.h"
+#include "velox/functions/prestosql/types/TimestampWithTimeZoneRegistration.h"
 #include "velox/parse/Expressions.h"
 
 using namespace facebook::velox;
@@ -298,6 +298,9 @@ TEST(DuckParserTest, interval) {
     return value;
   };
 
+  EXPECT_EQ("1 00:00:00.000", parseInterval("INTERVAL 1 DAYS"));
+  EXPECT_EQ("1000 00:00:00.000", parseInterval("INTERVAL 1000 DAYS"));
+
   EXPECT_EQ("0 05:00:00.000", parseInterval("INTERVAL 5 HOURS"));
   EXPECT_EQ("0 00:36:00.000", parseInterval("INTERVAL 36 MINUTES"));
   EXPECT_EQ("0 00:00:07.000", parseInterval("INTERVAL 7 SECONDS"));
@@ -309,6 +312,29 @@ TEST(DuckParserTest, interval) {
 
   EXPECT_EQ(
       "0 00:00:00.011 AS x", parseInterval("INTERVAL 11 MILLISECONDS AS x"));
+}
+
+TEST(DuckParserTest, intervalYearMonth) {
+  auto parseYearMonthInterval = [](const std::string& sql) {
+    auto expr =
+        std::dynamic_pointer_cast<const core::ConstantExpr>(parseExpr(sql));
+    VELOX_CHECK_NOT_NULL(expr);
+
+    auto value =
+        INTERVAL_YEAR_MONTH()->valueToString(expr->value().value<int32_t>());
+    if (expr->alias()) {
+      return fmt::format("{} AS {}", value, expr->alias().value());
+    }
+    return value;
+  };
+
+  EXPECT_EQ("1-0", parseYearMonthInterval("INTERVAL 1 YEAR"));
+  EXPECT_EQ("14-0", parseYearMonthInterval("INTERVAL 14 YEAR"));
+
+  EXPECT_EQ("0-3", parseYearMonthInterval("INTERVAL 3 MONTHS"));
+  EXPECT_EQ("1-1", parseYearMonthInterval("INTERVAL 13 MONTHS"));
+  EXPECT_EQ(
+      "83-3 AS xyz", parseYearMonthInterval("INTERVAL 999 MONTHS as xyz"));
 }
 
 TEST(DuckParserTest, cast) {
@@ -531,7 +557,7 @@ const std::string boundTypeString(BoundType b) {
 const std::string parseWindow(const std::string& expr) {
   ParseOptions options;
   auto windowExpr = parseWindowExpr(expr, options);
-  std::string concatPartitions = "";
+  std::string concatPartitions;
   int i = 0;
   for (const auto& partition : windowExpr.partitionBy) {
     concatPartitions += partition->toString();

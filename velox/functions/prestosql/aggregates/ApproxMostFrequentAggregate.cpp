@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+#include "velox/functions/prestosql/aggregates/ApproxMostFrequentAggregate.h"
 #include "velox/exec/Aggregate.h"
 #include "velox/exec/SimpleAggregateAdapter.h"
 #include "velox/exec/Strings.h"
@@ -375,7 +376,9 @@ class ApproxMostFrequentBooleanAggregate {
     int64_t numTrue{0};
     int64_t numFalse{0};
 
-    explicit AccumulatorType(HashStringAllocator* /*allocator*/) {}
+    explicit AccumulatorType(
+        HashStringAllocator* /*allocator*/,
+        ApproxMostFrequentBooleanAggregate* /*fn*/) {}
 
     void addInput(
         HashStringAllocator* /*allocator*/,
@@ -445,8 +448,10 @@ class ApproxMostFrequentBooleanAggregate {
 
 template <TypeKind kKind>
 std::unique_ptr<exec::Aggregate> makeApproxMostFrequentAggregate(
-    const TypePtr& resultType,
     const std::string& name,
+    core::AggregationNode::Step step,
+    const std::vector<TypePtr>& argTypes,
+    const TypePtr& resultType,
     const TypePtr& valueType) {
   if constexpr (
       kKind == TypeKind::TINYINT || kKind == TypeKind::SMALLINT ||
@@ -460,7 +465,7 @@ std::unique_ptr<exec::Aggregate> makeApproxMostFrequentAggregate(
   if (kKind == TypeKind::BOOLEAN) {
     return std::make_unique<
         exec::SimpleAggregateAdapter<ApproxMostFrequentBooleanAggregate>>(
-        resultType);
+        step, argTypes, resultType);
   }
 
   VELOX_USER_FAIL(
@@ -477,7 +482,13 @@ void registerApproxMostFrequentAggregate(
     bool overwrite) {
   std::vector<std::shared_ptr<exec::AggregateFunctionSignature>> signatures;
   for (const auto& valueType :
-       {"boolean", "tinyint", "smallint", "integer", "bigint", "varchar"}) {
+       {"boolean",
+        "tinyint",
+        "smallint",
+        "integer",
+        "bigint",
+        "varchar",
+        "json"}) {
     signatures.push_back(
         exec::AggregateFunctionSignatureBuilder()
             .returnType(fmt::format("map({},bigint)", valueType))
@@ -494,7 +505,7 @@ void registerApproxMostFrequentAggregate(
       std::move(signatures),
       [name](
           core::AggregationNode::Step step,
-          const std::vector<TypePtr>&,
+          const std::vector<TypePtr>& argTypes,
           const TypePtr& resultType,
           const core::QueryConfig& /*config*/)
           -> std::unique_ptr<exec::Aggregate> {
@@ -504,8 +515,10 @@ void registerApproxMostFrequentAggregate(
         return VELOX_DYNAMIC_TYPE_DISPATCH(
             makeApproxMostFrequentAggregate,
             valueType->kind(),
-            resultType,
             name,
+            step,
+            argTypes,
+            resultType,
             valueType);
       },
       withCompanionFunctions,

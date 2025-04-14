@@ -30,15 +30,12 @@ class HiveTableHandle;
 class HiveConfig;
 struct HiveConnectorSplit;
 
-using SubfieldFilters =
-    std::unordered_map<common::Subfield, std::unique_ptr<common::Filter>>;
-
 const std::string& getColumnName(const common::Subfield& subfield);
 
 void checkColumnNameLowerCase(const std::shared_ptr<const Type>& type);
 
 void checkColumnNameLowerCase(
-    const SubfieldFilters& filters,
+    const common::SubfieldFilters& filters,
     const std::unordered_map<std::string, std::shared_ptr<HiveColumnHandle>>&
         infoColumns);
 
@@ -53,7 +50,7 @@ std::shared_ptr<common::ScanSpec> makeScanSpec(
     const RowTypePtr& rowType,
     const folly::F14FastMap<std::string, std::vector<const common::Subfield*>>&
         outputSubfields,
-    const SubfieldFilters& filters,
+    const common::SubfieldFilters& filters,
     const RowTypePtr& dataColumns,
     const std::unordered_map<std::string, std::shared_ptr<HiveColumnHandle>>&
         partitionKeys,
@@ -95,20 +92,22 @@ bool testFilters(
     const std::unordered_map<std::string, std::optional<std::string>>&
         partitionKey,
     const std::unordered_map<std::string, std::shared_ptr<HiveColumnHandle>>&
-        partitionKeysHandle);
+        partitionKeysHandle,
+    bool asLocalTime);
 
 std::unique_ptr<dwio::common::BufferedInput> createBufferedInput(
     const FileHandle& fileHandle,
     const dwio::common::ReaderOptions& readerOpts,
     const ConnectorQueryCtx* connectorQueryCtx,
     std::shared_ptr<io::IoStatistics> ioStats,
+    std::shared_ptr<filesystems::File::IoStats> fsStats,
     folly::Executor* executor);
 
 core::TypedExprPtr extractFiltersFromRemainingFilter(
     const core::TypedExprPtr& expr,
     core::ExpressionEvaluator* evaluator,
     bool negated,
-    SubfieldFilters& filters,
+    common::SubfieldFilters& filters,
     double& sampleRate);
 
 } // namespace facebook::velox::connector::hive

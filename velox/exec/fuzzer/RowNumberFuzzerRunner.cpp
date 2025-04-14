@@ -16,18 +16,11 @@
 
 #include <folly/init/Init.h>
 #include <gflags/gflags.h>
-#include <gtest/gtest.h>
-#include <unordered_set>
-#include "velox/common/file/FileSystems.h"
 #include "velox/common/memory/SharedArbitrator.h"
-#include "velox/connectors/hive/HiveConnector.h"
 #include "velox/exec/MemoryReclaimer.h"
-#include "velox/exec/fuzzer/DuckQueryRunner.h"
 #include "velox/exec/fuzzer/FuzzerUtil.h"
-#include "velox/exec/fuzzer/PrestoQueryRunner.h"
 #include "velox/exec/fuzzer/ReferenceQueryRunner.h"
 #include "velox/exec/fuzzer/RowNumberFuzzer.h"
-#include "velox/serializers/PrestoSerializer.h"
 
 /// RowNumberFuzzerRunner leverages RowNumberFuzzer and VectorFuzzer to
 /// automatically generate and execute the fuzzer. It works as follows:
@@ -86,28 +79,6 @@ DEFINE_int64(arbitrator_capacity, 6L << 30, "Arbitrator capacity in bytes.");
 
 using namespace facebook::velox::exec;
 
-namespace {
-std::unique_ptr<test::ReferenceQueryRunner> setupReferenceQueryRunner(
-    facebook::velox::memory::MemoryPool* aggregatePool,
-    const std::string& prestoUrl,
-    const std::string& runnerName,
-    const uint32_t& reqTimeoutMs) {
-  if (prestoUrl.empty()) {
-    auto duckQueryRunner =
-        std::make_unique<test::DuckQueryRunner>(aggregatePool);
-    LOG(INFO) << "Using DuckDB as the reference DB.";
-    return duckQueryRunner;
-  }
-
-  LOG(INFO) << "Using Presto as the reference DB.";
-  return std::make_unique<test::PrestoQueryRunner>(
-      aggregatePool,
-      prestoUrl,
-      runnerName,
-      static_cast<std::chrono::milliseconds>(reqTimeoutMs));
-}
-} // namespace
-
 int main(int argc, char** argv) {
   // Calls common init functions in the necessary order, initializing
   // singletons, installing proper signal handlers for better debugging
@@ -116,13 +87,11 @@ int main(int argc, char** argv) {
   test::setupMemory(FLAGS_allocator_capacity, FLAGS_arbitrator_capacity);
   std::shared_ptr<facebook::velox::memory::MemoryPool> rootPool{
       facebook::velox::memory::memoryManager()->addRootPool()};
-  auto referenceQueryRunner = setupReferenceQueryRunner(
+  auto referenceQueryRunner = test::setupReferenceQueryRunner(
       rootPool.get(),
       FLAGS_presto_url,
       "row_number_fuzzer",
       FLAGS_req_timeout_ms);
   const size_t initialSeed = FLAGS_seed == 0 ? std::time(nullptr) : FLAGS_seed;
-  facebook::velox::serializer::presto::PrestoVectorSerde::registerVectorSerde();
-  facebook::velox::filesystems::registerLocalFileSystem();
   rowNumberFuzzer(initialSeed, std::move(referenceQueryRunner));
 }

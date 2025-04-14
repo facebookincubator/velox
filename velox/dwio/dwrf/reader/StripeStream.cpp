@@ -110,9 +110,16 @@ StripeStreamsBase::getIntDictionaryInitializerForNode(
     uint64_t dictionaryWidth) {
   // Create local copy for manipulation
   EncodingKey dictEncodingKey{encodingKey};
-  auto dictDataSi = dictEncodingKey.forKind(proto::Stream_Kind_DICTIONARY_DATA);
+  auto dictDataSi = StripeStreamsUtil::getStreamForKind(
+      *this,
+      dictEncodingKey,
+      proto::Stream_Kind_DICTIONARY_DATA,
+      proto::orc::Stream_Kind_DICTIONARY_DATA);
+
   auto dictDataStream = getStream(dictDataSi, streamLabels.label(), false);
-  const auto dictionarySize = getEncoding(dictEncodingKey).dictionarysize();
+  const auto dictionarySize = format() == DwrfFormat::kDwrf
+      ? getEncoding(dictEncodingKey).dictionarysize()
+      : getEncodingOrc(dictEncodingKey).dictionarysize();
   // Try fetching shared dictionary streams instead.
   if (!dictDataStream) {
     // Get the label of the top level column, since this dictionary is shared by
@@ -124,7 +131,11 @@ StripeStreamsBase::getIntDictionaryInitializerForNode(
       label = label.substr(0, label.find('/', 1));
     }
     dictEncodingKey = EncodingKey(encodingKey.node(), 0);
-    dictDataSi = dictEncodingKey.forKind(proto::Stream_Kind_DICTIONARY_DATA);
+    dictDataSi = StripeStreamsUtil::getStreamForKind(
+        *this,
+        dictEncodingKey,
+        proto::Stream_Kind_DICTIONARY_DATA,
+        proto::orc::Stream_Kind_DICTIONARY_DATA);
     dictDataStream = getStream(dictDataSi, label, false);
   }
 
@@ -166,69 +177,92 @@ void StripeStreamsImpl::loadStreams() {
         });
   }
 
-  const auto addStream = [&](auto& stream, auto& offset) {
+  const auto addStreamDwrf = [&](const proto::Stream& stream, auto& offset) {
     if (stream.has_offset()) {
       offset = stream.offset();
     }
     if (projectedNodes_->contains(stream.node())) {
-      streams_[stream] = {offset, stream};
+      streams_.insert_or_assign(stream, StreamInformationImpl{offset, stream});
     }
+
+    offset += stream.length();
+  };
+
+  const auto addStreamOrc = [&](const proto::orc::Stream& stream,
+                                auto& offset) {
+    if (projectedNodes_->contains(stream.column())) {
+      streams_.insert_or_assign(stream, StreamInformationImpl{offset, stream});
+    }
+
     offset += stream.length();
   };
 
   uint64_t streamOffset{0};
-  for (auto& stream : stripeFooter.streams()) {
-    addStream(stream, streamOffset);
-  }
-
-  // update column encoding for each stream
-  for (uint32_t i = 0; i < stripeFooter.encoding_size(); ++i) {
-    const auto& e = stripeFooter.encoding(i);
-    const auto node = e.has_node() ? e.node() : i;
-    if (projectedNodes_->contains(node)) {
-      encodings_[{node, e.has_sequence() ? e.sequence() : 0}] = i;
+  for (int i = 0; i < stripeFooter.streamsSize(); i++) {
+    if (stripeFooter.format() == DwrfFormat::kDwrf) {
+      addStreamDwrf(stripeFooter.streamDwrf(i), streamOffset);
+    } else {
+      addStreamOrc(stripeFooter.streamOrc(i), streamOffset);
     }
   }
 
-  // handle encrypted columns
-  const auto& decryptionHandler =
-      *readState_->stripeMetadata->decryptionHandler;
-  if (decryptionHandler.isEncrypted()) {
-    VELOX_CHECK_EQ(
-        decryptionHandler.getEncryptionGroupCount(),
-        stripeFooter.encryptiongroups_size());
-    folly::F14FastSet<uint32_t> groupIndices;
-    bits::forEachSetBit(
-        projectedNodes_->bits(),
-        0,
-        projectedNodes_->max() + 1,
-        [&](uint32_t node) {
-          if (decryptionHandler.isEncrypted(node)) {
-            groupIndices.insert(
-                decryptionHandler.getEncryptionGroupIndex(node));
-          }
-        });
-
-    // decrypt encryption groups
-    for (auto index : groupIndices) {
-      const auto& group = stripeFooter.encryptiongroups(index);
-      const auto groupProto =
-          readState_->readerBase
-              ->readProtoFromString<proto::StripeEncryptionGroup>(
-                  group,
-                  std::addressof(
-                      decryptionHandler.getEncryptionProviderByIndex(index)));
-      streamOffset = 0;
-      for (auto& stream : groupProto->streams()) {
-        addStream(stream, streamOffset);
+  // update column encoding for each stream
+  for (uint32_t i = 0; i < stripeFooter.columnEncodingSize(); ++i) {
+    if (stripeFooter.format() == DwrfFormat::kDwrf) {
+      const auto& e = stripeFooter.columnEncodingDwrf(i);
+      const auto node = e.has_node() ? e.node() : i;
+      if (projectedNodes_->contains(node)) {
+        encodings_[{node, e.has_sequence() ? e.sequence() : 0}] = i;
       }
-      for (auto& encoding : groupProto->encoding()) {
-        VELOX_CHECK(encoding.has_node(), "node is required");
-        const auto node = encoding.node();
-        if (projectedNodes_->contains(node)) {
-          decryptedEncodings_[{
-              node, encoding.has_sequence() ? encoding.sequence() : 0}] =
-              encoding;
+    } else {
+      // kOrc
+      if (projectedNodes_->contains(i)) {
+        encodings_[{i, 0}] = i;
+      }
+    }
+  }
+
+  // handle encrypted columns, only supported for dwrf
+  if (stripeFooter.format() == DwrfFormat::kDwrf) {
+    const auto& decryptionHandler =
+        *readState_->stripeMetadata->decryptionHandler;
+    if (decryptionHandler.isEncrypted()) {
+      VELOX_CHECK_EQ(
+          decryptionHandler.getEncryptionGroupCount(),
+          stripeFooter.encryptiongroupsSize());
+      folly::F14FastSet<uint32_t> groupIndices;
+      bits::forEachSetBit(
+          projectedNodes_->bits(),
+          0,
+          projectedNodes_->max() + 1,
+          [&](uint32_t node) {
+            if (decryptionHandler.isEncrypted(node)) {
+              groupIndices.insert(
+                  decryptionHandler.getEncryptionGroupIndex(node));
+            }
+          });
+
+      // decrypt encryption groups
+      for (auto index : groupIndices) {
+        const auto& group = stripeFooter.encryptiongroupsDwrf(index);
+        const auto groupProto =
+            readState_->readerBase
+                ->readProtoFromString<proto::StripeEncryptionGroup>(
+                    group,
+                    std::addressof(
+                        decryptionHandler.getEncryptionProviderByIndex(index)));
+        streamOffset = 0;
+        for (auto& stream : groupProto->streams()) {
+          addStreamDwrf(stream, streamOffset);
+        }
+        for (auto& encoding : groupProto->encoding()) {
+          VELOX_CHECK(encoding.has_node(), "node is required");
+          const auto node = encoding.node();
+          if (projectedNodes_->contains(node)) {
+            decryptedEncodings_[{
+                node, encoding.has_sequence() ? encoding.sequence() : 0}] =
+                encoding;
+          }
         }
       }
     }
