@@ -54,12 +54,15 @@ jobs:
           fetch-depth: 0
           persist-credentials: true
 
-      - name: Install Dependencies
+      - name: Install System Dependencies
         run: |
           dnf install -y --setopt=install_weak_deps=False pandoc
+          pip3 install pipx
           pipx install --force uv cmake==3.31
+          pipx ensurepath
 
-          # Install sphinx etc.
+      - name: Install Python Dependencies
+        run: |
           make python-venv
           uv pip install -r scripts/docs-requirements.txt 
           
