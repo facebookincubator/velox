@@ -391,7 +391,7 @@ class MergeJoin : public Operator {
     // rows that correspond to a single left-side row. Use
     // 'noMoreFilterResults' to make sure 'onMiss' is called for the last
     // left-side row.
-    template <typename TOnMiss>
+    template <typename TOnMiss, typename TOnMatch>
     void processFilterResult(
         vector_size_t outputIndex,
         bool passed,
