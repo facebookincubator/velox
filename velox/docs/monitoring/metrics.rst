@@ -616,7 +616,7 @@ Table Scan
      - The time distribution of table scan batch processing time in range of [0,
        16s] with 512 buckets and reports P50, P90, P99, and P100.
 
-S3 File System
+S3 FileSystem
 --------------
 
 .. list-table::
@@ -626,33 +626,33 @@ S3 File System
    * - Metric Name
      - Type
      - Description
-   * - s3.active_connections
+   * - s3_active_connections
      - Sum
      - The number of connections open for S3 read operations.
-   * - s3.started_uploads
+   * - s3_started_uploads
      - Count
      - The number of S3 upload calls that were started.
-   * - s3.successful_uploads
+   * - s3_successful_uploads
      - Count
      - The number of S3 upload calls that were completed.
-   * - s3.failed_uploads
+   * - s3_failed_uploads
      - Count
      - The number of S3 upload calls that failed.
-   * - s3.metadata_calls
+   * - s3_metadata_calls
      - Count
      - The number of S3 head (metadata) calls.
-   * - s3.get_metadata_errors
+   * - s3_get_metadata_errors
      - Count
      - The number of S3 head (metadata) calls that failed.
-   * - s3.get_metadata_retries
+   * - s3_get_metadata_retries
      - Count
      - The number of retries made during S3 head (metadata) calls.
-   * - s3.get_object_calls
+   * - s3_get_object_calls
      - Count
      - The number of S3 getObject calls.
-   * - s3.get_object_errors
+   * - s3_get_object_errors
      - Count
      - The number of S3 getObject calls that failed.
-   * - s3.get_object_retries
+   * - s3_get_object_retries
      - Count
      - The number of retries made during S3 getObject calls.
