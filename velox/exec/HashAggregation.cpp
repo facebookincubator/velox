@@ -167,11 +167,14 @@ void HashAggregation::setupGroupingKeyChannelProjections(
 
 bool HashAggregation::abandonPartialAggregationEarly(int64_t numOutput) const {
   VELOX_CHECK(
-      groupingSet_->allPartialInput() || groupingSet_->allRawInput(),
-      "Hash aggregation only support abandonment when either all aggregate's inputs are partial or all are raw");
+      groupingSet_->allPartialOutput(),
+      "Hash aggregation only supports abandonment when all aggregates' outputs are partial");
   VELOX_CHECK(
       !isGlobal_,
       "Hash aggregation doesn't support abandonment for global aggregation");
+  VELOX_CHECK(
+      groupingSet_->allPartialInput() || groupingSet_->allRawInput(),
+      "Hash aggregation only supports abandonment when either all aggregates' inputs are partial or all are raw");
   return numInputRows_ > abandonPartialAggregationMinRows_ &&
       100 * numOutput / numInputRows_ >= abandonPartialAggregationMinPct_;
 }
