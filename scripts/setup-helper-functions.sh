@@ -185,6 +185,20 @@ function wget_and_untar {
   popd
 }
 
+function apply_patch {
+  local PATCH_FILE=$1
+  local TARGET_DIR=$2
+  if [ ! -f "${TARGET_DIR}" ]; then
+    echo "Patch file doesn't exist: $PATCH_FILE"; exit 1;
+  fi
+  if [ ! -d "${TARGET_DIR}" ]; then
+    echo "Target source directory doesn't exist: $TARGET_DIR"; exit 1;
+  fi
+  pushd "$TARGET_DIR"
+  git apply "$PATCH_FILE"
+  popd
+}
+
 function cmake_install_dir {
   pushd "${DEPENDENCY_DIR}/$1"
   # remove the directory argument
