@@ -119,7 +119,6 @@ function install_fmt {
 
 function install_folly {
   wget_and_untar https://github.com/facebook/folly/archive/refs/tags/${FB_OS_VERSION}.tar.gz folly
-  apply_patch "${SCRIPTDIR}/../CMake/resolve_dependency_modules/folly/folly-fix-aarch64-cmake-build.patch" folly
   cmake_install_dir folly -DBUILD_TESTS=OFF -DBUILD_SHARED_LIBS="$VELOX_BUILD_SHARED" -DFOLLY_HAVE_INT128_T=ON
 }
 

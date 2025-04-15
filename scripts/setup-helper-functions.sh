@@ -186,16 +186,19 @@ function wget_and_untar {
 }
 
 function apply_patch {
-  local PATCH_FILE=$1
+  local PATCH_FILE; PATCH_FILE=$(readlink -f "$1")
   local TARGET_DIR=$2
-  if [ ! -f "${TARGET_DIR}" ]; then
+  if [ ! -f "${PATCH_FILE}" ]; then
     echo "Patch file doesn't exist: $PATCH_FILE"; exit 1;
   fi
+  pushd "${DEPENDENCY_DIR}"
   if [ ! -d "${TARGET_DIR}" ]; then
     echo "Target source directory doesn't exist: $TARGET_DIR"; exit 1;
   fi
-  pushd "$TARGET_DIR"
+  pushd "${TARGET_DIR}"
   git apply "$PATCH_FILE"
+  echo "Successfully applied patch $PATCH_FILE to source of dependency $TARGET_DIR."
+  popd
   popd
 }
 
