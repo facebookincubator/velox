@@ -1,0 +1,181 @@
+<!DOCTYPE html>
+
+<html lang="en" data-content_root="../../">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="viewport" content="width=device-width, initial-scale=1" />
+
+    <title>Pyvelox Runners &#8212; Velox  documentation</title>
+    <link rel="stylesheet" type="text/css" href="../../_static/pygments.css?v=8f2a1f02" />
+    <link rel="stylesheet" type="text/css" href="../../_static/nature.css?v=0f882399" />
+    <script src="../../_static/documentation_options.js?v=5929fcd5"></script>
+    <script src="../../_static/doctools.js?v=9a2dae69"></script>
+    <script src="../../_static/sphinx_highlight.js?v=dc90522c"></script>
+    <link rel="index" title="Index" href="../../genindex.html" />
+    <link rel="search" title="Search" href="../../search.html" />
+    <link rel="next" title="Pyvelox Legacy Api" href="legacy.html" />
+    <link rel="prev" title="Pyvelox Plan Builder Api" href="plan_builder.html" /> 
+  </head><body>
+    <div class="related" role="navigation" aria-label="Related">
+      <h3>Navigation</h3>
+      <ul>
+        <li class="right" style="margin-right: 10px">
+          <a href="../../genindex.html" title="General Index"
+             accesskey="I">index</a></li>
+        <li class="right" >
+          <a href="legacy.html" title="Pyvelox Legacy Api"
+             accesskey="N">next</a> |</li>
+        <li class="right" >
+          <a href="plan_builder.html" title="Pyvelox Plan Builder Api"
+             accesskey="P">previous</a> |</li>
+        <li class="nav-item nav-item-0"><a href="../../index.html">Velox  documentation</a> &#187;</li>
+          <li class="nav-item nav-item-1"><a href="index.html" accesskey="U">Pyvelox Documentation</a> &#187;</li>
+        <li class="nav-item nav-item-this"><a href="">Pyvelox Runners</a></li> 
+      </ul>
+    </div>  
+
+    <div class="document">
+      <div class="documentwrapper">
+        <div class="bodywrapper">
+          <div class="body" role="main">
+            
+  <section id="pyvelox-runners">
+<h1>Pyvelox Runners<a class="headerlink" href="#pyvelox-runners" title="Link to this heading">¶</a></h1>
+<dl class="py class">
+<dt class="sig sig-object py" id="pyvelox.runner.LocalRunner">
+<em class="property"><span class="pre">class</span><span class="w"> </span></em><span class="sig-prename descclassname"><span class="pre">pyvelox.runner.</span></span><span class="sig-name descname"><span class="pre">LocalRunner</span></span><a class="headerlink" href="#pyvelox.runner.LocalRunner" title="Link to this definition">¶</a></dt>
+<dd><dl class="py method">
+<dt class="sig sig-object py" id="pyvelox.runner.LocalRunner.__init__">
+<span class="sig-name descname"><span class="pre">__init__</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">self</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference internal" href="#pyvelox.runner.LocalRunner" title="pyvelox.runner.LocalRunner"><span class="pre">pyvelox.runner.LocalRunner</span></a></span></em>, <em class="sig-param"><span class="n"><span class="pre">arg0</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference internal" href="plan_builder.html#pyvelox.plan_builder.PlanNode" title="pyvelox.plan_builder.PlanNode"><span class="pre">pyvelox.plan_builder.PlanNode</span></a></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">None</span></span></span><a class="headerlink" href="#pyvelox.runner.LocalRunner.__init__" title="Link to this definition">¶</a></dt>
+<dd></dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="pyvelox.runner.LocalRunner.add_file_split">
+<span class="sig-name descname"><span class="pre">add_file_split</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">self:</span> <span class="pre">pyvelox.runner.LocalRunner</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">file:</span> <span class="pre">facebook::velox::py::PyFile</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">plan_id:</span> <span class="pre">str</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">connector_id:</span> <span class="pre">str</span> <span class="pre">=</span> <span class="pre">'prism'</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">None</span></span></span><a class="headerlink" href="#pyvelox.runner.LocalRunner.add_file_split" title="Link to this definition">¶</a></dt>
+<dd><p>Add a split to scan a file, and associate it to the plan node
+described by plan_id.</p>
+<dl>
+<dt>Args:</dt><dd><p>file: A file object describing the file path and format.
+plan_id: The plan node id of the scan to associate this</p>
+<blockquote>
+<div><p>file/split with.</p>
+</div></blockquote>
+<p>connector_id: The id of the connector used by the scan.</p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="pyvelox.runner.LocalRunner.add_query_config">
+<span class="sig-name descname"><span class="pre">add_query_config</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">self</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference internal" href="#pyvelox.runner.LocalRunner" title="pyvelox.runner.LocalRunner"><span class="pre">pyvelox.runner.LocalRunner</span></a></span></em>, <em class="sig-param"><span class="n"><span class="pre">config_name</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">str</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">config_value</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">str</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">None</span></span></span><a class="headerlink" href="#pyvelox.runner.LocalRunner.add_query_config" title="Link to this definition">¶</a></dt>
+<dd><p>Add a query configuration parameter. These values are passed to the
+Velox Task through a query context object.</p>
+<dl class="simple">
+<dt>Args:</dt><dd><p>configName: The name (key) of the configuration parameter.
+configValue: The configuration value.</p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="pyvelox.runner.LocalRunner.execute">
+<span class="sig-name descname"><span class="pre">execute</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">self</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference internal" href="#pyvelox.runner.LocalRunner" title="pyvelox.runner.LocalRunner"><span class="pre">pyvelox.runner.LocalRunner</span></a></span></em>, <em class="sig-param"><span class="n"><span class="pre">max_drivers</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">int</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">1</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">Iterator</span></span></span><a class="headerlink" href="#pyvelox.runner.LocalRunner.execute" title="Link to this definition">¶</a></dt>
+<dd><p>Executes a given plan returning an iterator to the output produced
+by the root plan node.</p>
+<dl class="simple">
+<dt>Args:</dt><dd><p>max_drivers: Maximum number of drivers (threads) to use when
+executing the plan.</p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="pyvelox.runner.LocalRunner.print_plan_with_stats">
+<span class="sig-name descname"><span class="pre">print_plan_with_stats</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">self</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference internal" href="#pyvelox.runner.LocalRunner" title="pyvelox.runner.LocalRunner"><span class="pre">pyvelox.runner.LocalRunner</span></a></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">str</span></span></span><a class="headerlink" href="#pyvelox.runner.LocalRunner.print_plan_with_stats" title="Link to this definition">¶</a></dt>
+<dd><p>Prints a descriptive debug message containing plan and execution
+stats. If the task hasn’t finished, will print the plan with the
+current stats.</p>
+</dd></dl>
+
+</dd></dl>
+
+</section>
+
+
+            <div class="clearer"></div>
+          </div>
+        </div>
+      </div>
+      <div class="sphinxsidebar" role="navigation" aria-label="Main">
+        <div class="sphinxsidebarwrapper">
+  <div>
+    <h3><a href="../../index.html">Table of Contents</a></h3>
+    <ul>
+<li><a class="reference internal" href="#">Pyvelox Runners</a><ul>
+<li><a class="reference internal" href="#pyvelox.runner.LocalRunner"><code class="docutils literal notranslate"><span class="pre">LocalRunner</span></code></a><ul>
+<li><a class="reference internal" href="#pyvelox.runner.LocalRunner.__init__"><code class="docutils literal notranslate"><span class="pre">LocalRunner.__init__()</span></code></a></li>
+<li><a class="reference internal" href="#pyvelox.runner.LocalRunner.add_file_split"><code class="docutils literal notranslate"><span class="pre">LocalRunner.add_file_split()</span></code></a></li>
+<li><a class="reference internal" href="#pyvelox.runner.LocalRunner.add_query_config"><code class="docutils literal notranslate"><span class="pre">LocalRunner.add_query_config()</span></code></a></li>
+<li><a class="reference internal" href="#pyvelox.runner.LocalRunner.execute"><code class="docutils literal notranslate"><span class="pre">LocalRunner.execute()</span></code></a></li>
+<li><a class="reference internal" href="#pyvelox.runner.LocalRunner.print_plan_with_stats"><code class="docutils literal notranslate"><span class="pre">LocalRunner.print_plan_with_stats()</span></code></a></li>
+</ul>
+</li>
+</ul>
+</li>
+</ul>
+
+  </div>
+  <div>
+    <h4>Previous topic</h4>
+    <p class="topless"><a href="plan_builder.html"
+                          title="previous chapter">Pyvelox Plan Builder Api</a></p>
+  </div>
+  <div>
+    <h4>Next topic</h4>
+    <p class="topless"><a href="legacy.html"
+                          title="next chapter">Pyvelox Legacy Api</a></p>
+  </div>
+  <div role="note" aria-label="source link">
+    <h3>This Page</h3>
+    <ul class="this-page-menu">
+      <li><a href="../../_sources/bindings/python/runners.rst.txt"
+            rel="nofollow">Show Source</a></li>
+    </ul>
+   </div>
+<search id="searchbox" style="display: none" role="search">
+  <h3 id="searchlabel">Quick search</h3>
+    <div class="searchformwrapper">
+    <form class="search" action="../../search.html" method="get">
+      <input type="text" name="q" aria-labelledby="searchlabel" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false"/>
+      <input type="submit" value="Go" />
+    </form>
+    </div>
+</search>
+<script>document.getElementById('searchbox').style.display = "block"</script>
+        </div>
+      </div>
+      <div class="clearer"></div>
+    </div>
+    <div class="related" role="navigation" aria-label="Related">
+      <h3>Navigation</h3>
+      <ul>
+        <li class="right" style="margin-right: 10px">
+          <a href="../../genindex.html" title="General Index"
+             >index</a></li>
+        <li class="right" >
+          <a href="legacy.html" title="Pyvelox Legacy Api"
+             >next</a> |</li>
+        <li class="right" >
+          <a href="plan_builder.html" title="Pyvelox Plan Builder Api"
+             >previous</a> |</li>
+        <li class="nav-item nav-item-0"><a href="../../index.html">Velox  documentation</a> &#187;</li>
+          <li class="nav-item nav-item-1"><a href="index.html" >Pyvelox Documentation</a> &#187;</li>
+        <li class="nav-item nav-item-this"><a href="">Pyvelox Runners</a></li> 
+      </ul>
+    </div>
+    <div class="footer" role="contentinfo">
+    &#169; Copyright TBD.
+      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 7.4.7.
+    </div>
+  </body>
+</html>

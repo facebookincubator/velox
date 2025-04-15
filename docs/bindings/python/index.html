@@ -1,0 +1,151 @@
+<!DOCTYPE html>
+
+<html lang="en" data-content_root="../../">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="viewport" content="width=device-width, initial-scale=1" />
+
+    <title>Pyvelox Documentation &#8212; Velox  documentation</title>
+    <link rel="stylesheet" type="text/css" href="../../_static/pygments.css?v=8f2a1f02" />
+    <link rel="stylesheet" type="text/css" href="../../_static/nature.css?v=0f882399" />
+    <script src="../../_static/documentation_options.js?v=5929fcd5"></script>
+    <script src="../../_static/doctools.js?v=9a2dae69"></script>
+    <script src="../../_static/sphinx_highlight.js?v=dc90522c"></script>
+    <link rel="index" title="Index" href="../../genindex.html" />
+    <link rel="search" title="Search" href="../../search.html" />
+    <link rel="next" title="PyVelox: Python bindings and extensions for Velox" href="README_generated_pyvelox.html" />
+    <link rel="prev" title="Runtime Stats" href="../../monitoring/stats.html" /> 
+  </head><body>
+    <div class="related" role="navigation" aria-label="Related">
+      <h3>Navigation</h3>
+      <ul>
+        <li class="right" style="margin-right: 10px">
+          <a href="../../genindex.html" title="General Index"
+             accesskey="I">index</a></li>
+        <li class="right" >
+          <a href="README_generated_pyvelox.html" title="PyVelox: Python bindings and extensions for Velox"
+             accesskey="N">next</a> |</li>
+        <li class="right" >
+          <a href="../../monitoring/stats.html" title="Runtime Stats"
+             accesskey="P">previous</a> |</li>
+        <li class="nav-item nav-item-0"><a href="../../index.html">Velox  documentation</a> &#187;</li>
+        <li class="nav-item nav-item-this"><a href="">Pyvelox Documentation</a></li> 
+      </ul>
+    </div>  
+
+    <div class="document">
+      <div class="documentwrapper">
+        <div class="bodywrapper">
+          <div class="body" role="main">
+            
+  <section id="pyvelox-documentation">
+<h1>Pyvelox Documentation<a class="headerlink" href="#pyvelox-documentation" title="Link to this heading">¶</a></h1>
+<div class="toctree-wrapper compound">
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="README_generated_pyvelox.html">PyVelox: Python bindings and extensions for Velox</a><ul>
+<li class="toctree-l2"><a class="reference internal" href="README_generated_pyvelox.html#prerequisites">Prerequisites</a></li>
+</ul>
+</li>
+<li class="toctree-l1"><a class="reference internal" href="type.html">Pyvelox Types</a><ul>
+<li class="toctree-l2"><a class="reference internal" href="type.html#pyvelox.type.Type"><code class="docutils literal notranslate"><span class="pre">Type</span></code></a></li>
+<li class="toctree-l2"><a class="reference internal" href="type.html#pyvelox.type.BIGINT"><code class="docutils literal notranslate"><span class="pre">BIGINT</span></code></a></li>
+<li class="toctree-l2"><a class="reference internal" href="type.html#pyvelox.type.INTEGER"><code class="docutils literal notranslate"><span class="pre">INTEGER</span></code></a></li>
+<li class="toctree-l2"><a class="reference internal" href="type.html#pyvelox.type.SMALLINT"><code class="docutils literal notranslate"><span class="pre">SMALLINT</span></code></a></li>
+<li class="toctree-l2"><a class="reference internal" href="type.html#pyvelox.type.TINYINT"><code class="docutils literal notranslate"><span class="pre">TINYINT</span></code></a></li>
+<li class="toctree-l2"><a class="reference internal" href="type.html#pyvelox.type.BOOLEAN"><code class="docutils literal notranslate"><span class="pre">BOOLEAN</span></code></a></li>
+<li class="toctree-l2"><a class="reference internal" href="type.html#pyvelox.type.REAL"><code class="docutils literal notranslate"><span class="pre">REAL</span></code></a></li>
+<li class="toctree-l2"><a class="reference internal" href="type.html#pyvelox.type.DOUBLE"><code class="docutils literal notranslate"><span class="pre">DOUBLE</span></code></a></li>
+<li class="toctree-l2"><a class="reference internal" href="type.html#pyvelox.type.VARBINARY"><code class="docutils literal notranslate"><span class="pre">VARBINARY</span></code></a></li>
+<li class="toctree-l2"><a class="reference internal" href="type.html#pyvelox.type.DATE"><code class="docutils literal notranslate"><span class="pre">DATE</span></code></a></li>
+<li class="toctree-l2"><a class="reference internal" href="type.html#pyvelox.type.ARRAY"><code class="docutils literal notranslate"><span class="pre">ARRAY</span></code></a></li>
+<li class="toctree-l2"><a class="reference internal" href="type.html#pyvelox.type.MAP"><code class="docutils literal notranslate"><span class="pre">MAP</span></code></a></li>
+<li class="toctree-l2"><a class="reference internal" href="type.html#pyvelox.type.ROW"><code class="docutils literal notranslate"><span class="pre">ROW</span></code></a></li>
+</ul>
+</li>
+<li class="toctree-l1"><a class="reference internal" href="vector.html">Pyvelox Vectors</a><ul>
+<li class="toctree-l2"><a class="reference internal" href="vector.html#pyvelox.vector.Vector"><code class="docutils literal notranslate"><span class="pre">Vector</span></code></a></li>
+</ul>
+</li>
+<li class="toctree-l1"><a class="reference internal" href="arrow.html">Pyvelox Arrow Api</a><ul>
+<li class="toctree-l2"><a class="reference internal" href="arrow.html#pyvelox.arrow.to_velox"><code class="docutils literal notranslate"><span class="pre">to_velox()</span></code></a></li>
+<li class="toctree-l2"><a class="reference internal" href="arrow.html#pyvelox.arrow.to_arrow"><code class="docutils literal notranslate"><span class="pre">to_arrow()</span></code></a></li>
+</ul>
+</li>
+<li class="toctree-l1"><a class="reference internal" href="plan_builder.html">Pyvelox Plan Builder Api</a><ul>
+<li class="toctree-l2"><a class="reference internal" href="plan_builder.html#pyvelox.plan_builder.PlanNode"><code class="docutils literal notranslate"><span class="pre">PlanNode</span></code></a></li>
+<li class="toctree-l2"><a class="reference internal" href="plan_builder.html#pyvelox.plan_builder.PlanBuilder"><code class="docutils literal notranslate"><span class="pre">PlanBuilder</span></code></a></li>
+</ul>
+</li>
+<li class="toctree-l1"><a class="reference internal" href="runners.html">Pyvelox Runners</a><ul>
+<li class="toctree-l2"><a class="reference internal" href="runners.html#pyvelox.runner.LocalRunner"><code class="docutils literal notranslate"><span class="pre">LocalRunner</span></code></a></li>
+</ul>
+</li>
+<li class="toctree-l1"><a class="reference internal" href="legacy.html">Pyvelox Legacy Api</a><ul>
+<li class="toctree-l2"><a class="reference internal" href="legacy.html#pyvelox.legacy.VeloxType"><code class="docutils literal notranslate"><span class="pre">VeloxType</span></code></a></li>
+<li class="toctree-l2"><a class="reference internal" href="legacy.html#pyvelox.legacy.BaseVector"><code class="docutils literal notranslate"><span class="pre">BaseVector</span></code></a></li>
+</ul>
+</li>
+</ul>
+</div>
+</section>
+
+
+            <div class="clearer"></div>
+          </div>
+        </div>
+      </div>
+      <div class="sphinxsidebar" role="navigation" aria-label="Main">
+        <div class="sphinxsidebarwrapper">
+  <div>
+    <h4>Previous topic</h4>
+    <p class="topless"><a href="../../monitoring/stats.html"
+                          title="previous chapter">Runtime Stats</a></p>
+  </div>
+  <div>
+    <h4>Next topic</h4>
+    <p class="topless"><a href="README_generated_pyvelox.html"
+                          title="next chapter">PyVelox: Python bindings and extensions for Velox</a></p>
+  </div>
+  <div role="note" aria-label="source link">
+    <h3>This Page</h3>
+    <ul class="this-page-menu">
+      <li><a href="../../_sources/bindings/python/index.rst.txt"
+            rel="nofollow">Show Source</a></li>
+    </ul>
+   </div>
+<search id="searchbox" style="display: none" role="search">
+  <h3 id="searchlabel">Quick search</h3>
+    <div class="searchformwrapper">
+    <form class="search" action="../../search.html" method="get">
+      <input type="text" name="q" aria-labelledby="searchlabel" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false"/>
+      <input type="submit" value="Go" />
+    </form>
+    </div>
+</search>
+<script>document.getElementById('searchbox').style.display = "block"</script>
+        </div>
+      </div>
+      <div class="clearer"></div>
+    </div>
+    <div class="related" role="navigation" aria-label="Related">
+      <h3>Navigation</h3>
+      <ul>
+        <li class="right" style="margin-right: 10px">
+          <a href="../../genindex.html" title="General Index"
+             >index</a></li>
+        <li class="right" >
+          <a href="README_generated_pyvelox.html" title="PyVelox: Python bindings and extensions for Velox"
+             >next</a> |</li>
+        <li class="right" >
+          <a href="../../monitoring/stats.html" title="Runtime Stats"
+             >previous</a> |</li>
+        <li class="nav-item nav-item-0"><a href="../../index.html">Velox  documentation</a> &#187;</li>
+        <li class="nav-item nav-item-this"><a href="">Pyvelox Documentation</a></li> 
+      </ul>
+    </div>
+    <div class="footer" role="contentinfo">
+    &#169; Copyright TBD.
+      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 7.4.7.
+    </div>
+  </body>
+</html>
