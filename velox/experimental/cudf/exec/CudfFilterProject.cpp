@@ -143,7 +143,7 @@ void CudfFilterProject::filter(
   using ScalarType = cudf::scalar_type_t<bool>;
   auto result = static_cast<ScalarType*>(is_all_true.get());
   // If filter is not all true, apply the filter
-  if (!(result->is_valid() && result->value())) {
+  if (!(result->is_valid(stream) && result->value(stream))) {
     // Apply the Filter
     auto filter_table =
         std::make_unique<cudf::table>(std::move(input_table_columns));
