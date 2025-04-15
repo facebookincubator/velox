@@ -71,8 +71,7 @@ TEST_F(CovarianceAggregatesTest, corr) {
   testCovarianceAggResult(agg, input, expected);
 
   // Output NULL when count equals 1.
-  input =
-      makeRowVector({makeFlatVector<double>({1}), makeFlatVector<double>({2})});
+  input = makeRowVector({makeFlatVector<double>(1), makeFlatVector<double>(1)});
   expected = makeRowVector({makeNullableFlatVector<double>(
       std::vector<std::optional<double>>{std::nullopt})});
   testCovarianceAggResult(agg, input, expected);
@@ -95,8 +94,7 @@ TEST_F(CovarianceAggregatesTest, corr) {
   testCovarianceAggResult(agg, input, expected, true);
 
   // Output NaN when count equals 1 for legacy aggregate.
-  input =
-      makeRowVector({makeFlatVector<double>({1}), makeFlatVector<double>({2})});
+  input = makeRowVector({makeFlatVector<double>(1), makeFlatVector<double>(1)});
   expected = makeRowVector({makeFlatVector<double>(
       std::vector<double>{std::numeric_limits<double>::quiet_NaN()})});
   testCovarianceAggResult(agg, input, expected, true);

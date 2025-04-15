@@ -48,6 +48,9 @@ template <bool nullOnDivideByZero>
 struct CorrResultAccessor {
   static bool hasResult(const CorrAccumulator& accumulator) {
     if constexpr (nullOnDivideByZero) {
+      if (accumulator.count() == 1) {
+        return false;
+      }
       return accumulator.m2X() != 0 && accumulator.m2Y() != 0;
     } else {
       if (accumulator.count() == 1) {
