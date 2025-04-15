@@ -70,13 +70,13 @@ std::pair<std::string, std::string> makePartitionKeyValueString(
           getDecimalPrecisionScale(*partitionVector->type());
       const auto maxStringSize =
           DecimalUtil::maxStringViewSize(precision, scale);
-      char maxString[maxStringSize];
-      auto size = DecimalUtil::castToString(
+      std::vector<char> maxString(maxStringSize);
+      const auto size = DecimalUtil::castToString(
           partitionVector->as<SimpleVector<T>>()->valueAt(row),
           scale,
           maxStringSize,
-          maxString);
-      return std::make_pair(name, std::string(maxString, size));
+          maxString.data());
+      return std::make_pair(name, std::string(maxString.data(), size));
     }
   }
 
