@@ -1004,7 +1004,6 @@ void BaseVector::transposeIndices(
     const vector_size_t* wrapIndices,
     vector_size_t* resultIndices) {
 #if XSIMD_WITH_AVX2
-
   constexpr int32_t kBatch = xsimd::batch<int32_t>::size;
   static_assert(kBatch == 8);
   static_assert(sizeof(vector_size_t) == sizeof(int32_t));
@@ -1021,7 +1020,9 @@ void BaseVector::transposeIndices(
         .store_unaligned(resultIndices + i);
   }
 #else
-  VELOX_NYI();
+  for (auto i = 0; i < wrapSize; ++i) {
+    resultIndices[i] = baseIndices[wrapIndices[i]];
+  }
 #endif
 }
 
@@ -1035,7 +1036,6 @@ void BaseVector::transposeIndicesWithNulls(
     vector_size_t* resultIndices,
     uint64_t* resultNulls) {
 #if XSIMD_WITH_AVX2
-
   constexpr int32_t kBatch = xsimd::batch<int32_t>::size;
   static_assert(kBatch == 8);
   static_assert(sizeof(vector_size_t) == sizeof(int32_t));
@@ -1061,7 +1061,22 @@ void BaseVector::transposeIndicesWithNulls(
         .store_unaligned(resultIndices + i);
   }
 #else
-  VELOX_NYI();
+  for (auto i = 0; i < wrapSize; ++i) {
+    auto index = wrapIndices[i];
+    bool wrapIsNull = wrapNulls && bits::isBitNull(wrapNulls, i);
+    if (wrapIsNull) {
+      bits::setNull(resultNulls, i, true);
+      continue;
+    }
+    if (baseNulls) {
+      if (bits::isBitNull(baseNulls, index)) {
+        bits::setNull(resultNulls, i, true);
+        continue;
+      }
+      bits::clearNull(resultNulls, i);
+      resultIndices[i] = baseIndices[index];
+    }
+  }
 #endif
 }
 
