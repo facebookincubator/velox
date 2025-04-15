@@ -1,5 +1,5 @@
 /*
-* Copyright (c) Facebook, Inc. and its affiliates.
+ * Copyright (c) Facebook, Inc. and its affiliates.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -15,5 +15,23 @@
  */
 #pragma once
 
-#include <string>
+#include <folly/CPortability.h>
+#include <cstdint>
 
+namespace facebook::velox::functions::iceberg {
+class Murmur3_32HashFunction {
+ public:
+  static int hashBigint(uint64_t input);
+
+  static int32_t hashString(const char* const input, uint32_t len);
+
+ private:
+  FOLLY_ALWAYS_INLINE static uint32_t mixK1(uint32_t k1);
+
+  FOLLY_ALWAYS_INLINE static uint32_t mixH1(uint32_t h1, uint32_t k1);
+
+  FOLLY_ALWAYS_INLINE static uint32_t fmix(uint32_t h1, uint32_t length);
+
+  static constexpr int kSeed = 0;
+};
+} // namespace facebook::velox::functions::iceberg

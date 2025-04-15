@@ -13,7 +13,8 @@
 # limitations under the License.
 add_executable(
   velox_functions_iceberg_test
-  BucketFunctionTest.cpp)
+  BucketFunctionTest.cpp
+  Murmur3_32HashFunctionTest.cpp)
 
 add_test(
   NAME velox_functions_iceberg_test

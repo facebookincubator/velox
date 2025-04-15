@@ -15,6 +15,7 @@
 velox_add_library(
   velox_functions_iceberg
   BucketFunction.cpp
+  Murmur3_32HashFunction.cpp
   Register.cpp)
 
 velox_link_libraries(
@@ -22,8 +23,7 @@ velox_link_libraries(
   velox_functions_lib
   velox_expression
   velox_functions_util
-  Folly::folly
-  stemmer::stemmer)
+  Folly::folly)
 
 if(NOT VELOX_MONO_LIBRARY)
   set_property(TARGET velox_functions_iceberg PROPERTY JOB_POOL_COMPILE

@@ -24,7 +24,7 @@ using namespace facebook::velox::exec;
 using namespace facebook::velox::functions::iceberg;
 using namespace facebook::velox::functions::iceberg::test;
 
-namespace facebook::velox {
+namespace facebook::velox::functions::iceberg::test {
 class BucketFunctionTest : public IcebergFunctionBaseTest {
  public:
   BucketFunctionTest() {
@@ -44,7 +44,7 @@ class BucketFunctionTest : public IcebergFunctionBaseTest {
       const std::vector<VectorPtr>& input) {
     auto result =
         evaluate<SimpleVector<int32_t>>("bucket(c0, c1)", makeRowVector(input));
-    test::assertEqualVectors(expected, result);
+    velox::test::assertEqualVectors(expected, result);
   }
 };
 } // namespace facebook::velox
@@ -66,6 +66,7 @@ TEST_F(BucketFunctionTest, integerTypes) {
 TEST_F(BucketFunctionTest, string) {
   EXPECT_EQ(bucket<std::string>(5, "abcdefg"), 4);
   EXPECT_EQ(bucket<std::string>(128, "abc"), 122);
+  EXPECT_EQ(bucket<std::string>(128, "abcd"), 106);
   EXPECT_EQ(bucket<std::string>(64, "abcde"), 54);
   EXPECT_EQ(bucket<std::string>(12, "测试"), 8);
   EXPECT_EQ(bucket<std::string>(16, "测试raul试测"), 1);
