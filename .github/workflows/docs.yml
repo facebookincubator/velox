@@ -55,16 +55,21 @@ jobs:
           pip install sphinx sphinx-tabs breathe sphinx_rtd_theme chardet
           pipx install uv
           uv build --sdist --out-dir wheelhouse
+          pipx install --force cmake==3.31
 
       - name: Build wheels
         uses: pypa/cibuildwheel@6cccd09a31908ffd175b012fb8bf4e1dbda3bc6c # v2
         env:
           BUILD_VERSION: "3.12"
           # Only build for 3.12 for now
-          CIBW_BUILD: ${{ 'cp312-*' }}
+          CIBW_BUILD: "cp312-*"
           CIBW_ENVIRONMENT_PASS_LINUX:  "BUILD_VERSION"
           CIBW_ENVIRONMENT_LINUX: "CCACHE_DIR=/host${{ github.workspace }}/ccache"
           CCACHE_DIR: "${{ github.workspace }}/ccache"
+          CMAKE_POLICY_VERSION_MINIMUM: "3.5"
+          CIBW_TEST_COMMAND: "echo Wheel installed"
+        with:
+          output-dir: wheelhouse
 
       - name: Build Documentation
         run: |
