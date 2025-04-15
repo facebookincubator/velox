@@ -50,7 +50,7 @@ class FixedDoubleHistogram {
 
   void resizeWeights() {
     validateParameters(bucketCount_, min_, max_);
-    weights_.resize(bucketCount_);
+    weights_.resize(bucketCount_, 0);
   }
 
   /// API to support the case when bucket is created without a bucketCount
@@ -491,17 +491,25 @@ class ClassificationAggregation : public exec::Aggregate {
       auto* group = groups[i];
       auto* accumulator = value<Accumulator<type>>(group);
       const auto size = accumulator->size();
+      numValues += size;
       if (isNull(group)) {
         clearNull(rawNulls, i);
         continue;
       }
 
       clearNull(rawNulls, i);
-      numValues += size;
     }
 
     auto flatResults = vector->elements()->asFlatVector<double>();
     flatResults->resize(numValues);
+
+    // The memory must be cleared to 0 since these aggregation functions may
+    // have that as the default value. Therefore, we do not want to rely on
+    // whatever was in this buffer. Explicitly clear it to 0.
+    memset(
+        flatResults->values()->asMutable<char>(),
+        0,
+        flatResults->values()->size());
 
     auto* rawOffsets = vector->offsets()->asMutable<vector_size_t>();
     auto* rawSizes = vector->sizes()->asMutable<vector_size_t>();
