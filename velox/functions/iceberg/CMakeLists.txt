@@ -11,33 +11,25 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-velox_add_library(velox_function_registry FunctionRegistry.cpp)
-velox_add_library(velox_coverage_util CoverageUtil.cpp)
+
+velox_add_library(
+  velox_functions_iceberg
+  BucketFunction.cpp
+  Register.cpp)
 
 velox_link_libraries(
-  velox_function_registry
+  velox_functions_iceberg
+  velox_functions_lib
   velox_expression
-  velox_type
-  velox_core
-  velox_exception)
-velox_link_libraries(velox_coverage_util velox_function_registry)
-add_subdirectory(lib)
-if(${VELOX_ENABLE_PRESTO_FUNCTIONS})
-  add_subdirectory(prestosql)
-endif()
+  velox_functions_util
+  Folly::folly
+  stemmer::stemmer)
 
-if(${VELOX_ENABLE_SPARK_FUNCTIONS})
-  add_subdirectory(sparksql)
-endif()
-
-if(${VELOX_ENABLE_REMOTE_FUNCTIONS})
-  add_subdirectory(remote)
+if(NOT VELOX_MONO_LIBRARY)
+  set_property(TARGET velox_functions_iceberg PROPERTY JOB_POOL_COMPILE
+                                                              high_memory_pool)
 endif()
 
 if(${VELOX_BUILD_TESTING})
   add_subdirectory(tests)
-endif()
-
-if(${VELOX_ENABLE_ICEBERG_FUNCTIONS})
-  add_subdirectory(iceberg)
 endif()
