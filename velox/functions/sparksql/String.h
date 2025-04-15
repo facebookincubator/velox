@@ -1556,4 +1556,73 @@ struct Empty2NullFunction {
   }
 };
 
+template <typename TOutString, typename TInString>
+FOLLY_ALWAYS_INLINE void trimTrailingSpaces(
+    TOutString& output,
+    const TInString& inputStr,
+    int32_t numChars,
+    int32_t limit) {
+  auto numTailSpacesToTrim = numChars - limit;
+  VELOX_USER_CHECK_GT(numTailSpacesToTrim, 0);
+
+  auto curPos = inputStr.end() - 1;
+  auto trimTo = inputStr.end() - numTailSpacesToTrim;
+
+  while (curPos >= trimTo && stringImpl::isAsciiSpace(*curPos)) {
+    curPos--;
+  }
+  // Get num of chars.
+  auto trimmedSize = numChars - std::distance(curPos + 1, inputStr.end());
+
+  VELOX_USER_CHECK_LE(
+      trimmedSize,
+      limit,
+      "Exceeds char/varchar type length limitation: {}",
+      limit);
+  output.setNoCopy(
+      StringView(inputStr.data(), std::distance(inputStr.begin(), curPos + 1)));
+}
+
+template <typename T>
+struct VarcharTypeWriteSideCheckFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  // Results refer to strings in the first argument.
+  static constexpr int32_t reuse_strings_from_arg = 0;
+
+  // ASCII input always produces ASCII result.
+  static constexpr bool is_default_ascii_behavior = true;
+
+  FOLLY_ALWAYS_INLINE void call(
+      out_type<Varchar>& result,
+      const arg_type<Varchar>& input,
+      int32_t limit) {
+    doCall<false>(result, input, limit);
+  }
+
+  FOLLY_ALWAYS_INLINE void callAscii(
+      out_type<Varchar>& result,
+      const arg_type<Varchar>& input,
+      int32_t limit) {
+    doCall<true>(result, input, limit);
+  }
+
+ private:
+  template <bool isAscii>
+  FOLLY_ALWAYS_INLINE void doCall(
+      out_type<Varchar>& result,
+      const arg_type<Varchar>& input,
+      int32_t limit) {
+    VELOX_USER_CHECK_GE(limit, 0);
+
+    auto numCharacters = stringImpl::length<isAscii>(input);
+    if (numCharacters <= limit) {
+      result.setNoCopy(input);
+      return;
+    } else {
+      trimTrailingSpaces(result, input, numCharacters, limit);
+    }
+  }
+};
+
 } // namespace facebook::velox::functions::sparksql
