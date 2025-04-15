@@ -33,7 +33,8 @@ enum class TaskState : int {
   kFinished = 1,
   kCanceled = 2,
   kAborted = 3,
-  kFailed = 4
+  kFailed = 4,
+  kPlanned = 5
 };
 
 std::string taskStateString(TaskState state);
