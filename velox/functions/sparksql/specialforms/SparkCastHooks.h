@@ -66,7 +66,7 @@ class SparkCastHooks : public exec::CastHooks {
   }
 
   bool truncate() const override {
-    return true;
+    return !isTryCast_;
   }
 
   exec::PolicyType getPolicy() const override;
