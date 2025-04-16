@@ -31,7 +31,7 @@ class TestReadFile : public velox::ReadFile {
   TestReadFile(
       uint64_t seed,
       uint64_t length,
-      std::shared_ptr<io::IoStatistics> ioStats)
+      std::shared_ptr<filesystems::File::IoStats> ioStats)
       : seed_(seed), length_(length), ioStats_(std::move(ioStats)) {}
 
   uint64_t size() const override {
@@ -42,12 +42,16 @@ class TestReadFile : public velox::ReadFile {
       uint64_t offset,
       uint64_t length,
       void* buffer,
-      io::IoStatistics* stats = nullptr) const override {
+      filesystems::File::IoStats* stats = nullptr) const override {
     const uint64_t content = offset + seed_;
     const uint64_t available = std::min(length_ - offset, length);
     int fill;
     for (fill = 0; fill < available; ++fill) {
       reinterpret_cast<char*>(buffer)[fill] = content + fill;
+    }
+    if (stats) {
+      stats->addCounter(
+          "read", RuntimeCounter(fill, RuntimeCounter::Unit::kBytes));
     }
     return std::string_view(static_cast<const char*>(buffer), fill);
   }
@@ -55,8 +59,14 @@ class TestReadFile : public velox::ReadFile {
   uint64_t preadv(
       uint64_t offset,
       const std::vector<folly::Range<char*>>& buffers,
-      io::IoStatistics* stats = nullptr) const override {
+      filesystems::File::IoStats* stats = nullptr) const override {
     auto res = ReadFile::preadv(offset, buffers, stats);
+    if (stats) {
+      stats->addCounter(
+          "read",
+          RuntimeCounter(
+              static_cast<int64_t>(res), RuntimeCounter::Unit::kBytes));
+    }
     ++numIos_;
     return res;
   }
@@ -93,7 +103,7 @@ class TestReadFile : public velox::ReadFile {
  private:
   const uint64_t seed_;
   const uint64_t length_;
-  std::shared_ptr<io::IoStatistics> ioStats_;
+  std::shared_ptr<filesystems::File::IoStats> ioStats_;
   mutable std::atomic<int64_t> numIos_{0};
 };
 

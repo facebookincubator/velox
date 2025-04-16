@@ -23,7 +23,14 @@
 #include "velox/functions/lib/benchmarks/FunctionBenchmarkBase.h"
 #include "velox/functions/prestosql/JsonFunctions.h"
 #include "velox/functions/prestosql/json/JsonExtractor.h"
+#include "velox/functions/prestosql/types/JsonRegistration.h"
 #include "velox/functions/prestosql/types/JsonType.h"
+
+namespace facebook::velox::functions {
+void registerJsonVectorFunctions() {
+  VELOX_REGISTER_VECTOR_FUNCTION(udf_json_extract, "json_extract");
+}
+} // namespace facebook::velox::functions
 
 namespace facebook::velox::functions::prestosql {
 namespace {
@@ -187,17 +194,16 @@ class JsonBenchmark : public velox::functions::test::FunctionBenchmarkBase {
         {"json_array_length"});
     registerFunction<FollyJsonArrayLengthFunction, int64_t, Json>(
         {"folly_json_array_length"});
-    registerFunction<JsonExtractScalarFunction, Varchar, Json, Varchar>(
-        {"json_extract_scalar"});
     registerFunction<FollyJsonExtractScalarFunction, Varchar, Json, Varchar>(
         {"folly_json_extract_scalar"});
-    registerFunction<JsonExtractFunction, Varchar, Json, Varchar>(
-        {"json_extract"});
+    registerFunction<JsonExtractScalarFunction, Varchar, Json, Varchar>(
+        {"json_extract_scalar"});
     registerFunction<FollyJsonExtractFunction, Varchar, Json, Varchar>(
         {"folly_json_extract"});
     registerFunction<JsonSizeFunction, int64_t, Json, Varchar>({"json_size"});
     registerFunction<FollyJsonSizeFunction, int64_t, Json, Varchar>(
         {"folly_json_size"});
+    registerJsonVectorFunctions();
   }
 
   std::string prepareData(int jsonSize) {

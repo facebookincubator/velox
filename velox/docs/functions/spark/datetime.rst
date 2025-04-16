@@ -61,6 +61,43 @@ These functions support TIMESTAMP and DATE input types.
     ``num_days`` can be positive or negative.
     Supported types for ``num_days`` are: TINYINT, SMALLINT, INTEGER.
 
+.. spark:function:: date_trunc(fmt, ts) -> timestamp
+
+    Returns timestamp ``ts`` truncated to the unit specified by the format model ``fmt``.
+    Returns NULL if ``fmt`` is invalid. ``fmt`` as "MICROSECOND" and abbreviated unit string are allowed.
+
+    ``fmt`` is case insensitive and must be one of the following:
+        * "YEAR", "YYYY", "YY" - truncate to the first date of the year that the ``ts`` falls in, the time part will be zero out
+        * "QUARTER" - truncate to the first date of the quarter that the ``ts`` falls in, the time part will be zero out
+        * "MONTH", "MM", "MON" - truncate to the first date of the month that the ``ts`` falls in, the time part will be zero out
+        * "WEEK" - truncate to the Monday of the week that the ``ts`` falls in, the time part will be zero out
+        * "DAY", "DD" - zero out the time part
+        * "HOUR" - zero out the minute and second with fraction part
+        * "MINUTE"- zero out the second with fraction part
+        * "SECOND" - zero out the second fraction part
+        * "MILLISECOND" - zero out the microseconds
+        * "MICROSECOND" - everything remains.
+
+    ::
+
+        SELECT date_trunc('YEAR', '2015-03-05T09:32:05.359'); -- 2015-01-01 00:00:00
+        SELECT date_trunc('YYYY', '2015-03-05T09:32:05.359'); -- 2015-01-01 00:00:00
+        SELECT date_trunc('YY', '2015-03-05T09:32:05.359'); -- 2015-01-01 00:00:00
+        SELECT date_trunc('QUARTER', '2015-03-05T09:32:05.359'); -- 2015-01-01 00:00:00
+        SELECT date_trunc('MONTH', '2015-03-05T09:32:05.359'); -- 2015-03-01 00:00:00
+        SELECT date_trunc('MM', '2015-03-05T09:32:05.359'); -- 2015-03-01 00:00:00
+        SELECT date_trunc('MON', '2015-03-05T09:32:05.359'); -- 2015-03-01 00:00:00
+        SELECT date_trunc('WEEK', '2015-03-05T09:32:05.359'); -- 2015-03-02 00:00:00
+        SELECT date_trunc('DAY', '2015-03-05T09:32:05.359'); -- 2015-03-05 00:00:00
+        SELECT date_trunc('DD', '2015-03-05T09:32:05.359'); -- 2015-03-05 00:00:00
+        SELECT date_trunc('HOUR', '2015-03-05T09:32:05.359'); -- 2015-03-05 09:00:00
+        SELECT date_trunc('MINUTE', '2015-03-05T09:32:05.359'); -- 2015-03-05 09:32:00
+        SELECT date_trunc('SECOND', '2015-03-05T09:32:05.359'); -- 2015-03-05 09:32:05
+        SELECT date_trunc('MILLISECOND', '2015-03-05T09:32:05.123456'); -- 2015-03-05 09:32:05.123
+        SELECT date_trunc('MICROSECOND', '2015-03-05T09:32:05.123456'); -- 2015-03-05 09:32:05.123456
+        SELECT date_trunc('', '2015-03-05T09:32:05.123456'); -- NULL
+        SELECT date_trunc('Y', '2015-03-05T09:32:05.123456'); -- NULL
+
 .. spark:function:: datediff(endDate, startDate) -> integer
 
     Returns the number of days from startDate to endDate. Only DATE type is allowed
@@ -248,6 +285,11 @@ These functions support TIMESTAMP and DATE input types.
 
         SELECT timestamp_millis(1230219000123); -- '2008-12-25 15:30:00.123'
 
+.. spark:function:: to_unix_timestamp(date) -> integer
+   :noindex:
+
+    Alias for ``unix_timestamp(date) -> integer``.
+
 .. spark:function:: to_unix_timestamp(string) -> integer
 
     Alias for ``unix_timestamp(string) -> integer``.
@@ -256,6 +298,11 @@ These functions support TIMESTAMP and DATE input types.
    :noindex:
 
     Alias for ``unix_timestamp(string, format) -> integer``.
+
+.. spark:function:: to_unix_timestamp(timestamp) -> integer
+   :noindex:
+
+    Alias for ``unix_timestamp(timestamp) -> integer``.
 
 .. spark:function:: to_utc_timestamp(timestamp, string) -> timestamp
 
@@ -285,7 +332,7 @@ These functions support TIMESTAMP and DATE input types.
         SELECT unix_millis('1970-01-01 00:00:01'); -- 1000
 
 .. spark:function:: unix_seconds(timestamp) -> bigint
-    
+
     Returns the number of seconds since 1970-01-01 00:00:00 UTC. ::
 
         SELECT unix_seconds('1970-01-01 00:00:01'); -- 1
@@ -294,10 +341,18 @@ These functions support TIMESTAMP and DATE input types.
 
     Returns the current UNIX timestamp in seconds.
 
+.. spark:function:: unix_timestamp(date) -> integer
+
+    Converts the time represented by ``date`` at the configured session timezone to the GMT time, and extracts the seconds. ::
+
+        SELECT unix_timestamp('1970-01-01'); -- 0
+        SELECT unix_timestamp('2024-10-01'); -- 1727740800
+        SELECT unix_timestamp('-2025-02-18'); -- -126065894400
+
 .. spark:function:: unix_timestamp(string) -> integer
    :noindex:
 
-    Returns the UNIX timestamp of time specified by ``string``. Assumes the 
+    Returns the UNIX timestamp of time specified by ``string``. Assumes the
     format ``yyyy-MM-dd HH:mm:ss``. Returns null if ``string`` does not match
     ``format``.
 
@@ -310,6 +365,14 @@ These functions support TIMESTAMP and DATE input types.
     <https://spark.apache.org/docs/latest/sql-ref-datetime-pattern.html>`_.
     Returns null if ``string`` does not match ``format`` or if ``format``
     is invalid.
+
+.. spark:function:: unix_timestamp(timestamp) -> integer
+
+    Returns the UNIX timestamp of the given ``timestamp`` in seconds. ::
+
+        SELECT unix_timestamp(CAST(0 AS TIMESTAMP)); -- 0
+        SELECT unix_timestamp(CAST(1739933174 AS TIMESTAMP)); -- 1739933174
+        SELECT unix_timestamp(CAST(-1739933174 AS TIMESTAMP)); -- -1739933174
 
 .. function:: week_of_year(x) -> integer
 

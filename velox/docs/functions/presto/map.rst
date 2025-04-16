@@ -114,6 +114,15 @@ Map Functions
         SELECT map_top_n(map(ARRAY['a', 'b', 'c'], ARRAY[2, 3, 1]), 2) --- {'b' -> 3, 'a' -> 2}
         SELECT map_top_n(map(ARRAY['a', 'b', 'c'], ARRAY[NULL, 3, NULL]), 2) --- {'b' -> 3, 'c' -> NULL}
 
+.. function:: map_keys_by_top_n_values(map(K,V), n) -> array(K)
+
+    Returns an array of the top N keys from a map. Keeps only the top N elements by value. Keys are used to break ties with the max key being chosen. Both keys and values should be orderable.
+
+    ``n`` must be a non-negative BIGINT value.::
+
+        SELECT map_keys_by_top_n_values(map(ARRAY['a', 'b', 'c'], ARRAY[2, 3, 1]), 2) --- ['b', 'a']
+        SELECT map_keys_by_top_n_values(map(ARRAY['a', 'b', 'c'], ARRAY[NULL, 3, NULL]), 2) --- ['b', 'c']
+
 .. function:: map_top_n_keys(map(K,V), n) -> array(K)
 
     Constructs an array of the top N keys. Keys should be orderable.
@@ -122,6 +131,14 @@ Map Functions
 
         SELECT map_top_n_keys(map(ARRAY['a', 'b', 'c'], ARRAY[1, 2, 3]), 2) --- ['c', 'b']
         SELECT map_top_n_keys(map(ARRAY['a', 'b', 'c'], ARRAY[1, 2, 3]), 0) --- []
+
+.. function:: map_top_n_values(map(K,V), n) -> array(V)
+
+    Returns top N values from a map, by sorting its values in descending order. Both keys and values should be orderable.
+
+    ``n`` must be a non-negative BIGINT value.::
+
+        SELECT map_top_n_values(map(ARRAY['a', 'b', 'c'], ARRAY[1, 2, 3]), 2) --- [3, 2]
 
 .. function:: map_keys(x(K,V)) -> array(K)
 

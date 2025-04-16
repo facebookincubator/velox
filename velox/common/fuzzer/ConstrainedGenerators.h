@@ -28,8 +28,21 @@ namespace facebook::velox::fuzzer {
 
 using facebook::velox::variant;
 
-std::unique_ptr<AbstractInputGenerator>
-getRandomInputGenerator(size_t seed, const TypePtr& type, double nullRatio);
+/// Get a random input generator for the given type.
+/// @param seed The seed used by the returned input generator.
+/// @param type The type of the input generator.
+/// @param nullRatio The ratio of null values to generate by the returned input
+/// generator.
+/// @param mapKeys The candidate map keys used when generating data for all maps
+/// nested in 'type'. If empty, random keys are used.
+/// @param maxContainerSize The maximum size of all containers nested in 'type',
+/// including arrays and maps.
+std::unique_ptr<AbstractInputGenerator> getRandomInputGenerator(
+    size_t seed,
+    const TypePtr& type,
+    double nullRatio,
+    const std::vector<variant>& mapKeys = {},
+    size_t maxContainerSize = 10);
 
 template <typename T, typename Enabled = void>
 class RandomInputGenerator : public AbstractInputGenerator {
@@ -51,6 +64,17 @@ class RandomInputGenerator : public AbstractInputGenerator {
   }
 };
 
+struct RandomStrVariationOptions {
+  double controlCharacterProbability = 0.0;
+  double escapeStringProbability = 0.0;
+  double truncateProbability = 0.0;
+};
+
+void makeRandomStrVariation(
+    std::string& input,
+    FuzzerGenerator& rng,
+    const RandomStrVariationOptions& randomStrVariationOptions);
+
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wdeprecated-declarations"
 template <typename T>
@@ -66,10 +90,12 @@ class RandomInputGenerator<T, std::enable_if_t<std::is_same_v<T, StringView>>>
           {UTF8CharList::ASCII,
            UTF8CharList::UNICODE_CASE_SENSITIVE,
            UTF8CharList::EXTENDED_UNICODE,
-           UTF8CharList::MATHEMATICAL_SYMBOLS})
+           UTF8CharList::MATHEMATICAL_SYMBOLS},
+      RandomStrVariationOptions randomStrVariationOptions = {})
       : AbstractInputGenerator(seed, type, nullptr, nullRatio),
         maxLength_{maxLength},
-        encodings_{encodings} {}
+        encodings_{encodings},
+        randomStrVariationOptions_{randomStrVariationOptions} {}
 
   ~RandomInputGenerator<T, std::enable_if_t<std::is_same_v<T, StringView>>>()
       override = default;
@@ -82,13 +108,16 @@ class RandomInputGenerator<T, std::enable_if_t<std::is_same_v<T, StringView>>>
     const auto length = rand<size_t>(rng_, 0, maxLength_);
     std::wstring_convert<std::codecvt_utf8<char16_t>, char16_t> converter;
     std::string buf;
-    return variant(randString(rng_, length, encodings_, buf, converter));
+    auto randomStr = randString(rng_, length, encodings_, buf, converter);
+    makeRandomStrVariation(randomStr, rng_, randomStrVariationOptions_);
+    return variant(std::move(randomStr));
   }
 
  private:
   const size_t maxLength_;
 
   std::vector<UTF8CharList> encodings_;
+  RandomStrVariationOptions randomStrVariationOptions_;
 };
 #pragma GCC diagnostic pop
 
@@ -323,6 +352,11 @@ class SetConstrainedGenerator : public AbstractInputGenerator {
   std::vector<variant> set_;
 };
 
+// Generates random JSON strings. This generator first generates a value that
+// the expected JSON represents through 'objectGenerator', then converts the
+// value to a JSON string via folly::json::serialize() with randomly generated
+// serialization options. Additionally, it makes a random variation to the JSON
+// string by chance for testing of invalid cases.
 class JsonInputGenerator : public AbstractInputGenerator {
  public:
   JsonInputGenerator(
@@ -351,13 +385,80 @@ class JsonInputGenerator : public AbstractInputGenerator {
 
   folly::dynamic convertVariantToDynamic(const variant& object);
 
-  void makeRandomVariation(std::string json);
+  void makeRandomVariation(std::string& json);
 
   std::unique_ptr<AbstractInputGenerator> objectGenerator_;
 
   bool makeRandomVariation_;
 
   folly::json::serialization_opts opts_;
+};
+
+class PhoneNumberInputGenerator : public AbstractInputGenerator {
+ public:
+  PhoneNumberInputGenerator(size_t seed, const TypePtr& type, double nullRatio);
+
+  ~PhoneNumberInputGenerator() override;
+
+  variant generate() override;
+
+ private:
+  std::string generateImpl();
+};
+
+/// Generates a JSON path for JSON of a given type.
+/// @param jsonType The type of data represented by the JSON.
+/// @param mapKeys Candidate key values of maps in the JSON. All maps in the
+/// JSON are assumed to share the same key type and candidate key values.
+/// @param maxContainerLength The maximum length of a container (array or map)
+/// in the JSON.
+/// @param makeRandomVariation If true, the generator will generate JSON path
+/// not supported by JsonExtractor.
+/// This generator generates the following JSON paths:
+///  - On root: $
+///  - On arrays: [index], [], [*], .*
+///  - On objects: [key], ['key'], ["key"], [], [*], .*, .key, ."key"
+/// TODO: support the following JSON paths:
+///  - Recusive gathering by key or array index: ..key, ..[1]
+/// TODO: support the following JSON paths after Velox JsonExtractor supports
+/// them:
+///  - On strings, arrays, and objects: .length()
+///  - On arrays: [begin:end:step]
+
+class JsonPathGenerator : public AbstractInputGenerator {
+ public:
+  JsonPathGenerator(
+      size_t seed,
+      const TypePtr& type,
+      double nullRatio,
+      const TypePtr& jsonType,
+      const std::vector<variant>& mapKeys,
+      size_t maxContainerLength,
+      bool makeRandomVariation = false)
+      : AbstractInputGenerator(seed, type, nullptr, nullRatio),
+        jsonType_{jsonType},
+        mapKeys_{mapKeys},
+        maxContainerLength_{maxContainerLength},
+        makeRandomVariation_{makeRandomVariation} {}
+
+  ~JsonPathGenerator() override = default;
+
+  variant generate() override;
+
+ private:
+  uint64_t generateRandomIndex();
+
+  void generateRecursiveAccess(std::string& path, const TypePtr& type);
+
+  void generateImpl(std::string& path, const TypePtr& type);
+
+  TypePtr jsonType_;
+
+  std::vector<variant> mapKeys_;
+
+  size_t maxContainerLength_;
+
+  bool makeRandomVariation_;
 };
 
 } // namespace facebook::velox::fuzzer

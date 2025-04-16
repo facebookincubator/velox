@@ -22,6 +22,7 @@ add_library(
   AssertQueryBuilder.cpp
   ArbitratorTestUtil.cpp
   HiveConnectorTestBase.cpp
+  IndexLookupJoinTestBase.cpp
   LocalExchangeSource.cpp
   OperatorTestBase.cpp
   PlanBuilder.cpp
@@ -54,7 +55,6 @@ target_link_libraries(
   velox_tpch_connector
   velox_presto_serializer
   velox_functions_prestosql
-  velox_flag_definitions
   velox_aggregates)
 
 if(${VELOX_BUILD_RUNNER})

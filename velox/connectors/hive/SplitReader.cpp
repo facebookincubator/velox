@@ -84,6 +84,7 @@ std::unique_ptr<SplitReader> SplitReader::create(
     const std::shared_ptr<const HiveConfig>& hiveConfig,
     const RowTypePtr& readerOutputType,
     const std::shared_ptr<io::IoStatistics>& ioStats,
+    const std::shared_ptr<filesystems::File::IoStats>& fsStats,
     FileHandleFactory* fileHandleFactory,
     folly::Executor* executor,
     const std::shared_ptr<common::ScanSpec>& scanSpec) {
@@ -98,6 +99,7 @@ std::unique_ptr<SplitReader> SplitReader::create(
         hiveConfig,
         readerOutputType,
         ioStats,
+        fsStats,
         fileHandleFactory,
         executor,
         scanSpec);
@@ -110,6 +112,7 @@ std::unique_ptr<SplitReader> SplitReader::create(
         hiveConfig,
         readerOutputType,
         ioStats,
+        fsStats,
         fileHandleFactory,
         executor,
         scanSpec));
@@ -125,6 +128,7 @@ SplitReader::SplitReader(
     const std::shared_ptr<const HiveConfig>& hiveConfig,
     const RowTypePtr& readerOutputType,
     const std::shared_ptr<io::IoStatistics>& ioStats,
+    const std::shared_ptr<filesystems::File::IoStats>& fsStats,
     FileHandleFactory* fileHandleFactory,
     folly::Executor* executor,
     const std::shared_ptr<common::ScanSpec>& scanSpec)
@@ -135,6 +139,7 @@ SplitReader::SplitReader(
       hiveConfig_(hiveConfig),
       readerOutputType_(readerOutputType),
       ioStats_(ioStats),
+      fsStats_(fsStats),
       fileHandleFactory_(fileHandleFactory),
       executor_(executor),
       pool_(connectorQueryCtx->memoryPool()),
@@ -244,8 +249,8 @@ void SplitReader::createReader() {
   try {
     fileHandleCachePtr = fileHandleFactory_->generate(
         hiveSplit_->filePath,
-        hiveSplit_->properties.has_value() ? &*hiveSplit_->properties
-                                           : nullptr);
+        hiveSplit_->properties.has_value() ? &*hiveSplit_->properties : nullptr,
+        fsStats_ ? fsStats_.get() : nullptr);
     VELOX_CHECK_NOT_NULL(fileHandleCachePtr.get());
   } catch (const VeloxRuntimeError& e) {
     if (e.errorCode() == error_code::kFileNotFound &&
@@ -269,6 +274,7 @@ void SplitReader::createReader() {
       baseReaderOpts_,
       connectorQueryCtx_,
       ioStats_,
+      fsStats_,
       executor_);
 
   baseReader_ = dwio::common::getReaderFactory(baseReaderOpts_.fileFormat())
@@ -289,7 +295,10 @@ bool SplitReader::filterOnStats(
           baseReader_.get(),
           hiveSplit_->filePath,
           hiveSplit_->partitionKeys,
-          *partitionKeys_)) {
+          *partitionKeys_,
+          hiveConfig_->readTimestampPartitionValueAsLocalTime(
+              connectorQueryCtx_->sessionProperties()))) {
+    ++runtimeStats.processedSplits;
     return true;
   }
   ++runtimeStats.skippedSplits;

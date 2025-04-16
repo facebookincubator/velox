@@ -120,6 +120,12 @@ class HiveConfig {
   /// Maximum number of entries in the file handle cache.
   static constexpr const char* kNumCacheFileHandles = "num_cached_file_handles";
 
+  /// Expiration time in ms for a file handle in the cache. A value of 0
+  /// means cache will not evict the handle after kFileHandleExprationDurationMs
+  /// has passed.
+  static constexpr const char* kFileHandleExpirationDurationMs =
+      "file-handle-expiration-duration-ms";
+
   /// Enable file handle cache.
   static constexpr const char* kEnableFileHandleCache =
       "file-handle-cache-enabled";
@@ -170,9 +176,9 @@ class HiveConfig {
       "hive.reader.timestamp_partition_value_as_local_time";
 
   static constexpr const char* kReadStatsBasedFilterReorderDisabled =
-      "hive.reader.stats-based-filter-reorder-disabled";
+      "stats-based-filter-reorder-disabled";
   static constexpr const char* kReadStatsBasedFilterReorderDisabledSession =
-      "hive.reader.stats_based_filter_reorder_disabled";
+      "stats_based_filter_reorder_disabled";
 
   static constexpr const char* kLocalDataPath = "hive_local_data_path";
   static constexpr const char* kLocalFileFormat = "hive_local_file_format";
@@ -214,6 +220,8 @@ class HiveConfig {
   int32_t loadQuantum(const config::ConfigBase* session) const;
 
   int32_t numCacheFileHandles() const;
+
+  uint64_t fileHandleExpirationDurationMs() const;
 
   bool isFileHandleCacheEnabled() const;
 

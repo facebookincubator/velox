@@ -142,7 +142,6 @@ HiveDataSource::HiveDataSource(
     randomSkip_ = std::make_shared<random::RandomSkipTracker>(sampleRate);
   }
 
-  std::vector<common::Subfield> remainingFilterSubfields;
   if (remainingFilter) {
     remainingFilterExprSet_ = expressionEvaluator_->compile(remainingFilter);
     auto& remainingFilterExpr = remainingFilterExprSet_->expr(0);
@@ -164,13 +163,13 @@ HiveDataSource::HiveDataSource(
       readColumnNames.push_back(input->field());
       readColumnTypes.push_back(input->type());
     }
-    remainingFilterSubfields = remainingFilterExpr->extractSubfields();
+    remainingFilterSubfields_ = remainingFilterExpr->extractSubfields();
     if (VLOG_IS_ON(1)) {
       VLOG(1) << fmt::format(
           "Extracted subfields from remaining filter: [{}]",
-          fmt::join(remainingFilterSubfields, ", "));
+          fmt::join(remainingFilterSubfields_, ", "));
     }
-    for (auto& subfield : remainingFilterSubfields) {
+    for (auto& subfield : remainingFilterSubfields_) {
       const auto& name = getColumnName(subfield);
       auto it = subfields_.find(name);
       if (it != subfields_.end()) {
@@ -204,6 +203,7 @@ HiveDataSource::HiveDataSource(
   }
 
   ioStats_ = std::make_shared<io::IoStatistics>();
+  fsStats_ = std::make_shared<filesystems::File::IoStats>();
 }
 
 std::unique_ptr<SplitReader> HiveDataSource::createSplitReader() {
@@ -215,6 +215,7 @@ std::unique_ptr<SplitReader> HiveDataSource::createSplitReader() {
       hiveConfig_,
       readerOutputType_,
       ioStats_,
+      fsStats_,
       fileHandleFactory_,
       executor_,
       scanSpec_);
@@ -519,7 +520,9 @@ std::unordered_map<std::string, RuntimeCounter> HiveDataSource::runtimeStats() {
   if (numBucketConversion_ > 0) {
     res.insert({"numBucketConversion", RuntimeCounter(numBucketConversion_)});
   }
-  for (const auto& storageStats : ioStats_->storageStats()) {
+
+  const auto fsStats = fsStats_->stats();
+  for (const auto& storageStats : fsStats) {
     res.emplace(
         storageStats.first,
         RuntimeCounter(storageStats.second.sum, storageStats.second.unit));
@@ -534,6 +537,7 @@ void HiveDataSource::setFromDataSource(
 
   split_ = std::move(source->split_);
   runtimeStats_.skippedSplits += source->runtimeStats_.skippedSplits;
+  runtimeStats_.processedSplits += source->runtimeStats_.processedSplits;
   runtimeStats_.skippedSplitBytes += source->runtimeStats_.skippedSplitBytes;
   readerOutputType_ = std::move(source->readerOutputType_);
   source->scanSpec_->moveAdaptationFrom(*scanSpec_);
@@ -544,6 +548,9 @@ void HiveDataSource::setFromDataSource(
   // balance to that.
   source->ioStats_->merge(*ioStats_);
   ioStats_ = std::move(source->ioStats_);
+  source->fsStats_->merge(*fsStats_);
+  fsStats_ = std::move(source->fsStats_);
+
   numBucketConversion_ += source->numBucketConversion_;
   partitionFunction_ = std::move(source->partitionFunction_);
 }

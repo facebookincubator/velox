@@ -15,6 +15,15 @@ Array Functions
 
         SELECT array(1, 2, 3); -- [1,2,3]
 
+.. spark:function:: array_append(array(E), element) -> array(E)
+
+    Add the ``element`` at the end of the input ``array``.
+    Type of ``element`` should be the same to the type of elements in the ``array``.
+    NULL element is also appended into the ``array``. Returns NULL when the input ``array`` is NULL. ::
+
+        SELECT array_append(array(1, 2, 3), 2); -- [1, 2, 3, 2]
+        SELECT array_append(array(1, 2, 3), NULL); -- [1, 2, 3, NULL]
+
 .. spark:function:: array_contains(array(E), value) -> boolean
 
     Returns true if the array contains the value. ::
@@ -85,19 +94,25 @@ Array Functions
         SELECT array_max(array(-1, -2, NULL)); -- -1
         SELECT array_max(array()); -- NULL
         SELECT array_max(array(-0.0001, -0.0002, -0.0003, float('nan'))); -- NaN
+        SELECT array_max(array(array(1), array(NULL))); -- array(1)
+        SELECT array_max(array(array(1), array(2, 1), array(2))); -- array(2, 1)
+        SELECT array_max(array(array(1.0), array(1.0, 2.0), array(cast('NaN' as double)))); --array(NaN)
 
 .. spark:function:: array_min(array(E)) -> E
 
     Returns minimum non-NULL element of the array. Returns NULL if array is empty or all elements are NULL.
     When E is DOUBLE or REAL, NaN value is considered greater than any non-NaN value. ::
 
-        SELECT array_min(array(1, 2, 3）); -- 1
-        SELECT array_min(array(-1, -2, -2）); -- -2
+        SELECT array_min(array(1, 2, 3)); -- 1
+        SELECT array_min(array(-1, -2, -2)); -- -2
         SELECT array_min(array(-1, -2, NULL)); -- -2
         SELECT array_min(array(NULL, NULL)); -- NULL
         SELECT array_min(array()); -- NULL
-        SELECT array_min(array(4.0, float('nan')]); -- 4.0
+        SELECT array_min(array(4.0, float('nan'))); -- 4.0
         SELECT array_min(array(NULL, float('nan'))); -- NaN
+        SELECT array_min(array(array(1), array(NULL))); -- array(NULL)
+        SELECT array_min(array(array(1), array(1, 2), array(2))); -- array(1)
+        SELECT array_min(array(array(1.0), array(1.0, 2.0), array(cast('NaN' as double)))); --array(1.0)
 
 .. spark:function:: array_position(x, element) -> bigint
 
@@ -142,6 +157,15 @@ Array Functions
         SELECT array_sort(array(NULL, 1, NULL)); -- [1, NULL, NULL]
         SELECT array_sort(array(NULL, 2, 1)); -- [1, 2, NULL]
 
+.. spark:function:: array_union(array(E) x, array(E) y) -> array(E)
+    Returns an array of the elements in the union of ``x`` and ``y``, without duplicates. ::
+
+        SELECT array_union(array(1, 2, 3), array(1, 3, 5)); -- [1, 2, 3, 5]
+        SELECT array_union(array(1, 3, 5), array(1, 2, 3)); -- [1, 3, 5, 2]
+        SELECT array_union(array(1, 2, 3), array(1, 3, 5, null)); -- [1, 2, 3, 5, null]
+        SELECT array_union(array(1, 2, float('nan')), array(1, 3, float('nan'))); -- [1, 2, NaN, 3]
+        SELECT array_union(array(array(1)), array(array(null))); -- [[1], [null]]
+
 .. spark::function:: arrays_zip(array(T), array(U),..) -> array(row(T,U, ...))
 
     Returns the merge of the given arrays, element-wise into a single array of rows.
@@ -150,11 +174,16 @@ Array Functions
 
         SELECT arrays_zip(ARRAY[1, 2], ARRAY['1b', null, '3b']); -- [ROW(1, '1b'), ROW(2, null), ROW(null, '3b')]
 
-.. spark:function:: concat(array(E), array(E1), ..., array(En)) -> array(E, E1, ..., En)
+.. spark:function:: concat(array1, array2, ..., arrayN) -> array
 
-    Returns the concatenation of array(E), array(E1), ..., array(En). ::
+    Concatenates the arrays ``array1``, ``array2``, ..., ``arrayN``. All parameters have the same type.
+    This function provides the same functionality as the SQL-standard concatenation operator (``||``).
+    Fails if the result array size exceeds INT_MAX - 15. ::
 
         SELECT concat(array(1, 2, 3), array(4, 5), array(6)); -- [1, 2, 3, 4, 5, 6]
+        SELECT concat(array(1, 2, 3), null); -- NULL
+        SELECT concat(array(1, 2), array(1, 2), array(1, null)); -- [1, 2, 1, 2, 1, NULL]
+        SELECT concat(array(array(1, 2)), array(array(1, null))); -- [[1, 2], [1, NULL]]
 
 .. spark:function:: exists(array(T), function(T, boolean)) → boolean
 

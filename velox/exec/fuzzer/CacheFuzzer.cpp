@@ -17,9 +17,8 @@
 #include "velox/exec/fuzzer/CacheFuzzer.h"
 
 #include <boost/random/uniform_int_distribution.hpp>
-
 #include <folly/executors/IOThreadPoolExecutor.h>
-#include <gtest/gtest.h>
+
 #include "velox/common/caching/FileIds.h"
 #include "velox/common/caching/SsdCache.h"
 #include "velox/common/file/FileSystems.h"
@@ -67,6 +66,8 @@ DEFINE_int32(
     -1,
     "Number of SSD cache shards. When set to -1, a random value from 1 to 4 will be used, inclusively.");
 
+DECLARE_bool(velox_ssd_odirect);
+
 DEFINE_int64(
     ssd_checkpoint_interval_bytes,
     -1,
@@ -86,7 +87,7 @@ using namespace facebook::velox::cache;
 using namespace facebook::velox::dwio::common;
 using namespace facebook::velox::tests::utils;
 
-namespace facebook::velox::exec::test {
+namespace facebook::velox::exec {
 namespace {
 
 class CacheFuzzer {
@@ -168,7 +169,6 @@ class CacheFuzzer {
   int32_t lastNumSsdCacheShards_;
   int64_t lastSsdCheckpointIntervalBytes_;
   bool lastEnableChecksum_;
-  bool lastEnableChecksumReadVerification_;
 };
 
 template <typename T>
@@ -374,6 +374,7 @@ void CacheFuzzer::initializeInputs() {
   auto tracker = std::make_shared<ScanTracker>(
       "testTracker", nullptr, 256 << 10 /*256KB*/);
   auto ioStats = std::make_shared<IoStatistics>();
+  auto fsStats = std::make_shared<filesystems::File::IoStats>();
   inputs_.reserve(FLAGS_num_source_files);
   for (auto i = 0; i < FLAGS_num_source_files; ++i) {
     // Initialize buffered input.
@@ -387,6 +388,7 @@ void CacheFuzzer::initializeInputs() {
         tracker,
         fileIds_[i].id(), // NOLINT
         ioStats,
+        fsStats,
         withExecutor ? executor_.get() : nullptr,
         readOptions));
 
@@ -474,7 +476,7 @@ void CacheFuzzer::read(uint32_t fileIdx, int32_t fragmentIdx) {
           // Verify read content.
           const auto* data = reinterpret_cast<const uint8_t*>(buffer);
           for (int32_t sequence = 0; sequence < size; ++sequence) {
-            ASSERT_EQ(data[sequence], (offset + numRead + sequence) % 256);
+            VELOX_CHECK_EQ(data[sequence], (offset + numRead + sequence) % 256);
           }
         }
         numRead += size;
@@ -489,7 +491,7 @@ void CacheFuzzer::read(uint32_t fileIdx, int32_t fragmentIdx) {
       }
     }
   }
-  ASSERT_EQ(numRead, length);
+  VELOX_CHECK_EQ(numRead, length);
 }
 
 void CacheFuzzer::go() {
@@ -502,7 +504,7 @@ void CacheFuzzer::go() {
   // filesystem and kernel version.
   //
   // TODO: add this support if needed later.
-  FLAGS_ssd_odirect = false;
+  FLAGS_velox_ssd_odirect = false;
   auto startTime = std::chrono::system_clock::now();
   size_t iteration = 0;
 
@@ -548,4 +550,4 @@ void cacheFuzzer(size_t seed) {
   auto cacheFuzzer = CacheFuzzer(seed);
   cacheFuzzer.go();
 }
-} // namespace facebook::velox::exec::test
+} // namespace facebook::velox::exec

@@ -79,6 +79,8 @@ option(
 option(VELOX_MONO_LIBRARY "Build single unified library." OFF)
 option(ENABLE_ALL_WARNINGS "Enable -Wall and -Wextra compiler warnings." ON)
 option(VELOX_BUILD_SHARED "Build Velox as shared libraries." OFF)
+option(VELOX_SKIP_WAVE_BRANCH_KERNEL_TEST "Disable Wave branch kernel test."
+       OFF)
 # While it's possible to build both in one go we currently want to build either
 # static or shared.
 cmake_dependent_option(
@@ -138,12 +140,15 @@ option(VELOX_ENABLE_ABFS "Build Abfs Connector" OFF)
 option(VELOX_ENABLE_HDFS "Build Hdfs Connector" OFF)
 option(VELOX_ENABLE_PARQUET "Enable Parquet support" ON)
 option(VELOX_ENABLE_ARROW "Enable Arrow support" OFF)
+option(VELOX_ENABLE_GEO "Enable Geospatial support" OFF)
 option(VELOX_ENABLE_REMOTE_FUNCTIONS "Enable remote function support" OFF)
 option(VELOX_ENABLE_CCACHE "Use ccache if installed." ON)
+option(VELOX_ENABLE_COMPRESSION_LZ4 "Enable Lz4 compression support." OFF)
 
 option(VELOX_BUILD_TEST_UTILS "Builds Velox test utilities" OFF)
 option(VELOX_BUILD_VECTOR_TEST_UTILS "Builds Velox vector test utilities" OFF)
 option(VELOX_BUILD_PYTHON_PACKAGE "Builds Velox Python bindings" OFF)
+option(VELOX_PYTHON_LEGACY_ONLY "Build only the pyvelox module" OFF)
 option(VELOX_BUILD_RUNNER "Builds velox runner" ON)
 option(
   VELOX_ENABLE_INT64_BUILD_PARTITION_BOUND
@@ -190,6 +195,12 @@ if(VELOX_BUILD_TESTING OR VELOX_BUILD_TEST_UTILS)
   set(VELOX_ENABLE_PARSE ON)
 endif()
 
+if(${VELOX_BUILD_TESTING}
+   OR ${VELOX_BUILD_MINIMAL_WITH_DWIO}
+   OR ${VELOX_ENABLE_HIVE_CONNECTOR})
+  set(VELOX_ENABLE_COMPRESSION_LZ4 ON)
+endif()
+
 if(${VELOX_ENABLE_EXAMPLES})
   set(VELOX_ENABLE_EXPRESSION ON)
 endif()
@@ -202,7 +213,11 @@ if(${VELOX_BUILD_PYTHON_PACKAGE})
   set(VELOX_ENABLE_EXEC ON)
   set(VELOX_ENABLE_AGGREGATES ON)
   set(VELOX_ENABLE_SPARK_FUNCTIONS ON)
-  set(VELOX_BUILD_RUNNER OFF)
+
+  if(NOT VELOX_PYTHON_LEGACY_ONLY)
+    set(VELOX_BUILD_RUNNER OFF)
+    set(VELOX_BUILD_TEST_UTILS ON) # required for velox_exec_test_lib
+  endif()
 endif()
 
 if(${VELOX_ENABLE_DUCKDB})
@@ -369,8 +384,6 @@ if(ENABLE_ALL_WARNINGS)
   set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wall -Wextra ${KNOWN_WARNINGS}")
 endif()
 
-message("FINAL CMAKE_CXX_FLAGS=${CMAKE_CXX_FLAGS}")
-
 if(${VELOX_ENABLE_GPU})
   enable_language(CUDA)
   # Determine CUDA_ARCHITECTURES automatically.
@@ -457,12 +470,15 @@ velox_resolve_dependency(glog)
 velox_set_source(fmt)
 velox_resolve_dependency(fmt 9.0.0)
 
+if(VELOX_ENABLE_COMPRESSION_LZ4)
+  find_package(lz4 REQUIRED)
+endif()
+
 if(${VELOX_BUILD_MINIMAL_WITH_DWIO} OR ${VELOX_ENABLE_HIVE_CONNECTOR})
   # DWIO needs all sorts of stream compression libraries.
   #
   # TODO: make these optional and pluggable.
   find_package(ZLIB REQUIRED)
-  find_package(lz4 REQUIRED)
   find_package(lzo2 REQUIRED)
   find_package(zstd REQUIRED)
   find_package(Snappy REQUIRED)
@@ -480,9 +496,12 @@ velox_set_source(re2)
 velox_resolve_dependency(re2)
 
 if(${VELOX_BUILD_PYTHON_PACKAGE})
+  find_package(
+    Python 3.9
+    COMPONENTS Interpreter Development.Module
+    REQUIRED)
   velox_set_source(pybind11)
   velox_resolve_dependency(pybind11 2.10.0)
-  add_subdirectory(pyvelox)
 endif()
 
 # DWIO (ORC/DWRF) and Substrait depend on protobuf.
@@ -493,7 +512,7 @@ if(${VELOX_BUILD_MINIMAL_WITH_DWIO}
 
   # Locate or build protobuf.
   velox_set_source(Protobuf)
-  velox_resolve_dependency(Protobuf CONFIG 3.21.7 REQUIRED)
+  velox_resolve_dependency(Protobuf 3.21.7 REQUIRED)
   include_directories(${Protobuf_INCLUDE_DIRS})
 endif()
 
@@ -594,7 +613,7 @@ if(NOT VELOX_DISABLE_GOOGLETEST)
   velox_set_source(GTest)
   velox_resolve_dependency(GTest)
   set(VELOX_GTEST_INCUDE_DIR
-      "${gtest_SOURCE_DIR}/googletest/include"
+      "${gtest_SOURCE_DIR}/include"
       PARENT_SCOPE)
 endif()
 
@@ -621,9 +640,16 @@ if("${TREAT_WARNINGS_AS_ERRORS}")
   set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Werror")
 endif()
 
+message("FINAL CMAKE_CXX_FLAGS=${CMAKE_CXX_FLAGS}")
+
 if(VELOX_ENABLE_ARROW)
   velox_set_source(Arrow)
   velox_resolve_dependency(Arrow)
+endif()
+
+if(VELOX_ENABLE_GEO)
+  velox_set_source(geos)
+  velox_resolve_dependency(geos)
 endif()
 
 add_subdirectory(velox)

@@ -18,7 +18,7 @@
 #include <xxhash.h>
 
 #include "velox/common/base/tests/GTestUtils.h"
-#include "velox/external/date/tz.h"
+#include "velox/external/tzdb/zoned_time.h"
 #include "velox/functions/prestosql/tests/utils/FunctionBaseTest.h"
 #include "velox/functions/prestosql/types/TimestampWithTimeZoneType.h"
 #include "velox/type/tz/TimeZoneMap.h"
@@ -150,9 +150,9 @@ class DateTimeFunctionsTest : public functions::test::FunctionBaseTest {
     return parseDate(date::format(
         "%Y-%m-%d",
         timeZone.has_value()
-            ? date::make_zoned(
+            ? tzdb::zoned_time(
                   timeZone.value(), std::chrono::system_clock::now())
-            : std::chrono::system_clock::now()));
+            : tzdb::zoned_time(std::chrono::system_clock::now())));
   }
 };
 
@@ -308,6 +308,28 @@ TEST_F(DateTimeFunctionsTest, fromUnixtimeWithTimeZone) {
   EXPECT_EQ(
       fromUnixtime(1.7300479933495E9, "America/Costa_Rica"),
       TimestampWithTimezone(1730047993350, "America/Costa_Rica"));
+
+  // Maximum timestamp.
+  EXPECT_EQ(
+      fromUnixtime(2251799813685.247, "GMT"),
+      TimestampWithTimezone(2251799813685247, "GMT"));
+  EXPECT_EQ(
+      fromUnixtime(2251799813685.247, "America/Costa_Rica"),
+      TimestampWithTimezone(2251799813685247, "America/Costa_Rica"));
+  // Minimum timestamp.
+  EXPECT_EQ(
+      fromUnixtime(-2251799813685.248, "GMT"),
+      TimestampWithTimezone(-2251799813685248, "GMT"));
+  EXPECT_EQ(
+      fromUnixtime(-2251799813685.248, "America/Costa_Rica"),
+      TimestampWithTimezone(-2251799813685248, "America/Costa_Rica"));
+
+  // Test overflow in either direction.
+  VELOX_ASSERT_THROW(
+      fromUnixtime(2251799813685.248, "GMT"), "TimestampWithTimeZone overflow");
+  VELOX_ASSERT_THROW(
+      fromUnixtime(-2251799813685.249, "GMT"),
+      "TimestampWithTimeZone overflow");
 }
 
 TEST_F(DateTimeFunctionsTest, fromUnixtimeTzOffset) {
@@ -2686,20 +2708,20 @@ TEST_F(DateTimeFunctionsTest, dateDiffTimestamp) {
 
   // Check for integer overflow when result unit is month or larger.
   EXPECT_EQ(
-      -622191233,
+      106751991167,
       dateDiff("day", Timestamp(0, 0), Timestamp(9223372036854775, 0)));
   EXPECT_EQ(
-      -88884461,
+      15250284452,
       dateDiff("week", Timestamp(0, 0), Timestamp(9223372036854775, 0)));
-  VELOX_ASSERT_THROW(
-      dateDiff("month", Timestamp(0, 0), Timestamp(9223372036854775, 0)),
-      "Causes arithmetic overflow:");
-  VELOX_ASSERT_THROW(
-      dateDiff("quarter", Timestamp(0, 0), Timestamp(9223372036854775, 0)),
-      "Causes arithmetic overflow:");
-  VELOX_ASSERT_THROW(
-      dateDiff("year", Timestamp(0, 0), Timestamp(9223372036854775, 0)),
-      "Causes arithmetic overflow:");
+  EXPECT_EQ(
+      3507324295,
+      dateDiff("month", Timestamp(0, 0), Timestamp(9223372036854775, 0)));
+  EXPECT_EQ(
+      1169108098,
+      dateDiff("quarter", Timestamp(0, 0), Timestamp(9223372036854775, 0)));
+  EXPECT_EQ(
+      292277024,
+      dateDiff("year", Timestamp(0, 0), Timestamp(9223372036854775, 0)));
 
   // Simple tests
   EXPECT_EQ(
@@ -3370,6 +3392,18 @@ TEST_F(DateTimeFunctionsTest, parseDatetime) {
       TimestampWithTimezone(1708840800000, "GMT"),
       parseDatetime("GMT/2024-02-25+06:00:99", "ZZZ/yyyy-MM-dd+HH:mm:99"));
 
+  // Maximum timestamp.
+  EXPECT_EQ(
+      TimestampWithTimezone(2251799813685247, "UTC"),
+      parseDatetime(
+          "73326/09/11 20:14:45.247 UTC", "yyyy/MM/dd HH:mm:ss.SSS ZZZ"));
+
+  // Minimum timestamp.
+  EXPECT_EQ(
+      TimestampWithTimezone(-2251799813685248, "UTC"),
+      parseDatetime(
+          "-69387/04/22 03:45:14.752 UCT", "yyyy/MM/dd HH:mm:ss.SSS ZZZ"));
+
   // Test an invalid time zone without a prefix. (zzz should be used to match
   // abbreviations)
   VELOX_ASSERT_THROW(
@@ -3397,6 +3431,16 @@ TEST_F(DateTimeFunctionsTest, parseDatetime) {
           "2024-02-25+06:00:99 Pacific Standard Time",
           "yyyy-MM-dd+HH:mm:99 zzzzzzzzzz"),
       "Parsing time zone long names is not supported.");
+
+  // Test overflow in either direction.
+  VELOX_ASSERT_THROW(
+      parseDatetime(
+          "73326/09/11 20:14:45.248 UTC", "yyyy/MM/dd HH:mm:ss.SSS ZZZ"),
+      "TimestampWithTimeZone overflow");
+  VELOX_ASSERT_THROW(
+      parseDatetime(
+          "-69387/04/22 03:45:14.751 UTC", "yyyy/MM/dd HH:mm:ss.SSS ZZZ"),
+      "TimestampWithTimeZone overflow");
 }
 
 TEST_F(DateTimeFunctionsTest, formatDateTime) {
@@ -3630,6 +3674,32 @@ TEST_F(DateTimeFunctionsTest, formatDateTime) {
   EXPECT_EQ(
       "0010",
       formatDatetime(parseTimestamp("2022-01-01 03:30:30.001"), "SSSS"));
+
+  // Test the max and min years are formatted correctly.
+  EXPECT_EQ(
+      "2922789",
+      formatDatetime(parseTimestamp("292278993-12-31 23:59:59.999"), "C"));
+  EXPECT_EQ(
+      "292278993",
+      formatDatetime(parseTimestamp("292278993-12-31 23:59:59.999"), "YYYY"));
+  EXPECT_EQ(
+      "292278993",
+      formatDatetime(parseTimestamp("292278993-12-31 23:59:59.999"), "xxxx"));
+  EXPECT_EQ(
+      "292278993",
+      formatDatetime(parseTimestamp("292278993-12-31 23:59:59.999"), "yyyy"));
+  EXPECT_EQ(
+      "2922750",
+      formatDatetime(parseTimestamp("-292275054-01-01 00:00:00.000"), "C"));
+  EXPECT_EQ(
+      "292275055",
+      formatDatetime(parseTimestamp("-292275054-01-01 00:00:00.000"), "YYYY"));
+  EXPECT_EQ(
+      "-292275054",
+      formatDatetime(parseTimestamp("-292275054-01-01 00:00:00.000"), "xxxx"));
+  EXPECT_EQ(
+      "-292275054",
+      formatDatetime(parseTimestamp("-292275054-01-01 00:00:00.000"), "yyyy"));
 
   // Time zone test cases - 'Z'
   setQueryTimeZone("Asia/Kolkata");
@@ -4236,6 +4306,16 @@ TEST_F(DateTimeFunctionsTest, fromIso8601Timestamp) {
 
   EXPECT_EQ(TimestampWithTimezone(millis, "UTC"), fromIso(ts));
 
+  // Maximum timestamp.
+  EXPECT_EQ(
+      TimestampWithTimezone(2251799813685247, "UTC"),
+      fromIso("73326-09-11T20:14:45.247"));
+
+  // Minimum timestamp.
+  EXPECT_EQ(
+      TimestampWithTimezone(-2251799813685248, "UTC"),
+      fromIso("-69387-04-22T03:45:14.752"));
+
   // Partial strings with different session time zones.
   struct {
     const tz::TimeZone* timezone;
@@ -4417,6 +4497,13 @@ TEST_F(DateTimeFunctionsTest, fromIso8601Timestamp) {
   VELOX_ASSERT_THROW(
       fromIso("1970-01-02 "),
       R"(Unable to parse timestamp value: "1970-01-02 ")");
+
+  // Test overflow in either direction.
+  setQueryTimeZone("UTC");
+  VELOX_ASSERT_THROW(
+      fromIso("73326-09-11T20:14:45.248"), "TimestampWithTimeZone overflow");
+  VELOX_ASSERT_THROW(
+      fromIso("-69387-04-22T03:45:14.751"), "TimestampWithTimeZone overflow");
 }
 
 TEST_F(DateTimeFunctionsTest, dateParseMonthOfYearText) {
@@ -4529,6 +4616,12 @@ TEST_F(DateTimeFunctionsTest, dateParse) {
   // 05:30:00.000 UTC.
   EXPECT_EQ(
       Timestamp(-66600, 0), dateParse("1969-12-31+11:00", "%Y-%m-%d+%H:%i"));
+
+  setQueryTimeZone("America/Los_Angeles");
+  // Tests if it uses weekdateformat if %v not present but %a is present.
+  EXPECT_EQ(
+      Timestamp(1730707200, 0),
+      dateParse("04-Nov-2024 (Mon)", "%d-%b-%Y (%a)"));
 
   VELOX_ASSERT_THROW(dateParse("", "%y+"), "Invalid date format: ''");
   VELOX_ASSERT_THROW(dateParse("1", "%y+"), "Invalid date format: '1'");
@@ -4760,18 +4853,9 @@ TEST_F(DateTimeFunctionsTest, castDateForDateFunction) {
       castDateTest(Timestamp(
           -18297 * kSecondsInDay + kSecondsInDay - 1, kNanosInSecond - 1)));
 
-  // Trying to convert a very large timestamp should fail as velox/external/date
-  // can't convert past year 2037. Note that the correct result here should be
-  // 376358 ('3000-06-08'), and not 376357 ('3000-06-07').
-  VELOX_ASSERT_THROW(
-      castDateTest(Timestamp(32517359891, 0)), "Unable to convert timezone");
-
-  // Ensure timezone conversion failures leak through try().
-  const auto tryTest = [&](std::optional<Timestamp> timestamp) {
-    return evaluateOnce<int32_t>("try(cast(c0 as date))", timestamp);
-  };
-  VELOX_ASSERT_RUNTIME_THROW(
-      tryTest(Timestamp(32517359891, 0)), "Unable to convert timezone");
+  // Timestamps in the distant future in different DST time zones.
+  EXPECT_EQ(376358, castDateTest(Timestamp(32517359891, 0)));
+  EXPECT_EQ(376231, castDateTest(Timestamp(32506387200, 0)));
 }
 
 TEST_F(DateTimeFunctionsTest, currentDateWithTimezone) {
@@ -5078,20 +5162,19 @@ TEST_F(DateTimeFunctionsTest, lastDayOfMonthTimestampWithTimezone) {
 }
 
 TEST_F(DateTimeFunctionsTest, fromUnixtimeDouble) {
-  auto input = makeFlatVector<double>({
-      1623748302.,
-      1623748302.0,
-      1623748302.02,
-      1623748302.023,
-      1623748303.123,
-      1623748304.009,
-      1623748304.001,
-      1623748304.999,
-      1623748304.001290,
-      1623748304.001890,
-      1623748304.999390,
-      1623748304.999590,
-  });
+  auto input = makeFlatVector<double>(
+      {1623748302.,
+       1623748302.0,
+       1623748302.02,
+       1623748302.023,
+       1623748303.123,
+       1623748304.009,
+       1623748304.001,
+       1623748304.999,
+       1623748304.001290,
+       1623748304.001890,
+       1623748304.999390,
+       1623748304.999590});
   auto actual =
       evaluate("cast(from_unixtime(c0) as varchar)", makeRowVector({input}));
   auto expected = makeFlatVector<StringView>({
@@ -5294,4 +5377,81 @@ TEST_F(DateTimeFunctionsTest, xxHash64FunctionDate) {
   EXPECT_EQ(3856043376106280085, xxhash64(parseDate("9999-12-31")));
   // Y2K
   EXPECT_EQ(-7612541860844473816, xxhash64(parseDate("2000-01-01")));
+}
+
+TEST_F(DateTimeFunctionsTest, parseDuration) {
+  const auto parseDuration = [&](std::optional<std::string> amountUnit) {
+    return evaluateOnce<int64_t>(
+        "parse_duration(c0)", VARCHAR(), std::move(amountUnit));
+  };
+  // All units
+  int64_t expectedValue = 0;
+  EXPECT_EQ(expectedValue, parseDuration("5.8ns"));
+  expectedValue = 6;
+  EXPECT_EQ(expectedValue, parseDuration("5800000.3ns"));
+  expectedValue = 0;
+  EXPECT_EQ(expectedValue, parseDuration("5.8us"));
+  expectedValue = 5;
+  EXPECT_EQ(expectedValue, parseDuration("5400.3us"));
+  expectedValue = 43;
+  EXPECT_EQ(expectedValue, parseDuration("42.8ms"));
+  expectedValue = 5300;
+  EXPECT_EQ(expectedValue, parseDuration("5.3s"));
+  const int64_t hoursPerDay = 24;
+  const int64_t minutesPerHour = 60;
+  const int64_t secondsPerMinute = 60;
+  expectedValue = 5800 * secondsPerMinute;
+  EXPECT_EQ(expectedValue, parseDuration("5.8m"));
+  expectedValue = 5800 * minutesPerHour * secondsPerMinute;
+  EXPECT_EQ(expectedValue, parseDuration("5.8h"));
+  expectedValue = 3810 * hoursPerDay * minutesPerHour * secondsPerMinute;
+  EXPECT_EQ(expectedValue, parseDuration("3.81d"));
+  // Blank spaces
+  EXPECT_EQ(expectedValue, parseDuration(" 3.81d  "));
+  EXPECT_EQ(expectedValue, parseDuration("3.81  d"));
+  EXPECT_EQ(expectedValue, parseDuration(" 3.81  d  "));
+  // No point
+  expectedValue = 5000 * secondsPerMinute;
+  EXPECT_EQ(expectedValue, parseDuration("5m"));
+  // Too large
+  std::string maxDoubleValue =
+      std::to_string(std::numeric_limits<double>::max());
+  std::string tooLargeDuration = maxDoubleValue + "s";
+  VELOX_ASSERT_THROW(
+      parseDuration(tooLargeDuration),
+      "Value in s unit is too large to be represented in ms unit as an int64_t");
+  tooLargeDuration = maxDoubleValue + "ms";
+  VELOX_ASSERT_THROW(
+      parseDuration(tooLargeDuration),
+      "Value in ms unit is too large to be represented in ms unit as an int64_t");
+  std::string outOfRangeValue = "1" + maxDoubleValue;
+  std::string outOfRangeDuration = outOfRangeValue + "ms";
+  VELOX_ASSERT_THROW(
+      parseDuration(outOfRangeDuration),
+      "Input duration value is out of range for double: " + outOfRangeValue);
+  // Input format
+  VELOX_ASSERT_THROW(
+      parseDuration("ab.81d"),
+      "Input duration is not a valid data duration string: ab.81d");
+  VELOX_ASSERT_THROW(
+      parseDuration(".81d"),
+      "Input duration is not a valid data duration string: .81d");
+  VELOX_ASSERT_THROW(
+      parseDuration("3.abd"),
+      "Input duration is not a valid data duration string: 3.abd");
+  VELOX_ASSERT_THROW(
+      parseDuration("3.d"),
+      "Input duration is not a valid data duration string: 3.d");
+  VELOX_ASSERT_THROW(
+      parseDuration("3. d"),
+      "Input duration is not a valid data duration string: 3. d");
+  VELOX_ASSERT_THROW(
+      parseDuration("1.23e5ms"),
+      "Input duration is not a valid data duration string: 1.23e5ms");
+  VELOX_ASSERT_THROW(
+      parseDuration("1.23E5ms"),
+      "Input duration is not a valid data duration string: 1.23E5ms");
+  // Unit format
+  VELOX_ASSERT_THROW(parseDuration("3.81a"), "Unknown time unit: a");
+  VELOX_ASSERT_THROW(parseDuration("3.81as"), "Unknown time unit: as");
 }

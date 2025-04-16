@@ -17,12 +17,14 @@ add_executable(
   velox_vector_test
   CopyPreserveEncodingsTest.cpp
   DecodedVectorTest.cpp
+  EncodedVectorCopyTest.cpp
   EncodingTest.cpp
   EnsureWritableVectorTest.cpp
   IsWritableVectorTest.cpp
   LazyVectorTest.cpp
   MayHaveNullsRecursiveTest.cpp
   SelectivityVectorTest.cpp
+  StringVectorBufferTest.cpp
   VariantToVectorTest.cpp
   VectorCompareTest.cpp
   VectorEstimateFlatSizeTest.cpp
@@ -43,11 +45,13 @@ target_link_libraries(
   velox_vector_test_lib
   velox_buffer
   velox_vector
+  velox_vector_fuzzer
   velox_serialization
   velox_memory
   velox_presto_serializer
   velox_presto_types
   velox_temp_path
+  velox_test_util
   velox_type_test_lib
   velox_vector_fuzzer
   Boost::atomic
@@ -62,7 +66,6 @@ target_link_libraries(
   GTest::gtest_main
   GTest::gmock
   Folly::folly
-  gflags::gflags
   glog::glog
   fmt::fmt
   dl)
@@ -80,7 +83,6 @@ target_link_libraries(
   GTest::gtest
   GTest::gtest_main
   Folly::folly
-  gflags::gflags
   glog::glog
   fmt::fmt)
 
@@ -95,6 +97,5 @@ target_link_libraries(
   GTest::gtest
   GTest::gtest_main
   Folly::folly
-  gflags::gflags
   glog::glog
   fmt::fmt)

@@ -92,13 +92,15 @@ bool testFilters(
     const std::unordered_map<std::string, std::optional<std::string>>&
         partitionKey,
     const std::unordered_map<std::string, std::shared_ptr<HiveColumnHandle>>&
-        partitionKeysHandle);
+        partitionKeysHandle,
+    bool asLocalTime);
 
 std::unique_ptr<dwio::common::BufferedInput> createBufferedInput(
     const FileHandle& fileHandle,
     const dwio::common::ReaderOptions& readerOpts,
     const ConnectorQueryCtx* connectorQueryCtx,
     std::shared_ptr<io::IoStatistics> ioStats,
+    std::shared_ptr<filesystems::File::IoStats> fsStats,
     folly::Executor* executor);
 
 core::TypedExprPtr extractFiltersFromRemainingFilter(

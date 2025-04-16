@@ -189,6 +189,15 @@ class GroupingSet {
   // index for this aggregation), otherwise it returns reference to activeRows_.
   const SelectivityVector& getSelectivityVector(size_t aggregateIndex) const;
 
+  // Prepare spillResultWithoutAggregates_ for loading spilled data.
+  void prepareSpillResultWithoutAggregates(
+      int32_t maxOutputRows,
+      const RowVectorPtr& result);
+
+  // If prefixsort is enabled, loads the read data from
+  // spillResultWithoutAggregates_ into result.
+  void projectResult(const RowVectorPtr& result);
+
   // Checks if input will fit in the existing memory and increases reservation
   // if not. If reservation cannot be increased, spills enough to make 'input'
   // fit.
@@ -242,6 +251,9 @@ class GroupingSet {
       int32_t maxOutputRows,
       const RowVectorPtr& result);
 
+  // Returns the currently accummulated bytes of the unspill merge rows.
+  uint64_t mergeRowBytes() const;
+
   // Initializes a new row in 'mergeRows' with the keys from the
   // current element from 'stream'. Accumulators are left in the initial
   // state with no data accumulated. This is called each time a new
@@ -265,6 +277,10 @@ class GroupingSet {
   // 'mergeRows'. Used for producing a batch of results when aggregating spilled
   // groups.
   void extractSpillResult(const RowVectorPtr& result);
+
+  // Clears the merge results, including 'mergeRows_' and 'sortedAggregations_'
+  // if applicable.
+  void clearMergeRows();
 
   // Returns a list of accumulators for 'aggregates_', plus one more accumulator
   // for 'sortedAggregations_', and one for each 'distinctAggregations_'.  When
@@ -335,6 +351,12 @@ class GroupingSet {
 
   // First row in remainingInput_ that needs to be processed.
   vector_size_t firstRemainingRow_;
+
+  // In case of distinct aggregation without aggregates and the grouping key
+  // reordered, the spilled data is first loaded into
+  // 'spillResultWithoutAggregates_' and then reordered back and load to
+  // result.
+  RowVectorPtr spillResultWithoutAggregates_{nullptr};
 
   // The value of mayPushdown flag specified in addInput() for the
   // 'remainingInput_'.

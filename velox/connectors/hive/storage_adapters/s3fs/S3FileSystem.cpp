@@ -15,9 +15,11 @@
  */
 
 #include "velox/connectors/hive/storage_adapters/s3fs/S3FileSystem.h"
+#include "velox/common/base/StatsReporter.h"
 #include "velox/common/config/Config.h"
 #include "velox/common/file/File.h"
 #include "velox/connectors/hive/storage_adapters/s3fs/S3Config.h"
+#include "velox/connectors/hive/storage_adapters/s3fs/S3Counters.h"
 #include "velox/connectors/hive/storage_adapters/s3fs/S3Util.h"
 #include "velox/connectors/hive/storage_adapters/s3fs/S3WriteFile.h"
 #include "velox/dwio/common/DataBuffer.h"
@@ -71,6 +73,29 @@ Aws::IOStreamFactory AwsWriteableStreamFactory(void* data, int64_t nbytes) {
   return [=]() { return Aws::New<StringViewStream>("", data, nbytes); };
 }
 
+folly::Synchronized<
+    std::unordered_map<std::string, AWSCredentialsProviderFactory>>&
+credentialsProviderFactories() {
+  static folly::Synchronized<
+      std::unordered_map<std::string, AWSCredentialsProviderFactory>>
+      factories;
+  return factories;
+}
+
+std::shared_ptr<Aws::Auth::AWSCredentialsProvider> getCredentialsProviderByName(
+    const std::string& providerName,
+    const S3Config& s3Config) {
+  return credentialsProviderFactories().withRLock([&](const auto& factories) {
+    const auto it = factories.find(providerName);
+    VELOX_CHECK(
+        it != factories.end(),
+        "CredentialsProviderFactory for '{}' not registered",
+        providerName);
+    const auto& factory = it->second;
+    return factory(s3Config);
+  });
+}
+
 class S3ReadFile final : public ReadFile {
  public:
   S3ReadFile(std::string_view path, Aws::S3::S3Client* client)
@@ -96,7 +121,12 @@ class S3ReadFile final : public ReadFile {
     request.SetBucket(awsString(bucket_));
     request.SetKey(awsString(key_));
 
+    RECORD_METRIC_VALUE(kMetricS3MetadataCalls);
     auto outcome = client_->HeadObject(request);
+    if (!outcome.IsSuccess()) {
+      RECORD_METRIC_VALUE(kMetricS3GetMetadataErrors);
+    }
+    RECORD_METRIC_VALUE(kMetricS3GetMetadataRetries, outcome.GetRetryCount());
     VELOX_CHECK_AWS_OUTCOME(
         outcome, "Failed to get metadata for S3 object", bucket_, key_);
     length_ = outcome.GetResult().GetContentLength();
@@ -107,12 +137,12 @@ class S3ReadFile final : public ReadFile {
       uint64_t offset,
       uint64_t length,
       void* buffer,
-      io::IoStatistics* stats) const override {
+      File::IoStats* stats) const override {
     preadInternal(offset, length, static_cast<char*>(buffer));
     return {static_cast<char*>(buffer), length};
   }
 
-  std::string pread(uint64_t offset, uint64_t length, io::IoStatistics* stats)
+  std::string pread(uint64_t offset, uint64_t length, File::IoStats* stats)
       const override {
     std::string result(length, 0);
     char* position = result.data();
@@ -123,7 +153,7 @@ class S3ReadFile final : public ReadFile {
   uint64_t preadv(
       uint64_t offset,
       const std::vector<folly::Range<char*>>& buffers,
-      io::IoStatistics* stats) const override {
+      File::IoStats* stats) const override {
     // 'buffers' contains Ranges(data, size)  with some gaps (data = nullptr) in
     // between. This call must populate the ranges (except gap ranges)
     // sequentially starting from 'offset'. AWS S3 GetObject does not support
@@ -184,7 +214,14 @@ class S3ReadFile final : public ReadFile {
     request.SetRange(awsString(ss.str()));
     request.SetResponseStreamFactory(
         AwsWriteableStreamFactory(position, length));
+    RECORD_METRIC_VALUE(kMetricS3ActiveConnections);
+    RECORD_METRIC_VALUE(kMetricS3GetObjectCalls);
     auto outcome = client_->GetObject(request);
+    if (!outcome.IsSuccess()) {
+      RECORD_METRIC_VALUE(kMetricS3GetObjectErrors);
+    }
+    RECORD_METRIC_VALUE(kMetricS3GetObjectRetries, outcome.GetRetryCount());
+    RECORD_METRIC_VALUE(kMetricS3ActiveConnections, -1);
     VELOX_CHECK_AWS_OUTCOME(outcome, "Failed to get S3 object", bucket_, key_);
   }
 
@@ -252,7 +289,13 @@ class S3WriteFile::Impl {
       Aws::S3::Model::HeadObjectRequest request;
       request.SetBucket(awsString(bucket_));
       request.SetKey(awsString(key_));
+      RECORD_METRIC_VALUE(kMetricS3MetadataCalls);
       auto objectMetadata = client_->HeadObject(request);
+      if (!objectMetadata.IsSuccess()) {
+        RECORD_METRIC_VALUE(kMetricS3GetMetadataErrors);
+      }
+      RECORD_METRIC_VALUE(
+          kMetricS3GetObjectRetries, objectMetadata.GetRetryCount());
       VELOX_CHECK(!objectMetadata.IsSuccess(), "S3 object already exists");
     }
 
@@ -320,6 +363,7 @@ class S3WriteFile::Impl {
     if (closed()) {
       return;
     }
+    RECORD_METRIC_VALUE(kMetricS3StartedUploads);
     uploadPart({currentPart_->data(), currentPart_->size()}, true);
     VELOX_CHECK_EQ(uploadState_.partNumber, uploadState_.completedParts.size());
     // Complete the multipart upload.
@@ -333,6 +377,11 @@ class S3WriteFile::Impl {
       request.SetMultipartUpload(std::move(completedUpload));
 
       auto outcome = client_->CompleteMultipartUpload(request);
+      if (outcome.IsSuccess()) {
+        RECORD_METRIC_VALUE(kMetricS3SuccessfulUploads);
+      } else {
+        RECORD_METRIC_VALUE(kMetricS3FailedUploads);
+      }
       VELOX_CHECK_AWS_OUTCOME(
           outcome, "Failed to complete multiple part upload", bucket_, key_);
     }
@@ -467,19 +516,21 @@ struct AwsInstance {
   }
 
   // Returns true iff the instance was newly initialized with config.
-  bool initialize(std::string_view logLevel) {
+  bool initialize(
+      std::string_view logLevel,
+      std::optional<std::string_view> logLocation) {
     if (isFinalized_.load()) {
       VELOX_FAIL("Attempt to initialize S3 after it has been finalized.");
     }
     if (!isInitialized_.exchange(true)) {
       // Not already initialized.
-      doInitialize(logLevel);
+      doInitialize(logLevel, logLocation);
       return true;
     }
     return false;
   }
 
-  bool isInitialized() {
+  bool isInitialized() const {
     return !isFinalized_ && isInitialized_;
   }
 
@@ -499,14 +550,29 @@ struct AwsInstance {
     }
   }
 
-  std::string getLogLevelName() {
+  std::string getLogLevelName() const {
     return Aws::Utils::Logging::GetLogLevelName(
         awsOptions_.loggingOptions.logLevel);
   }
 
+  std::string getLogPrefix() const {
+    return logPrefix_;
+  }
+
  private:
-  void doInitialize(std::string_view logLevel) {
+  void doInitialize(
+      std::string_view logLevel,
+      std::optional<std::string_view> logLocation) {
     awsOptions_.loggingOptions.logLevel = inferS3LogLevel(logLevel);
+    if (logLocation.has_value()) {
+      logPrefix_ = fmt::format(
+          "{}{}{}",
+          logLocation.value(),
+          logLocation.value().back() == '/' ? "" : "/",
+          Aws::DEFAULT_LOG_PREFIX);
+      awsOptions_.loggingOptions.defaultLogPrefix = logPrefix_.c_str();
+      VLOG(0) << "Custom S3 log location prefix: " << logPrefix_;
+    }
     // In some situations, curl triggers a SIGPIPE signal causing the entire
     // process to be terminated without any notification.
     // This behavior is seen via Prestissimo on AmazonLinux2 on AWS EC2.
@@ -521,6 +587,7 @@ struct AwsInstance {
   Aws::SDKOptions awsOptions_;
   std::atomic<bool> isInitialized_;
   std::atomic<bool> isFinalized_;
+  std::string logPrefix_;
 };
 
 // Singleton to initialize AWS S3.
@@ -529,8 +596,10 @@ AwsInstance* getAwsInstance() {
   return instance.get();
 }
 
-bool initializeS3(std::string_view logLevel) {
-  return getAwsInstance()->initialize(logLevel);
+bool initializeS3(
+    std::string_view logLevel,
+    std::optional<std::string_view> logLocation) {
+  return getAwsInstance()->initialize(logLevel, logLocation);
 }
 
 static std::atomic<int> fileSystemCount = 0;
@@ -538,6 +607,20 @@ static std::atomic<int> fileSystemCount = 0;
 void finalizeS3() {
   VELOX_CHECK((fileSystemCount == 0), "Cannot finalize S3 while in use");
   getAwsInstance()->finalize();
+}
+
+void registerCredentialsProvider(
+    const std::string& providerName,
+    const AWSCredentialsProviderFactory& factory) {
+  VELOX_CHECK(
+      !providerName.empty(), "CredentialsProviderFactory name cannot be empty");
+  credentialsProviderFactories().withWLock([&](auto& factories) {
+    VELOX_CHECK(
+        factories.find(providerName) == factories.end(),
+        "CredentialsProviderFactory '{}' already registered",
+        providerName);
+    factories.insert({providerName, factory});
+  });
 }
 
 class S3FileSystem::Impl {
@@ -645,6 +728,13 @@ class S3FileSystem::Impl {
   // Return an AWSCredentialsProvider based on the config.
   std::shared_ptr<Aws::Auth::AWSCredentialsProvider> getCredentialsProvider(
       const S3Config& s3Config) const {
+    auto credentialsProvider = s3Config.credentialsProvider();
+    if (credentialsProvider.has_value()) {
+      const auto& name = credentialsProvider.value();
+      // Create the credentials provider using the registered factory.
+      return getCredentialsProviderByName(name, s3Config);
+    }
+
     auto accessKey = s3Config.accessKey();
     auto secretKey = s3Config.secretKey();
     const auto iamRole = s3Config.iamRole();
@@ -743,6 +833,10 @@ class S3FileSystem::Impl {
     return getAwsInstance()->getLogLevelName();
   }
 
+  std::string getLogPrefix() const {
+    return getAwsInstance()->getLogPrefix();
+  }
+
  private:
   std::shared_ptr<Aws::S3::S3Client> client_;
 };
@@ -757,6 +851,10 @@ S3FileSystem::S3FileSystem(
 
 std::string S3FileSystem::getLogLevelName() const {
   return impl_->getLogLevelName();
+}
+
+std::string S3FileSystem::getLogPrefix() const {
+  return impl_->getLogPrefix();
 }
 
 std::unique_ptr<ReadFile> S3FileSystem::openFileForRead(

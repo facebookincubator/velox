@@ -20,13 +20,13 @@
 
 namespace facebook::velox::exec {
 
-void ExchangeClient::addRemoteTaskId(const std::string& taskId) {
+void ExchangeClient::addRemoteTaskId(const std::string& remoteTaskId) {
   std::vector<RequestSpec> requestSpecs;
   std::shared_ptr<ExchangeSource> toClose;
   {
     std::lock_guard<std::mutex> l(queue_->mutex());
 
-    bool duplicate = !remoteTaskIds_.insert(taskId).second;
+    bool duplicate = !remoteTaskIds_.insert(remoteTaskId).second;
     if (duplicate) {
       // Do not add sources twice. Presto protocol may add duplicate sources
       // and the task updates have no guarantees of arriving in order.
@@ -35,15 +35,16 @@ void ExchangeClient::addRemoteTaskId(const std::string& taskId) {
 
     std::shared_ptr<ExchangeSource> source;
     try {
-      source = ExchangeSource::create(taskId, destination_, queue_, pool_);
+      source =
+          ExchangeSource::create(remoteTaskId, destination_, queue_, pool_);
     } catch (const VeloxException&) {
       throw;
     } catch (const std::exception& e) {
-      // Task ID can be very long. Truncate to 128 characters.
+      // 'remoteTaskId' can be very long. Truncate to 128 characters.
       VELOX_FAIL(
           "Failed to create ExchangeSource: {}. Task ID: {}.",
           e.what(),
-          taskId.substr(0, 128));
+          remoteTaskId.substr(0, 128));
     }
 
     if (closed_) {
@@ -91,9 +92,9 @@ void ExchangeClient::close() {
 }
 
 folly::F14FastMap<std::string, RuntimeMetric> ExchangeClient::stats() const {
+  folly::F14FastMap<std::string, RuntimeMetric> stats;
   std::lock_guard<std::mutex> l(queue_->mutex());
 
-  folly::F14FastMap<std::string, RuntimeMetric> stats;
   for (const auto& source : sources_) {
     if (source->supportsMetrics()) {
       for (const auto& [name, value] : source->metrics()) {
@@ -160,7 +161,7 @@ void ExchangeClient::request(std::vector<RequestSpec>&& requestSpecs) {
   for (auto& spec : requestSpecs) {
     auto future = folly::SemiFuture<ExchangeSource::Response>::makeEmpty();
     if (spec.maxBytes == 0) {
-      future = spec.source->requestDataSizes(kRequestDataSizesMaxWait);
+      future = spec.source->requestDataSizes(kRequestDataSizesMaxWaitSec_);
     } else {
       future = spec.source->request(spec.maxBytes, kRequestDataMaxWait);
     }
@@ -259,10 +260,17 @@ ExchangeClient::pickSourcesToRequestLocked() {
     producingSources_.pop();
     totalPendingBytes_ += requestBytes;
   }
-  if (queue_->totalBytes() == 0 && totalPendingBytes_ == 0 &&
+
+  if ((queue_->totalBytes() + totalPendingBytes_ < minOutputBatchBytes_) &&
       !producingSources_.empty()) {
-    // We have full capacity but still cannot initiate one single data
-    // transfer. Let the transfer happen in this case to avoid getting stuck.
+    // Two cases which we request an out-of-band data transfer:
+    // 1. We have full capacity but still cannot initiate one single data
+    //    transfer. Let the transfer happen in this case to avoid getting stuck.
+    //
+    // 2. We have some data in the queue that is not big enough for
+    //    consumers and it is big enough to not allow ExchangeClient to
+    //    initiate request for more data. Let transfer happen in this case
+    //    to avoid this deadlock situation.
     auto& source = producingSources_.front().source;
     auto requestBytes = producingSources_.front().remainingBytes.at(0);
     LOG(INFO) << "Requesting large single page " << requestBytes

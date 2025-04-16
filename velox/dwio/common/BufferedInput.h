@@ -35,13 +35,15 @@ class BufferedInput {
       memory::MemoryPool& pool,
       const MetricsLogPtr& metricsLog = MetricsLog::voidLog(),
       IoStatistics* stats = nullptr,
+      filesystems::File::IoStats* fsStats = nullptr,
       uint64_t maxMergeDistance = kMaxMergeDistance,
       std::optional<bool> wsVRLoad = std::nullopt)
       : BufferedInput(
             std::make_shared<ReadFileInputStream>(
                 std::move(readFile),
                 metricsLog,
-                stats),
+                stats,
+                fsStats),
             pool,
             maxMergeDistance,
             wsVRLoad) {}
@@ -197,8 +199,13 @@ class BufferedInput {
         }
         while (i < noPrefetch.size() &&
                getRegionEnd(noPrefetch[i]) <= coalesceEnd) {
-          prefetch[k++] = noPrefetch[i++];
-          ++numMoved;
+          if (getRegionOffset(noPrefetch[i]) >= coalesceStart) {
+            coalesceStart = getRegionEnd(noPrefetch[i]);
+            prefetch[k++] = noPrefetch[i++];
+            ++numMoved;
+          } else {
+            noPrefetch[l++] = noPrefetch[i++];
+          }
         }
         prefetch[k++] = oldPrefetch[j++];
       }

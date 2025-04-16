@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 #include "velox/common/base/tests/GTestUtils.h"
+#include "velox/common/testutil/OptionalEmpty.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/functions/lib/aggregates/tests/utils/AggregationTestBase.h"
 
@@ -30,7 +31,7 @@ class MapUnionSumTest : public AggregationTestBase {};
 TEST_F(MapUnionSumTest, global) {
   auto data = makeRowVector({
       makeNullableMapVector<int64_t, int64_t>({
-          {{}}, // empty map
+          common::testutil::optionalEmpty, // empty map
           std::nullopt, // null map
           {{{1, 10}, {2, 20}}},
           {{{1, 11}, {3, 30}, {4, 40}}},
@@ -62,7 +63,7 @@ TEST_F(MapUnionSumTest, globalVarcharKey) {
 
   auto data = makeRowVector({
       makeNullableMapVector<StringView, int64_t>({
-          {{}}, // empty map
+          common::testutil::optionalEmpty, // empty map
           std::nullopt, // null map
           {{{keys[0], 10}, {keys[1], 20}}},
           {{{keys[0], 11}, {keys[2], 30}, {keys[3], 40}}},
@@ -119,9 +120,9 @@ TEST_F(MapUnionSumTest, nullAndEmptyMaps) {
   auto emptyAndNullMaps = makeRowVector({
       makeNullableMapVector<int64_t, int64_t>({
           std::nullopt,
-          {{}},
+          common::testutil::optionalEmpty,
           std::nullopt,
-          {{}},
+          common::testutil::optionalEmpty,
       }),
   });
 
@@ -416,6 +417,30 @@ TEST_F(MapUnionSumTest, groupByJsonKey) {
   testAggregations({data}, {"c0"}, {"map_union_sum(c1)"}, {expected});
 }
 
+TEST_F(MapUnionSumTest, groupByBooleanKeys) {
+  auto data = makeRowVector({
+      makeFlatVector<int64_t>({1, 2, 1, 2, 1}),
+      makeNullableMapVector<bool, int64_t>({
+          {}, // empty map
+          std::nullopt, // null map
+          {{{true, 10}, {false, 20}}},
+          {{{true, 11}, {false, 30}, {true, 40}}},
+          {{{false, 28}, {true, 50}, {true, 12}}},
+      }),
+
+  });
+
+  auto expected = makeRowVector({
+      makeFlatVector<int64_t>({1, 2}),
+      makeMapVector<bool, int64_t>({
+          {{{true, 72}, {false, 48}}},
+          {{{true, 51}, {false, 30}}},
+      }),
+  });
+
+  testAggregations({data}, {"c0"}, {"map_union_sum(c1)"}, {expected});
+}
+
 TEST_F(MapUnionSumTest, floatingPointKeys) {
   auto data = makeRowVector({
       makeFlatVector<int32_t>({1, 2, 1, 2, 1, 1, 2, 2}),
@@ -442,8 +467,8 @@ TEST_F(MapUnionSumTest, floatingPointKeys) {
 }
 
 TEST_F(MapUnionSumTest, nanKeys) {
-  // Verify that NaNs with different binary representations are considered equal
-  // and deduplicated when used as keys in the output map.
+  // Verify that NaNs with different binary representations are considered
+  // equal and deduplicated when used as keys in the output map.
   constexpr double kNan = std::numeric_limits<double>::quiet_NaN();
   constexpr double kSNaN = std::numeric_limits<double>::signaling_NaN();
 
@@ -474,6 +499,76 @@ TEST_F(MapUnionSumTest, nanKeys) {
 
   testAggregations(
       {data}, {"c1"}, {"map_union_sum(c0)"}, {"a0", "c1"}, {expected});
+}
+
+TEST_F(MapUnionSumTest, complexType) {
+  // Verify that NaNs with different binary representations are considered equal
+  // and deduplicated when used as keys in the output map.
+  static const auto kNaN = std::numeric_limits<double>::quiet_NaN();
+  static const auto kSNaN = std::numeric_limits<double>::signaling_NaN();
+
+  // Global Aggregation, Complex type(Row)
+  // The complex input values are:
+  // [{"key":[1,1],"value":1},{"key":["NaN",2],"value":2},{"key":[2,4],"value":3},{"key":[3,5],"value":4},
+  // {"key":["NaN",2],"value":5}, {"key":["NaN",2],"value":6}]
+  auto data = makeRowVector(
+      {makeMapVector(
+           {0, 1, 2, 3, 4, 5},
+           makeRowVector(
+               {makeFlatVector<double>({1, kSNaN, 2, 3, kNaN, kSNaN}),
+                makeFlatVector<int32_t>({1, 2, 4, 5, 2, 2})}),
+           makeFlatVector<int32_t>({1, 2, 3, 4, 5, 6})),
+       makeFlatVector<int32_t>({1, 1, 1, 2, 2, 2})});
+
+  // The expected result is
+  // [{"key":[1,1],"value":1},{"key":[2,4],"value":3},{"key":[3,5],"value":4},
+  // {"key":["NaN",2],"value":12}]
+  auto expectedResult = makeRowVector({makeMapVector(
+      {0},
+      makeRowVector(
+          {makeFlatVector<double>({1, 2, 3, kNaN}),
+           makeFlatVector<int32_t>({1, 4, 5, 2})}),
+      makeFlatVector<int32_t>({1, 3, 4, 13}))});
+
+  testAggregations({data}, {}, {"map_union_sum(c0)"}, {expectedResult});
+
+  // Group by Aggregation, Complex type(Row)
+  // The expected result is
+  // [{"key":[1,1],"value":1},{"key":[2,4],"value":3},
+  //  {"key":["NaN",2],"value":2}] | 1
+  // [{"key":[3,5],"value":4},{"key":["NaN",2],"value":11}] | 2
+  expectedResult = makeRowVector(
+      {makeMapVector(
+           {0, 3},
+           makeRowVector(
+               {makeFlatVector<double>({1, 2, kNaN, 3, kNaN}),
+                makeFlatVector<int32_t>({1, 4, 2, 5, 2})}),
+           makeFlatVector<int32_t>({1, 3, 2, 4, 11})),
+       makeFlatVector<int32_t>({1, 2})});
+
+  testAggregations(
+      {data}, {"c1"}, {"map_union_sum(c0)"}, {"a0", "c1"}, {expectedResult});
+}
+
+TEST_F(MapUnionSumTest, unknownKey) {
+  auto data = makeRowVector({makeAllNullMapVector(3, UNKNOWN(), BIGINT())});
+  testAggregations({data}, {}, {"map_union_sum(c0)"}, {"VALUES (NULL)"});
+}
+
+TEST_F(MapUnionSumTest, decimalKey) {
+  // test on nulls
+  auto null_data =
+      makeRowVector({makeAllNullMapVector(3, DECIMAL(10, 5), BIGINT())});
+  testAggregations({null_data}, {}, {"map_union_sum(c0)"}, {"VALUES (NULL)"});
+
+  // test on non-null decimal keys
+  auto data = makeMapVector<int128_t, int64_t>(
+      {{{{1000}, 2}, {{1001}, 1}}, {{{1000}, 1}, {{1001}, 1}}},
+      MAP(DECIMAL(30, 2), BIGINT()));
+  auto expected = makeRowVector({makeMapVector<int128_t, int64_t>(
+      {{{{1000}, 3}, {{1001}, 2}}}, MAP(DECIMAL(30, 2), BIGINT()))});
+  testAggregations(
+      {makeRowVector({data})}, {}, {"map_union_sum(c0)"}, {expected});
 }
 
 } // namespace

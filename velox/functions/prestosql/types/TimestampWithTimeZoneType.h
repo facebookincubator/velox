@@ -15,10 +15,8 @@
  */
 #pragma once
 
-#include "velox/expression/CastExpr.h"
 #include "velox/type/SimpleFunctionApi.h"
 #include "velox/type/Type.h"
-#include "velox/vector/VectorTypeUtils.h"
 
 namespace facebook::velox {
 
@@ -26,6 +24,11 @@ using TimeZoneKey = int16_t;
 
 constexpr int32_t kMillisShift = 12;
 constexpr int32_t kTimezoneMask = (1 << kMillisShift) - 1;
+// The maximum and minimum millis UTC we can represent in a
+// TimestampWithTimeZone value given the bits we have to store it.
+// We have 64 bits minus the bits for the time zone minus 1 for the sign bit.
+constexpr int64_t kMaxMillisUtc = (1L << (64 - (int64_t)kMillisShift - 1)) - 1L;
+constexpr int64_t kMinMillisUtc = (kMaxMillisUtc + 1) * -1;
 
 inline int64_t unpackMillisUtc(int64_t dateTimeWithTimeZone) {
   return dateTimeWithTimeZone >> kMillisShift;
@@ -36,6 +39,10 @@ inline TimeZoneKey unpackZoneKeyId(int64_t dateTimeWithTimeZone) {
 }
 
 inline int64_t pack(int64_t millisUtc, TimeZoneKey timeZoneKey) {
+  VELOX_USER_CHECK(
+      millisUtc <= kMaxMillisUtc && millisUtc >= kMinMillisUtc,
+      "TimestampWithTimeZone overflow: {} ms",
+      millisUtc);
   return (millisUtc << kMillisShift) | (timeZoneKey & kTimezoneMask);
 }
 
@@ -46,37 +53,6 @@ inline int64_t pack(const Timestamp& timestamp, TimeZoneKey timeZoneKey) {
 inline Timestamp unpackTimestampUtc(int64_t dateTimeWithTimeZone) {
   return Timestamp::fromMillis(unpackMillisUtc(dateTimeWithTimeZone));
 }
-
-class TimestampWithTimeZoneCastOperator : public exec::CastOperator {
- public:
-  static const std::shared_ptr<const CastOperator>& get() {
-    static const std::shared_ptr<const CastOperator> instance{
-        new TimestampWithTimeZoneCastOperator()};
-
-    return instance;
-  }
-
-  bool isSupportedFromType(const TypePtr& other) const override;
-
-  bool isSupportedToType(const TypePtr& other) const override;
-
-  void castTo(
-      const BaseVector& input,
-      exec::EvalCtx& context,
-      const SelectivityVector& rows,
-      const TypePtr& resultType,
-      VectorPtr& result) const override;
-
-  void castFrom(
-      const BaseVector& input,
-      exec::EvalCtx& context,
-      const SelectivityVector& rows,
-      const TypePtr& resultType,
-      VectorPtr& result) const override;
-
- private:
-  TimestampWithTimeZoneCastOperator() = default;
-};
 
 /// Represents timestamp with time zone as a number of milliseconds since epoch
 /// and time zone ID.
@@ -148,24 +124,5 @@ struct TimestampWithTimezoneT {
 };
 
 using TimestampWithTimezone = CustomType<TimestampWithTimezoneT, true>;
-
-class TimestampWithTimeZoneTypeFactories : public CustomTypeFactories {
- public:
-  TypePtr getType() const override {
-    return TIMESTAMP_WITH_TIME_ZONE();
-  }
-
-  // Type casting from and to TimestampWithTimezone is not supported yet.
-  exec::CastOperatorPtr getCastOperator() const override {
-    return TimestampWithTimeZoneCastOperator::get();
-  }
-
-  AbstractInputGeneratorPtr getInputGenerator(
-      const InputGeneratorConfig& /*config*/) const override {
-    return nullptr;
-  }
-};
-
-void registerTimestampWithTimeZoneType();
 
 } // namespace facebook::velox

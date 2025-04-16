@@ -29,11 +29,6 @@
 
 namespace facebook::velox {
 
-using column_index_t = uint32_t;
-
-constexpr column_index_t kConstantChannel =
-    std::numeric_limits<column_index_t>::max();
-
 class RowVector : public BaseVector {
  public:
   RowVector(const RowVector&) = delete;
@@ -686,9 +681,10 @@ class MapVector : public ArrayVectorBase {
   bool isWritable() const override;
 
   /// Calls BaseVector::prepareForReuse() to check and reset nulls buffer if
-  /// needed, checks and resets offsets and sizes buffers, zeros out offsets and
-  /// sizes if reusable, calls BaseVector::prepareForReuse(keys|values, 0) for
-  /// the keys and values vectors.
+  /// needed. Checks and re-allocate offsets and sizes buffers to have
+  /// BaseVector::length_, or zeros out offsets and sizes if reusable, calls
+  /// BaseVector::prepareForReuse(keys|values, 0) for the keys and values
+  /// vectors.
   void prepareForReuse() override;
 
   bool mayHaveNullsRecursive() const override {
@@ -708,6 +704,10 @@ class MapVector : public ArrayVectorBase {
   std::shared_ptr<MapVector> update(
       const std::vector<std::shared_ptr<MapVector>>& others) const;
 
+  /// Same as the other `update' but can handle encodings on inputs.
+  std::shared_ptr<MapVector> update(
+      const folly::Range<DecodedVector*>& others) const;
+
  protected:
   virtual void resetDataDependentFlags(const SelectivityVector* rows) override {
     BaseVector::resetDataDependentFlags(rows);
@@ -725,7 +725,7 @@ class MapVector : public ArrayVectorBase {
 
   template <TypeKind kKeyTypeKind>
   std::shared_ptr<MapVector> updateImpl(
-      const std::vector<std::shared_ptr<MapVector>>& others) const;
+      const folly::Range<DecodedVector*>& others) const;
 
   VectorPtr keys_;
   VectorPtr values_;

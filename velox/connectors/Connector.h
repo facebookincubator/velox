@@ -47,6 +47,10 @@ namespace facebook::velox::core {
 class ITypedExpr;
 }
 
+namespace facebook::velox::core {
+struct IndexLookupCondition;
+}
+
 namespace facebook::velox::connector {
 
 class DataSource;
@@ -186,6 +190,10 @@ class DataSink {
     uint64_t numWrittenBytes{0};
     uint32_t numWrittenFiles{0};
     uint64_t writeIOTimeUs{0};
+    uint64_t numCompressedBytes{0};
+    uint64_t recodeTimeNs{0};
+    uint64_t compressionTimeNs{0};
+
     common::SpillStats spillStats;
 
     bool empty() const;
@@ -289,6 +297,12 @@ class DataSource {
   virtual std::shared_ptr<wave::WaveDataSource> toWaveDataSource() {
     VELOX_UNSUPPORTED();
   }
+
+  /// Invoked by table scan close to cancel any inflight async operations
+  /// running inside the data source. This is the best effort and the actual
+  /// connector implementation decides how to support the cancellation if
+  /// needed.
+  virtual void cancel() {}
 };
 
 class IndexSource {
@@ -362,7 +376,7 @@ class IndexSource {
   virtual std::shared_ptr<LookupResultIterator> lookup(
       const LookupRequest& request) = 0;
 
-  virtual std::unordered_map<std::string, RuntimeCounter> runtimeStats() = 0;
+  virtual std::unordered_map<std::string, RuntimeMetric> runtimeStats() = 0;
 };
 
 /// Collection of context data for use in a DataSource, IndexSource or DataSink.
@@ -584,8 +598,8 @@ class Connector {
   /// Here,
   /// - 'inputType' is ROW{t.sid, t.event_list}
   /// - 'numJoinKeys' is 1 since only t.sid is used in join equi-clauses.
-  /// - 'joinConditions' is list of one expression: contains(t.event_list,
-  ///    u.event_type)
+  /// - 'joinConditions' specifies the join condition: contains(t.event_list,
+  ///   u.event_type)
   /// - 'outputType' is ROW{u.event_value}
   /// - 'tableHandle' specifies the metadata of the index table.
   /// - 'columnHandles' is a map from 'u.event_type' (in 'joinConditions') and
@@ -596,7 +610,7 @@ class Connector {
   virtual std::shared_ptr<IndexSource> createIndexSource(
       const RowTypePtr& inputType,
       size_t numJoinKeys,
-      const std::vector<std::shared_ptr<const core::ITypedExpr>>&
+      const std::vector<std::shared_ptr<core::IndexLookupCondition>>&
           joinConditions,
       const RowTypePtr& outputType,
       const std::shared_ptr<ConnectorTableHandle>& tableHandle,

@@ -34,6 +34,12 @@ struct LoadRequest {
   LoadRequest(velox::common::Region& _region, cache::TrackingId _trackingId)
       : region(_region), trackingId(_trackingId) {}
 
+  bool operator<(const LoadRequest& other) const {
+    return region.offset < other.region.offset ||
+        (region.offset == other.region.offset &&
+         region.length > other.region.length);
+  }
+
   velox::common::Region region;
   cache::TrackingId trackingId;
 
@@ -52,16 +58,18 @@ class DirectCoalescedLoad : public cache::CoalescedLoad {
   DirectCoalescedLoad(
       std::shared_ptr<ReadFileInputStream> input,
       std::shared_ptr<IoStatistics> ioStats,
-      uint64_t groupId,
+      std::shared_ptr<filesystems::File::IoStats> fsStats,
+      uint64_t /* groupId */,
       const std::vector<LoadRequest*>& requests,
-      memory::MemoryPool& pool,
+      memory::MemoryPool* pool,
       int32_t loadQuantum)
       : CoalescedLoad({}, {}),
         ioStats_(ioStats),
-        groupId_(groupId),
+        fsStats_(fsStats),
         input_(std::move(input)),
         loadQuantum_(loadQuantum),
         pool_(pool) {
+    VELOX_DCHECK_NOT_NULL(pool_);
     VELOX_DCHECK(
         std::is_sorted(requests.begin(), requests.end(), [](auto* x, auto* y) {
           return x->region.offset < y->region.offset;
@@ -95,10 +103,10 @@ class DirectCoalescedLoad : public cache::CoalescedLoad {
 
  private:
   const std::shared_ptr<IoStatistics> ioStats_;
-  const uint64_t groupId_;
+  const std::shared_ptr<filesystems::File::IoStats> fsStats_;
   const std::shared_ptr<ReadFileInputStream> input_;
   const int32_t loadQuantum_;
-  memory::MemoryPool& pool_;
+  memory::MemoryPool* const pool_;
   std::vector<LoadRequest> requests_;
 };
 
@@ -113,17 +121,20 @@ class DirectBufferedInput : public BufferedInput {
       std::shared_ptr<cache::ScanTracker> tracker,
       uint64_t groupId,
       std::shared_ptr<IoStatistics> ioStats,
+      std::shared_ptr<filesystems::File::IoStats> fsStats,
       folly::Executor* executor,
       const io::ReaderOptions& readerOptions)
       : BufferedInput(
             std::move(readFile),
             readerOptions.memoryPool(),
             metricsLog,
-            ioStats.get()),
+            ioStats.get(),
+            fsStats.get()),
         fileNum_(fileNum),
         tracker_(std::move(tracker)),
         groupId_(groupId),
         ioStats_(std::move(ioStats)),
+        fsStats_(std::move(fsStats)),
         executor_(executor),
         fileSize_(input_->getLength()),
         options_(readerOptions) {}
@@ -161,7 +172,14 @@ class DirectBufferedInput : public BufferedInput {
 
   virtual std::unique_ptr<BufferedInput> clone() const override {
     return std::unique_ptr<DirectBufferedInput>(new DirectBufferedInput(
-        input_, fileNum_, tracker_, groupId_, ioStats_, executor_, options_));
+        input_,
+        fileNum_,
+        tracker_,
+        groupId_,
+        ioStats_,
+        fsStats_,
+        executor_,
+        options_));
   }
 
   memory::MemoryPool* pool() const {
@@ -194,6 +212,7 @@ class DirectBufferedInput : public BufferedInput {
       std::shared_ptr<cache::ScanTracker> tracker,
       uint64_t groupId,
       std::shared_ptr<IoStatistics> ioStats,
+      std::shared_ptr<filesystems::File::IoStats> fsStats,
       folly::Executor* executor,
       const io::ReaderOptions& readerOptions)
       : BufferedInput(std::move(input), readerOptions.memoryPool()),
@@ -201,6 +220,7 @@ class DirectBufferedInput : public BufferedInput {
         tracker_(std::move(tracker)),
         groupId_(groupId),
         ioStats_(std::move(ioStats)),
+        fsStats_(std::move(fsStats)),
         executor_(executor),
         fileSize_(input_->getLength()),
         options_(readerOptions) {}
@@ -223,10 +243,29 @@ class DirectBufferedInput : public BufferedInput {
       bool prefetch,
       const std::vector<int32_t>& groupEnds);
 
+  // Holds the reference on the memory pool for async load in case of early task
+  // terminate.
+  struct AsyncLoadHolder {
+    std::shared_ptr<cache::CoalescedLoad> load;
+    std::shared_ptr<memory::MemoryPool> pool;
+
+    ~AsyncLoadHolder() {
+      // Release the load reference before the memory pool reference.
+      // This is to make sure the memory pool is not destroyed before we free up
+      // the allocated buffers.
+      // This is to handle the case that the associated task has already
+      // destroyed before the async load is done. The async load holds
+      // the last reference to the memory pool in that case.
+      load.reset();
+      pool.reset();
+    }
+  };
+
   const uint64_t fileNum_;
   const std::shared_ptr<cache::ScanTracker> tracker_;
   const uint64_t groupId_;
   const std::shared_ptr<IoStatistics> ioStats_;
+  const std::shared_ptr<filesystems::File::IoStats> fsStats_;
   folly::Executor* const executor_;
   const uint64_t fileSize_;
 

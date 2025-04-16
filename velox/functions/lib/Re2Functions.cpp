@@ -138,20 +138,22 @@ bool re2Extract(
     if (emptyNoMatch) {
       result.setNoCopy(row, StringView(nullptr, 0));
       return true;
-    } else {
-      result.setNull(row, true);
-      return false;
     }
+    result.setNull(row, true);
+    return false;
   } else {
     const re2::StringPiece extracted = groups[groupId];
     // Check if the extracted data is null.
     if (extracted.data()) {
       result.setNoCopy(row, StringView(extracted.data(), extracted.size()));
       return !StringView::isInline(extracted.size());
-    } else {
-      result.setNull(row, true);
-      return false;
     }
+    if (emptyNoMatch) {
+      result.setNoCopy(row, StringView(nullptr, 0));
+      return true;
+    }
+    result.setNull(row, true);
+    return false;
   }
 }
 
@@ -364,6 +366,8 @@ class Re2SearchAndExtractConstantPattern final : public exec::VectorFunction {
 
  private:
   RE2 re_;
+  // If true, returns empty string as result for no match case, which is Spark's
+  // behavior. Otherwise, returns null as result, which is Presto's behavior.
   const bool emptyNoMatch_;
 };
 
@@ -1836,13 +1840,13 @@ std::vector<std::string> PatternMetadata::parseSubstrings(
   // Not support substrings-search with '_' for best performance.
   static const re2::RE2 fullPattern(R"((%+[^%_#\\]+)+%+)");
   static const re2::RE2 subPattern(R"((?:%+)([^%_#\\]+))");
-  re2::StringPiece full(pattern);
+  re2::StringPiece full(pattern.data(), pattern.size());
   re2::StringPiece cur;
   std::vector<std::string> substrings;
   if (RE2::FullMatch(full, fullPattern)) {
     while (RE2::PartialMatch(full, subPattern, &cur)) {
-      substrings.push_back(cur.as_string());
-      full.set(cur.end(), full.end() - cur.end());
+      substrings.push_back(std::string(cur));
+      full = re2::StringPiece(cur.end(), full.end() - cur.end());
     }
   }
   return substrings;

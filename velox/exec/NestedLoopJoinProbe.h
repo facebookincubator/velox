@@ -144,12 +144,19 @@ class NestedLoopJoinProbe : public Operator {
   // smaller in some cases - outputs follow the probe side buffer boundaries.
   RowVectorPtr generateOutput();
 
+  // For non cross-join mode, the `output_` can be reused across multible probe
+  // rows. If the input_ has remaining rows and the output_ is not fully filled,
+  // it returns false here.
+  bool readyToProduceOutput();
+
   // Fill in joined output to `output_` by matching the current probeRow_ and
   // successive build vectors (using getNextCrossProductBatch()). Stops when
   // either all build vectors were matched for the current probeRow (returns
   // true), or if the output is full (returns false). If it returns false, a
   // valid vector with more than zero records will be available at `output_`; if
   // it returns true, either nullptr or zero records may be placed at `output_`.
+  // Also if it returns true, it's the caller's responsiblity to deicide when to
+  // set `output_` size.
   //
   // Also updates `buildMatched_` if the build records that received a match, so
   // that they can be used to implement right and full outer join semantic once
@@ -260,7 +267,7 @@ class NestedLoopJoinProbe : public Operator {
     return (buildIndex_ >= buildVectors_.value().size());
   }
 
-  /// Cross joins are translated into NLJ's without a join conditition.
+  // Cross joins are translated into NLJ's without a join conditition.
   bool isCrossJoin() const {
     return joinCondition_ == nullptr && !isLeftSemiProjectJoin(joinType_);
   }
@@ -300,7 +307,8 @@ class NestedLoopJoinProbe : public Operator {
     state_ = state;
   }
 
- private:
+  const core::JoinType joinType_;
+
   // Output buffer members.
 
   // Maximum number of rows in the output batch.
@@ -338,7 +346,6 @@ class NestedLoopJoinProbe : public Operator {
 
   // Join metadata and state.
   std::shared_ptr<const core::NestedLoopJoinNode> joinNode_;
-  const core::JoinType joinType_;
 
   ProbeOperatorState state_{ProbeOperatorState::kWaitForBuild};
   ContinueFuture future_{ContinueFuture::makeEmpty()};

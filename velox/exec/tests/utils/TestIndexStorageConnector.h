@@ -16,6 +16,7 @@
 #pragma once
 
 #include "velox/exec/HashTable.h"
+#include "velox/exec/OperatorUtils.h"
 #include "velox/type/Type.h"
 
 namespace facebook::velox::exec::test {
@@ -110,6 +111,8 @@ class TestIndexSource : public connector::IndexSource,
   TestIndexSource(
       const RowTypePtr& inputType,
       const RowTypePtr& outputType,
+      size_t numEqualJoinKeys,
+      const core::TypedExprPtr& joinConditionExpr,
       const std::shared_ptr<TestIndexTableHandle>& tableHandle,
       connector::ConnectorQueryCtx* connectorQueryCtx,
       folly::Executor* executor);
@@ -117,10 +120,7 @@ class TestIndexSource : public connector::IndexSource,
   std::shared_ptr<LookupResultIterator> lookup(
       const LookupRequest& request) override;
 
-  std::unordered_map<std::string, RuntimeCounter> runtimeStats() override {
-    // TODO: add runtime stats.
-    return {};
-  }
+  std::unordered_map<std::string, RuntimeMetric> runtimeStats() override;
 
   memory::MemoryPool* pool() const {
     return pool_.get();
@@ -157,10 +157,22 @@ class TestIndexSource : public connector::IndexSource,
     void initBuffer(vector_size_t size, BufferPtr& buffer, T*& rawBuffer) {
       if (!buffer || !buffer->unique() ||
           buffer->capacity() < sizeof(T) * size) {
-        buffer = allocateIndices(size, source_->pool_.get());
+        buffer = AlignedBuffer::allocate<T>(size, source_->pool_.get(), T());
       }
       rawBuffer = buffer->asMutable<T>();
     }
+
+    void evalJoinConditions();
+
+    // Check if a given equality matched 'row' has passed join conditions.
+    inline bool joinConditionPassed(vector_size_t row) const {
+      return source_->conditionFilterInputRows_.isValid(row) &&
+          !source_->decodedConditionFilterResult_.isNullAt(row) &&
+          source_->decodedConditionFilterResult_.valueAt<bool>(row);
+    }
+
+    // Creates input vector for join condition evaluation.
+    RowVectorPtr createConditionInput();
 
     // Extracts the lookup result columns from the index table and return in
     // 'result'.
@@ -207,8 +219,17 @@ class TestIndexSource : public connector::IndexSource,
   };
 
  private:
+  // Invoked to check if this source has already encountered async lookup error,
+  // and throws if it has.
+  void checkNotFailed();
+
   // Initialize the output projections for lookup result processing.
   void initOutputProjections();
+
+  // Initialize the condition filter input type and projections if configured.
+  void initConditionProjections();
+
+  void recordCpuTiming(const CpuWallTiming& timing);
 
   const std::shared_ptr<TestIndexTableHandle> tableHandle_;
   const RowTypePtr inputType_;
@@ -216,10 +237,28 @@ class TestIndexSource : public connector::IndexSource,
   const RowTypePtr keyType_;
   const RowTypePtr valueType_;
   connector::ConnectorQueryCtx* const connectorQueryCtx_;
+  const size_t numEqualJoinKeys_;
+  const std::unique_ptr<exec::ExprSet> conditionExprSet_;
   const std::shared_ptr<memory::MemoryPool> pool_;
   folly::Executor* const executor_;
 
+  mutable std::mutex mutex_;
+
+  // Join condition filter input type.
+  RowTypePtr conditionInputType_;
+
+  // If not empty, set to the first encountered async error.
+  std::string error_;
+
+  // Reusable memory for join condition filter evaluation.
+  VectorPtr conditionFilterResult_;
+  DecodedVector decodedConditionFilterResult_;
+  SelectivityVector conditionFilterInputRows_;
+  // Column projections for join condition input and lookup output.
+  std::vector<IdentityProjection> conditionInputProjections_;
+  std::vector<IdentityProjection> conditionTableProjections_;
   std::vector<IdentityProjection> lookupOutputProjections_;
+  std::unordered_map<std::string, RuntimeMetric> runtimeStats_;
 };
 
 class TestIndexConnector : public connector::Connector {
@@ -245,8 +284,7 @@ class TestIndexConnector : public connector::Connector {
   std::shared_ptr<connector::IndexSource> createIndexSource(
       const RowTypePtr& inputType,
       size_t numJoinKeys,
-      const std::vector<std::shared_ptr<const core::ITypedExpr>>&
-          joinConditions,
+      const std::vector<core::IndexLookupConditionPtr>& joinConditions,
       const RowTypePtr& outputType,
       const std::shared_ptr<connector::ConnectorTableHandle>& tableHandle,
       const std::unordered_map<
