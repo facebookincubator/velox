@@ -59,6 +59,7 @@ using facebook::velox::fuzzer::ExpressionFuzzer;
 using facebook::velox::fuzzer::FuzzerRunner;
 using facebook::velox::fuzzer::JsonExtractArgValuesGenerator;
 using facebook::velox::fuzzer::JsonParseArgValuesGenerator;
+using facebook::velox::fuzzer::TDigestArgValuesGenerator;
 using facebook::velox::test::ReferenceQueryRunner;
 
 int main(int argc, char** argv) {
@@ -90,8 +91,6 @@ int main(int argc, char** argv) {
       // (since TDigest is a user defined type), and tries to pass a
       // VARBINARY (since TDigest's implementation uses an
       // alias to VARBINARY).
-      "value_at_quantile",
-      "values_at_quantiles",
       "merge_tdigest",
       // Fuzzer cannot generate valid 'comparator' lambda.
       "array_sort(array(T),constant function(T,T,bigint)) -> array(T)",
@@ -150,7 +149,11 @@ int main(int argc, char** argv) {
   std::unordered_map<std::string, std::shared_ptr<ArgValuesGenerator>>
       argValuesGenerators = {
           {"json_parse", std::make_shared<JsonParseArgValuesGenerator>()},
-          {"json_extract", std::make_shared<JsonExtractArgValuesGenerator>()}};
+          {"json_extract", std::make_shared<JsonExtractArgValuesGenerator>()},
+          {"value_at_quantile",
+           std::make_shared<TDigestArgValuesGenerator>("value_at_quantile")},
+          {"values_at_quantiles",
+           std::make_shared<TDigestArgValuesGenerator>("values_at_quantiles")}};
 
   std::shared_ptr<facebook::velox::memory::MemoryPool> rootPool{
       facebook::velox::memory::memoryManager()->addRootPool()};
