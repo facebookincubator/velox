@@ -18,6 +18,7 @@
 #include "velox/common/base/Counters.h"
 #include "velox/common/base/StatsReporter.h"
 #include "velox/common/testutil/TestValue.h"
+#include "velox/exec/HashTableBuilder.h"
 #include "velox/exec/OperatorUtils.h"
 #include "velox/exec/Task.h"
 #include "velox/expression/FieldReference.h"
@@ -65,46 +66,72 @@ HashBuild::HashBuild(
       joinBridge_(operatorCtx_->task()->getHashJoinBridgeLocked(
           operatorCtx_->driverCtx()->splitGroupId,
           planNodeId())),
-      keyChannelMap_(joinNode_->rightKeys().size()) {
+      keyChannelMap_(joinNode_->rightKeys().size()),
+      reusedHashTableAddress_(joinNode_->reusedHashTableAddress()) {
   VELOX_CHECK(pool()->trackUsage());
   VELOX_CHECK_NOT_NULL(joinBridge_);
 
   joinBridge_->addBuilder();
 
-  const auto& inputType = joinNode_->sources()[1]->outputType();
+  if (reusedHashTableAddress_ != nullptr) {
+    auto hashTableBuilder =
+        reinterpret_cast<exec::HashTableBuilder*>(reusedHashTableAddress_);
+    joinBridge_->start();
 
-  const auto numKeys = joinNode_->rightKeys().size();
-  keyChannels_.reserve(numKeys);
+    if (hashTableBuilder->joinHasNullKeys() && isAntiJoin(joinType_) &&
+        nullAware_ && !joinNode_->filter()) {
+      joinBridge_->setAntiJoinHasNullKeys();
+    } else {
+      HashJoinTableSpillFunc tableSpillFunc;
+      SpillPartitionSet spillPartitions;
 
-  for (int i = 0; i < numKeys; ++i) {
-    auto& key = joinNode_->rightKeys()[i];
-    auto channel = exprToChannel(key.get(), inputType);
-    keyChannelMap_[channel] = i;
-    keyChannels_.emplace_back(channel);
-  }
-
-  // Identify the non-key build side columns and make a decoder for each.
-  const int32_t numDependents = inputType->size() - numKeys;
-  if (numDependents > 0) {
-    // Number of join keys (numKeys) may be less then number of input columns
-    // (inputType->size()). In this case numDependents is negative and cannot be
-    // used to call 'reserve'. This happens when we join different probe side
-    // keys with the same build side key: SELECT * FROM t LEFT JOIN u ON t.k1 =
-    // u.k AND t.k2 = u.k.
-    dependentChannels_.reserve(numDependents);
-    decoders_.reserve(numDependents);
-  }
-  for (auto i = 0; i < inputType->size(); ++i) {
-    if (keyChannelMap_.find(i) == keyChannelMap_.end()) {
-      dependentChannels_.emplace_back(i);
-      decoders_.emplace_back(std::make_unique<DecodedVector>());
+      // Init hash table.
+      auto reusedTable = hashTableBuilder->hashTable();
+      reusedTable->prepareJoinTable(
+          {}, BaseHashTable::kNoSpillInputStartPartitionBit);
+      joinBridge_->setHashTable(
+          reusedTable,
+          std::move(spillPartitions),
+          false,
+          std::move(tableSpillFunc));
     }
-  }
 
-  tableType_ = hashJoinTableType(joinNode_);
-  setupTable();
-  setupSpiller();
-  stateCleared_ = false;
+  } else {
+    const auto& inputType = joinNode_->sources()[1]->outputType();
+
+    const auto numKeys = joinNode_->rightKeys().size();
+    keyChannels_.reserve(numKeys);
+
+    for (int i = 0; i < numKeys; ++i) {
+      auto& key = joinNode_->rightKeys()[i];
+      auto channel = exprToChannel(key.get(), inputType);
+      keyChannelMap_[channel] = i;
+      keyChannels_.emplace_back(channel);
+    }
+
+    // Identify the non-key build side columns and make a decoder for each.
+    const int32_t numDependents = inputType->size() - numKeys;
+    if (numDependents > 0) {
+      // Number of join keys (numKeys) may be less then number of input columns
+      // (inputType->size()). In this case numDependents is negative and cannot
+      // be used to call 'reserve'. This happens when we join different probe
+      // side keys with the same build side key: SELECT * FROM t LEFT JOIN u ON
+      // t.k1 = u.k AND t.k2 = u.k.
+      dependentChannels_.reserve(numDependents);
+      decoders_.reserve(numDependents);
+    }
+    for (auto i = 0; i < inputType->size(); ++i) {
+      if (keyChannelMap_.find(i) == keyChannelMap_.end()) {
+        dependentChannels_.emplace_back(i);
+        decoders_.emplace_back(std::make_unique<DecodedVector>());
+      }
+    }
+
+    tableType_ = hashJoinTableType(joinNode_);
+    setupTable();
+    setupSpiller();
+    stateCleared_ = false;
+  }
 }
 
 void HashBuild::initialize() {
@@ -616,6 +643,10 @@ void HashBuild::spillPartition(
 }
 
 void HashBuild::noMoreInput() {
+  if (reusedHashTableAddress_ != nullptr) {
+    return;
+  }
+
   checkRunning();
 
   if (noMoreInput_) {
@@ -963,6 +994,9 @@ BlockingReason HashBuild::isBlocked(ContinueFuture* future) {
 }
 
 bool HashBuild::isFinished() {
+  if (reusedHashTableAddress_ != nullptr) {
+    return true;
+  }
   return state_ == State::kFinish;
 }
 

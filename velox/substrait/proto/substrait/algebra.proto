@@ -162,6 +162,8 @@ message JoinRel {
 
   JoinType type = 6;
 
+  string hashTableId = 7;
+
   enum JoinType {
     JOIN_TYPE_UNSPECIFIED = 0;
     JOIN_TYPE_INNER = 1;

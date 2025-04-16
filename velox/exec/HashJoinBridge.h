@@ -63,6 +63,12 @@ class HashJoinBridge : public JoinBridge {
       std::shared_ptr<wave::HashTableHolder> table,
       bool hasNullKeys);
 
+  void setHashTable(
+      std::shared_ptr<BaseHashTable> table,
+      SpillPartitionSet spillPartitionSet,
+      bool hasNullKeys,
+      HashJoinTableSpillFunc&& tableSpillFunc);
+
   /// Invoked by the probe operator to append the spilled hash table partitions
   /// while probing. The function appends the spilled table partitions into
   /// 'spillPartitionSets_' stack. This only applies if the disk spilling is

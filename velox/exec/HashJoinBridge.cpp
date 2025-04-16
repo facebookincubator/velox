@@ -253,6 +253,35 @@ void HashJoinBridge::setHashTable(
   notify(std::move(promises));
 }
 
+void HashJoinBridge::setHashTable(
+    std::shared_ptr<BaseHashTable> table,
+    SpillPartitionSet spillPartitionSet,
+    bool hasNullKeys,
+    HashJoinTableSpillFunc&& tableSpillFunc) {
+  VELOX_CHECK_NOT_NULL(table, "setHashTable called with null table");
+
+  std::vector<ContinuePromise> promises;
+  {
+    std::lock_guard<std::mutex> l(mutex_);
+    VELOX_CHECK(started_);
+    VELOX_CHECK(!buildResult_.has_value());
+    VELOX_CHECK(restoringSpillShards_.empty());
+    if (!probeStarted_) {
+      tableSpillFunc_ = std::move(tableSpillFunc);
+    }
+    const auto spillPartitionIdSet = toSpillPartitionIdSet(spillPartitionSet);
+    appendSpilledHashTablePartitionsLocked(std::move(spillPartitionSet));
+    buildResult_ = HashBuildResult(
+        std::move(table),
+        std::move(restoringSpillPartitionId_),
+        spillPartitionIdSet,
+        hasNullKeys);
+    restoringSpillPartitionId_.reset();
+    promises = std::move(promises_);
+  }
+  notify(std::move(promises));
+}
+
 void HashJoinBridge::appendSpilledHashTablePartitions(
     SpillPartitionSet spillPartitionSet) {
   VELOX_CHECK(
