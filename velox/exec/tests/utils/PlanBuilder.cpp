@@ -1563,7 +1563,7 @@ PlanBuilder& PlanBuilder::nestedLoopJoin(
     core::JoinType joinType) {
   VELOX_CHECK_NOT_NULL(planNode_, "NestedLoopJoin cannot be the source node");
   auto resultType = concat(planNode_->outputType(), right->outputType());
-  if (isLeftSemiProjectJoin(joinType) || isRightSemiProjectJoin(joinType)) {
+  if (isLeftSemiProjectJoin(joinType)) {
     resultType = concat(resultType, ROW({"match"}, {BOOLEAN()}));
   }
 

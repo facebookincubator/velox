@@ -138,7 +138,7 @@ AggregationNode::AggregationNode(
     const std::vector<FieldAccessTypedExprPtr>& groupingKeys,
     const std::vector<FieldAccessTypedExprPtr>& preGroupedKeys,
     const std::vector<std::string>& aggregateNames,
-    const std::vector<AggregationNode::Aggregate>& aggregates,
+    const std::vector<Aggregate>& aggregates,
     const std::vector<vector_size_t>& globalGroupingSets,
     const std::optional<FieldAccessTypedExprPtr>& groupId,
     bool ignoreNullKeys,
@@ -204,7 +204,7 @@ AggregationNode::AggregationNode(
     const std::vector<FieldAccessTypedExprPtr>& groupingKeys,
     const std::vector<FieldAccessTypedExprPtr>& preGroupedKeys,
     const std::vector<std::string>& aggregateNames,
-    const std::vector<AggregationNode::Aggregate>& aggregates,
+    const std::vector<Aggregate>& aggregates,
     bool ignoreNullKeys,
     PlanNodePtr source)
     : AggregationNode(
@@ -1298,7 +1298,7 @@ AbstractJoinNode::AbstractJoinNode(
         core::isLeftSemiProjectJoin(joinType) || core::isAntiJoin(joinType));
 
   for (auto i = 0; i < numOutputColumms; ++i) {
-    const auto name = outputType_->nameOf(i);
+    auto name = outputType_->nameOf(i);
     if (outputMayIncludeLeftColumns && leftType->containsChild(name)) {
       VELOX_CHECK(
           !rightType->containsChild(name),
@@ -1610,7 +1610,7 @@ NestedLoopJoinNode::NestedLoopJoinNode(
   }
 
   for (auto i = 0; i < numOutputColumms; ++i) {
-    auto name = outputType_->nameOf(i);
+    const auto name = outputType_->nameOf(i);
     const bool leftContains = leftType->containsChild(name);
     const bool rightContains = rightType->containsChild(name);
     VELOX_USER_CHECK(

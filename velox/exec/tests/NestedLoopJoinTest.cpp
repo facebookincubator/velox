@@ -625,13 +625,9 @@ TEST_F(NestedLoopJoinTest, mergeBuildVectors) {
 }
 
 TEST_F(NestedLoopJoinTest, leftSemiJoinProjectDataValidation) {
-  auto probeVectors = makeRowVector(
-      {"t0"},
-      {sequence<int32_t>(5)});
+  auto probeVectors = makeRowVector({"t0"}, {sequence<int32_t>(5)});
 
-  auto buildVectors = makeRowVector(
-      {"u0"},
-      {sequence<int32_t>(3, 2)});
+  auto buildVectors = makeRowVector({"u0"}, {sequence<int32_t>(3, 2)});
 
   auto expected = makeRowVector(
       {"t0", "match"},
@@ -658,12 +654,10 @@ TEST_F(NestedLoopJoinTest, leftSemiJoinProjectDataValidation) {
 
 TEST_F(NestedLoopJoinTest, leftSemiJoinWithNullsAndFilter) {
   auto probeVectors = makeRowVector(
-      {"t0"},
-      {makeNullableFlatVector<int32_t>({0, 1, std::nullopt, 3, 4})});
+      {"t0"}, {makeNullableFlatVector<int32_t>({0, 1, std::nullopt, 3, 4})});
 
   auto buildVectors = makeRowVector(
-      {"u0"},
-      {makeNullableFlatVector<int32_t>({3, std::nullopt, 4})});
+      {"u0"}, {makeNullableFlatVector<int32_t>({3, std::nullopt, 4})});
 
   auto expected = makeRowVector(
       {"t0", "match"},
