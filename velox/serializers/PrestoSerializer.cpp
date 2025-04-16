@@ -90,6 +90,25 @@ PrestoVectorSerde::PrestoOptions toPrestoOptions(
       prestoOptions, "Serde options are not Presto-compatible");
   return *prestoOptions;
 }
+
+std::unique_ptr<folly::IOBuf> uncompressStream(
+    ByteInputStream* source,
+    const detail::PrestoHeader& header,
+    common::CompressionKind compressionKind) {
+  const auto codec = common::compressionKindToCodec(compressionKind);
+  if (auto* bufferSource = dynamic_cast<BufferInputStream*>(source)) {
+    // If the source is a BufferInputStream, we can avoid copying the data
+    // by creating an IOBuf from the underlying buffer.
+    const auto iobuf = bufferSource->readBytes(header.compressedSize);
+    // Process chained uncompressed results IOBufs.
+    return codec->uncompress(iobuf.get(), header.uncompressedSize);
+  }
+  auto compressBuf = folly::IOBuf::create(header.compressedSize);
+  source->readBytes(compressBuf->writableData(), header.compressedSize);
+  compressBuf->append(header.compressedSize);
+  // Process chained uncompressed results IOBufs.
+  return codec->uncompress(compressBuf.get(), header.uncompressedSize);
+}
 } // namespace
 
 void PrestoVectorSerde::estimateSerializedSize(
@@ -182,13 +201,8 @@ void PrestoVectorSerde::deserialize(
     detail::readTopColumns(
         *source, type, pool, *result, resultOffset, prestoOptions);
   } else {
-    auto compressBuf = folly::IOBuf::create(header.compressedSize);
-    source->readBytes(compressBuf->writableData(), header.compressedSize);
-    compressBuf->append(header.compressedSize);
-
-    // Process chained uncompressed results IOBufs.
     auto uncompress =
-        codec->uncompress(compressBuf.get(), header.uncompressedSize);
+        uncompressStream(source, header, prestoOptions.compressionKind);
     auto uncompressedSource = std::make_unique<BufferInputStream>(
         byteRangesFromIOBuf(uncompress.get()));
     detail::readTopColumns(

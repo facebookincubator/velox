@@ -320,14 +320,7 @@ class RowDeserializer {
       if (header.compressed) {
         VELOX_DCHECK_NE(
             compressionKind, common::CompressionKind::CompressionKind_NONE);
-        auto compressBuf = folly::IOBuf::create(header.compressedSize);
-        source->readBytes(compressBuf->writableData(), header.compressedSize);
-        compressBuf->append(header.compressedSize);
-
-        // Process chained uncompressed results IOBufs.
-        const auto codec = common::compressionKindToCodec(compressionKind);
-        uncompressedBuf =
-            codec->uncompress(compressBuf.get(), header.uncompressedSize);
+        uncompressedBuf = uncompressStream(source, header, compressionKind);
       }
 
       std::unique_ptr<ByteInputStream> uncompressedStream;
@@ -426,6 +419,25 @@ class RowDeserializer {
         std::move(uncompressedStream),
         std::move(uncompressedBuf),
         header.uncompressedSize + initialSize);
+  }
+
+  static std::unique_ptr<folly::IOBuf> uncompressStream(
+      ByteInputStream* source,
+      const detail::RowGroupHeader& header,
+      common::CompressionKind compressionKind) {
+    const auto codec = common::compressionKindToCodec(compressionKind);
+    if (auto* bufferSource = dynamic_cast<BufferInputStream*>(source)) {
+      // If the source is a BufferInputStream, we can avoid copying the data
+      // by creating an IOBuf from the underlying buffer.
+      const auto iobuf = bufferSource->readBytes(header.compressedSize);
+      // Process chained uncompressed results IOBufs.
+      return codec->uncompress(iobuf.get(), header.uncompressedSize);
+    }
+    auto compressBuf = folly::IOBuf::create(header.compressedSize);
+    source->readBytes(compressBuf->writableData(), header.compressedSize);
+    compressBuf->append(header.compressedSize);
+    // Process chained uncompressed results IOBufs.
+    return codec->uncompress(compressBuf.get(), header.uncompressedSize);
   }
 };
 } // namespace facebook::velox::serializer
