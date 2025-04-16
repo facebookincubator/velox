@@ -82,14 +82,15 @@ TEST_F(ToJsonTest, basicBool) {
 
 TEST_F(ToJsonTest, basicString) {
   auto data = makeNullableFlatVector<std::string>(
-      {"str1", "str2", std::nullopt, "str\"3\"", std::nullopt});
+      {"str1", "str2", std::nullopt, "str\"3\"", std::nullopt, "a\"é你😄"});
   auto input = makeRowVector({"a"}, {data});
   auto expected = makeFlatVector<std::string>(
       {R"({"a":"str1"})",
        R"({"a":"str2"})",
        R"({"a":null})",
        R"({"a":"str\"3\""})",
-       R"({"a":null})"});
+       R"({"a":null})",
+       R"({"a":"a\"é你\uD83D\uDE04"})"});
   testToJson(input, expected);
 }
 
