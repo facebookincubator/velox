@@ -186,7 +186,7 @@ function wget_and_untar {
 }
 
 function apply_patch {
-  local PATCH_FILE; PATCH_FILE=$(readlink -f "$1")
+  local PATCH_FILE; PATCH_FILE="$(realpath "$1")"
   local TARGET_DIR=$2
   if [ ! -f "${PATCH_FILE}" ]; then
     echo "Patch file doesn't exist: $PATCH_FILE"; exit 1;
