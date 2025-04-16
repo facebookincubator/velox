@@ -17,11 +17,15 @@ Conversion Functions
 .. spark:function:: try_cast(value AS type) -> type
 
     Returns the ``value`` cast to data type ``type`` if possible, or NULL if not possible.
-    try_cast differs from cast function in following case: 
+    try_cast's behavior is consistent regardless of the ANSI mode setting, it behaves similarly to cast with ANSI mode enabled, 
+    but returns NULL instead of throwing errors.
+    try_cast differs from cast function with ANSI mode disabled in following case: 
     
     * If the ``value`` cannot fit within the domain of ``type``, the result is NULL. ::
 
         SELECT try_cast(128 as tinyint); -- NULL
+        SELECT try_cast(cast(550000.0 as DECIMAL(8, 1)) as smallint); -- NULL
+        SELECT try_cast(1e12 as int); -- NULL
 
 Cast from UNKNOWN Type
 ----------------------
