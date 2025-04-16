@@ -568,11 +568,14 @@ VectorPtr CastExpr::applyDecimalToIntegralCast(
     applyToSelectedNoThrowLocal(context, rows, result, [&](vector_size_t row) {
       auto value = simpleInput->valueAt(row);
       auto integralPart = value / scaleFactor;
-      auto fractionPart = value % scaleFactor;
-      auto sign = value >= 0 ? 1 : -1;
-      bool needsRoundUp =
-          (scaleFactor != 1) && (sign * fractionPart >= (scaleFactor >> 1));
-      integralPart += needsRoundUp ? sign : 0;
+      if (hooks_->getPolicy() != SparkTryCastPolicy) {
+        auto fractionPart = value % scaleFactor;
+        auto sign = value >= 0 ? 1 : -1;
+        bool needsRoundUp =
+            (scaleFactor != 1) && (sign * fractionPart >= (scaleFactor >> 1));
+        integralPart += needsRoundUp ? sign : 0;
+      }
+
       if (integralPart > std::numeric_limits<To>::max() ||
           integralPart < std::numeric_limits<To>::min()) {
         if (setNullInResultAtError()) {
