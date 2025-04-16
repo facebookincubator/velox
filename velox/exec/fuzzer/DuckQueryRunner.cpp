@@ -276,7 +276,18 @@ class DuckQueryRunnerToSqlPlanNodeVisitor : public PrestoSqlPlanNodeVisitor {
       sql << " as " << node.names()[i];
     }
 
-    sql << " FROM (" << sourceSql.value() << ")";
+    sql << " FROM ";
+
+    // DuckDB doesn't support wrapping table names in parentheses.
+    if (std::dynamic_pointer_cast<const core::ValuesNode>(node.sources()[0]) ==
+            nullptr &&
+        std::dynamic_pointer_cast<const core::TableScanNode>(
+            node.sources()[0]) == nullptr) {
+      sql << "(" << sourceSql.value() << ")";
+    } else {
+      sql << sourceSql.value();
+    }
+
     visitorContext.sql = sql.str();
   }
 
