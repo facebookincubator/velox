@@ -314,25 +314,25 @@ TEST_F(SparkCastExprTest, intToTimestamp) {
 TEST_F(SparkCastExprTest, timestampToInt) {
   // Cast timestamp as bigint.
   testCast(
-      makeFlatVector<Timestamp>({
-          Timestamp(0, 0),
-          Timestamp(1, 0),
-          Timestamp(10, 0),
-          Timestamp(-1, 0),
-          Timestamp(-10, 0),
-          Timestamp(-1, 500000),
-          Timestamp(-2, 999999),
-          Timestamp(-10, 999999),
-          Timestamp(1, 999999),
-          Timestamp(-1, 1),
-          Timestamp(1234567, 500000),
-          Timestamp(-9876543, 1234),
-          Timestamp(1727181032, 0),
-          Timestamp(-1727181032, 0),
-          Timestamp(9223372036854, 775'807'000),
-          Timestamp(-9223372036855, 224'192'000),
-      }),
-      makeFlatVector<int64_t>({
+      makeFlatVector<Timestamp>(
+          {Timestamp(0, 0),
+           Timestamp(1, 0),
+           Timestamp(10, 0),
+           Timestamp(-1, 0),
+           Timestamp(-10, 0),
+           Timestamp(-1, 500000),
+           Timestamp(-2, 999999),
+           Timestamp(-10, 999999),
+           Timestamp(1, 999999),
+           Timestamp(-1, 1),
+           Timestamp(1234567, 500000),
+           Timestamp(-9876543, 1234),
+           Timestamp(1727181032, 0),
+           Timestamp(-1727181032, 0),
+           Timestamp(9223372036854, 775'807'000),
+           Timestamp(-9223372036855, 224'192'000),
+           Timestamp(9223372036856, 0)}),
+      makeNullableFlatVector<int64_t>({
           0,
           1,
           10,
@@ -349,11 +349,8 @@ TEST_F(SparkCastExprTest, timestampToInt) {
           -1727181032,
           9223372036854,
           -9223372036855,
+          std::nullopt,
       }));
-  testInvalidCast<Timestamp>(
-      "bigint",
-      {Timestamp(9223372036856, 0)},
-      "Could not convert Timestamp(9223372036856, 0) to microseconds");
 
   // Cast timestamp as tinyint/smallint/integer.
   testTimestampToIntegralCast<int8_t>();
@@ -557,7 +554,7 @@ TEST_F(SparkCastExprTest, truncate) {
       "tinyint", {1111111, 2, 3, 1000, -100101}, {71, 2, 3, -24, -5});
 }
 
-TEST_F(SparkCastExprTest, errorHandling) {
+TEST_F(SparkCastExprTest, tryCast) {
   testTryCast<std::string, int8_t>(
       "tinyint",
       {"-",
@@ -576,7 +573,8 @@ TEST_F(SparkCastExprTest, errorHandling) {
        "-..",
        "125.5",
        "127",
-       "-128"},
+       "-128",
+       "1.2"},
       {std::nullopt,
        0,
        std::nullopt,
@@ -593,7 +591,8 @@ TEST_F(SparkCastExprTest, errorHandling) {
        std::nullopt,
        std::nullopt,
        127,
-       -128});
+       -128,
+       std::nullopt});
 
   testTryCast<double, int32_t>(
       "integer",
@@ -603,13 +602,13 @@ TEST_F(SparkCastExprTest, errorHandling) {
   testTryCast<int64_t, int16_t>("smallint", {1234567}, {std::nullopt});
   testTryCast<int64_t, int32_t>("integer", {2147483649}, {std::nullopt});
 
-  testTryCast<std::string, int8_t>("tinyint", {"166"}, {std::nullopt});
   testTryCast<std::string, int16_t>("smallint", {"52769"}, {std::nullopt});
   testTryCast<std::string, int32_t>("integer", {"17515055537"}, {std::nullopt});
   testTryCast<std::string, int32_t>(
       "integer", {"-17515055537"}, {std::nullopt});
   testTryCast<std::string, int64_t>(
       "bigint", {"9663372036854775809"}, {std::nullopt});
+  testTryCast<int64_t, int8_t>("tinyint", {456}, {std::nullopt}, DECIMAL(6, 0));
 }
 
 TEST_F(SparkCastExprTest, overflow) {
@@ -641,16 +640,20 @@ TEST_F(SparkCastExprTest, overflow) {
   testCast(
       shortFlat,
       makeNullableFlatVector<int8_t>(
-          {-44, -4, 26, 56, -100, 0, 124, 117, 63, -78, -48, std::nullopt}));
+          {-44, -4, 26, 56, -100, 0, 124, 117, 63, -78, -48, std::nullopt}),
+      false);
   testCast(
       makeNullableFlatVector<int64_t>({214748364890}, DECIMAL(12, 2)),
-      makeNullableFlatVector<int8_t>({0}));
+      makeNullableFlatVector<int8_t>({0}),
+      false);
   testCast(
       makeNullableFlatVector<int64_t>({214748364890}, DECIMAL(12, 2)),
-      makeNullableFlatVector<int32_t>({-2147483648}));
+      makeNullableFlatVector<int32_t>({-2147483648}),
+      false);
   testCast(
       makeNullableFlatVector<int64_t>({214748364890}, DECIMAL(12, 2)),
-      makeNullableFlatVector<int64_t>({2147483648}));
+      makeNullableFlatVector<int64_t>({2147483648}),
+      false);
 
   testCast<std::string, int8_t>("tinyint", {"166"}, {std::nullopt});
   testCast<std::string, int16_t>("smallint", {"52769"}, {std::nullopt});
