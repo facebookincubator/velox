@@ -272,7 +272,7 @@ std::vector<core::TypedExprPtr> TDigestArgValuesGenerator::generate(
   const auto seed = rand<uint32_t>(rng);
   const auto nullRatio = options.nullRatio;
   std::vector<core::TypedExprPtr> inputExpressions;
-  VELOX_CHECK_EQ(signature.args.size(), 2);
+  VELOX_CHECK_GE(signature.args.size(), 2);
   if (functionName_ == "value_at_quantile" ||
       functionName_ == "values_at_quantiles") {
     // First input: TDigest
