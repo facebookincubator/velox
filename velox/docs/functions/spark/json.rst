@@ -95,6 +95,8 @@ JSON Functions
 
         to_json(ROW(1, "a"), map('option', 'value'))
 
+    * MAP key types must be VARCHAR. ::
+
     Examples of valid inputs are listed as below. ::
 
         SELECT to_json(ROW(1, "a")); -- {"a":1}

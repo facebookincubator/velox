@@ -30,6 +30,8 @@ void registerJsonFunctions(const std::string& prefix) {
   registerFunction<JsonArrayLengthFunction, int32_t, Varchar>(
       {prefix + "json_array_length"});
   registerFunction<ToJsonFunction, Varchar, Generic<T1>>({prefix + "to_json"});
+  registerFunction<ToJsonFunction, Varchar, Generic<T1>, Varchar>(
+      {prefix + "to_json"});
 }
 
 } // namespace facebook::velox::functions::sparksql

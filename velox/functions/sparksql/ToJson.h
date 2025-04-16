@@ -24,9 +24,9 @@ namespace facebook::velox::functions::sparksql {
 namespace {
 
 struct JsonOptions {
-  JsonOptions(const tz::TimeZone* _tz) : defaultTimeZone(_tz) {}
+  JsonOptions(const tz::TimeZone* _tz) : timeZone(_tz) {}
 
-  const tz::TimeZone* defaultTimeZone;
+  const tz::TimeZone* timeZone;
 };
 
 template <typename T>
@@ -212,10 +212,10 @@ void toJson<TypeKind::TIMESTAMP>(
   static const auto formatter =
       functions::buildJodaDateTimeFormatter("yyyy-MM-dd'T'HH:mm:ss.SSSZZ")
           .value();
-  const auto maxSize = formatter->maxResultSize(options.defaultTimeZone);
+  const auto maxSize = formatter->maxResultSize(options.timeZone);
   char buffer[maxSize];
-  auto size = formatter->format(
-      value, options.defaultTimeZone, maxSize, buffer, false, "Z");
+  auto size =
+      formatter->format(value, options.timeZone, maxSize, buffer, false, "Z");
   result.append("\"").append(buffer, size).append("\"");
 }
 
@@ -306,27 +306,65 @@ struct ToJsonFunction {
       const std::vector<TypePtr>& inputTypes,
       const core::QueryConfig& config,
       const void* /*unusde*/) {
-    auto kind = inputTypes[0]->kind();
     VELOX_CHECK(
-        inputTypes[0]->isRow() || inputTypes[0]->isArray() ||
-            inputTypes[0]->isMap(),
-        "to_json function only supports ROW/ARRAY/MAP");
-    tz_ = getTimeZoneFromConfig(config);
+        isSupportedType(inputTypes[0], true),
+        "to_json function does not support type {}.",
+        inputTypes[0]->toString());
+    sessionTimezone_ = getTimeZoneFromConfig(config);
   }
 
   FOLLY_ALWAYS_INLINE bool call(
       out_type<Varchar>& result,
       const arg_type<Generic<T1>>& input) {
+    return callImpl(result, input, sessionTimezone_);
+  }
+
+  FOLLY_ALWAYS_INLINE bool call(
+      out_type<Varchar>& result,
+      const arg_type<Generic<T1>>& input,
+      const arg_type<Varchar>& timeZone) {
+    auto tz = tz::locateZone(std::string_view(timeZone));
+    return callImpl(result, input, tz);
+  }
+
+ private:
+  /// Determine whether a given input type is supported.
+  /// 1. The root type can only be ROW, ARRAY, and MAP.
+  /// 2. The key type of MAP must be VARCHAR.
+  bool isSupportedType(const TypePtr& type, bool isRootType) {
+    switch (type->kind()) {
+      case TypeKind::ROW: {
+        for (const auto& child : asRowType(type)->children()) {
+          if (!isSupportedType(child, false)) {
+            return false;
+          }
+        }
+      }
+      case TypeKind::ARRAY: {
+        return isSupportedType(type->childAt(0), false);
+      }
+      case TypeKind::MAP: {
+        return type->childAt(0)->kind() == TypeKind::VARCHAR &&
+            isSupportedType(type->childAt(1), false);
+      }
+      default:
+        return !isRootType;
+    }
+  }
+
+  FOLLY_ALWAYS_INLINE bool callImpl(
+      out_type<Varchar>& result,
+      const arg_type<Generic<T1>>& input,
+      const tz::TimeZone* timeZone) {
     std::string res;
     VELOX_DYNAMIC_TYPE_DISPATCH_ALL(
-        toJson, input.kind(), input, res, JsonOptions(tz_));
+        toJson, input.kind(), input, res, JsonOptions(timeZone));
     result.resize(res.size());
     std::memcpy(result.data(), res.c_str(), res.size());
     return true;
   }
 
- private:
-  const tz::TimeZone* tz_;
+  const tz::TimeZone* sessionTimezone_;
 };
 
 } // namespace

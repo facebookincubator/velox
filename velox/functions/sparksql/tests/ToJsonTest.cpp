@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 #include <functions/sparksql/tests/SparkFunctionBaseTest.h>
+#include "velox/common/base/tests/GTestUtils.h"
 
 using namespace facebook::velox::test;
 
@@ -239,12 +240,34 @@ TEST_F(ToJsonTest, nestedComplexType) {
       {{{{"key1", 1}, {"key2", 2}, {"key3", 3}}},
        std::nullopt,
        {{{"key4", 1}, {"key5", std::nullopt}}}});
-  auto input = makeRowVector({"a", "b", "c"}, {data1, data2, data3});
+  auto data4 = makeRowVector(
+      {"d1", "d2"},
+      {makeNullableFlatVector<std::string>(
+           {"d1_str1", "d1_str2", std::nullopt}),
+       makeNullableArrayVector<int64_t>({{1, 2, 3}, {4, 5}, {std::nullopt}})});
+  auto input =
+      makeRowVector({"a", "b", "c", "d"}, {data1, data2, data3, data4});
   auto expected = makeFlatVector<std::string>(
-      {R"({"a":"str1","b":[1,2,3],"c":{"key1":1,"key2":2,"key3":3}})",
-       R"({"a":"str2","b":[],"c":null})",
-       R"({"a":"str3","b":[null],"c":{"key4":1,"key5":null}})"});
+      {R"({"a":"str1","b":[1,2,3],"c":{"key1":1,"key2":2,"key3":3},"d":{"d1":"d1_str1","d2":[1,2,3]}})",
+       R"({"a":"str2","b":[],"c":null,"d":{"d1":"d1_str2","d2":[4,5]}})",
+       R"({"a":"str3","b":[null],"c":{"key4":1,"key5":null},"d":{"d1":null,"d2":[null]}})"});
   testToJson(input, expected);
+}
+
+TEST_F(ToJsonTest, unsupportedType) {
+  auto invalidMap = makeNullableMapVector<int64_t, int64_t>(
+      {{{{1, 1}, {2, 2}, {3, 3}}},
+       std::nullopt,
+       {{}},
+       {{{1, 1}, {2, std::nullopt}}}});
+  VELOX_ASSERT_THROW(
+      testToJson(invalidMap, nullptr),
+      "to_json function does not support type MAP<BIGINT,BIGINT>.");
+  auto invalidRow = makeRowVector(
+      {"a", "b"}, {makeNullableFlatVector<int32_t>({0, 1, 2, 3}), invalidMap});
+  VELOX_ASSERT_THROW(
+      testToJson(invalidRow, nullptr),
+      "to_json function does not support type ROW<a:INTEGER,b:MAP<BIGINT,BIGINT>>.");
 }
 } // namespace
 } // namespace facebook::velox::functions::sparksql::test
