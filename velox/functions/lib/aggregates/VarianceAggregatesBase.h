@@ -62,13 +62,13 @@ struct VarianceAccumulator {
   double m2_{0};
 };
 
-// Base class for a set of Variance-based aggregations. Not used on its own, the
-// classes derived from it are used instead.
-// Partial aggregation produces variance struct.
-// Final aggregation takes the variance struct and returns a double.
-// T is the input type for partial aggregation. Not used for final aggregation.
-// TResultAccessor is the type of the static struct that will access the result
-// in a certain way from the Variance Accumulator.
+/// Base class for a set of Variance-based aggregations. Not used on its own,
+/// the classes derived from it are used instead.
+/// Partial aggregation produces variance struct.
+/// Final aggregation takes the variance struct and returns a double.
+/// T is the input type for partial aggregation. Not used for final aggregation.
+/// TResultAccessor is the type of the static struct that will access the result
+/// in a certain way from the Variance Accumulator.
 template <typename T, typename TResultAccessor>
 class VarianceAggregate : public exec::Aggregate {
  public:

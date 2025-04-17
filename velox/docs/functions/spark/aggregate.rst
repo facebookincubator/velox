@@ -177,8 +177,8 @@ General Aggregate Functions
 
 .. spark:function:: stddev(x) -> double
 
-    Returns the sample standard deviation calculated of all input values. When the count of `x` is
-    greater than or equal to 2, a non-null output will be generated.
+    Returns the sample standard deviation calculated of all input values. The type of `x` should be DOUBLE.
+    When the count of `x` is greater than or equal to 2, a non-null output will be generated.
 
 .. spark:function:: stddev_samp(x) -> double
 
@@ -216,8 +216,8 @@ General Aggregate Functions
 
 .. spark:function:: var_samp(x) -> double
 
-    Returns the sample variance calculated of all input values. When the count of `x` is
-    greater than or equal to 2, a non-null output will be generated.
+    Returns the sample variance calculated of all input values. The type of `x` should be DOUBLE.
+    When the count of `x` is greater than or equal to 2, a non-null output will be generated.
 
 .. spark:function:: variance(x) -> double
 
