@@ -104,9 +104,28 @@ class TDigest {
   /// Returns the total sum of all values added to this digest.
   double sum() const;
 
+  /// Returns the min_ value.
+  double min() const {
+    return min_;
+  }
+
+  /// Returns the max_ value.
+  double max() const {
+    return max_;
+  }
+
   /// Returns the compression parameter.
   double compression() const {
     return compression_;
+  }
+  // Return size of the digest.
+  std::size_t size() const {
+    return weights_.size();
+  }
+
+  /// Returns true if weights is empty
+  bool isWeightsEmpty() const {
+    return weights_.empty() == true;
   }
 
   static constexpr int8_t kSerializationVersion = 1;
