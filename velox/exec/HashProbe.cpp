@@ -1175,7 +1175,9 @@ bool HashProbe::maybeReadSpillOutput() {
     return false;
   }
 
-  VELOX_DCHECK_EQ(table_->numDistinct(), 0);
+  if (!table_->reused()) {
+    VELOX_DCHECK_EQ(table_->numDistinct(), 0);
+  }
 
   if (!spillOutputReader_->nextBatch(output_)) {
     spillOutputReader_.reset();

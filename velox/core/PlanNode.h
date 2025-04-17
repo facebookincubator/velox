@@ -1772,7 +1772,7 @@ class HashJoinNode : public AbstractJoinNode {
       PlanNodePtr left,
       PlanNodePtr right,
       RowTypePtr outputType,
-      void* reusedHashTableAddress = nullptr)
+      void* hashTableBuilder = nullptr)
       : AbstractJoinNode(
             id,
             joinType,
@@ -1783,7 +1783,7 @@ class HashJoinNode : public AbstractJoinNode {
             std::move(right),
             std::move(outputType)),
         nullAware_{nullAware},
-        reusedHashTableAddress_(reusedHashTableAddress) {
+        hashTableBuilder_(hashTableBuilder) {
     if (nullAware) {
       VELOX_USER_CHECK(
           isNullAwareSupported(joinType),
@@ -1819,8 +1819,8 @@ class HashJoinNode : public AbstractJoinNode {
     return nullAware_;
   }
 
-  void* reusedHashTableAddress() const {
-    return reusedHashTableAddress_;
+  void* hashTableBuilder() const {
+    return hashTableBuilder_;
   }
 
   folly::dynamic serialize() const override;
@@ -1832,7 +1832,7 @@ class HashJoinNode : public AbstractJoinNode {
 
   const bool nullAware_;
 
-  void* reusedHashTableAddress_;
+  void* hashTableBuilder_;
 };
 
 /// Represents inner/outer/semi/anti merge joins. Translates to an

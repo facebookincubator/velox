@@ -67,15 +67,15 @@ HashBuild::HashBuild(
           operatorCtx_->driverCtx()->splitGroupId,
           planNodeId())),
       keyChannelMap_(joinNode_->rightKeys().size()),
-      reusedHashTableAddress_(joinNode_->reusedHashTableAddress()) {
+      hashTableBuilder_(joinNode_->hashTableBuilder()) {
   VELOX_CHECK(pool()->trackUsage());
   VELOX_CHECK_NOT_NULL(joinBridge_);
 
   joinBridge_->addBuilder();
 
-  if (reusedHashTableAddress_ != nullptr) {
+  if (hashTableBuilder_ != nullptr) {
     auto hashTableBuilder =
-        reinterpret_cast<exec::HashTableBuilder*>(reusedHashTableAddress_);
+        reinterpret_cast<exec::HashTableBuilder*>(hashTableBuilder_);
     joinBridge_->start();
 
     if (hashTableBuilder->joinHasNullKeys() && isAntiJoin(joinType_) &&
@@ -643,7 +643,7 @@ void HashBuild::spillPartition(
 }
 
 void HashBuild::noMoreInput() {
-  if (reusedHashTableAddress_ != nullptr) {
+  if (hashTableBuilder_ != nullptr) {
     return;
   }
 
@@ -994,7 +994,7 @@ BlockingReason HashBuild::isBlocked(ContinueFuture* future) {
 }
 
 bool HashBuild::isFinished() {
-  if (reusedHashTableAddress_ != nullptr) {
+  if (hashTableBuilder_ != nullptr) {
     return true;
   }
   return state_ == State::kFinish;
