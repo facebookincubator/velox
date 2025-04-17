@@ -67,6 +67,10 @@ class ReaderBase {
     return FileMetaDataPtr(reinterpret_cast<const void*>(fileMetaData_.get()));
   }
 
+  const dwio::common::ReaderOptions& options() const {
+    return options_;
+  }
+
   const std::shared_ptr<const RowType>& schema() const {
     return schema_;
   }
@@ -956,6 +960,7 @@ class ParquetRowReader::Impl {
     requestedType_ = options_.requestedType() ? options_.requestedType()
                                               : readerBase_->schema();
     columnReader_ = ParquetColumnReader::build(
+        readerBase_->options(),
         requestedType_,
         readerBase_->schemaWithId(), // Id is schema id
         params,
