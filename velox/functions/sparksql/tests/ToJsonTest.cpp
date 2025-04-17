@@ -27,15 +27,28 @@ constexpr double kInfDouble = std::numeric_limits<double>::infinity();
 
 class ToJsonTest : public SparkFunctionBaseTest {
  protected:
-  core::CallTypedExprPtr createToJson(const TypePtr& inputType) {
-    std::vector<core::TypedExprPtr> inputs = {
-        std::make_shared<core::FieldAccessTypedExpr>(inputType, "c0")};
+  core::CallTypedExprPtr createToJson(
+      const TypePtr& inputType,
+      const std::optional<std::string>& timezone = std::nullopt) {
+    auto input = std::make_shared<core::FieldAccessTypedExpr>(inputType, "c0");
+    std::vector<core::TypedExprPtr> inputs = {input};
+    if (timezone) {
+      auto tz = std::make_shared<core::ConstantTypedExpr>(VARCHAR(), *timezone);
+      inputs.emplace_back(tz);
+    }
     return std::make_shared<const core::CallTypedExpr>(
         VARCHAR(), std::move(inputs), "to_json");
   }
 
   void testToJson(const VectorPtr& input, const VectorPtr& expected) {
-    auto expr = createToJson(input->type());
+    testToJson(input, std::nullopt, expected);
+  }
+
+  void testToJson(
+      const VectorPtr& input,
+      const std::optional<std::string>& timezone,
+      const VectorPtr& expected) {
+    auto expr = createToJson(input->type(), timezone);
     testEncodings(expr, {input}, expected);
   }
 };
@@ -209,7 +222,7 @@ TEST_F(ToJsonTest, basicTimestamp) {
        R"({"a":"2020-02-29T00:00:00.000Z"})",
        R"({"a":"1900-01-01T00:00:00.000Z"})",
        R"({"a":null})"});
-  testToJson(input, expected);
+  testToJson(input, "UTC", expected);
   // Los_Angeles time zone.
   setTimezone("America/Los_Angeles");
   expected = makeFlatVector<std::string>(
@@ -267,7 +280,7 @@ TEST_F(ToJsonTest, unsupportedType) {
   auto invalidRow = makeRowVector(
       {"a", "b"}, {makeNullableFlatVector<int32_t>({0, 1, 2, 3}), invalidMap});
   VELOX_ASSERT_THROW(
-      testToJson(invalidRow, nullptr),
+      testToJson(invalidRow, "UTC", nullptr),
       "to_json function does not support type ROW<a:INTEGER,b:MAP<BIGINT,BIGINT>>.");
 }
 } // namespace

@@ -198,7 +198,7 @@ void toJson<TypeKind::VARCHAR>(
   auto value = input.castTo<Varchar>();
   const size_t length = normalizedSizeForJsonCast(value.data(), value.size());
   char buffer[length];
-  normalizeForJsonCast(value.data(), length, buffer);
+  normalizeForJsonCast(value.data(), value.size(), buffer);
   result.append("\"").append(buffer, length).append("\"");
 }
 
@@ -305,7 +305,8 @@ struct ToJsonFunction {
   FOLLY_ALWAYS_INLINE void initialize(
       const std::vector<TypePtr>& inputTypes,
       const core::QueryConfig& config,
-      const void* /*unusde*/) {
+      const void* /*input*/,
+      const void* /*timeZone*/ = nullptr) {
     VELOX_CHECK(
         isSupportedType(inputTypes[0], true),
         "to_json function does not support type {}.",
