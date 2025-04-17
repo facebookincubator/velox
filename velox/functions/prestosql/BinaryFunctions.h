@@ -22,6 +22,7 @@
 #include "folly/ssl/OpenSSLHash.h"
 #include "velox/common/base/BitUtil.h"
 #include "velox/common/encode/Base64.h"
+#include "velox/common/hyperloglog/Murmur3Hash128.h"
 #include "velox/external/md5/md5.h"
 #include "velox/functions/Udf.h"
 #include "velox/functions/lib/ToHex.h"
@@ -293,11 +294,15 @@ struct FromBase64Function {
   // T can be either arg_type<Varchar> or arg_type<Varbinary>. These are the
   // same, but hard-coding one of them might be confusing.
   template <typename T>
-  FOLLY_ALWAYS_INLINE void call(out_type<Varbinary>& result, const T& input) {
+  FOLLY_ALWAYS_INLINE Status call(out_type<Varbinary>& result, const T& input) {
     auto inputSize = input.size();
-    result.resize(
-        encoding::Base64::calculateDecodedSize(input.data(), inputSize));
-    encoding::Base64::decode(
+    auto decodedSize =
+        encoding::Base64::calculateDecodedSize(input.data(), inputSize);
+    if (decodedSize.hasError()) {
+      return decodedSize.error();
+    }
+    result.resize(decodedSize.value());
+    return encoding::Base64::decode(
         input.data(), inputSize, result.data(), result.size());
   }
 };
@@ -305,13 +310,16 @@ struct FromBase64Function {
 template <typename T>
 struct FromBase64UrlFunction {
   VELOX_DEFINE_FUNCTION_TYPES(T);
-  FOLLY_ALWAYS_INLINE void call(
-      out_type<Varbinary>& result,
-      const arg_type<Varchar>& input) {
+  FOLLY_ALWAYS_INLINE Status
+  call(out_type<Varbinary>& result, const arg_type<Varchar>& input) {
     auto inputSize = input.size();
-    result.resize(
-        encoding::Base64::calculateDecodedSize(input.data(), inputSize));
-    encoding::Base64::decodeUrl(
+    auto decodedSize =
+        encoding::Base64::calculateDecodedSize(input.data(), inputSize);
+    if (decodedSize.hasError()) {
+      return decodedSize.error();
+    }
+    result.resize(decodedSize.value());
+    return encoding::Base64::decodeUrl(
         input.data(), inputSize, result.data(), result.size());
   }
 };
@@ -473,5 +481,19 @@ struct LPadVarbinaryFunction : public PadFunctionVarbinaryBase<T, true> {};
 
 template <typename T>
 struct RPadVarbinaryFunction : public PadFunctionVarbinaryBase<T, false> {};
+
+// Implement murmur3_x64_128 function murmur3_x64_128(varbinary) -> varbinary
+// This function is used to generate a 128-bit hash value for a given input
+template <typename T>
+struct Murmur3X64_128Function {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  FOLLY_ALWAYS_INLINE
+  void call(out_type<Varbinary>& result, const arg_type<Varbinary>& input) {
+    result.resize(16);
+    common::hll::Murmur3Hash128::hash(
+        input.data(), input.size(), 0, result.data());
+  }
+};
 
 } // namespace facebook::velox::functions

@@ -176,10 +176,13 @@ TEST_F(PrintPlanWithStatsTest, innerJoinWithTableScan) {
        {"     HashProbe: Input: 2000 rows \\(.+\\), Output: 2000 rows \\(.+\\), Cpu time: .+, Blocked wall time: .+, Peak memory: .+, Memory allocations: .+, Threads: 1, CPU breakdown: B/I/O/F (.+/.+/.+/.+)"},
        // These lines may or may not appear depending on whether the operator
        // gets blocked during a run.
-       {"        blockedWaitForJoinBuildTimes        sum: 1, count: 1, min: 1, max: 1, avg: 1"},
-       {"        blockedWaitForJoinBuildWallNanos\\s+sum: .+, count: 1, min: .+, max: .+"},
-       {"        dynamicFiltersProduced\\s+sum: 1, count: 1, min: 1, max: 1, avg: 1"},
-       {"        queuedWallNanos\\s+sum: .+, count: 1, min: .+, max: .+"},
+       {"        blockedWaitForJoinBuildTimes\\s+sum: 1, count: 1, min: 1, max: 1, avg: 1",
+        true},
+       {"        blockedWaitForJoinBuildWallNanos\\s+sum: .+, count: 1, min: .+, max: .+",
+        true},
+       {"        dynamicFiltersProduced\\s+sum: 1, count: 1, min: 1, max: 1, avg: 1",
+        true},
+       {"        queuedWallNanos\\s+sum: .+, count: 1, min: .+, max: .+", true},
        // This line may or may not appear depending on how the threads
        // running the Drivers are executed, this only appears if the
        // HashProbe has to wait for the HashBuild construction.
@@ -200,9 +203,13 @@ TEST_F(PrintPlanWithStatsTest, innerJoinWithTableScan) {
        {"          numStripes[ ]* sum: .+, count: 1, min: .+, max: .+"},
        {"          overreadBytes[ ]* sum: 0B, count: 1, min: 0B, max: 0B, avg: 0B"},
        {"          prefetchBytes       [ ]* sum: .+, count: 1, min: .+, max: .+"},
-       {"          preloadedSplits[ ]+sum: .+, count: .+, min: .+, max: .+"},
+       {"          preloadedSplits[ ]+sum: .+, count: .+, min: .+, max: .+",
+        true},
+       {"          processedSplits[ ]+sum: 20, count: 1, min: 20, max: 20, avg: 20"},
+       {"          processedStrides[ ]+sum: 20, count: 1, min: 20, max: 20, avg: 20"},
        {"          ramReadBytes        [ ]* sum: .+, count: 1, min: .+, max: .+"},
-       {"          readyPreloadedSplits[ ]+sum: .+, count: .+, min: .+, max: .+"},
+       {"          readyPreloadedSplits[ ]+sum: .+, count: .+, min: .+, max: .+",
+        true},
        {"          runningAddInputWallNanos\\s+sum: .+, count: 1, min: .+, max: .+"},
        {"          runningFinishWallNanos\\s+sum: .+, count: 1, min: .+, max: .+"},
        {"          runningGetOutputWallNanos\\s+sum: .+, count: 1, min: .+, max: .+"},
@@ -290,6 +297,8 @@ TEST_F(PrintPlanWithStatsTest, partialAggregateWithTableScan) {
          {"        overreadBytes[ ]* sum: 0B, count: 1, min: 0B, max: 0B, avg: 0B"},
 
          {"        prefetchBytes    [ ]* sum: .+, count: 1, min: .+, max: .+"},
+         {"        processedSplits  [ ]* sum: 1, count: 1, min: 1, max: 1, avg: 1"},
+         {"        processedStrides [ ]* sum: 1, count: 1, min: 1, max: 1, avg: 1"},
          {"        preloadedSplits[ ]+sum: .+, count: .+, min: .+, max: .+",
           true},
          {"        ramReadBytes     [ ]* sum: .+, count: 1, min: .+, max: .+"},
@@ -344,8 +353,9 @@ TEST_F(PrintPlanWithStatsTest, tableWriterWithTableScan) {
        {"      runningAddInputWallNanos\\s+sum: .+, count: 1, min: .+, max: .+"},
        {"      runningFinishWallNanos\\s+sum: .+, count: 1, min: .+, max: .+"},
        {"      runningGetOutputWallNanos\\s+sum: .+, count: 1, min: .+, max: .+"},
+       {"      runningWallNanos\\s+sum: .+, count: 1, min: .+, max: .+, avg: .+"},
        {"      stripeSize\\s+sum: .+, count: 1, min: .+, max: .+"},
-       {"      writeIOTime\\s+sum: .+, count: 1, min: .+, max: .+"},
+       {"      writeIOWallNanos\\s+sum: .+, count: 1, min: .+, max: .+"},
        {R"(  -- TableScan\[0\]\[table: hive_table\] -> c0:BIGINT, c1:INTEGER, c2:SMALLINT, c3:REAL, c4:DOUBLE, c5:VARCHAR)"},
        {R"(     Input: 100 rows \(.+\), Output: 100 rows \(.+\), Cpu time: .+, Blocked wall time: .+, Peak memory: .+, Memory allocations: .+, Threads: 1, Splits: 1, CPU breakdown: B/I/O/F (.+/.+/.+/.+))"},
        {"        dataSourceAddSplitWallNanos[ ]* sum: .+, count: 1, min: .+, max: .+"},
@@ -360,6 +370,8 @@ TEST_F(PrintPlanWithStatsTest, tableWriterWithTableScan) {
        {"        overreadBytes[ ]* sum: 0B, count: 1, min: 0B, max: 0B, avg: 0B"},
 
        {"        prefetchBytes    [ ]* sum: .+, count: 1, min: .+, max: .+"},
+       {"        processedSplits  [ ]* sum: 1, count: 1, min: 1, max: 1, avg: 1"},
+       {"        processedStrides [ ]* sum: 1, count: 1, min: 1, max: 1, avg: 1"},
        {"        preloadedSplits[ ]+sum: .+, count: .+, min: .+, max: .+",
         true},
        {"        ramReadBytes     [ ]* sum: .+, count: 1, min: .+, max: .+"},

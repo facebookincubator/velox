@@ -28,8 +28,21 @@ namespace facebook::velox::fuzzer {
 
 using facebook::velox::variant;
 
-std::unique_ptr<AbstractInputGenerator>
-getRandomInputGenerator(size_t seed, const TypePtr& type, double nullRatio);
+/// Get a random input generator for the given type.
+/// @param seed The seed used by the returned input generator.
+/// @param type The type of the input generator.
+/// @param nullRatio The ratio of null values to generate by the returned input
+/// generator.
+/// @param mapKeys The candidate map keys used when generating data for all maps
+/// nested in 'type'. If empty, random keys are used.
+/// @param maxContainerSize The maximum size of all containers nested in 'type',
+/// including arrays and maps.
+std::unique_ptr<AbstractInputGenerator> getRandomInputGenerator(
+    size_t seed,
+    const TypePtr& type,
+    double nullRatio,
+    const std::vector<variant>& mapKeys = {},
+    size_t maxContainerSize = 10);
 
 template <typename T, typename Enabled = void>
 class RandomInputGenerator : public AbstractInputGenerator {
@@ -339,6 +352,11 @@ class SetConstrainedGenerator : public AbstractInputGenerator {
   std::vector<variant> set_;
 };
 
+// Generates random JSON strings. This generator first generates a value that
+// the expected JSON represents through 'objectGenerator', then converts the
+// value to a JSON string via folly::json::serialize() with randomly generated
+// serialization options. Additionally, it makes a random variation to the JSON
+// string by chance for testing of invalid cases.
 class JsonInputGenerator : public AbstractInputGenerator {
  public:
   JsonInputGenerator(
@@ -386,5 +404,69 @@ class PhoneNumberInputGenerator : public AbstractInputGenerator {
 
  private:
   std::string generateImpl();
+};
+
+/// Generates a JSON path for JSON of a given type.
+/// @param jsonType The type of data represented by the JSON.
+/// @param mapKeys Candidate key values of maps in the JSON. All maps in the
+/// JSON are assumed to share the same key type and candidate key values.
+/// @param maxContainerLength The maximum length of a container (array or map)
+/// in the JSON.
+/// @param makeRandomVariation If true, the generator will generate JSON path
+/// not supported by JsonExtractor.
+/// This generator generates the following JSON paths:
+///  - On root: $
+///  - On arrays: [index], [], [*], .*
+///  - On objects: [key], ['key'], ["key"], [], [*], .*, .key, ."key"
+/// TODO: support the following JSON paths:
+///  - Recusive gathering by key or array index: ..key, ..[1]
+/// TODO: support the following JSON paths after Velox JsonExtractor supports
+/// them:
+///  - On strings, arrays, and objects: .length()
+///  - On arrays: [begin:end:step]
+
+class JsonPathGenerator : public AbstractInputGenerator {
+ public:
+  JsonPathGenerator(
+      size_t seed,
+      const TypePtr& type,
+      double nullRatio,
+      const TypePtr& jsonType,
+      const std::vector<variant>& mapKeys,
+      size_t maxContainerLength,
+      bool makeRandomVariation = false)
+      : AbstractInputGenerator(seed, type, nullptr, nullRatio),
+        jsonType_{jsonType},
+        mapKeys_{mapKeys},
+        maxContainerLength_{maxContainerLength},
+        makeRandomVariation_{makeRandomVariation} {}
+
+  ~JsonPathGenerator() override = default;
+
+  variant generate() override;
+
+ private:
+  uint64_t generateRandomIndex();
+
+  void generateRecursiveAccess(std::string& path, const TypePtr& type);
+
+  void generateImpl(std::string& path, const TypePtr& type);
+
+  TypePtr jsonType_;
+
+  std::vector<variant> mapKeys_;
+
+  size_t maxContainerLength_;
+
+  bool makeRandomVariation_;
+};
+
+class TDigestInputGenerator : public AbstractInputGenerator {
+ public:
+  TDigestInputGenerator(size_t seed, const TypePtr& type, double nullRatio);
+
+  ~TDigestInputGenerator() override;
+
+  variant generate() override;
 };
 } // namespace facebook::velox::fuzzer

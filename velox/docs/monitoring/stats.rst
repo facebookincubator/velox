@@ -130,6 +130,21 @@ These stats are reported only by TableWriter operator
    * - scaledWriters
      -
      - The number of times that we scale writers for a non-partitioned table.
+   * - runningWallNanos
+     - nanos
+     - The running wall time of a writer operator since its creation.
+   * - numWrittenFiles
+     -
+     - TThe number of files written by a writer operator
+   * - writeIOWallNanos
+     - nanos
+     - The file write IO walltime.
+   * - writeRecodeWallNanos
+     - nanos
+     - The walltime spend on file write data recoding.
+   * - writeCompressionWallNanos
+     - nanos
+     - The walltime spent on file write data compression.
 
 LookupIndexJoin
 ---------------
@@ -153,6 +168,12 @@ These stats are reported only by IndexLookupJoin operator
      - nanos
      - The cpu time in nanoseconds that the index connector process response from storages
        client for followup processing by index join operator.
+   * - clientlookupWaitWallNanos
+     - nanos
+     - The walltime in nanoseconds that the storage client wait for the lookup from remote storage.
+   * - clientNumStorageRequests
+     - nanos
+     - The number of split requests sent to remote storage for a client lookup request.
    * - clientRequestProcessCpuNanos
      - nanos
      - The cpu time in nanoseconds that the storage client process request for remote
@@ -263,3 +284,24 @@ These stats are reported by prefix sort.
    * - numPrefixSortKeys
      -
      - The number of columns sorted using prefix sort.
+
+IterativeVectorSerializer
+-------------------------
+These stats are reported by IterativeVectorSerializer.
+
+.. list-table::
+   :widths: 50 25 50
+   :header-rows: 1
+
+   * - Stats
+     - Unit
+     - Description
+   * - compressionInputBytes
+     -
+     - The number of bytes before compression.
+   * - compressedBytes
+     -
+     - The number of bytes after compression.
+   * - compressionSkippedBytes
+     -
+     - The number of bytes that skip in-efficient compression.

@@ -16,11 +16,10 @@
 
 #pragma once
 
-#include "velox/functions/sparksql/DateTimeFunctions.h"
 #include <iostream>
+#include "velox/functions/sparksql/DateTimeFunctions.h"
 
 namespace facebook::velox::functions::sparksql {
-
 
 inline int64_t safeMul(int64_t a, int64_t b, const char* context) {
   int64_t result;
@@ -43,7 +42,6 @@ inline int64_t safeAdd(int64_t a, int64_t b, const char* context) {
       b);
   return result;
 }
-
 
 template <typename T>
 struct MakeYMIntervalFunction {
@@ -87,7 +85,6 @@ struct MakeDTIntervalFunction {
       int32_t hours = 0,
       int32_t minutes = 0,
       double secondsMicros = 0) {
-    
     int64_t daysMicros = safeMul(
         static_cast<int64_t>(days) * Timestamp::kSecondsInDay,
         Timestamp::kMicrosecondsInSecond,
@@ -115,4 +112,4 @@ struct MakeDTIntervalFunction {
   }
 };
 
-} // namespace facebook::velox::functions::sparksql 
+} // namespace facebook::velox::functions::sparksql

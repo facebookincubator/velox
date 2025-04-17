@@ -70,13 +70,12 @@ if(${VELOX_ENABLE_DUCKDB})
 endif()
 
 if(${VELOX_ENABLE_GPU})
+  if(${VELOX_ENABLE_CUDF})
+    add_subdirectory(experimental/cudf)
+  endif()
   add_subdirectory(experimental/gpu)
   add_subdirectory(experimental/wave)
   add_subdirectory(external/jitify)
-endif()
-
-if(${VELOX_BUILD_PYTHON_PACKAGE})
-  add_subdirectory(py)
 endif()
 
 # substrait converter
@@ -86,4 +85,8 @@ endif()
 
 if(${VELOX_BUILD_TESTING})
   add_subdirectory(tool)
+endif()
+
+if(VELOX_BUILD_PYTHON_PACKAGE)
+  add_subdirectory(python)
 endif()

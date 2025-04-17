@@ -19,7 +19,9 @@
 #include <gtest/gtest.h>
 
 #include "velox/common/memory/Memory.h"
+#include "velox/functions/prestosql/json/JsonExtractor.h"
 #include "velox/functions/prestosql/types/JsonType.h"
+#include "velox/functions/prestosql/types/TDigestType.h"
 #include "velox/type/Variant.h"
 
 namespace facebook::velox::fuzzer::test {
@@ -381,6 +383,43 @@ TEST_F(ConstrainedGeneratorsTest, json) {
       EXPECT_TRUE(json.isNull() || json.isArray());
     }
   }
+}
+
+TEST_F(ConstrainedGeneratorsTest, jsonPath) {
+  const std::vector<variant> mapKeys{"k1", "k2"};
+  const size_t kMaxContainerSize = 3;
+  TypePtr type = ARRAY(MAP(VARCHAR(), ROW({BIGINT(), MAP(VARCHAR(), REAL())})));
+  auto jsonGenerator = std::make_unique<JsonInputGenerator>(
+      0,
+      JSON(),
+      0.2,
+      getRandomInputGenerator(0, type, 0.2, mapKeys, kMaxContainerSize));
+  auto jsonPathGenerator = std::make_unique<JsonPathGenerator>(
+      0, VARCHAR(), 0.2, type, mapKeys, kMaxContainerSize);
+
+  const uint32_t kIterations = 1000;
+  bool hasNull = false;
+  for (uint32_t i = 0; i < kIterations; ++i) {
+    const auto json = jsonGenerator->generate();
+    const auto jsonPath = jsonPathGenerator->generate();
+    if (jsonPath.hasValue()) {
+      if (json.hasValue()) {
+        EXPECT_NO_THROW(functions::jsonExtract(
+            json.value<TypeKind::VARCHAR>(),
+            jsonPath.value<TypeKind::VARCHAR>()));
+      }
+    } else {
+      hasNull = true;
+    }
+  }
+  EXPECT_TRUE(hasNull);
+}
+
+TEST_F(ConstrainedGeneratorsTest, tdigest) {
+  std::unique_ptr<TDigestInputGenerator> generator =
+      std::make_unique<TDigestInputGenerator>(0, TDIGEST(DOUBLE()), 0.4);
+  auto value = generator->generate();
+  EXPECT_EQ(value.kind(), TypeKind::VARBINARY);
 }
 
 } // namespace facebook::velox::fuzzer::test

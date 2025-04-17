@@ -15,6 +15,7 @@
  */
 #include "folly/Unicode.h"
 
+#include "velox/common/testutil/OptionalEmpty.h"
 #include "velox/functions/prestosql/json/JsonStringUtil.h"
 #include "velox/functions/prestosql/tests/CastBaseTest.h"
 #include "velox/functions/prestosql/types/JsonType.h"
@@ -825,7 +826,8 @@ TEST_F(JsonCastTest, unsupportedTypes) {
       "Map keys cannot be null.");
 
   // Map keys cannot be complex type.
-  auto arrayKeyVector = makeNullableArrayVector<int64_t>({{1}, {2}});
+  auto arrayKeyVector = makeNullableArrayVector<int64_t>(
+      std::vector<std::vector<std::optional<int64_t>>>{{1}, {2}});
   auto arrayKeyMap = std::make_shared<MapVector>(
       pool(),
       MAP(ARRAY(BIGINT()), BIGINT()),
@@ -837,7 +839,9 @@ TEST_F(JsonCastTest, unsupportedTypes) {
       valueVector);
   VELOX_ASSERT_THROW(
       evaluateCast(
-          MAP(ARRAY(BIGINT()), BIGINT()), JSON(), makeRowVector({arrayKeyMap})),
+          MAP(ARRAY(BIGINT()), BIGINT()),
+          JSON(),
+          makeRowVector(std::vector<VectorPtr>{arrayKeyMap})),
       "Cannot cast MAP<ARRAY<BIGINT>,BIGINT> to JSON");
 
   // Map keys of json type must not be null.
@@ -1030,6 +1034,18 @@ TEST_F(JsonCastTest, toDouble) {
       DOUBLE(),
       {"NaN"_sv},
       "The JSON document has an improper structure");
+
+  testThrow<JsonNativeType>(
+      JSON(),
+      REAL(),
+      {"\"nan\""_sv},
+      "The JSON element does not have the requested type");
+
+  testThrow<JsonNativeType>(
+      JSON(),
+      DOUBLE(),
+      {"\"nan\""_sv},
+      "The JSON element does not have the requested type");
 }
 
 TEST_F(JsonCastTest, toBoolean) {
@@ -1087,7 +1103,7 @@ TEST_F(JsonCastTest, toArray) {
   auto expected = makeNullableArrayVector<StringView>(
       {{{"red"_sv, "blue"_sv}},
        {{std::nullopt, std::nullopt, "purple"_sv}},
-       {{}},
+       common::testutil::optionalEmpty,
        std::nullopt});
 
   testCast(data, expected);
@@ -1116,7 +1132,7 @@ TEST_F(JsonCastTest, toMap) {
   auto expected = makeNullableMapVector<StringView, StringView>(
       {{{{"blue"_sv, "2.2"_sv}, {"red"_sv, "1"_sv}}},
        {{{"purple"_sv, std::nullopt}, {"yellow"_sv, "4"_sv}}},
-       {{}},
+       common::testutil::optionalEmpty,
        std::nullopt});
 
   testCast(data, expected);
@@ -1131,7 +1147,7 @@ TEST_F(JsonCastTest, toMap) {
   expected = makeNullableMapVector<int64_t, double>(
       {{{{101, 1.1}, {102, 2.0}}},
        {{{103, std::nullopt}, {104, 4.0}}},
-       {{}},
+       common::testutil::optionalEmpty,
        std::nullopt});
 
   testCast(data, expected);
@@ -1289,8 +1305,8 @@ TEST_F(JsonCastTest, toNested) {
   auto arrayExpected = makeNullableNestedArrayVector<StringView>(
       {{{{{"1"_sv, "2"_sv}}, {{"3"_sv}}}},
        {{{{std::nullopt, std::nullopt, "4"_sv}}}},
-       {{{{}}}},
-       {{}}});
+       {{common::testutil::optionalEmpty}},
+       common::testutil::optionalEmpty});
 
   testCast(array, arrayExpected);
 
@@ -1626,4 +1642,32 @@ TEST_F(JsonCastTest, castFromJsonWithEscaping) {
           "\"some large enough string 😀\"");
     }
   }
+}
+
+TEST_F(JsonCastTest, castFromJsonWithEscapingForSpecialUniocodeCharacters) {
+  auto testCast = [&](const std::string& json,
+                      const std::string& expectedJson) {
+    auto data = makeRowVector({makeFlatVector<std::string>({json})});
+    auto result = evaluate("cast(json_parse(c0) as json[])", data);
+    ASSERT_TRUE(!result->isNullAt(0));
+
+    auto castRow = evaluate(
+        "cast(row_constructor(c0[1]) as struct(x varchar))",
+        makeRowVector({result}));
+    ASSERT_TRUE(!castRow->isNullAt(0));
+
+    auto expected =
+        makeRowVector({"x"}, {makeFlatVector<std::string>({expectedJson})});
+    test::assertEqualVectors(expected, castRow);
+  };
+
+  testCast(
+      R"(["walk-in bar and \u0003spacious "])",
+      "walk-in bar and \u0003spacious ");
+
+  testCast(R"(["\u0010"])", "\u0010");
+  testCast(R"(["\u001a"])", "\u001A");
+  testCast(R"(["\u0020"])", "\u0020");
+  testCast(R"(["\u007F"])", "\u007F");
+  testCast(R"(["\u008A"])", "\u008A");
 }

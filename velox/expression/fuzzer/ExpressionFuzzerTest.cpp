@@ -57,7 +57,9 @@ using facebook::velox::fuzzer::ArgTypesGenerator;
 using facebook::velox::fuzzer::ArgValuesGenerator;
 using facebook::velox::fuzzer::ExpressionFuzzer;
 using facebook::velox::fuzzer::FuzzerRunner;
+using facebook::velox::fuzzer::JsonExtractArgValuesGenerator;
 using facebook::velox::fuzzer::JsonParseArgValuesGenerator;
+using facebook::velox::fuzzer::TDigestArgValuesGenerator;
 using facebook::velox::test::ReferenceQueryRunner;
 
 int main(int argc, char** argv) {
@@ -89,8 +91,8 @@ int main(int argc, char** argv) {
       // (since TDigest is a user defined type), and tries to pass a
       // VARBINARY (since TDigest's implementation uses an
       // alias to VARBINARY).
-      "value_at_quantile",
       "values_at_quantiles",
+      "merge_tdigest",
       // Fuzzer cannot generate valid 'comparator' lambda.
       "array_sort(array(T),constant function(T,T,bigint)) -> array(T)",
       "split_to_map(varchar,varchar,varchar,function(varchar,varchar,varchar,varchar)) -> map(varchar,varchar)",
@@ -120,7 +122,13 @@ int main(int argc, char** argv) {
       "bing_tile_zoom_level",
       "bing_tile_coordinates",
       "bing_tile_parent",
-      "bing_tile_children"};
+      "bing_tile_children",
+      "bing_tile_quadkey",
+      "array_min_by", // https://github.com/facebookincubator/velox/issues/12934
+      "array_max_by", // https://github.com/facebookincubator/velox/issues/12934
+      // https://github.com/facebookincubator/velox/issues/13047
+      "inverse_poisson_cdf",
+  };
   size_t initialSeed = FLAGS_seed == 0 ? std::time(nullptr) : FLAGS_seed;
 
   std::unordered_map<std::string, std::shared_ptr<ArgTypesGenerator>>
@@ -143,7 +151,10 @@ int main(int argc, char** argv) {
 
   std::unordered_map<std::string, std::shared_ptr<ArgValuesGenerator>>
       argValuesGenerators = {
-          {"json_parse", std::make_shared<JsonParseArgValuesGenerator>()}};
+          {"json_parse", std::make_shared<JsonParseArgValuesGenerator>()},
+          {"json_extract", std::make_shared<JsonExtractArgValuesGenerator>()},
+          {"value_at_quantile",
+           std::make_shared<TDigestArgValuesGenerator>("value_at_quantile")}};
 
   std::shared_ptr<facebook::velox::memory::MemoryPool> rootPool{
       facebook::velox::memory::memoryManager()->addRootPool()};
@@ -213,6 +224,9 @@ int main(int argc, char** argv) {
         "combine_hash_internal",
         "map_keys_by_top_n_values", // requires
                                     // https://github.com/prestodb/presto/pull/24570
+        "inverse_gamma_cdf", // https://github.com/facebookincubator/velox/issues/12918
+        "inverse_binomial_cdf", // https://github.com/facebookincubator/velox/issues/12981
+        "inverse_poisson_cdf", // https://github.com/facebookincubator/velox/issues/12982
     });
 
     referenceQueryRunner = std::make_shared<PrestoQueryRunner>(

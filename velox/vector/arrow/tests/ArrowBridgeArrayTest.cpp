@@ -1064,13 +1064,7 @@ TEST_F(ArrowBridgeArrayExportTest, constantCrossValidate) {
 
 TEST_F(ArrowBridgeArrayExportTest, flatIntervalYearMonth) {
   std::vector<std::optional<int32_t>> inputData = {
-      12, 
-      24, 
-      1,  
-      14, 
-      -12,
-      -14,
-      std::nullopt};
+      12, 24, 1, 14, -12, -14, std::nullopt};
 
   testFlatVector(inputData, INTERVAL_YEAR_MONTH());
 }
