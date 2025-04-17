@@ -147,6 +147,7 @@ option(VELOX_ENABLE_COMPRESSION_LZ4 "Enable Lz4 compression support." OFF)
 
 option(VELOX_BUILD_TEST_UTILS "Builds Velox test utilities" OFF)
 option(VELOX_BUILD_VECTOR_TEST_UTILS "Builds Velox vector test utilities" OFF)
+option(VELOX_BUILD_SPARK_AGGREGATE_FUZZER "Builds Spark aggregate fuzzer with Spark connector" ON)
 option(VELOX_BUILD_PYTHON_PACKAGE "Builds Velox Python bindings" OFF)
 option(VELOX_PYTHON_LEGACY_ONLY "Build only the pyvelox module" OFF)
 option(VELOX_BUILD_RUNNER "Builds velox runner" ON)
@@ -537,7 +538,7 @@ velox_resolve_dependency(simdjson 3.9.3)
 velox_set_source(folly)
 velox_resolve_dependency(folly)
 
-if(${VELOX_BUILD_TESTING})
+if(${VELOX_BUILD_TESTING} AND ${VELOX_BUILD_SPARK_AGGREGATE_FUZZER})
   # Spark query runner depends on absl, gRPC.
   velox_set_source(absl)
   velox_resolve_dependency(absl)
