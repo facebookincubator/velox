@@ -17,16 +17,16 @@
 #include <expression/ComplexViewTypes.h>
 #include <functions/lib/DateTimeFormatter.h>
 #include <functions/lib/TimeUtils.h>
-#include <functions/prestosql/json/JsonStringUtil.h>
 #include <velox/type/DecimalUtil.h>
 
 namespace facebook::velox::functions::sparksql {
 namespace {
 
 struct JsonOptions {
-  JsonOptions(const tz::TimeZone* _tz) : timeZone(_tz) {}
-
   const tz::TimeZone* timeZone;
+
+  /// Whether to ignore null fields during json generating.
+  const bool ignoreNullFields{true};
 };
 
 template <typename T>
@@ -196,10 +196,7 @@ void toJson<TypeKind::VARCHAR>(
     std::string& result,
     const JsonOptions& options) {
   auto value = input.castTo<Varchar>();
-  const size_t length = normalizedSizeForJsonCast(value.data(), value.size());
-  char buffer[length];
-  normalizeForJsonCast(value.data(), value.size(), buffer);
-  result.append("\"").append(buffer, length).append("\"");
+  folly::json::escapeString(value, result, {});
 }
 
 template <>
@@ -228,19 +225,29 @@ void toJson<TypeKind::ROW>(
   auto rowType = std::static_pointer_cast<const RowType>(input.type());
   auto row = input.castTo<DynamicRow>();
   result.append("{");
+  bool commaBefore = false;
   for (int i = 0; i < rowType->size(); i++) {
-    if (i > 0) {
-      result.append(",");
-    }
-    result.append("\"");
-    result.append(rowType->nameOf(i));
-    result.append("\":");
     auto data = row.at(i);
     if (data.has_value()) {
+      if (commaBefore) {
+        result.append(",");
+      } else {
+        commaBefore = true;
+      }
+      result.append("\"");
+      result.append(rowType->nameOf(i));
+      result.append("\":");
       VELOX_DYNAMIC_TYPE_DISPATCH_ALL(
           toJson, data->kind(), data.value(), result, options);
-    } else {
-      result.append("null");
+    } else if (!options.ignoreNullFields) {
+      if (commaBefore) {
+        result.append(",");
+      } else {
+        commaBefore = true;
+      }
+      result.append("\"");
+      result.append(rowType->nameOf(i));
+      result.append("\":null");
     }
   }
   result.append("}");
@@ -312,6 +319,7 @@ struct ToJsonFunction {
         "to_json function does not support type {}.",
         inputTypes[0]->toString());
     sessionTimezone_ = getTimeZoneFromConfig(config);
+    ignoreNullFields_ = config.sparkJsonIgnoreNullFields();
   }
 
   FOLLY_ALWAYS_INLINE bool call(
@@ -359,13 +367,19 @@ struct ToJsonFunction {
       const tz::TimeZone* timeZone) {
     std::string res;
     VELOX_DYNAMIC_TYPE_DISPATCH_ALL(
-        toJson, input.kind(), input, res, JsonOptions(timeZone));
+        toJson,
+        input.kind(),
+        input,
+        res,
+        JsonOptions{
+            .timeZone = timeZone, .ignoreNullFields = ignoreNullFields_});
     result.resize(res.size());
     std::memcpy(result.data(), res.c_str(), res.size());
     return true;
   }
 
   const tz::TimeZone* sessionTimezone_;
+  bool ignoreNullFields_;
 };
 
 } // namespace

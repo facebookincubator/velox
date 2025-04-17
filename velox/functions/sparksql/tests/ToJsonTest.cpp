@@ -51,6 +51,11 @@ class ToJsonTest : public SparkFunctionBaseTest {
     auto expr = createToJson(input->type(), timezone);
     testEncodings(expr, {input}, expected);
   }
+
+  void disableJsonIgnoreNullFields() {
+    queryCtx_->testingOverrideConfigUnsafe(
+        {{core::QueryConfig::kSparkJsonIgnoreNullFields, "false"}});
+  }
 };
 
 TEST_F(ToJsonTest, basicStruct) {
@@ -59,10 +64,7 @@ TEST_F(ToJsonTest, basicStruct) {
       {makeNullableFlatVector<int64_t>({1, std::nullopt, 3, std::nullopt}),
        makeNullableFlatVector<double>({1.1, 2.2, std::nullopt, std::nullopt})});
   auto expected = makeFlatVector<std::string>(
-      {R"({"a":1,"b":1.1})",
-       R"({"a":null,"b":2.2})",
-       R"({"a":3,"b":null})",
-       R"({"a":null,"b":null})"});
+      {R"({"a":1,"b":1.1})", R"({"b":2.2})", R"({"a":3})", R"({})"});
   testToJson(input, expected);
 }
 
@@ -86,6 +88,7 @@ TEST_F(ToJsonTest, basicMap) {
 }
 
 TEST_F(ToJsonTest, basicBool) {
+  disableJsonIgnoreNullFields();
   auto data = makeNullableFlatVector<bool>({true, false, std::nullopt});
   auto input = makeRowVector({"a"}, {data});
   auto expected = makeFlatVector<std::string>(
@@ -94,16 +97,17 @@ TEST_F(ToJsonTest, basicBool) {
 }
 
 TEST_F(ToJsonTest, basicString) {
+  disableJsonIgnoreNullFields();
   auto data = makeNullableFlatVector<std::string>(
-      {"str1", "str2", std::nullopt, "str\"3\"", std::nullopt, "a\"é你😄"});
+      {"str1", "str2\\u", std::nullopt, "str\"3\"", std::nullopt, "a\"é你😄"});
   auto input = makeRowVector({"a"}, {data});
   auto expected = makeFlatVector<std::string>(
       {R"({"a":"str1"})",
-       R"({"a":"str2"})",
+       R"({"a":"str2\\u"})",
        R"({"a":null})",
        R"({"a":"str\"3\""})",
        R"({"a":null})",
-       R"({"a":"a\"é你\uD83D\uDE04"})"});
+       R"({"a":"a\"é你😄"})"});
   testToJson(input, expected);
 }
 
@@ -117,7 +121,7 @@ TEST_F(ToJsonTest, basicTinyInt) {
        R"({"a":-128})",
        R"({"a":-128})",
        R"({"a":127})",
-       R"({"a":null})"});
+       R"({})"});
   testToJson(input, expected);
 }
 
@@ -125,7 +129,7 @@ TEST_F(ToJsonTest, basicSmallInt) {
   auto data = makeNullableFlatVector<int16_t>({0, 32768, -32769, std::nullopt});
   auto input = makeRowVector({"a"}, {data});
   auto expected = makeFlatVector<std::string>(
-      {R"({"a":0})", R"({"a":-32768})", R"({"a":32767})", R"({"a":null})"});
+      {R"({"a":0})", R"({"a":-32768})", R"({"a":32767})", R"({})"});
   testToJson(input, expected);
 }
 
@@ -134,10 +138,7 @@ TEST_F(ToJsonTest, basicInt) {
       {0, 2147483648, -2147483649, std::nullopt});
   auto input = makeRowVector({"a"}, {data});
   auto expected = makeFlatVector<std::string>(
-      {R"({"a":0})",
-       R"({"a":-2147483648})",
-       R"({"a":2147483647})",
-       R"({"a":null})"});
+      {R"({"a":0})", R"({"a":-2147483648})", R"({"a":2147483647})", R"({})"});
   testToJson(input, expected);
 }
 
@@ -146,7 +147,7 @@ TEST_F(ToJsonTest, basicBigInt) {
       {std::nullopt, 0, 1, INT64_MAX, INT64_MIN});
   auto input = makeRowVector({"a"}, {data});
   auto expected = makeFlatVector<std::string>(
-      {R"({"a":null})",
+      {R"({})",
        R"({"a":0})",
        R"({"a":1})",
        R"({"a":9223372036854775807})",
@@ -163,7 +164,7 @@ TEST_F(ToJsonTest, basicHugeInt) {
        static_cast<int128_t>(INT64_MIN) - 1});
   auto input = makeRowVector({"a"}, {data});
   auto expected = makeFlatVector<std::string>(
-      {R"({"a":null})",
+      {R"({})",
        R"({"a":0})",
        R"({"a":1})",
        R"({"a":9223372036854775808})",
@@ -180,7 +181,7 @@ TEST_F(ToJsonTest, basicFloat) {
        R"({"a":"NaN"})",
        R"({"a":"Infinity"})",
        R"({"a":"-Infinity"})",
-       R"({"a":null})"});
+       R"({})"});
   testToJson(input, expected);
 }
 
@@ -193,7 +194,7 @@ TEST_F(ToJsonTest, basicDouble) {
        R"({"a":"NaN"})",
        R"({"a":"Infinity"})",
        R"({"a":"-Infinity"})",
-       R"({"a":null})"});
+       R"({})"});
   testToJson(input, expected);
 }
 
@@ -202,10 +203,7 @@ TEST_F(ToJsonTest, basicDecimal) {
       {12345, 0, -67890, std::nullopt}, DECIMAL(10, 2));
   auto input = makeRowVector({"a"}, {data});
   auto expected = makeFlatVector<std::string>(
-      {R"({"a":123.45})",
-       R"({"a":0.00})",
-       R"({"a":-678.90})",
-       R"({"a":null})"});
+      {R"({"a":123.45})", R"({"a":0.00})", R"({"a":-678.90})", R"({})"});
   testToJson(input, expected);
 }
 
@@ -221,7 +219,7 @@ TEST_F(ToJsonTest, basicTimestamp) {
       {R"({"a":"1970-01-01T00:00:00.000Z"})",
        R"({"a":"2020-02-29T00:00:00.000Z"})",
        R"({"a":"1900-01-01T00:00:00.000Z"})",
-       R"({"a":null})"});
+       R"({})"});
   testToJson(input, "UTC", expected);
   // Los_Angeles time zone.
   setTimezone("America/Los_Angeles");
@@ -229,7 +227,7 @@ TEST_F(ToJsonTest, basicTimestamp) {
       {R"({"a":"1969-12-31T16:00:00.000-08:00"})",
        R"({"a":"2020-02-28T16:00:00.000-08:00"})",
        R"({"a":"1899-12-31T16:00:00.000-08:00"})",
-       R"({"a":null})"});
+       R"({})"});
   testToJson(input, expected);
 }
 
@@ -242,7 +240,7 @@ TEST_F(ToJsonTest, basicDate) {
        R"({"a":"2020-02-29"})",
        R"({"a":"1900-01-01"})",
        R"({"a":"9999-12-31"})",
-       R"({"a":null})"});
+       R"({})"});
   testToJson(input, expected);
 }
 
@@ -263,8 +261,8 @@ TEST_F(ToJsonTest, nestedComplexType) {
       makeRowVector({"a", "b", "c", "d"}, {data1, data2, data3, data4});
   auto expected = makeFlatVector<std::string>(
       {R"({"a":"str1","b":[1,2,3],"c":{"key1":1,"key2":2,"key3":3},"d":{"d1":"d1_str1","d2":[1,2,3]}})",
-       R"({"a":"str2","b":[],"c":null,"d":{"d1":"d1_str2","d2":[4,5]}})",
-       R"({"a":"str3","b":[null],"c":{"key4":1,"key5":null},"d":{"d1":null,"d2":[null]}})"});
+       R"({"a":"str2","b":[],"d":{"d1":"d1_str2","d2":[4,5]}})",
+       R"({"a":"str3","b":[null],"c":{"key4":1,"key5":null},"d":{"d2":[null]}})"});
   testToJson(input, expected);
 }
 
