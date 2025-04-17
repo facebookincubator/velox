@@ -41,7 +41,7 @@ USE_CLANG="${USE_CLANG:-false}"
 export INSTALL_PREFIX=${INSTALL_PREFIX:-"/usr/local"}
 DEPENDENCY_DIR=${DEPENDENCY_DIR:-$(pwd)/deps-download}
 
-FB_OS_VERSION="v2024.07.01.00"
+FB_OS_VERSION="v2025.04.07.00"
 FMT_VERSION="10.1.1"
 BOOST_VERSION="boost-1.84.0"
 THRIFT_VERSION="v0.16.0"
@@ -50,6 +50,7 @@ ARROW_VERSION="15.0.0"
 STEMMER_VERSION="2.2.0"
 DUCKDB_VERSION="v0.8.1"
 GEOS_VERSION="3.13.0"
+FAST_FLOAT_VERSION="v8.0.2"
 
 function dnf_install {
   dnf install -y -q --setopt=install_weak_deps=False "$@"
@@ -156,6 +157,11 @@ function install_fizz {
   cmake_install_dir fizz/fizz -DBUILD_TESTS=OFF
 }
 
+function install_fast_float {
+  wget_and_untar https://github.com/fastfloat/fast_float/releases/tag/${FAST_FLOAT_VERSION}.tar.gz fast_float
+  cmake_install_dir fast_float -DBUILD_TESTS=OFF
+}
+
 function install_folly {
   wget_and_untar https://github.com/facebook/folly/archive/refs/tags/${FB_OS_VERSION}.tar.gz folly
   cmake_install_dir folly -DBUILD_SHARED_LIBS="$VELOX_BUILD_SHARED" -DBUILD_TESTS=OFF -DFOLLY_HAVE_INT128_T=ON
@@ -258,6 +264,7 @@ function install_velox_deps {
   run_and_time install_boost
   run_and_time install_protobuf
   run_and_time install_fmt
+  run_and_time install_fast_float
   run_and_time install_folly
   run_and_time install_fizz
   run_and_time install_wangle
