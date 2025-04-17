@@ -21,6 +21,7 @@ velox_add_library(velox_expression_functions FunctionSignature.cpp
 
 velox_link_libraries(
   velox_expression_functions
+  velox_type_parser
   velox_common_base
   velox_type_calculation
   velox_type_signature
