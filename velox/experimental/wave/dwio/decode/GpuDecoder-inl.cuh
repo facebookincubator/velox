@@ -16,7 +16,11 @@
 
 #pragma once
 
-#include <cub/cub.cuh> // @manual
+#include <breeze/functions/reduce.h>
+#include <breeze/functions/scan.h>
+#include <breeze/platforms/platform.h>
+#include <breeze/utils/types.h>
+#include <breeze/platforms/cuda.cuh>
 #include "velox/experimental/wave/common/Bits.cuh"
 #include "velox/experimental/wave/common/Block.cuh"
 
@@ -256,6 +260,19 @@ __device__ inline void decodeDictionaryOnBitpack(GpuDecode& plan) {
   }
 }
 
+template <int32_t kBlockSize>
+struct BlockScanStorage {
+  using PlatformT = CudaPlatform<kBlockSize, kWarpThreads>;
+  union {
+    breeze::functions::BlockScan<PlatformT, int32_t, /*kItemsPerThread=*/1>
+        scan1;
+    breeze::functions::BlockScan<PlatformT, int32_t, /*kItemsPerThread=*/8>
+        scan8;
+  };
+  int32_t subtotal;
+  int32_t offsets[kBlockSize];
+};
+
 template <int32_t kBlockSize, typename T>
 __device__ int scatterIndices(
     const T* values,
@@ -263,22 +280,37 @@ __device__ int scatterIndices(
     int32_t begin,
     int32_t end,
     int32_t* indices) {
-  typedef cub::BlockScan<int32_t, kBlockSize> BlockScan;
+  using namespace breeze::functions;
+  using namespace breeze::utils;
+  CudaPlatform<kBlockSize, kWarpThreads> p;
+  using BlockScanT = BlockScan<decltype(p), int32_t, /*kItemsPerThread=*/1>;
   extern __shared__ char smem[];
-  auto* scanStorage = reinterpret_cast<typename BlockScan::TempStorage*>(smem);
-  int numMatch;
-  bool match;
+  auto* scanStorage = reinterpret_cast<typename BlockScanT::Scratch*>(smem);
+  auto* subtotal = (int32_t*)(scanStorage + 1);
   int32_t k = 0;
   for (auto j = begin; j < end; j += kBlockSize) {
     auto jt = j + threadIdx.x;
-    numMatch = match = (jt < end && values[jt] == value);
-    int subtotal;
-    BlockScan(*scanStorage).ExclusiveSum(numMatch, numMatch, subtotal);
+    int32_t inclusiveNumMatch;
+    int32_t match = (jt < end && values[jt] == value);
+    // Synchronize here to ensure that shared memory is safe to reuse after
+    // previous iteration.
+    __syncthreads();
+    int32_t lastSum = BlockScanT::template Scan<ScanOpAdd>(
+        p,
+        make_slice(&match),
+        make_slice(&inclusiveNumMatch),
+        make_slice(scanStorage).template reinterpret<SHARED>());
+    // Last sum of the last thread is the subtotal. Share it with all threads in
+    // the thread block.
+    if (threadIdx.x == (kBlockSize - 1)) {
+      *subtotal = lastSum;
+    }
     __syncthreads();
     if (match) {
+      int32_t numMatch = inclusiveNumMatch - 1;
       indices[k + numMatch] = jt - begin;
     }
-    k += subtotal;
+    k += *subtotal;
   }
   return k;
 }
@@ -290,28 +322,47 @@ __device__ int scatterIndices(
     int32_t begin,
     int32_t end,
     int32_t* indices) {
-  typedef cub::BlockScan<int32_t, kBlockSize> BlockScan;
-  extern __shared__ char smem[];
-  auto* scanStorage = reinterpret_cast<typename BlockScan::TempStorage*>(smem);
+  using namespace breeze::functions;
+  using namespace breeze::utils;
   constexpr int kPerThread = 8;
-  int numMatch[kPerThread];
-  bool match[kPerThread];
+  CudaPlatform<kBlockSize, kWarpThreads> p;
+  using BlockScanT = BlockScan<decltype(p), int32_t, kPerThread>;
+  extern __shared__ char smem[];
+  auto* scanStorage = reinterpret_cast<typename BlockScanT::Scratch*>(smem);
+  auto* subtotal = (int32_t*)(scanStorage + 1);
+  int32_t inclusiveNumMatch[kPerThread];
+  int32_t match[kPerThread];
   int32_t k = 0;
   constexpr auto kBitsPerBlock = kBlockSize * kPerThread;
   for (auto j = begin; j < end; j += kBitsPerBlock) {
-    auto jt = j + threadIdx.x * kPerThread;
+    auto jt = j + threadIdx.x;
+    // Load match values into striped arrangement.
     for (auto i = 0; i < kPerThread; ++i) {
-      numMatch[i] = match[i] = jt + i < end && isSet(bits, jt + i) == value;
+      auto offset = jt + (i * kBlockSize);
+      match[i] = offset < end && isSet(bits, offset) == value;
     }
-    int subtotal;
-    BlockScan(*scanStorage).ExclusiveSum(numMatch, numMatch, subtotal);
+    // Synchronize here to ensure that shared memory is safe to reuse after
+    // previous iteration.
+    __syncthreads();
+    int32_t lastSum = BlockScanT::template Scan<ScanOpAdd>(
+        p,
+        make_slice(match),
+        make_slice(inclusiveNumMatch),
+        make_slice(scanStorage).template reinterpret<SHARED>());
+    // Last sum of the last thread is the subtotal. Share it with all threads in
+    // the thread block.
+    if (threadIdx.x == (kBlockSize - 1)) {
+      *subtotal = lastSum;
+    }
     __syncthreads();
     for (auto i = 0; i < kPerThread; ++i) {
       if (match[i]) {
-        indices[k + numMatch[i]] = jt + i - begin;
+        int32_t numMatch = inclusiveNumMatch[i] - 1;
+        auto offset = jt + (i * kBlockSize);
+        indices[k + numMatch] = offset - begin;
       }
     }
-    k += subtotal;
+    k += *subtotal;
   }
   return k;
 }
@@ -500,11 +551,15 @@ __device__ void decodeMainlyConstant(GpuDecode& plan) {
   }
 }
 
+// First thread returns total sum.
 template <int kBlockSize, typename T, typename U>
 __device__ T sum(const U* values, int size) {
-  using Reduce = cub::BlockReduce<T, kBlockSize>;
+  using namespace breeze::functions;
+  using namespace breeze::utils;
+  CudaPlatform<kBlockSize, kWarpThreads> p;
+  using BlockReduceT = BlockReduce<decltype(p), T>;
   extern __shared__ char smem[];
-  auto* reduceStorage = reinterpret_cast<typename Reduce::TempStorage*>(smem);
+  auto* reduceStorage = reinterpret_cast<typename BlockReduceT::Scratch*>(smem);
   T total = 0;
   for (int i = 0; i < size; i += kBlockSize) {
     auto numValid = min(size - i, kBlockSize);
@@ -512,7 +567,11 @@ __device__ T sum(const U* values, int size) {
     if (threadIdx.x < numValid) {
       value = values[i + threadIdx.x];
     }
-    total += Reduce(*reduceStorage).Sum(value, numValid);
+    total += BlockReduceT::template Reduce<ReduceOpAdd, /*kItemsPerThread=*/1>(
+        p,
+        make_slice(&value),
+        make_slice(reduceStorage).template reinterpret<SHARED>(),
+        numValid);
     __syncthreads();
   }
   return total;
@@ -542,28 +601,39 @@ __device__ int upperBound(const T* data, int size, T target) {
 
 template <int kBlockSize, typename T>
 __device__ void decodeRle(GpuDecode::Rle& op) {
-  using BlockScan = cub::BlockScan<int32_t, kBlockSize>;
+  using namespace breeze::functions;
+  using namespace breeze::utils;
+  CudaPlatform<kBlockSize, kWarpThreads> p;
+  using BlockScanT = BlockScan<decltype(p), int32_t, /*kItemsPerThread=*/1>;
   extern __shared__ char smem[];
-  auto* scanStorage = reinterpret_cast<typename BlockScan::TempStorage*>(smem);
-
-  static_assert(sizeof(*scanStorage) >= sizeof(int32_t) * kBlockSize);
-  auto* offsets = (int32_t*)scanStorage;
+  auto* scanStorage = reinterpret_cast<typename BlockScanT::Scratch*>(smem);
+  auto* subtotal = (int32_t*)(scanStorage + 1);
+  auto* offsets = (int32_t*)(subtotal + 1);
   auto* values = (const T*)op.values;
   auto* result = (T*)op.result;
   int total = 0;
   for (int i = 0; i < op.count; i += blockDim.x) {
     auto ti = threadIdx.x + i;
-    auto len = ti < op.count ? op.lengths[ti] : 0;
-    int32_t offset, subtotal;
+    int32_t len = ti < op.count ? op.lengths[ti] : 0;
+    int32_t offset;
+    // Synchronize here to ensure that shared memory is safe to reuse after
+    // previous iteration.
     __syncthreads();
-    BlockScan(*scanStorage).InclusiveSum(len, offset, subtotal);
+    int32_t lastSum = BlockScanT::template Scan<ScanOpAdd>(
+        p,
+        make_slice(&len),
+        make_slice(&offset),
+        make_slice(scanStorage).template reinterpret<SHARED>());
     __syncthreads();
     offsets[threadIdx.x] = offset;
+    if (threadIdx.x == (kBlockSize - 1)) {
+      *subtotal = lastSum;
+    }
     __syncthreads();
-    for (int j = threadIdx.x; j < subtotal; j += blockDim.x) {
+    for (int j = threadIdx.x; j < *subtotal; j += blockDim.x) {
       result[total + j] = values[i + upperBound(offsets, blockDim.x, j)];
     }
-    total += subtotal;
+    total += *subtotal;
   }
 }
 
@@ -1004,32 +1074,31 @@ __device__ void setRowCountNoFilter(GpuDecode::RowCountNoFilter& op) {
 }
 
 template <int32_t kBlockSize, int32_t kWidth>
-inline __device__ void reduceCase(
-    int32_t cnt,
-    int32_t nthLoop,
-    int32_t numResults,
-    int32_t* results,
-    int32_t* temp) {
+inline __device__ void
+reduceCase(int32_t cnt, int32_t nthLoop, int32_t numResults, int32_t* results) {
+  using namespace breeze::functions;
+  using namespace breeze::utils;
   static_assert(kWidth == 4 || kWidth == 8 || kWidth == 16 || kWidth == 32);
-  using Reduce = cub::WarpReduce<int32_t, kWidth>;
-  auto sum =
-      Reduce(*reinterpret_cast<typename Reduce::TempStorage*>(temp)).Sum(cnt);
-  constexpr int32_t kResultsPerLoop = kBlockSize / kWidth;
-
-  if ((threadIdx.x & (kWidth - 1)) == 0) {
-    temp[threadIdx.x / kWidth] = sum;
-  }
-  __syncthreads();
-  // Add up the temps.
-  sum = threadIdx.x < kResultsPerLoop ? temp[threadIdx.x] : 0;
-  if (threadIdx.x == 0 && nthLoop > 0) {
-    sum += results[nthLoop * kResultsPerLoop - 1];
-  }
-  auto result = inclusiveSum<int32_t, kBlockSize / kWidth>(
-      threadIdx.x < kResultsPerLoop ? sum : 0, nullptr, temp);
-  auto resultIdx = threadIdx.x + nthLoop * kResultsPerLoop;
-  if (resultIdx < numResults) {
-    results[resultIdx] = result;
+  CudaPlatform<kBlockSize, kWarpThreads> p;
+  using BlockScanT = BlockScan<decltype(p), int32_t, /*kItemsPerThread=*/1>;
+  extern __shared__ char smem[];
+  auto* scanStorage = reinterpret_cast<typename BlockScanT::Scratch*>(smem);
+  int32_t result;
+  BlockScanT::template Scan<ScanOpAdd>(
+      p,
+      make_slice(&cnt),
+      make_slice(&result),
+      make_slice(scanStorage).template reinterpret<SHARED>());
+  // Every kWidth thread provides a result.
+  if ((threadIdx.x & (kWidth - 1)) == (kWidth - 1)) {
+    constexpr int32_t kResultsPerLoop = kBlockSize / kWidth;
+    auto resultIdx = threadIdx.x / kWidth + nthLoop * kResultsPerLoop;
+    if (resultIdx < numResults) {
+      if (nthLoop != 0) {
+        result += results[nthLoop * kResultsPerLoop - 1];
+      }
+      results[resultIdx] = result;
+    }
   }
 }
 
@@ -1057,32 +1126,28 @@ __device__ void countBits(GpuDecode& step) {
             cnt,
             i / (64 * kBlockSize),
             numResults,
-            reinterpret_cast<int32_t*>(step.result),
-            step.temp);
+            reinterpret_cast<int32_t*>(step.result));
         break;
       case 512:
         reduceCase<kBlockSize, 8>(
             cnt,
             i / (64 * kBlockSize),
             numResults,
-            reinterpret_cast<int32_t*>(step.result),
-            step.temp);
+            reinterpret_cast<int32_t*>(step.result));
         break;
       case 1024:
         reduceCase<kBlockSize, 16>(
             cnt,
             i / (64 * kBlockSize),
             numResults,
-            reinterpret_cast<int32_t*>(step.result),
-            step.temp);
+            reinterpret_cast<int32_t*>(step.result));
         break;
       case 2048:
         reduceCase<kBlockSize, 32>(
             cnt,
             i / (64 * kBlockSize),
             numResults,
-            reinterpret_cast<int32_t*>(step.result),
-            step.temp);
+            reinterpret_cast<int32_t*>(step.result));
         break;
     }
   }
@@ -1223,29 +1288,31 @@ __global__ void decodeGlobal(GpuDecode* plan) {
 
 template <int32_t kBlockSize>
 int32_t sharedMemorySizeForDecode(DecodeStep step) {
-  using Reduce32 = cub::BlockReduce<int32_t, kBlockSize>;
-  using BlockScan32 = cub::BlockScan<int32_t, kBlockSize>;
+  using namespace breeze::functions;
+  using PlatformT = CudaPlatform<kBlockSize, kWarpThreads>;
+  using BlockReduceT = BlockReduce<PlatformT, int32_t>;
+  using BlockScanStorageT = BlockScanStorage<kBlockSize>;
   switch (step) {
     case DecodeStep::kSelective32:
     case DecodeStep::kSelective64:
     case DecodeStep::kCompact64:
     case DecodeStep::kTrivial:
     case DecodeStep::kDictionaryOnBitpack:
-    case DecodeStep::kCountBits:
     case DecodeStep::kSparseBool:
     case DecodeStep::kRowCountNoFilter:
       return 0;
       break;
 
     case DecodeStep::kRleTotalLength:
-      return sizeof(typename Reduce32::TempStorage);
+      return sizeof(typename BlockReduceT::Scratch);
     case DecodeStep::kMainlyConstant:
     case DecodeStep::kRleBool:
     case DecodeStep::kRle:
     case DecodeStep::kVarint:
     case DecodeStep::kMakeScatterIndices:
     case DecodeStep::kLengthToOffset:
-      return sizeof(typename BlockScan32::TempStorage);
+    case DecodeStep::kCountBits:
+      return sizeof(BlockScanStorageT);
     default:
       assert(false); // Undefined.
       return 0;
