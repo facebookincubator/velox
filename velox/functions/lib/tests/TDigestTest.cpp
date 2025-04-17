@@ -435,5 +435,26 @@ TEST(TDigestTest, infinity) {
   ASSERT_EQ(digest.estimateQuantile(1), INFINITY);
 }
 
+TEST(TDigestTest, scalePositive) {
+  std::vector<int16_t> positions;
+  TDigest digest;
+  for (int i = 1; i <= 5; ++i) {
+    digest.add(positions, i);
+  }
+  digest.compress(positions);
+  double originalSum = digest.sum();
+  // Scale weights by 1.7
+  digest.scale(1.7);
+  digest.compress(positions);
+  ASSERT_NEAR(digest.sum(), originalSum * 1.7, kSumError);
+}
+
+TEST(TDigestTest, scaleNegative) {
+  std::vector<int16_t> positions;
+  TDigest digest;
+  digest.add(positions, 1.0);
+  ASSERT_THROW(digest.scale(-1), VeloxRuntimeError);
+}
+
 } // namespace
 } // namespace facebook::velox::functions
