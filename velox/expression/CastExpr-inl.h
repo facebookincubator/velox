@@ -517,14 +517,46 @@ VectorPtr CastExpr::applyDecimalToFloatCast(
   const auto precisionScale = getDecimalPrecisionScale(*fromType);
   const auto simpleInput = input.as<SimpleVector<FromNativeType>>();
   const auto scaleFactor = DecimalUtil::kPowersOfTen[precisionScale.second];
-  applyToSelectedNoThrowLocal(context, rows, result, [&](int row) {
-    const auto output =
-        util::Converter<ToKind>::tryCast(simpleInput->valueAt(row))
-            .thenOrThrow(folly::identity, [&](const Status& status) {
-              VELOX_USER_FAIL("{}", status.message());
-            });
-    resultBuffer[row] = output / scaleFactor;
-  });
+
+  if constexpr (ToKind == TypeKind::REAL) {
+    // Optimized path for float
+    applyToSelectedNoThrowLocal(context, rows, result, [&](int row) {
+      const auto output =
+          util::Converter<TypeKind::DOUBLE>::tryCast(simpleInput->valueAt(row))
+              .thenOrThrow(folly::identity, [&](const Status& status) {
+                VELOX_USER_FAIL("{}", status.message());
+              });
+      resultBuffer[row] = output / scaleFactor;
+    });
+  } else {
+    // Cast decimal to string, then string to double
+    const auto scale = precisionScale.second;
+    auto rowSize = DecimalUtil::maxStringViewSize(precisionScale.first, scale);
+    char buffer[rowSize];
+
+    applyToSelectedNoThrowLocal(context, rows, result, [&](int row) {
+      auto unscaledValue = simpleInput->valueAt(row);
+
+      if (scale == 0) {
+        resultBuffer[row] = static_cast<To>(unscaledValue);
+      } else if (
+          scale < DecimalUtil::kDoublePowersOfTenSize &&
+          DecimalUtil::absValue<FromNativeType>(unscaledValue) <
+              DecimalUtil::kDoubleMaxExact) {
+        resultBuffer[row] =
+            static_cast<To>(unscaledValue) / DecimalUtil::kPowersOfTen[scale];
+      } else {
+        memset(buffer, 0, rowSize);
+        auto size = DecimalUtil::castToString<FromNativeType>(
+            unscaledValue, scale, rowSize, buffer);
+        resultBuffer[row] =
+            util::Converter<ToKind>::tryCast(StringView(buffer, size))
+                .thenOrThrow(folly::identity, [&](const Status& status) {
+                  VELOX_USER_FAIL("{}", status.message());
+                });
+      }
+    });
+  }
   return result;
 }
 
