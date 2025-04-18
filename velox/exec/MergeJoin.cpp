@@ -18,8 +18,6 @@
 #include "velox/exec/Task.h"
 #include "velox/expression/FieldReference.h"
 
-#include <iostream>
-
 namespace facebook::velox::exec {
 
 MergeJoin::MergeJoin(
@@ -430,10 +428,12 @@ bool MergeJoin::tryAddOutputRow(
       if (isRightJoin(joinType_) || isRightSemiFilterJoin(joinType_) ||
           (isFullJoin(joinType_) && isRightJoinForFullOuter)) {
         // Record right-side row with a match on the left-side.
-        joinTracker_->addMatch(rightBatch, rightRow, outputSize_, isRightJoinForFullOuter);
+        joinTracker_->addMatch(
+            rightBatch, rightRow, outputSize_, isRightJoinForFullOuter);
       } else {
         // Record left-side row with a match on the right-side.
-        joinTracker_->addMatch(leftBatch, leftRow, outputSize_, isRightJoinForFullOuter);
+        joinTracker_->addMatch(
+            leftBatch, leftRow, outputSize_, isRightJoinForFullOuter);
       }
     }
   }
@@ -443,11 +443,13 @@ bool MergeJoin::tryAddOutputRow(
   if (isAntiJoin(joinType_) || isLeftSemiFilterJoin(joinType_)) {
     VELOX_CHECK(joinTracker_.has_value());
     // Record left-side row with a match on the right-side.
-    joinTracker_->addMatch(leftBatch, leftRow, outputSize_, isRightJoinForFullOuter);
+    joinTracker_->addMatch(
+        leftBatch, leftRow, outputSize_, isRightJoinForFullOuter);
   } else if (isRightSemiFilterJoin(joinType_)) {
     VELOX_CHECK(joinTracker_.has_value());
     // Record right-side row with a match on the left-side.
-    joinTracker_->addMatch(rightBatch, rightRow, outputSize_, isRightJoinForFullOuter);
+    joinTracker_->addMatch(
+        rightBatch, rightRow, outputSize_, isRightJoinForFullOuter);
   }
 
   ++outputSize_;
@@ -761,7 +763,13 @@ bool MergeJoin::addToOutputForRightJoin() {
         }
 
         for (auto j = leftStartRow; j < leftEndRow; ++j) {
-          if (!tryAddOutputRow(leftBatch, j, rightBatch, i)) {
+          bool tryAddOutput = false;
+          if (isFullJoin(joinType_)) {
+            tryAddOutput = tryAddOutputRow(leftBatch, j, rightBatch, i, true);
+          } else {
+            tryAddOutput = tryAddOutputRow(leftBatch, j, rightBatch, i);
+          }
+          if (!tryAddOutput) {
             // If we run out of space in the current output_, we will need to
             // produce a buffer and continue processing left later. In this
             // case, we cannot leave left as a lazy vector, since we cannot have
@@ -770,12 +778,6 @@ bool MergeJoin::addToOutputForRightJoin() {
             rightMatch_->setCursor(r, i);
             leftMatch_->setCursor(l, j);
             return true;
-          }
-
-          if (isFullJoin(joinType_)) {
-            tryAddOutputRow(leftBatch, j, rightBatch, i, true);
-          } else {
-            tryAddOutputRow(leftBatch, j, rightBatch, i);
           }
         }
       }
@@ -1153,6 +1155,29 @@ RowVectorPtr MergeJoin::doGetOutput() {
     }
 
     return nullptr;
+  }
+
+  auto firstNonNullIndex = firstNonNull(rightInput_, rightKeyChannels_);
+  if ((isRightJoin(joinType_) || isFullJoin(joinType_)) &&
+      firstNonNullIndex > rightRowIndex_) {
+    if (prepareOutput(nullptr, rightInput_)) {
+      output_->resize(outputSize_);
+      return std::move(output_);
+    }
+    for (int i = rightRowIndex_; i < firstNonNullIndex; i++) {
+      if (!tryAddOutputRowForRightJoin()) {
+        rightRowIndex_ = i;
+        return std::move(output_);
+      }
+
+      if (finishedRightBatch()) {
+        // Ran out of rows on the right side.
+        rightInput_ = nullptr;
+        return nullptr;
+      }
+    }
+
+    rightRowIndex_ = firstNonNullIndex;
   }
 
   // Look for a new match starting with index_ row on the left and rightIndex_
