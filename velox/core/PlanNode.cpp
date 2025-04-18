@@ -310,12 +310,28 @@ bool AggregationNode::canSpill(const QueryConfig& queryConfig) const {
 }
 
 void AggregationNode::addDetails(std::stringstream& stream) const {
+  folly::F14FastSet<Step> allSteps;
+  for (auto i = 0; i < aggregateNames_.size(); ++i) {
+    const auto& aggregate = aggregates_[i];
+    allSteps.emplace(aggregate.step);
+  }
+  const bool mixedSteps = allSteps.size() >= 2;
+
+  if (!mixedSteps) {
+    if (!allSteps.empty()) {
+      VELOX_CHECK(allSteps.size() == 1);
+      stream << Aggregate::stepName(*allSteps.begin()) << " ";
+    }
+  }
+
   if (isPreGrouped()) {
     stream << "STREAMING ";
   }
 
-  if (allowFlush_) {
-    stream << "ALLOW FLUSH ";
+  if (mixedSteps) {
+    if (allowFlush_) {
+      stream << "ALLOW FLUSH ";
+    }
   }
 
   if (!groupingKeys_.empty()) {
@@ -327,7 +343,9 @@ void AggregationNode::addDetails(std::stringstream& stream) const {
   for (auto i = 0; i < aggregateNames_.size(); ++i) {
     appendComma(i, stream);
     const auto& aggregate = aggregates_[i];
-    stream << aggregate.stepName(aggregate.step) << " ";
+    if (mixedSteps) {
+      stream << Aggregate::stepName(aggregate.step) << " ";
+    }
     stream << aggregateNames_[i] << " := " << aggregate.call->toString();
     if (aggregate.distinct) {
       stream << " distinct";
