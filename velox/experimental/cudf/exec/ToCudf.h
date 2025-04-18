@@ -17,6 +17,7 @@
 #pragma once
 
 #include "velox/exec/Driver.h"
+#include "velox/exec/Operator.h"
 
 #include <gflags/gflags.h>
 
