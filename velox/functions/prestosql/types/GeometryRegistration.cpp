@@ -14,6 +14,8 @@
  * limitations under the License.
  */
 
+#ifdef VELOX_ENABLE_GEO
+
 #include "velox/functions/prestosql/types/GeometryRegistration.h"
 
 #include "velox/expression/CastExpr.h"
@@ -47,3 +49,5 @@ void registerGeometryType() {
 }
 
 } // namespace facebook::velox
+
+#endif

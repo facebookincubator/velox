@@ -14,6 +14,8 @@
  * limitations under the License.
  */
 
+#ifdef VELOX_ENABLE_GEO
+
 #include <string>
 #include "velox/functions/Registerer.h"
 #include "velox/functions/prestosql/GeometryFunctions.h"
@@ -36,3 +38,5 @@ void registerGeometryFunctions(const std::string& prefix) {
 }
 
 } // namespace facebook::velox::functions
+
+#endif

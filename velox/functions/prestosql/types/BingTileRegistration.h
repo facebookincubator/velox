@@ -16,8 +16,12 @@
 
 #pragma once
 
+#ifdef VELOX_ENABLE_GEO
+
 namespace facebook::velox {
 
 void registerBingTileType();
 
 } // namespace facebook::velox
+
+#endif

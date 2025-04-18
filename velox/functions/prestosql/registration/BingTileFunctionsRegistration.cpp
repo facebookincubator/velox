@@ -14,6 +14,8 @@
  * limitations under the License.
  */
 
+#ifdef VELOX_ENABLE_GEO
+
 #include <string>
 #include "velox/functions/Registerer.h"
 #include "velox/functions/prestosql/BingTileFunctions.h"
@@ -61,3 +63,5 @@ void registerBingTileFunctions(const std::string& prefix) {
 }
 
 } // namespace facebook::velox::functions
+
+#endif

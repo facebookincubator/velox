@@ -51,6 +51,7 @@ add_executable(
   ArrayUnionTest.cpp
   ArgTypesGeneratorTest.cpp
   BinaryFunctionsTest.cpp
+  BingTileFunctionsTest.cpp
   BingTileCastTest.cpp
   BitwiseTest.cpp
   CardinalityTest.cpp

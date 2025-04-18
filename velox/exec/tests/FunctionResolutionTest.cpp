@@ -21,11 +21,14 @@
 #include "velox/functions/Udf.h"
 #include "velox/functions/prestosql/registration/RegistrationFunctions.h"
 #include "velox/functions/prestosql/tests/utils/FunctionBaseTest.h"
-#include "velox/functions/prestosql/types/BingTileType.h"
 #include "velox/functions/prestosql/types/HyperLogLogType.h"
 #include "velox/functions/prestosql/types/JsonType.h"
 #include "velox/functions/prestosql/types/TDigestType.h"
 #include "velox/functions/prestosql/types/TimestampWithTimeZoneType.h"
+
+#ifdef VELOX_ENABLE_GEO
+#include "velox/functions/prestosql/types/BingTileType.h"
+#endif
 
 namespace {
 using namespace facebook::velox;
@@ -337,6 +340,8 @@ TEST_F(FunctionResolutionTest, resolveCustomTypeTimestampWithTimeZone) {
   EXPECT_EQ(type->toString(), TIMESTAMP_WITH_TIME_ZONE()->toString());
 }
 
+#ifdef VELOX_ENABLE_GEO
+
 template <typename T>
 struct FuncBingTile {
   VELOX_DEFINE_FUNCTION_TYPES(T);
@@ -352,6 +357,7 @@ TEST_F(FunctionResolutionTest, resolveCustomTypeBingTile) {
       exec::simpleFunctions().resolveFunction("f_bing_tile", {})->type();
   EXPECT_EQ(type->toString(), BINGTILE()->toString());
 }
+#endif
 
 // A function that takes TInput and returns int, TInput determined at
 // registration.
