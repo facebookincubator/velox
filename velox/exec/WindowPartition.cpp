@@ -407,26 +407,64 @@ void WindowPartition::updateKRangeFrameBounds(
             mappedFrameColumn,
             flags) == 0) {
       rawFrameBounds[i] = rawPeerBounds[i];
-    } else {
-      // If the search is for a preceding bound then rows between
-      // [0, currentRow] are examined. For following bounds, rows between
-      // [currentRow, numRows()) are checked.
-      if (isPreceding) {
-        start = 0;
-        end = currentRow + 1;
-      } else {
-        start = currentRow;
-        end = partition_.size();
+      continue;
+    }
+
+    auto compareWithLastRow = [&](vector_size_t currentRow) -> int32_t {
+      if (currentRow == startRow) {
+        // For the first row, just returns an arbitrary positive value
+        // to indicate not to use the sliding optimization.
+        return 1;
       }
-      rawFrameBounds[i] = searchFrameValue(
-          firstMatch,
-          start,
-          end,
-          currentRow,
-          orderByColumn,
+      return data_->compare(
+          partition_[currentRow - 1],
+          partition_[currentRow],
+          mappedFrameColumn,
           mappedFrameColumn,
           flags);
+    };
+
+    // If the search is for a preceding bound then rows between
+    // [0, currentRow] are examined. For following bounds, rows between
+    // [currentRow, numRows()) are checked. If the sliding search pattern
+    // is applicable, we can use the last row's search result to determine
+    // the start search index for current row.
+
+    auto compareResult = compareWithLastRow(currentRow);
+    if (compareResult == 0) {
+      // As same as last row's search result.
+      rawFrameBounds[i] = rawFrameBounds[i - 1];
+      continue;
     }
+
+    bool slidingSearch = compareResult < 0;
+    if (isPreceding) {
+      // It's the first row or it doesn't match the sliding search pattern.
+      if (!slidingSearch) {
+        start = 0;
+      } else {
+        start = rawFrameBounds[i - 1] == -1 ? 0 : rawFrameBounds[i - 1];
+      }
+      end = currentRow + 1;
+    } else {
+      // It's the first row or it doesn't match the sliding search pattern.
+      if (!slidingSearch) {
+        start = currentRow;
+      } else {
+        start =
+            rawFrameBounds[i - 1] == -1 ? currentRow : rawFrameBounds[i - 1];
+      }
+      end = partition_.size();
+    }
+
+    rawFrameBounds[i] = searchFrameValue(
+        firstMatch,
+        start,
+        end,
+        currentRow,
+        orderByColumn,
+        mappedFrameColumn,
+        flags);
   }
 }
 
