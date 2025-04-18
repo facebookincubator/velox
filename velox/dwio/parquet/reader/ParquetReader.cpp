@@ -644,6 +644,15 @@ std::unique_ptr<ParquetTypeWithId> ReaderBase::getParquetColumnInfo(
   } else { // leaf node
     name = columnNames.at(curSchemaIdx);
     const auto veloxType = convertType(schemaElement, requestedType);
+    // Check if the requestedType matches the veloxType created from the schema
+    // if provided.
+    if (requestedType) {
+      VELOX_CHECK(
+          veloxType->equivalent(*requestedType),
+          "Converted type {} does not match the requested type {}",
+          veloxType->toString(),
+          requestedType->toString());
+    }
     int32_t precision =
         schemaElement.__isset.precision ? schemaElement.precision : 0;
     int32_t scale = schemaElement.__isset.scale ? schemaElement.scale : 0;
