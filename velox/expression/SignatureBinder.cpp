@@ -175,7 +175,7 @@ bool SignatureBinderBase::tryBind(
     VELOX_CHECK(variable.isTypeParameter(), "Not expecting integer variable");
 
     if (typeVariablesBindings_.count(baseName)) {
-      // If the the variable type is already mapped to a concrete type, make
+      // If the variable type is already mapped to a concrete type, make
       // sure the mapped type is equivalent to the actual type.
       return typeVariablesBindings_[baseName]->equivalent(*actualType);
     }

@@ -417,7 +417,7 @@ class EvalCtx {
     return isFinalSelection_;
   }
 
-  // True if the operands will not be evaluated on rows outside of the
+  // True if the operands will not be evaluated on rows outside the
   // current SelectivityVector. For example, true for top level
   // projections or conjuncts of a top level AND. False for then and
   // else of an IF.
@@ -521,7 +521,7 @@ class EvalCtx {
 
   /// Returns true if dictionary memoization optimization is enabled, which
   /// allows the reuse of results between consecutive input batches if they are
-  /// dictionary encoded and have the same alphabet(undelying flat vector).
+  /// dictionary encoded and have the same alphabet(underlying flat vector).
   bool dictionaryMemoizationEnabled() const {
     return execCtx_->optimizationParams().dictionaryMemoizationEnabled;
   }
@@ -552,7 +552,7 @@ class EvalCtx {
   void ensureErrorsVectorSize(EvalErrorsPtr& errors, vector_size_t size) const;
 
   // Updates 'errorPtr' to clear null at 'index' to indicate an error has
-  // occured without specifying error details.
+  // occurred without specifying error details.
   void addError(vector_size_t index, EvalErrorsPtr& errorsPtr) const;
 
   // Copy error from 'from' at index 'fromIndex' to 'to' at index 'toIndex'.
@@ -588,7 +588,7 @@ class EvalCtx {
   // True if the current set of rows will not grow, e.g. not under and IF or OR.
   bool isFinalSelection_{true};
 
-  // If isFinalSelection_ is false, the set of rows for the upper-most IF or
+  // If isFinalSelection_ is false, the set of rows for the uppermost IF or
   // OR. Used to determine the set of rows for loading lazy vectors.
   const SelectivityVector* finalSelection_;
 
@@ -600,7 +600,7 @@ class EvalCtx {
 
 /// Utility wrapper struct that is used to temporarily reset the value of the
 /// EvalCtx. EvalCtx::saveAndReset() is used to achieve that. Use
-/// withContextSaver to ensure the original context is restored on a scucessful
+/// withContextSaver to ensure the original context is restored on a successful
 /// run or call EvalContext::restore to do it manually.
 struct ContextSaver {
   // The context to restore. nullptr if nothing to restore.

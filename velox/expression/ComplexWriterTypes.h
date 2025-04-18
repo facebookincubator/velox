@@ -192,7 +192,7 @@ class ArrayWriter {
   }
 
   // Should be called by the user (VectorWriter) when null is committed to
-  // pretect against user miss-use (writing to the writer then committing null).
+  // protect against user miss-use (writing to the writer then committing null).
   void resetLength() {
     // No need to commit last written items and innerOffset_ stays the same for
     // the next item.
@@ -210,7 +210,7 @@ class ArrayWriter {
     length_ = size;
   }
 
-  // Functions below provide an std::like interface, and are enabled only when
+  // Functions below provide a std::like interface, and are enabled only when
   // the array element is primitive that is not string or bool.
 
   void push_back(element_t value) {
@@ -254,7 +254,7 @@ class ArrayWriter {
     add_items(data);
   }
 
-  // Don't mutate elementVecotr_ through this API unless you know what you're
+  // Don't mutate elementVector_ through this API unless you know what you're
   // doing.
   // This function returns the base of elements vector and the elements vector
   // itself.
@@ -622,11 +622,11 @@ class MapWriter {
     return length_;
   }
 
-  // Any map type iteratable in tuple like manner.
+  // Any map type iterable in tuple like manner.
   template <typename MapType>
   void copy_from(const MapType& data) {
     resize(0);
-    // TODO: acceletare this with memcpy.
+    // TODO: accelerate this with memcpy.
     for (const auto& [key, value] : data) {
       auto [keyWriter, valueWriter] = add_item();
       // copy key
@@ -650,7 +650,7 @@ class MapWriter {
       const typename VectorExec::template resolver<Map<K, V>>::in_type&
           mapView) {
     resize(0);
-    // TODO: acceletare this with memcpy.
+    // TODO: accelerate this with memcpy.
     for (const auto& [key, value] : mapView) {
       if (value.has_value()) {
         auto [keyWriter, valueWriter] = add_item();
@@ -736,7 +736,7 @@ class MapWriter {
   }
 
   // Should be called by the user (VectorWriter) when null is committed to
-  // pretect against user miss-use (writing to the writer then committing
+  // protect against user miss-use (writing to the writer then committing
   // null).
   void resetLength() {
     // No need to commit last written items and innerOffset_ stays the same

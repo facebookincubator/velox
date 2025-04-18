@@ -93,7 +93,7 @@ Status detail::parseDecimalComponents(
     if (withSign && pos == size - 1) {
       return Status::UserError("The exponent part only contains sign.");
     }
-    // Make sure all chars after sign are digits, as as folly::tryTo allows
+    // Make sure all chars after sign are digits, as folly::tryTo allows
     // leading and trailing whitespaces.
     for (auto i = static_cast<size_t>(withSign); i < size - pos; ++i) {
       if (!std::isdigit(s[pos + i])) {
@@ -418,7 +418,7 @@ VectorPtr CastExpr::applyMap(
   // that are not selected.
   BufferPtr sizes = input->sizes();
   if (newMapKeys->isConstantEncoding() && newMapValues->isConstantEncoding()) {
-    // We extends size since that is cheap.
+    // We extend the size since that is cheap.
     newMapKeys->resize(input->mapKeys()->size());
     newMapValues->resize(input->mapValues()->size());
   } else if (
@@ -491,7 +491,7 @@ VectorPtr CastExpr::applyArray(
   // that are not selected.
   BufferPtr sizes = input->sizes();
   if (newElements->isConstantEncoding()) {
-    // If the newElements we extends its size since that is cheap.
+    // If the newElements is encoded as constant, we extend its size since that is cheap.
     newElements->resize(input->elements()->size());
   } else if (newElements->size() < input->elements()->size()) {
     sizes =
@@ -545,7 +545,7 @@ VectorPtr CastExpr::applyRow(
   EvalErrorsPtr oldErrors;
   if (setNullInResultAtError()) {
     // We need to isolate errors that happen during the cast from previous
-    // errors since those translate to nulls, unlike exisiting errors.
+    // errors since those translate to nulls, unlike existing errors.
     context.swapErrors(oldErrors);
   }
 

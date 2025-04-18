@@ -30,7 +30,7 @@ class FunctionCallToSpecialForm {
   /// arguments, e.g. Try.
   virtual TypePtr resolveType(const std::vector<TypePtr>& argTypes) = 0;
 
-  /// Given the output Type, the child expresssions, and whether or not to track
+  /// Given the output Type, the child expressions, and whether or not to track
   /// CPU usage, returns the SpecialForm.
   virtual ExprPtr constructSpecialForm(
       const TypePtr& type,
@@ -47,7 +47,7 @@ TypePtr resolveTypeForSpecialForm(
     const std::string& functionName,
     const std::vector<TypePtr>& argTypes);
 
-/// Returns the SpeicalForm associated with the functionName.  If functionName
+/// Returns the SpecialForm associated with the functionName.  If functionName
 /// is not the name of a known SpecialForm, returns nulltpr.
 ExprPtr constructSpecialForm(
     const std::string& functionName,
@@ -56,7 +56,7 @@ ExprPtr constructSpecialForm(
     bool trackCpuUsage,
     const core::QueryConfig& config);
 
-/// Returns true iff a FunctionCallToSpeicalForm object has been registered for
+/// Returns true iff a FunctionCallToSpecialForm object has been registered for
 /// the given functionName.
 bool isFunctionCallToSpecialFormRegistered(const std::string& functionName);
 } // namespace facebook::velox::exec
