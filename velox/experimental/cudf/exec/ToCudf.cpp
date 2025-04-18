@@ -58,18 +58,9 @@ bool isAnyOf(const Base* p) {
 } // namespace
 
 bool CompileState::compile() {
-  if (cudfDebugEnabled()) {
-    std::cout << "Calling CudfDriverAdapter" << std::endl;
-  }
-
   auto operators = driver_.operators();
 
-  if (cudfDebugEnabled()) {
-    std::cout << "Number of plan nodes: " << driverFactory_.planNodes.size()
-              << std::endl;
-    for (auto& node : driverFactory_.planNodes) {
-      std::cout << "  Plan node: ID " << node->id() << ": " << node->toString();
-    }
+  if (FLAGS_velox_cudf_debug) {
     std::cout << "Operators before adapting for cuDF: count ["
               << operators.size() << "]" << std::endl;
     for (auto& op : operators) {
@@ -228,10 +219,8 @@ bool CompileState::compile() {
       auto planNode = std::dynamic_pointer_cast<const core::OrderByNode>(
           getPlanNode(orderByOp->planNodeId()));
       VELOX_CHECK(planNode != nullptr);
-      // From-velox (optional)
       replaceOp.push_back(std::make_unique<CudfOrderBy>(id, ctx, planNode));
       replaceOp.back()->initialize();
-      // To-velox (optional)
     } else if (auto hashAggOp = dynamic_cast<exec::HashAggregation*>(oper)) {
       auto planNode = std::dynamic_pointer_cast<const core::AggregationNode>(
           getPlanNode(hashAggOp->planNodeId()));
@@ -279,7 +268,7 @@ bool CompileState::compile() {
 
     if (not replaceOp.empty()) {
       operatorsOffset +=
-          replaceOp.size() - 1 + keepOperator; // Check this "- 1"
+          replaceOp.size() - 1 + keepOperator;
       [[maybe_unused]] auto replaced = driverFactory_.replaceOperators(
           driver_,
           replacingOperatorIndex + keepOperator,
@@ -289,7 +278,7 @@ bool CompileState::compile() {
     }
   }
 
-  if (cudfDebugEnabled()) {
+  if (FLAGS_velox_cudf_debug) {
     operators = driver_.operators();
     std::cout << "Operators after adapting for cuDF: count ["
               << operators.size() << "]" << std::endl;
@@ -330,21 +319,11 @@ void registerCudf(const CudfOptions& options) {
   cudaFree(nullptr); // Initialize CUDA context at startup
 
   const std::string mrMode = options.cudfMemoryResource;
-  if (cudfDebugEnabled()) {
-    std::cout << "Setting cuDF memory resource to " << mrMode << std::endl;
-  }
   auto mr = cudf_velox::createMemoryResource(mrMode);
   cudf::set_current_device_resource(mr.get());
 
-  if (cudfDebugEnabled()) {
-    std::cout << "Registering CudfHashJoinBridgeTranslator" << std::endl;
-  }
   exec::Operator::registerOperator(
       std::make_unique<CudfHashJoinBridgeTranslator>());
-
-  if (cudfDebugEnabled()) {
-    std::cout << "Registering CudfDriverAdapter" << std::endl;
-  }
   CudfDriverAdapter cda{mr};
   exec::DriverAdapter cudfAdapter{kCudfAdapterName, {}, cda};
   exec::DriverFactory::registerAdapter(cudfAdapter);
@@ -352,9 +331,6 @@ void registerCudf(const CudfOptions& options) {
 }
 
 void unregisterCudf() {
-  if (cudfDebugEnabled()) {
-    std::cout << "Unregistering CudfDriverAdapter" << std::endl;
-  }
   exec::DriverFactory::adapters.erase(
       std::remove_if(
           exec::DriverFactory::adapters.begin(),

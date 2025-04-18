@@ -17,8 +17,10 @@ add_library(
   ReferenceQueryRunner.cpp
   DuckQueryRunner.cpp
   PrestoQueryRunner.cpp
+  PrestoQueryRunnerIntermediateTypeTransforms.cpp
+  PrestoQueryRunnerTimestampWithTimeZoneTransform.cpp
   FuzzerUtil.cpp
-  ToSQLUtil.cpp)
+  PrestoSql.cpp)
 
 target_link_libraries(
   velox_fuzzer_util
@@ -111,7 +113,8 @@ add_executable(velox_topn_row_number_fuzzer TopNRowNumberFuzzerRunner.cpp)
 target_link_libraries(
   velox_topn_row_number_fuzzer velox_topn_row_number_fuzzer_lib)
 
-add_library(velox_join_fuzzer JoinFuzzer.cpp)
+# Join Fuzzer.
+add_executable(velox_join_fuzzer JoinFuzzerRunner.cpp JoinFuzzer.cpp)
 
 target_link_libraries(
   velox_join_fuzzer
@@ -159,3 +162,7 @@ target_link_libraries(
 target_link_libraries(
   velox_cache_fuzzer_lib velox_dwio_common velox_temp_path
   velox_vector_test_lib)
+
+if(${VELOX_BUILD_TESTING})
+  add_subdirectory(tests)
+endif()

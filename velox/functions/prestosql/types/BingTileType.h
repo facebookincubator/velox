@@ -15,6 +15,7 @@
  */
 #pragma once
 
+#include <folly/Expected.h>
 #include <cstdint>
 #include "velox/type/SimpleFunctionApi.h"
 
@@ -129,42 +130,20 @@ class BingTileType : public BigintType {
         (uint8_t)(bingTileY(tile) < coordinateBound);
   }
 
-  static std::optional<std::string> bingTileInvalidReason(uint64_t tile) {
-    // TODO?: We are duplicating some logic in isBingTileIntValid; maybe we
-    // should extract?
+  static std::optional<std::string> bingTileInvalidReason(uint64_t tile);
 
-    uint8_t version = BingTileType::bingTileVersion(tile);
-    if (version != BingTileType::kBingTileVersion) {
-      return fmt::format("Version {} not supported", version);
-    }
+  static folly::Expected<uint64_t, std::string> bingTileParent(
+      uint64_t tile,
+      uint8_t parentZoom);
 
-    uint8_t zoom = BingTileType::bingTileZoom(tile);
-    if (zoom > BingTileType::kBingTileMaxZoomLevel) {
-      return fmt::format(
-          "Zoom {} is greater than max zoom {}",
-          zoom,
-          BingTileType::kBingTileMaxZoomLevel);
-    }
+  static folly::Expected<std::vector<uint64_t>, std::string> bingTileChildren(
+      uint64_t tile,
+      uint8_t childZoom);
 
-    uint64_t coordinateBound = 1 << zoom;
+  static folly::Expected<uint64_t, std::string> bingTileFromQuadKey(
+      const std::string_view& quadKey);
 
-    if (BingTileType::bingTileX(tile) >= coordinateBound) {
-      return fmt::format(
-          "X coordinate {} is greater than max coordinate {} at zoom {}",
-          BingTileType::bingTileX(tile),
-          coordinateBound - 1,
-          zoom);
-    }
-    if (BingTileType::bingTileY(tile) >= coordinateBound) {
-      return fmt::format(
-          "Y coordinate {} is greater than max coordinate {} at zoom {}",
-          BingTileType::bingTileY(tile),
-          coordinateBound - 1,
-          zoom);
-    }
-
-    return std::nullopt;
-  }
+  static std::string bingTileToQuadKey(uint64_t tile);
 };
 
 inline bool isBingTileType(const TypePtr& type) {

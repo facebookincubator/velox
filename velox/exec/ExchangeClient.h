@@ -25,7 +25,6 @@ namespace facebook::velox::exec {
 class ExchangeClient : public std::enable_shared_from_this<ExchangeClient> {
  public:
   static constexpr int32_t kDefaultMaxQueuedBytes = 32 << 20; // 32 MB.
-  static constexpr std::chrono::seconds kRequestDataSizesMaxWait{10};
   static constexpr std::chrono::milliseconds kRequestDataMaxWait{100};
   static inline const std::string kBackgroundCpuTimeMs = "backgroundCpuTimeMs";
 
@@ -36,15 +35,24 @@ class ExchangeClient : public std::enable_shared_from_this<ExchangeClient> {
       int32_t numberOfConsumers,
       uint64_t minOutputBatchBytes,
       memory::MemoryPool* pool,
-      folly::Executor* executor)
+      folly::Executor* executor,
+      int32_t requestDataSizesMaxWaitSec = 10)
       : taskId_{std::move(taskId)},
         destination_(destination),
         maxQueuedBytes_{maxQueuedBytes},
+        kRequestDataSizesMaxWaitSec_{requestDataSizesMaxWaitSec},
         pool_(pool),
         executor_(executor),
         queue_(std::make_shared<ExchangeQueue>(
             numberOfConsumers,
-            minOutputBatchBytes)) {
+            minOutputBatchBytes)),
+        // See comment in 'pickSourcesToRequestLocked' for why this is needed
+        // for 'minOutputBatchBytes_'. Note: ExchangeQueue does not need max(1,
+        // minOutputBatchBytes) because for 'MergeExchangeSource', we want
+        // ExchangeQueue 'minOutputBatchBytes' to be be 0 so that it always
+        // unblocks. In short, 0 has a special meaning for ExchangeQueue
+        minOutputBatchBytes_(
+            std::max(static_cast<uint64_t>(1), minOutputBatchBytes)) {
     VELOX_CHECK_NOT_NULL(pool_);
     VELOX_CHECK_NOT_NULL(executor_);
     // NOTE: the executor is used to run async response callback from the
@@ -101,6 +109,10 @@ class ExchangeClient : public std::enable_shared_from_this<ExchangeClient> {
 
   folly::dynamic toJson() const;
 
+  std::chrono::seconds requestDataSizesMaxWaitSec() const {
+    return kRequestDataSizesMaxWaitSec_;
+  }
+
  private:
   struct RequestSpec {
     std::shared_ptr<ExchangeSource> source;
@@ -123,6 +135,8 @@ class ExchangeClient : public std::enable_shared_from_this<ExchangeClient> {
   const std::string taskId_;
   const int destination_;
   const int64_t maxQueuedBytes_;
+  const std::chrono::seconds kRequestDataSizesMaxWaitSec_;
+
   memory::MemoryPool* const pool_;
   folly::Executor* const executor_;
   const std::shared_ptr<ExchangeQueue> queue_;
@@ -130,6 +144,10 @@ class ExchangeClient : public std::enable_shared_from_this<ExchangeClient> {
   std::unordered_set<std::string> remoteTaskIds_;
   std::vector<std::shared_ptr<ExchangeSource>> sources_;
   bool closed_{false};
+
+  // The minimum byte size the consumer is expected to consume from
+  // the exchange queue.
+  const uint64_t minOutputBatchBytes_;
 
   // Total number of bytes in flight.
   int64_t totalPendingBytes_{0};

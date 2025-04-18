@@ -17,9 +17,18 @@
 #include "velox/experimental/cudf/exec/ToCudf.h"
 #include "velox/experimental/cudf/exec/VeloxCudfInterop.h"
 
+#include "velox/common/memory/Memory.h"
+#include "velox/type/Type.h"
 #include "velox/vector/arrow/Bridge.h"
+#include "velox/vector/BaseVector.h"
+#include "velox/vector/ComplexVector.h"
 
 #include <cudf/interop.hpp>
+#include <cudf/table/table.hpp>
+#include <cudf/types.hpp>
+#include <cudf/utilities/error.hpp>
+
+#include <rmm/cuda_stream_view.hpp>
 
 #include <arrow/c/bridge.h>
 #include <arrow/io/interfaces.h>
@@ -28,10 +37,6 @@
 namespace facebook::velox::cudf_velox {
 
 cudf::type_id velox_to_cudf_type_id(const TypePtr& type) {
-  if (cudfDebugEnabled()) {
-    std::cout << "Converting Velox type " << type->toString() << " to cudf"
-              << std::endl;
-  }
   switch (type->kind()) {
     case TypeKind::BOOLEAN:
       return cudf::type_id::BOOL8;
@@ -82,6 +87,7 @@ cudf::type_id velox_to_cudf_type_id(const TypePtr& type) {
       return cudf::type_id::EMPTY;
   }
 }
+
 namespace with_arrow {
 
 std::unique_ptr<cudf::table> toCudfTable(
@@ -116,41 +122,6 @@ std::unique_ptr<cudf::table> toCudfTable(
 
 namespace {
 
-void toSignedIntFormat(char* format) {
-  VELOX_CHECK_NOT_NULL(format);
-  switch (format[0]) {
-    case 'C':
-      format[0] = 'c';
-      break;
-    case 'S':
-      format[0] = 's';
-      break;
-    case 'I':
-      format[0] = 'i';
-      break;
-    case 'L':
-      format[0] = 'l';
-      break;
-    default:
-      return;
-  }
-  LOG(WARNING) << "arrowSchema.format: " << format
-               << ", unsigned is treated as signed indices";
-}
-
-// Changes all unsigned indices to signed indices for dictionary columns from
-// cudf which uses unsigned indices, but velox uses signed indices.
-void fixDictionaryIndices(ArrowSchema& arrowSchema) {
-  if (arrowSchema.dictionary != nullptr) {
-    toSignedIntFormat(const_cast<char*>(arrowSchema.format));
-    fixDictionaryIndices(*arrowSchema.dictionary);
-  }
-  for (size_t i = 0; i < arrowSchema.n_children; ++i) {
-    VELOX_CHECK_NOT_NULL(arrowSchema.children[i]);
-    fixDictionaryIndices(*arrowSchema.children[i]);
-  }
-}
-
 RowVectorPtr toVeloxColumn(
     const cudf::table_view& table,
     memory::MemoryPool* pool,
@@ -160,9 +131,6 @@ RowVectorPtr toVeloxColumn(
   auto& arrowArray = arrowDeviceArray->array;
 
   auto arrowSchema = cudf::to_arrow_schema(table, metadata);
-  // Hack to convert unsigned indices to signed indices for dictionary columns
-  fixDictionaryIndices(*arrowSchema);
-
   auto veloxTable = importFromArrowAsOwner(*arrowSchema, arrowArray, pool);
   // BaseVector to RowVector
   auto castedPtr =

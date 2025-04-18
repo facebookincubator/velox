@@ -16,7 +16,7 @@
 
 #pragma once
 
-#include "velox/exec/Operator.h"
+#include "velox/exec/Driver.h"
 
 #include <gflags/gflags.h>
 
@@ -31,12 +31,10 @@ static const std::string kCudfAdapterName = "cuDF";
 
 class CompileState {
  public:
-  CompileState(
-      const velox::exec::DriverFactory& driverFactory,
-      velox::exec::Driver& driver)
+  CompileState(const exec::DriverFactory& driverFactory, exec::Driver& driver)
       : driverFactory_(driverFactory), driver_(driver) {}
 
-  velox::exec::Driver& driver() {
+  exec::Driver& driver() {
     return driver_;
   }
 
@@ -44,8 +42,8 @@ class CompileState {
   // cuDF equivalents. Returns true if the Driver was changed.
   bool compile();
 
-  const velox::exec::DriverFactory& driverFactory_;
-  velox::exec::Driver& driver_;
+  const exec::DriverFactory& driverFactory_;
+  exec::Driver& driver_;
 };
 
 struct CudfOptions {

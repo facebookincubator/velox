@@ -109,10 +109,11 @@ class TDigest {
     return compression_;
   }
 
- private:
   static constexpr int8_t kSerializationVersion = 1;
   static constexpr double kEpsilon = 1e-3;
+  static constexpr double kRelativeErrorEpsilon = 1e-4;
 
+ private:
   void mergeNewValues(std::vector<int16_t>& positions, double compression);
 
   void merge(
@@ -134,7 +135,6 @@ class TDigest {
     double x = (x1 * w1 + x2 * w2) / (w1 + w2);
     return std::max(x1, std::min(x, x2));
   }
-
   std::vector<double, Allocator> weights_;
   std::vector<double, Allocator> means_;
   double compression_;
@@ -460,22 +460,16 @@ void TDigest<A>::mergeDeserialized(
     weights_.resize(numOld + numNew);
     auto* weights = weights_.data() + numOld;
     tdigest::detail::read(input, weights, numNew);
-    for (int i = 0; i < numNew; ++i) {
+    for (auto i = 0; i < numNew; ++i) {
       VELOX_CHECK_GT(weights[i], 0);
     }
     means_.resize(numOld + numNew);
     auto* means = means_.data() + numOld;
     tdigest::detail::read(input, means, numNew);
-    for (int i = 0; i < numNew; ++i) {
+    for (auto i = 0; i < numNew; ++i) {
       VELOX_CHECK(!std::isnan(means[i]));
     }
-    if (version >= 1) {
-      double actualSum = 0;
-      for (int i = 0; i < numNew; ++i) {
-        actualSum += weights[i] * means[i];
-      }
-      VELOX_CHECK_LT(std::abs(actualSum - sum), kEpsilon);
-    }
+
     double actualTotalWeight = std::accumulate(weights, weights + numNew, 0.0);
     VELOX_CHECK_LT(std::abs(actualTotalWeight - totalWeight), kEpsilon);
   } else {

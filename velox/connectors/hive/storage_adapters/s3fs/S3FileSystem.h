@@ -18,11 +18,28 @@
 
 #include "velox/common/file/FileSystems.h"
 
+namespace Aws::Auth {
+// Forward-declare the AWSCredentialsProvider class from the AWS SDK.
+class AWSCredentialsProvider;
+} // namespace Aws::Auth
+
 namespace facebook::velox::filesystems {
 
-bool initializeS3(std::string_view logLevel = "FATAL");
+bool initializeS3(
+    std::string_view logLevel = "FATAL",
+    std::optional<std::string_view> logLocation = std::nullopt);
 
 void finalizeS3();
+
+class S3Config;
+
+using AWSCredentialsProviderFactory =
+    std::function<std::shared_ptr<Aws::Auth::AWSCredentialsProvider>(
+        const S3Config& config)>;
+
+void registerCredentialsProvider(
+    const std::string& providerName,
+    const AWSCredentialsProviderFactory& factory);
 
 /// Implementation of S3 filesystem and file interface.
 /// We provide a registration method for read and write files so the appropriate
@@ -72,6 +89,8 @@ class S3FileSystem : public FileSystem {
   }
 
   std::string getLogLevelName() const;
+
+  std::string getLogPrefix() const;
 
  protected:
   class Impl;

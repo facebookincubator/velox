@@ -26,10 +26,6 @@ add_library(
   Utilities.cpp
   VeloxCudfInterop.cpp)
 
-set_target_properties(
-  velox_cudf_exec
-  PROPERTIES CUDA_ARCHITECTURES native)
-
 target_link_libraries(
   velox_cudf_exec
   PUBLIC cudf::cudf

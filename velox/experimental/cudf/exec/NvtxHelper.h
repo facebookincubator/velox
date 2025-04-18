@@ -89,11 +89,11 @@ constexpr std::string_view extractClassAndFunction(
       std::string(extractClassAndFunction(__PRETTY_FUNCTION__))};              \
   std::string const nvtx3_func_extra_info__{                                   \
       nvtx3_func_name__ + " " + this->extra_info_.value_or("")};               \
-  ::nvtx3::event_attributes const nvtx3_func_attr__{                    \
+  ::nvtx3::event_attributes const nvtx3_func_attr__{                           \
       this->payload_.has_value() ?                                             \
-          ::nvtx3::event_attributes{nvtx3_func_extra_info__, this->color_,           \
+          ::nvtx3::event_attributes{nvtx3_func_extra_info__, this->color_,     \
                                    nvtx3::payload{this->payload_.value()}} :   \
-          ::nvtx3::event_attributes{nvtx3_func_extra_info__, this->color_}};      \
+          ::nvtx3::event_attributes{nvtx3_func_extra_info__, this->color_}};   \
   ::nvtx3::scoped_range_in<VeloxDomain> const nvtx3_range__{nvtx3_func_attr__};
 
 #define VELOX_NVTX_PRETTY_FUNC_RANGE()                                         \
