@@ -12,6 +12,12 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+velox_add_library(velox_remote_thrift_libs INTERFACE)
+velox_link_libraries(
+  velox_remote_thrift_libs
+  INTERFACE velox_functions_remote_thrift_server velox_functions_remote
+            remote_function_thrift)
+
 add_subdirectory(if)
 add_subdirectory(client)
 add_subdirectory(server)
