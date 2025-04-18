@@ -268,15 +268,6 @@ std::optional<bool> isParquetEnableDictionary(
   return std::nullopt;
 }
 
-std::optional<int64_t> getParquetPageSize(
-    const config::ConfigBase& config,
-    const char* configKey) {
-  if (const auto pageSize = config.get<std::string>(configKey)) {
-    return config::toCapacity(pageSize.value(), config::CapacityUnit::BYTE);
-  }
-  return std::nullopt;
-}
-
 std::optional<bool> getParquetDataPageVersion(
     const config::ConfigBase& config,
     const char* configKey) {
