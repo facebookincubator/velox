@@ -139,8 +139,8 @@ class ExprCallable : public Callable {
   RowTypePtr signature_;
   RowVectorPtr capture_;
   std::shared_ptr<Expr> body_;
-  // List of Shared Exprs that are descendants of 'body_' for which reset() needs
-  // to be called before calling `body_->eval()`.
+  // List of Shared Exprs that are descendants of 'body_' for which reset()
+  // needs to be called before calling `body_->eval()`.
   std::vector<std::shared_ptr<Expr>> sharedExprsToReset_;
 };
 

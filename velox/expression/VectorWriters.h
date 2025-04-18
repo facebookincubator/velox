@@ -62,8 +62,8 @@ struct VectorWriter : public VectorWriterBase {
 
   void copyCommit(const exec_out_t& data) {
     // this code path is called for copying nested structures to slices
-    // in the future, we want to eliminate this so all writes go directly to their
-    // slice.
+    // in the future, we want to eliminate this so all writes go directly to
+    // their slice.
     data_[offset_] = data;
     vector_->setNull(offset_, false);
   }
