@@ -491,7 +491,8 @@ VectorPtr CastExpr::applyArray(
   // that are not selected.
   BufferPtr sizes = input->sizes();
   if (newElements->isConstantEncoding()) {
-    // If the newElements is encoded as constant, we extend its size since that is cheap.
+    // If the newElements is encoded as constant, we extend its size since that
+    // is cheap.
     newElements->resize(input->elements()->size());
   } else if (newElements->size() < input->elements()->size()) {
     sizes =

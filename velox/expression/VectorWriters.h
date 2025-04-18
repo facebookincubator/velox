@@ -61,9 +61,9 @@ struct VectorWriter : public VectorWriterBase {
   }
 
   void copyCommit(const exec_out_t& data) {
-    // this code path is called for copying nested structures to slices
-    // in the future, we want to eliminate this so all writes go directly to their
-    // slice.
+    // This code path is called for copying nested structures to slices.
+    // In the future, we want to eliminate this so all writes go directly to
+    // their slice.
     data_[offset_] = data;
     vector_->setNull(offset_, false);
   }
@@ -73,7 +73,7 @@ struct VectorWriter : public VectorWriterBase {
   }
 
   void commit(bool isSet) override {
-    // this code path is called when the slice is top-level
+    // This code path is called when the slice is top-level.
     if (!isSet) {
       vector_->setNull(offset_, true);
     } else {
@@ -569,7 +569,7 @@ struct VectorWriter<Generic<T, comparable, orderable>>
     }
     // No need to call finalizeNull here since commitNull will call it in
     // castType_ is true.
-    // otherwse there is nothing to do.
+    // Otherwise, there is nothing to do.
   }
 
   // User can only add values after casting a generic writer to an actual type.
