@@ -280,7 +280,7 @@ std::shared_ptr<Task> Task::create(
       std::move(consumerSupplier),
       memoryArbitrationPriority,
       std::move(onError)));
-  task->initTaskPool();
+  task->init();
   task->addToTaskList();
   return task;
 }
@@ -312,7 +312,6 @@ Task::Task(
     VELOX_CHECK_NULL(
         dynamic_cast<const folly::InlineLikeExecutor*>(queryCtx_->executor()));
   }
-
   maybeInitTrace();
 }
 
@@ -364,6 +363,53 @@ Task::~Task() {
   auto taskDeletionPromises = std::move(taskDeletionPromises_);
   for (auto& promise : taskDeletionPromises) {
     promise.setValue();
+  }
+}
+
+void Task::init() {
+  VELOX_CHECK(driverFactories_.empty());
+  initTaskPool();
+
+  if (mode_ != Task::ExecutionMode::kSerial) {
+    return;
+  }
+
+  // Create drivers.
+  VELOX_CHECK_NULL(
+      consumerSupplier_,
+      "Serial execution mode doesn't support delivering results to a "
+      "callback");
+
+  taskStats_.executionStartTimeMs = getCurrentTimeMs();
+  LocalPlanner::plan(
+      planFragment_, nullptr, &driverFactories_, queryCtx_->queryConfig(), 1);
+  exchangeClients_.resize(driverFactories_.size());
+
+  // In Task::next() we always assume ungrouped execution.
+  for (const auto& factory : driverFactories_) {
+    VELOX_CHECK(factory->supportsSerialExecution());
+    numDriversUngrouped_ += factory->numDrivers;
+    numTotalDrivers_ += factory->numTotalDrivers;
+    taskStats_.pipelineStats.emplace_back(
+        factory->inputDriver, factory->outputDriver);
+  }
+
+  // Create drivers.
+  createSplitGroupStateLocked(kUngroupedGroupId);
+  std::vector<std::shared_ptr<Driver>> drivers =
+      createDriversLocked(kUngroupedGroupId);
+  if (pool_->reservedBytes() != 0) {
+    VELOX_FAIL(
+        "Unexpected memory pool allocations during task[{}] driver initialization: {}",
+        taskId_,
+        pool_->treeMemoryUsage());
+  }
+
+  drivers_ = std::move(drivers);
+  driverBlockingStates_.reserve(drivers_.size());
+  for (auto i = 0; i < drivers_.size(); ++i) {
+    driverBlockingStates_.emplace_back(
+        std::make_unique<DriverBlockingState>(drivers_[i].get()));
   }
 }
 
@@ -662,46 +708,6 @@ RowVectorPtr Task::next(ContinueFuture* future) {
 
   VELOX_CHECK_EQ(
       state_, TaskState::kRunning, "Task has already finished processing.");
-
-  // On first call, create the drivers.
-  if (driverFactories_.empty()) {
-    VELOX_CHECK_NULL(
-        consumerSupplier_,
-        "Serial execution mode doesn't support delivering results to a "
-        "callback");
-
-    taskStats_.executionStartTimeMs = getCurrentTimeMs();
-    LocalPlanner::plan(
-        planFragment_, nullptr, &driverFactories_, queryCtx_->queryConfig(), 1);
-    exchangeClients_.resize(driverFactories_.size());
-
-    // In Task::next() we always assume ungrouped execution.
-    for (const auto& factory : driverFactories_) {
-      VELOX_CHECK(factory->supportsSerialExecution());
-      numDriversUngrouped_ += factory->numDrivers;
-      numTotalDrivers_ += factory->numTotalDrivers;
-      taskStats_.pipelineStats.emplace_back(
-          factory->inputDriver, factory->outputDriver);
-    }
-
-    // Create drivers.
-    createSplitGroupStateLocked(kUngroupedGroupId);
-    std::vector<std::shared_ptr<Driver>> drivers =
-        createDriversLocked(kUngroupedGroupId);
-    if (pool_->reservedBytes() != 0) {
-      VELOX_FAIL(
-          "Unexpected memory pool allocations during task[{}] driver initialization: {}",
-          taskId_,
-          pool_->treeMemoryUsage());
-    }
-
-    drivers_ = std::move(drivers);
-    driverBlockingStates_.reserve(drivers_.size());
-    for (auto i = 0; i < drivers_.size(); ++i) {
-      driverBlockingStates_.emplace_back(
-          std::make_unique<DriverBlockingState>(drivers_[i].get()));
-    }
-  }
 
   // Run drivers one at a time. If a driver blocks, continue running the other
   // drivers. Running other drivers is expected to unblock some or all blocked
@@ -1422,7 +1428,7 @@ std::unique_ptr<ContinuePromise> Task::addSplitLocked(
   ++taskStats_.numTotalSplits;
   ++taskStats_.numQueuedSplits;
 
-  if (split.connectorSplit) {
+  if (split.hasConnectorSplit()) {
     VELOX_CHECK_NULL(split.connectorSplit->dataSource);
     if (splitsState.sourceIsTableScan) {
       ++taskStats_.numQueuedTableScanSplits;
