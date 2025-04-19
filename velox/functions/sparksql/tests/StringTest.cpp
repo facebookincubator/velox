@@ -1055,5 +1055,30 @@ TEST_F(StringTest, empty2Null) {
   EXPECT_EQ(empty2Null(""), std::nullopt);
   EXPECT_EQ(empty2Null("abc"), "abc");
 }
+
+TEST_F(StringTest, luhnCheck) {
+  const auto luhnCheck = [&](const std::optional<std::string>& str) {
+    return evaluateOnce<bool>("luhn_check(c0)", str);
+  };
+
+  EXPECT_EQ(luhnCheck("4111111111111111"), true);
+  EXPECT_EQ(luhnCheck("5500000000000004"), true);
+  EXPECT_EQ(luhnCheck("340000000000009"), true);
+  EXPECT_EQ(luhnCheck("6011000000000004"), true);
+  EXPECT_EQ(luhnCheck("6011000000000005"), false);
+  EXPECT_EQ(luhnCheck("378282246310006"), false);
+  EXPECT_EQ(luhnCheck("0"), true);
+  EXPECT_EQ(luhnCheck("4111111111111111    "), false);
+  EXPECT_EQ(luhnCheck("4111111 111111111"), false);
+  EXPECT_EQ(luhnCheck(" 4111111111111111"), false);
+  EXPECT_EQ(luhnCheck(""), false);
+  EXPECT_EQ(luhnCheck("  "), false);
+  EXPECT_EQ(luhnCheck("510B105105105106"), false);
+  EXPECT_EQ(luhnCheck("ABCDED"), false);
+  EXPECT_EQ(luhnCheck(std::nullopt), std::nullopt);
+  EXPECT_EQ(luhnCheck("6011111111111117"), true);
+  EXPECT_EQ(luhnCheck("6011111111111118"), false);
+  EXPECT_EQ(luhnCheck("123.456"), false);
+}
 } // namespace
 } // namespace facebook::velox::functions::sparksql::test

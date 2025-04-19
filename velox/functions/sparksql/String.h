@@ -1556,4 +1556,47 @@ struct Empty2NullFunction {
   }
 };
 
+/// luhn_check(input) -> boolean
+///
+/// Checks that a string of digits is valid according to the Luhn algorithm.
+template <typename T>
+struct LuhnCheckFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  // Results refer to strings in the first argument.
+  static constexpr int32_t reuse_strings_from_arg = 0;
+
+  FOLLY_ALWAYS_INLINE void call(
+      out_type<bool>& result,
+      const arg_type<Varchar>& input) {
+    // Empty string is not a valid Luhn number.
+    if (input.empty()) {
+      result = false;
+      return;
+    }
+
+    int checkSum = 0;
+    bool isSecond = false;
+
+    for (auto it = input.end(); it != input.begin();) {
+      --it;
+      if (!std::isdigit(*it)) {
+        result = false;
+        return;
+      }
+
+      const int digit = *it - '0';
+      // Double the digit if it's the second digit in the sequence.
+      const int doubled = isSecond ? digit * 2 : digit;
+      // Add the two digits of the doubled number to the sum.
+      checkSum += doubled % 10 + doubled / 10;
+      // Toggle the isSecond flag for the next iteration.
+      isSecond = !isSecond;
+    }
+
+    // Check if the final sum is divisible by 10.
+    result = checkSum % 10 == 0;
+  }
+};
+
 } // namespace facebook::velox::functions::sparksql
