@@ -117,6 +117,12 @@ TEST_F(GetJsonObjectTest, nullResult) {
           R"([{"my": {"info": {"name": "Alice"quoted""}}}, {"other": ["v1", "v2"]}])",
           "$[0].my.info.name"),
       std::nullopt);
+
+  // Invalid json string.
+  EXPECT_EQ(
+      getJsonObject(R"({"a":"xxx","bbb":"{"ccc":12}"})", "$.a"), std::nullopt);
+  EXPECT_EQ(
+      getJsonObject(R"({"a":"xxx","bbb":"{"ccc":12}"})", "$"), std::nullopt);
 }
 
 } // namespace
