@@ -110,6 +110,7 @@ struct WriterOptions : public dwio::common::WriterOptions {
   std::optional<bool> useParquetDataPageV2;
   std::optional<int64_t> dataPageSize;
   std::optional<int64_t> batchSize;
+  std::optional<std::string> createdBy;
 
   // Parsing session and hive configs.
 
@@ -131,6 +132,8 @@ struct WriterOptions : public dwio::common::WriterOptions {
       "hive.parquet.writer.batch_size";
   static constexpr const char* kParquetHiveConnectorWriteBatchSize =
       "hive.parquet.writer.batch-size";
+  static constexpr const char* kParquetHiveConnectorCreatedBy =
+      "hive.parquet.writer.created-by";
 
   // Process hive connector and session configs.
   void processConfigs(
