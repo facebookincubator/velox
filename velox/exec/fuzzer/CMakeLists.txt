@@ -20,7 +20,8 @@ add_library(
   PrestoQueryRunnerIntermediateTypeTransforms.cpp
   PrestoQueryRunnerTimestampWithTimeZoneTransform.cpp
   FuzzerUtil.cpp
-  PrestoSql.cpp)
+  PrestoSql.cpp
+  PrestoQueryRunnerIntermediateTypeTransforms.cpp)
 
 target_link_libraries(
   velox_fuzzer_util
@@ -114,7 +115,8 @@ target_link_libraries(
   velox_topn_row_number_fuzzer velox_topn_row_number_fuzzer_lib)
 
 # Join Fuzzer.
-add_executable(velox_join_fuzzer JoinFuzzerRunner.cpp JoinFuzzer.cpp)
+add_executable(velox_join_fuzzer JoinFuzzerRunner.cpp JoinFuzzer.cpp
+                                 JoinMaker.cpp)
 
 target_link_libraries(
   velox_join_fuzzer
