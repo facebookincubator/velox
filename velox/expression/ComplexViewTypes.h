@@ -1203,7 +1203,7 @@ class GenericView : public ViewWithComparison<GenericView> {
             "castTo type is not compatible with type of vector, vector type is {}",
             type()->toString()));
 
-    // If its a primitive type, then the casted reader always exists at
+    // If it's a primitive type, then the casted reader always exists at
     // castReaders_[0], and is set in Vector readers.
     if constexpr (SimpleTypeTrait<ToType>::isPrimitiveType) {
       return reinterpret_cast<VectorReader<ToType>*>(castReaders_[0].get())

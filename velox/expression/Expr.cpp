@@ -454,7 +454,7 @@ void Expr::evalSimplified(
     removeSureNulls(rows, context, nonNullHolder);
   }
 
-  // If the initial non null holder couldn't be created, start with the input
+  // If the initial non-null holder couldn't be created, start with the input
   // `rows`.
   auto* remainingRows = nonNullHolder.get() ? nonNullHolder.get() : &rows;
 
@@ -979,7 +979,7 @@ Expr::PeelEncodingsResult Expr::peelEncodings(
 
   // Use finalSelection to generate peel to ensure those rows can be
   // translated and ensure consistent peeling across multiple calls to this
-  // expression if its a shared subexpression.
+  // expression if it's a shared subexpression.
   const auto& rowsToPeel =
       context.isFinalSelection() ? rows : *context.finalSelection();
   [[maybe_unused]] auto numFields = context.row()->childrenSize();
@@ -1182,7 +1182,7 @@ void Expr::evalWithNulls(
 // Optimization that attempts to cache results for inputs that are dictionary
 // encoded and use the same base vector between subsequent input batches.
 // Since this hold onto a reference to the base vector and the cached results,
-// it can be memory intensive. Therefore in order to reduce this consumption
+// it can be memory intensive. Therefore, in order to reduce this consumption
 // and ensure it is only employed for cases where it can be useful, it only
 // starts caching result after it encounters the same base at least twice.
 void Expr::evalWithMemo(
@@ -1301,7 +1301,7 @@ void computeIsAsciiForInputs(
     indices.push_back(index);
   }
 
-  // Compute string encoding for input vectors at indicies.
+  // Compute string encoding for input vectors at indices.
   for (auto& index : indices) {
     // Some arguments are optional and hence may not exist. And some
     // functions operate on dynamic types, but we only scan them when the

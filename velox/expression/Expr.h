@@ -169,7 +169,7 @@ class Expr {
   ///
   /// @param parentExprSet pointer to the parent ExprSet which is calling
   /// evaluate on this expression. Should only be set for top level expressions
-  /// and not passed on to child expressions as it is ssed to setup exception
+  /// and not passed on to child expressions as it is ssed to set up exception
   /// context.
   void eval(
       const SelectivityVector& rows,
@@ -188,7 +188,7 @@ class Expr {
   ///
   /// @param parentExprSet pointer to the parent ExprSet which is calling
   /// evaluate on this expression. Should only be set for top level expressions
-  /// and not passed on to child expressions as it is ssed to setup exception
+  /// and not passed on to child expressions as it is ssed to set up exception
   /// context.
   void evalFlatNoNulls(
       const SelectivityVector& rows,
@@ -463,7 +463,7 @@ class Expr {
       VectorPtr& result);
 
   // Checks 'inputValues_' for peelable wrappers (constants,
-  // dictionaries etc) and applies the function of 'this' to distinct
+  // dictionaries etc.) and applies the function of 'this' to distinct
   // values as opposed to all values. Wraps the return value into a
   // dictionary or constant so that we get the right
   // cardinality. Returns true if the function was called. Returns
@@ -538,7 +538,7 @@ class Expr {
   // error and a subsequent argument has a null for the same row the
   // error is masked and the row is removed from 'rows'. If
   // 'context.throwOnError()' is true, an error in arguments that is
-  // not cancelled by a null will be thrown. Otherwise the errors
+  // not cancelled by a null will be thrown. Otherwise, the errors
   // found in arguments are left in place and added to errors that may
   // have been in 'context' on entry. The rows where an argument had a
   // null or error are removed from 'rows' at before returning. If
@@ -599,7 +599,7 @@ class Expr {
   std::vector<FieldReference*> distinctFields_;
 
   // Fields referenced by multiple inputs, which is subset of distinctFields_.
-  // Used to determine pre-loading of lazy vectors at current expr.
+  // Used to determine preloading of lazy vectors at current expr.
   std::unordered_set<FieldReference*> multiplyReferencedFields_;
 
   // True if a null in any of 'distinctFields_' causes 'this' to be
@@ -684,7 +684,7 @@ class Expr {
   /// Runtime statistics. CPU time, wall time and number of processed rows.
   ExprStats stats_;
 
-  // If true computeMetaData returns, otherwise meta data is computed and the
+  // If true computeMetaData returns, otherwise metadata is computed and the
   // flag is set to true.
   bool metaDataComputed_ = false;
 
