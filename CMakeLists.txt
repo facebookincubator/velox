@@ -144,6 +144,10 @@ option(VELOX_ENABLE_GEO "Enable Geospatial support" OFF)
 option(VELOX_ENABLE_REMOTE_FUNCTIONS "Enable remote function support" OFF)
 option(VELOX_ENABLE_CCACHE "Use ccache if installed." ON)
 option(VELOX_ENABLE_COMPRESSION_LZ4 "Enable Lz4 compression support." OFF)
+option(VELOX_ENABLE_COMPRESSION_ZSTD "Enable Zstd compression support." OFF)
+option(VELOX_ENABLE_COMPRESSION_ZLIB "Enable Zlib/Gzip compression support."
+       OFF)
+option(VELOX_ENABLE_COMPRESSION_SNAPPY "Enable Snappy compression support." OFF)
 
 option(VELOX_BUILD_TEST_UTILS "Builds Velox test utilities" OFF)
 option(VELOX_BUILD_VECTOR_TEST_UTILS "Builds Velox vector test utilities" OFF)
@@ -199,6 +203,9 @@ if(${VELOX_BUILD_TESTING}
    OR ${VELOX_BUILD_MINIMAL_WITH_DWIO}
    OR ${VELOX_ENABLE_HIVE_CONNECTOR})
   set(VELOX_ENABLE_COMPRESSION_LZ4 ON)
+  set(VELOX_ENABLE_COMPRESSION_ZSTD ON)
+  set(VELOX_ENABLE_COMPRESSION_ZLIB ON)
+  set(VELOX_ENABLE_COMPRESSION_SNAPPY ON)
 endif()
 
 if(${VELOX_ENABLE_EXAMPLES})
@@ -489,14 +496,8 @@ if(VELOX_ENABLE_COMPRESSION_LZ4)
   find_package(lz4 REQUIRED)
 endif()
 
-if(${VELOX_BUILD_MINIMAL_WITH_DWIO} OR ${VELOX_ENABLE_HIVE_CONNECTOR})
-  # DWIO needs all sorts of stream compression libraries.
-  #
-  # TODO: make these optional and pluggable.
-  find_package(ZLIB REQUIRED)
-  find_package(lzo2 REQUIRED)
+if(VELOX_ENABLE_COMPRESSION_ZSTD)
   find_package(zstd REQUIRED)
-  find_package(Snappy REQUIRED)
   if(NOT TARGET zstd::zstd)
     if(TARGET zstd::libzstd_static)
       set(ZSTD_TYPE static)
@@ -505,6 +506,21 @@ if(${VELOX_BUILD_MINIMAL_WITH_DWIO} OR ${VELOX_ENABLE_HIVE_CONNECTOR})
     endif()
     add_library(zstd::zstd ALIAS zstd::libzstd_${ZSTD_TYPE})
   endif()
+endif()
+
+if(VELOX_ENABLE_COMPRESSION_ZLIB)
+  find_package(ZLIB REQUIRED)
+endif()
+
+if(VELOX_ENABLE_COMPRESSION_SNAPPY)
+  find_package(Snappy REQUIRED)
+endif()
+
+if(${VELOX_BUILD_MINIMAL_WITH_DWIO} OR ${VELOX_ENABLE_HIVE_CONNECTOR})
+  # DWIO needs all sorts of stream compression libraries.
+  #
+  # TODO: make these optional and pluggable.
+  find_package(lzo2 REQUIRED)
 endif()
 
 velox_set_source(re2)
