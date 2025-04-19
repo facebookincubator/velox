@@ -41,6 +41,7 @@ std::shared_ptr<core::QueryCtx> LocalRunnerTestBase::makeQueryCtx(
       schemaExecutor_.get(),
       core::QueryConfig(config),
       std::move(connectorConfigs),
+      {},
       cache::AsyncDataCache::getInstance(),
       rootPool->shared_from_this(),
       nullptr,

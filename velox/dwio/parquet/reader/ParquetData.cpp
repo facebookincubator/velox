@@ -17,6 +17,7 @@
 #include "velox/dwio/parquet/reader/ParquetData.h"
 
 #include "velox/dwio/common/BufferedInput.h"
+#include "velox/dwio/parquet/crypto/CryptoFactory.h"
 #include "velox/dwio/parquet/reader/ParquetStatsContext.h"
 
 namespace facebook::velox::parquet {
@@ -25,7 +26,7 @@ std::unique_ptr<dwio::common::FormatData> ParquetParams::toFormatData(
     const std::shared_ptr<const dwio::common::TypeWithId>& type,
     const common::ScanSpec& /*scanSpec*/) {
   return std::make_unique<ParquetData>(
-      type, metaData_, pool(), sessionTimezone_);
+      type, metaData_, fileDecryptor_, pool(), sessionTimezone_);
 }
 
 void ParquetData::filterRowGroups(
@@ -93,6 +94,10 @@ void ParquetData::enqueueRowGroup(
     uint32_t index,
     dwio::common::BufferedInput& input) {
   auto chunk = fileMetaDataPtr_.rowGroup(index).columnChunk(type_->column());
+  if (!CryptoFactory::getInstance().clacEnabled() && (chunk.hasCryptoMetadata() || chunk.hasEncryptedColumnMetadata())) {
+    VELOX_UNSUPPORTED(
+        "Trying to read an encrypted column {}. This is not yet support in velox.", type_->name_);
+  }
   streams_.resize(fileMetaDataPtr_.numRowGroups());
   VELOX_CHECK(
       chunk.hasMetadata(),
@@ -119,14 +124,48 @@ dwio::common::PositionProvider ParquetData::seekToRowGroup(int64_t index) {
   static std::vector<uint64_t> empty;
   VELOX_CHECK_LT(index, streams_.size());
   VELOX_CHECK(streams_[index], "Stream not enqueued for column");
-  auto metadata = fileMetaDataPtr_.rowGroup(index).columnChunk(type_->column());
+  uint32_t columnIndex = type_->column();
+  auto metadata = fileMetaDataPtr_.rowGroup(index).columnChunk(columnIndex);
+  ColumnPath columnPath = metadata.getColumnPath();
+  std::string path = columnPath.toDotString();
+  std::shared_ptr<ColumnDecryptionSetup> columnDecryptionSetup;
+  if (fileDecryptor_) {
+    columnDecryptionSetup = fileDecryptor_->getColumnCryptoMetadata(path);
+    if (columnDecryptionSetup->isEncrypted() && !columnDecryptionSetup->isKeyAvailable()) {
+      // the user doesn't have permission to access this column
+      VELOX_USER_FAIL("[CLAC] Key unavailable for {}: {}", path, columnDecryptionSetup->savedException());
+    }
+  }
+
+  bool hasDictionaryPage = false;
+  if (metadata.hasEncodingStats()) {
+    for (const thrift::PageEncodingStats& pageEncodingStats : metadata.getEncodingStats()) {
+      if (pageEncodingStats.page_type == thrift::PageType::type::DICTIONARY_PAGE) {
+        hasDictionaryPage = true;
+        break;
+      }
+    }
+  } else {
+    for (const thrift::Encoding::type& encoding : metadata.getEncoding()) {
+      if (encoding == thrift::Encoding::type::RLE_DICTIONARY ||
+          encoding == thrift::Encoding::type::PLAIN_DICTIONARY) {
+        hasDictionaryPage = true;
+        break;
+      }
+    }
+  }
   reader_ = std::make_unique<PageReader>(
       std::move(streams_[index]),
       pool_,
       type_,
       metadata.compression(),
       metadata.totalCompressedSize(),
-      sessionTimezone_);
+      sessionTimezone_,
+      columnPath,
+      static_cast<int16_t>(index),
+      static_cast<int16_t>(columnIndex),
+      columnDecryptionSetup,
+      hasDictionaryPage);
   return dwio::common::PositionProvider(empty);
 }
 

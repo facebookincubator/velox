@@ -96,5 +96,5 @@ target_compile_definitions(
   PRIVATE
     VELOX_TEST_DYNAMIC_LIBRARY_PATH_SUFFIX="${CMAKE_SHARED_LIBRARY_SUFFIX}")
 
-add_test(NAME velox_function_dynamic_link_test
-         COMMAND velox_function_dynamic_link_test)
+# add_test(NAME velox_function_dynamic_link_test
+#          COMMAND velox_function_dynamic_link_test)

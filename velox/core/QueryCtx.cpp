@@ -27,6 +27,7 @@ std::shared_ptr<QueryCtx> QueryCtx::create(
     QueryConfig&& queryConfig,
     std::unordered_map<std::string, std::shared_ptr<config::ConfigBase>>
         connectorConfigs,
+    security::Identity&& identity,
     cache::AsyncDataCache* cache,
     std::shared_ptr<memory::MemoryPool> pool,
     folly::Executor* spillExecutor,
@@ -35,6 +36,7 @@ std::shared_ptr<QueryCtx> QueryCtx::create(
       executor,
       std::move(queryConfig),
       std::move(connectorConfigs),
+      std::move(identity),
       cache,
       std::move(pool),
       spillExecutor,
@@ -48,6 +50,7 @@ QueryCtx::QueryCtx(
     QueryConfig&& queryConfig,
     std::unordered_map<std::string, std::shared_ptr<config::ConfigBase>>
         connectorSessionProperties,
+    security::Identity&& identity,
     cache::AsyncDataCache* cache,
     std::shared_ptr<memory::MemoryPool> pool,
     folly::Executor* spillExecutor,
@@ -57,6 +60,7 @@ QueryCtx::QueryCtx(
       spillExecutor_(spillExecutor),
       cache_(cache),
       connectorSessionProperties_(connectorSessionProperties),
+      identity_(std::move(identity)),
       pool_(std::move(pool)),
       queryConfig_{std::move(queryConfig)} {
   initPool(queryId);
