@@ -52,9 +52,8 @@ class ClassificationAggregationInputGenerator : public InputGenerator {
         size, [&](auto /*row*/) { return bucket_.value(); });
 
     auto pred = vectorMaker.flatVector<double>(size, [&](auto /*row*/) {
-      /// Predictions must be > 0.
-      return std::uniform_real_distribution<double>(
-          0, std::numeric_limits<double>::max())(rng);
+      /// Predictions must be > 0 and < 1.0.
+      return std::uniform_real_distribution<double>(0, 1.0)(rng);
     });
 
     result.emplace_back(std::move(bucket));
