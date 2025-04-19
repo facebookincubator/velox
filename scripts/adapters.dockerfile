@@ -36,7 +36,7 @@ ENV NVIDIA_VISIBLE_DEVICES all
 ENV NVIDIA_DRIVER_CAPABILITIES compute,utility
 
 # install miniforge
-RUN curl -L -o /tmp/miniforge.sh https://github.com/conda-forge/miniforge/releases/download/23.11.0-0/Mambaforge-23.11.0-0-Linux-x86_64.sh && \
+RUN curl -L -o /tmp/miniforge.sh https://github.com/conda-forge/miniforge/releases/download/23.11.0-0/Mambaforge-23.11.0-0-Linux-$(uname -m).sh && \
     bash /tmp/miniforge.sh -b -p /opt/miniforge && \
     rm /tmp/miniforge.sh
 ENV PATH=/opt/miniforge/condabin:${PATH}

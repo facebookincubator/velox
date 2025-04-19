@@ -14,10 +14,11 @@
  * limitations under the License.
  */
 
+#include "velox/experimental/cudf/exec/ToCudf.h"
+
 #include "velox/exec/OutputBufferManager.h"
 #include "velox/exec/tests/utils/HiveConnectorTestBase.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
-#include "velox/experimental/cudf/exec/ToCudf.h"
 
 using namespace facebook::velox;
 using namespace facebook::velox::exec;

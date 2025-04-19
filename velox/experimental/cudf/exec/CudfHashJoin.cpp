@@ -14,29 +14,16 @@
  * limitations under the License.
  */
 
-// For custom hash join operator
-#include "velox/core/Expressions.h"
-#include "velox/core/PlanNode.h"
-#include "velox/exec/Driver.h"
-#include "velox/exec/JoinBridge.h"
-#include "velox/exec/Operator.h"
-#include "velox/exec/Task.h"
-#include "velox/expression/FieldReference.h"
-#include "velox/vector/ComplexVector.h"
-
-#include <cudf/column/column_view.hpp>
-#include <cudf/concatenate.hpp>
-#include <cudf/copying.hpp>
-#include <cudf/join.hpp>
-#include <cudf/utilities/default_stream.hpp>
-
-#include <nvtx3/nvtx3.hpp>
-
 #include "velox/experimental/cudf/exec/CudfHashJoin.h"
 #include "velox/experimental/cudf/exec/ExpressionEvaluator.h"
+#include "velox/experimental/cudf/exec/ToCudf.h"
 #include "velox/experimental/cudf/exec/Utilities.h"
-#include "velox/experimental/cudf/exec/VeloxCudfInterop.h"
-#include "velox/experimental/cudf/vector/CudfVector.h"
+
+#include "velox/exec/Task.h"
+
+#include <cudf/copying.hpp>
+
+#include <nvtx3/nvtx3.hpp>
 
 namespace facebook::velox::cudf_velox {
 
@@ -94,7 +81,10 @@ CudfHashJoinBuild::CudfHashJoinBuild(
           operatorId,
           joinNode->id(),
           "CudfHashJoinBuild"),
-      NvtxHelper(nvtx3::rgb{65, 105, 225}, operatorId), // Royal Blue
+      NvtxHelper(
+          nvtx3::rgb{65, 105, 225}, // Royal Blue
+          operatorId,
+          fmt::format("[{}]", joinNode->id())),
       joinNode_(joinNode) {
   if (cudfDebugEnabled()) {
     std::cout << "CudfHashJoinBuild constructor" << std::endl;
@@ -230,7 +220,10 @@ CudfHashJoinProbe::CudfHashJoinProbe(
           operatorId,
           joinNode->id(),
           "CudfHashJoinProbe"),
-      NvtxHelper(nvtx3::rgb{0, 128, 128}, operatorId), // Teal
+      NvtxHelper(
+          nvtx3::rgb{0, 128, 128}, // Teal
+          operatorId,
+          fmt::format("[{}]", joinNode->id())),
       joinNode_(joinNode) {
   if (cudfDebugEnabled()) {
     std::cout << "CudfHashJoinProbe constructor" << std::endl;

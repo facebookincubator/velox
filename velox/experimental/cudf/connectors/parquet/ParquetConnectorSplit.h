@@ -16,12 +16,12 @@
 
 #pragma once
 
-#include <string>
-
 #include "velox/connectors/Connector.h"
 #include "velox/dwio/common/Options.h"
 
 #include <cudf/io/types.hpp>
+
+#include <string>
 
 namespace facebook::velox::cudf_velox::connector::parquet {
 

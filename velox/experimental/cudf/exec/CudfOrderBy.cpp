@@ -13,19 +13,12 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#include "velox/exec/Driver.h"
-#include "velox/exec/Operator.h"
-#include "velox/vector/ComplexVector.h"
-
-#include <cudf/concatenate.hpp>
-#include <cudf/sorting.hpp>
-#include <cudf/table/table.hpp>
-#include <cudf/utilities/default_stream.hpp>
 
 #include "velox/experimental/cudf/exec/CudfOrderBy.h"
-#include "velox/experimental/cudf/exec/NvtxHelper.h"
+#include "velox/experimental/cudf/exec/ToCudf.h"
 #include "velox/experimental/cudf/exec/Utilities.h"
-#include "velox/experimental/cudf/exec/VeloxCudfInterop.h"
+
+#include <cudf/sorting.hpp>
 
 namespace facebook::velox::cudf_velox {
 
@@ -39,46 +32,46 @@ CudfOrderBy::CudfOrderBy(
           operatorId,
           orderByNode->id(),
           "CudfOrderBy"),
-      NvtxHelper(nvtx3::rgb{64, 224, 208}, operatorId), // Turquoise
+      NvtxHelper(
+          nvtx3::rgb{64, 224, 208}, // Turquoise
+          operatorId,
+          fmt::format("[{}]", orderByNode->id())),
       orderByNode_(orderByNode) {
-  maxOutputRows_ = outputBatchRows(std::nullopt);
-  sort_keys_.reserve(orderByNode->sortingKeys().size());
-  column_order_.reserve(orderByNode->sortingKeys().size());
-  null_order_.reserve(orderByNode->sortingKeys().size());
+  sortKeys_.reserve(orderByNode->sortingKeys().size());
+  columnOrder_.reserve(orderByNode->sortingKeys().size());
+  nullOrder_.reserve(orderByNode->sortingKeys().size());
   for (int i = 0; i < orderByNode->sortingKeys().size(); ++i) {
     const auto channel =
         exec::exprToChannel(orderByNode->sortingKeys()[i].get(), outputType_);
     VELOX_CHECK(
         channel != kConstantChannel,
         "OrderBy doesn't allow constant sorting keys");
-    sort_keys_.push_back(channel);
-    auto const& sorting_order = orderByNode->sortingOrders()[i];
-    column_order_.push_back(
-        sorting_order.isAscending() ? cudf::order::ASCENDING
-                                    : cudf::order::DESCENDING);
-    null_order_.push_back(
-        (sorting_order.isNullsFirst() ^ !sorting_order.isAscending())
+    sortKeys_.push_back(channel);
+    auto const& sortingOrder = orderByNode->sortingOrders()[i];
+    columnOrder_.push_back(
+        sortingOrder.isAscending() ? cudf::order::ASCENDING
+                                   : cudf::order::DESCENDING);
+    nullOrder_.push_back(
+        (sortingOrder.isNullsFirst() ^ !sortingOrder.isAscending())
             ? cudf::null_order::BEFORE
             : cudf::null_order::AFTER);
   }
   if (cudfDebugEnabled()) {
-    std::cout << "Number of Sort keys: " << sort_keys_.size() << std::endl;
+    std::cout << "Number of Sort keys: " << sortKeys_.size() << std::endl;
   }
 }
 
 void CudfOrderBy::addInput(RowVectorPtr input) {
   // Accumulate inputs
   if (input->size() > 0) {
-    auto cudf_input = std::dynamic_pointer_cast<CudfVector>(input);
-    VELOX_CHECK_NOT_NULL(cudf_input);
-    inputs_.push_back(std::move(cudf_input));
+    auto cudfInput = std::dynamic_pointer_cast<CudfVector>(input);
+    VELOX_CHECK_NOT_NULL(cudfInput);
+    inputs_.push_back(std::move(cudfInput));
   }
 }
 
 void CudfOrderBy::noMoreInput() {
   exec::Operator::noMoreInput();
-  // TODO: Get total row count, batch output
-  // maxOutputRows_ = outputBatchRows(total_row_count);
 
   VELOX_NVTX_OPERATOR_FUNC_RANGE();
 
@@ -101,10 +94,10 @@ void CudfOrderBy::noMoreInput() {
               << std::endl;
   }
 
-  auto keys = tbl->view().select(sort_keys_);
+  auto keys = tbl->view().select(sortKeys_);
   auto values = tbl->view();
   auto result =
-      cudf::sort_by_key(values, keys, column_order_, null_order_, stream);
+      cudf::sort_by_key(values, keys, columnOrder_, nullOrder_, stream);
   auto const size = result->num_rows();
   outputTable_ = std::make_shared<CudfVector>(
       pool(), outputType_, size, std::move(result), stream);

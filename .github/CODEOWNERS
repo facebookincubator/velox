@@ -23,7 +23,7 @@
 # See the official docs for more details on syntax and precedence of rules: https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/customizing-your-repository/about-code-owners#example-of-a-codeowners-file
 
 # Velox-cuDF codeowners
-* @rapidsai/velox-private-codeowners
+* @rapidsai/velox-cudf-codeowners
 
 # Build & CI
 #CMake/ @assignUser @majetideepak
@@ -34,6 +34,9 @@
 
 # Breeze
 #velox/experimental/breeze @dreveman
+
+# cuDF
+velox/experimental/cudf @bdice @karthikeyann @devavret
 
 # Parquet
 #velox/dwio/parquet/ @majetideepak

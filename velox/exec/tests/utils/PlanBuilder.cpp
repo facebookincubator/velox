@@ -32,6 +32,10 @@
 #include "velox/parse/Expressions.h"
 #include "velox/parse/TypeResolver.h"
 
+#include "velox/experimental/cudf/connectors/parquet/ParquetTableHandle.h"
+#include "velox/experimental/cudf/exec/ToCudf.h"
+#include "velox/experimental/cudf/tests/utils/ParquetConnectorTestBase.h"
+
 using namespace facebook::velox;
 using namespace facebook::velox::connector;
 using namespace facebook::velox::connector::hive;
@@ -223,6 +227,7 @@ core::PlanNodePtr PlanBuilder::TableScanBuilder::build(core::PlanNodeId id) {
 
   const RowTypePtr& parseType = dataColumns_ ? dataColumns_ : outputType_;
 
+  std::vector<core::TypedExprPtr> subfieldExprs;
   common::SubfieldFilters filters;
   filters.reserve(subfieldFilters_.size());
   auto queryCtx = core::QueryCtx::create();
@@ -244,9 +249,32 @@ core::PlanNodePtr PlanBuilder::TableScanBuilder::build(core::PlanNodeId id) {
         "Duplicate subfield: {}",
         subfield.toString());
 
+    subfieldExprs.push_back(std::move(filterExpr));
     filters[std::move(subfield)] = std::move(subfieldFilter);
   }
 
+  // Create AND tree of subfieldExprs as combined_subfield_filter.
+  // replace every 2 subfieldExpr with a single AND node, until we have a single
+  // node.
+  while (subfieldExprs.size() > 1) {
+    std::vector<core::TypedExprPtr> combinedSubfieldExprs;
+    combinedSubfieldExprs.reserve(subfieldExprs.size() / 2 + 1);
+    for (size_t i = 0; i < subfieldExprs.size(); i += 2) {
+      if (i + 1 < subfieldExprs.size()) {
+        auto andCallExpr = std::make_shared<const core::CallTypedExpr>(
+            BOOLEAN(),
+            std::vector<core::TypedExprPtr>{
+                subfieldExprs[i], subfieldExprs[i + 1]},
+            "and");
+        combinedSubfieldExprs.push_back(andCallExpr);
+      } else {
+        combinedSubfieldExprs.push_back(subfieldExprs[i]);
+      }
+    }
+    subfieldExprs = std::move(combinedSubfieldExprs);
+  }
+  core::TypedExprPtr subfieldFilterExpr =
+      subfieldExprs.empty() ? nullptr : subfieldExprs[0];
   core::TypedExprPtr remainingFilterExpr;
   if (remainingFilter_) {
     remainingFilterExpr = core::Expressions::inferTypes(
@@ -255,13 +283,28 @@ core::PlanNodePtr PlanBuilder::TableScanBuilder::build(core::PlanNodeId id) {
   }
 
   if (!tableHandle_) {
-    tableHandle_ = std::make_shared<HiveTableHandle>(
-        connectorId_,
-        tableName_,
-        true,
-        std::move(filters),
-        remainingFilterExpr,
-        dataColumns_);
+    // if cudfIsRegistered, then use cudftableScan tableHandle_ here.
+    if (facebook::velox::cudf_velox::cudfIsRegistered() &&
+        facebook::velox::connector::getAllConnectors().count(
+            cudf_velox::exec::test::kParquetConnectorId) > 0 &&
+        facebook::velox::cudf_velox::cudfTableScanEnabled()) {
+      tableHandle_ =
+          std::make_shared<cudf_velox::connector::parquet::ParquetTableHandle>(
+              cudf_velox::exec::test::kParquetConnectorId,
+              tableName_,
+              subfieldFilterExpr != nullptr,
+              subfieldFilterExpr,
+              remainingFilterExpr,
+              dataColumns_);
+    } else {
+      tableHandle_ = std::make_shared<HiveTableHandle>(
+          connectorId_,
+          tableName_,
+          true,
+          std::move(filters),
+          remainingFilterExpr,
+          dataColumns_);
+    }
   }
   return std::make_shared<core::TableScanNode>(
       id, outputType_, tableHandle_, assignments_);

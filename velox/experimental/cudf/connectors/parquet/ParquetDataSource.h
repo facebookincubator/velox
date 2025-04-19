@@ -16,24 +16,26 @@
 
 #pragma once
 
+#include "velox/experimental/cudf/connectors/parquet/ParquetConfig.h"
+#include "velox/experimental/cudf/connectors/parquet/ParquetConnectorSplit.h"
+#include "velox/experimental/cudf/connectors/parquet/ParquetTableHandle.h"
+#include "velox/experimental/cudf/exec/ExpressionEvaluator.h"
+#include "velox/experimental/cudf/exec/NvtxHelper.h"
+
 #include "velox/common/base/RandomUtil.h"
 #include "velox/common/io/IoStatistics.h"
 #include "velox/connectors/Connector.h"
 #include "velox/dwio/common/Statistics.h"
-#include "velox/experimental/cudf/connectors/parquet/ParquetConfig.h"
-#include "velox/experimental/cudf/connectors/parquet/ParquetConnectorSplit.h"
-#include "velox/experimental/cudf/connectors/parquet/ParquetTableHandle.h"
 #include "velox/type/Type.h"
 
 #include <cudf/io/parquet.hpp>
 #include <cudf/io/types.hpp>
-#include <cudf/types.hpp>
 
 namespace facebook::velox::cudf_velox::connector::parquet {
 
 using namespace facebook::velox::connector;
 
-class ParquetDataSource : public DataSource {
+class ParquetDataSource : public DataSource, public NvtxHelper {
  public:
   ParquetDataSource(
       const std::shared_ptr<const RowType>& outputType,
@@ -100,13 +102,7 @@ class ParquetDataSource : public DataSource {
   // cuDF Parquet reader stuff.
   cudf::io::parquet_reader_options readerOptions_;
   std::unique_ptr<cudf::io::chunked_parquet_reader> splitReader_;
-
-  // cuDF Table not fully converted and returned to `RowVectorPtr` in the last
-  // `next()` call.
-  std::unique_ptr<cudf::table> cudfTable_;
-  // View of the currently available portion of the `cudfTable_` to be
-  // converted to `RowVectorPtr` in subsequent `next()` call.
-  cudf::table_view currentCudfTableView_;
+  rmm::cuda_stream_view stream_;
 
   // Table column names read from the Parquet file
   std::vector<std::string> columnNames;
@@ -126,6 +122,16 @@ class ParquetDataSource : public DataSource {
 
   // The row type for the data source output, not including filter-only columns
   const RowTypePtr outputType_;
+
+  // Expression evaluator for remaining filter.
+  core::ExpressionEvaluator* const expressionEvaluator_;
+  std::unique_ptr<exec::ExprSet> remainingFilterExprSet_;
+  velox::cudf_velox::ExpressionEvaluator cudfExpressionEvaluator_;
+
+  // Expression evaluator for subfield filter.
+  std::vector<std::unique_ptr<cudf::scalar>> subfieldScalars_;
+  cudf::ast::tree subfieldTree_;
+  std::unique_ptr<exec::ExprSet> subfieldFilterExprSet_;
 
   dwio::common::RuntimeStatistics runtimeStats_;
 };

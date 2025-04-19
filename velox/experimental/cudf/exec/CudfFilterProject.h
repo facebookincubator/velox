@@ -16,18 +16,14 @@
 
 #pragma once
 
-#include "velox/core/Expressions.h"
-#include "velox/core/PlanNode.h"
-#include "velox/exec/Driver.h"
-#include "velox/exec/FilterProject.h"
-#include "velox/exec/Operator.h"
 #include "velox/experimental/cudf/exec/ExpressionEvaluator.h"
 #include "velox/experimental/cudf/exec/NvtxHelper.h"
-#include "velox/experimental/cudf/vector/CudfVector.h"
-#include "velox/expression/Expr.h"
-#include "velox/vector/ComplexVector.h"
 
-#include <cudf/ast/expressions.hpp>
+#include "velox/core/Expressions.h"
+#include "velox/core/PlanNode.h"
+#include "velox/exec/FilterProject.h"
+#include "velox/exec/Operator.h"
+#include "velox/vector/ComplexVector.h"
 
 namespace facebook::velox::cudf_velox {
 

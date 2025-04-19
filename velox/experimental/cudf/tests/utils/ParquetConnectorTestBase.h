@@ -16,14 +16,15 @@
 
 #pragma once
 
-#include "velox/exec/Operator.h"
-#include "velox/exec/tests/utils/OperatorTestBase.h"
-#include "velox/exec/tests/utils/TempFilePath.h"
 #include "velox/experimental/cudf/connectors/parquet/ParquetConfig.h"
 #include "velox/experimental/cudf/connectors/parquet/ParquetConnector.h"
 #include "velox/experimental/cudf/connectors/parquet/ParquetDataSink.h"
 #include "velox/experimental/cudf/connectors/parquet/ParquetDataSource.h"
 #include "velox/experimental/cudf/connectors/parquet/ParquetTableHandle.h"
+
+#include "velox/exec/Operator.h"
+#include "velox/exec/tests/utils/OperatorTestBase.h"
+#include "velox/exec/tests/utils/TempFilePath.h"
 #include "velox/type/tests/SubfieldFiltersBuilder.h"
 
 namespace facebook::velox::cudf_velox::exec::test {
@@ -86,22 +87,30 @@ class ParquetConnectorTestBase
       const std::string& filePath,
       int64_t splitWeight = 0);
 
-  std::vector<std::shared_ptr<facebook::velox::connector::ConnectorSplit>>
+  static std::vector<
+      std::shared_ptr<facebook::velox::connector::ConnectorSplit>>
   makeParquetConnectorSplits(
       const std::vector<
           std::shared_ptr<facebook::velox::exec::test::TempFilePath>>&
           filePaths);
 
-  std::vector<std::shared_ptr<connector::parquet::ParquetConnectorSplit>>
+  static std::vector<std::shared_ptr<connector::parquet::ParquetConnectorSplit>>
   makeParquetConnectorSplits(const std::string& filePath, uint32_t splitCount);
 
   static std::shared_ptr<connector::parquet::ParquetTableHandle>
   makeTableHandle(
       const std::string& tableName = "parquet_table",
       const RowTypePtr& dataColumns = nullptr,
-      bool filterPushdownEnabled = false) {
+      bool filterPushdownEnabled = false,
+      const core::TypedExprPtr& subfieldFilterExpr = nullptr,
+      const core::TypedExprPtr& remainingFilterExpr = nullptr) {
     return std::make_shared<connector::parquet::ParquetTableHandle>(
-        kParquetConnectorId, tableName, filterPushdownEnabled, dataColumns);
+        kParquetConnectorId,
+        tableName,
+        filterPushdownEnabled,
+        subfieldFilterExpr,
+        remainingFilterExpr,
+        dataColumns);
   }
 
   /// @param name Column name.

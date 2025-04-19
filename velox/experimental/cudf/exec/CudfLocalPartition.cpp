@@ -14,14 +14,13 @@
  * limitations under the License.
  */
 
+#include "velox/experimental/cudf/exec/CudfLocalPartition.h"
+#include "velox/experimental/cudf/vector/CudfVector.h"
+
 #include "velox/exec/Task.h"
 
 #include <cudf/copying.hpp>
 #include <cudf/partitioning.hpp>
-
-#include "CudfLocalPartition.h"
-
-#include "velox/experimental/cudf/vector/CudfVector.h"
 
 namespace facebook::velox::cudf_velox {
 
@@ -35,13 +34,24 @@ CudfLocalPartition::CudfLocalPartition(
           operatorId,
           planNode->id(),
           "CudfLocalPartition"),
-      NvtxHelper(nvtx3::rgb{255, 215, 0}, std::stoi(planNode->id())),
+      NvtxHelper(
+          nvtx3::rgb{255, 215, 0}, // Gold
+          operatorId,
+          fmt::format("[{}]", planNode->id())),
       queues_{
           ctx->task->getLocalExchangeQueues(ctx->splitGroupId, planNode->id())},
       numPartitions_{queues_.size()} {
-  // DM: Following is IMO a hacky way to get the partition key indices. The
-  // partition spec constructs the hash function directly and has no public
-  // methods to get the partition key indices.
+  // Following is IMO a hacky way to get the partition key indices. It is to
+  // workaround the fact that the partition spec constructs the hash function
+  // directly and has no public methods to get the partition key indices.
+
+  // When the operator is of type kRepartition, the partition spec is a string
+  // in the format "HASH(key1, key2, ...)"
+  // We're going to extract the keys between HASH( and ) and find their indices
+  // in the output row type.
+
+  // When operator is of type kGather, we don't need to store any partition key
+  // indices because we're going to merge all the incoming streams together.
 
   // Get partition function specification string
   std::string spec = planNode->partitionFunctionSpec().toString();
@@ -54,7 +64,7 @@ CudfLocalPartition::CudfLocalPartition(
     if (start != std::string::npos && end != std::string::npos) {
       std::string keysStr = spec.substr(start, end - start);
 
-      // Split by comma to get individual keys
+      // Split by comma to get individual keys.
       std::vector<std::string> keys;
       size_t pos = 0;
       while ((pos = keysStr.find(",")) != std::string::npos) {
@@ -62,9 +72,9 @@ CudfLocalPartition::CudfLocalPartition(
         keys.push_back(key);
         keysStr.erase(0, pos + 1);
       }
-      keys.push_back(keysStr); // Add the last key
+      keys.push_back(keysStr); // Add the last key.
 
-      // Find field indices for each key
+      // Find field indices for each key.
       const auto& rowType = planNode->outputType();
       for (const auto& key : keys) {
         auto trimmedKey = key;
@@ -79,7 +89,7 @@ CudfLocalPartition::CudfLocalPartition(
   }
   VELOX_CHECK(numPartitions_ == 1 || partitionKeyIndices_.size() > 0);
 
-  // DM: Since we're replacing the LocalPartition with CudfLocalPartition, the
+  // Since we're replacing the LocalPartition with CudfLocalPartition, the
   // number of producers is already set. Adding producer only adds to a counter
   // which we don't have to do again.
   // Normally, this is what we'd have to do:
@@ -113,7 +123,7 @@ void CudfLocalPartition::addInput(RowVectorPtr input) {
     VELOX_CHECK(partitionOffsets.size() == numPartitions_);
     VELOX_CHECK(partitionOffsets[0] == 0);
 
-    // Erase first element since it's always 0 and we don't need it
+    // Erase first element since it's always 0 and we don't need it.
     partitionOffsets.erase(partitionOffsets.begin());
 
     auto partitionedTables =
@@ -122,7 +132,7 @@ void CudfLocalPartition::addInput(RowVectorPtr input) {
     for (int i = 0; i < numPartitions_; ++i) {
       auto partitionData = partitionedTables[i];
       if (partitionData.num_rows() == 0) {
-        // Skip empty partitions
+        // Skip empty partitions.
         continue;
       }
 
@@ -147,7 +157,7 @@ void CudfLocalPartition::addInput(RowVectorPtr input) {
       }
     }
   } else {
-    // Single partition case
+    // Single partition case.
     ContinueFuture future;
     auto blockingReason =
         queues_[0]->enqueue(input, input->retainedSize(), &future);

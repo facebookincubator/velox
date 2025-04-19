@@ -14,26 +14,25 @@
  * limitations under the License.
  */
 
-#include <filesystem>
-#include <limits>
-#include <memory>
-#include <string>
-
 #include "velox/experimental/cudf/connectors/parquet/ParquetConfig.h"
 #include "velox/experimental/cudf/connectors/parquet/ParquetConnectorSplit.h"
 #include "velox/experimental/cudf/connectors/parquet/ParquetDataSource.h"
 #include "velox/experimental/cudf/connectors/parquet/ParquetTableHandle.h"
-
+#include "velox/experimental/cudf/exec/ToCudf.h"
 #include "velox/experimental/cudf/exec/Utilities.h"
 #include "velox/experimental/cudf/exec/VeloxCudfInterop.h"
 #include "velox/experimental/cudf/vector/CudfVector.h"
 
-#include <cudf/concatenate.hpp>
-#include <cudf/copying.hpp>
 #include <cudf/io/parquet.hpp>
 #include <cudf/io/types.hpp>
+#include <cudf/stream_compaction.hpp>
 #include <cudf/table/table.hpp>
 #include <cudf/table/table_view.hpp>
+#include <cudf/transform.hpp>
+
+#include <filesystem>
+#include <memory>
+#include <string>
 
 namespace facebook::velox::cudf_velox::connector::parquet {
 
@@ -47,11 +46,16 @@ ParquetDataSource::ParquetDataSource(
     folly::Executor* executor,
     const ConnectorQueryCtx* connectorQueryCtx,
     const std::shared_ptr<ParquetConfig>& ParquetConfig)
-    : ParquetConfig_(ParquetConfig),
+    : NvtxHelper(
+          nvtx3::rgb{80, 171, 241}, // Parquet blue,
+          std::nullopt,
+          fmt::format("[{}]", tableHandle->name())),
+      ParquetConfig_(ParquetConfig),
       executor_(executor),
       connectorQueryCtx_(connectorQueryCtx),
       pool_(connectorQueryCtx->memoryPool()),
-      outputType_(outputType) {
+      outputType_(outputType),
+      expressionEvaluator_(connectorQueryCtx->expressionEvaluator()) {
   // Set up column projection if needed
   auto readColumnTypes = outputType_->children();
   for (const auto& outputName : outputType_->names()) {
@@ -72,93 +76,92 @@ ParquetDataSource::ParquetDataSource(
 
   // Create empty IOStats for later use
   ioStats_ = std::make_shared<io::IoStatistics>();
+
+  // Create subfield filter
+  auto subfieldFilter = tableHandle_->subfieldFilterExpr();
+  if (subfieldFilter) {
+    subfieldFilterExprSet_ = expressionEvaluator_->compile(subfieldFilter);
+  }
+
+  // Create remaining filter
+  auto remainingFilter = tableHandle_->remainingFilter();
+  if (remainingFilter) {
+    remainingFilterExprSet_ = expressionEvaluator_->compile(remainingFilter);
+    cudfExpressionEvaluator_ = velox::cudf_velox::ExpressionEvaluator(
+        remainingFilterExprSet_->exprs(), outputType_);
+    // TODO(kn): Get column names and subfields from remaining filter and add to
+    // readColumnNames_
+  }
 }
 
 std::optional<RowVectorPtr> ParquetDataSource::next(
-    uint64_t size,
+    uint64_t /*size*/,
     velox::ContinueFuture& /* future */) {
+  VELOX_NVTX_OPERATOR_FUNC_RANGE();
   // Basic sanity checks
   VELOX_CHECK_NOT_NULL(split_, "No split to process. Call addSplit first.");
   VELOX_CHECK_NOT_NULL(splitReader_, "No split reader present");
 
-  // Limit the size to [1, 1B] rows to avoid overflow in cudf::concatenate.
-  VELOX_CHECK(
-      size > 0 and size < std::numeric_limits<cudf::size_type>::max() / 2,
-      "ParquetDataSource can read [1, 2^30] rows at once");
+  if (not splitReader_->has_next()) {
+    return nullptr;
+  }
 
-  // Read table chunks via cudf until we have enough rows or no more
-  // chunks left.
-  if (currentCudfTableView_.num_rows() < size) {
-    // Vector to store read tables
-    auto readTables = std::vector<std::unique_ptr<cudf::table>>{};
-    size_t currentNumRows = currentCudfTableView_.num_rows();
-
-    // Read chunks until num_rows > size or no more chunks left.
-    while (splitReader_->has_next() and currentNumRows < size) {
-      auto [table, metadata] = splitReader_->read_chunk();
-      readTables.emplace_back(std::move(table));
-      currentNumRows += readTables.back()->num_rows();
-      // Fill in the column names if reading the first chunk.
-      if (columnNames.empty()) {
-        for (auto schema : metadata.schema_info) {
-          columnNames.emplace_back(schema.name);
-        }
-      }
+  // Read a table chunk
+  auto [table, metadata] = splitReader_->read_chunk();
+  auto cudfTable_ = std::move(table);
+  // Fill in the column names if reading the first chunk.
+  if (columnNames.empty()) {
+    for (auto schema : metadata.schema_info) {
+      columnNames.emplace_back(schema.name);
     }
+  }
 
-    if (readTables.empty() and not cudfTable_) {
-      // Check if currentCudfTableView_ is also reset.
-      VELOX_CHECK_EQ(currentCudfTableView_.num_rows(), 0);
-      // We are done with this split, reset the split.
-      resetSplit();
-      return nullptr;
-    }
-
-    if (readTables.size()) {
-      auto stream = cudf::get_default_stream();
-      auto readTable = concatenateTables(std::move(readTables), stream);
-      if (cudfTable_) {
-        // Concatenate the current view ahead of the read table.
-        auto tableViews = std::vector<cudf::table_view>{
-            currentCudfTableView_, readTable->view()};
-        cudfTable_ = cudf::concatenate(tableViews, stream);
-      } else {
-        cudfTable_ = std::move(readTable);
-      }
-      // Update the current table view
-      currentCudfTableView_ = cudfTable_->view();
-    }
+  // Apply remaining filter if present
+  if (remainingFilterExprSet_) {
+    auto cudfTableColumns = cudfTable_->release();
+    const auto originalNumColumns = cudfTableColumns.size();
+    // Filter may need addtional computed columns which are added to
+    // cudfTableColumns
+    auto filterResult = cudfExpressionEvaluator_.compute(
+        cudfTableColumns, stream_, cudf::get_current_device_resource_ref());
+    // discard computed columns
+    std::vector<std::unique_ptr<cudf::column>> originalColumns;
+    originalColumns.reserve(originalNumColumns);
+    std::move(
+        cudfTableColumns.begin(),
+        cudfTableColumns.begin() + originalNumColumns,
+        std::back_inserter(originalColumns));
+    auto originalTable =
+        std::make_unique<cudf::table>(std::move(originalColumns));
+    // Keep only rows where the filter is true
+    cudfTable_ = cudf::apply_boolean_mask(
+        *originalTable,
+        *filterResult[0],
+        stream_,
+        cudf::get_current_device_resource_ref());
   }
 
   // Output RowVectorPtr
-  auto output = RowVectorPtr{};
+  const auto nRows = cudfTable_->num_rows();
 
-  // If the current table view has <= size rows, this is the last chunk.
-  if (currentCudfTableView_.num_rows() <= size) {
-    // Convert the current table view to RowVectorPtr.
-    auto stream = cudf::get_default_stream();
-    output = with_arrow::to_velox_column(
-        currentCudfTableView_, pool_, columnNames, stream);
-    stream.synchronize();
-    // Reset internal tables
-    resetCudfTableAndView();
-  } else {
-    // Split the current table view into two partitions.
-    auto partitions =
-        std::vector<cudf::size_type>{static_cast<cudf::size_type>(size)};
-    auto tableSplits = cudf::split(currentCudfTableView_, partitions);
-    VELOX_CHECK_EQ(
-        static_cast<cudf::size_type>(size),
-        tableSplits[0].num_rows(),
-        "cudf::split yielded incorrect partitions");
-    // Convert the first split view to RowVectorPtr.
-    auto stream = cudf::get_default_stream();
-    output =
-        with_arrow::to_velox_column(tableSplits[0], pool_, columnNames, stream);
-    stream.synchronize();
-    // Set the current view to the second split view.
-    currentCudfTableView_ = tableSplits[1];
+  // keep only outputType_.size() columns in cudfTable_
+  if (outputType_->size() < cudfTable_->num_columns()) {
+    auto cudfTableColumns = cudfTable_->release();
+    std::vector<std::unique_ptr<cudf::column>> originalColumns;
+    originalColumns.reserve(outputType_->size());
+    std::move(
+        cudfTableColumns.begin(),
+        cudfTableColumns.begin() + outputType_->size(),
+        std::back_inserter(originalColumns));
+    cudfTable_ = std::make_unique<cudf::table>(std::move(originalColumns));
   }
+
+  auto output = cudfIsRegistered()
+      ? std::make_shared<CudfVector>(
+            pool_, outputType_, nRows, std::move(cudfTable_), stream_)
+      : with_arrow::toVeloxColumn(
+            cudfTable_->view(), pool_, outputType_->names(), stream_);
+  stream_.synchronize();
 
   // Check if conversion yielded a nullptr
   VELOX_CHECK_NOT_NULL(output, "Cudf to Velox conversion yielded a nullptr");
@@ -184,11 +187,6 @@ void ParquetDataSource::addSplit(std::shared_ptr<ConnectorSplit> split) {
   // Clear columnNames if not empty
   if (not columnNames.empty()) {
     columnNames.clear();
-  }
-
-  // Reset cudfTable and views if not already reset
-  if (cudfTable_) {
-    resetCudfTableAndView();
   }
 
   // Create a `cudf::io::chunked_parquet_reader` SplitReader
@@ -224,23 +222,34 @@ ParquetDataSource::createSplitReader() {
   if (readColumnNames_.size()) {
     readerOptions.set_columns(readColumnNames_);
   }
-
+  if (subfieldFilterExprSet_) {
+    auto subfieldFilterExpr = subfieldFilterExprSet_->expr(0);
+    // non-ast instructions in filter is not supported for SubFieldFilter.
+    // precomputeInstructions which are non-ast instructions should be empty.
+    std::vector<PrecomputeInstruction> precomputeInstructions;
+    create_ast_tree(
+        subfieldFilterExpr,
+        subfieldTree_,
+        subfieldScalars_,
+        outputType_,
+        precomputeInstructions);
+    VELOX_CHECK_EQ(precomputeInstructions.size(), 0);
+    readerOptions.set_filter(subfieldTree_.back());
+  }
+  stream_ = cudfGlobalStreamPool().get_stream();
   // Create a parquet reader
   return std::make_unique<cudf::io::chunked_parquet_reader>(
       ParquetConfig_->maxChunkReadLimit(),
       ParquetConfig_->maxPassReadLimit(),
-      readerOptions);
+      readerOptions,
+      stream_,
+      cudf::get_current_device_resource_ref());
 }
 
 void ParquetDataSource::resetSplit() {
   split_.reset();
   splitReader_.reset();
   columnNames.clear();
-}
-
-void ParquetDataSource::resetCudfTableAndView() {
-  cudfTable_.reset();
-  currentCudfTableView_ = cudf::table_view{};
 }
 
 } // namespace facebook::velox::cudf_velox::connector::parquet

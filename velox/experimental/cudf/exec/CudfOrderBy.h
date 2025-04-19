@@ -16,15 +16,11 @@
 
 #pragma once
 
-#include "velox/core/Expressions.h"
-#include "velox/core/PlanNode.h"
-#include "velox/exec/Driver.h"
-#include "velox/exec/Operator.h"
 #include "velox/experimental/cudf/exec/NvtxHelper.h"
 #include "velox/experimental/cudf/vector/CudfVector.h"
-#include "velox/vector/ComplexVector.h"
 
-#include <cudf/table/table.hpp>
+#include "velox/exec/Operator.h"
+#include "velox/vector/ComplexVector.h"
 
 namespace facebook::velox::cudf_velox {
 
@@ -59,11 +55,10 @@ class CudfOrderBy : public exec::Operator, public NvtxHelper {
   CudfVectorPtr outputTable_;
   std::shared_ptr<const core::OrderByNode> orderByNode_;
   std::vector<CudfVectorPtr> inputs_;
-  std::vector<cudf::size_type> sort_keys_;
-  std::vector<cudf::order> column_order_;
-  std::vector<cudf::null_order> null_order_;
+  std::vector<cudf::size_type> sortKeys_;
+  std::vector<cudf::order> columnOrder_;
+  std::vector<cudf::null_order> nullOrder_;
   bool finished_{false};
-  uint32_t maxOutputRows_;
 };
 
 } // namespace facebook::velox::cudf_velox

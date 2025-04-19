@@ -13,24 +13,17 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
 #include "velox/experimental/cudf/exec/CudfFilterProject.h"
-#include "velox/experimental/cudf/exec/Utilities.h"
-#include "velox/expression/ConstantExpr.h"
-#include "velox/expression/FieldReference.h"
-#include "velox/type/Type.h"
-#include "velox/vector/ConstantVector.h"
+#include "velox/experimental/cudf/exec/ToCudf.h"
+#include "velox/experimental/cudf/vector/CudfVector.h"
+
+#include "velox/expression/Expr.h"
 
 #include <cudf/aggregation.hpp>
-#include <cudf/datetime.hpp>
 #include <cudf/reduction.hpp>
 #include <cudf/stream_compaction.hpp>
-#include <cudf/strings/attributes.hpp>
-#include <cudf/strings/contains.hpp>
-#include <cudf/strings/slice.hpp>
-#include <cudf/table/table.hpp>
-#include <cudf/transform.hpp>
 
-#include <sstream>
 #include <unordered_map>
 
 namespace facebook::velox::cudf_velox {
@@ -60,7 +53,10 @@ CudfFilterProject::CudfFilterProject(
           operatorId,
           project ? project->id() : filter->id(),
           "CudfFilterProject"),
-      NvtxHelper(nvtx3::rgb{220, 20, 60}, operatorId), // Crimson
+      NvtxHelper(
+          nvtx3::rgb{220, 20, 60}, // Crimson
+          operatorId,
+          fmt::format("[{}]", project ? project->id() : filter->id())),
       hasFilter_(info.hasFilter),
       project_(project),
       filter_(filter) {
@@ -147,7 +143,7 @@ void CudfFilterProject::filter(
   using ScalarType = cudf::scalar_type_t<bool>;
   auto result = static_cast<ScalarType*>(is_all_true.get());
   // If filter is not all true, apply the filter
-  if (!(result->is_valid() && result->value())) {
+  if (!(result->is_valid(stream) && result->value(stream))) {
     // Apply the Filter
     auto filter_table =
         std::make_unique<cudf::table>(std::move(input_table_columns));

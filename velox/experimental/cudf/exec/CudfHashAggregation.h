@@ -15,9 +15,10 @@
  */
 #pragma once
 
-#include "velox/exec/Operator.h"
 #include "velox/experimental/cudf/exec/NvtxHelper.h"
 #include "velox/experimental/cudf/vector/CudfVector.h"
+
+#include "velox/exec/Operator.h"
 
 #include <cudf/groupby.hpp>
 

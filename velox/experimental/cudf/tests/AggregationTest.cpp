@@ -14,11 +14,12 @@
  * limitations under the License.
  */
 
+#include "velox/experimental/cudf/exec/ToCudf.h"
+
 #include "velox/dwio/common/tests/utils/BatchMaker.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/OperatorTestBase.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
-#include "velox/experimental/cudf/exec/ToCudf.h"
 
 namespace facebook::velox::exec::test {
 
