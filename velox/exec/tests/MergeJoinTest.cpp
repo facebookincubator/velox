@@ -729,6 +729,41 @@ TEST_F(MergeJoinTest, rightJoinFilterWithNull) {
       .assertResults("SELECT * from t RIGHT JOIN u ON a = c AND b < d");
 }
 
+TEST_F(MergeJoinTest, rightJoinFilterWithNull1) {
+  auto left = makeRowVector(
+      {"a", "b"},
+      {
+          makeNullableFlatVector<int32_t>({std::nullopt, 3}),
+          makeNullableFlatVector<double>({std::nullopt, 3}),
+      });
+
+  auto right = makeRowVector(
+      {"c", "d"},
+      {
+          makeNullableFlatVector<int32_t>({std::nullopt, std::nullopt, 3}),
+          makeNullableFlatVector<double>({std::nullopt, std::nullopt, 4}),
+      });
+
+  createDuckDbTable("t", {left});
+  createDuckDbTable("u", {right});
+
+  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+
+  auto rightPlan =
+      PlanBuilder(planNodeIdGenerator)
+          .values({left})
+          .mergeJoin(
+              {"a"},
+              {"c"},
+              PlanBuilder(planNodeIdGenerator).values({right}).planNode(),
+              "b < d",
+              {"a", "b", "c", "d"},
+              core::JoinType::kRight)
+          .planNode();
+  AssertQueryBuilder(rightPlan, duckDbQueryRunner_)
+      .assertResults("SELECT * from t RIGHT JOIN u ON a = c AND b < d");
+}
+
 // Verify that both left-side and right-side pipelines feeding the merge join
 // always run single-threaded.
 TEST_F(MergeJoinTest, numDrivers) {

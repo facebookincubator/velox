@@ -1060,6 +1060,29 @@ RowVectorPtr MergeJoin::doGetOutput() {
     return nullptr;
   }
 
+  auto firstNonNullIndex = firstNonNull(rightInput_, rightKeyChannels_);
+  if ((isRightJoin(joinType_) || isFullJoin(joinType_)) &&
+      firstNonNullIndex > rightRowIndex_) {
+    if (prepareOutput(nullptr, rightInput_)) {
+      output_->resize(outputSize_);
+      return std::move(output_);
+    }
+    for (int i = rightRowIndex_; i < firstNonNullIndex; i++) {
+      if (!tryAddOutputRowForRightJoin()) {
+        rightRowIndex_ = i;
+        return std::move(output_);
+      }
+
+      if (finishedRightBatch()) {
+        // Ran out of rows on the right side.
+        rightInput_ = nullptr;
+        return nullptr;
+      }
+    }
+
+    rightRowIndex_ = firstNonNullIndex;
+  }
+
   // Look for a new match starting with index_ row on the left and rightIndex_
   // row on the right.
   auto compareResult = compare();
