@@ -30,6 +30,7 @@ class SelectiveDwrfReader {
       const std::shared_ptr<const dwio::common::TypeWithId>& fileType,
       DwrfParams& params,
       common::ScanSpec& scanSpec,
+      bool useColumnNames,
       bool isRoot = false);
 
   /// Compatibility wrapper for tests. Takes the components of DwrfParams as
@@ -41,10 +42,12 @@ class SelectiveDwrfReader {
       const StreamLabels& streamLabels,
       dwio::common::ColumnReaderStatistics& stats,
       common::ScanSpec* scanSpec,
+      bool useColumnNames,
       FlatMapContext flatMapContext = {},
       bool isRoot = false) {
     auto params = DwrfParams(stripe, streamLabels, stats, flatMapContext);
-    return build(requestedType, fileType, params, *scanSpec, isRoot);
+    return build(
+        requestedType, fileType, params, *scanSpec, useColumnNames, isRoot);
   }
 };
 

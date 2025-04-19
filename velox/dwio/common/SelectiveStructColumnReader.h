@@ -115,11 +115,13 @@ class SelectiveStructColumnReaderBase : public SelectiveColumnReader {
       const std::shared_ptr<const dwio::common::TypeWithId>& fileType,
       FormatParams& params,
       velox::common::ScanSpec& scanSpec,
+      bool useColumnNames,
       bool isRoot = false)
       : SelectiveColumnReader(requestedType, fileType, params, scanSpec),
         debugString_(
             getExceptionContext().message(VeloxException::Type::kSystem)),
         isRoot_(isRoot),
+        useColumnNames_(useColumnNames),
         rows_(memoryPool_) {}
 
   bool hasDeletion() const final {
@@ -163,6 +165,9 @@ class SelectiveStructColumnReaderBase : public SelectiveColumnReader {
   // Whether or not this is the root Struct that represents entire rows of the
   // table.
   const bool isRoot_;
+
+  // Whether to use names for mapping table field names to file field names.
+  const bool useColumnNames_;
 
   // Dense set of rows to read in next().
   raw_vector<vector_size_t> rows_;
