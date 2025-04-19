@@ -752,6 +752,9 @@ class Task : public std::enable_shared_from_this<Task> {
       int32_t memoryArbitrationPriority = 0,
       std::function<void(std::exception_ptr)> onError = nullptr);
 
+  // Invoked to do post-create initialization.
+  void init();
+
   // Invoked to add this to the system-wide running task list on task creation.
   void addToTaskList();
 
@@ -1269,9 +1272,9 @@ class Task : public std::enable_shared_from_this<Task> {
   // sometimes tested outside 'mutex_' for a value of 0/false,
   // which is safe to access without acquiring 'mutex_'.Thread counts
   // and promises are guarded by 'mutex_'
-  std::atomic<bool> pauseRequested_{false};
-  std::atomic<bool> terminateRequested_{false};
-  std::atomic<int32_t> toYield_ = 0;
+  std::atomic_bool pauseRequested_{false};
+  std::atomic_bool terminateRequested_{false};
+  std::atomic_int32_t toYield_ = 0;
   int32_t numThreads_ = 0;
   // Microsecond real time when 'this' last went from no threads to
   // one thread running. Used to decide if continuous run should be
