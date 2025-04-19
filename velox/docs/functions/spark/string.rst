@@ -427,3 +427,15 @@ String Functions
     Returns string with all characters changed to uppercase. ::
 
         SELECT upper('SparkSql'); -- SPARKSQL
+
+.. spark:function:: varchar_type_write_side_check(string, limit) -> varchar
+
+    Removes trailing 0x20(space) characters from ``string`` to fit in the ``limit``, if not fit, throws exception.
+    Note: This function is not directly callable in SQL, but internally used by SparkSQL for length check
+    when write to varchar type columns. ::
+
+        -- Test with SparkSQL that triggers the function
+        create table srcvarchar(id string) stored as parquet;
+        create table tgt(id varchar(3)) stored as parquet;
+        insert into tgt select id from srcvarchar;
+
