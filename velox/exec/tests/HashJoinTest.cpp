@@ -24,6 +24,7 @@
 #include "velox/exec/Cursor.h"
 #include "velox/exec/HashBuild.h"
 #include "velox/exec/HashJoinBridge.h"
+#include "velox/exec/HashTableBuilder.h"
 #include "velox/exec/OperatorUtils.h"
 #include "velox/exec/PlanNodeStats.h"
 #include "velox/exec/tests/utils/ArbitratorTestUtil.h"
@@ -2464,6 +2465,22 @@ TEST_F(HashJoinTest, nullAwareRightSemiProjectOverScan) {
     createDuckDbTable("t", {probe});
     createDuckDbTable("u", {build});
 
+    const auto& joinType = core::JoinType::kRightSemiProject;
+    const auto& rowType = asRowType(build->type());
+    const auto& joinKeyNames = {"u0"};
+
+    std::vector<std::shared_ptr<const core::FieldAccessTypedExpr>> joinKeys;
+    joinKeys.reserve(joinKeyNames.size());
+    for (const auto& name : joinKeyNames) {
+      joinKeys.emplace_back(std::make_shared<core::FieldAccessTypedExpr>(
+          rowType->findChild(name), name));
+    }
+
+    auto hashTableBuilder = std::make_shared<exec::HashTableBuilder>(
+        joinType, true, false, joinKeys, rowType, pool_.get());
+
+    hashTableBuilder->addInput(build);
+
     core::PlanNodeId probeScanId;
     core::PlanNodeId buildScanId;
     auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
@@ -2480,7 +2497,8 @@ TEST_F(HashJoinTest, nullAwareRightSemiProjectOverScan) {
                         "",
                         {"u0", "match"},
                         core::JoinType::kRightSemiProject,
-                        true /*nullAware*/)
+                        true /*nullAware*/,
+                        hashTableBuilder.get())
                     .planNode();
 
     SplitInput splitInput = {
