@@ -40,8 +40,12 @@ extern void registerDataSizeFunctions(const std::string& prefix);
 extern void registerMapAllowingDuplicates(
     const std::string& name,
     const std::string& prefix);
-extern void registerBingTileFunctions(const std::string& prefix);
 extern void registerInternalArrayFunctions();
+
+#ifdef VELOX_ENABLE_GEO
+extern void registerBingTileFunctions(const std::string& prefix);
+extern void registerGeometryFunctions(const std::string& prefix);
+#endif
 
 namespace prestosql {
 void registerArithmeticFunctions(const std::string& prefix) {
@@ -82,10 +86,6 @@ void registerIntegerFunctions(const std::string& prefix) {
   functions::registerIntegerFunctions(prefix);
 }
 
-void registerBingTileFunctions(const std::string& prefix) {
-  functions::registerBingTileFunctions(prefix);
-}
-
 void registerGeneralFunctions(const std::string& prefix) {
   functions::registerGeneralFunctions(prefix);
 }
@@ -120,7 +120,6 @@ void registerAllScalarFunctions(const std::string& prefix) {
   registerHyperLogFunctions(prefix);
   registerTDigestFunctions(prefix);
   registerIntegerFunctions(prefix);
-  registerBingTileFunctions(prefix);
   registerGeneralFunctions(prefix);
   registerDateTimeFunctions(prefix);
   registerURLFunctions(prefix);
@@ -130,6 +129,11 @@ void registerAllScalarFunctions(const std::string& prefix) {
   registerUuidFunctions(prefix);
   registerIPAddressFunctions(prefix);
   registerDataSizeFunctions(prefix);
+
+#ifdef VELOX_ENABLE_GEO
+  registerBingTileFunctions(prefix);
+  registerGeometryFunctions(prefix);
+#endif
 }
 
 void registerMapAllowingDuplicates(
@@ -141,6 +145,17 @@ void registerMapAllowingDuplicates(
 void registerInternalFunctions() {
   functions::registerInternalArrayFunctions();
 }
+
+#ifdef VELOX_ENABLE_GEO
+void registerBingTileFunctions(const std::string& prefix) {
+  functions::registerBingTileFunctions(prefix);
+}
+
+void registerGeometryFunctions(const std::string& prefix) {
+  functions::registerGeometryFunctions(prefix);
+}
+#endif
+
 } // namespace prestosql
 
 } // namespace facebook::velox::functions

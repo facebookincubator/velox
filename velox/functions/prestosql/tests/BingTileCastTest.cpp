@@ -14,6 +14,8 @@
  * limitations under the License.
  */
 
+#ifdef VELOX_ENABLE_GEO
+
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/functions/prestosql/tests/utils/FunctionBaseTest.h"
 #include "velox/functions/prestosql/types/BingTileType.h"
@@ -58,3 +60,5 @@ TEST_F(BingTileCastTest, errors) {
 } // namespace
 
 } // namespace facebook::velox::functions::prestosql
+
+#endif

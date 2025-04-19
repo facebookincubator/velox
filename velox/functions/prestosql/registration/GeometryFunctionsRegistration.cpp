@@ -16,32 +16,27 @@
 
 #ifdef VELOX_ENABLE_GEO
 
-#include "velox/functions/prestosql/types/GeometryType.h"
+#include <string>
+#include "velox/functions/Registerer.h"
+#include "velox/functions/prestosql/GeometryFunctions.h"
 #include "velox/functions/prestosql/types/GeometryRegistration.h"
-#include "velox/functions/prestosql/types/tests/TypeTestBase.h"
 
-namespace facebook::velox::test {
+namespace facebook::velox::functions {
+void registerGeometryFunctions(const std::string& prefix) {
+  registerGeometryType();
+  registerFunction<StGeometryFromTextFunction, Geometry, Varchar>(
+      {{prefix + "ST_GeometryFromText"}});
 
-class GeometryTypeTest : public testing::Test, public TypeTestBase {
- public:
-  GeometryTypeTest() {
-    registerGeometryType();
-  }
-};
+  registerFunction<StGeomFromBinaryFunction, Geometry, Varbinary>(
+      {{prefix + "ST_GeomFromBinary"}});
 
-TEST_F(GeometryTypeTest, basic) {
-  ASSERT_EQ(GEOMETRY()->name(), "GEOMETRY");
-  ASSERT_EQ(GEOMETRY()->kindName(), "VARBINARY");
-  ASSERT_TRUE(GEOMETRY()->parameters().empty());
-  ASSERT_EQ(GEOMETRY()->toString(), "GEOMETRY");
+  registerFunction<StAsTextFunction, Varchar, Geometry>(
+      {{prefix + "ST_AsText"}});
 
-  ASSERT_TRUE(hasType("GEOMETRY"));
-  ASSERT_EQ(*getType("GEOMETRY", {}), *GEOMETRY());
+  registerFunction<StAsBinaryFunction, Varbinary, Geometry>(
+      {{prefix + "ST_AsBinary"}});
 }
 
-TEST_F(GeometryTypeTest, serde) {
-  testTypeSerde(GEOMETRY());
-}
-} // namespace facebook::velox::test
+} // namespace facebook::velox::functions
 
 #endif

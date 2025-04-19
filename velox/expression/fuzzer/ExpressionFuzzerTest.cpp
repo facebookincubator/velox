@@ -122,6 +122,12 @@ int main(int argc, char** argv) {
       "array_join(array(real),varchar,varchar) -> varchar",
       "array_join(array(double),varchar) -> varchar",
       "array_join(array(double),varchar,varchar) -> varchar",
+      "array_min_by", // https://github.com/facebookincubator/velox/issues/12934
+      "array_max_by", // https://github.com/facebookincubator/velox/issues/12934
+      // https://github.com/facebookincubator/velox/issues/13047
+      "inverse_poisson_cdf",
+
+#ifdef VELOX_ENABLE_GEO
       // BingTiles throw VeloxUserError when zoom/x/y are out of range.
       "bing_tile",
       "bing_tile_zoom_level",
@@ -129,10 +135,12 @@ int main(int argc, char** argv) {
       "bing_tile_parent",
       "bing_tile_children",
       "bing_tile_quadkey",
-      "array_min_by", // https://github.com/facebookincubator/velox/issues/12934
-      "array_max_by", // https://github.com/facebookincubator/velox/issues/12934
-      // https://github.com/facebookincubator/velox/issues/13047
-      "inverse_poisson_cdf",
+      // Geometry functions don't yet have a ValuesGenerator
+      "st_geometryfromtext",
+      "st_geomfrombinary",
+      "st_astext",
+      "st_asbinary",
+#endif
   };
   size_t initialSeed = FLAGS_seed == 0 ? std::time(nullptr) : FLAGS_seed;
 

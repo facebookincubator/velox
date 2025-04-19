@@ -16,6 +16,7 @@
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/functions/prestosql/tests/utils/FunctionBaseTest.h"
 #include "velox/functions/prestosql/types/BingTileType.h"
+#include "velox/functions/prestosql/types/GeometryType.h"
 #include "velox/functions/prestosql/types/HyperLogLogType.h"
 #include "velox/functions/prestosql/types/JsonType.h"
 #include "velox/functions/prestosql/types/TDigestType.h"
@@ -54,8 +55,6 @@ TEST_F(TypeOfTest, basic) {
   EXPECT_EQ("timestamp with time zone", typeOf(TIMESTAMP_WITH_TIME_ZONE()));
   EXPECT_EQ("date", typeOf(DATE()));
 
-  EXPECT_EQ("bingtile", typeOf(BINGTILE()));
-
   EXPECT_EQ("json", typeOf(JSON()));
 
   EXPECT_EQ("HyperLogLog", typeOf(HYPERLOGLOG()));
@@ -74,6 +73,11 @@ TEST_F(TypeOfTest, basic) {
       typeOf(ROW({"a", "b", "c"}, {INTEGER(), VARCHAR(), ARRAY(DATE())})));
 
   VELOX_ASSERT_THROW(typeOf(OPAQUE<int>()), "Unsupported type: OPAQUE<int>");
+
+#ifdef VELOX_ENABLE_GEO
+  EXPECT_EQ("bingtile", typeOf(BINGTILE()));
+  EXPECT_EQ("geometry", typeOf(GEOMETRY()));
+#endif
 }
 
 } // namespace

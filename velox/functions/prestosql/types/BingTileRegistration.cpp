@@ -14,6 +14,8 @@
  * limitations under the License.
  */
 
+#ifdef VELOX_ENABLE_GEO
+
 #include "velox/functions/prestosql/types/BingTileRegistration.h"
 
 #include "velox/expression/CastExpr.h"
@@ -143,3 +145,5 @@ void registerBingTileType() {
 }
 
 } // namespace facebook::velox
+
+#endif
