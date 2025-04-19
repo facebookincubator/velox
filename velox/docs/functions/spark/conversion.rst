@@ -2,6 +2,34 @@
 Conversion Functions
 ====================
 
+.. spark:function:: cast(value AS type) -> type
+
+    Explicitly cast a ``value`` to a specified ``type``.
+    Behavior when ANSI mode is disabled:
+    
+    * If the ``value`` exceeds the range of the ``type``, no error is raised. Instead, the ``value`` is "wrapped" around.
+
+    * If the ``value`` has an invalid format or contains characters incompatible with the target ``type``, the cast function returns NULL. ::
+
+        SELECT cast(128 as tinyint); -- -128
+        SELECT cast('2012-Oct-23' as date); -- NULL
+
+.. spark:function:: try_cast(value AS type) -> type
+
+    Returns the ``value`` cast to data type ``type`` if possible, or NULL if not possible.
+    try_cast's behavior is consistent regardless of the ANSI mode setting, it behaves similarly to cast with ANSI mode enabled, 
+    but returns NULL instead of throwing errors.
+    try_cast differs from cast function with ANSI mode disabled in following case: 
+    
+    * If the ``value`` cannot fit within the domain of ``type``, the result is NULL. ::
+
+        SELECT try_cast(128 as tinyint); -- NULL
+        SELECT try_cast(cast(550000.0 as DECIMAL(8, 1)) as smallint); -- NULL
+        SELECT try_cast(1e12 as int); -- NULL
+
+Cast from UNKNOWN Type
+----------------------
+
 Casting from UNKNOWN type to all other scalar types is supported, e.g., cast(NULL as int).
 
 Cast to Integral Types
@@ -74,13 +102,13 @@ Invalid examples
 
 ::
 
-  SELECT cast('1234567' as tinyint); -- Out of range
-  SELECT cast('1a' as tinyint); -- Invalid argument
-  SELECT cast('' as tinyint); -- Invalid argument
-  SELECT cast('1,234,567' as bigint); -- Invalid argument
-  SELECT cast('1'234'567' as bigint); -- Invalid argument
-  SELECT cast('nan' as bigint); -- Invalid argument
-  SELECT cast('infinity' as bigint); -- Invalid argument
+  SELECT cast('1234567' as tinyint); -- NULL
+  SELECT cast('1a' as tinyint); -- NULL
+  SELECT cast('' as tinyint); -- NULL
+  SELECT cast('1,234,567' as bigint); -- NULL
+  SELECT cast('1'234'567' as bigint); -- NULL
+  SELECT cast('nan' as bigint); -- NULL
+  SELECT cast('infinity' as bigint); -- NULL
 
 From decimal
 ^^^^^^^^^^^^
@@ -145,13 +173,13 @@ Invalid examples
 
 ::
 
-  SELECT cast('1.7E308' as boolean); -- Invalid argument
-  SELECT cast('nan' as boolean); -- Invalid argument
-  SELECT cast('infinity' as boolean); -- Invalid argument
-  SELECT cast('12' as boolean); -- Invalid argument
-  SELECT cast('-1' as boolean); -- Invalid argument
-  SELECT cast('tr' as boolean); -- Invalid argument
-  SELECT cast('tru' as boolean); -- Invalid argument
+  SELECT cast('1.7E308' as boolean); -- NULL
+  SELECT cast('nan' as boolean); -- NULL
+  SELECT cast('infinity' as boolean); -- NULL
+  SELECT cast('12' as boolean); -- NULL
+  SELECT cast('-1' as boolean); -- NULL
+  SELECT cast('tr' as boolean); -- NULL
+  SELECT cast('tru' as boolean); -- NULL
 
 Cast to String
 --------------
@@ -215,9 +243,9 @@ Invalid examples
 
 ::
 
-  SELECT cast('2012-Oct-23' as date); -- Invalid argument
-  SELECT cast('2012/10/23' as date); -- Invalid argument
-  SELECT cast('2012.10.23' as date); -- Invalid argument
+  SELECT cast('2012-Oct-23' as date); -- NULL
+  SELECT cast('2012/10/23' as date); -- NULL
+  SELECT cast('2012.10.23' as date); -- NULL
 
 Cast to Decimal
 ---------------
