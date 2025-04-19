@@ -37,8 +37,6 @@ class GroupingSet {
       std::vector<column_index_t>&& groupingKeyOutputProjections,
       std::vector<AggregateInfo>&& aggregates,
       bool ignoreNullKeys,
-      bool isPartial,
-      bool isRawInput,
       const std::vector<vector_size_t>& globalGroupingSets,
       const std::optional<column_index_t>& groupIdChannel,
       const common::SpillConfig* spillConfig,
@@ -148,6 +146,38 @@ class GroupingSet {
       RowContainerIterator& iterator,
       RowVectorPtr& result);
 
+  bool hasPartialInput() const {
+    return hasPartialInput_;
+  }
+
+  bool hasPartialOutput() const {
+    return hasPartialOutput_;
+  }
+
+  bool allPartialInput() const {
+    return allPartialInput_;
+  }
+
+  bool allPartialOutput() const {
+    return allPartialOutput_;
+  }
+
+  bool hasRawInput() const {
+    return !allPartialInput();
+  }
+
+  bool allRawInput() const {
+    return !hasPartialInput();
+  }
+
+  bool hasRawOutput() const {
+    return !allPartialOutput();
+  }
+
+  bool allRawOutput() const {
+    return !hasPartialOutput();
+  }
+
   memory::MemoryPool& testingPool() const {
     return pool_;
   }
@@ -177,7 +207,7 @@ class GroupingSet {
   // output in case no input rows were received.
   bool hasDefaultGlobalGroupingSetOutput() const {
     return noMoreInput_ && numInputRows_ == 0 && !globalGroupingSets_.empty() &&
-        isRawInput_;
+        allRawInput();
   }
 
   void createHashTable();
@@ -300,8 +330,10 @@ class GroupingSet {
 
   std::vector<std::unique_ptr<VectorHasher>> hashers_;
   const bool isGlobal_;
-  const bool isPartial_;
-  const bool isRawInput_;
+  bool hasPartialInput_{false};
+  bool hasPartialOutput_{false};
+  bool allPartialInput_{false};
+  bool allPartialOutput_{false};
   const core::QueryConfig& queryConfig_;
 
   std::vector<AggregateInfo> aggregates_;

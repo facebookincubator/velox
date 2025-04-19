@@ -250,15 +250,15 @@ class TableWriterReplayerTest : public HiveConnectorTestBase {
     std::vector<std::string> aggregateNames = {"min"};
     std::vector<core::AggregationNode::Aggregate> aggregates = {
         core::AggregationNode::Aggregate{
-            callExpr, {{BIGINT()}}, nullptr, {}, {}}};
+            step, callExpr, {{BIGINT()}}, nullptr, {}, {}}};
     return std::make_shared<core::AggregationNode>(
         nodeId,
-        step,
         groupingKeys,
         std::vector<core::FieldAccessTypedExprPtr>{},
         aggregateNames,
         aggregates,
         false, // ignoreNullKeys
+        core::AggregationNode::Aggregate::isPartialOutput(step),
         source);
   }
 
