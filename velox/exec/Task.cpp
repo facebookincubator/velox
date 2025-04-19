@@ -205,6 +205,8 @@ std::string taskStateString(TaskState state) {
       return "Aborted";
     case TaskState::kFailed:
       return "Failed";
+    case TaskState::kPlanned:
+      return "Planned";
     default:
       return fmt::format("UNKNOWN[{}]", static_cast<int>(state));
   }
@@ -2421,6 +2423,22 @@ void Task::onTaskCompletion() {
           uuid_, taskId_, state, exception, stats, planFragment_);
     }
   });
+}
+
+TaskState Task::realState() const {
+  std::lock_guard<std::timed_mutex> l(mutex_);
+  // We set 'running' state for any new task right from the construction time,
+  // but in reality the task becomes 'running' only when the start() method has
+  // been called.
+  // We are introducing 'planned' state, but currently we cannot set this state
+  // from the creation as there is a lot of logic tied to isRunning() and
+  // 'running' state in general.
+  // TODO(spershin): A separate change will be needed to sort this out.
+  // For now, for the sake of reporting and visibility we add this work-around
+  // method.
+  return taskStats_.executionStartTimeMs > 0
+      ? state_
+      : (state_ == TaskState::kRunning ? TaskState::kPlanned : state_);
 }
 
 ContinueFuture Task::stateChangeFuture(uint64_t maxWaitMicros) {
