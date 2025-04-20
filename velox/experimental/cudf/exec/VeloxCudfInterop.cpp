@@ -19,9 +19,9 @@
 
 #include "velox/common/memory/Memory.h"
 #include "velox/type/Type.h"
-#include "velox/vector/arrow/Bridge.h"
 #include "velox/vector/BaseVector.h"
 #include "velox/vector/ComplexVector.h"
+#include "velox/vector/arrow/Bridge.h"
 
 #include <cudf/interop.hpp>
 #include <cudf/table/table.hpp>

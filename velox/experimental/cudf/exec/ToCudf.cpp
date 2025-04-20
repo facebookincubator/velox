@@ -267,8 +267,7 @@ bool CompileState::compile() {
     }
 
     if (not replaceOp.empty()) {
-      operatorsOffset +=
-          replaceOp.size() - 1 + keepOperator;
+      operatorsOffset += replaceOp.size() - 1 + keepOperator;
       [[maybe_unused]] auto replaced = driverFactory_.replaceOperators(
           driver_,
           replacingOperatorIndex + keepOperator,
