@@ -4,7 +4,7 @@
 #include <string>
 #include "velox/dwio/parquet/crypto/Cache.h"
 #include "velox/dwio/parquet/crypto/KeyRetriever.h"
-#include "EncryptionKey.h"
+#include "velox/dwio/parquet/crypto/EncryptionKey.h"
 
 namespace facebook::velox::parquet {
 

@@ -1,7 +1,7 @@
 #pragma once
-#include "FileDecryptionProperties.h"
-#include "KeyRetriever.h"
-#include "common/base/Exceptions.h"
+#include "velox/dwio/parquet/crypto/FileDecryptionProperties.h"
+#include "velox/dwio/parquet/crypto/KeyRetriever.h"
+#include "velox/common/base/Exceptions.h"
 
 namespace facebook::velox::parquet {
 
