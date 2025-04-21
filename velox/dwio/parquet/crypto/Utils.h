@@ -1,6 +1,4 @@
 #pragma once
-#include <iostream>
-#include <functional>
 #include <chrono>
 #include <thread>
 

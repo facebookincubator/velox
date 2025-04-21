@@ -1,9 +1,9 @@
-#include "FileDecryptor.h"
+#include "velox/dwio/parquet/crypto/FileDecryptor.h"
 #include <utility>
-#include "AesEncryption.h"
-#include "Exception.h"
-#include "FileDecryptionProperties.h"
-#include "common/base/Exceptions.h"
+#include "velox/dwio/parquet/crypto/AesEncryption.h"
+#include "velox/dwio/parquet/crypto/Exception.h"
+#include "velox/dwio/parquet/crypto/FileDecryptionProperties.h"
+#include "velox/common/base/Exceptions.h"
 
 namespace facebook::velox::parquet {
 

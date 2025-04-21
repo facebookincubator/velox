@@ -20,7 +20,7 @@
 #include "velox/vector/tests/utils/VectorMaker.h"
 #include "velox/dwio/parquet/crypto/CryptoFactory.h"
 #include "velox/dwio/parquet/crypto/InMemoryKMSClient.h"
-#include "common/encode/Base64.h"
+#include "velox/common/encode/Base64.h"
 
 using namespace facebook::velox;
 using namespace facebook::velox::common;

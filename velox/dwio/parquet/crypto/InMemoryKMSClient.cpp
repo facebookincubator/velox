@@ -1,5 +1,5 @@
-#include "InMemoryKMSClient.h"
-#include "Exception.h"
+#include "velox/dwio/parquet/crypto/InMemoryKMSClient.h"
+#include "velox/dwio/parquet/crypto/Exception.h"
 
 namespace facebook::velox::parquet {
 
