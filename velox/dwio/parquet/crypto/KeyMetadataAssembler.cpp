@@ -1,7 +1,7 @@
 #include <memory>
-#include "KeyMetadataAssembler.h"
-#include "common/base/Exceptions.h"
-#include "common/encode/Base64.h"
+#include "velox/dwio/parquet/crypto/KeyMetadataAssembler.h"
+#include "velox/common/base/Exceptions.h"
+#include "velox/common/encode/Base64.h"
 
 namespace facebook::velox::parquet {
 
