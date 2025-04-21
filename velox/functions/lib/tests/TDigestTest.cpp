@@ -27,7 +27,6 @@ namespace {
 
 constexpr double kSumError = 1e-4;
 constexpr double kRankError = 0.01;
-
 constexpr double kQuantiles[] = {
     0.0001, 0.0200, 0.0300, 0.04000, 0.0500, 0.1000, 0.2000,
     0.3000, 0.4000, 0.5000, 0.6000,  0.7000, 0.8000, 0.9000,

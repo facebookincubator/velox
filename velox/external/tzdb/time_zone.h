@@ -17,6 +17,7 @@
 #include <type_traits>
 
 #include "velox/external/date/date.h"
+#include "velox/external/date/tz.h"
 #include "velox/external/tzdb/exception.h"
 #include "velox/external/tzdb/local_info.h"
 #include "velox/external/tzdb/sys_info.h"
@@ -162,8 +163,12 @@ class time_zone {
   }
 
  private:
+  [[nodiscard]] sys_info load_sys_info(std::vector<date::transition>::const_iterator i) const;
+
   [[nodiscard]] std::string_view __name() const noexcept;
 
+
+  [[nodiscard]] sys_info __get_info_to_populate_transition(date::sys_seconds __time) const;
   [[nodiscard]] sys_info __get_info(date::sys_seconds __time) const;
   [[nodiscard]] local_info __get_info(date::local_seconds __time) const;
 

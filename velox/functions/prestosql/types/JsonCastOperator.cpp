@@ -593,6 +593,16 @@ simdjson::simdjson_result<T> fromString(const std::string_view& s) {
   if (result.hasError()) {
     return simdjson::INCORRECT_TYPE;
   }
+
+  if constexpr (std::is_floating_point_v<T>) {
+    // Only "NaN" is allowed to be converted to NaN.  "nan" is not allowed.
+    if (FOLLY_UNLIKELY(std::isnan(*result))) {
+      if (s != "NaN" && s != "-NaN") {
+        return simdjson::INCORRECT_TYPE;
+      }
+    }
+  }
+
   return std::move(*result);
 }
 
@@ -624,7 +634,14 @@ simdjson::error_code convertIfInRange(From x, exec::GenericWriter& writer) {
     if (!(kMin <= x && x <= kMax)) {
       return simdjson::NUMBER_OUT_OF_RANGE;
     }
-    return convertIfInRange<To, int64_t>(x, writer);
+
+    // Need to round to nearest integer to be conformant with Java.
+    simdjson::error_code err{simdjson::NUMBER_OUT_OF_RANGE};
+    folly::tryTo<To>(std::round(x)).then([&err, &writer](To y) {
+      err = convertIfInRange<To, int64_t>(y, writer);
+    });
+
+    return err;
   }
 }
 
@@ -688,10 +705,25 @@ struct CastFromJsonTypedImpl {
         Input value,
         exec::GenericWriter& writer) {
       SIMDJSON_ASSIGN_OR_RAISE(auto type, value.type());
-      std::string_view s;
+
       if (isJsonType(writer.type())) {
-        SIMDJSON_ASSIGN_OR_RAISE(s, rawJson(value, type));
+        std::string_view json;
+        SIMDJSON_ASSIGN_OR_RAISE(json, rawJson(value, type));
+        auto& vectorWriter = writer.castTo<Varchar>();
+
+        // The needNormalizeForJsonParse() just checks for escape sequences
+        // in the string
+        if (needNormalizeForJsonParse(json.data(), json.size())) {
+          // Unescape the json string as calling raw_json does not unescape in
+          // simdjson.
+          auto size = unescapeSizeForJsonCast(json.data(), json.size());
+          vectorWriter.resize(size);
+          unescapeForJsonCast(json.data(), json.size(), vectorWriter.data());
+        } else {
+          vectorWriter.append(json);
+        }
       } else {
+        std::string_view s;
         switch (type) {
           case simdjson::ondemand::json_type::string: {
             SIMDJSON_ASSIGN_OR_RAISE(s, value.get_string());
@@ -704,8 +736,9 @@ struct CastFromJsonTypedImpl {
           default:
             return simdjson::INCORRECT_TYPE;
         }
+        writer.castTo<Varchar>().append(s);
       }
-      writer.castTo<Varchar>().append(s);
+
       return simdjson::SUCCESS;
     }
   };

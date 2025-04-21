@@ -269,10 +269,10 @@ TEST_F(FilterProjectTest, allFailedOrPassed) {
   createDuckDbTable(vectors);
 
   // filter over flat vector
-  assertFilter(std::move(vectors), "c0 = 0");
+  assertFilter(vectors, "c0 = 0");
 
   // filter over constant vector
-  assertFilter(std::move(vectors), "c1 = 0");
+  assertFilter(vectors, "c1 = 0");
 }
 
 // Tests fusing of consecutive filters and projects.
@@ -362,4 +362,47 @@ TEST_F(FilterProjectTest, numSilentThrow) {
   auto task = AssertQueryBuilder(plan).assertEmptyResults();
   auto planStats = toPlanStats(task->taskStats());
   ASSERT_EQ(100, planStats.at(filterId).customStats.at("numSilentThrow").sum);
+}
+
+TEST_F(FilterProjectTest, statsSplitter) {
+  auto data = makeRowVector({
+      makeFlatVector<int32_t>(100, folly::identity),
+  });
+
+  // Make 5 batches, 20 rows each: 0...19, 20...39, 40...59, 60...79, 80...99.
+  // Filter out firs 25 rows (1 full batch plus some more), then keep every 3rd
+  // row.
+  core::PlanNodeId filterId;
+  core::PlanNodeId projectId;
+  auto plan = PlanBuilder()
+                  .values(split(data, 5))
+                  .filter("if (c0 < 25, false, c0 % 3 = 0)")
+                  .capturePlanNodeId(filterId)
+                  .project({"c0", "c0 + 1"})
+                  .capturePlanNodeId(projectId)
+                  .planNode();
+
+  std::shared_ptr<Task> task;
+  AssertQueryBuilder(plan).runWithoutResults(task);
+
+  auto planStats = toPlanStats(task->taskStats());
+
+  const auto& filterStats = planStats.at(filterId);
+  const auto& projectStats = planStats.at(projectId);
+
+  EXPECT_EQ(filterStats.inputRows, 100);
+  EXPECT_EQ(filterStats.inputVectors, 5);
+
+  EXPECT_EQ(filterStats.outputRows, 25);
+  EXPECT_EQ(filterStats.outputVectors, 4);
+  EXPECT_LT(filterStats.outputBytes * 2, filterStats.inputBytes);
+
+  EXPECT_EQ(projectStats.inputRows, 25);
+  EXPECT_EQ(projectStats.inputVectors, 4);
+
+  EXPECT_EQ(projectStats.inputBytes, filterStats.outputBytes);
+  EXPECT_LT(projectStats.inputBytes, projectStats.outputBytes);
+
+  EXPECT_EQ(projectStats.outputRows, 25);
+  EXPECT_EQ(projectStats.outputVectors, 4);
 }

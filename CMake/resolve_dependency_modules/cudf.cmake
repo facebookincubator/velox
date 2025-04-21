@@ -17,35 +17,35 @@ include_guard(GLOBAL)
 # 3.30.4 is the minimum version required by cudf
 cmake_minimum_required(VERSION 3.30.4)
 
-set(VELOX_rapids_cmake_VERSION 25.04)
+set(VELOX_rapids_cmake_VERSION 25.06)
 set(VELOX_rapids_cmake_BUILD_SHA256_CHECKSUM
-    458c14eaff9000067b32d65c8c914f4521090ede7690e16eb57035ce731386db)
+    812cef3478ef2ee02742d8cba68ab754603eb21e1333f1be03b91e7820ca0e27)
 set(VELOX_rapids_cmake_SOURCE_URL
-    "https://github.com/rapidsai/rapids-cmake/archive/7828fc8ff2e9f4fa86099f3c844505c2f47ac672.tar.gz"
+    "https://github.com/rapidsai/rapids-cmake/archive/4f203ce0126c91ff57289dfc70555f29cd81a8ee.tar.gz"
 )
 velox_resolve_dependency_url(rapids_cmake)
 
-set(VELOX_rmm_VERSION 25.04)
+set(VELOX_rmm_VERSION 25.06)
 set(VELOX_rmm_BUILD_SHA256_CHECKSUM
-    17aa9cf50e37ac0058bd09cb05f01e0c1b788ba5ce3e77fc9f7e386fab54397a)
+    d2cabadc6c484620a7aaff533494920f4e8c8c027ae717cae83110883e3cb378)
 set(VELOX_rmm_SOURCE_URL
-    "https://github.com/rapidsai/rmm/archive/7529f921a0bea3587e357be89d127797a4acea37.tar.gz"
+    "https://github.com/rapidsai/rmm/archive/c7a331432f003bcaa8cc45d7bbcbd21a2876565f.tar.gz"
 )
 velox_resolve_dependency_url(rmm)
 
-set(VELOX_kvikio_VERSION 25.04)
+set(VELOX_kvikio_VERSION 25.06)
 set(VELOX_kvikio_BUILD_SHA256_CHECKSUM
-    a39ba878ddc7bdd065bb7e4ecf04fd7944c0d51c8ebf8a49b6ee24dacebeb021)
+    bdf756557ea6608ec5a00cde5130ec22b6059f96208c269a83c49917967804f8)
 set(VELOX_kvikio_SOURCE_URL
-    "https://github.com/rapidsai/kvikio/archive/0b90bb84872fd2f4709d116d9d60d3741ef577a2.tar.gz"
+    "https://github.com/rapidsai/kvikio/archive/9f143867a41c56d6df4c58572311c9bee004285a.tar.gz"
 )
 velox_resolve_dependency_url(kvikio)
 
 set(VELOX_cudf_VERSION 25.06)
 set(VELOX_cudf_BUILD_SHA256_CHECKSUM
-    b9e9ebf7593571940aa25320466278e48fc3aea4e6795ebf63ffa41155f8f218)
+    39e1b32c8491bb84f52388a3ae9cd28b1e82ce81f311e6678067741f9d0ac01d)
 set(VELOX_cudf_SOURCE_URL
-    "https://github.com/rapidsai/cudf/archive/52a7f51d1e845d0fb4faf4577aa6af8fcae7e1fb.tar.gz"
+    "https://github.com/rapidsai/cudf/archive/191620472f3d3daeadf32003c37ee99eaa4773a9.tar.gz"
 )
 velox_resolve_dependency_url(cudf)
 

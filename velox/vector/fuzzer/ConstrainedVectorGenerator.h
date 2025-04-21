@@ -16,7 +16,6 @@
 
 #pragma once
 
-#include "velox/common/fuzzer/ConstrainedGenerators.h"
 #include "velox/vector/BaseVector.h"
 
 namespace facebook::velox::fuzzer {
