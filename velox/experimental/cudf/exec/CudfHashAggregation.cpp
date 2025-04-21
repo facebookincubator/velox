@@ -18,7 +18,6 @@
 #include "velox/experimental/cudf/exec/Utilities.h"
 #include "velox/experimental/cudf/exec/VeloxCudfInterop.h"
 
-#include "cudf/concatenate.hpp"
 #include "velox/exec/Aggregate.h"
 #include "velox/exec/PrefixSort.h"
 #include "velox/exec/Task.h"
@@ -26,6 +25,7 @@
 
 #include <cudf/binaryop.hpp>
 #include <cudf/column/column_factories.hpp>
+#include <cudf/concatenate.hpp>
 #include <cudf/reduction.hpp>
 #include <cudf/stream_compaction.hpp>
 #include <cudf/unary.hpp>
@@ -557,6 +557,7 @@ void CudfHashAggregation::computeInterimGroupbyPartial(
 }
 
 void CudfHashAggregation::addInput(RowVectorPtr input) {
+  VELOX_NVTX_OPERATOR_FUNC_RANGE();
   // For every input, we'll do a groupby and compact results with the existing
   // interim groupby results
   // - If this is partial agg, we'll do a groupby on the
