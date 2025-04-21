@@ -134,12 +134,13 @@ std::shared_ptr<WriterProperties> getArrowParquetWriterOptions(
   if (options.enableDictionary.value_or(
           facebook::velox::parquet::arrow::DEFAULT_IS_DICTIONARY_ENABLED)) {
     properties = properties->enable_dictionary();
+    properties = properties->dictionary_pagesize_limit(
+        options.dictionaryPageSizeLimit.value_or(
+            facebook::velox::parquet::arrow::
+                DEFAULT_DICTIONARY_PAGE_SIZE_LIMIT));
   } else {
     properties = properties->disable_dictionary();
   }
-  properties = properties->dictionary_pagesize_limit(
-      options.dictionaryPageSizeLimit.value_or(
-          facebook::velox::parquet::arrow::DEFAULT_DICTIONARY_PAGE_SIZE_LIMIT));
   properties = properties->compression(getArrowParquetCompression(
       options.compressionKind.value_or(common::CompressionKind_NONE)));
   for (const auto& columnCompressionValues : options.columnCompressionsMap) {
