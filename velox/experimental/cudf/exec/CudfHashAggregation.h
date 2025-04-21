@@ -39,7 +39,7 @@ class CudfHashAggregation : public exec::Operator, public NvtxHelper {
 
     virtual std::unique_ptr<cudf::column> doReduce(
         cudf::table_view const& input,
-        TypePtr const& output_type,
+        TypePtr const& outputType,
         rmm::cuda_stream_view stream) = 0;
 
     virtual std::unique_ptr<cudf::column> makeOutputColumn(
@@ -52,9 +52,9 @@ class CudfHashAggregation : public exec::Operator, public NvtxHelper {
         cudf::aggregation::Kind kind,
         uint32_t inputIndex,
         VectorPtr constant,
-        bool is_global)
+        bool isGlobal)
         : step(step),
-          is_global(is_global),
+          is_global(isGlobal),
           kind(kind),
           inputIndex(inputIndex),
           constant(constant) {}
