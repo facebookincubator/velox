@@ -28,39 +28,6 @@
 
 namespace facebook::velox {
 
-namespace detail {
-
-/// Represent the varchar fragment.
-///
-/// For example:
-/// | value | wholeDigits | fractionalDigits | exponent | sign |
-/// | 9999999999.99 | 9999999999 | 99 | nullopt | 1 |
-/// | 15 | 15 |  | nullopt | 1 |
-/// | 1.5 | 1 | 5 | nullopt | 1 |
-/// | -1.5 | 1 | 5 | nullopt | -1 |
-/// | 31.523e-2 | 31 | 523 | -2 | 1 |
-struct DecimalComponents {
-  std::string_view wholeDigits;
-  std::string_view fractionalDigits;
-  std::optional<int32_t> exponent = std::nullopt;
-  int8_t sign = 1;
-};
-
-// Extract a string view of continuous digits.
-std::string_view extractDigits(const char* s, size_t start, size_t size);
-
-/// Parse decimal components, including whole digits, fractional digits,
-/// exponent and sign, from input chars. Returns error status if input chars
-/// do not represent a valid value.
-Status
-parseDecimalComponents(const char* s, size_t size, DecimalComponents& out);
-
-/// Parse huge int from decimal components. The fractional part is scaled up by
-/// required power of 10, and added with the whole part. Returns error status if
-/// overflows.
-Status parseHugeInt(const DecimalComponents& decimalComponents, int128_t& out);
-} // namespace detail
-
 /// A static class that holds helper functions for DECIMAL type.
 class DecimalUtil {
  public:
@@ -550,9 +517,9 @@ class DecimalUtil {
       int toPrecision,
       int toScale,
       T& decimalValue) {
-    detail::DecimalComponents decimalComponents;
-    if (auto status = detail::parseDecimalComponents(
-            s.data(), s.size(), decimalComponents);
+    DecimalComponents decimalComponents;
+    if (auto status =
+            parseDecimalComponents(s.data(), s.size(), decimalComponents);
         !status.ok()) {
       return Status::UserError("Value is not a number. " + status.message());
     }
@@ -609,8 +576,7 @@ class DecimalUtil {
     }
 
     int128_t out = 0;
-    if (auto status = detail::parseHugeInt(decimalComponents, out);
-        !status.ok()) {
+    if (auto status = parseHugeInt(decimalComponents, out); !status.ok()) {
       return status;
     }
 
@@ -651,5 +617,39 @@ class DecimalUtil {
   }
 
   static constexpr __uint128_t kOverflowMultiplier = ((__uint128_t)1 << 127);
+
+ private:
+  // Represent the varchar fragment.
+  //
+  // For example:
+  // | value | wholeDigits | fractionalDigits | exponent | sign |
+  // | 9999999999.99 | 9999999999 | 99 | nullopt | 1 |
+  // | 15 | 15 |  | nullopt | 1 |
+  // | 1.5 | 1 | 5 | nullopt | 1 |
+  // | -1.5 | 1 | 5 | nullopt | -1 |
+  // | 31.523e-2 | 31 | 523 | -2 | 1 |
+  struct DecimalComponents {
+    std::string_view wholeDigits;
+    std::string_view fractionalDigits;
+    std::optional<int32_t> exponent = std::nullopt;
+    int8_t sign = 1;
+  };
+
+  // Extract a string view of continuous digits.
+  static std::string_view
+  extractDigits(const char* s, size_t start, size_t size);
+
+  // Parse decimal components, including whole digits, fractional digits,
+  // exponent and sign, from input chars. Returns error status if input chars
+  // do not represent a valid value.
+  static Status
+  parseDecimalComponents(const char* s, size_t size, DecimalComponents& out);
+
+  // Parse huge int from decimal components. The fractional part is scaled up by
+  // required power of 10, and added with the whole part. Returns error status
+  // if overflows.
+  static Status parseHugeInt(
+      const DecimalComponents& decimalComponents,
+      int128_t& out);
 }; // DecimalUtil
 } // namespace facebook::velox
