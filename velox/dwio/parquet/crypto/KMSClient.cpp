@@ -1,12 +1,12 @@
-#include "KMSClient.h"
+#include "velox/dwio/parquet/crypto/KMSClient.h"
 #include <map>
-#include "KeyMetadataAssembler.h"
-#include "common/base/Exceptions.h"
-#include "common/encode/Base64.h"
+#include "velox/dwio/parquet/crypto/KeyMetadataAssembler.h"
+#include "velox/common/base/Exceptions.h"
+#include "velox/common/encode/Base64.h"
 #include <glog/logging.h>
-#include "Exception.h"
+#include "velox/dwio/parquet/crypto/Exception.h"
 #include <cstddef>
-#include "Utils.h"
+#include "velox/dwio/parquet/crypto/Utils.h"
 
 namespace facebook::velox::parquet {
 

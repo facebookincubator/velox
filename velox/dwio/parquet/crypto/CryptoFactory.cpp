@@ -1,4 +1,4 @@
-#include "CryptoFactory.h"
+#include "velox/dwio/parquet/crypto/CryptoFactory.h"
 
 namespace facebook::velox::parquet {
 
