@@ -289,7 +289,7 @@ ParquetConnectorTestBase::makeParquetInsertTableHandle(
         std::make_shared<connector::parquet::ParquetColumnHandle>(
             tableColumnNames.at(i),
             tableColumnTypes.at(i),
-            cudf::data_type{velox_to_cudf_type_id(tableColumnTypes.at(i))}));
+            cudf::data_type{veloxToCudfTypeId(tableColumnTypes.at(i))}));
   }
 
   return std::make_shared<connector::parquet::ParquetInsertTableHandle>(

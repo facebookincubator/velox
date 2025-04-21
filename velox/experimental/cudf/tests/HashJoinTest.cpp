@@ -44,7 +44,7 @@ namespace {
 struct TestParam {
   int numDrivers;
 
-  explicit TestParam(int _numDrivers) : numDrivers(_numDrivers) {}
+  explicit TestParam(int numDrivers) : numDrivers(numDrivers) {}
 };
 
 using SplitInput =
@@ -240,11 +240,11 @@ class HashJoinBuilder {
   HashJoinBuilder& planNode(core::PlanNodePtr planNode) {
     VELOX_CHECK_NULL(planNode_);
     planNode_ = planNode;
-    auto hash_node_ptr = core::PlanNode::findFirstNode(
+    auto hashNodePtr = core::PlanNode::findFirstNode(
         planNode.get(), [](const core::PlanNode* node) {
           return dynamic_cast<const core::HashJoinNode*>(node) != nullptr;
         });
-    if (cudf_velox::cudfDebugEnabled() && hash_node_ptr != nullptr) {
+    if (cudf_velox::cudfDebugEnabled() && hashNodePtr != nullptr) {
       std::cout << "Found a HashJoinNode" << std::endl;
     }
     return *this;

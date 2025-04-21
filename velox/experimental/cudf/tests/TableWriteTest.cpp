@@ -106,7 +106,7 @@ FOLLY_ALWAYS_INLINE std::ostream& operator<<(std::ostream& os, TestMode mode) {
 struct TestParam {
   uint64_t value;
 
-  explicit TestParam(uint64_t _value) : value(_value) {}
+  explicit TestParam(uint64_t value) : value(value) {}
 
   TestParam(
       FileFormat fileFormat,

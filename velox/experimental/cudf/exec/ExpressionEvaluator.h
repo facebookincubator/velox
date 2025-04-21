@@ -42,25 +42,25 @@ struct PrecomputeInstruction {
         new_column_index(newIndex) {}
 };
 
-cudf::ast::expression const& create_ast_tree(
+cudf::ast::expression const& createAstTree(
     const std::shared_ptr<velox::exec::Expr>& expr,
     cudf::ast::tree& tree,
     std::vector<std::unique_ptr<cudf::scalar>>& scalars,
     const RowTypePtr& inputRowSchema,
-    std::vector<PrecomputeInstruction>& precompute_instructions);
+    std::vector<PrecomputeInstruction>& precomputeInstructions);
 
-cudf::ast::expression const& create_ast_tree(
+cudf::ast::expression const& createAstTree(
     const std::shared_ptr<velox::exec::Expr>& expr,
     cudf::ast::tree& tree,
     std::vector<std::unique_ptr<cudf::scalar>>& scalars,
     const RowTypePtr& leftRowSchema,
     const RowTypePtr& rightRowSchema,
-    std::vector<PrecomputeInstruction>& left_precompute_instructions,
-    std::vector<PrecomputeInstruction>& right_precompute_instructions);
+    std::vector<PrecomputeInstruction>& leftPrecomputeInstructions,
+    std::vector<PrecomputeInstruction>& rightPrecomputeInstructions);
 
 void addPrecomputedColumns(
-    std::vector<std::unique_ptr<cudf::column>>& input_table_columns,
-    const std::vector<PrecomputeInstruction>& precompute_instructions,
+    std::vector<std::unique_ptr<cudf::column>>& inputTableColumns,
+    const std::vector<PrecomputeInstruction>& precomputeInstructions,
     const std::vector<std::unique_ptr<cudf::scalar>>& scalars,
     rmm::cuda_stream_view stream);
 
@@ -76,13 +76,13 @@ class ExpressionEvaluator {
 
   // Evaluates the expression tree for the given input columns
   std::vector<std::unique_ptr<cudf::column>> compute(
-      std::vector<std::unique_ptr<cudf::column>>& input_table_columns,
+      std::vector<std::unique_ptr<cudf::column>>& inputTableColumns,
       rmm::cuda_stream_view stream,
       rmm::device_async_resource_ref mr);
 
   void close();
 
-  static bool can_be_evaluated(
+  static bool canBeEvaluated(
       const std::vector<std::shared_ptr<velox::exec::Expr>>& exprs);
 
  private:
@@ -91,7 +91,7 @@ class ExpressionEvaluator {
   // instruction on dependent column to get new column index on non-ast
   // supported operations in expressions
   // <dependent_column_index, "instruction", new_column_index>
-  std::vector<PrecomputeInstruction> precompute_instructions_;
+  std::vector<PrecomputeInstruction> precomputeInstructions_;
 };
 
 } // namespace facebook::velox::cudf_velox

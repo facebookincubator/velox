@@ -33,10 +33,10 @@
 namespace facebook::velox::cudf_velox {
 namespace {
 template <TypeKind kind>
-cudf::ast::literal make_scalar_and_literal(
+cudf::ast::literal makeScalarAndLiteral(
     const VectorPtr& vector,
     std::vector<std::unique_ptr<cudf::scalar>>& scalars,
-    size_t at_index = 0) {
+    size_t atIndex = 0) {
   using T = typename facebook::velox::KindToFlatVector<kind>::WrapperType;
   auto stream = cudf::get_default_stream();
   auto mr = cudf::get_current_device_resource_ref();
@@ -45,7 +45,7 @@ cudf::ast::literal make_scalar_and_literal(
   if constexpr (cudf::is_fixed_width<T>()) {
     auto constVector = vector->as<facebook::velox::SimpleVector<T>>();
     VELOX_CHECK_NOT_NULL(constVector, "ConstantVector is null");
-    T value = constVector->valueAt(at_index);
+    T value = constVector->valueAt(atIndex);
     if (type->isShortDecimal()) {
       VELOX_FAIL("Short decimal not supported");
       /* TODO: enable after rewriting using binary ops
@@ -80,34 +80,34 @@ cudf::ast::literal make_scalar_and_literal(
     } else if (type->isIntervalDayTime()) {
       using CudfDurationType = cudf::duration_ms;
       if constexpr (std::is_same_v<T, CudfDurationType::rep>) {
-        using cudfScalarType = cudf::duration_scalar<CudfDurationType>;
-        auto scalar = std::make_unique<cudfScalarType>(value, true, stream, mr);
+        using CudfScalarType = cudf::duration_scalar<CudfDurationType>;
+        auto scalar = std::make_unique<CudfScalarType>(value, true, stream, mr);
         scalars.emplace_back(std::move(scalar));
         return cudf::ast::literal{
-            *static_cast<cudfScalarType*>(scalars.back().get())};
+            *static_cast<CudfScalarType*>(scalars.back().get())};
       }
     } else if (type->isDate()) {
       using CudfDateType = cudf::timestamp_D;
       if constexpr (std::is_same_v<T, CudfDateType::rep>) {
-        using cudfScalarType = cudf::timestamp_scalar<CudfDateType>;
-        auto scalar = std::make_unique<cudfScalarType>(value, true, stream, mr);
+        using CudfScalarType = cudf::timestamp_scalar<CudfDateType>;
+        auto scalar = std::make_unique<CudfScalarType>(value, true, stream, mr);
         scalars.emplace_back(std::move(scalar));
         return cudf::ast::literal{
-            *static_cast<cudfScalarType*>(scalars.back().get())};
+            *static_cast<CudfScalarType*>(scalars.back().get())};
       }
     } else {
       // Create a numeric scalar of type T, store it in the scalars vector,
       // and use its reference in the literal expression.
-      using cudfScalarType = cudf::numeric_scalar<T>;
+      using CudfScalarType = cudf::numeric_scalar<T>;
       scalars.emplace_back(
-          std::make_unique<cudfScalarType>(value, true, stream, mr));
+          std::make_unique<CudfScalarType>(value, true, stream, mr));
       return cudf::ast::literal{
-          *static_cast<cudfScalarType*>(scalars.back().get())};
+          *static_cast<CudfScalarType*>(scalars.back().get())};
     }
     VELOX_FAIL("Unsupported base type for literal");
   } else if (kind == TypeKind::VARCHAR) {
     auto constVector = vector->as<facebook::velox::SimpleVector<StringView>>();
-    auto value = constVector->valueAt(at_index);
+    auto value = constVector->valueAt(atIndex);
     std::string_view stringValue = static_cast<std::string_view>(value);
     scalars.emplace_back(
         std::make_unique<cudf::string_scalar>(stringValue, true, stream, mr));
@@ -124,10 +124,10 @@ cudf::ast::literal make_scalar_and_literal(
 cudf::ast::literal createLiteral(
     const VectorPtr& vector,
     std::vector<std::unique_ptr<cudf::scalar>>& scalars,
-    size_t at_index = 0) {
+    size_t atIndex = 0) {
   const auto kind = vector->typeKind();
   return VELOX_DYNAMIC_TYPE_DISPATCH_ALL(
-      make_scalar_and_literal, kind, std::move(vector), scalars, at_index);
+      makeScalarAndLiteral, kind, std::move(vector), scalars, atIndex);
 }
 
 // Helper function to extract literals from array elements based on type
@@ -199,24 +199,24 @@ std::vector<cudf::ast::literal> createLiteralsFromArray(
 }
 } // namespace
 
-using op = cudf::ast::ast_operator;
-const std::map<std::string, op> binary_ops = {
-    {"plus", op::ADD},
-    {"minus", op::SUB},
-    {"multiply", op::MUL},
-    {"divide", op::DIV},
-    {"eq", op::EQUAL},
-    {"neq", op::NOT_EQUAL},
-    {"lt", op::LESS},
-    {"gt", op::GREATER},
-    {"lte", op::LESS_EQUAL},
-    {"gte", op::GREATER_EQUAL},
-    {"and", op::NULL_LOGICAL_AND},
-    {"or", op::NULL_LOGICAL_OR}};
+using Op = cudf::ast::ast_operator;
+const std::map<std::string, Op> binaryOps = {
+    {"plus", Op::ADD},
+    {"minus", Op::SUB},
+    {"multiply", Op::MUL},
+    {"divide", Op::DIV},
+    {"eq", Op::EQUAL},
+    {"neq", Op::NOT_EQUAL},
+    {"lt", Op::LESS},
+    {"gt", Op::GREATER},
+    {"lte", Op::LESS_EQUAL},
+    {"gte", Op::GREATER_EQUAL},
+    {"and", Op::NULL_LOGICAL_AND},
+    {"or", Op::NULL_LOGICAL_OR}};
 
-const std::map<std::string, op> unary_ops = {{"not", op::NOT}};
+const std::map<std::string, Op> unaryOps = {{"not", Op::NOT}};
 
-const std::unordered_set<std::string> supported_ops = {
+const std::unordered_set<std::string> supportedOps = {
     "literal",
     "between",
     "in",
@@ -229,12 +229,12 @@ const std::unordered_set<std::string> supported_ops = {
 
 namespace detail {
 
-bool can_be_evaluated(const std::shared_ptr<velox::exec::Expr>& expr) {
+bool canBeEvaluated(const std::shared_ptr<velox::exec::Expr>& expr) {
   const auto& name = expr->name();
-  if (supported_ops.count(name) || binary_ops.count(name) ||
-      unary_ops.count(name)) {
+  if (supportedOps.count(name) || binaryOps.count(name) ||
+      unaryOps.count(name)) {
     return std::all_of(
-        expr->inputs().begin(), expr->inputs().end(), can_be_evaluated);
+        expr->inputs().begin(), expr->inputs().end(), canBeEvaluated);
   }
   return std::dynamic_pointer_cast<velox::exec::FieldReference>(expr) !=
       nullptr;
@@ -247,59 +247,58 @@ struct AstContext {
   std::vector<std::unique_ptr<cudf::scalar>>& scalars;
   const std::vector<RowTypePtr> inputRowSchema;
   const std::vector<std::reference_wrapper<std::vector<PrecomputeInstruction>>>
-      precompute_instructions;
-  cudf::ast::expression const& push_expr_to_tree(
+      precomputeInstructions;
+  cudf::ast::expression const& pushExprToTree(
       const std::shared_ptr<velox::exec::Expr>& expr);
-  cudf::ast::expression const& add_precompute_instruction(
+  cudf::ast::expression const& addPrecomputeInstruction(
       std::string const& name,
       std::string const& instruction);
-  cudf::ast::expression const& multiple_inputs_to_pair_wise(
+  cudf::ast::expression const& multipleInputsToPairWise(
       const std::shared_ptr<velox::exec::Expr>& expr);
-  static bool can_be_evaluated(const std::shared_ptr<velox::exec::Expr>& expr);
+  static bool canBeEvaluated(const std::shared_ptr<velox::exec::Expr>& expr);
 };
 
 // Create tree from Expr
 // and collect precompute instructions for non-ast operations
-cudf::ast::expression const& create_ast_tree(
+cudf::ast::expression const& createAstTree(
     const std::shared_ptr<velox::exec::Expr>& expr,
     cudf::ast::tree& tree,
     std::vector<std::unique_ptr<cudf::scalar>>& scalars,
     const RowTypePtr& inputRowSchema,
-    std::vector<PrecomputeInstruction>& precompute_instructions) {
-  AstContext context{
-      tree, scalars, {inputRowSchema}, {precompute_instructions}};
-  return context.push_expr_to_tree(expr);
+    std::vector<PrecomputeInstruction>& precomputeInstructions) {
+  AstContext context{tree, scalars, {inputRowSchema}, {precomputeInstructions}};
+  return context.pushExprToTree(expr);
 }
 
-cudf::ast::expression const& create_ast_tree(
+cudf::ast::expression const& createAstTree(
     const std::shared_ptr<velox::exec::Expr>& expr,
     cudf::ast::tree& tree,
     std::vector<std::unique_ptr<cudf::scalar>>& scalars,
     const RowTypePtr& leftRowSchema,
     const RowTypePtr& rightRowSchema,
-    std::vector<PrecomputeInstruction>& left_precompute_instructions,
-    std::vector<PrecomputeInstruction>& right_precompute_instructions) {
+    std::vector<PrecomputeInstruction>& leftPrecomputeInstructions,
+    std::vector<PrecomputeInstruction>& rightPrecomputeInstructions) {
   AstContext context{
       tree,
       scalars,
       {leftRowSchema, rightRowSchema},
-      {left_precompute_instructions, right_precompute_instructions}};
-  return context.push_expr_to_tree(expr);
+      {leftPrecomputeInstructions, rightPrecomputeInstructions}};
+  return context.pushExprToTree(expr);
 }
 
-cudf::ast::expression const& AstContext::add_precompute_instruction(
+cudf::ast::expression const& AstContext::addPrecomputeInstruction(
     std::string const& name,
     std::string const& instruction) {
-  for (size_t side_idx = 0; side_idx < inputRowSchema.size(); ++side_idx) {
-    if (inputRowSchema[side_idx].get()->containsChild(name)) {
-      auto column_index = inputRowSchema[side_idx].get()->getChildIdx(name);
-      auto new_column_index = inputRowSchema[side_idx].get()->size() +
-          precompute_instructions[side_idx].get().size();
+  for (size_t sideIdx = 0; sideIdx < inputRowSchema.size(); ++sideIdx) {
+    if (inputRowSchema[sideIdx].get()->containsChild(name)) {
+      auto columnIndex = inputRowSchema[sideIdx].get()->getChildIdx(name);
+      auto newColumnIndex = inputRowSchema[sideIdx].get()->size() +
+          precomputeInstructions[sideIdx].get().size();
       // This custom op should be added to input columns.
-      precompute_instructions[side_idx].get().emplace_back(
-          column_index, instruction, new_column_index);
-      auto side = static_cast<cudf::ast::table_reference>(side_idx);
-      return tree.push(cudf::ast::column_reference(new_column_index, side));
+      precomputeInstructions[sideIdx].get().emplace_back(
+          columnIndex, instruction, newColumnIndex);
+      auto side = static_cast<cudf::ast::table_reference>(sideIdx);
+      return tree.push(cudf::ast::column_reference(newColumnIndex, side));
     }
   }
   VELOX_FAIL("Field not found, " + name);
@@ -311,19 +310,19 @@ cudf::ast::expression const& AstContext::add_precompute_instruction(
 ///
 /// @param expr The expression containing multiple inputs for AND/OR operation
 /// @return A reference to the resulting AST expression
-cudf::ast::expression const& AstContext::multiple_inputs_to_pair_wise(
+cudf::ast::expression const& AstContext::multipleInputsToPairWise(
     const std::shared_ptr<velox::exec::Expr>& expr) {
-  using operation = cudf::ast::operation;
+  using Operation = cudf::ast::operation;
 
   const auto& name = expr->name();
   auto len = expr->inputs().size();
   // Create a simple chain of operations
-  auto result = &push_expr_to_tree(expr->inputs()[0]);
+  auto result = &pushExprToTree(expr->inputs()[0]);
 
   // Chain the rest of the inputs sequentially
   for (size_t i = 1; i < len; i++) {
-    auto const& next_input = push_expr_to_tree(expr->inputs()[i]);
-    result = &tree.push(operation{binary_ops.at(name), *result, next_input});
+    auto const& nextInput = pushExprToTree(expr->inputs()[i]);
+    result = &tree.push(Operation{binaryOps.at(name), *result, nextInput});
   }
   return *result;
 }
@@ -333,10 +332,10 @@ cudf::ast::expression const& AstContext::multiple_inputs_to_pair_wise(
 ///
 /// @param expr The expression to push into the AST tree
 /// @return A reference to the resulting AST expression
-cudf::ast::expression const& AstContext::push_expr_to_tree(
+cudf::ast::expression const& AstContext::pushExprToTree(
     const std::shared_ptr<velox::exec::Expr>& expr) {
-  using op = cudf::ast::ast_operator;
-  using operation = cudf::ast::operation;
+  using Op = cudf::ast::ast_operator;
+  using Operation = cudf::ast::operation;
   using velox::exec::ConstantExpr;
   using velox::exec::FieldReference;
 
@@ -350,33 +349,32 @@ cudf::ast::expression const& AstContext::push_expr_to_tree(
     VELOX_CHECK(value->isConstantEncoding());
     // convert to cudf scalar
     return tree.push(createLiteral(value, scalars));
-  } else if (binary_ops.find(name) != binary_ops.end()) {
+  } else if (binaryOps.find(name) != binaryOps.end()) {
     if (len > 2 and (name == "and" or name == "or")) {
-      return multiple_inputs_to_pair_wise(expr);
+      return multipleInputsToPairWise(expr);
     }
     VELOX_CHECK_EQ(len, 2);
-    auto const& op1 = push_expr_to_tree(expr->inputs()[0]);
-    auto const& op2 = push_expr_to_tree(expr->inputs()[1]);
-    return tree.push(operation{binary_ops.at(name), op1, op2});
-  } else if (unary_ops.find(name) != unary_ops.end()) {
+    auto const& op1 = pushExprToTree(expr->inputs()[0]);
+    auto const& op2 = pushExprToTree(expr->inputs()[1]);
+    return tree.push(Operation{binaryOps.at(name), op1, op2});
+  } else if (unaryOps.find(name) != unaryOps.end()) {
     VELOX_CHECK_EQ(len, 1);
-    auto const& op1 = push_expr_to_tree(expr->inputs()[0]);
-    return tree.push(operation{unary_ops.at(name), op1});
+    auto const& op1 = pushExprToTree(expr->inputs()[0]);
+    return tree.push(Operation{unaryOps.at(name), op1});
   } else if (name == "between") {
     VELOX_CHECK_EQ(len, 3);
-    auto const& value = push_expr_to_tree(expr->inputs()[0]);
-    auto const& lower = push_expr_to_tree(expr->inputs()[1]);
-    auto const& upper = push_expr_to_tree(expr->inputs()[2]);
+    auto const& value = pushExprToTree(expr->inputs()[0]);
+    auto const& lower = pushExprToTree(expr->inputs()[1]);
+    auto const& upper = pushExprToTree(expr->inputs()[2]);
     // construct between(op2, op3) using >= and <=
-    auto const& ge_lower =
-        tree.push(operation{op::GREATER_EQUAL, value, lower});
-    auto const& le_upper = tree.push(operation{op::LESS_EQUAL, value, upper});
-    return tree.push(operation{op::NULL_LOGICAL_AND, ge_lower, le_upper});
+    auto const& geLower = tree.push(Operation{Op::GREATER_EQUAL, value, lower});
+    auto const& leUpper = tree.push(Operation{Op::LESS_EQUAL, value, upper});
+    return tree.push(Operation{Op::NULL_LOGICAL_AND, geLower, leUpper});
   } else if (name == "in") {
     // number of inputs is variable. >=2
     VELOX_CHECK_EQ(len, 2);
     // actually len is 2, second input is ARRAY
-    auto const& op1 = push_expr_to_tree(expr->inputs()[0]);
+    auto const& op1 = pushExprToTree(expr->inputs()[0]);
     auto c = dynamic_cast<ConstantExpr*>(expr->inputs()[1].get());
     VELOX_CHECK_NOT_NULL(c, "literal expression should be ConstantExpr");
     auto value = c->value();
@@ -386,15 +384,15 @@ cudf::ast::expression const& AstContext::push_expr_to_tree(
     auto literals = createLiteralsFromArray(value, scalars);
 
     // Create equality expressions for each literal and OR them together
-    std::vector<const cudf::ast::expression*> expr_vec;
+    std::vector<const cudf::ast::expression*> exprVec;
     for (auto& literal : literals) {
       auto const& opi = tree.push(std::move(literal));
-      auto const& logical_node = tree.push(operation{op::EQUAL, op1, opi});
-      expr_vec.push_back(&logical_node);
+      auto const& logicalNode = tree.push(Operation{Op::EQUAL, op1, opi});
+      exprVec.push_back(&logicalNode);
     }
 
     // Handle empty IN list case
-    if (expr_vec.empty()) {
+    if (exprVec.empty()) {
       // FAIL
       VELOX_FAIL("Empty IN list");
       // Return FALSE for empty IN list
@@ -404,23 +402,23 @@ cudf::ast::expression const& AstContext::push_expr_to_tree(
     }
 
     // OR all logical nodes
-    auto* result = expr_vec[0];
-    for (size_t i = 1; i < expr_vec.size(); i++) {
-      auto const& tree_node =
-          tree.push(operation{op::NULL_LOGICAL_OR, *result, *expr_vec[i]});
-      result = &tree_node;
+    auto* result = exprVec[0];
+    for (size_t i = 1; i < exprVec.size(); i++) {
+      auto const& treeNode =
+          tree.push(Operation{Op::NULL_LOGICAL_OR, *result, *exprVec[i]});
+      result = &treeNode;
     }
     return *result;
   } else if (name == "cast") {
     VELOX_CHECK_EQ(len, 1);
-    auto const& op1 = push_expr_to_tree(expr->inputs()[0]);
+    auto const& op1 = pushExprToTree(expr->inputs()[0]);
     if (expr->type()->kind() == TypeKind::INTEGER) {
       // No int32 cast in cudf ast
-      return tree.push(operation{op::CAST_TO_INT64, op1});
+      return tree.push(Operation{Op::CAST_TO_INT64, op1});
     } else if (expr->type()->kind() == TypeKind::BIGINT) {
-      return tree.push(operation{op::CAST_TO_INT64, op1});
+      return tree.push(Operation{Op::CAST_TO_INT64, op1});
     } else if (expr->type()->kind() == TypeKind::DOUBLE) {
-      return tree.push(operation{op::CAST_TO_FLOAT64, op1});
+      return tree.push(Operation{Op::CAST_TO_FLOAT64, op1});
     } else {
       VELOX_FAIL("Unsupported type for cast operation");
     }
@@ -432,13 +430,13 @@ cudf::ast::expression const& AstContext::push_expr_to_tree(
     auto c2 = dynamic_cast<ConstantExpr*>(expr->inputs()[2].get());
     if (c1 and c1->toString() == "1:BIGINT" and c2 and
         c2->toString() == "0:BIGINT") {
-      auto const& op1 = push_expr_to_tree(expr->inputs()[0]);
-      return tree.push(operation{op::CAST_TO_INT64, op1});
+      auto const& op1 = pushExprToTree(expr->inputs()[0]);
+      return tree.push(Operation{Op::CAST_TO_INT64, op1});
     } else if (c2 and c2->toString() == "0:DOUBLE") {
-      auto const& op1 = push_expr_to_tree(expr->inputs()[0]);
-      auto const& op1d = tree.push(operation{op::CAST_TO_FLOAT64, op1});
-      auto const& op2 = push_expr_to_tree(expr->inputs()[1]);
-      return tree.push(operation{op::MUL, op1d, op2});
+      auto const& op1 = pushExprToTree(expr->inputs()[0]);
+      auto const& op1d = tree.push(Operation{Op::CAST_TO_FLOAT64, op1});
+      auto const& op2 = pushExprToTree(expr->inputs()[1]);
+      return tree.push(Operation{Op::MUL, op1d, op2});
     } else {
       VELOX_NYI("Unsupported switch complex operation " + expr->toString());
     }
@@ -449,9 +447,9 @@ cudf::ast::expression const& AstContext::push_expr_to_tree(
         std::dynamic_pointer_cast<FieldReference>(expr->inputs()[0]);
     VELOX_CHECK_NOT_NULL(fieldExpr, "Expression is not a field");
 
-    auto const& col_ref = add_precompute_instruction(fieldExpr->name(), "year");
+    auto const& colRef = addPrecomputeInstruction(fieldExpr->name(), "year");
 
-    return tree.push(operation{op::CAST_TO_INT64, col_ref});
+    return tree.push(Operation{Op::CAST_TO_INT64, colRef});
   } else if (name == "length") {
     VELOX_CHECK_EQ(len, 1);
 
@@ -459,10 +457,9 @@ cudf::ast::expression const& AstContext::push_expr_to_tree(
         std::dynamic_pointer_cast<FieldReference>(expr->inputs()[0]);
     VELOX_CHECK_NOT_NULL(fieldExpr, "Expression is not a field");
 
-    auto const& col_ref =
-        add_precompute_instruction(fieldExpr->name(), "length");
+    auto const& colRef = addPrecomputeInstruction(fieldExpr->name(), "length");
 
-    return tree.push(operation{op::CAST_TO_INT64, col_ref});
+    return tree.push(Operation{Op::CAST_TO_INT64, colRef});
   } else if (name == "substr") {
     // Extract the start and length parameters from the substr function call
     // and create a precomputed column with the substring operation.
@@ -474,10 +471,10 @@ cudf::ast::expression const& AstContext::push_expr_to_tree(
 
     auto c1 = dynamic_cast<ConstantExpr*>(expr->inputs()[1].get());
     auto c2 = dynamic_cast<ConstantExpr*>(expr->inputs()[2].get());
-    std::string substr_expr =
+    std::string substrExpr =
         "substr " + c1->value()->toString(0) + " " + c2->value()->toString(0);
 
-    return add_precompute_instruction(fieldExpr->name(), substr_expr);
+    return addPrecomputeInstruction(fieldExpr->name(), substrExpr);
   } else if (name == "like") {
     VELOX_CHECK_EQ(len, 2);
 
@@ -490,17 +487,17 @@ cudf::ast::expression const& AstContext::push_expr_to_tree(
 
     createLiteral(literalExpr->value(), scalars);
 
-    std::string like_expr = "like " + std::to_string(scalars.size() - 1);
+    std::string likeExpr = "like " + std::to_string(scalars.size() - 1);
 
-    return add_precompute_instruction(fieldExpr->name(), like_expr);
+    return addPrecomputeInstruction(fieldExpr->name(), likeExpr);
   } else if (auto fieldExpr = std::dynamic_pointer_cast<FieldReference>(expr)) {
     // Refer to the appropriate side
-    for (size_t side_idx = 0; side_idx < inputRowSchema.size(); ++side_idx) {
-      auto& schema = inputRowSchema[side_idx];
+    for (size_t sideIdx = 0; sideIdx < inputRowSchema.size(); ++sideIdx) {
+      auto& schema = inputRowSchema[sideIdx];
       if (schema.get()->containsChild(name)) {
-        auto column_index = schema.get()->getChildIdx(name);
-        auto side = static_cast<cudf::ast::table_reference>(side_idx);
-        return tree.push(cudf::ast::column_reference(column_index, side));
+        auto columnIndex = schema.get()->getChildIdx(name);
+        auto side = static_cast<cudf::ast::table_reference>(sideIdx);
+        return tree.push(cudf::ast::column_reference(columnIndex, side));
       }
     }
     VELOX_FAIL("Field not found, " + name);
@@ -518,52 +515,52 @@ void addPrecomputedColumns(
   for (const auto& instruction : precompute_instructions) {
     auto [dependent_column_index, ins_name, new_column_index] = instruction;
     if (ins_name == "year") {
-      auto new_column = cudf::datetime::extract_datetime_component(
+      auto newColumn = cudf::datetime::extract_datetime_component(
           input_table_columns[dependent_column_index]->view(),
           cudf::datetime::datetime_component::YEAR,
           stream,
           cudf::get_current_device_resource_ref());
-      input_table_columns.emplace_back(std::move(new_column));
+      input_table_columns.emplace_back(std::move(newColumn));
     } else if (ins_name == "length") {
-      auto new_column = cudf::strings::count_characters(
+      auto newColumn = cudf::strings::count_characters(
           input_table_columns[dependent_column_index]->view(),
           stream,
           cudf::get_current_device_resource_ref());
-      input_table_columns.emplace_back(std::move(new_column));
+      input_table_columns.emplace_back(std::move(newColumn));
     } else if (ins_name.rfind("substr", 0) == 0) {
       std::istringstream iss(ins_name.substr(6));
-      int begin_value, length;
-      iss >> begin_value >> length;
-      auto begin_scalar = cudf::numeric_scalar<cudf::size_type>(
-          begin_value - 1,
+      int beginValue, length;
+      iss >> beginValue >> length;
+      auto beginScalar = cudf::numeric_scalar<cudf::size_type>(
+          beginValue - 1,
           true,
           stream,
           cudf::get_current_device_resource_ref());
-      auto end_scalar = cudf::numeric_scalar<cudf::size_type>(
-          begin_value - 1 + length,
+      auto endScalar = cudf::numeric_scalar<cudf::size_type>(
+          beginValue - 1 + length,
           true,
           stream,
           cudf::get_current_device_resource_ref());
-      auto step_scalar = cudf::numeric_scalar<cudf::size_type>(
+      auto stepScalar = cudf::numeric_scalar<cudf::size_type>(
           1, true, stream, cudf::get_current_device_resource_ref());
-      auto new_column = cudf::strings::slice_strings(
+      auto newColumn = cudf::strings::slice_strings(
           input_table_columns[dependent_column_index]->view(),
-          begin_scalar,
-          end_scalar,
-          step_scalar,
+          beginScalar,
+          endScalar,
+          stepScalar,
           stream,
           cudf::get_current_device_resource_ref());
-      input_table_columns.emplace_back(std::move(new_column));
+      input_table_columns.emplace_back(std::move(newColumn));
     } else if (ins_name.rfind("like", 0) == 0) {
-      auto scalar_index = std::stoi(ins_name.substr(4));
-      auto new_column = cudf::strings::like(
+      auto scalarIndex = std::stoi(ins_name.substr(4));
+      auto newColumn = cudf::strings::like(
           input_table_columns[dependent_column_index]->view(),
-          *static_cast<cudf::string_scalar*>(scalars[scalar_index].get()),
+          *static_cast<cudf::string_scalar*>(scalars[scalarIndex].get()),
           cudf::string_scalar(
               "", true, stream, cudf::get_current_device_resource_ref()),
           stream,
           cudf::get_current_device_resource_ref());
-      input_table_columns.emplace_back(std::move(new_column));
+      input_table_columns.emplace_back(std::move(newColumn));
     } else {
       VELOX_FAIL("Unsupported precompute operation " + ins_name);
     }
@@ -576,8 +573,8 @@ ExpressionEvaluator::ExpressionEvaluator(
   exprAst_.reserve(exprs.size());
   for (const auto& expr : exprs) {
     cudf::ast::tree tree;
-    create_ast_tree(
-        expr, tree, scalars_, inputRowSchema, precompute_instructions_);
+    createAstTree(
+        expr, tree, scalars_, inputRowSchema, precomputeInstructions_);
     exprAst_.emplace_back(std::move(tree));
   }
 }
@@ -585,41 +582,39 @@ ExpressionEvaluator::ExpressionEvaluator(
 void ExpressionEvaluator::close() {
   exprAst_.clear();
   scalars_.clear();
-  precompute_instructions_.clear();
+  precomputeInstructions_.clear();
 }
 
 std::vector<std::unique_ptr<cudf::column>> ExpressionEvaluator::compute(
-    std::vector<std::unique_ptr<cudf::column>>& input_table_columns,
+    std::vector<std::unique_ptr<cudf::column>>& inputTableColumns,
     rmm::cuda_stream_view stream,
     rmm::device_async_resource_ref mr) {
-  auto num_columns = input_table_columns.size();
+  auto numColumns = inputTableColumns.size();
   addPrecomputedColumns(
-      input_table_columns, precompute_instructions_, scalars_, stream);
-  auto ast_input_table =
-      std::make_unique<cudf::table>(std::move(input_table_columns));
-  auto ast_input_table_view = ast_input_table->view();
+      inputTableColumns, precomputeInstructions_, scalars_, stream);
+  auto astInputTable =
+      std::make_unique<cudf::table>(std::move(inputTableColumns));
+  auto astInputTableView = astInputTable->view();
   std::vector<std::unique_ptr<cudf::column>> columns;
   for (auto& tree : exprAst_) {
-    if (auto col_ref_ptr =
+    if (auto colRefPtr =
             dynamic_cast<cudf::ast::column_reference const*>(&tree.back())) {
       auto col = std::make_unique<cudf::column>(
-          ast_input_table_view.column(col_ref_ptr->get_column_index()),
-          stream,
-          mr);
+          astInputTableView.column(colRefPtr->get_column_index()), stream, mr);
       columns.emplace_back(std::move(col));
     } else {
       auto col =
-          cudf::compute_column(ast_input_table_view, tree.back(), stream, mr);
+          cudf::compute_column(astInputTableView, tree.back(), stream, mr);
       columns.emplace_back(std::move(col));
     }
   }
-  input_table_columns = ast_input_table->release();
-  input_table_columns.resize(num_columns);
+  inputTableColumns = astInputTable->release();
+  inputTableColumns.resize(numColumns);
   return columns;
 }
 
-bool ExpressionEvaluator::can_be_evaluated(
+bool ExpressionEvaluator::canBeEvaluated(
     const std::vector<std::shared_ptr<velox::exec::Expr>>& exprs) {
-  return std::all_of(exprs.begin(), exprs.end(), detail::can_be_evaluated);
+  return std::all_of(exprs.begin(), exprs.end(), detail::canBeEvaluated);
 }
 } // namespace facebook::velox::cudf_velox

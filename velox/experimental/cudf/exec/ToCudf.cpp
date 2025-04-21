@@ -101,7 +101,7 @@ bool CompileState::compile() {
   auto isFilterProjectSupported = [](const exec::Operator* op) {
     if (auto filterProjectOp = dynamic_cast<const exec::FilterProject*>(op)) {
       auto info = filterProjectOp->exprsAndProjection();
-      return ExpressionEvaluator::can_be_evaluated(info.exprs->exprs());
+      return ExpressionEvaluator::canBeEvaluated(info.exprs->exprs());
     }
     return false;
   };
