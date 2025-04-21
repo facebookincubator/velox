@@ -148,6 +148,7 @@ folly::dynamic getTaskMetadata(
     const std::string& taskMetaFilePath,
     const std::shared_ptr<filesystems::FileSystem>& fs) {
   try {
+    VELOX_CHECK_NOT_NULL(fs);
     const auto file = fs->openFileForRead(taskMetaFilePath);
     VELOX_CHECK_NOT_NULL(file);
     const auto taskMeta = file->pread(0, file->size());
@@ -156,31 +157,6 @@ folly::dynamic getTaskMetadata(
   } catch (const std::exception& e) {
     VELOX_FAIL(
         "Failed to get the query metadata from '{}' with error: {}",
-        taskMetaFilePath,
-        e.what());
-  }
-}
-
-std::string getNodeName(
-    const std::string& nodeId,
-    const std::string& taskMetaFilePath,
-    const std::shared_ptr<filesystems::FileSystem>& fs,
-    memory::MemoryPool* pool) {
-  try {
-    const auto file = fs->openFileForRead(taskMetaFilePath);
-    VELOX_CHECK_NOT_NULL(file);
-    const auto taskMeta = file->pread(0, file->size());
-    VELOX_USER_CHECK(!taskMeta.empty());
-    folly::dynamic metaObj = folly::parseJson(taskMeta);
-    const auto planFragment = ISerializable::deserialize<core::PlanNode>(
-        metaObj[TraceTraits::kPlanNodeKey], pool);
-    const auto* traceNode = core::PlanNode::findFirstNode(
-        planFragment.get(),
-        [&nodeId](const core::PlanNode* node) { return node->id() == nodeId; });
-    return std::string(traceNode->name());
-  } catch (const std::exception& e) {
-    VELOX_FAIL(
-        "Failed to get the trace node name from '{}' with error: {}",
         taskMetaFilePath,
         e.what());
   }

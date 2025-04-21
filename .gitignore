@@ -83,6 +83,7 @@ build/
 _build/
 .cache/
 .ccache/
+ccache/
 #*.m4
 *.o
 *.lo
@@ -325,6 +326,8 @@ src/amalgamation/
 velox/docs/sphinx/source/README_generated_*
 velox/docs/bindings/python/_generate/*
 scripts/bm-report/report.html
+dist/
+wheelhouse/
 
 # Custom ignores
 aws-sdk-cpp

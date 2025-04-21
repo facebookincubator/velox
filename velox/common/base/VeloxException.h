@@ -109,6 +109,9 @@ inline constexpr auto kNoCacheSpace = "NO_CACHE_SPACE"_fs;
 /// An error raised when spill bytes exceeds limits.
 inline constexpr auto kSpillLimitExceeded = "SPILL_LIMIT_EXCEEDED"_fs;
 
+/// An error raised to indicate any general failure happened during spilling.
+inline constexpr auto kGenericSpillFailure = "GENERIC_SPILL_FAILURE"_fs;
+
 /// An error raised when trace bytes exceeds limits.
 inline constexpr auto kTraceLimitExceeded = "TRACE_LIMIT_EXCEEDED"_fs;
 
@@ -122,8 +125,8 @@ inline constexpr auto kFileNotFound = "FILE_NOT_FOUND"_fs;
 inline constexpr auto kUnknown = "UNKNOWN"_fs;
 
 /// VeloxRuntimeErrors due to unsupported input values such as unicode input to
-/// cast-varchar-to-integer and timestamps beyond the year 2037 to datetime
-/// functions. This kind of errors is allowed in expression fuzzer.
+/// cast-varchar-to-integer. This kind of errors is allowed in expression
+/// fuzzer.
 inline constexpr auto kUnsupportedInputUncatchable =
     "UNSUPPORTED_INPUT_UNCATCHABLE"_fs;
 } // namespace error_code

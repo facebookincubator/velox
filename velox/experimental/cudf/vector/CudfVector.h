@@ -15,7 +15,9 @@
  */
 #pragma once
 
+#include "velox/common/memory/MemoryPool.h"
 #include "velox/vector/ComplexVector.h"
+#include "velox/vector/TypeAliases.h"
 
 #include <cudf/table/table.hpp>
 

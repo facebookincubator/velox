@@ -15,9 +15,15 @@
  */
 
 #include "velox/experimental/cudf/exec/CudfConversion.h"
+#include "velox/experimental/cudf/exec/NvtxHelper.h"
 #include "velox/experimental/cudf/exec/ToCudf.h"
 #include "velox/experimental/cudf/exec/Utilities.h"
 #include "velox/experimental/cudf/exec/VeloxCudfInterop.h"
+#include "velox/experimental/cudf/vector/CudfVector.h"
+
+#include "velox/exec/Driver.h"
+#include "velox/exec/Operator.h"
+#include "velox/vector/ComplexVector.h"
 
 #include <cudf/table/table.hpp>
 #include <cudf/utilities/default_stream.hpp>
@@ -77,7 +83,7 @@ CudfFromVelox::CudfFromVelox(
 
 void CudfFromVelox::addInput(RowVectorPtr input) {
   VELOX_NVTX_OPERATOR_FUNC_RANGE();
-  if (input and input->size() > 0) {
+  if (input->size() > 0) {
     // Materialize lazy vectors
     for (auto& child : input->children()) {
       child->loadedVector();
@@ -139,13 +145,6 @@ RowVectorPtr CudfFromVelox::getOutput() {
 
   VELOX_CHECK_NOT_NULL(tbl);
 
-  if (cudfDebugEnabled()) {
-    std::cout << "CudfFromVelox table number of columns: " << tbl->num_columns()
-              << std::endl;
-    std::cout << "CudfFromVelox table number of rows: " << tbl->num_rows()
-              << std::endl;
-  }
-
   // Return a CudfVector that owns the cudf table
   const auto size = tbl->num_rows();
   return std::make_shared<CudfVector>(
@@ -195,12 +194,6 @@ RowVectorPtr CudfToVelox::getOutput() {
   inputs_.pop_front();
 
   VELOX_CHECK_NOT_NULL(tbl);
-  if (cudfDebugEnabled()) {
-    std::cout << "CudfToVelox table number of columns: " << tbl->num_columns()
-              << std::endl;
-    std::cout << "CudfToVelox table number of rows: " << tbl->num_rows()
-              << std::endl;
-  }
   if (tbl->num_rows() == 0) {
     return nullptr;
   }

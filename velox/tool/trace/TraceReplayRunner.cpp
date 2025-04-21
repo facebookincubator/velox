@@ -99,6 +99,10 @@ DEFINE_uint64(
     0,
     "Specify the query memory capacity limit in GB. If it is zero, then there is no limit.");
 DEFINE_bool(copy_results, false, "Copy the replaying results.");
+DEFINE_string(
+    function_prefix,
+    "",
+    "Prefix for the scalar and aggregate functions.");
 
 namespace facebook::velox::tool::trace {
 namespace {
@@ -123,11 +127,9 @@ void printTaskMetadata(
     std::ostringstream& oss) {
   auto taskMetaReader = std::make_unique<exec::trace::TaskTraceMetadataReader>(
       taskTraceDir, pool);
-  std::unordered_map<std::string, std::string> queryConfigs;
-  std::unordered_map<std::string, std::unordered_map<std::string, std::string>>
-      connectorProperties;
-  core::PlanNodePtr queryPlan;
-  taskMetaReader->read(queryConfigs, connectorProperties, queryPlan);
+  const auto queryConfigs = taskMetaReader->queryConfigs();
+  const auto connectorProperties = taskMetaReader->connectorProperties();
+  const auto queryPlan = taskMetaReader->queryPlan();
 
   oss << "\n++++++Query configs++++++\n";
   for (const auto& queryConfigEntry : queryConfigs) {
@@ -285,27 +287,26 @@ void TraceReplayRunner::init() {
   connector::hive::LocationHandle::registerSerDe();
   connector::hive::HiveColumnHandle::registerSerDe();
   connector::hive::HiveInsertTableHandle::registerSerDe();
+  connector::hive::HiveInsertFileNameGenerator::registerSerDe();
   connector::hive::HiveConnectorSplit::registerSerDe();
   connector::hive::registerHivePartitionFunctionSerDe();
   connector::hive::HiveBucketProperty::registerSerDe();
 
-  functions::prestosql::registerAllScalarFunctions();
-  aggregate::prestosql::registerAllAggregateFunctions();
+  functions::prestosql::registerAllScalarFunctions(FLAGS_function_prefix);
+  aggregate::prestosql::registerAllAggregateFunctions(FLAGS_function_prefix);
   parse::registerTypeResolver();
 
   if (!facebook::velox::connector::hasConnectorFactory("hive")) {
     connector::registerConnectorFactory(
         std::make_shared<connector::hive::HiveConnectorFactory>());
-    const auto hiveConnector =
-        connector::getConnectorFactory("hive")->newConnector(
-            "test-hive",
-            std::make_shared<config::ConfigBase>(
-                std::unordered_map<std::string, std::string>()),
-            ioExecutor_.get());
-    connector::registerConnector(hiveConnector);
   }
 
   fs_ = filesystems::getFileSystem(FLAGS_root_dir, nullptr);
+  const auto taskTraceDir = exec::trace::getTaskTraceDirectory(
+      FLAGS_root_dir, FLAGS_query_id, FLAGS_task_id);
+  taskTraceMetadataReader_ =
+      std::make_unique<exec::trace::TaskTraceMetadataReader>(
+          taskTraceDir, memory::MemoryManager::getInstance()->tracePool());
 }
 
 std::unique_ptr<tool::trace::OperatorReplayerBase>
@@ -313,11 +314,7 @@ TraceReplayRunner::createReplayer() const {
   std::unique_ptr<tool::trace::OperatorReplayerBase> replayer;
   const auto taskTraceDir = exec::trace::getTaskTraceDirectory(
       FLAGS_root_dir, FLAGS_query_id, FLAGS_task_id);
-  const auto traceNodeName = exec::trace::getNodeName(
-      FLAGS_node_id,
-      exec::trace::getTaskTraceMetaFilePath(taskTraceDir),
-      fs_,
-      memory::MemoryManager::getInstance()->tracePool());
+  const auto traceNodeName = taskTraceMetadataReader_->nodeName(FLAGS_node_id);
   const auto queryCapacityBytes = (1ULL * FLAGS_query_memory_capacity_mb) << 20;
   if (traceNodeName == "TableWrite") {
     VELOX_USER_CHECK(
@@ -355,6 +352,18 @@ TraceReplayRunner::createReplayer() const {
         queryCapacityBytes,
         cpuExecutor_.get());
   } else if (traceNodeName == "TableScan") {
+    const auto connectorId =
+        taskTraceMetadataReader_->connectorId(FLAGS_node_id);
+    if (const auto& collectors = connector::getAllConnectors();
+        collectors.find(connectorId) == collectors.end()) {
+      const auto hiveConnector =
+          connector::getConnectorFactory("hive")->newConnector(
+              connectorId,
+              std::make_shared<config::ConfigBase>(
+                  std::unordered_map<std::string, std::string>()),
+              ioExecutor_.get());
+      connector::registerConnector(hiveConnector);
+    }
     replayer = std::make_unique<tool::trace::TableScanReplayer>(
         FLAGS_root_dir,
         FLAGS_query_id,

@@ -188,9 +188,22 @@ TEST_F(JsonExtractScalarTest, invalidPath) {
   VELOX_ASSERT_THROW(
       jsonExtractScalar(R"({"k1":"v1"})", "$.k1."), "Invalid JSON path");
   VELOX_ASSERT_THROW(
-      jsonExtractScalar(R"({"k1":"v1"})", "$.k1]"), "Invalid JSON path");
+      jsonExtractScalar(R"({"k1":"v1"})", "$.k1["), "Invalid JSON path");
   VELOX_ASSERT_THROW(
-      jsonExtractScalar(R"({"k1":"v1)", "$.k1]"), "Invalid JSON path");
+      jsonExtractScalar(R"({"k1":"v1)", "$.k1["), "Invalid JSON path");
+}
+
+TEST_F(JsonExtractScalarTest, invalidJson) {
+  // Verify that we return null on invalid JSON regardless of whether the
+  // invalid section is after the target path.
+  EXPECT_EQ(jsonExtractScalar(R"({"a": "b", "c": "d})", "$.a"), std::nullopt);
+  EXPECT_EQ(jsonExtractScalar(R"([["a"], ["b]])", "$[0][0]"), std::nullopt);
+}
+
+TEST_F(JsonExtractScalarTest, escapedString) {
+  // Verify the the returned string is unescaped.
+  EXPECT_EQ(
+      jsonExtractScalar(R"({"x": {"a" : 1, "b" : "b\/c"} })", "$.x.b"), "b/c");
 }
 
 // simdjson, like Presto java, returns the large number as-is as a string,

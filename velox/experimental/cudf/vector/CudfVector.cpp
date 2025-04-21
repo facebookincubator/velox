@@ -16,6 +16,10 @@
 
 #include "velox/experimental/cudf/vector/CudfVector.h"
 
+#include "velox/buffer/Buffer.h"
+#include "velox/common/memory/MemoryPool.h"
+#include "velox/vector/TypeAliases.h"
+
 #include <cudf/column/column.hpp>
 #include <cudf/table/table.hpp>
 

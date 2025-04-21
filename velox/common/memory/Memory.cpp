@@ -94,9 +94,9 @@ MemoryManager::MemoryManager(const MemoryManagerOptions& options)
       arbitrator_(createArbitrator(options)),
       alignment_(std::max(MemoryAllocator::kMinAlignment, options.alignment)),
       checkUsageLeak_(options.checkUsageLeak),
-      debugEnabled_(options.debugEnabled),
       coreOnAllocationFailureEnabled_(options.coreOnAllocationFailureEnabled),
       disableMemoryPoolTracking_(options.disableMemoryPoolTracking),
+      getPreferredSize_(options.getPreferredSize),
       poolDestructionCb_([&](MemoryPool* pool) { dropPool(pool); }),
       sysRoot_{std::make_shared<MemoryPoolImpl>(
           this,
@@ -110,9 +110,9 @@ MemoryManager::MemoryManager(const MemoryManagerOptions& options)
               .alignment = alignment_,
               .maxCapacity = kMaxMemory,
               .trackUsage = options.trackDefaultUsage,
-              .debugEnabled = options.debugEnabled,
               .coreOnAllocationFailureEnabled =
-                  options.coreOnAllocationFailureEnabled})},
+                  options.coreOnAllocationFailureEnabled,
+              .getPreferredSize = getPreferredSize_})},
       spillPool_{addLeafPool("__sys_spilling__")},
       cachePool_{addLeafPool("__sys_caching__")},
       tracePool_{addLeafPool("__sys_tracing__")},
@@ -234,7 +234,8 @@ std::shared_ptr<MemoryPoolImpl> MemoryManager::createRootPool(
 std::shared_ptr<MemoryPool> MemoryManager::addRootPool(
     const std::string& name,
     int64_t maxCapacity,
-    std::unique_ptr<MemoryReclaimer> reclaimer) {
+    std::unique_ptr<MemoryReclaimer> reclaimer,
+    const std::optional<MemoryPool::DebugOptions>& poolDebugOpts) {
   std::string poolName = name;
   if (poolName.empty()) {
     static std::atomic<int64_t> poolId{0};
@@ -245,8 +246,9 @@ std::shared_ptr<MemoryPool> MemoryManager::addRootPool(
   options.alignment = alignment_;
   options.maxCapacity = maxCapacity;
   options.trackUsage = true;
-  options.debugEnabled = debugEnabled_;
   options.coreOnAllocationFailureEnabled = coreOnAllocationFailureEnabled_;
+  options.getPreferredSize = getPreferredSize_;
+  options.debugOptions = poolDebugOpts;
 
   auto pool = createRootPool(poolName, reclaimer, options);
   if (!disableMemoryPoolTracking_) {
@@ -256,7 +258,7 @@ std::shared_ptr<MemoryPool> MemoryManager::addRootPool(
         VELOX_FAIL("Duplicate root pool name found: {}", poolName);
       }
       pools_.emplace(poolName, pool);
-    } catch (const VeloxRuntimeError& ex) {
+    } catch (const VeloxRuntimeError&) {
       arbitrator_->removePool(pool.get());
       throw;
     }

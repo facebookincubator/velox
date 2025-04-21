@@ -79,21 +79,21 @@ constexpr std::string_view extractClassAndFunction(
   return prettyFunction.substr(prevColonPos + 2, parenPos - prevColonPos - 2);
 }
 
-#define VELOX_NVTX_OPERATOR_FUNC_RANGE()                                       \
-  static_assert(                                                               \
-      std::is_base_of<NvtxHelper, std::remove_pointer<decltype(this)>::type>:: \
-          value,                                                               \
-      "VELOX_NVTX_OPERATOR_FUNC_RANGE can only be used"                        \
-      " in Operators derived from NvtxHelper");                                \
-  static std::string const nvtx3_func_name__{                                  \
-      std::string(extractClassAndFunction(__PRETTY_FUNCTION__))};              \
-  std::string const nvtx3_func_extra_info__{                                   \
-      nvtx3_func_name__ + " " + this->extra_info_.value_or("")};               \
-  ::nvtx3::event_attributes const nvtx3_func_attr__{                    \
+#define VELOX_NVTX_OPERATOR_FUNC_RANGE()                                         \
+  static_assert(                                                                 \
+      std::is_base_of<NvtxHelper, std::remove_pointer<decltype(this)>::type>::   \
+          value,                                                                 \
+      "VELOX_NVTX_OPERATOR_FUNC_RANGE can only be used"                          \
+      " in Operators derived from NvtxHelper");                                  \
+  static std::string const nvtx3_func_name__{                                    \
+      std::string(extractClassAndFunction(__PRETTY_FUNCTION__))};                \
+  std::string const nvtx3_func_extra_info__{                                     \
+      nvtx3_func_name__ + " " + this->extra_info_.value_or("")};                 \
+  ::nvtx3::event_attributes const nvtx3_func_attr__{                           \
       this->payload_.has_value() ?                                             \
-          ::nvtx3::event_attributes{nvtx3_func_extra_info__, this->color_,           \
+          ::nvtx3::event_attributes{nvtx3_func_extra_info__, this->color_,     \
                                    nvtx3::payload{this->payload_.value()}} :   \
-          ::nvtx3::event_attributes{nvtx3_func_extra_info__, this->color_}};      \
+          ::nvtx3::event_attributes{nvtx3_func_extra_info__, this->color_}}; \
   ::nvtx3::scoped_range_in<VeloxDomain> const nvtx3_range__{nvtx3_func_attr__};
 
 #define VELOX_NVTX_PRETTY_FUNC_RANGE()                                         \

@@ -442,6 +442,12 @@ TEST_F(BinaryFunctionsTest, fromBase64) {
   VELOX_ASSERT_USER_THROW(
       fromBase64("YQ==="),
       "Base64::decode() - invalid input string: string length is not a multiple of 4.");
+  VELOX_ASSERT_USER_THROW(
+      fromBase64("aG;"),
+      "decode() - invalid input string: invalid character ';'");
+  VELOX_ASSERT_USER_THROW(
+      fromBase64("YQ?="),
+      "decode() - invalid input string: invalid character '?'");
 
   // Check encoded strings without padding
   EXPECT_EQ("a", fromBase64("YQ"));
@@ -831,6 +837,19 @@ TEST_F(BinaryFunctionsTest, lpad) {
   VELOX_ASSERT_USER_THROW(
       lpad("2312", -1, "4524"), "pad size must be in the range [0..1048576)");
   VELOX_ASSERT_USER_THROW(lpad("2312", 1, ""), "padString must not be empty");
+}
+
+TEST_F(BinaryFunctionsTest, murmur3_x64_128) {
+  const auto murmur3_x64_128 = [&](std::optional<std::string> arg) {
+    return evaluateOnce<std::string>(
+        "murmur3_x64_128(c0)", VARBINARY(), std::move(arg));
+  };
+
+  EXPECT_EQ(murmur3_x64_128(""), hexToDec("00000000000000000000000000000000"));
+  EXPECT_EQ(
+      murmur3_x64_128("hashme"), hexToDec("93192FE805BE23041C8318F67EC4F2BC"));
+
+  EXPECT_EQ(murmur3_x64_128(std::nullopt), std::nullopt);
 }
 
 } // namespace
