@@ -1,11 +1,11 @@
-#include "AesEncryption.h"
+#include "velox/dwio/parquet/crypto/AesEncryption.h"
 #include <openssl/aes.h>
 #include <openssl/evp.h>
 #include <openssl/rand.h>
 #include <cstring>
 #include <limits>
 #include <sstream>
-#include "Exception.h"
+#include "velox/dwio/parquet/crypto/Exception.h"
 
 namespace facebook::velox::parquet {
 

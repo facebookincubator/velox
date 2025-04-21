@@ -1,4 +1,4 @@
-#include "Cache.h"
+#include "velox/dwio/parquet/crypto/Cache.h"
 
 namespace facebook::velox::parquet {
 

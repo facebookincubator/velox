@@ -1,4 +1,4 @@
-#include "ColumnPath.h"
+#include "velox/dwio/parquet/crypto/ColumnPath.h"
 #include "folly/String.h"
 
 namespace facebook::velox::parquet {

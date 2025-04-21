@@ -1,6 +1,5 @@
 #include "FileDecryptionProperties.h"
-#include "common/base/Exceptions.h"
-#include "velox/dwio/parquet/crypto/AesEncryption.h"
+#include "velox/common/base/Exceptions.h"
 
 namespace facebook::velox::parquet {
 

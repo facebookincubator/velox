@@ -15,31 +15,17 @@
 velox_add_library(
   velox_dwio_parquet_crypto
   CryptoFactory.cpp
-  CryptoFactory.h
-  Exception.h
-  KeyRetriever.h
   InMemoryKMSClient.cpp
-  InMemoryKMSClient.h
-  Utils.h
-  EncryptionKey.h
   KeyMetadataAssembler.cpp
-  KeyMetadataAssembler.h
   Cache.cpp
-  Cache.h
   AesEncryption.cpp
-  AesEncryption.h
   FileDecryptionProperties.cpp
-  FileDecryptionProperties.h
   ColumnPath.cpp
-  ColumnPath.h
   FileDecryptor.cpp
-  FileDecryptor.h
   KMSClient.cpp
-  KMSClient.h
 )
 
 velox_link_libraries(
   velox_dwio_parquet_crypto
-  CURL::libcurl
   velox_dwio_parquet_thrift
 )

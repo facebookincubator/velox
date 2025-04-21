@@ -7,7 +7,7 @@
 #include <string>
 #include <optional>
 #include <thread>
-#include "EncryptionKey.h"
+#include "velox/dwio/parquet/crypto/EncryptionKey.h"
 
 namespace facebook::velox::parquet {
 
