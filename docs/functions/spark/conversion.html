@@ -121,6 +121,21 @@ It is allowed when the truncated result exceeds the range of result type.</p>
 </pre></div>
 </div>
 </section>
+<section id="from-timestamp">
+<h3>From timestamp<a class="headerlink" href="#from-timestamp" title="Link to this heading">¶</a></h3>
+<p>Casting timestamp as integral types returns the number of seconds by converting timestamp as microseconds, dividing by the number of microseconds in a second, and then rounding down to the nearest second since the epoch (1970-01-01 00:00:00 UTC).</p>
+<p>Valid examples</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="n">cast</span><span class="p">(</span><span class="s1">&#39;1970-01-01 00:00:00&#39;</span> <span class="k">as</span> <span class="n">timestamp</span><span class="p">)</span> <span class="k">as</span> <span class="n">bigint</span><span class="p">);</span> <span class="o">--</span> <span class="mi">0</span>
+<span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="n">cast</span><span class="p">(</span><span class="s1">&#39;1970-01-01 00:00:00&#39;</span> <span class="k">as</span> <span class="n">timestamp</span><span class="p">)</span> <span class="k">as</span> <span class="n">smallint</span><span class="p">);</span> <span class="o">--</span> <span class="mi">0</span>
+<span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="n">cast</span><span class="p">(</span><span class="s1">&#39;1970-01-01 00:00:00&#39;</span> <span class="k">as</span> <span class="n">timestamp</span><span class="p">)</span> <span class="k">as</span> <span class="n">tinyint</span><span class="p">);</span> <span class="o">--</span> <span class="mi">0</span>
+<span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="n">cast</span><span class="p">(</span><span class="s1">&#39;2000-01-01 12:21:56&#39;</span> <span class="k">as</span> <span class="n">timestamp</span><span class="p">)</span> <span class="k">as</span> <span class="n">bigint</span><span class="p">);</span> <span class="o">--</span> <span class="mi">946684916</span>
+<span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="n">cast</span><span class="p">(</span><span class="s1">&#39;2025-02-25 08:00:26.88&#39;</span> <span class="k">as</span> <span class="n">timestamp</span><span class="p">)</span> <span class="k">as</span> <span class="n">bigint</span><span class="p">);</span> <span class="o">--</span> <span class="mi">1740470426</span>
+<span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="n">cast</span><span class="p">(</span><span class="s1">&#39;2025-02-25 08:00:26.88&#39;</span> <span class="k">as</span> <span class="n">timestamp</span><span class="p">)</span> <span class="k">as</span> <span class="n">integer</span><span class="p">);</span> <span class="o">--</span> <span class="mi">1740470426</span>
+<span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="n">cast</span><span class="p">(</span><span class="s1">&#39;2025-02-25 08:00:26.88&#39;</span> <span class="k">as</span> <span class="n">timestamp</span><span class="p">)</span> <span class="k">as</span> <span class="n">smallint</span><span class="p">);</span> <span class="o">--</span> <span class="mi">30874</span>
+<span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="n">cast</span><span class="p">(</span><span class="s1">&#39;2025-02-25 08:00:26.88&#39;</span> <span class="k">as</span> <span class="n">timestamp</span><span class="p">)</span> <span class="k">as</span> <span class="n">tinyint</span><span class="p">);</span> <span class="o">--</span> <span class="o">-</span><span class="mi">102</span>
+</pre></div>
+</div>
+</section>
 </section>
 <section id="cast-to-boolean">
 <h2>Cast to Boolean<a class="headerlink" href="#cast-to-boolean" title="Link to this heading">¶</a></h2>
@@ -155,8 +170,8 @@ Casting from other strings to boolean throws.</p>
 </section>
 <section id="cast-to-string">
 <h2>Cast to String<a class="headerlink" href="#cast-to-string" title="Link to this heading">¶</a></h2>
-<section id="from-timestamp">
-<h3>From TIMESTAMP<a class="headerlink" href="#from-timestamp" title="Link to this heading">¶</a></h3>
+<section id="id1">
+<h3>From TIMESTAMP<a class="headerlink" href="#id1" title="Link to this heading">¶</a></h3>
 <p>Casting a timestamp to a string returns ISO 8601 format with space as separator between date and time,
 and the year part is padded with zeros to 4 characters.
 The conversion precision is microsecond, and trailing zeros are not appended.
@@ -175,8 +190,8 @@ When the year exceeds 9999, a positive sign is added.</p>
 </section>
 <section id="cast-to-date">
 <h2>Cast to Date<a class="headerlink" href="#cast-to-date" title="Link to this heading">¶</a></h2>
-<section id="id1">
-<h3>From strings<a class="headerlink" href="#id1" title="Link to this heading">¶</a></h3>
+<section id="id2">
+<h3>From strings<a class="headerlink" href="#id2" title="Link to this heading">¶</a></h3>
 <p>All Spark supported patterns are allowed:</p>
 <blockquote>
 <div><ul class="simple">
@@ -217,8 +232,8 @@ Casting from invalid input values throws.</p>
 </section>
 <section id="cast-to-decimal">
 <h2>Cast to Decimal<a class="headerlink" href="#cast-to-decimal" title="Link to this heading">¶</a></h2>
-<section id="id2">
-<h3>From varchar<a class="headerlink" href="#id2" title="Link to this heading">¶</a></h3>
+<section id="id3">
+<h3>From varchar<a class="headerlink" href="#id3" title="Link to this heading">¶</a></h3>
 <p>Casting varchar to a decimal of given precision and scale is allowed.
 The behavior is similar with Presto except Spark allows leading and trailing white-spaces in input varchars.</p>
 <p>Valid example</p>
@@ -234,8 +249,8 @@ The behavior is similar with Presto except Spark allows leading and trailing whi
 </section>
 <section id="cast-to-varbinary">
 <h2>Cast to Varbinary<a class="headerlink" href="#cast-to-varbinary" title="Link to this heading">¶</a></h2>
-<section id="id3">
-<h3>From integral types<a class="headerlink" href="#id3" title="Link to this heading">¶</a></h3>
+<section id="id4">
+<h3>From integral types<a class="headerlink" href="#id4" title="Link to this heading">¶</a></h3>
 <p>Casting integral value to varbinary type is allowed.
 Bytes of input value are converted into an array of bytes in little-endian order.
 Supported types are tinyint, smallint, integer and bigint.</p>
@@ -250,8 +265,8 @@ Supported types are tinyint, smallint, integer and bigint.</p>
 </section>
 <section id="cast-to-timestamp">
 <h2>Cast to Timestamp<a class="headerlink" href="#cast-to-timestamp" title="Link to this heading">¶</a></h2>
-<section id="id4">
-<h3>From integral types<a class="headerlink" href="#id4" title="Link to this heading">¶</a></h3>
+<section id="id5">
+<h3>From integral types<a class="headerlink" href="#id5" title="Link to this heading">¶</a></h3>
 <p>Casting integral value to timestamp type is allowed.
 The input value is treated as the number of seconds since the epoch (1970-01-01 00:00:00 UTC).
 Supported types are tinyint, smallint, integer and bigint.</p>
@@ -263,8 +278,8 @@ Supported types are tinyint, smallint, integer and bigint.</p>
 </pre></div>
 </div>
 </section>
-<section id="id5">
-<h3>From floating-point types<a class="headerlink" href="#id5" title="Link to this heading">¶</a></h3>
+<section id="id6">
+<h3>From floating-point types<a class="headerlink" href="#id6" title="Link to this heading">¶</a></h3>
 <p>Casting from floating-point input to timestamp type is allowed.
 The input value is treated as the number of seconds since the epoch (1970-01-01 00:00:00 UTC) and converted to microseconds by truncating the fractional part.</p>
 <p>Valid examples</p>
@@ -298,6 +313,7 @@ The input value is treated as the number of seconds since the epoch (1970-01-01 
 <li><a class="reference internal" href="#from-floating-point-types">From floating-point types</a></li>
 <li><a class="reference internal" href="#from-strings">From strings</a></li>
 <li><a class="reference internal" href="#from-decimal">From decimal</a></li>
+<li><a class="reference internal" href="#from-timestamp">From timestamp</a></li>
 </ul>
 </li>
 <li><a class="reference internal" href="#cast-to-boolean">Cast to Boolean</a><ul>
@@ -305,24 +321,24 @@ The input value is treated as the number of seconds since the epoch (1970-01-01 
 </ul>
 </li>
 <li><a class="reference internal" href="#cast-to-string">Cast to String</a><ul>
-<li><a class="reference internal" href="#from-timestamp">From TIMESTAMP</a></li>
+<li><a class="reference internal" href="#id1">From TIMESTAMP</a></li>
 </ul>
 </li>
 <li><a class="reference internal" href="#cast-to-date">Cast to Date</a><ul>
-<li><a class="reference internal" href="#id1">From strings</a></li>
+<li><a class="reference internal" href="#id2">From strings</a></li>
 </ul>
 </li>
 <li><a class="reference internal" href="#cast-to-decimal">Cast to Decimal</a><ul>
-<li><a class="reference internal" href="#id2">From varchar</a></li>
+<li><a class="reference internal" href="#id3">From varchar</a></li>
 </ul>
 </li>
 <li><a class="reference internal" href="#cast-to-varbinary">Cast to Varbinary</a><ul>
-<li><a class="reference internal" href="#id3">From integral types</a></li>
+<li><a class="reference internal" href="#id4">From integral types</a></li>
 </ul>
 </li>
 <li><a class="reference internal" href="#cast-to-timestamp">Cast to Timestamp</a><ul>
-<li><a class="reference internal" href="#id4">From integral types</a></li>
-<li><a class="reference internal" href="#id5">From floating-point types</a></li>
+<li><a class="reference internal" href="#id5">From integral types</a></li>
+<li><a class="reference internal" href="#id6">From floating-point types</a></li>
 </ul>
 </li>
 </ul>
