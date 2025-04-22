@@ -15,12 +15,12 @@
  */
 #pragma once
 
+#include <fmt/format.h>
 #include "velox/expression/CastExpr.h"
 #include "velox/functions/Udf.h"
 #include "velox/type/Conversions.h"
 #include "velox/type/Timestamp.h"
 #include "velox/type/tz/TimeZoneMap.h"
-#include <fmt/format.h>
 
 namespace facebook::velox::functions::sparksql {
 namespace detail {
@@ -100,7 +100,8 @@ struct ToPrettyStringVarbinaryFunction {
       char* pos = startPosition;
       *pos++ = '[';
       for (auto i = 0; i < input->size(); i++) {
-        auto end = fmt::format_to(pos, "{:02X}", static_cast<int>(input->data()[i]));
+        auto end =
+            fmt::format_to(pos, "{:02X}", static_cast<int>(input->data()[i]));
         int count = end - pos;
         if (count != 2) {
           // Malformed input
