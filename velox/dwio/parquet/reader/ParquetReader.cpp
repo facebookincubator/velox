@@ -219,16 +219,11 @@ void ReaderBase::processMetaData() {
   std::string fileAad = FileDecryptor::handleAadPrefix(fileDecryptionProperties_.get(), fileMetaData_->encryption_algorithm);
   ParquetCipher::type algo = FileDecryptor::getEncryptionAlgorithm(fileMetaData_->encryption_algorithm);
 
-  std::string user("");
-  if (options_.identity()) {
-    user = options_.identity()->user;
-  }
-
   fileDecryptor_ = std::make_shared<FileDecryptor>(
       fileDecryptionProperties_.get(),
       fileAad,
       algo,
-      user);
+      "");
 
   if (fileMetaData_->row_groups.empty()) {
     return;

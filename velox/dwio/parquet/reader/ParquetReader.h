@@ -122,6 +122,7 @@ class ParquetReaderFactory : public dwio::common::ReaderFactory {
 };
 
 void registerParquetReaderFactory();
+void registerParquetReaderFactory(bool clacEnabled);
 
 void unregisterParquetReaderFactory();
 
