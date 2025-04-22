@@ -861,6 +861,33 @@ RowVectorPtr MergeJoin::getOutput() {
   }
 }
 
+std::pair<bool, RowVectorPtr> MergeJoin::handleRightSideNullRows() {
+  auto rightFirstNonNullIndex = firstNonNull(rightInput_, rightKeyChannels_);
+  if ((isRightJoin(joinType_) || isFullJoin(joinType_)) &&
+      rightFirstNonNullIndex > rightRowIndex_) {
+    if (prepareOutput(nullptr, rightInput_)) {
+      output_->resize(outputSize_);
+      return std::make_pair(true, std::move(output_));
+    }
+    for (int i = rightRowIndex_; i < rightFirstNonNullIndex; i++) {
+      if (!tryAddOutputRowForRightJoin()) {
+        rightRowIndex_ = i;
+        return std::make_pair(true, std::move(output_));
+      }
+
+      if (finishedRightBatch()) {
+        // Ran out of rows on the right side.
+        rightInput_ = nullptr;
+        return std::make_pair(true, nullptr);
+      }
+    }
+
+    rightRowIndex_ = rightFirstNonNullIndex;
+  }
+
+  return std::make_pair(false, nullptr);
+}
+
 RowVectorPtr MergeJoin::doGetOutput() {
   // Check if we ran out of space in the output vector in the middle of the
   // match.
@@ -1058,6 +1085,11 @@ RowVectorPtr MergeJoin::doGetOutput() {
     }
 
     return nullptr;
+  }
+
+  auto pair = handleRightSideNullRows();
+  if (pair.first) {
+    return pair.second;
   }
 
   // Look for a new match starting with index_ row on the left and rightIndex_

@@ -75,6 +75,9 @@ class MergeJoin : public Operator {
       const RowTypePtr& leftType,
       const RowTypePtr& rightType);
 
+  // Advances handling of null rows on the right side for right and full joins.
+  std::pair<bool, RowVectorPtr> handleRightSideNullRows();
+
   RowVectorPtr doGetOutput();
 
   static int32_t compare(
