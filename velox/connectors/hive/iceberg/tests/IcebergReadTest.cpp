@@ -1086,6 +1086,72 @@ TEST_F(HiveIcebergTest, equalityDeletesSingleFileColumn1) {
   assertEqualityDeletes(equalityDeleteVectorMap, equalityFieldIdsMap);
 }
 
+TEST_F(HiveIcebergTest, equalityDeletesWithNegatedVarcharValues) {
+  folly::SingletonVault::singleton()->registrationComplete();
+
+  std::vector<RowVectorPtr> dataVectors = {makeRowVector(
+      {"c0"},
+      {makeFlatVector<std::string>(
+          {"apple", "banana", "cherry", "date", "elderberry"})})};
+
+  std::shared_ptr<TempFilePath> dataFilePath =
+      writeDataFiles(rowCount, 1, 1, dataVectors)[0];
+
+  std::vector<RowVectorPtr> deleteVectors = {makeRowVector(
+      {"c0"}, {makeFlatVector<std::string>({"apple", "cherry"})})};
+
+  auto deleteFilePath = TempFilePath::create();
+  writeToFile(deleteFilePath->getPath(), deleteVectors.front());
+
+  IcebergDeleteFile deleteFile(
+      FileContent::kEqualityDeletes,
+      deleteFilePath->getPath(),
+      fileFomat_,
+      2,
+      testing::internal::GetFileSize(
+          std::fopen(deleteFilePath->getPath().c_str(), "r")),
+      std::vector<int32_t>{1});
+
+  auto splits = makeIcebergSplits(dataFilePath->getPath(), {deleteFile});
+  assertEqualityDeletes(
+      splits.back(),
+      asRowType(dataVectors[0]->type()),
+      "SELECT * FROM tmp WHERE c0 NOT IN ('apple', 'cherry')");
+}
+
+TEST_F(HiveIcebergTest, equalityDeletesWithNegatedVarbinaryValues) {
+  folly::SingletonVault::singleton()->registrationComplete();
+
+  std::vector<RowVectorPtr> dataVectors = {makeRowVector(
+      {"c0"},
+      {makeFlatVector<std::string_view>(
+          {"\x01\x02", "\x03\x04", "\x05\x06", "\x07\x08", "\x09\x0A"})})};
+
+  std::shared_ptr<TempFilePath> dataFilePath =
+      writeDataFiles(rowCount, 1, 1, dataVectors)[0];
+
+  std::vector<RowVectorPtr> deleteVectors = {makeRowVector(
+      {"c0"}, {makeFlatVector<std::string_view>({"\x01\x02", "\x05\x06"})})};
+
+  auto deleteFilePath = TempFilePath::create();
+  writeToFile(deleteFilePath->getPath(), deleteVectors.front());
+
+  IcebergDeleteFile deleteFile(
+      FileContent::kEqualityDeletes,
+      deleteFilePath->getPath(),
+      fileFomat_,
+      2,
+      testing::internal::GetFileSize(
+          std::fopen(deleteFilePath->getPath().c_str(), "r")),
+      std::vector<int32_t>{1});
+
+  auto splits = makeIcebergSplits(dataFilePath->getPath(), {deleteFile});
+  assertEqualityDeletes(
+      splits.back(),
+      asRowType(dataVectors[0]->type()),
+      "SELECT * FROM tmp WHERE hex(c0) NOT IN ('0102', '0506')");
+}
+
 // Delete values from the second column in a 2-column file
 //
 //    c1    c2
