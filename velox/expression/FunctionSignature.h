@@ -34,7 +34,7 @@ std::string sanitizeName(const std::string& name);
 /// Return a list of primitive type names.
 const std::vector<std::string> primitiveTypeNames();
 
-enum class ParameterType : int8_t { kTypeParameter, kIntegerParameter };
+enum class ParameterType : int8_t { kTypeParameter, kIntegerParameter, kConstantIntegerParameter };
 
 /// Canonical names for functions that have special treatments in pushdowns.
 enum class FunctionCanonicalName {
@@ -86,6 +86,10 @@ class SignatureVariable {
 
   bool isIntegerParameter() const {
     return type_ == ParameterType::kIntegerParameter;
+  }
+
+  bool isConstantIntegerParameter() const {
+    return type_ == ParameterType::kConstantIntegerParameter;
   }
 
   bool operator==(const SignatureVariable& rhs) const {
