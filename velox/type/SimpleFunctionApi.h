@@ -220,12 +220,27 @@ struct Varchar {
   Varchar() {}
 };
 
-using L0 = IntegerVariable<std::numeric_limits<int>::max()>;
+template <size_t id, size_t value>
+struct ConstantIntegerVariable {
+  static size_t getId() {
+    return id;
+  }
+
+  static std::string name() {
+    return fmt::format("c{}", id);
+  }
+
+  static size_t getValue() {
+    return value;
+  }
+};
+
+using C1 = ConstantIntegerVariable<1, std::numeric_limits<int>::max()>;
 using L1 = IntegerVariable<1>;
 using L2 = IntegerVariable<2>;
 using L3 = IntegerVariable<3>;
 
-template <typename L = L0>
+template <typename L>
 struct VarcharN {
  private:
   VarcharN() {}
