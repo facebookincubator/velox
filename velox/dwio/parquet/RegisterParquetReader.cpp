@@ -21,6 +21,10 @@
 
 namespace facebook::velox::parquet {
 
+void registerParquetReaderFactory() {
+  registerParquetReaderFactory(false);
+}
+
 void registerParquetReaderFactory(bool clacEnabled) {
 #ifdef VELOX_ENABLE_PARQUET
   // Note, when adopting CLAC for decrypting encrypted parquet files,

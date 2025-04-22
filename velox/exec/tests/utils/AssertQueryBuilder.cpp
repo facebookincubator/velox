@@ -281,7 +281,6 @@ AssertQueryBuilder::readCursor() {
           core::QueryConfig({}),
           std::
               unordered_map<std::string, std::shared_ptr<config::ConfigBase>>{},
-              {},
           cache::AsyncDataCache::getInstance(),
           std::move(queryPool),
           nullptr,
