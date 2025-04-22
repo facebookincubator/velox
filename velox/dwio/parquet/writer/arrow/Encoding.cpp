@@ -3528,7 +3528,7 @@ class DeltaByteArrayEncoder : public EncoderImpl,
         sink_(pool),
         prefix_length_encoder_(/*descr=*/nullptr, pool),
         suffix_encoder_(descr, pool),
-        last_value_(""),
+
         empty_(
             static_cast<uint32_t>(kEmpty.size()),
             reinterpret_cast<const uint8_t*>(kEmpty.data())) {}
@@ -3762,7 +3762,7 @@ class DeltaByteArrayDecoderImpl : public DecoderImpl,
         pool_(pool),
         prefix_len_decoder_(nullptr, pool),
         suffix_decoder_(nullptr, pool),
-        last_value_in_previous_page_(""),
+
         buffered_prefix_length_(AllocateBuffer(pool, 0)),
         buffered_data_(AllocateBuffer(pool, 0)) {}
 
