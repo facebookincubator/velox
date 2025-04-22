@@ -33,6 +33,7 @@ velox_add_library(
   FilterFunctions.cpp
   FindFirst.cpp
   FromUtf8.cpp
+  GeometrySerde.cpp
   InPredicate.cpp
   JsonFunctions.cpp
   Map.cpp
