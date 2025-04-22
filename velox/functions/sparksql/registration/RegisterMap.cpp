@@ -15,6 +15,7 @@
  */
 #include "velox/functions/lib/MapConcat.h"
 #include "velox/functions/lib/RegistrationHelpers.h"
+#include "velox/functions/sparksql/MapFromArrays.h"
 #include "velox/functions/sparksql/Size.h"
 
 namespace facebook::velox::functions {
@@ -23,8 +24,7 @@ extern void registerElementAtFunction(
     bool enableCaching);
 
 void registerSparkMapFunctions(const std::string& prefix) {
-  VELOX_REGISTER_VECTOR_FUNCTION(
-      udf_map_allow_duplicates, prefix + "map_from_arrays");
+  sparksql::registerMapFromArrays(prefix + "map_from_arrays");
   // Spark and Presto map_filter function has the same definition:
   //   function expression corresponds to body, arguments to signature
   VELOX_REGISTER_VECTOR_FUNCTION(udf_map_filter, prefix + "map_filter");
