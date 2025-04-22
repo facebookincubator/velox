@@ -13,6 +13,8 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+#ifdef VELOX_ENABLE_GEO
+
 #include "velox/functions/prestosql/types/BingTileType.h"
 #include "velox/functions/prestosql/types/BingTileRegistration.h"
 #include "velox/functions/prestosql/types/tests/TypeTestBase.h"
@@ -222,3 +224,5 @@ TEST_F(BingTileTypeTest, bingTileFromQuadKey) {
 }
 
 } // namespace facebook::velox::test
+
+#endif

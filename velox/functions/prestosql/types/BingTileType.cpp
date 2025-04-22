@@ -14,6 +14,8 @@
  * limitations under the License.
  */
 
+#ifdef VELOX_ENABLE_GEO
+
 #include "velox/functions/prestosql/types/BingTileType.h"
 #include <folly/Expected.h>
 #include <optional>
@@ -169,3 +171,5 @@ std::string BingTileType::bingTileToQuadKey(uint64_t tile) {
 }
 
 } // namespace facebook::velox
+
+#endif

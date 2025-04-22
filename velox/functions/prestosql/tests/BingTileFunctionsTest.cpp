@@ -14,6 +14,8 @@
  * limitations under the License.
  */
 
+#ifdef VELOX_ENABLE_GEO
+
 #include <gtest/gtest.h>
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/functions/prestosql/tests/utils/FunctionBaseTest.h"
@@ -444,3 +446,5 @@ TEST_F(BingTileFunctionsTest, bingTileChildrenZoom) {
   VELOX_ASSERT_USER_THROW(
       testBingTileChildren(0, 0, 2, 1), "Child zoom 1 must be >= tile zoom 2");
 }
+
+#endif

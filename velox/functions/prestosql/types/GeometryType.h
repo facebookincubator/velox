@@ -16,6 +16,8 @@
 
 #pragma once
 
+#ifdef VELOX_ENABLE_GEO
+
 #include "velox/expression/CastExpr.h"
 #include "velox/type/SimpleFunctionApi.h"
 #include "velox/type/Type.h"
@@ -71,3 +73,5 @@ struct GeometryT {
 using Geometry = CustomType<GeometryT>;
 
 } // namespace facebook::velox
+
+#endif

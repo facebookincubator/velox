@@ -76,6 +76,12 @@ velox_link_libraries(
   Folly::folly
   stemmer::stemmer)
 
+if(VELOX_ENABLE_GEO)
+  velox_link_libraries(
+    velox_functions_prestosql_impl
+    GEOS::geos)
+endif()
+
 if(NOT VELOX_MONO_LIBRARY)
   set_property(TARGET velox_functions_prestosql_impl PROPERTY JOB_POOL_COMPILE
                                                               high_memory_pool)

@@ -15,6 +15,8 @@
  */
 #pragma once
 
+#ifdef VELOX_ENABLE_GEO
+
 #include "velox/common/base/Status.h"
 #include "velox/functions/Macros.h"
 #include "velox/functions/prestosql/types/BingTileType.h"
@@ -203,3 +205,5 @@ struct BingTileToQuadKeyFunction {
 };
 
 } // namespace facebook::velox::functions
+
+#endif

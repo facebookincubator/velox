@@ -23,6 +23,7 @@
 
 namespace facebook::velox::functions {
 
+#ifdef VELOX_ENABLE_GEO
 namespace {
 
 void registerSimpleBingTileFunctions(const std::string& prefix) {
@@ -53,11 +54,14 @@ void registerSimpleBingTileFunctions(const std::string& prefix) {
 }
 
 } // namespace
+#endif
 
 void registerBingTileFunctions(const std::string& prefix) {
+#ifdef VELOX_ENABLE_GEO
   registerBingTileType();
 
   registerSimpleBingTileFunctions(prefix);
+#endif
 }
 
 } // namespace facebook::velox::functions

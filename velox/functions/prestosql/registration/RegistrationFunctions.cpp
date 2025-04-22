@@ -147,6 +147,7 @@ void registerMapAllowingDuplicates(
 void registerInternalFunctions() {
   functions::registerInternalArrayFunctions();
 }
+
 } // namespace prestosql
 
 } // namespace facebook::velox::functions

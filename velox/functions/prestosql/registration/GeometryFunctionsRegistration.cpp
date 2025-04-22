@@ -20,8 +20,11 @@
 #include "velox/functions/prestosql/types/GeometryRegistration.h"
 
 namespace facebook::velox::functions {
-void registerGeometryFunctions(const std::string& prefix) {
-  registerGeometryType();
+
+#ifdef VELOX_ENABLE_GEO
+namespace {
+
+void registerConstructorGeometryFunctions(const std::string& prefix) {
   registerFunction<StGeometryFromTextFunction, Geometry, Varchar>(
       {{prefix + "ST_GeometryFromText"}});
 
@@ -33,6 +36,17 @@ void registerGeometryFunctions(const std::string& prefix) {
 
   registerFunction<StAsBinaryFunction, Varbinary, Geometry>(
       {{prefix + "ST_AsBinary"}});
+}
+
+} // namespace
+#endif
+
+void registerGeometryFunctions(const std::string& prefix) {
+#ifdef VELOX_ENABLE_GEO
+  registerGeometryType();
+
+  registerConstructorGeometryFunctions(prefix);
+#endif
 }
 
 } // namespace facebook::velox::functions

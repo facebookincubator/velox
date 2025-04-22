@@ -15,6 +15,8 @@
  */
 #pragma once
 
+#ifdef VELOX_ENABLE_GEO
+
 #include <folly/Expected.h>
 #include <cstdint>
 #include "velox/type/SimpleFunctionApi.h"
@@ -164,3 +166,5 @@ struct BingTileT {
 using BingTile = CustomType<BingTileT, false>;
 
 } // namespace facebook::velox
+
+#endif

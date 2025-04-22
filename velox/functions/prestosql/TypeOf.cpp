@@ -55,9 +55,11 @@ std::string typeName(const TypePtr& type) {
         return fmt::format(
             "decimal({},{})", shortDecimal.precision(), shortDecimal.scale());
       }
+#ifdef VELOX_ENABLE_GEO
       if (isBingTileType(type)) {
         return "bingtile";
       }
+#endif
       return "bigint";
     case TypeKind::HUGEINT: {
       if (isUuidType(type)) {
@@ -86,9 +88,11 @@ std::string typeName(const TypePtr& type) {
       if (isHyperLogLogType(type)) {
         return "HyperLogLog";
       }
+#ifdef VELOX_ENABLE_GEO
       if (isGeometryType(type)) {
         return "geometry";
       }
+#endif
       if (*type == *TDIGEST(DOUBLE())) {
         return "tdigest(double)";
       }

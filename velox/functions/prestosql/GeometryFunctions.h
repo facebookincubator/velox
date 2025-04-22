@@ -16,6 +16,8 @@
 
 #pragma once
 
+#ifdef VELOX_ENABLE_GEO
+
 #include <geos/io/WKBReader.h>
 #include <geos/io/WKBWriter.h>
 #include <geos/io/WKTReader.h>
@@ -121,3 +123,5 @@ struct StAsBinaryFunction {
 };
 
 } // namespace facebook::velox::functions
+
+#endif
