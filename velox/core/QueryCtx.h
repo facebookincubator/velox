@@ -20,7 +20,6 @@
 #include <folly/executors/CPUThreadPoolExecutor.h>
 #include "velox/common/caching/AsyncDataCache.h"
 #include "velox/common/memory/Memory.h"
-#include "velox/common/security/Identity.h"
 #include "velox/core/QueryConfig.h"
 #include "velox/vector/DecodedVector.h"
 #include "velox/vector/VectorPool.h"
@@ -49,7 +48,6 @@ class QueryCtx : public std::enable_shared_from_this<QueryCtx> {
       QueryConfig&& queryConfig = QueryConfig{{}},
       std::unordered_map<std::string, std::shared_ptr<config::ConfigBase>>
           connectorConfigs = {},
-      security::Identity&& identity = {},
       cache::AsyncDataCache* cache = cache::AsyncDataCache::getInstance(),
       std::shared_ptr<memory::MemoryPool> pool = nullptr,
       folly::Executor* spillExecutor = nullptr,
@@ -76,10 +74,6 @@ class QueryCtx : public std::enable_shared_from_this<QueryCtx> {
 
   const QueryConfig& queryConfig() const {
     return queryConfig_;
-  }
-
-  const security::Identity* identity() const {
-    return &identity_;
   }
 
   config::ConfigBase* connectorSessionProperties(
@@ -161,7 +155,6 @@ class QueryCtx : public std::enable_shared_from_this<QueryCtx> {
       QueryConfig&& queryConfig = QueryConfig{{}},
       std::unordered_map<std::string, std::shared_ptr<config::ConfigBase>>
           connectorConfigs = {},
-      security::Identity&& identity = {},
       cache::AsyncDataCache* cache = cache::AsyncDataCache::getInstance(),
       std::shared_ptr<memory::MemoryPool> pool = nullptr,
       folly::Executor* spillExecutor = nullptr,
@@ -231,7 +224,6 @@ class QueryCtx : public std::enable_shared_from_this<QueryCtx> {
 
   std::unordered_map<std::string, std::shared_ptr<config::ConfigBase>>
       connectorSessionProperties_;
-  security::Identity identity_;
   std::shared_ptr<memory::MemoryPool> pool_;
   QueryConfig queryConfig_;
   std::atomic<uint64_t> numSpilledBytes_{0};

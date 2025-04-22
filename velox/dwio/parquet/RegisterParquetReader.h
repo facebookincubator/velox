@@ -18,7 +18,8 @@
 
 namespace facebook::velox::parquet {
 
-void registerParquetReaderFactory(bool clacEnabled=false);
+void registerParquetReaderFactory();
+void registerParquetReaderFactory(bool clacEnabled);
 
 void unregisterParquetReaderFactory();
 

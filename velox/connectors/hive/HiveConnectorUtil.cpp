@@ -603,7 +603,6 @@ void configureReaderOptions(
 
     readerOptions.setFileFormat(hiveSplit->fileFormat);
   }
-  readerOptions.setIdentity(connectorQueryCtx->identity());
 }
 
 void configureRowReaderOptions(
@@ -611,7 +610,6 @@ void configureRowReaderOptions(
     const std::shared_ptr<common::ScanSpec>& scanSpec,
     std::shared_ptr<common::MetadataFilter> metadataFilter,
     const RowTypePtr& rowType,
-    const ConnectorQueryCtx* connectorQueryCtx,
     const std::shared_ptr<const HiveConnectorSplit>& hiveSplit,
     const std::shared_ptr<const HiveConfig>& hiveConfig,
     const config::ConfigBase* sessionProperties,
