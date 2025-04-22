@@ -131,7 +131,7 @@ wave:			   	         #: Build with Wave GPU support
 	$(MAKE) cmake-wave BUILD_DIR=release BUILD_TYPE=release
 	$(MAKE) build BUILD_DIR=release
 
-cudf:			   	         #: Build with CUDF GPU support
+cudf:			   	         #: Build with cuDF GPU support
 	$(MAKE) cmake-cudf BUILD_DIR=release BUILD_TYPE=release
 	$(MAKE) build BUILD_DIR=release
 
@@ -139,7 +139,7 @@ wave-debug:			 #: Build with debugging symbols and Wave GPU support
 	$(MAKE) cmake-wave BUILD_DIR=debug BUILD_TYPE=debug
 	$(MAKE) build BUILD_DIR=debug
 
-cudf-debug:			 #: Build with debugging symbols and CUDF GPU support
+cudf-debug:			 #: Build with debugging symbols and cuDF GPU support
 	$(MAKE) cmake-cudf BUILD_DIR=debug BUILD_TYPE=debug
 	$(MAKE) build BUILD_DIR=debug
 
