@@ -197,9 +197,10 @@ struct MeanAggregator : cudf_velox::CudfHashAggregation::Aggregator {
                 cudf::null_policy::EXCLUDE));
         break;
       }
+      case core::AggregationNode::Step::kIntermediate:
       case core::AggregationNode::Step::kFinal: {
-        // In final aggregation, the previously computed sum and count are in
-        // the child columns of the input column.
+        // In intermediate and final aggregation, the previously computed sum
+        // and count are in the child columns of the input column.
         auto& request = requests.emplace_back();
         sumIdx_ = requests.size() - 1;
         request.values = tbl.column(inputIndex).child(0);
@@ -242,6 +243,30 @@ struct MeanAggregator : cudf_velox::CudfHashAggregation::Aggregator {
 
         // TODO: Handle nulls. This can happen if all values are null in a
         // group.
+        return std::make_unique<cudf::column>(
+            cudf::data_type(cudf::type_id::STRUCT),
+            size,
+            rmm::device_buffer{},
+            rmm::device_buffer{},
+            0,
+            std::move(children));
+      }
+      case core::AggregationNode::Step::kIntermediate: {
+        // The difference between intermediate and partial is in where the
+        // sum and count are coming from. In partial, since the input column is
+        // the same, the sum and count are in the same agg result. In
+        // intermediate, the input columns are different (it's the child
+        // columns of the input column) and so the sum and count are in
+        // different agg results.
+        auto sum = std::move(results[sumIdx_].results[0]);
+        auto count = std::move(results[countIdx_].results[0]);
+
+        auto size = sum->size();
+
+        auto children = std::vector<std::unique_ptr<cudf::column>>();
+        children.push_back(std::move(sum));
+        children.push_back(std::move(count));
+
         return std::make_unique<cudf::column>(
             cudf::data_type(cudf::type_id::STRUCT),
             size,
@@ -479,9 +504,9 @@ void CudfHashAggregation::initialize() {
 
   numAggregates_ = aggregationNode_->aggregates().size();
   aggregators_ = toAggregators(*aggregationNode_, *operatorCtx_);
-  final_aggregators_ = toAggregators(*aggregationNode_, *operatorCtx_);
-  for (auto& aggregator : final_aggregators_) {
-    aggregator->step = core::AggregationNode::Step::kFinal;
+  intermediateAggregators_ = toAggregators(*aggregationNode_, *operatorCtx_);
+  for (auto& aggregator : intermediateAggregators_) {
+    aggregator->step = core::AggregationNode::Step::kIntermediate;
   }
 
   // Check that aggregate result type match the output type.
@@ -547,7 +572,7 @@ void CudfHashAggregation::computeInterimGroupbyPartial(
     // style.
     auto compactedOutput = doGroupByAggregation(
         std::move(concatenatedTable),
-        final_aggregators_,
+        intermediateAggregators_,
         rmm::cuda_stream_default);
     partial_output_ = compactedOutput->release();
   } else {
@@ -566,7 +591,8 @@ void CudfHashAggregation::addInput(RowVectorPtr input) {
   // - If this is final agg, we can simply concatenate incoming batch with the
   // interim results and then do 1 groupby
   // Right now, for Q13, I'm going to let final aggregation be as it is.
-  if (step != core::AggregationNode::Step::kPartial) {
+  if (step != core::AggregationNode::Step::kPartial || isDistinct_ ||
+      isGlobal_) {
     if (input->size() > 0) {
       auto cudfInput = std::dynamic_pointer_cast<cudf_velox::CudfVector>(input);
       VELOX_CHECK_NOT_NULL(cudfInput);
@@ -574,7 +600,7 @@ void CudfHashAggregation::addInput(RowVectorPtr input) {
     }
     return;
   }
-  // Now it's only partial aggregation
+  // Now it's only partial groupby aggregation
 
   // we need to do a groupby on the new batch and then compact with
   // the existing partial output
@@ -617,7 +643,7 @@ CudfVectorPtr CudfHashAggregation::doGroupByAggregation(
       std::make_move_iterator(groupKeysColumns.end()));
 
   // then fill the aggregation results
-  for (auto& aggregator : aggregators_) {
+  for (auto& aggregator : aggregators) {
     resultColumns.push_back(aggregator->makeOutputColumn(results, stream));
   }
 
@@ -724,7 +750,7 @@ void CudfHashAggregation::computeInterimGroupbyFinal() {
 RowVectorPtr CudfHashAggregation::getOutput() {
   VELOX_NVTX_OPERATOR_FUNC_RANGE();
 
-  if (isPartialOutput_) {
+  if (isPartialOutput_ && !isGlobal_ && !isDistinct_) {
     if (not noMoreInput_) {
       return nullptr;
     }

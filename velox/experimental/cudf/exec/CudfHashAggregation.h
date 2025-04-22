@@ -110,7 +110,7 @@ class CudfHashAggregation : public exec::Operator, public NvtxHelper {
 
   std::shared_ptr<const core::AggregationNode> aggregationNode_;
   std::vector<std::unique_ptr<Aggregator>> aggregators_;
-  std::vector<std::unique_ptr<Aggregator>> final_aggregators_;
+  std::vector<std::unique_ptr<Aggregator>> intermediateAggregators_;
 
   // Partial aggregation is the first phase of aggregation. e.g. count(*) when
   // in partial phase will do a count_agg but in the final phase will do a sum
