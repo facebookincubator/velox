@@ -54,7 +54,7 @@ std::vector<std::vector<std::string>> test_data;
 
 // creates a random string with length at most length
 std::string gen_string(int32_t length) {
-  std::string res = "";
+  std::string res;
   unsigned long pool_size = char_pool.length() + 1;
   for (int i = 0; i < length; ++i) {
     int32_t x = folly::Random::rand32() % pool_size;
