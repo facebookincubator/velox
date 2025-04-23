@@ -552,6 +552,9 @@ class MergeJoin : public Operator {
   // A set of rows with matching keys on the left side.
   std::optional<Match> leftMatch_;
 
+  std::optional<Match> previousLeftMatch_ =
+      Match{{}, -1, -1, false, std::nullopt};
+
   // A set of rows with matching keys on the right side.
   std::optional<Match> rightMatch_;
 
