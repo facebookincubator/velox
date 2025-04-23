@@ -178,7 +178,17 @@ bool MallocAllocator::allocateContiguousImpl(
       MAP_PRIVATE | MAP_ANONYMOUS,
       -1,
       0);
-  // TODO: add handling of MAP_FAILED.
+  if (data == nullptr || data == MAP_FAILED) {
+    const std::string errorMsg = fmt::format(
+        "Mmap failed with {} pages, errno {}, Malloc Allocator: {}",
+        numPages,
+        folly::errnoStr(errno),
+        toString());
+    VELOX_MEM_LOG(ERROR) << errorMsg;
+    setAllocatorFailureMessage(errorMsg);
+    return false;
+  }
+
   allocation.set(
       data,
       AllocationTraits::pageBytes(numPages),
