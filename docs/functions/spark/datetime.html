@@ -392,31 +392,31 @@ Supported types are: TINYINT, SMALLINT, INTEGER and BIGINT.:</p>
 
 <dl class="spark function">
 <dt class="sig sig-object spark">
-<span class="sig-name descname"><span class="pre">to_unix_timestamp</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">date</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">integer</span></span></span></dt>
+<span class="sig-name descname"><span class="pre">to_unix_timestamp</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">date</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">bigint</span></span></span></dt>
 <dd><blockquote>
-<div><p>Alias for <code class="docutils literal notranslate"><span class="pre">unix_timestamp(date)</span> <span class="pre">-&gt;</span> <span class="pre">integer</span></code>.</p>
+<div><p>Alias for <code class="docutils literal notranslate"><span class="pre">unix_timestamp(date)</span> <span class="pre">-&gt;</span> <span class="pre">bigint</span></code>.</p>
 </div></blockquote>
 </dd></dl>
 
 <dl class="spark function">
 <dt class="sig sig-object spark" id="to_unix_timestamp">
-<span class="sig-name descname"><span class="pre">to_unix_timestamp</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">string</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">integer</span></span></span><a class="headerlink" href="#to_unix_timestamp" title="Link to this definition">¶</a></dt>
-<dd><p>Alias for <code class="docutils literal notranslate"><span class="pre">unix_timestamp(string)</span> <span class="pre">-&gt;</span> <span class="pre">integer</span></code>.</p>
+<span class="sig-name descname"><span class="pre">to_unix_timestamp</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">string</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">bigint</span></span></span><a class="headerlink" href="#to_unix_timestamp" title="Link to this definition">¶</a></dt>
+<dd><p>Alias for <code class="docutils literal notranslate"><span class="pre">unix_timestamp(string)</span> <span class="pre">-&gt;</span> <span class="pre">bigint</span></code>.</p>
 </dd></dl>
 
 <dl class="spark function">
 <dt class="sig sig-object spark">
-<span class="sig-name descname"><span class="pre">to_unix_timestamp</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">string</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">format</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">integer</span></span></span></dt>
+<span class="sig-name descname"><span class="pre">to_unix_timestamp</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">string</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">format</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">bigint</span></span></span></dt>
 <dd><blockquote>
-<div><p>Alias for <code class="docutils literal notranslate"><span class="pre">unix_timestamp(string,</span> <span class="pre">format)</span> <span class="pre">-&gt;</span> <span class="pre">integer</span></code>.</p>
+<div><p>Alias for <code class="docutils literal notranslate"><span class="pre">unix_timestamp(string,</span> <span class="pre">format)</span> <span class="pre">-&gt;</span> <span class="pre">bigint</span></code>.</p>
 </div></blockquote>
 </dd></dl>
 
 <dl class="spark function">
 <dt class="sig sig-object spark">
-<span class="sig-name descname"><span class="pre">to_unix_timestamp</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">timestamp</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">integer</span></span></span></dt>
+<span class="sig-name descname"><span class="pre">to_unix_timestamp</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">timestamp</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">bigint</span></span></span></dt>
 <dd><blockquote>
-<div><p>Alias for <code class="docutils literal notranslate"><span class="pre">unix_timestamp(timestamp)</span> <span class="pre">-&gt;</span> <span class="pre">integer</span></code>.</p>
+<div><p>Alias for <code class="docutils literal notranslate"><span class="pre">unix_timestamp(timestamp)</span> <span class="pre">-&gt;</span> <span class="pre">bigint</span></code>.</p>
 </div></blockquote>
 </dd></dl>
 
@@ -470,13 +470,13 @@ higher levels of precision.:</p>
 
 <dl class="spark function">
 <dt class="sig sig-object spark" id="unix_timestamp">
-<span class="sig-name descname"><span class="pre">unix_timestamp</span></span><span class="sig-paren">(</span><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">integer</span></span></span><a class="headerlink" href="#unix_timestamp" title="Link to this definition">¶</a></dt>
+<span class="sig-name descname"><span class="pre">unix_timestamp</span></span><span class="sig-paren">(</span><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">bigint</span></span></span><a class="headerlink" href="#unix_timestamp" title="Link to this definition">¶</a></dt>
 <dd><p>Returns the current UNIX timestamp in seconds.</p>
 </dd></dl>
 
 <dl class="spark function">
 <dt class="sig sig-object spark" id="id0">
-<span class="sig-name descname"><span class="pre">unix_timestamp</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">date</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">integer</span></span></span><a class="headerlink" href="#id0" title="Link to this definition">¶</a></dt>
+<span class="sig-name descname"><span class="pre">unix_timestamp</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">date</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">bigint</span></span></span><a class="headerlink" href="#id0" title="Link to this definition">¶</a></dt>
 <dd><p>Converts the time represented by <code class="docutils literal notranslate"><span class="pre">date</span></code> at the configured session timezone to the GMT time, and extracts the seconds.</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">unix_timestamp</span><span class="p">(</span><span class="s1">&#39;1970-01-01&#39;</span><span class="p">);</span> <span class="o">--</span> <span class="mi">0</span>
 <span class="n">SELECT</span> <span class="n">unix_timestamp</span><span class="p">(</span><span class="s1">&#39;2024-10-01&#39;</span><span class="p">);</span> <span class="o">--</span> <span class="mi">1727740800</span>
@@ -487,7 +487,7 @@ higher levels of precision.:</p>
 
 <dl class="spark function">
 <dt class="sig sig-object spark">
-<span class="sig-name descname"><span class="pre">unix_timestamp</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">string</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">integer</span></span></span></dt>
+<span class="sig-name descname"><span class="pre">unix_timestamp</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">string</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">bigint</span></span></span></dt>
 <dd><blockquote>
 <div><p>Returns the UNIX timestamp of time specified by <code class="docutils literal notranslate"><span class="pre">string</span></code>. Assumes the
 format <code class="docutils literal notranslate"><span class="pre">yyyy-MM-dd</span> <span class="pre">HH:mm:ss</span></code>. Returns null if <code class="docutils literal notranslate"><span class="pre">string</span></code> does not match
@@ -497,7 +497,7 @@ format <code class="docutils literal notranslate"><span class="pre">yyyy-MM-dd</
 
 <dl class="spark function">
 <dt class="sig sig-object spark">
-<span class="sig-name descname"><span class="pre">unix_timestamp</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">string</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">format</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">integer</span></span></span></dt>
+<span class="sig-name descname"><span class="pre">unix_timestamp</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">string</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">format</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">bigint</span></span></span></dt>
 <dd><blockquote>
 <div><p>Returns the UNIX timestamp of time specified by <code class="docutils literal notranslate"><span class="pre">string</span></code> using the
 format described in the <code class="docutils literal notranslate"><span class="pre">format</span></code> string. The format follows Spark’s
@@ -509,7 +509,7 @@ is invalid.</p>
 
 <dl class="spark function">
 <dt class="sig sig-object spark" id="id2">
-<span class="sig-name descname"><span class="pre">unix_timestamp</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">timestamp</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">integer</span></span></span><a class="headerlink" href="#id2" title="Link to this definition">¶</a></dt>
+<span class="sig-name descname"><span class="pre">unix_timestamp</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">timestamp</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">bigint</span></span></span><a class="headerlink" href="#id2" title="Link to this definition">¶</a></dt>
 <dd><p>Returns the UNIX timestamp of the given <code class="docutils literal notranslate"><span class="pre">timestamp</span></code> in seconds.</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">unix_timestamp</span><span class="p">(</span><span class="n">CAST</span><span class="p">(</span><span class="mi">0</span> <span class="n">AS</span> <span class="n">TIMESTAMP</span><span class="p">));</span> <span class="o">--</span> <span class="mi">0</span>
 <span class="n">SELECT</span> <span class="n">unix_timestamp</span><span class="p">(</span><span class="n">CAST</span><span class="p">(</span><span class="mi">1739933174</span> <span class="n">AS</span> <span class="n">TIMESTAMP</span><span class="p">));</span> <span class="o">--</span> <span class="mi">1739933174</span>
