@@ -2886,14 +2886,10 @@ std::shared_ptr<ColumnWriter> ColumnWriter::Make(
   Encoding::type encoding = properties->encoding(descr->path());
 
   if (encoding == Encoding::UNKNOWN) {
-    // TODO: Arrow uses RLE by default for boolean columns. Since Velox can't
-    // read RLEs yet, we disable this check. Re-enable once Velox's native
-    // reader supports RLE.
-    // encoding = (descr->physical_type() == Type::BOOLEAN &&
-    //            properties->version() != ParquetVersion::PARQUET_1_0)
-    //               ? Encoding::RLE
-    //               : Encoding::PLAIN;
-    encoding = Encoding::PLAIN;
+    encoding = (descr->physical_type() == Type::BOOLEAN &&
+               properties->version() != ParquetVersion::PARQUET_1_0)
+                  ? Encoding::RLE
+                  : Encoding::PLAIN;
   }
   if (use_dictionary) {
     encoding = properties->dictionary_index_encoding();
