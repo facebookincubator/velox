@@ -172,7 +172,7 @@ BlockingReason LocalExchangeQueue::next(
     return BlockingReason::kNotBlocked;
   });
   notify(memoryPromises);
-  if (*data != nullptr) {
+  if (*data != nullptr && vectorPool_ != nullptr) {
     vectorPool_->push(*data, size);
   }
   return blockingReason;
@@ -197,6 +197,10 @@ bool LocalExchangeQueue::isFinished() {
 bool LocalExchangeQueue::testingProducersDone() const {
   return queue_.withRLock(
       [&](auto& queue) { return noMoreProducers_ && pendingProducers_ == 0; });
+}
+
+bool LocalExchangeQueue::testingVectorPoolEnabled() const {
+  return vectorPool_ != nullptr;
 }
 
 void LocalExchangeQueue::close() {

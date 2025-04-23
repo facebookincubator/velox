@@ -17,10 +17,10 @@
 
 #include "velox/common/base/Portability.h"
 #include "velox/common/memory/MemoryAllocator.h"
+#include "velox/exec/OneWayStatusFlag.h"
 #include "velox/exec/Operator.h"
 #include "velox/exec/RowContainer.h"
 #include "velox/exec/VectorHasher.h"
-
 namespace facebook::velox::exec {
 
 using PartitionBoundIndexType = int64_t;
@@ -569,7 +569,7 @@ class HashTable : public BaseHashTable {
   }
 
   bool hasDuplicateKeys() const override {
-    return hasDuplicates_;
+    return hasDuplicates_.check();
   }
 
   HashMode hashMode() const override {
@@ -1048,7 +1048,7 @@ class HashTable : public BaseHashTable {
   // Set at join build time if the table has duplicates, meaning that
   // the join can be cardinality increasing. Atomic for tsan because
   // many threads can set this.
-  std::atomic<bool> hasDuplicates_{false};
+  OneWayStatusFlag hasDuplicates_;
 
   // Offset of next row link for join build side set from 'rows_'.
   int32_t nextOffset_{0};

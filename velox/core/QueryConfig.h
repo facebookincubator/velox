@@ -380,6 +380,11 @@ class QueryConfig {
   static constexpr const char* kMaxSharedSubexprResultsCached =
       "max_shared_subexpr_results_cached";
 
+  /// If true, enable LocalExchangeVectorPool to reuse RowVectors during local
+  /// exchange.
+  static constexpr const char* kEnableLocalExchangeQueueCache =
+      "enable_local_exchange_queue_cache";
+
   /// Maximum number of splits to preload. Set to 0 to disable preloading.
   static constexpr const char* kMaxSplitPreloadPerDriver =
       "max_split_preload_per_driver";
@@ -912,6 +917,10 @@ class QueryConfig {
 
   bool isExpressionEvaluationCacheEnabled() const {
     return get<bool>(kEnableExpressionEvaluationCache, true);
+  }
+
+  bool isLocalExchangeQueueCacheEnabled() const {
+    return get<bool>(kEnableLocalExchangeQueueCache, true);
   }
 
   uint32_t maxSharedSubexprResultsCached() const {

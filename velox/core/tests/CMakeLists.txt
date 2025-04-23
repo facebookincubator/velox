@@ -30,6 +30,8 @@ target_link_libraries(
     velox_core
     velox_exception
     velox_exec_test_lib
+    velox_exec
+    velox_aggregates
     velox_presto_types
     velox_type
     velox_vector_test_lib
