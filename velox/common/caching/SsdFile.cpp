@@ -119,8 +119,16 @@ SsdFile::SsdFile(const Config& config)
   filesystems::FileOptions fileOptions;
   fileOptions.shouldThrowOnFileAlreadyExists = false;
   fileOptions.bufferIo = !FLAGS_velox_ssd_odirect;
-  writeFile_ = fs_->openFileForWrite(fileName_, fileOptions);
-  readFile_ = fs_->openFileForRead(fileName_, fileOptions);
+
+  try {
+    writeFile_ = fs_->openFileForWrite(fileName_, fileOptions);
+    readFile_ = fs_->openFileForRead(fileName_, fileOptions);
+  } catch (std::exception& e) {
+    ++stats_.openFileErrors;
+    VELOX_SSD_CACHE_LOG(ERROR)
+	        << fmt::format("Error opening ssd file {}", e.what());
+    throw;
+  }
 
   const uint64_t size = writeFile_->size();
   numRegions_ = std::min<int32_t>(size / kRegionSize, maxRegions_);
