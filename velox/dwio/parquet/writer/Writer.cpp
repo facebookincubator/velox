@@ -141,6 +141,11 @@ std::shared_ptr<WriterProperties> getArrowParquetWriterOptions(
         columnCompressionValues.first,
         getArrowParquetCompression(columnCompressionValues.second));
   }
+  for (const auto& columnEncodingValues : options.columnEncodingsMap) {
+    properties->encoding(
+        columnEncodingValues.first, columnEncodingValues.second);
+  }
+  properties = properties->encoding(options.encoding);
   properties = properties->encoding(options.encoding);
   properties = properties->data_pagesize(options.dataPageSize.value_or(
       facebook::velox::parquet::arrow::kDefaultDataPageSize));

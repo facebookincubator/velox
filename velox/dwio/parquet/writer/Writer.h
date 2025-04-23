@@ -101,6 +101,8 @@ struct WriterOptions : public dwio::common::WriterOptions {
   std::unordered_map<std::string, common::CompressionKind>
       columnCompressionsMap;
 
+  std::unordered_map<std::string, arrow::Encoding::type> columnEncodingsMap;
+
   /// Timestamp unit for Parquet write through Arrow bridge.
   /// Default if not specified: TimestampPrecision::kNanoseconds (9).
   std::optional<TimestampPrecision> parquetWriteTimestampUnit;

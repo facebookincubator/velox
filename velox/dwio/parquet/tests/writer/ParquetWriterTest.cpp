@@ -16,6 +16,7 @@
 
 #include <arrow/type.h>
 #include <folly/init/Init.h>
+#include "velox/dwio/parquet/writer/arrow/Types.h"
 #include "velox/dwio/parquet/writer/arrow/tests/TestUtil.h"
 
 #include "velox/common/base/tests/GTestUtils.h"
@@ -82,7 +83,7 @@ class ParquetWriterTest : public ParquetTestBase {
   inline static const std::string kHiveConnectorId = "test-hive";
 };
 
-std::vector<CompressionKind> params = {
+std::vector<CompressionKind> compressionParams = {
     CompressionKind::CompressionKind_NONE,
     CompressionKind::CompressionKind_SNAPPY,
     CompressionKind::CompressionKind_ZSTD,
@@ -90,25 +91,33 @@ std::vector<CompressionKind> params = {
     CompressionKind::CompressionKind_GZIP,
 };
 
-TEST_F(ParquetWriterTest, compression) {
+std::vector<parquet::arrow::Encoding::type> encodingParams = {
+    parquet::arrow::Encoding::type::PLAIN,
+    parquet::arrow::Encoding::type::DELTA_BINARY_PACKED,
+    parquet::arrow::Encoding::type::RLE,
+};
+
+TEST_F(ParquetWriterTest, testCompressionAndEncoding) {
   auto schema =
-      ROW({"c0", "c1", "c2", "c3", "c4", "c5", "c6"},
+      ROW({"c0", "c1", "c2", "c3", "c4", "c5", "c6", "c7"},
           {INTEGER(),
+           INTEGER(),
+           BOOLEAN(),
+           BIGINT(),
+           BIGINT(),
+           INTEGER(),
            DOUBLE(),
-           BIGINT(),
-           INTEGER(),
-           BIGINT(),
-           INTEGER(),
            DOUBLE()});
   const int64_t kRows = 10'000;
   const auto data = makeRowVector({
       makeFlatVector<int32_t>(kRows, [](auto row) { return row + 5; }),
-      makeFlatVector<double>(kRows, [](auto row) { return row - 10; }),
+      makeFlatVector<uint32_t>(kRows, [](auto row) { return row + 10; }),
+      makeFlatVector<bool>(kRows, [](vector_size_t row) -> bool { return true; }),
       makeFlatVector<int64_t>(kRows, [](auto row) { return row - 15; }),
-      makeFlatVector<uint32_t>(kRows, [](auto row) { return row + 20; }),
-      makeFlatVector<uint64_t>(kRows, [](auto row) { return row + 25; }),
-      makeFlatVector<int32_t>(kRows, [](auto row) { return row + 30; }),
-      makeFlatVector<double>(kRows, [](auto row) { return row - 25; }),
+      makeFlatVector<uint64_t>(kRows, [](auto row) { return row + 20; }),
+      makeFlatVector<int32_t>(kRows, [](auto row) { return row + 25; }),
+      makeFlatVector<double>(kRows, [](auto row) { return row - 30; }),
+      makeFlatVector<double>(kRows, [](auto row) { return row - 35; }),
   });
 
   // Create an in-memory writer
@@ -118,12 +127,19 @@ TEST_F(ParquetWriterTest, compression) {
   auto sinkPtr = sink.get();
   facebook::velox::parquet::WriterOptions writerOptions;
   writerOptions.memoryPool = leafPool_.get();
-  writerOptions.compressionKind = CompressionKind::CompressionKind_SNAPPY;
-
+  auto defaultCompression = CompressionKind::CompressionKind_SNAPPY;
+  auto defaultEncoding = parquet::arrow::Encoding::type::PLAIN;
+  writerOptions.compressionKind = defaultCompression;
+  writerOptions.encoding = defaultEncoding;
+  // Turn off dictionary encoding to turn on specific encoding.
+  writerOptions.enableDictionary = false;
   const auto& fieldNames = schema->names();
 
-  for (int i = 0; i < params.size(); i++) {
-    writerOptions.columnCompressionsMap[fieldNames[i]] = params[i];
+  for (int i = 0; i < compressionParams.size(); i++) {
+    writerOptions.columnCompressionsMap[fieldNames[i]] = compressionParams[i];
+  }
+  for (int i = 0; i < encodingParams.size(); i++) {
+    writerOptions.columnEncodingsMap[fieldNames[i]] = encodingParams[i];
   }
 
   auto writer = std::make_unique<facebook::velox::parquet::Writer>(
@@ -137,11 +153,17 @@ TEST_F(ParquetWriterTest, compression) {
   ASSERT_EQ(reader->numberOfRows(), kRows);
   ASSERT_EQ(*reader->rowType(), *schema);
 
-  for (int i = 0; i < params.size(); i++) {
+  for (int i = 0; i < schema->size(); i++) {
     EXPECT_EQ(
         reader->fileMetaData().rowGroup(0).columnChunk(i).compression(),
-        (i < params.size()) ? params[i]
-                            : CompressionKind::CompressionKind_SNAPPY);
+        (i < compressionParams.size())
+            ? compressionParams[i] : defaultCompression);
+  }
+
+  for (int i = 0; i < schema->size(); i++) {
+    auto encodings = reader->fileMetaData().rowGroup(0).columnChunk(i).encodings();
+    EXPECT_EQ( encodings.back(),
+        (i < encodingParams.size()) ? encodingParams[i] : defaultEncoding);
   }
 
   auto rowReader = createRowReaderWithSchema(std::move(reader), schema);
