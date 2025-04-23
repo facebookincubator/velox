@@ -2340,8 +2340,8 @@ std::unique_ptr<Filter> BytesRange::mergeWith(const Filter* other) const {
       bool lowerUnbounded = false;
       bool upperExclusive = false;
       bool lowerExclusive = false;
-      std::string upper = "";
-      std::string lower = "";
+      std::string upper;
+      std::string lower;
 
       if (lowerUnbounded_) {
         lowerUnbounded = otherRange->lowerUnbounded_;
