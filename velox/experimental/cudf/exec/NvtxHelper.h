@@ -28,12 +28,12 @@ class NvtxHelper {
   NvtxHelper(
       nvtx3::color color,
       std::optional<int64_t> payload = std::nullopt,
-      std::optional<std::string> extra_info = std::nullopt)
-      : color_(color), payload_(payload), extra_info_(extra_info) {}
+      std::optional<std::string> extraInfo = std::nullopt)
+      : color_(color), payload_(payload), extraInfo_(extraInfo) {}
 
   nvtx3::color color_{nvtx3::rgb{125, 125, 125}}; // Gray
   std::optional<int64_t> payload_{};
-  std::optional<std::string> extra_info_{};
+  std::optional<std::string> extraInfo_{};
 };
 
 /**
@@ -88,7 +88,7 @@ constexpr std::string_view extractClassAndFunction(
   static std::string const nvtx3_func_name__{                                    \
       std::string(extractClassAndFunction(__PRETTY_FUNCTION__))};                \
   std::string const nvtx3_func_extra_info__{                                     \
-      nvtx3_func_name__ + " " + this->extra_info_.value_or("")};                 \
+      nvtx3_func_name__ + " " + this->extraInfo_.value_or("")};                  \
   ::nvtx3::event_attributes const nvtx3_func_attr__{                           \
       this->payload_.has_value() ?                                             \
           ::nvtx3::event_attributes{nvtx3_func_extra_info__, this->color_,     \

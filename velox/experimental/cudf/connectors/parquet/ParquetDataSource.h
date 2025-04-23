@@ -92,7 +92,7 @@ class ParquetDataSource : public DataSource, public NvtxHelper {
   std::shared_ptr<ParquetConnectorSplit> split_;
   std::shared_ptr<ParquetTableHandle> tableHandle_;
 
-  const std::shared_ptr<ParquetConfig> ParquetConfig_;
+  const std::shared_ptr<ParquetConfig> parquetConfig_;
 
   folly::Executor* const executor_;
   const ConnectorQueryCtx* const connectorQueryCtx_;
@@ -105,7 +105,7 @@ class ParquetDataSource : public DataSource, public NvtxHelper {
   rmm::cuda_stream_view stream_;
 
   // Table column names read from the Parquet file
-  std::vector<std::string> columnNames;
+  std::vector<std::string> columnNames_;
 
   // Output type from file reader.  This is different from outputType_ that it
   // contains column names before assignment, and columns that only used in

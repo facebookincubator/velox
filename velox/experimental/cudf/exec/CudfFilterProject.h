@@ -47,11 +47,11 @@ class CudfFilterProject : public exec::Operator, public NvtxHelper {
   RowVectorPtr getOutput() override;
 
   void filter(
-      std::vector<std::unique_ptr<cudf::column>>& input_table_columns,
+      std::vector<std::unique_ptr<cudf::column>>& inputTableColumns,
       rmm::cuda_stream_view stream);
 
   std::vector<std::unique_ptr<cudf::column>> project(
-      std::vector<std::unique_ptr<cudf::column>>& input_table_columns,
+      std::vector<std::unique_ptr<cudf::column>>& inputTableColumns,
       rmm::cuda_stream_view stream);
 
   exec::BlockingReason isBlocked(ContinueFuture* /*future*/) override {

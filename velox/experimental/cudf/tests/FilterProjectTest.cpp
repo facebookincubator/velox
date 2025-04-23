@@ -29,10 +29,7 @@ using namespace facebook::velox::common::testutil;
 namespace {
 
 template <typename T>
-T get_col_value(
-    const std::vector<RowVectorPtr>& input,
-    int col,
-    int32_t index) {
+T getColValue(const std::vector<RowVectorPtr>& input, int col, int32_t index) {
   return input[0]->as<RowVector>()->childAt(col)->as<FlatVector<T>>()->valueAt(
       index);
 }
@@ -266,7 +263,7 @@ class CudfFilterProjectTest : public OperatorTestBase {
 
   void testMultiInputAndOperation(const std::vector<RowVectorPtr>& input) {
     // Create a plan with multiple AND operations
-    auto c2Value = get_col_value<StringView>(input, 2, 1).str();
+    auto c2Value = getColValue<StringView>(input, 2, 1).str();
     auto plan = PlanBuilder()
                     .values(input)
                     .project(
@@ -283,7 +280,7 @@ class CudfFilterProjectTest : public OperatorTestBase {
 
   void testMultiInputOrOperation(const std::vector<RowVectorPtr>& input) {
     // Create a plan with multiple OR operations
-    auto c2Value = get_col_value<StringView>(input, 2, 1).str();
+    auto c2Value = getColValue<StringView>(input, 2, 1).str();
     auto plan = PlanBuilder()
                     .values(input)
                     .project(
@@ -302,7 +299,7 @@ class CudfFilterProjectTest : public OperatorTestBase {
     // Create a plan with an IN operation for integers
     std::vector<int32_t> c0Values;
     for (int32_t i = 0; i < 5; i++) {
-      c0Values.push_back(get_col_value<int32_t>(input, 0, i));
+      c0Values.push_back(getColValue<int32_t>(input, 0, i));
     }
     std::string c0ValuesStr;
     for (size_t i = 0; i < c0Values.size(); ++i) {
@@ -322,7 +319,7 @@ class CudfFilterProjectTest : public OperatorTestBase {
     // Create a plan with an IN operation for doubles
     std::vector<double> c1Values;
     for (int32_t i = 0; i < 4; i++) {
-      c1Values.push_back(get_col_value<double>(input, 1, i));
+      c1Values.push_back(getColValue<double>(input, 1, i));
     }
     std::string c1ValuesStr;
     for (size_t i = 0; i < c1Values.size(); ++i) {
@@ -342,7 +339,7 @@ class CudfFilterProjectTest : public OperatorTestBase {
     // Create a plan with an IN operation for strings
     std::vector<StringView> c2Values;
     for (int32_t i = 0; i < 3; i++) {
-      c2Values.push_back(get_col_value<StringView>(input, 2, i));
+      c2Values.push_back(getColValue<StringView>(input, 2, i));
     }
     std::string c2ValuesStr;
     for (size_t i = 0; i < c2Values.size(); ++i) {

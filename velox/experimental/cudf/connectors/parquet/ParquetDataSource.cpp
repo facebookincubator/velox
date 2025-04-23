@@ -45,12 +45,12 @@ ParquetDataSource::ParquetDataSource(
         columnHandles,
     folly::Executor* executor,
     const ConnectorQueryCtx* connectorQueryCtx,
-    const std::shared_ptr<ParquetConfig>& ParquetConfig)
+    const std::shared_ptr<ParquetConfig>& parquetConfig)
     : NvtxHelper(
           nvtx3::rgb{80, 171, 241}, // Parquet blue,
           std::nullopt,
           fmt::format("[{}]", tableHandle->name())),
-      ParquetConfig_(ParquetConfig),
+      parquetConfig_(parquetConfig),
       executor_(executor),
       connectorQueryCtx_(connectorQueryCtx),
       pool_(connectorQueryCtx->memoryPool()),
@@ -108,17 +108,17 @@ std::optional<RowVectorPtr> ParquetDataSource::next(
 
   // Read a table chunk
   auto [table, metadata] = splitReader_->read_chunk();
-  auto cudfTable_ = std::move(table);
+  auto cudfTable = std::move(table);
   // Fill in the column names if reading the first chunk.
-  if (columnNames.empty()) {
+  if (columnNames_.empty()) {
     for (auto schema : metadata.schema_info) {
-      columnNames.emplace_back(schema.name);
+      columnNames_.emplace_back(schema.name);
     }
   }
 
   // Apply remaining filter if present
   if (remainingFilterExprSet_) {
-    auto cudfTableColumns = cudfTable_->release();
+    auto cudfTableColumns = cudfTable->release();
     const auto originalNumColumns = cudfTableColumns.size();
     // Filter may need addtional computed columns which are added to
     // cudfTableColumns
@@ -134,7 +134,7 @@ std::optional<RowVectorPtr> ParquetDataSource::next(
     auto originalTable =
         std::make_unique<cudf::table>(std::move(originalColumns));
     // Keep only rows where the filter is true
-    cudfTable_ = cudf::apply_boolean_mask(
+    cudfTable = cudf::apply_boolean_mask(
         *originalTable,
         *filterResult[0],
         stream_,
@@ -142,25 +142,25 @@ std::optional<RowVectorPtr> ParquetDataSource::next(
   }
 
   // Output RowVectorPtr
-  const auto nRows = cudfTable_->num_rows();
+  const auto nRows = cudfTable->num_rows();
 
   // keep only outputType_.size() columns in cudfTable_
-  if (outputType_->size() < cudfTable_->num_columns()) {
-    auto cudfTableColumns = cudfTable_->release();
+  if (outputType_->size() < cudfTable->num_columns()) {
+    auto cudfTableColumns = cudfTable->release();
     std::vector<std::unique_ptr<cudf::column>> originalColumns;
     originalColumns.reserve(outputType_->size());
     std::move(
         cudfTableColumns.begin(),
         cudfTableColumns.begin() + outputType_->size(),
         std::back_inserter(originalColumns));
-    cudfTable_ = std::make_unique<cudf::table>(std::move(originalColumns));
+    cudfTable = std::make_unique<cudf::table>(std::move(originalColumns));
   }
 
   auto output = cudfIsRegistered()
       ? std::make_shared<CudfVector>(
-            pool_, outputType_, nRows, std::move(cudfTable_), stream_)
+            pool_, outputType_, nRows, std::move(cudfTable), stream_)
       : with_arrow::toVeloxColumn(
-            cudfTable_->view(), pool_, outputType_->names(), stream_);
+            cudfTable->view(), pool_, outputType_->names(), stream_);
   stream_.synchronize();
 
   // Check if conversion yielded a nullptr
@@ -185,8 +185,8 @@ void ParquetDataSource::addSplit(std::shared_ptr<ConnectorSplit> split) {
   }
 
   // Clear columnNames if not empty
-  if (not columnNames.empty()) {
-    columnNames.clear();
+  if (not columnNames_.empty()) {
+    columnNames_.clear();
   }
 
   // Create a `cudf::io::chunked_parquet_reader` SplitReader
@@ -205,17 +205,17 @@ ParquetDataSource::createSplitReader() {
   // Reader options
   auto readerOptions =
       cudf::io::parquet_reader_options::builder(split_->getCudfSourceInfo())
-          .skip_rows(ParquetConfig_->skipRows())
-          .use_pandas_metadata(ParquetConfig_->isUsePandasMetadata())
-          .use_arrow_schema(ParquetConfig_->isUseArrowSchema())
+          .skip_rows(parquetConfig_->skipRows())
+          .use_pandas_metadata(parquetConfig_->isUsePandasMetadata())
+          .use_arrow_schema(parquetConfig_->isUseArrowSchema())
           .allow_mismatched_pq_schemas(
-              ParquetConfig_->isAllowMismatchedParquetSchemas())
-          .timestamp_type(ParquetConfig_->timestampType())
+              parquetConfig_->isAllowMismatchedParquetSchemas())
+          .timestamp_type(parquetConfig_->timestampType())
           .build();
 
   // Set num_rows only if available
-  if (ParquetConfig_->numRows().has_value()) {
-    readerOptions.set_num_rows(ParquetConfig_->numRows().value());
+  if (parquetConfig_->numRows().has_value()) {
+    readerOptions.set_num_rows(parquetConfig_->numRows().value());
   }
 
   // Set column projection if needed
@@ -227,7 +227,7 @@ ParquetDataSource::createSplitReader() {
     // non-ast instructions in filter is not supported for SubFieldFilter.
     // precomputeInstructions which are non-ast instructions should be empty.
     std::vector<PrecomputeInstruction> precomputeInstructions;
-    create_ast_tree(
+    createAstTree(
         subfieldFilterExpr,
         subfieldTree_,
         subfieldScalars_,
@@ -239,8 +239,8 @@ ParquetDataSource::createSplitReader() {
   stream_ = cudfGlobalStreamPool().get_stream();
   // Create a parquet reader
   return std::make_unique<cudf::io::chunked_parquet_reader>(
-      ParquetConfig_->maxChunkReadLimit(),
-      ParquetConfig_->maxPassReadLimit(),
+      parquetConfig_->maxChunkReadLimit(),
+      parquetConfig_->maxPassReadLimit(),
       readerOptions,
       stream_,
       cudf::get_current_device_resource_ref());
@@ -249,7 +249,7 @@ ParquetDataSource::createSplitReader() {
 void ParquetDataSource::resetSplit() {
   split_.reset();
   splitReader_.reset();
-  columnNames.clear();
+  columnNames_.clear();
 }
 
 } // namespace facebook::velox::cudf_velox::connector::parquet

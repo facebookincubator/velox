@@ -76,26 +76,26 @@ std::string makeUuid() {
 
 cudf::io::compression_type getCompressionType(
     facebook::velox::common::CompressionKind name) {
-  using compression_type = cudf::io::compression_type;
+  using CompressionType = cudf::io::compression_type;
 
   static std::unordered_map<
       facebook::velox::common::CompressionKind,
-      compression_type> const map = {
+      CompressionType> const kMap = {
       {facebook::velox::common::CompressionKind::CompressionKind_NONE,
-       compression_type::NONE},
+       CompressionType::NONE},
       {facebook::velox::common::CompressionKind::CompressionKind_SNAPPY,
-       compression_type::SNAPPY},
+       CompressionType::SNAPPY},
       {facebook::velox::common::CompressionKind::CompressionKind_LZ4,
-       compression_type::LZ4},
+       CompressionType::LZ4},
       {facebook::velox::common::CompressionKind::CompressionKind_ZSTD,
-       compression_type::ZSTD}};
+       CompressionType::ZSTD}};
 
   VELOX_CHECK(
-      map.find(name) != map.end(),
+      kMap.find(name) != kMap.end(),
       "Unsupported compression type requested. Supported compression types are: "
       "NONE, SNAPPY, LZ4, ZSTD");
 
-  return map.at(name);
+  return kMap.at(name);
 }
 
 std::shared_ptr<memory::MemoryPool> createSinkPool(
@@ -112,14 +112,14 @@ std::shared_ptr<memory::MemoryPool> createSortPool(
 
 const std::string LocationHandle::tableTypeName(
     LocationHandle::TableType type) {
-  static const auto tableTypes = tableTypeNames();
-  return tableTypes.at(type);
+  static const auto kTableTypes = tableTypeNames();
+  return kTableTypes.at(type);
 }
 
 LocationHandle::TableType LocationHandle::tableTypeFromName(
     const std::string& name) {
-  static const auto nameTableTypes = invertMap(tableTypeNames());
-  return nameTableTypes.at(name);
+  static const auto kNameTableTypes = invertMap(tableTypeNames());
+  return kNameTableTypes.at(name);
 }
 
 ParquetDataSink::ParquetDataSink(
@@ -220,9 +220,7 @@ ParquetDataSink::createCudfWriter(cudf::table_view cudfTable) {
     std::for_each(
         tableInputMetadata.column_metadata.begin(),
         tableInputMetadata.column_metadata.end(),
-        [=](auto& col_meta) {
-          col_meta.set_encoding(writerOptions->encoding);
-        });
+        [=](auto& colMeta) { colMeta.set_encoding(writerOptions->encoding); });
 
     cudfWriterOptions.set_row_group_size_bytes(
         writerOptions->rowGroupSizeBytes);

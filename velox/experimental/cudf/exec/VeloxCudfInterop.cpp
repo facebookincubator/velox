@@ -36,7 +36,7 @@
 
 namespace facebook::velox::cudf_velox {
 
-cudf::type_id velox_to_cudf_type_id(const TypePtr& type) {
+cudf::type_id veloxToCudfTypeId(const TypePtr& type) {
   switch (type->kind()) {
     case TypeKind::BOOLEAN:
       return cudf::type_id::BOOL8;
