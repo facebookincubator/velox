@@ -121,13 +121,19 @@ class LocalExchangeQueue {
   void close();
 
   /// Get a reusable vector from the vector pool.  Return nullptr if none is
-  /// available.
+  /// available or if vector pool is not enabled.
   RowVectorPtr getVector() {
-    return vectorPool_->pop();
+    if (vectorPool_ != nullptr) {
+      return vectorPool_->pop();
+    }
+    return nullptr;
   }
 
   /// Returns true if all producers have sent no more data signal.
   bool testingProducersDone() const;
+
+  /// Returns true if vectorPool_ is enabled.
+  bool testingVectorPoolEnabled() const;
 
  private:
   using Queue = std::queue<std::pair<RowVectorPtr, int64_t>>;

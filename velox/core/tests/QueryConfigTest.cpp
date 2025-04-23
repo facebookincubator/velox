@@ -17,7 +17,11 @@
 
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/core/QueryCtx.h"
+#include "velox/exec/Task.h"
+#include "velox/exec/tests/utils/PlanBuilder.h"
+#include "velox/exec/tests/utils/QueryAssertions.h"
 #include "velox/expression/EvalCtx.h"
+#include "velox/functions/prestosql/aggregates/RegisterAggregateFunctions.h"
 
 namespace facebook::velox::core::test {
 
@@ -202,6 +206,57 @@ TEST_F(QueryConfigTest, expressionEvaluationRelatedConfigs) {
   testConfig(createConfig(false, true, false, false));
   testConfig(createConfig(false, false, true, false));
   testConfig(createConfig(false, false, false, true));
+}
+
+TEST_F(QueryConfigTest, enableLocalExchangeVectorPool) {
+  aggregate::prestosql::registerAllAggregateFunctions();
+
+  std::shared_ptr<memory::MemoryPool> rootPool{
+      memory::memoryManager()->addRootPool()};
+  std::shared_ptr<memory::MemoryPool> pool{rootPool->addLeafChild("leaf")};
+
+  auto data = RowVector::createEmpty(
+      ROW({"c0", "c1"}, {BIGINT(), BIGINT()}), pool.get());
+  core::PlanNodeId planNodeId;
+  auto plan = exec::test::PlanBuilder()
+                  .values({data})
+                  .singleAggregation({"c1"}, {"sum(c0)"})
+                  .localPartition({})
+                  .capturePlanNodeId(planNodeId)
+                  .singleAggregation({}, {"sum(a0)"})
+                  .planNode();
+
+  auto testConfig = [&](bool enableLocalExchangeVectorPool) {
+    std::unordered_map<std::string, std::string> configData(
+        {{core::QueryConfig::kEnableLocalExchangeQueueCache,
+          enableLocalExchangeVectorPool ? "true" : "false"}});
+    auto queryCtx =
+        core::QueryCtx::create(nullptr, QueryConfig{std::move(configData)});
+    const core::QueryConfig& config = queryCtx->queryConfig();
+    ASSERT_EQ(
+        config.isLocalExchangeQueueCacheEnabled(),
+        enableLocalExchangeVectorPool);
+
+    auto task = exec::Task::create(
+        "taskId",
+        PlanFragment{plan},
+        0,
+        queryCtx,
+        exec::Task::ExecutionMode::kSerial);
+    auto result = task->next();
+    auto localExchangeQueue =
+        task->getLocalExchangeQueue(exec::kUngroupedGroupId, planNodeId, 0);
+    ASSERT_EQ(
+        localExchangeQueue->testingVectorPoolEnabled(),
+        enableLocalExchangeVectorPool);
+
+    while (result != nullptr) {
+      result = task->next();
+    }
+    exec::test::waitForTaskCompletion(task.get());
+  };
+  testConfig(true);
+  testConfig(false);
 }
 
 } // namespace facebook::velox::core::test
