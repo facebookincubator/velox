@@ -14,17 +14,19 @@
 
 # Download Spark source code and copy the Spark connect proto files to Velox
 # directory.
-set(SPARK_VERSION 3.5.1)
-set(SPARK_SHA256_CHECKSUM
-    SHA256=8eb939a637cc9d4406467620cfef8e8985bf370d766907967fc85db3e9a120cb)
-set(SPARK_SOURCE_URL
-    "https://github.com/apache/spark/archive/refs/tags/v${SPARK_VERSION}.tar.gz"
+set(VELOX_SPARK_VERSION 3.5.1)
+set(VELOX_SPARK_BUILD_SHA256_CHECKSUM
+    8eb939a637cc9d4406467620cfef8e8985bf370d766907967fc85db3e9a120cb)
+set(VELOX_SPARK_SOURCE_URL
+    "https://github.com/apache/spark/archive/refs/tags/v${VELOX_SPARK_VERSION}.tar.gz"
 )
+
+velox_resolve_dependency_url(SPARK)
 
 FetchContent_Declare(
   Spark
-  URL ${SPARK_SOURCE_URL}
-  URL_HASH ${SPARK_SHA256_CHECKSUM})
+  URL ${VELOX_SPARK_SOURCE_URL}
+  URL_HASH ${VELOX_SPARK_BUILD_SHA256_CHECKSUM})
 FetchContent_MakeAvailable(Spark)
 
 set(SPARK_CONNECT_PROTO_BASE_DIR
