@@ -182,6 +182,33 @@ common::CompressionKind thriftCodecToCompressionKind(
   }
 }
 
+arrow::Encoding::type thriftCodecToEncoding(thrift::Encoding::type encoding) {
+  switch (encoding) {
+    case thrift::Encoding::PLAIN:
+      return arrow::Encoding::PLAIN;
+    case thrift::Encoding::PLAIN_DICTIONARY:
+      return arrow::Encoding::PLAIN_DICTIONARY;
+    case thrift::Encoding::RLE:
+      return arrow::Encoding::RLE;
+    case thrift::Encoding::BIT_PACKED:
+      return arrow::Encoding::BIT_PACKED;
+    case thrift::Encoding::DELTA_BINARY_PACKED:
+      return arrow::Encoding::DELTA_BINARY_PACKED;
+    case thrift::Encoding::DELTA_LENGTH_BYTE_ARRAY:
+      return arrow::Encoding::DELTA_LENGTH_BYTE_ARRAY;
+    case thrift::Encoding::DELTA_BYTE_ARRAY:
+      return arrow::Encoding::DELTA_BYTE_ARRAY;
+    case thrift::Encoding::RLE_DICTIONARY:
+      return arrow::Encoding::RLE_DICTIONARY;
+    case thrift::Encoding::BYTE_STREAM_SPLIT:
+      return arrow::Encoding::BYTE_STREAM_SPLIT;
+    default:
+      VELOX_UNSUPPORTED(
+          "Unsupported encoding type: " +
+          facebook::velox::parquet::thrift::to_string(encoding));
+  }
+}
+
 ColumnChunkMetaDataPtr::ColumnChunkMetaDataPtr(const void* metadata)
     : ptr_(metadata) {}
 
@@ -246,6 +273,16 @@ int64_t ColumnChunkMetaDataPtr::dictionaryPageOffset() const {
 common::CompressionKind ColumnChunkMetaDataPtr::compression() const {
   return thriftCodecToCompressionKind(
       thriftColumnChunkPtr(ptr_)->meta_data.codec);
+}
+
+std::vector<arrow::Encoding::type> ColumnChunkMetaDataPtr::encodings() const {
+  const auto& thriftEncodings = thriftColumnChunkPtr(ptr_)->meta_data.encodings;
+  std::vector<arrow::Encoding::type> result;
+  result.reserve(thriftEncodings.size());
+  for (const auto& encoding : thriftEncodings) {
+    result.push_back(thriftCodecToEncoding(encoding));
+  }
+  return result;
 }
 
 int64_t ColumnChunkMetaDataPtr::totalCompressedSize() const {
