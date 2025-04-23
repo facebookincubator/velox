@@ -333,16 +333,14 @@ VectorPtr CastExpr::castFromIntervalYearMonth(
   (*castResult).clearNulls(rows);
 
   auto* inputFlatVector = input.as<SimpleVector<int32_t>>();
-  VELOX_CHECK(
-      toType->kind() == TypeKind::INTEGER,
-      "Casting from interval year month to {} is not supported",
-      toType->toString());
+  VELOX_CHECK_EQ(toType->kind(), TypeKind::INTEGER);
 
   auto* resultFlatVector = castResult->as<FlatVector<int32_t>>();
-  applyToSelectedNoThrowLocal(context, rows, castResult, [&](vector_size_t row) {
-    int32_t intervalMonths = inputFlatVector->valueAt(row);
-    resultFlatVector->set(row, intervalMonths);
-  });
+  applyToSelectedNoThrowLocal(
+      context, rows, castResult, [&](vector_size_t row) {
+        int32_t intervalMonths = inputFlatVector->valueAt(row);
+        resultFlatVector->set(row, intervalMonths);
+      });
   return castResult;
 }
 
@@ -783,7 +781,8 @@ void CastExpr::applyPeeled(
         "Cast from {} to {} is not supported",
         fromType->toString(),
         toType->toString());
-  } else if (fromType->isIntervalYearMonth() && toType->kind() == TypeKind::INTEGER) {
+  } else if (
+      fromType->isIntervalYearMonth() && toType->kind() == TypeKind::INTEGER) {
     result = castFromIntervalYearMonth(rows, input, context, toType);
   } else if (toType->isShortDecimal()) {
     result = applyDecimal<int64_t>(rows, input, context, fromType, toType);

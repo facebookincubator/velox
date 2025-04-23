@@ -322,6 +322,24 @@ supported conversions to/from JSON are listed in :doc:`json`.
      -
      - Y
      - Y
+   * - interval year to month
+     -
+     -
+     -
+     - Y
+     -
+     -
+     -
+     -
+     -
+     -
+     -
+     -
+     -
+     -
+     -
+     -
+
 Cast to Integral Types
 ----------------------
 
@@ -429,6 +447,23 @@ Invalid examples
 ::
 
   SELECT cast(214748364890 decimal(12, 2) as integer); -- Out of range
+
+From interval year month
+^^^^^^^^^^^^^^^^^^^^^^^
+
+Casting from interval year month to integer returns the total number of months in the interval.
+The conversion is straightforward where 1 year = 12 months.
+
+Valid examples:
+
+::
+
+  SELECT cast(INTERVAL '1' YEAR as integer); -- 1
+  SELECT cast(INTERVAL '2' YEAR as integer); -- 2
+  SELECT cast(INTERVAL '1' MONTH as integer); -- 1
+  SELECT cast(INTERVAL '1-2' YEAR TO MONTH as integer); -- 14
+  SELECT cast(INTERVAL '-1' YEAR as integer); -- -1
+  SELECT cast(INTERVAL '-1-2' YEAR TO MONTH as integer); -- -14
 
 Cast to Boolean
 ---------------
@@ -1271,20 +1306,3 @@ Miscellaneous
         SELECT typeof(123); -- integer
         SELECT typeof(1.5); -- double
         SELECT typeof(array[1,2,3]); -- array(integer)
-
-From interval year month
-^^^^^^^^^^^^^^^^^^^^^^^
-
-Casting from interval year month to integer returns the total number of months in the interval.
-The conversion is straightforward where 1 year = 12 months.
-
-Valid examples:
-
-::
-
-  SELECT cast(INTERVAL '1' YEAR as integer); -- 12
-  SELECT cast(INTERVAL '2' YEAR as integer); -- 24
-  SELECT cast(INTERVAL '1' MONTH as integer); -- 1
-  SELECT cast(INTERVAL '1-2' YEAR TO MONTH as integer); -- 14
-  SELECT cast(INTERVAL '-1' YEAR as integer); -- -12
-  SELECT cast(INTERVAL '-1-2' YEAR TO MONTH as integer); -- -14
