@@ -39,6 +39,38 @@ std::unique_ptr<PeriodicStatsReporter>& instance() {
   static std::unique_ptr<PeriodicStatsReporter> reporter;
   return reporter;
 }
+
+#define DEFINE_METRIC_ARRAY_ENTRY(i) \
+  &kMetricAllocatorSizeStats_##i##_allocateClocks,
+
+const folly::StringPiece* allocateClockMetrics[] = {
+    EXPAND_SIZE_STATS_CLASSES(DEFINE_METRIC_ARRAY_ENTRY)};
+
+#undef DEFINE_METRIC_ARRAY_ENTRY
+
+#define DEFINE_METRIC_ARRAY_ENTRY(i) \
+  &kMetricAllocatorSizeStats_##i##_freeClocks,
+
+const folly::StringPiece* freeClockMetrics[] = {
+    EXPAND_SIZE_STATS_CLASSES(DEFINE_METRIC_ARRAY_ENTRY)};
+
+#undef DEFINE_METRIC_ARRAY_ENTRY
+
+#define DEFINE_METRIC_ARRAY_ENTRY(i) \
+  &kMetricAllocatorSizeStats_##i##_numAllocations,
+
+const folly::StringPiece* numAllocationsMetrics[] = {
+    EXPAND_SIZE_STATS_CLASSES(DEFINE_METRIC_ARRAY_ENTRY)};
+
+#undef DEFINE_METRIC_ARRAY_ENTRY
+
+#define DEFINE_METRIC_ARRAY_ENTRY(i) \
+  &kMetricAllocatorSizeStats_##i##_totalBytes,
+
+const folly::StringPiece* totalBytesMetrics[] = {
+    EXPAND_SIZE_STATS_CLASSES(DEFINE_METRIC_ARRAY_ENTRY)};
+
+#undef DEFINE_METRIC_ARRAY_ENTRY
 } // namespace
 
 void startPeriodicStatsReporter(const PeriodicStatsReporter::Options& options) {
@@ -115,6 +147,18 @@ void PeriodicStatsReporter::reportAllocatorStats() {
   RECORD_METRIC_VALUE(
       kMetricAllocatedMemoryBytes,
       (velox::memory::AllocationTraits::pageBytes(allocator_->numAllocated())));
+
+  if (FLAGS_velox_time_allocations) {
+    const auto stats = allocator_->stats();
+    for (size_t i = 0; i < stats.sizes.size(); ++i) {
+      const auto& sizeStats = stats.sizes[i];
+      RECORD_METRIC_VALUE(*allocateClockMetrics[i], sizeStats.allocateClocks);
+      RECORD_METRIC_VALUE(*freeClockMetrics[i], sizeStats.freeClocks);
+      RECORD_METRIC_VALUE(*numAllocationsMetrics[i], sizeStats.numAllocations);
+      RECORD_METRIC_VALUE(*totalBytesMetrics[i], sizeStats.totalBytes);
+    }
+  }
+
   // TODO(jtan6): Remove condition after T150019700 is done
   if (auto* mmapAllocator =
           dynamic_cast<const velox::memory::MmapAllocator*>(allocator_)) {
@@ -125,7 +169,6 @@ void PeriodicStatsReporter::reportAllocatorStats() {
         velox::memory::AllocationTraits::pageBytes(
             (mmapAllocator->numExternalMapped())));
   }
-  // TODO(xiaoxmeng): add memory allocation size stats.
 }
 
 void PeriodicStatsReporter::reportCacheStats() {
