@@ -139,6 +139,11 @@ class BingTileType : public BigintType {
   static folly::Expected<std::vector<uint64_t>, std::string> bingTileChildren(
       uint64_t tile,
       uint8_t childZoom);
+
+  static folly::Expected<uint64_t, std::string> bingTileFromQuadKey(
+      const std::string_view& quadKey);
+
+  static std::string bingTileToQuadKey(uint64_t tile);
 };
 
 inline bool isBingTileType(const TypePtr& type) {

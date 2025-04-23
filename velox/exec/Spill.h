@@ -27,11 +27,14 @@
 #include "velox/exec/SpillFile.h"
 #include "velox/exec/TreeOfLosers.h"
 #include "velox/exec/UnorderedStreamReader.h"
+#include "velox/exec/VectorHasher.h"
 #include "velox/vector/ComplexVector.h"
 #include "velox/vector/DecodedVector.h"
 #include "velox/vector/VectorStream.h"
 
 namespace facebook::velox::exec {
+class VectorHasher;
+
 /// A source of sorted spilled RowVectors coming either from a file or memory.
 class SpillMergeStream : public MergeStream {
  public:
@@ -197,61 +200,88 @@ class FileSpillBatchStream : public BatchStream {
 };
 
 /// Identifies a spill partition generated from a given spilling operator. It
-/// consists of partition start bit offset and the actual partition number.
-/// The start bit offset is used to calculate the partition number of spill
-/// data. It is required for the recursive spilling handling as we advance the
-/// start bit offset when we go to the next level of recursive spilling.
+/// provides with informattion on spill level and the partition number of each
+/// spill level. When recursive spilling happens, there will be more than one
+/// spill level.
 ///
 /// NOTE: multiple shards created from the same SpillPartition by split()
 /// will share the same id.
 class SpillPartitionId {
  public:
-  SpillPartitionId(uint8_t partitionBitOffset, int32_t partitionNumber)
-      : partitionBitOffset_(partitionBitOffset),
-        partitionNumber_(partitionNumber) {}
+  /// Maximum spill level supported by 'SpillPartitionId'.
+  static constexpr uint32_t kMaxSpillLevel{3};
 
-  bool operator==(const SpillPartitionId& other) const {
-    return std::tie(partitionBitOffset_, partitionNumber_) ==
-        std::tie(other.partitionBitOffset_, other.partitionNumber_);
-  }
+  /// Maximum number of partition bits per spill level supported by
+  /// 'SpillPartitionId'.
+  static constexpr uint32_t kMaxPartitionBits{3};
 
-  bool operator!=(const SpillPartitionId& other) const {
-    return !(*this == other);
-  }
+  /// Constructs a default invalid id.
+  SpillPartitionId() = default;
+
+  /// Constructs a root spill level id.
+  explicit SpillPartitionId(uint32_t partitionNumber);
+
+  /// Constructs a child spill level id, descending from provided 'parent'.
+  SpillPartitionId(SpillPartitionId parent, uint32_t partitionNumber);
+
+  bool operator==(const SpillPartitionId& other) const;
+
+  bool operator!=(const SpillPartitionId& other) const;
 
   /// Customize the compare operator for recursive spilling control. It
-  /// ensures the partition with higher partition bit is handled prior than
-  /// one with lower partition bit. With the same partition bit, the one with
-  /// smaller partition number is handled first. We put all spill partitions
-  /// in an ordered map sorted based on the partition id. The recursive
-  /// spilling will advance the partition start bit when go to the next level
-  /// of recursive spilling.
-  bool operator<(const SpillPartitionId& other) const {
-    if (partitionBitOffset_ != other.partitionBitOffset_) {
-      return partitionBitOffset_ > other.partitionBitOffset_;
-    }
-    return partitionNumber_ < other.partitionNumber_;
-  }
+  /// ensures the partition with higher partition bit (deeper spill level) is
+  /// handled prior than one with lower partition bit (lower spill level). With
+  /// the same partition bit, the one with smaller partition number is handled
+  /// first. We put all spill partitions in an ordered map sorted based on the
+  /// partition id. The recursive spilling will advance the partition start bit
+  /// when go to the next level of recursive spilling.
+  bool operator<(const SpillPartitionId& other) const;
 
   bool operator>(const SpillPartitionId& other) const {
     return (*this != other) && !(*this < other);
   }
 
-  std::string toString() const {
-    return fmt::format("[{},{}]", partitionBitOffset_, partitionNumber_);
-  }
+  std::string toString() const;
 
-  uint8_t partitionBitOffset() const {
-    return partitionBitOffset_;
-  }
+  uint32_t spillLevel() const;
 
-  int32_t partitionNumber() const {
-    return partitionNumber_;
-  }
+  /// Returns the partition number of the current spill level.
+  uint32_t partitionNumber() const;
+
+  /// Overloaded method that returns the partition number of the requested spill
+  /// level.
+  uint32_t partitionNumber(uint32_t spillLevel) const;
+
+  uint32_t encodedId() const;
+
+  bool valid() const;
 
  private:
-  uint8_t partitionBitOffset_{0};
-  int32_t partitionNumber_{0};
+  // Default invalid encoded id.
+  static constexpr uint32_t kInvalidEncodedId{0xFFFFFFFF};
+
+  // Number of bits to represent one spill level, details see 'encodedId_'.
+  static constexpr uint8_t kNumPartitionBits = 3;
+  static constexpr uint8_t kSpillLevelBitOffset = 29;
+
+  // Bit mask for the partition number of the spill level, details see
+  // 'encodedId_'
+  static constexpr uint32_t kPartitionBitMask = 0x00000007;
+
+  // Bit mask for the depth of this spill level, details see 'encodedId_'.
+  static constexpr uint32_t kSpillLevelBitMask = 0xE0000000;
+
+  // Encoded hirachical spill partition id. Below shows the layout from the low
+  // bits.
+  //   <LSB>
+  //   (0 ~ 2 bits): Represents the partition number at the 1st level.
+  //   (3 ~ 5 bits): Represents the partition number at the 2nd level.
+  //   (6 ~ 8 bits): Represents the partition number at the 3rd level.
+  //   (9 ~ 11 bits): Represents the partition number at the 4th level.
+  //   (12 ~ 28 bits): Unused
+  //   (29 ~ 31 bits): Represents the current spill level.
+  //   <MSB>
+  uint32_t encodedId_{kInvalidEncodedId};
 };
 
 inline std::ostream& operator<<(std::ostream& os, SpillPartitionId id) {
@@ -261,6 +291,64 @@ inline std::ostream& operator<<(std::ostream& os, SpillPartitionId id) {
 
 using SpillPartitionIdSet = folly::F14FastSet<SpillPartitionId>;
 using SpillPartitionNumSet = folly::F14FastSet<uint32_t>;
+
+/// Provides the mapping from the computed hash value to 'SpillPartitionId'. It
+/// is used to lookup the spill partition id for a spilled row.
+class SpillPartitionIdLookup {
+ public:
+  SpillPartitionIdLookup(
+      const SpillPartitionIdSet& spillPartitionIds,
+      uint32_t startPartitionBit,
+      uint32_t numPartitionBits);
+
+  SpillPartitionId partition(uint64_t hash) const;
+
+ private:
+  void generateLookup(
+      const SpillPartitionId& id,
+      uint32_t startPartitionBit,
+      uint32_t numPartitionBits,
+      uint32_t numLookupBits);
+
+  void generateLookupHelper(
+      const SpillPartitionId& id,
+      uint32_t currentBit,
+      uint32_t endBit,
+      uint64_t lookupBits);
+
+  const uint64_t partitionBitsMask_;
+
+  // The lookup_ array index is the extracted hash value key, value is the
+  // corresponding spill partition id. The vector is sized to accommodate all
+  // possible combinations of partition bits (2^numLookupBits entries). When a
+  // hash value is used to partition, its lookup bits range will be used as
+  // index to check against 'lookup_' and find the corresponding id.
+  std::vector<SpillPartitionId> lookup_;
+};
+
+/// Vectorized partitioning function for spill. The partitioning takes advantage
+/// of SpillPartitionIdLookup and performs a fast partitioning for the input
+/// vector.
+class SpillPartitionFunction {
+ public:
+  SpillPartitionFunction(
+      const SpillPartitionIdLookup& lookup,
+      const RowTypePtr& inputType,
+      const std::vector<column_index_t>& keyChannels);
+
+  void partition(
+      const RowVector& input,
+      std::vector<SpillPartitionId>& partitionIds);
+
+ private:
+  const SpillPartitionIdLookup lookup_;
+
+  std::vector<std::unique_ptr<VectorHasher>> hashers_;
+
+  // Reusable resources for hashing.
+  SelectivityVector rows_;
+  raw_vector<uint64_t> hashes_;
+};
 
 /// Contains a spill partition data which includes the partition id and
 /// corresponding spill files.
@@ -279,6 +367,10 @@ class SpillPartition {
       size_ += file.size;
       files_.push_back(std::move(file));
     }
+  }
+
+  SpillFiles files() const {
+    return files_;
   }
 
   const SpillPartitionId& id() const {
@@ -476,6 +568,12 @@ class SpillState {
   std::vector<std::unique_ptr<SpillWriter>> partitionWriters_;
 };
 
+/// Returns the partition bit offset of the current spill level of 'id'.
+uint8_t partitionBitOffset(
+    const SpillPartitionId& id,
+    uint8_t startPartitionBitOffset,
+    uint8_t numPartitionBits);
+
 /// Generate partition id set from given spill partition set.
 SpillPartitionIdSet toSpillPartitionIdSet(
     const SpillPartitionSet& partitionSet);
@@ -515,9 +613,9 @@ void removeEmptyPartitions(SpillPartitionSet& partitionSet);
 namespace std {
 template <>
 struct hash<::facebook::velox::exec::SpillPartitionId> {
-  size_t operator()(const ::facebook::velox::exec::SpillPartitionId& id) const {
-    return facebook::velox::bits::hashMix(
-        id.partitionBitOffset(), id.partitionNumber());
+  uint32_t operator()(
+      const ::facebook::velox::exec::SpillPartitionId& id) const {
+    return std::hash<uint32_t>()(id.encodedId());
   }
 };
 } // namespace std

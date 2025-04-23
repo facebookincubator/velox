@@ -54,6 +54,8 @@ void registerSimpleFunctions(const std::string& prefix) {
       {prefix + "starts_with"});
   registerFunction<EndsWithFunction, bool, Varchar, Varchar>(
       {prefix + "ends_with"});
+  registerFunction<EndsWithFunction, bool, Varchar, UnknownValue>(
+      {prefix + "ends_with"});
 
   registerFunction<TrailFunction, Varchar, Varchar, int32_t>(
       {prefix + "trail"});
@@ -111,13 +113,33 @@ void registerSimpleFunctions(const std::string& prefix) {
 
   registerFunction<Re2RegexpSplit, Array<Varchar>, Varchar, Varchar>(
       {prefix + "regexp_split"});
+}
 
+void registerSplitToMultiMap(const std::string& prefix) {
   registerFunction<
       SplitToMultiMapFunction,
       Map<Varchar, Array<Varchar>>,
       Varchar,
       Varchar,
       Varchar>({prefix + "split_to_multimap"});
+  registerFunction<
+      SplitToMultiMapFunction,
+      Map<Varchar, Array<Varchar>>,
+      Varchar,
+      UnknownValue,
+      Varchar>({prefix + "split_to_multimap"});
+  registerFunction<
+      SplitToMultiMapFunction,
+      Map<Varchar, Array<Varchar>>,
+      Varchar,
+      Varchar,
+      UnknownValue>({prefix + "split_to_multimap"});
+  registerFunction<
+      SplitToMultiMapFunction,
+      Map<Varchar, Array<Varchar>>,
+      Varchar,
+      UnknownValue,
+      UnknownValue>({prefix + "split_to_multimap"});
 }
 
 void registerSplitToMap(const std::string& prefix) {
@@ -127,6 +149,25 @@ void registerSplitToMap(const std::string& prefix) {
       Varchar,
       Varchar,
       Varchar>({prefix + "split_to_map"});
+
+  registerFunction<
+      SplitToMapFunction,
+      Map<Varchar, Array<Varchar>>,
+      Varchar,
+      UnknownValue,
+      Varchar>({prefix + "split_to_map"});
+  registerFunction<
+      SplitToMapFunction,
+      Map<Varchar, Array<Varchar>>,
+      Varchar,
+      Varchar,
+      UnknownValue>({prefix + "split_to_map"});
+  registerFunction<
+      SplitToMapFunction,
+      Map<Varchar, Array<Varchar>>,
+      Varchar,
+      UnknownValue,
+      UnknownValue>({prefix + "split_to_map"});
 
   exec::registerVectorFunction(
       prefix + "split_to_map",
@@ -161,6 +202,7 @@ void registerStringFunctions(const std::string& prefix) {
   VELOX_REGISTER_VECTOR_FUNCTION(udf_split, prefix + "split");
 
   registerSplitToMap(prefix);
+  registerSplitToMultiMap(prefix);
 
   VELOX_REGISTER_VECTOR_FUNCTION(udf_concat, prefix + "concat");
   VELOX_REGISTER_VECTOR_FUNCTION(udf_replaceFirst, prefix + "replace_first");

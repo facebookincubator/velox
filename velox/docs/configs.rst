@@ -31,14 +31,6 @@ Generic Configuration
      - integer
      - 5000
      - TableScan operator will exit getOutput() method after this many milliseconds even if it has no data to return yet. Zero means 'no time limit'.
-   * - abandon_partial_aggregation_min_rows
-     - integer
-     - 100,000
-     - Number of input rows to receive before starting to check whether to abandon partial aggregation.
-   * - abandon_partial_aggregation_min_pct
-     - integer
-     - 80
-     - Abandons partial aggregation if number of groups equals or exceeds this percentage of the number of input rows.
    * - abandon_partial_topn_row_number_min_rows
      - integer
      - 100,000
@@ -399,6 +391,34 @@ Spilling
      - 0
      - Percentage of aggregation or join input batches that will be forced to spill for testing. 0 means no extra spilling.
 
+Aggregation
+-----------
+.. list-table::
+   :widths: 20 10 10 70
+   :header-rows: 1
+
+   * - Property Name
+     - Type
+     - Default Value
+     - Description
+   * - abandon_partial_aggregation_min_rows
+     - integer
+     - 100,000
+     - Number of input rows to receive before starting to check whether to abandon partial aggregation.
+   * - abandon_partial_aggregation_min_pct
+     - integer
+     - 80
+     - Abandons partial aggregation if number of groups equals or exceeds this percentage of the number of input rows.
+   * - streaming_aggregation_eager_flush
+     - bool
+     - false
+     - If this is false (the default), in streaming aggregation, wait until we
+       have enough number of output rows to produce a batch of size specified by
+       Operator::outputBatchRows.  If this is true, we put the rows in output
+       batch, as soon as the corresponding groups are fully aggregated.  This is
+       useful for reducing memory consumption, if the downstream operators are
+       not sensitive to small batch size.
+
 Table Scan
 ------------
 .. list-table::
@@ -673,6 +693,16 @@ Each query can override the config by setting corresponding query session proper
      - V1
      - Data Page version used when writing into Parquet through Arrow bridge.
        Valid values are "V1" and "V2".
+   * - hive.parquet.writer.page-size
+     - hive.parquet.writer.page_size
+     - string
+     - 1MB
+     - Data Page size used when writing into Parquet through Arrow bridge.
+   * - hive.parquet.writer.batch-size
+     - hive.parquet.writer.batch_size
+     - integer
+     - 1024
+     - Batch size used when writing into Parquet through Arrow bridge.
 
 ``Amazon S3 Configuration``
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^
@@ -765,6 +795,11 @@ Each query can override the config by setting corresponding query session proper
        Legacy mode only enables throttled retry for transient errors.
        Standard mode is built on top of legacy mode and has throttled retry enabled for throttling errors apart from transient errors.
        Adaptive retry mode dynamically limits the rate of AWS requests to maximize success rate.
+   * - hive.s3.aws-credentials-provider
+     - string
+     -
+     - A custom credential provider, if specified, will be used to create the client in favor of other authentication mechanisms.
+       The provider must be registered using "registerAWSCredentialsProvider" before it can be used.
 
 Bucket Level Configuration
 """"""""""""""""""""""""""
@@ -901,6 +936,12 @@ Spark-specific Configuration
        Joda date formatter performs strict checking of its input and uses different pattern string.
        For example, the 2015-07-22 10:00:00 timestamp cannot be parsed if pattern is yyyy-MM-dd because the parser does not consume whole input.
        Another example is that the 'W' pattern, which means week in month, is not supported. For more differences, see :issue:`10354`.
+   * - spark.legacy_statistical_aggregate
+     - bool
+     - false
+     - If true, Spark statistical aggregation functions including skewness, kurtosis will return NaN instead of NULL
+       when dividing by zero during expression evaluation. Please note that Spark statistical aggregation functions
+       including stddev, stddev_samp, variance, var_samp, covar_samp and corr should be supported to respect this configuration.
 
 Tracing
 --------

@@ -23,6 +23,7 @@
 
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/common/memory/ByteStream.h"
+#include "velox/common/testutil/OptionalEmpty.h"
 #include "velox/serializers/PrestoSerializer.h"
 #include "velox/vector/BaseVector.h"
 #include "velox/vector/ComplexVector.h"
@@ -3175,7 +3176,7 @@ TEST_F(VectorTest, containsNullAtArrays) {
   auto data = makeNullableArrayVector<int32_t>({
       {{1, 2}},
       {{1, 2, std::nullopt, 3}},
-      {{}},
+      common::testutil::optionalEmpty,
       std::nullopt,
       {{1, 2, 3, 4}},
   });
@@ -3192,7 +3193,7 @@ TEST_F(VectorTest, containsNullAtMaps) {
       {{{1, 10}, {2, 20}}},
       {{{3, 30}}},
       {{{1, 10}, {2, 20}, {3, std::nullopt}, {4, 40}}},
-      {{}},
+      common::testutil::optionalEmpty,
       std::nullopt,
       {{{1, 10}, {2, 20}, {3, 30}, {4, 40}}},
   });
@@ -3228,7 +3229,7 @@ TEST_F(VectorTest, containsNullAtStructs) {
           makeNullableArrayVector<int64_t>({
               {{1, 2}},
               {{1, 2, std::nullopt, 3}},
-              {{}},
+              common::testutil::optionalEmpty,
               {{1, 2, 3}},
               std::nullopt,
               {{1, 2, 3, 4, 5}},
@@ -3706,7 +3707,7 @@ TEST_F(VectorTest, getLargeStringBuffer) {
 TEST_F(VectorTest, mapUpdate) {
   auto base = makeNullableMapVector<int64_t, int64_t>({
       {{{1, 1}, {2, 1}}},
-      {{}},
+      common::testutil::optionalEmpty,
       {{{3, 1}}},
       std::nullopt,
       {{{4, 1}}},
@@ -3714,7 +3715,7 @@ TEST_F(VectorTest, mapUpdate) {
   auto update = makeNullableMapVector<int64_t, int64_t>({
       {{{2, 2}, {3, 2}}},
       {{{4, 2}}},
-      {{}},
+      common::testutil::optionalEmpty,
       {{{5, 2}}},
       std::nullopt,
   });
@@ -3781,7 +3782,7 @@ TEST_F(VectorTest, mapUpdateNullMapValue) {
 TEST_F(VectorTest, mapUpdateMultipleUpdates) {
   auto base = makeNullableMapVector<int64_t, int64_t>({
       {{{1, 1}, {2, 1}}},
-      {{}},
+      common::testutil::optionalEmpty,
       {{{3, 1}}},
       std::nullopt,
       {{{4, 1}}},
@@ -3790,16 +3791,16 @@ TEST_F(VectorTest, mapUpdateMultipleUpdates) {
       makeNullableMapVector<int64_t, int64_t>({
           {{{2, 2}, {3, 2}}},
           {{{4, 2}}},
-          {{}},
+          common::testutil::optionalEmpty,
           {{{5, 2}}},
           std::nullopt,
       }),
       makeNullableMapVector<int64_t, int64_t>({
           {{{3, 3}, {4, 3}}},
           std::nullopt,
-          {{}},
-          {{}},
-          {{}},
+          common::testutil::optionalEmpty,
+          common::testutil::optionalEmpty,
+          common::testutil::optionalEmpty,
       }),
   };
   auto expected = makeNullableMapVector<int64_t, int64_t>({
@@ -3814,6 +3815,51 @@ TEST_F(VectorTest, mapUpdateMultipleUpdates) {
   for (int i = 0; i < actual->size(); ++i) {
     ASSERT_TRUE(actual->equalValueAt(expected.get(), i, i));
   }
+}
+
+TEST_F(VectorTest, mapUpdateConstant) {
+  auto base = makeNullableMapVector<int64_t, int64_t>({
+      {{{1, 1}, {2, 1}}},
+      {{}},
+      {{{3, 1}}},
+      std::nullopt,
+      {{{4, 1}}},
+  });
+  auto update = BaseVector::wrapInConstant(
+      base->size(), 0, makeMapVector<int64_t, int64_t>({{{2, 2}}}));
+  DecodedVector decoded(*update);
+  auto actual = base->update(folly::Range(&decoded, 1));
+  auto expected = makeNullableMapVector<int64_t, int64_t>({
+      {{{2, 2}, {1, 1}}},
+      {{{2, 2}}},
+      {{{2, 2}, {3, 1}}},
+      std::nullopt,
+      {{{2, 2}, {4, 1}}},
+  });
+  test::assertEqualVectors(expected, actual);
+}
+
+TEST_F(VectorTest, mapUpdateDictionary) {
+  auto base = makeNullableMapVector<int64_t, int64_t>({
+      {{{1, 1}, {2, 1}}},
+      {{}},
+      {{{3, 1}}},
+      std::nullopt,
+      {{{4, 1}}},
+  });
+  auto update = wrapInDictionary(
+      makeIndices({0, 0, 1, 1, 0}),
+      makeMapVector<int64_t, int64_t>({{{2, 2}}, {}}));
+  DecodedVector decoded(*update);
+  auto actual = base->update(folly::Range(&decoded, 1));
+  auto expected = makeNullableMapVector<int64_t, int64_t>({
+      {{{2, 2}, {1, 1}}},
+      {{{2, 2}}},
+      {{{3, 1}}},
+      std::nullopt,
+      {{{2, 2}, {4, 1}}},
+  });
+  test::assertEqualVectors(expected, actual);
 }
 
 TEST_F(VectorTest, pushDictionaryToRowVectorLeaves) {
@@ -3914,7 +3960,7 @@ TEST_F(VectorTest, arrayCopyTargetNullOffsets) {
   auto offsetsRef = target->asUnchecked<ArrayVector>()->offsets();
   ASSERT_TRUE(offsetsRef);
   BaseVector::prepareForReuse(target, target->size());
-  ASSERT_FALSE(target->asUnchecked<ArrayVector>()->offsets());
+  ASSERT_TRUE(target->asUnchecked<ArrayVector>()->offsets());
   auto source = makeArrayVector<int64_t>(
       11, [](auto) { return 1; }, [](auto i, auto) { return i; });
   target->copy(source.get(), 0, 0, source->size());
@@ -4019,6 +4065,17 @@ TEST_F(VectorTest, hasOverlappingRanges) {
   test(3, {false, false, false}, {2, 1, 0}, {1, 2, 1}, true);
   test(2, {false, false}, {0, 1}, {3, 1}, true);
   test(2, {false, false}, {1, 0}, {1, 3}, true);
+}
+
+TEST_F(VectorTest, estimateFlatSize) {
+  auto arrayVector = makeArrayVector<int64_t>(
+      10, [](auto) { return 1; }, [](auto i, auto) { return i; });
+  auto originalSize = arrayVector->estimateFlatSize();
+  arrayVector->prepareForReuse();
+  auto flatSize = arrayVector->estimateFlatSize();
+  EXPECT_NE(originalSize, flatSize);
+  // Test that the second call to prepareForReuse will not cause crash
+  arrayVector->prepareForReuse();
 }
 
 } // namespace

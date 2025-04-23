@@ -411,6 +411,194 @@ struct IPPrefixCollapseFunction {
   }
 };
 
+template <typename T>
+struct IPPrefixSubnetsFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  FOLLY_ALWAYS_INLINE void call(
+      out_type<Array<IPPrefix>>& result,
+      const arg_type<IPPrefix>& prefix,
+      const arg_type<int64_t>& newPrefixLength) {
+    const bool inputIsIpV4 = isIPv4(*prefix.template at<0>());
+
+    if (newPrefixLength < 0 || (inputIsIpV4 && newPrefixLength > 32) ||
+        (!inputIsIpV4 && newPrefixLength > 128)) {
+      VELOX_USER_FAIL(fmt::format(
+          "Invalid prefix length for IPv{}: {}",
+          inputIsIpV4 ? 4 : 6,
+          newPrefixLength));
+    }
+
+    int8_t inputPrefixLength = *prefix.template at<1>();
+    // An IP prefix is a 'network', or group of contiguous IP addresses. The
+    // common format for describing IP prefixes is
+    // uses 2 parts separated by a '/': (1) the IP address part and the (2)
+    // prefix length part (also called subnet size or CIDR). For example,
+    // in 9.255.255.0/24, 9.255.255.0 is the IP address part and 24 is the
+    // prefix length. The prefix length describes how many IP addresses the
+    // prefix contains in terms of the leading number of bits required. A higher
+    // number of bits means smaller number of IP addresses. Subnets inherently
+    // mean smaller groups of IP addresses. We can only disaggregate a prefix if
+    // the prefix length is the same length or longer (more-specific) than the
+    // length of the input prefix. E.g., if the input prefix is 9.255.255.0/24,
+    // the prefix length can be /24, /25, /26, etc... but not 23 or larger value
+    // than 24.
+
+    // If inputPrefixLength > newPrefixLength, there are no new prefixes and we
+    // will return an empty array.
+    uint128_t newPrefixCount = inputPrefixLength <= newPrefixLength
+        ? 1 << (newPrefixLength - inputPrefixLength)
+        : 0;
+    if (newPrefixCount == 0) {
+      return;
+    }
+
+    if (newPrefixCount == 1) {
+      writeResults(result, *prefix.template at<0>(), *prefix.template at<1>());
+      return;
+    }
+
+    const int64_t ipVersionMaxBits =
+        inputIsIpV4 ? ipaddress::kIPV4Bits : ipaddress::kIPV6Bits;
+    const uint128_t newPrefixIpCount = static_cast<uint128_t>(1)
+        << (ipVersionMaxBits - newPrefixLength);
+
+    int128_t currentIpAddress = *prefix.template at<0>();
+
+    for (uint128_t i = 0; i < newPrefixCount; i++) {
+      writeResults(result, currentIpAddress, newPrefixLength);
+      currentIpAddress += newPrefixIpCount;
+    }
+    return;
+  }
+
+ private:
+  FOLLY_ALWAYS_INLINE static void writeResults(
+      exec::ArrayWriter<IPPrefix>& result,
+      int128_t ipaddress,
+      int8_t prefixLength) {
+    result.add_item() = std::make_tuple(ipaddress, prefixLength);
+  }
+};
+
+template <typename T>
+struct IsPrivateIPFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+  FOLLY_ALWAYS_INLINE void call(
+      out_type<bool>& result,
+      const arg_type<IPAddress>& ipadddress) {
+    const bool isIpV4 = isIPv4(*ipadddress);
+    const int128_t ipAsBigInt = *ipadddress;
+
+    const auto& rangesToCheck =
+        isIpV4 ? privateIPv4AddressRanges() : privateIPv6AddressRanges();
+
+    for (const auto& range : rangesToCheck) {
+      const int128_t startIp = range.first;
+      const int128_t endIp = range.second;
+
+      if (ipAsBigInt < startIp) {
+        result = false;
+        return;
+      }
+
+      if (ipAsBigInt <= endIp) {
+        result = true;
+        return;
+      }
+    }
+    result = false;
+    return;
+  }
+
+ private:
+  FOLLY_ALWAYS_INLINE static const std::vector<std::string>&
+  getPrivatePrefixes() {
+    const static std::vector<std::string> kPrivatePrefixes = {
+        // IPv4 private ranges
+        {"0.0.0.0/8"}, // RFC1122: "This host on this network"
+        {"10.0.0.0/8"}, // RFC1918: Private-Use
+        {"100.64.0.0/10"}, // RFC6598: Shared Address Space
+        {"127.0.0.0/8"}, // RFC1122: Loopback
+        {"169.254.0.0/16"}, // RFC3927: Link Local
+        {"172.16.0.0/12"}, // RFC1918: Private-Use
+        {"192.0.0.0/24"}, // RFC6890: IETF Protocol Assignments
+        {"192.0.2.0/24"}, // RFC5737: Documentation (TEST-NET-1)
+        {"192.88.99.0/24"}, // RFC3068: 6to4 Relay anycast
+        {"192.168.0.0/16"}, // RFC1918: Private-Use
+        {"198.18.0.0/15"}, // RFC2544: Benchmarking
+        {"198.51.100.0/24"}, // RFC5737: Documentation (TEST-NET-2)
+        {"203.0.113.0/24"}, // RFC5737: Documentation (TEST-NET-3)
+        {"240.0.0.0/4"}, // RFC1112: Reserved
+        // IPv6 private ranges
+        {"::/127"}, // RFC4291: Unspecified address and Loopback address
+        {"64:ff9b:1::/48"}, // RFC8215: IPv4-IPv6 Translation
+        {"100::/64"}, // RFC6666: Discard-Only Address Block
+        {"2001:2::/48"}, // RFC5180, RFC Errata 1752: Benchmarking
+        {"2001:db8::/32"}, // RFC3849: Documentation
+        {"2001::/23"}, // RFC2928: IETF Protocol Assignments
+        {"5f00::/16"}, // RFC-ietf-6man-sids-06: Segment Routing (SRv6)
+        {"fe80::/10"}, // RFC4291: Link-Local Unicast
+        {"fc00::/7"}, // RFC4193, RFC8190: Unique Local
+    };
+    return kPrivatePrefixes;
+  }
+
+  FOLLY_ALWAYS_INLINE static std::vector<std::pair<int128_t, int128_t>>
+  generatePrivateIPAddressRanges(bool isIpv4) {
+    std::vector<std::pair<int128_t, int128_t>> privateIpV4AddressRanges;
+    std::vector<std::pair<int128_t, int128_t>> privateIpV6AddressRanges;
+    const auto& privatePrefixes = getPrivatePrefixes();
+    for (const auto& prefix : privatePrefixes) {
+      auto tryIpPrefix = ipaddress::tryParseIpPrefixString(prefix);
+      if (tryIpPrefix.hasError()) {
+        VELOX_USER_FAIL(
+            "Invalid IP prefix string: {}. Error: {}",
+            prefix,
+            tryIpPrefix.error());
+      }
+      const auto& ipPrefix = tryIpPrefix.value();
+
+      const int128_t startingIpAsBigInt = ipPrefix.first;
+      const int128_t endingIpAsBigInt =
+          getIPSubnetMax(ipPrefix.first, ipPrefix.second);
+
+      if (isIPv4(ipPrefix.first)) {
+        privateIpV4AddressRanges.emplace_back(
+            startingIpAsBigInt, endingIpAsBigInt);
+      } else {
+        privateIpV6AddressRanges.emplace_back(
+            startingIpAsBigInt, endingIpAsBigInt);
+      }
+    }
+    std::sort(
+        privateIpV4AddressRanges.begin(),
+        privateIpV4AddressRanges.end(),
+        [](const auto& a, const auto& b) { return a.first < b.first; });
+    std::sort(
+        privateIpV6AddressRanges.begin(),
+        privateIpV6AddressRanges.end(),
+        [](const auto& a, const auto& b) { return a.first < b.first; });
+    return isIpv4 ? privateIpV4AddressRanges : privateIpV6AddressRanges;
+  }
+
+  FOLLY_ALWAYS_INLINE static const std::vector<std::pair<int128_t, int128_t>>&
+  privateIPv6AddressRanges() {
+    const static std::vector<std::pair<int128_t, int128_t>>
+        kPrivateIPv6AddressRanges =
+            generatePrivateIPAddressRanges(/*isIpv4=*/false);
+    return kPrivateIPv6AddressRanges;
+  }
+
+  FOLLY_ALWAYS_INLINE static const std::vector<std::pair<int128_t, int128_t>>&
+  privateIPv4AddressRanges() {
+    const static std::vector<std::pair<int128_t, int128_t>>
+        kPrivateIPv4AddressRanges =
+            generatePrivateIPAddressRanges(/*isIpv4=*/true);
+    return kPrivateIPv4AddressRanges;
+  }
+};
+
 void registerIPAddressFunctions(const std::string& prefix) {
   registerIPAddressType();
   registerIPPrefixType();
@@ -430,6 +618,10 @@ void registerIPAddressFunctions(const std::string& prefix) {
       {prefix + "is_subnet_of"});
   registerFunction<IPPrefixCollapseFunction, Array<IPPrefix>, Array<IPPrefix>>(
       {prefix + "ip_prefix_collapse"});
+  registerFunction<IPPrefixSubnetsFunction, Array<IPPrefix>, IPPrefix, int64_t>(
+      {prefix + "ip_prefix_subnets"});
+  registerFunction<IsPrivateIPFunction, bool, IPAddress>(
+      {prefix + "is_private_ip"});
 }
 
 } // namespace facebook::velox::functions

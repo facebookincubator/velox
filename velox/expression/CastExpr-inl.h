@@ -293,6 +293,15 @@ void CastExpr::applyCastKernel(
     }
 
     if constexpr (
+        (ToKind == TypeKind::TINYINT || ToKind == TypeKind::SMALLINT ||
+         ToKind == TypeKind::INTEGER || ToKind == TypeKind::BIGINT) &&
+        FromKind == TypeKind::TIMESTAMP) {
+      const auto castResult = hooks_->castTimestampToInt(inputRowValue);
+      setResultOrError(castResult, row);
+      return;
+    }
+
+    if constexpr (
         (FromKind == TypeKind::DOUBLE || FromKind == TypeKind::REAL) &&
         ToKind == TypeKind::TIMESTAMP) {
       const auto castResult =

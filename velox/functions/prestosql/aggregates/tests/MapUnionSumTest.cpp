@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 #include "velox/common/base/tests/GTestUtils.h"
+#include "velox/common/testutil/OptionalEmpty.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/functions/lib/aggregates/tests/utils/AggregationTestBase.h"
 
@@ -30,7 +31,7 @@ class MapUnionSumTest : public AggregationTestBase {};
 TEST_F(MapUnionSumTest, global) {
   auto data = makeRowVector({
       makeNullableMapVector<int64_t, int64_t>({
-          {{}}, // empty map
+          common::testutil::optionalEmpty, // empty map
           std::nullopt, // null map
           {{{1, 10}, {2, 20}}},
           {{{1, 11}, {3, 30}, {4, 40}}},
@@ -62,7 +63,7 @@ TEST_F(MapUnionSumTest, globalVarcharKey) {
 
   auto data = makeRowVector({
       makeNullableMapVector<StringView, int64_t>({
-          {{}}, // empty map
+          common::testutil::optionalEmpty, // empty map
           std::nullopt, // null map
           {{{keys[0], 10}, {keys[1], 20}}},
           {{{keys[0], 11}, {keys[2], 30}, {keys[3], 40}}},
@@ -119,9 +120,9 @@ TEST_F(MapUnionSumTest, nullAndEmptyMaps) {
   auto emptyAndNullMaps = makeRowVector({
       makeNullableMapVector<int64_t, int64_t>({
           std::nullopt,
-          {{}},
+          common::testutil::optionalEmpty,
           std::nullopt,
-          {{}},
+          common::testutil::optionalEmpty,
       }),
   });
 
@@ -500,8 +501,6 @@ TEST_F(MapUnionSumTest, nanKeys) {
       {data}, {"c1"}, {"map_union_sum(c0)"}, {"a0", "c1"}, {expected});
 }
 
-} // namespace
-
 TEST_F(MapUnionSumTest, complexType) {
   // Verify that NaNs with different binary representations are considered equal
   // and deduplicated when used as keys in the output map.
@@ -551,4 +550,26 @@ TEST_F(MapUnionSumTest, complexType) {
       {data}, {"c1"}, {"map_union_sum(c0)"}, {"a0", "c1"}, {expectedResult});
 }
 
+TEST_F(MapUnionSumTest, unknownKey) {
+  auto data = makeRowVector({makeAllNullMapVector(3, UNKNOWN(), BIGINT())});
+  testAggregations({data}, {}, {"map_union_sum(c0)"}, {"VALUES (NULL)"});
+}
+
+TEST_F(MapUnionSumTest, decimalKey) {
+  // test on nulls
+  auto null_data =
+      makeRowVector({makeAllNullMapVector(3, DECIMAL(10, 5), BIGINT())});
+  testAggregations({null_data}, {}, {"map_union_sum(c0)"}, {"VALUES (NULL)"});
+
+  // test on non-null decimal keys
+  auto data = makeMapVector<int128_t, int64_t>(
+      {{{{1000}, 2}, {{1001}, 1}}, {{{1000}, 1}, {{1001}, 1}}},
+      MAP(DECIMAL(30, 2), BIGINT()));
+  auto expected = makeRowVector({makeMapVector<int128_t, int64_t>(
+      {{{{1000}, 3}, {{1001}, 2}}}, MAP(DECIMAL(30, 2), BIGINT()))});
+  testAggregations(
+      {makeRowVector({data})}, {}, {"map_union_sum(c0)"}, {expected});
+}
+
+} // namespace
 } // namespace facebook::velox::aggregate::test

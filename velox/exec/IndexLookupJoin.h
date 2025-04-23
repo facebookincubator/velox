@@ -59,6 +59,10 @@ class IndexLookupJoin : public Operator {
   /// from remote storage.
   static inline const std::string kClientLookupWaitWallTime{
       "clientlookupWaitWallNanos"};
+  /// The number of split requests sent to remote storage for a client lookup
+  /// request.
+  static inline const std::string kClientNumStorageRequests{
+      "clientNumStorageRequests"};
   /// The cpu time in nanoseconds that the storage client process response from
   /// remote storage lookup such as decoding the response data into velox
   /// vectors.
@@ -116,6 +120,9 @@ class IndexLookupJoin : public Operator {
   // Prepare index source lookup for a given 'input_'.
   void prepareLookup(InputBatchState& batch);
   void startLookup(InputBatchState& batch);
+
+  void startLookupBlockWait();
+  void endLookupBlockWait();
 
   RowVectorPtr getOutputFromLookupResult(InputBatchState& batch);
   RowVectorPtr produceOutputForInnerJoin(const InputBatchState& batch);
@@ -246,5 +253,9 @@ class IndexLookupJoin : public Operator {
 
   // The reusable output vector for the join output.
   RowVectorPtr output_;
+
+  // The start time of the current lookup driver block wait, and reset after the
+  // driver wait completes.
+  std::optional<size_t> blockWaitStartNs_;
 };
 } // namespace facebook::velox::exec

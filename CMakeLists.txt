@@ -143,10 +143,12 @@ option(VELOX_ENABLE_ARROW "Enable Arrow support" OFF)
 option(VELOX_ENABLE_GEO "Enable Geospatial support" OFF)
 option(VELOX_ENABLE_REMOTE_FUNCTIONS "Enable remote function support" OFF)
 option(VELOX_ENABLE_CCACHE "Use ccache if installed." ON)
+option(VELOX_ENABLE_COMPRESSION_LZ4 "Enable Lz4 compression support." OFF)
 
 option(VELOX_BUILD_TEST_UTILS "Builds Velox test utilities" OFF)
 option(VELOX_BUILD_VECTOR_TEST_UTILS "Builds Velox vector test utilities" OFF)
 option(VELOX_BUILD_PYTHON_PACKAGE "Builds Velox Python bindings" OFF)
+option(VELOX_PYTHON_LEGACY_ONLY "Build only the pyvelox module" OFF)
 option(VELOX_BUILD_RUNNER "Builds velox runner" ON)
 option(
   VELOX_ENABLE_INT64_BUILD_PARTITION_BOUND
@@ -193,6 +195,12 @@ if(VELOX_BUILD_TESTING OR VELOX_BUILD_TEST_UTILS)
   set(VELOX_ENABLE_PARSE ON)
 endif()
 
+if(${VELOX_BUILD_TESTING}
+   OR ${VELOX_BUILD_MINIMAL_WITH_DWIO}
+   OR ${VELOX_ENABLE_HIVE_CONNECTOR})
+  set(VELOX_ENABLE_COMPRESSION_LZ4 ON)
+endif()
+
 if(${VELOX_ENABLE_EXAMPLES})
   set(VELOX_ENABLE_EXPRESSION ON)
 endif()
@@ -205,8 +213,11 @@ if(${VELOX_BUILD_PYTHON_PACKAGE})
   set(VELOX_ENABLE_EXEC ON)
   set(VELOX_ENABLE_AGGREGATES ON)
   set(VELOX_ENABLE_SPARK_FUNCTIONS ON)
-  set(VELOX_BUILD_RUNNER OFF)
-  set(VELOX_BUILD_TEST_UTILS ON) # required for velox_exec_test_lib
+
+  if(NOT VELOX_PYTHON_LEGACY_ONLY)
+    set(VELOX_BUILD_RUNNER OFF)
+    set(VELOX_BUILD_TEST_UTILS ON) # required for velox_exec_test_lib
+  endif()
 endif()
 
 if(${VELOX_ENABLE_DUCKDB})
@@ -227,7 +238,8 @@ find_package(OpenSSL REQUIRED)
 
 if(VELOX_ENABLE_CCACHE
    AND NOT CMAKE_C_COMPILER_LAUNCHER
-   AND NOT CMAKE_CXX_COMPILER_LAUNCHER)
+   AND NOT CMAKE_CXX_COMPILER_LAUNCHER
+   AND NOT CMAKE_CUDA_COMPILER_LAUNCHER)
 
   find_program(CCACHE_FOUND ccache)
 
@@ -235,6 +247,7 @@ if(VELOX_ENABLE_CCACHE
     message(STATUS "Using ccache: ${CCACHE_FOUND}")
     set(CMAKE_C_COMPILER_LAUNCHER ${CCACHE_FOUND})
     set(CMAKE_CXX_COMPILER_LAUNCHER ${CCACHE_FOUND})
+    set(CMAKE_CUDA_COMPILER_LAUNCHER ${CCACHE_FOUND})
     # keep comments as they might matter to the compiler
     set(ENV{CCACHE_COMMENTS} "1")
   endif()
@@ -373,9 +386,7 @@ if(ENABLE_ALL_WARNINGS)
   set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wall -Wextra ${KNOWN_WARNINGS}")
 endif()
 
-message("FINAL CMAKE_CXX_FLAGS=${CMAKE_CXX_FLAGS}")
-
-if(${VELOX_ENABLE_GPU})
+if(VELOX_ENABLE_WAVE OR VELOX_ENABLE_CUDF)
   enable_language(CUDA)
   # Determine CUDA_ARCHITECTURES automatically.
   cmake_policy(SET CMP0104 NEW)
@@ -387,6 +398,19 @@ if(${VELOX_ENABLE_GPU})
     add_compile_options("$<$<COMPILE_LANGUAGE:CUDA>:-G>")
   endif()
   find_package(CUDAToolkit REQUIRED)
+  if(VELOX_ENABLE_CUDF)
+    foreach(arch ${CMAKE_CUDA_ARCHITECTURES})
+      if(arch LESS 70)
+        message(
+          FATAL_ERROR
+            "CUDA architecture ${arch} is below 70. CUDF requires Volta (SM 70) or newer GPUs."
+        )
+      endif()
+    endforeach()
+    set(VELOX_ENABLE_ARROW ON)
+    velox_set_source(cudf)
+    velox_resolve_dependency(cudf)
+  endif()
 endif()
 
 # Set after the test of the CUDA compiler. Otherwise, the test fails with
@@ -461,12 +485,15 @@ velox_resolve_dependency(glog)
 velox_set_source(fmt)
 velox_resolve_dependency(fmt 9.0.0)
 
+if(VELOX_ENABLE_COMPRESSION_LZ4)
+  find_package(lz4 REQUIRED)
+endif()
+
 if(${VELOX_BUILD_MINIMAL_WITH_DWIO} OR ${VELOX_ENABLE_HIVE_CONNECTOR})
   # DWIO needs all sorts of stream compression libraries.
   #
   # TODO: make these optional and pluggable.
   find_package(ZLIB REQUIRED)
-  find_package(lz4 REQUIRED)
   find_package(lzo2 REQUIRED)
   find_package(zstd REQUIRED)
   find_package(Snappy REQUIRED)
@@ -484,9 +511,12 @@ velox_set_source(re2)
 velox_resolve_dependency(re2)
 
 if(${VELOX_BUILD_PYTHON_PACKAGE})
+  find_package(
+    Python 3.9
+    COMPONENTS Interpreter Development.Module
+    REQUIRED)
   velox_set_source(pybind11)
   velox_resolve_dependency(pybind11 2.10.0)
-  add_subdirectory(pyvelox)
 endif()
 
 # DWIO (ORC/DWRF) and Substrait depend on protobuf.
@@ -508,7 +538,7 @@ velox_set_source(folly)
 velox_resolve_dependency(folly)
 
 if(${VELOX_BUILD_TESTING})
-  # Spark qury runner depends on absl, gRPC.
+  # Spark query runner depends on absl, gRPC.
   velox_set_source(absl)
   velox_resolve_dependency(absl)
 
@@ -624,6 +654,8 @@ install(FILES velox/type/Type.h DESTINATION "include/velox")
 if("${TREAT_WARNINGS_AS_ERRORS}")
   set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Werror")
 endif()
+
+message("FINAL CMAKE_CXX_FLAGS=${CMAKE_CXX_FLAGS}")
 
 if(VELOX_ENABLE_ARROW)
   velox_set_source(Arrow)

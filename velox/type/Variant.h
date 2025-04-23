@@ -467,6 +467,10 @@ class variant {
     return toJsonUnsafe();
   }
 
+  /// Returns a string of the variant value. Currently only supports scalar
+  /// types.
+  std::string toString(const TypePtr& type) const;
+
   folly::dynamic serialize() const;
 
   static variant create(const folly::dynamic&);
@@ -566,6 +570,19 @@ class variant {
         OpaqueType::create<T>()->toString(),
         capsule.type->toString());
     return std::static_pointer_cast<T>(capsule.obj);
+  }
+
+  /// Try to cast to the target custom type
+  /// Throw if the variant is not an opaque type
+  /// Return nullptr if it's opaque type but the underlying custom type doesn't
+  /// match the target. Otherwise return the data in custom type.
+  template <class T>
+  std::shared_ptr<T> tryOpaque() const {
+    const auto& capsule = value<TypeKind::OPAQUE>();
+    if (capsule.type->typeIndex() == std::type_index(typeid(T))) {
+      return std::static_pointer_cast<T>(capsule.obj);
+    }
+    return nullptr;
   }
 
   std::shared_ptr<const Type> inferType() const {

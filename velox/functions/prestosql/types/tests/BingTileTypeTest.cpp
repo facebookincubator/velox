@@ -180,4 +180,45 @@ TEST_F(BingTileTypeTest, bingTileChildren) {
   testBingTileChildren(0, 0, 23, 24, "Child zoom 24 must be <= max zoom 23");
 }
 
+TEST_F(BingTileTypeTest, bingTileToQuadKey) {
+  ASSERT_EQ(
+      "123123123123123123", BingTileType::bingTileToQuadKey(804212359411419));
+  ASSERT_EQ("000", BingTileType::bingTileToQuadKey(201326592));
+  ASSERT_EQ("0", BingTileType::bingTileToQuadKey(67108864));
+  ASSERT_EQ("123", BingTileType::bingTileToQuadKey(21676163075));
+  ASSERT_EQ("", BingTileType::bingTileToQuadKey(0));
+}
+
+TEST_F(BingTileTypeTest, bingTileFromQuadKey) {
+  const auto testBingTileFromQuadKey =
+      [&](const std::string& quadKey,
+          std::optional<uint64_t> expectedResult,
+          std::optional<std::string> errorMsg = std::nullopt) {
+        auto tileResult = BingTileType::bingTileFromQuadKey(quadKey);
+        if (errorMsg.has_value()) {
+          ASSERT_TRUE(tileResult.hasError());
+          ASSERT_EQ(errorMsg.value(), tileResult.error());
+        } else {
+          ASSERT_TRUE(tileResult.hasValue());
+          uint64_t tile = tileResult.value();
+          ASSERT_EQ(tile, expectedResult.value());
+          ASSERT_EQ(quadKey, BingTileType::bingTileToQuadKey(tile));
+        }
+      };
+
+  testBingTileFromQuadKey("123123123123123123", 804212359411419);
+  testBingTileFromQuadKey("000", 201326592);
+  testBingTileFromQuadKey("0", 67108864);
+  testBingTileFromQuadKey("123", 21676163075);
+  testBingTileFromQuadKey("", 0);
+  testBingTileFromQuadKey(
+      "123123123123123123123123123123123123",
+      std::nullopt,
+      "Zoom level 36 is greater than max zoom 23");
+  testBingTileFromQuadKey(
+      "blah", std::nullopt, "Invalid QuadKey digit sequence: blah");
+  testBingTileFromQuadKey(
+      "1231234", std::nullopt, "Invalid QuadKey digit sequence: 1231234");
+}
+
 } // namespace facebook::velox::test

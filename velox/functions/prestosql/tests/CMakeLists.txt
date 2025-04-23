@@ -36,11 +36,11 @@ add_executable(
   ArrayJoinTest.cpp
   ArrayMaxTest.cpp
   ArrayMinTest.cpp
+  ArrayMinMaxByTest.cpp
   ArrayNGramsTest.cpp
   ArrayNoneMatchTest.cpp
   ArrayNormalizeTest.cpp
   ArrayPositionTest.cpp
-  ArrayRemoveNullsTest.cpp
   ArrayRemoveTest.cpp
   ArrayShuffleTest.cpp
   ArraySortTest.cpp
@@ -77,6 +77,7 @@ add_executable(
   MapNormalizeTest.cpp
   MapTopNTest.cpp
   MapTopNKeysTest.cpp
+  MapTopNValuesTest.cpp
   MapKeysAndValuesTest.cpp
   MapKeysByTopNValuesTest.cpp
   MapMatchTest.cpp

@@ -333,6 +333,12 @@ class QueryConfig {
   static constexpr const char* kSparkLegacyDateFormatter =
       "spark.legacy_date_formatter";
 
+  /// If true, Spark statistical aggregation functions including skewness,
+  /// kurtosis, will return NaN instead of NULL when dividing by zero during
+  /// expression evaluation.
+  static constexpr const char* kSparkLegacyStatisticalAggregate =
+      "spark.legacy_statistical_aggregate";
+
   /// The number of local parallel table writer operators per task.
   static constexpr const char* kTaskWriterCount = "task_writer_count";
 
@@ -451,6 +457,11 @@ class QueryConfig {
       kDebugAggregationApproxPercentileFixedRandomSeed =
           "debug_aggregation_approx_percentile_fixed_random_seed";
 
+  /// When debug is enabled for memory manager, this is used to match the memory
+  /// pools that need allocation callsites tracking. Default to track nothing.
+  static constexpr const char* kDebugMemoryPoolNameRegex =
+      "debug_memory_pool_name_regex";
+
   /// Temporary flag to control whether selective Nimble reader should be used
   /// in this query or not.  Will be removed after the selective Nimble reader
   /// is fully rolled out.
@@ -520,6 +531,17 @@ class QueryConfig {
   static constexpr const char* kRequestDataSizesMaxWaitSec =
       "request_data_sizes_max_wait_sec";
 
+  /// If this is false (the default), in streaming aggregation, wait until we
+  /// have enough number of output rows to produce a batch of size specified by
+  /// Operator::outputBatchRows.
+  ///
+  /// If this is true, we put the rows in output batch, as soon as the
+  /// corresponding groups are fully aggregated.  This is useful for reducing
+  /// memory consumption, if the downstream operators are not sensitive to small
+  /// batch size.
+  static constexpr const char* kStreamingAggregationEagerFlush =
+      "streaming_aggregation_eager_flush";
+
   bool selectiveNimbleReaderEnabled() const {
     return get<bool>(kSelectiveNimbleReaderEnabled, false);
   }
@@ -538,6 +560,10 @@ class QueryConfig {
 
   bool debugDisableExpressionsWithLazyInputs() const {
     return get<bool>(kDebugDisableExpressionWithLazyInputs, false);
+  }
+
+  std::string debugMemoryPoolNameRegex() const {
+    return get<std::string>(kDebugMemoryPoolNameRegex, "");
   }
 
   std::optional<uint32_t> debugAggregationApproxPercentileFixedRandomSeed()
@@ -846,6 +872,10 @@ class QueryConfig {
     return get<bool>(kSparkLegacyDateFormatter, false);
   }
 
+  bool sparkLegacyStatisticalAggregate() const {
+    return get<bool>(kSparkLegacyStatisticalAggregate, false);
+  }
+
   bool exprTrackCpuUsage() const {
     return get<bool>(kExprTrackCpuUsage, false);
   }
@@ -955,6 +985,10 @@ class QueryConfig {
 
   bool throwExceptionOnDuplicateMapKeys() const {
     return get<bool>(kThrowExceptionOnDuplicateMapKeys, false);
+  }
+
+  bool streamingAggregationEagerFlush() const {
+    return get<bool>(kStreamingAggregationEagerFlush, false);
   }
 
   template <typename T>
