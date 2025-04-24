@@ -508,7 +508,7 @@ CudfHashAggregation::CudfHashAggregation(
       isPartialOutput_(exec::isPartialOutput(aggregationNode->step())),
       isGlobal_(aggregationNode->groupingKeys().empty()),
       isDistinct_(!isGlobal_ && aggregationNode->aggregates().empty()),
-      step(aggregationNode->step()) {}
+      step_(aggregationNode->step()) {}
 
 void CudfHashAggregation::initialize() {
   Operator::initialize();
@@ -572,10 +572,10 @@ void CudfHashAggregation::setupGroupingKeyChannelProjections(
       groupingKeyOutputChannels.begin(), groupingKeyOutputChannels.end(), 0);
 }
 
-void CudfHashAggregation::computeInterimGroupbyPartial(
-    std::unique_ptr<cudf::table> tbl) {
-  auto groupbyOnInput = doGroupByAggregation(
-      std::move(tbl), aggregators_, rmm::cuda_stream_default);
+void CudfHashAggregation::computeInterimGroupbyPartial(CudfVectorPtr tbl) {
+  auto inputTableStream = tbl->stream();
+  auto groupbyOnInput =
+      doGroupByAggregation(tbl->release(), aggregators_, inputTableStream);
 
   // If we already have partial output, concatenate the new results with it
   if (partial_output_) {
@@ -584,19 +584,24 @@ void CudfHashAggregation::computeInterimGroupbyPartial(
     tablesToConcat.push_back(partial_output_->view());
     tablesToConcat.push_back(groupbyOnInput->getTableView());
 
+    // we need to join the input table stream on the partial output stream to
+    // make sure the intermediate results are available when we do the concat
+    cudf::detail::join_streams(
+        std::vector<rmm::cuda_stream_view>{inputTableStream}, stream_);
+
     // Concatenate the tables
-    auto concatenatedTable =
-        cudf::concatenate(tablesToConcat, rmm::cuda_stream_default);
+    auto concatenatedTable = cudf::concatenate(tablesToConcat, stream_);
 
     // Now we have to groupby again but this time with final aggregation
     // style.
     auto compactedOutput = doGroupByAggregation(
-        std::move(concatenatedTable),
-        intermediateAggregators_,
-        rmm::cuda_stream_default);
+        std::move(concatenatedTable), intermediateAggregators_, stream_);
     partial_output_ = compactedOutput->release();
   } else {
     // First time processing, just store the result
+    auto partialOutputStream = cudfGlobalStreamPool().get_stream();
+    stream_ = partialOutputStream;
+    // TODO: Can I just store the first input's stream here?
     partial_output_ = groupbyOnInput->release();
   }
 }
@@ -611,7 +616,7 @@ void CudfHashAggregation::addInput(RowVectorPtr input) {
   // - If this is final agg, we can simply concatenate incoming batch with the
   // interim results and then do 1 groupby
   // Right now, for Q13, I'm going to let final aggregation be as it is.
-  if (step != core::AggregationNode::Step::kPartial || isDistinct_ ||
+  if (step_ != core::AggregationNode::Step::kPartial || isDistinct_ ||
       isGlobal_) {
     if (input->size() > 0) {
       auto cudfInput = std::dynamic_pointer_cast<cudf_velox::CudfVector>(input);
@@ -627,7 +632,7 @@ void CudfHashAggregation::addInput(RowVectorPtr input) {
   auto cudfInput = std::dynamic_pointer_cast<cudf_velox::CudfVector>(input);
   VELOX_CHECK_NOT_NULL(cudfInput);
 
-  computeInterimGroupbyPartial(cudfInput->release());
+  computeInterimGroupbyPartial(cudfInput);
 }
 
 CudfVectorPtr CudfHashAggregation::doGroupByAggregation(

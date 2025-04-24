@@ -122,7 +122,7 @@ class CudfHashAggregation : public exec::Operator, public NvtxHelper {
   // aggregations
   const bool isDistinct_;
 
-  const core::AggregationNode::Step step;
+  const core::AggregationNode::Step step_;
 
   bool finished_ = false;
 
@@ -137,7 +137,7 @@ class CudfHashAggregation : public exec::Operator, public NvtxHelper {
 
   // This is for partial aggregation to keep reducing the amount of memory it
   // has to hold on to.
-  void computeInterimGroupbyPartial(std::unique_ptr<cudf::table> tbl);
+  void computeInterimGroupbyPartial(CudfVectorPtr tbl);
 
   std::unique_ptr<cudf::table> partial_output_;
   rmm::cuda_stream_view stream_;
