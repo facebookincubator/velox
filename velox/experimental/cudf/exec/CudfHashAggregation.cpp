@@ -573,6 +573,9 @@ void CudfHashAggregation::setupGroupingKeyChannelProjections(
 }
 
 void CudfHashAggregation::computeInterimGroupbyPartial(CudfVectorPtr tbl) {
+  // For every input, we'll do a groupby and compact results with the existing
+  // interim groupby results
+
   auto inputTableStream = tbl->stream();
   auto groupbyOnInput =
       doGroupByAggregation(tbl->release(), aggregators_, inputTableStream);
@@ -611,31 +614,22 @@ void CudfHashAggregation::computeInterimGroupbyPartial(CudfVectorPtr tbl) {
 
 void CudfHashAggregation::addInput(RowVectorPtr input) {
   VELOX_NVTX_OPERATOR_FUNC_RANGE();
-  // For every input, we'll do a groupby and compact results with the existing
-  // interim groupby results
-  // - If this is partial agg, we'll do a groupby on the
-  // new batch and then compact with the existing partial output and groupby
-  // again but final style (at least for count)
-  // - If this is final agg, we can simply concatenate incoming batch with the
-  // interim results and then do 1 groupby
-  // Right now, for Q13, I'm going to let final aggregation be as it is.
-  if (step_ != core::AggregationNode::Step::kPartial || isDistinct_ ||
-      isGlobal_) {
-    if (input->size() > 0) {
-      auto cudfInput = std::dynamic_pointer_cast<cudf_velox::CudfVector>(input);
-      VELOX_CHECK_NOT_NULL(cudfInput);
-      inputs_.push_back(std::move(cudfInput));
-    }
+  if (input->size() == 0) {
     return;
   }
-  // Now it's only partial groupby aggregation
 
-  // we need to do a groupby on the new batch and then compact with
-  // the existing partial output
   auto cudfInput = std::dynamic_pointer_cast<cudf_velox::CudfVector>(input);
   VELOX_CHECK_NOT_NULL(cudfInput);
 
-  computeInterimGroupbyPartial(cudfInput);
+  if (step_ == core::AggregationNode::Step::kPartial && !isDistinct_ &&
+      !isGlobal_) {
+    // Handle partial groupby aggregation
+    computeInterimGroupbyPartial(cudfInput);
+    return;
+  }
+
+  // Handle final aggregation, distinct, or global cases
+  inputs_.push_back(std::move(cudfInput));
 }
 
 CudfVectorPtr CudfHashAggregation::doGroupByAggregation(
