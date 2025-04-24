@@ -83,6 +83,32 @@ void registerUnaryNumeric(const std::vector<std::string>& aliases) {
   registerUnaryFloatingPoint<T>(aliases);
 }
 
+#define REGISTER_NUMERIC_FUNCTIONS(functionName, prefix) \
+  {                                                      \
+    functionName<int8_t>(prefix);                        \
+    functionName<int16_t>(prefix);                       \
+    functionName<int32_t>(prefix);                       \
+    functionName<int64_t>(prefix);                       \
+    functionName<int128_t>(prefix);                      \
+    functionName<float>(prefix);                         \
+    functionName<double>(prefix);                        \
+  }
+
+#define REGISTER_SCALAR_FUNCTIONS_WITHOUT_VARCHAR(functionName, prefix) \
+  {                                                                     \
+    REGISTER_NUMERIC_FUNCTIONS(functionName, prefix)                    \
+    functionName<Varbinary>(prefix);                                    \
+    functionName<bool>(prefix);                                         \
+    functionName<Timestamp>(prefix);                                    \
+    functionName<Date>(prefix);                                         \
+  }
+
+#define REGISTER_SCALAR_FUNCTIONS(functionName, prefix)             \
+  {                                                                 \
+    REGISTER_SCALAR_FUNCTIONS_WITHOUT_VARCHAR(functionName, prefix) \
+    functionName<Varchar>(prefix);                                  \
+  }
+
 } // namespace
 
 } // namespace facebook::velox::functions
