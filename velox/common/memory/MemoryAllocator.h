@@ -100,8 +100,9 @@ struct Stats {
       auto index = sizeIndex(bytes);
       velox::ClockTimer timer(sizes[index].allocateClocks);
       op();
-      sizes[index].numAllocations += count;
-      sizes[index].totalBytes += bytes * count;
+      sizes[index].numAllocations.fetch_add(count, std::memory_order_relaxed);
+      sizes[index].totalBytes.fetch_add(
+          bytes * count, std::memory_order_relaxed);
     } else {
       op();
     }

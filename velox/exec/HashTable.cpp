@@ -1085,7 +1085,8 @@ void HashTable<ignoreNullKeys>::buildJoinPartition(
           numRows,
           &partitionInfo,
           allocator);
-      table->numParallelBuildRows_ += numRows;
+      table->numParallelBuildRows_.fetch_add(
+          numRows, std::memory_order_relaxed);
     }
   }
 }

@@ -103,8 +103,8 @@ class LocalExchangeSource : public exec::ExchangeSource {
         pages.push_back(std::make_unique<SerializedPage>(std::move(inputPage)));
         inputPage = nullptr;
       }
-      numPages_ += pages.size();
-      totalBytes_ += totalBytes;
+      numPages_.fetch_add(pages.size(), std::memory_order_relaxed);
+      totalBytes_.fetch_add(totalBytes, std::memory_order_relaxed);
       if (data.empty()) {
         common::testutil::TestValue::adjust(
             "facebook::velox::exec::test::LocalExchangeSource::timeout", this);

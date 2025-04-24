@@ -89,8 +89,9 @@ bool MmapAllocator::allocateNonContiguousWithoutRetry(
     return false;
   }
 
-  ++numAllocations_;
-  numAllocatedPages_ += sizeMix.totalPages;
+  numAllocations_.fetch_add(1, std::memory_order_relaxed);
+  numAllocatedPages_.fetch_add(sizeMix.totalPages, std::memory_order_relaxed);
+
   MachinePageCount newMapsNeeded = 0;
   for (int i = 0; i < sizeMix.numSizes; ++i) {
     bool success;
@@ -197,7 +198,8 @@ MachinePageCount MmapAllocator::freeNonContiguousInternal(
       // allocator are not necessarily the same as in the stats.
       const auto sizeIndex =
           Stats::sizeIndex(AllocationTraits::pageBytes(sizeClassSizes_[i]));
-      stats_.sizes[sizeIndex].freeClocks += clocks;
+      stats_.sizes[sizeIndex].freeClocks.fetch_add(
+          clocks, std::memory_order_relaxed);
     }
     numFreed += pages;
   }
@@ -505,7 +507,7 @@ MachinePageCount MmapAllocator::adviseAway(MachinePageCount target) {
       break;
     }
   }
-  numAdvisedPages_ += numAway;
+  numAdvisedPages_.fetch_add(numAway, std::memory_order_relaxed);
   return numAway;
 }
 

@@ -109,11 +109,12 @@ IoStatistics::operationStats() const {
 }
 
 void IoStatistics::merge(const IoStatistics& other) {
-  rawBytesRead_ += other.rawBytesRead_;
-  rawBytesWritten_ += other.rawBytesWritten_;
-  totalScanTime_ += other.totalScanTime_;
+  rawBytesRead_.fetch_add(other.rawBytesRead_, std::memory_order_relaxed);
+  rawBytesWritten_.fetch_add(other.rawBytesWritten_, std::memory_order_relaxed);
+  totalScanTime_.fetch_add(other.totalScanTime_, std::memory_order_relaxed);
 
-  rawOverreadBytes_ += other.rawOverreadBytes_;
+  rawOverreadBytes_.fetch_add(
+      other.rawOverreadBytes_, std::memory_order_relaxed);
   prefetch_.merge(other.prefetch_);
   read_.merge(other.read_);
   ramHit_.merge(other.ramHit_);
