@@ -459,6 +459,28 @@ auto toAggregators(
   return aggregators;
 }
 
+auto toIntermediateAggregators(
+    core::AggregationNode const& aggregationNode,
+    exec::OperatorCtx const& operatorCtx) {
+  auto const step = core::AggregationNode::Step::kIntermediate;
+  bool const isGlobal = aggregationNode.groupingKeys().empty();
+  auto const& inputRowSchema = aggregationNode.outputType();
+
+  std::vector<std::unique_ptr<cudf_velox::CudfHashAggregation::Aggregator>>
+      aggregators;
+  for (size_t i = 0; i < aggregationNode.aggregates().size(); i++) {
+    // Intermediate aggregation has a 1:1 mapping between input and output.
+    // We don't need to figure out input from the aggregate function.
+    auto const& aggregate = aggregationNode.aggregates()[i];
+    auto const inputIndex = aggregationNode.groupingKeys().size() + i;
+    auto const kind = aggregate.call->name();
+    auto const constant = nullptr;
+    aggregators.push_back(
+        createAggregator(step, kind, inputIndex, constant, isGlobal));
+  }
+  return aggregators;
+}
+
 } // namespace
 
 namespace facebook::velox::cudf_velox {
@@ -504,10 +526,8 @@ void CudfHashAggregation::initialize() {
 
   numAggregates_ = aggregationNode_->aggregates().size();
   aggregators_ = toAggregators(*aggregationNode_, *operatorCtx_);
-  intermediateAggregators_ = toAggregators(*aggregationNode_, *operatorCtx_);
-  for (auto& aggregator : intermediateAggregators_) {
-    aggregator->step = core::AggregationNode::Step::kIntermediate;
-  }
+  intermediateAggregators_ =
+      toIntermediateAggregators(*aggregationNode_, *operatorCtx_);
 
   // Check that aggregate result type match the output type.
   // TODO: This is output schema validation. In velox CPU, it's done using
