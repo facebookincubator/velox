@@ -730,48 +730,10 @@ RowVectorPtr CudfHashAggregation::getDistinctKeys(
       pool(), outputType_, numRows, std::move(result), stream);
 }
 
-void CudfHashAggregation::computeInterimGroupbyFinal() {
-#if 0
-  // We're going to do a groupby on whatever we have received so far.
-  // This is to reduce the amount of memory we have to hold on to.
-  auto stream = cudfGlobalStreamPool().get_stream();
-  auto tbl = getConcatenatedTable(inputs_, stream);
-
-  // Release input data after synchronizing
-  stream.synchronize();
-  inputs_.clear();
-
-  auto result = doGroupByAggregation(std::move(tbl), stream);
-
-  // now we concat the result with the partial output
-  if (partial_output_) {
-    auto result_cudf =
-        std::dynamic_pointer_cast<cudf_velox::CudfVector>(result);
-    auto table_views = std::vector<cudf::table_view>{
-        partial_output_->view(), result_cudf->getTableView()};
-    auto concatenated_table = cudf::concatenate(table_views, stream);
-
-    // keys may be duplicated at most twice in the concatenated table. Once for
-    // partial_output_ table and once in result
-
-    // Well actually in Q18, the only agg is sum so we didn't even need to do
-    // the groupby on the new batches first. We could simply concat with the
-    // partial result and then doa groupby. But in the general case we'll have
-    // to because aggs like count will have sums in the partial result but
-    // countable values in the new batches
-
-    // do the groupby again to generate new partial result
-    result = doGroupByAggregation(std::move(concatenated_table), stream);
-  }
-  partial_output_ =
-      std::dynamic_pointer_cast<cudf_velox::CudfVector>(result)->release();
-  stream_ = stream;
-#endif
-}
-
 RowVectorPtr CudfHashAggregation::getOutput() {
   VELOX_NVTX_OPERATOR_FUNC_RANGE();
 
+  // Handle partial groupby
   if (isPartialOutput_ && !isGlobal_ && !isDistinct_) {
     if (not noMoreInput_) {
       return nullptr;
@@ -787,27 +749,6 @@ RowVectorPtr CudfHashAggregation::getOutput() {
   if (finished_) {
     return nullptr;
   }
-
-#if 0
-  if (!isPartialOutput_) {
-    // For final aggs, keep computing groupby using whatever we have received so
-    // far.
-    // Partial aggs already don't hold on to inputs. Final aggs do and hence
-    // have OOM issues.
-    // TODO (dm): Ideally this should be done in addInput()
-    if (not inputs_.empty()) {
-      computeInterimGroupbyFinal();
-    }
-    if (noMoreInput_) {
-      finished_ = true;
-      auto num_rows = partial_output_->num_rows();
-      return std::make_shared<cudf_velox::CudfVector>(
-          pool(), outputType_, num_rows, std::move(partial_output_), stream_);
-    } else {
-      return nullptr;
-    }
-  }
-#endif
 
   if (!isPartialOutput_ && !noMoreInput_) {
     // Final aggregation has to wait for all batches to arrive so we cannot
