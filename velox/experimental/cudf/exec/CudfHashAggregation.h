@@ -139,8 +139,7 @@ class CudfHashAggregation : public exec::Operator, public NvtxHelper {
   // has to hold on to.
   void computeInterimGroupbyPartial(CudfVectorPtr tbl);
 
-  std::unique_ptr<cudf::table> partial_output_;
-  rmm::cuda_stream_view stream_;
+  CudfVectorPtr partialOutput_;
 };
 
 } // namespace facebook::velox::cudf_velox

@@ -578,31 +578,34 @@ void CudfHashAggregation::computeInterimGroupbyPartial(CudfVectorPtr tbl) {
       doGroupByAggregation(tbl->release(), aggregators_, inputTableStream);
 
   // If we already have partial output, concatenate the new results with it
-  if (partial_output_) {
+  if (partialOutput_) {
     // Create a vector of tables to concatenate
     std::vector<cudf::table_view> tablesToConcat;
-    tablesToConcat.push_back(partial_output_->view());
+    tablesToConcat.push_back(partialOutput_->getTableView());
     tablesToConcat.push_back(groupbyOnInput->getTableView());
 
+    auto partialOutputStream = partialOutput_->stream();
     // we need to join the input table stream on the partial output stream to
     // make sure the intermediate results are available when we do the concat
     cudf::detail::join_streams(
-        std::vector<rmm::cuda_stream_view>{inputTableStream}, stream_);
+        std::vector<rmm::cuda_stream_view>{inputTableStream},
+        partialOutputStream);
 
     // Concatenate the tables
-    auto concatenatedTable = cudf::concatenate(tablesToConcat, stream_);
+    auto concatenatedTable =
+        cudf::concatenate(tablesToConcat, partialOutputStream);
 
     // Now we have to groupby again but this time with final aggregation
     // style.
     auto compactedOutput = doGroupByAggregation(
-        std::move(concatenatedTable), intermediateAggregators_, stream_);
-    partial_output_ = compactedOutput->release();
+        std::move(concatenatedTable),
+        intermediateAggregators_,
+        partialOutputStream);
+    partialOutput_ = compactedOutput;
   } else {
-    // First time processing, just store the result
-    auto partialOutputStream = cudfGlobalStreamPool().get_stream();
-    stream_ = partialOutputStream;
-    // TODO: Can I just store the first input's stream here?
-    partial_output_ = groupbyOnInput->release();
+    // First time processing, just store the result of the input batch's groupby
+    // This means we're storing the stream from the first batch
+    partialOutput_ = groupbyOnInput;
   }
 }
 
@@ -779,12 +782,12 @@ RowVectorPtr CudfHashAggregation::getOutput() {
     if (not noMoreInput_) {
       return nullptr;
     }
-    if (!partial_output_ && finished_) {
+    if (!partialOutput_ && finished_) {
       return nullptr;
     }
-    auto numRows = partial_output_->num_rows();
-    return std::make_shared<cudf_velox::CudfVector>(
-        pool(), outputType_, numRows, std::move(partial_output_), stream_);
+    // We're moving partialOutput_ to the caller because we want it to be null
+    // after this call.
+    return std::move(partialOutput_);
   }
 
   if (finished_) {
