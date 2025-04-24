@@ -96,6 +96,7 @@ class CudfHashAggregation : public exec::Operator, public NvtxHelper {
 
   CudfVectorPtr doGroupByAggregation(
       std::unique_ptr<cudf::table> tbl,
+      std::vector<column_index_t> const& groupByKeys,
       std::vector<std::unique_ptr<Aggregator>>& aggregators,
       rmm::cuda_stream_view stream);
   RowVectorPtr doGlobalAggregation(

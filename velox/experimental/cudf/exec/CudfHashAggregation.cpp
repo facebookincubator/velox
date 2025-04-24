@@ -577,8 +577,11 @@ void CudfHashAggregation::computeInterimGroupbyPartial(CudfVectorPtr tbl) {
   // interim groupby results
 
   auto inputTableStream = tbl->stream();
-  auto groupbyOnInput =
-      doGroupByAggregation(tbl->release(), aggregators_, inputTableStream);
+  auto groupbyOnInput = doGroupByAggregation(
+      tbl->release(),
+      groupingKeyInputChannels_,
+      aggregators_,
+      inputTableStream);
 
   // If we already have partial output, concatenate the new results with it
   if (partialOutput_) {
@@ -602,6 +605,7 @@ void CudfHashAggregation::computeInterimGroupbyPartial(CudfVectorPtr tbl) {
     // style.
     auto compactedOutput = doGroupByAggregation(
         std::move(concatenatedTable),
+        groupingKeyOutputChannels_,
         intermediateAggregators_,
         partialOutputStream);
     partialOutput_ = compactedOutput;
@@ -634,10 +638,10 @@ void CudfHashAggregation::addInput(RowVectorPtr input) {
 
 CudfVectorPtr CudfHashAggregation::doGroupByAggregation(
     std::unique_ptr<cudf::table> tbl,
+    std::vector<column_index_t> const& groupByKeys,
     std::vector<std::unique_ptr<Aggregator>>& aggregators,
     rmm::cuda_stream_view stream) {
-  auto groupbyKeyView = tbl->select(
-      groupingKeyInputChannels_.begin(), groupingKeyInputChannels_.end());
+  auto groupbyKeyView = tbl->select(groupByKeys.begin(), groupByKeys.end());
 
   size_t const numGroupingKeys = groupbyKeyView.num_columns();
 
@@ -783,7 +787,8 @@ RowVectorPtr CudfHashAggregation::getOutput() {
   }
 
   if (!isGlobal_) {
-    return doGroupByAggregation(std::move(tbl), aggregators_, stream);
+    return doGroupByAggregation(
+        std::move(tbl), groupingKeyInputChannels_, aggregators_, stream);
   } else if (isDistinct_) {
     return getDistinctKeys(std::move(tbl), stream);
   } else {
