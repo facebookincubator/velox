@@ -635,6 +635,14 @@ TEST_F(JsonCastTest, fromMap) {
 
   testCast(mapOfUnknownValues, mapOfUnknownValuesExpected);
 
+  // Tests map whose keys and values are both of unknown type.
+  auto emptyMapVector =
+      VectorTestBase::makeMapVector<UnknownValue, UnknownValue>({{}});
+  auto expectedEmptyVector =
+      makeNullableFlatVector<JsonNativeType>({"{}"}, JSON());
+
+  testCast(emptyMapVector, expectedEmptyVector);
+
   // Tests map whose elements are wrapped in a dictionary.
   std::vector<std::optional<double>> values{
       1.1e3, 2.2, 3.14e0, -4.4, std::nullopt, -0.0000000006, -7.7};

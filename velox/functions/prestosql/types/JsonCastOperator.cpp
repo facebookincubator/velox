@@ -288,8 +288,8 @@ struct AsJson {
   }
 
   // Returns the length of the json string of the value at i, when this
-  // value will be inlined as an element in the json string of an array, map, or
-  // row.
+  // value will be inlined as an element in the json string of an array, map,
+  // or row.
   vector_size_t lengthAt(vector_size_t i) const {
     if (decoded_->isNullAt(i)) {
       // Null values are inlined as "null".
@@ -338,11 +338,12 @@ struct AsJson {
         isMapKey);
   }
 
-  // Combine exceptions in oldErrors into context.errors_ with a transformation
-  // of rows mapping provided by elementToTopLevelRows. If there are exceptions
-  // at the same row in both context.errors_ and oldErrors, the one in oldErrors
-  // remains. elementToTopLevelRows can be a nullptr, meaning that the rows in
-  // context.errors_ correspond to rows in oldErrors exactly.
+  // Combine exceptions in oldErrors into context.errors_ with a
+  // transformation of rows mapping provided by elementToTopLevelRows. If
+  // there are exceptions at the same row in both context.errors_ and
+  // oldErrors, the one in oldErrors remains. elementToTopLevelRows can be a
+  // nullptr, meaning that the rows in context.errors_ correspond to rows in
+  // oldErrors exactly.
   void combineErrors(
       exec::EvalCtx& context,
       const SelectivityVector& rows,
@@ -420,7 +421,8 @@ void castToJsonFromArray(
 
   flatResult.getBufferWithSpace(elementsStringSize);
 
-  // Constructs the Json string of each array from Json strings of its elements.
+  // Constructs the Json string of each array from Json strings of its
+  // elements.
   context.applyToSelectedNoThrow(rows, [&](auto row) {
     if (inputArray->isNullAt(row)) {
       flatResult.set(row, "null");
@@ -495,7 +497,8 @@ void castToJsonFromMap(
     auto offset = inputMap->offsetAt(row);
     auto size = inputMap->sizeAt(row);
     for (auto i = offset, end = offset + size; i < end; ++i) {
-      // The construction of keysAsJson ensured there is no null in keysAsJson.
+      // The construction of keysAsJson ensured there is no null in
+      // keysAsJson.
       elementsStringSize += keysAsJson.at(i).size() + valuesAsJson.lengthAt(i);
     }
 
@@ -739,8 +742,8 @@ struct CastFromJsonTypedImpl {
   }
 
  private:
-  // Dummy is needed because full/explicit specialization is not allowed inside
-  // class.
+  // Dummy is needed because full/explicit specialization is not allowed
+  // inside class.
   template <TypeKind kind, typename Dummy = void>
   struct KindDispatcher {
     static simdjson::error_code apply(Input, exec::GenericWriter&) {
@@ -1158,6 +1161,7 @@ bool isSupportedBasicType(const TypePtr& type) {
     case TypeKind::DOUBLE:
     case TypeKind::REAL:
     case TypeKind::VARCHAR:
+    case TypeKind::UNKNOWN:
       return true;
     default:
       return false;
