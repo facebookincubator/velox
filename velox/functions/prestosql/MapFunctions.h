@@ -24,10 +24,10 @@ template <typename TExec>
 struct MapKeyExists {
   VELOX_DEFINE_FUNCTION_TYPES(TExec);
 
-  void call(
+  void callNullFree(
       bool& out,
-      const arg_type<Map<Generic<T1>, Generic<T2>>>& inputMap,
-      const arg_type<Generic<T1>>& key) {
+      const null_free_arg_type<Map<Generic<T1>, Generic<T2>>>& inputMap,
+      const null_free_arg_type<Generic<T1>>& key) {
     out = (inputMap.find(key) != inputMap.end());
   }
 };
