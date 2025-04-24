@@ -27,16 +27,6 @@ FetchContent_Declare(
   fastfloat
   URL ${VELOX_FASTFLOAT_SOURCE_URL}
   URL_HASH ${VELOX_FASTFLOAT_BUILD_SHA256_CHECKSUM})
+
 set(fastfloat_BUILD_TESTS OFF)
 FetchContent_MakeAvailable(fastfloat)
-# If folly is bundled it uses find_path fast_float/fast_float.h to locate the
-# header. But when made availabe through FetchContent it does not find it.
-# Instead, we need to explicitly point it to the location to search for it. This
-# caches the FASTFLOAT_INCLUDE_DIR variable so when folly re-runs find_path it
-# will already have located the bundled header.
-FetchContent_GetProperties(fastfloat SOURCE_DIR FASTFLOAT_SOURCE_DIR)
-find_path(
-  FASTFLOAT_INCLUDE_DIR
-  NAMES fast_float/fast_float.h
-  PATHS ${FASTFLOAT_SOURCE_DIR}
-  PATH_SUFFIXES include)
