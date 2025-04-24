@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 #include "velox/exec/MergeJoin.h"
+#include <iostream>
 #include "velox/exec/OperatorUtils.h"
 #include "velox/exec/Task.h"
 #include "velox/expression/FieldReference.h"
@@ -197,6 +198,10 @@ bool MergeJoin::needsInput() const {
 
 void MergeJoin::addInput(RowVectorPtr input) {
   input_ = std::move(input);
+  if (input_) {
+    std::cout << "the left input_ is " << input_->toString(0, input_->size())
+              << "\n";
+  }
   leftRowIndex_ = 0;
 
   if (joinTracker_) {
@@ -818,7 +823,7 @@ RowVectorPtr MergeJoin::getOutput() {
         continue;
       } else if (isAntiJoin(joinType_)) {
         output = filterOutputForAntiJoin(output);
-        if (output) {
+        if (output != nullptr && output->size() > 0) {
           return output;
         }
 
@@ -844,6 +849,9 @@ RowVectorPtr MergeJoin::getOutput() {
         }
 
         if (rightInput_) {
+          std::cout << "the right input is "
+                    << rightInput_->toString(0, rightInput_->size()) << "\n";
+
           if (isFullJoin(joinType_) || isRightJoin(joinType_)) {
             rightRowIndex_ = 0;
           } else {
@@ -904,6 +912,8 @@ RowVectorPtr MergeJoin::doGetOutput() {
     // results from the current match.
     if (addToOutput()) {
       return std::move(output_);
+    } else {
+      previousLeftMatch_ = leftMatch_;
     }
   }
 
@@ -968,6 +978,8 @@ RowVectorPtr MergeJoin::doGetOutput() {
 
     if (addToOutput()) {
       return std::move(output_);
+    } else {
+      previousLeftMatch_ = leftMatch_;
     }
   }
 
@@ -1212,6 +1224,8 @@ RowVectorPtr MergeJoin::doGetOutput() {
 
       if (addToOutput()) {
         return std::move(output_);
+      } else {
+        previousLeftMatch_ = leftMatch_;
       }
 
       if (!rightInput_) {
@@ -1247,9 +1261,6 @@ RowVectorPtr MergeJoin::applyFilter(const RowVectorPtr& output) {
     // If all matches for a given left-side row fail the filter, add a row to
     // the output with nulls for the right-side columns.
     const auto onMiss = [&](auto row) {
-      if (isAntiJoin(joinType_)) {
-        return;
-      }
       rawIndices[numPassed++] = row;
 
       if (isFullJoin(joinType_)) {
@@ -1326,11 +1337,7 @@ RowVectorPtr MergeJoin::applyFilter(const RowVectorPtr& output) {
 
         joinTracker_->processFilterResult(i, passed, onMiss);
 
-        if (isAntiJoin(joinType_)) {
-          if (!passed) {
-            rawIndices[numPassed++] = i;
-          }
-        } else {
+        if (!isAntiJoin(joinType_)) {
           if (passed) {
             rawIndices[numPassed++] = i;
           }
@@ -1344,26 +1351,37 @@ RowVectorPtr MergeJoin::applyFilter(const RowVectorPtr& output) {
 
     // Every time we start a new left key match, `processFilterResult()` will
     // check if at least one row from the previous match passed the filter. If
-    // none did, it calls onMiss to add a record with null right projections to
-    // the output.
+    // none did, it calls onMiss to add a record with null right projections
+    // to the output.
     //
     // Before we leave the current buffer, since we may not have seen the next
-    // left key match yet, the last key match may still be pending to produce a
-    // row (because `processFilterResult()` was not called yet).
+    // left key match yet, the last key match may still be pending to produce
+    // a row (because `processFilterResult()` was not called yet).
     //
     // To handle this, we need to call `noMoreFilterResults()` unless the
-    // same current left key match may continue in the next buffer. So there are
-    // two cases to check:
+    // same current left key match may continue in the next buffer. So there
+    // are two cases to check:
     //
-    // 1. If leftMatch_ is nullopt, there for sure the next buffer will contain
-    // a different key match.
+    // 1. If leftMatch_ is nullopt, there for sure the next buffer will
+    // contain a different key match.
     //
     // 2. leftMatch_ may not be nullopt, but may be related to a different
     // (subsequent) left key. So we check if the last row in the batch has the
     // same left row number as the last key match.
-    if (!leftMatch_ || !joinTracker_->isCurrentLeftMatch(numRows - 1)) {
+    //
+    // 3. If outputSize_ does not equal outputBatchSize_ and leftMatch_ is reset
+    // to null, the output will not be returned immediately. Instead, the next
+    // input will be processed, and leftMatch_ will be assigned a new value.
+    // Additionally, when handling the output from the previous batch, it is
+    // necessary to call the noMoreFilterResults method. This should be done by
+    // checking if previousOutput_ is null. This logic applies specifically to
+    // anti-join operations. In anti-joins, the passed value is processed
+    // within the processFilterResult method, unlike other types of joins.
+    if (!leftMatch_ || !joinTracker_->isCurrentLeftMatch(numRows - 1) ||
+        (isAntiJoin(joinType_) && leftMatch_ && !previousLeftMatch_)) {
       joinTracker_->noMoreFilterResults(onMiss);
     }
+
   } else {
     filterRows_.resize(numRows);
     filterRows_.setAll();

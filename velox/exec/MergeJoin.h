@@ -540,6 +540,9 @@ class MergeJoin : public Operator {
 
   // A set of rows with matching keys on the left side.
   std::optional<Match> leftMatch_;
+  
+  // Records the leftMatch_ of previous batch.
+  std::optional<Match> previousLeftMatch_;
 
   // A set of rows with matching keys on the right side.
   std::optional<Match> rightMatch_;
