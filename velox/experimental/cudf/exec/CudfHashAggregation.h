@@ -134,7 +134,7 @@ class CudfHashAggregation : public exec::Operator, public NvtxHelper {
 
   // This is for partial aggregation to keep reducing the amount of memory it
   // has to hold on to.
-  void computeInterimGroupbyPartial(CudfVectorPtr tbl);
+  void computeIntermediateGroupbyPartial(CudfVectorPtr tbl);
 
   CudfVectorPtr partialOutput_;
 };

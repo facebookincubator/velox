@@ -572,7 +572,7 @@ void CudfHashAggregation::setupGroupingKeyChannelProjections(
       groupingKeyOutputChannels.begin(), groupingKeyOutputChannels.end(), 0);
 }
 
-void CudfHashAggregation::computeInterimGroupbyPartial(CudfVectorPtr tbl) {
+void CudfHashAggregation::computeIntermediateGroupbyPartial(CudfVectorPtr tbl) {
   // For every input, we'll do a groupby and compact results with the existing
   // interim groupby results
 
@@ -628,7 +628,7 @@ void CudfHashAggregation::addInput(RowVectorPtr input) {
   if (step_ == core::AggregationNode::Step::kPartial && !isDistinct_ &&
       !isGlobal_) {
     // Handle partial groupby aggregation
-    computeInterimGroupbyPartial(cudfInput);
+    computeIntermediateGroupbyPartial(cudfInput);
     return;
   }
 
@@ -786,13 +786,13 @@ RowVectorPtr CudfHashAggregation::getOutput() {
               << " table size: " << tbl->num_rows() << std::endl;
   }
 
-  if (!isGlobal_) {
+  if (isDistinct_) {
+    return getDistinctKeys(std::move(tbl), stream);
+  } else if (isGlobal_) {
+    return doGlobalAggregation(std::move(tbl), stream);
+  } else {
     return doGroupByAggregation(
         std::move(tbl), groupingKeyInputChannels_, aggregators_, stream);
-  } else if (isDistinct_) {
-    return getDistinctKeys(std::move(tbl), stream);
-  } else {
-    return doGlobalAggregation(std::move(tbl), stream);
   }
 }
 
