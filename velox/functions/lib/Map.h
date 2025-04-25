@@ -23,7 +23,7 @@ static const char* kNullKeyErrorMessage = "map key cannot be null";
 static const char* kIndeterminateKeyErrorMessage =
     "map key cannot be indeterminate";
 
-template <bool AllowDuplicateKeys, bool DeduplicateKeys = false>
+template <bool AllowDuplicateKeys, bool DeduplicateKeys>
 class MapFunction : public exec::VectorFunction {
  public:
   void apply(

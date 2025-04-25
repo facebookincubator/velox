@@ -14,20 +14,25 @@
  * limitations under the License.
  */
 #include "velox/functions/lib/Map.h"
-#include "velox/expression/Expr.h"
 #include "velox/expression/VectorFunction.h"
 
 namespace facebook::velox::functions {
 
 VELOX_DECLARE_VECTOR_FUNCTION(
     udf_map,
-    MapFunction<false>::signatures(),
-    std::make_unique<MapFunction</*AllowDuplicateKeys=*/false>>());
+    (MapFunction</*AllowDuplicateKeys=*/false, /*DeduplicateKeys=*/false>::
+         signatures()),
+    (std::make_unique<MapFunction<
+         /*AllowDuplicateKeys=*/false,
+         /*DeduplicateKeys=*/false>>()));
 
 VELOX_DECLARE_VECTOR_FUNCTION(
     udf_map_allow_duplicates,
-    MapFunction</*AllowDuplicateKeys=*/true>::signatures(),
-    std::make_unique<MapFunction</*AllowDuplicateKeys=*/true>>());
+    (MapFunction</*AllowDuplicateKeys=*/true, /*DeduplicateKeys=*/false>::
+         signatures()),
+    (std::make_unique<MapFunction<
+         /*AllowDuplicateKeys=*/true,
+         /*DeduplicateKeys=*/false>>()));
 
 void registerMapFunction(const std::string& name, bool allowDuplicateKeys) {
   if (allowDuplicateKeys) {
