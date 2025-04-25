@@ -99,10 +99,10 @@ class CudfHashAggregation : public exec::Operator, public NvtxHelper {
       std::vector<column_index_t> const& groupByKeys,
       std::vector<std::unique_ptr<Aggregator>>& aggregators,
       rmm::cuda_stream_view stream);
-  RowVectorPtr doGlobalAggregation(
+  CudfVectorPtr doGlobalAggregation(
       std::unique_ptr<cudf::table> tbl,
       rmm::cuda_stream_view stream);
-  RowVectorPtr getDistinctKeys(
+  CudfVectorPtr getDistinctKeys(
       std::unique_ptr<cudf::table> tbl,
       rmm::cuda_stream_view stream);
 
@@ -135,6 +135,8 @@ class CudfHashAggregation : public exec::Operator, public NvtxHelper {
   // This is for partial aggregation to keep reducing the amount of memory it
   // has to hold on to.
   void computeIntermediateGroupbyPartial(CudfVectorPtr tbl);
+
+  void computeIntermediateDistinctPartial(CudfVectorPtr tbl);
 
   CudfVectorPtr partialOutput_;
 };

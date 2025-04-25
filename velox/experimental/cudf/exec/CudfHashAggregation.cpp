@@ -616,6 +616,40 @@ void CudfHashAggregation::computeIntermediateGroupbyPartial(CudfVectorPtr tbl) {
   }
 }
 
+void CudfHashAggregation::computeIntermediateDistinctPartial(
+    CudfVectorPtr tbl) {
+  // For every input, we'll concat with existing distinct results and then do a
+  // distinct on the concatenated results
+
+  auto inputTableStream = tbl->stream();
+
+  if (partialOutput_) {
+    // Concatenate the input table with the existing distinct results
+    std::vector<cudf::table_view> tablesToConcat;
+    tablesToConcat.push_back(partialOutput_->getTableView());
+    tablesToConcat.push_back(tbl->getTableView());
+
+    auto partialOutputStream = partialOutput_->stream();
+    // we need to join the input table stream on the partial output stream to
+    // make sure the input table is available when we do the concat
+    cudf::detail::join_streams(
+        std::vector<rmm::cuda_stream_view>{inputTableStream},
+        partialOutputStream);
+
+    auto concatenatedTable =
+        cudf::concatenate(tablesToConcat, partialOutputStream);
+
+    // Do a distinct on the concatenated results
+    auto distinctOutput =
+        getDistinctKeys(std::move(concatenatedTable), inputTableStream);
+    partialOutput_ = distinctOutput;
+  } else {
+    // First time processing, just store the result of the input batch's
+    // distinct
+    partialOutput_ = getDistinctKeys(tbl->release(), inputTableStream);
+  }
+}
+
 void CudfHashAggregation::addInput(RowVectorPtr input) {
   VELOX_NVTX_OPERATOR_FUNC_RANGE();
   if (input->size() == 0) {
@@ -625,10 +659,14 @@ void CudfHashAggregation::addInput(RowVectorPtr input) {
   auto cudfInput = std::dynamic_pointer_cast<cudf_velox::CudfVector>(input);
   VELOX_CHECK_NOT_NULL(cudfInput);
 
-  if (step_ == core::AggregationNode::Step::kPartial && !isDistinct_ &&
-      !isGlobal_) {
-    // Handle partial groupby aggregation
-    computeIntermediateGroupbyPartial(cudfInput);
+  if (step_ == core::AggregationNode::Step::kPartial && !isGlobal_) {
+    if (isDistinct_) {
+      // Handle partial distinct aggregation
+      computeIntermediateDistinctPartial(cudfInput);
+    } else {
+      // Handle partial groupby aggregation
+      computeIntermediateGroupbyPartial(cudfInput);
+    }
     return;
   }
 
@@ -697,7 +735,7 @@ CudfVectorPtr CudfHashAggregation::doGroupByAggregation(
       pool(), outputType_, numRows, std::move(resultTable), stream);
 }
 
-RowVectorPtr CudfHashAggregation::doGlobalAggregation(
+CudfVectorPtr CudfHashAggregation::doGlobalAggregation(
     std::unique_ptr<cudf::table> tbl,
     rmm::cuda_stream_view stream) {
   std::vector<std::unique_ptr<cudf::column>> resultColumns;
@@ -715,7 +753,7 @@ RowVectorPtr CudfHashAggregation::doGlobalAggregation(
       stream);
 }
 
-RowVectorPtr CudfHashAggregation::getDistinctKeys(
+CudfVectorPtr CudfHashAggregation::getDistinctKeys(
     std::unique_ptr<cudf::table> tbl,
     rmm::cuda_stream_view stream) {
   std::vector<cudf::size_type> keyIndices(
@@ -738,7 +776,7 @@ RowVectorPtr CudfHashAggregation::getOutput() {
   VELOX_NVTX_OPERATOR_FUNC_RANGE();
 
   // Handle partial groupby
-  if (isPartialOutput_ && !isGlobal_ && !isDistinct_) {
+  if (isPartialOutput_ && !isGlobal_) {
     if (not noMoreInput_) {
       return nullptr;
     }
