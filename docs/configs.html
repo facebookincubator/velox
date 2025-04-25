@@ -916,18 +916,6 @@ execution stats.</p></td>
 </tr>
 </thead>
 <tbody>
-<tr class="row-even"><td><p>hive.parquet.writer.enable-dictionary</p></td>
-<td><p>hive.parquet.writer.enable_dictionary</p></td>
-<td><p>bool</p></td>
-<td><p>true</p></td>
-<td><p>Whether to enable dictionary encoding when writing into Parquet through the Arrow bridge.</p></td>
-</tr>
-<tr class="row-odd"><td><p>hive.parquet.writer.dictionary-page-size-limit</p></td>
-<td><p>hive.parquet.writer.dictionary_page_size_limit</p></td>
-<td><p>string</p></td>
-<td><p>1MB</p></td>
-<td><p>Dictionary Page size used when writing into Parquet through Arrow bridge. This setting is applicable only when dictionary encoding is enabled.</p></td>
-</tr>
 <tr class="row-even"><td><p>hive.parquet.writer.timestamp-unit</p></td>
 <td><p>hive.parquet.writer.timestamp_unit</p></td>
 <td><p>tinyint</p></td>
@@ -1298,7 +1286,7 @@ including stddev, stddev_samp, variance, var_samp, covar_samp and corr should be
 <tbody>
 <tr class="row-even"><td><p>query_trace_enabled</p></td>
 <td><p>bool</p></td>
-<td><p>false</p></td>
+<td><p>true</p></td>
 <td><p>If true, enable query tracing.</p></td>
 </tr>
 <tr class="row-odd"><td><p>query_trace_dir</p></td>
