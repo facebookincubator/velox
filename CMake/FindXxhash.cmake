@@ -12,10 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-#
-# Try to find Facebook xxhash library This will define Xxhash_FOUND
-# Xxhash_INCLUDE_DIR Xxhash_LIBRARY
-#
+# Try to find Facebook xxhash library. This will define Xxhash_FOUND,
+# Xxhash_INCLUDE_DIR, Xxhash_LIBRARY
 
 find_path(Xxhash_INCLUDE_DIR NAMES xxhash.h)
 

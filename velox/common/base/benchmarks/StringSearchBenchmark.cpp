@@ -25,6 +25,7 @@
 #include <folly/Benchmark.h>
 #include <folly/Random.h>
 #include <folly/container/Foreach.h>
+#include <folly/portability/GFlags.h>
 
 #include <iostream>
 
