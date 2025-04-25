@@ -95,7 +95,7 @@ jobs:
             "-DVELOX_ENABLE_S3=ON"
             "-DVELOX_ENABLE_GCS=ON"
             "-DVELOX_ENABLE_ABFS=ON"
-            "-DVELOX_ENABLE_REMOTE_FUNCTIONS=ON"
+            "-DVELOX_ENABLE_REMOTE_FUNCTIONS=OFF" # Disable until FBThrift is fixed #issue 13153
             "-DVELOX_ENABLE_GPU=ON"
             "-DVELOX_MONO_LIBRARY=ON"
             "-DVELOX_BUILD_SHARED=ON"
