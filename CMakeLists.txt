@@ -556,6 +556,7 @@ if(VELOX_ENABLE_REMOTE_FUNCTIONS)
   # requires clients to explicitly install fizz and wangle.
   find_package(fizz CONFIG REQUIRED)
   find_package(wangle CONFIG REQUIRED)
+  find_package(Xxhash REQUIRED)
   find_package(FBThrift CONFIG REQUIRED)
 endif()
 
