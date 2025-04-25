@@ -309,6 +309,11 @@ time (instead of a space), and the year part is not padded.</p></td>
 <td><p>false</p></td>
 <td><p>Disable optimization in expression evaluation to delay loading of lazy inputs unless required. Should only be used for debugging.</p></td>
 </tr>
+<tr class="row-even"><td><p>debug_lambda_function_evaluation_batch_size</p></td>
+<td><p>integer</p></td>
+<td><p>10000</p></td>
+<td><p>Some lambda functions over arrays and maps are evaluated in batches of the underlying elements that comprise the arrays/maps. This is done to make the batch size managable as array vectors can have thousands of elements each and hit scaling limits as implementations typically expect BaseVectors to a couple of thousand entries. This lets up tune those batch sizes. Setting this to zero is setting unlimited batch size.</p></td>
+</tr>
 </tbody>
 </table>
 </section>
@@ -916,6 +921,18 @@ execution stats.</p></td>
 </tr>
 </thead>
 <tbody>
+<tr class="row-even"><td><p>hive.parquet.writer.enable-dictionary</p></td>
+<td><p>hive.parquet.writer.enable_dictionary</p></td>
+<td><p>bool</p></td>
+<td><p>true</p></td>
+<td><p>Whether to enable dictionary encoding when writing into Parquet through the Arrow bridge.</p></td>
+</tr>
+<tr class="row-odd"><td><p>hive.parquet.writer.dictionary-page-size-limit</p></td>
+<td><p>hive.parquet.writer.dictionary_page_size_limit</p></td>
+<td><p>string</p></td>
+<td><p>1MB</p></td>
+<td><p>Dictionary Page size used when writing into Parquet through Arrow bridge. This setting is applicable only when dictionary encoding is enabled.</p></td>
+</tr>
 <tr class="row-even"><td><p>hive.parquet.writer.timestamp-unit</p></td>
 <td><p>hive.parquet.writer.timestamp_unit</p></td>
 <td><p>tinyint</p></td>
@@ -1286,7 +1303,7 @@ including stddev, stddev_samp, variance, var_samp, covar_samp and corr should be
 <tbody>
 <tr class="row-even"><td><p>query_trace_enabled</p></td>
 <td><p>bool</p></td>
-<td><p>true</p></td>
+<td><p>false</p></td>
 <td><p>If true, enable query tracing.</p></td>
 </tr>
 <tr class="row-odd"><td><p>query_trace_dir</p></td>

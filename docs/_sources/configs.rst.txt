@@ -218,6 +218,10 @@ Expression Evaluation Configuration
      - bool
      - false
      - Disable optimization in expression evaluation to delay loading of lazy inputs unless required. Should only be used for debugging.
+   * - debug_lambda_function_evaluation_batch_size
+     - integer
+     - 10000
+     - Some lambda functions over arrays and maps are evaluated in batches of the underlying elements that comprise the arrays/maps. This is done to make the batch size managable as array vectors can have thousands of elements each and hit scaling limits as implementations typically expect BaseVectors to a couple of thousand entries. This lets up tune those batch sizes. Setting this to zero is setting unlimited batch size.
 
 Memory Management
 -----------------
@@ -681,6 +685,16 @@ Each query can override the config by setting corresponding query session proper
      - Type
      - Default Value
      - Description
+   * - hive.parquet.writer.enable-dictionary
+     - hive.parquet.writer.enable_dictionary
+     - bool
+     - true
+     - Whether to enable dictionary encoding when writing into Parquet through the Arrow bridge.
+   * - hive.parquet.writer.dictionary-page-size-limit
+     - hive.parquet.writer.dictionary_page_size_limit
+     - string
+     - 1MB
+     - Dictionary Page size used when writing into Parquet through Arrow bridge. This setting is applicable only when dictionary encoding is enabled.
    * - hive.parquet.writer.timestamp-unit
      - hive.parquet.writer.timestamp_unit
      - tinyint
@@ -955,7 +969,7 @@ Tracing
      - Description
    * - query_trace_enabled
      - bool
-     - true
+     - false
      - If true, enable query tracing.
    * - query_trace_dir
      - string
