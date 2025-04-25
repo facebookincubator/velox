@@ -627,7 +627,8 @@ void CudfHashAggregation::computeIntermediateDistinctPartial(
     // Concatenate the input table with the existing distinct results
     std::vector<cudf::table_view> tablesToConcat;
     tablesToConcat.push_back(partialOutput_->getTableView());
-    tablesToConcat.push_back(tbl->getTableView());
+    tablesToConcat.push_back(tbl->getTableView().select(
+        groupingKeyInputChannels_.begin(), groupingKeyInputChannels_.end()));
 
     auto partialOutputStream = partialOutput_->stream();
     // we need to join the input table stream on the partial output stream to
@@ -640,13 +641,16 @@ void CudfHashAggregation::computeIntermediateDistinctPartial(
         cudf::concatenate(tablesToConcat, partialOutputStream);
 
     // Do a distinct on the concatenated results
-    auto distinctOutput =
-        getDistinctKeys(std::move(concatenatedTable), inputTableStream);
+    auto distinctOutput = getDistinctKeys(
+        std::move(concatenatedTable),
+        groupingKeyOutputChannels_,
+        inputTableStream);
     partialOutput_ = distinctOutput;
   } else {
     // First time processing, just store the result of the input batch's
     // distinct
-    partialOutput_ = getDistinctKeys(tbl->release(), inputTableStream);
+    partialOutput_ = getDistinctKeys(
+        tbl->release(), groupingKeyInputChannels_, inputTableStream);
   }
 }
 
@@ -755,12 +759,11 @@ CudfVectorPtr CudfHashAggregation::doGlobalAggregation(
 
 CudfVectorPtr CudfHashAggregation::getDistinctKeys(
     std::unique_ptr<cudf::table> tbl,
+    std::vector<column_index_t> const& groupByKeys,
     rmm::cuda_stream_view stream) {
-  std::vector<cudf::size_type> keyIndices(
-      groupingKeyInputChannels_.begin(), groupingKeyInputChannels_.end());
   auto result = cudf::distinct(
-      tbl->view(),
-      keyIndices,
+      tbl->view().select(groupByKeys.begin(), groupByKeys.end()),
+      {groupingKeyOutputChannels_.begin(), groupingKeyOutputChannels_.end()},
       cudf::duplicate_keep_option::KEEP_FIRST,
       cudf::null_equality::EQUAL,
       cudf::nan_equality::ALL_EQUAL,
@@ -825,7 +828,7 @@ RowVectorPtr CudfHashAggregation::getOutput() {
   }
 
   if (isDistinct_) {
-    return getDistinctKeys(std::move(tbl), stream);
+    return getDistinctKeys(std::move(tbl), groupingKeyInputChannels_, stream);
   } else if (isGlobal_) {
     return doGlobalAggregation(std::move(tbl), stream);
   } else {

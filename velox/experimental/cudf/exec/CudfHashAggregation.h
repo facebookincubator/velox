@@ -104,6 +104,7 @@ class CudfHashAggregation : public exec::Operator, public NvtxHelper {
       rmm::cuda_stream_view stream);
   CudfVectorPtr getDistinctKeys(
       std::unique_ptr<cudf::table> tbl,
+      std::vector<column_index_t> const& groupByKeys,
       rmm::cuda_stream_view stream);
 
   std::vector<column_index_t> groupingKeyInputChannels_;
