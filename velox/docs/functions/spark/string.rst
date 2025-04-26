@@ -433,7 +433,7 @@ String Functions
     Removes trailing space characters (ASCII 32) that exceed the maximum Unicode string length ``limit`` in characters.
     This function will trim at most the length of ``string`` in characters - ``limit`` space characters from the end of this string.
     Throws exception when the string still exceeds ``limit`` after trimming trailing spaces or when ``limit`` is negative.
-    Note: This function is not directly callable in SQL, but internally used by SparkSQL for length check when write to
+    Note: This function is not directly callable in SQL, but internally used by SparkSQL for length check when writing to
     varchar type columns. ``limit=0`` is technically valid for this function but SparkSQL does not support ``VARCHAR(0)``
     in DDL. This case exists primarily for internal consistency. ::
 
