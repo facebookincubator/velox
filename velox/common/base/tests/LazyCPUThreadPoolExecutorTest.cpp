@@ -50,7 +50,11 @@ TEST(LazyCPUThreadPoolExecutorTest, delayedInitialization) {
   folly::ThreadPoolExecutor::withAll(
       [&](folly::ThreadPoolExecutor& ex) { after.push_back(ex.getName()); });
 
-  ASSERT_THAT(after, testing::Contains(prefix).Times(1));
+  std::vector<std::string> matching;
+  std::copy_if(after.begin(), after.end(), std::back_inserter(matching),
+               [&prefix](const std::string& name) { return name == prefix; });
+
+  ASSERT_THAT(matching, testing::SizeIs(1));
 }
 } // namespace
 } // namespace facebook::velox
