@@ -51,13 +51,14 @@ FOLLY_ALWAYS_INLINE void trimTrailingSpaces(
       StringView(inputStr.data(), std::distance(inputStr.begin(), curPos + 1)));
 }
 
-/// Ensures that the input string fit within the specified length ``limit`` in
+/// Ensures that ``input`` fit within the specified length ``limit`` in
 /// characters. If the length of ``input`` exceeds the limit, trailing spaces
 /// are trimmed to fit within the limit. If the length of ``input`` is less than
-/// or equal to ``limit``, it is returned as-is. Throws exception if the trimmed
-/// string still exceeds ``limit`` or if ``limit`` is negative. This function
-/// will trim at most (length of ``input`` - ``limit``) space characters (ASCII
-/// 32) from the end of ``input``.
+/// or equal to
+/// ``limit``, it is returned as-is. Throws exception if the trimmed string
+/// still exceeds ``limit`` or if ``limit`` is negative. This function will trim
+/// at most (length of ``input`` - ``limit``) space characters (ASCII 32) from
+/// the end of ``input``.
 template <typename T>
 struct VarcharTypeWriteSideCheckFunction {
   VELOX_DEFINE_FUNCTION_TYPES(T);
