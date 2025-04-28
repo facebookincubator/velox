@@ -450,44 +450,71 @@ template <typename TExecCtx, typename T>
 struct ArrayCumSumFunction {
   VELOX_DEFINE_FUNCTION_TYPES(TExecCtx)
 
-  FOLLY_ALWAYS_INLINE void call(
-      out_type<velox::Array<T>>& out,
-      const arg_type<velox::Array<T>>& in) {
-    T sum = 0;
-    auto len = in.size();
+  // Detect if T is a decimal type (ShortDecimal or LongDecimal)
+  static constexpr bool isDecimal =
+      std::is_same_v<typename SimpleTypeTrait<T>::NativeType, int64_t> ||
+      std::is_same_v<typename SimpleTypeTrait<T>::NativeType, int128_t>;
 
-    for (auto i = 0; i < len; ++i) {
-      if (in[i].has_value()) {
-        if constexpr (std::is_same_v<T, float> || std::is_same_v<T, double>) {
-          sum += in[i].value();
-        } else {
-          sum = checkedPlus<T>(sum, in[i].value());
+  using NativeType = typename SimpleTypeTrait<T>::NativeType;
+
+  static FOLLY_ALWAYS_INLINE T add(const T& a, const T& b) {
+    if constexpr (std::is_same_v<T, float> || std::is_same_v<T, double>) {
+      return a + b;
+    } else if constexpr (isDecimal) {
+      return T{static_cast<NativeType>(a.unscaledValue + b.unscaledValue)};
+    } else {
+      return checkedPlus<T>(a, b);
+    }
+  }
+
+  FOLLY_ALWAYS_INLINE void call(
+      out_type<Array<T>>& out,
+      const arg_type<Array<T>>& in) {
+    const auto len = in.size();
+
+    if constexpr (isDecimal) {
+      NativeType sum = 0;
+      for (int i = 0; i < len; ++i) {
+        if (!in[i].has_value()) {
+          for (; i < len; ++i)
+            out.add_null();
+          return;
         }
+        sum = checkedPlus<NativeType>(sum, *in[i]);
         out.add_item() = sum;
-      } else {
-        for (auto j = i; j < len; ++j) {
-          out.add_null();
+      }
+    } else {
+      T sum{};
+      for (int i = 0; i < len; ++i) {
+        if (!in[i].has_value()) {
+          for (; i < len; ++i)
+            out.add_null();
+          return;
         }
-        break;
+        sum = add(sum, *in[i]);
+        out.add_item() = sum;
       }
     }
-    return;
   }
 
   FOLLY_ALWAYS_INLINE void callNullFree(
-      out_type<velox::Array<T>>& out,
-      const null_free_arg_type<velox::Array<T>>& in) {
-    T sum = 0;
+      out_type<Array<T>>& out,
+      const null_free_arg_type<Array<T>>& in) {
+    const auto len = in.size();
 
-    for (const auto& item : in) {
-      if constexpr (std::is_same_v<T, float> || std::is_same_v<T, double>) {
-        sum += item;
-      } else {
-        sum = checkedPlus<T>(sum, item);
+    if constexpr (isDecimal) {
+      NativeType sum = 0;
+      for (int i = 0; i < len; ++i) {
+        sum = checkedPlus<NativeType>(sum, in[i]);
+        out.add_item() = sum;
       }
-      out.add_item() = sum;
+    } else {
+      T sum{};
+      for (int i = 0; i < len; ++i) {
+        sum = add(sum, in[i]);
+        out.add_item() = sum;
+      }
     }
-    return;
   }
 };
 
