@@ -14,10 +14,10 @@
  * limitations under the License.
  */
 #pragma once
-#include <string>
-#include <memory>
-#include <utility>
 #include <boost/functional/hash.hpp>
+#include <memory>
+#include <string>
+#include <utility>
 
 namespace facebook::velox::parquet {
 
@@ -27,10 +27,10 @@ struct KeyVersion {
   std::string material;
 
   KeyVersion() = default;
-  KeyVersion(std::string name,
-             std::string versionName,
-             std::string material)
-      : name(std::move(name)), versionName(std::move(versionName)), material(std::move(material)) {}
+  KeyVersion(std::string name, std::string versionName, std::string material)
+      : name(std::move(name)),
+        versionName(std::move(versionName)),
+        material(std::move(material)) {}
 
   // Equality operator
   bool operator==(const KeyVersion& other) const {
@@ -54,11 +54,12 @@ struct EncryptedKeyVersion {
   std::shared_ptr<KeyVersion> encryptedKeyVersion;
 
   EncryptedKeyVersion() = default;
-  EncryptedKeyVersion(std::string& encryptionKeyName,
-                      std::string& encryptionKeyVersionName,
-                      std::string& encryptedKeyIv,
-                      std::shared_ptr<KeyVersion>& encryptedKeyVersion) :
-        encryptionKeyName(encryptionKeyName),
+  EncryptedKeyVersion(
+      std::string& encryptionKeyName,
+      std::string& encryptionKeyVersionName,
+      std::string& encryptedKeyIv,
+      std::shared_ptr<KeyVersion>& encryptedKeyVersion)
+      : encryptionKeyName(encryptionKeyName),
         encryptionKeyVersionName(encryptionKeyVersionName),
         encryptedKeyIv(encryptedKeyIv),
         encryptedKeyVersion(encryptedKeyVersion) {}
@@ -77,7 +78,8 @@ struct EncryptedKeyVersion {
     if (!encryptedKeyVersion && !other.encryptedKeyVersion) {
       return true;
     }
-    if ((encryptedKeyVersion && !other.encryptedKeyVersion) || (!encryptedKeyVersion && other.encryptedKeyVersion)) {
+    if ((encryptedKeyVersion && !other.encryptedKeyVersion) ||
+        (!encryptedKeyVersion && other.encryptedKeyVersion)) {
       return false;
     }
     return *encryptedKeyVersion == *other.encryptedKeyVersion;
@@ -88,9 +90,10 @@ struct CacheableEncryptedKeyVersion {
   std::string userName;
   std::shared_ptr<EncryptedKeyVersion> encryptedKeyVersion;
 
-  CacheableEncryptedKeyVersion(std::string userName,
-                               std::shared_ptr<EncryptedKeyVersion>& encryptedKeyVersion) :
-        userName(std::move(userName)),
+  CacheableEncryptedKeyVersion(
+      std::string userName,
+      std::shared_ptr<EncryptedKeyVersion>& encryptedKeyVersion)
+      : userName(std::move(userName)),
         encryptedKeyVersion(encryptedKeyVersion) {}
 
   // Equality operator
@@ -101,7 +104,8 @@ struct CacheableEncryptedKeyVersion {
     if (!encryptedKeyVersion && !other.encryptedKeyVersion) {
       return true;
     }
-    if ((encryptedKeyVersion && !other.encryptedKeyVersion) || (!encryptedKeyVersion && other.encryptedKeyVersion)) {
+    if ((encryptedKeyVersion && !other.encryptedKeyVersion) ||
+        (!encryptedKeyVersion && other.encryptedKeyVersion)) {
       return false;
     }
     return *encryptedKeyVersion == *other.encryptedKeyVersion;
@@ -120,10 +124,12 @@ struct CacheableEncryptedKeyVersion {
       return seed;
     }
     boost::hash_combine(seed, encryptedKeyVersion->encryptedKeyVersion->name);
-    boost::hash_combine(seed, encryptedKeyVersion->encryptedKeyVersion->material);
-    boost::hash_combine(seed, encryptedKeyVersion->encryptedKeyVersion->versionName);
+    boost::hash_combine(
+        seed, encryptedKeyVersion->encryptedKeyVersion->material);
+    boost::hash_combine(
+        seed, encryptedKeyVersion->encryptedKeyVersion->versionName);
     return seed;
   }
 };
 
-}
+} // namespace facebook::velox::parquet
