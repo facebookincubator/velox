@@ -18,8 +18,6 @@
 #include "velox/exec/Task.h"
 #include "velox/expression/FieldReference.h"
 
-#include <iostream>
-
 namespace facebook::velox::exec {
 
 MergeJoin::MergeJoin(
@@ -96,7 +94,8 @@ void MergeJoin::initialize() {
     }
   } else if (joinNode_->isAntiJoin() || joinNode_->isFullJoin()) {
     // Anti join needs to track the left side rows that have no match on the
-    // right.
+    // right. Full outer join needs to track the right side rows that have no
+    // match on the left.
     joinTracker_ = JoinTracker(outputBatchSize_, pool());
   }
 
