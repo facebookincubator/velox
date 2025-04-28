@@ -14,9 +14,9 @@
  * limitations under the License.
  */
 #pragma once
+#include <memory>
 #include <string>
 #include <vector>
-#include <memory>
 
 namespace facebook::velox::parquet {
 
@@ -24,9 +24,11 @@ class ColumnPath {
  public:
   ColumnPath() : path_() {}
   explicit ColumnPath(const std::vector<std::string>& path) : path_(path) {}
-  explicit ColumnPath(std::vector<std::string>&& path) : path_(std::move(path)) {}
+  explicit ColumnPath(std::vector<std::string>&& path)
+      : path_(std::move(path)) {}
 
-  static std::shared_ptr<ColumnPath> fromDotString(const std::string& dotString);
+  static std::shared_ptr<ColumnPath> fromDotString(
+      const std::string& dotString);
 
   std::shared_ptr<ColumnPath> extend(const std::string& nodeName) const;
   std::string toDotString() const;
@@ -37,4 +39,4 @@ class ColumnPath {
   std::vector<std::string> path_;
 };
 
-}
+} // namespace facebook::velox::parquet

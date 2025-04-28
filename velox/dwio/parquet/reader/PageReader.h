@@ -21,8 +21,8 @@
 #include "velox/dwio/common/DirectDecoder.h"
 #include "velox/dwio/common/SelectiveColumnReader.h"
 #include "velox/dwio/common/compression/Compression.h"
-#include "velox/dwio/parquet/crypto/FileDecryptor.h"
 #include "velox/dwio/parquet/common/RleEncodingInternal.h"
+#include "velox/dwio/parquet/crypto/FileDecryptor.h"
 #include "velox/dwio/parquet/reader/BooleanDecoder.h"
 #include "velox/dwio/parquet/reader/DeltaBpDecoder.h"
 #include "velox/dwio/parquet/reader/DeltaByteArrayDecoder.h"
@@ -158,7 +158,9 @@ class PageReader {
 
   // Parses the PageHeader at 'inputStream_', and move the bufferStart_ and
   // bufferEnd_ to the corresponding positions.
-  thrift::PageHeader readPageHeader(std::shared_ptr<Decryptor> decryptor=nullptr, std::string_view aad="");
+  thrift::PageHeader readPageHeader(
+      std::shared_ptr<Decryptor> decryptor = nullptr,
+      std::string_view aad = "");
 
   const tz::TimeZone* sessionTimezone() const {
     return sessionTimezone_;
@@ -215,11 +217,27 @@ class PageReader {
   // next page.
   void updateRowInfoAfterPageSkipped();
 
-  thrift::PageHeader decryptPageHeader(std::shared_ptr<Decryptor> decryptor, std::string_view aad);
-  int32_t decryptPageData(const thrift::PageHeader& pageHeader, std::shared_ptr<Decryptor> decryptor, std::string_view aad);
-  void prepareDataPageV1(const thrift::PageHeader& pageHeader, int64_t row, std::shared_ptr<Decryptor> decryptor=nullptr, std::string_view aad="");
-  void prepareDataPageV2(const thrift::PageHeader& pageHeader, int64_t row, std::shared_ptr<Decryptor> decryptor=nullptr, std::string_view aad="");
-  void prepareDictionary(const thrift::PageHeader& pageHeader, std::shared_ptr<Decryptor> decryptor=nullptr, std::string_view aad="");
+  thrift::PageHeader decryptPageHeader(
+      std::shared_ptr<Decryptor> decryptor,
+      std::string_view aad);
+  int32_t decryptPageData(
+      const thrift::PageHeader& pageHeader,
+      std::shared_ptr<Decryptor> decryptor,
+      std::string_view aad);
+  void prepareDataPageV1(
+      const thrift::PageHeader& pageHeader,
+      int64_t row,
+      std::shared_ptr<Decryptor> decryptor = nullptr,
+      std::string_view aad = "");
+  void prepareDataPageV2(
+      const thrift::PageHeader& pageHeader,
+      int64_t row,
+      std::shared_ptr<Decryptor> decryptor = nullptr,
+      std::string_view aad = "");
+  void prepareDictionary(
+      const thrift::PageHeader& pageHeader,
+      std::shared_ptr<Decryptor> decryptor = nullptr,
+      std::string_view aad = "");
   void makeDecoder();
 
   // For a non-top level leaf, reads the defs and sets 'leafNulls_' and

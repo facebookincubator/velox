@@ -35,4 +35,4 @@ void retry(int attempts, std::chrono::milliseconds delay, Func func) {
   }
 }
 
-}
+} // namespace facebook::velox::parquet

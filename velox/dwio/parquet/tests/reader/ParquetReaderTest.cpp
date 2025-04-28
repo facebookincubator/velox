@@ -15,12 +15,12 @@
  */
 
 #include "velox/common/base/tests/GTestUtils.h"
+#include "velox/common/encode/Base64.h"
+#include "velox/dwio/parquet/crypto/CryptoFactory.h"
+#include "velox/dwio/parquet/crypto/InMemoryKMSClient.h"
 #include "velox/dwio/parquet/tests/ParquetTestBase.h"
 #include "velox/expression/ExprToSubfieldFilter.h"
 #include "velox/vector/tests/utils/VectorMaker.h"
-#include "velox/dwio/parquet/crypto/CryptoFactory.h"
-#include "velox/dwio/parquet/crypto/InMemoryKMSClient.h"
-#include "velox/common/encode/Base64.h"
 
 using namespace facebook::velox;
 using namespace facebook::velox::common;
@@ -170,12 +170,15 @@ TEST_F(ParquetReaderTest, parseEmptyNestedList) {
 
 TEST_F(ParquetReaderTest, readEncryptedColumnWithClacEnaled) {
   auto inMemoryKMSClient = std::make_shared<InMemoryKMSClient>();
-  std::string encryptionKey = encoding::Base64::decodeUrl("s4qfala5hmJ0frF5T4drCQ");
-  std::string keyMetadata = encoding::Base64::decodeUrl("AgEAAAAYNnp6ekEzNEVwVHpoMTUwOVpwc2NLUT09AgAAAAQAAAAAAwAAABhSR0RsdUtNREQrbERrSkdoSkZKd0N3PT0EAAAABHRlc3Q");
+  std::string encryptionKey =
+      encoding::Base64::decodeUrl("s4qfala5hmJ0frF5T4drCQ");
+  std::string keyMetadata = encoding::Base64::decodeUrl(
+      "AgEAAAAYNnp6ekEzNEVwVHpoMTUwOVpwc2NLUT09AgAAAAQAAAAAAwAAABhSR0RsdUtNREQrbERrSkdoSkZKd0N3PT0EAAAABHRlc3Q");
   inMemoryKMSClient->putKey(keyMetadata, encryptionKey);
 
   CryptoFactory::initialize(inMemoryKMSClient, true);
-  auto key = CryptoFactory::getInstance().getDecryptionKeyRetriever().getKey(keyMetadata, "");
+  auto key = CryptoFactory::getInstance().getDecryptionKeyRetriever().getKey(
+      keyMetadata, "");
   EXPECT_EQ(key, encryptionKey);
 
   const std::string sample(getExampleFilePath("clac_columns.parquet"));
@@ -206,7 +209,8 @@ TEST_F(ParquetReaderTest, readEncryptedColumnWithClacEnaled) {
 }
 
 TEST_F(ParquetReaderTest, readNonEncryptedColumnFromEncrypedFile) {
-  std::shared_ptr<DecryptionKeyRetriever> inMemoryKMSClient = std::make_shared<InMemoryKMSClient>();
+  std::shared_ptr<DecryptionKeyRetriever> inMemoryKMSClient =
+      std::make_shared<InMemoryKMSClient>();
   CryptoFactory::initialize(inMemoryKMSClient, true);
 
   const std::string sample(getExampleFilePath("clac_columns.parquet"));
