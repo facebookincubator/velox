@@ -28,8 +28,8 @@ FileDecryptionProperties::Builder::keyRetriever(
   return this;
 }
 
-FileDecryptionProperties::Builder*
-FileDecryptionProperties::Builder::aadPrefix(const std::string& aadPrefix) {
+FileDecryptionProperties::Builder* FileDecryptionProperties::Builder::aadPrefix(
+    const std::string& aadPrefix) {
   if (aadPrefix.empty()) {
     return this;
   }
@@ -61,4 +61,4 @@ FileDecryptionProperties::FileDecryptionProperties(
   plaintextFilesAllowed_ = plaintextFilesAllowed;
 }
 
-}
+} // namespace facebook::velox::parquet

@@ -14,16 +14,17 @@
  * limitations under the License.
  */
 #pragma once
+#include "velox/common/base/Exceptions.h"
 #include "velox/dwio/parquet/crypto/FileDecryptionProperties.h"
 #include "velox/dwio/parquet/crypto/KeyRetriever.h"
-#include "velox/common/base/Exceptions.h"
 
 namespace facebook::velox::parquet {
 
 class CryptoFactory {
  public:
-  static void initialize(std::shared_ptr<DecryptionKeyRetriever> kmsClient,
-                         const bool clacEnabled) {
+  static void initialize(
+      std::shared_ptr<DecryptionKeyRetriever> kmsClient,
+      const bool clacEnabled) {
     instance_ = std::unique_ptr<CryptoFactory>(
         new CryptoFactory(kmsClient, clacEnabled));
   }
@@ -40,23 +41,28 @@ class CryptoFactory {
   }
 
   std::shared_ptr<FileDecryptionProperties> getFileDecryptionProperties() {
-    return FileDecryptionProperties::Builder().plaintextFilesAllowed()
+    return FileDecryptionProperties::Builder()
+        .plaintextFilesAllowed()
         ->disableFooterSignatureVerification()
         ->keyRetriever(kmsClient_)
         ->build();
   }
 
-  bool clacEnabled() { return clacEnabled_; }
+  bool clacEnabled() {
+    return clacEnabled_;
+  }
 
   ~CryptoFactory() {}
 
  private:
-  CryptoFactory(std::shared_ptr<DecryptionKeyRetriever> kmsClient,
-                const bool clacEnabled) : kmsClient_(kmsClient), clacEnabled_(clacEnabled) {}
+  CryptoFactory(
+      std::shared_ptr<DecryptionKeyRetriever> kmsClient,
+      const bool clacEnabled)
+      : kmsClient_(kmsClient), clacEnabled_(clacEnabled) {}
 
   static std::unique_ptr<CryptoFactory> instance_;
   std::shared_ptr<DecryptionKeyRetriever> kmsClient_;
   bool clacEnabled_;
 };
 
-}
+} // namespace facebook::velox::parquet

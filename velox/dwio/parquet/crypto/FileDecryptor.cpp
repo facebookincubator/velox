@@ -15,16 +15,18 @@
  */
 #include "velox/dwio/parquet/crypto/FileDecryptor.h"
 #include <utility>
+#include "velox/common/base/Exceptions.h"
 #include "velox/dwio/parquet/crypto/AesEncryption.h"
 #include "velox/dwio/parquet/crypto/Exception.h"
 #include "velox/dwio/parquet/crypto/FileDecryptionProperties.h"
-#include "velox/common/base/Exceptions.h"
 
 namespace facebook::velox::parquet {
 
 // Decryptor
-Decryptor::Decryptor(std::shared_ptr<AesDecryptor> aesDecryptor,
-                     std::string  key, std::string fileAad)
+Decryptor::Decryptor(
+    std::shared_ptr<AesDecryptor> aesDecryptor,
+    std::string key,
+    std::string fileAad)
     : aesDecryptor_(aesDecryptor),
       key_(std::move(key)),
       fileAad_(std::move(fileAad)) {}
@@ -37,24 +39,34 @@ int Decryptor::ciphertextLength(int plaintextLen) const {
   return aesDecryptor_->ciphertextLength(plaintextLen);
 }
 
-int Decryptor::decrypt(const uint8_t* ciphertext, int ciphertextLen,
-                       uint8_t* plaintext, int plaintextLen, std::string_view aad) {
-  return aesDecryptor_->decrypt(ciphertext, ciphertextLen, reinterpret_cast<const uint8_t*>(key_.data()), static_cast<int>(key_.size()), reinterpret_cast<const uint8_t*>(aad.data()), static_cast<int>(aad.size()), plaintext, plaintextLen);
+int Decryptor::decrypt(
+    const uint8_t* ciphertext,
+    int ciphertextLen,
+    uint8_t* plaintext,
+    int plaintextLen,
+    std::string_view aad) {
+  return aesDecryptor_->decrypt(
+      ciphertext,
+      ciphertextLen,
+      reinterpret_cast<const uint8_t*>(key_.data()),
+      static_cast<int>(key_.size()),
+      reinterpret_cast<const uint8_t*>(aad.data()),
+      static_cast<int>(aad.size()),
+      plaintext,
+      plaintextLen);
 }
 
-FileDecryptor::FileDecryptor(FileDecryptionProperties* properties,
-                                             std::string  fileAad,
-                                             ParquetCipher::type algorithm,
-                                             std::string user)
+FileDecryptor::FileDecryptor(
+    FileDecryptionProperties* properties,
+    std::string fileAad,
+    ParquetCipher::type algorithm,
+    std::string user)
     : properties_(properties),
       fileAad_(std::move(fileAad)),
       algorithm_(algorithm),
-      user_(std::move(user)) {
-}
+      user_(std::move(user)) {}
 
-
-std::shared_ptr<ColumnDecryptionSetup>
-FileDecryptor::setColumnCryptoMetadata(
+std::shared_ptr<ColumnDecryptionSetup> FileDecryptor::setColumnCryptoMetadata(
     ColumnPath& columnPath,
     bool encrypted,
     std::string& keyMetadata,
@@ -64,13 +76,20 @@ FileDecryptor::setColumnCryptoMetadata(
   std::string savedException{""};
   if (!encrypted) {
     columnDecryptionSetup = std::make_shared<ColumnDecryptionSetup>(
-        columnPath, false, false, nullptr, nullptr, columnOrdinal, savedException);
+        columnPath,
+        false,
+        false,
+        nullptr,
+        nullptr,
+        columnOrdinal,
+        savedException);
   } else {
     try {
       columnKey = properties_->keyRetriever()->getKey(keyMetadata, user_);
     } catch (CryptoException& e) {
       std::string error = e.what();
-      if (error.find("http status code 403") != std::string::npos) { // KeyAccessDeniedException
+      if (error.find("http status code 403") !=
+          std::string::npos) { // KeyAccessDeniedException
         columnKey = "";
         savedException = error;
       } else {
@@ -80,19 +99,28 @@ FileDecryptor::setColumnCryptoMetadata(
 
     if (columnKey.empty()) {
       columnDecryptionSetup = std::make_shared<ColumnDecryptionSetup>(
-          columnPath, true, false, nullptr, nullptr, columnOrdinal, savedException);
+          columnPath,
+          true,
+          false,
+          nullptr,
+          nullptr,
+          columnOrdinal,
+          savedException);
     } else {
       columnDecryptionSetup = std::make_shared<ColumnDecryptionSetup>(
-          columnPath, true, true,
+          columnPath,
+          true,
+          true,
           getColumnDataDecryptor(columnKey),
           getColumnMetaDecryptor(columnKey),
-          columnOrdinal, savedException);
+          columnOrdinal,
+          savedException);
     }
   }
-  columnPathToDecryptionSetupMap_[columnPath.toDotString()] = columnDecryptionSetup;
+  columnPathToDecryptionSetupMap_[columnPath.toDotString()] =
+      columnDecryptionSetup;
   return columnDecryptionSetup;
 }
-
 
 std::shared_ptr<Decryptor> FileDecryptor::getColumnMetaDecryptor(
     const std::string& columnKey) {
@@ -105,10 +133,12 @@ std::shared_ptr<Decryptor> FileDecryptor::getColumnDataDecryptor(
 }
 
 std::shared_ptr<Decryptor> FileDecryptor::getColumnDecryptor(
-    const std::string& columnKey, bool metadata) {
+    const std::string& columnKey,
+    bool metadata) {
   int key_len = static_cast<int>(columnKey.size());
   auto aesDecryptor = AesDecryptor::make(algorithm_, key_len, metadata);
-  return std::make_shared<Decryptor>(std::move(aesDecryptor), columnKey, fileAad_);
+  return std::make_shared<Decryptor>(
+      std::move(aesDecryptor), columnKey, fileAad_);
 }
 
 std::string FileDecryptor::handleAadPrefix(
@@ -151,7 +181,8 @@ std::string FileDecryptor::handleAadPrefix(
     aadPrefix = aadPrefixInFile;
     std::shared_ptr<AADPrefixVerifier> aadPrefixVerifier =
         fileDecryptionProperties->aadPrefixVerifier();
-    if (aadPrefixVerifier != nullptr) aadPrefixVerifier->Verify(aadPrefix);
+    if (aadPrefixVerifier != nullptr)
+      aadPrefixVerifier->Verify(aadPrefix);
   } else {
     if (!supplyAadPrefix && !aadPrefixInProperties.empty()) {
       throw CryptoException(
@@ -168,7 +199,8 @@ std::string FileDecryptor::handleAadPrefix(
   return aadPrefix + aadFileUnique;
 }
 
-ParquetCipher::type FileDecryptor::getEncryptionAlgorithm(thrift::EncryptionAlgorithm& encryptionAlgorithm) {
+ParquetCipher::type FileDecryptor::getEncryptionAlgorithm(
+    thrift::EncryptionAlgorithm& encryptionAlgorithm) {
   ParquetCipher::type algo;
   if (encryptionAlgorithm.__isset.AES_GCM_V1) {
     algo = ParquetCipher::type::AES_GCM_V1;
@@ -180,4 +212,4 @@ ParquetCipher::type FileDecryptor::getEncryptionAlgorithm(thrift::EncryptionAlgo
   return algo;
 }
 
-}
+} // namespace facebook::velox::parquet

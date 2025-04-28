@@ -14,8 +14,8 @@
  * limitations under the License.
  */
 #pragma once
-#include <string>
 #include <sstream>
+#include <string>
 
 namespace facebook::velox::parquet {
 
@@ -30,17 +30,20 @@ class CryptoException : public std::exception {
 
   explicit CryptoException(std::string msg) : msg_(std::move(msg)) {}
 
-  explicit CryptoException(const char* msg, const std::exception&) : msg_(msg) {}
+  explicit CryptoException(const char* msg, const std::exception&)
+      : msg_(msg) {}
 
   CryptoException(const CryptoException&) = default;
   CryptoException& operator=(const CryptoException&) = default;
   CryptoException(CryptoException&&) = default;
   CryptoException& operator=(CryptoException&&) = default;
 
-  const char* what() const noexcept override { return msg_.c_str(); }
+  const char* what() const noexcept override {
+    return msg_.c_str();
+  }
 
  private:
   std::string msg_;
 };
 
-}
+} // namespace facebook::velox::parquet
