@@ -81,6 +81,8 @@ TEST(VariantTest, opaque) {
     EXPECT_THROW(v.opaque<Bar>(), std::exception);
     EXPECT_EQ(*v.inferType(), *OPAQUE<Foo>());
   }
+
+  // Check that the expected shared ptrs are acquired.
   {
     EXPECT_EQ(1, foo.use_count());
     variant v = variant::opaque(foo);
@@ -92,6 +94,8 @@ TEST(VariantTest, opaque) {
     v = 0;
     EXPECT_EQ(1, foo.use_count());
   }
+
+  // Test opaque equality.
   {
     variant v1 = variant::opaque(foo);
     variant vv1 = variant::opaque(foo);
@@ -102,6 +106,39 @@ TEST(VariantTest, opaque) {
     EXPECT_NE(v1, v2);
     EXPECT_NE(v1, v3);
     EXPECT_NE(v1, vint);
+  }
+
+  // Test hashes. The semantic of the hash follows the object it points to
+  // (it hashes the pointer).
+  {
+    variant v1 = variant::opaque(foo);
+    variant vv1 = variant::opaque(foo);
+
+    variant v2 = variant::opaque(foo2);
+    variant v3 = variant::opaque(bar);
+
+    EXPECT_EQ(v1.hash(), vv1.hash());
+    EXPECT_NE(v1.hash(), v2.hash());
+    EXPECT_NE(vv1.hash(), v2.hash());
+
+    EXPECT_NE(v1.hash(), v3.hash());
+    EXPECT_NE(v2.hash(), v3.hash());
+  }
+
+  // Test opaque casting.
+  {
+    variant fooOpaque = variant::opaque(foo);
+    variant barOpaque = variant::opaque(bar);
+    variant int1 = variant((int64_t)123);
+
+    auto castFoo1 = fooOpaque.tryOpaque<Foo>();
+    auto castBar1 = fooOpaque.tryOpaque<Bar>();
+    auto castBar2 = barOpaque.tryOpaque<Bar>();
+
+    EXPECT_EQ(castFoo1, foo);
+    EXPECT_EQ(castBar1, nullptr);
+    EXPECT_EQ(castBar2, bar);
+    EXPECT_THROW(int1.tryOpaque<Foo>(), std::invalid_argument);
   }
 }
 

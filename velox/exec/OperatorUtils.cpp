@@ -177,12 +177,24 @@ vector_size_t* FilterEvalCtx::getRawSelectedIndices(
 namespace {
 vector_size_t processConstantFilterResults(
     const VectorPtr& filterResult,
-    const SelectivityVector& rows) {
+    const SelectivityVector& rows,
+    FilterEvalCtx& filterEvalCtx,
+    memory::MemoryPool* pool) {
   const auto constant = filterResult->as<ConstantVector<bool>>();
   if (constant->isNullAt(0) || constant->valueAt(0) == false) {
     return 0;
   }
-  return rows.countSelected();
+
+  const auto numSelected = rows.countSelected();
+  // If not all rows are selected we need to update the selected indices.
+  // If we don't do this, the caller will use the indices from the previous
+  // batch.
+  if (!rows.isAllSelected()) {
+    auto* rawSelected = filterEvalCtx.getRawSelectedIndices(numSelected, pool);
+    vector_size_t passed = 0;
+    rows.applyToSelected([&](auto row) { rawSelected[passed++] = row; });
+  }
+  return numSelected;
 }
 
 vector_size_t processFlatFilterResults(
@@ -252,7 +264,8 @@ vector_size_t processFilterResults(
     memory::MemoryPool* pool) {
   switch (filterResult->encoding()) {
     case VectorEncoding::Simple::CONSTANT:
-      return processConstantFilterResults(filterResult, rows);
+      return processConstantFilterResults(
+          filterResult, rows, filterEvalCtx, pool);
     case VectorEncoding::Simple::FLAT:
       return processFlatFilterResults(filterResult, rows, filterEvalCtx, pool);
     default:
@@ -447,12 +460,13 @@ void addOperatorRuntimeStats(
     const std::string& name,
     const RuntimeCounter& value,
     std::unordered_map<std::string, RuntimeMetric>& stats) {
-  if (UNLIKELY(stats.count(name) == 0)) {
-    stats.insert(std::pair(name, RuntimeMetric(value.unit)));
+  auto statIt = stats.find(name);
+  if (UNLIKELY(statIt == stats.end())) {
+    statIt = stats.insert(std::pair(name, RuntimeMetric(value.unit))).first;
   } else {
-    VELOX_CHECK_EQ(stats.at(name).unit, value.unit);
+    VELOX_CHECK_EQ(statIt->second.unit, value.unit);
   }
-  stats.at(name).addValue(value.value);
+  statIt->second.addValue(value.value);
 }
 
 void aggregateOperatorRuntimeStats(

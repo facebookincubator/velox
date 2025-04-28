@@ -29,6 +29,7 @@ struct ValueAtQuantileFunction {
       out_type<double>& result,
       const arg_type<SimpleTDigest<double>>& input,
       const arg_type<double>& quantile) {
+    VELOX_USER_CHECK(0 <= quantile && quantile <= 1);
     TDigest<> digest;
     std::vector<int16_t> positions;
     digest.mergeDeserialized(positions, input.data());
@@ -51,9 +52,58 @@ struct ValuesAtQuantilesFunction {
     digest.compress(positions);
     result.resize(quantiles.size());
     for (size_t i = 0; i < quantiles.size(); ++i) {
-      result[i] = digest.estimateQuantile(quantiles[i].value());
+      double quantile = quantiles[i].value();
+      VELOX_USER_CHECK(0 <= quantile && quantile <= 1);
+      result[i] = digest.estimateQuantile(quantile);
     }
   }
 };
 
+template <typename T>
+struct MergeTDigestFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+  FOLLY_ALWAYS_INLINE bool call(
+      out_type<SimpleTDigest<double>>& result,
+      const arg_type<Array<SimpleTDigest<double>>>& input) {
+    TDigest<> digest;
+    std::vector<int16_t> positions;
+    bool hasValidInput = false;
+    for (auto i = 0; i < input.size(); i++) {
+      if (!input[i].has_value()) {
+        continue;
+      }
+      hasValidInput = true;
+      const auto& tdigest = input[i].value();
+      digest.mergeDeserialized(positions, tdigest.data());
+    }
+    if (!hasValidInput) {
+      return false;
+    }
+    digest.compress(positions);
+    int64_t size = digest.serializedByteSize();
+    result.resize(size);
+    digest.serialize(result.data());
+    return true;
+  }
+};
+
+template <typename T>
+struct ScaleTDigestFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  FOLLY_ALWAYS_INLINE void call(
+      out_type<SimpleTDigest<double>>& result,
+      const arg_type<SimpleTDigest<double>>& input,
+      const arg_type<double>& scaleFactor) {
+    VELOX_USER_CHECK(scaleFactor > 0, "Scale factor should be positive.");
+    TDigest<> digest;
+    std::vector<int16_t> positions;
+    digest.mergeDeserialized(positions, input.data());
+    digest.compress(positions);
+    digest.scale(scaleFactor);
+    int64_t size = digest.serializedByteSize();
+    result.resize(size);
+    digest.serialize(result.data());
+  }
+};
 } // namespace facebook::velox::functions

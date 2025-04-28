@@ -184,6 +184,50 @@ class IndexLookupJoinTest : public IndexLookupJoinTestBase,
       std::make_unique<folly::CPUThreadPoolExecutor>(128)};
 };
 
+TEST_P(IndexLookupJoinTest, joinCondition) {
+  const auto rowType =
+      ROW({"c0", "c1", "c2", "c3", "c4"},
+          {BIGINT(), BIGINT(), BIGINT(), ARRAY(BIGINT()), BIGINT()});
+
+  auto inJoinCondition = PlanBuilder::parseIndexJoinCondition(
+      "contains(c3, c2)", rowType, pool_.get());
+  ASSERT_FALSE(inJoinCondition->isFilter());
+  ASSERT_EQ(inJoinCondition->toString(), "ROW[\"c2\"] IN ROW[\"c3\"]");
+
+  auto inFilterCondition = PlanBuilder::parseIndexJoinCondition(
+      "contains(ARRAY[1,2], c2)", rowType, pool_.get());
+  ASSERT_TRUE(inFilterCondition->isFilter());
+  ASSERT_EQ(
+      inFilterCondition->toString(),
+      "ROW[\"c2\"] IN 2 elements starting at 0 {1, 2}");
+
+  auto betweenFilterCondition = PlanBuilder::parseIndexJoinCondition(
+      "c0 between 0 AND 1", rowType, pool_.get());
+  ASSERT_TRUE(betweenFilterCondition->isFilter());
+  ASSERT_EQ(betweenFilterCondition->toString(), "ROW[\"c0\"] BETWEEN 0 AND 1");
+
+  auto betweenJoinCondition1 = PlanBuilder::parseIndexJoinCondition(
+      "c0 between c1 AND c4", rowType, pool_.get());
+  ASSERT_FALSE(betweenJoinCondition1->isFilter());
+  ASSERT_EQ(
+      betweenJoinCondition1->toString(),
+      "ROW[\"c0\"] BETWEEN ROW[\"c1\"] AND ROW[\"c4\"]");
+
+  auto betweenJoinCondition2 = PlanBuilder::parseIndexJoinCondition(
+      "c0 between 0 AND c1", rowType, pool_.get());
+  ASSERT_FALSE(betweenJoinCondition2->isFilter());
+  ASSERT_EQ(
+      betweenJoinCondition2->toString(),
+      "ROW[\"c0\"] BETWEEN 0 AND ROW[\"c1\"]");
+
+  auto betweenJoinCondition3 = PlanBuilder::parseIndexJoinCondition(
+      "c0 between c1 AND 0", rowType, pool_.get());
+  ASSERT_FALSE(betweenJoinCondition3->isFilter());
+  ASSERT_EQ(
+      betweenJoinCondition3->toString(),
+      "ROW[\"c0\"] BETWEEN ROW[\"c1\"] AND 0");
+}
+
 TEST_P(IndexLookupJoinTest, planNodeAndSerde) {
   TestIndexTableHandle::registerSerDe();
 
@@ -729,6 +773,7 @@ TEST_P(IndexLookupJoinTest, equalJoin) {
     auto probeVectors = generateProbeInput(
         testData.numProbeBatches,
         testData.numRowsPerProbeBatch,
+        1,
         tableData,
         pool_,
         {"t0", "t1", "t2"},
@@ -765,12 +810,7 @@ TEST_P(IndexLookupJoinTest, equalJoin) {
         testData.joinType,
         testData.outputColumns,
         joinNodeId);
-    AssertQueryBuilder(duckDbQueryRunner_)
-        .plan(plan)
-        .config(
-            core::QueryConfig::kIndexLookupJoinMaxPrefetchBatches,
-            std::to_string(GetParam().numPrefetches))
-        .assertResults(testData.duckDbVerifySql);
+    runLookupQuery(plan, GetParam().numPrefetches, testData.duckDbVerifySql);
   }
 }
 
@@ -1182,6 +1222,7 @@ TEST_P(IndexLookupJoinTest, betweenJoinCondition) {
     auto probeVectors = generateProbeInput(
         testData.numProbeBatches,
         testData.numProbeRowsPerBatch,
+        1,
         tableData,
         pool_,
         {"t0", "t1"},
@@ -1220,12 +1261,7 @@ TEST_P(IndexLookupJoinTest, betweenJoinCondition) {
         testData.joinType,
         testData.outputColumns,
         joinNodeId);
-    AssertQueryBuilder(duckDbQueryRunner_)
-        .plan(plan)
-        .config(
-            core::QueryConfig::kIndexLookupJoinMaxPrefetchBatches,
-            std::to_string(GetParam().numPrefetches))
-        .assertResults(testData.duckDbVerifySql);
+    runLookupQuery(plan, GetParam().numPrefetches, testData.duckDbVerifySql);
   }
 }
 
@@ -1504,6 +1540,7 @@ TEST_P(IndexLookupJoinTest, inJoinCondition) {
     auto probeVectors = generateProbeInput(
         testData.numProbeBatches,
         testData.numProbeRowsPerBatch,
+        1,
         tableData,
         pool_,
         {"t0", "t1"},
@@ -1541,12 +1578,7 @@ TEST_P(IndexLookupJoinTest, inJoinCondition) {
         testData.joinType,
         testData.outputColumns,
         joinNodeId);
-    AssertQueryBuilder(duckDbQueryRunner_)
-        .plan(plan)
-        .config(
-            core::QueryConfig::kIndexLookupJoinMaxPrefetchBatches,
-            std::to_string(GetParam().numPrefetches))
-        .assertResults(testData.duckDbVerifySql);
+    runLookupQuery(plan, GetParam().numPrefetches, testData.duckDbVerifySql);
   }
 }
 
@@ -1554,7 +1586,7 @@ DEBUG_ONLY_TEST_P(IndexLookupJoinTest, connectorError) {
   SequenceTableData tableData;
   generateIndexTableData({100, 1, 1}, tableData, pool_);
   const std::vector<RowVectorPtr> probeVectors = generateProbeInput(
-      20, 100, tableData, pool_, {"t0", "t1", "t2"}, {}, {}, 100);
+      20, 100, 1, tableData, pool_, {"t0", "t1", "t2"}, {}, {}, 100);
 
   const std::string errorMsg{"injectedError"};
   std::atomic_int lookupCount{0};
@@ -1607,7 +1639,15 @@ DEBUG_ONLY_TEST_P(IndexLookupJoinTest, prefetch) {
   const int numProbeBatches{20};
   ASSERT_GT(numProbeBatches, GetParam().numPrefetches);
   const std::vector<RowVectorPtr> probeVectors = generateProbeInput(
-      numProbeBatches, 100, tableData, pool_, {"t0", "t1", "t2"}, {}, {}, 100);
+      numProbeBatches,
+      100,
+      1,
+      tableData,
+      pool_,
+      {"t0", "t1", "t2"},
+      {},
+      {},
+      100);
   createDuckDbTable("t", probeVectors);
   createDuckDbTable("u", {tableData.tableData});
 
@@ -1651,13 +1691,10 @@ DEBUG_ONLY_TEST_P(IndexLookupJoinTest, prefetch) {
       {"u3", "t5"},
       joinNodeId);
   std::thread queryThread([&] {
-    AssertQueryBuilder(duckDbQueryRunner_)
-        .plan(plan)
-        .config(
-            core::QueryConfig::kIndexLookupJoinMaxPrefetchBatches,
-            std::to_string(GetParam().numPrefetches))
-        .assertResults(
-            "SELECT u.c3, t.c5 FROM t, u WHERE t.c0 = u.c0 AND t.c1 = u.c1 AND t.c2 = u.c2");
+    runLookupQuery(
+        plan,
+        GetParam().numPrefetches,
+        "SELECT u.c3, t.c5 FROM t, u WHERE t.c0 = u.c0 AND t.c1 = u.c1 AND t.c2 = u.c2");
   });
   while (lookupCount < 1 + GetParam().numPrefetches) {
     std::this_thread::sleep_for(std::chrono::milliseconds(100)); // NOLINT
@@ -1704,6 +1741,7 @@ TEST_P(IndexLookupJoinTest, outputBatchSize) {
     const auto probeVectors = generateProbeInput(
         testData.numProbeBatches,
         testData.numRowsPerProbeBatch,
+        1,
         tableData,
         pool_,
         {"t0", "t1", "t2"},
@@ -1765,7 +1803,15 @@ DEBUG_ONLY_TEST_P(IndexLookupJoinTest, runtimeStats) {
   generateIndexTableData({100, 1, 1}, tableData, pool_);
   const int numProbeBatches{2};
   const std::vector<RowVectorPtr> probeVectors = generateProbeInput(
-      numProbeBatches, 100, tableData, pool_, {"t0", "t1", "t2"}, {}, {}, 100);
+      numProbeBatches,
+      100,
+      1,
+      tableData,
+      pool_,
+      {"t0", "t1", "t2"},
+      {},
+      {},
+      100);
   createDuckDbTable("t", probeVectors);
   createDuckDbTable("u", {tableData.tableData});
 
@@ -1801,11 +1847,11 @@ DEBUG_ONLY_TEST_P(IndexLookupJoinTest, runtimeStats) {
       core::JoinType::kInner,
       {"u3", "t5"},
       joinNodeId);
-  auto task =
-      AssertQueryBuilder(duckDbQueryRunner_)
-          .plan(plan)
-          .assertResults(
-              "SELECT u.c3, t.c5 FROM t, u WHERE t.c0 = u.c0 AND t.c1 = u.c1 AND t.c2 = u.c2");
+  auto task = runLookupQuery(
+      plan,
+      0,
+      "SELECT u.c3, t.c5 FROM t, u WHERE t.c0 = u.c0 AND t.c1 = u.c1 AND t.c2 = u.c2");
+
   auto taskStats = toPlanStats(task->taskStats());
   auto& operatorStats = taskStats.at(joinNodeId);
   ASSERT_EQ(operatorStats.backgroundTiming.count, numProbeBatches);
@@ -1839,7 +1885,7 @@ TEST_P(IndexLookupJoinTest, joinFuzzer) {
   SequenceTableData tableData;
   generateIndexTableData({1024, 1, 1}, tableData, pool_);
   const auto probeVectors =
-      generateProbeInput(50, 256, tableData, pool_, {"t0", "t1", "t2"});
+      generateProbeInput(50, 256, 1, tableData, pool_, {"t0", "t1", "t2"});
 
   createDuckDbTable("t", probeVectors);
   createDuckDbTable("u", {tableData.tableData});
@@ -1874,13 +1920,10 @@ TEST_P(IndexLookupJoinTest, joinFuzzer) {
       core::JoinType::kInner,
       {"u0", "u4", "t0", "t1", "t4"},
       joinNodeId);
-  AssertQueryBuilder(duckDbQueryRunner_)
-      .plan(plan)
-      .config(
-          core::QueryConfig::kIndexLookupJoinMaxPrefetchBatches,
-          std::to_string(GetParam().numPrefetches))
-      .assertResults(
-          "SELECT u.c0, u.c1, u.c2, u.c3, u.c4, u.c5, t.c0, t.c1, t.c2, t.c3, t.c4, t.c5 FROM t, u WHERE t.c0 = u.c0 AND array_contains(t.c4, u.c1) AND u.c2 BETWEEN t.c1 AND t.c2");
+  runLookupQuery(
+      plan,
+      GetParam().numPrefetches,
+      "SELECT u.c0, u.c1, u.c2, u.c3, u.c4, u.c5, t.c0, t.c1, t.c2, t.c3, t.c4, t.c5 FROM t, u WHERE t.c0 = u.c0 AND array_contains(t.c4, u.c1) AND u.c2 BETWEEN t.c1 AND t.c2");
 }
 } // namespace
 

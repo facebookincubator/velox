@@ -641,6 +641,8 @@ bool Task::supportSerialExecutionMode() const {
 }
 
 RowVectorPtr Task::next(ContinueFuture* future) {
+  recordBatchStartTime();
+
   checkExecutionMode(ExecutionMode::kSerial);
   // NOTE: Task::next() is serial execution so locking is not required
   // to access Task object.
@@ -745,6 +747,7 @@ RowVectorPtr Task::next(ContinueFuture* future) {
         VELOX_CHECK(!driverFuture.valid());
         VELOX_CHECK_NULL(driverOp);
         VELOX_CHECK_EQ(blockReason, BlockingReason::kNotBlocked);
+        recordBatchEndTime();
         return result;
       }
 
@@ -776,6 +779,20 @@ RowVectorPtr Task::next(ContinueFuture* future) {
       return nullptr;
     }
   }
+}
+
+void Task::recordBatchStartTime() {
+  if (batchStartTimeMs_.has_value()) {
+    return;
+  }
+  batchStartTimeMs_ = getCurrentTimeMs();
+}
+
+void Task::recordBatchEndTime() {
+  VELOX_CHECK(batchStartTimeMs_.has_value());
+  RECORD_METRIC_VALUE(
+      kMetricTaskBatchProcessTimeMs, getCurrentTimeMs() - *batchStartTimeMs_);
+  batchStartTimeMs_.reset();
 }
 
 void Task::start(uint32_t maxDrivers, uint32_t concurrentSplitGroups) {
@@ -1329,6 +1346,7 @@ bool Task::addSplitWithSequence(
     const core::PlanNodeId& planNodeId,
     exec::Split&& split,
     long sequenceId) {
+  RECORD_METRIC_VALUE(kMetricTaskSplitsCount, 1);
   std::unique_ptr<ContinuePromise> promise;
   bool added = false;
   bool isTaskRunning;
@@ -1361,6 +1379,7 @@ bool Task::addSplitWithSequence(
 }
 
 void Task::addSplit(const core::PlanNodeId& planNodeId, exec::Split&& split) {
+  RECORD_METRIC_VALUE(kMetricTaskSplitsCount, 1);
   bool isTaskRunning;
   std::unique_ptr<ContinuePromise> promise;
   {
@@ -2399,7 +2418,13 @@ void Task::onTaskCompletion() {
 
     for (auto& listener : listeners) {
       listener->onTaskCompletion(
-          uuid_, taskId_, state, exception, stats, planFragment_);
+          uuid_,
+          taskId_,
+          state,
+          exception,
+          stats,
+          planFragment_,
+          exchangeClientByPlanNode_);
     }
   });
 }
