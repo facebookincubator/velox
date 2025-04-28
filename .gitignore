@@ -295,6 +295,9 @@ cmake_build
 .cmake_build
 cmake-build-*
 
+# Maven
+target/
+
 # tests
 test/test.sql
 
