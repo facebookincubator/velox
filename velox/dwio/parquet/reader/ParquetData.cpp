@@ -96,9 +96,11 @@ void ParquetData::enqueueRowGroup(
     uint32_t index,
     dwio::common::BufferedInput& input) {
   auto chunk = fileMetaDataPtr_.rowGroup(index).columnChunk(type_->column());
-  if (!CryptoFactory::getInstance().clacEnabled() && (chunk.hasCryptoMetadata() || chunk.hasEncryptedColumnMetadata())) {
+  if (!CryptoFactory::getInstance().clacEnabled() &&
+      (chunk.hasCryptoMetadata() || chunk.hasEncryptedColumnMetadata())) {
     VELOX_UNSUPPORTED(
-        "Trying to read an encrypted column {}. This is not yet support in velox.", type_->name_);
+        "Trying to read an encrypted column {}. This is not yet support in velox.",
+        type_->name_);
   }
   streams_.resize(fileMetaDataPtr_.numRowGroups());
   VELOX_CHECK(
@@ -133,16 +135,22 @@ dwio::common::PositionProvider ParquetData::seekToRowGroup(int64_t index) {
   std::shared_ptr<ColumnDecryptionSetup> columnDecryptionSetup;
   if (fileDecryptor_) {
     columnDecryptionSetup = fileDecryptor_->getColumnCryptoMetadata(path);
-    if (columnDecryptionSetup->isEncrypted() && !columnDecryptionSetup->isKeyAvailable()) {
+    if (columnDecryptionSetup->isEncrypted() &&
+        !columnDecryptionSetup->isKeyAvailable()) {
       // the user doesn't have permission to access this column
-      VELOX_USER_FAIL("[CLAC] Key unavailable for {}: {}", path, columnDecryptionSetup->savedException());
+      VELOX_USER_FAIL(
+          "[CLAC] Key unavailable for {}: {}",
+          path,
+          columnDecryptionSetup->savedException());
     }
   }
 
   bool hasDictionaryPage = false;
   if (metadata.hasEncodingStats()) {
-    for (const thrift::PageEncodingStats& pageEncodingStats : metadata.getEncodingStats()) {
-      if (pageEncodingStats.page_type == thrift::PageType::type::DICTIONARY_PAGE) {
+    for (const thrift::PageEncodingStats& pageEncodingStats :
+         metadata.getEncodingStats()) {
+      if (pageEncodingStats.page_type ==
+          thrift::PageType::type::DICTIONARY_PAGE) {
         hasDictionaryPage = true;
         break;
       }

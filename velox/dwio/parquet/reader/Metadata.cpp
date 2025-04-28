@@ -243,14 +243,17 @@ int64_t ColumnChunkMetaDataPtr::getColumnMetadataStatsNullCount() {
 }
 
 bool ColumnChunkMetaDataPtr::hasEncodingStats() const {
-  return hasMetadata() && thriftColumnChunkPtr(ptr_)->meta_data.__isset.encoding_stats;
+  return hasMetadata() &&
+      thriftColumnChunkPtr(ptr_)->meta_data.__isset.encoding_stats;
 }
 
-const std::vector<thrift::PageEncodingStats>& ColumnChunkMetaDataPtr::getEncodingStats() const {
+const std::vector<thrift::PageEncodingStats>&
+ColumnChunkMetaDataPtr::getEncodingStats() const {
   return thriftColumnChunkPtr(ptr_)->meta_data.encoding_stats;
 }
 
-const std::vector<thrift::Encoding::type>& ColumnChunkMetaDataPtr::getEncoding() const {
+const std::vector<thrift::Encoding::type>& ColumnChunkMetaDataPtr::getEncoding()
+    const {
   return thriftColumnChunkPtr(ptr_)->meta_data.encodings;
 }
 
@@ -278,7 +281,9 @@ int64_t ColumnChunkMetaDataPtr::totalUncompressedSize() const {
 
 ColumnPath ColumnChunkMetaDataPtr::getColumnPath() const {
   if (thriftColumnChunkPtr(ptr_)->__isset.crypto_metadata) {
-    return ColumnPath(thriftColumnChunkPtr(ptr_)->crypto_metadata.ENCRYPTION_WITH_COLUMN_KEY.path_in_schema);
+    return ColumnPath(
+        thriftColumnChunkPtr(ptr_)
+            ->crypto_metadata.ENCRYPTION_WITH_COLUMN_KEY.path_in_schema);
   } else {
     return ColumnPath(thriftColumnChunkPtr(ptr_)->meta_data.path_in_schema);
   }

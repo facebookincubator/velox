@@ -22,10 +22,6 @@ velox_add_library(
   FileDecryptionProperties.cpp
   ColumnPath.cpp
   FileDecryptor.cpp
-  KMSClient.cpp
-)
+  KMSClient.cpp)
 
-velox_link_libraries(
-  velox_dwio_parquet_crypto
-  velox_dwio_parquet_thrift
-)
+velox_link_libraries(velox_dwio_parquet_crypto velox_dwio_parquet_thrift)

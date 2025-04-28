@@ -15,13 +15,13 @@
  */
 #pragma once
 
-#include <iostream>
-#include <unordered_map>
 #include <chrono>
+#include <iostream>
 #include <mutex>
-#include <string>
 #include <optional>
+#include <string>
 #include <thread>
+#include <unordered_map>
 #include "velox/dwio/parquet/crypto/EncryptionKey.h"
 
 namespace facebook::velox::parquet {
@@ -34,12 +34,14 @@ struct CacheableEncryptedKeyVersionHash {
 
 class Cache {
  public:
-
-  // cleanupIntervalSeconds specifies how often the cleanup thread runs, it is not the TTL for the cached items
-  explicit Cache(int cleanupIntervalSeconds): cleanupIntervalSeconds_(cleanupIntervalSeconds) {
+  // cleanupIntervalSeconds specifies how often the cleanup thread runs, it is
+  // not the TTL for the cached items
+  explicit Cache(int cleanupIntervalSeconds)
+      : cleanupIntervalSeconds_(cleanupIntervalSeconds) {
     cleanupThread_ = std::thread([this]() {
       while (running_) {
-        std::this_thread::sleep_for(std::chrono::seconds(cleanupIntervalSeconds_));
+        std::this_thread::sleep_for(
+            std::chrono::seconds(cleanupIntervalSeconds_));
         cleanup();
       }
     });
@@ -52,7 +54,10 @@ class Cache {
     }
   }
 
-  void set(const CacheableEncryptedKeyVersion& key, const std::string& value, int ttlSeconds);
+  void set(
+      const CacheableEncryptedKeyVersion& key,
+      const std::string& value,
+      int ttlSeconds);
 
   std::optional<std::string> get(const CacheableEncryptedKeyVersion& key);
 
@@ -67,10 +72,14 @@ class Cache {
   void cleanup();
 
   int cleanupIntervalSeconds_;
-  std::unordered_map<CacheableEncryptedKeyVersion, CacheEntry, CacheableEncryptedKeyVersionHash> cache_;
+  std::unordered_map<
+      CacheableEncryptedKeyVersion,
+      CacheEntry,
+      CacheableEncryptedKeyVersionHash>
+      cache_;
   std::mutex mutex_;
   std::thread cleanupThread_;
   bool running_ = true;
 };
 
-}
+} // namespace facebook::velox::parquet

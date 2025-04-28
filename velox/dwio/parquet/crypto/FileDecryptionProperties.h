@@ -14,9 +14,9 @@
  * limitations under the License.
  */
 #pragma once
-#include <string>
 #include <map>
 #include <memory>
+#include <string>
 #include "velox/dwio/parquet/crypto/AesEncryption.h"
 #include "velox/dwio/parquet/crypto/ColumnPath.h"
 #include "velox/dwio/parquet/crypto/KeyRetriever.h"
@@ -45,7 +45,8 @@ class FileDecryptionProperties {
       checkPlaintextFooterIntegrity_ = kDefaultCheckSignature;
       plaintextFilesAllowed_ = kDefaultAllowPlaintextFiles;
     }
-    Builder* keyRetriever(const std::shared_ptr<DecryptionKeyRetriever>& keyRetriever);
+    Builder* keyRetriever(
+        const std::shared_ptr<DecryptionKeyRetriever>& keyRetriever);
     Builder* disableFooterSignatureVerification() {
       checkPlaintextFooterIntegrity_ = false;
       return this;
@@ -53,7 +54,8 @@ class FileDecryptionProperties {
 
     Builder* aadPrefix(const std::string& aadPrefix);
 
-    Builder* aadPrefixVerifier(std::shared_ptr<AADPrefixVerifier> aadPrefixVerifier);
+    Builder* aadPrefixVerifier(
+        std::shared_ptr<AADPrefixVerifier> aadPrefixVerifier);
 
     Builder* plaintextFilesAllowed() {
       plaintextFilesAllowed_ = true;
@@ -61,9 +63,13 @@ class FileDecryptionProperties {
     }
 
     std::unique_ptr<FileDecryptionProperties> build() {
-      return std::unique_ptr<FileDecryptionProperties>(new FileDecryptionProperties(
-          keyRetriever_, checkPlaintextFooterIntegrity_, aadPrefix_,
-          aadPrefixVerifier_, plaintextFilesAllowed_));
+      return std::unique_ptr<FileDecryptionProperties>(
+          new FileDecryptionProperties(
+              keyRetriever_,
+              checkPlaintextFooterIntegrity_,
+              aadPrefix_,
+              aadPrefixVerifier_,
+              plaintextFilesAllowed_));
     }
 
    private:
@@ -75,7 +81,9 @@ class FileDecryptionProperties {
     bool plaintextFilesAllowed_;
   };
 
-  std::string aadPrefix() const { return aadPrefix_; }
+  std::string aadPrefix() const {
+    return aadPrefix_;
+  }
 
   const std::shared_ptr<DecryptionKeyRetriever>& keyRetriever() const {
     return keyRetriever_;
@@ -85,7 +93,9 @@ class FileDecryptionProperties {
     return checkPlaintextFooterIntegrity_;
   }
 
-  bool plaintextFilesAllowed() const { return plaintextFilesAllowed_; }
+  bool plaintextFilesAllowed() const {
+    return plaintextFilesAllowed_;
+  }
 
   const std::shared_ptr<AADPrefixVerifier>& aadPrefixVerifier() const {
     return aadPrefixVerifier_;
@@ -106,4 +116,4 @@ class FileDecryptionProperties {
       std::shared_ptr<AADPrefixVerifier> aadPrefixVerifier,
       bool plaintextFilesAllowed);
 };
-}
+} // namespace facebook::velox::parquet

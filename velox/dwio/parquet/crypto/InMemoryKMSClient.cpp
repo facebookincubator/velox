@@ -18,7 +18,9 @@
 
 namespace facebook::velox::parquet {
 
-std::string InMemoryKMSClient::getKey(const std::string& keyMetadata, const std::string& doAs) {
+std::string InMemoryKMSClient::getKey(
+    const std::string& keyMetadata,
+    const std::string& doAs) {
   auto it = keyMap_.find(keyMetadata);
   if (it != keyMap_.end()) {
     return it->second;
@@ -26,8 +28,10 @@ std::string InMemoryKMSClient::getKey(const std::string& keyMetadata, const std:
   throw CryptoException("[CLAC] http status code 403");
 }
 
-void InMemoryKMSClient::putKey(const std::string& keyMetadata, const std::string& key) {
+void InMemoryKMSClient::putKey(
+    const std::string& keyMetadata,
+    const std::string& key) {
   keyMap_[keyMetadata] = key;
 }
 
-}
+} // namespace facebook::velox::parquet

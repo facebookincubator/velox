@@ -15,8 +15,8 @@
  */
 
 #ifdef VELOX_ENABLE_PARQUET
-#include "velox/dwio/parquet/reader/ParquetReader.h" // @manual
 #include "velox/dwio/parquet/crypto/CryptoFactory.h"
+#include "velox/dwio/parquet/reader/ParquetReader.h" // @manual
 #endif
 
 namespace facebook::velox::parquet {

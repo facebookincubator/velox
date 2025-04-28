@@ -137,7 +137,9 @@ class ReaderBase {
   /// the data still exists in the buffered inputs.
   bool isRowGroupBuffered(int32_t rowGroupIndex) const;
 
-  std::shared_ptr<FileDecryptor> fileDecryptor() {return fileDecryptor_;}
+  std::shared_ptr<FileDecryptor> fileDecryptor() {
+    return fileDecryptor_;
+  }
 
  private:
   // Reads and parses file footer.
@@ -208,67 +210,92 @@ ReaderBase::ReaderBase(
   initializeVersion();
 }
 
-// Mainly for processing encryption related metadata for decrypting metadata and columns. If Parquet files are not encrypted, directly return.
-// There are two encryption modes for Parquet files, Plaintext Footer mode and Encrypted Footer mode. Only the former is supported here.
+// Mainly for processing encryption related metadata for decrypting metadata and
+// columns. If Parquet files are not encrypted, directly return. There are two
+// encryption modes for Parquet files, Plaintext Footer mode and Encrypted
+// Footer mode. Only the former is supported here.
 void ReaderBase::processMetaData() {
-  if (!CryptoFactory::getInstance().clacEnabled() || !fileMetaData_->__isset.encryption_algorithm) {
+  if (!CryptoFactory::getInstance().clacEnabled() ||
+      !fileMetaData_->__isset.encryption_algorithm) {
     return;
   }
 
-  fileDecryptionProperties_ = CryptoFactory::getInstance().getFileDecryptionProperties();
-  std::string fileAad = FileDecryptor::handleAadPrefix(fileDecryptionProperties_.get(), fileMetaData_->encryption_algorithm);
-  ParquetCipher::type algo = FileDecryptor::getEncryptionAlgorithm(fileMetaData_->encryption_algorithm);
+  fileDecryptionProperties_ =
+      CryptoFactory::getInstance().getFileDecryptionProperties();
+  std::string fileAad = FileDecryptor::handleAadPrefix(
+      fileDecryptionProperties_.get(), fileMetaData_->encryption_algorithm);
+  ParquetCipher::type algo = FileDecryptor::getEncryptionAlgorithm(
+      fileMetaData_->encryption_algorithm);
 
   fileDecryptor_ = std::make_shared<FileDecryptor>(
-      fileDecryptionProperties_.get(),
-      fileAad,
-      algo,
-      "");
+      fileDecryptionProperties_.get(), fileAad, algo, "");
 
   if (fileMetaData_->row_groups.empty()) {
     return;
   }
   for (thrift::RowGroup& rowGroup : fileMetaData_->row_groups) {
     int columnOrdinal = -1;
-    for (thrift::ColumnChunk& columnChunk: rowGroup.columns) {
-      columnOrdinal ++;
+    for (thrift::ColumnChunk& columnChunk : rowGroup.columns) {
+      columnOrdinal++;
       // Case 1, this column is not encrypted
       if (!columnChunk.__isset.crypto_metadata) {
-        VELOX_USER_CHECK(columnChunk.__isset.meta_data, "[CLAC] ColumnMetaData not set in plaintext column");
+        VELOX_USER_CHECK(
+            columnChunk.__isset.meta_data,
+            "[CLAC] ColumnMetaData not set in plaintext column");
         thrift::ColumnMetaData& metadata = columnChunk.meta_data;
         std::vector<std::string>& pathList = metadata.path_in_schema;
         ColumnPath columnPath(pathList);
         std::string keyMetadata{""};
-        fileDecryptor_->setColumnCryptoMetadata(columnPath, false, keyMetadata, columnOrdinal);
+        fileDecryptor_->setColumnCryptoMetadata(
+            columnPath, false, keyMetadata, columnOrdinal);
         continue;
       }
 
       // Case 2, this column is encrypted with column key
-      thrift::ColumnCryptoMetaData& columnCryptoMetaData = columnChunk.crypto_metadata;
-      thrift::EncryptionWithColumnKey& encryptionWithColumnKey = columnCryptoMetaData.ENCRYPTION_WITH_COLUMN_KEY;
-      std::vector<std::string>& pathList = encryptionWithColumnKey.path_in_schema;
+      thrift::ColumnCryptoMetaData& columnCryptoMetaData =
+          columnChunk.crypto_metadata;
+      thrift::EncryptionWithColumnKey& encryptionWithColumnKey =
+          columnCryptoMetaData.ENCRYPTION_WITH_COLUMN_KEY;
+      std::vector<std::string>& pathList =
+          encryptionWithColumnKey.path_in_schema;
       std::string& columnKeyMetadata = encryptionWithColumnKey.key_metadata;
       ColumnPath columnPath(pathList);
       std::shared_ptr<ColumnDecryptionSetup> columnDecryptionSetup =
-          fileDecryptor_->setColumnCryptoMetadata(columnPath, true, columnKeyMetadata, columnOrdinal);
-      // if column key is available, recover ColumnMetaData. Otherwise, ColumnMetaData is null - meaning the user doesn't have permission to access the column.
-      if (columnDecryptionSetup->isKeyAvailable() && columnChunk.__isset.encrypted_column_metadata) {
+          fileDecryptor_->setColumnCryptoMetadata(
+              columnPath, true, columnKeyMetadata, columnOrdinal);
+      // if column key is available, recover ColumnMetaData. Otherwise,
+      // ColumnMetaData is null - meaning the user doesn't have permission to
+      // access the column.
+      if (columnDecryptionSetup->isKeyAvailable() &&
+          columnChunk.__isset.encrypted_column_metadata) {
         auto decryptor = columnDecryptionSetup->getMetadataDecryptor();
-        std::string aad = createModuleAad(decryptor->fileAad(), kColumnMetaData, rowGroup.ordinal, static_cast<uint16_t>(columnOrdinal), static_cast<int16_t>(-1));
+        std::string aad = createModuleAad(
+            decryptor->fileAad(),
+            kColumnMetaData,
+            rowGroup.ordinal,
+            static_cast<uint16_t>(columnOrdinal),
+            static_cast<int16_t>(-1));
 
         int encryptedLen = columnChunk.encrypted_column_metadata.size();
         thrift::ColumnMetaData columnMetaData;
         size_t decryptedBufferLen = decryptor->plaintextLength(encryptedLen);
         BufferPtr decryptedBuffer;
-        dwio::common::ensureCapacity<char>(decryptedBuffer, decryptedBufferLen, &pool_);
-        int decrypted_buffer_len = decryptor->decrypt(reinterpret_cast<const uint8_t*>(columnChunk.encrypted_column_metadata.data()), encryptedLen, decryptedBuffer->asMutable<uint8_t>(), decryptedBufferLen, aad);
+        dwio::common::ensureCapacity<char>(
+            decryptedBuffer, decryptedBufferLen, &pool_);
+        int decrypted_buffer_len = decryptor->decrypt(
+            reinterpret_cast<const uint8_t*>(
+                columnChunk.encrypted_column_metadata.data()),
+            encryptedLen,
+            decryptedBuffer->asMutable<uint8_t>(),
+            decryptedBufferLen,
+            aad);
 
         std::shared_ptr<thrift::ThriftTransport> thriftTransport =
             std::make_shared<thrift::ThriftBufferedTransport>(
                 decryptedBuffer->as<uint8_t>(), decrypted_buffer_len);
-        auto thriftProtocol = std::make_unique<
-            apache::thrift::protocol::TCompactProtocolT<thrift::ThriftTransport>>(
-            thriftTransport);
+        auto thriftProtocol =
+            std::make_unique<apache::thrift::protocol::TCompactProtocolT<
+                thrift::ThriftTransport>>(thriftTransport);
         columnMetaData.read(thriftProtocol.get());
 
         columnChunk.__set_meta_data(columnMetaData);
@@ -329,8 +356,10 @@ void ReaderBase::loadFileMetaData() {
 }
 
 void ReaderBase::initializeSchema() {
-  if (!CryptoFactory::getInstance().clacEnabled() && fileMetaData_->__isset.encryption_algorithm) {
-    VELOX_UNSUPPORTED("Decryption (CLAC) is not enabled for encrypted Parquet files. Please enable it first.");
+  if (!CryptoFactory::getInstance().clacEnabled() &&
+      fileMetaData_->__isset.encryption_algorithm) {
+    VELOX_UNSUPPORTED(
+        "Decryption (CLAC) is not enabled for encrypted Parquet files. Please enable it first.");
   }
 
   VELOX_CHECK_GT(
