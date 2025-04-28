@@ -86,18 +86,14 @@ std::unique_ptr<SimpleVector<uint64_t>> FlatVector<T>::hashAll() const {
   if (rawValues_ != nullptr) { // non all-null case
     folly::hasher<T> hasher;
     for (size_t i = 0; i < BaseVector::length_; ++i) {
-      hashData[i] = hasher(valueAtFast(i));
-    }
-  }
-
-  // overwrite the null hash values
-  if (BaseVector::rawNulls_ != nullptr) {
-    for (size_t i = 0; i < BaseVector::length_; ++i) {
-      if (bits::isBitNull(BaseVector::rawNulls_, i)) {
+      if (BaseVector::rawNulls_ != nullptr && bits::isBitNull(BaseVector::rawNulls_, i)) {
         hashData[i] = BaseVector::kNullHash;
+      } else {
+        hashData[i] = hasher(valueAtFast(i));
       }
     }
   }
+
   return std::make_unique<FlatVector<uint64_t>>(
       BaseVector::pool_,
       BIGINT(),
