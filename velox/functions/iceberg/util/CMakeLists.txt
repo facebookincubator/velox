@@ -12,21 +12,17 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-add_subdirectory(util)
-
 velox_add_library(
-  velox_functions_iceberg
-  BucketFunction.cpp
-  Register.cpp)
+  velox_functions_iceberg_util
+  Murmur3_32HashFunction.cpp)
 
 velox_link_libraries(
-  velox_functions_iceberg
   velox_functions_iceberg_util
-  velox_functions_lib
+  velox_common_base
   Folly::folly)
 
 if(NOT VELOX_MONO_LIBRARY)
-  set_property(TARGET velox_functions_iceberg PROPERTY JOB_POOL_COMPILE
+  set_property(TARGET velox_functions_iceberg_util PROPERTY JOB_POOL_COMPILE
                                                               high_memory_pool)
 endif()
 

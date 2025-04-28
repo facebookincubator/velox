@@ -18,7 +18,7 @@
 #include <folly/CPortability.h>
 #include <cstdint>
 
-namespace facebook::velox::functions::iceberg {
+namespace facebook::velox::functions::iceberg::util {
 class Murmur3_32HashFunction {
  public:
   static int hashBigint(uint64_t input);
@@ -34,4 +34,4 @@ class Murmur3_32HashFunction {
 
   static constexpr int kSeed = 0;
 };
-} // namespace facebook::velox::functions::iceberg
+} // namespace facebook::velox::functions::iceberg::util

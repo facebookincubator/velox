@@ -1,5 +1,5 @@
 /*
-* Copyright (c) Facebook, Inc. and its affiliates.
+ * Copyright (c) Facebook, Inc. and its affiliates.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -14,10 +14,10 @@
  * limitations under the License.
  */
 
-#include "velox/functions/iceberg/Murmur3_32HashFunction.h"
+#include "velox/functions/iceberg/util/Murmur3_32HashFunction.h"
 #include "velox/common/base/BitUtil.h"
 
-namespace facebook::velox::functions::iceberg {
+namespace facebook::velox::functions::iceberg::util {
 
 int Murmur3_32HashFunction::hashBigint(uint64_t input) {
   uint32_t low = input;
@@ -29,7 +29,9 @@ int Murmur3_32HashFunction::hashBigint(uint64_t input) {
   return fmix(h1, 8);
 }
 
-int32_t Murmur3_32HashFunction::hashString(const char* const input, uint32_t len) {
+int32_t Murmur3_32HashFunction::hashString(
+    const char* const input,
+    uint32_t len) {
   const uint8_t* data = reinterpret_cast<const uint8_t*>(input);
   const int32_t nblocks = len / 4;
 
@@ -48,15 +50,15 @@ int32_t Murmur3_32HashFunction::hashString(const char* const input, uint32_t len
   switch (len & 3) {
     case 3:
       k1 ^= static_cast<uint32_t>(tail[2]) << 16;
-    [[fallthrough]];
+      [[fallthrough]];
     case 2:
       k1 ^= static_cast<uint32_t>(tail[1]) << 8;
-    [[fallthrough]];
+      [[fallthrough]];
     case 1:
       k1 ^= static_cast<uint32_t>(tail[0]);
+      h1 ^= mixK1(k1);
   }
 
-  h1 ^= mixK1(k1);
   return fmix(h1, len);
 }
 
@@ -67,14 +69,16 @@ FOLLY_ALWAYS_INLINE uint32_t Murmur3_32HashFunction::mixK1(uint32_t k1) {
   return k1;
 }
 
-FOLLY_ALWAYS_INLINE uint32_t Murmur3_32HashFunction::mixH1(uint32_t h1, uint32_t k1) {
+FOLLY_ALWAYS_INLINE uint32_t
+Murmur3_32HashFunction::mixH1(uint32_t h1, uint32_t k1) {
   h1 ^= k1;
   h1 = bits::rotateLeft(h1, 13);
   h1 = h1 * 5 + 0xe6546b64;
   return h1;
 }
 
-FOLLY_ALWAYS_INLINE uint32_t Murmur3_32HashFunction::fmix(uint32_t h1, uint32_t length) {
+FOLLY_ALWAYS_INLINE uint32_t
+Murmur3_32HashFunction::fmix(uint32_t h1, uint32_t length) {
   h1 ^= length;
   h1 ^= h1 >> 16;
   h1 *= 0x85ebca6b;
@@ -83,4 +87,4 @@ FOLLY_ALWAYS_INLINE uint32_t Murmur3_32HashFunction::fmix(uint32_t h1, uint32_t 
   h1 ^= h1 >> 16;
   return h1;
 }
-}
+} // namespace facebook::velox::functions::iceberg::util

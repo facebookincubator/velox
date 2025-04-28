@@ -11,25 +11,18 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+add_executable(
+  velox_functions_iceberg_util_test
+  Murmur3_32HashFunctionTest.cpp)
 
-add_subdirectory(util)
+add_test(
+  NAME velox_functions_iceberg_util_test
+  COMMAND velox_functions_iceberg_util_test
+  WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR})
 
-velox_add_library(
-  velox_functions_iceberg
-  BucketFunction.cpp
-  Register.cpp)
-
-velox_link_libraries(
-  velox_functions_iceberg
+target_link_libraries(
+  velox_functions_iceberg_util_test
   velox_functions_iceberg_util
-  velox_functions_lib
-  Folly::folly)
-
-if(NOT VELOX_MONO_LIBRARY)
-  set_property(TARGET velox_functions_iceberg PROPERTY JOB_POOL_COMPILE
-                                                              high_memory_pool)
-endif()
-
-if(${VELOX_BUILD_TESTING})
-  add_subdirectory(tests)
-endif()
+  GTest::gtest
+  GTest::gtest_main
+  GTest::gmock)

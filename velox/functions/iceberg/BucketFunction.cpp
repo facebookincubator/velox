@@ -17,7 +17,7 @@
 #include "velox/functions/iceberg/BucketFunction.h"
 #include "velox/functions/Macros.h"
 #include "velox/functions/Registerer.h"
-#include "velox/functions/iceberg/Murmur3_32HashFunction.h"
+#include "velox/functions/iceberg/util/Murmur3_32HashFunction.h"
 #include "velox/type/Timestamp.h"
 
 namespace facebook::velox::functions::iceberg {
@@ -38,7 +38,7 @@ struct BucketDecimalFunction {
     const auto length = DecimalUtil::getByteArrayLength(input);
     char bytes[length];
     DecimalUtil::toByteArray(input, bytes);
-    const auto hash = Murmur3_32HashFunction::hashString(bytes, length);
+    const auto hash = util::Murmur3_32HashFunction::hashString(bytes, length);
     out = apply(numBuckets, hash);
   }
 };
@@ -51,7 +51,7 @@ struct BucketFunction {
   FOLLY_ALWAYS_INLINE void
   call(int32_t& out, const int32_t& numBuckets, const TInput& input) {
     VELOX_USER_CHECK_NE(numBuckets, 0, "Remainder cannot be zero");
-    const auto hash = Murmur3_32HashFunction::hashBigint(input);
+    const auto hash = util::Murmur3_32HashFunction::hashBigint(input);
     out = apply(numBuckets, hash);
   }
 
@@ -61,7 +61,7 @@ struct BucketFunction {
       const arg_type<Varchar>& input) {
     VELOX_USER_CHECK_NE(numBuckets, 0, "Remainder cannot be zero");
     const auto hash =
-        Murmur3_32HashFunction::hashString(input.data(), input.size());
+        util::Murmur3_32HashFunction::hashString(input.data(), input.size());
     out = apply(numBuckets, hash);
   }
 
@@ -69,7 +69,8 @@ struct BucketFunction {
       int32_t& out,
       const int32_t& numBuckets,
       const arg_type<Timestamp>& input) {
-    const auto hash = Murmur3_32HashFunction::hashBigint(input.toMicros());
+    const auto hash =
+        util::Murmur3_32HashFunction::hashBigint(input.toMicros());
     out = apply(numBuckets, hash);
   }
 };

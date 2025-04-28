@@ -1,5 +1,5 @@
 /*
-* Copyright (c) Facebook, Inc. and its affiliates.
+ * Copyright (c) Facebook, Inc. and its affiliates.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -13,11 +13,11 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#include "velox/functions/iceberg/Murmur3_32HashFunction.h"
+#include "velox/functions/iceberg/util/Murmur3_32HashFunction.h"
 
 #include <gtest/gtest.h>
 
-using namespace facebook::velox::functions::iceberg;
+using namespace facebook::velox::functions::iceberg::util;
 
 namespace facebook::velox::functions::iceberg::test {
 
@@ -45,4 +45,4 @@ TEST(Murmur3_32HashFunctionTest, string) {
   EXPECT_EQ(hash("Товары"), 1817480714);
   EXPECT_EQ(hash("😀"), -1095487750);
 }
-}
+} // namespace facebook::velox::functions::iceberg::test
