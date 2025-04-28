@@ -1717,6 +1717,8 @@ void HashProbe::checkRunning() const {
 }
 
 void HashProbe::setRunning() {
+  // A point for test code injection.
+  TestValue::adjust("facebook::velox::exec::HashProbe::setRunning", this);
   setState(ProbeOperatorState::kRunning);
 }
 

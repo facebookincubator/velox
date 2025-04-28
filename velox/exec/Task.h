@@ -708,6 +708,15 @@ class Task : public std::enable_shared_from_this<Task> {
     return cancellationSource_.getToken();
   }
 
+  struct SplitStatus {
+    int32_t runningTableScanSplitsNum{0};
+    int32_t queuedTableScanSplitsNum{0};
+    int64_t runningTableScanSplitsWeight{0};
+    int64_t queuedTableScanSplitsWeight{0};
+  };
+
+  SplitStatus getSplitStatus();
+
   void testingIncrementThreads() {
     std::lock_guard l(mutex_);
     ++numThreads_;

@@ -56,6 +56,7 @@ struct TaskStats {
   std::unordered_set<int32_t> completedSplitGroups;
 
   /// Table scan split stats.
+  // TODO: Remove after presto switches to use the new API
   int32_t numRunningTableScanSplits{0};
   int32_t numQueuedTableScanSplits{0};
   int64_t runningTableScanSplitWeights{0};

@@ -1705,6 +1705,126 @@ TEST_F(TableScanTest, waitForSplit) {
       duckDbQueryRunner_);
 }
 
+TEST_F(TableScanTest, multipleTableScanSplit) {
+  // Create 10 data files for 10 splits.
+  const size_t numSplits{10};
+  const auto filePaths = makeFilePaths(numSplits);
+  auto vectors = makeVectors(numSplits, 100);
+  for (auto i = 0; i < numSplits; i++) {
+    writeToFile(filePaths.at(i)->getPath(), vectors.at(i));
+  }
+
+  // Set the table scan operators wait once after acquiring a split
+  // Set the HashProbe operator to wait once before start
+  std::atomic_uint32_t numAcquiredSplits{0};
+  std::shared_mutex pauseSplitProcessing;
+  std::shared_mutex pauseHashProbe;
+  SCOPED_TESTVALUE_SET(
+      "facebook::velox::exec::TableScan::getOutput::gotSplit",
+      std::function<void(const TableScan*)>(
+          ([&](const TableScan* /*tableScan*/) {
+            ++numAcquiredSplits;
+            pauseSplitProcessing.lock_shared();
+            pauseSplitProcessing.unlock_shared();
+          })));
+  SCOPED_TESTVALUE_SET(
+      "facebook::velox::exec::HashProbe::setRunning",
+      std::function<void(const TableScan*)>(
+          ([&](const TableScan* /*tableScan*/) {
+            pauseHashProbe.lock_shared();
+            pauseHashProbe.unlock_shared();
+          })));
+  pauseSplitProcessing.lock();
+  pauseHashProbe.lock();
+
+  // Main task plan with 2 table scans.
+  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  core::PlanNodeId probeTableScanId, buildTableScanId;
+  auto planNode = PlanBuilder(planNodeIdGenerator, pool_.get())
+                      .tableScan(rowType_)
+                      .capturePlanNodeId(probeTableScanId)
+                      .project({"c0 AS t0", "c1 AS t1", "c2 AS t2"})
+                      .hashJoin(
+                          {"t0"},
+                          {"u0"},
+                          exec::test::PlanBuilder(planNodeIdGenerator)
+                              .tableScan(rowType_)
+                              .capturePlanNodeId(buildTableScanId)
+                              .project({"c0 as u0", "c1 as u1"})
+                              .planNode(),
+                          "",
+                          {"t1"},
+                          core::JoinType::kAnti)
+                      .planNode();
+
+  // Create task, cursor, start the task and supply the table scan splits.
+  const int32_t maxNumDrivers = 6;
+  CursorParameters params;
+  params.planNode = planNode;
+  params.maxDrivers = maxNumDrivers;
+  auto cursor = TaskCursor::create(params);
+  cursor->start();
+  auto task = cursor->task();
+  int64_t totalSplitWeights{0};
+  for (auto fileIndex = 0; fileIndex < numSplits; ++fileIndex) {
+    const int64_t splitWeight = fileIndex * 10 + 1;
+    totalSplitWeights += splitWeight;
+    auto split = makeHiveSplit(filePaths.at(fileIndex)->getPath(), splitWeight);
+    task->addSplit(probeTableScanId, std::move(split));
+    task->addSplit(buildTableScanId, std::move(split));
+  }
+  task->noMoreSplits(probeTableScanId);
+  task->noMoreSplits(buildTableScanId);
+
+  while (numAcquiredSplits < 12) {
+    /* sleep override */
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+  }
+
+  // Two table scans will respectively have 6 drivers each
+  EXPECT_EQ(numAcquiredSplits, 12);
+  auto splitStatus = task->getSplitStatus();
+  int64_t runningSplitWeights{0};
+  for (auto i = 0; i < numAcquiredSplits; ++i) {
+    runningSplitWeights += i * 10 + 1;
+  }
+  const auto queuedSplitWeights = totalSplitWeights - runningSplitWeights;
+  EXPECT_EQ(splitStatus.runningTableScanSplitsNum, 2 * maxNumDrivers);
+  EXPECT_EQ(
+      splitStatus.queuedTableScanSplitsNum, 2 * (numSplits - maxNumDrivers));
+  EXPECT_EQ(splitStatus.runningTableScanSplitsWeight, 2 * runningSplitWeights);
+  EXPECT_EQ(splitStatus.queuedTableScanSplitsWeight, 2 * queuedSplitWeights);
+
+  // Let build side finish processing all the splits
+  pauseSplitProcessing.unlock();
+  while (numAcquiredSplits < 16) {
+    /* sleep override */
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+  }
+  splitStatus = task->getSplitStatus();
+  EXPECT_EQ(splitStatus.runningTableScanSplitsNum, 0);
+  EXPECT_EQ(splitStatus.queuedTableScanSplitsNum, 0);
+  EXPECT_EQ(splitStatus.runningTableScanSplitsWeight, 0);
+  EXPECT_EQ(splitStatus.queuedTableScanSplitsWeight, 0);
+  EXPECT_EQ(numAcquiredSplits, numSplits);
+  pauseHashProbe.unlock();
+
+  // Finish the task.
+  std::vector<RowVectorPtr> result;
+  while (cursor->moveNext()) {
+    result.push_back(cursor->current());
+  }
+  EXPECT_TRUE(waitForTaskCompletion(task.get())) << task->taskId();
+
+  // Check task stats again.
+  splitStatus = task->getSplitStatus();
+  EXPECT_EQ(splitStatus.runningTableScanSplitsNum, 0);
+  EXPECT_EQ(splitStatus.queuedTableScanSplitsNum, 0);
+  EXPECT_EQ(splitStatus.runningTableScanSplitsWeight, 0);
+  EXPECT_EQ(splitStatus.queuedTableScanSplitsWeight, 0);
+  EXPECT_EQ(numAcquiredSplits, numSplits);
+}
+
 DEBUG_ONLY_TEST_F(TableScanTest, tableScanSplitsAndWeights) {
   // Create 10 data files for 10 splits.
   const size_t numSplits{10};
@@ -1802,15 +1922,6 @@ DEBUG_ONLY_TEST_F(TableScanTest, tableScanSplitsAndWeights) {
       exchangeNodeId,
       exec::Split(std::make_shared<RemoteConnectorSplit>(leafTaskId)));
   task->noMoreSplits(exchangeNodeId);
-
-  // Check the task stats.
-  auto stats = task->taskStats();
-  EXPECT_EQ(stats.numRunningTableScanSplits, 0);
-  EXPECT_EQ(stats.numQueuedTableScanSplits, numSplits);
-  EXPECT_EQ(stats.runningTableScanSplitWeights, 0);
-  EXPECT_EQ(stats.queuedTableScanSplitWeights, totalSplitWeights);
-  EXPECT_EQ(stats.numTotalSplits, numSplits + 1);
-
   // Let all the operators proceed to acquire splits.
   pauseTableScan.unlock();
 
@@ -1825,12 +1936,12 @@ DEBUG_ONLY_TEST_F(TableScanTest, tableScanSplitsAndWeights) {
   for (auto i = 0; i < numAcquiredSplits; ++i) {
     runningSplitWeights += i * 10 + 1;
   }
-  stats = task->taskStats();
+  auto splitStatus = task->getSplitStatus();
   const auto queuedSplitWeights = totalSplitWeights - runningSplitWeights;
-  EXPECT_EQ(stats.numRunningTableScanSplits, numDrivers);
-  EXPECT_EQ(stats.numQueuedTableScanSplits, numSplits - numDrivers);
-  EXPECT_EQ(stats.runningTableScanSplitWeights, runningSplitWeights);
-  EXPECT_EQ(stats.queuedTableScanSplitWeights, queuedSplitWeights);
+  EXPECT_EQ(splitStatus.runningTableScanSplitsNum, numDrivers);
+  EXPECT_EQ(splitStatus.queuedTableScanSplitsNum, numSplits - numDrivers);
+  EXPECT_EQ(splitStatus.runningTableScanSplitsWeight, runningSplitWeights);
+  EXPECT_EQ(splitStatus.queuedTableScanSplitsWeight, queuedSplitWeights);
 
   // Let all the operators proceed.
   pauseSplitProcessing.unlock();
@@ -1844,11 +1955,11 @@ DEBUG_ONLY_TEST_F(TableScanTest, tableScanSplitsAndWeights) {
   EXPECT_TRUE(waitForTaskCompletion(task.get())) << task->taskId();
 
   // Check task stats again.
-  stats = task->taskStats();
-  EXPECT_EQ(stats.numRunningTableScanSplits, 0);
-  EXPECT_EQ(stats.numQueuedTableScanSplits, 0);
-  EXPECT_EQ(stats.runningTableScanSplitWeights, 0);
-  EXPECT_EQ(stats.queuedTableScanSplitWeights, 0);
+  splitStatus = task->getSplitStatus();
+  EXPECT_EQ(splitStatus.runningTableScanSplitsNum, 0);
+  EXPECT_EQ(splitStatus.queuedTableScanSplitsNum, 0);
+  EXPECT_EQ(splitStatus.runningTableScanSplitsWeight, 0);
+  EXPECT_EQ(splitStatus.queuedTableScanSplitsWeight, 0);
   EXPECT_EQ(numAcquiredSplits, numSplits);
 }
 
