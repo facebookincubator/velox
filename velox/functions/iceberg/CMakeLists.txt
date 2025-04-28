@@ -14,20 +14,14 @@
 
 add_subdirectory(util)
 
-velox_add_library(
-  velox_functions_iceberg
-  BucketFunction.cpp
-  Register.cpp)
+velox_add_library(velox_functions_iceberg BucketFunction.cpp Register.cpp)
 
-velox_link_libraries(
-  velox_functions_iceberg
-  velox_functions_iceberg_util
-  velox_functions_lib
-  Folly::folly)
+velox_link_libraries(velox_functions_iceberg velox_functions_iceberg_util
+                     velox_functions_lib Folly::folly)
 
 if(NOT VELOX_MONO_LIBRARY)
   set_property(TARGET velox_functions_iceberg PROPERTY JOB_POOL_COMPILE
-                                                              high_memory_pool)
+                                                       high_memory_pool)
 endif()
 
 if(${VELOX_BUILD_TESTING})

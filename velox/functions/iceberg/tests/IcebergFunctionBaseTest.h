@@ -15,13 +15,14 @@
  */
 #pragma once
 
-#include "velox/functions/prestosql/tests/utils/FunctionBaseTest.h"
 #include "velox/functions/iceberg/Register.h"
+#include "velox/functions/prestosql/tests/utils/FunctionBaseTest.h"
 #include "velox/parse/TypeResolver.h"
 
 namespace facebook::velox::functions::iceberg::test {
 
-class IcebergFunctionBaseTest : public facebook::velox::functions::test::FunctionBaseTest {
+class IcebergFunctionBaseTest
+    : public facebook::velox::functions::test::FunctionBaseTest {
  protected:
   static void SetUpTestCase() {
     parse::registerTypeResolver();
@@ -30,4 +31,4 @@ class IcebergFunctionBaseTest : public facebook::velox::functions::test::Functio
   }
 };
 
-} // namespace facebook::velox::functions::sparksql::test
+} // namespace facebook::velox::functions::iceberg::test

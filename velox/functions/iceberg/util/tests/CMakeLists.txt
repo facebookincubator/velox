@@ -11,9 +11,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-add_executable(
-  velox_functions_iceberg_util_test
-  Murmur3_32HashFunctionTest.cpp)
+add_executable(velox_functions_iceberg_util_test Murmur3_32HashFunctionTest.cpp)
 
 add_test(
   NAME velox_functions_iceberg_util_test

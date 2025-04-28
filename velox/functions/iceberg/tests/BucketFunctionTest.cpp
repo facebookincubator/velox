@@ -47,7 +47,7 @@ class BucketFunctionTest : public IcebergFunctionBaseTest {
     velox::test::assertEqualVectors(expected, result);
   }
 };
-} // namespace facebook::velox
+} // namespace facebook::velox::functions::iceberg::test
 
 TEST_F(BucketFunctionTest, integerTypes) {
   EXPECT_EQ(bucket<int32_t>(10, 8), 3);
@@ -78,9 +78,9 @@ TEST_F(BucketFunctionTest, string) {
 
 TEST_F(BucketFunctionTest, binary) {
   bucketExpr(
-     makeFlatVector<int32_t>({122, 4}),
-     {makeFlatVector<int32_t>({128, 5}),
-      makeFlatVector<StringView>({"abc", "abcdefg"}, VARBINARY())});
+      makeFlatVector<int32_t>({122, 4}),
+      {makeFlatVector<int32_t>({128, 5}),
+       makeFlatVector<StringView>({"abc", "abcdefg"}, VARBINARY())});
 }
 
 TEST_F(BucketFunctionTest, timestamp) {
@@ -103,5 +103,6 @@ TEST_F(BucketFunctionTest, decimal) {
   bucketExpr(
       makeFlatVector<int32_t>({7, 7, 6, 4}),
       {makeConstant<int32_t>(10, 4),
-       makeFlatVector<int128_t>({12, 0, 234, DecimalUtil::kLongDecimalMax}, DECIMAL(38, 2))});
+       makeFlatVector<int128_t>(
+           {12, 0, 234, DecimalUtil::kLongDecimalMax}, DECIMAL(38, 2))});
 }

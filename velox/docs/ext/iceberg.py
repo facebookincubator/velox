@@ -591,7 +591,9 @@ class IcebergObject(ObjectDescription[Tuple[str, str]]):
                 classes.pop()
             except IndexError:
                 pass
-        self.env.ref_context["iceberg:class"] = classes[-1] if len(classes) > 0 else None
+        self.env.ref_context["iceberg:class"] = (
+            classes[-1] if len(classes) > 0 else None
+        )
         if "module" in self.options:
             modules = self.env.ref_context.setdefault("iceberg:modules", [])
             if modules:
