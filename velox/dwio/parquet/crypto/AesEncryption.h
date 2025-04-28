@@ -42,14 +42,18 @@ constexpr int8_t kBloomFilterHeader = 8;
 constexpr int8_t kBloomFilterBitset = 9;
 
 // Performs AES decryption operations with GCM or CTR ciphers.
-// It refers to the Apache Arrow's implementation at https://github.com/apache/arrow/blob/main/cpp/src/parquet/encryption/encryption_internal.h
+// It refers to the Apache Arrow's implementation at
+// https://github.com/apache/arrow/blob/main/cpp/src/parquet/encryption/encryption_internal.h
 class AesDecryptor {
  public:
-  explicit AesDecryptor(ParquetCipher::type algId, int keyLen, bool metadata,
-                        bool containsLength = true);
+  explicit AesDecryptor(
+      ParquetCipher::type algId,
+      int keyLen,
+      bool metadata,
+      bool containsLength = true);
 
-  static std::shared_ptr<AesDecryptor> make(
-      ParquetCipher::type algId, int keyLen, bool metadata);
+  static std::shared_ptr<AesDecryptor>
+  make(ParquetCipher::type algId, int keyLen, bool metadata);
 
   ~AesDecryptor();
   void wipeOut();
@@ -60,24 +64,34 @@ class AesDecryptor {
 
   int getCiphertextLength(const uint8_t* ciphertext, int ciphertextLen) const;
 
-  int getCiphertextLengthWithoutValidation(const uint8_t* ciphertext, int ciphertextLen) const;
+  int getCiphertextLengthWithoutValidation(
+      const uint8_t* ciphertext,
+      int ciphertextLen) const;
 
   /// Decrypts ciphertext with the key and aad. Key length is passed only for
-  /// validation. If different from value in constructor, exception will be thrown.
-  /// The caller is responsible for ensuring that the plaintext buffer is at least as
-  /// large as PlaintextLength(ciphertext_len).
-  int decrypt(const uint8_t* ciphertext, int ciphertextLen,
-              const uint8_t* key, int keyLen,
-              const uint8_t* aad, int aadLen,
-              uint8_t* plaintext, int plaintextLen);
+  /// validation. If different from value in constructor, exception will be
+  /// thrown. The caller is responsible for ensuring that the plaintext buffer
+  /// is at least as large as PlaintextLength(ciphertext_len).
+  int decrypt(
+      const uint8_t* ciphertext,
+      int ciphertextLen,
+      const uint8_t* key,
+      int keyLen,
+      const uint8_t* aad,
+      int aadLen,
+      uint8_t* plaintext,
+      int plaintextLen);
 
  private:
   class AesDecryptorImpl;
   std::unique_ptr<AesDecryptorImpl> impl_;
 };
 
-std::string createModuleAad(const std::string& fileAad, int8_t moduleType,
-                            int16_t rowGroupOrdinal, int16_t columnOrdinal,
-                            int16_t pageOrdinal);
+std::string createModuleAad(
+    const std::string& fileAad,
+    int8_t moduleType,
+    int16_t rowGroupOrdinal,
+    int16_t columnOrdinal,
+    int16_t pageOrdinal);
 
-}
+} // namespace facebook::velox::parquet

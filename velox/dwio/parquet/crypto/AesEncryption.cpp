@@ -30,12 +30,12 @@ constexpr int kCtrIvLength = 16;
 
 #define ENCRYPT_INIT(CTX, ALG)                                        \
   if (1 != EVP_EncryptInit_ex(CTX, ALG, nullptr, nullptr, nullptr)) { \
-    throw CryptoException("Couldn't init ALG encryption");           \
+    throw CryptoException("Couldn't init ALG encryption");            \
   }
 
 #define DECRYPT_INIT(CTX, ALG)                                        \
   if (1 != EVP_DecryptInit_ex(CTX, ALG, nullptr, nullptr, nullptr)) { \
-    throw CryptoException("Couldn't init ALG decryption");           \
+    throw CryptoException("Couldn't init ALG decryption");            \
   }
 
 class AesDecryptor::AesDecryptorImpl {
@@ -92,7 +92,8 @@ class AesDecryptor::AesDecryptorImpl {
       const uint8_t* ciphertext,
       int ciphertextLen) const;
 
-  /// Get the actual ciphertext length, inclusive of the length buffer length, without validation.
+  /// Get the actual ciphertext length, inclusive of the length buffer length,
+  /// without validation.
   [[nodiscard]] int getCiphertextLengthWithoutValidation(
       const uint8_t* ciphertext,
       int ciphertextLen) const;
@@ -132,7 +133,15 @@ int AesDecryptor::decrypt(
     int aadLen,
     uint8_t* plaintext,
     int plaintextLen) {
-  return impl_->decrypt(ciphertext, ciphertextLen, key, keyLen, aad, aadLen, plaintext, plaintextLen);
+  return impl_->decrypt(
+      ciphertext,
+      ciphertextLen,
+      key,
+      keyLen,
+      aad,
+      aadLen,
+      plaintext,
+      plaintextLen);
 }
 
 void AesDecryptor::wipeOut() {
@@ -198,10 +207,8 @@ AesDecryptor::AesDecryptor(
     : impl_{std::unique_ptr<AesDecryptorImpl>(
           new AesDecryptorImpl(algId, keyLen, metadata, containsLength))} {}
 
-std::shared_ptr<AesDecryptor> AesDecryptor::make(
-    ParquetCipher::type algId,
-    int keyLen,
-    bool metadata) {
+std::shared_ptr<AesDecryptor>
+AesDecryptor::make(ParquetCipher::type algId, int keyLen, bool metadata) {
   if (ParquetCipher::AES_GCM_V1 != algId &&
       ParquetCipher::AES_GCM_CTR_V1 != algId) {
     std::stringstream ss;
@@ -221,11 +228,15 @@ int AesDecryptor::ciphertextLength(int plaintextLen) const {
   return impl_->ciphertextLength(plaintextLen);
 }
 
-int AesDecryptor::getCiphertextLength(const uint8_t* ciphertext, int ciphertextLen) const {
+int AesDecryptor::getCiphertextLength(
+    const uint8_t* ciphertext,
+    int ciphertextLen) const {
   return impl_->getCiphertextLength(ciphertext, ciphertextLen);
 }
 
-int AesDecryptor::getCiphertextLengthWithoutValidation(const uint8_t* ciphertext, int ciphertextLen) const {
+int AesDecryptor::getCiphertextLengthWithoutValidation(
+    const uint8_t* ciphertext,
+    int ciphertextLen) const {
   return impl_->getCiphertextLengthWithoutValidation(ciphertext, ciphertextLen);
 }
 
@@ -251,9 +262,7 @@ int AesDecryptor::AesDecryptorImpl::getCiphertextLength(
       std::stringstream ss;
       ss << "Negative ciphertext length " << written_ciphertext_len;
       throw CryptoException(ss.str());
-    } else if (
-        ciphertextLen <
-        written_ciphertext_len + lengthBufferLength_) {
+    } else if (ciphertextLen < written_ciphertext_len + lengthBufferLength_) {
       std::stringstream ss;
       ss << "Serialized ciphertext length "
          << (written_ciphertext_len + lengthBufferLength_)
@@ -361,8 +370,7 @@ int AesDecryptor::AesDecryptorImpl::gcmDecrypt(
 
   // Setting additional authenticated data
   if (aad && aadLen > 0 &&
-      (1 !=
-       EVP_DecryptUpdate(ctx_, nullptr, &len, aad, aadLen))) {
+      (1 != EVP_DecryptUpdate(ctx_, nullptr, &len, aad, aadLen))) {
     throw CryptoException("Couldn't set AAD");
   }
 
@@ -418,8 +426,7 @@ int AesDecryptor::AesDecryptorImpl::ctrDecrypt(
   if (ciphertext_len < lengthBufferLength_ + kNonceLength) {
     std::stringstream ss;
     ss << "Invalid ciphertext length " << ciphertext_len
-       << ". Expected at least " << lengthBufferLength_ + kNonceLength
-       << "\n";
+       << ". Expected at least " << lengthBufferLength_ + kNonceLength << "\n";
     throw CryptoException(ss.str());
   }
 
@@ -509,29 +516,34 @@ static void CheckPageOrdinal(int32_t pageOrdinal) {
   }
 }
 
- std::string createModuleAad(const std::string& fileAad, int8_t moduleType,
-                             int16_t rowGroupOrdinal, int16_t columnOrdinal, int16_t pageOrdinal) {
-   CheckPageOrdinal(pageOrdinal);
-   int8_t type_ordinal_bytes[1];
-   type_ordinal_bytes[0] = moduleType;
-   std::string type_ordinal_bytes_str(reinterpret_cast<char const*>(type_ordinal_bytes), 1);
-   if (kFooter == moduleType) {
-     std::string result = fileAad + type_ordinal_bytes_str;
-     return result;
-   }
-   std::string row_group_ordinal_bytes = shortToBytesLe(rowGroupOrdinal);
-   std::string column_ordinal_bytes = shortToBytesLe(columnOrdinal);
-   if (kDataPage != moduleType && kDataPageHeader != moduleType) {
-     std::ostringstream out;
-     out << fileAad << type_ordinal_bytes_str << row_group_ordinal_bytes
-         << column_ordinal_bytes;
-     return out.str();
-   }
-   std::string page_ordinal_bytes = shortToBytesLe(pageOrdinal);
-   std::ostringstream out;
-   out << fileAad << type_ordinal_bytes_str << row_group_ordinal_bytes
-       << column_ordinal_bytes << page_ordinal_bytes;
-   return out.str();
- }
-
+std::string createModuleAad(
+    const std::string& fileAad,
+    int8_t moduleType,
+    int16_t rowGroupOrdinal,
+    int16_t columnOrdinal,
+    int16_t pageOrdinal) {
+  CheckPageOrdinal(pageOrdinal);
+  int8_t type_ordinal_bytes[1];
+  type_ordinal_bytes[0] = moduleType;
+  std::string type_ordinal_bytes_str(
+      reinterpret_cast<char const*>(type_ordinal_bytes), 1);
+  if (kFooter == moduleType) {
+    std::string result = fileAad + type_ordinal_bytes_str;
+    return result;
+  }
+  std::string row_group_ordinal_bytes = shortToBytesLe(rowGroupOrdinal);
+  std::string column_ordinal_bytes = shortToBytesLe(columnOrdinal);
+  if (kDataPage != moduleType && kDataPageHeader != moduleType) {
+    std::ostringstream out;
+    out << fileAad << type_ordinal_bytes_str << row_group_ordinal_bytes
+        << column_ordinal_bytes;
+    return out.str();
+  }
+  std::string page_ordinal_bytes = shortToBytesLe(pageOrdinal);
+  std::ostringstream out;
+  out << fileAad << type_ordinal_bytes_str << row_group_ordinal_bytes
+      << column_ordinal_bytes << page_ordinal_bytes;
+  return out.str();
 }
+
+} // namespace facebook::velox::parquet
