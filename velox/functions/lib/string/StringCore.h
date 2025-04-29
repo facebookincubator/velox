@@ -312,7 +312,7 @@ cappedByteLengthUnicode(const char* input, size_t size, int64_t maxChars) {
   return utf8Position;
 }
 
-constexpr size_t long_string_find(
+constexpr size_t longStringFind(
     std::string_view str, const std::string_view substr, size_t start_pos
 ) noexcept
 {
@@ -362,7 +362,7 @@ static inline int64_t findNthInstanceByteIndexFromStart(
     return -1;
   }
 
-  auto byteIndex = long_string_find(string, subString, startPosition);
+  auto byteIndex = longStringFind(string, subString, startPosition);
   // Not found
   if (byteIndex == std::string_view::npos) {
     return -1;

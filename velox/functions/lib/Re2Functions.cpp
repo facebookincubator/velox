@@ -674,7 +674,7 @@ bool matchSuffixPattern(
 bool matchSubstringPattern(
     const StringView& input,
     const std::string& fixedPattern) {
-    std::size_t found = facebook::velox::functions::stringCore::long_string_find(
+    std::size_t found = facebook::velox::functions::stringCore::longStringFind(
                             std::string_view(input), std::string_view(fixedPattern), (size_t)0);
   return found != std::string::npos;
 }
