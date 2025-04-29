@@ -759,11 +759,7 @@ bool MergeJoin::addToOutputForRightJoin() {
         }
 
         for (auto j = leftStartRow; j < leftEndRow; ++j) {
-          auto isRightJoinForFullOuter = false;
-          if (isFullJoin(joinType_)) {
-            isRightJoinForFullOuter = true;
-          }
-
+          const auto isRightJoinForFullOuter = isFullJoin(joinType_);
           if (!tryAddOutputRow(
                   leftBatch, j, rightBatch, i, isRightJoinForFullOuter)) {
             // If we run out of space in the current output_, we will need to
@@ -1292,14 +1288,14 @@ RowVectorPtr MergeJoin::applyFilter(const RowVectorPtr& output) {
 
     // If all matches for a given left-side row fail the filter, add a row to
     // the output with nulls for the right-side columns.
-    auto onMiss = [&](auto row, bool flag) {
+    const auto onMiss = [&](auto row, bool isRightJoinForFullOuter) {
       if (isAntiJoin(joinType_)) {
         return;
       }
       rawIndices[numPassed++] = row;
 
       if (!isRightJoin(joinType_)) {
-        if (isFullJoin(joinType_) && flag) {
+        if (isFullJoin(joinType_) && isRightJoinForFullOuter) {
           for (auto& projection : leftProjections_) {
             auto target = output->childAt(projection.outputChannel);
             target->setNull(row, true);
