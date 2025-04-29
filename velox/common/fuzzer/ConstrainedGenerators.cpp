@@ -561,4 +561,81 @@ variant CastVarcharInputGenerator::generate() {
   return variant(input);
 }
 
+// URLInputGenerator creates URL input data for URL functions.
+URLInputGenerator::URLInputGenerator(
+    size_t seed,
+    const TypePtr& type,
+    double nullRatio)
+    : AbstractInputGenerator(seed, type, nullptr, nullRatio) {}
+
+URLInputGenerator::~URLInputGenerator() = default;
+
+variant URLInputGenerator::generate() {
+  // Randomly add nulls.
+  if (coinToss(rng_, nullRatio_)) {
+    return variant::null(type_->kind());
+  }
+
+  std::string input;
+  // Generate mailto: URLs
+  if (coinToss(rng_, kMailToRatio)) {
+    std::vector<std::string> mailToParts;
+    if (coinToss(rng_, 0.2)) {
+      mailToParts.push_back(kMailSubject);
+    }
+    if (coinToss(rng_, 0.2)) {
+      mailToParts.push_back(kMailCC);
+    }
+    if (coinToss(rng_, 0.2)) {
+      mailToParts.push_back(kMailBCC);
+    }
+    if (coinToss(rng_, 0.2)) {
+      mailToParts.push_back(kMailBody);
+    }
+
+    input = fmt::format("{}?{}", kMailTo, folly::join("&", mailToParts));
+  }
+  // Generate chrome-extension: URLs
+  else if (coinToss(rng_, kChromeExtensionRatio)) {
+    input = fmt::format(
+        "{}://{}/{}",
+        kChromeExtension,
+        kChromeExtensionPath,
+        kChromeExtensionFile);
+
+    if (coinToss(rng_, 0.2)) {
+      input += fmt::format("?{}", kQuery);
+    }
+    if (coinToss(rng_, 0.2)) {
+      input += fmt::format("#{}", kFragment);
+    }
+  }
+  // Generate "standard" URL
+  else {
+    // Construct valid starter URL.
+    input = fmt::format("{}://{}", kProtocol, kDomain);
+
+    // Randomly add port, query and fragments.
+    if (coinToss(rng_, 0.2)) {
+      input += ":" + kPort;
+    }
+    input += kPath;
+    if (coinToss(rng_, 0.2)) {
+      input += fmt::format("?{}", kQuery);
+    }
+    if (coinToss(rng_, 0.2)) {
+      input += fmt::format("#{}", kFragment);
+    }
+  }
+
+  // Make additional random variations to valid input data to see how these
+  // functions process them.
+  if (coinToss(rng_, 0.2)) {
+    makeRandomStrVariation(
+        input, rng_, RandomStrVariationOptions{0.1, 0.1, 0.1});
+  }
+
+  return variant(input);
+}
+
 } // namespace facebook::velox::fuzzer
