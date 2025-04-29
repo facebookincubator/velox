@@ -65,6 +65,7 @@ add_executable(
   SplitTest.cpp
   StringTest.cpp
   StringToMapTest.cpp
+  UnBase64Test.cpp
   UnscaledValueFunctionTest.cpp
   UuidTest.cpp
   XxHash64Test.cpp)
