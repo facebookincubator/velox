@@ -33,24 +33,46 @@ namespace {
 
 void setKeysAndValuesResult(
     vector_size_t mapSize,
-    vector_size_t baseOffset,
     std::vector<VectorPtr>& args,
     const VectorPtr& keysResult,
     const VectorPtr& valuesResult,
+    const int32_t* offsets,
+    const int32_t* sizes,
     exec::EvalCtx& context,
     const SelectivityVector& rows) {
   exec::LocalDecodedVector decoded(context);
   SelectivityVector targetRows(keysResult->size(), false);
+  std::vector<vector_size_t> targetIdx(rows.size(), 0);
   std::vector<vector_size_t> toSourceRow(keysResult->size());
+
   for (vector_size_t i = 0; i < mapSize; i++) {
     decoded.get()->decode(*args[i * 2], rows);
-    auto offset = baseOffset;
     context.applyToSelectedNoThrow(rows, [&](vector_size_t row) {
       VELOX_USER_CHECK(!decoded->isNullAt(row), "Cannot use null as map key!");
-      targetRows.setValid(offset + i, true);
-      toSourceRow[offset + i] = row;
-      offset += mapSize;
+      auto offset = offsets[row];
+      auto size = sizes[row];
+
+      bool duplicate = false;
+      if (size < mapSize) {
+        // duplicate key exists in this row, check if the current element is
+        // duplicate. If yes, then do not add this element into result, only the
+        // last element should be added. This behavior is similar to spark's
+        // LAST_WIN policy for duplicate map key.
+        for (vector_size_t j = i + 1; j < mapSize; j++) {
+          if (args[i * 2]->equalValueAt(args[j * 2].get(), row, row)) {
+            duplicate = true;
+            break;
+          }
+        }
+      }
+
+      if (size == mapSize || !duplicate) {
+        targetRows.setValid(offset + targetIdx[row], true);
+        toSourceRow[offset + targetIdx[row]] = row;
+        targetIdx[row]++;
+      }
     });
+
     targetRows.updateBounds();
     keysResult->copy(args[i * 2].get(), targetRows, toSourceRow.data());
     valuesResult->copy(args[i * 2 + 1].get(), targetRows, toSourceRow.data());
@@ -100,18 +122,45 @@ class MapFunction : public exec::VectorFunction {
     const auto baseOffset =
         std::max<vector_size_t>(keysResult->size(), valuesResult->size());
 
-    // Setting size and offsets
+    bool throwExceptionOnDuplicateMapKeys =
+        context.execCtx()
+            ->queryCtx()
+            ->queryConfig()
+            .throwExceptionOnDuplicateMapKeys();
+
     vector_size_t offset = baseOffset;
+
+    // Check for duplicate keys and set size & offsets
     rows.applyToSelected([&](vector_size_t row) {
-      rawSizes[row] = mapSize;
+      vector_size_t duplicateCnt = 0;
+      for (vector_size_t i = 0; i < mapSize; i++) {
+        for (vector_size_t j = i + 1; j < mapSize; j++) {
+          if (args[i * 2]->equalValueAt(args[j * 2].get(), row, row)) {
+            if (throwExceptionOnDuplicateMapKeys) {
+              auto duplicateKey = args[i * 2]->toString(row);
+              VELOX_USER_FAIL("Duplicate map key '{}' found.", duplicateKey);
+            }
+            duplicateCnt++;
+          }
+        }
+      }
+
+      rawSizes[row] = mapSize - duplicateCnt;
       rawOffsets[row] = offset;
-      offset += mapSize;
+      offset += mapSize - duplicateCnt;
     });
 
     keysResult->resize(offset);
     valuesResult->resize(offset);
     setKeysAndValuesResult(
-        mapSize, baseOffset, args, keysResult, valuesResult, context, rows);
+        mapSize,
+        args,
+        keysResult,
+        valuesResult,
+        rawOffsets,
+        rawSizes,
+        context,
+        rows);
   }
 
   static std::vector<std::shared_ptr<exec::FunctionSignature>> signatures() {
