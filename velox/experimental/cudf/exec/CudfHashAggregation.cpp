@@ -381,7 +381,7 @@ std::unique_ptr<cudf_velox::CudfHashAggregation::Aggregator> createAggregator(
   } else if (kind.rfind("max", 0) == 0) {
     return std::make_unique<MaxAggregator>(
         step, inputIndex, constant, isGlobal);
-  } else if (kind.rfind("mean", 0) == 0) {
+  } else if (kind.rfind("avg", 0) == 0) {
     return std::make_unique<MeanAggregator>(
         step, inputIndex, constant, isGlobal);
   } else {
