@@ -200,7 +200,7 @@ std::vector<cudf::ast::literal> createLiteralsFromArray(
 } // namespace
 
 using Op = cudf::ast::ast_operator;
-const std::map<std::string, Op> prestoBinaryOps = {
+const std::unordered_map<std::string, Op> prestoBinaryOps = {
     {"plus", Op::ADD},
     {"minus", Op::SUB},
     {"multiply", Op::MUL},
@@ -214,7 +214,7 @@ const std::map<std::string, Op> prestoBinaryOps = {
     {"and", Op::NULL_LOGICAL_AND},
     {"or", Op::NULL_LOGICAL_OR}};
 
-const std::map<std::string, Op> sparkBinaryOps = {
+const std::unordered_map<std::string, Op> sparkBinaryOps = {
     {"add", Op::ADD},
     {"subtract", Op::SUB},
     {"multiply", Op::MUL},
