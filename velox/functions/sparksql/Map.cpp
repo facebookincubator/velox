@@ -44,14 +44,12 @@ void setKeysAndValuesResult(
   SelectivityVector targetRows(keysResult->size(), false);
   std::vector<vector_size_t> targetIdx(rows.size(), 0);
   std::vector<vector_size_t> toSourceRow(keysResult->size());
-
   for (vector_size_t i = 0; i < mapSize; i++) {
     decoded.get()->decode(*args[i * 2], rows);
     context.applyToSelectedNoThrow(rows, [&](vector_size_t row) {
       VELOX_USER_CHECK(!decoded->isNullAt(row), "Cannot use null as map key!");
       auto offset = offsets[row];
       auto size = sizes[row];
-
       bool duplicate = false;
       if (size < mapSize) {
         // duplicate key exists in this row, check if the current element is
@@ -65,14 +63,12 @@ void setKeysAndValuesResult(
           }
         }
       }
-
       if (size == mapSize || !duplicate) {
         targetRows.setValid(offset + targetIdx[row], true);
         toSourceRow[offset + targetIdx[row]] = row;
         targetIdx[row]++;
       }
     });
-
     targetRows.updateBounds();
     keysResult->copy(args[i * 2].get(), targetRows, toSourceRow.data());
     valuesResult->copy(args[i * 2 + 1].get(), targetRows, toSourceRow.data());
@@ -121,14 +117,13 @@ class MapFunction : public exec::VectorFunction {
     auto& valuesResult = mapResult->mapValues();
     const auto baseOffset =
         std::max<vector_size_t>(keysResult->size(), valuesResult->size());
+    vector_size_t offset = baseOffset;
 
     bool throwExceptionOnDuplicateMapKeys =
         context.execCtx()
             ->queryCtx()
             ->queryConfig()
             .throwExceptionOnDuplicateMapKeys();
-
-    vector_size_t offset = baseOffset;
 
     // Check for duplicate keys and set size & offsets
     rows.applyToSelected([&](vector_size_t row) {
@@ -144,7 +139,6 @@ class MapFunction : public exec::VectorFunction {
           }
         }
       }
-
       rawSizes[row] = mapSize - duplicateCnt;
       rawOffsets[row] = offset;
       offset += mapSize - duplicateCnt;
