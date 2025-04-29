@@ -77,6 +77,65 @@ TEST_F(MapTest, boolType) {
   testMap("map(c0, c1)", {inputVector1, inputVector2}, mapVector);
 }
 
+TEST_F(MapTest, duplicateMapKey) {
+  // Input vectors with duplicate keys
+  auto inputVector1 = makeNullableFlatVector<int64_t>({1, 2, 3});
+  auto inputVector2 = makeNullableFlatVector<double>({4.0, 5.0, 6.0});
+  auto inputVector3 = makeNullableFlatVector<int64_t>({10, 20, 30});
+  auto inputVector4 = makeNullableFlatVector<double>({4.1, 5.1, 6.1});
+  auto inputVector5 = makeNullableFlatVector<int64_t>({100, 200, 30});
+  auto inputVector6 = makeNullableFlatVector<double>({4.2, 5.2, 6.2});
+
+  // Deduplicate map keys based on LAST_WIN policy
+  queryCtx_->testingOverrideConfigUnsafe(
+      {{core::QueryConfig::kThrowExceptionOnDuplicateMapKeys, "false"}});
+
+  auto mapVector1 =
+      makeMapVector<int64_t, double>({{{1, 4.0}}, {{2, 5.0}}, {{3, 6.0}}});
+  auto mapVector2 = makeMapVector<int64_t, double>(
+      {{{10, 4.1}, {100, 4.2}}, {{20, 5.1}, {200, 5.2}}, {{30, 6.2}}});
+  auto mapVector3 = makeMapVector<int64_t, double>(
+      {{{1, 4.0}, {10, 4.1}, {100, 4.2}},
+       {{2, 5.0}, {20, 5.1}, {200, 5.2}},
+       {{3, 6.0}, {30, 6.2}}});
+
+  testMap("map(c0, c1)", {inputVector1, inputVector2}, mapVector1);
+
+  testMap(
+      "map(c0, c1, c2, c3)",
+      {inputVector3, inputVector4, inputVector5, inputVector6},
+      mapVector2);
+
+  testMap(
+      "map(c0, c1, c2, c3, c4, c5)",
+      {inputVector1,
+       inputVector2,
+       inputVector3,
+       inputVector4,
+       inputVector5,
+       inputVector6},
+      mapVector3);
+
+  // Throw exception when duplicate keys are found.
+  queryCtx_->testingOverrideConfigUnsafe(
+      {{core::QueryConfig::kThrowExceptionOnDuplicateMapKeys, "true"}});
+
+  testMapFails(
+      "map(c0, c1, c2, c3)",
+      {inputVector3, inputVector4, inputVector5, inputVector6},
+      "Duplicate map key '30' found.");
+
+  testMapFails(
+      "map(c0, c1, c2, c3, c4, c5)",
+      {inputVector1,
+       inputVector2,
+       inputVector3,
+       inputVector4,
+       inputVector5,
+       inputVector6},
+      "Duplicate map key '30' found.");
+}
+
 TEST_F(MapTest, wide) {
   auto inputVector1 = makeNullableFlatVector<int64_t>({1, 2, 3});
   auto inputVector2 = makeNullableFlatVector<double>({4.0, 5.0, 6.0});
@@ -210,6 +269,34 @@ TEST_F(MapTest, complexTypes) {
       {makeArrayVector<int64_t>({{1, 2, 3}, {7, 9}}),
        makeArrayVector<int64_t>({{1, 2}, {4, 6}})},
       arrayMapResult1);
+}
+
+TEST_F(MapTest, complexTypesDuplicateMapKey) {
+  auto arrayKey = makeArrayVectorFromJson<int64_t>({"[1, 2, 3]"});
+  auto arrayValue = makeArrayVectorFromJson<int64_t>({"[1, 3, 5]"});
+
+  auto mapVector = makeMapVector(
+      {
+          0,
+      },
+      arrayKey,
+      arrayValue);
+
+  // Deduplicate map keys based on LAST_WIN policy
+  queryCtx_->testingOverrideConfigUnsafe(
+      {{core::QueryConfig::kThrowExceptionOnDuplicateMapKeys, "false"}});
+  testMap(
+      "map(c0, c1, c2, c3)",
+      {arrayKey, arrayValue, arrayKey, arrayValue},
+      mapVector);
+
+  // Throw exception on duplicate map key
+  queryCtx_->testingOverrideConfigUnsafe(
+      {{core::QueryConfig::kThrowExceptionOnDuplicateMapKeys, "true"}});
+  testMapFails(
+      "map(c0, c1, c2, c3)",
+      {arrayKey, arrayValue, arrayKey, arrayValue},
+      "Duplicate map key '3 elements starting at 0 {1, 2, 3}' found.");
 }
 
 TEST_F(MapTest, resultSize) {
