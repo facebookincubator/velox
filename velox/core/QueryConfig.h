@@ -342,6 +342,9 @@ class QueryConfig {
   static constexpr const char* kSparkLegacyStatisticalAggregate =
       "spark.legacy_statistical_aggregate";
 
+  static constexpr const char* kSparkLegacyFollowThreeValuedLogicInArrayExists =
+      "spark.follow_three_valued_logic_in_array_exists";
+
   /// The number of local parallel table writer operators per task.
   static constexpr const char* kTaskWriterCount = "task_writer_count";
 
@@ -898,6 +901,10 @@ class QueryConfig {
 
   bool sparkLegacyStatisticalAggregate() const {
     return get<bool>(kSparkLegacyStatisticalAggregate, false);
+  }
+
+  bool sparkLegacyFollowThreeValuedLogicInArrayExists() const {
+    return get<bool>(kSparkLegacyFollowThreeValuedLogicInArrayExists, true);
   }
 
   bool exprTrackCpuUsage() const {

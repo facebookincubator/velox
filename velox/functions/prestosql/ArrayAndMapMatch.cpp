@@ -25,7 +25,7 @@ namespace facebook::velox::functions {
 namespace {
 
 // @tparam TContainer Either ArrayVector or MapVector.
-template <typename TContainer, bool initialValue, bool earlyReturn>
+template <typename TContainer, bool initialValue, bool earlyReturn, bool followNull = true>
 class MatchFunction : public exec::VectorFunction {
  protected:
   virtual std::shared_ptr<TContainer> flattenContainer(
@@ -176,6 +176,10 @@ class MatchFunction : public exec::VectorFunction {
     // else if hasError -> error
     // else if hasNull -> null
     // else -> result
+    //
+    // If followNull is false, hasNull will be ignored. For example:
+    // any([1, 2, null], x -> x == 3) is false if followNull disabled.
+    // Which is the default behavior in legacy Spark.
     bool result = initialValue;
     auto hasNull = false;
     std::exception_ptr errorPtr{nullptr};
@@ -200,7 +204,7 @@ class MatchFunction : public exec::VectorFunction {
       flatResult.set(arrayRow, result);
     } else if (errorPtr) {
       context.setError(arrayRow, errorPtr);
-    } else if (hasNull) {
+    } else if (followNull && hasNull) {
       flatResult.setNull(arrayRow, true);
     } else {
       flatResult.set(arrayRow, result);
@@ -208,9 +212,9 @@ class MatchFunction : public exec::VectorFunction {
   }
 };
 
-template <bool initialValue, bool earlyReturn>
+template <bool initialValue, bool earlyReturn, bool followNull = true>
 class ArrayMatchFunction
-    : public MatchFunction<ArrayVector, initialValue, earlyReturn> {
+    : public MatchFunction<ArrayVector, initialValue, earlyReturn, followNull> {
  protected:
   ArrayVectorPtr flattenContainer(
       const SelectivityVector& rows,
@@ -226,7 +230,8 @@ class ArrayMatchFunction
 };
 
 class AllMatchFunction : public ArrayMatchFunction<true, false> {};
-class AnyMatchFunction : public ArrayMatchFunction<false, true> {};
+template <bool followNull>
+class AnyMatchFunction : public ArrayMatchFunction<false, true, followNull> {};
 class NoneMatchFunction : public ArrayMatchFunction<true, true> {};
 
 template <bool initialValue, bool earlyReturn>
@@ -317,11 +322,34 @@ VELOX_DECLARE_VECTOR_FUNCTION_WITH_METADATA(
     exec::VectorFunctionMetadataBuilder().defaultNullBehavior(false).build(),
     std::make_unique<AllMatchFunction>());
 
-VELOX_DECLARE_VECTOR_FUNCTION_WITH_METADATA(
+namespace {
+exec::VectorFunctionFactory anyMatchFactory() {
+  // Any match function which follow three-valued boolean logic. This function
+  // follow null in match results. For example, any([1, 2, null], x -> x == 3)
+  // is null.
+  const auto anyMatch3VL = std::make_shared<AnyMatchFunction<true>>();
+
+  // two-valued boolean logic version.
+  // For example, any([1, 2, null], x -> x == 3) is false.
+  const auto anyMatch2VL = std::make_shared<AnyMatchFunction<false>>();
+
+  return [anyMatch3VL, anyMatch2VL](const std::string&,
+    const std::vector<exec::VectorFunctionArg>&,
+    const core::QueryConfig& config) -> std::shared_ptr<exec::VectorFunction> {
+      if (config.sparkLegacyFollowThreeValuedLogicInArrayExists()) {
+        return anyMatch3VL;
+      } else {
+        return anyMatch2VL;
+      }
+  };
+}
+}
+
+VELOX_DECLARE_STATEFUL_VECTOR_FUNCTION_WITH_METADATA(
     udf_any_match,
     signatures(),
     exec::VectorFunctionMetadataBuilder().defaultNullBehavior(false).build(),
-    std::make_unique<AnyMatchFunction>());
+    anyMatchFactory());
 
 VELOX_DECLARE_VECTOR_FUNCTION_WITH_METADATA(
     udf_none_match,

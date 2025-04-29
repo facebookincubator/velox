@@ -46,6 +46,12 @@ class ArrayAnyMatchTest : public functions::test::LambdaParameterizedBaseTest {
     auto result = evaluateParameterized(expression, (input));
     assertEqualVectors(makeNullableFlatVector<bool>(expected), result);
   }
+
+  void toggleFollowThreeValuedLogical(bool v) {
+    queryCtx_->testingOverrideConfigUnsafe({
+      {core::QueryConfig::kSparkLegacyFollowThreeValuedLogicInArrayExists, v ? "true" : "false"}
+    });
+  }
 };
 
 TEST_P(ArrayAnyMatchTest, basic) {
@@ -227,6 +233,34 @@ TEST_P(ArrayAnyMatchTest, underConditionalWithCapture) {
       input);
 
   assertEqualVectors(makeFlatVector<int64_t>({2, 1}), result);
+}
+
+TEST_P(ArrayAnyMatchTest, followThreeValuedLogic) {
+  std::vector<std::vector<std::optional<int32_t>>> ints{
+      {std::nullopt, 2, 0},
+      {-1, 3},
+      {std::nullopt, -2, -3},
+      {},
+      {0, std::nullopt},
+  };
+
+  toggleFollowThreeValuedLogical(false);
+  testAnyMatchExpr({
+      true,
+      true,
+      false,
+      false,
+      false,
+  }, "x > 1", ints);
+
+  toggleFollowThreeValuedLogical(true);
+  testAnyMatchExpr({
+      true,
+      true,
+      std::nullopt,
+      false,
+      std::nullopt,
+  }, "x > 1", ints);
 }
 
 VELOX_INSTANTIATE_TEST_SUITE_P(
