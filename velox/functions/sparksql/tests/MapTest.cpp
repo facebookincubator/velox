@@ -79,7 +79,7 @@ TEST_F(MapTest, boolType) {
 
 TEST_F(MapTest, duplicateMapKey) {
   // Input vectors with duplicate keys
-  auto inputVector1 = makeNullableFlatVector<int64_t>({1, 2, 3});
+  auto inputVector1 = makeNullableFlatVector<int64_t>({1, 20, 3});
   auto inputVector2 = makeNullableFlatVector<double>({4.0, 5.0, 6.0});
   auto inputVector3 = makeNullableFlatVector<int64_t>({10, 20, 30});
   auto inputVector4 = makeNullableFlatVector<double>({4.1, 5.1, 6.1});
@@ -91,12 +91,12 @@ TEST_F(MapTest, duplicateMapKey) {
       {{core::QueryConfig::kThrowExceptionOnDuplicateMapKeys, "false"}});
 
   auto mapVector1 =
-      makeMapVector<int64_t, double>({{{1, 4.0}}, {{2, 5.0}}, {{3, 6.0}}});
+      makeMapVector<int64_t, double>({{{1, 4.0}}, {{20, 5.0}}, {{3, 6.0}}});
   auto mapVector2 = makeMapVector<int64_t, double>(
       {{{10, 4.1}, {100, 4.2}}, {{20, 5.1}, {200, 5.2}}, {{30, 6.2}}});
   auto mapVector3 = makeMapVector<int64_t, double>(
       {{{1, 4.0}, {10, 4.1}, {100, 4.2}},
-       {{2, 5.0}, {20, 5.1}, {200, 5.2}},
+       {{20, 5.1}, {200, 5.2}},
        {{3, 6.0}, {30, 6.2}}});
 
   testMap("map(c0, c1)", {inputVector1, inputVector2}, mapVector1);
@@ -133,7 +133,7 @@ TEST_F(MapTest, duplicateMapKey) {
        inputVector4,
        inputVector5,
        inputVector6},
-      "Duplicate map key '30' found.");
+      "Duplicate map key '20' found.");
 }
 
 TEST_F(MapTest, wide) {
@@ -272,15 +272,18 @@ TEST_F(MapTest, complexTypes) {
 }
 
 TEST_F(MapTest, complexTypesDuplicateMapKey) {
+  auto makeSingleMapVector = [&](const VectorPtr& keyVector,
+                                 const VectorPtr& valueVector) {
+    return makeMapVector(
+        {
+            0,
+        },
+        keyVector,
+        valueVector);
+  };
   auto arrayKey = makeArrayVectorFromJson<int64_t>({"[1, 2, 3]"});
   auto arrayValue = makeArrayVectorFromJson<int64_t>({"[1, 3, 5]"});
-
-  auto mapVector = makeMapVector(
-      {
-          0,
-      },
-      arrayKey,
-      arrayValue);
+  auto nullArrayValue = makeArrayVectorFromJson<int64_t>({"null"});
 
   // Deduplicate map keys based on LAST_WIN policy
   queryCtx_->testingOverrideConfigUnsafe(
@@ -288,7 +291,12 @@ TEST_F(MapTest, complexTypesDuplicateMapKey) {
   testMap(
       "map(c0, c1, c2, c3)",
       {arrayKey, arrayValue, arrayKey, arrayValue},
-      mapVector);
+      makeSingleMapVector(arrayKey, arrayValue));
+
+  testMap(
+      "map(c0, c1, c2, c3)",
+      {arrayKey, nullArrayValue, arrayKey, nullArrayValue},
+      makeSingleMapVector(arrayKey, nullArrayValue));
 
   // Throw exception on duplicate map key
   queryCtx_->testingOverrideConfigUnsafe(
@@ -297,6 +305,116 @@ TEST_F(MapTest, complexTypesDuplicateMapKey) {
       "map(c0, c1, c2, c3)",
       {arrayKey, arrayValue, arrayKey, arrayValue},
       "Duplicate map key '3 elements starting at 0 {1, 2, 3}' found.");
+}
+
+TEST_F(MapTest, complexTypesWithNestedNullsDuplicateMapKey) {
+  // Create array keys with nulls
+  auto arrayKeysWithNull1 = makeNullableArrayVector<int64_t>(
+      {{1, std::nullopt, 3}, {4, 5, std::nullopt}, {7, 8, 9}});
+  auto valuesForKey1 = makeArrayVector<std::string>(
+      {{"a", "b", "c"}, {"d", "e", "f"}, {"g", "h", "i"}});
+
+  // Create duplicate keys with the same null pattern
+  auto arrayKeysWithNull2 = makeNullableArrayVector<int64_t>(
+      {{1, std::nullopt, 3}, {10, 11, 12}, {13, 14, 15}});
+  auto valuesForKey2 = makeArrayVector<std::string>(
+      {{"x", "y", "z"}, {"p", "q", "r"}, {"s", "t", "u"}});
+
+  // Create complex type with map containing null values
+  auto mapKey1 = makeMapVector<int64_t, int64_t>(
+      {{{1, 10}, {2, std::nullopt}},
+       {{3, 30}, {4, std::nullopt}},
+       {{5, 50}, {6, 60}}});
+  auto valueForMapKey1 = makeFlatVector<int64_t>({100, 200, 300});
+
+  // Create duplicate complex map key with the same null pattern
+  auto mapKey2 = makeMapVector<int64_t, int64_t>(
+      {{{1, 10}, {2, std::nullopt}},
+       {{30, 300}, {40, 400}},
+       {{50, 500}, {60, 600}}});
+  auto valueForMapKey2 = makeFlatVector<int64_t>({1000, 2000, 3000});
+
+  // Deduplicate map keys based on LAST_WIN policy
+  queryCtx_->testingOverrideConfigUnsafe(
+      {{core::QueryConfig::kThrowExceptionOnDuplicateMapKeys, "false"}});
+
+  // Test case 1: Array keys with nulls
+  // Expected: [1, null, 3] appears twice, last value ["x", "y", "z"] wins
+  auto expectedArrayMap = makeMapVector(
+      {0, 1, 3},
+      makeNullableArrayVector<int64_t>(
+          {{1, std::nullopt, 3},
+           {4, 5, std::nullopt},
+           {10, 11, 12},
+           {7, 8, 9},
+           {13, 14, 15}}),
+      makeArrayVector<std::string>(
+          {{"x", "y", "z"},
+           {"d", "e", "f"},
+           {"p", "q", "r"},
+           {"g", "h", "i"},
+           {"s", "t", "u"}}));
+
+  testMap(
+      "map(c0, c1, c2, c3)",
+      {arrayKeysWithNull1, valuesForKey1, arrayKeysWithNull2, valuesForKey2},
+      expectedArrayMap);
+
+  // Test case 2: Map keys with nulls
+  // Expected: {{1, 10}, {2, null}} appears twice, last value 1000 wins
+  auto expectedMapOfMap = makeMapVector(
+      {0, 1, 3},
+      makeMapVector<int64_t, int64_t>(
+          {{{1, 10}, {2, std::nullopt}},
+           {{3, 30}, {4, std::nullopt}},
+           {{30, 300}, {40, 400}},
+           {{5, 50}, {6, 60}},
+           {{50, 500}, {60, 600}}}),
+      makeFlatVector<int64_t>({1000, 200, 2000, 300, 3000}));
+
+  testMap(
+      "map(c0, c1, c2, c3)",
+      {mapKey1, valueForMapKey1, mapKey2, valueForMapKey2},
+      expectedMapOfMap);
+
+  // Test case 3: Test with deeply nested structures containing nulls
+  auto rowKey1 = makeRowVector(
+      {makeNullableArrayVector<int64_t>({{1, std::nullopt, 3}}),
+       makeMapVector<int64_t, int64_t>({{{1, 10}, {2, std::nullopt}}})});
+  auto valueForRow1 = makeFlatVector<std::string>({"first"});
+
+  // Duplicate row key with same null pattern
+  auto rowKey2 = makeRowVector(
+      {makeNullableArrayVector<int64_t>({{1, std::nullopt, 3}}),
+       makeMapVector<int64_t, int64_t>({{{1, 10}, {2, std::nullopt}}})});
+  auto valueForRow2 = makeFlatVector<std::string>({"last"});
+
+  // Expected: Complex row with nulls appears twice, last value "last" wins
+  auto expectedRowMap = makeMapVector(
+      {{0}},
+      makeRowVector(
+          {makeNullableArrayVector<int64_t>({{1, std::nullopt, 3}}),
+           makeMapVector<int64_t, int64_t>({{{1, 10}, {2, std::nullopt}}})}),
+      makeFlatVector<std::string>({"last"}));
+
+  testMap(
+      "map(c0, c1, c2, c3)",
+      {rowKey1, valueForRow1, rowKey2, valueForRow2},
+      expectedRowMap);
+
+  // Test case 4: Test with exception throwing enabled
+  queryCtx_->testingOverrideConfigUnsafe(
+      {{core::QueryConfig::kThrowExceptionOnDuplicateMapKeys, "true"}});
+
+  testMapFails(
+      "map(c0, c1, c2, c3)",
+      {arrayKeysWithNull1, valuesForKey1, arrayKeysWithNull2, valuesForKey2},
+      "Duplicate map key '3 elements starting at 0 {1, null, 3}' found.");
+
+  testMapFails(
+      "map(c0, c1, c2, c3)",
+      {mapKey1, valueForMapKey1, mapKey2, valueForMapKey2},
+      "Duplicate map key '2 elements starting at 0 {1 => 10, 2 => null}' found.");
 }
 
 TEST_F(MapTest, resultSize) {
