@@ -190,15 +190,93 @@ class OperatorUtilsTest : public OperatorTestBase {
 };
 
 TEST_F(OperatorUtilsTest, processFilterResults) {
-  auto filteredResults = makeArrayVector<int64_t>({{1}});
-  SelectivityVector filterRows(1);
-  filterRows.setValid(0, false);
-  filterRows.updateBounds();
   exec::FilterEvalCtx filterEvalCtx;
-  EXPECT_EQ(
-      exec::processFilterResults(
-          filteredResults, filterRows, filterEvalCtx, pool_.get()),
-      0);
+  VectorPtr filteredResults;
+
+  // Run case is when filteredResults is a const vector with all rows
+  // selected. We should not have selected indices buffer.
+  {
+    filteredResults = makeConstant(true, 10);
+    SelectivityVector filterRows(10);
+    filterRows.setAll();
+    filterRows.updateBounds();
+    EXPECT_EQ(
+        exec::processFilterResults(
+            filteredResults, filterRows, filterEvalCtx, pool_.get()),
+        10);
+    EXPECT_EQ(nullptr, filterEvalCtx.selectedIndices);
+  }
+
+  // Run case where the size of filteredResults is equal to the number of valid
+  // rows in filterRows. In this case, the selectedIndices should not be null.
+  {
+    // Explicitly set selectedIndices to be nullptr
+    filterEvalCtx.selectedIndices = nullptr;
+    filteredResults = makeConstant(true, 5);
+    SelectivityVector filterRows(10, false);
+    for (auto i = 0; i < 5; ++i) {
+      filterRows.setValid(i, true);
+    }
+    filterRows.updateBounds();
+    EXPECT_EQ(
+        exec::processFilterResults(
+            filteredResults, filterRows, filterEvalCtx, pool_.get()),
+        5);
+    const auto* rawIndices = filterEvalCtx.selectedIndices->as<vector_size_t>();
+    EXPECT_EQ(rawIndices[0], 0);
+    EXPECT_EQ(rawIndices[1], 1);
+    EXPECT_EQ(rawIndices[2], 2);
+    EXPECT_EQ(rawIndices[3], 3);
+    EXPECT_EQ(rawIndices[4], 4);
+  }
+
+  // Run case with 50 rows with the last 10 of them valid to get large
+  // indices in the selected indices buffer.
+  {
+    SelectivityVector filterRows(50);
+    filteredResults = makeFlatVector<bool>(50, [&](vector_size_t row) {
+      filterRows.setValid(row, row >= 40);
+      return true;
+    });
+    filterRows.updateBounds();
+    EXPECT_EQ(
+        exec::processFilterResults(
+            filteredResults, filterRows, filterEvalCtx, pool_.get()),
+        10);
+    const auto* rawIndices = filterEvalCtx.selectedIndices->as<vector_size_t>();
+    EXPECT_EQ(rawIndices[0], 40);
+    EXPECT_EQ(rawIndices[9], 49);
+  }
+
+  // Run case is when filteredResults is a const vector with all rows
+  // but one selected. We check that we get back correct indices.
+  {
+    filteredResults = makeConstant(true, 10);
+    SelectivityVector filterRows(10);
+    filterRows.setAll();
+    filterRows.setValid(4, false);
+    filterRows.updateBounds();
+    EXPECT_EQ(
+        exec::processFilterResults(
+            filteredResults, filterRows, filterEvalCtx, pool_.get()),
+        9);
+    const auto* rawIndices = filterEvalCtx.selectedIndices->as<vector_size_t>();
+    EXPECT_EQ(rawIndices[0], 0);
+    EXPECT_EQ(rawIndices[3], 3);
+    EXPECT_EQ(rawIndices[4], 5);
+    EXPECT_EQ(rawIndices[8], 9);
+  }
+
+  {
+    filteredResults = makeArrayVector<int64_t>({{1}});
+    SelectivityVector filterRows(1);
+    filterRows.setValid(0, false);
+    filterRows.updateBounds();
+    EXPECT_EQ(
+        exec::processFilterResults(
+            filteredResults, filterRows, filterEvalCtx, pool_.get()),
+        0);
+  }
 }
 
 TEST_F(OperatorUtilsTest, wrapChildConstant) {

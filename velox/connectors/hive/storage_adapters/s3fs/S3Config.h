@@ -54,6 +54,9 @@ class S3Config {
   /// S3FileSystem default identity.
   static constexpr const char* kDefaultS3Identity = "s3-default-identity";
 
+  /// Log location of AWS C++ SDK.
+  static constexpr const char* kS3LogLocation = "hive.s3.log-location";
+
   /// Keys to identify the config.
   enum class Keys {
     kBegin,
@@ -72,6 +75,7 @@ class S3Config {
     kMaxAttempts,
     kRetryMode,
     kUseProxyFromEnv,
+    kCredentialsProvider,
     kEnd
   };
 
@@ -107,7 +111,10 @@ class S3Config {
             {Keys::kMaxAttempts, std::make_pair("max-attempts", std::nullopt)},
             {Keys::kRetryMode, std::make_pair("retry-mode", std::nullopt)},
             {Keys::kUseProxyFromEnv,
-             std::make_pair("use-proxy-from-env", "false")}};
+             std::make_pair("use-proxy-from-env", "false")},
+            {Keys::kCredentialsProvider,
+             std::make_pair("aws-credentials-provider", std::nullopt)},
+        };
     return config;
   }
 
@@ -228,9 +235,18 @@ class S3Config {
     return payloadSigningPolicy_;
   }
 
+  std::string bucket() const {
+    return bucket_;
+  }
+
+  std::optional<std::string> credentialsProvider() const {
+    return config_.find(Keys::kCredentialsProvider)->second;
+  }
+
  private:
   std::unordered_map<Keys, std::optional<std::string>> config_;
   std::string payloadSigningPolicy_;
+  std::string bucket_;
 };
 
 } // namespace facebook::velox::filesystems

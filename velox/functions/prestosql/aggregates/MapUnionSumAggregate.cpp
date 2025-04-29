@@ -290,6 +290,11 @@ struct AccumulatorTypeTraits<ComplexType, V> {
   using AccumulatorType = ComplexTypeAccumulator<V>;
 };
 
+template <typename S>
+struct AccumulatorTypeTraits<UnknownValue, S> {
+  using AccumulatorType = Accumulator<int32_t, S>;
+};
+
 // Defines common aggregator.
 template <typename K, typename S>
 class MapUnionSumAggregate : public exec::Aggregate {
@@ -487,20 +492,14 @@ void registerMapUnionSumAggregate(
     bool withCompanionFunctions,
     bool overwrite) {
   const std::vector<std::string> valueTypes = {
-      "tinyint",
-      "smallint",
-      "integer",
-      "bigint",
-      "double",
-      "real",
-  };
+      "tinyint", "smallint", "integer", "bigint", "double", "real"};
 
   // Add all allowed signatures.
   std::vector<std::shared_ptr<exec::AggregateFunctionSignature>> signatures;
   for (auto valueType : valueTypes) {
     signatures.push_back(
         exec::AggregateFunctionSignatureBuilder()
-            .comparableTypeVariable("K")
+            .typeVariable("K")
             .returnType(fmt::format("map(K,{})", valueType))
             .intermediateType(fmt::format("map(K,{})", valueType))
             .argumentType(fmt::format("map(K,{})", valueType))
@@ -555,7 +554,14 @@ void registerMapUnionSumAggregate(
           case TypeKind::ROW:
             return createMapUnionSumAggregate<ComplexType>(
                 valueTypeKind, resultType);
+          case TypeKind::UNKNOWN:
+            return createMapUnionSumAggregate<UnknownValue>(
+                valueTypeKind, resultType);
           default:
+            if (mapType.keyType()->isDecimal()) {
+              return createMapUnionSumAggregate<int128_t>(
+                  valueTypeKind, resultType);
+            }
             VELOX_UNREACHABLE(
                 "Unexpected key type {}", mapTypeKindToName(keyTypeKind));
         }

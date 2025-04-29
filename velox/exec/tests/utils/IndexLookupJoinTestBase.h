@@ -16,6 +16,7 @@
 
 #include "velox/connectors/Connector.h"
 #include "velox/core/PlanNode.h"
+#include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/HiveConnectorTestBase.h"
 #include "velox/parse/PlanNodeIdGenerator.h"
 
@@ -33,15 +34,19 @@ class IndexLookupJoinTestBase
     std::vector<int64_t> maxKeys;
   };
 
-  facebook::velox::RowTypePtr concat(
+  static facebook::velox::RowTypePtr concat(
       const facebook::velox::RowTypePtr& a,
       const facebook::velox::RowTypePtr& b);
+
+  bool isFilter(const std::string& conditionSql) const;
 
   int getNumRows(const std::vector<int>& cardinalities);
 
   // Generate probe input for lookup join.
   // @param numBatches: number of probe batches.
   // @param batchSize: number of rows in each probe batch.
+  // @param numDuplicateProbeRows: number of duplicates for each probe row so
+  // the actual batch size is batchSize * numDuplicatesProbeRows.
   // @param tableData: contains the sequence table data including key vectors
   // and min/max key values.
   // @param probeJoinKeys: the prefix key colums used for equality joins.
@@ -56,6 +61,7 @@ class IndexLookupJoinTestBase
   std::vector<facebook::velox::RowVectorPtr> generateProbeInput(
       size_t numBatches,
       size_t batchSize,
+      size_t numDuplicateProbeRows,
       SequenceTableData& tableData,
       std::shared_ptr<facebook::velox::memory::MemoryPool>& pool,
       const std::vector<std::string>& probeJoinKeys,
@@ -125,7 +131,13 @@ class IndexLookupJoinTestBase
   facebook::velox::RowTypePtr makeScanOutputType(
       std::vector<std::string> outputNames);
 
+  std::shared_ptr<facebook::velox::exec::Task> runLookupQuery(
+      const facebook::velox::core::PlanNodePtr& plan,
+      int numPrefetchBatches,
+      const std::string& duckDbVefifySql);
+
   facebook::velox::RowTypePtr keyType_;
+  std::optional<facebook::velox::RowTypePtr> partitionType_;
   facebook::velox::RowTypePtr valueType_;
   facebook::velox::RowTypePtr tableType_;
   facebook::velox::RowTypePtr probeType_;

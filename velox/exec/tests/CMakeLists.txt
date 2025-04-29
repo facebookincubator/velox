@@ -70,6 +70,7 @@ add_executable(
   PlanNodeToStringTest.cpp
   PlanNodeToSummaryStringTest.cpp
   PrefixSortTest.cpp
+  PrestoQueryRunnerTimestampWithTimeZoneTransformTest.cpp
   PrintPlanWithStatsTest.cpp
   ProbeOperatorStateTest.cpp
   TraceUtilTest.cpp
@@ -214,12 +215,6 @@ target_link_libraries(
   velox_exec_test_lib
   velox_tpch_connector
   velox_memory)
-
-# Join Fuzzer.
-add_executable(velox_join_fuzzer_test JoinFuzzerTest.cpp)
-
-target_link_libraries(
-  velox_join_fuzzer_test velox_join_fuzzer GTest::gtest GTest::gtest_main)
 
 # Arbitration Fuzzer.
 add_executable(velox_memory_arbitration_fuzzer_test

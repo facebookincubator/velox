@@ -80,8 +80,28 @@ class HashProbe : public Operator {
     return input_ != nullptr;
   }
 
+  const std::vector<IdentityProjection>& tableOutputProjections() const {
+    return tableOutputProjections_;
+  }
+
+  ExprSet* filterExprSet() const {
+    return filter_.get();
+  }
+
+  /// Returns the type for the hash table row. Build side keys first,
+  /// then dependent build side columns.
+
+  static RowTypePtr makeTableType(
+      const RowType* type,
+      const std::vector<std::shared_ptr<const core::FieldAccessTypedExpr>>&
+          keys);
+
   ProbeOperatorState testingState() const {
     return state_;
+  }
+
+  const std::shared_ptr<HashJoinBridge>& joinBridge() const {
+    return joinBridge_;
   }
 
  private:
@@ -685,6 +705,11 @@ class HashProbe : public Operator {
   // previously spilled data. It is used to read the probe inputs from the
   // corresponding spilled data on disk.
   std::unique_ptr<UnorderedStreamReader<BatchStream>> spillInputReader_;
+
+  // The spill partition id for the currently restoring input partition,
+  // corresponding to 'spillInputReader_'. Not set if hash probe hasn't spilled
+  // yet.
+  std::optional<SpillPartitionId> restoringPartitionId_;
 
   // Sets to true after read all the probe inputs from 'spillInputReader_'.
   bool noMoreSpillInput_{false};

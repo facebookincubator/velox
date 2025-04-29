@@ -1044,6 +1044,11 @@ class Task : public std::enable_shared_from_this<Task> {
 
   std::shared_ptr<Driver> getDriver(uint32_t driverId) const;
 
+  // Invokes to record the start/end time of task output batch processing time
+  // under serial execution mode.
+  void recordBatchStartTime();
+  void recordBatchEndTime();
+
   // Universally unique identifier of the task. Used to identify the task when
   // calling TaskListener.
   const std::string uuid_;
@@ -1162,6 +1167,10 @@ class Task : public std::enable_shared_from_this<Task> {
     // Promises to fulfill when the driver is unblocked.
     std::vector<std::unique_ptr<ContinuePromise>> promises_;
   };
+
+  // Tracks the task next batch processing start time under serialized execution
+  // mode.
+  std::optional<uint64_t> batchStartTimeMs_{std::nullopt};
 
   // Tracks the driver blocking state under serialized execution mode.
   std::vector<std::unique_ptr<DriverBlockingState>> driverBlockingStates_;
@@ -1317,7 +1326,10 @@ class TaskListener {
       TaskState state,
       std::exception_ptr error,
       const TaskStats& stats,
-      const core::PlanFragment& /*fragment*/) {
+      const core::PlanFragment& /*fragment*/,
+      const std::
+          unordered_map<core::PlanNodeId, std::shared_ptr<ExchangeClient>>&
+      /*exchangeClientMap*/) {
     onTaskCompletion(taskUuid, taskId, state, error, stats);
   }
 };

@@ -13,6 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+#include "velox/functions/lib/ArrayRemoveNullFunction.h"
 #include "velox/functions/lib/ArrayShuffle.h"
 #include "velox/functions/lib/RegistrationHelpers.h"
 #include "velox/functions/lib/Repeat.h"
@@ -23,6 +24,7 @@
 #include "velox/functions/sparksql/ArrayFlattenFunction.h"
 #include "velox/functions/sparksql/ArrayInsert.h"
 #include "velox/functions/sparksql/ArrayMinMaxFunction.h"
+#include "velox/functions/sparksql/ArrayPrepend.h"
 #include "velox/functions/sparksql/ArraySort.h"
 
 namespace facebook::velox::functions {
@@ -103,9 +105,11 @@ inline void registerArrayMinMaxFunctions(const std::string& prefix) {
   registerArrayMinMaxFunctions<float>(prefix);
   registerArrayMinMaxFunctions<double>(prefix);
   registerArrayMinMaxFunctions<bool>(prefix);
+  registerArrayMinMaxFunctions<Varbinary>(prefix);
   registerArrayMinMaxFunctions<Varchar>(prefix);
   registerArrayMinMaxFunctions<Timestamp>(prefix);
   registerArrayMinMaxFunctions<Date>(prefix);
+  registerArrayMinMaxFunctions<Orderable<T1>>(prefix);
 }
 
 template <typename T>
@@ -135,6 +139,28 @@ inline void registerArrayRemoveFunctions(const std::string& prefix) {
 }
 
 template <typename T>
+inline void registerArrayPrependFunctions(const std::string& prefix) {
+  registerFunction<ArrayPrependFunction, Array<T>, Array<T>, T>(
+      {prefix + "array_prepend"});
+}
+
+inline void registerArrayPrependFunctions(const std::string& prefix) {
+  registerArrayPrependFunctions<int8_t>(prefix);
+  registerArrayPrependFunctions<int16_t>(prefix);
+  registerArrayPrependFunctions<int32_t>(prefix);
+  registerArrayPrependFunctions<int64_t>(prefix);
+  registerArrayPrependFunctions<int128_t>(prefix);
+  registerArrayPrependFunctions<float>(prefix);
+  registerArrayPrependFunctions<double>(prefix);
+  registerArrayPrependFunctions<bool>(prefix);
+  registerArrayPrependFunctions<Timestamp>(prefix);
+  registerArrayPrependFunctions<Date>(prefix);
+  registerArrayPrependFunctions<Varbinary>(prefix);
+  registerArrayPrependFunctions<Varchar>(prefix);
+  registerArrayPrependFunctions<Generic<T1>>(prefix);
+}
+
+template <typename T>
 inline void registerArrayUnionFunction(const std::string& prefix) {
   registerFunction<ArrayUnionFunction, Array<T>, Array<T>, Array<T>>(
       {prefix + "array_union"});
@@ -156,11 +182,37 @@ inline void registerArrayUnionFunctions(const std::string& prefix) {
   registerArrayUnionFunction<Generic<T1>>(prefix);
 }
 
+template <typename T>
+inline void registerArrayCompactFunction(const std::string& prefix) {
+  registerFunction<ArrayRemoveNullFunction, Array<T>, Array<T>>(
+      {prefix + "array_compact"});
+}
+
+inline void registerArrayCompactFunctions(const std::string& prefix) {
+  registerArrayCompactFunction<int8_t>(prefix);
+  registerArrayCompactFunction<int16_t>(prefix);
+  registerArrayCompactFunction<int32_t>(prefix);
+  registerArrayCompactFunction<int64_t>(prefix);
+  registerArrayCompactFunction<int128_t>(prefix);
+  registerArrayCompactFunction<float>(prefix);
+  registerArrayCompactFunction<double>(prefix);
+  registerArrayCompactFunction<bool>(prefix);
+  registerArrayCompactFunction<Timestamp>(prefix);
+  registerArrayCompactFunction<Date>(prefix);
+  registerArrayCompactFunction<Varbinary>(prefix);
+  registerArrayCompactFunction<Generic<T1>>(prefix);
+  registerFunction<
+      ArrayRemoveNullFunctionString,
+      Array<Varchar>,
+      Array<Varchar>>({prefix + "array_compact"});
+}
+
 void registerArrayFunctions(const std::string& prefix) {
   registerArrayConcatFunctions(prefix);
   registerArrayJoinFunctions(prefix);
   registerArrayMinMaxFunctions(prefix);
   registerArrayRemoveFunctions(prefix);
+  registerArrayPrependFunctions(prefix);
   registerSparkArrayFunctions(prefix);
   // Register array sort functions.
   exec::registerStatefulVectorFunction(
@@ -196,6 +248,7 @@ void registerArrayFunctions(const std::string& prefix) {
       Array<Generic<T1>>,
       Generic<T1>>({prefix + "array_append"});
   registerArrayUnionFunctions(prefix);
+  registerArrayCompactFunctions(prefix);
 }
 
 } // namespace sparksql

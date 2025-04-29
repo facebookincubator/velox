@@ -30,10 +30,10 @@ namespace {
 
 // Batch size used when iterating the row container.
 constexpr int kBatchSize = 1024;
+} // namespace
 
-// Returns the type for the hash table row. Build side keys first,
-// then dependent build side columns.
-RowTypePtr makeTableType(
+// static
+RowTypePtr HashProbe::makeTableType(
     const RowType* type,
     const std::vector<std::shared_ptr<const core::FieldAccessTypedExpr>>&
         keys) {
@@ -57,6 +57,7 @@ RowTypePtr makeTableType(
   return ROW(std::move(names), std::move(types));
 }
 
+namespace {
 // Copy values from 'rows' of 'table' according to 'projections' in
 // 'result'. Reuses 'result' children where possible.
 void extractColumns(
@@ -248,14 +249,16 @@ void HashProbe::maybeSetupInputSpiller(
     return;
   }
 
+  const auto bitOffset = partitionBitOffset(
+      *spillInputPartitionIds_.begin(),
+      spillConfig()->startPartitionBit,
+      spillConfig()->numPartitionBits);
   // If 'spillInputPartitionIds_' is not empty, then we set up a spiller to
   // spill the incoming probe inputs.
   inputSpiller_ = std::make_unique<NoRowContainerSpiller>(
       probeType_,
-      HashBitRange(
-          spillInputPartitionIds_.begin()->partitionBitOffset(),
-          spillInputPartitionIds_.begin()->partitionBitOffset() +
-              spillConfig()->numPartitionBits),
+      restoringPartitionId_,
+      HashBitRange(bitOffset, bitOffset + spillConfig()->numPartitionBits),
       spillConfig(),
       &spillStats_);
   // Set the spill partitions to the corresponding ones at the build side. The
@@ -289,6 +292,7 @@ void HashProbe::maybeSetupSpillInputReader(
   VELOX_CHECK(iter != inputSpillPartitionSet_.end());
   auto partition = std::move(iter->second);
   VELOX_CHECK_EQ(partition->id(), restoredPartitionId.value());
+  restoringPartitionId_ = restoredPartitionId;
   spillInputReader_ = partition->createUnorderedReader(
       spillConfig_->readBufferSize, pool(), &spillStats_);
   inputSpillPartitionSet_.erase(iter);
@@ -472,6 +476,7 @@ void HashProbe::prepareForSpillRestore() {
   table_.reset();
   inputSpiller_.reset();
   spillInputReader_.reset();
+  restoringPartitionId_.reset();
   spillInputPartitionIds_.clear();
   spillOutputReader_.reset();
   lastProbeIterator_.reset();
@@ -1843,7 +1848,12 @@ void HashProbe::reclaim(
     // Only spill hash table if any hash probe operators still has input probe
     // data, otherwise we skip this step.
     spillPartitionSet = spillHashJoinTable(
-        table_, tableSpillHashBits_, joinNode_, spillConfig(), &spillStats_);
+        table_,
+        restoringPartitionId_,
+        tableSpillHashBits_,
+        joinNode_,
+        spillConfig(),
+        &spillStats_);
     VELOX_CHECK(!spillPartitionSet.empty());
   }
   const auto spillPartitionIdSet = toSpillPartitionIdSet(spillPartitionSet);
@@ -1924,7 +1934,7 @@ void HashProbe::spillOutput() {
   }
   // We spill all the outputs produced from 'input_' into a single partition.
   auto outputSpiller = std::make_unique<NoRowContainerSpiller>(
-      outputType_, HashBitRange{}, spillConfig(), &spillStats_);
+      outputType_, std::nullopt, HashBitRange{}, spillConfig(), &spillStats_);
   outputSpiller->setPartitionsSpilled({0});
 
   RowVectorPtr output{nullptr};
@@ -1979,8 +1989,11 @@ void HashProbe::checkMaxSpillLevel(
   const auto* config = spillConfig();
   uint8_t startPartitionBit = config->startPartitionBit;
   if (restoredPartitionId.has_value()) {
-    startPartitionBit =
-        restoredPartitionId->partitionBitOffset() + config->numPartitionBits;
+    startPartitionBit = partitionBitOffset(
+                            restoredPartitionId.value(),
+                            config->startPartitionBit,
+                            config->numPartitionBits) +
+        config->numPartitionBits;
     // Disable spilling if exceeding the max spill level and the query might
     // run out of memory if the restored partition still can't fit in memory.
     if (config->exceedSpillLevelLimit(startPartitionBit)) {
@@ -2006,6 +2019,7 @@ void HashProbe::close() {
   inputSpiller_.reset();
   table_.reset();
   spillInputReader_.reset();
+  restoringPartitionId_.reset();
   spillOutputPartitionSet_.clear();
   spillOutputReader_.reset();
   clearBuffers();

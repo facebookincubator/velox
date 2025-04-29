@@ -94,6 +94,7 @@ namespace {
 // spilled partitions and stats.
 std::unique_ptr<HashBuildSpiller> createSpiller(
     RowContainer* subTableRows,
+    std::optional<SpillPartitionId> parentId,
     core::JoinType joinType,
     const RowTypePtr& tableType,
     const HashBitRange& hashBitRange,
@@ -101,6 +102,7 @@ std::unique_ptr<HashBuildSpiller> createSpiller(
     folly::Synchronized<common::SpillStats>* stats) {
   return std::make_unique<HashBuildSpiller>(
       joinType,
+      parentId,
       subTableRows,
       hashJoinTableSpillType(tableType, joinType),
       hashBitRange,
@@ -161,6 +163,7 @@ std::vector<std::unique_ptr<HashJoinTableSpillResult>> spillHashJoinTable(
 
 SpillPartitionSet spillHashJoinTable(
     std::shared_ptr<BaseHashTable> table,
+    std::optional<SpillPartitionId> parentId,
     const HashBitRange& hashBitRange,
     const std::shared_ptr<const core::HashJoinNode>& joinNode,
     const common::SpillConfig* spillConfig,
@@ -182,6 +185,7 @@ SpillPartitionSet spillHashJoinTable(
     }
     spillersHolder.push_back(createSpiller(
         rowContainer,
+        parentId,
         joinNode->joinType(),
         tableType,
         hashBitRange,
@@ -236,6 +240,23 @@ void HashJoinBridge::setHashTable(
   notify(std::move(promises));
 }
 
+void HashJoinBridge::setHashTable(
+    std::shared_ptr<wave::HashTableHolder> table,
+    bool hasNullKeys) {
+  VELOX_CHECK_NOT_NULL(table, "setHashTable called with null table");
+
+  std::vector<ContinuePromise> promises;
+  {
+    std::lock_guard<std::mutex> l(mutex_);
+    VELOX_CHECK(started_);
+    VELOX_CHECK(!buildResult_.has_value());
+    VELOX_CHECK(restoringSpillShards_.empty());
+    buildResult_ = HashBuildResult(std::move(table), hasNullKeys);
+    promises = std::move(promises_);
+  }
+  notify(std::move(promises));
+}
+
 void HashJoinBridge::appendSpilledHashTablePartitions(
     SpillPartitionSet spillPartitionSet) {
   VELOX_CHECK(
@@ -258,8 +279,7 @@ void HashJoinBridge::appendSpilledHashTablePartitionsLocked(
   if (restoringSpillPartitionId_.has_value()) {
     for ([[maybe_unused]] const auto& id : spillPartitionIdSet) {
       VELOX_DCHECK_LT(
-          restoringSpillPartitionId_->partitionBitOffset(),
-          id.partitionBitOffset());
+          restoringSpillPartitionId_->spillLevel(), id.spillLevel());
     }
   }
 

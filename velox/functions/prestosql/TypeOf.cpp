@@ -15,10 +15,12 @@
  */
 #include "velox/expression/VectorFunction.h"
 #include "velox/functions/prestosql/types/BingTileType.h"
+#include "velox/functions/prestosql/types/GeometryType.h"
 #include "velox/functions/prestosql/types/HyperLogLogType.h"
 #include "velox/functions/prestosql/types/IPAddressType.h"
 #include "velox/functions/prestosql/types/IPPrefixType.h"
 #include "velox/functions/prestosql/types/JsonType.h"
+#include "velox/functions/prestosql/types/QDigestType.h"
 #include "velox/functions/prestosql/types/TDigestType.h"
 #include "velox/functions/prestosql/types/TimestampWithTimeZoneType.h"
 #include "velox/functions/prestosql/types/UuidType.h"
@@ -85,8 +87,20 @@ std::string typeName(const TypePtr& type) {
       if (isHyperLogLogType(type)) {
         return "HyperLogLog";
       }
+      if (isGeometryType(type)) {
+        return "geometry";
+      }
       if (*type == *TDIGEST(DOUBLE())) {
         return "tdigest(double)";
+      }
+      if (*type == *QDIGEST(BIGINT())) {
+        return "qdigest(bigint)";
+      }
+      if (*type == *QDIGEST(REAL())) {
+        return "qdigest(real)";
+      }
+      if (*type == *QDIGEST(DOUBLE())) {
+        return "qdigest(double)";
       }
       return "varbinary";
     case TypeKind::TIMESTAMP:

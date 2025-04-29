@@ -14,7 +14,6 @@
 project(Arrow)
 
 if(VELOX_ENABLE_ARROW)
-  find_package(Thrift)
   if(Thrift_FOUND)
     set(THRIFT_SOURCE "SYSTEM")
   else()
@@ -39,7 +38,10 @@ if(VELOX_ENABLE_ARROW)
       -DCMAKE_BUILD_TYPE=${CMAKE_BUILD_TYPE}
       -DARROW_BUILD_STATIC=ON
       -DThrift_SOURCE=${THRIFT_SOURCE}
-      -DCMAKE_PREFIX_PATH=${CMAKE_PREFIX_PATH})
+      -DCMAKE_PREFIX_PATH=${CMAKE_PREFIX_PATH}
+      -DCMAKE_POLICY_VERSION_MINIMUM=3.5
+      # Remove with Arrow upgrade to Arrow 20.
+      -DARROW_CXXFLAGS=-Wno-documentation)
   set(ARROW_LIBDIR ${ARROW_PREFIX}/install/${CMAKE_INSTALL_LIBDIR})
 
   add_library(thrift STATIC IMPORTED GLOBAL)

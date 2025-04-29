@@ -15,12 +15,14 @@ velox_add_library(
   velox_presto_types
   BingTileRegistration.cpp
   BingTileType.cpp
+  GeometryRegistration.cpp
   HyperLogLogRegistration.cpp
   IPAddressRegistration.cpp
   IPPrefixRegistration.cpp
   JsonCastOperator.cpp
   JsonRegistration.cpp
   TDigestRegistration.cpp
+  QDigestRegistration.cpp
   TimestampWithTimeZoneRegistration.cpp
   UuidRegistration.cpp)
 

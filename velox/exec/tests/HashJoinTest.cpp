@@ -2411,14 +2411,14 @@ TEST_P(MultiThreadedHashJoinTest, noSpillLevelLimit) {
       .referenceQuery(
           "SELECT t_k0, t_data, u_k0, u_data FROM t, u WHERE t.t_k0 = u.u_k0")
       .maxSpillLevel(-1)
-      .config(core::QueryConfig::kSpillStartPartitionBit, "48")
+      .config(core::QueryConfig::kSpillStartPartitionBit, "51")
       .config(core::QueryConfig::kSpillNumPartitionBits, "3")
       .checkSpillStats(false)
       .verifier([&](const std::shared_ptr<Task>& task, bool hasSpill) {
         if (!hasSpill) {
           return;
         }
-        ASSERT_EQ(maxHashBuildSpillLevel(*task), 4);
+        ASSERT_EQ(maxHashBuildSpillLevel(*task), 3);
       })
       .run();
 }
@@ -6669,7 +6669,7 @@ DEBUG_ONLY_TEST_F(HashJoinTest, exceptionDuringFinishJoinBuild) {
       std::function<void(HashBuild*)>([&](HashBuild* buildOp) {
         try {
           VELOX_FAIL("Simulated failure");
-        } catch (VeloxException& e) {
+        } catch (VeloxException&) {
           buildOp->testingOperatorCtx()->task()->setError(
               std::current_exception());
         }

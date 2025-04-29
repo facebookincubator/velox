@@ -21,6 +21,7 @@
 #include "velox/experimental/wave/exec/Values.h"
 
 DECLARE_bool(wave_print_time);
+DECLARE_bool(cuda_G);
 
 namespace facebook::velox::wave {
 
@@ -110,6 +111,23 @@ void CompileState::declareNamed(const std::string& line) {
   }
   namedDeclares_.insert(line);
   declarations_ << line << std::endl;
+}
+
+void CompileState::declareNamed(
+    const std::string& type,
+    const std::string& name,
+    const std::string& debugInit) {
+  if (namedDeclares_.count(name)) {
+    return;
+  }
+  namedDeclares_.insert(name);
+  declarations_ << "  " << type << " " << name;
+  if (FLAGS_cuda_G) {
+    declarations_ << " = reinterpret_cast<" << type << ">(" << debugInit
+                  << ");\n";
+  } else {
+    declarations_ << ";\n";
+  }
 }
 
 bool CompileState::hasMoreReferences(AbstractOperand* op, int32_t pc) {
@@ -397,8 +415,9 @@ std::string CompileState::generateIsTrue(const AbstractOperand& op) {
       declareNamed(fmt::format("bool flag{};\n", ord));
       generated_ << fmt::format("flag{} = r{}", ord, ord);
     } else {
+      declareNamed(fmt::format("bool flag{};\n", ord));
       generated_ << fmt::format(
-          "bool flag{} = r{} && !isRegisterNull(nulls{}, {});\n",
+          "flag{} = r{} && !isRegisterNull(nulls{}, {});\n",
           ord,
           ord,
           ord / 32,
@@ -410,12 +429,12 @@ std::string CompileState::generateIsTrue(const AbstractOperand& op) {
     if (op.notNull || insideNullPropagating_) {
       declareNamed(fmt::format("bool flag{};\n", ord));
       generated_ << fmt::format(
-          "bool flag{} = nonNullOperand<bool, {}>(operands, {}, blockBase)",
+          "flag{} = nonNullOperand<bool, {}>(operands, {}, blockBase)",
           ord,
           mayWrap,
           ord);
     } else {
-      generated_ << fmt::format("bool flag{};\n", ord);
+      declareNamed(fmt::format("bool flag{};\n", ord));
       generated_ << fmt::format(
           "if (!valueOrNull<{}, bool>(operands, {}, blockBase, flags{})) {{ flags{} = false; }};\n",
           mayWrap ? "true" : "false",
@@ -470,7 +489,7 @@ int32_t CompileState::nextWrapId() {
   return ++wrapId_;
 }
 
-int32_t CompileState::wrapLiteral(int32_t nthWrap) {
+int32_t CompileState::wrapLiteral(const WrapInfo& info, int32_t nthWrap) {
   // We take one Operand of each group of Operands that shares a
   // wrappedAt such that the Operand's lifetime crosses the
   // filter. The wrap that is initialized here is first in the indices
@@ -523,14 +542,60 @@ void Filter::generateMain(CompileState& state, int32_t syncLabel) {
       "filterKernel({}, operands, {}, blockBase, shared, laneStatus);\n",
       flagValue,
       state.ordinal(*indices));
-  auto numWraps = state.wrapLiteral(nthWrap);
-  out << fmt::format(
-      "wrapKernel(wraps{}, {}, {}, operands, blockBase, shared);\n",
-      nthWrap,
-      numWraps,
-      state.ordinal(*indices));
-  state.lastPlacedWrap() = nthWrap;
-  state.clearInRegister();
+  state.generateWrap(wrapInfo_, nthWrap, indices);
+}
+
+std::string operandIdArray(
+    CompileState& state,
+    const std::string& name,
+    const std::vector<AbstractOperand*> more) {
+  std::stringstream out;
+  if (more.empty()) {
+    out << "const OperandIndex* " << name << " = nullptr;\n";
+  } else {
+    out << "  const OperandIndex " << name << "[] = {";
+    for (auto i = 0; i < more.size(); ++i) {
+      out << state.ordinal(*more[i]);
+      if (i < more.size() - 1) {
+        out << ", ";
+      }
+    }
+
+    out << "};\n";
+  }
+  return out.str();
+}
+
+void CompileState::generateWrap(
+    WrapInfo& info,
+    int32_t nthWrap,
+    const AbstractOperand* indices) {
+  auto& out = generated_;
+  if (info.needRewind) {
+    out << operandIdArray(
+        *this, fmt::format("wraps{}", nthWrap), info.rewrapped);
+    out << operandIdArray(
+        *this, fmt::format("idxs{}", nthWrap), info.wrapIndices);
+    out << operandIdArray(
+        *this, fmt::format("back{}", nthWrap), info.wrapBackup);
+    out << fmt::format(
+        "wrapKernel({}, wraps{}, idxs{}, back{}, {}, {}, shared);\n",
+        info.wrappedHere ? ordinal(*info.wrappedHere) : kEmpty,
+        nthWrap,
+        nthWrap,
+        nthWrap,
+        info.wrapIndices.size(),
+        ordinal(*indices));
+  } else {
+    auto numWraps = wrapLiteral(info, nthWrap);
+    out << fmt::format(
+        "wrapKernel(wraps{}, {}, {}, operands, blockBase, shared);\n",
+        nthWrap,
+        numWraps,
+        ordinal(*indices));
+  }
+  lastPlacedWrap() = nthWrap;
+  clearInRegister();
 }
 
 void AggregateProbe::generateMain(CompileState& state, int32_t syncLabel) {
@@ -679,7 +744,7 @@ ProgramKey CompileState::makeLevelText(
 
   VELOX_CHECK_EQ(1, level.size(), "Only one program per level supported");
   std::stringstream head;
-  auto kernelName = fmt::format("wavegen{}", ++kernelCounter_);
+  auto kernelName = fmt::format("wavegen{}_{}", startNodeId_, ++kernelCounter_);
   kernelEntryPoints_ = {fmt::format("facebook::velox::wave::{}", kernelName)};
   generated_ << "  GENERATED_PREAMBLE(0);\n";
   auto& params = currentCandidate_->levelParams[kernelSeq_];
@@ -721,7 +786,7 @@ ProgramKey CompileState::makeLevelText(
       if (needActiveCheck) {
         for (auto next = stepIdx_; next < box.steps.size(); ++next) {
           auto label = box.steps[next]->continueLabel();
-          if (label.has_value()) {
+          if (label.has_value() && box.steps[next]->autoContinueLabel()) {
             generated_ << fmt::format(" continue{}:\n", label.value());
           }
           if (box.steps[next]->isBarrier()) {
@@ -860,12 +925,15 @@ void CompileState::makeLevel(std::vector<KernelBox>& level) {
         auto* status = instruction->mutableInstructionStatus();
         if (status) {
           allStatuses_.push_back(status);
-          currentBox_->steps[stepIdx_]->status = *status;
         }
         auto opInst = dynamic_cast<AbstractOperator*>(instruction);
         if (opInst) {
           if (auto* agg = dynamic_cast<AbstractAggregation*>(opInst)) {
             currentBox_->kernelEntryPoints_[agg->continueIdx()] =
+                kernelEntryPointCounter++;
+          }
+          if (auto* build = dynamic_cast<AbstractHashBuild*>(opInst)) {
+            currentBox_->kernelEntryPoints_[build->continueIdx()] =
                 kernelEntryPointCounter++;
           }
           AbstractState* state = opInst->state;
@@ -899,20 +967,8 @@ void CompileState::makeLevelKernel(std::vector<KernelBox>& level) {
     auto* abstractState = operatorStates_[id].get();
     auto programState = std::make_unique<ProgramState>();
     programState->stateId = abstractState->id;
-    auto* abstractInst =
-        reinterpret_cast<AbstractAggregation*>(abstractState->instruction);
     programState->isGlobal = true;
-    programState->create =
-        [inst = abstractInst](
-            WaveStream& stream) -> std::shared_ptr<OperatorState> {
-      auto newState =
-          std::make_shared<AggregateOperatorState>(stream.arenaShared());
-      newState->isGrouped = !inst->keys.empty();
-      newState->rowSize = inst->rowSize();
-      newState->maxReadStreams = inst->maxReadStreams;
-      stream.makeAggregate(*inst, *newState);
-      return newState;
-    };
+    programState->create = abstractState->instruction->stateCreateFunction();
 
     states.push_back(std::move(programState));
   });

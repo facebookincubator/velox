@@ -73,6 +73,29 @@ Aws::IOStreamFactory AwsWriteableStreamFactory(void* data, int64_t nbytes) {
   return [=]() { return Aws::New<StringViewStream>("", data, nbytes); };
 }
 
+folly::Synchronized<
+    std::unordered_map<std::string, AWSCredentialsProviderFactory>>&
+credentialsProviderFactories() {
+  static folly::Synchronized<
+      std::unordered_map<std::string, AWSCredentialsProviderFactory>>
+      factories;
+  return factories;
+}
+
+std::shared_ptr<Aws::Auth::AWSCredentialsProvider> getCredentialsProviderByName(
+    const std::string& providerName,
+    const S3Config& s3Config) {
+  return credentialsProviderFactories().withRLock([&](const auto& factories) {
+    const auto it = factories.find(providerName);
+    VELOX_CHECK(
+        it != factories.end(),
+        "CredentialsProviderFactory for '{}' not registered",
+        providerName);
+    const auto& factory = it->second;
+    return factory(s3Config);
+  });
+}
+
 class S3ReadFile final : public ReadFile {
  public:
   S3ReadFile(std::string_view path, Aws::S3::S3Client* client)
@@ -493,19 +516,21 @@ struct AwsInstance {
   }
 
   // Returns true iff the instance was newly initialized with config.
-  bool initialize(std::string_view logLevel) {
+  bool initialize(
+      std::string_view logLevel,
+      std::optional<std::string_view> logLocation) {
     if (isFinalized_.load()) {
       VELOX_FAIL("Attempt to initialize S3 after it has been finalized.");
     }
     if (!isInitialized_.exchange(true)) {
       // Not already initialized.
-      doInitialize(logLevel);
+      doInitialize(logLevel, logLocation);
       return true;
     }
     return false;
   }
 
-  bool isInitialized() {
+  bool isInitialized() const {
     return !isFinalized_ && isInitialized_;
   }
 
@@ -525,14 +550,29 @@ struct AwsInstance {
     }
   }
 
-  std::string getLogLevelName() {
+  std::string getLogLevelName() const {
     return Aws::Utils::Logging::GetLogLevelName(
         awsOptions_.loggingOptions.logLevel);
   }
 
+  std::string getLogPrefix() const {
+    return logPrefix_;
+  }
+
  private:
-  void doInitialize(std::string_view logLevel) {
+  void doInitialize(
+      std::string_view logLevel,
+      std::optional<std::string_view> logLocation) {
     awsOptions_.loggingOptions.logLevel = inferS3LogLevel(logLevel);
+    if (logLocation.has_value()) {
+      logPrefix_ = fmt::format(
+          "{}{}{}",
+          logLocation.value(),
+          logLocation.value().back() == '/' ? "" : "/",
+          Aws::DEFAULT_LOG_PREFIX);
+      awsOptions_.loggingOptions.defaultLogPrefix = logPrefix_.c_str();
+      VLOG(0) << "Custom S3 log location prefix: " << logPrefix_;
+    }
     // In some situations, curl triggers a SIGPIPE signal causing the entire
     // process to be terminated without any notification.
     // This behavior is seen via Prestissimo on AmazonLinux2 on AWS EC2.
@@ -547,6 +587,7 @@ struct AwsInstance {
   Aws::SDKOptions awsOptions_;
   std::atomic<bool> isInitialized_;
   std::atomic<bool> isFinalized_;
+  std::string logPrefix_;
 };
 
 // Singleton to initialize AWS S3.
@@ -555,8 +596,10 @@ AwsInstance* getAwsInstance() {
   return instance.get();
 }
 
-bool initializeS3(std::string_view logLevel) {
-  return getAwsInstance()->initialize(logLevel);
+bool initializeS3(
+    std::string_view logLevel,
+    std::optional<std::string_view> logLocation) {
+  return getAwsInstance()->initialize(logLevel, logLocation);
 }
 
 static std::atomic<int> fileSystemCount = 0;
@@ -564,6 +607,20 @@ static std::atomic<int> fileSystemCount = 0;
 void finalizeS3() {
   VELOX_CHECK((fileSystemCount == 0), "Cannot finalize S3 while in use");
   getAwsInstance()->finalize();
+}
+
+void registerCredentialsProvider(
+    const std::string& providerName,
+    const AWSCredentialsProviderFactory& factory) {
+  VELOX_CHECK(
+      !providerName.empty(), "CredentialsProviderFactory name cannot be empty");
+  credentialsProviderFactories().withWLock([&](auto& factories) {
+    VELOX_CHECK(
+        factories.find(providerName) == factories.end(),
+        "CredentialsProviderFactory '{}' already registered",
+        providerName);
+    factories.insert({providerName, factory});
+  });
 }
 
 class S3FileSystem::Impl {
@@ -671,6 +728,13 @@ class S3FileSystem::Impl {
   // Return an AWSCredentialsProvider based on the config.
   std::shared_ptr<Aws::Auth::AWSCredentialsProvider> getCredentialsProvider(
       const S3Config& s3Config) const {
+    auto credentialsProvider = s3Config.credentialsProvider();
+    if (credentialsProvider.has_value()) {
+      const auto& name = credentialsProvider.value();
+      // Create the credentials provider using the registered factory.
+      return getCredentialsProviderByName(name, s3Config);
+    }
+
     auto accessKey = s3Config.accessKey();
     auto secretKey = s3Config.secretKey();
     const auto iamRole = s3Config.iamRole();
@@ -769,6 +833,10 @@ class S3FileSystem::Impl {
     return getAwsInstance()->getLogLevelName();
   }
 
+  std::string getLogPrefix() const {
+    return getAwsInstance()->getLogPrefix();
+  }
+
  private:
   std::shared_ptr<Aws::S3::S3Client> client_;
 };
@@ -783,6 +851,10 @@ S3FileSystem::S3FileSystem(
 
 std::string S3FileSystem::getLogLevelName() const {
   return impl_->getLogLevelName();
+}
+
+std::string S3FileSystem::getLogPrefix() const {
+  return impl_->getLogPrefix();
 }
 
 std::unique_ptr<ReadFile> S3FileSystem::openFileForRead(

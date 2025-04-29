@@ -15,6 +15,7 @@
  */
 #pragma once
 
+#include <folly/Expected.h>
 #include <cstdint>
 #include "velox/type/SimpleFunctionApi.h"
 
@@ -130,6 +131,19 @@ class BingTileType : public BigintType {
   }
 
   static std::optional<std::string> bingTileInvalidReason(uint64_t tile);
+
+  static folly::Expected<uint64_t, std::string> bingTileParent(
+      uint64_t tile,
+      uint8_t parentZoom);
+
+  static folly::Expected<std::vector<uint64_t>, std::string> bingTileChildren(
+      uint64_t tile,
+      uint8_t childZoom);
+
+  static folly::Expected<uint64_t, std::string> bingTileFromQuadKey(
+      const std::string_view& quadKey);
+
+  static std::string bingTileToQuadKey(uint64_t tile);
 };
 
 inline bool isBingTileType(const TypePtr& type) {

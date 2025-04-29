@@ -23,6 +23,7 @@ add_executable(
   ExceptionTest.cpp
   FsTest.cpp
   IndexedPriorityQueueTest.cpp
+  LazyCPUThreadPoolExecutorTest.cpp
   RangeTest.cpp
   RuntimeMetricsTest.cpp
   ScopedLockTest.cpp
@@ -66,7 +67,6 @@ target_link_libraries(
   velox_common_base
   velox_memory
   Boost::headers
-  gflags::gflags
   glog::glog
   GTest::gtest
   GTest::gtest_main

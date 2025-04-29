@@ -82,7 +82,10 @@ std::shared_ptr<FileSystem> fileSystemGenerator(
 
         auto logLevel =
             properties->get(S3Config::kS3LogLevel, std::string("FATAL"));
-        initializeS3(logLevel);
+        std::optional<std::string> logLocation =
+            static_cast<std::optional<std::string>>(
+                properties->get<std::string>(S3Config::kS3LogLocation));
+        initializeS3(logLevel, logLocation);
         auto fs = std::make_shared<S3FileSystem>(bucketName, properties);
         instanceMap.insert({cacheKey, fs});
         return fs;
@@ -145,6 +148,14 @@ void registerS3Metrics() {
   DEFINE_METRIC(kMetricS3GetMetadataErrors, velox::StatType::COUNT);
   DEFINE_METRIC(kMetricS3GetObjectRetries, velox::StatType::COUNT);
   DEFINE_METRIC(kMetricS3GetMetadataRetries, velox::StatType::COUNT);
+#endif
+}
+
+void registerAWSCredentialsProvider(
+    const std::string& providerName,
+    const AWSCredentialsProviderFactory& provider) {
+#ifdef VELOX_ENABLE_S3
+  registerCredentialsProvider(providerName, provider);
 #endif
 }
 

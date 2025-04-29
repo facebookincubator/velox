@@ -88,9 +88,6 @@ class LambdaFlushPolicy : public DefaultFlushPolicy {
 };
 
 struct WriterOptions : public dwio::common::WriterOptions {
-  bool enableDictionary = true;
-  int64_t dataPageSize = 1'024 * 1'024;
-  int64_t dictionaryPageSizeLimit = 1'024 * 1'024;
   // Growth ratio passed to ArrowDataBufferSink. The default value is a
   // heuristic borrowed from
   // folly/FBVector(https://github.com/facebook/folly/blob/main/folly/docs/FBVector.md#memory-handling).
@@ -108,6 +105,11 @@ struct WriterOptions : public dwio::common::WriterOptions {
   /// Timestamp time zone for Parquet write through Arrow bridge.
   std::optional<std::string> parquetWriteTimestampTimeZone;
   bool writeInt96AsTimestamp = false;
+
+  std::optional<int64_t> batchSize;
+  std::optional<int64_t> dataPageSize;
+  std::optional<int64_t> dictionaryPageSizeLimit;
+  std::optional<bool> enableDictionary;
   std::optional<bool> useParquetDataPageV2;
 
   // Parsing session and hive configs.
@@ -118,10 +120,26 @@ struct WriterOptions : public dwio::common::WriterOptions {
       "hive.parquet.writer.timestamp_unit";
   static constexpr const char* kParquetHiveConnectorWriteTimestampUnit =
       "hive.parquet.writer.timestamp-unit";
+  static constexpr const char* kParquetSessionEnableDictionary =
+      "hive.parquet.writer.enable_dictionary";
+  static constexpr const char* kParquetHiveConnectorEnableDictionary =
+      "hive.parquet.writer.enable-dictionary";
+  static constexpr const char* kParquetSessionDictionaryPageSizeLimit =
+      "hive.parquet.writer.dictionary_page_size_limit";
+  static constexpr const char* kParquetHiveConnectorDictionaryPageSizeLimit =
+      "hive.parquet.writer.dictionary-page-size-limit";
   static constexpr const char* kParquetSessionDataPageVersion =
       "hive.parquet.writer.datapage_version";
   static constexpr const char* kParquetHiveConnectorDataPageVersion =
       "hive.parquet.writer.datapage-version";
+  static constexpr const char* kParquetSessionWritePageSize =
+      "hive.parquet.writer.page_size";
+  static constexpr const char* kParquetHiveConnectorWritePageSize =
+      "hive.parquet.writer.page-size";
+  static constexpr const char* kParquetSessionWriteBatchSize =
+      "hive.parquet.writer.batch_size";
+  static constexpr const char* kParquetHiveConnectorWriteBatchSize =
+      "hive.parquet.writer.batch-size";
 
   // Process hive connector and session configs.
   void processConfigs(

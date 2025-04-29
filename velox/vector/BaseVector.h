@@ -430,6 +430,12 @@ class BaseVector {
     vector_size_t sourceIndex;
     vector_size_t targetIndex;
     vector_size_t count;
+
+    /// Whether `next` can be merged with this range to form a new range.
+    bool mergeable(const CopyRange& next) const {
+      return next.sourceIndex == sourceIndex + count &&
+          next.targetIndex == targetIndex + count;
+    }
   };
 
   /// Sets null flags for each row in 'ranges' to 'isNull'.
@@ -1078,6 +1084,16 @@ std::string printNulls(
 std::string printIndices(
     const BufferPtr& indices,
     vector_size_t maxIndicesToPrint = 10);
+
+template <typename OutputStream>
+OutputStream& operator<<(
+    OutputStream& out,
+    const BaseVector::CopyRange& range) {
+  out << "{sourceIndex=" << range.sourceIndex
+      << " targetIndex=" << range.targetIndex << " count=" << range.count
+      << "}";
+  return out;
+}
 
 } // namespace facebook::velox
 

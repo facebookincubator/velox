@@ -142,7 +142,6 @@ HiveDataSource::HiveDataSource(
     randomSkip_ = std::make_shared<random::RandomSkipTracker>(sampleRate);
   }
 
-  std::vector<common::Subfield> remainingFilterSubfields;
   if (remainingFilter) {
     remainingFilterExprSet_ = expressionEvaluator_->compile(remainingFilter);
     auto& remainingFilterExpr = remainingFilterExprSet_->expr(0);
@@ -164,13 +163,13 @@ HiveDataSource::HiveDataSource(
       readColumnNames.push_back(input->field());
       readColumnTypes.push_back(input->type());
     }
-    remainingFilterSubfields = remainingFilterExpr->extractSubfields();
+    remainingFilterSubfields_ = remainingFilterExpr->extractSubfields();
     if (VLOG_IS_ON(1)) {
       VLOG(1) << fmt::format(
           "Extracted subfields from remaining filter: [{}]",
-          fmt::join(remainingFilterSubfields, ", "));
+          fmt::join(remainingFilterSubfields_, ", "));
     }
-    for (auto& subfield : remainingFilterSubfields) {
+    for (auto& subfield : remainingFilterSubfields_) {
       const auto& name = getColumnName(subfield);
       auto it = subfields_.find(name);
       if (it != subfields_.end()) {
@@ -538,6 +537,7 @@ void HiveDataSource::setFromDataSource(
 
   split_ = std::move(source->split_);
   runtimeStats_.skippedSplits += source->runtimeStats_.skippedSplits;
+  runtimeStats_.processedSplits += source->runtimeStats_.processedSplits;
   runtimeStats_.skippedSplitBytes += source->runtimeStats_.skippedSplitBytes;
   readerOutputType_ = std::move(source->readerOutputType_);
   source->scanSpec_->moveAdaptationFrom(*scanSpec_);
