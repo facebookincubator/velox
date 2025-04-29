@@ -287,6 +287,12 @@ class Task : public std::enable_shared_from_this<Task> {
     return state_;
   }
 
+  /// Same as state(), but will return 'planned' state if the Task is not
+  /// started yet.
+  /// We will use it for reporting purposes in the pilot implementation of
+  /// Task-level pushback when the worker is overloaded.
+  TaskState stateIncludingPlanned() const;
+
   /// Returns a future which is realized when the task's state has changed and
   /// the Task is ready to report some progress (such as split group finished or
   /// task is completed).

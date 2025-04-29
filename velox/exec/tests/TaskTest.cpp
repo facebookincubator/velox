@@ -2198,7 +2198,9 @@ DEBUG_ONLY_TEST_F(TaskTest, taskPauseTime) {
       0,
       std::move(queryCtx),
       Task::ExecutionMode::kParallel);
+  ASSERT_EQ(task->stateIncludingPlanned(), TaskState::kPlanned);
   task->start(4, 1);
+  ASSERT_EQ(task->stateIncludingPlanned(), TaskState::kRunning);
 
   // Wait for the task driver starts to run.
   taskPauseWait.await([&]() { return !taskPauseWaitFlag.load(); });
