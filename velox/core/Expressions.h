@@ -623,7 +623,7 @@ class CastTypedExpr : public ITypedExpr {
   /// expresion.
   /// @param input Single input. The type of input is referred to as from-type
   /// and expected to be different from to-type.
-  /// @param isTryCast Whether to suppress cast errors and return null.
+  /// @param isTryCast Whether this expression is used for `try_cast`.
   CastTypedExpr(const TypePtr& type, const TypedExprPtr& input, bool isTryCast)
       : ITypedExpr{type, {input}}, isTryCast_(isTryCast) {}
 
@@ -685,7 +685,7 @@ class CastTypedExpr : public ITypedExpr {
   static TypedExprPtr create(const folly::dynamic& obj, void* context);
 
  private:
-  // Suppress exception and return null on failure to cast.
+  // Whether this expression is used for `try_cast`.
   const bool isTryCast_;
 };
 
