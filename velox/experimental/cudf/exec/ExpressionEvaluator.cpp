@@ -200,7 +200,7 @@ std::vector<cudf::ast::literal> createLiteralsFromArray(
 } // namespace
 
 using Op = cudf::ast::ast_operator;
-const std::map<std::string, Op> binaryOps = {
+const std::unordered_map<std::string, Op> prestoBinaryOps = {
     {"plus", Op::ADD},
     {"minus", Op::SUB},
     {"multiply", Op::MUL},
@@ -213,6 +213,26 @@ const std::map<std::string, Op> binaryOps = {
     {"gte", Op::GREATER_EQUAL},
     {"and", Op::NULL_LOGICAL_AND},
     {"or", Op::NULL_LOGICAL_OR}};
+
+const std::unordered_map<std::string, Op> sparkBinaryOps = {
+    {"add", Op::ADD},
+    {"subtract", Op::SUB},
+    {"multiply", Op::MUL},
+    {"divide", Op::DIV},
+    {"equalto", Op::EQUAL},
+    {"lessthan", Op::LESS},
+    {"greaterthan", Op::GREATER},
+    {"lessthanorequal", Op::LESS_EQUAL},
+    {"greaterthanorequal", Op::GREATER_EQUAL},
+    {"and", Op::NULL_LOGICAL_AND},
+    {"or", Op::NULL_LOGICAL_OR}};
+
+const std::unordered_map<std::string, Op> binaryOps = [] {
+  std::unordered_map<std::string, Op> merged(
+      sparkBinaryOps.begin(), sparkBinaryOps.end());
+  merged.insert(prestoBinaryOps.begin(), prestoBinaryOps.end());
+  return merged;
+}();
 
 const std::map<std::string, Op> unaryOps = {{"not", Op::NOT}};
 
