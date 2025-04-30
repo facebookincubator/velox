@@ -190,7 +190,8 @@ void CudfToVelox::addInput(RowVectorPtr input) {
 
 std::optional<uint64_t> CudfToVelox::averageRowSize() {
   if (!averageRowSize_) {
-    averageRowSize_ = inputs_.front()->estimateFlatSize() / inputs_.front()->size();
+    averageRowSize_ =
+        inputs_.front()->estimateFlatSize() / inputs_.front()->size();
   }
   return averageRowSize_;
 }
@@ -208,9 +209,10 @@ RowVectorPtr CudfToVelox::getOutput() {
 
   // Process single input directly in these cases:
   // 1. In passthrough mode
-  // 2. If we only have one input and it's smaller than or equal to the target batch size
-  if (isPassthroughMode()
-     || (inputs_.size() == 1 && inputs_.front()->size() <= targetBatchSize)) {
+  // 2. If we only have one input and it's smaller than or equal to the target
+  // batch size
+  if (isPassthroughMode() ||
+      (inputs_.size() == 1 && inputs_.front()->size() <= targetBatchSize)) {
     std::unique_ptr<cudf::table> tbl = inputs_.front()->release();
     inputs_.pop_front();
 
@@ -227,11 +229,11 @@ RowVectorPtr CudfToVelox::getOutput() {
     return output;
   }
 
-  // Calculate how many tables we need to concatenate to reach the target batch size
-  // and collect them in a vector
+  // Calculate how many tables we need to concatenate to reach the target batch
+  // size and collect them in a vector
   std::vector<CudfVectorPtr> selectedInputs;
   vector_size_t totalSize = 0;
-  
+
   while (!inputs_.empty() && totalSize < targetBatchSize) {
     auto& input = inputs_.front();
     if (totalSize + input->size() <= targetBatchSize) {
@@ -239,28 +241,28 @@ RowVectorPtr CudfToVelox::getOutput() {
       selectedInputs.push_back(std::move(input));
       inputs_.pop_front();
     } else {
-      // If the next input would exceed targetBatchSize, 
+      // If the next input would exceed targetBatchSize,
       // we need to split it and only take what we need
       auto cudfTableView = input->getTableView();
       auto partitions = std::vector<cudf::size_type>{
           static_cast<cudf::size_type>(targetBatchSize - totalSize)};
       auto tableSplits = cudf::split(cudfTableView, partitions);
-      
+
       // Create new CudfVector from the first part
       auto firstPart = std::make_unique<cudf::table>(tableSplits[0], stream);
       auto firstPartSize = firstPart->num_rows();
       auto firstPartVector = std::make_shared<CudfVector>(
           pool(), input->type(), firstPartSize, std::move(firstPart), stream);
-      
+
       // Create new CudfVector from the second part
       auto secondPart = std::make_unique<cudf::table>(tableSplits[1], stream);
       auto secondPartSize = secondPart->num_rows();
       auto secondPartVector = std::make_shared<CudfVector>(
           pool(), input->type(), secondPartSize, std::move(secondPart), stream);
-      
+
       // Replace the original input with the second part
       input = std::move(secondPartVector);
-      
+
       // Add the first part to selectedInputs
       selectedInputs.push_back(std::move(firstPartVector));
       totalSize += firstPartSize;

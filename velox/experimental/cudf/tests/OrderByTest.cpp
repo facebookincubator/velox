@@ -13,8 +13,8 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#include "velox/experimental/cudf/exec/ToCudf.h"
 #include "velox/experimental/cudf/exec/CudfConversion.h"
+#include "velox/experimental/cudf/exec/ToCudf.h"
 
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/core/QueryConfig.h"
@@ -372,18 +372,20 @@ TEST_F(OrderByTest, outputBatchRows) {
           std::to_string(testData.preferredOutBatchBytes)},
          {core::QueryConfig::kMaxOutputBatchRows,
           std::to_string(testData.maxOutBatchRows)},
-          {facebook::velox::cudf_velox::CudfToVelox::kPassthroughMode, "false"}});
+         {facebook::velox::cudf_velox::CudfToVelox::kPassthroughMode,
+          "false"}});
     CursorParameters params;
     params.planNode = plan;
     params.queryCtx = queryCtx;
     auto task = assertQueryOrdered(
         params, "SELECT * FROM tmp ORDER BY c0 ASC NULLS LAST", {0});
-    
+
     EXPECT_EQ(
         testData.expectedOutputVectors,
-        toPlanStats(task->taskStats()).at(orderById + "-to-velox").outputVectors);
+        toPlanStats(task->taskStats())
+            .at(orderById + "-to-velox")
+            .outputVectors);
   }
 }
-
 
 } // namespace
