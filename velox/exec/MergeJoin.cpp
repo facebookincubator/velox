@@ -608,27 +608,27 @@ bool MergeJoin::addToOutputForLeftJoin() {
           : rightMatch_->startRowIndex;
 
       const auto numRightBatches = rightMatch_->inputs.size();
-      for (size_t r = firstRightBatch; r < numRightBatches; ++r) {
+      // TODO: Since semi joins only require determining if there is at least
+      // one match on the other side, we could explore specialized algorithms
+      // or data structures that short-circuit the join process once a match
+      // is found.
+      for (size_t r = isLeftSemiFilterJoin(joinType_) ? numRightBatches - 1
+                                                      : firstRightBatch;
+           r < numRightBatches;
+           ++r) {
         const auto rightBatch = rightMatch_->inputs[r];
-        const auto rightStartRow =
-            r == firstRightBatch ? rightStartRowIndex : 0;
-        auto rightEndRow = r == numRightBatches - 1 ? rightMatch_->endRowIndex
-                                                    : rightBatch->size();
-
+        auto rightStartRow = r == firstRightBatch ? rightStartRowIndex : 0;
+        const auto rightEndRow = r == numRightBatches - 1
+            ? rightMatch_->endRowIndex
+            : rightBatch->size();
+        if (isLeftSemiFilterJoin(joinType_)) {
+          rightStartRow = rightEndRow - 1;
+        }
         if (prepareOutput(leftBatch, rightBatch)) {
           output_->resize(outputSize_);
           leftMatch_->setCursor(l, i);
           rightMatch_->setCursor(r, rightStartRow);
           return true;
-        }
-
-        // TODO: Since semi joins only require determining if there is at least
-        // one match on the other side, we could explore specialized algorithms
-        // or data structures that short-circuit the join process once a match
-        // is found.
-        if (isLeftSemiFilterJoin(joinType_)) {
-          // LeftSemiFilter produce each row from the left at most once.
-          rightEndRow = rightStartRow + 1;
         }
 
         for (auto j = rightStartRow; j < rightEndRow; ++j) {
@@ -688,11 +688,23 @@ bool MergeJoin::addToOutputForRightJoin() {
           : leftMatch_->startRowIndex;
 
       const auto numLeftBatches = leftMatch_->inputs.size();
-      for (size_t l = firstLeftBatch; l < numLeftBatches; ++l) {
+      // TODO: Since semi joins only require determining if there is at least
+      // one match on the other side, we could explore specialized algorithms
+      // or data structures that short-circuit the join process once a match
+      // is found.
+      for (size_t l = isRightSemiFilterJoin(joinType_) ? numLeftBatches - 1
+                                                       : firstLeftBatch;
+           l < numLeftBatches;
+           ++l) {
         const auto leftBatch = leftMatch_->inputs[l];
-        const auto leftStartRow = l == firstLeftBatch ? leftStartRowIndex : 0;
-        auto leftEndRow = l == numLeftBatches - 1 ? leftMatch_->endRowIndex
-                                                  : leftBatch->size();
+        auto leftStartRow = l == firstLeftBatch ? leftStartRowIndex : 0;
+        const auto leftEndRow = l == numLeftBatches - 1
+            ? leftMatch_->endRowIndex
+            : leftBatch->size();
+        if (isRightSemiFilterJoin(joinType_)) {
+          // RightSemiFilter produce each row from the right at most once.
+          leftStartRow = leftEndRow - 1;
+        }
 
         if (prepareOutput(leftBatch, rightBatch)) {
           // Differently from left joins, for right joins we need to load lazies
@@ -704,15 +716,6 @@ bool MergeJoin::addToOutputForRightJoin() {
           leftMatch_->setCursor(l, leftStartRow);
           rightMatch_->setCursor(r, i);
           return true;
-        }
-
-        // TODO: Since semi joins only require determining if there is at least
-        // one match on the other side, we could explore specialized algorithms
-        // or data structures that short-circuit the join process once a match
-        // is found.
-        if (isRightSemiFilterJoin(joinType_)) {
-          // RightSemiFilter produce each row from the right at most once.
-          leftEndRow = leftStartRow + 1;
         }
 
         for (auto j = leftStartRow; j < leftEndRow; ++j) {
@@ -859,6 +862,34 @@ RowVectorPtr MergeJoin::getOutput() {
 
     return nullptr;
   }
+}
+
+RowVectorPtr MergeJoin::handleRightSideNullRows() {
+  const auto rightFirstNonNullIndex =
+      firstNonNull(rightInput_, rightKeyChannels_);
+  if ((isRightJoin(joinType_) || isFullJoin(joinType_)) &&
+      rightFirstNonNullIndex > rightRowIndex_) {
+    if (prepareOutput(nullptr, rightInput_)) {
+      output_->resize(outputSize_);
+      return std::move(output_);
+    }
+    for (int i = rightRowIndex_; i < rightFirstNonNullIndex; ++i) {
+      if (!tryAddOutputRowForRightJoin()) {
+        rightRowIndex_ = i;
+        return std::move(output_);
+      }
+
+      if (finishedRightBatch()) {
+        // Ran out of rows on the right side.
+        rightInput_ = nullptr;
+        return nullptr;
+      }
+    }
+
+    rightRowIndex_ = rightFirstNonNullIndex;
+  }
+
+  return nullptr;
 }
 
 RowVectorPtr MergeJoin::doGetOutput() {
@@ -1059,6 +1090,12 @@ RowVectorPtr MergeJoin::doGetOutput() {
 
     return nullptr;
   }
+
+  const auto output = handleRightSideNullRows();
+  if (output != nullptr || rightInput_ == nullptr) {
+    return output;
+  }
+  VELOX_CHECK_NOT_NULL(rightInput_);
 
   // Look for a new match starting with index_ row on the left and rightIndex_
   // row on the right.
