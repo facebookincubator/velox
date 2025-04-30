@@ -23,4 +23,9 @@ set(TEST_LINK_LIBS
     gflags::gflags
     glog::glog)
 
+add_subdirectory(reader)
 add_subdirectory(writer)
+
+file(COPY ${CMAKE_CURRENT_SOURCE_DIR}/examples
+        DESTINATION ${CMAKE_CURRENT_BINARY_DIR})
+

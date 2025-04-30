@@ -12,15 +12,20 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-if(${VELOX_BUILD_TESTING})
-  add_subdirectory(tests)
-endif()
+add_executable(velox_text_reader_test TextReaderTest.cpp)
 
-add_subdirectory(reader)
-add_subdirectory(writer)
+add_test(
+        NAME velox_text_reader_test
+        COMMAND velox_text_reader_test
+        WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR})
 
-velox_add_library(velox_dwio_text_reader_register RegisterTextReader.cpp)
-velox_add_library(velox_dwio_text_writer_register RegisterTextWriter.cpp)
-
-velox_link_libraries(velox_dwio_text_reader_register velox_dwio_text_reader)
-velox_link_libraries(velox_dwio_text_writer_register velox_dwio_text_writer)
+target_link_libraries(
+        velox_text_reader_test
+        velox_dwio_text_reader
+        velox_dwio_common_test_utils
+        velox_link_libs
+        Boost::regex
+        Folly::folly
+        ${TEST_LINK_LIBS}
+        GTest::gtest
+        fmt::fmt)
