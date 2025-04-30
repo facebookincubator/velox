@@ -323,6 +323,7 @@ bool PrestoQueryRunner::isSupported(const exec::FunctionSignature& signature) {
       usesInputTypeName(signature, "json") ||
       usesInputTypeName(signature, "ipaddress") ||
       usesInputTypeName(signature, "ipprefix") ||
+      usesInputTypeName(signature, "fbsampleset") ||
       usesInputTypeName(signature, "uuid"));
 }
 
