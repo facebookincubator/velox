@@ -233,6 +233,20 @@ If the argument is zero, then the result is a zero with the same sign as the arg
 </dd></dl>
 
 <dl class="spark function">
+<dt class="sig sig-object spark" id="factorial">
+<span class="sig-name descname"><span class="pre">factorial</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">bigint</span></span></span><a class="headerlink" href="#factorial" title="Link to this definition">¶</a></dt>
+<dd><p>Returns the factorial of integer <code class="docutils literal notranslate"><span class="pre">x</span></code>, defined as <code class="docutils literal notranslate"><span class="pre">x!</span> <span class="pre">=</span> <span class="pre">x</span> <span class="pre">*</span> <span class="pre">(x-1)</span> <span class="pre">*</span> <span class="pre">...</span> <span class="pre">*</span> <span class="pre">1</span></code>.
+The input must be between 0 and 20 inclusive. Returns NULL for values outside this range.</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">factorial</span><span class="p">(</span><span class="mi">0</span><span class="p">);</span> <span class="o">--</span> <span class="mi">1</span>
+<span class="n">SELECT</span> <span class="n">factorial</span><span class="p">(</span><span class="mi">5</span><span class="p">);</span> <span class="o">--</span> <span class="mi">120</span>
+<span class="n">SELECT</span> <span class="n">factorial</span><span class="p">(</span><span class="mi">20</span><span class="p">);</span> <span class="o">--</span> <span class="mi">2432902008176640000</span>
+<span class="n">SELECT</span> <span class="n">factorial</span><span class="p">(</span><span class="mi">21</span><span class="p">);</span> <span class="o">--</span> <span class="n">NULL</span>
+<span class="n">SELECT</span> <span class="n">factorial</span><span class="p">(</span><span class="o">-</span><span class="mi">1</span><span class="p">);</span> <span class="o">--</span> <span class="n">NULL</span>
+</pre></div>
+</div>
+</dd></dl>
+
+<dl class="spark function">
 <dt class="sig sig-object spark" id="floor">
 <span class="sig-name descname"><span class="pre">floor</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">[same</span> <span class="pre">as</span> <span class="pre">x]</span></span></span><a class="headerlink" href="#floor" title="Link to this definition">¶</a></dt>
 <dd><p>Returns <code class="docutils literal notranslate"><span class="pre">x</span></code> rounded down to the nearest integer.
@@ -529,6 +543,7 @@ Otherwise, the function will return NULL.</p>
 <li><a class="reference internal" href="#id3"><code class="docutils literal notranslate"><span class="pre">divide()</span></code></a></li>
 <li><a class="reference internal" href="#exp"><code class="docutils literal notranslate"><span class="pre">exp()</span></code></a></li>
 <li><a class="reference internal" href="#expm1"><code class="docutils literal notranslate"><span class="pre">expm1()</span></code></a></li>
+<li><a class="reference internal" href="#factorial"><code class="docutils literal notranslate"><span class="pre">factorial()</span></code></a></li>
 <li><a class="reference internal" href="#floor"><code class="docutils literal notranslate"><span class="pre">floor()</span></code></a></li>
 <li><a class="reference internal" href="#hex"><code class="docutils literal notranslate"><span class="pre">hex()</span></code></a></li>
 <li><a class="reference internal" href="#hypot"><code class="docutils literal notranslate"><span class="pre">hypot()</span></code></a></li>
