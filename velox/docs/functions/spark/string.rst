@@ -108,6 +108,29 @@ String Functions
         SELECT find_in_set(NULL, ',123'); -- NULL
         SELECT find_in_set("abc", NULL); -- NULL
 
+.. function:: initcap(string) -> VARCHAR
+
+   Capitalizes the first letter of each word in a specified string.
+
+   The ``initcap`` function converts the first character of each word to uppercase
+   and all other characters in the word to lowercase. It supports UTF-8 multibyte
+   characters, up to four bytes per character.
+
+   A *word* is defined as a sequence of characters separated by whitespace. Only
+   space characters—such as space, tab, newline, carriage return, and form feed—
+   are considered word boundaries.
+
+   Punctuation marks, symbols, and digits **do not** start a new word.
+
+   **Example**::
+
+        SELECT initcap('spark sql'); -- Spark Sql
+        SELECT initcap('spARK sQL'); -- Spark Sql
+        SELECT initcap('123abc DEF!ghi'); -- 123abc Def!ghi
+        SELECT initcap('élan vital für alle'); -- Élan Vital Für Alle
+        SELECT initcap('hello-world test_case'); -- Hello-world Test_case
+        SELECT initcap('one\ttwo\nthree'); -- One\tTwo\nThree
+
 .. spark:function:: instr(string, substring) -> integer
 
     Returns the starting position of the first instance of ``substring`` in

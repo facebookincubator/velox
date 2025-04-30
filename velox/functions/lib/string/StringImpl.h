@@ -34,6 +34,18 @@
 namespace facebook::velox::functions::stringImpl {
 using namespace stringCore;
 
+namespace {
+inline bool isAlphaUtf8(utf8proc_int32_t cp) {
+  auto category = utf8proc_category(cp);
+  return (category >= UTF8PROC_CATEGORY_LU && category <= UTF8PROC_CATEGORY_LO);
+}
+
+inline bool isSpaceUtf8(utf8proc_int32_t cp) {
+  auto category = utf8proc_category(cp);
+  return (category >= UTF8PROC_CATEGORY_ZS && category <= UTF8PROC_CATEGORY_ZP);
+}
+} // namespace
+
 /// Perform upper for a UTF8 string
 template <bool ascii, typename TOutString, typename TInString>
 FOLLY_ALWAYS_INLINE bool upper(TOutString& output, const TInString& input) {
@@ -671,6 +683,88 @@ FOLLY_ALWAYS_INLINE void pad(
       output.data() + paddingOffset + fullPadCopies * padString.size(),
       padString.data(),
       padPrefixByteLength);
+}
+
+// ASCII InitCap Implementation
+template <typename TOutString, typename TInString>
+FOLLY_ALWAYS_INLINE bool initcapAsciiImpl(
+    TOutString& output,
+    const TInString& input) {
+  output.resize(input.size());
+  const char* inputChars = input.data();
+  char* outputChars = output.data();
+
+  bool isStartOfWord = true;
+
+  for (size_t i = 0; i < input.size(); ++i) {
+    unsigned char currentChar = static_cast<unsigned char>(inputChars[i]);
+
+    if (std::isspace(currentChar)) {
+      isStartOfWord = true;
+      outputChars[i] = currentChar;
+    } else if (isStartOfWord && std::isalpha(currentChar)) {
+      outputChars[i] = std::toupper(currentChar);
+      isStartOfWord = false;
+    } else {
+      outputChars[i] = std::tolower(currentChar);
+    }
+  }
+
+  return true;
+}
+
+// UTF-8 InitCap Implementation
+template <typename TOutString, typename TInString>
+FOLLY_ALWAYS_INLINE bool initcapUtf8Impl(
+    TOutString& output,
+    const TInString& input) {
+  const uint8_t* inputBytes = reinterpret_cast<const uint8_t*>(input.data());
+  const uint8_t* inputEnd = inputBytes + input.size();
+  output.resize(input.size() * 4); // Max size for UTF-8 characters
+  uint8_t* outputBytes = reinterpret_cast<uint8_t*>(output.data());
+
+  bool isStartOfWord = true;
+
+  while (inputBytes < inputEnd) {
+    utf8proc_int32_t originalCodepoint;
+    auto numBytesRead =
+        utf8proc_iterate(inputBytes, inputEnd - inputBytes, &originalCodepoint);
+    if (numBytesRead < 0) {
+      return false;
+    }
+
+    utf8proc_int32_t capitalizedCodepoint;
+
+    if (isSpaceUtf8(originalCodepoint)) {
+      isStartOfWord = true;
+      capitalizedCodepoint = originalCodepoint;
+    } else if (isStartOfWord && isAlphaUtf8(originalCodepoint)) {
+      capitalizedCodepoint = utf8proc_toupper(originalCodepoint);
+      isStartOfWord = false;
+    } else {
+      capitalizedCodepoint = utf8proc_tolower(originalCodepoint);
+    }
+
+    auto numBytesWritten =
+        utf8proc_encode_char(capitalizedCodepoint, outputBytes);
+    outputBytes += numBytesWritten;
+    inputBytes += numBytesRead;
+  }
+
+  output.resize(reinterpret_cast<char*>(outputBytes) - output.data());
+  return true;
+}
+
+// Converts the first character of each word in the input string to uppercase
+// The implementation logic is taken from
+// https://github.com/apache/hive/blob/master/ql/src/java/org/apache/hadoop/hive/ql/udf/generic/GenericUDFInitCap.java.
+template <bool isAscii, typename TOutString, typename TInString>
+FOLLY_ALWAYS_INLINE bool initcap(TOutString& output, const TInString& input) {
+  if constexpr (isAscii) {
+    return initcapAsciiImpl(output, input);
+  } else {
+    return initcapUtf8Impl(output, input);
+  }
 }
 
 } // namespace facebook::velox::functions::stringImpl
