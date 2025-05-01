@@ -232,16 +232,9 @@ core::PlanNodePtr PlanBuilder::TableScanBuilder::build(core::PlanNodeId id) {
           "Duplicate subfield: {}",
           subfield.toString());
 
+      subfieldExprs.push_back(std::move(filterExpr));
       filters[std::move(subfield)] = std::move(subfieldFilter);
     }
-    VELOX_CHECK_EQ(
-        filters.count(subfield),
-        0,
-        "Duplicate subfield: {}",
-        subfield.toString());
-
-    subfieldExprs.push_back(std::move(filterExpr));
-    filters[std::move(subfield)] = std::move(subfieldFilter);
   }
 
   // Create AND tree of subfieldExprs as combined_subfield_filter.
