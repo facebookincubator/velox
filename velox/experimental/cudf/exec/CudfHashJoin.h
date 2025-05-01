@@ -25,7 +25,8 @@
 #include "velox/exec/Operator.h"
 #include "velox/vector/ComplexVector.h"
 
-#include <cudf/join.hpp>
+#include <cudf/ast/expressions.hpp>
+#include <cudf/join/hash_join.hpp>
 #include <cudf/table/table.hpp>
 
 namespace facebook::velox::cudf_velox {
