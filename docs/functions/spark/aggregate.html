@@ -245,6 +245,19 @@ output will be generated.</p>
 </dd></dl>
 
 <dl class="spark function">
+<dt class="sig sig-object spark" id="stddev">
+<span class="sig-name descname"><span class="pre">stddev</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">double</span></span></span><a class="headerlink" href="#stddev" title="Link to this definition">¶</a></dt>
+<dd><p>Returns the sample standard deviation calculated of all input values. The type of <cite>x</cite> should be DOUBLE.
+When the count of <cite>x</cite> is greater than or equal to 2, a non-null output will be generated.</p>
+</dd></dl>
+
+<dl class="spark function">
+<dt class="sig sig-object spark" id="stddev_samp">
+<span class="sig-name descname"><span class="pre">stddev_samp</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">double</span></span></span><a class="headerlink" href="#stddev_samp" title="Link to this definition">¶</a></dt>
+<dd><p>This is an alias for <a class="reference internal" href="#stddev" title="stddev"><code class="xref spark spark-func docutils literal notranslate"><span class="pre">stddev()</span></code></a>.</p>
+</dd></dl>
+
+<dl class="spark function">
 <dt class="sig sig-object spark" id="sum">
 <span class="sig-name descname"><span class="pre">sum</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">bigint</span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">double</span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">real</span></span></span><a class="headerlink" href="#sum" title="Link to this definition">¶</a></dt>
 <dd><p>Returns the sum of <cite>x</cite>.</p>
@@ -268,6 +281,19 @@ overflowed value rather than raising an error.</p>
 </pre></div>
 </div>
 <p>Returns -9223372036854775808</p>
+</dd></dl>
+
+<dl class="spark function">
+<dt class="sig sig-object spark" id="var_samp">
+<span class="sig-name descname"><span class="pre">var_samp</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">double</span></span></span><a class="headerlink" href="#var_samp" title="Link to this definition">¶</a></dt>
+<dd><p>Returns the sample variance calculated of all input values. The type of <cite>x</cite> should be DOUBLE.
+When the count of <cite>x</cite> is greater than or equal to 2, a non-null output will be generated.</p>
+</dd></dl>
+
+<dl class="spark function">
+<dt class="sig sig-object spark" id="variance">
+<span class="sig-name descname"><span class="pre">variance</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">double</span></span></span><a class="headerlink" href="#variance" title="Link to this definition">¶</a></dt>
+<dd><p>This is an alias for <a class="reference internal" href="#var_samp" title="var_samp"><code class="xref spark spark-func docutils literal notranslate"><span class="pre">var_samp()</span></code></a>.</p>
 </dd></dl>
 
 </section>
@@ -304,7 +330,11 @@ overflowed value rather than raising an error.</p>
 <li><a class="reference internal" href="#mode"><code class="docutils literal notranslate"><span class="pre">mode()</span></code></a></li>
 <li><a class="reference internal" href="#regr_replacement"><code class="docutils literal notranslate"><span class="pre">regr_replacement()</span></code></a></li>
 <li><a class="reference internal" href="#skewness"><code class="docutils literal notranslate"><span class="pre">skewness()</span></code></a></li>
+<li><a class="reference internal" href="#stddev"><code class="docutils literal notranslate"><span class="pre">stddev()</span></code></a></li>
+<li><a class="reference internal" href="#stddev_samp"><code class="docutils literal notranslate"><span class="pre">stddev_samp()</span></code></a></li>
 <li><a class="reference internal" href="#sum"><code class="docutils literal notranslate"><span class="pre">sum()</span></code></a></li>
+<li><a class="reference internal" href="#var_samp"><code class="docutils literal notranslate"><span class="pre">var_samp()</span></code></a></li>
+<li><a class="reference internal" href="#variance"><code class="docutils literal notranslate"><span class="pre">variance()</span></code></a></li>
 </ul>
 </li>
 </ul>
