@@ -106,4 +106,192 @@ struct ScaleTDigestFunction {
     digest.serialize(result.data());
   }
 };
+template <typename T>
+struct QuantileAtValueFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  FOLLY_ALWAYS_INLINE bool call(
+      out_type<double>& result,
+      const arg_type<SimpleTDigest<double>>& input,
+      const arg_type<double>& value) {
+    if (std::isnan(value)) {
+      return false;
+    }
+    TDigest<> digest;
+    std::vector<int16_t> positions;
+    digest.mergeDeserialized(positions, input.data());
+    digest.compress(positions);
+    result = digest.getCdf(value);
+    return true;
+  }
+};
+
+template <typename T>
+struct ConstructTDigestFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+  FOLLY_ALWAYS_INLINE bool call(
+      out_type<SimpleTDigest<double>>& result,
+      const arg_type<Array<double>>& centroidMeans,
+      const arg_type<Array<double>>& centroidWeights,
+      const arg_type<double>& compression,
+      const arg_type<double>& min,
+      const arg_type<double>& max,
+      const arg_type<double>& sum,
+      const arg_type<int64_t>& count) {
+    VELOX_USER_CHECK(
+        !std::isnan(compression), "Compression factor must not be NaN.");
+    VELOX_USER_CHECK_LE(
+        compression, 1000, "Compression factor cannot exceed 1000");
+    // Ensure compression is at least 10.
+    double compressionValue = std::max(compression, 10.0);
+    TDigest<> digest;
+    digest.setCompression(compressionValue);
+    // Copy centroid means and weights
+    std::vector<int16_t> positions;
+    std::vector<double> means(centroidMeans.size());
+    std::vector<double> weights(centroidWeights.size());
+    for (size_t i = 0; i < centroidMeans.size(); i++) {
+      means[i] = centroidMeans[i].value();
+      weights[i] = centroidWeights[i].value();
+    }
+    // Merge the centroids
+    for (size_t i = 0; i < means.size(); i++) {
+      digest.add(positions, means[i], weights[i]);
+    }
+    // Compress and Serialize
+    digest.compress(positions);
+    int64_t size = digest.serializedByteSize();
+    result.resize(size);
+    digest.serialize(result.data());
+    return true;
+  }
+};
+
+template <typename T>
+struct DestructureTDigestFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+  FOLLY_ALWAYS_INLINE bool call(
+      out_type<
+          Row<Array<double>,
+              Array<double>,
+              double,
+              double,
+              double,
+              double,
+              int64_t>>& result,
+      const arg_type<SimpleTDigest<double>>& input) {
+    // Deserialize the TDigest
+    TDigest<> digest;
+    std::vector<int16_t> positions;
+    digest.mergeDeserialized(positions, input.data());
+    digest.compress(positions);
+    // Extract the components
+    double min = digest.min();
+    double max = digest.max();
+    double sum = digest.sum();
+    double compression = digest.compression();
+    int64_t count = 0;
+    // Get the centroids from the TDigest
+    std::vector<double> means;
+    std::vector<double> weights;
+    const double* tDigestWeights = digest.weights();
+    const double* tDigestMeans = digest.means();
+    size_t weightsSize = digest.weightsSize();
+    for (int i = 0; i < weightsSize; i++) {
+      means.push_back(tDigestMeans[i]);
+      weights.push_back(tDigestWeights[i]);
+      count += tDigestWeights[i];
+    }
+    // Create the result row
+    result.copy_from(std::make_tuple(
+        std::move(means),
+        std::move(weights),
+        compression,
+        min,
+        max,
+        sum,
+        count));
+
+    return true;
+  }
+};
+
+template <typename T>
+struct TrimmedMeanFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+  FOLLY_ALWAYS_INLINE bool call(
+      out_type<double>& result,
+      const arg_type<SimpleTDigest<double>>& input,
+      const arg_type<double>& lowerQuantileBound,
+      const arg_type<double>& upperQuantileBound) {
+    VELOX_USER_CHECK(
+        0 <= lowerQuantileBound && lowerQuantileBound <= 1,
+        "Lower quantile bound must be between 0 and 1");
+    VELOX_USER_CHECK(
+        0 <= upperQuantileBound && upperQuantileBound <= 1,
+        "Upper quantile bound must be between 0 and 1");
+    VELOX_USER_CHECK(
+        lowerQuantileBound <= upperQuantileBound,
+        "Lower quantile bound must be less than or equal to upper quantile bound");
+    // Deserialize the TDigest
+    TDigest<> digest;
+    std::vector<int16_t> positions;
+    digest.mergeDeserialized(positions, input.data());
+    digest.compress(positions);
+    size_t weightsSize = digest.weightsSize();
+    if (weightsSize == 0) {
+      return false;
+    }
+    // Special case for full range
+    if (lowerQuantileBound == 0 && upperQuantileBound == 1) {
+      result = digest.sum() / digest.totalWeight();
+      return true;
+    }
+
+    // Calculate the trimmed mean
+    const double* weights = digest.weights();
+    const double* means = digest.means();
+    double totalWeight = std::accumulate(weights, weights + weightsSize, 0.0);
+    double lowerIndex = lowerQuantileBound * totalWeight;
+    double upperIndex = upperQuantileBound * totalWeight;
+
+    double weightSoFar = 0;
+    double sumInBounds = 0;
+    double weightInBounds = 0;
+
+    for (size_t i = 0; i < weightsSize; i++) {
+      if (weightSoFar < lowerIndex && lowerIndex <= weightSoFar + weights[i] &&
+          upperIndex <= weightSoFar + weights[i]) {
+        // Lower and upper bounds are in the same weight interval
+        result = means[i];
+        return true;
+      } else if (
+          weightSoFar < lowerIndex && lowerIndex <= weightSoFar + weights[i]) {
+        // The lower bound is between our current point and the next point
+        double addedWeight = weightSoFar + weights[i] - lowerIndex;
+        sumInBounds += means[i] * addedWeight;
+        weightInBounds += addedWeight;
+      } else if (
+          upperIndex < weightSoFar + weights[i] && upperIndex > weightSoFar) {
+        // The upper bound is between our current point and the next point
+        double addedWeight = upperIndex - weightSoFar;
+        sumInBounds += means[i] * addedWeight;
+        weightInBounds += addedWeight;
+        result = sumInBounds / weightInBounds;
+        return true;
+      } else if (lowerIndex <= weightSoFar && weightSoFar <= upperIndex) {
+        // We are somewhere in between the lower and upper bounds
+        sumInBounds += means[i] * weights[i];
+        weightInBounds += weights[i];
+      }
+      weightSoFar += weights[i];
+    }
+    if (weightInBounds > 0) {
+      result = sumInBounds / weightInBounds;
+      return true;
+    }
+    result = sumInBounds / weightInBounds;
+    return true;
+  }
+};
 } // namespace facebook::velox::functions
