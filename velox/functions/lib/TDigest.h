@@ -131,6 +131,26 @@ class TDigest {
     return max_;
   }
 
+  /// Returns the weights of the centroids.
+  const double* weights() const {
+    return weights_.data();
+  }
+
+  /// Returns the size of the weights array.
+  size_t weightsSize() const {
+    return weights_.size();
+  }
+
+  /// Returns the means of the centroids.
+  const double* means() const {
+    return means_.data();
+  }
+
+  /// Returns the size of the means array.
+  size_t meansSize() const {
+    return means_.size();
+  }
+
   static constexpr int8_t kSerializationVersion = 1;
   static constexpr double kEpsilon = 1e-3;
   static constexpr double kRelativeErrorEpsilon = 1e-4;
