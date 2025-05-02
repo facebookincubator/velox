@@ -56,7 +56,6 @@ class Merge : public SourceOperator {
 
   std::vector<std::shared_ptr<MergeSource>> sources_;
   size_t numStartedSources_{0};
-  std::vector<SourceStream*> mergeStreams_;
 
  private:
   void startSources();
@@ -92,9 +91,9 @@ class Merge : public SourceOperator {
   /// source is blocked waiting for the next batch of data.
   std::vector<ContinueFuture> sourceBlockingFutures_;
 
-  int8_t maxMergeSources_{0};
-  std::unique_ptr<TreeOfLosers<SourceStream>> inputMerger_;
-  std::unique_ptr<TreeOfLosers<SourceStream>> spillMergeReader_;
+  int32_t maxMergeSources_{std::numeric_limits<int32_t>::max()};
+  std::unique_ptr<TreeOfLosers<SourceStream>> partialInputMerger_;
+  std::vector<SourceStream*> partialMergeStream_;
 };
 
 class SourceStream final : public MergeStream {
