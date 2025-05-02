@@ -508,7 +508,8 @@ CudfHashAggregation::CudfHashAggregation(
       isPartialOutput_(exec::isPartialOutput(aggregationNode->step())),
       isGlobal_(aggregationNode->groupingKeys().empty()),
       isDistinct_(!isGlobal_ && aggregationNode->aggregates().empty()),
-      step_(aggregationNode->step()) {}
+      maxPartialAggregationMemoryUsage_(
+          driverCtx->queryConfig().maxPartialAggregationMemoryUsage()) {}
 
 void CudfHashAggregation::initialize() {
   Operator::initialize();
@@ -663,7 +664,7 @@ void CudfHashAggregation::addInput(RowVectorPtr input) {
   auto cudfInput = std::dynamic_pointer_cast<cudf_velox::CudfVector>(input);
   VELOX_CHECK_NOT_NULL(cudfInput);
 
-  if (step_ == core::AggregationNode::Step::kPartial && !isGlobal_) {
+  if (isPartialOutput_ && !isGlobal_) {
     if (isDistinct_) {
       // Handle partial distinct aggregation
       computeIntermediateDistinctPartial(cudfInput);
@@ -780,7 +781,15 @@ RowVectorPtr CudfHashAggregation::getOutput() {
 
   // Handle partial groupby
   if (isPartialOutput_ && !isGlobal_) {
+    if (partialOutput_ &&
+        partialOutput_->estimateFlatSize() >
+            maxPartialAggregationMemoryUsage_) {
+      // This is basically a flush of the partial output
+      return std::move(partialOutput_);
+    }
     if (not noMoreInput_) {
+      // Don't produce output if the partial output hasn't reached memory limit
+      // and there's more batches to come
       return nullptr;
     }
     if (!partialOutput_ && finished_) {

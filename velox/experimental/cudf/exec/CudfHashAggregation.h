@@ -124,7 +124,8 @@ class CudfHashAggregation : public exec::Operator, public NvtxHelper {
   // aggregations
   const bool isDistinct_;
 
-  const core::AggregationNode::Step step_;
+  // Maximum memory usage for partial aggregation.
+  const int64_t maxPartialAggregationMemoryUsage_;
 
   bool finished_ = false;
 
