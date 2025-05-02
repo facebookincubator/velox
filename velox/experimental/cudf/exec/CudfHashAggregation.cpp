@@ -149,8 +149,7 @@ struct CountAggregator : cudf_velox::CudfHashAggregation::Aggregator {
       rmm::cuda_stream_view stream) override {
     // cudf produces int32 for count(0) but velox expects int64
     auto col = std::move(results[outputIdx_].results[0]);
-    // wtf is this? do we not need to cast int32 to int64 when counting columns?
-    if (/* constant != nullptr && */
+    if (constant != nullptr &&
         col->type() == cudf::data_type(cudf::type_id::INT32)) {
       col = cudf::cast(*col, cudf::data_type(cudf::type_id::INT64), stream);
     }
@@ -729,16 +728,6 @@ CudfVectorPtr CudfHashAggregation::doGroupByAggregation(
 
   auto numRows = resultTable->num_rows();
 
-  static std::mutex printMutex;
-  {
-    std::lock_guard<std::mutex> lock(printMutex);
-    std::cout << "Plan node id: " << operatorCtx_->planNodeId()
-              << " operator type: " << operatorCtx_->operatorType()
-              << " Driver " << operatorCtx_->driverCtx()->driverId
-              << " num rows before aggregation: " << tbl->num_rows()
-              << " num rows after aggregation: " << numRows << std::endl;
-  }
-
   return std::make_shared<cudf_velox::CudfVector>(
       pool(), outputType_, numRows, std::move(resultTable), stream);
 }
@@ -846,15 +835,6 @@ RowVectorPtr CudfHashAggregation::getOutput() {
   }
 
   VELOX_CHECK_NOT_NULL(tbl);
-
-  static std::mutex printMutex;
-  {
-    std::lock_guard<std::mutex> lock(printMutex);
-    std::cout << "Plan node id: " << operatorCtx_->planNodeId()
-              << " operator type: " << operatorCtx_->operatorType()
-              << " Driver " << operatorCtx_->driverCtx()->driverId
-              << " table size: " << tbl->num_rows() << std::endl;
-  }
 
   if (isDistinct_) {
     return getDistinctKeys(std::move(tbl), groupingKeyInputChannels_, stream);
