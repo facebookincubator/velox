@@ -107,6 +107,8 @@ class CudfHashAggregation : public exec::Operator, public NvtxHelper {
       std::vector<column_index_t> const& groupByKeys,
       rmm::cuda_stream_view stream);
 
+  CudfVectorPtr releaseAndResetPartialOutput();
+
   std::vector<column_index_t> groupingKeyInputChannels_;
   std::vector<column_index_t> groupingKeyOutputChannels_;
 
@@ -126,6 +128,8 @@ class CudfHashAggregation : public exec::Operator, public NvtxHelper {
 
   // Maximum memory usage for partial aggregation.
   const int64_t maxPartialAggregationMemoryUsage_;
+  // Number of rows received in the input so far.
+  int64_t numInputRows_ = 0;
 
   bool finished_ = false;
 

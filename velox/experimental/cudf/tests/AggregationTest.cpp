@@ -17,12 +17,14 @@
 #include "velox/experimental/cudf/exec/ToCudf.h"
 
 #include "velox/dwio/common/tests/utils/BatchMaker.h"
+#include "velox/exec/PlanNodeStats.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/OperatorTestBase.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
 
 namespace facebook::velox::exec::test {
 
+using core::QueryConfig;
 using facebook::velox::test::BatchMaker;
 using namespace common::testutil;
 
@@ -475,6 +477,73 @@ TEST_F(AggregationTest, countPartialFinalGlobal) {
                 .planNode();
 
   assertQuery(op, "SELECT count(*) FROM tmp");
+}
+
+TEST_F(AggregationTest, partialAggregationMemoryLimit) {
+  auto vectors = {
+      makeRowVector({makeFlatVector<int32_t>(
+          100, [](auto row) { return row; }, nullEvery(5))}),
+      makeRowVector({makeFlatVector<int32_t>(
+          110, [](auto row) { return row + 29; }, nullEvery(7))}),
+      makeRowVector({makeFlatVector<int32_t>(
+          90, [](auto row) { return row - 71; }, nullEvery(7))}),
+  };
+
+  createDuckDbTable(vectors);
+
+  // Set an artificially low limit on the amount of data to accumulate in
+  // the partial aggregation.
+
+  // Distinct aggregation.
+  core::PlanNodeId aggNodeId;
+  auto task = AssertQueryBuilder(duckDbQueryRunner_)
+                  .config(QueryConfig::kMaxPartialAggregationMemory, 100)
+                  .plan(PlanBuilder()
+                            .values(vectors)
+                            .partialAggregation({"c0"}, {})
+                            .capturePlanNodeId(aggNodeId)
+                            .finalAggregation()
+                            .planNode())
+                  .assertResults("SELECT distinct c0 FROM tmp");
+
+  auto rowFlushStats = toPlanStats(task->taskStats())
+                           .at(aggNodeId)
+                           .customStats.at("flushRowCount");
+  EXPECT_GT(rowFlushStats.sum, 0);
+  EXPECT_GT(rowFlushStats.max, 0);
+
+  // Count aggregation.
+  task = AssertQueryBuilder(duckDbQueryRunner_)
+             .config(QueryConfig::kMaxPartialAggregationMemory, 1)
+             .plan(PlanBuilder()
+                       .values(vectors)
+                       .partialAggregation({"c0"}, {"count(1)"})
+                       .capturePlanNodeId(aggNodeId)
+                       .finalAggregation()
+                       .planNode())
+             .assertResults("SELECT c0, count(1) FROM tmp GROUP BY 1");
+
+  rowFlushStats = toPlanStats(task->taskStats())
+                      .at(aggNodeId)
+                      .customStats.at("flushRowCount");
+  EXPECT_GT(rowFlushStats.sum, 0);
+  EXPECT_GT(rowFlushStats.max, 0);
+
+  // Global aggregation.
+  task = AssertQueryBuilder(duckDbQueryRunner_)
+             .config(QueryConfig::kMaxPartialAggregationMemory, 1)
+             .plan(PlanBuilder()
+                       .values(vectors)
+                       .partialAggregation({}, {"sum(c0)"})
+                       .capturePlanNodeId(aggNodeId)
+                       .finalAggregation()
+                       .planNode())
+             .assertResults("SELECT sum(c0) FROM tmp");
+  EXPECT_EQ(
+      0,
+      toPlanStats(task->taskStats())
+          .at(aggNodeId)
+          .customStats.count("flushRowCount"));
 }
 
 } // namespace facebook::velox::exec::test

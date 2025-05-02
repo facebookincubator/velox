@@ -660,6 +660,7 @@ void CudfHashAggregation::addInput(RowVectorPtr input) {
   if (input->size() == 0) {
     return;
   }
+  numInputRows_ += input->size();
 
   auto cudfInput = std::dynamic_pointer_cast<cudf_velox::CudfVector>(input);
   VELOX_CHECK_NOT_NULL(cudfInput);
@@ -776,6 +777,25 @@ CudfVectorPtr CudfHashAggregation::getDistinctKeys(
       pool(), outputType_, numRows, std::move(result), stream);
 }
 
+CudfVectorPtr CudfHashAggregation::releaseAndResetPartialOutput() {
+  VELOX_DCHECK(!isGlobal_);
+  auto numOutputRows = partialOutput_->size();
+  const double aggregationPct =
+      numOutputRows == 0 ? 0 : (numOutputRows * 1.0) / numInputRows_ * 100;
+  {
+    auto lockedStats = stats_.wlock();
+    lockedStats->addRuntimeStat("flushRowCount", RuntimeCounter(numOutputRows));
+    lockedStats->addRuntimeStat("flushTimes", RuntimeCounter(1));
+    lockedStats->addRuntimeStat(
+        "partialAggregationPct", RuntimeCounter(aggregationPct));
+  }
+
+  numInputRows_ = 0;
+  // We're moving partialOutput_ to the caller because we want it to be null
+  // after this call.
+  return std::move(partialOutput_);
+}
+
 RowVectorPtr CudfHashAggregation::getOutput() {
   VELOX_NVTX_OPERATOR_FUNC_RANGE();
 
@@ -785,7 +805,7 @@ RowVectorPtr CudfHashAggregation::getOutput() {
         partialOutput_->estimateFlatSize() >
             maxPartialAggregationMemoryUsage_) {
       // This is basically a flush of the partial output
-      return std::move(partialOutput_);
+      return releaseAndResetPartialOutput();
     }
     if (not noMoreInput_) {
       // Don't produce output if the partial output hasn't reached memory limit
@@ -795,9 +815,7 @@ RowVectorPtr CudfHashAggregation::getOutput() {
     if (!partialOutput_ && finished_) {
       return nullptr;
     }
-    // We're moving partialOutput_ to the caller because we want it to be null
-    // after this call.
-    return std::move(partialOutput_);
+    return releaseAndResetPartialOutput();
   }
 
   if (finished_) {
