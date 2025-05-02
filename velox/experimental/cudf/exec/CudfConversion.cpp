@@ -57,11 +57,11 @@ cudf::size_type preferredGpuBatchSizeRows(
   constexpr cudf::size_type kDefaultGpuBatchSizeRows = 100000;
   const auto batchSize = queryConfig.get<int32_t>(
       CudfFromVelox::kGpuBatchSizeRows, kDefaultGpuBatchSizeRows);
-  VELOX_CHECK_GT(batchSize, 0, "cudf_gpu_batch_size_rows must be > 0");
+  VELOX_CHECK_GT(batchSize, 0, "velox.cudf.gpu_batch_size_rows must be > 0");
   VELOX_CHECK_LE(
       batchSize,
       std::numeric_limits<vector_size_t>::max(),
-      "cudf_gpu_batch_size_rows must be <= max(vector_size_t)");
+      "velox.cudf.gpu_batch_size_rows must be <= max(vector_size_t)");
   return batchSize;
 }
 } // namespace

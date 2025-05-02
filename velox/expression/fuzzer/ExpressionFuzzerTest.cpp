@@ -55,6 +55,7 @@ using namespace facebook::velox::exec::test;
 using facebook::velox::exec::test::PrestoQueryRunner;
 using facebook::velox::fuzzer::ArgTypesGenerator;
 using facebook::velox::fuzzer::ArgValuesGenerator;
+using facebook::velox::fuzzer::CastVarcharAndJsonArgValuesGenerator;
 using facebook::velox::fuzzer::ExpressionFuzzer;
 using facebook::velox::fuzzer::FuzzerRunner;
 using facebook::velox::fuzzer::JsonExtractArgValuesGenerator;
@@ -116,7 +117,12 @@ int main(int argc, char** argv) {
       // make other functions throw VeloxRuntimeErrors.
       "from_unixtime",
       // JSON not supported, Real doesn't match exactly, etc.
-      "array_join",
+      "array_join(array(json),varchar) -> varchar",
+      "array_join(array(json),varchar,varchar) -> varchar",
+      "array_join(array(real),varchar) -> varchar",
+      "array_join(array(real),varchar,varchar) -> varchar",
+      "array_join(array(double),varchar) -> varchar",
+      "array_join(array(double),varchar,varchar) -> varchar",
       // BingTiles throw VeloxUserError when zoom/x/y are out of range.
       "bing_tile",
       "bing_tile_zoom_level",
@@ -151,10 +157,13 @@ int main(int argc, char** argv) {
 
   std::unordered_map<std::string, std::shared_ptr<ArgValuesGenerator>>
       argValuesGenerators = {
+          {"cast", std::make_shared<CastVarcharAndJsonArgValuesGenerator>()},
           {"json_parse", std::make_shared<JsonParseArgValuesGenerator>()},
           {"json_extract", std::make_shared<JsonExtractArgValuesGenerator>()},
           {"value_at_quantile",
-           std::make_shared<TDigestArgValuesGenerator>("value_at_quantile")}};
+           std::make_shared<TDigestArgValuesGenerator>("value_at_quantile")},
+          {"scale_tdigest",
+           std::make_shared<TDigestArgValuesGenerator>("scale_tdigest")}};
 
   std::shared_ptr<facebook::velox::memory::MemoryPool> rootPool{
       facebook::velox::memory::memoryManager()->addRootPool()};
