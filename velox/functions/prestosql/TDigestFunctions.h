@@ -215,4 +215,83 @@ struct DestructureTDigestFunction {
     return true;
   }
 };
+
+template <typename T>
+struct TrimmedMeanFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+  FOLLY_ALWAYS_INLINE bool call(
+      out_type<double>& result,
+      const arg_type<SimpleTDigest<double>>& input,
+      const arg_type<double>& lowerQuantileBound,
+      const arg_type<double>& upperQuantileBound) {
+    VELOX_USER_CHECK(
+        0 <= lowerQuantileBound && lowerQuantileBound <= 1,
+        "Lower quantile bound must be between 0 and 1");
+    VELOX_USER_CHECK(
+        0 <= upperQuantileBound && upperQuantileBound <= 1,
+        "Upper quantile bound must be between 0 and 1");
+    VELOX_USER_CHECK(
+        lowerQuantileBound <= upperQuantileBound,
+        "Lower quantile bound must be less than or equal to upper quantile bound");
+    // Deserialize the TDigest
+    TDigest<> digest;
+    std::vector<int16_t> positions;
+    digest.mergeDeserialized(positions, input.data());
+    digest.compress(positions);
+    size_t weightsSize = digest.weightsSize();
+    if (weightsSize == 0) {
+      return false;
+    }
+    // Special case for full range
+    if (lowerQuantileBound == 0 && upperQuantileBound == 1) {
+      result = digest.sum() / digest.totalWeight();
+      return true;
+    }
+
+    // Calculate the trimmed mean
+    const double* weights = digest.weights();
+    const double* means = digest.means();
+    double totalWeight = std::accumulate(weights, weights + weightsSize, 0.0);
+    double lowerIndex = lowerQuantileBound * totalWeight;
+    double upperIndex = upperQuantileBound * totalWeight;
+
+    double weightSoFar = 0;
+    double sumInBounds = 0;
+    double weightInBounds = 0;
+
+    for (size_t i = 0; i < weightsSize; i++) {
+      if (weightSoFar < lowerIndex && lowerIndex <= weightSoFar + weights[i] &&
+          upperIndex <= weightSoFar + weights[i]) {
+        // Lower and upper bounds are in the same weight interval
+        result = means[i];
+        return true;
+      } else if (
+          weightSoFar < lowerIndex && lowerIndex <= weightSoFar + weights[i]) {
+        // The lower bound is between our current point and the next point
+        double addedWeight = weightSoFar + weights[i] - lowerIndex;
+        sumInBounds += means[i] * addedWeight;
+        weightInBounds += addedWeight;
+      } else if (
+          upperIndex < weightSoFar + weights[i] && upperIndex > weightSoFar) {
+        // The upper bound is between our current point and the next point
+        double addedWeight = upperIndex - weightSoFar;
+        sumInBounds += means[i] * addedWeight;
+        weightInBounds += addedWeight;
+        result = sumInBounds / weightInBounds;
+        return true;
+      } else if (lowerIndex <= weightSoFar && weightSoFar <= upperIndex) {
+        // We are somewhere in between the lower and upper bounds
+        sumInBounds += means[i] * weights[i];
+        weightInBounds += weights[i];
+      }
+      weightSoFar += weights[i];
+    }
+    if (weightInBounds > 0) {
+      result = sumInBounds / weightInBounds;
+      return true;
+    }
+    result = sumInBounds / weightInBounds;
+    return true;
+  }
+};
 } // namespace facebook::velox::functions
