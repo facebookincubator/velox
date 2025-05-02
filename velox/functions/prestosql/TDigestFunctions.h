@@ -106,4 +106,24 @@ struct ScaleTDigestFunction {
     digest.serialize(result.data());
   }
 };
+template <typename T>
+struct QuantileAtValueFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  FOLLY_ALWAYS_INLINE bool call(
+      out_type<double>& result,
+      const arg_type<SimpleTDigest<double>>& input,
+      const arg_type<double>& value) {
+    if (std::isnan(value)) {
+      return false;
+    }
+    TDigest<> digest;
+    std::vector<int16_t> positions;
+    digest.mergeDeserialized(positions, input.data());
+    digest.compress(positions);
+    result = digest.getCdf(value);
+    return true;
+  }
+};
+
 } // namespace facebook::velox::functions
