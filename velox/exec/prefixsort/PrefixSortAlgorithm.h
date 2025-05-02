@@ -16,11 +16,11 @@
 #pragma once
 
 #include <cstdint>
+#include <cstring>
 #include <functional>
 #include <memory>
 
 #include "velox/common/base/Exceptions.h"
-#include "velox/common/base/SimdUtil.h"
 
 namespace facebook::velox::exec::prefixsort {
 
@@ -178,9 +178,9 @@ class PrefixSortRunner {
   FOLLY_ALWAYS_INLINE void swap(
       const detail::PrefixSortIterator& lhs,
       const detail::PrefixSortIterator& rhs) const {
-    simd::memcpy(swapBuffer_, *lhs, entrySize_);
-    simd::memcpy(*lhs, *rhs, entrySize_);
-    simd::memcpy(*rhs, swapBuffer_, entrySize_);
+    std::memcpy(swapBuffer_, *lhs, entrySize_);
+    std::memcpy(*lhs, *rhs, entrySize_);
+    std::memcpy(*rhs, swapBuffer_, entrySize_);
   }
 
   FOLLY_ALWAYS_INLINE void rangeSwap(

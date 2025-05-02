@@ -14,6 +14,8 @@
  * limitations under the License.
  */
 
+#include <cstring>
+
 #include "velox/dwio/common/SelectiveColumnReaderInternal.h"
 
 namespace facebook::velox::dwio::common {
@@ -137,7 +139,7 @@ void SelectiveColumnReader::prepareNulls(
   anyNulls_ = false;
   // Clear whole capacity because future uses could hit uncleared data between
   // capacity() and 'numBytes'.
-  simd::memset(rawResultNulls_, bits::kNotNullByte, resultNulls_->capacity());
+  std::memset(rawResultNulls_, bits::kNotNullByte, resultNulls_->capacity());
 }
 
 const uint64_t* SelectiveColumnReader::shouldMoveNulls(const RowSet& rows) {
@@ -454,7 +456,7 @@ void SelectiveColumnReader::resetFilterCaches() {
     scanState_.updateRawState();
   }
   if (!scanState_.filterCache.empty()) {
-    simd::memset(
+    std::memset(
         scanState_.filterCache.data(),
         FilterResult::kUnknown,
         scanState_.filterCache.size());

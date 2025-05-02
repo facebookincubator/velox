@@ -16,8 +16,8 @@
 #pragma once
 
 #include <cstdint>
+#include <cstring>
 
-#include "velox/common/base/SimdUtil.h"
 #include "velox/common/memory/HashStringAllocator.h"
 #include "velox/type/Timestamp.h"
 #include "velox/type/Type.h"
@@ -53,7 +53,7 @@ class PrefixSortEncoder {
       encodeNoNulls(value.value(), dest + 1, encodeSize - 1);
     } else {
       dest[0] = nullsFirst_ ? 0 : 1;
-      simd::memset(dest + 1, 0, encodeSize - 1);
+      std::memset(dest + 1, 0, encodeSize - 1);
     }
   }
 

@@ -291,7 +291,7 @@ void PrefixSort::extractRowAndEncodePrefixKeys(char* row, char* prefixBuffer) {
         prefixBuffer);
   }
 
-  simd::memset(
+  std::memset(
       prefixBuffer + sortLayout_.normalizedBufferSize -
           sortLayout_.numPaddingBytes,
       0,

@@ -13,6 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+#include <cstring>
 #include "velox/common/memory/HashStringAllocator.h"
 #include "velox/common/base/Portability.h"
 #include "velox/common/base/SimdUtil.h"
@@ -612,7 +613,7 @@ inline bool HashStringAllocator::storeStringFast(
     }
   }
 
-  simd::memcpy(header->begin(), bytes, numBytes);
+  std::memcpy(header->begin(), bytes, numBytes);
   *reinterpret_cast<StringView*>(destination) =
       StringView(reinterpret_cast<char*>(header->begin()), numBytes);
   return true;

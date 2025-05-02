@@ -15,6 +15,8 @@
  */
 #include "velox/vector/VectorPool.h"
 
+#include <cstring>
+
 namespace facebook::velox {
 
 namespace {
@@ -113,7 +115,7 @@ VectorPtr VectorPool::TypePool::pop(
     auto result = std::move(vectors[--size]);
     if (UNLIKELY(result->rawNulls() != nullptr)) {
       // This is a recyclable vector, no need to check uniqueness.
-      simd::memset(
+      std::memset(
           const_cast<uint64_t*>(result->rawNulls()),
           bits::kNotNullByte,
           bits::roundUp(std::min<int32_t>(vectorSize, result->size()), 64) / 8);
@@ -121,7 +123,7 @@ VectorPtr VectorPool::TypePool::pop(
     if (UNLIKELY(
             result->typeKind() == TypeKind::VARCHAR ||
             result->typeKind() == TypeKind::VARBINARY)) {
-      simd::memset(
+      std::memset(
           const_cast<void*>(result->valuesAsVoid()),
           0,
           std::min<int32_t>(vectorSize, result->size()) * sizeof(StringView));

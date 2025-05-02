@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+#include <cstring>
 #include "velox/dwio/dwrf/reader/SelectiveIntegerDictionaryColumnReader.h"
 #include "velox/dwio/common/BufferUtil.h"
 #include "velox/dwio/dwrf/common/DecoderUtil.h"
@@ -125,7 +126,7 @@ void SelectiveIntegerDictionaryColumnReader::ensureInitialized() {
     // failure when preparing a gather with all lanes masked out.
     scanState_.filterCache.resize(
         std::max<int32_t>(1, scanState_.dictionary.numValues));
-    simd::memset(
+    std::memset(
         scanState_.filterCache.data(),
         FilterResult::kUnknown,
         scanState_.filterCache.size());

@@ -16,6 +16,8 @@
 
 #include "velox/dwio/parquet/reader/PageReader.h"
 
+#include <cstring>
+
 #include "velox/common/testutil/TestValue.h"
 #include "velox/dwio/common/BufferUtil.h"
 #include "velox/dwio/common/ColumnVisitors.h"
@@ -519,7 +521,7 @@ void PageReader::makeFilterCache(dwio::common::ScanState& state) {
   VELOX_CHECK(
       !state.dictionary2.values, "Parquet supports only one dictionary");
   state.filterCache.resize(state.dictionary.numValues);
-  simd::memset(
+  std::memset(
       state.filterCache.data(),
       dwio::common::FilterResult::kUnknown,
       state.filterCache.size());

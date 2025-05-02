@@ -16,12 +16,13 @@
 #pragma once
 
 #include <algorithm>
+#include <cstring>
 #include <memory>
 #include <optional>
 #include <vector>
 
+#include "velox/common/base/BitUtil.h"
 #include "velox/common/base/Exceptions.h"
-#include "velox/common/base/SimdUtil.h"
 
 #include <folly/Likely.h>
 
@@ -350,7 +351,7 @@ class MergeArray {
         [](const Stream* left, const Stream* right) { return *left < *right; });
     auto offset = it - rawStreams;
     if (offset > 1) {
-      simd::memcpy(rawStreams, rawStreams + 1, (offset - 1) * sizeof(Stream*));
+      std::memcpy(rawStreams, rawStreams + 1, (offset - 1) * sizeof(Stream*));
       it[-1] = first;
     }
     return streams_[0].get();
