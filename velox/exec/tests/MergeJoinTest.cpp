@@ -729,6 +729,52 @@ TEST_F(MergeJoinTest, rightJoinFilterWithNull) {
       .assertResults("SELECT * from t RIGHT JOIN u ON a = c AND b < d");
 }
 
+TEST_F(MergeJoinTest, fisrtRowsNull) {
+  auto left = makeRowVector(
+      {"a", "b"},
+      {
+          makeNullableFlatVector<int32_t>({std::nullopt, 3}),
+          makeNullableFlatVector<double>({std::nullopt, 3}),
+      });
+
+  auto right = makeRowVector(
+      {"c", "d"},
+      {
+          makeNullableFlatVector<int32_t>({std::nullopt, std::nullopt, 3}),
+          makeNullableFlatVector<double>({std::nullopt, std::nullopt, 4}),
+      });
+
+  createDuckDbTable("t", {left});
+  createDuckDbTable("u", {right});
+
+  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+
+  auto plan = [&](core::JoinType type) {
+    return PlanBuilder(planNodeIdGenerator)
+        .values({left})
+        .mergeJoin(
+            {"a"},
+            {"c"},
+            PlanBuilder(planNodeIdGenerator).values({right}).planNode(),
+            "b < d",
+            {"a", "b", "c", "d"},
+            type)
+        .planNode();
+  };
+
+  // Right Join
+  AssertQueryBuilder(plan(core::JoinType::kRight), duckDbQueryRunner_)
+      .assertResults("SELECT * from t RIGHT JOIN u ON a = c AND b < d");
+
+  // Left Join
+  AssertQueryBuilder(plan(core::JoinType::kLeft), duckDbQueryRunner_)
+      .assertResults("SELECT * from t Left JOIN u ON a = c AND b < d");
+
+  // Inner Join
+  AssertQueryBuilder(plan(core::JoinType::kInner), duckDbQueryRunner_)
+      .assertResults("SELECT * from t, u where a = c AND b < d");
+}
+
 // Verify that both left-side and right-side pipelines feeding the merge join
 // always run single-threaded.
 TEST_F(MergeJoinTest, numDrivers) {
@@ -915,6 +961,55 @@ TEST_F(MergeJoinTest, semiJoin) {
       "SELECT u0 FROM u where u0 IN (SELECT t0 from t) and u0 > 1",
       {"u0"},
       core::JoinType::kRightSemiFilter);
+}
+
+TEST_F(MergeJoinTest, semiJoinWithMultipleMatchVectors) {
+  std::vector<RowVectorPtr> leftVectors;
+  for (int i = 0; i < 10; ++i) {
+    leftVectors.push_back(makeRowVector(
+        {"t0"}, {makeFlatVector<int64_t>({i / 2, i / 2, i / 2})}));
+  }
+  std::vector<RowVectorPtr> rightVectors;
+  for (int i = 0; i < 10; ++i) {
+    rightVectors.push_back(makeRowVector(
+        {"u0"}, {makeFlatVector<int64_t>({i / 2, i / 2, i / 2})}));
+  }
+
+  createDuckDbTable("t", leftVectors);
+  createDuckDbTable("u", rightVectors);
+
+  auto testSemiJoin = [&](const std::string& filter,
+                          const std::string& sql,
+                          const std::vector<std::string>& outputLayout,
+                          core::JoinType joinType) {
+    auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+    auto plan = PlanBuilder(planNodeIdGenerator)
+                    .values(leftVectors)
+                    .mergeJoin(
+                        {"t0"},
+                        {"u0"},
+                        PlanBuilder(planNodeIdGenerator)
+                            .values(rightVectors)
+                            .planNode(),
+                        filter,
+                        outputLayout,
+                        joinType)
+                    .planNode();
+    AssertQueryBuilder(plan, duckDbQueryRunner_)
+        .config(core::QueryConfig::kMaxOutputBatchRows, "1")
+        .assertResults(sql);
+  };
+
+  testSemiJoin(
+      "u0 > 1",
+      "SELECT u0 FROM u where u0 IN (SELECT t0 from t) and u0 > 1",
+      {"u0"},
+      core::JoinType::kRightSemiFilter);
+  testSemiJoin(
+      "t0 >1",
+      "SELECT t0 FROM t where t0 IN (SELECT u0 from u) and t0 > 1",
+      {"t0"},
+      core::JoinType::kLeftSemiFilter);
 }
 
 TEST_F(MergeJoinTest, rightJoin) {
@@ -1450,14 +1545,14 @@ DEBUG_ONLY_TEST_F(MergeJoinTest, failureOnRightSide) {
   // this to be called at least once to ensure consumerPromise_ is created in
   // the MergeSource.
   SCOPED_TESTVALUE_SET(
-      "facebook::velox::exec::MergeSource::next",
+      "facebook::velox::exec::MergeJoinSource::next",
       std::function<void(const MergeJoinSource*)>([&](const MergeJoinSource*) {
         nextCalled = true;
         nextCalledWait.notifyAll();
       }));
 
   SCOPED_TESTVALUE_SET(
-      "facebook::velox::exec::MergeSource::enqueue",
+      "facebook::velox::exec::MergeJoinSource::enqueue",
       std::function<void(const MergeJoinSource*)>([&](const MergeJoinSource*) {
         // Only call this the first time, otherwise if we throw an exception
         // during Driver.close the process will crash.

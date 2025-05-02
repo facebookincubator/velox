@@ -27,6 +27,10 @@ Generic Configuration
      - 10000
      - Max number of rows that could be return by operators from Operator::getOutput. It is used when an estimate of
        average row size is known and preferred_output_batch_bytes is used to compute the number of output rows.
+   * - max_elements_size_in_repeat_and_sequence
+     - integer
+     - 10000
+     - Max number of elements that can be set in `repeat` and `sequence` functions.
    * - table_scan_getoutput_time_limit_ms
      - integer
      - 5000
@@ -218,6 +222,10 @@ Expression Evaluation Configuration
      - bool
      - false
      - Disable optimization in expression evaluation to delay loading of lazy inputs unless required. Should only be used for debugging.
+   * - debug_lambda_function_evaluation_batch_size
+     - integer
+     - 10000
+     - Some lambda functions over arrays and maps are evaluated in batches of the underlying elements that comprise the arrays/maps. This is done to make the batch size managable as array vectors can have thousands of elements each and hit scaling limits as implementations typically expect BaseVectors to a couple of thousand entries. This lets up tune those batch sizes. Setting this to zero is setting unlimited batch size.
 
 Memory Management
 -----------------
@@ -681,6 +689,16 @@ Each query can override the config by setting corresponding query session proper
      - Type
      - Default Value
      - Description
+   * - hive.parquet.writer.enable-dictionary
+     - hive.parquet.writer.enable_dictionary
+     - bool
+     - true
+     - Whether to enable dictionary encoding when writing into Parquet through the Arrow bridge.
+   * - hive.parquet.writer.dictionary-page-size-limit
+     - hive.parquet.writer.dictionary_page_size_limit
+     - string
+     - 1MB
+     - Dictionary Page size used when writing into Parquet through Arrow bridge. This setting is applicable only when dictionary encoding is enabled.
    * - hive.parquet.writer.timestamp-unit
      - hive.parquet.writer.timestamp_unit
      - tinyint
@@ -939,9 +957,9 @@ Spark-specific Configuration
    * - spark.legacy_statistical_aggregate
      - bool
      - false
-     - If true, Spark statistical aggregation functions including skewness, kurtosis will return NaN instead of NULL
-       when dividing by zero during expression evaluation. Please note that Spark statistical aggregation functions
-       including stddev, stddev_samp, variance, var_samp, covar_samp and corr should be supported to respect this configuration.
+     - If true, Spark statistical aggregation functions including skewness, kurtosis, stddev, stddev_samp, variance,
+       var_samp will return NaN instead of NULL when dividing by zero during expression evaluation. Please note that
+       Spark statistical aggregation functions including covar_samp and corr should be supported to respect this configuration.
 
 Tracing
 --------
@@ -955,7 +973,7 @@ Tracing
      - Description
    * - query_trace_enabled
      - bool
-     - true
+     - false
      - If true, enable query tracing.
    * - query_trace_dir
      - string

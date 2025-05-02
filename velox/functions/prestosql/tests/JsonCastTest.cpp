@@ -82,7 +82,9 @@ class JsonCastTest : public functions::test::CastBaseTest {
     auto thirdChild =
         makeNullableFlatVector<TChild3>(child3, fromType->childAt(2));
 
-    auto rowVector = makeRowVector({firstChild, secondChild, thirdChild});
+    auto names = fromType->asRow().names();
+    auto rowVector =
+        makeRowVector(names, {firstChild, secondChild, thirdChild});
     auto expectedVector =
         makeNullableFlatVector<JsonNativeType>(expected, JSON());
 
@@ -214,6 +216,12 @@ class JsonCastTest : public functions::test::CastBaseTest {
     }
 
     return vector;
+  }
+
+  void setFieldNamesInJsonCast(bool flag) {
+    queryCtx_->testingOverrideConfigUnsafe({
+        {core::QueryConfig::kFieldNamesInJsonCastEnabled, std::to_string(flag)},
+    });
   }
 };
 
@@ -734,6 +742,84 @@ TEST_F(JsonCastTest, fromRow) {
   testCast(allNullRow, allNullExpected);
 }
 
+TEST_F(JsonCastTest, fieldNamesInJsonCast) {
+  setFieldNamesInJsonCast(true);
+
+  std::vector<std::optional<int64_t>> child1{
+      std::nullopt, 2, 3, std::nullopt, 5};
+  std::vector<std::optional<StringView>> child2{
+      "red"_sv, std::nullopt, "blue"_sv, std::nullopt, "yellow"_sv};
+  std::vector<std::optional<double>> child3{
+      1.1, 2.2, std::nullopt, std::nullopt, 5.5};
+  std::vector<std::optional<JsonNativeType>> expected{
+      R"({"a":null,"b":"red","c":1.1})",
+      R"({"a":2,"b":null,"c":2.2})",
+      R"({"a":3,"b":"blue","c":null})",
+      R"({"a":null,"b":null,"c":null})",
+      R"({"a":5,"b":"yellow","c":5.5})"};
+
+  testCastFromRow<int64_t, StringView, double>(
+      ROW({"a", "b", "c"}, {BIGINT(), VARCHAR(), DOUBLE()}),
+      child1,
+      child2,
+      child3,
+      expected);
+
+  // Tests rows with child rows, and make sure json's are canonicalized.
+  auto child1_1 = makeNullableFlatVector<int64_t>({3, 1, 2});
+  auto child1_2 = makeArrayVectorFromJson<int64_t>({
+      "[1, 2, 3]",
+      "[4, 5]",
+      "[6, 7, 8]",
+  });
+
+  auto child1_3 = makeRowVector(
+      {"b", "a"},
+      {makeNullableFlatVector<int64_t>({5, 4, 3}),
+       makeNullableFlatVector<int64_t>({1, 2, 3})});
+
+  auto rowVector =
+      makeRowVector({"xyz", "abc", "mno"}, {child1_1, child1_2, child1_3});
+
+  // Canonicalized json's.
+  auto expectedVector = makeNullableFlatVector<JsonNativeType>(
+      {
+          R"({"abc":[1,2,3],"mno":{"a":1,"b":5},"xyz":3})",
+          R"({"abc":[4,5],"mno":{"a":2,"b":4},"xyz":1})",
+          R"({"abc":[6,7,8],"mno":{"a":3,"b":3},"xyz":2})",
+      },
+      JSON());
+
+  testCast(rowVector, expectedVector);
+
+  // Ensure Rows containing maps are also canonicalized.
+
+  auto child2_1 = makeNullableFlatVector<int64_t>({3, std::nullopt, 2});
+  auto child2_2 = makeMapVector<std::string, int64_t>(
+      {{{"x", 2}, {"a", 4}}, {{"y", 6}}, {{"z", 8}, {"A", 10}}});
+
+  auto child2_3 = makeRowVector(
+      {"b", "a"},
+      {makeNullableFlatVector<int64_t>({5, 4, 3}),
+       makeNullableFlatVector<int64_t>({1, 2, std::nullopt})});
+
+  auto rowVector2 =
+      makeRowVector({"xyz", "abc", "mno"}, {child2_1, child2_2, child2_3});
+
+  // Canonicalized json's.
+  auto expectedVector2 = makeNullableFlatVector<JsonNativeType>(
+      {
+          R"({"abc":{"a":4,"x":2},"mno":{"a":1,"b":5},"xyz":3})",
+          R"({"abc":{"y":6},"mno":{"a":2,"b":4},"xyz":null})",
+          R"({"abc":{"A":10,"z":8},"mno":{"a":null,"b":3},"xyz":2})",
+      },
+      JSON());
+
+  testCast(rowVector2, expectedVector2);
+
+  setFieldNamesInJsonCast(false);
+}
+
 TEST_F(JsonCastTest, fromNested) {
   // Create map of array vector.
   auto keyVector = makeNullableFlatVector<StringView>(
@@ -1173,6 +1259,32 @@ TEST_F(JsonCastTest, toMap) {
       "The JSON document has an improper structure");
 }
 
+TEST_F(JsonCastTest, unknownType) {
+  // Test map of unknown key and value types.
+
+  auto unknownKeyData = makeFlatUnknownVector(1);
+  auto unknownValueData = makeFlatUnknownVector(1);
+  auto unknownMapData = makeMapVector({0}, unknownKeyData, unknownValueData);
+  auto unknownMap = makeNullableFlatVector<JsonNativeType>({R"({})"}, JSON());
+
+  testCast(unknownMapData, unknownMap);
+
+  // Test map with unknown value types.
+  auto unknownValueMapData = makeMapVector(
+      {0}, makeFlatVector<StringView>({"red"_sv}), unknownValueData);
+  auto unknownValueMap =
+      makeNullableFlatVector<JsonNativeType>({R"({"red":null})"}, JSON());
+
+  testCast(unknownValueMapData, unknownValueMap);
+
+  // Test array of unknown element types.
+  auto unknownArrayData = makeArrayVector({0}, unknownKeyData);
+  auto unknownArray =
+      makeNullableFlatVector<JsonNativeType>({R"([null])"}, JSON());
+
+  testCast(unknownArrayData, unknownArray);
+}
+
 TEST_F(JsonCastTest, orderOfKeys) {
   auto data = makeFlatVector<JsonNativeType>(
       {
@@ -1504,6 +1616,16 @@ TEST_F(JsonCastTest, castInTry) {
 }
 
 TEST_F(JsonCastTest, tryCastFromJson) {
+  // Ensure bad unicode characters are handled correctly during casts.
+  auto dataj = makeFlatVector<JsonNativeType>(
+      {
+          R"("\uD83E褙")"_sv,
+      },
+      JSON());
+  auto expectedj = makeFlatVector<StringView>({R"(�褙)"}, VARCHAR());
+  evaluateAndVerify(
+      JSON(), VARCHAR(), makeRowVector({dataj}), expectedj, false);
+
   // Test try_cast to map when there are error in the conversions of map
   // elements.
   // To map(bigint, real).

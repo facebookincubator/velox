@@ -94,7 +94,6 @@ SpillState::SpillState(
     const common::GetSpillDirectoryPathCB& getSpillDirPathCb,
     const common::UpdateAndCheckSpillLimitCB& updateAndCheckSpillLimitCb,
     const std::string& fileNamePrefix,
-    int32_t maxPartitions,
     int32_t numSortKeys,
     const std::vector<CompareFlags>& sortCompareFlags,
     uint64_t targetFileSize,
@@ -107,7 +106,6 @@ SpillState::SpillState(
     : getSpillDirPathCb_(getSpillDirPathCb),
       updateAndCheckSpillLimitCb_(updateAndCheckSpillLimitCb),
       fileNamePrefix_(fileNamePrefix),
-      maxPartitions_(maxPartitions),
       numSortKeys_(numSortKeys),
       sortCompareFlags_(
           getCompareFlagsOrDefault(sortCompareFlags, numSortKeys)),
@@ -117,14 +115,11 @@ SpillState::SpillState(
       prefixSortConfig_(prefixSortConfig),
       fileCreateConfig_(fileCreateConfig),
       pool_(pool),
-      stats_(stats),
-      partitionWriters_(maxPartitions_) {}
+      stats_(stats) {}
 
-void SpillState::setPartitionSpilled(uint32_t partition) {
-  VELOX_DCHECK_LT(partition, maxPartitions_);
-  VELOX_DCHECK_LT(spilledPartitionSet_.size(), maxPartitions_);
-  VELOX_DCHECK(!spilledPartitionSet_.contains(partition));
-  spilledPartitionSet_.insert(partition);
+void SpillState::setPartitionSpilled(const SpillPartitionId& id) {
+  VELOX_DCHECK(!spilledPartitionIdSet_.contains(id));
+  spilledPartitionIdSet_.emplace(id);
   ++stats_->wlock()->spilledPartitions;
   common::incrementGlobalSpilledPartitionStats();
 }
@@ -148,10 +143,10 @@ void SpillState::updateSpilledInputBytes(uint64_t bytes) {
 }
 
 uint64_t SpillState::appendToPartition(
-    uint32_t partition,
+    const SpillPartitionId& id,
     const RowVectorPtr& rows) {
   VELOX_CHECK(
-      isPartitionSpilled(partition), "Partition {} is not spilled", partition);
+      isPartitionSpilled(id), "Partition {} is not spilled", id.toString());
 
   TestValue::adjust(
       "facebook::velox::exec::SpillState::appendToPartition", this);
@@ -160,94 +155,103 @@ uint64_t SpillState::appendToPartition(
       getSpillDirPathCb_, "Spill directory callback not specified.");
   auto spillDir = getSpillDirPathCb_();
   VELOX_CHECK(!spillDir.empty(), "Spill directory does not exist");
-  // Ensure that partition exist before writing.
-  if (partitionWriters_.at(partition) == nullptr) {
-    partitionWriters_[partition] = std::make_unique<SpillWriter>(
-        std::static_pointer_cast<const RowType>(rows->type()),
-        numSortKeys_,
-        sortCompareFlags_,
-        compressionKind_,
-        fmt::format("{}/{}-spill-{}", spillDir, fileNamePrefix_, partition),
-        targetFileSize_,
-        writeBufferSize_,
-        fileCreateConfig_,
-        updateAndCheckSpillLimitCb_,
-        pool_,
-        stats_);
-  }
+
+  partitionWriters_.withWLock([&](auto& lockedWriters) {
+    // Ensure that partition exist before writing.
+    if (!lockedWriters.contains(id)) {
+      lockedWriters.emplace(
+          id,
+          std::make_unique<SpillWriter>(
+              std::static_pointer_cast<const RowType>(rows->type()),
+              numSortKeys_,
+              sortCompareFlags_,
+              compressionKind_,
+              fmt::format(
+                  "{}/{}-spill-{}", spillDir, fileNamePrefix_, id.encodedId()),
+              targetFileSize_,
+              writeBufferSize_,
+              fileCreateConfig_,
+              updateAndCheckSpillLimitCb_,
+              pool_,
+              stats_));
+    }
+  });
 
   const uint64_t bytes = rows->estimateFlatSize();
   validateSpillBytesSize(bytes);
   updateSpilledInputBytes(bytes);
 
   IndexRange range{0, rows->size()};
-  return partitionWriters_[partition]->write(
-      rows, folly::Range<IndexRange*>(&range, 1));
+  return partitionWriter(id)->write(rows, folly::Range<IndexRange*>(&range, 1));
 }
 
-SpillWriter* SpillState::partitionWriter(uint32_t partition) const {
-  VELOX_DCHECK(isPartitionSpilled(partition));
-  return partitionWriters_[partition].get();
+SpillWriter* SpillState::partitionWriter(const SpillPartitionId& id) const {
+  VELOX_DCHECK(isPartitionSpilled(id));
+  auto partitionWriters = partitionWriters_.rlock();
+  return partitionWriters->contains(id) ? partitionWriters->at(id).get()
+                                        : nullptr;
 }
 
-void SpillState::finishFile(uint32_t partition) {
-  auto* writer = partitionWriter(partition);
+void SpillState::finishFile(const SpillPartitionId& id) {
+  auto* writer = partitionWriter(id);
   if (writer == nullptr) {
     return;
   }
   writer->finishFile();
 }
 
-size_t SpillState::numFinishedFiles(uint32_t partition) const {
-  if (!isPartitionSpilled(partition)) {
+size_t SpillState::numFinishedFiles(const SpillPartitionId& id) const {
+  if (!isPartitionSpilled(id)) {
     return 0;
   }
-  const auto* writer = partitionWriter(partition);
+  const auto* writer = partitionWriter(id);
   if (writer == nullptr) {
     return 0;
   }
   return writer->numFinishedFiles();
 }
 
-SpillFiles SpillState::finish(uint32_t partition) {
-  auto* writer = partitionWriter(partition);
+SpillFiles SpillState::finish(const SpillPartitionId& id) {
+  auto* writer = partitionWriter(id);
   if (writer == nullptr) {
     return {};
   }
   return writer->finish();
 }
 
-const SpillPartitionNumSet& SpillState::spilledPartitionSet() const {
-  return spilledPartitionSet_;
+const SpillPartitionIdSet& SpillState::spilledPartitionIdSet() const {
+  return spilledPartitionIdSet_;
 }
 
 std::vector<std::string> SpillState::testingSpilledFilePaths() const {
   std::vector<std::string> spilledFiles;
-  for (const auto& writer : partitionWriters_) {
-    if (writer != nullptr) {
+  partitionWriters_.withRLock([&](const auto& partitionWriters) {
+    for (const auto& [id, writer] : partitionWriters) {
       const auto partitionSpilledFiles = writer->testingSpilledFilePaths();
       spilledFiles.insert(
           spilledFiles.end(),
           partitionSpilledFiles.begin(),
           partitionSpilledFiles.end());
     }
-  }
+  });
   return spilledFiles;
 }
 
 std::vector<uint32_t> SpillState::testingSpilledFileIds(
-    int32_t partitionNum) const {
-  return partitionWriters_[partitionNum]->testingSpilledFileIds();
+    const SpillPartitionId& id) const {
+  auto partitionWriters = partitionWriters_.rlock();
+  VELOX_CHECK(partitionWriters->contains(id));
+  return partitionWriters->at(id)->testingSpilledFileIds();
 }
 
-SpillPartitionNumSet SpillState::testingNonEmptySpilledPartitionSet() const {
-  SpillPartitionNumSet partitionSet;
-  for (uint32_t partition = 0; partition < maxPartitions_; ++partition) {
-    if (partitionWriters_[partition] != nullptr) {
-      partitionSet.insert(partition);
+SpillPartitionIdSet SpillState::testingNonEmptySpilledPartitionIdSet() const {
+  SpillPartitionIdSet partitionIdSet;
+  partitionWriters_.withRLock([&](const auto& partitionWriters) {
+    for (const auto& [id, writer] : partitionWriters) {
+      partitionIdSet.emplace(id);
     }
-  }
-  return partitionSet;
+  });
+  return partitionIdSet;
 }
 
 std::vector<std::unique_ptr<SpillPartition>> SpillPartition::split(
@@ -317,6 +321,57 @@ SpillPartition::createOrderedReader(
   return std::make_unique<TreeOfLosers<SpillMergeStream>>(std::move(streams));
 }
 
+IterableSpillPartitionSet::IterableSpillPartitionSet() {
+  spillPartitionIter_ = spillPartitions_.begin();
+}
+
+void IterableSpillPartitionSet::insert(SpillPartitionSet&& spillPartitionSet) {
+  VELOX_CHECK(
+      !spillPartitionSet.empty(),
+      "Inserted spill partition set must not be empty.");
+
+  const auto parentId = spillPartitionSet.begin()->first.parentId();
+  if (!spillPartitions_.empty()) {
+    VELOX_CHECK(parentId.has_value());
+    VELOX_CHECK(spillPartitionIter_ != spillPartitions_.begin());
+    VELOX_CHECK_EQ(
+        std::prev(spillPartitionIter_)->first,
+        parentId.value(),
+        "Partition set does not have the same parent.");
+    spillPartitions_.erase(std::prev(spillPartitionIter_));
+  } else {
+    VELOX_CHECK(!parentId.has_value());
+  }
+
+  for (const auto& [id, partition] : spillPartitionSet) {
+    VELOX_CHECK_EQ(
+        id.parentId().value_or(SpillPartitionId()),
+        parentId.value_or(SpillPartitionId()));
+    spillPartitions_.emplace(id, std::make_unique<SpillPartition>(*partition));
+  }
+  spillPartitionIter_ = spillPartitions_.find(spillPartitionSet.begin()->first);
+}
+
+bool IterableSpillPartitionSet::hasNext() const {
+  return spillPartitionIter_ != spillPartitions_.end();
+}
+
+SpillPartition IterableSpillPartitionSet::next() {
+  VELOX_CHECK(hasNext(), "No more spill partitions to read.");
+  return *((spillPartitionIter_++)->second);
+}
+
+const SpillPartitionSet& IterableSpillPartitionSet::spillPartitions() const {
+  VELOX_CHECK(
+      !hasNext(),
+      "Spill partitions can only be extracted out after entire set is read.");
+  return spillPartitions_;
+}
+
+void IterableSpillPartitionSet::reset() {
+  spillPartitionIter_ = spillPartitions_.begin();
+}
+
 uint32_t FileSpillMergeStream::id() const {
   VELOX_CHECK(!closed_);
   return spillFile_->id();
@@ -339,6 +394,255 @@ void FileSpillMergeStream::close() {
   spillFile_.reset();
 }
 
+SpillPartitionId::SpillPartitionId(uint32_t partitionNumber)
+    : encodedId_(partitionNumber) {
+  if (FOLLY_UNLIKELY(partitionNumber >= (1 << kMaxPartitionBits))) {
+    VELOX_FAIL(fmt::format(
+        "Partition number {} exceeds max partition number {}",
+        partitionNumber,
+        1 << kMaxPartitionBits));
+  }
+}
+
+SpillPartitionId::SpillPartitionId(
+    SpillPartitionId parent,
+    uint32_t partitionNumber) {
+  const auto childSpillLevel = parent.spillLevel() + 1;
+  if (FOLLY_UNLIKELY(childSpillLevel > kMaxSpillLevel)) {
+    VELOX_FAIL(fmt::format(
+        "Spill level {} exceeds max spill level {}",
+        childSpillLevel,
+        kMaxSpillLevel));
+  }
+  encodedId_ = parent.encodedId_;
+  encodedId_ = encodedId_ & ~kSpillLevelBitMask;
+
+  // Set spill levels.
+  encodedId_ |= childSpillLevel << kSpillLevelBitOffset;
+
+  // Set partition number.
+  encodedId_ |= partitionNumber << (kNumPartitionBits * childSpillLevel);
+}
+
+bool SpillPartitionId::operator==(const SpillPartitionId& other) const {
+  return encodedId_ == other.encodedId_;
+}
+
+bool SpillPartitionId::operator!=(const SpillPartitionId& other) const {
+  return !(*this == other);
+}
+
+bool SpillPartitionId::operator<(const SpillPartitionId& other) const {
+  for (auto i = 0; i <= std::min(spillLevel(), other.spillLevel()); ++i) {
+    const auto selfPartitionNum = partitionNumber(i);
+    const auto otherPartitionNum = other.partitionNumber(i);
+    if (selfPartitionNum == otherPartitionNum) {
+      continue;
+    }
+    return selfPartitionNum < otherPartitionNum;
+  }
+  return spillLevel() < other.spillLevel();
+}
+
+std::string SpillPartitionId::toString() const {
+  std::stringstream ss;
+  if (!valid()) {
+    return "[invalid]";
+  }
+  ss << "[levels: " << (spillLevel() + 1) << ", partitions: [";
+  for (auto i = 0; i <= spillLevel(); ++i) {
+    ss << partitionNumber(i);
+    if (i < spillLevel()) {
+      ss << ",";
+    }
+  }
+  ss << "]]";
+  return ss.str();
+}
+
+uint32_t SpillPartitionId::spillLevel() const {
+  return bits::extractBits(encodedId_, kSpillLevelBitMask);
+}
+
+uint32_t SpillPartitionId::partitionNumber() const {
+  return bits::extractBits(
+      encodedId_, kPartitionBitMask << (spillLevel() * kNumPartitionBits));
+}
+
+/// Overloaded method that returns the partition number of the requested spill
+/// level.
+uint32_t SpillPartitionId::partitionNumber(uint32_t level) const {
+  const auto leafLevel = spillLevel();
+  if (FOLLY_UNLIKELY(level > leafLevel)) {
+    VELOX_FAIL(
+        "spillLevel needs to be equal or smaller than leaf level {} vs {}",
+        level,
+        leafLevel);
+  }
+  return bits::extractBits(
+      encodedId_, kPartitionBitMask << (level * kNumPartitionBits));
+}
+
+uint32_t SpillPartitionId::encodedId() const {
+  return encodedId_;
+}
+
+std::optional<SpillPartitionId> SpillPartitionId::parentId() const {
+  VELOX_CHECK(valid());
+  if (spillLevel() == 0) {
+    return std::nullopt;
+  }
+
+  SpillPartitionId parent;
+  parent.encodedId_ = encodedId_;
+
+  // Clear the current level's partition number bits
+  const auto currentLevel = spillLevel();
+  const auto currentLevelBitOffset = currentLevel * kNumPartitionBits;
+  parent.encodedId_ &= ~(kPartitionBitMask << currentLevelBitOffset);
+
+  // Decrement the spill level
+  parent.encodedId_ &= ~kSpillLevelBitMask;
+  parent.encodedId_ |= (currentLevel - 1) << kSpillLevelBitOffset;
+
+  return parent;
+}
+
+bool SpillPartitionId::valid() const {
+  return encodedId_ != kInvalidEncodedId;
+}
+
+namespace {
+uint32_t numSpillLevels(const SpillPartitionIdSet& spillPartitionIds) {
+  VELOX_CHECK(!spillPartitionIds.empty());
+  uint32_t maxSpillLevel{0};
+  for (const auto& id : spillPartitionIds) {
+    maxSpillLevel = std::max(maxSpillLevel, id.spillLevel());
+  }
+  return maxSpillLevel + 1;
+}
+} // namespace
+
+SpillPartitionIdLookup::SpillPartitionIdLookup(
+    const SpillPartitionIdSet& spillPartitionIds,
+    uint32_t startPartitionBit,
+    uint32_t numPartitionBits)
+    : partitionBitsMask_(
+          bits::lowMask(numPartitionBits * (numSpillLevels(spillPartitionIds)))
+          << startPartitionBit) {
+  const auto numLookupBits =
+      (numSpillLevels(spillPartitionIds)) * numPartitionBits;
+  VELOX_CHECK_LT(
+      startPartitionBit,
+      sizeof(uint64_t) * 8 - numLookupBits,
+      "Insufficient lookup bits.");
+  lookup_.resize(1UL << numLookupBits, SpillPartitionId());
+
+  for (const auto& id : spillPartitionIds) {
+    generateLookup(id, startPartitionBit, numPartitionBits, numLookupBits);
+  }
+}
+
+void SpillPartitionIdLookup::generateLookup(
+    const SpillPartitionId& id,
+    uint32_t startPartitionBit,
+    uint32_t numPartitionBits,
+    uint32_t numLookupBits) {
+  // Enumerate all possible numbers for enumeration range and combine with spill
+  // level partition bits range to form the lookup keys.
+  //
+  // |..MSB..|...enumeration range...|...partition bits range...|..LSB..|
+  //
+  // Calculate the range of bits that need to be enumerated [start, end).
+  const auto enumStartBit =
+      startPartitionBit + (id.spillLevel() + 1) * numPartitionBits;
+  const auto enumEndBit = startPartitionBit + numLookupBits;
+
+  // Calculate the spill level partition bits range bits which are fixed.
+  uint64_t lookupBits{0};
+  for (auto i = 0; i <= id.spillLevel(); ++i) {
+    const auto partitionNum = id.partitionNumber(i);
+    VELOX_CHECK_LT(
+        partitionNum,
+        1UL << numPartitionBits,
+        "Partition number exceeds max partition number");
+    lookupBits |= static_cast<uint64_t>(partitionNum) << (i * numPartitionBits);
+  }
+  lookupBits = lookupBits << startPartitionBit;
+
+  // Start building from fixed bits and enumerate the rest.
+  generateLookupHelper(id, enumStartBit, enumEndBit, lookupBits);
+}
+
+void SpillPartitionIdLookup::generateLookupHelper(
+    const SpillPartitionId& id,
+    uint32_t currentBit,
+    uint32_t endBit,
+    uint64_t lookupBits) {
+  if (currentBit == endBit) {
+    const auto index = bits::extractBits(lookupBits, partitionBitsMask_);
+    VELOX_CHECK(
+        !lookup_[index].valid(),
+        "Duplicated lookup key {}, likely due to non-leaf spill partition id used "
+        "to construct lookup.",
+        id.toString());
+    lookup_[index] = id;
+    return;
+  }
+  generateLookupHelper(
+      id, currentBit + 1, endBit, lookupBits | (1UL << currentBit));
+  generateLookupHelper(id, currentBit + 1, endBit, lookupBits);
+}
+
+SpillPartitionId SpillPartitionIdLookup::partition(uint64_t hash) const {
+  return lookup_[bits::extractBits(hash, partitionBitsMask_)];
+}
+
+SpillPartitionFunction::SpillPartitionFunction(
+    const SpillPartitionIdLookup& lookup,
+    const RowTypePtr& inputType,
+    const std::vector<column_index_t>& keyChannels)
+    : lookup_(lookup) {
+  VELOX_CHECK(!keyChannels.empty(), "Key channels must not be empty.");
+  hashers_.reserve(keyChannels.size());
+  for (const auto channel : keyChannels) {
+    VELOX_CHECK_NE(channel, kConstantChannel);
+    hashers_.emplace_back(
+        VectorHasher::create(inputType->childAt(channel), channel));
+  }
+}
+
+void SpillPartitionFunction::partition(
+    const RowVector& input,
+    std::vector<SpillPartitionId>& partitionIds) {
+  const auto size = input.size();
+  rows_.resize(size);
+  rows_.setAll();
+
+  hashes_.resize(size);
+  for (auto i = 0; i < hashers_.size(); ++i) {
+    auto& hasher = hashers_[i];
+    hashers_[i]->decode(*input.childAt(hasher->channel()), rows_);
+    hashers_[i]->hash(rows_, i > 0, hashes_);
+  }
+
+  partitionIds.resize(size);
+
+  for (auto i = 0; i < size; ++i) {
+    partitionIds[i] = lookup_.partition(hashes_[i]);
+  }
+}
+
+uint8_t partitionBitOffset(
+    const SpillPartitionId& id,
+    uint8_t startPartitionBitOffset,
+    uint8_t numPartitionBits) {
+  const auto partitionOffset =
+      startPartitionBitOffset + numPartitionBits * id.spillLevel();
+  VELOX_CHECK_LE(startPartitionBitOffset, partitionOffset);
+  return partitionOffset;
+}
+
 SpillPartitionIdSet toSpillPartitionIdSet(
     const SpillPartitionSet& partitionSet) {
   SpillPartitionIdSet partitionIdSet;
@@ -347,6 +651,26 @@ SpillPartitionIdSet toSpillPartitionIdSet(
     partitionIdSet.insert(partitionEntry.first);
   }
   return partitionIdSet;
+}
+
+SpillPartitionIdSet toSpillPartitionIdSet(
+    const SpillPartitionNumSet& partitionNumSet) {
+  SpillPartitionIdSet partitionIdSet;
+  partitionIdSet.reserve(partitionNumSet.size());
+  for (const auto& partitionNum : partitionNumSet) {
+    partitionIdSet.emplace(SpillPartitionId(partitionNum));
+  }
+  return partitionIdSet;
+}
+
+SpillPartitionNumSet toPartitionNumSet(
+    const SpillPartitionIdSet& partitionIdSet) {
+  SpillPartitionNumSet partitionNumSet;
+  partitionNumSet.reserve(partitionIdSet.size());
+  for (const auto& partitionId : partitionIdSet) {
+    partitionNumSet.emplace(partitionId.partitionNumber());
+  }
+  return partitionNumSet;
 }
 
 namespace {

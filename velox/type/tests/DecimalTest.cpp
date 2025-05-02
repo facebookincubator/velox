@@ -99,11 +99,11 @@ void assertRescaleRealFail(
 }
 
 void testToByteArray(int128_t value, int8_t* expected, int32_t size) {
-  char out[size];
-  int32_t length = DecimalUtil::toByteArray(value, out);
+  std::vector<char> out(size);
+  int32_t length = DecimalUtil::toByteArray(value, out.data());
   EXPECT_EQ(length, size);
   EXPECT_EQ(DecimalUtil::getByteArrayLength(value), size);
-  EXPECT_EQ(std::memcmp(expected, out, length), 0);
+  EXPECT_EQ(std::memcmp(expected, out.data(), length), 0);
 }
 
 template <typename T>
@@ -113,11 +113,11 @@ void testcastToString(
     int scale,
     int maxStringSize,
     const std::string& expected) {
-  char out[maxStringSize];
-  auto actualSize =
-      DecimalUtil::castToString<T>(unscaleValue, scale, maxStringSize, out);
+  std::vector<char> out(maxStringSize);
+  auto actualSize = DecimalUtil::castToString<T>(
+      unscaleValue, scale, maxStringSize, out.data());
   EXPECT_EQ(expected.size(), actualSize);
-  EXPECT_EQ(std::memcmp(expected.data(), out, expected.size()), 0);
+  EXPECT_EQ(std::memcmp(expected.data(), out.data(), expected.size()), 0);
 }
 
 void testMaxStringViewSize(
@@ -485,6 +485,10 @@ TEST(DecimalTest, rescaleReal) {
   assertRescaleReal(21.5455, DECIMAL(12, 3), 21546);
 
   assertRescaleReal(std::numeric_limits<float>::min(), DECIMAL(38, 2), 0);
+
+  assertRescaleReal(27867.64, DECIMAL(18, 2), 2786764);
+  assertRescaleReal(27867.644, DECIMAL(18, 2), 2786764);
+  assertRescaleReal(27867.645, DECIMAL(18, 2), 2786764);
 
   // Test for overflows.
   std::vector<float> invalidInputs = {
