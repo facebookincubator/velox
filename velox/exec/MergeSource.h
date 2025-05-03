@@ -83,6 +83,7 @@ class MergeJoinSource {
   struct State {
     bool atEnd = false;
     RowVectorPtr data;
+    std::queue<RowVectorPtr> dataQueue;
   };
 
   folly::Synchronized<State> state_;
