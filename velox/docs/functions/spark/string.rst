@@ -427,3 +427,36 @@ String Functions
     Returns string with all characters changed to uppercase. ::
 
         SELECT upper('SparkSql'); -- SPARKSQL
+
+.. spark:function:: varchar_type_write_side_check(string, limit) -> varchar
+
+    An implementation for Spark's varcharTypeWriteSideCheck function of class CharVarcharCodegenUtils.
+    Removes trailing 0x20(space) characters from ``string`` to fit in the ``limit``, if not fit, throws exception. ::
+
+        -- Test with SparkSQL that triggers the function
+        create table srcvarchar(id string) stored as parquet;
+        create table tgt(id varchar(3)) stored as parquet;
+        insert into tgt select id from srcvarchar;
+
+.. spark:function:: char_type_write_side_check(string, limit) -> varchar
+
+    An implementation for Spark's charTypeWriteSideCheck function of class CharVarcharCodegenUtils.
+    Returns string of length ``limit`` by right padding spaces(0x20) or trailing 0x20(space) characters, throws if not fit in. ::
+
+        -- Test with SparkSQL that triggers the function
+        create table srcchar(id string) stored as parquet;
+        create table tgt(id char(3)) stored as parquet;
+        insert into tgt select id from srcchar;
+
+.. spark:function:: read_side_padding(string, limit) -> varchar
+
+    An implementation for Spark's readSidePadding function of class CharVarcharCodegenUtils.
+    Right pads ``string`` with 0x20(space) characters to ``limit`` when the number of characters
+    of ``string`` is less than ``limit``.
+    Returns ``string`` when the number of characters is greater than or equal to ``limit``. ::
+
+        -- Test with SparkSQL that triggers the function
+        create table tgt(id char(3)) stored as parquet;
+        insert into tgt values ("a");
+        select id from tgt; -- "a  "
+
