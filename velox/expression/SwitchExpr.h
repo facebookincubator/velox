@@ -86,5 +86,14 @@ class SwitchCallToSpecialForm : public FunctionCallToSpecialForm {
 class IfCallToSpecialForm : public SwitchCallToSpecialForm {
  public:
   TypePtr resolveType(const std::vector<TypePtr>& argTypes) override;
+
+  ExprPtr constructSpecialForm(
+      const TypePtr& type,
+      std::vector<ExprPtr>&& compiledChildren,
+      bool trackCpuUsage,
+      const core::QueryConfig& config) override;
+
+ private:
+  ExprPtr optimize(std::vector<ExprPtr>& compiledChildren);
 };
 } // namespace facebook::velox::exec
