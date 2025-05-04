@@ -55,8 +55,10 @@ enum class FilterKind {
   kBigintMultiRange,
   kMultiRange,
   kHugeintRange,
+  kNegatedHugeintRange,
   kTimestampRange,
   kHugeintValuesUsingHashTable,
+  kNegatedHugeintValuesUsingHashTable,
 };
 
 class Filter;
@@ -885,66 +887,6 @@ class NegatedBigintRange final : public Filter {
   std::unique_ptr<BigintRange> nonNegated_;
 };
 
-class HugeintRange final : public Filter {
- public:
-  /// @param lower Lowest value in the rejected range, inclusive.
-  /// @param upper Highest value in the range, inclusive.
-  /// @param nullAllowed Null values are passing the filter if true.
-  HugeintRange(const int128_t& lower, const int128_t& upper, bool nullAllowed)
-      : Filter(true, nullAllowed, FilterKind::kHugeintRange),
-        lower_(lower),
-        upper_(upper) {}
-
-  folly::dynamic serialize() const override;
-
-  static FilterPtr create(const folly::dynamic& obj);
-
-  std::unique_ptr<Filter> clone(
-      std::optional<bool> nullAllowed = std::nullopt) const final {
-    if (nullAllowed) {
-      return std::make_unique<HugeintRange>(
-          this->lower_, this->upper_, nullAllowed.value());
-    } else {
-      return std::make_unique<HugeintRange>(*this);
-    }
-  }
-
-  bool testInt128(const int128_t& value) const final {
-    return value >= lower_ && value <= upper_;
-  }
-
-  bool testInt128Range(const int128_t& min, const int128_t& max, bool hasNull)
-      const final {
-    if (hasNull && nullAllowed_) {
-      return true;
-    }
-
-    return !(min > upper_ || max < lower_);
-  }
-
-  int128_t lower() const {
-    return lower_;
-  }
-
-  int128_t upper() const {
-    return upper_;
-  }
-
-  std::string toString() const override {
-    return fmt::format(
-        "HugeintRange: [{}, {}] {}",
-        lower_,
-        upper_,
-        nullAllowed_ ? "with nulls" : "no nulls");
-  }
-
-  bool testingEquals(const Filter& other) const final;
-
- private:
-  const int128_t lower_;
-  const int128_t upper_;
-};
-
 /// IN-list filter for integral data types. Implemented as a hash table. Good
 /// for large number of values that do not fit within a small range.
 class BigintValuesUsingHashTable final : public Filter {
@@ -1035,47 +977,6 @@ class BigintValuesUsingHashTable final : public Filter {
   bool containsEmptyMarker_ = false;
   std::vector<int64_t> values_;
   int32_t sizeMask_;
-};
-
-/// IN-list filter for int128_t data type, implemented as a hash table.
-class HugeintValuesUsingHashTable final : public Filter {
- public:
-  HugeintValuesUsingHashTable(
-      const int128_t& min,
-      const int128_t& max,
-      const std::vector<int128_t>& values,
-      const bool nullAllowed);
-
-  HugeintValuesUsingHashTable(
-      const HugeintValuesUsingHashTable& other,
-      bool nullAllowed)
-      : Filter(true, nullAllowed, other.kind()),
-        min_(other.min_),
-        max_(other.max_),
-        values_(other.values_) {}
-
-  folly::dynamic serialize() const override;
-
-  static FilterPtr create(const folly::dynamic& obj);
-
-  std::unique_ptr<Filter> clone(
-      std::optional<bool> nullAllowed = std::nullopt) const final {
-    if (nullAllowed) {
-      return std::make_unique<HugeintValuesUsingHashTable>(
-          *this, nullAllowed.value());
-    } else {
-      return std::make_unique<HugeintValuesUsingHashTable>(*this);
-    }
-  }
-
-  bool testInt128(const int128_t& value) const final;
-
-  bool testingEquals(const Filter& other) const final;
-
- private:
-  const int128_t min_;
-  const int128_t max_;
-  folly::F14FastSet<int128_t> values_;
 };
 
 /// IN-list filter for integral data types. Implemented as a bitmask. Offers
@@ -1209,9 +1110,6 @@ class NegatedBigintValuesUsingHashTable final : public Filter {
   bool testingEquals(const Filter& other) const final;
 
  private:
-  std::unique_ptr<Filter>
-  mergeWith(int64_t min, int64_t max, const Filter* other) const;
-
   std::unique_ptr<BigintValuesUsingHashTable> nonNegated_;
 };
 
@@ -1269,6 +1167,223 @@ class NegatedBigintValuesUsingBitmask final : public Filter {
   int64_t min_;
   int64_t max_;
   std::unique_ptr<BigintValuesUsingBitmask> nonNegated_;
+};
+
+// Range filter for hugeint data type.
+class HugeintRange final : public Filter {
+ public:
+  /// @param lower Lower end of the range, inclusive.
+  /// @param upper Upper end of the range, inclusive.
+  /// @param nullAllowed Null values are passing the filter if true.
+  HugeintRange(const int128_t& lower, const int128_t& upper, bool nullAllowed)
+      : Filter(true, nullAllowed, FilterKind::kHugeintRange),
+        lower_(lower),
+        upper_(upper) {}
+
+  folly::dynamic serialize() const override;
+
+  static FilterPtr create(const folly::dynamic& obj);
+
+  std::unique_ptr<Filter> clone(
+      std::optional<bool> nullAllowed = std::nullopt) const final {
+    return std::make_unique<HugeintRange>(
+        this->lower_, this->upper_, nullAllowed.value_or(nullAllowed_));
+  }
+
+  bool testInt128(const int128_t& value) const final {
+    return value >= lower_ && value <= upper_;
+  }
+
+  bool testInt128Range(const int128_t& min, const int128_t& max, bool hasNull)
+      const final {
+    if (hasNull && nullAllowed_) {
+      return true;
+    }
+
+    return !(min > upper_ || max < lower_);
+  }
+
+  int128_t lower() const {
+    return lower_;
+  }
+
+  int128_t upper() const {
+    return upper_;
+  }
+
+  std::string toString() const override {
+    return fmt::format(
+        "HugeintRange: [{}, {}] {}",
+        lower_,
+        upper_,
+        nullAllowed_ ? "with nulls" : "no nulls");
+  }
+
+  bool testingEquals(const Filter& other) const final;
+
+ private:
+  const int128_t lower_;
+  const int128_t upper_;
+};
+
+// Negated range filter for hugeint data type.
+class NegatedHugeintRange final : public Filter {
+ public:
+  /// @param lower Lowest value in the rejected range, inclusive.
+  /// @param upper Highest value in the rejected range, inclusive.
+  /// @param nullAllowed Null values are passing the filter if true.
+  NegatedHugeintRange(int128_t lower, int128_t upper, bool nullAllowed)
+      : Filter(true, nullAllowed, FilterKind::kNegatedHugeintRange),
+        nonNegated_(
+            std::make_unique<HugeintRange>(lower, upper, !nullAllowed)) {}
+
+  folly::dynamic serialize() const override;
+
+  static FilterPtr create(const folly::dynamic& obj);
+
+  std::unique_ptr<Filter> clone(
+      std::optional<bool> nullAllowed = std::nullopt) const final {
+    return std::make_unique<NegatedHugeintRange>(
+        nonNegated_->lower(),
+        nonNegated_->upper(),
+        nullAllowed.value_or(nullAllowed_));
+  }
+
+  bool testInt128(const int128_t& value) const final {
+    return !nonNegated_->testInt128(value);
+  }
+
+  bool testInt128Range(const int128_t& min, const int128_t& max, bool hasNull)
+      const final {
+    if (hasNull && nullAllowed_) {
+      return true;
+    }
+
+    return !(nonNegated_->lower() <= min && max <= nonNegated_->upper());
+  }
+
+  int128_t lower() const {
+    return nonNegated_->lower();
+  }
+
+  int128_t upper() const {
+    return nonNegated_->upper();
+  }
+
+  std::string toString() const override {
+    return "Negated" + nonNegated_->toString();
+  }
+
+  bool testingEquals(const Filter& other) const final;
+
+ private:
+  std::unique_ptr<HugeintRange> nonNegated_;
+};
+
+// IN-list filter for int128_t data type, implemented as a hash table.
+class HugeintValuesUsingHashTable final : public Filter {
+ public:
+  HugeintValuesUsingHashTable(
+      const int128_t& min,
+      const int128_t& max,
+      const std::vector<int128_t>& values,
+      bool nullAllowed);
+
+  HugeintValuesUsingHashTable(
+      const HugeintValuesUsingHashTable& other,
+      bool nullAllowed)
+      : Filter(true, nullAllowed, other.kind()),
+        min_(other.min_),
+        max_(other.max_),
+        values_(other.values_) {}
+
+  folly::dynamic serialize() const override;
+
+  static FilterPtr create(const folly::dynamic& obj);
+
+  std::unique_ptr<Filter> clone(
+      std::optional<bool> nullAllowed = std::nullopt) const final {
+    if (nullAllowed) {
+      return std::make_unique<HugeintValuesUsingHashTable>(
+          *this, nullAllowed.value());
+    } else {
+      return std::make_unique<HugeintValuesUsingHashTable>(*this);
+    }
+  }
+
+  bool testInt128(const int128_t& value) const final;
+
+  bool testingEquals(const Filter& other) const final;
+
+  int128_t min() const {
+    return min_;
+  }
+
+  int128_t max() const {
+    return max_;
+  }
+
+  std::vector<int128_t> values() const {
+    std::vector<int128_t> vec(values_.begin(), values_.end());
+    return vec;
+  }
+
+ private:
+  const int128_t min_;
+  const int128_t max_;
+  folly::F14FastSet<int128_t> values_;
+};
+
+// NOT IN-list filter for int128_t data type, implemented as a hash table.
+class NegatedHugeintValuesUsingHashTable final : public Filter {
+ public:
+  NegatedHugeintValuesUsingHashTable(
+      const int128_t& min,
+      const int128_t& max,
+      const std::vector<int128_t>& values,
+      bool nullAllowed);
+
+  NegatedHugeintValuesUsingHashTable(
+      const NegatedHugeintValuesUsingHashTable& other,
+      bool nullAllowed)
+      : Filter(true, nullAllowed, other.kind()),
+        nonNegated_(
+            std::make_unique<HugeintValuesUsingHashTable>(*other.nonNegated_)) {
+  }
+
+  folly::dynamic serialize() const override;
+
+  static FilterPtr create(const folly::dynamic& obj);
+
+  std::unique_ptr<Filter> clone(
+      std::optional<bool> nullAllowed = std::nullopt) const final {
+    return std::make_unique<NegatedHugeintValuesUsingHashTable>(
+        *this, nullAllowed.value_or(nullAllowed_));
+  }
+
+  bool testInt128(const int128_t& value) const final {
+    return !nonNegated_->testInt128(value);
+  }
+
+  bool testInt128Range(const int128_t& min, const int128_t& max, bool hashNull)
+      const final;
+
+  bool testingEquals(const Filter& other) const final;
+
+  int128_t min() const {
+    return nonNegated_->min();
+  }
+
+  int128_t max() const {
+    return nonNegated_->max();
+  }
+
+  std::vector<int128_t> values() const {
+    return nonNegated_->values();
+  }
+
+ private:
+  std::unique_ptr<HugeintValuesUsingHashTable> nonNegated_;
 };
 
 /// Base class for range filters on floating point and string data types.
