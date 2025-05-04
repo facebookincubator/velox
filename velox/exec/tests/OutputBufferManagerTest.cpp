@@ -15,7 +15,7 @@
  */
 #include "velox/exec/OutputBufferManager.h"
 #include <gtest/gtest.h>
-#include "folly/experimental/EventCount.h"
+#include "folly/synchronization/EventCount.h"
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/dwio/common/tests/utils/BatchMaker.h"
 #include "velox/exec/Task.h"
