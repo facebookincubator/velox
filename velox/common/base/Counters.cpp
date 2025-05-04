@@ -85,6 +85,21 @@ void registerVeloxMetrics() {
   // NOTE: This applies only to MmapAllocator
   DEFINE_METRIC(kMetricMmapDelegatedAllocBytes, facebook::velox::StatType::AVG);
 
+  #define REGISTER_SINGLE_SIZE_STATS_METRIC(i, field)      \
+    DEFINE_METRIC(                                         \
+        kMetricAllocatorSizeStats_##i##_##field,           \
+        facebook::velox::StatType::COUNT)
+  
+  #define REGISTER_SIZE_STATS_METRICS(i)                  \
+    REGISTER_SINGLE_SIZE_STATS_METRIC(i, allocateClocks); \
+    REGISTER_SINGLE_SIZE_STATS_METRIC(i, freeClocks);     \
+    REGISTER_SINGLE_SIZE_STATS_METRIC(i, numAllocations); \
+    REGISTER_SINGLE_SIZE_STATS_METRIC(i, totalBytes)
+  
+  #define REGISTER_ALL_SIZE_STATS_METRICS EXPAND_SIZE_STATS_CLASSES(REGISTER_SIZE_STATS_METRICS)
+
+  REGISTER_ALL_SIZE_STATS_METRICS
+
   /// ================== AsyncDataCache Counters =================
 
   // Max possible age of AsyncDataCache and SsdCache entries since the raw file

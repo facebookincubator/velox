@@ -82,7 +82,7 @@ struct SizeClassStats {
 };
 
 struct Stats {
-  /// 20 size classes in powers of 2 are tracked, from 4K to 4G. The
+  /// 20 size classes in powers of 2 are tracked, from 4K to 2G. The
   /// allocation is recorded to the class corresponding to the closest
   /// power of 2 >= the allocation size.
   static constexpr int32_t kNumSizes = 20;
