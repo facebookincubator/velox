@@ -484,13 +484,20 @@ FOLLY_ALWAYS_INLINE bool splitPart(
 template <
     bool leftTrim,
     bool rightTrim,
-    typename TShouldTrim,
     typename TOutString,
-    typename TInString>
+    typename TInString,
+    typename TShouldTrim>
 FOLLY_ALWAYS_INLINE void
 trimAscii(TOutString& output, const TInString& input, TShouldTrim shouldTrim) {
+  const auto emptyOutput = [&]() {
+    if constexpr (std::is_same_v<TOutString, StringView>) {
+      output = StringView("");
+    } else {
+      output.setEmpty();
+    }
+  };
   if (input.empty()) {
-    output.setEmpty();
+    emptyOutput();
     return;
   }
 
@@ -501,7 +508,7 @@ trimAscii(TOutString& output, const TInString& input, TShouldTrim shouldTrim) {
     }
   }
   if (curPos >= input.end()) {
-    output.setEmpty();
+    emptyOutput();
     return;
   }
   auto start = curPos;
@@ -511,7 +518,12 @@ trimAscii(TOutString& output, const TInString& input, TShouldTrim shouldTrim) {
       curPos--;
     }
   }
-  output.setNoCopy(StringView(start, curPos - start + 1));
+  auto view = StringView(start, curPos - start + 1);
+  if constexpr (std::is_same_v<TOutString, StringView>) {
+    output = std::move(view);
+  } else {
+    output.setNoCopy(view);
+  }
 }
 
 template <
