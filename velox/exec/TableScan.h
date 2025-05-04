@@ -51,6 +51,10 @@ class TableScan : public SourceOperator {
       column_index_t outputChannel,
       const std::shared_ptr<common::Filter>& filter) override;
 
+  int64_t splitWeight() {
+    return currentSplitWeight_;
+  }
+
   /// The name of runtime stats specific to table scan.
   /// The number of running table scan drivers.
   ///

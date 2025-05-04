@@ -473,6 +473,59 @@ const std::string& Task::getOrCreateSpillDirectory() {
   return spillDirectory_;
 }
 
+Task::SplitStatus Task::getSplitStatus() {
+  SplitStatus splitStatus;
+
+  // Iterate drivers to
+  // 1. Collect running splits
+  // 2. Collect runningTableScanGroups: a map of <tableScan nodeId, [group ids]>
+  std::unordered_map<std::string, std::unordered_set<uint32_t>>
+      runningTableScanGroups;
+  for (auto driver : drivers_) {
+    if (driver == nullptr || driver->operators().empty() ||
+        driver->operators()[0]->operatorType() != "TableScan" ||
+        driver->blockingReason() != velox::exec::BlockingReason::kNotBlocked) {
+      continue;
+    }
+
+    runningTableScanGroups[driver->operators().at(0)->planNodeId()].insert(
+        driver->driverCtx()->splitGroupId);
+    splitStatus.runningTableScanSplitsNum++;
+    splitStatus.runningTableScanSplitsWeight +=
+        dynamic_cast<TableScan*>(driver->operators().at(0))->splitWeight();
+  }
+
+  // Calculate queued splits based on runningTableScanGroups
+  for (const auto& runningTableScanGroup : runningTableScanGroups) {
+    auto planNodeId = runningTableScanGroup.first;
+    auto groupIds = runningTableScanGroup.second;
+
+    if (splitsStates_.count(planNodeId) == 0) {
+      // no splits for this planNodeId
+      continue;
+    }
+
+    auto& groupSplitsStores = splitsStates_[planNodeId].groupSplitsStores;
+    for (auto groupId : groupIds) {
+      if (groupSplitsStores.count(groupId) == 0) {
+        // no splits for this group
+        continue;
+      }
+      auto splits = groupSplitsStores.at(groupId).splits;
+      if (splits.empty()) {
+        // no splits for this group
+        continue;
+      }
+      splitStatus.queuedTableScanSplitsNum += splits.size();
+      for (auto split : splits) {
+        splitStatus.queuedTableScanSplitsWeight +=
+            split.connectorSplit->splitWeight;
+      }
+    }
+  }
+  return splitStatus;
+}
+
 void Task::removeSpillDirectoryIfExists() {
   if (spillDirectory_.empty() || !spillDirectoryCreated_) {
     return;
@@ -1422,6 +1475,7 @@ std::unique_ptr<ContinuePromise> Task::addSplitLocked(
   ++taskStats_.numTotalSplits;
   ++taskStats_.numQueuedSplits;
 
+  // Remove after presto switches to use the new API
   if (split.connectorSplit) {
     VELOX_CHECK_NULL(split.connectorSplit->dataSource);
     if (splitsState.sourceIsTableScan) {
@@ -1654,6 +1708,7 @@ exec::Split Task::getSplitLocked(
 
   --taskStats_.numQueuedSplits;
   ++taskStats_.numRunningSplits;
+  // Remove after presto switches to use the new API
   if (forTableScan && split.connectorSplit) {
     --taskStats_.numQueuedTableScanSplits;
     ++taskStats_.numRunningTableScanSplits;
@@ -1704,6 +1759,7 @@ void Task::splitFinished(bool fromTableScan, int64_t splitWeight) {
   std::lock_guard<std::timed_mutex> l(mutex_);
   ++taskStats_.numFinishedSplits;
   --taskStats_.numRunningSplits;
+  // Remove after presto switches to use the new API
   if (fromTableScan) {
     --taskStats_.numRunningTableScanSplits;
     taskStats_.runningTableScanSplitWeights -= splitWeight;
@@ -1720,6 +1776,7 @@ void Task::multipleSplitsFinished(
   std::lock_guard<std::timed_mutex> l(mutex_);
   taskStats_.numFinishedSplits += numSplits;
   taskStats_.numRunningSplits -= numSplits;
+  // Remove after presto switches to use the new API
   if (fromTableScan) {
     taskStats_.numRunningTableScanSplits -= numSplits;
     taskStats_.runningTableScanSplitWeights -= splitsWeight;
