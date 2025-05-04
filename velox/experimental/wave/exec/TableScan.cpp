@@ -77,7 +77,8 @@ void TableScan::updateStats(
   }
   for (const auto& [name, counter] : connectorStats) {
     if (name == "ioWaitNanos") {
-      ioWaitNanos_ += counter.value - lastIoWaitNanos_;
+      ioWaitNanos_.fetch_add(
+          counter.value - lastIoWaitNanos_, std::memory_order_relaxed);
       lastIoWaitNanos_ = counter.value;
     }
     if (UNLIKELY(lockedStats->runtimeStats.count(name) == 0)) {
