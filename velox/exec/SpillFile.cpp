@@ -309,7 +309,8 @@ SpillReadFile::SpillReadFile(
       serde_(getNamedVectorSerde(VectorSerde::Kind::kPresto)),
       stats_(stats) {
   auto fs = filesystems::getFileSystem(path_, nullptr);
-  auto file = fs->openFileForRead(path_);
+  auto uniqueFile = fs->openFileForRead(path_);
+  std::shared_ptr<ReadFile> file = std::move(uniqueFile);
   input_ = std::make_unique<common::FileInputStream>(
       std::move(file), bufferSize, pool_);
 }
