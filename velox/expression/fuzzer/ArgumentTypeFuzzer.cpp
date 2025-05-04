@@ -25,6 +25,7 @@
 #include "velox/functions/prestosql/types/IPPrefixType.h"
 #include "velox/functions/prestosql/types/JsonType.h"
 #include "velox/type/Type.h"
+#include "velox/type/parser/ParserUtil.h"
 #include "velox/vector/fuzzer/VectorFuzzer.h"
 
 namespace facebook::velox::fuzzer {
@@ -56,15 +57,6 @@ bool isDecimalBaseName(const std::string& typeName) {
 
   return normalized == "decimal";
 }
-
-/// Returns true only if 'str' contains digits.
-bool isPositiveInteger(const std::string& str) {
-  return !str.empty() &&
-      std::find_if(str.begin(), str.end(), [](unsigned char c) {
-        return !std::isdigit(c);
-      }) == str.end();
-}
-
 } // namespace
 
 void ArgumentTypeFuzzer::determineUnboundedIntegerVariables(
