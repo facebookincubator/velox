@@ -180,10 +180,11 @@ AssertQueryBuilder& AssertQueryBuilder::splits(
 
 std::shared_ptr<Task> AssertQueryBuilder::assertResults(
     const std::string& duckDbSql,
-    const std::optional<std::vector<uint32_t>>& sortingKeys) {
+    const std::optional<std::vector<uint32_t>>& sortingKeys,
+    bool addSplitWithSequence) {
   VELOX_CHECK_NOT_NULL(duckDbQueryRunner_);
 
-  auto [cursor, results] = readCursor();
+  auto [cursor, results] = readCursor(addSplitWithSequence);
   if (results.empty()) {
     test::assertResults(results, ROW({}, {}), duckDbSql, *duckDbQueryRunner_);
   } else if (sortingKeys.has_value()) {
@@ -201,42 +202,50 @@ std::shared_ptr<Task> AssertQueryBuilder::assertResults(
 }
 
 std::shared_ptr<Task> AssertQueryBuilder::assertResults(
-    const RowVectorPtr& expected) {
-  return assertResults(std::vector<RowVectorPtr>{expected});
+    const RowVectorPtr& expected,
+    bool addSplitWithSequence) {
+  return assertResults(
+      std::vector<RowVectorPtr>{expected}, addSplitWithSequence);
 }
 
 std::shared_ptr<Task> AssertQueryBuilder::assertResults(
-    const std::vector<RowVectorPtr>& expected) {
-  auto [cursor, results] = readCursor();
+    const std::vector<RowVectorPtr>& expected,
+    bool addSplitWithSequence) {
+  auto [cursor, results] = readCursor(addSplitWithSequence);
 
   assertEqualResults(expected, results);
   return cursor->task();
 }
 
-std::shared_ptr<Task> AssertQueryBuilder::assertEmptyResults() {
-  auto [cursor, results] = readCursor();
+std::shared_ptr<Task> AssertQueryBuilder::assertEmptyResults(
+    bool addSplitWithSequence) {
+  auto [cursor, results] = readCursor(addSplitWithSequence);
   test::assertEmptyResults(results);
   return cursor->task();
 }
 
 std::shared_ptr<Task> AssertQueryBuilder::assertTypeAndNumRows(
     const TypePtr& expectedType,
-    vector_size_t expectedNumRows) {
-  auto [cursor, results] = readCursor();
+    vector_size_t expectedNumRows,
+    bool addSplitWithSequence) {
+  auto [cursor, results] = readCursor(addSplitWithSequence);
 
   assertEqualTypeAndNumRows(expectedType, expectedNumRows, results);
   return cursor->task();
 }
 
-RowVectorPtr AssertQueryBuilder::copyResults(memory::MemoryPool* pool) {
+RowVectorPtr AssertQueryBuilder::copyResults(
+    memory::MemoryPool* pool,
+    bool addSplitWithSequence) {
   std::shared_ptr<Task> unused;
-  return copyResults(pool, unused);
+  return copyResults(pool, unused, addSplitWithSequence);
 }
 
 RowVectorPtr AssertQueryBuilder::copyResults(
     memory::MemoryPool* pool,
-    std::shared_ptr<Task>& task) {
-  auto [cursor, results] = readCursor();
+    std::shared_ptr<Task>& task,
+    bool addSplitWithSequence) {
+  auto [cursor, results] = readCursor(addSplitWithSequence);
 
   if (results.empty()) {
     task = cursor->task();
@@ -260,8 +269,10 @@ RowVectorPtr AssertQueryBuilder::copyResults(
   return copy;
 }
 
-uint64_t AssertQueryBuilder::runWithoutResults(std::shared_ptr<Task>& task) {
-  auto [cursor, results] = readCursor();
+uint64_t AssertQueryBuilder::runWithoutResults(
+    std::shared_ptr<Task>& task,
+    bool addSplitWithSequence) {
+  auto [cursor, results] = readCursor(addSplitWithSequence);
   uint64_t count = 0;
   for (const auto& result : results) {
     count += result->size();
@@ -271,7 +282,7 @@ uint64_t AssertQueryBuilder::runWithoutResults(std::shared_ptr<Task>& task) {
 }
 
 std::pair<std::unique_ptr<TaskCursor>, std::vector<RowVectorPtr>>
-AssertQueryBuilder::readCursor() {
+AssertQueryBuilder::readCursor(bool addSplitWithSequence) {
   VELOX_CHECK_NOT_NULL(params_.planNode);
 
   if (!configs_.empty() || !connectorSessionProperties_.empty()) {
@@ -313,12 +324,18 @@ AssertQueryBuilder::readCursor() {
     if (params_.barrierExecution) {
       int numSplits{0};
       for (auto& [nodeId, nodeSplits] : splits_) {
+        long sequenceId = 0;
         if (nodeSplits.empty()) {
           task->noMoreSplits(nodeId);
           continue;
         }
         ++numSplits;
-        task->addSplit(nodeId, std::move(nodeSplits[0]));
+        if (addSplitWithSequence) {
+          task->addSplitWithSequence(
+              nodeId, std::move(nodeSplits[0]), sequenceId++);
+        } else {
+          task->addSplit(nodeId, std::move(nodeSplits[0]));
+        }
         nodeSplits.erase(nodeSplits.begin());
       }
       if (numSplits > 0) {
