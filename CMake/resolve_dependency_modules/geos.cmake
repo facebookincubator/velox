@@ -22,12 +22,11 @@ string(CONCAT VELOX_GEOS_SOURCE_URL "https://download.osgeo.org/geos/"
 velox_resolve_dependency_url(GEOS)
 
 FetchContent_Declare(
-        geos
-        URL ${VELOX_GEOS_SOURCE_URL}
-        URL_HASH ${VELOX_GEOS_BUILD_SHA256_CHECKSUM}
-        PATCH_COMMAND
-        cp "${CMAKE_CURRENT_LIST_DIR}/geos/CMakeLists.txt" . &&
-        git apply "${CMAKE_CURRENT_LIST_DIR}/geos/geos-build.patch")
+  geos
+  URL ${VELOX_GEOS_SOURCE_URL}
+  URL_HASH ${VELOX_GEOS_BUILD_SHA256_CHECKSUM}
+  PATCH_COMMAND cp "${CMAKE_CURRENT_LIST_DIR}/geos/CMakeLists.txt" . && git
+                apply "${CMAKE_CURRENT_LIST_DIR}/geos/geos-build.patch")
 
 list(APPEND CMAKE_MODULE_PATH "${geos_SOURCE_DIR}/cmake")
 set(BUILD_SHARED_LIBS ${VELOX_BUILD_SHARED})
@@ -36,7 +35,7 @@ set(PREVIOUS_CMAKE_CXX_FLAGS ${CMAKE_CXX_FLAGS})
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS}  -Wno-nonnull ")
 
 if("${CMAKE_CXX_COMPILER_ID}" MATCHES "GNU")
-    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS}  -Wno-dangling-pointer")
+  set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS}  -Wno-dangling-pointer")
 endif()
 
 FetchContent_MakeAvailable(geos)
