@@ -23,3 +23,20 @@ target_link_libraries(
   velox_parse_parser
   velox_parse_expression
   GTest::gtest)
+
+velox_add_library(velox_query_replay_runner QueryReplayRunner.cpp)
+
+velox_link_libraries(
+  velox_query_replay_runner
+  velox_exec
+  velox_exec_test_lib
+  velox_local_runner
+)
+
+add_executable(velox_query_replay_runner_test QueryReplayRunnerTest.cpp)
+
+add_test(velox_query_replay_runner_test velox_query_replay_runner_test)
+
+target_link_libraries(velox_query_replay_runner_test velox_query_replay_runner
+                      velox_exec_test_lib
+)
