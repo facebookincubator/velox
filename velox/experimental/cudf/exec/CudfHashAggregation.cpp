@@ -576,7 +576,7 @@ void CudfHashAggregation::setupGroupingKeyChannelProjections(
 
 void CudfHashAggregation::computeIntermediateGroupbyPartial(CudfVectorPtr tbl) {
   // For every input, we'll do a groupby and compact results with the existing
-  // interim groupby results
+  // intermediate groupby results.
 
   auto inputTableStream = tbl->stream();
   auto groupbyOnInput = doGroupByAggregation(
@@ -585,7 +585,7 @@ void CudfHashAggregation::computeIntermediateGroupbyPartial(CudfVectorPtr tbl) {
       aggregators_,
       inputTableStream);
 
-  // If we already have partial output, concatenate the new results with it
+  // If we already have partial output, concatenate the new results with it.
   if (partialOutput_) {
     // Create a vector of tables to concatenate
     std::vector<cudf::table_view> tablesToConcat;
@@ -593,8 +593,8 @@ void CudfHashAggregation::computeIntermediateGroupbyPartial(CudfVectorPtr tbl) {
     tablesToConcat.push_back(groupbyOnInput->getTableView());
 
     auto partialOutputStream = partialOutput_->stream();
-    // we need to join the input table stream on the partial output stream to
-    // make sure the intermediate results are available when we do the concat
+    // We need to join the input table stream on the partial output stream to
+    // make sure the intermediate results are available when we do the concat.
     cudf::detail::join_streams(
         std::vector<rmm::cuda_stream_view>{inputTableStream},
         partialOutputStream);
@@ -603,8 +603,7 @@ void CudfHashAggregation::computeIntermediateGroupbyPartial(CudfVectorPtr tbl) {
     auto concatenatedTable =
         cudf::concatenate(tablesToConcat, partialOutputStream);
 
-    // Now we have to groupby again but this time with final aggregation
-    // style.
+    // Now we have to groupby again but this time with intermediate aggregators.
     auto compactedOutput = doGroupByAggregation(
         std::move(concatenatedTable),
         groupingKeyOutputChannels_,
@@ -613,7 +612,7 @@ void CudfHashAggregation::computeIntermediateGroupbyPartial(CudfVectorPtr tbl) {
     partialOutput_ = compactedOutput;
   } else {
     // First time processing, just store the result of the input batch's groupby
-    // This means we're storing the stream from the first batch
+    // This means we're storing the stream from the first batch.
     partialOutput_ = groupbyOnInput;
   }
 }
@@ -621,20 +620,20 @@ void CudfHashAggregation::computeIntermediateGroupbyPartial(CudfVectorPtr tbl) {
 void CudfHashAggregation::computeIntermediateDistinctPartial(
     CudfVectorPtr tbl) {
   // For every input, we'll concat with existing distinct results and then do a
-  // distinct on the concatenated results
+  // distinct on the concatenated results.
 
   auto inputTableStream = tbl->stream();
 
   if (partialOutput_) {
-    // Concatenate the input table with the existing distinct results
+    // Concatenate the input table with the existing distinct results.
     std::vector<cudf::table_view> tablesToConcat;
     tablesToConcat.push_back(partialOutput_->getTableView());
     tablesToConcat.push_back(tbl->getTableView().select(
         groupingKeyInputChannels_.begin(), groupingKeyInputChannels_.end()));
 
     auto partialOutputStream = partialOutput_->stream();
-    // we need to join the input table stream on the partial output stream to
-    // make sure the input table is available when we do the concat
+    // We need to join the input table stream on the partial output stream to
+    // make sure the input table is available when we do the concat.
     cudf::detail::join_streams(
         std::vector<rmm::cuda_stream_view>{inputTableStream},
         partialOutputStream);
@@ -642,7 +641,7 @@ void CudfHashAggregation::computeIntermediateDistinctPartial(
     auto concatenatedTable =
         cudf::concatenate(tablesToConcat, partialOutputStream);
 
-    // Do a distinct on the concatenated results
+    // Do a distinct on the concatenated results.
     auto distinctOutput = getDistinctKeys(
         std::move(concatenatedTable),
         groupingKeyOutputChannels_,
@@ -650,7 +649,7 @@ void CudfHashAggregation::computeIntermediateDistinctPartial(
     partialOutput_ = distinctOutput;
   } else {
     // First time processing, just store the result of the input batch's
-    // distinct
+    // distinct.
     partialOutput_ = getDistinctKeys(
         tbl->release(), groupingKeyInputChannels_, inputTableStream);
   }
@@ -668,16 +667,16 @@ void CudfHashAggregation::addInput(RowVectorPtr input) {
 
   if (isPartialOutput_ && !isGlobal_) {
     if (isDistinct_) {
-      // Handle partial distinct aggregation
+      // Handle partial distinct aggregation.
       computeIntermediateDistinctPartial(cudfInput);
     } else {
-      // Handle partial groupby aggregation
+      // Handle partial groupby aggregation.
       computeIntermediateGroupbyPartial(cudfInput);
     }
     return;
   }
 
-  // Handle final aggregation, distinct, or global cases
+  // Handle final aggregation or global cases.
   inputs_.push_back(std::move(cudfInput));
 }
 
@@ -790,17 +789,17 @@ CudfVectorPtr CudfHashAggregation::releaseAndResetPartialOutput() {
 RowVectorPtr CudfHashAggregation::getOutput() {
   VELOX_NVTX_OPERATOR_FUNC_RANGE();
 
-  // Handle partial groupby
+  // Handle partial groupby.
   if (isPartialOutput_ && !isGlobal_) {
     if (partialOutput_ &&
         partialOutput_->estimateFlatSize() >
             maxPartialAggregationMemoryUsage_) {
-      // This is basically a flush of the partial output
+      // This is basically a flush of the partial output.
       return releaseAndResetPartialOutput();
     }
     if (not noMoreInput_) {
       // Don't produce output if the partial output hasn't reached memory limit
-      // and there's more batches to come
+      // and there's more batches to come.
       return nullptr;
     }
     if (!partialOutput_ && finished_) {
@@ -826,7 +825,7 @@ RowVectorPtr CudfHashAggregation::getOutput() {
   auto stream = cudfGlobalStreamPool().get_stream();
   auto tbl = getConcatenatedTable(inputs_, stream);
 
-  // Release input data after synchronizing
+  // Release input data after synchronizing.
   stream.synchronize();
   inputs_.clear();
 
