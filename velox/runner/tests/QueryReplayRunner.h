@@ -39,11 +39,27 @@ class QueryReplayRunner {
   /// Runs a query with the given serialized plan fragments and returns the
   /// results. The serialized plan fragments should have the same query id as
   /// 'queryId'.
+  template <typename SplitSourceFactoryCreator>
   std::vector<VectorPtr> run(
       const std::string& queryId,
-      const std::vector<std::string>& serializedPlanFragments);
+      const std::vector<std::string>& serializedPlanFragments,
+      SplitSourceFactoryCreator splitSourceFactoryCreator) {
+    auto queryRootPool = makeRootPool(queryId);
+    auto multiFragmentPlan = deserializePlan(queryId, serializedPlanFragments);
+    auto localRunner = std::make_shared<LocalRunner>(
+        multiFragmentPlan,
+        makeQueryCtx(queryId, queryRootPool),
+        splitSourceFactoryCreator(multiFragmentPlan));
+
+    auto result = readCursor(localRunner, pool_);
+    localRunner->waitForCompletion(kWaitTimeoutUs);
+
+    return result;
+  }
 
  private:
+  std::shared_ptr<memory::MemoryPool> makeRootPool(const std::string& queryId);
+
   std::shared_ptr<core::QueryCtx> makeQueryCtx(
       const std::string& queryId,
       std::shared_ptr<memory::MemoryPool> rootPool);
@@ -54,6 +70,10 @@ class QueryReplayRunner {
   MultiFragmentPlanPtr deserializePlan(
       const std::string& queryId,
       const std::vector<std::string>& serializedPlanFragments);
+
+  std::vector<VectorPtr> readCursor(
+      std::shared_ptr<runner::LocalRunner> runner,
+      memory::MemoryPool* pool);
 
   static constexpr int kWaitTimeoutUs = 5000'000;
   static const std::string kHiveConnectorId;

@@ -16,32 +16,13 @@
 
 #include "velox/runner/tests/QueryReplayRunner.h"
 
+#include "velox/connectors/hive/TableHandle.h"
 #include "velox/exec/PartitionFunction.h"
 #include "velox/exec/tests/utils/LocalExchangeSource.h"
 
 namespace facebook::velox::runner {
 
 const std::string QueryReplayRunner::kHiveConnectorId = "test-hive";
-
-namespace {
-std::shared_ptr<memory::MemoryPool> makeRootPool(const std::string& queryId) {
-  static std::atomic_uint64_t poolId{0};
-  return memory::memoryManager()->addRootPool(
-      fmt::format("{}_{}", queryId, poolId++));
-}
-
-std::vector<VectorPtr> readCursor(
-    std::shared_ptr<runner::LocalRunner> runner,
-    memory::MemoryPool* pool) {
-  // We'll check the result after tasks are deleted, so copy the result vectors
-  // to 'pool' that has longer lifetime.
-  std::vector<VectorPtr> result;
-  while (auto rows = runner->next()) {
-    result.push_back(BaseVector::copy(*rows, pool));
-  }
-  return result;
-}
-} // namespace
 
 QueryReplayRunner::QueryReplayRunner(
     memory::MemoryPool* pool,
@@ -57,9 +38,18 @@ QueryReplayRunner::QueryReplayRunner(
   Type::registerSerDe();
   core::PlanNode::registerSerDe();
   core::ITypedExpr::registerSerDe();
+  connector::hive::HiveTableHandle::registerSerDe();
+  connector::hive::HiveColumnHandle::registerSerDe();
   exec::registerPartitionFunctionSerDe();
 
   exec::ExchangeSource::registerFactory(exec::test::createLocalExchangeSource);
+}
+
+std::shared_ptr<memory::MemoryPool> QueryReplayRunner::makeRootPool(
+    const std::string& queryId) {
+  static std::atomic_uint64_t poolId{0};
+  return memory::memoryManager()->addRootPool(
+      fmt::format("{}_{}", queryId, poolId++));
 }
 
 std::shared_ptr<core::QueryCtx> QueryReplayRunner::makeQueryCtx(
@@ -80,23 +70,6 @@ std::shared_ptr<core::QueryCtx> QueryReplayRunner::makeQueryCtx(
       rootPool->shared_from_this(),
       nullptr,
       queryId);
-}
-
-std::vector<VectorPtr> QueryReplayRunner::run(
-    const std::string& queryId,
-    const std::vector<std::string>& serializedPlanFragments) {
-  auto queryRootPool = makeRootPool(queryId);
-  auto multiFragmentPlan = deserializePlan(queryId, serializedPlanFragments);
-  auto splitSourceFactory = makeSplitSourceFactory(multiFragmentPlan); // todo
-  auto localRunner = std::make_shared<LocalRunner>(
-      std::move(multiFragmentPlan),
-      makeQueryCtx(queryId, queryRootPool),
-      splitSourceFactory);
-
-  auto result = readCursor(localRunner, pool_);
-  localRunner->waitForCompletion(kWaitTimeoutUs);
-
-  return result;
 }
 
 namespace {
@@ -131,23 +104,20 @@ std::vector<core::TableScanNodePtr> getScanNodes(
   return result;
 }
 
-// If 'plan' is a broadcast partitioned output node, return the number of
-// broadcast destinations. Otherwise return 0.
-int getNumBroadcastDestinations(const core::PlanNodePtr& plan) {
-  if (auto partitionedOutput =
-          std::dynamic_pointer_cast<const core::PartitionedOutputNode>(plan)) {
-    if (partitionedOutput->isBroadcast()) {
-      return partitionedOutput->numPartitions();
-    }
-  }
-  return 0;
-}
-
 // Return true if 'node' is a gathering PartitionedOutput node.
 bool isGatheringPartition(const core::PlanNodePtr& node) {
   if (auto partitionedOutput =
           std::dynamic_pointer_cast<const core::PartitionedOutputNode>(node)) {
-    return partitionedOutput->keys().empty();
+    return partitionedOutput->keys().empty() &&
+        !partitionedOutput->isBroadcast();
+  }
+  return false;
+}
+
+bool isBroadcastPartition(const core::PlanNodePtr& node) {
+  if (auto partitionedOutput =
+          std::dynamic_pointer_cast<const core::PartitionedOutputNode>(node)) {
+    return partitionedOutput->isBroadcast();
   }
   return false;
 }
@@ -162,6 +132,10 @@ core::PlanNodePtr updateNumberOfPartitions(
   auto partitionedOutput =
       std::dynamic_pointer_cast<const core::PartitionedOutputNode>(plan);
   VELOX_CHECK(partitionedOutput != nullptr);
+  if (partitionedOutput->isBroadcast()) {
+    return plan;
+  }
+
   VELOX_CHECK(!partitionedOutput->keys().empty());
   return std::make_shared<core::PartitionedOutputNode>(
       partitionedOutput->id(),
@@ -199,8 +173,6 @@ MultiFragmentPlanPtr QueryReplayRunner::deserializePlan(
     const auto plan =
         core::PlanNode::deserialize<core::PlanNode>(jsonPlanFragment, pool_);
     planFragments[taskPrefix].scans = getScanNodes(plan);
-    planFragments[taskPrefix].numBroadcastDestinations =
-        getNumBroadcastDestinations(plan);
     planFragments[taskPrefix].plan = plan;
   }
 
@@ -220,8 +192,12 @@ MultiFragmentPlanPtr QueryReplayRunner::deserializePlan(
           planFragments[taskPrefix].numWorkers = 1;
         } else {
           planFragments[taskPrefix].numWorkers = width_;
-          planFragments[remoteTaskPrefix].plan = updateNumberOfPartitions(
-              planFragments[remoteTaskPrefix].plan, width_);
+          if (isBroadcastPartition(planFragments[remoteTaskPrefix].plan)) {
+            planFragments[remoteTaskPrefix].numBroadcastDestinations = width_;
+          } else {
+            planFragments[remoteTaskPrefix].plan = updateNumberOfPartitions(
+                planFragments[remoteTaskPrefix].plan, width_);
+          }
         }
         remoteTaskIdPrefixSet.insert(remoteTaskPrefix);
       }
@@ -257,6 +233,18 @@ MultiFragmentPlanPtr QueryReplayRunner::deserializePlan(
   MultiFragmentPlan::Options options{queryId, width_, maxDrivers_};
   return std::make_shared<MultiFragmentPlan>(
       std::move(executableFragments), std::move(options));
+}
+
+std::vector<VectorPtr> QueryReplayRunner::readCursor(
+    std::shared_ptr<runner::LocalRunner> runner,
+    memory::MemoryPool* pool) {
+  // We'll check the result after tasks are deleted, so copy the result vectors
+  // to 'pool' that has longer lifetime.
+  std::vector<VectorPtr> result;
+  while (auto rows = runner->next()) {
+    result.push_back(BaseVector::copy(*rows, pool));
+  }
+  return result;
 }
 
 std::shared_ptr<runner::SplitSourceFactory>

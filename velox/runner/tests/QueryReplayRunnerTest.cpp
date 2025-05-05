@@ -17,11 +17,13 @@
 #include "velox/runner/tests/QueryReplayRunner.h"
 
 #include "velox/exec/tests/utils/HiveConnectorTestBase.h"
+#include "velox/exec/tests/utils/TempDirectoryPath.h"
 
 namespace facebook::velox::runner {
 
 using namespace facebook::velox::exec::test;
 
+namespace {
 // Presto 'taskId' is in the format of
 // queryId.stageId.stageExecutionId.taskId.attemptNumber. return stage id from
 // the given taskId.
@@ -31,10 +33,45 @@ std::string getTaskPrefix(const std::string& taskId) {
   VELOX_CHECK_EQ(parts.size(), 5);
   return std::string(parts[1]);
 }
+} // namespace
 
-class QueryReplayRunnerTest : public HiveConnectorTestBase {};
+class QueryReplayRunnerTest : public HiveConnectorTestBase {
+ protected:
+  std::unordered_map<
+      core::PlanNodeId,
+      std::vector<std::shared_ptr<connector::ConnectorSplit>>>
+  deserializeConnectorSplits(const std::vector<std::string>& serializedSplits) {
+    std::unordered_map<
+        core::PlanNodeId,
+        std::vector<std::shared_ptr<connector::ConnectorSplit>>>
+        nodeSplitsMap;
+    for (auto& serializedSplit : serializedSplits) {
+      auto json = folly::parseJson(serializedSplit);
+      VELOX_CHECK(json.isObject());
+      if (json.empty()) {
+        continue;
+      }
 
-TEST_F(QueryReplayRunnerTest, basicWithoutTableScan) {
+      for (auto& [key, value] : json.items()) {
+        auto planNodeId = key.asString();
+        VELOX_CHECK(value.isArray());
+        std::vector<std::shared_ptr<connector::ConnectorSplit>> nodeSplits;
+        for (auto& split : value) {
+          nodeSplits.push_back(
+              connector::hive::HiveConnectorSplit::create(split));
+        }
+        nodeSplitsMap[planNodeId] = std::move(nodeSplits);
+      }
+    }
+    return nodeSplitsMap;
+  }
+
+  std::unordered_map<std::string, std::vector<std::string>> tableFilePaths_;
+
+  std::shared_ptr<TempDirectoryPath> files_;
+};
+
+TEST_F(QueryReplayRunnerTest, aggregationWithoutTableScan) {
   const auto queryId = "abc";
   const std::vector<std::string> serializedPlanFragments = {
       /*partial aggregation*/
@@ -50,7 +87,63 @@ TEST_F(QueryReplayRunnerTest, basicWithoutTableScan) {
   auto rootPool = memory::memoryManager()->addRootPool("testRootPool");
   auto pool = rootPool->addLeafChild("testLeafPool");
   QueryReplayRunner runner{pool.get(), getTaskPrefix};
-  auto result = runner.run(queryId, serializedPlanFragments);
+  auto result = runner.run(
+      queryId,
+      serializedPlanFragments,
+      [](const runner::MultiFragmentPlanPtr& /*plan*/) { return nullptr; });
+  runner.~QueryReplayRunner();
+}
+
+TEST_F(QueryReplayRunnerTest, joinWithTableScan) {
+  std::vector<RowVectorPtr> tables = {
+      makeRowVector({"c0"}, {makeFlatVector<int64_t>({1, 2, 3, 4, 5})}),
+      makeRowVector({"c0"}, {makeFlatVector<int64_t>({2, 4, 6, 8, 10})})};
+  auto directory = TempDirectoryPath::create();
+  auto directoryPath = directory->getPath();
+  for (auto i = 0; i < 2; ++i) {
+    auto tablePath = fmt::format("{}/t{}", directoryPath, i);
+    auto fs = filesystems::getFileSystem(tablePath, {});
+    fs->mkdir(tablePath);
+    for (auto j = 0; j < 2; ++j) {
+      auto filePath = fmt::format("{}/f{}", tablePath, j);
+      writeToFile(filePath, tables[i]);
+    }
+  }
+
+  const auto queryId = "bcd";
+  const std::vector<std::string> serializedPlanFragments = {
+      /*broadcast*/
+      R"({"task_id":"bcd.3.0.0.0","remote_task_ids":{},"plan_fragment":{"outputType":{"cTypes":[{"type":"BIGINT","name":"Type"}],"names":["b0"],"type":"ROW","name":"Type"},"serdeKind":"Presto","partitionFunctionSpec":{"name":"GatherPartitionFunctionSpec"},"replicateNullsAndAny":false,"sources":[{"names":["b0"],"projections":[{"fieldName":"c0","inputs":[{"type":{"names":["c0"],"cTypes":[{"type":"BIGINT","name":"Type"}],"type":"ROW","name":"Type"},"name":"InputTypedExpr"}],"type":{"type":"BIGINT","name":"Type"},"name":"FieldAccessTypedExpr"}],"sources":[{"assignments":[{"columnHandle":{"requiredSubfields":[],"hiveType":{"type":"BIGINT","name":"Type"},"dataType":{"type":"BIGINT","name":"Type"},"columnType":"Regular","hiveColumnHandleName":"c0","name":"HiveColumnHandle"},"assign":"c0"}],"tableHandle":{"tableParameters":{},"tableName":"U","subfieldFilters":[],"filterPushdownEnabled":true,"connectorId":"test-hive","name":"HiveTableHandle"},"outputType":{"names":["c0"],"cTypes":[{"type":"BIGINT","name":"Type"}],"type":"ROW","name":"Type"},"id":"4","name":"TableScanNode"}],"id":"5","name":"ProjectNode"}],"keys":[],"kind":"BROADCAST","numPartitions":1,"id":"6","name":"PartitionedOutputNode"}})",
+      /*join*/
+      R"({"task_id":"bcd.2.0.0.0","remote_task_ids":{"3":["bcd.1.3.0.0","bcd.1.1.0.0","bcd.1.2.0.0","bcd.1.1.0.0"],"7":["bcd.3.1.0.0","bcd.3.0.0.0","bcd.3.2.0.0","bcd.3.3.0.0"]},"plan_fragment":{"partitionFunctionSpec":{"name":"GatherPartitionFunctionSpec"},"serdeKind":"Presto","outputType":{"cTypes":[{"type":"BIGINT","name":"Type"},{"type":"BIGINT","name":"Type"}],"names":["c0","b0"],"type":"ROW","name":"Type"},"replicateNullsAndAny":false,"kind":"PARTITIONED","keys":[],"numPartitions":1,"sources":[{"outputType":{"cTypes":[{"type":"BIGINT","name":"Type"},{"type":"BIGINT","name":"Type"}],"names":["c0","b0"],"type":"ROW","name":"Type"},"nullAware":false,"joinType":"INNER","rightKeys":[{"fieldName":"b0","type":{"type":"BIGINT","name":"Type"},"name":"FieldAccessTypedExpr"}],"sources":[{"serdeKind":"Presto","outputType":{"cTypes":[{"type":"BIGINT","name":"Type"}],"names":["c0"],"type":"ROW","name":"Type"},"id":"3","name":"ExchangeNode"},{"outputType":{"names":["b0"],"cTypes":[{"type":"BIGINT","name":"Type"}],"type":"ROW","name":"Type"},"serdeKind":"Presto","id":"7","name":"ExchangeNode"}],"leftKeys":[{"fieldName":"c0","type":{"type":"BIGINT","name":"Type"},"name":"FieldAccessTypedExpr"}],"id":"8","name":"HashJoinNode"}],"id":"9","name":"PartitionedOutputNode"}})",
+      /*table scan*/
+      R"({"task_id":"bcd.1.0.0.0","remote_task_ids":{},"plan_fragment":{"outputType":{"cTypes":[{"type":"BIGINT","name":"Type"}],"names":["c0"],"type":"ROW","name":"Type"},"serdeKind":"Presto","partitionFunctionSpec":{"constants":[],"keyChannels":[0],"inputType":{"cTypes":[{"type":"BIGINT","name":"Type"}],"names":["c0"],"type":"ROW","name":"Type"},"name":"HashPartitionFunctionSpec"},"replicateNullsAndAny":false,"keys":[{"fieldName":"c0","inputs":[{"type":{"cTypes":[{"type":"BIGINT","name":"Type"}],"names":["c0"],"type":"ROW","name":"Type"},"name":"InputTypedExpr"}],"type":{"type":"BIGINT","name":"Type"},"name":"FieldAccessTypedExpr"}],"numPartitions":3,"kind":"PARTITIONED","sources":[{"projections":[{"fieldName":"c0","inputs":[{"type":{"cTypes":[{"type":"BIGINT","name":"Type"}],"names":["c0"],"type":"ROW","name":"Type"},"name":"InputTypedExpr"}],"type":{"type":"BIGINT","name":"Type"},"name":"FieldAccessTypedExpr"}],"names":["c0"],"sources":[{"assignments":[{"columnHandle":{"requiredSubfields":[],"hiveType":{"type":"BIGINT","name":"Type"},"dataType":{"type":"BIGINT","name":"Type"},"columnType":"Regular","hiveColumnHandleName":"c0","name":"HiveColumnHandle"},"assign":"c0"}],"tableHandle":{"tableParameters":{},"subfieldFilters":[],"filterPushdownEnabled":true,"tableName":"T","connectorId":"test-hive","name":"HiveTableHandle"},"outputType":{"cTypes":[{"type":"BIGINT","name":"Type"}],"names":["c0"],"type":"ROW","name":"Type"},"id":"0","name":"TableScanNode"}],"id":"1","name":"ProjectNode"}],"id":"2","name":"PartitionedOutputNode"}})",
+      /*gathering*/
+      R"({"task_id":"bcd.0.0.0.0","remote_task_ids":{"10":["bcd.2.0.0.0","bcd.2.1.0.0","bcd.2.2.0.0"]},"plan_fragment":{"ignoreNullKeys":false,"globalGroupingSets":[],"aggregates":[{"distinct":false,"sortingOrders":[],"sortingKeys":[],"rawInputTypes":[{"type":"BIGINT","name":"Type"}],"call":{"functionName":"count","inputs":[{"value":{"value":1,"type":"BIGINT"},"type":{"type":"BIGINT","name":"Type"},"name":"ConstantTypedExpr"}],"type":{"type":"BIGINT","name":"Type"},"name":"CallTypedExpr"}}],"aggregateNames":["a0"],"preGroupedKeys":[],"groupingKeys":[],"step":"FINAL","sources":[{"serdeKind":"Presto","outputType":{"cTypes":[{"type":"BIGINT","name":"Type"},{"type":"BIGINT","name":"Type"}],"names":["c0","b0"],"type":"ROW","name":"Type"},"id":"10","name":"ExchangeNode"}],"id":"11","name":"AggregationNode"}})",
+  };
+  std::vector<std::string> serializedConnectorSplits = {
+      /*bcd.1.0.0.0*/
+      fmt::format(
+          R"({{"0":[{{"infoColumns":{{"$path":"{0}/t0/f0"}},"tableBucketNumber":null,"partitionKeys":{{}},"start":0,"extraFileInfo":null,"customSplitInfo":{{}},"bucketConversion":null,"splitWeight":0,"cacheable":true,"filePath":"{0}/t0/f0","fileFormat":"dwrf","name":"HiveConnectorSplit","storageParameters":{{}},"serdeParameters":{{}},"length":-1,"connectorId":"test-hive"}},{{"infoColumns":{{"$path":"{0}/t0/f1"}},"extraFileInfo":null,"bucketConversion":null,"partitionKeys":{{}},"customSplitInfo":{{}},"tableBucketNumber":null,"start":0,"filePath":"{0}/t0/f1","fileFormat":"dwrf","splitWeight":0,"cacheable":true,"name":"HiveConnectorSplit","storageParameters":{{}},"serdeParameters":{{}},"length":-1,"connectorId":"test-hive"}}]}})",
+          directoryPath),
+
+      /*bcd.3.0.0.0*/
+      fmt::format(
+          R"({{"4":[{{"infoColumns":{{"$path":"{0}/t1/f0"}},"bucketConversion":null,"customSplitInfo":{{}},"start":0,"extraFileInfo":null,"partitionKeys":{{}},"tableBucketNumber":null,"cacheable":true,"filePath":"{0}/t1/f0","fileFormat":"dwrf","splitWeight":0,"name":"HiveConnectorSplit","storageParameters":{{}},"serdeParameters":{{}},"length":-1,"connectorId":"test-hive"}},{{"infoColumns":{{"$path":"{0}/t1/f1"}},"bucketConversion":null,"tableBucketNumber":null,"customSplitInfo":{{}},"extraFileInfo":null,"start":0,"partitionKeys":{{}},"filePath":"{0}/t1/f1","cacheable":true,"fileFormat":"dwrf","splitWeight":0,"name":"HiveConnectorSplit","storageParameters":{{}},"serdeParameters":{{}},"length":-1,"connectorId":"test-hive"}}]}})",
+          directoryPath),
+  };
+  auto nodeSplitsMap = deserializeConnectorSplits(serializedConnectorSplits);
+
+  auto rootPool = memory::memoryManager()->addRootPool("testRootPool");
+  auto pool = rootPool->addLeafChild("testLeafPool");
+  QueryReplayRunner runner{pool.get(), getTaskPrefix};
+  auto result = runner.run(
+      queryId,
+      serializedPlanFragments,
+      [&](const runner::MultiFragmentPlanPtr& plan) {
+        return std::make_shared<runner::SimpleSplitSourceFactory>(
+            nodeSplitsMap);
+      });
   runner.~QueryReplayRunner();
 }
 

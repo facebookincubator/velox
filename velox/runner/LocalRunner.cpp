@@ -149,6 +149,43 @@ void LocalRunner::waitForCompletion(int32_t maxWaitUs) {
   }
 }
 
+void visitDFS(
+    const std::vector<ExecutableFragment>& fragments,
+    int32_t index,
+    const std::unordered_map<std::string, int32_t>& taskPrefixToIndex,
+    std::unordered_set<std::string>& visited) {
+  if (visited.count(fragments[index].taskPrefix) > 0) {
+    return;
+  }
+  visited.insert(fragments[index].taskPrefix);
+  for (auto& input : fragments[index].inputStages) {
+    visitDFS(
+        fragments,
+        taskPrefixToIndex.at(input.producerTaskPrefix),
+        taskPrefixToIndex,
+        visited);
+  }
+}
+
+// Return the index of the final stage in fragments.
+int32_t getLastStageIndex(const std::vector<ExecutableFragment>& fragments) {
+  std::unordered_map<std::string, int32_t> taskPrefixToIndex;
+  for (auto i = 0; i < fragments.size(); ++i) {
+    taskPrefixToIndex[fragments[i].taskPrefix] = i;
+  }
+
+  std::stack<int32_t> indices;
+  std::unordered_set<std::string> visited;
+  for (auto i = 0; i < fragments.size() - 1; ++i) {
+    if (visited.count(fragments[i].taskPrefix) > 0) {
+      continue;
+    }
+    visitDFS(fragments, i, taskPrefixToIndex, visited);
+    indices.push(i);
+  }
+  return indices.top();
+}
+
 std::vector<std::shared_ptr<exec::RemoteConnectorSplit>>
 LocalRunner::makeStages() {
   std::unordered_map<std::string, int32_t> stageMap;
@@ -250,7 +287,10 @@ LocalRunner::makeStages() {
     return {};
   }
   std::vector<std::shared_ptr<exec::RemoteConnectorSplit>> lastStage;
-  for (auto& task : stages_.back()) {
+  // Find the index of the final stage in fragments_. stages_.back() may not be
+  // the final stage because input fragments may not come in order.
+  auto i = getLastStageIndex(fragments_);
+  for (auto& task : stages_[i]) {
     lastStage.push_back(remoteSplit(task->taskId()));
   }
   return lastStage;
