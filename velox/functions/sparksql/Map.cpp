@@ -125,7 +125,7 @@ class MapFunction : public exec::VectorFunction {
             ->queryConfig()
             .throwExceptionOnDuplicateMapKeys();
 
-    // Check for duplicate keys and set size & offsets
+    // Check for duplicate keys and set size & offsets.
     rows.applyToSelected([&](vector_size_t row) {
       vector_size_t duplicateCnt = 0;
       for (vector_size_t i = 0; i < mapSize; i++) {
@@ -133,7 +133,8 @@ class MapFunction : public exec::VectorFunction {
           if (args[i * 2]->equalValueAt(args[j * 2].get(), row, row)) {
             if (throwExceptionOnDuplicateMapKeys) {
               auto duplicateKey = args[i * 2]->toString(row);
-              VELOX_USER_FAIL("Duplicate map key '{}' found.", duplicateKey);
+              VELOX_USER_FAIL(
+                  "Duplicate map key ({}) was found.", duplicateKey);
             }
             duplicateCnt++;
           }
