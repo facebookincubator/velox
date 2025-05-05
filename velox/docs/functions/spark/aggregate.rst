@@ -28,6 +28,7 @@ General Aggregate Functions
 
     For example, 
         bloom_filter_agg(xxhash64(x), 100, 1024)
+
     In Spark implementation, ``estimatedNumItems`` and ``numBits`` are used to decide the number of hash functions and bloom filter capacity.
     In Velox implementation, ``estimatedNumItems`` is not used.
 

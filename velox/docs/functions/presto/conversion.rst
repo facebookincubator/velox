@@ -322,6 +322,7 @@ supported conversions to/from JSON are listed in :doc:`json`.
      -
      - Y
      - Y
+
 Cast to Integral Types
 ----------------------
 
@@ -570,7 +571,7 @@ Invalid example
   SELECT cast(decimal '300.001' as tinyint); -- Out of range
 
 Cast to VARCHAR
---------------
+---------------
 
 Casting from scalar types to string is allowed.
 
@@ -1117,10 +1118,12 @@ Full form:
 
 Compressed form:
 ::
+
   2001:DB8::8:800:200C:417A
 
 Alternate form:
 ::
+
   0:0:0:0:0:0:13.1.68.3
   ::13.1.68.3
 

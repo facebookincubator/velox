@@ -127,6 +127,7 @@ Elaborating with an example table:
        5            1                10               5           12            2             5
        6            1                15               10          17            5             6
        7            1                21               16          23            7             7
+
 There are some more aspects to consider when calculating the frame indices.
 
 One of the subtle nuances is related to *PRECEDING* and *FOLLOWING* usage.

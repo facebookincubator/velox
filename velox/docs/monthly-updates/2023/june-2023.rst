@@ -27,7 +27,7 @@ Presto Functions
 * Add :func:`json_extract` function.
 * Add :func:`sum_data_size_for_stats aggregation` function.
 * Add 3-argument version of :func:`min_by` and :func:`max_by` aggregate functions.
-* Add :func:`concat`(array(E), E) function.
+* Add :func:`concat` (array(E), E) function.
 * Add support for inputs of type DECIMAL to :func:`round` function.
 * Add support for inputs of type REAL in :func:`least` and :func:`greatest` functions.
 * Add support for inputs of type TIMESTAMP in :func:`min_by` and :func:`max_by` aggregate functions.
