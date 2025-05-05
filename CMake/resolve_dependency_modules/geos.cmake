@@ -22,13 +22,22 @@ string(CONCAT VELOX_GEOS_SOURCE_URL "https://download.osgeo.org/geos/"
 velox_resolve_dependency_url(GEOS)
 
 FetchContent_Declare(
-  geos
-  URL ${VELOX_GEOS_SOURCE_URL}
-  URL_HASH ${VELOX_GEOS_BUILD_SHA256_CHECKSUM}
-  PATCH_COMMAND
-    cp "${CMAKE_CURRENT_LIST_DIR}/geos/CMakeLists.txt" "${geos_SOURCE_DIR}" &&
-    git apply "${CMAKE_CURRENT_LIST_DIR}/geos/geos-build.patch")
+        geos
+        URL ${VELOX_GEOS_SOURCE_URL}
+        URL_HASH ${VELOX_GEOS_BUILD_SHA256_CHECKSUM}
+        PATCH_COMMAND
+        cp "${CMAKE_CURRENT_LIST_DIR}/geos/CMakeLists.txt" . &&
+        git apply "${CMAKE_CURRENT_LIST_DIR}/geos/geos-build.patch")
+
 list(APPEND CMAKE_MODULE_PATH "${geos_SOURCE_DIR}/cmake")
 set(BUILD_SHARED_LIBS ${VELOX_BUILD_SHARED})
+set(CMAKE_BUILD_TYPE Release)
+set(PREVIOUS_CMAKE_CXX_FLAGS ${CMAKE_CXX_FLAGS})
+set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS}  -Wno-nonnull -Wno-dangling-pointer")
+
+
 FetchContent_MakeAvailable(geos)
+
 unset(BUILD_SHARED_LIBS)
+set(CMAKE_CXX_FLAGS ${PREVIOUS_CMAKE_CXX_FLAGS})
+set(CMAKE_BUILD_TYPE ${PREVIOUS_BUILD_TYPE})
