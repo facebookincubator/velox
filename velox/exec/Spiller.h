@@ -212,6 +212,8 @@ class NoRowContainerSpiller : public SpillerBase {
       const SpillPartitionId& partitionId,
       const RowVectorPtr& spillVector);
 
+  SpillFiles finishFile(const SpillPartitionId& partitionId);
+
   void setPartitionsSpilled(const SpillPartitionIdSet& ids) {
     for (const auto& id : ids) {
       state_.setPartitionSpilled(id);

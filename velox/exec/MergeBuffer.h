@@ -31,17 +31,17 @@ namespace facebook::velox::exec {
 class MergeBuffer {
  public:
   MergeBuffer(
-      const RowTypePtr& input,
-      const std::vector<column_index_t>& sortColumnIndices,
-      const std::vector<CompareFlags>& sortCompareFlags,
-      velox::memory::MemoryPool* pool,
-      tsan_atomic<bool>* nonReclaimableSection,
+      const RowTypePtr& type,
+      velox::memory::MemoryPool* const pool,
+      const std::vector<std::pair<column_index_t, CompareFlags>>& sortingKeys,
       const common::SpillConfig* spillConfig = nullptr,
       folly::Synchronized<velox::common::SpillStats>* spillStats = nullptr);
 
-  ~MergeBuffer();
+  /// Adds input to the MergeBuffer and spills it.
+  void addInput(const RowVectorPtr& input);
 
-  void addInput(const VectorPtr& input);
+  /// Force the spiller to close the spill file for each partial merge run.
+  void finishFile() const;
 
   /// Indicates no more input and triggers finish spilling and setup the sort
   /// merge reader for processing for the output.
@@ -50,17 +50,7 @@ class MergeBuffer {
   /// Returns the sorted output rows in batch.
   RowVectorPtr getOutput(vector_size_t maxOutputRows);
 
-  /// Invoked to spill all the rows from 'data_'.
-  void spill();
-
-  memory::MemoryPool* pool() const {
-    return pool_;
-  }
-
  private:
-  // Ensures there is sufficient memory reserved to process 'input'.
-  void ensureInputFits(const VectorPtr& input);
-
   // Invoked to initialize or reset the reusable output buffer to get output.
   void prepareOutput(vector_size_t outputBatchSize);
 
@@ -70,60 +60,30 @@ class MergeBuffer {
 
   void getOutputWithSpill();
 
-  // Spill during input stage.
-  void spillInput();
-
   // Finish spill, and we shouldn't get any rows from non-spilled partition as
   // there is only one hash partition for SortBuffer.
   void finishSpill();
 
-  const RowTypePtr input_;
-
-  const std::vector<CompareFlags> sortCompareFlags_;
-
+  const RowTypePtr type_;
   velox::memory::MemoryPool* const pool_;
-
-  // The flag is passed from the associated operator such as indicate if this
-  // sort buffer object is under non-reclaimable execution section or not.
-  tsan_atomic<bool>* const nonReclaimableSection_;
-
+  const std::vector<std::pair<column_index_t, CompareFlags>> sortingKeys_;
   const common::SpillConfig* const spillConfig_;
-
   folly::Synchronized<common::SpillStats>* const spillStats_;
-
-  // The column projection map between 'input_' and 'spillerStoreType_' as sort
-  // buffer stores the sort columns first in 'data_'.
-  std::vector<IdentityProjection> columnMap_;
+  const std::unique_ptr<NoRowContainerSpiller> inputSpiller_;
 
   // Indicates no more input. Once it is set, addInput() can't be called on this
   // sort buffer object.
   bool noMoreInput_ = false;
-
   // The number of received input rows.
   uint64_t numInputRows_ = 0;
-
-  // Used to store the input data in row format.
-  std::unique_ptr<RowContainer> data_;
-
-  // The data type of the rows stored in 'data_' and spilled on disk. The
-  // sort key columns are stored first then the non-sorted data columns.
-  RowTypePtr spillerStoreType_;
-
-  std::unique_ptr<SortInputSpiller> inputSpiller_;
-
   SpillPartitionSet spillPartitionSet_;
-
   // Used to merge the sorted runs from in-memory rows and spilled rows on disk.
   std::unique_ptr<TreeOfLosers<SpillMergeStream>> spillMerger_;
-
   // Records the source rows to copy to 'output_' in order.
   std::vector<const RowVector*> spillSources_;
-
   std::vector<vector_size_t> spillSourceRows_;
-
   // Reusable output vector.
   RowVectorPtr output_;
-
   // The number of rows that has been returned.
   uint64_t numOutputRows_{0};
 };

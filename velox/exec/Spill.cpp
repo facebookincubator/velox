@@ -90,6 +90,24 @@ void SpillMergeStream::close() {
   size_ = 0;
 }
 
+int32_t SortedFileSpillStream::compare(const MergeStream& other) const {
+  VELOX_CHECK(!closed_);
+  const auto& children = rowVector_->children();
+  const auto& otherStream = static_cast<const SortedFileSpillStream&>(other);
+  const auto& otherChildren = otherStream.current().children();
+  for (const auto& [key, flags] : sortingKeys_) {
+    const auto result =
+        children[key]
+            ->compare(
+                otherChildren[key].get(), index_, otherStream.index_, flags)
+            .value();
+    if (result != 0) {
+      return result;
+    }
+  }
+  return 0;
+}
+
 SpillState::SpillState(
     const common::GetSpillDirectoryPathCB& getSpillDirPathCb,
     const common::UpdateAndCheckSpillLimitCB& updateAndCheckSpillLimitCb,
@@ -312,6 +330,27 @@ SpillPartition::createOrderedReader(
   for (auto& fileInfo : files_) {
     streams.push_back(FileSpillMergeStream::create(
         SpillReadFile::create(fileInfo, bufferSize, pool, spillStats)));
+  }
+  files_.clear();
+  // Check if the partition is empty or not.
+  if (FOLLY_UNLIKELY(streams.empty())) {
+    return nullptr;
+  }
+  return std::make_unique<TreeOfLosers<SpillMergeStream>>(std::move(streams));
+}
+
+std::unique_ptr<TreeOfLosers<SpillMergeStream>>
+SpillPartition::createOrderedReader(
+    std::vector<std::pair<column_index_t, CompareFlags>> sortingKeys,
+    uint64_t bufferSize,
+    memory::MemoryPool* pool,
+    folly::Synchronized<common::SpillStats>* spillStats) {
+  std::vector<std::unique_ptr<SpillMergeStream>> streams;
+  streams.reserve(files_.size());
+  for (auto& fileInfo : files_) {
+    streams.push_back(SortedFileSpillStream::create(
+        SpillReadFile::create(fileInfo, bufferSize, pool, spillStats),
+        std::move(sortingKeys)));
   }
   files_.clear();
   // Check if the partition is empty or not.

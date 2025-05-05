@@ -151,12 +151,15 @@ class FileSpillMergeStream : public SpillMergeStream {
 
   uint32_t id() const override;
 
- private:
+ protected:
   explicit FileSpillMergeStream(std::unique_ptr<SpillReadFile> spillFile)
       : spillFile_(std::move(spillFile)) {
     VELOX_CHECK_NOT_NULL(spillFile_);
   }
 
+  void nextBatch() override;
+
+ private:
   int32_t numSortKeys() const override {
     VELOX_CHECK(!closed_);
     return spillFile_->numSortKeys();
@@ -167,11 +170,32 @@ class FileSpillMergeStream : public SpillMergeStream {
     return spillFile_->sortCompareFlags();
   }
 
-  void nextBatch() override;
-
   void close() override;
 
   std::unique_ptr<SpillReadFile> spillFile_;
+};
+
+class SortedFileSpillStream final : public FileSpillMergeStream {
+ public:
+  static std::unique_ptr<SpillMergeStream> create(
+      std::unique_ptr<SpillReadFile> spillFile,
+      std::vector<std::pair<column_index_t, CompareFlags>> sortingKeys) {
+    auto spillStream = std::make_unique<SortedFileSpillStream>(
+        std::move(spillFile), std::move(sortingKeys));
+    spillStream->nextBatch();
+    return spillStream;
+  }
+
+  int32_t compare(const MergeStream& other) const override;
+
+  SortedFileSpillStream(
+      std::unique_ptr<SpillReadFile> spillFile,
+      std::vector<std::pair<column_index_t, CompareFlags>> sortingKeys)
+      : FileSpillMergeStream(std::move(spillFile)),
+        sortingKeys_(std::move(sortingKeys)) {}
+
+ private:
+  std::vector<std::pair<column_index_t, CompareFlags>> sortingKeys_;
 };
 
 /// A source of spilled RowVectors coming from a file. The spill data might not
@@ -446,6 +470,12 @@ class SpillPartition {
   /// one buffer prefetch ahead. 'spillStats' is provided to collect the spill
   /// stats when reading data from spilled files.
   std::unique_ptr<TreeOfLosers<SpillMergeStream>> createOrderedReader(
+      uint64_t bufferSize,
+      memory::MemoryPool* pool,
+      folly::Synchronized<common::SpillStats>* spillStats);
+
+  std::unique_ptr<TreeOfLosers<SpillMergeStream>> createOrderedReader(
+      std::vector<std::pair<column_index_t, CompareFlags>> sortingKeys,
       uint64_t bufferSize,
       memory::MemoryPool* pool,
       folly::Synchronized<common::SpillStats>* spillStats);
