@@ -149,6 +149,7 @@ int main(int argc, char** argv) {
           {"max_data_size_for_stats", nullptr},
           {"sum_data_size_for_stats", nullptr},
           {"avg", std::make_shared<AverageResultVerifier>()},
+          {"tdigest_agg", std::make_shared<AverageResultVerifier>()},
       };
 
   static const std::unordered_set<std::string> orderDependentFunctions = {
