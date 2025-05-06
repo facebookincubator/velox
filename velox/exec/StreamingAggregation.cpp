@@ -30,7 +30,17 @@ StreamingAggregation::StreamingAggregation(
           aggregationNode->step() == core::AggregationNode::Step::kPartial
               ? "PartialAggregation"
               : "Aggregation"),
-      outputBatchSize_{outputBatchRows()},
+      maxOutputBatchSize_{outputBatchRows()},
+      minOutputBatchSize_{
+          operatorCtx_->driverCtx()
+                      ->queryConfig()
+                      .streamingAggregationMinOutputBatchRows() > 0
+              ? std::min(
+                    maxOutputBatchSize_,
+                    operatorCtx_->driverCtx()
+                        ->queryConfig()
+                        .streamingAggregationMinOutputBatchRows())
+              : maxOutputBatchSize_},
       aggregationNode_{aggregationNode},
       step_{aggregationNode->step()} {
   if (aggregationNode_->ignoreNullKeys()) {
@@ -75,6 +85,15 @@ void StreamingAggregation::initialize() {
     }
   }
 
+  if (isRawInput(step_)) {
+    for (column_index_t i = 0; i < aggregates_.size(); ++i) {
+      if (aggregates_[i].sortingKeys.empty() && !aggregates_[i].distinct) {
+        // Must be set before we initialize row container, because it could
+        // change the type and size of accumulator.
+        aggregates_[i].function->setClusteredInput(true);
+      }
+    }
+  }
   masks_ = std::make_unique<AggregationMasks>(extractMaskChannels(aggregates_));
   rows_ = makeRowContainer(groupingKeyTypes);
 
@@ -175,6 +194,9 @@ RowVectorPtr StreamingAggregation::createOutput(size_t numGroups) {
     }
   }
 
+  std::rotate(groups_.begin(), groups_.begin() + numGroups, groups_.end());
+  numGroups_ -= numGroups;
+
   return output;
 }
 
@@ -215,6 +237,15 @@ void StreamingAggregation::assignGroups() {
       }
     }
   }
+
+  groupBoundaries_.clear();
+  for (vector_size_t i = 1; i < numInput; ++i) {
+    if (inputGroups_[i] != inputGroups_[i - 1]) {
+      groupBoundaries_.push_back(i);
+    }
+  }
+  VELOX_CHECK_GT(numInput, 0);
+  groupBoundaries_.push_back(numInput);
 }
 
 const SelectivityVector& StreamingAggregation::getSelectivityVector(
@@ -256,7 +287,12 @@ void StreamingAggregation::evaluateAggregates() {
     }
 
     if (isRawInput(step_)) {
-      function->addRawInput(inputGroups_.data(), rows, args, false);
+      if (function->supportsAddRawClusteredInput()) {
+        function->addRawClusteredInput(
+            inputGroups_.data(), rows, args, groupBoundaries_);
+      } else {
+        function->addRawInput(inputGroups_.data(), rows, args, false);
+      }
     } else {
       function->addIntermediateResults(inputGroups_.data(), rows, args, false);
     }
@@ -274,9 +310,7 @@ bool StreamingAggregation::isFinished() {
 RowVectorPtr StreamingAggregation::getOutput() {
   if (!input_) {
     if (noMoreInput_ && numGroups_ > 0) {
-      auto output = createOutput(numGroups_);
-      numGroups_ = 0;
-      return output;
+      return createOutput(numGroups_);
     }
     return nullptr;
   }
@@ -294,19 +328,10 @@ RowVectorPtr StreamingAggregation::getOutput() {
   evaluateAggregates();
 
   RowVectorPtr output;
-  if (numGroups_ > outputBatchSize_) {
-    output = createOutput(outputBatchSize_);
 
-    // Rotate the entries in the groups_ vector to move the remaining groups to
-    // the beginning and place re-usable groups at the end.
-    std::vector<char*> copy(groups_.size());
-    std::copy(groups_.begin() + outputBatchSize_, groups_.end(), copy.begin());
-    std::copy(
-        groups_.begin(),
-        groups_.begin() + outputBatchSize_,
-        copy.begin() + groups_.size() - outputBatchSize_);
-    groups_ = std::move(copy);
-    numGroups_ -= outputBatchSize_;
+  if (numGroups_ > minOutputBatchSize_) {
+    output = createOutput(
+        std::min(numGroups_ - 1, static_cast<size_t>(maxOutputBatchSize_)));
   }
 
   prevInput_ = input_;

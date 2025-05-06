@@ -838,15 +838,17 @@ template <typename Source>
 void syncWorkItems(
     std::vector<std::shared_ptr<Source>>& items,
     std::exception_ptr& error,
-    CpuWallTiming time,
+    std::vector<CpuWallTiming>& timings,
     bool log = false) {
   // All items must be synced also in case of error because the items
   // hold references to the table and rows which could be destructed
   // if unwinding the stack did not pause to sync.
+  timings.reserve(items.size());
   for (auto& item : items) {
     try {
-      item->move();
-      time.add(item->prepareTiming());
+      if (item->move()) {
+        timings.push_back(item->prepareTiming());
+      }
     } catch (const std::exception& e) {
       if (log) {
         LOG(ERROR) << "Error in async hash build: " << e.what();
@@ -913,8 +915,10 @@ void HashTable<ignoreNullKeys>::parallelJoinBuild() {
     // This is executed on returning path, possibly in unwinding, so must not
     // throw.
     std::exception_ptr error;
-    syncWorkItems(partitionSteps, error, offThreadBuildTiming_, true);
-    syncWorkItems(buildSteps, error, offThreadBuildTiming_, true);
+    syncWorkItems(
+        partitionSteps, error, parallelJoinBuildStats_.partitionTimings, true);
+    syncWorkItems(
+        buildSteps, error, parallelJoinBuildStats_.buildTimings, true);
   });
 
   const auto getTable = [this](size_t i) INLINE_LAMBDA {
@@ -953,7 +957,8 @@ void HashTable<ignoreNullKeys>::parallelJoinBuild() {
   }
 
   std::exception_ptr error;
-  syncWorkItems(partitionSteps, error, offThreadBuildTiming_);
+  syncWorkItems(
+      partitionSteps, error, parallelJoinBuildStats_.partitionTimings);
   if (error != nullptr) {
     std::rethrow_exception(error);
   }
@@ -978,7 +983,7 @@ void HashTable<ignoreNullKeys>::parallelJoinBuild() {
       step->prepare();
     });
   }
-  syncWorkItems(buildSteps, error, offThreadBuildTiming_);
+  syncWorkItems(buildSteps, error, parallelJoinBuildStats_.buildTimings);
 
   if (error != nullptr) {
     std::rethrow_exception(error);
@@ -1174,7 +1179,7 @@ bool HashTable<ignoreNullKeys>::arrayPushRow(
   auto* existingRow = table_[index];
   if (existingRow != nullptr) {
     if (nextOffset_ > 0) {
-      hasDuplicates_ = true;
+      hasDuplicates_.set();
       rows->appendNextRow(existingRow, row, allocator);
     }
     return false;
@@ -1190,7 +1195,7 @@ void HashTable<ignoreNullKeys>::pushNext(
     char* next,
     HashStringAllocator* allocator) {
   VELOX_CHECK_GT(nextOffset_, 0);
-  hasDuplicates_ = true;
+  hasDuplicates_.set();
   rows->appendNextRow(row, next, allocator);
 }
 
@@ -1660,8 +1665,8 @@ std::string HashTable<ignoreNullKeys>::toString() {
     int64_t occupied = 0;
 
     // Count of buckets indexed by the number of non-empty slots.
-    // Each bucket has 16 slots. Hence, the number of non-empty slots is between
-    // 0 and 16 (17 possible values).
+    // Each bucket has 16 slots. Hence, the number of non-empty slots is
+    // between 0 and 16 (17 possible values).
     int64_t numBuckets[sizeof(TagVector) + 1] = {};
     for (int64_t bucketOffset = 0; bucketOffset < sizeMask_;
          bucketOffset += kBucketSize) {

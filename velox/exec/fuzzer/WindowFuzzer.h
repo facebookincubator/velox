@@ -89,8 +89,8 @@ class WindowFuzzer : public AggregationFuzzerBase {
         core::WindowNode::BoundType::kUnboundedPreceding;
     core::WindowNode::BoundType endBoundType =
         core::WindowNode::BoundType::kCurrentRow;
-    std::string startBoundString = "";
-    std::string endBoundString = "";
+    std::string startBoundString;
+    std::string endBoundString;
   };
 
   void addWindowFunctionSignatures(const WindowFunctionMap& signatureMap);
@@ -199,6 +199,7 @@ class WindowFuzzer : public AggregationFuzzerBase {
       const std::string& frameClause,
       const std::string& functionCall,
       const std::vector<RowVectorPtr>& input,
+      const std::vector<core::ExprPtr>& projections,
       bool customVerification,
       const std::shared_ptr<ResultVerifier>& customVerifier,
       bool enableWindowVerification,
@@ -210,6 +211,7 @@ class WindowFuzzer : public AggregationFuzzerBase {
       const std::string& frame,
       const std::string& functionCall,
       const std::vector<RowVectorPtr>& input,
+      const std::vector<core::ExprPtr>& projections,
       bool customVerification,
       const std::shared_ptr<ResultVerifier>& customVerifier,
       const velox::fuzzer::ResultOrError& expected);

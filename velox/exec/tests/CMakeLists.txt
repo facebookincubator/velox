@@ -82,7 +82,7 @@ add_executable(
   SortBufferTest.cpp
   SpillerTest.cpp
   SpillTest.cpp
-  SplitToStringTest.cpp
+  SplitTest.cpp
   SqlTest.cpp
   StreamingAggregationTest.cpp
   TableScanTest.cpp
@@ -216,12 +216,6 @@ target_link_libraries(
   velox_tpch_connector
   velox_memory)
 
-# Join Fuzzer.
-add_executable(velox_join_fuzzer_test JoinFuzzerTest.cpp)
-
-target_link_libraries(
-  velox_join_fuzzer_test velox_join_fuzzer GTest::gtest GTest::gtest_main)
-
 # Arbitration Fuzzer.
 add_executable(velox_memory_arbitration_fuzzer_test
                MemoryArbitrationFuzzerTest.cpp)
@@ -229,18 +223,6 @@ add_executable(velox_memory_arbitration_fuzzer_test
 target_link_libraries(
   velox_memory_arbitration_fuzzer_test velox_memory_arbitration_fuzzer
   GTest::gtest GTest::gtest_main)
-
-add_executable(velox_exchange_fuzzer_test ExchangeFuzzer.cpp)
-
-target_link_libraries(
-  velox_exchange_fuzzer_test
-  velox_exec_test_lib
-  velox_aggregates
-  velox_vector_test_lib
-  velox_vector_fuzzer
-  GTest::gtest
-  GTest::gtest
-  GTest::gtest_main)
 
 add_executable(velox_table_evolution_fuzzer_test TableEvolutionFuzzerTest.cpp)
 
@@ -336,7 +318,7 @@ add_test(
 target_link_libraries(
   cpr_http_client_test cpr::cpr GTest::gtest GTest::gtest_main)
 
-add_executable(velox_driver_test OperatorReplacement.cpp Main.cpp)
+add_executable(velox_driver_test OperatorReplacementTest.cpp Main.cpp)
 add_test(
   NAME velox_driver_test
   COMMAND velox_driver_test

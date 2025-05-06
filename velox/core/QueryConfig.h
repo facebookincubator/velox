@@ -140,6 +140,9 @@ class QueryConfig {
   static constexpr const char* kAbandonPartialTopNRowNumberMinPct =
       "abandon_partial_topn_row_number_min_pct";
 
+  static constexpr const char* kMaxElementsSizeInRepeatAndSequence =
+      "max_elements_size_in_repeat_and_sequence";
+
   /// The maximum number of bytes to buffer in PartitionedOutput operator to
   /// avoid creating tiny SerializedPages.
   ///
@@ -462,6 +465,15 @@ class QueryConfig {
   static constexpr const char* kDebugMemoryPoolNameRegex =
       "debug_memory_pool_name_regex";
 
+  /// Some lambda functions over arrays and maps are evaluated in batches of the
+  /// underlying elements that comprise the arrays/maps. This is done to make
+  /// the batch size managable as array vectors can have thousands of elements
+  /// each and hit scaling limits as implementations typically expect
+  /// BaseVectors to a couple of thousand entries. This lets up tune those batch
+  /// sizes.
+  static constexpr const char* kDebugLambdaFunctionEvaluationBatchSize =
+      "debug_lambda_function_evaluation_batch_size";
+
   /// Temporary flag to control whether selective Nimble reader should be used
   /// in this query or not.  Will be removed after the selective Nimble reader
   /// is fully rolled out.
@@ -531,6 +543,21 @@ class QueryConfig {
   static constexpr const char* kRequestDataSizesMaxWaitSec =
       "request_data_sizes_max_wait_sec";
 
+  /// In streaming aggregation, wait until we have enough number of output rows
+  /// to produce a batch of size specified by this. If set to 0, then
+  /// Operator::outputBatchRows will be used as the min output batch rows.
+  static constexpr const char* kStreamingAggregationMinOutputBatchRows =
+      "streaming_aggregation_min_output_batch_rows";
+
+  /// TODO: Remove after dependencies are cleaned up.
+  static constexpr const char* kStreamingAggregationEagerFlush =
+      "streaming_aggregation_eager_flush";
+
+  /// If this is true, then it allows you to get the struct field names
+  /// as json element names when casting a row to json.
+  static constexpr const char* kFieldNamesInJsonCastEnabled =
+      "field_names_in_json_cast_enabled";
+
   bool selectiveNimbleReaderEnabled() const {
     return get<bool>(kSelectiveNimbleReaderEnabled, false);
   }
@@ -558,6 +585,10 @@ class QueryConfig {
   std::optional<uint32_t> debugAggregationApproxPercentileFixedRandomSeed()
       const {
     return get<uint32_t>(kDebugAggregationApproxPercentileFixedRandomSeed);
+  }
+
+  int32_t debugLambdaFunctionEvaluationBatchSize() const {
+    return get<int32_t>(kDebugLambdaFunctionEvaluationBatchSize, 10'000);
   }
 
   uint64_t queryMaxMemoryPerNode() const {
@@ -590,6 +621,10 @@ class QueryConfig {
 
   int32_t abandonPartialTopNRowNumberMinPct() const {
     return get<int32_t>(kAbandonPartialTopNRowNumberMinPct, 80);
+  }
+
+  int32_t maxElementsSizeInRepeatAndSequence() const {
+    return get<int32_t>(kMaxElementsSizeInRepeatAndSequence, 10'000);
   }
 
   uint64_t maxSpillRunRows() const {
@@ -974,6 +1009,19 @@ class QueryConfig {
 
   bool throwExceptionOnDuplicateMapKeys() const {
     return get<bool>(kThrowExceptionOnDuplicateMapKeys, false);
+  }
+
+  /// TODO: Remove after dependencies are cleaned up.
+  bool streamingAggregationEagerFlush() const {
+    return get<bool>(kStreamingAggregationEagerFlush, false);
+  }
+
+  int32_t streamingAggregationMinOutputBatchRows() const {
+    return get<int32_t>(kStreamingAggregationMinOutputBatchRows, 0);
+  }
+
+  bool isFieldNamesInJsonCastEnabled() const {
+    return get<bool>(kFieldNamesInJsonCastEnabled, false);
   }
 
   template <typename T>

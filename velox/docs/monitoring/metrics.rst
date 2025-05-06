@@ -76,6 +76,9 @@ Task Execution
      - Average
      - Tracks the averaged task batch processing time. This only applies for
        sequential task execution mode.
+   * - task_barrier_process_time_ms
+     - Tracks task barrier execution time in range of [0, 30s] with 30 buckets
+       and each bucket with time window of 1s. We report P50, P90, P99, and P100.
 
 Memory Management
 -----------------
@@ -582,10 +585,6 @@ Index Join
      - Histogram
      - The time distribution of index lookup time in range of [0, 16s] with 512
        buckets and reports P50, P90, P99, and P100.
-   * - index_lookup_wait_time_ms
-     - Histogram
-     - The time distribution of index lookup time in range of [0, 16s] with 512
-       buckets and reports P50, P90, P99, and P100.
    * - index_lookup_blocked_wait_time_ms
      - Histogram
      - The time distribution of index lookup operator blocked wait time in range
@@ -615,3 +614,48 @@ Table Scan
      - Histogram
      - The time distribution of table scan batch processing time in range of [0,
        16s] with 512 buckets and reports P50, P90, P99, and P100.
+   * - table_scan_batch_bytes
+     - Histogram
+     - The size distribution of table scan output batch in range of [0, 512MB]
+       with 512 buckets and reports P50, P90, P99, and P100
+
+S3 FileSystem
+--------------
+
+.. list-table::
+   :widths: 40 10 50
+   :header-rows: 1
+
+   * - Metric Name
+     - Type
+     - Description
+   * - s3_active_connections
+     - Sum
+     - The number of connections open for S3 read operations.
+   * - s3_started_uploads
+     - Count
+     - The number of S3 upload calls that were started.
+   * - s3_successful_uploads
+     - Count
+     - The number of S3 upload calls that were completed.
+   * - s3_failed_uploads
+     - Count
+     - The number of S3 upload calls that failed.
+   * - s3_metadata_calls
+     - Count
+     - The number of S3 head (metadata) calls.
+   * - s3_get_metadata_errors
+     - Count
+     - The number of S3 head (metadata) calls that failed.
+   * - s3_get_metadata_retries
+     - Count
+     - The number of retries made during S3 head (metadata) calls.
+   * - s3_get_object_calls
+     - Count
+     - The number of S3 getObject calls.
+   * - s3_get_object_errors
+     - Count
+     - The number of S3 getObject calls that failed.
+   * - s3_get_object_retries
+     - Count
+     - The number of retries made during S3 getObject calls.

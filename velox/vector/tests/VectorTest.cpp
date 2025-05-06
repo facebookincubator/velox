@@ -1651,7 +1651,28 @@ TEST_F(VectorTest, rowResize) {
       10,
       [&](vector_size_t i) { return i % 5; },
       [](vector_size_t i) { return i % 7 == 0; })});
-  EXPECT_THROW(rowWithLazyChild->resize(20), VeloxException);
+  VELOX_ASSERT_THROW(
+      rowWithLazyChild->resize(20), "Resize on a lazy vector is not allowed");
+}
+
+TEST_F(VectorTest, rowPrepareForReuse) {
+  const int oldSize = 10;
+  for (const int newSize : {10, 20, 5, 0}) {
+    SCOPED_TRACE(fmt::format("oldSize {}, newSize {}", oldSize, newSize));
+    auto rowVector = makeRowVector(
+        {makeFlatVector<int32_t>(10), makeFlatVector<int64_t>(10)});
+    ASSERT_EQ(rowVector->size(), 10);
+    for (const auto& child : rowVector->children()) {
+      ASSERT_EQ(child->size(), rowVector->size());
+    }
+    velox::VectorPtr baseVector = rowVector;
+    BaseVector::prepareForReuse(baseVector, newSize);
+    rowVector = std::static_pointer_cast<velox::RowVector>(baseVector);
+    ASSERT_EQ(rowVector->size(), newSize);
+    for (const auto& child : rowVector->children()) {
+      ASSERT_EQ(child->size(), newSize);
+    }
+  }
 }
 
 TEST_F(VectorTest, wrapConstantInDictionary) {
@@ -3820,7 +3841,7 @@ TEST_F(VectorTest, mapUpdateMultipleUpdates) {
 TEST_F(VectorTest, mapUpdateConstant) {
   auto base = makeNullableMapVector<int64_t, int64_t>({
       {{{1, 1}, {2, 1}}},
-      {{}},
+      common::testutil::optionalEmpty,
       {{{3, 1}}},
       std::nullopt,
       {{{4, 1}}},
@@ -3842,7 +3863,7 @@ TEST_F(VectorTest, mapUpdateConstant) {
 TEST_F(VectorTest, mapUpdateDictionary) {
   auto base = makeNullableMapVector<int64_t, int64_t>({
       {{{1, 1}, {2, 1}}},
-      {{}},
+      common::testutil::optionalEmpty,
       {{{3, 1}}},
       std::nullopt,
       {{{4, 1}}},

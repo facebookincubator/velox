@@ -41,7 +41,6 @@ add_executable(
   ArrayNoneMatchTest.cpp
   ArrayNormalizeTest.cpp
   ArrayPositionTest.cpp
-  ArrayRemoveNullsTest.cpp
   ArrayRemoveTest.cpp
   ArrayShuffleTest.cpp
   ArraySortTest.cpp
@@ -107,6 +106,7 @@ add_executable(
   TrimFunctionsTest.cpp
   TypeOfTest.cpp
   TDigestCastTest.cpp
+  QDigestCastTest.cpp
   URLFunctionsTest.cpp
   UuidFunctionsTest.cpp
   WidthBucketArrayTest.cpp

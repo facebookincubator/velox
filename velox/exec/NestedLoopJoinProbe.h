@@ -262,8 +262,7 @@ class NestedLoopJoinProbe : public Operator {
   // Check if this is a LeftSemiProjectJoin with no join condition and non-empty
   // build side
   bool isLeftSemiProjectNoCondition() const {
-    return joinCondition_ == nullptr &&
-        isLeftSemiProjectJoin(joinType_);
+    return joinCondition_ == nullptr && isLeftSemiProjectJoin(joinType_);
   }
 
   // Handles LeftSemiProjectJoin with no join condition

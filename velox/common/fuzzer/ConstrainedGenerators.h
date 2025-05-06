@@ -461,4 +461,32 @@ class JsonPathGenerator : public AbstractInputGenerator {
   bool makeRandomVariation_;
 };
 
+// Input generator to cast a Varchar or Json to a given type T.
+class CastVarcharInputGenerator : public AbstractInputGenerator {
+ public:
+  CastVarcharInputGenerator(
+      size_t seed,
+      const TypePtr& type,
+      double nullRatio,
+      const TypePtr& castToType);
+
+  ~CastVarcharInputGenerator() override;
+
+  variant generate() override;
+
+ private:
+  TypePtr castToType_;
+
+  std::string generateValidPrimitiveAsString();
+};
+
+class TDigestInputGenerator : public AbstractInputGenerator {
+ public:
+  TDigestInputGenerator(size_t seed, const TypePtr& type, double nullRatio);
+
+  ~TDigestInputGenerator() override;
+
+  variant generate() override;
+};
+
 } // namespace facebook::velox::fuzzer

@@ -90,7 +90,7 @@ class MultiFragmentTest : public HiveConnectorTestBase,
   }
 
   static exec::Consumer noopConsumer() {
-    return [](RowVectorPtr, ContinueFuture*) {
+    return [](RowVectorPtr, bool, ContinueFuture*) {
       return BlockingReason::kNotBlocked;
     };
   }
@@ -2023,8 +2023,12 @@ DEBUG_ONLY_TEST_P(
       kRootTaskId,
       rootPlan,
       0,
-      [](RowVectorPtr /*unused*/, ContinueFuture* /*unused*/)
-          -> BlockingReason { return BlockingReason::kNotBlocked; },
+      [](RowVectorPtr /*unused*/,
+         bool drained,
+         ContinueFuture* /*unused*/) -> BlockingReason {
+        VELOX_CHECK(!drained);
+        return BlockingReason::kNotBlocked;
+      },
       kRootMemoryLimit);
   rootTask->start(1);
   rootTask->addSplit("0", remoteSplit(leafTaskId));
@@ -2216,7 +2220,7 @@ DEBUG_ONLY_TEST_P(MultiFragmentTest, mergeWithEarlyTermination) {
         }
         mergeIsBlockedWait.await([&]() { return mergeIsBlockedReady.load(); });
         // Trigger early termination.
-        op->testingOperatorCtx()->task()->requestAbort();
+        op->operatorCtx()->task()->requestAbort();
       }));
 
   auto finalSortTaskId = makeTaskId("orderby", 1);
@@ -2652,15 +2656,94 @@ TEST_P(MultiFragmentTest, mergeSmallBatchesInExchange) {
     test(100'000, 1);
   } else if (GetParam().serdeKind == VectorSerde::Kind::kCompactRow) {
     test(1, 1'000);
-    test(1'000, 38);
-    test(10'000, 4);
-    test(100'000, 1);
+    test(1'000, 39);
+    test(10'000, 5);
+    test(100'000, 2);
   } else {
     test(1, 1'000);
     test(1'000, 72);
     test(10'000, 7);
     test(100'000, 1);
   }
+}
+
+TEST_P(MultiFragmentTest, splitLargeCompactRowsInExchange) {
+  if (GetParam().serdeKind != VectorSerde::Kind::kCompactRow) {
+    return;
+  }
+  const uint64_t kNumColumns = 100;
+  const uint64_t kNumRows = 2'000;
+  const int32_t kNumPartitions = 2;
+
+  std::vector<int64_t> columnElements;
+  for (auto i = 0; i < kNumRows; ++i) {
+    columnElements.push_back(i);
+  }
+  std::vector<VectorPtr> columns;
+  for (auto i = 0; i < kNumColumns; ++i) {
+    columns.push_back(makeFlatVector<int64_t>(columnElements));
+  }
+
+  // 'data' is a wide vector of 20k rows and 100 columns(children vectors). Each
+  // row estimated to be 100 * 8b = 800b.
+  auto data = makeRowVector(columns);
+
+  auto producerPlan = test::PlanBuilder()
+                          .values({data})
+                          .partitionedOutput(
+                              {"c0"},
+                              kNumPartitions,
+                              /*outputLayout=*/{},
+                              VectorSerde::Kind::kCompactRow)
+                          .planNode();
+  const auto producerTaskId = "local://t1";
+
+  auto plan =
+      test::PlanBuilder()
+          .exchange(asRowType(data->type()), VectorSerde::Kind::kCompactRow)
+          .planNode();
+
+  auto expected = makeRowVector(columns);
+
+  auto test = [&](uint64_t maxBytes, int32_t expectedBatches) {
+    auto producerTask = makeTask(producerTaskId, producerPlan);
+
+    bufferManager_->initializeTask(
+        producerTask,
+        core::PartitionedOutputNode::Kind::kPartitioned,
+        kNumPartitions,
+        1);
+
+    auto cleanupGuard = folly::makeGuard([&]() {
+      producerTask->requestCancel();
+      bufferManager_->removeTask(producerTaskId);
+    });
+
+    // Enqueue a single large page.
+    enqueue(producerTaskId, 0, data);
+
+    bufferManager_->noMoreData(producerTaskId);
+
+    auto task = test::AssertQueryBuilder(plan)
+                    .split(remoteSplit(producerTaskId))
+                    .destination(0)
+                    .config(
+                        core::QueryConfig::kPreferredOutputBatchBytes,
+                        std::to_string(maxBytes))
+                    .assertResults(expected);
+
+    auto taskStats = exec::toPlanStats(task->taskStats());
+    const auto& stats = taskStats.at("0");
+
+    ASSERT_EQ(expected->size(), stats.outputRows);
+    ASSERT_EQ(expectedBatches, stats.outputVectors);
+    ASSERT_EQ(1, stats.customStats.at("numReceivedPages").sum);
+  };
+
+  test(1, kNumRows / 64 + 1);
+  test(1'000, kNumRows / 64 + 1);
+  test(160'000, 14);
+  test(10'000'000, 2);
 }
 
 TEST_P(MultiFragmentTest, compression) {

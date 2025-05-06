@@ -27,19 +27,6 @@ namespace {
 
 constexpr double kSumError = 1e-4;
 constexpr double kRankError = 0.01;
-
-// Small hack to modify the TDigest sum in the serilaized buffer, so we can test
-// that the relative error algorithm in sum testing code works.
-void alterTDigestSumInTheBuffer(std::string& buf, const TDigest<>& digest) {
-  // Find and adjust the sum in the buffer.
-  double originalSum = digest.sum();
-  // Based on the TDigest::serialize() we expect the sum at this position.
-  const size_t sumOffset = sizeof(int8_t) * 2 + sizeof(double) * 2;
-  ASSERT_EQ(memcmp(buf.data() + sumOffset, &originalSum, sizeof(double)), 0);
-
-  *(double*)(buf.data() + sumOffset) += TDigest<>::kEpsilon * 2;
-}
-
 constexpr double kQuantiles[] = {
     0.0001, 0.0200, 0.0300, 0.04000, 0.0500, 0.1000, 0.2000,
     0.3000, 0.4000, 0.5000, 0.6000,  0.7000, 0.8000, 0.9000,
@@ -399,11 +386,7 @@ TEST(TDigestTest, merge) {
   std::default_random_engine gen(common::testutil::getRandomSeed(42));
   std::vector<double> values;
   std::string buf;
-  auto test = [&](int numDigests,
-                  int size,
-                  double mean,
-                  double stddev,
-                  bool alterSum = false) {
+  auto test = [&](int numDigests, int size, double mean, double stddev) {
     SCOPED_TRACE(fmt::format(
         "numDigests={} size={} mean={} stddev={}",
         numDigests,
@@ -424,9 +407,6 @@ TEST(TDigestTest, merge) {
       current.compress(positions);
       buf.resize(current.serializedByteSize());
       current.serialize(buf.data());
-      if (alterSum) {
-        alterTDigestSumInTheBuffer(buf, current);
-      }
       digest.mergeDeserialized(positions, buf.data());
     }
     digest.compress(positions);
@@ -436,8 +416,6 @@ TEST(TDigestTest, merge) {
   test(2, 5e4, 0, 50);
   test(100, 1000, 500, 20);
   test(1e4, 10, 500, 20);
-
-  test(5, 5e4, 0, 50, true);
 }
 
 TEST(TDigestTest, infinity) {
@@ -455,6 +433,62 @@ TEST(TDigestTest, infinity) {
   ASSERT_EQ(digest.estimateQuantile(0.6), 0.0);
   ASSERT_EQ(digest.estimateQuantile(0.7), INFINITY);
   ASSERT_EQ(digest.estimateQuantile(1), INFINITY);
+}
+
+TEST(TDigestTest, scale) {
+  std::vector<int16_t> positions;
+  TDigest digest;
+  for (int i = 1; i <= 5; ++i) {
+    digest.add(positions, i);
+  }
+  digest.compress(positions);
+  double originalSum = digest.sum();
+
+  // Scale weights by negative
+  ASSERT_THROW(digest.scale(-1), VeloxRuntimeError);
+
+  // Scale weights by 1.7
+  digest.scale(1.7);
+  digest.compress(positions);
+  ASSERT_NEAR(digest.sum(), originalSum * 1.7, kSumError);
+}
+
+TEST(TDigestTest, largeScalePreservesWeights) {
+  TDigest digest;
+  std::vector<int16_t> positions;
+  std::normal_distribution<double> normal(1000, 100);
+  std::default_random_engine gen(common::testutil::getRandomSeed(42));
+  constexpr int N = 1e5;
+  std::vector<double> values;
+  values.reserve(N);
+  for (int i = 0; i < N; ++i) {
+    double value = normal(gen);
+    digest.add(positions, value);
+    values.push_back(value);
+  }
+  digest.compress(positions);
+  // Store original percentiles and sum
+  std::vector<double> originalPercentiles;
+  for (auto q : kQuantiles) {
+    originalPercentiles.push_back(digest.estimateQuantile(q));
+  }
+  double originalSum = digest.sum();
+
+  // Scale TDigest
+  double scaleFactor = std::numeric_limits<int>::max() * 2.0;
+  digest.scale(scaleFactor);
+  digest.compress(positions);
+
+  // Verify sum is scaled correctly.
+  ASSERT_NEAR(digest.sum(), originalSum * scaleFactor, kSumError * scaleFactor);
+  // Verify percentiles remain the same.
+  std::sort(values.begin(), values.end());
+  for (size_t i = 0; i < std::size(kQuantiles); ++i) {
+    ASSERT_NEAR(
+        digest.estimateQuantile(kQuantiles[i]),
+        originalPercentiles[i],
+        kRankError * (values.back() - values.front()));
+  }
 }
 
 } // namespace

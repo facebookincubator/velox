@@ -84,7 +84,10 @@ class StreamingAggregation : public Operator {
   void initializeAggregates(uint32_t numKeys);
 
   /// Maximum number of rows in the output batch.
-  const vector_size_t outputBatchSize_;
+  const vector_size_t maxOutputBatchSize_;
+
+  /// Maximum number of rows in the output batch.
+  const vector_size_t minOutputBatchSize_;
 
   // Used at initialize() and gets reset() afterward.
   std::shared_ptr<const core::AggregationNode> aggregationNode_;
@@ -116,6 +119,10 @@ class StreamingAggregation : public Operator {
 
   // Pointers to groups for all input rows.
   std::vector<char*> inputGroups_;
+
+  // Indices into `groups` indicating the row after last row of each group.  The
+  // last element of this is the total size of input.
+  std::vector<vector_size_t> groupBoundaries_;
 
   // A subset of input rows to evaluate the aggregate function on. Rows
   // where aggregation mask is false are excluded.

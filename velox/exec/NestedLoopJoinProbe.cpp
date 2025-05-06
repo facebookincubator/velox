@@ -648,7 +648,6 @@ void NestedLoopJoinProbe::copyBuildValues(const RowVectorPtr& buildVector) {
 }
 
 void NestedLoopJoinProbe::addProbeMismatchRow() {
-  
   // Probe side is always a dictionary; just populate the index.
   rawProbeOutputIndices_[numOutputRows_] = probeRow_;
   if (isLeftSemiProjectJoin(joinType_)) {
