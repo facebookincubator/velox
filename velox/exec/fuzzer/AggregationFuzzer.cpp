@@ -130,8 +130,8 @@ class AggregationFuzzer : public AggregationFuzzerBase {
         plan.get(), [](const core::PlanNode* node) {
           if (auto aggregation =
                   dynamic_cast<const core::AggregationNode*>(node)) {
-            return aggregation->step() ==
-                core::AggregationNode::Step::kPartial &&
+            return aggregation->allRawInput() &&
+                aggregation->allPartialOutput() &&
                 !aggregation->groupingKeys().empty();
           }
 

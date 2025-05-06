@@ -48,11 +48,11 @@ std::vector<AggregateInfo> toAggregateInfo(
 
   const auto& inputType = aggregationNode.sources()[0]->outputType();
   const auto& outputType = aggregationNode.outputType();
-  const auto step = aggregationNode.step();
 
   for (auto i = 0; i < numAggregates; i++) {
     const auto& aggregate = aggregationNode.aggregates()[i];
     AggregateInfo info;
+    info.step = aggregate.step;
     // Populate input.
     auto& channels = info.inputs;
     auto& constants = info.constantInputs;
@@ -97,8 +97,8 @@ std::vector<AggregateInfo> toAggregateInfo(
     const auto& aggResultType = outputType->childAt(index);
     info.function = Aggregate::create(
         aggregate.call->name(),
-        isPartialOutput(step) ? core::AggregationNode::Step::kPartial
-                              : core::AggregationNode::Step::kSingle,
+        isPartialOutput(aggregate.step) ? core::AggregationNode::Step::kPartial
+                                        : core::AggregationNode::Step::kSingle,
         aggregate.rawInputTypes,
         aggResultType,
         operatorCtx.driverCtx()->queryConfig());

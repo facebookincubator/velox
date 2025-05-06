@@ -83,15 +83,15 @@ static std::shared_ptr<core::AggregationNode> generateAggregationNode(
   std::vector<std::string> aggregateNames = {"min"};
   std::vector<core::AggregationNode::Aggregate> aggregates = {
       core::AggregationNode::Aggregate{
-          callExpr, {{BIGINT()}}, nullptr, {}, {}}};
+          step, callExpr, {{BIGINT()}}, nullptr, {}, {}}};
   return std::make_shared<core::AggregationNode>(
       core::PlanNodeId(),
-      step,
       groupingKeys,
       std::vector<core::FieldAccessTypedExprPtr>{},
       aggregateNames,
       aggregates,
       false, // ignoreNullKeys
+      core::AggregationNode::Aggregate::isPartialOutput(step),
       source);
 }
 
@@ -3073,6 +3073,7 @@ TEST_P(AllTableWriterTest, columnStatsDataTypes) {
       rawInputTypes.push_back(input->type());
     }
     return core::AggregationNode::Aggregate{
+        core::AggregationNode::Step::kPartial,
         callExpr,
         rawInputTypes,
         nullptr, // mask
@@ -3096,12 +3097,12 @@ TEST_P(AllTableWriterTest, columnStatsDataTypes) {
   };
   const auto aggregationNode = std::make_shared<core::AggregationNode>(
       core::PlanNodeId(),
-      core::AggregationNode::Step::kPartial,
       groupingKeyFields,
       std::vector<core::FieldAccessTypedExprPtr>{},
       aggregateNames,
       aggregates,
       false, // ignoreNullKeys
+      true,
       PlanBuilder().values({input}).planNode());
 
   auto plan = PlanBuilder()

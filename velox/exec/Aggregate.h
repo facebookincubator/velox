@@ -32,12 +32,12 @@ namespace facebook::velox::exec {
 
 class AggregateFunctionSignature;
 
-/// Returns true if aggregation receives raw (unprocessed) input, e.g. partial
-/// and single aggregation.
+/// Returns true if aggregate receives raw (unprocessed) input, e.g. partial
+/// and single aggregate.
 bool isRawInput(core::AggregationNode::Step step);
 
-/// Returns false if aggregation produces final result, e.g. final
-/// and single aggregation.
+/// Returns false if aggregate produces final result, e.g. final
+/// and single aggregate.
 bool isPartialOutput(core::AggregationNode::Step step);
 
 /// Returns true if aggregation receives intermediate states as input,

@@ -748,7 +748,8 @@ class PlanBuilder {
         {},
         aggregates,
         {},
-        core::AggregationNode::Step::kFinal,
+        std::vector{aggregates.size(), core::AggregationNode::Step::kFinal},
+        false,
         false,
         rawInputTypes);
   }
@@ -833,8 +834,31 @@ class PlanBuilder {
         preGroupedKeys,
         aggregates,
         masks,
-        step,
+        std::vector{aggregates.size(), step},
         ignoreNullKeys,
+        core::AggregationNode::Aggregate::isPartialOutput(step),
+        {});
+  }
+
+  /// Same as above, but also allows to specify steps of each of the passed
+  /// aggregates. Also allows setting the boolean flag 'flushable' to sepcify
+  /// whether flushing is allowed on partial aggregations.
+  PlanBuilder& aggregation(
+      const std::vector<std::string>& groupingKeys,
+      const std::vector<std::string>& preGroupedKeys,
+      const std::vector<std::string>& aggregates,
+      const std::vector<std::string>& masks,
+      const std::vector<core::AggregationNode::Step> steps,
+      bool ignoreNullKeys,
+      bool flushable) {
+    return aggregation(
+        groupingKeys,
+        preGroupedKeys,
+        aggregates,
+        masks,
+        steps,
+        ignoreNullKeys,
+        flushable,
         {});
   }
 
@@ -1402,7 +1426,7 @@ class PlanBuilder {
   AggregatesAndNames createAggregateExpressionsAndNames(
       const std::vector<std::string>& aggregates,
       const std::vector<std::string>& masks,
-      core::AggregationNode::Step step,
+      const std::vector<core::AggregationNode::Step>& steps,
       const std::vector<std::vector<TypePtr>>& rawInputTypes = {});
 
   PlanBuilder& aggregation(
@@ -1410,8 +1434,9 @@ class PlanBuilder {
       const std::vector<std::string>& preGroupedKeys,
       const std::vector<std::string>& aggregates,
       const std::vector<std::string>& masks,
-      core::AggregationNode::Step step,
+      const std::vector<core::AggregationNode::Step>& step,
       bool ignoreNullKeys,
+      bool allowFlush,
       const std::vector<std::vector<TypePtr>>& rawInputTypes);
 
   /// Create WindowNode based on whether input is sorted and then compute the

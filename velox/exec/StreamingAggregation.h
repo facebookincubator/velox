@@ -92,8 +92,6 @@ class StreamingAggregation : public Operator {
   // Used at initialize() and gets reset() afterward.
   std::shared_ptr<const core::AggregationNode> aggregationNode_;
 
-  const core::AggregationNode::Step step_;
-
   std::vector<column_index_t> groupingKeys_;
   std::vector<AggregateInfo> aggregates_;
   std::unique_ptr<SortedAggregations> sortedAggregations_;

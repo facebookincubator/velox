@@ -142,7 +142,6 @@ const std::optional<FieldAccessTypedExprPtr> AggregationNode::kDefaultGroupId =
 
 AggregationNode::AggregationNode(
     const PlanNodeId& id,
-    Step step,
     const std::vector<FieldAccessTypedExprPtr>& groupingKeys,
     const std::vector<FieldAccessTypedExprPtr>& preGroupedKeys,
     const std::vector<std::string>& aggregateNames,
@@ -150,14 +149,15 @@ AggregationNode::AggregationNode(
     const std::vector<vector_size_t>& globalGroupingSets,
     const std::optional<FieldAccessTypedExprPtr>& groupId,
     bool ignoreNullKeys,
+    bool allowFlush,
     PlanNodePtr source)
     : PlanNode(id),
-      step_(step),
       groupingKeys_(groupingKeys),
       preGroupedKeys_(preGroupedKeys),
       aggregateNames_(aggregateNames),
       aggregates_(aggregates),
       ignoreNullKeys_(ignoreNullKeys),
+      allowFlush_(allowFlush),
       groupId_(groupId),
       globalGroupingSets_(globalGroupingSets),
       sources_{source},
@@ -204,20 +204,36 @@ AggregationNode::AggregationNode(
     VELOX_USER_CHECK(
         groupId_.has_value(), "Global grouping sets require GroupId key");
   }
+
+  if (allowFlush_) {
+    VELOX_CHECK(
+        aggregates_.empty() || allPartialOutput(),
+        "Flushing is only allowed for distinct aggregation or when all aggregation function are partial");
+  }
+
+  // So far we don't allow passing aggregates with different steps to the same
+  // aggregation node. We might remove this restriction in the future.
+  std::unordered_set<Step> steps;
+  for (const auto& aggregate : aggregates_) {
+    steps.emplace(aggregate.step);
+  }
+  VELOX_CHECK_LE(
+      steps.size(),
+      1,
+      "All aggregates in the same aggregation node should be with the same step");
 }
 
 AggregationNode::AggregationNode(
     const PlanNodeId& id,
-    Step step,
     const std::vector<FieldAccessTypedExprPtr>& groupingKeys,
     const std::vector<FieldAccessTypedExprPtr>& preGroupedKeys,
     const std::vector<std::string>& aggregateNames,
     const std::vector<Aggregate>& aggregates,
     bool ignoreNullKeys,
+    bool allowFlush,
     PlanNodePtr source)
     : AggregationNode(
           id,
-          step,
           groupingKeys,
           preGroupedKeys,
           aggregateNames,
@@ -225,6 +241,7 @@ AggregationNode::AggregationNode(
           kDefaultGlobalGroupingSets,
           kDefaultGroupId,
           ignoreNullKeys,
+          allowFlush,
           source) {}
 
 namespace {
@@ -274,17 +291,55 @@ bool AggregationNode::canSpill(const QueryConfig& queryConfig) const {
       return false;
     }
   }
+
+  if (allowFlush()) {
+    return false;
+  }
+
+  if (hasPartialOutput()) {
+    return false;
+  }
+
+  if (groupingKeys().empty()) {
+    return false;
+  }
+
   // TODO: add spilling for pre-grouped aggregation later:
   // https://github.com/facebookincubator/velox/issues/3264
-  return (isFinal() || isSingle()) && !groupingKeys().empty() &&
-      preGroupedKeys().empty() && queryConfig.aggregationSpillEnabled();
+  if (!preGroupedKeys().empty()) {
+    return false;
+  }
+
+  if (!queryConfig.aggregationSpillEnabled()) {
+    return false;
+  }
+
+  return true;
 }
 
 void AggregationNode::addDetails(std::stringstream& stream) const {
-  stream << stepName(step_) << " ";
+  folly::F14FastSet<Step> allSteps;
+  for (auto i = 0; i < aggregateNames_.size(); ++i) {
+    const auto& aggregate = aggregates_[i];
+    allSteps.emplace(aggregate.step);
+  }
+  const bool mixedSteps = allSteps.size() >= 2;
+
+  if (!mixedSteps) {
+    if (!allSteps.empty()) {
+      VELOX_CHECK(allSteps.size() == 1);
+      stream << Aggregate::stepName(*allSteps.begin()) << " ";
+    }
+  }
 
   if (isPreGrouped()) {
     stream << "STREAMING ";
+  }
+
+  if (mixedSteps) {
+    if (allowFlush_) {
+      stream << "ALLOW FLUSH ";
+    }
   }
 
   if (!groupingKeys_.empty()) {
@@ -296,6 +351,9 @@ void AggregationNode::addDetails(std::stringstream& stream) const {
   for (auto i = 0; i < aggregateNames_.size(); ++i) {
     appendComma(i, stream);
     const auto& aggregate = aggregates_[i];
+    if (mixedSteps) {
+      stream << Aggregate::stepName(aggregate.step) << " ";
+    }
     stream << aggregateNames_[i] << " := " << aggregate.call->toString();
     if (aggregate.distinct) {
       stream << " distinct";
@@ -342,7 +400,7 @@ std::unordered_map<V, K> invertMap(const std::unordered_map<K, V>& mapping) {
 } // namespace
 
 // static
-const char* AggregationNode::stepName(AggregationNode::Step step) {
+const char* AggregationNode::Aggregate::stepName(AggregationNode::Step step) {
   static const auto kSteps = stepNames();
   auto it = kSteps.find(step);
   VELOX_CHECK(it != kSteps.end(), "Invalid step {}", static_cast<int>(step));
@@ -350,16 +408,32 @@ const char* AggregationNode::stepName(AggregationNode::Step step) {
 }
 
 // static
-AggregationNode::Step AggregationNode::stepFromName(const std::string& name) {
+AggregationNode::Step AggregationNode::Aggregate::stepFromName(
+    const std::string& name) {
   static const auto kSteps = invertMap(stepNames());
   auto it = kSteps.find(name);
   VELOX_CHECK(it != kSteps.end(), "Invalid step " + name);
   return it->second;
 }
 
+// static
+bool AggregationNode::Aggregate::isPartialInput(AggregationNode::Step step) {
+  if (step == Step::kIntermediate || step == Step::kFinal) {
+    return true;
+  }
+  return false;
+}
+
+// static
+bool AggregationNode::Aggregate::isPartialOutput(AggregationNode::Step step) {
+  if (step == Step::kPartial || step == Step::kIntermediate) {
+    return true;
+  }
+  return false;
+}
+
 folly::dynamic AggregationNode::serialize() const {
   auto obj = PlanNode::serialize();
-  obj["step"] = stepName(step_);
   obj["groupingKeys"] = ISerializable::serialize(groupingKeys_);
   obj["preGroupedKeys"] = ISerializable::serialize(preGroupedKeys_);
   obj["aggregateNames"] = ISerializable::serialize(aggregateNames_);
@@ -377,6 +451,7 @@ folly::dynamic AggregationNode::serialize() const {
     obj["groupId"] = ISerializable::serialize(groupId_.value());
   }
   obj["ignoreNullKeys"] = ignoreNullKeys_;
+  obj["allowFlush"] = allowFlush_;
   return obj;
 }
 
@@ -424,6 +499,7 @@ std::vector<SortOrder> deserializeSortingOrders(const folly::dynamic& array) {
 
 folly::dynamic AggregationNode::Aggregate::serialize() const {
   folly::dynamic obj = folly::dynamic::object();
+  obj["step"] = stepName(step);
   obj["call"] = call->serialize();
   obj["rawInputTypes"] = ISerializable::serialize(rawInputTypes);
   if (mask) {
@@ -439,6 +515,7 @@ folly::dynamic AggregationNode::Aggregate::serialize() const {
 AggregationNode::Aggregate AggregationNode::Aggregate::deserialize(
     const folly::dynamic& obj,
     void* context) {
+  auto step = stepFromName(obj["step"].asString());
   auto call = ISerializable::deserialize<CallTypedExpr>(obj["call"]);
   auto rawInputTypes =
       ISerializable::deserialize<std::vector<Type>>(obj["rawInputTypes"]);
@@ -450,6 +527,7 @@ AggregationNode::Aggregate AggregationNode::Aggregate::deserialize(
   auto sortingOrders = deserializeSortingOrders(obj["sortingOrders"]);
   bool distinct = obj["distinct"].asBool();
   return {
+      step,
       call,
       rawInputTypes,
       mask,
@@ -484,7 +562,6 @@ PlanNodePtr AggregationNode::create(const folly::dynamic& obj, void* context) {
 
   return std::make_shared<AggregationNode>(
       deserializePlanNodeId(obj),
-      stepFromName(obj["step"].asString()),
       groupingKeys,
       preGroupedKeys,
       aggregateNames,
@@ -492,6 +569,7 @@ PlanNodePtr AggregationNode::create(const folly::dynamic& obj, void* context) {
       globalGroupingSets,
       groupId,
       obj["ignoreNullKeys"].asBool(),
+      obj["allowFlush"].asBool(),
       deserializeSingleSource(obj, context));
 }
 

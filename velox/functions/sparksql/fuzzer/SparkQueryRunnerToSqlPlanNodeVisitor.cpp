@@ -22,7 +22,7 @@ void SparkQueryRunnerToSqlPlanNodeVisitor::visit(
     const core::AggregationNode& node,
     core::PlanNodeVisitorContext& ctx) const {
   // Assume plan is Aggregation over Values.
-  VELOX_CHECK(node.step() == core::AggregationNode::Step::kSingle);
+  VELOX_CHECK(node.allRawInput() && node.allRawOutput());
 
   exec::test::PrestoSqlPlanNodeVisitorContext& visitorContext =
       static_cast<exec::test::PrestoSqlPlanNodeVisitorContext&>(ctx);
