@@ -1167,6 +1167,77 @@ TEST_F(ParquetTableScanTest, schemaMatch) {
   assertEqualVectors(rows->childAt(2), nullVector);
 }
 
+TEST_F(ParquetTableScanTest, structMatchByIndex) {
+  std::vector<int64_t> values = {2};
+  const auto id = makeFlatVector<int64_t>(values);
+  const auto name = makeRowVector(
+      {"first", "last"},
+      {
+          makeFlatVector<std::string>({"Janet"}),
+          makeFlatVector<std::string>({"Jones"}),
+      });
+  const auto address = makeFlatVector<std::string>({"567 Maple Drive"});
+  const auto vector =
+      makeRowVector({"id", "name", "address"}, {id, name, address});
+
+  WriterOptions options;
+  const auto schema = asRowType(vector->type());
+  const auto file = TempFilePath::create();
+  writeToParquetFile(file->getPath(), {vector}, options);
+
+  loadData(file->getPath(), schema, vector);
+  assertSelect({"id", "name", "address"}, "SELECT id, name, address from tmp");
+
+  // Add one nonexisting subfield 'middle' to the 'name' field.
+  auto rowType =
+      ROW({"id", "name", "address"},
+          {BIGINT(),
+           ROW({"first", "middle", "last"}, {VARCHAR(), VARCHAR(), VARCHAR()}),
+           VARCHAR()});
+  loadData(file->getPath(), rowType, vector);
+  assertSelectWithDataColumns(
+      {"id", "name", "address"},
+      rowType,
+      "SELECT 2, ('Janet', 'Jones', null), '567 Maple Drive'");
+
+  // Rename subfields of the 'name' field.
+  rowType =
+      ROW({"id", "name", "address"},
+          {BIGINT(), ROW({"a", "b"}, {VARCHAR(), VARCHAR()}), VARCHAR()});
+  loadData(file->getPath(), rowType, vector);
+  assertSelectWithDataColumns(
+      {"id", "name", "address"},
+      rowType,
+      "SELECT 2, ('Janet', 'Jones'), '567 Maple Drive'");
+
+  // Deletion of one subfield from the 'name' field.
+  rowType =
+      ROW({"id", "name", "address"},
+          {BIGINT(), ROW({"full"}, {VARCHAR()}), VARCHAR()});
+  auto op = PlanBuilder()
+                .startTableScan()
+                .outputType(rowType)
+                .dataColumns(rowType)
+                .endTableScan()
+                .planNode();
+  auto split = makeSplit(file->getPath());
+  EXPECT_THROW(
+      AssertQueryBuilder(op).split(split).copyResults(pool()),
+      VeloxRuntimeError);
+
+  // No subfield in the 'name' field.
+  rowType = ROW({"id", "name", "address"}, {BIGINT(), ROW({}, {}), VARCHAR()});
+  op = PlanBuilder()
+           .startTableScan()
+           .outputType(rowType)
+           .dataColumns(rowType)
+           .endTableScan()
+           .planNode();
+  EXPECT_THROW(
+      AssertQueryBuilder(op).split(split).copyResults(pool()),
+      VeloxRuntimeError);
+}
+
 TEST_F(ParquetTableScanTest, deltaByteArray) {
   auto a = makeFlatVector<StringView>({"axis", "axle", "babble", "babyhood"});
   auto expected = makeRowVector({"a"}, {a});
