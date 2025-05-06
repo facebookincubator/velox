@@ -110,6 +110,11 @@ class Base64 {
       char* outputBuffer,
       size_t outputSize);
 
+  /// Encodes the input buffer into Base64 MIME format.
+  /// Inserts a CRLF every kMaxLineLength output characters.
+  static void
+  encodeMime(const char* input, size_t inputSize, char* outputBuffer);
+
   /// Calculates the encoded size based on input 'inputSize'.
   static size_t calculateEncodedSize(size_t inputSize, bool withPadding = true);
 
@@ -119,9 +124,16 @@ class Base64 {
       const char* input,
       size_t& inputSize);
 
+  /// Computes the exact output length for MIME‐mode Base64 encoding,
+  /// including required CRLF line breaks.
+  static size_t calculateMimeEncodedSize(size_t inputSize);
+
  private:
   // Padding character used in encoding.
   static const char kPadding = '=';
+
+  inline static const std::string kNewline{"\r\n"};
+  static const size_t kMaxLineLength = 76;
 
   // Checks if the input Base64 string is padded.
   static inline bool isPadded(const char* input, size_t inputSize) {
