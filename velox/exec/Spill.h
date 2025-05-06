@@ -175,27 +175,49 @@ class FileSpillMergeStream : public SpillMergeStream {
   std::unique_ptr<SpillReadFile> spillFile_;
 };
 
-class SortedFileSpillStream final : public FileSpillMergeStream {
+/// A SpillMergeStream that contains a sequence of sorted spill files, the
+/// sorted keys are ordered both within each file and across files.
+class ConcatenateFilesSpillMergeStream final : public SpillMergeStream {
  public:
   static std::unique_ptr<SpillMergeStream> create(
-      std::unique_ptr<SpillReadFile> spillFile,
-      std::vector<std::pair<column_index_t, CompareFlags>> sortingKeys) {
-    auto spillStream = std::make_unique<SortedFileSpillStream>(
-        std::move(spillFile), std::move(sortingKeys));
+      uint32_t id,
+      std::vector<std::pair<column_index_t, CompareFlags>> sortingKeys,
+      std::vector<std::unique_ptr<SpillReadFile>> spillFiles) {
+    auto spillStream = std::make_unique<ConcatenateFilesSpillMergeStream>(
+        id, std::move(sortingKeys), std::move(spillFiles));
     spillStream->nextBatch();
     return spillStream;
   }
 
+  uint32_t id() const override;
+
   int32_t compare(const MergeStream& other) const override;
 
-  SortedFileSpillStream(
-      std::unique_ptr<SpillReadFile> spillFile,
-      std::vector<std::pair<column_index_t, CompareFlags>> sortingKeys)
-      : FileSpillMergeStream(std::move(spillFile)),
-        sortingKeys_(std::move(sortingKeys)) {}
+  void nextBatch() override;
+
+  void close() override;
+
+  const std::vector<CompareFlags>& sortCompareFlags() const override {
+    VELOX_UNREACHABLE("This method should not be called");
+  }
+
+  int32_t numSortKeys() const override {
+    VELOX_UNREACHABLE("This method should not be called");
+  }
+
+  ConcatenateFilesSpillMergeStream(
+      uint32_t id,
+      std::vector<std::pair<column_index_t, CompareFlags>> sortingKeys,
+      std::vector<std::unique_ptr<SpillReadFile>> spillFiles)
+      : id_(id),
+        sortingKeys_(std::move(sortingKeys)),
+        spillFiles_(std::move(spillFiles)) {}
 
  private:
-  std::vector<std::pair<column_index_t, CompareFlags>> sortingKeys_;
+  const uint32_t id_;
+  const std::vector<std::pair<column_index_t, CompareFlags>> sortingKeys_;
+  std::vector<std::unique_ptr<SpillReadFile>> spillFiles_;
+  size_t fileIndex_{0};
 };
 
 /// A source of spilled RowVectors coming from a file. The spill data might not
@@ -470,12 +492,6 @@ class SpillPartition {
   /// one buffer prefetch ahead. 'spillStats' is provided to collect the spill
   /// stats when reading data from spilled files.
   std::unique_ptr<TreeOfLosers<SpillMergeStream>> createOrderedReader(
-      uint64_t bufferSize,
-      memory::MemoryPool* pool,
-      folly::Synchronized<common::SpillStats>* spillStats);
-
-  std::unique_ptr<TreeOfLosers<SpillMergeStream>> createOrderedReader(
-      std::vector<std::pair<column_index_t, CompareFlags>> sortingKeys,
       uint64_t bufferSize,
       memory::MemoryPool* pool,
       folly::Synchronized<common::SpillStats>* spillStats);

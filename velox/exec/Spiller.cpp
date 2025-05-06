@@ -408,11 +408,6 @@ void NoRowContainerSpiller::spill(
   state_.appendToPartition(partitionId, spillVector);
 }
 
-SpillFiles NoRowContainerSpiller::finishFile(
-    const SpillPartitionId& partitionId) {
-  return state_.finish(partitionId);
-}
-
 void SortInputSpiller::spill() {
   SpillerBase::spill(nullptr);
 }

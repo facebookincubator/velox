@@ -105,19 +105,11 @@ BlockingReason Merge::isBlocked(ContinueFuture* future) {
   if (maxMergeSources_ < sources_.size()) {
     if (mergeBuffer_ == nullptr) {
       VELOX_CHECK(!finished_);
-      auto spillConfig = spillConfig_.has_value()
+      const auto spillConfig = spillConfig_.has_value()
           ? spillConfig_
           : operatorCtx_->driverCtx()->makeSpillConfig(
                 operatorCtx_->operatorId());
       VELOX_CHECK(spillConfig.has_value());
-      std::vector<column_index_t> sortColumnIndices;
-      sortColumnIndices.reserve(sortingKeys_.size());
-      std::vector<CompareFlags> sortCompareFlags;
-      sortCompareFlags.reserve(sortingKeys_.size());
-      for (const auto& [index, flags] : sortingKeys_) {
-        sortColumnIndices.emplace_back(index);
-        sortCompareFlags.emplace_back(flags);
-      }
       mergeBuffer_ = std::make_unique<MergeBuffer>(
           outputType_,
           pool(),
@@ -137,7 +129,6 @@ BlockingReason Merge::isBlocked(ContinueFuture* future) {
            ++i) {
         currentSources.push_back(sources_.at(i).get());
       }
-      numStartedSources_ += currentSources.size();
 
       // Initializes the input merger.
       std::vector<std::unique_ptr<SourceStream>> currentCursors;
@@ -148,7 +139,7 @@ BlockingReason Merge::isBlocked(ContinueFuture* future) {
       }
 
       // mergeStreams_ and inputMerger_ are paired.
-      VELOX_USER_CHECK(partialMergeStream_.empty());
+      VELOX_CHECK(partialMergeStream_.empty());
       for (auto& cursor : currentCursors) {
         partialMergeStream_.push_back(cursor.get());
       }
@@ -159,6 +150,7 @@ BlockingReason Merge::isBlocked(ContinueFuture* future) {
       for (auto& source : currentSources) {
         source->start();
       }
+      numStartedSources_ += currentSources.size();
     }
 
     VELOX_USER_CHECK(
@@ -244,17 +236,11 @@ RowVectorPtr Merge::getOutput() {
         if (!stream) {
           partialInputMerger_ = nullptr;
           partialMergeStream_.clear();
-          mergeBuffer_->finishFile();
-          // Return nullptr if there is no data.
-          if (outputSize_ == 0) {
-            return nullptr;
+          if (outputSize_ > 0) {
+            output_->resize(outputSize_);
+            mergeBuffer_->addInput(output_);
           }
-
-          output_->resize(outputSize_);
-          mergeBuffer_->addInput(output_);
-          if (numStartedSources_ >= sources_.size()) {
-            mergeBuffer_->noMoreInput();
-          }
+          mergeBuffer_->finishSpill(numStartedSources_ >= sources_.size());
           return nullptr;
         }
 
@@ -271,7 +257,7 @@ RowVectorPtr Merge::getOutput() {
 
         if (outputSize_ == outputBatchSize_) {
           // Copy out data from all sources.
-          for (auto& s : streams_) {
+          for (const auto& s : streams_) {
             s->copyToOutput(output_);
           }
 
@@ -286,8 +272,7 @@ RowVectorPtr Merge::getOutput() {
       }
     }
 
-    VELOX_USER_CHECK(
-        partialInputMerger_ == nullptr && partialMergeStream_.empty());
+    VELOX_CHECK(partialInputMerger_ == nullptr && partialMergeStream_.empty());
     output_ = mergeBuffer_->getOutput(outputBatchSize_);
     if (output_ == nullptr) {
       finished_ = true;

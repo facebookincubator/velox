@@ -15,7 +15,6 @@
  */
 
 #include "velox/exec/MergeBuffer.h"
-#include "velox/exec/MemoryReclaimer.h"
 #include "velox/exec/Spiller.h"
 
 namespace facebook::velox::exec {
@@ -41,32 +40,44 @@ MergeBuffer::MergeBuffer(
           spillConfig_,
           spillStats_)) {}
 
-void MergeBuffer::addInput(const RowVectorPtr& input) {
+void MergeBuffer::addInput(const RowVectorPtr vector) {
   VELOX_CHECK(!noMoreInput_);
-  numInputRows_ += input->size();
+  numInputRows_ += vector->size();
   // Ensure vector are lazy loaded before spilling.
-  for (auto i = 0; i < input->childrenSize(); ++i) {
-    input->childAt(i)->loadedVector();
+  for (auto i = 0; i < vector->childrenSize(); ++i) {
+    vector->childAt(i)->loadedVector();
   }
-  inputSpiller_->spill(kSpillPartitionId, input);
+  inputSpiller_->spill(kSpillPartitionId, vector);
 }
 
-void MergeBuffer::finishFile() const {
+void MergeBuffer::finishSpill(bool lastRun) {
   VELOX_CHECK_NOT_NULL(inputSpiller_);
-  VELOX_CHECK_GT(inputSpiller_->finishFile(kSpillPartitionId).size(), 0);
+  SpillPartitionSet partitionSet;
+  inputSpiller_->finishSpill(partitionSet);
+  VELOX_CHECK_EQ(partitionSet.size(), 1);
+  spillFilesLists_.emplace_back(partitionSet.cbegin()->second->files());
+  if (lastRun) {
+    noMoreInput();
+    return;
+  }
+
+  inputSpiller_ = std::make_unique<NoRowContainerSpiller>(
+      type_, std::nullopt, HashBitRange{}, spillConfig_, spillStats_);
 }
 
 void MergeBuffer::noMoreInput() {
   velox::common::testutil::TestValue::adjust(
       "facebook::velox::exec::SortBuffer::noMoreInput", this);
   VELOX_CHECK(!noMoreInput_);
+  inputSpiller_ = nullptr;
   noMoreInput_ = true;
-  finishSpill();
+  createSortMergeReader();
 }
 
 RowVectorPtr MergeBuffer::getOutput(vector_size_t maxOutputRows) {
   VELOX_CHECK(noMoreInput_);
 
+  // Finished.
   if (numOutputRows_ == numInputRows_) {
     return nullptr;
   }
@@ -75,7 +86,7 @@ RowVectorPtr MergeBuffer::getOutput(vector_size_t maxOutputRows) {
   const vector_size_t batchSize =
       std::min<uint64_t>(numInputRows_ - numOutputRows_, maxOutputRows);
   prepareOutput(batchSize);
-  getOutputWithSpill();
+  getOutputInternal();
   return output_;
 }
 
@@ -89,19 +100,18 @@ void MergeBuffer::prepareOutput(vector_size_t batchSize) {
         BaseVector::create(type_, batchSize, pool_));
   }
 
-  for (auto& child : output_->children()) {
+  for (const auto& child : output_->children()) {
     child->resize(batchSize);
   }
 
   spillSources_.resize(batchSize);
   spillSourceRows_.resize(batchSize);
-  prepareOutputWithSpill();
 
   VELOX_CHECK_GT(output_->size(), 0);
   VELOX_CHECK_LE(output_->size() + numOutputRows_, numInputRows_);
 }
 
-void MergeBuffer::getOutputWithSpill() {
+void MergeBuffer::getOutputInternal() {
   VELOX_CHECK_NOT_NULL(spillMerger_);
 
   int32_t outputRow = 0;
@@ -145,23 +155,25 @@ void MergeBuffer::getOutputWithSpill() {
   numOutputRows_ += output_->size();
 }
 
-void MergeBuffer::finishSpill() {
+void MergeBuffer::createSortMergeReader() {
+  VELOX_CHECK(noMoreInput_);
   VELOX_CHECK_NULL(spillMerger_);
-  VELOX_CHECK(spillPartitionSet_.empty());
-  VELOX_CHECK(!inputSpiller_->finalized());
-  inputSpiller_->finishSpill(spillPartitionSet_);
-  VELOX_CHECK_EQ(spillPartitionSet_.size(), 1);
-}
-
-void MergeBuffer::prepareOutputWithSpill() {
-  if (spillMerger_ != nullptr) {
-    VELOX_CHECK(spillPartitionSet_.empty());
-    return;
+  std::vector<std::unique_ptr<SpillMergeStream>> streams;
+  streams.reserve(spillFilesLists_.size());
+  for (size_t id = 0; id < spillFilesLists_.size(); ++id) {
+    auto& spillFiles = spillFilesLists_[id];
+    // TODO: Lazy open spill read file in 'SortedFileSpillStream'.
+    std::vector<std::unique_ptr<SpillReadFile>> spillReadFiles;
+    spillReadFiles.reserve(spillFiles.size());
+    for (const auto& spillFile : spillFiles) {
+      spillReadFiles.emplace_back(SpillReadFile::create(
+          spillFile, spillConfig_->readBufferSize, pool_, spillStats_));
+    }
+    streams.push_back(ConcatenateFilesSpillMergeStream::create(
+        id, sortingKeys_, std::move(spillReadFiles)));
   }
-
-  VELOX_CHECK_EQ(spillPartitionSet_.size(), 1);
-  spillMerger_ = spillPartitionSet_.begin()->second->createOrderedReader(
-      sortingKeys_, spillConfig_->readBufferSize, pool_, spillStats_);
-  spillPartitionSet_.clear();
+  spillFilesLists_.clear();
+  spillMerger_ =
+      std::make_unique<TreeOfLosers<SpillMergeStream>>(std::move(streams));
 }
 } // namespace facebook::velox::exec
