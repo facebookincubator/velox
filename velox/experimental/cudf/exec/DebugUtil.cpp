@@ -26,6 +26,7 @@ std::string DebugUtil::toString(
     vector_size_t from,
     vector_size_t to) {
   auto rowVector = with_arrow::toVeloxColumn(table, pool_.get(), "", stream);
+  stream.synchronize();
   return rowVector->toString(from, to);
 }
 } // namespace facebook::velox::cudf_velox
