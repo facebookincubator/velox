@@ -21,8 +21,11 @@
 namespace facebook::velox::cudf_velox {
 class DebugUtil {
  public:
-  std::string
-  toString(const cudf::table_view& table, vector_size_t from, vector_size_t to);
+  std::string toString(
+      const cudf::table_view& table,
+      rmm::cuda_stream_view stream,
+      vector_size_t from,
+      vector_size_t to);
 
  private:
   std::shared_ptr<memory::MemoryPool> rootPool_{
