@@ -17,6 +17,7 @@
 #include "velox/functions/lib/Re2Functions.h"
 #include "velox/functions/prestosql/StringFunctions.h"
 #include "velox/functions/prestosql/URLFunctions.h"
+#include "velox/functions/sparksql/Base64Function.h"
 #include "velox/functions/sparksql/ConcatWs.h"
 #include "velox/functions/sparksql/MaskFunction.h"
 #include "velox/functions/sparksql/Split.h"
@@ -147,6 +148,8 @@ void registerStringFunctions(const std::string& prefix) {
   registerFunctionCallToSpecialForm(
       ConcatWsCallToSpecialForm::kConcatWs,
       std::make_unique<ConcatWsCallToSpecialForm>());
+
+  registerFunction<Base64Function, Varchar, Varbinary>({prefix + "base64"});
 }
 } // namespace sparksql
 } // namespace facebook::velox::functions

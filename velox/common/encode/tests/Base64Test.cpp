@@ -107,4 +107,32 @@ TEST_F(Base64Test, countsPaddingCorrectly) {
   EXPECT_EQ(1, Base64::numPadding("ABC=", 4));
   EXPECT_EQ(2, Base64::numPadding("AB==", 4));
 }
+
+TEST_F(Base64Test, calculateMimeEncodedSize) {
+  EXPECT_EQ(0, Base64::calculateMimeEncodedSize(0));
+  EXPECT_EQ(8, Base64::calculateMimeEncodedSize(4));
+  EXPECT_EQ(76, Base64::calculateMimeEncodedSize(57));
+  EXPECT_EQ(82, Base64::calculateMimeEncodedSize(58));
+  EXPECT_EQ(274, Base64::calculateMimeEncodedSize(200));
+}
+
+TEST_F(Base64Test, encodeMime) {
+  auto encodeMime = [](const std::string& in) {
+    size_t len = Base64::calculateMimeEncodedSize(in.size());
+    std::string out(len, '\0');
+    Base64::encodeMime(in.data(), in.size(), out.data());
+    return out;
+  };
+  EXPECT_EQ("", encodeMime(""));
+  EXPECT_EQ("TWFu", encodeMime("Man"));
+  EXPECT_EQ("AQ==", encodeMime("\x01"));
+  EXPECT_EQ("/+4=", encodeMime("\xff\xee"));
+  EXPECT_EQ(
+      "QUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFB",
+      encodeMime(std::string(57, 'A')));
+  EXPECT_EQ(
+      "QUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFB\r\nQQ==",
+      encodeMime(std::string(58, 'A')));
+}
+
 } // namespace facebook::velox::encoding
