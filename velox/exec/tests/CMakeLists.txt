@@ -216,14 +216,6 @@ target_link_libraries(
   velox_tpch_connector
   velox_memory)
 
-# Arbitration Fuzzer.
-add_executable(velox_memory_arbitration_fuzzer_test
-               MemoryArbitrationFuzzerTest.cpp)
-
-target_link_libraries(
-  velox_memory_arbitration_fuzzer_test velox_memory_arbitration_fuzzer
-  GTest::gtest GTest::gtest_main)
-
 add_executable(velox_table_evolution_fuzzer_test TableEvolutionFuzzerTest.cpp)
 
 target_link_libraries(
