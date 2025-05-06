@@ -5,21 +5,25 @@ Conversion Functions
 .. spark:function:: cast(value AS type) -> type
 
     Explicitly cast a ``value`` to a specified ``type``.
-    Behavior when ANSI mode is disabled:
+    Follows the behavior when Spark ANSI mode is disabled, and does not support 
+    the behavior when ANSI is turned on:
     
-    * If the ``value`` exceeds the range of the ``type``, no error is raised. Instead, the ``value`` is "wrapped" around.
+    * If the ``value`` exceeds the range of the ``type``, no error is raised. 
+      Instead, the ``value`` is "wrapped" around.
 
-    * If the ``value`` has an invalid format or contains characters incompatible with the target ``type``, the cast function returns NULL. ::
+    * If the ``value`` has an invalid format or contains characters incompatible 
+      with the target ``type``, the cast function returns NULL. ::
 
         SELECT cast(128 as tinyint); -- -128
         SELECT cast('2012-Oct-23' as date); -- NULL
 
 .. spark:function:: try_cast(value AS type) -> type
 
-    Returns the ``value`` cast to data type ``type`` if possible, or NULL if not possible.
-    try_cast's behavior is consistent regardless of the ANSI mode setting, it behaves similarly to cast with ANSI mode enabled, 
-    but returns NULL instead of throwing errors.
-    try_cast differs from cast function with ANSI mode disabled in following case: 
+    Returns the ``value`` cast to ``type`` if possible, or NULL if not possible.
+    Its behavior is independent of the ANSI mode setting, and it acts identically 
+    to cast with ANSI mode enabled but returns NULL rather than throwing errors 
+    for failure to cast.
+    ``try_cast`` differs from ``cast`` function with ANSI mode disabled in following case: 
     
     * If the ``value`` cannot fit within the domain of ``type``, the result is NULL. ::
 
