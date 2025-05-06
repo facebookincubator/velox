@@ -140,6 +140,10 @@ TopNRowNumber::TopNRowNumber(
           node->sortingOrders(),
           data_.get()),
       decodedVectors_(inputType_->size()) {
+  VELOX_CHECK(
+      node->rankFunction() == core::TopNRowNumberNode::RankFunction::kRowNumber,
+      "TopNRowNumber supports only row_number() semantics");
+
   const auto& keys = node->partitionKeys();
   const auto numKeys = keys.size();
 
