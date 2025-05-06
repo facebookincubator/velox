@@ -685,7 +685,8 @@ class CastTypedExpr : public ITypedExpr {
   static TypedExprPtr create(const folly::dynamic& obj, void* context);
 
  private:
-  // Whether this expression is used for `try_cast`.
+  // Whether this expression is used for `try_cast`. When true, Presto cast
+  // suppresses exception and return null on failure to case.
   const bool isTryCast_;
 };
 
