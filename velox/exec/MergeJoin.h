@@ -443,7 +443,7 @@ class MergeJoin : public Operator {
     }
 
     void reset();
-    
+
     bool isRightJoinForFullOuter(vector_size_t row) {
       return rawRightJoinRows_[row];
     }
@@ -584,7 +584,7 @@ class MergeJoin : public Operator {
 
   bool leftHasDrained_{false};
   bool rightHasDrained_{false};
-  
+
   bool leftJoinForFullFinished_{false};
 
   bool rightJoinForFullFinished_{false};
