@@ -16,12 +16,14 @@
 
 #pragma once
 
-#ifdef VELOX_ENABLE_GEO
+#include <geos/geom/Geometry.h>
+#include "velox/type/StringView.h"
 
-namespace facebook::velox {
+namespace facebook::velox::functions {
 
-void registerBingTileType();
+std::unique_ptr<geos::geom::Geometry> deserializeGeometry(
+    const StringView& geometryString);
 
-} // namespace facebook::velox
+std::string serializeGeometry(const geos::geom::Geometry& geosGeometry);
 
-#endif
+} // namespace facebook::velox::functions

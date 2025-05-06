@@ -14,6 +14,8 @@
  * limitations under the License.
  */
 
+#ifdef VELOX_ENABLE_GEO
+
 #include "velox/functions/prestosql/types/GeometryType.h"
 #include "velox/functions/prestosql/types/GeometryRegistration.h"
 #include "velox/functions/prestosql/types/tests/TypeTestBase.h"
@@ -41,3 +43,5 @@ TEST_F(GeometryTypeTest, serde) {
   testTypeSerde(GEOMETRY());
 }
 } // namespace facebook::velox::test
+
+#endif

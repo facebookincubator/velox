@@ -15,8 +15,13 @@
  */
 
 #pragma once
+
+#ifdef VELOX_ENABLE_GEO
+
 namespace facebook::velox {
 
 void registerGeometryType();
 
 } // namespace facebook::velox
+
+#endif

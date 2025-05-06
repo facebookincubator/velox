@@ -33,6 +33,7 @@ velox_add_library(
   FilterFunctions.cpp
   FindFirst.cpp
   FromUtf8.cpp
+  GeometrySerde.cpp
   InPredicate.cpp
   JsonFunctions.cpp
   Map.cpp
@@ -74,6 +75,12 @@ velox_link_libraries(
   velox_functions_util
   Folly::folly
   stemmer::stemmer)
+
+if(VELOX_ENABLE_GEO)
+  velox_link_libraries(
+    velox_functions_prestosql_impl
+    GEOS::geos)
+endif()
 
 if(NOT VELOX_MONO_LIBRARY)
   set_property(TARGET velox_functions_prestosql_impl PROPERTY JOB_POOL_COMPILE
