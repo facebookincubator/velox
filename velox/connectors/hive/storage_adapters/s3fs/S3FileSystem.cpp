@@ -627,7 +627,9 @@ class S3FileSystem::Impl {
  public:
   Impl(const S3Config& s3Config) {
     VELOX_CHECK(getAwsInstance()->isInitialized(), "S3 is not initialized");
-    Aws::S3::S3ClientConfiguration clientConfig;
+    Aws::Client::ClientConfigurationInitValues initValues;
+    initValues.shouldDisableIMDS = !s3Config.useIMDS();
+    Aws::S3::S3ClientConfiguration clientConfig(initValues);
     if (s3Config.endpoint().has_value()) {
       clientConfig.endpointOverride = s3Config.endpoint().value();
     }
