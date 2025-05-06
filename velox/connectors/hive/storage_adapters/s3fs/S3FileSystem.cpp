@@ -294,6 +294,10 @@ class S3FileSystem::Impl {
 
     auto credentialsProvider = getCredentialsProvider(s3Config);
 
+    if (s3Config.maxClientRetries().has_value()) {
+      maxClientRetries_ = s3Config.maxClientRetries().value();
+    }
+
     client_ = std::make_shared<Aws::S3::S3Client>(
         credentialsProvider, nullptr /* endpointProvider */, clientConfig);
     ++fileSystemCount;
@@ -441,8 +445,13 @@ class S3FileSystem::Impl {
     return getAwsInstance()->getLogPrefix();
   }
 
+  uint32_t getMaxClientRetries() const {
+    return maxClientRetries_;
+  }
+
  private:
   std::shared_ptr<Aws::S3::S3Client> client_;
+  uint32_t maxClientRetries_;
 };
 
 S3FileSystem::S3FileSystem(
@@ -465,7 +474,8 @@ std::unique_ptr<ReadFile> S3FileSystem::openFileForRead(
     std::string_view s3Path,
     const FileOptions& options) {
   const auto path = getPath(s3Path);
-  auto s3file = std::make_unique<S3ReadFile>(path, impl_->s3Client());
+  auto s3file = std::make_unique<S3ReadFile>(
+      path, impl_->s3Client(), impl_->getMaxClientRetries());
   s3file->initialize(options);
   return s3file;
 }
