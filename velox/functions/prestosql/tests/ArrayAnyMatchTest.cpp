@@ -48,7 +48,7 @@ class ArrayAnyMatchTest : public functions::test::LambdaParameterizedBaseTest {
   }
 
   void toggleFollowThreeValuedLogical(bool v) {
-    queryCtx_->testingOverrideConfigUnsafe(
+    queryCtxParametrized_->testingOverrideConfigUnsafe(
         {{core::QueryConfig::kSparkLegacyFollowThreeValuedLogicInArrayExists,
           v ? "true" : "false"}});
   }
