@@ -17,6 +17,7 @@
 #include "velox/functions/lib/Re2Functions.h"
 #include "velox/functions/prestosql/StringFunctions.h"
 #include "velox/functions/prestosql/URLFunctions.h"
+#include "velox/functions/sparksql/Base64Function.h"
 #include "velox/functions/sparksql/ConcatWs.h"
 #include "velox/functions/sparksql/LuhnCheckFunction.h"
 #include "velox/functions/sparksql/MaskFunction.h"
@@ -149,6 +150,8 @@ void registerStringFunctions(const std::string& prefix) {
       ConcatWsCallToSpecialForm::kConcatWs,
       std::make_unique<ConcatWsCallToSpecialForm>());
   registerFunction<LuhnCheckFunction, bool, Varchar>({prefix + "luhn_check"});
+
+  registerFunction<Base64Function, Varchar, Varbinary>({prefix + "base64"});
 }
 } // namespace sparksql
 } // namespace facebook::velox::functions
