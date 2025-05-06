@@ -25,7 +25,11 @@ namespace facebook::velox::functions {
 namespace {
 
 // @tparam TContainer Either ArrayVector or MapVector.
-template <typename TContainer, bool initialValue, bool earlyReturn, bool followNull = true>
+template <
+    typename TContainer,
+    bool initialValue,
+    bool earlyReturn,
+    bool followNull = true>
 class MatchFunction : public exec::VectorFunction {
  protected:
   virtual std::shared_ptr<TContainer> flattenContainer(
@@ -333,17 +337,19 @@ exec::VectorFunctionFactory anyMatchFactory() {
   // For example, any([1, 2, null], x -> x == 3) is false.
   const auto anyMatch2VL = std::make_shared<AnyMatchFunction<false>>();
 
-  return [anyMatch3VL, anyMatch2VL](const std::string&,
-    const std::vector<exec::VectorFunctionArg>&,
-    const core::QueryConfig& config) -> std::shared_ptr<exec::VectorFunction> {
-      if (config.sparkLegacyFollowThreeValuedLogicInArrayExists()) {
-        return anyMatch3VL;
-      } else {
-        return anyMatch2VL;
-      }
+  return [anyMatch3VL, anyMatch2VL](
+             const std::string&,
+             const std::vector<exec::VectorFunctionArg>&,
+             const core::QueryConfig& config)
+             -> std::shared_ptr<exec::VectorFunction> {
+    if (config.sparkLegacyFollowThreeValuedLogicInArrayExists()) {
+      return anyMatch3VL;
+    } else {
+      return anyMatch2VL;
+    }
   };
 }
-}
+} // namespace
 
 VELOX_DECLARE_STATEFUL_VECTOR_FUNCTION_WITH_METADATA(
     udf_any_match,

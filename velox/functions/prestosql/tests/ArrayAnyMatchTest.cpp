@@ -48,9 +48,9 @@ class ArrayAnyMatchTest : public functions::test::LambdaParameterizedBaseTest {
   }
 
   void toggleFollowThreeValuedLogical(bool v) {
-    queryCtx_->testingOverrideConfigUnsafe({
-      {core::QueryConfig::kSparkLegacyFollowThreeValuedLogicInArrayExists, v ? "true" : "false"}
-    });
+    queryCtx_->testingOverrideConfigUnsafe(
+        {{core::QueryConfig::kSparkLegacyFollowThreeValuedLogicInArrayExists,
+          v ? "true" : "false"}});
   }
 };
 
@@ -245,22 +245,28 @@ TEST_P(ArrayAnyMatchTest, followThreeValuedLogic) {
   };
 
   toggleFollowThreeValuedLogical(false);
-  testAnyMatchExpr({
-      true,
-      true,
-      false,
-      false,
-      false,
-  }, "x > 1", ints);
+  testAnyMatchExpr(
+      {
+          true,
+          true,
+          false,
+          false,
+          false,
+      },
+      "x > 1",
+      ints);
 
   toggleFollowThreeValuedLogical(true);
-  testAnyMatchExpr({
-      true,
-      true,
-      std::nullopt,
-      false,
-      std::nullopt,
-  }, "x > 1", ints);
+  testAnyMatchExpr(
+      {
+          true,
+          true,
+          std::nullopt,
+          false,
+          std::nullopt,
+      },
+      "x > 1",
+      ints);
 }
 
 VELOX_INSTANTIATE_TEST_SUITE_P(
