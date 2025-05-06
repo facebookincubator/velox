@@ -76,6 +76,7 @@ class S3Config {
     kRetryMode,
     kUseProxyFromEnv,
     kCredentialsProvider,
+    kMaxClientRetries,
     kEnd
   };
 
@@ -108,12 +109,14 @@ class S3Config {
              std::make_pair("socket-timeout", std::nullopt)},
             {Keys::kMaxConnections,
              std::make_pair("max-connections", std::nullopt)},
-            {Keys::kMaxAttempts, std::make_pair("max-attempts", std::nullopt)},
-            {Keys::kRetryMode, std::make_pair("retry-mode", std::nullopt)},
+            {Keys::kMaxAttempts, std::make_pair("max-attempts", "10")},
+            {Keys::kRetryMode, std::make_pair("retry-mode", "standard")},
             {Keys::kUseProxyFromEnv,
              std::make_pair("use-proxy-from-env", "false")},
             {Keys::kCredentialsProvider,
              std::make_pair("aws-credentials-provider", std::nullopt)},
+            {Keys::kMaxClientRetries,
+             std::make_pair("max-client-retries", "5")},
         };
     return config;
   }
@@ -224,6 +227,15 @@ class S3Config {
   /// Retry mode for a single http client.
   std::optional<std::string> retryMode() const {
     return config_.find(Keys::kRetryMode)->second;
+  }
+
+  /// Maximum retry attempts for a single http client.
+  std::optional<int32_t> maxClientRetries() const {
+    auto val = config_.find(Keys::kMaxClientRetries)->second;
+    if (val.has_value()) {
+      return folly::to<int32_t>(val.value());
+    }
+    return std::optional<int32_t>(5);
   }
 
   bool useProxyFromEnv() const {
