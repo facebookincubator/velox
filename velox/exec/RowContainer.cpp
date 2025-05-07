@@ -1326,9 +1326,9 @@ RowComparator::RowComparator(
   }
 }
 
-bool RowComparator::operator()(const char* lhs, const char* rhs) {
+int32_t RowComparator::compare(const char* lhs, const char* rhs) {
   if (lhs == rhs) {
-    return false;
+    return 0;
   }
   for (auto& key : keyInfo_) {
     if (auto result = rowContainer_->compare(
@@ -1336,13 +1336,17 @@ bool RowComparator::operator()(const char* lhs, const char* rhs) {
             rhs,
             key.first,
             {key.second.isNullsFirst(), key.second.isAscending(), false})) {
-      return result < 0;
+      return result;
     }
   }
-  return false;
+  return 0;
 }
 
-bool RowComparator::operator()(
+bool RowComparator::operator()(const char* lhs, const char* rhs) {
+  return compare(lhs, rhs) < 0;
+}
+
+int32_t RowComparator::compare(
     const std::vector<DecodedVector>& decodedVectors,
     vector_size_t index,
     const char* rhs) {
@@ -1353,9 +1357,16 @@ bool RowComparator::operator()(
             decodedVectors[key.first],
             index,
             {key.second.isNullsFirst(), key.second.isAscending(), false})) {
-      return result > 0;
+      return result;
     }
   }
-  return false;
+  return 0;
+}
+
+bool RowComparator::operator()(
+    const std::vector<DecodedVector>& decodedVectors,
+    vector_size_t index,
+    const char* rhs) {
+  return compare(decodedVectors, index, rhs) > 0;
 }
 } // namespace facebook::velox::exec

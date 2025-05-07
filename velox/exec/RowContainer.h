@@ -1884,8 +1884,18 @@ class RowComparator {
   /// Returns true if lhs < rhs, false otherwise.
   bool operator()(const char* lhs, const char* rhs);
 
+  /// Returns 0 for equal, < 0 for 'lhs' < 'rhs', > 0 otherwise.
+  int compare(const char* lhs, const char* rhs);
+
   /// Returns true if decodeVectors[index] < rhs, false otherwise.
   bool operator()(
+      const std::vector<DecodedVector>& decodedVectors,
+      vector_size_t index,
+      const char* rhs);
+
+  /// Returns 0 for equal, < 0 for 'decodedVectors[index]' < 'rhs',
+  /// > 0 otherwise.
+  int32_t compare(
       const std::vector<DecodedVector>& decodedVectors,
       vector_size_t index,
       const char* rhs);
