@@ -1562,6 +1562,17 @@ TEST_F(Re2FunctionsTest, split) {
       {"a", "b"},
   });
   assertEqualVectors(expected, result);
+
+  input = makeRowVector({
+      makeFlatVector<std::string>({
+          "abcd",
+      }),
+  });
+  result = evaluate("regexp_split(c0, '')", input);
+  expected = makeArrayVector<std::string>({
+      {"", "a", "b", "c", "d", ""},
+  });
+  assertEqualVectors(expected, result);
 }
 
 TEST_F(Re2FunctionsTest, parseSubstrings) {
