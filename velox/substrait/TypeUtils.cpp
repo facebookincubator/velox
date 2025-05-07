@@ -26,8 +26,8 @@ std::vector<std::string_view> getTypesFromCompoundName(
   // equals rightAngleBracket need to split.
   std::vector<std::string_view> types;
   std::vector<int> angleBracketNumEqualPos;
-  auto leftAngleBracketPos = compoundName.find("<");
-  auto rightAngleBracketPos = compoundName.rfind(">");
+  auto leftAngleBracketPos = compoundName.find('<');
+  auto rightAngleBracketPos = compoundName.rfind('>');
   auto typesName = compoundName.substr(
       leftAngleBracketPos + 1, rightAngleBracketPos - leftAngleBracketPos - 1);
   int leftAngleBracketNum = 0;
