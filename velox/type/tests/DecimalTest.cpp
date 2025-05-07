@@ -128,6 +128,19 @@ void testMaxStringViewSize(
       DecimalUtil::maxStringViewSize(precision, scale), expectedMaxStringSize);
 }
 
+template <typename T>
+void testCastFromString(
+    const std::string& input,
+    int toPrecision,
+    int toScale,
+    T expectedUnscaleValue) {
+  T decimalValue;
+  auto status = DecimalUtil::toDecimalValue<T>(
+      StringView(input), toPrecision, toScale, decimalValue);
+  EXPECT_TRUE(status.ok());
+  EXPECT_EQ(expectedUnscaleValue, decimalValue);
+}
+
 std::string zeros(uint32_t numZeros) {
   return std::string(numZeros, '0');
 }
@@ -569,6 +582,36 @@ TEST(DecimalTest, castToString) {
       DecimalUtil::kLongDecimalMax, 38, 0, 39, std::string(38, '9'));
   testcastToString<int128_t>(
       DecimalUtil::kLongDecimalMin, 38, 0, 39, "-" + std::string(38, '9'));
+}
+
+TEST(DecimalTest, castFromString) {
+  testCastFromString<int64_t>("12", 10, 0, 12);
+  testCastFromString<int64_t>("1.2", 10, 1, 12);
+  testCastFromString<int64_t>("0.012", 10, 3, 12);
+  testCastFromString<int64_t>("-0.012", 10, 3, -12);
+  testCastFromString<int64_t>("0.00012", 5, 5, 12);
+  testCastFromString<int64_t>("-0.00012", 5, 5, -12);
+  testCastFromString<int64_t>("-0.00012", 5, 5, -12);
+  testCastFromString<int64_t>(
+      std::string(18, '9'), 18, 0, DecimalUtil::kShortDecimalMax);
+  testCastFromString<int64_t>(
+      "-" + std::string(18, '9'), 18, 0, DecimalUtil::kShortDecimalMin);
+
+  testCastFromString<int128_t>(
+      "-18446744073709551616", 20, 0, HugeInt::parse("-18446744073709551616"));
+
+  testCastFromString<int128_t>(
+      "-18446744073709551.616", 20, 3, HugeInt::parse("-18446744073709551616"));
+
+  testCastFromString<int128_t>(
+      "-0.12345678901234567890",
+      20,
+      20,
+      HugeInt::parse("-12345678901234567890"));
+  testCastFromString<int128_t>(
+      std::string(38, '9'), 38, 0, DecimalUtil::kLongDecimalMax);
+  testCastFromString<int128_t>(
+      "-" + std::string(38, '9'), 38, 0, DecimalUtil::kLongDecimalMin);
 }
 } // namespace
 } // namespace facebook::velox
