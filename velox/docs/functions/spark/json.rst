@@ -93,12 +93,14 @@ JSON Functions
 
     * Does not support user provided options. ::
 
-        to_json(ROW(1, "a"), map('option', 'value'))
+        to_json(MAP(1, 'a'), map('option', 'value'))
 
-    * MAP key types must be VARCHAR. ::
+    * MAP key type cannot be/contain MAP. ::
+
+        to_json(MAP(MAP('a', 1), 10))
 
     Examples of valid inputs are listed as below. ::
 
-        SELECT to_json(ROW(1, "a")); -- {"a":1}
+        SELECT to_json(ROW({'c0', 'c1'}, 1, 'a')); -- {"c0":1,"c1":"a"}
         SELECT to_json(ARRAY[1, 2, 3]); -- [1,2,3]
-        SELECT to_json(MAP(ARRAY['x', 'y'], ARRAY[1, 2])); -- {"x":1,"y":2}
+        SELECT to_json(MAP('x', 1, 'y', 2)); -- {"x":1,"y":2}

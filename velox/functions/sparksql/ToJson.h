@@ -30,28 +30,9 @@ struct JsonOptions {
 };
 
 template <typename T>
-std::enable_if_t<std::is_integral_v<T>, void> append(
-    T value,
-    std::string& result) {
-  const size_t len = folly::to_ascii_size_max_decimal<uint64_t> + 1;
-  char buffer[len];
-  auto uvalue = value < 0 ? ~static_cast<uint64_t>(value) + 1
-                          : static_cast<uint64_t>(value);
-  size_t p = 0;
-  char* writtenPosition = buffer;
-  if (value < 0) {
-    *writtenPosition++ = '-';
-    p += 1;
-  };
-  p += folly::to_ascii_decimal(writtenPosition, buffer + len, uvalue);
-  result.append(buffer, p);
-}
-
-template <typename T>
-std::enable_if_t<std::is_floating_point_v<T>, void> append(
-    T value,
-    std::string& result) {
-  if (FOLLY_UNLIKELY(std::isinf(value) || std::isnan(value))) {
+std::enable_if_t<std::is_floating_point_v<T>, void>
+append(T value, std::string& result, bool isMapKey) {
+  if (!isMapKey && FOLLY_UNLIKELY(std::isinf(value) || std::isnan(value))) {
     result.append(fmt::format(
         "\"{}\"", util::Converter<TypeKind::VARCHAR>::tryCast(value).value()));
   } else {
@@ -64,33 +45,38 @@ template <TypeKind kind>
 void toJson(
     const exec::GenericView& input,
     std::string& result,
-    const JsonOptions& options);
+    const JsonOptions& options,
+    bool isMapKey = false);
 
 template <>
 void toJson<TypeKind::ROW>(
     const exec::GenericView& input,
     std::string& result,
-    const JsonOptions& options);
+    const JsonOptions& options,
+    bool isMapKey);
 
 template <>
 void toJson<TypeKind::ARRAY>(
     const exec::GenericView& input,
     std::string& result,
-    const JsonOptions& options);
+    const JsonOptions& options,
+    bool isMapKey);
 
 template <>
 void toJson<TypeKind::MAP>(
     const exec::GenericView& input,
     std::string& result,
-    const JsonOptions& options);
+    const JsonOptions& options,
+    bool isMapKey);
 
 // Primary specialization for unsupported types.
 template <TypeKind kind>
 void toJson(
     const exec::GenericView& input,
     std::string& result,
-    const JsonOptions& options) {
-  VELOX_FAIL("{} is not supported in to_json.", kind);
+    const JsonOptions& options,
+    bool isMapKey) {
+  VELOX_USER_FAIL("{} is not supported in to_json.", kind);
 }
 
 // Convert primitive-type input to Json string.
@@ -98,7 +84,8 @@ template <>
 void toJson<TypeKind::BOOLEAN>(
     const exec::GenericView& input,
     std::string& result,
-    const JsonOptions& options) {
+    const JsonOptions& options,
+    bool isMapKey) {
   auto value = input.castTo<bool>();
   static const char TRUE[] = "true";
   static const char FALSE[] = "false";
@@ -109,30 +96,33 @@ template <>
 void toJson<TypeKind::TINYINT>(
     const exec::GenericView& input,
     std::string& result,
-    const JsonOptions& options) {
+    const JsonOptions& options,
+    bool isMapKey) {
   auto value = input.castTo<int8_t>();
-  append(value, result);
+  folly::toAppend<std::string, int8_t>(value, &result);
 }
 
 template <>
 void toJson<TypeKind::SMALLINT>(
     const exec::GenericView& input,
     std::string& result,
-    const JsonOptions& options) {
+    const JsonOptions& options,
+    bool isMapKey) {
   auto value = input.castTo<int16_t>();
-  append(value, result);
+  folly::toAppend<std::string, int16_t>(value, &result);
 }
 
 template <>
 void toJson<TypeKind::INTEGER>(
     const exec::GenericView& input,
     std::string& result,
-    const JsonOptions& options) {
+    const JsonOptions& options,
+    bool isMapKey) {
   auto value = input.castTo<int32_t>();
-  if (input.type()->isDate()) {
+  if (!isMapKey && input.type()->isDate()) {
     result.append("\"").append(DATE()->toString(value)).append("\"");
   } else {
-    append(value, result);
+    folly::toAppend<std::string, int32_t>(value, &result);
   }
 }
 
@@ -140,7 +130,8 @@ template <>
 void toJson<TypeKind::BIGINT>(
     const exec::GenericView& input,
     std::string& result,
-    const JsonOptions& options) {
+    const JsonOptions& options,
+    bool isMapKey) {
   auto value = input.castTo<int64_t>();
   if (input.type()->isDecimal()) {
     auto [precision, scale] = getDecimalPrecisionScale(*input.type());
@@ -149,7 +140,7 @@ void toJson<TypeKind::BIGINT>(
     size_t len = DecimalUtil::castToString(value, scale, maxSize, buffer);
     result.append(buffer, len);
   } else {
-    append(value, result);
+    folly::toAppend<std::string, int64_t>(value, &result);
   }
 }
 
@@ -157,63 +148,71 @@ template <>
 void toJson<TypeKind::HUGEINT>(
     const exec::GenericView& input,
     std::string& result,
-    const JsonOptions& options) {
+    const JsonOptions& options,
+    bool isMapKey) {
   auto value = input.castTo<int128_t>();
   const size_t maxSize = folly::detail::digitsEnough<uint128_t>() + 1;
   char buffer[maxSize];
-  size_t p;
-  if (value < 0) {
-    *buffer = '-';
-    p = 1 +
-        folly::detail::unsafeTelescope128(buffer + 1, buffer + maxSize, -value);
-  } else {
-    p = folly::detail::unsafeTelescope128(buffer, buffer + maxSize, value);
-  }
-  result.append(buffer, p);
+  size_t len = DecimalUtil::castToString(value, 0, maxSize, buffer);
+  result.append(buffer, len);
 }
 
 template <>
 void toJson<TypeKind::REAL>(
     const exec::GenericView& input,
     std::string& result,
-    const JsonOptions& options) {
+    const JsonOptions& options,
+    bool isMapKey) {
   auto value = input.castTo<float>();
-  append(value, result);
+  append(value, result, isMapKey);
 }
 
 template <>
 void toJson<TypeKind::DOUBLE>(
     const exec::GenericView& input,
     std::string& result,
-    const JsonOptions& options) {
+    const JsonOptions& options,
+    bool isMapKey) {
   auto value = input.castTo<double>();
-  append(value, result);
+  append(value, result, isMapKey);
 }
 
 template <>
 void toJson<TypeKind::VARCHAR>(
     const exec::GenericView& input,
     std::string& result,
-    const JsonOptions& options) {
+    const JsonOptions& options,
+    bool isMapKey) {
   auto value = input.castTo<Varchar>();
-  folly::json::escapeString(value, result, {});
+  if (!isMapKey) {
+    folly::json::escapeString(value, result, {});
+  } else {
+    std::string quotedString;
+    folly::json::escapeString(value, quotedString, {});
+    result.append(quotedString.substr(1, quotedString.size() - 2));
+  }
 }
 
 template <>
 void toJson<TypeKind::TIMESTAMP>(
     const exec::GenericView& input,
     std::string& result,
-    const JsonOptions& options) {
+    const JsonOptions& options,
+    bool isMapKey) {
   auto value = input.castTo<Timestamp>();
-  // Spark converts Timestamp in ISO8601 format by default.
-  static const auto formatter =
-      functions::buildJodaDateTimeFormatter("yyyy-MM-dd'T'HH:mm:ss.SSSZZ")
-          .value();
-  const auto maxSize = formatter->maxResultSize(options.timeZone);
-  char buffer[maxSize];
-  auto size =
-      formatter->format(value, options.timeZone, maxSize, buffer, false, "Z");
-  result.append("\"").append(buffer, size).append("\"");
+  if (isMapKey) {
+    folly::toAppend<std::string, int64_t>(value.toMicros(), &result);
+  } else {
+    // Spark converts Timestamp in ISO8601 format by default.
+    static const auto formatter =
+        functions::buildJodaDateTimeFormatter("yyyy-MM-dd'T'HH:mm:ss.SSSZZ")
+            .value();
+    const auto maxSize = formatter->maxResultSize(options.timeZone);
+    char buffer[maxSize];
+    auto size =
+        formatter->format(value, options.timeZone, maxSize, buffer, false, "Z");
+    result.append("\"").append(buffer, size).append("\"");
+  }
 }
 
 // Convert complex-type input to Json string.
@@ -221,43 +220,51 @@ template <>
 void toJson<TypeKind::ROW>(
     const exec::GenericView& input,
     std::string& result,
-    const JsonOptions& options) {
+    const JsonOptions& options,
+    bool isMapKey) {
   auto rowType = std::static_pointer_cast<const RowType>(input.type());
   auto row = input.castTo<DynamicRow>();
-  result.append("{");
+  result.append(isMapKey ? "[" : "{");
   bool commaBefore = false;
   for (int i = 0; i < rowType->size(); i++) {
     auto data = row.at(i);
     if (data.has_value()) {
       if (commaBefore) {
         result.append(",");
-      } else {
-        commaBefore = true;
       }
-      result.append("\"");
-      result.append(rowType->nameOf(i));
-      result.append("\":");
+      if (!isMapKey) {
+        result.append("\"");
+        result.append(rowType->nameOf(i));
+        result.append("\":");
+      }
       VELOX_DYNAMIC_TYPE_DISPATCH_ALL(
-          toJson, data->kind(), data.value(), result, options);
+          toJson, data->kind(), data.value(), result, options, isMapKey);
+      commaBefore = true;
+    } else if (isMapKey) {
+      if (commaBefore) {
+        result.append(",");
+      }
+      result.append("null");
+      commaBefore = true;
     } else if (!options.ignoreNullFields) {
       if (commaBefore) {
         result.append(",");
-      } else {
-        commaBefore = true;
       }
       result.append("\"");
       result.append(rowType->nameOf(i));
       result.append("\":null");
+      commaBefore = true;
     }
   }
-  result.append("}");
+  result.append(isMapKey ? "]" : "}");
 }
 
 template <>
 void toJson<TypeKind::ARRAY>(
     const exec::GenericView& input,
     std::string& result,
-    const JsonOptions& options) {
+    const JsonOptions& options,
+    bool isMapKey) {
   auto arrayView = input.castTo<Array<Any>>();
   result.append("[");
   for (int i = 0; i < arrayView.size(); i++) {
@@ -267,7 +274,7 @@ void toJson<TypeKind::ARRAY>(
     if (arrayView[i].has_value()) {
       auto element = arrayView[i].value();
       VELOX_DYNAMIC_TYPE_DISPATCH_ALL(
-          toJson, element.kind(), element, result, options);
+          toJson, element.kind(), element, result, options, isMapKey);
     } else {
       result.append("null");
     }
@@ -279,7 +286,8 @@ template <>
 void toJson<TypeKind::MAP>(
     const exec::GenericView& input,
     std::string& result,
-    const JsonOptions& options) {
+    const JsonOptions& options,
+    bool isMapKey) {
   auto mapView = input.castTo<Map<Any, Any>>();
   result.append("{");
   for (int i = 0; i < mapView.size(); i++) {
@@ -289,15 +297,18 @@ void toJson<TypeKind::MAP>(
     auto element = mapView.atIndex(i);
     auto key = element.first;
     auto value = element.second;
-    bool isKeyVarchar = key.kind() == TypeKind::VARCHAR;
-    if (!isKeyVarchar) {
-      result.append("\"");
-    }
-    VELOX_DYNAMIC_TYPE_DISPATCH_ALL(toJson, key.kind(), key, result, options);
-    result.append(isKeyVarchar ? ":" : "\":");
+    result.append("\"");
+    VELOX_DYNAMIC_TYPE_DISPATCH_ALL(
+        toJson, key.kind(), key, result, options, true);
+    result.append("\":");
     if (value.has_value()) {
       VELOX_DYNAMIC_TYPE_DISPATCH_ALL(
-          toJson, value.value().kind(), value.value(), result, options);
+          toJson,
+          value.value().kind(),
+          value.value(),
+          result,
+          options,
+          isMapKey);
     } else {
       result.append("null");
     }
@@ -339,22 +350,25 @@ struct ToJsonFunction {
  private:
   /// Determine whether a given input type is supported.
   /// 1. The root type can only be ROW, ARRAY, and MAP.
-  /// 2. The key type of MAP must be VARCHAR.
-  bool isSupportedType(const TypePtr& type, bool isRootType) {
+  /// 2. The key type of MAP cannot be/contain MAP.
+  bool isSupportedType(
+      const TypePtr& type,
+      bool isRootType = false,
+      bool isMapKey = false) {
     switch (type->kind()) {
       case TypeKind::ROW: {
         for (const auto& child : asRowType(type)->children()) {
-          if (!isSupportedType(child, false)) {
+          if (!isSupportedType(child, false, isMapKey)) {
             return false;
           }
         }
       }
       case TypeKind::ARRAY: {
-        return isSupportedType(type->childAt(0), false);
+        return isSupportedType(type->childAt(0), false, isMapKey);
       }
       case TypeKind::MAP: {
-        return type->childAt(0)->kind() == TypeKind::VARCHAR &&
-            isSupportedType(type->childAt(1), false);
+        return !isMapKey && isSupportedType(type->childAt(0), false, true) &&
+            isSupportedType(type->childAt(1));
       }
       default:
         return !isRootType;

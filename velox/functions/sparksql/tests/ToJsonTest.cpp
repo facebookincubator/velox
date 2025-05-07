@@ -77,6 +77,7 @@ TEST_F(ToJsonTest, basicArray) {
 }
 
 TEST_F(ToJsonTest, basicMap) {
+  // MAP(VARCHAR, BIGINT)
   auto input = makeNullableMapVector<std::string, int64_t>(
       {{{{"a", 1}, {"b", 2}, {"c", 3}}},
        std::nullopt,
@@ -84,6 +85,19 @@ TEST_F(ToJsonTest, basicMap) {
        {{{"a", 1}, {"b", std::nullopt}}}});
   auto expected = makeNullableFlatVector<std::string>(
       {R"({"a":1,"b":2,"c":3})", std::nullopt, R"({})", R"({"a":1,"b":null})"});
+  testToJson(input, expected);
+
+  // MAP(BIGINT, VARCHAR)
+  input = makeNullableMapVector<int64_t, std::string>(
+      {{{{1, "a"}, {2, "b"}, {3, "c"}}},
+       std::nullopt,
+       {{}},
+       {{{1, "a"}, {2, std::nullopt}}}});
+  expected = makeNullableFlatVector<std::string>(
+      {R"({"1":"a","2":"b","3":"c"})",
+       std::nullopt,
+       R"({})",
+       R"({"1":"a","2":null})"});
   testToJson(input, expected);
 }
 
@@ -245,6 +259,8 @@ TEST_F(ToJsonTest, basicDate) {
 }
 
 TEST_F(ToJsonTest, nestedComplexType) {
+  // ROW(VARCHAR, ARRAY(INTEGER), MAP(VARCHAR, INTEGER),
+  //     ROW(VARCHAR, ARRAY(INTEGER)))
   auto data1 = makeNullableFlatVector<std::string>({"str1", "str2", "str3"});
   auto data2 =
       makeNullableArrayVector<int64_t>({{1, 2, 3}, {}, {std::nullopt}});
@@ -266,20 +282,65 @@ TEST_F(ToJsonTest, nestedComplexType) {
   testToJson(input, expected);
 }
 
-TEST_F(ToJsonTest, unsupportedType) {
-  auto invalidMap = makeNullableMapVector<int64_t, int64_t>(
-      {{{{1, 1}, {2, 2}, {3, 3}}},
-       std::nullopt,
+TEST_F(ToJsonTest, nestedMap) {
+  // MAP(ROW(DATE, ARRAY(VARCHAR), DOUBLE, TIMESTAMP), INTEGER)
+  auto values = makeFlatVector<int32_t>({10, 20, 30, 40, 50});
+  auto data1 = makeNullableFlatVector<int32_t>(
+      {0, 18321, -25567, 2932896, std::nullopt}, DateType::get());
+  auto data2 = makeNullableArrayVector<std::string>(
+      {{{"a", "b", std::nullopt}},
        {{}},
-       {{{1, 1}, {2, std::nullopt}}}});
+       {{"d", "e"}},
+       {{"f", std::nullopt, "h"}},
+       std::nullopt});
+  auto data3 = makeNullableFlatVector<double>(
+      {1.0, kNaNDouble, kInfDouble, -kInfDouble, std::nullopt});
+  auto data4 = makeNullableFlatVector<Timestamp>(
+      {Timestamp(0, 0),
+       std::nullopt,
+       Timestamp(1582934400, 0),
+       Timestamp(-2208988800, 0),
+       Timestamp(1735713000, 0)});
+  auto rows = makeRowVector({"a", "b", "c", "d"}, {data1, data2, data3, data4});
+  auto input = makeMapVector({0, 1, 2, 3, 4}, rows, values);
+  auto expected = makeFlatVector<std::string>(
+      {R"({"[0,[a,b,null],1.0,0]":10})",
+       R"({"[18321,[],NaN,null]":20})",
+       R"({"[-25567,[d,e],Infinity,1582934400000000]":30})",
+       R"({"[2932896,[f,null,h],-Infinity,-2208988800000000]":40})",
+       R"({"[null,null,null,1735713000000000]":50})"});
+  testToJson(input, expected);
+}
+
+TEST_F(ToJsonTest, unsupportedType) {
+  VectorFuzzer::Options opts;
+  opts.vectorSize = 1000;
+  opts.nullRatio = 0.1;
+
+  VectorFuzzer fuzzer(opts, pool_.get());
+
+  // MAP(MAP)
+  auto input = fuzzer.fuzzDictionary(
+      fuzzer.fuzzFlat(MAP(MAP(BIGINT(), BIGINT()), INTEGER())));
   VELOX_ASSERT_THROW(
-      testToJson(invalidMap, nullptr),
-      "to_json function does not support type MAP<BIGINT,BIGINT>.");
-  auto invalidRow = makeRowVector(
-      {"a", "b"}, {makeNullableFlatVector<int32_t>({0, 1, 2, 3}), invalidMap});
+      testToJson(input, nullptr),
+      "to_json function does not support type MAP<MAP<BIGINT,BIGINT>,INTEGER>.");
+
+  // MAP(ARRAY(MAP))
+  input = fuzzer.fuzzDictionary(
+      fuzzer.fuzzFlat(MAP(ARRAY(MAP(VARCHAR(), INTEGER())), INTEGER())));
   VELOX_ASSERT_THROW(
-      testToJson(invalidRow, "UTC", nullptr),
-      "to_json function does not support type ROW<a:INTEGER,b:MAP<BIGINT,BIGINT>>.");
+      testToJson(input, nullptr),
+      "to_json function does not support type MAP<ARRAY<MAP<VARCHAR,INTEGER>>,INTEGER>.");
+
+  // ROW(MAP(ARRAY(MAP)))
+  input = makeRowVector(
+      {"a"},
+      {fuzzer.fuzzDictionary(
+          fuzzer.fuzzFlat(MAP(ARRAY(MAP(BIGINT(), BIGINT())), INTEGER())))});
+  VELOX_ASSERT_THROW(
+      testToJson(input, nullptr),
+      "to_json function does not support type ROW<a:MAP<ARRAY<MAP<BIGINT,BIGINT>>,INTEGER>>.");
 }
 } // namespace
 } // namespace facebook::velox::functions::sparksql::test
