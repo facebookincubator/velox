@@ -25,8 +25,9 @@ FetchContent_Declare(
   geos
   URL ${VELOX_GEOS_SOURCE_URL}
   URL_HASH ${VELOX_GEOS_BUILD_SHA256_CHECKSUM}
-  PATCH_COMMAND cp "${CMAKE_CURRENT_LIST_DIR}/geos/CMakeLists.txt" . && git
-                apply "${CMAKE_CURRENT_LIST_DIR}/geos/geos-build.patch")
+  PATCH_COMMAND
+    git apply "${CMAKE_CURRENT_LIST_DIR}/geos/geos-cmakelists.patch" && git
+    apply "${CMAKE_CURRENT_LIST_DIR}/geos/geos-build.patch")
 
 list(APPEND CMAKE_MODULE_PATH "${geos_SOURCE_DIR}/cmake")
 set(BUILD_SHARED_LIBS ${VELOX_BUILD_SHARED})
