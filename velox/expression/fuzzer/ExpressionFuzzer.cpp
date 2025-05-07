@@ -77,7 +77,7 @@ class FullSignatureBinder : public SignatureBinderBase {
 
 static std::pair<std::string, std::string> splitSignature(
     const std::string& signature) {
-  const auto parenPos = signature.find("(");
+  const auto parenPos = signature.find('(');
 
   if (parenPos != std::string::npos) {
     return {signature.substr(0, parenPos), signature.substr(parenPos)};
