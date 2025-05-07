@@ -133,7 +133,7 @@ class BiasVector : public SimpleVector<T> {
    *
    * @param byteOffset - the byte offset to laod from
    */
-  xsimd::batch<T> loadSIMDValueBufferAt(size_t index) const;
+  simd::xbatch<T> loadSIMDValueBufferAt(size_t index) const;
 #endif
 
   std::unique_ptr<SimpleVector<uint64_t>> hashAll() const override;
@@ -188,10 +188,10 @@ class BiasVector : public SimpleVector<T> {
  private:
 #ifdef VELOX_ENABLE_LOAD_SIMD_VALUE_BUFFER
   template <typename U>
-  inline xsimd::batch<T> loadSIMDInternal(size_t byteOffset) const {
+  inline simd::xbatch<T> loadSIMDInternal(size_t byteOffset) const {
     auto mem = reinterpret_cast<const U*>(
         rawValues_ + byteOffset / sizeof(T) * sizeof(U));
-    return xsimd::batch<T>::load_unaligned(mem);
+    return simd::xbatch<T>::load_unaligned(mem);
   }
 #endif
 
@@ -210,7 +210,7 @@ class BiasVector : public SimpleVector<T> {
 
 #ifdef VELOX_ENABLE_LOAD_SIMD_VALUE_BUFFER
   // Used to debias several values at a time.
-  std::conditional_t<can_simd, xsimd::batch<T>, char> biasBuffer_;
+  std::conditional_t<can_simd, simd::xbatch<T>, char> biasBuffer_;
 #endif
 };
 
