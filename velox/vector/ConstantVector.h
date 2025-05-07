@@ -196,7 +196,7 @@ class ConstantVector final : public SimpleVector<T> {
   /// Loads a 256bit vector of data at the virtual byteOffset given
   /// Note this method is implemented on each vector type, but is intentionally
   /// not virtual for performance reasons
-  xsimd::batch<T> loadSIMDValueBufferAt(size_t /* byteOffset */) const {
+  simd::xbatch<T> loadSIMDValueBufferAt(size_t /* byteOffset */) const {
     VELOX_DCHECK(initialized_);
     return valueBuffer_;
   }
@@ -505,7 +505,7 @@ class ConstantVector final : public SimpleVector<T> {
 
 #ifdef VELOX_ENABLE_LOAD_SIMD_VALUE_BUFFER
   // This must be at end to avoid memory corruption.
-  std::conditional_t<can_simd, xsimd::batch<T>, char> valueBuffer_;
+  std::conditional_t<can_simd, simd::xbatch<T>, char> valueBuffer_;
 #endif
 };
 

@@ -120,13 +120,13 @@ std::unique_ptr<SimpleVector<uint64_t>> SequenceVector<T>::hashAll() const {
 
 #ifdef VELOX_ENABLE_LOAD_SIMD_VALUE_BUFFER
 template <typename T>
-xsimd::batch<T> SequenceVector<T>::loadSIMDValueBufferAt(
+simd::xbatch<T> SequenceVector<T>::loadSIMDValueBufferAt(
     size_t byteOffset) const {
   if constexpr (std::is_same_v<T, bool>) {
     throw std::runtime_error(
         "Sequence encoding only supports SIMD operations on integers");
   } else {
-    constexpr int kBatchSize = xsimd::batch<T>::size;
+    constexpr int kBatchSize = simd::xbatch<T>::size;
     auto startIndex = byteOffset / sizeof(T);
     if (checkLoadRange(startIndex, kBatchSize)) {
       return simd::setAll(valueAtFast(startIndex));

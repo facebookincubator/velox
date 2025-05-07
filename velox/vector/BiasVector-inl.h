@@ -114,7 +114,7 @@ typename SimpleVector<T>::TValueAt BiasVector<T>::valueAtFast(
 
 #ifdef VELOX_ENABLE_LOAD_SIMD_VALUE_BUFFER
 template <typename T>
-xsimd::batch<T> BiasVector<T>::loadSIMDValueBufferAt(size_t index) const {
+simd::xbatch<T> BiasVector<T>::loadSIMDValueBufferAt(size_t index) const {
   if constexpr (std::is_same_v<T, int64_t>) {
     switch (valueType_) {
       case TypeKind::INTEGER:

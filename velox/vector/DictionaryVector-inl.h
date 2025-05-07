@@ -158,10 +158,10 @@ std::unique_ptr<SimpleVector<uint64_t>> DictionaryVector<T>::hashAll() const {
 
 #ifdef VELOX_ENABLE_LOAD_SIMD_VALUE_BUFFER
 template <typename T>
-xsimd::batch<T> DictionaryVector<T>::loadSIMDValueBufferAt(
+simd::xbatch<T> DictionaryVector<T>::loadSIMDValueBufferAt(
     size_t byteOffset) const {
   if constexpr (can_simd) {
-    constexpr int N = xsimd::batch<T>::size;
+    constexpr int N = simd::xbatch<T>::size;
     alignas(xsimd::default_arch::alignment()) T tmp[N];
     auto startIndex = byteOffset / sizeof(T);
     for (int i = 0; i < N; ++i) {
