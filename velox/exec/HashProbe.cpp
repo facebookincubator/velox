@@ -1045,6 +1045,9 @@ RowVectorPtr HashProbe::getOutputInternal(bool toSpillOutput) {
           joinBridge_->probeFinished(!allProbeGroupFinished());
         } else {
           joinBridge_->probeFinished();
+          if (table_ != nullptr) {
+            table_->clear(true);
+          }
         }
         wakeupPeerOperators();
       }
