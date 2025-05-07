@@ -91,13 +91,23 @@ class StringFunctionsTest : public FunctionBaseTest {
       int stringVectorIndex = 0) {
     auto row = makeRowVector(args);
     auto stringVector = args[stringVectorIndex];
-    int refCountBeforeEval =
-        bufferRefCounts(stringVector->asFlatVector<StringView>());
+    auto flatStringArg = stringVector->asFlatVector<StringView>();
+
+    int refCountBeforeEval = bufferRefCounts(flatStringArg);
     auto result = evaluate<FlatVector<StringView>>(query, row);
 
-    int refCountAfterEval =
-        bufferRefCounts(stringVector->asFlatVector<StringView>());
-    EXPECT_EQ(refCountAfterEval, 2 * refCountBeforeEval) << "at " << query;
+    int refCountAfterEval = bufferRefCounts(flatStringArg);
+
+    int numNonNullBuffersInStringArg = 0;
+    for (const auto& buf : flatStringArg->stringBuffers()) {
+      if (buf != nullptr) {
+        numNonNullBuffersInStringArg++;
+      }
+    }
+
+    EXPECT_EQ(
+        refCountAfterEval, refCountBeforeEval + numNonNullBuffersInStringArg)
+        << "at " << query;
 
     return result;
   }
