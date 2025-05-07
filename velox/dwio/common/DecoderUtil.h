@@ -17,6 +17,7 @@
 #pragma once
 
 #include <algorithm>
+#include <cstring>
 #include "velox/common/memory/RawVector.h"
 #include "velox/common/process/ProcessBase.h"
 #include "velox/dwio/common/StreamUtil.h"
@@ -223,7 +224,7 @@ void fixedWidthScan(
                         kStep,
                         rawValues);
                   } else {
-                    simd::memcpy(
+                    std::memcpy(
                         rawValues + numValues,
                         buffer + firstRow - rowOffset,
                         sizeof(T) * kStep);

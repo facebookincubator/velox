@@ -14,6 +14,8 @@
  * limitations under the License.
  */
 
+#include <cstring>
+
 #include "velox/dwio/dwrf/reader/SelectiveStringDirectColumnReader.h"
 
 #include "velox/common/testutil/TestValue.h"
@@ -301,7 +303,7 @@ inline bool SelectiveStringDirectColumnReader::try8Consecutive(
     if (length > 16) {
       size_t copySize = bits::roundUp(length - 16, 16);
       VELOX_CHECK_LE(copySize, bufferEnd_ - data - 16);
-      simd::memcpy(rawStringBuffer_ + rawUsed + 16, data + 16, copySize);
+      std::memcpy(rawStringBuffer_ + rawUsed + 16, data + 16, copySize);
     }
     rawUsed += length;
     data += length;

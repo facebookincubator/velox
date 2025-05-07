@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+#include <cstring>
 #include "velox/common/memory/ByteStream.h"
 
 namespace facebook::velox {
@@ -144,7 +145,7 @@ void BufferInputStream::readBytes(uint8_t* bytes, int32_t size) {
   for (;;) {
     const int32_t availableBytes = current_->size - current_->position;
     const int32_t readBytes = std::min(availableBytes, size);
-    simd::memcpy(
+    std::memcpy(
         bytes + offset, current_->buffer + current_->position, readBytes);
     offset += readBytes;
     size -= readBytes;
@@ -244,7 +245,7 @@ void ByteOutputStream::appendStringView(std::string_view value) {
   for (;;) {
     const int64_t bytesFit =
         std::min(bytes - offset, current_->size - current_->position);
-    simd::memcpy(
+    std::memcpy(
         current_->buffer + current_->position, value.data() + offset, bytesFit);
     current_->position += bytesFit;
     offset += bytesFit;

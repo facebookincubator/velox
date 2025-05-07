@@ -22,6 +22,7 @@
 #include <folly/Bits.h>
 #include <folly/io/IOBuf.h>
 
+#include <cstring>
 #include <memory>
 
 namespace facebook::velox {
@@ -95,7 +96,7 @@ class BufferedOutputStream : public OutputStream {
     while (remaining > 0) {
       const int64_t copyLength =
           std::min(remaining, buffer_.size - buffer_.position);
-      simd::memcpy(
+      std::memcpy(
           buffer_.buffer + buffer_.position, s + count - remaining, copyLength);
       buffer_.position += copyLength;
       remaining -= copyLength;
