@@ -97,6 +97,9 @@ class TopNRowNumber : public Operator {
   // Decodes and potentially loads input if lazy vector.
   void prepareInput(RowVectorPtr& input);
 
+  // Loop to add each row to a partition or discard the row.
+  void processInputRowLoop(vector_size_t numInput);
+
   // Adds input row to a partition or discards the row.
   void processInputRow(vector_size_t index, TopRows& partition);
 
