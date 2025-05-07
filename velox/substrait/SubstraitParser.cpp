@@ -125,7 +125,7 @@ std::string SubstraitParser::makeNodeName(int node_id, int col_idx) {
 
 int SubstraitParser::getIdxFromNodeName(const std::string& nodeName) {
   // Get the position of "_" in the function name.
-  std::size_t pos = nodeName.find("_");
+  std::size_t pos = nodeName.find('_');
   if (pos == std::string::npos) {
     VELOX_FAIL("Invalid node name.");
   }
@@ -175,7 +175,7 @@ std::string SubstraitParser::mapToVeloxFunction(
 std::vector<std::string> SubstraitParser::getSubFunctionTypes(
     const std::string& substraitFunction) {
   // Get the position of ":" in the function name.
-  size_t pos = substraitFunction.find(":");
+  size_t pos = substraitFunction.find(':');
   // Get the input types.
   std::vector<std::string> types;
   if (pos == std::string::npos || pos == substraitFunction.size() - 1) {
@@ -183,7 +183,7 @@ std::vector<std::string> SubstraitParser::getSubFunctionTypes(
   }
   // Extract input types with delimiter.
   for (;;) {
-    const size_t endPos = substraitFunction.find("_", pos + 1);
+    const size_t endPos = substraitFunction.find('_', pos + 1);
     if (endPos == std::string::npos) {
       std::string typeName = substraitFunction.substr(pos + 1);
       if (typeName != "opt" && typeName != "req") {
