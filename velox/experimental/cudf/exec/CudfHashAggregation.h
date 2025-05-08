@@ -94,21 +94,27 @@ class CudfHashAggregation : public exec::Operator, public NvtxHelper {
       std::vector<column_index_t>& groupingKeyInputChannels,
       std::vector<column_index_t>& groupingKeyOutputChannels) const;
 
-  RowVectorPtr doGroupByAggregation(
+  CudfVectorPtr doGroupByAggregation(
+      std::unique_ptr<cudf::table> tbl,
+      std::vector<column_index_t> const& groupByKeys,
+      std::vector<std::unique_ptr<Aggregator>>& aggregators,
+      rmm::cuda_stream_view stream);
+  CudfVectorPtr doGlobalAggregation(
       std::unique_ptr<cudf::table> tbl,
       rmm::cuda_stream_view stream);
-  RowVectorPtr doGlobalAggregation(
+  CudfVectorPtr getDistinctKeys(
       std::unique_ptr<cudf::table> tbl,
+      std::vector<column_index_t> const& groupByKeys,
       rmm::cuda_stream_view stream);
-  RowVectorPtr getDistinctKeys(
-      std::unique_ptr<cudf::table> tbl,
-      rmm::cuda_stream_view stream);
+
+  CudfVectorPtr releaseAndResetPartialOutput();
 
   std::vector<column_index_t> groupingKeyInputChannels_;
   std::vector<column_index_t> groupingKeyOutputChannels_;
 
   std::shared_ptr<const core::AggregationNode> aggregationNode_;
   std::vector<std::unique_ptr<Aggregator>> aggregators_;
+  std::vector<std::unique_ptr<Aggregator>> intermediateAggregators_;
 
   // Partial aggregation is the first phase of aggregation. e.g. count(*) when
   // in partial phase will do a count_agg but in the final phase will do a sum
@@ -120,12 +126,25 @@ class CudfHashAggregation : public exec::Operator, public NvtxHelper {
   // aggregations
   const bool isDistinct_;
 
+  // Maximum memory usage for partial aggregation.
+  const int64_t maxPartialAggregationMemoryUsage_;
+  // Number of rows received in the input so far.
+  int64_t numInputRows_ = 0;
+
   bool finished_ = false;
 
   size_t numAggregates_;
   bool ignoreNullKeys_;
 
   std::vector<cudf_velox::CudfVectorPtr> inputs_;
+
+  // This is for partial aggregation to keep reducing the amount of memory it
+  // has to hold on to.
+  void computeIntermediateGroupbyPartial(CudfVectorPtr tbl);
+
+  void computeIntermediateDistinctPartial(CudfVectorPtr tbl);
+
+  CudfVectorPtr partialOutput_;
 };
 
 } // namespace facebook::velox::cudf_velox

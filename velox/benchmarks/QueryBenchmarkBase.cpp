@@ -116,6 +116,11 @@ DEFINE_int64(
     10 << 20,
     "Preferred output batch size in bytes");
 
+DEFINE_uint64(
+    max_partial_aggregation_memory,
+    10 << 20,
+    "Maximum memory usage for partial aggregation");
+
 DEFINE_int32(
     preferred_output_batch_rows,
     1024,
@@ -319,6 +324,8 @@ QueryBenchmarkBase::run(const TpchPlan& tpchPlan) {
           std::to_string(FLAGS_max_output_batch_rows);
       params.queryConfigs[cudf_velox::CudfFromVelox::kGpuBatchSizeRows] =
           std::to_string(FLAGS_cudf_gpu_batch_size_rows);
+      params.queryConfigs[core::QueryConfig::kMaxPartialAggregationMemory] =
+          std::to_string(FLAGS_max_partial_aggregation_memory);
       const int numSplitsPerFile = FLAGS_num_splits_per_file;
 
       bool noMoreSplits = false;
