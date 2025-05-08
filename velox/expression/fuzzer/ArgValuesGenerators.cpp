@@ -311,6 +311,28 @@ std::vector<core::TypedExprPtr> CastVarcharAndJsonArgValuesGenerator::generate(
   return inputExpressions;
 }
 
+std::vector<core::TypedExprPtr> URLArgValuesGenerator::generate(
+    const CallableSignature& signature,
+    const VectorFuzzer::Options& options,
+    FuzzerGenerator& rng,
+    ExpressionFuzzerState& state) {
+  populateInputTypesAndNames(signature, state);
+  std::vector<core::TypedExprPtr> inputExpressions{
+      signature.args.size(), nullptr};
+
+  const auto seed = rand<uint32_t>(rng);
+  const auto nullRatio = options.nullRatio;
+
+  // Only URL part of input should have URL input generation.
+  state.customInputGenerators_.emplace_back(
+      std::make_shared<fuzzer::URLInputGenerator>(
+          seed, signature.args[0], nullRatio));
+  inputExpressions[0] = std::make_shared<core::FieldAccessTypedExpr>(
+      signature.args[0], state.inputRowNames_[0]);
+
+  return inputExpressions;
+}
+
 std::vector<core::TypedExprPtr> TDigestArgValuesGenerator::generate(
     const CallableSignature& signature,
     const VectorFuzzer::Options& options,

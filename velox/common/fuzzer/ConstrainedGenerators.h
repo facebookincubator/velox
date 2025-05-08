@@ -480,6 +480,36 @@ class CastVarcharInputGenerator : public AbstractInputGenerator {
   std::string generateValidPrimitiveAsString();
 };
 
+class URLInputGenerator : public AbstractInputGenerator {
+ public:
+  URLInputGenerator(size_t seed, const TypePtr& type, double nullRatio);
+
+  ~URLInputGenerator() override;
+
+  variant generate() override;
+
+ private:
+  // Standard URL components
+  const std::string kProtocol = "https";
+  const std::string kDomain = "www.facebook.com";
+  const std::string kPort = "8080";
+  const std::string kPath = "/test";
+  const std::string kQuery = "a=1&b=2";
+  const std::string kFragment = "test";
+
+  // Mailto and chrome-extension URL components
+  const std::string kMailTo = "mailto:test@fb.com";
+  const std::string kMailSubject = "subject=Hello\%20from\%20Example";
+  const std::string kMailCC = "cc=sales@example.com";
+  const std::string kMailBCC = "bcc=manager@example.com";
+  const std::string kMailBody = "body=This\%20is\%20a\%20test\%20email";
+  const std::string kChromeExtension = "chrome-extension";
+  const std::string kChromeExtensionPath = "path/to/chrome/extension";
+  const std::string kChromeExtensionFile = "some.html";
+  const double kMailToRatio = 0.2;
+  const double kChromeExtensionRatio = 0.2;
+};
+
 class TDigestInputGenerator : public AbstractInputGenerator {
  public:
   TDigestInputGenerator(size_t seed, const TypePtr& type, double nullRatio);

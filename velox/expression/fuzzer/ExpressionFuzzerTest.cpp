@@ -61,6 +61,7 @@ using facebook::velox::fuzzer::FuzzerRunner;
 using facebook::velox::fuzzer::JsonExtractArgValuesGenerator;
 using facebook::velox::fuzzer::JsonParseArgValuesGenerator;
 using facebook::velox::fuzzer::TDigestArgValuesGenerator;
+using facebook::velox::fuzzer::URLArgValuesGenerator;
 using facebook::velox::test::ReferenceQueryRunner;
 
 int main(int argc, char** argv) {
@@ -160,10 +161,18 @@ int main(int argc, char** argv) {
           {"cast", std::make_shared<CastVarcharAndJsonArgValuesGenerator>()},
           {"json_parse", std::make_shared<JsonParseArgValuesGenerator>()},
           {"json_extract", std::make_shared<JsonExtractArgValuesGenerator>()},
+          {"parse_url", std::make_shared<URLArgValuesGenerator>()},
+          {"scale_tdigest",
+           std::make_shared<TDigestArgValuesGenerator>("scale_tdigest")},
+          {"url_encode", std::make_shared<URLArgValuesGenerator>()},
+          {"url_extract_host", std::make_shared<URLArgValuesGenerator>()},
+          {"url_extract_path", std::make_shared<URLArgValuesGenerator>()},
+          {"url_extract_query", std::make_shared<URLArgValuesGenerator>()},
+          {"url_extract_fragment", std::make_shared<URLArgValuesGenerator>()},
+          {"url_extract_protocol", std::make_shared<URLArgValuesGenerator>()},
           {"value_at_quantile",
            std::make_shared<TDigestArgValuesGenerator>("value_at_quantile")},
-          {"scale_tdigest",
-           std::make_shared<TDigestArgValuesGenerator>("scale_tdigest")}};
+      };
 
   std::shared_ptr<facebook::velox::memory::MemoryPool> rootPool{
       facebook::velox::memory::memoryManager()->addRootPool()};
