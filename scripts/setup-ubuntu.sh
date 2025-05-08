@@ -121,8 +121,8 @@ function install_build_prerequisites {
 function install_format_prerequisites {
   pip3 install regex black
   ${SUDO} apt install -y cmake-format
-  wget -O - https://apt.llvm.org/llvm-snapshot.gpg.key | ${SUDO} apt-key add -
-  ${SUDO} add-apt-repository "deb http://apt.llvm.org/$(lsb_release -cs)/ llvm-toolchain-$(lsb_release -cs)-18 main"
+  curl -fsSL https://apt.llvm.org/llvm-snapshot.gpg.key | ${SUDO} tee /etc/apt/trusted.gpg.d/llvm.asc > /dev/null
+  echo "deb http://apt.llvm.org/$(lsb_release -cs)/ llvm-toolchain-$(lsb_release -cs)-18 main" | ${SUDO} tee /etc/apt/sources.list.d/llvm.list
 
   ${SUDO} apt update
   ${SUDO} apt install -y clang-format-18
