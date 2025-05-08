@@ -184,13 +184,17 @@ size_t Base64::calculateEncodedSize(size_t inputSize, bool withPadding) {
 }
 
 // static
-void Base64::encode(std::string_view input, std::string& output) {
-  encodeImpl(input, kBase64Charset, true, output);
+std::string Base64::encode(std::string_view input, bool includePadding) {
+  std::string output;
+  encodeImpl(input, kBase64Charset, includePadding, output);
+  return output;
 }
 
 // static
-void Base64::encodeUrl(std::string_view input, std::string& output) {
-  encodeImpl(input, kBase64UrlCharset, true, output);
+std::string Base64::encodeUrl(std::string_view input, bool includePadding) {
+  std::string output;
+  encodeImpl(input, kBase64UrlCharset, includePadding, output);
+  return output;
 }
 
 // static

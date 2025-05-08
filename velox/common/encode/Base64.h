@@ -51,7 +51,7 @@ class Base64 {
   static std::string encode(const folly::IOBuf* inputBuffer);
 
   /// Encodes the 'input' string and writes Base64-encoded string in 'output'.
-  static void encode(std::string_view input, std::string& output);
+  static std::string encode(std::string_view input, bool includePadding);
 
   /// Encodes the 'input' string using URL encoding.
   static std::string encodeUrl(std::string_view input);
@@ -61,7 +61,7 @@ class Base64 {
 
   /// Encodes the 'input' string and writes the result to the 'output' using URL
   /// encoding.
-  static void encodeUrl(std::string_view input, std::string& output);
+  static std::string encodeUrl(std::string_view input, bool includePadding);
 
   /// Decodes the input Base64 encoded string.
   static std::string decode(std::string_view input);
