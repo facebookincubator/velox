@@ -44,7 +44,7 @@ def get_diff(file, formatted):
 class CppFormatter(str):
     def diff(self, commit):
         if commit == "":
-            return get_diff(self, util.run(f"clang-format-16 --style=file {self}")[1])
+            return get_diff(self, util.run(f"clang-format --style=file {self}")[1])
         else:
             return util.run(
                 f"{SCRIPTS}/git-clang-format -q --extensions='{EXTENSIONS}' --diff --style=file {commit} {self}"
@@ -52,7 +52,7 @@ class CppFormatter(str):
 
     def fix(self, commit):
         if commit == "":
-            return util.run(f"clang-format-16 -i --style=file {self}")[0] == 0
+            return util.run(f"clang-format -i --style=file {self}")[0] == 0
         else:
             return (
                 util.run(
