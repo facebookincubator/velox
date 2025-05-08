@@ -67,14 +67,16 @@ class Base64 {
   static std::string decode(std::string_view input);
 
   /// Decodes the base64-encoded string and writes the result to the 'output'.
-  static Status decode(std::string_view input, std::string& output);
+  static Status decode(std::string_view input, Expected<std::string>& output);
 
   /// Decodes the input Base64 URL encoded string.
   static std::string decodeUrl(std::string_view input);
 
   /// Decodes the 'input' string using URL encoding and writes the result to the
   /// 'output'
-  static Status decodeUrl(std::string_view input, std::string& output);
+  static Status decodeUrl(
+      std::string_view input,
+      Expected<std::string>& output);
 
  private:
   // Padding character used in encoding.
@@ -126,7 +128,7 @@ class Base64 {
   // Decodes the specified data using the provided reverse lookup table.
   static Status decodeImpl(
       std::string_view input,
-      std::string& output,
+      Expected<std::string>& output,
       const ReverseIndex& reverseIndex);
 
   VELOX_FRIEND_TEST(Base64Test, checksPadding);
