@@ -28,17 +28,16 @@ struct TDigestAccumulator {
   explicit TDigestAccumulator(HashStringAllocator* allocator)
       : digest_(StlAllocator<double>(allocator)) {}
 
-  void mergeWith(
-      StringView serialized,
-      HashStringAllocator* /*allocator*/,
-      std::vector<int16_t>& positions) {
+  void mergeWith(StringView serialized, HashStringAllocator* /*allocator*/) {
     if (serialized.empty()) {
       return;
     }
+    std::vector<int16_t> positions;
     digest_.mergeDeserialized(positions, serialized.data());
   }
 
-  int64_t serializedSize(std::vector<int16_t>& positions) {
+  int64_t serializedSize() {
+    std::vector<int16_t> positions;
     digest_.compress(positions);
     return digest_.serializedByteSize();
   }
@@ -95,7 +94,7 @@ class MergeTDigestAggregate : public exec::Aggregate {
         [&](TDigestAccumulator* accumulator,
             FlatVector<StringView>* result,
             vector_size_t index) {
-          auto size = accumulator->serializedSize(positions_);
+          auto size = accumulator->serializedSize();
           StringView serialized;
           if (StringView::isInline(size)) {
             std::string buffer(size, '\0');
@@ -134,7 +133,7 @@ class MergeTDigestAggregate : public exec::Aggregate {
       auto tracker = trackRowSize(group);
       clearNull(group);
 
-      mergeToAccumulator(group, row, positions_);
+      mergeToAccumulator(group, row);
     });
   }
 
@@ -161,7 +160,7 @@ class MergeTDigestAggregate : public exec::Aggregate {
       }
 
       clearNull(group);
-      mergeToAccumulator(group, row, positions_);
+      mergeToAccumulator(group, row);
     });
   }
 
@@ -181,13 +180,10 @@ class MergeTDigestAggregate : public exec::Aggregate {
   }
 
  private:
-  void mergeToAccumulator(
-      char* group,
-      const vector_size_t row,
-      std::vector<int16_t>& positions) {
+  void mergeToAccumulator(char* group, const vector_size_t row) {
     auto serialized = decodedTDigest_.valueAt<StringView>(row);
     TDigestAccumulator* accumulator = value<TDigestAccumulator>(group);
-    accumulator->mergeWith(serialized, allocator_, positions);
+    accumulator->mergeWith(serialized, allocator_);
   }
 
   template <typename ExtractResult, typename ExtractFunc>
@@ -220,7 +216,6 @@ class MergeTDigestAggregate : public exec::Aggregate {
     }
   }
   DecodedVector decodedTDigest_;
-  std::vector<int16_t> positions_;
 };
 
 inline std::unique_ptr<exec::Aggregate> createMergeTDigestAggregate(
