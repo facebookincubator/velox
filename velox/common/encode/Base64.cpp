@@ -309,12 +309,15 @@ std::string Base64::encode(const folly::IOBuf* inputBuffer) {
 
 // static
 std::string Base64::decode(std::string_view input) {
-  std::string output;
+  Expected<std::string> output;
   auto status = decodeImpl(input, output, kBase64ReverseIndexTable);
   if (!status.ok()) {
     VELOX_USER_FAIL(status.message());
   }
-  return output;
+  if (output.hasError()) {
+    VELOX_USER_FAIL(output.error().message());
+  }
+  return output.value();
 }
 
 // static
@@ -331,7 +334,7 @@ Expected<uint8_t> Base64::base64ReverseLookup(
 }
 
 // static
-Status Base64::decode(std::string_view input, std::string& output) {
+Status Base64::decode(std::string_view input, Expected<std::string>& output) {
   return decodeImpl(input, output, kBase64ReverseIndexTable);
 }
 
@@ -384,9 +387,9 @@ Expected<size_t> Base64::calculateDecodedSize(
 // static
 Status Base64::decodeImpl(
     std::string_view input,
-    std::string& output,
+    Expected<std::string>& output,
     const ReverseIndex& reverseIndex) {
-  output.clear();
+  std::string outputString;
   if (input.empty()) {
     return Status::OK();
   }
@@ -396,7 +399,7 @@ Status Base64::decodeImpl(
   if (decodedSize.hasError()) {
     return decodedSize.error();
   }
-  output.reserve(decodedSize.value());
+  outputString.reserve(decodedSize.value());
   const char* inputPointer = input.data();
   // Handle full groups of 4 characters
   for (; inputSize > 4; inputSize -= 4, inputPointer += 4) {
@@ -412,9 +415,9 @@ Status Base64::decodeImpl(
       }
       decodedBlock |= reverseLookupValue.value() << (18 - 6 * i);
     }
-    output.push_back(static_cast<char>((decodedBlock >> 16) & 0xFF));
-    output.push_back(static_cast<char>((decodedBlock >> 8) & 0xFF));
-    output.push_back(static_cast<char>(decodedBlock & 0xFF));
+    outputString.push_back(static_cast<char>((decodedBlock >> 16) & 0xFF));
+    outputString.push_back(static_cast<char>((decodedBlock >> 8) & 0xFF));
+    outputString.push_back(static_cast<char>(decodedBlock & 0xFF));
   }
 
   // Handle the last 2-4 characters. This is similar to the above, but the
@@ -431,7 +434,7 @@ Status Base64::decodeImpl(
       }
       decodedBlock |= reverseLookupValue.value() << (18 - 6 * i);
     }
-    output.push_back(static_cast<char>((decodedBlock >> 16) & 0xFF));
+    outputString.push_back(static_cast<char>((decodedBlock >> 16) & 0xFF));
 
     if (inputSize > 2) {
       auto reverseLookupValue =
@@ -440,7 +443,7 @@ Status Base64::decodeImpl(
         return reverseLookupValue.error();
       }
       decodedBlock |= reverseLookupValue.value() << 6;
-      output.push_back(static_cast<char>((decodedBlock >> 8) & 0xFF));
+      outputString.push_back(static_cast<char>((decodedBlock >> 8) & 0xFF));
 
       if (inputSize > 3) {
         reverseLookupValue = base64ReverseLookup(inputPointer[3], reverseIndex);
@@ -448,11 +451,11 @@ Status Base64::decodeImpl(
           return reverseLookupValue.error();
         }
         decodedBlock |= reverseLookupValue.value();
-        output.push_back(static_cast<char>(decodedBlock & 0xFF));
+        outputString.push_back(static_cast<char>(decodedBlock & 0xFF));
       }
     }
   }
-
+  output = outputString;
   return Status::OK();
 }
 
@@ -467,18 +470,23 @@ std::string Base64::encodeUrl(std::string_view input) {
 }
 
 // static
-Status Base64::decodeUrl(std::string_view input, std::string& output) {
+Status Base64::decodeUrl(
+    std::string_view input,
+    Expected<std::string>& output) {
   return decodeImpl(input, output, kBase64UrlReverseIndexTable);
 }
 
 // static
 std::string Base64::decodeUrl(std::string_view input) {
-  std::string output;
+  Expected<std::string> output;
   auto status = decodeImpl(input, output, kBase64UrlReverseIndexTable);
   if (!status.ok()) {
     VELOX_USER_FAIL(status.message());
   }
-  return output;
+  if (output.hasError()) {
+    VELOX_USER_FAIL(output.error().message());
+  }
+  return output.value();
 }
 
 } // namespace facebook::velox::encoding
