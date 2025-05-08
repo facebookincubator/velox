@@ -17,12 +17,12 @@
 #include "velox/functions/lib/Re2Functions.h"
 #include "velox/functions/prestosql/StringFunctions.h"
 #include "velox/functions/prestosql/URLFunctions.h"
-#include "velox/functions/sparksql/CharVarcharUtils.h"
 #include "velox/functions/sparksql/ConcatWs.h"
 #include "velox/functions/sparksql/MaskFunction.h"
 #include "velox/functions/sparksql/Split.h"
 #include "velox/functions/sparksql/String.h"
 #include "velox/functions/sparksql/StringToMap.h"
+#include "velox/functions/sparksql/VarcharTypeWriteSideCheck.h"
 
 namespace facebook::velox::functions {
 void registerSparkStringFunctions(const std::string& prefix) {

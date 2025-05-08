@@ -13,23 +13,34 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#pragma once
-
-#include <string>
-
-#include "velox/expression/StringWriter.h"
-#include "velox/functions/lib/string/StringImpl.h"
+#include "velox/functions/sparksql/CharVarcharUtils.h"
 
 namespace facebook::velox::functions::sparksql {
 
-/// Trims trailing ASCII space characters (0x20) from ``inputStr``
-/// to ensure its length does not exceed the specified Unicode string length
-/// ``limit`` in characters. Throws an exception if the string still exceeds
-/// `limit` after trimming.
 void trimTrailingSpaces(
     exec::StringWriter& output,
     StringView inputStr,
     int32_t numChars,
-    int32_t limit);
+    int32_t limit) {
+  const auto numTailSpacesToTrim = numChars - limit;
+  VELOX_USER_CHECK_GT(numTailSpacesToTrim, 0);
+
+  auto curPos = inputStr.end() - 1;
+  const auto trimTo = inputStr.end() - numTailSpacesToTrim;
+
+  while (curPos >= trimTo && stringImpl::isAsciiSpace(*curPos)) {
+    curPos--;
+  }
+  // Get the length of the trimmed string in characters.
+  const auto trimmedSize = numChars - std::distance(curPos + 1, inputStr.end());
+
+  VELOX_USER_CHECK_LE(
+      trimmedSize,
+      limit,
+      "Exceeds char/varchar type length limitation: {}",
+      limit);
+  output.setNoCopy(
+      StringView(inputStr.data(), std::distance(inputStr.begin(), curPos + 1)));
+}
 
 } // namespace facebook::velox::functions::sparksql

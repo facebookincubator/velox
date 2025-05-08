@@ -430,20 +430,19 @@ String Functions
 
 .. spark:function:: varchar_type_write_side_check(string, limit) -> varchar
 
-    Removes trailing space characters (ASCII 32) that exceed the maximum Unicode string length ``limit`` in characters.
-    This function will trim at most the length of ``string`` in characters - ``limit`` space characters from the end of this string.
-    Throws exception when the string still exceeds ``limit`` after trimming trailing spaces or when ``limit`` is negative.
-    Note: This function is not directly callable in SQL, but internally used by SparkSQL for length check when writing to
-    varchar type columns. ``limit=0`` is technically valid for this function but SparkSQL does not support ``VARCHAR(0)``
-    in DDL. This case exists primarily for internal consistency. ::
+    Removes trailing space characters (ASCII 32) that exceed the length ``limit`` from the end of input ``string``. ``limit`` is the maximum length of characters that can be allowed.
+    Throws exception when ``string`` still exceeds ``limit`` after trimming trailing spaces or when ``limit`` is negative.
+    When ``limit=0``, this function returns an empty string if the input ``string`` is empty or contains only spaces, but throws an exception for any other input.
+    Spark SQL itself rejects ``VARCHAR(0)`` in DDL statements so this case will not be encountered.
+    Note: This function is not directly callable in Spark SQL, but internally used for length check when writing string type columns. ::
 
         -- Example SparkSQL usage that triggers the function (function is not called directly in SQL).
         create table src(id string) stored as parquet;
         create table tgt(id varchar(3)) stored as parquet;
         insert into src values ('abc '); -- ascii string with characters length of 4.
-        insert into tgt select id from src where id in('abc '); -- calls: varchar_type_write_side_check("abc ", 3) → "abc"
+        insert into tgt select id from src where id in('abc '); -- calls: varchar_type_write_side_check("abc ", 3) -- "abc"
         insert into src values ('abcd'); -- ascii string with characters length of 4.
-        insert into tgt select id from src where id in('abcd'); -- calls: varchar_type_write_side_check("abcd", 3) → throws exception
+        insert into tgt select id from src where id in('abcd'); -- calls: varchar_type_write_side_check("abcd", 3) -- throws exception
         insert into src values ('中国'); -- Unicode string with characters length of 2.
         insert into tgt select id from src where id in('中国'); -- "中国"
         insert into src values ('中文中国'); -- Unicode string with characters length of 4.
