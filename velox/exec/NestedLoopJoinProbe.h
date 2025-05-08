@@ -259,8 +259,7 @@ class NestedLoopJoinProbe : public Operator {
     return isSingleBuildVector() && buildVectors_->front()->size() == 1;
   }
 
-  // Check if this is a LeftSemiProjectJoin with no join condition and non-empty
-  // build side
+  // Check if this is a LeftSemiProjectJoin with no join condition.
   bool isLeftSemiProjectNoCondition() const {
     return joinCondition_ == nullptr && isLeftSemiProjectJoin(joinType_);
   }
