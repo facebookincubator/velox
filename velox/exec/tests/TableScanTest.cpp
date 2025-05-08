@@ -1392,6 +1392,92 @@ TEST_F(TableScanTest, missingColumnsInRepeatedColumns) {
       .assertResults(expected);
 }
 
+TEST_F(TableScanTest, structMatchByName) {
+  const auto assertSelectUseColumnNames =
+      [this](
+          const RowTypePtr& outputType,
+          const std::string& sql,
+          const std::string& filePath,
+          const std::string& remainingFilter = "") {
+        const auto plan =
+            PlanBuilder().tableScan(outputType, {}, remainingFilter).planNode();
+        AssertQueryBuilder(plan, duckDbQueryRunner_)
+            .connectorSessionProperty(
+                kHiveConnectorId,
+                connector::hive::HiveConfig::kOrcUseColumnNamesSession,
+                "true")
+            .split(makeHiveConnectorSplit(filePath))
+            .assertResults(sql);
+      };
+
+  std::vector<int64_t> values = {2};
+  const auto id = makeFlatVector<int64_t>(values);
+  const auto name = makeRowVector(
+      {"first", "last"},
+      {
+          makeFlatVector<std::string>({"Janet"}),
+          makeFlatVector<std::string>({"Jones"}),
+      });
+  const auto address = makeFlatVector<std::string>({"567 Maple Drive"});
+  auto vector = makeRowVector({"id", "name", "address"}, {id, name, address});
+
+  auto file = TempFilePath::create();
+  writeToFile(file->getPath(), {vector});
+
+  // Add one non-existing subfield 'middle' to the 'name' field and rename filed
+  // 'address'.
+  auto rowType =
+      ROW({"id", "name", "email"},
+          {BIGINT(),
+           ROW({"first", "middle", "last"}, {VARCHAR(), VARCHAR(), VARCHAR()}),
+           VARCHAR()});
+  assertSelectUseColumnNames(
+      rowType, "SELECT 2, ('Janet', null, 'Jones'), null", file->getPath());
+
+  // Filter pushdown on the non-existing field.
+  createDuckDbTable({vector});
+  assertSelectUseColumnNames(
+      rowType,
+      "SELECT * from tmp where false",
+      file->getPath(),
+      "not(is_null(name.middle))");
+
+  // Deletion of one subfield from the 'name' field.
+  rowType =
+      ROW({"id", "name", "address"},
+          {BIGINT(), ROW({"full"}, {VARCHAR()}), VARCHAR()});
+  assertSelectUseColumnNames(
+      rowType, "SELECT 2, row(null), '567 Maple Drive'", file->getPath());
+
+  // Filter pushdown on the non-existing subfield.
+  assertSelectUseColumnNames(
+      rowType,
+      "SELECT * from tmp where false",
+      file->getPath(),
+      "not(is_null(name.full))");
+
+  // No subfield in the 'name' field.
+  rowType = ROW({"id", "name", "address"}, {BIGINT(), ROW({}, {}), VARCHAR()});
+  const auto op = PlanBuilder()
+                      .startTableScan()
+                      .outputType(rowType)
+                      .dataColumns(rowType)
+                      .endTableScan()
+                      .planNode();
+  const auto split = makeHiveConnectorSplit(file->getPath());
+  const auto result =
+      AssertQueryBuilder(op)
+          .connectorSessionProperty(
+              kHiveConnectorId,
+              connector::hive::HiveConfig::kOrcUseColumnNamesSession,
+              "true")
+          .split(split)
+          .copyResults(pool());
+  const auto rows = result->as<RowVector>();
+  const auto expected = makeRowVector(ROW({}, {}), 1);
+  facebook::velox::test::assertEqualVectors(expected, rows->childAt(1));
+}
+
 // Tests queries that use Lazy vectors with multiple layers of wrapping.
 TEST_F(TableScanTest, constDictLazy) {
   vector_size_t size = 1'000;

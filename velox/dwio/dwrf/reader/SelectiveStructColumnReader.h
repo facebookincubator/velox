@@ -29,12 +29,14 @@ class SelectiveStructColumnReaderBase
       const std::shared_ptr<const dwio::common::TypeWithId>& fileType,
       DwrfParams& params,
       common::ScanSpec& scanSpec,
+      bool useColumnNames,
       bool isRoot = false)
       : dwio::common::SelectiveStructColumnReaderBase(
             requestedType,
             fileType,
             params,
             scanSpec,
+            useColumnNames,
             isRoot),
         rowsPerRowGroup_(formatData_->rowsPerRowGroup().value()) {
     VELOX_CHECK_EQ(fileType_->id(), fileType->id(), "working on the same node");
@@ -85,6 +87,7 @@ class SelectiveStructColumnReader : public SelectiveStructColumnReaderBase {
       const std::shared_ptr<const dwio::common::TypeWithId>& fileType,
       DwrfParams& params,
       common::ScanSpec& scanSpec,
+      bool useColumnNames,
       bool isRoot = false);
 
  private:
