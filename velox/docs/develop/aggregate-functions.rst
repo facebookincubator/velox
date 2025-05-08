@@ -913,7 +913,7 @@ unique pointers. Below is an example.
         return std::make_unique<SimpleAggregateAdapter<SimpleArrayAggAggregate>>(
             step, argTypes, resultType);
       });
-}
+  }
 
 
 Use FunctionSignatureBuilder to create FunctionSignature instances which
@@ -1045,7 +1045,7 @@ Aggregate functions use memory to store intermediate results in the
 accumulators. They allocate memory from an arena (:doc:`HashStringAllocator <arena>` class).
 
 array_agg and ValueList
-~~~~~~~~~~~~~~~~~~~~~~~
+^^^^^^^^^^^^^^^^^^^^^^^
 
 StlAllocator is an STL-compatible allocator backed by HashStringAllocator that
 can be used with STL containers. For example, one can define an std::vector
@@ -1167,7 +1167,7 @@ arena and requires the user to explicitly call the free
 (HashStringAllocator*) method.
 
 min, max, and SingleValueAccumulator
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 :func:`min` and :func:`max` functions store a single value in the accumulator
 (the current min or max value). They use SingleValueAccumulator to store
@@ -1182,7 +1182,7 @@ This accumulator is also used in the implementation of the :func:`arbitrary`
 aggregate function which stores the first value in the accumulator.
 
 set_agg, set_union, Strings and AddressableNonNullValueList
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 :func:`set_agg` function accumulates a set of unique values into an F14FastSet
 configured to allocate memory from the arena via AlignedStlAllocator.
@@ -1287,7 +1287,7 @@ Both :func:`set_agg` and :func:`set_union` functions are implemented using
 SetAccumulator.
 
 map_agg, map_union, and MapAccumulator
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 :func:`map_agg` function accumulates keys and values into a map. It discards
 duplicate keys and keeps only one value for each unique key. Map_agg uses
@@ -1325,7 +1325,7 @@ SingleValueAccumulator, Strings, AddressableNonNullValueList and F14
 containers to put together an accumulator that uses memory efficiently.
 
 Tracking Memory Usage
-~~~~~~~~~~~~~~~~~~~~~
+^^^^^^^^^^^^^^^^^^^^^
 
 Aggregation operator needs to know how much memory is used for each group.
 For example, this information is used to decide how many and which rows to

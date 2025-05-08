@@ -11,9 +11,11 @@ to validate the consistency of the results. It works as follows:
    and the other is over TableScanNode as the alter plan.
 3. Query Execution: Executes those equivalent query plans using the generated data and asserts that the results are
    consistent across different plans.
+
   i. Execute the base plan, compare the result with the reference (DuckDB or Presto) and use it as the expected result.
   #. Execute the alter plan multiple times with and without spill, and compare each result with the
      expected result.
+
 4. Iteration: This process is repeated multiple times to ensure reliability and robustness.
 
 How to run
