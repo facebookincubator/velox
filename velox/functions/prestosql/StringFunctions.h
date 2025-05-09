@@ -671,5 +671,4 @@ struct XxHash64StringFunction {
     result = XXH64(input.data(), input.size(), 0);
   }
 };
-
 } // namespace facebook::velox::functions

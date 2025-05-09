@@ -34,6 +34,18 @@
 namespace facebook::velox::functions::stringImpl {
 using namespace stringCore;
 
+namespace {
+inline bool isAlphaUtf8(utf8proc_int32_t cp) {
+  auto category = utf8proc_category(cp);
+  return (category >= UTF8PROC_CATEGORY_LU && category <= UTF8PROC_CATEGORY_LO);
+}
+
+inline bool isSpaceUtf8(utf8proc_int32_t cp) {
+  auto category = utf8proc_category(cp);
+  return (category >= UTF8PROC_CATEGORY_ZS && category <= UTF8PROC_CATEGORY_ZP);
+}
+} // namespace
+
 /// Perform upper for a UTF8 string
 template <bool ascii, typename TOutString, typename TInString>
 FOLLY_ALWAYS_INLINE bool upper(TOutString& output, const TInString& input) {
@@ -671,6 +683,78 @@ FOLLY_ALWAYS_INLINE void pad(
       output.data() + paddingOffset + fullPadCopies * padString.size(),
       padString.data(),
       padPrefixByteLength);
+}
+
+// Converts the first character of each word in the input string to uppercase
+// The implementation logic is taken from
+// https://github.com/apache/hive/blob/master/ql/src/java/org/apache/hadoop/hive/ql/udf/generic/GenericUDFInitCap.java.
+template <bool isAscii, typename TOutString, typename TInString>
+FOLLY_ALWAYS_INLINE bool initcap(
+    TOutString& outputStr,
+    const TInString& inputStr) {
+  if constexpr (isAscii) {
+    outputStr.resize(inputStr.size());
+    const char* inputChars = inputStr.data();
+    char* outputChars = outputStr.data();
+
+    bool isStartOfWord = true;
+
+    for (size_t index = 0; index < inputStr.size(); ++index) {
+      char currentChar = inputChars[index];
+
+      if (std::isspace(static_cast<unsigned char>(currentChar))) {
+        isStartOfWord = true;
+        outputChars[index] = currentChar;
+      } else if (
+          isStartOfWord &&
+          std::isalpha(static_cast<unsigned char>(currentChar))) {
+        outputChars[index] =
+            std::toupper(static_cast<unsigned char>(currentChar));
+        isStartOfWord = false;
+      } else {
+        outputChars[index] =
+            std::tolower(static_cast<unsigned char>(currentChar));
+      }
+    }
+    return true;
+  } else {
+    const uint8_t* inputBytes =
+        reinterpret_cast<const uint8_t*>(inputStr.data());
+    const uint8_t* inputEnd = inputBytes + inputStr.size();
+    outputStr.resize(inputStr.size() * 4);
+    uint8_t* outputBytes = reinterpret_cast<uint8_t*>(outputStr.data());
+
+    bool isStartOfWord = true;
+
+    while (inputBytes < inputEnd) {
+      utf8proc_int32_t originalCharCode;
+      auto numBytesRead = utf8proc_iterate(
+          inputBytes, inputEnd - inputBytes, &originalCharCode);
+      if (numBytesRead < 0) {
+        return false;
+      }
+
+      utf8proc_int32_t capitalizedCharCode;
+
+      if (isSpaceUtf8(originalCharCode)) {
+        isStartOfWord = true;
+        capitalizedCharCode = originalCharCode;
+      } else if (isStartOfWord && isAlphaUtf8(originalCharCode)) {
+        capitalizedCharCode = utf8proc_toupper(originalCharCode);
+        isStartOfWord = false;
+      } else {
+        capitalizedCharCode = utf8proc_tolower(originalCharCode);
+      }
+
+      auto numBytesWritten =
+          utf8proc_encode_char(capitalizedCharCode, outputBytes);
+      outputBytes += numBytesWritten;
+      inputBytes += numBytesRead;
+    }
+
+    outputStr.resize(reinterpret_cast<char*>(outputBytes) - outputStr.data());
+    return true;
+  }
 }
 
 } // namespace facebook::velox::functions::stringImpl

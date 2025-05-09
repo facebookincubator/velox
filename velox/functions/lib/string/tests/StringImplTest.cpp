@@ -60,6 +60,49 @@ class StringImplTest : public testing::Test {
         {"АБВГДЕЖЗИЙКЛМНОПРСТУФХЦЧШЩЪЫЬЭЮЯ",
          "абвгдежзийклмнопрстуфхцчшщъыьэюя"}};
   }
+
+  static std::vector<std::tuple<std::string, std::string>>
+  getInitcapUnicodeTestData() {
+    return {
+        {"àáâãäåæçèéêëìíîïðñòóôõöøùúûüýþ", "Àáâãäåæçèéêëìíîïðñòóôõöøùúûüýþ"},
+        {"αβγδεζηθικλμνξοπρςστυφχψ", "Αβγδεζηθικλμνξοπρςστυφχψ"},
+        {"абвгдежзийклмнопрстуфхцчшщъыьэюя",
+         "Абвгдежзийклмнопрстуфхцчшщъыьэюя"},
+        {"hello world", "Hello World"},
+        {"HELLO WORLD", "Hello World"},
+        {"1234", "1234"},
+        {"", ""},
+        {"élève très-intelligent", "Élève Très-intelligent"},
+        {"mañana-por_la_tarde!", "Mañana-por_la_tarde!"},
+        {"добро-пожаловать.тест", "Добро-пожаловать.тест"},
+        {"çalışkan öğrenci@üniversite.tr", "Çalışkan Öğrenci@üniversite.tr"},
+        {"emoji😊test🚀case", "Emoji😊test🚀case"},
+        {"тест@пример.рф", "Тест@пример.рф"}};
+  }
+
+  static std::vector<std::tuple<std::string, std::string>>
+  getInitcapAsciiTestData() {
+    return {
+        {"abcdefg", "Abcdefg"},
+        {"ABCDEFG", "Abcdefg"},
+        {"a B c D e F g", "A B C D E F G"},
+        {"hello world", "Hello World"},
+        {"HELLO WORLD", "Hello World"},
+        {"1234", "1234"},
+        {"", ""},
+        {"urna.Ut@egetdictumplacerat.edu", "Urna.ut@egetdictumplacerat.edu"},
+        {"nibh.enim@egestas.ca", "Nibh.enim@egestas.ca"},
+        {"in@Donecat.ca", "In@donecat.ca"},
+        {"sodales@blanditviverraDonec.ca", "Sodales@blanditviverradonec.ca"},
+        {"sociis.natoque.penatibus@vitae.org",
+         "Sociis.natoque.penatibus@vitae.org"},
+        {"john_doe-123@example-site.com", "John_doe-123@example-site.com"},
+        {"MIXED.case-EMAIL_42@domain.NET", "Mixed.case-email_42@domain.net"},
+        {"...weird..case@@", "...Weird..case@@"},
+        {"user-name+filter@sub.mail.org", "User-name+filter@sub.mail.org"},
+        {"CAPS_LOCK@DOMAIN.COM", "Caps_lock@domain.com"},
+        {"__init__.py@example.dev", "__Init__.py@example.dev"}};
+  }
 };
 
 TEST_F(StringImplTest, upperAscii) {
@@ -838,4 +881,26 @@ TEST_F(StringImplTest, isAscii) {
   memcpy(&s[0], alpha, strlen(alpha));
   ASSERT_FALSE(isAscii(s.data(), strlen(alpha)));
   ASSERT_FALSE(isAscii(s.data(), s.size()));
+}
+
+TEST_F(StringImplTest, initcapUnicode) {
+  for (const auto& testCase : getInitcapUnicodeTestData()) {
+    auto input = StringView(std::get<0>(testCase));
+    auto& expectedInitcap = std::get<1>(testCase);
+
+    std::string initcapOutput;
+    initcap<false>(initcapOutput, input);
+    ASSERT_EQ(initcapOutput, expectedInitcap);
+  }
+}
+
+TEST_F(StringImplTest, initcapAscii) {
+  for (const auto& testCase : getInitcapAsciiTestData()) {
+    auto input = StringView(std::get<0>(testCase));
+    auto& expectedInitCap = std::get<1>(testCase);
+
+    std::string initcapOutput;
+    initcap<true>(initcapOutput, input);
+    ASSERT_EQ(initcapOutput, expectedInitCap);
+  }
 }
