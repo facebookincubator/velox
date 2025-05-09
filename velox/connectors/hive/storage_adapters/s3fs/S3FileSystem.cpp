@@ -96,10 +96,25 @@ std::shared_ptr<Aws::Auth::AWSCredentialsProvider> getCredentialsProviderByName(
   });
 }
 
+bool shouldRetryRequest(
+    Aws::Client::AWSError<Aws::S3::S3Errors>& error,
+    uint32_t retries,
+    uint32_t maxErrorRetries) {
+  if (retries < maxErrorRetries &&
+      (error.ShouldRetry() ||
+       error.GetErrorType() == Aws::S3::S3Errors::UNKNOWN)) {
+    return true;
+  }
+  return false;
+}
+
 class S3ReadFile final : public ReadFile {
  public:
-  S3ReadFile(std::string_view path, Aws::S3::S3Client* client)
-      : client_(client) {
+  S3ReadFile(
+      std::string_view path,
+      Aws::S3::S3Client* client,
+      int32_t maxClientRetries)
+      : client_(client), maxClientRetries_(maxClientRetries) {
     getBucketAndKeyFromPath(path, bucket_, key_);
   }
 
@@ -216,11 +231,24 @@ class S3ReadFile final : public ReadFile {
         AwsWriteableStreamFactory(position, length));
     RECORD_METRIC_VALUE(kMetricS3ActiveConnections);
     RECORD_METRIC_VALUE(kMetricS3GetObjectCalls);
-    auto outcome = client_->GetObject(request);
-    if (!outcome.IsSuccess()) {
+
+    Aws::S3::Model::GetObjectOutcome outcome;
+    bool shouldRetry = true;
+    uint32_t retries = 0;
+
+    while (shouldRetry) {
+      outcome = client_->GetObject(request);
+      if (outcome.IsSuccess()) {
+        break;
+      }
+      auto error = outcome.GetError();
+      auto s3ClientRetryCount = outcome.GetRetryCount();
       RECORD_METRIC_VALUE(kMetricS3GetObjectErrors);
+      retries += s3ClientRetryCount > 0 ? s3ClientRetryCount : 1;
+      shouldRetry = shouldRetryRequest(error, retries, maxClientRetries_);
     }
-    RECORD_METRIC_VALUE(kMetricS3GetObjectRetries, outcome.GetRetryCount());
+
+    RECORD_METRIC_VALUE(kMetricS3GetObjectRetries, retries);
     RECORD_METRIC_VALUE(kMetricS3ActiveConnections, -1);
     VELOX_CHECK_AWS_OUTCOME(outcome, "Failed to get S3 object", bucket_, key_);
   }
@@ -229,6 +257,7 @@ class S3ReadFile final : public ReadFile {
   std::string bucket_;
   std::string key_;
   int64_t length_ = -1;
+  int32_t maxClientRetries_;
 };
 
 Aws::Utils::Logging::LogLevel inferS3LogLevel(std::string_view logLevel) {
@@ -690,6 +719,10 @@ class S3FileSystem::Impl {
 
     auto credentialsProvider = getCredentialsProvider(s3Config);
 
+    if (s3Config.maxClientRetries().has_value()) {
+      maxClientRetries_ = s3Config.maxClientRetries().value();
+    }
+
     client_ = std::make_shared<Aws::S3::S3Client>(
         credentialsProvider, nullptr /* endpointProvider */, clientConfig);
     ++fileSystemCount;
@@ -837,8 +870,13 @@ class S3FileSystem::Impl {
     return getAwsInstance()->getLogPrefix();
   }
 
+  int32_t getMaxClientRetries() const {
+    return maxClientRetries_;
+  }
+
  private:
   std::shared_ptr<Aws::S3::S3Client> client_;
+  int32_t maxClientRetries_;
 };
 
 S3FileSystem::S3FileSystem(
@@ -861,7 +899,8 @@ std::unique_ptr<ReadFile> S3FileSystem::openFileForRead(
     std::string_view s3Path,
     const FileOptions& options) {
   const auto path = getPath(s3Path);
-  auto s3file = std::make_unique<S3ReadFile>(path, impl_->s3Client());
+  auto s3file = std::make_unique<S3ReadFile>(
+      path, impl_->s3Client(), impl_->getMaxClientRetries());
   s3file->initialize(options);
   return s3file;
 }
