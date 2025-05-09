@@ -15,6 +15,7 @@
  */
 
 #include <fmt/format.h>
+#include <folly/Preprocessor.h>
 #include <gflags/gflags.h>
 #include <nvrtc.h>
 #include "velox/experimental/wave/common/Cuda.h"
@@ -41,6 +42,9 @@ DEFINE_int32(
 #ifndef VELOX_OSS_BUILD
 #include "velox/facebook/NvrtcUtil.h"
 #endif
+
+// FIXME: Use FOLLY_PP_STRINGIZE_MACRO when available.
+#define PP_STRINGIZE_MACRO(x) FOLLY_PP_STRINGIZE(x)
 
 namespace facebook::velox::wave {
 
@@ -92,9 +96,10 @@ void addFlag(
 
 #ifdef VELOX_OSS_BUILD
 void getDefaultNvrtcOptions(std::vector<std::string>& data) {
-  constexpr const char* kUsrLocalCuda = "/usr/local/cuda/include";
-  LOG(INFO) << "Using " << kUsrLocalCuda;
-  addFlag("-I", kUsrLocalCuda, strlen(kUsrLocalCuda), data);
+  constexpr const char* kIncludePath =
+      PP_STRINGIZE_MACRO(VELOX_WAVE_NVRTC_INCLUDE_PATH);
+  LOG(INFO) << "Using " << kIncludePath;
+  addFlag("-I", kIncludePath, strlen(kIncludePath), data);
 }
 #endif
 
