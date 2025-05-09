@@ -94,8 +94,9 @@ class MergeTDigestAggregate : public exec::Aggregate {
         flatResult,
         [&](TDigestAccumulator* accumulator,
             FlatVector<StringView>* result,
-            vector_size_t index) {
-          auto size = accumulator->serializedSize(positions_);
+            vector_size_t index,
+            std::vector<int16_t>& positions) {
+          auto size = accumulator->serializedSize(positions);
           StringView serialized;
           if (StringView::isInline(size)) {
             std::string buffer(size, '\0');
@@ -204,7 +205,8 @@ class MergeTDigestAggregate : public exec::Aggregate {
       BufferPtr& nulls = result->mutableNulls(result->size());
       rawNulls = nulls->asMutable<uint64_t>();
     }
-
+    // Create local variable in extract just in case for thread safety.
+    std::vector<int16_t> positions;
     for (auto i = 0; i < numGroups; ++i) {
       char* group = groups[i];
       if (isNull(group)) {
@@ -215,7 +217,7 @@ class MergeTDigestAggregate : public exec::Aggregate {
           bits::clearBit(rawNulls, i);
         }
         auto accumulator = value<TDigestAccumulator>(group);
-        extractFunction(accumulator, result, i);
+        extractFunction(accumulator, result, i, positions);
       }
     }
   }
