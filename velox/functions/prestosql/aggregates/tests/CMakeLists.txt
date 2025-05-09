@@ -43,6 +43,7 @@ add_executable(
   MinMaxTest.cpp
   MultiMapAggTest.cpp
   PrestoHasherTest.cpp
+  QDigestAggTest.cpp
   ReduceAggTest.cpp
   SetAggTest.cpp
   SetUnionTest.cpp

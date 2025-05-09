@@ -28,6 +28,7 @@ namespace facebook::velox::functions {
 namespace qdigest {
 
 constexpr double kZeroWeightThreshold = 1.0E-5;
+constexpr double kUninitializedMaxError = 0.0;
 
 template <typename T, typename Allocator = StlAllocator<T>>
 class QuantileDigest {
@@ -39,6 +40,10 @@ class QuantileDigest {
   explicit QuantileDigest(const Allocator& allocator, double maxError);
 
   QuantileDigest(const Allocator& allocator, const char* serialized);
+
+  void setMaxError(double maxError);
+
+  double getMaxError() const;
 
   void add(T value, double weight);
 
@@ -411,6 +416,16 @@ QuantileDigest<T, Allocator>::QuantileDigest(
 }
 
 template <typename T, typename Allocator>
+void QuantileDigest<T, Allocator>::setMaxError(double maxError) {
+  maxError_ = maxError;
+}
+
+template <typename T, typename Allocator>
+double QuantileDigest<T, Allocator>::getMaxError() const {
+  return maxError_;
+}
+
+template <typename T, typename Allocator>
 int32_t QuantileDigest<T, Allocator>::calculateHeight(int32_t nodeCount) {
   int32_t height;
   if constexpr (std::is_same_v<U, int64_t>) {
@@ -771,6 +786,11 @@ int32_t QuantileDigest<T, Allocator>::popFree() {
 template <typename T, typename Allocator>
 void QuantileDigest<T, Allocator>::merge(
     const QuantileDigest<T, Allocator>& other) {
+  if (maxError_ == kUninitializedMaxError) {
+    maxError_ = other.getMaxError();
+  } else {
+    VELOX_CHECK_EQ(other.getMaxError(), maxError_);
+  }
   root_ = mergeRecursive(root_, other, other.root_);
   max_ = std::max(max_, other.max_);
   min_ = std::min(min_, other.min_);
@@ -786,7 +806,11 @@ void QuantileDigest<T, Allocator>::mergeSerialized(const char* other) {
   int32_t nodeCount;
   SerDe::readMetadata(other, version, maxError, min, max, nodeCount);
   VELOX_CHECK_EQ(version, 0);
-  VELOX_CHECK_EQ(maxError, maxError_);
+  if (maxError_ == kUninitializedMaxError) {
+    maxError_ = maxError;
+  } else {
+    VELOX_CHECK_EQ(maxError, maxError_);
+  }
 
   if (nodeCount == 0) {
     return;
