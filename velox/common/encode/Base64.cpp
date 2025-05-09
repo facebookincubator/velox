@@ -546,4 +546,73 @@ void Base64::decodeUrl(
   decodedOutput.resize(decodedSize.value());
 }
 
+// static
+void Base64::encodeMime(const char* input, size_t inputSize, char* output) {
+  if (inputSize == 0) {
+    return;
+  }
+
+  char* outputPointer = output; // Current write position.
+  const char* inputIterator = input; // Current read position.
+  size_t inputIndex = 0;
+  // Largest multiple of 3 ≤ inputSize.
+  const size_t blockSize = (inputSize / 3) * 3;
+  const size_t lineSize = (kMaxLineLength / 4) * 3;
+  // Process complete 3-byte groups, line by line.
+  while (inputIndex < blockSize) {
+    // Determine how many bytes to take this iteration (up to one line’s worth).
+    size_t currentChunkSize = std::min(lineSize, blockSize - inputIndex);
+    auto endIterator = inputIterator + currentChunkSize;
+    // Encode each 3-byte group in this chunk.
+    while (inputIterator != endIterator) {
+      // Pack 3 bytes into a 24-bit integer.
+      uint32_t inputBlock = static_cast<uint8_t>(*inputIterator++) << 16;
+      inputBlock |= static_cast<uint8_t>(*inputIterator++) << 8;
+      inputBlock |= static_cast<uint8_t>(*inputIterator++);
+      // Emit four Base64 characters.
+      *outputPointer++ = kBase64Charset[(inputBlock >> 18) & 0x3f];
+      *outputPointer++ = kBase64Charset[(inputBlock >> 12) & 0x3f];
+      *outputPointer++ = kBase64Charset[(inputBlock >> 6) & 0x3f];
+      *outputPointer++ = kBase64Charset[inputBlock & 0x3f];
+    }
+    inputIndex += currentChunkSize;
+    // If we just wrote exactly one full line, and there's more data,
+    // append the CRLF line separator.
+    if (currentChunkSize == lineSize && inputIndex < inputSize) {
+      for (char c : kNewline) {
+        *outputPointer++ = c;
+      }
+    }
+  }
+
+  if (inputIndex < inputSize) {
+    uint32_t inputBlock = static_cast<uint8_t>(*inputIterator++) << 16;
+    *outputPointer++ = kBase64Charset[(inputBlock >> 18) & 0x3f];
+    if (inputIndex == inputSize - 2) {
+      // Two bytes remain: read the second and emit 3 chars + one '='.
+      inputBlock |= static_cast<uint8_t>(*inputIterator) << 8;
+      *outputPointer++ = kBase64Charset[(inputBlock >> 12) & 0x3f];
+      *outputPointer++ = kBase64Charset[(inputBlock >> 6) & 0x3f];
+      *outputPointer = kPadding;
+    } else {
+      // Only one byte remains: emit 2 chars + two '='.
+      *outputPointer++ = kBase64Charset[(inputBlock >> 12) & 0x3f];
+      *outputPointer++ = kPadding;
+      *outputPointer = kPadding;
+    }
+  }
+}
+
+// static
+size_t Base64::calculateMimeEncodedSize(size_t inputSize) {
+  if (inputSize == 0) {
+    return 0;
+  }
+
+  size_t encodedSize = calculateEncodedSize(inputSize, true);
+  // Add CRLFs: one per full kMaxLineLength block.
+  encodedSize += (encodedSize - 1) / kMaxLineLength * kNewline.size();
+  return encodedSize;
+}
+
 } // namespace facebook::velox::encoding
