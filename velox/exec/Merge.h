@@ -16,6 +16,7 @@
 #pragma once
 
 #include "velox/exec/Exchange.h"
+#include "velox/exec/MergeBuffer.h"
 #include "velox/exec/MergeSource.h"
 #include "velox/exec/TreeOfLosers.h"
 
@@ -61,10 +62,16 @@ class Merge : public SourceOperator {
 
   void initializeTreeOfLosers();
 
+  bool needSpillMerge() const {
+    return maxMergeSources_ < sources_.size();
+  }
+
   /// Maximum number of rows in the output batch.
   const vector_size_t outputBatchSize_;
 
   std::vector<std::pair<column_index_t, CompareFlags>> sortingKeys_;
+
+  std::unique_ptr<MergeBuffer> mergeBuffer_{nullptr};
 
   /// A list of cursors over batches of ordered source data. One per source.
   /// Aligned with 'sources'.
@@ -83,6 +90,10 @@ class Merge : public SourceOperator {
   /// A list of blocking futures for sources. These are populates when a given
   /// source is blocked waiting for the next batch of data.
   std::vector<ContinueFuture> sourceBlockingFutures_;
+
+  int32_t maxMergeSources_{std::numeric_limits<int32_t>::max()};
+  std::unique_ptr<TreeOfLosers<SourceStream>> partialInputMerger_;
+  std::vector<SourceStream*> partialMergeStream_;
 };
 
 class SourceStream final : public MergeStream {

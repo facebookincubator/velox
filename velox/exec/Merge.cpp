@@ -16,6 +16,7 @@
 
 #include "velox/exec/Merge.h"
 #include "velox/common/testutil/TestValue.h"
+#include "velox/exec/MergeBuffer.h"
 #include "velox/exec/Task.h"
 
 using facebook::velox::common::testutil::TestValue;
@@ -101,6 +102,77 @@ BlockingReason Merge::isBlocked(ContinueFuture* future) {
     return BlockingReason::kNotBlocked;
   }
 
+  if (maxMergeSources_ < sources_.size()) {
+    if (mergeBuffer_ == nullptr) {
+      VELOX_CHECK(!finished_);
+      const auto spillConfig = spillConfig_.has_value()
+          ? spillConfig_
+          : operatorCtx_->driverCtx()->makeSpillConfig(
+                operatorCtx_->operatorId());
+      VELOX_CHECK(spillConfig.has_value());
+      mergeBuffer_ = std::make_unique<MergeBuffer>(
+          outputType_,
+          pool(),
+          sortingKeys_,
+          spillConfig_.has_value() ? &(spillConfig_.value()) : nullptr,
+          &spillStats_);
+    }
+
+    VELOX_CHECK_NOT_NULL(mergeBuffer_);
+
+    if (partialInputMerger_ == nullptr &&
+        numStartedSources_ < sources_.size()) {
+      // Plans merge sources for this run.
+      std::vector<MergeSource*> currentSources;
+      for (auto i = numStartedSources_; i <
+           (std::min(sources_.size(), numStartedSources_ + maxMergeSources_));
+           ++i) {
+        currentSources.push_back(sources_.at(i).get());
+      }
+
+      // Initializes the input merger.
+      std::vector<std::unique_ptr<SourceStream>> currentCursors;
+      currentCursors.reserve(currentSources.size());
+      for (auto* source : currentSources) {
+        currentCursors.push_back(std::make_unique<SourceStream>(
+            source, sortingKeys_, outputBatchSize_));
+      }
+
+      // mergeStreams_ and inputMerger_ are paired.
+      VELOX_CHECK(partialMergeStream_.empty());
+      for (auto& cursor : currentCursors) {
+        partialMergeStream_.push_back(cursor.get());
+      }
+      partialInputMerger_ = std::make_unique<TreeOfLosers<SourceStream>>(
+          std::move(currentCursors));
+
+      // Start sources.
+      for (auto& source : currentSources) {
+        source->start();
+      }
+      numStartedSources_ += currentSources.size();
+    }
+
+    VELOX_USER_CHECK(
+        (partialInputMerger_ == nullptr && partialMergeStream_.empty()) ||
+        (partialInputMerger_ != nullptr && !partialMergeStream_.empty()));
+
+    // Load data if needed.
+    if (sourceBlockingFutures_.empty()) {
+      for (auto& cursor : partialMergeStream_) {
+        cursor->isBlocked(sourceBlockingFutures_);
+      }
+    }
+
+    if (sourceBlockingFutures_.empty()) {
+      return BlockingReason::kNotBlocked;
+    }
+
+    *future = std::move(sourceBlockingFutures_.back());
+    sourceBlockingFutures_.pop_back();
+    return BlockingReason::kWaitForProducer;
+  }
+
   startSources();
 
   // No merging is needed if there is only one source.
@@ -147,6 +219,67 @@ bool Merge::isFinished() {
 RowVectorPtr Merge::getOutput() {
   if (finished_) {
     return nullptr;
+  }
+
+  if (mergeBuffer_ != nullptr) {
+    if (partialInputMerger_ != nullptr) {
+      if (!output_) {
+        output_ = BaseVector::create<RowVector>(
+            outputType_, outputBatchSize_, operatorCtx_->pool());
+        for (auto& child : output_->children()) {
+          child->resize(outputBatchSize_);
+        }
+      }
+
+      for (;;) {
+        const auto stream = partialInputMerger_->next();
+        if (!stream) {
+          partialInputMerger_ = nullptr;
+          partialMergeStream_.clear();
+          if (outputSize_ > 0) {
+            output_->resize(outputSize_);
+            mergeBuffer_->addInput(output_);
+          }
+          mergeBuffer_->finishSpill(numStartedSources_ >= sources_.size());
+          return nullptr;
+        }
+
+        if (stream->setOutputRow(outputSize_)) {
+          // The stream is at end of input batch. Need to copy out the rows
+          // before fetching next batch in 'pop'.
+          stream->copyToOutput(output_);
+        }
+
+        ++outputSize_;
+
+        // Advance the stream.
+        stream->pop(sourceBlockingFutures_);
+
+        if (outputSize_ == outputBatchSize_) {
+          // Copy out data from all sources.
+          for (const auto& s : streams_) {
+            s->copyToOutput(output_);
+          }
+
+          outputSize_ = 0;
+          mergeBuffer_->addInput(std::move(output_));
+          return nullptr;
+        }
+
+        if (!sourceBlockingFutures_.empty()) {
+          return nullptr;
+        }
+      }
+    }
+
+    VELOX_CHECK(partialInputMerger_ == nullptr && partialMergeStream_.empty());
+    output_ = mergeBuffer_->getOutput(outputBatchSize_);
+    if (output_ == nullptr) {
+      finished_ = true;
+      return nullptr;
+    }
+
+    return std::move(output_);
   }
 
   VELOX_CHECK_EQ(numStartedSources_, sources_.size());

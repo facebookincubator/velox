@@ -399,6 +399,50 @@ void FileSpillMergeStream::close() {
   spillFile_.reset();
 }
 
+uint32_t ConcatenateFilesSpillMergeStream::id() const {
+  return id_;
+}
+
+void ConcatenateFilesSpillMergeStream::nextBatch() {
+  VELOX_CHECK(!closed_);
+  index_ = 0;
+  for (; fileIndex_ < spillFiles_.size(); ++fileIndex_) {
+    if (spillFiles_[fileIndex_]->nextBatch(rowVector_)) {
+      VELOX_CHECK_NOT_NULL(rowVector_);
+      size_ = rowVector_->size();
+      return;
+    }
+  }
+  size_ = 0;
+  close();
+}
+
+void ConcatenateFilesSpillMergeStream::close() {
+  VELOX_CHECK(!closed_);
+  SpillMergeStream::close();
+  spillFiles_.clear();
+}
+
+int32_t ConcatenateFilesSpillMergeStream::compare(
+    const MergeStream& other) const {
+  VELOX_CHECK(!closed_);
+  const auto& children = rowVector_->children();
+  const auto& otherStream =
+      static_cast<const ConcatenateFilesSpillMergeStream&>(other);
+  const auto& otherChildren = otherStream.current().children();
+  for (const auto& [key, flags] : sortingKeys_) {
+    const auto result =
+        children[key]
+            ->compare(
+                otherChildren[key].get(), index_, otherStream.index_, flags)
+            .value();
+    if (result != 0) {
+      return result;
+    }
+  }
+  return 0;
+}
+
 SpillPartitionId::SpillPartitionId(uint32_t partitionNumber)
     : encodedId_(partitionNumber) {
   if (FOLLY_UNLIKELY(partitionNumber >= (1 << kMaxPartitionBits))) {

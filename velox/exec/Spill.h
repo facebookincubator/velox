@@ -151,12 +151,15 @@ class FileSpillMergeStream : public SpillMergeStream {
 
   uint32_t id() const override;
 
- private:
+ protected:
   explicit FileSpillMergeStream(std::unique_ptr<SpillReadFile> spillFile)
       : spillFile_(std::move(spillFile)) {
     VELOX_CHECK_NOT_NULL(spillFile_);
   }
 
+  void nextBatch() override;
+
+ private:
   int32_t numSortKeys() const override {
     VELOX_CHECK(!closed_);
     return spillFile_->numSortKeys();
@@ -167,11 +170,54 @@ class FileSpillMergeStream : public SpillMergeStream {
     return spillFile_->sortCompareFlags();
   }
 
+  void close() override;
+
+  std::unique_ptr<SpillReadFile> spillFile_;
+};
+
+/// A SpillMergeStream that contains a sequence of sorted spill files, the
+/// sorted keys are ordered both within each file and across files.
+class ConcatenateFilesSpillMergeStream final : public SpillMergeStream {
+ public:
+  static std::unique_ptr<SpillMergeStream> create(
+      uint32_t id,
+      std::vector<std::pair<column_index_t, CompareFlags>> sortingKeys,
+      std::vector<std::unique_ptr<SpillReadFile>> spillFiles) {
+    auto spillStream = std::make_unique<ConcatenateFilesSpillMergeStream>(
+        id, std::move(sortingKeys), std::move(spillFiles));
+    spillStream->nextBatch();
+    return spillStream;
+  }
+
+  uint32_t id() const override;
+
+  int32_t compare(const MergeStream& other) const override;
+
   void nextBatch() override;
 
   void close() override;
 
-  std::unique_ptr<SpillReadFile> spillFile_;
+  const std::vector<CompareFlags>& sortCompareFlags() const override {
+    VELOX_UNREACHABLE("This method should not be called");
+  }
+
+  int32_t numSortKeys() const override {
+    VELOX_UNREACHABLE("This method should not be called");
+  }
+
+  ConcatenateFilesSpillMergeStream(
+      uint32_t id,
+      std::vector<std::pair<column_index_t, CompareFlags>> sortingKeys,
+      std::vector<std::unique_ptr<SpillReadFile>> spillFiles)
+      : id_(id),
+        sortingKeys_(std::move(sortingKeys)),
+        spillFiles_(std::move(spillFiles)) {}
+
+ private:
+  const uint32_t id_;
+  const std::vector<std::pair<column_index_t, CompareFlags>> sortingKeys_;
+  std::vector<std::unique_ptr<SpillReadFile>> spillFiles_;
+  size_t fileIndex_{0};
 };
 
 /// A source of spilled RowVectors coming from a file. The spill data might not
