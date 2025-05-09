@@ -55,6 +55,7 @@ using namespace facebook::velox::exec::test;
 using facebook::velox::exec::test::PrestoQueryRunner;
 using facebook::velox::fuzzer::ArgTypesGenerator;
 using facebook::velox::fuzzer::ArgValuesGenerator;
+using facebook::velox::fuzzer::BingTileArgValuesGenerator;
 using facebook::velox::fuzzer::CastVarcharAndJsonArgValuesGenerator;
 using facebook::velox::fuzzer::ExpressionFuzzer;
 using facebook::velox::fuzzer::FuzzerRunner;
@@ -123,13 +124,6 @@ int main(int argc, char** argv) {
       "array_join(array(real),varchar,varchar) -> varchar",
       "array_join(array(double),varchar) -> varchar",
       "array_join(array(double),varchar,varchar) -> varchar",
-      // BingTiles throw VeloxUserError when zoom/x/y are out of range.
-      "bing_tile",
-      "bing_tile_zoom_level",
-      "bing_tile_coordinates",
-      "bing_tile_parent",
-      "bing_tile_children",
-      "bing_tile_quadkey",
       "array_min_by", // https://github.com/facebookincubator/velox/issues/12934
       "array_max_by", // https://github.com/facebookincubator/velox/issues/12934
       // https://github.com/facebookincubator/velox/issues/13047
@@ -163,7 +157,17 @@ int main(int argc, char** argv) {
           {"value_at_quantile",
            std::make_shared<TDigestArgValuesGenerator>("value_at_quantile")},
           {"scale_tdigest",
-           std::make_shared<TDigestArgValuesGenerator>("scale_tdigest")}};
+           std::make_shared<TDigestArgValuesGenerator>("scale_tdigest")},
+          {"bing_tile_parent", std::make_shared<BingTileArgValuesGenerator>()},
+          {"bing_tile_children",
+           std::make_shared<BingTileArgValuesGenerator>()},
+          {"bing_tile_coordinates",
+           std::make_shared<BingTileArgValuesGenerator>()},
+          {"bing_tile_polygon", std::make_shared<BingTileArgValuesGenerator>()},
+          {"bing_tile_quadkey", std::make_shared<BingTileArgValuesGenerator>()},
+          {"bing_tile_zoom_level",
+           std::make_shared<BingTileArgValuesGenerator>()},
+      };
 
   std::shared_ptr<facebook::velox::memory::MemoryPool> rootPool{
       facebook::velox::memory::memoryManager()->addRootPool()};

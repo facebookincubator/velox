@@ -336,6 +336,38 @@ std::vector<core::TypedExprPtr> TDigestArgValuesGenerator::generate(
     state.customInputGenerators_.emplace_back(nullptr);
     inputExpressions.emplace_back(nullptr);
   }
+
+  return inputExpressions;
+}
+
+std::vector<core::TypedExprPtr> BingTileArgValuesGenerator::generate(
+    const CallableSignature& signature,
+    const VectorFuzzer::Options& options,
+    FuzzerGenerator& rng,
+    ExpressionFuzzerState& state) {
+  populateInputTypesAndNames(signature, state);
+  const auto seed = rand<uint32_t>(rng);
+  const auto nullRatio = options.nullRatio;
+  std::vector<core::TypedExprPtr> inputExpressions;
+
+  VELOX_CHECK_GE(signature.args.size(), 1);
+  state.customInputGenerators_.emplace_back(
+      std::make_shared<fuzzer::BingTileInputGenerator>(
+          seed, signature.args[0], nullRatio));
+
+  VELOX_CHECK_GE(state.inputRowNames_.size(), 1);
+  inputExpressions.emplace_back(std::make_shared<core::FieldAccessTypedExpr>(
+      signature.args[0],
+      state.inputRowNames_
+          [state.inputRowNames_.size() - signature.args.size()]));
+
+  //  Populate state.customInputGenerators_ and inputExpressions with nullptr
+  //  for inputs that do not require custom input generators
+  while (state.customInputGenerators_.size() < signature.args.size()) {
+    state.customInputGenerators_.emplace_back(nullptr);
+    inputExpressions.emplace_back(nullptr);
+  }
+
   return inputExpressions;
 }
 } // namespace facebook::velox::fuzzer
