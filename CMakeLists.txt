@@ -418,6 +418,11 @@ if(VELOX_ENABLE_WAVE OR VELOX_ENABLE_CUDF)
     velox_set_source(cudf)
     velox_resolve_dependency(cudf)
   endif()
+  if(VELOX_ENABLE_WAVE)
+    set(VELOX_WAVE_NVRTC_INCLUDE_PATH
+        "/usr/local/cuda/include"
+        CACHE STRING "Specify the default include path to use for RTC in Wave")
+  endif()
 endif()
 
 # Set after the test of the CUDA compiler. Otherwise, the test fails with
