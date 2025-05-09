@@ -22,6 +22,7 @@
 #include "velox/functions/sparksql/Split.h"
 #include "velox/functions/sparksql/String.h"
 #include "velox/functions/sparksql/StringToMap.h"
+#include "velox/functions/sparksql/VarcharTypeWriteSideCheck.h"
 
 namespace facebook::velox::functions {
 void registerSparkStringFunctions(const std::string& prefix) {
@@ -147,6 +148,12 @@ void registerStringFunctions(const std::string& prefix) {
   registerFunctionCallToSpecialForm(
       ConcatWsCallToSpecialForm::kConcatWs,
       std::make_unique<ConcatWsCallToSpecialForm>());
+
+  registerFunction<
+      VarcharTypeWriteSideCheckFunction,
+      Varchar,
+      Varchar,
+      int32_t>({prefix + "varchar_type_write_side_check"});
 }
 } // namespace sparksql
 } // namespace facebook::velox::functions
