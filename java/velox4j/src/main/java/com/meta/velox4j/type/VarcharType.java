@@ -15,6 +15,6 @@
  */
 package com.meta.velox4j.type;
 
-public class VarCharType extends Type {
-  public VarCharType() {}
+public class VarcharType extends Type {
+  public VarcharType() {}
 }

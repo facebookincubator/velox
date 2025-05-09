@@ -41,7 +41,6 @@ class ExternalStream {
   ExternalStream& operator=(const ExternalStream&) = delete;
   ExternalStream& operator=(ExternalStream&&) = delete;
 
-  // DTOR.
   virtual ~ExternalStream() = default;
 
   virtual std::optional<facebook::velox::RowVectorPtr> read(

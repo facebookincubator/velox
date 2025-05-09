@@ -47,7 +47,7 @@ import com.meta.velox4j.type.IntegerType;
 import com.meta.velox4j.type.MapType;
 import com.meta.velox4j.type.RowType;
 import com.meta.velox4j.type.Type;
-import com.meta.velox4j.type.VarCharType;
+import com.meta.velox4j.type.VarcharType;
 import com.meta.velox4j.variant.Variant;
 import com.meta.velox4j.variant.VariantCo;
 
@@ -129,9 +129,9 @@ public final class SerdeTests {
     final Type dataType =
         ArrayType.create(
             MapType.create(
-                new VarCharType(),
+                new VarcharType(),
                 new RowType(
-                    List.of("id", "description"), List.of(new BigIntType(), new VarCharType()))));
+                    List.of("id", "description"), List.of(new BigIntType(), new VarcharType()))));
     final HiveColumnHandle handle =
         new HiveColumnHandle(
             "complex_type",
@@ -230,7 +230,7 @@ public final class SerdeTests {
         HiveBucketProperty.Kind.PRESTO_NATIVE,
         10,
         List.of("foo", "bar"),
-        List.of(new IntegerType(), new VarCharType()),
+        List.of(new IntegerType(), new VarcharType()),
         List.of(
             new HiveSortingColumn("foo", new SortOrder(true, true)),
             new HiveSortingColumn("bar", new SortOrder(false, false))));

@@ -21,7 +21,7 @@ import java.util.List;
 import com.meta.velox4j.type.BigIntType;
 import com.meta.velox4j.type.DecimalType;
 import com.meta.velox4j.type.RowType;
-import com.meta.velox4j.type.VarCharType;
+import com.meta.velox4j.type.VarcharType;
 
 public final class TpchTests {
   private static final String DATA_DIRECTORY = "data/tpch-sf0.1";
@@ -31,7 +31,7 @@ public final class TpchTests {
         "region/region.parquet",
         new RowType(
             List.of("r_regionkey", "r_name", "r_comment"),
-            List.of(new BigIntType(), new VarCharType(), new VarCharType()))),
+            List.of(new BigIntType(), new VarcharType(), new VarcharType()))),
 
     CUSTOMER(
         "customer/customer.parquet",
@@ -46,18 +46,18 @@ public final class TpchTests {
                 "s_comment"),
             List.of(
                 new BigIntType(),
-                new VarCharType(),
-                new VarCharType(),
+                new VarcharType(),
+                new VarcharType(),
                 new BigIntType(),
-                new VarCharType(),
+                new VarcharType(),
                 new DecimalType(12, 2),
-                new VarCharType()))),
+                new VarcharType()))),
 
     NATION(
         "nation/nation.parquet",
         new RowType(
             List.of("n_nationkey", "n_name", "n_regionkey", "n_comment"),
-            List.of(new BigIntType(), new VarCharType(), new BigIntType(), new VarCharType())));
+            List.of(new BigIntType(), new VarcharType(), new BigIntType(), new VarcharType())));
 
     private final RowType schema;
     private final File file;

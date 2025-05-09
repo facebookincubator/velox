@@ -8,8 +8,6 @@
 
 namespace velox4j {
 
-const jint kJniVersion = JNI_VERSION_1_8;
-
 std::string jStringToCString(JNIEnv* env, jstring string) {
   int32_t jlen, clen;
   clen = env->GetStringUTFLength(string);

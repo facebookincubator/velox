@@ -37,10 +37,8 @@ class JavaAllocationListenerJniWrapper final : public spotify::jni::JavaClass {
 
 class JavaAllocationListener : public AllocationListener {
  public:
-  // CTOR.
   JavaAllocationListener(JNIEnv* env, jobject ref);
 
-  // DTOR.
   ~JavaAllocationListener() override;
 
   void allocationChanged(int64_t diff) override;

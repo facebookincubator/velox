@@ -50,7 +50,7 @@ import com.meta.velox4j.type.BigIntType;
 import com.meta.velox4j.type.BooleanType;
 import com.meta.velox4j.type.RowType;
 import com.meta.velox4j.type.Type;
-import com.meta.velox4j.type.VarCharType;
+import com.meta.velox4j.type.VarcharType;
 import com.meta.velox4j.variant.BigIntValue;
 import com.meta.velox4j.variant.BooleanValue;
 import com.meta.velox4j.write.TableWriteTraits;
@@ -636,7 +636,7 @@ public class QueryTest {
             List.of("n_nationkey", "n_comment"),
             List.of(
                 FieldAccessTypedExpr.create(new BigIntType(), "n_nationkey"),
-                FieldAccessTypedExpr.create(new VarCharType(), "n_comment")));
+                FieldAccessTypedExpr.create(new VarcharType(), "n_comment")));
     final Query query = new Query(projectNode, Config.empty(), ConnectorConfig.empty());
     final SerialTask task = session.queryOps().execute(query);
     task.addSplit(scanNode.getId(), split);
@@ -696,7 +696,7 @@ public class QueryTest {
             regionScanNode,
             new RowType(
                 List.of("n_nationkey", "n_name", "r_regionkey", "r_name"),
-                List.of(new BigIntType(), new VarCharType(), new BigIntType(), new VarCharType())),
+                List.of(new BigIntType(), new VarcharType(), new BigIntType(), new VarcharType())),
             false);
     final Query query = new Query(hashJoinNode, Config.empty(), ConnectorConfig.empty());
     final SerialTask task = session.queryOps().execute(query);

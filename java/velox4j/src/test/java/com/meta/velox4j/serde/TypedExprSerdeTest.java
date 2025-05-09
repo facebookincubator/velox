@@ -40,7 +40,7 @@ import com.meta.velox4j.type.BooleanType;
 import com.meta.velox4j.type.IntegerType;
 import com.meta.velox4j.type.RealType;
 import com.meta.velox4j.type.RowType;
-import com.meta.velox4j.type.VarCharType;
+import com.meta.velox4j.type.VarcharType;
 import com.meta.velox4j.variant.IntegerValue;
 
 public class TypedExprSerdeTest {
@@ -146,7 +146,7 @@ public class TypedExprSerdeTest {
   @Test
   public void testLambdaTypedExpr() {
     final RowType signature =
-        new RowType(List.of("foo", "bar"), List.of(new IntegerType(), new VarCharType()));
+        new RowType(List.of("foo", "bar"), List.of(new IntegerType(), new VarcharType()));
     final LambdaTypedExpr lambdaTypedExpr =
         LambdaTypedExpr.create(signature, FieldAccessTypedExpr.create(new IntegerType(), "foo"));
     SerdeTests.testISerializableRoundTrip(lambdaTypedExpr);

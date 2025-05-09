@@ -35,8 +35,8 @@ public class VariantRegistry {
     TYPE_REGISTRY.registerClass("HUGEINT", HugeIntValue.class);
     TYPE_REGISTRY.registerClass("REAL", RealValue.class);
     TYPE_REGISTRY.registerClass("DOUBLE", DoubleValue.class);
-    TYPE_REGISTRY.registerClass("VARCHAR", VarCharValue.class);
-    TYPE_REGISTRY.registerClass("VARBINARY", VarBinaryValue.class);
+    TYPE_REGISTRY.registerClass("VARCHAR", VarcharValue.class);
+    TYPE_REGISTRY.registerClass("VARBINARY", VarbinaryValue.class);
     TYPE_REGISTRY.registerClass("TIMESTAMP", TimestampValue.class);
     TYPE_REGISTRY.registerClass("ARRAY", ArrayValue.class);
     TYPE_REGISTRY.registerClass("MAP", MapValue.class);

@@ -42,8 +42,8 @@ import com.meta.velox4j.type.SmallIntType;
 import com.meta.velox4j.type.TimestampType;
 import com.meta.velox4j.type.TinyIntType;
 import com.meta.velox4j.type.UnknownType;
-import com.meta.velox4j.type.VarCharType;
 import com.meta.velox4j.type.VarbinaryType;
+import com.meta.velox4j.type.VarcharType;
 
 public class TypeSerdeTest {
 
@@ -94,7 +94,7 @@ public class TypeSerdeTest {
 
   @Test
   public void testVarcharType() {
-    SerdeTests.testISerializableRoundTrip(new VarCharType());
+    SerdeTests.testISerializableRoundTrip(new VarcharType());
   }
 
   @Test
@@ -114,19 +114,19 @@ public class TypeSerdeTest {
 
   @Test
   public void testMapType() {
-    SerdeTests.testISerializableRoundTrip(MapType.create(new IntegerType(), new VarCharType()));
+    SerdeTests.testISerializableRoundTrip(MapType.create(new IntegerType(), new VarcharType()));
   }
 
   @Test
   public void testRowType() {
     SerdeTests.testISerializableRoundTrip(
-        new RowType(List.of("foo", "bar"), List.of(new IntegerType(), new VarCharType())));
+        new RowType(List.of("foo", "bar"), List.of(new IntegerType(), new VarcharType())));
   }
 
   @Test
   public void testFunctionType() {
     SerdeTests.testISerializableRoundTrip(
-        FunctionType.create(List.of(new IntegerType(), new VarCharType()), new VarbinaryType()));
+        FunctionType.create(List.of(new IntegerType(), new VarcharType()), new VarbinaryType()));
   }
 
   @Test

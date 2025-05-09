@@ -60,8 +60,8 @@ import com.meta.velox4j.type.SmallIntType;
 import com.meta.velox4j.type.TimestampType;
 import com.meta.velox4j.type.TinyIntType;
 import com.meta.velox4j.type.UnknownType;
-import com.meta.velox4j.type.VarCharType;
 import com.meta.velox4j.type.VarbinaryType;
+import com.meta.velox4j.type.VarcharType;
 
 public final class ISerializableRegistry {
   private static final SerdeRegistry NAME_REGISTRY =
@@ -91,7 +91,7 @@ public final class ISerializableRegistry {
     typeRegistry.registerClass("HUGEINT", HugeIntType.class);
     typeRegistry.registerClass("REAL", RealType.class);
     typeRegistry.registerClass("DOUBLE", DoubleType.class);
-    typeRegistry.registerClass("VARCHAR", VarCharType.class);
+    typeRegistry.registerClass("VARCHAR", VarcharType.class);
     typeRegistry.registerClass("VARBINARY", VarbinaryType.class);
     typeRegistry.registerClass("TIMESTAMP", TimestampType.class);
     typeRegistry.registerClass("ARRAY", ArrayType.class);

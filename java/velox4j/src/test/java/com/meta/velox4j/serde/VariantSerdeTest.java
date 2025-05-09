@@ -37,8 +37,8 @@ import com.meta.velox4j.variant.RowValue;
 import com.meta.velox4j.variant.SmallIntValue;
 import com.meta.velox4j.variant.TimestampValue;
 import com.meta.velox4j.variant.TinyIntValue;
-import com.meta.velox4j.variant.VarBinaryValue;
-import com.meta.velox4j.variant.VarCharValue;
+import com.meta.velox4j.variant.VarbinaryValue;
+import com.meta.velox4j.variant.VarcharValue;
 
 public class VariantSerdeTest {
   @BeforeClass
@@ -105,12 +105,12 @@ public class VariantSerdeTest {
 
   @Test
   public void testVarCharValue() {
-    SerdeTests.testVariantRoundTrip(new VarCharValue("foo"));
+    SerdeTests.testVariantRoundTrip(new VarcharValue("foo"));
   }
 
   @Test
   public void testVarBinaryValue() {
-    final VarBinaryValue in = VarBinaryValue.create("foo".getBytes());
+    final VarbinaryValue in = VarbinaryValue.create("foo".getBytes());
     SerdeTests.testVariantRoundTrip(in);
   }
 

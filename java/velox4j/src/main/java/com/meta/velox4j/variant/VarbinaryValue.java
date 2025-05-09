@@ -15,40 +15,45 @@
  */
 package com.meta.velox4j.variant;
 
+import java.util.Base64;
 import java.util.Objects;
 
 import com.fasterxml.jackson.annotation.JsonCreator;
 import com.fasterxml.jackson.annotation.JsonGetter;
 import com.fasterxml.jackson.annotation.JsonProperty;
 
-public class VarCharValue extends Variant {
-  private final String value;
+public class VarbinaryValue extends Variant {
+  private final String base64;
 
   @JsonCreator
-  public VarCharValue(@JsonProperty("value") String value) {
-    this.value = value;
+  public VarbinaryValue(@JsonProperty("value") String base64) {
+    this.base64 = base64;
+  }
+
+  public static VarbinaryValue create(byte[] bytes) {
+    return new VarbinaryValue(Base64.getEncoder().encodeToString(bytes));
   }
 
   @JsonGetter("value")
-  public String getValue() {
-    return value;
+  public String getBase64() {
+    return base64;
   }
 
   @Override
   public boolean equals(Object o) {
     if (this == o) return true;
     if (o == null || getClass() != o.getClass()) return false;
-    VarCharValue that = (VarCharValue) o;
-    return Objects.equals(value, that.value);
+    VarbinaryValue that = (VarbinaryValue) o;
+    return Objects.equals(base64, that.base64);
   }
 
   @Override
   public int hashCode() {
-    return Objects.hashCode(value);
+    return Objects.hashCode(base64);
   }
 
   @Override
   public String toString() {
-    return "VarCharValue{" + "value='" + value + '\'' + '}';
+    return "VarbinaryValue{" + "base64='" + base64 + '\'' + '}';
   }
 }
