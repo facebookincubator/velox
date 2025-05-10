@@ -40,6 +40,13 @@ stringify "velox/experimental/wave/common/StringView.cuh" >> $JIT/Headers.h
 stringify "velox/experimental/wave/common/StringView.h" >> $JIT/Headers.h
 stringify "velox/experimental/wave/common/Hash.h" >> $JIT/Headers.h
 stringify "velox/experimental/wave/common/CompilerDefines.h" >> $JIT/Headers.h
+stringify "velox/experimental/wave/common/Atomic.cuh" >> $JIT/Headers.h
+cd velox/experimental/breeze
+stringify "breeze/platforms/cuda.cuh" >> ../../../$JIT/Headers.h
+stringify "breeze/platforms/specialization/cuda-ptx.cuh" >> ../../../$JIT/Headers.h
+stringify "breeze/platforms/platform.h" >> ../../../$JIT/Headers.h
+stringify "breeze/utils/types.h" >> ../../../$JIT/Headers.h
+cd -
 
 echo "}" >> $JIT/Headers.h
 
