@@ -1,0 +1,102 @@
+/*
+ * Copyright (c) Facebook, Inc. and its affiliates.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+#pragma once
+
+#include "velox/exec/Operator.h"
+#include "velox/exec/OperatorUtils.h"
+#include "velox/exec/RowContainer.h"
+#include "velox/vector/BaseVector.h"
+
+namespace facebook::velox::exec {
+
+// A utility class for spilling merged vectors from the 'LocalMerge' operator.
+// It creates a new NoRowContainer spiller for each partial merge run
+// and ensures that at least one file is created per run by finshing the spill.
+class MergeSpiller {
+ public:
+  MergeSpiller(
+      const RowTypePtr& type,
+      velox::memory::MemoryPool* const pool,
+      const std::vector<std::pair<column_index_t, CompareFlags>>& sortingKeys,
+      const common::SpillConfig* spillConfig = nullptr,
+      folly::Synchronized<velox::common::SpillStats>* spillStats = nullptr);
+
+  /// Spill the merged vector.
+  void addInput(const RowVectorPtr& vector);
+
+  /// Finish current merge run.
+  void finishSpill(bool lastRun);
+
+  /// Number of spilled rows.
+  uint64_t numSpillRows() const;
+
+  /// Each element is the SpillFiles of each partial merge run.
+  std::vector<SpillFiles> spillFiles() const;
+
+ private:
+  const RowTypePtr type_;
+  velox::memory::MemoryPool* const pool_;
+  const std::vector<std::pair<column_index_t, CompareFlags>> sortingKeys_;
+  const common::SpillConfig* const spillConfig_;
+  folly::Synchronized<common::SpillStats>* const spillStats_;
+
+  std::unique_ptr<NoRowContainerSpiller> inputSpiller_;
+  uint64_t numSpillRows_{0};
+  std::vector<SpillFiles> spillFilesLists_;
+};
+
+class MergeBuffer {
+ public:
+  MergeBuffer(
+      const RowTypePtr& type,
+      velox::memory::MemoryPool* const pool,
+      const std::vector<SpillFiles>& spillFilesList,
+      uint64_t numInputRows,
+      uint64_t readBufferSize,
+      folly::Synchronized<velox::common::SpillStats>* spillStats);
+
+  /// Returns the sorted output rows in batch.
+  RowVectorPtr getOutput(vector_size_t maxOutputRows);
+
+ private:
+  std::unique_ptr<TreeOfLosers<SpillMergeStream>> createSortMergeReader(
+      const std::vector<SpillFiles>& spillFilesLists,
+      uint64_t readBufferSize,
+      folly::Synchronized<velox::common::SpillStats>* spillStats) const;
+
+  // Invoked to initialize or reset the reusable output buffer to get output.
+  void prepareOutput(vector_size_t outputBatchSize);
+
+  void getOutputInternal();
+
+  const RowTypePtr type_;
+  velox::memory::MemoryPool* const pool_;
+ // SpillFiles per partial spill merge.
+  // The number of spilled input rows.
+  const uint64_t numInputRows_;
+  // Used to merge the sorted runs from in-memory rows and spilled rows on disk.
+  const std::unique_ptr<TreeOfLosers<SpillMergeStream>> spillMerger_;
+
+  // Records the source rows to copy to 'output_' in order.
+  std::vector<const RowVector*> spillSources_;
+  std::vector<vector_size_t> spillSourceRows_;
+  // Reusable output vector.
+  RowVectorPtr output_;
+  // The number of rows that has been returned.
+  uint64_t numOutputRows_{0};
+};
+} // namespace facebook::velox::exec

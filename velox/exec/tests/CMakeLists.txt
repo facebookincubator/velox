@@ -59,6 +59,7 @@ add_executable(
   Main.cpp
   MarkDistinctTest.cpp
   MemoryReclaimerTest.cpp
+        MergeSpillTest.cpp
   MergeJoinTest.cpp
   MergeTest.cpp
   MultiFragmentTest.cpp
