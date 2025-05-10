@@ -359,9 +359,10 @@ TEST_P(TableScanTest, filterInScan) {
   auto type =
       ROW({"c0", "c1", "c2", "c3"}, {BIGINT(), BIGINT(), BIGINT(), BIGINT()});
   auto splits = makeData(type, numBatches_, batchSize_);
-
+  std::vector<std::string> subfieldFilters = {
+      "c0 < 500000000", "c1 < 400000000"};
   auto plan = PlanBuilder(pool_.get())
-                  .tableScan(type, {"c0 < 500000000", "c1 < 400000000"})
+                  .tableScan(type, subfieldFilters)
                   .project({"c0", "c1 + 100000000 as c1", "c2", "c3"})
                   .project({"c0", "c1", "c2 + 1", "c3", "c3 + 2"})
                   .planNode();
@@ -376,10 +377,11 @@ TEST_P(TableScanTest, filterInScanNull) {
       ROW({"c0", "c1", "c2", "c3", "rn"},
           {BIGINT(), BIGINT(), BIGINT(), BIGINT(), BIGINT()});
   auto splits = makeData(type, numBatches_, batchSize_, false);
-
+  std::vector<std::string> subfieldFilters = {
+      "c0 < 500000000", "c1 < 400000000"};
   auto plan =
       PlanBuilder(pool_.get())
-          .tableScan(type, {"c0 < 500000000", "c1 < 400000000"})
+          .tableScan(type, subfieldFilters)
           .project(
               {"c0",
                "c1",
@@ -438,9 +440,11 @@ TEST_P(TableScanTest, scanDictAgg) {
         }
       });
 
+  std::vector<std::string> subfieldFilters = {
+      "c0 < 9500000000", "c1 < 9000000000"};
   auto plan =
       PlanBuilder(pool_.get())
-          .tableScan(type, {"c0 < 9500000000", "c1 < 9000000000"})
+          .tableScan(type, subfieldFilters)
           .project(
               {"c0",
                "c1 + 1 as c1",
@@ -476,10 +480,10 @@ TEST_P(TableScanTest, scanDict) {
           card *= 1.3;
         }
       });
-
-  auto plan = PlanBuilder(pool_.get())
-                  .tableScan(type, {"c0 < 9500000000", "c1 < 9000000000"})
-                  .planNode();
+  std::vector<std::string> subfieldFilters = {
+      "c0 < 9500000000", "c1 < 9000000000"};
+  auto plan =
+      PlanBuilder(pool_.get()).tableScan(type, subfieldFilters).planNode();
   auto task = assertQuery(
       plan,
       splits,
