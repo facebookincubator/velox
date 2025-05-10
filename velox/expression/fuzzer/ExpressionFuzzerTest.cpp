@@ -130,8 +130,6 @@ int main(int argc, char** argv) {
       "bing_tile_parent",
       "bing_tile_children",
       "bing_tile_quadkey",
-      "array_min_by", // https://github.com/facebookincubator/velox/issues/12934
-      "array_max_by", // https://github.com/facebookincubator/velox/issues/12934
       // https://github.com/facebookincubator/velox/issues/13047
       "inverse_poisson_cdf",
   };
