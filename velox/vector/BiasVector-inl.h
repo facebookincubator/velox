@@ -111,7 +111,7 @@ const T BiasVector<T>::valueAtFast(vector_size_t idx) const {
 }
 
 template <typename T>
-xsimd::batch<T> BiasVector<T>::loadSIMDValueBufferAt(size_t index) const {
+simd::xbatch<T> BiasVector<T>::loadSIMDValueBufferAt(size_t index) const {
   if constexpr (std::is_same_v<T, int64_t>) {
     switch (valueType_) {
       case TypeKind::INTEGER:
