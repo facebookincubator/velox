@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-#include "velox/functions/remote/server/RemoteFunctionService.h"
+#include "velox/functions/remote/server/RemoteFunctionThriftService.h"
 #include "velox/common/base/Exceptions.h"
 #include "velox/expression/Expr.h"
 #include "velox/functions/remote/if/GetSerde.h"
