@@ -28,7 +28,8 @@ add_executable(
   ModeAggregateTest.cpp
   RegrReplacementAggregationTest.cpp
   SumAggregationTest.cpp
-  VarianceAggregationTest.cpp)
+  VarianceAggregationTest.cpp
+  CovarianceAggregatesTest.cpp)
 
 add_test(velox_functions_spark_aggregates_test
          velox_functions_spark_aggregates_test)

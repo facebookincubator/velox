@@ -21,7 +21,8 @@ velox_add_library(
   SingleValueAccumulator.cpp
   ValueList.cpp
   ValueSet.cpp
-  VarianceAggregatesBase.cpp)
+  VarianceAggregatesBase.cpp
+  CovarianceAggregatesBase.cpp)
 
 velox_link_libraries(velox_functions_aggregates velox_exec
                      velox_presto_serializer Folly::folly)
