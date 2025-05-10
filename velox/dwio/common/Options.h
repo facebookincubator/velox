@@ -660,6 +660,17 @@ struct WriterOptions {
   virtual ~WriterOptions() = default;
 };
 
+// Options for creating a column reader.
+struct ColumnOptions {
+  // Whether to map table field names to file field names using names, not
+  // indices.
+  bool useColumnNamesForColumnMapping_{false};
+};
+
+void updateColumnOptionsFromReaderOptions(
+    const ReaderOptions& options,
+    ColumnOptions& columnOptions);
+
 } // namespace facebook::velox::dwio::common
 
 template <>

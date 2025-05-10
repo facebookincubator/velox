@@ -23,6 +23,7 @@ namespace facebook::velox::dwrf {
 
 std::unique_ptr<dwio::common::SelectiveColumnReader>
 createSelectiveFlatMapColumnReader(
+    const dwio::common::ColumnOptions& columnOptions,
     const TypePtr& requestedType,
     const std::shared_ptr<const dwio::common::TypeWithId>& fileType,
     DwrfParams&,

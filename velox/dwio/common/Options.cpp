@@ -70,4 +70,11 @@ std::string_view toString(FileFormat fmt) {
   }
 }
 
+void updateColumnOptionsFromReaderOptions(
+    const ReaderOptions& options,
+    ColumnOptions& columnOptions) {
+  columnOptions.useColumnNamesForColumnMapping_ =
+      options.useColumnNamesForColumnMapping();
+}
+
 } // namespace facebook::velox::dwio::common
