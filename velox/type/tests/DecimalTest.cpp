@@ -120,6 +120,12 @@ void testcastToString(
   EXPECT_EQ(std::memcmp(expected.data(), out.data(), expected.size()), 0);
 }
 
+template <typename T>
+void testStringToDecimal(const std::string& input, uint8_t scale, T expected) {
+  const auto value = DecimalUtil::stringToDecimal<T>(input, scale);
+  EXPECT_EQ(value, expected);
+}
+
 void testMaxStringViewSize(
     int precision,
     int scale,
@@ -569,6 +575,30 @@ TEST(DecimalTest, castToString) {
       DecimalUtil::kLongDecimalMax, 38, 0, 39, std::string(38, '9'));
   testcastToString<int128_t>(
       DecimalUtil::kLongDecimalMin, 38, 0, 39, "-" + std::string(38, '9'));
+}
+
+TEST(DecimalTest, stringToDecimal) {
+  testStringToDecimal<int64_t>("12", 0, 12);
+  testStringToDecimal<int64_t>("1.2", 1, 12);
+  testStringToDecimal<int64_t>("0.012", 3, 12);
+  testStringToDecimal<int64_t>("-0.012", 3, -12);
+  testStringToDecimal<int64_t>("0.00012", 5, 12);
+  testStringToDecimal<int64_t>("-0.00012", 5, -12);
+  testStringToDecimal<int64_t>(
+      std::string(18, '9'), 0, DecimalUtil::kShortDecimalMax);
+  testStringToDecimal<int64_t>(
+      "-" + std::string(18, '9'), 0, DecimalUtil::kShortDecimalMin);
+
+  testStringToDecimal<int128_t>(
+      "-18446744073709551616", 0, HugeInt::parse("-18446744073709551616"));
+  testStringToDecimal<int128_t>(
+      "-18446744073709551.616", 3, HugeInt::parse("-18446744073709551616"));
+  testStringToDecimal<int128_t>(
+      "-0.12345678901234567890", 20, HugeInt::parse("-12345678901234567890"));
+  testStringToDecimal<int128_t>(
+      std::string(38, '9'), 0, DecimalUtil::kLongDecimalMax);
+  testStringToDecimal<int128_t>(
+      "-" + std::string(38, '9'), 0, DecimalUtil::kLongDecimalMin);
 }
 } // namespace
 } // namespace facebook::velox
