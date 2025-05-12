@@ -211,15 +211,43 @@ TEST_F(FromJsonTest, basicString) {
 }
 
 TEST_F(FromJsonTest, nestedComplexType) {
-  auto rowVector = makeRowVector({"a"}, {makeFlatVector<int64_t>({1, 2, 2})});
   std::vector<vector_size_t> offsets;
   offsets.push_back(0);
   offsets.push_back(1);
   offsets.push_back(2);
-  auto arrayVector = makeArrayVector(offsets, rowVector);
+  auto arrayVector = makeArrayVector(
+      offsets, makeRowVector({"a"}, {makeFlatVector<int64_t>({1, 2, 2})}));
   auto input = makeFlatVector<std::string>(
       {R"({"a": 1})", R"([{"a": 2}])", R"([{"a": 2}])"});
   testFromJson(input, arrayVector);
+
+  auto keyVector = makeFlatVector<StringView>({"a", "b", "c"});
+  auto valueVector = makeArrayVector(
+      offsets,
+      makeRowVector(
+          {"d", "e"},
+          {makeFlatVector<int64_t>({1, 2, 3}),
+           makeNullableFlatVector<int32_t>({3, 4, std::nullopt})}));
+  auto mapVector = makeMapVector(offsets, keyVector, valueVector);
+  auto mapInput = makeFlatVector<std::string>(
+      {R"({"a": [{"d": 1, "e": 3}]})",
+       R"({"b": [{"d": 2, "e": 4}]})",
+       R"({"c": [{"d": 3}]})"});
+  testFromJson(mapInput, mapVector);
+
+  auto rowVector = makeRowVector(
+      {"a"},
+      {makeRowVector(
+          {"b"},
+          {makeRowVector(
+              {"d1", "e1"},
+              {makeFlatVector<int64_t>({1, 1, 1}),
+               makeNullableFlatVector<int32_t>({3, 3, std::nullopt})})})});
+  auto rowInput = makeFlatVector<std::string>(
+      {R"({"a": {"b": {"d1": 1, "e1": 3}}})",
+       R"({"a": {"b": {"D1": 1, "e1": 3}}})",
+       R"({"a": {"b": {"d1": 1, "f3": 3}}})"});
+  testFromJson(rowInput, rowVector);
 }
 
 TEST_F(FromJsonTest, structEmptyArray) {
