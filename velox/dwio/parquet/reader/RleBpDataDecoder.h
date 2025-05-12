@@ -57,6 +57,7 @@ class RleBpDataDecoder : public facebook::velox::parquet::RleBpDecoder {
       }
     }
     int32_t current = visitor.start();
+    int32_t numValues = 0;
     skip<hasNulls>(current, 0, nulls);
     int32_t toSkip = 0;
     bool atEnd = false;
@@ -71,6 +72,10 @@ class RleBpDataDecoder : public facebook::velox::parquet::RleBpDecoder {
             skip<false>(toSkip, current, nullptr);
           }
           if (atEnd) {
+            if constexpr (Visitor::kHasHook) {
+              visitor.setNumValues(
+                  Visitor::kHasFilter ? numValues : visitor.numRows());
+            }
             return;
           }
         }
@@ -88,11 +93,16 @@ class RleBpDataDecoder : public facebook::velox::parquet::RleBpDecoder {
         --remainingValues_;
       }
       ++current;
+      ++numValues;
       if (toSkip) {
         skip<hasNulls>(toSkip, current, nulls);
         current += toSkip;
       }
       if (atEnd) {
+        if constexpr (Visitor::kHasHook) {
+          visitor.setNumValues(
+              Visitor::kHasFilter ? numValues : visitor.numRows());
+        }
         return;
       }
     }
