@@ -60,15 +60,15 @@ class IoCounter {
   }
 
   void increment(uint64_t amount) {
-    ++count_;
-    sum_ += amount;
+    count_.fetch_add(1, std::memory_order_relaxed);
+    sum_.fetch_add(amount, std::memory_order_relaxed);
     casLoop(min_, amount, std::greater());
     casLoop(max_, amount, std::less());
   }
 
   void merge(const IoCounter& other) {
-    sum_ += other.sum_;
-    count_ += other.count_;
+    sum_.fetch_add(other.sum_, std::memory_order_relaxed);
+    count_.fetch_add(other.count_, std::memory_order_relaxed);
     casLoop(min_, other.min_, std::greater());
     casLoop(max_, other.max_, std::less());
   }
