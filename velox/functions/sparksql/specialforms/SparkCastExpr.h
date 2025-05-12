@@ -26,14 +26,17 @@ class SparkCastExpr : public exec::CastExpr {
   /// @param type The target type of the cast expression
   /// @param expr The expression to cast
   /// @param trackCpuUsage Whether to track CPU usage
+  /// In Spark SQL (with ANSI mode off), both CAST and TRY_CAST behave like
+  /// Velox's try_cast, so we set 'isTryCast' to true by default in CastExpr.
+  /// The distinction between CAST (ANSI off) and TRY_CAST is limited to
+  /// overflow handling, which is managed by the 'allowOverflow' flag in
+  /// SparkCastHooks.
   SparkCastExpr(
       TypePtr type,
       exec::ExprPtr&& expr,
       bool trackCpuUsage,
-      bool isTryCast,
       std::shared_ptr<SparkCastHooks> hooks)
-      : exec::CastExpr(type, std::move(expr), trackCpuUsage, isTryCast, hooks) {
-  }
+      : exec::CastExpr(type, std::move(expr), trackCpuUsage, true, hooks) {}
 };
 
 class SparkCastCallToSpecialForm : public exec::CastCallToSpecialForm {
