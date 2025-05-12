@@ -877,7 +877,7 @@ class TableWriteTest : public HiveConnectorTestBase {
           partitionTypes[i]->isDate()) {
         conjuncts.push_back(
             partitionKeyValues[i]
-                .replace(partitionKeyValues[i].find("="), 1, "='")
+                .replace(partitionKeyValues[i].find('='), 1, "='")
                 .append("'"));
       } else {
         conjuncts.push_back(partitionKeyValues[i]);
@@ -898,7 +898,7 @@ class TableWriteTest : public HiveConnectorTestBase {
           partitionTypes_[i]->isVarbinary() || partitionTypes_[i]->isDate()) {
         conjuncts.push_back(
             partitionKeyValues[i]
-                .replace(partitionKeyValues[i].find("="), 1, "='")
+                .replace(partitionKeyValues[i].find('='), 1, "='")
                 .append("'"));
       } else {
         conjuncts.push_back(partitionDirNames[i]);
