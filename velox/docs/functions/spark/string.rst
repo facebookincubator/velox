@@ -436,15 +436,12 @@ String Functions
     Spark SQL itself rejects ``VARCHAR(0)`` in DDL statements so this case will not be encountered.
     Note: This function is not directly callable in Spark SQL, but internally used for length check when writing string type columns. ::
 
-        -- Example SparkSQL usage that triggers the function (function is not called directly in SQL).
-        create table src(id string) stored as parquet;
-        create table tgt(id varchar(3)) stored as parquet;
-        insert into src values ('abc '); -- ascii string with characters length of 4.
-        insert into tgt select id from src where id in('abc '); -- calls: varchar_type_write_side_check("abc ", 3) -- "abc"
-        insert into src values ('abcd'); -- ascii string with characters length of 4.
-        insert into tgt select id from src where id in('abcd'); -- calls: varchar_type_write_side_check("abcd", 3) -- throws exception
-        insert into src values ('中国'); -- Unicode string with characters length of 2.
-        insert into tgt select id from src where id in('中国'); -- "中国"
-        insert into src values ('中文中国'); -- Unicode string with characters length of 4.
-        insert into tgt select id from src where id in('中文中国'); -- throws exception
+        -- Function call examples (this function is not directly callable in Spark SQL).
+        varchar_type_write_side_check("abc", 3) -- "abc"
+        varchar_type_write_side_check("abc   ", 3) -- "abc"
+        varchar_type_write_side_check("abcd", 3) -- throws exception
+        varchar_type_write_side_check("中国", 3) -- "中国"
+        varchar_type_write_side_check("中文中国", 3) -- throws exception
+        varchar_type_write_side_check("   ", 0) -- ""
+        varchar_type_write_side_check("abc", 0) -- throws exception
 
