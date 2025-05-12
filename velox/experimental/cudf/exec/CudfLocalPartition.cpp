@@ -98,8 +98,16 @@ CudfLocalPartition::CudfLocalPartition(
   // }
 }
 
+void CudfLocalPartition::recordOutputStats(RowVectorPtr& input) {
+  {
+    auto lockedStats = stats_.wlock();
+    lockedStats->addOutputVector(input->estimateFlatSize(), input->size());
+  }
+}
+
 void CudfLocalPartition::addInput(RowVectorPtr input) {
   VELOX_NVTX_OPERATOR_FUNC_RANGE();
+  recordOutputStats(input);
   auto cudfVector = std::dynamic_pointer_cast<CudfVector>(input);
   VELOX_CHECK(cudfVector, "Input must be a CudfVector");
   auto stream = cudfVector->stream();
