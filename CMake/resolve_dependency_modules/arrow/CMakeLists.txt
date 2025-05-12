@@ -42,6 +42,11 @@ if(VELOX_ENABLE_ARROW)
       -DCMAKE_POLICY_VERSION_MINIMUM=3.5
       # Remove with Arrow upgrade to Arrow 20.
       -DARROW_CXXFLAGS=-Wno-documentation)
+  if(DEFINED ENV{EXTRA_ARROW_CMAKE_FLAGS})
+    string(REPLACE " " ";" EXTRA_ARROW_CMAKE_FLAGS_LIST
+                   "$ENV{EXTRA_ARROW_CMAKE_FLAGS}")
+    list(APPEND ARROW_CMAKE_ARGS ${EXTRA_ARROW_CMAKE_FLAGS_LIST})
+  endif()
   set(ARROW_LIBDIR ${ARROW_PREFIX}/install/${CMAKE_INSTALL_LIBDIR})
 
   add_library(thrift STATIC IMPORTED GLOBAL)

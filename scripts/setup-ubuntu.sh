@@ -45,6 +45,7 @@ export INSTALL_PREFIX=${INSTALL_PREFIX:-"/usr/local"}
 DEPENDENCY_DIR=${DEPENDENCY_DIR:-$(pwd)/deps-download}
 VERSION=$(cat /etc/os-release | grep VERSION_ID)
 PYTHON_VENV=${PYTHON_VENV:-"${SCRIPTDIR}/../.venv"}
+EXTRA_ARROW_CMAKE_FLAGS=${EXTRA_ARROW_CMAKE_FLAGS:-""}
 
 # On Ubuntu 20.04 dependencies need to be built using gcc11.
 # On Ubuntu 22.04 gcc11 is already the system gcc installed.
@@ -287,7 +288,8 @@ function install_arrow {
     -DCMAKE_INSTALL_PREFIX=${INSTALL_PREFIX} \
     -DCMAKE_BUILD_TYPE=Release \
     -DARROW_BUILD_STATIC=ON \
-    -DBOOST_ROOT=${INSTALL_PREFIX}
+    -DBOOST_ROOT=${INSTALL_PREFIX} \
+    ${EXTRA_ARROW_CMAKE_FLAGS}
 }
 
 function install_cuda {
