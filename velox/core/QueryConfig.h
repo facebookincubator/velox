@@ -598,6 +598,9 @@ class QueryConfig {
   static constexpr const char* kFieldNamesInJsonCastEnabled =
       "field_names_in_json_cast_enabled";
 
+  /// Enable dynamic filter for broadcast joins
+  static constexpr const char* kDynamicFilterEnabled = "dynamic_filter_enabled";
+
   bool selectiveNimbleReaderEnabled() const {
     return get<bool>(kSelectiveNimbleReaderEnabled, false);
   }
@@ -1087,6 +1090,10 @@ class QueryConfig {
 
   bool isFieldNamesInJsonCastEnabled() const {
     return get<bool>(kFieldNamesInJsonCastEnabled, false);
+  }
+
+  bool dynamicFilterEnabled() const {
+    return get<bool>(kDynamicFilterEnabled, true);
   }
 
   template <typename T>
