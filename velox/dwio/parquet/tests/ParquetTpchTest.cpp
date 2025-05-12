@@ -51,8 +51,8 @@ class ParquetTpchTest : public testing::Test {
     filesystems::registerLocalFileSystem();
     dwio::common::registerFileSinks();
 
-    parquet::registerParquetReaderFactory();
-    parquet::registerParquetWriterFactory();
+    facebook::velox::parquet::registerParquetReaderFactory();
+    facebook::velox::parquet::registerParquetWriterFactory();
 
     connector::registerConnectorFactory(
         std::make_shared<connector::hive::HiveConnectorFactory>());
@@ -87,8 +87,8 @@ class ParquetTpchTest : public testing::Test {
         connector::tpch::TpchConnectorFactory::kTpchConnectorName);
     connector::unregisterConnector(kHiveConnectorId);
     connector::unregisterConnector(kTpchConnectorId);
-    parquet::unregisterParquetReaderFactory();
-    parquet::unregisterParquetWriterFactory();
+    facebook::velox::parquet::unregisterParquetReaderFactory();
+    facebook::velox::parquet::unregisterParquetWriterFactory();
   }
 
   static void saveTpchTablesAsParquet() {
