@@ -62,6 +62,7 @@ add_executable(
   FailTest.cpp
   FindFirstTest.cpp
   FromUtf8Test.cpp
+  GeometryFunctionsTest.cpp
   GreatestLeastTest.cpp
   HyperLogLogCastTest.cpp
   HyperLogLogFunctionsTest.cpp
@@ -132,3 +133,13 @@ target_link_libraries(
   GTest::gtest_main
   GTest::gmock
   GTest::gmock_main)
+
+if(VELOX_ENABLE_GEO)
+  velox_compile_definitions(velox_functions_test PRIVATE VELOX_ENABLE_GEO)
+  if(VELOX_MONO_LIBRARY)
+    target_compile_options(velox PRIVATE -Wno-cpp)
+  else()
+    target_compile_options(velox_functions_test PRIVATE -Wno-cpp)
+  endif()
+  velox_link_libraries(velox_functions_test GEOS::geos)
+endif()
