@@ -28,17 +28,11 @@ exec::ExprPtr SparkCastCallToSpecialForm::constructSpecialForm(
       1,
       "CAST statements expect exactly 1 argument, received {}.",
       compiledChildren.size());
-  // We set isTryCast to true because Spark's cast function (with ANSI mode
-  // disabled) returns NULL when given invalid input, matching the velox
-  // try_cast behavior.
-  // TODO: If an ANSI mode configuration is added, the value of isTryCast should
-  // be set according to that configuration.
   return std::make_shared<SparkCastExpr>(
       type,
       std::move(compiledChildren[0]),
       trackCpuUsage,
-      true,
-      std::make_shared<SparkCastHooks>(config, false));
+      std::make_shared<SparkCastHooks>(config, true));
 }
 
 exec::ExprPtr SparkTryCastCallToSpecialForm::constructSpecialForm(
@@ -55,7 +49,6 @@ exec::ExprPtr SparkTryCastCallToSpecialForm::constructSpecialForm(
       type,
       std::move(compiledChildren[0]),
       trackCpuUsage,
-      true,
-      std::make_shared<SparkCastHooks>(config, true));
+      std::make_shared<SparkCastHooks>(config, false));
 }
 } // namespace facebook::velox::functions::sparksql

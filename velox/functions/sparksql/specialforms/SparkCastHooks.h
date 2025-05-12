@@ -26,7 +26,7 @@ class SparkCastHooks : public exec::CastHooks {
  public:
   explicit SparkCastHooks(
       const velox::core::QueryConfig& config,
-      bool isTryCast);
+      bool allowOverflow);
 
   // TODO: Spark hook allows more string patterns than Presto.
   Expected<Timestamp> castStringToTimestamp(
@@ -69,7 +69,7 @@ class SparkCastHooks : public exec::CastHooks {
   }
 
   bool truncate() const override {
-    return !isTryCast_;
+    return allowOverflow_;
   }
 
   exec::PolicyType getPolicy() const override;
@@ -82,7 +82,7 @@ class SparkCastHooks : public exec::CastHooks {
   Expected<Timestamp> castNumberToTimestamp(T seconds) const;
 
   const core::QueryConfig& config_;
-  const bool isTryCast_;
+  const bool allowOverflow_;
 
   /// 1) Does not follow 'isLegacyCast'. 2) The conversion precision is
   /// microsecond. 3) Does not append trailing zeros. 4) Adds a positive
