@@ -160,39 +160,49 @@ class AssertQueryBuilder {
   /// duckDbQueryRunner to be provided in the constructor.
   std::shared_ptr<Task> assertResults(
       const std::string& duckDbSql,
-      const std::optional<std::vector<uint32_t>>& sortingKeys = std::nullopt);
-
-  /// Run the query and compare results with 'expected'.
-  std::shared_ptr<Task> assertResults(const RowVectorPtr& expected);
+      const std::optional<std::vector<uint32_t>>& sortingKeys = std::nullopt,
+      bool addSplitWithSequence = false);
 
   /// Run the query and compare results with 'expected'.
   std::shared_ptr<Task> assertResults(
-      const std::vector<RowVectorPtr>& expected);
+      const RowVectorPtr& expected,
+      bool addSplitWithSequence = false);
+
+  /// Run the query and compare results with 'expected'.
+  std::shared_ptr<Task> assertResults(
+      const std::vector<RowVectorPtr>& expected,
+      bool addSplitWithSequence = false);
 
   /// Run the query and test that it returns no results (empty result set).
-  std::shared_ptr<Task> assertEmptyResults();
+  std::shared_ptr<Task> assertEmptyResults(bool addSplitWithSequence = false);
 
   /// Run the query and ensure it returns batches of `expectedType`, and exactly
   /// `numRows`.
   std::shared_ptr<Task> assertTypeAndNumRows(
       const TypePtr& expectedType,
-      vector_size_t expectedNumRows);
+      vector_size_t expectedNumRows,
+      bool addSplitWithSequence = false);
 
   /// Run the query and collect all results into a single vector. Throws if
   /// query returns empty result.
-  RowVectorPtr copyResults(memory::MemoryPool* pool);
+  RowVectorPtr copyResults(
+      memory::MemoryPool* pool,
+      bool addSplitWithSequence = false);
 
   /// Similar to above method and also returns the task.
   RowVectorPtr copyResults(
       memory::MemoryPool* pool,
-      std::shared_ptr<Task>& task);
+      std::shared_ptr<Task>& task,
+      bool addSplitWithSequence = false);
 
   /// Run the query and return the number of result rows.
-  uint64_t runWithoutResults(std::shared_ptr<Task>& task);
+  uint64_t runWithoutResults(
+      std::shared_ptr<Task>& task,
+      bool runWithoutResults = false);
 
  private:
-  std::pair<std::unique_ptr<TaskCursor>, std::vector<RowVectorPtr>>
-  readCursor();
+  std::pair<std::unique_ptr<TaskCursor>, std::vector<RowVectorPtr>> readCursor(
+      bool addSplitWithSequence);
 
   static std::unique_ptr<folly::Executor> newExecutor() {
     return std::make_unique<folly::CPUThreadPoolExecutor>(
