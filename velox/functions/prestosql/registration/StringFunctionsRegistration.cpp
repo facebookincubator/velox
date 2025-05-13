@@ -84,7 +84,14 @@ void registerSimpleFunctions(const std::string& prefix) {
   registerFunction<SplitPart, Varchar, Varchar, Varchar, int64_t>(
       {prefix + "split_part"});
 
-  registerFunction<TrimFunction, Varchar, Varchar>({prefix + "trim"});
+  std::vector<exec::SignatureVariable> constraints = {
+      exec::SignatureVariable(
+          L2::name(),
+          fmt::format("{return_length}", fmt::arg("return_length", L1::name())),
+          exec::ParameterType::kIntegerParameter),
+  };
+  registerFunction<TrimFunction, VarcharN<L2>, VarcharN<L1>>(
+      {prefix + "trim"}, constraints);
   registerFunction<TrimFunction, Varchar, Varchar, Varchar>({prefix + "trim"});
   registerFunction<LTrimFunction, Varchar, Varchar>({prefix + "ltrim"});
   registerFunction<LTrimFunction, Varchar, Varchar, Varchar>(
@@ -93,8 +100,10 @@ void registerSimpleFunctions(const std::string& prefix) {
   registerFunction<RTrimFunction, Varchar, Varchar, Varchar>(
       {prefix + "rtrim"});
 
-  registerFunction<LPadFunction, Varchar, Varchar, int64_t, Varchar>(
-      {prefix + "lpad"});
+  registerFunction<LPadFunction, VarcharN<>, VarcharN<>, int64_t, VarcharN<>>(
+        {prefix + "lpad"});
+  //registerFunction<LPadFunction, Varchar, Varchar, int64_t, Varchar>(
+  //    {prefix + "lpad"});
   registerFunction<RPadFunction, Varchar, Varchar, int64_t, Varchar>(
       {prefix + "rpad"});
 
