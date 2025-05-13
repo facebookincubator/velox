@@ -160,7 +160,6 @@ option(
   OFF)
 option(VELOX_SIMDJSON_SKIPUTF8VALIDATION
        "Skip simdjson utf8 validation in JSON parsing" OFF)
-option(VELOX_ENABLE_CPR "Enable cpr support" OFF)
 
 # Explicitly force compilers to generate colored output. Compilers usually do
 # this by default if they detect the output is a terminal, but this assumption
@@ -194,8 +193,7 @@ if(VELOX_ENABLE_BENCHMARKS_BASIC)
 endif()
 
 if(VELOX_BUILD_TESTING OR VELOX_BUILD_TEST_UTILS)
-  set(cpr_SOURCE BUNDLED)
-  velox_resolve_dependency(cpr)
+  set(VELOX_ENABLE_CPR ON)
   set(VELOX_ENABLE_DUCKDB ON)
   set(VELOX_ENABLE_PARSE ON)
 endif()
@@ -558,8 +556,7 @@ if(VELOX_ENABLE_REMOTE_FUNCTIONS)
   find_package(fizz CONFIG REQUIRED)
   find_package(wangle CONFIG REQUIRED)
   find_package(FBThrift CONFIG REQUIRED)
-  set(cpr_SOURCE BUNDLED)
-  velox_resolve_dependency(cpr)
+  set(VELOX_ENABLE_CPR ON)
 endif()
 
 if(VELOX_ENABLE_GCS)
@@ -671,13 +668,8 @@ if(VELOX_ENABLE_GEO)
 endif()
 
 if(VELOX_ENABLE_CPR)
-  find_package(cpr CONFIG QUIET)
-  if(NOT cpr_FOUND)
-    set(cpr_SOURCE BUNDLED)
-    velox_set_source(cpr)
-    velox_resolve_dependency(cpr)
-  endif()
-  add_definitions(-DVELOX_ENABLE_CPR)
+  velox_set_source(cpr)
+  velox_resolve_dependency(cpr)
 endif()
 
 add_subdirectory(velox)
