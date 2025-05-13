@@ -294,6 +294,19 @@ The input value is treated as the number of seconds since the epoch (1970-01-01 
 </pre></div>
 </div>
 </section>
+<section id="from-boolean">
+<h3>From boolean<a class="headerlink" href="#from-boolean" title="Link to this heading">¶</a></h3>
+<p>Casting from boolean to timestamp is supported.</p>
+<ul class="simple">
+<li><p><code class="docutils literal notranslate"><span class="pre">true</span></code> - cast to <strong>1970-01-01 00:00:00.000001</strong></p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">false</span></code> - cast to <strong>1970-01-01 00:00:00</strong> (epoch)</p></li>
+</ul>
+<p>Valid examples</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="n">true</span> <span class="k">as</span> <span class="n">timestamp</span><span class="p">);</span> <span class="o">--</span> <span class="mi">1970</span><span class="o">-</span><span class="mi">01</span><span class="o">-</span><span class="mi">01</span> <span class="mi">00</span><span class="p">:</span><span class="mi">00</span><span class="p">:</span><span class="mf">00.000001</span>
+<span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="n">false</span> <span class="k">as</span> <span class="n">timestamp</span><span class="p">);</span> <span class="o">--</span> <span class="mi">1970</span><span class="o">-</span><span class="mi">01</span><span class="o">-</span><span class="mi">01</span> <span class="mi">00</span><span class="p">:</span><span class="mi">00</span><span class="p">:</span><span class="mi">00</span>
+</pre></div>
+</div>
+</section>
 </section>
 </section>
 
@@ -339,6 +352,7 @@ The input value is treated as the number of seconds since the epoch (1970-01-01 
 <li><a class="reference internal" href="#cast-to-timestamp">Cast to Timestamp</a><ul>
 <li><a class="reference internal" href="#id5">From integral types</a></li>
 <li><a class="reference internal" href="#id6">From floating-point types</a></li>
+<li><a class="reference internal" href="#from-boolean">From boolean</a></li>
 </ul>
 </li>
 </ul>
