@@ -28,12 +28,14 @@ SelectiveStructColumnReader::SelectiveStructColumnReader(
     const std::shared_ptr<const TypeWithId>& fileType,
     DwrfParams& params,
     common::ScanSpec& scanSpec,
+    bool useColumnNames,
     bool isRoot)
     : SelectiveStructColumnReaderBase(
           requestedType,
           fileType,
           params,
           scanSpec,
+          useColumnNames,
           isRoot) {
   EncodingKey encodingKey{fileType_->id(), params.flatMapContext().sequence};
   auto& stripe = params.stripeStreams();
@@ -86,7 +88,11 @@ SelectiveStructColumnReader::SelectiveStructColumnReader(
             .inMapDecoder = nullptr,
             .keySelectionCallback = nullptr});
     addChild(SelectiveDwrfReader::build(
-        childRequestedType, childFileType, childParams, *childSpec));
+        childRequestedType,
+        childFileType,
+        childParams,
+        *childSpec,
+        useColumnNames));
     childSpec->setSubscript(children_.size() - 1);
   }
 }
