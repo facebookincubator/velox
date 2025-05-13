@@ -23,6 +23,11 @@ string(
 
 velox_resolve_dependency_url(GFLAGS)
 
+if($(BUILD_TESTING))
+  message(STATUS "Joe - gflags: BUILD_TESTING is enabled")
+endif()
+set(BUILD_TESTING OFF)
+
 message(STATUS "Building gflags from source")
 FetchContent_Declare(
   gflags
@@ -63,3 +68,4 @@ endif()
 set(gflags_FOUND TRUE)
 set(gflags_LIBRARY gflags::gflags)
 set(gflags_INCLUDE_DIR)
+unset(BUILD_TESTING)
