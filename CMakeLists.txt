@@ -18,6 +18,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED TRUE)
 set(CMAKE_CXX_EXTENSIONS ON) # Big Int is an extension
 message(STATUS "CXX standard: ${CMAKE_CXX_STANDARD}")
 
+
 # Check for SVE support
 execute_process(COMMAND lscpu OUTPUT_VARIABLE LSCPU_OUTPUT)
 string(FIND "${LSCPU_OUTPUT}" "sve" SVE_FOUND)
