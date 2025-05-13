@@ -82,33 +82,6 @@ class SimdUtilTest : public testing::Test {
     }
   }
 
-  void testMemsetAndMemcpy(int32_t size) {
-    int32_t words = bits::roundUp(size + 20, 8) / 8;
-    std::vector<int64_t> source(words);
-    for (auto& item : source) {
-      item = folly::Random::rand64(rng_);
-    }
-    auto target = source;
-    auto reference = source;
-    int32_t offset = size % 11;
-    memset(
-        reinterpret_cast<char*>(reference.data()) + offset,
-        source.back(),
-        size);
-    simd::memset(
-        reinterpret_cast<char*>(target.data()) + offset, source.back(), size);
-    EXPECT_EQ(reference, target);
-    memcpy(
-        reinterpret_cast<char*>(reference.data()) + offset,
-        reinterpret_cast<char*>(source.data()) + offset,
-        size);
-    simd::memcpy(
-        reinterpret_cast<char*>(target.data()) + offset,
-        reinterpret_cast<char*>(source.data()) + offset,
-        size);
-    EXPECT_EQ(reference, target);
-  }
-
   template <class Integral1, class Integral2>
   Integral2 random(Integral1 low, Integral2 up) {
     std::uniform_int_distribution<> range(low, up);
@@ -373,12 +346,6 @@ TEST_F(SimdUtilTest, misc) {
   EXPECT_FALSE(simd::isDense(&ints[0], 4));
 }
 
-TEST_F(SimdUtilTest, memory) {
-  for (auto size = 0; size < 150; ++size) {
-    testMemsetAndMemcpy(size);
-  }
-}
-
 TEST_F(SimdUtilTest, crc32) {
   uint32_t checksum = 0;
   checksum = simd::crc32U64(0, 123456789);
@@ -464,44 +431,6 @@ TEST_F(SimdUtilTest, memEqualUnsafe) {
   // Redo the test offset by 1 to test unaligned.
   EXPECT_TRUE(simd::memEqualUnsafe(&data.x[1], &data.y[1], 66));
   EXPECT_FALSE(simd::memEqualUnsafe(&data.x[1], &data.y[1], 67));
-}
-
-TEST_F(SimdUtilTest, memcpyTime) {
-  constexpr int64_t kMaxMove = 128;
-  constexpr int64_t kSize = (128 << 20) + kMaxMove;
-  constexpr uint64_t kSizeMask = (128 << 20) - 1;
-  constexpr int32_t kMoveMask = kMaxMove - 1;
-  constexpr uint64_t kMagic1 = 0x5231871;
-  constexpr uint64_t kMagic3 = 0xfae1;
-  constexpr uint64_t kMagic2 = 0x817952491;
-  std::vector<char> dataV(kSize);
-
-  auto data = dataV.data();
-  uint64_t simd = 0;
-  uint64_t sys = 0;
-  {
-    MicrosecondTimer t(&simd);
-    for (auto ctr = 0; ctr < 100; ++ctr) {
-      for (auto i = 0; i < 10000; ++i) {
-        char* from = data + ((i * kMagic1) & kSizeMask);
-        char* to = data + ((i * kMagic2) & kSizeMask);
-        int32_t size = (i * kMagic3) % kMoveMask;
-        simd::memcpy(to, from, size);
-      }
-    }
-  }
-  {
-    MicrosecondTimer t(&sys);
-    for (auto ctr = 0; ctr < 100; ++ctr) {
-      for (auto i = 0; i < 10000; ++i) {
-        char* from = data + ((i * kMagic1) & kSizeMask);
-        char* to = data + ((i * kMagic2) & kSizeMask);
-        int32_t size = (i * kMagic3) % kMoveMask;
-        ::memcpy(to, from, size);
-      }
-    }
-  }
-  LOG(INFO) << "simd=" << simd << " sys=" << sys;
 }
 
 /// Copy from std::boyer_moore_searcher proposal:
