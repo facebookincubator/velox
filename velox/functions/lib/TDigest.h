@@ -82,6 +82,10 @@ class TDigest {
   /// @param quantile Quantile in [0, 1] to be estimated.
   double estimateQuantile(double quantile) const;
 
+  /// Estimate the quantile for a given value
+  /// @param value to be estimated.
+  double getCdf(double quantile);
+
   /// Calculate the size needed for serialization.
   int64_t serializedByteSize() const;
 
@@ -127,9 +131,26 @@ class TDigest {
     return max_;
   }
 
+  /// Returns the weights of the centroids.
+  const double* weights() const {
+    return weights_.data();
+  }
+
+  /// Returns the size of the centroids.
+  size_t size() const {
+    VELOX_DCHECK_EQ(weights_.size(), means_.size());
+    return weights_.size();
+  }
+
+  /// Returns the means of the centroids.
+  const double* means() const {
+    return means_.data();
+  }
+
   static constexpr int8_t kSerializationVersion = 1;
   static constexpr double kEpsilon = 1e-3;
   static constexpr double kRelativeErrorEpsilon = 1e-4;
+  int activeCentroids_ = 0;
 
  private:
   void mergeNewValues(std::vector<int16_t>& positions, double compression);
@@ -188,6 +209,7 @@ void TDigest<A>::add(
   max_ = std::max(max_, value);
   weights_.push_back(weight);
   means_.push_back(value);
+  activeCentroids_++;
   if (weights_.size() >= maxBufferSize_) {
     mergeNewValues(positions, 2 * compression_);
   }
@@ -311,6 +333,7 @@ void TDigest<A>::mergeImpl(
   means_.resize(numMerged_);
   min_ = std::min(min_, means_.front());
   max_ = std::max(max_, means_.back());
+  activeCentroids_ = numMerged_;
 }
 
 template <typename A>
@@ -384,6 +407,135 @@ double TDigest<A>::estimateQuantile(double quantile) const {
   auto z2 = weights_.back() / 2 - z1;
   return weightedAverageSorted(means_.back(), z1, max_, z2);
 }
+template <typename A>
+double TDigest<A>::getCdf(double x) {
+  if (activeCentroids_ == 0) {
+    return std::numeric_limits<double>::quiet_NaN();
+  }
+  if (activeCentroids_ == 1) {
+    double width = max_ - min_;
+    if (x < min_) {
+      return 0;
+    }
+    if (x > max_) {
+      return 1;
+    }
+    if (x - min_ <= width) {
+      // min and max are too close together to do any viable interpolation
+      return 0.5;
+    }
+    return (x - min_) / (max_ - min_);
+  }
+  int n = activeCentroids_;
+  if (x < min_) {
+    return 0;
+  }
+  if (x > max_) {
+    return 1;
+  }
+  auto totalWeight = std::accumulate(weights_.begin(), weights_.end(), 0.0);
+  // check for the left tail
+  if (x < means_[0]) {
+    // guarantees we divide by non-zero number and interpolation works
+    if (means_[0] - min_ > 0) {
+      // must be a sample exactly at min
+      if (x == min_) {
+        return 0.5 / totalWeight;
+      }
+      return (1 + (x - min_) / (means_[0] - min_) * (weights_[0] / 2 - 1)) /
+          totalWeight;
+    }
+    return 0.0;
+  }
+  VELOX_CHECK_GE(
+      x,
+      means_[0],
+      "Value x:%s must be greater than mean of first centroid %s if we got here",
+      x,
+      means_[0]);
+
+  // and the right tail
+  if (x > means_[n - 1]) {
+    if (max_ - means_[n - 1] > 0) {
+      if (x == max_) {
+        return 1 - 0.5 / totalWeight;
+      }
+      // there has to be a single sample exactly at max
+      double dq =
+          (1 +
+           (max_ - x) / (max_ - means_[n - 1]) * (weights_[n - 1] / 2 - 1)) /
+          totalWeight;
+      return 1 - dq;
+    }
+    return 1.0;
+  }
+
+  // we know that there are at least two centroids and mean[0] < x < mean[n-1]
+  // that means that there are either one or more consecutive centroids all at
+  // exactly x or there are consecutive centroids, c0 < x < c1
+  double weightSoFar = 0;
+  for (int it = 0; it < n - 1; it++) {
+    // weightSoFar does not include weight[it] yet
+    if (means_[it] == x) {
+      // dw will accumulate the weight of all of the centroids at x
+      double dw = 0;
+      while (it < n && means_[it] == x) {
+        dw += weights_[it];
+        it++;
+      }
+      return (weightSoFar + dw / 2) / totalWeight;
+    } else if (means_[it] <= x && x < means_[it + 1]) {
+      // landed between centroids
+      if (means_[it + 1] - means_[it] > 0) {
+        // no interpolation needed if we have a singleton centroid
+        double leftExcludedW = 0;
+        double rightExcludedW = 0;
+        if (weights_[it] == 1) {
+          if (weights_[it + 1] == 1) {
+            // two singletons means no interpolation
+            // left singleton is in, right is out
+            return (weightSoFar + 1) / totalWeight;
+          } else {
+            leftExcludedW = 0.5;
+          }
+        } else if (weights_[it + 1] == 1) {
+          rightExcludedW = 0.5;
+        }
+        double dw = (weights_[it] + weights_[it + 1]) / 2;
+        VELOX_CHECK_GT(dw, 1.0, "dw must be > 1, was %s", dw);
+        VELOX_CHECK_LE(
+            leftExcludedW + rightExcludedW,
+            0.5,
+            "Excluded weight must be <= 0.5, was %s",
+            leftExcludedW + rightExcludedW);
+
+        // adjust endpoints for any singleton
+        double left = means_[it];
+        double right = means_[it + 1];
+        double dwNoSingleton = dw - leftExcludedW - rightExcludedW;
+        VELOX_CHECK_GT(
+            right - left,
+            0.0,
+            "Centroids should be in ascending order, but mean of left centroid was greater than right centroid");
+        double base = weightSoFar + weights_[it] / 2 + leftExcludedW;
+        return (base + dwNoSingleton * (x - left) / (right - left)) /
+            totalWeight;
+      } else {
+        // caution against floating point madness
+        double dw = (weights_[it] + weights_[it + 1]) / 2;
+        return (weightSoFar + dw) / totalWeight;
+      }
+    } else {
+      weightSoFar += weights_[it];
+    }
+  }
+  VELOX_CHECK_EQ(
+      x,
+      means_[n - 1],
+      "At this point, x must equal the mean of the last centroid");
+
+  return 1 - 0.5 / totalWeight;
+}
 
 template <typename A>
 void TDigest<A>::scale(double scaleFactor) {
@@ -437,7 +589,6 @@ int64_t TDigest<A>::serializedByteSize() const {
 template <typename A>
 void TDigest<A>::serialize(char* out) const {
   VELOX_CHECK_EQ(numMerged_, weights_.size());
-  auto totalWeight = std::accumulate(weights_.begin(), weights_.end(), 0.0);
   const char* oldOut = out;
   tdigest::detail::write(kSerializationVersion, out);
   tdigest::detail::write<int8_t>(0, out);
@@ -445,7 +596,7 @@ void TDigest<A>::serialize(char* out) const {
   tdigest::detail::write(max_, out);
   tdigest::detail::write(sum(), out);
   tdigest::detail::write(compression_, out);
-  tdigest::detail::write(totalWeight, out);
+  tdigest::detail::write(totalWeight(), out);
   tdigest::detail::write(numMerged_, out);
   if (numMerged_ > 0) {
     tdigest::detail::write(weights_.data(), numMerged_, out);
