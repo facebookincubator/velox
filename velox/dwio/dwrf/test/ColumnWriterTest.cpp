@@ -1700,7 +1700,7 @@ void removeSizeFromStats(std::string& input) {
   // and value from the String used for comparison.
   auto firstPos = input.find(" Size:");
   ASSERT_NE(firstPos, std::string::npos) << " Size not found in " << input;
-  auto endPos = input.find(",", firstPos);
+  auto endPos = input.find(',', firstPos);
   ASSERT_NE(endPos, std::string::npos) << " , not found after Size " << input;
   input.erase(firstPos, (endPos + 1) - firstPos);
 }
