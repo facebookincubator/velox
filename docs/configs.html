@@ -474,16 +474,9 @@ can be used to prevent a query from using too much io and cpu resources.</p></td
 <td><p>12582912</p></td>
 <td><p>The max number of rows to fill and spill for each spill run. This is used to cap the memory used for spilling.
 If it is zero, then there is no limit and spilling might run out of memory. Based on offline test results, the
-default value is set to 12 million rows which uses ~128MB memory when to fill a spill run.
-Relation between spill rows and memory usage are as follows:</p>
-<blockquote>
-<div><ul class="simple">
-<li><p><code class="docutils literal notranslate"><span class="pre">12</span> <span class="pre">million</span> <span class="pre">rows:</span> <span class="pre">128</span> <span class="pre">MB</span></code></p></li>
-<li><p><code class="docutils literal notranslate"><span class="pre">30</span> <span class="pre">million</span> <span class="pre">rows:</span> <span class="pre">256</span> <span class="pre">MB</span></code></p></li>
-<li><p><code class="docutils literal notranslate"><span class="pre">60</span> <span class="pre">million</span> <span class="pre">rows:</span> <span class="pre">512</span> <span class="pre">MB</span></code></p></li>
-</ul>
-</div></blockquote>
-</td>
+default value is set to 12 million rows which uses <code class="docutils literal notranslate"><span class="pre">~128MB</span></code> memory when to fill a spill run.
+Relation between spill rows and memory usage are as follows:
+12 million rows: <code class="docutils literal notranslate"><span class="pre">128</span> <span class="pre">MB</span></code>, 30 million rows: <code class="docutils literal notranslate"><span class="pre">256</span> <span class="pre">MB</span></code>, 60 million rows: <code class="docutils literal notranslate"><span class="pre">512</span> <span class="pre">MB</span></code></p></td>
 </tr>
 <tr class="row-odd"><td><p>max_spill_file_size</p></td>
 <td><p>integer</p></td>
