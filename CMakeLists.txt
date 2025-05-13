@@ -14,6 +14,7 @@
 cmake_minimum_required(VERSION 3.28)
 message(STATUS "Building using CMake version: ${CMAKE_VERSION}")
 
+
 # Check for SVE support
 execute_process(COMMAND lscpu OUTPUT_VARIABLE LSCPU_OUTPUT)
 string(FIND "${LSCPU_OUTPUT}" "sve" SVE_FOUND)
