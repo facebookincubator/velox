@@ -11,28 +11,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-cmake_minimum_required(VERSION 3.5.0)
-cmake_policy(SET CMP0063 NEW)
 
-project(dbgen CXX C)
+velox_add_library(velox_tpcds_append_info OBJECT append_info-c.cpp)
+velox_link_libraries(velox_tpcds_append_info Folly::folly xsimd)
 
-add_library(
-  dbgen STATIC
-  dbgen.cpp
-  dbgen_gunk.cpp
-  bm_utils.cpp
-  build.cpp
-  permute.cpp
-  rnd.cpp
-  rng64.cpp
-  speed_seed.cpp
-  text.cpp)
-
-target_compile_definitions(dbgen PRIVATE DBNAME=dss MAC ORACLE TPCH)
-target_include_directories(dbgen PRIVATE include)
-target_link_libraries(
-  dbgen
-  PRIVATE fmt::fmt Folly::folly)
-
-# Suppress warnings when compiling dbgen.
-target_compile_options(dbgen PRIVATE -w)
