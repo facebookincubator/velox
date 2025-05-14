@@ -17,8 +17,6 @@
 
 #include "velox/functions/Macros.h"
 
-#include <glog/logging.h>
-
 namespace facebook::velox::functions::sparksql {
 
 /// luhn_check(input) -> boolean
