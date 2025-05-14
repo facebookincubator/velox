@@ -51,16 +51,11 @@ struct LuhnCheckFunction {
       // Double the digit if it's the second digit in the sequence.
       const int doubled = isSecond ? digit * 2 : digit;
       // Add the two digits of the doubled number to the sum.
-      checkSum += doubled % 10 + doubled / 10;
+      checkSum = checkedPlus<int32_t>(checkSum, doubled % 10 + doubled / 10);
       // Toggle the isSecond flag for the next iteration.
       isSecond = !isSecond;
     }
 
-    // Keep checkSum as int32_t as Apache Spark. Just log a warning if it
-    // overflows.
-    if (checkSum < 0) {
-      LOG(WARNING) << "Arithmetic overflow with checkSum: " << checkSum;
-    }
     // Check if the final sum is divisible by 10.
     result = checkSum % 10 == 0;
   }
