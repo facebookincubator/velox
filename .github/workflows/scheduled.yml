@@ -175,9 +175,9 @@ jobs:
         run: |
           source .venv/bin/activate
           python3 -m pip install deepdiff
-          python3 scripts/signature.py export --spark /tmp/signatures/spark_signatures_main.json
-          python3 scripts/signature.py export --presto /tmp/signatures/presto_signatures_main.json
-          python3 scripts/signature.py export_aggregates --presto /tmp/signatures/presto_aggregate_signatures_main.json
+          python3 scripts/ci/signature.py export --spark /tmp/signatures/spark_signatures_main.json
+          python3 scripts/ci/signature.py export --presto /tmp/signatures/presto_signatures_main.json
+          python3 scripts/ci/signature.py export_aggregates --presto /tmp/signatures/presto_aggregate_signatures_main.json
 
       - name: Save Function Signature Stash
         if: ${{ github.event_name == 'pull_request' && steps.get-sig.outputs.stash-hit != 'true' }}
@@ -234,9 +234,9 @@ jobs:
         run: |
           source .venv/bin/activate
           python3 -m pip install deepdiff
-          python3 scripts/signature.py gh_bias_check presto spark
-          python3 scripts/signature.py export_aggregates --presto /tmp/signatures/presto_aggregate_signatures_contender.json
-          python3 scripts/signature.py bias_aggregates  /tmp/signatures/presto_aggregate_signatures_main.json \
+          python3 scripts/ci/signature.py gh_bias_check presto spark
+          python3 scripts/ci/signature.py export_aggregates --presto /tmp/signatures/presto_aggregate_signatures_contender.json
+          python3 scripts/ci/signature.py bias_aggregates  /tmp/signatures/presto_aggregate_signatures_main.json \
            /tmp/signatures/presto_aggregate_signatures_contender.json /tmp/signatures/presto_aggregate_bias_functions \
            /tmp/signatures/presto_aggregate_errors
 
