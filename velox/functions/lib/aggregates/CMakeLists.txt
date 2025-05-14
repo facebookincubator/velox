@@ -17,12 +17,12 @@ velox_add_library(
   AverageAggregateBase.cpp
   CentralMomentsAggregatesBase.cpp
   Compare.cpp
+  CovarianceAggregatesBase.cpp
   MinMaxAggregateBase.cpp
   SingleValueAccumulator.cpp
   ValueList.cpp
   ValueSet.cpp
-  VarianceAggregatesBase.cpp
-  CovarianceAggregatesBase.cpp)
+  VarianceAggregatesBase.cpp)
 
 velox_link_libraries(velox_functions_aggregates velox_exec
                      velox_presto_serializer Folly::folly)

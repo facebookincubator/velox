@@ -19,6 +19,7 @@ velox_add_library(
   CentralMomentsAggregate.cpp
   CollectListAggregate.cpp
   CollectSetAggregate.cpp
+  CovarianceAggregate.cpp
   FirstLastAggregate.cpp
   MinMaxAggregate.cpp
   MinMaxByAggregate.cpp
@@ -26,8 +27,7 @@ velox_add_library(
   Register.cpp
   RegrReplacementAggregate.cpp
   SumAggregate.cpp
-  VarianceAggregate.cpp
-  CovarianceAggregate.cpp)
+  VarianceAggregate.cpp)
 
 velox_link_libraries(
   velox_functions_spark_aggregates

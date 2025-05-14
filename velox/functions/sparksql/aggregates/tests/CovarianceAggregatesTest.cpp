@@ -110,7 +110,7 @@ TEST_F(CovarianceAggregatesTest, corr) {
   testCovarianceAggResult(agg, input, expected, true);
 }
 
-TEST_F(CovarianceAggregatesTest, covar_samp) {
+TEST_F(CovarianceAggregatesTest, covarSamp) {
   auto agg = "covar_samp";
   auto input = makeRowVector(
       {makeFlatVector<double>({1, 2, 3}), makeFlatVector<double>({1, 2, 3})});

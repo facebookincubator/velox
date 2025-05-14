@@ -20,6 +20,7 @@ add_executable(
   CentralMomentsAggregationTest.cpp
   CollectListAggregateTest.cpp
   CollectSetAggregateTest.cpp
+  CovarianceAggregatesTest.cpp
   FirstAggregateTest.cpp
   LastAggregateTest.cpp
   Main.cpp
@@ -28,8 +29,7 @@ add_executable(
   ModeAggregateTest.cpp
   RegrReplacementAggregationTest.cpp
   SumAggregationTest.cpp
-  VarianceAggregationTest.cpp
-  CovarianceAggregatesTest.cpp)
+  VarianceAggregationTest.cpp)
 
 add_test(velox_functions_spark_aggregates_test
          velox_functions_spark_aggregates_test)
