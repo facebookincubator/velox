@@ -106,13 +106,13 @@ Invalid examples
 
 ::
 
-  SELECT cast('1234567' as tinyint); -- NULL(Out of range)
-  SELECT cast('1a' as tinyint); -- NULL(Invalid argument)
-  SELECT cast('' as tinyint); -- NULL(Invalid argument)
-  SELECT cast('1,234,567' as bigint); -- NULL(Invalid argument)
-  SELECT cast('1'234'567' as bigint); -- NULL(Invalid argument)
-  SELECT cast('nan' as bigint); -- NULL(Invalid argument)
-  SELECT cast('infinity' as bigint); -- NULL(Invalid argument)
+  SELECT cast('1234567' as tinyint); -- NULL // Reason: Out of range
+  SELECT cast('1a' as tinyint); -- NULL // Invalid argument
+  SELECT cast('' as tinyint); -- NULL // Invalid argument
+  SELECT cast('1,234,567' as bigint); -- NULL // Invalid argument
+  SELECT cast('1'234'567' as bigint); -- NULL // Invalid argument
+  SELECT cast('nan' as bigint); -- NULL // Invalid argument
+  SELECT cast('infinity' as bigint); -- NULL // Invalid argument
 
 From decimal
 ^^^^^^^^^^^^
@@ -177,13 +177,13 @@ Invalid examples
 
 ::
 
-  SELECT cast('1.7E308' as boolean); -- NULL(Invalid argument)
-  SELECT cast('nan' as boolean); -- NULL(Invalid argument)
-  SELECT cast('infinity' as boolean); -- NULL(Invalid argument)
-  SELECT cast('12' as boolean); -- NULL(Invalid argument)
-  SELECT cast('-1' as boolean); -- NULL(Invalid argument)
-  SELECT cast('tr' as boolean); -- NULL(Invalid argument)
-  SELECT cast('tru' as boolean); -- NULL(Invalid argument)
+  SELECT cast('1.7E308' as boolean); -- NULL // Invalid argument
+  SELECT cast('nan' as boolean); -- NULL // Invalid argument
+  SELECT cast('infinity' as boolean); -- NULL // Invalid argument
+  SELECT cast('12' as boolean); -- NULL // Invalid argument
+  SELECT cast('-1' as boolean); -- NULL // Invalid argument
+  SELECT cast('tr' as boolean); -- NULL // Invalid argument
+  SELECT cast('tru' as boolean); -- NULL // Invalid argument
 
 Cast to String
 --------------
@@ -247,9 +247,9 @@ Invalid examples
 
 ::
 
-  SELECT cast('2012-Oct-23' as date); -- NULL(Invalid argument)
-  SELECT cast('2012/10/23' as date); -- NULL(Invalid argument)
-  SELECT cast('2012.10.23' as date); -- NULL(Invalid argument)
+  SELECT cast('2012-Oct-23' as date); -- NULL // Invalid argument
+  SELECT cast('2012/10/23' as date); -- NULL // Invalid argument
+  SELECT cast('2012.10.23' as date); -- NULL // Invalid argument
 
 Cast to Decimal
 ---------------

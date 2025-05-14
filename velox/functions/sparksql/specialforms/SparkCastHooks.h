@@ -82,6 +82,8 @@ class SparkCastHooks : public exec::CastHooks {
   Expected<Timestamp> castNumberToTimestamp(T seconds) const;
 
   const core::QueryConfig& config_;
+
+  // If true, the cast will truncate the overflow value to fit the target type.
   const bool allowOverflow_;
 
   /// 1) Does not follow 'isLegacyCast'. 2) The conversion precision is
