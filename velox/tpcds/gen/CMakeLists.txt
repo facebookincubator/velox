@@ -12,27 +12,18 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-cmake_policy(SET CMP0079 NEW)
-
-project(TPCDS)
-
 # Add subdirectories
-add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/dsdgen build)
+add_subdirectory(utils)
+add_subdirectory(dsdgen)
 
-add_library(append_info OBJECT utils/append_info-c.cpp)
-target_link_libraries(
-  append_info Folly::folly xsimd)
-
-target_link_libraries(
-  dsdgen_c append_info)
-
-add_library(velox_tpcds_gen TpcdsGen.cpp DSDGenIterator.cpp)
-target_include_directories(velox_tpcds_gen PUBLIC dsdgen/include)
-target_link_libraries(
+velox_add_library(velox_tpcds_gen TpcdsGen.cpp DSDGenIterator.cpp)
+velox_include_directories(velox_tpcds_gen PUBLIC dsdgen/include)
+velox_link_libraries(
   velox_tpcds_gen
   velox_memory
   velox_vector
-  dsdgen_c
+  velox_tpcds_dsdgen
+  velox_tpcds_append_info
   fmt::fmt)
 
 if(${VELOX_BUILD_TESTING})

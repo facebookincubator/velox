@@ -21,13 +21,13 @@
 #
 #  THE TPC SOFTWARE IS AVAILABLE WITHOUT CHARGE FROM TPC.
 #
-cmake_minimum_required(VERSION 3.0.0)
+cmake_minimum_required(VERSION 3.5.0)
 cmake_policy(SET CMP0063 NEW)
 
-project(dsdgen_c CXX C)
+project(velox_tpcds_dsdgen CXX C)
 
-add_library(
-  dsdgen_c STATIC
+velox_add_library(
+  velox_tpcds_dsdgen
   skip_days.cpp
   address.cpp
   build_support.cpp
@@ -78,7 +78,5 @@ add_library(
   w_web_sales.cpp
   w_web_site.cpp)
 
-target_include_directories(dsdgen_c PRIVATE include)
-
-# Suppress warnings when compiling dsdgen.
-target_compile_options(dsdgen_c PRIVATE -w)
+velox_include_directories(velox_tpcds_dsdgen PRIVATE include)
+velox_link_libraries(velox_tpcds_dsdgen velox_tpcds_append_info)
