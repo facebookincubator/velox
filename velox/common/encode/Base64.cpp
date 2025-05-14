@@ -547,6 +547,9 @@ void Base64::decodeUrl(
 }
 
 // static
+// The implementation of this function is inspired by the Java Base64 mime
+// decoder:
+// https://github.com/openjdk/jdk/blob/master/src/java.base/share/classes/java/util/Base64.java#L810
 Status Base64::decodeMime(const char* input, size_t inputSize, char* output) {
   if (!inputSize) {
     return Status::OK();
