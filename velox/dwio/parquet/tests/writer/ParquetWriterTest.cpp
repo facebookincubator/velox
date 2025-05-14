@@ -22,6 +22,7 @@
 #include "velox/common/testutil/TestValue.h"
 #include "velox/connectors/hive/HiveConnector.h" // @manual
 #include "velox/core/QueryCtx.h"
+#include "velox/dwio/common/tests/utils/BatchMaker.h"
 #include "velox/dwio/parquet/RegisterParquetWriter.h" // @manual
 #include "velox/dwio/parquet/reader/PageReader.h"
 #include "velox/dwio/parquet/tests/ParquetTestBase.h"
@@ -803,6 +804,43 @@ DEBUG_ONLY_TEST_F(ParquetWriterTest, timestampUnitAndTimeZone) {
       .copyResults(pool_.get());
 }
 #endif
+
+TEST_F(ParquetWriterTest, complexTypeDictionaryEncoded) {
+  const auto randomIndices = [this](vector_size_t size) {
+    BufferPtr indices =
+        AlignedBuffer::allocate<vector_size_t>(size, leafPool_.get());
+    auto rawIndices = indices->asMutable<vector_size_t>();
+    for (int32_t i = 0; i < size; i++) {
+      rawIndices[i] = folly::Random::rand32(size);
+    }
+    return indices;
+  };
+
+  const auto size = 10'000;
+  VectorPtr flatVector =
+      facebook::velox::test::BatchMaker::createVector<TypeKind::MAP>(
+          MAP(VARCHAR(), INTEGER()), size, *leafPool_);
+
+  auto wrappedVector = BaseVector::wrapInDictionary(
+      BufferPtr(nullptr), randomIndices(size), size, flatVector);
+  EXPECT_EQ(wrappedVector->encoding(), VectorEncoding::Simple::DICTIONARY);
+  const auto data = makeRowVector({wrappedVector});
+
+  parquet::WriterOptions writerOptions;
+  writerOptions.memoryPool = leafPool_.get();
+
+  // Create an in-memory writer.
+  auto sink = std::make_unique<MemorySink>(
+      200 * 1024 * 1024,
+      dwio::common::FileSink::Options{.pool = leafPool_.get()});
+  auto writer = std::make_unique<parquet::Writer>(
+      std::move(sink),
+      writerOptions,
+      rootPool_,
+      ROW({"c0"}, {MAP(VARCHAR(), INTEGER())}));
+  writer->write(data);
+  writer->close();
+};
 
 } // namespace
 
