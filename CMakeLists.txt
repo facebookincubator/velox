@@ -374,6 +374,9 @@ if(ENABLE_ALL_WARNINGS)
          -Wno-array-bounds \
          -Wno-maybe-uninitialized \
          -Wno-unused-result \
+	 -Wno-write-strings \
+	 -Wno-stringop-truncation \
+	 -Wno-missing-field-initializers \
          -Wno-format-overflow \
          -Wno-strict-aliasing")
   endif()
