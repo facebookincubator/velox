@@ -415,10 +415,22 @@ void Writer::write(const VectorPtr& data) {
       data->type()->equivalent(*schema_),
       "The file schema type should be equal with the input rowvector type.");
 
+  // If the input data contains complex vector, flatten the input to make it
+  // compatible with Arrow export.
+  VectorPtr exportable = data;
+  const auto& rowVector = std::dynamic_pointer_cast<RowVector>(data);
+  const bool needFlatten = std::any_of(
+      rowVector->children().begin(),
+      rowVector->children().end(),
+      [](const auto& child) { return !child->isScalar(); });
+  if (needFlatten) {
+    BaseVector::flattenVector(exportable);
+  }
+
   ArrowArray array;
   ArrowSchema schema;
-  exportToArrow(data, array, generalPool_.get(), options_);
-  exportToArrow(data, schema, options_);
+  exportToArrow(exportable, array, generalPool_.get(), options_);
+  exportToArrow(exportable, schema, options_);
 
   // Convert the arrow schema to Schema and then update the column names based
   // on schema_.
