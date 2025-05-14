@@ -166,8 +166,8 @@ void registerArrayFunctions(const std::string& prefix) {
       makeArraySortDesc);
 
   auto checker = std::make_shared<SimpleComparisonChecker>();
-  exec::registerExpressionRewrite([prefix](const auto& expr) {
-    return rewriteArraySortCall(prefix, expr);
+  exec::registerExpressionRewrite([prefix, checker](const auto& expr) {
+    return rewriteArraySortCall(prefix, expr, checker);
   });
 
   VELOX_REGISTER_VECTOR_FUNCTION(udf_array_max_by, prefix + "array_max_by");
