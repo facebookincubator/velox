@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-#include "append_info-c.h"
+#include "velox/tpcds/gen/utils/append_info-c.h"
 
 #include <fmt/format.h>
 #include "velox/tpcds/gen/dsdgen/include/append_info.h"

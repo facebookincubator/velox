@@ -12,20 +12,5 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# Add subdirectories
-add_subdirectory(utils)
-add_subdirectory(dsdgen)
-
-velox_add_library(velox_tpcds_gen TpcdsGen.cpp DSDGenIterator.cpp)
-velox_include_directories(velox_tpcds_gen PUBLIC dsdgen/include)
-velox_link_libraries(
-  velox_tpcds_gen
-  velox_memory
-  velox_vector
-  velox_tpcds_dsdgen
-  velox_tpcds_append_info
-  fmt::fmt)
-
-if(${VELOX_BUILD_TESTING})
-  add_subdirectory(tests)
-endif()
+velox_add_library(velox_tpcds_append_info OBJECT append_info-c.cpp)
+velox_link_libraries(velox_tpcds_append_info Folly::folly xsimd)
