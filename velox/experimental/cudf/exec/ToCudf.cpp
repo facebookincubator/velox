@@ -174,6 +174,9 @@ struct CudfDriverAdapter {
 
   // Call operator needed by DriverAdapter
   bool operator()(const exec::DriverFactory& factory, exec::Driver& driver) {
+    if (!driver.driverCtx()->queryConfig().get<bool>(kCudfEnabled, "true")) {
+      return false;
+    }
     auto state = CompileState(factory, driver);
     auto res = state.compile();
     return res;
@@ -217,6 +220,10 @@ void unregisterCudf() {
 
 bool cudfIsRegistered() {
   return isCudfRegistered;
+}
+
+bool isCudfOperator(const exec::Operator* op) {
+  return isAnyOf<NvtxHelper>(op) || isAnyOf<CudfHashJoinBridgeTranslator>(op);
 }
 
 } // namespace facebook::velox::cudf_velox
