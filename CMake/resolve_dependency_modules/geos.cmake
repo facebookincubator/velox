@@ -13,9 +13,9 @@
 # limitations under the License.
 include_guard(GLOBAL)
 # GEOS Configuration
-set(VELOX_GEOS_BUILD_VERSION 3.10.2)
+set(VELOX_GEOS_BUILD_VERSION 3.10.7)
 set(VELOX_GEOS_BUILD_SHA256_CHECKSUM
-    50bbc599ac386b4c2b3962dcc411f0040a61f204aaef4eba7225ecdd0cf45715)
+    8b2ab4d04d660e27f2006550798f49dd11748c3767455cae9f71967dc437da1f)
 string(CONCAT VELOX_GEOS_SOURCE_URL "https://download.osgeo.org/geos/"
               "geos-${VELOX_GEOS_BUILD_VERSION}.tar.bz2")
 
@@ -25,9 +25,6 @@ FetchContent_Declare(
   geos
   URL ${VELOX_GEOS_SOURCE_URL}
   URL_HASH ${VELOX_GEOS_BUILD_SHA256_CHECKSUM}
-  PATCH_COMMAND
-    git apply "${CMAKE_CURRENT_LIST_DIR}/geos/geos-cmakelists.patch" && git
-    apply "${CMAKE_CURRENT_LIST_DIR}/geos/geos-build.patch")
 
 list(APPEND CMAKE_MODULE_PATH "${geos_SOURCE_DIR}/cmake")
 set(BUILD_SHARED_LIBS ${VELOX_BUILD_SHARED})
