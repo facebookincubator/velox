@@ -132,6 +132,8 @@ class Base64 {
   // Padding character used in encoding.
   static const char kPadding = '=';
 
+  // Soft Line breaks used in mime encoding as defined in RFC 2045, section 6.8:
+  // https://www.rfc-editor.org/rfc/rfc2045#section-6.8
   inline static const std::string kNewline{"\r\n"};
   static const size_t kMaxLineLength = 76;
 
