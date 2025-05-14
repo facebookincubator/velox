@@ -480,6 +480,31 @@ class CastVarcharInputGenerator : public AbstractInputGenerator {
   std::string generateValidPrimitiveAsString();
 };
 
+class URLInputGenerator : public AbstractInputGenerator {
+ public:
+  URLInputGenerator(
+      size_t seed,
+      const TypePtr& type,
+      double nullRatio,
+      std::string functionName);
+
+  ~URLInputGenerator() override;
+
+  variant generate() override;
+
+ private:
+  // Particular UDFs are known to have mismatches for mailto and trucated input.
+  // Let's skip those test cases for now. More info can be found in T222820058.
+  bool skipKnownMailToMismatches(std::string functionName);
+  bool skipKnownTruncateMismatches(std::string functionName);
+
+  std::shared_ptr<RuleList> generateURLRules();
+  std::shared_ptr<RuleList> generateMailToRules();
+  std::shared_ptr<RuleList> generateChromeExtensionRules();
+
+  const std::string functionName_;
+};
+
 class TDigestInputGenerator : public AbstractInputGenerator {
  public:
   TDigestInputGenerator(size_t seed, const TypePtr& type, double nullRatio);
