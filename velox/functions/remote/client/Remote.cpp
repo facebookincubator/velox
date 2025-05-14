@@ -75,7 +75,7 @@ class RemoteFunction : public exec::VectorFunction {
           metadata_);
     }
 
-    throw std::runtime_error("Unsupported client type in initializeClient");
+    VELOX_UNSUPPORTED("Unsupported client type in initializeClient");
   }
 
   void apply(
@@ -85,11 +85,8 @@ class RemoteFunction : public exec::VectorFunction {
       exec::EvalCtx& context,
       VectorPtr& result) const override {
     try {
-      if (remoteClient_) {
-        remoteClient_->applyRemote(rows, args, outputType, context, result);
-      } else {
-        VELOX_FAIL("Remote client not initialized.");
-      }
+      VELOX_CHECK(remoteClient_, "Remote client not initialized.");
+      remoteClient_->applyRemote(rows, args, outputType, context, result);
     } catch (const VeloxRuntimeError&) {
       throw;
     } catch (const std::exception&) {

@@ -16,7 +16,8 @@
 
 #include "velox/functions/remote/client/RestClient.h"
 
-#include <cpr/cpr.h>
+#include <boost/asio.hpp>
+#include <boost/beast.hpp>
 #include <folly/io/IOBufQueue.h>
 
 #include "velox/common/base/Exceptions.h"
@@ -30,6 +31,24 @@ inline std::string getContentType(remote::PageFormat serdeFormat) {
       ? remote::CONTENT_TYPE_SPARK_UNSAFE_ROW
       : remote::CONTENT_TYPE_PRESTO_PAGE;
 }
+
+std::pair<std::string, std::string> parseHostAndPort(
+    const std::string& fullUrl) {
+  auto pos = fullUrl.find("//");
+  std::string url =
+      (pos != std::string::npos) ? fullUrl.substr(pos + 2) : fullUrl;
+  pos = url.find("/");
+  if (pos != std::string::npos) {
+    url = url.substr(0, pos);
+  }
+
+  pos = url.find(":");
+  if (pos != std::string::npos) {
+    return {url.substr(0, pos), url.substr(pos + 1)};
+  }
+  VELOX_FAIL("Invalid URL: {}", fullUrl);
+}
+
 } // namespace
 
 std::unique_ptr<IOBuf> RestClient::invokeFunction(
@@ -47,28 +66,46 @@ std::unique_ptr<IOBuf> RestClient::invokeFunction(
 
   std::string contentType = getContentType(serdeFormat);
 
-  cpr::Response response = Post(
-      cpr::Url{fullUrl},
-      cpr::Header{{"Content-Type", contentType}, {"Accept", contentType}},
-      cpr::Body{requestBody});
+  try {
+    boost::asio::io_context ioc;
+    boost::asio::ip::tcp::resolver resolver(ioc);
 
-  if (response.error) {
-    VELOX_FAIL(fmt::format(
-        "Error communicating with server: {} URL: {}",
-        response.error.message,
-        fullUrl));
+    auto [host, port] = parseHostAndPort(fullUrl);
+    auto const results = resolver.resolve(host, port);
+
+    boost::beast::tcp_stream stream(ioc);
+    stream.connect(results);
+
+    boost::beast::flat_buffer buffer;
+    boost::beast::http::request<boost::beast::http::string_body> req;
+    req.method(boost::beast::http::verb::post);
+    req.target(fullUrl);
+    req.set(boost::beast::http::field::content_type, contentType);
+    req.set(boost::beast::http::field::accept, contentType);
+    req.body() = requestBody;
+    req.prepare_payload();
+
+    boost::beast::http::response<boost::beast::http::string_body> res;
+    boost::beast::http::write(stream, req);
+    boost::beast::http::read(stream, buffer, res);
+
+    if (res.result_int() < 200 || res.result_int() >= 300) {
+      VELOX_FAIL(
+          fmt::format(
+              "Server responded with status {}. Message: '{}'. URL: {}",
+              res.result_int(),
+              res.body(),
+              fullUrl));
+    }
+
+    stream.socket().shutdown(boost::asio::ip::tcp::socket::shutdown_both);
+
+    return IOBuf::copyBuffer(res.body());
+  } catch (const std::exception& ex) {
+    VELOX_FAIL(
+        fmt::format(
+            "Error communicating with server: {} URL: {}", ex.what(), fullUrl));
   }
-
-  if (response.status_code < 200 || response.status_code >= 300) {
-    VELOX_FAIL(fmt::format(
-        "Server responded with status {}. Message: '{}'. URL: {}",
-        response.status_code,
-        response.text,
-        fullUrl));
-  }
-
-  auto outputBuf = IOBuf::copyBuffer(response.text);
-  return outputBuf;
 }
 
 std::unique_ptr<RestClient> getRestClient() {

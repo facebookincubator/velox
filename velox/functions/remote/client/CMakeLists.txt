@@ -20,7 +20,7 @@ velox_link_libraries(velox_functions_remote_thrift_client
 velox_add_library(velox_functions_remote_rest_client RestClient.cpp
                   RestRemoteClient.cpp)
 velox_link_libraries(velox_functions_remote_rest_client
-                     velox_functions_remote_get_serde Folly::folly cpr::cpr)
+                     velox_functions_remote_get_serde Folly::folly)
 
 velox_add_library(velox_functions_remote Remote.cpp)
 velox_link_libraries(
