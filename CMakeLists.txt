@@ -193,7 +193,7 @@ if(VELOX_ENABLE_BENCHMARKS_BASIC)
 endif()
 
 if(VELOX_BUILD_TESTING OR VELOX_BUILD_TEST_UTILS)
-  set(cpr_SOURCE BUNDLED)
+  velox_set_source(cpr)
   velox_resolve_dependency(cpr)
   set(VELOX_ENABLE_DUCKDB ON)
   set(VELOX_ENABLE_PARSE ON)
