@@ -68,6 +68,10 @@ BufferPtr sortElements(
           }
           bool aNull = decodedElements->isNullAt(a);
           bool bNull = decodedElements->isNullAt(b);
+
+          if (aNull && bNull) {
+            return false;
+          }
           if (aNull) {
             return nullsFirst;
           }
