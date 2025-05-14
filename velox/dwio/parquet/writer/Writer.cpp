@@ -415,10 +415,14 @@ void Writer::write(const VectorPtr& data) {
       data->type()->equivalent(*schema_),
       "The file schema type should be equal with the input rowvector type.");
 
+  // Flatten the input data to make it compatible with Arrow export.
+  VectorPtr flattened = data;
+  BaseVector::flattenVector(flattened);
+
   ArrowArray array;
   ArrowSchema schema;
-  exportToArrow(data, array, generalPool_.get(), options_);
-  exportToArrow(data, schema, options_);
+  exportToArrow(flattened, array, generalPool_.get(), options_);
+  exportToArrow(flattened, schema, options_);
 
   // Convert the arrow schema to Schema and then update the column names based
   // on schema_.
