@@ -608,7 +608,7 @@ struct Converter<TypeKind::VARCHAR, void, TPolicy> {
   /// example, for the given string '12345', replace it with '12345.0'.
   static void normalizeStandardNotation(std::string& str) {
     if (!FLAGS_experimental_enable_legacy_cast &&
-        str.find(".") == std::string::npos && isdigit(str[str.length() - 1])) {
+        str.find('.') == std::string::npos && isdigit(str[str.length() - 1])) {
       str += ".0";
     }
   }
