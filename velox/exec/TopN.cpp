@@ -73,7 +73,7 @@ void TopN::addInput(RowVectorPtr input) {
     } else {
       char* topRow = topRows_.top();
 
-      if (!comparator_(decodedVectors_, row, topRow)) {
+      if (comparator_(topRow, decodedVectors_, row)) {
         continue;
       }
       topRows_.pop();
