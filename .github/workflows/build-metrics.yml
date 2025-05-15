@@ -17,18 +17,18 @@ name: Collect Build Metrics
 on:
   pull_request:
     paths:
-      - ".github/workflows/build-metrics.yml"
-      - "scripts/ci/bm-report/**"
+      - .github/workflows/build-metrics.yml
+      - scripts/ci/bm-report/**
 
   workflow_dispatch:
     inputs:
       ref:
-        description: "ref to check"
+        description: ref to check
         required: true
 
   schedule:
     # Run every day at 04:05
-    - cron: "5 4 * * *"
+    - cron: 5 4 * * *
 
 permissions:
   contents: read
@@ -42,9 +42,9 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        runner: ["16-core-ubuntu"]
-        type: ["debug", "release"]
-        link-type: ["shared", "static"]
+        runner: [16-core-ubuntu]
+        type: [debug, release]
+        link-type: [shared, static]
     defaults:
       run:
         shell: bash
@@ -60,7 +60,7 @@ jobs:
 
       - name: Make  ${{ matrix.link-type }} - ${{ matrix.type }} Build
         env:
-          MAKEFLAGS: 'MAX_HIGH_MEM_JOBS=8 MAX_LINK_JOBS=4'
+          MAKEFLAGS: MAX_HIGH_MEM_JOBS=8 MAX_LINK_JOBS=4
         run: |
           EXTRA_CMAKE_FLAGS=(
             "-DVELOX_ENABLE_BENCHMARKS=ON"
@@ -103,28 +103,28 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           path: ${{ env.sizes_file }}
-          name: "${{ matrix.type }}-${{ matrix.link-type }}-sizes"
+          name: ${{ matrix.type }}-${{ matrix.link-type }}-sizes
 
       - name: Copy ninja_log
         run: cp _build/${{ matrix.type }}/.ninja_log /tmp/metrics/.ninja_log
 
-      - name: "Install dependencies"
+      - name: Install dependencies
         run: |
           python3 -m pip install setuptools
           python3 -m pip install -r scripts/ci/benchmark-requirements.txt
 
-      - name: "Upload Metrics"
+      - name: Upload Metrics
         # This disables the upload and report generation on fork PRs but allows it for forks from within the main repo.
         if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'facebookincubator/velox' }}
         env:
-          CONBENCH_URL: "https://velox-conbench.voltrondata.run/"
-          CONBENCH_MACHINE_INFO_NAME: "GitHub-runner-${{ matrix.runner }}"
-          CONBENCH_EMAIL: "${{ secrets.CONBENCH_EMAIL }}"
-          CONBENCH_PASSWORD: "${{ secrets.CONBENCH_PASSWORD }}"
+          CONBENCH_URL: https://velox-conbench.voltrondata.run/
+          CONBENCH_MACHINE_INFO_NAME: GitHub-runner-${{ matrix.runner }}
+          CONBENCH_EMAIL: ${{ secrets.CONBENCH_EMAIL }}
+          CONBENCH_PASSWORD: ${{ secrets.CONBENCH_PASSWORD }}
           # These don't actually work https://github.com/conbench/conbench/issues/1484
           # but have to be there to work regardless??
-          CONBENCH_PROJECT_REPOSITORY: "${{ github.repository }}"
-          CONBENCH_PROJECT_COMMIT: "${{ inputs.ref || github.sha }}"
+          CONBENCH_PROJECT_REPOSITORY: ${{ github.repository }}
+          CONBENCH_PROJECT_COMMIT: ${{ inputs.ref || github.sha }}
         run: |
           ./scripts/ci/bm-report/build-metrics.py upload \
             --build_type "${{ matrix.link-type }}-${{ matrix.type }}" \
@@ -161,9 +161,9 @@ jobs:
 
       - name: Build Documentation
         env:
-          CONBENCH_URL: "https://velox-conbench.voltrondata.run/"
-          CONBENCH_EMAIL: "${{ secrets.CONBENCH_EMAIL }}"
-          CONBENCH_PASSWORD: "${{ secrets.CONBENCH_PASSWORD }}"
+          CONBENCH_URL: https://velox-conbench.voltrondata.run/
+          CONBENCH_EMAIL: ${{ secrets.CONBENCH_EMAIL }}
+          CONBENCH_PASSWORD: ${{ secrets.CONBENCH_PASSWORD }}
         run: |
           cd scripts/ci/bm-report
           nix-shell --run "quarto render report.qmd"

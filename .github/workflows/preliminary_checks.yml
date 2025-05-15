@@ -37,8 +37,8 @@ jobs:
       fail-fast: false
       matrix:
         config:
-          - {name: "License Header", command: "header-fix", message: "Found missing License Header(s)"}
-          - {name: "Code Format", command: "format-fix", message: "Found format issues"}
+          - {name: License Header, command: header-fix, message: Found missing License Header(s)}
+          - {name: Code Format, command: format-fix, message: Found format issues}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -76,7 +76,7 @@ jobs:
     steps:
       - shell: python
         env:
-          title: "${{ github.event.pull_request.title }}"
+          title: ${{ github.event.pull_request.title }}
         run: |
           import re
           import os
