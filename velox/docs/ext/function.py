@@ -95,13 +95,17 @@ def parse_reftarget(
     return reftype, reftarget, title, refspecific
 
 
-def type_to_xref(function_module: str,
-    target: str, env: BuildEnvironment | None = None, suppress_prefix: bool = False
+def type_to_xref(
+    function_module: str,
+    target: str,
+    env: BuildEnvironment | None = None,
+    suppress_prefix: bool = False,
 ) -> addnodes.pending_xref:
     """Convert a type string to a cross reference node."""
     if env:
         kwargs = {
-            function_module + ":module": env.ref_context.get(function_module + ":module"),
+            function_module
+            + ":module": env.ref_context.get(function_module + ":module"),
             function_module + ":class": env.ref_context.get(function_module + ":class"),
         }
     else:
@@ -121,7 +125,9 @@ def type_to_xref(function_module: str,
     )
 
 
-def parse_annotation(function_module: str, annotation: str, env: BuildEnvironment | None) -> list[Node]:
+def parse_annotation(
+    function_module: str, annotation: str, env: BuildEnvironment | None
+) -> list[Node]:
     """Parse type annotation."""
 
     def unparse(node: ast.AST) -> list[Node]:
@@ -244,7 +250,11 @@ def parse_annotation(function_module: str, annotation: str, env: BuildEnvironmen
                     and result[-1].astext() == "~"
                 ):
                     result.pop()
-                    result.append(type_to_xref(function_module, str(node), env, suppress_prefix=True))
+                    result.append(
+                        type_to_xref(
+                            function_module, str(node), env, suppress_prefix=True
+                        )
+                    )
                 else:
                     result.append(type_to_xref(function_module, str(node), env))
             else:

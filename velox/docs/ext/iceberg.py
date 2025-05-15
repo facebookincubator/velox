@@ -44,6 +44,7 @@ logger = logging.getLogger(__name__)
 
 function_module = "iceberg"
 
+
 class IcebergObject(ObjectDescription[Tuple[str, str]]):
     """
     Description of a general Iceberg object.
