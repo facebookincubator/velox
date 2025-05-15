@@ -16,7 +16,6 @@ name: Build & Push Docker Images
 on:
   pull_request:
     paths:
-      - scripts/docker/*.dockfile
       - scripts/docker/*.dockerfile
       - scripts/setup-*.sh
       - .github/workflows/docker.yml
@@ -24,7 +23,6 @@ on:
   push:
     branches: [main]
     paths:
-      - scripts/docker/*.dockfile
       - scripts/docker/*.dockerfile
       - scripts/setup-*.sh
       - .github/workflows/docker.yml
@@ -45,9 +43,6 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - name: Check
-            file: scripts/docker/check-container.dockfile
-            tags: ghcr.io/facebookincubator/velox-dev:check
           - name: Centos 9
             file: scripts/docker/centos.dockerfile
             tags: ghcr.io/facebookincubator/velox-dev:centos9
