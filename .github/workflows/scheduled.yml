@@ -12,60 +12,61 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-name: "Fuzzer Jobs"
+name: Fuzzer Jobs
 
 on:
   pull_request:
     paths:
-      - "velox/**"
-      - "!velox/docs/**"
-      - "CMakeLists.txt"
-      - "CMake/**"
-      - "third_party/**"
-      - "scripts/setup-ubuntu.sh"
-      - "scripts/setup-common.sh"
-      - "scripts/setup-versions.sh"
-      - "scripts/setup-helper-functions.sh"
-      - ".github/workflows/scheduled.yml"
-      - "setup.py"
+      - velox/**
+      - '!velox/docs/**'
+      - CMakeLists.txt
+      - CMake/**
+      - third_party/**
+      - scripts/setup-ubuntu.sh
+      - scripts/setup-common.sh
+      - scripts/setup-versions.sh
+      - scripts/setup-helper-functions.sh
+      - .github/workflows/scheduled.yml
+      - pyproject.toml
 
   push:
     branches:
-      - "main"
+      - main
     paths:
-      - "velox/**"
-      - "!velox/docs/**"
-      - "CMakeLists.txt"
-      - "CMake/**"
-      - "third_party/**"
-      - "scripts/setup-ubuntu.sh"
-      - "scripts/setup-common.sh"
-      - "scripts/setup-versions.sh"
-      - "scripts/setup-helper-functions.sh"
-      - ".github/workflows/scheduled.yml"
+      - velox/**
+      - '!velox/docs/**'
+      - CMakeLists.txt
+      - CMake/**
+      - third_party/**
+      - scripts/setup-ubuntu.sh
+      - scripts/setup-common.sh
+      - scripts/setup-versions.sh
+      - scripts/setup-helper-functions.sh
+      - .github/workflows/scheduled.yml
+      - pyproject.toml
 
   schedule:
-    - cron: '0 3 * * *'
+    - cron: 0 3 * * *
 
   workflow_dispatch:
     inputs:
       ref:
-        description: 'Ref to checkout out'
-        default: 'main'
+        description: Ref to checkout out
+        default: main
       numThreads:
-        description: 'Number of threads'
+        description: Number of threads
         default: 16
       maxHighMemJobs:
-        description: 'Number of high memory jobs'
+        description: Number of high memory jobs
         default: 8
       maxLinkJobs:
-        description: 'Maximum number of link jobs'
+        description: Maximum number of link jobs
         default: 4
       extraCMakeFlags:
-        description: 'Additional CMake flags'
+        description: Additional CMake flags
         default: ''
       duration:
-        description: 'Duration of fuzzer run in seconds'
+        description: Duration of fuzzer run in seconds
         default: 1800
 
 defaults:
@@ -84,9 +85,9 @@ concurrency:
 
 env:
   # Run for 15 minute on PRs
-  DURATION: "${{ inputs.duration || ( github.event_name != 'schedule' && 900 || 1800 )}}"
+  DURATION: ${{ inputs.duration || ( github.event_name != 'schedule' && 900 || 1800 )}}
   # minimize artifact duration for PRs, keep them a bit longer for nightly runs
-  RETENTION: "${{ github.event_name == 'pull_request' && 1 || 3 }}"
+  RETENTION: ${{ github.event_name == 'pull_request' && 1 || 3 }}
 
 jobs:
   compile:
@@ -97,12 +98,12 @@ jobs:
     container: ghcr.io/facebookincubator/velox-dev:centos9
     timeout-minutes: 120
     env:
-      CCACHE_DIR: "${{ github.workspace }}/ccache"
-      NUM_THREADS: "${{ inputs.numThreads || 16 }}"
-      MAX_HIGH_MEM_JOBS: "${{ inputs.maxHighMemJobs || 8 }}"
-      MAX_LINK_JOBS: "${{ inputs.maxLinkJobs || 4 }}"
-      SKBUILD_BUILD_DIR: "_build/debug"
-      PYVELOX_LEGACY_ONLY: "ON"
+      CCACHE_DIR: ${{ github.workspace }}/ccache
+      NUM_THREADS: ${{ inputs.numThreads || 16 }}
+      MAX_HIGH_MEM_JOBS: ${{ inputs.maxHighMemJobs || 8 }}
+      MAX_LINK_JOBS: ${{ inputs.maxLinkJobs || 4 }}
+      SKBUILD_BUILD_DIR: _build/debug
+      PYVELOX_LEGACY_ONLY: 'ON'
 
     defaults:
       run:
@@ -143,7 +144,7 @@ jobs:
       - name: Restore ccache
         uses: assignUser/stash/restore@v1
         with:
-          path: "${{ env.CCACHE_DIR }}"
+          path: ${{ env.CCACHE_DIR }}
           key: ccache-fuzzer-centos
 
       - name: Fix git permissions
@@ -194,8 +195,8 @@ jobs:
         uses: actions/checkout@v4
         with:
           path: velox
-          submodules: 'recursive'
-          ref: "${{ inputs.ref }}"
+          submodules: recursive
+          ref: ${{ inputs.ref }}
 
       - name: Zero Ccache Statistics
         run: |
@@ -223,7 +224,7 @@ jobs:
         if: ${{ github.event_name != 'schedule' }}
         uses: assignUser/stash/save@v1
         with:
-          path: "${{ env.CCACHE_DIR }}"
+          path: ${{ env.CCACHE_DIR }}
           key: ccache-fuzzer-centos
 
       - name: Build PyVelox
@@ -249,7 +250,7 @@ jobs:
         with:
           name: signatures
           path: /tmp/signatures
-          retention-days: "${{ env.RETENTION }}"
+          retention-days: ${{ env.RETENTION }}
 
       - name: Prepare signatures
         working-directory: /tmp/signatures
@@ -275,91 +276,91 @@ jobs:
         with:
           name: presto
           path: velox/_build/debug/velox/expression/fuzzer/velox_expression_fuzzer_test
-          retention-days: "${{ env.RETENTION }}"
+          retention-days: ${{ env.RETENTION }}
 
       - name: Upload spark expression fuzzer
         uses: actions/upload-artifact@v4
         with:
           name: spark_expression_fuzzer
           path: velox/_build/debug/velox/expression/fuzzer/spark_expression_fuzzer_test
-          retention-days: "${{ env.RETENTION }}"
+          retention-days: ${{ env.RETENTION }}
 
       - name: Upload spark aggregation fuzzer
         uses: actions/upload-artifact@v4
         with:
           name: spark_aggregation_fuzzer
           path: velox/_build/debug/velox/functions/sparksql/fuzzer/spark_aggregation_fuzzer_test
-          retention-days: "${{ env.RETENTION }}"
+          retention-days: ${{ env.RETENTION }}
 
       - name: Upload aggregation fuzzer
         uses: actions/upload-artifact@v4
         with:
           name: aggregation
           path: velox/_build/debug/velox/functions/prestosql/fuzzer/velox_aggregation_fuzzer_test
-          retention-days: "${{ env.RETENTION }}"
+          retention-days: ${{ env.RETENTION }}
 
       - name: Upload join fuzzer
         uses: actions/upload-artifact@v4
         with:
           name: join
           path: velox/_build/debug/velox/exec/fuzzer/velox_join_fuzzer
-          retention-days: "${{ env.RETENTION }}"
+          retention-days: ${{ env.RETENTION }}
 
       - name: Upload exchange fuzzer
         uses: actions/upload-artifact@v4
         with:
           name: exchange
           path: velox/_build/debug//velox/exec/fuzzer/velox_exchange_fuzzer
-          retention-days: "${{ env.RETENTION }}"
+          retention-days: ${{ env.RETENTION }}
 
       - name: Upload window fuzzer
         uses: actions/upload-artifact@v4
         with:
           name: window
           path: velox/_build/debug/velox/functions/prestosql/fuzzer/velox_window_fuzzer_test
-          retention-days: "${{ env.RETENTION }}"
+          retention-days: ${{ env.RETENTION }}
 
       - name: Upload cache fuzzer
         uses: actions/upload-artifact@v4
         with:
           name: cache_fuzzer
           path: velox/_build/debug/velox/exec/fuzzer/velox_cache_fuzzer
-          retention-days: "${{ env.RETENTION }}"
+          retention-days: ${{ env.RETENTION }}
 
       - name: Upload table evolution fuzzer
         uses: actions/upload-artifact@v4
         with:
           name: table_evolution_fuzzer
           path: velox/_build/debug/velox/exec/tests/velox_table_evolution_fuzzer_test
-          retention-days: "${{ env.RETENTION }}"
+          retention-days: ${{ env.RETENTION }}
 
       - name: Upload memory arbitration fuzzer
         uses: actions/upload-artifact@v4
         with:
           name: memory_arbitration_fuzzer
           path: velox/_build/debug/velox/exec/fuzzer/velox_memory_arbitration_fuzzer
-          retention-days: "${{ env.RETENTION }}"
+          retention-days: ${{ env.RETENTION }}
 
       - name: Upload row number fuzzer
         uses: actions/upload-artifact@v4
         with:
           name: row_number
           path: velox/_build/debug//velox/exec/fuzzer/velox_row_number_fuzzer
-          retention-days: "${{ env.RETENTION }}"
+          retention-days: ${{ env.RETENTION }}
 
       - name: Upload topn row number fuzzer
         uses: actions/upload-artifact@v4
         with:
           name: topn_row_number
           path: velox/_build/debug//velox/exec/fuzzer/velox_topn_row_number_fuzzer
-          retention-days: "${{ env.RETENTION }}"
+          retention-days: ${{ env.RETENTION }}
 
       - name: Upload writer fuzzer
         uses: actions/upload-artifact@v4
         with:
           name: writer
           path: velox/_build/debug/velox/functions/prestosql/fuzzer/velox_writer_fuzzer_test
-          retention-days: "${{ env.RETENTION }}"
+          retention-days: ${{ env.RETENTION }}
 
   presto-fuzzer-run:
     name: Presto Fuzzer
@@ -385,10 +386,10 @@ jobs:
       - name: Set presto specific fuzzer duration
         env:
           # Run for 30 minutes instead of 15, when files relevant to presto are touched
-          pr_duration: "${{ steps.changes.outputs.presto == 'true' && 1800 || 900 }}"
+          pr_duration: ${{ steps.changes.outputs.presto == 'true' && 1800 || 900 }}
           # Run for 60 minutes if its a scheduled run
-          other_duration: "${{ inputs.duration || (github.event_name == 'push' && 1800 || 3600) }}"
-          is_pr: "${{ github.event_name == 'pull_request' }}"
+          other_duration: ${{ inputs.duration || (github.event_name == 'push' && 1800 || 3600) }}
+          is_pr: ${{ github.event_name == 'pull_request' }}
         run: |
           if [ "$is_pr" == "true" ]; then
             duration=$pr_duration
@@ -626,8 +627,8 @@ jobs:
     needs: compile
     timeout-minutes: 120
     env:
-      CCACHE_DIR: "${{ github.workspace }}/ccache/"
-      LINUX_DISTRO: "centos"
+      CCACHE_DIR: ${{ github.workspace }}/ccache/
+      LINUX_DISTRO: centos
     steps:
 
       - name: Download join fuzzer
@@ -635,12 +636,12 @@ jobs:
         with:
           name: join
 
-      - name: "Checkout Repo"
+      - name: Checkout Repo
         uses: actions/checkout@v4
         with:
           path: velox
-          submodules: 'recursive'
-          ref: "${{ inputs.ref }}"
+          submodules: recursive
+          ref: ${{ inputs.ref }}
 
       - name: Fix git permissions
         # Usually actions/checkout does this but as we run in a container
@@ -726,8 +727,8 @@ jobs:
     needs: compile
     timeout-minutes: 120
     env:
-      CCACHE_DIR: "${{ github.workspace }}/ccache/"
-      LINUX_DISTRO: "centos"
+      CCACHE_DIR: ${{ github.workspace }}/ccache/
+      LINUX_DISTRO: centos
 
     steps:
 
@@ -736,12 +737,12 @@ jobs:
         with:
           name: row_number
 
-      - name: "Checkout Repo"
+      - name: Checkout Repo
         uses: actions/checkout@v4
         with:
           path: velox
-          submodules: 'recursive'
-          ref: "${{ inputs.ref }}"
+          submodules: recursive
+          ref: ${{ inputs.ref }}
 
       - name: Fix git permissions
         # Usually actions/checkout does this but as we run in a container
@@ -788,8 +789,8 @@ jobs:
     needs: compile
     timeout-minutes: 120
     env:
-      CCACHE_DIR: "${{ github.workspace }}/ccache/"
-      LINUX_DISTRO: "centos"
+      CCACHE_DIR: ${{ github.workspace }}/ccache/
+      LINUX_DISTRO: centos
 
     steps:
 
@@ -798,12 +799,12 @@ jobs:
         with:
           name: topn_row_number
 
-      - name: "Checkout Repo"
+      - name: Checkout Repo
         uses: actions/checkout@v4
         with:
           path: velox
-          submodules: 'recursive'
-          ref: "${{ inputs.ref }}"
+          submodules: recursive
+          ref: ${{ inputs.ref }}
 
       - name: Fix git permissions
         # Usually actions/checkout does this but as we run in a container
@@ -955,8 +956,8 @@ jobs:
     container: ghcr.io/facebookincubator/velox-dev:presto-java
     timeout-minutes: 120
     env:
-      CCACHE_DIR: "${{ github.workspace }}/ccache/"
-      LINUX_DISTRO: "centos"
+      CCACHE_DIR: ${{ github.workspace }}/ccache/
+      LINUX_DISTRO: centos
     steps:
 
       - name: Download aggregation fuzzer
@@ -964,19 +965,19 @@ jobs:
         with:
           name: aggregation
 
-      - name: "Checkout Repo"
+      - name: Checkout Repo
         uses: actions/checkout@v4
         with:
           path: velox
-          submodules: 'recursive'
-          ref: "${{ inputs.ref }}"
+          submodules: recursive
+          ref: ${{ inputs.ref }}
 
       - name: Fix git permissions
         # Usually actions/checkout does this but as we run in a container
         # it doesn't work
         run: git config --global --add safe.directory ${GITHUB_WORKSPACE}/velox
 
-      - name: "Run Aggregate Fuzzer"
+      - name: Run Aggregate Fuzzer
         run: |
           cd  velox
           cp ./scripts/ci/presto/etc/hive.properties $PRESTO_HOME/etc/catalog
@@ -1019,8 +1020,8 @@ jobs:
     timeout-minutes: 120
     if: ${{ needs.compile.outputs.presto_bias  == 'true' }}
     env:
-      CCACHE_DIR: "${{ github.workspace }}/ccache/"
-      LINUX_DISTRO: "centos"
+      CCACHE_DIR: ${{ github.workspace }}/ccache/
+      LINUX_DISTRO: centos
     steps:
 
       - name: Download presto expression fuzzer
@@ -1028,12 +1029,12 @@ jobs:
         with:
           name: presto
 
-      - name: "Checkout Repo"
+      - name: Checkout Repo
         uses: actions/checkout@v4
         with:
           path: velox
-          submodules: 'recursive'
-          ref: "${{ inputs.ref }}"
+          submodules: recursive
+          ref: ${{ inputs.ref }}
 
       - name: Fix git permissions
         # Usually actions/checkout does this but as we run in a container
@@ -1108,8 +1109,8 @@ jobs:
     timeout-minutes: 120
     if: ${{ needs.compile.outputs.presto_aggregate_bias  == 'true' }}
     env:
-      CCACHE_DIR: "${{ github.workspace }}/ccache/"
-      LINUX_DISTRO: "centos"
+      CCACHE_DIR: ${{ github.workspace }}/ccache/
+      LINUX_DISTRO: centos
     steps:
 
       - name: Download aggregation fuzzer
@@ -1117,12 +1118,12 @@ jobs:
         with:
           name: aggregation
 
-      - name: "Checkout Repo"
+      - name: Checkout Repo
         uses: actions/checkout@v4
         with:
           path: velox
-          submodules: 'recursive'
-          ref: "${{ inputs.ref }}"
+          submodules: recursive
+          ref: ${{ inputs.ref }}
 
       - name: Fix git permissions
         # Usually actions/checkout does this but as we run in a container
@@ -1135,7 +1136,7 @@ jobs:
           name: signatures
           path: /tmp/signatures
 
-      - name: "Run Bias Aggregate Fuzzer"
+      - name: Run Bias Aggregate Fuzzer
         run: |
           cd  velox
           cp ./scripts/ci/presto/etc/hive.properties $PRESTO_HOME/etc/catalog
@@ -1206,8 +1207,8 @@ jobs:
     container: ghcr.io/facebookincubator/velox-dev:presto-java
     timeout-minutes: 120
     env:
-      CCACHE_DIR: "${{ github.workspace }}/ccache/"
-      LINUX_DISTRO: "centos"
+      CCACHE_DIR: ${{ github.workspace }}/ccache/
+      LINUX_DISTRO: centos
     steps:
 
       - name: Download window fuzzer
@@ -1215,19 +1216,19 @@ jobs:
         with:
           name: window
 
-      - name: "Checkout Repo"
+      - name: Checkout Repo
         uses: actions/checkout@v4
         with:
           path: velox
-          submodules: 'recursive'
-          ref: "${{ inputs.ref }}"
+          submodules: recursive
+          ref: ${{ inputs.ref }}
 
       - name: Fix git permissions
         # Usually actions/checkout does this but as we run in a container
         # it doesn't work
         run: git config --global --add safe.directory ${GITHUB_WORKSPACE}/velox
 
-      - name: "Run Window Fuzzer"
+      - name: Run Window Fuzzer
         run: |
           cd  velox
           cp ./scripts/ci/presto/etc/hive.properties $PRESTO_HOME/etc/catalog
@@ -1270,8 +1271,8 @@ jobs:
     container: ghcr.io/facebookincubator/velox-dev:presto-java
     timeout-minutes: 120
     env:
-      CCACHE_DIR: "${{ github.workspace }}/ccache/"
-      LINUX_DISTRO: "centos"
+      CCACHE_DIR: ${{ github.workspace }}/ccache/
+      LINUX_DISTRO: centos
     steps:
 
       - name: Download writer fuzzer
@@ -1279,19 +1280,19 @@ jobs:
         with:
           name: writer
 
-      - name: "Checkout Repo"
+      - name: Checkout Repo
         uses: actions/checkout@v4
         with:
           path: velox
-          submodules: 'recursive'
-          ref: "${{ inputs.ref }}"
+          submodules: recursive
+          ref: ${{ inputs.ref }}
 
       - name: Fix git permissions
         # Usually actions/checkout does this but as we run in a container
         # it doesn't work
         run: git config --global --add safe.directory ${GITHUB_WORKSPACE}/velox
 
-      - name: "Run Writer Fuzzer"
+      - name: Run Writer Fuzzer
         run: |
           cd  velox
           cp ./scripts/ci/presto/etc/hive.properties $PRESTO_HOME/etc/catalog

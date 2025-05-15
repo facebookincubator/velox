@@ -39,7 +39,7 @@ repos:
         entry: cmake-format
         language: python
         files: (CMakeLists.*|.*\.cmake|.*\.cmake.in)$
-        args: ["--in-place"]
+        args: [--in-place]
         require_serial: false
         additional_dependencies: [cmake-format==0.6.13, pyyaml]
 
@@ -58,7 +58,7 @@ repos:
         name: license-header
         description: Add missing license headers.
         entry: ./scripts/checks/license-header.py
-        args: ["-i"]
+        args: [-i]
         language: python
         additional_dependencies: [regex]
         require_serial: true

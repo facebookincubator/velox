@@ -38,7 +38,7 @@ rules:
   indentation: disable
   line-length: disable
   octal-values: enable
-  quoted-strings: 
+  quoted-strings:
     required: only-when-needed
   truthy:
     allowed-values: ['true', 'false', 'on']
