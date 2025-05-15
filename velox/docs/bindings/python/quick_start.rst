@@ -1,5 +1,5 @@
 ===========================================================
-PyVelox Quick Start - The Power of Velox at your Fingertips
+PyVelox Quick Start - The Power of Velox at your fingertips
 ===========================================================
 
 PyVelox is a thin Python layer on top of the Velox C++ library. It provides Python language bindings that allow Velox query plans to be easily constructed and executed, without requiring users to build, install, and learn other idiosyncrasies of the C++ library. 
