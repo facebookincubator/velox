@@ -30,4 +30,3 @@ For this reason we need to use the base functions to create standalone
 libraries for wave to avoid linking statically against the stubs when
 building the monolithic library and label any tests with 'cuda_driver'
 to allow excluding them from ctest on machines without the driver.
-

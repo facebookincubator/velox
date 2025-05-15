@@ -87,4 +87,3 @@ mission, a few overarching principles and values are highlighted below.
 * **Adaptivity.** Exposing too many configuration knobs to users increases the
   API complexity, and makes it more error-prone. As much as possible, we try to
   make the library self-adapt to find optimal execution configurations.
-

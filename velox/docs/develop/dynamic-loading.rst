@@ -77,4 +77,3 @@ Notes
 
 - In Velox, a function's signature is determined solely by its name and argument types. The return type is not taken into account. As a result, if a function with an identical signature is added but with a different return type, it will overwrite the existing function.
 - Function overloading is supported. Therefore, multiple functions can share the same name as long as they differ in the number or types of arguments.
-
