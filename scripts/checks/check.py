@@ -18,7 +18,6 @@ import argparse
 from collections import OrderedDict
 import os
 import regex
-import subprocess
 import sys
 
 from util import attrdict

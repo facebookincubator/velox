@@ -16,9 +16,6 @@
 
 # pyre-unsafe
 
-from typing import List
-
-
 class Vector:
     def size(self) -> int: ...
     def print_all(self) -> str: ...
