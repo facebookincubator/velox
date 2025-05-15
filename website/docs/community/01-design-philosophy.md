@@ -8,7 +8,7 @@ title: Design Philosophy
 This page lists a set of directional principles and values meant to guide
 contributors and maintainers as they develop the Velox project. These are not
 meant to be hard-and-fast rules, but to inform decision making and help guide
-discussions that may come up during the development of Velox. 
+discussions that may come up during the development of Velox.
 
 ## Velox Mission
 
