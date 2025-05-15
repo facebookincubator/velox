@@ -144,8 +144,8 @@ jobs:
 
       - name: Fix git permissions
         working-directory: ${{ github.workspace }}
-          # Usually actions/checkout does this but as we run in a container
-          # it doesn't work
+        # Usually actions/checkout does this but as we run in a container
+        # it doesn't work
         run: |
           git config --global --add safe.directory ${GITHUB_WORKSPACE}/velox
           git config --global --add safe.directory ${GITHUB_WORKSPACE}/velox_main
@@ -209,7 +209,6 @@ jobs:
           make python-venv
           source .venv/bin/activate
           make debug
-
 
       - name: Ccache after
         run: ccache -s
@@ -640,7 +639,7 @@ jobs:
           ref: "${{ inputs.ref }}"
 
       - name: Fix git permissions
-          # Usually actions/checkout does this but as we run in a container
+        # Usually actions/checkout does this but as we run in a container
         # it doesn't work
         run: git config --global --add safe.directory ${GITHUB_WORKSPACE}/velox
 
@@ -712,9 +711,9 @@ jobs:
         if: ${{ !cancelled() }}
         uses: actions/upload-artifact@v4
         with:
-            name: exchange-fuzzer-failure-artifacts
-            path: |
-              /tmp/exchange_fuzzer_repro
+          name: exchange-fuzzer-failure-artifacts
+          path: |
+            /tmp/exchange_fuzzer_repro
 
   presto-java-row-number-fuzzer-run:
     name: RowNumber Fuzzer
@@ -774,9 +773,9 @@ jobs:
         if: ${{ !cancelled() }}
         uses: actions/upload-artifact@v4
         with:
-            name: row-fuzzer-failure-artifacts
-            path: |
-              /tmp/row_fuzzer_repro
+          name: row-fuzzer-failure-artifacts
+          path: |
+            /tmp/row_fuzzer_repro
 
   presto-java-topn-row-number-fuzzer-run:
     name: TopNRowNumber Fuzzer
@@ -873,9 +872,9 @@ jobs:
         if: ${{ !cancelled() }}
         uses: actions/upload-artifact@v4
         with:
-            name: cache-fuzzer-logs
-            path: |
-              /tmp/cache_fuzzer
+          name: cache-fuzzer-logs
+          path: |
+            /tmp/cache_fuzzer
 
   table-evolution-fuzzer-run:
     name: Table Evolution Fuzzer
@@ -907,9 +906,9 @@ jobs:
         if: ${{ !cancelled() }}
         uses: actions/upload-artifact@v4
         with:
-            name: table-evolution-fuzzer-test-logs
-            path: |
-              /tmp/table_evolution_fuzzer_test
+          name: table-evolution-fuzzer-test-logs
+          path: |
+            /tmp/table_evolution_fuzzer_test
 
   memory-arbitration-fuzzer-run:
     name: Memory Arbitration Fuzzer
@@ -941,9 +940,9 @@ jobs:
         if: ${{ !cancelled() }}
         uses: actions/upload-artifact@v4
         with:
-            name: memory-arbitration-fuzzer-test-logs
-            path: |
-              /tmp/memory_arbitration_fuzzer_test
+          name: memory-arbitration-fuzzer-test-logs
+          path: |
+            /tmp/memory_arbitration_fuzzer_test
 
   presto-java-aggregation-fuzzer-run:
     name: Aggregation Fuzzer with Presto as source of truth
@@ -969,10 +968,9 @@ jobs:
           ref: "${{ inputs.ref }}"
 
       - name: Fix git permissions
-          # Usually actions/checkout does this but as we run in a container
+        # Usually actions/checkout does this but as we run in a container
         # it doesn't work
         run: git config --global --add safe.directory ${GITHUB_WORKSPACE}/velox
-
 
       - name: "Run Aggregate Fuzzer"
         run: |
@@ -1008,7 +1006,6 @@ jobs:
           path: |
             /tmp/aggregate_fuzzer_repro
             /tmp/server.log
-
 
   presto-java-only-bias-function-expression-fuzzer-run:
     name: Biased Expression Fuzzer with Only Added/Updated Functions and Presto as source of truth
@@ -1222,10 +1219,9 @@ jobs:
           ref: "${{ inputs.ref }}"
 
       - name: Fix git permissions
-          # Usually actions/checkout does this but as we run in a container
+        # Usually actions/checkout does this but as we run in a container
         # it doesn't work
         run: git config --global --add safe.directory ${GITHUB_WORKSPACE}/velox
-
 
       - name: "Run Window Fuzzer"
         run: |

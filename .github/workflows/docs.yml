@@ -63,15 +63,7 @@ jobs:
           echo "PATH=$PATH:/github/home/.local/bin" >> $GITHUB_ENV
 
       - name: Install Python Dependencies
-        run: |
-          which uv
-          make python-venv
-          which uv
-          uv pip install -r scripts/docs-requirements.txt 
-          
-          # Install pyvelox to generate it's docs
-          make python-build
-
+        run: "which uv\nmake python-venv\nwhich uv\nuv pip install -r scripts/docs-requirements.txt \n#magic___^_^___line\n# Install pyvelox to generate it's docs\nmake python-build\n#magic___^_^___line\n"
       - name: "Save ccache"
         uses: apache/infrastructure-actions/stash/save@3354c1565d4b0e335b78a76aedd82153a9e144d4
         with:
