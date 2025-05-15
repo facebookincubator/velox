@@ -1,0 +1,174 @@
+---
+slug: working-with-pyvelox
+title: "Working with PyVelox: Running TPC-H Queries"
+authors: [kgpai, jwujciak]
+tags: [tech-blog, pyvelox]
+---
+
+## TL;DR
+
+PyVelox is python bindings for Velox library developers, that provides a simple and interactive API to facilitates exploratory programming and debugging of the Velox API's for rapid prototyping. PyVelox support Arrow integration as Arrow and Velox in-memory layouts are compatible with each other and the conversions are very efficient, zero copy in almost every case. The PyPI page for PyVelox is available at: https://pypi.org/project/PyVelox/ 
+ 
+PyVelox can be installed from PyPI using the following command: 
+```
+pip install pyvelox
+```
+
+PyVelox may be of interest to the following individuals:
+
+1. Experienced C++ Database developers who want to explore Velox Api’s using the python bindings.
+2. New developers and engineers who are looking for an introduction to Velox.
+3. Engineers who are working to incorporate Velox into new data processing systems, can use PyVelox as a springboard to iterate and prototype proof of concepts. 
+4. Engineers who need to integrate Velox bindings with other python based libraries.
+
+In this blog, we will see how we can leverage PyVelox for rapid testing of TPC-H query plans. 
+
+## Running TPC-H Queries
+
+Let's write a plan to run TPC-H Query 1.
+
+<figure>
+ <img src="/img/tpc-h-1-query.png" height= "100%" width="100%"/>
+</figure>
+
+### Identifying all the columns in TPC-H Query 1 and their types
+```
+from pyvelox.type import ROW, VARCHAR, DOUBLE, INTEGER
+
+rowtype = ROW(["l_returnflag",
+      "l_linestatus",
+      "l_quantity",
+      "l_extendedprice",
+      "l_discount",
+      "l_tax",
+      "l_shipdate"],
+      [VARCHAR(), VARCHAR(), DOUBLE(), DOUBLE(), DOUBLE(), DOUBLE(), INTEGER()])
+```
+
+<figure>
+ <img src="/img/columns_highlighted.png" height= "100%" width="100%"/>
+</figure>
+
+### Registering parquet input data file
+
+If you need to generate test datasets to register the input data file, you can do so by using Velox’s builtin TPC-H connector. For example, to generate data for the lineitem table you can use the following snippet:
+
+```
+register_tpch("tpch")
+register_hive("hive")
+
+num_output_files = 10
+
+plan_builder = PlanBuilder()
+plan_builder.tpch_gen(
+     table_name="lineitem",
+     connector_id="tpch",
+     scale_factor=10,
+     num_parts=num_output_files,
+)
+.table_write(
+     output_path=PARQUET("/tmp/tpch/lineitem/")
+     connector_id="hive",
+)
+
+# Run the plan
+runner = LocalRunner(plan_builder.get_plan_node())
+for vector in runner.execute(max_drivers=num_output_files):
+     print(vector.print_all())
+```
+
+Velox supports file formats like Dwrf, Nimble, Parquet, ORC, Json, CSV, and others. You can define files to be read and written using pyvelox.file:
+
+```
+from velox.py.file import PARQUET
+
+input_files = [PARQUET('/tmp/tpch/lineitem.parquet')]
+```
+
+By default, these files are read from the local filesystem. Files can also be read from remote storage systems like S3, ABFS, GCS, and others by registering the filesystem. 
+
+### Reading the input data file
+
+To read data in a file or a set of files, you can define a query plan containing a table scan node:
+
+```
+from pyvelox.plan_builder import PlanBuilder
+
+plan_builder = PlanBuilder()
+
+plan_builder.table_scan(
+    output_schema=rowtype,
+    input_files=input_files)
+
+plan = plan_builder.get_plan_node()
+print(plan)
+```
+
+### Running the query plan
+
+Once a query plan is constructed using PlanBuilder, it can be locally executed by a query runner:
+
+```
+from pyvelox.runner import LocalRunner
+runner = LocalRunner(plan)
+
+for vector in runner.execute():
+    print(vector.print_all())
+
+print(runner.print_plan_with_stats())
+```
+
+<figure>
+ <img src="/img/execute-queryplan.png" height= "100%" width="100%"/>
+</figure>
+
+### Adding the projection
+
+Adding the projection to the plan using PlanBuilder methods: 
+
+```
+plan_builder = PlanBuilder()
+plan_builder.table_scan(
+    output_schema=rowtype,
+    input_files=input_files)
+plan_builder.project(["l_returnflag",
+               "l_linestatus",
+               "l_quantity",
+               "l_extendedprice",
+               "l_extendedprice * (1.0 - l_discount) AS l_sum_disc_price",
+               "l_extendedprice * (1.0 - l_discount) * (1.0 + l_tax) AS l_sum_charge",
+               "l_discount"])
+```
+
+<figure>
+ <img src="/img/projection.png" height= "100%" width="100%"/>
+</figure>
+
+### Adding the Aggregation, Group By and Order By
+
+Adding the Aggregation, Group By and Order By to the plan using PlanBuilder methods:
+
+```
+plan_builder.aggregate(grouping_keys = ["l_returnflag", "l_linestatus"],
+                       aggregations = ["sum(l_quantity)",
+               "sum(l_extendedprice)",
+               "sum(l_sum_disc_price)",
+               "sum(l_sum_charge)",
+               "avg(l_quantity)",
+               "avg(l_extendedprice)",
+               "avg(l_discount)",
+               "count(0)"])
+```
+
+<figure>
+ <img src="/img/aggregation.png" height= "100%" width="100%"/>
+</figure>
+
+### Running the plan
+
+Query plan is locally executed by a query runner:
+
+<figure>
+ <img src="/img/aggregation.png" height= "100%" width="100%"/>
+</figure>
+
