@@ -12,7 +12,7 @@ Getting Started
 
 1. **Create a C++ file for your dynamic library**
 
-   For dynamically loaded function registration, the format followed mirrors that of built-in function registration with some noted differences. Using `DynamicTestFunction.cpp` as an example, the function uses the `extern "C"` keyword to protect against name mangling. 
+   For dynamically loaded function registration, the format followed mirrors that of built-in function registration with some noted differences. Using `DynamicTestFunction.cpp` as an example, the function uses the `extern "C"` keyword to protect against name mangling.
    The `registrationFunctionName` function here acts as the entrypoint for the dynamic library for loading symbols. The `registrationFunctionName` function name is customizable and defaults to `registerExtensions` when not specified in the library loading call.
 
    Make sure to also include the necessary header file:

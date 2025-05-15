@@ -32,7 +32,7 @@ format:
     - target_link_libraries
 
 parse:
-  # We define these for our custom 
+  # We define these for our custom
   # functions so they get formatted correctly
   additional_commands:
     velox_add_library:
