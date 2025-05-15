@@ -1548,10 +1548,6 @@ std::shared_ptr<Task> assertQuery(
     DuckDbQueryRunner& duckDbQueryRunner,
     std::optional<std::vector<uint32_t>> sortingKeys) {
   auto [cursor, actualResults] = readCursor(params, addSplits);
-  for (const auto& actual : actualResults) {
-    std::cerr << "MACDUAN RESULTS: " << actual->toString(0, actual->size())
-              << std::endl;
-  }
 
   if (sortingKeys) {
     assertResultsOrdered(

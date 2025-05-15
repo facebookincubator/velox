@@ -61,23 +61,12 @@ class Merge : public SourceOperator {
   size_t numStartedSources_{0};
 
  private:
-  void startSources();
-
-  void initializeTreeOfLosers();
-
   void spill();
 
   /// Maximum number of rows in the output batch.
   const vector_size_t outputBatchSize_;
 
   std::vector<SpillSortKey> sortingKeys_;
-
-  /// A list of cursors over batches of ordered source data. One per source.
-  /// Aligned with 'sources'.
-  std::vector<SourceStream*> streams_;
-
-  /// Used to merge data from two or more sources.
-  std::unique_ptr<TreeOfLosers<SourceStream>> treeOfLosers_;
 
   RowVectorPtr output_;
 
@@ -94,12 +83,18 @@ class Merge : public SourceOperator {
 
   std::unique_ptr<MergeSpiller> mergeSpiller_;
 
+  bool hasSpilled_{false};
+
   // SpillReadFiles group for all partial merge run.
   std::vector<std::vector<std::unique_ptr<SpillReadFile>>> spillReadFilesGroup_;
 
   uint32_t maxMergeSources_;
 };
 
+/// A utility class for sort-merging data from upstream sources or from data
+/// spilled by the `LocalMerge` operator. The `LocalMerge` operator may start
+/// only a portion of the sources at a time to cap the memory usage, hence it
+/// might perform multiple sort-merge operations from different merge sources.
 class MergeBuffer {
  public:
   MergeBuffer(const RowTypePtr& type, velox::memory::MemoryPool* pool)
@@ -108,16 +103,16 @@ class MergeBuffer {
   RowVectorPtr getOutputFromSource(
       vector_size_t maxOutputRows,
       std::vector<ContinueFuture>& sourceBlockingFutures,
-      bool& needFinish);
+      bool& isLastRun);
 
   RowVectorPtr getOutputFromSpill(vector_size_t maxOutputRows);
 
-  /// No more data to spill if sourceStreamMerger_ is null.
-  bool needsSpill() const {
+  bool hasSourceInput() const {
     return sourceStreamMerger_ != nullptr;
   }
 
-  /// Start sources for this partial merge run.
+  /// Start sources for this merge run, it may start either all the sources at
+  /// once or a portion of the sources at a time to cap the memory usage.
   void maybeStartMoreSources(
       size_t& numStartedSources,
       std::vector<ContinueFuture>& sourceBlockingFutures,
@@ -129,10 +124,6 @@ class MergeBuffer {
   void createSpillMerger(
       std::vector<std::vector<std::unique_ptr<SpillReadFile>>>
           spillReadFilesGroup);
-
-  void addSpillRowsNum(uint64_t numRows) {
-    numSpillRows_ += numRows;
-  }
 
  private:
   const RowTypePtr type_;
@@ -148,7 +139,7 @@ class MergeBuffer {
   // Reusable output vector.
   RowVectorPtr output_;
   // The number of received input rows.
-  uint64_t numSpillRows_{0};
+  uint64_t numInputRows_{0};
   // The number of rows that has been returned.
   uint64_t numOutputRows_{0};
 };
