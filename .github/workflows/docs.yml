@@ -67,8 +67,8 @@ jobs:
           which uv
           make python-venv
           which uv
-          uv pip install -r scripts/docs-requirements.txt 
-          
+          uv pip install -r scripts/docs-requirements.txt
+
           # Install pyvelox to generate it's docs
           make python-build
 
