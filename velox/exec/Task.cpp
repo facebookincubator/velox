@@ -287,7 +287,6 @@ std::shared_ptr<Task> Task::create(
   if (mode == Task::ExecutionMode::kSerial) {
     task->initDriverFactory();
   }
-
   return task;
 }
 
@@ -711,6 +710,11 @@ RowVectorPtr Task::next(ContinueFuture* future) {
   }
 
   VELOX_CHECK(!driverFactories_.empty());
+  if (numDriversUnderBarrier_ == 0) {
+    if (underBarrier()) {
+      startDriverBarriersLocked();
+    }
+  }
 
   // Run drivers one at a time. If a driver blocks, continue running the other
   // drivers. Running other drivers is expected to unblock some or all blocked
@@ -2223,7 +2227,7 @@ template <class TBridgeType, typename MemberType>
 std::shared_ptr<TBridgeType> Task::getJoinBridgeInternalLocked(
     uint32_t splitGroupId,
     const core::PlanNodeId& planNodeId,
-    MemberType SplitGroupState::*bridges_member) {
+    MemberType SplitGroupState::* bridges_member) {
   const auto& splitGroupState = splitGroupStates_[splitGroupId];
 
   auto it = (splitGroupState.*bridges_member).find(planNodeId);
