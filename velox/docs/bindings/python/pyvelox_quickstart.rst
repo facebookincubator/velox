@@ -4,7 +4,7 @@ PyVelox Quick Start - The Power Of Velox At Your Fingertips
 
 PyVelox is a thin Python layer on top of the Velox C++ library. It provides Python language bindings that allow Velox query plans to be easily constructed and executed, without requiring users to build, install, and learn other idiosyncrasies of the C++ library. 
 
-PyVelox is meant to be used by engineers when developing and debugging Velox and other parts of the data stack; it’s not meant to be used by end data users. 
+PyVelox is meant to be used by engineers when developing and debugging Velox and other parts of the data stack; it’s not meant to be used by end data users. The PyPI page for PyVelox is available at: https://pypi.org/project/PyVelox/  
 
 
 Installation
@@ -12,7 +12,7 @@ Installation
 
 .. code-block:: python
 
-      // The PyPI page for PyVelox is available at: https://pypi.org/project/PyVelox/
+      // Install PyVelox
 
       $ pip install pyvelox
 
