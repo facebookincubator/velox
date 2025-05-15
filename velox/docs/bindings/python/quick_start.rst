@@ -6,6 +6,7 @@ PyVelox is a thin Python layer on top of the Velox C++ library. It provides Pyth
 
 PyVelox is meant to be used by engineers when developing and debugging Velox and other parts of the data stack; it’s not meant to be used by end data users. 
 
+
 Installation
 ------------
 
@@ -129,6 +130,7 @@ Query configs can be added using the add_query_config() runner method:
 
       runner.add_query_config("selective_nimble_reader_enabled", "true")
 
+
 Manipulating Vectors
 --------------------
 
@@ -150,7 +152,129 @@ And other basic APIs for comparisons across vectors, printing contents, and chec
 
 PyArrow Integration
 ^^^^^^^^^^^^^^^^^^^
+If users need to further manipulate columnar buffers, they can do so using the PyArrow API, then converting the Arrow Arrays into Velox Vectors (and vice versa). Arrow and Velox in-memory layouts are compatible, so conversions are very efficient and zero copy in almost every case: 
+
+.. code-block:: python
+
+      // Work with Arrow Arrays using PyArrow API
+
+      import pyarrow
+      from velox.py.arrow import to_velox, to_arrow
+
+      arrow_array = pyarrow.array([2, 2, 3, 4, 4, 0])
+      velox_vector = to_velox(arrow_array)
+      assert arrow_array == to_arrow(velox_vector)
 
 
+Generating TPC-H Files
+----------------------
+
+If you need to generate test datasets, you can do so by using Velox’s builtin TPC-H connector. For example, to generate data for the lineitem table you can use the following snippet:
+
+.. code-block:: python
+
+      // Generate test datasets
+
+      register_tpch("tpch")
+      register_hive("hive")
+
+      num_output_files = 10
+
+      plan_builder = PlanBuilder()
+      plan_builder.tpch_gen(
+           table_name="lineitem",
+           connector_id="tpch",
+           scale_factor=10,
+           num_parts=num_output_files,
+      )
+      .table_write(
+           output_path=PARQUET("/tmp/tpch/lineitem/")
+           connector_id="hive",
+      )
+
+      // Run the plan
+      runner = LocalRunner(plan_builder.get_plan_node())
+      for vector in runner.execute(max_drivers=num_output_files):
+           print(vector.print_all())
+
+
+More Operators
+--------------
+
+Additional relational operator can be added to the plan using PlanBuilder methods:
+
+.. code-block:: python
+
+      // Work with relational operators
+
+      from pyvelox.type import ARRAY, DATE, DOUBLE, INTEGER, MAP, ROW
+      from pyvelox.plan_builder import PlanBuilder
+
+      plan_builder = PlanBuilder()
+      plan_builder.table_scan(
+          output_schema=ROW(
+              ["l_shipdate", "l_extendedprice", "l_quantity", "l_discount"],
+              [DATE(), DOUBLE(), DOUBLE(), DOUBLE()],
+          ),  
+          input_files=input_files,
+      )
+      plan_builder.filter("l_quantity < 10")
+      plan_builder.project(["l_extendedprice * l_discount as revenue"])
+      plan_builder.aggregate(
+          grouping_keys=["l_shipdate"]
+          aggregations=["sum(revenue)"]
+      )
+      plan_builder.order_by("l_shipdate DESC")
+      plan_builder.limit(10)
+
+      print(plan_builder.get_plan_node())
+
+
+Filter Pushdown
+^^^^^^^^^^^^^^^
+If filters are to be applied near the scan, they can be pushed down into the table scan for more efficient filtering using the following API:
+
+.. code-block:: python
+
+      // Push down filter to table scan
+
+      plan_builder = PlanBuilder()
+      plan_builder.table_scan(
+          output_schema=ROW(
+              ["l_shipdate", "l_extendedprice", "l_quantity", "l_discount"],
+              [DATE(), DOUBLE(), DOUBLE(), DOUBLE()],
+          ),  
+          input_files=input_files,
+          filters=["l_quantity < 10"],
+      )
+
+Table scan filters support simple predicates in the form of a “column <operation> value”, and different predicates are assumed to be associated using an AND conjunct. Additional complex filters may also be pushed down by using the *remaining_filter* parameter to .table_scan().
+
+
+Joins
+-----
+
+Joins and other multi-pipeline plans can be chained together using the new_builder() method on plan builder:
+
+.. code-block:: python
+
+      // Work with joins
+
+      plan_builder.hash_join(
+          left_keys=["o_custkey"],
+          right_keys=["c_custkey"],
+          build_plan_node=(
+              plan_builder.new_builder()
+              .table_scan(
+                  output_schema=ROW(["c_custkey"], [BIGINT()]),
+                  input_files=customer_files,
+              )
+              .get_plan_node()
+          ),  
+          output=["o_orderkey", "o_custkey", "c_custkey"],
+          join_type=JoinType.LEFT,
+      )
+
+Left and right keys define the join keys; *build_plan_node* contains the subtree from the build side of a hash join (or the right-hand side of a merge join). Output contains the list of columns the join will return (project out), and join_type specifies the join type, either INNER, LEFT, RIGHT, or FULL.
 
 
