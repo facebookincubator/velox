@@ -391,7 +391,6 @@ jobs:
           other_duration: "${{ inputs.duration || (github.event_name == 'push' && 1800 || 3600) }}"
           is_pr: "${{ github.event_name == 'pull_request' }}"
         run: |
-
           if [ "$is_pr" == "true" ]; then
             duration=$pr_duration
           else
