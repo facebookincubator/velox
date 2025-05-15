@@ -110,7 +110,7 @@ void HashAggregation::initialize() {
       isRawInput(aggregationNode_->step()),
       aggregationNode_->globalGroupingSets(),
       groupIdChannel,
-      spillConfig_.has_value() ? &spillConfig_.value() : nullptr,
+      spillConfig(),
       &nonReclaimableSection_,
       operatorCtx_.get(),
       &spillStats_);
@@ -136,9 +136,9 @@ void HashAggregation::setupGroupingKeyChannelProjections(
     groupingKeyProjections.emplace_back(
         exprToChannel(groupingKeys[i].get(), inputType), i);
   }
-
+  const auto& queryConfig = operatorCtx_->driverCtx()->queryConfig();
   const bool reorderGroupingKeys =
-      canSpill() && spillConfig()->prefixSortEnabled();
+      canSpill() && queryConfig.spillPrefixSortEnabled();
   // If prefix sort is enabled, we need to sort the grouping key's layout in the
   // grouping set to maximize the prefix sort acceleration if spill is
   // triggered. The reorder stores the grouping key with smaller prefix sort
