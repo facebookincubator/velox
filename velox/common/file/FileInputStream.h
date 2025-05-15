@@ -28,7 +28,7 @@ namespace facebook::velox::common {
 class FileInputStream : public ByteInputStream {
  public:
   FileInputStream(
-      std::unique_ptr<ReadFile>&& file,
+      const std::shared_ptr<ReadFile>& file,
       uint64_t bufferSize,
       memory::MemoryPool* pool);
 
@@ -108,7 +108,7 @@ class FileInputStream : public ByteInputStream {
 
   void updateStats(uint64_t readBytes, uint64_t readTimeNs);
 
-  const std::unique_ptr<ReadFile> file_;
+  const std::shared_ptr<ReadFile> file_;
   const uint64_t fileSize_;
   const uint64_t bufferSize_;
   memory::MemoryPool* const pool_;
