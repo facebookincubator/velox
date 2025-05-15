@@ -455,8 +455,7 @@ def parse_args():
     parser_run.add_argument(
         "--binary_filter",
         default=None,
-        help="Filter applied to binary names. "
-        "By default execute all binaries found.",
+        help="Filter applied to binary names. By default execute all binaries found.",
     )
     parser_run.add_argument(
         "--bm_filter",

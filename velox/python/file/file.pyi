@@ -18,7 +18,6 @@
 
 from pyvelox.type import Type
 
-
 class File:
     def __init__(self, path: str, format_str: str) -> None: ...
     def get_schema(self) -> Type: ...

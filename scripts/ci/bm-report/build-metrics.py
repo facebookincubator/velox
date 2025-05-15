@@ -14,7 +14,6 @@
 # limitations under the License.
 
 import argparse
-import sys
 import uuid
 from os.path import join, splitext
 from pathlib import Path

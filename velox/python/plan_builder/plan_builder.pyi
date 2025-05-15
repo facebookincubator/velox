@@ -22,7 +22,6 @@ from typing import List, Dict, Type, Optional
 from pyvelox.file import File
 from pyvelox.type import Type
 
-
 class JoinType(Enum):
     INNER = 1
     LEFT = 2
@@ -53,7 +52,7 @@ class PlanBuilder:
         columns: list[str] = [],
         scale_factor: int = 1,
         num_parts: int = 1,
-        connector_id: str = "tpch"
+        connector_id: str = "tpch",
     ) -> PlanBuilder: ...
     def table_write(
         self,

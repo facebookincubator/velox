@@ -34,7 +34,7 @@ import subprocess
 from abc import ABC, abstractmethod
 
 
-AUTOGEN_HEADER = f"""/*
+AUTOGEN_HEADER = """/*
  * This file is auto-generated from kernel_generator.py
  * DO NOT EDIT!
  */

@@ -16,8 +16,6 @@
 
 # pyre-unsafe
 
-from typing import List
-
 from pyvelox.vector import Vector
 from pyarrow import Array
 
