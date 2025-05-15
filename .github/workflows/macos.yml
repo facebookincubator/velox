@@ -89,21 +89,21 @@ jobs:
           fmt_SOURCE: BUNDLED #brew fmt11 is not supported
           CMAKE_POLICY_VERSION_MINIMUM: "3.5"
         run: |
-            ccache -sz -M 5Gi
-            cmake \
-                -B _build/$BUILD_TYPE \
-                -GNinja \
-                -DTREAT_WARNINGS_AS_ERRORS=1 \
-                -DENABLE_ALL_WARNINGS=1 \
-                -DVELOX_ENABLE_PARQUET=ON \
-                -DVELOX_MONO_LIBRARY=ON \
-                -DVELOX_BUILD_SHARED=ON \
-                -DCMAKE_BUILD_TYPE=$BUILD_TYPE
+          ccache -sz -M 5Gi
+          cmake \
+              -B _build/$BUILD_TYPE \
+              -GNinja \
+              -DTREAT_WARNINGS_AS_ERRORS=1 \
+              -DENABLE_ALL_WARNINGS=1 \
+              -DVELOX_ENABLE_PARQUET=ON \
+              -DVELOX_MONO_LIBRARY=ON \
+              -DVELOX_BUILD_SHARED=ON \
+              -DCMAKE_BUILD_TYPE=$BUILD_TYPE
 
       - name: Build
         run: |
-            cmake --build _build/$BUILD_TYPE -j $NJOBS
-            ccache -s
+          cmake --build _build/$BUILD_TYPE -j $NJOBS
+          ccache -s
 
       - uses: assignUser/stash/save@v1
         with:

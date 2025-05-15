@@ -51,7 +51,7 @@ jobs:
           - name: Centos 9
             file: "scripts/docker/centos.dockerfile"
             tags: "ghcr.io/facebookincubator/velox-dev:centos9"
-          - name: Pyvelox 
+          - name: Pyvelox
             file: "scripts/docker/pyvelox.dockerfile"
             tags: "ghcr.io/facebookincubator/velox-dev:pyvelox"
           - name: Dev

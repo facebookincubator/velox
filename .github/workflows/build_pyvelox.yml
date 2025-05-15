@@ -84,12 +84,12 @@ jobs:
             echo "INSTALL_PREFIX=$INSTALL_PREFIX" >> $GITHUB_ENV
             echo "DYLD_LIBRARY_PATH=$INSTALL_PREFIX/lib:$DYLD_LIBRARY_PATH" >> $GITHUB_ENV
 
-            source scripts/setup-macos.sh
-            install_build_prerequisites
-            install_velox_deps_from_brew
-            # CMake 4.0 causes issues with arrows bundled dependencies
-            brew uninstall cmake
-            pipx install --force cmake==3.31
+          source scripts/setup-macos.sh
+          install_build_prerequisites
+          install_velox_deps_from_brew
+          # CMake 4.0 causes issues with arrows bundled dependencies
+          brew uninstall cmake
+          pipx install --force cmake==3.31
 
       - name: Install macOS dependencies
         if: ${{ startsWith(matrix.os, 'macos') && steps.restore-deps.outputs.stash-hit != 'true' }}
@@ -119,11 +119,11 @@ jobs:
         env:
           BUILD_VERSION: "${{ inputs.version }}"
           CIBW_BUILD: "cp310-* cp311-* cp312-* cp313-*"
-          CIBW_ENVIRONMENT_PASS_LINUX:  "BUILD_VERSION"
+          CIBW_ENVIRONMENT_PASS_LINUX: "BUILD_VERSION"
           CIBW_ENVIRONMENT_LINUX: "CCACHE_DIR=/host${{ github.workspace }}/ccache"
           # for macos
           MACOSX_DEPLOYMENT_TARGET: ${{ matrix.os == 'macos-14' && '14' || '13' }}
-          CCACHE_DIR: "${{ github.workspace }}/ccache" 
+          CCACHE_DIR: "${{ github.workspace }}/ccache"
         with:
           output-dir: wheelhouse
 
