@@ -1939,11 +1939,29 @@ bool Task::isUngroupedExecution() const {
   return not isGroupedExecution();
 }
 
-bool Task::hasMixedExecutionGroup() const {
-  if (!isGroupedExecution()) {
+bool Task::hasMixedExecutionGroupJoin(
+    const core::HashJoinNode* joinNode) const {
+  VELOX_CHECK_NOT_NULL(joinNode);
+  if (!isGroupedExecution() || numDriversUngrouped_ == 0) {
     return false;
   }
-  return numDriversUngrouped_ > 0;
+
+  // Check if one side is in grouped execution and the other is not
+  const auto& probeSide = joinNode->sources()[0];
+  const auto& buildSide = joinNode->sources()[1];
+
+  // We need to find the relevant leaf nodes that indicates the execution mode
+  // of both sides.
+  const auto* probeLeftMostLeafNode = core::PlanNode::findFirstNode(
+      probeSide.get(),
+      [](const core::PlanNode* n) { return n->sources().empty(); });
+  const auto* buildLeftModeLeafNode = core::PlanNode::findFirstNode(
+      buildSide.get(),
+      [](const core::PlanNode* n) { return n->sources().empty(); });
+
+  return planFragment_.leafNodeRunsGroupedExecution(
+             probeLeftMostLeafNode->id()) !=
+      planFragment_.leafNodeRunsGroupedExecution(buildLeftModeLeafNode->id());
 }
 
 bool Task::allSplitsConsumedHelper(const core::PlanNode* planNode) const {
