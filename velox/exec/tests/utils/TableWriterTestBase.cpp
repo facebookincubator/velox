@@ -799,7 +799,7 @@ std::string TableWriterTestBase::partitionNameToPredicate(
     if (partitionTypes[i]->isVarchar() || partitionTypes[i]->isVarbinary() ||
         partitionTypes[i]->isDate()) {
       conjuncts.push_back(partitionKeyValues[i]
-                              .replace(partitionKeyValues[i].find("="), 1, "='")
+                              .replace(partitionKeyValues[i].find('='), 1, "='")
                               .append("'"));
     } else {
       conjuncts.push_back(partitionKeyValues[i]);
@@ -817,7 +817,7 @@ std::string TableWriterTestBase::partitionNameToPredicate(
     if (partitionTypes_[i]->isVarchar() || partitionTypes_[i]->isVarbinary() ||
         partitionTypes_[i]->isDate()) {
       conjuncts.push_back(partitionKeyValues[i]
-                              .replace(partitionKeyValues[i].find("="), 1, "='")
+                              .replace(partitionKeyValues[i].find('='), 1, "='")
                               .append("'"));
     } else {
       conjuncts.push_back(partitionDirNames[i]);
