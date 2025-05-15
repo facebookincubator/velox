@@ -52,8 +52,9 @@ services:
     environment:
       NUM_THREADS: 8 # default value for NUM_THREADS
       CCACHE_DIR: "/velox/.ccache"
-      EXTRA_CMAKE_FLAGS: -DVELOX_ENABLE_PARQUET=ON
-                         -DVELOX_ENABLE_S3=ON
+      EXTRA_CMAKE_FLAGS: >
+                        -DVELOX_ENABLE_PARQUET=ON
+                        -DVELOX_ENABLE_S3=ON
     volumes:
       - .:/velox:delegated
     working_dir: /velox
@@ -78,7 +79,8 @@ services:
     environment:
       NUM_THREADS: 8 # default value for NUM_THREADS
       CCACHE_DIR: "/velox/.ccache"
-      EXTRA_CMAKE_FLAGS: -DVELOX_ENABLE_PARQUET=ON
+      EXTRA_CMAKE_FLAGS: >
+                         -DVELOX_ENABLE_PARQUET=ON
                          -DVELOX_ENABLE_S3=ON
     privileged: true
     deploy:
