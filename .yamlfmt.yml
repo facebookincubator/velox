@@ -1,0 +1,8 @@
+match_type: doublestar 
+exclude:
+  - "**/.clang-format"
+  - "**/.clang-tidy"
+formatter:
+  type: basic
+  retain_line_breaks_single: true
+  indent: 2
