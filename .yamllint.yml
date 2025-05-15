@@ -1,0 +1,32 @@
+rules:
+  braces:
+    min-spaces-inside: 0
+    max-spaces-inside: 1
+    min-spaces-inside-empty: 0
+    max-spaces-inside-empty: 0
+  brackets:
+    min-spaces-inside: 0
+    max-spaces-inside: 0
+    min-spaces-inside-empty: 0
+    max-spaces-inside-empty: 0
+  comments: disable
+  comments-indentation: disable
+  document-end: disable
+  document-start: disable
+  empty-lines: disable
+  empty-values:
+    forbid-in-flow-mappings: true
+    forbid-in-block-sequences: true
+  float-values:
+    forbid-inf: true
+    forbid-nan: true
+    forbid-scientific-notation: true
+    require-numeral-before-decimal: true
+  indentation: disable
+  line-length: disable
+  octal-values: enable
+  quoted-strings: 
+    required: only-when-needed
+  truthy:
+    allowed-values: ['true', 'false', 'on']
+    level: warning
