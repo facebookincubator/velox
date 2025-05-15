@@ -24,7 +24,8 @@
 namespace facebook::velox::exec {
 
 class SourceStream;
-class MergeBuffer;
+class SourceMerger;
+class SpillMerger;
 
 // Merge operator Implementation: This implementation uses priority queue
 // to perform a k-way merge of its inputs. It stops merging if any one of
@@ -61,23 +62,23 @@ class Merge : public SourceOperator {
   size_t numStartedSources_{0};
 
  private:
-  void startSources();
+  /// Start sources for this merge run, it may start either all the sources at
+  /// once or a portion of the sources at a time to cap the memory usage.
+  void maybeStartMoreSources();
 
-  void initializeTreeOfLosers();
+  bool needSpill() const {
+    return maxNumMergeSources_ < sources_.size();
+  }
 
   void spill();
+  void finishSpill();
 
   /// Maximum number of rows in the output batch.
   const vector_size_t outputBatchSize_;
+  /// Maximum number of merge sources per run.
+  const uint32_t maxNumMergeSources_;
 
   std::vector<SpillSortKey> sortingKeys_;
-
-  /// A list of cursors over batches of ordered source data. One per source.
-  /// Aligned with 'sources'.
-  std::vector<SourceStream*> streams_;
-
-  /// Used to merge data from two or more sources.
-  std::unique_ptr<TreeOfLosers<SourceStream>> treeOfLosers_;
 
   RowVectorPtr output_;
 
@@ -90,65 +91,103 @@ class Merge : public SourceOperator {
   /// source is blocked waiting for the next batch of data.
   std::vector<ContinueFuture> sourceBlockingFutures_;
 
-  std::unique_ptr<MergeBuffer> mergeBuffer_;
+  std::unique_ptr<SourceMerger> sourceMerger_;
+  std::unique_ptr<SpillMerger> spillMerger_;
 
-  std::unique_ptr<MergeSpiller> mergeSpiller_;
+  std::unique_ptr<MergeSpiller> mergeOutputSpiller_;
+
+  uint64_t numSpilledRows_{0};
+
+  bool hasSpilled_{false};
 
   // SpillReadFiles group for all partial merge run.
-  std::vector<std::vector<std::unique_ptr<SpillReadFile>>> spillReadFilesGroup_;
-
-  uint32_t maxMergeSources_;
+  std::vector<std::vector<std::unique_ptr<SpillReadFile>>> spillReadFileGroups_;
 };
 
-class MergeBuffer {
+/// A utility class for sort-merging data from upstream sourcesof  the
+/// `LocalMerge` operator. The `LocalMerge` operator may start only a portion of
+/// the sources at a time to cap the memory usage, hence it might perform
+/// multiple sort-merge operations with each grouping a subset of merge sources.
+class SourceMerger {
  public:
-  MergeBuffer(const RowTypePtr& type, velox::memory::MemoryPool* pool)
-      : type_(type), pool_(pool) {}
+  SourceMerger(
+      const RowTypePtr& type,
+      velox::memory::MemoryPool* pool,
+      std::vector<std::unique_ptr<SourceStream>> sourceStreams)
+      : type_(type),
+        pool_(pool),
+        streams_([&sourceStreams]() {
+          std::vector<SourceStream*> streams;
+          for (auto& cursor : sourceStreams) {
+            streams.push_back(cursor.get());
+          }
+          return streams;
+        }()),
+        merger_(std::make_unique<TreeOfLosers<SourceStream>>(
+            std::move(sourceStreams))) {}
 
-  RowVectorPtr getOutputFromSource(
+  void isBlocked(std::vector<ContinueFuture>& sourceBlockingFutures) const;
+
+  RowVectorPtr getOutput(
       vector_size_t maxOutputRows,
       std::vector<ContinueFuture>& sourceBlockingFutures,
-      bool& needFinish);
-
-  RowVectorPtr getOutputFromSpill(vector_size_t maxOutputRows);
-
-  /// No more data to spill if sourceStreamMerger_ is null.
-  bool needsSpill() const {
-    return sourceStreamMerger_ != nullptr;
-  }
-
-  /// Start sources for this partial merge run.
-  void maybeStartMoreSources(
-      size_t& numStartedSources,
-      std::vector<ContinueFuture>& sourceBlockingFutures,
-      uint32_t maxMergeSources,
-      vector_size_t outputBatchSize,
-      const std::vector<std::shared_ptr<MergeSource>>& sources,
-      const std::vector<SpillSortKey>& sortingKeys);
-
-  void createSpillMerger(
-      std::vector<std::vector<std::unique_ptr<SpillReadFile>>>
-          spillReadFilesGroup);
-
-  void addSpillRowsNum(uint64_t numRows) {
-    numSpillRows_ += numRows;
-  }
+      bool& lastRun);
 
  private:
   const RowTypePtr type_;
   velox::memory::MemoryPool* const pool_;
+  const std::vector<SourceStream*> streams_;
+  const std::unique_ptr<TreeOfLosers<SourceStream>> merger_;
 
-  std::unique_ptr<TreeOfLosers<SourceStream>> sourceStreamMerger_;
-  std::vector<SourceStream*> sourceStreams_;
+  // Reusable output vector.
+  RowVectorPtr output_;
+};
+
+/// A utility class for sort-merging data from data spilled by the `LocalMerge`
+/// operator.
+class SpillMerger {
+ public:
+  SpillMerger(
+      const RowTypePtr& type,
+      velox::memory::MemoryPool* pool,
+      uint64_t numSpilledRows,
+      std::vector<std::vector<std::unique_ptr<SpillReadFile>>>
+          spillReadFilesGroup)
+      : type_(type),
+        pool_(pool),
+        numSpilledRows_(numSpilledRows),
+        merger_([&spillReadFilesGroup]() {
+          std::vector<std::unique_ptr<SpillMergeStream>> streams;
+          streams.reserve(spillReadFilesGroup.size());
+          for (auto i = 0; i < spillReadFilesGroup.size(); ++i) {
+            streams.push_back(ConcatFilesSpillMergeStream::create(
+                i, std::move(spillReadFilesGroup[i])));
+          }
+          return std::make_unique<TreeOfLosers<SpillMergeStream>>(
+              std::move(streams));
+        }()) {
+    VELOX_CHECK_NOT_NULL(merger_);
+  }
+
+  RowVectorPtr getOutput(vector_size_t maxOutputRows);
+
+ private:
+  static std::unique_ptr<TreeOfLosers<SpillMergeStream>> createSpillMerger(
+      std::vector<std::vector<std::unique_ptr<SpillReadFile>>>
+          spillReadFilesGroup);
+
+  const RowTypePtr type_;
+  velox::memory::MemoryPool* const pool_;
+  // The number of spilled input rows.
+  const uint64_t numSpilledRows_;
   // Used to merge the sorted runs from in-memory rows and spilled rows on disk.
-  std::unique_ptr<TreeOfLosers<SpillMergeStream>> spillMerger_;
+  const std::unique_ptr<TreeOfLosers<SpillMergeStream>> merger_;
+
   // Records the source rows to copy to 'output_' in order.
   std::vector<const RowVector*> spillSources_;
   std::vector<vector_size_t> spillSourceRows_;
   // Reusable output vector.
   RowVectorPtr output_;
-  // The number of received input rows.
-  uint64_t numSpillRows_{0};
   // The number of rows that has been returned.
   uint64_t numOutputRows_{0};
 };

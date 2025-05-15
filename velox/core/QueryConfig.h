@@ -266,9 +266,9 @@ class QueryConfig {
   /// LocalMerge spilling flag, only applies if "spill_enabled" flag is set.
   static constexpr const char* kLocalMergeSpillEnabled = "local_merge_enabled";
 
-  /// LocalMerge max merge sources.
-  static constexpr const char* kLocalMergeMaxMergeSources =
-      "local_merge_max_merge_source";
+  /// Specify the max number of local sources to merge at a time.
+  static constexpr const char* kLocalMergeMaxNumMergeSources =
+      "local_merge_max_num_merge_sources";
 
   /// The max row numbers to fill and spill for each spill run. This is used to
   /// cap the memory used for spilling. If it is zero, then there is no limit
@@ -846,12 +846,12 @@ class QueryConfig {
   }
 
   bool localMergeSpillEnabled() const {
-    return get<bool>(kLocalMergeSpillEnabled, true);
+    return get<bool>(kLocalMergeSpillEnabled, false);
   }
 
-  uint32_t localMergeMaxMergeSources() const {
+  uint32_t localMergeMaxNumMergeSources() const {
     return get<uint32_t>(
-        kLocalMergeMaxMergeSources, std::numeric_limits<uint32_t>::max());
+        kLocalMergeMaxNumMergeSources, std::numeric_limits<uint32_t>::max());
   }
 
   int32_t maxSpillLevel() const {
