@@ -37,7 +37,7 @@ class FromJsonBenchmark : public functions::test::FunctionBenchmarkBase {
             size, [&](vector_size_t /*row*/) { return input; })});
   }
 
-  size_t run(const StringView& input, const TypePtr& outputType) {
+  void run(const StringView& input, const TypePtr& outputType) {
     folly::BenchmarkSuspender suspender;
     auto rowVector = makeData(input);
 
@@ -49,15 +49,13 @@ class FromJsonBenchmark : public functions::test::FunctionBenchmarkBase {
     exec::ExprSet exprSet({typedExpr}, &execCtx_);
     suspender.dismiss();
 
-    return doRun(exprSet, rowVector);
+    doRun(exprSet, rowVector);
   }
 
-  size_t doRun(exec::ExprSet& exprSet, const RowVectorPtr& rowVector) {
-    int cnt = 0;
+  void doRun(exec::ExprSet& exprSet, const RowVectorPtr& rowVector) {
     for (auto i = 0; i < 1000; i++) {
-      cnt += evaluate(exprSet, rowVector)->size();
+      evaluate(exprSet, rowVector)->size();
     }
-    return cnt;
   }
 };
 
