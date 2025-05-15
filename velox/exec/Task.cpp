@@ -511,14 +511,15 @@ void Task::initDriverFactory() {
       "Serial execution mode doesn't support delivering results to a "
       "callback");
 
-  taskStats_.executionStartTimeMs = getCurrentTimeMs();
   LocalPlanner::plan(
       planFragment_, nullptr, &driverFactories_, queryCtx_->queryConfig(), 1);
   exchangeClients_.resize(driverFactories_.size());
 
   // In Task::next() we always assume ungrouped execution.
   for (const auto& factory : driverFactories_) {
-    VELOX_CHECK(factory->supportsSerialExecution());
+    VELOX_CHECK(
+        factory->supportsSerialExecution(),
+        "DriverFactory should supports serial execution");
     numDriversUngrouped_ += factory->numDrivers;
     numTotalDrivers_ += factory->numTotalDrivers;
     taskStats_.pipelineStats.emplace_back(
@@ -621,8 +622,9 @@ velox::memory::MemoryPool* Task::addOperatorPool(
   } else {
     nodePool = getOrAddNodePool(planNodeId);
   }
-  childPools_.push_back(nodePool->addLeafChild(fmt::format(
-      "op.{}.{}.{}.{}", planNodeId, pipelineId, driverId, operatorType)));
+  childPools_.push_back(nodePool->addLeafChild(
+      fmt::format(
+          "op.{}.{}.{}.{}", planNodeId, pipelineId, driverId, operatorType)));
   return childPools_.back().get();
 }
 
@@ -633,13 +635,14 @@ velox::memory::MemoryPool* Task::addConnectorPoolLocked(
     const std::string& operatorType,
     const std::string& connectorId) {
   auto* nodePool = getOrAddNodePool(planNodeId);
-  childPools_.push_back(nodePool->addAggregateChild(fmt::format(
-      "op.{}.{}.{}.{}.{}",
-      planNodeId,
-      pipelineId,
-      driverId,
-      operatorType,
-      connectorId)));
+  childPools_.push_back(nodePool->addAggregateChild(
+      fmt::format(
+          "op.{}.{}.{}.{}.{}",
+          planNodeId,
+          pipelineId,
+          driverId,
+          operatorType,
+          connectorId)));
   return childPools_.back().get();
 }
 
@@ -711,6 +714,7 @@ RowVectorPtr Task::next(ContinueFuture* future) {
 
   VELOX_CHECK(!driverFactories_.empty());
   if (numDriversUnderBarrier_ == 0) {
+    taskStats_.executionStartTimeMs = getCurrentTimeMs();
     if (underBarrier()) {
       startDriverBarriersLocked();
     }
@@ -2887,8 +2891,9 @@ void Task::createLocalExchangeQueuesLocked(
       queryCtx_->queryConfig().maxLocalExchangeBufferSize());
   exchange.queues.reserve(numPartitions);
   for (auto i = 0; i < numPartitions; ++i) {
-    exchange.queues.emplace_back(std::make_shared<LocalExchangeQueue>(
-        exchange.memoryManager, exchange.vectorPool, i));
+    exchange.queues.emplace_back(
+        std::make_shared<LocalExchangeQueue>(
+            exchange.memoryManager, exchange.vectorPool, i));
   }
 
   const auto partitionNode =
@@ -3580,8 +3585,8 @@ bool Task::DriverBlockingState::blocked(ContinueFuture* future) {
     VELOX_CHECK(promises_.empty());
     return false;
   }
-  auto [blockPromise, blockFuture] =
-      makeVeloxContinuePromiseContract(fmt::format(
+  auto [blockPromise, blockFuture] = makeVeloxContinuePromiseContract(
+      fmt::format(
           "DriverBlockingState {} from task {}",
           driver_->driverCtx()->driverId,
           driver_->task()->taskId()));

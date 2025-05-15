@@ -1055,7 +1055,7 @@ DEBUG_ONLY_TEST_P(
 }
 
 DEBUG_ONLY_TEST_P(SharedArbitrationTestWithThreadingModes, runtimeStats) {
-  const uint64_t memoryCapacity = 128 * MB;
+  const uint64_t memoryCapacity = isSerialExecutionMode_ ? 138 * MB : 128 * MB;
   setupMemory(memoryCapacity);
   fuzzerOpts_.vectorSize = 1000;
   fuzzerOpts_.stringLength = 1024;

@@ -1156,16 +1156,17 @@ TEST_F(TaskTest, supportSerialExecutionMode) {
                   .project({"c0 % 10"})
                   .partitionedOutput({}, 1, std::vector<std::string>{"p0"})
                   .planFragment();
-  auto task = Task::create(
-      "single.execution.task.0",
-      plan,
-      0,
-      core::QueryCtx::create(),
-      Task::ExecutionMode::kSerial);
 
   // PartitionedOutput does not support serial execution mode, therefore the
   // task doesn't support it either.
-  ASSERT_FALSE(task->supportSerialExecutionMode());
+  VELOX_ASSERT_THROW(
+      Task::create(
+          "single.execution.task.0",
+          plan,
+          0,
+          core::QueryCtx::create(),
+          Task::ExecutionMode::kSerial),
+      "DriverFactory should supports serial execution");
 }
 
 TEST_F(TaskTest, updateBroadCastOutputBuffers) {
@@ -1822,17 +1823,27 @@ TEST_F(TaskTest, driverCreationMemoryAllocationCheck) {
           .planFragment();
   for (bool singleThreadExecution : {false, true}) {
     SCOPED_TRACE(fmt::format("singleThreadExecution: ", singleThreadExecution));
-    auto badTask = Task::create(
-        "driverCreationMemoryAllocationCheck",
-        plan,
-        0,
-        core::QueryCtx::create(
-            singleThreadExecution ? nullptr : driverExecutor_.get()),
-        singleThreadExecution ? Task::ExecutionMode::kSerial
-                              : Task::ExecutionMode::kParallel);
+
     if (singleThreadExecution) {
-      VELOX_ASSERT_THROW(badTask->next(), "Unexpected memory pool allocations");
+      VELOX_ASSERT_THROW(
+          Task::create(
+              "driverCreationMemoryAllocationCheck",
+              plan,
+              0,
+              core::QueryCtx::create(
+                  singleThreadExecution ? nullptr : driverExecutor_.get()),
+              singleThreadExecution ? Task::ExecutionMode::kSerial
+                                    : Task::ExecutionMode::kParallel),
+          "Unexpected memory pool allocations");
     } else {
+      auto badTask = Task::create(
+          "driverCreationMemoryAllocationCheck",
+          plan,
+          0,
+          core::QueryCtx::create(
+              singleThreadExecution ? nullptr : driverExecutor_.get()),
+          singleThreadExecution ? Task::ExecutionMode::kSerial
+                                : Task::ExecutionMode::kParallel);
       VELOX_ASSERT_THROW(
           badTask->start(1), "Unexpected memory pool allocations");
     }
@@ -2448,10 +2459,11 @@ DEBUG_ONLY_TEST_F(TaskTest, taskReclaimFailure) {
           .config(core::QueryConfig::kSpillEnabled, true)
           .config(core::QueryConfig::kAggregationSpillEnabled, true)
           .maxDrivers(1)
-          .plan(PlanBuilder()
-                    .values(inputVectors)
-                    .singleAggregation({"c0", "c1"}, {"array_agg(c2)"})
-                    .planNode())
+          .plan(
+              PlanBuilder()
+                  .values(inputVectors)
+                  .singleAggregation({"c0", "c1"}, {"array_agg(c2)"})
+                  .planNode())
           .assertResults(
               "SELECT c0, c1, array_agg(c2) FROM tmp GROUP BY c0, c1"),
       spillTableError);
@@ -2476,10 +2488,11 @@ DEBUG_ONLY_TEST_F(TaskTest, taskDeletionPromise) {
   std::thread queryThread([&]() {
     AssertQueryBuilder(duckDbQueryRunner_)
         .maxDrivers(1)
-        .plan(PlanBuilder()
-                  .values(inputVectors)
-                  .singleAggregation({"c0", "c1"}, {"array_agg(c2)"})
-                  .planNode())
+        .plan(
+            PlanBuilder()
+                .values(inputVectors)
+                .singleAggregation({"c0", "c1"}, {"array_agg(c2)"})
+                .planNode())
         .assertResults("SELECT c0, c1, array_agg(c2) FROM tmp GROUP BY c0, c1");
   });
 
@@ -2599,6 +2612,7 @@ TEST_F(TaskTest, invalidPlanNodeForBarrier) {
       Task::ExecutionMode::kSerial);
   ASSERT_TRUE(!task->underBarrier());
   VELOX_ASSERT_THROW(task->requestBarrier(), "Task doesn't support barrier");
+  task->requestCancel();
 }
 
 TEST_F(TaskTest, barrierAfterNoMoreSplits) {
@@ -2633,6 +2647,7 @@ TEST_F(TaskTest, barrierAfterNoMoreSplits) {
   VELOX_ASSERT_THROW(
       task->requestBarrier(),
       "Can't start barrier on task which has already received no more splits");
+  task->requestCancel();
 }
 
 TEST_F(TaskTest, invalidTaskModeForBarrier) {
