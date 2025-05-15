@@ -43,6 +43,8 @@ from sphinx.util.typing import OptionSpec
 logger = logging.getLogger(__name__)
 
 function_module = "spark"
+
+
 class SparkObject(ObjectDescription[Tuple[str, str]]):
     """
     Description of a general Spark object.
