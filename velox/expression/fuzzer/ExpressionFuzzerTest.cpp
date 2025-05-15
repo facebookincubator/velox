@@ -129,8 +129,6 @@ int main(int argc, char** argv) {
       // https://github.com/facebookincubator/velox/issues/13047
       "inverse_poisson_cdf",
       // Geometry functions don't yet have a ValuesGenerator
-      "st_geometryfromtext",
-      "st_geomfrombinary",
       "st_astext",
       "st_asbinary",
   };
