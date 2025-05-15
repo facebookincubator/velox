@@ -43,7 +43,7 @@ To read (scan) data in a file or a set of files, you can define a query plan con
 
 .. code-block:: python
 
-      // Read input file using PyVelox
+      // Read input file
 
       from pyvelox.file import DWRF
       from pyvelox.plan_builder import PlanBuilder
@@ -103,7 +103,7 @@ Once a query plan is constructed using PlanBuilder, it can be locally executed b
 
 .. code-block:: python
 
-      // Create and run a plan to read some data
+      // Create and run a plan to read data
 
       from pyvelox.plan_builder import PlanBuilder
       from pyvelox.runner import LocalRunner
@@ -138,7 +138,7 @@ Vectors in PyVelox only provide a basic API aimed at inspecting the values and t
 
 .. code-block:: python
 
-      // Work with vectors
+      // Work with Vectors
 
       iterator = runner.execute():
       vector = next(iterator)
