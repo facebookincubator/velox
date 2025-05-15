@@ -32,18 +32,45 @@ using namespace facebook::velox::exec;
 namespace facebook::velox::functions::sparksql {
 namespace {
 
+// Struct to store schema information for a JSON row, used for efficient field
+// lookup and null handling.
 struct JsonRowSchemaInfo {
+  // Unique key for this schema info, computed from the nesting level and field
+  // index.
   uint64_t key;
-  bool allFieldsAreAscii;
-  std::shared_ptr<std::vector<bool>> isFieldMissing;
-  std::shared_ptr<folly::F14FastMap<std::string, column_index_t>> fieldIndices;
 
+  // Indicates if all field names in this row are ASCII (for optimized
+  // case-insensitive comparison).
+  // True if all field names in this row are ASCII, enabling optimized lowercase
+  // conversion.
+  bool allFieldsAreAscii;
+
+  // Shared pointer to a vector indicating which fields are missing in the
+  // current JSON object.
+  std::shared_ptr<std::vector<bool>> isFieldMissing;
+
+  // Maps lowercased field names to their column indices for fast lookup.
+  folly::F14FastMap<std::string, column_index_t> fieldIndices;
+
+  // Equality operator based on the unique key.
   bool operator==(const JsonRowSchemaInfo& other) {
     return key == other.key;
   }
 
+  JsonRowSchemaInfo(
+      uint64_t key,
+      bool allFieldsAreAscii,
+      const std::shared_ptr<std::vector<bool>> isFieldMissing,
+      const folly::F14FastMap<std::string, column_index_t>& fieldIndices)
+      : key(key),
+        allFieldsAreAscii(allFieldsAreAscii),
+        isFieldMissing(std::move(isFieldMissing)),
+        fieldIndices(std::move(fieldIndices)) {}
+
+  // Computes a unique key for a row schema based on its nesting level and field
+  // index.
   static uint64_t computeKey(column_index_t level, column_index_t fieldIndex) {
-    return static_cast<uint64_t>(level) * UINT32_MAX + fieldIndex;
+    return (static_cast<uint64_t>(level) << 32) | fieldIndex;
   }
 };
 
@@ -217,7 +244,7 @@ struct ExtractJsonTypeImpl {
         bool isRoot,
         const folly::F14FastMap<int64_t, JsonRowSchemaInfo>& jsonRowSchemaInfo,
         column_index_t level,
-        column_index_t fieldIndex) {
+        column_index_t /*fieldIndex*/) {
       auto& writerTyped = writer.castTo<Array<Any>>();
       const auto& elementType = writer.type()->childAt(0);
       SIMDJSON_ASSIGN_OR_RAISE(auto type, value.type());
@@ -266,7 +293,7 @@ struct ExtractJsonTypeImpl {
         bool isRoot,
         const folly::F14FastMap<int64_t, JsonRowSchemaInfo>& jsonRowSchemaInfo,
         column_index_t level,
-        column_index_t fieldIndex) {
+        column_index_t /*fieldIndex*/) {
       auto& writerTyped = writer.castTo<Map<Any, Any>>();
       const auto& valueType = writer.type()->childAt(1);
       SIMDJSON_ASSIGN_OR_RAISE(auto object, value.get_object());
@@ -313,18 +340,10 @@ struct ExtractJsonTypeImpl {
       const auto type = value.type().value_unsafe();
       if (type == simdjson::ondemand::json_type::object) {
         SIMDJSON_ASSIGN_OR_RAISE(auto object, value.get_object());
-        auto allFieldsAreAscii =
-            jsonRowSchemaInfo
-                .at(JsonRowSchemaInfo::computeKey(level, fieldIndex))
-                .allFieldsAreAscii;
-        auto& fieldIndices =
-            jsonRowSchemaInfo
-                .at(JsonRowSchemaInfo::computeKey(level, fieldIndex))
-                .fieldIndices;
-        auto& isFieldMissing =
-            jsonRowSchemaInfo
-                .at(JsonRowSchemaInfo::computeKey(level, fieldIndex))
-                .isFieldMissing;
+        const auto& schemaInfo = jsonRowSchemaInfo.at(
+            JsonRowSchemaInfo::computeKey(level, fieldIndex));
+        const auto& isFieldMissing = schemaInfo.isFieldMissing;
+        const auto& fieldIndices = schemaInfo.fieldIndices;
         std::fill(isFieldMissing->begin(), isFieldMissing->end(), true);
         std::string key;
         for (const auto& fieldResult : object) {
@@ -335,13 +354,13 @@ struct ExtractJsonTypeImpl {
           if (!field.value().is_null()) {
             SIMDJSON_ASSIGN_OR_RAISE(key, field.unescaped_key(true));
 
-            if (allFieldsAreAscii) {
+            if (schemaInfo.allFieldsAreAscii) {
               folly::toLowerAscii(key);
             } else {
               boost::algorithm::to_lower(key);
             }
-            auto it = fieldIndices->find(key);
-            if (it != fieldIndices->end() && isFieldMissing->at(it->second)) {
+            auto it = fieldIndices.find(key);
+            if (it != fieldIndices.end() && isFieldMissing->at(it->second)) {
               const auto index = it->second;
               isFieldMissing->at(index) = false;
               const auto res = VELOX_DYNAMIC_TYPE_DISPATCH(
@@ -360,7 +379,7 @@ struct ExtractJsonTypeImpl {
           }
         }
 
-        for (int i = 0; i < isFieldMissing->size(); ++i) {
+        for (int i = 0; i < rowType.size(); ++i) {
           if (isFieldMissing->at(i)) {
             writerTyped.set_null_at(i);
           }
@@ -636,11 +655,10 @@ class FromJsonFunction final : public exec::VectorFunction {
             std::all_of(names.begin(), names.end(), [](const auto& name) {
               return functions::stringCore::isAscii(name.data(), name.size());
             });
-
-        auto fieldIndices =
-            std::make_shared<folly::F14FastMap<std::string, column_index_t>>();
+        auto isFieldMissing = std::make_shared<std::vector<bool>>();
+        isFieldMissing->resize(rowType->size(), true);
+        folly::F14FastMap<std::string, column_index_t> fieldIndices;
         const auto size = rowType->size();
-        auto isFieldMissing = std::make_shared<std::vector<bool>>(size, true);
         for (auto i = 0; i < size; ++i) {
           std::string key = rowType->nameOf(i);
           if (allFieldsAreAscii) {
@@ -649,14 +667,17 @@ class FromJsonFunction final : public exec::VectorFunction {
             boost::algorithm::to_lower(key);
           }
 
-          (*fieldIndices)[key] = i;
+          fieldIndices[key] = i;
           constructRowSchemaInfoMap(type->childAt(i), level + 1, i);
         }
         auto key = JsonRowSchemaInfo::computeKey(level, fieldIndex);
         rowSchemaInfoMap_.insert_or_assign(
             key,
-            JsonRowSchemaInfo{
-                key, allFieldsAreAscii, isFieldMissing, fieldIndices});
+            JsonRowSchemaInfo(
+                key,
+                allFieldsAreAscii,
+                std::move(isFieldMissing),
+                std::move(fieldIndices)));
         break;
       }
       default:

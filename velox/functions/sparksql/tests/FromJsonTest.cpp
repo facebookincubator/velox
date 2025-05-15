@@ -211,6 +211,7 @@ TEST_F(FromJsonTest, basicString) {
 }
 
 TEST_F(FromJsonTest, nestedComplexType) {
+  // ARRAY(ROW(BIGINT))
   std::vector<vector_size_t> offsets;
   offsets.push_back(0);
   offsets.push_back(1);
@@ -221,6 +222,7 @@ TEST_F(FromJsonTest, nestedComplexType) {
       {R"({"a": 1})", R"([{"a": 2}])", R"([{"a": 2}])"});
   testFromJson(input, arrayVector);
 
+  // MAP(ARRAY(ROW(BIGINT, INTEGER)))
   auto keyVector = makeFlatVector<StringView>({"a", "b", "c"});
   auto valueVector = makeArrayVector(
       offsets,
@@ -235,19 +237,47 @@ TEST_F(FromJsonTest, nestedComplexType) {
        R"({"c": [{"d": 3}]})"});
   testFromJson(mapInput, mapVector);
 
+  // ROW(ROW(ROW(BIGINT, INTEGER)))
   auto rowVector = makeRowVector(
       {"a"},
       {makeRowVector(
           {"b"},
           {makeRowVector(
               {"d1", "e1"},
-              {makeFlatVector<int64_t>({1, 1, 1}),
-               makeNullableFlatVector<int32_t>({3, 3, std::nullopt})})})});
+              {makeFlatVector<int64_t>({1, 2, 3}),
+               makeNullableFlatVector<int32_t>({3, 4, std::nullopt})})})});
   auto rowInput = makeFlatVector<std::string>(
-      {R"({"a": {"b": {"d1": 1, "e1": 3}}})",
-       R"({"a": {"b": {"D1": 1, "e1": 3}}})",
-       R"({"a": {"b": {"d1": 1, "f3": 3}}})"});
+      {R"({"a": {"b": {"d1": 1, "e1": 3, "e1": 4}}})", // Duplicate keys.
+       R"({"a": {"b": {"D1": 2, "e1": 4}}})", // Key case insensitive.
+       R"({"a": {"b": {"d1": 3, "f3": 3}}})"}); // Key not in schema.
   testFromJson(rowInput, rowVector);
+
+  // ROW(ARRAY[BIGINT], BIGINT)
+  std::vector<vector_size_t> offsets1;
+  offsets1.push_back(0);
+  offsets1.push_back(1);
+  offsets1.push_back(3);
+  auto arrayVector1 =
+      makeArrayVector(offsets1, makeFlatVector<int64_t>({1, 2, 2, 3, 3, 3}));
+  auto rowVector1 = makeRowVector(
+      {"a", "b"}, {arrayVector1, makeFlatVector<int64_t>({1, 2, 3})});
+  auto rowInput1 = makeFlatVector<std::string>(
+      {R"({"a": [1], "b": 1})",
+       R"({"a": [2, 2], "b": 2})",
+       R"({"a": [3, 3, 3], "b": 3})"});
+  testFromJson(rowInput1, rowVector1);
+
+  // ROW(ROW(BIGINT, ARRAY[BIGINT]), ARRAY[BIGINT])
+  auto rowVector2 = makeRowVector(
+      {"a", "b"},
+      {makeRowVector(
+           {"c", "d"}, {makeFlatVector<int64_t>({1, 3, 4}), arrayVector1}),
+       arrayVector1});
+  auto rowInput2 = makeFlatVector<std::string>(
+      {R"({"a": {"c": 1, "d": [1]}, "b": [1]})",
+       R"({"a": {"c": 3, "d": [2, 2]}, "b": [2, 2]})",
+       R"({"a": {"c": 4, "d": [3, 3, 3]}, "b": [3, 3, 3]})"});
+  testFromJson(rowInput2, rowVector2);
 }
 
 TEST_F(FromJsonTest, structEmptyArray) {
