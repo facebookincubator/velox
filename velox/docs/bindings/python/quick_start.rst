@@ -72,4 +72,85 @@ Alternatively, a file schema can be inspected by using the following API:
       row_type = dwrf_file.get_schema()
       print(row_type)
 
+Schemas and types can be defined by using the pyvelox.type API. It follows the C++ Type API closely, allowing users to define primitive and nested types using the following macros/functions:
+
+.. code-block:: python
+
+      // Define types
+
+      from pyvelox.type import ARRAY, DATE, DOUBLE, INTEGER, MAP, ROW
+
+      velox_type = BIGINT()
+      print(velox_type)
+
+      velox_complex_type = ROW(
+           ["col_name1", "col_name2"],
+           [
+                MAP(INTEGER(), ARRAY(DOUBLE())), 
+                ROW(["nested_column"], [DATE()])
+           ],
+      )
+      print(velox_complex_type)
+
+The root type passed to a table scan is always a ROW.
+
+
+Executing a Query Plan
+----------------------
+
+Once a query plan is constructed using PlanBuilder, it can be locally executed by a query runner:
+
+.. code-block:: python
+
+      // Create and run a plan to read some data
+
+      from pyvelox.plan_builder import PlanBuilder
+      from pyvelox.runner import LocalRunner
+
+       plan_builder = PlanBuilder()
+
+       runner = LocalRunner(plan_builder.get_plan_node())
+
+       for vector in runner.execute():
+            print(vector.print_all())
+
+       print(runner.print_plan_with_stats())
+
+execute() returns an iterable object that returns data produced by the plan in the form of Velox Vectors.
+
+
+Query Configs
+^^^^^^^^^^^^^
+Query configs can be added using the add_query_config() runner method:
+
+.. code-block:: python
+
+      // Add query configs
+
+      runner.add_query_config("selective_nimble_reader_enabled", "true")
+
+Manipulating Vectors
+--------------------
+
+Vectors in PyVelox only provide a basic API aimed at inspecting the values and types that they encapsulate. For example: 
+
+.. code-block:: python
+
+      // Work with vectors
+
+      iterator = runner.execute():
+      vector = next(iterator)
+
+      print(vector.print_all())
+      print(vector.type())
+      size = vector.size()
+      null_count = vector.null_count()
+
+And other basic APIs for comparisons across vectors, printing contents, and checking for nulls. For a full description of the API, check velox/python/vector/vector.cpp
+
+PyArrow Integration
+^^^^^^^^^^^^^^^^^^^
+
+
+
 
