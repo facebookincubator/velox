@@ -32,11 +32,81 @@
             
   <section id="geospatial-operators">
 <h1>Geospatial Operators<a class="headerlink" href="#geospatial-operators" title="Link to this heading">¶</a></h1>
+<section id="geometry-functions">
+<h2>Geometry Functions<a class="headerlink" href="#geometry-functions" title="Link to this heading">¶</a></h2>
+<p>Velox has a set of functions that operator on Geometries, conforming to the Open
+Geospatial Consortium’s (OGC) <a class="reference external" href="https://www.ogc.org/standards/ogcapi-features/">OpenGIS Specifications</a>. These are
+piecewise-linear planar geometries that are 0-, 1-, or 2-dimensional and
+collections of such geometries. They support a variety of operations, including
+spatial relationship predicates (e.g., “do these geometries intersect?”), binary
+operations (e.g., “what is the union of these geometries?”), and unary
+operations (e.g., “what is the area of this geometry?”). The basis for the
+Geometry type is a plane. The shortest path between two points on the plane is a
+straight line. That means calculations on geometries (areas, distances, lengths,
+intersections, etc) can be calculated using cartesian mathematics and straight
+line vectors.</p>
+<p>Functions that begin with the <a href="#id3"><span class="problematic" id="id4">ST_</span></a> prefix are compliant with the <a href="#id5"><span class="problematic" id="id6">`SQL/MM Part 3:
+Spatial`_</span></a> specification`. As such, many Geometry functions assume that
+geometries that are operated on are both simple and valid. Functions may raise
+an exception or return an arbitrary value for non-simple or non-valid
+geometries. For example, it does not make sense to calculate the area of a
+polygon that has a hole defined outside of the polygon, or to construct a
+polygon from a non-simple boundary line.</p>
+<p>Geometries can be constructed in several ways. Two of the most common are
+<code class="docutils literal notranslate"><span class="pre">ST_GeometryFromText</span></code> and <code class="docutils literal notranslate"><span class="pre">ST_GeomFromBinary</span></code>.  <code class="docutils literal notranslate"><span class="pre">ST_GeometryFromText</span></code>
+accepts the Well-Known Text (WKT) format:</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="o">*</span> <span class="n">POINT</span> <span class="p">(</span><span class="mi">0</span> <span class="mi">0</span><span class="p">)</span>
+<span class="o">*</span> <span class="n">LINESTRING</span> <span class="p">(</span><span class="mi">0</span> <span class="mi">0</span><span class="p">,</span> <span class="mi">1</span> <span class="mi">1</span><span class="p">,</span> <span class="mi">1</span> <span class="mi">2</span><span class="p">)</span>
+<span class="o">*</span> <span class="n">POLYGON</span> <span class="p">((</span><span class="mi">0</span> <span class="mi">0</span><span class="p">,</span> <span class="mi">4</span> <span class="mi">0</span><span class="p">,</span> <span class="mi">4</span> <span class="mi">4</span><span class="p">,</span> <span class="mi">0</span> <span class="mi">4</span><span class="p">,</span> <span class="mi">0</span> <span class="mi">0</span><span class="p">),</span> <span class="p">(</span><span class="mi">1</span> <span class="mi">1</span><span class="p">,</span> <span class="mi">2</span> <span class="mi">1</span><span class="p">,</span> <span class="mi">2</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">1</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">1</span> <span class="mi">1</span><span class="p">))</span>
+<span class="o">*</span> <span class="n">MULTIPOINT</span> <span class="p">(</span><span class="mi">0</span> <span class="mi">0</span><span class="p">,</span> <span class="mi">1</span> <span class="mi">2</span><span class="p">)</span>
+<span class="o">*</span> <span class="n">MULTILINESTRING</span> <span class="p">((</span><span class="mi">0</span> <span class="mi">0</span><span class="p">,</span> <span class="mi">1</span> <span class="mi">1</span><span class="p">,</span> <span class="mi">1</span> <span class="mi">2</span><span class="p">),</span> <span class="p">(</span><span class="mi">2</span> <span class="mi">3</span><span class="p">,</span> <span class="mi">3</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">5</span> <span class="mi">4</span><span class="p">))</span>
+<span class="o">*</span> <span class="n">MULTIPOLYGON</span> <span class="p">(((</span><span class="mi">0</span> <span class="mi">0</span><span class="p">,</span> <span class="mi">4</span> <span class="mi">0</span><span class="p">,</span> <span class="mi">4</span> <span class="mi">4</span><span class="p">,</span> <span class="mi">0</span> <span class="mi">4</span><span class="p">,</span> <span class="mi">0</span> <span class="mi">0</span><span class="p">),</span> <span class="p">(</span><span class="mi">1</span> <span class="mi">1</span><span class="p">,</span> <span class="mi">2</span> <span class="mi">1</span><span class="p">,</span> <span class="mi">2</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">1</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">1</span> <span class="mi">1</span><span class="p">)),</span>
+</pre></div>
+</div>
+<blockquote>
+<div><p>((-1 -1, -1 -2, -2 -2, -2 -1, -1 -1)))</p>
+</div></blockquote>
+<ul class="simple">
+<li><p>GEOMETRYCOLLECTION (POINT(2 3), LINESTRING (2 3, 3 4))</p></li>
+</ul>
+<p><code class="docutils literal notranslate"><span class="pre">ST_GeomFromBinary</span></code> accepts the Well-Known Binary (WKB) format. In WKT/WKB,
+the coordinate order is (x, y). The details of both WKT and WKB can be found
+<a class="reference external" href="https://en.wikipedia.org/wiki/Well-known_text_representation_of_geometry">here</a>.</p>
+</section>
+<section id="geometry-constructors">
+<h2>Geometry Constructors<a class="headerlink" href="#geometry-constructors" title="Link to this heading">¶</a></h2>
+<dl class="py function">
+<dt class="sig sig-object py" id="ST_GeometryFromText">
+<span class="sig-name descname"><span class="pre">ST_GeometryFromText</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">wkt</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">varchar</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">geometry:</span> <span class="pre">Geometry</span></span></span><a class="headerlink" href="#ST_GeometryFromText" title="Link to this definition">¶</a></dt>
+<dd><p>Creates a Geometry object from the Well-Known Text (WKT) formatted string.
+Ill-formed strings will return a User Error.</p>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="ST_GeomFromBinary">
+<span class="sig-name descname"><span class="pre">ST_GeomFromBinary</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">wkb</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">varbinary</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">geometry:</span> <span class="pre">Geometry</span></span></span><a class="headerlink" href="#ST_GeomFromBinary" title="Link to this definition">¶</a></dt>
+<dd><p>Creates a Geometry object from the Well-Known Binary (WKB) formatted binary.
+Ill-formed binary will return a User Error.</p>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="ST_AsText">
+<span class="sig-name descname"><span class="pre">ST_AsText</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">geometry</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">Geometry</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">wkt:</span> <span class="pre">varchar</span></span></span><a class="headerlink" href="#ST_AsText" title="Link to this definition">¶</a></dt>
+<dd><p>Returns the Well-Known Text (WKT) formatted string of the Geometry object.</p>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="ST_AsBinary">
+<span class="sig-name descname"><span class="pre">ST_AsBinary</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">geometry</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">Geometry</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">wkb:</span> <span class="pre">varbinary</span></span></span><a class="headerlink" href="#ST_AsBinary" title="Link to this definition">¶</a></dt>
+<dd><p>Returns the Well-Known Binary (WKB) formatted binary of the Geometry object.</p>
+</dd></dl>
+
+</section>
 <section id="bing-tile-functions">
 <h2>Bing Tile Functions<a class="headerlink" href="#bing-tile-functions" title="Link to this heading">¶</a></h2>
 <p>Bing tiles are a convenient quad-tree representation of the WGS84 projection of
-Earth’s surface.  They can be used to partition geospatial data, perform quick
-proximity or intersection checks, and more.  Each tile is defined by a <cite>zoom</cite>
+Earth’s surface. They can be used to partition geospatial data, perform quick
+proximity or intersection checks, and more. Each tile is defined by a <cite>zoom</cite>
 level (how far down the quad-tree the tile lives), and an <cite>x</cite> and <cite>y</cite> coordinate
 specifying where it is in that <cite>zoom</cite> level.  Velox supports <cite>zoom</cite> levels from
 0 to 23.  For a given zoom level, <cite>x</cite> and <cite>y</cite> must be between 0 and <cite>2**zoom -
@@ -54,8 +124,8 @@ for more details.</p>
 <dl class="py function">
 <dt class="sig sig-object py" id="bing_tile">
 <span class="sig-name descname"><span class="pre">bing_tile</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">integer</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">y</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">integer</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">zoom_level</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">tinyint</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">tile:</span> <span class="pre">BingTile</span></span></span><a class="headerlink" href="#bing_tile" title="Link to this definition">¶</a></dt>
-<dd><p>Creates a Bing tile object from <cite>x</cite>, <cite>y</cite> coordinates and a <cite>zoom_level</cite>.
-Zoom levels from 0 to 23 are supported, with valid <cite>x</cite> and <cite>y</cite> coordinates
+<dd><p>Creates a Bing tile object from <code class="docutils literal notranslate"><span class="pre">x</span></code>, <code class="docutils literal notranslate"><span class="pre">y</span></code> coordinates and a <code class="docutils literal notranslate"><span class="pre">zoom_level</span></code>.
+Zoom levels from 0 to 23 are supported, with valid <code class="docutils literal notranslate"><span class="pre">x</span></code> and <code class="docutils literal notranslate"><span class="pre">y</span></code> coordinates
 described above.  Invalid parameters will return a User Error.</p>
 </dd></dl>
 
@@ -68,7 +138,7 @@ described above.  Invalid parameters will return a User Error.</p>
 <dl class="py function">
 <dt class="sig sig-object py" id="bing_tile_coordinates">
 <span class="sig-name descname"><span class="pre">bing_tile_coordinates</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">tile:</span> <span class="pre">BingTile)</span> <span class="pre">-&gt;</span> <span class="pre">coords:</span> <span class="pre">row(integer</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">integer</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#bing_tile_coordinates" title="Link to this definition">¶</a></dt>
-<dd><p>Returns the <cite>x</cite>, <cite>y</cite> coordinates of a given Bing tile as <cite>row(x, y)</cite>.</p>
+<dd><p>Returns the <code class="docutils literal notranslate"><span class="pre">x</span></code>, <code class="docutils literal notranslate"><span class="pre">y</span></code> coordinates of a given Bing tile as <code class="docutils literal notranslate"><span class="pre">row(x,</span> <span class="pre">y)</span></code>.</p>
 </dd></dl>
 
 <dl class="py function">
@@ -128,6 +198,14 @@ specified.</p>
     <h3><a href="../../index.html">Table of Contents</a></h3>
     <ul>
 <li><a class="reference internal" href="#">Geospatial Operators</a><ul>
+<li><a class="reference internal" href="#geometry-functions">Geometry Functions</a></li>
+<li><a class="reference internal" href="#geometry-constructors">Geometry Constructors</a><ul>
+<li><a class="reference internal" href="#ST_GeometryFromText"><code class="docutils literal notranslate"><span class="pre">ST_GeometryFromText()</span></code></a></li>
+<li><a class="reference internal" href="#ST_GeomFromBinary"><code class="docutils literal notranslate"><span class="pre">ST_GeomFromBinary()</span></code></a></li>
+<li><a class="reference internal" href="#ST_AsText"><code class="docutils literal notranslate"><span class="pre">ST_AsText()</span></code></a></li>
+<li><a class="reference internal" href="#ST_AsBinary"><code class="docutils literal notranslate"><span class="pre">ST_AsBinary()</span></code></a></li>
+</ul>
+</li>
 <li><a class="reference internal" href="#bing-tile-functions">Bing Tile Functions</a><ul>
 <li><a class="reference internal" href="#bing_tile"><code class="docutils literal notranslate"><span class="pre">bing_tile()</span></code></a></li>
 <li><a class="reference internal" href="#id0"><code class="docutils literal notranslate"><span class="pre">bing_tile()</span></code></a></li>
