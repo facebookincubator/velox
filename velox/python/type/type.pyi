@@ -18,7 +18,6 @@
 
 from typing import List
 
-
 class Type: ...
 
 def BIGINT() -> Type: ...
