@@ -40,6 +40,7 @@ rules:
   octal-values: enable
   quoted-strings:
     required: only-when-needed
+    extra-allowed: ['.*\$\{\{.*\}\}.*']
   truthy:
     allowed-values: ['true', 'false', 'on']
     level: warning
