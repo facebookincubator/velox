@@ -21,7 +21,6 @@ on:
       - '!velox/docs/**'
       - CMakeLists.txt
       - CMake/**
-      - third_party/**
       - scripts/setup-macos.sh
       - .github/workflows/macos.yml
 
@@ -31,7 +30,6 @@ on:
       - '!velox/docs/**'
       - CMakeLists.txt
       - CMake/**
-      - third_party/**
       - scripts/setup-macos.sh
       - .github/workflows/macos.yml
 
