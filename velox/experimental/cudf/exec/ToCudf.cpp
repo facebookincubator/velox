@@ -223,7 +223,7 @@ bool cudfIsRegistered() {
 }
 
 bool isCudfOperator(const exec::Operator* op) {
-  return isAnyOf<NvtxHelper>(op) || isAnyOf<CudfHashJoinBridgeTranslator>(op);
+  return isAnyOf<NvtxHelper>(op);
 }
 
 } // namespace facebook::velox::cudf_velox
