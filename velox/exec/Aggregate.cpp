@@ -295,6 +295,22 @@ std::unique_ptr<Aggregate> Aggregate::create(
     const std::vector<TypePtr>& argTypes,
     const TypePtr& resultType,
     const core::QueryConfig& config) {
+  // Validate the result type.
+  if (isPartialOutput(step)) {
+    auto intermediateType = Aggregate::intermediateType(name, argTypes);
+    VELOX_CHECK(
+        resultType->equivalent(*intermediateType),
+        "Intermediate type mismatch. Expected: {}, actual: {}",
+        intermediateType->toString(),
+        resultType->toString());
+  } else {
+    auto returnType = Aggregate::returnType(name, argTypes);
+    VELOX_CHECK(
+        resultType->equivalent(*returnType),
+        "Return type mismatch. Expected: {}, actual: {}",
+        returnType->toString(),
+        resultType->toString());
+  }
   // Lookup the function in the new registry first.
   if (auto func = getAggregateFunctionEntry(name)) {
     return func->factory(step, argTypes, resultType, config);
@@ -326,6 +342,32 @@ TypePtr Aggregate::intermediateType(
   std::stringstream error;
   error << "Aggregate function signature is not supported: "
         << toString(name, argTypes)
+        << ". Supported signatures: " << toString(signatures.value()) << ".";
+  VELOX_USER_FAIL(error.str());
+}
+
+// static
+TypePtr Aggregate::returnType(
+    const std::string& name,
+    const std::vector<TypePtr>& argTypes) {
+  auto signatures = exec::getAggregateFunctionSignatures(name);
+  if (!signatures.has_value()) {
+    VELOX_USER_FAIL("Aggregate function not registered: {}", name);
+  }
+  for (auto& signature : signatures.value()) {
+    exec::SignatureBinder binder(*signature, argTypes);
+    if (binder.tryBind()) {
+      auto type = binder.tryResolveType(signature->returnType());
+      VELOX_USER_CHECK(
+          type,
+          "Cannot resolve return type for aggregate function {}",
+          exec::toString(name, argTypes));
+      return type;
+    }
+  }
+
+  std::stringstream error;
+  error << "Aggregate function signature is not supported: " << name
         << ". Supported signatures: " << toString(signatures.value()) << ".";
   VELOX_USER_FAIL(error.str());
 }
