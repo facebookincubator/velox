@@ -106,7 +106,7 @@ class KernelCodeGen(ABC):
         if self.use_namespace:
             out.write("namespace kernels {\n\n")
         warp_threads = self.num_warp_threads()
-        if warp_threads != None:
+        if warp_threads is not None:
             out.write(f"enum {{ WARP_THREADS = {warp_threads} }};")
         for kernel in kernels:
             kernel_name = kernel["spelling"]

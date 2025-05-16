@@ -124,8 +124,9 @@ class NinjaLogAdapter(BenchmarkAdapter):
         else:
             del log_lines[0]
 
-        ms2sec = lambda x: x / 1000
-        get_epoch = lambda l: int(l.split()[2])
+        def ms2sec(x):
+            return x / 1000
+
         totals = {
             "link_time": 0,
             "compile_time": 0,
