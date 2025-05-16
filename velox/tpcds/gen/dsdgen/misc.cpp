@@ -49,7 +49,7 @@
 #include "r_params.h"
 #include "tdefs.h"
 
-static char* alpha_num =
+static const char* alpha_num =
     "0123456789abcdefghijklmnopqrstuvwxyz ABCDEFGHIJKLMNOPQRSTUVWXYZ,";
 
 char* getenv(const char* name);

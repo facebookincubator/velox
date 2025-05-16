@@ -157,7 +157,7 @@ int ftodec(decimal_t* dest, double f) {
  * Side Effects:
  * TODO: None
  */
-int strtodec(decimal_t* dest, char* s) {
+int strtodec(decimal_t* dest, const char* s) {
   int i;
   char* d_pt;
   char valbuf[20];
@@ -207,7 +207,8 @@ int dectostr(char* dest, decimal_t* d, DSDGenContext& dsdGenContext) {
   static char szFormat[80];
 
   if (!dsdGenContext.dectostr_init) {
-    auto result = sprintf(szFormat, "%s.%s", HUGE_FORMAT, HUGE_FORMAT);
+    auto result =
+        snprintf(szFormat, sizeof(szFormat), "%s.%s", HUGE_FORMAT, HUGE_FORMAT);
     if (result < 0)
       perror("sprintf failed");
     dsdGenContext.dectostr_init = 1;
@@ -219,7 +220,7 @@ int dectostr(char* dest, decimal_t* d, DSDGenContext& dsdGenContext) {
     number /= 10;
 
   dest = (char*)malloc(160);
-  auto result = sprintf(dest, szFormat, number, d->number - number);
+  auto result = snprintf(dest, 160, szFormat, number, d->number - number);
   if (result < 0)
     perror("sprintf failed");
 

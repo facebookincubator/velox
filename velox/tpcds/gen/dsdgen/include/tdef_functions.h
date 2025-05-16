@@ -37,7 +37,7 @@ it must be kept in sync with the
 
 */
 typedef struct TABLE_FUNC_T {
-  char* name; /* -- name of the table; */
+  const char* name; /* -- name of the table; */
   int (*builder)(
       void*,
       ds_key_t,

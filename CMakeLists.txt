@@ -74,7 +74,7 @@ option(
 option(
   VELOX_BUILD_MINIMAL
   "Build a minimal set of components only. This will override other build options."
-  OFF)
+  ON)
 option(
   VELOX_BUILD_MINIMAL_WITH_DWIO
   "Build a minimal set of components, including DWIO (file format readers/writers).
@@ -177,7 +177,7 @@ if(${VELOX_BUILD_MINIMAL} OR ${VELOX_BUILD_MINIMAL_WITH_DWIO})
   set(VELOX_ENABLE_AGGREGATES OFF)
   set(VELOX_ENABLE_HIVE_CONNECTOR OFF)
   set(VELOX_ENABLE_TPCH_CONNECTOR OFF)
-  set(VELOX_ENABLE_TPCDS_CONNECTOR OFF)
+  set(VELOX_ENABLE_TPCDS_CONNECTOR ON)
   set(VELOX_ENABLE_SPARK_FUNCTIONS OFF)
   set(VELOX_ENABLE_EXAMPLES OFF)
   set(VELOX_ENABLE_S3 OFF)
@@ -381,9 +381,6 @@ if(ENABLE_ALL_WARNINGS)
          -Wno-array-bounds \
          -Wno-maybe-uninitialized \
          -Wno-unused-result \
-	 -Wno-write-strings \
-	 -Wno-stringop-truncation \
-	 -Wno-missing-field-initializers \
          -Wno-format-overflow \
          -Wno-strict-aliasing")
   endif()

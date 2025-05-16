@@ -555,7 +555,8 @@ int dist_op(
 
   if ((d = find_dist(d_name)) == nullptr) {
     char msg[40 + strlen(d_name)];
-    auto result = sprintf(msg, "Invalid distribution name '%s'", d_name);
+    auto result =
+        snprintf(msg, sizeof(msg), "Invalid distribution name '%s'", d_name);
     if (result < 0)
       perror("sprintf failed");
     INTERNAL(msg);
@@ -662,7 +663,7 @@ int dist_weight(
 
   if ((d_idx = find_dist(d)) == nullptr) {
     char msg[40 + strlen(d)];
-    sprintf(msg, "Invalid distribution name '%s'", d);
+    snprintf(msg, sizeof(msg), "Invalid distribution name '%s'", d);
     INTERNAL(msg);
   }
 
@@ -981,7 +982,7 @@ int MatchDistWeight(
 
   if ((d = find_dist(szDist)) == nullptr) {
     char msg[40 + strlen(szDist)];
-    sprintf(msg, "Invalid distribution name '%s'", szDist);
+    snprintf(msg, sizeof(msg), "Invalid distribution name '%s'", szDist);
     INTERNAL(msg);
   }
 

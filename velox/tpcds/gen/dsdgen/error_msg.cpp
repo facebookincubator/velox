@@ -208,7 +208,7 @@ int ReportErrorNoLine(int nError, const char* msg, int bExit) {
                                  static_cast<uint32_t>(MAX_ERROR + 1))]
                           .prompt;
         char e_msg[1024 + strlen(prompt) + strlen(msg)];
-        auto result = sprintf(e_msg, prompt, msg);
+        auto result = snprintf(e_msg, sizeof(e_msg), prompt, msg);
         if (result < 0)
           perror("sprintf failed");
         result =
