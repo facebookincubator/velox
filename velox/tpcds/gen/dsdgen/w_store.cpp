@@ -355,7 +355,7 @@ int mk_w_store(void* info_arr, ds_key_t index, DSDGenContext& dsdGenContext) {
       &nFieldChangeFlags,
       bFirstRecord);
 
-  char szTemp2[128];
+  std::vector<char> szTemp2(128);
 
   void* info = append_info_get(info_arr, STORE);
   append_row_start(info);
@@ -382,12 +382,12 @@ int mk_w_store(void* info_arr, ds_key_t index, DSDGenContext& dsdGenContext) {
       W_STORE_ADDRESS_STREET_NUM, info, std::to_string(r->address.street_num));
   if (r->address.street_name2) {
     snprintf(
-        szTemp2,
-        sizeof(szTemp2),
+        szTemp2.data(),
+        szTemp2.size(),
         "%s %s",
         r->address.street_name1,
         r->address.street_name2);
-    append_varchar(W_STORE_ADDRESS_STREET_NAME1, info, szTemp2);
+    append_varchar(W_STORE_ADDRESS_STREET_NAME1, info, szTemp2.data());
   } else
     append_varchar(W_STORE_ADDRESS_STREET_NAME1, info, r->address.street_name1);
   append_varchar(W_STORE_ADDRESS_STREET_TYPE, info, r->address.street_type);
@@ -395,8 +395,8 @@ int mk_w_store(void* info_arr, ds_key_t index, DSDGenContext& dsdGenContext) {
   append_varchar(W_STORE_ADDRESS_CITY, info, r->address.city);
   append_varchar(W_STORE_ADDRESS_COUNTY, info, r->address.county);
   append_varchar(W_STORE_ADDRESS_STATE, info, r->address.state);
-  snprintf(szTemp2, sizeof(szTemp2), "%05d", r->address.zip);
-  append_varchar(W_STORE_ADDRESS_ZIP, info, szTemp2);
+  snprintf(szTemp2.data(), szTemp2.size(), "%05d", r->address.zip);
+  append_varchar(W_STORE_ADDRESS_ZIP, info, szTemp2.data());
   append_varchar(W_STORE_ADDRESS_COUNTRY, info, r->address.country);
   append_integer_decimal(
       W_STORE_ADDRESS_GMT_OFFSET, info, r->address.gmt_offset);
