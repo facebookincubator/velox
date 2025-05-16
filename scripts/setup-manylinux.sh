@@ -39,6 +39,7 @@ BUILD_DUCKDB="${BUILD_DUCKDB:-true}"
 USE_CLANG="${USE_CLANG:-false}"
 export INSTALL_PREFIX=${INSTALL_PREFIX:-"/usr/local"}
 DEPENDENCY_DIR=${DEPENDENCY_DIR:-$(pwd)/deps-download}
+EXTRA_ARROW_CMAKE_FLAGS=${EXTRA_ARROW_CMAKE_FLAGS:-""}
 
 # Folly Portability.h being used to decide whether or not support coroutines
 # causes issues (build, lin) if the selection is not consistent across users of folly.
@@ -246,7 +247,8 @@ function install_arrow {
     -DCMAKE_INSTALL_PREFIX=${INSTALL_PREFIX} \
     -DCMAKE_BUILD_TYPE=Release \
     -DARROW_BUILD_STATIC=ON \
-    -DBOOST_ROOT=${INSTALL_PREFIX}
+    -DBOOST_ROOT=${INSTALL_PREFIX} \
+    ${EXTRA_ARROW_CMAKE_FLAGS}
 }
 
 function install_cuda {
