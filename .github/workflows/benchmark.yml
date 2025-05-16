@@ -19,7 +19,7 @@ on:
     paths:
       - .github/workflows/benchmark.yml
       - scripts/ci/benchmark-requirements.txt
-      - scripts/ci/setup-ubuntu.sh
+      - scripts/setup-ubuntu.sh
 
   push:
     branches: [main]
