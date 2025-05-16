@@ -493,6 +493,7 @@ void HashProbe::wakeupPeerOperators() {
   for (auto& promise : promises) {
     promise.setValue();
   }
+  promises_.clear();
 }
 
 std::vector<HashProbe*> HashProbe::findPeerOperators() {
@@ -938,8 +939,16 @@ bool HashProbe::skipProbeOnEmptyBuild() const {
 }
 
 bool HashProbe::canSpill() const {
-  return Operator::canSpill() &&
-      !operatorCtx_->task()->hasMixedExecutionGroup();
+  if (!Operator::canSpill()) {
+    return false;
+  }
+  if (operatorCtx_->task()->hasMixedExecutionGroup()) {
+    return operatorCtx_->driverCtx()
+               ->queryConfig()
+               .mixedGroupedModeHashJoinSpillEnabled() &&
+        operatorCtx_->task()->concurrentSplitGroups() == 1;
+  }
+  return true;
 }
 
 bool HashProbe::hasMoreSpillData() const {
@@ -1040,7 +1049,26 @@ RowVectorPtr HashProbe::getOutputInternal(bool toSpillOutput) {
       asyncWaitForHashTable();
     } else {
       if (lastProber_ && canSpill()) {
-        joinBridge_->probeFinished();
+        if (operatorCtx_->task()->hasMixedExecutionGroup()) {
+          const bool isLastGroup = allProbeGroupFinished();
+          if (isSpillInput()) {
+            // Mixed group mode has triggered spilling, based on if current
+            // group is the last group or not, resetting spill partitions in
+            // join bridge.
+            joinBridge_->probeFinished(!isLastGroup);
+          } else if (isLastGroup) {
+            // Mixed group mode has NOT triggered spilling, and current group is
+            // the last group (unreliable best effort signal), finish probe to
+            // notify build to finish. If last group signal is not present, rely
+            // on task cleanup.
+            joinBridge_->probeFinished();
+          }
+        } else {
+          joinBridge_->probeFinished();
+          if (table_ != nullptr) {
+            table_->clear(true);
+          }
+        }
         wakeupPeerOperators();
       }
       setState(ProbeOperatorState::kFinish);
@@ -1712,6 +1740,12 @@ bool HashProbe::isWaitingForPeers() const {
   return state_ == ProbeOperatorState::kWaitForPeers;
 }
 
+bool HashProbe::allProbeGroupFinished() const {
+  VELOX_CHECK(operatorCtx_->task()->hasMixedExecutionGroup());
+  VELOX_CHECK_EQ(operatorCtx_->task()->concurrentSplitGroups(), 1);
+  return operatorCtx_->task()->allSplitsConsumed(joinNode_.get());
+}
+
 void HashProbe::checkRunning() const {
   VELOX_CHECK(isRunning(), probeOperatorStateName(state_));
 }
@@ -2024,6 +2058,11 @@ void HashProbe::close() {
   spillOutputPartitionSet_.clear();
   spillOutputReader_.reset();
   clearBuffers();
+
+  // Fullfill any pending promises
+  if (lastProber_) {
+    wakeupPeerOperators();
+  }
 }
 
 void HashProbe::clearBuffers() {

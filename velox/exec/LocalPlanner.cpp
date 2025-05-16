@@ -52,6 +52,23 @@
 
 namespace facebook::velox::exec {
 
+namespace {
+
+// If the upstream is partial limit, downstream is final limit and we want to
+// flush as soon as we can to reach the limit and do as little work as possible.
+bool eagerFlush(const core::PlanNode& node) {
+  if (auto* limit = dynamic_cast<const core::LimitNode*>(&node)) {
+    return limit->isPartial() && limit->offset() + limit->count() < 10'000;
+  }
+  if (node.sources().empty()) {
+    return false;
+  }
+  // Follow the first source, which is driving the output.
+  return eagerFlush(*node.sources()[0]);
+}
+
+} // namespace
+
 namespace detail {
 
 /// Returns true if source nodes must run in a separate pipeline.
@@ -70,12 +87,6 @@ bool mustStartNewPipeline(
 
   // Non-first sources always run in their own pipeline.
   return sourceId != 0;
-}
-
-bool isIndexLookupJoin(core::PlanNodePtr planNode) {
-  const auto indexLookupJoin =
-      std::dynamic_pointer_cast<const core::IndexLookupJoinNode>(planNode);
-  return indexLookupJoin != nullptr;
 }
 
 // Creates the customized local partition operator for table writer scaling.
@@ -111,10 +122,12 @@ OperatorSupplier makeConsumerSupplier(
     return [localMerge](int32_t operatorId, DriverCtx* ctx) {
       auto mergeSource = ctx->task->addLocalMergeSource(
           ctx->splitGroupId, localMerge->id(), localMerge->outputType());
-      auto consumerCb = [mergeSource](
-                            RowVectorPtr input, ContinueFuture* future) {
-        return mergeSource->enqueue(std::move(input), future);
-      };
+      auto consumerCb =
+          [mergeSource](
+              RowVectorPtr input, bool drained, ContinueFuture* future) {
+            VELOX_CHECK(!drained);
+            return mergeSource->enqueue(std::move(input), future);
+          };
       auto startCb = [mergeSource](ContinueFuture* future) {
         return mergeSource->started(future);
       };
@@ -131,15 +144,24 @@ OperatorSupplier makeConsumerSupplier(
             localPartitionNode, operatorId, ctx);
       };
     }
-    return [localPartitionNode](int32_t operatorId, DriverCtx* ctx) {
+    bool useEagerFlush = eagerFlush(*planNode);
+    return [localPartitionNode, useEagerFlush](
+               int32_t operatorId, DriverCtx* ctx) {
       return std::make_unique<LocalPartition>(
-          operatorId, ctx, localPartitionNode);
+          operatorId, ctx, localPartitionNode, useEagerFlush);
     };
   }
 
   if (auto join =
           std::dynamic_pointer_cast<const core::HashJoinNode>(planNode)) {
     return [join](int32_t operatorId, DriverCtx* ctx) {
+      if (ctx->task->hasMixedExecutionGroup() &&
+          needRightSideJoin(join->joinType())) {
+        VELOX_UNSUPPORTED(
+            "Hash join currently does not support mixed grouped execution for join "
+            "type {}",
+            core::joinTypeName(join->joinType()));
+      }
       return std::make_unique<HashBuild>(operatorId, ctx, join);
     };
   }
@@ -157,9 +179,17 @@ OperatorSupplier makeConsumerSupplier(
     return [planNodeId](int32_t operatorId, DriverCtx* ctx) {
       auto source =
           ctx->task->getMergeJoinSource(ctx->splitGroupId, planNodeId);
-      auto consumer = [source](RowVectorPtr input, ContinueFuture* future) {
-        return source->enqueue(std::move(input), future);
-      };
+      auto consumer =
+          [source](RowVectorPtr input, bool drained, ContinueFuture* future) {
+            if (drained) {
+              VELOX_CHECK_NULL(input);
+              source->drain();
+              return BlockingReason::kNotBlocked;
+            } else {
+              VELOX_CHECK(!drained);
+              return source->enqueue(std::move(input), future);
+            }
+          };
       return std::make_unique<CallbackSink>(operatorId, ctx, consumer);
     };
   }
@@ -185,7 +215,7 @@ void plan(
     driverFactories->back()->inputDriver = true;
   } else {
     const auto numSourcesToPlan =
-        isIndexLookupJoin(planNode) ? 1 : sources.size();
+        isIndexLookupJoin(planNode.get()) ? 1 : sources.size();
     for (int32_t i = 0; i < numSourcesToPlan; ++i) {
       plan(
           sources[i],
@@ -430,23 +460,6 @@ void LocalPlanner::markMixedJoinBridges(
     }
   }
 }
-
-namespace {
-
-// If the upstream is partial limit, downstream is final limit and we want to
-// flush as soon as we can to reach the limit and do as little work as possible.
-bool eagerFlush(const core::PlanNode& node) {
-  if (auto* limit = dynamic_cast<const core::LimitNode*>(&node)) {
-    return limit->isPartial() && limit->offset() + limit->count() < 10'000;
-  }
-  if (node.sources().empty()) {
-    return false;
-  }
-  // Follow the first source, which is driving the output.
-  return eagerFlush(*node.sources()[0]);
-}
-
-} // namespace
 
 std::shared_ptr<Driver> DriverFactory::createDriver(
     std::unique_ptr<DriverCtx> ctx,

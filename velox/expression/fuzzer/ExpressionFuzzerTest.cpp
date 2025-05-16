@@ -73,7 +73,8 @@ int main(int argc, char** argv) {
   // experience, and initialize glog and gflags.
   folly::Init init(&argc, &argv);
 
-  facebook::velox::memory::MemoryManager::initialize({});
+  facebook::velox::memory::MemoryManager::initialize(
+      facebook::velox::memory::MemoryManager::Options{});
 
   // TODO: List of the functions that at some point crash or fail and need to
   // be fixed before we can enable.
@@ -123,17 +124,28 @@ int main(int argc, char** argv) {
       "array_join(array(real),varchar,varchar) -> varchar",
       "array_join(array(double),varchar) -> varchar",
       "array_join(array(double),varchar,varchar) -> varchar",
-      // BingTiles throw VeloxUserError when zoom/x/y are out of range.
-      "bing_tile",
-      "bing_tile_zoom_level",
-      "bing_tile_coordinates",
-      "bing_tile_parent",
-      "bing_tile_children",
-      "bing_tile_quadkey",
       "array_min_by", // https://github.com/facebookincubator/velox/issues/12934
       "array_max_by", // https://github.com/facebookincubator/velox/issues/12934
       // https://github.com/facebookincubator/velox/issues/13047
       "inverse_poisson_cdf",
+      // Geometry functions don't yet have a ValuesGenerator
+      "st_geometryfromtext",
+      "st_geomfrombinary",
+      "st_astext",
+      "st_asbinary",
+      "st_relate",
+      "st_contains",
+      "st_crosses",
+      "st_disjoint",
+      "st_equals",
+      "st_intersects",
+      "st_overlaps",
+      "st_touches",
+      "st_within",
+      "st_difference",
+      "st_intersection",
+      "st_symdifference",
+      "st_union",
   };
   size_t initialSeed = FLAGS_seed == 0 ? std::time(nullptr) : FLAGS_seed;
 
