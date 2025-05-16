@@ -124,10 +124,14 @@ function install_build_prerequisites {
 
 # Install packages required to fix format
 function install_format_prerequisites {
-  pip3 install regex
-  ${SUDO} apt install -y \
-    clang-format \
-    cmake-format
+  pip3 install regex black
+  ${SUDO} apt install -y cmake-format
+  curl -fsSL https://apt.llvm.org/llvm-snapshot.gpg.key | ${SUDO} tee /etc/apt/trusted.gpg.d/llvm.asc > /dev/null
+  echo "deb http://apt.llvm.org/$(lsb_release -cs)/ llvm-toolchain-$(lsb_release -cs)-18 main" | ${SUDO} tee /etc/apt/sources.list.d/llvm.list
+
+  ${SUDO} apt update
+  ${SUDO} apt install -y clang-format-18
+  ${SUDO} update-alternatives --install /usr/bin/clang-format clang-format /usr/bin/clang-format-18 18
 }
 
 # Install packages required for build.
@@ -325,6 +329,7 @@ function install_geos {
 }
 
 function install_velox_deps {
+  run_and_time install_format_prerequisites
   run_and_time install_velox_deps_from_apt
   run_and_time install_fmt
   run_and_time install_protobuf
