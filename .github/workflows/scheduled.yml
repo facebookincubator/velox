@@ -21,7 +21,6 @@ on:
       - '!velox/docs/**'
       - CMakeLists.txt
       - CMake/**
-      - third_party/**
       - scripts/setup-ubuntu.sh
       - scripts/setup-common.sh
       - scripts/setup-versions.sh
@@ -37,7 +36,6 @@ on:
       - '!velox/docs/**'
       - CMakeLists.txt
       - CMake/**
-      - third_party/**
       - scripts/setup-ubuntu.sh
       - scripts/setup-common.sh
       - scripts/setup-versions.sh
