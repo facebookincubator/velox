@@ -7,7 +7,7 @@ tags: [tech-blog, pyvelox]
 
 ## TL;DR
 
-PyVelox is python bindings for Velox library developers, that provides a simple and interactive API to facilitates exploratory programming and debugging of the Velox API's for rapid prototyping. PyVelox support Arrow integration as Arrow and Velox in-memory layouts are compatible with each other and the conversions are very efficient, zero copy in almost every case. The PyPI page for PyVelox is available at: https://pypi.org/project/PyVelox/ 
+PyVelox is a set of Python bindings for the Velox library, designed to provide a simple and interactive API that facilitates exploratory programming and debugging of Velox APIs for rapid prototyping. It also supports Apache Arrow integration as Arrow and Velox in-memory layouts, leveraging the compatibility between Arrow and Velox in-memory layouts. This allows for highly efficient, zero-copy conversions in nearly all cases. The PyPI page for PyVelox is available at: https://pypi.org/project/PyVelox/ 
  
 PyVelox can be installed from PyPI using the following command: 
 ```
@@ -16,12 +16,12 @@ pip install pyvelox
 
 PyVelox may be of interest to the following individuals:
 
-1. Experienced C++ Database developers who want to explore Velox Api’s using the python bindings.
-2. New developers and engineers who are looking for an introduction to Velox.
-3. Engineers who are working to incorporate Velox into new data processing systems, can use PyVelox as a springboard to iterate and prototype proof of concepts. 
-4. Engineers who need to integrate Velox bindings with other python based libraries.
+1. Experienced C++ database developers looking to explore Velox APIs through Python bindings in an interactive environment..
+2. New developers or engineers seeking an approachable introduction to the Velox ecosystem.
+3. Engineers integrating Velox into new data processing systems, who can leverage PyVelox for rapid iteration and prototyping of proof-of-concept solutions. 
+4. Engineers working with Python-based libraries who require seamless integration with Velox bindings.
 
-In this blog, we will see how we can leverage PyVelox for rapid testing of TPC-H query plans. 
+In this blog, we’ll explore how PyVelox can be leveraged to test TPC-H query plans effectively. 
 
 ## Running TPC-H Queries
 
@@ -172,4 +172,4 @@ Query plan is locally executed by a query runner:
  <img src="/img/running-plan.png" height= "100%" width="100%"/>
 </figure>
 
-Congratulations! You’ve successfully completed this introductory tutorial on working with PyVelox to run TPC-H Query 1. We are looking forward to hearing your experience working with PyVelox.  
+Congratulations! You’ve successfully completed this introductory tutorial on using PyVelox to run TPC-H Query 1. We look forward to hearing about your experience and feedback as you continue exploring PyVelox.  
