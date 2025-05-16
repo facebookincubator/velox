@@ -546,4 +546,104 @@ void Base64::decodeUrl(
   decodedOutput.resize(decodedSize.value());
 }
 
+// static
+// The implementation of this function is inspired by the Java Base64 mime
+// decoder:
+// https://github.com/openjdk/jdk/blob/master/src/java.base/share/classes/java/util/Base64.java#L810
+Status Base64::decodeMime(const char* input, size_t inputSize, char* output) {
+  if (!inputSize) {
+    return Status::OK();
+  }
+
+  uint32_t bits = 0; // Accumulated 24-bit buffer.
+  int shift = 18; // Next write position in bits.
+  size_t inputIndex = 0;
+  char* outputBuffer = output;
+
+  while (inputIndex < inputSize) {
+    auto c = input[inputIndex++];
+    auto val = kBase64ReverseIndexTable[static_cast<uint8_t>(c)];
+    if (c == kPadding) {
+      // Handle '=' padding. Must follow Base64 rules or error out.
+      if ((shift == 6 &&
+           (inputIndex == inputSize || input[inputIndex++] != kPadding)) ||
+          shift == 18) {
+        return Status::UserError(
+            "Input byte array has wrong 4-byte ending unit.");
+      }
+      break;
+    } else if (val >= 0x40) {
+      // Skip whitespace or other non-Base64 characters.
+      continue;
+    } else {
+      // Collect 6 bits into our 24-bit buffer.
+      bits |= val << shift;
+      shift -= 6;
+      // If we've got 24 bits, emit 3 bytes.
+      if (shift < 0) {
+        outputBuffer[0] = (bits >> 16) & 0xFF;
+        outputBuffer[1] = (bits >> 8) & 0xFF;
+        outputBuffer[2] = bits & 0xFF;
+        outputBuffer += 3;
+        shift = 18;
+        bits = 0;
+      }
+    }
+  }
+
+  // Handle any remaining bits (for final 1 or 2 bytes).
+  if (shift == 0) {
+    outputBuffer[0] = (bits >> 16) & 0xFF;
+    outputBuffer[1] = (bits >> 8) & 0xFF;
+  } else if (shift == 6) {
+    outputBuffer[0] = (bits >> 16) & 0xFF;
+  } else if (shift == 12) {
+    // Not enough bits for a valid final unit.
+    return Status::UserError("Last unit does not have enough valid bits.");
+  }
+  // Ensure any remaining characters after padding are ignorable.
+  while (inputIndex < inputSize) {
+    if (kBase64ReverseIndexTable[static_cast<uint8_t>(input[inputIndex++])] <
+        0x40) {
+      return Status::UserError("Input byte array has incorrect ending.");
+    }
+  }
+  return Status::OK();
+}
+
+// static
+Expected<size_t> Base64::calculateMimeDecodedSize(
+    const char* input,
+    const size_t inputSize) {
+  if (inputSize == 0) {
+    return 0;
+  }
+  if (inputSize < 2) {
+    if (kBase64ReverseIndexTable[static_cast<uint8_t>(input[0])] >= 0x40) {
+      return 0;
+    }
+    return folly::makeUnexpected(Status::UserError(
+        "Input should at least have 2 bytes for base64 bytes."));
+  }
+  auto decodedSize = inputSize;
+  // Compute how many true Base64 chars.
+  for (size_t i = 0; i < inputSize; ++i) {
+    auto c = input[i];
+    if (c == kPadding) {
+      decodedSize -= inputSize - i;
+      break;
+    } else if (kBase64ReverseIndexTable[static_cast<uint8_t>(c)] >= 0x40) {
+      decodedSize--;
+    }
+  }
+  // If no explicit padding but validChars ≢ 0 mod 4, infer missing '='.
+  size_t paddings = 0;
+  if ((decodedSize & 0x3) != 0) {
+    paddings = 4 - (decodedSize & 0x3);
+  }
+  // Each 4-char block yields 3 bytes; subtract padding.
+  decodedSize = 3 * ((decodedSize + 3) / 4) - paddings;
+  return decodedSize;
+}
+
 } // namespace facebook::velox::encoding
