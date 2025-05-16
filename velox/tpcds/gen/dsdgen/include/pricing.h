@@ -30,11 +30,11 @@
 
 typedef struct DS_LIMITS_T {
   int nId;
-  char* szQuantity;
-  char* szMarkUp;
-  char* szDiscount;
-  char* szWholesale;
-  char* szCoupon;
+  const char* szQuantity;
+  const char* szMarkUp;
+  const char* szDiscount;
+  const char* szWholesale;
+  const char* szCoupon;
 } ds_limits_t;
 
 void set_pricing(

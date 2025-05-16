@@ -68,7 +68,7 @@ int mk_w_customer_address(
   void* info = append_info_get(info_arr, CUSTOMER_ADDRESS);
   append_row_start(info);
 
-  char szTemp[128];
+  std::vector<char> szTemp(128);
 
   append_key(CA_ADDRESS_SK, info, r->ca_addr_sk);
   append_varchar(CA_ADDRESS_ID, info, r->ca_addr_id);
@@ -76,12 +76,12 @@ int mk_w_customer_address(
       CA_ADDRESS_STREET_NUM, info, std::to_string(r->ca_address.street_num));
   if (r->ca_address.street_name2) {
     snprintf(
-        szTemp,
-        sizeof(szTemp),
+        szTemp.data(),
+        szTemp.size(),
         "%s %s",
         r->ca_address.street_name1,
         r->ca_address.street_name2);
-    append_varchar(CA_ADDRESS_STREET_NAME1, info, szTemp);
+    append_varchar(CA_ADDRESS_STREET_NAME1, info, szTemp.data());
   } else
     append_varchar(CA_ADDRESS_STREET_NAME1, info, r->ca_address.street_name1);
   append_varchar(CA_ADDRESS_STREET_TYPE, info, r->ca_address.street_type);
@@ -89,8 +89,8 @@ int mk_w_customer_address(
   append_varchar(CA_ADDRESS_CITY, info, r->ca_address.city);
   append_varchar(CA_ADDRESS_COUNTY, info, r->ca_address.county);
   append_varchar(CA_ADDRESS_STATE, info, r->ca_address.state);
-  snprintf(szTemp, sizeof(szTemp), "%05d", r->ca_address.zip);
-  append_varchar(CA_ADDRESS_ZIP, info, szTemp);
+  snprintf(szTemp.data(), szTemp.size(), "%05d", r->ca_address.zip);
+  append_varchar(CA_ADDRESS_ZIP, info, szTemp.data());
   append_varchar(CA_ADDRESS_COUNTRY, info, &r->ca_address.country[0]);
   append_integer_decimal(CA_ADDRESS_GMT_OFFSET, info, r->ca_address.gmt_offset);
   append_varchar(CA_LOCATION_TYPE, info, r->ca_location_type);
