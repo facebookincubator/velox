@@ -27,7 +27,7 @@ function HomepageHeader() {
         </h1>
 
         <div className={styles.buttonGroup}>
-          <Link className={clsx('button', styles.primaryButton)} to="/docs">
+          <Link className={clsx('button', styles.primaryButton)} to="https://facebookincubator.github.io/velox/">
             Get Started
           </Link>
           <Link
