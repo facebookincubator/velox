@@ -16,6 +16,7 @@
 
 #include "velox/functions/sparksql/specialforms/FromJson.h"
 
+#include <algorithm>
 #include <limits>
 #include <stdexcept>
 
@@ -31,13 +32,61 @@ using namespace facebook::velox::exec;
 namespace facebook::velox::functions::sparksql {
 namespace {
 
+// Struct to store schema information for a JSON row, used for efficient field
+// lookup and null handling.
+struct JsonRowSchemaInfo {
+  // Unique key for this schema info, computed from the nesting level and field
+  // index.
+  uint64_t key;
+
+  // Indicates if all field names in this row are ASCII (for optimized
+  // case-insensitive comparison).
+  // True if all field names in this row are ASCII, enabling optimized lowercase
+  // conversion.
+  bool allFieldsAreAscii;
+
+  // Shared pointer to a vector indicating which fields are missing in the
+  // current JSON object.
+  std::shared_ptr<std::vector<bool>> isFieldMissing;
+
+  // Maps lowercased field names to their column indices for fast lookup.
+  folly::F14FastMap<std::string, column_index_t> fieldIndices;
+
+  // Equality operator based on the unique key.
+  bool operator==(const JsonRowSchemaInfo& other) {
+    return key == other.key;
+  }
+
+  JsonRowSchemaInfo(
+      uint64_t key,
+      bool allFieldsAreAscii,
+      const std::shared_ptr<std::vector<bool>> isFieldMissing,
+      const folly::F14FastMap<std::string, column_index_t>& fieldIndices)
+      : key(key),
+        allFieldsAreAscii(allFieldsAreAscii),
+        isFieldMissing(std::move(isFieldMissing)),
+        fieldIndices(std::move(fieldIndices)) {}
+
+  // Computes a unique key for a row schema based on its nesting level and field
+  // index.
+  static uint64_t computeKey(column_index_t level, column_index_t fieldIndex) {
+    return (static_cast<uint64_t>(level) << 32) | fieldIndex;
+  }
+};
+
 // Struct for extracting JSON data and writing it with type-specific handling.
 template <typename Input>
 struct ExtractJsonTypeImpl {
   template <TypeKind kind>
-  static simdjson::error_code
-  apply(Input input, exec::GenericWriter& writer, bool isRoot) {
-    return KindDispatcher<kind>::apply(input, writer, isRoot);
+  static simdjson::error_code apply(
+      Input input,
+      exec::GenericWriter& writer,
+      bool isRoot,
+      const folly::F14FastMap<int64_t, JsonRowSchemaInfo>& jsonRowSchemaInfo,
+      column_index_t level,
+      column_index_t fieldIndex) {
+    return KindDispatcher<kind>::apply(
+        input, writer, isRoot, jsonRowSchemaInfo, level, fieldIndex);
   }
 
  private:
@@ -45,7 +94,14 @@ struct ExtractJsonTypeImpl {
   // class.
   template <TypeKind kind, typename Dummy = void>
   struct KindDispatcher {
-    static simdjson::error_code apply(Input, exec::GenericWriter&, bool) {
+    static simdjson::error_code apply(
+        Input,
+        exec::GenericWriter&,
+        bool /*isRoot*/,
+        const folly::
+            F14FastMap<int64_t, JsonRowSchemaInfo>& /*jsonRowSchemaInfo*/,
+        column_index_t /*level*/,
+        column_index_t /*fieldIndex*/) {
       VELOX_NYI("Parse json to {} is not supported.", TypeTraits<kind>::name);
       return simdjson::error_code::UNEXPECTED_ERROR;
     }
@@ -53,8 +109,14 @@ struct ExtractJsonTypeImpl {
 
   template <typename Dummy>
   struct KindDispatcher<TypeKind::VARCHAR, Dummy> {
-    static simdjson::error_code
-    apply(Input value, exec::GenericWriter& writer, bool /*isRoot*/) {
+    static simdjson::error_code apply(
+        Input value,
+        exec::GenericWriter& writer,
+        bool /*isRoot*/,
+        const folly::
+            F14FastMap<int64_t, JsonRowSchemaInfo>& /*jsonRowSchemaInfo*/,
+        column_index_t /*level*/,
+        column_index_t /*fieldIndex*/) {
       SIMDJSON_ASSIGN_OR_RAISE(auto type, value.type());
       std::string_view s;
       if (type == simdjson::ondemand::json_type::string) {
@@ -69,8 +131,14 @@ struct ExtractJsonTypeImpl {
 
   template <typename Dummy>
   struct KindDispatcher<TypeKind::BOOLEAN, Dummy> {
-    static simdjson::error_code
-    apply(Input value, exec::GenericWriter& writer, bool /*isRoot*/) {
+    static simdjson::error_code apply(
+        Input value,
+        exec::GenericWriter& writer,
+        bool /*isRoot*/,
+        const folly::
+            F14FastMap<int64_t, JsonRowSchemaInfo>& /*jsonRowSchemaInfo*/,
+        column_index_t /*level*/,
+        column_index_t /*fieldIndex*/) {
       SIMDJSON_ASSIGN_OR_RAISE(auto type, value.type());
       if (type == simdjson::ondemand::json_type::boolean) {
         auto& w = writer.castTo<bool>();
@@ -83,24 +151,42 @@ struct ExtractJsonTypeImpl {
 
   template <typename Dummy>
   struct KindDispatcher<TypeKind::TINYINT, Dummy> {
-    static simdjson::error_code
-    apply(Input value, exec::GenericWriter& writer, bool /*isRoot*/) {
+    static simdjson::error_code apply(
+        Input value,
+        exec::GenericWriter& writer,
+        bool /*isRoot*/,
+        const folly::
+            F14FastMap<int64_t, JsonRowSchemaInfo>& /*jsonRowSchemaInfo*/,
+        column_index_t /*level*/,
+        column_index_t /*fieldIndex*/) {
       return castJsonToInt<int8_t>(value, writer);
     }
   };
 
   template <typename Dummy>
   struct KindDispatcher<TypeKind::SMALLINT, Dummy> {
-    static simdjson::error_code
-    apply(Input value, exec::GenericWriter& writer, bool /*isRoot*/) {
+    static simdjson::error_code apply(
+        Input value,
+        exec::GenericWriter& writer,
+        bool /*isRoot*/,
+        const folly::
+            F14FastMap<int64_t, JsonRowSchemaInfo>& /*jsonRowSchemaInfo*/,
+        column_index_t /*level*/,
+        column_index_t /*fieldIndex*/) {
       return castJsonToInt<int16_t>(value, writer);
     }
   };
 
   template <typename Dummy>
   struct KindDispatcher<TypeKind::INTEGER, Dummy> {
-    static simdjson::error_code
-    apply(Input value, exec::GenericWriter& writer, bool /*isRoot*/) {
+    static simdjson::error_code apply(
+        Input value,
+        exec::GenericWriter& writer,
+        bool /*isRoot*/,
+        const folly::
+            F14FastMap<int64_t, JsonRowSchemaInfo>& /*jsonRowSchemaInfo*/,
+        column_index_t /*level*/,
+        column_index_t /*fieldIndex*/) {
       if (writer.type() == DATE()) {
         return castJsonToDate(value, writer);
       }
@@ -110,32 +196,55 @@ struct ExtractJsonTypeImpl {
 
   template <typename Dummy>
   struct KindDispatcher<TypeKind::BIGINT, Dummy> {
-    static simdjson::error_code
-    apply(Input value, exec::GenericWriter& writer, bool /*isRoot*/) {
+    static simdjson::error_code apply(
+        Input value,
+        exec::GenericWriter& writer,
+        bool /*isRoot*/,
+        const folly::
+            F14FastMap<int64_t, JsonRowSchemaInfo>& /*jsonRowSchemaInfo*/,
+        column_index_t /*level*/,
+        column_index_t /*fieldIndex*/) {
       return castJsonToInt<int64_t>(value, writer);
     }
   };
 
   template <typename Dummy>
   struct KindDispatcher<TypeKind::REAL, Dummy> {
-    static simdjson::error_code
-    apply(Input value, exec::GenericWriter& writer, bool /*isRoot*/) {
+    static simdjson::error_code apply(
+        Input value,
+        exec::GenericWriter& writer,
+        bool /*isRoot*/,
+        const folly::
+            F14FastMap<int64_t, JsonRowSchemaInfo>& /*jsonRowSchemaInfo*/,
+        column_index_t /*level*/,
+        column_index_t /*fieldIndex*/) {
       return castJsonToFloatingPoint<float>(value, writer);
     }
   };
 
   template <typename Dummy>
   struct KindDispatcher<TypeKind::DOUBLE, Dummy> {
-    static simdjson::error_code
-    apply(Input value, exec::GenericWriter& writer, bool /*isRoot*/) {
+    static simdjson::error_code apply(
+        Input value,
+        exec::GenericWriter& writer,
+        bool /*isRoot*/,
+        const folly::
+            F14FastMap<int64_t, JsonRowSchemaInfo>& /*jsonRowSchemaInfo*/,
+        column_index_t /*level*/,
+        column_index_t /*fieldIndex*/) {
       return castJsonToFloatingPoint<double>(value, writer);
     }
   };
 
   template <typename Dummy>
   struct KindDispatcher<TypeKind::ARRAY, Dummy> {
-    static simdjson::error_code
-    apply(Input value, exec::GenericWriter& writer, bool isRoot) {
+    static simdjson::error_code apply(
+        Input value,
+        exec::GenericWriter& writer,
+        bool isRoot,
+        const folly::F14FastMap<int64_t, JsonRowSchemaInfo>& jsonRowSchemaInfo,
+        column_index_t level,
+        column_index_t /*fieldIndex*/) {
       auto& writerTyped = writer.castTo<Array<Any>>();
       const auto& elementType = writer.type()->childAt(0);
       SIMDJSON_ASSIGN_OR_RAISE(auto type, value.type());
@@ -153,7 +262,10 @@ struct ExtractJsonTypeImpl {
                 elementType->kind(),
                 element,
                 writerTyped.add_item(),
-                false));
+                false,
+                jsonRowSchemaInfo,
+                level + 1,
+                0));
           }
         }
       } else if (elementType->kind() == TypeKind::ROW && isRoot) {
@@ -162,7 +274,10 @@ struct ExtractJsonTypeImpl {
             elementType->kind(),
             value,
             writerTyped.add_item(),
-            false));
+            false,
+            jsonRowSchemaInfo,
+            level + 1,
+            0));
       } else {
         return simdjson::INCORRECT_TYPE;
       }
@@ -172,8 +287,13 @@ struct ExtractJsonTypeImpl {
 
   template <typename Dummy>
   struct KindDispatcher<TypeKind::MAP, Dummy> {
-    static simdjson::error_code
-    apply(Input value, exec::GenericWriter& writer, bool /*isRoot*/) {
+    static simdjson::error_code apply(
+        Input value,
+        exec::GenericWriter& writer,
+        bool isRoot,
+        const folly::F14FastMap<int64_t, JsonRowSchemaInfo>& jsonRowSchemaInfo,
+        column_index_t level,
+        column_index_t /*fieldIndex*/) {
       auto& writerTyped = writer.castTo<Map<Any, Any>>();
       const auto& valueType = writer.type()->childAt(1);
       SIMDJSON_ASSIGN_OR_RAISE(auto object, value.get_object());
@@ -192,7 +312,10 @@ struct ExtractJsonTypeImpl {
               valueType->kind(),
               field.value(),
               std::get<1>(writers),
-              false));
+              false,
+              jsonRowSchemaInfo,
+              level + 1,
+              1));
         }
       }
       return simdjson::SUCCESS;
@@ -201,8 +324,13 @@ struct ExtractJsonTypeImpl {
 
   template <typename Dummy>
   struct KindDispatcher<TypeKind::ROW, Dummy> {
-    static simdjson::error_code
-    apply(Input value, exec::GenericWriter& writer, bool isRoot) {
+    static simdjson::error_code apply(
+        Input value,
+        exec::GenericWriter& writer,
+        bool isRoot,
+        const folly::F14FastMap<int64_t, JsonRowSchemaInfo>& jsonRowSchemaInfo,
+        column_index_t level,
+        column_index_t fieldIndex) {
       const auto& rowType = writer.type()->asRow();
       auto& writerTyped = writer.castTo<DynamicRow>();
       if (value.type().error() != ::simdjson::SUCCESS) {
@@ -212,15 +340,11 @@ struct ExtractJsonTypeImpl {
       const auto type = value.type().value_unsafe();
       if (type == simdjson::ondemand::json_type::object) {
         SIMDJSON_ASSIGN_OR_RAISE(auto object, value.get_object());
-
-        const auto& names = rowType.names();
-        bool allFieldsAreAscii =
-            std::all_of(names.begin(), names.end(), [](const auto& name) {
-              return functions::stringCore::isAscii(name.data(), name.size());
-            });
-
-        auto fieldIndices = makeFieldIndicesMap(rowType, allFieldsAreAscii);
-
+        const auto& schemaInfo = jsonRowSchemaInfo.at(
+            JsonRowSchemaInfo::computeKey(level, fieldIndex));
+        const auto& isFieldMissing = schemaInfo.isFieldMissing;
+        const auto& fieldIndices = schemaInfo.fieldIndices;
+        std::fill(isFieldMissing->begin(), isFieldMissing->end(), true);
         std::string key;
         for (const auto& fieldResult : object) {
           if (fieldResult.error() != ::simdjson::SUCCESS) {
@@ -230,22 +354,24 @@ struct ExtractJsonTypeImpl {
           if (!field.value().is_null()) {
             SIMDJSON_ASSIGN_OR_RAISE(key, field.unescaped_key(true));
 
-            if (allFieldsAreAscii) {
+            if (schemaInfo.allFieldsAreAscii) {
               folly::toLowerAscii(key);
             } else {
               boost::algorithm::to_lower(key);
             }
             auto it = fieldIndices.find(key);
-            if (it != fieldIndices.end() && it->second >= 0) {
+            if (it != fieldIndices.end() && isFieldMissing->at(it->second)) {
               const auto index = it->second;
-              it->second = -1;
-
+              isFieldMissing->at(index) = false;
               const auto res = VELOX_DYNAMIC_TYPE_DISPATCH(
                   ExtractJsonTypeImpl<simdjson::ondemand::value>::apply,
                   rowType.childAt(index)->kind(),
                   field.value(),
                   writerTyped.get_writer_at(index),
-                  false);
+                  false,
+                  jsonRowSchemaInfo,
+                  level + 1,
+                  index);
               if (res != simdjson::SUCCESS) {
                 writerTyped.set_null_at(index);
               }
@@ -253,9 +379,9 @@ struct ExtractJsonTypeImpl {
           }
         }
 
-        for (const auto& [_, index] : fieldIndices) {
-          if (index >= 0) {
-            writerTyped.set_null_at(index);
+        for (int i = 0; i < rowType.size(); ++i) {
+          if (isFieldMissing->at(i)) {
+            writerTyped.set_null_at(i);
           }
         }
       } else {
@@ -389,26 +515,6 @@ struct ExtractJsonTypeImpl {
     return simdjson::SUCCESS;
   }
 
-  // Creates a map of lower case field names to their indices in the row type.
-  static folly::F14FastMap<std::string, int32_t> makeFieldIndicesMap(
-      const RowType& rowType,
-      bool allFieldsAreAscii) {
-    folly::F14FastMap<std::string, int32_t> fieldIndices;
-    const auto size = rowType.size();
-    for (auto i = 0; i < size; ++i) {
-      std::string key = rowType.nameOf(i);
-      if (allFieldsAreAscii) {
-        folly::toLowerAscii(key);
-      } else {
-        boost::algorithm::to_lower(key);
-      }
-
-      fieldIndices[key] = i;
-    }
-
-    return fieldIndices;
-  }
-
   constexpr static std::string_view kGMT{"GMT"};
 };
 
@@ -428,6 +534,10 @@ struct ExtractJsonTypeImpl {
 template <TypeKind kind>
 class FromJsonFunction final : public exec::VectorFunction {
  public:
+  explicit FromJsonFunction(const TypePtr& type) {
+    constructRowSchemaInfoMap(type, 0, 0);
+  }
+
   void apply(
       const SelectivityVector& rows,
       std::vector<VectorPtr>& args, // Not using const ref so we can reuse args
@@ -475,7 +585,8 @@ class FromJsonFunction final : public exec::VectorFunction {
       context.applyToSelectedNoThrow(rows, [&](auto row) {
         writer.setOffset(row);
         if (error != simdjson::SUCCESS ||
-            extractJsonToWriter(jsonDoc, writer) != simdjson::SUCCESS) {
+            extractJsonToWriter(jsonDoc, writer, rowSchemaInfoMap_) !=
+                simdjson::SUCCESS) {
           writer.commitNull();
         }
       });
@@ -515,23 +626,76 @@ class FromJsonFunction final : public exec::VectorFunction {
       simdjson::ondemand::document doc;
       auto error = simdjsonParse(paddedInput).get(doc);
       if (error != simdjson::SUCCESS ||
-          extractJsonToWriter(doc, writer) != simdjson::SUCCESS) {
+          extractJsonToWriter(doc, writer, rowSchemaInfoMap_) !=
+              simdjson::SUCCESS) {
         writer.commitNull();
       }
     });
     writer.finish();
   }
 
+  void constructRowSchemaInfoMap(
+      const TypePtr& type,
+      column_index_t level,
+      column_index_t fieldIndex) {
+    switch (type->kind()) {
+      case TypeKind::ARRAY: {
+        constructRowSchemaInfoMap(type->childAt(0), level + 1, 0);
+        break;
+      }
+      case TypeKind::MAP: {
+        constructRowSchemaInfoMap(type->childAt(0), level + 1, 0);
+        constructRowSchemaInfoMap(type->childAt(1), level + 1, 1);
+        break;
+      }
+      case TypeKind::ROW: {
+        const auto& rowType = asRowType(type);
+        const auto& names = rowType->names();
+        bool allFieldsAreAscii =
+            std::all_of(names.begin(), names.end(), [](const auto& name) {
+              return functions::stringCore::isAscii(name.data(), name.size());
+            });
+        auto isFieldMissing = std::make_shared<std::vector<bool>>();
+        isFieldMissing->resize(rowType->size(), true);
+        folly::F14FastMap<std::string, column_index_t> fieldIndices;
+        const auto size = rowType->size();
+        for (auto i = 0; i < size; ++i) {
+          std::string key = rowType->nameOf(i);
+          if (allFieldsAreAscii) {
+            folly::toLowerAscii(key);
+          } else {
+            boost::algorithm::to_lower(key);
+          }
+
+          fieldIndices[key] = i;
+          constructRowSchemaInfoMap(type->childAt(i), level + 1, i);
+        }
+        auto key = JsonRowSchemaInfo::computeKey(level, fieldIndex);
+        rowSchemaInfoMap_.insert_or_assign(
+            key,
+            JsonRowSchemaInfo(
+                key,
+                allFieldsAreAscii,
+                std::move(isFieldMissing),
+                std::move(fieldIndices)));
+        break;
+      }
+      default:
+        break;
+    }
+  }
+
   // Extracts data from json doc and writes it to writer.
   static simdjson::error_code extractJsonToWriter(
       simdjson::ondemand::document& doc,
-      exec::VectorWriter<Any>& writer) {
+      exec::VectorWriter<Any>& writer,
+      const folly::F14FastMap<int64_t, JsonRowSchemaInfo>& rowSchemaInfoMap) {
     if (doc.is_null()) {
       writer.commitNull();
     } else {
       SIMDJSON_TRY(
           ExtractJsonTypeImpl<simdjson::ondemand::document&>::apply<kind>(
-              doc, writer.current(), true));
+              doc, writer.current(), true, rowSchemaInfoMap, 0, 0));
       writer.commit(true);
     }
     return simdjson::SUCCESS;
@@ -539,6 +703,7 @@ class FromJsonFunction final : public exec::VectorFunction {
 
   // The buffer with extra bytes for parser::parse(),
   mutable std::string paddedInput_;
+  folly::F14FastMap<int64_t, JsonRowSchemaInfo> rowSchemaInfoMap_;
 };
 
 /// Determines whether a given type is supported.
@@ -606,11 +771,11 @@ exec::ExprPtr FromJsonCallToSpecialForm::constructSpecialForm(
 
   std::shared_ptr<exec::VectorFunction> func;
   if (type->kind() == TypeKind::ARRAY) {
-    func = std::make_shared<FromJsonFunction<TypeKind::ARRAY>>();
+    func = std::make_shared<FromJsonFunction<TypeKind::ARRAY>>(type);
   } else if (type->kind() == TypeKind::MAP) {
-    func = std::make_shared<FromJsonFunction<TypeKind::MAP>>();
+    func = std::make_shared<FromJsonFunction<TypeKind::MAP>>(type);
   } else {
-    func = std::make_shared<FromJsonFunction<TypeKind::ROW>>();
+    func = std::make_shared<FromJsonFunction<TypeKind::ROW>>(type);
   }
 
   return std::make_shared<exec::Expr>(
