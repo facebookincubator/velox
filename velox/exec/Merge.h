@@ -18,11 +18,13 @@
 #include "velox/exec/Exchange.h"
 #include "velox/exec/MergeSource.h"
 #include "velox/exec/Spill.h"
+#include "velox/exec/Spiller.h"
 #include "velox/exec/TreeOfLosers.h"
 
 namespace facebook::velox::exec {
 
 class SourceStream;
+class MergeBuffer;
 
 // Merge operator Implementation: This implementation uses priority queue
 // to perform a k-way merge of its inputs. It stops merging if any one of
@@ -37,7 +39,8 @@ class Merge : public SourceOperator {
           sortingKeys,
       const std::vector<core::SortOrder>& sortingOrders,
       const std::string& planNodeId,
-      const std::string& operatorType);
+      const std::string& operatorType,
+      const std::optional<common::SpillConfig>& spillConfig = std::nullopt);
 
   BlockingReason isBlocked(ContinueFuture* future) override;
 
@@ -58,21 +61,12 @@ class Merge : public SourceOperator {
   size_t numStartedSources_{0};
 
  private:
-  void startSources();
-
-  void initializeTreeOfLosers();
+  void spill();
 
   /// Maximum number of rows in the output batch.
   const vector_size_t outputBatchSize_;
 
   std::vector<SpillSortKey> sortingKeys_;
-
-  /// A list of cursors over batches of ordered source data. One per source.
-  /// Aligned with 'sources'.
-  std::vector<SourceStream*> streams_;
-
-  /// Used to merge data from two or more sources.
-  std::unique_ptr<TreeOfLosers<SourceStream>> treeOfLosers_;
 
   RowVectorPtr output_;
 
@@ -84,6 +78,70 @@ class Merge : public SourceOperator {
   /// A list of blocking futures for sources. These are populates when a given
   /// source is blocked waiting for the next batch of data.
   std::vector<ContinueFuture> sourceBlockingFutures_;
+
+  std::unique_ptr<MergeBuffer> mergeBuffer_;
+
+  std::unique_ptr<MergeSpiller> mergeSpiller_;
+
+  bool hasSpilled_{false};
+
+  // SpillReadFiles group for all partial merge run.
+  std::vector<std::vector<std::unique_ptr<SpillReadFile>>> spillReadFilesGroup_;
+
+  uint32_t maxMergeSources_;
+};
+
+/// A utility class for sort-merging data from upstream sources or from data
+/// spilled by the `LocalMerge` operator. The `LocalMerge` operator may start
+/// only a portion of the sources at a time to cap the memory usage, hence it
+/// might perform multiple sort-merge operations from different merge sources.
+class MergeBuffer {
+ public:
+  MergeBuffer(const RowTypePtr& type, velox::memory::MemoryPool* pool)
+      : type_(type), pool_(pool) {}
+
+  RowVectorPtr getOutputFromSource(
+      vector_size_t maxOutputRows,
+      std::vector<ContinueFuture>& sourceBlockingFutures,
+      bool& isLastRun);
+
+  RowVectorPtr getOutputFromSpill(vector_size_t maxOutputRows);
+
+  bool hasSourceInput() const {
+    return sourceStreamMerger_ != nullptr;
+  }
+
+  /// Start sources for this merge run, it may start either all the sources at
+  /// once or a portion of the sources at a time to cap the memory usage.
+  void maybeStartMoreSources(
+      size_t& numStartedSources,
+      std::vector<ContinueFuture>& sourceBlockingFutures,
+      uint32_t maxMergeSources,
+      vector_size_t outputBatchSize,
+      const std::vector<std::shared_ptr<MergeSource>>& sources,
+      const std::vector<SpillSortKey>& sortingKeys);
+
+  void createSpillMerger(
+      std::vector<std::vector<std::unique_ptr<SpillReadFile>>>
+          spillReadFilesGroup);
+
+ private:
+  const RowTypePtr type_;
+  velox::memory::MemoryPool* const pool_;
+
+  std::unique_ptr<TreeOfLosers<SourceStream>> sourceStreamMerger_;
+  std::vector<SourceStream*> sourceStreams_;
+  // Used to merge the sorted runs from in-memory rows and spilled rows on disk.
+  std::unique_ptr<TreeOfLosers<SpillMergeStream>> spillMerger_;
+  // Records the source rows to copy to 'output_' in order.
+  std::vector<const RowVector*> spillSources_;
+  std::vector<vector_size_t> spillSourceRows_;
+  // Reusable output vector.
+  RowVectorPtr output_;
+  // The number of received input rows.
+  uint64_t numInputRows_{0};
+  // The number of rows that has been returned.
+  uint64_t numOutputRows_{0};
 };
 
 class SourceStream final : public MergeStream {

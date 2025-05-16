@@ -18,6 +18,7 @@
 #include "velox/common/testutil/TestValue.h"
 #include "velox/exec/tests/utils/OperatorTestBase.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
+#include "velox/exec/tests/utils/TempDirectoryPath.h"
 
 using namespace facebook::velox;
 using namespace facebook::velox::exec;
@@ -25,6 +26,11 @@ using namespace facebook::velox::common::testutil;
 using namespace facebook::velox::exec::test;
 
 class MergeTest : public OperatorTestBase {
+ public:
+  MergeTest() {
+    filesystems::registerLocalFileSystem();
+  }
+
  protected:
   void testSingleKey(
       const std::vector<RowVectorPtr>& inputVectors,
@@ -33,7 +39,6 @@ class MergeTest : public OperatorTestBase {
 
     std::vector<std::string> sortOrderSqls = {
         "NULLS LAST", "NULLS FIRST", "DESC NULLS FIRST", "DESC NULLS LAST"};
-
     for (const auto& sortOrderSql : sortOrderSqls) {
       const auto orderByClause = fmt::format("{} {}", key, sortOrderSql);
       auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
@@ -41,18 +46,17 @@ class MergeTest : public OperatorTestBase {
                       .localMerge(
                           {orderByClause},
                           {PlanBuilder(planNodeIdGenerator)
-                               .values(inputVectors, true)
+                               .values(inputVectors)
                                .orderBy({orderByClause}, true)
                                .planNode()})
                       .planNode();
-
+      // Use single source for local merge.
       CursorParameters params;
       params.planNode = plan;
-      params.maxDrivers = 2;
+      params.maxDrivers = 1;
       assertQueryOrdered(
           params,
-          "SELECT * FROM (SELECT * FROM tmp UNION ALL SELECT * FROM tmp) ORDER BY " +
-              orderByClause,
+          "SELECT * FROM (SELECT * FROM tmp) ORDER BY " + orderByClause,
           {keyIndex});
 
       // Use multiple sources for local merge.
@@ -100,18 +104,17 @@ class MergeTest : public OperatorTestBase {
                         .localMerge(
                             orderByClauses,
                             {PlanBuilder(planNodeIdGenerator)
-                                 .values(inputVectors, true)
+                                 .values(inputVectors)
                                  .orderBy(orderByClauses, true)
                                  .planNode()})
                         .planNode();
-
+        // Use single source for local merge.
         CursorParameters params;
         params.planNode = plan;
-        params.maxDrivers = 2;
+        params.maxDrivers = 1;
         assertQueryOrdered(
             params,
-            "SELECT * FROM (SELECT * FROM tmp UNION ALL SELECT * FROM tmp) " +
-                orderBySql,
+            "SELECT * FROM (SELECT * FROM tmp) " + orderBySql,
             sortingKeys);
 
         // Use multiple sources for local merge.
@@ -131,12 +134,95 @@ class MergeTest : public OperatorTestBase {
       }
     }
   }
+
+  void testSingleKeyWithSpill(
+      const std::vector<RowVectorPtr>& inputVectors,
+      const std::string& key) {
+    auto keyIndex = inputVectors[0]->type()->asRow().getChildIdx(key);
+
+    std::vector<std::string> sortOrderSqls = {
+        "NULLS LAST", "NULLS FIRST", "DESC NULLS FIRST", "DESC NULLS LAST"};
+
+    for (const auto& sortOrderSql : sortOrderSqls) {
+      const auto orderByClause = fmt::format("{} {}", key, sortOrderSql);
+      const auto planNodeIdGenerator =
+          std::make_shared<core::PlanNodeIdGenerator>();
+      const std::shared_ptr<TempDirectoryPath> spillDirectory =
+          TempDirectoryPath::create();
+      std::vector<std::shared_ptr<const core::PlanNode>> sources;
+      for (const auto& input : inputVectors) {
+        sources.push_back(PlanBuilder(planNodeIdGenerator)
+                              .values({input})
+                              .orderBy({orderByClause}, true)
+                              .planNode());
+      }
+      const auto plan = PlanBuilder(planNodeIdGenerator)
+                            .localMerge({orderByClause}, std::move(sources))
+                            .planNode();
+      CursorParameters params;
+      params.planNode = plan;
+      params.maxDrivers = 2;
+      params.queryConfigs = {
+          {"spill_enabled", "true"}, {"local_merge_max_merge_source", "2"}};
+      params.spillDirectory = spillDirectory->getPath();
+      assertQueryOrdered(
+          params, "SELECT * FROM tmp ORDER BY " + orderByClause, {keyIndex});
+    }
+  }
+
+  void testTwoKeysWithSpill(
+      const std::vector<RowVectorPtr>& inputVectors,
+      const std::string& key1,
+      const std::string& key2) {
+    auto& rowType = inputVectors[0]->type()->asRow();
+    auto sortingKeys = {rowType.getChildIdx(key1), rowType.getChildIdx(key2)};
+
+    std::vector<core::SortOrder> sortOrders = {
+        core::kAscNullsLast,
+        core::kAscNullsFirst,
+        core::kDescNullsFirst,
+        core::kDescNullsLast};
+    std::vector<std::string> sortOrderSqls = {
+        "NULLS LAST", "NULLS FIRST", "DESC NULLS FIRST", "DESC NULLS LAST"};
+
+    for (auto i = 0; i < sortOrders.size(); ++i) {
+      for (auto j = 0; j < sortOrders.size(); ++j) {
+        const std::vector<std::string> orderByClauses = {
+            fmt::format("{} {}", key1, sortOrderSqls[i]),
+            fmt::format("{} {}", key2, sortOrderSqls[j])};
+        const auto orderBySql = fmt::format(
+            "ORDER BY {}, {}", orderByClauses[0], orderByClauses[1]);
+        const auto planNodeIdGenerator =
+            std::make_shared<core::PlanNodeIdGenerator>();
+        const std::shared_ptr<TempDirectoryPath> spillDirectory =
+            TempDirectoryPath::create();
+        std::vector<std::shared_ptr<const core::PlanNode>> sources;
+        for (const auto& input : inputVectors) {
+          sources.push_back(PlanBuilder(planNodeIdGenerator)
+                                .values({input})
+                                .orderBy(orderByClauses, true)
+                                .planNode());
+        }
+        const auto plan = PlanBuilder(planNodeIdGenerator)
+                              .localMerge(orderByClauses, std::move(sources))
+                              .planNode();
+        CursorParameters params;
+        params.planNode = plan;
+        params.maxDrivers = 2;
+        params.queryConfigs = {
+            {"spill_enabled", "true"}, {"local_merge_max_merge_source", "2"}};
+        params.spillDirectory = spillDirectory->getPath();
+        assertQueryOrdered(
+            params, "SELECT * FROM tmp " + orderBySql, sortingKeys);
+      }
+    }
+  }
 };
 
 TEST_F(MergeTest, localMerge) {
-  vector_size_t batchSize = 1000;
   std::vector<RowVectorPtr> vectors;
   for (int32_t i = 0; i < 3; ++i) {
+    constexpr vector_size_t batchSize = 23;
     auto c0 = makeFlatVector<int64_t>(
         batchSize, [&](auto row) { return batchSize * i + row; }, nullEvery(5));
     auto c1 = makeFlatVector<int64_t>(
@@ -155,6 +241,30 @@ TEST_F(MergeTest, localMerge) {
 
   testTwoKeys(vectors, "c0", "c3");
   testTwoKeys(vectors, "c3", "c0");
+}
+
+TEST_F(MergeTest, localMergeWithSpill) {
+  std::vector<RowVectorPtr> vectors;
+  for (int32_t i = 0; i < 9; ++i) {
+    constexpr vector_size_t batchSize = 37;
+    auto c0 = makeFlatVector<int64_t>(
+        batchSize, [&](auto row) { return batchSize * i + row; }, nullEvery(5));
+    auto c1 = makeFlatVector<int64_t>(
+        batchSize, [&](auto row) { return row; }, nullEvery(5));
+    auto c2 = makeFlatVector<double>(
+        batchSize, [](auto row) { return row * 0.1; }, nullEvery(11));
+    auto c3 = makeFlatVector<StringView>(batchSize, [](auto row) {
+      return StringView::makeInline(std::to_string(row));
+    });
+    vectors.push_back(makeRowVector({c0, c1, c2, c3}));
+  }
+  createDuckDbTable(vectors);
+
+  testSingleKeyWithSpill(vectors, "c0");
+  testSingleKeyWithSpill(vectors, "c3");
+
+  testTwoKeysWithSpill(vectors, "c0", "c3");
+  testTwoKeysWithSpill(vectors, "c3", "c0");
 }
 
 DEBUG_ONLY_TEST_F(MergeTest, localMergeStart) {
