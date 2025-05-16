@@ -102,11 +102,11 @@ void hierarchy_item(
           I_BRAND,
           dsdGenContext);
       int idValue = static_cast<int>(*id);
-      char sTemp[6 + std::to_string(idValue).size()];
-      auto result = sprintf(sTemp, " #%d", idValue);
+      std::vector<char> sTemp(6 + std::to_string(idValue).size());
+      auto result = snprintf(sTemp.data(), sTemp.size(), " #%d", idValue);
       if (result < 0)
         perror("sprintf failed");
-      strcat(*name, sTemp);
+      strcat(*name, sTemp.data());
       *id += (nBrandBase * 1000 + nLastClass) * 1000;
       break;
     }
@@ -206,13 +206,14 @@ void bitmap_to_dist(
     DSDGenContext& dsdGenContext) {
   int32_t m, s;
   unsigned int len = strlen(distname);
-  char msg[len + 31];
+  std::vector<char> msg(len + 31);
 
   if ((s = distsize(distname, dsdGenContext)) == -1) {
-    auto result = sprintf(msg, "Invalid distribution name '%s'", distname);
+    auto result = snprintf(
+        msg.data(), msg.size(), "Invalid distribution name '%s'", distname);
     if (result < 0)
       perror("sprintf failed");
-    INTERNAL(msg);
+    INTERNAL(msg.data());
   }
   m = static_cast<int32_t>((*modulus % s) + 1);
   *modulus /= s;

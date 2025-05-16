@@ -67,15 +67,16 @@ int mk_w_web_site(
   decimal_t dMinTaxPercentage, dMaxTaxPercentage;
 
   /* begin locals declarations */
-  char szTemp[16], *sName1 = nullptr, *sName2 = nullptr;
+  std::vector<char> szTemp(16);
+  char *sName1 = nullptr, *sName2 = nullptr;
   struct W_WEB_SITE_TBL *r, *rOldValues = &g_OldValues;
   tdef* pT = getSimpleTdefsByNumber(WEB_SITE, dsdGenContext);
 
   r = &dsdGenContext.g_w_web_site;
 
   snprintf(
-      szTemp,
-      sizeof(szTemp),
+      szTemp.data(),
+      szTemp.size(),
       "%d-%d-%d",
       CURRENT_YEAR,
       CURRENT_MONTH,
@@ -279,7 +280,7 @@ int mk_w_web_site(
   void* info = append_info_get(info_arr, WEB_SITE);
   append_row_start(info);
 
-  char szStreetName[128];
+  std::vector<char> szStreetName(128);
 
   append_key(WEB_SITE_SK, info, r->web_site_sk);
   append_varchar(WEB_SITE_ID, info, &r->web_site_id[0]);
@@ -302,12 +303,12 @@ int mk_w_web_site(
       WEB_ADDRESS_STREET_NUM, info, std::to_string(r->web_address.street_num));
   if (r->web_address.street_name2) {
     snprintf(
-        szStreetName,
-        sizeof(szStreetName),
+        szStreetName.data(),
+        szStreetName.size(),
         "%s %s",
         r->web_address.street_name1,
         r->web_address.street_name2);
-    append_varchar(WEB_ADDRESS_STREET_NAME1, info, szStreetName);
+    append_varchar(WEB_ADDRESS_STREET_NAME1, info, szStreetName.data());
   } else
     append_varchar(WEB_ADDRESS_STREET_NAME1, info, r->web_address.street_name1);
   append_varchar(WEB_ADDRESS_STREET_TYPE, info, r->web_address.street_type);
@@ -315,8 +316,9 @@ int mk_w_web_site(
   append_varchar(WEB_ADDRESS_CITY, info, r->web_address.city);
   append_varchar(WEB_ADDRESS_COUNTY, info, r->web_address.county);
   append_varchar(WEB_ADDRESS_STATE, info, r->web_address.state);
-  snprintf(szStreetName, sizeof(szStreetName), "%05d", r->web_address.zip);
-  append_varchar(WEB_ADDRESS_ZIP, info, szStreetName);
+  snprintf(
+      szStreetName.data(), szStreetName.size(), "%05d", r->web_address.zip);
+  append_varchar(WEB_ADDRESS_ZIP, info, szStreetName.data());
   append_varchar(WEB_ADDRESS_COUNTRY, info, r->web_address.country);
   append_integer_decimal(
       WEB_ADDRESS_GMT_OFFSET, info, r->web_address.gmt_offset);

@@ -75,7 +75,7 @@ int mk_w_warehouse(
 
   mk_address(&r->w_address, W_WAREHOUSE_ADDRESS, dsdGenContext);
 
-  char szTemp[128];
+  std::vector<char> szTemp(128);
 
   void* info = append_info_get(info_arr, WAREHOUSE);
   append_row_start(info);
@@ -88,12 +88,12 @@ int mk_w_warehouse(
       W_ADDRESS_STREET_NUM, info, std::to_string(r->w_address.street_num));
   if (r->w_address.street_name2 != NULL) {
     snprintf(
-        szTemp,
-        sizeof(szTemp),
+        szTemp.data(),
+        szTemp.size(),
         "%s %s",
         r->w_address.street_name1,
         r->w_address.street_name2);
-    append_varchar(W_ADDRESS_STREET_NAME1, info, szTemp);
+    append_varchar(W_ADDRESS_STREET_NAME1, info, szTemp.data());
   } else
     append_varchar(W_ADDRESS_STREET_NAME1, info, r->w_address.street_name1);
   append_varchar(W_ADDRESS_STREET_TYPE, info, r->w_address.street_type);
@@ -101,8 +101,8 @@ int mk_w_warehouse(
   append_varchar(W_ADDRESS_CITY, info, r->w_address.city);
   append_varchar(W_ADDRESS_COUNTY, info, r->w_address.county);
   append_varchar(W_ADDRESS_STATE, info, r->w_address.state);
-  snprintf(szTemp, sizeof(szTemp), "%05d", r->w_address.zip);
-  append_varchar(W_ADDRESS_ZIP, info, szTemp);
+  snprintf(szTemp.data(), szTemp.size(), "%05d", r->w_address.zip);
+  append_varchar(W_ADDRESS_ZIP, info, szTemp.data());
   append_varchar(W_ADDRESS_COUNTRY, info, r->w_address.country);
   append_integer_decimal(W_ADDRESS_GMT_OFFSET, info, r->w_address.gmt_offset);
 

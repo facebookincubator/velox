@@ -28,6 +28,7 @@
 #include <stdio.h>
 #include <algorithm>
 #include <cstdint>
+#include <vector>
 #include "config.h"
 #include "grammar_support.h"
 #include "porting.h"
@@ -207,12 +208,12 @@ int ReportErrorNoLine(int nError, const char* msg, int bExit) {
                                  static_cast<uint32_t>(-nError),
                                  static_cast<uint32_t>(MAX_ERROR + 1))]
                           .prompt;
-        char e_msg[1024 + strlen(prompt) + strlen(msg)];
-        auto result = sprintf(e_msg, prompt, msg);
+        std::vector<char> e_msg(1024 + strlen(prompt) + strlen(msg));
+        auto result = snprintf(e_msg.data(), e_msg.size(), prompt, msg);
         if (result < 0)
           perror("sprintf failed");
-        result =
-            fprintf(stderr, "%s: %s\n", (bExit) ? "ERROR" : "Warning", e_msg);
+        result = fprintf(
+            stderr, "%s: %s\n", (bExit) ? "ERROR" : "Warning", e_msg.data());
         if (result < 0)
           perror("sprintf failed");
         break;

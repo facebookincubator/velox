@@ -134,13 +134,13 @@ int itodec(decimal_t* dest, int src) {
  * TODO: None
  */
 int ftodec(decimal_t* dest, double f) {
-  static char valbuf[20];
+  std::vector<char> valbuf(20);
 
-  auto result = snprintf(valbuf, sizeof(valbuf), "%f", f);
+  auto result = snprintf(valbuf.data(), valbuf.size(), "%f", f);
   if (result < 0)
     perror("sprintf failed");
 
-  return (strtodec(dest, valbuf));
+  return (strtodec(dest, valbuf.data()));
 }
 
 /*
@@ -157,24 +157,24 @@ int ftodec(decimal_t* dest, double f) {
  * Side Effects:
  * TODO: None
  */
-int strtodec(decimal_t* dest, char* s) {
+int strtodec(decimal_t* dest, const char* s) {
   int i;
   char* d_pt;
-  char valbuf[20];
+  std::vector<char> valbuf(20);
 
   if (strlen(s) < 20) {
-    strcpy(valbuf, s);
+    strcpy(valbuf.data(), s);
   }
   dest->flags = 0;
-  if ((d_pt = strchr(valbuf, '.')) == NULL) {
-    dest->scale = strlen(valbuf);
-    dest->number = atoi(valbuf);
+  if ((d_pt = strchr(valbuf.data(), '.')) == NULL) {
+    dest->scale = valbuf.size();
+    dest->number = atoi(valbuf.data());
     dest->precision = 0;
   } else {
     *d_pt = '\0';
     d_pt += 1;
-    dest->scale = strlen(valbuf);
-    dest->number = atoi(valbuf);
+    dest->scale = valbuf.size();
+    dest->number = atoi(valbuf.data());
     dest->precision = strlen(d_pt);
     for (i = 0; i < dest->precision; i++)
       dest->number *= 10;
@@ -201,25 +201,30 @@ int strtodec(decimal_t* dest, char* s) {
  * Side Effects:
  * TODO: None
  */
-int dectostr(char* dest, decimal_t* d, DSDGenContext& dsdGenContext) {
+int dectostr(
+    std::vector<char>& dest,
+    decimal_t* d,
+    DSDGenContext& dsdGenContext) {
   ds_key_t number;
   int i;
-  static char szFormat[80];
+  std::vector<char> szFormat(80);
 
   if (!dsdGenContext.dectostr_init) {
-    auto result = sprintf(szFormat, "%s.%s", HUGE_FORMAT, HUGE_FORMAT);
+    auto result = snprintf(
+        szFormat.data(), szFormat.size(), "%s.%s", HUGE_FORMAT, HUGE_FORMAT);
     if (result < 0)
       perror("sprintf failed");
     dsdGenContext.dectostr_init = 1;
   }
 
-  if (d == NULL || dest == NULL)
+  if (d == NULL || dest.empty())
     return (-1);
   for (number = d->number, i = 0; i < d->precision; i++)
     number /= 10;
 
-  dest = (char*)malloc(160);
-  auto result = sprintf(dest, szFormat, number, d->number - number);
+  dest.resize(160);
+  auto result =
+      snprintf(dest.data(), 160, szFormat.data(), number, d->number - number);
   if (result < 0)
     perror("sprintf failed");
 

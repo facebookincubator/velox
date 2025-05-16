@@ -554,11 +554,12 @@ int dist_op(
   const d_idx_t* d;
 
   if ((d = find_dist(d_name)) == nullptr) {
-    char msg[40 + strlen(d_name)];
-    auto result = sprintf(msg, "Invalid distribution name '%s'", d_name);
+    std::vector<char> msg(40 + strlen(d_name));
+    auto result = snprintf(
+        msg.data(), msg.size(), "Invalid distribution name '%s'", d_name);
     if (result < 0)
       perror("sprintf failed");
-    INTERNAL(msg);
+    INTERNAL(msg.data());
     assert(d != nullptr);
   }
 
@@ -661,9 +662,9 @@ int dist_weight(
   const d_idx_t* d_idx;
 
   if ((d_idx = find_dist(d)) == nullptr) {
-    char msg[40 + strlen(d)];
-    sprintf(msg, "Invalid distribution name '%s'", d);
-    INTERNAL(msg);
+    std::vector<char> msg(40 + strlen(d));
+    snprintf(msg.data(), msg.size(), "Invalid distribution name '%s'", d);
+    INTERNAL(msg.data());
   }
 
   dist = d_idx->dist;
@@ -980,9 +981,9 @@ int MatchDistWeight(
   char* char_val;
 
   if ((d = find_dist(szDist)) == nullptr) {
-    char msg[40 + strlen(szDist)];
-    sprintf(msg, "Invalid distribution name '%s'", szDist);
-    INTERNAL(msg);
+    std::vector<char> msg(40 + strlen(szDist));
+    snprintf(msg.data(), msg.size(), "Invalid distribution name '%s'", szDist);
+    INTERNAL(msg.data());
   }
 
   dist = d->dist;
@@ -1052,14 +1053,14 @@ int findDistValue(
     const char* szDistName,
     int ValueSet,
     DSDGenContext& dsdGenContext) {
-  char szDistValue[128];
+  std::vector<char> szDistValue(128);
   int nRetValue = 1, nDistMax;
 
   nDistMax = distsize(szDistName, dsdGenContext);
 
   for (nRetValue = 1; nRetValue < nDistMax; nRetValue++) {
     dist_member(&szDistValue, szDistName, nRetValue, ValueSet, dsdGenContext);
-    if (strcmp(szValue, szDistValue) == 0)
+    if (strcmp(szValue, szDistValue.data()) == 0)
       break;
   }
 
