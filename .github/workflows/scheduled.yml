@@ -21,11 +21,10 @@ on:
       - '!velox/docs/**'
       - CMakeLists.txt
       - CMake/**
-      - third_party/**
       - scripts/setup-ubuntu.sh
       - scripts/setup-helper-functions.sh
       - .github/workflows/scheduled.yml
-      - setup.py
+      - pyproject.toml
 
   push:
     branches:
@@ -35,7 +34,6 @@ on:
       - '!velox/docs/**'
       - CMakeLists.txt
       - CMake/**
-      - third_party/**
       - scripts/setup-ubuntu.sh
       - scripts/setup-helper-functions.sh
       - .github/workflows/scheduled.yml
