@@ -321,7 +321,6 @@ bool PrestoQueryRunner::isSupported(const exec::FunctionSignature& signature) {
       usesTypeName(signature, "hugeint") ||
       usesTypeName(signature, "hyperloglog") ||
       usesTypeName(signature, "tdigest") ||
-      usesInputTypeName(signature, "json") ||
       usesInputTypeName(signature, "ipaddress") ||
       usesInputTypeName(signature, "ipprefix") ||
       usesInputTypeName(signature, "uuid"));
