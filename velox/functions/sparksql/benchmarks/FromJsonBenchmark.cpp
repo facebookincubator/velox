@@ -59,6 +59,11 @@ class FromJsonBenchmark : public functions::test::FunctionBenchmarkBase {
   }
 };
 
+BENCHMARK(bm_json_depth1_1col) {
+  FromJsonBenchmark benchmark;
+  benchmark.run(StringView(R"({"a": 1})"), ROW({"a"}, {BIGINT()}));
+}
+
 BENCHMARK(bm_json_depth1_4col) {
   FromJsonBenchmark benchmark;
   benchmark.run(
