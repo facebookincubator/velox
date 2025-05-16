@@ -70,7 +70,7 @@ int mk_w_web_page(
 
   /* begin locals declarations */
   int32_t nTemp, nAccess;
-  char szTemp[16];
+  std::vector<char> szTemp(16);
   struct W_WEB_PAGE_TBL *r, *rOldValues = &g_web_page_OldValues;
   tdef* pT = getSimpleTdefsByNumber(WEB_PAGE, dsdGenContext);
 
@@ -78,13 +78,13 @@ int mk_w_web_page(
 
   /* setup invariant values */
   snprintf(
-      szTemp,
-      sizeof(szTemp),
+      szTemp.data(),
+      szTemp.size(),
       "%d-%d-%d",
       CURRENT_YEAR,
       CURRENT_MONTH,
       CURRENT_DAY);
-  strtodt(&dToday, szTemp);
+  strtodt(&dToday, szTemp.data());
   /* set up for the SCD handling */
   nConcurrent =
       static_cast<int>(get_rowcount(CONCURRENT_WEB_SITES, dsdGenContext));

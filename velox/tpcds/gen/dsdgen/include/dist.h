@@ -290,7 +290,7 @@ struct W_DATE_TBL {
   int d_fy_year;
   int d_fy_quarter_seq;
   int d_fy_week_seq;
-  char* d_day_name;
+  const char* d_day_name;
   /* char		d_quarter_name[RS_D_QUARTER_NAME + 1]; derived at print
    * time */
   int d_holiday;

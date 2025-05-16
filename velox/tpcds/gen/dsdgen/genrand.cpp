@@ -429,7 +429,7 @@ int dump_seeds_ds(int tbl, DSDGenContext& dsdGenContext) {
  */
 int gen_charset(
     char* dest,
-    char* set,
+    const char* set,
     int min,
     int max,
     int stream,
@@ -613,7 +613,7 @@ void genrand_email(
     int nColumn,
     DSDGenContext& dsdGenContext) {
   char* pDomain = nullptr;
-  char szCompany[50];
+  std::vector<char> szCompany(50);
   int nCompanyLength;
 
   pick_distribution(&pDomain, "top_domains", 1, 1, nColumn, dsdGenContext);
@@ -622,10 +622,16 @@ void genrand_email(
   gen_charset(&szCompany[0], ALPHANUM, 1, 20, nColumn, dsdGenContext);
   szCompany[nCompanyLength] = '\0';
 
-  if ((strlen(pFirst) + strlen(pLast) + strlen(szCompany) + strlen(pDomain) +
+  if ((strlen(pFirst) + strlen(pLast) + szCompany.size() + strlen(pDomain) +
        3) < (RS_C_EMAIL + 1)) {
-    auto result =
-        sprintf(pEmail, "%s.%s@%s.%s", pFirst, pLast, szCompany, pDomain);
+    auto result = snprintf(
+        pEmail,
+        RS_C_EMAIL + 1,
+        "%s.%s@%s.%s",
+        pFirst,
+        pLast,
+        szCompany.data(),
+        pDomain);
     if (result < 0)
       perror("sprintf failed");
   }
@@ -653,8 +659,9 @@ void genrand_ipaddr(char* pDest, int nColumn, DSDGenContext& dsdGenContext) {
   for (i = 0; i < 4; i++)
     genrand_integer(
         &arQuads[i], DIST_UNIFORM, 1, 255, 0, nColumn, dsdGenContext);
-  auto result = sprintf(
+  auto result = snprintf(
       pDest,
+      16,
       "%03d.%03d.%03d.%03d",
       arQuads[0],
       arQuads[1],

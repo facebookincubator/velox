@@ -37,7 +37,7 @@
 #include "w_web_sales.h"
 
 #define MAX_LIMIT 12
-static ds_limits_t aPriceLimits[MAX_LIMIT] = {
+static const ds_limits_t aPriceLimits[MAX_LIMIT] = {
     {CS_PRICING,
      CS_QUANTITY_MAX,
      CS_MARKUP_MAX,
