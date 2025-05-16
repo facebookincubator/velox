@@ -54,7 +54,7 @@ jobs:
         with:
           ref: ${{ inputs.ref || github.ref }}
           fetch-depth: 0
-          submodules: recursive
+
           persist-credentials: false
 
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
@@ -79,10 +79,10 @@ jobs:
       - name: Install macOS dependencies from brew
         if: startsWith(matrix.os, 'macos')
         run: |
-            export INSTALL_PREFIX="$GITHUB_WORKSPACE/dependencies"
-            echo "CMAKE_PREFIX_PATH=$INSTALL_PREFIX" >> $GITHUB_ENV
-            echo "INSTALL_PREFIX=$INSTALL_PREFIX" >> $GITHUB_ENV
-            echo "DYLD_LIBRARY_PATH=$INSTALL_PREFIX/lib:$DYLD_LIBRARY_PATH" >> $GITHUB_ENV
+          export INSTALL_PREFIX="$GITHUB_WORKSPACE/dependencies"
+          echo "CMAKE_PREFIX_PATH=$INSTALL_PREFIX" >> $GITHUB_ENV
+          echo "INSTALL_PREFIX=$INSTALL_PREFIX" >> $GITHUB_ENV
+          echo "DYLD_LIBRARY_PATH=$INSTALL_PREFIX/lib:$DYLD_LIBRARY_PATH" >> $GITHUB_ENV
 
           source scripts/setup-macos.sh
           install_build_prerequisites
