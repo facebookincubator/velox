@@ -1364,7 +1364,7 @@ TEST_F(TableScanTest, missingColumnsInRepeatedColumns) {
   auto plan = PlanBuilder()
                   .tableScan(
                       ROW({"c1", "c2"}, {c1Type, c2Type}),
-                      {},
+                      std::vector<std::string>(),
                       "c0 % 2 = 0",
                       ROW({"c0", "c1", "c2"}, {BIGINT(), c1Type, c2Type}))
                   .planNode();
@@ -1938,7 +1938,9 @@ TEST_F(TableScanTest, validFileNoData) {
                    .length(fs::file_size(filePath) / 2)
                    .build();
 
-  auto op = PlanBuilder().tableScan(rowType, {}, "", rowType).planNode();
+  auto op = PlanBuilder()
+                .tableScan(rowType, std::vector<std::string>(), "", rowType)
+                .planNode();
   assertQuery(op, split, "");
 }
 
@@ -2706,7 +2708,9 @@ TEST_F(TableScanTest, filterBasedSkippingWithoutDecompression) {
 
   auto assertQuery = [&](const std::string& remainingFilter) {
     return TableScanTest::assertQuery(
-        PlanBuilder().tableScan(rowType, {}, remainingFilter).planNode(),
+        PlanBuilder()
+            .tableScan(rowType, std::vector<std::string>(), remainingFilter)
+            .planNode(),
         filePaths,
         "SELECT * FROM tmp WHERE " + remainingFilter);
   };
@@ -3225,7 +3229,10 @@ TEST_F(TableScanTest, bucketConversion) {
   };
   {
     auto outputType = ROW({"c1"}, {BIGINT()});
-    auto plan = PlanBuilder().tableScan(outputType, {}, "", schema).planNode();
+    auto plan =
+        PlanBuilder()
+            .tableScan(outputType, std::vector<std::string>(), "", schema)
+            .planNode();
     std::vector<int64_t> c1;
     for (int bucket : selectedBuckets) {
       for (int i = bucket; i < 2 * kSize + 1; i += kNewNumBuckets) {
@@ -3238,9 +3245,11 @@ TEST_F(TableScanTest, bucketConversion) {
   {
     SCOPED_TRACE("With remaining filter");
     auto outputType = ROW({"c1"}, {BIGINT()});
-    auto plan = PlanBuilder()
-                    .tableScan(outputType, {}, "c1 % 7 != 0", schema)
-                    .planNode();
+    auto plan =
+        PlanBuilder()
+            .tableScan(
+                outputType, std::vector<std::string>(), "c1 % 7 != 0", schema)
+            .planNode();
     std::vector<int64_t> c1;
     for (int bucket : selectedBuckets) {
       for (int i = bucket; i < 2 * kSize + 1; i += kNewNumBuckets) {
@@ -3645,13 +3654,19 @@ TEST_F(TableScanTest, remainingFilter) {
   // Remaining filter converted into tuple domain.
   assertQuery(
       PlanBuilder(pool_.get())
-          .tableScan(rowType, {}, "not (c0 > 0::INTEGER or c1 > 0::INTEGER)")
+          .tableScan(
+              rowType,
+              std::vector<std::string>(),
+              "not (c0 > 0::INTEGER or c1 > 0::INTEGER)")
           .planNode(),
       filePaths,
       "SELECT * FROM tmp WHERE not (c0 > 0 or c1 > 0)");
   assertQuery(
       PlanBuilder(pool_.get())
-          .tableScan(rowType, {}, "not (c0 > 0::INTEGER or c1 > c0)")
+          .tableScan(
+              rowType,
+              std::vector<std::string>(),
+              "not (c0 > 0::INTEGER or c1 > c0)")
           .planNode(),
       filePaths,
       "SELECT * FROM tmp WHERE not (c0 > 0 or c1 > c0)");
@@ -3670,10 +3685,12 @@ TEST_F(TableScanTest, remainingFilterLazyWithMultiReferences) {
   CursorParameters params;
   params.copyResult = false;
   params.serialExecution = true;
-  params.planNode =
-      PlanBuilder()
-          .tableScan(schema, {}, "NOT (c0 % 2 == 0 AND c2 % 3 == 0)")
-          .planNode();
+  params.planNode = PlanBuilder()
+                        .tableScan(
+                            schema,
+                            std::vector<std::string>(),
+                            "NOT (c0 % 2 == 0 AND c2 % 3 == 0)")
+                        .planNode();
   auto cursor = TaskCursor::create(params);
   cursor->task()->addSplit(
       "0", exec::Split(makeHiveConnectorSplit(file->getPath())));
@@ -3711,7 +3728,8 @@ TEST_F(TableScanTest, sharedNullBufferFromComplexResult) {
   CursorParameters params;
   params.copyResult = false;
   params.serialExecution = true;
-  params.planNode = PlanBuilder().tableScan(schema, {}).planNode();
+  params.planNode =
+      PlanBuilder().tableScan(schema, std::vector<std::string>()).planNode();
   std::unordered_map<std::string, std::string> config;
   // Set output buffer row limit to 1 to trigger one batch read at a time.
   params.queryConfigs.emplace(
@@ -3752,9 +3770,11 @@ TEST_F(
   CursorParameters params;
   params.copyResult = false;
   params.serialExecution = true;
-  params.planNode = PlanBuilder()
-                        .tableScan(schema, {}, "c0 % 7 == 0 AND c1 % 2 == 0")
-                        .planNode();
+  params.planNode =
+      PlanBuilder()
+          .tableScan(
+              schema, std::vector<std::string>(), "c0 % 7 == 0 AND c1 % 2 == 0")
+          .planNode();
   auto cursor = TaskCursor::create(params);
   cursor->task()->addSplit(
       "0", exec::Split(makeHiveConnectorSplit(file->getPath())));
@@ -3799,10 +3819,11 @@ TEST_F(TableScanTest, remainingFilterSkippedStrides) {
   }
   createDuckDbTable(vectors);
   core::PlanNodeId tableScanNodeId;
-  auto plan = PlanBuilder()
-                  .tableScan(rowType, {}, "c0 = 0 or c1 = 2")
-                  .capturePlanNodeId(tableScanNodeId)
-                  .planNode();
+  auto plan =
+      PlanBuilder()
+          .tableScan(rowType, std::vector<std::string>(), "c0 = 0 or c1 = 2")
+          .capturePlanNodeId(tableScanNodeId)
+          .planNode();
   auto task =
       assertQuery(plan, filePaths, "SELECT * FROM tmp WHERE c0 = 0 or c1 = 2");
   auto skippedStrides = toPlanStats(task->taskStats())
@@ -3854,7 +3875,9 @@ TEST_F(TableScanTest, randomSample) {
   }
   CursorParameters params;
   params.planNode =
-      PlanBuilder().tableScan(rowType, {}, "rand() < 0.01").planNode();
+      PlanBuilder()
+          .tableScan(rowType, std::vector<std::string>(), "rand() < 0.01")
+          .planNode();
   auto cursor = TaskCursor::create(params);
   for (auto& file : files) {
     cursor->task()->addSplit("0", makeHiveSplit(file->getPath()));
@@ -4383,11 +4406,13 @@ TEST_F(TableScanTest, parallelPrepare) {
 
   auto filePath = TempFilePath::create();
   writeToFile(filePath->getPath(), {data});
-  auto plan =
-      exec::test::PlanBuilder(pool_.get())
-          .tableScan(ROW({"c0"}, {INTEGER()}), {}, kLargeRemainingFilter)
-          .project({"c0"})
-          .planNode();
+  auto plan = exec::test::PlanBuilder(pool_.get())
+                  .tableScan(
+                      ROW({"c0"}, {INTEGER()}),
+                      std::vector<std::string>(),
+                      kLargeRemainingFilter)
+                  .project({"c0"})
+                  .planNode();
 
   std::vector<exec::Split> splits;
   for (auto i = 0; i < kNumParallel; ++i) {
@@ -4421,7 +4446,7 @@ TEST_F(TableScanTest, dictionaryMemo) {
   auto file = TempFilePath::create();
   writeToFile(file->getPath(), {rows});
   auto plan = PlanBuilder()
-                  .tableScan(rowType, {}, "a like '%m'")
+                  .tableScan(rowType, std::vector<std::string>(), "a like '%m'")
                   .project({"length(b.c)"})
                   .planNode();
 #ifndef NDEBUG
@@ -4452,7 +4477,7 @@ TEST_F(TableScanTest, reuseRowVector) {
   auto file = TempFilePath::create();
   writeToFile(file->getPath(), {data});
   auto plan = PlanBuilder()
-                  .tableScan(rowType, {}, "c0 < 5")
+                  .tableScan(rowType, std::vector<std::string>(), "c0 < 5")
                   .project({"c1.c0"})
                   .planNode();
   auto split = exec::test::HiveConnectorSplitBuilder(file->getPath()).build();
@@ -5159,12 +5184,16 @@ TEST_F(TableScanTest, readFlatMapAsStruct) {
   writeToFile(file->getPath(), {vector}, config, writeSchema);
   auto readSchema = asRowType(vector->type());
   auto plan =
-      PlanBuilder().tableScan(readSchema, {}, "", writeSchema).planNode();
+      PlanBuilder()
+          .tableScan(readSchema, std::vector<std::string>(), "", writeSchema)
+          .planNode();
   auto split = makeHiveConnectorSplit(file->getPath());
   AssertQueryBuilder(plan).split(split).assertResults(vector);
   readSchema =
       ROW({"c0"}, {ROW({"1", "4", "2"}, {BIGINT(), BIGINT(), BIGINT()})});
-  plan = PlanBuilder().tableScan(readSchema, {}, "", writeSchema).planNode();
+  plan = PlanBuilder()
+             .tableScan(readSchema, std::vector<std::string>(), "", writeSchema)
+             .planNode();
   split = makeHiveConnectorSplit(file->getPath());
   auto expected = makeRowVector({makeRowVector(
       {"1", "4", "2"},
@@ -5284,7 +5313,7 @@ TEST_F(TableScanTest, dynamicFilterWithRowIndexColumn) {
   auto plan = PlanBuilder(planNodeIdGenerator)
                   .tableScan(
                       ROW({"row_index", "a"}, {BIGINT(), BIGINT()}),
-                      {},
+                      std::vector<std::string>(),
                       "",
                       nullptr,
                       assignments)
