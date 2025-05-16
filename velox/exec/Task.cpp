@@ -511,6 +511,7 @@ void Task::initDriverFactory() {
       "Serial execution mode doesn't support delivering results to a "
       "callback");
 
+  taskStats_.executionStartTimeMs = getCurrentTimeMs();
   LocalPlanner::plan(
       planFragment_, nullptr, &driverFactories_, queryCtx_->queryConfig(), 1);
   exchangeClients_.resize(driverFactories_.size());
@@ -712,7 +713,6 @@ RowVectorPtr Task::next(ContinueFuture* future) {
 
   VELOX_CHECK(!driverFactories_.empty());
   if (numDriversUnderBarrier_ == 0) {
-    taskStats_.executionStartTimeMs = getCurrentTimeMs();
     if (underBarrier()) {
       startDriverBarriersLocked();
     }
