@@ -16,7 +16,6 @@
 
 #include "velox/dwio/parquet/writer/Writer.h"
 #include <arrow/c/bridge.h>
-#include <arrow/io/interfaces.h>
 #include <arrow/table.h>
 #include "velox/common/base/Pointers.h"
 #include "velox/common/config/Config.h"
