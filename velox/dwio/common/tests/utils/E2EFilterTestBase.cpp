@@ -681,8 +681,13 @@ void E2EFilterTestBase::testSubfieldsPruning() {
         [](auto) { return 1; },
         [](auto) { return 0; },
         [](auto) { return "foofoofoofoofoo"_sv; });
+    auto e = vectorMaker.mapVector<int64_t, int64_t>(
+        batchSize_,
+        [&](auto) { return kMapSize; },
+        [](auto j) { return j; },
+        [&](auto j) { return j % kMapSize; });
     batches.push_back(
-        vectorMaker.rowVector({"a", "b", "c", "d"}, {a, b, c, d}));
+        vectorMaker.rowVector({"a", "b", "c", "d", "e"}, {a, b, c, d, e}));
   }
   writeToMemory(batches[0]->type(), batches, false);
   auto spec = std::make_shared<common::ScanSpec>("<root>");
@@ -707,6 +712,10 @@ void E2EFilterTestBase::testSubfieldsPruning() {
   auto specD = spec->addFieldRecursively("d", *MAP(BIGINT(), VARCHAR()), 3);
   specD->childByName(common::ScanSpec::kMapKeysFieldName)
       ->setFilter(common::createBigintValues({1}, false));
+  spec->addFieldRecursively("e", *MAP(BIGINT(), BIGINT()), 4);
+  auto specE = spec->addFieldRecursively("e", *MAP(BIGINT(), BIGINT()), 4);
+  specE->childByName(common::ScanSpec::kMapValuesFieldName)
+      ->setFilter(common::createBigintValues({0, 2, 4}, false));
   ReaderOptions readerOpts{leafPool_.get()};
   RowReaderOptions rowReaderOpts;
   auto input = std::make_unique<BufferedInput>(
@@ -756,6 +765,17 @@ void E2EFilterTestBase::testSubfieldsPruning() {
       auto* dd = actual->childAt(3)->loadedVector()->asUnchecked<MapVector>();
       ASSERT_FALSE(dd->isNullAt(ii));
       ASSERT_EQ(dd->sizeAt(ii), 0);
+      auto* e = expected->childAt(4)->asUnchecked<MapVector>();
+      auto* ee = actual->childAt(4)->loadedVector()->asUnchecked<MapVector>();
+      ASSERT_FALSE(ee->isNullAt(ii));
+      ASSERT_EQ(ee->sizeAt(ii), (kMapSize + 1) / 2);
+      for (int k = 0; k < kMapSize; k += 2) {
+        int k1 = ee->offsetAt(ii) + k / 2;
+        int k2 = e->offsetAt(j) + k;
+        ASSERT_TRUE(ee->mapKeys()->equalValueAt(e->mapKeys().get(), k1, k2));
+        ASSERT_TRUE(
+            ee->mapValues()->equalValueAt(e->mapValues().get(), k1, k2));
+      }
       ++ii;
     }
   }
