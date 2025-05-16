@@ -14,4 +14,3 @@
 
 velox_add_library(velox_tpcds_append_info OBJECT append_info-c.cpp)
 velox_link_libraries(velox_tpcds_append_info Folly::folly xsimd)
-
