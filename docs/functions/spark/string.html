@@ -280,6 +280,20 @@ is any character contained in <code class="docutils literal notranslate"><span c
 </dd></dl>
 
 <dl class="spark function">
+<dt class="sig sig-object spark" id="luhn_check">
+<span class="sig-name descname"><span class="pre">luhn_check</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">string</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">boolean</span></span></span><a class="headerlink" href="#luhn_check" title="Link to this definition">¶</a></dt>
+<dd><p>Returns true if <code class="docutils literal notranslate"><span class="pre">string</span></code> passes the Luhn algorithm check. Otherwise, returns false.
+The Luhn algorithm is a simple check digit formula used to validate a variety of identification numbers,
+defined in US patent 2950048A.
+Returns NULL if <code class="docutils literal notranslate"><span class="pre">string</span></code> is NULL.</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">luhn_check</span><span class="p">(</span><span class="s1">&#39;4111111111111111&#39;</span><span class="p">);</span> <span class="o">--</span> <span class="n">true</span>
+<span class="n">SELECT</span> <span class="n">luhn_check</span><span class="p">(</span><span class="s1">&#39;378282246310006&#39;</span><span class="p">);</span> <span class="o">--</span> <span class="n">false</span>
+<span class="n">SELECT</span> <span class="n">luhn_check</span><span class="p">(</span><span class="n">NULL</span><span class="p">);</span> <span class="o">--</span> <span class="n">NULL</span>
+</pre></div>
+</div>
+</dd></dl>
+
+<dl class="spark function">
 <dt class="sig sig-object spark" id="mask">
 <span class="sig-name descname"><span class="pre">mask</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">string</span></span></em><span class="optional">[</span>, <em class="sig-param"><span class="n"><span class="pre">upperChar</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">lowerChar</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">digitChar</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">otherChar</span></span></em><span class="optional">]</span><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">string</span></span></span><a class="headerlink" href="#mask" title="Link to this definition">¶</a></dt>
 <dd><p>Returns a masked version of the input <code class="docutils literal notranslate"><span class="pre">string</span></code>.
@@ -605,6 +619,7 @@ The specified character is any character contained in <code class="docutils lite
 <li><a class="reference internal" href="#lower"><code class="docutils literal notranslate"><span class="pre">lower()</span></code></a></li>
 <li><a class="reference internal" href="#lpad"><code class="docutils literal notranslate"><span class="pre">lpad()</span></code></a></li>
 <li><a class="reference internal" href="#ltrim"><code class="docutils literal notranslate"><span class="pre">ltrim()</span></code></a></li>
+<li><a class="reference internal" href="#luhn_check"><code class="docutils literal notranslate"><span class="pre">luhn_check()</span></code></a></li>
 <li><a class="reference internal" href="#mask"><code class="docutils literal notranslate"><span class="pre">mask()</span></code></a></li>
 <li><a class="reference internal" href="#overlay"><code class="docutils literal notranslate"><span class="pre">overlay()</span></code></a></li>
 <li><a class="reference internal" href="#repeat"><code class="docutils literal notranslate"><span class="pre">repeat()</span></code></a></li>
