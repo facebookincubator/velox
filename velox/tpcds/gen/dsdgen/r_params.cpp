@@ -322,10 +322,11 @@ int init_params(DSDGenContext& dsdGenContext) {
     dsdGenContext.params[dsdGenContext.options[i].index] =
         static_cast<char*>(malloc(PARAM_MAX_LEN * sizeof(char)));
     MALLOC_CHECK(dsdGenContext.params[dsdGenContext.options[i].index]);
-    strncpy(
+    snprintf(
         dsdGenContext.params[dsdGenContext.options[i].index],
-        dsdGenContext.options[i].dflt,
-        80);
+        80,
+        "%s",
+        dsdGenContext.options[i].dflt);
     if (*dsdGenContext.options[i].dflt)
       dsdGenContext.options[i].flags = static_cast<int>(
           static_cast<uint32_t>(dsdGenContext.options[i].flags) | OPT_DFLT);

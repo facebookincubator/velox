@@ -103,7 +103,7 @@ void hierarchy_item(
           dsdGenContext);
       int idValue = static_cast<int>(*id);
       char sTemp[6 + std::to_string(idValue).size()];
-      auto result = sprintf(sTemp, " #%d", idValue);
+      auto result = snprintf(sTemp, sizeof(sTemp), " #%d", idValue);
       if (result < 0)
         perror("sprintf failed");
       strcat(*name, sTemp);
@@ -209,7 +209,8 @@ void bitmap_to_dist(
   char msg[len + 31];
 
   if ((s = distsize(distname, dsdGenContext)) == -1) {
-    auto result = sprintf(msg, "Invalid distribution name '%s'", distname);
+    auto result =
+        snprintf(msg, sizeof(msg), "Invalid distribution name '%s'", distname);
     if (result < 0)
       perror("sprintf failed");
     INTERNAL(msg);

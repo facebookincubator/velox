@@ -217,3 +217,9 @@ TEST_F(TpcdsConnectorTest, inventoryDateCount) {
 }
 } // namespace
 } // namespace facebook::velox::connector::tpcds::test
+
+int main(int argc, char** argv) {
+  testing::InitGoogleTest(&argc, argv);
+  folly::Init init{&argc, &argv, false};
+  return RUN_ALL_TESTS();
+}

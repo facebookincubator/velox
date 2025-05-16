@@ -75,7 +75,7 @@ ds_key_t genrand_key(
     DSDGenContext& dsdGenContext);
 int gen_charset(
     char* dest,
-    char* set,
+    const char* set,
     int min,
     int max,
     int stream,

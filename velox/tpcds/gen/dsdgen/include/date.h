@@ -40,8 +40,8 @@ typedef struct DATE_T {
 date_t* mk_date(void);
 
 int jtodt(date_t* dest, int i);
-int strtodt(date_t* dest, char* s);
-date_t* strtodate(char* str);
+int strtodt(date_t* dest, const char* s);
+date_t* strtodate(const char* str);
 int strtotime(char* str);
 
 char* dttostr(date_t* d);
@@ -64,6 +64,6 @@ int getDateWeightFromJulian(int jDay, int nDistribution);
 #define OP_SAME_LY 0x03 /* get date for same day/month, last year */
 #define OP_SAME_LQ 0x04 /* get date for same offset in the prior quarter */
 
-extern char* weekday_names[];
+extern const char* weekday_names[];
 
 #endif /* R_DATE_H */

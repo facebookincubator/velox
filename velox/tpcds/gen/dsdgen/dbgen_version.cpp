@@ -70,24 +70,32 @@ int mk_dbgen_version(
   time(&ltime); /* Get time in seconds */
   pTimeStamp = localtime(&ltime); /* Convert time to struct */
 
-  auto result = sprintf(
+  auto result = snprintf(
       r->szDate,
+      sizeof(r->szDate),
       "%4d-%02d-%02d",
       pTimeStamp->tm_year + 1900,
       pTimeStamp->tm_mon + 1,
       pTimeStamp->tm_mday);
   if (result < 0)
     perror("sprintf failed");
-  result = sprintf(
+  result = snprintf(
       r->szTime,
+      sizeof(r->szTime),
       "%02d:%02d:%02d",
       pTimeStamp->tm_hour,
       pTimeStamp->tm_min,
       pTimeStamp->tm_sec);
   if (result < 0)
     perror("sprintf failed");
-  result = sprintf(
-      r->szVersion, "%d.%d.%d%s", VERSION, RELEASE, MODIFICATION, PATCH);
+  result = snprintf(
+      r->szVersion,
+      sizeof(r->szVersion),
+      "%d.%d.%d%s",
+      VERSION,
+      RELEASE,
+      MODIFICATION,
+      PATCH);
   if (result < 0)
     perror("sprintf failed");
   strcpy(r->szCmdLineArgs, "--this_table_is_rather_pointless");
