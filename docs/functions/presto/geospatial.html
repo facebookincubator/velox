@@ -175,6 +175,38 @@ but their interiors do not intersect.</p>
 </dd></dl>
 
 </section>
+<section id="spatial-operations">
+<h2>Spatial Operations<a class="headerlink" href="#spatial-operations" title="Link to this heading">¶</a></h2>
+<dl class="py function">
+<dt class="sig sig-object py" id="ST_Difference">
+<span class="sig-name descname"><span class="pre">ST_Difference</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">geometry1</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">Geometry</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">geometry2</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">Geometry</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">difference:</span> <span class="pre">Geometry</span></span></span><a class="headerlink" href="#ST_Difference" title="Link to this definition">¶</a></dt>
+<dd><p>Returns the geometry that represents the portion of <code class="docutils literal notranslate"><span class="pre">geometry1</span></code> that is
+not contained in <code class="docutils literal notranslate"><span class="pre">geometry2</span></code>.</p>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="ST_Intersection">
+<span class="sig-name descname"><span class="pre">ST_Intersection</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">geometry1</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">Geometry</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">geometry2</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">Geometry</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">intersection:</span> <span class="pre">Geometry</span></span></span><a class="headerlink" href="#ST_Intersection" title="Link to this definition">¶</a></dt>
+<dd><p>Returns the geometry that represents the portion of <code class="docutils literal notranslate"><span class="pre">geometry1</span></code> that is
+also contained in <code class="docutils literal notranslate"><span class="pre">geometry2</span></code>.</p>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="ST_SymDifference">
+<span class="sig-name descname"><span class="pre">ST_SymDifference</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">geometry1</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">Geometry</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">geometry2</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">Geometry</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">symdifference:</span> <span class="pre">Geometry</span></span></span><a class="headerlink" href="#ST_SymDifference" title="Link to this definition">¶</a></dt>
+<dd><p>Returns the geometry that represents the portion of <code class="docutils literal notranslate"><span class="pre">geometry1</span></code> that is
+not contained in <code class="docutils literal notranslate"><span class="pre">geometry2</span></code> as well as the portion of <code class="docutils literal notranslate"><span class="pre">geometry1</span></code> that
+is not congtained in <code class="docutils literal notranslate"><span class="pre">geometry1</span></code>.</p>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="ST_Union">
+<span class="sig-name descname"><span class="pre">ST_Union</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">geometry1</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">Geometry</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">geometry2</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">Geometry</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">intersection:</span> <span class="pre">Geometry</span></span></span><a class="headerlink" href="#ST_Union" title="Link to this definition">¶</a></dt>
+<dd><p>Returns the geometry that represents the all points in either <code class="docutils literal notranslate"><span class="pre">geometry1</span></code>
+or <code class="docutils literal notranslate"><span class="pre">geometry2</span></code>.</p>
+</dd></dl>
+
+</section>
 <section id="bing-tile-functions">
 <h2>Bing Tile Functions<a class="headerlink" href="#bing-tile-functions" title="Link to this heading">¶</a></h2>
 <p>Bing tiles are a convenient quad-tree representation of the WGS84 projection of
@@ -289,6 +321,13 @@ specified.</p>
 <li><a class="reference internal" href="#ST_Relat"><code class="docutils literal notranslate"><span class="pre">ST_Relat()</span></code></a></li>
 <li><a class="reference internal" href="#ST_Touches"><code class="docutils literal notranslate"><span class="pre">ST_Touches()</span></code></a></li>
 <li><a class="reference internal" href="#ST_Within"><code class="docutils literal notranslate"><span class="pre">ST_Within()</span></code></a></li>
+</ul>
+</li>
+<li><a class="reference internal" href="#spatial-operations">Spatial Operations</a><ul>
+<li><a class="reference internal" href="#ST_Difference"><code class="docutils literal notranslate"><span class="pre">ST_Difference()</span></code></a></li>
+<li><a class="reference internal" href="#ST_Intersection"><code class="docutils literal notranslate"><span class="pre">ST_Intersection()</span></code></a></li>
+<li><a class="reference internal" href="#ST_SymDifference"><code class="docutils literal notranslate"><span class="pre">ST_SymDifference()</span></code></a></li>
+<li><a class="reference internal" href="#ST_Union"><code class="docutils literal notranslate"><span class="pre">ST_Union()</span></code></a></li>
 </ul>
 </li>
 <li><a class="reference internal" href="#bing-tile-functions">Bing Tile Functions</a><ul>
