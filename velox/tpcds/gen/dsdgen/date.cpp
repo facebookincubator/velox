@@ -42,9 +42,10 @@
 static int m_days[2][13] = {
     {0, 0, 31, 59, 90, 120, 151, 181, 212, 243, 273, 304, 334},
     {0, 0, 31, 60, 91, 121, 152, 182, 213, 244, 274, 305, 335}};
-static char* qtr_start[5] = {NULL, "01-01", "04-01", "07-01", "10-01"};
-char* weekday_names[8] = {
-    NULL,
+const std::vector<std::string> qtr_start =
+    {"", "01-01", "04-01", "07-01", "10-01"};
+const std::vector<std::string> weekday_names = {
+    "",
     "Sunday",
     "Monday",
     "Tuesday",
@@ -122,7 +123,7 @@ int strtotime(char* str) {
  * Side Effects:
  * TODO: None
  */
-date_t* strtodate(char* str) {
+date_t* strtodate(const char* str) {
   date_t* res;
 
   res = (date_t*)malloc(sizeof(struct DATE_T));
@@ -218,7 +219,7 @@ int dttoj(date_t* dt) {
  * Side Effects:
  * TODO: Need to allow for date formats other than Y4MD-
  */
-int strtodt(date_t* dest, char* s) {
+int strtodt(date_t* dest, const char* s) {
   int nRetCode = 0;
 
   if (s == NULL) {
@@ -251,21 +252,20 @@ int strtodt(date_t* dest, char* s) {
  * TODO: 20000110 Need to handle more than Y4MD-
  */
 char* dttostr(date_t* d) {
-  static char* res;
+  static std::vector<char> res;
   static int init = 0;
 
   if (!init) {
-    res = (char*)malloc(sizeof(char) * 11);
-    MALLOC_CHECK(res);
+    res.resize(sizeof(char) * 11);
     init = 1;
   }
 
   if (d == NULL)
     return (NULL);
 
-  sprintf(res, "%4d-%02d-%02d", d->year, d->month, d->day);
+  snprintf(res.data(), 11, "%4d-%02d-%02d", d->year, d->month, d->day);
 
-  return (res);
+  return res.data();
 }
 
 /*
@@ -305,7 +305,7 @@ int date_init(void) {
  */
 int date_t_op(date_t* dest, int op, date_t* d1, date_t* d2) {
   int tJulian;
-  char tString[11];
+  std::vector<char> tString(20);
   date_t tDate;
 
   switch (op) {
@@ -319,54 +319,100 @@ int date_t_op(date_t* dest, int op, date_t* d1, date_t* d2) {
       break;
     case OP_SAME_LY:
       if (is_leap(d1->year) && (d1->month == 2) && (d1->day == 29))
-        sprintf(tString, "%d-02-28", d1->year - 1);
+        snprintf(tString.data(), tString.size(), "%d-02-28", d1->year - 1);
       else
-        sprintf(tString, "%4d-%02d-%02d", d1->year - 1, d1->month, d1->day);
-      strtodt(dest, tString);
+        snprintf(
+            tString.data(),
+            tString.size(),
+            "%4d-%02d-%02d",
+            d1->year - 1,
+            d1->month,
+            d1->day);
+      strtodt(dest, tString.data());
       break;
     case OP_SAME_LQ:
       switch (d1->month) {
         case 1:
         case 2:
         case 3:
-          sprintf(tString, "%4d-%s", d1->year, qtr_start[1]);
-          strtodt(&tDate, tString);
+          snprintf(
+              tString.data(),
+              tString.size(),
+              "%4d-%s",
+              d1->year,
+              qtr_start[1].c_str());
+          strtodt(&tDate, tString.data());
           tJulian = d1->julian - tDate.julian;
-          sprintf(tString, "%4d-%s", d1->year - 1, qtr_start[4]);
-          strtodt(&tDate, tString);
+          snprintf(
+              tString.data(),
+              tString.size(),
+              "%4d-%s",
+              d1->year - 1,
+              qtr_start[4].c_str());
+          strtodt(&tDate, tString.data());
           tJulian += tDate.julian;
           jtodt(dest, tJulian);
           break;
         case 4:
         case 5:
         case 6:
-          sprintf(tString, "%4d-%s", d1->year, qtr_start[2]);
-          strtodt(&tDate, tString);
+          snprintf(
+              tString.data(),
+              tString.size(),
+              "%4d-%s",
+              d1->year,
+              qtr_start[2].c_str());
+          strtodt(&tDate, tString.data());
           tJulian = d1->julian - tDate.julian;
-          sprintf(tString, "%4d-%s", d1->year, qtr_start[1]);
-          strtodt(&tDate, tString);
+          snprintf(
+              tString.data(),
+              tString.size(),
+              "%4d-%s",
+              d1->year,
+              qtr_start[1].c_str());
+          strtodt(&tDate, tString.data());
           tJulian += tDate.julian;
           jtodt(dest, tJulian);
           break;
         case 7:
         case 8:
         case 9:
-          sprintf(tString, "%4d-%s", d1->year, qtr_start[3]);
-          strtodt(&tDate, tString);
+          snprintf(
+              tString.data(),
+              tString.size(),
+              "%4d-%s",
+              d1->year,
+              qtr_start[3].c_str());
+          strtodt(&tDate, tString.data());
           tJulian = d1->julian - tDate.julian;
-          sprintf(tString, "%4d-%s", d1->year, qtr_start[2]);
-          strtodt(&tDate, tString);
+          snprintf(
+              tString.data(),
+              tString.size(),
+              "%4d-%s",
+              d1->year,
+              qtr_start[2].c_str());
+          strtodt(&tDate, tString.data());
           tJulian += tDate.julian;
           jtodt(dest, tJulian);
           break;
         case 10:
         case 11:
         case 12:
-          sprintf(tString, "%4d-%s", d1->year, qtr_start[4]);
-          strtodt(&tDate, tString);
+          snprintf(
+              tString.data(),
+              tString.size(),
+              "%4d-%s",
+              d1->year,
+              qtr_start[4].c_str());
+          strtodt(&tDate, tString.data());
           tJulian = d1->julian - tDate.julian;
-          sprintf(tString, "%4d-%s", d1->year, qtr_start[3]);
-          strtodt(&tDate, tString);
+          snprintf(
+              tString.data(),
+              tString.size(),
+              "%4d-%s",
+              d1->year,
+              qtr_start[3].c_str());
+          strtodt(&tDate, tString.data());
           tJulian += tDate.julian;
           jtodt(dest, tJulian);
           break;

@@ -87,11 +87,16 @@ int mk_address(ds_addr_t* pAddr, int nColumn, DSDGenContext& dsdGenContext) {
   /* suite number is alphabetic 50% of the time */
   genrand_integer(&i, DIST_UNIFORM, 1, 100, 0, nColumn, dsdGenContext);
   if (i & 0x01) {
-    auto result = sprintf(pAddr->suite_num, "Suite %d", (i >> 1) * 10);
+    auto result = snprintf(
+        pAddr->suite_num, sizeof(pAddr->suite_num), "Suite %d", (i >> 1) * 10);
     if (result < 0)
       perror("sprintf failed");
   } else {
-    auto result = sprintf(pAddr->suite_num, "Suite %c", ((i >> 1) % 25) + 'A');
+    auto result = snprintf(
+        pAddr->suite_num,
+        sizeof(pAddr->suite_num),
+        "Suite %c",
+        ((i >> 1) % 25) + 'A');
     if (result < 0)
       perror("sprintf failed");
   }
@@ -149,8 +154,9 @@ int mk_address(ds_addr_t* pAddr, int nColumn, DSDGenContext& dsdGenContext) {
     pAddr->zip += 600;
   pAddr->zip += (szZipPrefix[0] - '0') * 10000;
 
-  auto result = sprintf(
+  auto result = snprintf(
       szAddr,
+      sizeof(szAddr),
       "%d %s %s %s",
       pAddr->street_num,
       pAddr->street_name1,
@@ -207,12 +213,12 @@ int mk_suitenumber(int nTable, char* dest, DSDGenContext& dsdGenContext) {
   genrand_integer(&i, DIST_UNIFORM, 1, 100, 0, nTable, dsdGenContext);
   if (i <= 50) {
     genrand_integer(&i, DIST_UNIFORM, 1, 1000, 0, nTable, dsdGenContext);
-    auto result = sprintf(dest, "Suite %d", i);
+    auto result = snprintf(dest, 11, "Suite %d", i);
     if (result < 0)
       perror("sprintf failed");
   } else {
     genrand_integer(&i, DIST_UNIFORM, 0, 25, 0, nTable, dsdGenContext);
-    auto result = sprintf(dest, "Suite %c", i + 'A');
+    auto result = snprintf(dest, 10, "Suite %c", i + 'A');
     if (result < 0)
       perror("sprintf failed");
   }
@@ -255,7 +261,8 @@ int mk_streetname(int nTable, char* dest, DSDGenContext& dsdGenContext) {
 
   if (pTemp1 && pTemp2) {
     if (strlen(pTemp2)) {
-      auto result = sprintf(dest, "%s %s", pTemp1, pTemp2);
+      auto result = snprintf(
+          dest, strlen(pTemp1) + strlen(pTemp2) + 2, "%s %s", pTemp1, pTemp2);
       if (result < 0)
         perror("sprintf failed");
     } else
@@ -365,8 +372,13 @@ int mk_zipcode(
     nCityCode = city_hash(nTable, city);
     genrand_integer(
         &nPlusFour, DIST_UNIFORM, 1, 9999, 0, nTable, dsdGenContext);
-    auto result =
-        sprintf(dest, "%s%04d-%04d", szZipPrefix, nCityCode, nPlusFour);
+    auto result = snprintf(
+        dest,
+        strlen(szZipPrefix) + 10,
+        "%s%04d-%04d",
+        szZipPrefix,
+        nCityCode,
+        nPlusFour);
     if (result < 0)
       perror("sprintf failed");
   }

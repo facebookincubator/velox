@@ -77,7 +77,7 @@ table_func_t w_tdef_funcs[] = {
     {"web_sales", mk_w_web_sales, {NULL, NULL}, NULL},
     {"web_site", mk_w_web_site, {NULL, NULL}, NULL},
     {"dbgen_version", mk_dbgen_version, {NULL, NULL}, NULL},
-    {NULL}};
+    {NULL, NULL, {NULL, NULL}, NULL}};
 
 table_func_t* getTdefFunctionsByNumber(int nTable) {
   return (&w_tdef_funcs[nTable]);

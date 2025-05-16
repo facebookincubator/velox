@@ -101,7 +101,7 @@ int mk_w_date(void* info_arr, ds_key_t index, DSDGenContext& dsdGenContext) {
   r->d_fy_year = r->d_year;
   r->d_fy_quarter_seq = r->d_quarter_seq;
   r->d_fy_week_seq = r->d_week_seq;
-  r->d_day_name = weekday_names[r->d_dow + 1];
+  r->d_day_name = weekday_names[r->d_dow + 1].c_str();
   dist_member(&r->d_holiday, "calendar", day_index, 8, dsdGenContext);
   if ((r->d_dow == 5) || (r->d_dow == 6))
     r->d_weekend = 1;
@@ -133,7 +133,7 @@ int mk_w_date(void* info_arr, ds_key_t index, DSDGenContext& dsdGenContext) {
     r->d_current_week = (r->d_week_seq == CURRENT_WEEK) ? 1 : 0;
   }
 
-  char sQuarterName[7];
+  std::vector<char> sQuarterName(7);
 
   void* info = append_info_get(info_arr, DATET);
   append_row_start(info);
@@ -153,8 +153,9 @@ int mk_w_date(void* info_arr, ds_key_t index, DSDGenContext& dsdGenContext) {
   append_integer(D_FY_QUARTER_SEQ, info, r->d_fy_quarter_seq);
   append_integer(D_FY_WEEK_SEQ, info, r->d_fy_week_seq);
   append_varchar(D_DAY_NAME, info, r->d_day_name);
-  snprintf(sQuarterName, sizeof(sQuarterName), "%4dQ%d", r->d_year, r->d_qoy);
-  append_varchar(D_QUARTER_NAME, info, sQuarterName);
+  snprintf(
+      sQuarterName.data(), sQuarterName.size(), "%4dQ%d", r->d_year, r->d_qoy);
+  append_varchar(D_QUARTER_NAME, info, sQuarterName.data());
   append_varchar(D_HOLIDAY, info, r->d_holiday ? "Y" : "N");
   append_varchar(D_WEEKEND, info, r->d_weekend ? "Y" : "N");
   append_varchar(D_FOLLOWING_HOLIDAY, info, r->d_following_holiday ? "Y" : "N");

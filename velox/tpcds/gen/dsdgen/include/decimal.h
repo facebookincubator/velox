@@ -38,9 +38,9 @@ decimal_t* mk_decimal(int s, int p);
 
 int itodec(decimal_t* dest, int i);
 int ftodec(decimal_t* d, double f);
-int strtodec(decimal_t* d, char* src);
+int strtodec(decimal_t* d, const char* src);
 
-int dectostr(char* dest, decimal_t* d);
+int dectostr(std::vector<char>& dest, decimal_t* d);
 int dectof(double* dest, decimal_t*);
 #define dectoi(d) atoi(d->number)
 
