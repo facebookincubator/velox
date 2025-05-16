@@ -252,7 +252,7 @@ Table scan filters support simple predicates in the form of a “column <operati
 
 
 Joins
------
+^^^^^
 
 Joins and other multi-pipeline plans can be chained together using the new_builder() method on plan builder:
 
@@ -277,4 +277,4 @@ Joins and other multi-pipeline plans can be chained together using the new_build
 
 Left and right keys define the join keys; *build_plan_node* contains the subtree from the build side of a hash join (or the right-hand side of a merge join). Output contains the list of columns the join will return (project out), and join_type specifies the join type, either INNER, LEFT, RIGHT, or FULL.
 
-
+If you'd like to see additional code examples for working with PyVelox, please reach out to us. We’ll continue to expand this guide with more content. Happy exploring with PyVelox! 
