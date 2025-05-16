@@ -275,7 +275,7 @@ class ExprTest : public testing::Test, public VectorTestBase {
     auto startPos = context.find(key);
     VELOX_CHECK(startPos != std::string::npos);
     startPos += strlen(key);
-    auto endPos = context.find(".", startPos);
+    auto endPos = context.find('.', startPos);
     VELOX_CHECK(endPos != std::string::npos, context);
     return context.substr(startPos, endPos - startPos);
   }
