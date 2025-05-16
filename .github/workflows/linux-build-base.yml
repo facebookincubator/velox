@@ -43,6 +43,8 @@ jobs:
       USE_CLANG: ${{ inputs.use-clang && 'true' || 'false' }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
 
       - name: Fix git permissions
         # Usually actions/checkout does this but as we run in a container
@@ -67,7 +69,7 @@ jobs:
             mv ./${MINIO_BINARY} /usr/local/bin/
           fi
 
-      - uses: assignUser/stash/restore@v1
+      - uses: apache/infrastructure-actions/stash/restore@3354c1565d4b0e335b78a76aedd82153a9e144d4
         with:
           path: ${{ env.CCACHE_DIR }}
           key: ccache-linux-adapters-${{ inputs.use-clang && 'clang' || 'gcc' }}
@@ -105,7 +107,7 @@ jobs:
       - name: Ccache after
         run: ccache -s
 
-      - uses: assignUser/stash/save@v1
+      - uses: apache/infrastructure-actions/stash/save@3354c1565d4b0e335b78a76aedd82153a9e144d4
         with:
           path: ${{ env.CCACHE_DIR }}
           key: ccache-linux-adapters-${{ inputs.use-clang && 'clang' || 'gcc' }}
@@ -135,7 +137,7 @@ jobs:
     steps:
 
       - name: Get Ccache Stash
-        uses: assignUser/stash/restore@v1
+        uses: apache/infrastructure-actions/stash/restore@3354c1565d4b0e335b78a76aedd82153a9e144d4
         with:
           path: ${{ env.CCACHE_DIR }}
           key: ccache-ubuntu-debug-default-${{ inputs.use-clang && 'clang' || 'gcc' }}
@@ -143,11 +145,12 @@ jobs:
       - name: Ensure Stash Dirs Exists
         working-directory: ${{ github.workspace }}
         run: |
-          mkdir -p '${{ env.CCACHE_DIR }}'
+          mkdir -p "$CCACHE_DIR"
 
       - uses: actions/checkout@v4
         with:
           path: velox
+          persist-credentials: false
 
       - name: Install Dependencies
         run: |
@@ -171,7 +174,7 @@ jobs:
         run: |
           ccache -vs
 
-      - uses: assignUser/stash/save@v1
+      - uses: apache/infrastructure-actions/stash/save@3354c1565d4b0e335b78a76aedd82153a9e144d4
         with:
           path: ${{ env.CCACHE_DIR }}
           key: ccache-ubuntu-debug-default-${{ inputs.use-clang && 'clang' || 'gcc' }}
