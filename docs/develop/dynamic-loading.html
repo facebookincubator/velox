@@ -48,13 +48,14 @@ Using shared libraries built against a different version of Velox may result in 
 <h2>Getting Started<a class="headerlink" href="#getting-started" title="Link to this heading">¶</a></h2>
 <ol class="arabic">
 <li><p><strong>Create a C++ file for your dynamic library</strong></p>
-<p>For dynamically loaded function registration, the format followed mirrors that of built-in function registration with some noted differences. Using <cite>DynamicTestFunction.cpp</cite> as an example, the function uses the <cite>extern “C”</cite> keyword to protect against name mangling. A <cite>registry()</cite> function call is also necessary.</p>
+<p>For dynamically loaded function registration, the format followed mirrors that of built-in function registration with some noted differences. Using <cite>DynamicTestFunction.cpp</cite> as an example, the function uses the <cite>extern “C”</cite> keyword to protect against name mangling.
+The <cite>registrationFunctionName</cite> function here acts as the entrypoint for the dynamic library for loading symbols. The <cite>registrationFunctionName</cite> function name is customizable and defaults to <cite>registerExtensions</cite> when not specified in the library loading call.</p>
 <p>Make sure to also include the necessary header file:</p>
-<div class="highlight-cpp notranslate"><div class="highlight"><pre><span></span><span class="cp">#include</span><span class="w"> </span><span class="cpf">&quot;velox/common/dynamic_registry/DynamicUdf.h&quot;</span>
+<div class="highlight-cpp notranslate"><div class="highlight"><pre><span></span><span class="cp">#include</span><span class="w"> </span><span class="cpf">&quot;velox/functions/Udf.h&quot;</span>
 </pre></div>
 </div>
 <p>Example template for a function with no arguments returning a BIGINT:</p>
-<div class="highlight-cpp notranslate"><div class="highlight"><pre><span></span><span class="cp">#include</span><span class="w"> </span><span class="cpf">&quot;velox/common/dynamic_registry/DynamicUdf.h&quot;</span>
+<div class="highlight-cpp notranslate"><div class="highlight"><pre><span></span><span class="cp">#include</span><span class="w"> </span><span class="cpf">&quot;velox/functions/Udf.h&quot;</span>
 
 <span class="k">namespace</span><span class="w"> </span><span class="nn">example_namespace</span><span class="w"> </span><span class="p">{</span>
 
@@ -67,7 +68,7 @@ Using shared libraries built against a different version of Velox may result in 
 <span class="p">}</span>
 
 <span class="k">extern</span><span class="w"> </span><span class="s">&quot;C&quot;</span><span class="w"> </span><span class="p">{</span>
-<span class="kt">void</span><span class="w"> </span><span class="nf">registry</span><span class="p">()</span><span class="w"> </span><span class="p">{</span>
+<span class="kt">void</span><span class="w"> </span><span class="nf">registrationFunctionName</span><span class="p">()</span><span class="w"> </span><span class="p">{</span>
 <span class="w">  </span><span class="n">facebook</span><span class="o">::</span><span class="n">velox</span><span class="o">::</span><span class="n">registerFunction</span><span class="o">&lt;</span>
 <span class="w">      </span><span class="n">example_namespace</span><span class="o">::</span><span class="n">DynamicFunction</span><span class="p">,</span>
 <span class="w">      </span><span class="kt">int64_t</span><span class="o">&gt;</span><span class="p">({</span><span class="s">&quot;your_function_name&quot;</span><span class="p">});</span>
