@@ -166,9 +166,10 @@ std::unique_ptr<core::PartitionFunction> createBucketFunction(
 
 std::string computeBucketedFileName(
     const std::string& queryId,
+    const uint32_t maxBucketCount,
     uint32_t bucket) {
   static const uint32_t kMaxBucketCountPadding =
-      std::to_string(HiveDataSink::maxBucketCount() - 1).size();
+      std::to_string(maxBucketCount - 1).size();
   const std::string bucketValueStr = std::to_string(bucket);
   return fmt::format(
       "0{:0>{}}_0_{}", bucketValueStr, kMaxBucketCountPadding, queryId);
@@ -933,21 +934,28 @@ HiveWriterParameters HiveDataSink::getWriterParameters(
 std::pair<std::string, std::string> HiveDataSink::getWriterFileNames(
     std::optional<uint32_t> bucketId) const {
   return fileNameGenerator_->gen(
-      bucketId, insertTableHandle_, *connectorQueryCtx_, isCommitRequired());
+      bucketId,
+      insertTableHandle_,
+      *connectorQueryCtx_,
+      hiveConfig_,
+      isCommitRequired());
 }
 
 std::pair<std::string, std::string> HiveInsertFileNameGenerator::gen(
     std::optional<uint32_t> bucketId,
     const std::shared_ptr<const HiveInsertTableHandle> insertTableHandle,
     const ConnectorQueryCtx& connectorQueryCtx,
+    const std::shared_ptr<const HiveConfig>& hiveConfig,
     bool commitRequired) const {
   auto targetFileName = insertTableHandle->locationHandle()->targetFileName();
   const bool generateFileName = targetFileName.empty();
   if (bucketId.has_value()) {
     VELOX_CHECK(generateFileName);
     // TODO: add hive.file_renaming_enabled support.
-    targetFileName =
-        computeBucketedFileName(connectorQueryCtx.queryId(), bucketId.value());
+    targetFileName = computeBucketedFileName(
+        connectorQueryCtx.queryId(),
+        bucketId.value(),
+        hiveConfig->maxBucketCount());
   } else if (generateFileName) {
     // targetFileName includes planNodeId and Uuid. As a result, different
     // table writers run by the same task driver or the same table writer

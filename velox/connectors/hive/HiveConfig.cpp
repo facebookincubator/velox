@@ -67,6 +67,10 @@ uint32_t HiveConfig::maxPartitionsPerWriters(
       config_->get<uint32_t>(kMaxPartitionsPerWriters, 128));
 }
 
+uint32_t HiveConfig::maxBucketCount() const {
+  return config_->get<uint32_t>(kMaxBucketCount, 100'000);
+}
+
 bool HiveConfig::immutablePartitions() const {
   return config_->get<bool>(kImmutablePartitions, false);
 }

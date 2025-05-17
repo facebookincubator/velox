@@ -202,6 +202,7 @@ class FileNameGenerator : public ISerializable {
       std::optional<uint32_t> bucketId,
       const std::shared_ptr<const HiveInsertTableHandle> insertTableHandle,
       const ConnectorQueryCtx& connectorQueryCtx,
+      const std::shared_ptr<const HiveConfig>& hiveConfig,
       bool commitRequired) const = 0;
 
   virtual std::string toString() const = 0;
@@ -215,6 +216,7 @@ class HiveInsertFileNameGenerator : public FileNameGenerator {
       std::optional<uint32_t> bucketId,
       const std::shared_ptr<const HiveInsertTableHandle> insertTableHandle,
       const ConnectorQueryCtx& connectorQueryCtx,
+      const std::shared_ptr<const HiveConfig>& hiveConfig,
       bool commitRequired) const override;
 
   static void registerSerDe();
@@ -525,9 +527,8 @@ class HiveDataSink : public DataSink {
       uint32_t bucketCount,
       std::unique_ptr<core::PartitionFunction> bucketFunction);
 
-  static uint32_t maxBucketCount() {
-    static const uint32_t kMaxBucketCount = 100'000;
-    return kMaxBucketCount;
+  uint32_t maxBucketCount() {
+    return hiveConfig_->maxBucketCount();
   }
 
   void appendData(RowVectorPtr input) override;
