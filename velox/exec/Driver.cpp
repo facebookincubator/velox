@@ -252,6 +252,7 @@ void Driver::init(
   operators_ = std::move(operators);
   curOperatorId_ = operators_.size() - 1;
   trackOperatorCpuUsage_ = ctx_->queryConfig().operatorTrackCpuUsage();
+  dynamicFilterEnabled_ = ctx_->queryConfig().dynamicFilterEnabled();
 }
 
 void Driver::initializeOperators() {
@@ -971,6 +972,9 @@ bool Driver::mayPushdownAggregation(Operator* aggregation) const {
 std::unordered_set<column_index_t> Driver::canPushdownFilters(
     const Operator* filterSource,
     const std::vector<column_index_t>& channels) const {
+  if (!dynamicFilterEnabled_) {
+    return {};
+  }
   int filterSourceIndex = -1;
   for (auto i = 0; i < operators_.size(); ++i) {
     auto op = operators_[i].get();
