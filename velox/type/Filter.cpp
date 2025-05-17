@@ -762,7 +762,12 @@ BigintValuesUsingBitmask::BigintValuesUsingBitmask(
     : Filter(true, nullAllowed, FilterKind::kBigintValuesUsingBitmask),
       min_(min),
       max_(max) {
-  VELOX_CHECK(min < max, "min must be less than max");
+  VELOX_CHECK(
+      min < max,
+      fmt::format(
+          "BigintValuesUsingBitmask min must be less than max. min: {}, max: {}",
+          min,
+          max));
   VELOX_CHECK(values.size() > 1, "values must contain at least 2 entries");
 
   bitmask_.resize(max - min + 1);
@@ -814,7 +819,12 @@ BigintValuesUsingHashTable::BigintValuesUsingHashTable(
       max_(max),
       values_(values) {
   constexpr int32_t kPaddingElements = 4;
-  VELOX_CHECK(min < max, "min must be less than max");
+  VELOX_CHECK(
+      min < max,
+      fmt::format(
+          "BigintValuesUsingHashTable min must be less than max. min: {}, max: {}",
+          min,
+          max));
   VELOX_CHECK(values.size() > 1, "values must contain at least 2 entries");
 
   // Size the hash table to be 2+x the entry count, e.g. 10 entries
@@ -1036,7 +1046,10 @@ NegatedBigintValuesUsingBitmask::NegatedBigintValuesUsingBitmask(
     : Filter(true, nullAllowed, FilterKind::kNegatedBigintValuesUsingBitmask),
       min_(min),
       max_(max) {
-  VELOX_CHECK(min <= max, "min must be no greater than max");
+  VELOX_CHECK(
+      min <= max,
+      fmt::format(
+          "min must be no greater than max. min: {}, max: {}", min, max));
 
   nonNegated_ = std::make_unique<BigintValuesUsingBitmask>(
       min, max, values, !nullAllowed);
@@ -2070,7 +2083,7 @@ std::unique_ptr<Filter> BigintValuesUsingHashTable::mergeWith(
     valuesToKeep.emplace_back(kEmptyMarker);
   }
 
-  for (int64_t v : hashTable_) {
+  for (int64_t v : values_) {
     if (v != kEmptyMarker && other->testInt64(v)) {
       valuesToKeep.emplace_back(v);
     }
