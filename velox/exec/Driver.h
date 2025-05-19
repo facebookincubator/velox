@@ -659,6 +659,7 @@ class Driver : public std::enable_shared_from_this<Driver> {
   size_t blockedOperatorId_{0};
 
   bool trackOperatorCpuUsage_;
+  bool dynamicFilterEnabled_{true};
 
   // Indicates that a DriverAdapter can rearrange Operators. Set to false at end
   // of DriverFactory::createDriver().
