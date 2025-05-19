@@ -343,13 +343,19 @@ std::shared_ptr<const Type> ReaderBase::convertType(
       return SMALLINT();
     case TypeKind::INTEGER:
       return INTEGER();
-    case TypeKind::BIGINT:
+    case TypeKind::BIGINT: {
+      TypePtr converted;
       if (type.format() == DwrfFormat::kOrc &&
           type.getOrcPtr()->kind() == proto::orc::Type_Kind_DECIMAL) {
-        return DECIMAL(
-            type.getOrcPtr()->precision(), type.getOrcPtr()->scale());
+        converted =
+            DECIMAL(type.getOrcPtr()->precision(), type.getOrcPtr()->scale());
+      } else {
+        converted = BIGINT();
+        common::testutil::TestValue::adjust(
+            "facebook::velox::dwrf::ReaderBase::convertType", &converted);
       }
-      return BIGINT();
+      return converted;
+    }
     case TypeKind::HUGEINT:
       if (type.format() == DwrfFormat::kOrc &&
           type.getOrcPtr()->kind() == proto::orc::Type_Kind_DECIMAL) {
