@@ -103,6 +103,11 @@
   background-color: #f9f9f9;
 }
 
+.textColumn h2 {
+  font-size: 1.8rem; /* updated from previous smaller value */
+  margin-bottom: 1rem;
+}
+
 .contentRow {
   display: flex;
   flex-wrap: wrap;
@@ -124,6 +129,61 @@
 .architectureImage {
   max-width: 100%;
   height: auto;
+}
+
+/* Ecosystem Section */
+
+.ecosystemRow {
+  margin-top: 3rem;
+}
+
+.ecosystemRow h2 {
+  font-size: 1.8rem;
+  margin-bottom: 0.5rem;
+  text-align: left;
+}
+
+.ecosystemDescription {
+  max-width: 100%;
+  margin-bottom: 2rem;
+  font-size: 1rem;
+  line-height: 1.6;
+}
+
+.ecosystemGrid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2rem;
+  justify-content: space-between;
+}
+
+.ecosystemCard {
+  flex: 1 1 calc(33.333% - 2rem);
+  background: #fff;
+  border: 1px solid #e0e0e0;
+  padding: 1.5rem;
+  border-radius: 8px;
+  text-align: left;
+}
+
+.ecosystemCard img {
+  max-width: 100px;
+  margin-bottom: 1rem;
+}
+
+.ecosystemCard h3 {
+  margin-bottom: 0.5rem;
+  font-size: 1.2rem;
+}
+
+.ecosystemCard p {
+  margin-bottom: 1rem;
+}
+
+.ecosystemCard a {
+  color: var(--ifm-color-primary);
+  font-weight: 500;
+  text-decoration: none;
 }
 
 /* Key Features Section */

@@ -62,6 +62,40 @@ function WhatIsVeloxSection() {
             />
           </div>
         </div>
+
+        {/* New Ecosystem Section */}
+        <div className={styles.ecosystemRow}>
+          <h2>The Velox Ecosystem</h2>
+          <p className={styles.ecosystemDescription}>
+            Velox powers a growing ecosystem of open-source projects, from Spark acceleration with Apache Gluten to next-gen query engines like Presto C++. It’s also the foundation for ongoing work in hardware-accelerated execution.
+          </p>
+          <div className={styles.ecosystemGrid}>
+            <div className={styles.ecosystemCard}>
+              <img src={useBaseUrl('img/logo-presto.png')} alt="Presto C++" />
+              <h3>Presto C++</h3>
+              <p>A next-generation query engine built for performance using Velox components.</p>
+              <a href="https://prestodb.io/docs/current/presto-cpp.html" target="_blank" rel="noopener">
+                Learn More →
+              </a>
+            </div>
+            <div className={styles.ecosystemCard}>
+              <img src={useBaseUrl('img/logo-gluten.png')} alt="Apache Gluten" />
+              <h3>Apache Gluten</h3>
+              <p>An accelerator for Apache Spark that integrates Velox for native execution.</p>
+              <a href="https://gluten.apache.org/" target="_blank" rel="noopener">
+                Learn More →
+              </a>
+            </div>
+            <div className={styles.ecosystemCard}>
+              <img src={useBaseUrl('img/logo-nvidia.png')} alt="NVIDIA CUDF" />
+              <h3>NVIDIA CUDF</h3>
+              <p>Hardware-accelerated query execution with Velox + GPU acceleration.</p>
+              <a href="https://github.com/rapidsai/velox" target="_blank" rel="noopener">
+                Learn More →
+              </a>
+            </div>
+          </div>
+        </div>
       </div>
     </section>
   );
@@ -118,6 +152,10 @@ function TheVeloxCommunity() {
               <img src={useBaseUrl('img/logo-pinterest.png')} alt="Pinterest" />
               <img src={useBaseUrl('img/logo-voltron.png')} alt="Voltron Data" />
               <img src={useBaseUrl('img/logo-datapelago.png')} alt="DataPelago" />
+              <img src={useBaseUrl('img/logo-alibaba.png')} alt="Alibaba Cloud" />
+              <img src={useBaseUrl('img/logo-uber.png')} alt="Uber" />
+              <img src={useBaseUrl('img/logo-bytedance.png')} alt="Bytedance" />
+              <img src={useBaseUrl('img/logo-intel.png')} alt="Intel" />
 
               {/* Repeat for seamless loop */}
               <img className={styles.metaLogo} src={useBaseUrl('img/logo-meta.png')} alt="Meta" />
@@ -128,6 +166,10 @@ function TheVeloxCommunity() {
               <img src={useBaseUrl('img/logo-pinterest.png')} alt="Pinterest" />
               <img src={useBaseUrl('img/logo-voltron.png')} alt="Voltron Data" />
               <img src={useBaseUrl('img/logo-datapelago.png')} alt="DataPelago" />
+              <img src={useBaseUrl('img/logo-alibaba.png')} alt="Alibaba Cloud" />
+              <img src={useBaseUrl('img/logo-uber.png')} alt="Uber" />
+              <img src={useBaseUrl('img/logo-bytedance.png')} alt="Bytedance" />
+              <img src={useBaseUrl('img/logo-intel.png')} alt="Intel" />
             </div>
           </div>
         </div>
