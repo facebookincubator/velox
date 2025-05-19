@@ -76,6 +76,10 @@ class ExprCallable : public Callable {
     lambdaCtx.swapErrors(elementErrors);
   }
 
+  const RowTypePtr getFunctionSignatures() override {
+    return signature_;
+  }
+
  private:
   void resetSharedExprs() {
     for (auto& expr : sharedExprsToReset_) {

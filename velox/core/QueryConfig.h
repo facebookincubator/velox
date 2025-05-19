@@ -598,6 +598,13 @@ class QueryConfig {
   static constexpr const char* kFieldNamesInJsonCastEnabled =
       "field_names_in_json_cast_enabled";
 
+  /// Represents the maximum size of the array that can be sorted by the
+  /// array_sort() function, if the lambda takes more than one argument
+  /// and cannot be reduced by the SimpleMatcher. If the value is 0, then
+  /// this is disabled.
+  static constexpr const char* kArraySortMaxIterations =
+      "array_sort_max_iterations";
+
   bool selectiveNimbleReaderEnabled() const {
     return get<bool>(kSelectiveNimbleReaderEnabled, false);
   }
@@ -1087,6 +1094,10 @@ class QueryConfig {
 
   bool isFieldNamesInJsonCastEnabled() const {
     return get<bool>(kFieldNamesInJsonCastEnabled, false);
+  }
+
+  uint32_t getArraySortMaxIterations() const {
+    return get<uint32_t>(kArraySortMaxIterations, 1000);
   }
 
   template <typename T>

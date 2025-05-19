@@ -300,7 +300,266 @@ class ArraySortFunction : public exec::VectorFunction {
   const bool throwOnNestedNull_;
 };
 
+namespace {
+
+bool isMultiArgLambda(
+    const SelectivityVector& rows,
+    const VectorPtr vector,
+    exec::EvalCtx& context) {
+  // Go over all the lambdas and check if this requires
+  // us to use the multi arg path.
+  auto lambdaVector = vector->asUnchecked<FunctionVector>();
+  auto it = lambdaVector->iterator(&rows);
+
+  // If there is only one argument lambda, we can use the single arg path.
+  // If there are more than one argument lambdas, we need to use the multi arg
+  // path. If there are multiple lambdas , i.e more than one entry we throw an
+  // error.
+  auto entry =
+      FunctionVector::Iterator::Entry{.callable = nullptr, .rows = nullptr};
+  entry = it.next();
+  VELOX_CHECK_NOT_NULL(entry.callable, "Lambda cannot be null");
+  auto lambdaTypes = entry.callable->getFunctionSignatures();
+  VELOX_CHECK_LT(lambdaTypes->size(), 3, "Lambda cannot have more than 2 args");
+
+  if ((entry = it.next())) {
+    if (entry.callable) {
+      VELOX_FAIL("Arraysort cannot have more than one lambda");
+    }
+  }
+
+  if (lambdaTypes->size() == 2) {
+    if (context.execCtx()
+            ->queryCtx()
+            ->queryConfig()
+            .getArraySortMaxIterations() == 0) {
+      VELOX_USER_FAIL(
+          "Arraysort with lambda function with 2 arguments is not supported. "
+          "Please set array_sort_max_iterations to a positive value to enable this feature.");
+    }
+
+    return true;
+  }
+
+  return false;
+}
+
+struct ArrayInfo {
+  bool isNull;
+  vector_size_t offset;
+  vector_size_t size;
+  vector_size_t nullCount;
+
+  inline vector_size_t sizeWithoutNulls() const {
+    return size - nullCount;
+  }
+};
+
+} // namespace
+
 class ArraySortLambdaFunction : public exec::VectorFunction {
+  // Called for lambda functions with 2 arguments.
+  // TODO: Handling of null elements is not implemented yet.
+  VectorPtr applyMultiArg(
+      const SelectivityVector& rows,
+      const ArrayVectorPtr& arrayVector,
+      const VectorPtr& lambdaVector,
+      const SelectivityVector& validRowsInReusedResult,
+      const BufferPtr& elementToTopLevelRows,
+      exec::EvalCtx& context) const {
+    auto numElements = arrayVector->elements()->size();
+    auto elementsVector = arrayVector->elements();
+
+    const auto maxIterations = context.execCtx()
+                                   ->queryCtx()
+                                   ->queryConfig()
+                                   .getArraySortMaxIterations();
+
+    // Ensure that max size of array is not greater than the max iterations.
+    rows.applyToSelected([&](vector_size_t row) {
+      VELOX_USER_CHECK_LT(
+          arrayVector->sizeAt(row),
+          maxIterations,
+          "Array size is greater than max iterations");
+    });
+
+    // lambda takes two arguments, say x, y.
+    // We will map y to the elements of the array and x
+    // will compare one index on each iteration to every element in y.
+    // At the end of each iteration, we will know the position of element at
+    // the index in x.
+
+    BufferPtr sortedIndices =
+        AlignedBuffer::allocate<vector_size_t>(numElements, context.pool(), -1);
+    BufferPtr xIndices = allocateIndices(numElements, context.pool());
+
+    auto rawSortedIndices = sortedIndices->asMutable<vector_size_t>();
+    auto rawXIndices = xIndices->asMutable<vector_size_t>();
+
+    auto it = lambdaVector->asUnchecked<FunctionVector>()->iterator(&rows);
+    auto entry = it.next();
+
+    // set all of x to the same index and use the selectivity vector
+    // to ensure we dont exceed size bounds.
+
+    uint32_t currentIteration = 0;
+    auto wrapCapture = toWrapCapture<ArrayVector>(
+        numElements, entry.callable, *entry.rows, arrayVector);
+
+    SelectivityVector iteratedRows{entry.rows->end()};
+    iteratedRows.select(*entry.rows);
+    VectorPtr sortedIteration;
+    auto elementRows = toElementRows<ArrayVector>(
+        numElements, iteratedRows, arrayVector.get());
+
+    // Handle null elements in the array.
+    folly::F14FastMap<vector_size_t, ArrayInfo> arrayInfos;
+    arrayInfos.reserve(entry.rows->end());
+    entry.rows->applyToSelected([&](vector_size_t row) {
+      vector_size_t nullCount = 0;
+
+      if (!arrayVector->isNullAt(row)) {
+        vector_size_t offset = arrayVector->offsetAt(row);
+        vector_size_t size = arrayVector->sizeAt(row);
+        for (auto i = offset; i < offset + size; i++) {
+          if (elementsVector->isNullAt(i)) {
+            elementRows.setValid(i, false);
+            nullCount++;
+            // Push nulls to the end.
+            rawSortedIndices[offset + size - nullCount] = i;
+          }
+        }
+      }
+
+      arrayInfos[row] = ArrayInfo{
+          .isNull = arrayVector->isNullAt(row),
+          .offset = arrayVector->offsetAt(row),
+          .size = arrayVector->sizeAt(row),
+          .nullCount = nullCount};
+    });
+
+    elementRows.updateBounds();
+
+    while (currentIteration < maxIterations) {
+      for (const auto& [row, arrayInfo] : arrayInfos) {
+        if (arrayInfo.size > currentIteration) {
+          for (auto i = arrayInfo.offset; i < arrayInfo.offset + arrayInfo.size;
+               i++) {
+            rawXIndices[i] = arrayInfo.offset + currentIteration;
+          }
+        } else {
+          iteratedRows.setValid(row, false);
+        }
+      }
+
+      iteratedRows.updateBounds();
+
+      // Break if we have no more rows to iterate over.
+      if (!iteratedRows.hasSelections()) {
+        break;
+      }
+
+      // Create the lambda vector
+      auto xVector = BaseVector::wrapInDictionary(
+          nullptr, xIndices, numElements, elementsVector);
+      std::vector<VectorPtr> lambdaArgs = {xVector, elementsVector};
+
+      entry.callable->apply(
+          elementRows,
+          &validRowsInReusedResult,
+          wrapCapture,
+          &context,
+          lambdaArgs,
+          elementToTopLevelRows,
+          &sortedIteration);
+
+      // Now determine the best location for the current index.
+      auto iterationResult = sortedIteration->as<SimpleVector<int32_t>>();
+
+      iteratedRows.applyToSelected([&](vector_size_t row) {
+        auto arrayInfo = arrayInfos[row];
+
+        if (arrayInfo.size > currentIteration) {
+          // If current iteration corresponds to a null element in this array.
+          // We will skip this iteration.
+
+          if (elementsVector->isNullAt(arrayInfo.offset + currentIteration)) {
+            return;
+          }
+
+          // Determine the best location for the current index.
+          auto smaller = 0;
+          auto larger = 0;
+          auto equal = 0;
+          for (auto i = arrayInfo.offset; i < arrayInfo.offset + arrayInfo.size;
+               i++) {
+            // Ignore comparison to other nulls.
+            if (elementsVector->isNullAt(i)) {
+              continue;
+            }
+            auto comparison = iterationResult->valueAt(i);
+
+            if (comparison == 1) {
+              smaller++;
+            } else if (comparison == -1) {
+              larger++;
+            } else if (comparison == 0) {
+              equal++;
+            } else {
+              VELOX_USER_FAIL(
+                  "Comparisons should only return -1, 0, 1. Got {}",
+                  comparison);
+            }
+          }
+
+          // Throw if there is no equal element.
+          VELOX_USER_CHECK_GT(
+              equal, 0, "Comparison of equal elements should return 0");
+
+          bool set = false;
+          for (auto i = arrayInfo.offset + smaller;
+               i < arrayInfo.offset + arrayInfo.sizeWithoutNulls() - larger;
+               i++) {
+            if (rawSortedIndices[i] == -1) {
+              rawSortedIndices[i] = arrayInfo.offset + currentIteration;
+              set = true;
+              break;
+            }
+          }
+
+          VELOX_USER_CHECK(
+              set,
+              "Could not find a location for the current index {}. This should never happen.",
+              currentIteration);
+        }
+      });
+
+      // Increment the current iteration.
+      currentIteration++;
+    }
+
+    // Now we have the sorted indices, we can create the sorted array.
+    auto sortedElements = BaseVector::wrapInDictionary(
+        nullptr,
+        sortedIndices,
+        sortedIndices->size() / sizeof(vector_size_t),
+        elementsVector);
+
+    // Set nulls for rows not present in 'rows'.
+    BufferPtr newNulls = addNullsForUnselectedRows(arrayVector, rows);
+
+    VectorPtr localResult = std::make_shared<ArrayVector>(
+        arrayVector->pool(),
+        arrayVector->type(),
+        std::move(newNulls),
+        rows.end(),
+        arrayVector->offsets(),
+        arrayVector->sizes(),
+        sortedElements);
+
+    return localResult;
+  }
+
  public:
   explicit ArraySortLambdaFunction(bool ascending, bool throwOnNestedNull)
       : ascending_{ascending}, throwOnNestedNull_(throwOnNestedNull) {}
@@ -325,54 +584,67 @@ class ArraySortLambdaFunction : public exec::VectorFunction {
 
     // Compute sorting keys.
     VectorPtr newElements;
+    VectorPtr localResult;
 
     auto elementToTopLevelRows = getElementToTopLevelRows(
         newNumElements, rows, flatArray.get(), context.pool());
 
-    // Loop over lambda functions and apply these to elements of the base array.
-    // In most cases there will be only one function and the loop will run once.
-    auto it = args[1]->asUnchecked<FunctionVector>()->iterator(&rows);
-    while (auto entry = it.next()) {
-      auto elementRows = toElementRows<ArrayVector>(
-          newNumElements, *entry.rows, flatArray.get());
-      auto wrapCapture = toWrapCapture<ArrayVector>(
-          newNumElements, entry.callable, *entry.rows, flatArray);
-
-      entry.callable->apply(
-          elementRows,
-          &validRowsInReusedResult,
-          wrapCapture,
-          &context,
-          lambdaArgs,
+    if (isMultiArgLambda(rows, args[1], context)) {
+      localResult = applyMultiArg(
+          rows,
+          flatArray,
+          args[1],
+          validRowsInReusedResult,
           elementToTopLevelRows,
-          &newElements);
+          context);
+    } else {
+      // Loop over lambda functions and apply these to elements of the base
+      // array. In most cases there will be only one function and the loop
+      // will run once.
+      auto it = args[1]->asUnchecked<FunctionVector>()->iterator(&rows);
+      while (auto entry = it.next()) {
+        auto elementRows = toElementRows<ArrayVector>(
+            newNumElements, *entry.rows, flatArray.get());
+        auto wrapCapture = toWrapCapture<ArrayVector>(
+            newNumElements, entry.callable, *entry.rows, flatArray);
+
+        entry.callable->apply(
+            elementRows,
+            &validRowsInReusedResult,
+            wrapCapture,
+            &context,
+            lambdaArgs,
+            elementToTopLevelRows,
+            &newElements);
+      }
+
+      // Sort 'newElements'.
+      auto indices = sortElements(
+          rows,
+          *flatArray,
+          *newElements,
+          ascending_,
+          context,
+          throwOnNestedNull_);
+      auto sortedElements = BaseVector::wrapInDictionary(
+          nullptr,
+          indices,
+          indices->size() / sizeof(vector_size_t),
+          flatArray->elements());
+
+      // Set nulls for rows not present in 'rows'.
+      BufferPtr newNulls = addNullsForUnselectedRows(flatArray, rows);
+
+      localResult = std::make_shared<ArrayVector>(
+          flatArray->pool(),
+          flatArray->type(),
+          std::move(newNulls),
+          rows.end(),
+          flatArray->offsets(),
+          flatArray->sizes(),
+          sortedElements);
     }
 
-    // Sort 'newElements'.
-    auto indices = sortElements(
-        rows,
-        *flatArray,
-        *newElements,
-        ascending_,
-        context,
-        throwOnNestedNull_);
-    auto sortedElements = BaseVector::wrapInDictionary(
-        nullptr,
-        indices,
-        indices->size() / sizeof(vector_size_t),
-        flatArray->elements());
-
-    // Set nulls for rows not present in 'rows'.
-    BufferPtr newNulls = addNullsForUnselectedRows(flatArray, rows);
-
-    VectorPtr localResult = std::make_shared<ArrayVector>(
-        flatArray->pool(),
-        flatArray->type(),
-        std::move(newNulls),
-        rows.end(),
-        flatArray->offsets(),
-        flatArray->sizes(),
-        sortedElements);
     context.moveOrCopyResult(localResult, rows, result);
   }
 
@@ -452,12 +724,12 @@ std::vector<std::shared_ptr<exec::FunctionSignature>> signatures(
 
   if (withComparator) {
     signatures.push_back(
-        // array(T), function(T,T,bigint) -> array(T)
+        // array(T), function(T,T,integer) -> array(T)
         exec::FunctionSignatureBuilder()
             .typeVariable("T")
             .returnType("array(T)")
             .argumentType("array(T)")
-            .constantArgumentType("function(T,T,bigint)")
+            .constantArgumentType("function(T,T,integer)")
             .build());
   }
   return signatures;
@@ -540,7 +812,11 @@ core::TypedExprPtr rewriteArraySortCall(
     return rewritten;
   }
 
-  VELOX_USER_FAIL(kNotSupported, lambda->toString());
+  // TODO: Should we gate the fail based on some queryConfig ?
+  // Since we dont have a query context when the rewrite is called
+  // we will just pass the expr back.
+  // VELOX_USER_FAIL(kNotSupported, lambda->toString());
+  return expr;
 }
 
 // Register function.
