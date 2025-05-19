@@ -102,6 +102,13 @@ class ConstantTypedExpr : public ITypedExpr {
     return valueVector_;
   }
 
+  bool isNull() const {
+    if (hasValueVector()) {
+      return valueVector_->isNullAt(0);
+    }
+    return value_.isNull();
+  }
+
   VectorPtr toConstantVector(memory::MemoryPool* pool) const {
     if (valueVector_) {
       return valueVector_;
@@ -546,8 +553,8 @@ class LambdaTypedExpr : public ITypedExpr {
       : ITypedExpr(std::make_shared<FunctionType>(
             std::vector<TypePtr>(signature->children()),
             body->type())),
-        signature_(signature),
-        body_(body) {}
+        signature_(std::move(signature)),
+        body_(std::move(body)) {}
 
   const RowTypePtr& signature() const {
     return signature_;
@@ -588,10 +595,14 @@ class LambdaTypedExpr : public ITypedExpr {
     if (!casted) {
       return false;
     }
-    if (*casted->type() != *this->type()) {
+    return operator==(*casted);
+  }
+
+  bool operator==(const LambdaTypedExpr& other) const {
+    if (*type() != *other.type()) {
       return false;
     }
-    return *signature_ == *casted->signature_ && *body_ == *casted->body_;
+    return *signature_ == *other.signature_ && *body_ == *other.body_;
   }
 
   folly::dynamic serialize() const override;

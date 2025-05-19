@@ -20,6 +20,7 @@
 #include <gflags/gflags.h>
 #include "velox/experimental/wave/common/CudaUtil.cuh"
 #include "velox/experimental/wave/exec/ExprKernelStream.h"
+#include "velox/experimental/wave/exec/Join.cuh"
 #include "velox/experimental/wave/exec/WaveCore.cuh"
 
 DEFINE_bool(kernel_gdb, false, "Run kernels sequentially for debugging");
@@ -28,7 +29,8 @@ namespace facebook::velox::wave {
 
 void __global__ setupAggregationKernel(AggregationControl op) {
   assert(!op.oldBuckets);
-  auto* data = new (op.head) DeviceAggregation();
+  auto* data = reinterpret_cast<DeviceAggregation*>(op.head);
+  *data = DeviceAggregation();
   data->rowSize = op.rowSize;
   data->singleRow = reinterpret_cast<char*>(data + 1);
   memset(data->singleRow, 0, op.rowSize);

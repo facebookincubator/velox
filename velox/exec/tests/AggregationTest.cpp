@@ -111,7 +111,7 @@ void checkSpillStats(PlanNodeStats& stats, bool expectedSpill) {
     ASSERT_GT(stats.spilledRows, 0);
     ASSERT_GT(stats.spilledInputBytes, 0);
     ASSERT_GT(stats.spilledBytes, 0);
-    ASSERT_EQ(stats.spilledPartitions, 8);
+    ASSERT_GT(stats.spilledPartitions, 0);
     ASSERT_GT(stats.customStats[Operator::kSpillRuns].sum, 0);
     ASSERT_GT(stats.customStats[Operator::kSpillFillTime].sum, 0);
     ASSERT_GT(stats.customStats[Operator::kSpillSortTime].sum, 0);
@@ -484,18 +484,18 @@ TEST_F(AggregationTest, missingFunctionOrSignature) {
   CursorParameters params;
   params.planNode = makePlan(missingFunc);
   VELOX_ASSERT_THROW(
-      readCursor(params, [](Task*) {}),
+      readCursor(params),
       "Aggregate function not registered: missing-function");
 
   params.planNode = makePlan(wrongInputTypes);
   VELOX_ASSERT_THROW(
-      readCursor(params, [](Task*) {}),
+      readCursor(params),
       "Aggregate function signature is not supported: test_aggregate(BIGINT, BOOLEAN). "
       "Supported signatures: (smallint,varchar) -> tinyint -> bigint.");
 
   params.planNode = makePlan(missingInputs);
   VELOX_ASSERT_THROW(
-      readCursor(params, [](Task*) {}),
+      readCursor(params),
       "Aggregate function signature is not supported: test_aggregate(). "
       "Supported signatures: (smallint,varchar) -> tinyint -> bigint.");
 }
@@ -546,8 +546,7 @@ TEST_F(AggregationTest, missingLambdaFunction) {
   CursorParameters params;
   params.planNode = plan;
   VELOX_ASSERT_THROW(
-      readCursor(params, [](Task*) {}),
-      "Aggregate function not registered: missing-lambda");
+      readCursor(params), "Aggregate function not registered: missing-lambda");
 }
 
 TEST_F(AggregationTest, global) {
@@ -1423,11 +1422,11 @@ TEST_F(AggregationTest, groupingSetsOutput) {
 
   CursorParameters orderParams;
   orderParams.planNode = orderPlan;
-  auto orderResult = readCursor(orderParams, [](Task*) {});
+  auto orderResult = readCursor(orderParams);
 
   CursorParameters reversedOrderParams;
   reversedOrderParams.planNode = reversedOrderPlan;
-  auto reversedOrderResult = readCursor(reversedOrderParams, [](Task*) {});
+  auto reversedOrderResult = readCursor(reversedOrderParams);
 
   assertEqualResults(orderResult.second, reversedOrderResult.second);
 }
@@ -1603,7 +1602,7 @@ TEST_F(AggregationTest, disableNonBooleanMasks) {
                       false)
                   .planNode();
 
-  VELOX_ASSERT_THROW(
+  VELOX_ASSERT_USER_THROW(
       AssertQueryBuilder(plan).copyResults(pool()),
       "FILTER(WHERE..) clause must use masks that are BOOLEAN");
 
@@ -1704,6 +1703,71 @@ TEST_F(AggregationTest, outputBatchSizeCheckWithSpill) {
                       .capturePlanNodeId(aggrNodeId)
                       .planNode())
             .assertResults("SELECT c0, array_agg(c1) FROM tmp GROUP BY 1");
+    ASSERT_GT(toPlanStats(task->taskStats()).at(aggrNodeId).spilledBytes, 0);
+    ASSERT_EQ(
+        toPlanStats(task->taskStats()).at(aggrNodeId).outputVectors,
+        testData.expectedNumOutputVectors);
+    OperatorTestBase::deleteTaskAndCheckSpillDirectory(task);
+  }
+}
+
+TEST_F(AggregationTest, outputBatchSizeCheckWithSpillForOrderedAggr) {
+  const int numVectors = 5;
+  const int vectorSize = 20;
+  const std::string strValue(1L << 20, 'a'); // 1MB
+
+  std::vector<RowVectorPtr> vectors;
+  for (int i = 0; i < numVectors; ++i) {
+    vectors.push_back(makeRowVector(
+        {makeFlatVector<int32_t>(vectorSize, [&](auto row) { return row % 5; }),
+         makeFlatVector<StringView>(vectorSize, [&](auto /*unused*/) {
+           return StringView(strValue);
+         })}));
+  }
+  auto rowType = asRowType(vectors.back()->type());
+
+  struct {
+    vector_size_t maxOutputRows;
+    uint32_t maxOutputBytes;
+    uint32_t expectedNumOutputVectors;
+
+    std::string debugString() const {
+      return fmt::format(
+          "maxOutputRows: {}, maxOutputBytes: {}, expectedNumOutputVectors: {}",
+          maxOutputRows,
+          succinctBytes(maxOutputBytes),
+          expectedNumOutputVectors);
+    }
+  } testSettings[] = {
+      {1, std::numeric_limits<uint32_t>::max(), 5},
+      {std::numeric_limits<vector_size_t>::max(), 15L << 20, 5},
+      {std::numeric_limits<vector_size_t>::max(), 35L << 20, 3}};
+
+  for (const auto& testData : testSettings) {
+    SCOPED_TRACE(testData.debugString());
+
+    createDuckDbTable(vectors);
+    auto tempDirectory = exec::test::TempDirectoryPath::create();
+    core::PlanNodeId aggrNodeId;
+    TestScopedSpillInjection scopedSpillInjection(100);
+    auto task =
+        AssertQueryBuilder(duckDbQueryRunner_)
+            .spillDirectory(tempDirectory->getPath())
+            .config(QueryConfig::kSpillEnabled, true)
+            .config(QueryConfig::kAggregationSpillEnabled, true)
+            .config(
+                QueryConfig::kPreferredOutputBatchBytes,
+                std::to_string(testData.maxOutputBytes))
+            .config(
+                QueryConfig::kMaxOutputBatchRows,
+                std::to_string(testData.maxOutputRows))
+            .plan(PlanBuilder()
+                      .values(vectors)
+                      .singleAggregation({"c0"}, {"array_agg(c1 order by c1)"})
+                      .capturePlanNodeId(aggrNodeId)
+                      .planNode())
+            .assertResults(
+                "SELECT c0, array_agg(c1 order by c1) FROM tmp GROUP BY 1");
     ASSERT_GT(toPlanStats(task->taskStats()).at(aggrNodeId).spilledBytes, 0);
     ASSERT_EQ(
         toPlanStats(task->taskStats()).at(aggrNodeId).outputVectors,
@@ -1896,16 +1960,20 @@ DEBUG_ONLY_TEST_F(AggregationTest, minSpillableMemoryReservation) {
 TEST_F(AggregationTest, distinctWithSpilling) {
   struct TestParam {
     std::vector<RowVectorPtr> inputs;
+    uint32_t expectedSpilledPartitions;
     std::function<void(uint32_t)> expectedSpillFilesCheck{nullptr};
   };
 
   std::vector<TestParam> testParams{
       {makeVectors(rowType_, 10, 100),
+       8,
        [](uint32_t spilledFiles) { ASSERT_GE(spilledFiles, 100); }},
+
       {{makeRowVector(
            {"c0"},
            {makeFlatVector<int64_t>(
                2'000, [](vector_size_t /* unused */) { return 100; })})},
+       1,
        [](uint32_t spilledFiles) { ASSERT_EQ(spilledFiles, 1); }}};
 
   for (const auto& testParam : testParams) {
@@ -1928,7 +1996,8 @@ TEST_F(AggregationTest, distinctWithSpilling) {
     const auto planNodeStatsMap = toPlanStats(task->taskStats());
     const auto& aggrNodeStats = planNodeStatsMap.at(aggrNodeId);
     ASSERT_GT(aggrNodeStats.spilledInputBytes, 0);
-    ASSERT_EQ(aggrNodeStats.spilledPartitions, 8);
+    ASSERT_EQ(
+        aggrNodeStats.spilledPartitions, testParam.expectedSpilledPartitions);
     ASSERT_GT(aggrNodeStats.spilledBytes, 0);
     testParam.expectedSpillFilesCheck(aggrNodeStats.spilledFiles);
     OperatorTestBase::deleteTaskAndCheckSpillDirectory(task);
@@ -2418,7 +2487,7 @@ DEBUG_ONLY_TEST_F(AggregationTest, reclaimDuringInputProcessing) {
 
     testWait.await([&]() { return !testWaitFlag.load(); });
     ASSERT_TRUE(op != nullptr);
-    auto task = op->testingOperatorCtx()->task();
+    auto task = op->operatorCtx()->task();
     auto taskPauseWait = task->requestPause();
 
     driverWaitFlag = false;
@@ -2534,7 +2603,7 @@ DEBUG_ONLY_TEST_F(AggregationTest, reclaimDuringReserve) {
             const bool reclaimable = op->reclaimableBytes(reclaimableBytes);
             ASSERT_TRUE(reclaimable);
             ASSERT_GT(reclaimableBytes, 0);
-            auto* driver = op->testingOperatorCtx()->driver();
+            auto* driver = op->operatorCtx()->driver();
             TestSuspendedSection suspendedSection(driver);
             testWait.notify();
             driverWait.wait(driverWaitKey);
@@ -2555,7 +2624,7 @@ DEBUG_ONLY_TEST_F(AggregationTest, reclaimDuringReserve) {
 
   testWait.wait(testWaitKey);
   ASSERT_TRUE(op != nullptr);
-  auto task = op->testingOperatorCtx()->task();
+  auto task = op->operatorCtx()->task();
   auto taskPauseWait = task->requestPause();
   taskPauseWait.wait();
 
@@ -2651,7 +2720,7 @@ DEBUG_ONLY_TEST_F(AggregationTest, reclaimDuringAllocation) {
               } else {
                 ASSERT_EQ(reclaimableBytes, 0);
               }
-              auto* driver = op->testingOperatorCtx()->driver();
+              auto* driver = op->operatorCtx()->driver();
               TestSuspendedSection suspendedSection(driver);
               testWait.notify();
               driverWait.wait(driverWaitKey);
@@ -2684,7 +2753,7 @@ DEBUG_ONLY_TEST_F(AggregationTest, reclaimDuringAllocation) {
 
     testWait.wait(testWaitKey);
     ASSERT_TRUE(op != nullptr);
-    auto task = op->testingOperatorCtx()->task();
+    auto task = op->operatorCtx()->task();
     auto taskPauseWait = task->requestPause();
     taskPauseWait.wait();
 
@@ -2799,7 +2868,7 @@ DEBUG_ONLY_TEST_F(AggregationTest, reclaimDuringOutputProcessing) {
     testWait.await([&]() { return !testWaitFlag.load(); });
     ASSERT_TRUE(op != nullptr);
 
-    auto task = op->testingOperatorCtx()->task();
+    auto task = op->operatorCtx()->task();
     auto taskPauseWait = task->requestPause();
     driverWaitFlag = false;
     driverWait.notifyAll();
@@ -3090,7 +3159,7 @@ DEBUG_ONLY_TEST_F(AggregationTest, reclaimWithEmptyAggregationTable) {
 
     testWait.wait(testWaitKey);
     ASSERT_TRUE(op != nullptr);
-    auto task = op->testingOperatorCtx()->task();
+    auto task = op->operatorCtx()->task();
     auto taskPauseWait = task->requestPause();
     driverWait.notify();
     taskPauseWait.wait();
@@ -3176,7 +3245,7 @@ DEBUG_ONLY_TEST_F(AggregationTest, abortDuringOutputProcessing) {
           if (!injectOnce.exchange(false)) {
             return;
           }
-          auto* driver = op->testingOperatorCtx()->driver();
+          auto* driver = op->operatorCtx()->driver();
           ASSERT_EQ(
               driver->task()->enterSuspended(driver->state()),
               StopReason::kNone);
@@ -3240,7 +3309,7 @@ DEBUG_ONLY_TEST_F(AggregationTest, abortDuringInputgProcessing) {
           if (++numInputs != 2) {
             return;
           }
-          auto* driver = op->testingOperatorCtx()->driver();
+          auto* driver = op->operatorCtx()->driver();
           ASSERT_EQ(
               driver->task()->enterSuspended(driver->state()),
               StopReason::kNone);
@@ -3369,8 +3438,8 @@ DEBUG_ONLY_TEST_F(AggregationTest, reclaimEmptyInput) {
         if (!injectReclaimOnce.exchange(false)) {
           return;
         }
-        auto* driver = values->testingOperatorCtx()->driver();
-        auto task = values->testingOperatorCtx()->task();
+        auto* driver = values->operatorCtx()->driver();
+        auto task = values->operatorCtx()->task();
         // Shrink all the capacity before reclaim.
         memory::memoryManager()->arbitrator()->shrinkCapacity(
             task->pool()->root(), 0);
@@ -3439,8 +3508,8 @@ DEBUG_ONLY_TEST_F(AggregationTest, reclaimEmptyOutput) {
         if (++numGetOutput != 2) {
           return;
         }
-        auto* driver = op->testingOperatorCtx()->driver();
-        auto task = op->testingOperatorCtx()->task();
+        auto* driver = op->operatorCtx()->driver();
+        auto task = op->operatorCtx()->task();
         // Shrink all the capacity before reclaim.
         memory::memoryManager()->arbitrator()->shrinkCapacity(
             task->pool()->root(), 0);
@@ -3543,7 +3612,7 @@ DEBUG_ONLY_TEST_F(AggregationTest, reclaimFromAggregation) {
     SCOPED_TESTVALUE_SET(
         "facebook::velox::exec::Driver::runInternal::addInput",
         std::function<void(exec::Operator*)>(([&](exec::Operator* op) {
-          if (op->testingOperatorCtx()->operatorType() != "Aggregation") {
+          if (op->operatorCtx()->operatorType() != "Aggregation") {
             return;
           }
           // Inject spill in the middle of aggregation input processing.
@@ -3597,7 +3666,7 @@ DEBUG_ONLY_TEST_F(AggregationTest, reclaimFromDistinctAggregation) {
     SCOPED_TESTVALUE_SET(
         "facebook::velox::exec::Driver::runInternal::addInput",
         std::function<void(exec::Operator*)>(([&](exec::Operator* op) {
-          if (op->testingOperatorCtx()->operatorType() != "Aggregation") {
+          if (op->operatorCtx()->operatorType() != "Aggregation") {
             return;
           }
           // Inject spill at the end of aggregation input processing.

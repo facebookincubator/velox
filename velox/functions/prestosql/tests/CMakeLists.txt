@@ -36,11 +36,11 @@ add_executable(
   ArrayJoinTest.cpp
   ArrayMaxTest.cpp
   ArrayMinTest.cpp
+  ArrayMinMaxByTest.cpp
   ArrayNGramsTest.cpp
   ArrayNoneMatchTest.cpp
   ArrayNormalizeTest.cpp
   ArrayPositionTest.cpp
-  ArrayRemoveNullsTest.cpp
   ArrayRemoveTest.cpp
   ArrayShuffleTest.cpp
   ArraySortTest.cpp
@@ -62,6 +62,7 @@ add_executable(
   FailTest.cpp
   FindFirstTest.cpp
   FromUtf8Test.cpp
+  GeometryFunctionsTest.cpp
   GreatestLeastTest.cpp
   HyperLogLogCastTest.cpp
   HyperLogLogFunctionsTest.cpp
@@ -77,6 +78,7 @@ add_executable(
   MapNormalizeTest.cpp
   MapTopNTest.cpp
   MapTopNKeysTest.cpp
+  MapTopNValuesTest.cpp
   MapKeysAndValuesTest.cpp
   MapKeysByTopNValuesTest.cpp
   MapMatchTest.cpp
@@ -96,6 +98,7 @@ add_executable(
   SliceTest.cpp
   SplitTest.cpp
   SplitToMapTest.cpp
+  SplitToMultiMapTest.cpp
   StringFunctionsTest.cpp
   TimestampWithTimeZoneCastTest.cpp
   TransformKeysTest.cpp
@@ -104,6 +107,7 @@ add_executable(
   TrimFunctionsTest.cpp
   TypeOfTest.cpp
   TDigestCastTest.cpp
+  QDigestCastTest.cpp
   URLFunctionsTest.cpp
   UuidFunctionsTest.cpp
   WidthBucketArrayTest.cpp
@@ -127,6 +131,5 @@ target_link_libraries(
   velox_expression_fuzzer
   GTest::gtest
   GTest::gtest_main
-  gflags::gflags
   GTest::gmock
   GTest::gmock_main)

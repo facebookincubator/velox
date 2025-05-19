@@ -16,7 +16,6 @@
 
 #include "velox/vector/DecodedVector.h"
 
-#include <gflags/gflags.h>
 #include <glog/logging.h>
 #include <gtest/gtest.h>
 #include <optional>
@@ -33,7 +32,7 @@ namespace facebook::velox::test {
 class DecodedVectorTest : public testing::Test, public VectorTestBase {
  protected:
   static void SetUpTestCase() {
-    memory::MemoryManager::testingSetInstance({});
+    memory::MemoryManager::testingSetInstance(memory::MemoryManager::Options{});
   }
 
   DecodedVectorTest() : allSelected_(10010), halfSelected_(10010) {

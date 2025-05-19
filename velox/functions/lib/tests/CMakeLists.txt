@@ -14,6 +14,7 @@
 add_executable(
   velox_functions_lib_test
   ApproxMostFrequentStreamSummaryTest.cpp
+  ArrayRemoveNullsTest.cpp
   CheckNestedNullsTest.cpp
   DateTimeFormatterTest.cpp
   IsNullTest.cpp
@@ -21,9 +22,11 @@ add_executable(
   KllSketchTest.cpp
   LambdaFunctionUtilTest.cpp
   MapConcatTest.cpp
+  QuantileDigestTest.cpp
   Re2FunctionsTest.cpp
   RepeatTest.cpp
   TDigestTest.cpp
+  TimeUtilsTest.cpp
   Utf8Test.cpp
   ZetaDistributionTest.cpp)
 
@@ -43,5 +46,4 @@ target_link_libraries(
   velox_dwio_common_test_utils
   GTest::gtest
   GTest::gtest_main
-  GTest::gmock
-  gflags::gflags)
+  GTest::gmock)

@@ -77,7 +77,7 @@ std::string makeAggregateRow(CompileState& state, const AggregateProbe& probe) {
   for (auto n = 0; n < numNullable; n += 32) {
     out << fmt::format("  uint32_t nulls{};\n", n / 32);
   }
-  makeKeyMembers(probe.keys, out);
+  makeKeyMembers(probe.keys, "key", out);
   for (auto i = 0; i < probe.updates.size(); ++i) {
     probe.updates[i]->generator->generateInclude(
         state, probe, *probe.updates[i]);
@@ -193,7 +193,8 @@ void makeAggregateOps(
       << "(0, nullptr));\n"
          "    return;\n"
          "  }\n"
-         "  auto* data = new (op.head) DeviceAggregation();\n"
+         "  auto* data = reinterpret_cast<DeviceAggregation*>(op.head);\n"
+         "  *data = DeviceAggregation();\n"
          "  data->rowSize = op.rowSize;\n"
          "  data->singleRow = reinterpret_cast<char*>(data + 1);\n"
          "  memset(data->singleRow, 0, op.rowSize);\n"

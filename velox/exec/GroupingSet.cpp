@@ -754,10 +754,10 @@ bool GroupingSet::getOutput(
   VELOX_CHECK(!isDistinct());
 
   // @lint-ignore CLANGTIDY
-  char* groups[maxOutputRows];
+  std::vector<char*> groups(maxOutputRows);
   const int32_t numGroups = table_
       ? table_->rows()->listRows(
-            &iterator, maxOutputRows, maxOutputBytes, groups)
+            &iterator, maxOutputRows, maxOutputBytes, groups.data())
       : 0;
   if (numGroups == 0) {
     if (table_ != nullptr) {
@@ -766,7 +766,7 @@ bool GroupingSet::getOutput(
     return false;
   }
   extractGroups(
-      table_->rows(), folly::Range<char**>(groups, numGroups), result);
+      table_->rows(), folly::Range<char**>(groups.data(), numGroups), result);
   return true;
 }
 
@@ -842,11 +842,16 @@ bool GroupingSet::isPartialFull(int64_t maxBytes) {
 }
 
 uint64_t GroupingSet::allocatedBytes() const {
-  if (table_) {
-    return table_->allocatedBytes();
+  uint64_t totalBytes{0};
+  if (sortedAggregations_ != nullptr) {
+    totalBytes += sortedAggregations_->inputRowBytes();
   }
-
-  return stringAllocator_.retainedSize() + rows_.allocatedBytes();
+  if (table_ != nullptr) {
+    totalBytes += table_->allocatedBytes();
+  } else {
+    totalBytes += (stringAllocator_.retainedSize() + rows_.allocatedBytes());
+  }
+  return totalBytes;
 }
 
 const HashLookup& GroupingSet::hashLookup() const {
@@ -1010,6 +1015,8 @@ void GroupingSet::spill() {
   if (inputSpiller_ == nullptr) {
     VELOX_DCHECK(pool_.trackUsage());
     VELOX_CHECK(numDistinctSpillFilesPerPartition_.empty());
+    const auto sortingKeys = SpillState::makeSortingKeys(
+        std::vector<CompareFlags>(rows->keyTypes().size()));
     inputSpiller_ = std::make_unique<AggregationInputSpiller>(
         rows,
         makeSpillType(),
@@ -1018,13 +1025,9 @@ void GroupingSet::spill() {
             static_cast<uint8_t>(
                 spillConfig_->startPartitionBit +
                 spillConfig_->numPartitionBits)),
-        rows->keyTypes().size(),
-        std::vector<CompareFlags>(),
+        sortingKeys,
         spillConfig_,
         spillStats_);
-    VELOX_CHECK_EQ(
-        inputSpiller_->state().maxPartitions(),
-        1 << spillConfig_->numPartitionBits);
   }
   // Spilling may execute on multiple partitions in parallel, and
   // HashStringAllocator is not thread safe. If any aggregations
@@ -1034,12 +1037,11 @@ void GroupingSet::spill() {
   rows->stringAllocator().freezeAndExecute([&]() { inputSpiller_->spill(); });
   if (isDistinct() && numDistinctSpillFilesPerPartition_.empty()) {
     size_t totalNumDistinctSpilledFiles{0};
-    numDistinctSpillFilesPerPartition_.resize(
-        inputSpiller_->state().maxPartitions(), 0);
-    for (int partition = 0; partition < inputSpiller_->state().maxPartitions();
-         ++partition) {
+    const auto maxPartitions = 1 << spillConfig_->numPartitionBits;
+    numDistinctSpillFilesPerPartition_.resize(maxPartitions, 0);
+    for (int partition = 0; partition < maxPartitions; ++partition) {
       numDistinctSpillFilesPerPartition_[partition] =
-          inputSpiller_->state().numFinishedFiles(partition);
+          inputSpiller_->state().numFinishedFiles(SpillPartitionId(partition));
       totalNumDistinctSpilledFiles +=
           numDistinctSpillFilesPerPartition_[partition];
     }
@@ -1181,14 +1183,35 @@ bool GroupingSet::mergeNextWithAggregates(
     updateRow(*next.first, mergeState_);
     nextKeyIsEqual = next.second;
     next.first->pop();
+
     if (!nextKeyIsEqual &&
         ((mergeRows_->numRows() >= maxOutputRows) ||
-         (mergeRows_->allocatedBytes() >= maxOutputBytes))) {
+         (mergeRowBytes() >= maxOutputBytes))) {
       extractSpillResult(result);
       return true;
     }
   }
   VELOX_UNREACHABLE();
+}
+
+uint64_t GroupingSet::mergeRowBytes() const {
+  auto totalBytes = mergeRows_->allocatedBytes();
+  if (sortedAggregations_ != nullptr) {
+    totalBytes += sortedAggregations_->inputRowBytes();
+
+    // The memory below is used by 'sortedAggregations_' for allocating space to
+    // store the row pointers for later sorting usage. This by theory does not
+    // belong to the aggregation output as it will be dropped after sorting. But
+    // the memory usage of this part could be very high in conditions of large
+    // number of tiny groups due to 'RowPointers' headroom overhead. Hence we
+    // include it in the accounting to avoid memory overuse.
+    if (table_ != nullptr) {
+      totalBytes += table_->rows()->stringAllocator().currentBytes();
+    } else {
+      totalBytes += stringAllocator_.currentBytes();
+    }
+  }
+  return totalBytes;
 }
 
 void GroupingSet::prepareSpillResultWithoutAggregates(
@@ -1240,7 +1263,7 @@ bool GroupingSet::mergeNextWithoutAggregates(
   VELOX_CHECK_NOT_NULL(inputSpiller_);
   VELOX_CHECK_EQ(
       numDistinctSpillFilesPerPartition_.size(),
-      inputSpiller_->state().maxPartitions());
+      1 << spillConfig_->numPartitionBits);
 
   // We are looping over sorted rows produced by tree-of-losers. We logically
   // split the stream into runs of duplicate rows. As we process each run we
@@ -1320,7 +1343,22 @@ void GroupingSet::extractSpillResult(const RowVectorPtr& result) {
   }
   extractGroups(
       mergeRows_.get(), folly::Range<char**>(rows.data(), rows.size()), result);
+  clearMergeRows();
+}
+
+void GroupingSet::clearMergeRows() {
   mergeRows_->clear();
+  if (sortedAggregations_ != nullptr) {
+    // Clear the memory used by sorted aggregations.
+    sortedAggregations_->clear();
+    if (table_ != nullptr) {
+      // If non-global aggregation, 'sortedAggregations_' uses hash table's hash
+      // string allocator.
+      table_->rows()->stringAllocator().clear();
+    } else {
+      stringAllocator_.clear();
+    }
+  }
 }
 
 void GroupingSet::updateRow(SpillMergeStream& input, char* row) {
@@ -1484,18 +1522,17 @@ AggregationInputSpiller::AggregationInputSpiller(
     RowContainer* container,
     RowTypePtr rowType,
     const HashBitRange& hashBitRange,
-    int32_t numSortingKeys,
-    const std::vector<CompareFlags>& sortCompareFlags,
+    const std::vector<SpillSortKey>& sortingKeys,
     const common::SpillConfig* spillConfig,
     folly::Synchronized<common::SpillStats>* spillStats)
     : SpillerBase(
           container,
           std::move(rowType),
           hashBitRange,
-          numSortingKeys,
-          sortCompareFlags,
+          sortingKeys,
           std::numeric_limits<uint64_t>::max(),
           spillConfig->maxSpillRunRows,
+          std::nullopt,
           spillConfig,
           spillStats) {}
 
@@ -1508,10 +1545,10 @@ AggregationOutputSpiller::AggregationOutputSpiller(
           container,
           std::move(rowType),
           HashBitRange{},
-          0,
           {},
           std::numeric_limits<uint64_t>::max(),
           spillConfig->maxSpillRunRows,
+          std::nullopt,
           spillConfig,
           spillStats) {}
 
@@ -1526,8 +1563,8 @@ void AggregationOutputSpiller::spill(const RowContainerIterator& startRowIter) {
 void AggregationOutputSpiller::runSpill(bool lastRun) {
   SpillerBase::runSpill(lastRun);
   if (lastRun) {
-    for (auto partition = 0; partition < spillRuns_.size(); ++partition) {
-      state_.finishFile(partition);
+    for (const auto& [partitionId, spillRun] : spillRuns_) {
+      state_.finishFile(partitionId);
     }
   }
 }

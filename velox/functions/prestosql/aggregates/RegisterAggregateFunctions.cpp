@@ -37,9 +37,11 @@
 #include "velox/functions/prestosql/aggregates/MapUnionSumAggregate.h"
 #include "velox/functions/prestosql/aggregates/MaxByAggregate.h"
 #include "velox/functions/prestosql/aggregates/MaxSizeForStatsAggregate.h"
+#include "velox/functions/prestosql/aggregates/MergeAggregate.h"
 #include "velox/functions/prestosql/aggregates/MinByAggregate.h"
 #include "velox/functions/prestosql/aggregates/MinMaxAggregates.h"
 #include "velox/functions/prestosql/aggregates/MultiMapAggAggregate.h"
+#include "velox/functions/prestosql/aggregates/NoisyCountIfGaussianAggregate.h"
 #include "velox/functions/prestosql/aggregates/ReduceAgg.h"
 #include "velox/functions/prestosql/aggregates/SetAggregates.h"
 #include "velox/functions/prestosql/aggregates/SumAggregate.h"
@@ -84,9 +86,12 @@ void registerAllAggregateFunctions(
   registerMultiMapAggAggregate(prefix, withCompanionFunctions, overwrite);
   registerSumDataSizeForStatsAggregate(
       prefix, withCompanionFunctions, overwrite);
+  registerMergeAggregate(prefix, withCompanionFunctions, overwrite);
   registerMinMaxAggregates(prefix, withCompanionFunctions, overwrite);
   registerMaxByAggregates(prefix, withCompanionFunctions, overwrite);
   registerMinByAggregates(prefix, withCompanionFunctions, overwrite);
+  registerNoisyCountIfGaussianAggregate(
+      prefix, withCompanionFunctions, overwrite);
   registerReduceAgg(prefix, withCompanionFunctions, overwrite);
   registerSetAggAggregate(prefix, withCompanionFunctions, overwrite);
   registerSetUnionAggregate(prefix, withCompanionFunctions, overwrite);

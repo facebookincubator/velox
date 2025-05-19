@@ -34,7 +34,8 @@ void duplicateJoinKeyCheck(
 
 std::string getColumnName(const core::TypedExprPtr& typeExpr) {
   const auto field = core::TypedExprs::asFieldAccess(typeExpr);
-  VELOX_USER_CHECK(field->isInputColumn());
+  VELOX_CHECK_NOT_NULL(field);
+  VELOX_CHECK(field->isInputColumn());
   return field->name();
 }
 
@@ -191,9 +192,6 @@ void IndexLookupJoin::initialize() {
 
 void IndexLookupJoin::ensureInputLoaded(const InputBatchState& batch) {
   VELOX_CHECK_GT(numInputBatches(), 0);
-  if (!lookupPrefetchEnabled()) {
-    return;
-  }
   // Ensure each input vector are lazy loaded before process next batch. This is
   // to ensure the ordered lazy materialization in the source readers.
   auto& input = batch.input;
@@ -356,8 +354,12 @@ void IndexLookupJoin::initOutputProjections() {
       outputType_->size());
 }
 
+bool IndexLookupJoin::startDrain() {
+  return numInputBatches() != 0;
+}
+
 bool IndexLookupJoin::needsInput() const {
-  if (noMoreInput_) {
+  if (noMoreInput_ || isDraining()) {
     return false;
   }
   if (numInputBatches() >= maxNumInputBatches_) {
@@ -376,6 +378,7 @@ bool IndexLookupJoin::needsInput() const {
 BlockingReason IndexLookupJoin::isBlocked(ContinueFuture* future) {
   auto& batch = currentInputBatch();
   if (!batch.lookupFuture.valid()) {
+    endLookupBlockWait();
     return BlockingReason::kNotBlocked;
   }
   if (lookupPrefetchEnabled() && (numInputBatches() < maxNumInputBatches_) &&
@@ -384,7 +387,27 @@ BlockingReason IndexLookupJoin::isBlocked(ContinueFuture* future) {
   }
   *future = std::move(batch.lookupFuture);
   VELOX_CHECK(!batch.lookupFuture.valid());
+  startLookupBlockWait();
   return BlockingReason::kWaitForIndexLookup;
+}
+
+void IndexLookupJoin::startLookupBlockWait() {
+  VELOX_CHECK(!blockWaitStartNs_.has_value());
+  blockWaitStartNs_ = getCurrentTimeNano();
+}
+
+void IndexLookupJoin::endLookupBlockWait() {
+  if (!blockWaitStartNs_.has_value()) {
+    return;
+  }
+  SCOPE_EXIT {
+    blockWaitStartNs_ = std::nullopt;
+  };
+  const auto blockWaitEndNs = getCurrentTimeNano();
+  VELOX_CHECK_GE(blockWaitEndNs, blockWaitStartNs_.value());
+  const auto blockWaitNs = blockWaitEndNs - blockWaitStartNs_.value();
+  RECORD_HISTOGRAM_METRIC_VALUE(
+      velox::kMetricIndexLookupBlockedWaitTimeMs, blockWaitNs / 1'000'000);
 }
 
 void IndexLookupJoin::addInput(RowVectorPtr input) {
@@ -398,6 +421,12 @@ void IndexLookupJoin::addInput(RowVectorPtr input) {
 }
 
 RowVectorPtr IndexLookupJoin::getOutput() {
+  SCOPE_EXIT {
+    if (numInputBatches() == 0 && isDraining()) {
+      finishDrain();
+    }
+  };
+
   auto& batch = currentInputBatch();
   if (batch.empty()) {
     return nullptr;
@@ -779,14 +808,15 @@ void IndexLookupJoin::recordConnectorStats() {
     lockedStats->runtimeStats.erase(name);
     lockedStats->runtimeStats.emplace(name, std::move(value));
   }
-  if (connectorStats.count(kConnectorLookupCpuTime) != 0) {
-    VELOX_CHECK_EQ(
-        connectorStats[kConnectorLookupCpuTime].count,
-        connectorStats[kConnectorLookupWallTime].count);
+  if (connectorStats.count(kConnectorLookupWallTime) != 0) {
     const CpuWallTiming backgroundTiming{
-        static_cast<uint64_t>(connectorStats[kConnectorLookupCpuTime].count),
+        static_cast<uint64_t>(connectorStats[kConnectorLookupWallTime].count),
         static_cast<uint64_t>(connectorStats[kConnectorLookupWallTime].sum),
-        static_cast<uint64_t>(connectorStats[kConnectorLookupCpuTime].sum)};
+        // NOTE: this might not be accurate as it doesn't include the time spent
+        // inside the index storage client.
+        static_cast<uint64_t>(connectorStats[kConnectorResultPrepareTime].sum) +
+            connectorStats[kClientRequestProcessTime].sum +
+            connectorStats[kClientResultProcessTime].sum};
     lockedStats->backgroundTiming.clear();
     lockedStats->backgroundTiming.add(backgroundTiming);
   }

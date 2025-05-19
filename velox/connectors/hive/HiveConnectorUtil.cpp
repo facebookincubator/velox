@@ -554,6 +554,7 @@ void configureReaderOptions(
       hiveConfig->maxCoalescedDistanceBytes(sessionProperties));
   readerOptions.setFileColumnNamesReadAsLowerCase(
       hiveConfig->isFileColumnNamesReadAsLowerCase(sessionProperties));
+  readerOptions.setAllowEmptyFile(true);
   bool useColumnNamesForColumnMapping = false;
   switch (hiveSplit->fileFormat) {
     case dwio::common::FileFormat::DWRF:
@@ -627,6 +628,7 @@ void configureRowReaderOptions(
     rowReaderOptions.setTimestampPrecision(static_cast<TimestampPrecision>(
         hiveConfig->readTimestampUnit(sessionProperties)));
   }
+  rowReaderOptions.setStorageParameters(hiveSplit->storageParameters);
 }
 
 namespace {
@@ -635,7 +637,8 @@ bool applyPartitionFilter(
     const TypePtr& type,
     const std::string& partitionValue,
     bool isPartitionDateDaysSinceEpoch,
-    common::Filter* filter) {
+    common::Filter* filter,
+    bool asLocalTime) {
   if (type->isDate()) {
     int32_t result = 0;
     // days_since_epoch partition values are integers in string format. Eg.
@@ -666,7 +669,9 @@ bool applyPartitionFilter(
       auto result = util::fromTimestampString(
           StringView(partitionValue), util::TimestampParseMode::kPrestoCast);
       VELOX_CHECK(!result.hasError());
-      result.value().toGMT(Timestamp::defaultTimezone());
+      if (asLocalTime) {
+        result.value().toGMT(Timestamp::defaultTimezone());
+      }
       return applyFilter(*filter, result.value());
     }
     case TypeKind::VARCHAR: {
@@ -687,7 +692,8 @@ bool testFilters(
     const std::unordered_map<std::string, std::optional<std::string>>&
         partitionKeys,
     const std::unordered_map<std::string, std::shared_ptr<HiveColumnHandle>>&
-        partitionKeysHandle) {
+        partitionKeysHandle,
+    bool asLocalTime) {
   const auto totalRows = reader->numberOfRows();
   const auto& fileTypeWithId = reader->typeWithId();
   const auto& rowType = reader->rowType();
@@ -708,7 +714,8 @@ bool testFilters(
               handlesIter->second->dataType(),
               iter->second.value(),
               handlesIter->second->isPartitionDateValueDaysSinceEpoch(),
-              child->filter());
+              child->filter(),
+              asLocalTime);
         }
         // Column is missing, most likely due to schema evolution. Or it's a
         // partition key but the partition value is NULL.

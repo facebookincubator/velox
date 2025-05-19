@@ -22,6 +22,8 @@
 #include "velox/common/fuzzer/Utils.h"
 #include "velox/core/PlanNode.h"
 #include "velox/expression/FunctionSignature.h"
+#include "velox/parse/Expressions.h"
+#include "velox/parse/IExpr.h"
 #include "velox/vector/fuzzer/VectorFuzzer.h"
 
 namespace facebook::velox::exec::test {
@@ -71,6 +73,27 @@ class ReferenceQueryRunner {
     return defaultScalarTypes();
   }
 
+  /// Given a vector of batches, returns a pair of updated input batches and
+  /// expressions to be run as a projection. This is used to convert
+  /// intermediate only types (types not supported in the input) in input to
+  /// types allowed in the input, and the projections will handle converting
+  /// those values back into intermediate only types.
+  virtual std::pair<std::vector<RowVectorPtr>, std::vector<core::ExprPtr>>
+  inputProjections(const std::vector<RowVectorPtr>& input) const {
+    if (input.empty()) {
+      return {input, {}};
+    }
+
+    std::vector<core::ExprPtr> projections;
+
+    for (const auto& name : input[0]->type()->asRow().names()) {
+      projections.push_back(
+          std::make_shared<core::FieldAccessExpr>(name, name));
+    }
+
+    return std::make_pair(input, projections);
+  }
+
   virtual const std::unordered_map<std::string, DataSpec>&
   aggregationFunctionDataSpecs() const = 0;
 
@@ -78,22 +101,6 @@ class ReferenceQueryRunner {
   /// @return std::nullopt if the plan uses features not supported by the
   /// reference database.
   virtual std::optional<std::string> toSql(const core::PlanNodePtr& plan) = 0;
-
-  /// Same as the above toSql but for values nodes.
-  virtual std::optional<std::string> toSql(
-      const core::ValuesNodePtr& valuesNode);
-
-  /// Same as the above toSql but for table scan nodes.
-  virtual std::optional<std::string> toSql(
-      const core::TableScanNodePtr& tableScanNode);
-
-  /// Same as the above toSql but for hash join nodes.
-  virtual std::optional<std::string> toSql(
-      const std::shared_ptr<const core::HashJoinNode>& joinNode);
-
-  /// Same as the above toSql but for nested loop join nodes.
-  virtual std::optional<std::string> toSql(
-      const std::shared_ptr<const core::NestedLoopJoinNode>& joinNode);
 
   /// Returns whether a constant expression is supported by the reference
   /// database.
@@ -172,16 +179,14 @@ class ReferenceQueryRunner {
     VELOX_UNSUPPORTED();
   }
 
+  /// Returns the name of the values node table in the form t_<id>.
+  static std::string getTableName(const core::ValuesNode& valuesNode) {
+    return fmt::format("t_{}", valuesNode.id());
+  }
+
  protected:
   memory::MemoryPool* aggregatePool() {
     return aggregatePool_;
-  }
-
-  bool isSupportedDwrfType(const TypePtr& type);
-
-  /// Returns the name of the values node table in the form t_<id>.
-  std::string getTableName(const core::ValuesNodePtr& valuesNode) {
-    return fmt::format("t_{}", valuesNode->id());
   }
 
   // Traverses all nodes in the plan and returns all tables and their names.
@@ -190,7 +195,5 @@ class ReferenceQueryRunner {
 
  private:
   memory::MemoryPool* aggregatePool_;
-
-  std::optional<std::string> joinSourceToSql(const core::PlanNodePtr& planNode);
 };
 } // namespace facebook::velox::exec::test

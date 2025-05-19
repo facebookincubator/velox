@@ -59,12 +59,11 @@ class HashTableTestHelper {
   }
 
   void insertForJoin(
-      RowContainer* rows,
       char** groups,
       uint64_t* hashes,
       int32_t numGroups,
       TableInsertPartitionInfo* partitionInfo) {
-    table_->insertForJoin(rows, groups, hashes, numGroups, partitionInfo);
+    table_->insertForJoin(groups, hashes, numGroups, partitionInfo);
   }
 
   void setHashMode(BaseHashTable::HashMode mode, int32_t numNew) {
@@ -92,7 +91,7 @@ class HashTableTest : public testing::TestWithParam<bool>,
                       public VectorTestBase {
  protected:
   static void SetUpTestCase() {
-    memory::MemoryManager::testingSetInstance({});
+    memory::MemoryManager::testingSetInstance(memory::MemoryManager::Options{});
   }
 
   void SetUp() override {
@@ -1092,15 +1091,15 @@ VELOX_INSTANTIATE_TEST_SUITE_P(
     HashTableTest,
     testing::Values(true, false));
 
-/// This tests an issue only seen when the number of unique entries
-/// in the HashTable, crosses over int32 limit. The HashTable::loadTag()
-/// offset argument was int32 and for positions greater than int32 max,
-/// it would seg fault.
-TEST_P(HashTableTest, offsetOverflowLoadTags) {
-  GTEST_SKIP() << "Skipping as it takes long time to converge,"
-                  " re-enable to reproduce the issue";
-  if (GetParam() == true) {
-    return;
+// This tests an issue only seen when the number of unique entries in the
+// HashTable, crosses over int32 limit. The HashTable::loadTag() offset argument
+// was int32 and for positions greater than int32 max, it would seg fault.
+//
+// Disabled as it takes long time to converge, re-enable to reproduce the
+// issue.
+TEST_P(HashTableTest, DISABLED_offsetOverflowLoadTags) {
+  if (GetParam()) {
+    GTEST_SKIP() << "No need to run this in multi-threaded mode";
   }
   auto rowType = ROW({"a"}, {BIGINT()});
   auto table = createHashTableForAggregation(rowType, rowType->size());

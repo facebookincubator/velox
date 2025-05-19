@@ -16,6 +16,7 @@
 #include "velox/dwio/common/tests/utils/BatchMaker.h"
 #include "velox/exec/PlanNodeStats.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
+#include "velox/exec/tests/utils/HiveConnectorTestBase.h"
 #include "velox/exec/tests/utils/OperatorTestBase.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
 #include "velox/parse/Expressions.h"
@@ -26,21 +27,34 @@ using namespace facebook::velox::exec::test;
 
 using facebook::velox::test::BatchMaker;
 
-class FilterProjectTest : public OperatorTestBase {
+class FilterProjectTest : public HiveConnectorTestBase {
  protected:
+  void SetUp() override {
+    HiveConnectorTestBase::SetUp();
+  }
+
   void assertFilter(
       const std::vector<RowVectorPtr>& vectors,
       const std::string& filter = "c1 % 10  > 0") {
-    auto plan = PlanBuilder().values(vectors).filter(filter).planNode();
+    core::PlanNodePtr filterNode;
+    auto plan = PlanBuilder()
+                    .values(vectors)
+                    .filter(filter)
+                    .capturePlanNode(filterNode)
+                    .planNode();
+    ASSERT_TRUE(filterNode->supportsBarrier());
 
     assertQuery(plan, "SELECT * FROM tmp WHERE " + filter);
   }
 
   void assertProject(const std::vector<RowVectorPtr>& vectors) {
+    core::PlanNodePtr projectNode;
     auto plan = PlanBuilder()
                     .values(vectors)
                     .project({"c0", "c1", "c0 + c1"})
+                    .capturePlanNode(projectNode)
                     .planNode();
+    ASSERT_TRUE(projectNode->supportsBarrier());
 
     auto task = assertQuery(plan, "SELECT c0, c1, c0 + c1 FROM tmp");
 
@@ -269,10 +283,10 @@ TEST_F(FilterProjectTest, allFailedOrPassed) {
   createDuckDbTable(vectors);
 
   // filter over flat vector
-  assertFilter(std::move(vectors), "c0 = 0");
+  assertFilter(vectors, "c0 = 0");
 
   // filter over constant vector
-  assertFilter(std::move(vectors), "c1 = 0");
+  assertFilter(vectors, "c1 = 0");
 }
 
 // Tests fusing of consecutive filters and projects.
@@ -362,4 +376,109 @@ TEST_F(FilterProjectTest, numSilentThrow) {
   auto task = AssertQueryBuilder(plan).assertEmptyResults();
   auto planStats = toPlanStats(task->taskStats());
   ASSERT_EQ(100, planStats.at(filterId).customStats.at("numSilentThrow").sum);
+}
+
+TEST_F(FilterProjectTest, statsSplitter) {
+  auto data = makeRowVector({
+      makeFlatVector<int32_t>(100, folly::identity),
+  });
+
+  // Make 5 batches, 20 rows each: 0...19, 20...39, 40...59, 60...79, 80...99.
+  // Filter out firs 25 rows (1 full batch plus some more), then keep every 3rd
+  // row.
+  core::PlanNodeId filterId;
+  core::PlanNodeId projectId;
+  auto plan = PlanBuilder()
+                  .values(split(data, 5))
+                  .filter("if (c0 < 25, false, c0 % 3 = 0)")
+                  .capturePlanNodeId(filterId)
+                  .project({"c0", "c0 + 1"})
+                  .capturePlanNodeId(projectId)
+                  .planNode();
+
+  std::shared_ptr<Task> task;
+  AssertQueryBuilder(plan).runWithoutResults(task);
+
+  auto planStats = toPlanStats(task->taskStats());
+
+  const auto& filterStats = planStats.at(filterId);
+  const auto& projectStats = planStats.at(projectId);
+
+  EXPECT_EQ(filterStats.inputRows, 100);
+  EXPECT_EQ(filterStats.inputVectors, 5);
+
+  EXPECT_EQ(filterStats.outputRows, 25);
+  EXPECT_EQ(filterStats.outputVectors, 4);
+  EXPECT_LT(filterStats.outputBytes * 2, filterStats.inputBytes);
+
+  EXPECT_EQ(projectStats.inputRows, 25);
+  EXPECT_EQ(projectStats.inputVectors, 4);
+
+  EXPECT_EQ(projectStats.inputBytes, filterStats.outputBytes);
+  EXPECT_LT(projectStats.inputBytes, projectStats.outputBytes);
+
+  EXPECT_EQ(projectStats.outputRows, 25);
+  EXPECT_EQ(projectStats.outputVectors, 4);
+}
+
+TEST_F(FilterProjectTest, barrier) {
+  std::vector<RowVectorPtr> vectors;
+  std::vector<std::shared_ptr<TempFilePath>> tempFiles;
+  const int numSplits{5};
+  const int numRowsPerSplit{100};
+  for (int32_t i = 0; i < 5; ++i) {
+    auto vector = std::dynamic_pointer_cast<RowVector>(
+        BatchMaker::createBatch(rowType_, numRowsPerSplit, *pool_));
+    vectors.push_back(vector);
+    tempFiles.push_back(TempFilePath::create());
+  }
+  writeToFiles(toFilePaths(tempFiles), vectors);
+  createDuckDbTable(vectors);
+
+  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  core::PlanNodeId projectPlanNodeId;
+  auto plan = PlanBuilder(planNodeIdGenerator)
+                  .startTableScan()
+                  .outputType(rowType_)
+                  .endTableScan()
+                  .filter("c1 % 10  > 0")
+                  .project({"c0", "c1", "c0 + c1"})
+                  .capturePlanNodeId(projectPlanNodeId)
+                  .planNode();
+  struct {
+    bool barrierExecution;
+    int numOutputRows;
+
+    std::string toString() const {
+      return fmt::format(
+          "barrierExecution {}, numOutputRows {}",
+          barrierExecution,
+          numOutputRows);
+    }
+  } testSettings[] = {{true, 23}, {false, 23}, {true, 200}, {false, 200}};
+  for (const auto& testData : testSettings) {
+    SCOPED_TRACE(testData.toString());
+    auto task =
+        AssertQueryBuilder(plan, duckDbQueryRunner_)
+            .config(core::QueryConfig::kSparkPartitionId, "0")
+            .config(
+                core::QueryConfig::kMaxSplitPreloadPerDriver,
+                std::to_string(tempFiles.size()))
+            .splits(makeHiveConnectorSplits(tempFiles))
+            .serialExecution(true)
+            .barrierExecution(testData.barrierExecution)
+            .config(
+                core::QueryConfig::kPreferredOutputBatchRows,
+                std::to_string(testData.numOutputRows))
+            .assertResults("SELECT c0, c1, c0 + c1 FROM tmp WHERE c1 % 10 > 0");
+    const auto taskStats = task->taskStats();
+    ASSERT_EQ(taskStats.numBarriers, testData.barrierExecution ? numSplits : 0);
+    ASSERT_EQ(taskStats.numFinishedSplits, numSplits);
+    // NOTE: the projector node doesn't respect output batch size as it does
+    // one-to-one mapping and expects the upstream operator respects the output
+    // batch size.
+    ASSERT_EQ(
+        exec::toPlanStats(taskStats).at(projectPlanNodeId).outputVectors,
+        numSplits);
+  }
 }

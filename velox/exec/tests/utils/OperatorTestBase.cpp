@@ -88,7 +88,7 @@ void OperatorTestBase::setupMemory(
     asyncDataCache_->clear();
     asyncDataCache_.reset();
   }
-  MemoryManagerOptions options;
+  MemoryManager::Options options;
   options.allocatorCapacity = allocatorCapacity;
   options.arbitratorCapacity = arbitratorCapacity;
   options.arbitratorKind = "SHARED";
@@ -105,6 +105,9 @@ void OperatorTestBase::setupMemory(
        folly::to<std::string>(memoryPoolReservedCapacity) + "B"},
       {std::string(ExtraConfig::kMemoryPoolMinReclaimBytes),
        folly::to<std::string>(memoryPoolMinReclaimBytes) + "B"},
+      // For simplicity, we set the reclaim pct to 0, so that the tests will be
+      // purely based on kMemoryPoolMinReclaimBytes.
+      {std::string(ExtraConfig::kMemoryPoolMinReclaimPct), "0"},
       {std::string(ExtraConfig::kMemoryPoolAbortCapacityLimit),
        folly::to<std::string>(memoryPoolAbortCapacityLimit) + "B"},
       {std::string(ExtraConfig::kGlobalArbitrationEnabled), "true"},
@@ -188,20 +191,20 @@ core::PlanNodeId getOnlyLeafPlanNodeId(const core::PlanNodePtr& root) {
   return getOnlyLeafPlanNodeId(sources[0]);
 }
 
-std::function<void(Task* task)> makeAddSplit(
-    bool& noMoreSplits,
+std::function<void(TaskCursor* taskCursor)> makeAddSplit(
     std::unordered_map<core::PlanNodeId, std::vector<exec::Split>>&& splits) {
-  return [&](Task* task) {
-    if (noMoreSplits) {
+  return [&](TaskCursor* taskCursor) {
+    if (taskCursor->noMoreSplits()) {
       return;
     }
+    auto& task = taskCursor->task();
     for (auto& [nodeId, nodeSplits] : splits) {
       for (auto& split : nodeSplits) {
         task->addSplit(nodeId, std::move(split));
       }
       task->noMoreSplits(nodeId);
     }
-    noMoreSplits = true;
+    taskCursor->setNoMoreSplits();
   };
 }
 } // namespace
@@ -221,10 +224,9 @@ std::shared_ptr<Task> OperatorTestBase::assertQuery(
     std::unordered_map<core::PlanNodeId, std::vector<exec::Split>>&& splits,
     const std::string& duckDbSql,
     std::optional<std::vector<uint32_t>> sortingKeys) {
-  bool noMoreSplits = false;
   return test::assertQuery(
       plan,
-      makeAddSplit(noMoreSplits, std::move(splits)),
+      makeAddSplit(std::move(splits)),
       duckDbSql,
       duckDbQueryRunner_,
       sortingKeys);

@@ -103,6 +103,42 @@ class QueryConfig {
   static constexpr const char* kMaxLocalExchangePartitionCount =
       "max_local_exchange_partition_count";
 
+  /// Minimum number of local exchange output partitions to use buffered
+  /// partitioning.
+  ///
+  /// When the number of output partitions is low, it is preferred to process
+  /// one input vector at a time. For example, with 10 output partitions
+  /// splitting a single 100KB input vector into 10 10KB vectors is acceptable.
+  /// However, when the number of output partitions is high it may result in a
+  /// large number of tiny vectors generated. For example, with 100 output
+  /// partitions splitting a single 100KB input vector results in 100 1KB
+  /// vectors. Exchanging and processing tiny vectors may negatively impact
+  /// performance. To avoid this, buffered partitioning is used to accumulate
+  /// larger vectors.
+  static constexpr const char*
+      kMinLocalExchangePartitionCountToUsePartitionBuffer =
+          "min_local_exchange_partition_count_to_use_partition_buffer";
+
+  /// Maximum size in bytes to accumulate for a single partition of a local
+  /// exchange before flushing.
+  ///
+  /// The total amount of memory used by a single
+  /// local exchange operator is the sum of the sizes of all partitions. For
+  /// example, if the number of downstream pipeline drivers is 10 and the max
+  /// local exchange partition buffer size is 100KB, then the total memory used
+  /// by a single local exchange operator is 1MB. The total memory needed to
+  /// perform a local exchange is equal to the single local exchange
+  /// operator memory multiplied by the number of upstream pipeline drivers. For
+  /// example, if the number of upstream pipeline drivers is 10 the total memory
+  /// used by the local exchange operator is 10MB.
+  static constexpr const char* kMaxLocalExchangePartitionBufferSize =
+      "max_local_exchange_partition_buffer_size";
+
+  /// Try to preserve the encoding of the input vector when copying it to the
+  /// buffer.
+  static constexpr const char* kLocalExchangePartitionBufferPreserveEncoding =
+      "local_exchange_partition_buffer_preserve_encoding";
+
   /// Maximum size in bytes to accumulate in ExchangeQueue. Enforced
   /// approximately, not strictly.
   static constexpr const char* kMaxExchangeBufferSize =
@@ -139,6 +175,9 @@ class QueryConfig {
 
   static constexpr const char* kAbandonPartialTopNRowNumberMinPct =
       "abandon_partial_topn_row_number_min_pct";
+
+  static constexpr const char* kMaxElementsSizeInRepeatAndSequence =
+      "max_elements_size_in_repeat_and_sequence";
 
   /// The maximum number of bytes to buffer in PartitionedOutput operator to
   /// avoid creating tiny SerializedPages.
@@ -200,6 +239,10 @@ class QueryConfig {
 
   /// Join spilling flag, only applies if "spill_enabled" flag is set.
   static constexpr const char* kJoinSpillEnabled = "join_spill_enabled";
+
+  /// Config to enable hash join spill for mixed grouped execution mode.
+  static constexpr const char* kMixedGroupedModeHashJoinSpillEnabled =
+      "mixed_grouped_mode_hash_join_spill_enabled";
 
   /// OrderBy spilling flag, only applies if "spill_enabled" flag is set.
   static constexpr const char* kOrderBySpillEnabled = "order_by_spill_enabled";
@@ -333,6 +376,12 @@ class QueryConfig {
   static constexpr const char* kSparkLegacyDateFormatter =
       "spark.legacy_date_formatter";
 
+  /// If true, Spark statistical aggregation functions including skewness,
+  /// kurtosis, will return NaN instead of NULL when dividing by zero during
+  /// expression evaluation.
+  static constexpr const char* kSparkLegacyStatisticalAggregate =
+      "spark.legacy_statistical_aggregate";
+
   /// The number of local parallel table writer operators per task.
   static constexpr const char* kTaskWriterCount = "task_writer_count";
 
@@ -451,6 +500,20 @@ class QueryConfig {
       kDebugAggregationApproxPercentileFixedRandomSeed =
           "debug_aggregation_approx_percentile_fixed_random_seed";
 
+  /// When debug is enabled for memory manager, this is used to match the memory
+  /// pools that need allocation callsites tracking. Default to track nothing.
+  static constexpr const char* kDebugMemoryPoolNameRegex =
+      "debug_memory_pool_name_regex";
+
+  /// Some lambda functions over arrays and maps are evaluated in batches of the
+  /// underlying elements that comprise the arrays/maps. This is done to make
+  /// the batch size managable as array vectors can have thousands of elements
+  /// each and hit scaling limits as implementations typically expect
+  /// BaseVectors to a couple of thousand entries. This lets up tune those batch
+  /// sizes.
+  static constexpr const char* kDebugLambdaFunctionEvaluationBatchSize =
+      "debug_lambda_function_evaluation_batch_size";
+
   /// Temporary flag to control whether selective Nimble reader should be used
   /// in this query or not.  Will be removed after the selective Nimble reader
   /// is fully rolled out.
@@ -520,6 +583,21 @@ class QueryConfig {
   static constexpr const char* kRequestDataSizesMaxWaitSec =
       "request_data_sizes_max_wait_sec";
 
+  /// In streaming aggregation, wait until we have enough number of output rows
+  /// to produce a batch of size specified by this. If set to 0, then
+  /// Operator::outputBatchRows will be used as the min output batch rows.
+  static constexpr const char* kStreamingAggregationMinOutputBatchRows =
+      "streaming_aggregation_min_output_batch_rows";
+
+  /// TODO: Remove after dependencies are cleaned up.
+  static constexpr const char* kStreamingAggregationEagerFlush =
+      "streaming_aggregation_eager_flush";
+
+  /// If this is true, then it allows you to get the struct field names
+  /// as json element names when casting a row to json.
+  static constexpr const char* kFieldNamesInJsonCastEnabled =
+      "field_names_in_json_cast_enabled";
+
   bool selectiveNimbleReaderEnabled() const {
     return get<bool>(kSelectiveNimbleReaderEnabled, false);
   }
@@ -540,9 +618,17 @@ class QueryConfig {
     return get<bool>(kDebugDisableExpressionWithLazyInputs, false);
   }
 
+  std::string debugMemoryPoolNameRegex() const {
+    return get<std::string>(kDebugMemoryPoolNameRegex, "");
+  }
+
   std::optional<uint32_t> debugAggregationApproxPercentileFixedRandomSeed()
       const {
     return get<uint32_t>(kDebugAggregationApproxPercentileFixedRandomSeed);
+  }
+
+  int32_t debugLambdaFunctionEvaluationBatchSize() const {
+    return get<int32_t>(kDebugLambdaFunctionEvaluationBatchSize, 10'000);
   }
 
   uint64_t queryMaxMemoryPerNode() const {
@@ -577,6 +663,10 @@ class QueryConfig {
     return get<int32_t>(kAbandonPartialTopNRowNumberMinPct, 80);
   }
 
+  int32_t maxElementsSizeInRepeatAndSequence() const {
+    return get<int32_t>(kMaxElementsSizeInRepeatAndSequence, 10'000);
+  }
+
   uint64_t maxSpillRunRows() const {
     static constexpr uint64_t kDefault = 12UL << 20;
     return get<uint64_t>(kMaxSpillRunRows, kDefault);
@@ -606,6 +696,27 @@ class QueryConfig {
     // defaults to unlimited
     static constexpr uint32_t kDefault = std::numeric_limits<uint32_t>::max();
     return get<uint32_t>(kMaxLocalExchangePartitionCount, kDefault);
+  }
+
+  uint32_t minLocalExchangePartitionCountToUsePartitionBuffer() const {
+    // Use non buffering mode if the partition count 32 or less
+    // The default value is 32 is chosen rather conservatively. A
+    // significant performance degradation of a non-buffered approach is
+    // observed after 16 partitions.
+    static constexpr uint64_t kDefault = 33;
+    return get<uint32_t>(
+        kMinLocalExchangePartitionCountToUsePartitionBuffer, kDefault);
+  }
+
+  uint64_t maxLocalExchangePartitionBufferSize() const {
+    /// The default partition buffer size is 64KB.
+    static constexpr uint64_t kDefault = 64UL * 1024;
+    return get<uint64_t>(kMaxLocalExchangePartitionBufferSize, kDefault);
+  }
+
+  bool localExchangePartitionBufferPreserveEncoding() const {
+    /// Trying to preserve encoding can be expensive. Disabled by default.
+    return get<bool>(kLocalExchangePartitionBufferPreserveEncoding, false);
   }
 
   uint64_t maxExchangeBufferSize() const {
@@ -701,6 +812,10 @@ class QueryConfig {
 
   bool joinSpillEnabled() const {
     return get<bool>(kJoinSpillEnabled, true);
+  }
+
+  bool mixedGroupedModeHashJoinSpillEnabled() const {
+    return get<bool>(kMixedGroupedModeHashJoinSpillEnabled, false);
   }
 
   bool orderBySpillEnabled() const {
@@ -846,6 +961,10 @@ class QueryConfig {
     return get<bool>(kSparkLegacyDateFormatter, false);
   }
 
+  bool sparkLegacyStatisticalAggregate() const {
+    return get<bool>(kSparkLegacyStatisticalAggregate, false);
+  }
+
   bool exprTrackCpuUsage() const {
     return get<bool>(kExprTrackCpuUsage, false);
   }
@@ -955,6 +1074,19 @@ class QueryConfig {
 
   bool throwExceptionOnDuplicateMapKeys() const {
     return get<bool>(kThrowExceptionOnDuplicateMapKeys, false);
+  }
+
+  /// TODO: Remove after dependencies are cleaned up.
+  bool streamingAggregationEagerFlush() const {
+    return get<bool>(kStreamingAggregationEagerFlush, false);
+  }
+
+  int32_t streamingAggregationMinOutputBatchRows() const {
+    return get<int32_t>(kStreamingAggregationMinOutputBatchRows, 0);
+  }
+
+  bool isFieldNamesInJsonCastEnabled() const {
+    return get<bool>(kFieldNamesInJsonCastEnabled, false);
   }
 
   template <typename T>

@@ -37,7 +37,6 @@ PlanNodeStats& PlanNodeStats::operator+=(const PlanNodeStats& another) {
   addInputTiming.add(another.addInputTiming);
   getOutputTiming.add(another.getOutputTiming);
   finishTiming.add(another.finishTiming);
-  cpuWallTiming.add(another.isBlockedTiming);
   cpuWallTiming.add(another.addInputTiming);
   cpuWallTiming.add(another.getOutputTiming);
   cpuWallTiming.add(another.finishTiming);
@@ -209,20 +208,33 @@ std::string PlanNodeStats::toString(
   return out.str();
 }
 
+void appendOperatorStats(
+    const OperatorStats& stats,
+    std::unordered_map<core::PlanNodeId, PlanNodeStats>& planStats) {
+  const auto& planNodeId = stats.planNodeId;
+  auto it = planStats.find(planNodeId);
+  if (it != planStats.end()) {
+    it->second.add(stats);
+  } else {
+    PlanNodeStats nodeStats;
+    nodeStats.add(stats);
+    planStats.emplace(planNodeId, std::move(nodeStats));
+  }
+}
+
 std::unordered_map<core::PlanNodeId, PlanNodeStats> toPlanStats(
     const TaskStats& taskStats) {
   std::unordered_map<core::PlanNodeId, PlanNodeStats> planStats;
 
   for (const auto& pipelineStats : taskStats.pipelineStats) {
     for (const auto& opStats : pipelineStats.operatorStats) {
-      const auto& planNodeId = opStats.planNodeId;
-      auto it = planStats.find(planNodeId);
-      if (it != planStats.end()) {
-        it->second.add(opStats);
+      if (opStats.statsSplitter.has_value()) {
+        const auto& multiNodeStats = opStats.statsSplitter.value()(opStats);
+        for (const auto& stats : multiNodeStats) {
+          appendOperatorStats(stats, planStats);
+        }
       } else {
-        PlanNodeStats nodeStats;
-        nodeStats.add(opStats);
-        planStats.emplace(planNodeId, std::move(nodeStats));
+        appendOperatorStats(opStats, planStats);
       }
     }
   }

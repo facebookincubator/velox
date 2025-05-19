@@ -58,7 +58,7 @@ namespace facebook::velox::tool::trace::test {
 class HashJoinReplayerTest : public HiveConnectorTestBase {
  protected:
   static void SetUpTestCase() {
-    memory::MemoryManager::testingSetInstance({});
+    memory::MemoryManager::testingSetInstance(memory::MemoryManager::Options{});
     HiveConnectorTestBase::SetUpTestCase();
     registerFaultyFileSystem();
     if (!isRegisteredVectorSerde()) {
@@ -70,6 +70,7 @@ class HashJoinReplayerTest : public HiveConnectorTestBase {
     connector::hive::LocationHandle::registerSerDe();
     connector::hive::HiveColumnHandle::registerSerDe();
     connector::hive::HiveInsertTableHandle::registerSerDe();
+    connector::hive::HiveInsertFileNameGenerator::registerSerDe();
     connector::hive::HiveConnectorSplit::registerSerDe();
     core::PlanNode::registerSerDe();
     core::ITypedExpr::registerSerDe();
@@ -328,13 +329,6 @@ TEST_F(HashJoinReplayerTest, partialDriverIds) {
 }
 
 TEST_F(HashJoinReplayerTest, runner) {
-  const auto planWithSplits = createPlan(
-      tableDir_,
-      core::JoinType::kInner,
-      probeKeys_,
-      buildKeys_,
-      probeInput_,
-      buildInput_);
   const auto testDir = TempDirectoryPath::create();
   const auto traceRoot = fmt::format("{}/{}", testDir->getPath(), "traceRoot");
   std::shared_ptr<Task> task;

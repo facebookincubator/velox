@@ -23,6 +23,7 @@
 
 #include "velox/common/base/Fs.h"
 #include "velox/common/base/tests/GTestUtils.h"
+#include "velox/common/caching/AsyncDataCache.h"
 #include "velox/common/caching/tests/CacheTestUtil.h"
 #include "velox/common/file/tests/FaultyFile.h"
 #include "velox/common/file/tests/FaultyFileSystem.h"
@@ -72,7 +73,7 @@ void verifyCacheStats(
 }
 } // namespace
 
-class TableScanTest : public virtual HiveConnectorTestBase {
+class TableScanTest : public HiveConnectorTestBase {
  protected:
   void SetUp() override {
     HiveConnectorTestBase::SetUp();
@@ -146,7 +147,13 @@ class TableScanTest : public virtual HiveConnectorTestBase {
   }
 
   core::PlanNodePtr tableScanNode(const RowTypePtr& outputType) {
-    return PlanBuilder(pool_.get()).tableScan(outputType).planNode();
+    core::PlanNodePtr tableScanNode;
+    const auto plan = PlanBuilder(pool_.get())
+                          .tableScan(outputType)
+                          .capturePlanNode(tableScanNode)
+                          .planNode();
+    VELOX_CHECK(tableScanNode->supportsBarrier());
+    return plan;
   }
 
   static PlanNodeStats getTableScanStats(const std::shared_ptr<Task>& task) {
@@ -202,19 +209,8 @@ class TableScanTest : public virtual HiveConnectorTestBase {
                   .planNode();
 
     std::string partitionValueStr;
-    if (partitionType->isTimestamp() && partitionValue.has_value()) {
-      auto t = util::fromTimestampString(
-                   StringView(*partitionValue),
-                   util::TimestampParseMode::kPrestoCast)
-                   .thenOrThrow(folly::identity, [&](const Status& status) {
-                     VELOX_USER_FAIL("{}", status.message());
-                   });
-      t.toGMT(Timestamp::defaultTimezone());
-      partitionValueStr = "'" + t.toString() + "'";
-    } else {
-      partitionValueStr =
-          partitionValue.has_value() ? "'" + *partitionValue + "'" : "null";
-    }
+    partitionValueStr =
+        partitionValue.has_value() ? "'" + *partitionValue + "'" : "null";
     assertQuery(
         op, split, fmt::format("SELECT {}, * FROM tmp", partitionValueStr));
 
@@ -341,6 +337,66 @@ TEST_F(TableScanTest, directBufferInputRawInputBytes) {
       rawInputBytes + overreadBytes);
   ASSERT_GT(getTableScanRuntimeStats(task)["totalScanTime"].sum, 0);
   ASSERT_GT(getTableScanRuntimeStats(task)["ioWaitWallNanos"].sum, 0);
+}
+
+DEBUG_ONLY_TEST_F(TableScanTest, pendingCoalescedIoWhenTaskFailed) {
+  gflags::FlagSaver gflagSaver;
+  // Always trigger prefetch.
+  FLAGS_cache_prefetch_min_pct = 0;
+  facebook::velox::VectorFuzzer::Options opts;
+  opts.vectorSize = 1024;
+  facebook::velox::VectorFuzzer fuzzer(opts, pool_.get());
+  const auto tableType = ROW({"a", "b"}, {BIGINT(), BIGINT()});
+  const int numBatches{10};
+  std::vector<RowVectorPtr> tableInputs;
+  tableInputs.reserve(numBatches);
+  for (int i = 0; i < numBatches; ++i) {
+    tableInputs.push_back(fuzzer.fuzzInputRow(tableType));
+  }
+  auto filePath = TempFilePath::create();
+  writeToFile(filePath->getPath(), tableInputs);
+
+  auto plan = PlanBuilder(pool_.get())
+                  .startTableScan()
+                  .outputType(tableType)
+                  .endTableScan()
+                  .planNode();
+
+  std::unordered_map<std::string, std::string> config;
+  std::unordered_map<std::string, std::shared_ptr<config::ConfigBase>>
+      connectorConfigs = {};
+  // Create query ctx without cache to read through direct buffer input.
+  auto queryCtx = core::QueryCtx::create(
+      executor_.get(),
+      core::QueryConfig(std::move(config)),
+      connectorConfigs,
+      /*cache=*/nullptr);
+
+  // Inject error right after the coalesce io gets triggered and before the
+  // on-demand load.
+  const std::string errMsg{"injectedError"};
+  SCOPED_TESTVALUE_SET(
+      "facebook::velox::connector::hive::HiveDataSource::next",
+      std::function<void(connector::hive::HiveDataSource*)>(
+          [&](connector::hive::HiveDataSource* /*unused*/) {
+            VELOX_FAIL(errMsg);
+          }));
+  SCOPED_TESTVALUE_SET(
+      "facebook::velox::cache::DirectCoalescedLoad::loadData",
+      std::function<void(cache::CoalescedLoad*)>(
+          [&](cache::CoalescedLoad* /*unused*/) {
+            std::this_thread::sleep_for(std::chrono::seconds(2));
+          }));
+  std::thread queryThread([&]() {
+    VELOX_ASSERT_THROW(
+        AssertQueryBuilder(duckDbQueryRunner_)
+            .plan(plan)
+            .splits(makeHiveConnectorSplits({filePath}))
+            .queryCtx(queryCtx)
+            .copyResults(pool_.get()),
+        errMsg);
+  });
+  queryThread.join();
 }
 
 TEST_F(TableScanTest, connectorStats) {
@@ -613,7 +669,7 @@ DEBUG_ONLY_TEST_F(TableScanTest, timeLimitInGetOutput) {
   // Ensure the getOutput is long enough to trigger the maxGetOutputTimeMs in
   // TableScan, so we can test early exit (bail) from the TableScan::getOutput.
   SCOPED_TESTVALUE_SET(
-      "facebook::velox::exec::TableScan::getOutput",
+      "facebook::velox::exec::TableScan::getSplit",
       std::function<void(const TableScan*)>(
           ([&](const TableScan* /*tableScan*/) {
             /* sleep override */
@@ -1640,19 +1696,50 @@ TEST_F(TableScanTest, waitForSplit) {
   }
   createDuckDbTable(vectors);
 
-  int32_t fileIndex = 0;
-  ::assertQuery(
-      tableScanNode(),
-      [&](Task* task) {
-        if (fileIndex < filePaths.size()) {
-          task->addSplit("0", makeHiveSplit(filePaths[fileIndex++]->getPath()));
-        }
-        if (fileIndex == filePaths.size()) {
-          task->noMoreSplits("0");
-        }
-      },
-      "SELECT * FROM tmp",
-      duckDbQueryRunner_);
+  std::atomic_bool addSplitWaitFlag{true};
+  folly::EventCount addSplitWait;
+  TaskCursor* cursor{nullptr};
+
+  auto plan = tableScanNode();
+  const auto scanNodeId = plan->id();
+  std::atomic_int32_t fileIndex = 0;
+  std::thread queryThread([&]() {
+    ::assertQuery(
+        plan,
+        [&](TaskCursor* taskCursor) {
+          if (taskCursor->noMoreSplits()) {
+            return;
+          }
+          if (fileIndex != 0) {
+            return;
+          }
+          auto& task = taskCursor->task();
+          task->addSplit(
+              scanNodeId, makeHiveSplit(filePaths[fileIndex++]->getPath()));
+
+          cursor = taskCursor;
+          addSplitWaitFlag = false;
+          addSplitWait.notifyAll();
+        },
+        "SELECT * FROM tmp",
+        duckDbQueryRunner_);
+  });
+
+  addSplitWait.await([&] { return !addSplitWaitFlag.load(); });
+  ASSERT_NE(cursor, nullptr);
+  ASSERT_EQ(fileIndex, 1);
+  while (fileIndex < filePaths.size()) {
+    while (!cursor->task()->testingHasDriverWaitForSplit()) {
+      std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    }
+    cursor->task()->addSplit(
+        scanNodeId, makeHiveSplit(filePaths[fileIndex++]->getPath()));
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+  }
+  ASSERT_EQ(fileIndex, filePaths.size());
+  cursor->task()->noMoreSplits("0");
+  cursor->setNoMoreSplits();
+  queryThread.join();
 }
 
 DEBUG_ONLY_TEST_F(TableScanTest, tableScanSplitsAndWeights) {
@@ -1670,7 +1757,7 @@ DEBUG_ONLY_TEST_F(TableScanTest, tableScanSplitsAndWeights) {
   std::shared_mutex pauseTableScan;
   std::shared_mutex pauseSplitProcessing;
   SCOPED_TESTVALUE_SET(
-      "facebook::velox::exec::TableScan::getOutput",
+      "facebook::velox::exec::TableScan::getSplit",
       std::function<void(const TableScan*)>(
           ([&](const TableScan* /*tableScan*/) {
             pauseTableScan.lock_shared();
@@ -1858,16 +1945,7 @@ TEST_F(TableScanTest, validFileNoData) {
 // An invalid (size = 0) file.
 TEST_F(TableScanTest, emptyFile) {
   auto filePath = TempFilePath::create();
-
-  try {
-    assertQuery(
-        tableScanNode(),
-        makeHiveConnectorSplit(filePath->getPath()),
-        "SELECT * FROM tmp");
-    ASSERT_FALSE(true) << "Function should throw.";
-  } catch (const VeloxException& e) {
-    EXPECT_EQ("ORC file is empty", e.message());
-  }
+  assertQuery(tableScanNode(), makeHiveConnectorSplit(filePath->getPath()), "");
 }
 
 TEST_F(TableScanTest, preloadEmptySplit) {
@@ -2001,48 +2079,187 @@ TEST_F(TableScanTest, partitionedTableTimestampKey) {
   writeToFile(filePath->getPath(), vectors);
   createDuckDbTable(vectors);
   const std::string partitionValue = "2023-10-27 00:12:35";
-  testPartitionedTable(filePath->getPath(), TIMESTAMP(), partitionValue);
+
+  auto partitionType = TIMESTAMP();
+  // Test partition value is null.
+  testPartitionedTable(filePath->getPath(), partitionType, std::nullopt);
+
+  auto split = exec::test::HiveConnectorSplitBuilder(filePath->getPath())
+                   .partitionKey("pkey", partitionValue)
+                   .build();
+
+  ColumnHandleMap assignments = {
+      {"pkey", partitionKey("pkey", TIMESTAMP())},
+      {"c0", regularColumn("c0", BIGINT())},
+      {"c1", regularColumn("c1", DOUBLE())}};
+
+  Timestamp ts =
+      util::fromTimestampString(
+          StringView(partitionValue), util::TimestampParseMode::kPrestoCast)
+          .thenOrThrow(folly::identity, [&](const Status& status) {
+            VELOX_USER_FAIL("{}", status.message());
+          });
+  // Read timestamp partition value as UTC.
+  std::string tsValue = "'" + ts.toString() + "'";
+
+  Timestamp tsAsLocalTime = ts;
+  tsAsLocalTime.toGMT(Timestamp::defaultTimezone());
+  // Read timestamp partition value as local time.
+  std::string tsValueAsLocal = "'" + tsAsLocalTime.toString() + "'";
+
+  {
+    auto plan =
+        PlanBuilder()
+            .startTableScan()
+            .tableName("hive_table")
+            .outputType(
+                ROW({"pkey", "c0", "c1"}, {partitionType, BIGINT(), DOUBLE()}))
+            .assignments(assignments)
+            .endTableScan()
+            .planNode();
+
+    auto expect = [&](bool asLocalTime) {
+      AssertQueryBuilder(plan, duckDbQueryRunner_)
+          .connectorSessionProperty(
+              kHiveConnectorId,
+              connector::hive::HiveConfig::
+                  kReadTimestampPartitionValueAsLocalTimeSession,
+              asLocalTime ? "true" : "false")
+          .splits({split})
+          .assertResults(fmt::format(
+              "SELECT {}, * FROM tmp", asLocalTime ? tsValueAsLocal : tsValue));
+    };
+
+    expect(true);
+    expect(false);
+  }
+
+  {
+    auto plan =
+        PlanBuilder()
+            .startTableScan()
+            .tableName("hive_table")
+            .outputType(
+                ROW({"c0", "pkey", "c1"}, {BIGINT(), partitionType, DOUBLE()}))
+            .assignments(assignments)
+            .endTableScan()
+            .planNode();
+
+    auto expect = [&](bool asLocalTime) {
+      AssertQueryBuilder(plan, duckDbQueryRunner_)
+          .connectorSessionProperty(
+              kHiveConnectorId,
+              connector::hive::HiveConfig::
+                  kReadTimestampPartitionValueAsLocalTimeSession,
+              asLocalTime ? "true" : "false")
+          .splits({split})
+          .assertResults(fmt::format(
+              "SELECT c0, {}, c1 FROM tmp",
+              asLocalTime ? tsValueAsLocal : tsValue));
+    };
+    expect(true);
+    expect(false);
+  }
+
+  {
+    auto plan =
+        PlanBuilder()
+            .startTableScan()
+            .tableName("hive_table")
+            .outputType(
+                ROW({"c0", "c1", "pkey"}, {BIGINT(), DOUBLE(), partitionType}))
+            .assignments(assignments)
+            .endTableScan()
+            .planNode();
+
+    auto expect = [&](bool asLocalTime) {
+      AssertQueryBuilder(plan, duckDbQueryRunner_)
+          .connectorSessionProperty(
+              kHiveConnectorId,
+              connector::hive::HiveConfig::
+                  kReadTimestampPartitionValueAsLocalTimeSession,
+              asLocalTime ? "true" : "false")
+          .splits({split})
+          .assertResults(fmt::format(
+              "SELECT c0, c1, {} FROM tmp",
+              asLocalTime ? tsValueAsLocal : tsValue));
+    };
+    expect(true);
+    expect(false);
+  }
+
+  {
+    // Select only partition key.
+    auto plan =
+        PlanBuilder()
+            .startTableScan()
+            .tableName("hive_table")
+            .outputType(ROW({"pkey"}, {partitionType}))
+            .assignments({{"pkey", partitionKey("pkey", partitionType)}})
+            .endTableScan()
+            .planNode();
+
+    auto expect = [&](bool asLocalTime) {
+      AssertQueryBuilder(plan, duckDbQueryRunner_)
+          .connectorSessionProperty(
+              kHiveConnectorId,
+              connector::hive::HiveConfig::
+                  kReadTimestampPartitionValueAsLocalTimeSession,
+              asLocalTime ? "true" : "false")
+          .splits({split})
+          .assertResults(fmt::format(
+              "SELECT {} FROM tmp", asLocalTime ? tsValueAsLocal : tsValue));
+    };
+    expect(true);
+    expect(false);
+  }
 
   // Test partition filter on TIMESTAMP column.
   {
-    auto split = exec::test::HiveConnectorSplitBuilder(filePath->getPath())
-                     .partitionKey("pkey", partitionValue)
-                     .build();
-    auto outputType =
-        ROW({"pkey", "c0", "c1"}, {TIMESTAMP(), BIGINT(), DOUBLE()});
-    ColumnHandleMap assignments = {
-        {"pkey", partitionKey("pkey", TIMESTAMP())},
-        {"c0", regularColumn("c0", BIGINT())},
-        {"c1", regularColumn("c1", DOUBLE())}};
+    auto planWithSubfilter = [&](bool asLocalTime) {
+      auto outputType =
+          ROW({"pkey", "c0", "c1"}, {TIMESTAMP(), BIGINT(), DOUBLE()});
+      common::SubfieldFilters filters;
+      // pkey = 2023-10-27 00:12:35.
+      auto lower =
+          util::fromTimestampString(
+              StringView(partitionValue), util::TimestampParseMode::kPrestoCast)
+              .value();
+      if (asLocalTime) {
+        lower.toGMT(Timestamp::defaultTimezone());
+      }
+      filters[common::Subfield("pkey")] =
+          std::make_unique<common::TimestampRange>(lower, lower, false);
+      auto tableHandle = std::make_shared<HiveTableHandle>(
+          "test-hive",
+          "hive_table",
+          true,
+          std::move(filters),
+          nullptr,
+          nullptr);
 
-    common::SubfieldFilters filters;
-    // pkey = 2023-10-27 00:12:35.
-    auto lower = util::fromTimestampString(
-                     StringView("2023-10-27 00:12:35"),
-                     util::TimestampParseMode::kPrestoCast)
-                     .value();
-    lower.toGMT(Timestamp::defaultTimezone());
-    filters[common::Subfield("pkey")] =
-        std::make_unique<common::TimestampRange>(lower, lower, false);
+      return PlanBuilder()
+          .startTableScan()
+          .tableHandle(tableHandle)
+          .outputType(outputType)
+          .assignments(assignments)
+          .endTableScan()
+          .planNode();
+    };
 
-    auto tableHandle = std::make_shared<HiveTableHandle>(
-        "test-hive", "hive_table", true, std::move(filters), nullptr, nullptr);
-    auto op = std::make_shared<TableScanNode>(
-        "0",
-        std::move(outputType),
-        std::move(tableHandle),
-        std::move(assignments));
-
-    auto t =
-        util::fromTimestampString(
-            StringView(partitionValue), util::TimestampParseMode::kPrestoCast)
-            .thenOrThrow(folly::identity, [&](const Status& status) {
-              VELOX_USER_FAIL("{}", status.message());
-            });
-    t.toGMT(Timestamp::defaultTimezone());
-    std::string partitionValueStr = "'" + t.toString() + "'";
-    assertQuery(
-        op, split, fmt::format("SELECT {}, * FROM tmp", partitionValueStr));
+    auto expect = [&](bool asLocalTime) {
+      AssertQueryBuilder(planWithSubfilter(asLocalTime), duckDbQueryRunner_)
+          .connectorSessionProperty(
+              kHiveConnectorId,
+              connector::hive::HiveConfig::
+                  kReadTimestampPartitionValueAsLocalTimeSession,
+              asLocalTime ? "true" : "false")
+          .splits({split})
+          .assertResults(fmt::format(
+              "SELECT {}, * FROM tmp", asLocalTime ? tsValueAsLocal : tsValue));
+    };
+    expect(true);
+    expect(false);
   }
 }
 
@@ -4959,6 +5176,24 @@ TEST_F(TableScanTest, readFlatMapAsStruct) {
   AssertQueryBuilder(plan).split(split).assertResults(expected);
 }
 
+TEST_F(TableScanTest, flatMapReadOffset) {
+  auto vector = makeRowVector(
+      {makeNullableMapVector<int64_t, int64_t>({std::nullopt, {{{1, 2}}}})});
+  auto schema = asRowType(vector->type());
+  auto config = std::make_shared<dwrf::Config>();
+  config->set(dwrf::Config::FLATTEN_MAP, true);
+  config->set<const std::vector<uint32_t>>(dwrf::Config::MAP_FLAT_COLS, {0});
+  auto file = TempFilePath::create();
+  writeToFile(file->getPath(), {vector}, config);
+  auto plan = PlanBuilder().tableScan(schema, {"c0 is not null"}).planNode();
+  auto split = makeHiveConnectorSplit(file->getPath());
+  auto expected = makeRowVector({makeMapVector<int64_t, int64_t>({{{1, 2}}})});
+  AssertQueryBuilder(plan)
+      .split(split)
+      .config(QueryConfig::kMaxOutputBatchRows, "1")
+      .assertResults(expected);
+}
+
 TEST_F(TableScanTest, dynamicFilters) {
   // Make sure filters on same column from multiple downstream operators are
   // merged properly without overwriting each other.
@@ -5272,10 +5507,9 @@ DEBUG_ONLY_TEST_F(TableScanTest, cancellationToken) {
 
   std::atomic<Task*> task{nullptr};
   SCOPED_TESTVALUE_SET(
-      "facebook::velox::exec::TableScan::getOutput",
-      std::function<void(Operator*)>([&](Operator* op) {
-        task = op->testingOperatorCtx()->task().get();
-      }));
+      "facebook::velox::exec::TableScan::getSplit",
+      std::function<void(Operator*)>(
+          [&](Operator* op) { task = op->operatorCtx()->task().get(); }));
 
   std::thread queryThread([&]() {
     auto split = makeHiveConnectorSplit(

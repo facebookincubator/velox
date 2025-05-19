@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+#include "velox/common/base/tests/GTestUtils.h"
 #include "velox/dwio/parquet/tests/ParquetTestBase.h"
 #include "velox/expression/ExprToSubfieldFilter.h"
 #include "velox/vector/tests/utils/VectorMaker.h"
@@ -95,6 +96,73 @@ TEST_F(ParquetReaderTest, parseSample) {
 
   assertReadWithReaderAndExpected(
       sampleSchema(), *rowReader, expected, *leafPool_);
+}
+
+TEST_F(ParquetReaderTest, parseEmptyNestedList) {
+  // parse_empty_nested_list.parquet holds 1,000 rows of the following data:
+  //
+  // { "msg": { "a": { "b": [] } } }
+  //
+  // The create table SQL is:
+  //
+  // CREATE TABLE test (
+  //   msg ROW(
+  //     a ROW(
+  //       b ARRAY<INTEGER>
+  //     )
+  //   )
+  // )
+  // WITH (
+  //   format = 'PARQUET'
+  // );
+  //
+  // All 1000 rows in one row group.
+  // Data is in RLE_DICTIONARY Snappy format.
+  const std::string sample(
+      getExampleFilePath("parse_empty_nested_list.parquet"));
+
+  dwio::common::ReaderOptions readerOptions{leafPool_.get()};
+  auto reader = createReader(sample, readerOptions);
+  EXPECT_EQ(reader->numberOfRows(), 1000ULL);
+
+  // Ensure the intact data structure
+  auto type = reader->typeWithId();
+  EXPECT_EQ(type->size(), 1ULL);
+  auto colMsg = type->childAt(0);
+  EXPECT_EQ(colMsg->type()->kind(), TypeKind::ROW);
+
+  EXPECT_EQ(colMsg->size(), 1ULL);
+  auto childMsgA = colMsg->childAt(0);
+  EXPECT_EQ(childMsgA->type()->kind(), TypeKind::ROW);
+
+  EXPECT_EQ(childMsgA->size(), 1ULL);
+  auto childMsgAB = childMsgA->childAt(0);
+  EXPECT_EQ(childMsgAB->type()->kind(), TypeKind::ARRAY);
+
+  EXPECT_EQ(childMsgAB->size(), 1ULL);
+  auto childMsgABElement = childMsgAB->childAt(0);
+  EXPECT_EQ(childMsgABElement->type()->kind(), TypeKind::INTEGER);
+
+  EXPECT_EQ(type->childByName("msg"), colMsg);
+  EXPECT_EQ(colMsg->childByName("a"), childMsgA);
+  EXPECT_EQ(childMsgA->childByName("b"), childMsgAB);
+
+  // Ensure actual data can be read
+  auto schema = ROW({"msg"}, {ROW({"a"}, {ROW({"b"}, {ARRAY(INTEGER())})})});
+  auto rowReaderOpts = getReaderOpts(schema);
+  auto scanSpec = makeScanSpec(schema);
+  rowReaderOpts.setScanSpec(scanSpec);
+  auto rowReader = reader->createRowReader(rowReaderOpts);
+
+  auto expected =
+      makeRowVector({makeRowVector({makeRowVector({makeArrayVector<int32_t>(
+          1000,
+          // Create empty list
+          [](auto) { return 0; },
+          [](auto) { return 0; },
+          [](auto) { return false; })})})});
+
+  assertReadWithReaderAndExpected(schema, *rowReader, expected, *leafPool_);
 }
 
 TEST_F(ParquetReaderTest, parseUnannotatedList) {
@@ -242,6 +310,74 @@ TEST_F(ParquetReaderTest, parseLegacyListWithMultipleChildren) {
           col0->childAt(0)->childAt(2))
           ->name_,
       "c");
+}
+
+TEST_F(ParquetReaderTest, parseArrayOfRowHiveReservedKeywords) {
+  // array_of_row_hive_reserved_keywords.parquet was created using Hive's
+  // built-in Parquet writer with the following schema:
+  //  message hive_schema {
+  //    optional int32 id;
+  //    optional group items (LIST) {
+  //      repeated group bag {
+  //        optional group array_element {
+  //          optional binary name (STRING);
+  //          optional int32 quantity;
+  //          optional double price;
+  //        }
+  //      }
+  //    }
+  //  }
+  const std::string expectedVeloxType =
+      "ROW<id:INTEGER,items:ARRAY<ROW<name:VARCHAR,quantity:INTEGER,price:DOUBLE>>>";
+  const std::string sample(
+      getExampleFilePath("array_of_row_hive_reserved_keywords.parquet"));
+
+  dwio::common::ReaderOptions readerOpts{leafPool_.get()};
+  auto reader = createReader(sample, readerOpts);
+  EXPECT_EQ(reader->rowType()->toString(), expectedVeloxType);
+  EXPECT_EQ(reader->numberOfRows(), 6ULL);
+
+  auto type = reader->typeWithId();
+  EXPECT_EQ(type->size(), 2ULL);
+
+  auto col0 = type->childAt(0);
+  EXPECT_EQ(col0->type()->kind(), TypeKind::INTEGER);
+  EXPECT_EQ(
+      std::static_pointer_cast<const ParquetTypeWithId>(col0)->name_, "id");
+
+  auto col1 = type->childAt(1);
+  EXPECT_EQ(col1->type()->kind(), TypeKind::ARRAY);
+  EXPECT_EQ(
+      std::static_pointer_cast<const ParquetTypeWithId>(col1)->name_, "items");
+  EXPECT_EQ(col1->size(), 1ULL);
+
+  auto arrayElement = col1->childAt(0);
+  EXPECT_EQ(arrayElement->type()->kind(), TypeKind::ROW);
+  EXPECT_EQ(
+      std::static_pointer_cast<const ParquetTypeWithId>(arrayElement)->name_,
+      "array_element");
+  EXPECT_EQ(arrayElement->size(), 3ULL);
+
+  EXPECT_EQ(arrayElement->childAt(0)->type()->kind(), TypeKind::VARCHAR);
+  EXPECT_EQ(
+      std::static_pointer_cast<const ParquetTypeWithId>(
+          arrayElement->childAt(0))
+          ->name_,
+      "name");
+
+  EXPECT_EQ(arrayElement->childAt(1)->type()->kind(), TypeKind::INTEGER);
+  EXPECT_EQ(
+      std::static_pointer_cast<const ParquetTypeWithId>(
+          arrayElement->childAt(1))
+          ->name_,
+      "quantity");
+
+  EXPECT_EQ(arrayElement->childAt(2)->type()->kind(), TypeKind::DOUBLE);
+  EXPECT_EQ(
+      std::static_pointer_cast<const ParquetTypeWithId>(
+          arrayElement->childAt(2))
+          ->name_,
+      "price");
 }
 
 TEST_F(ParquetReaderTest, parseSampleRange1) {
@@ -1555,4 +1691,45 @@ TEST_F(ParquetReaderTest, parquet251) {
   auto rowType = ROW({"str"}, {VARCHAR()});
   assertReadWithFilters(
       "parquet-251.parquet", rowType, std::move(filters), expected);
+}
+
+TEST_F(ParquetReaderTest, fileColumnVarcharToMetadataColumnMismatchTest) {
+  const std::string sample(getExampleFilePath("nation.parquet"));
+
+  dwio::common::ReaderOptions readerOptions{leafPool_.get()};
+
+  auto runVarcharColTest = [&](const TypePtr& requestedType) {
+    // The type in the file is a BYTE_ARRAY resolving to VARCHAR.
+    // The requested type must match with what is requested as otherwise:
+    // - errors occur in the column readers
+    // - SIGSEGVs can be encountered during partitioning and subsequent
+    // operators following the table scan
+    auto outputRowType =
+        ROW({"nationkey", "name", "regionkey", "comment"},
+            {BIGINT(), requestedType, BIGINT(), VARCHAR()});
+
+    // Sets the metadata schema requested, for example from Hive, and not the
+    // schema from the file.
+    readerOptions.setFileSchema(outputRowType);
+    VELOX_ASSERT_THROW(
+        createReader(sample, readerOptions),
+        fmt::format(
+            "Converted type VARCHAR is not allowed for requested type {}",
+            requestedType->toString()));
+  };
+
+  auto types = std::vector<TypePtr>{
+      SMALLINT(),
+      INTEGER(),
+      BIGINT(),
+      DECIMAL(10, 2),
+      REAL(),
+      DOUBLE(),
+      TIMESTAMP(),
+      DATE(),
+      VARBINARY()};
+
+  for (const auto& type : types) {
+    runVarcharColTest(type);
+  }
 }

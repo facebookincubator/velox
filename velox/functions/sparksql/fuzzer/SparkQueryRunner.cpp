@@ -24,16 +24,17 @@
 #include "arrow/ipc/api.h"
 #include "arrow/result.h"
 #include "arrow/status.h"
-#include "grpc/grpc.h"
+#include "grpc/grpc.h" // @manual
 #include "spark/connect/base.pb.h"
 #include "spark/connect/relations.pb.h"
 #include "velox/common/base/Fs.h"
 #include "velox/dwio/common/WriterFactory.h"
 #include "velox/dwio/parquet/writer/Writer.h"
 #include "velox/exec/fuzzer/FuzzerUtil.h"
-#include "velox/exec/fuzzer/ToSQLUtil.h"
+#include "velox/exec/fuzzer/PrestoSql.h"
 #include "velox/exec/tests/utils/QueryAssertions.h"
 #include "velox/exec/tests/utils/TempFilePath.h"
+#include "velox/functions/sparksql/fuzzer/SparkQueryRunnerToSqlPlanNodeVisitor.h"
 #include "velox/vector/arrow/Bridge.h"
 
 using namespace spark::connect;
@@ -101,15 +102,11 @@ SparkQueryRunner::aggregationFunctionDataSpecs() const {
 
 std::optional<std::string> SparkQueryRunner::toSql(
     const velox::core::PlanNodePtr& plan) {
-  if (const auto aggregationNode =
-          std::dynamic_pointer_cast<const core::AggregationNode>(plan)) {
-    return toSql(aggregationNode);
-  }
-  if (const auto projectNode =
-          std::dynamic_pointer_cast<const core::ProjectNode>(plan)) {
-    return toSql(projectNode);
-  }
-  VELOX_NYI("Unsupported plan node: {}.", plan->toString());
+  exec::test::PrestoSqlPlanNodeVisitorContext context;
+  SparkQueryRunnerToSqlPlanNodeVisitor visitor;
+  plan->accept(visitor, context);
+
+  return context.sql;
 }
 
 std::multiset<std::vector<variant>> SparkQueryRunner::execute(
@@ -232,84 +229,5 @@ std::vector<RowVectorPtr> SparkQueryRunner::readArrowData(
       "Failed to read batch: {}.",
       batchResult.status().ToString());
   return results;
-}
-
-std::optional<std::string> SparkQueryRunner::toSql(
-    const std::shared_ptr<const core::AggregationNode>& aggregationNode) {
-  // Assume plan is Aggregation over Values.
-  VELOX_CHECK(aggregationNode->step() == core::AggregationNode::Step::kSingle);
-
-  std::vector<std::string> groupingKeys;
-  for (const auto& key : aggregationNode->groupingKeys()) {
-    groupingKeys.push_back(key->name());
-  }
-
-  std::stringstream sql;
-  sql << "SELECT " << folly::join(", ", groupingKeys);
-
-  const auto& aggregates = aggregationNode->aggregates();
-  if (!aggregates.empty()) {
-    if (!groupingKeys.empty()) {
-      sql << ", ";
-    }
-
-    for (auto i = 0; i < aggregates.size(); ++i) {
-      exec::test::appendComma(i, sql);
-      const auto& aggregate = aggregates[i];
-      VELOX_CHECK(
-          aggregate.sortingKeys.empty(),
-          "Sort key is not supported in Spark's aggregation. You may need to disable 'enable_sorted_aggregations' when running the fuzzer test.");
-      sql << exec::test::toAggregateCallSql(
-          aggregate.call, {}, {}, aggregate.distinct);
-
-      if (aggregate.mask != nullptr) {
-        sql << " filter (where " << aggregate.mask->name() << ")";
-      }
-      sql << " as " << aggregationNode->aggregateNames()[i];
-    }
-  }
-
-  sql << " FROM tmp";
-
-  if (!groupingKeys.empty()) {
-    sql << " GROUP BY " << folly::join(", ", groupingKeys);
-  }
-
-  return sql.str();
-}
-
-std::optional<std::string> SparkQueryRunner::toSql(
-    const std::shared_ptr<const core::ProjectNode>& projectNode) {
-  auto sourceSql = toSql(projectNode->sources()[0]);
-  if (!sourceSql.has_value()) {
-    return std::nullopt;
-  }
-
-  std::stringstream sql;
-  sql << "SELECT ";
-
-  for (auto i = 0; i < projectNode->names().size(); ++i) {
-    exec::test::appendComma(i, sql);
-    auto projection = projectNode->projections()[i];
-    if (auto field =
-            std::dynamic_pointer_cast<const core::FieldAccessTypedExpr>(
-                projection)) {
-      sql << field->name();
-    } else if (
-        auto call =
-            std::dynamic_pointer_cast<const core::CallTypedExpr>(projection)) {
-      sql << exec::test::toCallSql(call);
-    } else {
-      VELOX_NYI(
-          "Unsupported projection {} in project node: {}.",
-          projection->toString(),
-          projectNode->toString());
-    }
-
-    sql << " as " << projectNode->names()[i];
-  }
-
-  sql << " FROM (" << sourceSql.value() << ")";
-  return sql.str();
 }
 } // namespace facebook::velox::functions::sparksql::fuzzer

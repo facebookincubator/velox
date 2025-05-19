@@ -57,7 +57,7 @@ namespace facebook::velox::tool::trace::test {
 class FilterProjectReplayerTest : public HiveConnectorTestBase {
  protected:
   static void SetUpTestCase() {
-    memory::MemoryManager::testingSetInstance({});
+    memory::MemoryManager::testingSetInstance(memory::MemoryManager::Options{});
     HiveConnectorTestBase::SetUpTestCase();
     filesystems::registerLocalFileSystem();
     if (!isRegisteredVectorSerde()) {
@@ -69,6 +69,7 @@ class FilterProjectReplayerTest : public HiveConnectorTestBase {
     connector::hive::LocationHandle::registerSerDe();
     connector::hive::HiveColumnHandle::registerSerDe();
     connector::hive::HiveInsertTableHandle::registerSerDe();
+    connector::hive::HiveInsertFileNameGenerator::registerSerDe();
     connector::hive::HiveConnectorSplit::registerSerDe();
     core::PlanNode::registerSerDe();
     core::ITypedExpr::registerSerDe();

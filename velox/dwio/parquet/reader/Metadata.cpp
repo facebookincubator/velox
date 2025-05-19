@@ -219,6 +219,21 @@ ColumnChunkMetaDataPtr::getColumnStatistics(
       thriftColumnChunkPtr(ptr_)->meta_data.statistics, *type, numRows);
 };
 
+std::string ColumnChunkMetaDataPtr::getColumnMetadataStatsMinValue() {
+  VELOX_CHECK(hasStatistics());
+  return thriftColumnChunkPtr(ptr_)->meta_data.statistics.min_value;
+}
+
+std::string ColumnChunkMetaDataPtr::getColumnMetadataStatsMaxValue() {
+  VELOX_CHECK(hasStatistics());
+  return thriftColumnChunkPtr(ptr_)->meta_data.statistics.max_value;
+}
+
+int64_t ColumnChunkMetaDataPtr::getColumnMetadataStatsNullCount() {
+  VELOX_CHECK(hasStatistics());
+  return thriftColumnChunkPtr(ptr_)->meta_data.statistics.null_count;
+}
+
 int64_t ColumnChunkMetaDataPtr::dataPageOffset() const {
   return thriftColumnChunkPtr(ptr_)->meta_data.data_page_offset;
 }
@@ -253,6 +268,18 @@ RowGroupMetaDataPtr::~RowGroupMetaDataPtr() = default;
 
 int RowGroupMetaDataPtr::numColumns() const {
   return thriftRowGroupPtr(ptr_)->columns.size();
+}
+
+int32_t RowGroupMetaDataPtr::sortingColumnIdx(int i) const {
+  return thriftRowGroupPtr(ptr_)->sorting_columns[i].column_idx;
+}
+
+bool RowGroupMetaDataPtr::sortingColumnDescending(int i) const {
+  return thriftRowGroupPtr(ptr_)->sorting_columns[i].descending;
+}
+
+bool RowGroupMetaDataPtr::sortingColumnNullsFirst(int i) const {
+  return thriftRowGroupPtr(ptr_)->sorting_columns[i].nulls_first;
 }
 
 int64_t RowGroupMetaDataPtr::numRows() const {
@@ -304,6 +331,32 @@ int64_t FileMetaDataPtr::numRows() const {
 
 int FileMetaDataPtr::numRowGroups() const {
   return thriftFileMetaDataPtr(ptr_)->row_groups.size();
+}
+
+int64_t FileMetaDataPtr::keyValueMetadataSize() const {
+  return thriftFileMetaDataPtr(ptr_)->key_value_metadata.size();
+}
+
+bool FileMetaDataPtr::keyValueMetadataContains(
+    const std::string_view key) const {
+  auto thriftKeyValueMeta = thriftFileMetaDataPtr(ptr_)->key_value_metadata;
+  for (const auto& kv : thriftKeyValueMeta) {
+    if (kv.key == key) {
+      return true;
+    }
+  }
+  return false;
+}
+
+std::string FileMetaDataPtr::keyValueMetadataValue(
+    const std::string_view key) const {
+  int thriftKeyValueMetaSize = keyValueMetadataSize();
+  for (size_t i = 0; i < thriftKeyValueMetaSize; i++) {
+    if (key == thriftFileMetaDataPtr(ptr_)->key_value_metadata[i].key) {
+      return thriftFileMetaDataPtr(ptr_)->key_value_metadata[i].value;
+    }
+  }
+  VELOX_FAIL(fmt::format("Input key {} is not in the key value metadata", key));
 }
 
 } // namespace facebook::velox::parquet

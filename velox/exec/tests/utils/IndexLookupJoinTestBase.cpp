@@ -41,6 +41,7 @@ std::vector<facebook::velox::RowVectorPtr>
 IndexLookupJoinTestBase::generateProbeInput(
     size_t numBatches,
     size_t batchSize,
+    size_t numDuplicateProbeRows,
     SequenceTableData& tableData,
     std::shared_ptr<facebook::velox::memory::MemoryPool>& pool,
     const std::vector<std::string>& probeJoinKeys,
@@ -49,16 +50,16 @@ IndexLookupJoinTestBase::generateProbeInput(
     std::optional<int> equalMatchPct,
     std::optional<int> inMatchPct,
     std::optional<int> betweenMatchPct) {
-  VELOX_CHECK_EQ(
-      probeJoinKeys.size() + betweenColumns.size() + inColumns.size(), 3);
+  VELOX_CHECK_LE(
+      probeJoinKeys.size() + betweenColumns.size() + inColumns.size(),
+      keyType_->size());
   std::vector<facebook::velox::RowVectorPtr> probeInputs;
   probeInputs.reserve(numBatches);
   facebook::velox::VectorFuzzer::Options opts;
-  opts.vectorSize = batchSize;
+  opts.vectorSize = batchSize * numDuplicateProbeRows;
   opts.allowSlice = false;
   // TODO: add nullable handling later.
   opts.nullRatio = 0.0;
-  opts.allowDictionaryVector = false;
   facebook::velox::VectorFuzzer fuzzer(opts, pool.get());
   for (int i = 0; i < numBatches; ++i) {
     probeInputs.push_back(fuzzer.fuzzInputRow(probeType_));
@@ -91,17 +92,23 @@ IndexLookupJoinTestBase::generateProbeInput(
             probeInputs[i]->size(),
             pool.get()));
       }
-      for (int row = 0; row < probeInputs[i]->size(); ++row, ++totalRows) {
-        if (totalRows % 100 < equalMatchPct.value()) {
+      for (int row = 0; row < probeInputs[i]->size();
+           row += numDuplicateProbeRows, totalRows += numDuplicateProbeRows) {
+        if ((totalRows / numDuplicateProbeRows) % 100 < equalMatchPct.value()) {
           const auto matchKeyRow = folly::Random::rand64(numTableRows);
           for (int j = 0; j < probeJoinKeys.size(); ++j) {
-            probeKeyVectors[j]->set(
-                row, tableKeyVectors[j]->valueAt(matchKeyRow));
+            for (int k = 0; k < numDuplicateProbeRows; ++k) {
+              probeKeyVectors[j]->set(
+                  row + k, tableKeyVectors[j]->valueAt(matchKeyRow));
+            }
           }
         } else {
           for (int j = 0; j < probeJoinKeys.size(); ++j) {
-            probeKeyVectors[j]->set(
-                row, tableData.maxKeys[j] + 1 + folly::Random::rand32());
+            const auto randomValue = folly::Random::rand32() % 4096;
+            for (int k = 0; k < numDuplicateProbeRows; ++k) {
+              probeKeyVectors[j]->set(
+                  row + k, tableData.maxKeys[j] + 1 + randomValue);
+            }
           }
         }
       }
@@ -208,7 +215,8 @@ facebook::velox::core::PlanNodePtr IndexLookupJoinTestBase::makeLookupPlan(
     facebook::velox::core::PlanNodeId& joinNodeId) {
   VELOX_CHECK_EQ(leftKeys.size(), rightKeys.size());
   VELOX_CHECK_LE(leftKeys.size(), keyType_->size());
-  return facebook::velox::exec::test::PlanBuilder(planNodeIdGenerator)
+  return facebook::velox::exec::test::PlanBuilder(
+             planNodeIdGenerator, pool_.get())
       .values(probeVectors)
       .indexLookupJoin(
           leftKeys,
@@ -218,6 +226,34 @@ facebook::velox::core::PlanNodePtr IndexLookupJoinTestBase::makeLookupPlan(
           outputColumns,
           joinType)
       .capturePlanNodeId(joinNodeId)
+      .planNode();
+}
+
+facebook::velox::core::PlanNodePtr IndexLookupJoinTestBase::makeLookupPlan(
+    const std::shared_ptr<facebook::velox::core::PlanNodeIdGenerator>&
+        planNodeIdGenerator,
+    facebook::velox::core::TableScanNodePtr indexScanNode,
+    const std::vector<std::string>& leftKeys,
+    const std::vector<std::string>& rightKeys,
+    const std::vector<std::string>& joinConditions,
+    facebook::velox::core::JoinType joinType,
+    const std::vector<std::string>& outputColumns) {
+  VELOX_CHECK_EQ(leftKeys.size(), rightKeys.size());
+  VELOX_CHECK_LE(leftKeys.size(), keyType_->size());
+  return facebook::velox::exec::test::PlanBuilder(
+             planNodeIdGenerator, pool_.get())
+      .startTableScan()
+      .outputType(probeType_)
+      .endTableScan()
+      .captureScanNodeId(probeScanNodeId_)
+      .indexLookupJoin(
+          leftKeys,
+          rightKeys,
+          indexScanNode,
+          joinConditions,
+          outputColumns,
+          joinType)
+      .capturePlanNodeId(joinNodeId_)
       .planNode();
 }
 
@@ -247,13 +283,12 @@ IndexLookupJoinTestBase::makeIndexScanNode(
     const std::shared_ptr<facebook::velox::connector::ConnectorTableHandle>
         indexTableHandle,
     const facebook::velox::RowTypePtr& outputType,
-    facebook::velox::core::PlanNodeId& scanNodeId,
     std::unordered_map<
         std::string,
         std::shared_ptr<facebook::velox::connector::ColumnHandle>>&
         assignments) {
-  auto planBuilder =
-      facebook::velox::exec::test::PlanBuilder(planNodeIdGenerator);
+  auto planBuilder = facebook::velox::exec::test::PlanBuilder(
+      planNodeIdGenerator, pool_.get());
   auto indexTableScan =
       std::dynamic_pointer_cast<const facebook::velox::core::TableScanNode>(
           facebook::velox::exec::test::PlanBuilder::TableScanBuilder(
@@ -262,7 +297,7 @@ IndexLookupJoinTestBase::makeIndexScanNode(
               .outputType(outputType)
               .assignments(assignments)
               .endTableScan()
-              .capturePlanNodeId(scanNodeId)
+              .capturePlanNodeId(indexScanNodeId_)
               .planNode());
   VELOX_CHECK_NOT_NULL(indexTableScan);
   return indexTableScan;
@@ -278,7 +313,6 @@ void IndexLookupJoinTestBase::generateIndexTableData(
   opts.vectorSize = numRows;
   opts.nullRatio = 0.0;
   opts.allowSlice = false;
-  opts.allowDictionaryVector = false;
   facebook::velox::VectorFuzzer fuzzer(opts, pool.get());
 
   tableData.keyData = fuzzer.fuzzInputFlatRow(keyType_);
@@ -328,5 +362,64 @@ facebook::velox::RowTypePtr IndexLookupJoinTestBase::makeScanOutputType(
     types.push_back(keyType_->findChild(outputNames[i]));
   }
   return facebook::velox::ROW(std::move(outputNames), std::move(types));
+}
+
+bool IndexLookupJoinTestBase::isFilter(const std::string& conditionSql) const {
+  const auto inputType = concat(keyType_, probeType_);
+  return facebook::velox::exec::test::PlanBuilder::parseIndexJoinCondition(
+             conditionSql, inputType, pool_.get())
+      ->isFilter();
+}
+
+std::shared_ptr<facebook::velox::exec::Task>
+IndexLookupJoinTestBase::runLookupQuery(
+    const facebook::velox::core::PlanNodePtr& plan,
+    int numPrefetchBatches,
+    const std::string& duckDbVefifySql) {
+  return facebook::velox::exec::test::AssertQueryBuilder(duckDbQueryRunner_)
+      .plan(plan)
+      .config(
+          facebook::velox::core::QueryConfig::
+              kIndexLookupJoinMaxPrefetchBatches,
+          std::to_string(numPrefetchBatches))
+      .assertResults(duckDbVefifySql);
+}
+
+std::shared_ptr<facebook::velox::exec::Task>
+IndexLookupJoinTestBase::runLookupQuery(
+    const facebook::velox::core::PlanNodePtr& plan,
+    const std::vector<
+        std::shared_ptr<facebook::velox::exec::test::TempFilePath>>& probeFiles,
+    bool serialExecution,
+    bool barrierExecution,
+    int maxOutputRows,
+    int numPrefetchBatches,
+    const std::string& duckDbVefifySql) {
+  return facebook::velox::exec::test::AssertQueryBuilder(duckDbQueryRunner_)
+      .plan(plan)
+      .splits(probeScanNodeId_, makeHiveConnectorSplits(probeFiles))
+      .serialExecution(serialExecution)
+      .barrierExecution(barrierExecution)
+      .config(
+          facebook::velox::core::QueryConfig::kMaxOutputBatchRows,
+          std::to_string(maxOutputRows))
+      .config(
+          facebook::velox::core::QueryConfig::
+              kIndexLookupJoinMaxPrefetchBatches,
+          std::to_string(numPrefetchBatches))
+      .assertResults(duckDbVefifySql);
+}
+
+std::vector<std::shared_ptr<facebook::velox::exec::test::TempFilePath>>
+IndexLookupJoinTestBase::createProbeFiles(
+    const std::vector<facebook::velox::RowVectorPtr>& probeVectors) {
+  std::vector<std::shared_ptr<facebook::velox::exec::test::TempFilePath>>
+      probeFiles;
+  probeFiles.reserve(probeVectors.size());
+  for (auto i = 0; i < probeVectors.size(); ++i) {
+    probeFiles.push_back(facebook::velox::exec::test::TempFilePath::create());
+  }
+  writeToFiles(toFilePaths(probeFiles), probeVectors);
+  return probeFiles;
 }
 } // namespace fecebook::velox::exec::test

@@ -674,19 +674,20 @@ TEST_F(ParquetTableScanTest, readAsLowerCase) {
   params.planNode = plan;
   const int numSplitsPerFile = 1;
 
-  bool noMoreSplits = false;
-  auto addSplits = [&](exec::Task* task) {
-    if (!noMoreSplits) {
-      auto const splits = HiveConnectorTestBase::makeHiveConnectorSplits(
-          {getExampleFilePath("upper.parquet")},
-          numSplitsPerFile,
-          dwio::common::FileFormat::PARQUET);
-      for (const auto& split : splits) {
-        task->addSplit("0", exec::Split(split));
-      }
-      task->noMoreSplits("0");
+  auto addSplits = [&](exec::TaskCursor* taskCursor) {
+    if (taskCursor->noMoreSplits()) {
+      return;
     }
-    noMoreSplits = true;
+    auto& task = taskCursor->task();
+    auto const splits = HiveConnectorTestBase::makeHiveConnectorSplits(
+        {getExampleFilePath("upper.parquet")},
+        numSplitsPerFile,
+        dwio::common::FileFormat::PARQUET);
+    for (const auto& split : splits) {
+      task->addSplit("0", exec::Split(split));
+    }
+    task->noMoreSplits("0");
+    taskCursor->setNoMoreSplits();
   };
   auto result = readCursor(params, addSplits);
   ASSERT_TRUE(waitForTaskCompletion(result.first->task().get()));
@@ -916,49 +917,27 @@ TEST_F(ParquetTableScanTest, timestampPrecisionMicrosecond) {
           kSize, [](auto i) { return Timestamp(i, i * 1'001'001); }),
   });
   auto schema = asRowType(vector->type());
-  auto file = TempFilePath::create();
-  WriterOptions options;
-  options.writeInt96AsTimestamp = true;
-  writeToParquetFile(file->getPath(), {vector}, options);
-  auto plan = PlanBuilder().tableScan(schema).planNode();
+  for (const auto writeInt96 : {true, false}) {
+    auto file = TempFilePath::create();
+    WriterOptions options;
+    options.writeInt96AsTimestamp = writeInt96;
+    writeToParquetFile(file->getPath(), {vector}, options);
+    auto plan = PlanBuilder().tableScan(schema).planNode();
 
-  // Read timestamp data from parquet with microsecond precision.
-  CursorParameters params;
-  std::shared_ptr<folly::Executor> executor =
-      std::make_shared<folly::CPUThreadPoolExecutor>(
-          std::thread::hardware_concurrency());
-  std::shared_ptr<core::QueryCtx> queryCtx =
-      core::QueryCtx::create(executor.get());
-  std::unordered_map<std::string, std::string> session = {
-      {std::string(connector::hive::HiveConfig::kReadTimestampUnitSession),
-       "6"}};
-  queryCtx->setConnectorSessionOverridesUnsafe(
-      kHiveConnectorId, std::move(session));
-  params.queryCtx = queryCtx;
-  params.planNode = plan;
-  const int numSplitsPerFile = 1;
-
-  bool noMoreSplits = false;
-  auto addSplits = [&](exec::Task* task) {
-    if (!noMoreSplits) {
-      auto const splits = HiveConnectorTestBase::makeHiveConnectorSplits(
-          {file->getPath()},
-          numSplitsPerFile,
-          dwio::common::FileFormat::PARQUET);
-      for (const auto& split : splits) {
-        task->addSplit("0", exec::Split(split));
-      }
-      task->noMoreSplits("0");
-    }
-    noMoreSplits = true;
-  };
-  auto result = readCursor(params, addSplits);
-  ASSERT_TRUE(waitForTaskCompletion(result.first->task().get()));
-  auto expected = makeRowVector({
-      makeFlatVector<Timestamp>(
-          kSize, [](auto i) { return Timestamp(i, i * 1'001'000); }),
-  });
-  assertEqualResults({expected}, result.second);
+    // Read timestamp data from parquet with microsecond precision.
+    auto split = makeSplit(file->getPath());
+    auto result =
+        AssertQueryBuilder(plan, duckDbQueryRunner_)
+            .connectorSessionProperty(
+                kHiveConnectorId, HiveConfig::kReadTimestampUnitSession, "6")
+            .split(split)
+            .copyResults(pool());
+    auto expected = makeRowVector({
+        makeFlatVector<Timestamp>(
+            kSize, [](auto i) { return Timestamp(i, i * 1'001'000); }),
+    });
+    assertEqualResults({expected}, {result});
+  }
 }
 
 TEST_F(ParquetTableScanTest, testColumnNotExists) {
@@ -1277,6 +1256,82 @@ TEST_F(ParquetTableScanTest, singleBooleanRle) {
   assertSelect({"c0"}, "SELECT c0 FROM tmp");
   assertSelect({"c1"}, "SELECT c1 FROM tmp");
   assertSelect({"c2"}, "SELECT c2 FROM tmp");
+}
+
+TEST_F(ParquetTableScanTest, intToBigintRead) {
+  vector_size_t kSize = 100;
+  RowVectorPtr intDataFileVectors = makeRowVector(
+      {"c1"}, {makeFlatVector<int32_t>(kSize, [](auto row) { return row; })});
+
+  RowVectorPtr bigintDataFileVectors = makeRowVector(
+      {"c1"}, {makeFlatVector<int64_t>(kSize, [](auto row) { return row; })});
+
+  const std::shared_ptr<exec::test::TempDirectoryPath> dataFileFolder =
+      exec::test::TempDirectoryPath::create();
+  auto filePath = dataFileFolder->getPath() + "/" + "data.parquet";
+  WriterOptions options;
+  options.writeInt96AsTimestamp = false;
+  writeToParquetFile(filePath, {intDataFileVectors}, options);
+
+  auto rowType = ROW({"c1"}, {BIGINT()});
+  auto op = PlanBuilder()
+                .startTableScan()
+                .outputType(rowType)
+                .dataColumns(rowType)
+                .endTableScan()
+                .planNode();
+
+  auto split = makeSplit(filePath);
+  auto result = AssertQueryBuilder(op).split(split).copyResults(pool());
+  auto rows = result->as<RowVector>();
+
+  assertEqualVectors(bigintDataFileVectors->childAt(0), rows->childAt(0));
+}
+
+TEST_F(ParquetTableScanTest, shortAndLongDecimalReadWithLargerPrecision) {
+  // decimal.parquet holds two columns (a: DECIMAL(5, 2), b: DECIMAL(20, 5)) and
+  // 20 rows (10 rows per group). Data is in plain uncompressed format:
+  //   a: [100.01 .. 100.20]
+  //   b: [100000000000000.00001 .. 100000000000000.00020]
+  // This test reads the DECIMAL(5, 2)a and DECIMAL(20, 5) file columns
+  // with DECIMAL(8, 2) and DECIMAL(22, 5) row types.
+  vector_size_t kSize = 20;
+  std::vector<int64_t> unscaledShortValues(kSize);
+  std::iota(unscaledShortValues.begin(), unscaledShortValues.end(), 10001);
+  std::vector<int128_t> longDecimalValues;
+  for (int i = 1; i <= kSize; ++i) {
+    if (i < 10) {
+      longDecimalValues.emplace_back(
+          HugeInt::parse(fmt::format("1000000000000000000{}", i)));
+    } else {
+      longDecimalValues.emplace_back(
+          HugeInt::parse(fmt::format("100000000000000000{}", i)));
+    }
+  }
+
+  RowVectorPtr expectedDecimalVectors = makeRowVector(
+      {"c1", "c2"},
+      {makeFlatVector<int64_t>(unscaledShortValues, DECIMAL(8, 2)),
+       makeFlatVector<int128_t>(longDecimalValues, DECIMAL(22, 5))});
+
+  const std::shared_ptr<exec::test::TempDirectoryPath> dataFileFolder =
+      exec::test::TempDirectoryPath::create();
+  auto filePath = getExampleFilePath("decimal.parquet");
+
+  auto rowType = ROW({"c1", "c2"}, {DECIMAL(8, 2), DECIMAL(22, 5)});
+  auto op = PlanBuilder()
+                .startTableScan()
+                .outputType(rowType)
+                .dataColumns(rowType)
+                .endTableScan()
+                .planNode();
+
+  auto split = makeSplit(filePath);
+  auto result = AssertQueryBuilder(op).split(split).copyResults(pool());
+  auto rows = result->as<RowVector>();
+
+  assertEqualVectors(expectedDecimalVectors->childAt(0), rows->childAt(0));
+  assertEqualVectors(expectedDecimalVectors->childAt(1), rows->childAt(1));
 }
 
 int main(int argc, char** argv) {

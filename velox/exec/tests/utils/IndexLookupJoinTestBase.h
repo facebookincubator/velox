@@ -16,6 +16,7 @@
 
 #include "velox/connectors/Connector.h"
 #include "velox/core/PlanNode.h"
+#include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/HiveConnectorTestBase.h"
 #include "velox/parse/PlanNodeIdGenerator.h"
 
@@ -33,29 +34,34 @@ class IndexLookupJoinTestBase
     std::vector<int64_t> maxKeys;
   };
 
-  facebook::velox::RowTypePtr concat(
+  static facebook::velox::RowTypePtr concat(
       const facebook::velox::RowTypePtr& a,
       const facebook::velox::RowTypePtr& b);
 
+  bool isFilter(const std::string& conditionSql) const;
+
   int getNumRows(const std::vector<int>& cardinalities);
 
-  // Generate probe input for lookup join.
-  // @param numBatches: number of probe batches.
-  // @param batchSize: number of rows in each probe batch.
-  // @param tableData: contains the sequence table data including key vectors
-  // and min/max key values.
-  // @param probeJoinKeys: the prefix key colums used for equality joins.
-  // @param inColumns: the ordered list of in conditions.
-  // @param betweenColumns: the ordered list of between conditions.
-  // @param equalMatchPct: percentage of rows in the probe input that matches
-  // with the rows in index table.
-  // @param betweenMatchPct: percentage of rows in the probe input that matches
-  // the rows in index table with between conditions.
-  // @param inMatchPct: percentage of rows in the probe input that matches the
-  // rows in index table with in conditions.
+  /// Generate probe input for lookup join.
+  /// @param numBatches: number of probe batches.
+  /// @param batchSize: number of rows in each probe batch.
+  /// @param numDuplicateProbeRows: number of duplicates for each probe row so
+  /// the actual batch size is batchSize * numDuplicatesProbeRows.
+  /// @param tableData: contains the sequence table data including key vectors
+  /// and min/max key values.
+  /// @param probeJoinKeys: the prefix key colums used for equality joins.
+  /// @param inColumns: the ordered list of in conditions.
+  /// @param betweenColumns: the ordered list of between conditions.
+  /// @param equalMatchPct: percentage of rows in the probe input that matches
+  /// with the rows in index table.
+  /// @param betweenMatchPct: percentage of rows in the probe input that matches
+  /// the rows in index table with between conditions.
+  /// @param inMatchPct: percentage of rows in the probe input that matches the
+  /// rows in index table with in conditions.
   std::vector<facebook::velox::RowVectorPtr> generateProbeInput(
       size_t numBatches,
       size_t batchSize,
+      size_t numDuplicateProbeRows,
       SequenceTableData& tableData,
       std::shared_ptr<facebook::velox::memory::MemoryPool>& pool,
       const std::vector<std::string>& probeJoinKeys,
@@ -66,15 +72,15 @@ class IndexLookupJoinTestBase
       std::optional<int> inMatchPct = std::nullopt,
       std::optional<int> betweenMatchPct = std::nullopt);
 
-  // Makes lookup join plan with the following parameters:
-  // @param indexScanNode: the index table scan node.
-  // @param probeVectors: the probe input vectors.
-  // @param leftKeys: the left join keys of index lookup join.
-  // @param rightKeys: the right join keys of index lookup join.
-  // @param joinType: the join type of index lookup join.
-  // @param outputColumns: the output column names of index lookup join.
-  // @param joinNodeId: returns the plan node id of the index lookup join
-  // node.
+  /// Makes lookup join plan with the following parameters:
+  /// @param indexScanNode: the index table scan node.
+  /// @param probeVectors: the probe input vectors.
+  /// @param leftKeys: the left join keys of index lookup join.
+  /// @param rightKeys: the right join keys of index lookup join.
+  /// @param joinType: the join type of index lookup join.
+  /// @param outputColumns: the output column names of index lookup join.
+  /// @param joinNodeId: returns the plan node id of the index lookup join
+  /// node.
   facebook::velox::core::PlanNodePtr makeLookupPlan(
       const std::shared_ptr<facebook::velox::core::PlanNodeIdGenerator>&
           planNodeIdGenerator,
@@ -87,47 +93,89 @@ class IndexLookupJoinTestBase
       const std::vector<std::string>& outputColumns,
       facebook::velox::core::PlanNodeId& joinNodeId);
 
+  /// Makes lookup join plan with the following parameters:
+  /// @param indexScanNode: the index table scan node.
+  /// @param probeVectors: the probe input vectors.
+  /// @param leftKeys: the left join keys of index lookup join.
+  /// @param rightKeys: the right join keys of index lookup join.
+  /// @param joinType: the join type of index lookup join.
+  /// @param outputColumns: the output column names of index lookup join.
+  /// @param joinNodeId: returns the plan node id of the index lookup join
+  /// node.
+  /// @param probeScanNodeId: returns the plan node id of the probe table scan
+  facebook::velox::core::PlanNodePtr makeLookupPlan(
+      const std::shared_ptr<facebook::velox::core::PlanNodeIdGenerator>&
+          planNodeIdGenerator,
+      facebook::velox::core::TableScanNodePtr indexScanNode,
+      const std::vector<std::string>& leftKeys,
+      const std::vector<std::string>& rightKeys,
+      const std::vector<std::string>& joinConditions,
+      facebook::velox::core::JoinType joinType,
+      const std::vector<std::string>& outputColumns);
+
   void createDuckDbTable(
       const std::string& tableName,
       const std::vector<facebook::velox::RowVectorPtr>& data);
 
-  // Makes index table scan node with the specified index table handle.
-  // @param outputType: the output schema of the index table scan node.
-  // @param scanNodeId: returns the plan node id of the index table scan
-  // node.
+  /// Makes index table scan node with the specified index table handle.
+  /// @param outputType: the output schema of the index table scan node.
   facebook::velox::core::TableScanNodePtr makeIndexScanNode(
       const std::shared_ptr<facebook::velox::core::PlanNodeIdGenerator>&
           planNodeIdGenerator,
       const std::shared_ptr<facebook::velox::connector::ConnectorTableHandle>
           indexTableHandle,
       const facebook::velox::RowTypePtr& outputType,
-      facebook::velox::core::PlanNodeId& scanNodeId,
       std::unordered_map<
           std::string,
           std::shared_ptr<facebook::velox::connector::ColumnHandle>>&
           assignments);
 
-  // Generate sequence storage table which will be persisted by mock zippydb
-  // client for testing.
-  // @param keyCardinalities: specifies the number of unique keys per each index
-  // column, which also determines the total number of rows stored in the
-  // sequence storage table.
-  // @param tableData: returns the sequence table data stats including the key
-  // vector, value vector, table vector, and the min and max key values for each
-  // index column.
+  /// Generate sequence storage table which will be persisted by mock zippydb
+  /// client for testing.
+  /// @param keyCardinalities: specifies the number of unique keys per each
+  /// index column, which also determines the total number of rows stored in the
+  /// sequence storage table.
+  /// @param tableData: returns the sequence table data stats including the key
+  /// vector, value vector, table vector, and the min and max key values for
+  /// each index column.
   void generateIndexTableData(
       const std::vector<int>& keyCardinalities,
       SequenceTableData& tableData,
       std::shared_ptr<facebook::velox::memory::MemoryPool>& pool);
 
-  // Makes output schema from the index table scan node with the specified
-  // column names.
+  /// Write 'probeVectors' to a number of files with one per each file.
+  std::vector<std::shared_ptr<facebook::velox::exec::test::TempFilePath>>
+  createProbeFiles(
+      const std::vector<facebook::velox::RowVectorPtr>& probeVectors);
+
+  /// Makes output schema from the index table scan node with the specified
+  /// column names.
   facebook::velox::RowTypePtr makeScanOutputType(
       std::vector<std::string> outputNames);
 
+  std::shared_ptr<facebook::velox::exec::Task> runLookupQuery(
+      const facebook::velox::core::PlanNodePtr& plan,
+      int numPrefetchBatches,
+      const std::string& duckDbVefifySql);
+
+  std::shared_ptr<facebook::velox::exec::Task> runLookupQuery(
+      const facebook::velox::core::PlanNodePtr& plan,
+      const std::vector<
+          std::shared_ptr<facebook::velox::exec::test::TempFilePath>>&
+          probeFiles,
+      bool serialExecution,
+      bool barrierExecution,
+      int maxBatchRows,
+      int numPrefetchBatches,
+      const std::string& duckDbVefifySql);
+
   facebook::velox::RowTypePtr keyType_;
+  std::optional<facebook::velox::RowTypePtr> partitionType_;
   facebook::velox::RowTypePtr valueType_;
   facebook::velox::RowTypePtr tableType_;
   facebook::velox::RowTypePtr probeType_;
+  facebook::velox::core::PlanNodeId joinNodeId_;
+  facebook::velox::core::PlanNodeId indexScanNodeId_;
+  facebook::velox::core::PlanNodeId probeScanNodeId_;
 };
 } // namespace fecebook::velox::exec::test

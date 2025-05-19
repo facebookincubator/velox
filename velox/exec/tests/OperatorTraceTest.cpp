@@ -42,7 +42,7 @@ namespace facebook::velox::exec::trace::test {
 class OperatorTraceTest : public HiveConnectorTestBase {
  protected:
   static void SetUpTestCase() {
-    memory::MemoryManager::testingSetInstance({});
+    memory::MemoryManager::testingSetInstance(memory::MemoryManager::Options{});
     HiveConnectorTestBase::SetUpTestCase();
     filesystems::registerLocalFileSystem();
     if (!isRegisteredVectorSerde()) {
@@ -55,6 +55,7 @@ class OperatorTraceTest : public HiveConnectorTestBase {
     connector::hive::HiveColumnHandle::registerSerDe();
     connector::hive::HiveInsertTableHandle::registerSerDe();
     connector::hive::HiveConnectorSplit::registerSerDe();
+    connector::hive::HiveInsertFileNameGenerator::registerSerDe();
     core::PlanNode::registerSerDe();
     core::ITypedExpr::registerSerDe();
     registerPartitionFunctionSerDe();
@@ -301,17 +302,16 @@ TEST_F(OperatorTraceTest, traceMetadata) {
       expectedConnectorProperties);
   auto writer = trace::TaskTraceMetadataWriter(outputDir->getPath(), pool());
   writer.write(queryCtx, planNode);
-  std::unordered_map<std::string, std::string> acutalQueryConfigs;
-  std::unordered_map<std::string, std::unordered_map<std::string, std::string>>
-      actualConnectorProperties;
-  core::PlanNodePtr actualQueryPlan;
-  auto reader = trace::TaskTraceMetadataReader(outputDir->getPath(), pool());
-  reader.read(acutalQueryConfigs, actualConnectorProperties, actualQueryPlan);
+  const auto reader =
+      trace::TaskTraceMetadataReader(outputDir->getPath(), pool());
+  const auto actualQueryConfigs = reader.queryConfigs();
+  const auto actualConnectorProperties = reader.connectorProperties();
+  const auto actualQueryPlan = reader.queryPlan();
 
   ASSERT_TRUE(isSamePlan(actualQueryPlan, planNode));
-  ASSERT_EQ(acutalQueryConfigs.size(), expectedQueryConfigs.size());
-  for (const auto& [key, value] : acutalQueryConfigs) {
-    ASSERT_EQ(acutalQueryConfigs.at(key), expectedQueryConfigs.at(key));
+  ASSERT_EQ(actualQueryConfigs.size(), expectedQueryConfigs.size());
+  for (const auto& [key, value] : actualQueryConfigs) {
+    ASSERT_EQ(actualQueryConfigs.at(key), expectedQueryConfigs.at(key));
   }
 
   ASSERT_EQ(
@@ -367,7 +367,7 @@ TEST_F(OperatorTraceTest, task) {
       return fmt::format(
           "taskRegExpr: {}, expectedNumDirs: ", taskRegExpr, expectedNumDirs);
     }
-  } testSettings[]{{".*", 1}, {"test_cursor .*", 1}, {"xxx_yyy \\d+", 0}};
+  } testSettings[]{{".*", 1}, {"test_cursor_.*", 1}, {"xxx_yyy \\d+", 0}};
   for (const auto& testData : testSettings) {
     SCOPED_TRACE(testData.debugString());
     const auto outputDir = TempDirectoryPath::create();
@@ -418,18 +418,15 @@ TEST_F(OperatorTraceTest, task) {
     ASSERT_EQ(taskIds.size(), testData.expectedNumDirs);
     ASSERT_EQ(taskIds.at(0), task->taskId());
 
-    std::unordered_map<std::string, std::string> acutalQueryConfigs;
-    std::
-        unordered_map<std::string, std::unordered_map<std::string, std::string>>
-            actualConnectorProperties;
-    core::PlanNodePtr actualQueryPlan;
-    auto reader = trace::TaskTraceMetadataReader(expectedDir, pool());
-    reader.read(acutalQueryConfigs, actualConnectorProperties, actualQueryPlan);
+    const auto reader = trace::TaskTraceMetadataReader(expectedDir, pool());
+    const auto actualQueryConfigs = reader.queryConfigs();
+    const auto actualConnectorProperties = reader.connectorProperties();
+    const auto actualQueryPlan = reader.queryPlan();
 
     ASSERT_TRUE(isSamePlan(actualQueryPlan, planNode));
-    ASSERT_EQ(acutalQueryConfigs.size(), expectedQueryConfigs.size());
-    for (const auto& [key, value] : acutalQueryConfigs) {
-      ASSERT_EQ(acutalQueryConfigs.at(key), expectedQueryConfigs.at(key));
+    ASSERT_EQ(actualQueryConfigs.size(), expectedQueryConfigs.size());
+    for (const auto& [key, value] : actualQueryConfigs) {
+      ASSERT_EQ(actualQueryConfigs.at(key), expectedQueryConfigs.at(key));
     }
 
     ASSERT_EQ(
@@ -553,8 +550,8 @@ TEST_F(OperatorTraceTest, traceTableWriter) {
       {".*", 10UL << 30, numBatch, false},
       {".*", 0, numBatch, true},
       {"wrong id", 10UL << 30, 0, false},
-      {"test_cursor \\d+", 10UL << 30, numBatch, false},
-      {"test_cursor \\d+", 800, 2, true}};
+      {"test_cursor_\\d+", 10UL << 30, numBatch, false},
+      {"test_cursor_\\d+", 800, 2, true}};
 
   for (const auto& testData : testSettings) {
     SCOPED_TRACE(testData.debugString());
@@ -605,9 +602,9 @@ TEST_F(OperatorTraceTest, traceTableWriter) {
     // Query metadata file should exist.
     const auto traceMetaFilePath = getTaskTraceMetaFilePath(taskTraceDir);
     ASSERT_TRUE(fs->exists(traceMetaFilePath));
-    ASSERT_EQ(
-        "TableWrite",
-        getNodeName(tableWriteNodeId, traceMetaFilePath, fs, pool()));
+    const auto taskTraceReader =
+        trace::TaskTraceMetadataReader(taskTraceDir, pool());
+    ASSERT_EQ("TableWrite", taskTraceReader.nodeName(tableWriteNodeId));
 
     const auto opTraceDir =
         getOpTraceDirectory(taskTraceDir, tableWriteNodeId, 0, 0);
@@ -658,8 +655,8 @@ TEST_F(OperatorTraceTest, filterProject) {
       {".*", 10UL << 30, numBatch, false},
       {".*", 0, numBatch, true},
       {"wrong id", 10UL << 30, 0, false},
-      {"test_cursor \\d+", 10UL << 30, numBatch, false},
-      {"test_cursor \\d+", 800, 2, true}};
+      {"test_cursor_\\d+", 10UL << 30, numBatch, false},
+      {"test_cursor_\\d+", 800, 2, true}};
 
   for (const auto& testData : testSettings) {
     SCOPED_TRACE(testData.debugString());
@@ -711,9 +708,10 @@ TEST_F(OperatorTraceTest, filterProject) {
 
     // Query metadata file should exist.
     const auto traceMetaFilePath = getTaskTraceMetaFilePath(taskTraceDir);
+    const auto taskTraceReader =
+        trace::TaskTraceMetadataReader(taskTraceDir, pool());
     ASSERT_TRUE(fs->exists(traceMetaFilePath));
-    ASSERT_EQ(
-        "Project", getNodeName(projectNodeId, traceMetaFilePath, fs, pool()));
+    ASSERT_EQ("Project", taskTraceReader.nodeName(projectNodeId));
 
     const auto opTraceDir =
         getOpTraceDirectory(taskTraceDir, projectNodeId, 0, 0);
@@ -1020,8 +1018,8 @@ TEST_F(OperatorTraceTest, hashJoin) {
       {".*", 10UL << 30, numBatch, false},
       {".*", 0, numBatch, true},
       {"wrong id", 10UL << 30, 0, false},
-      {"test_cursor \\d+", 10UL << 30, numBatch, false},
-      {"test_cursor \\d+", 800, 2, true}};
+      {"test_cursor_\\d+", 10UL << 30, numBatch, false},
+      {"test_cursor_\\d+", 800, 2, true}};
 
   for (const auto& testData : testSettings) {
     SCOPED_TRACE(testData.debugString());
@@ -1083,8 +1081,9 @@ TEST_F(OperatorTraceTest, hashJoin) {
     // Query metadata file should exist.
     const auto traceMetaFilePath = getTaskTraceMetaFilePath(taskTraceDir);
     ASSERT_TRUE(fs->exists(traceMetaFilePath));
-    ASSERT_EQ(
-        "HashJoin", getNodeName(hashJoinNodeId, traceMetaFilePath, fs, pool()));
+    const auto taskTraceReader =
+        trace::TaskTraceMetadataReader(taskTraceDir, pool());
+    ASSERT_EQ("HashJoin", taskTraceReader.nodeName(hashJoinNodeId));
 
     for (uint32_t pipelineId = 0; pipelineId < 2; ++pipelineId) {
       const auto opTraceProbeDir =
@@ -1178,12 +1177,7 @@ TEST_F(OperatorTraceTest, hiveConnectorId) {
       .runWithoutResults(task);
   const auto taskTraceDir =
       getTaskTraceDirectory(traceDirPath->getPath(), *task);
-  std::vector<std::string> traceDirs;
-  const auto connectorId = exec::trace::getHiveConnectorId(
-      scanNodeId,
-      exec::trace::getTaskTraceMetaFilePath(taskTraceDir),
-      fs,
-      memory::MemoryManager::getInstance()->tracePool());
-  ASSERT_EQ("test-hive", connectorId);
+  const auto reader = trace::TaskTraceMetadataReader(taskTraceDir, pool());
+  ASSERT_EQ("test-hive", reader.connectorId("0"));
 }
 } // namespace facebook::velox::exec::trace::test

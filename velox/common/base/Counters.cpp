@@ -35,6 +35,16 @@ void registerVeloxMetrics() {
   DEFINE_HISTOGRAM_METRIC(
       kMetricDriverExecTimeMs, 1'000, 0, 30'000, 50, 90, 99, 100);
 
+  // Tracks the averaged task batch processing time. This only applies for
+  // sequential task execution mode.
+  DEFINE_METRIC(kMetricTaskBatchProcessTimeMs, facebook::velox::StatType::AVG);
+
+  // Tracks task barrier execution time in range of [0, 30s] with 30 buckets and
+  // each bucket has time window of 1 second. We reports P50, P90, P99, and
+  // P100.
+  DEFINE_HISTOGRAM_METRIC(
+      kMetricTaskBarrierProcessTimeMs, 1'000, 0, 30'000, 50, 90, 99, 100);
+
   /// ================== Cache Counters =================
 
   // Tracks hive handle generation latency in range of [0, 100s] and reports
@@ -62,24 +72,33 @@ void registerVeloxMetrics() {
   // the bytes that are either currently being allocated or were in the past
   // allocated, not yet been returned back to the operating system, in the
   // form of 'Allocation' or 'ContiguousAllocation'.
-  DEFINE_METRIC(kMetricMappedMemoryBytes, facebook::velox::StatType::AVG);
+  DEFINE_METRIC(
+      kMetricMemoryAllocatorMappedBytes, facebook::velox::StatType::AVG);
 
   // Number of bytes currently allocated (used) from MemoryAllocator in the form
   // of 'Allocation' or 'ContiguousAllocation'.
-  DEFINE_METRIC(kMetricAllocatedMemoryBytes, facebook::velox::StatType::AVG);
+  DEFINE_METRIC(
+      kMetricMemoryAllocatorAllocatedBytes, facebook::velox::StatType::AVG);
+
+  // Total number of bytes currently allocated from MemoryAllocator.
+  DEFINE_METRIC(
+      kMetricMemoryAllocatorTotalUsedBytes, facebook::velox::StatType::AVG);
 
   // Number of bytes currently mapped in MmapAllocator, in the form of
   // 'ContiguousAllocation'.
   //
   // NOTE: This applies only to MmapAllocator
-  DEFINE_METRIC(kMetricMmapExternalMappedBytes, facebook::velox::StatType::AVG);
+  DEFINE_METRIC(
+      kMetricMmapAllocatorExternalMappedBytes, facebook::velox::StatType::AVG);
 
   // Number of bytes currently allocated from MmapAllocator directly from raw
   // allocateBytes() interface, and internally allocated by malloc. Only small
   // chunks of memory are delegated to malloc.
   //
   // NOTE: This applies only to MmapAllocator
-  DEFINE_METRIC(kMetricMmapDelegatedAllocBytes, facebook::velox::StatType::AVG);
+  DEFINE_METRIC(
+      kMetricMmapAllocatorDelegatedAllocatedBytes,
+      facebook::velox::StatType::AVG);
 
   /// ================== AsyncDataCache Counters =================
 
@@ -345,6 +364,9 @@ void registerVeloxMetrics() {
       kMetricTaskMemoryReclaimWaitTimeoutCount,
       facebook::velox::StatType::COUNT);
 
+  // Tracks the total number of splits received by all tasks.
+  DEFINE_METRIC(kMetricTaskSplitsCount, facebook::velox::StatType::COUNT);
+
   // The number of times that the memory reclaim fails because the operator is
   // executing a non-reclaimable section where it is expected to have reserved
   // enough memory to execute without asking for more. Therefore, it is an
@@ -585,6 +607,52 @@ void registerVeloxMetrics() {
 
   // The number of data size exchange requests.
   DEFINE_METRIC(kMetricExchangeDataSizeCount, facebook::velox::StatType::COUNT);
+
+  /// ================== Index Lookup Counters =================
+  // The distribution of index lookup result raw bytes in range of [0, 128MB]
+  // with 128 buckets. It is configured to report the capacity at P50, P90, P99,
+  // and P100 percentiles.
+  DEFINE_HISTOGRAM_METRIC(
+      kMetricIndexLookupResultRawBytes,
+      1L << 20,
+      0,
+      128L << 20,
+      50,
+      90,
+      99,
+      100);
+
+  // The distribution of index lookup result bytes in range of [0, 128MB] with
+  // 128 buckets. It is configured to report the capacity at P50, P90, P99, and
+  // P100 percentiles.
+  DEFINE_HISTOGRAM_METRIC(
+      kMetricIndexLookupResultBytes, 1L << 20, 0, 128L << 20, 50, 90, 99, 100);
+
+  // The time distribution of index lookup time in range of [0, 16s] with 512
+  // buckets and reports P50, P90, P99, and P100.
+  DEFINE_HISTOGRAM_METRIC(
+      kMetricIndexLookupTimeMs, 32, 0, 16L << 10, 50, 90, 99, 100);
+
+  // The time distribution of index lookup wait time in range of [0, 16s] with
+  // 512 buckets and reports P50, P90, P99, and P100.
+  DEFINE_HISTOGRAM_METRIC(
+      kMetricIndexLookupWaitTimeMs, 32, 0, 16L << 10, 50, 90, 99, 100);
+
+  // The time distribution of index lookup operator blocked wait time in range
+  // of [0, 16s] with 512 buckets and reports P50, P90, P99, and P100.
+  DEFINE_HISTOGRAM_METRIC(
+      kMetricIndexLookupBlockedWaitTimeMs, 32, 0, 16L << 10, 50, 90, 99, 100);
+
+  /// ================== Table Scan Counters =================
+  // The time distribution of table scan batch processing time in range of [0,
+  // 16s] with 512 buckets and reports P50, P90, P99, and P100.
+  DEFINE_HISTOGRAM_METRIC(
+      kMetricTableScanBatchProcessTimeMs, 32, 0, 16L << 10, 50, 90, 99, 100);
+
+  // The size distribution of table scan output batch in range of [0, 512MB]
+  // with 512 buckets and reports P50, P90, P99, and P100
+  DEFINE_HISTOGRAM_METRIC(
+      kMetricTableScanBatchBytes, 1L << 20, 0, 512L << 20, 50, 90, 99, 100);
 
   /// ================== Storage Counters =================
 

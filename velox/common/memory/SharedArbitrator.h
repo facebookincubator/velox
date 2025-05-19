@@ -115,8 +115,10 @@ class SharedArbitrator : public memory::MemoryArbitrator {
         const std::unordered_map<std::string, std::string>& configs);
 
     /// Specifies the minimum bytes to reclaim from a participant at a time. The
-    /// global arbitration also avoids to reclaim from a participant if its
-    /// reclaimable used capacity is less than this threshold. This is to
+    /// bigger of 'memory-pool-min-reclaim-bytes' and
+    /// 'memory-pool-min-reclaim-pct' will be applied as the minimum reclaim
+    /// bytes. The global arbitration also avoids to reclaim from a participant
+    /// if its reclaimable used capacity is less than this threshold. This is to
     /// prevent inefficient memory reclaim operations on a participant with
     /// small reclaimable used capacity which could causes a large number of
     /// small spilled file on disk.
@@ -125,6 +127,12 @@ class SharedArbitrator : public memory::MemoryArbitrator {
     static constexpr std::string_view kDefaultMemoryPoolMinReclaimBytes{
         "128MB"};
     static uint64_t memoryPoolMinReclaimBytes(
+        const std::unordered_map<std::string, std::string>& configs);
+
+    static constexpr std::string_view kMemoryPoolMinReclaimPct{
+        "memory-pool-min-reclaim-pct"};
+    static constexpr double kDefaultMemoryPoolMinReclaimPct{0.25};
+    static double memoryPoolMinReclaimPct(
         const std::unordered_map<std::string, std::string>& configs);
 
     /// Specifies the starting memory capacity limit for global arbitration to
@@ -466,10 +474,13 @@ class SharedArbitrator : public memory::MemoryArbitrator {
 
   // Invoked to reclaim the used memory capacity to abort the participant with
   // the largest capacity to free up memory. The function returns the actually
-  // reclaimed capacity in bytes. The function returns zero if there is no
-  // eligible participant to abort. If 'force' is true, it picks up the youngest
-  // participant which has largest participant id to abort if there is no
-  // eligible one.
+  // reclaimed capacity in bytes.
+  //
+  // The function returns the total of released and to be released capacity,
+  // including the soon to be released capacity from the victim query. Returns
+  // zero if there is no eligible participant to abort. If 'force' is true,
+  // it picks up the youngest participant which has largest participant id to
+  // abort if there is no eligible one.
   uint64_t reclaimUsedMemoryByAbort(bool force);
 
   // Finds the participant victim to abort to free used memory based on the
@@ -624,10 +635,12 @@ class SharedArbitrator : public memory::MemoryArbitrator {
   // and abort the youngest participant whose capacity is larger than the limit.
   // If there is no such participant, it goes to the next limit and so on.
   std::vector<uint64_t> globalArbitrationAbortCapacityLimits_;
+
   // The global arbitration control thread which runs the global arbitration at
   // the background, and dispatch the actual memory reclaim work on different
   // participants to 'globalArbitrationExecutor_' and collects the results back.
   std::unique_ptr<std::thread> globalArbitrationController_;
+
   // Signal used to wakeup 'globalArbitrationController_' to run global
   // arbitration on-demand.
   std::condition_variable_any globalArbitrationThreadCv_;

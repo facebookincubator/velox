@@ -26,7 +26,6 @@
 #include "velox/functions/prestosql/fuzzer/ApproxPercentileInputGenerator.h"
 #include "velox/functions/prestosql/fuzzer/ApproxPercentileResultVerifier.h"
 #include "velox/functions/prestosql/fuzzer/AverageResultVerifier.h"
-#include "velox/functions/prestosql/fuzzer/ClassificationAggregationInputGenerator.h"
 #include "velox/functions/prestosql/fuzzer/MinMaxInputGenerator.h"
 #include "velox/functions/prestosql/fuzzer/WindowOffsetInputGenerator.h"
 #include "velox/functions/prestosql/registration/RegistrationFunctions.h"
@@ -77,17 +76,7 @@ getCustomInputGenerators() {
       {"lead", std::make_shared<WindowOffsetInputGenerator>(1)},
       {"lag", std::make_shared<WindowOffsetInputGenerator>(1)},
       {"nth_value", std::make_shared<WindowOffsetInputGenerator>(1)},
-      {"ntile", std::make_shared<WindowOffsetInputGenerator>(0)},
-      {"classification_fall_out",
-       std::make_shared<ClassificationAggregationInputGenerator>()},
-      {"classification_precision",
-       std::make_shared<ClassificationAggregationInputGenerator>()},
-      {"classification_recall",
-       std::make_shared<ClassificationAggregationInputGenerator>()},
-      {"classification_miss_rate",
-       std::make_shared<ClassificationAggregationInputGenerator>()},
-      {"classification_thresholds",
-       std::make_shared<ClassificationAggregationInputGenerator>()}};
+      {"ntile", std::make_shared<WindowOffsetInputGenerator>(0)}};
 }
 
 } // namespace
@@ -99,7 +88,8 @@ int main(int argc, char** argv) {
   facebook::velox::aggregate::prestosql::registerInternalAggregateFunctions("");
   facebook::velox::window::prestosql::registerAllWindowFunctions();
   facebook::velox::functions::prestosql::registerAllScalarFunctions();
-  facebook::velox::memory::MemoryManager::initialize({});
+  facebook::velox::memory::MemoryManager::initialize(
+      facebook::velox::memory::MemoryManager::Options{});
 
   ::testing::InitGoogleTest(&argc, argv);
 
@@ -112,6 +102,12 @@ int main(int argc, char** argv) {
 
   // List of functions that have known bugs that cause crashes or failures.
   static const std::unordered_set<std::string> skipFunctions = {
+      // https://github.com/prestodb/presto/issues/24936
+      "classification_fall_out",
+      "classification_precision",
+      "classification_recall",
+      "classification_miss_rate",
+      "classification_thresholds",
       // Skip internal functions used only for result verifications.
       "$internal$count_distinct",
       "$internal$array_agg",
@@ -173,11 +169,6 @@ int main(int argc, char** argv) {
       "any_value",
       "arbitrary",
       "array_agg",
-      "classification_fall_out",
-      "classification_precision",
-      "classification_recall",
-      "classification_miss_rate",
-      "classification_thresholds",
       "set_agg",
       "set_union",
       "map_agg",

@@ -535,7 +535,7 @@ class Type : public Tree<const TypePtr>, public velox::ISerializable {
   static void registerSerDe();
 
   /// Recursive kind hashing (uses only TypeKind).
-  size_t hashKind() const;
+  virtual size_t hashKind() const;
 
   /// Recursive kind match (uses only TypeKind).
   bool kindEquals(const std::shared_ptr<const Type>& other) const;
@@ -577,6 +577,8 @@ class Type : public Tree<const TypePtr>, public velox::ISerializable {
 
   bool containsUnknown() const;
 
+  VELOX_DEFINE_CLASS_NAME(Type)
+
  protected:
   FOLLY_ALWAYS_INLINE bool hasSameTypeId(const Type& other) const {
     return typeid(*this) == typeid(other);
@@ -595,8 +597,6 @@ class Type : public Tree<const TypePtr>, public velox::ISerializable {
  private:
   const TypeKind kind_;
   const bool providesCustomComparison_;
-
-  VELOX_DEFINE_CLASS_NAME(Type)
 };
 
 #undef VELOX_FLUENT_CAST
@@ -1070,6 +1070,8 @@ class RowType : public TypeBase<TypeKind::ROW> {
     return *parameters;
   }
 
+  size_t hashKind() const override;
+
  protected:
   bool equals(const Type& other) const override;
 
@@ -1079,6 +1081,8 @@ class RowType : public TypeBase<TypeKind::ROW> {
   const std::vector<std::string> names_;
   const std::vector<std::shared_ptr<const Type>> children_;
   mutable std::atomic<std::vector<TypeParameter>*> parameters_{nullptr};
+  mutable std::atomic_bool hashKindComputed_{false};
+  mutable std::atomic_size_t hashKind_;
 };
 
 using RowTypePtr = std::shared_ptr<const RowType>;

@@ -488,6 +488,14 @@ bool RowType::equals(const Type& other) const {
   return true;
 }
 
+size_t RowType::hashKind() const {
+  if (!hashKindComputed_.load(std::memory_order_relaxed)) {
+    hashKind_ = TypeBase<TypeKind::ROW>::hashKind();
+    hashKindComputed_ = true;
+  }
+  return hashKind_;
+}
+
 void RowType::printChildren(std::stringstream& ss, std::string_view delimiter)
     const {
   bool any = false;
@@ -641,7 +649,7 @@ folly::dynamic RowType::serialize() const {
 }
 
 size_t Type::hashKind() const {
-  size_t hash = (int32_t)kind();
+  size_t hash = (int32_t)kind() + 1;
   for (auto& child : *this) {
     hash = hash * 31 + child->hashKind();
   }

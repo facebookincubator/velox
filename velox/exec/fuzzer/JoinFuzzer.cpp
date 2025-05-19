@@ -17,15 +17,14 @@
 #include <boost/random/uniform_int_distribution.hpp>
 #include "velox/common/file/FileSystems.h"
 #include "velox/connectors/hive/HiveConnector.h"
-#include "velox/connectors/hive/HiveConnectorSplit.h"
-#include "velox/connectors/hive/PartitionIdGenerator.h"
 #include "velox/dwio/dwrf/RegisterDwrfReader.h"
 #include "velox/dwio/dwrf/RegisterDwrfWriter.h"
-#include "velox/exec/OperatorUtils.h"
+#include "velox/exec/HashJoinBridge.h"
+#include "velox/exec/Spill.h"
 #include "velox/exec/fuzzer/FuzzerUtil.h"
+#include "velox/exec/fuzzer/JoinMaker.h"
 #include "velox/exec/fuzzer/ReferenceQueryRunner.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
-#include "velox/exec/tests/utils/PlanBuilder.h"
 #include "velox/exec/tests/utils/TempDirectoryPath.h"
 #include "velox/vector/fuzzer/VectorFuzzer.h"
 
@@ -66,7 +65,7 @@ DEFINE_double(
     0,
     "The chance of testing plans with filters enabled.");
 
-namespace facebook::velox::exec::test {
+namespace facebook::velox::exec {
 
 namespace {
 
@@ -78,43 +77,9 @@ class JoinFuzzer {
  public:
   JoinFuzzer(
       size_t initialSeed,
-      std::unique_ptr<ReferenceQueryRunner> referenceQueryRunner);
+      std::unique_ptr<test::ReferenceQueryRunner> referenceQueryRunner);
 
   void go();
-
-  struct PlanWithSplits {
-    core::PlanNodePtr plan;
-    core::PlanNodeId probeScanId;
-    core::PlanNodeId buildScanId;
-    std::unordered_map<core::PlanNodeId, std::vector<velox::exec::Split>>
-        splits;
-    core::ExecutionStrategy executionStrategy{
-        core::ExecutionStrategy::kUngrouped};
-    int32_t numGroups;
-
-    explicit PlanWithSplits(
-        const core::PlanNodePtr& _plan,
-        const core::PlanNodeId& _probeScanId = "",
-        const core::PlanNodeId& _buildScanId = "",
-        const std::unordered_map<
-            core::PlanNodeId,
-            std::vector<velox::exec::Split>>& _splits = {},
-        core::ExecutionStrategy _executionStrategy =
-            core::ExecutionStrategy::kUngrouped,
-        int32_t _numGroups = 0)
-        : plan(_plan),
-          probeScanId(_probeScanId),
-          buildScanId(_buildScanId),
-          splits(_splits),
-          executionStrategy(_executionStrategy),
-          numGroups(_numGroups) {}
-  };
-
-  static core::PlanNodePtr tryFlipJoinSides(const core::HashJoinNode& joinNode);
-  static core::PlanNodePtr tryFlipJoinSides(
-      const core::MergeJoinNode& joinNode);
-  static core::PlanNodePtr tryFlipJoinSides(
-      const core::NestedLoopJoinNode& joinNode);
 
  private:
   static VectorFuzzer::Options getFuzzerOptions() {
@@ -141,100 +106,6 @@ class JoinFuzzer {
   // Randomly pick a join type to test.
   core::JoinType pickJoinType();
 
-  template <typename TNode>
-  static std::pair<core::PlanNodePtr, core::PlanNodePtr> tryFlipJoinSidesHelper(
-      const TNode& joinNode);
-
-  // Makes the query plan with default settings in JoinFuzzer and value inputs
-  // for both probe and build sides.
-  //
-  // NOTE: 'probeInput' and 'buildInput' could either input rows with lazy
-  // vectors or flatten ones.
-  JoinFuzzer::PlanWithSplits makeDefaultPlan(
-      core::JoinType joinType,
-      bool nullAware,
-      const std::vector<std::string>& probeKeys,
-      const std::vector<std::string>& buildKeys,
-      const std::vector<RowVectorPtr>& probeInput,
-      const std::vector<RowVectorPtr>& buildInput,
-      const std::vector<std::string>& outputColumns,
-      const std::string& filter);
-
-  JoinFuzzer::PlanWithSplits makeMergeJoinPlan(
-      core::JoinType joinType,
-      const std::vector<std::string>& probeKeys,
-      const std::vector<std::string>& buildKeys,
-      const std::vector<RowVectorPtr>& probeInput,
-      const std::vector<RowVectorPtr>& buildInput,
-      const std::vector<std::string>& outputColumns,
-      const std::string& filter);
-
-  // Returns a PlanWithSplits for NestedLoopJoin with inputs from Values nodes.
-  // If withFilter is true, uses the equality filter between probeKeys and
-  // buildKeys as the join filter. Uses empty join filter otherwise.
-  JoinFuzzer::PlanWithSplits makeNestedLoopJoinPlan(
-      core::JoinType joinType,
-      const std::vector<std::string>& probeKeys,
-      const std::vector<std::string>& buildKeys,
-      const std::vector<RowVectorPtr>& probeInput,
-      const std::vector<RowVectorPtr>& buildInput,
-      const std::vector<std::string>& outputColumns,
-      const std::string& filter);
-
-  // Makes the default query plan with table scan as inputs for both probe and
-  // build sides.
-  JoinFuzzer::PlanWithSplits makeDefaultPlanWithTableScan(
-      core::JoinType joinType,
-      bool nullAware,
-      const RowTypePtr& probeType,
-      const RowTypePtr& buildType,
-      const std::vector<std::string>& probeKeys,
-      const std::vector<std::string>& buildKeys,
-      const std::vector<Split>& probeSplits,
-      const std::vector<Split>& buildSplits,
-      const std::vector<std::string>& outputColumns,
-      const std::string& filter);
-
-  JoinFuzzer::PlanWithSplits makeMergeJoinPlanWithTableScan(
-      core::JoinType joinType,
-      const RowTypePtr& probeType,
-      const RowTypePtr& buildType,
-      const std::vector<std::string>& probeKeys,
-      const std::vector<std::string>& buildKeys,
-      const std::vector<Split>& probeSplits,
-      const std::vector<Split>& buildSplits,
-      const std::vector<std::string>& outputColumns,
-      const std::string& filter);
-
-  // Returns a PlanWithSplits for NestedLoopJoin with inputs from TableScan
-  // nodes. If withFilter is true, uses the equiality filter between probeKeys
-  // and buildKeys as the join filter. Uses empty join filter otherwise.
-  JoinFuzzer::PlanWithSplits makeNestedLoopJoinPlanWithTableScan(
-      core::JoinType joinType,
-      const RowTypePtr& probeType,
-      const RowTypePtr& buildType,
-      const std::vector<std::string>& probeKeys,
-      const std::vector<std::string>& buildKeys,
-      const std::vector<Split>& probeSplits,
-      const std::vector<Split>& buildSplits,
-      const std::vector<std::string>& outputColumns,
-      const std::string& filter);
-
-  void makeAlternativePlans(
-      const core::PlanNodePtr& plan,
-      const std::vector<RowVectorPtr>& probeInput,
-      const std::vector<RowVectorPtr>& buildInput,
-      std::vector<JoinFuzzer::PlanWithSplits>& plans,
-      const std::string& filter);
-
-  // Makes the query plan from 'planWithTableScan' with grouped execution mode.
-  // Correspondingly, it replaces the table scan input splits with grouped ones.
-  JoinFuzzer::PlanWithSplits makeGroupedExecutionPlanWithTableScan(
-      const JoinFuzzer::PlanWithSplits& planWithTableScan,
-      int32_t numGroups,
-      const std::vector<exec::Split>& groupedProbeScanSplits,
-      const std::vector<exec::Split>& groupedBuildScanSplits);
-
   // Runs one test iteration from query plans generations, executions and result
   // verifications.
   void verify(core::JoinType joinType);
@@ -260,35 +131,9 @@ class JoinFuzzer {
       std::vector<std::string>& probeKeys,
       std::vector<std::string>& buildKeys);
 
-  void addPlansWithTableScan(
-      const std::string& tableDir,
-      core::JoinType joinType,
-      bool nullAware,
-      const std::vector<std::string>& probeKeys,
-      const std::vector<std::string>& buildKeys,
-      const std::vector<RowVectorPtr>& probeInput,
-      const std::vector<RowVectorPtr>& buildInput,
-      const std::vector<std::string>& outputColumns,
-      std::vector<PlanWithSplits>& altPlans,
-      const std::string& filter);
+  RowVectorPtr execute(const JoinMaker::PlanWithSplits& plan, bool injectSpill);
 
-  // Splits the input into groups by partitioning on the join keys.
-  std::vector<std::vector<RowVectorPtr>> splitInputByGroup(
-      int32_t numGroups,
-      size_t numKeys,
-      const std::vector<RowVectorPtr>& inputs);
-
-  // Generates the grouped splits.
-  std::vector<exec::Split> generateSplitsWithGroup(
-      const std::string& tableDir,
-      int32_t numGroups,
-      bool isProbe,
-      size_t numKeys,
-      const std::vector<RowVectorPtr>& input);
-
-  RowVectorPtr execute(const PlanWithSplits& plan, bool injectSpill);
-
-  std::optional<MaterializedRowMultiset> computeReferenceResults(
+  std::optional<test::MaterializedRowMultiset> computeReferenceResults(
       const core::PlanNodePtr& plan,
       const std::vector<RowVectorPtr>& probeInput,
       const std::vector<RowVectorPtr>& buildInput);
@@ -297,12 +142,10 @@ class JoinFuzzer {
   // result is compared to DuckDB. Returns the result vector of the cross
   // product.
   RowVectorPtr testCrossProduct(
-      const std::string& tableDir,
-      core::JoinType joinType,
-      const std::vector<std::string>& probeKeys,
-      const std::vector<std::string>& buildKeys,
-      const std::vector<RowVectorPtr>& probeInput,
-      const std::vector<RowVectorPtr>& buildInput);
+      const JoinMaker& joinMaker,
+      const JoinMaker::InputType inputType,
+      const std::shared_ptr<JoinSource>& probeSource,
+      const std::shared_ptr<JoinSource>& buildSource);
 
   int32_t randInt(int32_t min, int32_t max) {
     return boost::random::uniform_int_distribution<int32_t>(min, max)(rng_);
@@ -325,7 +168,7 @@ class JoinFuzzer {
       exec::MemoryReclaimer::create())};
 
   VectorFuzzer vectorFuzzer_;
-  std::unique_ptr<ReferenceQueryRunner> referenceQueryRunner_;
+  std::unique_ptr<test::ReferenceQueryRunner> referenceQueryRunner_;
 
   struct Stats {
     // The total number of iterations tested.
@@ -354,7 +197,7 @@ class JoinFuzzer {
 
 JoinFuzzer::JoinFuzzer(
     size_t initialSeed,
-    std::unique_ptr<ReferenceQueryRunner> referenceQueryRunner)
+    std::unique_ptr<test::ReferenceQueryRunner> referenceQueryRunner)
     : vectorFuzzer_{getFuzzerOptions(), pool_.get()},
       referenceQueryRunner_{std::move(referenceQueryRunner)} {
   filesystems::registerLocalFileSystem();
@@ -368,7 +211,7 @@ JoinFuzzer::JoinFuzzer(
       connector::getConnectorFactory(
           connector::hive::HiveConnectorFactory::kHiveConnectorName)
           ->newConnector(
-              kHiveConnectorId,
+              test::kHiveConnectorId,
               std::make_shared<config::ConfigBase>(std::move(hiveConfig)));
   connector::registerConnector(hiveConnector);
   dwrf::registerDwrfReaderFactory();
@@ -515,21 +358,17 @@ std::vector<RowVectorPtr> JoinFuzzer::generateBuildInput(
   return input;
 }
 
-std::vector<RowVectorPtr> flatten(const std::vector<RowVectorPtr>& vectors) {
-  std::vector<RowVectorPtr> flatVectors;
-  for (const auto& vector : vectors) {
-    auto flat = BaseVector::create<RowVector>(
-        vector->type(), vector->size(), vector->pool());
-    flat->copy(vector.get(), 0, 0, vector->size());
-    flatVectors.push_back(flat);
-  }
-
-  return flatVectors;
-}
-
-RowVectorPtr JoinFuzzer::execute(const PlanWithSplits& plan, bool injectSpill) {
+RowVectorPtr JoinFuzzer::execute(
+    const JoinMaker::PlanWithSplits& plan,
+    bool injectSpill) {
   LOG(INFO) << "Executing query plan with "
-            << executionStrategyToString(plan.executionStrategy) << " strategy["
+            << executionStrategyToString(plan.executionStrategy)
+            << (plan.executionStrategy == core::ExecutionStrategy::kGrouped
+                    ? fmt::format(
+                          "({})",
+                          plan.mixedGroupedExecution ? "mixed" : "unmixed")
+                    : "")
+            << " strategy["
             << (plan.executionStrategy == core::ExecutionStrategy::kGrouped
                     ? plan.numGroups
                     : 0)
@@ -537,29 +376,34 @@ RowVectorPtr JoinFuzzer::execute(const PlanWithSplits& plan, bool injectSpill) {
             << ": " << std::endl
             << plan.plan->toString(true, true);
 
-  AssertQueryBuilder builder(plan.plan);
+  test::AssertQueryBuilder builder(plan.plan);
   for (const auto& [planNodeId, nodeSplits] : plan.splits) {
     builder.splits(planNodeId, nodeSplits);
   }
 
   if (plan.executionStrategy == core::ExecutionStrategy::kGrouped) {
     builder.executionStrategy(core::ExecutionStrategy::kGrouped);
-    builder.groupedExecutionLeafNodeIds({plan.probeScanId, plan.buildScanId});
+    if (plan.mixedGroupedExecution) {
+      builder.groupedExecutionLeafNodeIds({plan.probeScanId});
+    } else {
+      builder.groupedExecutionLeafNodeIds({plan.probeScanId, plan.buildScanId});
+    }
     builder.numSplitGroups(plan.numGroups);
     builder.numConcurrentSplitGroups(randInt(1, plan.numGroups));
   }
 
-  std::shared_ptr<TempDirectoryPath> spillDirectory;
+  std::shared_ptr<test::TempDirectoryPath> spillDirectory;
   int32_t spillPct{0};
   if (injectSpill) {
     spillDirectory = exec::test::TempDirectoryPath::create();
     builder.config(core::QueryConfig::kSpillEnabled, true)
         .config(core::QueryConfig::kJoinSpillEnabled, true)
+        .config(core::QueryConfig::kMixedGroupedModeHashJoinSpillEnabled, true)
         .spillDirectory(spillDirectory->getPath());
     spillPct = 10;
   }
 
-  ScopedOOMInjector oomInjector(
+  test::ScopedOOMInjector oomInjector(
       []() -> bool { return folly::Random::oneIn(10); },
       10); // Check the condition every 10 ms.
   if (FLAGS_enable_oom_injection) {
@@ -573,7 +417,7 @@ RowVectorPtr JoinFuzzer::execute(const PlanWithSplits& plan, bool injectSpill) {
   } catch (VeloxRuntimeError& e) {
     if (FLAGS_enable_oom_injection &&
         e.errorCode() == facebook::velox::error_code::kMemCapExceeded &&
-        e.message() == ScopedOOMInjector::kErrorMessage) {
+        e.message() == test::ScopedOOMInjector::kErrorMessage) {
       // If we enabled OOM injection we expect the exception thrown by the
       // ScopedOOMInjector.
       return nullptr;
@@ -588,7 +432,7 @@ RowVectorPtr JoinFuzzer::execute(const PlanWithSplits& plan, bool injectSpill) {
   // Wait for the task to be destroyed before start next query execution to
   // avoid the potential interference of the background activities across query
   // executions.
-  waitForAllTasksToBeDeleted();
+  test::waitForAllTasksToBeDeleted();
   return result;
 }
 
@@ -615,115 +459,20 @@ std::optional<core::JoinType> tryFlipJoinType(core::JoinType joinType) {
   }
 }
 
-template <typename TNode>
-std::pair<core::PlanNodePtr, core::PlanNodePtr>
-JoinFuzzer::tryFlipJoinSidesHelper(const TNode& joinNode) {
-  core::PlanNodePtr left = joinNode.sources()[0];
-  core::PlanNodePtr right = joinNode.sources()[1];
-  if (auto leftJoinInput =
-          std::dynamic_pointer_cast<const TNode>(joinNode.sources()[0])) {
-    left = JoinFuzzer::tryFlipJoinSides(*leftJoinInput);
-  }
-  if (auto rightJoinInput =
-          std::dynamic_pointer_cast<const TNode>(joinNode.sources()[1])) {
-    right = JoinFuzzer::tryFlipJoinSides(*rightJoinInput);
-  }
-  return make_pair(left, right);
-}
-
-// Returns a plan with flipped join sides of the input hash join node. If the
-// inputs of the join node are other hash join nodes, recursively flip the join
-// sides of those join nodes as well. If the join type doesn't allow flipping,
-// returns a nullptr.
-core::PlanNodePtr JoinFuzzer::tryFlipJoinSides(
-    const core::HashJoinNode& joinNode) {
-  //  Null-aware right semi project join doesn't support filter.
-  if (joinNode.filter() &&
-      joinNode.joinType() == core::JoinType::kLeftSemiProject &&
-      joinNode.isNullAware()) {
-    return nullptr;
-  }
-
-  auto flippedJoinType = tryFlipJoinType(joinNode.joinType());
-  if (!flippedJoinType) {
-    return nullptr;
-  }
-  auto [left, right] =
-      JoinFuzzer::tryFlipJoinSidesHelper<core::HashJoinNode>(joinNode);
-
-  return std::make_shared<core::HashJoinNode>(
-      joinNode.id(),
-      *flippedJoinType,
-      joinNode.isNullAware(),
-      joinNode.rightKeys(),
-      joinNode.leftKeys(),
-      joinNode.filter(),
-      right,
-      left,
-      joinNode.outputType());
-}
-
-// Returns a plan with flipped join sides of the input merge join node. If the
-// inputs of the join node are other merge join nodes, recursively flip the join
-// sides of those join nodes as well. If the
-// join type doesn't allow flipping, returns a nullptr.
-core::PlanNodePtr JoinFuzzer::tryFlipJoinSides(
-    const core::MergeJoinNode& joinNode) {
-  // Merge join only supports inner and left join, so only inner join can be
-  // flipped.
-  if (joinNode.joinType() != core::JoinType::kInner) {
-    return nullptr;
-  }
-
-  auto [left, right] =
-      JoinFuzzer::tryFlipJoinSidesHelper<core::MergeJoinNode>(joinNode);
-
-  return std::make_shared<core::MergeJoinNode>(
-      joinNode.id(),
-      core::JoinType::kInner,
-      joinNode.rightKeys(),
-      joinNode.leftKeys(),
-      joinNode.filter(),
-      right,
-      left,
-      joinNode.outputType());
-}
-
-// Returns a plan with flipped join sides of the input nested loop join node. If
-// the inputs of the join node are other nested loop join nodes, recursively
-// flip the join sides of those join nodes as well. If the join type doesn't
-// allow flipping, returns a nullptr.
-core::PlanNodePtr JoinFuzzer::tryFlipJoinSides(
-    const core::NestedLoopJoinNode& joinNode) {
-  auto flippedJoinType = tryFlipJoinType(joinNode.joinType());
-  if (!flippedJoinType) {
-    return nullptr;
-  }
-
-  auto [left, right] =
-      JoinFuzzer::tryFlipJoinSidesHelper<core::NestedLoopJoinNode>(joinNode);
-
-  return std::make_shared<core::NestedLoopJoinNode>(
-      joinNode.id(),
-      flippedJoinType.value(),
-      joinNode.joinCondition(),
-      right,
-      left,
-      joinNode.outputType());
-}
-
-std::optional<MaterializedRowMultiset> JoinFuzzer::computeReferenceResults(
+std::optional<test::MaterializedRowMultiset>
+JoinFuzzer::computeReferenceResults(
     const core::PlanNodePtr& plan,
     const std::vector<RowVectorPtr>& probeInput,
     const std::vector<RowVectorPtr>& buildInput) {
   if (referenceQueryRunner_->runnerType() ==
-      ReferenceQueryRunner::RunnerType::kDuckQueryRunner) {
-    VELOX_CHECK(!containsUnsupportedTypes(probeInput[0]->type()));
-    VELOX_CHECK(!containsUnsupportedTypes(buildInput[0]->type()));
+      test::ReferenceQueryRunner::RunnerType::kDuckQueryRunner) {
+    VELOX_CHECK(!test::containsUnsupportedTypes(probeInput[0]->type()));
+    VELOX_CHECK(!test::containsUnsupportedTypes(buildInput[0]->type()));
   }
 
   auto result = referenceQueryRunner_->execute(plan);
-  VELOX_CHECK_NE(result.second, ReferenceQueryErrorCode::kReferenceQueryFail);
+  VELOX_CHECK_NE(
+      result.second, test::ReferenceQueryErrorCode::kReferenceQueryFail);
   return result.first;
 }
 
@@ -735,275 +484,6 @@ std::vector<std::string> fieldNames(
     names.push_back(field->name());
   }
   return names;
-}
-
-JoinFuzzer::PlanWithSplits JoinFuzzer::makeDefaultPlan(
-    core::JoinType joinType,
-    bool nullAware,
-    const std::vector<std::string>& probeKeys,
-    const std::vector<std::string>& buildKeys,
-    const std::vector<RowVectorPtr>& probeInput,
-    const std::vector<RowVectorPtr>& buildInput,
-    const std::vector<std::string>& outputColumns,
-    const std::string& filter) {
-  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
-  auto plan =
-      PlanBuilder(planNodeIdGenerator)
-          .values(probeInput)
-          .hashJoin(
-              probeKeys,
-              buildKeys,
-              PlanBuilder(planNodeIdGenerator).values(buildInput).planNode(),
-              filter,
-              outputColumns,
-              joinType,
-              nullAware)
-          .planNode();
-  return PlanWithSplits{plan};
-}
-
-JoinFuzzer::PlanWithSplits JoinFuzzer::makeDefaultPlanWithTableScan(
-    core::JoinType joinType,
-    bool nullAware,
-    const RowTypePtr& probeType,
-    const RowTypePtr& buildType,
-    const std::vector<std::string>& probeKeys,
-    const std::vector<std::string>& buildKeys,
-    const std::vector<Split>& probeSplits,
-    const std::vector<Split>& buildSplits,
-    const std::vector<std::string>& outputColumns,
-    const std::string& filter) {
-  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
-  core::PlanNodeId probeScanId;
-  core::PlanNodeId buildScanId;
-  auto plan = PlanBuilder(planNodeIdGenerator)
-                  .tableScan(probeType)
-                  .capturePlanNodeId(probeScanId)
-                  .hashJoin(
-                      probeKeys,
-                      buildKeys,
-                      PlanBuilder(planNodeIdGenerator)
-                          .tableScan(buildType)
-                          .capturePlanNodeId(buildScanId)
-                          .planNode(),
-                      filter,
-                      outputColumns,
-                      joinType,
-                      nullAware)
-                  .planNode();
-  return PlanWithSplits{
-      plan,
-      probeScanId,
-      buildScanId,
-      {{probeScanId, probeSplits}, {buildScanId, buildSplits}}};
-}
-
-JoinFuzzer::PlanWithSplits JoinFuzzer::makeGroupedExecutionPlanWithTableScan(
-    const JoinFuzzer::PlanWithSplits& planWithTableScan,
-    int32_t numGroups,
-    const std::vector<exec::Split>& groupedProbeScanSplits,
-    const std::vector<exec::Split>& groupedBuildScanSplits) {
-  return PlanWithSplits{
-      planWithTableScan.plan,
-      planWithTableScan.probeScanId,
-      planWithTableScan.buildScanId,
-      {{planWithTableScan.probeScanId, groupedProbeScanSplits},
-       {planWithTableScan.buildScanId, groupedBuildScanSplits}},
-      core::ExecutionStrategy::kGrouped,
-      numGroups};
-}
-
-std::vector<core::PlanNodePtr> makeSources(
-    const std::vector<RowVectorPtr>& input,
-    std::shared_ptr<core::PlanNodeIdGenerator>& planNodeIdGenerator) {
-  auto numSources = std::min<size_t>(4, input.size());
-  std::vector<std::vector<RowVectorPtr>> sourceInputs(numSources);
-  for (auto i = 0; i < input.size(); ++i) {
-    sourceInputs[i % numSources].push_back(input[i]);
-  }
-
-  std::vector<core::PlanNodePtr> sourceNodes;
-  for (const auto& sourceInput : sourceInputs) {
-    sourceNodes.push_back(
-        PlanBuilder(planNodeIdGenerator).values(sourceInput).planNode());
-  }
-
-  return sourceNodes;
-}
-
-// Returns an equality join filter between probeKeys and buildKeys.
-std::string makeJoinFilter(
-    const std::vector<std::string>& probeKeys,
-    const std::vector<std::string>& buildKeys) {
-  const auto numKeys = probeKeys.size();
-  std::string filter;
-  VELOX_CHECK_EQ(numKeys, buildKeys.size());
-  for (auto i = 0; i < numKeys; ++i) {
-    if (i > 0) {
-      filter += " AND ";
-    }
-    filter += fmt::format("{} = {}", probeKeys[i], buildKeys[i]);
-  }
-  return filter;
-}
-
-template <typename TNode>
-void addFlippedJoinPlan(
-    const core::PlanNodePtr& plan,
-    std::vector<JoinFuzzer::PlanWithSplits>& plans,
-    const core::PlanNodeId& probeScanId = "",
-    const core::PlanNodeId& buildScanId = "",
-    const std::unordered_map<core::PlanNodeId, std::vector<velox::exec::Split>>&
-        splits = {},
-    core::ExecutionStrategy executionStrategy =
-        core::ExecutionStrategy::kUngrouped,
-    int32_t numGroups = 0) {
-  auto joinNode = std::dynamic_pointer_cast<const TNode>(plan);
-  VELOX_CHECK_NOT_NULL(joinNode);
-  if (auto flippedPlan = JoinFuzzer::tryFlipJoinSides(*joinNode)) {
-    plans.push_back(JoinFuzzer::PlanWithSplits{
-        flippedPlan,
-        probeScanId,
-        buildScanId,
-        splits,
-        executionStrategy,
-        numGroups});
-  }
-}
-
-JoinFuzzer::PlanWithSplits JoinFuzzer::makeMergeJoinPlan(
-    core::JoinType joinType,
-    const std::vector<std::string>& probeKeys,
-    const std::vector<std::string>& buildKeys,
-    const std::vector<RowVectorPtr>& probeInput,
-    const std::vector<RowVectorPtr>& buildInput,
-    const std::vector<std::string>& outputColumns,
-    const std::string& filter) {
-  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
-  return JoinFuzzer::PlanWithSplits{PlanBuilder(planNodeIdGenerator)
-                                        .values(probeInput)
-                                        .orderBy(probeKeys, false)
-                                        .mergeJoin(
-                                            probeKeys,
-                                            buildKeys,
-                                            PlanBuilder(planNodeIdGenerator)
-                                                .values(buildInput)
-                                                .orderBy(buildKeys, false)
-                                                .planNode(),
-                                            filter,
-                                            outputColumns,
-                                            joinType)
-                                        .planNode()};
-}
-
-JoinFuzzer::PlanWithSplits JoinFuzzer::makeNestedLoopJoinPlan(
-    core::JoinType joinType,
-    const std::vector<std::string>& probeKeys,
-    const std::vector<std::string>& buildKeys,
-    const std::vector<RowVectorPtr>& probeInput,
-    const std::vector<RowVectorPtr>& buildInput,
-    const std::vector<std::string>& outputColumns,
-    const std::string& filter) {
-  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
-  return JoinFuzzer::PlanWithSplits{
-      PlanBuilder(planNodeIdGenerator)
-          .values(probeInput)
-          .nestedLoopJoin(
-              PlanBuilder(planNodeIdGenerator).values(buildInput).planNode(),
-              filter,
-              outputColumns,
-              joinType)
-          .planNode()};
-}
-
-void JoinFuzzer::makeAlternativePlans(
-    const core::PlanNodePtr& plan,
-    const std::vector<RowVectorPtr>& probeInput,
-    const std::vector<RowVectorPtr>& buildInput,
-    std::vector<JoinFuzzer::PlanWithSplits>& plans,
-    const std::string& filter) {
-  auto joinNode = std::dynamic_pointer_cast<const core::HashJoinNode>(plan);
-  VELOX_CHECK_NOT_NULL(joinNode);
-
-  // Flip join sides.
-  addFlippedJoinPlan<core::HashJoinNode>(plan, plans);
-
-  // Parallelize probe and build sides.
-  const auto probeKeys = fieldNames(joinNode->leftKeys());
-  const auto buildKeys = fieldNames(joinNode->rightKeys());
-  const auto outputColumns = joinNode->outputType()->names();
-  const auto joinType = joinNode->joinType();
-
-  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
-  // Use LocalPartition with round robin.
-  plans.push_back(JoinFuzzer::PlanWithSplits{
-      PlanBuilder(planNodeIdGenerator)
-          .localPartitionRoundRobin(
-              makeSources(probeInput, planNodeIdGenerator))
-          .hashJoin(
-              probeKeys,
-              buildKeys,
-              PlanBuilder(planNodeIdGenerator)
-                  .localPartitionRoundRobin(
-                      makeSources(buildInput, planNodeIdGenerator))
-                  .planNode(),
-              filter,
-              outputColumns,
-              joinType,
-              joinNode->isNullAware())
-          .planNode()});
-
-  // Use LocalPartition with hash.
-  plans.push_back(JoinFuzzer::PlanWithSplits{
-      PlanBuilder(planNodeIdGenerator)
-          .localPartition(
-              probeKeys, makeSources(probeInput, planNodeIdGenerator))
-          .hashJoin(
-              probeKeys,
-              buildKeys,
-              PlanBuilder(planNodeIdGenerator)
-                  .localPartition(
-                      buildKeys, makeSources(buildInput, planNodeIdGenerator))
-                  .planNode(),
-              filter,
-              outputColumns,
-              joinType,
-              joinNode->isNullAware())
-          .planNode()});
-
-  // Use OrderBy + MergeJoin
-  if (core::MergeJoinNode::isSupported(joinNode->joinType())) {
-    auto planWithSplits = makeMergeJoinPlan(
-        joinType,
-        probeKeys,
-        buildKeys,
-        probeInput,
-        buildInput,
-        outputColumns,
-        filter);
-    plans.push_back(planWithSplits);
-
-    addFlippedJoinPlan<core::MergeJoinNode>(planWithSplits.plan, plans);
-  }
-
-  // Use NestedLoopJoin.
-  if (core::NestedLoopJoinNode::isSupported(joinNode->joinType())) {
-    std::string joinCondition = filter.empty()
-        ? makeJoinFilter(probeKeys, buildKeys)
-        : fmt::format(
-              "{} AND {}", makeJoinFilter(probeKeys, buildKeys), filter);
-    auto planWithSplits = makeNestedLoopJoinPlan(
-        joinType,
-        probeKeys,
-        buildKeys,
-        probeInput,
-        buildInput,
-        outputColumns,
-        joinCondition);
-    plans.push_back(planWithSplits);
-
-    addFlippedJoinPlan<core::NestedLoopJoinNode>(planWithSplits.plan, plans);
-  }
 }
 
 void JoinFuzzer::shuffleJoinKeys(
@@ -1028,38 +508,21 @@ void JoinFuzzer::shuffleJoinKeys(
 }
 
 RowVectorPtr JoinFuzzer::testCrossProduct(
-    const std::string& tableDir,
-    core::JoinType joinType,
-    const std::vector<std::string>& probeKeys,
-    const std::vector<std::string>& buildKeys,
-    const std::vector<RowVectorPtr>& probeInput,
-    const std::vector<RowVectorPtr>& buildInput) {
-  VELOX_CHECK_GT(probeInput.size(), 0);
-  VELOX_CHECK_GT(buildInput.size(), 0);
-
-  const auto probeType = asRowType(probeInput[0]->type());
-  const auto buildType = asRowType(buildInput[0]->type());
-  auto outputColumns =
-      concat(asRowType(probeInput[0]->type()), asRowType(buildInput[0]->type()))
-          ->names();
-
-  auto plan = makeNestedLoopJoinPlan(
-      joinType,
-      probeKeys,
-      buildKeys,
-      probeInput,
-      buildInput,
-      outputColumns,
-      /*filter=*/"");
+    const JoinMaker& joinMaker,
+    const JoinMaker::InputType inputType,
+    const std::shared_ptr<JoinSource>& probeSource,
+    const std::shared_ptr<JoinSource>& buildSource) {
+  auto plan =
+      joinMaker.makeNestedLoopJoin(inputType, JoinMaker::JoinOrder::NATURAL);
   const auto expected = execute(plan, /*injectSpill=*/false);
 
   // If OOM injection is not enabled verify the results against Reference
   // query runner.
   if (!FLAGS_enable_oom_injection) {
-    if (auto referenceResult =
-            computeReferenceResults(plan.plan, probeInput, buildInput)) {
+    if (auto referenceResult = computeReferenceResults(
+            plan.plan, probeSource->batches(), buildSource->batches())) {
       VELOX_CHECK(
-          assertEqualResults(
+          test::assertEqualResults(
               referenceResult.value(), plan.plan->outputType(), {expected}),
           "Velox and DuckDB results don't match");
 
@@ -1068,36 +531,68 @@ RowVectorPtr JoinFuzzer::testCrossProduct(
     }
   }
 
-  std::vector<PlanWithSplits> altPlans;
-  if (isTableScanSupported(probeInput[0]->type()) &&
-      isTableScanSupported(buildInput[0]->type())) {
-    std::vector<Split> probeScanSplits =
-        makeSplits(probeInput, fmt::format("{}/probe", tableDir), writerPool_);
-    std::vector<Split> buildScanSplits =
-        makeSplits(buildInput, fmt::format("{}/build", tableDir), writerPool_);
-
-    altPlans.push_back(makeNestedLoopJoinPlanWithTableScan(
-        joinType,
-        probeType,
-        buildType,
-        probeKeys,
-        buildKeys,
-        probeScanSplits,
-        buildScanSplits,
-        outputColumns,
-        /*filter=*/""));
+  std::vector<JoinMaker::PlanWithSplits> altPlans;
+  if (joinMaker.supportsTableScan()) {
+    altPlans.push_back(joinMaker.makeNestedLoopJoinWithTableScan(
+        JoinMaker::JoinOrder::NATURAL));
   }
-  addFlippedJoinPlan<core::NestedLoopJoinNode>(plan.plan, altPlans);
+
+  if (joinMaker.supportsFlippingNestedLoopJoin()) {
+    altPlans.push_back(
+        joinMaker.makeNestedLoopJoin(inputType, JoinMaker::JoinOrder::FLIPPED));
+  }
 
   for (const auto& altPlan : altPlans) {
     auto actual = execute(altPlan, /*injectSpill=*/false);
     if (actual != nullptr && expected != nullptr) {
       VELOX_CHECK(
-          assertEqualResults({expected}, {actual}),
+          test::assertEqualResults({expected}, {actual}),
           "Logically equivalent plans produced different results");
     }
   }
   return expected;
+}
+
+void addPlansForInputType(
+    const JoinMaker::InputType inputType,
+    const JoinMaker& joinMaker,
+    std::vector<JoinMaker::PlanWithSplits>& plans) {
+  plans.push_back(joinMaker.makeHashJoin(
+      inputType,
+      JoinMaker::PartitionStrategy::NONE,
+      JoinMaker::JoinOrder::NATURAL));
+  plans.push_back(joinMaker.makeHashJoin(
+      inputType,
+      JoinMaker::PartitionStrategy::ROUND_ROBIN,
+      JoinMaker::JoinOrder::NATURAL));
+  plans.push_back(joinMaker.makeHashJoin(
+      inputType,
+      JoinMaker::PartitionStrategy::HASH,
+      JoinMaker::JoinOrder::NATURAL));
+  if (joinMaker.supportsFlippingHashJoin()) {
+    plans.push_back(joinMaker.makeHashJoin(
+        inputType,
+        JoinMaker::PartitionStrategy::NONE,
+        JoinMaker::JoinOrder::FLIPPED));
+  }
+
+  if (joinMaker.supportsMergeJoin()) {
+    plans.push_back(
+        joinMaker.makeMergeJoin(inputType, JoinMaker::JoinOrder::NATURAL));
+    if (joinMaker.supportsFlippingMergeJoin()) {
+      plans.push_back(
+          joinMaker.makeMergeJoin(inputType, JoinMaker::JoinOrder::FLIPPED));
+    }
+  }
+
+  if (joinMaker.supportsNestedLoopJoin()) {
+    plans.push_back(
+        joinMaker.makeNestedLoopJoin(inputType, JoinMaker::JoinOrder::NATURAL));
+    if (joinMaker.supportsFlippingNestedLoopJoin()) {
+      plans.push_back(joinMaker.makeNestedLoopJoin(
+          inputType, JoinMaker::JoinOrder::FLIPPED));
+    }
+  }
 }
 
 void JoinFuzzer::verify(core::JoinType joinType) {
@@ -1125,29 +620,56 @@ void JoinFuzzer::verify(core::JoinType joinType) {
     }
   }
 
-  std::vector<std::string> probeKeys = makeNames("t", keyTypes.size());
-  std::vector<std::string> buildKeys = makeNames("u", keyTypes.size());
+  const auto tableScanDir = exec::test::TempDirectoryPath::create();
+  auto localFs = filesystems::getFileSystem(tableScanDir->getPath(), nullptr);
+  std::string probePath =
+      fmt::format("{}/{}", tableScanDir->getPath(), "probe");
+  localFs->mkdir(probePath);
+  std::string buildPath =
+      fmt::format("{}/{}", tableScanDir->getPath(), "build");
+  localFs->mkdir(buildPath);
+
+  std::vector<std::string> probeKeys = test::makeNames("t", keyTypes.size());
+  std::vector<std::string> buildKeys = test::makeNames("u", keyTypes.size());
 
   auto probeInput = generateProbeInput(probeKeys, keyTypes);
   auto buildInput = generateBuildInput(probeInput, probeKeys, buildKeys);
 
-  // Flatten inputs.
-  auto flatProbeInput = flatten(probeInput);
-  auto flatBuildInput = flatten(buildInput);
+  auto [convertedProbeInput, probeProjections] =
+      referenceQueryRunner_->inputProjections(probeInput);
+  auto [convertedBuildInput, buildProjections] =
+      referenceQueryRunner_->inputProjections(buildInput);
+
+  VELOX_CHECK(!convertedProbeInput.empty());
+  VELOX_CHECK(!convertedBuildInput.empty());
+
+  auto probeSource = std::make_shared<JoinSource>(
+      asRowType(convertedProbeInput[0]->type()),
+      probeKeys,
+      convertedProbeInput,
+      probeProjections,
+      probePath,
+      writerPool_);
+
+  auto buildSource = std::make_shared<JoinSource>(
+      asRowType(convertedBuildInput[0]->type()),
+      buildKeys,
+      convertedBuildInput,
+      buildProjections,
+      buildPath,
+      writerPool_);
 
   if (VLOG_IS_ON(1)) {
-    VLOG(1) << "Probe input: " << probeInput[0]->toString();
-    for (const auto& v : flatProbeInput) {
+    VLOG(1) << "Probe input: " << convertedProbeInput[0]->toString();
+    for (const auto& v : probeSource->flatBatches()) {
       VLOG(1) << std::endl << v->toString(0, v->size());
     }
 
-    VLOG(1) << "Build input: " << buildInput[0]->toString();
-    for (const auto& v : flatBuildInput) {
+    VLOG(1) << "Build input: " << convertedBuildInput[0]->toString();
+    for (const auto& v : buildSource->flatBatches()) {
       VLOG(1) << std::endl << v->toString(0, v->size());
     }
   }
-
-  const auto tableScanDir = exec::test::TempDirectoryPath::create();
 
   // Test cross product without filter with 10% chance. Avoid testing cross
   // product if input size is too large.
@@ -1157,21 +679,23 @@ void JoinFuzzer::verify(core::JoinType joinType) {
     if (vectorFuzzer_.coinToss(0.1)) {
       stats_.numCrossProduct++;
 
+      JoinMaker crossJoinMaker(
+          joinType,
+          nullAware,
+          {probeSource, buildSource},
+          test::concat(probeSource->outputType(), buildSource->outputType())
+              ->names(),
+          "" // It's a cross join, so no filter.
+      );
+
       auto result = testCrossProduct(
-          tableScanDir->getPath(),
-          joinType,
-          probeKeys,
-          buildKeys,
-          probeInput,
-          buildInput);
+          crossJoinMaker,
+          JoinMaker::InputType::ENCODED,
+          probeSource,
+          buildSource);
       auto flatResult = testCrossProduct(
-          tableScanDir->getPath(),
-          joinType,
-          probeKeys,
-          buildKeys,
-          flatProbeInput,
-          flatBuildInput);
-      assertEqualResults({result}, {flatResult});
+          crossJoinMaker, JoinMaker::InputType::FLAT, probeSource, buildSource);
+      test::assertEqualResults({result}, {flatResult});
     }
   }
 
@@ -1179,7 +703,7 @@ void JoinFuzzer::verify(core::JoinType joinType) {
       (core::isLeftSemiProjectJoin(joinType) ||
        core::isLeftSemiFilterJoin(joinType) || core::isAntiJoin(joinType))
       ? asRowType(probeInput[0]->type())->names()
-      : concat(
+      : test::concat(
             asRowType(probeInput[0]->type()), asRowType(buildInput[0]->type()))
             ->names();
 
@@ -1197,25 +721,23 @@ void JoinFuzzer::verify(core::JoinType joinType) {
 
   shuffleJoinKeys(probeKeys, buildKeys);
 
-  const auto defaultPlan = makeDefaultPlan(
-      joinType,
-      nullAware,
-      probeKeys,
-      buildKeys,
-      probeInput,
-      buildInput,
-      outputColumns,
-      filter);
+  JoinMaker joinMaker(
+      joinType, nullAware, {probeSource, buildSource}, outputColumns, filter);
+
+  const auto defaultPlan = joinMaker.makeHashJoin(
+      JoinMaker::InputType::ENCODED,
+      JoinMaker::PartitionStrategy::NONE,
+      JoinMaker::JoinOrder::NATURAL);
 
   const auto expected = execute(defaultPlan, /*injectSpill=*/false);
 
   // If OOM injection is not enabled verify the results against Reference
   // query runner.
   if (!FLAGS_enable_oom_injection) {
-    if (auto referenceResult =
-            computeReferenceResults(defaultPlan.plan, probeInput, buildInput)) {
+    if (auto referenceResult = computeReferenceResults(
+            defaultPlan.plan, convertedProbeInput, convertedBuildInput)) {
       VELOX_CHECK(
-          assertEqualResults(
+          test::assertEqualResults(
               referenceResult.value(),
               defaultPlan.plan->outputType(),
               {expected}),
@@ -1226,40 +748,73 @@ void JoinFuzzer::verify(core::JoinType joinType) {
     }
   }
 
-  std::vector<PlanWithSplits> altPlans;
-  altPlans.push_back(makeDefaultPlan(
-      joinType,
-      nullAware,
-      probeKeys,
-      buildKeys,
-      flatProbeInput,
-      flatBuildInput,
-      outputColumns,
-      filter));
+  std::vector<JoinMaker::PlanWithSplits> altPlans;
 
-  makeAlternativePlans(
-      defaultPlan.plan, probeInput, buildInput, altPlans, filter);
-  makeAlternativePlans(
-      defaultPlan.plan, flatProbeInput, flatBuildInput, altPlans, filter);
+  addPlansForInputType(JoinMaker::InputType::ENCODED, joinMaker, altPlans);
+  addPlansForInputType(JoinMaker::InputType::FLAT, joinMaker, altPlans);
 
-  addPlansWithTableScan(
-      tableScanDir->getPath(),
-      joinType,
-      nullAware,
-      probeKeys,
-      buildKeys,
-      flatProbeInput,
-      flatBuildInput,
-      outputColumns,
-      altPlans,
-      filter);
+  if (joinMaker.supportsTableScan()) {
+    const int32_t numGroups = randInt(1, probeSource->batches().size());
+
+    // Use ungrouped execution.
+    altPlans.push_back(joinMaker.makeHashJoinWithTableScan(
+        std::nullopt, false, JoinMaker::JoinOrder::NATURAL));
+
+    // Use unmixed mode grouped execution.
+    altPlans.push_back(joinMaker.makeHashJoinWithTableScan(
+        numGroups, false, JoinMaker::JoinOrder::NATURAL));
+
+    // Use mixed mode grouped execution.
+    if (!needRightSideJoin(joinType)) {
+      // Mixed grouped mode join does not support types that needs right side
+      // join.
+      altPlans.push_back(joinMaker.makeHashJoinWithTableScan(
+          numGroups, true, JoinMaker::JoinOrder::NATURAL));
+    }
+
+    if (joinMaker.supportsFlippingHashJoin()) {
+      // Use ungrouped execution.
+      altPlans.push_back(joinMaker.makeHashJoinWithTableScan(
+          std::nullopt, false, JoinMaker::JoinOrder::FLIPPED));
+
+      // Use unmixed mode grouped execution.
+      altPlans.push_back(joinMaker.makeHashJoinWithTableScan(
+          numGroups, false, JoinMaker::JoinOrder::FLIPPED));
+
+      // Use mixed mode grouped execution.
+      if (!needRightSideJoin(flipJoinType(joinType))) {
+        // Mixed grouped mode join does not support types that needs right side
+        // join.
+        altPlans.push_back(joinMaker.makeHashJoinWithTableScan(
+            numGroups, true, JoinMaker::JoinOrder::FLIPPED));
+      }
+    }
+
+    if (joinMaker.supportsMergeJoin()) {
+      altPlans.push_back(
+          joinMaker.makeMergeJoinWithTableScan(JoinMaker::JoinOrder::NATURAL));
+      if (joinMaker.supportsFlippingMergeJoin()) {
+        altPlans.push_back(joinMaker.makeMergeJoinWithTableScan(
+            JoinMaker::JoinOrder::FLIPPED));
+      }
+    }
+
+    if (joinMaker.supportsNestedLoopJoin()) {
+      altPlans.push_back(joinMaker.makeNestedLoopJoinWithTableScan(
+          JoinMaker::JoinOrder::NATURAL));
+      if (joinMaker.supportsFlippingNestedLoopJoin()) {
+        altPlans.push_back(joinMaker.makeNestedLoopJoinWithTableScan(
+            JoinMaker::JoinOrder::FLIPPED));
+      }
+    }
+  }
 
   for (auto i = 0; i < altPlans.size(); ++i) {
     LOG(INFO) << "Testing plan #" << i;
     auto actual = execute(altPlans[i], /*injectSpill=*/false);
     if (actual != nullptr && expected != nullptr) {
       VELOX_CHECK(
-          assertEqualResults({expected}, {actual}),
+          test::assertEqualResults({expected}, {actual}),
           "Logically equivalent plans produced different results");
     } else {
       VELOX_CHECK(
@@ -1280,7 +835,7 @@ void JoinFuzzer::verify(core::JoinType joinType) {
       if (actual != nullptr && expected != nullptr) {
         try {
           VELOX_CHECK(
-              assertEqualResults({expected}, {actual}),
+              test::assertEqualResults({expected}, {actual}),
               "Logically equivalent plans produced different results");
         } catch (const VeloxException&) {
           LOG(ERROR) << "Expected\n"
@@ -1294,301 +849,6 @@ void JoinFuzzer::verify(core::JoinType joinType) {
       }
     }
   }
-}
-
-JoinFuzzer::PlanWithSplits JoinFuzzer::makeMergeJoinPlanWithTableScan(
-    core::JoinType joinType,
-    const RowTypePtr& probeType,
-    const RowTypePtr& buildType,
-    const std::vector<std::string>& probeKeys,
-    const std::vector<std::string>& buildKeys,
-    const std::vector<Split>& probeSplits,
-    const std::vector<Split>& buildSplits,
-    const std::vector<std::string>& outputColumns,
-    const std::string& filter) {
-  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
-  core::PlanNodeId probeScanId;
-  core::PlanNodeId buildScanId;
-
-  return JoinFuzzer::PlanWithSplits{
-      PlanBuilder(planNodeIdGenerator)
-          .tableScan(probeType)
-          .capturePlanNodeId(probeScanId)
-          .orderBy(probeKeys, false)
-          .mergeJoin(
-              probeKeys,
-              buildKeys,
-              PlanBuilder(planNodeIdGenerator)
-                  .tableScan(buildType)
-                  .capturePlanNodeId(buildScanId)
-                  .orderBy(buildKeys, false)
-                  .planNode(),
-              filter,
-              outputColumns,
-              joinType)
-          .planNode(),
-      probeScanId,
-      buildScanId,
-      {{probeScanId, probeSplits}, {buildScanId, buildSplits}}};
-}
-
-JoinFuzzer::PlanWithSplits JoinFuzzer::makeNestedLoopJoinPlanWithTableScan(
-    core::JoinType joinType,
-    const RowTypePtr& probeType,
-    const RowTypePtr& buildType,
-    const std::vector<std::string>& probeKeys,
-    const std::vector<std::string>& buildKeys,
-    const std::vector<Split>& probeSplits,
-    const std::vector<Split>& buildSplits,
-    const std::vector<std::string>& outputColumns,
-    const std::string& filter) {
-  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
-  core::PlanNodeId probeScanId;
-  core::PlanNodeId buildScanId;
-
-  return JoinFuzzer::PlanWithSplits{
-      PlanBuilder(planNodeIdGenerator)
-          .tableScan(probeType)
-          .capturePlanNodeId(probeScanId)
-          .nestedLoopJoin(
-              PlanBuilder(planNodeIdGenerator)
-                  .tableScan(buildType)
-                  .capturePlanNodeId(buildScanId)
-                  .planNode(),
-              filter,
-              outputColumns,
-              joinType)
-          .planNode(),
-      probeScanId,
-      buildScanId,
-      {{probeScanId, probeSplits}, {buildScanId, buildSplits}}};
-}
-
-void JoinFuzzer::addPlansWithTableScan(
-    const std::string& tableDir,
-    core::JoinType joinType,
-    bool nullAware,
-    const std::vector<std::string>& probeKeys,
-    const std::vector<std::string>& buildKeys,
-    const std::vector<RowVectorPtr>& probeInput,
-    const std::vector<RowVectorPtr>& buildInput,
-    const std::vector<std::string>& outputColumns,
-    std::vector<PlanWithSplits>& altPlans,
-    const std::string& filter) {
-  VELOX_CHECK(!tableDir.empty());
-
-  if (!isTableScanSupported(probeInput[0]->type()) ||
-      !isTableScanSupported(buildInput[0]->type())) {
-    return;
-  }
-
-  std::vector<Split> probeScanSplits =
-      makeSplits(probeInput, fmt::format("{}/probe", tableDir), writerPool_);
-  std::vector<Split> buildScanSplits =
-      makeSplits(buildInput, fmt::format("{}/build", tableDir), writerPool_);
-
-  const auto probeType = asRowType(probeInput[0]->type());
-  const auto buildType = asRowType(buildInput[0]->type());
-
-  std::vector<PlanWithSplits> plansWithTableScan;
-  auto defaultPlan = makeDefaultPlanWithTableScan(
-      joinType,
-      nullAware,
-      probeType,
-      buildType,
-      probeKeys,
-      buildKeys,
-      probeScanSplits,
-      buildScanSplits,
-      outputColumns,
-      filter);
-  plansWithTableScan.push_back(defaultPlan);
-
-  auto joinNode =
-      std::dynamic_pointer_cast<const core::HashJoinNode>(defaultPlan.plan);
-  VELOX_CHECK_NOT_NULL(joinNode);
-
-  // Flip join sides.
-  addFlippedJoinPlan<core::HashJoinNode>(
-      defaultPlan.plan,
-      plansWithTableScan,
-      defaultPlan.probeScanId,
-      defaultPlan.buildScanId,
-      defaultPlan.splits);
-
-  const int32_t numGroups = randInt(1, probeScanSplits.size());
-  const std::vector<exec::Split> groupedProbeScanSplits =
-      generateSplitsWithGroup(
-          tableDir,
-          numGroups,
-          /*isProbe=*/true,
-          probeKeys.size(),
-          probeInput);
-  const std::vector<exec::Split> groupedBuildScanSplits =
-      generateSplitsWithGroup(
-          tableDir,
-          numGroups,
-          /*isProbe=*/false,
-          buildKeys.size(),
-          buildInput);
-
-  for (const auto& planWithTableScan : plansWithTableScan) {
-    altPlans.push_back(planWithTableScan);
-    altPlans.push_back(makeGroupedExecutionPlanWithTableScan(
-        planWithTableScan,
-        numGroups,
-        groupedProbeScanSplits,
-        groupedBuildScanSplits));
-  }
-
-  // Add ungrouped MergeJoin with TableScan.
-  if (core::MergeJoinNode::isSupported(joinNode->joinType())) {
-    auto planWithSplits = makeMergeJoinPlanWithTableScan(
-        joinType,
-        probeType,
-        buildType,
-        probeKeys,
-        buildKeys,
-        probeScanSplits,
-        buildScanSplits,
-        outputColumns,
-        filter);
-    altPlans.push_back(planWithSplits);
-
-    addFlippedJoinPlan<core::MergeJoinNode>(
-        planWithSplits.plan,
-        altPlans,
-        planWithSplits.probeScanId,
-        planWithSplits.buildScanId,
-        {{planWithSplits.probeScanId, probeScanSplits},
-         {planWithSplits.buildScanId, buildScanSplits}});
-  }
-
-  // Add ungrouped NestedLoopJoin with TableScan.
-  if (core::NestedLoopJoinNode::isSupported(joinNode->joinType())) {
-    std::string joinCondition = filter.empty()
-        ? makeJoinFilter(probeKeys, buildKeys)
-        : fmt::format(
-              "{} AND {}", makeJoinFilter(probeKeys, buildKeys), filter);
-    auto planWithSplits = makeNestedLoopJoinPlanWithTableScan(
-        joinType,
-        probeType,
-        buildType,
-        probeKeys,
-        buildKeys,
-        probeScanSplits,
-        buildScanSplits,
-        outputColumns,
-        joinCondition);
-    altPlans.push_back(planWithSplits);
-
-    addFlippedJoinPlan<core::NestedLoopJoinNode>(
-        planWithSplits.plan,
-        altPlans,
-        planWithSplits.probeScanId,
-        planWithSplits.buildScanId,
-        {{planWithSplits.probeScanId, probeScanSplits},
-         {planWithSplits.buildScanId, buildScanSplits}});
-  }
-}
-
-std::vector<exec::Split> JoinFuzzer::generateSplitsWithGroup(
-    const std::string& tableDir,
-    int32_t numGroups,
-    bool isProbe,
-    size_t numKeys,
-    const std::vector<RowVectorPtr>& input) {
-  const std::vector<std::vector<RowVectorPtr>> inputVectorsByGroup =
-      splitInputByGroup(numGroups, numKeys, input);
-
-  std::vector<exec::Split> splitsWithGroup;
-  for (int32_t groupId = 0; groupId < numGroups; ++groupId) {
-    for (auto i = 0; i < inputVectorsByGroup[groupId].size(); ++i) {
-      const std::string filePath = fmt::format(
-          "{}/grouped[{}].{}.{}",
-          tableDir,
-          groupId,
-          isProbe ? "probe" : "build",
-          i);
-      writeToFile(filePath, inputVectorsByGroup[groupId][i], writerPool_.get());
-      splitsWithGroup.emplace_back(makeConnectorSplit(filePath), groupId);
-    }
-    splitsWithGroup.emplace_back(nullptr, groupId);
-  }
-  return splitsWithGroup;
-}
-
-std::vector<std::vector<RowVectorPtr>> JoinFuzzer::splitInputByGroup(
-    int32_t numGroups,
-    size_t numKeys,
-    const std::vector<RowVectorPtr>& inputs) {
-  if (numGroups == 1) {
-    return {inputs};
-  }
-
-  // Partition 'input' based on the join keys for group execution with one
-  // partition per each group.
-  const RowTypePtr& inputType = asRowType(inputs[0]->type());
-  std::vector<column_index_t> partitionChannels(numKeys);
-  std::iota(partitionChannels.begin(), partitionChannels.end(), 0);
-  std::vector<std::unique_ptr<exec::VectorHasher>> hashers;
-  hashers.reserve(numKeys);
-  for (auto channel : partitionChannels) {
-    hashers.emplace_back(
-        exec::VectorHasher::create(inputType->childAt(channel), channel));
-  }
-
-  std::vector<std::vector<RowVectorPtr>> inputsByGroup{
-      static_cast<size_t>(numGroups)};
-  raw_vector<uint64_t> groupHashes;
-  std::vector<BufferPtr> groupRows(numGroups);
-  std::vector<vector_size_t*> rawGroupRows(numGroups);
-  std::vector<vector_size_t> groupSizes(numGroups, 0);
-  SelectivityVector inputRows;
-
-  for (const auto& input : inputs) {
-    const int numRows = input->size();
-    inputRows.resize(numRows);
-    inputRows.setAll();
-    groupHashes.resize(numRows);
-    std::fill(groupSizes.begin(), groupSizes.end(), 0);
-    std::fill(groupHashes.begin(), groupHashes.end(), 0);
-
-    for (auto i = 0; i < hashers.size(); ++i) {
-      auto& hasher = hashers[i];
-      auto* keyVector = input->childAt(hashers[i]->channel())->loadedVector();
-      hashers[i]->decode(*keyVector, inputRows);
-      if (hasher->channel() != kConstantChannel) {
-        hashers[i]->hash(inputRows, i > 0, groupHashes);
-      } else {
-        hashers[i]->hashPrecomputed(inputRows, i > 0, groupHashes);
-      }
-    }
-
-    for (int row = 0; row < numRows; ++row) {
-      const int32_t groupId = groupHashes[row] % numGroups;
-      if (groupRows[groupId] == nullptr ||
-          (groupRows[groupId]->capacity() < numRows * sizeof(vector_size_t))) {
-        groupRows[groupId] = allocateIndices(numRows, pool_.get());
-        rawGroupRows[groupId] = groupRows[groupId]->asMutable<vector_size_t>();
-      }
-      rawGroupRows[groupId][groupSizes[groupId]++] = row;
-    }
-
-    for (int32_t groupId = 0; groupId < numGroups; ++groupId) {
-      const size_t groupSize = groupSizes[groupId];
-      if (groupSize != 0) {
-        VELOX_CHECK_NOT_NULL(groupRows[groupId]);
-        groupRows[groupId]->setSize(
-            groupSizes[groupId] * sizeof(vector_size_t));
-        inputsByGroup[groupId].push_back(
-            (groupSize == numRows)
-                ? input
-                : exec::wrap(groupSize, std::move(groupRows[groupId]), input));
-      }
-    }
-  }
-  return inputsByGroup;
 }
 
 void JoinFuzzer::go() {
@@ -1624,4 +884,4 @@ void joinFuzzer(
     std::unique_ptr<test::ReferenceQueryRunner> referenceQueryRunner) {
   JoinFuzzer(seed, std::move(referenceQueryRunner)).go();
 }
-} // namespace facebook::velox::exec::test
+} // namespace facebook::velox::exec

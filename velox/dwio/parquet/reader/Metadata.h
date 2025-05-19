@@ -42,6 +42,15 @@ class ColumnChunkMetaDataPtr {
       const TypePtr type,
       int64_t numRows);
 
+  /// Return the Column Metadata Statistics Min Value
+  std::string getColumnMetadataStatsMinValue();
+
+  /// Return the Column Metadata Statistics Max Value
+  std::string getColumnMetadataStatsMaxValue();
+
+  /// Return the Column Metadata Statistics Null Count
+  int64_t getColumnMetadataStatsNullCount();
+
   /// Number of values.
   int64_t numValues() const;
 
@@ -100,6 +109,16 @@ class RowGroupMetaDataPtr {
   /// Check the presence of total compressed size.
   bool hasTotalCompressedSize() const;
 
+  /// The sorting column, column index in this row group
+  int32_t sortingColumnIdx(int i) const;
+
+  /// If true, indicates this column is sorted in descending order.
+  bool sortingColumnDescending(int i) const;
+
+  /// If true, nulls will come before non-null values, otherwise, nulls go at
+  /// the end
+  bool sortingColumnNullsFirst(int i) const;
+
   /// Total byte size of all the compressed (and potentially encrypted)
   /// column data in this row group.
   /// This information is optional and may be 0 if omitted.
@@ -124,6 +143,15 @@ class FileMetaDataPtr {
 
   /// Return the RowGroupMetaData pointer of the corresponding row group index.
   RowGroupMetaDataPtr rowGroup(int index) const;
+
+  /// The key/value metadata size.
+  int64_t keyValueMetadataSize() const;
+
+  /// Returns True if the key/value metadata contains the key input.
+  bool keyValueMetadataContains(const std::string_view key) const;
+
+  /// Returns the value inside the key/value metadata if the key is present.
+  std::string keyValueMetadataValue(const std::string_view key) const;
 
  private:
   const void* ptr_;

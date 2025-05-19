@@ -79,17 +79,7 @@ getCustomInputGenerators() {
       {"approx_distinct", std::make_shared<ApproxDistinctInputGenerator>()},
       {"approx_set", std::make_shared<ApproxDistinctInputGenerator>()},
       {"approx_percentile", std::make_shared<ApproxPercentileInputGenerator>()},
-      {"map_union_sum", std::make_shared<MapUnionSumInputGenerator>()},
-      {"classification_fall_out",
-       std::make_shared<ClassificationAggregationInputGenerator>()},
-      {"classification_precision",
-       std::make_shared<ClassificationAggregationInputGenerator>()},
-      {"classification_recall",
-       std::make_shared<ClassificationAggregationInputGenerator>()},
-      {"classification_miss_rate",
-       std::make_shared<ClassificationAggregationInputGenerator>()},
-      {"classification_thresholds",
-       std::make_shared<ClassificationAggregationInputGenerator>()}};
+      {"map_union_sum", std::make_shared<MapUnionSumInputGenerator>()}};
 }
 
 } // namespace
@@ -117,12 +107,19 @@ int main(int argc, char** argv) {
   facebook::velox::window::prestosql::registerAllWindowFunctions();
   facebook::velox::functions::prestosql::registerInternalFunctions();
   facebook::velox::aggregate::prestosql::registerInternalAggregateFunctions();
-  facebook::velox::memory::MemoryManager::initialize({});
+  facebook::velox::memory::MemoryManager::initialize(
+      facebook::velox::memory::MemoryManager::Options{});
 
   size_t initialSeed = FLAGS_seed == 0 ? std::time(nullptr) : FLAGS_seed;
 
   // List of functions that have known bugs that cause crashes or failures.
   static const std::unordered_set<std::string> skipFunctions = {
+      // https://github.com/prestodb/presto/issues/24936
+      "classification_fall_out",
+      "classification_precision",
+      "classification_recall",
+      "classification_miss_rate",
+      "classification_thresholds",
       // Skip internal functions used only for result verifications.
       "$internal$count_distinct",
       "$internal$array_agg",

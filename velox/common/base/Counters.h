@@ -55,6 +55,8 @@ constexpr folly::StringPiece kMetricTaskMemoryReclaimExecTimeMs{
 constexpr folly::StringPiece kMetricTaskMemoryReclaimWaitTimeoutCount{
     "velox.task_memory_reclaim_wait_timeout_count"};
 
+constexpr folly::StringPiece kMetricTaskSplitsCount{"velox.task_splits_count"};
+
 constexpr folly::StringPiece kMetricOpMemoryReclaimTimeMs{
     "velox.op_memory_reclaim_time_ms"};
 
@@ -176,17 +178,20 @@ constexpr folly::StringPiece kMetricHiveSortWriterFinishTimeMs{
 constexpr folly::StringPiece kMetricArbitratorRequestsCount{
     "velox.arbitrator_requests_count"};
 
-constexpr folly::StringPiece kMetricMappedMemoryBytes{
+constexpr folly::StringPiece kMetricMemoryAllocatorMappedBytes{
     "velox.memory_allocator_mapped_bytes"};
 
-constexpr folly::StringPiece kMetricAllocatedMemoryBytes{
-    "velox.memory_allocator_alloc_bytes"};
+constexpr folly::StringPiece kMetricMemoryAllocatorAllocatedBytes{
+    "velox.memory_allocator_allocated_bytes"};
 
-constexpr folly::StringPiece kMetricMmapExternalMappedBytes{
+constexpr folly::StringPiece kMetricMemoryAllocatorTotalUsedBytes{
+    "velox.memory_allocator_total_used_bytes"};
+
+constexpr folly::StringPiece kMetricMmapAllocatorExternalMappedBytes{
     "velox.mmap_allocator_external_mapped_bytes"};
 
-constexpr folly::StringPiece kMetricMmapDelegatedAllocBytes{
-    "velox.mmap_allocator_delegated_alloc_bytes"};
+constexpr folly::StringPiece kMetricMmapAllocatorDelegatedAllocatedBytes{
+    "velox.mmap_allocator_delegated_allocated_bytes"};
 
 constexpr folly::StringPiece kMetricCacheMaxAgeSecs{"velox.cache_max_age_secs"};
 
@@ -360,4 +365,31 @@ constexpr folly::StringPiece kMetricStorageGlobalThrottled{
 
 constexpr folly::StringPiece kMetricStorageNetworkThrottled{
     "velox.storage_network_throttled_count"};
+
+constexpr folly::StringPiece kMetricIndexLookupResultRawBytes{
+    "velox.index_lookup_result_raw_bytes"};
+
+constexpr folly::StringPiece kMetricIndexLookupResultBytes{
+    "velox.index_lookup_result_bytes"};
+
+constexpr folly::StringPiece kMetricIndexLookupTimeMs{
+    "velox.index_lookup_time_ms"};
+
+constexpr folly::StringPiece kMetricIndexLookupWaitTimeMs{
+    "velox.index_lookup_wait_time_ms"};
+
+constexpr folly::StringPiece kMetricIndexLookupBlockedWaitTimeMs{
+    "velox.index_lookup_blocked_wait_time_ms"};
+
+constexpr folly::StringPiece kMetricTableScanBatchProcessTimeMs{
+    "velox.table_scan_batch_process_time_ms"};
+
+constexpr folly::StringPiece kMetricTableScanBatchBytes{
+    "velox.table_scan_batch_bytes"};
+
+constexpr folly::StringPiece kMetricTaskBatchProcessTimeMs{
+    "velox.task_batch_process_time_ms"};
+
+constexpr folly::StringPiece kMetricTaskBarrierProcessTimeMs{
+    "velox.task_barrier_process_time_ms"};
 } // namespace facebook::velox

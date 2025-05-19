@@ -49,7 +49,7 @@ void recordSilentThrows(Operator& op) {
 
 // Used to generate context for exceptions that are thrown while executing an
 // operator. Eg output: 'Operator: FilterProject(1) PlanNodeId: 1 TaskId:
-// test_cursor 1 PipelineId: 0 DriverId: 0 OperatorAddress: 0x61a000003c80'
+// test_cursor_1 PipelineId: 0 DriverId: 0 OperatorAddress: 0x61a000003c80'
 std::string addContextOnException(
     VeloxException::Type exceptionType,
     void* arg) {
@@ -95,7 +95,7 @@ const core::QueryConfig& DriverCtx::queryConfig() const {
   return task->queryCtx()->queryConfig();
 }
 
-const std::optional<trace::TraceConfig>& DriverCtx::traceConfig() const {
+const std::optional<TraceConfig>& DriverCtx::traceConfig() const {
   return task->traceConfig();
 }
 
@@ -481,6 +481,15 @@ bool Driver::checkUnderArbitration(ContinueFuture* future) {
   return task()->queryCtx()->checkUnderArbitration(future);
 }
 
+namespace {
+inline void getOutput(Operator* op, RowVectorPtr& result) {
+  result = op->getOutput();
+  if (FOLLY_UNLIKELY(op->shouldDropOutput())) {
+    result = nullptr;
+  }
+}
+} // namespace
+
 StopReason Driver::runInternal(
     std::shared_ptr<Driver>& self,
     std::shared_ptr<BlockingState>& blockingState,
@@ -571,7 +580,6 @@ StopReason Driver::runInternal(
               curOperatorId_,
               kOpMethodIsBlocked);
         });
-
         if (blockingReason_ != BlockingReason::kNotBlocked) {
           return blockDriver(self, i, std::move(future), blockingState, guard);
         }
@@ -579,7 +587,7 @@ StopReason Driver::runInternal(
         if (i < numOperators - 1) {
           Operator* nextOp = operators_[i + 1].get();
 
-          withDeltaCpuWallTimer(op, &OperatorStats::isBlockedTiming, [&]() {
+          withDeltaCpuWallTimer(nextOp, &OperatorStats::isBlockedTiming, [&]() {
             CALL_OPERATOR(
                 blockingReason_ = nextOp->isBlocked(&future),
                 nextOp,
@@ -604,7 +612,7 @@ StopReason Driver::runInternal(
               TestValue::adjust(
                   "facebook::velox::exec::Driver::runInternal::getOutput", op);
               CALL_OPERATOR(
-                  intermediateResult = op->getOutput(),
+                  getOutput(op, intermediateResult),
                   op,
                   curOperatorId_,
                   kOpMethodGetOutput);
@@ -697,10 +705,7 @@ StopReason Driver::runInternal(
           // will come back here after this is again on thread.
           withDeltaCpuWallTimer(op, &OperatorStats::getOutputTiming, [&]() {
             CALL_OPERATOR(
-                result = op->getOutput(),
-                op,
-                curOperatorId_,
-                kOpMethodGetOutput);
+                getOutput(op, result), op, curOperatorId_, kOpMethodGetOutput);
             if (result) {
               validateOperatorOutputResult(result, *op);
 
@@ -852,6 +857,80 @@ void Driver::updateStats() {
   task()->addDriverStats(ctx_->pipelineId, std::move(stats));
 }
 
+void Driver::startBarrier() {
+  VELOX_CHECK(ctx_->task->underBarrier());
+  VELOX_CHECK(
+      !barrier_.has_value(),
+      "The driver has already started barrier processing");
+  barrier_ = BarrierState{};
+}
+
+void Driver::drainOutput() {
+  VELOX_CHECK(
+      hasBarrier(), "Can't drain a driver not under barrier processing");
+  VELOX_CHECK(!isDraining(), "The driver is already draining");
+  // Starts to drain from the source operator.
+  barrier_->drainingOpId = 0;
+  drainNextOperator();
+}
+
+bool Driver::isDraining() const {
+  return hasBarrier() && barrier_->drainingOpId.has_value();
+}
+
+bool Driver::isDraining(int32_t operatorId) const {
+  return isDraining() && operatorId == barrier_->drainingOpId;
+}
+
+bool Driver::hasDrained(int32_t operatorId) const {
+  return isDraining() && operatorId < barrier_->drainingOpId;
+}
+
+void Driver::finishDrain(int32_t operatorId) {
+  VELOX_CHECK(isDraining());
+  VELOX_CHECK_EQ(barrier_->drainingOpId.value(), operatorId);
+  barrier_->drainingOpId = barrier_->drainingOpId.value() + 1;
+  drainNextOperator();
+}
+
+void Driver::drainNextOperator() {
+  VELOX_CHECK(isDraining());
+  for (; barrier_->drainingOpId < operators_.size();
+       barrier_->drainingOpId = barrier_->drainingOpId.value() + 1) {
+    if (operators_[barrier_->drainingOpId.value()]->startDrain()) {
+      break;
+    }
+  }
+  if (barrier_->drainingOpId == operators_.size()) {
+    finishBarrier();
+  }
+}
+
+void Driver::dropInput(int32_t operatorId) {
+  if (!hasBarrier()) {
+    // No need to drop input if the driver has finished barrier processing.
+    return;
+  }
+  VELOX_CHECK_LT(operatorId, operators_.size());
+  if (!barrier_->dropInputOpId.has_value()) {
+    barrier_->dropInputOpId = operatorId;
+  } else {
+    barrier_->dropInputOpId = std::max(*barrier_->dropInputOpId, operatorId);
+  }
+}
+
+bool Driver::shouldDropOutput(int32_t operatorId) const {
+  return hasBarrier() && barrier_->dropInputOpId.has_value() &&
+      operatorId < *barrier_->dropInputOpId;
+}
+
+void Driver::finishBarrier() {
+  VELOX_CHECK(isDraining());
+  VELOX_CHECK_EQ(barrier_->drainingOpId.value(), operators_.size());
+  barrier_.reset();
+  ctx_->task->finishDriverBarrier();
+}
+
 void Driver::close() {
   if (closed_) {
     // Already closed.
@@ -958,6 +1037,14 @@ Operator* Driver::findOperatorNoThrow(int32_t operatorId) const {
                                           : nullptr;
 }
 
+Operator* Driver::sourceOperator() const {
+  return operators_[0].get();
+}
+
+Operator* Driver::sinkOperator() const {
+  return operators_[operators_.size() - 1].get();
+}
+
 std::vector<Operator*> Driver::operators() const {
   std::vector<Operator*> operators;
   operators.reserve(operators_.size());
@@ -1045,11 +1132,12 @@ void Driver::withDeltaCpuWallTimer(
   // If 'trackOperatorCpuUsage_' is true, create and initialize the timer object
   // to track cpu and wall time of the opFunction.
   if (!trackOperatorCpuUsage_) {
-    return opFunction();
+    opFunction();
+    return;
   }
 
   // The delta CpuWallTiming object would be recorded to the corresponding
-  // opTimingMember upon destruction of the timer when withDeltaCpuWallTimer
+  // 'opTimingMember' upon destruction of the timer when withDeltaCpuWallTimer
   // ends. The timer is created on the stack to avoid heap allocation
   auto f = [op, opTimingMember, this](const CpuWallTiming& elapsedTime) {
     auto elapsedSelfTime = processLazyIoStats(*op, elapsedTime);

@@ -251,6 +251,9 @@ class GroupingSet {
       int32_t maxOutputRows,
       const RowVectorPtr& result);
 
+  // Returns the currently accummulated bytes of the unspill merge rows.
+  uint64_t mergeRowBytes() const;
+
   // Initializes a new row in 'mergeRows' with the keys from the
   // current element from 'stream'. Accumulators are left in the initial
   // state with no data accumulated. This is called each time a new
@@ -274,6 +277,10 @@ class GroupingSet {
   // 'mergeRows'. Used for producing a batch of results when aggregating spilled
   // groups.
   void extractSpillResult(const RowVectorPtr& result);
+
+  // Clears the merge results, including 'mergeRows_' and 'sortedAggregations_'
+  // if applicable.
+  void clearMergeRows();
 
   // Returns a list of accumulators for 'aggregates_', plus one more accumulator
   // for 'sortedAggregations_', and one for each 'distinctAggregations_'.  When
@@ -414,8 +421,7 @@ class AggregationInputSpiller : public SpillerBase {
       RowContainer* container,
       RowTypePtr rowType,
       const HashBitRange& hashBitRange,
-      int32_t numSortingKeys,
-      const std::vector<CompareFlags>& sortCompareFlags,
+      const std::vector<SpillSortKey>& sortingKeys,
       const common::SpillConfig* spillConfig,
       folly::Synchronized<common::SpillStats>* spillStats);
 

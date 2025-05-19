@@ -279,6 +279,9 @@ void SplitReader::createReader() {
 
   baseReader_ = dwio::common::getReaderFactory(baseReaderOpts_.fileFormat())
                     ->createReader(std::move(baseFileInput), baseReaderOpts_);
+  if (!baseReader_) {
+    emptySplit_ = true;
+  }
 }
 
 RowTypePtr SplitReader::getAdaptedRowType() const {
@@ -295,7 +298,10 @@ bool SplitReader::filterOnStats(
           baseReader_.get(),
           hiveSplit_->filePath,
           hiveSplit_->partitionKeys,
-          *partitionKeys_)) {
+          *partitionKeys_,
+          hiveConfig_->readTimestampPartitionValueAsLocalTime(
+              connectorQueryCtx_->sessionProperties()))) {
+    ++runtimeStats.processedSplits;
     return true;
   }
   ++runtimeStats.skippedSplits;

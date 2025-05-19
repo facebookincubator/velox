@@ -635,7 +635,7 @@ DEBUG_ONLY_TEST_F(OrderByTest, reclaimDuringInputProcessing) {
 
     testWait.wait(testWaitKey);
     ASSERT_TRUE(op != nullptr);
-    auto task = op->testingOperatorCtx()->task();
+    auto task = op->operatorCtx()->task();
     auto taskPauseWait = task->requestPause();
     driverWait.notify();
     taskPauseWait.wait();
@@ -745,7 +745,7 @@ DEBUG_ONLY_TEST_F(OrderByTest, reclaimDuringReserve) {
             const bool reclaimable = op->reclaimableBytes(reclaimableBytes);
             ASSERT_TRUE(reclaimable);
             ASSERT_GT(reclaimableBytes, 0);
-            auto* driver = op->testingOperatorCtx()->driver();
+            auto* driver = op->operatorCtx()->driver();
             TestSuspendedSection suspendedSection(driver);
             testWait.notify();
             driverWait.wait(driverWaitKey);
@@ -767,7 +767,7 @@ DEBUG_ONLY_TEST_F(OrderByTest, reclaimDuringReserve) {
 
   testWait.wait(testWaitKey);
   ASSERT_TRUE(op != nullptr);
-  auto task = op->testingOperatorCtx()->task();
+  auto task = op->operatorCtx()->task();
   auto taskPauseWait = task->requestPause();
   taskPauseWait.wait();
 
@@ -865,7 +865,7 @@ DEBUG_ONLY_TEST_F(OrderByTest, reclaimDuringAllocation) {
               } else {
                 ASSERT_EQ(reclaimableBytes, 0);
               }
-              auto* driver = op->testingOperatorCtx()->driver();
+              auto* driver = op->operatorCtx()->driver();
               TestSuspendedSection suspendedSection(driver);
               testWait.notify();
               driverWait.wait(driverWaitKey);
@@ -898,7 +898,7 @@ DEBUG_ONLY_TEST_F(OrderByTest, reclaimDuringAllocation) {
 
     testWait.wait(testWaitKey);
     ASSERT_TRUE(op != nullptr);
-    auto task = op->testingOperatorCtx()->task();
+    auto task = op->operatorCtx()->task();
     auto taskPauseWait = task->requestPause();
     taskPauseWait.wait();
 
@@ -1015,7 +1015,7 @@ DEBUG_ONLY_TEST_F(OrderByTest, reclaimDuringOutputProcessing) {
 
     testWait.wait(testWaitKey);
     ASSERT_TRUE(op != nullptr);
-    auto task = op->testingOperatorCtx()->task();
+    auto task = op->operatorCtx()->task();
     auto taskPauseWait = task->requestPause();
     driverWait.notify();
     taskPauseWait.wait();
@@ -1096,7 +1096,7 @@ DEBUG_ONLY_TEST_F(OrderByTest, abortDuringOutputProcessing) {
             return;
           }
           ASSERT_GT(op->pool()->usedBytes(), 0);
-          auto* driver = op->testingOperatorCtx()->driver();
+          auto* driver = op->operatorCtx()->driver();
           ASSERT_EQ(
               driver->task()->enterSuspended(driver->state()),
               StopReason::kNone);
@@ -1162,7 +1162,7 @@ DEBUG_ONLY_TEST_F(OrderByTest, abortDuringInputgProcessing) {
           if (++numInputs != 2) {
             return;
           }
-          auto* driver = op->testingOperatorCtx()->driver();
+          auto* driver = op->operatorCtx()->driver();
           ASSERT_EQ(
               driver->task()->enterSuspended(driver->state()),
               StopReason::kNone);
@@ -1307,7 +1307,7 @@ DEBUG_ONLY_TEST_F(OrderByTest, reclaimFromOrderBy) {
         if (++numInputs != 5) {
           return;
         }
-        auto* driver = op->testingOperatorCtx()->driver();
+        auto* driver = op->operatorCtx()->driver();
         TestSuspendedSection suspendedSection(driver);
         memory::testingRunArbitration();
       })));
@@ -1366,5 +1366,51 @@ DEBUG_ONLY_TEST_F(OrderByTest, reclaimFromEmptyOrderBy) {
   const auto stats = task->taskStats().pipelineStats;
   ASSERT_EQ(stats[0].operatorStats[1].spilledBytes, 0);
   ASSERT_EQ(stats[0].operatorStats[1].spilledPartitions, 0);
+}
+
+DEBUG_ONLY_TEST_F(OrderByTest, orderByWithLazyInput) {
+  auto nonLazyVector = createVectors(1, rowType_, fuzzerOpts_)[0];
+
+  std::vector<RowVectorPtr> lazyInput;
+  lazyInput.push_back(
+      VectorFuzzer(fuzzerOpts_, pool()).fuzzRowChildrenToLazy(nonLazyVector));
+
+  std::vector<RowVectorPtr> lazyInputCopy;
+  lazyInputCopy.push_back(std::dynamic_pointer_cast<RowVector>(
+      nonLazyVector->copyPreserveEncodings()));
+  createDuckDbTable(lazyInputCopy);
+
+  std::atomic_bool nonReclaimableSectionEntered{false};
+  SCOPED_TESTVALUE_SET(
+      "facebook::velox::exec::SortBuffer::addInput",
+      std::function<void(void*)>(
+          ([&](void* /* unused */) { nonReclaimableSectionEntered = true; })));
+
+  std::optional<bool> lazyLoadedInNonReclaimableSection;
+  SCOPED_TESTVALUE_SET(
+      "facebook::velox::{}::VectorLoaderWrap::loadInternal",
+      std::function<void(void*)>(([&](void* /* unused */) {
+        ASSERT_FALSE(lazyLoadedInNonReclaimableSection.has_value());
+        if (nonReclaimableSectionEntered) {
+          lazyLoadedInNonReclaimableSection = true;
+        } else {
+          lazyLoadedInNonReclaimableSection = false;
+        }
+      })));
+
+  const auto spillDirectory = exec::test::TempDirectoryPath::create();
+  auto task =
+      AssertQueryBuilder(duckDbQueryRunner_)
+          .spillDirectory(spillDirectory->getPath())
+          .config(core::QueryConfig::kSpillEnabled, true)
+          .config(core::QueryConfig::kOrderBySpillEnabled, true)
+          .plan(PlanBuilder()
+                    .values(lazyInput)
+                    .orderBy({"c0 ASC NULLS LAST"}, false)
+                    .planNode())
+          .assertResults("SELECT * FROM tmp ORDER BY c0 ASC NULLS LAST");
+
+  ASSERT_TRUE(lazyLoadedInNonReclaimableSection.has_value());
+  ASSERT_FALSE(lazyLoadedInNonReclaimableSection.value());
 }
 } // namespace facebook::velox::exec::test

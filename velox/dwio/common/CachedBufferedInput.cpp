@@ -151,13 +151,11 @@ uint64_t getOffset(const CacheRequest& request) {
 }
 
 template <bool kSsd>
-std::pair<uint64_t, uint64_t> toRegion(const CacheRequest& request) {
-  return std::make_pair(getOffset<kSsd>(request), request.size);
-}
-
-template <bool kSsd>
 bool lessThan(const CacheRequest* left, const CacheRequest* right) {
-  return toRegion<kSsd>(*left) < toRegion<kSsd>(*right);
+  auto leftOffset = getOffset<kSsd>(*left);
+  auto rightOffset = getOffset<kSsd>(*right);
+  return leftOffset < rightOffset ||
+      (leftOffset == rightOffset && left->size > right->size);
 }
 
 } // namespace
@@ -281,11 +279,13 @@ class DwioCoalescedLoadBase : public cache::CoalescedLoad {
   DwioCoalescedLoadBase(
       cache::AsyncDataCache& cache,
       std::shared_ptr<IoStatistics> ioStats,
+      std::shared_ptr<filesystems::File::IoStats> fsStats,
       uint64_t groupId,
       std::vector<CacheRequest*> requests)
       : CoalescedLoad(makeKeys(requests), makeSizes(requests)),
         cache_(cache),
         ioStats_(std::move(ioStats)),
+        fsStats_(std::move(fsStats)),
         groupId_(groupId) {
     requests_.reserve(requests.size());
     for (const auto& request : requests) {
@@ -356,6 +356,7 @@ class DwioCoalescedLoadBase : public cache::CoalescedLoad {
   cache::AsyncDataCache& cache_;
   std::vector<CacheRequest> requests_;
   std::shared_ptr<IoStatistics> ioStats_;
+  std::shared_ptr<filesystems::File::IoStats> fsStats_;
   const uint64_t groupId_;
   int64_t size_{0};
 };
@@ -367,10 +368,16 @@ class DwioCoalescedLoad : public DwioCoalescedLoadBase {
       cache::AsyncDataCache& cache,
       std::shared_ptr<ReadFileInputStream> input,
       std::shared_ptr<IoStatistics> ioStats,
+      std::shared_ptr<filesystems::File::IoStats> fsStats,
       uint64_t groupId,
       std::vector<CacheRequest*> requests,
       int32_t maxCoalesceDistance)
-      : DwioCoalescedLoadBase(cache, ioStats, groupId, std::move(requests)),
+      : DwioCoalescedLoadBase(
+            cache,
+            std::move(ioStats),
+            std::move(fsStats),
+            groupId,
+            std::move(requests)),
         input_(std::move(input)),
         maxCoalesceDistance_(maxCoalesceDistance) {}
 
@@ -415,9 +422,15 @@ class SsdLoad : public DwioCoalescedLoadBase {
   SsdLoad(
       cache::AsyncDataCache& cache,
       std::shared_ptr<IoStatistics> ioStats,
+      std::shared_ptr<filesystems::File::IoStats> fsStats,
       uint64_t groupId,
       std::vector<CacheRequest*> requests)
-      : DwioCoalescedLoadBase(cache, ioStats, groupId, std::move(requests)) {}
+      : DwioCoalescedLoadBase(
+            cache,
+            std::move(ioStats),
+            std::move(fsStats),
+            groupId,
+            std::move(requests)) {}
 
   std::vector<CachePin> loadData(bool prefetch) override {
     std::vector<SsdPin> ssdPins;
@@ -453,12 +466,14 @@ void CachedBufferedInput::readRegion(
 
   std::shared_ptr<cache::CoalescedLoad> load;
   if (!requests[0]->ssdPin.empty()) {
-    load = std::make_shared<SsdLoad>(*cache_, ioStats_, groupId_, requests);
+    load = std::make_shared<SsdLoad>(
+        *cache_, ioStats_, fsStats_, groupId_, requests);
   } else {
     load = std::make_shared<DwioCoalescedLoad>(
         *cache_,
         input_,
         ioStats_,
+        fsStats_,
         groupId_,
         requests,
         options_.maxCoalesceDistance());

@@ -52,7 +52,7 @@ namespace facebook::velox::tool::trace::test {
 class TableScanReplayerTest : public HiveConnectorTestBase {
  protected:
   static void SetUpTestCase() {
-    memory::MemoryManager::testingSetInstance({});
+    memory::MemoryManager::testingSetInstance(memory::MemoryManager::Options{});
     HiveConnectorTestBase::SetUpTestCase();
     filesystems::registerLocalFileSystem();
     if (!isRegisteredVectorSerde()) {
@@ -64,6 +64,7 @@ class TableScanReplayerTest : public HiveConnectorTestBase {
     connector::hive::LocationHandle::registerSerDe();
     connector::hive::HiveColumnHandle::registerSerDe();
     connector::hive::HiveInsertTableHandle::registerSerDe();
+    connector::hive::HiveInsertFileNameGenerator::registerSerDe();
     connector::hive::HiveConnectorSplit::registerSerDe();
     core::PlanNode::registerSerDe();
     core::ITypedExpr::registerSerDe();
@@ -129,11 +130,9 @@ TEST_F(TableScanReplayerTest, runner) {
 
   const auto taskTraceDir =
       exec::trace::getTaskTraceDirectory(traceRoot, *task);
-  const auto connectorId = exec::trace::getHiveConnectorId(
-      traceNodeId_,
-      exec::trace::getTaskTraceMetaFilePath(taskTraceDir),
-      fs,
-      memory::MemoryManager::getInstance()->tracePool());
+  const auto taskTraceReader =
+      exec::trace::TaskTraceMetadataReader(taskTraceDir, pool());
+  const auto connectorId = taskTraceReader.connectorId(traceNodeId_);
   ASSERT_EQ("test-hive", connectorId);
   const auto opTraceDir = exec::trace::getOpTraceDirectory(
       taskTraceDir,

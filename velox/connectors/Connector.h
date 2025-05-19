@@ -191,7 +191,7 @@ class DataSink {
     uint32_t numWrittenFiles{0};
     uint64_t writeIOTimeUs{0};
     uint64_t numCompressedBytes{0};
-    uint64_t wallRecodeTimeNs{0};
+    uint64_t recodeTimeNs{0};
     uint64_t compressionTimeNs{0};
 
     common::SpillStats spillStats;
@@ -297,6 +297,12 @@ class DataSource {
   virtual std::shared_ptr<wave::WaveDataSource> toWaveDataSource() {
     VELOX_UNSUPPORTED();
   }
+
+  /// Invoked by table scan close to cancel any inflight async operations
+  /// running inside the data source. This is the best effort and the actual
+  /// connector implementation decides how to support the cancellation if
+  /// needed.
+  virtual void cancel() {}
 };
 
 class IndexSource {

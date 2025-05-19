@@ -85,10 +85,13 @@ class SelectiveRepeatedColumnReader : public SelectiveColumnReader {
     return i;
   }
 
+  void ensureAllLengthsBuffer(vector_size_t size);
+
   BufferPtr allLengthsHolder_;
   vector_size_t* allLengths_;
   RowSet nestedRows_;
   raw_vector<vector_size_t> nestedRowsHolder_;
+  bool nestedRowsAllSelected_;
 
   // The position in the child readers that corresponds to the position in the
   // length stream. The child readers can be behind if the last parents were

@@ -99,11 +99,11 @@ void assertRescaleRealFail(
 }
 
 void testToByteArray(int128_t value, int8_t* expected, int32_t size) {
-  char out[size];
-  int32_t length = DecimalUtil::toByteArray(value, out);
+  std::vector<char> out(size);
+  int32_t length = DecimalUtil::toByteArray(value, out.data());
   EXPECT_EQ(length, size);
   EXPECT_EQ(DecimalUtil::getByteArrayLength(value), size);
-  EXPECT_EQ(std::memcmp(expected, out, length), 0);
+  EXPECT_EQ(std::memcmp(expected, out.data(), length), 0);
 }
 
 template <typename T>
@@ -113,11 +113,11 @@ void testcastToString(
     int scale,
     int maxStringSize,
     const std::string& expected) {
-  char out[maxStringSize];
-  auto actualSize =
-      DecimalUtil::castToString<T>(unscaleValue, scale, maxStringSize, out);
+  std::vector<char> out(maxStringSize);
+  auto actualSize = DecimalUtil::castToString<T>(
+      unscaleValue, scale, maxStringSize, out.data());
   EXPECT_EQ(expected.size(), actualSize);
-  EXPECT_EQ(std::memcmp(expected.data(), out, expected.size()), 0);
+  EXPECT_EQ(std::memcmp(expected.data(), out.data(), expected.size()), 0);
 }
 
 void testMaxStringViewSize(
@@ -397,12 +397,21 @@ TEST(DecimalTest, rescaleDouble) {
       10.03, DECIMAL(38, 18), HugeInt::parse("1003" + zeros(16)));
   assertRescaleDouble(0.034567890, DECIMAL(38, 18), 34'567'890'000'000'000);
   assertRescaleDouble(
+      0.03456789, DECIMAL(38, 33), HugeInt::parse("3456789" + zeros(25)));
+  assertRescaleDouble(
       0.999999999999999, DECIMAL(38, 18), 999'999'999'999'999'000);
   assertRescaleDouble(
       0.123456789123123, DECIMAL(38, 18), 123'456'789'123'123'000);
   assertRescaleDouble(21.54551, DECIMAL(12, 3), 21546);
 
   assertRescaleDouble(std::numeric_limits<double>::min(), DECIMAL(38, 2), 0);
+
+  assertRescaleDouble(0.9999999999999999, DECIMAL(17, 2), 100);
+
+  assertRescaleDouble(-0.9999999999999999, DECIMAL(17, 2), -100);
+
+  assertRescaleDouble(
+      kMaxDoubleBelowInt64Max, DECIMAL(19, 0), 9'223'372'036'854'774'784);
 
   // Test for overflows.
   std::vector<double> invalidInputs = {
@@ -476,6 +485,10 @@ TEST(DecimalTest, rescaleReal) {
   assertRescaleReal(21.5455, DECIMAL(12, 3), 21546);
 
   assertRescaleReal(std::numeric_limits<float>::min(), DECIMAL(38, 2), 0);
+
+  assertRescaleReal(27867.64, DECIMAL(18, 2), 2786764);
+  assertRescaleReal(27867.644, DECIMAL(18, 2), 2786764);
+  assertRescaleReal(27867.645, DECIMAL(18, 2), 2786764);
 
   // Test for overflows.
   std::vector<float> invalidInputs = {

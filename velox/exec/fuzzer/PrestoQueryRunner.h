@@ -52,6 +52,11 @@ class PrestoQueryRunner : public velox::exec::test::ReferenceQueryRunner {
 
   const std::vector<TypePtr>& supportedScalarTypes() const override;
 
+  static bool isSupportedDwrfType(const TypePtr& type);
+
+  std::pair<std::vector<RowVectorPtr>, std::vector<core::ExprPtr>>
+  inputProjections(const std::vector<RowVectorPtr>& input) const override;
+
   const std::unordered_map<std::string, DataSpec>&
   aggregationFunctionDataSpecs() const override;
 
@@ -106,25 +111,6 @@ class PrestoQueryRunner : public velox::exec::test::ReferenceQueryRunner {
   memory::MemoryPool* pool() {
     return pool_.get();
   }
-
-  std::optional<std::string> toSql(
-      const std::shared_ptr<const velox::core::AggregationNode>&
-          aggregationNode);
-
-  std::optional<std::string> toSql(
-      const std::shared_ptr<const velox::core::WindowNode>& windowNode);
-
-  std::optional<std::string> toSql(
-      const std::shared_ptr<const velox::core::ProjectNode>& projectNode);
-
-  std::optional<std::string> toSql(
-      const std::shared_ptr<const velox::core::RowNumberNode>& rowNumberNode);
-
-  std::optional<std::string> toSql(
-      const std::shared_ptr<const core::TopNRowNumberNode>& rowNumberNode);
-
-  std::optional<std::string> toSql(
-      const std::shared_ptr<const core::TableWriteNode>& tableWriteNode);
 
   std::string startQuery(
       const std::string& sql,

@@ -20,6 +20,7 @@
 #include <optional>
 #include "velox/common/base/Doubles.h"
 #include "velox/external/date/date.h"
+#include "velox/functions/lib/DateTimeFormatter.h"
 #include "velox/functions/prestosql/types/TimestampWithTimeZoneType.h"
 #include "velox/type/Timestamp.h"
 #include "velox/type/TimestampConversion.h"
@@ -90,20 +91,6 @@ FOLLY_ALWAYS_INLINE boost::int64_t fromUnixtime(
 
   return pack(std::llround(unixtime * kMillisecondsInSecond), timeZoneId);
 }
-
-namespace {
-enum class DateTimeUnit {
-  kMillisecond,
-  kSecond,
-  kMinute,
-  kHour,
-  kDay,
-  kWeek,
-  kMonth,
-  kQuarter,
-  kYear
-};
-} // namespace
 
 // Year, quarter or month are not uniformly incremented. Months have different
 // total days, and leap years have more days than the rest. If the new year,
@@ -389,7 +376,8 @@ FOLLY_ALWAYS_INLINE int64_t diffTimestamp(
       static_cast<unsigned>(toCalLastYearMonthDay.day());
 
   if (unit == DateTimeUnit::kMonth || unit == DateTimeUnit::kQuarter) {
-    int64_t diff = (int(toCalDate.year()) - int(fromCalDate.year())) * 12 +
+    int64_t diff =
+        (int64_t(toCalDate.year()) - int64_t(fromCalDate.year())) * 12 +
         int(toMonth) - int(fromMonth);
 
     if ((toDay != toLastYearMonthDay && fromDay > toDay) ||

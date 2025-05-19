@@ -132,6 +132,14 @@ RowTypePtr getAggregationOutputType(
 
 } // namespace
 
+// static
+const std::vector<vector_size_t> AggregationNode::kDefaultGlobalGroupingSets =
+    {};
+
+// static
+const std::optional<FieldAccessTypedExprPtr> AggregationNode::kDefaultGroupId =
+    std::nullopt;
+
 AggregationNode::AggregationNode(
     const PlanNodeId& id,
     Step step,
@@ -214,8 +222,8 @@ AggregationNode::AggregationNode(
           preGroupedKeys,
           aggregateNames,
           aggregates,
-          {},
-          std::nullopt,
+          kDefaultGlobalGroupingSets,
+          kDefaultGroupId,
           ignoreNullKeys,
           source) {}
 
@@ -370,6 +378,12 @@ folly::dynamic AggregationNode::serialize() const {
   }
   obj["ignoreNullKeys"] = ignoreNullKeys_;
   return obj;
+}
+
+void AggregationNode::accept(
+    const PlanNodeVisitor& visitor,
+    PlanNodeVisitorContext& context) const {
+  visitor.visit(*this, context);
 }
 
 namespace {
@@ -565,6 +579,12 @@ folly::dynamic ExpandNode::serialize() const {
   return obj;
 }
 
+void ExpandNode::accept(
+    const PlanNodeVisitor& visitor,
+    PlanNodeVisitorContext& context) const {
+  visitor.visit(*this, context);
+}
+
 // static
 PlanNodePtr ExpandNode::create(const folly::dynamic& obj, void* context) {
   auto source = deserializeSingleSource(obj, context);
@@ -668,6 +688,12 @@ folly::dynamic GroupIdNode::serialize() const {
   return obj;
 }
 
+void GroupIdNode::accept(
+    const PlanNodeVisitor& visitor,
+    PlanNodeVisitorContext& context) const {
+  visitor.visit(*this, context);
+}
+
 // static
 PlanNodePtr GroupIdNode::create(const folly::dynamic& obj, void* context) {
   auto source = deserializeSingleSource(obj, context);
@@ -692,6 +718,12 @@ PlanNodePtr GroupIdNode::create(const folly::dynamic& obj, void* context) {
 
 const std::vector<PlanNodePtr>& ValuesNode::sources() const {
   return kEmptySources;
+}
+
+void ValuesNode::accept(
+    const PlanNodeVisitor& visitor,
+    PlanNodeVisitorContext& context) const {
+  visitor.visit(*this, context);
 }
 
 void ValuesNode::addDetails(std::stringstream& stream) const {
@@ -751,7 +783,7 @@ PlanNodePtr ValuesNode::create(const folly::dynamic& obj, void* context) {
       obj["repeatTimes"].asInt());
 }
 
-void ProjectNode::addDetails(std::stringstream& stream) const {
+void AbstractProjectNode::addDetails(std::stringstream& stream) const {
   stream << "expressions: ";
   for (auto i = 0; i < projections_.size(); i++) {
     auto& projection = projections_[i];
@@ -879,7 +911,7 @@ std::string truncate(const std::string& str, size_t maxLen = 50) {
 
 void appendProjections(
     const std::string& indentation,
-    const ProjectNode& op,
+    const AbstractProjectNode& op,
     const std::vector<size_t>& projections,
     size_t cnt,
     std::stringstream& stream) {
@@ -896,6 +928,28 @@ void appendProjections(
 
   if (cnt < projections.size()) {
     stream << indentation << "... " << (projections.size() - cnt) << " more"
+           << std::endl;
+  }
+}
+
+void appendAggregations(
+    const std::string& indentation,
+    const AggregationNode& op,
+    size_t cnt,
+    std::stringstream& stream) {
+  if (cnt == 0) {
+    return;
+  }
+
+  for (auto i = 0; i < cnt; ++i) {
+    const auto& expr = op.aggregates().at(i).call;
+    stream << indentation << i << ": "
+           << (op.aggregates().at(i).distinct ? "DISTINCT" : "")
+           << truncate(expr->toString()) << std::endl;
+  }
+
+  if (cnt < op.aggregates().size()) {
+    stream << indentation << "... " << (op.aggregates().size() - cnt) << " more"
            << std::endl;
   }
 }
@@ -929,7 +983,7 @@ void appendExprSummary(
 
 } // namespace
 
-void ProjectNode::addSummaryDetails(
+void AbstractProjectNode::addSummaryDetails(
     const std::string& indentation,
     const PlanSummaryOptions& options,
     std::stringstream& stream) const {
@@ -990,6 +1044,12 @@ folly::dynamic ProjectNode::serialize() const {
   return obj;
 }
 
+void ProjectNode::accept(
+    const PlanNodeVisitor& visitor,
+    PlanNodeVisitorContext& context) const {
+  visitor.visit(*this, context);
+}
+
 // static
 PlanNodePtr ProjectNode::create(const folly::dynamic& obj, void* context) {
   auto source = deserializeSingleSource(obj, context);
@@ -1006,6 +1066,12 @@ PlanNodePtr ProjectNode::create(const folly::dynamic& obj, void* context) {
 
 const std::vector<PlanNodePtr>& TableScanNode::sources() const {
   return kEmptySources;
+}
+
+void TableScanNode::accept(
+    const PlanNodeVisitor& visitor,
+    PlanNodeVisitorContext& context) const {
+  visitor.visit(*this, context);
 }
 
 void TableScanNode::addDetails(std::stringstream& stream) const {
@@ -1053,6 +1119,12 @@ const std::vector<PlanNodePtr>& ArrowStreamNode::sources() const {
   return kEmptySources;
 }
 
+void ArrowStreamNode::accept(
+    const PlanNodeVisitor& visitor,
+    PlanNodeVisitorContext& context) const {
+  visitor.visit(*this, context);
+}
+
 void ArrowStreamNode::addDetails(std::stringstream& stream) const {
   // Nothing to add.
 }
@@ -1072,6 +1144,12 @@ folly::dynamic ExchangeNode::serialize() const {
   return obj;
 }
 
+void ExchangeNode::accept(
+    const PlanNodeVisitor& visitor,
+    PlanNodeVisitorContext& context) const {
+  visitor.visit(*this, context);
+}
+
 // static
 PlanNodePtr ExchangeNode::create(const folly::dynamic& obj, void* context) {
   return std::make_shared<ExchangeNode>(
@@ -1084,13 +1162,14 @@ UnnestNode::UnnestNode(
     const PlanNodeId& id,
     std::vector<FieldAccessTypedExprPtr> replicateVariables,
     std::vector<FieldAccessTypedExprPtr> unnestVariables,
-    const std::vector<std::string>& unnestNames,
-    const std::optional<std::string>& ordinalityName,
+    std::vector<std::string> unnestNames,
+    std::optional<std::string> ordinalityName,
     const PlanNodePtr& source)
     : PlanNode(id),
       replicateVariables_{std::move(replicateVariables)},
       unnestVariables_{std::move(unnestVariables)},
-      withOrdinality_{ordinalityName.has_value()},
+      unnestNames_{std::move(unnestNames)},
+      ordinalityName_{std::move(ordinalityName)},
       sources_{source} {
   // Calculate output type. First come "replicate" columns, followed by
   // "unnest" columns, followed by an optional ordinality column.
@@ -1105,15 +1184,15 @@ UnnestNode::UnnestNode(
   int unnestIndex = 0;
   for (const auto& variable : unnestVariables_) {
     if (variable->type()->isArray()) {
-      names.emplace_back(unnestNames[unnestIndex++]);
+      names.emplace_back(unnestNames_[unnestIndex++]);
       types.emplace_back(variable->type()->asArray().elementType());
     } else if (variable->type()->isMap()) {
       const auto& mapType = variable->type()->asMap();
 
-      names.emplace_back(unnestNames[unnestIndex++]);
+      names.emplace_back(unnestNames_[unnestIndex++]);
       types.emplace_back(mapType.keyType());
 
-      names.emplace_back(unnestNames[unnestIndex++]);
+      names.emplace_back(unnestNames_[unnestIndex++]);
       types.emplace_back(mapType.valueType());
     } else {
       VELOX_FAIL(
@@ -1122,8 +1201,8 @@ UnnestNode::UnnestNode(
     }
   }
 
-  if (ordinalityName.has_value()) {
-    names.emplace_back(ordinalityName.value());
+  if (ordinalityName_.has_value()) {
+    names.emplace_back(ordinalityName_.value());
     types.emplace_back(BIGINT());
   }
   outputType_ = ROW(std::move(names), std::move(types));
@@ -1137,22 +1216,18 @@ folly::dynamic UnnestNode::serialize() const {
   auto obj = PlanNode::serialize();
   obj["replicateVariables"] = ISerializable::serialize(replicateVariables_);
   obj["unnestVariables"] = ISerializable::serialize(unnestVariables_);
+  obj["unnestNames"] = ISerializable::serialize(unnestNames_);
 
-  obj["unnestNames"] = folly::dynamic::array();
-
-  // Extract 'unnest' column names from the 'outputType'.
-  // Output types contains 'replicated' column names, followed by 'unnest'
-  // column names, followed by an optional 'ordinal' column name.
-  for (auto i = replicateVariables_.size();
-       i < outputType()->size() - (withOrdinality_ ? 1 : 0);
-       ++i) {
-    obj["unnestNames"].push_back(outputType()->names()[i]);
-  }
-
-  if (withOrdinality_) {
-    obj["ordinalityName"] = outputType()->names().back();
+  if (ordinalityName_.has_value()) {
+    obj["ordinalityName"] = ordinalityName_.value();
   }
   return obj;
+}
+
+void UnnestNode::accept(
+    const PlanNodeVisitor& visitor,
+    PlanNodeVisitorContext& context) const {
+  visitor.visit(*this, context);
 }
 
 // static
@@ -1336,6 +1411,12 @@ folly::dynamic HashJoinNode::serialize() const {
   return obj;
 }
 
+void HashJoinNode::accept(
+    const PlanNodeVisitor& visitor,
+    PlanNodeVisitorContext& context) const {
+  visitor.visit(*this, context);
+}
+
 // static
 PlanNodePtr HashJoinNode::create(const folly::dynamic& obj, void* context) {
   auto sources = deserializeSources(obj, context);
@@ -1407,6 +1488,12 @@ bool MergeJoinNode::isSupported(core::JoinType joinType) {
     default:
       return false;
   }
+}
+
+void MergeJoinNode::accept(
+    const PlanNodeVisitor& visitor,
+    PlanNodeVisitorContext& context) const {
+  visitor.visit(*this, context);
 }
 
 // static
@@ -1491,6 +1578,12 @@ void IndexLookupJoinNode::addDetails(std::stringstream& stream) const {
          << " ]";
 }
 
+void IndexLookupJoinNode::accept(
+    const PlanNodeVisitor& visitor,
+    PlanNodeVisitorContext& context) const {
+  visitor.visit(*this, context);
+}
+
 // static
 bool IndexLookupJoinNode::isSupported(core::JoinType joinType) {
   switch (joinType) {
@@ -1502,6 +1595,17 @@ bool IndexLookupJoinNode::isSupported(core::JoinType joinType) {
       return false;
   }
 }
+
+bool isIndexLookupJoin(const core::PlanNode* planNode) {
+  const auto* indexLookupJoin =
+      dynamic_cast<const core::IndexLookupJoinNode*>(planNode);
+  return indexLookupJoin != nullptr;
+}
+
+// static
+const JoinType NestedLoopJoinNode::kDefaultJoinType = JoinType::kInner;
+// static
+const TypedExprPtr NestedLoopJoinNode::kDefaultJoinCondition = nullptr;
 
 NestedLoopJoinNode::NestedLoopJoinNode(
     const PlanNodeId& id,
@@ -1522,7 +1626,23 @@ NestedLoopJoinNode::NestedLoopJoinNode(
 
   auto leftType = sources_[0]->outputType();
   auto rightType = sources_[1]->outputType();
-  for (const auto& name : outputType_->names()) {
+  auto numOutputColumms = outputType_->size();
+  if (core::isLeftSemiProjectJoin(joinType)) {
+    --numOutputColumms;
+    VELOX_CHECK_EQ(outputType_->childAt(numOutputColumms), BOOLEAN());
+    const auto& name = outputType_->nameOf(numOutputColumms);
+    VELOX_CHECK(
+        !leftType->containsChild(name),
+        "Match column '{}' cannot be present in left source.",
+        name);
+    VELOX_CHECK(
+        !rightType->containsChild(name),
+        "Match column '{}' cannot be present in right source.",
+        name);
+  }
+
+  for (auto i = 0; i < numOutputColumms; ++i) {
+    const auto name = outputType_->nameOf(i);
     const bool leftContains = leftType->containsChild(name);
     const bool rightContains = rightType->containsChild(name);
     VELOX_USER_CHECK(
@@ -1543,8 +1663,8 @@ NestedLoopJoinNode::NestedLoopJoinNode(
     RowTypePtr outputType)
     : NestedLoopJoinNode(
           id,
-          JoinType::kInner,
-          nullptr,
+          kDefaultJoinType,
+          kDefaultJoinCondition,
           left,
           right,
           outputType) {}
@@ -1556,6 +1676,7 @@ bool NestedLoopJoinNode::isSupported(core::JoinType joinType) {
     case core::JoinType::kLeft:
     case core::JoinType::kRight:
     case core::JoinType::kFull:
+    case core::JoinType::kLeftSemiProject:
       return true;
 
     default:
@@ -1578,6 +1699,12 @@ folly::dynamic NestedLoopJoinNode::serialize() const {
   }
   obj["outputType"] = outputType_->serialize();
   return obj;
+}
+
+void NestedLoopJoinNode::accept(
+    const PlanNodeVisitor& visitor,
+    PlanNodeVisitorContext& context) const {
+  visitor.visit(*this, context);
 }
 
 PlanNodePtr NestedLoopJoinNode::create(
@@ -1627,6 +1754,12 @@ folly::dynamic AssignUniqueIdNode::serialize() const {
   obj["idName"] = outputType_->names().back();
   obj["taskUniqueId"] = taskUniqueId_;
   return obj;
+}
+
+void AssignUniqueIdNode::accept(
+    const PlanNodeVisitor& visitor,
+    PlanNodeVisitorContext& context) const {
+  visitor.visit(*this, context);
 }
 
 // static
@@ -1705,12 +1838,13 @@ WindowNode::WindowNode(
       partitionKeys_(std::move(partitionKeys)),
       sortingKeys_(std::move(sortingKeys)),
       sortingOrders_(std::move(sortingOrders)),
+      windowColumnNames_(std::move(windowColumnNames)),
       windowFunctions_(std::move(windowFunctions)),
       inputsSorted_(inputsSorted),
       sources_{std::move(source)},
       outputType_(getWindowOutputType(
           sources_[0]->outputType(),
-          windowColumnNames,
+          windowColumnNames_,
           windowFunctions_)) {
   VELOX_CHECK_GT(
       windowFunctions_.size(),
@@ -1896,16 +2030,16 @@ folly::dynamic WindowNode::serialize() const {
     obj["functions"].push_back(function.serialize());
   }
 
-  auto numInputs = sources()[0]->outputType()->size();
-  auto numOutputs = outputType()->size();
-  std::vector<std::string> windowNames;
-  for (auto i = numInputs; i < numOutputs; ++i) {
-    windowNames.push_back(outputType_->nameOf(i));
-  }
-  obj["names"] = ISerializable::serialize(windowNames);
+  obj["names"] = ISerializable::serialize(windowColumnNames_);
   obj["inputsSorted"] = inputsSorted_;
 
   return obj;
+}
+
+void WindowNode::accept(
+    const PlanNodeVisitor& visitor,
+    PlanNodeVisitorContext& context) const {
+  visitor.visit(*this, context);
 }
 
 // static
@@ -1967,6 +2101,12 @@ folly::dynamic MarkDistinctNode::serialize() const {
   obj["distinctKeys"] = ISerializable::serialize(this->distinctKeys_);
   obj["markerName"] = this->markerName_;
   return obj;
+}
+
+void MarkDistinctNode::accept(
+    const PlanNodeVisitor& visitor,
+    PlanNodeVisitorContext& context) const {
+  visitor.visit(*this, context);
 }
 
 // static
@@ -2043,6 +2183,12 @@ folly::dynamic RowNumberNode::serialize() const {
   }
 
   return obj;
+}
+
+void RowNumberNode::accept(
+    const PlanNodeVisitor& visitor,
+    PlanNodeVisitorContext& context) const {
+  visitor.visit(*this, context);
 }
 
 // static
@@ -2139,6 +2285,12 @@ folly::dynamic TopNRowNumberNode::serialize() const {
   return obj;
 }
 
+void TopNRowNumberNode::accept(
+    const PlanNodeVisitor& visitor,
+    PlanNodeVisitorContext& context) const {
+  visitor.visit(*this, context);
+}
+
 // static
 PlanNodePtr TopNRowNumberNode::create(
     const folly::dynamic& obj,
@@ -2175,6 +2327,12 @@ folly::dynamic LocalMergeNode::serialize() const {
   return obj;
 }
 
+void LocalMergeNode::accept(
+    const PlanNodeVisitor& visitor,
+    PlanNodeVisitorContext& context) const {
+  visitor.visit(*this, context);
+}
+
 // static
 PlanNodePtr LocalMergeNode::create(const folly::dynamic& obj, void* context) {
   auto sources = deserializeSources(obj, context);
@@ -2206,6 +2364,12 @@ folly::dynamic TableWriteNode::serialize() const {
   obj["outputType"] = outputType_->serialize();
   obj["commitStrategy"] = connector::commitStrategyToString(commitStrategy_);
   return obj;
+}
+
+void TableWriteNode::accept(
+    const PlanNodeVisitor& visitor,
+    PlanNodeVisitorContext& context) const {
+  visitor.visit(*this, context);
 }
 
 // static
@@ -2255,6 +2419,12 @@ folly::dynamic TableWriteMergeNode::serialize() const {
   return obj;
 }
 
+void TableWriteMergeNode::accept(
+    const PlanNodeVisitor& visitor,
+    PlanNodeVisitorContext& context) const {
+  visitor.visit(*this, context);
+}
+
 // static
 PlanNodePtr TableWriteMergeNode::create(
     const folly::dynamic& obj,
@@ -2295,6 +2465,12 @@ folly::dynamic MergeExchangeNode::serialize() const {
   return obj;
 }
 
+void MergeExchangeNode::accept(
+    const PlanNodeVisitor& visitor,
+    PlanNodeVisitorContext& context) const {
+  visitor.visit(*this, context);
+}
+
 // static
 PlanNodePtr MergeExchangeNode::create(
     const folly::dynamic& obj,
@@ -2327,6 +2503,12 @@ folly::dynamic LocalPartitionNode::serialize() const {
   obj["scaleWriter"] = scaleWriter_;
   obj["partitionFunctionSpec"] = partitionFunctionSpec_->serialize();
   return obj;
+}
+
+void LocalPartitionNode::accept(
+    const PlanNodeVisitor& visitor,
+    PlanNodeVisitorContext& context) const {
+  visitor.visit(*this, context);
 }
 
 // static
@@ -2471,6 +2653,12 @@ folly::dynamic EnforceSingleRowNode::serialize() const {
   return PlanNode::serialize();
 }
 
+void EnforceSingleRowNode::accept(
+    const PlanNodeVisitor& visitor,
+    PlanNodeVisitorContext& context) const {
+  visitor.visit(*this, context);
+}
+
 // static
 PlanNodePtr EnforceSingleRowNode::create(
     const folly::dynamic& obj,
@@ -2547,6 +2735,12 @@ folly::dynamic PartitionedOutputNode::serialize() const {
   return obj;
 }
 
+void PartitionedOutputNode::accept(
+    const PlanNodeVisitor& visitor,
+    PlanNodeVisitorContext& context) const {
+  visitor.visit(*this, context);
+}
+
 // static
 PlanNodePtr PartitionedOutputNode::create(
     const folly::dynamic& obj,
@@ -2612,6 +2806,12 @@ folly::dynamic TopNNode::serialize() const {
   return obj;
 }
 
+void TopNNode::accept(
+    const PlanNodeVisitor& visitor,
+    PlanNodeVisitorContext& context) const {
+  visitor.visit(*this, context);
+}
+
 // static
 PlanNodePtr TopNNode::create(const folly::dynamic& obj, void* context) {
   auto source = deserializeSingleSource(obj, context);
@@ -2645,6 +2845,12 @@ folly::dynamic LimitNode::serialize() const {
   return obj;
 }
 
+void LimitNode::accept(
+    const PlanNodeVisitor& visitor,
+    PlanNodeVisitorContext& context) const {
+  visitor.visit(*this, context);
+}
+
 // static
 PlanNodePtr LimitNode::create(const folly::dynamic& obj, void* context) {
   auto source = deserializeSingleSource(obj, context);
@@ -2670,6 +2876,12 @@ folly::dynamic OrderByNode::serialize() const {
   obj["sortingOrders"] = serializeSortingOrders(sortingOrders_);
   obj["partial"] = isPartial_;
   return obj;
+}
+
+void OrderByNode::accept(
+    const PlanNodeVisitor& visitor,
+    PlanNodeVisitorContext& context) const {
+  visitor.visit(*this, context);
 }
 
 // static
@@ -2759,6 +2971,12 @@ std::string summarizeOutputType(
 
 } // namespace
 
+void PlanNode::accept(
+    const PlanNodeVisitor& visitor,
+    PlanNodeVisitorContext& context) const {
+  visitor.visit(*this, context);
+}
+
 void PlanNode::toSummaryString(
     const PlanSummaryOptions& options,
     std::stringstream& stream,
@@ -2794,8 +3012,10 @@ void collectLeafPlanNodeIds(
     return;
   }
 
-  for (const auto& child : planNode.sources()) {
-    collectLeafPlanNodeIds(*child, leafIds);
+  const auto& sources = planNode.sources();
+  const auto numSources = isIndexLookupJoin(&planNode) ? 1 : sources.size();
+  for (int i = 0; i < numSources; ++i) {
+    collectLeafPlanNodeIds(*sources[i], leafIds);
   }
 }
 } // namespace
@@ -2863,6 +3083,12 @@ const std::vector<PlanNodePtr>& TraceScanNode::sources() const {
   return kEmptySources;
 }
 
+void TraceScanNode::accept(
+    const PlanNodeVisitor& visitor,
+    PlanNodeVisitorContext& context) const {
+  visitor.visit(*this, context);
+}
+
 std::string TraceScanNode::traceDir() const {
   return traceDir_;
 }
@@ -2891,6 +3117,34 @@ folly::dynamic FilterNode::serialize() const {
   return obj;
 }
 
+void FilterNode::accept(
+    const PlanNodeVisitor& visitor,
+    PlanNodeVisitorContext& context) const {
+  visitor.visit(*this, context);
+}
+
+void AggregationNode::addSummaryDetails(
+    const std::string& indentation,
+    const PlanSummaryOptions& options,
+    std::stringstream& stream) const {
+  std::stringstream out;
+  SummarizeExprVisitor::Context exprCtx;
+  SummarizeExprVisitor visitor;
+  for (const auto& aggregate : aggregates()) {
+    aggregate.call->accept(visitor, exprCtx);
+  }
+
+  appendExprSummary(indentation, options, exprCtx, stream);
+
+  stream << indentation << "aggregations: " << aggregates().size() << std::endl;
+
+  {
+    const auto cnt =
+        std::min(options.aggregate.maxAggregations, aggregates().size());
+    appendAggregations(indentation + "   ", *this, cnt, stream);
+  }
+}
+
 // static
 PlanNodePtr FilterNode::create(const folly::dynamic& obj, void* context) {
   auto source = deserializeSingleSource(obj, context);
@@ -2906,6 +3160,10 @@ folly::dynamic IndexLookupCondition::serialize() const {
   return obj;
 }
 
+bool InIndexLookupCondition::isFilter() const {
+  return std::dynamic_pointer_cast<const ConstantTypedExpr>(list) != nullptr;
+}
+
 folly::dynamic InIndexLookupCondition::serialize() const {
   folly::dynamic obj = IndexLookupCondition::serialize();
   obj["type"] = "in";
@@ -2917,12 +3175,40 @@ std::string InIndexLookupCondition::toString() const {
   return fmt::format("{} IN {}", key->toString(), list->toString());
 }
 
+void InIndexLookupCondition::validate() const {
+  VELOX_CHECK_NOT_NULL(key);
+  VELOX_CHECK_NOT_NULL(list);
+  VELOX_CHECK(
+      std::dynamic_pointer_cast<const core::FieldAccessTypedExpr>(list) ||
+          std::dynamic_pointer_cast<const core::ConstantTypedExpr>(list),
+      "Invalid condition list {}",
+      list->toString());
+  const auto listType =
+      std::dynamic_pointer_cast<const ArrayType>(list->type());
+  VELOX_CHECK_NOT_NULL(listType);
+  VELOX_CHECK_EQ(
+      key->type()->kind(),
+      listType->elementType()->kind(),
+      "In condition key and list condition element must have the same type");
+}
+
 IndexLookupConditionPtr InIndexLookupCondition::create(
     const folly::dynamic& obj,
     void* context) {
+  TypedExprPtr list =
+      ISerializable::deserialize<FieldAccessTypedExpr>(obj["in"], context);
+  if (list == nullptr) {
+    list = ISerializable::deserialize<ConstantTypedExpr>(obj["in"], context);
+  }
   return std::make_shared<InIndexLookupCondition>(
       ISerializable::deserialize<FieldAccessTypedExpr>(obj["key"], context),
-      ISerializable::deserialize<FieldAccessTypedExpr>(obj["in"], context));
+      std::move(list));
+}
+
+bool BetweenIndexLookupCondition::isFilter() const {
+  return (std::dynamic_pointer_cast<const ConstantTypedExpr>(lower) !=
+          nullptr) &&
+      (std::dynamic_pointer_cast<const ConstantTypedExpr>(upper) != nullptr);
 }
 
 folly::dynamic BetweenIndexLookupCondition::serialize() const {
@@ -2944,9 +3230,38 @@ std::string BetweenIndexLookupCondition::toString() const {
 IndexLookupConditionPtr BetweenIndexLookupCondition::create(
     const folly::dynamic& obj,
     void* context) {
+  auto key =
+      ISerializable::deserialize<FieldAccessTypedExpr>(obj["key"], context);
   return std::make_shared<BetweenIndexLookupCondition>(
-      ISerializable::deserialize<FieldAccessTypedExpr>(obj["key"], context),
+      key,
       ISerializable::deserialize<ITypedExpr>(obj["lower"], context),
       ISerializable::deserialize<ITypedExpr>(obj["upper"], context));
+}
+
+void BetweenIndexLookupCondition::validate() const {
+  VELOX_CHECK_NOT_NULL(key);
+  VELOX_CHECK_NOT_NULL(lower);
+  VELOX_CHECK_NOT_NULL(upper);
+  VELOX_CHECK(
+      std::dynamic_pointer_cast<const core::FieldAccessTypedExpr>(lower) ||
+          std::dynamic_pointer_cast<const core::ConstantTypedExpr>(lower),
+      "Invalid lower between condition {}",
+      lower->toString());
+
+  VELOX_CHECK(
+      std::dynamic_pointer_cast<const core::FieldAccessTypedExpr>(upper) ||
+          std::dynamic_pointer_cast<const core::ConstantTypedExpr>(upper),
+      "Invalid upper between condition {}",
+      upper->toString());
+
+  VELOX_CHECK_EQ(
+      key->type()->kind(),
+      lower->type()->kind(),
+      "Index key and lower condition must have the same type");
+
+  VELOX_CHECK_EQ(
+      key->type()->kind(),
+      upper->type()->kind(),
+      "Index key and upper condition must have the same type");
 }
 } // namespace facebook::velox::core

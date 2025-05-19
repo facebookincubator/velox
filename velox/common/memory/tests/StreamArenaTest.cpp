@@ -18,7 +18,6 @@
 #include "velox/common/memory/MemoryAllocator.h"
 #include "velox/common/memory/MmapAllocator.h"
 
-#include <gflags/gflags.h>
 #include <gtest/gtest.h>
 
 using namespace facebook::velox;
@@ -28,7 +27,7 @@ class StreamArenaTest : public testing::Test {
  protected:
   void SetUp() override {
     constexpr uint64_t kMaxMappedMemory = 64 << 20;
-    MemoryManagerOptions options;
+    MemoryManager::Options options;
     options.allocatorCapacity = kMaxMappedMemory;
     options.useMmapAllocator = true;
     memoryManager_ = std::make_unique<MemoryManager>(options);

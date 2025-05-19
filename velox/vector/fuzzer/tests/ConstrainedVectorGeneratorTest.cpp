@@ -18,6 +18,7 @@
 
 #include <gtest/gtest.h>
 
+#include "velox/common/fuzzer/ConstrainedGenerators.h"
 #include "velox/vector/tests/utils/VectorTestBase.h"
 
 namespace facebook::velox::fuzzer::test {
@@ -26,7 +27,7 @@ class ConstrainedVectorGeneratorTest : public testing::Test,
                                        public velox::test::VectorTestBase {
  protected:
   static void SetUpTestCase() {
-    memory::MemoryManager::testingSetInstance({});
+    memory::MemoryManager::testingSetInstance(memory::MemoryManager::Options{});
   }
 
   template <TypeKind KIND>

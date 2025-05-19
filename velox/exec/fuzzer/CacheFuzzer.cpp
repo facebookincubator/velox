@@ -169,7 +169,6 @@ class CacheFuzzer {
   int32_t lastNumSsdCacheShards_;
   int64_t lastSsdCheckpointIntervalBytes_;
   bool lastEnableChecksum_;
-  bool lastEnableChecksumReadVerification_;
 };
 
 template <typename T>
@@ -352,7 +351,7 @@ void CacheFuzzer::initializeCache(bool restartCache) {
         enableChecksumReadVerification_ ? "enabled" : "disabled");
   }
 
-  memory::MemoryManagerOptions options;
+  memory::MemoryManager::Options options;
   options.useMmapAllocator = true;
   options.allocatorCapacity = memoryCacheBytes;
   options.arbitratorCapacity = memoryCacheBytes;

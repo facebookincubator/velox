@@ -32,7 +32,7 @@ class VectorCompareTest : public testing::Test,
                           public velox::test::VectorTestBase {
  public:
   static void SetUpTestCase() {
-    memory::MemoryManager::testingSetInstance({});
+    memory::MemoryManager::testingSetInstance(memory::MemoryManager::Options{});
   }
 
   bool static constexpr kExpectNull = true;
@@ -612,7 +612,8 @@ TEST_F(VectorCompareTest, customComparisonDictionary) {
 
 TEST_F(VectorCompareTest, customComparisonArray) {
   auto arrayVector = makeNullableArrayVector<int64_t>(
-      {{0}, {1}, {std::nullopt}, {256}, {257}},
+      std::vector<std::vector<std::optional<int64_t>>>{
+          {0}, {1}, {std::nullopt}, {256}, {257}},
       ARRAY(test::BIGINT_TYPE_WITH_CUSTOM_COMPARISON()));
 
   testCustomComparison(std::vector<VectorPtr>(5, arrayVector), {0, 1, 2, 3, 4});

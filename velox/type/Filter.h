@@ -1266,8 +1266,8 @@ class NegatedBigintValuesUsingBitmask final : public Filter {
   std::unique_ptr<Filter>
   mergeWith(int64_t min, int64_t max, const Filter* other) const;
 
-  int min_;
-  int max_;
+  int64_t min_;
+  int64_t max_;
   std::unique_ptr<BigintValuesUsingBitmask> nonNegated_;
 };
 
@@ -1416,7 +1416,9 @@ class FloatingPointRange final : public AbstractRange {
       return true;
     }
 
-    return !(min > upper_ || max < lower_);
+    return !(
+        (!upperUnbounded_ && min > upper_) ||
+        (!lowerUnbounded_ && max < lower_));
   }
 
   std::unique_ptr<Filter> mergeWith(const Filter* other) const final {
