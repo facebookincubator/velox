@@ -23,14 +23,13 @@
 
 namespace facebook::velox::functions::sparksql {
 
-/// Ensures that ``input`` fit within the specified length ``limit`` in
-/// characters. If the length of ``input`` exceeds the limit, trailing spaces
-/// are trimmed to fit within the limit. If the length of ``input`` is less than
-/// or equal to
-/// ``limit``, it is returned as-is. Throws exception if the trimmed string
-/// still exceeds ``limit`` or if ``limit`` is negative. This function will trim
-/// at most (length of ``input`` - ``limit``) space characters (ASCII 32) from
-/// the end of ``input``.
+/// Ensures that `'abc'` fits within the specified length `n` in
+/// characters. If the length of `'abc'` exceeds `n`, trailing spaces
+/// are trimmed to fit within `n`. If the length of `'abc'` is less than
+/// or equal to `n`, it is returned as-is. Throws an exception if the
+/// trimmed string still exceeds `n` or if `n` is negative. This function
+/// will trim at most (length of `'abc'` - `n`) space characters (ASCII 32)
+/// from the end of `'abc'`.
 template <typename T>
 struct VarcharTypeWriteSideCheckFunction {
   VELOX_DEFINE_FUNCTION_TYPES(T);
@@ -61,7 +60,7 @@ struct VarcharTypeWriteSideCheckFunction {
       out_type<Varchar>& result,
       const arg_type<Varchar>& input,
       int32_t limit) {
-    VELOX_USER_CHECK_GE(limit, 0);
+    VELOX_USER_CHECK_GT(limit, 0, "The length limit must be greater than 0.");
 
     auto numCharacters = stringImpl::length<isAscii>(input);
     if (numCharacters <= limit) {

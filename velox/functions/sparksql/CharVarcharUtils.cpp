@@ -21,7 +21,7 @@ void trimTrailingSpaces(
     exec::StringWriter& output,
     StringView inputStr,
     int32_t numChars,
-    int32_t limit) {
+    uint32_t limit) {
   const auto numTailSpacesToTrim = numChars - limit;
   VELOX_USER_CHECK_GT(numTailSpacesToTrim, 0);
 
@@ -36,9 +36,7 @@ void trimTrailingSpaces(
 
   VELOX_USER_CHECK_LE(
       trimmedSize,
-      limit,
-      "Exceeds char/varchar type length limitation: {}",
-      limit);
+      limit, "Exceeds allowed length limitation: {}", limit);
   output.setNoCopy(
       StringView(inputStr.data(), std::distance(inputStr.begin(), curPos + 1)));
 }

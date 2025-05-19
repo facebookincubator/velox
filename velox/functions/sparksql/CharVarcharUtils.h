@@ -22,14 +22,14 @@
 
 namespace facebook::velox::functions::sparksql {
 
-/// Trims trailing ASCII space characters (0x20) from ``inputStr``
+/// Trims trailing ASCII space characters (0x20) from `'abc'`
 /// to ensure its length does not exceed the specified Unicode string length
-/// ``limit`` in characters. Throws an exception if the string still exceeds
-/// `limit` after trimming.
+/// `limit` (must be greater than 0) in characters. Throws an exception if the
+/// string still exceeds `limit` after trimming.
 void trimTrailingSpaces(
     exec::StringWriter& output,
     StringView inputStr,
     int32_t numChars,
-    int32_t limit);
+    uint32_t limit);
 
 } // namespace facebook::velox::functions::sparksql

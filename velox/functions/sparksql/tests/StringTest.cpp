@@ -1056,57 +1056,5 @@ TEST_F(StringTest, empty2Null) {
   EXPECT_EQ(empty2Null("abc"), "abc");
 }
 
-TEST_F(StringTest, varcharTypeWriteSideCheck) {
-  const auto varcharTypeWriteSideCheck =
-      [&](const std::optional<std::string>& input,
-          const std::optional<int32_t>& limit) {
-        return evaluateOnce<std::string>(
-            "varchar_type_write_side_check(c0, c1)", input, limit);
-      };
-
-  // Basic cases - string length <= limit.
-  EXPECT_EQ(varcharTypeWriteSideCheck("abc", 3), "abc");
-  EXPECT_EQ(varcharTypeWriteSideCheck("ab", 3), "ab");
-  EXPECT_EQ(varcharTypeWriteSideCheck("", 5), "");
-
-  // Cases with trailing spaces.
-  // Edge cases - input string is longer than limit but trims to exactly limit.
-  EXPECT_EQ(varcharTypeWriteSideCheck("abc  ", 3), "abc");
-  EXPECT_EQ(varcharTypeWriteSideCheck("abc  ", 4), "abc ");
-  EXPECT_EQ(varcharTypeWriteSideCheck("abc  ", 5), "abc  ");
-
-  // Unicode string cases with trailing spaces.
-  EXPECT_EQ(varcharTypeWriteSideCheck("世界   ", 2), "世界");
-  EXPECT_EQ(varcharTypeWriteSideCheck("世界", 2), "世界");
-
-  // Error cases - string length > limit even after trimming trailing spaces.
-  VELOX_ASSERT_USER_THROW(
-      varcharTypeWriteSideCheck("abcd", 3),
-      "Exceeds char/varchar type length limitation: 3");
-  VELOX_ASSERT_USER_THROW(
-      varcharTypeWriteSideCheck("世界人", 2),
-      "Exceeds char/varchar type length limitation: 2");
-  VELOX_ASSERT_USER_THROW(
-      varcharTypeWriteSideCheck("abc def", 5),
-      "Exceeds char/varchar type length limitation: 5");
-
-  // Null input cases.
-  EXPECT_EQ(varcharTypeWriteSideCheck(std::nullopt, 5), std::nullopt);
-
-  // Edge cases - limit is zero.
-  VELOX_ASSERT_USER_THROW(
-      varcharTypeWriteSideCheck("abc", 0),
-      "Exceeds char/varchar type length limitation: 0");
-  EXPECT_EQ(varcharTypeWriteSideCheck("   ", 0), "");
-
-  // Edge cases - limit is negative.
-  VELOX_ASSERT_USER_THROW(varcharTypeWriteSideCheck("abc", -1), "(-1 vs. 0)");
-
-  // Edge cases - input string is all spaces.
-  EXPECT_EQ(varcharTypeWriteSideCheck("   ", 2), "  ");
-  EXPECT_EQ(varcharTypeWriteSideCheck("   ", 3), "   ");
-  EXPECT_EQ(varcharTypeWriteSideCheck("   ", 1), " ");
-}
-
 } // namespace
 } // namespace facebook::velox::functions::sparksql::test
