@@ -541,6 +541,7 @@ endif()
 velox_set_source(simdjson)
 velox_resolve_dependency(simdjson 3.9.3)
 
+set(folly_SOURCE "BUNDLED")
 velox_set_source(folly)
 velox_resolve_dependency(folly 2025.04.28.00)
 
