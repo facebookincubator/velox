@@ -70,7 +70,7 @@ class PartitionedOutputReplayerTest
 
   std::vector<RowVectorPtr> makeBatches(
       vector_size_t numBatches,
-      std::function<RowVectorPtr(int32_t)> makeVector) {
+      const std::function<RowVectorPtr(int32_t)>& makeVector) {
     std::vector<RowVectorPtr> batches;
     batches.reserve(numBatches);
     for (int32_t i = 0; i < numBatches; ++i) {
