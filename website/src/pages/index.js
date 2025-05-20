@@ -21,9 +21,7 @@ function HomepageHeader() {
         />
 
         <h1 className={styles.heroTitle}>
-          High-performance<br />
-          native execution engine<br />
-          for data systems
+          An open-source composable execution engine for data systems
         </h1>
 
         <div className={styles.buttonGroup}>
