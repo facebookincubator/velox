@@ -1266,7 +1266,7 @@ TEST_F(DateTimeFunctionsTest, trunc) {
   const auto trunc = [&](std::optional<int32_t> date,
                          const std::string& format) {
     return evaluateOnce<int32_t>(
-        fmt::format("trunc(c0, {})", format), DATE(), date);
+        fmt::format("trunc(c0, '{}')", format), DATE(), date);
   };
 
   // Date(0) is 1970-01-01.

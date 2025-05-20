@@ -595,7 +595,7 @@ struct TruncFunction {
   }
 
   FOLLY_ALWAYS_INLINE bool call(
-      out_type<Timestamp>& result,
+      out_type<Date>& result,
       const arg_type<Date>& date,
       const arg_type<Varchar>& format) {
     std::optional<DateTimeUnit> unitOption = fromDateTimeUnitString(
