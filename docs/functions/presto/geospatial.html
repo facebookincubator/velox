@@ -207,6 +207,18 @@ or <code class="docutils literal notranslate"><span class="pre">geometry2</span>
 </dd></dl>
 
 </section>
+<section id="accessors">
+<h2>Accessors<a class="headerlink" href="#accessors" title="Link to this heading">¶</a></h2>
+<dl class="py function">
+<dt class="sig sig-object py" id="ST_Area">
+<span class="sig-name descname"><span class="pre">ST_Area</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">geometry</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">Geometry</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">area:</span> <span class="pre">double</span></span></span><a class="headerlink" href="#ST_Area" title="Link to this definition">¶</a></dt>
+<dd><p>Returns the 2D Euclidean area of <code class="docutils literal notranslate"><span class="pre">geometry</span></code>.
+For Point and LineString types, returns 0.0. For GeometryCollection types,
+returns the sum of the areas of the individual geometries. Empty geometries
+return 0.</p>
+</dd></dl>
+
+</section>
 <section id="bing-tile-functions">
 <h2>Bing Tile Functions<a class="headerlink" href="#bing-tile-functions" title="Link to this heading">¶</a></h2>
 <p>Bing tiles are a convenient quad-tree representation of the WGS84 projection of
@@ -328,6 +340,10 @@ specified.</p>
 <li><a class="reference internal" href="#ST_Intersection"><code class="docutils literal notranslate"><span class="pre">ST_Intersection()</span></code></a></li>
 <li><a class="reference internal" href="#ST_SymDifference"><code class="docutils literal notranslate"><span class="pre">ST_SymDifference()</span></code></a></li>
 <li><a class="reference internal" href="#ST_Union"><code class="docutils literal notranslate"><span class="pre">ST_Union()</span></code></a></li>
+</ul>
+</li>
+<li><a class="reference internal" href="#accessors">Accessors</a><ul>
+<li><a class="reference internal" href="#ST_Area"><code class="docutils literal notranslate"><span class="pre">ST_Area()</span></code></a></li>
 </ul>
 </li>
 <li><a class="reference internal" href="#bing-tile-functions">Bing Tile Functions</a><ul>
