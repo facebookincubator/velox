@@ -587,17 +587,17 @@ struct TruncFunction {
   VELOX_DEFINE_FUNCTION_TYPES(T);
 
   FOLLY_ALWAYS_INLINE void initialize(
-    const std::vector<TypePtr>& /*inputTypes*/,
-    const core::QueryConfig& config,
-    const arg_type<Date>* /*date*/,
-    const arg_type<Varchar>* /*format*/) {
+      const std::vector<TypePtr>& /*inputTypes*/,
+      const core::QueryConfig& config,
+      const arg_type<Date>* /*date*/,
+      const arg_type<Varchar>* /*format*/) {
     timeZone_ = getTimeZoneFromConfig(config);
   }
 
   FOLLY_ALWAYS_INLINE bool call(
-    out_type<Timestamp>& result,
-    const arg_type<Date>& date,
-    const arg_type<Varchar>& format) {
+      out_type<Timestamp>& result,
+      const arg_type<Date>& date,
+      const arg_type<Varchar>& format) {
     std::optional<DateTimeUnit> unitOption = fromDateTimeUnitString(
         format,
         /*throwIfInvalid=*/false,

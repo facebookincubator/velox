@@ -1264,7 +1264,7 @@ TEST_F(DateTimeFunctionsTest, dateTrunc) {
 
 TEST_F(DateTimeFunctionsTest, trunc) {
   const auto trunc = [&](std::optional<int32_t> date,
-                             const std::string& format) {
+                         const std::string& format) {
     return evaluateOnce<int32_t>(
         fmt::format("trunc(c0, {})", format), DATE(), date);
   };
