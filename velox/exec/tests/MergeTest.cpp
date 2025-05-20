@@ -163,7 +163,9 @@ class MergeTest : public OperatorTestBase {
       params.planNode = plan;
       params.maxDrivers = 2;
       params.queryConfigs = {
-          {"spill_enabled", "true"}, {"local_merge_max_merge_source", "2"}};
+          {"spill_enabled", "true"},
+          {"local_merge_enabled", "true"},
+          {"local_merge_max_num_merge_sources", "2"}};
       params.spillDirectory = spillDirectory->getPath();
       assertQueryOrdered(
           params, "SELECT * FROM tmp ORDER BY " + orderByClause, {keyIndex});
@@ -210,7 +212,9 @@ class MergeTest : public OperatorTestBase {
         params.planNode = plan;
         params.maxDrivers = 2;
         params.queryConfigs = {
-            {"spill_enabled", "true"}, {"local_merge_max_merge_source", "2"}};
+            {"spill_enabled", "true"},
+            {"local_merge_enabled", "true"},
+            {"local_merge_max_num_merge_sources", "2"}};
         params.spillDirectory = spillDirectory->getPath();
         assertQueryOrdered(
             params, "SELECT * FROM tmp " + orderBySql, sortingKeys);
@@ -222,7 +226,7 @@ class MergeTest : public OperatorTestBase {
 TEST_F(MergeTest, localMerge) {
   std::vector<RowVectorPtr> vectors;
   for (int32_t i = 0; i < 3; ++i) {
-    constexpr vector_size_t batchSize = 23;
+    constexpr vector_size_t batchSize = 100;
     auto c0 = makeFlatVector<int64_t>(
         batchSize, [&](auto row) { return batchSize * i + row; }, nullEvery(5));
     auto c1 = makeFlatVector<int64_t>(
@@ -246,7 +250,7 @@ TEST_F(MergeTest, localMerge) {
 TEST_F(MergeTest, localMergeWithSpill) {
   std::vector<RowVectorPtr> vectors;
   for (int32_t i = 0; i < 9; ++i) {
-    constexpr vector_size_t batchSize = 37;
+    constexpr vector_size_t batchSize = 137;
     auto c0 = makeFlatVector<int64_t>(
         batchSize, [&](auto row) { return batchSize * i + row; }, nullEvery(5));
     auto c1 = makeFlatVector<int64_t>(
