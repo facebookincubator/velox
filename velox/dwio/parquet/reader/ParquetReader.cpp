@@ -27,7 +27,7 @@ namespace facebook::velox::parquet {
 namespace {
 
 bool isParquetReservedKeyword(
-    std::string name,
+    const std::string& name,
     uint32_t parentSchemaIdx,
     uint32_t curSchemaIdx) {
   return ((parentSchemaIdx == 0 && curSchemaIdx == 0) || name == "key_value" ||
