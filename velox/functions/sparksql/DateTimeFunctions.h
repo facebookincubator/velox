@@ -580,6 +580,33 @@ struct DateTruncFunction {
   const tz::TimeZone* timeZone_ = nullptr;
 };
 
+/// Truncates a date to a specified time unit. Return NULL if the format is
+/// invalid. Format as abbreviated unit string is allowed.
+template <typename T>
+struct TruncFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  FOLLY_ALWAYS_INLINE bool call(
+      out_type<Date>& result,
+      const arg_type<Date>& date,
+      const arg_type<Varchar>& format) {
+    std::optional<DateTimeUnit> unitOption = fromDateTimeUnitString(
+        format,
+        /*throwIfInvalid=*/false,
+        /*allowMicro=*/false,
+        /*allowAbbreviated=*/true);
+    // Return null if unit is illegal, unit less than week is also illegal.
+    if (!unitOption.has_value() || unitOption.value() < DateTimeUnit::kWeek) {
+      return false;
+    }
+    auto dateTime = getDateTime(date);
+    adjustDateTime(dateTime, unitOption.value());
+
+    result = Timestamp::calendarUtcToEpoch(dateTime) / kSecondsInDay;
+    return true;
+  }
+};
+
 template <typename T>
 struct DateAddFunction {
   VELOX_DEFINE_FUNCTION_TYPES(T);
