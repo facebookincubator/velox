@@ -37,7 +37,7 @@ void initForSpark() {
   FLAGS_velox_exception_user_stacktrace_enabled = true;
   FLAGS_velox_exception_system_stacktrace_enabled = true;
   filesystems::registerLocalFileSystem();
-  memory::MemoryManager::initialize({});
+  memory::MemoryManager::initialize(memory::MemoryManager::Options{});
   dwio::common::registerFileSinks();
   parquet::registerParquetReaderFactory();
   parquet::registerParquetWriterFactory();
