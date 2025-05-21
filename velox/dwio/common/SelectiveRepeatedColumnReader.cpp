@@ -338,6 +338,9 @@ void SelectiveMapColumnReader::read(
     nestedRows_ = keyReader_->outputRows();
     if (!nestedRows_.empty()) {
       elementReader_->read(elementReader_->readOffset(), nestedRows_, nullptr);
+      nestedRowsAllSelected_ = nestedRowsAllSelected_ &&
+          nestedRows_.size() == elementReader_->outputRows().size();
+      nestedRows_ = elementReader_->outputRows();
     }
   }
   numValues_ = activeRows.size();
