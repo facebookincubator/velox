@@ -20,6 +20,7 @@
 #include "velox/expression/CoalesceExpr.h"
 #include "velox/expression/ConjunctExpr.h"
 #include "velox/expression/ConstantExpr.h"
+#include "velox/expression/FieldReference.h"
 #include "velox/expression/RegisterSpecialForm.h"
 #include "velox/expression/SpecialFormRegistry.h"
 #include "velox/expression/SwitchExpr.h"
@@ -52,8 +53,10 @@ TEST_F(FunctionCallToSpecialFormTest, andCall) {
       BOOLEAN(),
       {std::make_shared<ConstantExpr>(
            vectorMaker_.constantVector<bool>({true})),
-       std::make_shared<ConstantExpr>(
-           vectorMaker_.constantVector<bool>({false}))},
+       std::make_shared<exec::FieldReference>(
+           BOOLEAN(), std::vector<ExprPtr>{}, "a"),
+       std::make_shared<exec::FieldReference>(
+           BOOLEAN(), std::vector<ExprPtr>{}, "b")},
       false,
       config_);
   ASSERT_EQ(typeid(*specialForm), typeid(const ConjunctExpr&));
@@ -83,8 +86,12 @@ TEST_F(FunctionCallToSpecialFormTest, coalesceCall) {
   auto specialForm = constructSpecialForm(
       "coalesce",
       INTEGER(),
-      {std::make_shared<ConstantExpr>(
-          vectorMaker_.constantVector<int32_t>({0}))},
+      {std::make_shared<exec::FieldReference>(
+           INTEGER(), std::vector<ExprPtr>{}, "a"),
+       std::make_shared<exec::FieldReference>(
+           INTEGER(), std::vector<ExprPtr>{}, "b"),
+       std::make_shared<ConstantExpr>(
+           vectorMaker_.constantVector<int32_t>({0}))},
       false,
       config_);
   ASSERT_EQ(typeid(*specialForm), typeid(const CoalesceExpr&));
@@ -100,8 +107,8 @@ TEST_F(FunctionCallToSpecialFormTest, ifCall) {
   auto specialForm = constructSpecialForm(
       "if",
       INTEGER(),
-      {std::make_shared<ConstantExpr>(
-           vectorMaker_.constantVector<bool>({true})),
+      {std::make_shared<exec::FieldReference>(
+           BOOLEAN(), std::vector<ExprPtr>{}, "a"),
        std::make_shared<ConstantExpr>(
            vectorMaker_.constantVector<int32_t>({0})),
        std::make_shared<ConstantExpr>(
@@ -120,8 +127,10 @@ TEST_F(FunctionCallToSpecialFormTest, orCall) {
   auto specialForm = constructSpecialForm(
       "or",
       BOOLEAN(),
-      {std::make_shared<ConstantExpr>(
-           vectorMaker_.constantVector<bool>({true})),
+      {std::make_shared<exec::FieldReference>(
+           BOOLEAN(), std::vector<ExprPtr>{}, "a"),
+       std::make_shared<exec::FieldReference>(
+           BOOLEAN(), std::vector<ExprPtr>{}, "b"),
        std::make_shared<ConstantExpr>(
            vectorMaker_.constantVector<bool>({false}))},
       false,
@@ -216,10 +225,10 @@ TEST_F(FunctionCallToSpecialFormSanitizeNameTest, sanitizeName) {
     auto specialForm = constructSpecialForm(
         name,
         BOOLEAN(),
-        {std::make_shared<ConstantExpr>(
-             vectorMaker_.constantVector<bool>({true})),
-         std::make_shared<ConstantExpr>(
-             vectorMaker_.constantVector<bool>({false}))},
+        {std::make_shared<exec::FieldReference>(
+             BOOLEAN(), std::vector<ExprPtr>{}, "a"),
+         std::make_shared<exec::FieldReference>(
+             BOOLEAN(), std::vector<ExprPtr>{}, "b")},
         false,
         core::QueryConfig{{}});
     ASSERT_EQ(typeid(*specialForm), typeid(const ConjunctExpr&));
