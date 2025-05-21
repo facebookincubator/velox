@@ -42,7 +42,7 @@ BUILD_DUCKDB="${BUILD_DUCKDB:-true}"
 BUILD_GEOS="${BUILD_GEOS:-true}"
 VELOX_BUILD_SHARED=${VELOX_BUILD_SHARED:-"OFF"} #Build folly shared for use in libvelox.so.
 DEPENDENCY_DIR=${DEPENDENCY_DIR:-$(pwd)}
-MACOS_VELOX_DEPS="bison flex gflags glog googletest icu4c libevent libsodium lz4 lzo openssl protobuf@21 snappy xz xxhash zstd"
+MACOS_VELOX_DEPS="bison flex gflags glog googletest icu4c libevent libsodium lz4 openssl protobuf@21 snappy xz xxhash zstd"
 MACOS_BUILD_DEPS="ninja cmake"
 
 FB_OS_VERSION="v2025.04.28.00"
