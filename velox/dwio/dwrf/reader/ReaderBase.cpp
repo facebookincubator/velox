@@ -19,7 +19,6 @@
 #include <fmt/format.h>
 
 #include "velox/common/process/TraceContext.h"
-#include "velox/dwio/common/Mutation.h"
 #include "velox/dwio/common/exception/Exception.h"
 
 namespace facebook::velox::dwrf {
