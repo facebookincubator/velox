@@ -350,13 +350,6 @@ struct Log10Function {
 };
 
 template <typename T>
-struct SqrtFunction {
-  FOLLY_ALWAYS_INLINE void call(double& result, double a) {
-    result = std::sqrt(a);
-  }
-};
-
-template <typename T>
 struct IsNanFunction {
   template <typename TInput>
   FOLLY_ALWAYS_INLINE void call(bool& result, TInput a) {
