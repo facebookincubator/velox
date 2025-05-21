@@ -16,6 +16,8 @@
 
 #include "SemanticVersion.h"
 
+#include <utility>
+
 namespace facebook::velox::parquet {
 
 const re2::RE2 SemanticVersion::pattern_(
@@ -34,7 +36,7 @@ SemanticVersion::SemanticVersion(
     int majorVersion,
     int minorVersion,
     int patch)
-    : application_(application),
+    : application_(std::move(application)),
       majorVersion_(majorVersion),
       minorVersion_(minorVersion),
       patchVersion_(patch) {}
