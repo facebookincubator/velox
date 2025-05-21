@@ -305,7 +305,7 @@ bool MemoryAllocator::allocateContiguous(
 bool MemoryAllocator::growContiguous(
     MachinePageCount increment,
     ContiguousAllocation& allocation,
-    ReservationCallback reservationCB) {
+    const ReservationCallback& reservationCB) {
   VELOX_CHECK_LE(
       allocation.size() + increment * AllocationTraits::kPageSize,
       allocation.maxSize());
@@ -473,7 +473,7 @@ int32_t elapsedUsec(struct timeval end, struct timeval begin) {
 void MemoryAllocator::getTracingHooks(
     std::function<void()>& init,
     std::function<std::string()>& report,
-    std::function<int64_t()> ioVolume) {
+    const std::function<int64_t()>& ioVolume) {
   auto allocator = shared_from_this();
   auto state = std::make_shared<TraceState>();
   init = [state, allocator, ioVolume]() {

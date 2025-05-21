@@ -295,7 +295,7 @@ class MemoryAllocator : public std::enable_shared_from_this<MemoryAllocator> {
   bool growContiguous(
       MachinePageCount increment,
       ContiguousAllocation& allocation,
-      ReservationCallback reservationCB = nullptr);
+      const ReservationCallback& reservationCB = nullptr);
 
   /// Allocates contiguous 'bytes' and return the first byte. Returns nullptr if
   /// there is no space. The function might retry allocation failure by making
@@ -403,7 +403,7 @@ class MemoryAllocator : public std::enable_shared_from_this<MemoryAllocator> {
   void getTracingHooks(
       std::function<void()>& init,
       std::function<std::string()>& report,
-      std::function<int64_t()> ioVolume = nullptr);
+      const std::function<int64_t()>& ioVolume = nullptr);
 
  protected:
   MemoryAllocator(MachinePageCount largestSizeClassPages = 256)
