@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+#include <cstring>
 #include "velox/dwio/dwrf/reader/SelectiveStringDictionaryColumnReader.h"
 #include "velox/dwio/common/BufferUtil.h"
 #include "velox/dwio/dwrf/common/DecoderUtil.h"
@@ -170,7 +171,7 @@ void SelectiveStringDictionaryColumnReader::loadStrideDictionary() {
   if (DictionaryValues::hasFilter(scanSpec_->filter())) {
     scanState_.filterCache.resize(
         scanState_.dictionary.numValues + scanState_.dictionary2.numValues);
-    simd::memset(
+    std::memset(
         scanState_.filterCache.data() + scanState_.dictionary.numValues,
         FilterResult::kUnknown,
         scanState_.dictionary2.numValues);
@@ -322,7 +323,7 @@ void SelectiveStringDictionaryColumnReader::ensureInitialized() {
 
   if (DictionaryValues::hasFilter(scanSpec_->filter())) {
     scanState_.filterCache.resize(scanState_.dictionary.numValues);
-    simd::memset(
+    std::memset(
         scanState_.filterCache.data(),
         FilterResult::kUnknown,
         scanState_.dictionary.numValues);
