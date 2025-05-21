@@ -48,7 +48,7 @@ env:
   NUM_THREADS: ${{ inputs.numThreads || 8 }}
   MAX_LINK_JOBS: ${{ inputs.maxLinkJobs || 4 }}
   MAX_HIGH_MEM_JOBS: ${{ inputs.maxHighMemJobs || 8 }}
-  EXTRA_CMAKE_FLAGS: -DVELOX_ENABLE_ARROW=ON ${{ inputs.extraCMakeFlags }}
+  EXTRA_CMAKE_FLAGS: -DVELOX_ENABLE_ARROW=ON ${{ inputs.extraCMakeFlags }} -DFETCHCONTENT_QUIET=OFF
 
 jobs:
   compile:
