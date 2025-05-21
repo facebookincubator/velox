@@ -383,6 +383,28 @@ class DecimalUtil {
     return writePosition - startPosition;
   }
 
+  /// @brief Convert the string to unscaled decimal.
+  /// @tparam T The type of return value.
+  /// @param str The input string that represents the decimal, e.g. 12.34.
+  /// @param scale The scale of decimal.
+  /// @return The decimal unscaled value.
+  template <typename T>
+  static T stringToDecimal(const std::string& str, uint8_t scale) {
+    if (scale == 0) {
+      return folly::to<T>(str);
+    }
+    size_t idx = 0;
+    if (str.at(idx) == '-') {
+      ++idx;
+    }
+    T result = folly::to<T>(std::string_view(
+                   str.c_str() + idx, str.length() - scale - 1 - idx)) *
+            kPowersOfTen[scale] +
+        folly::to<T>(
+                   std::string_view(str.c_str() + str.length() - scale, scale));
+    return idx > 0 ? -result : result;
+  }
+
   /*
    * sum up and return overflow/underflow.
    */
