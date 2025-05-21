@@ -251,6 +251,13 @@ class ArraySortTest : public FunctionBaseTest,
     }
   }
 
+  void setArraySortMaxIterations(uint32_t maxIterations) {
+    queryCtx_->testingOverrideConfigUnsafe({
+        {core::QueryConfig::kArraySortMaxIterations,
+         std::to_string(maxIterations)},
+    });
+  }
+
   // Specify the number of values per each data vector in 'dataVectorsByType_'.
   const int numValues_;
   std::unordered_map<TypeKind, VectorPtr> dataVectorsByType_;
@@ -334,6 +341,7 @@ ArrayVectorPtr ArraySortTest::arrayVector<TestRowType>(
 }
 
 void ArraySortTest::SetUp() {
+  options_.parseIntegerAsBigint = false;
   for (const TypeKind type : kSupportedTypes) {
     switch (type) {
       case TypeKind::BOOLEAN:
@@ -535,6 +543,7 @@ TEST_F(ArraySortTest, wellFormedVectors) {
 }
 
 TEST_F(ArraySortTest, lambda) {
+  setArraySortMaxIterations(0);
   auto data = makeRowVector({makeNullableArrayVector<std::string>({
       {"abc123", "abc", std::nullopt, "abcd"},
       {std::nullopt, "x", "xyz123", "xyz"},
@@ -595,7 +604,8 @@ TEST_F(ArraySortTest, lambda) {
       "(x, y) -> if(length(x) < length(y), 1, if(length(x) = length(y), 0, -1))");
 }
 
-TEST_F(ArraySortTest, unsupporteLambda) {
+TEST_F(ArraySortTest, unsupportedLambda) {
+  setArraySortMaxIterations(0);
   auto data = makeRowVector({
       makeArrayVectorFromJson<int32_t>({
           "[1, 2, 3, 4]",
@@ -605,7 +615,67 @@ TEST_F(ArraySortTest, unsupporteLambda) {
 
   VELOX_ASSERT_THROW(
       evaluate("array_sort(c0, (a, b) -> 0)", data),
-      "array_sort with comparator lambda that cannot be rewritten into a transform is not supported");
+      "Arraysort with lambda function with 2 arguments is not supported");
+}
+
+TEST_F(ArraySortTest, lambdaWithExpressions) {
+  setArraySortMaxIterations(0);
+  auto data = makeRowVector({
+      makeArrayVectorFromJson<int32_t>({
+          "[1, 2, 3, 4]",
+          "[1, 2, 3]",
+      }),
+  });
+
+  // This expression always returns -1.
+  auto arraySortExpr =
+      "ARRAY_SORT(c0, (a, b) -> IF ((a - b) * (a - b) + 5 > 0, -1, 1))";
+
+  // Fails if array_sort_max_iterations is unset.
+  VELOX_ASSERT_THROW(
+      evaluate(arraySortExpr, data),
+      "Arraysort with lambda function with 2 arguments is not supported.");
+
+  setArraySortMaxIterations(100);
+  VELOX_ASSERT_THROW(
+      evaluate(arraySortExpr, data),
+      "Comparison of equal elements should return 0");
+
+  arraySortExpr =
+      "ARRAY_SORT(c0, (a, b) -> IF(POW(a, 3) < POW(b, 3), -1, IF(a = b, 0, 1)))";
+  data = makeRowVector({
+      makeArrayVectorFromJson<int32_t>(
+          {"[7, 4, 1, 0, -1, -4, -7]",
+           "[3, 2, 1]",
+           "[9, 8, 7, 6, 5, 3, 3, 6, 5, 4, 3, 2, 1]",
+           "[2, 3, -1, -2, null, 4, 1, null, 5]"}),
+  });
+  auto result = evaluate(arraySortExpr, data);
+  auto expected = makeArrayVectorFromJson<int32_t>(
+      {"[-7, -4, -1, 0, 1, 4, 7]",
+       "[1, 2, 3]",
+       "[1, 2, 3, 3, 3, 4, 5, 5, 6, 6, 7, 8, 9]",
+       "[-2, -1, 1, 2, 3, 4, 5, null, null]"});
+  assertEqualVectors(expected, result);
+
+  // Wrap capture test.
+  data = makeRowVector({
+      makeArrayVectorFromJson<int32_t>({
+          "[1, 2, -3, -4]",
+          "[1, -2, 5, null, 3]",
+      }),
+      makeFlatVector(std::vector<int32_t>{1, 2}),
+      makeFlatVector(std::vector<int32_t>{-1, 1}),
+  });
+
+  arraySortExpr =
+      "ARRAY_SORT(c0, (a, b) -> IF(a + c1 + c2 < b + c1 + c2, -1, IF(a + c1 + c2 = b + c1 + c2, 0, 1)))";
+  result = evaluate(arraySortExpr, data);
+  expected = makeArrayVectorFromJson<int32_t>({
+      "[-4, -3, 1, 2]",
+      "[-2, 1, 3, 5, null]",
+  });
+  assertEqualVectors(expected, result);
 }
 
 TEST_F(ArraySortTest, failOnMapTypeSort) {

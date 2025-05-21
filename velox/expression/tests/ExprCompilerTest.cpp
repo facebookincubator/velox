@@ -310,6 +310,11 @@ TEST_F(ExprCompilerTest, rewrites) {
       "plus(1:BIGINT, array_sum_propagate_element_null(transform(c0, (x) -> multiply(x, 2:BIGINT))))");
 
   exprSet = compile(makeTypedExpr(
+      "ARRAY_SORT(c0, (a, b) -> IF(POW(a, 3) < POW(b, 3), -1, IF(a = b, 0, 1)))",
+      ROW({"c0", "c1"}, {ARRAY(BIGINT()), BIGINT()})));
+  ASSERT_EQ(exprSet->size(), 1);
+
+  exprSet = compile(makeTypedExpr(
       "reduce(c0, 1, (s, x) -> (s + 2) - x, s -> s)",
       ROW({"c0"}, {ARRAY(BIGINT())})));
   ASSERT_EQ(exprSet->size(), 1);

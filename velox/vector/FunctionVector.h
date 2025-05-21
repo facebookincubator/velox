@@ -72,6 +72,9 @@ class Callable {
       const std::vector<VectorPtr>& args,
       exec::EvalErrorsPtr& elementErrors,
       VectorPtr* result) = 0;
+
+  /// Returns the parameters required by the caller to be passed.
+  virtual const RowTypePtr getFunctionSignatures() = 0;
 };
 
 // Represents a vector of functions. In most cases all the positions
