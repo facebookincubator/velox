@@ -12,30 +12,29 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-name: "Experimental Fuzzer Jobs"
+name: Experimental Fuzzer Jobs
 
 on:
   pull_request:
     paths:
-      - ".github/workflows/experimental.yml"
-
+      - .github/workflows/experimental.yml
 
   workflow_dispatch:
     inputs:
       ref:
-        description: 'Ref to checkout out'
-        default: 'main'
+        description: Ref to checkout out
+        default: main
       numThreads:
-        description: 'Number of threads'
+        description: Number of threads
         default: 16
       maxHighMemJobs:
-        description: 'Number of high memory jobs'
+        description: Number of high memory jobs
         default: 8
       maxLinkJobs:
-        description: 'Maximum number of link jobs'
+        description: Maximum number of link jobs
         default: 4
       extraCMakeFlags:
-        description: 'Additional CMake flags'
+        description: Additional CMake flags
         default: ''
 
 defaults:
@@ -45,38 +44,45 @@ defaults:
 permissions:
   contents: read
 
+env:
+  NUM_THREADS: ${{ inputs.numThreads || 8 }}
+  MAX_LINK_JOBS: ${{ inputs.maxLinkJobs || 4 }}
+  MAX_HIGH_MEM_JOBS: ${{ inputs.maxHighMemJobs || 8 }}
+  EXTRA_CMAKE_FLAGS: -DVELOX_ENABLE_ARROW=ON ${{ inputs.extraCMakeFlags }} -DFETCHCONTENT_QUIET=OFF
+
 jobs:
   compile:
     runs-on: 16-core-ubuntu
     timeout-minutes: 120
     env:
-      CCACHE_DIR: "${{ github.workspace }}/ccache/"
-      LINUX_DISTRO: "ubuntu"
+      CCACHE_DIR: ${{ github.workspace }}/ccache/
+      LINUX_DISTRO: ubuntu
     steps:
 
-      - name: "Restore ccache"
+      - name: Restore ccache
         uses: actions/cache@v4
         with:
-          path: "${{ env.CCACHE_DIR }}"
+          path: ${{ env.CCACHE_DIR }}
           # We are using the benchmark ccache as it has all
           # required features enabled, so no need to create a new one
           key: ccache-benchmark-${{ github.sha }}
           restore-keys: |
             ccache-benchmark-
-      - name: "Checkout Repo"
+      - name: Checkout Repo
         uses: actions/checkout@v3
         with:
           path: velox
-          submodules: 'recursive'
-          ref: "${{ inputs.ref || 'main' }}"
 
-      - name: "Install dependencies"
+          ref: ${{ inputs.ref || 'main' }}
+          persist-credentials: false
+
+      - name: Install dependencies
         run: cd  velox && source ./scripts/setup-ubuntu.sh && install_apt_deps
 
-      - name: "Build"
+      - name: Build
         run: |
           cd velox
-          make debug NUM_THREADS="${{ inputs.numThreads || 8 }}" MAX_HIGH_MEM_JOBS="${{ inputs.maxHighMemJobs || 8 }}" MAX_LINK_JOBS="${{ inputs.maxLinkJobs || 4 }}" EXTRA_CMAKE_FLAGS="-DVELOX_ENABLE_ARROW=ON ${{ inputs.extraCMakeFlags }}"
+          make debug
           ccache -s
 
       - name: Upload aggregation fuzzer
@@ -114,36 +120,36 @@ jobs:
     container: ghcr.io/facebookincubator/velox-dev:presto-java
     timeout-minutes: 120
     env:
-      CCACHE_DIR: "${{ github.workspace }}/ccache/"
-      LINUX_DISTRO: "centos"
+      CCACHE_DIR: ${{ github.workspace }}/ccache/
+      LINUX_DISTRO: centos
     steps:
 
-      - name: "Restore ccache"
+      - name: Restore ccache
         uses: actions/cache@v4
         with:
-          path: "${{ env.CCACHE_DIR }}"
+          path: ${{ env.CCACHE_DIR }}
           # We are using the benchmark ccache as it has all
           # required features enabled, so no need to create a new one
           key: ccache-presto-${{ github.sha }}
           restore-keys: |
             ccache-presto-
 
-      - name: "Checkout Repo"
+      - name: Checkout Repo
         uses: actions/checkout@v3
         with:
           path: velox
-          submodules: 'recursive'
-          ref: "${{ inputs.ref || 'main' }}"
 
+          ref: ${{ inputs.ref || 'main' }}
+          persist-credentials: false
 
-      - name: "Build"
+      - name: Build
         run: |
           cd velox
           source /opt/rh/gcc-toolset-12/enable
-          make debug NUM_THREADS="${{ inputs.numThreads || 8 }}" MAX_HIGH_MEM_JOBS="${{ inputs.maxHighMemJobs || 8 }}" MAX_LINK_JOBS="${{ inputs.maxLinkJobs || 4 }}" EXTRA_CMAKE_FLAGS="-DVELOX_ENABLE_ARROW=ON ${{ inputs.extraCMakeFlags }}"
+          make debug
           ccache -s
 
-      - name: "Run Aggregate Fuzzer"
+      - name: Run Aggregate Fuzzer
         run: |
           cd  velox
           cp ./scripts/presto/etc/hive.properties $PRESTO_HOME/etc/catalog
@@ -180,12 +186,13 @@ jobs:
     timeout-minutes: 120
     steps:
 
-      - name: "Checkout Repo"
+      - name: Checkout Repo
         uses: actions/checkout@v3
         with:
-          ref: "${{ inputs.ref || 'main' }}"
+          ref: ${{ inputs.ref || 'main' }}
+          persist-credentials: false
 
-      - name: "Install dependencies"
+      - name: Install dependencies
         run: source ./scripts/setup-ubuntu.sh && install_apt_deps
 
       - name: Download spark aggregation fuzzer
@@ -193,7 +200,7 @@ jobs:
         with:
           name: spark_aggregation_fuzzer
 
-      - name: "Run Spark Aggregate Fuzzer"
+      - name: Run Spark Aggregate Fuzzer
         run: |
           mkdir -p /tmp/spark_aggregate_fuzzer_repro/
           chmod -R 777 /tmp/spark_aggregate_fuzzer_repro
@@ -221,12 +228,13 @@ jobs:
     timeout-minutes: 120
     steps:
 
-      - name: "Checkout Repo"
+      - name: Checkout Repo
         uses: actions/checkout@v3
         with:
-          ref: "${{ inputs.ref || 'main' }}"
+          ref: ${{ inputs.ref || 'main' }}
+          persist-credentials: false
 
-      - name: "Install dependencies"
+      - name: Install dependencies
         run: source ./scripts/setup-ubuntu.sh && install_apt_deps
 
       - name: Download join fuzzer
@@ -234,7 +242,7 @@ jobs:
         with:
           name: join
 
-      - name: "Run Join Fuzzer"
+      - name: Run Join Fuzzer
         run: |
           ls /lib64
           mkdir -p /tmp/join_fuzzer_repro/
@@ -262,12 +270,13 @@ jobs:
     timeout-minutes: 120
     steps:
 
-      - name: "Checkout Repo"
+      - name: Checkout Repo
         uses: actions/checkout@v3
         with:
-          ref: "${{ inputs.ref || 'main' }}"
+          ref: ${{ inputs.ref || 'main' }}
+          persist-credentials: false
 
-      - name: "Install dependencies"
+      - name: Install dependencies
         run: source ./scripts/setup-ubuntu.sh && install_apt_deps
 
       - name: Download presto fuzzer
@@ -275,7 +284,7 @@ jobs:
         with:
           name: presto_expression_fuzzer
 
-      - name: "Run Presto Fuzzer"
+      - name: Run Presto Fuzzer
         run: |
           mkdir -p /tmp/presto_fuzzer_repro/
           rm -rfv /tmp/presto_fuzzer_repro/*
@@ -312,12 +321,13 @@ jobs:
     timeout-minutes: 120
     steps:
 
-      - name: "Checkout Repo"
+      - name: Checkout Repo
         uses: actions/checkout@v3
         with:
-          ref: "${{ inputs.ref || 'main' }}"
+          ref: ${{ inputs.ref || 'main' }}
+          persist-credentials: false
 
-      - name: "Install dependencies"
+      - name: Install dependencies
         run: source ./scripts/setup-ubuntu.sh && install_apt_deps
 
       - name: Download spark fuzzer
@@ -325,7 +335,7 @@ jobs:
         with:
           name: spark_expression_fuzzer
 
-      - name: "Run Spark Fuzzer"
+      - name: Run Spark Fuzzer
         run: |
           mkdir -p /tmp/spark_fuzzer_repro/
           rm -rfv /tmp/spark_fuzzer_repro/*
