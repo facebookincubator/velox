@@ -159,12 +159,6 @@ void Merge::maybeStartMoreSources() {
     return;
   }
 
-  if (sources_.size() == 1 && numStartedSources_ < 1) {
-    sources_[0]->start();
-    ++numStartedSources_;
-    return;
-  }
-
   // Gets the merge sources for the next partial merge run.
   std::vector<MergeSource*> sources;
   for (auto i = numStartedSources_; i <
@@ -203,20 +197,6 @@ RowVectorPtr Merge::getOutputFromSpill() {
 
 RowVectorPtr Merge::getOutputFromSource() {
   VELOX_CHECK_NULL(spillMerger_);
-  // No merging is needed if there is only one source.
-  if (sources_.size() == 1) {
-    ContinueFuture future;
-    RowVectorPtr data;
-    auto reason = sources_[0]->next(data, &future);
-    if (reason != BlockingReason::kNotBlocked) {
-      sourceBlockingFutures_.emplace_back(std::move(future));
-      return nullptr;
-    }
-
-    finished_ = data == nullptr;
-    return data;
-  }
-
   bool lastRun = false;
   output_ = sourceMerger_->getOutput(
       outputBatchSize_, sourceBlockingFutures_, lastRun);
