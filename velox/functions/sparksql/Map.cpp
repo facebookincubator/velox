@@ -48,14 +48,13 @@ void setKeysAndValuesResult(
     decoded.get()->decode(*args[i * 2], rows);
     context.applyToSelectedNoThrow(rows, [&](vector_size_t row) {
       VELOX_USER_CHECK(!decoded->isNullAt(row), "Cannot use null as map key!");
-      auto offset = offsets[row];
-      auto size = sizes[row];
+      const auto offset = offsets[row];
+      const auto size = sizes[row];
       bool duplicate = false;
       if (size < mapSize) {
-        // duplicate key exists in this row, check if the current element is
-        // duplicate. If yes, then do not add this element into result, only the
-        // last element should be added. This behavior is similar to spark's
-        // LAST_WIN policy for duplicate map key.
+        // Check if the current key at position i is duplicated in any later position.
+        // When a duplicate is found, mark this occurrence as duplicate and skip further checks.
+        // This implements the LAST_WIN policy where only the last occurrence of any key is kept.
         for (vector_size_t j = i + 1; j < mapSize; j++) {
           if (args[i * 2]->equalValueAt(args[j * 2].get(), row, row)) {
             duplicate = true;
@@ -119,11 +118,11 @@ class MapFunction : public exec::VectorFunction {
         std::max<vector_size_t>(keysResult->size(), valuesResult->size());
     vector_size_t offset = baseOffset;
 
-    bool throwExceptionOnDuplicateMapKeys =
-        context.execCtx()
-            ->queryCtx()
-            ->queryConfig()
-            .throwExceptionOnDuplicateMapKeys();
+    bool throwExceptionOnDuplicateMapKeys = false;
+    if (auto* ctx = context.execCtx()->queryCtx()) {
+      throwExceptionOnDuplicateMapKeys =
+          ctx->queryConfig().throwExceptionOnDuplicateMapKeys();
+    }
 
     // Check for duplicate keys and set size & offsets.
     rows.applyToSelected([&](vector_size_t row) {

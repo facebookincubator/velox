@@ -78,7 +78,7 @@ TEST_F(MapTest, boolType) {
 }
 
 TEST_F(MapTest, duplicateMapKey) {
-  // Input vectors with duplicate keys
+  // Input vectors with duplicate keys.
   auto inputVector1 = makeNullableFlatVector<int64_t>({1, 20, 3});
   auto inputVector2 = makeNullableFlatVector<double>({4.0, 5.0, 6.0});
   auto inputVector3 = makeNullableFlatVector<int64_t>({10, 20, 30});
@@ -154,7 +154,7 @@ TEST_F(MapTest, errorCases) {
   auto inputVectorDouble = makeNullableFlatVector<double>({4.0, 5.0, 6.0});
   auto nullInputVector = makeNullableFlatVector<int64_t>({1, std::nullopt, 3});
 
-  // Number of args
+  // Number of args.
   testMapFails(
       "map(c0)",
       {inputVectorInt64},
@@ -176,7 +176,7 @@ TEST_F(MapTest, errorCases) {
        inputVectorDouble},
       "Scalar function signature is not supported: map(DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE)");
 
-  // Types of args
+  // Types of args.
   testMapFails(
       "map(c0, c1, c2, c3)",
       {inputVectorInt64,
