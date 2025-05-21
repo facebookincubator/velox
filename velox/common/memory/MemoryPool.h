@@ -484,7 +484,8 @@ class MemoryPool : public std::enable_shared_from_this<MemoryPool> {
   }
 
   // Overrides getPreferredSize to allow specializing behavior for this pool.
-  void setPreferredSize(std::function<size_t(size_t)> getPreferredSizeFunc);
+  void setPreferredSize(
+      const std::function<size_t(size_t)>& getPreferredSizeFunc);
 
  protected:
   static constexpr uint64_t kMB = 1 << 20;
