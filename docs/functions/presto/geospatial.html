@@ -101,6 +101,13 @@ Ill-formed binary will return a User Error.</p>
 <dd><p>Returns the Well-Known Binary (WKB) formatted binary of the Geometry object.</p>
 </dd></dl>
 
+<dl class="py function">
+<dt class="sig sig-object py" id="ST_Point">
+<span class="sig-name descname"><span class="pre">ST_Point</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">double</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">y</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">double</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">geometry:</span> <span class="pre">Geometry</span></span></span><a class="headerlink" href="#ST_Point" title="Link to this definition">¶</a></dt>
+<dd><p>Returns the Point geometry at the given coordinates.  This will raise an
+error if <code class="docutils literal notranslate"><span class="pre">x</span></code> or <code class="docutils literal notranslate"><span class="pre">y</span></code> is <code class="docutils literal notranslate"><span class="pre">NaN</span></code> or <code class="docutils literal notranslate"><span class="pre">infinity</span></code>.</p>
+</dd></dl>
+
 </section>
 <section id="spatial-predicates">
 <h2>Spatial Predicates<a class="headerlink" href="#spatial-predicates" title="Link to this heading">¶</a></h2>
@@ -218,6 +225,22 @@ returns the sum of the areas of the individual geometries. Empty geometries
 return 0.</p>
 </dd></dl>
 
+<dl class="py function">
+<dt class="sig sig-object py" id="ST_X">
+<span class="sig-name descname"><span class="pre">ST_X</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">geometry</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">Geometry</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">x:</span> <span class="pre">double</span></span></span><a class="headerlink" href="#ST_X" title="Link to this definition">¶</a></dt>
+<dd><p>Returns the <code class="docutils literal notranslate"><span class="pre">x</span></code> coordinate of the geometry if it is a Point.  Returns
+<code class="docutils literal notranslate"><span class="pre">null</span></code> if the geometry is empty.  Raises an error if the geometry is
+not a Point and not empty.</p>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="ST_Y">
+<span class="sig-name descname"><span class="pre">ST_Y</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">geometry</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">Geometry</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">x:</span> <span class="pre">double</span></span></span><a class="headerlink" href="#ST_Y" title="Link to this definition">¶</a></dt>
+<dd><p>Returns the <code class="docutils literal notranslate"><span class="pre">y</span></code> coordinate of the geometry if it is a Point.  Returns
+<code class="docutils literal notranslate"><span class="pre">null</span></code> if the geometry is empty.  Raises an error if the geometry is
+not a Point and not empty.</p>
+</dd></dl>
+
 </section>
 <section id="bing-tile-functions">
 <h2>Bing Tile Functions<a class="headerlink" href="#bing-tile-functions" title="Link to this heading">¶</a></h2>
@@ -321,6 +344,7 @@ specified.</p>
 <li><a class="reference internal" href="#ST_GeomFromBinary"><code class="docutils literal notranslate"><span class="pre">ST_GeomFromBinary()</span></code></a></li>
 <li><a class="reference internal" href="#ST_AsText"><code class="docutils literal notranslate"><span class="pre">ST_AsText()</span></code></a></li>
 <li><a class="reference internal" href="#ST_AsBinary"><code class="docutils literal notranslate"><span class="pre">ST_AsBinary()</span></code></a></li>
+<li><a class="reference internal" href="#ST_Point"><code class="docutils literal notranslate"><span class="pre">ST_Point()</span></code></a></li>
 </ul>
 </li>
 <li><a class="reference internal" href="#spatial-predicates">Spatial Predicates</a><ul>
@@ -344,6 +368,8 @@ specified.</p>
 </li>
 <li><a class="reference internal" href="#accessors">Accessors</a><ul>
 <li><a class="reference internal" href="#ST_Area"><code class="docutils literal notranslate"><span class="pre">ST_Area()</span></code></a></li>
+<li><a class="reference internal" href="#ST_X"><code class="docutils literal notranslate"><span class="pre">ST_X()</span></code></a></li>
+<li><a class="reference internal" href="#ST_Y"><code class="docutils literal notranslate"><span class="pre">ST_Y()</span></code></a></li>
 </ul>
 </li>
 <li><a class="reference internal" href="#bing-tile-functions">Bing Tile Functions</a><ul>
