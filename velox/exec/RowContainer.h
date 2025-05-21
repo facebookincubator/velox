@@ -1870,14 +1870,24 @@ class RowComparator {
       const std::vector<core::SortOrder>& sortingOrders,
       RowContainer* rowContainer);
 
-  /// Returns true if lhs < rhs, false otherwise.
+  /// Returns true if lhs <= rhs, false otherwise.
   bool operator()(const char* lhs, const char* rhs);
 
-  /// Returns true if decodeVectors[index] < rhs, false otherwise.
+  /// Returns 0 for equal, < 0 for 'lhs' < 'rhs', > 0 otherwise.
+  int compare(const char* lhs, const char* rhs);
+
+  /// Returns true if lhs <= decodeVectors[index], false otherwise.
   bool operator()(
+      const char* lhs,
       const std::vector<DecodedVector>& decodedVectors,
-      vector_size_t index,
-      const char* rhs);
+      vector_size_t index);
+
+  /// Returns 0 for equal, < 0 for 'lhs' < 'decodedVectors[index]',
+  /// > 0 otherwise.
+  int32_t compare(
+      const char* lhs,
+      const std::vector<DecodedVector>& decodedVectors,
+      vector_size_t index);
 
  private:
   std::vector<std::pair<column_index_t, core::SortOrder>> keyInfo_;
