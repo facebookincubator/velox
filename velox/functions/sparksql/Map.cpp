@@ -52,9 +52,10 @@ void setKeysAndValuesResult(
       const auto size = sizes[row];
       bool duplicate = false;
       if (size < mapSize) {
-        // Check if the current key at position i is duplicated in any later position.
-        // When a duplicate is found, mark this occurrence as duplicate and skip further checks.
-        // This implements the LAST_WIN policy where only the last occurrence of any key is kept.
+        // Check if the current key at position i is duplicated in any later
+        // position. When a duplicate is found, mark this occurrence as
+        // duplicate and skip further checks. This implements the LAST_WIN
+        // policy where only the last occurrence of any key is kept.
         for (vector_size_t j = i + 1; j < mapSize; j++) {
           if (args[i * 2]->equalValueAt(args[j * 2].get(), row, row)) {
             duplicate = true;
