@@ -14,18 +14,15 @@
  * limitations under the License.
  */
 
-// This header must be included in any dynamically loaded user-defined
-// function library. It enforces the correct function declaration with
-// the proper signature.
 #pragma once
 
-#include "velox/functions/Udf.h"
+#include <string>
 
-extern "C" {
-// The "registry()" declaration and "check()" function ensure the correct
-// registry signature function is defined by the user.
-void registry();
-void check() {
-  registry();
-}
-}
+namespace facebook::velox::functions::aggregate::sparksql {
+
+void registerCovarianceAggregates(
+    const std::string& prefix,
+    bool withCompanionFunctions,
+    bool overwrite);
+
+} // namespace facebook::velox::functions::aggregate::sparksql

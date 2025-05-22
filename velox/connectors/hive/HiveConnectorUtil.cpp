@@ -554,6 +554,7 @@ void configureReaderOptions(
       hiveConfig->maxCoalescedDistanceBytes(sessionProperties));
   readerOptions.setFileColumnNamesReadAsLowerCase(
       hiveConfig->isFileColumnNamesReadAsLowerCase(sessionProperties));
+  readerOptions.setAllowEmptyFile(true);
   bool useColumnNamesForColumnMapping = false;
   switch (hiveSplit->fileFormat) {
     case dwio::common::FileFormat::DWRF:
@@ -628,6 +629,7 @@ void configureRowReaderOptions(
         hiveConfig->readTimestampUnit(sessionProperties)));
   }
   rowReaderOptions.setStorageParameters(hiveSplit->storageParameters);
+  rowReaderOptions.setSerdeParameters(hiveSplit->serdeParameters);
 }
 
 namespace {
