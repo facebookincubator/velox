@@ -59,7 +59,7 @@ class HashJoinBridgeTest : public testing::Test,
 
  protected:
   static void SetUpTestCase() {
-    memory::MemoryManager::testingSetInstance({});
+    memory::MemoryManager::testingSetInstance(memory::MemoryManager::Options{});
     filesystems::registerLocalFileSystem();
   }
 
@@ -120,8 +120,7 @@ class HashJoinBridgeTest : public testing::Test,
            rowType_,
            tempDir_->getPath() + "/Spill_" + std::to_string(fileId),
            1024,
-           1,
-           std::vector<CompareFlags>({}),
+           SpillState::makeSortingKeys(std::vector<CompareFlags>(1)),
            common::CompressionKind_NONE});
     }
     return files;
@@ -249,7 +248,8 @@ TEST_P(HashJoinBridgeTest, withoutSpill) {
     ASSERT_TRUE(futures[0].valid());
 
     // Probe side completion.
-    ASSERT_FALSE(joinBridge->probeFinished());
+    ASSERT_FALSE(joinBridge->testingHasMoreSpilledPartitions());
+    joinBridge->probeFinished();
     ASSERT_FALSE(helper.buildResult().has_value());
 
     futures[0].wait();
@@ -365,7 +365,8 @@ TEST_P(HashJoinBridgeTest, withSpill) {
       }
 
       // Probe table.
-      ASSERT_EQ(hasMoreSpill, joinBridge->probeFinished());
+      ASSERT_EQ(hasMoreSpill, joinBridge->testingHasMoreSpilledPartitions());
+      joinBridge->probeFinished();
       // Probe can't set spilled table partitions after it finishes probe.
       VELOX_ASSERT_THROW(
           joinBridge->appendSpilledHashTablePartitions({}),
@@ -542,7 +543,9 @@ TEST_P(HashJoinBridgeTest, multiThreading) {
           } else {
             proberBarrier.reset(new BarrierState());
             ASSERT_EQ(
-                joinBridge->probeFinished(), !spillPartitionIdSet.empty());
+                joinBridge->testingHasMoreSpilledPartitions(),
+                !spillPartitionIdSet.empty());
+            joinBridge->probeFinished();
             for (auto& promise : promises) {
               promise.setValue();
             }
@@ -554,10 +557,10 @@ TEST_P(HashJoinBridgeTest, multiThreading) {
       });
     }
 
-    for (auto& th : builderThreads) {
+    for (auto& th : proberThreads) {
       th.join();
     }
-    for (auto& th : proberThreads) {
+    for (auto& th : builderThreads) {
       th.join();
     }
   }

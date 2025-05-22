@@ -37,7 +37,7 @@ using namespace facebook::velox::exec::test;
 class ParquetTpchTest : public testing::Test {
  protected:
   static void SetUpTestSuite() {
-    memory::MemoryManager::testingSetInstance({});
+    memory::MemoryManager::testingSetInstance(memory::MemoryManager::Options{});
 
     duckDb_ = std::make_shared<DuckDbQueryRunner>();
     tempDirectory_ = TempDirectoryPath::create();
@@ -134,23 +134,24 @@ class ParquetTpchTest : public testing::Test {
       const TpchPlan& tpchPlan,
       const std::string& duckQuery,
       const std::optional<std::vector<uint32_t>>& sortingKeys) const {
-    bool noMoreSplits = false;
     constexpr int kNumSplits = 10;
     constexpr int kNumDrivers = 4;
-    auto addSplits = [&](Task* task) {
-      if (!noMoreSplits) {
-        for (const auto& entry : tpchPlan.dataFiles) {
-          for (const auto& path : entry.second) {
-            auto const splits = HiveConnectorTestBase::makeHiveConnectorSplits(
-                path, kNumSplits, tpchPlan.dataFileFormat);
-            for (const auto& split : splits) {
-              task->addSplit(entry.first, Split(split));
-            }
-          }
-          task->noMoreSplits(entry.first);
-        }
+    auto addSplits = [&](TaskCursor* taskCursor) {
+      if (taskCursor->noMoreSplits()) {
+        return;
       }
-      noMoreSplits = true;
+      auto& task = taskCursor->task();
+      for (const auto& entry : tpchPlan.dataFiles) {
+        for (const auto& path : entry.second) {
+          auto const splits = HiveConnectorTestBase::makeHiveConnectorSplits(
+              path, kNumSplits, tpchPlan.dataFileFormat);
+          for (const auto& split : splits) {
+            task->addSplit(entry.first, Split(split));
+          }
+        }
+        task->noMoreSplits(entry.first);
+      }
+      taskCursor->setNoMoreSplits();
     };
     CursorParameters params;
     params.maxDrivers = kNumDrivers;

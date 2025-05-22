@@ -13,11 +13,11 @@
 # limitations under the License.
 # Build the test and build container for presto_cpp
 #
-FROM ghcr.io/facebookincubator/velox-dev:centos9 
+FROM ghcr.io/facebookincubator/velox-dev:centos9
 
 ARG PRESTO_VERSION=0.290
 
-ADD scripts /velox/scripts/
+COPY scripts /velox/scripts/
 RUN wget https://repo1.maven.org/maven2/com/facebook/presto/presto-server/${PRESTO_VERSION}/presto-server-${PRESTO_VERSION}.tar.gz
 RUN wget https://repo1.maven.org/maven2/com/facebook/presto/presto-cli/${PRESTO_VERSION}/presto-cli-${PRESTO_VERSION}-executable.jar
 
@@ -42,10 +42,10 @@ RUN dnf install -y java-11-openjdk less procps python3 tzdata \
 # detailed here : https://github.com/facebookincubator/velox/issues/8127
 ENV TZ=America/Los_Angeles
 
-COPY scripts/presto/etc/config.properties.example $PRESTO_HOME/etc/config.properties
-COPY scripts/presto/etc/jvm.config.example $PRESTO_HOME/etc/jvm.config
-COPY scripts/presto/etc/node.properties $PRESTO_HOME/etc/node.properties
-COPY scripts/presto/etc/hive.properties $PRESTO_HOME/etc/catalog
-COPY scripts/presto/start-prestojava.sh /opt
+COPY scripts/ci/presto/etc/config.properties.example $PRESTO_HOME/etc/config.properties
+COPY scripts/ci/presto/etc/jvm.config.example $PRESTO_HOME/etc/jvm.config
+COPY scripts/ci/presto/etc/node.properties $PRESTO_HOME/etc/node.properties
+COPY scripts/ci/presto/etc/hive.properties $PRESTO_HOME/etc/catalog
+COPY scripts/ci/presto/start-prestojava.sh /opt
 
 WORKDIR /velox

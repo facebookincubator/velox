@@ -30,12 +30,19 @@ StreamingAggregation::StreamingAggregation(
           aggregationNode->step() == core::AggregationNode::Step::kPartial
               ? "PartialAggregation"
               : "Aggregation"),
-      outputBatchSize_{outputBatchRows()},
-      aggregationNode_{aggregationNode},
-      step_{aggregationNode->step()},
-      eagerFlush_{operatorCtx_->driverCtx()
+      maxOutputBatchSize_{outputBatchRows()},
+      minOutputBatchSize_{
+          operatorCtx_->driverCtx()
                       ->queryConfig()
-                      .streamingAggregationEagerFlush()} {
+                      .streamingAggregationMinOutputBatchRows() > 0
+              ? std::min(
+                    maxOutputBatchSize_,
+                    operatorCtx_->driverCtx()
+                        ->queryConfig()
+                        .streamingAggregationMinOutputBatchRows())
+              : maxOutputBatchSize_},
+      aggregationNode_{aggregationNode},
+      step_{aggregationNode->step()} {
   if (aggregationNode_->ignoreNullKeys()) {
     VELOX_UNSUPPORTED(
         "Streaming aggregation doesn't support ignoring null keys yet");
@@ -128,7 +135,7 @@ bool equalKeys(
 
 char* StreamingAggregation::startNewGroup(vector_size_t index) {
   if (numGroups_ < groups_.size()) {
-    auto group = groups_[numGroups_++];
+    auto* group = groups_[numGroups_++];
     rows_->initializeRow(group, true);
     storeKeys(group, index);
     return group;
@@ -155,7 +162,7 @@ RowVectorPtr StreamingAggregation::createOutput(size_t numGroups) {
     rows_->extractColumn(groups_.data(), numGroups, i, output->childAt(i));
   }
 
-  auto numKeys = groupingKeys_.size();
+  const auto numKeys = groupingKeys_.size();
   for (auto i = 0; i < aggregates_.size(); ++i) {
     const auto& aggregate = aggregates_.at(i);
     if (!aggregate.sortingKeys.empty()) {
@@ -194,14 +201,15 @@ RowVectorPtr StreamingAggregation::createOutput(size_t numGroups) {
 }
 
 void StreamingAggregation::assignGroups() {
-  auto numInput = input_->size();
+  const auto numInput = input_->size();
+  VELOX_CHECK_GT(numInput, 0);
 
   inputGroups_.resize(numInput);
 
   // Look for the end of the last group.
   vector_size_t index = 0;
-  if (prevInput_) {
-    auto prevIndex = prevInput_->size() - 1;
+  if (prevInput_ != nullptr) {
+    const auto prevIndex = prevInput_->size() - 1;
     auto* prevGroup = groups_[numGroups_ - 1];
     for (; index < numInput; ++index) {
       if (equalKeys(groupingKeys_, prevInput_, prevIndex, input_, index)) {
@@ -237,7 +245,6 @@ void StreamingAggregation::assignGroups() {
       groupBoundaries_.push_back(i);
     }
   }
-  VELOX_CHECK_GT(numInput, 0);
   groupBoundaries_.push_back(numInput);
 }
 
@@ -296,40 +303,56 @@ void StreamingAggregation::evaluateAggregates() {
   }
 }
 
+bool StreamingAggregation::startDrain() {
+  VELOX_CHECK(isDraining());
+  VELOX_CHECK(!noMoreInput_);
+  if (!input_ && numGroups_ == 0) {
+    return false;
+  }
+  return true;
+}
+
+void StreamingAggregation::maybeFinishDrain() {
+  if (FOLLY_LIKELY((numGroups_ != 0) || !isDraining())) {
+    return;
+  }
+  prevInput_ = nullptr;
+  Operator::finishDrain();
+}
+
 bool StreamingAggregation::isFinished() {
   return noMoreInput_ && input_ == nullptr && numGroups_ == 0;
 }
 
 RowVectorPtr StreamingAggregation::getOutput() {
   if (!input_) {
-    if (noMoreInput_ && numGroups_ > 0) {
-      return createOutput(numGroups_);
+    if ((noMoreInput_ || isDraining()) && numGroups_ > 0) {
+      return createOutput(
+          std::min(numGroups_, static_cast<size_t>(maxOutputBatchSize_)));
     }
+    maybeFinishDrain();
     return nullptr;
   }
 
-  auto numInput = input_->size();
+  const auto numInput = input_->size();
   inputRows_.resize(numInput);
   inputRows_.setAll();
 
   masks_->addInput(input_, inputRows_);
 
-  auto numPrevGroups = numGroups_;
+  const auto numPrevGroups = numGroups_;
 
   assignGroups();
   initializeNewGroups(numPrevGroups);
   evaluateAggregates();
 
   RowVectorPtr output;
-  if (eagerFlush_ && numGroups_ > 1) {
-    output = createOutput(numGroups_ - 1);
-  } else if (numGroups_ > outputBatchSize_) {
-    output = createOutput(outputBatchSize_);
+  if (numGroups_ > minOutputBatchSize_) {
+    output = createOutput(
+        std::min(numGroups_ - 1, static_cast<size_t>(maxOutputBatchSize_)));
   }
-
   prevInput_ = input_;
   input_ = nullptr;
-
   return output;
 }
 

@@ -14,11 +14,14 @@
  * limitations under the License.
  */
 #include "velox/common/base/tests/GTestUtils.h"
+#include "velox/dwio/common/tests/utils/BatchMaker.h"
 #include "velox/exec/PlanNodeStats.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/HiveConnectorTestBase.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
 #include "velox/functions/prestosql/window/WindowFunctionsRegistration.h"
+
+using facebook::velox::test::BatchMaker;
 
 namespace facebook::velox::exec::test {
 namespace {
@@ -91,7 +94,29 @@ class LocalPartitionTest : public HiveConnectorTestBase {
   }
 };
 
-TEST_F(LocalPartitionTest, gather) {
+struct TestParam {
+  uint32_t minLocalExchangePartitionCountToUsePartitionBuffer;
+  uint32_t maxLocalExchangePartitionBufferSize;
+  std::string_view name;
+};
+
+class LocalPartitionTestParametrized
+    : public LocalPartitionTest,
+      public testing::WithParamInterface<TestParam> {
+ protected:
+  void applyTestParameters(AssertQueryBuilder& queryBuilder) {
+    const auto& params = GetParam();
+    queryBuilder.config(
+        core::QueryConfig::kMinLocalExchangePartitionCountToUsePartitionBuffer,
+        std::to_string(
+            params.minLocalExchangePartitionCountToUsePartitionBuffer));
+    queryBuilder.config(
+        core::QueryConfig::kMaxLocalExchangePartitionBufferSize,
+        std::to_string(params.maxLocalExchangePartitionBufferSize));
+  }
+};
+
+TEST_P(LocalPartitionTestParametrized, gather) {
   std::vector<RowVectorPtr> vectors = {
       makeRowVector({makeFlatSequence<int32_t>(0, 100)}),
       makeRowVector({makeFlatSequence<int32_t>(53, 100)}),
@@ -142,13 +167,20 @@ TEST_F(LocalPartitionTest, gather) {
            .planNode();
 
   AssertQueryBuilder queryBuilder(op, duckDbQueryRunner_);
+  applyTestParameters(queryBuilder);
   for (auto i = 0; i < filePaths.size(); ++i) {
     queryBuilder.split(
         scanNodeIds[i], makeHiveConnectorSplit(filePaths[i]->getPath()));
   }
 
   task = queryBuilder.assertResults("SELECT 300, -71, 152");
-  verifyExchangeSourceOperatorStats(task, 300, 3, 1);
+
+  verifyExchangeSourceOperatorStats(
+      task,
+      300,
+      // no partition buffering for single output partition
+      3,
+      1);
 }
 
 TEST_F(LocalPartitionTest, gatherPreserveInputOrderWithSerialExecutionMode) {
@@ -177,13 +209,12 @@ TEST_F(LocalPartitionTest, gatherPreserveInputOrderWithSerialExecutionMode) {
           .window({"row_number() over () as r"})
           .planNode();
 
-  AssertQueryBuilder(op, duckDbQueryRunner_)
-      .serialExecution(true)
-      .assertResults(
-          "VALUES (10, 1), (20, 2), (30, 3), (40, 4), (50, 5), (60, 6), (70, 7), (80, 8), (90, 9), (100, 10), (110, 11), (120, 12)");
+  AssertQueryBuilder queryBuilder(op, duckDbQueryRunner_);
+  queryBuilder.serialExecution(true).assertResults(
+      "VALUES (10, 1), (20, 2), (30, 3), (40, 4), (50, 5), (60, 6), (70, 7), (80, 8), (90, 9), (100, 10), (110, 11), (120, 12)");
 }
 
-TEST_F(LocalPartitionTest, partition) {
+TEST_P(LocalPartitionTestParametrized, partition) {
   std::vector<RowVectorPtr> vectors = {
       makeRowVector({makeFlatSequence<int32_t>(0, 100)}),
       makeRowVector({makeFlatSequence<int32_t>(53, 100)}),
@@ -219,6 +250,7 @@ TEST_F(LocalPartitionTest, partition) {
   createDuckDbTable(vectors);
 
   AssertQueryBuilder queryBuilder(op, duckDbQueryRunner_);
+  applyTestParameters(queryBuilder);
   queryBuilder.maxDrivers(4);
   queryBuilder.config(core::QueryConfig::kMaxLocalExchangePartitionCount, "2");
   for (auto i = 0; i < filePaths.size(); ++i) {
@@ -228,7 +260,121 @@ TEST_F(LocalPartitionTest, partition) {
 
   auto task =
       queryBuilder.assertResults("SELECT c0, count(1) FROM tmp GROUP BY 1");
+
   verifyExchangeSourceOperatorStats(task, 300, 6, 2);
+}
+
+TEST_F(LocalPartitionTest, partitionBuffering) {
+  std::vector<RowVectorPtr> vectors = {
+      makeRowVector({"c0"}, {makeFlatSequence<int32_t>(0, 100)}),
+      makeRowVector({"c0"}, {makeFlatSequence<int32_t>(53, 100)}),
+      makeRowVector({"c0"}, {makeFlatSequence<int32_t>(-71, 1000)}),
+      makeRowVector({"c0"}, {makeFlatSequence<int32_t>(-69, 1000)}),
+  };
+
+  std::string query{"SELECT c0, count(1) FROM tmp GROUP BY 1"};
+  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  auto plan =
+      PlanBuilder(planNodeIdGenerator)
+          .localPartition(
+              {"c0"},
+              {PlanBuilder(planNodeIdGenerator).values(vectors).planNode()})
+          .partialAggregation({"c0"}, {"count(1)"})
+          .planNode();
+  createDuckDbTable(vectors);
+
+  AssertQueryBuilder queryBuilder(plan, duckDbQueryRunner_);
+  queryBuilder.maxDrivers(2);
+
+  std::unordered_map<std::string, std::string> configs;
+  configs[core::QueryConfig::kMaxLocalExchangePartitionCount] = "2";
+
+  // no buffer
+  configs
+      [core::QueryConfig::kMinLocalExchangePartitionCountToUsePartitionBuffer] =
+          std::to_string(100);
+  queryBuilder.configs(configs);
+  verifyExchangeSourceOperatorStats(
+      queryBuilder.assertResults(query), 2200, 8, 2);
+
+  // tiny buffer
+  configs
+      [core::QueryConfig::kMinLocalExchangePartitionCountToUsePartitionBuffer] =
+          std::to_string(2);
+  configs[core::QueryConfig::kMaxLocalExchangePartitionBufferSize] =
+      std::to_string(1);
+  queryBuilder.configs(configs);
+  verifyExchangeSourceOperatorStats(
+      queryBuilder.assertResults(query), 2200, 8, 2);
+
+  // small buffer
+  configs[core::QueryConfig::kMaxLocalExchangePartitionBufferSize] =
+      std::to_string(300);
+  queryBuilder.configs(configs);
+  verifyExchangeSourceOperatorStats(
+      queryBuilder.assertResults(query), 2200, 6, 2);
+
+  // medium buffer
+  configs[core::QueryConfig::kMaxLocalExchangePartitionBufferSize] =
+      std::to_string(1000);
+  queryBuilder.configs(configs);
+  verifyExchangeSourceOperatorStats(
+      queryBuilder.assertResults(query), 2200, 4, 2);
+
+  // large buffer
+  configs[core::QueryConfig::kMaxLocalExchangePartitionBufferSize] =
+      std::to_string(1000000);
+  queryBuilder.configs(configs);
+  verifyExchangeSourceOperatorStats(
+      queryBuilder.assertResults(query), 2200, 2, 2);
+}
+
+TEST_F(LocalPartitionTest, partitionBufferingPreserveEncoding) {
+  std::vector<RowVectorPtr> vectors = {
+      makeRowVector({"c0"}, {makeConstant<int32_t>(0, 100)}),
+      makeRowVector({"c0"}, {makeConstant<int32_t>(0, 100)}),
+      makeRowVector({"c0"}, {makeConstant<int32_t>(1, 100)}),
+      makeRowVector({"c0"}, {makeConstant<int32_t>(1, 100)}),
+  };
+
+  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  auto plan =
+      PlanBuilder(planNodeIdGenerator)
+          .localPartition(
+              {"c0"},
+              {PlanBuilder(planNodeIdGenerator).values(vectors).planNode()})
+          .planNode();
+
+  std::unordered_map<std::string, std::string> configs;
+  // enable buffering
+  configs
+      [core::QueryConfig::kMinLocalExchangePartitionCountToUsePartitionBuffer] =
+          std::to_string(2);
+  configs[core::QueryConfig::kMaxLocalExchangePartitionBufferSize] =
+      std::to_string(1000000);
+
+  // enable preserve encoding
+  configs[core::QueryConfig::kLocalExchangePartitionBufferPreserveEncoding] =
+      "true";
+
+  CursorParameters params;
+  params.planNode = plan;
+  params.copyResult = false;
+  params.maxDrivers = 2;
+  params.queryConfigs = configs;
+  auto cursor = TaskCursor::create(params);
+  int numRows = 0;
+  int numVectors = 0;
+  while (cursor->moveNext()) {
+    auto* batch = cursor->current()->as<RowVector>();
+    ASSERT_EQ(batch->childrenSize(), 1);
+    auto& column = batch->childAt(0);
+    ASSERT_EQ(column->encoding(), VectorEncoding::Simple::CONSTANT);
+    numRows += batch->size();
+    numVectors++;
+  }
+  ASSERT_EQ(numRows, 400);
+  ASSERT_EQ(numVectors, 2);
 }
 
 TEST_F(LocalPartitionTest, maxBufferSizeGather) {
@@ -301,6 +447,7 @@ TEST_F(LocalPartitionTest, maxBufferSizePartition) {
 
   auto makeQueryBuilder = [&](const char* bufferSize) {
     AssertQueryBuilder queryBuilder(op, duckDbQueryRunner_);
+
     queryBuilder.maxDrivers(2);
     for (auto i = 0; i < filePaths.size(); ++i) {
       queryBuilder.split(
@@ -439,7 +586,7 @@ TEST_F(LocalPartitionTest, blockingOnLocalExchangeQueue) {
   }
 }
 
-TEST_F(LocalPartitionTest, multipleExchanges) {
+TEST_P(LocalPartitionTestParametrized, multipleExchanges) {
   std::vector<RowVectorPtr> vectors = {
       makeRowVector({
           makeFlatSequence<int32_t>(0, 100),
@@ -491,6 +638,7 @@ TEST_F(LocalPartitionTest, multipleExchanges) {
   createDuckDbTable(vectors);
 
   AssertQueryBuilder queryBuilder(op, duckDbQueryRunner_);
+  applyTestParameters(queryBuilder);
   for (auto i = 0; i < filePaths.size(); ++i) {
     queryBuilder.split(
         scanNodeIds[i], makeHiveConnectorSplit(filePaths[i]->getPath()));
@@ -502,7 +650,7 @@ TEST_F(LocalPartitionTest, multipleExchanges) {
       ") t GROUP BY 1");
 }
 
-TEST_F(LocalPartitionTest, earlyCompletion) {
+TEST_P(LocalPartitionTestParametrized, earlyCompletion) {
   std::vector<RowVectorPtr> data = {
       makeRowVector({makeFlatSequence(3, 100)}),
       makeRowVector({makeFlatSequence(7, 100)}),
@@ -518,10 +666,11 @@ TEST_F(LocalPartitionTest, earlyCompletion) {
           .limit(0, 2, true)
           .planNode();
 
-  auto task = assertQuery(plan, "VALUES (3), (4)");
+  AssertQueryBuilder queryBuilder(plan, duckDbQueryRunner_);
+  applyTestParameters(queryBuilder);
+  auto task = queryBuilder.maxDrivers(2).assertResults("VALUES (3), (4)");
 
   verifyExchangeSourceOperatorStats(task, 100, 1, 1);
-
   // Make sure there is only one reference to Task left, i.e. no Driver is
   // blocked forever.
   assertTaskReferenceCount(task, 1);
@@ -643,15 +792,15 @@ TEST_F(LocalPartitionTest, unionAll) {
       "SELECT * FROM t1 UNION ALL SELECT * FROM t2");
 }
 
-TEST_F(LocalPartitionTest, unionAllLocalExchange) {
+TEST_P(LocalPartitionTestParametrized, unionAllLocalExchange) {
   auto data1 = makeRowVector({"d0"}, {makeFlatVector<StringView>({"x"})});
   auto data2 = makeRowVector({"e0"}, {makeFlatVector<StringView>({"y"})});
-
   for (bool serialExecutionMode : {false, true}) {
     SCOPED_TRACE(fmt::format("serialExecutionMode {}", serialExecutionMode));
     auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
-    AssertQueryBuilder(duckDbQueryRunner_)
-        .serialExecution(serialExecutionMode)
+    AssertQueryBuilder queryBuilder(duckDbQueryRunner_);
+    applyTestParameters(queryBuilder);
+    queryBuilder.serialExecution(serialExecutionMode)
         .plan(PlanBuilder(planNodeIdGenerator)
                   .localPartitionRoundRobin(
                       {PlanBuilder(planNodeIdGenerator)
@@ -950,6 +1099,76 @@ TEST_F(LocalPartitionTest, vectorPool) {
   ASSERT_EQ(vector.get(), vectors[2]);
   ASSERT_FALSE(vectorPool.pop());
 }
+
+TEST_F(LocalPartitionTest, barrier) {
+  const auto rowType = ROW({"c0"}, {BIGINT()});
+  std::vector<RowVectorPtr> vectors;
+  const int numSources{3};
+  std::vector<std::vector<std::shared_ptr<TempFilePath>>> tempFiles(numSources);
+  const int numSplits{5};
+  for (int i = 0; i < numSources; ++i) {
+    std::vector<RowVectorPtr> sourceVectors;
+    for (int32_t j = 0; j < numSplits; ++j) {
+      auto vector = std::dynamic_pointer_cast<RowVector>(
+          BatchMaker::createBatch(rowType, 100, *pool_));
+      sourceVectors.push_back(vector);
+      tempFiles[i].push_back(TempFilePath::create());
+    }
+    HiveConnectorTestBase::writeToFiles(
+        toFilePaths(tempFiles[i]), sourceVectors);
+    std::copy(
+        sourceVectors.begin(),
+        sourceVectors.end(),
+        std::back_inserter(vectors));
+  }
+  createDuckDbTable(vectors);
+
+  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+
+  std::vector<core::PlanNodeId> scanNodeIds;
+  auto tableScanNode = [&]() {
+    auto node = PlanBuilder(planNodeIdGenerator).tableScan(rowType).planNode();
+    scanNodeIds.push_back(node->id());
+    return node;
+  };
+
+  auto plan = PlanBuilder(planNodeIdGenerator)
+                  .localPartition(
+                      {},
+                      {
+                          tableScanNode(),
+                          tableScanNode(),
+                          tableScanNode(),
+                      })
+                  .planNode();
+
+  for (const auto hasBarrier : {false, true}) {
+    SCOPED_TRACE(fmt::format("hasBarrier {}", hasBarrier));
+    AssertQueryBuilder queryBuilder(plan, duckDbQueryRunner_);
+    queryBuilder.barrierExecution(hasBarrier).serialExecution(true);
+    for (auto i = 0; i < numSources; ++i) {
+      for (auto j = 0; j < numSplits; ++j) {
+        queryBuilder.split(
+            scanNodeIds[i], makeHiveConnectorSplit(tempFiles[i][j]->getPath()));
+      }
+    }
+
+    const auto task = queryBuilder.assertResults("SELECT * FROM tmp");
+    ASSERT_EQ(task->taskStats().numBarriers, hasBarrier ? numSplits : 0);
+  }
+}
+
+INSTANTIATE_TEST_SUITE_P(
+    LocalExchangePartitionBuffer,
+    LocalPartitionTestParametrized,
+    testing::Values(
+        TestParam{1000, 1000, "partition_buffer_disabled"},
+        TestParam{0, 1024, "partition_buffer_enabled"},
+        TestParam{0, 0, "partition_buffer_enabled_always_flush"},
+        TestParam{0, 10 * 1024 * 1024, "partition_buffer_enabled_never_flush"}),
+    [](const testing::TestParamInfo<TestParam>& info) {
+      return std::string{info.param.name};
+    });
 
 } // namespace
 } // namespace facebook::velox::exec::test

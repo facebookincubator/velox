@@ -932,6 +932,28 @@ void appendProjections(
   }
 }
 
+void appendAggregations(
+    const std::string& indentation,
+    const AggregationNode& op,
+    size_t cnt,
+    std::stringstream& stream) {
+  if (cnt == 0) {
+    return;
+  }
+
+  for (auto i = 0; i < cnt; ++i) {
+    const auto& expr = op.aggregates().at(i).call;
+    stream << indentation << i << ": "
+           << (op.aggregates().at(i).distinct ? "DISTINCT" : "")
+           << truncate(expr->toString()) << std::endl;
+  }
+
+  if (cnt < op.aggregates().size()) {
+    stream << indentation << "... " << (op.aggregates().size() - cnt) << " more"
+           << std::endl;
+  }
+}
+
 void appendExprSummary(
     const std::string& indentation,
     const PlanSummaryOptions& options,
@@ -1574,6 +1596,12 @@ bool IndexLookupJoinNode::isSupported(core::JoinType joinType) {
   }
 }
 
+bool isIndexLookupJoin(const core::PlanNode* planNode) {
+  const auto* indexLookupJoin =
+      dynamic_cast<const core::IndexLookupJoinNode*>(planNode);
+  return indexLookupJoin != nullptr;
+}
+
 // static
 const JoinType NestedLoopJoinNode::kDefaultJoinType = JoinType::kInner;
 // static
@@ -1598,7 +1626,23 @@ NestedLoopJoinNode::NestedLoopJoinNode(
 
   auto leftType = sources_[0]->outputType();
   auto rightType = sources_[1]->outputType();
-  for (const auto& name : outputType_->names()) {
+  auto numOutputColumms = outputType_->size();
+  if (core::isLeftSemiProjectJoin(joinType)) {
+    --numOutputColumms;
+    VELOX_CHECK_EQ(outputType_->childAt(numOutputColumms), BOOLEAN());
+    const auto& name = outputType_->nameOf(numOutputColumms);
+    VELOX_CHECK(
+        !leftType->containsChild(name),
+        "Match column '{}' cannot be present in left source.",
+        name);
+    VELOX_CHECK(
+        !rightType->containsChild(name),
+        "Match column '{}' cannot be present in right source.",
+        name);
+  }
+
+  for (auto i = 0; i < numOutputColumms; ++i) {
+    const auto name = outputType_->nameOf(i);
     const bool leftContains = leftType->containsChild(name);
     const bool rightContains = rightType->containsChild(name);
     VELOX_USER_CHECK(
@@ -1632,6 +1676,7 @@ bool NestedLoopJoinNode::isSupported(core::JoinType joinType) {
     case core::JoinType::kLeft:
     case core::JoinType::kRight:
     case core::JoinType::kFull:
+    case core::JoinType::kLeftSemiProject:
       return true;
 
     default:
@@ -2967,8 +3012,10 @@ void collectLeafPlanNodeIds(
     return;
   }
 
-  for (const auto& child : planNode.sources()) {
-    collectLeafPlanNodeIds(*child, leafIds);
+  const auto& sources = planNode.sources();
+  const auto numSources = isIndexLookupJoin(&planNode) ? 1 : sources.size();
+  for (int i = 0; i < numSources; ++i) {
+    collectLeafPlanNodeIds(*sources[i], leafIds);
   }
 }
 } // namespace
@@ -3074,6 +3121,28 @@ void FilterNode::accept(
     const PlanNodeVisitor& visitor,
     PlanNodeVisitorContext& context) const {
   visitor.visit(*this, context);
+}
+
+void AggregationNode::addSummaryDetails(
+    const std::string& indentation,
+    const PlanSummaryOptions& options,
+    std::stringstream& stream) const {
+  std::stringstream out;
+  SummarizeExprVisitor::Context exprCtx;
+  SummarizeExprVisitor visitor;
+  for (const auto& aggregate : aggregates()) {
+    aggregate.call->accept(visitor, exprCtx);
+  }
+
+  appendExprSummary(indentation, options, exprCtx, stream);
+
+  stream << indentation << "aggregations: " << aggregates().size() << std::endl;
+
+  {
+    const auto cnt =
+        std::min(options.aggregate.maxAggregations, aggregates().size());
+    appendAggregations(indentation + "   ", *this, cnt, stream);
+  }
 }
 
 // static
