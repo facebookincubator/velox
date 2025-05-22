@@ -11,27 +11,25 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-ARG base=ubuntu:22.04
-FROM ${base}
 
-SHELL ["/bin/bash", "-o", "pipefail", "-c"]
+#
+# Try to find Facebook xxhash library This will define Xxhash_FOUND
+# Xxhash_INCLUDE_DIR Xxhash_LIBRARY
+#
 
-RUN apt update && \
-      apt install -y sudo \
-            lsb-release \
-            pip \
-            python3
-            
+find_path(Xxhash_INCLUDE_DIR NAMES xxhash.h)
 
-ADD scripts /velox/scripts/
+find_library(Xxhash_LIBRARY_RELEASE NAMES xxhash)
 
-# TZ and DEBIAN_FRONTEND="noninteractive"
-# are required to avoid tzdata installation
-# to prompt for region selection.
-ARG DEBIAN_FRONTEND="noninteractive"
-# Set a default timezone, can be overriden via ARG
-ARG tz="Etc/UTC"
-ENV TZ=${tz}
-RUN /velox/scripts/setup-ubuntu.sh
+include(SelectLibraryConfigurations)
+select_library_configurations(Xxhash)
 
-WORKDIR /velox
+include(FindPackageHandleStandardArgs)
+find_package_handle_standard_args(Xxhash DEFAULT_MSG Xxhash_LIBRARY
+                                  Xxhash_INCLUDE_DIR)
+
+if(Xxhash_FOUND)
+  message(STATUS "Found xxhash: ${Xxhash_LIBRARY}")
+endif()
+
+mark_as_advanced(Xxhash_INCLUDE_DIR Xxhash_LIBRARY)

@@ -382,6 +382,15 @@ class RowReaderOptions {
     formatSpecificOptions_ = std::move(options);
   }
 
+  const std::unordered_map<std::string, std::string>& serdeParameters() const {
+    return serdeParameters_;
+  }
+
+  void setSerdeParameters(
+      std::unordered_map<std::string, std::string> serdeParameters) {
+    serdeParameters_ = std::move(serdeParameters);
+  }
+
   const std::unordered_map<std::string, std::string>& storageParameters()
       const {
     return storageParameters_;
@@ -413,7 +422,10 @@ class RowReaderOptions {
   size_t decodingParallelismFactor_{0};
   std::optional<RowNumberColumnInfo> rowNumberColumnInfo_{std::nullopt};
   // Parameters that are provided as the physical storage properties.
-  std::unordered_map<std::string, std::string> storageParameters_ = {};
+  std::unordered_map<std::string, std::string> storageParameters_{};
+  // Parameters that are provided as the serialization/deserialization
+  // properties.
+  std::unordered_map<std::string, std::string> serdeParameters_{};
 
   // Function to populate metrics related to feature projection stats
   // in Koski. This gets fired in FlatMapColumnReader.
@@ -611,6 +623,14 @@ class ReaderOptions : public io::ReaderOptions {
     selectiveNimbleReaderEnabled_ = value;
   }
 
+  bool allowEmptyFile() const {
+    return allowEmptyFile_;
+  }
+
+  void setAllowEmptyFile(bool value) {
+    allowEmptyFile_ = value;
+  }
+
  private:
   uint64_t tailLocation_;
   FileFormat fileFormat_;
@@ -627,6 +647,7 @@ class ReaderOptions : public io::ReaderOptions {
   const tz::TimeZone* sessionTimezone_{nullptr};
   bool adjustTimestampToTimezone_{false};
   bool selectiveNimbleReaderEnabled_{false};
+  bool allowEmptyFile_{false};
 };
 
 struct WriterOptions {

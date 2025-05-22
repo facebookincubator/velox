@@ -217,7 +217,7 @@ void HashJoinBridge::setHashTable(
     bool hasNullKeys,
     HashJoinTableSpillFunc&& tableSpillFunc) {
   VELOX_CHECK_NOT_NULL(table, "setHashTable called with null table");
-
+  VELOX_CHECK(table->numDistinct() == 0 || spillPartitionSet.empty());
   std::vector<ContinuePromise> promises;
   {
     std::lock_guard<std::mutex> l(mutex_);
@@ -275,24 +275,11 @@ void HashJoinBridge::appendSpilledHashTablePartitionsLocked(
   if (spillPartitionSet.empty()) {
     return;
   }
-  auto spillPartitionIdSet = toSpillPartitionIdSet(spillPartitionSet);
-  if (restoringSpillPartitionId_.has_value()) {
-    for ([[maybe_unused]] const auto& id : spillPartitionIdSet) {
-      VELOX_DCHECK_LT(
-          restoringSpillPartitionId_->spillLevel(), id.spillLevel());
-    }
-  }
-
-  for (auto& partitionEntry : spillPartitionSet) {
-    const auto id = partitionEntry.first;
-    VELOX_CHECK_EQ(spillPartitionSets_.count(id), 0);
-    spillPartitionSets_.emplace(id, std::move(partitionEntry.second));
-  }
+  spillPartitionSet_.insert(std::move(spillPartitionSet));
 }
 
 void HashJoinBridge::setAntiJoinHasNullKeys() {
   std::vector<ContinuePromise> promises;
-  SpillPartitionSet spillPartitions;
   {
     std::lock_guard<std::mutex> l(mutex_);
     VELOX_CHECK(started_);
@@ -301,7 +288,7 @@ void HashJoinBridge::setAntiJoinHasNullKeys() {
 
     buildResult_ = HashBuildResult{};
     restoringSpillPartitionId_.reset();
-    spillPartitions.swap(spillPartitionSets_);
+    spillPartitionSet_.clear();
     promises = std::move(promises_);
   }
   notify(std::move(promises));
@@ -326,9 +313,8 @@ std::optional<HashJoinBridge::HashBuildResult> HashJoinBridge::tableOrFuture(
   return std::nullopt;
 }
 
-bool HashJoinBridge::probeFinished() {
+void HashJoinBridge::probeFinished(bool restart) {
   std::vector<ContinuePromise> promises;
-  bool hasSpillInput = false;
   {
     std::lock_guard<std::mutex> l(mutex_);
     VELOX_CHECK(started_);
@@ -340,23 +326,39 @@ bool HashJoinBridge::probeFinished() {
     probeStarted_ = false;
     VELOX_CHECK_NULL(tableSpillFunc_);
 
-    // NOTE: we are clearing the hash table as it has been fully processed and
-    // not needed anymore. We'll wait for the HashBuild operator to build a new
-    // table from the next spill partition now.
-    buildResult_.reset();
-
-    if (!spillPartitionSets_.empty()) {
-      hasSpillInput = true;
-      restoringSpillPartitionId_ = spillPartitionSets_.begin()->first;
-      restoringSpillShards_ =
-          spillPartitionSets_.begin()->second->split(numBuilders_);
+    if (restart) {
+      // Applies only to mixed grouped execution mode. Finished current probe
+      // group processing. For the next group, the spilled table partitions from
+      // this finishing group processing will be reused. At the start of the
+      // next group processing, probe input will be forced to spill based on the
+      // this group's table spill partitions. Since the spilled partitions are
+      // reused, hash build is not needed. Directly set 'buildResult_',
+      // bypassing hash build. Hence do not notify the build operators.
+      VELOX_CHECK(!spillPartitionSet_.hasNext());
+      buildResult_->table->clear(true);
+      buildResult_->restoredPartitionId = std::nullopt;
+      buildResult_->spillPartitionIds =
+          toSpillPartitionIdSet(spillPartitionSet_.spillPartitions());
+      spillPartitionSet_.reset();
+      return;
+    }
+    if (spillPartitionSet_.hasNext()) {
+      // Finished probing one restored table from an unspilled partition. Wait
+      // for the hash build operator to build a new table from the next spill
+      // partition.
+      buildResult_.reset();
+      auto nextSpillPartition = spillPartitionSet_.next();
+      restoringSpillPartitionId_ = nextSpillPartition.id();
+      restoringSpillShards_ = nextSpillPartition.split(numBuilders_);
       VELOX_CHECK_EQ(restoringSpillShards_.size(), numBuilders_);
-      spillPartitionSets_.erase(spillPartitionSets_.begin());
+    } else {
+      // Probe fully completed, resetting 'buildResult_' to signal build side to
+      // finish.
+      buildResult_.reset();
     }
     promises = std::move(promises_);
   }
   notify(std::move(promises));
-  return hasSpillInput;
 }
 
 std::optional<HashJoinBridge::SpillInput> HashJoinBridge::spillInputOrFuture(
@@ -379,7 +381,7 @@ std::optional<HashJoinBridge::SpillInput> HashJoinBridge::spillInputOrFuture(
   // If 'restoringSpillPartitionId_' is not set after probe side is done, then
   // the join processing is all done.
   if (!restoringSpillPartitionId_.has_value()) {
-    VELOX_CHECK(spillPartitionSets_.empty());
+    VELOX_CHECK(!spillPartitionSet_.hasNext());
     VELOX_CHECK(restoringSpillShards_.empty());
     return HashJoinBridge::SpillInput{};
   }
@@ -388,6 +390,11 @@ std::optional<HashJoinBridge::SpillInput> HashJoinBridge::spillInputOrFuture(
   auto spillShard = std::move(restoringSpillShards_.back());
   restoringSpillShards_.pop_back();
   return SpillInput(std::move(spillShard));
+}
+
+bool HashJoinBridge::testingHasMoreSpilledPartitions() {
+  std::lock_guard<std::mutex> l(mutex_);
+  return spillPartitionSet_.hasNext();
 }
 
 bool isLeftNullAwareJoinWithFilter(

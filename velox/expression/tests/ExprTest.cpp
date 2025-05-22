@@ -50,7 +50,7 @@ namespace {
 class ExprTest : public testing::Test, public VectorTestBase {
  protected:
   static void SetUpTestCase() {
-    memory::MemoryManager::testingSetInstance({});
+    memory::MemoryManager::testingSetInstance(memory::MemoryManager::Options{});
   }
 
   void SetUp() override {
@@ -1406,9 +1406,10 @@ TEST_P(ParameterizedExprTest, selectiveLazyLoadingIf) {
 namespace {
 class StatefulVectorFunction : public exec::VectorFunction {
  public:
-  explicit StatefulVectorFunction(
+  StatefulVectorFunction(
       const std::string& /*name*/,
-      const std::vector<exec::VectorFunctionArg>& inputs)
+      const std::vector<exec::VectorFunctionArg>& inputs,
+      const core::QueryConfig& /* config */)
       : numInputs_(inputs.size()) {}
 
   void apply(

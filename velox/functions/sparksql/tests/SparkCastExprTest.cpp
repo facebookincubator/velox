@@ -27,7 +27,7 @@ class SparkCastExprTest : public functions::test::CastBaseTest {
   static void SetUpTestCase() {
     parse::registerTypeResolver();
     functions::sparksql::registerFunctions("");
-    memory::MemoryManager::testingSetInstance({});
+    memory::MemoryManager::testingSetInstance(memory::MemoryManager::Options{});
   }
 
   template <typename T>
@@ -921,6 +921,15 @@ TEST_F(SparkCastExprTest, bigintToBinary) {
        std::string("\0\0\0\0\0\x02\xBF\x20", 8),
        std::string("\x7F\xFF\xFF\xFF\xFF\xFF\xFF\xFF", 8),
        std::string("\x80\x00\x00\x00\x00\x00\x00\x00", 8)});
+}
+
+TEST_F(SparkCastExprTest, boolToTimestamp) {
+  testCast(
+      makeFlatVector<bool>({true, false}),
+      makeFlatVector<Timestamp>({
+          Timestamp(0, 1000),
+          Timestamp(0, 0),
+      }));
 }
 
 } // namespace

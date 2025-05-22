@@ -139,6 +139,16 @@ struct PlanSummaryOptions {
   /// well as up to 2 fields of a struct: ARRAY(REAL), MAP(INTEGER, ARRAY),
   /// ROW(VARCHAR, ARRAY,...).
   size_t maxChildTypes = 0;
+
+  /// Options that apply specifically to AGGREGATION nodes.
+  struct AggregateOptions {
+    /// For a given AGGREGATION node, maximum number of aggregate expressions
+    /// to include in the summary. By default, no aggregate expression is
+    /// included.
+    size_t maxAggregations = 0;
+  };
+
+  AggregateOptions aggregate = {};
 };
 
 class PlanNode : public ISerializable {
@@ -192,6 +202,14 @@ class PlanNode : public ISerializable {
   /// Returns true if this plan node operator is spillable and 'queryConfig' has
   /// enabled it.
   virtual bool canSpill(const QueryConfig& queryConfig) const {
+    return false;
+  }
+
+  /// Returns true if this plan node operator supports task barrier processing.
+  /// To support barrier processing, the operator must be able to drain its
+  /// buffered output when it receives the drain signal at split boundary. Not
+  /// all plan nodes support barrier processing. For example, Hash Join doesn't.
+  virtual bool supportsBarrier() const {
     return false;
   }
 
@@ -602,6 +620,10 @@ class FilterNode : public PlanNode {
         filter_->type()->toString());
   }
 
+  bool supportsBarrier() const override {
+    return true;
+  }
+
   class Builder {
    public:
     Builder() = default;
@@ -819,6 +841,10 @@ class ProjectNode : public AbstractProjectNode {
       PlanNodePtr source)
       : AbstractProjectNode(id, names, projections, source) {}
 
+  bool supportsBarrier() const override {
+    return true;
+  }
+
   class Builder : public AbstractProjectNode::Builder<ProjectNode, Builder> {
    public:
     Builder() : AbstractProjectNode::Builder<ProjectNode, Builder>() {}
@@ -921,6 +947,10 @@ class TableScanNode : public PlanNode {
         std::shared_ptr<connector::ColumnHandle>>>
         assignments_;
   };
+
+  bool supportsBarrier() const override {
+    return true;
+  }
 
   const std::vector<PlanNodePtr>& sources() const override;
 
@@ -1157,6 +1187,10 @@ class AggregationNode : public PlanNode {
     std::optional<PlanNodePtr> source_;
   };
 
+  bool supportsBarrier() const override {
+    return isPreGrouped();
+  }
+
   const std::vector<PlanNodePtr>& sources() const override {
     return sources_;
   }
@@ -1236,6 +1270,11 @@ class AggregationNode : public PlanNode {
   static const std::optional<FieldAccessTypedExprPtr> kDefaultGroupId;
 
   void addDetails(std::stringstream& stream) const override;
+
+  void addSummaryDetails(
+      const std::string& indentation,
+      const PlanSummaryOptions& options,
+      std::stringstream& stream) const override;
 
   const Step step_;
   const std::vector<FieldAccessTypedExprPtr> groupingKeys_;
@@ -2329,6 +2368,10 @@ class LocalPartitionNode : public PlanNode {
     return scaleWriter_;
   }
 
+  bool supportsBarrier() const override {
+    return !scaleWriter_;
+  }
+
   Type type() const {
     return type_;
   }
@@ -3069,6 +3112,10 @@ class MergeJoinNode : public AbstractJoinNode {
 
   folly::dynamic serialize() const override;
 
+  bool supportsBarrier() const override {
+    return true;
+  }
+
   /// Returns true if the merge join supports this join type, otherwise false.
   static bool isSupported(JoinType joinType);
 
@@ -3285,6 +3332,10 @@ class IndexLookupJoinNode : public AbstractJoinNode {
     std::optional<std::vector<IndexLookupConditionPtr>> joinConditions_;
   };
 
+  bool supportsBarrier() const override {
+    return true;
+  }
+
   const TableScanNodePtr& lookupSource() const {
     return lookupSourceNode_;
   }
@@ -3314,6 +3365,9 @@ class IndexLookupJoinNode : public AbstractJoinNode {
 
   const std::vector<IndexLookupConditionPtr> joinConditions_;
 };
+
+/// Returns true if 'planNode' is index lookup join node.
+bool isIndexLookupJoin(const core::PlanNode* planNode);
 
 /// Represents inner/outer nested loop joins. Translates to an
 /// exec::NestedLoopJoinProbe and exec::NestedLoopJoinBuild. A separate
@@ -3947,6 +4001,10 @@ class UnnestNode : public PlanNode {
     std::optional<std::string> ordinalityName_;
     std::optional<PlanNodePtr> source_;
   };
+
+  bool supportsBarrier() const override {
+    return true;
+  }
 
   /// The order of columns in the output is: replicated columns (in the order
   /// specified), unnested columns (in the order specified, for maps: key

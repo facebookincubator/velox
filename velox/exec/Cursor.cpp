@@ -232,7 +232,11 @@ class MultiThreadedTaskCursor : public TaskCursorBase {
         Task::ExecutionMode::kParallel,
         // consumer
         [queue, copyResult = params.copyResult](
-            const RowVectorPtr& vector, velox::ContinueFuture* future) {
+            const RowVectorPtr& vector,
+            bool drained,
+            velox::ContinueFuture* future) {
+          VELOX_CHECK(
+              !drained, "Unexpected drain in multithreaded task cursor");
           if (!vector || !copyResult) {
             return queue->enqueue(vector, future);
           }
@@ -302,6 +306,15 @@ class MultiThreadedTaskCursor : public TaskCursorBase {
     return current_ != nullptr;
   }
 
+  void setNoMoreSplits() override {
+    VELOX_CHECK(!noMoreSplits_);
+    noMoreSplits_ = true;
+  }
+
+  bool noMoreSplits() const override {
+    return noMoreSplits_;
+  }
+
   bool hasNext() override {
     return queue_->hasNext();
   }
@@ -347,6 +360,7 @@ class MultiThreadedTaskCursor : public TaskCursorBase {
   std::shared_ptr<exec::Task> task_;
   RowVectorPtr current_;
   bool atEnd_{false};
+  tsan_atomic<bool> noMoreSplits_{false};
   std::exception_ptr error_;
 };
 
@@ -385,6 +399,15 @@ class SingleThreadedTaskCursor : public TaskCursorBase {
     // no-op
   }
 
+  void setNoMoreSplits() override {
+    VELOX_CHECK(!noMoreSplits_);
+    noMoreSplits_ = true;
+  }
+
+  bool noMoreSplits() const override {
+    return noMoreSplits_;
+  }
+
   bool moveNext() override {
     if (!hasNext()) {
       return false;
@@ -410,7 +433,7 @@ class SingleThreadedTaskCursor : public TaskCursorBase {
       }
       // When next is returned from task as a null pointer.
       if (!future.valid()) {
-        VELOX_CHECK(!task_->isRunning());
+        VELOX_CHECK(!task_->isRunning() || !noMoreSplits_);
         return false;
       }
       // Task is blocked for some reason. Wait and try again.
@@ -436,6 +459,7 @@ class SingleThreadedTaskCursor : public TaskCursorBase {
 
  private:
   std::shared_ptr<exec::Task> task_;
+  bool noMoreSplits_{false};
   RowVectorPtr current_;
   RowVectorPtr next_;
   std::exception_ptr error_;
