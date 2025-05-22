@@ -19,12 +19,7 @@
 namespace facebook::velox::functions::sparksql::test {
 namespace {
 
-class VarcharTypeWriteSideCheckTest : public SparkFunctionBaseTest {
- protected:
-  // This is a five codepoint sequence that renders as a single emoji.
-  static constexpr char kWomanFacepalmingLightSkinTone[] =
-      "\xF0\x9F\xA4\xA6\xF0\x9F\x8F\xBB\xE2\x80\x8D\xE2\x99\x80\xEF\xB8\x8F";
-};
+class VarcharTypeWriteSideCheckTest : public SparkFunctionBaseTest {};
 
 TEST_F(VarcharTypeWriteSideCheckTest, varcharTypeWriteSideCheck) {
   const auto varcharTypeWriteSideCheck =
