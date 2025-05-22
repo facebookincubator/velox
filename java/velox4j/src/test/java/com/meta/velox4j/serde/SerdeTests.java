@@ -167,7 +167,6 @@ public final class SerdeTests {
         Map.of("sk", "sv"),
         Optional.of("extra"),
         Map.of("serde_key", "serde_value"),
-        Map.of("storage_key", "storage_key"),
         Map.of("info_key", "info_value"),
         Optional.of(new FileProperties(OptionalLong.of(100), OptionalLong.of(50))),
         Optional.of(new RowIdProperties(5, 10, "UUID-100")));
@@ -198,7 +197,6 @@ public final class SerdeTests {
         Map.of("sk", "sv"),
         Optional.empty(),
         Map.of("serde_key", "serde_value"),
-        Map.of("storage_key", "storage_key"),
         Map.of("info_key", "info_value"),
         Optional.of(new FileProperties(OptionalLong.empty(), OptionalLong.of(50))),
         Optional.of(new RowIdProperties(5, 10, "UUID-100")));
