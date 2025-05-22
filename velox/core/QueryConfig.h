@@ -850,8 +850,10 @@ class QueryConfig {
   }
 
   uint32_t localMergeMaxNumMergeSources() const {
-    return get<uint32_t>(
+    const auto maxNumMergeSources = get<uint32_t>(
         kLocalMergeMaxNumMergeSources, std::numeric_limits<uint32_t>::max());
+    VELOX_CHECK_GT(maxNumMergeSources, 0);
+    return maxNumMergeSources;
   }
 
   int32_t maxSpillLevel() const {

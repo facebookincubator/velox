@@ -66,21 +66,22 @@ class Merge : public SourceOperator {
  private:
   // Start sources for this merge run, it may start either all the sources at
   // once or a portion of the sources at a time to cap the memory usage.
-  void maybeStartMoreSources();
+  void maybeStartNextMergeSourceGroup();
 
-  // Returns true if all sources can not be merged at once.
+  // Returns true if needs to spill the merged source output if all sources can
+  // not be merged at once.
   bool needSpill() const {
     return sourceMerger_ != nullptr && maxNumMergeSources_ < sources_.size();
   }
 
-  void setupOutputSpiller();
+  void maybeSetupOutputSpiller();
 
-  // Spill the output of a subset of merge sources.
+  // Spill the output of a partial merge sources.
   void spill();
 
-  // Force to finish spill for each partial merge run to ensure the order within
+  // Invoked at the end for each partial merge run to ensure the order within
   // each spill file.
-  void finishSpill();
+  void finishMergeSourceGroup();
 
   // Create spillMerger_ exactly once if spill has happened.
   void setupSpillMerger();
@@ -91,7 +92,8 @@ class Merge : public SourceOperator {
 
   /// Maximum number of rows in the output batch.
   const vector_size_t outputBatchSize_;
-  std::vector<SpillSortKey> sortingKeys_;
+  const std::vector<SpillSortKey> sortingKeys_;
+
   RowVectorPtr output_;
   /// Number of rows accumulated in 'output_' so far.
   vector_size_t outputSize_{0};
@@ -104,32 +106,22 @@ class Merge : public SourceOperator {
   std::unique_ptr<SourceMerger> sourceMerger_;
   std::unique_ptr<SpillMerger> spillMerger_;
   std::unique_ptr<MergeSpiller> mergeOutputSpiller_;
+  // Number of total spilled rows, it must be equal to the input rows.
   uint64_t numSpilledRows_{0};
   // SpillFiles group for all the partial merge runs.
   std::vector<SpillFiles> spillFileGroups_;
 };
 
-/// A utility class for sort-merging data from upstream sourcesof  the
+/// A utility class for sort-merging data from upstream sources of the
 /// `LocalMerge` operator. The `LocalMerge` operator may start only a portion of
 /// the sources at a time to cap the memory usage, hence it might perform
-/// multiple sort-merge operations with each grouping a subset of merge sources.
+/// multiple sort-merge operations with a subset of merge sources.
 class SourceMerger {
  public:
   SourceMerger(
       const RowTypePtr& type,
       std::vector<std::unique_ptr<SourceStream>> sourceStreams,
-      velox::memory::MemoryPool* pool)
-      : type_(type),
-        streams_([&sourceStreams]() {
-          std::vector<SourceStream*> streams;
-          for (auto& cursor : sourceStreams) {
-            streams.push_back(cursor.get());
-          }
-          return streams;
-        }()),
-        merger_(std::make_unique<TreeOfLosers<SourceStream>>(
-            std::move(sourceStreams))),
-        pool_(pool) {}
+      velox::memory::MemoryPool* pool);
 
   void isBlocked(std::vector<ContinueFuture>& sourceBlockingFutures) const;
 
@@ -157,29 +149,14 @@ class SpillMerger {
       uint64_t numSpilledRows,
       std::vector<std::vector<std::unique_ptr<SpillReadFile>>>
           spillReadFilesGroup,
-      velox::memory::MemoryPool* pool)
-      : type_(type),
-        numSpilledRows_(numSpilledRows),
-        merger_([&spillReadFilesGroup]() {
-          std::vector<std::unique_ptr<SpillMergeStream>> streams;
-          streams.reserve(spillReadFilesGroup.size());
-          for (auto i = 0; i < spillReadFilesGroup.size(); ++i) {
-            streams.push_back(ConcatFilesSpillMergeStream::create(
-                i, std::move(spillReadFilesGroup[i])));
-          }
-          return std::make_unique<TreeOfLosers<SpillMergeStream>>(
-              std::move(streams));
-        }()),
-        pool_(pool) {
-    VELOX_CHECK_NOT_NULL(merger_);
-  }
+      velox::memory::MemoryPool* pool);
 
   RowVectorPtr getOutput(vector_size_t maxOutputRows);
 
  private:
   static std::unique_ptr<TreeOfLosers<SpillMergeStream>> createSpillMerger(
       std::vector<std::vector<std::unique_ptr<SpillReadFile>>>
-          spillReadFilesGroup);
+          spillReadFilesGroups);
 
   const RowTypePtr type_;
   // The number of spilled input rows.
