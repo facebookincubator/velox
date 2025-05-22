@@ -18,7 +18,6 @@
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/functions/lib/window/tests/WindowTestBase.h"
 #include "velox/functions/prestosql/window/WindowFunctionsRegistration.h"
-#include "velox/vector/fuzzer/VectorFuzzer.h"
 
 using namespace facebook::velox::exec::test;
 
