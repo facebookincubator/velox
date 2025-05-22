@@ -14,9 +14,7 @@
  * limitations under the License.
  */
 #include "velox/exec/OrderBy.h"
-#include "velox/exec/OperatorUtils.h"
 #include "velox/exec/Task.h"
-#include "velox/vector/FlatVector.h"
 
 namespace facebook::velox::exec {
 
