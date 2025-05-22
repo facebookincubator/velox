@@ -55,6 +55,7 @@ using namespace facebook::velox::exec::test;
 using facebook::velox::exec::test::PrestoQueryRunner;
 using facebook::velox::fuzzer::ArgTypesGenerator;
 using facebook::velox::fuzzer::ArgValuesGenerator;
+using facebook::velox::fuzzer::BingTileArgValuesGenerator;
 using facebook::velox::fuzzer::CastVarcharAndJsonArgValuesGenerator;
 using facebook::velox::fuzzer::ExpressionFuzzer;
 using facebook::velox::fuzzer::FuzzerRunner;
@@ -179,7 +180,17 @@ int main(int argc, char** argv) {
           {"value_at_quantile",
            std::make_shared<TDigestArgValuesGenerator>("value_at_quantile")},
           {"scale_tdigest",
-           std::make_shared<TDigestArgValuesGenerator>("scale_tdigest")}};
+           std::make_shared<TDigestArgValuesGenerator>("scale_tdigest")},
+          {"bing_tile_parent", std::make_shared<BingTileArgValuesGenerator>()},
+          {"bing_tile_children",
+           std::make_shared<BingTileArgValuesGenerator>()},
+          {"bing_tile_coordinates",
+           std::make_shared<BingTileArgValuesGenerator>()},
+          {"bing_tile_polygon", std::make_shared<BingTileArgValuesGenerator>()},
+          {"bing_tile_quadkey", std::make_shared<BingTileArgValuesGenerator>()},
+          {"bing_tile_zoom_level",
+           std::make_shared<BingTileArgValuesGenerator>()},
+      };
 
   std::shared_ptr<facebook::velox::memory::MemoryPool> rootPool{
       facebook::velox::memory::memoryManager()->addRootPool()};
