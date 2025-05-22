@@ -18,7 +18,6 @@
 
 #include <folly/json.h>
 
-#include <numeric>
 #include "velox/common/base/Exceptions.h"
 #include "velox/common/file/File.h"
 #include "velox/common/file/FileSystems.h"
