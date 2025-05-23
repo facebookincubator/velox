@@ -12,7 +12,9 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 include_guard(GLOBAL)
-# GEOS Configuration
+
+block()
+
 set(VELOX_GEOS_BUILD_VERSION 3.10.7)
 set(VELOX_GEOS_BUILD_SHA256_CHECKSUM
     8b2ab4d04d660e27f2006550798f49dd11748c3767455cae9f71967dc437da1f)
@@ -27,14 +29,13 @@ FetchContent_Declare(
   URL_HASH ${VELOX_GEOS_BUILD_SHA256_CHECKSUM}
   PATCH_COMMAND
     git apply "${CMAKE_CURRENT_LIST_DIR}/geos/geos-cmakelists.patch"
-  OVERRIDE_FIND_PACKAGE SYSTEM EXCLUDE_FROM_ALL)
+    OVERRIDE_FIND_PACKAGE SYSTEM EXCLUDE_FROM_ALL)
 
 list(APPEND CMAKE_MODULE_PATH "${geos_SOURCE_DIR}/cmake")
-set(BUILD_SHARED_LIBS ${VELOX_BUILD_SHARED})
+set(BUILD_SHARED_LIBS OFF) 
+set(BUILD_TESTING OFF)
 set(CMAKE_BUILD_TYPE Release)
-set(PREVIOUS_CMAKE_CXX_FLAGS ${CMAKE_CXX_FLAGS})
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS}  -Wno-nonnull ")
-
 # This option defaults to on and adds warning flags that fail the build.
 set(GEOS_BUILD_DEVELOPER OFF)
 
@@ -46,6 +47,4 @@ FetchContent_MakeAvailable(geos)
 
 add_library(GEOS::geos ALIAS geos)
 
-unset(BUILD_SHARED_LIBS)
-set(CMAKE_CXX_FLAGS ${PREVIOUS_CMAKE_CXX_FLAGS})
-set(CMAKE_BUILD_TYPE ${PREVIOUS_BUILD_TYPE})
+endblock()
