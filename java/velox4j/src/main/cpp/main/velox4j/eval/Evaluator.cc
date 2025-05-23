@@ -4,11 +4,11 @@
 namespace velox4j {
 using namespace facebook::velox;
 
-Evaluator::Evaluator(MemoryManager* memoryManager, std::string exprJson)
-    : memoryManager_(memoryManager), exprJson_(exprJson) {
+Evaluator::Evaluator(MemoryManager* memoryManager, const std::string& exprJson)
+    : exprJson_(exprJson) {
   static std::atomic<uint32_t> executionId{0};
   const uint32_t eid = executionId++;
-  auto evaluatorSerdePool = memoryManager_->getVeloxPool(
+  auto evaluatorSerdePool = memoryManager->getVeloxPool(
       fmt::format("Evaluator Serde Memory Pool - EID {}", std::to_string(eid)),
       memory::MemoryPool::Kind::kLeaf);
   auto exprDynamic = folly::parseJson(exprJson_);
@@ -19,7 +19,7 @@ Evaluator::Evaluator(MemoryManager* memoryManager, std::string exprJson)
       core::QueryConfig{expr->queryConfig()->toMap()},
       expr->connectorConfig()->toMap(),
       cache::AsyncDataCache::getInstance(),
-      memoryManager_
+      memoryManager
           ->getVeloxPool(
               fmt::format(
                   "Evaluator Memory Pool - EID {}", std::to_string(eid)),
@@ -29,7 +29,7 @@ Evaluator::Evaluator(MemoryManager* memoryManager, std::string exprJson)
       fmt::format("Evaluator Context - EID {}", std::to_string(eid)));
   ee_ = std::make_unique<exec::SimpleExpressionEvaluator>(
       queryCtx_.get(),
-      memoryManager_->getVeloxPool(
+      memoryManager->getVeloxPool(
           fmt::format(
               "Evaluator Leaf Memory Pool - EID {}", std::to_string(eid)),
           memory::MemoryPool::Kind::kLeaf));
