@@ -165,7 +165,10 @@ void registerArrayFunctions(const std::string& prefix) {
   VELOX_REGISTER_VECTOR_FUNCTION(udf_array_max_by, prefix + "array_max_by");
   VELOX_REGISTER_VECTOR_FUNCTION(udf_array_min_by, prefix + "array_min_by");
 
-  exec::registerExpressionRewrite([prefix](const auto& expr) {
+  exec::registerExpressionRewrite([prefix](
+                                      const core::TypedExprPtr& expr,
+                                      const core::QueryConfig& /*config*/,
+                                      memory::MemoryPool* /*pool*/) {
     return rewriteArraySortCall(prefix, expr);
   });
 

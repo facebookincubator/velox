@@ -13,27 +13,29 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-
 #pragma once
 
-#include <memory>
+#include <set>
+
 #include "velox/core/Expressions.h"
 #include "velox/core/QueryCtx.h"
 
-namespace facebook::velox::exec {
+namespace facebook::velox::expression {
 
-class Expr;
-class ExprSet;
+bool allInputTypesEquivalent(const core::TypedExprPtr& expr);
 
-core::TypedExprPtr rewriteExpression(
+void flattenInput(
+    const core::TypedExprPtr& input,
+    const std::string& flattenCall,
+    std::vector<core::TypedExprPtr>& flat);
+
+/// Register expression optimizations for AND, OR, IF, COALESCE.
+void registerExpressionOptimizations();
+
+/// Constant fold subtrees of the input expression and return the folded
+/// expression.
+core::TypedExprPtr constantFold(
     const core::TypedExprPtr& expr,
     const core::QueryConfig& config,
     memory::MemoryPool* pool);
-
-std::vector<std::shared_ptr<Expr>> compileExpressions(
-    const std::vector<core::TypedExprPtr>& sources,
-    core::ExecCtx* execCtx,
-    ExprSet* exprSet,
-    bool enableConstantFolding = true);
-
-} // namespace facebook::velox::exec
+} // namespace facebook::velox::expression
