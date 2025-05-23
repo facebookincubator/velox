@@ -1072,6 +1072,18 @@ class HugeintValuesUsingHashTable final : public Filter {
 
   bool testingEquals(const Filter& other) const final;
 
+  int128_t min() const {
+    return min_;
+  }
+
+  int128_t max() const {
+    return max_;
+  }
+
+  const folly::F14FastSet<int128_t>& values() const {
+    return values_;
+  }
+
  private:
   const int128_t min_;
   const int128_t max_;
@@ -1124,6 +1136,14 @@ class BigintValuesUsingBitmask final : public Filter {
   std::unique_ptr<Filter> mergeWith(const Filter* other) const final;
 
   bool testingEquals(const Filter& other) const final;
+
+  int64_t min() const {
+    return min_;
+  }
+
+  int64_t max() const {
+    return max_;
+  }
 
  private:
   std::unique_ptr<Filter>
@@ -1261,6 +1281,14 @@ class NegatedBigintValuesUsingBitmask final : public Filter {
   std::unique_ptr<Filter> mergeWith(const Filter* other) const final;
 
   bool testingEquals(const Filter& other) const final;
+
+  int64_t min() const {
+    return min_;
+  }
+
+  int64_t max() const {
+    return max_;
+  }
 
  private:
   std::unique_ptr<Filter>
@@ -1709,6 +1737,14 @@ class BytesRange final : public AbstractRange {
     return lowerUnbounded_;
   }
 
+  bool isUpperExclusive() const {
+    return upperExclusive_;
+  }
+
+  bool isLowerExclusive() const {
+    return lowerExclusive_;
+  }
+
   const std::string& lower() const {
     return lower_;
   }
@@ -1803,6 +1839,14 @@ class NegatedBytesRange final : public Filter {
 
   bool isLowerUnbounded() const {
     return nonNegated_->isLowerUnbounded();
+  }
+
+  bool isUpperExclusive() const {
+    return nonNegated_->isUpperExclusive();
+  }
+
+  bool isLowerExclusive() const {
+    return nonNegated_->isLowerExclusive();
   }
 
   const std::string& lower() const {
