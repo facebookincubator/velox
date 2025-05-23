@@ -278,6 +278,12 @@ void registerNoisyCountIfGaussianAggregate(
           .argumentType("boolean")
           .argumentType("double")
           .build(),
+      exec::AggregateFunctionSignatureBuilder()
+          .returnType("bigint")
+          .intermediateType("varbinary")
+          .argumentType("boolean")
+          .argumentType("bigint") // support BIGINT noise scale
+          .build(),
   };
 
   auto name = prefix + kNoisyCountIfGaussian;
