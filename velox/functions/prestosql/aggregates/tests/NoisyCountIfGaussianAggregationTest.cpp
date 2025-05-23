@@ -188,4 +188,17 @@ TEST_F(NoisyCountIfGaussianAggregationTest, zeroRowsMultipleGroupsNoise) {
       "SELECT c0, sum(if(c1, 1, 0)), sum(if(c2, 1, 0)) FROM tmp group by c0, c1");
 }
 
+// Test that the aggregation supports BIGINT as a valid
+// noise scale.
+TEST_F(NoisyCountIfGaussianAggregationTest, bigIntNoiseScale) {
+  auto vectors = makeVectors(rowType_, 10, 4);
+  createDuckDbTable(vectors);
+
+  testAggregations(
+      vectors,
+      {},
+      {"noisy_count_if_gaussian(c1, 2)", "noisy_count_if_gaussian(c2, 2)"},
+      "SELECT sum(if(c1, 1, 0)), sum(if(c2, 1, 0)) FROM tmp");
+}
+
 } // namespace facebook::velox::aggregate::test
