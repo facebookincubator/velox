@@ -39,22 +39,9 @@ constexpr static ObjectHandle kInvalidObjectHandle = -1;
 // manager.
 class ObjectStore {
  public:
-  static ObjectStore* global() {
-    static std::unique_ptr<ObjectStore> globalStore = create();
-    return globalStore.get();
-  }
+  static ObjectStore* global();
 
-  static std::unique_ptr<ObjectStore> create() {
-    static std::mutex mtx;
-    std::lock_guard<std::mutex> lock(mtx);
-    const StoreHandle nextId = safeCast<StoreHandle>(stores().nextId());
-    auto store = std::unique_ptr<ObjectStore>(new ObjectStore(nextId));
-    const StoreHandle storeId =
-        safeCast<StoreHandle>(stores().insert(store.get()));
-    VELOX_CHECK(
-        storeId == nextId, "Store ID mismatched, this should not happen");
-    return store;
-  }
+  static std::unique_ptr<ObjectStore> create();
 
   static void release(ObjectHandle handle) {
     const ResourceHandle storeId =

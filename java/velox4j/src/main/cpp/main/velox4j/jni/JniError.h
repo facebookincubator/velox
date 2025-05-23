@@ -40,21 +40,18 @@ class JniErrorState {
  private:
   void initialize(JNIEnv* env);
 
-  jclass ioExceptionClass_ = nullptr;
-  jclass runtimeExceptionClass_ = nullptr;
-  jclass unsupportedOperationExceptionClass_ = nullptr;
-  jclass illegalAccessExceptionClass_ = nullptr;
-  jclass illegalArgumentExceptionClass_ = nullptr;
-  jclass veloxExceptionClass_ = nullptr;
-  JavaVM* vm_;
+  jclass ioExceptionClass_{nullptr};
+  jclass runtimeExceptionClass_{nullptr};
+  jclass unsupportedOperationExceptionClass_{nullptr};
+  jclass illegalAccessExceptionClass_{nullptr};
+  jclass illegalArgumentExceptionClass_{nullptr};
+  jclass veloxExceptionClass_{nullptr};
+  JavaVM* vm_{nullptr};
   bool initialized_{false};
   bool closed_{false};
   std::mutex mtx_;
 };
 
-inline JniErrorState* getJniErrorState() {
-  static JniErrorState jniErrorState;
-  return &jniErrorState;
-}
+JniErrorState* getJniErrorState();
 
 } // namespace velox4j
