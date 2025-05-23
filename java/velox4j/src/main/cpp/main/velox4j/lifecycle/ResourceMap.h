@@ -60,7 +60,7 @@ class ResourceMap {
             std::to_string(moduleId));
   }
 
-  TResource lookup(ResourceHandle moduleId) {
+  TResource lookup(ResourceHandle moduleId) const {
     const std::lock_guard<std::mutex> lock(mtx_);
     auto it = map_.find(moduleId);
     VELOX_CHECK(
@@ -75,12 +75,12 @@ class ResourceMap {
     map_.clear();
   }
 
-  size_t size() {
+  size_t size() const {
     const std::lock_guard<std::mutex> lock(mtx_);
     return map_.size();
   }
 
-  size_t nextId() {
+  size_t nextId() const {
     return resourceId_;
   }
 
@@ -93,7 +93,7 @@ class ResourceMap {
 
   // map from resource ids returned to Java and resource pointers
   std::unordered_map<ResourceHandle, TResource> map_;
-  std::mutex mtx_;
+  mutable std::mutex mtx_;
 };
 
 } // namespace velox4j

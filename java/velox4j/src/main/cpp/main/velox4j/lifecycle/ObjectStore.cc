@@ -13,7 +13,7 @@ ObjectStore::~ObjectStore() {
   const std::lock_guard<std::mutex> lock(mtx_);
   for (auto itr = aliveObjects_.rbegin(); itr != aliveObjects_.rend(); ++itr) {
     const std::string_view description = (*itr).second;
-    ResourceHandle handle = (*itr).first;
+    const ResourceHandle handle = (*itr).first;
     LOG(WARNING)
         << "Unclosed object [" << "Store ID: " << storeId_
         << ", Resource handle ID: " << handle
