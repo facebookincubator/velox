@@ -263,6 +263,7 @@ void Merge::close() {
   for (auto& source : sources_) {
     source->close();
   }
+  Operator::close();
 }
 
 SourceMerger::SourceMerger(

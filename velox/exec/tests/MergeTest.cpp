@@ -13,9 +13,11 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
 #include "folly/experimental/EventCount.h"
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/common/testutil/TestValue.h"
+#include "velox/exec/PlanNodeStats.h"
 #include "velox/exec/tests/utils/OperatorTestBase.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
 #include "velox/exec/tests/utils/TempDirectoryPath.h"
@@ -156,8 +158,10 @@ class MergeTest : public OperatorTestBase {
                               .orderBy({orderByClause}, true)
                               .planNode());
       }
+      core::PlanNodeId nodeId;
       const auto plan = PlanBuilder(planNodeIdGenerator)
                             .localMerge({orderByClause}, std::move(sources))
+                            .capturePlanNodeId(nodeId)
                             .planNode();
       CursorParameters params;
       params.planNode = plan;
@@ -167,8 +171,16 @@ class MergeTest : public OperatorTestBase {
           {"local_merge_enabled", "true"},
           {"local_merge_max_num_merge_sources", "2"}};
       params.spillDirectory = spillDirectory->getPath();
-      assertQueryOrdered(
+      auto task = assertQueryOrdered(
           params, "SELECT * FROM tmp ORDER BY " + orderByClause, {keyIndex});
+      auto taskStats = toPlanStats(task->taskStats());
+      auto& planStats = taskStats.at(nodeId);
+      auto expectedNumSpillFiles = (inputVectors.size() + 2 - 1) / 2;
+      ASSERT_GT(planStats.spilledBytes, 0);
+      ASSERT_EQ(planStats.spilledPartitions, expectedNumSpillFiles);
+      ASSERT_EQ(planStats.spilledFiles, expectedNumSpillFiles);
+      ASSERT_EQ(
+          planStats.spilledRows, inputVectors.size() * inputVectors[0]->size());
     }
   }
 
@@ -205,8 +217,10 @@ class MergeTest : public OperatorTestBase {
                                 .orderBy(orderByClauses, true)
                                 .planNode());
         }
+        core::PlanNodeId nodeId;
         const auto plan = PlanBuilder(planNodeIdGenerator)
-                              .localMerge(orderByClauses, std::move(sources))
+                              .localMerge({orderByClauses}, std::move(sources))
+                              .capturePlanNodeId(nodeId)
                               .planNode();
         CursorParameters params;
         params.planNode = plan;
@@ -216,12 +230,207 @@ class MergeTest : public OperatorTestBase {
             {"local_merge_enabled", "true"},
             {"local_merge_max_num_merge_sources", "2"}};
         params.spillDirectory = spillDirectory->getPath();
-        assertQueryOrdered(
+        auto task = assertQueryOrdered(
             params, "SELECT * FROM tmp " + orderBySql, sortingKeys);
+        auto taskStats = toPlanStats(task->taskStats());
+        auto& planStats = taskStats.at(nodeId);
+        auto expectedNumSpillFiles = (inputVectors.size() + 2 - 1) / 2;
+        ASSERT_GT(planStats.spilledBytes, 0);
+        ASSERT_EQ(planStats.spilledPartitions, expectedNumSpillFiles);
+        ASSERT_EQ(planStats.spilledFiles, expectedNumSpillFiles);
+        ASSERT_EQ(
+            planStats.spilledRows,
+            inputVectors.size() * inputVectors[0]->size());
       }
     }
   }
+
+  void testLocalMergeSpill(
+      const uint32_t batchSize,
+      const uint32_t numMaxMergeSources) {
+    std::vector<std::vector<RowVectorPtr>> inputVectors;
+    for (int32_t i = 0; i < 9; ++i) {
+      std::vector<RowVectorPtr> vectors;
+      for (int32_t i = 0; i < 3; ++i) {
+        auto c0 = makeFlatVector<int64_t>(
+            batchSize,
+            [&](auto row) { return batchSize * i + row; },
+            nullEvery(5));
+        auto c1 = makeFlatVector<int64_t>(
+            batchSize, [&](auto row) { return row; }, nullEvery(5));
+        auto c2 = makeFlatVector<double>(
+            batchSize, [](auto row) { return row * 0.1; }, nullEvery(11));
+        auto c3 = makeFlatVector<StringView>(batchSize, [](auto row) {
+          return StringView::makeInline(std::to_string(row));
+        });
+        vectors.push_back(makeRowVector({c0, c1, c2, c3}));
+      }
+      inputVectors.push_back(std::move(vectors));
+    }
+    std::vector<RowVectorPtr> duckInputs;
+    for (const auto& input : inputVectors) {
+      for (const auto& vector : input) {
+        duckInputs.push_back(vector);
+      }
+    }
+    createDuckDbTable(duckInputs);
+    auto keyIndex = inputVectors[0][0]->type()->asRow().getChildIdx("c0");
+
+    const auto orderByClause = fmt::format("{}", "c0");
+    const auto planNodeIdGenerator =
+        std::make_shared<core::PlanNodeIdGenerator>();
+    const std::shared_ptr<TempDirectoryPath> spillDirectory =
+        TempDirectoryPath::create();
+    std::vector<std::shared_ptr<const core::PlanNode>> sources;
+    sources.reserve(inputVectors.size());
+    for (const auto& vectors : inputVectors) {
+      sources.push_back(PlanBuilder(planNodeIdGenerator)
+                            .values(vectors)
+                            .orderBy({orderByClause}, true)
+                            .planNode());
+    }
+    core::PlanNodeId nodeId;
+    const auto plan = PlanBuilder(planNodeIdGenerator)
+                          .localMerge({orderByClause}, std::move(sources))
+                          .capturePlanNodeId(nodeId)
+                          .planNode();
+    CursorParameters params;
+    params.planNode = plan;
+    params.maxDrivers = 2;
+    params.queryConfigs = {
+        {"spill_enabled", "true"},
+        {"local_merge_enabled", "true"},
+        {"local_merge_max_num_merge_sources",
+         std::to_string(numMaxMergeSources)}};
+    params.spillDirectory = spillDirectory->getPath();
+    auto task = assertQueryOrdered(
+        params, "SELECT * FROM tmp ORDER BY " + orderByClause, {keyIndex});
+
+    auto taskStats = toPlanStats(task->taskStats());
+    auto& planStats = taskStats.at(nodeId);
+    if (batchSize == 0 || numMaxMergeSources >= inputVectors.size()) {
+      ASSERT_EQ(planStats.spilledBytes, 0);
+      ASSERT_EQ(planStats.spilledPartitions, 0);
+      ASSERT_EQ(planStats.spilledFiles, 0);
+      ASSERT_EQ(planStats.spilledRows, 0);
+    } else {
+      const auto expectedFiles =
+          (inputVectors.size() + numMaxMergeSources - 1) / numMaxMergeSources;
+      const auto expectedSpillRows = batchSize * duckInputs.size();
+      ASSERT_GT(planStats.spilledBytes, 0);
+      ASSERT_EQ(planStats.spilledPartitions, expectedFiles);
+      ASSERT_EQ(planStats.spilledFiles, expectedFiles);
+      ASSERT_EQ(planStats.spilledRows, expectedSpillRows);
+    }
+  }
 };
+
+TEST_F(MergeTest, localMergeSpillBasic) {
+  std::vector<RowVectorPtr> vectors;
+  for (int32_t i = 0; i < 9; ++i) {
+    constexpr vector_size_t batchSize = 137;
+    auto c0 = makeFlatVector<int64_t>(
+        batchSize, [&](auto row) { return batchSize * i + row; }, nullEvery(5));
+    auto c1 = makeFlatVector<int64_t>(
+        batchSize, [&](auto row) { return row; }, nullEvery(5));
+    auto c2 = makeFlatVector<double>(
+        batchSize, [](auto row) { return row * 0.1; }, nullEvery(11));
+    auto c3 = makeFlatVector<StringView>(batchSize, [](auto row) {
+      return StringView::makeInline(std::to_string(row));
+    });
+    vectors.push_back(makeRowVector({c0, c1, c2, c3}));
+  }
+  createDuckDbTable(vectors);
+
+  testSingleKeyWithSpill(vectors, "c0");
+  testSingleKeyWithSpill(vectors, "c3");
+
+  testTwoKeysWithSpill(vectors, "c0", "c3");
+  testTwoKeysWithSpill(vectors, "c3", "c0");
+}
+
+TEST_F(MergeTest, localMergeSpill) {
+  struct TestParam {
+    uint32_t maxNumMergeSources;
+    uint32_t batchSize;
+
+    std::string debugString() const {
+      return fmt::format(
+          "maxNumMergeSources {}, batchSize {}", maxNumMergeSources, batchSize);
+    }
+  } testSettings[]{
+      {1, 0},
+      {10, 0},
+      {1, 30},
+      {3, 30},
+      {8, 30},
+      {9, 30},
+      {std::numeric_limits<uint32_t>::max(), 30},
+  };
+  for (const auto& testData : testSettings) {
+    SCOPED_TRACE(testData.debugString());
+    testLocalMergeSpill(testData.batchSize, testData.maxNumMergeSources);
+  }
+}
+
+TEST_F(MergeTest, localMergeSpillPartialEmpty) {
+  std::vector<RowVectorPtr> vectors;
+  for (int32_t i = 0; i < 9; ++i) {
+    auto batchSize = 30;
+    if (i % 2 == 0) {
+      batchSize = 0;
+    }
+
+    auto c0 = makeFlatVector<int64_t>(
+        batchSize, [&](auto row) { return batchSize * i + row; }, nullEvery(5));
+    auto c1 = makeFlatVector<int64_t>(
+        batchSize, [&](auto row) { return row; }, nullEvery(5));
+    auto c2 = makeFlatVector<double>(
+        batchSize, [](auto row) { return row * 0.1; }, nullEvery(11));
+    auto c3 = makeFlatVector<StringView>(batchSize, [](auto row) {
+      return StringView::makeInline(std::to_string(row));
+    });
+    vectors.push_back(makeRowVector({c0, c1, c2, c3}));
+  }
+  createDuckDbTable(vectors);
+  auto keyIndex = vectors[0]->type()->asRow().getChildIdx("c0");
+
+  const auto orderByClause = fmt::format("{}", "c0");
+  const auto planNodeIdGenerator =
+      std::make_shared<core::PlanNodeIdGenerator>();
+  const std::shared_ptr<TempDirectoryPath> spillDirectory =
+      TempDirectoryPath::create();
+  std::vector<std::shared_ptr<const core::PlanNode>> sources;
+  sources.reserve(vectors.size());
+  for (const auto& vector : vectors) {
+    sources.push_back(PlanBuilder(planNodeIdGenerator)
+                          .values({vector})
+                          .orderBy({orderByClause}, true)
+                          .planNode());
+  }
+  core::PlanNodeId nodeId;
+  const auto plan = PlanBuilder(planNodeIdGenerator)
+                        .localMerge({orderByClause}, std::move(sources))
+                        .capturePlanNodeId(nodeId)
+                        .planNode();
+  CursorParameters params;
+  params.planNode = plan;
+  params.maxDrivers = 2;
+  params.queryConfigs = {
+      {"spill_enabled", "true"},
+      {"local_merge_enabled", "true"},
+      {"local_merge_max_num_merge_sources", "2"}};
+  params.spillDirectory = spillDirectory->getPath();
+  auto task = assertQueryOrdered(
+      params, "SELECT * FROM tmp ORDER BY " + orderByClause, {keyIndex});
+
+  auto taskStats = toPlanStats(task->taskStats());
+  auto& planStats = taskStats.at(nodeId);
+  ASSERT_GT(planStats.spilledBytes, 0);
+  ASSERT_EQ(planStats.spilledPartitions, 4);
+  ASSERT_EQ(planStats.spilledFiles, 4);
+  ASSERT_EQ(planStats.spilledRows, 120);
+}
 
 TEST_F(MergeTest, localMerge) {
   std::vector<RowVectorPtr> vectors;
@@ -245,30 +454,6 @@ TEST_F(MergeTest, localMerge) {
 
   testTwoKeys(vectors, "c0", "c3");
   testTwoKeys(vectors, "c3", "c0");
-}
-
-TEST_F(MergeTest, localMergeWithSpill) {
-  std::vector<RowVectorPtr> vectors;
-  for (int32_t i = 0; i < 9; ++i) {
-    constexpr vector_size_t batchSize = 137;
-    auto c0 = makeFlatVector<int64_t>(
-        batchSize, [&](auto row) { return batchSize * i + row; }, nullEvery(5));
-    auto c1 = makeFlatVector<int64_t>(
-        batchSize, [&](auto row) { return row; }, nullEvery(5));
-    auto c2 = makeFlatVector<double>(
-        batchSize, [](auto row) { return row * 0.1; }, nullEvery(11));
-    auto c3 = makeFlatVector<StringView>(batchSize, [](auto row) {
-      return StringView::makeInline(std::to_string(row));
-    });
-    vectors.push_back(makeRowVector({c0, c1, c2, c3}));
-  }
-  createDuckDbTable(vectors);
-
-  testSingleKeyWithSpill(vectors, "c0");
-  testSingleKeyWithSpill(vectors, "c3");
-
-  testTwoKeysWithSpill(vectors, "c0", "c3");
-  testTwoKeysWithSpill(vectors, "c3", "c0");
 }
 
 DEBUG_ONLY_TEST_F(MergeTest, localMergeStart) {
