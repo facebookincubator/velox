@@ -1557,6 +1557,14 @@ TEST_P(BucketedTableOnlyWriteTest, bucketCountLimit) {
   SCOPED_TRACE(testParam_.toString());
   auto input = makeVectors(1, 100);
   createDuckDbTable(input);
+
+  // Get the default maxBucketCount from config.
+  HiveConfig hiveConfig(std::make_shared<config::ConfigBase>(
+      std::unordered_map<std::string, std::string>()));
+  const auto emptySession = std::make_unique<config::ConfigBase>(
+      std::unordered_map<std::string, std::string>());
+  uint32_t maxBucketCount = hiveConfig.maxBucketCount(emptySession.get());
+
   struct {
     uint32_t bucketCount;
     bool expectedError;
@@ -1568,10 +1576,10 @@ TEST_P(BucketedTableOnlyWriteTest, bucketCountLimit) {
   } testSettings[] = {
       {1, false},
       {3, false},
-      {HiveDataSink::maxBucketCount() - 1, false},
-      {HiveDataSink::maxBucketCount(), true},
-      {HiveDataSink::maxBucketCount() + 1, true},
-      {HiveDataSink::maxBucketCount() * 2, true}};
+      {maxBucketCount - 1, false},
+      {maxBucketCount, true},
+      {maxBucketCount + 1, true},
+      {maxBucketCount * 2, true}};
   for (const auto& testData : testSettings) {
     SCOPED_TRACE(testData.debugString());
     auto outputDirectory = TempDirectoryPath::create();

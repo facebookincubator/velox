@@ -200,6 +200,7 @@ class FileNameGenerator : public ISerializable {
 
   virtual std::pair<std::string, std::string> gen(
       std::optional<uint32_t> bucketId,
+      std::optional<uint32_t> maxBucketCount,
       const std::shared_ptr<const HiveInsertTableHandle> insertTableHandle,
       const ConnectorQueryCtx& connectorQueryCtx,
       bool commitRequired) const = 0;
@@ -213,6 +214,7 @@ class HiveInsertFileNameGenerator : public FileNameGenerator {
 
   std::pair<std::string, std::string> gen(
       std::optional<uint32_t> bucketId,
+      std::optional<uint32_t> maxBucketCount,
       const std::shared_ptr<const HiveInsertTableHandle> insertTableHandle,
       const ConnectorQueryCtx& connectorQueryCtx,
       bool commitRequired) const override;
@@ -525,11 +527,6 @@ class HiveDataSink : public DataSink {
       uint32_t bucketCount,
       std::unique_ptr<core::PartitionFunction> bucketFunction);
 
-  static uint32_t maxBucketCount() {
-    static const uint32_t kMaxBucketCount = 100'000;
-    return kMaxBucketCount;
-  }
-
   void appendData(RowVectorPtr input) override;
 
   bool finish() override;
@@ -665,6 +662,7 @@ class HiveDataSink : public DataSink {
   const std::shared_ptr<const HiveConfig> hiveConfig_;
   const HiveWriterParameters::UpdateMode updateMode_;
   const uint32_t maxOpenWriters_;
+  const uint32_t maxBucketCount_;
   const std::vector<column_index_t> partitionChannels_;
   const std::unique_ptr<PartitionIdGenerator> partitionIdGenerator_;
   // Indices of dataChannel are stored in ascending order

@@ -32,6 +32,7 @@ TEST(HiveConfigTest, defaultConfig) {
       facebook::velox::connector::hive::HiveConfig::
           InsertExistingPartitionsBehavior::kError);
   ASSERT_EQ(hiveConfig.maxPartitionsPerWriters(emptySession.get()), 128);
+  ASSERT_EQ(hiveConfig.maxBucketCount(emptySession.get()), 100'000);
   ASSERT_EQ(hiveConfig.immutablePartitions(), false);
   ASSERT_EQ(hiveConfig.gcsEndpoint(), "");
   ASSERT_EQ(hiveConfig.gcsCredentialsPath(), "");
@@ -59,6 +60,7 @@ TEST(HiveConfigTest, overrideConfig) {
   std::unordered_map<std::string, std::string> configFromFile = {
       {HiveConfig::kInsertExistingPartitionsBehavior, "OVERWRITE"},
       {HiveConfig::kMaxPartitionsPerWriters, "120"},
+      {HiveConfig::kMaxBucketCount, "200"},
       {HiveConfig::kImmutablePartitions, "true"},
       {HiveConfig::kGcsEndpoint, "hey"},
       {HiveConfig::kGcsCredentialsPath, "hey"},
@@ -84,6 +86,7 @@ TEST(HiveConfigTest, overrideConfig) {
       facebook::velox::connector::hive::HiveConfig::
           InsertExistingPartitionsBehavior::kOverwrite);
   ASSERT_EQ(hiveConfig.maxPartitionsPerWriters(emptySession.get()), 120);
+  ASSERT_EQ(hiveConfig.maxBucketCount(emptySession.get()), 200);
   ASSERT_TRUE(hiveConfig.immutablePartitions());
   ASSERT_EQ(hiveConfig.gcsEndpoint(), "hey");
   ASSERT_EQ(hiveConfig.gcsCredentialsPath(), "hey");
@@ -121,6 +124,7 @@ TEST(HiveConfigTest, overrideSession) {
       {HiveConfig::kAllowNullPartitionKeysSession, "false"},
       {HiveConfig::kIgnoreMissingFilesSession, "true"},
       {HiveConfig::kReadStatsBasedFilterReorderDisabledSession, "true"},
+      {HiveConfig::kMaxBucketCountSession, "200"},
       {HiveConfig::kLoadQuantumSession, std::to_string(4 << 20)}};
   const auto session =
       std::make_unique<config::ConfigBase>(std::move(sessionOverride));
@@ -129,6 +133,7 @@ TEST(HiveConfigTest, overrideSession) {
       facebook::velox::connector::hive::HiveConfig::
           InsertExistingPartitionsBehavior::kOverwrite);
   ASSERT_EQ(hiveConfig.maxPartitionsPerWriters(session.get()), 128);
+  ASSERT_EQ(hiveConfig.maxBucketCount(session.get()), 200);
   ASSERT_FALSE(hiveConfig.immutablePartitions());
   ASSERT_EQ(hiveConfig.gcsEndpoint(), "");
   ASSERT_EQ(hiveConfig.gcsCredentialsPath(), "");
