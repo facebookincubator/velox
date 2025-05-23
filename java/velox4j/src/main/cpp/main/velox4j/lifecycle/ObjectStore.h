@@ -47,18 +47,19 @@ class ObjectStore {
   static std::unique_ptr<ObjectStore> create() {
     static std::mutex mtx;
     std::lock_guard<std::mutex> lock(mtx);
-    StoreHandle nextId = safeCast<StoreHandle>(stores().nextId());
+    const StoreHandle nextId = safeCast<StoreHandle>(stores().nextId());
     auto store = std::unique_ptr<ObjectStore>(new ObjectStore(nextId));
-    StoreHandle storeId = safeCast<StoreHandle>(stores().insert(store.get()));
+    const StoreHandle storeId =
+        safeCast<StoreHandle>(stores().insert(store.get()));
     VELOX_CHECK(
         storeId == nextId, "Store ID mismatched, this should not happen");
     return store;
   }
 
   static void release(ObjectHandle handle) {
-    ResourceHandle storeId =
+    const ResourceHandle storeId =
         safeCast<ResourceHandle>(handle >> (sizeof(ResourceHandle) * 8));
-    ResourceHandle resourceId = safeCast<ResourceHandle>(
+    const ResourceHandle resourceId = safeCast<ResourceHandle>(
         handle & std::numeric_limits<ResourceHandle>::max());
     auto store = stores().lookup(storeId);
     store->releaseInternal(resourceId);
@@ -66,11 +67,11 @@ class ObjectStore {
 
   template <typename T>
   static std::shared_ptr<T> retrieve(ObjectHandle handle) {
-    ResourceHandle storeId =
+    const ResourceHandle storeId =
         safeCast<ResourceHandle>(handle >> (sizeof(ResourceHandle) * 8));
-    ResourceHandle resourceId = safeCast<ResourceHandle>(
+    const ResourceHandle resourceId = safeCast<ResourceHandle>(
         handle & std::numeric_limits<ResourceHandle>::max());
-    auto store = stores().lookup(storeId);
+    const auto store = stores().lookup(storeId);
     return store->retrieveInternal<T>(resourceId);
   }
 
@@ -84,7 +85,7 @@ class ObjectStore {
   ObjectHandle save(std::shared_ptr<T> obj) {
     const std::lock_guard<std::mutex> lock(mtx_);
     const std::string_view description = typeid(T).name();
-    ResourceHandle handle = store_.insert(std::move(obj));
+    const ResourceHandle handle = store_.insert(std::move(obj));
     aliveObjects_.emplace(handle, description);
     return toObjHandle(handle);
   }
@@ -93,14 +94,14 @@ class ObjectStore {
   static ResourceMap<ObjectStore*>& stores();
 
   ObjectHandle toObjHandle(ResourceHandle rh) const {
-    ObjectHandle prefix = static_cast<ObjectHandle>(storeId_)
+    const ObjectHandle prefix = static_cast<ObjectHandle>(storeId_)
         << (sizeof(ResourceHandle) * 8);
-    ObjectHandle objHandle = prefix + rh;
+    const ObjectHandle objHandle = prefix + rh;
     return objHandle;
   }
 
   template <typename T>
-  std::shared_ptr<T> retrieveInternal(ResourceHandle handle) {
+  std::shared_ptr<T> retrieveInternal(ResourceHandle handle) const {
     const std::lock_guard<std::mutex> lock(mtx_);
     std::shared_ptr<void> object = store_.lookup(handle);
     // Programming carefully. This will lead to ub if wrong typename T was
@@ -117,6 +118,6 @@ class ObjectStore {
   // Preserves handles of objects in the store in order, with the text
   // descriptions associated with them.
   std::map<ResourceHandle, std::string_view> aliveObjects_{};
-  std::mutex mtx_;
+  mutable std::mutex mtx_;
 };
 } // namespace velox4j
