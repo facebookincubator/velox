@@ -131,15 +131,21 @@ void Merge::spill() {
 }
 
 void Merge::finishMergeSourceGroup() {
+  sourceMerger_ = nullptr;
+  if (mergeOutputSpiller_ == nullptr) {
+    return;
+  }
+  VELOX_CHECK(needSpill());
+  VELOX_CHECK_GT(numSpilledRows_, 0);
+  // Finishes spill if it has happened and setup spill merger if no more source
+  // to merge.
   SpillPartitionSet spillPartitionSet;
   mergeOutputSpiller_->finishSpill(spillPartitionSet);
   mergeOutputSpiller_ = nullptr;
   VELOX_CHECK_EQ(spillPartitionSet.size(), 1);
-  spillFileGroups_.push_back(spillPartitionSet.begin()->second->files());
-  sourceMerger_ = nullptr;
-  if (numStartedSources_ >= sources_.size()) {
-    setupSpillMerger();
-  }
+  auto spillFiles = spillPartitionSet.begin()->second->files();
+  VELOX_CHECK(!spillFiles.empty());
+  spillFileGroups_.push_back(std::move(spillFiles));
 }
 
 void Merge::setupSpillMerger() {
@@ -214,17 +220,29 @@ RowVectorPtr Merge::getOutputFromSource() {
   bool atEnd = false;
   output_ =
       sourceMerger_->getOutput(outputBatchSize_, sourceBlockingFutures_, atEnd);
+  SCOPE_EXIT {
+    if (!atEnd) {
+      return;
+    }
+
+    finishMergeSourceGroup();
+    if (numStartedSources_ < sources_.size()) {
+      return;
+    }
+
+    if (numSpilledRows_ > 0) {
+      setupSpillMerger();
+      return;
+    }
+    finished_ = true;
+  };
 
   if (needSpill()) {
     spill();
-    if (atEnd) {
-      finishMergeSourceGroup();
-    }
     return nullptr;
   }
 
   VELOX_CHECK_EQ(numSpilledRows_, 0);
-  finished_ = atEnd;
   return std::move(output_);
 }
 

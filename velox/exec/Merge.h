@@ -71,7 +71,7 @@ class Merge : public SourceOperator {
   // Returns true if needs to spill the merged source output if all sources can
   // not be merged at once.
   bool needSpill() const {
-    return sourceMerger_ != nullptr && maxNumMergeSources_ < sources_.size();
+    return maxNumMergeSources_ < sources_.size();
   }
 
   void maybeSetupOutputSpiller();
