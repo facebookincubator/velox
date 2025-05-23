@@ -60,6 +60,8 @@ class MalformedInputException : public dwio::common::ParseError {
 };
 } // namespace
 
+#pragma GCC push_options
+#pragma GCC optimize ("no-tree-loop-vectorize")
 uint64_t lzoDecompress(
     const char* inputAddress,
     const char* inputLimit,
@@ -382,6 +384,7 @@ uint64_t lzoDecompress(
 
   return static_cast<uint64_t>(output - outputAddress);
 }
+#pragma GCC pop_options
 
 } // namespace compression
 } // namespace common
