@@ -129,10 +129,10 @@ struct StPointFunction {
         {
           geos::geom::GeometryFactory::Ptr factory =
               geos::geom::GeometryFactory::create();
-          geos::geom::Point* point =
+          std::unique_ptr<geos::geom::Point> point =
               factory->createPoint(geos::geom::Coordinate(x, y));
           result = geospatial::serializeGeometry(*point);
-          factory->destroyGeometry(point);
+          factory->destroyGeometry(point.get());
         },
         "Failed to create point geometry");
     return Status::OK();
