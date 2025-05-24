@@ -50,7 +50,7 @@ FMT_VERSION="10.1.1"
 BOOST_VERSION="boost-1.84.0"
 STEMMER_VERSION="2.2.0"
 DUCKDB_VERSION="v0.8.1"
-GEOS_VERSION="3.10.2"
+GEOS_VERSION="3.10.7"
 FAST_FLOAT_VERSION="v8.0.2"
 
 function update_brew {
@@ -204,12 +204,6 @@ function install_geos {
   if [[ "$BUILD_GEOS" == "true" ]]; then
     ABSOLUTE_SCRIPTDIR=$(realpath ${SCRIPTDIR})
     wget_and_untar https://github.com/libgeos/geos/archive/${GEOS_VERSION}.tar.gz geos
-    (
-      # Adopted from the bundled patching needed for macOS.
-      cd ${DEPENDENCY_DIR}/geos
-      git apply "${ABSOLUTE_SCRIPTDIR}/../CMake/resolve_dependency_modules/geos/geos-cmakelists.patch"
-      git apply "${ABSOLUTE_SCRIPTDIR}/../CMake/resolve_dependency_modules/geos/geos-build.patch"
-    )
     cmake_install_dir geos -DBUILD_TESTING=OFF
   fi
 }
