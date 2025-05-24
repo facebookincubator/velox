@@ -28,10 +28,10 @@
 set -e # Exit on error.
 set -x # Print commands that are executed.
 
-SCRIPTDIR=$(dirname "${BASH_SOURCE[0]}")
+SCRIPT_DIR=$(dirname "${BASH_SOURCE[0]}")
 export INSTALL_PREFIX=${INSTALL_PREFIX:-"$(pwd)/deps-install"}
-source $SCRIPTDIR/setup-common.sh
-PYTHON_VENV=${PYTHON_VENV:-"${SCRIPTDIR}/../.venv"}
+source $SCRIPT_DIR/setup-common.sh
+PYTHON_VENV=${PYTHON_VENV:-"${SCRIPT_DIR}/../.venv"}
 # Allow installed package headers to be picked up before brew package headers
 # by tagging the brew packages to be system packages.
 # This is used during package builds.
@@ -152,7 +152,7 @@ function install_velox_deps {
 # See https://github.com/facebook/fbthrift/pull/317 for an explanation.
 # run_and_time install_thrift
   run_and_time install_arrow
-  run_and_time install_duckdb_clang 
+  run_and_time install_duckdb_clang
   run_and_time install_geos
 }
 
