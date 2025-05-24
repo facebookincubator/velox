@@ -103,16 +103,6 @@ function install_glog {
   cmake_install_dir glog -DBUILD_SHARED_LIBS=ON
 }
 
-function install_lzo {
-  wget_and_untar http://www.oberhumer.com/opensource/lzo/download/lzo-2.10.tar.gz lzo
-  (
-    cd ${DEPENDENCY_DIR}/lzo
-    ./configure --prefix=${INSTALL_PREFIX} --enable-shared --disable-static --docdir=/usr/share/doc/lzo-2.10
-    make "-j${NPROC}"
-    make install
-  )
-}
-
 function install_boost {
   wget_and_untar https://github.com/boostorg/boost/releases/download/${BOOST_VERSION}/${BOOST_VERSION}.tar.gz boost
   (
@@ -274,7 +264,6 @@ function install_velox_deps {
   run_and_time install_conda
   run_and_time install_gflags
   run_and_time install_glog
-  run_and_time install_lzo
   run_and_time install_snappy
   run_and_time install_boost
   run_and_time install_protobuf
