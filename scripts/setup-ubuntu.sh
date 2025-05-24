@@ -27,15 +27,15 @@
 
 # Minimal setup for Ubuntu 22.04.
 set -eufx -o pipefail
-SCRIPTDIR=$(dirname "${BASH_SOURCE[0]}")
-source $SCRIPTDIR/setup-common.sh
+SCRIPT_DIR=$(dirname "${BASH_SOURCE[0]}")
+source $SCRIPT_DIR/setup-common.sh
 
 SUDO="${SUDO:-"sudo --preserve-env"}"
 USE_CLANG="${USE_CLANG:-false}"
 export INSTALL_PREFIX=${INSTALL_PREFIX:-"/usr/local"}
 DEPENDENCY_DIR=${DEPENDENCY_DIR:-$(pwd)/deps-download}
 VERSION=$(cat /etc/os-release | grep VERSION_ID)
-PYTHON_VENV=${PYTHON_VENV:-"${SCRIPTDIR}/../.venv"}
+PYTHON_VENV=${PYTHON_VENV:-"${SCRIPT_DIR}/../.venv"}
 
 # On Ubuntu 20.04 dependencies need to be built using gcc11.
 # On Ubuntu 22.04 gcc11 is already the system gcc installed.

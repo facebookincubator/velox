@@ -14,9 +14,9 @@
 # limitations under the License.
 # trigger reinstall
 
-SCRIPTDIR=$(dirname "${BASH_SOURCE[0]}")
-source $SCRIPTDIR/setup-helper-functions.sh
-source $SCRIPTDIR/setup-versions.sh
+SCRIPT_DIR=$(dirname "${BASH_SOURCE[0]}")
+source $SCRIPT_DIR/setup-helper-functions.sh
+source $SCRIPT_DIR/setup-versions.sh
 
 VELOX_BUILD_SHARED=${VELOX_BUILD_SHARED:-"OFF"} #Build folly and gflags shared for use in libvelox.so.
 CMAKE_BUILD_TYPE="${BUILD_TYPE:-Release}"
