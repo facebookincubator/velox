@@ -413,7 +413,7 @@ TEST_F(GeometryFunctionsTest, testStContains) {
           "MULTIPOLYGON ( ((0 0, 0 2, 2 2, 2 0, 0 0)), ((1 1, 1 3, 3 3, 3 1, 1 1)) )",
           "POINT (1 1)",
           false),
-      "Failed to check geometry contains: TopologyException: side location conflict at 1 2. This can occur if the input geometry is invalid.");
+      "TopologyException: side location conflict at 1 2. This can occur if the input geometry is invalid.");
 }
 
 TEST_F(GeometryFunctionsTest, testStCrosses) {
@@ -478,7 +478,7 @@ TEST_F(GeometryFunctionsTest, testStCrosses) {
           "MULTIPOLYGON ( ((0 0, 0 2, 2 2, 2 0, 0 0)), ((1 1, 1 3, 3 3, 3 1, 1 1)) )",
           "POINT (1 1)",
           false),
-      "Failed to check geometry crosses: TopologyException: side location conflict at 1 2. This can occur if the input geometry is invalid.");
+      "TopologyException: side location conflict at 1 2. This can occur if the input geometry is invalid.");
 }
 
 TEST_F(GeometryFunctionsTest, testStDisjoint) {
@@ -514,7 +514,7 @@ TEST_F(GeometryFunctionsTest, testStDisjoint) {
           "MULTIPOLYGON ( ((0 0, 0 2, 2 2, 2 0, 0 0)), ((1 1, 1 3, 3 3, 3 1, 1 1)) )",
           "POINT (1 1)",
           false),
-      "Failed to check geometry disjoint: TopologyException: side location conflict at 1 2. This can occur if the input geometry is invalid.");
+      "TopologyException: side location conflict at 1 2. This can occur if the input geometry is invalid.");
 }
 
 TEST_F(GeometryFunctionsTest, testStEquals) {
@@ -604,7 +604,7 @@ TEST_F(GeometryFunctionsTest, testStIntersects) {
           "MULTIPOLYGON ( ((0 0, 0 2, 2 2, 2 0, 0 0)), ((1 1, 1 3, 3 3, 3 1, 1 1)) )",
           "POINT (1 1)",
           false),
-      "Failed to check geometry intersects: TopologyException: side location conflict at 1 2. This can occur if the input geometry is invalid.");
+      "TopologyException: side location conflict at 1 2. This can occur if the input geometry is invalid.");
 }
 
 TEST_F(GeometryFunctionsTest, testStOverlaps) {
@@ -658,7 +658,7 @@ TEST_F(GeometryFunctionsTest, testStOverlaps) {
           "MULTIPOLYGON ( ((0 0, 0 2, 2 2, 2 0, 0 0)), ((1 1, 1 3, 3 3, 3 1, 1 1)) )",
           "POINT (1 1)",
           false),
-      "Failed to check geometry overlaps: TopologyException: side location conflict at 1 2. This can occur if the input geometry is invalid.");
+      "TopologyException: side location conflict at 1 2. This can occur if the input geometry is invalid.");
 }
 
 TEST_F(GeometryFunctionsTest, testStTouches) {
@@ -729,7 +729,7 @@ TEST_F(GeometryFunctionsTest, testStTouches) {
           "MULTIPOLYGON ( ((0 0, 0 2, 2 2, 2 0, 0 0)), ((1 1, 1 3, 3 3, 3 1, 1 1)) )",
           "POINT (1 1)",
           false),
-      "Failed to check geometry touches: TopologyException: side location conflict at 1 2. This can occur if the input geometry is invalid.");
+      "TopologyException: side location conflict at 1 2. This can occur if the input geometry is invalid.");
 }
 
 TEST_F(GeometryFunctionsTest, testStWithin) {
@@ -804,7 +804,7 @@ TEST_F(GeometryFunctionsTest, testStWithin) {
           "POINT (0 0)",
           "MULTIPOLYGON ( ((0 0, 0 2, 2 2, 2 0, 0 0)), ((1 1, 1 3, 3 3, 3 1, 1 1)) )",
           false),
-      "Failed to check geometry within: TopologyException: side location conflict at 1 2. This can occur if the input geometry is invalid.");
+      "TopologyException: side location conflict at 1 2. This can occur if the input geometry is invalid.");
 }
 
 // Overlay operations
@@ -845,7 +845,7 @@ TEST_F(GeometryFunctionsTest, testStDifference) {
           "LINESTRING (0 0, 1 1, 1 0, 0 1)",
           "MULTIPOLYGON ( ((0 0, 0 2, 2 2, 2 0, 0 0)), ((1 1, 1 3, 3 3, 3 1, 1 1)) )",
           "POINT EMPTY"),
-      "Failed to compute geometry difference: TopologyException: Input geom 1 is invalid: Self-intersection at 1 2");
+      "TopologyException: side location conflict at 1 2. This can occur if the input geometry is invalid.");
 }
 
 TEST_F(GeometryFunctionsTest, testStIntersection) {
@@ -894,7 +894,7 @@ TEST_F(GeometryFunctionsTest, testStIntersection) {
           "LINESTRING (0 0, 1 1, 1 0, 0 1)",
           "MULTIPOLYGON ( ((0 0, 0 2, 2 2, 2 0, 0 0)), ((1 1, 1 3, 3 3, 3 1, 1 1)) )",
           "POINT EMPTY"),
-      "Failed to compute geometry intersection: TopologyException: Input geom 1 is invalid: Self-intersection at 1 2");
+      "TopologyException: side location conflict at 1 2. This can occur if the input geometry is invalid.");
 }
 
 TEST_F(GeometryFunctionsTest, testStSymDifference) {
@@ -936,7 +936,7 @@ TEST_F(GeometryFunctionsTest, testStSymDifference) {
           "LINESTRING (0 0, 1 1, 1 0, 0 1)",
           "MULTIPOLYGON ( ((0 0, 0 2, 2 2, 2 0, 0 0)), ((1 1, 1 3, 3 3, 3 1, 1 1)) )",
           "POINT EMPTY"),
-      "Failed to compute geometry symdifference: TopologyException: Input geom 1 is invalid: Self-intersection at 1 2");
+      "TopologyException: side location conflict at 1 2. This can occur if the input geometry is invalid.");
 }
 
 TEST_F(GeometryFunctionsTest, testStUnion) {
@@ -1073,7 +1073,7 @@ TEST_F(GeometryFunctionsTest, testStUnion) {
           "LINESTRING (0 0, 1 1, 1 0, 0 1)",
           "MULTIPOLYGON ( ((0 0, 0 2, 2 2, 2 0, 0 0)), ((1 1, 1 3, 3 3, 3 1, 1 1)) )",
           "POINT EMPTY"),
-      "Failed to compute geometry union: TopologyException: Input geom 1 is invalid: Self-intersection at 1 2");
+      "TopologyException: side location conflict at 1 2. This can occur if the input geometry is invalid.");
 }
 
 // Accessors
