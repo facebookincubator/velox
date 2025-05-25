@@ -17,18 +17,15 @@
 #pragma once
 
 #include "velox/exec/fuzzer/PrestoQueryRunnerIntermediateTypeTransforms.h"
+#include "velox/functions/prestosql/types/TimestampWithTimeZoneType.h"
 
 namespace facebook::velox::exec::test {
-class TimestampWithTimeZoneTransform : public IntermediateTypeTransform {
+class TimestampWithTimeZoneTransform : public TransientTypeTransform {
  public:
-  TypePtr transformedType() const override {
-    return VARCHAR();
-  }
+  TimestampWithTimeZoneTransform()
+      : TransientTypeTransform(TIMESTAMP_WITH_TIME_ZONE(), VARCHAR()) {}
 
-  variant transform(const BaseVector* const vector, vector_size_t row)
-      const override;
-
-  core::ExprPtr projectionExpr(
+  core::ExprPtr projectToTransientType(
       const core::ExprPtr& inputExpr,
       const std::string& columnAlias) const override;
 };
