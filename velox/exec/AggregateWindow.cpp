@@ -19,7 +19,6 @@
 #include "velox/exec/Aggregate.h"
 #include "velox/exec/WindowFunction.h"
 #include "velox/expression/FunctionSignature.h"
-#include "velox/vector/FlatVector.h"
 
 namespace facebook::velox::exec {
 
