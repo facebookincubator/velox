@@ -16,7 +16,6 @@
 
 #include "velox/dwio/dwrf/reader/SelectiveStructColumnReader.h"
 #include "folly/Conv.h"
-#include "velox/dwio/common/ColumnLoader.h"
 #include "velox/dwio/dwrf/reader/SelectiveDwrfReader.h"
 
 namespace facebook::velox::dwrf {
