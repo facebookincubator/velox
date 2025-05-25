@@ -49,6 +49,10 @@ class HiveConfig {
   static constexpr const char* kMaxPartitionsPerWritersSession =
       "max_partitions_per_writers";
 
+  /// Maximum number of buckets allowed to output by the table writers.
+  static constexpr const char* kMaxBucketCount = "max_bucket_count";
+  static constexpr const char* kMaxBucketCountSession = "max_bucket_count";
+
   /// Whether new data can be inserted into an unpartition table.
   /// Velox currently does not support appending data to existing partitions.
   static constexpr const char* kImmutablePartitions =
@@ -187,6 +191,8 @@ class HiveConfig {
       const config::ConfigBase* session) const;
 
   uint32_t maxPartitionsPerWriters(const config::ConfigBase* session) const;
+
+  uint32_t maxBucketCount(const config::ConfigBase* session) const;
 
   bool immutablePartitions() const;
 
