@@ -17,7 +17,6 @@
 
 #include "velox/exec/ContainerRowSerde.h"
 #include "velox/exec/TopN.h"
-#include "velox/vector/FlatVector.h"
 
 namespace facebook::velox::exec {
 TopN::TopN(
