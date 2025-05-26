@@ -170,8 +170,6 @@ jobs:
       - name: Build PyVelox
         if: ${{ github.event_name != 'schedule' && steps.get-sig.outputs.stash-hit != 'true' }}
         working-directory: velox_main
-        env:
-          CXX_FLAGS: -DSIMDJSON_EXPERIMENTAL_ALLOW_INCOMPLETE_JSON
         run: |
           make python-build
 
