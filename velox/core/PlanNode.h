@@ -4717,19 +4717,54 @@ class MarkDistinctNode : public PlanNode {
   const RowTypePtr outputType_;
 };
 
-/// Optimized version of a WindowNode for a single row_number function with a
-/// limit over sorted partitions.
-/// The output of this node contains all input columns followed by an optional
+/// Optimized version of a WindowNode for a single row_number, rank or
+/// dense_rank function with a limit over sorted partitions. The output of this
+/// node contains all input columns followed by an optional
 /// 'rowNumberColumnName' BIGINT column.
+/// TODO: This node will be renamed to TopNRank once all the support for
+/// handling rank and dense_rank is committed to Velox.
 class TopNRowNumberNode : public PlanNode {
  public:
+  enum class RankFunction {
+    kRowNumber,
+    kRank,
+    kDenseRank,
+  };
+
+  static const char* rankFunctionName(TopNRowNumberNode::RankFunction function);
+
+  static RankFunction rankFunctionFromName(const std::string& name);
+
+  /// @param rankFunction RanksFunction (row_number, rank, dense_rank) for TopN.
   /// @param partitionKeys Partitioning keys. May be empty.
   /// @param sortingKeys Sorting keys. May not be empty and may not intersect
   /// with 'partitionKeys'.
   /// @param sortingOrders Sorting orders, one per sorting key.
   /// @param rowNumberColumnName Optional name of the column containing row
-  /// numbers. If not specified, the output doesn't include 'row number'
-  /// column. This is used when computing partial results.
+  /// numbers (or rank and dense_rank). If not specified, the output doesn't
+  /// include 'row number' column. This is used when computing partial results.
+  /// @param limit Per-partition limit. The number of
+  /// rows produced by this node will not exceed this value for any given
+  /// partition. Extra rows will be dropped.
+  TopNRowNumberNode(
+      PlanNodeId id,
+      RankFunction function,
+      std::vector<FieldAccessTypedExprPtr> partitionKeys,
+      std::vector<FieldAccessTypedExprPtr> sortingKeys,
+      std::vector<SortOrder> sortingOrders,
+      const std::optional<std::string>& rowNumberColumnName,
+      int32_t limit,
+      PlanNodePtr source);
+
+  /// Note : This constructor is for backwards compatibility. Remove it after
+  /// migrating Prestissimo to use the new constructor.
+  /// @param partitionKeys Partitioning keys. May be empty.
+  /// @param sortingKeys Sorting keys. May not be empty and may not intersect
+  /// with 'partitionKeys'.
+  /// @param sortingOrders Sorting orders, one per sorting key.
+  /// @param rowNumberColumnName Optional name of the column containing row
+  /// numbers (or rank and dense_rank). If not specified, the output doesn't
+  /// include 'row number' column. This is used when computing partial results.
   /// @param limit Per-partition limit. The number of
   /// rows produced by this node will not exceed this value for any given
   /// partition. Extra rows will be dropped.
@@ -4740,7 +4775,16 @@ class TopNRowNumberNode : public PlanNode {
       std::vector<SortOrder> sortingOrders,
       const std::optional<std::string>& rowNumberColumnName,
       int32_t limit,
-      PlanNodePtr source);
+      PlanNodePtr source)
+      : TopNRowNumberNode(
+            id,
+            RankFunction::kRowNumber,
+            partitionKeys,
+            sortingKeys,
+            sortingOrders,
+            rowNumberColumnName,
+            limit,
+            source) {}
 
   class Builder {
    public:
@@ -4761,6 +4805,11 @@ class TopNRowNumberNode : public PlanNode {
 
     Builder& id(PlanNodeId id) {
       id_ = std::move(id);
+      return *this;
+    }
+
+    Builder& function(RankFunction function) {
+      function_ = function;
       return *this;
     }
 
@@ -4815,6 +4864,7 @@ class TopNRowNumberNode : public PlanNode {
 
       return std::make_shared<TopNRowNumberNode>(
           id_.value(),
+          function_.has_value() ? function_.value() : RankFunction::kRowNumber,
           partitionKeys_.value(),
           sortingKeys_.value(),
           sortingOrders_.value(),
@@ -4825,6 +4875,7 @@ class TopNRowNumberNode : public PlanNode {
 
    private:
     std::optional<PlanNodeId> id_;
+    std::optional<RankFunction> function_;
     std::optional<std::vector<FieldAccessTypedExprPtr>> partitionKeys_;
     std::optional<std::vector<FieldAccessTypedExprPtr>> sortingKeys_;
     std::optional<std::vector<SortOrder>> sortingOrders_;
@@ -4868,6 +4919,10 @@ class TopNRowNumberNode : public PlanNode {
     return limit_;
   }
 
+  RankFunction rankFunction() const {
+    return function_;
+  }
+
   bool generateRowNumber() const {
     return outputType_->size() > sources_[0]->outputType()->size();
   }
@@ -4882,6 +4937,8 @@ class TopNRowNumberNode : public PlanNode {
 
  private:
   void addDetails(std::stringstream& stream) const override;
+
+  const RankFunction function_;
 
   const std::vector<FieldAccessTypedExprPtr> partitionKeys_;
 
