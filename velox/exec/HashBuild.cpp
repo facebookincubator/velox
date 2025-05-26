@@ -182,6 +182,12 @@ void HashBuild::setupTable() {
   }
   lookup_ = std::make_unique<HashLookup>(table_->hashers(), pool());
   analyzeKeys_ = table_->hashMode() != BaseHashTable::HashMode::kHash;
+  if (abandonBuildNoDupHashMinPct_ == 0) {
+    // Building a HashTable without duplicates is disabled if
+    // abandonBuildNoDupHashMinPct_ is 0.
+    abandonBuildNoDupHash_ = true;
+    table_->joinTableMayHaveDuplicates();
+  }
 }
 
 void HashBuild::setupSpiller(SpillPartition* spillPartition) {

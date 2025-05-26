@@ -46,11 +46,13 @@ Generic Configuration
    * - abandon_build_no_dup_hash_min_rows
      - integer
      - 100,000
-     - Number of input rows to receive before starting to check whether to abandon building a HashTable without duplicates in HashBuild for left semi/anti join.
+     - Number of input rows to receive before starting to check whether to abandon building a HashTable without
+       duplicates in HashBuild for left semi/anti join.
    * - abandon_build_no_dup_hash_min_pct
      - integer
-     - 70
-     - Abandons building a HashTable without duplicates in HashBuild for left semi/anti join if the percentage of distinct keys in the HashTable exceeds this threshold.
+     - 0
+     - Abandons building a HashTable without duplicates in HashBuild for left semi/anti join if the percentage of
+       distinct keys in the HashTable exceeds this threshold. Zero means 'disable this optimization'.
    * - session_timezone
      - string
      -
