@@ -13,7 +13,7 @@
 # limitations under the License.
 include_guard(GLOBAL)
 
-block()
+block() # This creates a separate scope so any changed variables don't affect the rest of the build.
 
 set(VELOX_GEOS_BUILD_VERSION 3.10.7)
 set(VELOX_GEOS_BUILD_SHA256_CHECKSUM
