@@ -30,28 +30,18 @@ set -x # Print commands that are executed.
 
 SCRIPTDIR=$(dirname "${BASH_SOURCE[0]}")
 export INSTALL_PREFIX=${INSTALL_PREFIX:-"$(pwd)/deps-install"}
-source $SCRIPTDIR/setup-helper-functions.sh
+source $SCRIPTDIR/setup-common.sh
 PYTHON_VENV=${PYTHON_VENV:-"${SCRIPTDIR}/../.venv"}
 # Allow installed package headers to be picked up before brew package headers
 # by tagging the brew packages to be system packages.
 # This is used during package builds.
 export OS_CXXFLAGS=" -isystem $(brew --prefix)/include "
-NPROC=${BUILD_THREADS:-$(getconf _NPROCESSORS_ONLN)}
 
-BUILD_DUCKDB="${BUILD_DUCKDB:-true}"
-BUILD_GEOS="${BUILD_GEOS:-true}"
-VELOX_BUILD_SHARED=${VELOX_BUILD_SHARED:-"OFF"} #Build folly shared for use in libvelox.so.
 DEPENDENCY_DIR=${DEPENDENCY_DIR:-$(pwd)}
-MACOS_VELOX_DEPS="bison flex gflags glog googletest icu4c libevent libsodium lz4 lzo openssl protobuf@21 snappy xz xxhash zstd"
-MACOS_BUILD_DEPS="ninja cmake"
+MACOS_VELOX_DEPS="bison flex gflags glog googletest icu4c libevent libsodium lz4 lzo openssl protobuf@21 simdjson snappy xz zstd"
+MACOS_BUILD_DEPS="ninja cmake ccache"
 
-FB_OS_VERSION="v2025.04.28.00"
-FMT_VERSION="10.1.1"
-BOOST_VERSION="boost-1.84.0"
-STEMMER_VERSION="2.2.0"
-DUCKDB_VERSION="v0.8.1"
-GEOS_VERSION="3.10.7"
-FAST_FLOAT_VERSION="v8.0.2"
+SUDO="${SUDO:-""}"
 
 function update_brew {
   DEFAULT_BREW_PATH=/usr/local/bin/brew
@@ -105,31 +95,24 @@ function install_velox_deps_from_brew {
   done
 }
 
-function install_boost {
-  wget_and_untar https://github.com/boostorg/boost/releases/download/${BOOST_VERSION}/${BOOST_VERSION}.tar.gz boost
-  (
-    cd ${DEPENDENCY_DIR}/boost
-    ./bootstrap.sh --prefix=${INSTALL_PREFIX}
-    ${SUDO} ./b2 "-j${NPROC}" -d0 install threading=multi --without-python
-  )
+function install_s3 {
+  install_aws_deps
+
+  local MINIO_OS="darwin"
+  install_minio ${MINIO_OS}
 }
 
-function install_fmt {
-  wget_and_untar https://github.com/fmtlib/fmt/archive/${FMT_VERSION}.tar.gz fmt
-  cmake_install_dir fmt -DFMT_TEST=OFF
+function install_gcs {
+  install_gcs-sdk-cpp
 }
 
-function install_fast_float {
-  wget_and_untar https://github.com/fastfloat/fast_float/archive/refs/tags/${FAST_FLOAT_VERSION}.tar.gz fast_float
-  cmake_install_dir fast_float -DBUILD_TESTS=OFF
+function install_abfs {
+  install_azure-storage-sdk-cpp
 }
 
-function install_folly {
-  # Folly Portability.h being used to decide whether or not support coroutines
-  # causes issues (build, lin) if the selection is not consistent across users of folly.
-  EXTRA_PKG_CXXFLAGS=" -DFOLLY_CFG_NO_COROUTINES"
-  wget_and_untar https://github.com/facebook/folly/archive/refs/tags/${FB_OS_VERSION}.tar.gz folly
-  cmake_install_dir folly -DBUILD_TESTS=OFF -DBUILD_SHARED_LIBS="$VELOX_BUILD_SHARED" -DFOLLY_HAVE_INT128_T=ON
+function install_hdfs {
+  brew install libxml2 gsasl
+  install_hdfs_deps
 }
 
 function install_fizz {
@@ -208,6 +191,13 @@ function install_geos {
   fi
 }
 
+function install_adapters {
+  run_and_time install_s3
+  run_and_time install_gcs
+  run_and_time install_abfs
+  run_and_time install_hdfs
+}
+
 function install_velox_deps {
   run_and_time install_velox_deps_from_brew
   run_and_time install_ranges_v3
@@ -221,8 +211,11 @@ function install_velox_deps {
   run_and_time install_wangle
   run_and_time install_mvfst
   run_and_time install_fbthrift
+  run_and_time install_xsimd
   run_and_time install_duckdb
   run_and_time install_stemmer
+  run_and_time install_thrift
+  run_and_time install_arrow
   run_and_time install_geos
 }
 
