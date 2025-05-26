@@ -812,7 +812,9 @@ TEST_F(CbrtTest, cbrt) {
   EXPECT_EQ(cbrt(-8), -2.0);
   EXPECT_EQ(cbrt(0), 0.0);
   EXPECT_EQ(cbrt(kInf), kInf);
+  EXPECT_EQ(cbrt(-kInf), -kInf);
   EXPECT_TRUE(std::isnan(cbrt(kNan).value()));
+}
 
 } // namespace
 } // namespace facebook::velox::functions::sparksql::test
