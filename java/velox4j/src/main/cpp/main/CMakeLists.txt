@@ -13,29 +13,29 @@
 # limitations under the License.
 # Variables.
 set(VELOX4J_SOURCES
-    velox4j/init/Init.cc
-    velox4j/jni/JniCommon.cc
-    velox4j/jni/JniError.cc
-    velox4j/jni/JniLoader.cc
-    velox4j/jni/JniWrapper.cc
-    velox4j/jni/StaticJniWrapper.cc
-    velox4j/iterator/UpIterator.cc
-    velox4j/iterator/DownIterator.cc
-    velox4j/lifecycle/ObjectStore.cc
-    velox4j/lifecycle/Session.cc
-    velox4j/arrow/Arrow.cc
-    velox4j/query/Query.cc
-    velox4j/query/QueryExecutor.cc
-    velox4j/connector/ExternalStream.cc
-    velox4j/memory/AllocationListener.cc
-    velox4j/memory/JavaAllocationListener.cc
-    velox4j/memory/MemoryManager.cc
-    velox4j/memory/ArrowMemoryPool.cc
-    velox4j/conf/Config.cc
-    velox4j/init/Config.cc
-    velox4j/eval/Evaluation.cc
-    velox4j/eval/Evaluator.cc
-    velox4j/iterator/BlockingQueue.cc)
+        velox4j/init/Init.cpp
+        velox4j/jni/JniCommon.cpp
+        velox4j/jni/JniError.cpp
+        velox4j/jni/JniLoader.cpp
+        velox4j/jni/JniWrapper.cpp
+        velox4j/jni/StaticJniWrapper.cpp
+        velox4j/iterator/UpIterator.cpp
+        velox4j/iterator/DownIterator.cpp
+        velox4j/lifecycle/ObjectStore.cpp
+        velox4j/lifecycle/Session.cpp
+        velox4j/arrow/Arrow.cpp
+        velox4j/query/Query.cpp
+        velox4j/query/QueryExecutor.cpp
+        velox4j/connector/ExternalStream.cpp
+        velox4j/memory/AllocationListener.cpp
+        velox4j/memory/JavaAllocationListener.cpp
+        velox4j/memory/MemoryManager.cpp
+        velox4j/memory/ArrowMemoryPool.cpp
+        velox4j/conf/Config.cpp
+        velox4j/init/Config.cpp
+        velox4j/eval/Evaluation.cpp
+        velox4j/eval/Evaluator.cpp
+        velox4j/iterator/BlockingQueue.cpp)
 set(VELOX4J_INCLUDES ${CMAKE_CURRENT_LIST_DIR} ${velox_SOURCE_DIR}
                      ${JniHelpersLib_SOURCE_DIR})
 set(VELOX4J_DEPENDENCIES velox JniHelpers JNI::JNI)
