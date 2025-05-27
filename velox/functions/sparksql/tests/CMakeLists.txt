@@ -42,7 +42,6 @@ add_executable(
   GetJsonObjectTest.cpp
   GetStructFieldTest.cpp
   HashTest.cpp
-  InitcapTest.cpp
   InTest.cpp
   JsonArrayLengthTest.cpp
   JsonObjectKeysTest.cpp

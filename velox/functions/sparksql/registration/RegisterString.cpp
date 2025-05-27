@@ -18,7 +18,6 @@
 #include "velox/functions/prestosql/StringFunctions.h"
 #include "velox/functions/prestosql/URLFunctions.h"
 #include "velox/functions/sparksql/ConcatWs.h"
-#include "velox/functions/sparksql/InitcapFunction.h"
 #include "velox/functions/sparksql/LuhnCheckFunction.h"
 #include "velox/functions/sparksql/MaskFunction.h"
 #include "velox/functions/sparksql/Split.h"
