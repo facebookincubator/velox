@@ -348,14 +348,12 @@ uint64_t ArbitrationParticipant::shrinkLocked(bool reclaimAll) {
   return reclaimedBytes;
 }
 
-uint64_t ArbitrationParticipant::abort(
-    const std::exception_ptr& error) noexcept {
+uint64_t ArbitrationParticipant::abort(const std::exception_ptr& error) {
   std::lock_guard<std::timed_mutex> l(reclaimMutex_);
   return abortLocked(error);
 }
 
-uint64_t ArbitrationParticipant::abortLocked(
-    const std::exception_ptr& error) noexcept {
+uint64_t ArbitrationParticipant::abortLocked(const std::exception_ptr& error) {
   TestValue::adjust(
       "facebook::velox::memory::ArbitrationParticipant::abortLocked", this);
   {

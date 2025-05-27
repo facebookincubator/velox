@@ -250,7 +250,7 @@ class ArbitrationParticipant
 
   /// Invoked to abort the query memory pool and returns the reclaimed bytes
   /// after abort.
-  uint64_t abort(const std::exception_ptr& error) noexcept;
+  uint64_t abort(const std::exception_ptr& error);
 
   /// Returns true if the query memory pool has been aborted.
   bool aborted() const {
@@ -339,7 +339,7 @@ class ArbitrationParticipant
   uint64_t minGrowCapacity() const;
 
   // Aborts the query memory pool and returns the reclaimed bytes after abort.
-  uint64_t abortLocked(const std::exception_ptr& error) noexcept;
+  uint64_t abortLocked(const std::exception_ptr& error);
 
   uint64_t shrinkLocked(bool reclaimAll);
 
