@@ -2322,3 +2322,39 @@ TEST_F(StringFunctionsTest, xxHash64FunctionVarchar) {
   // Non-ASCII strings
   EXPECT_EQ(8176744303664166369, xxhash64("日本語"));
 }
+
+TEST_F(StringFunctionsTest, initcap) {
+  const auto initcap = [&](const std::optional<std::string>& value) {
+    return evaluateOnce<std::string>("initcap(c0)", value);
+  };
+  // Unicode only.
+  EXPECT_EQ(
+      initcap("àáâãäåæçèéêëìíîïðñòóôõöøùúûüýþ"),
+      "Àáâãäåæçèéêëìíîïðñòóôõöøùúûüýþ");
+  EXPECT_EQ(initcap("αβγδεζηθικλμνξοπρςστυφχψ"), "Αβγδεζηθικλμνξοπρςστυφχψ");
+
+  // Mix of ASCII and Unicode.
+  EXPECT_EQ(initcap("αβγδεζ world"), "Αβγδεζ World");
+  EXPECT_EQ(initcap("αfoo wβ"), "Αfoo Wβ");
+
+  // ASCII only.
+  EXPECT_EQ(initcap("hello world"), "Hello World");
+  EXPECT_EQ(initcap("HELLO WORLD"), "Hello World");
+  EXPECT_EQ(initcap("1234"), "1234");
+  EXPECT_EQ(initcap("a b c d"), "A B C D");
+  EXPECT_EQ(initcap("abcd"), "Abcd");
+
+  // Delimiter variations (all treat any whitespace as a word break)
+  EXPECT_EQ(initcap("foo bar"), "Foo Bar");
+  EXPECT_EQ(initcap("foo\tbar"), "Foo\tBar");
+  EXPECT_EQ(initcap("foo\nbar"), "Foo\nBar");
+  EXPECT_EQ(initcap("foo \t\nbar baz"), "Foo \t\nBar Baz");
+
+  // Numbers.
+  EXPECT_EQ(initcap("123"), "123");
+  EXPECT_EQ(initcap("1abc de"), "1abc De");
+
+  // Edge cases.
+  EXPECT_EQ(initcap(""), "");
+  EXPECT_EQ(initcap(std::nullopt), std::nullopt);
+}

@@ -111,6 +111,70 @@ class StringImplTest : public testing::Test {
         {"\u1E8A", "\u1E8B"},
         {"\u1E8E", "\u1E8F"}};
   }
+
+  static std::vector<std::tuple<std::string, std::string>>
+  getPrestoInitcapUnicodeTestData() {
+    return {
+        {u8"foo\u0020bar", u8"Foo\u0020Bar"},
+        {u8"foo\u0009bar", u8"Foo\u0009Bar"},
+        {u8"foo\u000Abar", u8"Foo\u000ABar"},
+        {u8"foo\u0020\u0009\u000Abar", u8"Foo\u0020\u0009\u000ABar"},
+        {u8"foo\u00A0bar", u8"Foo\u00A0Bar"},
+        {u8"\u00E9l\u00E8ve\u000Atr\u00E8s-intelligent",
+         u8"\u00C9l\u00E8ve\u000ATr\u00E8s-intelligent"}};
+  }
+
+  static std::vector<std::tuple<std::string, std::string>>
+  getPrestoInitcapAsciiTestData() {
+    return {
+        {"foo bar", "Foo Bar"},
+        {"foo\nbar", "Foo\nBar"},
+        {"foo \t\nbar", "Foo \t\nBar"}};
+  }
+
+  static std::vector<std::tuple<std::string, std::string>>
+  getSparkInitcapUnicodeTestData() {
+    return {
+        {"àáâãäåæçèéêëìíîïðñòóôõöøùúûüýþ", "Àáâãäåæçèéêëìíîïðñòóôõöøùúûüýþ"},
+        {"αβγδεζηθικλμνξοπρςστυφχψ", "Αβγδεζηθικλμνξοπρςστυφχψ"},
+        {"абвгдежзийклмнопрстуфхцчшщъыьэюя",
+         "Абвгдежзийклмнопрстуфхцчшщъыьэюя"},
+        {"hello world", "Hello World"},
+        {"HELLO WORLD", "Hello World"},
+        {"1234", "1234"},
+        {"1234", "1234"},
+        {"", ""},
+        {"élève très-intelligent", "Élève Très-intelligent"},
+        {"mañana-por_la_tarde!", "Mañana-por_la_tarde!"},
+        {"добро-пожаловать.тест", "Добро-пожаловать.тест"},
+        {"çalışkan öğrenci@üniversite.tr", "Çalışkan Öğrenci@üniversite.tr"},
+        {"emoji😊test🚀case", "Emoji😊test🚀case"},
+        {"тест@пример.рф", "Тест@пример.рф"}};
+  }
+
+  static std::vector<std::tuple<std::string, std::string>>
+  getSparkInitcapAsciiTestData() {
+    return {
+        {"abcdefg", "Abcdefg"},
+        {"ABCDEFG", "Abcdefg"},
+        {"a B c D e F g", "A B C D E F G"},
+        {"hello world", "Hello World"},
+        {"HELLO WORLD", "Hello World"},
+        {"1234", "1234"},
+        {"", ""},
+        {"urna.Ut@egetdictumplacerat.edu", "Urna.ut@egetdictumplacerat.edu"},
+        {"nibh.enim@egestas.ca", "Nibh.enim@egestas.ca"},
+        {"in@Donecat.ca", "In@donecat.ca"},
+        {"sodales@blanditviverraDonec.ca", "Sodales@blanditviverradonec.ca"},
+        {"sociis.natoque.penatibus@vitae.org",
+         "Sociis.natoque.penatibus@vitae.org"},
+        {"john_doe-123@example-site.com", "John_doe-123@example-site.com"},
+        {"MIXED.case-EMAIL_42@domain.NET", "Mixed.case-email_42@domain.net"},
+        {"...weird..case@@", "...weird..case@@"},
+        {"user-name+filter@sub.mail.org", "User-name+filter@sub.mail.org"},
+        {"CAPS_LOCK@DOMAIN.COM", "Caps_lock@domain.com"},
+        {"__init__.py@example.dev", "__init__.py@example.dev"}};
+  }
 };
 
 TEST_F(StringImplTest, upperAscii) {
@@ -889,4 +953,47 @@ TEST_F(StringImplTest, isAscii) {
   memcpy(&s[0], alpha, strlen(alpha));
   ASSERT_FALSE(isAscii(s.data(), strlen(alpha)));
   ASSERT_FALSE(isAscii(s.data(), s.size()));
+}
+
+TEST_F(StringImplTest, prestoInitcapUnicode) {
+  for (const auto& testCase : getPrestoInitcapUnicodeTestData()) {
+    auto input = StringView(std::get<0>(testCase));
+    auto& expectedInitcap = std::get<1>(testCase);
+
+    std::string initcapOutput;
+    initcap<false, false>(initcapOutput, input);
+    ASSERT_EQ(initcapOutput, expectedInitcap);
+  }
+}
+
+TEST_F(StringImplTest, prestoInitcapAscii) {
+  for (const auto& testCase : getPrestoInitcapAsciiTestData()) {
+    auto input = StringView(std::get<0>(testCase));
+    auto& expectedInitCap = std::get<1>(testCase);
+
+    std::string initcapOutput;
+    initcap<false, true>(initcapOutput, input);
+    ASSERT_EQ(initcapOutput, expectedInitCap);
+  }
+}
+TEST_F(StringImplTest, sparkInitcapUnicode) {
+  for (const auto& testCase : getSparkInitcapUnicodeTestData()) {
+    auto input = StringView(std::get<0>(testCase));
+    auto& expectedInitcap = std::get<1>(testCase);
+
+    std::string initcapOutput;
+    initcap<true, false>(initcapOutput, input);
+    ASSERT_EQ(initcapOutput, expectedInitcap);
+  }
+}
+
+TEST_F(StringImplTest, sparkInitcapAscii) {
+  for (const auto& testCase : getSparkInitcapAsciiTestData()) {
+    auto input = StringView(std::get<0>(testCase));
+    auto& expectedInitCap = std::get<1>(testCase);
+
+    std::string initcapOutput;
+    initcap<true, true>(initcapOutput, input);
+    ASSERT_EQ(initcapOutput, expectedInitCap);
+  }
 }
