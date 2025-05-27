@@ -123,6 +123,10 @@ TEST_F(FromJsonTest, basicFloat) {
   auto expected = makeNullableFlatVector<float>(
       {1.0,
        2.0,
+       -3.4028235E38,
+       3.4028235E38,
+       -kInfFloat,
+       kInfFloat,
        std::nullopt,
        kNaNFloat,
        -kInfFloat,
@@ -133,6 +137,10 @@ TEST_F(FromJsonTest, basicFloat) {
   auto input = makeFlatVector<std::string>(
       {R"({"a": 1})",
        R"({"a": 2.0})",
+       R"({"a": -3.4028235E38})", // Min float value
+       R"({"a": 3.4028235E38})", // Max float value
+       R"({"a": -3.4028235E39})",
+       R"({"a": 3.4028235E39})",
        R"({"a": "3"})",
        R"({"a": "NaN"})",
        R"({"a": "-Infinity"})",
@@ -147,6 +155,10 @@ TEST_F(FromJsonTest, basicDouble) {
   auto expected = makeNullableFlatVector<double>(
       {1.0,
        2.0,
+       -1.7976931348623158e+308,
+       1.7976931348623158e+308,
+       -kInfDouble,
+       kInfDouble,
        std::nullopt,
        kNaNDouble,
        -kInfDouble,
@@ -157,6 +169,10 @@ TEST_F(FromJsonTest, basicDouble) {
   auto input = makeFlatVector<std::string>(
       {R"({"a": 1})",
        R"({"a": 2.0})",
+       R"({"a": -1.7976931348623158e+308})", // Min double value
+       R"({"a": 1.7976931348623158e+308})", // Max double value
+       R"({"a": -1.7976931348623158e+309})",
+       R"({"a": 1.7976931348623158e+309})",
        R"({"a": "3"})",
        R"({"a": "NaN"})",
        R"({"a": "-Infinity"})",
