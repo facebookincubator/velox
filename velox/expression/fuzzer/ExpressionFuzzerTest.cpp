@@ -93,7 +93,6 @@ int main(int argc, char** argv) {
       // (since TDigest is a user defined type), and tries to pass a
       // VARBINARY (since TDigest's implementation uses an
       // alias to VARBINARY).
-      "values_at_quantiles",
       "merge_tdigest",
       "construct_tdigest",
       // Fuzzer cannot generate valid 'comparator' lambda.
@@ -177,6 +176,8 @@ int main(int argc, char** argv) {
           {"json_extract", std::make_shared<JsonExtractArgValuesGenerator>()},
           {"value_at_quantile",
            std::make_shared<TDigestArgValuesGenerator>("value_at_quantile")},
+          {"values_at_quantiles",
+           std::make_shared<TDigestArgValuesGenerator>("values_at_quantiles")},
           {"scale_tdigest",
            std::make_shared<TDigestArgValuesGenerator>("scale_tdigest")},
           {"quantile_at_value",
