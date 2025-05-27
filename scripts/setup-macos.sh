@@ -139,7 +139,9 @@ function install_velox_deps {
   run_and_time install_xsimd
   run_and_time install_duckdb
   run_and_time install_stemmer
-  run_and_time install_thrift
+# We allow arrow to bundle thrift on MacOS due to issues with bison and flex.
+# See https://github.com/facebook/fbthrift/pull/317 for an explanation.
+# run_and_time install_thrift
   run_and_time install_arrow
   run_and_time install_geos
 }
