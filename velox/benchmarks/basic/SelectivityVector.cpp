@@ -20,7 +20,6 @@
 #include <gflags/gflags.h>
 
 #include "velox/functions/lib/benchmarks/FunctionBenchmarkBase.h"
-#include "velox/vector/DecodedVector.h"
 #include "velox/vector/fuzzer/VectorFuzzer.h"
 
 DEFINE_int64(fuzzer_seed, 99887766, "Seed for random input dataset generator");
