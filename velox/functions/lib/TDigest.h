@@ -163,6 +163,17 @@ class TDigest {
     return means_.data();
   }
 
+  /// Returns the size of the digest which is the total weight of all values
+  /// added to this digest
+  double sizeOfCentroids() const {
+    return std::accumulate(weights_.begin(), weights_.end(), 0.0);
+  }
+
+  /// Returns true if weights is empty
+  bool isWeightsEmpty() const {
+    return weights_.empty() == true;
+  }
+
   static constexpr int8_t kSerializationVersion = 1;
   static constexpr double kEpsilon = 1e-3;
   static constexpr double kRelativeErrorEpsilon = 1e-4;
