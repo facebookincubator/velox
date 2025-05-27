@@ -28,13 +28,13 @@ target_link_libraries(
 set(TEST_OBJECT_FILES $<TARGET_OBJECTS:velox_fuzzer_connector>)
 
 add_executable(velox4j_query_serde_test ${TEST_OBJECT_FILES}
-        velox4j/query/QuerySerdeTest.cpp)
+                                        velox4j/query/QuerySerdeTest.cpp)
 target_link_libraries(
   velox4j_query_serde_test velox4j_test)
 add_test(velox4j_query_serde_test velox4j_query_serde_test)
 
 add_executable(velox4j_query_test ${TEST_OBJECT_FILES}
-        velox4j/query/QueryTest.cpp)
+                                  velox4j/query/QueryTest.cpp)
 target_link_libraries(
   velox4j_query_test velox4j_test)
 add_test(velox4j_query_test velox4j_query_test)
