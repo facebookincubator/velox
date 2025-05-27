@@ -16,6 +16,7 @@
 
 #pragma once
 
+#include <cctype>
 #include "utf8proc/utf8proc.h"
 #include "velox/functions/Macros.h"
 
@@ -31,8 +32,26 @@ inline bool isSpaceUtf8(utf8proc_int32_t cp) {
   return (category >= UTF8PROC_CATEGORY_ZS && category <= UTF8PROC_CATEGORY_ZP);
 }
 
+template <bool onlySpaceDelimiter>
+inline bool isDelimiterAscii(unsigned char ch) {
+  if constexpr (onlySpaceDelimiter) {
+    return ch == ' ';
+  } else {
+    return std::isspace(ch);
+  }
+}
+
+template <bool onlySpaceDelimiter>
+inline bool isDelimiterUtf8(utf8proc_int32_t cp) {
+  if constexpr (onlySpaceDelimiter) {
+    return cp == 0x20;
+  } else {
+    return isSpaceUtf8(cp);
+  }
+}
+
 // ASCII InitCap Implementation
-template <typename TOutString, typename TInString>
+template <bool onlySpaceDelimiter, typename TOutString, typename TInString>
 FOLLY_ALWAYS_INLINE bool initcapAsciiImpl(
     TOutString& output,
     const TInString& input) {
@@ -41,11 +60,10 @@ FOLLY_ALWAYS_INLINE bool initcapAsciiImpl(
   char* outputChars = output.data();
 
   bool isStartOfWord = true;
-
   for (size_t i = 0; i < input.size(); ++i) {
     unsigned char currentChar = static_cast<unsigned char>(inputChars[i]);
 
-    if (std::isspace(currentChar)) {
+    if (isDelimiterAscii<onlySpaceDelimiter>(currentChar)) {
       isStartOfWord = true;
       outputChars[i] = currentChar;
     } else if (isStartOfWord && std::isalpha(currentChar)) {
@@ -55,12 +73,11 @@ FOLLY_ALWAYS_INLINE bool initcapAsciiImpl(
       outputChars[i] = std::tolower(currentChar);
     }
   }
-
   return true;
 }
 
 // UTF-8 InitCap Implementation
-template <typename TOutString, typename TInString>
+template <bool onlySpaceDelimiter, typename TOutString, typename TInString>
 FOLLY_ALWAYS_INLINE bool initcapUtf8Impl(
     TOutString& output,
     const TInString& input) {
@@ -80,10 +97,9 @@ FOLLY_ALWAYS_INLINE bool initcapUtf8Impl(
     }
 
     utf8proc_int32_t capitalizedCodepoint;
-
-    if (isSpaceUtf8(originalCodepoint)) {
-      isStartOfWord = true;
+    if (isDelimiterUtf8<onlySpaceDelimiter>(originalCodepoint)) {
       capitalizedCodepoint = originalCodepoint;
+      isStartOfWord = true;
     } else if (isStartOfWord && isAlphaUtf8(originalCodepoint)) {
       capitalizedCodepoint = utf8proc_toupper(originalCodepoint);
       isStartOfWord = false;
@@ -101,19 +117,20 @@ FOLLY_ALWAYS_INLINE bool initcapUtf8Impl(
   return true;
 }
 
-template <bool isAscii, typename TOutString, typename TInString>
+template <
+    bool onlySpaceDelimiter,
+    bool isAscii,
+    typename TOutString,
+    typename TInString>
 FOLLY_ALWAYS_INLINE bool initcap(TOutString& output, const TInString& input) {
   if constexpr (isAscii) {
-    return initcapAsciiImpl(output, input);
+    return initcapAsciiImpl<onlySpaceDelimiter>(output, input);
   } else {
-    return initcapUtf8Impl(output, input);
+    return initcapUtf8Impl<onlySpaceDelimiter>(output, input);
   }
 }
 } // namespace
 
-/// Converts the first character of each word in the input string to uppercase
-/// The implementation logic is taken from
-/// https://github.com/apache/hive/blob/master/ql/src/java/org/apache/hadoop/hive/ql/udf/generic/GenericUDFInitCap.java
 template <typename T>
 struct InitCapFunction {
   VELOX_DEFINE_FUNCTION_TYPES(T);
@@ -123,13 +140,28 @@ struct InitCapFunction {
   FOLLY_ALWAYS_INLINE void call(
       out_type<Varchar>& result,
       const arg_type<Varchar>& input) {
-    initcap<false>(result, input);
+    initcap<false /* all whitespace */, false /* UTF-8 */>(result, input);
   }
 
+  // Presto style: only ASCII-space → UTF-8 path
+  FOLLY_ALWAYS_INLINE void callSpace(
+      out_type<Varchar>& result,
+      const arg_type<Varchar>& input) {
+    initcap<true /* only space */, false /* UTF-8 */>(result, input);
+  }
+
+  // ASCII fast-path, all whitespace
   FOLLY_ALWAYS_INLINE void callAscii(
       out_type<Varchar>& result,
       const arg_type<Varchar>& input) {
-    initcap<true>(result, input);
+    initcap<false /* all whitespace */, true /* ASCII */>(result, input);
+  }
+
+  // ASCII fast-path, only ASCII-space
+  FOLLY_ALWAYS_INLINE void callAsciiSpace(
+      out_type<Varchar>& result,
+      const arg_type<Varchar>& input) {
+    initcap<true /* only space */, true /* ASCII */>(result, input);
   }
 };
 
