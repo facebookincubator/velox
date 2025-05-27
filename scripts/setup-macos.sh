@@ -39,7 +39,7 @@ export OS_CXXFLAGS=" -isystem $(brew --prefix)/include "
 
 DEPENDENCY_DIR=${DEPENDENCY_DIR:-$(pwd)}
 MACOS_VELOX_DEPS="bison flex gflags glog googletest icu4c libevent libsodium lz4 lzo openssl protobuf@21 simdjson snappy xz zstd"
-MACOS_BUILD_DEPS="ninja cmake ccache"
+MACOS_BUILD_DEPS="ninja cmake"
 
 SUDO="${SUDO:-""}"
 
@@ -80,12 +80,12 @@ function install_build_prerequisites {
     python3 -m venv ${PYTHON_VENV}
   fi
   source ${PYTHON_VENV}/bin/activate; pip3 install cmake-format regex pyyaml
-  if [ ! -f /usr/local/bin/ccache ]; then
-    curl -L https://github.com/ccache/ccache/releases/download/v4.10.2/ccache-4.10.2-darwin.tar.gz > ccache.tar.gz
-    tar -xf ccache.tar.gz
-    mv ccache-4.10.2-darwin/ccache /usr/local/bin/
-    rm -rf ccache-4.10.2-darwin ccache.tar.gz
-  fi
+
+  # Install ccache
+  curl -L https://github.com/ccache/ccache/releases/download/v${CCACHE_VERSION}/ccache-${CCACHE_VERSION}-darwin.tar.gz > ccache.tar.gz
+  tar -xf ccache.tar.gz
+  mv ccache-${CCACHE_VERSION}-darwin/ccache /usr/local/bin/
+  rm -rf ccache-${CCACHE_VERSION}-darwin ccache.tar.gz
 }
 
 function install_velox_deps_from_brew {
