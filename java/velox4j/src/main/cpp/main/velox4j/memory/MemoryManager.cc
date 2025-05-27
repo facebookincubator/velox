@@ -348,8 +348,8 @@ MemoryManager::~MemoryManager() {
 velox::memory::MemoryPool* MemoryManager::getVeloxPool(
     const std::string& name,
     const velox::memory::MemoryPool::Kind& kind) {
-  if (veloxPoolRefs_.count(name) > 0) {
-    const auto& pool = veloxPoolRefs_[name];
+  if (const auto it = veloxPoolRefs_.find(name); it != veloxPoolRefs_.end()) {
+    const auto& pool = it->second;
     VELOX_CHECK_EQ(
         pool->kind(),
         kind,
@@ -377,8 +377,8 @@ velox::memory::MemoryPool* MemoryManager::getVeloxPool(
 }
 
 arrow::MemoryPool* MemoryManager::getArrowPool(const std::string& name) {
-  if (arrowPoolRefs_.count(name) > 0) {
-    return arrowPoolRefs_[name].get();
+  if (const auto it = arrowPoolRefs_.find(name); it != arrowPoolRefs_.end()) {
+    return it->second.get();
   }
   arrowPoolRefs_[name] =
       std::make_unique<ArrowMemoryPool>(arrowAllocator_.get());
