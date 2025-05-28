@@ -35,29 +35,6 @@
 #include "mathops.h"
 
 /*
- * Routine: set_precision(decimal_t *dest, int size, int precision)
- * Purpose:
- * Algorithm:
- * Data Structures:
- *
- * Params:
- * Returns: None
- * Called By:
- * Calls:
- * Assumptions:
- * Side Effects:
- * TODO: None
- */
-void set_precision(decimal_t* dest, int scale, int precision) {
-  dest->scale = scale;
-  dest->precision = precision;
-  dest->number = 0;
-  dest->flags = 0;
-
-  return;
-}
-
-/*
  * Routine: mk_decimal(int size, int precision)
  * Purpose: initialize a decimal_t
  * Algorithm:
@@ -120,30 +97,6 @@ int itodec(decimal_t* dest, int src) {
 }
 
 /*
- * Routine: ftodec(double f, decimal_t *dec)
- * Purpose: Convert a double to a decimal_t
- * Algorithm:
- * Data Structures:
- *
- * Params: double f
- * Returns: decimal_t *
- * Called By:
- * Calls:
- * Assumptions:
- * Side Effects:
- * TODO: None
- */
-int ftodec(decimal_t* dest, double f) {
-  std::vector<char> valbuf(20);
-
-  auto result = snprintf(valbuf.data(), valbuf.size(), "%f", f);
-  if (result < 0)
-    perror("sprintf failed");
-
-  return (strtodec(dest, valbuf.data()));
-}
-
-/*
  * Routine: strtodec()
  * Purpose: Convert an ascii string to a decimal_t structure
  * Algorithm:
@@ -183,80 +136,6 @@ int strtodec(decimal_t* dest, const char* s) {
 
   if (*s == '-' && dest->number > 0)
     dest->number *= -1;
-
-  return (0);
-}
-
-/*
- * Routine: dectostr(decimal_t *d, char *buf)
- * Purpose: convert a decimal structure to a string
- * Algorithm:
- * Data Structures:
- *
- * Params:
- * Returns: char *; NULL on success
- * Called By:
- * Calls:
- * Assumptions:
- * Side Effects:
- * TODO: None
- */
-int dectostr(
-    std::vector<char>& dest,
-    decimal_t* d,
-    DSDGenContext& dsdGenContext) {
-  ds_key_t number;
-  int i;
-  std::vector<char> szFormat(80);
-
-  if (!dsdGenContext.dectostr_init) {
-    auto result = snprintf(
-        szFormat.data(), szFormat.size(), "%s.%s", HUGE_FORMAT, HUGE_FORMAT);
-    if (result < 0)
-      perror("sprintf failed");
-    dsdGenContext.dectostr_init = 1;
-  }
-
-  if (d == NULL || dest.empty())
-    return (-1);
-  for (number = d->number, i = 0; i < d->precision; i++)
-    number /= 10;
-
-  dest.resize(160);
-  auto result =
-      snprintf(dest.data(), 160, szFormat.data(), number, d->number - number);
-  if (result < 0)
-    perror("sprintf failed");
-
-  return (0);
-}
-
-/*
- * Routine: dectof(float *dest, decimal_t *d)
- * Purpose: convert a decimal structure to a double
- * Algorithm:
- * Data Structures:
- *
- * Params:
- * Returns: char *; NULL on success
- * Called By:
- * Calls:
- * Assumptions:
- * Side Effects:
- * TODO: None
- */
-int dectoflt(double* dest, decimal_t* d) {
-  if ((dest == NULL) || (d == NULL))
-    return (-1);
-#ifdef WIN32
-#pragma warning(disable : 4244)
-#endif
-  *dest = d->number;
-#ifdef WIN32
-#pragma warning(default : 4244)
-#endif
-  while (--d->precision > 0)
-    *dest /= 10.0;
 
   return (0);
 }

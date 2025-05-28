@@ -17,6 +17,7 @@
 #include <folly/init/Init.h>
 #include "gtest/gtest.h"
 
+#include "velox/common/memory/Memory.h"
 #include "velox/tpcds/gen/TpcdsGen.h"
 #include "velox/vector/ComplexVector.h"
 #include "velox/vector/FlatVector.h"

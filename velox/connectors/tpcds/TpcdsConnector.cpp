@@ -14,6 +14,8 @@
  * limitations under the License.
  */
 
+#include <fmt/format.h>
+
 #include "velox/connectors/tpcds/TpcdsConnector.h"
 #include "velox/tpcds/gen/DSDGenIterator.h"
 
