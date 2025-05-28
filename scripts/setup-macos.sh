@@ -38,7 +38,7 @@ PYTHON_VENV=${PYTHON_VENV:-"${SCRIPTDIR}/../.venv"}
 export OS_CXXFLAGS=" -isystem $(brew --prefix)/include "
 
 DEPENDENCY_DIR=${DEPENDENCY_DIR:-$(pwd)}
-MACOS_VELOX_DEPS="bison flex gflags glog googletest icu4c libevent libsodium lz4 lzo openssl protobuf@21 simdjson snappy xz zstd"
+MACOS_VELOX_DEPS="bison flex gflags glog googletest icu4c libevent libsodium lz4 openssl protobuf@21 simdjson snappy xz zstd"
 MACOS_BUILD_DEPS="ninja cmake ccache"
 
 SUDO="${SUDO:-""}"
