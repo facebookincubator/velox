@@ -42,7 +42,6 @@
 #include "r_params.h"
 
 #include "columns.h"
-#include "streams.h"
 #include "tables.h"
 
 static long Mult = 16807; /* the multiplier */

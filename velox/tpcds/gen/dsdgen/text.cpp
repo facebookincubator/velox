@@ -161,6 +161,7 @@ char* gen_text(
       strcat(dest, " ");
       target_len -= 1;
     }
+    free(s);
   }
 
   return (dest);

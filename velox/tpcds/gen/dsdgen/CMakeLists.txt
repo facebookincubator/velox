@@ -21,7 +21,7 @@
 #
 #  THE TPC SOFTWARE IS AVAILABLE WITHOUT CHARGE FROM TPC.
 #
-cmake_minimum_required(VERSION 3.5.0)
+cmake_minimum_required(VERSION 3.10)
 cmake_policy(SET CMP0063 NEW)
 
 project(velox_tpcds_dsdgen CXX C)
@@ -79,4 +79,4 @@ velox_add_library(
   w_web_site.cpp)
 
 velox_include_directories(velox_tpcds_dsdgen PRIVATE include)
-velox_link_libraries(velox_tpcds_dsdgen velox_tpcds_append_info)
+velox_link_libraries(velox_tpcds_dsdgen velox_tpcds_append_info Folly::folly)

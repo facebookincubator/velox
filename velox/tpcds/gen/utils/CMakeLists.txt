@@ -12,5 +12,5 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-velox_add_library(velox_tpcds_append_info OBJECT append_info-c.cpp)
-velox_link_libraries(velox_tpcds_append_info Folly::folly xsimd)
+velox_add_library(velox_tpcds_append_info append_info-c.cpp)
+velox_link_libraries(velox_tpcds_append_info PRIVATE velox_vector fmt::fmt)
