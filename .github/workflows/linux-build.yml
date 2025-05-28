@@ -36,7 +36,7 @@ jobs:
       run:
         shell: bash
     env:
-      CCACHE_DIR: "${{ github.workspace }}/.ccache"
+      CCACHE_DIR: "${{ github.workspace }}/ccache"
       VELOX_DEPENDENCY_SOURCE: SYSTEM
       GTest_SOURCE: BUNDLED
       simdjson_SOURCE: BUNDLED
@@ -65,11 +65,10 @@ jobs:
           # TODO: Install a newer cmake here until we update the images upstream
           pip install cmake==3.30.4
 
-#     - uses: assignUser/stash/restore@v1
-#       with:
-#         token: '${{ secrets.ARTIFACT_CACHE_TOKEN }}'
-#         path: '${{ env.CCACHE_DIR }}'
-#         key: ccache-linux-adapters
+      - uses: assignUser/stash/restore@v1
+        with:
+          path: '${{ env.CCACHE_DIR }}'
+          key: ccache-linux-adapters
 
       - name: "Zero Ccache Statistics"
         run: |
@@ -120,7 +119,7 @@ jobs:
 #   runs-on: linux-amd64-cpu16
 #   name: "Ubuntu debug with resolve_dependency"
 #   env:
-#     CCACHE_DIR: "${{ github.workspace }}/.ccache"
+#     CCACHE_DIR: "${{ github.workspace }}/ccache"
 #   defaults:
 #     run:
 #       shell: bash
@@ -130,7 +129,6 @@ jobs:
 #     - name: Get Ccache Stash
 #       uses: assignUser/stash/restore@v1
 #       with:
-#         token: '${{ secrets.ARTIFACT_CACHE_TOKEN }}'
 #         path: '${{ env.CCACHE_DIR }}'
 #         key: ccache-ubuntu-debug-default
 
