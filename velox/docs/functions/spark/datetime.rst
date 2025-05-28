@@ -312,11 +312,11 @@ These functions support TIMESTAMP and DATE input types.
 
 .. spark:function:: trunc(date, fmt) -> date
 
-    Returns date ``date`` truncated to the unit specified by the format model ``fmt``.
+    Returns ``date`` truncated to the unit specified by the format model ``fmt``.
     Returns NULL if ``fmt`` is invalid.
 
     ``fmt`` is case insensitive and must be one of the following:
-        * "YEAR", "YYYY", "YY" - truncate to the first date of the year that the ``date``` falls in
+        * "YEAR", "YYYY", "YY" - truncate to the first date of the year that the ``date`` falls in
         * "QUARTER" - truncate to the first date of the quarter that the ``date`` falls in
         * "MONTH", "MM", "MON" - truncate to the first date of the month that the ``date`` falls in
         * "WEEK" - truncate to the Monday of the week that the ``date`` falls in
