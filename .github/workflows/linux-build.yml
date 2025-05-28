@@ -30,7 +30,7 @@ concurrency:
 jobs:
   adapters:
     name: Linux release with adapters
-    runs-on: linux-amd64-cpu16
+    runs-on: linux-amd64-gpu-l4-latest-1
     container: ghcr.io/facebookincubator/velox-dev:adapters
     defaults:
       run:
@@ -114,7 +114,7 @@ jobs:
         working-directory: _build/release
         run: |
           export CLASSPATH=`/usr/local/hadoop/bin/hdfs classpath --glob`
-          ctest -j 8 --label-exclude cuda_driver --output-on-failure --no-tests=error -E "velox_exec_test|velox_hdfs_file_test|velox_s3"
+          ctest -j 8 --output-on-failure --no-tests=error -E "velox_exec_test|velox_hdfs_file_test|velox_s3"
 
 # ubuntu-debug:
 #   runs-on: linux-amd64-cpu16
