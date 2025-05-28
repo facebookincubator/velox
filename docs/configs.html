@@ -710,7 +710,13 @@ Each query can override the config by setting corresponding query session proper
 <td><p>100</p></td>
 <td><p>Maximum number of (bucketed) partitions per a single table writer instance.</p></td>
 </tr>
-<tr class="row-odd"><td><p>insert-existing-partitions-behavior</p></td>
+<tr class="row-odd"><td><p>hive.max-bucket-count</p></td>
+<td><p>hive.max_bucket_count</p></td>
+<td><p>integer</p></td>
+<td><p>100000</p></td>
+<td><p>Maximum number of buckets that a table writer is allowed to write to.</p></td>
+</tr>
+<tr class="row-even"><td><p>insert-existing-partitions-behavior</p></td>
 <td><p>insert_existing_partitions_behavior</p></td>
 <td><p>string</p></td>
 <td><p>ERROR</p></td>
@@ -719,27 +725,27 @@ the update mode field of the table writer operator output. <code class="docutils
 sets the update mode to indicate overwriting a partition if exists. <code class="docutils literal notranslate"><span class="pre">ERROR</span></code> sets the update mode to indicate
 error throwing if writing to an existing partition.</p></td>
 </tr>
-<tr class="row-even"><td><p>hive.immutable-partitions</p></td>
+<tr class="row-odd"><td><p>hive.immutable-partitions</p></td>
 <td></td>
 <td><p>bool</p></td>
 <td><p>false</p></td>
 <td><p>True if appending data to an existing unpartitioned table is allowed. Currently this configuration does not
 support appending to existing partitions.</p></td>
 </tr>
-<tr class="row-odd"><td><p>file-column-names-read-as-lower-case</p></td>
+<tr class="row-even"><td><p>file-column-names-read-as-lower-case</p></td>
 <td></td>
 <td><p>bool</p></td>
 <td><p>false</p></td>
 <td><p>True if reading the source file column names as lower case, and planner should guarantee
 the input column name and filter is also lower case to achive case-insensitive read.</p></td>
 </tr>
-<tr class="row-even"><td><p>partition_path_as_lower_case</p></td>
+<tr class="row-odd"><td><p>partition_path_as_lower_case</p></td>
 <td></td>
 <td><p>bool</p></td>
 <td><p>true</p></td>
 <td><p>If true, the partition directory will be converted to lowercase when executing a table write operation.</p></td>
 </tr>
-<tr class="row-odd"><td><p>allow-null-partition-keys</p></td>
+<tr class="row-even"><td><p>allow-null-partition-keys</p></td>
 <td><p>allow_null_partition_keys</p></td>
 <td><p>bool</p></td>
 <td><p>true</p></td>
@@ -748,71 +754,71 @@ not be null” error message when writing data with null partition key.
 Null check for partitioning key should be used only when partitions are generated dynamically during query execution.
 For queries that write to fixed partitions, this check should happen much earlier before the Velox execution even starts.</p></td>
 </tr>
-<tr class="row-even"><td><p>ignore_missing_files</p></td>
+<tr class="row-odd"><td><p>ignore_missing_files</p></td>
 <td></td>
 <td><p>bool</p></td>
 <td><p>false</p></td>
 <td><p>If true, splits that refer to missing files don’t generate errors and are processed as empty splits.</p></td>
 </tr>
-<tr class="row-odd"><td><p>max-coalesced-bytes</p></td>
+<tr class="row-even"><td><p>max-coalesced-bytes</p></td>
 <td></td>
 <td><p>integer</p></td>
 <td><p>128MB</p></td>
 <td><p>Maximum size in bytes to coalesce requests to be fetched in a single request.</p></td>
 </tr>
-<tr class="row-even"><td><p>max-coalesced-distance</p></td>
+<tr class="row-odd"><td><p>max-coalesced-distance</p></td>
 <td></td>
 <td><p>integer</p></td>
 <td><p>512KB</p></td>
 <td><p>Maximum distance in capacity units between chunks to be fetched that may be coalesced into a single request.</p></td>
 </tr>
-<tr class="row-odd"><td><p>load-quantum</p></td>
+<tr class="row-even"><td><p>load-quantum</p></td>
 <td><p>load-quantum</p></td>
 <td><p>integer</p></td>
 <td><p>8MB</p></td>
 <td><p>Define the size of each coalesce load request. E.g. in Parquet scan, if it’s bigger than rowgroup size then the whole row group can be fetched together. Otherwise, the row group will be fetched column chunk by column chunk</p></td>
 </tr>
-<tr class="row-even"><td><p>num-cached-file-handles</p></td>
+<tr class="row-odd"><td><p>num-cached-file-handles</p></td>
 <td></td>
 <td><p>integer</p></td>
 <td><p>20000</p></td>
 <td><p>Maximum number of entries in the file handle cache. The value must be non-negative. Zero value
 indicates infinite cache capacity.</p></td>
 </tr>
-<tr class="row-odd"><td><p>file-handle-cache-enabled</p></td>
+<tr class="row-even"><td><p>file-handle-cache-enabled</p></td>
 <td></td>
 <td><p>bool</p></td>
 <td><p>true</p></td>
 <td><p>Enables caching of file handles if true. Disables caching if false. File handle cache should be
 disabled if files are not immutable, i.e. file content may change while file path stays the same.</p></td>
 </tr>
-<tr class="row-even"><td><p>sort-writer-max-output-rows</p></td>
+<tr class="row-odd"><td><p>sort-writer-max-output-rows</p></td>
 <td><p>sort_writer_max_output_rows</p></td>
 <td><p>integer</p></td>
 <td><p>1024</p></td>
 <td><p>Maximum number of rows for sort writer in one batch of output. This is to limit the memory usage of sort writer.</p></td>
 </tr>
-<tr class="row-odd"><td><p>sort-writer-max-output-bytes</p></td>
+<tr class="row-even"><td><p>sort-writer-max-output-bytes</p></td>
 <td><p>sort_writer_max_output_bytes</p></td>
 <td><p>string</p></td>
 <td><p>10MB</p></td>
 <td><p>Maximum bytes for sort writer in one batch of output. This is to limit the memory usage of sort writer.</p></td>
 </tr>
-<tr class="row-even"><td><p>file-preload-threshold</p></td>
+<tr class="row-odd"><td><p>file-preload-threshold</p></td>
 <td></td>
 <td><p>integer</p></td>
 <td><p>8MB</p></td>
 <td><p>Usually Velox fetches the meta data firstly then fetch the rest of file. But if the file is very small, Velox can fetch the whole file directly to avoid multiple IO requests.
 The parameter controls the threshold when whole file is fetched.</p></td>
 </tr>
-<tr class="row-odd"><td><p>footer-estimated-size</p></td>
+<tr class="row-even"><td><p>footer-estimated-size</p></td>
 <td></td>
 <td><p>integer</p></td>
 <td><p>1MB</p></td>
 <td><p>Define the estimation of footer size in ORC and Parquet format. The footer data includes version, schema, and meta data for every columns which may or may not need to be fetched later.
 The parameter controls the size when footer is fetched each time. Bigger value can decrease the IO requests but may fetch more useless meta data.</p></td>
 </tr>
-<tr class="row-even"><td><p>cache.no_retention</p></td>
+<tr class="row-odd"><td><p>cache.no_retention</p></td>
 <td><p>cache.no_retention</p></td>
 <td><p>bool</p></td>
 <td><p>false</p></td>
@@ -821,7 +827,7 @@ and also skip staging to the ssd cache. This helps to prevent the cache space po
 from the one-time table scan by large batch query when mixed running with interactive
 query which has high data locality.</p></td>
 </tr>
-<tr class="row-odd"><td><p>hive.reader.stats_based_filter_reorder_disabaled</p></td>
+<tr class="row-even"><td><p>hive.reader.stats_based_filter_reorder_disabaled</p></td>
 <td><p>hive.reader.stats_based_filter_reorder_disabaled</p></td>
 <td><p>bool</p></td>
 <td><p>false</p></td>
@@ -830,7 +836,7 @@ filter execution order is totally determined by the filter type. Otherwise, the 
 reader will dynamically adjust the filter execution order based on the past filter
 execution stats.</p></td>
 </tr>
-<tr class="row-even"><td><p>hive.reader.timestamp-partition-value-as-local-time</p></td>
+<tr class="row-odd"><td><p>hive.reader.timestamp-partition-value-as-local-time</p></td>
 <td><p>hive.reader.timestamp_partition_value_as_local_time</p></td>
 <td><p>bool</p></td>
 <td><p>true</p></td>
