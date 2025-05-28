@@ -42,9 +42,9 @@
 static int m_days[2][13] = {
     {0, 0, 31, 59, 90, 120, 151, 181, 212, 243, 273, 304, 334},
     {0, 0, 31, 60, 91, 121, 152, 182, 213, 244, 274, 305, 335}};
-const std::vector<std::string> qtr_start =
+static const std::vector<const char*> qtr_start =
     {"", "01-01", "04-01", "07-01", "10-01"};
-const std::vector<std::string> weekday_names = {
+const std::vector<const char*> weekday_names = {
     "",
     "Sunday",
     "Monday",
@@ -263,7 +263,7 @@ char* dttostr(date_t* d) {
   if (d == NULL)
     return (NULL);
 
-  snprintf(res.data(), 11, "%4d-%02d-%02d", d->year, d->month, d->day);
+  snprintf(res.data(), res.size(), "%4d-%02d-%02d", d->year, d->month, d->day);
 
   return res.data();
 }
@@ -336,11 +336,7 @@ int date_t_op(date_t* dest, int op, date_t* d1, date_t* d2) {
         case 2:
         case 3:
           snprintf(
-              tString.data(),
-              tString.size(),
-              "%4d-%s",
-              d1->year,
-              qtr_start[1].c_str());
+              tString.data(), tString.size(), "%4d-%s", d1->year, qtr_start[1]);
           strtodt(&tDate, tString.data());
           tJulian = d1->julian - tDate.julian;
           snprintf(
@@ -348,7 +344,7 @@ int date_t_op(date_t* dest, int op, date_t* d1, date_t* d2) {
               tString.size(),
               "%4d-%s",
               d1->year - 1,
-              qtr_start[4].c_str());
+              qtr_start[4]);
           strtodt(&tDate, tString.data());
           tJulian += tDate.julian;
           jtodt(dest, tJulian);
@@ -357,19 +353,11 @@ int date_t_op(date_t* dest, int op, date_t* d1, date_t* d2) {
         case 5:
         case 6:
           snprintf(
-              tString.data(),
-              tString.size(),
-              "%4d-%s",
-              d1->year,
-              qtr_start[2].c_str());
+              tString.data(), tString.size(), "%4d-%s", d1->year, qtr_start[2]);
           strtodt(&tDate, tString.data());
           tJulian = d1->julian - tDate.julian;
           snprintf(
-              tString.data(),
-              tString.size(),
-              "%4d-%s",
-              d1->year,
-              qtr_start[1].c_str());
+              tString.data(), tString.size(), "%4d-%s", d1->year, qtr_start[1]);
           strtodt(&tDate, tString.data());
           tJulian += tDate.julian;
           jtodt(dest, tJulian);
@@ -378,19 +366,11 @@ int date_t_op(date_t* dest, int op, date_t* d1, date_t* d2) {
         case 8:
         case 9:
           snprintf(
-              tString.data(),
-              tString.size(),
-              "%4d-%s",
-              d1->year,
-              qtr_start[3].c_str());
+              tString.data(), tString.size(), "%4d-%s", d1->year, qtr_start[3]);
           strtodt(&tDate, tString.data());
           tJulian = d1->julian - tDate.julian;
           snprintf(
-              tString.data(),
-              tString.size(),
-              "%4d-%s",
-              d1->year,
-              qtr_start[2].c_str());
+              tString.data(), tString.size(), "%4d-%s", d1->year, qtr_start[2]);
           strtodt(&tDate, tString.data());
           tJulian += tDate.julian;
           jtodt(dest, tJulian);
@@ -399,19 +379,11 @@ int date_t_op(date_t* dest, int op, date_t* d1, date_t* d2) {
         case 11:
         case 12:
           snprintf(
-              tString.data(),
-              tString.size(),
-              "%4d-%s",
-              d1->year,
-              qtr_start[4].c_str());
+              tString.data(), tString.size(), "%4d-%s", d1->year, qtr_start[4]);
           strtodt(&tDate, tString.data());
           tJulian = d1->julian - tDate.julian;
           snprintf(
-              tString.data(),
-              tString.size(),
-              "%4d-%s",
-              d1->year,
-              qtr_start[3].c_str());
+              tString.data(), tString.size(), "%4d-%s", d1->year, qtr_start[3]);
           strtodt(&tDate, tString.data());
           tJulian += tDate.julian;
           jtodt(dest, tJulian);

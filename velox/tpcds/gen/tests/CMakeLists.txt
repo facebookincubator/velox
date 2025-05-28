@@ -18,7 +18,8 @@ add_test(velox_tpcds_gen_test velox_tpcds_gen_test)
 target_link_libraries(
   velox_tpcds_gen_test
   velox_tpcds_gen
-  velox_type
   velox_vector
+  velox_memory
+  Folly::folly
   GTest::gtest
   GTest::gtest_main)
