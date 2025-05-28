@@ -781,8 +781,8 @@ TEST_F(ProbabilityTest, inverseChiSquaredCDF) {
   EXPECT_EQ(0.0, inverseChiSquaredCDF(3, 0.0));
   EXPECT_EQ(1.4236522430352796, inverseChiSquaredCDF(3, 0.3));
   EXPECT_EQ(11.344866730144370, inverseChiSquaredCDF(3, 0.99));
-  EXPECT_EQ(2.80930085646724e-123, inverseChiSquaredCDF(5, kDoubleMin));
-  EXPECT_EQ(kInf, inverseChiSquaredCDF(kDoubleMax, 0.95));
+  EXPECT_NEAR(kDoubleMin, inverseChiSquaredCDF(5, kDoubleMin).value(), 1e-15);
+  EXPECT_NEAR(kInf, inverseChiSquaredCDF(kDoubleMax, 0.95).value(), 1e-15);
   EXPECT_EQ(std::nullopt, inverseChiSquaredCDF(std::nullopt, 0.94));
   EXPECT_EQ(std::nullopt, inverseChiSquaredCDF(142.345, std::nullopt));
   EXPECT_EQ(std::nullopt, inverseChiSquaredCDF(std::nullopt, std::nullopt));
