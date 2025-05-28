@@ -20,11 +20,8 @@ velox_add_library(velox_tpcds_gen TpcdsGen.cpp DSDGenIterator.cpp)
 velox_include_directories(velox_tpcds_gen PUBLIC dsdgen/include)
 velox_link_libraries(
   velox_tpcds_gen
-  velox_memory
-  velox_vector
-  velox_tpcds_dsdgen
-  velox_tpcds_append_info
-  fmt::fmt)
+  PUBLIC velox_memory velox_tpcds_append_info
+  PRIVATE velox_vector velox_tpcds_dsdgen fmt::fmt)
 
 if(${VELOX_BUILD_TESTING})
   add_subdirectory(tests)

@@ -101,7 +101,7 @@ int mk_w_date(void* info_arr, ds_key_t index, DSDGenContext& dsdGenContext) {
   r->d_fy_year = r->d_year;
   r->d_fy_quarter_seq = r->d_quarter_seq;
   r->d_fy_week_seq = r->d_week_seq;
-  r->d_day_name = weekday_names[r->d_dow + 1].c_str();
+  r->d_day_name = weekday_names[r->d_dow + 1];
   dist_member(&r->d_holiday, "calendar", day_index, 8, dsdGenContext);
   if ((r->d_dow == 5) || (r->d_dow == 6))
     r->d_weekend = 1;
