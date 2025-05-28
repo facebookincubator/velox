@@ -140,6 +140,10 @@ struct PlanSummaryOptions {
   /// ROW(VARCHAR, ARRAY,...).
   size_t maxChildTypes = 0;
 
+  /// Controls the maximum length of a string that is included in the plan
+  /// summary.
+  size_t maxLength = 50;
+
   /// Options that apply specifically to AGGREGATION nodes.
   struct AggregateOptions {
     /// For a given AGGREGATION node, maximum number of aggregate expressions
@@ -325,7 +329,7 @@ class ValuesNode : public PlanNode {
     explicit Builder(const ValuesNode& other) {
       id_ = other.id();
       values_ = other.values();
-      parallelizable_ = other.isParallelizable();
+      parallelizable_ = other.testingIsParallelizable();
       repeatTimes_ = other.repeatTimes();
     }
 
@@ -339,7 +343,7 @@ class ValuesNode : public PlanNode {
       return *this;
     }
 
-    Builder& parallelizable(const bool parallelizable) {
+    Builder& testingParallelizable(const bool parallelizable) {
       parallelizable_ = parallelizable;
       return *this;
     }
@@ -378,7 +382,7 @@ class ValuesNode : public PlanNode {
   }
 
   // For testing only.
-  bool isParallelizable() const {
+  bool testingIsParallelizable() const {
     return parallelizable_;
   }
 
