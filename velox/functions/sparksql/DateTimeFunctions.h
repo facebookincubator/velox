@@ -586,15 +586,32 @@ template <typename T>
 struct TruncFunction {
   VELOX_DEFINE_FUNCTION_TYPES(T);
 
+  std::optional<DateTimeUnit> unit_;
+
+  FOLLY_ALWAYS_INLINE void initialize(
+      const std::vector<TypePtr>& /*inputTypes*/,
+      const core::QueryConfig& config,
+      const arg_type<Date>* /*date*/,
+      const arg_type<Varchar>* format) {
+    if (format != nullptr) {
+      unit_ = fromDateTimeUnitString(
+          *format,
+          /*throwIfInvalid=*/false,
+          /*allowMicro=*/false,
+          /*allowAbbreviated=*/true);
+    }
+  }
+
   FOLLY_ALWAYS_INLINE bool call(
       out_type<Date>& result,
       const arg_type<Date>& date,
       const arg_type<Varchar>& format) {
-    std::optional<DateTimeUnit> unitOption = fromDateTimeUnitString(
-        format,
-        /*throwIfInvalid=*/false,
-        /*allowMicro=*/false,
-        /*allowAbbreviated=*/true);
+    const auto unitOption = unit_.has_value() ? unit_
+                                              : fromDateTimeUnitString(
+                                                    format,
+                                                    /*throwIfInvalid=*/false,
+                                                    /*allowMicro=*/false,
+                                                    /*allowAbbreviated=*/true);
     // Return null if unit is illegal, unit less than week is also illegal.
     if (!unitOption.has_value() || unitOption.value() < DateTimeUnit::kWeek) {
       return false;
