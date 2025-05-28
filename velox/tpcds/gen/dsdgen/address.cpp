@@ -213,7 +213,7 @@ int mk_suitenumber(int nTable, char* dest, DSDGenContext& dsdGenContext) {
   genrand_integer(&i, DIST_UNIFORM, 1, 100, 0, nTable, dsdGenContext);
   if (i <= 50) {
     genrand_integer(&i, DIST_UNIFORM, 1, 1000, 0, nTable, dsdGenContext);
-    auto result = snprintf(dest, 9, "Suite %d", i);
+    auto result = snprintf(dest, 11, "Suite %d", i);
     if (result < 0)
       perror("sprintf failed");
   } else {

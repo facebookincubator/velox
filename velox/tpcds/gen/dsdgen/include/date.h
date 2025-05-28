@@ -27,6 +27,8 @@
 #ifndef R_DATE_H
 #define R_DATE_H
 
+#include <string>
+#include <vector>
 #include "mathops.h"
 
 typedef struct DATE_T {
@@ -64,6 +66,6 @@ int getDateWeightFromJulian(int jDay, int nDistribution);
 #define OP_SAME_LY 0x03 /* get date for same day/month, last year */
 #define OP_SAME_LQ 0x04 /* get date for same offset in the prior quarter */
 
-extern const char* weekday_names[];
+extern const std::vector<std::string> weekday_names;
 
 #endif /* R_DATE_H */

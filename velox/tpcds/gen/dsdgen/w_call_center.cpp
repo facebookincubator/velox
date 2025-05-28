@@ -306,7 +306,7 @@ int mk_w_call_center(
       bFirstRecord);
 
   // append the newly created row
-  char szTemp[128];
+  std::vector<char> szTemp(128);
 
   void* info = append_info_get(info_arr, CALL_CENTER);
 
@@ -335,12 +335,12 @@ int mk_w_call_center(
 
   if (r->cc_address.street_name2) {
     snprintf(
-        szTemp,
-        sizeof(szTemp),
+        szTemp.data(),
+        szTemp.size(),
         "%s %s",
         r->cc_address.street_name1,
         r->cc_address.street_name2);
-    append_varchar(CC_ADDRESS, info, szTemp);
+    append_varchar(CC_ADDRESS, info, szTemp.data());
   } else {
     append_varchar(CC_ADDRESS, info, r->cc_address.street_name1);
   }
@@ -350,8 +350,8 @@ int mk_w_call_center(
   append_varchar(CC_ADDRESS, info, r->cc_address.city);
   append_varchar(CC_ADDRESS, info, r->cc_address.county);
   append_varchar(CC_ADDRESS, info, r->cc_address.state);
-  snprintf(szTemp, sizeof(szTemp), "%05d", r->cc_address.zip);
-  append_varchar(CC_ADDRESS, info, szTemp);
+  snprintf(szTemp.data(), szTemp.size(), "%05d", r->cc_address.zip);
+  append_varchar(CC_ADDRESS, info, szTemp.data());
   append_varchar(CC_ADDRESS, info, &r->cc_address.country[0]);
   append_integer_decimal(CC_GMT_OFFSET, info, r->cc_address.gmt_offset);
   append_decimal(CC_TAX_PERCENTAGE, info, &r->cc_tax_percentage);

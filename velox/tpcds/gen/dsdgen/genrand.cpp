@@ -613,7 +613,7 @@ void genrand_email(
     int nColumn,
     DSDGenContext& dsdGenContext) {
   char* pDomain = nullptr;
-  char szCompany[50];
+  std::vector<char> szCompany(50);
   int nCompanyLength;
 
   pick_distribution(&pDomain, "top_domains", 1, 1, nColumn, dsdGenContext);
@@ -622,7 +622,7 @@ void genrand_email(
   gen_charset(&szCompany[0], ALPHANUM, 1, 20, nColumn, dsdGenContext);
   szCompany[nCompanyLength] = '\0';
 
-  if ((strlen(pFirst) + strlen(pLast) + strlen(szCompany) + strlen(pDomain) +
+  if ((strlen(pFirst) + strlen(pLast) + szCompany.size() + strlen(pDomain) +
        3) < (RS_C_EMAIL + 1)) {
     auto result = snprintf(
         pEmail,
@@ -630,7 +630,7 @@ void genrand_email(
         "%s.%s@%s.%s",
         pFirst,
         pLast,
-        szCompany,
+        szCompany.data(),
         pDomain);
     if (result < 0)
       perror("sprintf failed");
