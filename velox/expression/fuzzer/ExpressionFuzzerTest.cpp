@@ -89,12 +89,13 @@ int main(int argc, char** argv) {
       "cardinality",
       "element_at",
       "width_bucket",
-      // Fuzzer and the underlying engine are confused about TDigest functions
+      // Fuzzer and the underlying engine are confused about TDigest output
       // (since TDigest is a user defined type), and tries to pass a
       // VARBINARY (since TDigest's implementation uses an
       // alias to VARBINARY).
       "values_at_quantiles",
       "merge_tdigest",
+      "construct_tdigest",
       // Fuzzer cannot generate valid 'comparator' lambda.
       "array_sort(array(T),constant function(T,T,bigint)) -> array(T)",
       "split_to_map(varchar,varchar,varchar,function(varchar,varchar,varchar,varchar)) -> map(varchar,varchar)",
@@ -124,8 +125,6 @@ int main(int argc, char** argv) {
       "array_join(array(real),varchar,varchar) -> varchar",
       "array_join(array(double),varchar) -> varchar",
       "array_join(array(double),varchar,varchar) -> varchar",
-      "array_min_by", // https://github.com/facebookincubator/velox/issues/12934
-      "array_max_by", // https://github.com/facebookincubator/velox/issues/12934
       // https://github.com/facebookincubator/velox/issues/13047
       "inverse_poisson_cdf",
       // Geometry functions don't yet have a ValuesGenerator
@@ -179,7 +178,13 @@ int main(int argc, char** argv) {
           {"value_at_quantile",
            std::make_shared<TDigestArgValuesGenerator>("value_at_quantile")},
           {"scale_tdigest",
-           std::make_shared<TDigestArgValuesGenerator>("scale_tdigest")}};
+           std::make_shared<TDigestArgValuesGenerator>("scale_tdigest")},
+          {"quantile_at_value",
+           std::make_shared<TDigestArgValuesGenerator>("quantile_at_value")},
+          {"destructure_tdigest",
+           std::make_shared<TDigestArgValuesGenerator>("destructure_tdigest")},
+          {"trimmed_mean",
+           std::make_shared<TDigestArgValuesGenerator>("trimmed_mean")}};
 
   std::shared_ptr<facebook::velox::memory::MemoryPool> rootPool{
       facebook::velox::memory::memoryManager()->addRootPool()};
