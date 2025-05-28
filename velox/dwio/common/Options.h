@@ -391,16 +391,6 @@ class RowReaderOptions {
     serdeParameters_ = std::move(serdeParameters);
   }
 
-  const std::unordered_map<std::string, std::string>& storageParameters()
-      const {
-    return storageParameters_;
-  }
-
-  void setStorageParameters(
-      std::unordered_map<std::string, std::string> storageParameters) {
-    storageParameters_ = std::move(storageParameters);
-  }
-
  private:
   uint64_t dataStart_;
   uint64_t dataLength_;
@@ -680,6 +670,15 @@ struct WriterOptions {
 
   virtual ~WriterOptions() = default;
 };
+
+// Options for creating a column reader.
+struct ColumnReaderOptions {
+  // Whether to map table field names to file field names using names, not
+  // indices.
+  bool useColumnNamesForColumnMapping_{false};
+};
+
+ColumnReaderOptions makeColumnReaderOptions(const ReaderOptions& options);
 
 } // namespace facebook::velox::dwio::common
 
