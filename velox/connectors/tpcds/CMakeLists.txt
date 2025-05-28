@@ -12,9 +12,11 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-velox_add_library(velox_tpcds_connector OBJECT TpcdsConnector.cpp)
-velox_link_libraries(velox_tpcds_connector velox_connector velox_tpcds_gen
-                     fmt::fmt)
+velox_add_library(velox_tpcds_connector TpcdsConnector.cpp)
+velox_link_libraries(
+  velox_tpcds_connector
+  PUBLIC velox_connector velox_tpcds_gen
+  PRIVATE fmt::fmt)
 
 if(${VELOX_BUILD_TESTING})
   add_subdirectory(tests)
