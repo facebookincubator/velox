@@ -316,7 +316,6 @@ bool PrestoQueryRunner::isSupported(const exec::FunctionSignature& signature) {
   // special handling, because Presto requires literals of these types to be
   // valid, and doesn't allow creating HIVE columns of these types.
   return !(
-      usesTypeName(signature, "bingtile") ||
       usesTypeName(signature, "interval year to month") ||
       usesTypeName(signature, "hugeint") ||
       usesTypeName(signature, "hyperloglog") ||
