@@ -17,7 +17,6 @@
 #include <folly/init/Init.h>
 #include <iostream>
 
-#include "glog/logging.h"
 #include "velox/exec/PlanNodeStats.h"
 #include "velox/exec/benchmarks/OrderByBenchmarkUtil.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
