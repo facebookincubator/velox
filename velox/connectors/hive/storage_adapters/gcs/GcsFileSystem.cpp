@@ -447,7 +447,31 @@ void GcsFileSystem::mkdir(
 }
 
 void GcsFileSystem::rmdir(std::string_view path) {
-  VELOX_UNSUPPORTED("rmdir for GCS not implemented");
+  if (!isGcsFile(path))
+    VELOX_FAIL(kGcsInvalidPath, path);
+
+  const auto file = gcsPath(path);
+  std::string bucket;
+  std::string object;
+  setBucketAndKeyFromGcsPath(file, bucket, object);
+  for (auto&& metadata : impl_->getClient()->ListObjects(bucket)) {
+    if (!metadata.ok()) {
+      checkGcsStatus(
+          metadata.status(),
+          "Failed to get metadata for GCS object",
+          bucket,
+          object);
+    }
+
+    auto status = impl_->getClient()->DeleteObject(bucket, metadata->name());
+    if (!status.ok()) {
+      checkGcsStatus(
+          metadata.status(),
+          "Failed to delete GCS object",
+          bucket,
+          metadata->name());
+    }
+  }
 }
 
 } // namespace filesystems
