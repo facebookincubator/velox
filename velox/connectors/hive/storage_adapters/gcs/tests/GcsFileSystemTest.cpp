@@ -108,7 +108,7 @@ TEST_F(GcsFileSystemTest, writeAndReadFile) {
   VELOX_ASSERT_THROW(newGcfs.openFileForWrite(gcsFile), "File already exists");
 }
 
-TEST_F(GcsFileSystemTest, renameNotImplemented) {
+TEST_F(GcsFileSystemTest, rename) {
   const std::string_view file = "newTest.txt";
   const auto gcsExistingFile = gcsURI(
       emulator_->preexistingBucketName(), emulator_->preexistingObjectName());
@@ -116,9 +116,7 @@ TEST_F(GcsFileSystemTest, renameNotImplemented) {
   filesystems::GcsFileSystem gcfs(emulator_->hiveConfig());
   gcfs.initializeClient();
   gcfs.openFileForRead(gcsExistingFile);
-  VELOX_ASSERT_THROW(
-      gcfs.rename(gcsExistingFile, gcsNewFile, true),
-      "rename for GCS not implemented");
+  gcfs.rename(gcsExistingFile, gcsNewFile, true);
 }
 
 TEST_F(GcsFileSystemTest, mkdirNotImplemented) {
