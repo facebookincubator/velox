@@ -117,6 +117,8 @@ struct HiveConnectorSplit : public connector::ConnectorSplit {
 
   folly::dynamic serialize() const override;
 
+  std::string getSplitIdentifier() const override;
+
   static std::shared_ptr<HiveConnectorSplit> create(const folly::dynamic& obj);
 
   static void registerSerDe();

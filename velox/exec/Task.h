@@ -77,6 +77,8 @@ class Task : public std::enable_shared_from_this<Task> {
   static std::shared_ptr<Task> create(
       const std::string& taskId,
       core::PlanFragment planFragment,
+      const std::optional<std::string> planIdentifier,
+      std::shared_ptr<FragmentResultCacheManager> fragmentResultCacheManager,
       int destination,
       std::shared_ptr<core::QueryCtx> queryCtx,
       ExecutionMode mode,
@@ -87,6 +89,8 @@ class Task : public std::enable_shared_from_this<Task> {
   static std::shared_ptr<Task> create(
       const std::string& taskId,
       core::PlanFragment planFragment,
+      const std::optional<std::string> planIdentifier,
+      std::shared_ptr<FragmentResultCacheManager> fragmentResultCacheManager,
       int destination,
       std::shared_ptr<core::QueryCtx> queryCtx,
       ExecutionMode mode,
@@ -782,6 +786,8 @@ class Task : public std::enable_shared_from_this<Task> {
   Task(
       const std::string& taskId,
       core::PlanFragment planFragment,
+      const std::optional<std::string> planIdentifier,
+      std::shared_ptr<FragmentResultCacheManager> fragmentResultCacheManager,
       int destination,
       std::shared_ptr<core::QueryCtx> queryCtx,
       ExecutionMode mode,
@@ -1125,6 +1131,8 @@ class Task : public std::enable_shared_from_this<Task> {
   std::shared_ptr<core::QueryCtx> queryCtx_;
 
   core::PlanFragment planFragment_;
+  const std::optional<std::string> planIdentifier_;
+  std::shared_ptr<FragmentResultCacheManager> fragmentResultCacheManager_;
 
   // Indicates if this task supports barrier processing. It is set to true if
   // the task is under single threaded execution mode and all its plan nodes

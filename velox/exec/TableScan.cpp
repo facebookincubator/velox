@@ -124,6 +124,9 @@ RowVectorPtr TableScan::getOutput() {
         if (blockingReason_ != BlockingReason::kNotBlocked) {
           return nullptr;
         }
+        if (frcResults_.size() > 0) {
+          return nullptr;
+        }
         continue;
       }
       const auto estimatedRowSize = dataSource_->estimatedRowSize();
@@ -214,6 +217,7 @@ RowVectorPtr TableScan::getOutput() {
 
     driverCtx_->task->splitFinished(true, currentSplitWeight_);
     needNewSplit_ = true;
+    currentSplit_ = nullptr;
 
     // We only update scaled controller when we have finished a non-empty split.
     // Otherwise, it can lead to the wrong scale up decisions if the first few
@@ -243,6 +247,15 @@ bool TableScan::getSplit() {
     return false;
   }
 
+  // split is frc cached
+  if (driverCtx_->planIdentifier.has_value()
+    && split.hasConnectorSplit()
+    && split.connectorSplit->cacheable
+    && driverCtx_->fragmentResultCacheManager->get(driverCtx_->planIdentifier.value(), split.connectorSplit->getSplitIdentifier(), frcResults_)) {
+    currentSplit_ = nullptr;
+    return false;
+  }
+
   if (split.isBarrier()) {
     driverCtx_->driver->drainOutput();
     return false;
@@ -266,6 +279,7 @@ bool TableScan::getSplit() {
     return false;
   }
 
+  currentSplit_ = split.connectorSplit;
   if (FOLLY_UNLIKELY(splitTracer_ != nullptr)) {
     splitTracer_->write(split);
   }

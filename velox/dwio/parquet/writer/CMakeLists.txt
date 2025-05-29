@@ -11,16 +11,3 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-
-add_subdirectory(arrow)
-
-velox_add_library(velox_dwio_arrow_parquet_writer Writer.cpp)
-
-velox_link_libraries(
-  velox_dwio_arrow_parquet_writer
-  velox_dwio_arrow_parquet_writer_lib
-  velox_dwio_arrow_parquet_writer_util_lib
-  velox_dwio_common
-  velox_arrow_bridge
-  arrow
-  fmt::fmt)

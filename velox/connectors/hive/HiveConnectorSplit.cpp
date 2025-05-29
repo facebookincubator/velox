@@ -35,6 +35,10 @@ std::string HiveConnectorSplit::getFileName() const {
   return i == std::string::npos ? filePath : filePath.substr(i + 1);
 }
 
+std::string HiveConnectorSplit::getSplitIdentifier() const {
+  return filePath + std::to_string(start) + std::to_string(length);
+}
+
 folly::dynamic HiveConnectorSplit::serialize() const {
   folly::dynamic obj = folly::dynamic::object;
   obj["name"] = "HiveConnectorSplit";

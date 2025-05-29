@@ -97,7 +97,8 @@ velox_add_library(
   Window.cpp
   WindowBuild.cpp
   WindowFunction.cpp
-  WindowPartition.cpp)
+  WindowPartition.cpp
+  FragmentResultCacheManager.cpp)
 
 velox_link_libraries(
   velox_exec

@@ -289,13 +289,6 @@ if(VELOX_ENABLE_HDFS)
   set(VELOX_ENABLE_ARROW OFF)
 endif()
 
-if(VELOX_ENABLE_PARQUET)
-  add_definitions(-DVELOX_ENABLE_PARQUET)
-  # Native Parquet reader requires Apache Thrift and Arrow Parquet writer, which
-  # are included in Arrow.
-  set(VELOX_ENABLE_ARROW OFF)
-endif()
-
 # make buildPartitionBounds_ a vector int64 instead of int32 to avoid integer
 # overflow
 if(${VELOX_ENABLE_INT64_BUILD_PARTITION_BOUND})
@@ -468,7 +461,9 @@ if(NOT TARGET gflags::gflags)
   # target even when velox is built as a subproject which uses
   # `find_package(gflags)` which does not create a globally imported target that
   # we can ALIAS.
-  add_library(gflags_gflags INTERFACE)
+  add_library(gflags_gflags INTERFACE
+          velox/exec/FragmentResultCacheManager.cpp
+          velox/exec/FragmentResultCacheManager.h)
   target_link_libraries(gflags_gflags INTERFACE gflags)
   add_library(gflags::gflags ALIAS gflags_gflags)
 endif()

@@ -83,13 +83,17 @@ DriverCtx::DriverCtx(
     int _driverId,
     int _pipelineId,
     uint32_t _splitGroupId,
-    uint32_t _partitionId)
+    uint32_t _partitionId,
+    std::optional<std::string> planIdentifier,
+    std::shared_ptr<FragmentResultCacheManager> fragmentResultCacheManager)
     : driverId(_driverId),
       pipelineId(_pipelineId),
       splitGroupId(_splitGroupId),
       partitionId(_partitionId),
       task(std::move(_task)),
-      threadDebugInfo({task->queryCtx()->queryId(), task->taskId(), nullptr}) {}
+      threadDebugInfo({task->queryCtx()->queryId(), task->taskId(), nullptr}),
+      planIdentifier(planIdentifier),
+      fragmentResultCacheManager(fragmentResultCacheManager) {}
 
 const core::QueryConfig& DriverCtx::queryConfig() const {
   return task->queryCtx()->queryConfig();
@@ -490,6 +494,23 @@ inline void getOutput(Operator* op, RowVectorPtr& result) {
 }
 } // namespace
 
+void Driver::putInOutputOperator(const std::vector<std::shared_ptr<RowVector>>& frcResults, int32_t numOperators) {
+  auto outputOperator = operators_[numOperators - 1].get();
+  for (auto frcResult : frcResults) {
+    CALL_OPERATOR(
+      outputOperator->addInput(frcResult),
+      outputOperator,
+      curOperatorId_ + 1,
+      kOpMethodAddInput);
+  }
+}
+
+void Driver::flushResultToCache() {
+  driverCtx()->fragmentResultCacheManager->put(driverCtx()->planIdentifier.value(), toBeCachedSplit_->getSplitIdentifier(), toBeCachedSplitResult_);
+  toBeCachedSplitResult_.clear();
+  toBeCachedSplit_ = nullptr;
+}
+
 StopReason Driver::runInternal(
     std::shared_ptr<Driver>& self,
     std::shared_ptr<BlockingState>& blockingState,
@@ -540,6 +561,7 @@ StopReason Driver::runInternal(
 
     for (;;) {
       for (int32_t i = numOperators - 1; i >= 0; --i) {
+        LOG(ERROR) << "Driver pipeline:" << driverCtx()->pipelineId << ", driver id:" << driverCtx()->driverId << ", i:" << i;
         stop = task()->shouldStop();
         if (stop != StopReason::kNone) {
           guard.notThrown();
@@ -616,6 +638,18 @@ StopReason Driver::runInternal(
                   op,
                   curOperatorId_,
                   kOpMethodGetOutput);
+
+              // Table Scan Operator
+              if (i == 0 && dynamic_cast<TableScan*>(op)) {
+                auto tableScan = dynamic_cast<TableScan*>(op);
+                if (tableScan->getFrcResult().size() > 0) {
+                  auto frcResults = tableScan->getFrcResult();
+                  putInOutputOperator(frcResults, numOperators);
+                  tableScan->resetFrcResult();
+                }
+                operatorSplitMap_[i] = tableScan->getCurrentSplit();
+              }
+
               if (intermediateResult) {
                 validateOperatorOutputResult(intermediateResult, *op);
                 resultBytes = intermediateResult->estimateFlatSize();
@@ -645,6 +679,21 @@ StopReason Driver::runInternal(
                         nextOp,
                         curOperatorId_ + 1,
                         kOpMethodAddInput);
+                    operatorSplitMap_[i + 1] = operatorSplitMap_[i];
+                    auto currentSplit = operatorSplitMap_[i + 1];
+                    if (i == numOperators - 2 && driverCtx()->planIdentifier.has_value()) {
+                      if (toBeCachedSplit_ == nullptr) {
+                        VELOX_CHECK_EQ(toBeCachedSplitResult_.size(), 0);
+                      }
+                      if (toBeCachedSplit_ != nullptr && currentSplit != toBeCachedSplit_) {
+                        flushResultToCache();
+                      }
+
+                      if (currentSplit != nullptr && currentSplit->cacheable) {
+                        toBeCachedSplit_ = currentSplit;
+                        toBeCachedSplitResult_.emplace_back(intermediateResult);
+                      }
+                    }
                   });
               // The next iteration will see if operators_[i + 1] has
               // output now that it got input.
@@ -733,6 +782,9 @@ StopReason Driver::runInternal(
                 kOpMethodIsFinished);
           });
           if (finished) {
+            if (toBeCachedSplit_ != nullptr) {
+              flushResultToCache();
+            }
             guard.notThrown();
             close();
             return StopReason::kAtEnd;

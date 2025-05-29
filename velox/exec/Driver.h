@@ -22,6 +22,7 @@
 #include <folly/futures/Future.h>
 #include <folly/portability/SysSyscall.h>
 
+#include "FragmentResultCacheManager.h"
 #include "velox/common/base/Counters.h"
 #include "velox/common/base/StatsReporter.h"
 #include "velox/common/base/TraceConfig.h"
@@ -30,6 +31,7 @@
 #include "velox/core/QueryCtx.h"
 
 namespace facebook::velox::exec {
+struct Split;
 
 class Driver;
 class ExchangeClient;
@@ -277,6 +279,8 @@ struct DriverCtx {
   /// Id of the partition to use by this driver. For local exchange, for
   /// instance.
   const uint32_t partitionId;
+  const std::optional<std::string> planIdentifier;
+  const std::shared_ptr<FragmentResultCacheManager> fragmentResultCacheManager;
 
   std::shared_ptr<Task> task;
   Driver* driver{nullptr};
@@ -291,7 +295,9 @@ struct DriverCtx {
       int _driverId,
       int _pipelineId,
       uint32_t _splitGroupId,
-      uint32_t _partitionId);
+      uint32_t _partitionId,
+      std::optional<std::string> plabIdentifier,
+      std::shared_ptr<FragmentResultCacheManager> fragmentResultCacheManager);
 
   const core::QueryConfig& queryConfig() const;
 
@@ -514,6 +520,7 @@ class Driver : public std::enable_shared_from_this<Driver> {
   /// and all its upstream operators within the same pipeline should skip
   /// their output.
   bool shouldDropOutput(int32_t operatorId) const;
+  void flushResultToCache();
 
   /// Returns the process-wide number of driver cpu yields.
   static std::atomic_uint64_t& yieldCount();
@@ -570,6 +577,7 @@ class Driver : public std::enable_shared_from_this<Driver> {
 
   static void run(std::shared_ptr<Driver> self);
 
+  void putInOutputOperator(const std::vector<std::shared_ptr<RowVector>>& vector, int32_t numOperators);
   StopReason runInternal(
       std::shared_ptr<Driver>& self,
       std::shared_ptr<BlockingState>& blockingState,
@@ -663,6 +671,12 @@ class Driver : public std::enable_shared_from_this<Driver> {
   // Indicates that a DriverAdapter can rearrange Operators. Set to false at end
   // of DriverFactory::createDriver().
   bool isAdaptable_{true};
+
+   std::unordered_map<int32_t, std::shared_ptr<connector::ConnectorSplit>> operatorSplitMap_;
+
+  // write path
+   std::shared_ptr<connector::ConnectorSplit> toBeCachedSplit_;
+   std::vector<RowVectorPtr> toBeCachedSplitResult_;
 
   friend struct DriverFactory;
 };

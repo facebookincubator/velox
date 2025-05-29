@@ -67,6 +67,18 @@ class TableScan : public SourceOperator {
     return scaledController_;
   }
 
+  std::shared_ptr<connector::ConnectorSplit> getCurrentSplit() {
+    return currentSplit_;
+  }
+
+  std::vector<RowVectorPtr> getFrcResult() {
+    return frcResults_;
+  }
+
+  void resetFrcResult() {
+    frcResults_.clear();
+  }
+
  private:
   // Checks if this table scan operator needs to yield before processing the
   // next split.
@@ -151,5 +163,8 @@ class TableScan : public SourceOperator {
   // The total number of raw input rows read up till the last finished split.
   // This is used to detect if a finished split is empty or not.
   uint64_t rawInputRowsSinceLastSplit_{0};
+
+  std::vector<RowVectorPtr> frcResults_;
+  std::shared_ptr<connector::ConnectorSplit> currentSplit_;
 };
 } // namespace facebook::velox::exec

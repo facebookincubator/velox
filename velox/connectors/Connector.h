@@ -77,6 +77,11 @@ struct ConnectorSplit : public ISerializable {
     return nullptr;
   }
 
+  virtual std::string getSplitIdentifier() const {
+    VELOX_UNSUPPORTED();
+    return nullptr;
+  }
+
   virtual ~ConnectorSplit() {}
 
   virtual std::string toString() const {

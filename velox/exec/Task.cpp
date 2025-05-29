@@ -241,6 +241,8 @@ bool unregisterTaskListener(const std::shared_ptr<TaskListener>& listener) {
 std::shared_ptr<Task> Task::create(
     const std::string& taskId,
     core::PlanFragment planFragment,
+    const std::optional<std::string> planIdentifier,
+    std::shared_ptr<FragmentResultCacheManager> fragmentResultCacheManager,
     int destination,
     std::shared_ptr<core::QueryCtx> queryCtx,
     ExecutionMode mode,
@@ -251,6 +253,8 @@ std::shared_ptr<Task> Task::create(
   return Task::create(
       taskId,
       std::move(planFragment),
+      planIdentifier,
+      fragmentResultCacheManager,
       destination,
       std::move(queryCtx),
       mode,
@@ -264,6 +268,8 @@ std::shared_ptr<Task> Task::create(
 std::shared_ptr<Task> Task::create(
     const std::string& taskId,
     core::PlanFragment planFragment,
+    const std::optional<std::string> planIdentifier,
+    std::shared_ptr<FragmentResultCacheManager> fragmentResultCacheManager,
     int destination,
     std::shared_ptr<core::QueryCtx> queryCtx,
     ExecutionMode mode,
@@ -274,6 +280,8 @@ std::shared_ptr<Task> Task::create(
   auto task = std::shared_ptr<Task>(new Task(
       taskId,
       std::move(planFragment),
+      planIdentifier,
+      fragmentResultCacheManager,
       destination,
       std::move(queryCtx),
       mode,
@@ -288,6 +296,8 @@ std::shared_ptr<Task> Task::create(
 Task::Task(
     const std::string& taskId,
     core::PlanFragment planFragment,
+    const std::optional<std::string> planIdentifier,
+    std::shared_ptr<FragmentResultCacheManager> fragmentResultCacheManager,
     int destination,
     std::shared_ptr<core::QueryCtx> queryCtx,
     ExecutionMode mode,
@@ -301,6 +311,8 @@ Task::Task(
       memoryArbitrationPriority_(memoryArbitrationPriority),
       queryCtx_(std::move(queryCtx)),
       planFragment_(std::move(planFragment)),
+      planIdentifier_(planIdentifier),
+      fragmentResultCacheManager_(fragmentResultCacheManager),
       supportBarrier_(
           (mode_ == Task::ExecutionMode::kSerial) &&
           planFragment_.supportsBarrier()),
@@ -1197,7 +1209,9 @@ std::vector<std::shared_ptr<Driver>> Task::createDriversLocked(
               driverIdOffset + partitionId,
               pipeline,
               splitGroupId,
-              partitionId),
+              partitionId,
+              planIdentifier_,
+              fragmentResultCacheManager_),
           getExchangeClientLocked(pipeline),
           [self](size_t i) {
             return i < self->driverFactories_.size()
