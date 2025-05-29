@@ -217,6 +217,21 @@ or <code class="docutils literal notranslate"><span class="pre">geometry2</span>
 <section id="accessors">
 <h2>Accessors<a class="headerlink" href="#accessors" title="Link to this heading">¶</a></h2>
 <dl class="py function">
+<dt class="sig sig-object py" id="ST_IsValid">
+<span class="sig-name descname"><span class="pre">ST_IsValid</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">geometry</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">Geometry</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">valid:</span> <span class="pre">bool</span></span></span><a class="headerlink" href="#ST_IsValid" title="Link to this definition">¶</a></dt>
+<dd><p>Returns if <code class="docutils literal notranslate"><span class="pre">geometry</span></code> is valid, according to <a href="#id9"><span class="problematic" id="id10">`SQL/MM Part 3: Spatial`_</span></a>.
+Examples of non-valid geometries include Polygons with self-intersecting shells.</p>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="ST_IsSimple">
+<span class="sig-name descname"><span class="pre">ST_IsSimple</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">geometry</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">Geometry</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">simple:</span> <span class="pre">bool</span></span></span><a class="headerlink" href="#ST_IsSimple" title="Link to this definition">¶</a></dt>
+<dd><p>Returns if <code class="docutils literal notranslate"><span class="pre">geometry</span></code> is simple, according to <a href="#id11"><span class="problematic" id="id12">`SQL/MM Part 3: Spatial`_</span></a>.
+Examples of non-simple geometries include LineStrings with self-intersections,
+Polygons with empty rings for holes, and more.</p>
+</dd></dl>
+
+<dl class="py function">
 <dt class="sig sig-object py" id="ST_Area">
 <span class="sig-name descname"><span class="pre">ST_Area</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">geometry</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">Geometry</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">area:</span> <span class="pre">double</span></span></span><a class="headerlink" href="#ST_Area" title="Link to this definition">¶</a></dt>
 <dd><p>Returns the 2D Euclidean area of <code class="docutils literal notranslate"><span class="pre">geometry</span></code>.
@@ -367,6 +382,8 @@ specified.</p>
 </ul>
 </li>
 <li><a class="reference internal" href="#accessors">Accessors</a><ul>
+<li><a class="reference internal" href="#ST_IsValid"><code class="docutils literal notranslate"><span class="pre">ST_IsValid()</span></code></a></li>
+<li><a class="reference internal" href="#ST_IsSimple"><code class="docutils literal notranslate"><span class="pre">ST_IsSimple()</span></code></a></li>
 <li><a class="reference internal" href="#ST_Area"><code class="docutils literal notranslate"><span class="pre">ST_Area()</span></code></a></li>
 <li><a class="reference internal" href="#ST_X"><code class="docutils literal notranslate"><span class="pre">ST_X()</span></code></a></li>
 <li><a class="reference internal" href="#ST_Y"><code class="docutils literal notranslate"><span class="pre">ST_Y()</span></code></a></li>
