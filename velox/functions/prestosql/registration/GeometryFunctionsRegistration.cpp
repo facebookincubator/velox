@@ -16,13 +16,15 @@
 
 #include <string>
 #include "velox/functions/Registerer.h"
+#ifdef VELOX_ENABLE_GEO
 #include "velox/functions/prestosql/GeometryFunctions.h"
+#endif
 #include "velox/functions/prestosql/types/GeometryRegistration.h"
 
 namespace facebook::velox::functions {
 
 namespace {
-
+#ifdef VELOX_ENABLE_GEO
 void registerConstructors(const std::string& prefix) {
   registerFunction<StGeometryFromTextFunction, Geometry, Varchar>(
       {{prefix + "ST_GeometryFromText"}});
@@ -74,15 +76,18 @@ void registerAccessors(const std::string& prefix) {
   registerFunction<StXFunction, double, Geometry>({{prefix + "ST_X"}});
   registerFunction<StYFunction, double, Geometry>({{prefix + "ST_Y"}});
 }
+#endif
 
 } // namespace
 
 void registerGeometryFunctions(const std::string& prefix) {
   registerGeometryType();
+#ifdef VELOX_ENABLE_GEO
   registerConstructors(prefix);
   registerRelationPredicates(prefix);
   registerOverlayOperations(prefix);
   registerAccessors(prefix);
+#endif
 }
 
 } // namespace facebook::velox::functions
