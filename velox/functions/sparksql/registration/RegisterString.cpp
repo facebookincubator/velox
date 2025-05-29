@@ -149,6 +149,7 @@ void registerStringFunctions(const std::string& prefix) {
       ConcatWsCallToSpecialForm::kConcatWs,
       std::make_unique<ConcatWsCallToSpecialForm>());
   registerFunction<LuhnCheckFunction, bool, Varchar>({prefix + "luhn_check"});
+  registerFunction<InitCapFunction, Varchar, Varchar>({prefix + "initcap"});
 }
 } // namespace sparksql
 } // namespace facebook::velox::functions
