@@ -47,6 +47,27 @@ class RowReader {
   virtual ~RowReader() = default;
 
   /**
+   * Create a row batch for reading the selected columns of this file.
+   * @param size the number of rows to read
+   * @return a new BaseVector to read into
+   */
+  virtual std::unique_ptr<BaseVector> createRowBatch(uint64_t size) const {
+    return nullptr;
+  };
+
+  /**
+   * Read the next row from the current position.
+   * Caller must look at numElements in the row batch to determine how
+   * many rows were read.
+   * @param data the row to read into.
+   * @return true if a non-zero number of rows were read or false if the
+   *   end of the file was reached.
+   */
+  virtual bool next(BaseVector& data) {
+    return false;
+  };
+
+  /**
    * Fetch the next portion of rows.
    * @param size Max number of rows to read
    * @param result output vector
