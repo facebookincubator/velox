@@ -15,7 +15,6 @@
  */
 
 #include "velox/exec/HashTable.h"
-#include "velox/exec/OperatorUtils.h"
 #include "velox/vector/tests/utils/VectorTestBase.h"
 
 #include <folly/Benchmark.h>
