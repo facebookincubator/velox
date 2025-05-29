@@ -222,10 +222,10 @@ PrestoQueryRunner::inputProjections(
     // unchanged and the projection is just an identity mapping.
     if (isIntermediateOnlyType(childType)) {
       for (int batchIndex = 0; batchIndex < input.size(); batchIndex++) {
-        children[batchIndex].push_back(transformIntermediateOnlyType(
-            input[batchIndex]->childAt(childIndex)));
+        children[batchIndex].push_back(
+            transformIntermediateTypes(input[batchIndex]->childAt(childIndex)));
       }
-      projections.push_back(getIntermediateOnlyTypeProjectionExpr(
+      projections.push_back(getProjectionsToIntermediateTypes(
           childType,
           std::make_shared<core::FieldAccessExpr>(
               names[childIndex], names[childIndex]),
@@ -316,7 +316,6 @@ bool PrestoQueryRunner::isSupported(const exec::FunctionSignature& signature) {
   // special handling, because Presto requires literals of these types to be
   // valid, and doesn't allow creating HIVE columns of these types.
   return !(
-      usesTypeName(signature, "bingtile") ||
       usesTypeName(signature, "interval year to month") ||
       usesTypeName(signature, "hugeint") ||
       usesTypeName(signature, "hyperloglog") ||
