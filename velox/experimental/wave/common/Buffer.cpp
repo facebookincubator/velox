@@ -16,7 +16,6 @@
 
 #include "velox/experimental/wave/common/Buffer.h"
 #include "velox/common/base/Exceptions.h"
-#include "velox/common/base/SuccinctPrinter.h"
 #include "velox/experimental/wave/common/Exception.h"
 #include "velox/experimental/wave/common/GpuArena.h"
 
