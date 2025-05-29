@@ -121,13 +121,12 @@ TEST_F(GcsFileSystemTest, renameNotImplemented) {
       "rename for GCS not implemented");
 }
 
-TEST_F(GcsFileSystemTest, mkdirNotImplemented) {
+TEST_F(GcsFileSystemTest, mkdir) {
   const std::string_view dir = "newDirectory";
   const auto gcsNewDirectory = gcsURI(emulator_->preexistingBucketName(), dir);
   filesystems::GcsFileSystem gcfs(emulator_->hiveConfig());
   gcfs.initializeClient();
-  VELOX_ASSERT_THROW(
-      gcfs.mkdir(gcsNewDirectory), "mkdir for GCS not implemented");
+  gcfs.mkdir(gcsNewDirectory);
 }
 
 TEST_F(GcsFileSystemTest, rmdirNotImplemented) {
