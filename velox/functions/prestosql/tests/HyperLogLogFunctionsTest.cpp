@@ -51,6 +51,8 @@ class HyperLogLogFunctionsTest : public functions::test::FunctionBaseTest {
   std::shared_ptr<memory::MemoryPool> pool_{
       memory::memoryManager()->addLeafPool()};
   HashStringAllocator allocator_{pool_.get()};
+
+  const TypePtr ARRAY_HYPERLOGLOG = ARRAY(HYPERLOGLOG());
 };
 
 TEST_F(HyperLogLogFunctionsTest, cardinalitySignatures) {
@@ -108,6 +110,70 @@ TEST_F(HyperLogLogFunctionsTest, emptyApproxSet) {
       0,
       evaluateOnce<int64_t>(
           "cardinality(empty_approx_set(0.1))", makeRowVector(ROW({}), 1)));
+}
+
+TEST_F(HyperLogLogFunctionsTest, mergeHll) {
+  // Create HLLs with different values but same index bit length
+  const int8_t indexBitLength = 12;
+  const int blockSize = 3;
+  const int uniqueElementsPerBlock = 10000;
+  const int totalUniqueElements = uniqueElementsPerBlock * blockSize;
+  const double errorRate = 0.05; // 5% error rate
+
+  SparseHll sparseHll1{&allocator_};
+  for (int i = 0; i < uniqueElementsPerBlock; i++) {
+    sparseHll1.insertHash(hashOne(i));
+  }
+  auto serialized1 = serialize(indexBitLength, sparseHll1);
+  SparseHll sparseHll2{&allocator_};
+  for (int i = uniqueElementsPerBlock; i < 2 * uniqueElementsPerBlock; i++) {
+    sparseHll2.insertHash(hashOne(i));
+  }
+  auto serialized2 = serialize(indexBitLength, sparseHll2);
+  DenseHll denseHll{indexBitLength, &allocator_};
+  for (int i = 2 * uniqueElementsPerBlock; i < 3 * uniqueElementsPerBlock;
+       i++) {
+    denseHll.insertHash(hashOne(i));
+  }
+  auto serialized3 = serialize(denseHll);
+  auto arrayVector = makeNullableArrayVector<std::string>(
+      {{serialized1, serialized2, serialized3}}, ARRAY_HYPERLOGLOG);
+  // Merge the HLLs
+  auto result = evaluate("merge_hll(c0)", makeRowVector({arrayVector}));
+  // Verify the cardinality of the merged HLL
+  auto cardinalityResult = evaluate("cardinality(c0)", makeRowVector({result}));
+
+  auto cardinalityValue =
+      cardinalityResult->as<FlatVector<int64_t>>()->valueAt(0);
+  int64_t allowedError = static_cast<int64_t>(totalUniqueElements * errorRate);
+
+  EXPECT_GE(cardinalityValue, totalUniqueElements - allowedError);
+  EXPECT_LE(cardinalityValue, totalUniqueElements + allowedError);
+}
+
+TEST_F(HyperLogLogFunctionsTest, mergeHllWithNull) {
+  const int8_t indexBitLength = 12;
+  SparseHll sparseHll{&allocator_};
+  for (int i = 0; i < 100; i++) {
+    sparseHll.insertHash(hashOne(i));
+  }
+  auto serialized = serialize(indexBitLength, sparseHll);
+  // Create an array of HLLs with nulls
+  auto arrayVector = makeNullableArrayVector<std::string>(
+      {{serialized, std::nullopt, serialized}}, ARRAY_HYPERLOGLOG);
+  // Merge the HLLs
+  auto result = evaluate("merge_hll(c0)", makeRowVector({arrayVector}));
+  auto cardinalityResult = evaluate("cardinality(c0)", makeRowVector({result}));
+  auto cardinalityValue =
+      cardinalityResult->as<FlatVector<int64_t>>()->valueAt(0);
+  EXPECT_GE(cardinalityValue, 95);
+  EXPECT_LE(cardinalityValue, 105);
+}
+TEST_F(HyperLogLogFunctionsTest, mergeHllEmpty) {
+  auto arrayVector = makeArrayVector<std::string>({{}}, HYPERLOGLOG());
+  auto result = evaluate("merge_hll(c0)", makeRowVector({arrayVector}));
+  // Result should be null
+  ASSERT_TRUE(result->isNullAt(0));
 }
 
 } // namespace
