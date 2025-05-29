@@ -29,8 +29,10 @@ using velox::dwio::text::compression::ReaderDecompressor;
 namespace facebook::velox::text {
 
 using dwio::common::ColumnSelector;
+using dwio::common::RowReader;
 using dwio::common::RowReaderOptions;
 using dwio::common::TypeWithId;
+using velox::dwio::common::ReaderOptions;
 
 struct FileContents {
   const size_t COLUMN_POSITION_INVALID = std::numeric_limits<size_t>::max();
@@ -59,7 +61,7 @@ constexpr DelimType DelimTypeNone = 0;
 constexpr DelimType DelimTypeEOR = 1;
 constexpr DelimType DelimTypeEOE = 2;
 
-class RowReaderImpl : public dwio::common::RowReader {
+class RowReaderImpl : public RowReader {
  private:
   const RowReaderOptions& getDefaultOpts();
 
@@ -199,6 +201,38 @@ class RowReaderImpl : public dwio::common::RowReader {
   bool isPrestoTextReader() const {
     return false;
   }
+};
+
+class ReaderImpl : public dwio::common::Reader {
+ private:
+  std::shared_ptr<FileContents> contents_;
+  std::shared_ptr<const TypeWithId> schemaWithId_;
+  const ReaderOptions& options_;
+  std::shared_ptr<const RowType> internalSchema_;
+
+ public:
+  ReaderImpl(
+      std::unique_ptr<dwio::common::ReadFileInputStream> stream,
+      const ReaderOptions& options);
+
+  common::CompressionKind getCompression() const;
+
+  uint64_t getNumberOfRows() const;
+
+  std::unique_ptr<RowReader> createRowReader() const;
+
+  std::unique_ptr<RowReader> createRowReader(
+      const RowReaderOptions& options) const override;
+
+  std::unique_ptr<RowReader> createRowReader(
+      const RowReaderOptions& options,
+      bool prestoTextReader) const;
+
+  uint64_t getFileLength() const;
+
+  const std::shared_ptr<const RowType>& getType() const;
+
+  uint64_t getMemoryUse();
 };
 
 } // namespace facebook::velox::text
