@@ -191,7 +191,7 @@ const std::vector<TypePtr>& PrestoQueryRunner::supportedScalarTypes() const {
 
 // static
 bool PrestoQueryRunner::isSupportedDwrfType(const TypePtr& type) {
-  if (type->isDate() || type->isIntervalDayTime() || type->isUnKnown()) {
+  if (type->isDate() || type->isUnKnown()) {
     return false;
   }
 
@@ -299,9 +299,8 @@ bool PrestoQueryRunner::isConstantExprSupported(
     // constant literals in Presto SQL.
     auto& type = expr->type();
     return type->isPrimitiveType() && !type->isTimestamp() &&
-        !isJsonType(type) && !type->isIntervalDayTime() &&
-        !isIPAddressType(type) && !isIPPrefixType(type) && !isUuidType(type) &&
-        !isTimestampWithTimeZoneType(type);
+        !isJsonType(type) && !isIPAddressType(type) && !isIPPrefixType(type) &&
+        !isUuidType(type) && !isTimestampWithTimeZoneType(type);
   }
   return true;
 }
@@ -317,7 +316,6 @@ bool PrestoQueryRunner::isSupported(const exec::FunctionSignature& signature) {
   // valid, and doesn't allow creating HIVE columns of these types.
   return !(
       usesTypeName(signature, "bingtile") ||
-      usesTypeName(signature, "interval year to month") ||
       usesTypeName(signature, "hugeint") ||
       usesTypeName(signature, "hyperloglog") ||
       usesTypeName(signature, "tdigest") ||
