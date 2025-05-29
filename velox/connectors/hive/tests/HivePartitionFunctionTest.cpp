@@ -124,6 +124,26 @@ TEST_F(HivePartitionFunctionTest, bigint) {
   assertPartitionsWithConstChannel(values, 997);
 }
 
+TEST_F(HivePartitionFunctionTest, longDecimal) {
+  auto values = makeNullableFlatVector<int128_t>(
+      {std::nullopt,
+       300'000'000'000,
+       HugeInt::parse("12345678901234567890"),
+       DecimalUtil::kLongDecimalMin / 100,
+       DecimalUtil::kLongDecimalMax / 100},
+      DECIMAL(38, 2));
+
+  assertPartitions(values, 1, {0, 0, 0, 0, 0});
+  assertPartitions(values, 2, {0, 1, 0, 0, 1});
+  assertPartitions(values, 500, {0, 497, 346, 166, 167});
+  assertPartitions(values, 997, {0, 852, 678, 690, 691});
+
+  assertPartitionsWithConstChannel(values, 1);
+  assertPartitionsWithConstChannel(values, 2);
+  assertPartitionsWithConstChannel(values, 500);
+  assertPartitionsWithConstChannel(values, 997);
+}
+
 TEST_F(HivePartitionFunctionTest, varchar) {
   auto values = makeNullableFlatVector<std::string>(
       {std::nullopt,

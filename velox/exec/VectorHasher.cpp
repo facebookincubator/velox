@@ -41,6 +41,9 @@ namespace facebook::velox::exec {
       case TypeKind::BIGINT: {                                           \
         return TEMPLATE_FUNC<TypeKind::BIGINT>(__VA_ARGS__);             \
       }                                                                  \
+      case TypeKind::HUGEINT: {                                          \
+        return TEMPLATE_FUNC<TypeKind::HUGEINT>(__VA_ARGS__);            \
+      }                                                                  \
       case TypeKind::VARCHAR:                                            \
       case TypeKind::VARBINARY: {                                        \
         return TEMPLATE_FUNC<TypeKind::VARCHAR>(__VA_ARGS__);            \
