@@ -72,6 +72,13 @@ class StringViewBufferHolder {
     return stringBuffers_;
   }
 
+  /// Add a buffer to the list of buffers. This is used to allow bulk addition
+  /// of values with fewer overall buffers vs adding a value at a time via
+  /// getOwnedValue
+  void addOwnedBuffer(BufferPtr&& inBuffer) {
+    stringBuffers_.push_back(std::move(inBuffer));
+  }
+
  private:
   StringView getOwnedStringView(StringView stringView);
   StringView getOwnedStringView(const char* data, int32_t size);
