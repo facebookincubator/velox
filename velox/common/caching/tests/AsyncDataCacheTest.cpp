@@ -34,7 +34,6 @@
 #include <gtest/gtest.h>
 
 #include <fcntl.h>
-#include <sys/types.h>
 
 using namespace facebook::velox;
 using namespace facebook::velox::cache;
