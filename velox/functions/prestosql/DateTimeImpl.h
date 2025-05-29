@@ -335,6 +335,20 @@ FOLLY_ALWAYS_INLINE int64_t diffTimestamp(
       break;
   }
 
+  // Spark support microsecond unit.
+  if (unit == DateTimeUnit::kMicrosecond) {
+    const std::chrono::time_point<std::chrono::system_clock>
+        fromMicrosecondpoint(std::chrono::microseconds(
+            std::min(fromTimestamp, toTimestamp).toMicros()));
+    const std::chrono::time_point<std::chrono::system_clock> toMicrosecondpoint(
+        std::chrono::microseconds(
+            std::max(fromTimestamp, toTimestamp).toMicros()));
+    return sign *
+        std::chrono::duration_cast<std::chrono::microseconds>(
+            toMicrosecondpoint - fromMicrosecondpoint)
+            .count();
+  }
+
   // Month, quarter and year do not have fixed conversion ratio. Ex. a month can
   // have 28, 29, 30 or 31 days. A year can have 365 or 366 days.
   const std::chrono::time_point<std::chrono::system_clock, date::days>
