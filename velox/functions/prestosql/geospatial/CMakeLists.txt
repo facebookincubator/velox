@@ -14,3 +14,4 @@
 velox_add_library(velox_functions_geo GeometrySerde.cpp GeometryUtils.cpp)
 
 velox_link_libraries(velox_functions_geo velox_functions_lib GEOS::geos)
+velox_compile_definitions(velox_functions_geo PUBLIC VELOX_ENABLE_GEO)
