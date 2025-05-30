@@ -18,7 +18,7 @@
 #include <velox/vector/ComplexVector.h>
 #include "velox4j/query/Query.h"
 
-namespace velox4j {
+namespace facebook::velox4j {
 
 class UpIterator {
  public:
@@ -41,4 +41,4 @@ class UpIterator {
   virtual void wait() = 0;
   virtual facebook::velox::RowVectorPtr get() = 0;
 };
-} // namespace velox4j
+} // namespace facebook::velox4j

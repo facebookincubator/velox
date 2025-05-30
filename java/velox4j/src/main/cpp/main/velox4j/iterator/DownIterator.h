@@ -20,7 +20,7 @@
 #include <velox/vector/ComplexVector.h>
 #include "velox4j/connector/ExternalStream.h"
 
-namespace velox4j {
+namespace facebook::velox4j {
 class DownIteratorJniWrapper final : public spotify::jni::JavaClass {
  public:
   explicit DownIteratorJniWrapper(JNIEnv* env) : JavaClass(env) {
@@ -68,4 +68,4 @@ class DownIterator : public ExternalStream {
   std::atomic_bool closed_{false};
 };
 
-} // namespace velox4j
+} // namespace facebook::velox4j

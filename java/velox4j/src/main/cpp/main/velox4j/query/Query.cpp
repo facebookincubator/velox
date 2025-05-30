@@ -17,7 +17,7 @@
 
 #include <velox/exec/PlanNodeStats.h>
 
-namespace velox4j {
+namespace facebook::velox4j {
 using namespace facebook::velox;
 
 Query::Query(
@@ -69,4 +69,4 @@ void Query::registerSerDe() {
   auto& registry = DeserializationWithContextRegistryForSharedPtr();
   registry.Register("velox4j.Query", create);
 }
-} // namespace velox4j
+} // namespace facebook::velox4j

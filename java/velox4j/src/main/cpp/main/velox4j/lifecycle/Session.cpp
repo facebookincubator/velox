@@ -15,4 +15,4 @@
  */
 #include "Session.h"
 
-namespace velox4j {}
+namespace facebook::velox4j {}

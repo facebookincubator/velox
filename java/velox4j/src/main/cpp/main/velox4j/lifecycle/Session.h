@@ -19,7 +19,7 @@
 #include "ObjectStore.h"
 #include "velox4j/memory/MemoryManager.h"
 
-namespace velox4j {
+namespace facebook::velox4j {
 class Session {
  public:
   Session(MemoryManager* memoryManager)
@@ -39,4 +39,4 @@ class Session {
   std::unique_ptr<ObjectStore> objectStore_;
 };
 
-} // namespace velox4j
+} // namespace facebook::velox4j

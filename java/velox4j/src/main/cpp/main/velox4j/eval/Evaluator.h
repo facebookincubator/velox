@@ -21,7 +21,7 @@
 #include <velox/vector/ComplexVector.h>
 #include "velox4j/memory/MemoryManager.h"
 
-namespace velox4j {
+namespace facebook::velox4j {
 class Evaluator {
  public:
   Evaluator(MemoryManager* memoryManager, const std::string& exprJson);
@@ -36,4 +36,4 @@ class Evaluator {
   std::unique_ptr<facebook::velox::core::ExpressionEvaluator> ee_;
   std::unique_ptr<facebook::velox::exec::ExprSet> exprSet_;
 };
-} // namespace velox4j
+} // namespace facebook::velox4j

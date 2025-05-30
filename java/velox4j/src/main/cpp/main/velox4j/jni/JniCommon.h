@@ -27,17 +27,18 @@
 #endif
 
 #ifndef JNI_METHOD_END
-#define JNI_METHOD_END(fallback_expr)                                  \
-  }                                                                    \
-  catch (std::exception & e) {                                         \
-    env->ThrowNew(                                                     \
-        velox4j::getJniErrorState()->veloxExceptionClass(), e.what()); \
-    return fallback_expr;                                              \
+#define JNI_METHOD_END(fallback_expr)                                 \
+  }                                                                   \
+  catch (std::exception & e) {                                        \
+    env->ThrowNew(                                                    \
+        facebook::velox4j::getJniErrorState()->veloxExceptionClass(), \
+        e.what());                                                    \
+    return fallback_expr;                                             \
   }
 // macro ended
 #endif
 
-namespace velox4j {
+namespace facebook::velox4j {
 void checkException(JNIEnv* env);
 std::string jStringToCString(JNIEnv* env, jstring string);
 jclass createGlobalClassReference(JNIEnv* env, const char* className);
@@ -171,4 +172,4 @@ DEFINE_SAFE_GET_PRIMITIVE_ARRAY_FUNCTIONS(kInt, jintArray, Int)
 DEFINE_SAFE_GET_PRIMITIVE_ARRAY_FUNCTIONS(kLong, jlongArray, Long)
 DEFINE_SAFE_GET_PRIMITIVE_ARRAY_FUNCTIONS(kFloat, jfloatArray, Float)
 DEFINE_SAFE_GET_PRIMITIVE_ARRAY_FUNCTIONS(kDouble, jdoubleArray, Double)
-} // namespace velox4j
+} // namespace facebook::velox4j
