@@ -28,24 +28,12 @@ struct Split {
   /// to signal the output drain processing.
   bool barrier{false};
 
-  Split() = default;
-
-  explicit Split(
-      std::shared_ptr<velox::connector::ConnectorSplit>&& connectorSplit,
-      int32_t groupId = -1)
-      : connectorSplit(std::move(connectorSplit)), groupId(groupId) {}
-
   /// Called by the task barrier to create a special barrier split.
   static Split createBarrier() {
     static Split barrierSplit;
     barrierSplit.barrier = true;
     return barrierSplit;
   }
-
-  Split(Split&& other) = default;
-  Split(const Split& other) = default;
-  Split& operator=(Split&& other) = default;
-  Split& operator=(const Split& other) = default;
 
   bool isBarrier() const {
     return barrier;
