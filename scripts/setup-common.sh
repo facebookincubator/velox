@@ -13,9 +13,9 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-SCRIPTDIR=$(dirname "${BASH_SOURCE[0]}")
-source $SCRIPTDIR/setup-helper-functions.sh
-source $SCRIPTDIR/setup-versions.sh
+SCRIPT_DIR=$(dirname "${BASH_SOURCE[0]}")
+source $SCRIPT_DIR/setup-helper-functions.sh
+source $SCRIPT_DIR/setup-versions.sh
 
 VELOX_BUILD_SHARED=${VELOX_BUILD_SHARED:-"OFF"} #Build folly and gflags shared for use in libvelox.so.
 CMAKE_BUILD_TYPE="${BUILD_TYPE:-Release}"
@@ -220,12 +220,12 @@ function install_geos {
   if [[ "$BUILD_GEOS" == "true" ]]; then
     wget_and_untar https://github.com/libgeos/geos/archive/${GEOS_VERSION}.tar.gz geos
     if [[ "$(uname)" == "Darwin" ]]; then
-      ABSOLUTE_SCRIPTDIR=$(realpath ${SCRIPTDIR})
+      ABSOLUTE_SCRIPT_DIR=$(realpath ${SCRIPT_DIR})
       (
         # Adopted from the bundled patching needed for macOS.
         cd "${DEPENDENCY_DIR}/geos" || exit 1
-        git apply "${ABSOLUTE_SCRIPTDIR}/../CMake/resolve_dependency_modules/geos/geos-cmakelists.patch"
-        git apply "${ABSOLUTE_SCRIPTDIR}/../CMake/resolve_dependency_modules/geos/geos-build.patch"
+        git apply "${ABSOLUTE_SCRIPT_DIR}/../CMake/resolve_dependency_modules/geos/geos-cmakelists.patch"
+        git apply "${ABSOLUTE_SCRIPT_DIR}/../CMake/resolve_dependency_modules/geos/geos-build.patch"
       )
     fi
     cmake_install_dir geos -DBUILD_TESTING=OFF
