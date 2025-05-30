@@ -81,6 +81,8 @@ void registerAccessors(const std::string& prefix) {
       {{prefix + "ST_Centroid"}});
   registerFunction<StXFunction, double, Geometry>({{prefix + "ST_X"}});
   registerFunction<StYFunction, double, Geometry>({{prefix + "ST_Y"}});
+  registerFunction<StGeometryTypeFunction, Varchar, Geometry>(
+      {{prefix + "ST_GeometryType"}});
 }
 
 } // namespace
