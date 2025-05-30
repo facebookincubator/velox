@@ -587,4 +587,21 @@ struct StYFunction {
   }
 };
 
+template <typename T>
+struct StGeometryTypeFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  FOLLY_ALWAYS_INLINE Status
+  call(out_type<Varchar>& result, const arg_type<Geometry>& input) {
+    std::unique_ptr<geos::geom::Geometry> geosGeometry =
+        geospatial::deserializeGeometry(input);
+
+    std::unique_ptr<geos::geom::Geometry> outputGeometry;
+
+    result = geosGeometry->getGeometryType();
+
+    return Status::OK();
+  }
+};
+
 } // namespace facebook::velox::functions

@@ -135,6 +135,7 @@ int main(int argc, char** argv) {
       "st_asbinary",
       "st_boundary",
       "st_centroid",
+      "st_geometrytype",
       "st_relate",
       "st_contains",
       "st_crosses",
