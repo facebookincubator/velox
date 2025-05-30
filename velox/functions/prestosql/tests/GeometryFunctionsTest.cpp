@@ -1394,3 +1394,38 @@ TEST_F(GeometryFunctionsTest, testStDistance) {
       "MULTIPOLYGON EMPTY", "POLYGON ((10 100, 30 10, 30 100, 10 100))");
   testStDistanceFunc(std::nullopt, "POINT (50 100)");
 }
+
+TEST_F(GeometryFunctionsTest, testStXY) {
+  const auto testStXY =
+      [&](const std::optional<std::string>& wkt,
+          const std::optional<double>& expectedX = std::nullopt,
+          const std::optional<double>& expectedY = std::nullopt) {
+        std::optional<double> resultX =
+            evaluateOnce<double>("ST_X(ST_GeometryFromText(c0))", wkt);
+        std::optional<double> resultY =
+            evaluateOnce<double>("ST_Y(ST_GeometryFromText(c0))", wkt);
+
+        if (expectedX.has_value()) {
+          ASSERT_TRUE(resultX.has_value());
+          ASSERT_EQ(expectedX.value(), resultX.value());
+        } else {
+          ASSERT_FALSE(resultX.has_value());
+        }
+
+        if (expectedY.has_value()) {
+          ASSERT_TRUE(resultY.has_value());
+          ASSERT_EQ(expectedY.value(), resultY.value());
+        } else {
+          ASSERT_FALSE(resultY.has_value());
+        }
+      };
+
+  testStXY("POINT (1 2)", 1.0, 2.0);
+  testStXY("POINT EMPTY", std::nullopt, std::nullopt);
+  VELOX_ASSERT_USER_THROW(
+      testStXY("GEOMETRYCOLLECTION EMPTY"),
+      "ST_X requires a Point geometry, found GeometryCollection");
+  VELOX_ASSERT_USER_THROW(
+      testStXY("POLYGON ((1 1, 1 3, 3 3, 3 1, 1 1))"),
+      "ST_X requires a Point geometry, found Polygon");
+}
