@@ -250,7 +250,7 @@
             </googleJavaFormat>
             <removeUnusedImports></removeUnusedImports>
             <importOrder>
-              <order>java,javax,,com.meta.velox4j</order>
+              <order>java,javax,,com.facebook.velox4j</order>
             </importOrder>
           </java>
           <pom>
