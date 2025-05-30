@@ -17,6 +17,10 @@ package com.facebook.velox4j.serde;
 
 import java.util.List;
 
+import org.junit.Assert;
+import org.junit.BeforeClass;
+import org.junit.Test;
+
 import com.facebook.velox4j.exception.VeloxException;
 import com.facebook.velox4j.test.Velox4jTests;
 import com.facebook.velox4j.type.ArrayType;
@@ -40,9 +44,6 @@ import com.facebook.velox4j.type.TinyIntType;
 import com.facebook.velox4j.type.UnknownType;
 import com.facebook.velox4j.type.VarCharType;
 import com.facebook.velox4j.type.VarbinaryType;
-import org.junit.Assert;
-import org.junit.BeforeClass;
-import org.junit.Test;
 
 public class TypeSerdeTest {
 

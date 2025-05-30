@@ -20,6 +20,9 @@ import java.io.IOException;
 import java.util.*;
 import java.util.stream.Collectors;
 
+import com.fasterxml.jackson.databind.JsonNode;
+import org.junit.*;
+
 import com.facebook.velox4j.Velox4j;
 import com.facebook.velox4j.aggregate.Aggregate;
 import com.facebook.velox4j.aggregate.AggregateStep;
@@ -51,8 +54,6 @@ import com.facebook.velox4j.type.VarCharType;
 import com.facebook.velox4j.variant.BigIntValue;
 import com.facebook.velox4j.variant.BooleanValue;
 import com.facebook.velox4j.write.TableWriteTraits;
-import com.fasterxml.jackson.databind.JsonNode;
-import org.junit.*;
 
 public class QueryTest {
   public static final String HIVE_CONNECTOR_ID = "connector-hive";

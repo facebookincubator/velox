@@ -17,9 +17,10 @@ package com.facebook.velox4j.plan;
 
 import java.util.List;
 
-import com.facebook.velox4j.serializable.ISerializable;
 import com.fasterxml.jackson.annotation.JsonGetter;
 import com.fasterxml.jackson.annotation.JsonInclude;
+
+import com.facebook.velox4j.serializable.ISerializable;
 
 public abstract class PlanNode extends ISerializable {
   private final String id;

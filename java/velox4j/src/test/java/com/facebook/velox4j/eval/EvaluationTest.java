@@ -17,6 +17,8 @@ package com.facebook.velox4j.eval;
 
 import java.util.List;
 
+import org.junit.*;
+
 import com.facebook.velox4j.Velox4j;
 import com.facebook.velox4j.conf.Config;
 import com.facebook.velox4j.conf.ConnectorConfig;
@@ -32,7 +34,6 @@ import com.facebook.velox4j.session.Session;
 import com.facebook.velox4j.test.ResourceTests;
 import com.facebook.velox4j.test.Velox4jTests;
 import com.facebook.velox4j.type.BigIntType;
-import org.junit.*;
 
 public class EvaluationTest {
   private static MemoryManager memoryManager;

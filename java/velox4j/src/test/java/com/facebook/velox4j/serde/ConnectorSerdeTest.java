@@ -17,12 +17,13 @@ package com.facebook.velox4j.serde;
 
 import java.util.OptionalLong;
 
-import com.facebook.velox4j.connector.*;
-import com.facebook.velox4j.filter.AlwaysTrue;
-import com.facebook.velox4j.test.Velox4jTests;
 import org.junit.Assert;
 import org.junit.BeforeClass;
 import org.junit.Test;
+
+import com.facebook.velox4j.connector.*;
+import com.facebook.velox4j.filter.AlwaysTrue;
+import com.facebook.velox4j.test.Velox4jTests;
 
 public class ConnectorSerdeTest {
   @BeforeClass

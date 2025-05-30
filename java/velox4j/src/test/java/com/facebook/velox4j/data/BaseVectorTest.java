@@ -2,6 +2,8 @@ package com.facebook.velox4j.data;
 
 import java.util.List;
 
+import org.junit.*;
+
 import com.facebook.velox4j.Velox4j;
 import com.facebook.velox4j.memory.AllocationListener;
 import com.facebook.velox4j.memory.MemoryManager;
@@ -13,7 +15,6 @@ import com.facebook.velox4j.type.IntegerType;
 import com.facebook.velox4j.type.RealType;
 import com.facebook.velox4j.type.RowType;
 import com.facebook.velox4j.type.Type;
-import org.junit.*;
 
 public class BaseVectorTest {
   private static MemoryManager memoryManager;
