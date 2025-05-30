@@ -305,7 +305,7 @@ inline xsimd::batch_bool<float, xsimd::default_arch> leadingMask(
   With GCC builds, compiler throws an error "invalid cast" on reintepreting to
   the same data type, in SVE 256's case, svbool_t
   __attribute__((arm_sve_vector_bits(256))). With clang++ build, there are no
-  isses. So this is a workaround for now. Can be updated once the bug in GCC is
+  issues. So this is a workaround for now. Can be updated once the bug in GCC is
   resolved in future GCC versions.
   */
 
