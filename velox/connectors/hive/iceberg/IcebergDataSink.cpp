@@ -16,10 +16,12 @@
 
 #include "velox/connectors/hive/iceberg/IcebergDataSink.h"
 
+#include "dwio/common/SortingWriter.h"
 #include "velox/common/base/Fs.h"
 #include "velox/connectors/hive/HiveConnectorUtil.h"
 #include "velox/connectors/hive/iceberg/IcebergPartitionIdGenerator.h"
 #include "velox/exec/OperatorUtils.h"
+#include "velox/exec/SortBuffer.h"
 
 namespace facebook::velox::connector::hive::iceberg {
 
@@ -111,14 +113,14 @@ IcebergInsertTableHandle::IcebergInsertTableHandle(
     std::shared_ptr<const IcebergPartitionSpec> partitionSpec,
     memory::MemoryPool* pool,
     dwio::common::FileFormat tableStorageFormat,
-    std::shared_ptr<HiveBucketProperty> bucketProperty,
+    const std::vector<std::shared_ptr<const IcebergSortingColumn>>& sortedBy,
     std::optional<common::CompressionKind> compressionKind,
     const std::unordered_map<std::string, std::string>& serdeParameters)
     : HiveInsertTableHandle(
           std::move(inputColumns),
           std::move(locationHandle),
           tableStorageFormat,
-          std::move(bucketProperty),
+          nullptr,
           compressionKind,
           serdeParameters,
           nullptr,
@@ -188,6 +190,25 @@ IcebergDataSink::IcebergDataSink(
               : nullptr) {
   if (isPartitioned()) {
     partitionData_.resize(maxOpenWriters_);
+  }
+
+  const auto& sortedBy = insertTableHandle->sortedBy();
+  if (!sortedBy.empty()) {
+    sortColumnIndices_.reserve(sortedBy.size());
+    sortCompareFlags_.reserve(sortedBy.size());
+    for (int i = 0; i < sortedBy.size(); ++i) {
+      auto columnIndex =
+          getNonPartitionTypes(dataChannels_, inputType_)
+              ->getChildIdxIfExists(sortedBy.at(i)->sortColumn());
+      if (columnIndex.has_value()) {
+        sortColumnIndices_.push_back(columnIndex.value());
+        sortCompareFlags_.push_back(
+            {sortedBy.at(i)->sortOrder().isNullsFirst(),
+             sortedBy.at(i)->sortOrder().isAscending(),
+             false,
+             CompareFlags::NullHandlingMode::kNullAsValue});
+      }
+    }
   }
 }
 
@@ -318,6 +339,66 @@ std::optional<std::string> IcebergDataSink::getPartitionName(
         partitionIdGenerator_->partitionName(id.partitionId.value());
   }
   return partitionName;
+}
+
+std::unique_ptr<facebook::velox::dwio::common::Writer>
+IcebergDataSink::maybeCreateBucketSortWriter(
+    std::unique_ptr<facebook::velox::dwio::common::Writer> writer) {
+  if (!sortWrite()) {
+    return writer;
+  }
+  auto* sortPool = writerInfo_.back()->sortPool.get();
+  VELOX_CHECK_NOT_NULL(sortPool);
+  auto sortBuffer = std::make_unique<exec::SortBuffer>(
+      getNonPartitionTypes(dataChannels_, inputType_),
+      sortColumnIndices_,
+      sortCompareFlags_,
+      sortPool,
+      writerInfo_.back()->nonReclaimableSectionHolder.get(),
+      connectorQueryCtx_->prefixSortConfig(),
+      spillConfig_,
+      writerInfo_.back()->spillStats.get());
+  return std::make_unique<dwio::common::SortingWriter>(
+      std::move(writer),
+      std::move(sortBuffer),
+      hiveConfig_->sortWriterMaxOutputRows(
+          connectorQueryCtx_->sessionProperties()),
+      hiveConfig_->sortWriterMaxOutputBytes(
+          connectorQueryCtx_->sessionProperties()),
+      sortWriterFinishTimeSliceLimitMs_);
+}
+
+IcebergSortingColumn::IcebergSortingColumn(
+    const std::string& sortColumn,
+    const core::SortOrder& sortOrder)
+    : sortColumn_(sortColumn), sortOrder_(sortOrder) {
+  VELOX_USER_CHECK(!sortColumn_.empty(), "iceberg sort column must be set");
+}
+
+folly::dynamic IcebergSortingColumn::serialize() const {
+  folly::dynamic obj = folly::dynamic::object;
+  obj["name"] = "IcebergSortingColumn";
+  obj["columnName"] = sortColumn_;
+  obj["sortOrder"] = sortOrder_.serialize();
+  return obj;
+}
+
+std::shared_ptr<IcebergSortingColumn> IcebergSortingColumn::deserialize(
+    const folly::dynamic& obj,
+    void* context) {
+  const std::string columnName = obj["columnName"].asString();
+  const auto sortOrder = core::SortOrder::deserialize(obj["sortOrder"]);
+  return std::make_shared<IcebergSortingColumn>(columnName, sortOrder);
+}
+
+std::string IcebergSortingColumn::toString() const {
+  return fmt::format(
+      "[COLUMN[{}] ORDER[{}]]", sortColumn_, sortOrder_.toString());
+}
+
+void IcebergSortingColumn::registerSerDe() {
+  auto& registry = DeserializationWithContextRegistryForSharedPtr();
+  registry.Register("IcebergSortingColumn", IcebergSortingColumn::deserialize);
 }
 
 } // namespace facebook::velox::connector::hive::iceberg

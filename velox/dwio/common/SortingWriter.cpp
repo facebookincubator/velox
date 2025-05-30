@@ -91,6 +91,7 @@ void SortingWriter::close() {
   setState(State::kClosed);
   VELOX_CHECK_NULL(sortBuffer_);
   outputWriter_->close();
+  fileStatistics_ = outputWriter_->fileStats();
 }
 
 void SortingWriter::abort() {
