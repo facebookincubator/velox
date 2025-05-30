@@ -16,7 +16,7 @@
 #include "ObjectStore.h"
 #include <glog/logging.h>
 
-namespace velox4j {
+namespace facebook::velox4j {
 ObjectStore* ObjectStore::global() {
   static std::unique_ptr<ObjectStore> globalStore = create();
   return globalStore.get();
@@ -62,4 +62,4 @@ void ObjectStore::releaseInternal(ResourceHandle handle) {
   store_.erase(handle);
   aliveObjects_.erase(handle);
 }
-} // namespace velox4j
+} // namespace facebook::velox4j

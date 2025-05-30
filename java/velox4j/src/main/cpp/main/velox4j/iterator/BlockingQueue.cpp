@@ -15,7 +15,7 @@
  */
 #include "BlockingQueue.h"
 
-namespace velox4j {
+namespace facebook::velox4j {
 using namespace facebook::velox;
 
 std::string BlockingQueue::stateToString(State state) {
@@ -149,4 +149,4 @@ void BlockingQueue::close() {
   condVar_.notify_one();
   waitExecutor_->join();
 }
-} // namespace velox4j
+} // namespace facebook::velox4j

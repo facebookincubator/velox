@@ -19,7 +19,7 @@
 #include <arrow/c/abi.h>
 #include <velox/vector/ComplexVector.h>
 
-namespace velox4j {
+namespace facebook::velox4j {
 void fromBaseVectorToArrow(
     facebook::velox::VectorPtr vector,
     ArrowSchema* cSchema,
@@ -29,4 +29,4 @@ facebook::velox::VectorPtr fromArrowToBaseVector(
     facebook::velox::memory::MemoryPool* pool,
     ArrowSchema* cSchema,
     ArrowArray* cArray);
-} // namespace velox4j
+} // namespace facebook::velox4j

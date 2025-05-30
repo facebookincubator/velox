@@ -22,7 +22,7 @@
 #include "AllocationListener.h"
 #include "ArrowMemoryPool.h"
 
-namespace velox4j {
+namespace facebook::velox4j {
 
 namespace {}
 
@@ -57,4 +57,4 @@ class MemoryManager {
       std::shared_ptr<facebook::velox::memory::MemoryPool>>
       veloxPoolRefs_;
 };
-} // namespace velox4j
+} // namespace facebook::velox4j

@@ -17,7 +17,7 @@
 #include <arrow/type_fwd.h>
 #include <velox/common/base/Exceptions.h>
 
-namespace velox4j {
+namespace facebook::velox4j {
 
 namespace {
 #define ROUND_TO_LINE(n, round) (((n) + (round) - 1) & ~((round) - 1))
@@ -284,4 +284,4 @@ std::shared_ptr<arrow::MemoryPool> defaultArrowMemoryPool() {
       std::make_shared<ArrowMemoryPool>(defaultMemoryAllocator().get());
   return staticPool;
 }
-} // namespace velox4j
+} // namespace facebook::velox4j

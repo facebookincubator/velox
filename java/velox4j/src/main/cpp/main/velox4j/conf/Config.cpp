@@ -15,7 +15,7 @@
  */
 #include "Config.h"
 
-namespace velox4j {
+namespace facebook::velox4j {
 using namespace facebook::velox;
 
 std::unordered_map<std::string, std::string> ConfigArray::toMap() const {
@@ -106,4 +106,4 @@ void ConnectorConfigArray::registerSerDe() {
   auto& registry = DeserializationRegistryForSharedPtr();
   registry.Register("velox4j.ConnectorConfig", create);
 }
-} // namespace velox4j
+} // namespace facebook::velox4j

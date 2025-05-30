@@ -16,7 +16,7 @@
 #include "JniError.h"
 #include <velox/common/base/Exceptions.h>
 
-namespace velox4j {
+namespace facebook::velox4j {
 void JniErrorState::ensureInitialized(JNIEnv* env) {
   std::lock_guard<std::mutex> lockGuard(mtx_);
   if (initialized_) {
@@ -51,7 +51,7 @@ jclass JniErrorState::veloxExceptionClass() {
 
 void JniErrorState::initialize(JNIEnv* env) {
   veloxExceptionClass_ = createGlobalClassReference(
-      env, "Lcom/meta/velox4j/exception/VeloxException;");
+      env, "Lcom/facebook/velox4j/exception/VeloxException;");
   ioExceptionClass_ = createGlobalClassReference(env, "Ljava/io/IOException;");
   runtimeExceptionClass_ =
       createGlobalClassReference(env, "Ljava/lang/RuntimeException;");
@@ -87,4 +87,4 @@ JniErrorState* getJniErrorState() {
   static JniErrorState jniErrorState;
   return &jniErrorState;
 }
-} // namespace velox4j
+} // namespace facebook::velox4j

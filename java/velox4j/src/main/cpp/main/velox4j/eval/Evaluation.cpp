@@ -15,7 +15,7 @@
  */
 #include "Evaluation.h"
 
-namespace velox4j {
+namespace facebook::velox4j {
 using namespace facebook::velox;
 
 Evaluation::Evaluation(
@@ -66,4 +66,4 @@ void Evaluation::registerSerDe() {
   registry.Register("velox4j.Evaluation", create);
 }
 
-} // namespace velox4j
+} // namespace facebook::velox4j

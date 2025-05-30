@@ -22,7 +22,7 @@
 
 #include <utility>
 
-namespace velox4j {
+namespace facebook::velox4j {
 
 using namespace facebook::velox;
 
@@ -182,4 +182,4 @@ QueryExecutor::QueryExecutor(
 std::unique_ptr<SerialTask> QueryExecutor::execute() const {
   return std::make_unique<SerialTask>(memoryManager_, query_);
 }
-} // namespace velox4j
+} // namespace facebook::velox4j

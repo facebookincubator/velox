@@ -16,7 +16,7 @@
 #include "Evaluator.h"
 #include "Evaluation.h"
 
-namespace velox4j {
+namespace facebook::velox4j {
 using namespace facebook::velox;
 
 Evaluator::Evaluator(MemoryManager* memoryManager, const std::string& exprJson)
@@ -60,4 +60,4 @@ VectorPtr Evaluator::eval(
   return vector;
 }
 
-} // namespace velox4j
+} // namespace facebook::velox4j

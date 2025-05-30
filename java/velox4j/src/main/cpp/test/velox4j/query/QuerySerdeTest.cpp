@@ -19,7 +19,7 @@
 #include "velox4j/query/Query.h"
 #include "velox4j/test/Init.h"
 
-namespace velox4j {
+namespace facebook::velox4j {
 using namespace facebook::velox;
 using namespace facebook::velox::exec::test;
 
@@ -61,4 +61,4 @@ TEST_F(QuerySerdeTest, sanity) {
               std::pair<std::string, std::shared_ptr<const ConfigArray>>>({})));
   testSerde(query.get());
 }
-} // namespace velox4j
+} // namespace facebook::velox4j

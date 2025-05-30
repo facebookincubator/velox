@@ -17,10 +17,10 @@
 #include <glog/logging.h>
 #include "velox4j/jni/JniCommon.h"
 
-namespace velox4j {
+namespace facebook::velox4j {
 
 namespace {
-const char* kClassName = "com/meta/velox4j/memory/AllocationListener";
+const char* kClassName = "com/facebook/velox4j/memory/AllocationListener";
 }
 const char* JavaAllocationListenerJniWrapper::getCanonicalName() const {
   return kClassName;
@@ -78,4 +78,4 @@ const int64_t JavaAllocationListener::currentBytes() const {
 const int64_t JavaAllocationListener::peakBytes() const {
   return peakBytes_;
 }
-} // namespace velox4j
+} // namespace facebook::velox4j

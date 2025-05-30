@@ -22,7 +22,7 @@
 #include <velox/connectors/fuzzer/tests/FuzzerConnectorTestBase.h>
 #include <velox4j/test/Init.h>
 
-namespace velox4j {
+namespace facebook::velox4j {
 using namespace facebook::velox;
 using namespace facebook::velox::exec::test;
 class QueryTest : public testing::Test, public test::VectorTestBase {
@@ -142,4 +142,4 @@ TEST_F(QueryTest, fuzzer) {
   }
   ASSERT_EQ(actualRows, rowsPerSplit * numSplits);
 }
-} // namespace velox4j
+} // namespace facebook::velox4j

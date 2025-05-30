@@ -16,7 +16,7 @@
 #include "Arrow.h"
 #include <velox/vector/arrow/Bridge.h>
 
-namespace velox4j {
+namespace facebook::velox4j {
 using namespace facebook::velox;
 
 namespace {
@@ -62,4 +62,4 @@ VectorPtr fromArrowToBaseVector(
   auto options = makeOptions();
   return importFromArrowAsOwner(*cSchema, *cArray, pool);
 }
-} // namespace velox4j
+} // namespace facebook::velox4j

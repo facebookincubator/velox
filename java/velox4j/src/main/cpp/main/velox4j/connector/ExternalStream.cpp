@@ -15,7 +15,7 @@
  */
 #include "ExternalStream.h"
 
-namespace velox4j {
+namespace facebook::velox4j {
 using namespace facebook::velox;
 
 SuspendedSection::SuspendedSection(facebook::velox::exec::Driver* driver)
@@ -192,4 +192,4 @@ ExternalStreamConnectorFactory::newConnector(
     folly::Executor* cpuExecutor) {
   return std::make_shared<ExternalStreamConnector>(id, config);
 }
-} // namespace velox4j
+} // namespace facebook::velox4j

@@ -17,7 +17,7 @@
 
 #include <JniHelpers.h>
 
-namespace velox4j {
+namespace facebook::velox4j {
 class StaticJniWrapper final : public spotify::jni::JavaClass {
  public:
   explicit StaticJniWrapper(JNIEnv* env) : JavaClass(env) {
@@ -30,4 +30,4 @@ class StaticJniWrapper final : public spotify::jni::JavaClass {
 
   void mapFields() override;
 };
-} // namespace velox4j
+} // namespace facebook::velox4j

@@ -18,7 +18,7 @@
 #include <velox/expression/Expr.h>
 #include "velox4j/conf/Config.h"
 
-namespace velox4j {
+namespace facebook::velox4j {
 class Evaluation : public facebook::velox::ISerializable {
  public:
   Evaluation(
@@ -43,4 +43,4 @@ class Evaluation : public facebook::velox::ISerializable {
   const std::shared_ptr<const ConfigArray> queryConfig_;
   const std::shared_ptr<const ConnectorConfigArray> connectorConfig_;
 };
-} // namespace velox4j
+} // namespace facebook::velox4j

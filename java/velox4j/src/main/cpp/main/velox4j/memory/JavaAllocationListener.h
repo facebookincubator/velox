@@ -19,7 +19,7 @@
 #include <atomic>
 #include "velox4j/memory/AllocationListener.h"
 
-namespace velox4j {
+namespace facebook::velox4j {
 class JavaAllocationListenerJniWrapper final : public spotify::jni::JavaClass {
  public:
   explicit JavaAllocationListenerJniWrapper(JNIEnv* env) : JavaClass(env) {
@@ -52,4 +52,4 @@ class JavaAllocationListener : public AllocationListener {
   std::atomic_int64_t usedBytes_{0L};
   std::atomic_int64_t peakBytes_{0L};
 };
-} // namespace velox4j
+} // namespace facebook::velox4j

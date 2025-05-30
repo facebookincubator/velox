@@ -18,7 +18,7 @@
 #include <map>
 #include "ResourceMap.h"
 
-namespace velox4j {
+namespace facebook::velox4j {
 
 // ObjectHandle is a signed int64 consisting of:
 // 1. 1 - 32 bits is a signed int32 as the object store's ID;
@@ -107,4 +107,4 @@ class ObjectStore {
   std::map<ResourceHandle, std::string_view> aliveObjects_{};
   mutable std::mutex mtx_;
 };
-} // namespace velox4j
+} // namespace facebook::velox4j
