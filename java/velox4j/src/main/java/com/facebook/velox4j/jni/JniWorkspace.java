@@ -21,10 +21,11 @@ import java.nio.file.Files;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 
-import com.facebook.velox4j.exception.VeloxException;
 import com.google.common.base.Preconditions;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+
+import com.facebook.velox4j.exception.VeloxException;
 
 public class JniWorkspace {
   private static final Logger LOG = LoggerFactory.getLogger(JniWorkspace.class);

@@ -2,10 +2,11 @@ package com.facebook.velox4j.data;
 
 import java.util.List;
 
+import com.google.common.base.Preconditions;
+
 import com.facebook.velox4j.jni.JniApi;
 import com.facebook.velox4j.jni.StaticJniApi;
 import com.facebook.velox4j.type.Type;
-import com.google.common.base.Preconditions;
 
 public class BaseVectors {
   private final JniApi jniApi;

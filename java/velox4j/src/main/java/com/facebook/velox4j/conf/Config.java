@@ -19,10 +19,11 @@ import java.util.List;
 import java.util.Map;
 import java.util.stream.Collectors;
 
-import com.facebook.velox4j.serializable.ISerializable;
 import com.fasterxml.jackson.annotation.JsonCreator;
 import com.fasterxml.jackson.annotation.JsonGetter;
 import com.fasterxml.jackson.annotation.JsonProperty;
+
+import com.facebook.velox4j.serializable.ISerializable;
 
 public class Config extends ISerializable {
   private static final Config EMPTY = new Config(List.of());

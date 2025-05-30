@@ -18,9 +18,10 @@ package com.facebook.velox4j.iterator;
 import java.util.HashMap;
 import java.util.Map;
 
+import com.google.common.base.Preconditions;
+
 import com.facebook.velox4j.data.RowVector;
 import com.facebook.velox4j.jni.CppObject;
-import com.google.common.base.Preconditions;
 
 public interface UpIterator extends CppObject {
   enum State {
