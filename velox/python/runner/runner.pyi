@@ -20,7 +20,6 @@ from typing import Iterator, Optional
 
 from pyvelox.vector import Vector
 
-
 class LocalRunner:
     def __init__(self, PlanNode) -> None: ...
     def execute(self, max_drivers: Optional[int] = None) -> Iterator[Vector]: ...
