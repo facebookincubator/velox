@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+#ifdef VELOX_ENABLE_GEO
 #include <gtest/gtest.h>
 #include <array>
 #include "velox/common/base/tests/GTestUtils.h"
@@ -1231,3 +1232,4 @@ TEST_F(GeometryFunctionsTest, testStArea) {
       "GEOMETRYCOLLECTION (POLYGON ((0 0, 2 0, 2 2, 0 2, 0 0)), POLYGON ((1 1, 3 1, 3 3, 1 3, 1 1)), GEOMETRYCOLLECTION (POINT (8 8), LINESTRING (5 5, 6 6), POLYGON ((1 1, 3 1, 3 4, 1 4, 1 1))))",
       14.0);
 }
+#endif
