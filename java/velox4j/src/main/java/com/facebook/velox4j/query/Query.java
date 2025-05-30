@@ -15,13 +15,14 @@
  */
 package com.facebook.velox4j.query;
 
+import com.fasterxml.jackson.annotation.JsonCreator;
+import com.fasterxml.jackson.annotation.JsonGetter;
+import com.fasterxml.jackson.annotation.JsonProperty;
+
 import com.facebook.velox4j.conf.Config;
 import com.facebook.velox4j.conf.ConnectorConfig;
 import com.facebook.velox4j.plan.PlanNode;
 import com.facebook.velox4j.serializable.ISerializable;
-import com.fasterxml.jackson.annotation.JsonCreator;
-import com.fasterxml.jackson.annotation.JsonGetter;
-import com.fasterxml.jackson.annotation.JsonProperty;
 
 public class Query extends ISerializable {
   private final PlanNode plan;

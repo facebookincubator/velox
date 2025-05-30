@@ -17,16 +17,17 @@ package com.facebook.velox4j.expression;
 
 import java.util.Collections;
 
+import com.fasterxml.jackson.annotation.JsonCreator;
+import com.fasterxml.jackson.annotation.JsonGetter;
+import com.fasterxml.jackson.annotation.JsonProperty;
+import com.google.common.base.Preconditions;
+
 import com.facebook.velox4j.data.BaseVector;
 import com.facebook.velox4j.data.BaseVectors;
 import com.facebook.velox4j.data.VectorEncoding;
 import com.facebook.velox4j.jni.StaticJniApi;
 import com.facebook.velox4j.type.Type;
 import com.facebook.velox4j.variant.Variant;
-import com.fasterxml.jackson.annotation.JsonCreator;
-import com.fasterxml.jackson.annotation.JsonGetter;
-import com.fasterxml.jackson.annotation.JsonProperty;
-import com.google.common.base.Preconditions;
 
 public class ConstantTypedExpr extends TypedExpr {
   private final Variant value;

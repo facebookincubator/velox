@@ -17,11 +17,12 @@ package com.facebook.velox4j.plan;
 
 import java.util.List;
 
-import com.facebook.velox4j.expression.FieldAccessTypedExpr;
-import com.facebook.velox4j.sort.SortOrder;
 import com.fasterxml.jackson.annotation.JsonCreator;
 import com.fasterxml.jackson.annotation.JsonGetter;
 import com.fasterxml.jackson.annotation.JsonProperty;
+
+import com.facebook.velox4j.expression.FieldAccessTypedExpr;
+import com.facebook.velox4j.sort.SortOrder;
 
 public class OrderByNode extends PlanNode {
   private final List<PlanNode> sources;

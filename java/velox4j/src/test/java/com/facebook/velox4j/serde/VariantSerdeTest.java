@@ -19,6 +19,10 @@ import java.math.BigInteger;
 import java.util.List;
 import java.util.Map;
 
+import org.junit.Assert;
+import org.junit.BeforeClass;
+import org.junit.Test;
+
 import com.facebook.velox4j.exception.VeloxException;
 import com.facebook.velox4j.test.Velox4jTests;
 import com.facebook.velox4j.variant.ArrayValue;
@@ -35,9 +39,6 @@ import com.facebook.velox4j.variant.TimestampValue;
 import com.facebook.velox4j.variant.TinyIntValue;
 import com.facebook.velox4j.variant.VarBinaryValue;
 import com.facebook.velox4j.variant.VarCharValue;
-import org.junit.Assert;
-import org.junit.BeforeClass;
-import org.junit.Test;
 
 public class VariantSerdeTest {
   @BeforeClass

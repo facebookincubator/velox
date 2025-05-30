@@ -21,8 +21,6 @@ import java.util.List;
 import java.util.Set;
 import java.util.stream.Collectors;
 
-import com.facebook.velox4j.collection.Streams;
-import com.facebook.velox4j.exception.VeloxException;
 import com.fasterxml.jackson.core.JacksonException;
 import com.fasterxml.jackson.core.JsonParser;
 import com.fasterxml.jackson.core.JsonProcessingException;
@@ -36,6 +34,9 @@ import com.fasterxml.jackson.databind.deser.BeanDeserializerModifier;
 import com.fasterxml.jackson.databind.deser.BeanDeserializerUnsafe;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.google.common.base.Preconditions;
+
+import com.facebook.velox4j.collection.Streams;
+import com.facebook.velox4j.exception.VeloxException;
 
 public class PolymorphicDeserializer {
   private static class AbstractDeserializer extends JsonDeserializer<Object> {

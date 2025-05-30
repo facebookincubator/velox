@@ -17,9 +17,10 @@ package com.facebook.velox4j.expression;
 
 import java.util.Collections;
 
-import com.facebook.velox4j.type.Type;
 import com.fasterxml.jackson.annotation.JsonCreator;
 import com.fasterxml.jackson.annotation.JsonProperty;
+
+import com.facebook.velox4j.type.Type;
 
 public class InputTypedExpr extends TypedExpr {
   @JsonCreator

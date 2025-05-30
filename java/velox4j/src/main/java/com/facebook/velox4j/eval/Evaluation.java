@@ -15,13 +15,14 @@
  */
 package com.facebook.velox4j.eval;
 
+import com.fasterxml.jackson.annotation.JsonCreator;
+import com.fasterxml.jackson.annotation.JsonGetter;
+import com.fasterxml.jackson.annotation.JsonProperty;
+
 import com.facebook.velox4j.conf.Config;
 import com.facebook.velox4j.conf.ConnectorConfig;
 import com.facebook.velox4j.expression.TypedExpr;
 import com.facebook.velox4j.serializable.ISerializable;
-import com.fasterxml.jackson.annotation.JsonCreator;
-import com.fasterxml.jackson.annotation.JsonGetter;
-import com.fasterxml.jackson.annotation.JsonProperty;
 
 public class Evaluation extends ISerializable {
   private final TypedExpr expr;

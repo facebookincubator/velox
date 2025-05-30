@@ -20,6 +20,8 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.concurrent.atomic.AtomicBoolean;
 
+import com.google.common.base.Preconditions;
+
 import com.facebook.velox4j.conf.Config;
 import com.facebook.velox4j.exception.VeloxException;
 import com.facebook.velox4j.jni.JniLibLoader;
@@ -29,7 +31,6 @@ import com.facebook.velox4j.memory.MemoryManager;
 import com.facebook.velox4j.serializable.ISerializableRegistry;
 import com.facebook.velox4j.session.Session;
 import com.facebook.velox4j.variant.VariantRegistry;
-import com.google.common.base.Preconditions;
 
 public class Velox4j {
   private static final AtomicBoolean initialized = new AtomicBoolean(false);

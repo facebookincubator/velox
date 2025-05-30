@@ -21,9 +21,10 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.nio.charset.Charset;
 
+import com.google.common.base.Preconditions;
+
 import com.facebook.velox4j.jni.JniWorkspace;
 import com.facebook.velox4j.resource.Resources;
-import com.google.common.base.Preconditions;
 
 public final class ResourceTests {
   public static String readResourceAsString(String path) {

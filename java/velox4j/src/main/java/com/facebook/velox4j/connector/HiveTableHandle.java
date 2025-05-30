@@ -20,11 +20,12 @@ import java.util.List;
 import java.util.Map;
 import java.util.TreeMap;
 
-import com.facebook.velox4j.expression.TypedExpr;
-import com.facebook.velox4j.type.RowType;
 import com.fasterxml.jackson.annotation.JsonCreator;
 import com.fasterxml.jackson.annotation.JsonGetter;
 import com.fasterxml.jackson.annotation.JsonProperty;
+
+import com.facebook.velox4j.expression.TypedExpr;
+import com.facebook.velox4j.type.RowType;
 
 public class HiveTableHandle extends ConnectorTableHandle {
   private final String tableName;

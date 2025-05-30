@@ -15,8 +15,9 @@
  */
 package com.facebook.velox4j.jni;
 
-import com.facebook.velox4j.iterator.DownIterator;
 import com.google.common.annotations.VisibleForTesting;
+
+import com.facebook.velox4j.iterator.DownIterator;
 
 final class JniWrapper {
   private final long sessionId;

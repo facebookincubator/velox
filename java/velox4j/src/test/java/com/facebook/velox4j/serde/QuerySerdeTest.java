@@ -15,11 +15,12 @@
  */
 package com.facebook.velox4j.serde;
 
+import org.junit.BeforeClass;
+import org.junit.Ignore;
+
 import com.facebook.velox4j.query.Query;
 import com.facebook.velox4j.test.ResourceTests;
 import com.facebook.velox4j.test.Velox4jTests;
-import org.junit.BeforeClass;
-import org.junit.Ignore;
 
 public class QuerySerdeTest {
 

@@ -17,12 +17,13 @@ package com.facebook.velox4j.plan;
 
 import java.util.List;
 
-import com.facebook.velox4j.aggregate.Aggregate;
-import com.facebook.velox4j.aggregate.AggregateStep;
-import com.facebook.velox4j.expression.FieldAccessTypedExpr;
 import com.fasterxml.jackson.annotation.JsonCreator;
 import com.fasterxml.jackson.annotation.JsonGetter;
 import com.fasterxml.jackson.annotation.JsonProperty;
+
+import com.facebook.velox4j.aggregate.Aggregate;
+import com.facebook.velox4j.aggregate.AggregateStep;
+import com.facebook.velox4j.expression.FieldAccessTypedExpr;
 
 public class AggregationNode extends PlanNode {
   private final AggregateStep step;

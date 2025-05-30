@@ -17,13 +17,14 @@ package com.facebook.velox4j.aggregate;
 
 import java.util.List;
 
+import com.fasterxml.jackson.annotation.JsonCreator;
+import com.fasterxml.jackson.annotation.JsonGetter;
+import com.fasterxml.jackson.annotation.JsonProperty;
+
 import com.facebook.velox4j.expression.CallTypedExpr;
 import com.facebook.velox4j.expression.FieldAccessTypedExpr;
 import com.facebook.velox4j.sort.SortOrder;
 import com.facebook.velox4j.type.Type;
-import com.fasterxml.jackson.annotation.JsonCreator;
-import com.fasterxml.jackson.annotation.JsonGetter;
-import com.fasterxml.jackson.annotation.JsonProperty;
 
 public class Aggregate {
   public final CallTypedExpr call;

@@ -17,10 +17,11 @@ package com.facebook.velox4j.type;
 
 import java.util.List;
 
-import com.facebook.velox4j.exception.VeloxException;
 import com.fasterxml.jackson.annotation.JsonCreator;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import com.google.common.base.Preconditions;
+
+import com.facebook.velox4j.exception.VeloxException;
 
 public class RowType extends Type {
   private final List<String> names;

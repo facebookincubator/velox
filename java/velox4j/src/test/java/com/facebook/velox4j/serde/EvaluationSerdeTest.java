@@ -17,6 +17,10 @@ package com.facebook.velox4j.serde;
 
 import java.util.Collections;
 
+import org.junit.AfterClass;
+import org.junit.BeforeClass;
+import org.junit.Test;
+
 import com.facebook.velox4j.conf.Config;
 import com.facebook.velox4j.conf.ConnectorConfig;
 import com.facebook.velox4j.eval.Evaluation;
@@ -25,9 +29,6 @@ import com.facebook.velox4j.memory.AllocationListener;
 import com.facebook.velox4j.memory.MemoryManager;
 import com.facebook.velox4j.test.Velox4jTests;
 import com.facebook.velox4j.type.IntegerType;
-import org.junit.AfterClass;
-import org.junit.BeforeClass;
-import org.junit.Test;
 
 public class EvaluationSerdeTest {
   private static MemoryManager memoryManager;

@@ -15,6 +15,12 @@
  */
 package com.facebook.velox4j.arrow;
 
+import org.apache.arrow.memory.BufferAllocator;
+import org.apache.arrow.memory.RootAllocator;
+import org.apache.arrow.vector.FieldVector;
+import org.apache.arrow.vector.table.Table;
+import org.junit.*;
+
 import com.facebook.velox4j.Velox4j;
 import com.facebook.velox4j.data.BaseVector;
 import com.facebook.velox4j.data.BaseVectorTests;
@@ -23,11 +29,6 @@ import com.facebook.velox4j.memory.AllocationListener;
 import com.facebook.velox4j.memory.MemoryManager;
 import com.facebook.velox4j.session.Session;
 import com.facebook.velox4j.test.Velox4jTests;
-import org.apache.arrow.memory.BufferAllocator;
-import org.apache.arrow.memory.RootAllocator;
-import org.apache.arrow.vector.FieldVector;
-import org.apache.arrow.vector.table.Table;
-import org.junit.*;
 
 public class ArrowTest {
   private static MemoryManager memoryManager;

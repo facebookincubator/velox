@@ -2,14 +2,15 @@ package com.facebook.velox4j.data;
 
 import java.util.List;
 
-import com.facebook.velox4j.serde.Serde;
-import com.facebook.velox4j.session.Session;
-import com.facebook.velox4j.test.ResourceTests;
-import com.facebook.velox4j.type.Type;
 import org.apache.arrow.memory.BufferAllocator;
 import org.apache.arrow.memory.RootAllocator;
 import org.apache.arrow.vector.IntVector;
 import org.junit.Assert;
+
+import com.facebook.velox4j.serde.Serde;
+import com.facebook.velox4j.session.Session;
+import com.facebook.velox4j.test.ResourceTests;
+import com.facebook.velox4j.type.Type;
 
 public final class BaseVectorTests {
   private BaseVectorTests() {}
