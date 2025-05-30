@@ -17,15 +17,15 @@
   </licenses>
 
   <scm>
-    <connection>scm:git:git@github.com:velox4j/velox4j.git</connection>
-    <developerConnection>scm:git:git@github.com:velox4j/velox4j.git</developerConnection>
+    <connection>scm:git:git@github.com/facebookincubator/velox.git</connection>
+    <developerConnection>scm:git:git@github.com/facebookincubator/velox.git</developerConnection>
     <tag>HEAD</tag>
-    <url>https://github.com/velox4j/velox4j</url>
+    <url>https://github.com/facebookincubator/velox</url>
   </scm>
 
   <issueManagement>
     <system>GitHub Issues</system>
-    <url>https://github.com/velox4j/velox4j/issues</url>
+    <url>https://github.com/facebookincubator/velox/issues</url>
   </issueManagement>
 
   <properties>
