@@ -641,19 +641,25 @@ TEST_F(IcebergStatsTest, realStatsTest) {
   auto outputDir = exec::test::TempDirectoryPath::create();
   auto dataSink = createIcebergDataSink(rowType, outputDir->getPath());
   constexpr vector_size_t size = 100;
-  auto expectedNulls = 20;
+  auto expectedNulls = 15;
   auto expectedNaNs = 0;
 
   auto rowVector = makeRowVector({makeFlatVector<float>(
       size,
       [&](vector_size_t row) {
-        if (row % 6 == 0) {
+        if (row % 3 == 0) {
           expectedNaNs++;
           return std::numeric_limits<float>::quiet_NaN();
         }
+        if (row % 4 == 0) {
+          return std::numeric_limits<float>::infinity();
+        }
+        if (row % 5 == 0) {
+          return -std::numeric_limits<float>::infinity();
+        }
         return row * 1.5f;
       },
-      nullEvery(5),
+      nullEvery(7),
       REAL())});
 
   dataSink->appendData(rowVector);
@@ -673,27 +679,29 @@ TEST_F(IcebergStatsTest, realStatsTest) {
   EXPECT_EQ(stats->valueCounts.at(realColId), size)
       << "Real column value count incorrect";
 
-  ASSERT_FALSE(stats->nullValueCounts.empty())
-      << "Should have null counts for columns";
   EXPECT_EQ(stats->nullValueCounts.at(realColId), expectedNulls)
       << "Real column null count incorrect";
   EXPECT_EQ(stats->nanValueCounts.at(realColId), expectedNaNs)
-      << "Real column null count incorrect";
+      << "Real column NaN count incorrect";
 
   ASSERT_FALSE(stats->lowerBounds.empty())
       << "Should have lower bounds for columns";
   ASSERT_FALSE(stats->upperBounds.empty())
       << "Should have upper bounds for columns";
 
+  // Verify bounds are set correctly and NaN/infinity values don't affect
+  // min/max incorrectly.
   std::string lowerBounds =
       encoding::Base64::decode(stats->lowerBounds.at(realColId));
   auto lb = *reinterpret_cast<float*>(lowerBounds.data());
-  EXPECT_FLOAT_EQ(lb, 1.5f) << "Lower bound should be 1.5";
+  EXPECT_FLOAT_EQ(lb, -std::numeric_limits<float>::infinity())
+      << "Lower bound should be -infinity";
 
   std::string upperBounds =
       encoding::Base64::decode(stats->upperBounds.at(realColId));
   auto ub = *reinterpret_cast<float*>(upperBounds.data());
-  EXPECT_FLOAT_EQ(ub, 148.5f) << "Upper bound should be 148.5";
+  EXPECT_FLOAT_EQ(ub, std::numeric_limits<float>::infinity())
+      << "Upper bound should be infinity";
 }
 
 TEST_F(IcebergStatsTest, doubleStatsTest) {

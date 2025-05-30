@@ -230,4 +230,44 @@ TEST_F(IcebergInsertTest, testColumnCombinationsAsPartition) {
   }
 }
 
+TEST_F(IcebergInsertTest, testInfinityValues) {
+  const auto outputDirectory = exec::test::TempDirectoryPath::create();
+  auto realVector = makeFlatVector<float>(
+      {std::numeric_limits<float>::max(),
+       -std::numeric_limits<float>::infinity(),
+       std::numeric_limits<float>::infinity(),
+       std::numeric_limits<float>::min(),
+       std::numeric_limits<float>::lowest(),
+       std::numeric_limits<float>::quiet_NaN()});
+
+  auto doubleVector = makeFlatVector<double>(
+      {std::numeric_limits<double>::max(),
+       -std::numeric_limits<double>::infinity(),
+       std::numeric_limits<double>::infinity(),
+       std::numeric_limits<double>::min(),
+       std::numeric_limits<double>::lowest(),
+       std::numeric_limits<double>::quiet_NaN()});
+
+  auto idVector = makeFlatVector<int64_t>({0, 1, 2, 3, 4, 5});
+
+  auto rowType =
+      ROW({"id", "real_col", "double_col"}, {BIGINT(), REAL(), DOUBLE()});
+  auto vector = makeRowVector(
+      {"id", "real_col", "double_col"}, {idVector, realVector, doubleVector});
+
+  auto dataSink =
+      createIcebergDataSink(rowType, outputDirectory->getPath(), {});
+  dataSink->appendData(vector);
+  ASSERT_TRUE(dataSink->finish());
+  dataSink->close();
+
+  createDuckDbTable({vector});
+  auto splits = createSplitsForDirectory(outputDirectory->getPath());
+
+  auto plan =
+      exec::test::PlanBuilder(pool_.get()).tableScan(rowType).planNode();
+
+  assertQuery(plan, splits, "SELECT * FROM tmp ORDER BY id");
+}
+
 } // namespace facebook::velox::connector::hive::iceberg::test
