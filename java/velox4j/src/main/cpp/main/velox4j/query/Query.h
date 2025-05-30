@@ -18,7 +18,7 @@
 #include <velox/core/PlanNode.h>
 #include "velox4j/conf/Config.h"
 
-namespace velox4j {
+namespace facebook::velox4j {
 class Query : public facebook::velox::ISerializable {
  public:
   Query(
@@ -45,4 +45,4 @@ class Query : public facebook::velox::ISerializable {
   const std::shared_ptr<const ConfigArray> queryConfig_;
   const std::shared_ptr<const ConnectorConfigArray> connectorConfig_;
 };
-} // namespace velox4j
+} // namespace facebook::velox4j

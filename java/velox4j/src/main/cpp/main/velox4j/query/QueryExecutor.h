@@ -21,7 +21,7 @@
 #include "velox4j/iterator/UpIterator.h"
 #include "velox4j/memory/MemoryManager.h"
 
-namespace velox4j {
+namespace facebook::velox4j {
 
 class SerialTaskStats {
  public:
@@ -82,4 +82,4 @@ class QueryExecutor {
   const std::shared_ptr<const Query> query_;
 };
 
-} // namespace velox4j
+} // namespace facebook::velox4j

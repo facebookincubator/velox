@@ -19,7 +19,7 @@
 
 #include "JniCommon.h"
 
-namespace velox4j {
+namespace facebook::velox4j {
 
 class JniErrorState {
  public:
@@ -54,4 +54,4 @@ class JniErrorState {
 
 JniErrorState* getJniErrorState();
 
-} // namespace velox4j
+} // namespace facebook::velox4j
