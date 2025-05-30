@@ -643,7 +643,7 @@ class HiveDataSink : public DataSink {
   virtual std::optional<std::string> getPartitionName(
       const HiveWriterId& id) const;
 
-  std::unique_ptr<facebook::velox::dwio::common::Writer>
+  virtual std::unique_ptr<facebook::velox::dwio::common::Writer>
   maybeCreateBucketSortWriter(
       std::unique_ptr<facebook::velox::dwio::common::Writer> writer);
 
