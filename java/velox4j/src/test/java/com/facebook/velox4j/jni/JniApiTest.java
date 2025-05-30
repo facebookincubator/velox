@@ -18,6 +18,15 @@ package com.facebook.velox4j.jni;
 import java.util.Collections;
 import java.util.List;
 
+import org.apache.arrow.memory.BufferAllocator;
+import org.apache.arrow.memory.RootAllocator;
+import org.apache.arrow.vector.FieldVector;
+import org.junit.AfterClass;
+import org.junit.Assert;
+import org.junit.BeforeClass;
+import org.junit.Test;
+import org.junit.function.ThrowingRunnable;
+
 import com.facebook.velox4j.arrow.Arrow;
 import com.facebook.velox4j.connector.ExternalStream;
 import com.facebook.velox4j.data.BaseVector;
@@ -42,14 +51,6 @@ import com.facebook.velox4j.type.RealType;
 import com.facebook.velox4j.variant.DoubleValue;
 import com.facebook.velox4j.variant.IntegerValue;
 import com.facebook.velox4j.variant.RealValue;
-import org.apache.arrow.memory.BufferAllocator;
-import org.apache.arrow.memory.RootAllocator;
-import org.apache.arrow.vector.FieldVector;
-import org.junit.AfterClass;
-import org.junit.Assert;
-import org.junit.BeforeClass;
-import org.junit.Test;
-import org.junit.function.ThrowingRunnable;
 
 public class JniApiTest {
   private static MemoryManager memoryManager;

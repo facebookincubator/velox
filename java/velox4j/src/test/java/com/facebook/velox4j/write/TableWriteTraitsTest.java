@@ -15,6 +15,8 @@
  */
 package com.facebook.velox4j.write;
 
+import org.junit.*;
+
 import com.facebook.velox4j.Velox4j;
 import com.facebook.velox4j.memory.AllocationListener;
 import com.facebook.velox4j.memory.MemoryManager;
@@ -24,7 +26,6 @@ import com.facebook.velox4j.session.Session;
 import com.facebook.velox4j.test.ResourceTests;
 import com.facebook.velox4j.test.Velox4jTests;
 import com.facebook.velox4j.type.RowType;
-import org.junit.*;
 
 public class TableWriteTraitsTest {
   private static MemoryManager memoryManager;

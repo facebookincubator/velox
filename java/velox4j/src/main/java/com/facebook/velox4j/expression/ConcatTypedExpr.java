@@ -18,11 +18,12 @@ package com.facebook.velox4j.expression;
 import java.util.List;
 import java.util.stream.Collectors;
 
-import com.facebook.velox4j.type.RowType;
-import com.facebook.velox4j.type.Type;
 import com.fasterxml.jackson.annotation.JsonCreator;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import com.google.common.base.Preconditions;
+
+import com.facebook.velox4j.type.RowType;
+import com.facebook.velox4j.type.Type;
 
 public class ConcatTypedExpr extends TypedExpr {
   @JsonCreator

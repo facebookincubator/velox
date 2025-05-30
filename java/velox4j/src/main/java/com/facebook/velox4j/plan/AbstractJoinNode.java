@@ -17,11 +17,12 @@ package com.facebook.velox4j.plan;
 
 import java.util.List;
 
+import com.fasterxml.jackson.annotation.JsonGetter;
+
 import com.facebook.velox4j.expression.FieldAccessTypedExpr;
 import com.facebook.velox4j.expression.TypedExpr;
 import com.facebook.velox4j.join.JoinType;
 import com.facebook.velox4j.type.RowType;
-import com.fasterxml.jackson.annotation.JsonGetter;
 
 public abstract class AbstractJoinNode extends PlanNode {
   private final List<PlanNode> sources;

@@ -19,12 +19,13 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
 
-import com.facebook.velox4j.exception.VeloxException;
-import com.facebook.velox4j.serde.Serde;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.google.common.base.Preconditions;
+
+import com.facebook.velox4j.exception.VeloxException;
+import com.facebook.velox4j.serde.Serde;
 
 public class SerialTaskStats {
   private final ArrayNode planStatsDynamic;
