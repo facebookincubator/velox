@@ -26,6 +26,7 @@
 #include <system_error>
 #include <type_traits>
 
+#include "faiss/utils/distances.h"
 #include "folly/CPortability.h"
 #include "velox/common/base/Doubles.h"
 #include "velox/common/base/Exceptions.h"
@@ -659,27 +660,6 @@ template <typename T>
 struct CosineSimilarityFunctionMap {
   VELOX_DEFINE_FUNCTION_TYPES(T);
 
-  double normalize(const null_free_arg_type<Map<Varchar, double>>& map) {
-    double norm = 0.0;
-    for (const auto& [key, value] : map) {
-      norm += (value * value);
-    }
-    return std::sqrt(norm);
-  }
-
-  double dotProduct(
-      const null_free_arg_type<Map<Varchar, double>>& leftMap,
-      const null_free_arg_type<Map<Varchar, double>>& rightMap) {
-    double result = 0.0;
-    for (const auto& [key, value] : leftMap) {
-      auto it = rightMap.find(key);
-      if (it != rightMap.end()) {
-        result += value * it->second;
-      }
-    }
-    return result;
-  }
-
   void callNullFree(
       out_type<double>& result,
       const null_free_arg_type<Map<Varchar, double>>& leftMap,
@@ -688,45 +668,44 @@ struct CosineSimilarityFunctionMap {
       result = std::numeric_limits<double>::quiet_NaN();
       return;
     }
-
-    double normLeftMap = normalize(leftMap);
-    if (normLeftMap == 0.0) {
+    // dimension of the vectors, and be conservative assume no overlap.
+    size_t d = leftMap.size() + rightMap.size();
+    // Make a vector to store values of left and right maps
+    std::vector<float> x(d * 2, 0);
+    uint i = 0;
+    for (const auto& [key, value] : leftMap) {
+      auto it = rightMap.find(key);
+      double right = (it != rightMap.end()) ? it->second : 0;
+      if (i < d) { // Check buffer bounds
+        x[i] = static_cast<float>(value);
+      }
+      if (static_cast<size_t>(d + i) < x.size()) { // Check buffer bounds
+        x[d + i] = static_cast<float>(right);
+      }
+      i++;
+    }
+    // For the remaining keys in rightMap that does not appear in leftMap
+    for (const auto& [key, value] : rightMap) {
+      if (leftMap.find(key) == leftMap.end()) {
+        x[d + i++] = static_cast<float>(value);
+      }
+    }
+    // Compute the L2 norms by calling faiss
+    float norms[2] = {0};
+    faiss::fvec_norms_L2(norms, /*x=*/x.data(), /*d=*/d, /*nx=*/2);
+    float product = faiss::fvec_inner_product(x.data(), /*y=*/x.data() + d, d);
+    if (norms[0] == 0 || norms[1] == 0) {
       result = std::numeric_limits<double>::quiet_NaN();
       return;
     }
-
-    double normRightMap = normalize(rightMap);
-    if (normRightMap == 0.0) {
-      result = std::numeric_limits<double>::quiet_NaN();
-      return;
-    }
-
-    double product = dotProduct(leftMap, rightMap);
-    result = product / (normLeftMap * normRightMap);
+    // Cosine similarity
+    result = static_cast<double>(product / (norms[0] * norms[1]));
   }
 };
 
 template <typename T>
 struct CosineSimilarityFunctionArray {
   VELOX_DEFINE_FUNCTION_TYPES(T);
-
-  double normalize(const null_free_arg_type<Array<double>>& map) {
-    double norm = 0.0;
-    for (const auto value : map) {
-      norm += (value * value);
-    }
-    return std::sqrt(norm);
-  }
-
-  double dotProduct(
-      const null_free_arg_type<Array<double>>& leftArray,
-      const null_free_arg_type<Array<double>>& rightArray) {
-    double result = 0.0;
-    for (size_t i = 0; i < leftArray.size(); i++) {
-      result += leftArray[i] * rightArray[i];
-    }
-    return result;
-  }
 
   void callNullFree(
       out_type<double>& result,
@@ -736,20 +715,29 @@ struct CosineSimilarityFunctionArray {
         leftArray.size() == rightArray.size(),
         "Both arrays need to have identical size");
 
-    double normLeftArray = normalize(leftArray);
-    if (normLeftArray == 0.0) {
+    size_t d = leftArray.size();
+    // vector to store the values of left and right arrays
+    std::vector<float> x(d * 2, 0);
+    for (size_t i = 0; i < leftArray.size(); i++) {
+      if (i < x.size()) { // Check buffer bounds
+        x[i] = static_cast<float>(leftArray[i]);
+      }
+    }
+    for (size_t i = 0; i < rightArray.size(); i++) {
+      if (i + d < x.size()) { // Check buffer bounds
+        x[i + d] = static_cast<float>(rightArray[i]);
+      }
+    }
+
+    float norms[2] = {0};
+    faiss::fvec_norms_L2(norms, /*x=*/x.data(), /*d=*/d, /*nx=*/2);
+    if (norms[0] == 0 || norms[1] == 0) {
       result = std::numeric_limits<double>::quiet_NaN();
       return;
     }
+    float product = faiss::fvec_inner_product(x.data(), /*y=*/x.data() + d, d);
 
-    double normRightArray = normalize(rightArray);
-    if (normRightArray == 0.0) {
-      result = std::numeric_limits<double>::quiet_NaN();
-      return;
-    }
-
-    double product = dotProduct(leftArray, rightArray);
-    result = product / (normLeftArray * normRightArray);
+    result = static_cast<double>(product / (norms[0] * norms[1]));
   }
 };
 
