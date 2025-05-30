@@ -974,15 +974,10 @@ struct TimestampDiffFunction {
       const arg_type<Varchar>& unitString,
       const arg_type<Timestamp>& timestamp1,
       const arg_type<Timestamp>& timestamp2) {
-    const auto unitOption = unit_.has_value() ? unit_
-                                              : fromDateTimeUnitString(
-                                                    unitString,
-                                                    /*throwIfInvalid=*/false,
-                                                    /*allowMicro=*/true);
-    if (!unitOption.has_value()) {
+    if (!unit_.has_value()) {
       return false;
     }
-    const auto unit = unitOption.value();
+    const auto unit = unit_.value();
     if (LIKELY(sessionTimeZone_ != nullptr)) {
       // sessionTimeZone not null means that the config
       // adjust_timestamp_to_timezone is on.
