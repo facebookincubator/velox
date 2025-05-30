@@ -54,7 +54,7 @@ jobs:
     env:
       CCACHE_DIR: ${{ github.workspace }}/ccache
       # The arm runners have only 7GB RAM
-      BUILD_TYPE: ${{ matrix.os == 'macos-15' && 'Release' || 'Debug' }}
+      BUILD_TYPE: ${{ (matrix.os == 'macos-14' || matrix.os == 'macos-15') && 'Release' || 'Debug' }}
       INSTALL_PREFIX: /tmp/deps-install
     steps:
       - name: Checkout
