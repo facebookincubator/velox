@@ -15,10 +15,11 @@
  */
 package com.facebook.velox4j.serde;
 
-import com.facebook.velox4j.filter.AlwaysTrue;
-import com.facebook.velox4j.test.Velox4jTests;
 import org.junit.BeforeClass;
 import org.junit.Test;
+
+import com.facebook.velox4j.filter.AlwaysTrue;
+import com.facebook.velox4j.test.Velox4jTests;
 
 public class FilterSerdeTest {
 

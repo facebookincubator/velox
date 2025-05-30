@@ -17,12 +17,13 @@ package com.facebook.velox4j.connector;
 
 import java.util.List;
 
-import com.facebook.velox4j.serializable.ISerializable;
-import com.facebook.velox4j.type.Type;
 import com.fasterxml.jackson.annotation.JsonCreator;
 import com.fasterxml.jackson.annotation.JsonGetter;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import com.fasterxml.jackson.annotation.JsonValue;
+
+import com.facebook.velox4j.serializable.ISerializable;
+import com.facebook.velox4j.type.Type;
 
 public class HiveBucketProperty extends ISerializable {
   private final Kind kind;

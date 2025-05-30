@@ -15,8 +15,9 @@
  */
 package com.facebook.velox4j.filter;
 
-import com.facebook.velox4j.serializable.ISerializable;
 import com.fasterxml.jackson.annotation.JsonGetter;
+
+import com.facebook.velox4j.serializable.ISerializable;
 
 public abstract class Filter extends ISerializable {
   private final boolean nullAllowed;

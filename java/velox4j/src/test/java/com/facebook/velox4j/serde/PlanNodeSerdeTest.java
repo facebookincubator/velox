@@ -17,6 +17,8 @@ package com.facebook.velox4j.serde;
 
 import java.util.List;
 
+import org.junit.*;
+
 import com.facebook.velox4j.Velox4j;
 import com.facebook.velox4j.aggregate.Aggregate;
 import com.facebook.velox4j.aggregate.AggregateStep;
@@ -42,7 +44,6 @@ import com.facebook.velox4j.test.Velox4jTests;
 import com.facebook.velox4j.type.IntegerType;
 import com.facebook.velox4j.type.RowType;
 import com.facebook.velox4j.variant.BooleanValue;
-import org.junit.*;
 
 public class PlanNodeSerdeTest {
   private static MemoryManager memoryManager;

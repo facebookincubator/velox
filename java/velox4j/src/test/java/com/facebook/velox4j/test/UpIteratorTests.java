@@ -21,14 +21,15 @@ import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Consumer;
 import java.util.stream.Collectors;
 
+import org.apache.arrow.memory.RootAllocator;
+import org.junit.Assert;
+
 import com.facebook.velox4j.collection.Streams;
 import com.facebook.velox4j.data.RowVector;
 import com.facebook.velox4j.iterator.CloseableIterator;
 import com.facebook.velox4j.iterator.UpIterator;
 import com.facebook.velox4j.iterator.UpIterators;
 import com.facebook.velox4j.serde.Serde;
-import org.apache.arrow.memory.RootAllocator;
-import org.junit.Assert;
 
 public final class UpIteratorTests {
   public static RowVector collectSingleVector(UpIterator itr) {

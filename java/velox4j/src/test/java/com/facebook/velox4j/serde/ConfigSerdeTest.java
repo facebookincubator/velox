@@ -15,12 +15,13 @@
  */
 package com.facebook.velox4j.serde;
 
+import org.junit.BeforeClass;
+import org.junit.Test;
+
 import com.facebook.velox4j.conf.Config;
 import com.facebook.velox4j.conf.ConnectorConfig;
 import com.facebook.velox4j.test.ConfigTests;
 import com.facebook.velox4j.test.Velox4jTests;
-import org.junit.BeforeClass;
-import org.junit.Test;
 
 public class ConfigSerdeTest {
   @BeforeClass

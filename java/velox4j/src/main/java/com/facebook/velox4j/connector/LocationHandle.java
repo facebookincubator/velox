@@ -15,11 +15,12 @@
  */
 package com.facebook.velox4j.connector;
 
-import com.facebook.velox4j.serializable.ISerializable;
 import com.fasterxml.jackson.annotation.JsonCreator;
 import com.fasterxml.jackson.annotation.JsonGetter;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import com.fasterxml.jackson.annotation.JsonValue;
+
+import com.facebook.velox4j.serializable.ISerializable;
 
 public class LocationHandle extends ISerializable {
   private final String targetPath;

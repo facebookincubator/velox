@@ -32,8 +32,9 @@ import java.util.zip.ZipEntry;
 import java.util.zip.ZipException;
 import java.util.zip.ZipFile;
 
-import com.facebook.velox4j.exception.VeloxException;
 import com.google.common.base.Preconditions;
+
+import com.facebook.velox4j.exception.VeloxException;
 
 public class Resources {
 
