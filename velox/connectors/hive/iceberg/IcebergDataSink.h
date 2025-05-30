@@ -23,6 +23,23 @@
 
 namespace facebook::velox::connector::hive::iceberg {
 
+class IcebergSortingColumn : public ISerializable {
+ public:
+  IcebergSortingColumn(
+      const std::string& sortColumn,
+      const core::SortOrder& sortOrder);
+
+  const std::string& sortColumn() const;
+
+  const core::SortOrder& sortOrder() const;
+
+  folly::dynamic serialize() const override;
+
+ private:
+  const std::string sortColumn_;
+  const core::SortOrder sortOrder_;
+};
+
 // Represents a request for Iceberg write.
 class IcebergInsertTableHandle final : public HiveInsertTableHandle {
  public:
@@ -33,7 +50,7 @@ class IcebergInsertTableHandle final : public HiveInsertTableHandle {
       memory::MemoryPool* pool,
       dwio::common::FileFormat tableStorageFormat =
           dwio::common::FileFormat::PARQUET,
-      std::shared_ptr<HiveBucketProperty> bucketProperty = nullptr,
+      const std::vector<IcebergSortingColumn>& sortedBy = {},
       std::optional<common::CompressionKind> compressionKind = {},
       const std::unordered_map<std::string, std::string>& serdeParameters = {});
 
@@ -47,9 +64,14 @@ class IcebergInsertTableHandle final : public HiveInsertTableHandle {
     return columnTransforms_;
   }
 
+  const std::vector<IcebergSortingColumn>& sortedBy() const {
+    return sortedBy_;
+  }
+
  private:
   const std::shared_ptr<const IcebergPartitionSpec> partitionSpec_;
   const std::vector<std::shared_ptr<Transform>> columnTransforms_;
+  const std::vector<IcebergSortingColumn> sortedBy_;
 };
 
 class IcebergDataSink : public HiveDataSink {
@@ -89,6 +111,9 @@ class IcebergDataSink : public HiveDataSink {
 
   std::optional<std::string> getPartitionName(
       const HiveWriterId& id) const override;
+
+  std::unique_ptr<dwio::common::Writer> maybeCreateBucketSortWriter(
+      std::unique_ptr<dwio::common::Writer> writer) override;
 
   void closeInternal() override;
 

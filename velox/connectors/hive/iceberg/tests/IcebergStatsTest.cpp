@@ -307,7 +307,7 @@ TEST_F(IcebergStatsTest, varbinaryStatsTest2) {
   auto rowType = ROW({"varbinary_col"}, {VARBINARY()});
 
   auto outputDir = exec::test::TempDirectoryPath::create();
-  std::vector<ParititonField> partitionTransforms = {
+  std::vector<PartitionField> partitionTransforms = {
       {0, TransformType::kBucket, 4}};
   auto dataSink =
       createIcebergDataSink(rowType, outputDir->getPath(), partitionTransforms);
@@ -816,7 +816,7 @@ TEST_F(IcebergStatsTest, partitionedTableStatsTest) {
   auto rowType = ROW(
       {"int_col", "date_col", "varchar_col"}, {INTEGER(), DATE(), VARCHAR()});
   auto outputDir = exec::test::TempDirectoryPath::create();
-  std::vector<ParititonField> partitionTransforms = {
+  std::vector<PartitionField> partitionTransforms = {
       {0, TransformType::kBucket, 4},
       {1, TransformType::kDay, std::nullopt},
       {2, TransformType::kTruncate, 2}};
@@ -910,7 +910,7 @@ TEST_F(IcebergStatsTest, multiplePartitionTransformsStatsTest) {
           {INTEGER(), DATE(), VARCHAR(), BIGINT()});
   auto outputDir = exec::test::TempDirectoryPath::create();
 
-  std::vector<ParititonField> partitionTransforms = {
+  std::vector<PartitionField> partitionTransforms = {
       {0, TransformType::kBucket, 2},
       {1, TransformType::kYear, std::nullopt},
       {2, TransformType::kTruncate, 3},
@@ -1010,7 +1010,7 @@ TEST_F(IcebergStatsTest, partitionedTableWithNullsStatsTest) {
   auto rowType = ROW(
       {"int_col", "date_col", "varchar_col"}, {INTEGER(), DATE(), VARCHAR()});
   auto outputDir = exec::test::TempDirectoryPath::create();
-  std::vector<ParititonField> partitionTransforms = {
+  std::vector<PartitionField> partitionTransforms = {
       {0, TransformType::kIdentity, std::nullopt},
       {1, TransformType::kMonth, std::nullopt},
       {2, TransformType::kTruncate, 2}};
