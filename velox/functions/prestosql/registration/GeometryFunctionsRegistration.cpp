@@ -59,6 +59,8 @@ void registerRelationPredicates(const std::string& prefix) {
 }
 
 void registerOverlayOperations(const std::string& prefix) {
+  registerFunction<StBoundaryFunction, Geometry, Geometry>(
+      {{prefix + "St_Boundary"}});
   registerFunction<StDifferenceFunction, Geometry, Geometry, Geometry>(
       {{prefix + "ST_Difference"}});
   registerFunction<StIntersectionFunction, Geometry, Geometry, Geometry>(
@@ -75,6 +77,8 @@ void registerAccessors(const std::string& prefix) {
   registerFunction<StIsSimpleFunction, bool, Geometry>(
       {{prefix + "ST_IsSimple"}});
   registerFunction<StAreaFunction, double, Geometry>({{prefix + "ST_Area"}});
+  registerFunction<StCentroidFunction, Geometry, Geometry>(
+      {{prefix + "ST_Centroid"}});
   registerFunction<StXFunction, double, Geometry>({{prefix + "ST_X"}});
   registerFunction<StYFunction, double, Geometry>({{prefix + "ST_Y"}});
 }

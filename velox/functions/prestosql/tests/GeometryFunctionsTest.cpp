@@ -1231,3 +1231,76 @@ TEST_F(GeometryFunctionsTest, testStArea) {
       "GEOMETRYCOLLECTION (POLYGON ((0 0, 2 0, 2 2, 0 2, 0 0)), POLYGON ((1 1, 3 1, 3 3, 1 3, 1 1)), GEOMETRYCOLLECTION (POINT (8 8), LINESTRING (5 5, 6 6), POLYGON ((1 1, 3 1, 3 4, 1 4, 1 1))))",
       14.0);
 }
+
+TEST_F(GeometryFunctionsTest, testStBoundary) {
+  const auto testStBoundaryFunc = [&](const std::optional<std::string>& wkt,
+                                      const std::optional<std::string>&
+                                          expected) {
+    std::optional<bool> result = evaluateOnce<bool>(
+        "ST_Equals(ST_Boundary(ST_GeometryFromText(c0)), ST_GeometryFromText(c1))",
+        wkt,
+        expected);
+
+    if (wkt.has_value()) {
+      ASSERT_TRUE(result.has_value());
+      ASSERT_TRUE(expected.has_value());
+      ASSERT_TRUE(result.value());
+    } else {
+      ASSERT_FALSE(result.has_value());
+    }
+  };
+
+  testStBoundaryFunc("POINT (1 2)", "GEOMETRYCOLLECTION EMPTY");
+  testStBoundaryFunc(
+      "MULTIPOINT (1 2, 2 4, 3 6, 4 8)", "GEOMETRYCOLLECTION EMPTY");
+  testStBoundaryFunc("LINESTRING EMPTY", "MULTIPOINT EMPTY");
+  testStBoundaryFunc("LINESTRING (8 4, 5 7)", "MULTIPOINT (8 4, 5 7)");
+  testStBoundaryFunc(
+      "LINESTRING (100 150, 50 60, 70 80, 160 170)",
+      "MULTIPOINT (100 150, 160 170)");
+  testStBoundaryFunc(
+      "MULTILINESTRING ((1 1, 5 1), (2 4, 4 4))",
+      "MULTIPOINT (1 1, 2 4, 4 4, 5 1)");
+  testStBoundaryFunc(
+      "POLYGON ((1 1, 4 1, 1 4, 1 1))", "LINESTRING (1 1, 1 4, 4 1, 1 1)");
+  testStBoundaryFunc(
+      "MULTIPOLYGON (((1 1, 1 3, 3 3, 3 1, 1 1)), ((0 0, 0 2, 2 2, 2 0, 0 0)))",
+      "MULTILINESTRING ((1 1, 1 3, 3 3, 3 1, 1 1), (0 0, 0 2, 2 2, 2 0, 0 0))");
+}
+
+TEST_F(GeometryFunctionsTest, testStCentroid) {
+  const auto testStCentroidFunc =
+      [&](const std::optional<std::string>& wkt,
+          const std::optional<std::string>& expected) {
+        std::optional<std::string> result = evaluateOnce<std::string>(
+            "ST_AsText(ST_Centroid(ST_GeometryFromText(c0)))", wkt);
+
+        if (wkt.has_value()) {
+          ASSERT_TRUE(result.has_value());
+          ASSERT_TRUE(expected.has_value());
+          ASSERT_EQ(result.value(), expected.value());
+        } else {
+          ASSERT_FALSE(result.has_value());
+        }
+      };
+
+  testStCentroidFunc("LINESTRING EMPTY", "POINT EMPTY");
+  testStCentroidFunc("POINT (3 5)", "POINT (3 5)");
+  testStCentroidFunc("MULTIPOINT (1 2, 2 4, 3 6, 4 8)", "POINT (2.5 5)");
+  testStCentroidFunc("LINESTRING (1 1, 2 2, 3 3)", "POINT (2 2)");
+  testStCentroidFunc("MULTILINESTRING ((1 1, 5 1), (2 4, 4 4))", "POINT (3 2)");
+  testStCentroidFunc("POLYGON ((1 1, 1 4, 4 4, 4 1, 1 1))", "POINT (2.5 2.5)");
+  testStCentroidFunc("POLYGON ((1 1, 5 1, 3 4, 1 1))", "POINT (3 2)");
+  testStCentroidFunc(
+      "MULTIPOLYGON (((1 1, 1 3, 3 3, 3 1, 1 1)), ((2 4, 2 6, 6 6, 6 4, 2 4)))",
+      "POINT (3.3333333333333335 4)");
+  testStCentroidFunc(
+      "POLYGON ((0 0, 0 5, 5 5, 5 0, 0 0), (1 1, 1 2, 2 2, 2 1, 1 1))",
+      "POINT (2.5416666666666665 2.5416666666666665)");
+
+  VELOX_ASSERT_USER_THROW(
+      testStCentroidFunc(
+          "GEOMETRYCOLLECTION (POLYGON ((0 0, 2 0, 2 2, 0 2, 0 0)), POLYGON ((1 1, 3 1, 3 3, 1 3, 1 1)), GEOMETRYCOLLECTION (POINT (8 8), LINESTRING (5 5, 6 6), POLYGON ((1 1, 3 1, 3 4, 1 4, 1 1))))",
+          std::nullopt),
+      "ST_Centroid only applies to Point or MultiPoint or LineString or MultiLineString or Polygon or MultiPolygon. Input type is: GeometryCollection");
+}
