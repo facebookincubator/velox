@@ -19,7 +19,7 @@
 #include <memory>
 #include <mutex>
 
-namespace velox4j {
+namespace facebook::velox4j {
 
 class AllocationListener {
  public:
@@ -76,4 +76,4 @@ class BlockAllocationListener final : public AllocationListener {
 
   mutable std::mutex mutex_;
 };
-} // namespace velox4j
+} // namespace facebook::velox4j

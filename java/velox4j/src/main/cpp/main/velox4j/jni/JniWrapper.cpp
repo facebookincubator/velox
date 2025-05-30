@@ -30,11 +30,11 @@
 #include "velox4j/lifecycle/Session.h"
 #include "velox4j/query/QueryExecutor.h"
 
-namespace velox4j {
+namespace facebook::velox4j {
 using namespace facebook::velox;
 
 namespace {
-const char* kClassName = "com/meta/velox4j/jni/JniWrapper";
+const char* kClassName = "com/facebook/velox4j/jni/JniWrapper";
 
 Session* sessionOf(JNIEnv* env, jobject javaThis) {
   static const auto* clazz = jniClassRegistry()->get(kClassName);
@@ -358,7 +358,7 @@ void JniWrapper::initialize(JNIEnv* env) {
       "createExternalStreamFromDownIterator",
       (void*)createExternalStreamFromDownIterator,
       kTypeLong,
-      "com/meta/velox4j/iterator/DownIterator",
+      "com/facebook/velox4j/iterator/DownIterator",
       nullptr);
   addNativeMethod(
       "createBlockingQueue", (void*)createBlockingQueue, kTypeLong, nullptr);
@@ -433,4 +433,4 @@ void JniWrapper::initialize(JNIEnv* env) {
   registerNativeMethods(env);
 }
 
-} // namespace velox4j
+} // namespace facebook::velox4j

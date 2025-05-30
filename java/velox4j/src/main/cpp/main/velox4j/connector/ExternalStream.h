@@ -20,7 +20,7 @@
 #include <velox/exec/Task.h>
 #include "velox4j/lifecycle/ObjectStore.h"
 
-namespace velox4j {
+namespace facebook::velox4j {
 class SuspendedSection {
  public:
   explicit SuspendedSection(facebook::velox::exec::Driver* driver);
@@ -175,4 +175,4 @@ class ExternalStreamConnectorFactory
       folly::Executor* cpuExecutor) override;
 };
 
-} // namespace velox4j
+} // namespace facebook::velox4j

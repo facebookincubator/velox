@@ -21,7 +21,7 @@
 #include <jni.h>
 #include <velox/common/base/Exceptions.h>
 
-namespace velox4j {
+namespace facebook::velox4j {
 
 const jint kJniVersion = JNI_VERSION_1_8;
 
@@ -38,7 +38,7 @@ void checkException(JNIEnv* env) {
     jthrowable t = env->ExceptionOccurred();
     env->ExceptionClear();
     jclass describerClass =
-        env->FindClass("com/meta/velox4j/exception/ExceptionDescriber");
+        env->FindClass("com/facebook/velox4j/exception/ExceptionDescriber");
     jmethodID describeMethod = env->GetStaticMethodID(
         describerClass,
         "describe",
@@ -152,4 +152,4 @@ spotify::jni::ClassRegistry* jniClassRegistry() {
   static spotify::jni::ClassRegistry gClasses;
   return &gClasses;
 }
-} // namespace velox4j
+} // namespace facebook::velox4j

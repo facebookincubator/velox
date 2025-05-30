@@ -16,7 +16,7 @@
 #include "MemoryManager.h"
 #include "ArrowMemoryPool.h"
 
-namespace velox4j {
+namespace facebook::velox4j {
 using namespace facebook;
 
 namespace {
@@ -399,4 +399,4 @@ arrow::MemoryPool* MemoryManager::getArrowPool(const std::string& name) {
       std::make_unique<ArrowMemoryPool>(arrowAllocator_.get());
   return arrowPoolRefs_[name].get();
 }
-} // namespace velox4j
+} // namespace facebook::velox4j
