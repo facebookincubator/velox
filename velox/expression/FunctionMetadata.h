@@ -32,7 +32,7 @@ struct VectorFunctionMetadata {
   /// type.
   bool supportsFlattening{false};
 
-  /// True if the function is deterministic, e.g given same inputs always
+  /// True if the function is deterministic, e.g. given same inputs always
   /// returns same result.
   bool deterministic{true};
 

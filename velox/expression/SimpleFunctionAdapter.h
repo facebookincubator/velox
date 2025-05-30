@@ -126,7 +126,7 @@ class SimpleFunctionAdapter : public VectorFunction {
       if constexpr (isVariadicType<arg_at<Is>>::value) {
         return true;
       } else if constexpr (!isArgFlatConstantFastPathEligible<Is>) {
-        return true; // We only want to check the encodings of primtive
+        return true; // We only want to check the encodings of primitive
                      // arguments if any exists.
       } else {
         return args[Is]->isFlatEncoding() || args[Is]->isConstantEncoding();
@@ -153,7 +153,7 @@ class SimpleFunctionAdapter : public VectorFunction {
 
   /// When true, a fast path for each possible combination of encodings will be
   /// used for reading arguments when all arguments are flat or constant
-  /// primitivies.
+  /// primitives.
   static constexpr bool specializeForAllEncodings = FUNC::num_args <= 3;
 
   /// If the initialize() method provided by functions throw, we don't (can't)
@@ -185,7 +185,7 @@ class SimpleFunctionAdapter : public VectorFunction {
 
       if constexpr (return_type_traits::isPrimitiveType) {
         // Avoid checking mutability during initialization.
-        // EnsureWritable gurantees uniqueness and mutability hence if
+        // EnsureWritable guarantees uniqueness and mutability hence if
         // valuesAsVoid()!= nullptr, then values is writable.
         resultWriter.init(*result, result->valuesAsVoid());
       } else {
@@ -361,8 +361,8 @@ class SimpleFunctionAdapter : public VectorFunction {
     // null buffer during iteration).
 
     if constexpr (fastPathIteration) {
-      // If result is resuing one of the inputs we do not clear nulls, instead
-      // we do that after the the input is read. It is safe because reuse only
+      // If result is reusing one of the inputs we do not clear nulls, instead
+      // we do that after the input is read. It is safe because reuse only
       // happens when the function does not generate null.
       if (!isResultReused) {
         (*reusableResult)->clearNulls(rows);
@@ -384,7 +384,7 @@ class SimpleFunctionAdapter : public VectorFunction {
     }
 
     if constexpr (fastPathIteration) {
-      // If result is resued and function is is_default_null_behavior then we do
+      // If result is reused and function is is_default_null_behavior then we do
       // not need to clear nulls.
       if constexpr (!FUNC::is_default_null_behavior) {
         if (isResultReused) {
@@ -672,7 +672,7 @@ class SimpleFunctionAdapter : public VectorFunction {
           }
         }
         applyContext.applyToSelectedNoThrow([&](auto row) INLINE_LAMBDA {
-          // Passing a stack variable have shown to be boost the performance
+          // Passing a stack variable has shown to boost the performance
           // of functions that repeatedly update the output. The opposite
           // optimization (eliminating the temp) is easier to do by the
           // compiler (assuming the function call is inlined).
@@ -772,7 +772,7 @@ class SimpleFunctionAdapter : public VectorFunction {
 
   // For default null behavior, assume everything is not null.
   // If anything is, return false.
-  // Otherwise pass all arguments as references or copies.
+  // Otherwise, pass all arguments as references or copies.
   template <
       size_t POSITION,
       typename R0,
