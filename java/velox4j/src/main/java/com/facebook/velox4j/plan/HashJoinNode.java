@@ -17,14 +17,15 @@ package com.facebook.velox4j.plan;
 
 import java.util.List;
 
-import com.facebook.velox4j.expression.FieldAccessTypedExpr;
-import com.facebook.velox4j.expression.TypedExpr;
-import com.facebook.velox4j.join.JoinType;
-import com.facebook.velox4j.type.RowType;
 import com.fasterxml.jackson.annotation.JsonCreator;
 import com.fasterxml.jackson.annotation.JsonGetter;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import com.google.common.base.Preconditions;
+
+import com.facebook.velox4j.expression.FieldAccessTypedExpr;
+import com.facebook.velox4j.expression.TypedExpr;
+import com.facebook.velox4j.join.JoinType;
+import com.facebook.velox4j.type.RowType;
 
 public class HashJoinNode extends AbstractJoinNode {
   private final boolean nullAware;

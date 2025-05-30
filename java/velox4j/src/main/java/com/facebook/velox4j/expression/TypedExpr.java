@@ -18,9 +18,10 @@ package com.facebook.velox4j.expression;
 import java.util.Collections;
 import java.util.List;
 
+import com.fasterxml.jackson.annotation.JsonGetter;
+
 import com.facebook.velox4j.serializable.ISerializable;
 import com.facebook.velox4j.type.Type;
-import com.fasterxml.jackson.annotation.JsonGetter;
 
 public abstract class TypedExpr extends ISerializable {
   private final Type returnType;

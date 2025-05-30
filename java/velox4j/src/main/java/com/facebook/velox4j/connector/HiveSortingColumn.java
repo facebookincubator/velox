@@ -15,11 +15,12 @@
  */
 package com.facebook.velox4j.connector;
 
-import com.facebook.velox4j.serializable.ISerializable;
-import com.facebook.velox4j.sort.SortOrder;
 import com.fasterxml.jackson.annotation.JsonCreator;
 import com.fasterxml.jackson.annotation.JsonGetter;
 import com.fasterxml.jackson.annotation.JsonProperty;
+
+import com.facebook.velox4j.serializable.ISerializable;
+import com.facebook.velox4j.sort.SortOrder;
 
 public class HiveSortingColumn extends ISerializable {
   private final String sortColumn;

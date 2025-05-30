@@ -17,7 +17,6 @@ package com.facebook.velox4j.serde;
 
 import java.io.IOException;
 
-import com.facebook.velox4j.exception.VeloxException;
 import com.fasterxml.jackson.annotation.JsonInclude;
 import com.fasterxml.jackson.core.JsonGenerator;
 import com.fasterxml.jackson.core.JsonParser;
@@ -29,6 +28,8 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.json.JsonMapper;
 import com.fasterxml.jackson.databind.module.SimpleModule;
 import com.fasterxml.jackson.datatype.jdk8.Jdk8Module;
+
+import com.facebook.velox4j.exception.VeloxException;
 
 public final class Serde {
   private static final PolymorphicDeserializer.Modifier DESER_MOD =

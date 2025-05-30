@@ -19,8 +19,9 @@ import java.lang.reflect.Modifier;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 
-import com.facebook.velox4j.exception.VeloxException;
 import com.google.common.base.Preconditions;
+
+import com.facebook.velox4j.exception.VeloxException;
 
 public class SerdeRegistry {
   private static final Map<Class<? extends NativeBean>, List<KvPair>> CLASS_TO_KVS =

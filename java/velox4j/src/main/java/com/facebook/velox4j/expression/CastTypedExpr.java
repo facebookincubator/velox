@@ -18,11 +18,12 @@ package com.facebook.velox4j.expression;
 import java.util.Collections;
 import java.util.List;
 
-import com.facebook.velox4j.type.Type;
 import com.fasterxml.jackson.annotation.JsonCreator;
 import com.fasterxml.jackson.annotation.JsonGetter;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import com.google.common.base.Preconditions;
+
+import com.facebook.velox4j.type.Type;
 
 public class CastTypedExpr extends TypedExpr {
   private final boolean nullOnFailure;

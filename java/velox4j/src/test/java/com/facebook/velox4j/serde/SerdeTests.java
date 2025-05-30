@@ -17,6 +17,12 @@ package com.facebook.velox4j.serde;
 
 import java.util.*;
 
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import org.junit.Assert;
+import org.junit.ComparisonFailure;
+
 import com.facebook.velox4j.aggregate.Aggregate;
 import com.facebook.velox4j.aggregate.AggregateStep;
 import com.facebook.velox4j.connector.*;
@@ -44,11 +50,6 @@ import com.facebook.velox4j.type.Type;
 import com.facebook.velox4j.type.VarCharType;
 import com.facebook.velox4j.variant.Variant;
 import com.facebook.velox4j.variant.VariantCo;
-import com.fasterxml.jackson.core.JsonProcessingException;
-import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.ObjectMapper;
-import org.junit.Assert;
-import org.junit.ComparisonFailure;
 
 public final class SerdeTests {
   private static void assertJsonEquals(String expected, String actual) {
