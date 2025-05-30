@@ -21,7 +21,7 @@
 #include <mutex>
 #include <unordered_map>
 
-namespace velox4j {
+namespace facebook::velox4j {
 using ResourceHandle = uint32_t;
 static_assert(std::numeric_limits<ResourceHandle>::min() == 0);
 
@@ -96,4 +96,4 @@ class ResourceMap {
   mutable std::mutex mtx_;
 };
 
-} // namespace velox4j
+} // namespace facebook::velox4j

@@ -18,7 +18,7 @@
 #include <velox/vector/tests/utils/VectorTestBase.h>
 #include "velox4j/test/Init.h"
 
-namespace velox4j {
+namespace facebook::velox4j {
 using namespace facebook::velox;
 using namespace facebook::velox::exec::test;
 
@@ -119,4 +119,4 @@ TEST_F(BlockingQueueTest, concurrentPutAndRead) {
   consumer.join();
   ASSERT_TRUE(queue.empty());
 }
-} // namespace velox4j
+} // namespace facebook::velox4j

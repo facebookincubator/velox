@@ -18,7 +18,7 @@
 #include <velox/common/serialization/Serializable.h>
 #include <velox/core/QueryConfig.h>
 
-namespace velox4j {
+namespace facebook::velox4j {
 class ConfigArray : public facebook::velox::ISerializable {
  public:
   explicit ConfigArray(
@@ -62,4 +62,4 @@ class ConnectorConfigArray : public facebook::velox::ISerializable {
   const std::vector<std::pair<std::string, std::shared_ptr<const ConfigArray>>>
       values_;
 };
-} // namespace velox4j
+} // namespace facebook::velox4j

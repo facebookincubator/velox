@@ -18,7 +18,7 @@
 #include <arrow/memory_pool.h>
 #include "AllocationListener.h"
 
-namespace velox4j {
+namespace facebook::velox4j {
 class MemoryAllocator {
  public:
   virtual ~MemoryAllocator() = default;
@@ -141,4 +141,4 @@ std::shared_ptr<MemoryAllocator> defaultMemoryAllocator();
 
 std::shared_ptr<arrow::MemoryPool> defaultArrowMemoryPool();
 
-} // namespace velox4j
+} // namespace facebook::velox4j

@@ -23,6 +23,8 @@
 #include "velox4j/jni/JniError.h"
 #include "velox4j/memory/JavaAllocationListener.h"
 
+using namespace facebook::velox4j;
+
 JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM* jvm, void*) {
   LOG(INFO) << "Initializing Velox4J...";
   JNIEnv* env = jniHelpersInitialize(jvm);
@@ -30,13 +32,11 @@ JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM* jvm, void*) {
     return -1;
   }
 
-  velox4j::getJniErrorState()->ensureInitialized(env);
-  velox4j::jniClassRegistry()->add(env, new velox4j::StaticJniWrapper(env));
-  velox4j::jniClassRegistry()->add(env, new velox4j::JniWrapper(env));
-  velox4j::jniClassRegistry()->add(
-      env, new velox4j::DownIteratorJniWrapper(env));
-  velox4j::jniClassRegistry()->add(
-      env, new velox4j::JavaAllocationListenerJniWrapper(env));
+  getJniErrorState()->ensureInitialized(env);
+  jniClassRegistry()->add(env, new StaticJniWrapper(env));
+  jniClassRegistry()->add(env, new JniWrapper(env));
+  jniClassRegistry()->add(env, new DownIteratorJniWrapper(env));
+  jniClassRegistry()->add(env, new JavaAllocationListenerJniWrapper(env));
 
   LOG(INFO) << "Velox4J initialized.";
   return JAVA_VERSION;
