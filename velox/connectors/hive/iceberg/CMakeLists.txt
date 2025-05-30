@@ -32,7 +32,7 @@ velox_link_libraries(velox_hive_iceberg_splitreader velox_connector
                      velox_dwio_common Folly::folly)
 
 if(VELOX_ENABLE_PARQUET)
-  velox_link_libraries(velox_hive_iceberg_connector
+  velox_link_libraries(velox_hive_iceberg_splitreader
                        velox_dwio_arrow_parquet_writer)
 endif()
 

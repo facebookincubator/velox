@@ -176,7 +176,8 @@ std::shared_ptr<IcebergInsertTableHandle>
 IcebergTestBase::createIcebergInsertTableHandle(
     const RowTypePtr& rowType,
     const std::string& outputDirectoryPath,
-    const std::vector<PartitionField>& partitionFields) {
+    const std::vector<PartitionField>& partitionFields,
+    const std::vector<std::string>& sortedBy) {
   std::vector<std::shared_ptr<const HiveColumnHandle>> columnHandles;
   addColumnHandles(rowType, partitionFields, columnHandles);
 
@@ -187,22 +188,55 @@ IcebergTestBase::createIcebergInsertTableHandle(
 
   auto partitionSpec = createPartitionSpec(partitionFields, rowType);
 
+  // Create sorting columns if specified
+  std::vector<IcebergSortingColumn> sortingColumns;
+  for (const auto& sortExpr : sortedBy) {
+    std::string columnName;
+    bool isAscending = true;
+    bool isNullsFirst = true;
+
+    // Parse sort expression
+    std::istringstream iss(sortExpr);
+    iss >> columnName;
+
+    std::string token;
+    if (iss >> token) {
+      if (token == "DESC") {
+        isAscending = false;
+      } else if (token != "ASC") {
+        // If not ASC, put it back (might be NULLS)
+        iss.seekg(-(int)token.length(), std::ios_base::cur);
+      }
+
+      if (iss >> token && token == "NULLS") {
+        if (iss >> token && token == "LAST") {
+          isNullsFirst = false;
+        }
+      }
+    }
+
+    core::SortOrder sortOrder(isAscending, isNullsFirst);
+    IcebergSortingColumn(columnName, sortOrder);
+    sortingColumns.push_back(IcebergSortingColumn(columnName, sortOrder));
+  }
+
   return std::make_shared<IcebergInsertTableHandle>(
       columnHandles,
       locationHandle,
       partitionSpec,
       opPool_.get(),
       fileFormat_,
-      nullptr,
+      sortingColumns,
       common::CompressionKind::CompressionKind_ZSTD);
 }
 
 std::shared_ptr<IcebergDataSink> IcebergTestBase::createIcebergDataSink(
     const RowTypePtr& rowType,
     const std::string& outputDirectoryPath,
-    const std::vector<PartitionField>& partitionFields) {
+    const std::vector<PartitionField>& partitionFields,
+    const std::vector<std::string>& sortedBy) {
   auto tableHandle = createIcebergInsertTableHandle(
-      rowType, outputDirectoryPath, partitionFields);
+      rowType, outputDirectoryPath, partitionFields, sortedBy);
   return std::make_shared<IcebergDataSink>(
       rowType,
       tableHandle,
