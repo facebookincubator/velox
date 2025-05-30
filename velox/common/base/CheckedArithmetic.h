@@ -24,11 +24,17 @@
 namespace facebook::velox {
 
 template <typename T>
+void handleOverflow(const char *format, const char *typeName, T a, T b)
+{
+  VELOX_ARITHMETIC_ERROR(format, typeName, a, b);
+}
+
+template <typename T>
 T checkedPlus(T a, T b, const char* typeName = "integer") {
   T result;
   bool overflow = __builtin_add_overflow(a, b, &result);
   if (UNLIKELY(overflow)) {
-    VELOX_ARITHMETIC_ERROR("{} overflow: {} + {}", typeName, a, b);
+    handleOverflow("{} overflow: {} + {}", typeName, a, b);
   }
   return result;
 }
@@ -38,7 +44,7 @@ T checkedMinus(T a, T b, const char* typeName = "integer") {
   T result;
   bool overflow = __builtin_sub_overflow(a, b, &result);
   if (UNLIKELY(overflow)) {
-    VELOX_ARITHMETIC_ERROR("{} overflow: {} - {}", typeName, a, b);
+    handleOverflow("{} overflow: {} - {}", typeName, a, b);
   }
   return result;
 }
@@ -48,13 +54,13 @@ T checkedMultiply(T a, T b, const char* typeName = "integer") {
   T result;
   bool overflow = __builtin_mul_overflow(a, b, &result);
   if (UNLIKELY(overflow)) {
-    VELOX_ARITHMETIC_ERROR("{} overflow: {} * {}", typeName, a, b);
+    handleOverflow("{} overflow: {} * {}", typeName, a, b);
   }
   return result;
 }
 
 template <typename T>
-T checkedDivide(T a, T b) {
+T checkedDivide(T a, T b, const char *typeName = "integer") {
   if (b == 0) {
     VELOX_ARITHMETIC_ERROR("division by zero");
   }
@@ -62,7 +68,7 @@ T checkedDivide(T a, T b) {
   // Type T can not represent abs(std::numeric_limits<T>::min()).
   if constexpr (std::is_integral_v<T>) {
     if (UNLIKELY(a == std::numeric_limits<T>::min() && b == -1)) {
-      VELOX_ARITHMETIC_ERROR("integer overflow: {} / {}", a, b);
+      handleOverflow("{} overflow: {} / {}", typeName, a, b);
     }
   }
   return a / b;
