@@ -17,12 +17,13 @@ package com.facebook.velox4j.plan;
 
 import java.util.List;
 
-import com.facebook.velox4j.data.BaseVectors;
-import com.facebook.velox4j.data.RowVector;
 import com.fasterxml.jackson.annotation.JsonCreator;
 import com.fasterxml.jackson.annotation.JsonGetter;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import com.google.common.base.Preconditions;
+
+import com.facebook.velox4j.data.BaseVectors;
+import com.facebook.velox4j.data.RowVector;
 
 public class ValuesNode extends PlanNode {
   private final String serializedRowVectors;

@@ -18,12 +18,13 @@ package com.facebook.velox4j.plan;
 import java.util.Collections;
 import java.util.List;
 
-import com.facebook.velox4j.connector.Assignment;
-import com.facebook.velox4j.connector.ConnectorTableHandle;
-import com.facebook.velox4j.type.Type;
 import com.fasterxml.jackson.annotation.JsonCreator;
 import com.fasterxml.jackson.annotation.JsonGetter;
 import com.fasterxml.jackson.annotation.JsonProperty;
+
+import com.facebook.velox4j.connector.Assignment;
+import com.facebook.velox4j.connector.ConnectorTableHandle;
+import com.facebook.velox4j.type.Type;
 
 public class TableScanNode extends PlanNode {
   private final Type outputType;

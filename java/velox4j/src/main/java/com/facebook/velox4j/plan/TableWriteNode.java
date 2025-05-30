@@ -17,13 +17,14 @@ package com.facebook.velox4j.plan;
 
 import java.util.List;
 
+import com.fasterxml.jackson.annotation.JsonCreator;
+import com.fasterxml.jackson.annotation.JsonGetter;
+import com.fasterxml.jackson.annotation.JsonProperty;
+
 import com.facebook.velox4j.connector.CommitStrategy;
 import com.facebook.velox4j.connector.ConnectorInsertTableHandle;
 import com.facebook.velox4j.connector.InsertTableHandle;
 import com.facebook.velox4j.type.RowType;
-import com.fasterxml.jackson.annotation.JsonCreator;
-import com.fasterxml.jackson.annotation.JsonGetter;
-import com.fasterxml.jackson.annotation.JsonProperty;
 
 public class TableWriteNode extends PlanNode {
   private final RowType columns;

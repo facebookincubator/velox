@@ -18,6 +18,8 @@ package com.facebook.velox4j.serde;
 import java.util.Collections;
 import java.util.List;
 
+import org.junit.*;
+
 import com.facebook.velox4j.Velox4j;
 import com.facebook.velox4j.data.BaseVector;
 import com.facebook.velox4j.data.BaseVectorTests;
@@ -40,7 +42,6 @@ import com.facebook.velox4j.type.RealType;
 import com.facebook.velox4j.type.RowType;
 import com.facebook.velox4j.type.VarCharType;
 import com.facebook.velox4j.variant.IntegerValue;
-import org.junit.*;
 
 public class TypedExprSerdeTest {
   private static MemoryManager memoryManager;

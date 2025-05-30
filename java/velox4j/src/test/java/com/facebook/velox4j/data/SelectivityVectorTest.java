@@ -1,11 +1,12 @@
 package com.facebook.velox4j.data;
 
+import org.junit.*;
+
 import com.facebook.velox4j.Velox4j;
 import com.facebook.velox4j.memory.AllocationListener;
 import com.facebook.velox4j.memory.MemoryManager;
 import com.facebook.velox4j.session.Session;
 import com.facebook.velox4j.test.Velox4jTests;
-import org.junit.*;
 
 public class SelectivityVectorTest {
   private static MemoryManager memoryManager;

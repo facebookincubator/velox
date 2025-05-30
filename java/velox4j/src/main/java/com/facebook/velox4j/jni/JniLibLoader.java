@@ -21,11 +21,12 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 
+import com.google.common.base.Preconditions;
+import com.google.common.base.StandardSystemProperty;
+
 import com.facebook.velox4j.exception.VeloxException;
 import com.facebook.velox4j.resource.ResourceFile;
 import com.facebook.velox4j.resource.Resources;
-import com.google.common.base.Preconditions;
-import com.google.common.base.StandardSystemProperty;
 
 public class JniLibLoader {
   private static final AtomicBoolean LOADED = new AtomicBoolean(false);

@@ -17,6 +17,9 @@ package com.facebook.velox4j.jni;
 
 import java.util.List;
 
+import org.apache.arrow.c.ArrowArray;
+import org.apache.arrow.c.ArrowSchema;
+
 import com.facebook.velox4j.conf.Config;
 import com.facebook.velox4j.connector.ConnectorSplit;
 import com.facebook.velox4j.connector.ExternalStreams;
@@ -36,8 +39,6 @@ import com.facebook.velox4j.type.RowType;
 import com.facebook.velox4j.type.Type;
 import com.facebook.velox4j.variant.Variant;
 import com.facebook.velox4j.variant.VariantCo;
-import org.apache.arrow.c.ArrowArray;
-import org.apache.arrow.c.ArrowSchema;
 
 public class StaticJniApi {
   private static final StaticJniApi INSTANCE = new StaticJniApi();
