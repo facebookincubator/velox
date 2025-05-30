@@ -32,7 +32,7 @@
 #include "velox4j/init/Config.h"
 #include "velox4j/query/Query.h"
 
-namespace velox4j {
+namespace facebook::velox4j {
 
 using namespace facebook::velox;
 
@@ -114,4 +114,4 @@ void initialize(const std::shared_ptr<ConfigArray>& configArray) {
     }
   });
 }
-} // namespace velox4j
+} // namespace facebook::velox4j

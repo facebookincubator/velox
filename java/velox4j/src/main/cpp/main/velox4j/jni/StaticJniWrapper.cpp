@@ -30,11 +30,11 @@
 #include "velox4j/memory/JavaAllocationListener.h"
 #include "velox4j/query/QueryExecutor.h"
 
-namespace velox4j {
+namespace facebook::velox4j {
 using namespace facebook::velox;
 
 namespace {
-const char* kClassName = "com/meta/velox4j/jni/StaticJniWrapper";
+const char* kClassName = "com/facebook/velox4j/jni/StaticJniWrapper";
 
 void initialize0(JNIEnv* env, jobject javaThis, jstring globalConfJson) {
   JNI_METHOD_START
@@ -283,7 +283,7 @@ void StaticJniWrapper::initialize(JNIEnv* env) {
       "createMemoryManager",
       (void*)createMemoryManager,
       kTypeLong,
-      "com/meta/velox4j/memory/AllocationListener",
+      "com/facebook/velox4j/memory/AllocationListener",
       nullptr);
   addNativeMethod(
       "createSession", (void*)createSession, kTypeLong, kTypeLong, nullptr);
@@ -406,4 +406,4 @@ void StaticJniWrapper::initialize(JNIEnv* env) {
 }
 
 void StaticJniWrapper::mapFields() {}
-} // namespace velox4j
+} // namespace facebook::velox4j

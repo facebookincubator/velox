@@ -17,11 +17,11 @@
 #include "velox4j/jni/JniCommon.h"
 #include "velox4j/lifecycle/ObjectStore.h"
 
-namespace velox4j {
+namespace facebook::velox4j {
 using namespace facebook::velox;
 
 namespace {
-const char* kClassName = "com/meta/velox4j/iterator/DownIterator";
+const char* kClassName = "com/facebook/velox4j/iterator/DownIterator";
 } // namespace
 
 void DownIteratorJniWrapper::mapFields() {}
@@ -156,4 +156,4 @@ RowVectorPtr DownIterator::get() {
   checkException(env);
   return ObjectStore::retrieve<RowVector>(rvId);
 }
-} // namespace velox4j
+} // namespace facebook::velox4j

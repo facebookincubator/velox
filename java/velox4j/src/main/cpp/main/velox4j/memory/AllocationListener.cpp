@@ -15,7 +15,7 @@
  */
 #include "AllocationListener.h"
 
-namespace velox4j {
+namespace facebook::velox4j {
 
 class NoopAllocationListener : public AllocationListener {
  public:
@@ -61,4 +61,4 @@ int64_t BlockAllocationListener::reserve(int64_t diff) {
   peakBytes_ = std::max(peakBytes_, usedBytes_);
   return bytesGranted;
 }
-} // namespace velox4j
+} // namespace facebook::velox4j
