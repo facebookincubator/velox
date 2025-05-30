@@ -40,8 +40,7 @@ inline std::shared_ptr<common::CodecOptions> getDwrfOrcCompressionOptions(
     common::CompressionKind kind,
     int32_t zlibCompressionLevel,
     int32_t zstdCompressionLevel) {
-  if (kind == common::CompressionKind_ZLIB ||
-      kind == common::CompressionKind_GZIP) {
+  if (kind == common::CompressionKind_ZLIB) {
     return std::make_shared<common::ZlibCodecOptions>(
         common::ZlibFormat::kDeflate, zlibCompressionLevel);
   }
@@ -65,30 +64,37 @@ inline std::unique_ptr<dwio::common::BufferedOutputStream> createCompressor(
     dwio::common::DataBufferHolder& bufferHolder,
     const Config& config,
     const dwio::common::encryption::Encrypter* encrypter = nullptr) {
-  if (kind == common::CompressionKind_NONE) {
-    if (encrypter == nullptr) {
-      return std::make_unique<dwio::common::BufferedOutputStream>(bufferHolder);
+  switch (kind) {
+    case common::CompressionKind_NONE: {
+      if (encrypter == nullptr) {
+        return std::make_unique<dwio::common::BufferedOutputStream>(
+            bufferHolder);
+      }
+      return std::make_unique<PagedOutputStream>(
+          bufferPool, bufferHolder, 0, nullptr, PAGE_HEADER_SIZE, encrypter);
     }
-    return std::make_unique<PagedOutputStream>(
-        bufferPool, bufferHolder, 0, nullptr, PAGE_HEADER_SIZE, encrypter);
+    case common::CompressionKind_ZLIB:
+    case common::CompressionKind_ZSTD: {
+      const auto options = getDwrfOrcCompressionOptions(
+          kind,
+          config.get(Config::ZLIB_COMPRESSION_LEVEL),
+          config.get(Config::ZSTD_COMPRESSION_LEVEL));
+      auto codec = common::Codec::create(kind, *options);
+      if (codec.hasError()) {
+        VELOX_USER_FAIL(codec.error().message());
+      }
+      return std::make_unique<PagedOutputStream>(
+          bufferPool,
+          bufferHolder,
+          config.get(Config::COMPRESSION_THRESHOLD),
+          std::move(codec.value()),
+          PAGE_HEADER_SIZE,
+          encrypter);
+    }
+    default:
+      VELOX_UNSUPPORTED(
+          "Unsupported compression type: {}", compressionKindToString(kind));
   }
-
-  const auto options = getDwrfOrcCompressionOptions(
-      kind,
-      config.get(Config::ZLIB_COMPRESSION_LEVEL),
-      config.get(Config::ZSTD_COMPRESSION_LEVEL));
-  auto codec = common::Codec::create(kind, *options);
-  if (codec.hasError()) {
-    VELOX_USER_FAIL(codec.error().message());
-  }
-
-  return std::make_unique<PagedOutputStream>(
-      bufferPool,
-      bufferHolder,
-      config.get(Config::COMPRESSION_THRESHOLD),
-      std::move(codec.value()),
-      PAGE_HEADER_SIZE,
-      encrypter);
 }
 
 inline std::shared_ptr<common::CodecOptions> getDwrfOrcDecompressionOptions(

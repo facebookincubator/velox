@@ -185,10 +185,9 @@ bool PagedInputStream::readOrSkip(const void** data, int32_t* size) {
     if (velox::common::Codec::supportsGetUncompressedLength(
             codec_->compressionKind())) {
       auto result = codec_->getUncompressedLength(rawInput, remainingLength_);
-      if (result.hasError()) {
-        VELOX_FAIL(result.error().message());
+      if (result.hasValue()) {
+        decompressedLength = result.value();
       }
-      decompressedLength = result.value();
     }
 
     if (!data && decompressedLength.has_value() &&
@@ -196,8 +195,11 @@ bool PagedInputStream::readOrSkip(const void** data, int32_t* size) {
       *size = static_cast<int32_t>(*decompressedLength);
       outputBufferPtr_ = nullptr;
     } else {
+      // Use blockSize_ as the upper bound when decompression size is not
+      // available.
       prepareOutputBuffer(
-          decompressedLength ? *decompressedLength : blockSize_);
+          decompressedLength.has_value() ? decompressedLength.value()
+                                         : blockSize_);
       auto result = codec_->decompress(
           rawInput,
           remainingLength_,

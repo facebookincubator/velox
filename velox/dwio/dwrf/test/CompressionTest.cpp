@@ -473,9 +473,8 @@ TEST(CompressionOptionsTest, testCompressionOptions) {
   EXPECT_EQ(codec->name(), "deflate");
   EXPECT_EQ(codec->compressionLevel(), 4);
 
-  options = getDwrfOrcCompressionOptions(
-      facebook::velox::common::CompressionKind_ZSTD, 4, 7);
-  codec = Codec::create(facebook::velox::common::CompressionKind_ZSTD, *options)
+  options = getDwrfOrcCompressionOptions(CompressionKind_ZSTD, 4, 7);
+  codec = Codec::create(CompressionKind_ZSTD, *options)
               .thenOrThrow(folly::identity, throwsNotOk);
 
   EXPECT_EQ(codec->compressionLevel(), 7);
