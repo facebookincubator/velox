@@ -685,7 +685,11 @@ Each query can override the config by setting corresponding query session proper
      - bool
      - false
      - Whether to preserve flat maps in memory as FlatMapVectors instead of converting them to MapVectors. This is only applied during data reading inside the DWRF and Nimble readers, not during downstream processing like expression evaluation etc.
-
+   * - enable-requested-type-check
+     - enable_requested_type_check
+     - bool
+     - true
+     - Whether to enable requested type check in the `ReaderBase::convertType`. True by default.
 
 ``ORC File Format Configuration``
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
