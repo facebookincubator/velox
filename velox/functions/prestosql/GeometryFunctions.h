@@ -348,6 +348,25 @@ struct StDifferenceFunction {
 };
 
 template <typename T>
+struct StBoundaryFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  FOLLY_ALWAYS_INLINE Status
+  call(out_type<Geometry>& result, const arg_type<Geometry>& input) {
+    std::unique_ptr<geos::geom::Geometry> geosGeometry =
+        geospatial::deserializeGeometry(input);
+
+    std::unique_ptr<geos::geom::Geometry> outputGeometry;
+
+    GEOS_TRY(
+        result = geospatial::serializeGeometry(*geosGeometry->getBoundary());
+        , "Failed to compute geometry boundary");
+
+    return Status::OK();
+  }
+};
+
+template <typename T>
 struct StIntersectionFunction {
   VELOX_DEFINE_FUNCTION_TYPES(T);
 
@@ -474,6 +493,53 @@ struct StAreaFunction {
 };
 
 template <typename T>
+struct StCentroidFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  FOLLY_ALWAYS_INLINE Status
+  call(out_type<Geometry>& result, const arg_type<Geometry>& input) {
+    std::unique_ptr<geos::geom::Geometry> geosGeometry =
+        geospatial::deserializeGeometry(input);
+
+    auto validate = facebook::velox::functions::geospatial::validateType(
+        "ST_Centroid",
+        *geosGeometry,
+        {geos::geom::GeometryTypeId::GEOS_POINT,
+         geos::geom::GeometryTypeId::GEOS_MULTIPOINT,
+         geos::geom::GeometryTypeId::GEOS_LINESTRING,
+         geos::geom::GeometryTypeId::GEOS_MULTILINESTRING,
+         geos::geom::GeometryTypeId::GEOS_POLYGON,
+         geos::geom::GeometryTypeId::GEOS_MULTIPOLYGON});
+
+    if (validate.hasError()) {
+      return Status::UserError(validate.error());
+    }
+
+    geos::geom::GeometryTypeId type = geosGeometry->getGeometryTypeId();
+    if (type == geos::geom::GeometryTypeId::GEOS_POINT) {
+      result = input;
+      return Status::OK();
+    }
+
+    if (geosGeometry->getNumPoints() == 0) {
+      GEOS_TRY(
+          {
+            geos::geom::GeometryFactory::Ptr factory =
+                geos::geom::GeometryFactory::create();
+            std::unique_ptr<geos::geom::Point> point = factory->createPoint();
+            result = geospatial::serializeGeometry(*point);
+            factory->destroyGeometry(point.release());
+          },
+          "Failed to create point geometry");
+      return Status::OK();
+    }
+
+    result = geospatial::serializeGeometry(*(geosGeometry->getCentroid()));
+    return Status::OK();
+  }
+};
+
+template <typename T>
 struct StXFunction {
   VELOX_DEFINE_FUNCTION_TYPES(T);
 
@@ -517,6 +583,54 @@ struct StYFunction {
     }
     auto coordinate = geosGeometry->getCoordinate();
     result = coordinate->y;
+    return true;
+  }
+};
+
+template <typename T>
+struct StGeometryTypeFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  FOLLY_ALWAYS_INLINE Status
+  call(out_type<Varchar>& result, const arg_type<Geometry>& input) {
+    std::unique_ptr<geos::geom::Geometry> geosGeometry =
+        geospatial::deserializeGeometry(input);
+
+    std::unique_ptr<geos::geom::Geometry> outputGeometry;
+
+    result = geosGeometry->getGeometryType();
+
+    return Status::OK();
+  }
+};
+
+template <typename T>
+struct StDistanceFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  FOLLY_ALWAYS_INLINE bool call(
+      out_type<double>& result,
+      const arg_type<Geometry>& geometry1,
+      const arg_type<Geometry>& geometry2) {
+    std::unique_ptr<geos::geom::Geometry> geosGeometry1 =
+        geospatial::deserializeGeometry(geometry1);
+    std::unique_ptr<geos::geom::Geometry> geosGeometry2 =
+        geospatial::deserializeGeometry(geometry2);
+
+    if (geosGeometry1->getSRID() != geosGeometry2->getSRID()) {
+      VELOX_USER_FAIL(fmt::format(
+          "Input geometries must have the same spatial reference, found {} and {}",
+          geosGeometry1->getSRID(),
+          geosGeometry2->getSRID()));
+    }
+
+    if (geosGeometry1->isEmpty() || geosGeometry2->isEmpty()) {
+      return false;
+    }
+
+    GEOS_RETHROW(result = geosGeometry1->distance(geosGeometry2.get());
+                 , "Failed to calculate geometry distance");
+
     return true;
   }
 };
