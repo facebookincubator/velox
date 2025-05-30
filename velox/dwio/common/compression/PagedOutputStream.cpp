@@ -26,12 +26,25 @@ std::vector<folly::StringPiece> PagedOutputStream::createPage() {
   auto compressedSize = origSize;
   // Applies compression if there is compressor and original data size exceeds
   // threshold.
-  if (compressor_ && origSize >= threshold_) {
+  if (codec_ != nullptr && origSize >= threshold_) {
     compressionBuffer_ = pool_->getBuffer(buffer_.size());
-    compressedSize = compressor_->compress(
-        buffer_.data() + pageHeaderSize_,
-        compressionBuffer_->data() + pageHeaderSize_,
-        origSize);
+    if (!velox::common::Codec::supportsCompressFixedLength(
+            codec_->compressionKind())) {
+      VELOX_USER_FAIL(
+          "Codec {} does not support compress fixed block size",
+          codec_->name());
+    }
+
+    auto result = codec_->compressFixedLength(
+        reinterpret_cast<const uint8_t*>(buffer_.data() + pageHeaderSize_),
+        origSize,
+        reinterpret_cast<uint8_t*>(
+            compressionBuffer_->data() + pageHeaderSize_),
+        buffer_.size());
+    if (result.hasError()) {
+      VELOX_FAIL(result.error().message());
+    }
+    compressedSize = result.value();
   }
 
   folly::StringPiece compressed;

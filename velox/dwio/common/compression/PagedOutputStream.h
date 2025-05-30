@@ -28,17 +28,17 @@ class PagedOutputStream : public BufferedOutputStream {
       CompressionBufferPool& pool,
       DataBufferHolder& bufferHolder,
       uint32_t compressionThreshold,
+      std::unique_ptr<velox::common::Codec> codec,
       uint8_t pageHeaderSize,
-      std::unique_ptr<Compressor> compressor,
       const dwio::common::encryption::Encrypter* encryptor)
       : BufferedOutputStream(bufferHolder),
         pool_{&pool},
-        compressor_{std::move(compressor)},
-        encryptor_{encryptor},
         threshold_{compressionThreshold},
+        codec_{std::move(codec)},
+        encryptor_{encryptor},
         pageHeaderSize_{pageHeaderSize} {
     VELOX_CHECK(
-        compressor_ || encryptor_,
+        codec_ || encryptor_,
         "Neither compressor or encryptor is set for paged output stream");
   }
 
@@ -75,13 +75,13 @@ class PagedOutputStream : public BufferedOutputStream {
 
   CompressionBufferPool* const pool_;
 
-  const std::unique_ptr<Compressor> compressor_;
+  // threshold below which, we skip compression
+  const uint32_t threshold_;
+
+  const std::unique_ptr<velox::common::Codec> codec_;
 
   // Encryption provider
   const dwio::common::encryption::Encrypter* const encryptor_;
-
-  // threshold below which, we skip compression
-  const uint32_t threshold_;
 
   const uint8_t pageHeaderSize_;
 

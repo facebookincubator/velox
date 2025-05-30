@@ -177,20 +177,37 @@ bool PagedInputStream::readOrSkip(const void** data, int32_t* size) {
 
   // perform decompression
   if (state_ == State::START) {
-    DWIO_ENSURE_NOT_NULL(decompressor_.get(), "invalid stream state");
-    DWIO_ENSURE_NOT_NULL(input);
-    auto [decompressedLength, exact] =
-        decompressor_->getDecompressedLength(input, remainingLength_);
-    if (!data && exact && decompressedLength <= pendingSkip_) {
-      *size = decompressedLength;
+    DWIO_ENSURE_NOT_NULL(codec_, "invalid stream state");
+    const auto rawInput = reinterpret_cast<const uint8_t*>(input);
+
+    std::optional<uint64_t> decompressedLength{std::nullopt};
+
+    if (velox::common::Codec::supportsGetUncompressedLength(
+            codec_->compressionKind())) {
+      auto result = codec_->getUncompressedLength(rawInput, remainingLength_);
+      if (result.hasError()) {
+        VELOX_FAIL(result.error().message());
+      }
+      decompressedLength = result.value();
+    }
+
+    if (!data && decompressedLength.has_value() &&
+        *decompressedLength <= pendingSkip_) {
+      *size = static_cast<int32_t>(*decompressedLength);
       outputBufferPtr_ = nullptr;
     } else {
-      prepareOutputBuffer(decompressedLength);
-      outputBufferLength_ = decompressor_->decompress(
-          input,
+      prepareOutputBuffer(
+          decompressedLength ? *decompressedLength : blockSize_);
+      auto result = codec_->decompress(
+          rawInput,
           remainingLength_,
-          outputBuffer_->data(),
+          reinterpret_cast<uint8_t*>(outputBuffer_->data()),
           outputBuffer_->capacity());
+      if (result.hasError()) {
+        VELOX_FAIL(result.error().message());
+      }
+      outputBufferLength_ = result.value();
+
       if (data) {
         *data = outputBuffer_->data();
       }

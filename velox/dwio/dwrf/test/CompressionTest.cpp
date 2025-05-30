@@ -39,6 +39,12 @@ using facebook::velox::VeloxException;
 
 const int32_t DEFAULT_MEM_STREAM_SIZE = 1024 * 1024 * 2; // 2M
 
+namespace {
+void throwsNotOk(const facebook::velox::Status& status) {
+  VELOX_USER_FAIL("{}", status.message());
+}
+} // namespace
+
 class TestBufferPool : public CompressionBufferPool {
  public:
   TestBufferPool(MemoryPool& pool, uint64_t blockSize)
@@ -461,17 +467,33 @@ VELOX_INSTANTIATE_TEST_SUITE_P(
         std::make_tuple(CompressionKind_NONE, &testEncrypter)));
 
 TEST(CompressionOptionsTest, testCompressionOptions) {
-  auto options = getDwrfOrcCompressionOptions(
-      facebook::velox::common::CompressionKind_ZLIB, 256, 4, 7);
-
-  EXPECT_EQ(
-      options.format.zlib.windowBits, Compressor::DWRF_ORC_ZLIB_WINDOW_BITS);
-  EXPECT_EQ(options.format.zlib.compressionLevel, 4);
-  EXPECT_EQ(options.compressionThreshold, 256);
+  auto options = getDwrfOrcCompressionOptions(CompressionKind_ZLIB, 4, 7);
+  auto codec = Codec::create(CompressionKind_ZLIB, *options)
+                   .thenOrThrow(folly::identity, throwsNotOk);
+  EXPECT_EQ(codec->name(), "deflate");
+  EXPECT_EQ(codec->compressionLevel(), 4);
 
   options = getDwrfOrcCompressionOptions(
-      facebook::velox::common::CompressionKind_ZSTD, 256, 4, 7);
+      facebook::velox::common::CompressionKind_ZSTD, 4, 7);
+  codec = Codec::create(facebook::velox::common::CompressionKind_ZSTD, *options)
+              .thenOrThrow(folly::identity, throwsNotOk);
 
-  EXPECT_EQ(options.format.zstd.compressionLevel, 7);
-  EXPECT_EQ(options.compressionThreshold, 256);
+  EXPECT_EQ(codec->compressionLevel(), 7);
+}
+
+TEST(CompressionOptionsTest, testDecompressionOptions) {
+  auto options = getDwrfOrcDecompressionOptions(CompressionKind_ZLIB);
+  auto codec = Codec::create(CompressionKind_ZLIB, *options)
+                   .thenOrThrow(folly::identity, throwsNotOk);
+  EXPECT_EQ(codec->name(), "deflate");
+
+  options = getDwrfOrcDecompressionOptions(CompressionKind_LZ4);
+  codec = Codec::create(CompressionKind_LZ4, *options)
+              .thenOrThrow(folly::identity, throwsNotOk);
+  EXPECT_EQ(codec->name(), "lz4_raw");
+
+  options = getDwrfOrcDecompressionOptions(CompressionKind_LZO);
+  codec = Codec::create(CompressionKind_LZO, *options)
+              .thenOrThrow(folly::identity, throwsNotOk);
+  EXPECT_EQ(codec->name(), "lzo");
 }
