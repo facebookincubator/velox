@@ -2093,4 +2093,108 @@ Expected<std::shared_ptr<DateTimeFormatter>> buildSimpleDateTimeFormatter(
   return builder.setType(type).build();
 }
 
+Expected<std::shared_ptr<DateTimeFormatter>> buildTeradataDateTimeFormatter(
+    const std::string_view& format) {
+  if (format.empty()) {
+    if (threadSkipErrorDetails()) {
+      return folly::makeUnexpected(Status::UserError());
+    }
+    return folly::makeUnexpected(
+        Status::UserError("Invalid pattern specification"));
+  }
+
+  DateTimeFormatterBuilder builder(format.size());
+  const char* cur = format.data();
+  const char* end = cur + format.size();
+
+  while (cur < end) {
+    const char* startTokenPtr = cur;
+
+    // Literal case
+    if (*startTokenPtr == '\'') {
+      // Case 1: 2 consecutive single quote
+      if (cur + 1 < end && *(cur + 1) == '\'') {
+        builder.appendLiteral("'");
+        cur += 2;
+      } else {
+        // Case 2: find closing single quote
+        int64_t count = numLiteralChars(startTokenPtr + 1, end);
+        if (count == -1) {
+          if (threadSkipErrorDetails()) {
+            return folly::makeUnexpected(Status::UserError());
+          }
+          return folly::makeUnexpected(
+              Status::UserError("No closing single quote for literal"));
+        }
+        for (int64_t i = 1; i <= count; i++) {
+          builder.appendLiteral(startTokenPtr + i, 1);
+          if (*(startTokenPtr + i) == '\'') {
+            i += 1;
+          }
+        }
+        cur += count + 2;
+      }
+    } else {
+      ++cur;
+      switch (*startTokenPtr) {
+        case 'd':
+          if ('d' == *cur) {
+            builder.appendDayOfMonth(2);
+            cur++;
+          }
+          break;
+        case 'h':
+          if ('h' == *cur) {
+            if ('2' == *(cur + 1) && '4' == *(cur + 2)) {
+              builder.appendHourOfDay(2);
+              cur += 3;
+            } else {
+              builder.appendClockHourOfHalfDay(2);
+            }
+          }
+          break;
+        case 'm':
+          if ('i' == *cur) {
+            builder.appendMinuteOfHour(2);
+            cur++;
+          } else if ('m' == *cur) {
+            builder.appendMonthOfYear(2);
+            cur++;
+          }
+          break;
+        case 's':
+          if ('s' == *cur) {
+            builder.appendSecondOfMinute(2);
+            cur++;
+          }
+          break;
+        case 'y':
+          if ('y' == *cur) {
+            if ('y' == *(cur + 1) && 'y' == *(cur + 2)) {
+              builder.appendYear(4);
+              cur += 2;
+            } else {
+              builder.appendYear(2);
+              cur++;
+            }
+          }
+          break;
+        default:
+          if (isalpha(*startTokenPtr)) {
+            if (threadSkipErrorDetails()) {
+              return folly::makeUnexpected(Status::UserError());
+            }
+            return folly::makeUnexpected(Status::UserError(
+                "Specifier {} is not supported or number of digits is not supported.",
+                *startTokenPtr));
+          } else {
+            builder.appendLiteral(startTokenPtr, 1);
+          }
+          break;
+      }
+    }
+  }
+  return builder.setType(DateTimeFormatterType::TERADATA).build();
+}
+
 } // namespace facebook::velox::functions

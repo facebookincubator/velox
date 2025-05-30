@@ -251,11 +251,18 @@ void registerSimpleFunctions(const std::string& prefix) {
       {prefix + "date_format"});
   registerFunction<FormatDateTimeFunction, Varchar, Timestamp, Varchar>(
       {prefix + "format_datetime"});
+  registerFunction<TeradataDateToCharFunction, Varchar, Timestamp, Varchar>(
+      {prefix + "to_char"});
   registerFunction<
       FormatDateTimeFunction,
       Varchar,
       TimestampWithTimezone,
       Varchar>({prefix + "format_datetime"});
+  registerFunction<
+      TeradataDateToCharFunction,
+      Varchar,
+      TimestampWithTimezone ,
+      Varchar>({prefix + "to_char"});
   registerFunction<
       ParseDateTimeFunction,
       TimestampWithTimezone,

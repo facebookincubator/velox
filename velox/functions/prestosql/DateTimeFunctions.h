@@ -1672,6 +1672,79 @@ struct FormatDateTimeFunction {
 };
 
 template <typename T>
+struct TeradataDateToCharFunction : public FormatDateTimeFunction<T> {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  FOLLY_ALWAYS_INLINE void initialize(
+      const std::vector<TypePtr>& /*inputTypes*/,
+      const core::QueryConfig& config,
+      const arg_type<Timestamp>* /*timestamp*/,
+      const arg_type<Varchar>* formatString) {
+    sessionTimeZone_ = getTimeZoneFromConfig(config);
+    if (formatString != nullptr) {
+      setFormatter(*formatString);
+      isConstFormat_ = true;
+    }
+  }
+
+  FOLLY_ALWAYS_INLINE void call(
+      out_type<Varchar>& result,
+      const arg_type<Timestamp>& timestamp,
+      const arg_type<Varchar>& formatString) {
+    ensureFormatter(formatString);
+
+    format(timestamp, sessionTimeZone_, maxResultSize_, result);
+  }
+
+  FOLLY_ALWAYS_INLINE void call(
+      out_type<Varchar>& result,
+      const arg_type<TimestampWithTimezone>& timestampWithTimezone,
+      const arg_type<Varchar>& formatString) {
+    ensureFormatter(formatString);
+
+    const auto timestamp = unpackTimestampUtc(*timestampWithTimezone);
+    const auto timeZoneId = unpackZoneKeyId(*timestampWithTimezone);
+    auto* timezonePtr = tz::locateZone(tz::getTimeZoneName(timeZoneId));
+
+    const auto maxResultSize = teradataDateTime_->maxResultSize(timezonePtr);
+    format(timestamp, timezonePtr, maxResultSize, result);
+  }
+
+ private:
+  FOLLY_ALWAYS_INLINE void ensureFormatter(
+      const arg_type<Varchar>& formatString) {
+    if (!isConstFormat_) {
+      setFormatter(formatString);
+    }
+  }
+
+  FOLLY_ALWAYS_INLINE void setFormatter(const arg_type<Varchar>& formatString) {
+    buildTeradataDateTimeFormatter(
+        std::string_view(formatString.data(), formatString.size()))
+        .thenOrThrow([this](auto formatter) {
+          teradataDateTime_ = formatter;
+          maxResultSize_ = teradataDateTime_->maxResultSize(sessionTimeZone_);
+        });
+  }
+
+  void format(
+      const Timestamp& timestamp,
+      const tz::TimeZone* timeZone,
+      uint32_t maxResultSize,
+      out_type<Varchar>& result) const {
+    result.reserve(maxResultSize);
+    const auto resultSize = teradataDateTime_->format(
+        timestamp, timeZone, maxResultSize, result.data());
+    result.resize(resultSize);
+  }
+
+  const tz::TimeZone* sessionTimeZone_ = nullptr;
+  std::shared_ptr<DateTimeFormatter> teradataDateTime_;
+  uint32_t maxResultSize_;
+  bool isConstFormat_ = false;
+};
+
+template <typename T>
 struct ParseDateTimeFunction {
   VELOX_DEFINE_FUNCTION_TYPES(T);
 

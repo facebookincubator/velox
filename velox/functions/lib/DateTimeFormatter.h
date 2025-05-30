@@ -34,6 +34,7 @@ enum class DateTimeFormatterType {
   // Corresponding to java.text.SimpleDateFormat in strict(lenient=false) mode.
   // It is used by Spark 'cast date to string'.
   STRICT_SIMPLE,
+  TERADATA,
   UNKNOWN
 };
 
@@ -231,6 +232,9 @@ Expected<std::shared_ptr<DateTimeFormatter>> buildJodaDateTimeFormatter(
 Expected<std::shared_ptr<DateTimeFormatter>> buildSimpleDateTimeFormatter(
     const std::string_view& format,
     bool lenient);
+
+Expected<std::shared_ptr<DateTimeFormatter>> buildTeradataDateTimeFormatter(
+    const std::string_view& format);
 
 } // namespace facebook::velox::functions
 
