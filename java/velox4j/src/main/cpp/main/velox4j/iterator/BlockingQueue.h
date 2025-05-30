@@ -18,7 +18,7 @@
 #include <folly/executors/IOThreadPoolExecutor.h>
 #include "velox4j/connector/ExternalStream.h"
 
-namespace velox4j {
+namespace facebook::velox4j {
 
 class BlockingQueue : public ExternalStream {
  public:
@@ -61,4 +61,4 @@ class BlockingQueue : public ExternalStream {
   std::vector<facebook::velox::ContinuePromise> promises_{};
   State state_{OPEN};
 };
-} // namespace velox4j
+} // namespace facebook::velox4j
