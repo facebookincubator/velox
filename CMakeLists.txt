@@ -18,7 +18,6 @@ set(CMAKE_CXX_STANDARD_REQUIRED TRUE)
 set(CMAKE_CXX_EXTENSIONS ON) # Big Int is an extension
 message(STATUS "CXX standard: ${CMAKE_CXX_STANDARD}")
 
-
 # Check for SVE support
 execute_process(COMMAND lscpu OUTPUT_VARIABLE LSCPU_OUTPUT)
 string(FIND "${LSCPU_OUTPUT}" "sve" SVE_FOUND)
@@ -27,8 +26,12 @@ execute_process(COMMAND cat /etc/os-release OUTPUT_VARIABLE OS_RELEASE)
 string(FIND "${OS_RELEASE}" "Ubuntu" UBUNTU_FOUND)
 
 if(NOT SVE_FOUND EQUAL -1 AND NOT UBUNTU_FOUND EQUAL -1)
-    set(CMAKE_C_COMPILER "/usr/bin/gcc-12" CACHE STRING "C Compiler" FORCE)
-    set(CMAKE_CXX_COMPILER "/usr/bin/g++-12" CACHE STRING "C++ Compiler" FORCE)
+  set(CMAKE_C_COMPILER
+      "/usr/bin/gcc-12"
+      CACHE STRING "C Compiler" FORCE)
+  set(CMAKE_CXX_COMPILER
+      "/usr/bin/g++-12"
+      CACHE STRING "C++ Compiler" FORCE)
 endif()
 
 # The policy allows us to change options without caching.
