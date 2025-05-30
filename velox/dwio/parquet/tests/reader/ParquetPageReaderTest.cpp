@@ -102,9 +102,24 @@ TEST_F(ParquetPageReaderTest, corruptedPageHeader) {
 }
 
 TEST(CompressionOptionsTest, testCompressionOptions) {
-  auto options = getParquetDecompressionOptions(
-      facebook::velox::common::CompressionKind_ZLIB);
-  EXPECT_EQ(
-      options.format.zlib.windowBits,
-      dwio::common::compression::Compressor::PARQUET_ZLIB_WINDOW_BITS);
+  auto options = getParquetDecompressionOptions(CompressionKind_ZLIB);
+  auto codec = common::Codec::create(CompressionKind_ZLIB, *options)
+                   .thenOrThrow(folly::identity, [](const Status& status) {
+                     VELOX_USER_FAIL("{}", status.message());
+                   });
+  EXPECT_EQ(codec->name(), "zlib");
+
+  options = getParquetDecompressionOptions(CompressionKind_LZ4);
+  codec = common::Codec::create(CompressionKind_LZ4, *options)
+              .thenOrThrow(folly::identity, [](const Status& status) {
+                VELOX_USER_FAIL("{}", status.message());
+              });
+  EXPECT_EQ(codec->name(), "lz4_hadoop");
+
+  options = getParquetDecompressionOptions(CompressionKind_LZO);
+  codec = common::Codec::create(CompressionKind_LZO, *options)
+              .thenOrThrow(folly::identity, [](const Status& status) {
+                VELOX_USER_FAIL("{}", status.message());
+              });
+  EXPECT_EQ(codec->name(), "lzo_hadoop");
 }
