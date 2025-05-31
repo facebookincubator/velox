@@ -79,6 +79,14 @@ GENERATOR += -DVELOX_FORCE_COLORED_OUTPUT=ON
 endif
 endif
 
+SVE_ENABLED := $(shell lscpu | grep -q "sve" && echo 1 || echo 0)
+OS_UBUNTU   := $(shell grep -i "ubuntu" /etc/os-release >/dev/null && echo 1 || echo 0)
+
+ifeq ($(SVE_ENABLED)$(OS_UBUNTU),11)
+    export CC  := /usr/bin/gcc-12
+    export CXX := /usr/bin/g++-12
+endif
+
 NUM_THREADS ?= $(shell getconf _NPROCESSORS_CONF 2>/dev/null || echo 1)
 CPU_TARGET ?= "avx"
 
