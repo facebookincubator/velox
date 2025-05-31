@@ -264,6 +264,16 @@ not a Point and not empty.</p>
 not a Point and not empty.</p>
 </dd></dl>
 
+<dl class="py function">
+<dt class="sig sig-object py" id="simplify_geometry">
+<span class="sig-name descname"><span class="pre">simplify_geometry</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">geometry</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">Geometry</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">tolerance</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">double</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">output:</span> <span class="pre">Geometry</span></span></span><a class="headerlink" href="#simplify_geometry" title="Link to this definition">¶</a></dt>
+<dd><p>Returns a “simplified” version of the input geometry using the
+Douglas-Peucker algorithm. Will avoid creating geometries (polygons in
+particular) that are invalid. Tolerance must be a non-negative finite value.
+Using tolerance of 0 will return the original geometry.  Empty geometries
+will also be returned as-is.</p>
+</dd></dl>
+
 </section>
 <section id="bing-tile-functions">
 <h2>Bing Tile Functions<a class="headerlink" href="#bing-tile-functions" title="Link to this heading">¶</a></h2>
@@ -396,6 +406,7 @@ specified.</p>
 <li><a class="reference internal" href="#ST_Area"><code class="docutils literal notranslate"><span class="pre">ST_Area()</span></code></a></li>
 <li><a class="reference internal" href="#ST_X"><code class="docutils literal notranslate"><span class="pre">ST_X()</span></code></a></li>
 <li><a class="reference internal" href="#ST_Y"><code class="docutils literal notranslate"><span class="pre">ST_Y()</span></code></a></li>
+<li><a class="reference internal" href="#simplify_geometry"><code class="docutils literal notranslate"><span class="pre">simplify_geometry()</span></code></a></li>
 </ul>
 </li>
 <li><a class="reference internal" href="#bing-tile-functions">Bing Tile Functions</a><ul>
