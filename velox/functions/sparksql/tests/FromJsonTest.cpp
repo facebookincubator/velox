@@ -295,6 +295,31 @@ TEST_F(FromJsonTest, nestedComplexType) {
        R"({"a": {"b": {"c": 2}}, "d": {"e": {"f": 2, "g": 5}}})",
        R"({"a": {"b": {"c": 3}}, "d": {"e": {"f": 3, "g": 6}}})"});
   testFromJson(rowInput3, rowVector3);
+
+  // ROW(ARRAY[ROW(BIGINT)], ARRAY[ROW(BIGINT, BIGINT)])
+  std::vector<vector_size_t> offsets2;
+  offsets2.push_back(0);
+  offsets2.push_back(1);
+  offsets2.push_back(2);
+  auto arrayVector3 = makeArrayVector(
+      offsets2,
+      makeRowVector({"c"}, {makeFlatVector<int64_t>({1, 2, 3, 4, 5})}));
+  std::vector<vector_size_t> offsets3;
+  offsets3.push_back(0);
+  offsets3.push_back(1);
+  offsets3.push_back(3);
+  auto arrayVector4 = makeArrayVector(
+      offsets3,
+      makeRowVector(
+          {"d", "e"},
+          {makeFlatVector<int64_t>({3, 2, 2, 1}),
+           makeFlatVector<int64_t>({7, 4, 8, 9})}));
+  auto rowVector4 = makeRowVector({"a", "b"}, {arrayVector3, arrayVector4});
+  auto rowInput4 = makeFlatVector<std::string>(
+      {R"({"a": [{"c": 1}], "b": [{"d": 3, "e": 7}]})",
+       R"({"a": [{"c": 2}], "b": [{"d": 2, "e": 4}, {"d": 2, "e": 8}]})",
+       R"({"a": [{"c": 3}, {"c": 4}, {"c": 5}], "b": [{"d": 1, "e": 9}]})"});
+  testFromJson(rowInput4, rowVector4);
 }
 
 TEST_F(FromJsonTest, structEmptyArray) {
