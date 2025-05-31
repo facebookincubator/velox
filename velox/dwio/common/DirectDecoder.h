@@ -65,6 +65,7 @@ class DirectDecoder : public IntDecoder<isSigned> {
     }
 
     int32_t current = visitor.start();
+    int32_t numValues = 0;
     this->template skip<hasNulls>(current, 0, nulls);
     const bool allowNulls = hasNulls && visitor.allowNulls();
     for (;;) {
@@ -77,6 +78,10 @@ class DirectDecoder : public IntDecoder<isSigned> {
             this->template skip<false>(toSkip, current, nullptr);
           }
           if (atEnd) {
+            if constexpr (Visitor::kHasHook) {
+              visitor.setNumValues(
+                  Visitor::kHasFilter ? numValues : visitor.numRows());
+            }
             return;
           }
         } else {
@@ -100,11 +105,16 @@ class DirectDecoder : public IntDecoder<isSigned> {
 
     skip:
       ++current;
+      ++numValues;
       if (toSkip) {
         this->template skip<hasNulls>(toSkip, current, nulls);
         current += toSkip;
       }
       if (atEnd) {
+        if constexpr (Visitor::kHasHook) {
+          visitor.setNumValues(
+              Visitor::kHasFilter ? numValues : visitor.numRows());
+        }
         return;
       }
     }

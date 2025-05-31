@@ -407,6 +407,26 @@ TEST_F(ParquetTableScanTest, lazy) {
   ASSERT_TRUE(waitForTaskCompletion(cursor->task().get()));
 }
 
+TEST_F(ParquetTableScanTest, multipleBatchAggregate) {
+  auto keysVector = makeFlatVector<int64_t>({1, 2, 3, 4, 5, 6});
+  auto valuesVector = makeFlatVector<int64_t>({334, 334, 333, 333, 333, 333});
+
+  auto outputType = ROW({"a", "b"}, {BIGINT(), BIGINT()});
+  auto plan = PlanBuilder()
+                  .tableScan(outputType)
+                  .singleAggregation({"a"}, {"sum(b)"})
+                  .planNode();
+  std::vector<std::shared_ptr<connector::ConnectorSplit>> splits;
+  splits.push_back(makeSplit(getExampleFilePath("multiple_batch.parquet")));
+  auto result = AssertQueryBuilder(plan).splits(splits).copyResults(pool());
+  ASSERT_EQ(result->size(), 6);
+  auto rows = result->as<RowVector>();
+  ASSERT_TRUE(rows);
+  ASSERT_EQ(rows->childrenSize(), 2);
+  assertEqualVectors(rows->childAt(0), keysVector);
+  assertEqualVectors(rows->childAt(1), valuesVector);
+}
+
 TEST_F(ParquetTableScanTest, aggregatePushdown) {
   auto keysVector = makeFlatVector<int64_t>({1, 4, 0, 3, 2});
   auto valuesVector = makeFlatVector<int64_t>({8077, 6883, 5805, 10640, 3582});
