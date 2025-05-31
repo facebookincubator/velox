@@ -28,6 +28,7 @@
 #include "velox/exec/tests/utils/LocalExchangeSource.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
 #include "velox/exec/tests/utils/SerializedPageUtil.h"
+#include "velox/exec/tests/utils/TempDirectoryPath.h"
 
 using namespace facebook::velox::exec::test;
 
@@ -101,8 +102,35 @@ class MultiFragmentTest : public HiveConnectorTestBase,
       int destination = 0,
       Consumer consumer = nullptr,
       int64_t maxMemory = memory::kMaxMemory,
-      folly::Executor* executor = nullptr) {
+      folly::Executor* executor = nullptr) const {
     auto configCopy = configSettings_;
+    auto queryCtx = core::QueryCtx::create(
+        executor ? executor : executor_.get(),
+        core::QueryConfig(std::move(configCopy)));
+    queryCtx->testingOverrideMemoryPool(memory::memoryManager()->addRootPool(
+        queryCtx->queryId(), maxMemory, MemoryReclaimer::create()));
+    core::PlanFragment planFragment{planNode};
+    return Task::create(
+        taskId,
+        std::move(planFragment),
+        destination,
+        std::move(queryCtx),
+        Task::ExecutionMode::kParallel,
+        std::move(consumer));
+  }
+
+  std::shared_ptr<Task> makeTask(
+      const std::string& taskId,
+      const core::PlanNodePtr& planNode,
+      std::unordered_map<std::string, std::string>& extraQueryConfigs,
+      int destination = 0,
+      Consumer consumer = nullptr,
+      int64_t maxMemory = memory::kMaxMemory,
+      folly::Executor* executor = nullptr) const {
+    auto configCopy = configSettings_;
+    for (const auto& [k, v] : extraQueryConfigs) {
+      configCopy[k] = v;
+    }
     auto queryCtx = core::QueryCtx::create(
         executor ? executor : executor_.get(),
         core::QueryConfig(std::move(configCopy)));
@@ -128,8 +156,8 @@ class MultiFragmentTest : public HiveConnectorTestBase,
     return vectors;
   }
 
-  void addHiveSplits(
-      std::shared_ptr<Task> task,
+  static void addHiveSplits(
+      const std::shared_ptr<Task>& task,
       const std::vector<std::shared_ptr<TempFilePath>>& filePaths) {
     for (auto& filePath : filePaths) {
       auto split = exec::Split(
@@ -144,11 +172,31 @@ class MultiFragmentTest : public HiveConnectorTestBase,
     task->noMoreSplits("0");
   }
 
-  exec::Split remoteSplit(const std::string& taskId) {
+  static void addHiveSplits(
+      const std::shared_ptr<Task>& task,
+      const std::vector<std::string>& scanNodeIds,
+      const std::vector<std::shared_ptr<TempFilePath>>& filePaths) {
+    for (auto i = 0; i < filePaths.size(); ++i) {
+      const auto& filePath = filePaths[i];
+      auto split = exec::Split(
+          std::make_shared<connector::hive::HiveConnectorSplit>(
+              kHiveConnectorId,
+              "file:" + filePath->getPath(),
+              facebook::velox::dwio::common::FileFormat::DWRF),
+          -1);
+      task->addSplit(scanNodeIds[i % scanNodeIds.size()], std::move(split));
+      VLOG(1) << filePath->getPath() << "\n";
+    }
+    for (const auto& id : scanNodeIds) {
+      task->noMoreSplits(id);
+    }
+  }
+
+  static exec::Split remoteSplit(const std::string& taskId) {
     return exec::Split(std::make_shared<RemoteConnectorSplit>(taskId));
   }
 
-  void addRemoteSplits(
+  static void addRemoteSplits(
       std::shared_ptr<Task> task,
       const std::vector<std::string>& remoteTaskIds) {
     for (auto& taskId : remoteTaskIds) {
@@ -525,42 +573,43 @@ TEST_P(MultiFragmentTest, abortMergeExchange) {
 
 TEST_P(MultiFragmentTest, mergeExchange) {
   setupSources(20, 1000);
-
   static const core::SortOrder kAscNullsLast(true, false);
   std::vector<std::shared_ptr<Task>> tasks;
-
   std::vector<std::shared_ptr<TempFilePath>> filePaths0(
       filePaths_.begin(), filePaths_.begin() + 10);
   std::vector<std::shared_ptr<TempFilePath>> filePaths1(
       filePaths_.begin() + 10, filePaths_.end());
-
   std::vector<std::vector<std::shared_ptr<TempFilePath>>> filePathsList = {
       filePaths0, filePaths1};
-
   std::vector<std::string> partialSortTaskIds;
   RowTypePtr outputType;
-
   core::PlanNodeId partitionNodeId;
   for (int i = 0; i < 2; ++i) {
     auto sortTaskId = makeTaskId("orderby", tasks.size());
     partialSortTaskIds.push_back(sortTaskId);
     auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+    std::vector<std::shared_ptr<const core::PlanNode>> sources;
+    std::vector<std::string> scanNodeIds;
+    for (int j = 0; j < 5; ++j) {
+      core::PlanNodeId scanNodeId;
+      sources.push_back(PlanBuilder(planNodeIdGenerator)
+                            .tableScan(rowType_)
+                            .capturePlanNodeId(scanNodeId)
+                            .orderBy({"c0"}, true)
+                            .planNode());
+      scanNodeIds.push_back(scanNodeId);
+    }
+
     auto partialSortPlan =
         PlanBuilder(planNodeIdGenerator)
-            .localMerge(
-                {"c0"},
-                {PlanBuilder(planNodeIdGenerator)
-                     .tableScan(rowType_)
-                     .orderBy({"c0"}, true)
-                     .planNode()})
+            .localMerge({"c0"}, std::move(sources))
             .partitionedOutput({}, 1, /*outputLayout=*/{}, GetParam().serdeKind)
             .capturePlanNodeId(partitionNodeId)
             .planNode();
-
     auto sortTask = makeTask(sortTaskId, partialSortPlan, tasks.size());
     tasks.push_back(sortTask);
-    sortTask->start(4);
-    addHiveSplits(sortTask, filePathsList[i]);
+    sortTask->start(2);
+    addHiveSplits(sortTask, scanNodeIds, filePathsList[i]);
     outputType = partialSortPlan->outputType();
   }
 
@@ -793,6 +842,113 @@ TEST_P(MultiFragmentTest, partitionedOutput) {
 
     ASSERT_TRUE(waitForTaskCompletion(leafTask.get())) << leafTask->taskId();
   }
+}
+
+TEST_P(MultiFragmentTest, mergeExchangeMultiMerge) {
+  setupSources(20, 1000);
+  static const core::SortOrder kAscNullsLast(true, false);
+  std::vector<std::shared_ptr<Task>> tasks;
+  std::vector<std::shared_ptr<TempFilePath>> filePaths0(
+      filePaths_.begin(), filePaths_.begin() + 10);
+  std::vector<std::shared_ptr<TempFilePath>> filePaths1(
+      filePaths_.begin() + 10, filePaths_.end());
+  std::vector<std::vector<std::shared_ptr<TempFilePath>>> filePathsList = {
+      filePaths0, filePaths1};
+  std::vector<std::string> partialSortTaskIds;
+  RowTypePtr outputType;
+  std::vector<std::shared_ptr<TempDirectoryPath>> spillDirectories;
+  core::PlanNodeId partitionNodeId;
+  std::unordered_map<std::string, std::string> spillMergeConfigs{
+      {"spill_enabled", "true"},
+      {"local_merge_enabled", "true"},
+      {"local_merge_max_num_merge_sources", "3"}};
+  std::vector<core::PlanNodeId> localMergeNodeIds;
+  for (int i = 0; i < 2; ++i) {
+    auto sortTaskId = makeTaskId("orderby", tasks.size());
+    partialSortTaskIds.push_back(sortTaskId);
+    auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+    std::vector<std::shared_ptr<const core::PlanNode>> sources;
+    std::vector<std::string> scanNodeIds;
+    for (int j = 0; j < 5; ++j) {
+      core::PlanNodeId scanNodeId;
+      sources.push_back(PlanBuilder(planNodeIdGenerator)
+                            .tableScan(rowType_)
+                            .capturePlanNodeId(scanNodeId)
+                            .orderBy({"c0"}, true)
+                            .planNode());
+      scanNodeIds.push_back(scanNodeId);
+    }
+
+    core::PlanNodeId localMergeNodeId;
+    auto partialSortPlan =
+        PlanBuilder(planNodeIdGenerator)
+            .localMerge({"c0"}, std::move(sources))
+            .capturePlanNodeId(localMergeNodeId)
+            .partitionedOutput({}, 1, /*outputLayout=*/{}, GetParam().serdeKind)
+            .capturePlanNodeId(partitionNodeId)
+            .planNode();
+    localMergeNodeIds.push_back(localMergeNodeId);
+    auto sortTask =
+        makeTask(sortTaskId, partialSortPlan, spillMergeConfigs, tasks.size());
+    spillDirectories.push_back(TempDirectoryPath::create());
+    sortTask->setSpillDirectory(spillDirectories[i]->getPath());
+    tasks.push_back(sortTask);
+    sortTask->start(2);
+    addHiveSplits(sortTask, scanNodeIds, filePathsList[i]);
+    outputType = partialSortPlan->outputType();
+  }
+
+  auto finalSortTaskId = makeTaskId("orderby", tasks.size());
+  core::PlanNodeId mergeExchangeId;
+  auto finalSortPlan =
+      PlanBuilder()
+          .mergeExchange(outputType, {"c0"}, GetParam().serdeKind)
+          .capturePlanNodeId(mergeExchangeId)
+          .partitionedOutput({}, 1, /*outputLayout=*/{}, GetParam().serdeKind)
+          .planNode();
+
+  auto mergeTask = makeTask(finalSortTaskId, finalSortPlan, 0);
+  tasks.push_back(mergeTask);
+  mergeTask->start(1);
+  addRemoteSplits(mergeTask, partialSortTaskIds);
+
+  auto op = PlanBuilder().exchange(outputType, GetParam().serdeKind).planNode();
+
+  test::AssertQueryBuilder(op, duckDbQueryRunner_)
+      .split(remoteSplit(finalSortTaskId))
+      .config(
+          core::QueryConfig::kShuffleCompressionKind,
+          common::compressionKindToString(GetParam().compressionKind))
+      .assertResults(
+          "SELECT * FROM tmp ORDER BY 1 NULLS LAST", std::vector<uint32_t>{0});
+
+  for (auto& task : tasks) {
+    ASSERT_TRUE(waitForTaskCompletion(task.get())) << task->taskId();
+  }
+  for (auto i = 0; i < 2; ++i) {
+    auto taskStats = toPlanStats(tasks[i]->taskStats());
+    auto& planStats = taskStats.at(localMergeNodeIds[i]);
+    ASSERT_GT(planStats.spilledBytes, 0);
+    ASSERT_EQ(planStats.spilledPartitions, 3);
+    ASSERT_EQ(planStats.spilledFiles, 3);
+  }
+
+  const auto finalSortStats = toPlanStats(mergeTask->taskStats());
+  const auto& mergeExchangeStats = finalSortStats.at(mergeExchangeId);
+
+  EXPECT_EQ(20'000, mergeExchangeStats.inputRows);
+  EXPECT_EQ(20'000, mergeExchangeStats.rawInputRows);
+
+  EXPECT_LT(0, mergeExchangeStats.inputBytes);
+  EXPECT_LT(0, mergeExchangeStats.rawInputBytes);
+
+  const auto serdeKindRuntimsStats =
+      mergeExchangeStats.customStats.at(Operator::kShuffleSerdeKind);
+  ASSERT_EQ(serdeKindRuntimsStats.count, 1);
+  ASSERT_EQ(
+      serdeKindRuntimsStats.min, static_cast<int64_t>(GetParam().serdeKind));
+  ASSERT_EQ(
+      serdeKindRuntimsStats.max, static_cast<int64_t>(GetParam().serdeKind));
 }
 
 TEST_P(MultiFragmentTest, noHashPartitionSkew) {
