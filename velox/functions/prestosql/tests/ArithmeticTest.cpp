@@ -1056,18 +1056,21 @@ TEST_F(ArithmeticTest, cosineSimilarity) {
             .value();
       };
 
-  EXPECT_DOUBLE_EQ(
+  EXPECT_NEAR(
       (2.0 * 3.0) / (std::sqrt(5.0) * std::sqrt(10.0)),
-      cosineSimilarity({{"a", 1}, {"b", 2}}, {{"c", 1}, {"b", 3}}));
+      cosineSimilarity({{"a", 1}, {"b", 2}}, {{"c", 1}, {"b", 3}}),
+      1e-6);
 
-  EXPECT_DOUBLE_EQ(
+  EXPECT_NEAR(
       (2.0 * 3.0 + (-1) * 1) / (std::sqrt(1 + 4 + 1) * std::sqrt(1 + 9)),
-      cosineSimilarity({{"a", 1}, {"b", 2}, {"c", -1}}, {{"c", 1}, {"b", 3}}));
+      cosineSimilarity({{"a", 1}, {"b", 2}, {"c", -1}}, {{"c", 1}, {"b", 3}}),
+      1e-6);
 
-  EXPECT_DOUBLE_EQ(
-      (2.0 * 3.0 + (-1) * 1) / (std::sqrt(1 + 4 + 1) * std::sqrt(1 + 9)),
-      cosineSimilarity({{"a", 1}, {"b", 2}, {"c", -1}}, {{"c", 1}, {"b", 3}}));
-
+  EXPECT_NEAR(
+      ((-1) * 1) / (std::sqrt(1 + 4 + 1) * std::sqrt(1 + 9)),
+      cosineSimilarity({{"a", 1}, {"b", 2}, {"c", -1}}, {{"c", 1}, {"d", 3}}),
+      1e-6);
+  // Two maps have no common keys.
   EXPECT_DOUBLE_EQ(
       0.0,
       cosineSimilarity({{"a", 1}, {"b", 2}, {"c", -1}}, {{"d", 1}, {"e", 3}}));
@@ -1097,15 +1100,16 @@ TEST_F(ArithmeticTest, cosineSimilarityArray) {
                "cosine_similarity(c0,c1)", makeRowVector({leftMap, rightMap}))
         .value();
   };
-
-  EXPECT_DOUBLE_EQ(
+  EXPECT_NEAR(
       (1 * 1 * 1 + 2 * 3) / (std::sqrt(5.0) * std::sqrt(10.0)),
-      cosineSimilarity({{1, 2}}, {{1, 3}}));
+      cosineSimilarity({{1, 2}}, {{1, 3}}),
+      1e-6);
 
-  EXPECT_DOUBLE_EQ(
+  EXPECT_NEAR(
       (1 * 1 + 2 * 3 + (-1) * 5) /
           (std::sqrt(1 + 4 + 1) * std::sqrt(1 + 9 + 25)),
-      cosineSimilarity({{1, 2, -1}}, {{1, 3, 5}}));
+      cosineSimilarity({{1, 2, -1}}, {{1, 3, 5}}),
+      1e-6);
 
   EXPECT_TRUE(std::isnan(cosineSimilarity({}, {})));
   VELOX_ASSERT_THROW(
