@@ -8139,4 +8139,56 @@ DEBUG_ONLY_TEST_F(HashJoinTest, hashTableCleanupAfterProbeFinish) {
       .run();
   ASSERT_TRUE(tableEmpty);
 }
+
+DEBUG_ONLY_TEST_F(HashJoinTest, emptyHashProbeSpill) {
+  driverExecutor_ = std::make_unique<folly::CPUThreadPoolExecutor>(1);
+  std::atomic_bool injectProbeSpillOnce{true};
+  SCOPED_TESTVALUE_SET(
+      "facebook::velox::exec::Driver::runInternal::addInput",
+      std::function<void(Operator*)>([&](Operator* op) {
+        if (!isHashProbeMemoryPool(*op->pool())) {
+          return;
+        }
+        if (!injectProbeSpillOnce.exchange(false)) {
+          return;
+        }
+        testingRunArbitration(op->pool());
+      }));
+
+  auto buildVectors = makeVectors(buildType_, 1, 5);
+  auto probeVectors = makeVectors(probeType_, 1, 1);
+
+  const auto spillDirectory = exec::test::TempDirectoryPath::create();
+  // Use high number of drivers to create a 99% chance that the probe operator
+  // picked for initiate reclaim from join bridge has not started.
+  HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
+      .numDrivers(100, true, true)
+      .spillDirectory(spillDirectory->getPath())
+      .probeKeys({"t_k1"})
+      .probeVectors(std::move(probeVectors))
+      .buildKeys({"u_k1"})
+      .buildVectors(std::move(buildVectors))
+      .config(core::QueryConfig::kSpillEnabled, "true")
+      .config(core::QueryConfig::kJoinSpillEnabled, "true")
+      .joinType(core::JoinType::kInner)
+      .joinOutputLayout({"t_k1", "t_k2", "u_k1", "t_v1"})
+      .referenceQuery(
+          "SELECT t.t_k1, t.t_k2, u.u_k1, t.t_v1 FROM t JOIN u ON t.t_k1 = u.u_k1")
+      .injectSpill(false)
+      .verifier([&](const std::shared_ptr<Task>& task, bool /*unused*/) {
+        auto opStats = toOperatorStats(task->taskStats());
+        ASSERT_GT(opStats.at("HashProbe").spilledBytes, 0);
+        ASSERT_EQ(opStats.at("HashBuild").spilledBytes, 0);
+
+        // Verify spill partitions were created
+        ASSERT_GT(opStats.at("HashProbe").spilledPartitions, 0);
+        ASSERT_EQ(opStats.at("HashBuild").spilledPartitions, 0);
+
+        // Verify memory arbitration was triggered
+        const auto* arbitrator = memory::memoryManager()->arbitrator();
+        ASSERT_GT(arbitrator->stats().numRequests, 0);
+        ASSERT_GT(arbitrator->stats().reclaimedUsedBytes, 0);
+      })
+      .run();
+}
 } // namespace
