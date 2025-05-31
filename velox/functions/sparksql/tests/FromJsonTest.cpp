@@ -278,6 +278,23 @@ TEST_F(FromJsonTest, nestedComplexType) {
        R"({"a": {"c": 3, "d": [2, 2]}, "b": [2, 2]})",
        R"({"a": {"c": 4, "d": [3, 3, 3]}, "b": [3, 3, 3]})"});
   testFromJson(rowInput2, rowVector2);
+
+  // ROW(ROW(ROW(BIGINT)), ROW(ROW(BIGINT, BIGINT)))
+  auto rowVector3 = makeRowVector(
+      {"a", "d"},
+      {makeRowVector(
+           {"b"}, {makeRowVector({"c"}, {makeFlatVector<int64_t>({1, 2, 3})})}),
+       makeRowVector(
+           {"e"},
+           {makeRowVector(
+               {"f", "g"},
+               {makeFlatVector<int64_t>({1, 2, 3}),
+                makeFlatVector<int64_t>({4, 5, 6})})})});
+  auto rowInput3 = makeFlatVector<std::string>(
+      {R"({"a": {"b": {"c": 1}}, "d": {"e": {"f": 1, "g": 4}}})",
+       R"({"a": {"b": {"c": 2}}, "d": {"e": {"f": 2, "g": 5}}})",
+       R"({"a": {"b": {"c": 3}}, "d": {"e": {"f": 3, "g": 6}}})"});
+  testFromJson(rowInput3, rowVector3);
 }
 
 TEST_F(FromJsonTest, structEmptyArray) {
