@@ -232,6 +232,14 @@ Polygons with empty rings for holes, and more.</p>
 </dd></dl>
 
 <dl class="py function">
+<dt class="sig sig-object py" id="geometry_invalid_reason">
+<span class="sig-name descname"><span class="pre">geometry_invalid_reason</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">geometry</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">Geometry</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">reason:</span> <span class="pre">varchar</span></span></span><a class="headerlink" href="#geometry_invalid_reason" title="Link to this definition">¶</a></dt>
+<dd><p>If <code class="docutils literal notranslate"><span class="pre">geometry</span></code> is not valid or not simple, return a description of the
+reason. If the geometry is valid and simple (or <code class="docutils literal notranslate"><span class="pre">NULL</span></code>), return <code class="docutils literal notranslate"><span class="pre">NULL</span></code>.
+This function is relatively expensive.</p>
+</dd></dl>
+
+<dl class="py function">
 <dt class="sig sig-object py" id="ST_Area">
 <span class="sig-name descname"><span class="pre">ST_Area</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">geometry</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">Geometry</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">area:</span> <span class="pre">double</span></span></span><a class="headerlink" href="#ST_Area" title="Link to this definition">¶</a></dt>
 <dd><p>Returns the 2D Euclidean area of <code class="docutils literal notranslate"><span class="pre">geometry</span></code>.
@@ -384,6 +392,7 @@ specified.</p>
 <li><a class="reference internal" href="#accessors">Accessors</a><ul>
 <li><a class="reference internal" href="#ST_IsValid"><code class="docutils literal notranslate"><span class="pre">ST_IsValid()</span></code></a></li>
 <li><a class="reference internal" href="#ST_IsSimple"><code class="docutils literal notranslate"><span class="pre">ST_IsSimple()</span></code></a></li>
+<li><a class="reference internal" href="#geometry_invalid_reason"><code class="docutils literal notranslate"><span class="pre">geometry_invalid_reason()</span></code></a></li>
 <li><a class="reference internal" href="#ST_Area"><code class="docutils literal notranslate"><span class="pre">ST_Area()</span></code></a></li>
 <li><a class="reference internal" href="#ST_X"><code class="docutils literal notranslate"><span class="pre">ST_X()</span></code></a></li>
 <li><a class="reference internal" href="#ST_Y"><code class="docutils literal notranslate"><span class="pre">ST_Y()</span></code></a></li>
