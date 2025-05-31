@@ -18,6 +18,7 @@ add_library(
   DuckQueryRunner.cpp
   DuckQueryRunnerToSqlPlanNodeVisitor.cpp
   PrestoQueryRunner.cpp
+  PrestoQueryRunnerHyperLogLogTransform.cpp
   PrestoQueryRunnerIntermediateTypeTransforms.cpp
   PrestoQueryRunnerTimestampWithTimeZoneTransform.cpp
   PrestoQueryRunnerToSqlPlanNodeVisitor.cpp
