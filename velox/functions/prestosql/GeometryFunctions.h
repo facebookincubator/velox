@@ -17,6 +17,7 @@
 #pragma once
 
 #include <geos/geom/Coordinate.h>
+#include <geos/geom/Envelope.h>
 #include <geos/io/WKBReader.h>
 #include <geos/io/WKBWriter.h>
 #include <geos/io/WKTReader.h>
@@ -498,6 +499,40 @@ struct StXFunction {
 };
 
 template <typename T>
+struct StXMinFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  FOLLY_ALWAYS_INLINE Status
+  call(out_type<double>& result, const arg_type<Geometry>& geometry) {
+    std::unique_ptr<geos::geom::Geometry> geosGeometry =
+        geospatial::deserializeGeometry(geometry);
+    if (geosGeometry->isEmpty()) {
+      return Status::OK();
+    }
+    const geos::geom::Envelope* env = geosGeometry->getEnvelopeInternal();
+    result = env->getMinX();
+    return Status::OK();
+  }
+};
+
+template <typename T>
+struct StXMaxFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  FOLLY_ALWAYS_INLINE Status
+  call(out_type<double>& result, const arg_type<Geometry>& geometry) {
+    std::unique_ptr<geos::geom::Geometry> geosGeometry =
+        geospatial::deserializeGeometry(geometry);
+    if (geosGeometry->isEmpty()) {
+      return Status::OK();
+    }
+    const geos::geom::Envelope* env = geosGeometry->getEnvelopeInternal();
+    result = env->getMaxX();
+    return Status::OK();
+  }
+};
+
+template <typename T>
 struct StYFunction {
   VELOX_DEFINE_FUNCTION_TYPES(T);
 
@@ -518,6 +553,40 @@ struct StYFunction {
     auto coordinate = geosGeometry->getCoordinate();
     result = coordinate->y;
     return true;
+  }
+};
+
+template <typename T>
+struct StYMinFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  FOLLY_ALWAYS_INLINE Status
+  call(out_type<double>& result, const arg_type<Geometry>& geometry) {
+    std::unique_ptr<geos::geom::Geometry> geosGeometry =
+        geospatial::deserializeGeometry(geometry);
+    if (geosGeometry->isEmpty()) {
+      return Status::OK();
+    }
+    const geos::geom::Envelope* env = geosGeometry->getEnvelopeInternal();
+    result = env->getMinY();
+    return Status::OK();
+  }
+};
+
+template <typename T>
+struct StYMaxFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  FOLLY_ALWAYS_INLINE Status
+  call(out_type<double>& result, const arg_type<Geometry>& geometry) {
+    std::unique_ptr<geos::geom::Geometry> geosGeometry =
+        geospatial::deserializeGeometry(geometry);
+    if (geosGeometry->isEmpty()) {
+      return Status::OK();
+    }
+    const geos::geom::Envelope* env = geosGeometry->getEnvelopeInternal();
+    result = env->getMaxY();
+    return Status::OK();
   }
 };
 

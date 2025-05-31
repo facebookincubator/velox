@@ -76,7 +76,11 @@ void registerAccessors(const std::string& prefix) {
       {{prefix + "ST_IsSimple"}});
   registerFunction<StAreaFunction, double, Geometry>({{prefix + "ST_Area"}});
   registerFunction<StXFunction, double, Geometry>({{prefix + "ST_X"}});
+  registerFunction<StXMinFunction, double, Geometry>({{prefix + "ST_XMin"}});
+  registerFunction<StXMaxFunction, double, Geometry>({{prefix + "ST_XMax"}});
   registerFunction<StYFunction, double, Geometry>({{prefix + "ST_Y"}});
+  registerFunction<StYMinFunction, double, Geometry>({{prefix + "ST_YMin"}});
+  registerFunction<StYMaxFunction, double, Geometry>({{prefix + "ST_YMax"}});
 }
 
 } // namespace
