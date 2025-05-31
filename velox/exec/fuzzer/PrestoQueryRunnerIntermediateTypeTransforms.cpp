@@ -15,8 +15,10 @@
  */
 
 #include "velox/exec/fuzzer/PrestoQueryRunnerIntermediateTypeTransforms.h"
+#include "velox/exec/fuzzer/PrestoQueryRunnerHyperLogLogTransform.h"
 #include "velox/exec/fuzzer/PrestoQueryRunnerTimestampWithTimeZoneTransform.h"
 #include "velox/expression/VectorWriters.h"
+#include "velox/functions/prestosql/types/HyperLogLogType.h"
 #include "velox/functions/prestosql/types/TimestampWithTimeZoneType.h"
 #include "velox/parse/Expressions.h"
 #include "velox/vector/ComplexVector.h"
@@ -67,7 +69,8 @@ intermediateTypeTransforms() {
   static std::unordered_map<TypePtr, std::shared_ptr<IntermediateTypeTransform>>
       intermediateTypeTransforms{
           {TIMESTAMP_WITH_TIME_ZONE(),
-           std::make_shared<TimestampWithTimeZoneTransform>()}};
+           std::make_shared<TimestampWithTimeZoneTransform>()},
+          {HYPERLOGLOG(), std::make_shared<HyperLogLogTransform>()}};
   return intermediateTypeTransforms;
 }
 
