@@ -207,6 +207,7 @@ add_executable(
   velox_exec_util_test
   Main.cpp PrestoQueryRunnerHyperLogLogTransformTest.cpp
   PrestoQueryRunnerIntermediateTypeTransformTestBase.cpp
+  PrestoQueryRunnerTDigestTransformTest.cpp
   PrestoQueryRunnerTimestampWithTimeZoneTransformTest.cpp)
 
 add_test(velox_exec_util_test velox_exec_util_test)
