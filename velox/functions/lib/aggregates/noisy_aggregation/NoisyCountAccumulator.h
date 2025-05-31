@@ -30,6 +30,15 @@ struct NoisyCountAccumulator {
   // indicating that we have not updated it yet
   double noiseScale{-1.0};
 
+  // Add a field to store random seed
+  std::optional<int32_t> randomSeed{std::nullopt};
+
+  void setRandomSeed(int32_t seed) {
+    VELOX_USER_CHECK_LT(seed, std::numeric_limits<int32_t>::max());
+    VELOX_USER_CHECK_GT(seed, std::numeric_limits<int32_t>::min());
+    randomSeed = seed;
+  }
+
   void increaseCount(uint64_t value) {
     count = facebook::velox::checkedPlus<uint64_t>(count, value);
   }
@@ -42,13 +51,14 @@ struct NoisyCountAccumulator {
   }
 
   static int32_t serializedSize() {
-    return sizeof(uint64_t) + sizeof(double);
+    return sizeof(uint64_t) + sizeof(double) + sizeof(std::optional<int32_t>);
   }
 
   void serialize(char* output) {
     common::OutputByteStream stream(output);
     stream.appendOne(count);
     stream.appendOne(noiseScale);
+    stream.appendOne(randomSeed);
   }
 
   static NoisyCountAccumulator deserialize(const char* serialized) {
@@ -56,8 +66,9 @@ struct NoisyCountAccumulator {
 
     auto count = stream.read<uint64_t>();
     auto noiseScale = stream.read<double>();
+    auto randomSeed = stream.read<std::optional<int32_t>>();
 
-    return NoisyCountAccumulator{count, noiseScale};
+    return NoisyCountAccumulator{count, noiseScale, randomSeed};
   }
 };
 
