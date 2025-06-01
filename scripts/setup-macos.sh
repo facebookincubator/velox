@@ -144,6 +144,7 @@ function install_velox_deps {
 # run_and_time install_thrift
   run_and_time install_arrow
   run_and_time install_geos
+  run_and_time install_faiss
 }
 
 (return 2> /dev/null) && return # If script was sourced, don't run commands.

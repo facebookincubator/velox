@@ -150,6 +150,7 @@ function install_velox_deps {
   run_and_time install_xsimd
   run_and_time install_simdjson
   run_and_time install_geos
+  run_and_time install_faiss
 }
 
 (return 2> /dev/null) && return # If script was sourced, don't run commands.
@@ -194,4 +195,3 @@ function install_velox_deps {
     dnf clean all
   fi
 )
-

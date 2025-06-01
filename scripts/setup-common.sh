@@ -21,6 +21,7 @@ VELOX_BUILD_SHARED=${VELOX_BUILD_SHARED:-"OFF"} #Build folly and gflags shared f
 CMAKE_BUILD_TYPE="${BUILD_TYPE:-Release}"
 DEPENDENCY_DIR=${DEPENDENCY_DIR:-$(pwd)}
 BUILD_GEOS="${BUILD_GEOS:-true}"
+BUILD_FAISS="${BUILD_FAISS:-true}"
 BUILD_DUCKDB="${BUILD_DUCKDB:-true}"
 EXTRA_ARROW_OPTIONS=${EXTRA_ARROW_OPTIONS:-""}
 
@@ -230,6 +231,54 @@ function install_geos {
     fi
     cmake_install_dir geos -DBUILD_TESTING=OFF
   fi
+}
+
+function install_faiss {
+  wget_and_untar https://github.com/facebookresearch/faiss/archive/refs/tags/v${FAISS_VERSION}.tar.gz faiss
+
+  # Detect OS and architecture
+  local uname_s=$(uname -s)
+  local uname_m=$(uname -m)
+
+  local cmake_args=(
+    -DFAISS_ENABLE_GPU=OFF
+    -DFAISS_ENABLE_PYTHON=OFF
+    -DFAISS_ENABLE_REMOTE=OFF
+    -DFAISS_ENABLE_GPU_TESTS=OFF
+    -DFAISS_ENABLE_BENCHMARKS=OFF
+    -DFAISS_ENABLE_OPENMP=ON
+  )
+
+  if [[ "$uname_s" == "Darwin" ]]; then
+    # macOS (Apple Silicon or Intel)
+    local libomp_prefix=$(brew --prefix libomp)
+    cmake_args+=(
+      "-DOpenMP_CXX_FLAGS=-Xpreprocessor -fopenmp -I${libomp_prefix}/include"
+      -DOpenMP_CXX_LIB_NAMES=omp
+      "-DOpenMP_omp_LIBRARY=${libomp_prefix}/lib/libomp.dylib"
+    )
+    if [[ "$uname_m" == "arm64" ]]; then
+      # Apple Silicon: add arch-specific flags if needed
+      cmake_args+=("-DCMAKE_CXX_FLAGS=-mcpu=apple-m1+crc")
+    fi
+  elif [[ -f /etc/os-release ]] && (grep -qi 'ubuntu' /etc/os-release || grep -qi 'centos' /etc/os-release); then
+    # Ubuntu or CentOS
+    cmake_args+=(
+      "-DCMAKE_CXX_FLAGS=-fopenmp"
+      "-DCMAKE_EXE_LINKER_FLAGS=-fopenmp"
+    )
+  else
+    echo "Warning: Unknown OS. You may need to set OpenMP flags manually."
+  fi
+
+  cmake_install_dir_quote faiss "${cmake_args[@]}"
+}
+function cmake_install_dir_quote {
+  pushd "${DEPENDENCY_DIR}/$1"
+  # remove the directory argument
+  shift
+  cmake_install "$@"
+  popd
 }
 
 # Adapters that can be installed.
