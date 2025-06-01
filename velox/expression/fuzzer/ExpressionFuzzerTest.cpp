@@ -88,6 +88,7 @@ int main(int argc, char** argv) {
       // alias to VARBINARY).
       "cardinality",
       "element_at",
+      "merge_hll",
       "width_bucket",
       // Fuzzer and the underlying engine are confused about TDigest output
       // (since TDigest is a user defined type), and tries to pass a
