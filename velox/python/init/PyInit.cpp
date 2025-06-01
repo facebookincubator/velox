@@ -15,6 +15,9 @@
  */
 
 #include "velox/python/init/PyInit.h"
+
+#include <folly/debugging/symbolizer/SignalHandler.h>
+
 #include "velox/common/memory/Memory.h"
 #include "velox/connectors/hive/HiveConnectorSplit.h"
 #include "velox/connectors/hive/HiveDataSink.h"
@@ -69,7 +72,12 @@ void initializeVeloxMemory() {
   if (not velox::memory::MemoryManager::testInstance()) {
     // Enable full Velox stack trace when exceptions are thrown.
     FLAGS_velox_exception_user_stacktrace_enabled = true;
-    velox::memory::initializeMemoryManager({});
+    velox::memory::initializeMemoryManager(
+        velox::memory::MemoryManager::Options{});
+
+    // Installs folly's signal handler to print a stack trace on crashes.
+    folly::symbolizer::installFatalSignalHandler(
+        folly::symbolizer::kAllFatalSignals);
   }
 }
 

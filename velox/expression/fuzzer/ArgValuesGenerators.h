@@ -82,4 +82,31 @@ class JsonExtractArgValuesGenerator : public ArgValuesGenerator {
       ExpressionFuzzerState& state) override;
 };
 
+class CastVarcharAndJsonArgValuesGenerator : public ArgValuesGenerator {
+ public:
+  ~CastVarcharAndJsonArgValuesGenerator() override = default;
+
+  std::vector<core::TypedExprPtr> generate(
+      const CallableSignature& signature,
+      const VectorFuzzer::Options& options,
+      FuzzerGenerator& rng,
+      ExpressionFuzzerState& state) override;
+};
+
+class TDigestArgValuesGenerator : public ArgValuesGenerator {
+ public:
+  explicit TDigestArgValuesGenerator(std::string functionName) {
+    functionName_ = std::move(functionName);
+  }
+  ~TDigestArgValuesGenerator() override = default;
+
+  std::vector<core::TypedExprPtr> generate(
+      const CallableSignature& signature,
+      const VectorFuzzer::Options& options,
+      FuzzerGenerator& rng,
+      ExpressionFuzzerState& state) override;
+
+ private:
+  std::string functionName_;
+};
 } // namespace facebook::velox::fuzzer

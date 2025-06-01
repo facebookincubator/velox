@@ -272,6 +272,9 @@ class Aggregate {
   // @param result The result vector to store the results in.
   //
   // See comment on 'result' and side effects in extractValues().
+  //
+  // This method needs to be thread-safe as it may be called concurrently during
+  // spilling operations.
   virtual void
   extractAccumulators(char** groups, int32_t numGroups, VectorPtr* result) = 0;
 
@@ -341,6 +344,12 @@ class Aggregate {
   // Returns the intermediate type for 'name' with signature
   // 'argTypes'. Throws if cannot resolve.
   static TypePtr intermediateType(
+      const std::string& name,
+      const std::vector<TypePtr>& argTypes);
+
+  // Returns the final type for 'name' with signature
+  // 'argTypes'. Throws if cannot resolve.
+  static TypePtr finalType(
       const std::string& name,
       const std::vector<TypePtr>& argTypes);
 

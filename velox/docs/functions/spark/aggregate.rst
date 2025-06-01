@@ -81,6 +81,16 @@ General Aggregate Functions
         ) AS t(elements);
         -- ARRAY[ARRAY[1, 2], ARRAY[1, null]]
 
+.. spark:function:: corr(x, y) -> double
+
+    Returns Pearson coefficient of correlation between a set of number pairs. When the count of pairs is
+    greater than or equal to 2, a non-null output will be generated.
+
+.. spark:function:: covar_samp(x, y) -> double
+
+    Returns the sample covariance of a set of number pairs. When the count of pairs is
+    greater than or equal to 2, a non-null output will be generated.
+
 .. spark:function:: first(x) -> x
 
     Returns the first value of `x`.
@@ -175,6 +185,15 @@ General Aggregate Functions
     a non-null output will be generated. When the value of `m2` in the accumulator is 0, a null
     output will be generated.
 
+.. spark:function:: stddev(x) -> double
+
+    Returns the sample standard deviation calculated of all input values. The type of `x` should be DOUBLE.
+    When the count of `x` is greater than or equal to 2, a non-null output will be generated.
+
+.. spark:function:: stddev_samp(x) -> double
+
+    This is an alias for :spark:func:`stddev`.
+
 .. spark:function:: sum(x) -> bigint|double|real
 
     Returns the sum of `x`.
@@ -204,3 +223,12 @@ General Aggregate Functions
         ) AS t(x);
 
     Returns -9223372036854775808
+
+.. spark:function:: var_samp(x) -> double
+
+    Returns the sample variance calculated of all input values. The type of `x` should be DOUBLE.
+    When the count of `x` is greater than or equal to 2, a non-null output will be generated.
+
+.. spark:function:: variance(x) -> double
+
+    This is an alias for :spark:func:`var_samp`.

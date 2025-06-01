@@ -76,6 +76,10 @@ Task Execution
      - Average
      - Tracks the averaged task batch processing time. This only applies for
        sequential task execution mode.
+   * - task_barrier_process_time_ms
+     - Histogram
+     - Tracks task barrier execution time in range of [0, 30s] with 30 buckets
+       and each bucket with time window of 1s. We report P50, P90, P99, and P100.
 
 Memory Management
 -----------------
@@ -239,15 +243,14 @@ Memory Management
        the bytes that are either currently being allocated or were in the past
        allocated, not yet been returned back to the operating system, in the
        form of 'Allocation' or 'ContiguousAllocation'.
-   * - memory_allocator_alloc_bytes
+   * - memory_allocator_allocated_bytes
      - Avg
      - Number of bytes currently allocated (used) from MemoryAllocator in the form
        of 'Allocation' or 'ContiguousAllocation'.
-   * - mmap_allocator_external_mapped_bytes
+   * - memory_allocator_external_mapped_bytes
      - Avg
-     - Number of bytes currently mapped in MmapAllocator, in the form of
+     - Number of bytes currently mapped in MemoryAllocator, in the form of
        'ContiguousAllocation'.
-       NOTE: This applies only to MmapAllocator
    * - mmap_allocator_delegated_alloc_bytes
      - Avg
      - Number of bytes currently allocated from MmapAllocator directly from raw
@@ -578,10 +581,6 @@ Index Join
    * - Metric Name
      - Type
      - Description
-   * - index_lookup_wait_time_ms
-     - Histogram
-     - The time distribution of index lookup time in range of [0, 16s] with 512
-       buckets and reports P50, P90, P99, and P100.
    * - index_lookup_wait_time_ms
      - Histogram
      - The time distribution of index lookup time in range of [0, 16s] with 512

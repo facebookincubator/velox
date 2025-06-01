@@ -99,6 +99,10 @@ class FileSink : public Closeable {
       const std::string& filePath,
       const Options& options);
 
+  IoStatistics* getIoStatistics() {
+    return stats_;
+  }
+
  protected:
   // General write wrapper with logging. All concrete subclasses gets logging
   // for free if they call a public method that goes through this method.
@@ -164,6 +168,14 @@ class LocalFileSink : public FileSink {
   void write(std::vector<DataBuffer<char>>& buffers) override;
 
   static void registerFactory();
+
+  // TODO: Hack to make Alpha writer work with Velox.  To be removed after Alpha
+  // writer takes DataSink directly.
+  // TODO revisit after T225172934
+  std::unique_ptr<WriteFile> toWriteFile() {
+    markClosed();
+    return std::move(writeFile_);
+  }
 
  protected:
   // 'initializeWriter' is false if it is used by FaultyFileSink which setups

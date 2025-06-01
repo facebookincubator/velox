@@ -37,6 +37,7 @@ add_executable(
   DecimalRoundTest.cpp
   DecimalUtilTest.cpp
   ElementAtTest.cpp
+  FactorialTest.cpp
   FromJsonTest.cpp
   GetJsonObjectTest.cpp
   GetStructFieldTest.cpp
@@ -45,6 +46,7 @@ add_executable(
   JsonArrayLengthTest.cpp
   JsonObjectKeysTest.cpp
   LeastGreatestTest.cpp
+  LuhnCheckTest.cpp
   MakeDecimalTest.cpp
   MakeTimestampTest.cpp
   MapConcatTest.cpp

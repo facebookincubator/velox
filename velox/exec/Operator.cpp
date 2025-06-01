@@ -364,6 +364,11 @@ vector_size_t Operator::outputBatchRows(
   return std::max<vector_size_t>(batchSize, 1);
 }
 
+void Operator::loadLazyReclaimable(RowVectorPtr& vector) {
+  ReclaimableSectionGuard guard(this);
+  vector->loadedVector();
+}
+
 void Operator::recordBlockingTime(uint64_t start, BlockingReason reason) {
   uint64_t now =
       std::chrono::duration_cast<std::chrono::microseconds>(
@@ -629,6 +634,25 @@ void OperatorStats::clear() {
   spilledFiles = 0;
 
   dynamicFilterStats.clear();
+}
+
+bool Operator::isDraining() const {
+  return operatorCtx_->driver() != nullptr &&
+      operatorCtx_->driver()->isDraining(operatorId());
+}
+
+bool Operator::hasDrained() const {
+  return operatorCtx_->driver()->hasDrained(operatorId());
+}
+
+void Operator::finishDrain() {
+  VELOX_CHECK(isDraining());
+  operatorCtx_->driver()->finishDrain(operatorId());
+  VELOX_CHECK(!isDraining());
+}
+
+bool Operator::shouldDropOutput() const {
+  return operatorCtx_->driver()->shouldDropOutput(operatorId());
 }
 
 std::unique_ptr<memory::MemoryReclaimer> Operator::MemoryReclaimer::create(

@@ -139,7 +139,7 @@ void QueryBenchmarkBase::printResults(
 
 void QueryBenchmarkBase::initialize() {
   if (FLAGS_cache_gb) {
-    memory::MemoryManagerOptions options;
+    memory::MemoryManager::Options options;
     int64_t memoryBytes = FLAGS_cache_gb * (1LL << 30);
     options.useMmapAllocator = true;
     options.allocatorCapacity = memoryBytes;
@@ -164,7 +164,7 @@ void QueryBenchmarkBase::initialize() {
         memory::memoryManager()->allocator(), std::move(ssdCache));
     cache::AsyncDataCache::setInstance(cache_.get());
   } else {
-    memory::MemoryManager::testingSetInstance({});
+    memory::MemoryManager::testingSetInstance(memory::MemoryManager::Options{});
   }
   functions::prestosql::registerAllScalarFunctions();
   aggregate::prestosql::registerAllAggregateFunctions();
@@ -229,9 +229,9 @@ QueryBenchmarkBase::run(const TpchPlan& tpchPlan) {
           std::to_string(FLAGS_split_preload_per_driver);
       const int numSplitsPerFile = FLAGS_num_splits_per_file;
 
-      bool noMoreSplits = false;
-      auto addSplits = [&](exec::Task* task) {
-        if (!noMoreSplits) {
+      auto addSplits = [&](TaskCursor* taskCursor) {
+        auto& task = taskCursor->task();
+        if (!taskCursor->noMoreSplits()) {
           for (const auto& entry : tpchPlan.dataFiles) {
             for (const auto& path : entry.second) {
               auto splits = listSplits(path, numSplitsPerFile, tpchPlan);
@@ -242,7 +242,7 @@ QueryBenchmarkBase::run(const TpchPlan& tpchPlan) {
             task->noMoreSplits(entry.first);
           }
         }
-        noMoreSplits = true;
+        taskCursor->setNoMoreSplits();
       };
       auto result = readCursor(params, addSplits);
       ensureTaskCompletion(result.first->task().get());

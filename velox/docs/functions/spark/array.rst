@@ -24,6 +24,17 @@ Array Functions
         SELECT array_append(array(1, 2, 3), 2); -- [1, 2, 3, 2]
         SELECT array_append(array(1, 2, 3), NULL); -- [1, 2, 3, NULL]
 
+.. spark:function:: array_compact(array(E) x) -> array(E)
+
+    Removes all NULL elements from array ``x``. Returns NULL if array ``x`` is NULL.
+    Returns empty array if array ``x`` is empty or all elements in it are NULL. ::
+
+        SELECT array_compact(array(1, 2, NULL, 3)); -- [1, 2, 3]
+        SELECT array_compact(array()); -- []
+        SELECT array_compact(array(NULL)); -- []
+        SELECT array_compact(NULL); -- NULL
+        SELECT array_compact(array(array(1, 2), NULL, array(NULL, 3, 4))); -- [[1, 2], [NULL, 3, 4]]
+
 .. spark:function:: array_contains(array(E), value) -> boolean
 
     Returns true if the array contains the value. ::
@@ -228,14 +239,15 @@ Array Functions
     Returns whether all elements of an array match the given predicate.
 
         Returns true if all the elements match the predicate (a special case is when the array is empty);
-        Returns false if one or more elements don’t match;
+        Returns false if one or more elements don't match;
         Returns NULL if the predicate function returns NULL for one or more elements and true for all other elements.
         Throws an exception if the predicate fails for one or more elements and returns true or NULL for the rest.
 
 .. spark:function:: get(array(E), index) -> E
 
-    Returns an element of the array at the specified 0-based index.
-    Returns NULL if index points outside of the array boundaries. ::
+    Returns an element of the array at the specified 0-based ``index``.
+    Returns NULL if ``index`` points outside of the array boundaries.
+    ``index`` must be of an integral type. ::
 
         SELECT get(array(1, 2, 3), 0); -- 1
         SELECT get(array(1, 2, 3), 3); -- NULL

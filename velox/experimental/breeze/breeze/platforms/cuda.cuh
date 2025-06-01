@@ -144,6 +144,8 @@ struct CudaSpecialization {
                                                    int num_bits);
   template <bool HIGH_PRIORITY>
   static __device__ __forceinline__ void scheduling_hint() {}
+  template <typename SliceT>
+  static __device__ __forceinline__ void prefetch(SliceT) {}
 };
 
 template <int CUDA_BLOCK_THREADS, int CUDA_WARP_THREADS>
@@ -263,9 +265,13 @@ struct CudaPlatform {
   __device__ __forceinline__ void scheduling_hint() {
     CudaSpecialization::scheduling_hint<HIGH_PRIORITY>();
   }
+  template <typename SliceT>
+  __device__ __forceinline__ void prefetch(SliceT address) {
+    CudaSpecialization::prefetch(address);
+  }
 };
 
-#if CUDART_VERSION >= 12080
+#if CUDART_VERSION >= 12080 && __CUDA_ARCH__ >= 700
 // specialization for MEMORY_ORDER=ACQUIRE, SliceT=Slice<GLOBAL, BLOCKED, int>
 template <>
 __device__ __forceinline__ int CudaSpecialization::atomic_load<

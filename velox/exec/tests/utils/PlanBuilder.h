@@ -32,6 +32,10 @@ enum class Table : uint8_t;
 
 namespace facebook::velox::exec::test {
 
+struct PushdownConfig {
+  common::SubfieldFilters subfieldFiltersMap;
+};
+
 /// A builder class with fluent API for building query plans. Plans are built
 /// bottom up starting with the source node (table scan or similar). Expressions
 /// and orders can be specified using SQL. See filter, project and orderBy
@@ -172,6 +176,24 @@ class PlanBuilder {
           std::string,
           std::shared_ptr<connector::ColumnHandle>>& assignments = {});
 
+  /// Add a TableScanNode to scan a Hive table with direct SubfieldFilters.
+  ///
+  /// @param outputType List of column names and types to read from the table.
+  /// @param PushdownConfig Contains pushdown configs for the table scan.
+  /// @param remainingFilter SQL expression for the additional conjunct.
+  /// @param dataColumns Optional data columns that may differ from outputType.
+  /// @param assignments Optional ColumnHandles.
+
+  PlanBuilder& tableScan(
+      const RowTypePtr& outputType,
+      bool hasPushDown,
+      const PushdownConfig& pushdownConfig,
+      const std::string& remainingFilter = "",
+      const RowTypePtr& dataColumns = nullptr,
+      const std::unordered_map<
+          std::string,
+          std::shared_ptr<connector::ColumnHandle>>& assignments = {});
+
   /// Add a TableScanNode to scan a TPC-H table.
   ///
   /// @param tpchTableHandle The handle that specifies the target TPC-H table
@@ -202,6 +224,16 @@ class PlanBuilder {
       return *this;
     }
 
+    /// if 'idGenerator' is non-nullptr, produces filters that would be pushed
+    /// down into the scan as a separate FilterNode instead. 'idGenerator'
+    /// produces the id for the filterNode.
+    TableScanBuilder& filtersAsNode(
+        std::shared_ptr<core::PlanNodeIdGenerator> idGenerator) {
+      filtersAsNode_ = idGenerator != nullptr;
+      planNodeIdGenerator_ = idGenerator;
+      return *this;
+    }
+
     /// @param connectorId The id of the connector to scan.
     TableScanBuilder& connectorId(std::string connectorId) {
       connectorId_ = std::move(connectorId);
@@ -228,6 +260,10 @@ class PlanBuilder {
     /// >  column < v1
     /// >  column >= v2
     TableScanBuilder& subfieldFilters(std::vector<std::string> subfieldFilters);
+
+    // @param subfieldFiltersMap A map of Subfield to Filters.
+    TableScanBuilder& subfieldFiltersMap(
+        const common::SubfieldFilters& filtersMap);
 
     /// @param subfieldFilter A single SQL expression to be applied to an
     /// individual column.
@@ -300,6 +336,15 @@ class PlanBuilder {
     std::shared_ptr<connector::ConnectorTableHandle> tableHandle_;
     std::unordered_map<std::string, std::shared_ptr<connector::ColumnHandle>>
         assignments_;
+
+    // produce filters as a FilterNode instead of pushdown.
+    bool filtersAsNode_{false};
+
+    // Generates the id of a FilterNode if 'filtersAsNode_'.
+    std::shared_ptr<core::PlanNodeIdGenerator> planNodeIdGenerator_;
+
+    // SubfieldFilters object containing filters to apply.
+    common::SubfieldFilters subfieldFiltersMap_;
   };
 
   /// Start a TableScanBuilder.
@@ -421,7 +466,7 @@ class PlanBuilder {
 
     /// @param ensureFiles When set the Task will always output a file, even if
     /// it's empty.
-    TableWriterBuilder& ensureFiles(const bool ensureFiles) {
+    TableWriterBuilder& ensureFiles(bool ensureFiles) {
       ensureFiles_ = ensureFiles;
       return *this;
     }
@@ -480,6 +525,11 @@ class PlanBuilder {
       const std::vector<RowVectorPtr>& values,
       bool parallelizable = false,
       size_t repeatTimes = 1);
+
+  PlanBuilder& filtersAsNode(bool _filtersAsNode) {
+    filtersAsNode_ = _filtersAsNode;
+    return *this;
+  }
 
   /// Adds a QueryReplayNode for query tracing.
   ///
@@ -552,6 +602,8 @@ class PlanBuilder {
   /// the type.
   PlanBuilder& projectExpressions(
       const std::vector<core::ExprPtr>& projections);
+  PlanBuilder& projectExpressions(
+      const std::vector<core::TypedExprPtr>& projections);
 
   /// Similar to project() except 'optionalProjections' could be empty and the
   /// function will skip creating a ProjectNode in that case.
@@ -1238,6 +1290,20 @@ class PlanBuilder {
     return *this;
   }
 
+  /// Captures the id for the latest TableScanNode. this is useful when using
+  /// filtersAsNode(), where a table scan can have a filter over it.
+  PlanBuilder& captureScanNodeId(core::PlanNodeId& id) {
+    auto node = planNode_;
+    for (;;) {
+      VELOX_CHECK_NOT_NULL(node);
+      if (dynamic_cast<const core::TableScanNode*>(node.get())) {
+        id = node->id();
+        return *this;
+      }
+      node = node->sources()[0];
+    }
+  }
+
   /// Stores the latest plan node into the specified variable. Useful for
   /// capturing intermediate plan nodes without interrupting the build flow.
   template <typename T = core::PlanNode>
@@ -1392,5 +1458,6 @@ class PlanBuilder {
  private:
   std::shared_ptr<core::PlanNodeIdGenerator> planNodeIdGenerator_;
   memory::MemoryPool* pool_;
+  bool filtersAsNode_{false};
 };
 } // namespace facebook::velox::exec::test

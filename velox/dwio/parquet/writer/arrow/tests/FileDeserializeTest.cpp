@@ -553,7 +553,7 @@ TYPED_TEST(PageFilterTest, TestPageFilterCallback) {
     std::vector<int64_t> read_num_values;
     std::vector<std::optional<int32_t>> read_num_rows;
     auto read_all_pages = [&](const DataPageStats& stats) -> bool {
-      DCHECK_NE(stats.encoded_statistics, nullptr);
+      VELOX_DCHECK_NOT_NULL(stats.encoded_statistics);
       read_stats.push_back(*stats.encoded_statistics);
       read_num_values.push_back(stats.num_values);
       read_num_rows.push_back(stats.num_rows);
@@ -997,7 +997,7 @@ class TestParquetFileReader : public ::testing::Test {
     // Write the buffer to a temp file path
     auto filePath = exec::test::TempFilePath::create();
     writeToFile(filePath, buffer);
-    memory::MemoryManager::testingSetInstance({});
+    memory::MemoryManager::testingSetInstance(memory::MemoryManager::Options{});
     std::shared_ptr<facebook::velox::memory::MemoryPool> rootPool =
         memory::memoryManager()->addRootPool("MetadataTest");
     std::shared_ptr<facebook::velox::memory::MemoryPool> leafPool =
@@ -1053,7 +1053,7 @@ TEST_F(TestParquetFileReader, IncompleteMetadata) {
   // Write the buffer to a temp file path
   auto filePath = exec::test::TempFilePath::create();
   writeToFile(filePath, buffer);
-  memory::MemoryManager::testingSetInstance({});
+  memory::MemoryManager::testingSetInstance(memory::MemoryManager::Options{});
   std::shared_ptr<facebook::velox::memory::MemoryPool> rootPool =
       memory::memoryManager()->addRootPool("MetadataTest");
   std::shared_ptr<facebook::velox::memory::MemoryPool> leafPool =

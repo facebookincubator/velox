@@ -20,6 +20,7 @@
 
 #include "velox/common/file/FileSystems.h"
 #include "velox/common/memory/Memory.h"
+#include "velox/common/memory/SharedArbitrator.h"
 #include "velox/connectors/hive/HiveConnector.h"
 #include "velox/connectors/hive/HiveConnectorSplit.h"
 #include "velox/connectors/hive/HiveDataSink.h"
@@ -43,6 +44,7 @@
 #include "velox/tool/trace/AggregationReplayer.h"
 #include "velox/tool/trace/FilterProjectReplayer.h"
 #include "velox/tool/trace/HashJoinReplayer.h"
+#include "velox/tool/trace/IndexLookupJoinReplayer.h"
 #include "velox/tool/trace/OperatorReplayerBase.h"
 #include "velox/tool/trace/PartitionedOutputReplayer.h"
 #include "velox/tool/trace/TableScanReplayer.h"
@@ -92,7 +94,7 @@ DEFINE_int32(
     "Specify the shuffle serialization format, 0: presto columnar, 1: compact row, 2: spark unsafe row.");
 DEFINE_string(
     memory_arbitrator_type,
-    "shared",
+    "SHARED",
     "Specify the memory arbitrator type.");
 DEFINE_uint64(
     query_memory_capacity_mb,
@@ -247,9 +249,11 @@ void TraceReplayRunner::init() {
   VELOX_USER_CHECK(!FLAGS_node_id.empty(), "--node_id must be provided");
 
   if (!memory::MemoryManager::testInstance()) {
-    memory::MemoryManagerOptions options;
+    velox::memory::SharedArbitrator::registerFactory();
+
+    memory::MemoryManager::Options options;
     options.arbitratorKind = FLAGS_memory_arbitrator_type;
-    memory::initializeMemoryManager({});
+    memory::initializeMemoryManager(options);
   }
   filesystems::registerLocalFileSystem();
   filesystems::registerS3FileSystem();
@@ -385,6 +389,16 @@ TraceReplayRunner::createReplayer() const {
         cpuExecutor_.get());
   } else if (traceNodeName == "HashJoin") {
     replayer = std::make_unique<tool::trace::HashJoinReplayer>(
+        FLAGS_root_dir,
+        FLAGS_query_id,
+        FLAGS_task_id,
+        FLAGS_node_id,
+        traceNodeName,
+        FLAGS_driver_ids,
+        queryCapacityBytes,
+        cpuExecutor_.get());
+  } else if (traceNodeName == "IndexLookupJoin") {
+    replayer = std::make_unique<tool::trace::IndexLookupJoinReplayer>(
         FLAGS_root_dir,
         FLAGS_query_id,
         FLAGS_task_id,

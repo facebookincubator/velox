@@ -53,6 +53,35 @@ class BingTileFunctionsTest : public functions::test::FunctionBaseTest {
     return makeRowVector({inputX, inputY, inputZ, inputZ2});
   }
 
+  RowVectorPtr makeSingleLatLongZoomRow(
+      std::optional<double> latitude,
+      std::optional<double> longitude,
+      std::optional<uint8_t> zoom) {
+    std::vector<std::optional<double>> latVec = {latitude};
+    auto inputLat = makeNullableFlatVector<double>(latVec);
+    std::vector<std::optional<double>> longVec = {longitude};
+    auto inputLong = makeNullableFlatVector<double>(longVec);
+    std::vector<std::optional<int8_t>> zVec = {zoom};
+    auto inputZ = makeNullableFlatVector<int8_t>(zVec);
+    return makeRowVector({inputLat, inputLong, inputZ});
+  }
+
+  RowVectorPtr makeSingleLatLongZoomRowWithRadius(
+      std::optional<double> latitude,
+      std::optional<double> longitude,
+      std::optional<uint8_t> zoom,
+      std::optional<double> radiusInKm) {
+    std::vector<std::optional<double>> latVec = {latitude};
+    auto inputLat = makeNullableFlatVector<double>(latVec);
+    std::vector<std::optional<double>> longVec = {longitude};
+    auto inputLong = makeNullableFlatVector<double>(longVec);
+    std::vector<std::optional<int8_t>> zVec = {zoom};
+    auto inputZ = makeNullableFlatVector<int8_t>(zVec);
+    std::vector<std::optional<double>> radiusVec = {radiusInKm};
+    auto inputRadius = makeNullableFlatVector<double>(radiusVec);
+    return makeRowVector({inputLat, inputLong, inputZ, inputRadius});
+  }
+
   folly::Expected<std::vector<int64_t>, std::string> makeExpectedChildren(
       int32_t x,
       int32_t y,
@@ -73,14 +102,6 @@ class BingTileFunctionsTest : public functions::test::FunctionBaseTest {
     return children;
   }
 };
-
-TEST_F(BingTileFunctionsTest, toBingTileSignatures) {
-  auto signatures = getSignatureStrings("bing_tile");
-  ASSERT_EQ(2, signatures.size());
-
-  ASSERT_EQ(1, signatures.count("(integer,integer,tinyint) -> bingtile"));
-  ASSERT_EQ(1, signatures.count("(varchar) -> bingtile"));
-}
 
 TEST_F(BingTileFunctionsTest, toBingTileCoordinates) {
   const auto testToBingTile = [&](std::optional<int32_t> x,
@@ -155,6 +176,15 @@ TEST_F(BingTileFunctionsTest, quadKeyToBingTile) {
       testToBingTile("123123123123123123123123"),
       "Zoom level 24 is greater than max zoom 23"); // 24 digits, invalid
                                                     // quadkey
+
+  const auto getBingTileFromQuadKey = [&](std::optional<std::string> quadKey) {
+    return evaluateOnce<int64_t>(
+        "CAST(bing_tile(c0) AS BIGINT)", std::move(quadKey));
+  };
+
+  ASSERT_EQ(30266097671, getBingTileFromQuadKey("333"));
+  ASSERT_EQ(67108864, getBingTileFromQuadKey("0"));
+  ASSERT_EQ(804212359411419, getBingTileFromQuadKey("123123123123123123"));
 }
 
 TEST_F(BingTileFunctionsTest, bingTileToQuadKey) {
@@ -187,13 +217,6 @@ TEST_F(BingTileFunctionsTest, bingTileToQuadKey) {
       "123030123010121", getQuadKeyResultFromCoordinates(21845, 13506, 15));
 }
 
-TEST_F(BingTileFunctionsTest, bingTileZoomLevelSignatures) {
-  auto signatures = getSignatureStrings("bing_tile_zoom_level");
-  ASSERT_EQ(1, signatures.size());
-
-  ASSERT_EQ(1, signatures.count("(bingtile) -> tinyint"));
-}
-
 TEST_F(BingTileFunctionsTest, bingTileZoomLevel) {
   const auto testBingTileZoom = [&](std::optional<int32_t> x,
                                     std::optional<int32_t> y,
@@ -215,13 +238,6 @@ TEST_F(BingTileFunctionsTest, bingTileZoomLevel) {
   testBingTileZoom(std::nullopt, 1, 1);
   testBingTileZoom(1, std::nullopt, 1);
   testBingTileZoom(1, 1, std::nullopt);
-}
-
-TEST_F(BingTileFunctionsTest, bingTileCoordinatesSignatures) {
-  auto signatures = getSignatureStrings("bing_tile_coordinates");
-  ASSERT_EQ(1, signatures.size());
-
-  ASSERT_EQ(1, signatures.count("(bingtile) -> row(integer,integer)"));
 }
 
 TEST_F(BingTileFunctionsTest, bingTileCoordinates) {
@@ -254,14 +270,6 @@ TEST_F(BingTileFunctionsTest, bingTileCoordinates) {
   testBingTileCoordinates(std::nullopt, 1, 1);
   testBingTileCoordinates(1, std::nullopt, 1);
   testBingTileCoordinates(1, 1, std::nullopt);
-}
-
-TEST_F(BingTileFunctionsTest, bingTileParentSignatures) {
-  auto signatures = getSignatureStrings("bing_tile_parent");
-  ASSERT_EQ(2, signatures.size());
-
-  ASSERT_EQ(1, signatures.count("(bingtile) -> bingtile"));
-  ASSERT_EQ(1, signatures.count("(bingtile,tinyint) -> bingtile"));
 }
 
 TEST_F(BingTileFunctionsTest, bingTileParentNoZoom) {
@@ -307,19 +315,31 @@ TEST_F(BingTileFunctionsTest, bingTileParentZoom) {
         y,
         zoom,
         parentZoom);
-    if (x.has_value() && y.has_value() && zoom.has_value() &&
-        parentZoom.has_value()) {
-      ASSERT_TRUE(tile.has_value());
-      int32_t shift = *zoom - *parentZoom;
-      ASSERT_EQ(
-          BingTileType::bingTileCoordsToInt(
-              static_cast<uint32_t>(*x) >> shift,
-              static_cast<uint32_t>(*y) >> shift,
-              *parentZoom),
-          *tile);
-    } else {
-      ASSERT_FALSE(tile.has_value());
-    }
+    auto validate = [&]() {
+      if (x.has_value() && y.has_value() && zoom.has_value() &&
+          parentZoom.has_value()) {
+        ASSERT_TRUE(tile.has_value());
+        int32_t shift = *zoom - *parentZoom;
+        ASSERT_EQ(
+            BingTileType::bingTileCoordsToInt(
+                static_cast<uint32_t>(*x) >> shift,
+                static_cast<uint32_t>(*y) >> shift,
+                *parentZoom),
+            *tile);
+      } else {
+        ASSERT_FALSE(tile.has_value());
+      }
+    };
+
+    validate();
+
+    tile = evaluateOnce<int64_t>(
+        "CAST(bing_tile_parent(bing_tile(c0, c1, c2), cast(c3 as integer)) AS BIGINT)",
+        x,
+        y,
+        zoom,
+        parentZoom);
+    validate();
   };
 
   testBingTileParent(0, 0, 0, 0);
@@ -342,14 +362,6 @@ TEST_F(BingTileFunctionsTest, bingTileParentZoom) {
       testBingTileParent(0, 0, 0, 1), "Parent zoom 1 must be <= tile zoom 0");
   VELOX_ASSERT_USER_THROW(
       testBingTileParent(5, 17, 5, 8), "Parent zoom 8 must be <= tile zoom 5");
-}
-
-TEST_F(BingTileFunctionsTest, bingTileChildrenSignatures) {
-  auto signatures = getSignatureStrings("bing_tile_children");
-  ASSERT_EQ(2, signatures.size());
-
-  ASSERT_EQ(1, signatures.count("(bingtile) -> array(bingtile)"));
-  ASSERT_EQ(1, signatures.count("(bingtile,tinyint) -> array(bingtile)"));
 }
 
 TEST_F(BingTileFunctionsTest, bingTileChildren) {
@@ -434,4 +446,198 @@ TEST_F(BingTileFunctionsTest, bingTileChildrenZoom) {
       "Cannot call bing_tile_children with negative zoom");
   VELOX_ASSERT_USER_THROW(
       testBingTileChildren(0, 0, 2, 1), "Child zoom 1 must be >= tile zoom 2");
+}
+
+TEST_F(BingTileFunctionsTest, bingTileAt) {
+  const auto testBingTileAtFunc = [&](std::optional<double> latitude,
+                                      std::optional<double> longitude,
+                                      std::optional<int8_t> zoom,
+                                      std::optional<int64_t> expectedTile =
+                                          std::nullopt) {
+    std::optional<int64_t> tile = evaluateOnce<int64_t>(
+        "CAST(bing_tile_at(c0, c1, c2) AS BIGINT)", latitude, longitude, zoom);
+    if (latitude.has_value() && longitude.has_value() && zoom.has_value() &&
+        expectedTile.has_value()) {
+      ASSERT_TRUE(tile.has_value());
+      ASSERT_EQ(expectedTile.value(), tile.value());
+      ASSERT_EQ(zoom.value(), BingTileType::bingTileZoom(tile.value()));
+    } else {
+      ASSERT_FALSE(tile.has_value());
+    }
+  };
+  testBingTileAtFunc(0, 0, 0, 0);
+  testBingTileAtFunc(80, 80, 0, 0);
+  testBingTileAtFunc(80, 80, 5, 99119792131);
+  testBingTileAtFunc(-85, -180, 5, 335544351);
+  testBingTileAtFunc(0.0, 0.0, 3, 17381195780);
+  testBingTileAtFunc(0.0, -0.000001, 3, 13086228484);
+  testBingTileAtFunc(0.0, 0.000001, 3, 17381195780);
+  testBingTileAtFunc(-0.000001, 0.0, 3, 17381195780);
+  testBingTileAtFunc(0.000001, 0.0, 3, 17381195779);
+  testBingTileAtFunc(std::nullopt, 1, 1);
+  testBingTileAtFunc(1, std::nullopt, 1);
+  testBingTileAtFunc(1, 1, std::nullopt);
+
+  VELOX_ASSERT_USER_THROW(
+      testBingTileAtFunc(-86, -180, 5, std::nullopt),
+      "Latitude -86 is outside of valid range [-85.05112878, 85.05112878]");
+  VELOX_ASSERT_USER_THROW(
+      testBingTileAtFunc(-85, -181, 5, std::nullopt),
+      "Longitude -181 is outside of valid range [-180, 180]");
+  VELOX_ASSERT_USER_THROW(
+      testBingTileAtFunc(-85, -180, 24, 335544351),
+      "Zoom level 24 is greater than max zoom 23");
+  VELOX_ASSERT_USER_THROW(
+      testBingTileAtFunc(-85, -180, -1, 335544351),
+      "Bing tile zoom -1 cannot be negative");
+}
+
+TEST_F(BingTileFunctionsTest, bingTilesAround) {
+  const auto testBingTilesAroundFunc = [&](std::optional<double> latitude,
+                                           std::optional<double> longitude,
+                                           std::optional<int8_t> zoom,
+                                           std::optional<std::vector<int64_t>>
+                                               expectedTiles) {
+    auto input = makeSingleLatLongZoomRow(latitude, longitude, zoom);
+
+    VectorPtr output = evaluate(
+        "ARRAY_SORT(TRANSFORM(bing_tiles_around(c0, c1, c2) , x -> CAST(x AS BIGINT)))",
+        input);
+
+    if (latitude.has_value() && longitude.has_value() && zoom.has_value()) {
+      ASSERT_TRUE(expectedTiles.has_value());
+      ASSERT_EQ(output->getNullCount().value_or(0), 0);
+
+      VectorPtr elements = output->asChecked<ArrayVector>()->elements();
+      FlatVectorPtr<int64_t> expectedVector =
+          makeFlatVector<int64_t>(expectedTiles.value());
+      test::assertEqualVectors(elements, expectedVector);
+    } else {
+      // Null inputs mean null output
+      ASSERT_TRUE(output->isNullAt(0));
+    }
+  };
+
+  testBingTilesAroundFunc(
+      70.0,
+      70.0,
+      5,
+      {{90529857542,
+        90529857543,
+        90529857544,
+        94824824838,
+        94824824839,
+        94824824840,
+        99119792134,
+        99119792135,
+        99119792136}});
+
+  testBingTilesAroundFunc(
+      -70.0,
+      -70.0,
+      10,
+      {{1336405918489,
+        1336405918490,
+        1336405918491,
+        1340700885785,
+        1340700885786,
+        1340700885787,
+        1344995853081,
+        1344995853082,
+        1344995853083}});
+
+  testBingTilesAroundFunc(0, 0, 0, {{0}});
+  testBingTilesAroundFunc(std::nullopt, 70, 5, std::nullopt);
+  testBingTilesAroundFunc(70, std::nullopt, 5, std::nullopt);
+  testBingTilesAroundFunc(70, 70, std::nullopt, std::nullopt);
+
+  VELOX_ASSERT_USER_THROW(
+      testBingTilesAroundFunc(-86, -180, 5, std::nullopt),
+      "Latitude -86 is outside of valid range [-85.05112878, 85.05112878]");
+  VELOX_ASSERT_USER_THROW(
+      testBingTilesAroundFunc(-85, -181, 5, std::nullopt),
+      "Longitude -181 is outside of valid range [-180, 180]");
+  VELOX_ASSERT_USER_THROW(
+      testBingTilesAroundFunc(-85, -180, 24, std::nullopt),
+      "Zoom level 24 is greater than max zoom 23");
+  VELOX_ASSERT_USER_THROW(
+      testBingTilesAroundFunc(-85, -180, -1, std::nullopt),
+      "Bing tile zoom -1 cannot be negative");
+}
+
+TEST_F(BingTileFunctionsTest, bingTilesAroundWithRadius) {
+  const auto testBingTilesAroundWithRadiusFunc = [&](std::optional<double>
+                                                         latitude,
+                                                     std::optional<double>
+                                                         longitude,
+                                                     std::optional<int8_t> zoom,
+                                                     std::optional<double>
+                                                         radiusInKm,
+                                                     std::optional<
+                                                         std::vector<int64_t>>
+                                                         expectedTiles) {
+    auto input = makeSingleLatLongZoomRowWithRadius(
+        latitude, longitude, zoom, radiusInKm);
+
+    VectorPtr output = evaluate(
+        "ARRAY_SORT(TRANSFORM(bing_tiles_around(c0, c1, c2, c3) , x -> CAST(x AS BIGINT)))",
+        input);
+
+    if (latitude.has_value() && longitude.has_value() && zoom.has_value() &&
+        radiusInKm.has_value()) {
+      ASSERT_TRUE(expectedTiles.has_value());
+      ASSERT_EQ(output->getNullCount().value_or(0), 0);
+
+      VectorPtr elements = output->asChecked<ArrayVector>()->elements();
+      FlatVectorPtr<int64_t> expectedVector =
+          makeFlatVector<int64_t>(expectedTiles.value());
+      test::assertEqualVectors(elements, expectedVector);
+    } else {
+      // Null inputs mean null output
+      ASSERT_TRUE(output->isNullAt(0));
+    }
+  };
+
+  testBingTilesAroundWithRadiusFunc(70.0, 70.0, 5, 20, {{94824824839}});
+
+  testBingTilesAroundWithRadiusFunc(
+      -70.0,
+      -70.0,
+      5,
+      500,
+      {{34695282712,
+        34695282713,
+        38990250007,
+        38990250008,
+        38990250009,
+        38990250010,
+        43285217303,
+        43285217304,
+        43285217305,
+        43285217306}});
+
+  testBingTilesAroundWithRadiusFunc(0.0, 0.0, 0, 0.0, {{0}});
+  testBingTilesAroundWithRadiusFunc(std::nullopt, 70, 5, 500, std::nullopt);
+  testBingTilesAroundWithRadiusFunc(70, std::nullopt, 5, 500, std::nullopt);
+  testBingTilesAroundWithRadiusFunc(70, 70, std::nullopt, 500, std::nullopt);
+  testBingTilesAroundWithRadiusFunc(70.0, 70.0, 5, std::nullopt, std::nullopt);
+
+  VELOX_ASSERT_USER_THROW(
+      testBingTilesAroundWithRadiusFunc(-86.0, -180.0, 5, 500.0, std::nullopt),
+      "Latitude -86 is outside of valid range [-85.05112878, 85.05112878]");
+  VELOX_ASSERT_USER_THROW(
+      testBingTilesAroundWithRadiusFunc(-85, -181, 5, 500, std::nullopt),
+      "Longitude -181 is outside of valid range [-180, 180]");
+  VELOX_ASSERT_USER_THROW(
+      testBingTilesAroundWithRadiusFunc(-85, -180, 24, 500, std::nullopt),
+      "Zoom level 24 is greater than max zoom 23");
+  VELOX_ASSERT_USER_THROW(
+      testBingTilesAroundWithRadiusFunc(-85, -180, -1, 500, std::nullopt),
+      "Bing tile zoom -1 cannot be negative");
+  VELOX_ASSERT_USER_THROW(
+      testBingTilesAroundWithRadiusFunc(-85, -180, 1, -1, std::nullopt),
+      "Radius in km must between 0 and 1000, got -1");
+  VELOX_ASSERT_USER_THROW(
+      testBingTilesAroundWithRadiusFunc(-85, -180, 1, 1001, std::nullopt),
+      "Radius in km must between 0 and 1000, got 1001");
 }

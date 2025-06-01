@@ -61,12 +61,11 @@ class MergeJoin : public Operator {
 
   bool isFinished() override;
 
-  void close() override {
-    if (rightSource_) {
-      rightSource_->close();
-    }
-    Operator::close();
-  }
+  bool startDrain() override;
+
+  void finishDrain() override;
+
+  void close() override;
 
  private:
   // Sets up 'filter_' and related member variables.
@@ -74,6 +73,10 @@ class MergeJoin : public Operator {
       const core::TypedExprPtr& filter,
       const RowTypePtr& leftType,
       const RowTypePtr& rightType);
+
+  // The handling of null rows on the right side for right and full type of
+  // joins.
+  RowVectorPtr handleRightSideNullRows();
 
   RowVectorPtr doGetOutput();
 
@@ -146,6 +149,14 @@ class MergeJoin : public Operator {
         rightKeyChannels_,
         otherBatch,
         otherIndex);
+  }
+
+  bool rightHasNoInput() const {
+    return noMoreRightInput_ || rightHasDrained_;
+  }
+
+  bool leftHasNoInput() const {
+    return noMoreInput_ || leftHasDrained_;
   }
 
   // Describes a contiguous set of rows on the left or right side of the join
@@ -224,13 +235,14 @@ class MergeJoin : public Operator {
   // right.
   bool addToOutputForRightJoin();
 
-  // Adds one row of output by writing to the indices of the output
+  // Tries to add one row of output by writing to the indices of the output
   // dictionaries. By default, this operator returns dictionaries wrapped around
   // the input columns from the left and right. If `isRightFlattened_`, the
   // right side projections are copied to the output.
   //
-  // Advances outputSize_. Assumes that dictionary indices in output_ have room.
-  void addOutputRow(
+  // If there is space in the output, advances outputSize_ and returns true.
+  // Otherwise returns false and outputSize_ is unchanged.
+  bool tryAddOutputRow(
       const RowVectorPtr& leftBatch,
       vector_size_t leftRow,
       const RowVectorPtr& rightBatch,
@@ -244,19 +256,23 @@ class MergeJoin : public Operator {
   // logic is more involved.
   void flattenRightProjections();
 
-  // Adds one row of output for a left-side row with no right-side match.
-  // Copies values from the 'leftIndex' row of 'left' and fills in nulls
+  // Tries to add one row of output for a left-side row with no right-side
+  // match. Copies values from the 'leftIndex' row of 'left' and fills in nulls
   // for columns that correspond to the right side.
-  void addOutputRowForLeftJoin(
-      const RowVectorPtr& leftBatch,
-      vector_size_t leftRow);
+  //
+  // If there is space in the output, advances outputSize_ and leftRowIndex_,
+  // and returns true. Otherwise returns false and outputSize_ and leftRowIndex_
+  // are unchanged.
+  bool tryAddOutputRowForLeftJoin();
 
-  // Adds one row of output for a right-side row with no left-side match.
-  // Copies values from the 'rightIndex' row of 'right' and fills in nulls
-  // for columns that correspond to the right side.
-  void addOutputRowForRightJoin(
-      const RowVectorPtr& right,
-      vector_size_t rightIndex);
+  // Tries to add one row of output for a right-side row with no left-side
+  // match. Copies values from the 'rightIndex' row of 'right' and fills in
+  // nulls for columns that correspond to the right side.
+  //
+  // If there is space in the output, advances outputSize_ and rightRowIndex_,
+  // and returns true. Otherwise returns false and outputSize_ and
+  // rightRowIndex_ are unchanged.
+  bool tryAddOutputRowForRightJoin();
 
   // If all rows from the current left batch have been processed.
   bool finishedLeftBatch() const {
@@ -420,6 +436,8 @@ class MergeJoin : public Operator {
       currentRowPassed_ = false;
     }
 
+    void reset();
+
    private:
     // A subset of output rows where left side matched right side on the join
     // keys. Used in filter evaluation.
@@ -484,6 +502,8 @@ class MergeJoin : public Operator {
   // Number of join keys.
   const size_t numKeys_;
 
+  const core::PlanNodeId rightNodeId_;
+
   // The cached merge join plan node used to initialize this operator after the
   // driver has started execution. It is reset after the initialization.
   std::shared_ptr<const core::MergeJoinNode> joinNode_;
@@ -545,5 +565,8 @@ class MergeJoin : public Operator {
 
   // True if all the right side data has been received.
   bool noMoreRightInput_{false};
+
+  bool leftHasDrained_{false};
+  bool rightHasDrained_{false};
 };
 } // namespace facebook::velox::exec

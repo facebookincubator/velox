@@ -105,12 +105,23 @@ RowVectorPtr TableScan::getOutput() {
       VELOX_CHECK(needNewSplit_);
       return nullptr;
     }
+
     // Check for cancellation since scans that filter everything out will not
     // hit the check in Driver.
     if (operatorCtx_->task()->isCancelled()) {
       VELOX_CHECK(needNewSplit_);
       return nullptr;
     }
+
+    if (hasDrained()) {
+      return nullptr;
+    }
+
+    ExceptionContextSetter exceptionContext(
+        {[](VeloxException::Type /*exceptionType*/, auto* debugString) {
+           return *static_cast<std::string*>(debugString);
+         },
+         &debugString_});
 
     if (needNewSplit_) {
       const auto hasNewSplit = getSplit();
@@ -121,7 +132,6 @@ RowVectorPtr TableScan::getOutput() {
         }
         continue;
       }
-
       const auto estimatedRowSize = dataSource_->estimatedRowSize();
       readBatchSize_ =
           estimatedRowSize == connector::DataSource::kUnknownRowSize
@@ -129,12 +139,7 @@ RowVectorPtr TableScan::getOutput() {
           : outputBatchRows(estimatedRowSize);
     }
     VELOX_CHECK(!needNewSplit_);
-
-    ExceptionContextSetter exceptionContext(
-        {[](VeloxException::Type /*exceptionType*/, auto* debugString) {
-           return *static_cast<std::string*>(debugString);
-         },
-         &debugString_});
+    VELOX_CHECK(!hasDrained());
 
     int32_t readBatchSize = readBatchSize_;
     if (maxFilteringRatio_ > 0) {
@@ -165,7 +170,10 @@ RowVectorPtr TableScan::getOutput() {
       lockedStats->rawInputBytes = dataSource_->getCompletedBytes();
 
       RowVectorPtr data = std::move(dataOptional).value();
-      if (data != nullptr) {
+      // NOTE: even if we the scan output has been suppressed, we still need to
+      // at least read one batch from a split to trigger split fetch inside Meta
+      // internal data source connector.
+      if (data != nullptr && !shouldDropOutput()) {
         if (data->size() > 0) {
           lockedStats->addInputVector(data->estimateFlatSize(), data->size());
           constexpr int kMaxSelectiveBatchSizeMultiplier = 4;
@@ -232,6 +240,11 @@ bool TableScan::getSplit() {
       maxPreloadedSplits_,
       splitPreloader_);
   if (blockingReason_ != BlockingReason::kNotBlocked) {
+    return false;
+  }
+
+  if (split.isBarrier()) {
+    driverCtx_->driver->drainOutput();
     return false;
   }
 

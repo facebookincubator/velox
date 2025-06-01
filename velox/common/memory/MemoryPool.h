@@ -152,6 +152,11 @@ class MemoryPool : public std::enable_shared_from_this<MemoryPool> {
 
     /// If non-empty, enables debug mode for the created memory pool.
     std::optional<DebugOptions> debugOptions{std::nullopt};
+
+    /// Sets the priority of the memory pool. The priority is used for
+    /// determining which pools to abort when the system is out of memory.
+    /// higher poolPriority value respresents higher priority and vice-versa.
+    uint32_t poolPriority{0};
   };
 
   /// Constructs a named memory pool with specified 'name', 'parent' and 'kind'.
@@ -295,6 +300,11 @@ class MemoryPool : public std::enable_shared_from_this<MemoryPool> {
   /// memory pool object.  Must be a power of two.
   virtual uint16_t alignment() const {
     return alignment_;
+  }
+
+  /// Returns the priority of this pool.
+  uint32_t poolPriority() const {
+    return poolPriority_;
   }
 
   /// Resource governing methods used to track and limit the memory usage
@@ -546,6 +556,7 @@ class MemoryPool : public std::enable_shared_from_this<MemoryPool> {
   const bool trackUsage_;
   const bool threadSafe_;
   const std::optional<DebugOptions> debugOptions_;
+  const uint32_t poolPriority_;
   const bool coreOnAllocationFailureEnabled_;
   std::function<size_t(size_t)> getPreferredSize_;
 
@@ -684,7 +695,7 @@ class MemoryPoolImpl : public MemoryPool {
   ///
   /// Exceeded memory cap of 5.00MB when requesting 2.00MB
   /// default_root_1 usage 5.00MB peak 5.00MB
-  ///     task.test_cursor 1 usage 5.00MB peak 5.00MB
+  ///     task.test_cursor_1 usage 5.00MB peak 5.00MB
   ///         node.N/A usage 0B peak 0B
   ///             op.N/A.0.0.CallbackSink usage 0B peak 0B
   ///         node.2 usage 4.00MB peak 4.00MB
@@ -763,7 +774,7 @@ class MemoryPoolImpl : public MemoryPool {
       std::unique_ptr<MemoryReclaimer> reclaimer) override;
 
   FOLLY_ALWAYS_INLINE int64_t capacityLocked() const {
-    return parent_ != nullptr ? toImpl(parent_)->capacity_ : capacity_;
+    return toImpl(root())->capacity_;
   }
 
   FOLLY_ALWAYS_INLINE int64_t availableReservationLocked() const {

@@ -57,7 +57,7 @@ jobs:
           submodules: recursive
           persist-credentials: false
 
-      - uses: actions/setup-python@42375524e23c412d93fb67b49958b491fce71c38 # v5.4.0
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
         with:
           python-version: '3.10'
 
@@ -114,7 +114,7 @@ jobs:
           uv build --sdist --out-dir wheelhouse
 
       - name: Build wheels
-        uses: pypa/cibuildwheel@6cccd09a31908ffd175b012fb8bf4e1dbda3bc6c # v2
+        uses: pypa/cibuildwheel@faf86a6ed7efa889faf6996aa23820831055001a # v2
         env:
           BUILD_VERSION: "${{ inputs.version }}"
           CIBW_BUILD: "cp310-* cp311-* cp312-* cp313-*"
@@ -161,7 +161,7 @@ jobs:
 
       - run: ls wheelhouse
 
-      - uses: actions/setup-python@42375524e23c412d93fb67b49958b491fce71c38 # v5.4.0
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
         with:
           python-version: "3.10"
 

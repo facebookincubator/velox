@@ -109,7 +109,8 @@ ArbitrationParticipant::ArbitrationParticipant(
       pool_(pool.get()),
       config_(config),
       maxCapacity_(pool_->maxCapacity()),
-      createTimeNs_(getCurrentTimeNano()) {
+      createTimeNs_(getCurrentTimeNano()),
+      poolPriority_(pool_->poolPriority()) {
   VELOX_CHECK_LE(
       config_->minCapacity,
       maxCapacity_,
@@ -292,11 +293,11 @@ uint64_t ArbitrationParticipant::reclaim(
   if (targetBytes == 0) {
     return 0;
   }
-  ArbitrationTimedLock l(reclaimMutex_, maxWaitTimeNs);
-  TestValue::adjust(
-      "facebook::velox::memory::ArbitrationParticipant::reclaim", this);
   uint64_t reclaimedCapacity{0};
   try {
+    ArbitrationTimedLock l(reclaimMutex_, maxWaitTimeNs);
+    TestValue::adjust(
+        "facebook::velox::memory::ArbitrationParticipant::reclaim", this);
     ++numReclaims_;
     VELOX_MEM_LOG(INFO) << "Reclaiming from memory pool " << pool_->name()
                         << " with target " << succinctBytes(targetBytes);
@@ -355,14 +356,14 @@ uint64_t ArbitrationParticipant::abort(
 
 uint64_t ArbitrationParticipant::abortLocked(
     const std::exception_ptr& error) noexcept {
-  TestValue::adjust(
-      "facebook::velox::memory::ArbitrationParticipant::abortLocked", this);
   {
     std::lock_guard<std::mutex> l(stateLock_);
     if (aborted_) {
       return 0;
     }
   }
+  TestValue::adjust(
+      "facebook::velox::memory::ArbitrationParticipant::abortLocked", this);
   try {
     VELOX_MEM_LOG(WARNING) << "Memory pool " << pool_->name()
                            << " is being aborted";
@@ -377,7 +378,6 @@ uint64_t ArbitrationParticipant::abortLocked(
   VELOX_CHECK(pool_->aborted());
 
   std::lock_guard<std::mutex> l(stateLock_);
-  VELOX_CHECK(!aborted_);
   aborted_ = true;
   return shrinkLocked(/*reclaimAll=*/true);
 }
