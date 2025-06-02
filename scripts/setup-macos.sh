@@ -123,6 +123,11 @@ function install_adapters {
   run_and_time install_hdfs
 }
 
+# Clang17 requires this. See issue #13215.
+function install_duckdb_clang {
+  EXTRA_PKG_CXXFLAGS=" -Wno-missing-template-arg-list-after-template-kw" install_duckdb
+}
+
 function install_velox_deps {
   run_and_time install_velox_deps_from_brew
   run_and_time install_ranges_v3
@@ -137,12 +142,12 @@ function install_velox_deps {
   run_and_time install_mvfst
   run_and_time install_fbthrift
   run_and_time install_xsimd
-  run_and_time install_duckdb
   run_and_time install_stemmer
 # We allow arrow to bundle thrift on MacOS due to issues with bison and flex.
 # See https://github.com/facebook/fbthrift/pull/317 for an explanation.
 # run_and_time install_thrift
   run_and_time install_arrow
+  run_and_time install_duckdb_clang 
   run_and_time install_geos
 }
 
