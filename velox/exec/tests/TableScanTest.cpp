@@ -1644,7 +1644,7 @@ DEBUG_ONLY_TEST_F(TableScanTest, tableScanSplitsAndWeights) {
   // Manage remote exchange splits.
   task->addSplit(
       exchangeNodeId,
-      exec::Split(std::make_shared<RemoteConnectorSplit>(leafTaskId)));
+      exec::Split{std::make_shared<RemoteConnectorSplit>(leafTaskId)});
   task->noMoreSplits(exchangeNodeId);
 
   // Check the task stats.
@@ -3483,7 +3483,7 @@ TEST_F(TableScanTest, remainingFilterLazyWithMultiReferences) {
           .planNode();
   auto cursor = TaskCursor::create(params);
   cursor->task()->addSplit(
-      "0", exec::Split(makeHiveConnectorSplit(file->getPath())));
+      "0", exec::Split{makeHiveConnectorSplit(file->getPath())});
   cursor->task()->noMoreSplits("0");
   int i = 0;
   while (cursor->moveNext()) {
@@ -3526,7 +3526,7 @@ TEST_F(TableScanTest, sharedNullBufferFromComplexResult) {
 
   auto cursor = TaskCursor::create(params);
   cursor->task()->addSplit(
-      "0", exec::Split(makeHiveConnectorSplit(file->getPath())));
+      "0", exec::Split{makeHiveConnectorSplit(file->getPath())});
   cursor->task()->noMoreSplits("0");
   int i = 0;
   BufferPtr nullBufferHolder;
@@ -3564,7 +3564,7 @@ TEST_F(
                         .planNode();
   auto cursor = TaskCursor::create(params);
   cursor->task()->addSplit(
-      "0", exec::Split(makeHiveConnectorSplit(file->getPath())));
+      "0", exec::Split{makeHiveConnectorSplit(file->getPath())});
   cursor->task()->noMoreSplits("0");
   ASSERT_TRUE(cursor->moveNext());
   auto* result = cursor->current()->asUnchecked<RowVector>();

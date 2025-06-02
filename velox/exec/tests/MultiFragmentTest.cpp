@@ -132,12 +132,12 @@ class MultiFragmentTest : public HiveConnectorTestBase,
       std::shared_ptr<Task> task,
       const std::vector<std::shared_ptr<TempFilePath>>& filePaths) {
     for (auto& filePath : filePaths) {
-      auto split = exec::Split(
+      auto split = exec::Split{
           std::make_shared<connector::hive::HiveConnectorSplit>(
               kHiveConnectorId,
               "file:" + filePath->getPath(),
               facebook::velox::dwio::common::FileFormat::DWRF),
-          -1);
+          -1};
       task->addSplit("0", std::move(split));
       VLOG(1) << filePath->getPath() << "\n";
     }
@@ -145,7 +145,7 @@ class MultiFragmentTest : public HiveConnectorTestBase,
   }
 
   exec::Split remoteSplit(const std::string& taskId) {
-    return exec::Split(std::make_shared<RemoteConnectorSplit>(taskId));
+    return exec::Split{std::make_shared<RemoteConnectorSplit>(taskId)};
   }
 
   void addRemoteSplits(
@@ -1347,7 +1347,7 @@ TEST_P(MultiFragmentTest, limit) {
   leafTask->start(1);
 
   leafTask.get()->addSplit(
-      "0", exec::Split(makeHiveConnectorSplit(file->getPath())));
+      "0", exec::Split{makeHiveConnectorSplit(file->getPath())});
 
   // Make final task: Exchange -> FinalLimit(10).
   auto plan = PlanBuilder()

@@ -218,7 +218,7 @@ std::shared_ptr<Task> TableWriterTestBase::assertQueryWithWriterConfigs(
     bool spillEnabled) {
   std::vector<Split> splits;
   for (const auto& filePath : filePaths) {
-    splits.push_back(Split(makeHiveConnectorSplit(filePath->getPath())));
+    splits.push_back(Split{makeHiveConnectorSplit(filePath->getPath())});
   }
   if (!spillEnabled) {
     return AssertQueryBuilder(plan, duckDbQueryRunner_)

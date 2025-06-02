@@ -155,7 +155,7 @@ AssertQueryBuilder& AssertQueryBuilder::split(
     const core::PlanNodeId& planNodeId,
     const std::shared_ptr<connector::ConnectorSplit>& connectorSplit) {
   splits_[planNodeId].emplace_back(
-      exec::Split(folly::copy(connectorSplit), -1));
+      exec::Split{folly::copy(connectorSplit), -1});
   return *this;
 }
 
@@ -172,7 +172,7 @@ AssertQueryBuilder& AssertQueryBuilder::splits(
         connectorSplits) {
   std::vector<Split> splits;
   for (auto& connectorSplit : connectorSplits) {
-    splits.emplace_back(exec::Split(folly::copy(connectorSplit), -1));
+    splits.emplace_back(exec::Split{folly::copy(connectorSplit), -1});
   }
   splits_[planNodeId] = std::move(splits);
   return *this;

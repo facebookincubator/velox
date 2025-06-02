@@ -172,7 +172,7 @@ std::shared_ptr<Task> OperatorTestBase::assertQuery(
   std::vector<exec::Split> splits;
   splits.reserve(connectorSplits.size());
   for (const auto& connectorSplit : connectorSplits) {
-    splits.emplace_back(exec::Split(folly::copy(connectorSplit), -1));
+    splits.emplace_back(exec::Split{folly::copy(connectorSplit), -1});
   }
 
   return assertQuery(plan, std::move(splits), duckDbSql, sortingKeys);

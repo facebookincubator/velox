@@ -478,7 +478,7 @@ class TaskTest : public HiveConnectorTestBase {
 
     for (const auto& [nodeId, paths] : filePaths) {
       for (const auto& path : paths) {
-        task->addSplit(nodeId, exec::Split(makeHiveConnectorSplit(path)));
+        task->addSplit(nodeId, exec::Split{makeHiveConnectorSplit(path)});
       }
       task->noMoreSplits(nodeId);
     }
@@ -591,21 +591,21 @@ TEST_F(TaskTest, wrongPlanNodeForSplit) {
       Task::ExecutionMode::kParallel);
 
   // Add split for the source node.
-  task->addSplit("0", exec::Split(folly::copy(connectorSplit)));
+  task->addSplit("0", exec::Split{folly::copy(connectorSplit)});
 
   // Add an empty split.
-  task->addSplit("0", exec::Split());
+  task->addSplit("0", exec::Split{});
 
   // Try to add split for a non-source node.
   auto errorMessage =
       "Splits can be associated only with leaf plan nodes which require splits. Plan node ID 1 doesn't refer to such plan node.";
   VELOX_ASSERT_THROW(
-      task->addSplit("1", exec::Split(folly::copy(connectorSplit))),
+      task->addSplit("1", exec::Split{folly::copy(connectorSplit)}),
       errorMessage)
 
   VELOX_ASSERT_THROW(
       task->addSplitWithSequence(
-          "1", exec::Split(folly::copy(connectorSplit)), 3),
+          "1", exec::Split{folly::copy(connectorSplit)}, 3),
       errorMessage)
 
   VELOX_ASSERT_THROW(task->setMaxSplitSequenceId("1", 9), errorMessage)
@@ -618,12 +618,12 @@ TEST_F(TaskTest, wrongPlanNodeForSplit) {
   errorMessage =
       "Splits can be associated only with leaf plan nodes which require splits. Plan node ID 12 doesn't refer to such plan node.";
   VELOX_ASSERT_THROW(
-      task->addSplit("12", exec::Split(folly::copy(connectorSplit))),
+      task->addSplit("12", exec::Split{folly::copy(connectorSplit)}),
       errorMessage)
 
   VELOX_ASSERT_THROW(
       task->addSplitWithSequence(
-          "12", exec::Split(folly::copy(connectorSplit)), 3),
+          "12", exec::Split{folly::copy(connectorSplit)}, 3),
       errorMessage)
 
   VELOX_ASSERT_THROW(task->setMaxSplitSequenceId("12", 9), errorMessage)
@@ -648,7 +648,7 @@ TEST_F(TaskTest, wrongPlanNodeForSplit) {
   errorMessage =
       "Splits can be associated only with leaf plan nodes which require splits. Plan node ID 0 doesn't refer to such plan node.";
   VELOX_ASSERT_THROW(
-      valuesTask->addSplit("0", exec::Split(folly::copy(connectorSplit))),
+      valuesTask->addSplit("0", exec::Split{folly::copy(connectorSplit)}),
       errorMessage)
 }
 
@@ -762,9 +762,9 @@ TEST_F(TaskTest, allSplitsConsumedMultipleSources) {
 
   ASSERT_FALSE(task->allSplitsConsumed(task->planFragment().planNode.get()));
 
-  auto split1 = exec::Split(makeHiveConnectorSplit(filePath1->getPath()));
-  auto split2 = exec::Split(makeHiveConnectorSplit(filePath2->getPath()));
-  auto split3 = exec::Split(makeHiveConnectorSplit(filePath3->getPath()));
+  auto split1 = exec::Split{makeHiveConnectorSplit(filePath1->getPath())};
+  auto split2 = exec::Split{makeHiveConnectorSplit(filePath2->getPath())};
+  auto split3 = exec::Split{makeHiveConnectorSplit(filePath3->getPath())};
 
   task->addSplit(scanNodeId1, std::move(split1));
   ASSERT_FALSE(task->allSplitsConsumed(task->planFragment().planNode.get()));
@@ -1879,8 +1879,8 @@ DEBUG_ONLY_TEST_F(TaskTest, driverCounters) {
   ASSERT_EQ(it->second, 4);
 
   // Now add a split, finalize splits and wait for the task to finish.
-  auto split = exec::Split(makeHiveConnectorSplit(
-      filePath->getPath(), 0, std::numeric_limits<uint64_t>::max(), 1));
+  auto split = exec::Split{makeHiveConnectorSplit(
+      filePath->getPath(), 0, std::numeric_limits<uint64_t>::max(), 1)};
   task->addSplit(scanNodeId, std::move(split));
   task->noMoreSplits(scanNodeId);
   taskThread.join();
@@ -2711,7 +2711,7 @@ TEST_F(TaskTest, barrierAfterNoMoreSplits) {
   ASSERT_TRUE(!task->underBarrier());
 
   task->addSplit(
-      scanId, exec::Split(makeHiveConnectorSplit(filePath->getPath())));
+      scanId, exec::Split{makeHiveConnectorSplit(filePath->getPath()))};
   task->noMoreSplits(scanId);
   ASSERT_TRUE(!task->underBarrier());
 
@@ -2771,12 +2771,12 @@ TEST_F(TaskTest, addSplitAfterBarrier) {
   ASSERT_TRUE(!task->underBarrier());
 
   task->addSplit(
-      scanId, exec::Split(makeHiveConnectorSplit(filePath->getPath())));
+      scanId, exec::Split{makeHiveConnectorSplit(filePath->getPath())});
   auto future = task->requestBarrier();
   ASSERT_TRUE(task->underBarrier());
   VELOX_ASSERT_THROW(
       task->addSplit(
-          scanId, exec::Split(makeHiveConnectorSplit(filePath->getPath()))),
+          scanId, exec::Split{makeHiveConnectorSplit(filePath->getPath())}),
       "Can't add new split under barrier processing");
   std::this_thread::sleep_for(std::chrono::seconds(1)); // NOLINT
   ASSERT_TRUE(task->isRunning());
@@ -2813,7 +2813,7 @@ TEST_F(TaskTest, testTerminateDuringBarrier) {
       Task::ExecutionMode::kSerial);
   ASSERT_TRUE(!task->underBarrier());
   task->addSplit(
-      scanId, exec::Split(makeHiveConnectorSplit(filePath->getPath())));
+      scanId, exec::Split{makeHiveConnectorSplit(filePath->getPath())});
   auto barrierFuture = task->requestBarrier();
   ASSERT_TRUE(task->underBarrier());
   for (int i = 0; i < numRows / 2; ++i) {
@@ -3003,7 +3003,7 @@ TEST_F(TaskTest, operatorErrorDuringBarrier) {
       Task::ExecutionMode::kSerial);
   ASSERT_TRUE(!task->underBarrier());
   task->addSplit(
-      scanId, exec::Split(makeHiveConnectorSplit(filePath->getPath())));
+      scanId, exec::Split{makeHiveConnectorSplit(filePath->getPath())});
   auto barrierFuture = task->requestBarrier();
   ASSERT_TRUE(task->underBarrier());
   for (int i = 0; i < numRows / 2; ++i) {
@@ -3060,7 +3060,7 @@ TEST_F(TaskTest, dropOutputDuringBarrier) {
       Task::ExecutionMode::kSerial);
   ASSERT_TRUE(!task->underBarrier());
   task->addSplit(
-      scanId, exec::Split(makeHiveConnectorSplit(filePath->getPath())));
+      scanId, exec::Split{makeHiveConnectorSplit(filePath->getPath())});
   auto barrierFuture = task->requestBarrier();
   ASSERT_TRUE(task->underBarrier());
   for (int i = 0; i < numRows; ++i) {
@@ -3126,7 +3126,7 @@ TEST_F(TaskTest, testTerminateDuringBarrierWithUnion) {
   ASSERT_TRUE(!task->underBarrier());
   for (const auto& scanId : scanNodeIds) {
     task->addSplit(
-        scanId, exec::Split(makeHiveConnectorSplit(filePath->getPath())));
+        scanId, exec::Split{makeHiveConnectorSplit(filePath->getPath())});
   }
   auto barrierFuture = task->requestBarrier();
   ASSERT_TRUE(task->underBarrier());

@@ -172,7 +172,7 @@ class ExchangeBenchmark : public VectorTestBase {
       for (int i = 0; i < width; i++) {
         auto taskId = makeTaskId(iteration, "final-agg", i);
         finalAggSplits.push_back(
-            exec::Split(std::make_shared<exec::RemoteConnectorSplit>(taskId)));
+            exec::Split{std::make_shared<exec::RemoteConnectorSplit>(taskId)});
         auto finalAggTask = makeTask(taskId, finalAggPlan, i);
         finalAggTasks.push_back(finalAggTask);
         finalAggTask->start(taskWidth);
@@ -358,9 +358,8 @@ class ExchangeBenchmark : public VectorTestBase {
       std::shared_ptr<Task> task,
       const std::vector<std::string>& remoteTaskIds) {
     for (const auto& taskId : remoteTaskIds) {
-      auto split =
-          exec::Split(std::make_shared<RemoteConnectorSplit>(taskId), -1);
-      task->addSplit("0", std::move(split));
+      task->addSplit(
+          "0", exec::Split{std::make_shared<RemoteConnectorSplit>(taskId), -1});
     }
     task->noMoreSplits("0");
   }

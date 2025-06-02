@@ -800,7 +800,7 @@ class HashJoinTestBase : public HiveConnectorTestBase {
       std::vector<exec::Split> splits;
       splits.reserve(files[i].size());
       for (const auto& file : files[i]) {
-        splits.push_back(exec::Split(makeHiveConnectorSplit(file->getPath())));
+        splits.push_back(exec::Split{makeHiveConnectorSplit(file->getPath())});
       }
       splitInput.emplace(nodeIds[i], std::move(splits));
     }
@@ -857,9 +857,9 @@ class HashJoinTestBase : public HiveConnectorTestBase {
                   .planNode();
     SplitInput splitInput = {
         {probeScanId,
-         {exec::Split(makeHiveConnectorSplit(probeFile->getPath()))}},
+         {exec::Split{makeHiveConnectorSplit(probeFile->getPath())}}},
         {buildScanId,
-         {exec::Split(makeHiveConnectorSplit(buildFile->getPath()))}},
+         {exec::Split{makeHiveConnectorSplit(buildFile->getPath())}}},
     };
     HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
         .planNode(std::move(op))

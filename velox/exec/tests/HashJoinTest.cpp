@@ -943,9 +943,11 @@ TEST_P(MultiThreadedHashJoinTest, semiFilterOverLazyVectors) {
 
   SplitInput splitInput = {
       {probeScanId,
-       {exec::Split(makeHiveConnectorSplit(probeFile->getPath()))}},
+       {exec::Split{
+           .connectorSplit = makeHiveConnectorSplit(probeFile->getPath())}}},
       {buildScanId,
-       {exec::Split(makeHiveConnectorSplit(buildFile->getPath()))}},
+       {exec::Split{
+           .connectorSplit = makeHiveConnectorSplit(buildFile->getPath())}}},
   };
 
   HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
@@ -2501,9 +2503,9 @@ TEST_F(HashJoinTest, nullAwareRightSemiProjectOverScan) {
 
     SplitInput splitInput = {
         {probeScanId,
-         {exec::Split(makeHiveConnectorSplit(probeFile->getPath()))}},
+         {exec::Split{makeHiveConnectorSplit(probeFile->getPath())}}},
         {buildScanId,
-         {exec::Split(makeHiveConnectorSplit(buildFile->getPath()))}},
+         {exec::Split{makeHiveConnectorSplit(buildFile->getPath())}}},
     };
 
     HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
@@ -3178,9 +3180,9 @@ TEST_F(HashJoinTest, semiProjectOverLazyVectors) {
 
   SplitInput splitInput = {
       {probeScanId,
-       {exec::Split(makeHiveConnectorSplit(probeFile->getPath()))}},
+       {exec::Split{makeHiveConnectorSplit(probeFile->getPath())}}},
       {buildScanId,
-       {exec::Split(makeHiveConnectorSplit(buildFile->getPath()))}},
+       {exec::Split{makeHiveConnectorSplit(buildFile->getPath())}}},
   };
 
   HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
@@ -3318,12 +3320,12 @@ TEST_F(HashJoinTest, lazyVectors) {
       std::vector<exec::Split> probeSplits;
       for (int i = 0; i < probeVectors.size(); ++i) {
         probeSplits.push_back(
-            exec::Split(makeHiveConnectorSplit(tempFiles[i]->getPath())));
+            exec::Split{makeHiveConnectorSplit(tempFiles[i]->getPath())});
       }
       std::vector<exec::Split> buildSplits;
       for (int i = 0; i < buildVectors.size(); ++i) {
-        buildSplits.push_back(exec::Split(makeHiveConnectorSplit(
-            tempFiles[probeSplits.size() + i]->getPath())));
+        buildSplits.push_back(exec::Split{makeHiveConnectorSplit(
+            tempFiles[probeSplits.size() + i]->getPath())});
       }
       SplitInput splits;
       splits.emplace(probeScanId, probeSplits);
@@ -3498,7 +3500,7 @@ TEST_F(HashJoinTest, dynamicFilters) {
       std::vector<exec::Split> probeSplits;
       for (auto& file : tempFiles) {
         probeSplits.push_back(
-            exec::Split(makeHiveConnectorSplit(file->getPath())));
+            exec::Split{makeHiveConnectorSplit(file->getPath())});
       }
       SplitInput splits;
       splits.emplace(nodeId, probeSplits);
@@ -4176,7 +4178,7 @@ TEST_F(HashJoinTest, dynamicFiltersStatsWithChainedJoins) {
       std::vector<exec::Split> probeSplits;
       for (auto& file : tempFiles) {
         probeSplits.push_back(
-            exec::Split(makeHiveConnectorSplit(file->getPath())));
+            exec::Split{makeHiveConnectorSplit(file->getPath())});
       }
       SplitInput splits;
       splits.emplace(nodeId, probeSplits);
@@ -4284,15 +4286,15 @@ TEST_F(HashJoinTest, dynamicFiltersWithSkippedSplits) {
       std::vector<exec::Split> probeSplits;
       for (auto& file : tempFiles) {
         probeSplits.push_back(
-            exec::Split(makeHiveConnectorSplit(file->getPath())));
+            exec::Split{makeHiveConnectorSplit(file->getPath())});
       }
       // We add splits that have no rows.
       auto makeEmpty = [&]() {
-        return exec::Split(
+        return exec::Split{
             HiveConnectorSplitBuilder(tempFiles.back()->getPath())
                 .start(10000000)
                 .length(1)
-                .build());
+                .build()};
       };
       std::vector<exec::Split> emptyFront = {makeEmpty(), makeEmpty()};
       std::vector<exec::Split> emptyMiddle = {makeEmpty(), makeEmpty()};
@@ -4496,7 +4498,7 @@ TEST_F(HashJoinTest, dynamicFiltersAppliedToPreloadedSplits) {
     auto split = HiveConnectorSplitBuilder(tempFiles.back()->getPath())
                      .partitionKey("p1", std::to_string(i))
                      .build();
-    probeSplits.push_back(exec::Split(split));
+    probeSplits.push_back(exec::Split{split});
   }
 
   auto outputType = ROW({"p0", "p1"}, {BIGINT(), BIGINT()});
@@ -4602,7 +4604,7 @@ TEST_F(HashJoinTest, dynamicFiltersPushDownThroughAgg) {
                 .planNode();
 
   SplitInput splitInput = {
-      {scanNodeId, {Split(makeHiveConnectorSplit(probeFile->getPath()))}}};
+      {scanNodeId, {Split{makeHiveConnectorSplit(probeFile->getPath())}}}};
   HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
       .planNode(std::move(op))
       .inputSplits(splitInput)
@@ -4665,7 +4667,7 @@ TEST_F(HashJoinTest, noDynamicFiltersPushDownThroughRightJoin) {
               {"aa"})
           .planNode();
   AssertQueryBuilder(plan)
-      .split(scanNodeId, Split(makeHiveConnectorSplit(file->getPath())))
+      .split(scanNodeId, Split{makeHiveConnectorSplit(file->getPath())})
       .assertResults(
           BaseVector::create<RowVector>(innerBuild[0]->type(), 0, pool_.get()));
 }
@@ -4916,7 +4918,7 @@ TEST_F(HashJoinTest, dynamicFilterOnPartitionKey) {
               core::JoinType::kInner)
           .project({"c0"})
           .planNode();
-  SplitInput splits = {{probeScanId, {exec::Split(split)}}};
+  SplitInput splits = {{probeScanId, {exec::Split{split}}}};
 
   HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
       .planNode(std::move(op))
@@ -7608,7 +7610,7 @@ DEBUG_ONLY_TEST_F(HashJoinTest, spillCheckOnLeftSemiFilterWithDynamicFilters) {
       std::vector<exec::Split> probeSplits;
       for (auto& file : tempFiles) {
         probeSplits.push_back(
-            exec::Split(makeHiveConnectorSplit(file->getPath())));
+            exec::Split{makeHiveConnectorSplit(file->getPath())});
       }
       SplitInput splits;
       splits.emplace(nodeId, probeSplits);

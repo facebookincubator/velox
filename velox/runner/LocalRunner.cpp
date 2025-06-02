@@ -36,7 +36,7 @@ std::vector<exec::Split> listAllSplits(std::shared_ptr<SplitSource> source) {
         return result;
         break;
       }
-      result.push_back(exec::Split(std::move(split.split)));
+      result.push_back(exec::Split{std::move(split.split)});
     }
   }
   VELOX_UNREACHABLE();
@@ -133,7 +133,7 @@ void LocalRunner::start() {
     const auto finalStageConsumer =
         fragments_.back().inputStages[0].consumerNodeId;
     for (auto& remote : lastStage) {
-      cursor->task()->addSplit(finalStageConsumer, exec::Split(remote));
+      cursor->task()->addSplit(finalStageConsumer, exec::Split{remote});
     }
     cursor->task()->noMoreSplits(finalStageConsumer);
   }
@@ -262,11 +262,11 @@ LocalRunner::makeStages() {
       int32_t splitIdx = 0;
       auto getNextSplit = [&]() {
         if (splitIdx < splits.size()) {
-          return exec::Split(std::move(splits[splitIdx++].split));
+          return exec::Split{std::move(splits[splitIdx++].split)};
         }
         splits = source->getSplits(std::numeric_limits<int64_t>::max());
         splitIdx = 1;
-        return exec::Split(std::move(splits[0].split));
+        return exec::Split{std::move(splits[0].split)};
       };
 
       bool allDone = false;
@@ -295,7 +295,7 @@ LocalRunner::makeStages() {
       }
       for (auto& task : stages_[fragmentIndex]) {
         for (auto& remote : sourceSplits) {
-          task->addSplit(input.consumerNodeId, exec::Split(remote));
+          task->addSplit(input.consumerNodeId, exec::Split{remote});
         }
         task->noMoreSplits(input.consumerNodeId);
       }

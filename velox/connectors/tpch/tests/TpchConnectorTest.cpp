@@ -60,8 +60,8 @@ class TpchConnectorTest : public exec::test::OperatorTestBase {
 
   exec::Split makeTpchSplit(size_t totalParts = 1, size_t partNumber = 0)
       const {
-    return exec::Split(std::make_shared<TpchConnectorSplit>(
-        kTpchConnectorId, /*cacheable=*/true, totalParts, partNumber));
+    return exec::Split{std::make_shared<TpchConnectorSplit>(
+        kTpchConnectorId, /*cacheable=*/true, totalParts, partNumber)};
   }
 
   RowVectorPtr getResults(

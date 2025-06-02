@@ -39,8 +39,8 @@ std::vector<RowVectorPtr> TableScanTestBase::makeVectors(
 exec::Split TableScanTestBase::makeHiveSplit(
     const std::string& path,
     int64_t splitWeight) {
-  return exec::Split(makeHiveConnectorSplit(
-      path, 0, std::numeric_limits<uint64_t>::max(), splitWeight));
+  return exec::Split{makeHiveConnectorSplit(
+      path, 0, std::numeric_limits<uint64_t>::max(), splitWeight)};
 }
 
 std::shared_ptr<Task> TableScanTestBase::assertQuery(

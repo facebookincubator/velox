@@ -47,11 +47,11 @@ class GroupedExecutionTest : public virtual HiveConnectorTestBase {
   }
 
   exec::Split makeHiveSplitWithGroup(std::string path, int32_t group) {
-    return exec::Split(makeHiveConnectorSplit(std::move(path)), group);
+    return exec::Split{makeHiveConnectorSplit(std::move(path)), group};
   }
 
   exec::Split makeHiveSplit(std::string path) {
-    return exec::Split(makeHiveConnectorSplit(std::move(path)));
+    return exec::Split{makeHiveConnectorSplit(std::move(path))};
   }
 
   static core::PlanNodePtr tableScanNode(const RowTypePtr& outputType) {

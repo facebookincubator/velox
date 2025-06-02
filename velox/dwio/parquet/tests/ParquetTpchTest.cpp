@@ -106,8 +106,8 @@ class ParquetTpchTest : public testing::Test {
                       .tpchTableScan(table, std::move(columnNames), 0.01)
                       .planNode();
       auto split =
-          exec::Split(std::make_shared<connector::tpch::TpchConnectorSplit>(
-              kTpchConnectorId, /*cacheable=*/true, 1, 0));
+          exec::Split{std::make_shared<connector::tpch::TpchConnectorSplit>(
+              kTpchConnectorId, /*cacheable=*/true, 1, 0)};
 
       auto rows =
           AssertQueryBuilder(plan).splits({split}).copyResults(pool.get());

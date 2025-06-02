@@ -156,7 +156,7 @@ class WindowPrefixSortBenchmark : public HiveConnectorTestBase {
     auto task = makeTask(plan, prefixSort);
     task->addSplit(
         tableScanPlanId,
-        exec::Split(makeHiveConnectorSplit(sourceFilePath_->getPath())));
+        exec::Split{makeHiveConnectorSplit(sourceFilePath_->getPath())});
     task->noMoreSplits(tableScanPlanId);
     suspender1.dismiss();
 

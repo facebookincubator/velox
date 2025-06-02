@@ -94,7 +94,7 @@ TEST_F(LimitTest, limitOverLocalExchange) {
 
   auto cursor = TaskCursor::create(params);
   cursor->task()->addSplit(
-      scanNodeId, exec::Split(makeHiveConnectorSplit(file->getPath())));
+      scanNodeId, exec::Split{makeHiveConnectorSplit(file->getPath())});
 
   int32_t numRead = 0;
   while (cursor->moveNext()) {
