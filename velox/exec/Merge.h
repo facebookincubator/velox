@@ -120,18 +120,19 @@ class SourceMerger {
  public:
   SourceMerger(
       const RowTypePtr& type,
+      vector_size_t outputBatchSize,
       std::vector<std::unique_ptr<SourceStream>> sourceStreams,
       velox::memory::MemoryPool* pool);
 
   void isBlocked(std::vector<ContinueFuture>& sourceBlockingFutures) const;
 
   RowVectorPtr getOutput(
-      vector_size_t maxOutputRows,
       std::vector<ContinueFuture>& sourceBlockingFutures,
       bool& atEnd);
 
  private:
   const RowTypePtr type_;
+  const vector_size_t outputBatchSize_;
   const std::vector<SourceStream*> streams_;
   const std::unique_ptr<TreeOfLosers<SourceStream>> merger_;
   velox::memory::MemoryPool* const pool_;
@@ -155,10 +156,6 @@ class SpillMerger {
   RowVectorPtr getOutput(vector_size_t maxOutputRows);
 
  private:
-  static std::unique_ptr<TreeOfLosers<SpillMergeStream>> createSpillMerger(
-      std::vector<std::vector<std::unique_ptr<SpillReadFile>>>
-          spillReadFilesGroups);
-
   const RowTypePtr type_;
   // The number of spilled input rows.
   const uint64_t numSpilledRows_;
