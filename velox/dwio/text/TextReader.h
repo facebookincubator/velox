@@ -17,6 +17,7 @@
 #pragma once
 
 #include "velox/dwio/common/ReaderFactory.h"
+#include "velox/dwio/text/reader/ReaderBase.h"
 
 namespace facebook::velox::text {
 
@@ -78,6 +79,7 @@ class TextReader : public Reader {
   ReaderOptions options_;
   std::shared_ptr<ReadFile> readFile_;
   mutable std::shared_ptr<const TypeWithId> typeWithId_;
+  std::unique_ptr<ReaderBase> readerBase_;
 };
 
 class TextReaderFactory : public dwio::common::ReaderFactory {
