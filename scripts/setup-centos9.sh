@@ -92,7 +92,8 @@ function install_cuda {
     cuda-compat-$dashed \
     cuda-driver-devel-$dashed \
     cuda-minimal-build-$dashed \
-    cuda-nvrtc-devel-$dashed
+    cuda-nvrtc-devel-$dashed \
+    libcufile-devel-$dashed
 }
 
 function install_s3 {
