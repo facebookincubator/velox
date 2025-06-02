@@ -123,9 +123,14 @@ function install_adapters {
   run_and_time install_hdfs
 }
 
-# Clang17 requires this. See issue #13215.
 function install_duckdb_clang {
-  EXTRA_PKG_CXXFLAGS=" -Wno-missing-template-arg-list-after-template-kw" install_duckdb
+  clang_major_version=`echo | clang -dM -E - | grep __clang_major__ | awk '{print $3}'`
+  # Clang17 requires this. See issue #13215.
+  if [ ${clang_major_version} -eq 17 ]; then
+     EXTRA_PKG_CXXFLAGS=" -Wno-missing-template-arg-list-after-template-kw" install_duckdb
+  else
+     install_duckdb
+  fi
 }
 
 function install_velox_deps {

@@ -48,8 +48,14 @@ set(PREVIOUS_CMAKE_CXX_FLAGS ${CMAKE_CXX_FLAGS})
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wno-non-virtual-dtor")
 # Clang17 requires this. See issue #13215.
 if("${CMAKE_CXX_COMPILER_ID}" MATCHES "Clang")
-  set(CMAKE_CXX_FLAGS
-      "${CMAKE_CXX_FLAGS} -Wno-missing-template-arg-list-after-template-kw")
+  execute_process(
+    COMMAND zsh -c
+            "echo | clang -dM -E - | grep __clang_major__ | awk '{print $3}'"
+    OUTPUT_VARIABLE CLANG_MAJOR_VERSION)
+  if("${CLANG_MAJOR_VERSION}" MATCHES "17")
+    set(CMAKE_CXX_FLAGS
+        "${CMAKE_CXX_FLAGS} -Wno-missing-template-arg-list-after-template-kw")
+  endif()
 endif()
 
 FetchContent_MakeAvailable(duckdb)
