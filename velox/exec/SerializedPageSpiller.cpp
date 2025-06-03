@@ -93,6 +93,10 @@ SerializedPageSpiller::Result SerializedPageSpiller::finishSpill() {
   return {std::move(spillFiles), totalPages_};
 }
 
+bool SerializedPageSpiller::hasSpilled() const {
+  return totalPages_ > 0;
+}
+
 void SerializedPageSpiller::flushBuffer(
     SpillWriteFile* file,
     uint64_t& writtenBytes,

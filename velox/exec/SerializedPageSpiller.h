@@ -40,7 +40,7 @@ class SerializedPageSpiller : public SpillWriterBase {
       uint64_t targetFileSize,
       const std::string& pathPrefix,
       const std::string& fileCreateConfig,
-      common::UpdateAndCheckSpillLimitCB& updateAndCheckSpillLimitCb,
+      const common::UpdateAndCheckSpillLimitCB& updateAndCheckSpillLimitCb,
       memory::MemoryPool* pool,
       folly::Synchronized<common::SpillStats>* stats)
       : SpillWriterBase(
@@ -60,6 +60,9 @@ class SerializedPageSpiller : public SpillWriterBase {
 
   /// Finishes the spilling and return the spilled result.
   Result finishSpill();
+
+  /// Returns true if 'this' spiller has spilled.
+  bool hasSpilled() const;
 
  private:
   void flushBuffer(

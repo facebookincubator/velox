@@ -17,6 +17,7 @@
 
 #include "velox/core/PlanNode.h"
 #include "velox/exec/ExchangeQueue.h"
+#include "velox/exec/SerializedPageSpiller.h"
 
 namespace facebook::velox::exec {
 
@@ -92,11 +93,13 @@ class ArbitraryBuffer {
 
 class DestinationBuffer {
  public:
+  explicit DestinationBuffer(uint32_t destinationIdx)
+      : destinationIdx_(destinationIdx) {}
+
   /// The data transferred by the destination buffer has two phases:
   /// 1. Buffered: the data resides in the buffer after enqueued and before
-  ///              acked / deleted.
-  /// 2. Sent: the data is removed from the buffer after it is acked or
-  ///          deleted.
+  /// acked / deleted.
+  /// 2. Sent: the data is removed from the buffer after it is acked or deleted.
   struct Stats {
     void recordEnqueue(const SerializedPage& data);
 
@@ -184,17 +187,54 @@ class DestinationBuffer {
 
   std::string toString();
 
+  void setupSpiller(
+      memory::MemoryPool* pool,
+      common::SpillConfig* spillConfig,
+      folly::Synchronized<common::SpillStats>* spillStats);
+
+  void spill();
+
  private:
   void clearNotify();
 
+  // Returns true if this buffer is in spilling state. This means the buffer has
+  // spilled and not yet started to unspill.
+  bool isSpilling() const;
+
+  // Accessors and modifiers for 'data_' if not spilled, or 'reader_' if
+  // spilled.
+  bool empty() const;
+  uint64_t remainingPages() const;
+  std::shared_ptr<SerializedPage> at(uint64_t index);
+  void deleteFront(uint64_t numPages);
+  void deleteAll();
+
+  const uint32_t destinationIdx_;
+
+  common::SpillConfig* spillConfig_{nullptr};
+
+  memory::MemoryPool* pool_{nullptr};
+
+  folly::Synchronized<common::SpillStats>* spillStats_{nullptr};
+
   std::vector<std::shared_ptr<SerializedPage>> data_;
+
+  std::unique_ptr<SerializedPageSpiller> spiller_;
+
+  std::unique_ptr<SerializedPageSpillReader> reader_;
+
   // The sequence number of the first in 'data_'.
-  int64_t sequence_ = 0;
-  DataAvailableCallback notify_{nullptr};
-  DataConsumerActiveCheckCallback aliveCheck_{nullptr};
+  int64_t sequence_{0};
+
   // The sequence number of the first item to pass to 'notify'.
   int64_t notifySequence_{0};
+
   uint64_t notifyMaxBytes_{0};
+
+  DataAvailableCallback notify_{nullptr};
+
+  DataConsumerActiveCheckCallback aliveCheck_{nullptr};
+
   Stats stats_;
 };
 
