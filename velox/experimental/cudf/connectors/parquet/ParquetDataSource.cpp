@@ -106,18 +106,27 @@ std::optional<RowVectorPtr> ParquetDataSource::next(
     return nullptr;
   }
 
-  // Read a table chunk
-  auto [table, metadata] = splitReader_->read_chunk();
-  auto cudfTable = std::move(table);
-  // Fill in the column names if reading the first chunk.
-  if (columnNames_.empty()) {
-    for (auto schema : metadata.schema_info) {
-      columnNames_.emplace_back(schema.name);
+  uint64_t scanTimeUs{0};
+  std::unique_ptr<cudf::table> cudfTable;
+  {
+    MicrosecondTimer timer(&scanTimeUs);
+    // Read a table chunk
+    auto [table, metadata] = splitReader_->read_chunk();
+    cudfTable = std::move(table);
+    // Fill in the column names if reading the first chunk.
+    if (columnNames_.empty()) {
+      for (auto schema : metadata.schema_info) {
+        columnNames_.emplace_back(schema.name);
+      }
     }
+    // Update totalScanTime
+    ioStats_->incTotalScanTime(scanTimeUs * 1000);
   }
 
+  uint64_t filterTimeUs{0};
   // Apply remaining filter if present
   if (remainingFilterExprSet_) {
+    MicrosecondTimer filterTimer(&filterTimeUs);
     auto cudfTableColumns = cudfTable->release();
     const auto originalNumColumns = cudfTableColumns.size();
     // Filter may need addtional computed columns which are added to
@@ -139,6 +148,7 @@ std::optional<RowVectorPtr> ParquetDataSource::next(
         *filterResult[0],
         stream_,
         cudf::get_current_device_resource_ref());
+    totalRemainingFilterTime_.fetch_add(filterTimeUs * 1000, std::memory_order_relaxed);
   }
 
   // Output RowVectorPtr
@@ -250,6 +260,20 @@ void ParquetDataSource::resetSplit() {
   split_.reset();
   splitReader_.reset();
   columnNames_.clear();
+}
+
+std::unordered_map<std::string, RuntimeCounter> ParquetDataSource::runtimeStats() {
+  auto res = runtimeStats_.toMap();
+  res.insert({
+      {"totalScanTime",
+       RuntimeCounter(
+           ioStats_->totalScanTime(), RuntimeCounter::Unit::kNanos)},
+      {"totalRemainingFilterTime",
+       RuntimeCounter(
+           totalRemainingFilterTime_.load(std::memory_order_relaxed),
+           RuntimeCounter::Unit::kNanos)},
+  });
+  return res;
 }
 
 } // namespace facebook::velox::cudf_velox::connector::parquet
