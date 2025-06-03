@@ -68,15 +68,8 @@ endif()
 
 # Import Velox.
 set(VELOX_ROOT_DIR "${PROJECT_SOURCE_DIR}/../../../../../")
-FetchContent_Declare(
-  velox
-  DOWNLOAD_COMMAND
-    ln -sf ${VELOX_ROOT_DIR}/velox ${FETCHCONTENT_BASE_DIR}/velox-src/velox &&
-    ln -sf ${VELOX_ROOT_DIR}/scripts ${FETCHCONTENT_BASE_DIR}/velox-src/scripts
-    && ln -sf ${VELOX_ROOT_DIR}/CMake ${FETCHCONTENT_BASE_DIR}/velox-src/CMake
-    && ln -sf ${VELOX_ROOT_DIR}/CMakeLists.txt
-    ${FETCHCONTENT_BASE_DIR}/velox-src/CMakeLists.txt)
-FetchContent_MakeAvailable(velox)
+set(VELOX_BINARY_DIR "${PROJECT_BINARY_DIR}/velox-build")
+add_subdirectory(${VELOX_ROOT_DIR} ${VELOX_BINARY_DIR})
 
 # Import JniHelpers.
 set(JNI_HELPERS_REPO zhztheplayer/JniHelpersCpp)
