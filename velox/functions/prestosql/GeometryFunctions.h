@@ -21,6 +21,7 @@
 #include <geos/io/WKBWriter.h>
 #include <geos/io/WKTReader.h>
 #include <geos/io/WKTWriter.h>
+#include <geos/simplify/TopologyPreservingSimplifier.h>
 #include <geos/util/AssertionFailedException.h>
 #include <geos/util/UnsupportedOperationException.h>
 #include <cmath>
@@ -424,6 +425,58 @@ struct StUnionFunction {
 // Accessors
 
 template <typename T>
+struct StIsValidFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  FOLLY_ALWAYS_INLINE Status
+  call(out_type<bool>& result, const arg_type<Geometry>& input) {
+    std::unique_ptr<geos::geom::Geometry> geosGeometry =
+        geospatial::deserializeGeometry(input);
+
+    GEOS_TRY(result = geosGeometry->isValid();
+             , "Failed to check geometry isValid");
+
+    return Status::OK();
+  }
+};
+
+template <typename T>
+struct StIsSimpleFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  FOLLY_ALWAYS_INLINE Status
+  call(out_type<bool>& result, const arg_type<Geometry>& input) {
+    std::unique_ptr<geos::geom::Geometry> geosGeometry =
+        geospatial::deserializeGeometry(input);
+
+    GEOS_TRY(result = geosGeometry->isSimple();
+             , "Failed to check geometry isSimple");
+
+    return Status::OK();
+  }
+};
+
+template <typename T>
+struct GeometryInvalidReasonFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  FOLLY_ALWAYS_INLINE bool call(
+      out_type<Varchar>& result,
+      const arg_type<Geometry>& input) {
+    std::unique_ptr<geos::geom::Geometry> geosGeometry =
+        geospatial::deserializeGeometry(input);
+
+    std::optional<std::string> messageOpt =
+        geospatial::geometryInvalidReason(geosGeometry.get());
+
+    if (messageOpt.has_value()) {
+      result = messageOpt.value();
+    }
+    return messageOpt.has_value();
+  }
+};
+
+template <typename T>
 struct StAreaFunction {
   VELOX_DEFINE_FUNCTION_TYPES(T);
 
@@ -486,6 +539,45 @@ struct StYFunction {
     auto coordinate = geosGeometry->getCoordinate();
     result = coordinate->y;
     return true;
+  }
+};
+
+template <typename T>
+struct SimplifyGeometryFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  FOLLY_ALWAYS_INLINE Status call(
+      out_type<Geometry>& result,
+      const arg_type<Geometry>& geometry,
+      const arg_type<double>& tolerance) {
+    if (!std::isfinite(tolerance) || tolerance < 0) {
+      return Status::UserError(
+          "simplification tolerance must be a non-negative finite number");
+    }
+    if (tolerance == 0) {
+      result = geometry;
+      return Status::OK();
+    }
+
+    std::unique_ptr<geos::geom::Geometry> geosGeometry =
+        geospatial::deserializeGeometry(geometry);
+
+    if (geosGeometry->isEmpty()) {
+      result = geometry;
+      return Status::OK();
+    }
+
+    std::unique_ptr<geos::geom::Geometry> outputGeometry;
+    GEOS_TRY(
+        {
+          outputGeometry =
+              geos::simplify::TopologyPreservingSimplifier::simplify(
+                  geosGeometry.get(), tolerance);
+        },
+        "Failed to compute simplified geometry");
+
+    result = geospatial::serializeGeometry(*outputGeometry);
+    return Status::OK();
   }
 };
 

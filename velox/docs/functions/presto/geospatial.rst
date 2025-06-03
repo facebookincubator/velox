@@ -43,9 +43,6 @@ the coordinate order is (x, y). The details of both WKT and WKB can be found
 `here
 <https://en.wikipedia.org/wiki/Well-known_text_representation_of_geometry>`_.
 
-.. _OpenGIS Specifications: https://www.ogc.org/standards/ogcapi-features/
-.. _SQL/MM Part 3: Spatial: https://www.iso.org/standard/31369.html
-
 Geometry Constructors
 ---------------------
 
@@ -157,6 +154,22 @@ Spatial Operations
 
 Accessors
 ---------
+.. function:: ST_IsValid(geometry: Geometry) -> valid: bool
+
+    Returns if ``geometry`` is valid, according to `SQL/MM Part 3: Spatial`_.
+    Examples of non-valid geometries include Polygons with self-intersecting shells.
+
+.. function:: ST_IsSimple(geometry: Geometry) -> simple: bool
+
+    Returns if ``geometry`` is simple, according to `SQL/MM Part 3: Spatial`_.
+    Examples of non-simple geometries include LineStrings with self-intersections,
+    Polygons with empty rings for holes, and more.
+
+.. function:: geometry_invalid_reason(geometry: Geometry) -> reason: varchar
+
+    If ``geometry`` is not valid or not simple, return a description of the
+    reason. If the geometry is valid and simple (or ``NULL``), return ``NULL``.
+    This function is relatively expensive.
 
 .. function:: ST_Area(geometry: Geometry) -> area: double
 
@@ -176,6 +189,14 @@ Accessors
     Returns the ``y`` coordinate of the geometry if it is a Point.  Returns
     ``null`` if the geometry is empty.  Raises an error if the geometry is
     not a Point and not empty.
+
+.. function:: simplify_geometry(geometry: Geometry, tolerance: double) -> output: Geometry
+
+    Returns a "simplified" version of the input geometry using the
+    Douglas-Peucker algorithm. Will avoid creating geometries (polygons in
+    particular) that are invalid. Tolerance must be a non-negative finite value.
+    Using tolerance of 0 will return the original geometry.  Empty geometries
+    will also be returned as-is.
 
 Bing Tile Functions
 -------------------
@@ -243,3 +264,7 @@ for more details.
 .. function:: bing_tile_quadkey() -> quadKey: varchar
 
     Returns the quadkey representing the provided bing tile.
+
+
+.. _OpenGIS Specifications: https://www.ogc.org/standards/ogcapi-features/
+.. _SQL/MM Part 3: Spatial: https://www.iso.org/standard/31369.html

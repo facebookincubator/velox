@@ -70,6 +70,15 @@ void registerOverlayOperations(const std::string& prefix) {
 }
 
 void registerAccessors(const std::string& prefix) {
+  registerFunction<StIsValidFunction, bool, Geometry>(
+      {{prefix + "ST_IsValid"}});
+  registerFunction<StIsSimpleFunction, bool, Geometry>(
+      {{prefix + "ST_IsSimple"}});
+  registerFunction<GeometryInvalidReasonFunction, Varchar, Geometry>(
+      {{prefix + "geometry_invalid_reason"}});
+  registerFunction<SimplifyGeometryFunction, Geometry, Geometry, double>(
+      {{prefix + "simplify_geometry"}});
+
   registerFunction<StAreaFunction, double, Geometry>({{prefix + "ST_Area"}});
   registerFunction<StXFunction, double, Geometry>({{prefix + "ST_X"}});
   registerFunction<StYFunction, double, Geometry>({{prefix + "ST_Y"}});

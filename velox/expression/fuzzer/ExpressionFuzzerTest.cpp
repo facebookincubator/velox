@@ -127,6 +127,7 @@ int main(int argc, char** argv) {
       "array_join(array(double),varchar,varchar) -> varchar",
       // https://github.com/facebookincubator/velox/issues/13047
       "inverse_poisson_cdf",
+      "map_subset", // https://github.com/facebookincubator/velox/issues/12654
       // Geometry functions don't yet have a ValuesGenerator
       "st_geometryfromtext",
       "st_geomfrombinary",
@@ -149,6 +150,20 @@ int main(int argc, char** argv) {
       "st_point",
       "st_x",
       "st_y",
+      "st_isvalid",
+      "st_issimple",
+      "geometry_invalid_reason",
+      "simplify_geometry",
+      // bing_tile functions:
+      // https://github.com/facebookincubator/velox/issues/13593
+      "bing_tile",
+      "bing_tile_zoom_level",
+      "bing_tile_coordinates",
+      "bing_tile_parent",
+      "bing_tile_children",
+      "bing_tile_quadkey"
+      "bing_tile_at",
+      "bing_tiles_around",
   };
   size_t initialSeed = FLAGS_seed == 0 ? std::time(nullptr) : FLAGS_seed;
 
