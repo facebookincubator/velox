@@ -422,7 +422,7 @@ ds_key_t mk_join(
    */
   pTdef = getSimpleTdefsByNumber(to_tbl, dsdGenContext);
   if (pTdef->flags & FL_SPARSE) {
-    if (pTdef->arSparseKeys == NULL)
+    if (pTdef->arSparseKeys.data() == NULL)
       initSparseKeys(to_tbl, dsdGenContext);
   }
 

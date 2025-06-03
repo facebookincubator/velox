@@ -64,7 +64,7 @@ int mk_w_catalog_page(
     void* info_arr,
     ds_key_t index,
     DSDGenContext& dsdGenContext) {
-  date_t* dStartDate;
+  date_t dStartDate;
   int nCatalogPageMax;
   int nDuration, nOffset, nType;
   struct CATALOG_PAGE_TBL* r;
@@ -107,7 +107,7 @@ int mk_w_catalog_page(
       nOffset = (nCatalogInterval - 6) * nDuration;
       nType = 3; /* monthly */
   }
-  r->cp_start_date_id = dStartDate->julian + nOffset;
+  r->cp_start_date_id = dStartDate.julian + nOffset;
   r->cp_start_date_id +=
       ((r->cp_catalog_number - 1) / CP_CATALOGS_PER_YEAR) * 365;
   r->cp_end_date_id = r->cp_start_date_id + nDuration - 1;

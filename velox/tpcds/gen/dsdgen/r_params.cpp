@@ -119,7 +119,8 @@ void set_flg(const char* flag, DSDGenContext& dsdGenContext) {
   init_params(dsdGenContext);
   nParam = fnd_param(flag, dsdGenContext);
   if (nParam >= 0)
-    strcpy(dsdGenContext.params[dsdGenContext.options[nParam].index], "Y");
+    strcpy(
+        dsdGenContext.params[dsdGenContext.options[nParam].index].data(), "Y");
 
   return;
 }
@@ -144,7 +145,8 @@ void clr_flg(const char* flag, DSDGenContext& dsdGenContext) {
   init_params(dsdGenContext);
   nParam = fnd_param(flag, dsdGenContext);
   if (nParam >= 0)
-    strcpy(dsdGenContext.params[dsdGenContext.options[nParam].index], "N");
+    strcpy(
+        dsdGenContext.params[dsdGenContext.options[nParam].index].data(), "N");
   return;
 }
 
@@ -176,7 +178,7 @@ int is_set(const char* flag, DSDGenContext& dsdGenContext) {
     else
       bIsSet = (static_cast<uint32_t>(dsdGenContext.options[nParam].flags) &
                 OPT_SET) ||
-          (strlen(dsdGenContext.options[nParam].dflt) > 0);
+          (strlen(dsdGenContext.options[nParam].dflt.data()) > 0);
   }
 
   return (bIsSet); /* better a false negative than a false positive ? */
@@ -202,7 +204,8 @@ void set_int(const char* var, const char* val, DSDGenContext& dsdGenContext) {
   init_params(dsdGenContext);
   nParam = fnd_param(var, dsdGenContext);
   if (nParam >= 0) {
-    strcpy(dsdGenContext.params[dsdGenContext.options[nParam].index], val);
+    strcpy(
+        dsdGenContext.params[dsdGenContext.options[nParam].index].data(), val);
     dsdGenContext.options[nParam].flags = static_cast<int>(
         static_cast<uint32_t>(dsdGenContext.options[nParam].flags) | OPT_SET);
   }
@@ -229,7 +232,8 @@ int get_int(const char* var, DSDGenContext& dsdGenContext) {
   init_params(dsdGenContext);
   nParam = fnd_param(var, dsdGenContext);
   if (nParam >= 0)
-    return (atoi(dsdGenContext.params[dsdGenContext.options[nParam].index]));
+    return (
+        atoi(dsdGenContext.params[dsdGenContext.options[nParam].index].data()));
   else
     return (0);
 }
@@ -240,7 +244,8 @@ double get_dbl(const char* var, DSDGenContext& dsdGenContext) {
   init_params(dsdGenContext);
   nParam = fnd_param(var, dsdGenContext);
   if (nParam >= 0)
-    return (atof(dsdGenContext.params[dsdGenContext.options[nParam].index]));
+    return (
+        atof(dsdGenContext.params[dsdGenContext.options[nParam].index].data()));
   else
     return (0);
 }
@@ -265,7 +270,8 @@ void set_str(const char* var, const char* val, DSDGenContext& dsdGenContext) {
   init_params(dsdGenContext);
   nParam = fnd_param(var, dsdGenContext);
   if (nParam >= 0) {
-    strcpy(dsdGenContext.params[dsdGenContext.options[nParam].index], val);
+    strcpy(
+        dsdGenContext.params[dsdGenContext.options[nParam].index].data(), val);
     dsdGenContext.options[nParam].flags = static_cast<int>(
         static_cast<uint32_t>(dsdGenContext.options[nParam].flags) | OPT_SET);
   }
@@ -287,13 +293,13 @@ void set_str(const char* var, const char* val, DSDGenContext& dsdGenContext) {
  * Side Effects:
  * TODO: None
  */
-char* get_str(const char* var, DSDGenContext& dsdGenContext) {
+const char* get_str(const char* var, DSDGenContext& dsdGenContext) {
   int nParam;
 
   init_params(dsdGenContext);
   nParam = fnd_param(var, dsdGenContext);
   if (nParam >= 0)
-    return (dsdGenContext.params[dsdGenContext.options[nParam].index]);
+    return (dsdGenContext.params[dsdGenContext.options[nParam].index].data());
   else
     return (NULL);
 }
@@ -319,15 +325,13 @@ int init_params(DSDGenContext& dsdGenContext) {
     return (0);
 
   for (i = 0; dsdGenContext.options[i].name != NULL; i++) {
-    dsdGenContext.params[dsdGenContext.options[i].index] =
-        static_cast<char*>(malloc(PARAM_MAX_LEN * sizeof(char)));
-    MALLOC_CHECK(dsdGenContext.params[dsdGenContext.options[i].index]);
+    dsdGenContext.params[dsdGenContext.options[i].index].resize(PARAM_MAX_LEN);
     snprintf(
-        dsdGenContext.params[dsdGenContext.options[i].index],
-        80,
+        dsdGenContext.params[dsdGenContext.options[i].index].data(),
+        PARAM_MAX_LEN,
         "%s",
-        dsdGenContext.options[i].dflt);
-    if (*dsdGenContext.options[i].dflt)
+        dsdGenContext.options[i].dflt.data());
+    if (!dsdGenContext.options[i].dflt.empty())
       dsdGenContext.options[i].flags = static_cast<int>(
           static_cast<uint32_t>(dsdGenContext.options[i].flags) | OPT_DFLT);
   }
@@ -384,7 +388,8 @@ int save_file(const char* path, DSDGenContext& dsdGenContext) {
     if (static_cast<uint32_t>(dsdGenContext.options[i].flags) &
         OPT_HIDE) /* hidden option */
       continue;
-    if (strlen(dsdGenContext.params[dsdGenContext.options[i].index]) == 0)
+    if (strlen(dsdGenContext.params[dsdGenContext.options[i].index].data()) ==
+        0)
       continue;
 
     result = fprintf(ofp, "%s = ", dsdGenContext.options[i].name);
@@ -393,18 +398,22 @@ int save_file(const char* path, DSDGenContext& dsdGenContext) {
     w_adjust = strlen(dsdGenContext.options[i].name) + 3;
     if (static_cast<uint32_t>(dsdGenContext.options[i].flags) & OPT_STR) {
       result = fprintf(
-          ofp, "\"%s\"", dsdGenContext.params[dsdGenContext.options[i].index]);
+          ofp,
+          "\"%s\"",
+          dsdGenContext.params[dsdGenContext.options[i].index].data());
       if (result < 0)
         perror("sprintf failed");
       w_adjust += 2;
     } else {
       result = fprintf(
-          ofp, "%s", dsdGenContext.params[dsdGenContext.options[i].index]);
+          ofp,
+          "%s",
+          dsdGenContext.params[dsdGenContext.options[i].index].data());
       if (result < 0)
         perror("sprintf failed");
     }
     w_adjust +=
-        strlen(dsdGenContext.params[dsdGenContext.options[i].index]) + 3;
+        strlen(dsdGenContext.params[dsdGenContext.options[i].index].data()) + 3;
     w_adjust = 60 - w_adjust;
     result =
         fprintf(ofp, "%*s-- %s", w_adjust, " ", dsdGenContext.options[i].usage);
@@ -622,10 +631,10 @@ char* GetParamName(int nParam, DSDGenContext& dsdGenContext) {
  * Side Effects:
  * TODO: None
  */
-char* GetParamValue(int nParam, DSDGenContext& dsdGenContext) {
+const char* GetParamValue(int nParam, DSDGenContext& dsdGenContext) {
   init_params(dsdGenContext);
 
-  return (dsdGenContext.params[dsdGenContext.options[nParam].index]);
+  return (dsdGenContext.params[dsdGenContext.options[nParam].index].data());
 }
 
 /*
@@ -649,7 +658,9 @@ int load_param(int nParam, const char* szValue, DSDGenContext& dsdGenContext) {
       OPT_SET) /* already set from the command line */
     return (0);
   else
-    strcpy(dsdGenContext.params[dsdGenContext.options[nParam].index], szValue);
+    strcpy(
+        dsdGenContext.params[dsdGenContext.options[nParam].index].data(),
+        szValue);
 
   return (0);
 }

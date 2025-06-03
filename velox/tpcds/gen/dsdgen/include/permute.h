@@ -24,11 +24,7 @@
  * THE TPC SOFTWARE IS AVAILABLE WITHOUT CHARGE FROM TPC.
  */
 
-int* makePermutation(
-    int* pNumberSet,
-    int nSize,
-    int nStream,
-    DSDGenContext& dsdGenContext);
+int* makePermutation(int nSize, int nStream, DSDGenContext& dsdGenContext);
 ds_key_t* makeKeyPermutation(
     ds_key_t* pNumberSet,
     ds_key_t nSize,

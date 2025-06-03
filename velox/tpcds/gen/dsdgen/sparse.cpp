@@ -54,14 +54,7 @@ int initSparseKeys(int nTable, DSDGenContext& dsdGenContext) {
   kRowcount = get_rowcount(nTable, dsdGenContext);
   pTdef = getTdefsByNumber(nTable, dsdGenContext);
 
-  pTdef->arSparseKeys = static_cast<ds_key_t*>(
-      malloc(static_cast<long>(kRowcount) * sizeof(ds_key_t)));
-  MALLOC_CHECK(pTdef->arSparseKeys);
-  if (pTdef->arSparseKeys == NULL)
-    ReportError(QERR_NO_MEMORY, "initSparseKeys()", 1);
-  memset(
-      pTdef->arSparseKeys, 0, static_cast<long>(kRowcount) * sizeof(ds_key_t));
-
+  pTdef->arSparseKeys.resize(kRowcount, 0);
   kOldSeed = setSeed(0, nTable, dsdGenContext);
   for (k = 0; k < kRowcount; k++)
     genrand_key(

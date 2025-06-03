@@ -35,38 +35,6 @@
 #include "mathops.h"
 
 /*
- * Routine: mk_decimal(int size, int precision)
- * Purpose: initialize a decimal_t
- * Algorithm:
- * Data Structures:
- *
- * Params:	int size:		total number of places in the decimal
- *			int precision:	number of places in the fraction
- * Returns: decimal_t *
- * Called By:
- * Calls:
- * Assumptions:
- * Side Effects:
- * TODO: None
- */
-decimal_t* mk_decimal(int s, int p) {
-  auto res = (decimal_t*)malloc(sizeof(struct DECIMAL_T));
-
-  if ((s < 0) || (p < 0))
-    return (NULL);
-
-  MALLOC_CHECK(res);
-
-  res->flags = 0;
-  res->scale = s;
-  res->precision = p;
-  res->flags =
-      static_cast<int>(static_cast<unsigned int>(res->flags) | FL_INIT);
-
-  return (res);
-}
-
-/*
  * Routine: itodec(int src, decimal_t *dest)
  * Purpose: convert an integer to a decimal_t
  * Algorithm:
@@ -213,34 +181,3 @@ int decimal_t_op(decimal_t* dest, int op, decimal_t* d1, decimal_t* d2) {
 
   return (0);
 }
-
-#ifdef TEST
-main() {
-  decimal_t* res;
-  int code;
-
-  /* mk_decimal */
-  res = mk_decimal(5, 2);
-  if (res == NULL) {
-    printf("mk_decimal returned NULL\n");
-    exit(-1);
-  }
-
-  /* itodec */
-  itodec(res, 0);
-  code = dectoi(res);
-  if (code) {
-    printf("r_decimal:itodec(0, res) != 0 (%d)\n", code);
-    exit(-1);
-  }
-
-  itodec(res, 999);
-  code = dectoi(res);
-  if (code != 999) {
-    printf("r_decimal:itodec(999, res) != 0 (%d)\n", code);
-    exit(-1);
-  }
-
-  exit(0);
-}
-#endif /* TEST */
