@@ -14,8 +14,14 @@
  * limitations under the License.
  */
 #include "ArrowMemoryPool.h"
-#include <arrow/type_fwd.h>
+
+#include <jemalloc/jemalloc.h>
+#include <string.h>
 #include <velox/common/base/Exceptions.h>
+#include <algorithm>
+#include <cstdlib>
+
+#include "velox4j/memory/AllocationListener.h"
 
 namespace facebook::velox4j {
 

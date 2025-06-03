@@ -15,7 +15,13 @@
  */
 #include "Query.h"
 
-#include <velox/exec/PlanNodeStats.h>
+#include <fmt/core.h>
+#include <folly/json/dynamic-inl.h>
+#include <velox/common/serialization/DeserializationRegistry.h>
+#include <velox/core/PlanNode.h>
+#include <utility>
+
+#include "velox4j/conf/Config.h"
 
 namespace facebook::velox4j {
 using namespace facebook::velox;

@@ -17,7 +17,16 @@
 
 #include <JniHelpers.h>
 #include <folly/executors/IOThreadPoolExecutor.h>
+#include <jni.h>
+#include <velox/common/future/VeloxPromise.h>
 #include <velox/vector/ComplexVector.h>
+#include <atomic>
+#include <memory>
+#include <mutex>
+#include <optional>
+#include <vector>
+
+#include "JavaClass.h"
 #include "velox4j/connector/ExternalStream.h"
 
 namespace facebook::velox4j {

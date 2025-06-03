@@ -16,6 +16,16 @@
 #pragma once
 
 #include <folly/executors/IOThreadPoolExecutor.h>
+#include <velox/common/future/VeloxPromise.h>
+#include <velox/vector/ComplexVector.h>
+#include <condition_variable>
+#include <memory>
+#include <mutex>
+#include <optional>
+#include <queue>
+#include <string>
+#include <vector>
+
 #include "velox4j/connector/ExternalStream.h"
 
 namespace facebook::velox4j {

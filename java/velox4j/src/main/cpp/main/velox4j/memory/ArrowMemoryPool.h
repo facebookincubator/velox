@@ -16,6 +16,12 @@
 #pragma once
 
 #include <arrow/memory_pool.h>
+#include <arrow/status.h>
+#include <stdint.h>
+#include <atomic>
+#include <memory>
+#include <string>
+
 #include "AllocationListener.h"
 
 namespace facebook::velox4j {
