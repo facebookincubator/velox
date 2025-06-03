@@ -91,10 +91,6 @@ target_link_libraries(
   JniHelpers
   PRIVATE JNI::JNI)
 
-# Directories of Velox4J.
-set(VELOX4J_SOURCE_DIR ${CMAKE_CURRENT_LIST_DIR}/main)
-set(VELOX4J_TEST_DIR ${CMAKE_CURRENT_LIST_DIR}/test)
-
 # Setup compiler launcher to ccache if using similar code with Velox.
 if(VELOX4J_ENABLE_CCACHE
    AND NOT CMAKE_C_COMPILER_LAUNCHER
