@@ -22,8 +22,10 @@ concurrency:
   group: ${{ github.repository }}-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
-jobs:
+permissions:
+  contents: read
 
+jobs:
   ut-centos7:
     runs-on: ubuntu-latest
     env:
@@ -31,12 +33,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Restore Ccache
-        uses: actions/cache/restore@v4
+        uses: apache/infrastructure-actions/stash/restore@3354c1565d4b0e335b78a76aedd82153a9e144d4
         with:
+          clean: true
           path: '${{ env.HOST_CCACHE_DIR }}'
-          key: java-ut-cpp-ut-centos7-ccache-${{github.sha}}
-          restore-keys: |
-            java-ut-cpp-ut-centos7-ccache-
+          key: java-ut-cpp-ut-centos7-ccache
       - name: Run setup script / Build and run UTs
         run: |
           docker run -v ${{ github.workspace }}:/velox -w / centos:7 bash -c "
@@ -47,7 +48,7 @@ jobs:
             bash src/main/cpp/test.sh
           "
       - name: Save Ccache
-        uses: actions/cache/save@v4
+        uses: apache/infrastructure-actions/stash/save@3354c1565d4b0e335b78a76aedd82153a9e144d4
         with:
           path: '${{ env.HOST_CCACHE_DIR }}'
-          key: java-ut-cpp-ut-centos7-ccache-${{github.sha}}
+          key: java-ut-cpp-ut-centos7-ccache
