@@ -20,21 +20,29 @@ import java.util.Objects;
 
 import com.fasterxml.jackson.annotation.JsonCreator;
 import com.fasterxml.jackson.annotation.JsonGetter;
+import com.fasterxml.jackson.annotation.JsonInclude;
 import com.fasterxml.jackson.annotation.JsonProperty;
+import com.google.common.base.Preconditions;
 
 public class VarBinaryValue extends Variant {
   private final String base64;
 
   @JsonCreator
-  public VarBinaryValue(@JsonProperty("value") String base64) {
+  private VarBinaryValue(@JsonProperty("value") String base64) {
     this.base64 = base64;
   }
 
   public static VarBinaryValue create(byte[] bytes) {
+    Preconditions.checkNotNull(bytes, "bytes must not be null");
     return new VarBinaryValue(Base64.getEncoder().encodeToString(bytes));
   }
 
+  public static VarBinaryValue createNull() {
+    return new VarBinaryValue(null);
+  }
+
   @JsonGetter("value")
+  @JsonInclude(JsonInclude.Include.ALWAYS)
   public String getBase64() {
     return base64;
   }
