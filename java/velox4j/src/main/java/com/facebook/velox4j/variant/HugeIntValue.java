@@ -20,6 +20,7 @@ import java.util.Objects;
 
 import com.fasterxml.jackson.annotation.JsonCreator;
 import com.fasterxml.jackson.annotation.JsonGetter;
+import com.fasterxml.jackson.annotation.JsonInclude;
 import com.fasterxml.jackson.annotation.JsonProperty;
 
 public class HugeIntValue extends Variant {
@@ -31,6 +32,7 @@ public class HugeIntValue extends Variant {
   }
 
   @JsonGetter("value")
+  @JsonInclude(JsonInclude.Include.ALWAYS)
   public BigInteger getValue() {
     return value;
   }

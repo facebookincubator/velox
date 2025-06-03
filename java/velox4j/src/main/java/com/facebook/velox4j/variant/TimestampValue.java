@@ -19,23 +19,25 @@ import java.util.Objects;
 
 import com.fasterxml.jackson.annotation.JsonCreator;
 import com.fasterxml.jackson.annotation.JsonGetter;
+import com.fasterxml.jackson.annotation.JsonInclude;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import com.google.common.base.Preconditions;
 
 public class TimestampValue extends Variant {
   private static final int DUMMY_VALUE = -1;
-  private final int value;
+  private final Integer value;
   private final long seconds;
   private final long nanos;
 
   @JsonCreator
   private TimestampValue(
-      @JsonProperty("value") int value,
+      @JsonProperty("value") Integer value,
       @JsonProperty("seconds") long seconds,
       @JsonProperty("nanos") long nanos) {
-    // JSON field "value" is always -1 be Velox's design.
+    // For non-null case, JSON field "value" is always -1, according to Velox's design.
     Preconditions.checkArgument(
-        value == DUMMY_VALUE, "JSON field \"value\" has to be -1 in timestamp variant");
+        value == null || value == DUMMY_VALUE,
+        "JSON field \"value\" has to be null or -1 in timestamp variant");
     this.value = value;
     this.seconds = seconds;
     this.nanos = nanos;
@@ -45,8 +47,13 @@ public class TimestampValue extends Variant {
     return new TimestampValue(DUMMY_VALUE, seconds, nanos);
   }
 
+  public static TimestampValue createNull() {
+    return new TimestampValue(null, 0, 0);
+  }
+
   @JsonGetter("value")
-  public int getValue() {
+  @JsonInclude(JsonInclude.Include.ALWAYS)
+  public Integer getValue() {
     return value;
   }
 
