@@ -46,6 +46,10 @@ class AssertQueryBuilder {
   /// Default is false.
   AssertQueryBuilder& serialExecution(bool serial);
 
+  /// Use barrier task execution mode to execute the Velox plan.
+  /// Default is false.
+  AssertQueryBuilder& barrierExecution(bool barrier);
+
   /// Set configuration property. May be called multiple times to set multiple
   /// properties.
   AssertQueryBuilder& config(const std::string& key, const std::string& value);
@@ -112,6 +116,10 @@ class AssertQueryBuilder {
   AssertQueryBuilder& splits(
       const std::vector<std::shared_ptr<connector::ConnectorSplit>>&
           connectorSplits);
+
+  /// Indicate that the splits should be added with sequence numbers to the task
+  /// when the query runs.
+  AssertQueryBuilder& addSplitWithSequence(bool addWithSequence);
 
   /// Sets the QueryCtx.
   AssertQueryBuilder& queryCtx(const std::shared_ptr<core::QueryCtx>& ctx) {
@@ -203,6 +211,9 @@ class AssertQueryBuilder {
   std::unordered_map<std::string, std::unordered_map<std::string, std::string>>
       connectorSessionProperties_;
   std::unordered_map<core::PlanNodeId, std::vector<Split>> splits_;
+  bool addSplitWithSequence_{false};
+  // The sequence Id to be used when addSplitWithSequence_ is true.
+  int32_t sequenceId_{0};
 };
 
 } // namespace facebook::velox::exec::test

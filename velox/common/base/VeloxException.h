@@ -49,6 +49,11 @@ inline constexpr auto kErrorSourceUser = "USER"_fs;
 /// Errors where the root cause of the problem is an unexpected internal state
 /// in the system.
 inline constexpr auto kErrorSourceRuntime = "RUNTIME"_fs;
+
+/// Errors where the root cause of the problem is some external dependency (e.g.
+/// storage)
+inline constexpr auto kErrorSourceExternal = "EXTERNAL"_fs;
+  
 } // namespace error_source
 
 namespace error_code {

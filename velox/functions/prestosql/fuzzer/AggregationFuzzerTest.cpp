@@ -30,10 +30,11 @@
 #include "velox/functions/prestosql/fuzzer/ApproxPercentileResultVerifier.h"
 #include "velox/functions/prestosql/fuzzer/ArbitraryResultVerifier.h"
 #include "velox/functions/prestosql/fuzzer/AverageResultVerifier.h"
-#include "velox/functions/prestosql/fuzzer/ClassificationAggregationInputGenerator.h"
 #include "velox/functions/prestosql/fuzzer/MapUnionSumInputGenerator.h"
 #include "velox/functions/prestosql/fuzzer/MinMaxByResultVerifier.h"
 #include "velox/functions/prestosql/fuzzer/MinMaxInputGenerator.h"
+#include "velox/functions/prestosql/fuzzer/QDigestAggInputGenerator.h"
+#include "velox/functions/prestosql/fuzzer/QDigestAggResultVerifier.h"
 #include "velox/functions/prestosql/registration/RegistrationFunctions.h"
 #include "velox/functions/prestosql/window/WindowFunctionsRegistration.h"
 #include "velox/vector/fuzzer/VectorFuzzer.h"
@@ -79,7 +80,9 @@ getCustomInputGenerators() {
       {"approx_distinct", std::make_shared<ApproxDistinctInputGenerator>()},
       {"approx_set", std::make_shared<ApproxDistinctInputGenerator>()},
       {"approx_percentile", std::make_shared<ApproxPercentileInputGenerator>()},
-      {"map_union_sum", std::make_shared<MapUnionSumInputGenerator>()}};
+      {"qdigest_agg", std::make_shared<QDigestAggInputGenerator>()},
+      {"map_union_sum", std::make_shared<MapUnionSumInputGenerator>()},
+  };
 }
 
 } // namespace
@@ -107,7 +110,8 @@ int main(int argc, char** argv) {
   facebook::velox::window::prestosql::registerAllWindowFunctions();
   facebook::velox::functions::prestosql::registerInternalFunctions();
   facebook::velox::aggregate::prestosql::registerInternalAggregateFunctions();
-  facebook::velox::memory::MemoryManager::initialize({});
+  facebook::velox::memory::MemoryManager::initialize(
+      facebook::velox::memory::MemoryManager::Options{});
 
   size_t initialSeed = FLAGS_seed == 0 ? std::time(nullptr) : FLAGS_seed;
 
@@ -128,10 +132,13 @@ int main(int argc, char** argv) {
       "reduce_agg",
       "max_data_size_for_stats",
       "any_value",
+      // Skip non-deterministic functions.
+      "noisy_count_if_gaussian",
   };
 
   static const std::unordered_set<std::string> functionsRequireSortedInput = {
       "tdigest_agg",
+      "qdigest_agg",
   };
 
   using facebook::velox::exec::test::ApproxDistinctResultVerifier;
@@ -139,6 +146,7 @@ int main(int argc, char** argv) {
   using facebook::velox::exec::test::ArbitraryResultVerifier;
   using facebook::velox::exec::test::AverageResultVerifier;
   using facebook::velox::exec::test::MinMaxByResultVerifier;
+  using facebook::velox::exec::test::QDigestAggResultVerifier;
   using facebook::velox::exec::test::setupReferenceQueryRunner;
   using facebook::velox::exec::test::TransformResultVerifier;
 
@@ -167,6 +175,7 @@ int main(int argc, char** argv) {
           {"approx_set", std::make_shared<ApproxDistinctResultVerifier>(true)},
           {"approx_percentile",
            std::make_shared<ApproxPercentileResultVerifier>()},
+          {"qdigest_agg", std::make_shared<QDigestAggResultVerifier>()},
           {"arbitrary", std::make_shared<ArbitraryResultVerifier>()},
           {"any_value", nullptr},
           {"array_agg", makeArrayVerifier()},

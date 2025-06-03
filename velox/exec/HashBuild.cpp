@@ -394,6 +394,7 @@ void HashBuild::addInput(RowVectorPtr input) {
     }
   }
   auto rows = table_->rows();
+  auto nextOffset = rows->nextOffset();
   FlatVector<bool>* spillProbedFlagVector{nullptr};
   if (isInputFromSpill() && needProbedFlagSpill_) {
     spillProbedFlagVector =
@@ -402,6 +403,9 @@ void HashBuild::addInput(RowVectorPtr input) {
 
   activeRows_.applyToSelected([&](auto rowIndex) {
     char* newRow = rows->newRow();
+    if (nextOffset) {
+      *reinterpret_cast<char**>(newRow + nextOffset) = nullptr;
+    }
     // Store the columns for each row in sequence. At probe time
     // strings of the row will probably be in consecutive places, so
     // reading one will prime the cache for the next.
@@ -659,7 +663,7 @@ bool HashBuild::finishHashBuild() {
 
   SCOPE_EXIT {
     // Realize the promises so that the other Drivers (which were not
-    // the last to finish) can continue from the barrier and finish.
+    // the last to finish) can continue and finish.
     peers.clear();
     for (auto& promise : promises) {
       promise.setValue();
@@ -1051,8 +1055,16 @@ std::string HashBuild::stateName(State state) {
 }
 
 bool HashBuild::canSpill() const {
-  return Operator::canSpill() &&
-      !operatorCtx_->task()->hasMixedExecutionGroup();
+  if (!Operator::canSpill()) {
+    return false;
+  }
+  if (operatorCtx_->task()->hasMixedExecutionGroupJoin(joinNode_.get())) {
+    return operatorCtx_->driverCtx()
+               ->queryConfig()
+               .mixedGroupedModeHashJoinSpillEnabled() &&
+        operatorCtx_->task()->concurrentSplitGroups() == 1;
+  }
+  return true;
 }
 
 bool HashBuild::canReclaim() const {
@@ -1177,7 +1189,6 @@ HashBuildSpiller::HashBuildSpiller(
           container,
           std::move(rowType),
           bits,
-          0,
           {},
           spillConfig->maxFileSize,
           spillConfig->maxSpillRunRows,

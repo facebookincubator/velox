@@ -902,9 +902,9 @@ void appendCounts(
   }
 }
 
-std::string truncate(const std::string& str, size_t maxLen = 50) {
-  if (str.size() > maxLen) {
-    return str.substr(0, maxLen) + "...";
+std::string truncate(const std::string& str, size_t maxLength = 50) {
+  if (str.size() > maxLength) {
+    return str.substr(0, maxLength) + "...";
   }
   return str;
 }
@@ -914,7 +914,8 @@ void appendProjections(
     const AbstractProjectNode& op,
     const std::vector<size_t>& projections,
     size_t cnt,
-    std::stringstream& stream) {
+    std::stringstream& stream,
+    size_t maxLength) {
   if (cnt == 0) {
     return;
   }
@@ -923,11 +924,34 @@ void appendProjections(
     const auto index = projections[i];
     const auto& expr = op.projections()[index];
     stream << indentation << op.outputType()->nameOf(index) << ": "
-           << truncate(expr->toString()) << std::endl;
+           << truncate(expr->toString(), maxLength) << std::endl;
   }
 
   if (cnt < projections.size()) {
     stream << indentation << "... " << (projections.size() - cnt) << " more"
+           << std::endl;
+  }
+}
+
+void appendAggregations(
+    const std::string& indentation,
+    const AggregationNode& op,
+    size_t cnt,
+    std::stringstream& stream,
+    size_t maxLength) {
+  if (cnt == 0) {
+    return;
+  }
+
+  for (auto i = 0; i < cnt; ++i) {
+    const auto& expr = op.aggregates().at(i).call;
+    stream << indentation << i << ": "
+           << (op.aggregates().at(i).distinct ? "DISTINCT" : "")
+           << truncate(expr->toString(), maxLength) << std::endl;
+  }
+
+  if (cnt < op.aggregates().size()) {
+    stream << indentation << "... " << (op.aggregates().size() - cnt) << " more"
            << std::endl;
   }
 }
@@ -1002,7 +1026,13 @@ void AbstractProjectNode::addSummaryDetails(
   {
     const auto cnt =
         std::min(options.project.maxProjections, projections.size());
-    appendProjections(indentation + "   ", *this, projections, cnt, stream);
+    appendProjections(
+        indentation + "   ",
+        *this,
+        projections,
+        cnt,
+        stream,
+        options.maxLength);
   }
 
   // dereferences: 2 out of 10
@@ -1011,7 +1041,13 @@ void AbstractProjectNode::addSummaryDetails(
   {
     const auto cnt =
         std::min(options.project.maxDereferences, dereferences.size());
-    appendProjections(indentation + "   ", *this, dereferences, cnt, stream);
+    appendProjections(
+        indentation + "   ",
+        *this,
+        dereferences,
+        cnt,
+        stream,
+        options.maxLength);
   }
 }
 
@@ -1574,6 +1610,12 @@ bool IndexLookupJoinNode::isSupported(core::JoinType joinType) {
   }
 }
 
+bool isIndexLookupJoin(const core::PlanNode* planNode) {
+  const auto* indexLookupJoin =
+      dynamic_cast<const core::IndexLookupJoinNode*>(planNode);
+  return indexLookupJoin != nullptr;
+}
+
 // static
 const JoinType NestedLoopJoinNode::kDefaultJoinType = JoinType::kInner;
 // static
@@ -1598,7 +1640,23 @@ NestedLoopJoinNode::NestedLoopJoinNode(
 
   auto leftType = sources_[0]->outputType();
   auto rightType = sources_[1]->outputType();
-  for (const auto& name : outputType_->names()) {
+  auto numOutputColumms = outputType_->size();
+  if (core::isLeftSemiProjectJoin(joinType)) {
+    --numOutputColumms;
+    VELOX_CHECK_EQ(outputType_->childAt(numOutputColumms), BOOLEAN());
+    const auto& name = outputType_->nameOf(numOutputColumms);
+    VELOX_CHECK(
+        !leftType->containsChild(name),
+        "Match column '{}' cannot be present in left source.",
+        name);
+    VELOX_CHECK(
+        !rightType->containsChild(name),
+        "Match column '{}' cannot be present in right source.",
+        name);
+  }
+
+  for (auto i = 0; i < numOutputColumms; ++i) {
+    const auto name = outputType_->nameOf(i);
     const bool leftContains = leftType->containsChild(name);
     const bool rightContains = rightType->containsChild(name);
     VELOX_USER_CHECK(
@@ -1632,6 +1690,7 @@ bool NestedLoopJoinNode::isSupported(core::JoinType joinType) {
     case core::JoinType::kLeft:
     case core::JoinType::kRight:
     case core::JoinType::kFull:
+    case core::JoinType::kLeftSemiProject:
       return true;
 
     default:
@@ -2955,7 +3014,7 @@ void PlanNode::addSummaryDetails(
   std::stringstream out;
   addDetails(out);
 
-  stream << indentation << truncate(out.str()) << std::endl;
+  stream << indentation << truncate(out.str(), options.maxLength) << std::endl;
 }
 
 namespace {
@@ -2967,8 +3026,10 @@ void collectLeafPlanNodeIds(
     return;
   }
 
-  for (const auto& child : planNode.sources()) {
-    collectLeafPlanNodeIds(*child, leafIds);
+  const auto& sources = planNode.sources();
+  const auto numSources = isIndexLookupJoin(&planNode) ? 1 : sources.size();
+  for (int i = 0; i < numSources; ++i) {
+    collectLeafPlanNodeIds(*sources[i], leafIds);
   }
 }
 } // namespace
@@ -3060,7 +3121,8 @@ void FilterNode::addSummaryDetails(
 
   appendExprSummary(indentation, options, exprCtx, stream);
 
-  stream << indentation << "filter: " << truncate(filter_->toString())
+  stream << indentation
+         << "filter: " << truncate(filter_->toString(), options.maxLength)
          << std::endl;
 }
 
@@ -3074,6 +3136,29 @@ void FilterNode::accept(
     const PlanNodeVisitor& visitor,
     PlanNodeVisitorContext& context) const {
   visitor.visit(*this, context);
+}
+
+void AggregationNode::addSummaryDetails(
+    const std::string& indentation,
+    const PlanSummaryOptions& options,
+    std::stringstream& stream) const {
+  std::stringstream out;
+  SummarizeExprVisitor::Context exprCtx;
+  SummarizeExprVisitor visitor;
+  for (const auto& aggregate : aggregates()) {
+    aggregate.call->accept(visitor, exprCtx);
+  }
+
+  appendExprSummary(indentation, options, exprCtx, stream);
+
+  stream << indentation << "aggregations: " << aggregates().size() << std::endl;
+
+  {
+    const auto cnt =
+        std::min(options.aggregate.maxAggregations, aggregates().size());
+    appendAggregations(
+        indentation + "   ", *this, cnt, stream, options.maxLength);
+  }
 }
 
 // static

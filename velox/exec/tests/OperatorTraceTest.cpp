@@ -42,7 +42,7 @@ namespace facebook::velox::exec::trace::test {
 class OperatorTraceTest : public HiveConnectorTestBase {
  protected:
   static void SetUpTestCase() {
-    memory::MemoryManager::testingSetInstance({});
+    memory::MemoryManager::testingSetInstance(memory::MemoryManager::Options{});
     HiveConnectorTestBase::SetUpTestCase();
     filesystems::registerLocalFileSystem();
     if (!isRegisteredVectorSerde()) {
@@ -1135,6 +1135,7 @@ TEST_F(OperatorTraceTest, canTrace) {
       {"PartitionedOutput", true},
       {"HashBuild", true},
       {"HashProbe", true},
+      {"IndexLookupJoin", true},
       {"RowNumber", false},
       {"OrderBy", false},
       {"PartialAggregation", true},
