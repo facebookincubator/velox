@@ -185,6 +185,15 @@ but their interiors do not intersect.</p>
 <section id="spatial-operations">
 <h2>Spatial Operations<a class="headerlink" href="#spatial-operations" title="Link to this heading">¶</a></h2>
 <dl class="py function">
+<dt class="sig sig-object py" id="ST_Boundary">
+<span class="sig-name descname"><span class="pre">ST_Boundary</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">geometry</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">Geometry</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">boundary:</span> <span class="pre">Geometry</span></span></span><a class="headerlink" href="#ST_Boundary" title="Link to this definition">¶</a></dt>
+<dd><dl class="simple">
+<dt>Returns the closure of the combinatorial boundary of <code class="docutils literal notranslate"><span class="pre">geometry</span></code>.</dt><dd><p>Empty geometry inputs result in empty output.</p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py function">
 <dt class="sig sig-object py" id="ST_Difference">
 <span class="sig-name descname"><span class="pre">ST_Difference</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">geometry1</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">Geometry</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">geometry2</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">Geometry</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">difference:</span> <span class="pre">Geometry</span></span></span><a class="headerlink" href="#ST_Difference" title="Link to this definition">¶</a></dt>
 <dd><p>Returns the geometry that represents the portion of <code class="docutils literal notranslate"><span class="pre">geometry1</span></code> that is
@@ -246,6 +255,13 @@ This function is relatively expensive.</p>
 For Point and LineString types, returns 0.0. For GeometryCollection types,
 returns the sum of the areas of the individual geometries. Empty geometries
 return 0.</p>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="ST_Centroid">
+<span class="sig-name descname"><span class="pre">ST_Centroid</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">geometry</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">Geometry</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">geometry:</span> <span class="pre">Geometry</span></span></span><a class="headerlink" href="#ST_Centroid" title="Link to this definition">¶</a></dt>
+<dd><p>Returns the point value that is the mathematical centroid of <code class="docutils literal notranslate"><span class="pre">geometry</span></code>.
+Empty geometry inputs result in empty output.</p>
 </dd></dl>
 
 <dl class="py function">
@@ -393,6 +409,7 @@ specified.</p>
 </ul>
 </li>
 <li><a class="reference internal" href="#spatial-operations">Spatial Operations</a><ul>
+<li><a class="reference internal" href="#ST_Boundary"><code class="docutils literal notranslate"><span class="pre">ST_Boundary()</span></code></a></li>
 <li><a class="reference internal" href="#ST_Difference"><code class="docutils literal notranslate"><span class="pre">ST_Difference()</span></code></a></li>
 <li><a class="reference internal" href="#ST_Intersection"><code class="docutils literal notranslate"><span class="pre">ST_Intersection()</span></code></a></li>
 <li><a class="reference internal" href="#ST_SymDifference"><code class="docutils literal notranslate"><span class="pre">ST_SymDifference()</span></code></a></li>
@@ -404,6 +421,7 @@ specified.</p>
 <li><a class="reference internal" href="#ST_IsSimple"><code class="docutils literal notranslate"><span class="pre">ST_IsSimple()</span></code></a></li>
 <li><a class="reference internal" href="#geometry_invalid_reason"><code class="docutils literal notranslate"><span class="pre">geometry_invalid_reason()</span></code></a></li>
 <li><a class="reference internal" href="#ST_Area"><code class="docutils literal notranslate"><span class="pre">ST_Area()</span></code></a></li>
+<li><a class="reference internal" href="#ST_Centroid"><code class="docutils literal notranslate"><span class="pre">ST_Centroid()</span></code></a></li>
 <li><a class="reference internal" href="#ST_X"><code class="docutils literal notranslate"><span class="pre">ST_X()</span></code></a></li>
 <li><a class="reference internal" href="#ST_Y"><code class="docutils literal notranslate"><span class="pre">ST_Y()</span></code></a></li>
 <li><a class="reference internal" href="#simplify_geometry"><code class="docutils literal notranslate"><span class="pre">simplify_geometry()</span></code></a></li>

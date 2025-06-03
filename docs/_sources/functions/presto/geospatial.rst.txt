@@ -131,6 +131,11 @@ function you are using.
 Spatial Operations
 ------------------
 
+.. function:: ST_Boundary(geometry: Geometry) -> boundary: Geometry
+
+    Returns the closure of the combinatorial boundary of ``geometry``.
+     Empty geometry inputs result in empty output.
+
 .. function:: ST_Difference(geometry1: Geometry, geometry2: Geometry) -> difference: Geometry
 
     Returns the geometry that represents the portion of ``geometry1`` that is
@@ -177,6 +182,11 @@ Accessors
     For Point and LineString types, returns 0.0. For GeometryCollection types,
     returns the sum of the areas of the individual geometries. Empty geometries
     return 0.
+
+.. function:: ST_Centroid(geometry: Geometry) -> geometry: Geometry
+
+    Returns the point value that is the mathematical centroid of ``geometry``.
+    Empty geometry inputs result in empty output.
 
 .. function:: ST_X(geometry: Geometry) -> x: double
 
