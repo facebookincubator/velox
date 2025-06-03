@@ -14,7 +14,11 @@
  * limitations under the License.
  */
 #include "Arrow.h"
+
+#include <velox/vector/ComplexVector.h>
 #include <velox/vector/arrow/Bridge.h>
+#include <memory>
+#include <vector>
 
 namespace facebook::velox4j {
 using namespace facebook::velox;

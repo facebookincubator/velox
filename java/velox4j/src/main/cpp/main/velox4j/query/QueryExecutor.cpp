@@ -15,12 +15,31 @@
  */
 #include "QueryExecutor.h"
 
+#include <fmt/core.h>
+#include <glog/logging.h>
+#include <velox/common/base/Exceptions.h>
+#include <velox/common/caching/AsyncDataCache.h>
+#include <velox/common/future/VeloxPromise.h>
+#include <velox/common/memory/MemoryPool.h>
+#include <velox/core/PlanFragment.h>
+#include <velox/core/QueryConfig.h>
+#include <velox/core/QueryCtx.h>
+#include <velox/exec/Driver.h>
 #include <velox/exec/Operator.h>
 #include <velox/exec/PlanNodeStats.h>
+#include <velox/exec/Split.h>
 #include <velox/exec/Task.h>
-#include "velox4j/query/Query.h"
-
+#include <velox/exec/TaskStructs.h>
+#include <atomic>
+#include <functional>
+#include <ostream>
+#include <string>
+#include <unordered_set>
 #include <utility>
+
+#include "velox4j/conf/Config.h"
+#include "velox4j/memory/MemoryManager.h"
+#include "velox4j/query/Query.h"
 
 namespace facebook::velox4j {
 

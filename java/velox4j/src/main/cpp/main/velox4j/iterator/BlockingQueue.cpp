@@ -15,6 +15,13 @@
  */
 #include "BlockingQueue.h"
 
+#include <fmt/core.h>
+#include <folly/Unit.h>
+#include <folly/executors/IOThreadPoolExecutor.h>
+#include <velox/common/base/Exceptions.h>
+#include <exception>
+#include <utility>
+
 namespace facebook::velox4j {
 using namespace facebook::velox;
 

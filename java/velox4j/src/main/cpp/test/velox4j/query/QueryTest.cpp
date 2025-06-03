@@ -13,14 +13,23 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#include "velox4j/query/Query.h"
 #include <gtest/gtest.h>
+#include <velox/connectors/fuzzer/tests/FuzzerConnectorTestBase.h>
 #include <velox/exec/tests/utils/HiveConnectorTestBase.h>
 #include <velox/exec/tests/utils/PlanBuilder.h>
-#include "velox4j/query/QueryExecutor.h"
+#include <initializer_list>
+#include <memory>
+#include <string>
+#include <utility>
+#include <vector>
 
-#include <velox/connectors/fuzzer/tests/FuzzerConnectorTestBase.h>
-#include <velox4j/test/Init.h>
+#include "velox4j/conf/Config.h"
+#include "velox4j/iterator/UpIterator.h"
+#include "velox4j/memory/AllocationListener.h"
+#include "velox4j/memory/MemoryManager.h"
+#include "velox4j/query/Query.h"
+#include "velox4j/query/QueryExecutor.h"
+#include "velox4j/test/Init.h"
 
 namespace facebook::velox4j {
 using namespace facebook::velox;

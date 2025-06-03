@@ -14,7 +14,9 @@
  * limitations under the License.
  */
 #include "JavaAllocationListener.h"
+
 #include <glog/logging.h>
+
 #include "velox4j/jni/JniCommon.h"
 
 namespace facebook::velox4j {

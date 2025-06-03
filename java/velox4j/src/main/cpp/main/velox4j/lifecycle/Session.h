@@ -16,6 +16,7 @@
 #pragma once
 
 #include <memory>
+
 #include "ObjectStore.h"
 #include "velox4j/memory/MemoryManager.h"
 

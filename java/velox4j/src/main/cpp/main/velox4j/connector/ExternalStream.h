@@ -15,9 +15,22 @@
  */
 #pragma once
 
+#include <folly/json/dynamic.h>
+#include <stdint.h>
+#include <velox/common/base/Exceptions.h>
+#include <velox/common/base/RuntimeMetrics.h>
+#include <velox/common/future/VeloxPromise.h>
 #include <velox/connectors/Connector.h>
 #include <velox/exec/Driver.h>
 #include <velox/exec/Task.h>
+#include <velox/type/Type.h>
+#include <velox/vector/ComplexVector.h>
+#include <memory>
+#include <optional>
+#include <queue>
+#include <string>
+#include <unordered_map>
+
 #include "velox4j/lifecycle/ObjectStore.h"
 
 namespace facebook::velox4j {

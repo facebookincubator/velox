@@ -16,9 +16,13 @@
 #pragma once
 
 #include <velox/common/memory/Memory.h>
+#include <velox/core/ExpressionEvaluator.h>
 #include <velox/expression/Expr.h>
 #include <velox/vector/BaseVector.h>
 #include <velox/vector/ComplexVector.h>
+#include <memory>
+#include <string>
+
 #include "velox4j/memory/MemoryManager.h"
 
 namespace facebook::velox4j {

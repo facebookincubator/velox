@@ -13,9 +13,18 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#include "velox4j/iterator/BlockingQueue.h"
 #include <gtest/gtest.h>
+#include <stdint.h>
+#include <string.h>
 #include <velox/vector/tests/utils/VectorTestBase.h>
+#include <memory>
+#include <optional>
+#include <ostream>
+#include <string>
+#include <thread>
+#include <vector>
+
+#include "velox4j/iterator/BlockingQueue.h"
 #include "velox4j/test/Init.h"
 
 namespace facebook::velox4j {

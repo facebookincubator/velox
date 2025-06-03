@@ -14,12 +14,19 @@
  * limitations under the License.
  */
 #include "JniCommon.h"
-#include <arrow/ipc/reader.h>
-#include <arrow/ipc/writer.h>
-#include <execinfo.h>
+
+#include <fmt/core.h>
 #include <glog/logging.h>
 #include <jni.h>
 #include <velox/common/base/Exceptions.h>
+#include <atomic>
+#include <cstring>
+#include <ostream>
+#include <vector>
+
+#include "ClassRegistry.h"
+#include "JavaThreadUtils.h"
+#include "JniHelpersCommon.h"
 
 namespace facebook::velox4j {
 

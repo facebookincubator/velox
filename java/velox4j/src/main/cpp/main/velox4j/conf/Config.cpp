@@ -15,6 +15,10 @@
  */
 #include "Config.h"
 
+#include <velox/common/base/Exceptions.h>
+#include <velox/common/serialization/DeserializationRegistry.h>
+#include <velox/common/serialization/Serializable.h>
+
 namespace facebook::velox4j {
 using namespace facebook::velox;
 

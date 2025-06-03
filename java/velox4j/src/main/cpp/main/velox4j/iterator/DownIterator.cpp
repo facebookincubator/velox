@@ -14,6 +14,22 @@
  * limitations under the License.
  */
 #include "DownIterator.h"
+
+#include <fmt/core.h>
+#include <folly/Unit.h>
+#include <folly/executors/IOThreadPoolExecutor.h>
+#include <glog/logging.h>
+#include <jni_md.h>
+#include <stdint.h>
+#include <velox/common/base/Exceptions.h>
+#include <velox/vector/ComplexVector.h>
+#include <exception>
+#include <ostream>
+#include <string>
+#include <utility>
+
+#include "ClassRegistry.h"
+#include "JniTypes.h"
 #include "velox4j/jni/JniCommon.h"
 #include "velox4j/lifecycle/ObjectStore.h"
 

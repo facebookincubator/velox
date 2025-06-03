@@ -14,10 +14,22 @@
  * limitations under the License.
  */
 #include "Init.h"
+
+#include <folly/Conv.h>
+#include <velox/common/base/Exceptions.h>
+#include <velox/common/base/VeloxException.h>
+#include <velox/common/config/Config.h>
+#include <velox/common/file/FileSystems.h>
 #include <velox/common/memory/Memory.h>
+#include <velox/common/memory/MemoryPool.h>
+#include <velox/connectors/Connector.h>
 #include <velox/connectors/hive/HiveConnector.h>
 #include <velox/connectors/hive/HiveConnectorSplit.h>
 #include <velox/connectors/hive/HiveDataSink.h>
+#include <velox/connectors/hive/TableHandle.h>
+#include <velox/core/ITypedExpr.h>
+#include <velox/core/PlanNode.h>
+#include <velox/dwio/common/FileSink.h>
 #include <velox/dwio/parquet/RegisterParquetReader.h>
 #include <velox/dwio/parquet/RegisterParquetWriter.h>
 #include <velox/exec/PartitionFunction.h>
@@ -26,6 +38,13 @@
 #include <velox/functions/sparksql/aggregates/Register.h>
 #include <velox/functions/sparksql/registration/Register.h>
 #include <velox/functions/sparksql/window/WindowFunctionsRegistration.h>
+#include <velox/type/Filter.h>
+#include <velox/type/Type.h>
+#include <atomic>
+#include <functional>
+#include <string>
+#include <unordered_map>
+
 #include "velox4j/conf/Config.h"
 #include "velox4j/connector/ExternalStream.h"
 #include "velox4j/eval/Evaluation.h"

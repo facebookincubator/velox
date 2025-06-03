@@ -15,8 +15,16 @@
  */
 #pragma once
 
+#include <folly/json/dynamic.h>
 #include <velox/common/serialization/Serializable.h>
 #include <velox/core/QueryConfig.h>
+#include <memory>
+#include <string>
+#include <unordered_map>
+#include <utility>
+#include <vector>
+
+#include <velox/common/config/Config.h>
 
 namespace facebook::velox4j {
 class ConfigArray : public facebook::velox::ISerializable {

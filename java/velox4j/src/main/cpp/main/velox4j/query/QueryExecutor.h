@@ -15,7 +15,13 @@
  */
 #pragma once
 
+#include <folly/json/dynamic.h>
+#include <stdint.h>
+#include <velox/core/PlanNode.h>
 #include <velox/exec/TaskStats.h>
+#include <velox/vector/ComplexVector.h>
+#include <memory>
+#include <vector>
 
 #include "Query.h"
 #include "velox4j/iterator/UpIterator.h"

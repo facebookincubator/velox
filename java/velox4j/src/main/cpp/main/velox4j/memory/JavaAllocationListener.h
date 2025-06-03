@@ -17,6 +17,7 @@
 
 #include <JniHelpers.h>
 #include <atomic>
+
 #include "velox4j/memory/AllocationListener.h"
 
 namespace facebook::velox4j {

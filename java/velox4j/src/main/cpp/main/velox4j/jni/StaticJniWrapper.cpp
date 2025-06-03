@@ -14,20 +14,39 @@
  * limitations under the License.
  */
 #include "StaticJniWrapper.h"
-#include <folly/json/json.h>
-#include <velox/common/encode/Base64.h>
-#include <velox/exec/TableWriter.h>
-#include <velox/vector/VectorSaver.h>
 
+#include <folly/json/json.h>
+#include <jni_md.h>
+#include <velox/common/encode/Base64.h>
+#include <velox/common/serialization/Serializable.h>
+#include <velox/connectors/Connector.h>
+#include <velox/exec/TableWriter.h>
+#include <velox/type/Type.h>
+#include <velox/type/Variant.h>
+#include <velox/vector/BaseVector.h>
+#include <velox/vector/SelectivityVector.h>
+#include <velox/vector/TypeAliases.h>
+#include <velox/vector/VectorEncoding.h>
+#include <velox/vector/VectorSaver.h>
+#include <memory>
+#include <sstream>
+#include <string>
+#include <utility>
+
+#include "JavaString.h"
 #include "JniCommon.h"
 #include "JniError.h"
+#include "JniTypes.h"
 #include "velox4j/arrow/Arrow.h"
 #include "velox4j/conf/Config.h"
 #include "velox4j/init/Init.h"
 #include "velox4j/iterator/BlockingQueue.h"
 #include "velox4j/iterator/UpIterator.h"
+#include "velox4j/lifecycle/ObjectStore.h"
 #include "velox4j/lifecycle/Session.h"
+#include "velox4j/memory/AllocationListener.h"
 #include "velox4j/memory/JavaAllocationListener.h"
+#include "velox4j/memory/MemoryManager.h"
 #include "velox4j/query/QueryExecutor.h"
 
 namespace facebook::velox4j {

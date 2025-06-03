@@ -14,8 +14,18 @@
  * limitations under the License.
  */
 #include <gtest/gtest.h>
+#include <stdint.h>
+#include <string.h>
 #include <velox/exec/tests/utils/HiveConnectorTestBase.h>
 #include <velox/exec/tests/utils/PlanBuilder.h>
+#include <initializer_list>
+#include <memory>
+#include <ostream>
+#include <string>
+#include <utility>
+#include <vector>
+
+#include "velox4j/conf/Config.h"
 #include "velox4j/query/Query.h"
 #include "velox4j/test/Init.h"
 
