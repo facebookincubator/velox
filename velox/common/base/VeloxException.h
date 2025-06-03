@@ -52,7 +52,7 @@ inline constexpr auto kErrorSourceRuntime = "RUNTIME"_fs;
 
 /// Errors where the root cause of the problem is some external dependency (e.g.
 /// storage)
-inline constexpr auto kErrorSourceExternal = "EXTERNAL"_fs; 
+inline constexpr auto kErrorSourceExternal = "EXTERNAL"_fs;
 } // namespace error_source
 
 namespace error_code {
