@@ -61,10 +61,10 @@ TEST_F(VarcharTypeWriteSideCheckTest, varcharTypeWriteSideCheck) {
   // Edge cases - length limit must be positive
   VELOX_ASSERT_USER_THROW(
       varcharTypeWriteSideCheck("abc", 0),
-      "The character length limit must be greater than 0.");
+      "The length limit must be greater than 0.");
   VELOX_ASSERT_USER_THROW(
       varcharTypeWriteSideCheck("abc", -1),
-      "The character length limit must be greater than 0.");
+      "The length limit must be greater than 0.");
 
   // Edge cases - input string is all spaces.
   EXPECT_EQ(varcharTypeWriteSideCheck("   ", 2), "  ");

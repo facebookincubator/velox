@@ -35,8 +35,7 @@ void trimTrailingSpaces(
   const auto trimmedSize = numChars - std::distance(curPos + 1, inputStr.end());
 
   VELOX_USER_CHECK_LE(
-      trimmedSize,
-      limit, "Exceeds allowed length limitation: {}", limit);
+      trimmedSize, limit, "Exceeds allowed length limitation: {}", limit);
   output.setNoCopy(
       StringView(inputStr.data(), std::distance(inputStr.begin(), curPos + 1)));
 }
