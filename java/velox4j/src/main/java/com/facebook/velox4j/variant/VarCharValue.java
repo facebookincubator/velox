@@ -19,6 +19,7 @@ import java.util.Objects;
 
 import com.fasterxml.jackson.annotation.JsonCreator;
 import com.fasterxml.jackson.annotation.JsonGetter;
+import com.fasterxml.jackson.annotation.JsonInclude;
 import com.fasterxml.jackson.annotation.JsonProperty;
 
 public class VarCharValue extends Variant {
@@ -30,6 +31,7 @@ public class VarCharValue extends Variant {
   }
 
   @JsonGetter("value")
+  @JsonInclude(JsonInclude.Include.ALWAYS)
   public String getValue() {
     return value;
   }

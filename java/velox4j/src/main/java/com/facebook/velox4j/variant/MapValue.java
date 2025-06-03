@@ -26,6 +26,7 @@ import java.util.TreeMap;
 
 import com.fasterxml.jackson.annotation.JsonCreator;
 import com.fasterxml.jackson.annotation.JsonGetter;
+import com.fasterxml.jackson.annotation.JsonInclude;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import com.google.common.base.Preconditions;
 
@@ -33,6 +34,10 @@ public class MapValue extends Variant {
   private final Map<Variant, Variant> map;
 
   public MapValue(Map<Variant, Variant> map) {
+    if (map == null) {
+      this.map = null;
+      return;
+    }
     // The following is basically for test code, to write the map values into JSON with a
     //  comparatively stable order.
     // TODO: This may cause slow serialization as Variant#toString may be slow.
@@ -44,7 +49,10 @@ public class MapValue extends Variant {
   }
 
   @JsonCreator
-  public static MapValue create(@JsonProperty("value") Entries entries) {
+  private static MapValue create(@JsonProperty("value") Entries entries) {
+    if (entries == null) {
+      return new MapValue(null);
+    }
     final int size = entries.size();
     final Map<Variant, Variant> builder = new HashMap<>(size);
     for (int i = 0; i < size; i++) {
@@ -56,7 +64,11 @@ public class MapValue extends Variant {
   }
 
   @JsonGetter("value")
+  @JsonInclude(JsonInclude.Include.ALWAYS)
   public Entries getEntries() {
+    if (map == null) {
+      return null;
+    }
     final int size = map.size();
     final List<Variant> keys = new ArrayList<>(size);
     final List<Variant> values = new ArrayList<>(size);

@@ -662,7 +662,7 @@ public class QueryTest {
                 new BooleanType(),
                 List.of(
                     FieldAccessTypedExpr.create(new BigIntType(), "n_regionkey"),
-                    ConstantTypedExpr.create(new BigIntValue(3))),
+                    ConstantTypedExpr.create(new BigIntValue(3L))),
                 "greaterthanorequal"));
     final Query query = new Query(filterNode, Config.empty(), ConnectorConfig.empty());
     final SerialTask task = session.queryOps().execute(query);
