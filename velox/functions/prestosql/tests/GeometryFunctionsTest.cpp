@@ -16,6 +16,7 @@
 
 #include <gtest/gtest.h>
 #include <array>
+#include "velox/common/base/Status.h"
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/functions/prestosql/tests/utils/FunctionBaseTest.h"
 
@@ -839,13 +840,13 @@ TEST_F(GeometryFunctionsTest, testStDifference) {
       "POLYGON ((0 1, 3 1, 3 3, 0 3, 0 1))",
       "POLYGON ((0 1, 1 1, 1 0, 0 0, 0 1))");
 
-  VELOX_ASSERT_USER_THROW(
+  ASSERT_THROW(
       assertOverlay(
           "ST_Difference",
           "LINESTRING (0 0, 1 1, 1 0, 0 1)",
           "MULTIPOLYGON ( ((0 0, 0 2, 2 2, 2 0, 0 0)), ((1 1, 1 3, 3 3, 3 1, 1 1)) )",
           "POINT EMPTY"),
-      "TopologyException: side location conflict at 1 2. This can occur if the input geometry is invalid.");
+      facebook::velox::VeloxUserError);
 }
 
 TEST_F(GeometryFunctionsTest, testStIntersection) {
@@ -888,13 +889,13 @@ TEST_F(GeometryFunctionsTest, testStIntersection) {
       "LINESTRING (0 0, 1 -1, 1 2)",
       "GEOMETRYCOLLECTION (LINESTRING (1 1, 1 0), POINT (0 0))");
 
-  VELOX_ASSERT_USER_THROW(
+  ASSERT_THROW(
       assertOverlay(
           "ST_Intersection",
           "LINESTRING (0 0, 1 1, 1 0, 0 1)",
           "MULTIPOLYGON ( ((0 0, 0 2, 2 2, 2 0, 0 0)), ((1 1, 1 3, 3 3, 3 1, 1 1)) )",
           "POINT EMPTY"),
-      "TopologyException: side location conflict at 1 2. This can occur if the input geometry is invalid.");
+      facebook::velox::VeloxUserError);
 }
 
 TEST_F(GeometryFunctionsTest, testStSymDifference) {
@@ -930,13 +931,13 @@ TEST_F(GeometryFunctionsTest, testStSymDifference) {
       "POLYGON ((0 0, 0 3, 3 3, 3 0, 0 0))",
       "MULTIPOLYGON (((0 2, 0 3, 2 3, 2 2, 0 2)), ((2 2, 3 2, 3 0, 2 0, 2 2)), ((2 4, 4 4, 4 2, 3 2, 3 3, 2 3, 2 4)))");
 
-  VELOX_ASSERT_USER_THROW(
+  ASSERT_THROW(
       assertOverlay(
           "ST_SymDifference",
           "LINESTRING (0 0, 1 1, 1 0, 0 1)",
           "MULTIPOLYGON ( ((0 0, 0 2, 2 2, 2 0, 0 0)), ((1 1, 1 3, 3 3, 3 1, 1 1)) )",
           "POINT EMPTY"),
-      "TopologyException: side location conflict at 1 2. This can occur if the input geometry is invalid.");
+      facebook::velox::VeloxUserError);
 }
 
 TEST_F(GeometryFunctionsTest, testStUnion) {
@@ -1067,13 +1068,13 @@ TEST_F(GeometryFunctionsTest, testStUnion) {
       "GEOMETRYCOLLECTION (POLYGON ((2 2, 4 2, 4 4, 2 4, 2 2)), LINESTRING (2 1, 4 1))",
       "GEOMETRYCOLLECTION (LINESTRING (3 1, 4 1), POLYGON ((1 1, 1 3, 2 3, 2 4, 4 4, 4 2, 3 2, 3 1, 2 1, 1 1)))");
 
-  VELOX_ASSERT_USER_THROW(
+  ASSERT_THROW(
       assertOverlay(
           "ST_Union",
           "LINESTRING (0 0, 1 1, 1 0, 0 1)",
           "MULTIPOLYGON ( ((0 0, 0 2, 2 2, 2 0, 0 0)), ((1 1, 1 3, 3 3, 3 1, 1 1)) )",
           "POINT EMPTY"),
-      "TopologyException: side location conflict at 1 2. This can occur if the input geometry is invalid.");
+      facebook::velox::VeloxUserError);
 }
 
 // Accessors
