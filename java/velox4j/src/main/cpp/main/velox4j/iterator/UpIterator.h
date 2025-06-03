@@ -16,6 +16,7 @@
 #pragma once
 
 #include <velox/vector/ComplexVector.h>
+
 #include "velox4j/query/Query.h"
 
 namespace facebook::velox4j {

@@ -14,7 +14,28 @@
  * limitations under the License.
  */
 #include "MemoryManager.h"
+
+#include <fmt/core.h>
+#include <folly/Conv.h>
+#include <glog/logging.h>
+#include <stdint.h>
+#include <velox/common/base/BitUtil.h>
+#include <velox/common/base/Exceptions.h>
+#include <velox/common/base/SuccinctPrinter.h>
+#include <velox/common/config/Config.h>
+#include <velox/common/memory/Memory.h>
+#include <velox/common/memory/MemoryAllocator.h>
+#include <velox/common/memory/MemoryArbitrator.h>
+#include <atomic>
+#include <exception>
+#include <functional>
+#include <mutex>
+#include <ostream>
+#include <string_view>
+#include <utility>
+
 #include "ArrowMemoryPool.h"
+#include "velox4j/memory/AllocationListener.h"
 
 namespace facebook::velox4j {
 using namespace facebook;

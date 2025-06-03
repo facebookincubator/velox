@@ -14,7 +14,24 @@
  * limitations under the License.
  */
 #include "Evaluator.h"
+
+#include <fmt/core.h>
+#include <folly/json/json.h>
+#include <stdint.h>
+#include <velox/common/base/Exceptions.h>
+#include <velox/common/caching/AsyncDataCache.h>
+#include <velox/common/memory/MemoryPool.h>
+#include <velox/common/serialization/Serializable.h>
+#include <velox/core/QueryConfig.h>
+#include <velox/core/QueryCtx.h>
+#include <velox/expression/Expr.h>
+#include <velox/vector/BaseVector.h>
+#include <atomic>
+#include <utility>
+
 #include "Evaluation.h"
+#include "velox4j/conf/Config.h"
+#include "velox4j/memory/MemoryManager.h"
 
 namespace facebook::velox4j {
 using namespace facebook::velox;
