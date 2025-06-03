@@ -27,10 +27,7 @@
 #include <vector>
 
 #include "arrow/buffer.h"
-#include "arrow/io/file.h"
-#include "arrow/status.h"
 #include "arrow/testing/gtest_util.h"
-#include "arrow/testing/random.h"
 
 #include "velox/dwio/parquet/writer/arrow/Exception.h"
 #include "velox/dwio/parquet/writer/arrow/Platform.h"
