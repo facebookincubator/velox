@@ -129,7 +129,7 @@ char* mk_sentence(int stream, DSDGenContext& dsdGenContext) {
  * Side Effects:
  * TODO: None
  */
-char* gen_text(
+void gen_text(
     char* dest,
     int min,
     int max,
@@ -142,10 +142,6 @@ char* gen_text(
       &target_len, DIST_UNIFORM, min, max, 0, stream, dsdGenContext);
   if (dest)
     *dest = '\0';
-  else {
-    dest = static_cast<char*>(malloc((max + 1) * sizeof(char)));
-    MALLOC_CHECK(dest);
-  }
 
   while (target_len > 0) {
     s = mk_sentence(stream, dsdGenContext);
@@ -161,9 +157,8 @@ char* gen_text(
       strcat(dest, " ");
       target_len -= 1;
     }
+    free(s);
   }
-
-  return (dest);
 }
 
 #ifdef TEST

@@ -125,12 +125,12 @@ typedef HUGE_TYPE ds_key_t;
 struct DSDGenContext;
 
 typedef struct DIST_T {
-  int* type_vector;
-  int** weight_sets;
-  int* maximums;
-  int** value_sets;
-  char* strings;
-  char* names;
+  std::vector<int32_t> type_vector;
+  std::vector<std::vector<int32_t>> weight_sets;
+  std::vector<int32_t> maximums;
+  std::vector<std::vector<int32_t>> value_sets;
+  std::vector<char> strings;
+  std::vector<char> names;
   int size;
 } dist_t;
 
@@ -153,7 +153,7 @@ typedef struct D_IDX_T {
   int w_width;
   int v_width;
   int flags;
-  dist_t* dist;
+  dist_t dist;
 } d_idx_t;
 
 typedef struct DISTINDEX_T {
@@ -182,7 +182,7 @@ typedef struct OPTION_T {
       const char* szPName,
       const char* optarg,
       DSDGenContext& dsdGenContext);
-  const char* dflt;
+  std::string dflt;
 } option_t;
 
 typedef struct DS_PRICING_T {
@@ -731,8 +731,8 @@ typedef struct TDEF_T {
   int nNullPct = 0; /* percentage of rows with nulls (basis points) */
   ds_key_t kNullBitMap = 0; /* colums that should be NULL in the current row */
   ds_key_t kNotNullBitMap = 0; /* columns that are defined NOT NULL */
-  ds_key_t* arSparseKeys =
-      nullptr; /* sparse key set for table; used if FL_SPARSE is set */
+  std::vector<ds_key_t> arSparseKeys =
+      {}; /* sparse key set for table; used if FL_SPARSE is set */
 } tdef;
 
 int read_file(
@@ -761,6 +761,8 @@ static std::once_flag initFlag_;
 
 // DSDGenContext to access global variables.
 struct DSDGenContext {
+  DSDGenContext() : params(23 + 2) {}
+
   struct DBGEN_VERSION_TBL g_dbgen_version;
 
   struct W_STORE_SALES_TBL g_w_store_sales;
@@ -865,7 +867,7 @@ struct DSDGenContext {
        ".vld"},
       {"RNGSEED", OPT_INT | OPT_ADV, 24, "set RNG seed", NULL, "19620718"}};
 
-  char* params[23 + 2];
+  std::vector<std::vector<char>> params;
 
   struct W_DATE_TBL g_w_date;
 
@@ -979,7 +981,7 @@ struct DSDGenContext {
        0,
        0x0,
        0x0,
-       NULL},
+       {}},
       {"s_customer_address",
        "s_ca",
        FL_SOURCE_DDL | FL_PASSTHRU,
@@ -993,7 +995,7 @@ struct DSDGenContext {
        0,
        0x0,
        0x01,
-       NULL},
+       {}},
       {"s_call_center",
        "s_cc",
        FL_SOURCE_DDL,
@@ -1007,7 +1009,7 @@ struct DSDGenContext {
        0,
        0x0,
        0x02,
-       NULL},
+       {}},
       {"s_catalog",
        "s_ct",
        FL_SOURCE_DDL | FL_NOP,
@@ -1021,7 +1023,7 @@ struct DSDGenContext {
        0,
        0x0,
        0x0,
-       NULL},
+       {}},
       {"s_catalog_order",
        "s_cord",
        FL_SOURCE_DDL | FL_PARENT | FL_DATE_BASED,
@@ -1035,7 +1037,7 @@ struct DSDGenContext {
        0,
        0x0,
        0x01,
-       NULL},
+       {}},
       {"s_catalog_order_lineitem",
        "s_cl",
        FL_SOURCE_DDL | FL_CHILD | FL_PARENT,
@@ -1049,7 +1051,7 @@ struct DSDGenContext {
        0,
        0x0,
        0x07,
-       NULL},
+       {}},
       {"s_catalog_page",
        "s_cp",
        FL_SOURCE_DDL | FL_PASSTHRU,
@@ -1063,7 +1065,7 @@ struct DSDGenContext {
        0,
        0x0,
        0x033,
-       NULL},
+       {}},
       {"s_catalog_promotional_item",
        "s_ci",
        FL_NOP | FL_SOURCE_DDL,
@@ -1077,7 +1079,7 @@ struct DSDGenContext {
        0,
        0x0,
        0x0,
-       NULL},
+       {}},
       {"s_catalog_returns",
        "s_cr",
        FL_SOURCE_DDL | FL_CHILD,
@@ -1091,7 +1093,7 @@ struct DSDGenContext {
        0,
        0x0,
        0x0E,
-       NULL},
+       {}},
       {"s_category",
        "s_cg",
        FL_NOP | FL_SOURCE_DDL,
@@ -1105,7 +1107,7 @@ struct DSDGenContext {
        0,
        0x0,
        0x0,
-       NULL},
+       {}},
       {"s_class",
        "s_cl",
        FL_NOP | FL_SOURCE_DDL,
@@ -1119,7 +1121,7 @@ struct DSDGenContext {
        0,
        0x0,
        0x0,
-       NULL},
+       {}},
       {"s_company",
        "s_co",
        FL_NOP | FL_SOURCE_DDL,
@@ -1133,7 +1135,7 @@ struct DSDGenContext {
        0,
        0x0,
        0x0,
-       NULL},
+       {}},
       {"s_customer",
        "s_cu",
        FL_SOURCE_DDL,
@@ -1147,7 +1149,7 @@ struct DSDGenContext {
        0,
        0x0,
        0x01,
-       NULL},
+       {}},
       {"s_division",
        "s_di",
        FL_NOP | FL_SOURCE_DDL,
@@ -1161,7 +1163,7 @@ struct DSDGenContext {
        0,
        0x0,
        0x0,
-       NULL},
+       {}},
       {"s_inventory",
        "s_in",
        FL_SOURCE_DDL | FL_DATE_BASED,
@@ -1175,7 +1177,7 @@ struct DSDGenContext {
        0,
        0x0,
        0x07,
-       NULL},
+       {}},
       {"s_item",
        "s_it",
        FL_SOURCE_DDL,
@@ -1189,7 +1191,7 @@ struct DSDGenContext {
        0,
        0x0,
        0x01,
-       NULL},
+       {}},
       {"s_manager",
        "s_mg",
        FL_NOP | FL_SOURCE_DDL,
@@ -1203,7 +1205,7 @@ struct DSDGenContext {
        0,
        0x0,
        0x0,
-       NULL},
+       {}},
       {"s_manufacturer",
        "s_mn",
        FL_NOP | FL_SOURCE_DDL,
@@ -1217,7 +1219,7 @@ struct DSDGenContext {
        0,
        0x0,
        0x0,
-       NULL},
+       {}},
       {"s_market",
        "s_mk",
        FL_NOP | FL_SOURCE_DDL,
@@ -1231,7 +1233,7 @@ struct DSDGenContext {
        0,
        0x0,
        0x0,
-       NULL},
+       {}},
       {"s_product",
        "s_pr",
        FL_NOP | FL_SOURCE_DDL,
@@ -1245,7 +1247,7 @@ struct DSDGenContext {
        0,
        0x0,
        0x0,
-       NULL},
+       {}},
       {"s_promotion",
        "s_pm",
        FL_SOURCE_DDL | FL_PASSTHRU,
@@ -1259,7 +1261,7 @@ struct DSDGenContext {
        0,
        0x0,
        0x01,
-       NULL},
+       {}},
       {"s_purchase",
        "s_pu",
        FL_SOURCE_DDL | FL_PARENT | FL_DATE_BASED,
@@ -1273,7 +1275,7 @@ struct DSDGenContext {
        0,
        0x0,
        0x01,
-       NULL},
+       {}},
       {"s_purchase_lineitem",
        "s_pl",
        FL_SOURCE_DDL | FL_CHILD | FL_PARENT,
@@ -1287,7 +1289,7 @@ struct DSDGenContext {
        0,
        0x0,
        0x07,
-       NULL},
+       {}},
       {"s_reason",
        "s_re",
        FL_NOP | FL_SOURCE_DDL,
@@ -1301,7 +1303,7 @@ struct DSDGenContext {
        0,
        0x0,
        0x0,
-       NULL},
+       {}},
       {"s_store",
        "s_st",
        FL_SOURCE_DDL,
@@ -1315,7 +1317,7 @@ struct DSDGenContext {
        0,
        0x0,
        0x01,
-       NULL},
+       {}},
       {"s_store_promotional_item",
        "s_sp",
        FL_NOP | FL_SOURCE_DDL,
@@ -1329,7 +1331,7 @@ struct DSDGenContext {
        0,
        0x0,
        0x0,
-       NULL},
+       {}},
       {"s_store_returns",
        "s_sr",
        FL_SOURCE_DDL | FL_CHILD,
@@ -1343,7 +1345,7 @@ struct DSDGenContext {
        0,
        0x0,
        0x0E,
-       NULL},
+       {}},
       {"s_subcategory",
        "s_ct",
        FL_NOP | FL_SOURCE_DDL,
@@ -1357,7 +1359,7 @@ struct DSDGenContext {
        0,
        0x0,
        0x0,
-       NULL},
+       {}},
       {"s_subclass",
        "s_sc",
        FL_NOP | FL_SOURCE_DDL,
@@ -1371,7 +1373,7 @@ struct DSDGenContext {
        0,
        0x0,
        0x0,
-       NULL},
+       {}},
       {"s_warehouse",
        "s_.h",
        FL_SOURCE_DDL,
@@ -1385,7 +1387,7 @@ struct DSDGenContext {
        0,
        0x0,
        0x01,
-       NULL},
+       {}},
       {"s_web_order",
        "s_wo",
        FL_SOURCE_DDL | FL_PARENT | FL_DATE_BASED,
@@ -1399,7 +1401,7 @@ struct DSDGenContext {
        0,
        0x0,
        0x01,
-       NULL},
+       {}},
       {"s_web_order_lineitem",
        "s_wl",
        FL_SOURCE_DDL | FL_CHILD | FL_PARENT,
@@ -1413,7 +1415,7 @@ struct DSDGenContext {
        0,
        0x0,
        0x07,
-       NULL},
+       {}},
       {"s_web_page",
        "s_wp",
        FL_SOURCE_DDL | FL_PASSTHRU,
@@ -1427,7 +1429,7 @@ struct DSDGenContext {
        0,
        0x0,
        0x01,
-       NULL},
+       {}},
       {"s_web_promotional_item",
        "s_wi",
        FL_NOP | FL_SOURCE_DDL,
@@ -1441,7 +1443,7 @@ struct DSDGenContext {
        0,
        0x0,
        0x0,
-       NULL},
+       {}},
       {"s_web_returns",
        "s_wr",
        FL_SOURCE_DDL | FL_CHILD,
@@ -1455,7 +1457,7 @@ struct DSDGenContext {
        0,
        0x0,
        0x0E,
-       NULL},
+       {}},
       {"s_web_site",
        "s_ws",
        FL_SOURCE_DDL,
@@ -1469,7 +1471,7 @@ struct DSDGenContext {
        0,
        0x0,
        0x01,
-       NULL},
+       {}},
       {"s_zip_to_gmt",
        "s_zi",
        FL_SOURCE_DDL | FL_VPRINT,
@@ -1483,7 +1485,7 @@ struct DSDGenContext {
        0,
        0x0,
        0x03,
-       NULL},
+       {}},
       {NULL}};
 
   tdef w_tdefs[26] = {
@@ -1500,7 +1502,7 @@ struct DSDGenContext {
        100,
        0,
        0x0B,
-       NULL},
+       {}},
       {"catalog_page",
        "cp",
        0,
@@ -1514,7 +1516,7 @@ struct DSDGenContext {
        200,
        0,
        0x03,
-       NULL},
+       {}},
       {"catalog_returns",
        "cr",
        FL_CHILD,
@@ -1528,7 +1530,7 @@ struct DSDGenContext {
        400,
        0,
        0x10007,
-       NULL},
+       {}},
       {"catalog_sales",
        "cs",
        FL_PARENT | FL_DATE_BASED | FL_VPRINT,
@@ -1542,7 +1544,7 @@ struct DSDGenContext {
        100,
        0,
        0x28000,
-       NULL},
+       {}},
       {"customer",
        "cu",
        0,
@@ -1556,7 +1558,7 @@ struct DSDGenContext {
        700,
        0,
        0x13,
-       NULL},
+       {}},
       {"customer_address",
        "ca",
        0,
@@ -1570,7 +1572,7 @@ struct DSDGenContext {
        600,
        0,
        0x03,
-       NULL},
+       {}},
       {"customer_demographics",
        "cd",
        0,
@@ -1584,7 +1586,7 @@ struct DSDGenContext {
        0,
        0,
        0x1,
-       NULL},
+       {}},
       {"date_dim",
        "da",
        0,
@@ -1598,7 +1600,7 @@ struct DSDGenContext {
        0,
        0,
        0x03,
-       NULL},
+       {}},
       {"household_demographics",
        "hd",
        0,
@@ -1612,7 +1614,7 @@ struct DSDGenContext {
        0,
        0,
        0x01,
-       NULL},
+       {}},
       {"income_band",
        "ib",
        0,
@@ -1626,7 +1628,7 @@ struct DSDGenContext {
        0,
        0,
        0x1,
-       NULL},
+       {}},
       {"inventory",
        "inv",
        FL_DATE_BASED,
@@ -1640,7 +1642,7 @@ struct DSDGenContext {
        1000,
        0,
        0x07,
-       NULL},
+       {}},
       {"item",
        "it",
        FL_TYPE_2,
@@ -1654,7 +1656,7 @@ struct DSDGenContext {
        50,
        0,
        0x0B,
-       NULL},
+       {}},
       {"promotion",
        "pr",
        0,
@@ -1668,7 +1670,7 @@ struct DSDGenContext {
        200,
        0,
        0x03,
-       NULL},
+       {}},
       {"reason",
        "re",
        0,
@@ -1682,7 +1684,7 @@ struct DSDGenContext {
        0,
        0,
        0x03,
-       NULL},
+       {}},
       {"ship_mode",
        "sm",
        0,
@@ -1696,7 +1698,7 @@ struct DSDGenContext {
        0,
        0,
        0x03,
-       NULL},
+       {}},
       {"store",
        "st",
        FL_TYPE_2 | FL_SMALL,
@@ -1710,7 +1712,7 @@ struct DSDGenContext {
        100,
        0,
        0xB,
-       NULL},
+       {}},
       {"store_returns",
        "sr",
        FL_CHILD,
@@ -1724,7 +1726,7 @@ struct DSDGenContext {
        700,
        0,
        0x204,
-       NULL},
+       {}},
       {"store_sales",
        "ss",
        FL_PARENT | FL_DATE_BASED | FL_VPRINT,
@@ -1738,7 +1740,7 @@ struct DSDGenContext {
        900,
        0,
        0x204,
-       NULL},
+       {}},
       {"time_dim",
        "ti",
        0,
@@ -1752,7 +1754,7 @@ struct DSDGenContext {
        0,
        0,
        0x03,
-       NULL},
+       {}},
       {"warehouse",
        "wa",
        FL_SMALL,
@@ -1766,7 +1768,7 @@ struct DSDGenContext {
        200,
        0,
        0x03,
-       NULL},
+       {}},
       {"web_page",
        "wp",
        FL_TYPE_2,
@@ -1780,7 +1782,7 @@ struct DSDGenContext {
        250,
        0,
        0x0B,
-       NULL},
+       {}},
       {"web_returns",
        "wr",
        FL_CHILD,
@@ -1794,7 +1796,7 @@ struct DSDGenContext {
        900,
        0,
        0x2004,
-       NULL},
+       {}},
       {"web_sales",
        "ws",
        FL_VPRINT | FL_PARENT | FL_DATE_BASED,
@@ -1808,7 +1810,7 @@ struct DSDGenContext {
        5,
        1100,
        0x20008,
-       NULL},
+       {}},
       {"web_site",
        "web",
        FL_TYPE_2 | FL_SMALL,
@@ -1822,7 +1824,7 @@ struct DSDGenContext {
        100,
        0,
        0x0B,
-       NULL},
+       {}},
       {"dbgen_version",
        "dv",
        0,
@@ -1836,7 +1838,7 @@ struct DSDGenContext {
        0,
        0,
        0,
-       NULL},
+       {}},
       {NULL}};
 
   rng_t Streams[MAX_STREAM + 1] = {

@@ -31,7 +31,7 @@ int close_direct(int dialect);
 int pick_tbl(char* dname);
 int itostr(char* dest, int i);
 int char_op(char* dest, int op, char* s1, char* s2);
-char* gen_text(
+void gen_text(
     char* dest,
     int min,
     int max,
