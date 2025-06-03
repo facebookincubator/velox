@@ -39,14 +39,10 @@ typedef struct DATE_T {
   int julian;
 } date_t;
 
-date_t* mk_date(void);
-
 int jtodt(date_t* dest, int i);
 int strtodt(date_t* dest, const char* s);
-date_t* strtodate(const char* str);
-int strtotime(char* str);
+date_t strtodate(const char* str);
 
-char* dttostr(date_t* d);
 int dttoj(date_t* d);
 
 int date_t_op(date_t* dest, int o, date_t* d1, date_t* d2);
@@ -54,8 +50,6 @@ int set_dow(date_t* d);
 int is_leap(int year);
 int day_number(date_t* d);
 int date_part(date_t* d, int p);
-int set_outfile(int i);
-int getDateWeightFromJulian(int jDay, int nDistribution);
 #define CENTURY_SHIFT 20 /* years before this are assumed to be 2000's */
 /*
  * DATE OPERATORS

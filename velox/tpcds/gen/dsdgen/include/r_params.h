@@ -46,7 +46,7 @@
  * function declarations
  */
 int process_options(int count, const char** args);
-char* get_str(const char* var, DSDGenContext& dsdGenContext);
+const char* get_str(const char* var, DSDGenContext& dsdGenContext);
 void set_str(
     const char* param,
     const char* value,
@@ -58,7 +58,7 @@ int is_set(const char* flag, DSDGenContext& dsdGenContext);
 void clr_flg(const char* flag, DSDGenContext& dsdGenContext);
 int find_table(const char* szParamName, const char* tname);
 char* GetParamName(int nParam, DSDGenContext& dsdGenContext);
-char* GetParamValue(int nParam, DSDGenContext& dsdGenContext);
+const char* GetParamValue(int nParam, DSDGenContext& dsdGenContext);
 int load_param(int nParam, const char* value, DSDGenContext& dsdGenContext);
 int fnd_param(const char* name, DSDGenContext& dsdGenContext);
 int init_params(DSDGenContext& dsdGenContext);

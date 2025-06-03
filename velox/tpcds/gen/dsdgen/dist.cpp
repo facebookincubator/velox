@@ -451,13 +451,10 @@ static int load_dist(d_idx_t* di) {
   {
     auto read_ptr = tpcds_idx;
     read_ptr += di->offset;
-    di->dist = static_cast<dist_t*>(malloc(sizeof(struct DIST_T)));
-    MALLOC_CHECK(di->dist);
-    d = di->dist;
+    d = &di->dist;
 
     /* load the type information */
-    d->type_vector = static_cast<int*>(malloc(sizeof(int32_t) * di->v_width));
-    MALLOC_CHECK(d->type_vector);
+    d->type_vector.resize(di->v_width);
     for (i = 0; i < di->v_width; i++) {
       if (read_ptr)
         memcpy(&temp, read_ptr, sizeof(int32_t));
@@ -466,20 +463,16 @@ static int load_dist(d_idx_t* di) {
     }
 
     /* load the weights */
-    d->weight_sets = static_cast<int**>(malloc(sizeof(int*) * di->w_width));
-    d->maximums = static_cast<int*>(malloc(sizeof(int32_t) * di->w_width));
-    MALLOC_CHECK(d->weight_sets);
-    MALLOC_CHECK(d->maximums);
+    d->weight_sets.resize(di->w_width);
+    d->maximums.resize(di->w_width);
     for (i = 0; i < di->w_width; i++) {
-      *(d->weight_sets + i) =
-          static_cast<int*>(malloc(di->length * sizeof(int32_t)));
-      MALLOC_CHECK(*(d->weight_sets + i));
+      d->weight_sets[i].resize(di->length);
       d->maximums[i] = 0;
       for (j = 0; j < di->length; j++) {
         if (read_ptr)
           memcpy(&temp, read_ptr, sizeof(int32_t));
         read_ptr += sizeof(int32_t);
-        *(*(d->weight_sets + i) + j) = ntohl(temp);
+        d->weight_sets[i][j] = ntohl(temp);
         /* calculate the maximum weight and convert sets to cummulative
          */
         d->maximums[i] += d->weight_sets[i][j];
@@ -488,34 +481,29 @@ static int load_dist(d_idx_t* di) {
     }
 
     /* load the value offsets */
-    d->value_sets = static_cast<int**>(malloc(sizeof(int*) * di->v_width));
-    MALLOC_CHECK(d->value_sets);
+    d->value_sets.resize(di->v_width);
     for (i = 0; i < di->v_width; i++) {
-      *(d->value_sets + i) =
-          static_cast<int*>(malloc(di->length * sizeof(int32_t)));
-      MALLOC_CHECK(*(d->value_sets + i));
+      d->value_sets[i].resize(di->length);
       for (j = 0; j < di->length; j++) {
         if (read_ptr)
           memcpy(&temp, read_ptr, sizeof(int32_t));
         read_ptr += sizeof(int32_t);
-        *(*(d->value_sets + i) + j) = ntohl(temp);
+        d->value_sets[i][j] = ntohl(temp);
       }
     }
 
     /* load the column aliases, if they were defined */
     if (di->name_space) {
-      d->names = static_cast<char*>(malloc(di->name_space));
-      MALLOC_CHECK(d->names);
-      if (d->names && read_ptr)
-        memcpy(d->names, read_ptr, di->name_space * sizeof(char));
+      d->names.resize(di->name_space);
+      if (read_ptr)
+        memcpy(d->names.data(), read_ptr, di->name_space);
       read_ptr += di->name_space * sizeof(char);
     }
 
     /* and finally the values themselves */
-    d->strings = static_cast<char*>(malloc(sizeof(char) * di->str_space));
-    MALLOC_CHECK(d->strings);
-    if (d->strings && read_ptr)
-      memcpy(d->strings, read_ptr, di->str_space * sizeof(char));
+    d->strings.resize(di->str_space);
+    if (read_ptr)
+      memcpy(d->strings.data(), read_ptr, di->str_space);
     read_ptr += di->str_space * sizeof(char);
     di->flags = FL_LOADED;
   }
@@ -547,9 +535,7 @@ int dist_op(
     int wset,
     int stream,
     DSDGenContext& dsdGenContext) {
-  dist_t* dist = nullptr;
   int level = 0, index = 0, dt = 0;
-  char* char_val = nullptr;
   int i_res = 1;
   const d_idx_t* d;
 
@@ -563,7 +549,7 @@ int dist_op(
     assert(d != nullptr);
   }
 
-  dist = d->dist;
+  const dist_t* dist = &d->dist;
 
   if (op == 0) {
     genrand_integer(
@@ -579,7 +565,6 @@ int dist_op(
     dt = vset - 1;
     if ((index >= d->length) || (dt > d->v_width))
       INTERNAL("Distribution overrun");
-    char_val = dist->strings + dist->value_sets[dt][index];
   } else {
     index = vset - 1;
     dt = wset - 1;
@@ -599,13 +584,13 @@ int dist_op(
         perror("sprintf failed");
       exit(1);
     }
-    char_val = dist->strings + dist->value_sets[dt][index];
   }
+  const char* char_val = dist->strings.data() + dist->value_sets[dt][index];
 
   switch (dist->type_vector[dt]) {
     case TKN_VARCHAR:
       if (dest)
-        *static_cast<char**>(dest) = static_cast<char*>(char_val);
+        *static_cast<const char**>(dest) = static_cast<const char*>(char_val);
       break;
     case TKN_INT:
       i_res = atoi(char_val);
@@ -613,17 +598,9 @@ int dist_op(
         *static_cast<int*>(dest) = i_res;
       break;
     case TKN_DATE:
-      if (dest == NULL) {
-        dest = static_cast<date_t*>(malloc(sizeof(date_t)));
-        MALLOC_CHECK(dest);
-      }
       strtodt(*static_cast<date_t**>(dest), char_val);
       break;
     case TKN_DECIMAL:
-      if (dest == NULL) {
-        dest = static_cast<decimal_t*>(malloc(sizeof(decimal_t)));
-        MALLOC_CHECK(dest);
-      }
       strtodec(*static_cast<decimal_t**>(dest), char_val);
       break;
   }
@@ -657,7 +634,6 @@ int dist_weight(
     int index,
     int wset,
     DSDGenContext& /*dsdGenContext*/) {
-  dist_t* dist = nullptr;
   int res = 0;
   const d_idx_t* d_idx;
 
@@ -667,7 +643,7 @@ int dist_weight(
     INTERNAL(msg.data());
   }
 
-  dist = d_idx->dist;
+  const dist_t* dist = &d_idx->dist;
   assert(index > 0);
   assert(wset > 0);
   res = dist->weight_sets[wset - 1][index - 1];
@@ -681,56 +657,6 @@ int dist_weight(
   *dest = res;
 
   return (0);
-}
-
-/*
- * Routine: int DistNameIndex()
- * Purpose: return the index of a column alias
- * Algorithm:
- * Data Structures:
- *
- * Params:
- * Returns:
- * Called By:
- * Calls:
- * Assumptions:
- * Side Effects:
- * TODO:
- */
-int DistNameIndex(
-    const char* szDist,
-    int nNameType,
-    const char* szName,
-    DSDGenContext& /*dsdGenContext*/) {
-  const d_idx_t* d_idx = nullptr;
-  dist_t* dist = nullptr;
-  int res = 0;
-  char* cp = NULL;
-
-  if ((d_idx = find_dist(szDist)) == NULL)
-    return (-1);
-  dist = d_idx->dist;
-
-  if (dist->names == NULL)
-    return (-1);
-
-  res = 0;
-  cp = dist->names;
-  do {
-    if (strcasecmp(szName, cp) == 0)
-      break;
-    cp += strlen(cp) + 1;
-    res += 1;
-  } while (res < (d_idx->v_width + d_idx->w_width));
-
-  if (res >= 0) {
-    if ((nNameType == VALUE_NAME) && (res < d_idx->v_width))
-      return (res + 1);
-    if ((nNameType == WEIGHT_NAME) && (res > d_idx->v_width))
-      return (res - d_idx->v_width + 1);
-  }
-
-  return (-1);
 }
 
 /*
@@ -760,54 +686,6 @@ int distsize(const char* name, DSDGenContext& /*dsdGenContext*/) {
 }
 
 /*
- * Routine: int IntegrateDist(char *szDistName, int nPct, int nStartIndex, int
- *nWeightSet) Purpose: return the index of the entry which, starting from
- *nStartIndex, would create a range comprising nPct of the total contained in
- *nWeightSet NOTE: the value can "wrap" -- that is, the returned value can be
- *less than nStartIndex Algorithm: Data Structures:
- *
- * Params:
- * Returns:
- * Called By:
- * Calls:
- * Assumptions:
- * Side Effects:
- * TODO:
- */
-
-int IntegrateDist(
-    const char* szDistName,
-    int nPct,
-    int nStartIndex,
-    int nWeightSet,
-    DSDGenContext& dsdGenContext) {
-  const d_idx_t* pDistIndex = nullptr;
-  int nGoal = 0, nSize = 0;
-
-  if ((nPct <= 0) || (nPct >= 100))
-    return (QERR_RANGE_ERROR);
-
-  pDistIndex = find_dist(szDistName);
-  if (pDistIndex == NULL)
-    return (QERR_BAD_NAME);
-
-  if (nStartIndex > pDistIndex->length)
-    return (QERR_RANGE_ERROR);
-
-  nGoal = pDistIndex->dist->maximums[nWeightSet];
-  nGoal = nGoal * nPct / 100;
-  nSize = distsize(szDistName, dsdGenContext);
-
-  while (nGoal >= 0) {
-    nStartIndex++;
-    nGoal -= dist_weight(
-        nullptr, szDistName, nStartIndex % nSize, nWeightSet, dsdGenContext);
-  }
-
-  return (nStartIndex);
-}
-
-/*
  * Routine: int dist_type(char *name, int nValueSet)
  * Purpose: return the type of the n-th value set in a distribution
  * Algorithm:
@@ -832,7 +710,7 @@ int dist_type(const char* name, int nValueSet, DSDGenContext& dsdGenContext) {
   if (nValueSet < 1 || nValueSet > dist->v_width)
     return (-1);
 
-  return (dist->dist->type_vector[nValueSet - 1]);
+  return (dist->dist.type_vector[nValueSet - 1]);
 }
 
 /*
@@ -920,117 +798,6 @@ int dist_active(
   }
 
   return (nResult);
-}
-
-/*
- * Routine: DistSizeToShiftWidth(char *szDist)
- * Purpose: Determine the number of bits required to select a member of the
- * distribution Algorithm: Data Structures:
- *
- * Params:
- * Returns:
- * Called By:
- * Calls:
- * Assumptions:
- * Side Effects:
- * TODO: None
- */
-int DistSizeToShiftWidth(
-    const char* szDist,
-    int nWeightSet,
-    DSDGenContext& dsdGenContext) {
-  int nBits = 1, nMax;
-  unsigned int nTotal = 2;
-  const d_idx_t* d;
-
-  d = find_dist(szDist);
-  nMax = dist_max(d->dist, nWeightSet, dsdGenContext);
-
-  while (nTotal < nMax) {
-    nBits += 1;
-    nTotal <<= 1;
-  }
-
-  return (nBits);
-}
-
-/*
- * Routine:
- * Purpose:
- * Algorithm:
- * Data Structures:
- *
- * Params:
- * Returns:
- * Called By:
- * Calls:
- * Assumptions:
- * Side Effects:
- * TODO: None
- */
-int MatchDistWeight(
-    void* dest,
-    const char* szDist,
-    int nWeight,
-    int nWeightSet,
-    int ValueSet,
-    DSDGenContext& dsdGenContext) {
-  const d_idx_t* d = nullptr;
-  dist_t* dist = nullptr;
-  int index = 0, dt = 0, i_res = 0, nRetcode = 0;
-  char* char_val;
-
-  if ((d = find_dist(szDist)) == nullptr) {
-    std::vector<char> msg(40 + strlen(szDist));
-    snprintf(msg.data(), msg.size(), "Invalid distribution name '%s'", szDist);
-    INTERNAL(msg.data());
-  }
-
-  dist = d->dist;
-  nWeight %= dist->maximums[nWeightSet - 1];
-
-  while (nWeight > dist->weight_sets[nWeightSet - 1][index] &&
-         index < d->length)
-    index += 1;
-  dt = ValueSet - 1;
-  if (index >= d->length)
-    index = d->length - 1;
-  char_val = dist->strings + dist->value_sets[dt][index];
-
-  switch (dist->type_vector[dt]) {
-    case TKN_VARCHAR:
-      if (dest)
-        *static_cast<char**>(dest) = static_cast<char*>(char_val);
-      break;
-    case TKN_INT:
-      i_res = atoi(char_val);
-      if (dest)
-        *static_cast<int*>(dest) = i_res;
-      break;
-    case TKN_DATE:
-      if (dest == nullptr) {
-        dest = static_cast<date_t*>(malloc(sizeof(date_t)));
-        MALLOC_CHECK(dest);
-      }
-      strtodt(*static_cast<date_t**>(dest), char_val);
-      break;
-    case TKN_DECIMAL:
-      if (dest == nullptr) {
-        dest = static_cast<decimal_t*>(malloc(sizeof(decimal_t)));
-        MALLOC_CHECK(dest);
-      }
-      strtodec(*(decimal_t**)dest, char_val);
-      break;
-  }
-
-  nRetcode = 1;
-  index = 1;
-  while (index < dist->maximums[nWeightSet - 1]) {
-    nRetcode += 1;
-    index *= 2;
-  }
-
-  return (nRetcode);
 }
 
 /*

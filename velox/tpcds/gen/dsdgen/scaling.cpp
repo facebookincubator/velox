@@ -657,14 +657,13 @@ int getSkewedJulianDate(
  * TODO: None
  */
 ds_key_t dateScaling(int nTable, ds_key_t jDate, DSDGenContext& dsdGenContext) {
-  dist_t* pDist;
   const d_idx_t* pDistIndex;
   date_t Date;
   int nDateWeight = 1, nCalendarTotal, nDayWeight;
   ds_key_t kRowCount = -1;
   tdef* pTdef = getSimpleTdefsByNumber(nTable, dsdGenContext);
   pDistIndex = find_dist("calendar");
-  pDist = pDistIndex->dist;
+  const dist_t* pDist = &pDistIndex->dist;
   if (!pDist)
     ReportError(QERR_NO_MEMORY, "dateScaling()", 1);
 
