@@ -31,7 +31,8 @@ struct DoublerGenerator {
   std::unique_ptr<int> operator()(
       const int& value,
       const void* /*properties*/ = nullptr,
-      void* /*statistics*/ = nullptr) {
+      void* /*statistics*/ = nullptr,
+      const void* /*context*/ = nullptr) {
     ++generated;
     return std::make_unique<int>(value * 2);
   }
@@ -42,7 +43,8 @@ struct IdentityGenerator {
   std::unique_ptr<int> operator()(
       const int& value,
       const void* /*properties*/ = nullptr,
-      void* /*statistics*/ = nullptr) {
+      void* /*statistics*/ = nullptr,
+      const void* /*context*/ = nullptr) {
     return std::make_unique<int>(value);
   }
 };
@@ -116,7 +118,8 @@ struct DoublerWithExceptionsGenerator {
   std::unique_ptr<int> operator()(
       const int& value,
       const void* /*properties*/ = nullptr,
-      void* /*statistics*/ = nullptr) {
+      void* /*statistics*/ = nullptr,
+      const void* /*context*/ = nullptr) {
     if (value == 3) {
       VELOX_FAIL("3 is bad");
     }

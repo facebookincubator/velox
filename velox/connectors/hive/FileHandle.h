@@ -32,6 +32,9 @@
 #include "velox/connectors/hive/FileProperties.h"
 
 namespace facebook::velox {
+namespace connector {
+class ConnectorQueryCtx;
+}
 
 // See the file comment.
 struct FileHandle {
@@ -70,7 +73,8 @@ class FileHandleGenerator {
   std::unique_ptr<FileHandle> operator()(
       const std::string& filename,
       const FileProperties* properties,
-      filesystems::File::IoStats* stats);
+      filesystems::File::IoStats* stats,
+      const connector::ConnectorQueryCtx* connectorQueryCtx);
 
  private:
   const std::shared_ptr<const config::ConfigBase> properties_;
@@ -82,6 +86,7 @@ using FileHandleFactory = CachedFactory<
     FileHandleGenerator,
     FileProperties,
     filesystems::File::IoStats,
+    connector::ConnectorQueryCtx,
     FileHandleSizer>;
 
 using FileHandleCachedPtr = CachedPtr<std::string, FileHandle>;

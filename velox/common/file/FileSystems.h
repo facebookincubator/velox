@@ -84,6 +84,9 @@ struct FileOptions {
   /// A hint to the file system for which region size of the file should be
   /// read. Specifically, the read length.
   std::optional<int64_t> readRangeHint{std::nullopt};
+
+  /// Used to pass custom context into backend filesystem for logging purposes.
+  std::optional<std::unordered_map<std::string, std::string>> loggingContext{};
 };
 
 /// Defines directory options

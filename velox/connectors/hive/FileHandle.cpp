@@ -19,6 +19,7 @@
 #include "velox/common/base/StatsReporter.h"
 #include "velox/common/file/FileSystems.h"
 #include "velox/common/time/Timer.h"
+#include "velox/connectors/Connector.h"
 
 #include <atomic>
 
@@ -42,7 +43,8 @@ std::string groupName(const std::string& filename) {
 std::unique_ptr<FileHandle> FileHandleGenerator::operator()(
     const std::string& filename,
     const FileProperties* properties,
-    filesystems::File::IoStats* stats) {
+    filesystems::File::IoStats* stats,
+    const connector::ConnectorQueryCtx* connectorQueryCtx) {
   // We have seen cases where drivers are stuck when creating file handles.
   // Adding a trace here to spot this more easily in future.
   process::TraceContext trace("FileHandleGenerator::operator()");
@@ -57,6 +59,11 @@ std::unique_ptr<FileHandle> FileHandleGenerator::operator()(
       options.fileSize = properties->fileSize;
       options.readRangeHint = properties->readRangeHint;
       options.extraFileInfo = properties->extraFileInfo;
+    }
+    if (connectorQueryCtx) {
+      options.loggingContext = std::unordered_map<std::string, std::string>{
+          {"query_id", connectorQueryCtx->queryId()},
+      };
     }
     fileHandle->file = filesystems::getFileSystem(filename, properties_)
                            ->openFileForRead(filename, options);
