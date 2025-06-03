@@ -17,6 +17,8 @@
 
 #include <JniHelpers.h>
 #include <jni.h>
+#include <jni_md.h>
+#include <stdint.h>
 #include <cmath>
 #include <mutex>
 #include <string>

@@ -15,6 +15,13 @@
  */
 #include "Evaluation.h"
 
+#include <folly/json/dynamic-inl.h>
+#include <velox/common/serialization/DeserializationRegistry.h>
+#include <string>
+#include <utility>
+
+#include "velox4j/conf/Config.h"
+
 namespace facebook::velox4j {
 using namespace facebook::velox;
 

@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 #include "JniError.h"
+
 #include <velox/common/base/Exceptions.h>
 
 namespace facebook::velox4j {
