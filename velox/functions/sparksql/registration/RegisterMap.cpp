@@ -29,7 +29,8 @@ void registerSparkMapFunctions(const std::string& prefix) {
   //   function expression corresponds to body, arguments to signature
   VELOX_REGISTER_VECTOR_FUNCTION(udf_map_filter, prefix + "map_filter");
   VELOX_REGISTER_VECTOR_FUNCTION(udf_map_entries, prefix + "map_entries");
-  VELOX_REGISTER_VECTOR_FUNCTION(udf_map_from_entries, prefix + "map_from_entries");
+  VELOX_REGISTER_VECTOR_FUNCTION(
+      udf_map_from_entries, prefix + "map_from_entries");
   VELOX_REGISTER_VECTOR_FUNCTION(udf_map_keys, prefix + "map_keys");
   VELOX_REGISTER_VECTOR_FUNCTION(udf_map_values, prefix + "map_values");
   VELOX_REGISTER_VECTOR_FUNCTION(udf_map_zip_with, prefix + "map_zip_with");
