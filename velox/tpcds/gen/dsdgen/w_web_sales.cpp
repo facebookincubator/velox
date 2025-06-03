@@ -66,7 +66,6 @@ W_WEB_SALES_TBL* mk_web_sales_master(
 
   if (!dsdGenContext.mk_master_web_sales_init) {
     dsdGenContext.pWebSalesItemPermutation = makePermutation(
-        NULL,
         dsdGenContext.nWebSalesItemCount =
             static_cast<int>(getIDCount(ITEM, dsdGenContext)),
         WS_PERMUTATION,

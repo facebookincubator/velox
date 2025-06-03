@@ -68,7 +68,6 @@ W_CATALOG_SALES_TBL* mk_catalog_sales_master(
     dsdGenContext.jDate =
         skipDays(CATALOG_SALES, &dsdGenContext.kNewDateIndex, dsdGenContext);
     dsdGenContext.pCatalogSalesItemPermutation = makePermutation(
-        NULL,
         (dsdGenContext.nCatalogSalesItemCount =
              static_cast<int>(getIDCount(ITEM, dsdGenContext))),
         CS_PERMUTE,

@@ -53,62 +53,6 @@ const std::vector<const char*> weekday_names = {
     "Thursday",
     "Friday",
     "Saturday"};
-/*
- * Routine: mk_date(void)
- * Purpose: initialize a date_t
- * Algorithm:
- * Data Structures:
- * Params:
- * Returns: date_t *
- * Called By:
- * Calls:
- * Assumptions:
- * Side Effects:
- * TODO: None
- */
-date_t* mk_date(void) {
-  date_t* res;
-
-  res = (date_t*)malloc(sizeof(struct DATE_T));
-  MALLOC_CHECK(res);
-
-  res->flags = 0;
-  res->year = 0;
-  res->month = 0;
-  res->day = 0;
-  res->julian = 0;
-
-  return (res);
-}
-/*
- * Routine: strtotime(char *str)
- * Purpose: convert a string from the time to the number of seconds since
- * midnight Algorithm: Data Structures: Params: Returns: int Called By: Calls:
- * Assumptions:
- * Side Effects:
- * TODO: None
- */
-int strtotime(char* str) {
-  int hour, min, sec, res = 0;
-
-  if (sscanf(str, "%d:%d:%d", &hour, &min, &sec) != 3) {
-    if (sscanf(str, "%d:%d", &hour, &min) != 2) {
-      INTERNAL("Invalid time format");
-    }
-    sec = 0;
-  }
-
-  if (hour > 23 || hour < 0)
-    INTERNAL("Invalid time format");
-  if (min > 59 || min < 0)
-    INTERNAL("Invalid time format");
-  if (sec > 59 || sec < 0)
-    INTERNAL("Invalid time format");
-
-  res = hour * 3600 + min * 60 + sec;
-
-  return (res);
-}
 
 /*
  * Routine: strtodate(char *str)
@@ -116,23 +60,20 @@ int strtotime(char* str) {
  * Algorithm:
  * Data Structures:
  * Params:
- * Returns: date_t *
+ * Returns: date_t
  * Called By:
  * Calls:
  * Assumptions:
  * Side Effects:
  * TODO: None
  */
-date_t* strtodate(const char* str) {
-  date_t* res;
+date_t strtodate(const char* str) {
+  date_t res;
 
-  res = (date_t*)malloc(sizeof(struct DATE_T));
-  MALLOC_CHECK(res);
-
-  if (sscanf(str, "%d-%d-%d", &res->year, &res->month, &res->day) != 3)
+  if (sscanf(str, "%d-%d-%d", &res.year, &res.month, &res.day) != 3)
     INTERNAL("Badly formed string in call to strtodate()");
-  res->flags = 0;
-  res->julian = dttoj(res);
+  res.flags = 0;
+  res.julian = dttoj(&res);
 
   return (res);
 }
@@ -235,37 +176,6 @@ int strtodt(date_t* dest, const char* s) {
   dest->julian = dttoj(dest);
 
   return (nRetCode);
-}
-
-/*
- * Routine: dttostr(date_t *d)
- * Purpose: convert a date_t structure to a string
- * Algorithm:
- * Data Structures:
- *
- * Params:
- * Returns: char *; NULL on failure
- * Called By:
- * Calls:
- * Assumptions:
- * Side Effects:
- * TODO: 20000110 Need to handle more than Y4MD-
- */
-char* dttostr(date_t* d) {
-  static std::vector<char> res;
-  static int init = 0;
-
-  if (!init) {
-    res.resize(sizeof(char) * 11);
-    init = 1;
-  }
-
-  if (d == NULL)
-    return (NULL);
-
-  snprintf(res.data(), res.size(), "%4d-%02d-%02d", d->year, d->month, d->day);
-
-  return res.data();
 }
 
 /*
@@ -396,26 +306,6 @@ int date_t_op(date_t* dest, int op, date_t* d1, date_t* d2) {
 }
 
 /*
- * Routine: itodt(date_t *d, int src)
- * Purpose:  convert a number of days to a date_t
- * Algorithm: NOTE: sets only julian field
- * Data Structures:
- *
- * Params:
- * Returns:
- * Called By:
- * Calls:
- * Assumptions:
- * Side Effects:
- * TODO: None
- */
-int itodt(date_t* dest, int src) {
-  dest->julian = src;
-
-  return (0);
-}
-
-/*
  * Routine: set_dow(date *d)
  * Purpose: perpetual calendar stuff
  * Algorithm:
@@ -515,36 +405,6 @@ int day_number(date_t* d) {
 }
 
 /*
- * Routine: getDateWeightFromJulian(jDay, nDistribution)
- * Purpose: return the weight associated with a particular julian date and
- * distribution Algorithm: Data Structures:
- *
- * Params:
- * Returns:
- * Called By:
- * Calls:
- * Assumptions:
- * Side Effects:
- * TODO: None
- */
-int getDateWeightFromJulian(
-    int jDay,
-    int nDistribution,
-    DSDGenContext& dsdGenContext) {
-  date_t dTemp;
-  jtodt(&dTemp, jDay);
-  int nDay;
-  nDay = day_number(&dTemp);
-
-  return (dist_weight(
-      NULL,
-      "calendar",
-      nDay,
-      nDistribution + is_leap(dTemp.year),
-      dsdGenContext));
-}
-
-/*
  * Routine: date_part(date_t *, int part)
  * Purpose:
  * Algorithm:
@@ -571,41 +431,3 @@ int date_part(date_t* d, int part) {
       return (-1);
   }
 }
-
-#ifdef TEST
-main() {
-  date_t* d;
-  int ret;
-
-  d = mk_date();
-  strtodt(d, "1776-07-04");
-  ret = set_dow(d);
-  printf("set_dow(\"1776-07-04\"): wanted 4 got %d\n", ret);
-  if (ret != 4) {
-    exit(1);
-  }
-  strtodt(d, "2000-01-01");
-  ret = set_dow(d);
-  printf("set_dow(\"2000-01-01\"): wanted 6 got %d\n", ret);
-  if (ret != 6) {
-    exit(1);
-  }
-
-  strtodt(d, "1970-01-01");
-  if ((ret = dttoj(d)) != 2440588) {
-    printf("dttoj returned %d\n", ret);
-    exit(1);
-  }
-
-  d->year = 1;
-  d->month = 11;
-  d->date = 11;
-  jtodt(d, 2440588);
-  if ((d->year != 1970) || (d->month != 1) || (d->date != 1)) {
-    printf("jtodt failed got: ");
-    printf("%4d-%02d-%02d", d->year, d->month, d->date);
-    exit(1);
-  }
-  return (0);
-}
-#endif /* TEST */

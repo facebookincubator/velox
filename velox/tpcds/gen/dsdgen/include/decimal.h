@@ -34,8 +34,6 @@
 
 #define FL_INIT 0x0004
 
-decimal_t* mk_decimal(int s, int p);
-
 int itodec(decimal_t* dest, int i);
 int strtodec(decimal_t* d, const char* src);
 
