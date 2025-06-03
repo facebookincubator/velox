@@ -322,6 +322,28 @@ class ValuesNode : public PlanNode {
         parallelizable_(parallelizable),
         repeatTimes_(repeatTimes) {}
 
+  ValuesNode(
+      const PlanNodeId& id,
+      std::vector<RowVectorPtr> values,
+      const RowTypePtr& outputType,
+      bool parallelizable = kDefaultParallelizable,
+      size_t repeatTimes = kDefaultRepeatTimes)
+      : PlanNode(id),
+        values_(std::move(values)),
+        outputType_(outputType),
+        parallelizable_(parallelizable),
+        repeatTimes_(repeatTimes) {
+    if (values_.empty()) {
+      VELOX_CHECK(ROW({})->equivalent(*outputType_));
+    } else {
+      for (const auto& rowVector : values_) {
+        const auto& valuesType =
+            std::dynamic_pointer_cast<const RowType>(rowVector->type());
+        VELOX_CHECK(valuesType->equivalent(*outputType_));
+      }
+    }
+  }
+
   class Builder {
    public:
     Builder() = default;
