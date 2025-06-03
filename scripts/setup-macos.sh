@@ -126,7 +126,7 @@ function install_adapters {
 function install_duckdb_clang {
   clang_major_version=`echo | clang -dM -E - | grep __clang_major__ | awk '{print $3}'`
   # Clang17 requires this. See issue #13215.
-  if [ ${clang_major_version} -eq 17 ]; then
+  if [ ${clang_major_version} -ge 17 ]; then
      EXTRA_PKG_CXXFLAGS=" -Wno-missing-template-arg-list-after-template-kw" install_duckdb
   else
      install_duckdb
