@@ -26,7 +26,7 @@ VELOX4J_LIB_NAME=libvelox4j.so
 
 # Build C++ so libraries.
 cmake -DCMAKE_BUILD_TYPE=Release -DVELOX4J_ENABLE_CCACHE=ON -DVELOX4J_BUILD_TESTING=OFF -DVELOX4J_INSTALL_DESTINATION="$INSTALL_DESTINATION" -S "$SOURCE_DIR" -B "$BUILD_DIR"
-cmake --build "$BUILD_DIR" --target velox4j_shared -j "$NUM_THREADS"
+cmake --build "$BUILD_DIR" --target velox4j -j "$NUM_THREADS"
 cmake --install "$BUILD_DIR" --component velox4j
 
 # Do a check to exclude the case that CMake installation incorrectly installed symbolic links.
