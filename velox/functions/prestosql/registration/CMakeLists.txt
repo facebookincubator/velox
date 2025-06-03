@@ -25,7 +25,6 @@ velox_add_library(
   DateTimeFunctionsRegistration.cpp
   DataSizeFunctionsRegistration.cpp
   GeneralFunctionsRegistration.cpp
-  GeometryFunctionsRegistration.cpp
   HyperLogFunctionsRegistration.cpp
   IntegerFunctionsRegistration.cpp
   JsonFunctionsRegistration.cpp
@@ -37,6 +36,10 @@ velox_add_library(
   StringFunctionsRegistration.cpp
   TDigestFunctionsRegistration.cpp
   URLFunctionsRegistration.cpp)
+
+if(VELOX_ENABLE_GEO)
+  velox_add_library(velox_functions_prestosql GeometryFunctionsRegistration.cpp)
+endif()
 
 # GCC 12 has a bug where it does not respect "pragma ignore" directives and ends
 # up failing compilation in an openssl header included by a hash-related
