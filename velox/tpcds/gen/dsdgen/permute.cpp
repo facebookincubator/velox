@@ -46,23 +46,16 @@
  * Side Effects:
  * TODO: None
  */
-int* makePermutation(
-    int* nNumberSet,
-    int nSize,
-    int nStream,
-    DSDGenContext& dsdGenContext) {
+int* makePermutation(int nSize, int nStream, DSDGenContext& dsdGenContext) {
   int i, nTemp, nIndex, *pInt;
 
   if (nSize <= 0)
     return (NULL);
 
-  if (!nNumberSet) {
-    nNumberSet = static_cast<int*>(malloc(nSize * sizeof(int)));
-    MALLOC_CHECK(nNumberSet);
-    pInt = nNumberSet;
-    for (i = 0; i < nSize; i++)
-      *pInt++ = i;
-  }
+  std::vector<int32_t> nNumberSet(nSize);
+  pInt = nNumberSet.data();
+  for (i = 0; i < nSize; i++)
+    *pInt++ = i;
 
   for (i = 0; i < nSize; i++) {
     nIndex = genrand_integer(
@@ -72,47 +65,5 @@ int* makePermutation(
     nNumberSet[nIndex] = nTemp;
   }
 
-  return (nNumberSet);
-}
-
-/*
- * Routine: MakePermutation(int nSize)
- * Purpose: Permute the integers in [1..nSize]
- * Algorithm:
- * Data Structures:
- *
- * Params:
- * Returns:
- * Called By:
- * Calls:
- * Assumptions:
- * Side Effects:
- * TODO: None
- */
-ds_key_t* makeKeyPermutation(
-    ds_key_t* nNumberSet,
-    ds_key_t nSize,
-    int nStream,
-    DSDGenContext& dsdGenContext) {
-  ds_key_t i, nTemp, nIndex, *pInt;
-  if (nSize <= 0)
-    return (NULL);
-
-  if (!nNumberSet) {
-    nNumberSet = static_cast<ds_key_t*>(malloc(nSize * sizeof(ds_key_t)));
-    MALLOC_CHECK(nNumberSet);
-    pInt = nNumberSet;
-    for (i = 0; i < nSize; i++)
-      *pInt++ = i;
-  }
-
-  for (i = 0; i < nSize; i++) {
-    nIndex = genrand_key(
-        NULL, DIST_UNIFORM, 0, nSize - 1, 0, nStream, dsdGenContext);
-    nTemp = nNumberSet[i];
-    nNumberSet[i] = nNumberSet[nIndex];
-    nNumberSet[nIndex] = nTemp;
-  }
-
-  return (nNumberSet);
+  return std::move(nNumberSet.data());
 }

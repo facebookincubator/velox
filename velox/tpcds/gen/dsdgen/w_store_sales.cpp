@@ -63,7 +63,6 @@ W_STORE_SALES_TBL* mk_master_store_sales(
     strtodec(&dMax, "100000.00");
     nMaxItemCount = 20;
     dsdGenContext.pStoreSalesItemPermutation = makePermutation(
-        NULL,
         dsdGenContext.nStoreSalesItemCount =
             static_cast<int>(getIDCount(ITEM, dsdGenContext)),
         SS_PERMUTATION,
