@@ -5654,3 +5654,36 @@ TEST_F(TableScanTest, statsBasedFilterReorderDisabled) {
     }
   }
 }
+
+TEST_F(TableScanTest, prevBatchEmptyAdaptivity) {
+  auto rowType = ROW({"c0", "c1"}, {BIGINT(), VARCHAR()});
+
+  const vector_size_t size = 100;
+
+  const std::string sampleString(1024 * 1024, 'a');
+  StringView sampleStringView(sampleString);
+  auto rowVector = makeRowVector(
+      {makeFlatVector<int64_t>(
+           size, [&](auto row) { return row % 100 == 50 ? 51 : row % 100; }),
+       makeFlatVector<StringView>(
+           size, [&](auto row) { return sampleStringView; })});
+
+  auto filePath = TempFilePath::create();
+  writeToFile(filePath->getPath(), rowVector);
+  createDuckDbTable({rowVector});
+
+  auto plan = PlanBuilder().tableScan(rowType, {"c0 = 50"}).planNode();
+  {
+    auto task = AssertQueryBuilder(duckDbQueryRunner_)
+                    .plan(plan)
+                    .split(makeHiveConnectorSplit(filePath->getPath()))
+                    .config(
+                        QueryConfig::kMaxOutputBatchRows,
+                        folly::to<std::string>(size * 4))
+                    .assertResults("SELECT * FROM tmp WHERE c0 = 50");
+    const auto opStats = task->taskStats().pipelineStats[0].operatorStats[0];
+    const auto initialBatchSize = opStats.runtimeStats.at("readBatchSize").min;
+    const auto maxBatchSize = opStats.runtimeStats.at("readBatchSize").max;
+    EXPECT_GT(maxBatchSize, initialBatchSize);
+  }
+}
