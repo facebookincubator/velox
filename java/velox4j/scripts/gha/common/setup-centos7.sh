@@ -30,14 +30,14 @@ sed -i \
   /etc/yum.repos.d/CentOS-SCLo-scl-rh.repo
 
 # Install essentials.
-yum -y install epel-release
-yum -y install wget curl tar zip unzip which patch sudo
-yum -y install ninja-build perl-IPC-Cmd autoconf autoconf-archive automake libtool
-yum -y install devtoolset-11 python3 pip dnf
-yum -y install bison java-1.8.0-openjdk java-1.8.0-openjdk-devel
-yum -y install ccache patchelf
-yum -y install lz4-devel lzo-devel libzstd-devel snappy-devel double-conversion-devel
-yum -y install libevent-devel
+yum -y install epel-release \
+  wget curl tar zip unzip which patch sudo \
+  ninja-build perl-IPC-Cmd autoconf autoconf-archive automake libtool \
+  devtoolset-11 python3 pip dnf \
+  bison java-1.8.0-openjdk java-1.8.0-openjdk-devel \
+  ccache patchelf \
+  lz4-devel lzo-devel libzstd-devel snappy-devel double-conversion-devel \
+  libevent-devel
 
 # Link cc / c++ to the ones in devtoolset.
 rm -f /usr/bin/cc /usr/bin/c++ /usr/bin/ld
