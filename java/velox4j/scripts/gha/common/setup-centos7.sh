@@ -30,8 +30,8 @@ sed -i \
   /etc/yum.repos.d/CentOS-SCLo-scl-rh.repo
 
 # Install essentials.
-yum -y install epel-release \
-  wget curl tar zip unzip which patch sudo \
+yum -y install epel-release
+yum -y install wget curl tar zip unzip which patch sudo \
   ninja-build perl-IPC-Cmd autoconf autoconf-archive automake libtool \
   devtoolset-11 python3 pip dnf \
   bison java-1.8.0-openjdk java-1.8.0-openjdk-devel \

@@ -15,7 +15,6 @@
  */
 #include "ArrowMemoryPool.h"
 
-#include <jemalloc/jemalloc.h>
 #include <string.h>
 #include <velox/common/base/Exceptions.h>
 #include <algorithm>

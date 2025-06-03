@@ -19,7 +19,7 @@ target_include_directories(velox4j_test INTERFACE ${CMAKE_CURRENT_LIST_DIR})
 target_link_libraries(
   velox4j_test
   INTERFACE
-    velox4j_shared
+    velox4j
     velox_vector_test_lib
     velox_dwio_common_test_utils
     velox_file_test_utils
