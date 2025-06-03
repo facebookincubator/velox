@@ -19,18 +19,20 @@ import java.util.Objects;
 
 import com.fasterxml.jackson.annotation.JsonCreator;
 import com.fasterxml.jackson.annotation.JsonGetter;
+import com.fasterxml.jackson.annotation.JsonInclude;
 import com.fasterxml.jackson.annotation.JsonProperty;
 
 public class RealValue extends Variant {
-  private final float value;
+  private final Float value;
 
   @JsonCreator
-  public RealValue(@JsonProperty("value") float value) {
+  public RealValue(@JsonProperty("value") Float value) {
     this.value = value;
   }
 
   @JsonGetter("value")
-  public float getValue() {
+  @JsonInclude(JsonInclude.Include.ALWAYS)
+  public Float getValue() {
     return value;
   }
 
@@ -39,7 +41,7 @@ public class RealValue extends Variant {
     if (this == o) return true;
     if (o == null || getClass() != o.getClass()) return false;
     RealValue realValue = (RealValue) o;
-    return Float.compare(value, realValue.value) == 0;
+    return Objects.equals(value, realValue.value);
   }
 
   @Override

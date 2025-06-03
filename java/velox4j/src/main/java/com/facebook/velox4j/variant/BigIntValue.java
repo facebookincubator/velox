@@ -19,18 +19,20 @@ import java.util.Objects;
 
 import com.fasterxml.jackson.annotation.JsonCreator;
 import com.fasterxml.jackson.annotation.JsonGetter;
+import com.fasterxml.jackson.annotation.JsonInclude;
 import com.fasterxml.jackson.annotation.JsonProperty;
 
 public class BigIntValue extends Variant {
-  private final long value;
+  private final Long value;
 
   @JsonCreator
-  public BigIntValue(@JsonProperty("value") long value) {
+  public BigIntValue(@JsonProperty("value") Long value) {
     this.value = value;
   }
 
   @JsonGetter("value")
-  public long getValue() {
+  @JsonInclude(JsonInclude.Include.ALWAYS)
+  public Long getValue() {
     return value;
   }
 
@@ -39,7 +41,7 @@ public class BigIntValue extends Variant {
     if (this == o) return true;
     if (o == null || getClass() != o.getClass()) return false;
     BigIntValue that = (BigIntValue) o;
-    return value == that.value;
+    return Objects.equals(value, that.value);
   }
 
   @Override

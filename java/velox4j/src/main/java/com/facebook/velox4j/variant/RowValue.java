@@ -21,6 +21,7 @@ import java.util.Objects;
 
 import com.fasterxml.jackson.annotation.JsonCreator;
 import com.fasterxml.jackson.annotation.JsonGetter;
+import com.fasterxml.jackson.annotation.JsonInclude;
 import com.fasterxml.jackson.annotation.JsonProperty;
 
 public class RowValue extends Variant {
@@ -28,10 +29,15 @@ public class RowValue extends Variant {
 
   @JsonCreator
   public RowValue(@JsonProperty("value") List<Variant> row) {
+    if (row == null) {
+      this.row = null;
+      return;
+    }
     this.row = Collections.unmodifiableList(row);
   }
 
   @JsonGetter("value")
+  @JsonInclude(JsonInclude.Include.ALWAYS)
   public List<Variant> getRow() {
     return row;
   }

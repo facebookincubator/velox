@@ -19,18 +19,20 @@ import java.util.Objects;
 
 import com.fasterxml.jackson.annotation.JsonCreator;
 import com.fasterxml.jackson.annotation.JsonGetter;
+import com.fasterxml.jackson.annotation.JsonInclude;
 import com.fasterxml.jackson.annotation.JsonProperty;
 
 public class DoubleValue extends Variant {
-  private final double value;
+  private final Double value;
 
   @JsonCreator
-  public DoubleValue(@JsonProperty("value") double value) {
+  public DoubleValue(@JsonProperty("value") Double value) {
     this.value = value;
   }
 
   @JsonGetter("value")
-  public double getValue() {
+  @JsonInclude(JsonInclude.Include.ALWAYS)
+  public Double getValue() {
     return value;
   }
 
@@ -39,7 +41,7 @@ public class DoubleValue extends Variant {
     if (this == o) return true;
     if (o == null || getClass() != o.getClass()) return false;
     DoubleValue that = (DoubleValue) o;
-    return Double.compare(value, that.value) == 0;
+    return Objects.equals(value, that.value);
   }
 
   @Override

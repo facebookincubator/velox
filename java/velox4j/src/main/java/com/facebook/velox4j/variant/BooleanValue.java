@@ -19,18 +19,20 @@ import java.util.Objects;
 
 import com.fasterxml.jackson.annotation.JsonCreator;
 import com.fasterxml.jackson.annotation.JsonGetter;
+import com.fasterxml.jackson.annotation.JsonInclude;
 import com.fasterxml.jackson.annotation.JsonProperty;
 
 public class BooleanValue extends Variant {
-  private final boolean value;
+  private final Boolean value;
 
   @JsonCreator
-  public BooleanValue(@JsonProperty("value") boolean value) {
+  public BooleanValue(@JsonProperty("value") Boolean value) {
     this.value = value;
   }
 
   @JsonGetter("value")
-  public boolean getValue() {
+  @JsonInclude(JsonInclude.Include.ALWAYS)
+  public Boolean getValue() {
     return value;
   }
 
@@ -39,7 +41,7 @@ public class BooleanValue extends Variant {
     if (this == o) return true;
     if (o == null || getClass() != o.getClass()) return false;
     BooleanValue that = (BooleanValue) o;
-    return value == that.value;
+    return Objects.equals(value, that.value);
   }
 
   @Override

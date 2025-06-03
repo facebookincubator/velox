@@ -50,6 +50,7 @@ public class VariantSerdeTest {
   public void testBooleanValue() {
     SerdeTests.testVariantRoundTrip(new BooleanValue(false));
     SerdeTests.testVariantRoundTrip(new BooleanValue(true));
+    SerdeTests.testVariantRoundTrip(new BooleanValue(null));
   }
 
   @Test
@@ -57,6 +58,7 @@ public class VariantSerdeTest {
     SerdeTests.testVariantRoundTrip(new TinyIntValue(-5));
     SerdeTests.testVariantRoundTrip(new TinyIntValue(0));
     SerdeTests.testVariantRoundTrip(new TinyIntValue(5));
+    SerdeTests.testVariantRoundTrip(new TinyIntValue(null));
   }
 
   @Test
@@ -64,6 +66,7 @@ public class VariantSerdeTest {
     SerdeTests.testVariantRoundTrip(new SmallIntValue(-5));
     SerdeTests.testVariantRoundTrip(new SmallIntValue(0));
     SerdeTests.testVariantRoundTrip(new SmallIntValue(5));
+    SerdeTests.testVariantRoundTrip(new SmallIntValue(null));
   }
 
   @Test
@@ -71,6 +74,7 @@ public class VariantSerdeTest {
     SerdeTests.testVariantRoundTrip(new IntegerValue(-5));
     SerdeTests.testVariantRoundTrip(new IntegerValue(0));
     SerdeTests.testVariantRoundTrip(new IntegerValue(5));
+    SerdeTests.testVariantRoundTrip(new IntegerValue(null));
   }
 
   @Test
@@ -79,10 +83,13 @@ public class VariantSerdeTest {
     SerdeTests.testVariantRoundTrip(new BigIntValue(0L));
     SerdeTests.testVariantRoundTrip(new BigIntValue(5L));
     SerdeTests.testVariantRoundTrip(new BigIntValue(Long.MAX_VALUE));
+    SerdeTests.testVariantRoundTrip(new BigIntValue(null));
   }
 
   @Test
   public void testHugeIntValue() {
+    SerdeTests.testVariantRoundTrip(new HugeIntValue(BigInteger.valueOf(0)));
+    SerdeTests.testVariantRoundTrip(new HugeIntValue(null));
     final BigInteger int64Max = BigInteger.valueOf(Long.MAX_VALUE);
     final BigInteger plusOne = int64Max.add(BigInteger.valueOf(1));
     SerdeTests.testVariantRoundTrip(new HugeIntValue(int64Max));
@@ -95,31 +102,35 @@ public class VariantSerdeTest {
   public void testRealValue() {
     SerdeTests.testVariantRoundTrip(new RealValue(-5.5f));
     SerdeTests.testVariantRoundTrip(new RealValue(5.5f));
+    SerdeTests.testVariantRoundTrip(new RealValue(null));
   }
 
   @Test
   public void testDoubleValue() {
     SerdeTests.testVariantRoundTrip(new DoubleValue(-5.5d));
     SerdeTests.testVariantRoundTrip(new DoubleValue(5.5d));
+    SerdeTests.testVariantRoundTrip(new DoubleValue(null));
   }
 
   @Test
   public void testVarCharValue() {
     SerdeTests.testVariantRoundTrip(new VarCharValue("foo"));
+    SerdeTests.testVariantRoundTrip(new VarCharValue(null));
   }
 
   @Test
   public void testVarBinaryValue() {
-    final VarBinaryValue in = VarBinaryValue.create("foo".getBytes());
-    SerdeTests.testVariantRoundTrip(in);
+    SerdeTests.testVariantRoundTrip(VarBinaryValue.create("foo".getBytes()));
+    Assert.assertThrows(NullPointerException.class, () -> VarBinaryValue.create(null));
+    SerdeTests.testVariantRoundTrip(VarBinaryValue.createNull());
   }
 
   @Test
   public void testTimestampValue() {
     long seconds = System.currentTimeMillis() / 1000;
     long nanos = System.nanoTime() % 1_000_000_000L;
-    final TimestampValue in = TimestampValue.create(seconds, nanos);
-    SerdeTests.testVariantRoundTrip(in);
+    SerdeTests.testVariantRoundTrip(TimestampValue.create(seconds, nanos));
+    SerdeTests.testVariantRoundTrip(TimestampValue.createNull());
   }
 
   @Test
@@ -128,6 +139,7 @@ public class VariantSerdeTest {
         new ArrayValue(List.of(new IntegerValue(100), new IntegerValue(500))));
     SerdeTests.testVariantRoundTrip(
         new ArrayValue(List.of(new BooleanValue(false), new BooleanValue(true))));
+    SerdeTests.testVariantRoundTrip(new ArrayValue(null));
   }
 
   @Test
@@ -141,6 +153,7 @@ public class VariantSerdeTest {
                 new IntegerValue(800), new BooleanValue(false),
                 new IntegerValue(200), new BooleanValue(true),
                 new IntegerValue(500), new BooleanValue(true))));
+    SerdeTests.testVariantRoundTrip(new MapValue(null));
   }
 
   @Test
@@ -149,5 +162,6 @@ public class VariantSerdeTest {
         new RowValue(List.of(new IntegerValue(100), new BooleanValue(true))));
     SerdeTests.testVariantRoundTrip(
         new RowValue(List.of(new IntegerValue(500), new BooleanValue(false))));
+    SerdeTests.testVariantRoundTrip(new RowValue(null));
   }
 }

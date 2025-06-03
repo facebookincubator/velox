@@ -19,18 +19,20 @@ import java.util.Objects;
 
 import com.fasterxml.jackson.annotation.JsonCreator;
 import com.fasterxml.jackson.annotation.JsonGetter;
+import com.fasterxml.jackson.annotation.JsonInclude;
 import com.fasterxml.jackson.annotation.JsonProperty;
 
 public class TinyIntValue extends Variant {
-  private final int value;
+  private final Integer value;
 
   @JsonCreator
-  public TinyIntValue(@JsonProperty("value") int value) {
+  public TinyIntValue(@JsonProperty("value") Integer value) {
     this.value = value;
   }
 
   @JsonGetter("value")
-  public int getValue() {
+  @JsonInclude(JsonInclude.Include.ALWAYS)
+  public Integer getValue() {
     return value;
   }
 
@@ -39,7 +41,7 @@ public class TinyIntValue extends Variant {
     if (this == o) return true;
     if (o == null || getClass() != o.getClass()) return false;
     TinyIntValue that = (TinyIntValue) o;
-    return value == that.value;
+    return Objects.equals(value, that.value);
   }
 
   @Override
