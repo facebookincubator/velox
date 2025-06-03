@@ -38,6 +38,12 @@ Map Functions
 
         SELECT map_entries(MAP(ARRAY[1, 2], ARRAY['x', 'y'])); -- [ROW(1, 'x'), ROW(2, 'y')]
 
+.. spark:function:: map_from_entries(array(row(K, V))) -> map(K, V)
+
+    Returns a map created from the given array of entries. ::
+
+        SELECT map_from_entries(array(struct(1, 'a'), struct(2, 'b'))); -- {1 -> a, 2 -> b}
+
 .. spark:function:: map_filter(map(K,V), func) -> map(K,V)
 
     Filters entries in a map using the function. ::
