@@ -83,7 +83,7 @@ Let’s see how the above connector interfaces are implemented in the Hive Conne
 <section id="hive-connector">
 <h2>Hive Connector<a class="headerlink" href="#hive-connector" title="Link to this heading">¶</a></h2>
 <p>The Hive Connector is used to read and write data files (Parquet, DWRF) residing on
-an external storage (S3, HDFS, GCS, Linux FS).</p>
+an external storage. Supported external “Storage Adapters” are listed below.</p>
 <section id="hiveconnectorsplit">
 <h3>HiveConnectorSplit<a class="headerlink" href="#hiveconnectorsplit" title="Link to this heading">¶</a></h3>
 <p>The HiveConnectorSplit describes a data chunk using parameters including <cite>file-path</cite>,
@@ -127,7 +127,7 @@ sources and each require a different configuration.</p>
 <section id="storage-adapters">
 <h3>Storage Adapters<a class="headerlink" href="#storage-adapters" title="Link to this heading">¶</a></h3>
 <p>Hive Connector allows reading and writing files from a variety of distributed storage systems.
-The supported storage API are S3, HDFS, GCS, Linux FS.</p>
+The supported storage API are S3 (Amazon S3 Compatible Storage), HDFS (Hadoop Distributed File System), GCS (Google Cloud Storage), ABFS (Azure Blob File Storage), Linux File System.</p>
 <p>If file is not found when reading, <cite>openFileForRead</cite> API throws <cite>VeloxRuntimeError</cite> with <cite>error_code::kFileNotFound</cite>.
 This behavior is necessary to support the <cite>ignore_missing_files</cite> configuration property.</p>
 <p>S3 is supported using the <a class="reference external" href="https://github.com/aws/aws-sdk-cpp">AWS SDK for C++</a> library.
@@ -139,8 +139,8 @@ are <cite>hdfs://</cite>.</p>
 <p>GCS is supported using the
 <a class="reference external" href="https://github.com/googleapis/google-cloud-cpp">Google Cloud Platform C++ Client Libraries</a>. GCS supported schemes
 are <cite>gs://</cite>.</p>
-<p>ABS (Azure Blob Storage) is supported using the
-<a class="reference external" href="https://github.com/Azure/azure-sdk-for-cpp">Azure SDK for C++</a> library. ABS supported schemes are <cite>abfs(s)://</cite>.</p>
+<p>ABFS is supported using the
+<a class="reference external" href="https://github.com/Azure/azure-sdk-for-cpp">Azure SDK for C++</a> library. ABFS supported schemes are <cite>abfs(s)://</cite>.</p>
 <section id="s3-storage-adapter-using-a-proxy">
 <h4>S3 Storage adapter using a proxy<a class="headerlink" href="#s3-storage-adapter-using-a-proxy" title="Link to this heading">¶</a></h4>
 <p>By default, the C++ AWS S3 client does not honor the configuration of the
