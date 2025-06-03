@@ -15,7 +15,12 @@
  */
 #pragma once
 
+#include <folly/json/dynamic.h>
+#include <velox/common/serialization/Serializable.h>
 #include <velox/core/PlanNode.h>
+#include <memory>
+#include <string>
+
 #include "velox4j/conf/Config.h"
 
 namespace facebook::velox4j {

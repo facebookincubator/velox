@@ -15,6 +15,8 @@
  */
 #pragma once
 
+#include <memory>
+
 #include "velox4j/conf/Config.h"
 
 namespace facebook::velox4j {

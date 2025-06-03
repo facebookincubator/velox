@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 #include "ObjectStore.h"
+
 #include <glog/logging.h>
 
 namespace facebook::velox4j {

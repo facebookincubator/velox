@@ -15,6 +15,15 @@
  */
 #include "ExternalStream.h"
 
+#include <folly/json/dynamic-inl.h>
+#include <glog/logging.h>
+#include <ostream>
+
+#include <velox/common/serialization/DeserializationRegistry.h>
+#include <velox/connectors/Connector.h>
+#include <velox/exec/Driver.h>
+#include <velox/exec/Task.h>
+
 namespace facebook::velox4j {
 using namespace facebook::velox;
 
