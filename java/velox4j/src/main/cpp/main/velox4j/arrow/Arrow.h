@@ -15,6 +15,7 @@
  */
 #pragma once
 
+#include <velox/vector/BaseVector.h>
 #include <velox/vector/ComplexVector.h>
 
 struct ArrowArray;

@@ -18,7 +18,11 @@
 #include <arrow/memory_pool.h>
 #include <velox/common/config/Config.h>
 #include <velox/common/memory/Memory.h>
+#include <velox/common/memory/MemoryPool.h>
 #include <memory>
+#include <string>
+#include <unordered_map>
+
 #include "AllocationListener.h"
 #include "ArrowMemoryPool.h"
 

@@ -14,20 +14,46 @@
  * limitations under the License.
  */
 #include "JniWrapper.h"
+
+#include <fmt/core.h>
+#include <folly/json/json.h>
+#include <jni_md.h>
+#include <velox/common/base/Exceptions.h>
 #include <velox/common/encode/Base64.h>
-#include <velox/common/memory/Memory.h>
+#include <velox/common/future/VeloxPromise.h>
+#include <velox/common/memory/MemoryPool.h>
+#include <velox/common/serialization/Serializable.h>
 #include <velox/core/PlanNode.h>
 #include <velox/exec/TableWriter.h>
+#include <velox/type/Type.h>
+#include <velox/type/Variant.h>
+#include <velox/vector/BaseVector.h>
+#include <velox/vector/ComplexVector.h>
+#include <velox/vector/SelectivityVector.h>
+#include <velox/vector/TypeAliases.h>
 #include <velox/vector/VectorSaver.h>
+#include <memory>
+#include <optional>
+#include <sstream>
+#include <string>
+#include <utility>
+#include <vector>
 
+#include "ClassRegistry.h"
+#include "JavaString.h"
 #include "JniCommon.h"
 #include "JniError.h"
+#include "JniTypes.h"
 #include "velox4j/arrow/Arrow.h"
 #include "velox4j/connector/ExternalStream.h"
 #include "velox4j/eval/Evaluator.h"
 #include "velox4j/iterator/BlockingQueue.h"
 #include "velox4j/iterator/DownIterator.h"
+#include "velox4j/iterator/UpIterator.h"
+#include "velox4j/lifecycle/ObjectStore.h"
 #include "velox4j/lifecycle/Session.h"
+#include "velox4j/memory/MemoryManager.h"
+#include "velox4j/query/Query.h"
 #include "velox4j/query/QueryExecutor.h"
 
 namespace facebook::velox4j {
