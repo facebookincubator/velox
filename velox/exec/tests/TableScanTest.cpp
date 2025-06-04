@@ -5654,3 +5654,56 @@ TEST_F(TableScanTest, statsBasedFilterReorderDisabled) {
     }
   }
 }
+
+DEBUG_ONLY_TEST_F(TableScanTest, memoryArbitrationInPreload) {
+  // At least 2 splits to trigger preload
+  const size_t numFiles{2};
+  std::vector<std::shared_ptr<TempFilePath>> filePaths;
+  filePaths.reserve(numFiles);
+  auto vectors = makeVectors(numFiles, 100);
+  for (int32_t i = 0; i < numFiles; i++) {
+    filePaths.emplace_back(TempFilePath::create(true));
+    writeToFile(filePaths[i]->getPath(), vectors[i]);
+  }
+  createDuckDbTable(vectors);
+
+  std::atomic<memory::MemoryPool*> taskPool{nullptr};
+  SCOPED_TESTVALUE_SET(
+      "facebook::velox::exec::TableScan::getOutput",
+      std::function<void(Operator*)>([&](Operator* op) {
+        taskPool = op->testingOperatorCtx()->task()->pool();
+      }));
+
+  auto faultyFs = faultyFileSystem();
+  std::atomic_bool injectOnce{true};
+  faultyFs->setFileInjectionHook([&](FaultFileOperation* readOp) {
+    // Only hook file operation on IOThread
+    DriverThreadContext* driverThreadCtx = driverThreadContext();
+    if (driverThreadCtx != nullptr) {
+      return;
+    }
+    if (!injectOnce.exchange(false)) {
+      return;
+    }
+
+    auto pool = taskPool.load();
+    ASSERT_NE(pool, nullptr);
+    memory::MemoryReclaimer::Stats stats;
+    pool->reclaim(0, 5'000, stats);
+  });
+
+  auto task = assertQuery(tableScanNode(), filePaths, "SELECT * FROM tmp", 0);
+  auto stats = getTableScanRuntimeStats(task);
+
+  // Verify that split preloading is enabled.
+  ASSERT_FALSE(injectOnce.load());
+  ASSERT_EQ(stats.count("preloadedSplits"), 1);
+  ASSERT_EQ(stats.at("preloadedSplits").sum, 1);
+
+  // Cleanup
+  taskPool = nullptr;
+  task.reset();
+
+  // Once all task references are cleared, all the tasks should be destroyed.
+  ASSERT_EQ(Task::numRunningTasks(), 0);
+}
