@@ -25,6 +25,7 @@
 #include "velox/expression/Expr.h"
 
 #include "velox/common/base/tests/GTestUtils.h"
+#include "velox/core/QueryConfig.h"
 #include "velox/exec/tests/utils/TempDirectoryPath.h"
 #include "velox/expression/CoalesceExpr.h"
 #include "velox/expression/ConjunctExpr.h"
@@ -4987,7 +4988,8 @@ TEST_F(ExprTest, disabledeferredLazyLoading) {
 TEST_F(ExprTest, evaluateConstantExpression) {
   auto eval = [&](const std::string& sql) {
     auto expr = parseExpression(sql, ROW({}));
-    return exec::evaluateConstantExpression(expr, pool());
+    return exec::evaluateConstantExpression(
+        expr, core::QueryConfig({}), pool());
   };
 
   assertEqualVectors(eval("1 + 2"), makeConstant<int64_t>(3, 1));

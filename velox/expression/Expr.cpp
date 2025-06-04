@@ -2021,11 +2021,13 @@ core::ExecCtx* SimpleExpressionEvaluator::ensureExecCtx() {
 
 VectorPtr evaluateConstantExpression(
     const core::TypedExprPtr& expr,
+    const core::QueryConfig& config,
     memory::MemoryPool* pool) {
   auto data = BaseVector::create<RowVector>(ROW({}), 1, pool);
 
-  auto queryCtx = velox::core::QueryCtx::create();
-  velox::core::ExecCtx execCtx{pool, queryCtx.get()};
+  auto queryContext = core::QueryCtx::create(
+      nullptr, core::QueryConfig{{config.rawConfigsCopy()}});
+  velox::core::ExecCtx execCtx{pool, queryContext.get()};
   velox::exec::ExprSet exprSet({expr}, &execCtx);
   velox::exec::EvalCtx evalCtx(&execCtx, &exprSet, data.get());
 
