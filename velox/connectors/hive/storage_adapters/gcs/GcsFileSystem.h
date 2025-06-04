@@ -66,7 +66,8 @@ class GcsFileSystem : public FileSystem {
   /// Returns the name of the adapter (GCS)
   std::string name() const override;
 
-  /// Unsupported
+  /// Removes the objects associated to a path by using
+  /// google::cloud::storage::Client::DeleteObject.
   void remove(std::string_view path) override;
 
   /// Check that the path exists by using
@@ -77,8 +78,13 @@ class GcsFileSystem : public FileSystem {
   /// google::cloud::storage::Client::ListObjects
   std::vector<std::string> list(std::string_view path) override;
 
-  /// Unsupported
-  void rename(std::string_view, std::string_view, bool) override;
+  /// Renames the original object to new object name by using
+  /// google::cloud::storage::Client::CopyObject and
+  /// google::cloud::storage::Client::DeleteObject
+  void rename(
+      std::string_view originPath,
+      std::string_view newPath,
+      bool overwrite) override;
 
   /// Unsupported
   void mkdir(std::string_view path, const DirectoryOptions& options = {})
