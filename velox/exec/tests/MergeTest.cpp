@@ -166,10 +166,10 @@ class MergeTest : public OperatorTestBase {
       CursorParameters params;
       params.planNode = plan;
       params.maxDrivers = 2;
-      params.queryConfigs = {
-          {"spill_enabled", "true"},
-          {"local_merge_enabled", "true"},
-          {"local_merge_max_num_merge_sources", "2"}};
+      params.queryCtx = createQueryCtx(
+          {{"spill_enabled", "true"},
+           {"local_merge_enabled", "true"},
+           {"local_merge_max_num_merge_sources", "2"}});
       params.spillDirectory = spillDirectory->getPath();
       auto task = assertQueryOrdered(
           params, "SELECT * FROM tmp ORDER BY " + orderByClause, {keyIndex});
@@ -225,10 +225,10 @@ class MergeTest : public OperatorTestBase {
         CursorParameters params;
         params.planNode = plan;
         params.maxDrivers = 2;
-        params.queryConfigs = {
-            {"spill_enabled", "true"},
-            {"local_merge_enabled", "true"},
-            {"local_merge_max_num_merge_sources", "2"}};
+        params.queryCtx = createQueryCtx(
+            {{"spill_enabled", "true"},
+             {"local_merge_enabled", "true"},
+             {"local_merge_max_num_merge_sources", "2"}});
         params.spillDirectory = spillDirectory->getPath();
         auto task = assertQueryOrdered(
             params, "SELECT * FROM tmp " + orderBySql, sortingKeys);
@@ -247,7 +247,8 @@ class MergeTest : public OperatorTestBase {
 
   void testLocalMergeSpill(
       const uint32_t batchSize,
-      const uint32_t numMaxMergeSources) {
+      const uint32_t numMaxMergeSources,
+      bool hasSpillExecutor) {
     std::vector<std::vector<RowVectorPtr>> inputVectors;
     for (int32_t i = 0; i < 9; ++i) {
       std::vector<RowVectorPtr> vectors;
@@ -297,18 +298,20 @@ class MergeTest : public OperatorTestBase {
     CursorParameters params;
     params.planNode = plan;
     params.maxDrivers = 2;
-    params.queryConfigs = {
-        {"spill_enabled", "true"},
-        {"local_merge_enabled", "true"},
-        {"local_merge_max_num_merge_sources",
-         std::to_string(numMaxMergeSources)}};
+    params.queryCtx = createQueryCtx(
+        {{"spill_enabled", "true"},
+         {"local_merge_enabled", "true"},
+         {"local_merge_max_num_merge_sources",
+          std::to_string(numMaxMergeSources)}},
+        hasSpillExecutor);
     params.spillDirectory = spillDirectory->getPath();
     auto task = assertQueryOrdered(
         params, "SELECT * FROM tmp ORDER BY " + orderByClause, {keyIndex});
 
     auto taskStats = toPlanStats(task->taskStats());
     auto& planStats = taskStats.at(nodeId);
-    if (batchSize == 0 || numMaxMergeSources >= inputVectors.size()) {
+    if (batchSize == 0 || numMaxMergeSources >= inputVectors.size() ||
+        !hasSpillExecutor) {
       ASSERT_EQ(planStats.spilledBytes, 0);
       ASSERT_EQ(planStats.spilledPartitions, 0);
       ASSERT_EQ(planStats.spilledFiles, 0);
@@ -323,6 +326,23 @@ class MergeTest : public OperatorTestBase {
       ASSERT_EQ(planStats.spilledRows, expectedSpillRows);
     }
   }
+
+  std::shared_ptr<core::QueryCtx> createQueryCtx(
+      std::unordered_map<std::string, std::string> queryConfigs = {},
+      bool hasSpillExecutor = true) const {
+    return core::QueryCtx::create(
+        executor_.get(),
+        core::QueryConfig{std::move(queryConfigs)},
+        {},
+        nullptr,
+        rootPool_,
+        hasSpillExecutor ? spillExecutor_.get() : nullptr);
+  }
+
+ private:
+  std::shared_ptr<folly::Executor> spillExecutor_{
+      std::make_shared<folly::CPUThreadPoolExecutor>(
+          std::thread::hardware_concurrency())};
 };
 
 TEST_F(MergeTest, localMergeSpillBasic) {
@@ -353,22 +373,28 @@ TEST_F(MergeTest, localMergeSpill) {
   struct TestParam {
     uint32_t maxNumMergeSources;
     uint32_t batchSize;
+    bool hasSpillExecutor;
 
     std::string debugString() const {
       return fmt::format(
-          "maxNumMergeSources {}, batchSize {}", maxNumMergeSources, batchSize);
+          "maxNumMergeSources {}, batchSize {}, hasSpillExecutor {}",
+          maxNumMergeSources,
+          batchSize,
+          hasSpillExecutor);
     }
   } testSettings[]{
-      {1, 0},
-      {10, 0},
-      {1, 30},
-      {3, 30},
-      {8, 30},
-      {9, 30},
-      {std::numeric_limits<uint32_t>::max(), 30}};
+      {1, 0, true},
+      {10, 0, true},
+      {1, 30, true},
+      {3, 30, true},
+      {1, 30, false},
+      {3, 30, false},
+      {8, 30, true},
+      {9, 30, true},
+      {std::numeric_limits<uint32_t>::max(), 30, true}};
   for (const auto& testData : testSettings) {
     SCOPED_TRACE(testData.debugString());
-    testLocalMergeSpill(testData.batchSize, testData.maxNumMergeSources);
+    testLocalMergeSpill(testData.batchSize, testData.maxNumMergeSources, true);
   }
 }
 
@@ -415,10 +441,10 @@ TEST_F(MergeTest, localMergeSpillPartialEmpty) {
   CursorParameters params;
   params.planNode = plan;
   params.maxDrivers = 2;
-  params.queryConfigs = {
-      {"spill_enabled", "true"},
-      {"local_merge_enabled", "true"},
-      {"local_merge_max_num_merge_sources", "2"}};
+  params.queryCtx = createQueryCtx(
+      {{"spill_enabled", "true"},
+       {"local_merge_enabled", "true"},
+       {"local_merge_max_num_merge_sources", "2"}});
   params.spillDirectory = spillDirectory->getPath();
   auto task = assertQueryOrdered(
       params, "SELECT * FROM tmp ORDER BY " + orderByClause, {keyIndex});
