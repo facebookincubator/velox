@@ -676,6 +676,11 @@ Each query can override the config by setting corresponding query session proper
      - bool
      - true
      - Reads timestamp partition value as local time if true. Otherwise, reads as UTC.
+   * - enable-requested-type-check
+     - enable_requested_type_check
+     - bool
+     - true
+     - Whether to enable requested type check in the `ReaderBase::convertType`. True by default.
 
 ``ORC File Format Configuration``
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
