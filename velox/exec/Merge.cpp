@@ -106,6 +106,7 @@ bool Merge::isFinished() {
 
 void Merge::maybeSetupOutputSpiller() {
   VELOX_CHECK(canSpill());
+  VELOX_CHECK(spillConfig_.has_value());
   if (mergeOutputSpiller_ != nullptr) {
     return;
   }
@@ -150,6 +151,7 @@ void Merge::finishMergeSourceGroup() {
 void Merge::setupSpillMerger() {
   VELOX_CHECK(!spillFileGroups_.empty());
   VELOX_CHECK_NULL(spillMerger_);
+  VELOX_CHECK(spillConfig_.has_value());
   std::vector<std::vector<std::unique_ptr<SpillReadFile>>> spillReadFilesGroups;
   spillReadFilesGroups.reserve(spillFileGroups_.size());
   for (const auto& spillFiles : spillFileGroups_) {
@@ -163,7 +165,12 @@ void Merge::setupSpillMerger() {
   }
   spillFileGroups_.clear();
   spillMerger_ = std::make_unique<SpillMerger>(
-      outputType_, numSpilledRows_, std::move(spillReadFilesGroups), pool());
+      sortingKeys_,
+      outputType_,
+      outputBatchSize_,
+      std::move(spillReadFilesGroups),
+      &spillConfig_.value(),
+      pool());
 }
 
 void Merge::maybeStartNextMergeSourceGroup() {
@@ -205,13 +212,15 @@ void Merge::maybeStartNextMergeSourceGroup() {
 RowVectorPtr Merge::getOutputFromSpill() {
   VELOX_CHECK_NOT_NULL(spillMerger_);
   VELOX_CHECK_NULL(sourceMerger_);
-  output_ = spillMerger_->getOutput(outputBatchSize_);
-  if (output_ != nullptr) {
-    return std::move(output_);
-  }
-  spillMerger_.reset();
-  finished_ = true;
-  return nullptr;
+  bool atEnd = false;
+  output_ = spillMerger_->getOutput(sourceBlockingFutures_, atEnd);
+  SCOPE_EXIT {
+    if (!atEnd) {
+      return;
+    }
+    finished_ = true;
+  };
+  return std::move(output_);
 }
 
 RowVectorPtr Merge::getOutputFromSource() {
@@ -348,99 +357,6 @@ RowVectorPtr SourceMerger::getOutput(
   }
 }
 
-SpillMerger::SpillMerger(
-    const RowTypePtr& type,
-    uint64_t numSpilledRows,
-    std::vector<std::vector<std::unique_ptr<SpillReadFile>>>
-        spillReadFilesGroup,
-    velox::memory::MemoryPool* pool)
-    : type_(type),
-      numSpilledRows_(numSpilledRows),
-      merger_([&spillReadFilesGroup]() {
-        std::vector<std::unique_ptr<SpillMergeStream>> streams;
-        streams.reserve(spillReadFilesGroup.size());
-        for (auto i = 0; i < spillReadFilesGroup.size(); ++i) {
-          streams.push_back(ConcatFilesSpillMergeStream::create(
-              i, std::move(spillReadFilesGroup[i])));
-        }
-        return std::make_unique<TreeOfLosers<SpillMergeStream>>(
-            std::move(streams));
-      }()),
-      pool_(pool) {
-  VELOX_CHECK_NOT_NULL(merger_);
-}
-
-RowVectorPtr SpillMerger::getOutput(vector_size_t maxOutputRows) {
-  // Check if the spill merger has finished.
-  if (numOutputRows_ == numSpilledRows_) {
-    return nullptr;
-  }
-
-  VELOX_CHECK_GT(maxOutputRows, 0);
-  VELOX_CHECK_GT(numSpilledRows_, numOutputRows_);
-  const vector_size_t batchSize =
-      std::min<uint64_t>(numSpilledRows_ - numOutputRows_, maxOutputRows);
-  if (output_ != nullptr) {
-    VectorPtr output = std::move(output_);
-    BaseVector::prepareForReuse(output, batchSize);
-    output_ = std::static_pointer_cast<RowVector>(output);
-  } else {
-    output_ = std::static_pointer_cast<RowVector>(
-        BaseVector::create(type_, batchSize, pool_));
-  }
-
-  for (const auto& child : output_->children()) {
-    child->resize(batchSize);
-  }
-
-  spillSources_.resize(batchSize);
-  spillSourceRows_.resize(batchSize);
-
-  VELOX_CHECK_GT(output_->size(), 0);
-  VELOX_CHECK_LE(output_->size() + numOutputRows_, numSpilledRows_);
-
-  int32_t outputRow = 0;
-  int32_t outputSize = 0;
-  bool isEndOfBatch = false;
-  while (outputRow + outputSize < output_->size()) {
-    SpillMergeStream* stream = merger_->next();
-    VELOX_CHECK_NOT_NULL(stream);
-
-    spillSources_[outputSize] = &stream->current();
-    spillSourceRows_[outputSize] = stream->currentIndex(&isEndOfBatch);
-    ++outputSize;
-    if (FOLLY_UNLIKELY(isEndOfBatch)) {
-      // The stream is at end of input batch. Need to copy out the rows before
-      // fetching next batch in 'pop'.
-      gatherCopy(
-          output_.get(),
-          outputRow,
-          outputSize,
-          spillSources_,
-          spillSourceRows_,
-          {});
-      outputRow += outputSize;
-      outputSize = 0;
-    }
-    // Advance the stream.
-    stream->pop();
-  }
-  VELOX_CHECK_EQ(outputRow + outputSize, output_->size());
-
-  if (FOLLY_LIKELY(outputSize != 0)) {
-    gatherCopy(
-        output_.get(),
-        outputRow,
-        outputSize,
-        spillSources_,
-        spillSourceRows_,
-        {});
-  }
-
-  numOutputRows_ += output_->size();
-  return std::move(output_);
-}
-
 bool SourceStream::operator<(const MergeStream& other) const {
   const auto& otherCursor = static_cast<const SourceStream&>(other);
   for (auto i = 0; i < sortingKeys_.size(); ++i) {
@@ -521,6 +437,114 @@ bool SourceStream::fetchMoreData(std::vector<ContinueFuture>& futures) {
   return false;
 }
 
+SpillMerger::SpillMerger(
+    const std::vector<SpillSortKey>& sortingKeys,
+    const RowTypePtr& type,
+    vector_size_t outputBatchSize,
+    std::vector<std::vector<std::unique_ptr<SpillReadFile>>>
+        spillReadFilesGroup,
+    const common::SpillConfig* spillConfig,
+    velox::memory::MemoryPool* pool)
+    : sources_(createMergeSources(spillReadFilesGroup.size())),
+      batchStreams_(createBatchStreams(std::move(spillReadFilesGroup))),
+      sourceMerger_(createSourceMerger(
+          sortingKeys,
+          type,
+          outputBatchSize,
+          sources_,
+          pool)),
+      executor_(spillConfig->executor),
+      pool_(pool) {
+  createFileStreamProducers(batchStreams_, sources_);
+}
+
+RowVectorPtr SpillMerger::getOutput(
+    std::vector<ContinueFuture>& sourceBlockingFutures,
+    bool& atEnd) const {
+  sourceMerger_->isBlocked(sourceBlockingFutures);
+  if (!sourceBlockingFutures.empty()) {
+    return nullptr;
+  }
+  return sourceMerger_->getOutput(sourceBlockingFutures, atEnd);
+}
+
+std::vector<std::shared_ptr<MergeSource>> SpillMerger::createMergeSources(
+    size_t num) {
+  std::vector<std::shared_ptr<MergeSource>> sources;
+  sources.reserve(num);
+  for (auto i = 0; i < num; ++i) {
+    sources.push_back(MergeSource::createLocalMergeSource());
+  }
+  for (const auto& source : sources) {
+    source->start();
+  }
+  return sources;
+}
+
+std::vector<std::unique_ptr<BatchStream>> SpillMerger::createBatchStreams(
+    std::vector<std::vector<std::unique_ptr<SpillReadFile>>>
+        spillReadFilesGroup) {
+  const auto numStreams = spillReadFilesGroup.size();
+  std::vector<std::unique_ptr<BatchStream>> batchStreams;
+  batchStreams.reserve(numStreams);
+  for (auto i = 0; i < numStreams; ++i) {
+    batchStreams.emplace_back(
+        ConcatFilesSpillBatchStream::create(std::move(spillReadFilesGroup[i])));
+  }
+  return batchStreams;
+}
+
+std::unique_ptr<SourceMerger> SpillMerger::createSourceMerger(
+    const std::vector<SpillSortKey>& sortingKeys,
+    const RowTypePtr& type,
+    vector_size_t outputBatchSize,
+    const std::vector<std::shared_ptr<MergeSource>>& sources,
+    velox::memory::MemoryPool* pool) {
+  std::vector<std::unique_ptr<SourceStream>> streams;
+  streams.reserve(sources.size());
+  for (const auto& source : sources) {
+    streams.push_back(std::make_unique<SourceStream>(
+        source.get(), sortingKeys, outputBatchSize));
+  }
+  return std::make_unique<SourceMerger>(
+      type, outputBatchSize, std::move(streams), pool);
+}
+
+void SpillMerger::fileStreamProducer(
+    BatchStream* batchStream,
+    MergeSource* source) const {
+  RowVectorPtr vector;
+  ContinueFuture future;
+  if (!batchStream->nextBatch(vector)) {
+    source->enqueue(nullptr, &future);
+    return;
+  }
+
+  source->enqueue(std::move(vector), &future);
+  std::move(future)
+      .via(executor_)
+      .thenValue([this, batchStream, source](folly::Unit) {
+        fileStreamProducer(batchStream, source);
+      })
+      .thenError(
+          folly::tag_t<std::exception>{}, [source](const std::exception& e) {
+            LOG(ERROR) << "Stop this batch stream producer for " << e.what();
+            ContinueFuture future;
+            source->enqueue(nullptr, &future);
+          });
+}
+
+void SpillMerger::createFileStreamProducers(
+    const std::vector<std::unique_ptr<BatchStream>>& batchStreams,
+    const std::vector<std::shared_ptr<MergeSource>>& sources) const {
+  VELOX_CHECK_EQ(batchStreams.size(), sources.size());
+  for (auto i = 0; i < batchStreams.size(); ++i) {
+    executor_->add([&, i]() {
+      fileStreamProducer(batchStreams[i].get(), sources[i].get());
+    });
+  }
+}
+
 LocalMerge::LocalMerge(
     int32_t operatorId,
     DriverCtx* driverCtx,
@@ -540,10 +564,14 @@ LocalMerge::LocalMerge(
       operatorCtx_->driverCtx()->driverId,
       0,
       "LocalMerge needs to run single-threaded");
-  maxNumMergeSources_ = operatorCtx_->task()
-                            ->queryCtx()
-                            ->queryConfig()
-                            .localMergeMaxNumMergeSources();
+  // Ensure spill config and executor when to config and constraint the
+  // maxNumMergeSources_.
+  if (spillConfig_.has_value() && spillConfig_->executor != nullptr) {
+    maxNumMergeSources_ = operatorCtx_->task()
+                              ->queryCtx()
+                              ->queryConfig()
+                              .localMergeMaxNumMergeSources();
+  }
 }
 
 BlockingReason LocalMerge::addMergeSources(ContinueFuture* /* future */) {
