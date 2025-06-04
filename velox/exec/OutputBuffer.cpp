@@ -116,12 +116,20 @@ DestinationBuffer::Data DestinationBuffer::getData(
     ArbitraryBuffer* arbitraryBuffer) {
   VELOX_CHECK_GE(
       sequence, sequence_, "Get received for an already acknowledged item");
+  if (isSpilling() && reader_ == nullptr) {
+    // The destination buffer has spilled, and there is still more data to be
+    // enqueued and spilled. Do not return data when spill is not completed. Do
+    // not set notify, either. Rely on client retry for another getData call.
+    return {};
+  }
+
   if (arbitraryBuffer != nullptr) {
     loadData(arbitraryBuffer, maxBytes);
   }
 
-  if (sequence - sequence_ >= data_.size()) {
-    if (sequence - sequence_ > data_.size()) {
+  const auto numPages = remainingPages();
+  if (sequence - sequence_ >= numPages) {
+    if (sequence - sequence_ > numPages) {
       VLOG(1) << this << " Out of order get: " << sequence << " over "
               << sequence_ << " Setting second notify " << notifySequence_
               << " / " << sequence;
@@ -137,7 +145,7 @@ DestinationBuffer::Data DestinationBuffer::getData(
     }
     notify_ = std::move(notify);
     aliveCheck_ = std::move(activeCheck);
-    if (sequence - sequence_ > data_.size()) {
+    if (sequence - sequence_ > numPages) {
       notifySequence_ = std::min(notifySequence_, sequence);
     } else {
       notifySequence_ = sequence;
@@ -150,15 +158,17 @@ DestinationBuffer::Data DestinationBuffer::getData(
   uint64_t resultBytes = 0;
   auto i = sequence - sequence_;
   if (maxBytes > 0) {
-    for (; i < data_.size(); ++i) {
+    for (; i < numPages; ++i) {
       // nullptr is used as end marker
-      if (data_[i] == nullptr) {
-        VELOX_CHECK_EQ(i, data_.size() - 1, "null marker found in the middle");
+      const auto page = at(i);
+      if (page == nullptr) {
+        VELOX_CHECK_EQ(i, numPages - 1, "null marker found in the middle");
         data.push_back(nullptr);
         break;
       }
-      data.push_back(data_[i]->getIOBuf());
-      resultBytes += data_[i]->size();
+
+      data.push_back(page->getIOBuf());
+      resultBytes += page->size();
       if (resultBytes >= maxBytes) {
         ++i;
         break;
@@ -167,27 +177,46 @@ DestinationBuffer::Data DestinationBuffer::getData(
   }
   bool atEnd = false;
   std::vector<int64_t> remainingBytes;
-  remainingBytes.reserve(data_.size() - i);
-  for (; i < data_.size(); ++i) {
-    if (data_[i] == nullptr) {
-      VELOX_CHECK_EQ(i, data_.size() - 1, "null marker found in the middle");
-      atEnd = true;
-      break;
+  if (reader_ == nullptr) {
+    // Only return page sizes when no spill condition. Otherwise return empty
+    // size vector to indicate spilled buffer.
+    remainingBytes.reserve(numPages - i);
+    for (; i < numPages; ++i) {
+      const auto page = at(i);
+      if (page == nullptr) {
+        VELOX_CHECK_EQ(i, numPages - 1, "null marker found in the middle");
+        atEnd = true;
+        break;
+      }
+      remainingBytes.push_back(page->size());
     }
-    remainingBytes.push_back(data_[i]->size());
   }
   if (!atEnd && arbitraryBuffer) {
+    VELOX_CHECK_NULL(
+        reader_,
+        "Arbitrary buffer spilling in DestinationBuffer is not supported");
     arbitraryBuffer->getAvailablePageSizes(remainingBytes);
   }
-  if (data.empty() && remainingBytes.empty() && atEnd) {
+  // Add end marker (nullptr) to data if needed
+  if (data.empty() &&
+      ((reader_ == nullptr && remainingBytes.empty() && atEnd) ||
+       (reader_ != nullptr && reader_->numPages() == 0))) {
     data.push_back(nullptr);
   }
+
   return {std::move(data), std::move(remainingBytes), true};
 }
 
 void DestinationBuffer::enqueue(std::shared_ptr<SerializedPage> data) {
   // Drop duplicate end markers.
   if (data == nullptr && !data_.empty() && data_.back() == nullptr) {
+    VELOX_CHECK(!isSpilling());
+    VELOX_CHECK_NULL(reader_);
+    return;
+  }
+  if (reader_ != nullptr) {
+    // Expect only duplicate null end markers after spill finished.
+    VELOX_CHECK_NULL(data);
     return;
   }
 
@@ -195,6 +224,19 @@ void DestinationBuffer::enqueue(std::shared_ptr<SerializedPage> data) {
     stats_.recordEnqueue(*data);
   }
   data_.push_back(std::move(data));
+
+  if (data_.back() == nullptr && (isSpilling())) {
+    spill();
+
+    // No more data in this destination buffer. Prepare for unspill.
+    auto spillResult = spiller_->finishSpill();
+    reader_ = std::make_unique<SerializedPageSpillReader>(
+        std::move(spillResult),
+        spillConfig_->readBufferSize,
+        pool_,
+        spillStats_);
+    spiller_.reset();
+  }
 }
 
 DataAvailable DestinationBuffer::getAndClearNotify() {
@@ -221,7 +263,7 @@ void DestinationBuffer::clearNotify() {
 
 void DestinationBuffer::finish() {
   VELOX_CHECK_NULL(notify_, "notify must be cleared before finish");
-  VELOX_CHECK(data_.empty(), "data must be fetched before finish");
+  VELOX_CHECK(empty(), "data must be fetched before finish");
   stats_.finished = true;
 }
 
@@ -248,6 +290,13 @@ void DestinationBuffer::loadData(ArbitraryBuffer* buffer, uint64_t maxBytes) {
 std::vector<std::shared_ptr<SerializedPage>> DestinationBuffer::acknowledge(
     int64_t sequence,
     bool fromGetData) {
+  if (isSpilling() && reader_ == nullptr) {
+    // We can ignore the previous acknowledgement calls that are made before
+    // destination buffer transitions to spill mode. Let later ack calls after
+    // unspill starts to clear out the front pages.
+    return {};
+  }
+
   const int64_t numDeleted = sequence - sequence_;
   if (numDeleted == 0 && fromGetData) {
     // If called from getData, it is expected that there will be
@@ -266,18 +315,20 @@ std::vector<std::shared_ptr<SerializedPage>> DestinationBuffer::acknowledge(
     return {};
   }
 
+  const auto numPages = remainingPages();
   VELOX_CHECK_LE(
-      numDeleted, data_.size(), "Ack received for a not yet produced item");
+      numDeleted, numPages, "Ack received for a not yet produced item");
   std::vector<std::shared_ptr<SerializedPage>> freed;
   for (auto i = 0; i < numDeleted; ++i) {
-    if (data_[i] == nullptr) {
-      VELOX_CHECK_EQ(i, data_.size() - 1, "null marker found in the middle");
+    auto page = at(i);
+    if (page == nullptr) {
+      VELOX_CHECK_EQ(i, numPages - 1, "null marker found in the middle");
       break;
     }
-    stats_.recordAcknowledge(*data_[i]);
-    freed.push_back(std::move(data_[i]));
+    stats_.recordAcknowledge(*page);
+    freed.push_back(std::move(page));
   }
-  data_.erase(data_.begin(), data_.begin() + numDeleted);
+  deleteFront(numDeleted);
   sequence_ += numDeleted;
   return freed;
 }
@@ -285,16 +336,84 @@ std::vector<std::shared_ptr<SerializedPage>> DestinationBuffer::acknowledge(
 std::vector<std::shared_ptr<SerializedPage>>
 DestinationBuffer::deleteResults() {
   std::vector<std::shared_ptr<SerializedPage>> freed;
-  for (auto i = 0; i < data_.size(); ++i) {
-    if (data_[i] == nullptr) {
-      VELOX_CHECK_EQ(i, data_.size() - 1, "null marker found in the middle");
+  const auto numPages = remainingPages();
+  for (auto i = 0; i < numPages; ++i) {
+    auto page = at(i);
+    if (page == nullptr) {
+      VELOX_CHECK_EQ(i, numPages - 1, "null marker found in the middle");
       break;
     }
-    stats_.recordDelete(*data_[i]);
-    freed.push_back(std::move(data_[i]));
+    stats_.recordDelete(*page);
+    freed.push_back(std::move(page));
   }
-  data_.clear();
+  deleteAll();
   return freed;
+}
+
+void DestinationBuffer::setupSpiller(
+    memory::MemoryPool* pool,
+    common::SpillConfig* spillConfig,
+    folly::Synchronized<common::SpillStats>* spillStats) {
+  spillConfig_ = spillConfig;
+  pool_ = pool;
+  spillStats_ = spillStats;
+  const auto spillDir = spillConfig_->getSpillDirPathCb();
+  VELOX_CHECK(!spillDir.empty(), "Spill directory does not exist");
+  spiller_ = std::make_unique<SerializedPageSpiller>(
+      spillConfig_->writeBufferSize,
+      spillConfig_->maxFileSize,
+      fmt::format(
+          "{}/{}-dest-{}",
+          spillDir,
+          spillConfig_->fileNamePrefix,
+          destinationIdx_),
+      spillConfig_->fileCreateConfig,
+      spillConfig_->updateAndCheckSpillLimitCb,
+      pool_,
+      spillStats_);
+}
+
+void DestinationBuffer::spill() {
+  VELOX_CHECK_NULL(reader_);
+  VELOX_CHECK_NOT_NULL(spiller_);
+  if (data_.empty()) {
+    return;
+  }
+
+  spiller_->spill(data_);
+  data_.clear();
+}
+
+bool DestinationBuffer::isSpilling() const {
+  return spiller_ != nullptr && spiller_->hasSpilled();
+}
+
+bool DestinationBuffer::empty() const {
+  return reader_ == nullptr ? data_.empty() : reader_->empty();
+}
+
+uint64_t DestinationBuffer::remainingPages() const {
+  return reader_ == nullptr ? data_.size() : reader_->numPages();
+}
+
+std::shared_ptr<SerializedPage> DestinationBuffer::at(uint64_t index) {
+  return reader_ == nullptr ? data_[index] : reader_->at(index);
+}
+
+void DestinationBuffer::deleteFront(uint64_t numPages) {
+  if (reader_ == nullptr) {
+    data_.erase(data_.begin(), data_.begin() + numPages);
+  } else {
+    reader_->deleteFront(numPages);
+  }
+}
+
+void DestinationBuffer::deleteAll() {
+  if (reader_ == nullptr) {
+    data_.clear();
+  } else {
+    reader_->deleteAll();
+  }
 }
 
 DestinationBuffer::Stats DestinationBuffer::stats() const {
@@ -338,7 +457,7 @@ OutputBuffer::OutputBuffer(
       numDrivers_(numDrivers) {
   buffers_.reserve(numDestinations);
   for (int i = 0; i < numDestinations; i++) {
-    buffers_.push_back(std::make_unique<DestinationBuffer>());
+    buffers_.push_back(std::make_unique<DestinationBuffer>(buffers_.size()));
   }
   finishedBufferStats_.resize(numDestinations);
 }
@@ -395,7 +514,7 @@ void OutputBuffer::addOutputBuffersLocked(int numBuffers) {
   VELOX_CHECK(!isPartitioned());
   buffers_.reserve(numBuffers);
   for (int32_t i = buffers_.size(); i < numBuffers; ++i) {
-    auto buffer = std::make_unique<DestinationBuffer>();
+    auto buffer = std::make_unique<DestinationBuffer>(i);
     if (isBroadcast()) {
       for (const auto& data : dataToBroadcast_) {
         buffer->enqueue(data);
