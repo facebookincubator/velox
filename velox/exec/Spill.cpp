@@ -430,13 +430,14 @@ const std::vector<SpillSortKey>& ConcatFilesSpillMergeStream::sortingKeys()
 }
 
 std::unique_ptr<BatchStream> ConcatFilesSpillBatchStream::create(
-      std::vector<std::unique_ptr<SpillReadFile>> spillFiles) {
+    std::vector<std::unique_ptr<SpillReadFile>> spillFiles) {
   auto* spillStream = new ConcatFilesSpillBatchStream(std::move(spillFiles));
   return std::unique_ptr<BatchStream>(spillStream);
 }
 
 bool ConcatFilesSpillBatchStream::nextBatch(RowVectorPtr& batch) {
   VELOX_CHECK(!atEnd_);
+  batch.reset();
   for (; fileIndex_ < spillFiles_.size(); ++fileIndex_) {
     VELOX_CHECK_NOT_NULL(spillFiles_[fileIndex_]);
     if (spillFiles_[fileIndex_]->nextBatch(batch)) {
