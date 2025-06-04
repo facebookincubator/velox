@@ -309,25 +309,31 @@ TEST_F(PlanBuilderTest, commitStrategyParameter) {
   // Lambda to create a plan with given commitStrategy and verify it
   auto testCommitStrategy = [&](connector::CommitStrategy commitStrategy) {
     // Create a plan with commitStrategy
-    auto plan = PlanBuilder()
-                    .values({data})
-                    .tableWrite(
-                        outputDirectory->getPath(),
-                        {},
-                        0,
-                        {},
-                        {},
-                        dwio::common::FileFormat::DWRF,
-                        {},
-                        PlanBuilder::kHiveDefaultConnectorId,
-                        {},
-                        nullptr,
-                        "",
-                        common::CompressionKind_NONE,
-                        nullptr,
-                        false,
-                        commitStrategy)
-                    .planNode();
+    auto planBuilder = PlanBuilder().values({data}).tableWrite(
+        outputDirectory->getPath(),
+        {},
+        0,
+        {},
+        {},
+        dwio::common::FileFormat::DWRF,
+        {},
+        PlanBuilder::kHiveDefaultConnectorId,
+        {},
+        nullptr,
+        "",
+        common::CompressionKind_NONE,
+        nullptr,
+        false);
+
+    auto plan = planBuilder.planNode();
+
+    // Conditionally set commitStrategy if it's not kNoCommit
+    if (commitStrategy != connector::CommitStrategy::kNoCommit) {
+      plan = PlanBuilder::TableWriterBuilder(planBuilder)
+                 .commitStrategy(commitStrategy)
+                 .endTableWriter()
+                 .planNode();
+    }
 
     // Verify the plan node has the correct commit strategy
     auto tableWriteNode =
