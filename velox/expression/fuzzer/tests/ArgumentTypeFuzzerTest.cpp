@@ -18,7 +18,6 @@
 
 #include <gtest/gtest.h>
 
-#include "velox/expression/SignatureBinder.h"
 #include "velox/functions/prestosql/types/TDigestRegistration.h"
 #include "velox/functions/prestosql/types/TDigestType.h"
 #include "velox/type/Type.h"
