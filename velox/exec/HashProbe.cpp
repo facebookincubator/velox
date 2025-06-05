@@ -1757,9 +1757,10 @@ void HashProbe::setRunning() {
 
 bool HashProbe::nonReclaimableState() const {
   return (state_ != ProbeOperatorState::kRunning &&
-          state_ != ProbeOperatorState::kWaitForPeers) ||
+          state_ != ProbeOperatorState::kWaitForPeers &&
+          state_ != ProbeOperatorState::kWaitForBuild) ||
       nonReclaimableSection_ || (inputSpiller_ != nullptr) ||
-      (table_ == nullptr) || (table_->numDistinct() == 0);
+      (table_ != nullptr && table_->numDistinct() == 0);
 }
 
 void HashProbe::ensureOutputFits() {
@@ -1848,9 +1849,16 @@ void HashProbe::reclaim(
   VELOX_CHECK(task->pauseRequested());
   const std::vector<HashProbe*> probeOps = findPeerOperators();
   bool hasMoreProbeInput{false};
+
+  // Some probe operators might not have started the first run. We operate on
+  // the one that has started.
+  HashProbe* startedProbe{nullptr};
+  bool noneStarted{true};
+  std::shared_ptr<BaseHashTable> table;
   for (auto* probeOp : probeOps) {
     VELOX_CHECK_NOT_NULL(probeOp);
     VELOX_CHECK(probeOp->canSpill());
+
     if (probeOp->nonReclaimableState()) {
       RECORD_METRIC_VALUE(kMetricMemoryNonReclaimableCount);
       ++stats.numNonReclaimableAttempts;
@@ -1873,9 +1881,29 @@ void HashProbe::reclaim(
                    << succinctBytes(peerPool->parent()->reservedBytes());
       return;
     }
+    if (table == nullptr && probeOp->table_ != nullptr) {
+      table = probeOp->table_;
+      startedProbe = probeOp;
+    }
+    noneStarted &=
+        (probeOp->state_ == ProbeOperatorState::kWaitForBuild &&
+         !probeOp->noMoreInput_);
     hasMoreProbeInput |= !probeOp->noMoreSpillInput_;
   }
 
+  if (noneStarted || table == nullptr) {
+    RECORD_METRIC_VALUE(kMetricMemoryNonReclaimableCount);
+    ++stats.numNonReclaimableAttempts;
+    if (noneStarted) {
+      // None probe operators have started yet, and are in kWaitForBuild state.
+      // This case, an additional reclaim effort from join bridge will be
+      // performed.
+      VELOX_CHECK_NULL(table);
+    }
+    return;
+  }
+
+  VELOX_CHECK_NOT_NULL(startedProbe);
   spillOutput(probeOps);
 
   SpillPartitionSet spillPartitionSet;
@@ -1883,12 +1911,12 @@ void HashProbe::reclaim(
     // Only spill hash table if any hash probe operators still has input probe
     // data, otherwise we skip this step.
     spillPartitionSet = spillHashJoinTable(
-        table_,
-        restoringPartitionId_,
-        tableSpillHashBits_,
-        joinNode_,
-        spillConfig(),
-        &spillStats_);
+        table,
+        startedProbe->restoringPartitionId_,
+        startedProbe->tableSpillHashBits_,
+        startedProbe->joinNode_,
+        startedProbe->spillConfig(),
+        &(startedProbe->spillStats_));
     VELOX_CHECK(!spillPartitionSet.empty());
   }
   const auto spillPartitionIdSet = toSpillPartitionIdSet(spillPartitionSet);
@@ -1901,12 +1929,21 @@ void HashProbe::reclaim(
     if (!spillPartitionSet.empty()) {
       VELOX_CHECK(hasMoreProbeInput);
       probeOp->maybeSetupInputSpiller(spillPartitionIdSet);
+      if (probeOp->state_ == ProbeOperatorState::kWaitForBuild &&
+          !probeOp->noMoreInput_) {
+        // For the probe operators that have not started the first run, set the
+        // table to indicate the input spilling state and transit the state to
+        // running.
+        VELOX_CHECK_NULL(probeOp->table_);
+        probeOp->table_ = table;
+        probeOp->setState(ProbeOperatorState::kRunning);
+      }
     }
     probeOp->pool()->release();
   }
 
   // Clears memory resources held by the built hash table.
-  table_->clear(true);
+  table->clear(true);
 
   // Sets the spilled hash table in the join bridge.
   if (!spillPartitionIdSet.empty()) {
