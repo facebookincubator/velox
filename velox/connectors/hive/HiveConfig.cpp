@@ -202,6 +202,15 @@ uint64_t HiveConfig::footerEstimatedSize() const {
   return config_->get<uint64_t>(kFooterEstimatedSize, 256UL << 10);
 }
 
+uint64_t HiveConfig::parquetFooterTrackThriftMemoryThreshold() const {
+  return config_->get<uint64_t>(
+      kparquetFooterTrackThriftMemoryThreshold, 20 * 1024 * 1024);
+}
+
+bool HiveConfig::parquetFooterTrackThriftMemoryEnabled() const {
+  return config_->get<bool>(kParquetFooterTrackThriftMemoryEnabled, true);
+}
+
 uint64_t HiveConfig::filePreloadThreshold() const {
   return config_->get<uint64_t>(kFilePreloadThreshold, 8UL << 20);
 }

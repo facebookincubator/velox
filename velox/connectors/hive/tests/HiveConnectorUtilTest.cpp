@@ -235,6 +235,11 @@ TEST_F(HiveConnectorUtilTest, configureReaderOptions) {
       "true";
   customHiveConfigProps[hive::HiveConfig::kOrcUseColumnNames] = "true";
   customHiveConfigProps[hive::HiveConfig::kFooterEstimatedSize] = "1111";
+  customHiveConfigProps
+      [hive::HiveConfig::kparquetFooterTrackThriftMemoryThreshold] = "1111";
+  customHiveConfigProps
+      [hive::HiveConfig::kParquetFooterTrackThriftMemoryEnabled] = "false";
+
   customHiveConfigProps[hive::HiveConfig::kFilePreloadThreshold] = "9999";
   customHiveConfigProps[hive::HiveConfig::kPrefetchRowGroups] = "10";
   hiveConfig = std::make_shared<hive::HiveConfig>(
@@ -253,6 +258,12 @@ TEST_F(HiveConnectorUtilTest, configureReaderOptions) {
       hiveConfig->isFileColumnNamesReadAsLowerCase(&sessionProperties));
   EXPECT_EQ(
       readerOptions.footerEstimatedSize(), hiveConfig->footerEstimatedSize());
+  EXPECT_EQ(
+      readerOptions.parquetFooterTrackThriftMemoryThreshold(),
+      hiveConfig->parquetFooterTrackThriftMemoryThreshold());
+  EXPECT_EQ(
+      readerOptions.parquetFooterTrackThriftMemoryEnabled(),
+      hiveConfig->parquetFooterTrackThriftMemoryEnabled());
   EXPECT_EQ(
       readerOptions.filePreloadThreshold(), hiveConfig->filePreloadThreshold());
   EXPECT_EQ(readerOptions.prefetchRowGroups(), hiveConfig->prefetchRowGroups());
