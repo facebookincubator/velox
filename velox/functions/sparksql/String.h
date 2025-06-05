@@ -1556,4 +1556,23 @@ struct Empty2NullFunction {
   }
 };
 
+template <typename T>
+struct InitCapFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  static constexpr bool is_default_ascii_behavior = true;
+
+  FOLLY_ALWAYS_INLINE void call(
+      out_type<Varchar>& result,
+      const arg_type<Varchar>& input) {
+    stringImpl::initcap<true, false>(result, input);
+  }
+
+  FOLLY_ALWAYS_INLINE void callAscii(
+      out_type<Varchar>& result,
+      const arg_type<Varchar>& input) {
+    stringImpl::initcap<true, true>(result, input);
+  }
+};
+
 } // namespace facebook::velox::functions::sparksql
