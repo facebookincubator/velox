@@ -11,24 +11,17 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-velox_add_library(velox_connector Connector.cpp)
+add_executable(velox_clp_connector_test ClpConnectorTest.cpp)
 
-velox_link_libraries(velox_connector velox_common_config velox_vector)
+add_test(velox_clp_connector_test velox_clp_connector_test)
 
-add_subdirectory(fuzzer)
+target_link_libraries(
+  velox_clp_connector_test
+  velox_clp_connector
+  velox_vector_test_lib
+  velox_exec_test_lib
+  GTest::gtest
+  GTest::gtest_main)
 
-if(${VELOX_ENABLE_CLP_CONNECTOR})
-  add_subdirectory(clp)
-endif()
-
-if(${VELOX_ENABLE_HIVE_CONNECTOR})
-  add_subdirectory(hive)
-endif()
-
-if(${VELOX_ENABLE_TPCH_CONNECTOR})
-  add_subdirectory(tpch)
-endif()
-
-if(${VELOX_BUILD_TESTING})
-  add_subdirectory(tests)
-endif()
+file(COPY ${CMAKE_CURRENT_SOURCE_DIR}/examples
+     DESTINATION ${CMAKE_CURRENT_BINARY_DIR})
