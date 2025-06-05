@@ -23,6 +23,7 @@
 #include "velox/dwio/dwrf/common/Compression.h"
 #include "velox/dwio/dwrf/common/Config.h"
 #include "velox/dwio/dwrf/common/EncoderUtil.h"
+#include "velox/dwio/dwrf/common/Encryption.h"
 #include "velox/dwio/dwrf/writer/IndexBuilder.h"
 #include "velox/dwio/dwrf/writer/IntegerDictionaryEncoder.h"
 #include "velox/dwio/dwrf/writer/PhysicalSizeAggregator.h"

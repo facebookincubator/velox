@@ -104,7 +104,7 @@ std::unique_ptr<dwio::common::SeekableInputStream> createDecompressor(
     std::unique_ptr<dwio::common::SeekableInputStream> input,
     uint64_t bufferSize,
     memory::MemoryPool& pool,
-    const CompressionOptions& options,
+    const std::shared_ptr<facebook::velox::common::CodecOptions>& options,
     const std::string& streamDebugInfo,
     const dwio::common::encryption::Decrypter* decryptr = nullptr,
     bool useRawDecompression = false,
