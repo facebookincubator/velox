@@ -126,6 +126,8 @@ int main(int argc, char** argv) {
       "max_by",
       // Skip non-deterministic functions.
       "noisy_count_if_gaussian",
+      // https://github.com/facebookincubator/velox/issues/13547
+      "merge",
   };
 
   // Functions whose results verification should be skipped. These can be
