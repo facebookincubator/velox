@@ -34,7 +34,7 @@ Y   [Y|y]
 Z   [Z|z]
 
 WORD              ([[:alnum:]_]*)
-QUOTED_ID         (['"'][[:alnum:][:space:]_]*['"'])
+QUOTED_ID         (['"'][[:alnum:][:space:]_()]*['"'])
 ROW               (ROW|STRUCT)
 
 %%

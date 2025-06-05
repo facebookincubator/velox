@@ -230,6 +230,15 @@ TEST_F(ParseTypeSignatureTest, row) {
     ASSERT_EQ(rowfield.rowFieldName(), "bla");
     ASSERT_EQ(rowfield.parameters().size(), 0);
   }
+
+  {
+    auto signature = parseTypeSignature("row(\"a (b)\" INTEGER)");
+    ASSERT_EQ(signature.baseName(), "row");
+    ASSERT_EQ(signature.parameters().size(), 1);
+    auto field0 = signature.parameters()[0];
+    ASSERT_EQ(field0.baseName(), "INTEGER");
+    ASSERT_EQ(field0.rowFieldName(), "a (b)");
+  }
 }
 
 TEST_F(ParseTypeSignatureTest, tdigest) {
