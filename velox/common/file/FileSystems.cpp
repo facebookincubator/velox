@@ -85,7 +85,7 @@ class LocalFileSystem : public FileSystem {
       const FileSystemOptions& options)
       : FileSystem(config),
         executor_(
-            options.readAheadEnabled
+            /*options.readAheadEnabled
                 ? std::make_unique<folly::CPUThreadPoolExecutor>(
                       std::max(
                           1,
@@ -93,7 +93,8 @@ class LocalFileSystem : public FileSystem {
                               std::thread::hardware_concurrency() / 2)),
                       std::make_shared<folly::NamedThreadFactory>(
                           "LocalReadahead"))
-                : nullptr) {}
+                :*/
+            nullptr) {}
 
   ~LocalFileSystem() override {
     if (executor_) {
