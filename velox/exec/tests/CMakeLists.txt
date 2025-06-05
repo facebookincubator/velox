@@ -81,6 +81,7 @@ add_executable(
   RowNumberTest.cpp
   ScaledScanControllerTest.cpp
   ScaleWriterLocalPartitionTest.cpp
+  SetAccumulatorTest.cpp
   SortBufferTest.cpp
   SpillerTest.cpp
   SpillTest.cpp
