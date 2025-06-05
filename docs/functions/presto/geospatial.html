@@ -281,6 +281,34 @@ not a Point and not empty.</p>
 </dd></dl>
 
 <dl class="py function">
+<dt class="sig sig-object py" id="ST_XMin">
+<span class="sig-name descname"><span class="pre">ST_XMin</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">geometry</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">Geometry</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">x:</span> <span class="pre">double</span></span></span><a class="headerlink" href="#ST_XMin" title="Link to this definition">¶</a></dt>
+<dd><p>Returns the minimum <code class="docutils literal notranslate"><span class="pre">x</span></code> coordinate of the geometries bounding box.
+Returns <code class="docutils literal notranslate"><span class="pre">null</span></code> if the geometry is empty.</p>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="ST_YMin">
+<span class="sig-name descname"><span class="pre">ST_YMin</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">geometry</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">Geometry</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">y:</span> <span class="pre">double</span></span></span><a class="headerlink" href="#ST_YMin" title="Link to this definition">¶</a></dt>
+<dd><p>Returns the minimum <code class="docutils literal notranslate"><span class="pre">y</span></code> coordinate of the geometries bounding box.
+Returns <code class="docutils literal notranslate"><span class="pre">null</span></code> if the geometry is empty.</p>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="ST_XMax">
+<span class="sig-name descname"><span class="pre">ST_XMax</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">geometry</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">Geometry</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">x:</span> <span class="pre">double</span></span></span><a class="headerlink" href="#ST_XMax" title="Link to this definition">¶</a></dt>
+<dd><p>Returns the maximum <code class="docutils literal notranslate"><span class="pre">x</span></code> coordinate of the geometries bounding box.
+Returns <code class="docutils literal notranslate"><span class="pre">null</span></code> if the geometry is empty.</p>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="ST_YMax">
+<span class="sig-name descname"><span class="pre">ST_YMax</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">geometry</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">Geometry</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">y:</span> <span class="pre">double</span></span></span><a class="headerlink" href="#ST_YMax" title="Link to this definition">¶</a></dt>
+<dd><p>Returns the maximum <code class="docutils literal notranslate"><span class="pre">y</span></code> coordinate of the geometries bounding box.
+Returns <code class="docutils literal notranslate"><span class="pre">null</span></code> if the geometry is empty.</p>
+</dd></dl>
+
+<dl class="py function">
 <dt class="sig sig-object py" id="simplify_geometry">
 <span class="sig-name descname"><span class="pre">simplify_geometry</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">geometry</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">Geometry</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">tolerance</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">double</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">output:</span> <span class="pre">Geometry</span></span></span><a class="headerlink" href="#simplify_geometry" title="Link to this definition">¶</a></dt>
 <dd><p>Returns a “simplified” version of the input geometry using the
@@ -424,6 +452,10 @@ specified.</p>
 <li><a class="reference internal" href="#ST_Centroid"><code class="docutils literal notranslate"><span class="pre">ST_Centroid()</span></code></a></li>
 <li><a class="reference internal" href="#ST_X"><code class="docutils literal notranslate"><span class="pre">ST_X()</span></code></a></li>
 <li><a class="reference internal" href="#ST_Y"><code class="docutils literal notranslate"><span class="pre">ST_Y()</span></code></a></li>
+<li><a class="reference internal" href="#ST_XMin"><code class="docutils literal notranslate"><span class="pre">ST_XMin()</span></code></a></li>
+<li><a class="reference internal" href="#ST_YMin"><code class="docutils literal notranslate"><span class="pre">ST_YMin()</span></code></a></li>
+<li><a class="reference internal" href="#ST_XMax"><code class="docutils literal notranslate"><span class="pre">ST_XMax()</span></code></a></li>
+<li><a class="reference internal" href="#ST_YMax"><code class="docutils literal notranslate"><span class="pre">ST_YMax()</span></code></a></li>
 <li><a class="reference internal" href="#simplify_geometry"><code class="docutils literal notranslate"><span class="pre">simplify_geometry()</span></code></a></li>
 </ul>
 </li>
