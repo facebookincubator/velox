@@ -42,7 +42,7 @@ class ConstantVector final : public SimpleVector<T> {
   static constexpr bool can_simd =
       (std::is_same_v<T, int64_t> || std::is_same_v<T, int32_t> ||
        std::is_same_v<T, int16_t> || std::is_same_v<T, int8_t> ||
-       std::is_same_v<T, bool> || std::is_same_v<T, size_t>);
+       /*std::is_same_v<T, bool> ||*/ std::is_same_v<T, size_t>);
 
   ConstantVector(
       velox::memory::MemoryPool* pool,

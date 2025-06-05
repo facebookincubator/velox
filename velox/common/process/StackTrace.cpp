@@ -36,7 +36,7 @@
 
 #ifdef __linux__
 #include <folly/experimental/symbolizer/Symbolizer.h> // @manual
-#include <folly/fibers/FiberManager.h> // @manual
+//#include <folly/fibers/FiberManager.h> // @manual
 #endif
 
 namespace facebook::velox::process {
@@ -175,7 +175,7 @@ inline std::string translateFrameImpl(void* addressPtr) {
 
 std::string StackTrace::translateFrame(void* addressPtr, bool /*lineNumbers*/) {
 #if VELOX_HAS_SYMBOLIZER
-  return folly::fibers::runInMainContext(
+  return std::invoke(
       [addressPtr]() { return translateFrameImpl(addressPtr); });
 #else
   static_cast<void>(addressPtr);
