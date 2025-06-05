@@ -205,7 +205,7 @@ MemoryManager::MemoryManager(const MemoryManager::Options& options)
       sysRoot_->name());
   VELOX_CHECK_EQ(
       sharedLeafPools_.size(),
-      std::max(1, FLAGS_velox_memory_num_shared_leaf_pools));
+      std::max<int>(1, FLAGS_velox_memory_num_shared_leaf_pools));
 }
 
 MemoryManager::MemoryManager(const MemoryManagerOptions& options)
