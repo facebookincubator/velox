@@ -431,8 +431,10 @@ struct Re2RegexpSplit {
       }
     }
 
-    out.add_item().setNoCopy(
-        StringView(string.data() + pos, string.size() - pos));
+    auto lastSlice = LIKELY(pos <= string.size())
+        ? StringView(string.data() + pos, string.size() - pos)
+        : StringView(nullptr, 0);
+    out.add_item().setNoCopy(lastSlice);
   }
 
  private:
