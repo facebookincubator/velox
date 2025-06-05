@@ -575,6 +575,8 @@ void configureReaderOptions(
       useColumnNamesForColumnMapping);
   readerOptions.setFileSchema(fileSchema);
   readerOptions.setFooterEstimatedSize(hiveConfig->footerEstimatedSize());
+  readerOptions.setParquetFooterTrackThriftMemoryThreshold(
+      hiveConfig->parquetFooterTrackThriftMemoryThreshold());
   readerOptions.setFilePreloadThreshold(hiveConfig->filePreloadThreshold());
   readerOptions.setPrefetchRowGroups(hiveConfig->prefetchRowGroups());
   readerOptions.setNoCacheRetention(!hiveSplit->cacheable);

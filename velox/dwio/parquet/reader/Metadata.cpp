@@ -363,4 +363,157 @@ std::string FileMetaDataPtr::createdBy() const {
   return thriftFileMetaDataPtr(ptr_)->created_by;
 }
 
+size_t calculateColumnMetadataSize(const thrift::ColumnChunk& column) {
+  size_t size = 0;
+  size += sizeof(thrift::ColumnChunk);
+  size += sizeof(thrift::ColumnMetaData);
+  size += column.meta_data.encodings.size() * sizeof(thrift::Encoding::type);
+  size += column.meta_data.path_in_schema.size() * sizeof(std::string);
+  for (const auto& path : column.meta_data.path_in_schema) {
+    size += path.capacity();
+  }
+  size += column.meta_data.key_value_metadata.size() * sizeof(thrift::KeyValue);
+  for (const auto& kv : column.meta_data.key_value_metadata) {
+    size += kv.key.capacity();
+    size += kv.value.capacity();
+  }
+
+  if (column.meta_data.__isset.statistics) {
+    const auto& stats = column.meta_data.statistics;
+    size += sizeof(thrift::Statistics);
+    if (stats.__isset.min)
+      size += stats.min.capacity();
+    if (stats.__isset.max)
+      size += stats.max.capacity();
+    if (stats.__isset.min_value)
+      size += stats.min_value.capacity();
+    if (stats.__isset.max_value)
+      size += stats.max_value.capacity();
+    if (stats.__isset.null_count)
+      size += sizeof(int64_t);
+    if (stats.__isset.distinct_count)
+      size += sizeof(int64_t);
+  }
+  return size;
+}
+
+size_t analyzeFileMetadata(
+    const thrift::FileMetaData& metadata,
+    const std::string& filename,
+    uint64_t footerLength) {
+  size_t totalSize = sizeof(thrift::FileMetaData);
+
+  size_t numSchemaElements = metadata.schema.size();
+  size_t maxSchemaDepth = 0;
+  size_t currentDepth = 0;
+  size_t numLeafNodes = 0;
+  size_t numGroupNodes = 0;
+  size_t totalStringLength = 0;
+  size_t maxStringLength = 0;
+  size_t maxDepth = 0;
+  size_t maxDepthElementSize = 0;
+  std::string maxDepthElementName;
+  size_t maxElementSize = 0;
+  std::string maxElementName;
+  currentDepth = 0;
+
+  for (const auto& schema : metadata.schema) {
+    size_t elementSize = sizeof(schema) + schema.name.capacity() +
+        sizeof(schema.type) + sizeof(schema.type_length) +
+        sizeof(schema.repetition_type) + sizeof(schema.num_children) +
+        sizeof(schema.converted_type) + sizeof(schema.scale) +
+        sizeof(schema.precision) + sizeof(schema.field_id);
+    if (schema.__isset.logicalType) {
+      elementSize += sizeof(schema.logicalType);
+    }
+    if (elementSize > maxElementSize) {
+      maxElementSize = elementSize;
+      maxElementName = schema.name;
+    }
+    if (schema.__isset.num_children) {
+      currentDepth++;
+      if (currentDepth > maxDepth) {
+        maxDepth = currentDepth;
+        maxDepthElementName = schema.name;
+        maxDepthElementSize = elementSize;
+      }
+    }
+  }
+  size_t numRowGroups = metadata.row_groups.size();
+  size_t totalColumns = 0;
+  size_t totalEncodings = 0;
+  size_t totalPaths = 0;
+  size_t totalKeyValues = 0;
+
+  totalSize += metadata.row_groups.size() * sizeof(thrift::RowGroup);
+  for (const auto& rowGroup : metadata.row_groups) {
+    totalColumns += rowGroup.columns.size();
+    totalSize += rowGroup.columns.size() * sizeof(thrift::ColumnChunk);
+    for (const auto& column : rowGroup.columns) {
+      totalSize += calculateColumnMetadataSize(column);
+      totalEncodings += column.meta_data.encodings.size();
+      totalPaths += column.meta_data.path_in_schema.size();
+      totalKeyValues += column.meta_data.key_value_metadata.size();
+    }
+  }
+
+  size_t numKeyValues = metadata.key_value_metadata.size();
+  totalSize += metadata.key_value_metadata.size() * sizeof(thrift::KeyValue);
+  for (const auto& kv : metadata.key_value_metadata) {
+    totalSize += kv.key.capacity();
+    totalSize += kv.value.capacity();
+  }
+
+  totalSize += metadata.created_by.capacity();
+  totalSize += metadata.column_orders.size() * sizeof(thrift::ColumnOrder);
+  totalSize += sizeof(thrift::EncryptionAlgorithm);
+  totalSize += metadata.footer_signing_key_metadata.capacity();
+
+  auto encodingToString = [](thrift::Encoding::type encoding) -> std::string {
+    switch (encoding) {
+      case thrift::Encoding::PLAIN:
+        return "PLAIN";
+      case thrift::Encoding::PLAIN_DICTIONARY:
+        return "PLAIN_DICTIONARY";
+      case thrift::Encoding::RLE:
+        return "RLE";
+      case thrift::Encoding::BIT_PACKED:
+        return "BIT_PACKED";
+      case thrift::Encoding::DELTA_BINARY_PACKED:
+        return "DELTA_BINARY_PACKED";
+      case thrift::Encoding::DELTA_LENGTH_BYTE_ARRAY:
+        return "DELTA_LENGTH_BYTE_ARRAY";
+      case thrift::Encoding::DELTA_BYTE_ARRAY:
+        return "DELTA_BYTE_ARRAY";
+      case thrift::Encoding::RLE_DICTIONARY:
+        return "RLE_DICTIONARY";
+      case thrift::Encoding::BYTE_STREAM_SPLIT:
+        return "BYTE_STREAM_SPLIT";
+      default:
+        return "UNKNOWN";
+    }
+  };
+  std::set<thrift::Encoding::type> distinctEncodings;
+  std::map<thrift::Encoding::type, size_t> encodingCounts;
+
+  for (const auto& rowGroup : metadata.row_groups) {
+    for (const auto& column : rowGroup.columns) {
+      for (const auto& encoding : column.meta_data.encodings) {
+        distinctEncodings.insert(encoding);
+        encodingCounts[encoding]++;
+      }
+      totalEncodings += column.meta_data.encodings.size();
+      totalSize +=
+          column.meta_data.encodings.size() * sizeof(thrift::Encoding::type);
+    }
+  }
+
+  std::string encodingStats;
+  for (const auto& [encoding, count] : encodingCounts) {
+    encodingStats += fmt::format(
+        "      {}: {} occurrences\n", encodingToString(encoding), count);
+  }
+  return totalSize;
+}
+
 } // namespace facebook::velox::parquet

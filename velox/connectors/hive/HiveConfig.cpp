@@ -216,6 +216,12 @@ uint64_t HiveConfig::footerEstimatedSize() const {
   return config_->get<uint64_t>(kFooterEstimatedSize, 256UL << 10);
 }
 
+uint64_t HiveConfig::parquetFooterTrackThriftMemoryThreshold() const {
+  return config_->get<uint64_t>(
+      kParquetFooterTrackThriftMemoryThreshold,
+      std::numeric_limits<uint64_t>::max());
+}
+
 uint64_t HiveConfig::filePreloadThreshold() const {
   return config_->get<uint64_t>(kFilePreloadThreshold, 8UL << 20);
 }
