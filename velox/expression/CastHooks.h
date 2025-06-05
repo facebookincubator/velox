@@ -16,6 +16,8 @@
 
 #pragma once
 
+#include <type_traits>
+
 #include "velox/expression/StringWriter.h"
 #include "velox/type/Timestamp.h"
 
@@ -28,7 +30,19 @@ enum PolicyType {
   SparkTryCastPolicy
 };
 
-fmt::underlying_t<PolicyType> format_as(PolicyType f);
+} // namespace facebook::velox::exec
+
+template <>
+struct fmt::formatter<facebook::velox::exec::PolicyType>
+    : formatter<std::underlying_type_t<facebook::velox::exec::PolicyType>> {
+  template <typename FormatContext>
+  auto format(facebook::velox::exec::PolicyType t, FormatContext& ctx) const {
+    using T = std::underlying_type_t<facebook::velox::exec::PolicyType>;
+    return formatter<T>::format(static_cast<T>(t), ctx);
+  }
+};
+
+namespace facebook::velox::exec {
 
 /// This class provides cast hooks to allow different behaviors of CastExpr and
 /// SparkCastExpr. The main purpose is to create customized cast implementation
