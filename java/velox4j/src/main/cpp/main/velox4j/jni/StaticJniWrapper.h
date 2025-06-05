@@ -15,10 +15,9 @@
  */
 #pragma once
 
+#include <JavaClass.h>
 #include <JniHelpers.h>
 #include <jni.h>
-
-#include "JavaClass.h"
 
 namespace facebook::velox4j {
 class StaticJniWrapper final : public spotify::jni::JavaClass {

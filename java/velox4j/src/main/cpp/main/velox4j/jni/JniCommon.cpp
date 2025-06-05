@@ -15,6 +15,9 @@
  */
 #include "JniCommon.h"
 
+#include <ClassRegistry.h>
+#include <JavaThreadUtils.h>
+#include <JniHelpersCommon.h>
 #include <fmt/core.h>
 #include <glog/logging.h>
 #include <jni.h>
@@ -23,10 +26,6 @@
 #include <cstring>
 #include <ostream>
 #include <vector>
-
-#include "ClassRegistry.h"
-#include "JavaThreadUtils.h"
-#include "JniHelpersCommon.h"
 
 namespace facebook::velox4j {
 
