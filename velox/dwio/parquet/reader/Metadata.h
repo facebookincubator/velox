@@ -18,6 +18,7 @@
 
 #include "velox/dwio/common/Statistics.h"
 #include "velox/dwio/common/compression/Compression.h"
+#include "velox/dwio/parquet/thrift/ParquetThriftTypes.h"
 
 namespace facebook::velox::parquet {
 
@@ -159,5 +160,12 @@ class FileMetaDataPtr {
  private:
   const void* ptr_;
 };
+
+size_t calculateColumnMetadataSize(const thrift::ColumnChunk& column);
+
+size_t analyzeFileMetadata(
+    const thrift::FileMetaData& metadata,
+    const std::string& filename,
+    uint64_t footerLength);
 
 } // namespace facebook::velox::parquet
