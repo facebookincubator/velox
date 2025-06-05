@@ -132,6 +132,12 @@ class NestedLoopJoinProbe : public Operator {
   // all probe data has been processed.
   bool addToOutput();
 
+  bool addToOutputOneRow(const RowVectorPtr& buildVector);
+
+  bool addToOutputOneVector(const RowVectorPtr& buildVector);
+
+  bool addToOutputMultiVector(const RowVectorPtr& buildVector);
+
   // Advances 'probeRow_' and resets required state information. Returns true
   // if there is not more probe data to be processed in the current `input_`
   // (and hence a new probe input is required). False otherwise.
@@ -195,16 +201,16 @@ class NestedLoopJoinProbe : public Operator {
   // zero-copy (dictionary indices), and build side projections are marked to be
   // copied using `buildCopyRanges_`; they will be copied later on by
   // `copyBuildValues()`.
-  void addOutputRow(vector_size_t buildRow);
+  void addOutputRow(vector_size_t probeRow, vector_size_t buildRow);
 
   // Checks if it is required to add a probe mismatch row, and does it if
   // needed. The caller needs to ensure there is available space in `output_`
   // for the new record, which has nulled out build projections.
-  void checkProbeMismatchRow();
+  void checkProbeMismatchRow(vector_size_t probeRow, size_t probeSize);
 
   // Add a probe mismatch (only for left/full outer joins). The record is based
   // on the current probeRow and vector (input_) and build projections are null.
-  void addProbeMismatchRow();
+  void addProbeMismatchRow(vector_size_t probeRow);
 
   // Copies the ranges from buildVector specified by `buildCopyRanges_` to
   // `output_`, one projected column at a time. Clears buildCopyRanges_.
@@ -335,10 +341,6 @@ class NestedLoopJoinProbe : public Operator {
   // How many probe rows are being processed by the current batch.
   vector_size_t probeRowCount_{1};
 
-  // Whether the current probeRow_ has produces a match. Used for left and full
-  // outer joins.
-  bool probeRowHasMatch_{false};
-
   // Controls if this is the operator gathering and producing right/full outer
   // join mismatches. This is only set after all probe and build data has been
   // processed, only for right/full outer joins, and only executed in one single
@@ -349,6 +351,8 @@ class NestedLoopJoinProbe : public Operator {
   // this indicates if all the probe sides are empty or not. This flag is used
   // for mismatched output producing.
   bool probeSideEmpty_{true};
+
+  bool outputProbeOrder_{true};
 
   // Build side state.
 
@@ -361,7 +365,14 @@ class NestedLoopJoinProbe : public Operator {
   // Row being currently processed from `buildVectors_[buildIndex_]`.
   vector_size_t buildRow_{0};
 
-  // Keep track of the build rows that had matches (only used for right or full
+  // Row being currently processed from `decodedFilterResult_`.
+  vector_size_t filterIndex_{0};
+
+  // Keep track of the probe rows that had matches (only used for right or full
+  // outer joins).
+  SelectivityVector probeMatched_;
+
+  // Keep track of the build rows that had matches (only used for left or full
   // outer joins).
   std::vector<SelectivityVector> buildMatched_;
 

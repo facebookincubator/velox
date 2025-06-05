@@ -208,6 +208,11 @@ class QueryConfig {
   static constexpr const char* kPreferredOutputBatchRows =
       "preferred_output_batch_rows";
 
+  /// Preferred produce output same order with probe data at NestedLoopJoin
+  /// operator
+  static constexpr const char* kPreferredNLJOutputProbeOrder =
+      "preferred_nlj_output_probe_order";
+
   /// Max number of rows that could be return by operators from
   /// Operator::getOutput. It is used when an estimate of average row size is
   /// known and kPreferredOutputBatchBytes is used to compute the number of
@@ -744,6 +749,11 @@ class QueryConfig {
     const uint32_t batchRows = get<uint32_t>(kPreferredOutputBatchRows, 1024);
     VELOX_USER_CHECK_LE(batchRows, std::numeric_limits<vector_size_t>::max());
     return batchRows;
+  }
+
+  bool preferredNLJOutputProbeOrder() const {
+    const bool probeOrder = get<bool>(kPreferredNLJOutputProbeOrder, true);
+    return probeOrder;
   }
 
   vector_size_t maxOutputBatchRows() const {
