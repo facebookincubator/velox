@@ -27,14 +27,48 @@ IcebergDataSink::IcebergDataSink(
     const facebook::velox::connector::ConnectorQueryCtx* connectorQueryCtx,
     facebook::velox::connector::CommitStrategy commitStrategy,
     const std::shared_ptr<const HiveConfig>& hiveConfig)
-    : HiveDataSink(
+    : IcebergDataSink(
           std::move(inputType),
-          std::move(insertTableHandle),
+          insertTableHandle,
           connectorQueryCtx,
           commitStrategy,
-          hiveConfig) {
-  initializeChannels();
-}
+          hiveConfig,
+          [&insertTableHandle]() {
+            std::vector<column_index_t> channels;
+            const auto& inputColumns = insertTableHandle->inputColumns();
+
+            for (column_index_t i = 0; i < inputColumns.size(); i++) {
+              if (inputColumns[i]->isPartitionKey()) {
+                channels.push_back(i);
+              }
+            }
+            return channels;
+          }(),
+          [&insertTableHandle]() {
+            std::vector<column_index_t> channels(
+                insertTableHandle->inputColumns().size());
+            std::iota(channels.begin(), channels.end(), 0);
+            return channels;
+          }()) {}
+
+IcebergDataSink::IcebergDataSink(
+    RowTypePtr inputType,
+    std::shared_ptr<const HiveInsertTableHandle> insertTableHandle,
+    const ConnectorQueryCtx* connectorQueryCtx,
+    CommitStrategy commitStrategy,
+    const std::shared_ptr<const HiveConfig>& hiveConfig,
+    const std::vector<column_index_t>& partitionChannels,
+    const std::vector<column_index_t>& dataChannels)
+    : HiveDataSink(
+          inputType,
+          insertTableHandle,
+          connectorQueryCtx,
+          commitStrategy,
+          hiveConfig,
+          0,
+          nullptr,
+          partitionChannels,
+          dataChannels) {}
 
 std::vector<std::string> IcebergDataSink::close() {
   setState(State::kClosed);

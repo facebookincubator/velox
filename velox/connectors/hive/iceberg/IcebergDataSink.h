@@ -165,17 +165,17 @@ class IcebergDataSink : public HiveDataSink {
   std::vector<std::string> close() override;
 
  protected:
+  IcebergDataSink(
+      RowTypePtr inputType,
+      std::shared_ptr<const HiveInsertTableHandle> insertTableHandle,
+      const ConnectorQueryCtx* connectorQueryCtx,
+      CommitStrategy commitStrategy,
+      const std::shared_ptr<const HiveConfig>& hiveConfig,
+      const std::vector<column_index_t>& partitionChannels,
+      const std::vector<column_index_t>& dataChannels);
   // Below are structures for partitions from all inputs. partitionData_
   // is indexed by partitionId.
   std::vector<std::shared_ptr<PartitionData>> partitionData_;
-
-  std::vector<column_index_t> createDataChannels(
-      const std::shared_ptr<const HiveInsertTableHandle>& tableHandle)
-      const override {
-    std::vector<column_index_t> channels(tableHandle->inputColumns().size());
-    std::iota(channels.begin(), channels.end(), 0);
-    return channels;
-  }
 
  private:
   void splitInputRowsAndEnsureWriters(RowVectorPtr input) override;

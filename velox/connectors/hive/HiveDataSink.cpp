@@ -140,6 +140,34 @@ FOLLY_ALWAYS_INLINE int32_t
 getBucketCount(const HiveBucketProperty* bucketProperty) {
   return bucketProperty == nullptr ? 0 : bucketProperty->bucketCount();
 }
+
+std::vector<column_index_t> createPartitionChannels(
+    const std::shared_ptr<const HiveInsertTableHandle>& tableHandle) {
+  std::vector<column_index_t> channels;
+  const auto& inputColumns = tableHandle->inputColumns();
+
+  for (column_index_t i = 0; i < inputColumns.size(); i++) {
+    if (inputColumns[i]->isPartitionKey()) {
+      channels.push_back(i);
+    }
+  }
+
+  return channels;
+}
+
+std::vector<column_index_t> createDataChannels(
+    const std::shared_ptr<const HiveInsertTableHandle>& tableHandle) {
+  std::vector<column_index_t> channels;
+  const auto& inputColumns = tableHandle->inputColumns();
+
+  for (column_index_t i = 0; i < inputColumns.size(); i++) {
+    if (!inputColumns[i]->isPartitionKey()) {
+      channels.push_back(i);
+    }
+  }
+  return channels;
+}
+
 } // namespace
 
 const HiveWriterId& HiveWriterId::unpartitionedId() {
@@ -322,7 +350,9 @@ HiveDataSink::HiveDataSink(
               ? createBucketFunction(
                     *insertTableHandle->bucketProperty(),
                     inputType)
-              : nullptr) {}
+              : nullptr,
+          createPartitionChannels(insertTableHandle),
+          createDataChannels(insertTableHandle)) {}
 
 HiveDataSink::HiveDataSink(
     RowTypePtr inputType,
@@ -331,9 +361,13 @@ HiveDataSink::HiveDataSink(
     CommitStrategy commitStrategy,
     const std::shared_ptr<const HiveConfig>& hiveConfig,
     uint32_t bucketCount,
-    std::unique_ptr<core::PartitionFunction> bucketFunction)
+    std::unique_ptr<core::PartitionFunction> bucketFunction,
+    const std::vector<column_index_t>& partitionChannels,
+    const std::vector<column_index_t>& dataChannels)
     : inputType_(std::move(inputType)),
       insertTableHandle_(std::move(insertTableHandle)),
+      partitionChannels_(partitionChannels),
+      dataChannels_(dataChannels),
       connectorQueryCtx_(connectorQueryCtx),
       commitStrategy_(commitStrategy),
       hiveConfig_(hiveConfig),
@@ -359,7 +393,6 @@ HiveDataSink::HiveDataSink(
       "Unsupported commit strategy: {}",
       commitStrategyToString(commitStrategy_));
 
-  initializeChannels();
   partitionIdGenerator_ = !partitionChannels_.empty()
       ? std::make_unique<PartitionIdGenerator>(
             inputType_,
@@ -398,39 +431,6 @@ HiveDataSink::HiveDataSink(
       }
     }
   }
-}
-
-void HiveDataSink::initializeChannels() {
-  partitionChannels_ = createPartitionChannels(insertTableHandle_);
-  dataChannels_ = createDataChannels(insertTableHandle_);
-}
-
-std::vector<column_index_t> HiveDataSink::createPartitionChannels(
-    const std::shared_ptr<const HiveInsertTableHandle>& tableHandle) const {
-  std::vector<column_index_t> channels;
-  const auto& inputColumns = tableHandle->inputColumns();
-
-  for (column_index_t i = 0; i < inputColumns.size(); i++) {
-    if (inputColumns[i]->isPartitionKey()) {
-      channels.push_back(i);
-    }
-  }
-
-  return channels;
-}
-
-std::vector<column_index_t> HiveDataSink::createDataChannels(
-    const std::shared_ptr<const HiveInsertTableHandle>& tableHandle) const {
-  std::vector<column_index_t> channels;
-  const auto& inputColumns = tableHandle->inputColumns();
-
-  for (column_index_t i = 0; i < inputColumns.size(); i++) {
-    if (!inputColumns[i]->isPartitionKey()) {
-      channels.push_back(i);
-    }
-  }
-
-  return channels;
 }
 
 bool HiveDataSink::canReclaim() const {

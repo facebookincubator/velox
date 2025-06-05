@@ -516,15 +516,6 @@ class HiveDataSink : public DataSink {
       CommitStrategy commitStrategy,
       const std::shared_ptr<const HiveConfig>& hiveConfig);
 
-  HiveDataSink(
-      RowTypePtr inputType,
-      std::shared_ptr<const HiveInsertTableHandle> insertTableHandle,
-      const ConnectorQueryCtx* connectorQueryCtx,
-      CommitStrategy commitStrategy,
-      const std::shared_ptr<const HiveConfig>& hiveConfig,
-      uint32_t bucketCount,
-      std::unique_ptr<core::PartitionFunction> bucketFunction);
-
   static uint32_t maxBucketCount() {
     static const uint32_t kMaxBucketCount = 100'000;
     return kMaxBucketCount;
@@ -543,8 +534,18 @@ class HiveDataSink : public DataSink {
   bool canReclaim() const;
 
  protected:
+  HiveDataSink(
+      RowTypePtr inputType,
+      std::shared_ptr<const HiveInsertTableHandle> insertTableHandle,
+      const ConnectorQueryCtx* connectorQueryCtx,
+      CommitStrategy commitStrategy,
+      const std::shared_ptr<const HiveConfig>& hiveConfig,
+      uint32_t bucketCount,
+      std::unique_ptr<core::PartitionFunction> bucketFunction,
+      const std::vector<column_index_t>& partitionChannels,
+      const std::vector<column_index_t>& dataChannels);
+
   void setState(State newState);
-  void initializeChannels();
   void closeInternal();
   // Returns true if the table is partitioned.
   FOLLY_ALWAYS_INLINE bool isPartitioned() const {
@@ -562,14 +563,6 @@ class HiveDataSink : public DataSink {
   void updatePartitionRows(uint32_t index, size_t numRows, size_t row);
 
   virtual void extendBuffersForPartitionedTables();
-
-  virtual std::vector<column_index_t> createPartitionChannels(
-      const std::shared_ptr<const HiveInsertTableHandle>& insertTableHandle)
-      const;
-
-  virtual std::vector<column_index_t> createDataChannels(
-      const std::shared_ptr<const HiveInsertTableHandle>& insertTableHandle)
-      const;
 
   RowVectorPtr makeDataInput(const RowVectorPtr& input);
 

@@ -21,7 +21,6 @@
 #include "velox/dwio/parquet/writer/Writer.h"
 
 namespace facebook::velox::connector::hive::iceberg::test {
-IcebergTestBase::IcebergTestBase() : HiveConnectorTestBase() {}
 void IcebergTestBase::SetUp() {
   HiveConnectorTestBase::SetUp();
   parquet::registerParquetReaderFactory();
