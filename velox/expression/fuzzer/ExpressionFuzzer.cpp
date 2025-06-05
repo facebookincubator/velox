@@ -449,7 +449,6 @@ bool ExpressionFuzzer::isSupportedSignature(
   // Not supporting functions using custom types, timestamp with time zone types
   // and interval day to second types.
   if (usesTypeName(signature, "opaque") ||
-      usesTypeName(signature, "interval day to second") ||
       usesTypeName(signature, "ipprefix") ||
       (!options_.enableDecimalType && usesTypeName(signature, "decimal")) ||
       (!options_.enableComplexTypes && useComplexType) ||
