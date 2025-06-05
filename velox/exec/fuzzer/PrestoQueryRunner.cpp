@@ -38,6 +38,7 @@
 #include "velox/functions/prestosql/types/TimestampWithTimeZoneType.h"
 #include "velox/functions/prestosql/types/UuidType.h"
 #include "velox/serializers/PrestoSerializer.h"
+#include "velox/type/Type.h"
 #include "velox/type/parser/TypeParser.h"
 
 using namespace facebook::velox;
@@ -185,13 +186,14 @@ const std::vector<TypePtr>& PrestoQueryRunner::supportedScalarTypes() const {
       VARBINARY(),
       TIMESTAMP(),
       TIMESTAMP_WITH_TIME_ZONE(),
+      INTERVAL_DAY_TIME(),
   };
   return kScalarTypes;
 }
 
 // static
 bool PrestoQueryRunner::isSupportedDwrfType(const TypePtr& type) {
-  if (type->isDate() || type->isIntervalDayTime() || type->isUnKnown()) {
+  if (type->isDate() || type->isUnKnown()) {
     return false;
   }
 
@@ -292,11 +294,11 @@ bool PrestoQueryRunner::isConstantExprSupported(
     // Ipprefix, and Uuid can be enabled after we're able to generate valid
     // input values, because when these types are used as the type of a constant
     // literal in SQL, Presto implicitly invokes json_parse(),
-    // cast(x as Ipaddress), cast(x as Ipprefix) and cast(x as uuid) on it,
-    // which makes the behavior of Presto different from Velox. Timestamp
-    // constant literals require further investigation to ensure Presto uses the
-    // same timezone as Velox. Interval type cannot be used as the type of
-    // constant literals in Presto SQL.
+    // cast(x as Ipaddress), cast(x as Ipprefix), to_milliseconds(x as interval
+    // day to seconds) and cast(x as uuid) on it, which makes the behavior of
+    // Presto different from Velox. Timestamp constant literals require further
+    // investigation to ensure Presto uses the same timezone as Velox. Interval
+    // type cannot be used as the type of constant literals in Presto SQL.
     auto& type = expr->type();
     return type->isPrimitiveType() && !type->isTimestamp() &&
         !isJsonType(type) && !type->isIntervalDayTime() &&
