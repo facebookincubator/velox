@@ -72,17 +72,14 @@ set(VELOX_BINARY_DIR "${PROJECT_BINARY_DIR}/velox-build")
 add_subdirectory(${VELOX_ROOT_DIR} ${VELOX_BINARY_DIR})
 
 # Import JniHelpers.
-set(JNI_HELPERS_REPO zhztheplayer/JniHelpersCpp)
-set(JNI_HELPERS_REF 7c58a9a24c87758fe94f33bec6a4463971af1e23)
+set(JNI_HELPERS_REPO spotify/JniHelpers)
+set(JNI_HELPERS_REF 956649eb352252ff6c43362d9b9c526f9241e480)
 FetchContent_Declare(
-  JniHelpersLib
+  JniHelpers
   GIT_REPOSITORY https://github.com/${JNI_HELPERS_REPO}.git
   GIT_TAG ${JNI_HELPERS_REF} # release-1.10.0
 )
-FetchContent_MakeAvailable(JniHelpersLib)
-target_link_libraries(
-  JniHelpers
-  PRIVATE JNI::JNI)
+FetchContent_MakeAvailable(JniHelpers)
 
 # Setup compiler launcher to ccache if using similar code with Velox.
 if(VELOX4J_ENABLE_CCACHE

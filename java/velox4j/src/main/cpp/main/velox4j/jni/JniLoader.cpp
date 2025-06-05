@@ -13,14 +13,14 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+#include <ClassRegistry.h>
 #include <JniHelpers.h>
+#include <JniHelpersCommon.h>
 #include <glog/logging.h>
 #include <jni.h>
 #include <jni_md.h>
 #include <ostream>
 
-#include "ClassRegistry.h"
-#include "JniHelpersCommon.h"
 #include "JniWrapper.h"
 #include "StaticJniWrapper.h"
 #include "velox4j/iterator/DownIterator.h"

@@ -15,6 +15,8 @@
  */
 #include "JniWrapper.h"
 
+#include <ClassRegistry.h>
+#include <JavaString.h>
 #include <fmt/core.h>
 #include <folly/json/json.h>
 #include <jni_md.h>
@@ -39,8 +41,6 @@
 #include <utility>
 #include <vector>
 
-#include "ClassRegistry.h"
-#include "JavaString.h"
 #include "JniCommon.h"
 #include "JniError.h"
 #include "JniTypes.h"

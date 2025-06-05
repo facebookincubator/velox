@@ -15,6 +15,7 @@
  */
 #include "StaticJniWrapper.h"
 
+#include <JavaString.h>
 #include <folly/json/json.h>
 #include <jni_md.h>
 #include <velox/common/encode/Base64.h>
@@ -33,7 +34,6 @@
 #include <string>
 #include <utility>
 
-#include "JavaString.h"
 #include "JniCommon.h"
 #include "JniError.h"
 #include "JniTypes.h"
