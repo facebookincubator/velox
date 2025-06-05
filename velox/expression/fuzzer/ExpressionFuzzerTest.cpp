@@ -82,20 +82,16 @@ int main(int argc, char** argv) {
   // Use function name to exclude all signatures of a given function from
   // testing. Use function signature to exclude only a specific signature.
   std::unordered_set<std::string> skipFunctions = {
-      // Fuzzer and the underlying engine are confused about cardinality(HLL)
-      // (since HLL is a user defined type), and end up trying to use
-      // cardinality passing a VARBINARY (since HLL's implementation uses an
-      // alias to VARBINARY).
-      "cardinality",
       "element_at",
       "width_bucket",
       // Fuzzer and the underlying engine are confused about TDigest output
       // (since TDigest is a user defined type), and tries to pass a
       // VARBINARY (since TDigest's implementation uses an
       // alias to VARBINARY).
-      "values_at_quantiles",
       "merge_tdigest",
       "construct_tdigest",
+      // https://github.com/facebookincubator/velox/issues/13551
+      "values_at_quantiles",
       // Fuzzer cannot generate valid 'comparator' lambda.
       "array_sort(array(T),constant function(T,T,bigint)) -> array(T)",
       "split_to_map(varchar,varchar,varchar,function(varchar,varchar,varchar,varchar)) -> map(varchar,varchar)",
