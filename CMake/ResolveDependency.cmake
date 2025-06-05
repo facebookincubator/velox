@@ -64,39 +64,10 @@ endmacro()
 # is not found the build will fail and will not fall back to download and build
 # from source.
 macro(velox_resolve_dependency dependency_name)
-  # INDENT is always visible, CONTEXT has to be turned on.
-  list(APPEND CMAKE_MESSAGE_INDENT "[${dependency_name}] ")
-
-  set(find_package_args ${dependency_name} ${ARGN})
-  list(REMOVE_ITEM find_package_args REQUIRED QUIET)
-  if(${dependency_name}_SOURCE STREQUAL "AUTO")
-    find_package(${find_package_args})
-    if(${${dependency_name}_FOUND})
-      set(${dependency_name}_SOURCE "SYSTEM")
-    else()
-      set(${dependency_name}_SOURCE "BUNDLED")
-      velox_build_dependency(${dependency_name})
-    endif()
-    message(STATUS "Using ${${dependency_name}_SOURCE} ${dependency_name}")
-  elseif(${dependency_name}_SOURCE STREQUAL "SYSTEM")
-    find_package(${find_package_args} REQUIRED)
-  elseif(${dependency_name}_SOURCE STREQUAL "BUNDLED")
-    velox_build_dependency(${dependency_name})
-  else()
-    message(
-      FATAL_ERROR
-        "Invalid source for ${dependency_name}: ${${dependency_name}_SOURCE}")
-  endif()
-
-  list(POP_BACK CMAKE_MESSAGE_INDENT)
 endmacro()
 
 # By using a macro we don't need to propagate the value into the parent scope.
 macro(velox_set_source dependency_name)
-  velox_set_with_default(${dependency_name}_SOURCE ${dependency_name}_SOURCE
-                         ${VELOX_DEPENDENCY_SOURCE})
-  message(
-    STATUS "Setting ${dependency_name} source to ${${dependency_name}_SOURCE}")
 endmacro()
 
 # Set var_name to the value of $ENV{envvar_name} if ENV is defined. If neither
@@ -117,19 +88,4 @@ endfunction()
 
 # Set custom source url with a optional sha256 checksum.
 macro(velox_resolve_dependency_url dependency_name)
-  # Prepend prefix for default checksum.
-  string(PREPEND VELOX_${dependency_name}_BUILD_SHA256_CHECKSUM "SHA256=")
-
-  velox_set_with_default(
-    VELOX_${dependency_name}_SOURCE_URL VELOX_${dependency_name}_URL
-    ${VELOX_${dependency_name}_SOURCE_URL})
-  message(VERBOSE "Set VELOX_${dependency_name}_SOURCE_URL to "
-          "${VELOX_${dependency_name}_SOURCE_URL}")
-  if(DEFINED ENV{VELOX_${dependency_name}_URL})
-    velox_set_with_default(VELOX_${dependency_name}_BUILD_SHA256_CHECKSUM
-                           VELOX_${dependency_name}_SHA256 "")
-    if(DEFINED ENV{VELOX_${dependency_name}_SHA256})
-      string(PREPEND VELOX_${dependency_name}_BUILD_SHA256_CHECKSUM "SHA256=")
-    endif()
-  endif()
 endmacro()
