@@ -5669,7 +5669,7 @@ DEBUG_ONLY_TEST_F(TableScanTest, memoryArbitrationInPreload) {
 
   std::atomic<memory::MemoryPool*> taskPool{nullptr};
   SCOPED_TESTVALUE_SET(
-      "facebook::velox::exec::TableScan::getOutput",
+      "facebook::velox::exec::TableScan::getOutput::gotSplit",
       std::function<void(Operator*)>([&](Operator* op) {
         taskPool = op->operatorCtx()->task()->pool();
       }));
@@ -5692,7 +5692,7 @@ DEBUG_ONLY_TEST_F(TableScanTest, memoryArbitrationInPreload) {
     pool->reclaim(0, 5'000, stats);
   });
 
-  auto task = assertQuery(tableScanNode(), filePaths, "SELECT * FROM tmp", 0);
+  auto task = assertQuery(tableScanNode(), filePaths, "SELECT * FROM tmp", 1);
   auto stats = getTableScanRuntimeStats(task);
 
   // Verify that split preloading is enabled.
