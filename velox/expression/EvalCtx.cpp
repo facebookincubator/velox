@@ -367,7 +367,7 @@ void EvalCtx::addNulls(
     EvalCtx& context,
     const TypePtr& type,
     VectorPtr& result) {
-  // If there's no `result` yet, return a NULL ContantVector.
+  // If there's no `result` yet, return a NULL ConstantVector.
   if (!result) {
     result = BaseVector::createNullConstant(type, rows.end(), context.pool());
     return;

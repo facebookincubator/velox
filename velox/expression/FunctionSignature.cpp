@@ -158,7 +158,7 @@ void validate(
     validateBaseTypeAndCollectTypeParams(variables, arg, usedVariables, false);
   }
 
-  // All type variables should apear in the inputs arguments.
+  // All type variables should appear in the inputs arguments.
   for (auto& [name, variable] : variables) {
     if (variable.isTypeParameter()) {
       VELOX_USER_CHECK(
@@ -189,13 +189,13 @@ SignatureVariable::SignatureVariable(
     ParameterType type,
     bool knownTypesOnly,
     bool orderableTypesOnly,
-    bool comaprableTypesOnly)
+    bool comparableTypesOnly)
     : name_{std::move(name)},
       constraint_(constraint.has_value() ? std::move(constraint.value()) : ""),
       type_{type},
       knownTypesOnly_(knownTypesOnly),
       orderableTypesOnly_(orderableTypesOnly),
-      comparableTypesOnly_(comaprableTypesOnly) {
+      comparableTypesOnly_(comparableTypesOnly) {
   VELOX_CHECK(
       !(knownTypesOnly_ || orderableTypesOnly_ || comparableTypesOnly_) ||
           isTypeParameter(),
@@ -352,7 +352,7 @@ AggregateFunctionSignatureBuilder::comparableTypeVariable(
           ParameterType::kTypeParameter,
           /*knownTypesOnly*/ false,
           /*orderableTypesOnly*/ false,
-          /*comaprableTypesOnly*/ true));
+          /*comparableTypesOnly*/ true));
   return *this;
 }
 
