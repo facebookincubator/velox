@@ -578,7 +578,7 @@ template <typename A>
 struct LoadIndices<int16_t, A> {
   static xsimd::batch<int32_t, A> apply(
       const int16_t* values,
-      const xsimd::generic&) {
+      const xsimd::common&) {
     constexpr int N = xsimd::batch<int32_t, A>::size;
     alignas(A::alignment()) int32_t tmp[N];
     for (int i = 0; i < N; ++i) {
