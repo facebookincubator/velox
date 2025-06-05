@@ -16,7 +16,7 @@ name: Java Bindings - C++ Build
 on:
   workflow_dispatch:
   schedule:
-    - cron: "0 8 * * *"
+    - cron: "38 8 * * *"
 
 concurrency:
   group: ${{ github.repository }}-${{ github.workflow }}-${{ github.ref }}
