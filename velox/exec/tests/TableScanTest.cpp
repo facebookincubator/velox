@@ -5671,7 +5671,7 @@ DEBUG_ONLY_TEST_F(TableScanTest, memoryArbitrationInPreload) {
   SCOPED_TESTVALUE_SET(
       "facebook::velox::exec::TableScan::getOutput",
       std::function<void(Operator*)>([&](Operator* op) {
-        taskPool = op->testingOperatorCtx()->task()->pool();
+        taskPool = op->operatorCtx()->task()->pool();
       }));
 
   auto faultyFs = faultyFileSystem();
