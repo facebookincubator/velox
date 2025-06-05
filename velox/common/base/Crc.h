@@ -16,15 +16,18 @@
 
 #pragma once
 
-#include <folly/hash/Checksum.h>
+#include <absl/crc/crc32c.h>
+
 namespace facebook::velox::bits {
 
 // A boost compatible CRC32 calculator.
 class Crc32 {
  public:
   void process_bytes(const void* data, int64_t size) {
-    checksum_ =
-        folly::crc32(reinterpret_cast<const uint8_t*>(data), size, checksum_);
+    checksum_ = static_cast<uint32_t>(absl::ExtendCrc32c(
+        absl::crc32c_t{checksum_},
+        {static_cast<const char*>(data), static_cast<size_t>(size)},
+        0));
   }
 
   uint32_t checksum() const {
