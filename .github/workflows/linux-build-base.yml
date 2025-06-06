@@ -38,7 +38,6 @@ jobs:
       VELOX_DEPENDENCY_SOURCE: SYSTEM
       GTest_SOURCE: BUNDLED
       cudf_SOURCE: BUNDLED
-      CUDA_VERSION: "12.8"
       USE_CLANG: "${{ inputs.use-clang && 'true' || 'false' }}"
     steps:
       - uses: actions/checkout@v4
@@ -49,12 +48,27 @@ jobs:
         run: git config --global --add safe.directory ${GITHUB_WORKSPACE}
 
       - name: Install Dependencies
+        env:
+          # event.before is only set on `push` and base_ref on `pull_request`
+          PARENT_REF: ${{ github.event.before || github.base_ref }}
+          THIS_REF: ${{ github.sha }}
         run: |
-          # Allows to install arbitrary cuda-version whithout needing to update
-          # docker container before. It simplifies testing new/different versions
-          if ! yum list installed cuda-nvcc-$(echo ${CUDA_VERSION} | tr '.' '-') 1>/dev/null; then
-            source scripts/setup-centos9.sh
-            install_cuda ${CUDA_VERSION}
+          if git diff --name-only $PARENT_REF $THIS_REF | grep -q "scripts/setup-"; then
+            # Overwrite old setup scripts with changed versions
+            cp scripts/setup-* /
+
+            mkdir /tmp/build
+            cd /tmp/build 
+            source /opt/rh/gcc-toolset-12/enable
+            # install basic deps
+            bash /setup-centos9.sh
+
+            source /setup-centos9.sh
+            install_adapters
+            install_cuda 12.8
+            
+            cd /
+            rm -rf /tmp/build # cleanup to avoid issues with disk space
           fi
 
       - uses: assignUser/stash/restore@v1
