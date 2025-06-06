@@ -137,7 +137,7 @@ const std::vector<ScanSpec*>& ScanSpec::stableChildren() {
 
 bool ScanSpec::hasFilter() const {
   if (filterDisabled_) {
-    return false;
+    return isMapKey_;
   }
   if (hasFilter_.has_value()) {
     return hasFilter_.value();
@@ -450,12 +450,14 @@ ScanSpec* ScanSpec::addFieldRecursively(
 
 ScanSpec* ScanSpec::addMapKeyField() {
   auto* child = addField(kMapKeysFieldName, kNoChannel);
+  child->isMapKey_ = true;
   child->isArrayElementOrMapEntry_ = true;
   return child;
 }
 
 ScanSpec* ScanSpec::addMapKeyFieldRecursively(const Type& type) {
   auto* child = addFieldRecursively(kMapKeysFieldName, type, kNoChannel);
+  child->isMapKey_ = true;
   child->isArrayElementOrMapEntry_ = true;
   return child;
 }

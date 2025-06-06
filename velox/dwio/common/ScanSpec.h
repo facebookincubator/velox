@@ -57,8 +57,16 @@ class ScanSpec {
   // Filter to apply. If 'this' corresponds to a struct/list/map, this
   // can only be isNull or isNotNull, other filtering is given by
   // 'children'.
-  common::Filter* filter() const {
-    return filterDisabled_ ? nullptr : filter_.get();
+  Filter* filter() const {
+    /* library-local */ static IsNotNull isNotNull;
+    if (filterDisabled_) {
+      return isMapKey_ ? &isNotNull : nullptr;
+    }
+    if (filter_) {
+      VELOX_DCHECK(!(isMapKey_ && filter_->testNull()));
+      return filter_.get();
+    }
+    return isMapKey_ ? &isNotNull : nullptr;
   }
 
   // Sets 'filter_'. May be used at initialization or when adding a
@@ -451,6 +459,10 @@ class ScanSpec {
   // If this node is map key/value or array element, filter will not be
   // propagated to parent.
   bool isArrayElementOrMapEntry_ = false;
+
+  // Whether this node is a map key.  When true, we should always filter out
+  // null values.
+  bool isMapKey_ = false;
 
   // Only take the first maxArrayElementsCount_ elements from each array.
   vector_size_t maxArrayElementsCount_ =
