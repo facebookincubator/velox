@@ -199,17 +199,18 @@ TEST_P(IndexLookupJoinTest, joinCondition) {
       ROW({"c0", "c1", "c2", "c3", "c4"},
           {BIGINT(), BIGINT(), BIGINT(), ARRAY(BIGINT()), BIGINT()});
 
-  auto inJoinCondition = PlanBuilder::parseIndexJoinCondition(
+  auto containsJoinCondition = PlanBuilder::parseIndexJoinCondition(
       "contains(c3, c2)", rowType, pool_.get());
-  ASSERT_FALSE(inJoinCondition->isFilter());
-  ASSERT_EQ(inJoinCondition->toString(), "ROW[\"c2\"] IN ROW[\"c3\"]");
-
-  auto inFilterCondition = PlanBuilder::parseIndexJoinCondition(
-      "contains(ARRAY[1,2], c2)", rowType, pool_.get());
-  ASSERT_TRUE(inFilterCondition->isFilter());
+  ASSERT_FALSE(containsJoinCondition->isFilter());
   ASSERT_EQ(
-      inFilterCondition->toString(),
-      "ROW[\"c2\"] IN 2 elements starting at 0 {1, 2}");
+      containsJoinCondition->toString(), "ROW[\"c3\"] CONTAINS ROW[\"c2\"]");
+
+  auto containsFilterCondition = PlanBuilder::parseIndexJoinCondition(
+      "contains(ARRAY[1,2], c2)", rowType, pool_.get());
+  ASSERT_TRUE(containsFilterCondition->isFilter());
+  ASSERT_EQ(
+      containsFilterCondition->toString(),
+      "2 elements starting at 0 {1, 2} CONTAINS ROW[\"c2\"]");
 
   auto betweenFilterCondition = PlanBuilder::parseIndexJoinCondition(
       "c0 between 0 AND 1", rowType, pool_.get());
@@ -1283,12 +1284,12 @@ TEST_P(IndexLookupJoinTest, betweenJoinCondition) {
   }
 }
 
-TEST_P(IndexLookupJoinTest, inJoinCondition) {
+TEST_P(IndexLookupJoinTest, containsJoinCondition) {
   struct {
     std::vector<int> keyCardinalities;
     int numProbeBatches;
     int numProbeRowsPerBatch;
-    std::string inCondition;
+    std::string containsCondition;
     int inMatchPct;
     std::vector<std::string> lookupOutputColumns;
     std::vector<std::string> outputColumns;
@@ -1297,11 +1298,11 @@ TEST_P(IndexLookupJoinTest, inJoinCondition) {
 
     std::string debugString() const {
       return fmt::format(
-          "keyCardinalities: {}: numProbeBatches: {}, numProbeRowsPerBatch: {}, inCondition: {}, inMatchPct: {}, lookupOutputColumns: {}, outputColumns: {}, joinType: {}, duckDbVerifySql: {}",
+          "keyCardinalities: {}: numProbeBatches: {}, numProbeRowsPerBatch: {}, containsCondition: {}, inMatchPct: {}, lookupOutputColumns: {}, outputColumns: {}, joinType: {}, duckDbVerifySql: {}",
           folly::join(",", keyCardinalities),
           numProbeBatches,
           numProbeRowsPerBatch,
-          inCondition,
+          containsCondition,
           inMatchPct,
           folly::join(",", lookupOutputColumns),
           folly::join(",", outputColumns),
@@ -1590,7 +1591,7 @@ TEST_P(IndexLookupJoinTest, inJoinCondition) {
         indexScanNode,
         {"t0", "t1"},
         {"u0", "u1"},
-        {testData.inCondition},
+        {testData.containsCondition},
         testData.joinType,
         testData.outputColumns);
     runLookupQuery(

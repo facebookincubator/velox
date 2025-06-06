@@ -259,10 +259,10 @@ void IndexLookupJoin::initLookupInput() {
     lookupIndexColumnSet.insert(indexKeyName);
     const auto indexKeyType = lookupType_->findChild(indexKeyName);
 
-    if (const auto inCondition =
-            std::dynamic_pointer_cast<const core::InIndexLookupCondition>(
+    if (const auto containsCondition =
+            std::dynamic_pointer_cast<const core::ContainsIndexLookupCondition>(
                 lookupCondition)) {
-      const auto conditionInputName = getColumnName(inCondition->list);
+      const auto conditionInputName = getColumnName(containsCondition->list);
       const auto conditionInputChannel =
           probeType_->getChildIdx(conditionInputName);
       const auto conditionInputType =
