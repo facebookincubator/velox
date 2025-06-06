@@ -43,8 +43,7 @@ add_executable(velox_sparksql_benchmarks_from_json FromJsonBenchmark.cpp)
 target_link_libraries(
   velox_sparksql_benchmarks_from_json
   velox_functions_spark
-  velox_exec
   velox_exec_test_lib
-  velox_expression
+  velox_parse_utils
   Folly::folly
   Folly::follybenchmark)
