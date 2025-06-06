@@ -476,7 +476,10 @@ void GcsFileSystem::rename(
   if (!copyStats.ok()) {
     checkGcsStatus(
         copyStats.status(),
-        "Failed to rename for GCS object",
+        fmt::format(
+            "Failed to rename for GCS object {}/{}",
+            originBucket,
+            originObject),
         originBucket,
         originObject);
   }
@@ -486,7 +489,12 @@ void GcsFileSystem::rename(
   if (!delStatus.ok()) {
     checkGcsStatus(
         delStatus,
-        "Failed to delete for GCS object",
+        fmt::format(
+            "Failed to delete for GCS object {}/{} after copy when renaming. And the copied object is at {}/{}",
+            originBucket,
+            originObject,
+            newBucket,
+            newObject),
         originBucket,
         originObject);
   }

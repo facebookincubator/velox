@@ -78,9 +78,12 @@ class GcsFileSystem : public FileSystem {
   /// google::cloud::storage::Client::ListObjects
   std::vector<std::string> list(std::string_view path) override;
 
-  /// Renames the original object to new object name by using
+  /// Renames the original object to the new object using
   /// google::cloud::storage::Client::CopyObject and
-  /// google::cloud::storage::Client::DeleteObject
+  /// google::cloud::storage::Client::DeleteObject.
+  /// Note that this process involves separate copy and delete operations, which
+  /// may lead to temporary inconsistencies if either operation fails or if
+  /// there is a delay between them.
   void rename(
       std::string_view originPath,
       std::string_view newPath,

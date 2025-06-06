@@ -23,8 +23,6 @@
 
 #include "gtest/gtest.h"
 
-#include <iostream>
-
 namespace facebook::velox::filesystems {
 namespace {
 
