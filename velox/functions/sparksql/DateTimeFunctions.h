@@ -906,4 +906,59 @@ struct MillisToTimestampFunction {
   }
 };
 
+template <typename T>
+struct TimestampDiffFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  FOLLY_ALWAYS_INLINE void initialize(
+      const std::vector<TypePtr>& /*inputTypes*/,
+      const core::QueryConfig& config,
+      const arg_type<Varchar>* unitString,
+      const arg_type<Timestamp>* /*timestamp1*/,
+      const arg_type<Timestamp>* /*timestamp2*/) {
+    if (unitString != nullptr) {
+      unit_ = fromDateTimeUnitString(
+          *unitString, /*throwIfInvalid=*/false, /*allowMicro=*/true);
+    }
+
+    sessionTimeZone_ = getTimeZoneFromConfig(config);
+  }
+
+  FOLLY_ALWAYS_INLINE bool call(
+      int64_t& result,
+      const arg_type<Varchar>& unitString,
+      const arg_type<Timestamp>& timestamp1,
+      const arg_type<Timestamp>& timestamp2) {
+    if (!unit_.has_value()) {
+      return false;
+    }
+    const auto unit = unit_.value();
+    if (LIKELY(sessionTimeZone_ != nullptr)) {
+      // sessionTimeZone not null means that the config
+      // adjust_timestamp_to_timezone is on.
+      Timestamp fromZonedTimestamp = timestamp1;
+      fromZonedTimestamp.toTimezone(*sessionTimeZone_);
+
+      Timestamp toZonedTimestamp = timestamp2;
+      if (isTimeUnit(unit)) {
+        const int64_t offset = static_cast<Timestamp>(timestamp1).getSeconds() -
+            fromZonedTimestamp.getSeconds();
+        toZonedTimestamp = Timestamp(
+            toZonedTimestamp.getSeconds() - offset,
+            toZonedTimestamp.getNanos());
+      } else {
+        toZonedTimestamp.toTimezone(*sessionTimeZone_);
+      }
+      result = diffTimestamp(unit, fromZonedTimestamp, toZonedTimestamp);
+    } else {
+      result = diffTimestamp(unit, timestamp1, timestamp2);
+    }
+    return true;
+  }
+
+ private:
+  const tz::TimeZone* sessionTimeZone_ = nullptr;
+  std::optional<DateTimeUnit> unit_ = std::nullopt;
+};
+
 } // namespace facebook::velox::functions::sparksql
