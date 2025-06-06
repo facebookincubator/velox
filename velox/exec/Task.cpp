@@ -857,6 +857,8 @@ void Task::recordBatchEndTime() {
 }
 
 void Task::start(uint32_t maxDrivers, uint32_t concurrentSplitGroups) {
+  queryCtx()->setStarted();
+
   facebook::velox::process::ThreadDebugInfo threadDebugInfo{
       queryCtx()->queryId(), taskId_, nullptr};
   facebook::velox::process::ScopedThreadDebugInfo scopedInfo(threadDebugInfo);
