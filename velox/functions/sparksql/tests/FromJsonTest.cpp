@@ -121,19 +121,11 @@ TEST_F(FromJsonTest, basicBigInt) {
 
 TEST_F(FromJsonTest, basicFloat) {
   auto expected = makeNullableFlatVector<float>(
-      {1.0,
-       2.0,
-       -3.4028235E38,
-       3.4028235E38,
-       -kInfFloat,
-       kInfFloat,
-       std::nullopt,
-       kNaNFloat,
-       -kInfFloat,
-       -kInfFloat,
-       kInfFloat,
-       kInfFloat,
-       kInfFloat});
+      {1.0,          2.0,          -3.4028235E38, 3.4028235E38, -kInfFloat,
+       kInfFloat,    0.0,          0.0,           std::nullopt, std::nullopt,
+       std::nullopt, std::nullopt, std::nullopt,  std::nullopt, std::nullopt,
+       std::nullopt, kNaNFloat,    -kInfFloat,    -kInfFloat,   kInfFloat,
+       kInfFloat,    kInfFloat});
   auto input = makeFlatVector<std::string>(
       {R"({"a": 1})",
        R"({"a": 2.0})",
@@ -141,7 +133,16 @@ TEST_F(FromJsonTest, basicFloat) {
        R"({"a": 3.4028235E38})", // Max float value
        R"({"a": -3.4028235E39})",
        R"({"a": 3.4028235E39})",
+       R"({"a": 0})",
+       R"({"a": 1.0e-200})",
        R"({"a": "3"})",
+       R"({"a": 1.1.0})", // Multiple decimal points.
+       R"({"a": 1.})", // Missing fraction digits after a decimal point.
+       R"({"a": 01})", // Leading zero.
+       R"({"a": 1e})", // Missing exponent digits after ‘e’ or ‘E’.
+       R"({"a": 1e+})", // Missing exponent digits after ‘e’ or ‘E’.
+       R"({"a": .e10})", // Missing digits.
+       R"({"a": -.})", // Missing digits entirely.
        R"({"a": "NaN"})",
        R"({"a": "-Infinity"})",
        R"({"a": "-INF"})",
@@ -159,6 +160,15 @@ TEST_F(FromJsonTest, basicDouble) {
        1.7976931348623158e+308,
        -kInfDouble,
        kInfDouble,
+       0.0,
+       0.0,
+       std::nullopt,
+       std::nullopt,
+       std::nullopt,
+       std::nullopt,
+       std::nullopt,
+       std::nullopt,
+       std::nullopt,
        std::nullopt,
        kNaNDouble,
        -kInfDouble,
@@ -173,7 +183,16 @@ TEST_F(FromJsonTest, basicDouble) {
        R"({"a": 1.7976931348623158e+308})", // Max double value
        R"({"a": -1.7976931348623158e+309})",
        R"({"a": 1.7976931348623158e+309})",
+       R"({"a": 0})",
+       R"({"a": 1.0e-2000})",
        R"({"a": "3"})",
+       R"({"a": 1.1.0})", // Multiple decimal points.
+       R"({"a": 1.})", // Missing fraction digits after a decimal point.
+       R"({"a": 01})", // Leading zero.
+       R"({"a": 1e})", // Missing exponent digits after ‘e’ or ‘E’.
+       R"({"a": 1e+})", // Missing exponent digits after ‘e’ or ‘E’.
+       R"({"a": .e10})", // Missing digits.
+       R"({"a": -.})", // Missing digits entirely.
        R"({"a": "NaN"})",
        R"({"a": "-Infinity"})",
        R"({"a": "-INF"})",
