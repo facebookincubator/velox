@@ -467,8 +467,18 @@ struct ExtractJsonTypeImpl {
           // NUMBER_ERROR. However, our expected behavior is to convert such
           // extreme values to -INF or +INF, so we add extra logic here to
           // handle NUMBER_ERROR and perform the conversion.
-          auto castResult = util::Converter<TypeKind::DOUBLE>::tryCast(
-              value.raw_json_token());
+          std::string_view s = value.raw_json_token();
+          if (s.length() > 0 && s.back() == '.') {
+            // If the number ends with a dot, it is not a valid JSON number,
+            // so we return NUMBER_ERROR.
+            return simdjson::NUMBER_ERROR;
+          }
+          if (s.length() > 1 && s.front() == '0') {
+            // If the number starts with '0' and has more than one character,
+            // it is not a valid JSON number, so we return NUMBER_ERROR.
+            return simdjson::NUMBER_ERROR;
+          }
+          auto castResult = util::Converter<TypeKind::DOUBLE>::tryCast(s);
           if (!castResult.hasError()) {
             writer.castTo<T>() = castResult.value();
             return simdjson::SUCCESS;
