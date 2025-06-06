@@ -46,6 +46,5 @@ target_link_libraries(
   velox_exec
   velox_exec_test_lib
   velox_expression
-  velox_parse_utils
   Folly::folly
   Folly::follybenchmark)
