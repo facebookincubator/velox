@@ -28,8 +28,8 @@
 set -efx -o pipefail
 # Some of the packages must be build with the same compiler flags
 # so that some low level types are the same size. Also, disable warnings.
-SCRIPTDIR=$(dirname "${BASH_SOURCE[0]}")
-source $SCRIPTDIR/setup-common.sh
+SCRIPT_DIR=$(dirname "${BASH_SOURCE[0]}")
+source $SCRIPT_DIR/setup-common.sh
 export CXXFLAGS=$(get_cxx_flags) # Used by boost.
 export CFLAGS=${CXXFLAGS//"-std=c++17"/} # Used by LZO.
 export COMPILER_FLAGS=${CXXFLAGS}
