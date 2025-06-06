@@ -141,6 +141,30 @@ struct StPointFunction {
   }
 };
 
+template <typename T>
+struct StPolygonFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  FOLLY_ALWAYS_INLINE Status
+  call(out_type<Geometry>& result, const arg_type<Varchar>& wkt) {
+    std::unique_ptr<geos::geom::Geometry> geosGeometry;
+    GEOS_TRY(
+        {
+          geos::io::WKTReader reader;
+          geosGeometry = reader.read(wkt);
+        },
+        "Failed to parse WKT");
+    auto validate = geospatial::validateType(
+        *geosGeometry,
+        {geos::geom::GeometryTypeId::GEOS_POLYGON},
+        "ST_Polygon");
+
+    result = geospatial::serializeGeometry(*geosGeometry);
+
+    return validate;
+  }
+};
+
 // Predicates
 
 template <typename T>
@@ -572,7 +596,7 @@ struct StXFunction {
         geospatial::deserializeGeometry(geometry);
     if (geosGeometry->getGeometryTypeId() !=
         geos::geom::GeometryTypeId::GEOS_POINT) {
-      throw Status::UserError(fmt::format(
+      VELOX_USER_FAIL(fmt::format(
           "ST_X requires a Point geometry, found {}",
           geosGeometry->getGeometryType()));
     }
@@ -596,7 +620,7 @@ struct StYFunction {
         geospatial::deserializeGeometry(geometry);
     if (geosGeometry->getGeometryTypeId() !=
         geos::geom::GeometryTypeId::GEOS_POINT) {
-      throw Status::UserError(fmt::format(
+      VELOX_USER_FAIL(fmt::format(
           "ST_Y requires a Point geometry, found {}",
           geosGeometry->getGeometryType()));
     }
@@ -705,6 +729,52 @@ struct SimplifyGeometryFunction {
 
     result = geospatial::serializeGeometry(*outputGeometry);
     return Status::OK();
+  }
+};
+
+template <typename T>
+struct StGeometryTypeFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  FOLLY_ALWAYS_INLINE Status
+  call(out_type<Varchar>& result, const arg_type<Geometry>& input) {
+    std::unique_ptr<geos::geom::Geometry> geosGeometry =
+        geospatial::deserializeGeometry(input);
+
+    result = geosGeometry->getGeometryType();
+
+    return Status::OK();
+  }
+};
+
+template <typename T>
+struct StDistanceFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  FOLLY_ALWAYS_INLINE bool call(
+      out_type<double>& result,
+      const arg_type<Geometry>& geometry1,
+      const arg_type<Geometry>& geometry2) {
+    std::unique_ptr<geos::geom::Geometry> geosGeometry1 =
+        geospatial::deserializeGeometry(geometry1);
+    std::unique_ptr<geos::geom::Geometry> geosGeometry2 =
+        geospatial::deserializeGeometry(geometry2);
+
+    if (geosGeometry1->getSRID() != geosGeometry2->getSRID()) {
+      VELOX_USER_FAIL(fmt::format(
+          "Input geometries must have the same spatial reference, found {} and {}",
+          geosGeometry1->getSRID(),
+          geosGeometry2->getSRID()));
+    }
+
+    if (geosGeometry1->isEmpty() || geosGeometry2->isEmpty()) {
+      return false;
+    }
+
+    GEOS_RETHROW(result = geosGeometry1->distance(geosGeometry2.get());
+                 , "Failed to calculate geometry distance");
+
+    return true;
   }
 };
 

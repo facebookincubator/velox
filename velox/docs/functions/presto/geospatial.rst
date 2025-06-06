@@ -69,6 +69,10 @@ Geometry Constructors
     Returns the Point geometry at the given coordinates.  This will raise an
     error if ``x`` or ``y`` is ``NaN`` or ``infinity``.
 
+.. function:: ST_Polygon(wkt: varchar) -> polygon: Geometry
+
+    Returns a geometry type polygon object from WKT representation.
+
 Spatial Predicates
 ------------------
 
@@ -187,6 +191,15 @@ Accessors
 
     Returns the point value that is the mathematical centroid of ``geometry``.
     Empty geometry inputs result in empty output.
+
+.. function:: ST_Distance(geometry1: Geometry, geometry2: Geometry) -> distance: double
+
+    Returns the 2-dimensional cartesian minimum distance (based on spatial ref)
+    between two geometries in projected units. Empty geometries result in null output.
+
+.. function:: ST_GeometryType(geometry: Geometry) -> type: varchar
+
+    Returns the type of the geometry.
 
 .. function:: ST_X(geometry: Geometry) -> x: double
 
