@@ -1104,6 +1104,11 @@ TEST_F(JsonFunctionsTest, jsonExtract) {
   VELOX_ASSERT_THROW(
       jsonExtract(kJson, "concat($..category)"), "Invalid JSON path");
   VELOX_ASSERT_THROW(jsonExtract(kJson, "$.store.keys()"), "Invalid JSON path");
+  VELOX_ASSERT_THROW(
+      jsonExtract(
+          R"({3436654998315577471:-768009352,3684989847712002091:-317930923,5235625120989803984:1278962211,6359026774420146638:651644866,6614027999037539496:528067092})",
+          "$.*"),
+      "The JSON document has an improper structure");
 
   // Ensure User errors are captured in try() and not thrown.
   EXPECT_EQ(
@@ -1112,6 +1117,12 @@ TEST_F(JsonFunctionsTest, jsonExtract) {
   EXPECT_EQ(std::nullopt, jsonExtract(kJson, "max($..price)", true));
   EXPECT_EQ(std::nullopt, jsonExtract(kJson, "concat($..category)", true));
   EXPECT_EQ(std::nullopt, jsonExtract(kJson, "$.store.keys()", true));
+  EXPECT_EQ(
+      std::nullopt,
+      jsonExtract(
+          R"({3436654998315577471:-768009352,3684989847712002091:-317930923,5235625120989803984:1278962211,6359026774420146638:651644866,6614027999037539496:528067092})",
+          "$.*",
+          true));
 }
 
 TEST_F(JsonFunctionsTest, jsonExtractVarcharInput) {
