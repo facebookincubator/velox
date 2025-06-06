@@ -3151,6 +3151,7 @@ struct IndexLookupCondition : public ISerializable {
 };
 using IndexLookupConditionPtr = std::shared_ptr<IndexLookupCondition>;
 
+#ifdef VELOX_ENABLE_BACKWARD_COMPATIBILITY
 /// Represents IN-LIST index lookup condition: contains('list', 'key'). 'list'
 /// can be either a probe input column or a constant list with type of
 /// ARRAY(typeof('key')).
@@ -3177,6 +3178,35 @@ struct InIndexLookupCondition : public IndexLookupCondition {
   void validate() const;
 };
 using InIndexLookupConditionPtr = std::shared_ptr<InIndexLookupCondition>;
+#endif
+
+/// Represents CONTAINS index lookup condition: contains('list', 'key'). 'list'
+/// can be either a probe input column or a constant list with type of
+/// ARRAY(typeof('key')).
+struct ContainsIndexLookupCondition : public IndexLookupCondition {
+  /// References to either a probe input column or a constant list.
+  TypedExprPtr list;
+
+  ContainsIndexLookupCondition(FieldAccessTypedExprPtr _key, TypedExprPtr _list)
+      : IndexLookupCondition(std::move(_key)), list(std::move(_list)) {
+    validate();
+  }
+
+  bool isFilter() const override;
+
+  folly::dynamic serialize() const override;
+
+  std::string toString() const override;
+
+  static IndexLookupConditionPtr create(
+      const folly::dynamic& obj,
+      void* context);
+
+ private:
+  void validate() const;
+};
+using ContainsIndexLookupConditionPtr =
+    std::shared_ptr<ContainsIndexLookupCondition>;
 
 /// Represents BETWEEN index lookup condition: 'key' between 'lower' and
 /// 'upper'. 'lower' and 'upper' have the same type of 'key'.

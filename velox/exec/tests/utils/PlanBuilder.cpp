@@ -1871,7 +1871,7 @@ core::IndexLookupConditionPtr PlanBuilder::parseIndexJoinCondition(
             removeCastTypedExpr(typedCallExpr->inputs()[1]));
     VELOX_CHECK_NOT_NULL(
         keyColumnExpr, "{}", typedCallExpr->inputs()[1]->toString());
-    return std::make_shared<core::InIndexLookupCondition>(
+    return std::make_shared<core::ContainsIndexLookupCondition>(
         keyColumnExpr,
         castIndexConditionInputExpr(
             typedCallExpr->inputs()[0], keyColumnExpr->type()));

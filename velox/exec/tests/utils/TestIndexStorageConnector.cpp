@@ -43,13 +43,13 @@ core::TypedExprPtr toJoinConditionExpr(
   for (const auto& condition : joinConditions) {
     auto indexColumnExpr = std::make_shared<core::FieldAccessTypedExpr>(
         keyType->findChild(condition->key->name()), condition->key->name());
-    if (auto inCondition =
-            std::dynamic_pointer_cast<core::InIndexLookupCondition>(
+    if (auto containsCondition =
+            std::dynamic_pointer_cast<core::ContainsIndexLookupCondition>(
                 condition)) {
       conditionExprs.push_back(std::make_shared<const core::CallTypedExpr>(
           BOOLEAN(),
           std::vector<core::TypedExprPtr>{
-              inCondition->list, std::move(indexColumnExpr)},
+              containsCondition->list, std::move(indexColumnExpr)},
           "contains"));
       continue;
     }
