@@ -1564,6 +1564,7 @@ TEST_F(Re2FunctionsTest, split) {
   });
   assertEqualVectors(expected, result);
 
+  // Test for empty matches
   result = evaluate("regexp_split(c0, '')", input);
   expected = makeArrayVector<std::string>({
       {"", "1", "a", " ", "2", "b", " ", "1", "4", "m", ""},
@@ -1573,6 +1574,7 @@ TEST_F(Re2FunctionsTest, split) {
   });
   assertEqualVectors(expected, result);
 
+  // Test for another case of empty matches
   result = evaluate("regexp_split(c0, '\\s*[a-z]*\\s*')", input);
   expected = makeArrayVector<std::string>({
       {"", "1", "", "2", "", "1", "4", "", ""},
