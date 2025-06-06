@@ -1348,6 +1348,12 @@ query metadata which includes the query plan and configs etc.</p></td>
 <td><p>0</p></td>
 <td><p>The max trace bytes limit. Tracing is disabled if zero.</p></td>
 </tr>
+<tr class="row-odd"><td><p>query_trace_dry_run</p></td>
+<td><p>boolean</p></td>
+<td><p>false</p></td>
+<td><p>If true, we only collect the input trace for a given operator but without the actual
+execution. This is used for crash debugging.</p></td>
+</tr>
 </tbody>
 </table>
 </section>
