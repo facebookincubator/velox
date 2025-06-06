@@ -14,4 +14,4 @@
 rules:
   use-trusted-publishing:
     ignore:
-      - build_pyvelox.yml:169:9
+      - build_pyvelox.yml
