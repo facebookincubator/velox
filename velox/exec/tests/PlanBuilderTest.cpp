@@ -17,6 +17,7 @@
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/core/Expressions.h"
 #include "velox/exec/WindowFunction.h"
+#include "velox/exec/tests/utils/TempDirectoryPath.h"
 #include "velox/functions/prestosql/aggregates/RegisterAggregateFunctions.h"
 #include "velox/functions/prestosql/registration/RegistrationFunctions.h"
 #include "velox/parse/Expressions.h"
@@ -303,71 +304,49 @@ TEST_F(PlanBuilderTest, projectExpressions) {
 
 TEST_F(PlanBuilderTest, commitStrategyParameter) {
   auto data = makeRowVector({makeFlatVector<int64_t>(10, folly::identity)});
-  auto directory = "/some/test/directory";
+  auto outputDirectory = TempDirectoryPath::create();
 
   // Lambda to create a plan with given commitStrategy and verify it
-  auto testCommitStrategy =
-      [&](std::optional<connector::CommitStrategy> commitStrategy,
-          connector::CommitStrategy expectedStrategy) {
-        std::shared_ptr<const core::PlanNode> plan;
+  auto testCommitStrategy = [&](connector::CommitStrategy commitStrategy) {
+    // Create a plan with commitStrategy
+    auto planBuilder = PlanBuilder().values({data}).tableWrite(
+        outputDirectory->getPath(),
+        {},
+        0,
+        {},
+        {},
+        dwio::common::FileFormat::DWRF,
+        {},
+        PlanBuilder::kHiveDefaultConnectorId,
+        {},
+        nullptr,
+        "",
+        common::CompressionKind_NONE,
+        nullptr,
+        false);
 
-        // Create a plan with or without commitStrategy based on whether it has
-        // a value
-        if (commitStrategy.has_value()) {
-          plan = PlanBuilder()
-                     .values({data})
-                     .tableWrite(
-                         directory,
-                         {},
-                         0,
-                         {},
-                         {},
-                         dwio::common::FileFormat::DWRF,
-                         {},
-                         PlanBuilder::kHiveDefaultConnectorId,
-                         {},
-                         nullptr,
-                         "",
-                         common::CompressionKind_NONE,
-                         nullptr,
-                         false,
-                         commitStrategy.value())
-                     .planNode();
-        } else {
-          plan = PlanBuilder()
-                     .values({data})
-                     .tableWrite(
-                         directory,
-                         {},
-                         0,
-                         {},
-                         {},
-                         dwio::common::FileFormat::DWRF,
-                         {},
-                         PlanBuilder::kHiveDefaultConnectorId,
-                         {},
-                         nullptr,
-                         "",
-                         common::CompressionKind_NONE,
-                         nullptr,
-                         false)
-                     .planNode();
-        }
+    auto plan = planBuilder.planNode();
 
-        // Verify the plan node has the correct commit strategy
-        auto tableWriteNode =
-            std::dynamic_pointer_cast<const core::TableWriteNode>(plan);
-        ASSERT_NE(tableWriteNode, nullptr);
-        ASSERT_EQ(tableWriteNode->commitStrategy(), expectedStrategy);
-      };
+    // Conditionally set commitStrategy if it's not kNoCommit
+    if (commitStrategy != connector::CommitStrategy::kNoCommit) {
+      plan = PlanBuilder::TableWriterBuilder(planBuilder)
+                 .commitStrategy(commitStrategy)
+                 .endTableWriter()
+                 .planNode();
+    }
+
+    // Verify the plan node has the correct commit strategy
+    auto tableWriteNode =
+        std::dynamic_pointer_cast<const core::TableWriteNode>(plan);
+    ASSERT_NE(tableWriteNode, nullptr);
+    ASSERT_EQ(tableWriteNode->commitStrategy(), commitStrategy);
+  };
 
   // Test with explicit task commit strategy
-  testCommitStrategy(
-      connector::CommitStrategy::kTaskCommit,
-      connector::CommitStrategy::kTaskCommit);
+  testCommitStrategy(connector::CommitStrategy::kTaskCommit);
 
   // Test with no explicit commit strategy (should default to kNoCommit)
-  testCommitStrategy(std::nullopt, connector::CommitStrategy::kNoCommit);
+  testCommitStrategy(connector::CommitStrategy::kNoCommit);
 }
 
 } // namespace facebook::velox::exec::test
