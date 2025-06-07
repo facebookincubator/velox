@@ -99,6 +99,28 @@ class GeometryFunctionsTest : public FunctionBaseTest {
   }
 };
 
+TEST_F(GeometryFunctionsTest, errorStGeometryFromText) {
+  const auto assertGeom = [&](const std::optional<std::string>& a) {
+    return evaluateOnce<std::string>("ST_GeometryFromText(c0)", a);
+  };
+
+  VELOX_ASSERT_USER_THROW(
+      assertGeom("xyz"),
+      "Failed to parse WKT: ParseException: Unknown type: 'XYZ'");
+  VELOX_ASSERT_USER_THROW(
+      assertGeom("LINESTRING (-71.3839245 42.3128124)"),
+      "Failed to parse WKT: IllegalArgumentException: point array must contain 0 or >1 elements");
+  VELOX_ASSERT_USER_THROW(
+      assertGeom("POLYGON ((-13.637339 9.617113, -13.637339 9.617113))"),
+      "Failed to parse WKT: IllegalArgumentException: Invalid number of points in LinearRing found 2 - must be 0 or >= 4");
+  VELOX_ASSERT_USER_THROW(
+      assertGeom("POLYGON(0 0)"),
+      "Failed to parse WKT: ParseException: Expected word but encountered number: '0'");
+  VELOX_ASSERT_USER_THROW(
+      assertGeom("POLYGON((0 0))"),
+      "Failed to parse WKT: IllegalArgumentException: point array must contain 0 or >1 elements");
+}
+
 TEST_F(GeometryFunctionsTest, wktAndWkb) {
   const auto wktRoundTrip = [&](const std::optional<std::string>& a) {
     return evaluateOnce<std::string>("ST_AsText(ST_GeometryFromText(c0))", a);
@@ -257,6 +279,16 @@ TEST_F(GeometryFunctionsTest, testStPoint) {
     }
   };
 
+  const auto assertPointToText = [&](const std::optional<double>& x,
+                                     const std::optional<double> y,
+                                     const std::optional<std::string> z) {
+    std::optional<std::string> point =
+        evaluateOnce<std::string>("ST_AsText(ST_Point(c0, c1))", x, y);
+    if (x.has_value() && y.has_value()) {
+      EXPECT_EQ(point, z);
+    }
+  };
+
   assertPoint(std::nullopt, 0.0);
   assertPoint(0.0, 0.0);
   assertPoint(1.0, -23.12344);
@@ -266,6 +298,9 @@ TEST_F(GeometryFunctionsTest, testStPoint) {
   VELOX_ASSERT_THROW(
       assertPoint(INFINITY, 0.0),
       "ST_Point requires finite coordinates, got x=inf y=0");
+
+  assertPointToText(1, 4, "POINT (1 4)");
+  assertPointToText(122.3, 10.55, "POINT (122.3 10.55)");
 
   std::optional<double> nullX =
       evaluateOnce<double>("ST_X(ST_GeometryFromText('POINT EMPTY'))");
