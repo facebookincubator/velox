@@ -156,19 +156,13 @@ function install_conda {
 
 function install_cuda {
   # See https://developer.nvidia.com/cuda-downloads
-  # if ! dpkg -l cuda-keyring 1>/dev/null; then
-  #   wget https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2204/x86_64/cuda-keyring_1.1-1_all.deb
-  #   $SUDO dpkg -i cuda-keyring_1.1-1_all.deb
-  #   rm cuda-keyring_1.1-1_all.deb
-  #   $SUDO apt update
-  # fi
   local arch=$(uname -m)
   local os_ver
 
-  if [[ ${VERSION} =~ "22.04" ]]; then
-    os_ver="ubuntu2204"
-  elif [[ ${VERSION} =~ "24.04" ]]; then
+  if [[ ${VERSION} =~ "24.04" ]]; then
     os_ver="ubuntu2404"
+  elif [[ ${VERSION} =~ "22.04" ]]; then
+    os_ver="ubuntu2204"
   elif [[ ${VERSION} =~ "20.04" ]]; then
     os_ver="ubuntu2004"
   else
