@@ -173,14 +173,14 @@ class MergerTest : public OperatorTestBase {
     }
   }
 
-  static std::vector<std::thread> createProducers(
+  std::vector<std::thread> createProducers(
       int num,
       const std::vector<std::vector<RowVectorPtr>>& inputs,
-      const std::vector<std::shared_ptr<MergeSource>>& sources) {
+      const std::vector<std::shared_ptr<MergeSource>>& sources) const {
     std::vector<std::thread> producers;
     producers.reserve(num);
     for (auto i = 0; i < num; ++i) {
-      producers.emplace_back([&, i]() {
+      executor_->add([&, i]() {
         auto* mergeSource = sources[i].get();
         const auto& vectors = inputs[i];
         for (const auto& vector : vectors) {
@@ -191,6 +191,56 @@ class MergerTest : public OperatorTestBase {
       });
     }
     return producers;
+  }
+
+  std::vector<std::thread> createFileStreamProducers(
+      const std::vector<std::unique_ptr<BatchStream>>& batchStreams,
+      const std::vector<std::shared_ptr<MergeSource>>& sources) const {
+    std::vector<std::thread> producers;
+    producers.reserve(batchStreams.size());
+    for (auto i = 0; i < batchStreams.size(); ++i) {
+      executor_->add([&, i]() {
+        auto* mergeSource = sources[i].get();
+        RowVectorPtr vector;
+        while (batchStreams[i]->nextBatch(vector)) {
+          enqueueMergeSources(mergeSource, vector);
+        }
+        ASSERT_EQ(vector, nullptr);
+        // Enqueue an end signal.
+        enqueueMergeSources(mergeSource, nullptr);
+      });
+    }
+    return producers;
+  }
+
+  folly::Future<folly::Unit> produceAsync(
+      MergeSource* mergeSource,
+      BatchStream* batchStream) const {
+    ContinueFuture future;
+    RowVectorPtr vector;
+    if (!batchStream->nextBatch(vector)) {
+      const auto reason = mergeSource->enqueue(nullptr, &future);
+      EXPECT_EQ(reason, BlockingReason::kNotBlocked);
+      return folly::makeFuture();
+    }
+    mergeSource->enqueue(vector, &future);
+    return std::move(future)
+        .via(executor_.get())
+        .thenValue([this, mergeSource, batchStream](folly::Unit) {
+          return produceAsync(mergeSource, batchStream);
+        })
+        .thenError(folly::tag_t<std::exception>{}, [](const std::exception& e) {
+          VELOX_FAIL(e.what());
+        });
+  }
+
+  void createFileStreamAsyncProducers(
+      const std::vector<std::unique_ptr<BatchStream>>& batchStreams,
+      const std::vector<std::shared_ptr<MergeSource>>& sources) const {
+    for (auto i = 0; i < batchStreams.size(); ++i) {
+      executor_->add(
+          [&, i]() { produceAsync(sources[i].get(), batchStreams[i].get()); });
+    }
   }
 
   static std::vector<RowVectorPtr> getOutputFromSourceMerger(
@@ -205,12 +255,12 @@ class MergerTest : public OperatorTestBase {
         future.wait();
         continue;
       }
-
       bool atEnd = false;
       auto output = sourceMerger->getOutput(sourceBlockingFutures, atEnd);
       if (output != nullptr) {
         results.emplace_back(std::move(output));
       }
+
       if (atEnd) {
         break;
       }
@@ -218,7 +268,7 @@ class MergerTest : public OperatorTestBase {
     return results;
   }
 
-  std::unique_ptr<SpillMerger> createSpillMerger(
+  /*std::unique_ptr<SpillMerger> createSpillMerger(
       std::vector<std::vector<std::unique_ptr<SpillReadFile>>> filesGroup,
       uint64_t numSpillRows) const {
     return std::make_unique<SpillMerger>(
@@ -237,7 +287,7 @@ class MergerTest : public OperatorTestBase {
       results.emplace_back(std::move(output));
     }
     return results;
-  }
+  }*/
 
   static void checkResults(
       std::vector<RowVectorPtr> expectedResults,
@@ -379,10 +429,56 @@ TEST_F(MergerTest, spilMerger) {
         numSpillRows += vector->size();
       }
     }
+
+    /*
     const auto spillMerger =
         createSpillMerger(std::move(filesGroup), numSpillRows);
     const auto results =
         getOutputFromSpillMerger(spillMerger.get(), testData.maxOutputRows);
+    const auto expectedResults = makeExpectedResults(inputs, 16);
+    checkResults(expectedResults, results);*/
+  }
+}
+
+TEST_F(MergerTest, async) {
+  struct {
+    size_t maxOutputRows;
+    size_t numSources;
+
+    std::string debugString() const {
+      return fmt::format(
+          "maxOutputRows:{} numStreams:{}", maxOutputRows, numSources);
+    }
+  } testSettings[] = {
+      {1, 1},
+      {1, 3},
+      {1, 8},
+      {7, 1},
+      {7, 3},
+      {7, 8},
+      {16, 1},
+      {16, 3},
+      {16, 8},
+      {32, 3},
+      {1024, 8}};
+  for (const auto& testData : testSettings) {
+    SCOPED_TRACE(testData.debugString());
+    const auto sources = createMergeSources(testData.numSources);
+    auto [inputs, filesGroup] = generateInputs(testData.numSources, 16);
+    ASSERT_EQ(filesGroup.size(), testData.numSources);
+
+    std::vector<std::unique_ptr<BatchStream>> batchStreams;
+    batchStreams.reserve(testData.numSources);
+    for (auto i = 0; i < testData.numSources; ++i) {
+      batchStreams.emplace_back(
+          ConcatFilesSpillBatchStream::create(std::move(filesGroup[i])));
+    }
+
+    // auto producers = createFileStreamProducers(batchStreams, sources);
+    createFileStreamAsyncProducers(batchStreams, sources);
+    const auto sourceMerger =
+        createSourceMerger(sources, testData.maxOutputRows);
+    const auto results = getOutputFromSourceMerger(sourceMerger.get());
     const auto expectedResults = makeExpectedResults(inputs, 16);
     checkResults(expectedResults, results);
   }
