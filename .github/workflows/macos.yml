@@ -87,6 +87,7 @@ jobs:
       - name: Configure Build
         env:
           fmt_SOURCE: BUNDLED #brew fmt11 is not supported
+          faiss_SOURCE: BUNDLED #brew faiss is not supported
           CMAKE_POLICY_VERSION_MINIMUM: "3.5"
         run: |
             ccache -sz -M 5Gi
@@ -98,7 +99,8 @@ jobs:
                 -DVELOX_ENABLE_PARQUET=ON \
                 -DVELOX_MONO_LIBRARY=ON \
                 -DVELOX_BUILD_SHARED=ON \
-                -DCMAKE_BUILD_TYPE=$BUILD_TYPE
+                -DCMAKE_BUILD_TYPE=$BUILD_TYPE \
+                -DVELOX_ENABLE_FAISS=ON
 
       - name: Build
         run: |
