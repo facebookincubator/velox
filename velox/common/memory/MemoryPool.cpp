@@ -539,6 +539,12 @@ void* MemoryPoolImpl::allocate(
   return buffer;
 }
 
+void MemoryPoolImpl::fakeAllocate(int64_t size) {
+  CHECK_AND_INC_MEM_OP_STATS(Allocs);
+  const auto alignedSize = sizeAlign(size);
+  reserve(alignedSize);
+}
+
 void* MemoryPoolImpl::allocateZeroFilled(int64_t numEntries, int64_t sizeEach) {
   CHECK_AND_INC_MEM_OP_STATS(Allocs);
   const auto size = sizeEach * numEntries;
@@ -588,6 +594,12 @@ void MemoryPoolImpl::free(void* p, int64_t size) {
   const auto alignedSize = sizeAlign(size);
   DEBUG_RECORD_FREE(p, size);
   allocator_->freeBytes(p, alignedSize);
+  release(alignedSize);
+}
+
+void MemoryPoolImpl::fakeFree(int64_t size) {
+  CHECK_AND_INC_MEM_OP_STATS(Frees);
+  const auto alignedSize = sizeAlign(size);
   release(alignedSize);
 }
 

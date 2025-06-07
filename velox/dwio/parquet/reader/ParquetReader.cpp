@@ -36,6 +36,29 @@ bool isParquetReservedKeyword(
       ? true
       : false;
 }
+
+size_t calculateColumnMetadataSize(const thrift::ColumnChunk& column) {
+  size_t size = 0;
+  // Add size of column metadata
+  size += sizeof(thrift::ColumnChunk);
+  // Add size of column metadata
+  size += sizeof(thrift::ColumnMetaData);
+  // Add size of encodings
+  size += column.meta_data.encodings.size() * sizeof(thrift::Encoding::type);
+  // Add size of path in schema
+  size += column.meta_data.path_in_schema.size() * sizeof(std::string);
+  for (const auto& path : column.meta_data.path_in_schema) {
+    size += path.capacity();
+  }
+  // Add size of key_value_metadata
+  size += column.meta_data.key_value_metadata.size() * sizeof(thrift::KeyValue);
+  for (const auto& kv : column.meta_data.key_value_metadata) {
+    size += kv.key.capacity();
+    size += kv.value.capacity();
+  }
+  return size;
+}
+
 } // namespace
 
 /// Metadata and options for reading Parquet.
@@ -45,7 +68,13 @@ class ReaderBase {
       std::unique_ptr<dwio::common::BufferedInput>,
       const dwio::common::ReaderOptions& options);
 
-  virtual ~ReaderBase() = default;
+  virtual ~ReaderBase() {
+    if (thriftSize_ > 0) {
+      if (thriftMemoryTracked_) {
+        pool_.fakeFree(thriftSize_);
+      }
+    }
+  }
 
   memory::MemoryPool& getMemoryPool() const {
     return pool_;
@@ -107,6 +136,15 @@ class ReaderBase {
   /// Checks whether the specific row group has been loaded and
   /// the data still exists in the buffered inputs.
   bool isRowGroupBuffered(int32_t rowGroupIndex) const;
+
+  size_t analyzeFileMetadata(
+      const thrift::FileMetaData& metadata,
+      const std::string& filename,
+      uint64_t footerLength);
+
+  bool thriftMemoryTracked_ = false;
+
+  size_t thriftSize_ = 0;
 
  private:
   // Reads and parses file footer.
@@ -220,6 +258,11 @@ void ReaderBase::loadFileMetaData() {
       thriftTransport);
   fileMetaData_ = std::make_unique<thrift::FileMetaData>();
   fileMetaData_->read(thriftProtocol.get());
+  // Only analyze metadata if footer length is greater than 20MB
+  if (footerLength > 20 * 1024 * 1024) {
+    thriftSize_ = analyzeFileMetadata(
+        *fileMetaData_, input_->getReadFile()->getName(), footerLength);
+  }
 }
 
 void ReaderBase::initializeSchema() {
@@ -1027,6 +1070,191 @@ bool ReaderBase::isRowGroupBuffered(int32_t rowGroupIndex) const {
   return inputs_.count(rowGroupIndex) != 0;
 }
 
+size_t ReaderBase::analyzeFileMetadata(
+    const thrift::FileMetaData& metadata,
+    const std::string& filename,
+    uint64_t footerLength) {
+  size_t totalSize = sizeof(thrift::FileMetaData);
+
+  // Statistics tracking
+  size_t numSchemaElements = metadata.schema.size();
+  size_t maxSchemaDepth = 0;
+  size_t currentDepth = 0;
+  size_t numLeafNodes = 0;
+  size_t numGroupNodes = 0;
+  size_t totalStringLength = 0;
+  size_t maxStringLength = 0;
+  size_t maxDepth = 0;
+  size_t maxDepthElementSize = 0;
+  std::string maxDepthElementName;
+  size_t maxElementSize = 0;
+  std::string maxElementName;
+  currentDepth = 0;
+
+  for (const auto& schema : metadata.schema) {
+    size_t elementSize = sizeof(schema) + schema.name.capacity() +
+        sizeof(schema.type) + sizeof(schema.type_length) +
+        sizeof(schema.repetition_type) + sizeof(schema.num_children) +
+        sizeof(schema.converted_type) + sizeof(schema.scale) +
+        sizeof(schema.precision) + sizeof(schema.field_id);
+    if (schema.__isset.logicalType) {
+      elementSize += sizeof(schema.logicalType);
+    }
+    if (elementSize > maxElementSize) {
+      maxElementSize = elementSize;
+      maxElementName = schema.name;
+    }
+    if (schema.__isset.num_children) {
+      currentDepth++;
+      if (currentDepth > maxDepth) {
+        maxDepth = currentDepth;
+        maxDepthElementName = schema.name;
+        maxDepthElementSize = elementSize;
+      }
+    }
+  }
+
+  // Add size of row groups
+  size_t numRowGroups = metadata.row_groups.size();
+  size_t totalColumns = 0;
+  size_t totalEncodings = 0;
+  size_t totalPaths = 0;
+  size_t totalKeyValues = 0;
+
+  totalSize += metadata.row_groups.size() * sizeof(thrift::RowGroup);
+  for (const auto& rowGroup : metadata.row_groups) {
+    // Add size of columns in each row group
+    totalColumns += rowGroup.columns.size();
+    totalSize += rowGroup.columns.size() * sizeof(thrift::ColumnChunk);
+    for (const auto& column : rowGroup.columns) {
+      totalSize += calculateColumnMetadataSize(column);
+      // Add size of encodings
+      totalEncodings += column.meta_data.encodings.size();
+      // Add size of path in schema
+      totalPaths += column.meta_data.path_in_schema.size();
+      // Add size of key_value_metadata
+      totalKeyValues += column.meta_data.key_value_metadata.size();
+    }
+  }
+
+  // Add size of key_value_metadata
+  size_t numKeyValues = metadata.key_value_metadata.size();
+  totalSize += metadata.key_value_metadata.size() * sizeof(thrift::KeyValue);
+  for (const auto& kv : metadata.key_value_metadata) {
+    totalSize += kv.key.capacity();
+    totalSize += kv.value.capacity();
+  }
+
+  // Add size of created_by
+  totalSize += metadata.created_by.capacity();
+
+  // Add size of column_orders
+  totalSize += metadata.column_orders.size() * sizeof(thrift::ColumnOrder);
+
+  // Add size of encryption_algorithm
+  totalSize += sizeof(thrift::EncryptionAlgorithm);
+
+  // Add size of footer_signing_key_metadata
+  totalSize += metadata.footer_signing_key_metadata.capacity();
+
+  auto encodingToString = [](thrift::Encoding::type encoding) -> std::string {
+    switch (encoding) {
+      case thrift::Encoding::PLAIN:
+        return "PLAIN";
+      case thrift::Encoding::PLAIN_DICTIONARY:
+        return "PLAIN_DICTIONARY";
+      case thrift::Encoding::RLE:
+        return "RLE";
+      case thrift::Encoding::BIT_PACKED:
+        return "BIT_PACKED";
+      case thrift::Encoding::DELTA_BINARY_PACKED:
+        return "DELTA_BINARY_PACKED";
+      case thrift::Encoding::DELTA_LENGTH_BYTE_ARRAY:
+        return "DELTA_LENGTH_BYTE_ARRAY";
+      case thrift::Encoding::DELTA_BYTE_ARRAY:
+        return "DELTA_BYTE_ARRAY";
+      case thrift::Encoding::RLE_DICTIONARY:
+        return "RLE_DICTIONARY";
+      case thrift::Encoding::BYTE_STREAM_SPLIT:
+        return "BYTE_STREAM_SPLIT";
+      default:
+        return "UNKNOWN";
+    }
+  };
+
+  // Track distinct encodings
+  std::set<thrift::Encoding::type> distinctEncodings;
+  std::map<thrift::Encoding::type, size_t> encodingCounts;
+
+  for (const auto& rowGroup : metadata.row_groups) {
+    for (const auto& column : rowGroup.columns) {
+      for (const auto& encoding : column.meta_data.encodings) {
+        distinctEncodings.insert(encoding);
+        encodingCounts[encoding]++;
+      }
+      totalEncodings += column.meta_data.encodings.size();
+      totalSize +=
+          column.meta_data.encodings.size() * sizeof(thrift::Encoding::type);
+    }
+  }
+
+  // Build encoding stats string and record metrics in one loop
+  std::string encodingStats;
+  for (const auto& [encoding, count] : encodingCounts) {
+    encodingStats += fmt::format(
+        "      {}: {} occurrences\n", encodingToString(encoding), count);
+
+    // Record metric for each encoding type
+  }
+
+  // Only log if totalSize is more than 8x footerLength
+  if (totalSize > 8 * footerLength) {
+    LOG(INFO) << fmt::format(
+        "FileMetaData Statistics for {} \n"
+        "  Footer length: {}):\n"
+        "  FileMetaData object size: {}\n"
+        "  Schema Statistics:\n"
+        "    Number of schema elements: {}\n"
+        "    Maximum schema depth: {} (Element: '{}', Size: {})\n"
+        "    Largest schema element: '{}' (Size: {})\n"
+        "    Number of leaf nodes: {}\n"
+        "    Number of group nodes: {}\n"
+        "    Average string length: {}\n"
+        "    Maximum string length: {}\n"
+        "  Row Group Statistics:\n"
+        "    Number of row groups: {}\n"
+        "    Total columns: {}\n"
+        "    Average columns per row group: {}\n"
+        "    Total encodings: {}\n"
+        "    Distinct encodings: {}\n"
+        "    Encoding distribution:\n{}"
+        "    Total paths: {}\n"
+        "    Total key-value pairs: {}",
+        filename,
+        succinctBytes(footerLength),
+        succinctBytes(totalSize),
+        numSchemaElements,
+        maxDepth,
+        maxDepthElementName,
+        succinctBytes(maxDepthElementSize),
+        maxElementName,
+        succinctBytes(maxElementSize),
+        numLeafNodes,
+        numGroupNodes,
+        (numSchemaElements > 0 ? totalStringLength / numSchemaElements : 0),
+        maxStringLength,
+        numRowGroups,
+        totalColumns,
+        (numRowGroups > 0 ? totalColumns / numRowGroups : 0),
+        totalEncodings,
+        distinctEncodings.size(),
+        encodingStats,
+        totalPaths,
+        (totalKeyValues + numKeyValues));
+  }
+  return totalSize;
+}
+
 class ParquetRowReader::Impl {
  public:
   Impl(
@@ -1096,6 +1324,8 @@ class ParquetRowReader::Impl {
     }
 
     uint64_t rowNumber = 0;
+    size_t totalColumnsSize = 0;
+    size_t totalClearedColumns = 0;
     for (auto i = 0; i < rowGroups_.size(); i++) {
       VELOX_CHECK_GT(rowGroups_[i].columns.size(), 0);
       auto fileOffset = rowGroups_[i].__isset.file_offset
@@ -1122,6 +1352,10 @@ class ParquetRowReader::Impl {
           // reduce the memory consumption. ColumnChunks consume the most
           // memory. Skip the 0th RowGroup as it is used by estimatedRowSize().
           rowGroups_[i].columns.clear();
+          for (const auto& column : rowGroups_[i].columns) {
+            totalColumnsSize += calculateColumnMetadataSize(column);
+            totalClearedColumns++;
+          }
         }
         if (rowGroupInRange) {
           skippedStrides_++;
@@ -1129,6 +1363,12 @@ class ParquetRowReader::Impl {
       }
 
       rowNumber += rowGroups_[i].num_rows;
+    }
+
+    if (totalClearedColumns > 0 && readerBase_->thriftSize_ > 0) {
+      readerBase_->thriftSize_ -= totalColumnsSize;
+      pool_.fakeAllocate(readerBase_->thriftSize_);
+      readerBase_->thriftMemoryTracked_ = true;
     }
   }
 
