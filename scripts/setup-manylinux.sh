@@ -266,10 +266,10 @@ function install_cuda {
   local repo_url
 
   if [[ "$arch" == "x86_64" ]]; then
-    repo_url="https://developer.download.nvidia.com/compute/cuda/repos/rhel9/x86_64/cuda-rhel9.repo"
+    repo_url="https://developer.download.nvidia.com/compute/cuda/repos/rhel8/x86_64/cuda-rhel8.repo"
   elif [[ "$arch" == "aarch64" ]]; then
     # Using SBSA (Server Base System Architecture) repository for ARM64 servers
-    repo_url="https://developer.download.nvidia.com/compute/cuda/repos/rhel9/sbsa/cuda-rhel9.repo"
+    repo_url="https://developer.download.nvidia.com/compute/cuda/repos/rhel8/sbsa/cuda-rhel8.repo"
   else
     echo "Unsupported architecture: $arch" >&2
     return 1
