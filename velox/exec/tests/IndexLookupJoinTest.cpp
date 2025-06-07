@@ -1825,7 +1825,7 @@ TEST_P(IndexLookupJoinTest, outputBatchSize) {
   }
 }
 
-DEBUG_ONLY_TEST_P(IndexLookupJoinTest, runtimeStats) {
+TEST_P(IndexLookupJoinTest, runtimeStats) {
   SequenceTableData tableData;
   generateIndexTableData({100, 1, 1}, tableData, pool_);
   const int numProbeBatches{2};
@@ -1903,6 +1903,9 @@ DEBUG_ONLY_TEST_P(IndexLookupJoinTest, runtimeStats) {
   ASSERT_EQ(runtimeStats.count(IndexLookupJoin::kClientResultProcessTime), 0);
   ASSERT_EQ(runtimeStats.count(IndexLookupJoin::kClientLookupResultSize), 0);
   ASSERT_EQ(runtimeStats.count(IndexLookupJoin::kClientLookupResultRawSize), 0);
+  ASSERT_EQ(
+      runtimeStats.count(IndexLookupJoin::kClientNumLazyDecodedResultBatches),
+      0);
   ASSERT_THAT(
       operatorStats.toString(true, true),
       testing::MatchesRegex(".*Runtime stats.*connectorLookupWallNanos:.*"));
