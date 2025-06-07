@@ -199,7 +199,7 @@ function cmake_install_dir {
   pushd "${DEPENDENCY_DIR}/$1"
   # remove the directory argument
   shift
-  cmake_install $@
+  cmake_install $@ -DCMAKE_POLICY_VERSION_MINIMUM=3.5
   popd
 }
 
