@@ -25,7 +25,7 @@ its dependencies in a separate environment to ensure reproducibility of the
 check results.
 
 
-The hooks are defined in `pre-commit-config.yaml`.
+The hooks are defined in `.pre-commit-config.yaml`.
 
 After the setup is complete, each time you `git commit`, the hooks will be run
 and potential changes applied to your *staged* files. Any unstaged files will
@@ -36,7 +36,7 @@ pushed into the repository.
 You will have to review and stage the changed files and commit again.
 
 To manually run one specific hook, use `pre-commit run <hookid>`, for example
-`pre-commit run clang-format`. You can find the `hookid` in `pre-commit-config.yaml`.
+`pre-commit run clang-format`. You can find the `hookid` in `.pre-commit-config.yaml`.
 
 By design, `pre-commit` will only be run on the files that are part of the commit
 or push. If you want to run the checks on all files (including unstaged files), you can
