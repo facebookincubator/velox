@@ -39,6 +39,7 @@ jobs:
       GTest_SOURCE: BUNDLED
       cudf_SOURCE: BUNDLED
       CUDA_VERSION: "12.8"
+      faiss_SOURCE: BUNDLED
       USE_CLANG: "${{ inputs.use-clang && 'true' || 'false' }}"
     steps:
       - uses: actions/checkout@v4
@@ -55,6 +56,13 @@ jobs:
           if ! yum list installed cuda-nvcc-$(echo ${CUDA_VERSION} | tr '.' '-') 1>/dev/null; then
             source scripts/setup-centos9.sh
             install_cuda ${CUDA_VERSION}
+          fi
+
+      - name: Install Blas
+        run: |
+          if ! yum list installed openblas-devel 1>/dev/null; then
+            source scripts/setup-centos9.sh
+            install_blas
           fi
 
       - name: Install Minio
@@ -88,6 +96,7 @@ jobs:
             "-DVELOX_ENABLE_EXAMPLES=ON"
             "-DVELOX_ENABLE_ARROW=ON"
             "-DVELOX_ENABLE_GEO=ON"
+            "-DVELOX_ENABLE_FAISS=ON"
             "-DVELOX_ENABLE_PARQUET=ON"
             "-DVELOX_ENABLE_HDFS=ON"
             "-DVELOX_ENABLE_S3=ON"
