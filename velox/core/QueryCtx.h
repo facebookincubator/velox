@@ -113,6 +113,14 @@ class QueryCtx : public std::enable_shared_from_this<QueryCtx> {
     return queryId_;
   }
 
+  bool started() const {
+    return started_;
+  }
+
+  void setStarted() {
+    started_ = true;
+  }
+
   /// Checks if the associated query is under memory arbitration or not. The
   /// function returns true if it is and set future which is fulfilled when the
   /// memory arbitration finishes.
@@ -227,6 +235,9 @@ class QueryCtx : public std::enable_shared_from_this<QueryCtx> {
   // Indicates if this query is under memory arbitration or not.
   std::atomic_bool underArbitration_{false};
   std::vector<ContinuePromise> arbitrationPromises_;
+
+  // True if at least one task of this query is started.
+  std::atomic_bool started_{false};
 };
 
 // Represents the state of one thread of query execution.
