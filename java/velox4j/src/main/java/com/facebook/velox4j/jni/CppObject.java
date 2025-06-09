@@ -15,12 +15,20 @@
  */
 package com.facebook.velox4j.jni;
 
+/**
+ * A CppObject is a Java-side representation of a C++ side object (usually managed by a C++ smart
+ * pointer).
+ */
 public interface CppObject extends AutoCloseable {
   long id();
 
+  /**
+   * Closes the associated C++ side object. In practice, this only releases the JNI reference of the
+   * smart pointer that manages the C++ object. Hence, if there are other references alive in C++
+   * code, the object will not be immediately destroyed.
+   */
   @Override
   default void close() {
     StaticJniApi.get().releaseCppObject(this);
   }
-  ;
 }

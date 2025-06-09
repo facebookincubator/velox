@@ -17,6 +17,10 @@ package com.facebook.velox4j.jni;
 
 import com.facebook.velox4j.memory.AllocationListener;
 
+/**
+ * A static JNI wrapper that is independent to any JNI sessions. All the JNI methods defined in the
+ * static JNI wrapper are globally available without having to create a session first.
+ */
 public class StaticJniWrapper {
   private static final StaticJniWrapper INSTANCE = new StaticJniWrapper();
 
