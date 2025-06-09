@@ -22,29 +22,51 @@ import com.facebook.velox4j.data.RowVectors;
 import com.facebook.velox4j.data.SelectivityVectors;
 import com.facebook.velox4j.eval.Evaluations;
 import com.facebook.velox4j.jni.CppObject;
+import com.facebook.velox4j.plan.TableWriteNode;
 import com.facebook.velox4j.query.Queries;
 import com.facebook.velox4j.serializable.ISerializables;
 import com.facebook.velox4j.variant.Variants;
 import com.facebook.velox4j.write.TableWriteTraits;
 
+/**
+ * A Velox4J session consists of a set of active Velox4J APIs.
+ *
+ * <p>Session itself should be closed after use, as it's a CppObject. Once it is closed, all the
+ * created C++ objects will be destroyed to avoid memory leakage.
+ */
 public interface Session extends CppObject {
+  /** APIs in relation to {@link com.facebook.velox4j.eval.Evaluation}. */
   Evaluations evaluationOps();
 
+  /** APIs in relation to {@link com.facebook.velox4j.query.Query}. */
   Queries queryOps();
 
+  /** APIs in relation to {@link com.facebook.velox4j.connector.ExternalStream}. */
   ExternalStreams externalStreamOps();
 
+  /** APIs in relation to {@link com.facebook.velox4j.data.BaseVector}. */
   BaseVectors baseVectorOps();
 
+  /** APIs in relation to {@link com.facebook.velox4j.data.RowVector}. */
   RowVectors rowVectorOps();
 
+  /** APIs in relation to {@link com.facebook.velox4j.data.SelectivityVector}. */
   SelectivityVectors selectivityVectorOps();
 
+  /**
+   * Arrow APIs for vectors. This includes interchange functionalities between Velox native vector
+   * format and Arrow-Java format.
+   */
   Arrow arrowOps();
 
+  /**
+   * An API for creating certain required information for building a {@link TableWriteNode} in Java.
+   */
   TableWriteTraits tableWriteTraitsOps();
 
+  /** APIs in relation to {@link com.facebook.velox4j.serializable.ISerializable}. */
   ISerializables iSerializableOps();
 
+  /** APIs in relation to {@link com.facebook.velox4j.variant.Variant}. */
   Variants variantOps();
 }

@@ -36,6 +36,13 @@ public class Velox4j {
   private static final AtomicBoolean initialized = new AtomicBoolean(false);
   private static final Map<String, String> globalConfMap = new LinkedHashMap<>();
 
+  /**
+   * Configure Velox4J with a key-value pair. The available configuration entries are defined in the
+   * C++ source file `velox4j/init/Config.cpp`.
+   *
+   * <p>The method should only be called before `initialize` is called. Exception is thrown
+   * otherwise.
+   */
   public static void configure(String key, String value) {
     Preconditions.checkNotNull(key, "Key cannot be null");
     Preconditions.checkNotNull(value, "Value of key %s cannot be null", key);
@@ -57,6 +64,10 @@ public class Velox4j {
     }
   }
 
+  /**
+   * Initializes Velox4J. Should be called once and only once before any Velox4J functionalities are
+   * actually invoked.
+   */
   public static void initialize() {
     if (!initialized.compareAndSet(false, true)) {
       throw new VeloxException("Velox4J has already been initialized");
@@ -64,6 +75,7 @@ public class Velox4j {
     initialize0();
   }
 
+  /** Creates a new Velox4J session. */
   public static Session newSession(MemoryManager memoryManager) {
     return StaticJniApi.get().createSession(memoryManager);
   }

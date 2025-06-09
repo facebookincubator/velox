@@ -20,6 +20,7 @@ import java.util.Iterator;
 import com.facebook.velox4j.data.RowVector;
 
 public final class DownIterators {
+  /** From Java iterator */
   public static DownIterator fromJavaIterator(Iterator<RowVector> itr) {
     return new FromJavaIterator(itr);
   }
