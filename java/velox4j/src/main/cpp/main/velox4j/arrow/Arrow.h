@@ -22,11 +22,14 @@ struct ArrowArray;
 struct ArrowSchema;
 
 namespace facebook::velox4j {
+
+// Exports the input base vector to Arrow ABI structs.
 void fromBaseVectorToArrow(
     facebook::velox::VectorPtr vector,
     ArrowSchema* cSchema,
     ArrowArray* cArray);
 
+// Imports the given Arrow ABI structs into a base vector, then returns it.
 facebook::velox::VectorPtr fromArrowToBaseVector(
     facebook::velox::memory::MemoryPool* pool,
     ArrowSchema* cSchema,

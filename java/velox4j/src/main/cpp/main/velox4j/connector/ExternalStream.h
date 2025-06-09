@@ -63,10 +63,14 @@ class ExternalStream {
   // DTOR.
   virtual ~ExternalStream() = default;
 
+  /// Reads a row-vector to the external stream. A future is passed
+  /// in for asynchronous reading. It's the implementation's choice
+  /// to either blocking-read or async-read by setting the provided future.
   virtual std::optional<facebook::velox::RowVectorPtr> read(
       facebook::velox::ContinueFuture& future) = 0;
 };
 
+// A split that wraps a ExternalStream.
 class ExternalStreamConnectorSplit
     : public facebook::velox::connector::ConnectorSplit {
  public:
@@ -88,6 +92,7 @@ class ExternalStreamConnectorSplit
   const ObjectHandle esId_;
 };
 
+// The table handle implementation that is used by ExternalStreamConnector.
 class ExternalStreamTableHandle
     : public facebook::velox::connector::ConnectorTableHandle {
  public:
@@ -106,6 +111,7 @@ class ExternalStreamTableHandle
       void* context);
 };
 
+// The data source implementation that is used by ExternalStreamConnector.
 class ExternalStreamDataSource : public facebook::velox::connector::DataSource {
  public:
   explicit ExternalStreamDataSource(
@@ -150,6 +156,7 @@ class ExternalStreamDataSource : public facebook::velox::connector::DataSource {
   std::shared_ptr<ExternalStream> current_{nullptr};
 };
 
+// The connector that reads ExternalStream splits into Velox pipeline.
 class ExternalStreamConnector : public facebook::velox::connector::Connector {
  public:
   ExternalStreamConnector(

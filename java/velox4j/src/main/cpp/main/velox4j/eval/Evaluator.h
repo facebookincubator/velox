@@ -23,19 +23,24 @@
 #include <memory>
 #include <string>
 
+#include "velox4j/eval/Evaluation.h"
 #include "velox4j/memory/MemoryManager.h"
 
 namespace facebook::velox4j {
+/// Evaluator is a JNI API that accepts calls from Java to evaluate
+/// an expression on a set of input row vectors.
 class Evaluator {
  public:
-  Evaluator(MemoryManager* memoryManager, const std::string& exprJson);
+  Evaluator(
+      MemoryManager* memoryManager,
+      const std::shared_ptr<const Evaluation>& evaluation);
 
   facebook::velox::VectorPtr eval(
       const facebook::velox::SelectivityVector& rows,
       const facebook::velox::RowVector& input);
 
  private:
-  const std::string exprJson_;
+  const std::shared_ptr<const Evaluation>& evaluation_;
   std::shared_ptr<facebook::velox::core::QueryCtx> queryCtx_;
   std::unique_ptr<facebook::velox::core::ExpressionEvaluator>
       expressionEvaluator_;

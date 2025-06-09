@@ -30,6 +30,7 @@
 
 using namespace facebook::velox4j;
 
+// The JNI entrypoint.
 JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM* jvm, void*) {
   LOG(INFO) << "Initializing Velox4J...";
   JNIEnv* env = jniHelpersInitialize(jvm);

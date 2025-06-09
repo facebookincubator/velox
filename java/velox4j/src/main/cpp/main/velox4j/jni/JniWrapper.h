@@ -20,6 +20,12 @@
 #include <jni.h>
 
 namespace facebook::velox4j {
+/// A dynamic JniWrapper that includes the JNI methods that are session-aware.
+/// Which means, the sanity of these methods usually rely on certain objects
+/// that were stored in the current session. For example, an API that turns
+/// a Velox vector into another, then returns it to Java - this method will read
+/// and write objects from and to the current JNI session storage. So the
+/// method will be defined in the (dynamic) JniWrapper.
 class JniWrapper final : public spotify::jni::JavaClass {
  public:
   explicit JniWrapper(JNIEnv* env) : JavaClass(env) {
