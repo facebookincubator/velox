@@ -20,6 +20,7 @@ import com.facebook.velox4j.iterator.DownIterator;
 import com.facebook.velox4j.jni.JniApi;
 import com.facebook.velox4j.jni.StaticJniApi;
 
+/** A factory for creaing {@link ExternalStream} instances. */
 public class ExternalStreams {
   private final JniApi jniApi;
 
@@ -27,10 +28,16 @@ public class ExternalStreams {
     this.jniApi = jniApi;
   }
 
+  /** Creates an external stream with a given {@link DownIterator} instance. */
   public ExternalStream bind(DownIterator itr) {
     return jniApi.createExternalStreamFromDownIterator(itr);
   }
 
+  /**
+   * Creates a {@link BlockingQueue} that is backed by a C++ native blocking queue instance. The
+   * blocking queue resulted is at the same time an ExternalStream instance that can be read by a
+   * Velox scan operator.
+   */
   public BlockingQueue newBlockingQueue() {
     return jniApi.createBlockingQueue();
   }

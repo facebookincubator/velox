@@ -19,6 +19,13 @@ import com.google.common.annotations.VisibleForTesting;
 
 import com.facebook.velox4j.iterator.DownIterator;
 
+/**
+ * A dynamic JniWrapper that includes the JNI methods that are session-aware. Which means, the
+ * sanity of these methods usually rely on certain objects that were stored in the current session.
+ * For example, an API that turns a Velox vector into another, then returns it to Java - this method
+ * will read and write objects from and to the current JNI session storage. So the method will be
+ * defined in the (dynamic) JniWrapper.
+ */
 final class JniWrapper {
   private final long sessionId;
 
