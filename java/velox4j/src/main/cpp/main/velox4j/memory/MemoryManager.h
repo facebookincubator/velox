@@ -28,10 +28,8 @@
 
 namespace facebook::velox4j {
 
-namespace {}
-
-/// A memory manager is supposed to manage all the memory allocations under a
-/// certain JNI session of Velox4J.
+/// A memory manager is supposed to manage all the memory allocations under one
+/// or multiple certain JNI sessions in Velox4J.
 class MemoryManager {
  public:
   explicit MemoryManager(std::unique_ptr<AllocationListener> listener);

@@ -9,6 +9,7 @@ public class SelectivityVectors {
     this.jniApi = jniApi;
   }
 
+  /** Creates an empty selectivity vector with the given length where all bits are available. */
   public SelectivityVector create(int length) {
     return jniApi.createSelectivityVector(length);
   }

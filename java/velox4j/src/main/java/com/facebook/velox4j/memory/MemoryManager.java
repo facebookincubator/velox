@@ -18,7 +18,21 @@ package com.facebook.velox4j.memory;
 import com.facebook.velox4j.jni.CppObject;
 import com.facebook.velox4j.jni.StaticJniApi;
 
+/**
+ * A memory manager for Velox4J. One memory manager can be bound to different Velox4J sessions or to
+ * only one session per user's need.
+ *
+ * <p>MemoryManager should be closed after use, as it's a CppObject. Once being closed, a memory
+ * leakage check will be performed, that says, all the sessions that are managed by this memory
+ * manager should be gracefully released (by calling Session#close) then this memory manager can be
+ * closed without any leakage. Error will be thrown otherwise.
+ */
 public class MemoryManager implements CppObject {
+
+  /**
+   * Creates a memory manager instance with a given {@link AllocationListener}. The listener will
+   * listen on all the native memory allocations.
+   */
   public static MemoryManager create(AllocationListener listener) {
     return StaticJniApi.get().createMemoryManager(listener);
   }
