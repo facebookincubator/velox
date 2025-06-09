@@ -60,7 +60,6 @@ class ExternalStream {
   ExternalStream& operator=(const ExternalStream&) = delete;
   ExternalStream& operator=(ExternalStream&&) = delete;
 
-  // DTOR.
   virtual ~ExternalStream() = default;
 
   /// Reads a row-vector to the external stream. A future is passed
