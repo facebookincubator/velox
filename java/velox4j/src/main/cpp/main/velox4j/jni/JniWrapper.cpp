@@ -13,7 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#include "JniWrapper.h"
+#include "velox4j/jni/JniWrapper.h"
 
 #include <ClassRegistry.h>
 #include <JavaString.h>

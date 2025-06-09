@@ -13,6 +13,6 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#include "Session.h"
+#include "velox4j/lifecycle/Session.h"
 
 namespace facebook::velox4j {}

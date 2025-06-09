@@ -13,7 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#include "Evaluator.h"
+#include "velox4j/eval/Evaluator.h"
 
 #include <fmt/core.h>
 #include <folly/json/json.h>

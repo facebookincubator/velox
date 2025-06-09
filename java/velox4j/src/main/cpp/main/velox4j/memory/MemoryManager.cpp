@@ -13,7 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#include "MemoryManager.h"
+#include "velox4j/memory/MemoryManager.h"
 
 #include <fmt/core.h>
 #include <folly/Conv.h>

@@ -13,7 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#include "JniCommon.h"
+#include "velox4j/jni/JniCommon.h"
 
 #include <ClassRegistry.h>
 #include <JavaThreadUtils.h>
