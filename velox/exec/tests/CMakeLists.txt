@@ -61,6 +61,7 @@ add_executable(
   MemoryReclaimerTest.cpp
   MergeJoinTest.cpp
   MergeTest.cpp
+  MergerTest.cpp
   MultiFragmentTest.cpp
   NestedLoopJoinTest.cpp
   OrderByTest.cpp
@@ -83,6 +84,7 @@ add_executable(
   SortBufferTest.cpp
   SpillerTest.cpp
   SpillTest.cpp
+  SplitListenerTest.cpp
   SplitTest.cpp
   SqlTest.cpp
   StreamingAggregationTest.cpp

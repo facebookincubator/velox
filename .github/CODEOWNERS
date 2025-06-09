@@ -38,6 +38,9 @@
 # cuDF
 velox/experimental/cudf @bdice @karthikeyann @devavret
 
+# cuDF
+velox/experimental/cudf/ @bdice @karthikeyann @devavret @mhaseeb123
+
 # Parquet
 #velox/dwio/parquet/ @majetideepak
 
