@@ -27,6 +27,7 @@
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/common/compression/Compression.h"
 #include "velox/common/compression/Lz4Compression.h"
+#include "velox/common/compression/ZlibCompression.h"
 
 namespace facebook::velox::common {
 
@@ -53,14 +54,29 @@ struct TestParams {
 std::vector<TestParams> generateLz4TestParams() {
   std::vector<TestParams> params;
   for (auto lz4Type :
-       {Lz4CodecOptions::kLz4Raw,
-        Lz4CodecOptions::kLz4Frame,
-        Lz4CodecOptions::kLz4Hadoop}) {
+       {Lz4Type::kLz4Raw, Lz4Type::kLz4Frame, Lz4Type::kLz4Hadoop}) {
     params.emplace_back(
         CompressionKind_LZ4, std::make_shared<Lz4CodecOptions>(lz4Type));
   }
   // Add default CodecOptions.
   params.emplace_back(CompressionKind_LZ4);
+  return params;
+}
+
+std::vector<TestParams> generateZlibTestParams() {
+  std::vector<TestParams> params;
+  for (auto format :
+       {ZlibFormat::kZlib, ZlibFormat::kDeflate, ZlibFormat::kGzip}) {
+    for (auto windowBits = kZlibMinWindowBits; windowBits <= kZlibMaxWindowBits;
+         ++windowBits) {
+      params.emplace_back(
+          CompressionKind::CompressionKind_ZLIB,
+          std::make_shared<ZlibCodecOptions>(
+              format, kDefaultCompressionLevel, windowBits));
+    }
+  }
+  // Add default CodecOptions.
+  params.emplace_back(CompressionKind_ZLIB);
   return params;
 }
 
@@ -507,15 +523,30 @@ INSTANTIATE_TEST_SUITE_P(
     CodecTest,
     ::testing::ValuesIn(generateLz4TestParams()));
 
+INSTANTIATE_TEST_SUITE_P(
+    TestZstd,
+    CodecTest,
+    ::testing::Values(TestParams{CompressionKind::CompressionKind_ZSTD}));
+
+INSTANTIATE_TEST_SUITE_P(
+    TestZlib,
+    CodecTest,
+    ::testing::ValuesIn(generateZlibTestParams()));
+
+INSTANTIATE_TEST_SUITE_P(
+    TestSnappy,
+    CodecTest,
+    ::testing::Values(CompressionKind::CompressionKind_SNAPPY));
+
 TEST(CodecLZ4HadoopTest, compatibility) {
   // LZ4 Hadoop codec should be able to read back LZ4 raw blocks.
   auto c1 = Codec::create(
                 CompressionKind::CompressionKind_LZ4,
-                Lz4CodecOptions{Lz4CodecOptions::kLz4Raw})
+                Lz4CodecOptions{Lz4Type::kLz4Raw})
                 .thenOrThrow([](auto codec) { return codec; }, throwsNotOk);
   auto c2 = Codec::create(
                 CompressionKind::CompressionKind_LZ4,
-                Lz4CodecOptions{Lz4CodecOptions::kLz4Hadoop})
+                Lz4CodecOptions{Lz4Type::kLz4Hadoop})
                 .thenOrThrow([](auto codec) { return codec; }, throwsNotOk);
 
   for (auto dataSize : {0, 10, 10000, 100000}) {
@@ -533,5 +564,21 @@ TEST(CodecTestInvalid, invalidKind) {
       fmt::format(
           "Support for codec '{}' is either not built or not implemented.",
           compressionKindToString(kind)));
+}
+
+TEST(CodecTestInvalid, invalidZlibWindowBit) {
+  for (auto invalidWindowBits :
+       {kZlibMinWindowBits - 1, kZlibMaxWindowBits + 1}) {
+    VELOX_ASSERT_ERROR_STATUS(
+        Codec::create(
+            CompressionKind_ZLIB,
+            ZlibCodecOptions{
+                ZlibFormat::kDeflate,
+                kDefaultCompressionLevel,
+                invalidWindowBits})
+            .error(),
+        StatusCode::kUserError,
+        "zlib window bits should be between 9 and 15");
+  }
 }
 } // namespace facebook::velox::common

@@ -17,6 +17,9 @@
 #pragma once
 
 #include "velox/common/compression/Compression.h"
+#include "velox/common/compression/Lz4Compression.h"
+#include "velox/common/compression/LzoCompression.h"
+#include "velox/common/compression/ZlibCompression.h"
 #include "velox/dwio/common/BitConcatenation.h"
 #include "velox/dwio/common/DirectDecoder.h"
 #include "velox/dwio/common/SelectiveColumnReader.h"
@@ -515,20 +518,23 @@ class PageReader {
   // Add decoders for other encodings here.
 };
 
-FOLLY_ALWAYS_INLINE dwio::common::compression::CompressionOptions
+FOLLY_ALWAYS_INLINE std::shared_ptr<common::CodecOptions>
 getParquetDecompressionOptions(common::CompressionKind kind) {
-  dwio::common::compression::CompressionOptions options{};
-
   if (kind == common::CompressionKind_ZLIB ||
       kind == common::CompressionKind_GZIP) {
-    options.format.zlib.windowBits =
-        dwio::common::compression::Compressor::PARQUET_ZLIB_WINDOW_BITS;
-  } else if (
-      kind == common::CompressionKind_LZ4 ||
-      kind == common::CompressionKind_LZO) {
-    options.format.lz4_lzo.isHadoopFrameFormat = true;
+    return std::make_shared<common::ZlibCodecOptions>(
+        common::ZlibFormat::kZlib);
   }
-  return options;
+  if (kind == common::CompressionKind_LZ4) {
+    return std::make_shared<common::Lz4CodecOptions>(
+        common::Lz4Type::kLz4Hadoop);
+  }
+  if (kind == common::CompressionKind_LZO) {
+    return std::make_shared<common::LzoCodecOptions>(
+        common::LzoType::kLzoHadoop);
+  }
+
+  return std::make_shared<common::CodecOptions>();
 }
 
 template <typename Visitor>
