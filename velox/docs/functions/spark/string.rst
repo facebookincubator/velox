@@ -454,4 +454,3 @@ String Functions
         varchar_type_write_side_check("中文中国", 3) -- VeloxUserError: "Exceeds allowed length limitation: '3'"
         varchar_type_write_side_check("   ", 0) -- VeloxUserError: "The length limit must be greater than 0."
         varchar_type_write_side_check("", 3) -- ""
-

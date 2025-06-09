@@ -43,7 +43,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          fetch-depth: 2 
+          fetch-depth: 2
           persist-credentials: false
 
       - name: Fix git permissions
@@ -58,7 +58,7 @@ jobs:
             cp scripts/setup-* /
 
             mkdir /tmp/build
-            cd /tmp/build 
+            cd /tmp/build
             source /opt/rh/gcc-toolset-12/enable
             # install basic deps
             bash /setup-centos9.sh
@@ -66,7 +66,7 @@ jobs:
             source /setup-centos9.sh
             install_adapters
             install_cuda $CUDA_VERSION
-            
+
             cd /
             rm -rf /tmp/build # cleanup to avoid issues with disk space
           fi
