@@ -13,7 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#include "Evaluation.h"
+#include "velox4j/eval/Evaluation.h"
 
 #include <folly/json/dynamic-inl.h>
 #include <velox/common/serialization/DeserializationRegistry.h>
