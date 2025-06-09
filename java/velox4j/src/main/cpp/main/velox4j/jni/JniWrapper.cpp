@@ -62,6 +62,8 @@ using namespace facebook::velox;
 namespace {
 const char* kClassName = "com/facebook/velox4j/jni/JniWrapper";
 
+/// Get the Velox4J session object that is associated with the current
+/// JniWrapper.
 Session* sessionOf(JNIEnv* env, jobject javaThis) {
   static const auto* clazz = jniClassRegistry()->get(kClassName);
   static jmethodID methodId = clazz->getMethod("sessionId");
@@ -74,8 +76,15 @@ jlong createEvaluator(JNIEnv* env, jobject javaThis, jstring evalJson) {
   JNI_METHOD_START
   auto session = sessionOf(env, javaThis);
   spotify::jni::JavaString jExprJson{env, evalJson};
+
+  auto evaluationSerdePool = session->memoryManager()->getVeloxPool(
+      "Evaluation Serde Memory Pool", memory::MemoryPool::Kind::kLeaf);
+  auto exprDynamic = folly::parseJson(jExprJson.get());
+  auto evaluation =
+      ISerializable::deserialize<Evaluation>(exprDynamic, evaluationSerdePool);
+
   auto evaluator =
-      std::make_shared<Evaluator>(session->memoryManager(), jExprJson.get());
+      std::make_shared<Evaluator>(session->memoryManager(), evaluation);
   return sessionOf(env, javaThis)->objectStore()->save(evaluator);
   JNI_METHOD_END(-1L)
 }

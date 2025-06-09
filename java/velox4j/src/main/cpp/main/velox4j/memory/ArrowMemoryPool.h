@@ -25,6 +25,8 @@
 #include "AllocationListener.h"
 
 namespace facebook::velox4j {
+/// The allocator abstraction for constructing an ArrowMemoryPool. The pool
+/// created with invoke this allocator for underlying allocations.
 class MemoryAllocator {
  public:
   virtual ~MemoryAllocator() = default;
@@ -50,7 +52,8 @@ class MemoryAllocator {
   virtual int64_t peakBytes() const = 0;
 };
 
-// The class must be thread safe
+/// An allocator decorator that listen on the allocations with a given
+/// AllocationListener then dispatch the calls to the delegated allocator.
 class ListenableMemoryAllocator final : public MemoryAllocator {
  public:
   explicit ListenableMemoryAllocator(
@@ -88,6 +91,7 @@ class ListenableMemoryAllocator final : public MemoryAllocator {
   std::atomic_int64_t peakBytes_{0L};
 };
 
+/// A simple malloc allocator.
 class StdMemoryAllocator final : public MemoryAllocator {
  public:
   bool allocate(int64_t size, void** out) override;
@@ -115,6 +119,8 @@ class StdMemoryAllocator final : public MemoryAllocator {
   std::atomic_int64_t bytes_{0};
 };
 
+/// An Arrow memory pool implementation used by Velox4J that routes Arrow
+/// allocation calls to a given MemoryAllocator.
 class ArrowMemoryPool final : public arrow::MemoryPool {
  public:
   explicit ArrowMemoryPool(MemoryAllocator* allocator)

@@ -29,6 +29,8 @@
 
 namespace facebook::velox4j {
 
+/// SerialTaskStats is a JSON-able object that wraps the task stats
+/// fetched from a Velox task.
 class SerialTaskStats {
  public:
   SerialTaskStats(const facebook::velox::exec::TaskStats& taskStats);
@@ -39,6 +41,8 @@ class SerialTaskStats {
   facebook::velox::exec::TaskStats taskStats_;
 };
 
+/// An UpIterator implementation that is backed by a Velox task which is
+/// executed in serial execution mode.
 class SerialTask : public UpIterator {
  public:
   SerialTask(MemoryManager* memoryManager, std::shared_ptr<const Query> query);
@@ -81,6 +85,7 @@ class QueryExecutor {
       MemoryManager* memoryManager,
       std::shared_ptr<const Query> query);
 
+  // Executes the query. A SerialTask will be returned.
   std::unique_ptr<SerialTask> execute() const;
 
  private:
