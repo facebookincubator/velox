@@ -20,5 +20,8 @@
 #include "velox4j/conf/Config.h"
 
 namespace facebook::velox4j {
+// Initializes Velox4J with a given configuration array.
+// Should only be called once in the same process.
+// Once called, further calls will be aborted by throwing an Exception.
 void initialize(const std::shared_ptr<ConfigArray>& configArray);
 } // namespace facebook::velox4j
