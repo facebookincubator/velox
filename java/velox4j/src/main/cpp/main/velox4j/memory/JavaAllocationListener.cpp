@@ -13,7 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#include "JavaAllocationListener.h"
+#include "velox4j/memory/JavaAllocationListener.h"
 
 #include <glog/logging.h>
 

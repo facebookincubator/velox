@@ -13,7 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#include "ArrowMemoryPool.h"
+#include "velox4j/memory/ArrowMemoryPool.h"
 
 #include <string.h>
 #include <velox/common/base/Exceptions.h>

@@ -13,7 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#include "DownIterator.h"
+#include "velox4j/iterator/DownIterator.h"
 
 #include <fmt/core.h>
 #include <folly/Unit.h>

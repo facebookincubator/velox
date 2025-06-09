@@ -13,7 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#include "ExternalStream.h"
+#include "velox4j/connector/ExternalStream.h"
 
 #include <folly/json/dynamic-inl.h>
 #include <glog/logging.h>

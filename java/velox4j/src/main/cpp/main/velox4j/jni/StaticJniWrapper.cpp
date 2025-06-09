@@ -13,7 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#include "StaticJniWrapper.h"
+#include "velox4j/jni/StaticJniWrapper.h"
 
 #include <JavaString.h>
 #include <folly/json/json.h>
