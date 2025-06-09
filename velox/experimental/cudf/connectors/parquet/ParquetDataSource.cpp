@@ -147,9 +147,9 @@ std::optional<RowVectorPtr> ParquetDataSource::next(
         *originalTable,
         *filterResult[0],
         stream_,
-        cudf::get_current_device_resource_ref());
-    totalRemainingFilterTime_.fetch_add(filterTimeUs * 1000, std::memory_order_relaxed);
+        cudf::get_current_device_resource_ref());  
   }
+  totalRemainingFilterTime_.fetch_add(filterTimeUs * 1000, std::memory_order_relaxed);
 
   // Output RowVectorPtr
   const auto nRows = cudfTable->num_rows();
