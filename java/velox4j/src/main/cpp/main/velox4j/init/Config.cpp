@@ -17,6 +17,11 @@
 
 namespace facebook::velox4j {
 using namespace facebook::velox;
+
+/// The preset used for initializing Velox4J.
+/// The initialization process will involve connector, function, fs
+/// registrations and so on.
+/// Spark is the only preset we support at this moment.
 config::ConfigBase::Entry<Preset> VELOX4J_INIT_PRESET(
     "velox4j.init.preset",
     Preset::SPARK);
