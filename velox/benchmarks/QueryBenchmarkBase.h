@@ -94,6 +94,13 @@ class QueryBenchmarkBase {
       int32_t numSplitsPerFile,
       const exec::test::TpchPlan& plan);
 
+#ifdef VELOX_ENABLE_CUDF
+  std::vector<std::shared_ptr<connector::ConnectorSplit>> listCudfSplits(
+      const std::string& path,
+      int32_t numSplitsPerFile,
+      const exec::test::TpchPlan& plan);
+#endif
+
   static void ensureTaskCompletion(exec::Task* task);
 
   static bool validateDataFormat(

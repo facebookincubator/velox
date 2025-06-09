@@ -16,6 +16,14 @@
 
 #include "velox/benchmarks/QueryBenchmarkBase.h"
 
+#ifdef VELOX_ENABLE_CUDF
+#include "velox/experimental/cudf/connectors/parquet/ParquetConfig.h"
+#include "velox/experimental/cudf/connectors/parquet/ParquetConnector.h"
+#include "velox/experimental/cudf/exec/CudfConversion.h"
+#include "velox/experimental/cudf/exec/ToCudf.h"
+#include "velox/experimental/cudf/tests/utils/ParquetConnectorTestBase.h"
+#endif
+
 DEFINE_string(data_format, "parquet", "Data format");
 
 DEFINE_validator(
@@ -89,7 +97,41 @@ DEFINE_int32(
     "prefetch. 1 means prefetch the next row group before decoding "
     "the current one");
 
+#ifdef VELOX_ENABLE_CUDF
+DEFINE_uint64(
+    cudf_chunk_read_limit,
+    0,
+    "Output table chunk read limit for cudf::parquet_chunked_reader.");
+
+DEFINE_uint64(
+    cudf_pass_read_limit,
+    0,
+    "Pass read limit for cudf::parquet_chunked_reader.");
+
+DEFINE_int32(
+    cudf_gpu_batch_size_rows,
+    100000,
+    "Preferred output batch size in rows for cudf operators.");
+#endif
+
 DEFINE_int32(split_preload_per_driver, 2, "Prefetch split metadata");
+
+DEFINE_int64(
+    preferred_output_batch_bytes,
+    10 << 20,
+    "Preferred output batch size in bytes");
+
+DEFINE_uint64(
+    max_partial_aggregation_memory,
+    10 << 20,
+    "Maximum memory usage for partial aggregation");
+
+DEFINE_int32(
+    preferred_output_batch_rows,
+    1024,
+    "Preferred output batch size in rows");
+
+DEFINE_int32(max_output_batch_rows, 10'000, "Max output batch size in rows");
 
 using namespace facebook::velox::exec;
 using namespace facebook::velox::exec::test;
@@ -195,6 +237,40 @@ void QueryBenchmarkBase::initialize() {
   connector::registerConnector(hiveConnector);
   parquet::registerParquetReaderFactory();
   dwrf::registerDwrfReaderFactory();
+
+#ifdef VELOX_ENABLE_CUDF
+  // Add new values into the parquet configuration...
+  auto parquetConfigurationValues =
+      std::unordered_map<std::string, std::string>();
+  parquetConfigurationValues
+      [cudf_velox::connector::parquet::ParquetConfig::kMaxChunkReadLimit] =
+          std::to_string(FLAGS_cudf_chunk_read_limit);
+  parquetConfigurationValues
+      [cudf_velox::connector::parquet::ParquetConfig::kMaxPassReadLimit] =
+          std::to_string(FLAGS_cudf_pass_read_limit);
+  parquetConfigurationValues[cudf_velox::connector::parquet::ParquetConfig::
+                                 kAllowMismatchedParquetSchemas] =
+      std::to_string(true);
+  auto parquetProperties = std::make_shared<const config::ConfigBase>(
+      std::move(parquetConfigurationValues));
+
+  // Create parquet connector with config...
+  connector::registerConnectorFactory(
+      std::make_shared<
+          cudf_velox::connector::parquet::ParquetConnectorFactory>());
+  auto parquetConnector =
+      connector::getConnectorFactory(
+          cudf_velox::connector::parquet::ParquetConnectorFactory::
+              kParquetConnectorName)
+          ->newConnector(
+              cudf_velox::exec::test::kParquetConnectorId,
+              parquetProperties,
+              ioExecutor_.get());
+  connector::registerConnector(parquetConnector);
+
+  // Enable cuDF operators
+  cudf_velox::registerCudf();
+#endif
 }
 
 std::vector<std::shared_ptr<connector::ConnectorSplit>>
@@ -211,7 +287,30 @@ QueryBenchmarkBase::listSplits(
   return result;
 }
 
+#ifdef VELOX_ENABLE_CUDF
+std::vector<std::shared_ptr<connector::ConnectorSplit>>
+QueryBenchmarkBase::listCudfSplits(
+    const std::string& path,
+    int32_t /*numSplitsPerFile*/,
+    const exec::test::TpchPlan& plan) {
+  std::vector<std::shared_ptr<connector::ConnectorSplit>> result;
+  auto temp = cudf_velox::exec::test::ParquetConnectorTestBase::
+      makeParquetConnectorSplits(path, 1);
+  for (auto& i : temp) {
+    result.push_back(i);
+  }
+  return result;
+}
+#endif
+
 void QueryBenchmarkBase::shutdown() {
+#ifdef VELOX_ENABLE_CUDF
+  cudf_velox::unregisterCudf();
+  connector::unregisterConnector(cudf_velox::exec::test::kParquetConnectorId);
+  connector::unregisterConnectorFactory(
+      cudf_velox::connector::parquet::ParquetConnectorFactory::
+          kParquetConnectorName);
+#endif
   if (cache_) {
     cache_->shutdown();
   }
@@ -227,6 +326,18 @@ QueryBenchmarkBase::run(const TpchPlan& tpchPlan) {
       params.planNode = tpchPlan.plan;
       params.queryConfigs[core::QueryConfig::kMaxSplitPreloadPerDriver] =
           std::to_string(FLAGS_split_preload_per_driver);
+      params.queryConfigs[core::QueryConfig::kPreferredOutputBatchBytes] =
+          std::to_string(FLAGS_preferred_output_batch_bytes);
+      params.queryConfigs[core::QueryConfig::kPreferredOutputBatchRows] =
+          std::to_string(FLAGS_preferred_output_batch_rows);
+      params.queryConfigs[core::QueryConfig::kMaxOutputBatchRows] =
+          std::to_string(FLAGS_max_output_batch_rows);
+#ifdef VELOX_ENABLE_CUDF
+      params.queryConfigs[cudf_velox::CudfFromVelox::kGpuBatchSizeRows] =
+          std::to_string(FLAGS_cudf_gpu_batch_size_rows);
+#endif
+      params.queryConfigs[core::QueryConfig::kMaxPartialAggregationMemory] =
+          std::to_string(FLAGS_max_partial_aggregation_memory);
       const int numSplitsPerFile = FLAGS_num_splits_per_file;
 
       auto addSplits = [&](TaskCursor* taskCursor) {
@@ -234,7 +345,17 @@ QueryBenchmarkBase::run(const TpchPlan& tpchPlan) {
         if (!taskCursor->noMoreSplits()) {
           for (const auto& entry : tpchPlan.dataFiles) {
             for (const auto& path : entry.second) {
+#ifdef VELOX_ENABLE_CUDF
+              auto splits = facebook::velox::cudf_velox::cudfIsRegistered() &&
+                      facebook::velox::connector::getAllConnectors().count(
+                          cudf_velox::exec::test::kParquetConnectorId) > 0 &&
+                      facebook::velox::cudf_velox::cudfTableScanEnabled()
+                  ? listCudfSplits(
+                        path, 1 /* numSplitsPerFile = 1 for cudf */, tpchPlan)
+                  : listSplits(path, numSplitsPerFile, tpchPlan);
+#else
               auto splits = listSplits(path, numSplitsPerFile, tpchPlan);
+#endif
               for (auto split : splits) {
                 task->addSplit(entry.first, exec::Split(std::move(split)));
               }
