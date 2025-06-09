@@ -40,6 +40,7 @@ import com.facebook.velox4j.type.Type;
 import com.facebook.velox4j.variant.Variant;
 import com.facebook.velox4j.variant.VariantCo;
 
+/** The higher-level JNI-based API over {@link StaticJniWrapper}. */
 public class StaticJniApi {
   private static final StaticJniApi INSTANCE = new StaticJniApi();
 
