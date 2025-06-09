@@ -42,10 +42,8 @@ class JavaAllocationListenerJniWrapper final : public spotify::jni::JavaClass {
 /// the methods with the same name in Java-side through JNI.
 class JavaAllocationListener : public AllocationListener {
  public:
-  // CTOR.
   JavaAllocationListener(JNIEnv* env, jobject ref);
 
-  // DTOR.
   ~JavaAllocationListener() override;
 
   void allocationChanged(int64_t diff) override;

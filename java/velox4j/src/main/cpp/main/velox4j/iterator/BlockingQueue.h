@@ -38,7 +38,6 @@ class BlockingQueue : public ExternalStream {
 
   static std::string stateToString(State state);
 
-  // CTOR.
   BlockingQueue();
 
   // Delete copy/move CTORs.
@@ -47,7 +46,6 @@ class BlockingQueue : public ExternalStream {
   BlockingQueue& operator=(const BlockingQueue&) = delete;
   BlockingQueue& operator=(BlockingQueue&&) = delete;
 
-  // DTOR.
   ~BlockingQueue() override;
 
   std::optional<facebook::velox::RowVectorPtr> read(
