@@ -17,6 +17,7 @@
 #include "velox/dwio/parquet/reader/ParquetData.h"
 
 #include "velox/dwio/common/BufferedInput.h"
+#include "velox/dwio/common/Options.h"
 #include "velox/dwio/parquet/reader/ParquetStatsContext.h"
 
 namespace facebook::velox::parquet {
@@ -84,7 +85,12 @@ bool ParquetData::rowGroupMatches(uint32_t rowGroupId, common::Filter* filter) {
   if (columnChunk.hasStatistics()) {
     auto columnStats =
         columnChunk.getColumnStatistics(type, rowGroup.numRows());
-    return testFilter(filter, columnStats.get(), rowGroup.numRows(), type);
+    return testFilter(
+        filter,
+        columnStats.get(),
+        rowGroup.numRows(),
+        type,
+        dwio::common::FileFormat::PARQUET);
   }
   return true;
 }
