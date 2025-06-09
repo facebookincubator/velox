@@ -27,7 +27,6 @@ class UpIterator {
  public:
   enum class State { AVAILABLE = 0, BLOCKED = 1, FINISHED = 2 };
 
-  // CTOR.
   UpIterator() = default;
 
   // Delete copy/move CTORs.
@@ -36,7 +35,6 @@ class UpIterator {
   UpIterator& operator=(const UpIterator&) = delete;
   UpIterator& operator=(UpIterator&&) = delete;
 
-  // DTOR.
   virtual ~UpIterator() = default;
 
   // Get the next state.

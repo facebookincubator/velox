@@ -55,7 +55,6 @@ class DownIterator : public ExternalStream {
  public:
   enum class State { AVAILABLE = 0, BLOCKED = 1, FINISHED = 2 };
 
-  // CTOR.
   DownIterator(JNIEnv* env, jobject ref);
 
   // Delete copy/move CTORs.
@@ -64,7 +63,6 @@ class DownIterator : public ExternalStream {
   DownIterator& operator=(const DownIterator&) = delete;
   DownIterator& operator=(DownIterator&&) = delete;
 
-  // DTOR.
   ~DownIterator() override;
 
   std::optional<facebook::velox::RowVectorPtr> read(
