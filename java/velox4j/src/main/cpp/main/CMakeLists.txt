@@ -25,7 +25,6 @@ add_library(
   velox4j/iterator/UpIterator.cpp
   velox4j/iterator/DownIterator.cpp
   velox4j/lifecycle/ObjectStore.cpp
-  velox4j/lifecycle/Session.cpp
   velox4j/arrow/Arrow.cpp
   velox4j/query/Query.cpp
   velox4j/query/QueryExecutor.cpp
