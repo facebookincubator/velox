@@ -20,6 +20,9 @@
 #include <jni.h>
 
 namespace facebook::velox4j {
+/// A static JNI wrapper that is independent to any JNI sessions.
+/// All the JNI methods defined in the static JNI wrapper are globally
+/// available without having to create a session first.
 class StaticJniWrapper final : public spotify::jni::JavaClass {
  public:
   explicit StaticJniWrapper(JNIEnv* env) : JavaClass(env) {

@@ -72,53 +72,11 @@ jclass createGlobalClassReference(JNIEnv* env, const char* className) {
 jclass createGlobalClassReferenceOrError(JNIEnv* env, const char* className) {
   jclass globalClass = createGlobalClassReference(env, className);
   if (globalClass == nullptr) {
-    std::string errorMessage =
-        "Unable to CreateGlobalClassReferenceOrError for" +
+    std::string errorMessage = "Unable to create a global class reference for" +
         std::string(className);
     VELOX_FAIL(errorMessage);
   }
   return globalClass;
-}
-
-jmethodID
-getMethodId(JNIEnv* env, jclass thisClass, const char* name, const char* sig) {
-  jmethodID ret = env->GetMethodID(thisClass, name, sig);
-  return ret;
-}
-
-jmethodID getMethodIdOrError(
-    JNIEnv* env,
-    jclass thisClass,
-    const char* name,
-    const char* sig) {
-  jmethodID ret = getMethodId(env, thisClass, name, sig);
-  if (ret == nullptr) {
-    std::string errorMessage = "Unable to find method " + std::string(name) +
-        " within signature" + std::string(sig);
-    VELOX_FAIL(errorMessage);
-  }
-  return ret;
-}
-jmethodID getStaticMethodId(
-    JNIEnv* env,
-    jclass thisClass,
-    const char* name,
-    const char* sig) {
-  jmethodID ret = env->GetStaticMethodID(thisClass, name, sig);
-  return ret;
-}
-jmethodID getStaticMethodIdOrError(
-    JNIEnv* env,
-    jclass thisClass,
-    const char* name,
-    const char* sig) {
-  jmethodID ret = getStaticMethodId(env, thisClass, name, sig);
-  if (ret == nullptr) {
-    std::string errorMessage = "Unable to find static method " +
-        std::string(name) + " within signature" + std::string(sig);
-    VELOX_FAIL(errorMessage);
-  }
-  return ret;
 }
 
 JNIEnv* getLocalJNIEnv() {
@@ -144,14 +102,6 @@ JNIEnv* getLocalJNIEnv() {
   JNIEnv* env = spotify::jni::JavaThreadUtils::getEnvForCurrentThread();
   VELOX_CHECK(env != nullptr);
   return env;
-}
-
-template <typename T>
-T* jniCastOrThrow(jlong handle) {
-  auto instance = reinterpret_cast<T*>(handle);
-  VELOX_CHECK(
-      instance != nullptr, "FATAL: resource instance should not be null.");
-  return instance;
 }
 
 spotify::jni::ClassRegistry* jniClassRegistry() {

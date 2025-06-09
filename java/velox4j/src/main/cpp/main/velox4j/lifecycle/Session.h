@@ -21,6 +21,8 @@
 #include "velox4j/memory/MemoryManager.h"
 
 namespace facebook::velox4j {
+
+/// A JNI session that is bound to a JniWrapper.
 class Session {
  public:
   explicit Session(MemoryManager* memoryManager)

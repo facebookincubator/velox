@@ -24,6 +24,8 @@
 #include "velox4j/conf/Config.h"
 
 namespace facebook::velox4j {
+/// An immutable JSON-able object that represents a query that is associated
+/// with a given Velox query plan and the corresponding query configurations.
 class Query : public facebook::velox::ISerializable {
  public:
   Query(
