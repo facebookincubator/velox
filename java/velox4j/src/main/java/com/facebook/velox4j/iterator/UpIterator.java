@@ -23,6 +23,10 @@ import com.google.common.base.Preconditions;
 import com.facebook.velox4j.data.RowVector;
 import com.facebook.velox4j.jni.CppObject;
 
+/**
+ * An up-iterator is the opposite of down-iterator. It transmits data that is output from Velox
+ * pipeline from C++ to Java.
+ */
 public interface UpIterator extends CppObject {
   enum State {
     AVAILABLE(0),
@@ -53,9 +57,15 @@ public interface UpIterator extends CppObject {
     }
   }
 
+  /** Gets the next state. */
   State advance();
 
+  /**
+   * Called once `advance` returns `BLOCKED` state to wait until the state gets refreshed, either by
+   * the next row-vector is ready for reading or by end of stream.
+   */
   void waitFor();
 
+  /** Called to close the iterator. */
   RowVector get();
 }

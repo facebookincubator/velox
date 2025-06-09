@@ -37,7 +37,7 @@ class UpIterator {
 
   virtual ~UpIterator() = default;
 
-  // Get the next state.
+  // Gets the next state.
   virtual State advance() = 0;
   /// Called once `advance` returns `BLOCKED` state to wait until
   /// the state gets refreshed, either by the next row-vector

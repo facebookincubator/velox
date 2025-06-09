@@ -18,6 +18,7 @@ package com.facebook.velox4j.query;
 import com.facebook.velox4j.jni.CppObject;
 import com.facebook.velox4j.jni.JniApi;
 
+/** An API for executing a Velox query plan. */
 public class QueryExecutor implements CppObject {
   private final JniApi jniApi;
   private final long id;

@@ -15,4 +15,8 @@
  */
 package com.facebook.velox4j.serde;
 
+/**
+ * A native bean can be serialized to JSON then be read by C++ code to be deserialized into a C++
+ * object.
+ */
 public interface NativeBean {}

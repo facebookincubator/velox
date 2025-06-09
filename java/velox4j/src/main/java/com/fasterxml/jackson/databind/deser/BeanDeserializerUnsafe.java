@@ -17,6 +17,7 @@ package com.fasterxml.jackson.databind.deser;
 
 import java.util.Set;
 
+/** Package-hacking the protected APIs of BeanDeserializer for Velox4J's use. */
 public final class BeanDeserializerUnsafe {
   public static Set<String> getIgnorableProps(BeanDeserializer beanDeserializer) {
     return beanDeserializer._ignorableProps;

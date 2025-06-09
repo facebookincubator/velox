@@ -69,7 +69,7 @@ class DownIterator : public ExternalStream {
       facebook::velox::ContinueFuture& future) override;
 
  private:
-  // Get the next state.
+  // Gets the next state.
   State advance();
   /// Called once `advance` returns `BLOCKED` state to wait until
   /// the state gets refreshed, either by the next row-vector

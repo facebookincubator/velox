@@ -21,6 +21,12 @@ import com.facebook.velox4j.data.SelectivityVector;
 import com.facebook.velox4j.jni.CppObject;
 import com.facebook.velox4j.jni.JniApi;
 
+/**
+ * An API to evaluate a Velox expression for a series of row-vector inputs.
+ *
+ * <p>There are no drivers created for evaluators, so it's user's job to invoke the `eval` API to do
+ * the evaluation.
+ */
 public class Evaluator implements CppObject {
   private final JniApi jniApi;
   private final long id;
@@ -39,6 +45,13 @@ public class Evaluator implements CppObject {
     return id;
   }
 
+  /**
+   * Evaluate the expression with given row-vector input.
+   *
+   * @param sv A selection vector for evaluating only the selected rows.
+   * @param input The input row-vector.
+   * @return The resulted vector.
+   */
   public BaseVector eval(SelectivityVector sv, RowVector input) {
     return jniApi.evaluatorEval(this, sv, input);
   }
