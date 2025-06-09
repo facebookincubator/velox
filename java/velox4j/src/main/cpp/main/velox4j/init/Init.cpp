@@ -13,7 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#include "Init.h"
+#include "velox4j/init/Init.h"
 
 #include <folly/Conv.h>
 #include <velox/common/base/Exceptions.h>

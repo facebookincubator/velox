@@ -13,7 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#include "QueryExecutor.h"
+#include "velox4j/query/QueryExecutor.h"
 
 #include <fmt/core.h>
 #include <glog/logging.h>

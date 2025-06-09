@@ -13,7 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#include "AllocationListener.h"
+#include "velox4j/memory/AllocationListener.h"
 
 namespace facebook::velox4j {
 
