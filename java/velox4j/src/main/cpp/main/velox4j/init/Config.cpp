@@ -13,7 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#include "Config.h"
+#include "velox4j/init/Config.h"
 
 namespace facebook::velox4j {
 using namespace facebook::velox;

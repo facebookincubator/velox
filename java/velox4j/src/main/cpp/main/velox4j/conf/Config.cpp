@@ -13,7 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#include "Config.h"
+#include "velox4j/conf/Config.h"
 
 #include <velox/common/base/Exceptions.h>
 #include <velox/common/serialization/DeserializationRegistry.h>
