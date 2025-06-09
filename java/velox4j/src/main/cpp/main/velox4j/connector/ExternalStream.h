@@ -44,6 +44,12 @@ class SuspendedSection {
   facebook::velox::exec::Driver* const driver_;
 };
 
+/// An ExternalStream represents a stream of row-vectors that is created
+/// by caller with arbitrary implementations.
+///
+/// The data in the stream will be read by the built-in connector
+/// `ExternalStreamConnector` through a split that wraps the external stream,
+/// i.e., `ExternalStreamConnectorSplit`.
 class ExternalStream {
  public:
   ExternalStream() = default;
