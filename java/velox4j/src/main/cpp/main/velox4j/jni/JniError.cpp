@@ -51,17 +51,18 @@ jclass JniErrorState::veloxExceptionClass() {
 }
 
 void JniErrorState::initialize(JNIEnv* env) {
-  veloxExceptionClass_ = createGlobalClassReference(
+  veloxExceptionClass_ = createGlobalClassReferenceOrError(
       env, "Lcom/facebook/velox4j/exception/VeloxException;");
-  ioExceptionClass_ = createGlobalClassReference(env, "Ljava/io/IOException;");
+  ioExceptionClass_ =
+      createGlobalClassReferenceOrError(env, "Ljava/io/IOException;");
   runtimeExceptionClass_ =
-      createGlobalClassReference(env, "Ljava/lang/RuntimeException;");
-  unsupportedOperationExceptionClass_ = createGlobalClassReference(
+      createGlobalClassReferenceOrError(env, "Ljava/lang/RuntimeException;");
+  unsupportedOperationExceptionClass_ = createGlobalClassReferenceOrError(
       env, "Ljava/lang/UnsupportedOperationException;");
-  illegalAccessExceptionClass_ =
-      createGlobalClassReference(env, "Ljava/lang/IllegalAccessException;");
-  illegalArgumentExceptionClass_ =
-      createGlobalClassReference(env, "Ljava/lang/IllegalArgumentException;");
+  illegalAccessExceptionClass_ = createGlobalClassReferenceOrError(
+      env, "Ljava/lang/IllegalAccessException;");
+  illegalArgumentExceptionClass_ = createGlobalClassReferenceOrError(
+      env, "Ljava/lang/IllegalArgumentException;");
   JavaVM* vm;
   if (env->GetJavaVM(&vm) != JNI_OK) {
     VELOX_FAIL("Unable to get JavaVM instance");

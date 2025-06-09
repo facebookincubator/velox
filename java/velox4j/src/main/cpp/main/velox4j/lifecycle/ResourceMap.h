@@ -36,7 +36,7 @@ T safeCast(F f) {
 }
 
 /**
- * An utility class that map resource handle to its shared pointers.
+ * A utility class that map resource handle to its shared pointers.
  * Not thread-safe.
  * @tparam TResource class of the object to hold.
  */
