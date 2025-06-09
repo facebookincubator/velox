@@ -37,7 +37,8 @@ class Evaluator {
  private:
   const std::string exprJson_;
   std::shared_ptr<facebook::velox::core::QueryCtx> queryCtx_;
-  std::unique_ptr<facebook::velox::core::ExpressionEvaluator> ee_;
+  std::unique_ptr<facebook::velox::core::ExpressionEvaluator>
+      expressionEvaluator_;
   std::unique_ptr<facebook::velox::exec::ExprSet> exprSet_;
 };
 } // namespace facebook::velox4j

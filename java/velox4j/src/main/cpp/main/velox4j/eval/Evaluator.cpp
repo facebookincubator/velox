@@ -59,20 +59,20 @@ Evaluator::Evaluator(MemoryManager* memoryManager, const std::string& exprJson)
           ->shared_from_this(),
       nullptr,
       fmt::format("Evaluator Context - EID {}", std::to_string(eid)));
-  ee_ = std::make_unique<exec::SimpleExpressionEvaluator>(
+  expressionEvaluator_ = std::make_unique<exec::SimpleExpressionEvaluator>(
       queryCtx_.get(),
       memoryManager->getVeloxPool(
           fmt::format(
               "Evaluator Leaf Memory Pool - EID {}", std::to_string(eid)),
           memory::MemoryPool::Kind::kLeaf));
-  exprSet_ = ee_->compile(expr->expr());
+  exprSet_ = expressionEvaluator_->compile(expr->expr());
 }
 
 VectorPtr Evaluator::eval(
     const SelectivityVector& rows,
     const RowVector& input) {
   VectorPtr vector{};
-  ee_->evaluate(exprSet_.get(), rows, input, vector);
+  expressionEvaluator_->evaluate(exprSet_.get(), rows, input, vector);
   VELOX_CHECK_NOT_NULL(vector, "Failed to evaluate expression");
   return vector;
 }
