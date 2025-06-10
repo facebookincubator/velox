@@ -256,18 +256,19 @@ class HiveIcebergTest : public HiveConnectorTestBase {
     const uint64_t splitSize = std::floor((fileSize) / splitCount);
 
     for (int i = 0; i < splitCount; ++i) {
-      splits.emplace_back(std::make_shared<HiveIcebergSplit>(
-          kHiveConnectorId,
-          dataFilePath,
-          fileFomat_,
-          i * splitSize,
-          splitSize,
-          partitionKeys,
-          std::nullopt,
-          customSplitInfo,
-          nullptr,
-          /*cacheable=*/true,
-          deleteFiles));
+      splits.emplace_back(
+          std::make_shared<HiveIcebergSplit>(
+              kHiveConnectorId,
+              dataFilePath,
+              fileFomat_,
+              i * splitSize,
+              splitSize,
+              partitionKeys,
+              std::nullopt,
+              customSplitInfo,
+              nullptr,
+              /*cacheable=*/true,
+              deleteFiles));
     }
 
     return splits;
