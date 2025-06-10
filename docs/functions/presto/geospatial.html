@@ -265,6 +265,19 @@ Empty geometry inputs result in empty output.</p>
 </dd></dl>
 
 <dl class="py function">
+<dt class="sig sig-object py" id="ST_Distance">
+<span class="sig-name descname"><span class="pre">ST_Distance</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">geometry1</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">Geometry</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">geometry2</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">Geometry</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">distance:</span> <span class="pre">double</span></span></span><a class="headerlink" href="#ST_Distance" title="Link to this definition">¶</a></dt>
+<dd><p>Returns the 2-dimensional cartesian minimum distance (based on spatial ref)
+between two geometries in projected units. Empty geometries result in null output.</p>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="ST_GeometryType">
+<span class="sig-name descname"><span class="pre">ST_GeometryType</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">geometry</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">Geometry</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">type:</span> <span class="pre">varchar</span></span></span><a class="headerlink" href="#ST_GeometryType" title="Link to this definition">¶</a></dt>
+<dd><p>Returns the type of the geometry.</p>
+</dd></dl>
+
+<dl class="py function">
 <dt class="sig sig-object py" id="ST_X">
 <span class="sig-name descname"><span class="pre">ST_X</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">geometry</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">Geometry</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">x:</span> <span class="pre">double</span></span></span><a class="headerlink" href="#ST_X" title="Link to this definition">¶</a></dt>
 <dd><p>Returns the <code class="docutils literal notranslate"><span class="pre">x</span></code> coordinate of the geometry if it is a Point.  Returns
@@ -450,6 +463,8 @@ specified.</p>
 <li><a class="reference internal" href="#geometry_invalid_reason"><code class="docutils literal notranslate"><span class="pre">geometry_invalid_reason()</span></code></a></li>
 <li><a class="reference internal" href="#ST_Area"><code class="docutils literal notranslate"><span class="pre">ST_Area()</span></code></a></li>
 <li><a class="reference internal" href="#ST_Centroid"><code class="docutils literal notranslate"><span class="pre">ST_Centroid()</span></code></a></li>
+<li><a class="reference internal" href="#ST_Distance"><code class="docutils literal notranslate"><span class="pre">ST_Distance()</span></code></a></li>
+<li><a class="reference internal" href="#ST_GeometryType"><code class="docutils literal notranslate"><span class="pre">ST_GeometryType()</span></code></a></li>
 <li><a class="reference internal" href="#ST_X"><code class="docutils literal notranslate"><span class="pre">ST_X()</span></code></a></li>
 <li><a class="reference internal" href="#ST_Y"><code class="docutils literal notranslate"><span class="pre">ST_Y()</span></code></a></li>
 <li><a class="reference internal" href="#ST_XMin"><code class="docutils literal notranslate"><span class="pre">ST_XMin()</span></code></a></li>
