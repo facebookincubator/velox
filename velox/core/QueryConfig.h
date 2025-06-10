@@ -263,6 +263,13 @@ class QueryConfig {
   static constexpr const char* kTopNRowNumberSpillEnabled =
       "topn_row_number_spill_enabled";
 
+  /// LocalMerge spilling flag, only applies if "spill_enabled" flag is set.
+  static constexpr const char* kLocalMergeSpillEnabled = "local_merge_enabled";
+
+  /// Specify the max number of local sources to merge at a time.
+  static constexpr const char* kLocalMergeMaxNumMergeSources =
+      "local_merge_max_num_merge_sources";
+
   /// The max row numbers to fill and spill for each spill run. This is used to
   /// cap the memory used for spilling. If it is zero, then there is no limit
   /// and spilling might run out of memory.
@@ -454,9 +461,14 @@ class QueryConfig {
   /// Base dir of a query to store tracing data.
   static constexpr const char* kQueryTraceDir = "query_trace_dir";
 
-  /// A comma-separated list of plan node ids whose input data will be traced.
+  /// @Deprecated. Do not use. Remove once existing call sites are updated.
+  /// The plan node id whose input data will be traced.
   /// Empty string if only want to trace the query metadata.
-  static constexpr const char* kQueryTraceNodeIds = "query_trace_node_ids";
+  static constexpr const char* kQueryTraceNodeIds = "query_trace_node_id";
+
+  /// The plan node id whose input data will be traced.
+  /// Empty string if only want to trace the query metadata.
+  static constexpr const char* kQueryTraceNodeId = "query_trace_node_id";
 
   /// The max trace bytes limit. Tracing is disabled if zero.
   static constexpr const char* kQueryTraceMaxBytes = "query_trace_max_bytes";
@@ -465,6 +477,10 @@ class QueryConfig {
   /// matches.
   static constexpr const char* kQueryTraceTaskRegExp =
       "query_trace_task_reg_exp";
+
+  /// If true, we only collect the input trace for a given operator but without
+  /// the actual execution.
+  static constexpr const char* kQueryTraceDryRun = "query_trace_dry_run";
 
   /// Config used to create operator trace directory. This config is provided to
   /// underlying file system and the config is free form. The form should be
@@ -514,6 +530,17 @@ class QueryConfig {
   /// sizes.
   static constexpr const char* kDebugLambdaFunctionEvaluationBatchSize =
       "debug_lambda_function_evaluation_batch_size";
+
+  /// The UDF `bing_tile_children` generates the children of a Bing tile based
+  /// on a specified target zoom level. The number of children produced is
+  /// determined by the difference between the target zoom level and the zoom
+  /// level of the input tile. This configuration limits the number of children
+  /// by capping the maximum zoom level difference, with a default value set
+  /// to 5. This cap is necessary to prevent excessively large array outputs,
+  /// which can exceed the size limits of the elements vector in the Velox array
+  /// vector.
+  static constexpr const char* kDebugBingTileChildrenMaxZoomShift =
+      "debug_bing_tile_children_max_zoom_shift";
 
   /// Temporary flag to control whether selective Nimble reader should be used
   /// in this query or not.  Will be removed after the selective Nimble reader
@@ -599,6 +626,18 @@ class QueryConfig {
   static constexpr const char* kFieldNamesInJsonCastEnabled =
       "field_names_in_json_cast_enabled";
 
+  /// If this is true, then operators that evaluate expressions will track their
+  /// stats and return them as part of their operator stats. Tracking these
+  /// stats can be expensive (especially if operator stats are retrieved
+  /// frequently) and this allows the user to explicitly enable it.
+  static constexpr const char* kOperatorTrackExpressionStats =
+      "operator_track_expression_stats";
+
+  /// If this is true, then the unnest operator might split output for each
+  /// input batch based on the output batch size control. Otherwise, it produces
+  /// a single output for each input batch.
+  static constexpr const char* kUnnestSplitOutput = "unnest_split_output";
+
   bool selectiveNimbleReaderEnabled() const {
     return get<bool>(kSelectiveNimbleReaderEnabled, false);
   }
@@ -630,6 +669,10 @@ class QueryConfig {
 
   int32_t debugLambdaFunctionEvaluationBatchSize() const {
     return get<int32_t>(kDebugLambdaFunctionEvaluationBatchSize, 10'000);
+  }
+
+  uint8_t debugBingTileChildrenMaxZoomShift() const {
+    return get<uint8_t>(kDebugBingTileChildrenMaxZoomShift, 5);
   }
 
   uint64_t queryMaxMemoryPerNode() const {
@@ -839,6 +882,17 @@ class QueryConfig {
     return get<bool>(kTopNRowNumberSpillEnabled, true);
   }
 
+  bool localMergeSpillEnabled() const {
+    return get<bool>(kLocalMergeSpillEnabled, false);
+  }
+
+  uint32_t localMergeMaxNumMergeSources() const {
+    const auto maxNumMergeSources = get<uint32_t>(
+        kLocalMergeMaxNumMergeSources, std::numeric_limits<uint32_t>::max());
+    VELOX_CHECK_GT(maxNumMergeSources, 0);
+    return maxNumMergeSources;
+  }
+
   int32_t maxSpillLevel() const {
     return get<int32_t>(kMaxSpillLevel, 1);
   }
@@ -905,9 +959,15 @@ class QueryConfig {
     return get<std::string>(kQueryTraceDir, "");
   }
 
+  /// @Deprecated. Do not use. Remove once existing call sites are updated.
   std::string queryTraceNodeIds() const {
-    // The default query trace nodes, empty by default.
-    return get<std::string>(kQueryTraceNodeIds, "");
+    // Use the new config kQueryTraceNodeId.
+    return get<std::string>(kQueryTraceNodeId, "");
+  }
+
+  std::string queryTraceNodeId() const {
+    // The default query trace node ID, empty by default.
+    return get<std::string>(kQueryTraceNodeId, "");
   }
 
   uint64_t queryTraceMaxBytes() const {
@@ -917,6 +977,10 @@ class QueryConfig {
   std::string queryTraceTaskRegExp() const {
     // The default query trace task regexp, empty by default.
     return get<std::string>(kQueryTraceTaskRegExp, "");
+  }
+
+  bool queryTraceDryRun() const {
+    return get<bool>(kQueryTraceDryRun, false);
   }
 
   std::string opTraceDirectoryCreateConfig() const {
@@ -1088,6 +1152,14 @@ class QueryConfig {
 
   bool isFieldNamesInJsonCastEnabled() const {
     return get<bool>(kFieldNamesInJsonCastEnabled, false);
+  }
+
+  bool operatorTrackExpressionStats() const {
+    return get<bool>(kOperatorTrackExpressionStats, false);
+  }
+
+  bool unnestSplitOutput() const {
+    return get<bool>(kUnnestSplitOutput, true);
   }
 
   template <typename T>

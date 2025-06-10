@@ -131,6 +131,11 @@ function you are using.
 Spatial Operations
 ------------------
 
+.. function:: ST_Boundary(geometry: Geometry) -> boundary: Geometry
+
+    Returns the closure of the combinatorial boundary of ``geometry``.
+     Empty geometry inputs result in empty output.
+
 .. function:: ST_Difference(geometry1: Geometry, geometry2: Geometry) -> difference: Geometry
 
     Returns the geometry that represents the portion of ``geometry1`` that is
@@ -165,6 +170,11 @@ Accessors
     Examples of non-simple geometries include LineStrings with self-intersections,
     Polygons with empty rings for holes, and more.
 
+.. function:: geometry_invalid_reason(geometry: Geometry) -> reason: varchar
+
+    If ``geometry`` is not valid or not simple, return a description of the
+    reason. If the geometry is valid and simple (or ``NULL``), return ``NULL``.
+    This function is relatively expensive.
 
 .. function:: ST_Area(geometry: Geometry) -> area: double
 
@@ -172,6 +182,20 @@ Accessors
     For Point and LineString types, returns 0.0. For GeometryCollection types,
     returns the sum of the areas of the individual geometries. Empty geometries
     return 0.
+
+.. function:: ST_Centroid(geometry: Geometry) -> geometry: Geometry
+
+    Returns the point value that is the mathematical centroid of ``geometry``.
+    Empty geometry inputs result in empty output.
+
+.. function:: ST_Distance(geometry1: Geometry, geometry2: Geometry) -> distance: double
+
+    Returns the 2-dimensional cartesian minimum distance (based on spatial ref)
+    between two geometries in projected units. Empty geometries result in null output.
+
+.. function:: ST_GeometryType(geometry: Geometry) -> type: varchar
+
+    Returns the type of the geometry.
 
 .. function:: ST_X(geometry: Geometry) -> x: double
 
@@ -184,6 +208,34 @@ Accessors
     Returns the ``y`` coordinate of the geometry if it is a Point.  Returns
     ``null`` if the geometry is empty.  Raises an error if the geometry is
     not a Point and not empty.
+
+.. function:: ST_XMin(geometry: Geometry) -> x: double
+
+    Returns the minimum ``x`` coordinate of the geometries bounding box.
+    Returns ``null`` if the geometry is empty.
+
+.. function:: ST_YMin(geometry: Geometry) -> y: double
+
+    Returns the minimum ``y`` coordinate of the geometries bounding box.
+    Returns ``null`` if the geometry is empty.
+
+.. function:: ST_XMax(geometry: Geometry) -> x: double
+
+    Returns the maximum ``x`` coordinate of the geometries bounding box.
+    Returns ``null`` if the geometry is empty.
+
+.. function:: ST_YMax(geometry: Geometry) -> y: double
+
+    Returns the maximum ``y`` coordinate of the geometries bounding box.
+    Returns ``null`` if the geometry is empty.
+
+.. function:: simplify_geometry(geometry: Geometry, tolerance: double) -> output: Geometry
+
+    Returns a "simplified" version of the input geometry using the
+    Douglas-Peucker algorithm. Will avoid creating geometries (polygons in
+    particular) that are invalid. Tolerance must be a non-negative finite value.
+    Using tolerance of 0 will return the original geometry.  Empty geometries
+    will also be returned as-is.
 
 Bing Tile Functions
 -------------------

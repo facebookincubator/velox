@@ -419,9 +419,9 @@ void TableEvolutionFuzzer::run() {
   std::vector<std::unique_ptr<TaskCursor>> scanTasks(2);
 
   scanTasks[0] = makeScanTask(
-      rowType, std::move(actualSplits), true, subfieldFilterConfig);
+      rowType, std::move(actualSplits), subfieldFilterConfig, false);
   scanTasks[1] = makeScanTask(
-      rowType, std::move(expectedSplits), true, subfieldFilterConfig);
+      rowType, std::move(expectedSplits), subfieldFilterConfig, true);
 
   auto scanResults = runTaskCursors(scanTasks, *executor);
 
@@ -594,15 +594,15 @@ VectorPtr TableEvolutionFuzzer::liftToPrimitiveType(
 std::unique_ptr<TaskCursor> TableEvolutionFuzzer::makeScanTask(
     const RowTypePtr& tableSchema,
     std::vector<Split> splits,
-    bool hasPushDown,
-    const PushdownConfig& pushdownConfig) {
+    const PushdownConfig& pushdownConfig,
+    bool useFiltersAsNode) {
   CursorParameters params;
   params.serialExecution = true;
   // TODO: Mix in filter and aggregate pushdowns.
   params.planNode = PlanBuilder()
-                        .tableScan(
+                        .filtersAsNode(useFiltersAsNode)
+                        .tableScanWithPushDown(
                             tableSchema,
-                            hasPushDown,
                             /*pushdownConfig=*/pushdownConfig,
                             /*remainingFilter=*/"",
                             tableSchema,

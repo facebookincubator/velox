@@ -107,34 +107,22 @@ PlanBuilder& PlanBuilder::tableScan(
       .endTableScan();
 }
 
-PlanBuilder& PlanBuilder::tableScan(
+PlanBuilder& PlanBuilder::tableScanWithPushDown(
     const RowTypePtr& outputType,
-    bool hasPushDown,
     const PushdownConfig& pushdownConfig,
     const std::string& remainingFilter,
     const RowTypePtr& dataColumns,
     const std::unordered_map<
         std::string,
         std::shared_ptr<connector::ColumnHandle>>& assignments) {
-  if (hasPushDown) {
-    return TableScanBuilder(*this)
-        .filtersAsNode(filtersAsNode_ ? planNodeIdGenerator_ : nullptr)
-        .outputType(outputType)
-        .assignments(assignments)
-        .subfieldFiltersMap(pushdownConfig.subfieldFiltersMap)
-        .remainingFilter(remainingFilter)
-        .dataColumns(dataColumns)
-        .endTableScan();
-  } else {
-    return TableScanBuilder(*this)
-        .filtersAsNode(filtersAsNode_ ? planNodeIdGenerator_ : nullptr)
-        .outputType(outputType)
-        .assignments(assignments)
-        .subfieldFilters({})
-        .remainingFilter(remainingFilter)
-        .dataColumns(dataColumns)
-        .endTableScan();
-  }
+  return TableScanBuilder(*this)
+      .filtersAsNode(filtersAsNode_ ? planNodeIdGenerator_ : nullptr)
+      .outputType(outputType)
+      .assignments(assignments)
+      .subfieldFiltersMap(pushdownConfig.subfieldFiltersMap)
+      .remainingFilter(remainingFilter)
+      .dataColumns(dataColumns)
+      .endTableScan();
 }
 
 PlanBuilder& PlanBuilder::tpchTableScan(
@@ -248,7 +236,6 @@ core::PlanNodePtr PlanBuilder::TableScanBuilder::build(core::PlanNodeId id) {
     auto queryCtx = core::QueryCtx::create();
     exec::SimpleExpressionEvaluator evaluator(
         queryCtx.get(), planBuilder_.pool_);
-
     for (const auto& filter : subfieldFilters_) {
       auto filterExpr =
           core::Expressions::inferTypes(filter, parseType, planBuilder_.pool_);
@@ -271,6 +258,10 @@ core::PlanNodePtr PlanBuilder::TableScanBuilder::build(core::PlanNodeId id) {
         filters[std::move(subfield)] = std::move(subfieldFilter);
       }
     }
+  }
+
+  if (filtersAsNode_) {
+    VELOX_CHECK(filters.empty());
   }
 
   core::TypedExprPtr remainingFilterExpr;
@@ -384,7 +375,7 @@ core::PlanNodePtr PlanBuilder::TableWriterBuilder::build(core::PlanNodeId id) {
       insertHandle_,
       false,
       TableWriteTraits::outputType(aggregationNode),
-      connector::CommitStrategy::kNoCommit,
+      commitStrategy_,
       upstreamNode);
   VELOX_CHECK(!writeNode->supportsBarrier());
   return writeNode;
@@ -624,7 +615,8 @@ PlanBuilder& PlanBuilder::tableWrite(
     const std::string& outputFileName,
     const common::CompressionKind compressionKind,
     const RowTypePtr& schema,
-    const bool ensureFiles) {
+    const bool ensureFiles,
+    const connector::CommitStrategy commitStrategy) {
   return TableWriterBuilder(*this)
       .outputDirectoryPath(outputDirectoryPath)
       .outputFileName(outputFileName)
@@ -640,6 +632,7 @@ PlanBuilder& PlanBuilder::tableWrite(
       .options(options)
       .compressionKind(compressionKind)
       .ensureFiles(ensureFiles)
+      .commitStrategy(commitStrategy)
       .endTableWriter();
 }
 

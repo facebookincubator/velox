@@ -2169,6 +2169,10 @@ class LocalMergeNode : public PlanNode {
     return sortingKeys_;
   }
 
+  bool canSpill(const QueryConfig& queryConfig) const override {
+    return !sortingKeys_.empty() && queryConfig.localMergeSpillEnabled();
+  }
+
   const std::vector<SortOrder>& sortingOrders() const {
     return sortingOrders_;
   }
@@ -4030,6 +4034,14 @@ class UnnestNode : public PlanNode {
 
   const std::vector<FieldAccessTypedExprPtr>& unnestVariables() const {
     return unnestVariables_;
+  }
+
+  const std::vector<std::string>& unnestNames() const {
+    return unnestNames_;
+  }
+
+  const std::optional<std::string>& ordinalityName() const {
+    return ordinalityName_;
   }
 
   bool withOrdinality() const {
