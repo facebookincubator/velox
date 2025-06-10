@@ -208,8 +208,7 @@ EOF
   fi
 }
 
-# Only run the function if called with argument 'detect_sve_flags'
-if [ "$1" = "detect_sve_flags" ]; then
+if [[ "${BASH_SOURCE[0]}" == "${0}" && "$1" == "detect_sve_flags" ]]; then
   detect_sve_flags
 fi
 
