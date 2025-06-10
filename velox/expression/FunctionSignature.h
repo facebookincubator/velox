@@ -345,7 +345,7 @@ class FunctionSignatureBuilder {
   bool variableArity_{false};
 };
 
-/// Convenience class for creating AggregageFunctionSignature instances.
+/// Convenience class for creating AggregateFunctionSignature instances.
 /// Example of usage:
 ///
 ///     - signature of covar_samp aggregate function: (double, double) ->
