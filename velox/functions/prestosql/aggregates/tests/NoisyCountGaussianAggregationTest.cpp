@@ -274,4 +274,16 @@ TEST_F(NoisyCountGaussianAggregationTest, nonScalarInputNoNoise) {
       "SELECT count(c2) FROM tmp");
 }
 
+// Test cases where the noise_scale is BIGINT.
+TEST_F(NoisyCountGaussianAggregationTest, noiseScaleBigintNoNoise) {
+  auto vectors = makeVectors(rowType1_, 10, 3);
+  createDuckDbTable(vectors);
+
+  testAggregations(
+      vectors,
+      {},
+      {"noisy_count_gaussian(c0, 0)"},
+      "SELECT count(c0) FROM tmp");
+}
+
 } // namespace facebook::velox::aggregate::test
