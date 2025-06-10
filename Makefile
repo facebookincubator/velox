@@ -25,17 +25,6 @@ PYTHON_VENV ?= .venv
 PIP ?= $(shell command -v uv > /dev/null 2>&1 && echo "uv pip" || echo "python3 -m pip")
 VENV ?= $(shell command -v uv > /dev/null 2>&1 && echo "uv venv" || echo "python3 -m venv")
 
-SVE_ENABLED := $(shell lscpu | grep -q "sve" && echo 1 || echo 0)
-OS_UBUNTU   := $(shell grep -i "ubuntu" /etc/os-release >/dev/null && echo 1 || echo 0)
-
-ifeq ($(shell lscpu | grep -q "sve" && grep -qi "ubuntu" /etc/os-release && echo 1),1)
-  CC  := /usr/bin/gcc-12
-  CXX := /usr/bin/g++-12
-else
-  CC  := gcc
-  CXX := g++
-endif
-
 # Option to make a minimal build. By default set to "OFF"; set to
 # "ON" to only build a minimal set of components. This may override
 # other build options
@@ -173,10 +162,13 @@ dwio_debug:			#: Minimal build with dwio debugging symbols.
 	$(MAKE) build BUILD_DIR=debug
 
 sve_build:		#: Build with SVE-specific configuration
-# Check for SVE support
-	@echo "Using CC=$(CC), CXX=$(CXX)"
-	CC=$(CC) CXX=$(CXX) $(MAKE) cmake BUILD_DIR=release BUILD_TYPE=release EXTRA_CMAKE_FLAGS="-DCMAKE_CXX_FLAGS='$(COMPILER_FLAGS) -Wno-error=stringop-overflow $(shell ./scripts/setup-helper-functions.sh detect_sve_flags)'"
-	CC=$(CC) CXX=$(CXX) $(MAKE) build BUILD_DIR=release
+# Check for SVE support and set appropriate compilers
+	@SVE_CC=$$(if [ "$$(lscpu | grep -q "sve" && grep -qi "ubuntu" /etc/os-release && echo 1)" = "1" ]; then echo "/usr/bin/gcc-12"; else echo "gcc"; fi); \
+	SVE_CXX=$$(if [ "$$(lscpu | grep -q "sve" && grep -qi "ubuntu" /etc/os-release && echo 1)" = "1" ]; then echo "/usr/bin/g++-12"; else echo "g++"; fi); \
+	echo "Using CC=$$SVE_CC, CXX=$$SVE_CXX"; \
+	export CC=$$SVE_CC; export CXX=$$SVE_CXX; \
+	$(MAKE) cmake BUILD_DIR=release BUILD_TYPE=release EXTRA_CMAKE_FLAGS="-DCMAKE_C_COMPILER=$$SVE_CC -DCMAKE_CXX_COMPILER=$$SVE_CXX -DCMAKE_CXX_FLAGS='$(COMPILER_FLAGS) -Wno-error=stringop-overflow $(shell ./scripts/setup-helper-functions.sh detect_sve_flags)'" && \
+	$(MAKE) build BUILD_DIR=release
 
 benchmarks-basic-build:
 	$(MAKE) release \
