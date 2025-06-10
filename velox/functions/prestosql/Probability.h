@@ -97,6 +97,11 @@ struct BinomialCDFFunction {
       return;
     }
 
+    if (value >= numOfTrials) {
+      result = 1.0;
+      return;
+    }
+
     boost::math::binomial_distribution<> dist(numOfTrials, successProb);
     result = boost::math::cdf(dist, value);
   }
@@ -352,6 +357,88 @@ struct InverseGammaCDFFunction {
       boost::math::gamma_distribution<> dist(shape, scale);
       result = boost::math::quantile(dist, p);
     }
+  }
+};
+
+template <typename T>
+struct InverseBinomialCDFFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  FOLLY_ALWAYS_INLINE void call(
+      int32_t& result,
+      int32_t numberOfTrials,
+      double successProbability,
+      double p) {
+    static constexpr double kInf = std::numeric_limits<double>::infinity();
+
+    VELOX_USER_CHECK(
+        (p >= 0) && (p <= 1) && (p != kInf),
+        "inverseBinomialCdf Function: p must be in the interval [0, 1]");
+    VELOX_USER_CHECK(
+        (successProbability >= 0) && (successProbability <= 1) &&
+            (successProbability != kInf),
+        "inverseBinomialCdf Function: successProbability must be in the interval [0, 1]");
+    VELOX_USER_CHECK(
+        numberOfTrials > 0,
+        "inverseBinomialCdf Function: numberOfTrials must be greater than 0");
+
+    boost::math::binomial_distribution<> dist(
+        numberOfTrials, successProbability);
+    result = static_cast<int32_t>(boost::math::quantile(dist, p));
+  }
+};
+
+template <typename T>
+struct InversePoissonCDFFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  FOLLY_ALWAYS_INLINE void call(int32_t& result, double lambda, double p) {
+    static constexpr double kInf = std::numeric_limits<double>::infinity();
+
+    VELOX_USER_CHECK(
+        (p >= 0) && (p < 1) && (p != kInf),
+        "inversePoissonCdf Function: p must be in the interval [0, 1)");
+    VELOX_USER_CHECK(
+        (lambda > 0) && (lambda != kInf),
+        "inversePoissonCdf Function: lambda must be greater than 0");
+
+    boost::math::poisson_distribution<> dist(lambda);
+    double quantile = boost::math::quantile(dist, p);
+    if (quantile > std::numeric_limits<int32_t>::max()) {
+      result = std::numeric_limits<int32_t>::max();
+    } else {
+      result = static_cast<int32_t>(quantile);
+    }
+  }
+};
+
+template <typename T>
+struct InverseFCDFFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  FOLLY_ALWAYS_INLINE void
+  call(double& result, double df1, double df2, double p) {
+    static constexpr double kInf = std::numeric_limits<double>::infinity();
+
+    VELOX_USER_CHECK(
+        p >= 0 && p <= 1 && p != kInf,
+        "inverseFCdf Function: p must be in the interval [0, 1]");
+    VELOX_USER_CHECK(
+        df1 > 0 && df1 != kInf,
+        "inverseFCdf Function: numerator df must be greater than 0");
+    VELOX_USER_CHECK(
+        df2 > 0 && df2 != kInf,
+        "inverseFCdf Function: denominator df must be greater than 0");
+
+    if (p == 0.0) {
+      result = 0.0;
+      return;
+    } else if (p == 1.0) {
+      result = std::numeric_limits<double>::infinity();
+      return;
+    }
+    boost::math::fisher_f_distribution<> dist(df1, df2);
+    result = boost::math::quantile(dist, p);
   }
 };
 

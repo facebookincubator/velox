@@ -89,6 +89,10 @@ class Filter : public velox::ISerializable {
     return kind_;
   }
 
+  bool nullAllowed() const {
+    return nullAllowed_;
+  }
+
   /// Return a copy of this filter. If nullAllowed is set, modified the
   /// nullAllowed flag in the copy to match.
   virtual std::unique_ptr<Filter> clone(
@@ -721,7 +725,13 @@ class BigintRange final : public Filter {
         upper32_(std::min<int64_t>(upper, std::numeric_limits<int32_t>::max())),
         lower16_(std::max<int64_t>(lower, std::numeric_limits<int16_t>::min())),
         upper16_(std::min<int64_t>(upper, std::numeric_limits<int16_t>::max())),
-        isSingleValue_(upper_ == lower_) {}
+        isSingleValue_(upper_ == lower_),
+        inInt32Range_(
+            lower <= std::numeric_limits<int32_t>::max() &&
+            upper >= std::numeric_limits<int32_t>::min()),
+        inInt16Range_(
+            lower <= std::numeric_limits<int16_t>::max() &&
+            upper >= std::numeric_limits<int16_t>::min()) {}
 
   folly::dynamic serialize() const override;
 
@@ -752,6 +762,9 @@ class BigintRange final : public Filter {
 
   xsimd::batch_bool<int32_t> testValues(
       xsimd::batch<int32_t> values) const final {
+    if (!inInt32Range_) {
+      return xsimd::batch_bool<int32_t>(false);
+    }
     if (isSingleValue_) {
       if (UNLIKELY(lower32_ != lower_)) {
         return xsimd::batch_bool<int32_t>(false);
@@ -764,6 +777,9 @@ class BigintRange final : public Filter {
 
   xsimd::batch_bool<int16_t> testValues(
       xsimd::batch<int16_t> values) const final {
+    if (!inInt16Range_) {
+      return xsimd::batch_bool<int16_t>(false);
+    }
     if (isSingleValue_) {
       if (UNLIKELY(lower16_ != lower_)) {
         return xsimd::batch_bool<int16_t>(false);
@@ -814,6 +830,8 @@ class BigintRange final : public Filter {
   const int16_t lower16_;
   const int16_t upper16_;
   const bool isSingleValue_;
+  const bool inInt32Range_;
+  const bool inInt16Range_;
 };
 
 class NegatedBigintRange final : public Filter {
@@ -1072,6 +1090,18 @@ class HugeintValuesUsingHashTable final : public Filter {
 
   bool testingEquals(const Filter& other) const final;
 
+  int128_t min() const {
+    return min_;
+  }
+
+  int128_t max() const {
+    return max_;
+  }
+
+  const folly::F14FastSet<int128_t>& values() const {
+    return values_;
+  }
+
  private:
   const int128_t min_;
   const int128_t max_;
@@ -1124,6 +1154,14 @@ class BigintValuesUsingBitmask final : public Filter {
   std::unique_ptr<Filter> mergeWith(const Filter* other) const final;
 
   bool testingEquals(const Filter& other) const final;
+
+  int64_t min() const {
+    return min_;
+  }
+
+  int64_t max() const {
+    return max_;
+  }
 
  private:
   std::unique_ptr<Filter>
@@ -1262,12 +1300,20 @@ class NegatedBigintValuesUsingBitmask final : public Filter {
 
   bool testingEquals(const Filter& other) const final;
 
+  int64_t min() const {
+    return min_;
+  }
+
+  int64_t max() const {
+    return max_;
+  }
+
  private:
   std::unique_ptr<Filter>
   mergeWith(int64_t min, int64_t max, const Filter* other) const;
 
-  int min_;
-  int max_;
+  int64_t min_;
+  int64_t max_;
   std::unique_ptr<BigintValuesUsingBitmask> nonNegated_;
 };
 
@@ -1416,7 +1462,9 @@ class FloatingPointRange final : public AbstractRange {
       return true;
     }
 
-    return !(min > upper_ || max < lower_);
+    return !(
+        (!upperUnbounded_ && min > upper_) ||
+        (!lowerUnbounded_ && max < lower_));
   }
 
   std::unique_ptr<Filter> mergeWith(const Filter* other) const final {
@@ -1707,6 +1755,14 @@ class BytesRange final : public AbstractRange {
     return lowerUnbounded_;
   }
 
+  bool isUpperExclusive() const {
+    return upperExclusive_;
+  }
+
+  bool isLowerExclusive() const {
+    return lowerExclusive_;
+  }
+
   const std::string& lower() const {
     return lower_;
   }
@@ -1803,6 +1859,14 @@ class NegatedBytesRange final : public Filter {
     return nonNegated_->isLowerUnbounded();
   }
 
+  bool isUpperExclusive() const {
+    return nonNegated_->isUpperExclusive();
+  }
+
+  bool isLowerExclusive() const {
+    return nonNegated_->isLowerExclusive();
+  }
+
   const std::string& lower() const {
     return nonNegated_->lower();
   }
@@ -1893,10 +1957,6 @@ class TimestampRange : public Filter {
 
   const Timestamp upper() const {
     return upper_;
-  }
-
-  bool nullAllowed() const {
-    return nullAllowed_;
   }
 
   bool testingEquals(const Filter& other) const final;
@@ -2104,6 +2164,8 @@ class MultiRange final : public Filter {
   bool testDouble(double value) const final;
 
   bool testFloat(float value) const final;
+
+  bool testInt128(const int128_t& value) const final;
 
   bool testBytes(const char* value, int32_t length) const final;
 

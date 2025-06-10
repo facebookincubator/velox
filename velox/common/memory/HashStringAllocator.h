@@ -285,7 +285,7 @@ class HashStringAllocator : public StreamArena {
   /// ranges will not overwrite the next pointer.
   ///
   /// May allocate less than 'bytes'.
-  void newRange(int32_t bytes, ByteRange* lastRange, ByteRange* range) override;
+  void newRange(int64_t bytes, ByteRange* lastRange, ByteRange* range) override;
 
   /// Allocates a new range of at least 'bytes' size.
   void newContiguousRange(int32_t bytes, ByteRange* range);
@@ -353,7 +353,7 @@ class HashStringAllocator : public StreamArena {
   static constexpr uint32_t kHeaderSize = sizeof(Header);
 
   void newRange(
-      int32_t bytes,
+      int64_t bytes,
       ByteRange* lastRange,
       ByteRange* range,
       bool contiguous);
@@ -367,7 +367,7 @@ class HashStringAllocator : public StreamArena {
 
   // Allocates a block of specified size. If exactSize is false, the block may
   // be smaller or larger. Checks free list before allocating new memory.
-  Header* allocate(int32_t size, bool exactSize);
+  Header* allocate(int64_t size, bool exactSize);
 
   // Allocates memory from free list. Returns nullptr if no memory in free list,
   // otherwise returns a header of a free block of some size. if 'mustHaveSize'
@@ -591,7 +591,7 @@ class HashStringAllocator::InputStream : public ByteInputStream {
     }
   }
 
-  std::string_view nextView(int32_t size) final {
+  std::string_view nextView(int64_t size) final {
     if (atEnd()) {
       return {};
     }
@@ -685,7 +685,7 @@ struct StlAllocator {
 
   explicit StlAllocator(HashStringAllocator* allocator)
       : allocator_{allocator} {
-    VELOX_CHECK(allocator);
+    VELOX_CHECK_NOT_NULL(allocator);
   }
 
   template <class U>
@@ -722,7 +722,7 @@ struct StlAllocator {
   }
 
  private:
-  HashStringAllocator* allocator_;
+  HashStringAllocator* const allocator_;
 };
 
 /// An allocator backed by HashStringAllocator that guaratees a configurable
@@ -833,7 +833,7 @@ struct AlignedStlAllocator {
     return reinterpret_cast<T*>(alignedPtr);
   }
 
-  HashStringAllocator* allocator_;
+  HashStringAllocator* const allocator_;
   const bool poolAligned_;
 };
 

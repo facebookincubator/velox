@@ -13,6 +13,10 @@
 # limitations under the License.
 cmake_minimum_required(VERSION 3.28)
 message(STATUS "Building using CMake version: ${CMAKE_VERSION}")
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD_REQUIRED TRUE)
+set(CMAKE_CXX_EXTENSIONS ON) # Big Int is an extension
+message(STATUS "CXX standard: ${CMAKE_CXX_STANDARD}")
 
 # The policy allows us to change options without caching.
 cmake_policy(SET CMP0077 NEW)
@@ -140,9 +144,10 @@ option(VELOX_ENABLE_ABFS "Build Abfs Connector" OFF)
 option(VELOX_ENABLE_HDFS "Build Hdfs Connector" OFF)
 option(VELOX_ENABLE_PARQUET "Enable Parquet support" ON)
 option(VELOX_ENABLE_ARROW "Enable Arrow support" OFF)
-option(VELOX_ENABLE_GEO "Enable Geospatial support" OFF)
+option(VELOX_ENABLE_GEO "Enable Geospatial support" ON)
 option(VELOX_ENABLE_REMOTE_FUNCTIONS "Enable remote function support" OFF)
 option(VELOX_ENABLE_CCACHE "Use ccache if installed." ON)
+option(VELOX_ENABLE_COMPRESSION_LZ4 "Enable Lz4 compression support." OFF)
 
 option(VELOX_BUILD_TEST_UTILS "Builds Velox test utilities" OFF)
 option(VELOX_BUILD_VECTOR_TEST_UTILS "Builds Velox vector test utilities" OFF)
@@ -194,6 +199,12 @@ if(VELOX_BUILD_TESTING OR VELOX_BUILD_TEST_UTILS)
   set(VELOX_ENABLE_PARSE ON)
 endif()
 
+if(${VELOX_BUILD_TESTING}
+   OR ${VELOX_BUILD_MINIMAL_WITH_DWIO}
+   OR ${VELOX_ENABLE_HIVE_CONNECTOR})
+  set(VELOX_ENABLE_COMPRESSION_LZ4 ON)
+endif()
+
 if(${VELOX_ENABLE_EXAMPLES})
   set(VELOX_ENABLE_EXPRESSION ON)
 endif()
@@ -231,7 +242,8 @@ find_package(OpenSSL REQUIRED)
 
 if(VELOX_ENABLE_CCACHE
    AND NOT CMAKE_C_COMPILER_LAUNCHER
-   AND NOT CMAKE_CXX_COMPILER_LAUNCHER)
+   AND NOT CMAKE_CXX_COMPILER_LAUNCHER
+   AND NOT CMAKE_CUDA_COMPILER_LAUNCHER)
 
   find_program(CCACHE_FOUND ccache)
 
@@ -239,6 +251,7 @@ if(VELOX_ENABLE_CCACHE
     message(STATUS "Using ccache: ${CCACHE_FOUND}")
     set(CMAKE_C_COMPILER_LAUNCHER ${CCACHE_FOUND})
     set(CMAKE_CXX_COMPILER_LAUNCHER ${CCACHE_FOUND})
+    set(CMAKE_CUDA_COMPILER_LAUNCHER ${CCACHE_FOUND})
     # keep comments as they might matter to the compiler
     set(ENV{CCACHE_COMMENTS} "1")
   endif()
@@ -295,7 +308,7 @@ endif()
 
 # MacOSX enables two-level namespace by default:
 # http://mirror.informatimago.com/next/developer.apple.com/releasenotes/DeveloperTools/TwoLevelNamespaces.html
-# Enables -flat_namespace so type_info can be deudplicated across .so boundaries
+# Enables -flat_namespace so type_info can be deduplicated across .so boundaries
 if(${CMAKE_SYSTEM_NAME} MATCHES "Darwin")
   add_link_options("-Wl,-flat_namespace")
 endif()
@@ -307,10 +320,6 @@ endif()
 
 # Required so velox code can be used in a dynamic library
 set(CMAKE_POSITION_INDEPENDENT_CODE TRUE)
-
-set(CMAKE_CXX_STANDARD 17)
-set(CMAKE_CXX_STANDARD_REQUIRED TRUE)
-set(CMAKE_CXX_EXTENSIONS ON) # Big Int is an extension
 
 execute_process(
   COMMAND
@@ -331,6 +340,13 @@ set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -D HAS_UNCAUGHT_EXCEPTIONS")
 if(${CMAKE_SYSTEM_PROCESSOR} MATCHES "aarch64")
   set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fsigned-char")
 endif()
+
+# Ensure that we don't bring in headers that might have coroutines enabled. The
+# dependencies turn off coroutines in folly and the other FBOS dependencies. If
+# not explicitly turned off differences in the build using GCC cause libray
+# incompatibilities of the thrift server and the remote functions library
+# causing SEGVs in the tests.
+string(APPEND CMAKE_CXX_FLAGS " -DFOLLY_CFG_NO_COROUTINES")
 
 # Under Ninja, we are able to designate certain targets large enough to require
 # restricted parallelism.
@@ -377,7 +393,7 @@ if(ENABLE_ALL_WARNINGS)
   set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wall -Wextra ${KNOWN_WARNINGS}")
 endif()
 
-if(${VELOX_ENABLE_GPU})
+if(VELOX_ENABLE_WAVE OR VELOX_ENABLE_CUDF)
   enable_language(CUDA)
   # Determine CUDA_ARCHITECTURES automatically.
   cmake_policy(SET CMP0104 NEW)
@@ -389,6 +405,19 @@ if(${VELOX_ENABLE_GPU})
     add_compile_options("$<$<COMPILE_LANGUAGE:CUDA>:-G>")
   endif()
   find_package(CUDAToolkit REQUIRED)
+  if(VELOX_ENABLE_CUDF)
+    foreach(arch ${CMAKE_CUDA_ARCHITECTURES})
+      if(arch LESS 70)
+        message(
+          FATAL_ERROR
+            "CUDA architecture ${arch} is below 70. CUDF requires Volta (SM 70) or newer GPUs."
+        )
+      endif()
+    endforeach()
+    set(VELOX_ENABLE_ARROW ON)
+    velox_set_source(cudf)
+    velox_resolve_dependency(cudf)
+  endif()
 endif()
 
 # Set after the test of the CUDA compiler. Otherwise, the test fails with
@@ -463,12 +492,15 @@ velox_resolve_dependency(glog)
 velox_set_source(fmt)
 velox_resolve_dependency(fmt 9.0.0)
 
+if(VELOX_ENABLE_COMPRESSION_LZ4)
+  find_package(lz4 REQUIRED)
+endif()
+
 if(${VELOX_BUILD_MINIMAL_WITH_DWIO} OR ${VELOX_ENABLE_HIVE_CONNECTOR})
   # DWIO needs all sorts of stream compression libraries.
   #
   # TODO: make these optional and pluggable.
   find_package(ZLIB REQUIRED)
-  find_package(lz4 REQUIRED)
   find_package(lzo2 REQUIRED)
   find_package(zstd REQUIRED)
   find_package(Snappy REQUIRED)
@@ -513,7 +545,7 @@ velox_set_source(folly)
 velox_resolve_dependency(folly)
 
 if(${VELOX_BUILD_TESTING})
-  # Spark qury runner depends on absl, gRPC.
+  # Spark query runner depends on absl, gRPC.
   velox_set_source(absl)
   velox_resolve_dependency(absl)
 

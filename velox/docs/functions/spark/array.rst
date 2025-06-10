@@ -24,6 +24,17 @@ Array Functions
         SELECT array_append(array(1, 2, 3), 2); -- [1, 2, 3, 2]
         SELECT array_append(array(1, 2, 3), NULL); -- [1, 2, 3, NULL]
 
+.. spark:function:: array_compact(array(E) x) -> array(E)
+
+    Removes all NULL elements from array ``x``. Returns NULL if array ``x`` is NULL.
+    Returns empty array if array ``x`` is empty or all elements in it are NULL. ::
+
+        SELECT array_compact(array(1, 2, NULL, 3)); -- [1, 2, 3]
+        SELECT array_compact(array()); -- []
+        SELECT array_compact(array(NULL)); -- []
+        SELECT array_compact(NULL); -- NULL
+        SELECT array_compact(array(array(1, 2), NULL, array(NULL, 3, 4))); -- [[1, 2], [NULL, 3, 4]]
+
 .. spark:function:: array_contains(array(E), value) -> boolean
 
     Returns true if the array contains the value. ::
@@ -122,6 +133,17 @@ Array Functions
         SELECT array_position(array(1, 2, 3), 4); -- 0
         SELECT array_position(array(1, 2, 3, 2), 2); -- 2
 
+.. spark:function:: array_prepend(x, element) -> array
+
+    Add the ``element`` at the beginning of the input array ``x``.
+    Type of ``element`` should be the same to the type of elements in the array ``x``.
+    NULL element is also prepended into the array ``x``. Returns NULL when the input array ``x`` is NULL. ::
+
+        SELECT array_prepend(array(1, 2, 3), 2); -- [2, 1, 2, 3]
+        SELECT array_prepend(array(1, 2, 3), NULL); -- [NULL, 1, 2, 3]
+        SELECT array_prepend(NULL, 1); -- NULL
+        SELECT array_prepend(array(NULL, 2, 3), 1); -- [1, NULL, 2, 3]
+
 .. spark:function:: array_remove(x, element) -> array
 
     Remove all elements that equal ``element`` from array ``x``. Returns NULL as result if ``element`` is NULL.
@@ -158,6 +180,7 @@ Array Functions
         SELECT array_sort(array(NULL, 2, 1)); -- [1, 2, NULL]
 
 .. spark:function:: array_union(array(E) x, array(E) y) -> array(E)
+
     Returns an array of the elements in the union of ``x`` and ``y``, without duplicates. ::
 
         SELECT array_union(array(1, 2, 3), array(1, 3, 5)); -- [1, 2, 3, 5]
@@ -216,14 +239,15 @@ Array Functions
     Returns whether all elements of an array match the given predicate.
 
         Returns true if all the elements match the predicate (a special case is when the array is empty);
-        Returns false if one or more elements don’t match;
+        Returns false if one or more elements don't match;
         Returns NULL if the predicate function returns NULL for one or more elements and true for all other elements.
         Throws an exception if the predicate fails for one or more elements and returns true or NULL for the rest.
 
 .. spark:function:: get(array(E), index) -> E
 
-    Returns an element of the array at the specified 0-based index.
-    Returns NULL if index points outside of the array boundaries. ::
+    Returns an element of the array at the specified 0-based ``index``.
+    Returns NULL if ``index`` points outside of the array boundaries.
+    ``index`` must be of an integral type. ::
 
         SELECT get(array(1, 2, 3), 0); -- 1
         SELECT get(array(1, 2, 3), 3); -- NULL
@@ -238,7 +262,7 @@ Array Functions
 
 .. spark:function:: shuffle(array(E), seed) -> array(E)
 
-    Generates a random permutation of the given ``array`` using a seed derived 
+    Generates a random permutation of the given ``array`` using a seed derived
     from the parameter ``seed`` and the configuration `spark.partition_id`.
     ``seed`` must be constant. ::
 

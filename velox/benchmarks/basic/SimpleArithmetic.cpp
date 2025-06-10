@@ -344,8 +344,8 @@ BENCHMARK(plusCheckedLarge) {
 
 int main(int argc, char* argv[]) {
   folly::Init init{&argc, &argv};
-  gflags::ParseCommandLineFlags(&argc, &argv, true);
-  memory::MemoryManager::initialize({});
+  ::gflags::ParseCommandLineFlags(&argc, &argv, true);
+  memory::MemoryManager::initialize(memory::MemoryManager::Options{});
   benchmark = std::make_unique<SimpleArithmeticBenchmark>();
   folly::runBenchmarks();
   benchmark.reset();

@@ -26,7 +26,7 @@ General Aggregate Functions
     Creates bloom filter from input hashes and returns it serialized into VARBINARY.
     The caller is expected to apply xxhash64 function to input data before calling bloom_filter_agg.
 
-    For example, 
+    For example,
         bloom_filter_agg(xxhash64(x), 100, 1024)
     In Spark implementation, ``estimatedNumItems`` and ``numBits`` are used to decide the number of hash functions and bloom filter capacity.
     In Velox implementation, ``estimatedNumItems`` is not used.
@@ -48,7 +48,7 @@ General Aggregate Functions
     But Spark allows for changing the defaults while Velox does not.
 
 .. spark:function:: bloom_filter_agg(hash) -> varbinary
-    
+
     A version of ``bloom_filter_agg`` that use the value of spark.bloom_filter.max_num_bits configuration property as ``numBits``.
 
     ``hash`` cannot be null.
@@ -80,6 +80,16 @@ General Aggregate Functions
                 ARRAY[1, null]
         ) AS t(elements);
         -- ARRAY[ARRAY[1, 2], ARRAY[1, null]]
+
+.. spark:function:: corr(x, y) -> double
+
+    Returns Pearson coefficient of correlation between a set of number pairs. When the count of pairs is
+    greater than or equal to 2, a non-null output will be generated.
+
+.. spark:function:: covar_samp(x, y) -> double
+
+    Returns the sample covariance of a set of number pairs. When the count of pairs is
+    greater than or equal to 2, a non-null output will be generated.
 
 .. spark:function:: first(x) -> x
 
@@ -152,11 +162,11 @@ General Aggregate Functions
     Returns the most frequent value for the values within ``x``.
     NULL values are ignored. If all the values are NULL, or
     there are 0 rows, returns NULL.
-    If multiple values have the same greatest frequency, the 
+    If multiple values have the same greatest frequency, the
     return value could be any one of them.
 
     Example::
-    
+
         SELECT mode(x)
         FROM (
             VALUES
@@ -174,6 +184,15 @@ General Aggregate Functions
     Returns the skewness of all input values. When the count of `x` is greater than or equal to 1,
     a non-null output will be generated. When the value of `m2` in the accumulator is 0, a null
     output will be generated.
+
+.. spark:function:: stddev(x) -> double
+
+    Returns the sample standard deviation calculated of all input values. The type of `x` should be DOUBLE.
+    When the count of `x` is greater than or equal to 2, a non-null output will be generated.
+
+.. spark:function:: stddev_samp(x) -> double
+
+    This is an alias for :spark:func:`stddev`.
 
 .. spark:function:: sum(x) -> bigint|double|real
 
@@ -204,3 +223,12 @@ General Aggregate Functions
         ) AS t(x);
 
     Returns -9223372036854775808
+
+.. spark:function:: var_samp(x) -> double
+
+    Returns the sample variance calculated of all input values. The type of `x` should be DOUBLE.
+    When the count of `x` is greater than or equal to 2, a non-null output will be generated.
+
+.. spark:function:: variance(x) -> double
+
+    This is an alias for :spark:func:`var_samp`.

@@ -285,30 +285,50 @@ These functions support TIMESTAMP and DATE input types.
 
         SELECT timestamp_millis(1230219000123); -- '2008-12-25 15:30:00.123'
 
-.. spark:function:: to_unix_timestamp(date) -> integer
+.. spark:function:: to_unix_timestamp(date) -> bigint
    :noindex:
 
-    Alias for ``unix_timestamp(date) -> integer``.
+    Alias for ``unix_timestamp(date) -> bigint``.
 
-.. spark:function:: to_unix_timestamp(string) -> integer
+.. spark:function:: to_unix_timestamp(string) -> bigint
 
-    Alias for ``unix_timestamp(string) -> integer``.
+    Alias for ``unix_timestamp(string) -> bigint``.
 
-.. spark:function:: to_unix_timestamp(string, format) -> integer
+.. spark:function:: to_unix_timestamp(string, format) -> bigint
    :noindex:
 
-    Alias for ``unix_timestamp(string, format) -> integer``.
+    Alias for ``unix_timestamp(string, format) -> bigint``.
 
-.. spark:function:: to_unix_timestamp(timestamp) -> integer
+.. spark:function:: to_unix_timestamp(timestamp) -> bigint
    :noindex:
 
-    Alias for ``unix_timestamp(timestamp) -> integer``.
+    Alias for ``unix_timestamp(timestamp) -> bigint``.
 
 .. spark:function:: to_utc_timestamp(timestamp, string) -> timestamp
 
     Returns the timestamp value from the given timezone to UTC timezone. ::
 
         SELECT to_utc_timestamp('2015-07-24 00:00:00', 'America/Los_Angeles'); -- '2015-07-24 07:00:00'
+
+.. spark:function:: trunc(date, fmt) -> date
+
+    Returns ``date`` truncated to the unit specified by the format model ``fmt``.
+    Returns NULL if ``fmt`` is invalid.
+
+    ``fmt`` is case insensitive and must be one of the following:
+        * "YEAR", "YYYY", "YY" - truncate to the first date of the year that the ``date`` falls in
+        * "QUARTER" - truncate to the first date of the quarter that the ``date`` falls in
+        * "MONTH", "MM", "MON" - truncate to the first date of the month that the ``date`` falls in
+        * "WEEK" - truncate to the Monday of the week that the ``date`` falls in
+
+    ::
+
+        SELECT trunc('2019-08-04', 'week'); -- 2019-07-29
+        SELECT trunc('2019-08-04', 'quarter'); -- 2019-07-01
+        SELECT trunc('2009-02-12', 'MM'); -- 2009-02-01
+        SELECT trunc('2015-10-27', 'YEAR'); -- 2015-01-01
+        SELECT trunc('2015-10-27', ''); -- NULL
+        SELECT trunc('2015-10-27', 'day'); -- NULL
 
 .. spark:function:: unix_date(date) -> integer
 
@@ -337,11 +357,11 @@ These functions support TIMESTAMP and DATE input types.
 
         SELECT unix_seconds('1970-01-01 00:00:01'); -- 1
 
-.. spark:function:: unix_timestamp() -> integer
+.. spark:function:: unix_timestamp() -> bigint
 
     Returns the current UNIX timestamp in seconds.
 
-.. spark:function:: unix_timestamp(date) -> integer
+.. spark:function:: unix_timestamp(date) -> bigint
 
     Converts the time represented by ``date`` at the configured session timezone to the GMT time, and extracts the seconds. ::
 
@@ -349,14 +369,14 @@ These functions support TIMESTAMP and DATE input types.
         SELECT unix_timestamp('2024-10-01'); -- 1727740800
         SELECT unix_timestamp('-2025-02-18'); -- -126065894400
 
-.. spark:function:: unix_timestamp(string) -> integer
+.. spark:function:: unix_timestamp(string) -> bigint
    :noindex:
 
     Returns the UNIX timestamp of time specified by ``string``. Assumes the
     format ``yyyy-MM-dd HH:mm:ss``. Returns null if ``string`` does not match
     ``format``.
 
-.. spark:function:: unix_timestamp(string, format) -> integer
+.. spark:function:: unix_timestamp(string, format) -> bigint
    :noindex:
 
     Returns the UNIX timestamp of time specified by ``string`` using the
@@ -366,7 +386,7 @@ These functions support TIMESTAMP and DATE input types.
     Returns null if ``string`` does not match ``format`` or if ``format``
     is invalid.
 
-.. spark:function:: unix_timestamp(timestamp) -> integer
+.. spark:function:: unix_timestamp(timestamp) -> bigint
 
     Returns the UNIX timestamp of the given ``timestamp`` in seconds. ::
 
@@ -428,4 +448,3 @@ returned for invalid format; otherwise, exception is thrown. ::
         SELECT from_unixtime(100, '!@#$%^&*'); -- throws exception) (for Joda date formatter)
         SELECT get_timestamp('1970-01-01', '!@#$%^&*'); -- NULL (parsing error) (for Simple date formatter)
         SELECT get_timestamp('1970-01-01', '!@#$%^&*'); -- throws exception) (for Joda date formatter)
-

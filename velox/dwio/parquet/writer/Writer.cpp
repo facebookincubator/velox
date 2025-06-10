@@ -131,7 +131,14 @@ std::shared_ptr<WriterProperties> getArrowParquetWriterOptions(
     const std::unique_ptr<DefaultFlushPolicy>& flushPolicy) {
   auto builder = WriterProperties::Builder();
   WriterProperties::Builder* properties = &builder;
-  if (!options.enableDictionary) {
+  if (options.enableDictionary.value_or(
+          facebook::velox::parquet::arrow::DEFAULT_IS_DICTIONARY_ENABLED)) {
+    properties = properties->enable_dictionary();
+    properties = properties->dictionary_pagesize_limit(
+        options.dictionaryPageSizeLimit.value_or(
+            facebook::velox::parquet::arrow::
+                DEFAULT_DICTIONARY_PAGE_SIZE_LIMIT));
+  } else {
     properties = properties->disable_dictionary();
   }
   properties = properties->compression(getArrowParquetCompression(
@@ -142,7 +149,10 @@ std::shared_ptr<WriterProperties> getArrowParquetWriterOptions(
         getArrowParquetCompression(columnCompressionValues.second));
   }
   properties = properties->encoding(options.encoding);
-  properties = properties->data_pagesize(options.dataPageSize);
+  properties = properties->data_pagesize(options.dataPageSize.value_or(
+      facebook::velox::parquet::arrow::kDefaultDataPageSize));
+  properties = properties->write_batch_size(options.batchSize.value_or(
+      facebook::velox::parquet::arrow::DEFAULT_WRITE_BATCH_SIZE));
   properties = properties->max_row_group_length(
       static_cast<int64_t>(flushPolicy->rowsInRowGroup()));
   properties = properties->codec_options(options.codecOptions);
@@ -153,6 +163,9 @@ std::shared_ptr<WriterProperties> getArrowParquetWriterOptions(
   } else {
     properties =
         properties->data_page_version(arrow::ParquetDataPageVersion::V1);
+  }
+  if (options.createdBy.has_value()) {
+    properties = properties->created_by(options.createdBy.value());
   }
   return properties->build();
 }
@@ -245,6 +258,20 @@ std::optional<std::string> getTimestampTimeZone(
   return std::nullopt;
 }
 
+std::optional<bool> isParquetEnableDictionary(
+    const config::ConfigBase& config,
+    const char* configKey) {
+  try {
+    if (const auto enableDictionary = config.get<bool>(configKey)) {
+      return enableDictionary.value();
+    }
+  } catch (const folly::ConversionError& e) {
+    VELOX_USER_FAIL(
+        "Invalid parquet writer enable dictionary option: {}", e.what());
+  }
+  return std::nullopt;
+}
+
 std::optional<bool> getParquetDataPageVersion(
     const config::ConfigBase& config,
     const char* configKey) {
@@ -256,6 +283,37 @@ std::optional<bool> getParquetDataPageVersion(
     } else {
       VELOX_FAIL("Unsupported parquet datapage version {}", version.value());
     }
+  }
+  return std::nullopt;
+}
+
+std::optional<int64_t> getParquetPageSize(
+    const config::ConfigBase& config,
+    const char* configKey) {
+  if (const auto pageSize = config.get<std::string>(configKey)) {
+    return config::toCapacity(pageSize.value(), config::CapacityUnit::BYTE);
+  }
+  return std::nullopt;
+}
+
+std::optional<int64_t> getParquetBatchSize(
+    const config::ConfigBase& config,
+    const char* configKey) {
+  try {
+    if (const auto batchSize = config.get<int64_t>(configKey)) {
+      return batchSize.value();
+    }
+  } catch (const folly::ConversionError& e) {
+    VELOX_USER_FAIL("Invalid parquet writer batch size: {}", e.what());
+  }
+  return std::nullopt;
+}
+
+std::optional<std::string> getParquetCreatedBy(
+    const config::ConfigBase& config,
+    const char* configKey) {
+  if (config.get<std::string>(configKey).has_value()) {
+    return config.get<std::string>(configKey).value();
   }
   return std::nullopt;
 }
@@ -490,6 +548,24 @@ void WriterOptions::processConfigs(
     parquetWriteTimestampTimeZone = parquetWriterOptions->sessionTimezoneName;
   }
 
+  if (!enableDictionary) {
+    enableDictionary =
+        isParquetEnableDictionary(session, kParquetSessionEnableDictionary)
+            .has_value()
+        ? isParquetEnableDictionary(session, kParquetSessionEnableDictionary)
+        : isParquetEnableDictionary(
+              connectorConfig, kParquetHiveConnectorEnableDictionary);
+  }
+
+  if (!dictionaryPageSizeLimit) {
+    dictionaryPageSizeLimit =
+        getParquetPageSize(session, kParquetSessionDictionaryPageSizeLimit)
+            .has_value()
+        ? getParquetPageSize(session, kParquetSessionDictionaryPageSizeLimit)
+        : getParquetPageSize(
+              connectorConfig, kParquetHiveConnectorDictionaryPageSizeLimit);
+  }
+
   if (!useParquetDataPageV2) {
     useParquetDataPageV2 =
         getParquetDataPageVersion(session, kParquetSessionDataPageVersion)
@@ -497,6 +573,27 @@ void WriterOptions::processConfigs(
         ? getParquetDataPageVersion(session, kParquetSessionDataPageVersion)
         : getParquetDataPageVersion(
               connectorConfig, kParquetHiveConnectorDataPageVersion);
+  }
+
+  if (!dataPageSize) {
+    dataPageSize =
+        getParquetPageSize(session, kParquetSessionWritePageSize).has_value()
+        ? getParquetPageSize(session, kParquetSessionWritePageSize)
+        : getParquetPageSize(
+              connectorConfig, kParquetHiveConnectorWritePageSize);
+  }
+
+  if (!batchSize) {
+    batchSize =
+        getParquetBatchSize(session, kParquetSessionWriteBatchSize).has_value()
+        ? getParquetBatchSize(session, kParquetSessionWriteBatchSize)
+        : getParquetBatchSize(
+              connectorConfig, kParquetHiveConnectorWriteBatchSize);
+  }
+
+  if (!createdBy) {
+    createdBy =
+        getParquetCreatedBy(connectorConfig, kParquetHiveConnectorCreatedBy);
   }
 }
 

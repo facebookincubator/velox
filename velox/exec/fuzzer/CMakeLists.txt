@@ -16,11 +16,14 @@ add_library(
   velox_fuzzer_util
   ReferenceQueryRunner.cpp
   DuckQueryRunner.cpp
+  DuckQueryRunnerToSqlPlanNodeVisitor.cpp
   PrestoQueryRunner.cpp
   PrestoQueryRunnerIntermediateTypeTransforms.cpp
   PrestoQueryRunnerTimestampWithTimeZoneTransform.cpp
+  PrestoQueryRunnerToSqlPlanNodeVisitor.cpp
   FuzzerUtil.cpp
-  PrestoSql.cpp)
+  PrestoSql.cpp
+  PrestoQueryRunnerIntermediateTypeTransforms.cpp)
 
 target_link_libraries(
   velox_fuzzer_util
@@ -113,7 +116,9 @@ add_executable(velox_topn_row_number_fuzzer TopNRowNumberFuzzerRunner.cpp)
 target_link_libraries(
   velox_topn_row_number_fuzzer velox_topn_row_number_fuzzer_lib)
 
-add_library(velox_join_fuzzer JoinFuzzer.cpp)
+# Join Fuzzer.
+add_executable(velox_join_fuzzer JoinFuzzerRunner.cpp JoinFuzzer.cpp
+                                 JoinMaker.cpp)
 
 target_link_libraries(
   velox_join_fuzzer
@@ -137,7 +142,9 @@ target_link_libraries(
   velox_dwio_faulty_file_sink
   velox_file_test_utils)
 
-add_library(velox_memory_arbitration_fuzzer MemoryArbitrationFuzzer.cpp)
+# Arbitration Fuzzer.
+add_executable(velox_memory_arbitration_fuzzer MemoryArbitrationFuzzerRunner.cpp
+                                               MemoryArbitrationFuzzer.cpp)
 
 target_link_libraries(
   velox_memory_arbitration_fuzzer
@@ -161,6 +168,16 @@ target_link_libraries(
 target_link_libraries(
   velox_cache_fuzzer_lib velox_dwio_common velox_temp_path
   velox_vector_test_lib)
+
+# Exchange Fuzzer
+add_executable(velox_exchange_fuzzer ExchangeFuzzer.cpp)
+
+target_link_libraries(
+  velox_exchange_fuzzer
+  velox_exec_test_lib
+  velox_aggregates
+  velox_vector_test_lib
+  velox_vector_fuzzer)
 
 if(${VELOX_BUILD_TESTING})
   add_subdirectory(tests)

@@ -152,7 +152,7 @@ TEST_F(ClassificationAggregationTest, basic) {
     }
   }
 
-  /// Test invalid threshold.
+  /// Test invalid Weight.
   for (const auto function : functions) {
     VELOX_ASSERT_THROW(
         runTest(
@@ -162,9 +162,7 @@ TEST_F(ClassificationAggregationTest, basic) {
         "Weight must be non-negative.");
   }
 
-  /// Test invalid predictions. Note, a prediction of > 1
-  /// will never actually be hit because convert the pred = std::min(pred,
-  /// 0.99999999999)
+  /// Test invalid predictions.
   for (const auto function : functions) {
     VELOX_ASSERT_THROW(
         runTest(
@@ -172,7 +170,53 @@ TEST_F(ClassificationAggregationTest, basic) {
             input,
             expected),
         "Prediction value must be between 0 and 1");
+
+    VELOX_ASSERT_THROW(
+        runTest(
+            fmt::format("{}({}, {}, {})", function, 5, "c0", 1.2),
+            input,
+            expected),
+        "Prediction value must be between 0 and 1");
   }
+}
+
+TEST_F(ClassificationAggregationTest, weights) {
+  auto runTest = [&](const std::string& expression,
+                     RowVectorPtr input,
+                     RowVectorPtr expected) {
+    testAggregations({input}, {}, {expression}, {expected});
+  };
+
+  /// This test detects memory access bugs in Accumulator::extractValues, where
+  /// iteration stops due to the number of used buckets rather than weight sum.
+  /// This discrepancy occurs because the weight sum is inaccurate, caused by a
+  /// double precision issue when summing in different orders.
+  auto input = makeRowVector({
+      makeNullableFlatVector<bool>(
+          {false, false, true, false, true, true, false, false}),
+      makeNullableFlatVector<double>({0.1, 0.0, 0.3, 0.0, 0.0, 0.1, 0.3, 0.8}),
+      makeNullableFlatVector<double>({0.0, 0.5, 0.4, 0.0, 0.6, 0.3, 0.0, 0.2}),
+  });
+
+  /// Fallout test.
+  auto expected = makeRowVector({makeArrayVector<double>({{1.0, 2. / 7}})});
+  runTest("classification_fall_out(5, c0, c1, c2)", input, expected);
+
+  /// Precision test.
+  expected = makeRowVector({makeArrayVector<double>({{0.65, 2. / 3}})});
+  runTest("classification_precision(5, c0, c1, c2)", input, expected);
+
+  /// Recall test.
+  expected = makeRowVector({makeArrayVector<double>({{1.0, 4. / 13}})});
+  runTest("classification_recall(5, c0, c1, c2)", input, expected);
+
+  /// Miss rate test.
+  expected = makeRowVector({makeArrayVector<double>({{0.0, 9. / 13}})});
+  runTest("classification_miss_rate(5, c0, c1, c2)", input, expected);
+
+  /// Thresholds test.
+  expected = makeRowVector({makeArrayVector<double>({{0.0, 0.2}})});
+  runTest("classification_thresholds(5, c0, c1, c2)", input, expected);
 }
 
 TEST_F(ClassificationAggregationTest, groupBy) {

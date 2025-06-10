@@ -37,7 +37,6 @@ PlanNodeStats& PlanNodeStats::operator+=(const PlanNodeStats& another) {
   addInputTiming.add(another.addInputTiming);
   getOutputTiming.add(another.getOutputTiming);
   finishTiming.add(another.finishTiming);
-  cpuWallTiming.add(another.isBlockedTiming);
   cpuWallTiming.add(another.addInputTiming);
   cpuWallTiming.add(another.getOutputTiming);
   cpuWallTiming.add(another.finishTiming);
@@ -129,6 +128,14 @@ void PlanNodeStats::addTotals(const OperatorStats& stats) {
       this->customStats.insert(std::make_pair(name, customStats));
     } else {
       this->customStats.at(name).merge(customStats);
+    }
+  }
+
+  for (const auto& [name, exprStats] : stats.expressionStats) {
+    if (UNLIKELY(this->expressionStats.count(name) == 0)) {
+      this->expressionStats.insert(std::make_pair(name, exprStats));
+    } else {
+      this->expressionStats.at(name).add(exprStats);
     }
   }
 

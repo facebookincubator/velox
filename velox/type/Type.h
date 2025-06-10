@@ -397,7 +397,7 @@ class Type;
 using TypePtr = std::shared_ptr<const Type>;
 
 enum class TypeParameterKind {
-  /// Type. For example, element type in the array type.
+  /// Type. For example, element type in the array, map, or row children type.
   kType,
   /// Integer. For example, precision in a decimal type.
   kLongLiteral,
@@ -407,24 +407,32 @@ struct TypeParameter {
   const TypeParameterKind kind;
 
   /// Must be not not null when kind is kType. All other properties should be
-  /// null or unset.
+  /// null or unset (other than rowFieldName).
   const TypePtr type;
 
   /// Must be set when kind is kLongLiteral. All other properties should be null
   /// or unset.
   const std::optional<int64_t> longLiteral;
 
+  /// If this parameter is a child of another parent row type, it can optionally
+  /// have a name, e.g, "id" for `row(id bigint)`. Only set when kind is kType
+  const std::optional<std::string> rowFieldName;
+
   /// Creates kType parameter.
-  explicit TypeParameter(TypePtr _type)
+  explicit TypeParameter(
+      TypePtr _type,
+      std::optional<std::string> _rowFieldName = std::nullopt)
       : kind{TypeParameterKind::kType},
         type{std::move(_type)},
-        longLiteral{std::nullopt} {}
+        longLiteral{std::nullopt},
+        rowFieldName(_rowFieldName) {}
 
   /// Creates kLongLiteral parameter.
   explicit TypeParameter(int64_t _longLiteral)
       : kind{TypeParameterKind::kLongLiteral},
         type{nullptr},
-        longLiteral{_longLiteral} {}
+        longLiteral{_longLiteral},
+        rowFieldName{std::nullopt} {}
 };
 
 /// Abstract class hierarchy. Instances of these classes carry full
@@ -535,7 +543,7 @@ class Type : public Tree<const TypePtr>, public velox::ISerializable {
   static void registerSerDe();
 
   /// Recursive kind hashing (uses only TypeKind).
-  size_t hashKind() const;
+  virtual size_t hashKind() const;
 
   /// Recursive kind match (uses only TypeKind).
   bool kindEquals(const std::shared_ptr<const Type>& other) const;
@@ -1070,6 +1078,8 @@ class RowType : public TypeBase<TypeKind::ROW> {
     return *parameters;
   }
 
+  size_t hashKind() const override;
+
  protected:
   bool equals(const Type& other) const override;
 
@@ -1079,6 +1089,8 @@ class RowType : public TypeBase<TypeKind::ROW> {
   const std::vector<std::string> names_;
   const std::vector<std::shared_ptr<const Type>> children_;
   mutable std::atomic<std::vector<TypeParameter>*> parameters_{nullptr};
+  mutable std::atomic_bool hashKindComputed_{false};
+  mutable std::atomic_size_t hashKind_;
 };
 
 using RowTypePtr = std::shared_ptr<const RowType>;

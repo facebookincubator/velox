@@ -37,9 +37,13 @@
 #include "velox/functions/prestosql/aggregates/MapUnionSumAggregate.h"
 #include "velox/functions/prestosql/aggregates/MaxByAggregate.h"
 #include "velox/functions/prestosql/aggregates/MaxSizeForStatsAggregate.h"
+#include "velox/functions/prestosql/aggregates/MergeAggregate.h"
 #include "velox/functions/prestosql/aggregates/MinByAggregate.h"
 #include "velox/functions/prestosql/aggregates/MinMaxAggregates.h"
 #include "velox/functions/prestosql/aggregates/MultiMapAggAggregate.h"
+#include "velox/functions/prestosql/aggregates/NoisyCountGaussianAggregate.h"
+#include "velox/functions/prestosql/aggregates/NoisyCountIfGaussianAggregate.h"
+#include "velox/functions/prestosql/aggregates/QDigestAggAggregate.h"
 #include "velox/functions/prestosql/aggregates/ReduceAgg.h"
 #include "velox/functions/prestosql/aggregates/SetAggregates.h"
 #include "velox/functions/prestosql/aggregates/SumAggregate.h"
@@ -59,6 +63,7 @@ void registerAllAggregateFunctions(
   registerApproxMostFrequentAggregate(
       prefix, withCompanionFunctions, overwrite);
   registerApproxPercentileAggregate(prefix, withCompanionFunctions, overwrite);
+  registerQDigestAggAggregate(prefix, overwrite);
   registerArbitraryAggregate(prefix, withCompanionFunctions, overwrite);
   registerArrayAggAggregate(prefix, withCompanionFunctions, overwrite);
   registerAverageAggregate(prefix, withCompanionFunctions, overwrite);
@@ -84,9 +89,14 @@ void registerAllAggregateFunctions(
   registerMultiMapAggAggregate(prefix, withCompanionFunctions, overwrite);
   registerSumDataSizeForStatsAggregate(
       prefix, withCompanionFunctions, overwrite);
+  registerMergeAggregate(prefix, withCompanionFunctions, overwrite);
   registerMinMaxAggregates(prefix, withCompanionFunctions, overwrite);
   registerMaxByAggregates(prefix, withCompanionFunctions, overwrite);
   registerMinByAggregates(prefix, withCompanionFunctions, overwrite);
+  registerNoisyCountIfGaussianAggregate(
+      prefix, withCompanionFunctions, overwrite);
+  registerNoisyCountGaussianAggregate(
+      prefix, withCompanionFunctions, overwrite);
   registerReduceAgg(prefix, withCompanionFunctions, overwrite);
   registerSetAggAggregate(prefix, withCompanionFunctions, overwrite);
   registerSetUnionAggregate(prefix, withCompanionFunctions, overwrite);

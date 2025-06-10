@@ -161,12 +161,11 @@ class SelectiveColumnReader {
   // from a downstream operator.
   virtual void resetFilterCaches();
 
-  // Seeks to offset and reads the rows in 'rows' and applies
-  // filters and value processing as given by 'scanSpec supplied at
-  // construction. 'offset' is relative to start of stripe. 'rows' are
-  // relative to 'offset', so that row 0 is the 'offset'th row from
-  // start of stripe. 'rows' is expected to stay constant
-  // between this and the next call to read.
+  // Seeks to offset and reads the rows in 'rows' and applies filters and value
+  // processing as given by 'scanSpec supplied at construction. 'offset' is
+  // relative to start of stripe. 'rows' are relative to 'offset', so that row 0
+  // is the 'offset'th row from start of stripe. 'rows' is expected to stay
+  // constant between this and the next call to read.
   virtual void
   read(int64_t offset, const RowSet& rows, const uint64_t* incomingNulls) = 0;
 
@@ -226,7 +225,7 @@ class SelectiveColumnReader {
 
   template <typename T>
   T* mutableValues(int32_t size) {
-    DCHECK(values_->capacity() >= (numValues_ + size) * sizeof(T));
+    VELOX_DCHECK_GE(values_->capacity(), (numValues_ + size) * sizeof(T));
     return reinterpret_cast<T*>(rawValues_) + numValues_;
   }
 
@@ -457,7 +456,7 @@ class SelectiveColumnReader {
   static constexpr uint32_t kRowGroupNotSet = ~0;
 
   template <typename T>
-  void ensureValuesCapacity(vector_size_t numRows);
+  void ensureValuesCapacity(vector_size_t numRows, bool preserveData = false);
 
   // Prepares the result buffer for nulls for reading 'rows'. Leaves
   // 'extraSpace' bits worth of space in the nulls buffer.

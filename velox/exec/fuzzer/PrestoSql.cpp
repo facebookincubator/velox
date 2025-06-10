@@ -16,6 +16,7 @@
 
 #include "velox/exec/fuzzer/PrestoSql.h"
 
+#include "velox/exec/fuzzer/PrestoQueryRunner.h"
 #include "velox/exec/fuzzer/ReferenceQueryRunner.h"
 #include "velox/functions/prestosql/types/JsonType.h"
 
@@ -133,7 +134,12 @@ void toCallInputsSql(
     if (auto field =
             std::dynamic_pointer_cast<const core::FieldAccessTypedExpr>(
                 input)) {
-      sql << field->name();
+      if (field->isInputColumn()) {
+        sql << field->name();
+      } else {
+        toCallInputsSql(field->inputs(), sql);
+        sql << fmt::format(".{}", field->name());
+      }
     } else if (
         auto call =
             std::dynamic_pointer_cast<const core::CallTypedExpr>(input)) {
@@ -201,13 +207,17 @@ std::string toCallSql(const core::CallTypedExprPtr& call) {
   const auto& unaryOperators = unaryOperatorMap();
   const auto& binaryOperators = binaryOperatorMap();
   if (unaryOperators.count(call->name()) > 0) {
-    VELOX_CHECK_EQ(call->inputs().size(), 1);
+    VELOX_CHECK_EQ(
+        call->inputs().size(), 1, "Expected one argument to a unary operator");
     sql << "(";
     sql << fmt::format("{} ", unaryOperators.at(call->name()));
     toCallInputsSql({call->inputs()[0]}, sql);
     sql << ")";
   } else if (binaryOperators.count(call->name()) > 0) {
-    VELOX_CHECK_EQ(call->inputs().size(), 2);
+    VELOX_CHECK_EQ(
+        call->inputs().size(),
+        2,
+        "Expected two arguments to a binary operator");
     sql << "(";
     toCallInputsSql({call->inputs()[0]}, sql);
     sql << fmt::format(" {} ", binaryOperators.at(call->name()));
@@ -215,12 +225,18 @@ std::string toCallSql(const core::CallTypedExprPtr& call) {
     sql << ")";
   } else if (call->name() == "is_null" || call->name() == "not_null") {
     sql << "(";
-    VELOX_CHECK_EQ(call->inputs().size(), 1);
+    VELOX_CHECK_EQ(
+        call->inputs().size(),
+        1,
+        "Expected one argument to function 'is_null' or 'not_null'");
     toCallInputsSql({call->inputs()[0]}, sql);
     sql << fmt::format(" is{} null", call->name() == "not_null" ? " not" : "");
     sql << ")";
   } else if (call->name() == "in") {
-    VELOX_CHECK_GE(call->inputs().size(), 2);
+    VELOX_CHECK_GE(
+        call->inputs().size(),
+        2,
+        "Expected at least two arguments to function 'in'");
     toCallInputsSql({call->inputs()[0]}, sql);
     sql << " in (";
     for (auto i = 1; i < call->inputs().size(); ++i) {
@@ -229,6 +245,14 @@ std::string toCallSql(const core::CallTypedExprPtr& call) {
     }
     sql << ")";
   } else if (call->name() == "like") {
+    VELOX_CHECK_GE(
+        call->inputs().size(),
+        2,
+        "Expected at least two arguments to function 'like'");
+    VELOX_CHECK_LE(
+        call->inputs().size(),
+        3,
+        "Expected at most three arguments to function 'like'");
     sql << "(";
     toCallInputsSql({call->inputs()[0]}, sql);
     sql << " like ";
@@ -239,6 +263,10 @@ std::string toCallSql(const core::CallTypedExprPtr& call) {
     }
     sql << ")";
   } else if (call->name() == "or" || call->name() == "and") {
+    VELOX_CHECK_GE(
+        call->inputs().size(),
+        2,
+        "Expected at least two arguments to function 'or' or 'and'");
     sql << "(";
     const auto& inputs = call->inputs();
     for (auto i = 0; i < inputs.size(); ++i) {
@@ -253,23 +281,53 @@ std::string toCallSql(const core::CallTypedExprPtr& call) {
     toCallInputsSql(call->inputs(), sql);
     sql << "]";
   } else if (call->name() == "between") {
+    VELOX_CHECK_EQ(
+        call->inputs().size(),
+        3,
+        "Expected three arguments to function 'between'");
+    sql << "(";
     const auto& inputs = call->inputs();
-    VELOX_CHECK_EQ(inputs.size(), 3);
     toCallInputsSql({inputs[0]}, sql);
     sql << " between ";
     toCallInputsSql({inputs[1]}, sql);
     sql << " and ";
     toCallInputsSql({inputs[2]}, sql);
+    sql << ")";
   } else if (call->name() == "row_constructor") {
+    VELOX_CHECK_GE(
+        call->inputs().size(),
+        1,
+        "Expected at least one argument to function 'row_constructor'");
     sql << "row(";
     toCallInputsSql(call->inputs(), sql);
     sql << ")";
   } else if (call->name() == "subscript") {
-    VELOX_CHECK_EQ(call->inputs().size(), 2);
+    VELOX_CHECK_EQ(
+        call->inputs().size(),
+        2,
+        "Expected two arguments to function 'subscript'");
     toCallInputsSql({call->inputs()[0]}, sql);
     sql << "[";
     toCallInputsSql({call->inputs()[1]}, sql);
     sql << "]";
+  } else if (call->name() == "switch") {
+    VELOX_CHECK_GE(
+        call->inputs().size(),
+        2,
+        "Expected at least two arguments to function 'switch'");
+    sql << "case";
+    int i = 0;
+    for (; i < call->inputs().size() - 1; i += 2) {
+      sql << " when ";
+      toCallInputsSql({call->inputs()[i]}, sql);
+      sql << " then ";
+      toCallInputsSql({call->inputs()[i + 1]}, sql);
+    }
+    if (i < call->inputs().size()) {
+      sql << " else ";
+      toCallInputsSql({call->inputs()[i]}, sql);
+    }
+    sql << " end";
   } else {
     // Regular function call syntax.
     sql << call->name() << "(";
@@ -293,11 +351,10 @@ std::string toCastSql(const core::CastTypedExpr& cast) {
 }
 
 std::string toConcatSql(const core::ConcatTypedExpr& concat) {
-  std::stringstream sql;
-  sql << "row(";
-  toCallInputsSql(concat.inputs(), sql);
-  sql << ")";
-  return sql.str();
+  std::stringstream input;
+  toCallInputsSql(concat.inputs(), input);
+  return fmt::format(
+      "cast(row({}) as {})", input.str(), toTypeSql(concat.type()));
 }
 
 template <typename T>
@@ -380,10 +437,10 @@ void PrestoSqlPlanNodeVisitor::visit(
     core::PlanNodeVisitorContext& ctx) const {
   PrestoSqlPlanNodeVisitorContext& visitorContext =
       static_cast<PrestoSqlPlanNodeVisitorContext&>(ctx);
-  if (!queryRunner_->isSupportedDwrfType(node.outputType())) {
+  if (!PrestoQueryRunner::isSupportedDwrfType(node.outputType())) {
     visitorContext.sql = std::nullopt;
   } else {
-    visitorContext.sql = queryRunner_->getTableName(node);
+    visitorContext.sql = ReferenceQueryRunner::getTableName(node);
   }
 }
 
@@ -400,8 +457,10 @@ void PrestoSqlPlanNodeVisitor::visit(
   PrestoSqlPlanNodeVisitorContext& visitorContext =
       static_cast<PrestoSqlPlanNodeVisitorContext&>(ctx);
 
-  if (!queryRunner_->isSupportedDwrfType(node.sources()[0]->outputType()) ||
-      !queryRunner_->isSupportedDwrfType(node.sources()[1]->outputType())) {
+  if (!PrestoQueryRunner::isSupportedDwrfType(
+          node.sources()[0]->outputType()) ||
+      !PrestoQueryRunner::isSupportedDwrfType(
+          node.sources()[1]->outputType())) {
     visitorContext.sql = std::nullopt;
     return;
   }

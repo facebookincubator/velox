@@ -15,9 +15,12 @@
  */
 #include "velox/exec/tests/utils/PlanBuilder.h"
 #include "velox/common/base/tests/GTestUtils.h"
+#include "velox/core/Expressions.h"
 #include "velox/exec/WindowFunction.h"
 #include "velox/functions/prestosql/aggregates/RegisterAggregateFunctions.h"
 #include "velox/functions/prestosql/registration/RegistrationFunctions.h"
+#include "velox/parse/Expressions.h"
+#include "velox/parse/IExpr.h"
 #include "velox/parse/TypeResolver.h"
 #include "velox/vector/tests/utils/VectorTestBase.h"
 
@@ -27,7 +30,7 @@ class PlanBuilderTest : public testing::Test,
                         public velox::test::VectorTestBase {
  public:
   static void SetUpTestCase() {
-    memory::MemoryManager::testingSetInstance({});
+    memory::MemoryManager::testingSetInstance(memory::MemoryManager::Options{});
   }
 
   PlanBuilderTest() {
@@ -248,6 +251,123 @@ TEST_F(PlanBuilderTest, missingOutputType) {
   VELOX_ASSERT_THROW(
       PlanBuilder().startTableScan().endTableScan(),
       "outputType must be specified");
+}
+
+TEST_F(PlanBuilderTest, projectExpressions) {
+  // Non-typed Expressions.
+  // Simple field access.
+  auto data = ROW({"c0"}, {BIGINT()});
+  VELOX_CHECK_EQ(
+      PlanBuilder()
+          .tableScan("tmp", data)
+          .projectExpressions(
+              {std::make_shared<core::FieldAccessExpr>("c0", std::nullopt)})
+          .planNode()
+          ->toString(true, false),
+      "-- Project[1][expressions: (c0:BIGINT, ROW[\"c0\"])] -> c0:BIGINT\n");
+  // Dereference test using field access query.
+  data = ROW({"c0"}, {ROW({"field0"}, {BIGINT()})});
+  VELOX_CHECK_EQ(
+      PlanBuilder()
+          .tableScan("tmp", data)
+          .projectExpressions({std::make_shared<core::FieldAccessExpr>(
+              "field0",
+              std::nullopt,
+              std::vector<core::ExprPtr>{
+                  std::make_shared<core::FieldAccessExpr>(
+                      "c0", std::nullopt)})})
+          .planNode()
+          ->toString(true, false),
+      "-- Project[1][expressions: (field0:BIGINT, ROW[\"c0\"][field0])] -> field0:BIGINT\n");
+
+  // Test Typed Expressions
+  VELOX_CHECK_EQ(
+      PlanBuilder()
+          .tableScan("tmp", ROW({"c0"}, {ROW({VARCHAR()})}))
+          .projectExpressions(
+              {std::make_shared<core::FieldAccessTypedExpr>(VARCHAR(), "c0")})
+          .planNode()
+          ->toString(true, false),
+      "-- Project[1][expressions: (p0:VARCHAR, \"c0\")] -> p0:VARCHAR\n");
+  VELOX_CHECK_EQ(
+      PlanBuilder()
+          .tableScan("tmp", ROW({"c0"}, {ROW({VARCHAR()})}))
+          .projectExpressions({std::make_shared<core::FieldAccessTypedExpr>(
+              VARCHAR(),
+              std::make_shared<core::FieldAccessTypedExpr>(VARCHAR(), "c0"),
+              "field0")})
+          .planNode()
+          ->toString(true, false),
+      "-- Project[1][expressions: (p0:VARCHAR, \"c0\"[\"field0\"])] -> p0:VARCHAR\n");
+}
+
+TEST_F(PlanBuilderTest, commitStrategyParameter) {
+  auto data = makeRowVector({makeFlatVector<int64_t>(10, folly::identity)});
+  auto directory = "/some/test/directory";
+
+  // Lambda to create a plan with given commitStrategy and verify it
+  auto testCommitStrategy =
+      [&](std::optional<connector::CommitStrategy> commitStrategy,
+          connector::CommitStrategy expectedStrategy) {
+        std::shared_ptr<const core::PlanNode> plan;
+
+        // Create a plan with or without commitStrategy based on whether it has
+        // a value
+        if (commitStrategy.has_value()) {
+          plan = PlanBuilder()
+                     .values({data})
+                     .tableWrite(
+                         directory,
+                         {},
+                         0,
+                         {},
+                         {},
+                         dwio::common::FileFormat::DWRF,
+                         {},
+                         PlanBuilder::kHiveDefaultConnectorId,
+                         {},
+                         nullptr,
+                         "",
+                         common::CompressionKind_NONE,
+                         nullptr,
+                         false,
+                         commitStrategy.value())
+                     .planNode();
+        } else {
+          plan = PlanBuilder()
+                     .values({data})
+                     .tableWrite(
+                         directory,
+                         {},
+                         0,
+                         {},
+                         {},
+                         dwio::common::FileFormat::DWRF,
+                         {},
+                         PlanBuilder::kHiveDefaultConnectorId,
+                         {},
+                         nullptr,
+                         "",
+                         common::CompressionKind_NONE,
+                         nullptr,
+                         false)
+                     .planNode();
+        }
+
+        // Verify the plan node has the correct commit strategy
+        auto tableWriteNode =
+            std::dynamic_pointer_cast<const core::TableWriteNode>(plan);
+        ASSERT_NE(tableWriteNode, nullptr);
+        ASSERT_EQ(tableWriteNode->commitStrategy(), expectedStrategy);
+      };
+
+  // Test with explicit task commit strategy
+  testCommitStrategy(
+      connector::CommitStrategy::kTaskCommit,
+      connector::CommitStrategy::kTaskCommit);
+
+  // Test with no explicit commit strategy (should default to kNoCommit)
+  testCommitStrategy(std::nullopt, connector::CommitStrategy::kNoCommit);
 }
 
 } // namespace facebook::velox::exec::test

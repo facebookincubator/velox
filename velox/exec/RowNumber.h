@@ -59,7 +59,7 @@ class RowNumber : public Operator {
     return spillConfig_.has_value();
   }
 
-  void setupInputSpiller(const SpillPartitionNumSet& spillPartitionSet);
+  void setupInputSpiller(const SpillPartitionIdSet& spillPartitionIdSet);
 
   void ensureInputFits(const RowVectorPtr& input);
 
@@ -69,7 +69,7 @@ class RowNumber : public Operator {
 
   void restoreNextSpillPartition();
 
-  SpillPartitionNumSet spillHashTable();
+  SpillPartitionIdSet spillHashTable();
 
   int64_t numRows(char* partition);
 
@@ -135,6 +135,10 @@ class RowNumber : public Operator {
   // Used to restore previously spilled input.
   std::unique_ptr<UnorderedStreamReader<BatchStream>> spillInputReader_;
 
+  // The spill partition id for the currently restoring partition, corresponding
+  // to 'spillInputReader_'. Not set if row number hasn't spilled yet.
+  std::optional<SpillPartitionId> restoringPartitionId_;
+
   SpillPartitionSet spillInputPartitionSet_;
 
   // Used to calculate the spill partition numbers of the inputs.
@@ -153,6 +157,7 @@ class RowNumberHashTableSpiller : public SpillerBase {
 
   RowNumberHashTableSpiller(
       RowContainer* container,
+      std::optional<SpillPartitionId> parentId,
       RowTypePtr rowType,
       HashBitRange bits,
       const common::SpillConfig* spillConfig,

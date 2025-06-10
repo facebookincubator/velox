@@ -19,6 +19,7 @@
 #include "velox/functions/sparksql/Arithmetic.h"
 #include "velox/functions/sparksql/DecimalArithmetic.h"
 #include "velox/functions/sparksql/DecimalCeil.h"
+#include "velox/functions/sparksql/Factorial.h"
 #include "velox/functions/sparksql/Rand.h"
 
 namespace facebook::velox::functions::sparksql {
@@ -84,6 +85,8 @@ void registerMathFunctions(const std::string& prefix) {
   registerFunction<sparksql::Log10Function, double, double>({prefix + "log10"});
   registerFunction<sparksql::LogarithmFunction, double, double, double>(
       {prefix + "log"});
+  registerFunction<SqrtFunction, double, double>({prefix + "sqrt"});
+  registerFunction<CbrtFunction, double, double>({prefix + "cbrt"});
   registerFunction<
       WidthBucketFunction,
       int64_t,
@@ -125,6 +128,8 @@ void registerMathFunctions(const std::string& prefix) {
   registerBinaryNumeric<CheckedSubtractFunction>({prefix + "checked_subtract"});
   registerBinaryNumeric<CheckedMultiplyFunction>({prefix + "checked_multiply"});
   registerBinaryNumeric<CheckedDivideFunction>({prefix + "checked_divide"});
+  registerFunction<sparksql::FactorialFunction, int64_t, int32_t>(
+      {prefix + "factorial"});
 }
 
 } // namespace facebook::velox::functions::sparksql

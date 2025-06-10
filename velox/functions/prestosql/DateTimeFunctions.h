@@ -87,7 +87,8 @@ struct FromUnixtimeFunction {
       const arg_type<int64_t>* hours,
       const arg_type<int64_t>* minutes) {
     if (hours != nullptr && minutes != nullptr) {
-      tzID_ = tz::getTimeZoneID(*hours * 60 + *minutes);
+      tzID_ = tz::getTimeZoneID(
+          checkedPlus(checkedMultiply<int64_t>(*hours, 60), *minutes));
     }
   }
 
@@ -96,8 +97,8 @@ struct FromUnixtimeFunction {
       const arg_type<double>& unixtime,
       const arg_type<int64_t>& hours,
       const arg_type<int64_t>& minutes) {
-    int16_t timezoneId =
-        tzID_.value_or(tz::getTimeZoneID(hours * 60 + minutes));
+    int16_t timezoneId = tzID_.value_or(tz::getTimeZoneID(
+        checkedPlus(checkedMultiply<int64_t>(hours, 60), minutes)));
     result = pack(fromUnixtime(unixtime).toMillis(), timezoneId);
   }
 
@@ -1722,6 +1723,20 @@ struct XxHash64DateFunction {
     // Casted to int64_t to feed into XXH64
     auto date_input = static_cast<int64_t>(input);
     result = XXH64(&date_input, sizeof(date_input), 0);
+  }
+};
+
+/// xxhash64(Timestamp) → bigint
+/// Return a xxhash64 of input Timestamp
+template <typename T>
+struct XxHash64TimestampFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  FOLLY_ALWAYS_INLINE
+  void call(out_type<int64_t>& result, const arg_type<Timestamp>& input) {
+    // Use the milliseconds representation of the timestamp
+    auto timestamp_millis = input.toMillis();
+    result = XXH64(&timestamp_millis, sizeof(timestamp_millis), 0);
   }
 };
 

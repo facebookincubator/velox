@@ -100,8 +100,11 @@ cmake:					#: Use CMake to create a Makefile build system
 		$(GENERATOR) \
 		${EXTRA_CMAKE_FLAGS}
 
-cmake-gpu:
-	$(MAKE) EXTRA_CMAKE_FLAGS="${EXTRA_CMAKE_FLAGS} -DVELOX_ENABLE_GPU=ON" cmake
+cmake-wave:
+	$(MAKE) EXTRA_CMAKE_FLAGS="${EXTRA_CMAKE_FLAGS} -DVELOX_ENABLE_WAVE=ON" cmake
+
+cmake-cudf:
+	$(MAKE) EXTRA_CMAKE_FLAGS="${EXTRA_CMAKE_FLAGS} -DVELOX_ENABLE_CUDF=ON" cmake
 
 build:					#: Build the software based in BUILD_DIR and BUILD_TYPE variables
 	cmake --build $(BUILD_BASE_DIR)/$(BUILD_DIR) -j $(NUM_THREADS)
@@ -124,12 +127,20 @@ minimal:				 #: Minimal build
 	$(MAKE) cmake BUILD_DIR=release BUILD_TYPE=release EXTRA_CMAKE_FLAGS="${EXTRA_CMAKE_FLAGS} -DVELOX_BUILD_MINIMAL=ON"
 	$(MAKE) build BUILD_DIR=release
 
-gpu:						 #: Build with GPU support
-	$(MAKE) cmake BUILD_DIR=release BUILD_TYPE=release EXTRA_CMAKE_FLAGS="${EXTRA_CMAKE_FLAGS} -DVELOX_ENABLE_GPU=ON"
+wave:			   	         #: Build with Wave GPU support
+	$(MAKE) cmake-wave BUILD_DIR=release BUILD_TYPE=release
 	$(MAKE) build BUILD_DIR=release
 
-gpu_debug:			 #: Build with debugging symbols and GPU support
-	$(MAKE) cmake BUILD_DIR=debug BUILD_TYPE=debug EXTRA_CMAKE_FLAGS="${EXTRA_CMAKE_FLAGS} -DVELOX_ENABLE_GPU=ON"
+cudf:			   	         #: Build with cuDF GPU support
+	$(MAKE) cmake-cudf BUILD_DIR=release BUILD_TYPE=release
+	$(MAKE) build BUILD_DIR=release
+
+wave-debug:			 #: Build with debugging symbols and Wave GPU support
+	$(MAKE) cmake-wave BUILD_DIR=debug BUILD_TYPE=debug
+	$(MAKE) build BUILD_DIR=debug
+
+cudf-debug:			 #: Build with debugging symbols and cuDF GPU support
+	$(MAKE) cmake-cudf BUILD_DIR=debug BUILD_TYPE=debug
 	$(MAKE) build BUILD_DIR=debug
 
 dwio:						#: Minimal build with dwio enabled.
@@ -155,7 +166,7 @@ benchmarks-build:
 					    -DVELOX_BUILD_RUNNER=OFF"
 
 benchmarks-basic-run:
-	scripts/benchmark-runner.py run \
+	scripts/ci/benchmark-runner.py run \
 			--bm_estimate_time \
 			--bm_max_secs 10 \
 			--bm_max_trials 10000 \
@@ -173,48 +184,6 @@ fuzzertest: debug
 			--repro_persist_path $(FUZZER_REPRO_PERSIST_PATH) \
 			--logtostderr=1 \
 			--minloglevel=0
-
-format-fix: 			#: Fix formatting issues in the main branch
-ifneq ("$(wildcard ${PYTHON_VENV}/pyvenv.cfg)","")
-	source ${PYTHON_VENV}/bin/activate; scripts/check.py format main --fix
-else
-	scripts/check.py format main --fix
-endif
-
-format-check: 			#: Check for formatting issues on the main branch
-	clang-format --version
-ifneq ("$(wildcard ${PYTHON_VENV}/pyvenv.cfg)","")
-	source ${PYTHON_VENV}/bin/activate; scripts/check.py format main
-else
-	scripts/check.py format main
-endif
-
-header-fix:			#: Fix license header issues in the current branch
-ifneq ("$(wildcard ${PYTHON_VENV}/pyvenv.cfg)","")
-	source ${PYTHON_VENV}/bin/activate; scripts/check.py header main --fix
-else
-	scripts/check.py header main --fix
-endif
-
-header-check:			#: Check for license header issues on the main branch
-ifneq ("$(wildcard ${PYTHON_VENV}/pyvenv.cfg)","")
-	source ${PYTHON_VENV}/bin/activate; scripts/check.py header main
-else
-	scripts/check.py header main
-endif
-
-circleci-container:			#: Build the linux container for CircleCi
-	$(MAKE) linux-container CONTAINER_NAME=circleci
-
-check-container:
-	$(MAKE) linux-container CONTAINER_NAME=check
-
-linux-container:
-	rm -rf /tmp/docker && \
-	mkdir -p /tmp/docker && \
-	cp scripts/setup-helper-functions.sh scripts/setup-$(CONTAINER_NAME).sh scripts/$(CONTAINER_NAME)-container.dockfile /tmp/docker && \
-	cd /tmp/docker && \
-	docker build --build-arg cpu_target=$(CPU_TARGET) --tag "prestocpp/velox-$(CPU_TARGET)-$(CONTAINER_NAME):${USER}-$(shell date +%Y%m%d)" -f $(CONTAINER_NAME)-container.dockfile .
 
 help:					#: Show the help messages
 	@cat $(firstword $(MAKEFILE_LIST)) | \

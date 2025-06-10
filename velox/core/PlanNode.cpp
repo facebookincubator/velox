@@ -132,6 +132,14 @@ RowTypePtr getAggregationOutputType(
 
 } // namespace
 
+// static
+const std::vector<vector_size_t> AggregationNode::kDefaultGlobalGroupingSets =
+    {};
+
+// static
+const std::optional<FieldAccessTypedExprPtr> AggregationNode::kDefaultGroupId =
+    std::nullopt;
+
 AggregationNode::AggregationNode(
     const PlanNodeId& id,
     Step step,
@@ -214,8 +222,8 @@ AggregationNode::AggregationNode(
           preGroupedKeys,
           aggregateNames,
           aggregates,
-          {},
-          std::nullopt,
+          kDefaultGlobalGroupingSets,
+          kDefaultGroupId,
           ignoreNullKeys,
           source) {}
 
@@ -894,9 +902,9 @@ void appendCounts(
   }
 }
 
-std::string truncate(const std::string& str, size_t maxLen = 50) {
-  if (str.size() > maxLen) {
-    return str.substr(0, maxLen) + "...";
+std::string truncate(const std::string& str, size_t maxLength = 50) {
+  if (str.size() > maxLength) {
+    return str.substr(0, maxLength) + "...";
   }
   return str;
 }
@@ -906,7 +914,8 @@ void appendProjections(
     const AbstractProjectNode& op,
     const std::vector<size_t>& projections,
     size_t cnt,
-    std::stringstream& stream) {
+    std::stringstream& stream,
+    size_t maxLength) {
   if (cnt == 0) {
     return;
   }
@@ -915,11 +924,34 @@ void appendProjections(
     const auto index = projections[i];
     const auto& expr = op.projections()[index];
     stream << indentation << op.outputType()->nameOf(index) << ": "
-           << truncate(expr->toString()) << std::endl;
+           << truncate(expr->toString(), maxLength) << std::endl;
   }
 
   if (cnt < projections.size()) {
     stream << indentation << "... " << (projections.size() - cnt) << " more"
+           << std::endl;
+  }
+}
+
+void appendAggregations(
+    const std::string& indentation,
+    const AggregationNode& op,
+    size_t cnt,
+    std::stringstream& stream,
+    size_t maxLength) {
+  if (cnt == 0) {
+    return;
+  }
+
+  for (auto i = 0; i < cnt; ++i) {
+    const auto& expr = op.aggregates().at(i).call;
+    stream << indentation << i << ": "
+           << (op.aggregates().at(i).distinct ? "DISTINCT" : "")
+           << truncate(expr->toString(), maxLength) << std::endl;
+  }
+
+  if (cnt < op.aggregates().size()) {
+    stream << indentation << "... " << (op.aggregates().size() - cnt) << " more"
            << std::endl;
   }
 }
@@ -994,7 +1026,13 @@ void AbstractProjectNode::addSummaryDetails(
   {
     const auto cnt =
         std::min(options.project.maxProjections, projections.size());
-    appendProjections(indentation + "   ", *this, projections, cnt, stream);
+    appendProjections(
+        indentation + "   ",
+        *this,
+        projections,
+        cnt,
+        stream,
+        options.maxLength);
   }
 
   // dereferences: 2 out of 10
@@ -1003,7 +1041,13 @@ void AbstractProjectNode::addSummaryDetails(
   {
     const auto cnt =
         std::min(options.project.maxDereferences, dereferences.size());
-    appendProjections(indentation + "   ", *this, dereferences, cnt, stream);
+    appendProjections(
+        indentation + "   ",
+        *this,
+        dereferences,
+        cnt,
+        stream,
+        options.maxLength);
   }
 }
 
@@ -1132,13 +1176,14 @@ UnnestNode::UnnestNode(
     const PlanNodeId& id,
     std::vector<FieldAccessTypedExprPtr> replicateVariables,
     std::vector<FieldAccessTypedExprPtr> unnestVariables,
-    const std::vector<std::string>& unnestNames,
-    const std::optional<std::string>& ordinalityName,
+    std::vector<std::string> unnestNames,
+    std::optional<std::string> ordinalityName,
     const PlanNodePtr& source)
     : PlanNode(id),
       replicateVariables_{std::move(replicateVariables)},
       unnestVariables_{std::move(unnestVariables)},
-      withOrdinality_{ordinalityName.has_value()},
+      unnestNames_{std::move(unnestNames)},
+      ordinalityName_{std::move(ordinalityName)},
       sources_{source} {
   // Calculate output type. First come "replicate" columns, followed by
   // "unnest" columns, followed by an optional ordinality column.
@@ -1153,15 +1198,15 @@ UnnestNode::UnnestNode(
   int unnestIndex = 0;
   for (const auto& variable : unnestVariables_) {
     if (variable->type()->isArray()) {
-      names.emplace_back(unnestNames[unnestIndex++]);
+      names.emplace_back(unnestNames_[unnestIndex++]);
       types.emplace_back(variable->type()->asArray().elementType());
     } else if (variable->type()->isMap()) {
       const auto& mapType = variable->type()->asMap();
 
-      names.emplace_back(unnestNames[unnestIndex++]);
+      names.emplace_back(unnestNames_[unnestIndex++]);
       types.emplace_back(mapType.keyType());
 
-      names.emplace_back(unnestNames[unnestIndex++]);
+      names.emplace_back(unnestNames_[unnestIndex++]);
       types.emplace_back(mapType.valueType());
     } else {
       VELOX_FAIL(
@@ -1170,8 +1215,8 @@ UnnestNode::UnnestNode(
     }
   }
 
-  if (ordinalityName.has_value()) {
-    names.emplace_back(ordinalityName.value());
+  if (ordinalityName_.has_value()) {
+    names.emplace_back(ordinalityName_.value());
     types.emplace_back(BIGINT());
   }
   outputType_ = ROW(std::move(names), std::move(types));
@@ -1185,20 +1230,10 @@ folly::dynamic UnnestNode::serialize() const {
   auto obj = PlanNode::serialize();
   obj["replicateVariables"] = ISerializable::serialize(replicateVariables_);
   obj["unnestVariables"] = ISerializable::serialize(unnestVariables_);
+  obj["unnestNames"] = ISerializable::serialize(unnestNames_);
 
-  obj["unnestNames"] = folly::dynamic::array();
-
-  // Extract 'unnest' column names from the 'outputType'.
-  // Output types contains 'replicated' column names, followed by 'unnest'
-  // column names, followed by an optional 'ordinal' column name.
-  for (auto i = replicateVariables_.size();
-       i < outputType()->size() - (withOrdinality_ ? 1 : 0);
-       ++i) {
-    obj["unnestNames"].push_back(outputType()->names()[i]);
-  }
-
-  if (withOrdinality_) {
-    obj["ordinalityName"] = outputType()->names().back();
+  if (ordinalityName_.has_value()) {
+    obj["ordinalityName"] = ordinalityName_.value();
   }
   return obj;
 }
@@ -1575,6 +1610,17 @@ bool IndexLookupJoinNode::isSupported(core::JoinType joinType) {
   }
 }
 
+bool isIndexLookupJoin(const core::PlanNode* planNode) {
+  const auto* indexLookupJoin =
+      dynamic_cast<const core::IndexLookupJoinNode*>(planNode);
+  return indexLookupJoin != nullptr;
+}
+
+// static
+const JoinType NestedLoopJoinNode::kDefaultJoinType = JoinType::kInner;
+// static
+const TypedExprPtr NestedLoopJoinNode::kDefaultJoinCondition = nullptr;
+
 NestedLoopJoinNode::NestedLoopJoinNode(
     const PlanNodeId& id,
     JoinType joinType,
@@ -1594,7 +1640,23 @@ NestedLoopJoinNode::NestedLoopJoinNode(
 
   auto leftType = sources_[0]->outputType();
   auto rightType = sources_[1]->outputType();
-  for (const auto& name : outputType_->names()) {
+  auto numOutputColumms = outputType_->size();
+  if (core::isLeftSemiProjectJoin(joinType)) {
+    --numOutputColumms;
+    VELOX_CHECK_EQ(outputType_->childAt(numOutputColumms), BOOLEAN());
+    const auto& name = outputType_->nameOf(numOutputColumms);
+    VELOX_CHECK(
+        !leftType->containsChild(name),
+        "Match column '{}' cannot be present in left source.",
+        name);
+    VELOX_CHECK(
+        !rightType->containsChild(name),
+        "Match column '{}' cannot be present in right source.",
+        name);
+  }
+
+  for (auto i = 0; i < numOutputColumms; ++i) {
+    const auto name = outputType_->nameOf(i);
     const bool leftContains = leftType->containsChild(name);
     const bool rightContains = rightType->containsChild(name);
     VELOX_USER_CHECK(
@@ -1615,8 +1677,8 @@ NestedLoopJoinNode::NestedLoopJoinNode(
     RowTypePtr outputType)
     : NestedLoopJoinNode(
           id,
-          JoinType::kInner,
-          nullptr,
+          kDefaultJoinType,
+          kDefaultJoinCondition,
           left,
           right,
           outputType) {}
@@ -1628,6 +1690,7 @@ bool NestedLoopJoinNode::isSupported(core::JoinType joinType) {
     case core::JoinType::kLeft:
     case core::JoinType::kRight:
     case core::JoinType::kFull:
+    case core::JoinType::kLeftSemiProject:
       return true;
 
     default:
@@ -1789,12 +1852,13 @@ WindowNode::WindowNode(
       partitionKeys_(std::move(partitionKeys)),
       sortingKeys_(std::move(sortingKeys)),
       sortingOrders_(std::move(sortingOrders)),
+      windowColumnNames_(std::move(windowColumnNames)),
       windowFunctions_(std::move(windowFunctions)),
       inputsSorted_(inputsSorted),
       sources_{std::move(source)},
       outputType_(getWindowOutputType(
           sources_[0]->outputType(),
-          windowColumnNames,
+          windowColumnNames_,
           windowFunctions_)) {
   VELOX_CHECK_GT(
       windowFunctions_.size(),
@@ -1980,13 +2044,7 @@ folly::dynamic WindowNode::serialize() const {
     obj["functions"].push_back(function.serialize());
   }
 
-  auto numInputs = sources()[0]->outputType()->size();
-  auto numOutputs = outputType()->size();
-  std::vector<std::string> windowNames;
-  for (auto i = numInputs; i < numOutputs; ++i) {
-    windowNames.push_back(outputType_->nameOf(i));
-  }
-  obj["names"] = ISerializable::serialize(windowNames);
+  obj["names"] = ISerializable::serialize(windowColumnNames_);
   obj["inputsSorted"] = inputsSorted_;
 
   return obj;
@@ -2956,7 +3014,7 @@ void PlanNode::addSummaryDetails(
   std::stringstream out;
   addDetails(out);
 
-  stream << indentation << truncate(out.str()) << std::endl;
+  stream << indentation << truncate(out.str(), options.maxLength) << std::endl;
 }
 
 namespace {
@@ -2968,8 +3026,10 @@ void collectLeafPlanNodeIds(
     return;
   }
 
-  for (const auto& child : planNode.sources()) {
-    collectLeafPlanNodeIds(*child, leafIds);
+  const auto& sources = planNode.sources();
+  const auto numSources = isIndexLookupJoin(&planNode) ? 1 : sources.size();
+  for (int i = 0; i < numSources; ++i) {
+    collectLeafPlanNodeIds(*sources[i], leafIds);
   }
 }
 } // namespace
@@ -3061,7 +3121,8 @@ void FilterNode::addSummaryDetails(
 
   appendExprSummary(indentation, options, exprCtx, stream);
 
-  stream << indentation << "filter: " << truncate(filter_->toString())
+  stream << indentation
+         << "filter: " << truncate(filter_->toString(), options.maxLength)
          << std::endl;
 }
 
@@ -3075,6 +3136,29 @@ void FilterNode::accept(
     const PlanNodeVisitor& visitor,
     PlanNodeVisitorContext& context) const {
   visitor.visit(*this, context);
+}
+
+void AggregationNode::addSummaryDetails(
+    const std::string& indentation,
+    const PlanSummaryOptions& options,
+    std::stringstream& stream) const {
+  std::stringstream out;
+  SummarizeExprVisitor::Context exprCtx;
+  SummarizeExprVisitor visitor;
+  for (const auto& aggregate : aggregates()) {
+    aggregate.call->accept(visitor, exprCtx);
+  }
+
+  appendExprSummary(indentation, options, exprCtx, stream);
+
+  stream << indentation << "aggregations: " << aggregates().size() << std::endl;
+
+  {
+    const auto cnt =
+        std::min(options.aggregate.maxAggregations, aggregates().size());
+    appendAggregations(
+        indentation + "   ", *this, cnt, stream, options.maxLength);
+  }
 }
 
 // static

@@ -166,9 +166,10 @@ std::unique_ptr<core::PartitionFunction> createBucketFunction(
 
 std::string computeBucketedFileName(
     const std::string& queryId,
+    uint32_t maxBucketCount,
     uint32_t bucket) {
-  static const uint32_t kMaxBucketCountPadding =
-      std::to_string(HiveDataSink::maxBucketCount() - 1).size();
+  const uint32_t kMaxBucketCountPadding =
+      std::to_string(maxBucketCount - 1).size();
   const std::string bucketValueStr = std::to_string(bucket);
   return fmt::format(
       "0{:0>{}}_0_{}", bucketValueStr, kMaxBucketCountPadding, queryId);
@@ -194,6 +195,11 @@ uint64_t getFinishTimeSliceLimitMsFromHiveConfig(
   return flushTimeSliceLimitMsFromConfig == 0
       ? std::numeric_limits<uint64_t>::max()
       : flushTimeSliceLimitMsFromConfig;
+}
+
+FOLLY_ALWAYS_INLINE int32_t
+getBucketCount(const HiveBucketProperty* bucketProperty) {
+  return bucketProperty == nullptr ? 0 : bucketProperty->bucketCount();
 }
 } // namespace
 
@@ -366,6 +372,27 @@ HiveDataSink::HiveDataSink(
     const ConnectorQueryCtx* connectorQueryCtx,
     CommitStrategy commitStrategy,
     const std::shared_ptr<const HiveConfig>& hiveConfig)
+    : HiveDataSink(
+          inputType,
+          insertTableHandle,
+          connectorQueryCtx,
+          commitStrategy,
+          hiveConfig,
+          getBucketCount(insertTableHandle->bucketProperty()),
+          getBucketCount(insertTableHandle->bucketProperty()) > 0
+              ? createBucketFunction(
+                    *insertTableHandle->bucketProperty(),
+                    inputType)
+              : nullptr) {}
+
+HiveDataSink::HiveDataSink(
+    RowTypePtr inputType,
+    std::shared_ptr<const HiveInsertTableHandle> insertTableHandle,
+    const ConnectorQueryCtx* connectorQueryCtx,
+    CommitStrategy commitStrategy,
+    const std::shared_ptr<const HiveConfig>& hiveConfig,
+    uint32_t bucketCount,
+    std::unique_ptr<core::PartitionFunction> bucketFunction)
     : inputType_(std::move(inputType)),
       insertTableHandle_(std::move(insertTableHandle)),
       connectorQueryCtx_(connectorQueryCtx),
@@ -387,15 +414,8 @@ HiveDataSink::HiveDataSink(
               : nullptr),
       dataChannels_(
           getNonPartitionChannels(partitionChannels_, inputType_->size())),
-      bucketCount_(
-          insertTableHandle_->bucketProperty() == nullptr
-              ? 0
-              : insertTableHandle_->bucketProperty()->bucketCount()),
-      bucketFunction_(
-          isBucketed() ? createBucketFunction(
-                             *insertTableHandle_->bucketProperty(),
-                             inputType_)
-                       : nullptr),
+      bucketCount_(static_cast<int32_t>(bucketCount)),
+      bucketFunction_(std::move(bucketFunction)),
       writerFactory_(
           dwio::common::getWriterFactory(insertTableHandle_->storageFormat())),
       spillConfig_(connectorQueryCtx->spillConfig()),
@@ -405,7 +425,9 @@ HiveDataSink::HiveDataSink(
       fileNameGenerator_(insertTableHandle_->fileNameGenerator()) {
   if (isBucketed()) {
     VELOX_USER_CHECK_LT(
-        bucketCount_, maxBucketCount(), "bucketCount exceeds the limit");
+        bucketCount_,
+        hiveConfig_->maxBucketCount(connectorQueryCtx->sessionProperties()),
+        "bucketCount exceeds the limit");
   }
   VELOX_USER_CHECK(
       (commitStrategy_ == CommitStrategy::kNoCommit) ||
@@ -913,6 +935,17 @@ HiveWriterParameters HiveDataSink::getWriterParameters(
 
 std::pair<std::string, std::string> HiveDataSink::getWriterFileNames(
     std::optional<uint32_t> bucketId) const {
+  if (auto hiveInsertFileNameGenerator =
+          std::dynamic_pointer_cast<const HiveInsertFileNameGenerator>(
+              fileNameGenerator_)) {
+    return hiveInsertFileNameGenerator->gen(
+        bucketId,
+        insertTableHandle_,
+        *connectorQueryCtx_,
+        hiveConfig_,
+        isCommitRequired());
+  }
+
   return fileNameGenerator_->gen(
       bucketId, insertTableHandle_, *connectorQueryCtx_, isCommitRequired());
 }
@@ -922,13 +955,33 @@ std::pair<std::string, std::string> HiveInsertFileNameGenerator::gen(
     const std::shared_ptr<const HiveInsertTableHandle> insertTableHandle,
     const ConnectorQueryCtx& connectorQueryCtx,
     bool commitRequired) const {
+  auto defaultHiveConfig =
+      std::make_shared<const HiveConfig>(std::make_shared<config::ConfigBase>(
+          std::unordered_map<std::string, std::string>()));
+
+  return this->gen(
+      bucketId,
+      insertTableHandle,
+      connectorQueryCtx,
+      defaultHiveConfig,
+      commitRequired);
+}
+
+std::pair<std::string, std::string> HiveInsertFileNameGenerator::gen(
+    std::optional<uint32_t> bucketId,
+    const std::shared_ptr<const HiveInsertTableHandle> insertTableHandle,
+    const ConnectorQueryCtx& connectorQueryCtx,
+    const std::shared_ptr<const HiveConfig>& hiveConfig,
+    bool commitRequired) const {
   auto targetFileName = insertTableHandle->locationHandle()->targetFileName();
   const bool generateFileName = targetFileName.empty();
   if (bucketId.has_value()) {
     VELOX_CHECK(generateFileName);
     // TODO: add hive.file_renaming_enabled support.
-    targetFileName =
-        computeBucketedFileName(connectorQueryCtx.queryId(), bucketId.value());
+    targetFileName = computeBucketedFileName(
+        connectorQueryCtx.queryId(),
+        hiveConfig->maxBucketCount(connectorQueryCtx.sessionProperties()),
+        bucketId.value());
   } else if (generateFileName) {
     // targetFileName includes planNodeId and Uuid. As a result, different
     // table writers run by the same task driver or the same table writer
@@ -993,9 +1046,6 @@ HiveWriterParameters::UpdateMode HiveDataSink::getUpdateMode() const {
                   insertBehavior));
       }
     } else {
-      if (insertTableHandle_->isBucketed()) {
-        VELOX_USER_FAIL("Cannot insert into bucketed unpartitioned Hive table");
-      }
       if (hiveConfig_->immutablePartitions()) {
         VELOX_USER_FAIL("Unpartitioned Hive tables are immutable.");
       }

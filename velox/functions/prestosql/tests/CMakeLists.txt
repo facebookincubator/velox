@@ -41,7 +41,6 @@ add_executable(
   ArrayNoneMatchTest.cpp
   ArrayNormalizeTest.cpp
   ArrayPositionTest.cpp
-  ArrayRemoveNullsTest.cpp
   ArrayRemoveTest.cpp
   ArrayShuffleTest.cpp
   ArraySortTest.cpp
@@ -62,11 +61,14 @@ add_executable(
   ElementAtTest.cpp
   FailTest.cpp
   FindFirstTest.cpp
+  FloatingPointFunctionsTest.cpp
   FromUtf8Test.cpp
+  GeometryFunctionsTest.cpp
   GreatestLeastTest.cpp
   HyperLogLogCastTest.cpp
   HyperLogLogFunctionsTest.cpp
   InPredicateTest.cpp
+  IntegerFunctionsTest.cpp
   IPAddressCastTest.cpp
   IPPrefixCastTest.cpp
   JsonCastTest.cpp
@@ -107,6 +109,7 @@ add_executable(
   TrimFunctionsTest.cpp
   TypeOfTest.cpp
   TDigestCastTest.cpp
+  QDigestCastTest.cpp
   URLFunctionsTest.cpp
   UuidFunctionsTest.cpp
   WidthBucketArrayTest.cpp

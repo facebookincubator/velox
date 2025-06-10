@@ -171,6 +171,35 @@ class Aggregate {
       const std::vector<VectorPtr>& args,
       bool mayPushdown) = 0;
 
+  /// Called by aggregation operator to set whether the input data is eligible
+  /// for clustered input optimization.  This is turned off, in cases for
+  /// example if the input rows from same group are not contiguous, or the
+  /// aggregate is sorted or distinct.
+  void setClusteredInput(bool value) {
+    clusteredInput_ = value;
+  }
+
+  /// Whether the function itself supports clustered input optimization.
+  ///
+  /// When this returns true, `addRawClusteredInput` should be implemented.
+  virtual bool supportsAddRawClusteredInput() const {
+    return false;
+  }
+
+  /// Fast path for the function when the input rows from same group are
+  /// clustered together. `groups`, `rows`, and `args` are the same as
+  /// `addRawInput`, `groupBoundaries` is the indices into `groups` indicating
+  /// the row after last row of each group.
+  ///
+  /// Will only be called when `supportsAddRawClusteredInput` returns true.
+  virtual void addRawClusteredInput(
+      char** /*groups*/,
+      const SelectivityVector& /*rows*/,
+      const std::vector<VectorPtr>& /*args*/,
+      const folly::Range<const vector_size_t*>& /*groupBoundaries*/) {
+    VELOX_NYI("Unimplemented: {} {}", typeid(*this).name(), __func__);
+  }
+
   // Updates final accumulators from intermediate results.
   // @param groups Pointers to the start of the group rows. These are aligned
   // with the 'args', e.g. data in the i-th row of the 'args' goes to the i-th
@@ -243,6 +272,9 @@ class Aggregate {
   // @param result The result vector to store the results in.
   //
   // See comment on 'result' and side effects in extractValues().
+  //
+  // This method needs to be thread-safe as it may be called concurrently during
+  // spilling operations.
   virtual void
   extractAccumulators(char** groups, int32_t numGroups, VectorPtr* result) = 0;
 
@@ -312,6 +344,12 @@ class Aggregate {
   // Returns the intermediate type for 'name' with signature
   // 'argTypes'. Throws if cannot resolve.
   static TypePtr intermediateType(
+      const std::string& name,
+      const std::vector<TypePtr>& argTypes);
+
+  // Returns the final type for 'name' with signature
+  // 'argTypes'. Throws if cannot resolve.
+  static TypePtr finalType(
       const std::string& name,
       const std::vector<TypePtr>& argTypes);
 
@@ -468,6 +506,8 @@ class Aggregate {
   std::vector<vector_size_t> pushdownCustomIndices_;
 
   bool validateIntermediateInputs_ = false;
+
+  bool clusteredInput_ = false;
 };
 
 using AggregateFunctionFactory = std::function<std::unique_ptr<Aggregate>(

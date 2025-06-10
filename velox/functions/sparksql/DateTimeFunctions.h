@@ -268,7 +268,18 @@ struct UnixTimestampParseWithFormatFunction
   FOLLY_ALWAYS_INLINE void call(int64_t& result, const arg_type<Date>& input) {
     auto timestamp = Timestamp::fromDate(input);
     timestamp.toGMT(*this->sessionTimeZone_);
-    result = timestamp.getSeconds();
+
+    int64_t seconds = timestamp.getSeconds();
+    // Spark converts days as microseconds and then divide it by 10e6 to get
+    // seconds. Spark throws exception if the microseconds overflows.
+    int128_t microseconds =
+        static_cast<int128_t>(seconds) * Timestamp::kMicrosecondsInSecond;
+    if (microseconds < INT64_MIN || microseconds > INT64_MAX) {
+      VELOX_USER_FAIL(
+          "Could not convert date {} to unix timestamp.",
+          DATE()->toString(input));
+    }
+    result = seconds;
   }
 
  private:
@@ -543,6 +554,7 @@ struct DateTruncFunction {
   FOLLY_ALWAYS_INLINE void initialize(
       const std::vector<TypePtr>& /*inputTypes*/,
       const core::QueryConfig& config,
+      const arg_type<Varchar>* /*format*/,
       const arg_type<Timestamp>* /*timestamp*/) {
     timeZone_ = getTimeZoneFromConfig(config);
   }
@@ -566,6 +578,51 @@ struct DateTruncFunction {
 
  private:
   const tz::TimeZone* timeZone_ = nullptr;
+};
+
+/// Truncates a date to a specified time unit. Return NULL if the format is
+/// invalid. Format as abbreviated unit string is allowed.
+template <typename T>
+struct TruncFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  FOLLY_ALWAYS_INLINE void initialize(
+      const std::vector<TypePtr>& /*inputTypes*/,
+      const core::QueryConfig& config,
+      const arg_type<Date>* /*date*/,
+      const arg_type<Varchar>* format) {
+    if (format != nullptr) {
+      unit_ = fromDateTimeUnitString(
+          *format,
+          /*throwIfInvalid=*/false,
+          /*allowMicro=*/false,
+          /*allowAbbreviated=*/true);
+    }
+  }
+
+  FOLLY_ALWAYS_INLINE bool call(
+      out_type<Date>& result,
+      const arg_type<Date>& date,
+      const arg_type<Varchar>& format) {
+    const auto unitOption = unit_.has_value() ? unit_
+                                              : fromDateTimeUnitString(
+                                                    format,
+                                                    /*throwIfInvalid=*/false,
+                                                    /*allowMicro=*/false,
+                                                    /*allowAbbreviated=*/true);
+    // Return NULL if unit is illegal or unit is less than week.
+    if (!unitOption.has_value() || unitOption.value() < DateTimeUnit::kWeek) {
+      return false;
+    }
+    auto dateTime = getDateTime(date);
+    adjustDateTime(dateTime, unitOption.value());
+
+    result = Timestamp::calendarUtcToEpoch(dateTime) / kSecondsInDay;
+    return true;
+  }
+
+ private:
+  std::optional<DateTimeUnit> unit_;
 };
 
 template <typename T>

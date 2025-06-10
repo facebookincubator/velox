@@ -37,7 +37,7 @@ class PrestoQueryRunnerTest : public ::testing::Test,
                               public velox::test::VectorTestBase {
  protected:
   static void SetUpTestCase() {
-    memory::MemoryManager::testingSetInstance({});
+    memory::MemoryManager::testingSetInstance(memory::MemoryManager::Options{});
   }
 
   void SetUp() override {
@@ -203,7 +203,7 @@ TEST_F(PrestoQueryRunnerTest, toSql) {
     EXPECT_EQ(
         queryRunner->toSql(plan),
         fmt::format(
-            "SELECT c0, c1, c2, first_value(c0) OVER (PARTITION BY c1 ORDER BY c2 ASC NULLS LAST {}) FROM tmp",
+            "SELECT c0, c1, c2, first_value(c0) OVER (PARTITION BY c1 ORDER BY c2 ASC NULLS LAST {}) as w0 FROM (tmp)",
             frameClause));
 
     const auto firstValueFrame =
@@ -222,7 +222,7 @@ TEST_F(PrestoQueryRunnerTest, toSql) {
     EXPECT_EQ(
         queryRunner->toSql(plan),
         fmt::format(
-            "SELECT c0, c1, c2, first_value(c0) OVER (PARTITION BY c1 ORDER BY c2 DESC NULLS FIRST {}), last_value(c0) OVER (PARTITION BY c1 ORDER BY c2 DESC NULLS FIRST {}) FROM tmp",
+            "SELECT c0, c1, c2, first_value(c0) OVER (PARTITION BY c1 ORDER BY c2 DESC NULLS FIRST {}) as w0, last_value(c0) OVER (PARTITION BY c1 ORDER BY c2 DESC NULLS FIRST {}) as w1 FROM (tmp)",
             firstValueFrame,
             lastValueFrame));
   }
@@ -235,7 +235,7 @@ TEST_F(PrestoQueryRunnerTest, toSql) {
                     .planNode();
     EXPECT_EQ(
         queryRunner->toSql(plan),
-        "SELECT c1, avg(c0) as a0 FROM tmp GROUP BY c1");
+        "SELECT c1, avg(c0) as a0 FROM (tmp) GROUP BY c1");
 
     plan = PlanBuilder()
                .tableScan("tmp", dataType)
@@ -244,7 +244,7 @@ TEST_F(PrestoQueryRunnerTest, toSql) {
                .planNode();
     EXPECT_EQ(
         queryRunner->toSql(plan),
-        "SELECT (a0 + c1) as p0 FROM (SELECT c1, sum(c0) as a0 FROM tmp GROUP BY c1)");
+        "SELECT (a0 + c1) as p0 FROM (SELECT c1, sum(c0) as a0 FROM (tmp) GROUP BY c1)");
 
     plan = PlanBuilder()
                .tableScan("tmp", dataType)
@@ -252,7 +252,20 @@ TEST_F(PrestoQueryRunnerTest, toSql) {
                .planNode();
     EXPECT_EQ(
         queryRunner->toSql(plan),
-        "SELECT avg(c0) filter (where c2) as a0, avg(c1) as a1 FROM tmp");
+        "SELECT avg(c0) filter (where c2) as a0, avg(c1) as a1 FROM (tmp)");
+  }
+
+  // Test dereference queries.
+  {
+    auto plan =
+        PlanBuilder()
+            .tableScan("tmp", ROW({"c0"}, {ROW({"field0"}, {BIGINT()})}))
+            .projectExpressions({std::make_shared<core::FieldAccessTypedExpr>(
+                VARCHAR(),
+                std::make_shared<core::FieldAccessTypedExpr>(VARCHAR(), "c0"),
+                "field0")})
+            .planNode();
+    EXPECT_EQ(queryRunner->toSql(plan), "SELECT c0.field0 as p0 FROM (tmp)");
   }
 }
 

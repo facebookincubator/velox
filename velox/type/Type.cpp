@@ -488,6 +488,14 @@ bool RowType::equals(const Type& other) const {
   return true;
 }
 
+size_t RowType::hashKind() const {
+  if (!hashKindComputed_.load(std::memory_order_relaxed)) {
+    hashKind_ = TypeBase<TypeKind::ROW>::hashKind();
+    hashKindComputed_ = true;
+  }
+  return hashKind_;
+}
+
 void RowType::printChildren(std::stringstream& ss, std::string_view delimiter)
     const {
   bool any = false;
@@ -1297,12 +1305,16 @@ class RowParametricType {
     }
 
     std::vector<TypePtr> argumentTypes;
+    std::vector<std::string> argumentNames;
+
     argumentTypes.reserve(parameters.size());
+    argumentNames.reserve(parameters.size());
+
     for (const auto& parameter : parameters) {
       argumentTypes.push_back(parameter.type);
+      argumentNames.push_back(parameter.rowFieldName.value_or(""));
     }
-
-    return ROW(std::move(argumentTypes));
+    return ROW(std::move(argumentNames), std::move(argumentTypes));
   }
 };
 

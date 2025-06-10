@@ -35,7 +35,7 @@ namespace facebook::velox::test {
 class VectorSaverTest : public testing::Test, public VectorTestBase {
  protected:
   static void SetUpTestCase() {
-    memory::MemoryManager::testingSetInstance({});
+    memory::MemoryManager::testingSetInstance(memory::MemoryManager::Options{});
   }
 
   VectorSaverTest() {
@@ -377,8 +377,9 @@ TEST_F(VectorSaverTest, flatVarchar) {
   testRoundTrip(opts, VARCHAR());
 
   // Make short strings only.
-  opts.stringLength = 6;
-  opts.vectorSize = 1024;
+  opts.containerVariableLength = true;
+  opts.stringLength = 100000;
+  opts.vectorSize = 10000;
   testRoundTrip(opts, VARCHAR());
 }
 

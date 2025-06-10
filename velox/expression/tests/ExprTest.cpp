@@ -50,7 +50,7 @@ namespace {
 class ExprTest : public testing::Test, public VectorTestBase {
  protected:
   static void SetUpTestCase() {
-    memory::MemoryManager::testingSetInstance({});
+    memory::MemoryManager::testingSetInstance(memory::MemoryManager::Options{});
   }
 
   void SetUp() override {
@@ -1406,9 +1406,10 @@ TEST_P(ParameterizedExprTest, selectiveLazyLoadingIf) {
 namespace {
 class StatefulVectorFunction : public exec::VectorFunction {
  public:
-  explicit StatefulVectorFunction(
+  StatefulVectorFunction(
       const std::string& /*name*/,
-      const std::vector<exec::VectorFunctionArg>& inputs)
+      const std::vector<exec::VectorFunctionArg>& inputs,
+      const core::QueryConfig& /* config */)
       : numInputs_(inputs.size()) {}
 
   void apply(
@@ -4985,8 +4986,14 @@ TEST_F(ExprTest, disabledeferredLazyLoading) {
 
 TEST_F(ExprTest, evaluateConstantExpression) {
   auto eval = [&](const std::string& sql) {
-    auto expr = parseExpression(sql, ROW({}));
-    return exec::evaluateConstantExpression(expr, pool());
+    auto expr = parseExpression(sql, ROW({"a"}, {BIGINT()}));
+    return exec::tryEvaluateConstantExpression(expr, pool());
+  };
+
+  auto evalNoThrow = [&](const std::string& sql) {
+    auto expr = parseExpression(sql, ROW({"a"}, {BIGINT()}));
+    return exec::tryEvaluateConstantExpression(
+        expr, pool(), true /* supressEvaluationFailures */);
   };
 
   assertEqualVectors(eval("1 + 2"), makeConstant<int64_t>(3, 1));
@@ -4994,6 +5001,54 @@ TEST_F(ExprTest, evaluateConstantExpression) {
   assertEqualVectors(
       eval("transform(array[1, 2, 3], x -> (x * 2))"),
       makeArrayVectorFromJson<int64_t>({"[2, 4, 6]"}));
+
+  assertEqualVectors(
+      eval("transform(array[1, 2, 3], x -> (x * (3 - 1)))"),
+      makeArrayVectorFromJson<int64_t>({"[2, 4, 6]"}));
+
+  assertEqualVectors(
+      eval("transform(array[1, 2, 3], x -> 2)"),
+      makeArrayVectorFromJson<int64_t>({"[2, 2, 2]"}));
+
+  assertEqualVectors(
+      eval(
+          "try(coalesce(array_min_by(array[1, 2, 3], x -> x / 0), 0::INTEGER))"),
+      makeNullConstant(TypeKind::INTEGER, 1));
+
+  EXPECT_TRUE(eval("a + 1") == nullptr);
+
+  EXPECT_TRUE(eval("rand() + 1.0") == nullptr);
+
+  EXPECT_TRUE(eval("transform(array[1, 2, 3], x -> (x * 2) + a)") == nullptr);
+
+  EXPECT_TRUE(eval("transform(array[1, 2, 3], x -> x + rand())") == nullptr);
+
+  VELOX_ASSERT_THROW(eval("5 / 0"), "division by zero");
+  EXPECT_TRUE(evalNoThrow("5 / 0") == nullptr);
+
+  VELOX_ASSERT_THROW(eval("1 + 5 / 0"), "division by zero");
+  EXPECT_TRUE(evalNoThrow("1 + 5 / 0") == nullptr);
+
+  VELOX_ASSERT_THROW(
+      eval("transform(array[1, 2, 3], x -> x / 0)"), "division by zero");
+  EXPECT_TRUE(evalNoThrow("transform(array[1, 2, 3], x -> x / 0)") == nullptr);
+}
+
+TEST_F(ExprTest, isDeterministic) {
+  auto isDeterministic = [&](const std::string& sql) {
+    SCOPED_TRACE(sql);
+    auto exprSet = compileExpression(sql, ROW({"c0"}, {ARRAY(DOUBLE())}));
+    return exprSet->expr(0)->isDeterministic();
+  };
+
+  EXPECT_TRUE(isDeterministic("cardinality(c0) + 5"));
+  EXPECT_TRUE(isDeterministic("transform(c0, x -> x + 5.0)"));
+  EXPECT_TRUE(isDeterministic("filter(c0, x -> (x < 5.0))"));
+
+  EXPECT_FALSE(isDeterministic("rand()"));
+  EXPECT_FALSE(isDeterministic("c0[1] + rand()"));
+  EXPECT_FALSE(isDeterministic("transform(c0, x -> x + rand())"));
+  EXPECT_FALSE(isDeterministic("filter(c0, x -> (x < rand()))"));
 }
 
 TEST_F(ExprTest, peelingOnDeterministicFunctionInNonDeterministicExpr) {

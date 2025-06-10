@@ -22,6 +22,7 @@ add_executable(
   ArrayInsertTest.cpp
   ArrayMaxTest.cpp
   ArrayMinTest.cpp
+  ArrayPrependTest.cpp
   ArraySortTest.cpp
   ArrayShuffleTest.cpp
   ArrayUnionTest.cpp
@@ -36,6 +37,7 @@ add_executable(
   DecimalRoundTest.cpp
   DecimalUtilTest.cpp
   ElementAtTest.cpp
+  FactorialTest.cpp
   FromJsonTest.cpp
   GetJsonObjectTest.cpp
   GetStructFieldTest.cpp
@@ -44,6 +46,7 @@ add_executable(
   JsonArrayLengthTest.cpp
   JsonObjectKeysTest.cpp
   LeastGreatestTest.cpp
+  LuhnCheckTest.cpp
   MakeDecimalTest.cpp
   MakeTimestampTest.cpp
   MapConcatTest.cpp
@@ -64,7 +67,9 @@ add_executable(
   StringToMapTest.cpp
   ToJsonTest.cpp
   UnscaledValueFunctionTest.cpp
+  UpperLowerTest.cpp
   UuidTest.cpp
+  VarcharTypeWriteSideCheckTest.cpp
   XxHash64Test.cpp)
 
 add_test(velox_functions_spark_test velox_functions_spark_test)

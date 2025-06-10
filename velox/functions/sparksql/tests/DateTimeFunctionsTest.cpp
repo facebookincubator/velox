@@ -337,10 +337,12 @@ TEST_F(DateTimeFunctionsTest, unixTimestampDateInput) {
   EXPECT_EQ(1727766000, unixTimestamp(parseDate("2024-10-01")));
   EXPECT_EQ(-126065866022, unixTimestamp(parseDate("-2025-02-18")));
   EXPECT_EQ(2398320000, unixTimestamp(parseDate("2045-12-31")));
-  EXPECT_EQ(
-      185542587126000, unixTimestamp(std::numeric_limits<int32_t>::max()));
-  EXPECT_EQ(
-      -185542587158822, unixTimestamp(std::numeric_limits<int32_t>::min()));
+  VELOX_ASSERT_USER_THROW(
+      unixTimestamp(kMax),
+      "Could not convert date 5881580-07-11 to unix timestamp.");
+  VELOX_ASSERT_USER_THROW(
+      unixTimestamp(kMin),
+      "Could not convert date -5877641-06-23 to unix timestamp.");
 }
 
 // unix_timestamp and to_unix_timestamp are aliases.
@@ -1227,6 +1229,63 @@ TEST_F(DateTimeFunctionsTest, dateTrunc) {
   EXPECT_EQ(
       Timestamp(978307200, 0),
       dateTrunc("yy", Timestamp(998'474'645, 321'001'234)));
+
+  setQueryTimeZone("America/Los_Angeles");
+
+  EXPECT_EQ(Timestamp(0, 0), dateTrunc("second", Timestamp(0, 0)));
+  EXPECT_EQ(Timestamp(0, 0), dateTrunc("second", Timestamp(0, 123)));
+
+  EXPECT_EQ(Timestamp(-57600, 0), dateTrunc("day", Timestamp(0, 0)));
+  EXPECT_EQ(
+      Timestamp(998474645, 0),
+      dateTrunc("second", Timestamp(998'474'645, 321'001'234)));
+  EXPECT_EQ(
+      Timestamp(998474640, 0),
+      dateTrunc("minute", Timestamp(998'474'645, 321'001'234)));
+  EXPECT_EQ(
+      Timestamp(998474400, 0),
+      dateTrunc("hour", Timestamp(998'474'645, 321'001'234)));
+  EXPECT_EQ(
+      Timestamp(998463600, 0),
+      dateTrunc("day", Timestamp(998'474'645, 321'001'234)));
+  EXPECT_EQ(
+      Timestamp(998290800, 0),
+      dateTrunc("week", Timestamp(998'474'645, 321'001'234)));
+  EXPECT_EQ(
+      Timestamp(996649200, 0),
+      dateTrunc("month", Timestamp(998'474'645, 321'001'234)));
+  EXPECT_EQ(
+      Timestamp(993970800, 0),
+      dateTrunc("quarter", Timestamp(998'474'645, 321'001'234)));
+  EXPECT_EQ(
+      Timestamp(978336000, 0),
+      dateTrunc("year", Timestamp(998'474'645, 321'001'234)));
+}
+
+TEST_F(DateTimeFunctionsTest, trunc) {
+  const auto trunc = [&](std::optional<int32_t> date,
+                         const std::string& format) {
+    return evaluateOnce<int32_t>(
+        fmt::format("trunc(c0, '{}')", format), DATE(), date);
+  };
+
+  // Date(0) is 1970-01-01.
+  EXPECT_EQ(std::nullopt, trunc(0, ""));
+  EXPECT_EQ(std::nullopt, trunc(0, "day"));
+  EXPECT_EQ(std::nullopt, trunc(0, "hour"));
+  EXPECT_EQ(std::nullopt, trunc(0, "minute"));
+  EXPECT_EQ(std::nullopt, trunc(0, "second"));
+  EXPECT_EQ(std::nullopt, trunc(0, "millisecond"));
+  EXPECT_EQ(std::nullopt, trunc(0, "microsecond"));
+
+  // Date(19576) is 2023-08-07, which is Monday, should return Monday.
+  EXPECT_EQ(19576, trunc(19576, "week"));
+  // Date(19579) is 2023-08-10, Thur, should return Monday.
+  EXPECT_EQ(19576, trunc(19579, "week"));
+  // Date(18297) is 2020-02-05.
+  EXPECT_EQ(18293, trunc(18297, "month"));
+  EXPECT_EQ(18262, trunc(18297, "quarter"));
+  EXPECT_EQ(18262, trunc(18297, "year"));
 }
 } // namespace
 } // namespace facebook::velox::functions::sparksql::test

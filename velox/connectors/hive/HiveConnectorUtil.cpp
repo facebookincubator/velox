@@ -554,6 +554,7 @@ void configureReaderOptions(
       hiveConfig->maxCoalescedDistanceBytes(sessionProperties));
   readerOptions.setFileColumnNamesReadAsLowerCase(
       hiveConfig->isFileColumnNamesReadAsLowerCase(sessionProperties));
+  readerOptions.setAllowEmptyFile(true);
   bool useColumnNamesForColumnMapping = false;
   switch (hiveSplit->fileFormat) {
     case dwio::common::FileFormat::DWRF:
@@ -627,7 +628,7 @@ void configureRowReaderOptions(
     rowReaderOptions.setTimestampPrecision(static_cast<TimestampPrecision>(
         hiveConfig->readTimestampUnit(sessionProperties)));
   }
-  rowReaderOptions.setStorageParameters(hiveSplit->storageParameters);
+  rowReaderOptions.setSerdeParameters(hiveSplit->serdeParameters);
 }
 
 namespace {
@@ -757,23 +758,35 @@ std::unique_ptr<dwio::common::BufferedInput> createBufferedInput(
     return std::make_unique<dwio::common::CachedBufferedInput>(
         fileHandle.file,
         dwio::common::MetricsLog::voidLog(),
-        fileHandle.uuid.id(),
+        fileHandle.uuid,
         connectorQueryCtx->cache(),
         Connector::getTracker(
             connectorQueryCtx->scanId(), readerOpts.loadQuantum()),
-        fileHandle.groupId.id(),
+        fileHandle.groupId,
         ioStats,
         std::move(fsStats),
         executor,
         readerOpts);
   }
+  if (readerOpts.fileFormat() == dwio::common::FileFormat::NIMBLE) {
+    // Nimble streams (in case of single chunk) are compressed as whole and need
+    // to be fully fetched in order to do decompression, so there is no point to
+    // fetch them by quanta.  Just use BufferedInput to fetch streams as whole
+    // to reduce memory footprint.
+    return std::make_unique<dwio::common::BufferedInput>(
+        fileHandle.file,
+        readerOpts.memoryPool(),
+        dwio::common::MetricsLog::voidLog(),
+        ioStats.get(),
+        fsStats.get());
+  }
   return std::make_unique<dwio::common::DirectBufferedInput>(
       fileHandle.file,
       dwio::common::MetricsLog::voidLog(),
-      fileHandle.uuid.id(),
+      fileHandle.uuid,
       Connector::getTracker(
           connectorQueryCtx->scanId(), readerOpts.loadQuantum()),
-      fileHandle.groupId.id(),
+      fileHandle.groupId,
       std::move(ioStats),
       std::move(fsStats),
       executor,

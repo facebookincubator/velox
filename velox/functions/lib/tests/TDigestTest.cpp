@@ -15,12 +15,14 @@
  */
 
 #include "velox/functions/lib/TDigest.h"
-#include "velox/common/testutil/RandomSeed.h"
+
+#include <random>
 
 #include <folly/base64.h>
 #include <gtest/gtest.h>
 
-#include <random>
+#include "velox/common/testutil/RandomSeed.h"
+#include "velox/functions/lib/tests/QuantileDigestTestBase.h"
 
 namespace facebook::velox::functions {
 namespace {
@@ -28,65 +30,9 @@ namespace {
 constexpr double kSumError = 1e-4;
 constexpr double kRankError = 0.01;
 
-// Small hack to modify the TDigest sum in the serilaized buffer, so we can test
-// that the relative error algorithm in sum testing code works.
-void alterTDigestSumInTheBuffer(std::string& buf, const TDigest<>& digest) {
-  // Find and adjust the sum in the buffer.
-  double originalSum = digest.sum();
-  // Based on the TDigest::serialize() we expect the sum at this position.
-  const size_t sumOffset = sizeof(int8_t) * 2 + sizeof(double) * 2;
-  ASSERT_EQ(memcmp(buf.data() + sumOffset, &originalSum, sizeof(double)), 0);
+class TDigestTest : public QuantileDigestTestBase {};
 
-  *(double*)(buf.data() + sumOffset) += TDigest<>::kEpsilon * 2;
-}
-
-constexpr double kQuantiles[] = {
-    0.0001, 0.0200, 0.0300, 0.04000, 0.0500, 0.1000, 0.2000,
-    0.3000, 0.4000, 0.5000, 0.6000,  0.7000, 0.8000, 0.9000,
-    0.9500, 0.9600, 0.9700, 0.9800,  0.9999,
-};
-
-void checkQuantiles(
-    folly::Range<const double*> values,
-    const TDigest<>& digest) {
-  VELOX_CHECK(std::is_sorted(values.begin(), values.end()));
-  auto sum = std::accumulate(values.begin(), values.end(), 0.0);
-  ASSERT_NEAR(digest.sum(), sum, kSumError);
-  for (auto q : kQuantiles) {
-    auto v = digest.estimateQuantile(q);
-    ASSERT_LE(values.front(), v);
-    ASSERT_LE(v, values.back());
-    auto hi = std::lower_bound(values.begin(), values.end(), v);
-    auto lo = hi;
-    while (lo != values.begin() && v > *lo) {
-      --lo;
-    }
-    while (std::next(hi) != values.end() && *hi == *std::next(hi)) {
-      ++hi;
-    }
-    auto l = (lo - values.begin()) / (values.size() - 1.0);
-    auto r = (hi - values.begin()) / (values.size() - 1.0);
-    if (q < l) {
-      ASSERT_NEAR(l, q, kRankError);
-    } else if (q > r) {
-      ASSERT_NEAR(r, q, kRankError);
-    }
-  }
-}
-
-#define CHECK_QUANTILES(_values, _digest) \
-  do {                                    \
-    SCOPED_TRACE("CHECK_QUANTILES");      \
-    checkQuantiles((_values), (_digest)); \
-  } while (false)
-
-std::string decodeBase64(std::string_view input) {
-  std::string decoded(folly::base64DecodedSize(input), '\0');
-  folly::base64Decode(input, decoded.data());
-  return decoded;
-}
-
-TEST(TDigestTest, addElementsInOrder) {
+TEST_F(TDigestTest, addElementsInOrder) {
   constexpr int N = 1e6;
   TDigest digest;
   ASSERT_EQ(digest.compression(), tdigest::kDefaultCompression);
@@ -102,7 +48,7 @@ TEST(TDigestTest, addElementsInOrder) {
   }
 }
 
-TEST(TDigestTest, addElementsRandomized) {
+TEST_F(TDigestTest, addElementsRandomized) {
   constexpr int N = 1e5;
   double values[N];
   TDigest digest;
@@ -116,10 +62,10 @@ TEST(TDigestTest, addElementsRandomized) {
   }
   digest.compress(positions);
   std::sort(std::begin(values), std::end(values));
-  CHECK_QUANTILES(folly::Range(values, N), digest);
+  CHECK_QUANTILES(folly::Range(values, N), digest, kSumError, kRankError);
 }
 
-TEST(TDigestTest, fewElements) {
+TEST_F(TDigestTest, fewElements) {
   TDigest digest;
   std::vector<int16_t> positions;
   digest.compress(positions);
@@ -139,7 +85,7 @@ TEST(TDigestTest, fewElements) {
 // not make them user errors.  If in another engine these are catchable errors,
 // throw user errors in the corresponding UDFs before they reach the TDigest
 // implementation.
-TEST(TDigestTest, invalid) {
+TEST_F(TDigestTest, invalid) {
   TDigest digest;
   ASSERT_THROW(digest.setCompression(NAN), VeloxRuntimeError);
   ASSERT_THROW(digest.setCompression(0), VeloxRuntimeError);
@@ -150,7 +96,7 @@ TEST(TDigestTest, invalid) {
   ASSERT_THROW(digest.estimateQuantile(1.1), VeloxRuntimeError);
 }
 
-TEST(TDigestTest, unalignedSerialization) {
+TEST_F(TDigestTest, unalignedSerialization) {
   constexpr int N = 1e4;
   TDigest digest;
   std::vector<int16_t> positions;
@@ -173,7 +119,7 @@ TEST(TDigestTest, unalignedSerialization) {
   }
 }
 
-TEST(TDigestTest, mergeEmpty) {
+TEST_F(TDigestTest, mergeEmpty) {
   std::vector<int16_t> positions;
   TDigest<> digests[2];
   std::string buf(digests[1].serializedByteSize(), '\0');
@@ -192,7 +138,7 @@ TEST(TDigestTest, mergeEmpty) {
   ASSERT_EQ(digests[0].estimateQuantile(0.5), 1);
 }
 
-TEST(TDigestTest, deserializeJava) {
+TEST_F(TDigestTest, deserializeJava) {
   std::vector<int16_t> positions;
   {
     SCOPED_TRACE(
@@ -263,7 +209,7 @@ TEST(TDigestTest, deserializeJava) {
     double values[101];
     values[0] = 0;
     std::fill(values + 1, values + 101, 1);
-    CHECK_QUANTILES(folly::Range(values, 101), digest);
+    CHECK_QUANTILES(folly::Range(values, 101), digest, kSumError, kRankError);
   }
   {
     SCOPED_TRACE(
@@ -278,11 +224,11 @@ TEST(TDigestTest, deserializeJava) {
     for (int i = 1; i <= 1000; ++i) {
       values.insert(values.end(), 1001 - i, i);
     }
-    CHECK_QUANTILES(values, digest);
+    CHECK_QUANTILES(values, digest, kSumError, kRankError);
   }
 }
 
-TEST(TDigestTest, mergeJava) {
+TEST_F(TDigestTest, mergeJava) {
   // select to_base64(cast(tdigest_agg(cast(x as double)) as varbinary)) from
   // unnest(sequence(0, 999, 2)) as t(x)
   auto javaData = decodeBase64(
@@ -323,7 +269,7 @@ TEST(TDigestTest, mergeJava) {
   }
 }
 
-TEST(TDigestTest, mergeNoOverlap) {
+TEST_F(TDigestTest, mergeNoOverlap) {
   constexpr int N = 1e5;
   TDigest<> digests[2];
   std::vector<int16_t> positions;
@@ -343,7 +289,7 @@ TEST(TDigestTest, mergeNoOverlap) {
   }
 }
 
-TEST(TDigestTest, mergeOverlap) {
+TEST_F(TDigestTest, mergeOverlap) {
   constexpr int N = 1e5;
   TDigest digest;
   std::vector<int16_t> positions;
@@ -358,10 +304,10 @@ TEST(TDigestTest, mergeOverlap) {
   digest.serialize(buf.data());
   digest.mergeDeserialized(positions, buf.data());
   digest.compress(positions);
-  CHECK_QUANTILES(values, digest);
+  CHECK_QUANTILES(values, digest, kSumError, kRankError);
 }
 
-TEST(TDigestTest, normalDistribution) {
+TEST_F(TDigestTest, normalDistribution) {
   constexpr int N = 1e5;
   std::vector<int16_t> positions;
   double values[N];
@@ -377,11 +323,11 @@ TEST(TDigestTest, normalDistribution) {
     }
     digest.compress(positions);
     std::sort(values, values + N);
-    CHECK_QUANTILES(folly::Range(values, N), digest);
+    CHECK_QUANTILES(folly::Range(values, N), digest, kSumError, kRankError);
   }
 }
 
-TEST(TDigestTest, addWeighed) {
+TEST_F(TDigestTest, addWeighed) {
   std::vector<int16_t> positions;
   TDigest digest;
   std::vector<double> values;
@@ -391,19 +337,15 @@ TEST(TDigestTest, addWeighed) {
     values.insert(values.end(), i, i);
   }
   digest.compress(positions);
-  CHECK_QUANTILES(values, digest);
+  CHECK_QUANTILES(values, digest, kSumError, kRankError);
 }
 
-TEST(TDigestTest, merge) {
+TEST_F(TDigestTest, merge) {
   std::vector<int16_t> positions;
   std::default_random_engine gen(common::testutil::getRandomSeed(42));
   std::vector<double> values;
   std::string buf;
-  auto test = [&](int numDigests,
-                  int size,
-                  double mean,
-                  double stddev,
-                  bool alterSum = false) {
+  auto test = [&](int numDigests, int size, double mean, double stddev) {
     SCOPED_TRACE(fmt::format(
         "numDigests={} size={} mean={} stddev={}",
         numDigests,
@@ -424,23 +366,18 @@ TEST(TDigestTest, merge) {
       current.compress(positions);
       buf.resize(current.serializedByteSize());
       current.serialize(buf.data());
-      if (alterSum) {
-        alterTDigestSumInTheBuffer(buf, current);
-      }
       digest.mergeDeserialized(positions, buf.data());
     }
     digest.compress(positions);
     std::sort(std::begin(values), std::end(values));
-    CHECK_QUANTILES(values, digest);
+    CHECK_QUANTILES(values, digest, kSumError, kRankError);
   };
   test(2, 5e4, 0, 50);
   test(100, 1000, 500, 20);
   test(1e4, 10, 500, 20);
-
-  test(5, 5e4, 0, 50, true);
 }
 
-TEST(TDigestTest, infinity) {
+TEST_F(TDigestTest, infinity) {
   std::vector<int16_t> positions;
   TDigest digest;
   digest.add(positions, 0.0);
@@ -455,6 +392,168 @@ TEST(TDigestTest, infinity) {
   ASSERT_EQ(digest.estimateQuantile(0.6), 0.0);
   ASSERT_EQ(digest.estimateQuantile(0.7), INFINITY);
   ASSERT_EQ(digest.estimateQuantile(1), INFINITY);
+}
+
+TEST_F(TDigestTest, scale) {
+  std::vector<int16_t> positions;
+  TDigest digest;
+  for (int i = 1; i <= 5; ++i) {
+    digest.add(positions, i);
+  }
+  digest.compress(positions);
+  double originalSum = digest.sum();
+
+  // Scale weights by negative
+  ASSERT_THROW(digest.scale(-1), VeloxRuntimeError);
+
+  // Scale weights by 1.7
+  digest.scale(1.7);
+  digest.compress(positions);
+  ASSERT_NEAR(digest.sum(), originalSum * 1.7, kSumError);
+}
+
+TEST_F(TDigestTest, largeScalePreservesWeights) {
+  TDigest digest;
+  std::vector<int16_t> positions;
+  std::normal_distribution<double> normal(1000, 100);
+  std::default_random_engine gen(common::testutil::getRandomSeed(42));
+  constexpr int N = 1e5;
+  std::vector<double> values;
+  values.reserve(N);
+  for (int i = 0; i < N; ++i) {
+    double value = normal(gen);
+    digest.add(positions, value);
+    values.push_back(value);
+  }
+  digest.compress(positions);
+  // Store original percentiles and sum
+  std::vector<double> originalPercentiles;
+  for (auto q : kQuantiles) {
+    originalPercentiles.push_back(digest.estimateQuantile(q));
+  }
+  double originalSum = digest.sum();
+
+  // Scale TDigest
+  double scaleFactor = std::numeric_limits<int>::max() * 2.0;
+  digest.scale(scaleFactor);
+  digest.compress(positions);
+
+  // Verify sum is scaled correctly.
+  ASSERT_NEAR(digest.sum(), originalSum * scaleFactor, kSumError * scaleFactor);
+  // Verify percentiles remain the same.
+  std::sort(values.begin(), values.end());
+  for (size_t i = 0; i < std::size(kQuantiles); ++i) {
+    ASSERT_NEAR(
+        digest.estimateQuantile(kQuantiles[i]),
+        originalPercentiles[i],
+        kRankError * (values.back() - values.front()));
+  }
+}
+
+TEST_F(TDigestTest, quantileAtValue) {
+  // Test small range.
+  {
+    TDigest digest;
+    std::vector<int16_t> positions;
+
+    // Add values from 10 to 20
+    for (int i = 10; i <= 20; ++i) {
+      digest.add(positions, i);
+    }
+    digest.compress(positions);
+
+    ASSERT_NEAR(digest.getCdf(5), 0.0, 0.001); // Below min
+    ASSERT_NEAR(digest.getCdf(25), 1.0, 0.001); // Above max
+    ASSERT_NEAR(digest.getCdf(10), 0.05, 0.01); // Min value
+    ASSERT_NEAR(digest.getCdf(20), 0.95, 0.01); // Max value
+    ASSERT_NEAR(digest.getCdf(15), 0.5, 0.01); // Median
+  }
+  std::vector<int16_t> positions;
+
+  // Test with uniform distribution
+  {
+    TDigest digest;
+    std::vector<double> values;
+    constexpr int N = 1000;
+
+    // Add values from 1 to N
+    for (int i = 1; i <= N; ++i) {
+      digest.add(positions, i);
+      values.push_back(i);
+    }
+    digest.compress(positions);
+
+    ASSERT_NEAR(digest.getCdf(1), 0.0005, 0.001); // Min value
+    ASSERT_NEAR(digest.getCdf(250), 0.25, 0.01); // 25th percentile
+    ASSERT_NEAR(digest.getCdf(500), 0.5, 0.01); // Median
+    ASSERT_NEAR(digest.getCdf(750), 0.75, 0.01); // 75th percentile
+    ASSERT_NEAR(digest.getCdf(1000), 0.9995, 0.001); // Max value
+    // Check values outside the range
+    ASSERT_NEAR(digest.getCdf(0), 0.0, 0.001); // Below min
+    ASSERT_NEAR(digest.getCdf(1001), 1.0, 0.001); // Above max
+  }
+
+  // Test with normal distribution
+  {
+    TDigest digest;
+    std::default_random_engine gen(common::testutil::getRandomSeed(42));
+    std::normal_distribution<double> normal(100, 10);
+    constexpr int N = 10000;
+    std::vector<double> values;
+    for (int i = 0; i < N; ++i) {
+      double value = normal(gen);
+      digest.add(positions, value);
+      values.push_back(value);
+    }
+    digest.compress(positions);
+
+    ASSERT_NEAR(digest.getCdf(90), 0.16, 0.02);
+    ASSERT_NEAR(digest.getCdf(100), 0.5, 0.02);
+    ASSERT_NEAR(digest.getCdf(110), 0.84, 0.02);
+  }
+
+  // Test with skewed distribution (exponential)
+  {
+    TDigest digest;
+    std::default_random_engine gen(common::testutil::getRandomSeed(42));
+    std::exponential_distribution<double> exp(0.1); // lambda = 0.1
+    constexpr int N = 10000;
+    for (int i = 0; i < N; ++i) {
+      double value = exp(gen);
+      digest.add(positions, value);
+    }
+    digest.compress(positions);
+
+    // For exponential distribution with lambda=0.1:
+    // CDF(x) = 1 - e^(-0.1x)
+    ASSERT_NEAR(digest.getCdf(0), 0.0, 0.01);
+    ASSERT_NEAR(digest.getCdf(6.93), 0.5, 0.02); // median = ln(2)/lambda
+    ASSERT_NEAR(digest.getCdf(10), 0.63, 0.02); // 1 - e^(-1) ≈ 0.63
+    ASSERT_NEAR(digest.getCdf(20), 0.86, 0.02); // 1 - e^(-2) ≈ 0.86
+    ASSERT_NEAR(digest.getCdf(30), 0.95, 0.02); // 1 - e^(-3) ≈ 0.95
+  }
+
+  // Test with edge cases
+  {
+    TDigest digest;
+
+    // Add a mix of values including extremes
+    digest.add(positions, -1000);
+    digest.add(positions, -100);
+    for (int i = 0; i < 98; ++i) {
+      digest.add(positions, i);
+    }
+    digest.add(positions, 1000);
+    digest.compress(positions);
+
+    // Check CDF at extremes
+    ASSERT_NEAR(digest.getCdf(-1000), 0.005, 0.01); // Minimum value (1/100)
+    ASSERT_NEAR(digest.getCdf(1000), 0.995, 0.01); // Maximum value (99/100)
+
+    // Check CDF at values outside the range
+    ASSERT_NEAR(digest.getCdf(-2000), 0.0, 0.001);
+    ASSERT_NEAR(digest.getCdf(2000), 1.0, 0.001);
+  }
 }
 
 } // namespace

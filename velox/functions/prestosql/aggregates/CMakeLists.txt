@@ -36,13 +36,17 @@ velox_add_library(
   MapUnionAggregate.cpp
   MapUnionSumAggregate.cpp
   MaxSizeForStatsAggregate.cpp
+  MergeAggregate.cpp
   MinMaxAggregates.cpp
   MaxByAggregate.cpp
   MinByAggregate.cpp
   MultiMapAggAggregate.cpp
   PrestoHasher.cpp
+  QDigestAggAggregate.cpp
   ReduceAgg.cpp
   RegisterAggregateFunctions.cpp
+  NoisyCountIfGaussianAggregate.cpp
+  NoisyCountGaussianAggregate.cpp
   SetAggregates.cpp
   SumAggregate.cpp
   SumDataSizeForStatsAggregate.cpp
