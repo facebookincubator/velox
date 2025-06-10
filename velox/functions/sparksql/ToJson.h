@@ -17,10 +17,9 @@
 #include <expression/ComplexViewTypes.h>
 #include <functions/lib/DateTimeFormatter.h>
 #include <functions/lib/TimeUtils.h>
-#include <velox/type/DecimalUtil.h>
+#include "velox/type/DecimalUtil.h"
 
 namespace facebook::velox::functions::sparksql {
-namespace {
 
 struct JsonOptions {
   const tz::TimeZone* timeZone;
@@ -348,9 +347,9 @@ struct ToJsonFunction {
   }
 
  private:
-  /// Determine whether a given input type is supported.
-  /// 1. The root type can only be ROW, ARRAY, and MAP.
-  /// 2. The key type of MAP cannot be/contain MAP.
+  // Determine whether a given input type is supported.
+  // 1. The root type can only be ROW, ARRAY, and MAP.
+  // 2. The key type of MAP cannot be/contain MAP.
   bool isSupportedType(
       const TypePtr& type,
       bool isRootType = false,
@@ -396,5 +395,4 @@ struct ToJsonFunction {
   bool ignoreNullFields_;
 };
 
-} // namespace
 } // namespace facebook::velox::functions::sparksql
