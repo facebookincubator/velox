@@ -541,6 +541,14 @@ The mean must be a real value and the scale must be a positive real value (both 
 The probability <code class="docutils literal notranslate"><span class="pre">p</span></code> must lie on the interval [0, 1].</p>
 </dd></dl>
 
+<dl class="py function">
+<dt class="sig sig-object py" id="inverse_f_cdf">
+<span class="sig-name descname"><span class="pre">inverse_f_cdf</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">df1</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">df2</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">p</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">double</span></span></span><a class="headerlink" href="#inverse_f_cdf" title="Link to this definition">¶</a></dt>
+<dd><p>Compute the inverse of the Fisher F cdf with a given <code class="docutils literal notranslate"><span class="pre">df1</span></code> (numerator degrees of freedom) and <code class="docutils literal notranslate"><span class="pre">df2</span></code> (denominator degrees of freedom) parameters
+for the cumulative probability (p): P(N &lt; n). The numerator and denominator df parameters must be positive real numbers.
+The probability <code class="docutils literal notranslate"><span class="pre">p</span></code> must lie on the interval [0, 1].</p>
+</dd></dl>
+
 </section>
 <section id="statistical-functions">
 <h1>Statistical Functions<a class="headerlink" href="#statistical-functions" title="Link to this heading">¶</a></h1>
@@ -648,6 +656,7 @@ at a confidence specified by the z-score z.</p>
 <li><a class="reference internal" href="#inverse_weibull_cdf"><code class="docutils literal notranslate"><span class="pre">inverse_weibull_cdf()</span></code></a></li>
 <li><a class="reference internal" href="#inverse_cauchy_cdf"><code class="docutils literal notranslate"><span class="pre">inverse_cauchy_cdf()</span></code></a></li>
 <li><a class="reference internal" href="#inverse_laplace_cdf"><code class="docutils literal notranslate"><span class="pre">inverse_laplace_cdf()</span></code></a></li>
+<li><a class="reference internal" href="#inverse_f_cdf"><code class="docutils literal notranslate"><span class="pre">inverse_f_cdf()</span></code></a></li>
 </ul>
 </li>
 <li><a class="reference internal" href="#statistical-functions">Statistical Functions</a><ul>
