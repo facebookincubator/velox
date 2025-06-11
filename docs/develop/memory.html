@@ -335,7 +335,7 @@ root memory pool to reduce the cpu cost, the leaf memory pool does quantized
 memory reservation. It rounds up the actual reservation bytes to the next large
 quantized reservation value (MemoryPool::quantizedSize):</p>
 <ul class="simple">
-<li><p>round up to next 1MB if size &lt; 16MB</p></li>
+<li><p>round up to next MB if size &lt; 16MB</p></li>
 <li><p>round up to next 4MB if size &lt; 64MB</p></li>
 <li><p>round up to next 8MB if size &gt;= 64MB</p></li>
 </ul>
@@ -532,7 +532,7 @@ between queries by adjusting their memory pool’s capacities accordingly (see
 <a class="reference external" href="#memory-arbitration-process">memory arbitration process section</a> for detail).</p>
 <p>The <em>MemoryArbitrator</em> is defined to support different implementations for
 different query systems. As for now, we implement <em>SharedArbitrator</em> for both
-Prestissimo and Prestissimo-on-Spark. <a class="reference external" href="https://github.com/apache/incubator-gluten">Gluten</a> implements its own memory
+Prestissimo and Prestissimo-on-Spark. <a class="reference external" href="https://github.com/oap-project/gluten">Gulten</a> implements its own memory
 arbitrator to integrate with the <a class="reference external" href="https://www.linkedin.com/pulse/apache-spark-memory-management-deep-dive-deepak-rajak/">Spark memory system</a>. <em>SharedArbitrator</em>
 ensures the total allocated memory capacity is within the query memory limit
 (<em>MemoryManagerOptions::arbitratorCapacity</em>), and also ensures each individual

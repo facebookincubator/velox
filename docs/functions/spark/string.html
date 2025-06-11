@@ -581,15 +581,6 @@ The specified character is any character contained in <code class="docutils lite
 </dd></dl>
 
 <dl class="spark function">
-<dt class="sig sig-object spark" id="unbase64">
-<span class="sig-name descname"><span class="pre">unbase64</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">expr</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">varbinary</span></span></span><a class="headerlink" href="#unbase64" title="Link to this definition">¶</a></dt>
-<dd><p>Returns a decoded base64 string as binary.</p>
-<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="n">unbase64</span><span class="p">(</span><span class="s1">&#39;U3BhcmsgU1FM&#39;</span><span class="p">)</span> <span class="n">AS</span> <span class="n">STRING</span><span class="p">);</span> <span class="o">--</span> <span class="s1">&#39;Spark SQL&#39;</span>
-</pre></div>
-</div>
-</dd></dl>
-
-<dl class="spark function">
 <dt class="sig sig-object spark" id="upper">
 <span class="sig-name descname"><span class="pre">upper</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">string</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">string</span></span></span><a class="headerlink" href="#upper" title="Link to this definition">¶</a></dt>
 <dd><p>Returns string with all characters changed to uppercase.</p>
@@ -664,7 +655,6 @@ Note: This function is not directly callable in Spark SQL, but internally used f
 <li><a class="reference internal" href="#substring_index"><code class="docutils literal notranslate"><span class="pre">substring_index()</span></code></a></li>
 <li><a class="reference internal" href="#translate"><code class="docutils literal notranslate"><span class="pre">translate()</span></code></a></li>
 <li><a class="reference internal" href="#trim"><code class="docutils literal notranslate"><span class="pre">trim()</span></code></a></li>
-<li><a class="reference internal" href="#unbase64"><code class="docutils literal notranslate"><span class="pre">unbase64()</span></code></a></li>
 <li><a class="reference internal" href="#upper"><code class="docutils literal notranslate"><span class="pre">upper()</span></code></a></li>
 <li><a class="reference internal" href="#varchar_type_write_side_check"><code class="docutils literal notranslate"><span class="pre">varchar_type_write_side_check()</span></code></a></li>
 </ul>
