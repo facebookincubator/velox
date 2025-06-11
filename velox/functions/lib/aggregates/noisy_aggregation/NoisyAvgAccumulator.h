@@ -17,12 +17,14 @@ class NoisyAvgAccumulator {
       uint64_t count,
       double noiseScale,
       std::optional<double> lowerBound,
-      std::optional<double> upperBound)
+      std::optional<double> upperBound,
+      std::optional<int32_t> randomSeed)
       : sum_{sum},
         count_{count},
         noiseScale_{noiseScale},
         lowerBound_(lowerBound),
-        upperBound_(upperBound) {}
+        upperBound_(upperBound),
+        randomSeed_(randomSeed) {}
 
   void updateCount(uint64_t value) {
     count_ = facebook::velox::checkedPlus<uint64_t>(count_, value);
@@ -56,6 +58,10 @@ class NoisyAvgAccumulator {
     this->upperBound_ = upperBound;
   }
 
+  void setRandomSeed(int32_t randomSeed) {
+    this->randomSeed_ = randomSeed;
+  }
+
   double getSum() const {
     return sum_;
   }
@@ -76,15 +82,21 @@ class NoisyAvgAccumulator {
     return upperBound_;
   }
 
+  std::optional<int32_t> getRandomSeed() const {
+    return randomSeed_;
+  }
+
   // sizeof(double) for sum_
   // sizeof(uint64_t) for count_
   // sizeof(double) for noiseScale_
   // sizeof(bool) for has_bound flag
   // sizeof(double) for lowerBound_ value
   // sizeof(double) for upperBound_ value
+  // sizeof(bool) for randomSeed_ has_value flag
+  // sizeof(int32_t) for randomSeed_ value
   static size_t serializedSize() {
     return sizeof(double) + sizeof(uint64_t) + sizeof(double) + sizeof(bool) +
-        sizeof(double) + sizeof(double);
+        sizeof(double) + sizeof(double) + sizeof(bool) + sizeof(int32_t);
   }
 
   void serialize(char* buffer) const {
@@ -96,6 +108,10 @@ class NoisyAvgAccumulator {
     stream.appendOne(lowerBound_.has_value());
     stream.appendOne(lowerBound_.has_value() ? *lowerBound_ : 0.0);
     stream.appendOne(upperBound_.has_value() ? *upperBound_ : 0.0);
+
+    // Serialize randomSeed_(append 0 if has_value is false).
+    stream.appendOne(randomSeed_.has_value());
+    stream.appendOne(randomSeed_.has_value() ? *randomSeed_ : 0);
   }
 
   static NoisyAvgAccumulator deserialize(const char* buffer) {
@@ -106,12 +122,15 @@ class NoisyAvgAccumulator {
     bool hasBounds = stream.read<bool>();
     std::optional<double> lowerBound = stream.read<double>();
     std::optional<double> upperBound = stream.read<double>();
+    bool hasRandomSeed = stream.read<bool>();
+    std::optional<int32_t> randomSeed = stream.read<int32_t>();
     return NoisyAvgAccumulator(
         sum,
         count,
         noiseScale,
         hasBounds ? lowerBound : std::nullopt,
-        hasBounds ? upperBound : std::nullopt);
+        hasBounds ? upperBound : std::nullopt,
+        hasRandomSeed ? randomSeed : std::nullopt);
   }
 
  private:
@@ -120,6 +139,7 @@ class NoisyAvgAccumulator {
   double noiseScale_{-1};
   std::optional<double> lowerBound_{std::nullopt};
   std::optional<double> upperBound_{std::nullopt};
+  std::optional<int32_t> randomSeed_{std::nullopt};
 };
 
 } // namespace facebook::velox::functions::aggregate
