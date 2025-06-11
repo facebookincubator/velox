@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""The Spark domain."""
+"""The Iceberg domain."""
 
 from __future__ import annotations
 
@@ -42,12 +42,12 @@ from sphinx.util.typing import OptionSpec
 
 logger = logging.getLogger(__name__)
 
-function_module = "spark"
+function_module = "iceberg"
 
 
-class SparkObject(ObjectDescription[Tuple[str, str]]):
+class IcebergObject(ObjectDescription[Tuple[str, str]]):
     """
-    Description of a general Spark object.
+    Description of a general Iceberg object.
 
     :cvar allow_nesting: Class is an object that allows for nested namespaces
     :vartype allow_nesting: bool
@@ -86,7 +86,7 @@ class SparkObject(ObjectDescription[Tuple[str, str]]):
         return False
 
     def handle_signature(self, sig: str, signode: desc_signature) -> tuple[str, str]:
-        """Transform a Spark signature into RST nodes.
+        """Transform a Iceberg signature into RST nodes.
         Return (fully qualified name of the thing, classname if any).
         If inside a class, the current class name is handled intelligently:
         * it is stripped from the displayed name if present
@@ -98,8 +98,8 @@ class SparkObject(ObjectDescription[Tuple[str, str]]):
         prefix, name, arglist, retann = m.groups()
 
         # determine module and class name (if applicable), as well as full name
-        modname = self.options.get("module", self.env.ref_context.get("spark:module"))
-        classname = self.env.ref_context.get("spark:class")
+        modname = self.options.get("module", self.env.ref_context.get("iceberg:module"))
+        classname = self.env.ref_context.get("iceberg:class")
         if classname:
             add_module = False
             if prefix and (prefix == classname or prefix.startswith(classname + ".")):
@@ -150,12 +150,12 @@ class SparkObject(ObjectDescription[Tuple[str, str]]):
             except SyntaxError:
                 # fallback to parse arglist original parser.
                 # it supports to represent optional arguments (ex. "func(foo [, bar])")
-                pseudo_parse_arglist(signode, arglist)
+                pseudoparse_arglist(signode, arglist)
             except NotImplementedError as exc:
                 logger.warning(
                     "could not parse arglist (%r): %s", arglist, exc, location=signode
                 )
-                pseudo_parse_arglist(signode, arglist)
+                pseudoparse_arglist(signode, arglist)
         else:
             if self.needs_arglist():
                 # for callables, add an empty parameter list
@@ -191,13 +191,13 @@ class SparkObject(ObjectDescription[Tuple[str, str]]):
     def add_target_and_index(
         self, name_cls: tuple[str, str], sig: str, signode: desc_signature
     ) -> None:
-        modname = self.options.get("module", self.env.ref_context.get("spark:module"))
+        modname = self.options.get("module", self.env.ref_context.get("iceberg:module"))
         fullname = (modname + "." if modname else "") + name_cls[0]
         node_id = make_id(self.env, self.state.document, "", fullname)
         signode["ids"].append(node_id)
         self.state.document.note_explicit_target(signode)
 
-        domain = cast(SparkDomain, self.env.get_domain("spark"))
+        domain = cast(IcebergDomain, self.env.get_domain("iceberg"))
         domain.note_object(fullname, self.objtype, node_id, location=signode)
 
         canonical_name = self.options.get("canonical")
@@ -218,7 +218,7 @@ class SparkObject(ObjectDescription[Tuple[str, str]]):
 
         For constructs that aren't nestable, the stack is bypassed, and instead
         only the most recent object is tracked. This object prefix name will be
-        removed with :spark:meth:`after_content`.
+        removed with :iceberg:meth:`after_content`.
         """
         prefix = None
         if self.names:
@@ -232,14 +232,14 @@ class SparkObject(ObjectDescription[Tuple[str, str]]):
             elif name_prefix:
                 prefix = name_prefix.strip(".")
         if prefix:
-            self.env.ref_context["spark:class"] = prefix
+            self.env.ref_context["iceberg:class"] = prefix
             if self.allow_nesting:
-                classes = self.env.ref_context.setdefault("spark:classes", [])
+                classes = self.env.ref_context.setdefault("iceberg:classes", [])
                 classes.append(prefix)
         if "module" in self.options:
-            modules = self.env.ref_context.setdefault("spark:modules", [])
-            modules.append(self.env.ref_context.get("spark:module"))
-            self.env.ref_context["spark:module"] = self.options["module"]
+            modules = self.env.ref_context.setdefault("iceberg:modules", [])
+            modules.append(self.env.ref_context.get("iceberg:module"))
+            self.env.ref_context["iceberg:module"] = self.options["module"]
 
     def after_content(self) -> None:
         """Handle object de-nesting after content
@@ -249,21 +249,23 @@ class SparkObject(ObjectDescription[Tuple[str, str]]):
 
         If this class is not a nestable object, the list of classes should not
         be altered as we didn't affect the nesting levels in
-        :spark:meth:`before_content`.
+        :iceberg:meth:`before_content`.
         """
-        classes = self.env.ref_context.setdefault("spark:classes", [])
+        classes = self.env.ref_context.setdefault("iceberg:classes", [])
         if self.allow_nesting:
             try:
                 classes.pop()
             except IndexError:
                 pass
-        self.env.ref_context["spark:class"] = classes[-1] if len(classes) > 0 else None
+        self.env.ref_context["iceberg:class"] = (
+            classes[-1] if len(classes) > 0 else None
+        )
         if "module" in self.options:
-            modules = self.env.ref_context.setdefault("spark:modules", [])
+            modules = self.env.ref_context.setdefault("iceberg:modules", [])
             if modules:
-                self.env.ref_context["spark:module"] = modules.pop()
+                self.env.ref_context["iceberg:module"] = modules.pop()
             else:
-                self.env.ref_context.pop("spark:module")
+                self.env.ref_context.pop("iceberg:module")
 
     def _toc_entry_name(self, sig_node: desc_signature) -> str:
         if not sig_node.get("_toc_parts"):
@@ -285,10 +287,10 @@ class SparkObject(ObjectDescription[Tuple[str, str]]):
         return ""
 
 
-class SparkFunction(SparkObject):
+class IcebergFunction(IcebergObject):
     """Description of a function."""
 
-    option_spec: OptionSpec = SparkObject.option_spec.copy()
+    option_spec: OptionSpec = IcebergObject.option_spec.copy()
     option_spec.update(
         {
             "async": directives.flag,
@@ -310,7 +312,7 @@ class SparkFunction(SparkObject):
         super().add_target_and_index(name_cls, sig, signode)
         if "noindexentry" not in self.options:
             modname = self.options.get(
-                "module", self.env.ref_context.get("spark:module")
+                "module", self.env.ref_context.get("iceberg:module")
             )
             node_id = signode["ids"][0]
 
@@ -319,7 +321,7 @@ class SparkFunction(SparkObject):
                 text = _("%s() (in module %s)") % (name, modname)
                 self.indexnode["entries"].append(("single", text, node_id, "", None))
             else:
-                text = f"{pairindextypes['builtin']}; {name}()"
+                text = f'{pairindextypes["builtin"]}; {name}()'
                 self.indexnode["entries"].append(("pair", text, node_id, "", None))
 
     def get_index_text(self, modname: str, name_cls: tuple[str, str]) -> str | None:
@@ -327,7 +329,7 @@ class SparkFunction(SparkObject):
         return None
 
 
-class SparkXRefRole(XRefRole):
+class IcebergXRefRole(XRefRole):
     def process_link(
         self,
         env: BuildEnvironment,
@@ -336,8 +338,8 @@ class SparkXRefRole(XRefRole):
         title: str,
         target: str,
     ) -> tuple[str, str]:
-        refnode["spark:module"] = env.ref_context.get("spark:module")
-        refnode["spark:class"] = env.ref_context.get("spark:class")
+        refnode["iceberg:module"] = env.ref_context.get("iceberg:module")
+        refnode["iceberg:class"] = env.ref_context.get("iceberg:class")
         if not has_explicit_title:
             title = title.lstrip(".")  # only has a meaning for the target
             target = target.lstrip("~")  # only has a meaning for the title
@@ -356,13 +358,13 @@ class SparkXRefRole(XRefRole):
         return title, target
 
 
-class SparkModuleIndex(Index):
+class IcebergModuleIndex(Index):
     """
-    Index subclass to provide the Spark module index.
+    Index subclass to provide the Iceberg module index.
     """
 
     name = "modindex"
-    localname = _("Spark Module Index")
+    localname = _("Iceberg Module Index")
     shortname = _("modules")
 
     def generate(
@@ -442,27 +444,27 @@ class SparkModuleIndex(Index):
         return sorted_content, collapse
 
 
-class SparkDomain(Domain):
-    """Spark domain."""
+class IcebergDomain(Domain):
+    """Iceberg domain."""
 
-    name = "spark"
-    label = "Spark"
+    name = "iceberg"
+    label = "Iceberg"
     object_types: dict[str, ObjType] = {
         "function": ObjType(_("function"), "func", "obj"),
     }
 
     directives = {
-        "function": SparkFunction,
+        "function": IcebergFunction,
     }
     roles = {
-        "func": SparkXRefRole(fix_parens=True),
+        "func": IcebergXRefRole(fix_parens=True),
     }
     initial_data: dict[str, dict[str, tuple[Any]]] = {
         "objects": {},  # fullname -> docname, objtype
         "modules": {},  # modname -> docname, synopsis, platform, deprecated
     }
     indices = [
-        SparkModuleIndex,
+        IcebergModuleIndex,
     ]
 
     @property
@@ -477,7 +479,7 @@ class SparkDomain(Domain):
         aliased: bool = False,
         location: Any = None,
     ) -> None:
-        """Note a spark object for cross reference.
+        """Note a iceberg object for cross reference.
 
         .. versionadded:: 2.1
         """
@@ -509,7 +511,7 @@ class SparkDomain(Domain):
     def note_module(
         self, name: str, node_id: str, synopsis: str, platform: str, deprecated: bool
     ) -> None:
-        """Note a spark module for cross reference.
+        """Note a iceberg module for cross reference.
 
         .. versionadded:: 2.1
         """
@@ -543,7 +545,7 @@ class SparkDomain(Domain):
         type: str | None,
         searchmode: int = 0,
     ) -> list[tuple[str, ObjectEntry]]:
-        """Find a Spark object for "name", perhaps using the given module
+        """Find a Iceberg object for "name", perhaps using the given module
         and/or classname.  Returns a list of (name, object entry) tuples.
         """
         # skip parens
@@ -620,8 +622,8 @@ class SparkDomain(Domain):
         node: pending_xref,
         contnode: Element,
     ) -> Element | None:
-        modname = node.get("spark:module")
-        clsname = node.get("spark:class")
+        modname = node.get("iceberg:module")
+        clsname = node.get("iceberg:class")
         searchmode = 1 if node.hasattr("refspecific") else 0
         matches = self.find_obj(env, modname, clsname, target, type, searchmode)
 
@@ -677,8 +679,8 @@ class SparkDomain(Domain):
         node: pending_xref,
         contnode: Element,
     ) -> list[tuple[str, Element]]:
-        modname = node.get("spark:module")
-        clsname = node.get("spark:class")
+        modname = node.get("iceberg:module")
+        clsname = node.get("iceberg:class")
         results: list[tuple[str, Element]] = []
 
         # always search in "refspecific" mode with the :any: role
@@ -693,7 +695,7 @@ class SparkDomain(Domain):
             if obj[2] == "module":
                 results.append(
                     (
-                        "spark:mod",
+                        "iceberg:mod",
                         self._make_module_refnode(builder, fromdocname, name, contnode),
                     )
                 )
@@ -708,7 +710,7 @@ class SparkDomain(Domain):
 
                 results.append(
                     (
-                        "spark:" + self.role_for_objtype(obj[2]),
+                        "iceberg:" + self.role_for_objtype(obj[2]),
                         make_refnode(
                             builder, fromdocname, obj[0], obj[1], children, name
                         ),
@@ -744,8 +746,8 @@ class SparkDomain(Domain):
                     yield (refname, refname, obj.objtype, obj.docname, obj.node_id, 1)
 
     def get_full_qualified_name(self, node: Element) -> str | None:
-        modname = node.get("spark:module")
-        clsname = node.get("spark:class")
+        modname = node.get("iceberg:module")
+        clsname = node.get("iceberg:class")
         target = node.get("reftarget")
         if target is None:
             return None
@@ -755,7 +757,7 @@ class SparkDomain(Domain):
 
 def setup(app: Sphinx) -> dict[str, Any]:
     app.setup_extension("sphinx.directives")
-    app.add_domain(SparkDomain)
+    app.add_domain(IcebergDomain)
 
     return {
         "version": "builtin",
