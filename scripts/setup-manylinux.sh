@@ -12,6 +12,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+# shellcheck source-path=SCRIPTDIR
 
 # This script documents setting up a Centos9 host for Velox
 # development.  Running it should make you ready to compile.
@@ -30,7 +31,8 @@ set -efx -o pipefail
 # so that some low level types are the same size. Also, disable warnings.
 SCRIPT_DIR=$(dirname "${BASH_SOURCE[0]}")
 source $SCRIPT_DIR/setup-common.sh
-export CXXFLAGS=$(get_cxx_flags) # Used by boost.
+CXXFLAGS=$(get_cxx_flags) # Used by boost.
+export CXXFLAGS
 export CFLAGS=${CXXFLAGS//"-std=c++17"/} # Used by LZO.
 USE_CLANG="${USE_CLANG:-false}"
 export INSTALL_PREFIX=${INSTALL_PREFIX:-"/usr/local"}
@@ -85,7 +87,8 @@ function install_gflags {
 
 function install_cuda {
   # See https://developer.nvidia.com/cuda-downloads
-  local arch=$(uname -m)
+  local arch
+  arch=$(uname -m)
   local repo_url
 
   if [[ "$arch" == "x86_64" ]]; then
@@ -99,8 +102,9 @@ function install_cuda {
   fi
 
   dnf config-manager --add-repo "$repo_url"
-  local dashed="$(echo $1 | tr '.' '-')"
-  dnf install -y cuda-nvcc-$dashed cuda-cudart-devel-$dashed cuda-nvrtc-devel-$dashed cuda-driver-devel-$dashed
+  local dashed
+  dashed="$(echo "$1" | tr '.' '-')"
+  dnf install -y cuda-nvcc-"$dashed" cuda-cudart-devel-"$dashed" cuda-nvrtc-devel-"$dashed" cuda-driver-devel-"$dashed"
 }
 
 function install_velox_deps {

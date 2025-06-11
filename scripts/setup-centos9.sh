@@ -12,6 +12,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+# shellcheck source-path=SCRIPTDIR
 
 # This script documents setting up a Centos9 host for Velox
 # development.  Running it should make you ready to compile.
@@ -29,8 +30,9 @@ set -efx -o pipefail
 # Some of the packages must be build with the same compiler flags
 # so that some low level types are the same size. Also, disable warnings.
 SCRIPT_DIR=$(dirname "${BASH_SOURCE[0]}")
-source $SCRIPT_DIR/setup-common.sh
-export CXXFLAGS=$(get_cxx_flags) # Used by boost.
+source "$SCRIPT_DIR"/setup-common.sh
+CXXFLAGS=$(get_cxx_flags) # Used by boost.
+export CXXFLAGS
 export CFLAGS=${CXXFLAGS//"-std=c++17"/} # Used by LZO.
 export COMPILER_FLAGS=${CXXFLAGS}
 SUDO="${SUDO:-""}"
@@ -80,13 +82,14 @@ function install_conda {
 function install_gflags {
   # Remove an older version if present.
   dnf remove -y gflags
-  wget_and_untar https://github.com/gflags/gflags/archive/${GFLAGS_VERSION}.tar.gz gflags
+  wget_and_untar https://github.com/gflags/gflags/archive/"${GFLAGS_VERSION}".tar.gz gflags
   cmake_install_dir gflags -DBUILD_SHARED_LIBS=ON -DBUILD_STATIC_LIBS=ON -DBUILD_gflags_LIB=ON -DLIB_SUFFIX=64
 }
 
 function install_cuda {
   # See https://developer.nvidia.com/cuda-downloads
-  local arch=$(uname -m)
+  local arch
+  arch="$(uname -m)"
   local repo_url
 
   if [[ "$arch" == "x86_64" ]]; then
@@ -100,13 +103,14 @@ function install_cuda {
   fi
 
   dnf config-manager --add-repo "$repo_url"
-  local dashed="$(echo $1 | tr '.' '-')"
+  local dashed
+  dashed="$(echo "$1" | tr '.' '-')"
   dnf install -y \
-    cuda-compat-$dashed \
-    cuda-driver-devel-$dashed \
-    cuda-minimal-build-$dashed \
-    cuda-nvrtc-devel-$dashed \
-    libcufile-devel-$dashed \
+    cuda-compat-"$dashed" \
+    cuda-driver-devel-"$dashed" \
+    cuda-minimal-build-"$dashed" \
+    cuda-nvrtc-devel-"$dashed" \
+    libcufile-devel-"$dashed" \
     numactl-libs
 }
 
