@@ -86,6 +86,7 @@ class HiveDataSinkTest : public exec::test::HiveConnectorTestBase {
   std::vector<RowVectorPtr> createVectors(int vectorSize, int numVectors) {
     VectorFuzzer::Options options;
     options.vectorSize = vectorSize;
+    options.nullRatio = 0.2;
     VectorFuzzer fuzzer(options, pool());
     std::vector<RowVectorPtr> vectors;
     for (int i = 0; i < numVectors; ++i) {
