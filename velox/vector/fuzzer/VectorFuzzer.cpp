@@ -225,6 +225,19 @@ bool hasNestedDictionaryLayers(const VectorPtr& baseVector) {
       VectorEncoding::isDictionary(baseVector->valueVector()->encoding());
 }
 
+// Returns an AbstractInputGeneratorPtr for the given type if it's a custom
+// type, otherwise returns null.
+AbstractInputGeneratorPtr maybeGetCustomTypeInputGenerator(
+    const TypePtr& type,
+    const double nullRatio,
+    FuzzerGenerator& rng) {
+  if (customTypeExists(type->name())) {
+    InputGeneratorConfig config{rand<uint32_t>(rng), nullRatio};
+    return getCustomTypeInputGenerator(type->name(), config);
+  }
+
+  return nullptr;
+}
 } // namespace
 
 VectorPtr VectorFuzzer::fuzzNotNull(
@@ -254,18 +267,15 @@ VectorPtr VectorFuzzer::fuzz(
     const AbstractInputGeneratorPtr& customGenerator) {
   VectorPtr vector;
   vector_size_t vectorSize = size;
-  auto inputGenerator = customGenerator;
+  const auto inputGenerator = customGenerator
+      ? customGenerator
+      : maybeGetCustomTypeInputGenerator(type, opts_.nullRatio, rng_);
 
   bool usingLazyVector = opts_.allowLazyVector && coinToss(0.1);
   // Lazy Vectors cannot be sliced, so we skip this if using lazy wrapping.
   if (opts_.allowSlice && !usingLazyVector && coinToss(0.1)) {
     // Extend the underlying vector to allow slicing later.
     vectorSize += rand<uint32_t>(rng_) % 8;
-  }
-
-  if (!inputGenerator && customTypeExists(type->name())) {
-    InputGeneratorConfig config{rand<uint32_t>(rng_), opts_.nullRatio};
-    inputGenerator = getCustomTypeInputGenerator(type->name(), config);
   }
 
   // 20% chance of adding a constant vector.
@@ -320,6 +330,10 @@ VectorPtr VectorFuzzer::fuzzConstant(
     const TypePtr& type,
     vector_size_t size,
     const AbstractInputGeneratorPtr& customGenerator) {
+  const auto inputGenerator = customGenerator
+      ? customGenerator
+      : maybeGetCustomTypeInputGenerator(type, opts_.nullRatio, rng_);
+
   // For constants, there are two possible cases:
   // - generate a regular constant vector (only for primitive types).
   // - generate a random vector and wrap it using a constant vector.
@@ -331,6 +345,11 @@ VectorPtr VectorFuzzer::fuzzConstant(
     if (type->isUnKnown()) {
       return BaseVector::createNullConstant(type, size, pool_);
     } else {
+      auto inputGenerator = customGenerator;
+      if (!inputGenerator && customTypeExists(type->name())) {
+        InputGeneratorConfig config{rand<uint32_t>(rng_), opts_.nullRatio};
+        inputGenerator = getCustomTypeInputGenerator(type->name(), config);
+      }
       return VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH_ALL(
           fuzzConstantPrimitiveImpl,
           type->kind(),
@@ -339,7 +358,7 @@ VectorPtr VectorFuzzer::fuzzConstant(
           size,
           rng_,
           opts_,
-          customGenerator);
+          inputGenerator);
     }
   }
 
@@ -362,7 +381,7 @@ VectorPtr VectorFuzzer::fuzzConstant(
         opts_.maxConstantContainerSize.value(), opts_.complexElementsMaxSize);
   }
   return BaseVector::wrapInConstant(
-      size, constantIndex, fuzz(type, innerVectorSize, customGenerator));
+      size, constantIndex, fuzz(type, innerVectorSize, inputGenerator));
 }
 
 VectorPtr VectorFuzzer::fuzzFlat(
@@ -387,9 +406,14 @@ VectorPtr VectorFuzzer::fuzzFlat(
     const TypePtr& type,
     vector_size_t size,
     const AbstractInputGeneratorPtr& customGenerator) {
-  if (customGenerator) {
+  auto inputGenerator = customGenerator;
+  if (!inputGenerator && customTypeExists(type->name())) {
+    InputGeneratorConfig config{rand<uint32_t>(rng_), opts_.nullRatio};
+    inputGenerator = getCustomTypeInputGenerator(type->name(), config);
+  }
+  if (inputGenerator) {
     return fuzzer::ConstrainedVectorGenerator::generateFlat(
-        customGenerator, size, pool_);
+        inputGenerator, size, pool_);
   }
 
   // Primitive types.

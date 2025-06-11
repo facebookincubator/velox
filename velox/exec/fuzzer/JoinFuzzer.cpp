@@ -398,6 +398,7 @@ RowVectorPtr JoinFuzzer::execute(
     spillDirectory = exec::test::TempDirectoryPath::create();
     builder.config(core::QueryConfig::kSpillEnabled, true)
         .config(core::QueryConfig::kJoinSpillEnabled, true)
+        .config(core::QueryConfig::kMixedGroupedModeHashJoinSpillEnabled, true)
         .spillDirectory(spillDirectory->getPath());
     spillPct = 10;
   }
@@ -764,13 +765,12 @@ void JoinFuzzer::verify(core::JoinType joinType) {
         numGroups, false, JoinMaker::JoinOrder::NATURAL));
 
     // Use mixed mode grouped execution.
-    // TODO(jtan6): Unblock mixed mode after fix fuzzer.
-    // if (!needRightSideJoin(joinType)) {
-    //   // Mixed grouped mode join does not support types that needs right side
-    //   // join.
-    //   altPlans.push_back(joinMaker.makeHashJoinWithTableScan(
-    //       numGroups, true, JoinMaker::JoinOrder::NATURAL));
-    // }
+    if (!needRightSideJoin(joinType)) {
+      // Mixed grouped mode join does not support types that needs right side
+      // join.
+      altPlans.push_back(joinMaker.makeHashJoinWithTableScan(
+          numGroups, true, JoinMaker::JoinOrder::NATURAL));
+    }
 
     if (joinMaker.supportsFlippingHashJoin()) {
       // Use ungrouped execution.
@@ -782,14 +782,12 @@ void JoinFuzzer::verify(core::JoinType joinType) {
           numGroups, false, JoinMaker::JoinOrder::FLIPPED));
 
       // Use mixed mode grouped execution.
-      // TODO(jtan6): Unblock mixed mode after fix fuzzer.
-      // if (!needRightSideJoin(flipJoinType(joinType))) {
-      //   // Mixed grouped mode join does not support types that needs right
-      //   side
-      //   // join.
-      //   altPlans.push_back(joinMaker.makeHashJoinWithTableScan(
-      //       numGroups, true, JoinMaker::JoinOrder::FLIPPED));
-      // }
+      if (!needRightSideJoin(flipJoinType(joinType))) {
+        // Mixed grouped mode join does not support types that needs right side
+        // join.
+        altPlans.push_back(joinMaker.makeHashJoinWithTableScan(
+            numGroups, true, JoinMaker::JoinOrder::FLIPPED));
+      }
     }
 
     if (joinMaker.supportsMergeJoin()) {

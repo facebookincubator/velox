@@ -32,6 +32,10 @@ class Unnest : public Operator {
     return input_ == nullptr;
   }
 
+  bool startDrain() override {
+    return input_ != nullptr;
+  }
+
   void addInput(RowVectorPtr input) override;
 
   RowVectorPtr getOutput() override;
@@ -39,9 +43,10 @@ class Unnest : public Operator {
   bool isFinished() override;
 
  private:
+  void maybeFinishDrain();
+
   // Represents the range of rows to process and indicates that the first and
-  // last
-  // rows may need to be processed partially to match the configured output
+  // last rows may need to be processed partially to match the configured output
   // batch size. When processing a single row, the range is from
   // 'firstRowStart_' to 'lastRowEnd'. For multiple rows, the range for the
   // first row is from 'firstRowStart_' to 'rawMaxSizes_[firstRow]', and for the
@@ -75,26 +80,27 @@ class Unnest : public Operator {
             vector_size_t /*start*/,
             vector_size_t /*size*/)> func,
         const vector_size_t* const rawMaxSizes,
-        vector_size_t firstRowStart) const;
+        vector_size_t firstInnerRowStart) const;
 
-    // First input row to be included in the output.
-    const vector_size_t start;
+    // First input row in 'input_' to be included in the output.
+    const vector_size_t startInputRow;
 
-    // Number of input rows to be included in the output.
-    const vector_size_t size;
+    // Number of input rows to be included in the output starting from
+    // 'startInputRow'.
+    const vector_size_t numInputRows;
 
     // The processing of the last input row starts at index 'firstRowStart_' or
     // 0, depending on whether it is the first row being processed, and ends at
     // 'lastRowEnd'. It is nullopt when the last row is processed completely.
-    const std::optional<vector_size_t> lastRowEnd;
+    const std::optional<vector_size_t> lastInnerRowEnd;
 
     // Total number of inner rows in the range.
-    const vector_size_t numElements;
+    const vector_size_t numInnerRows;
   };
 
   // Extract the range of rows to process.
   // @param size The size of input RowVector.
-  RowRange extractRowRange(vector_size_t size) const;
+  RowRange extractRowRange(vector_size_t inputSize) const;
 
   // Generate output for 'rowRange' represented rows.
   // @param rowRange Range of rows to process.
@@ -130,11 +136,12 @@ class Unnest : public Operator {
 
   // The maximum number of output batch rows.
   const uint32_t maxOutputSize_;
+
   BufferPtr maxSizes_;
   vector_size_t* rawMaxSizes_{nullptr};
 
   // The index to start processing the first row.
-  vector_size_t firstRowStart_ = 0;
+  vector_size_t firstInnerRowStart_ = 0;
 
   std::vector<const vector_size_t*> rawSizes_;
   std::vector<const vector_size_t*> rawOffsets_;

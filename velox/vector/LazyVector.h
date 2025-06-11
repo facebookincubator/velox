@@ -242,6 +242,7 @@ class LazyVector : public BaseVector {
         vector_(std::move(vector)) {}
 
   void reset(std::unique_ptr<VectorLoader>&& loader, vector_size_t size) {
+    VELOX_CHECK_GE(size, 0, "Size must be non-negative.");
     BaseVector::length_ = size;
     loader_ = std::move(loader);
     allLoaded_ = false;
@@ -363,10 +364,10 @@ class LazyVector : public BaseVector {
 
   void validate(const VectorValidateOptions& options) const override;
 
-  VectorPtr copyPreserveEncodings(
+  VectorPtr testingCopyPreserveEncodings(
       velox::memory::MemoryPool* pool = nullptr) const override {
     VELOX_CHECK(isLoaded());
-    return loadedVector()->copyPreserveEncodings(pool);
+    return loadedVector()->testingCopyPreserveEncodings(pool);
   }
 
  private:

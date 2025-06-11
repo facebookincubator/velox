@@ -115,8 +115,8 @@ BENCHMARK_DRAW_LINE();
 
 int main(int argc, char* argv[]) {
   folly::Init init{&argc, &argv};
-  gflags::ParseCommandLineFlags(&argc, &argv, true);
-  memory::MemoryManager::initialize({});
+  ::gflags::ParseCommandLineFlags(&argc, &argv, true);
+  memory::MemoryManager::initialize(memory::MemoryManager::Options{});
   benchmark = std::make_unique<VectorCompareBenchmark>(1000);
   folly::runBenchmarks();
   benchmark.reset();

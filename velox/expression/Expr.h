@@ -25,6 +25,7 @@
 #include "velox/core/Expressions.h"
 #include "velox/expression/DecodedArgs.h"
 #include "velox/expression/EvalCtx.h"
+#include "velox/expression/ExprStats.h"
 #include "velox/expression/VectorFunction.h"
 #include "velox/type/Subfield.h"
 #include "velox/vector/SimpleVector.h"
@@ -34,38 +35,6 @@ namespace facebook::velox::exec {
 class ExprSet;
 class FieldReference;
 class VectorFunction;
-
-struct ExprStats {
-  /// Requires QueryConfig.exprTrackCpuUsage() to be 'true'.
-  CpuWallTiming timing;
-
-  /// Number of processed rows.
-  uint64_t numProcessedRows{0};
-
-  /// Number of processed vectors / batches. Allows to compute average batch
-  /// size.
-  uint64_t numProcessedVectors{0};
-
-  /// Whether default-null behavior of an expression resulted in skipping
-  /// evaluation of rows.
-  bool defaultNullRowsSkipped{false};
-
-  void add(const ExprStats& other) {
-    timing.add(other.timing);
-    numProcessedRows += other.numProcessedRows;
-    numProcessedVectors += other.numProcessedVectors;
-    defaultNullRowsSkipped |= other.defaultNullRowsSkipped;
-  }
-
-  std::string toString() const {
-    return fmt::format(
-        "timing: {}, numProcessedRows: {}, numProcessedVectors: {}, defaultNullRowsSkipped: {}",
-        timing.toString(),
-        numProcessedRows,
-        numProcessedVectors,
-        defaultNullRowsSkipped ? "true" : "false");
-  }
-};
 
 /// Maintains a set of rows for evaluation and removes rows with
 /// nulls or errors as needed. Helps to avoid copying SelectivityVector in cases
@@ -836,11 +805,18 @@ std::unique_ptr<ExprSet> makeExprSetFromFlag(
     std::vector<core::TypedExprPtr>&& source,
     core::ExecCtx* execCtx);
 
-/// Evaluates an expression that doesn't depend on any inputs and returns the
-/// result as single-row vector.
-VectorPtr evaluateConstantExpression(
+/// Evaluates a deterministic expression that doesn't depend on any inputs and
+/// returns the result as single-row vector. Returns nullptr if the expression
+/// is non-deterministic or has dependencies.
+///
+/// By default, propagates failures that occur during evaluation of the
+/// expression. For example, evaluating 5 / 0 throws "division by zero". If
+/// 'suppressEvaluationFailures' is true, these failures are swallowed and the
+/// caller receives a nullptr result.
+VectorPtr tryEvaluateConstantExpression(
     const core::TypedExprPtr& expr,
-    memory::MemoryPool* pool);
+    memory::MemoryPool* pool,
+    bool suppressEvaluationFailures = false);
 
 /// Returns a string representation of the expression trees annotated with
 /// runtime statistics. Expected to be called after calling ExprSet::eval one or

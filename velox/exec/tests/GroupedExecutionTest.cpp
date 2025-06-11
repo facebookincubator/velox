@@ -20,6 +20,7 @@
 #include "velox/exec/Cursor.h"
 #include "velox/exec/OutputBufferManager.h"
 #include "velox/exec/PlanNodeStats.h"
+#include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/HiveConnectorTestBase.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
 #include "velox/exec/tests/utils/TempDirectoryPath.h"
@@ -500,6 +501,69 @@ TEST_F(GroupedExecutionTest, hashJoinWithMixedGroupedExecution) {
   }
 }
 
+TEST_F(GroupedExecutionTest, hashJoinWithMixedGroupedExecutionWithSpill) {
+  const uint64_t numGroups = 3;
+  auto probeVectors = makeVectors(12, 20);
+  auto probePath = TempFilePath::create();
+  writeToFile(probePath->getPath(), probeVectors);
+
+  auto buildVectors = makeVectors(4, 20);
+  auto buildPath = TempFilePath::create();
+  writeToFile(buildPath->getPath(), buildVectors);
+
+  std::vector<RowVectorPtr> totalProbeVectors;
+  for (int i = 0; i < numGroups; ++i) {
+    totalProbeVectors.insert(
+        totalProbeVectors.end(), probeVectors.begin(), probeVectors.end());
+  }
+  createDuckDbTable("t", totalProbeVectors);
+  createDuckDbTable("u", buildVectors);
+
+  for (const bool triggerSpill : {false, true}) {
+    auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+    core::PlanNodeId probeScanNodeId;
+    core::PlanNodeId buildScanNodeId;
+
+    auto plan = PlanBuilder(planNodeIdGenerator)
+                    .tableScan(rowType_)
+                    .capturePlanNodeId(probeScanNodeId)
+                    .project({"c0 as t0", "c1 as t1"})
+                    .hashJoin(
+                        {"t0"},
+                        {"u0"},
+                        PlanBuilder(planNodeIdGenerator)
+                            .tableScan(rowType_)
+                            .capturePlanNodeId(buildScanNodeId)
+                            .project({"c0 as u0", "c1 as u1"})
+                            .planNode(),
+                        "",
+                        {"t1", "u1"},
+                        core::JoinType::kInner)
+                    .planNode();
+
+    std::vector<Split> probeSplits;
+    for (int i = 0; i < numGroups; ++i) {
+      probeSplits.push_back(makeHiveSplitWithGroup(probePath->getPath(), i));
+    }
+
+    TestScopedSpillInjection scopedSpillInjection(triggerSpill ? 100 : 0);
+    const auto spillDirectory = exec::test::TempDirectoryPath::create();
+    AssertQueryBuilder queryBuilder(duckDbQueryRunner_);
+    queryBuilder.plan(plan)
+        .spillDirectory(spillDirectory->getPath())
+        .config(core::QueryConfig::kSpillEnabled, true)
+        .config(core::QueryConfig::kJoinSpillEnabled, true)
+        .config(core::QueryConfig::kMixedGroupedModeHashJoinSpillEnabled, true)
+        .splits(probeScanNodeId, std::move(probeSplits))
+        .splits(buildScanNodeId, {makeHiveSplit(buildPath->getPath())})
+        .executionStrategy(core::ExecutionStrategy::kGrouped)
+        .groupedExecutionLeafNodeIds({probeScanNodeId})
+        .numSplitGroups(numGroups)
+        .numConcurrentSplitGroups(1)
+        .assertResults("SELECT t.c1, u.c1 FROM t, u WHERE t.c0 = u.c0");
+  }
+}
+
 DEBUG_ONLY_TEST_F(
     GroupedExecutionTest,
     groupedExecutionWithHashJoinSpillCheck) {
@@ -549,7 +613,7 @@ DEBUG_ONLY_TEST_F(
         .capturePlanNodeId(probeScanNodeId)
         .project({"c0 as x"});
     // Hash join.
-    core::PlanNodeId joinNodeId;
+    core::PlanNodePtr joinNode;
     auto planFragment = planBuilder
                             .hashJoin(
                                 {"x"},
@@ -561,7 +625,7 @@ DEBUG_ONLY_TEST_F(
                                     .planNode(),
                                 "",
                                 {"x", "y"})
-                            .capturePlanNodeId(joinNodeId)
+                            .capturePlanNode(joinNode)
                             .partitionedOutput({}, 1, {"x", "y"})
                             .planFragment();
 
@@ -577,6 +641,8 @@ DEBUG_ONLY_TEST_F(
       std::unordered_map<std::string, std::string> configs;
       configs.emplace(core::QueryConfig::kSpillEnabled, "true");
       configs.emplace(core::QueryConfig::kJoinSpillEnabled, "true");
+      configs.emplace(
+          core::QueryConfig::kMixedGroupedModeHashJoinSpillEnabled, "true");
       queryCtx->testingOverrideConfigUnsafe(std::move(configs));
     }
 
@@ -622,7 +688,10 @@ DEBUG_ONLY_TEST_F(
 
     // 'numDriversPerGroup' drivers max to execute one group at a time.
     task->start(numDriversPerGroup, testData.groupConcurrency);
-    ASSERT_EQ(task->hasMixedExecutionGroup(), testData.mixedExecutionMode);
+    ASSERT_EQ(
+        task->hasMixedExecutionGroupJoin(
+            dynamic_cast<const core::HashJoinNode*>(joinNode.get())),
+        testData.mixedExecutionMode);
 
     // Add split(s) to the build scan.
     if (testData.mixedExecutionMode) {
@@ -664,7 +733,7 @@ DEBUG_ONLY_TEST_F(
     ASSERT_EQ(task->state(), exec::TaskState::kFinished);
 
     auto taskStats = exec::toPlanStats(task->taskStats());
-    auto& planStats = taskStats.at(joinNodeId);
+    auto& planStats = taskStats.at(joinNode->id());
     if (testData.expectedSpill) {
       ASSERT_GT(planStats.spilledBytes, 0);
     } else {
@@ -694,7 +763,7 @@ DEBUG_ONLY_TEST_F(
       .project({"c0 as x"});
 
   // Hash join.
-  core::PlanNodeId joinNodeId;
+  core::PlanNodePtr joinNode;
   auto planFragment = planBuilder
                           .hashJoin(
                               {"x"},
@@ -706,7 +775,7 @@ DEBUG_ONLY_TEST_F(
                                   .planNode(),
                               "",
                               {"x", "y"})
-                          .capturePlanNodeId(joinNodeId)
+                          .capturePlanNode(joinNode)
                           .partitionedOutput({}, 1, {"x", "y"})
                           .planFragment();
 
@@ -719,6 +788,8 @@ DEBUG_ONLY_TEST_F(
   std::unordered_map<std::string, std::string> configs;
   configs.emplace(core::QueryConfig::kSpillEnabled, "true");
   configs.emplace(core::QueryConfig::kJoinSpillEnabled, "true");
+  configs.emplace(
+      core::QueryConfig::kMixedGroupedModeHashJoinSpillEnabled, "true");
   queryCtx->testingOverrideConfigUnsafe(std::move(configs));
 
   SCOPED_TESTVALUE_SET(
@@ -758,7 +829,10 @@ DEBUG_ONLY_TEST_F(
 
   // 'numDriversPerGroup' drivers max to execute one group at a time.
   task->start(numDriversPerGroup, 1);
-  ASSERT_EQ(task->hasMixedExecutionGroup(), true);
+  ASSERT_EQ(
+      task->hasMixedExecutionGroupJoin(
+          dynamic_cast<const core::HashJoinNode*>(joinNode.get())),
+      true);
 
   // Add split to both build and probe scans.
   task->addSplit(buildScanNodeId, makeHiveSplit(filePath->getPath()));
@@ -787,7 +861,7 @@ DEBUG_ONLY_TEST_F(
   ASSERT_EQ(task->state(), exec::TaskState::kRunning);
 
   auto taskStats = exec::toPlanStats(task->taskStats());
-  auto& planStats = taskStats.at(joinNodeId);
+  auto& planStats = taskStats.at(joinNode->id());
   ASSERT_GT(planStats.spilledBytes, 0);
 
   // Finalize the last probe split.

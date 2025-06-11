@@ -25,8 +25,10 @@ velox_add_library(
   DateTimeFunctionsRegistration.cpp
   DataSizeFunctionsRegistration.cpp
   GeneralFunctionsRegistration.cpp
+  GeometryFunctionsRegistration.cpp
   HyperLogFunctionsRegistration.cpp
   IntegerFunctionsRegistration.cpp
+  FloatingPointFunctionsRegistration.cpp
   JsonFunctionsRegistration.cpp
   MapFunctionsRegistration.cpp
   MathematicalFunctionsRegistration.cpp

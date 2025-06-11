@@ -59,8 +59,6 @@ struct HiveConnectorSplit : public connector::ConnectorSplit {
   std::shared_ptr<std::string> extraFileInfo;
   // Parameters that are provided as the serialization options.
   std::unordered_map<std::string, std::string> serdeParameters;
-  // Parameters that are provided as the physical storage properties.
-  std::unordered_map<std::string, std::string> storageParameters;
 
   /// These represent columns like $file_size, $file_modified_time that are
   /// associated with the HiveSplit.
@@ -86,8 +84,6 @@ struct HiveConnectorSplit : public connector::ConnectorSplit {
       const std::unordered_map<std::string, std::string>& _customSplitInfo = {},
       const std::shared_ptr<std::string>& _extraFileInfo = {},
       const std::unordered_map<std::string, std::string>& _serdeParameters = {},
-      const std::unordered_map<std::string, std::string>& _storageParameters =
-          {},
       int64_t splitWeight = 0,
       bool cacheable = true,
       const std::unordered_map<std::string, std::string>& _infoColumns = {},
@@ -105,7 +101,6 @@ struct HiveConnectorSplit : public connector::ConnectorSplit {
         customSplitInfo(_customSplitInfo),
         extraFileInfo(_extraFileInfo),
         serdeParameters(_serdeParameters),
-        storageParameters(_storageParameters),
         infoColumns(_infoColumns),
         properties(_properties),
         rowIdProperties(_rowIdProperties),
@@ -198,12 +193,6 @@ class HiveConnectorSplitBuilder {
     return *this;
   }
 
-  HiveConnectorSplitBuilder& storageParameters(
-      const std::unordered_map<std::string, std::string>& storageParameters) {
-    storageParameters_ = storageParameters;
-    return *this;
-  }
-
   HiveConnectorSplitBuilder& connectorId(const std::string& connectorId) {
     connectorId_ = connectorId;
     return *this;
@@ -232,7 +221,6 @@ class HiveConnectorSplitBuilder {
         customSplitInfo_,
         extraFileInfo_,
         serdeParameters_,
-        storageParameters_,
         splitWeight_,
         cacheable_,
         infoColumns_,
@@ -252,7 +240,6 @@ class HiveConnectorSplitBuilder {
   std::unordered_map<std::string, std::string> customSplitInfo_ = {};
   std::shared_ptr<std::string> extraFileInfo_ = {};
   std::unordered_map<std::string, std::string> serdeParameters_ = {};
-  std::unordered_map<std::string, std::string> storageParameters_ = {};
   std::unordered_map<std::string, std::string> infoColumns_ = {};
   std::string connectorId_;
   int64_t splitWeight_{0};

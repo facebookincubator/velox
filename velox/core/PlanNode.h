@@ -140,6 +140,10 @@ struct PlanSummaryOptions {
   /// ROW(VARCHAR, ARRAY,...).
   size_t maxChildTypes = 0;
 
+  /// Controls the maximum length of a string that is included in the plan
+  /// summary.
+  size_t maxLength = 50;
+
   /// Options that apply specifically to AGGREGATION nodes.
   struct AggregateOptions {
     /// For a given AGGREGATION node, maximum number of aggregate expressions
@@ -325,7 +329,7 @@ class ValuesNode : public PlanNode {
     explicit Builder(const ValuesNode& other) {
       id_ = other.id();
       values_ = other.values();
-      parallelizable_ = other.isParallelizable();
+      parallelizable_ = other.testingIsParallelizable();
       repeatTimes_ = other.repeatTimes();
     }
 
@@ -339,7 +343,7 @@ class ValuesNode : public PlanNode {
       return *this;
     }
 
-    Builder& parallelizable(const bool parallelizable) {
+    Builder& testingParallelizable(const bool parallelizable) {
       parallelizable_ = parallelizable;
       return *this;
     }
@@ -378,7 +382,7 @@ class ValuesNode : public PlanNode {
   }
 
   // For testing only.
-  bool isParallelizable() const {
+  bool testingIsParallelizable() const {
     return parallelizable_;
   }
 
@@ -1186,6 +1190,10 @@ class AggregationNode : public PlanNode {
     std::optional<bool> ignoreNullKeys_;
     std::optional<PlanNodePtr> source_;
   };
+
+  bool supportsBarrier() const override {
+    return isPreGrouped();
+  }
 
   const std::vector<PlanNodePtr>& sources() const override {
     return sources_;
@@ -2159,6 +2167,10 @@ class LocalMergeNode : public PlanNode {
 
   const std::vector<FieldAccessTypedExprPtr>& sortingKeys() const {
     return sortingKeys_;
+  }
+
+  bool canSpill(const QueryConfig& queryConfig) const override {
+    return !sortingKeys_.empty() && queryConfig.localMergeSpillEnabled();
   }
 
   const std::vector<SortOrder>& sortingOrders() const {
@@ -3328,6 +3340,10 @@ class IndexLookupJoinNode : public AbstractJoinNode {
     std::optional<std::vector<IndexLookupConditionPtr>> joinConditions_;
   };
 
+  bool supportsBarrier() const override {
+    return true;
+  }
+
   const TableScanNodePtr& lookupSource() const {
     return lookupSourceNode_;
   }
@@ -3357,6 +3373,9 @@ class IndexLookupJoinNode : public AbstractJoinNode {
 
   const std::vector<IndexLookupConditionPtr> joinConditions_;
 };
+
+/// Returns true if 'planNode' is index lookup join node.
+bool isIndexLookupJoin(const core::PlanNode* planNode);
 
 /// Represents inner/outer nested loop joins. Translates to an
 /// exec::NestedLoopJoinProbe and exec::NestedLoopJoinBuild. A separate
@@ -3991,6 +4010,10 @@ class UnnestNode : public PlanNode {
     std::optional<PlanNodePtr> source_;
   };
 
+  bool supportsBarrier() const override {
+    return true;
+  }
+
   /// The order of columns in the output is: replicated columns (in the order
   /// specified), unnested columns (in the order specified, for maps: key
   /// comes before value), optional ordinality column.
@@ -4011,6 +4034,14 @@ class UnnestNode : public PlanNode {
 
   const std::vector<FieldAccessTypedExprPtr>& unnestVariables() const {
     return unnestVariables_;
+  }
+
+  const std::vector<std::string>& unnestNames() const {
+    return unnestNames_;
+  }
+
+  const std::optional<std::string>& ordinalityName() const {
+    return ordinalityName_;
   }
 
   bool withOrdinality() const {
@@ -4430,6 +4461,10 @@ class WindowNode : public PlanNode {
 
   std::string_view name() const override {
     return "Window";
+  }
+
+  const std::vector<std::string>& windowColumnNames() const {
+    return windowColumnNames_;
   }
 
   folly::dynamic serialize() const override;

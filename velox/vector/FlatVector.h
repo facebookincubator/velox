@@ -271,7 +271,7 @@ class FlatVector final : public SimpleVector<T> {
       const BaseVector* source,
       const folly::Range<const BaseVector::CopyRange*>& ranges) override;
 
-  VectorPtr copyPreserveEncodings(
+  VectorPtr testingCopyPreserveEncodings(
       velox::memory::MemoryPool* pool = nullptr) const override {
     const auto allocPool = pool ? pool : BaseVector::pool_;
     return std::make_shared<FlatVector<T>>(
@@ -533,6 +533,7 @@ class FlatVector final : public SimpleVector<T> {
   }
 
   void unsafeSetSize(vector_size_t newSize) {
+    VELOX_CHECK_GE(newSize, 0, "Size must be non-negative.");
     this->length_ = newSize;
   }
 
@@ -651,7 +652,7 @@ template <>
 void FlatVector<StringView>::prepareForReuse();
 
 template <>
-VectorPtr FlatVector<StringView>::copyPreserveEncodings(
+VectorPtr FlatVector<StringView>::testingCopyPreserveEncodings(
     velox::memory::MemoryPool* pool) const;
 
 template <typename T>

@@ -104,6 +104,22 @@ TEST_P(MultiThreadedHashJoinTest, joinWithCancellation) {
       .run();
 }
 
+TEST_P(MultiThreadedHashJoinTest, testJoinWithSpillenabledCancellation) {
+  auto spillDirectory = exec::test::TempDirectoryPath::create();
+  HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
+      .numDrivers(numDrivers_)
+      .keyTypes({BIGINT()})
+      .probeVectors(1600, 5)
+      .buildVectors(1500, 5)
+      .injectTaskCancellation(true)
+      .injectSpill(false)
+      // Need spill directory so that canSpill() is true for HashProbe
+      .spillDirectory(spillDirectory->getPath())
+      .referenceQuery(
+          "SELECT t_k0, t_data, u_k0, u_data FROM t, u WHERE t.t_k0 = u.u_k0")
+      .run();
+}
+
 TEST_P(MultiThreadedHashJoinTest, emptyBuild) {
   const std::vector<bool> finishOnEmptys = {false, true};
   for (const auto finishOnEmpty : finishOnEmptys) {
@@ -6431,7 +6447,7 @@ TEST_F(HashJoinTest, reclaimFromJoinBuilderWithMultiDrivers) {
   const auto vectors = createVectors(rowType, 64 << 20, fuzzerOpts_);
   const int numDrivers = 4;
 
-  memory::MemoryManagerOptions options;
+  memory::MemoryManager::Options options;
   options.allocatorCapacity = 8L << 30;
   auto memoryManagerWithoutArbitrator =
       std::make_unique<memory::MemoryManager>(options);
@@ -8070,5 +8086,57 @@ DEBUG_ONLY_TEST_F(HashJoinTest, probeReclaimedMemoryReport) {
   task.reset();
 
   taskThread.join();
+}
+
+DEBUG_ONLY_TEST_F(HashJoinTest, hashTableCleanupAfterProbeFinish) {
+  auto buildVectors = makeVectors(buildType_, 5, 100);
+  auto probeVectors = makeVectors(probeType_, 5, 100);
+
+  createDuckDbTable("t", probeVectors);
+  createDuckDbTable("u", buildVectors);
+
+  HashProbe* probeOp{nullptr};
+  SCOPED_TESTVALUE_SET(
+      "facebook::velox::exec::Driver::runInternal::getOutput",
+      std::function<void(Operator*)>([&](Operator* op) {
+        if (probeOp == nullptr && op->operatorType() == "HashProbe") {
+          probeOp = dynamic_cast<HashProbe*>(op);
+        }
+      }));
+
+  bool tableEmpty{false};
+  SCOPED_TESTVALUE_SET(
+      "facebook::velox::exec::Driver::runInternal::noMoreInput",
+      std::function<void(Operator*)>([&](Operator* op) {
+        if (op->operatorType() == "FilterProject") {
+          tableEmpty = (probeOp->testingTable()->numDistinct() == 0);
+        }
+      }));
+
+  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  auto plan = PlanBuilder(planNodeIdGenerator)
+                  .values(probeVectors, true)
+                  .hashJoin(
+                      {"t_k1"},
+                      {"u_k1"},
+                      PlanBuilder(planNodeIdGenerator)
+                          .values(buildVectors, true)
+                          .planNode(),
+                      "",
+                      concat(probeType_->names(), buildType_->names()))
+                  .project({"t_k1", "t_k2", "t_v1", "u_k1", "u_k2", "u_v1"})
+                  .planNode();
+
+  auto tempDirectory = exec::test::TempDirectoryPath::create();
+  HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
+      .numDrivers(1)
+      .planNode(plan)
+      .injectSpill(false)
+      .spillDirectory(tempDirectory->getPath())
+      .referenceQuery(
+          "SELECT t_k1, t_k2, t_v1, u_k1, u_k2, u_v1 FROM t, u WHERE t.t_k1 = u.u_k1")
+      .config(core::QueryConfig::kSpillStartPartitionBit, "29")
+      .run();
+  ASSERT_TRUE(tableEmpty);
 }
 } // namespace

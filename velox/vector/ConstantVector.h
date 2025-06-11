@@ -272,6 +272,7 @@ class ConstantVector final : public SimpleVector<T> {
   }
 
   void resize(vector_size_t newSize, bool /*setNotNull*/ = true) override {
+    VELOX_CHECK_GE(newSize, 0, "Size must be non-negative.");
     BaseVector::length_ = newSize;
     if constexpr (std::is_same_v<T, StringView>) {
       SimpleVector<StringView>::resizeIsAsciiIfNotEmpty(
@@ -372,7 +373,7 @@ class ConstantVector final : public SimpleVector<T> {
     }
   }
 
-  VectorPtr copyPreserveEncodings(
+  VectorPtr testingCopyPreserveEncodings(
       velox::memory::MemoryPool* pool = nullptr) const override {
     auto selfPool = pool ? pool : BaseVector::pool_;
     if (valueVector_) {
@@ -380,7 +381,7 @@ class ConstantVector final : public SimpleVector<T> {
           selfPool,
           BaseVector::length_,
           index_,
-          valueVector_->copyPreserveEncodings(pool),
+          valueVector_->testingCopyPreserveEncodings(pool),
           SimpleVector<T>::stats_);
     }
 

@@ -89,7 +89,8 @@ FilterProject::FilterProject(
       project_(project),
       filter_(filter) {
   if (filter_ != nullptr && project_ != nullptr) {
-    stats().withWLock([&](auto& stats) {
+    folly::Synchronized<OperatorStats>& opStats = Operator::stats();
+    opStats.withWLock([&](auto& stats) {
       stats.setStatSplitter(
           [filterId = filter_->id()](const auto& combinedStats) {
             return splitStats(combinedStats, filterId);
@@ -186,7 +187,6 @@ RowVectorPtr FilterProject::getOutput() {
     numProcessedInputRows_ = size;
     VELOX_CHECK(!isIdentityProjection_);
     auto results = project(*rows, evalCtx);
-
     return fillOutput(size, nullptr, results);
   }
 
@@ -198,8 +198,7 @@ RowVectorPtr FilterProject::getOutput() {
     return nullptr;
   }
 
-  bool allRowsSelected = (numOut == size);
-
+  const bool allRowsSelected = (numOut == size);
   // evaluate projections (if present)
   std::vector<VectorPtr> results;
   if (!isIdentityProjection_) {
@@ -230,5 +229,17 @@ vector_size_t FilterProject::filter(
   std::vector<VectorPtr> results;
   exprs_->eval(0, 1, true, allRows, evalCtx, results);
   return processFilterResults(results[0], allRows, filterEvalCtx_, pool());
+}
+
+OperatorStats FilterProject::stats(bool clear) {
+  auto stats = Operator::stats(clear);
+  if (operatorCtx()
+          ->driverCtx()
+          ->queryConfig()
+          .operatorTrackExpressionStats() &&
+      exprs_ != nullptr) {
+    stats.expressionStats = exprs_->stats();
+  }
+  return stats;
 }
 } // namespace facebook::velox::exec

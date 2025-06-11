@@ -551,6 +551,25 @@ TEST_F(TaskTest, toJson) {
   ASSERT_NO_THROW(task->toShortJson());
 }
 
+TEST_F(TaskTest, createdCount) {
+  const auto createdCount = Task::numCreatedTasks();
+  auto plan = PlanBuilder()
+                  .tableScan(ROW({"a", "b"}, {INTEGER(), DOUBLE()}))
+                  .project({"a * a", "b + b"})
+                  .planFragment();
+
+  auto task = Task::create(
+      "task-1",
+      std::move(plan),
+      0,
+      core::QueryCtx::create(driverExecutor_.get()),
+      Task::ExecutionMode::kParallel);
+  task->start(2);
+  task->noMoreSplits("0");
+  waitForTaskCompletion(task.get());
+  ASSERT_EQ(Task::numCreatedTasks(), createdCount + 1);
+}
+
 TEST_F(TaskTest, wrongPlanNodeForSplit) {
   auto connectorSplit = std::make_shared<connector::hive::HiveConnectorSplit>(
       "test",
@@ -769,6 +788,72 @@ TEST_F(TaskTest, allSplitsConsumedMultipleSources) {
 
   auto projectNode = task->planFragment().planNode->sources()[0];
   ASSERT_TRUE(task->allSplitsConsumed(projectNode.get()));
+}
+
+TEST_F(TaskTest, hasMixedExecutionGroupJoin) {
+  // Create data for all sources
+  auto data = makeRowVector({
+      makeFlatVector<int64_t>(100, [](auto row) { return row; }),
+  });
+
+  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+
+  // Create a plan with two joins and three source nodes. One mixed grouped mode
+  // join and one non mixed grouped mode join.
+  core::PlanNodeId groupedScanNodeId1;
+  core::PlanNodeId groupedScanNodeId2;
+  core::PlanNodeId ungroupedScanNodeId1;
+  core::PlanNodePtr mixedGroupedModeJoinNode;
+  core::PlanNodePtr nonMixedGroupedModeJoinNode;
+
+  auto planFragment = PlanBuilder(planNodeIdGenerator)
+                          .tableScan(asRowType(data->type()))
+                          .capturePlanNodeId(groupedScanNodeId1)
+                          .project({"c0 as t0"})
+                          .hashJoin(
+                              {"t0"},
+                              {"c0"},
+                              PlanBuilder(planNodeIdGenerator)
+                                  .tableScan(asRowType(data->type()))
+                                  .capturePlanNodeId(groupedScanNodeId2)
+                                  .planNode(),
+                              "",
+                              {"c0"})
+                          .capturePlanNode(nonMixedGroupedModeJoinNode)
+                          .project({"c0 as u0"})
+                          .hashJoin(
+                              {"u0"},
+                              {"c0"},
+                              PlanBuilder(planNodeIdGenerator)
+                                  .tableScan(asRowType(data->type()))
+                                  .capturePlanNodeId(ungroupedScanNodeId1)
+                                  .planNode(),
+                              "",
+                              {"c0"})
+                          .capturePlanNode(mixedGroupedModeJoinNode)
+                          .planFragment();
+
+  planFragment.executionStrategy = core::ExecutionStrategy::kGrouped;
+  planFragment.groupedExecutionLeafNodeIds.emplace(groupedScanNodeId1);
+  planFragment.groupedExecutionLeafNodeIds.emplace(groupedScanNodeId2);
+  planFragment.numSplitGroups = 2;
+
+  auto task = Task::create(
+      "task-mixed-grouped-join",
+      std::move(planFragment),
+      0,
+      core::QueryCtx::create(driverExecutor_.get()),
+      Task::ExecutionMode::kParallel);
+
+  task->start(1);
+
+  ASSERT_FALSE(
+      task->hasMixedExecutionGroupJoin(dynamic_cast<const core::HashJoinNode*>(
+          nonMixedGroupedModeJoinNode.get())));
+  ASSERT_TRUE(task->hasMixedExecutionGroupJoin(
+      dynamic_cast<const core::HashJoinNode*>(mixedGroupedModeJoinNode.get())));
+
+  task->requestAbort();
 }
 
 // This test simulates the following execution sequence that potentially can
@@ -3059,4 +3144,75 @@ TEST_F(TaskTest, testTerminateDuringBarrierWithUnion) {
   ASSERT_EQ(task->taskStats().numBarriers, 1);
   ASSERT_EQ(task->taskStats().numFinishedSplits, 3);
 }
+
+TEST_F(TaskTest, expressionStatsInBetweenBarriers) {
+  // Verify that expression stats are collected in between barriers and at the
+  // end.
+  const int numRows{10};
+  auto data = makeRowVector({
+      makeFlatVector<int64_t>(numRows, [](auto row) { return row; }),
+  });
+  auto filePath = TempFilePath::create();
+  writeToFile(filePath->getPath(), {data});
+
+  core::PlanNodeId scanId;
+  core::PlanNodeId projectNodeId;
+  auto plan = PlanBuilder()
+                  .tableScan(asRowType(data->type()))
+                  .capturePlanNodeId(scanId)
+                  .project({"c0 + 1"})
+                  .capturePlanNodeId(projectNodeId)
+                  .planFragment();
+
+  auto queryCtx = core::QueryCtx::create();
+  queryCtx->testingOverrideConfigUnsafe(
+      {{core::QueryConfig::kMaxOutputBatchRows, "10"},
+       {core::QueryConfig::kOperatorTrackExpressionStats, "true"}});
+  const auto task = Task::create(
+      "expressionStatsInBetweenBarriers",
+      plan,
+      0,
+      std::move(queryCtx),
+      Task::ExecutionMode::kSerial);
+  ASSERT_TRUE(!task->underBarrier());
+  task->addSplit(
+      scanId, exec::Split(makeHiveConnectorSplit(filePath->getPath())));
+  auto barrierFuture = task->requestBarrier();
+  ASSERT_TRUE(task->underBarrier());
+  RowVectorPtr result;
+  do {
+    ContinueFuture dummyFuture{ContinueFuture::makeEmpty()};
+    result = task->next(&dummyFuture);
+    ASSERT_FALSE(dummyFuture.valid());
+  } while (result != nullptr);
+  auto taskStats = task->taskStats();
+  ASSERT_EQ(taskStats.numBarriers, 1);
+  ASSERT_EQ(taskStats.numFinishedSplits, 1);
+  auto verifyExpressionStats = [nodeId = projectNodeId](
+                                   const TaskStats& taskStats,
+                                   uint64_t expectedNumProcessedRows) {
+    ASSERT_EQ(taskStats.pipelineStats.size(), 1);
+    ASSERT_EQ(taskStats.pipelineStats[0].operatorStats.size(), 2);
+    auto& projectStats = taskStats.pipelineStats[0].operatorStats[1];
+    ASSERT_EQ(projectStats.planNodeId, nodeId);
+    auto& expressionStats = projectStats.expressionStats;
+    auto it = expressionStats.find("plus");
+    ASSERT_TRUE(it != expressionStats.end());
+    ASSERT_EQ(it->second.numProcessedRows, expectedNumProcessedRows);
+  };
+  verifyExpressionStats(taskStats, 10);
+  ASSERT_TRUE(barrierFuture.isReady());
+  barrierFuture.wait();
+  task->addSplit(
+      scanId, exec::Split(makeHiveConnectorSplit(filePath->getPath())));
+  task->noMoreSplits(scanId);
+  do {
+    result = task->next();
+  } while (result != nullptr);
+  VELOX_CHECK(waitForTaskCompletion(task.get()));
+  taskStats = task->taskStats();
+  ASSERT_EQ(taskStats.numFinishedSplits, 2);
+  verifyExpressionStats(taskStats, 20);
+}
+
 } // namespace facebook::velox::exec::test

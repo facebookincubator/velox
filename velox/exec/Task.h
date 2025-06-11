@@ -36,6 +36,7 @@ class OutputBufferManager;
 
 class HashJoinBridge;
 class NestedLoopJoinBridge;
+class SplitListener;
 
 using ConnectorSplitPreloadFunc =
     std::function<void(const std::shared_ptr<connector::ConnectorSplit>&)>;
@@ -176,12 +177,12 @@ class Task : public std::enable_shared_from_this<Task> {
 
   bool isUngroupedExecution() const;
 
-  /// Returns true if this task has ungrouped execution split under grouped
-  /// execution mode.
+  /// Returns true if the provided 'joinNode' has probe side as grouped
+  /// execution mode and build side as ungrouped execution mode.
   ///
   /// NOTE: calls this function after task has been started as the number of
   /// ungrouped drivers is set during task startup.
-  bool hasMixedExecutionGroup() const;
+  bool hasMixedExecutionGroupJoin(const core::HashJoinNode* joinNode) const;
 
   /// If 'planNode' is a source node, returns true if all splits for 'planNode'
   /// are consumed and no more splits are expected. Otherwise, returns true if
@@ -747,6 +748,9 @@ class Task : public std::enable_shared_from_this<Task> {
     return cancellationSource_.getToken();
   }
 
+  /// Returns the number of created tasks from velox runtime.
+  static size_t numCreatedTasks();
+
   /// Returns the number of running tasks from velox runtime.
   static size_t numRunningTasks();
 
@@ -1012,17 +1016,19 @@ class Task : public std::enable_shared_from_this<Task> {
   // Notifies listeners that the task is now complete.
   void onTaskCompletion();
 
+  void onAddSplit(const core::PlanNodeId& planNodeId, const exec::Split& split);
+
   // Returns true if all splits are finished processing and there are no more
   // splits coming for the task.
   bool isAllSplitsFinishedLocked();
 
   std::unique_ptr<ContinuePromise> addSplitLocked(
       SplitsState& splitsState,
-      exec::Split&& split);
+      const exec::Split& split);
 
   std::unique_ptr<ContinuePromise> addSplitToStoreLocked(
       SplitsStore& splitsStore,
-      exec::Split&& split);
+      const exec::Split& split);
 
   // Invoked when all the driver threads are off thread. The function returns
   // 'threadFinishPromises_' to fulfill.
@@ -1117,6 +1123,8 @@ class Task : public std::enable_shared_from_this<Task> {
   void recordBatchStartTime();
   void recordBatchEndTime();
 
+  void initSplitListeners();
+
   // Universally unique identifier of the task. Used to identify the task when
   // calling TaskListener.
   const std::string uuid_;
@@ -1145,6 +1153,8 @@ class Task : public std::enable_shared_from_this<Task> {
   const bool supportBarrier_;
 
   const std::optional<TraceConfig> traceConfig_;
+
+  inline static std::atomic_uint64_t numCreatedTasks_;
 
   // Hook in the system wide task list.
   TaskListEntry taskListEntry_;
@@ -1386,6 +1396,8 @@ class Task : public std::enable_shared_from_this<Task> {
       preloadingSplits_;
 
   folly::CancellationSource cancellationSource_;
+
+  std::vector<std::unique_ptr<SplitListener>> splitListeners_;
 };
 
 /// Listener invoked on task completion.
@@ -1425,6 +1437,43 @@ bool registerTaskListener(std::shared_ptr<TaskListener> listener);
 /// Unregister a listener registered earlier. Returns true if listener was
 /// unregistered successfuly, false if listener was not found.
 bool unregisterTaskListener(const std::shared_ptr<TaskListener>& listener);
+
+/// Listener invoked when splits are added to Task.
+class SplitListener {
+ public:
+  SplitListener(const std::string& taskId, const std::string& taskUuid)
+      : taskId_(taskId), taskUuid_(taskUuid) {}
+
+  virtual ~SplitListener() = default;
+
+  // Called when a split is added to a task for a given plan node.
+  virtual void onAddSplit(
+      const core::PlanNodeId& planNodeId,
+      const exec::Split& split) = 0;
+
+  /// Called on task completion. Provides the information about success or
+  /// failure as well as runtime statistics about task execution.
+  virtual void onTaskCompletion() = 0;
+
+ protected:
+  const std::string taskId_;
+  const std::string taskUuid_;
+};
+
+class SplitListenerFactory {
+ public:
+  virtual ~SplitListenerFactory() = default;
+
+  virtual std::unique_ptr<SplitListener> create(
+      const std::string& taskId_,
+      const std::string& taskUuid_) = 0;
+};
+
+bool registerSplitListenerFactory(
+    const std::shared_ptr<SplitListenerFactory>& factory);
+
+bool unregisterSplitListenerFactory(
+    const std::shared_ptr<SplitListenerFactory>& factory);
 
 std::string executionModeString(Task::ExecutionMode mode);
 

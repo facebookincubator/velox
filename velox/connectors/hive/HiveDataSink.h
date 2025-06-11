@@ -217,6 +217,15 @@ class HiveInsertFileNameGenerator : public FileNameGenerator {
       const ConnectorQueryCtx& connectorQueryCtx,
       bool commitRequired) const override;
 
+  /// Version of file generation that takes hiveConfig into account when
+  /// generating file names
+  std::pair<std::string, std::string> gen(
+      std::optional<uint32_t> bucketId,
+      const std::shared_ptr<const HiveInsertTableHandle> insertTableHandle,
+      const ConnectorQueryCtx& connectorQueryCtx,
+      const std::shared_ptr<const HiveConfig>& hiveConfig,
+      bool commitRequired) const;
+
   static void registerSerDe();
 
   folly::dynamic serialize() const override;

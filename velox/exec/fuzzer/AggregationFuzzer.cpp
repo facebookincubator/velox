@@ -891,7 +891,7 @@ bool AggregationFuzzer::verifySortedAggregation(
 
   if (customVerification &&
       (!aggregateOrderSensitive || customVerifier == nullptr ||
-       customVerifier->supportsVerify())) {
+       customVerifier->supportsVerify() || customVerifier->supportsCompare())) {
     // We have custom verification enabled and:
     // 1) the aggregate function is not order sensitive (sorting the input won't
     //    have an effect on the output) or
@@ -899,13 +899,12 @@ bool AggregationFuzzer::verifySortedAggregation(
     //    verification of this aggregation) or
     // 3) the custom verifier supports verification (it can't compare the
     //    results of the aggregation with the reference DB)
+    // 4) the custom verifier supports compare.
     // keep the custom verifier enabled.
     return compareEquivalentPlanResults(
         plans, customVerification, input, customVerifier, 1);
   } else {
-    // If custom verification is not enabled or the custom verifier is used for
-    // compare and the aggregation is order sensitive (the result shoudl be
-    // deterministic if the input is sorted), then compare the results directly.
+    // If custom verification is not enabled, then compare the results directly.
     return compareEquivalentPlanResults(plans, false, input, nullptr, 1);
   }
 }
@@ -940,16 +939,25 @@ void AggregationFuzzer::verifyAggregation(
     }
   }
 
+  // Search for the source node starting from the AggregationNode
+  core::PlanNodePtr source = plan;
+
+  while (!dynamic_cast<const core::ValuesNode*>(source.get())) {
+    // The AggregationNode and any of it's preceding nodes can only have a
+    // single source. This will fail if a node with multiple sources is found
+    // (which would require updating the logic to handle), or if no ValuesNode
+    // is found.
+    VELOX_CHECK_EQ(source->sources().size(), 1);
+    source = source->sources()[0];
+  }
+
   // Get inputs.
   std::vector<RowVectorPtr> input;
-  input.reserve(node->sources().size());
 
-  for (auto source : node->sources()) {
-    auto valueNode = dynamic_cast<const core::ValuesNode*>(source.get());
-    VELOX_CHECK_NOT_NULL(valueNode);
-    auto values = valueNode->values();
-    input.insert(input.end(), values.begin(), values.end());
-  }
+  auto valueNode = dynamic_cast<const core::ValuesNode*>(source.get());
+  VELOX_CHECK_NOT_NULL(valueNode);
+  auto values = valueNode->values();
+  input.insert(input.end(), values.begin(), values.end());
 
   auto resultOrError = execute(plan);
   if (resultOrError.exceptionPtr) {
@@ -1050,7 +1058,8 @@ bool AggregationFuzzer::compareEquivalentPlanResults(
                   expectedResult.value(),
                   firstPlan->outputType(),
                   {resultOrError.result}),
-              "Velox and reference DB results don't match");
+              "Velox and reference DB results don't match, plan: {}",
+              firstPlan->toString(true, true));
           LOG(INFO) << "Verified results against reference DB";
         }
       } else if (referenceQueryRunner_->supportsVeloxVectorResults()) {

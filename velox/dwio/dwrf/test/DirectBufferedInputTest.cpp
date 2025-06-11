@@ -47,7 +47,7 @@ class DirectBufferedInputTest : public testing::Test {
   static constexpr int32_t kLoadQuantum = 8 << 20;
 
   static void SetUpTestCase() {
-    memory::MemoryManager::testingSetInstance({});
+    memory::MemoryManager::testingSetInstance(memory::MemoryManager::Options{});
   }
 
   void SetUp() override {
@@ -71,9 +71,9 @@ class DirectBufferedInputTest : public testing::Test {
     return std::make_unique<DirectBufferedInput>(
         file_,
         dwio::common::MetricsLog::voidLog(),
-        1,
+        StringIdLease{},
         tracker_,
-        2,
+        StringIdLease{},
         ioStats_,
         fsStats,
         executor_.get(),

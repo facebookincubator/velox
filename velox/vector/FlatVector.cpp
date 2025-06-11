@@ -17,6 +17,7 @@
 #include "velox/vector/FlatVector.h"
 #include "velox/vector/ComplexVector.h"
 #include "velox/vector/ConstantVector.h"
+#include "velox/vector/FlatMapVector.h"
 #include "velox/vector/TypeAliases.h"
 
 namespace facebook::velox {
@@ -192,6 +193,15 @@ void FlatVector<StringView>::acquireSharedStringBuffersRecursive(
       return;
     }
 
+    case VectorEncoding::Simple::FLAT_MAP: {
+      acquireSharedStringBuffersRecursive(
+          source->asUnchecked<FlatMapVector>()->distinctKeys().get());
+      for (auto& mapValue : source->asUnchecked<FlatMapVector>()->mapValues()) {
+        acquireSharedStringBuffersRecursive(mapValue.get());
+      }
+      return;
+    }
+
     case VectorEncoding::Simple::ROW: {
       for (auto& child : source->asUnchecked<RowVector>()->children()) {
         acquireSharedStringBuffersRecursive(child.get());
@@ -322,7 +332,7 @@ void FlatVector<StringView>::copy(
 // need to perform a deep copy and reconstruct the string views against the
 // updated stringBuffers.
 template <>
-VectorPtr FlatVector<StringView>::copyPreserveEncodings(
+VectorPtr FlatVector<StringView>::testingCopyPreserveEncodings(
     velox::memory::MemoryPool* pool) const {
   const auto allocPool = pool ? pool : BaseVector::pool_;
   // If the backing memory pool is the same as the vector pool

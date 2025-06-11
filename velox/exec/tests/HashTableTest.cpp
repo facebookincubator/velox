@@ -59,12 +59,11 @@ class HashTableTestHelper {
   }
 
   void insertForJoin(
-      RowContainer* rows,
       char** groups,
       uint64_t* hashes,
       int32_t numGroups,
       TableInsertPartitionInfo* partitionInfo) {
-    table_->insertForJoin(rows, groups, hashes, numGroups, partitionInfo);
+    table_->insertForJoin(groups, hashes, numGroups, partitionInfo);
   }
 
   void setHashMode(BaseHashTable::HashMode mode, int32_t numNew) {
@@ -92,7 +91,7 @@ class HashTableTest : public testing::TestWithParam<bool>,
                       public VectorTestBase {
  protected:
   static void SetUpTestCase() {
-    memory::MemoryManager::testingSetInstance({});
+    memory::MemoryManager::testingSetInstance(memory::MemoryManager::Options{});
   }
 
   void SetUp() override {
