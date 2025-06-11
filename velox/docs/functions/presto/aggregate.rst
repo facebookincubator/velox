@@ -715,7 +715,8 @@ Noisy Aggregate Functions
     value with 0 mean and standard deviation of ``noise_scale`` to the true count.
     The noisy count is post-processed to be non-negative and rounded to bigint.
 
-    If provided, ``random_seed`` is used to seed the random number generator. Otherwise, noise is drawn from a secure random.
+    If provided, ``random_seed`` is used to seed the random number generator.
+    Otherwise, noise is drawn from a secure random.
 
     ::
 
@@ -726,15 +727,45 @@ Noisy Aggregate Functions
 
         Unlike :func:`!count_if`, this function returns ``NULL`` when the (true) count is 0.
 
-.. function:: noisy_count_gaussian(col, noise_scale) -> bigint
+.. function:: noisy_count_gaussian(col, noise_scale[, random_seed]) -> bigint
 
     Counts the non-null values in ``col`` and then adds a normally distributed random double
     value with 0 mean and standard deviation of ``noise_scale`` to the true count.
     The noisy count is post-processed to be non-negative and rounded to bigint.
 
+    If provided, ``random_seed`` is used to seed the random number generator.
+    Otherwise, noise is drawn from a secure random.
+
     ::
         SELECT noisy_count_gaussian(orderkey, 20.0) FROM tpch.tiny.lineitem; -- 60181 (1 row)
         SELECT noisy_count_gaussian(orderkey, 20.0) FROM tpch.tiny.lineitem WHERE false; -- NULL (1 row)
+
+.. function:: noisy_sum_gaussian(col, noise_scale[, random_seed]) -> double
+
+    Calculates the sum over the input values in ``col`` and then adds a normally distributed
+    random double value with 0 mean and standard deviation of ``noise_scale``.
+
+    If provided, ``random_seed`` is used to seed the random number generator.
+    Otherwise, noise is drawn from a secure random.
+
+.. function:: noisy_sum_gaussian(col, noise_scale, lower, upper[, random_seed]) -> double
+
+    Calculates the sum over the input values in ``col`` and then adds a normally distributed
+    random double value with 0 mean and standard deviation of ``noise_scale``.
+    Each value is clipped to the range of [``lower``, ``upper``] before adding to the sum.
+
+    If provided, ``random_seed`` is used to seed the random number generator.
+    Otherwise, noise is drawn from a secure random.
+
+.. function:: noisy_avg_gaussian(col, noise_scale) -> double
+
+    Calculates the average (arithmetic mean) of all the input values in col and then adds a
+    normally distributed random double value with 0 mean and standard deviation of noise_scale.
+
+.. function:: noisy_avg_gaussian(col, noise_scale, lower, upper) -> double
+    Calculates the average (arithmetic mean) of all the input values in ``col`` and then adds a
+    normally distributed random double value with 0 mean and standard deviation of ``noise_scale``.
+    Each value is clipped to the range of [``lower``, ``upper``] before averaging.
 
 Miscellaneous
 -------------
