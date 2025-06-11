@@ -536,10 +536,14 @@ cudf::ast::expression const& AstContext::pushExprToTree(
     return addPrecomputeInstruction(fieldExpr->name(), likeExpr);
   } else if (auto fieldExpr = std::dynamic_pointer_cast<FieldReference>(expr)) {
     // Refer to the appropriate side
+    const auto fieldName =
+        fieldExpr->inputs().empty() ? name : fieldExpr->inputs()[0]->name();
     for (size_t sideIdx = 0; sideIdx < inputRowSchema.size(); ++sideIdx) {
       auto& schema = inputRowSchema[sideIdx];
-      if (schema.get()->containsChild(name)) {
-        auto columnIndex = schema.get()->getChildIdx(name);
+      if (schema.get()->containsChild(fieldName)) {
+        auto columnIndex = schema.get()->getChildIdx(fieldName);
+        // This column may be complex data type like ROW, we need to get the
+        // name from row. Push fieldName.name to the tree.
         auto side = static_cast<cudf::ast::table_reference>(sideIdx);
         return tree.push(cudf::ast::column_reference(columnIndex, side));
       }

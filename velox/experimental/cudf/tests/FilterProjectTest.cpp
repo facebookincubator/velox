@@ -774,4 +774,24 @@ TEST_F(CudfFilterProjectTest, filterWithEmptyResult) {
   // Run the test - should return empty result
   assertQuery(plan, "SELECT c0, c1, c2 FROM tmp WHERE c0 < 0 AND c0 > 1000");
 }
+
+TEST_F(CudfFilterProjectTest, dereference) {
+  auto vectors = makeVectors(rowType_, 10, 100);
+  createDuckDbTable(vectors);
+
+  auto plan = PlanBuilder()
+                  .values(vectors)
+                  .project({"row_constructor(c1, c2) AS c1_c2"})
+                  .project({"c1_c2.c1", "c1_c2.c2"})
+                  .planNode();
+  assertQuery(plan, "SELECT c1, c2 FROM tmp");
+
+  plan = PlanBuilder()
+             .values(vectors)
+             .project({"row_constructor(c1, c2) AS c1_c2"})
+             .filter("c1_c2.c1 % 10 = 5")
+             .project({"c1_c2.c1", "c1_c2.c2"})
+             .planNode();
+  assertQuery(plan, "SELECT c1, c2 FROM tmp WHERE c1 % 10 = 5");
+}
 } // namespace
