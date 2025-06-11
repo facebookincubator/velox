@@ -279,6 +279,7 @@ bool canTrace(const std::string& operatorType) {
       "HashBuild",
       "HashProbe",
       "IndexLookupJoin",
+      "Unnest",
       "PartialAggregation",
       "PartitionedOutput",
       "TableScan",
@@ -418,6 +419,18 @@ core::PlanNodePtr getTraceNode(
         tableWriteNode->commitStrategy(),
         std::make_shared<DummySourceNode>(
             tableWriteNode->sources().front()->outputType()));
+  }
+
+  if (const auto* unnestNode =
+          dynamic_cast<const core::UnnestNode*>(traceNode)) {
+    return std::make_shared<core::UnnestNode>(
+        nodeId,
+        unnestNode->replicateVariables(),
+        unnestNode->unnestVariables(),
+        unnestNode->unnestNames(),
+        unnestNode->ordinalityName(),
+        std::make_shared<DummySourceNode>(
+            unnestNode->sources().front()->outputType()));
   }
 
   VELOX_UNSUPPORTED(

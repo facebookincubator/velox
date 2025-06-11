@@ -1767,6 +1767,33 @@ TEST_F(TableScanTest, preloadEmptySplit) {
   assertQuery(op, filePaths, "SELECT * FROM tmp", 1);
 }
 
+TEST_F(TableScanTest, readAsLowerCase) {
+  auto rowType =
+      ROW({"Товары", "国Ⅵ", "\uFF21", "\uFF22"},
+          {BIGINT(), DOUBLE(), REAL(), INTEGER()});
+  auto vectors = makeVectors(10, 1'000, rowType);
+  auto filePath = TempFilePath::create();
+  writeToFile(filePath->getPath(), vectors);
+  createDuckDbTable(vectors);
+
+  // Test reading table with non-ascii names.
+  auto op = PlanBuilder()
+                .tableScan(
+                    ROW({"товары", "国ⅵ", "\uFF41", "\uFF42"},
+                        {BIGINT(), DOUBLE(), REAL(), INTEGER()}))
+                .planNode();
+  auto split =
+      exec::test::HiveConnectorSplitBuilder(filePath->getPath()).build();
+
+  AssertQueryBuilder(op, duckDbQueryRunner_)
+      .connectorSessionProperty(
+          kHiveConnectorId,
+          connector::hive::HiveConfig::kFileColumnNamesReadAsLowerCaseSession,
+          "true")
+      .split(split)
+      .assertResults("SELECT * FROM tmp");
+}
+
 TEST_F(TableScanTest, partitionedTableVarcharKey) {
   auto rowType = ROW({"c0", "c1"}, {BIGINT(), DOUBLE()});
   auto vectors = makeVectors(10, 1'000, rowType);
@@ -3135,6 +3162,52 @@ TEST_F(TableScanTest, bucketConversionWithSubfieldPruning) {
     }
   }
   ASSERT_EQ(j, result->size());
+}
+
+TEST_F(TableScanTest, bucketConversionLazyColumn) {
+  auto vector = makeRowVector({
+      makeFlatVector<int32_t>({1, 3, 5}),
+      makeFlatVector<int64_t>({4, 4, 6}),
+  });
+  auto schema = asRowType(vector->type());
+  auto file = TempFilePath::create();
+  writeToFile(file->getPath(), {vector});
+  constexpr int kNewNumBuckets = 4;
+  std::vector<std::shared_ptr<connector::ConnectorSplit>> splits;
+  {
+    // First split requires bucket conversion.
+    std::vector<std::shared_ptr<HiveColumnHandle>> handles;
+    handles.push_back(makeColumnHandle("c0", INTEGER(), {}));
+    auto split = makeHiveConnectorSplit(file->getPath());
+    split->tableBucketNumber = 1;
+    split->bucketConversion = {kNewNumBuckets, 2, std::move(handles)};
+    splits.push_back(split);
+  }
+  // Second split no bucket conversion, and non-empty after filter.
+  vector = makeRowVector({
+      makeFlatVector<int32_t>({1, 3, 5}),
+      makeFlatVector<int64_t>({4, 5, 6}),
+  });
+  auto file2 = TempFilePath::create();
+  writeToFile(file2->getPath(), {vector});
+  splits.push_back(makeHiveConnectorSplit(file2->getPath()));
+  {
+    // Third split requires bucket conversion, empty after filter.
+    std::vector<std::shared_ptr<HiveColumnHandle>> handles;
+    handles.push_back(makeColumnHandle("c0", INTEGER(), {}));
+    auto split = makeHiveConnectorSplit(file->getPath());
+    split->tableBucketNumber = 3;
+    split->bucketConversion = {kNewNumBuckets, 2, std::move(handles)};
+    splits.push_back(split);
+  }
+  auto outputType = ROW({"c1"}, {BIGINT()});
+  auto plan =
+      PlanBuilder().tableScan(outputType, {"c1 = 5"}, "", schema).planNode();
+  auto expected = makeRowVector({makeConstant<int64_t>(5, 1)});
+  AssertQueryBuilder(plan)
+      .splits(splits)
+      .config(core::QueryConfig::kMaxSplitPreloadPerDriver, "0")
+      .assertResults(expected);
 }
 
 TEST_F(TableScanTest, integerNotEqualFilter) {

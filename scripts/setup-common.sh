@@ -12,6 +12,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+# trigger reinstall
 
 SCRIPTDIR=$(dirname "${BASH_SOURCE[0]}")
 source $SCRIPTDIR/setup-helper-functions.sh
@@ -219,15 +220,6 @@ function install_stemmer {
 function install_geos {
   if [[ "$BUILD_GEOS" == "true" ]]; then
     wget_and_untar https://github.com/libgeos/geos/archive/${GEOS_VERSION}.tar.gz geos
-    if [[ "$(uname)" == "Darwin" ]]; then
-      ABSOLUTE_SCRIPTDIR=$(realpath ${SCRIPTDIR})
-      (
-        # Adopted from the bundled patching needed for macOS.
-        cd "${DEPENDENCY_DIR}/geos" || exit 1
-        git apply "${ABSOLUTE_SCRIPTDIR}/../CMake/resolve_dependency_modules/geos/geos-cmakelists.patch"
-        git apply "${ABSOLUTE_SCRIPTDIR}/../CMake/resolve_dependency_modules/geos/geos-build.patch"
-      )
-    fi
     cmake_install_dir geos -DBUILD_TESTING=OFF
   fi
 }

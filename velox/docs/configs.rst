@@ -167,6 +167,11 @@ Generic Configuration
      - 0
      - Specifies the max number of input batches to prefetch to do index lookup ahead. If it is zero,
        then process one input batch at a time.
+   * - unnest_split_output_batch
+     - bool
+     - true
+     - If this is true, then the unnest operator might split output for each input batch based on the
+       output batch size control. Otherwise, it produces a single output for each input batch.
 
 .. _expression-evaluation-conf:
 
@@ -734,6 +739,11 @@ Each query can override the config by setting corresponding query session proper
      - integer
      - 1024
      - Batch size used when writing into Parquet through Arrow bridge.
+   * - hive.parquet.writer.created-by
+     -
+     - string
+     - parquet-cpp-velox version 0.0.0
+     - Created-by value used when writing to Parquet.
 
 ``Amazon S3 Configuration``
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^
@@ -1004,3 +1014,8 @@ Tracing
      - integer
      - 0
      - The max trace bytes limit. Tracing is disabled if zero.
+   * - query_trace_dry_run
+     - boolean
+     - false
+     - If true, we only collect the input trace for a given operator but without the actual
+       execution. This is used for crash debugging.
