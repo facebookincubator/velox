@@ -115,8 +115,9 @@ void ParquetData::enqueueRowGroup(
     chunkReadOffset = chunk.dictionaryPageOffset();
   }
 
+  std::string path = chunk.getColumnPath().toDotString();
   uint64_t readSize =
-      (chunk.compression() == common::CompressionKind::CompressionKind_NONE)
+      (chunk.compression() == common::CompressionKind::CompressionKind_NONE && (!fileDecryptor_ || !fileDecryptor_->getColumnCryptoMetadata(path)->isEncrypted()))
       ? chunk.totalUncompressedSize()
       : chunk.totalCompressedSize();
 

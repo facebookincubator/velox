@@ -522,7 +522,7 @@ void PageReader::prepareDictionary(
       dictionaryEncoding_ == Encoding::PLAIN_DICTIONARY ||
       dictionaryEncoding_ == Encoding::PLAIN);
 
-  if (codec_ != common::CompressionKind::CompressionKind_NONE) {
+  if (codec_ != common::CompressionKind::CompressionKind_NONE || decryptor) {
     pageData_ = readBytes(pageHeader.compressed_page_size, pageBuffer_);
 
     int32_t decryptedPageSize;
@@ -532,10 +532,12 @@ void PageReader::prepareDictionary(
       decryptedPageSize = pageHeader.compressed_page_size;
     }
 
-    int32_t uncompressedPageSize{pageHeader.uncompressed_page_size};
-
-    pageData_ =
-        decompressData(pageData_, decryptedPageSize, uncompressedPageSize);
+    if (codec_ != common::CompressionKind::CompressionKind_NONE) {
+      pageData_ = decompressData(
+          pageData_,
+          decryptedPageSize,
+          pageHeader.uncompressed_page_size);
+    }
   }
 
   auto parquetType = type_->parquetType_.value();
