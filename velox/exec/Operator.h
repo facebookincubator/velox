@@ -341,8 +341,15 @@ class Operator : public BaseRuntimeStatWriter {
   /// should be called after this.
   virtual void close();
 
-  /// Returns true if 'this' never has more output rows than input rows.
-  virtual bool isFilter() const {
+  /// Returns true if the output can contain lazy vectors in general. For
+  /// example, when the hash probe processes a right join, since it might
+  /// introduce nulls on the probe side, its output vectors cannot be lazy in
+  /// general. The build side is always materialized and the probe side is
+  /// populated with NULLs in case of no matches. In contrast, for a left join,
+  /// the probe-side output vectors of the hash probe can be lazy. This function
+  /// facilitates checking if the aggregation pushdown can be applied to a given
+  /// operator.
+  virtual bool canHaveLazyOutputVectors() const {
     return false;
   }
 

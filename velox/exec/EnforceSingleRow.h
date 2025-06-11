@@ -25,7 +25,7 @@ class EnforceSingleRow : public Operator {
       DriverCtx* driverCtx,
       const std::shared_ptr<const core::EnforceSingleRowNode>& planNode);
 
-  bool isFilter() const override {
+  bool canHaveLazyOutputVectors() const override {
     return true;
   }
 

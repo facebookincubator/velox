@@ -29,7 +29,7 @@ class FilterProject : public Operator {
       const std::shared_ptr<const core::FilterNode>& filter,
       const std::shared_ptr<const core::ProjectNode>& project);
 
-  bool isFilter() const override {
+  bool canHaveLazyOutputVectors() const override {
     return true;
   }
 

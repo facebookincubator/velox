@@ -32,7 +32,7 @@ class HashProbe : public Operator {
       DriverCtx* driverCtx,
       const std::shared_ptr<const core::HashJoinNode>& hashJoinNode);
 
-  bool isFilter() const override {
+  bool canHaveLazyOutputVectors() const override {
     return joinNode_->onlyHaveResultsFromProbe();
   }
 
