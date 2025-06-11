@@ -196,7 +196,14 @@ class NoisyAvgGaussianAggregate : public exec::Aggregate {
     if (decodedValue_.isNullAt(i) || decodedNoiseScale_.isNullAt(i)) {
       return;
     }
-    accumulator->checkAndSetNoiseScale(decodedNoiseScale_.valueAt<double>(i));
+    double noiseScale = 0;
+    auto noiseScaleType = args[1]->typeKind();
+    if (noiseScaleType == TypeKind::DOUBLE) {
+      noiseScale = decodedNoiseScale_.valueAt<double>(i);
+    } else if (noiseScaleType == TypeKind::BIGINT) {
+      noiseScale = static_cast<double>(decodedNoiseScale_.valueAt<uint64_t>(i));
+    }
+    accumulator->checkAndSetNoiseScale(noiseScale);
     accumulator->updateCount(1);
     accumulator->updateSum(decodedValue_.valueAt<double>(i));
   }
@@ -228,6 +235,12 @@ void registerNoisyAvgGaussianAggregate(
           .intermediateType("varbinary")
           .argumentType("double") // input type
           .argumentType("double") // noise scale
+          .build(),
+      exec::AggregateFunctionSignatureBuilder()
+          .returnType("double")
+          .intermediateType("varbinary")
+          .argumentType("double") // input type
+          .argumentType("bigint") // noise scale
           .build()};
 
   auto name = prefix + kNoisyAvgGaussian;
