@@ -32,6 +32,10 @@ enum class Table : uint8_t;
 
 namespace facebook::velox::exec::test {
 
+struct PushdownConfig {
+  common::SubfieldFilters subfieldFiltersMap;
+};
+
 /// A builder class with fluent API for building query plans. Plans are built
 /// bottom up starting with the source node (table scan or similar). Expressions
 /// and orders can be specified using SQL. See filter, project and orderBy
@@ -172,6 +176,23 @@ class PlanBuilder {
           std::string,
           std::shared_ptr<connector::ColumnHandle>>& assignments = {});
 
+  /// Add a TableScanNode to scan a Hive table with direct SubfieldFilters.
+  ///
+  /// @param outputType List of column names and types to read from the table.
+  /// @param PushdownConfig Contains pushdown configs for the table scan.
+  /// @param remainingFilter SQL expression for the additional conjunct.
+  /// @param dataColumns Optional data columns that may differ from outputType.
+  /// @param assignments Optional ColumnHandles.
+
+  PlanBuilder& tableScanWithPushDown(
+      const RowTypePtr& outputType,
+      const PushdownConfig& pushdownConfig,
+      const std::string& remainingFilter = "",
+      const RowTypePtr& dataColumns = nullptr,
+      const std::unordered_map<
+          std::string,
+          std::shared_ptr<connector::ColumnHandle>>& assignments = {});
+
   /// Add a TableScanNode to scan a TPC-H table.
   ///
   /// @param tpchTableHandle The handle that specifies the target TPC-H table
@@ -238,6 +259,10 @@ class PlanBuilder {
     /// >  column < v1
     /// >  column >= v2
     TableScanBuilder& subfieldFilters(std::vector<std::string> subfieldFilters);
+
+    // @param subfieldFiltersMap A map of Subfield to Filters.
+    TableScanBuilder& subfieldFiltersMap(
+        const common::SubfieldFilters& filtersMap);
 
     /// @param subfieldFilter A single SQL expression to be applied to an
     /// individual column.
@@ -316,6 +341,9 @@ class PlanBuilder {
 
     // Generates the id of a FilterNode if 'filtersAsNode_'.
     std::shared_ptr<core::PlanNodeIdGenerator> planNodeIdGenerator_;
+
+    // SubfieldFilters object containing filters to apply.
+    common::SubfieldFilters subfieldFiltersMap_;
   };
 
   /// Start a TableScanBuilder.
@@ -442,6 +470,15 @@ class PlanBuilder {
       return *this;
     }
 
+    /// Specifies commitStrategy for writing to the connector.
+    /// @param commitStrategy The commit strategy to use for the table write
+    /// operation.
+    TableWriterBuilder& commitStrategy(
+        connector::CommitStrategy commitStrategy) {
+      commitStrategy_ = commitStrategy;
+      return *this;
+    }
+
     /// Stop the TableWriterBuilder.
     PlanBuilder& endTableWriter() {
       planBuilder_.planNode_ = build(planBuilder_.nextPlanNodeId());
@@ -473,6 +510,8 @@ class PlanBuilder {
     common::CompressionKind compressionKind_{common::CompressionKind_NONE};
 
     bool ensureFiles_{false};
+    connector::CommitStrategy commitStrategy_{
+        connector::CommitStrategy::kNoCommit};
   };
 
   /// Start a TableWriterBuilder.
@@ -691,7 +730,9 @@ class PlanBuilder {
       const std::string& outputFileName = "",
       const common::CompressionKind = common::CompressionKind_NONE,
       const RowTypePtr& schema = nullptr,
-      const bool ensureFiles = false);
+      const bool ensureFiles = false,
+      const connector::CommitStrategy commitStrategy =
+          connector::CommitStrategy::kNoCommit);
 
   /// Add a TableWriteMergeNode.
   PlanBuilder& tableWriteMerge(

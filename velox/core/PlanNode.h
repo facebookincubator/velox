@@ -2169,6 +2169,10 @@ class LocalMergeNode : public PlanNode {
     return sortingKeys_;
   }
 
+  bool canSpill(const QueryConfig& queryConfig) const override {
+    return !sortingKeys_.empty() && queryConfig.localMergeSpillEnabled();
+  }
+
   const std::vector<SortOrder>& sortingOrders() const {
     return sortingOrders_;
   }
@@ -4449,6 +4453,10 @@ class WindowNode : public PlanNode {
 
   std::string_view name() const override {
     return "Window";
+  }
+
+  const std::vector<std::string>& windowColumnNames() const {
+    return windowColumnNames_;
   }
 
   folly::dynamic serialize() const override;
