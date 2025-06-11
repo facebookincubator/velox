@@ -195,7 +195,9 @@ function wget_and_untar {
   fi
   mkdir -p "${DIR}"
   pushd "${DIR}" || exit
-  curl "${CURL_OPTIONS}" -L "${URL}" > "$2".tar.gz
+  # Use ${VAR:+"$VAR"} pattern to only include CURL_OPTIONS if it's not empty
+  # as curl >=8.6.0 rejects empty arguments
+  curl ${CURL_OPTIONS:+${CURL_OPTIONS}} -L "${URL}" > "$2".tar.gz
   tar -xz --strip-components=1 -f "$2".tar.gz
   popd || exit
   popd || exit
