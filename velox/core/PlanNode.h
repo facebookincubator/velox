@@ -2906,6 +2906,14 @@ class AbstractJoinNode : public PlanNode {
     return joinType_ == JoinType::kAnti;
   }
 
+  /// Return true only if a join only contain rows coming from the probe side. A
+  /// counter example would be a right outer join when the unmatched right rows
+  /// will populate the probe side with NULLs.
+  bool onlyHaveResultsFromProbe() const {
+    return isInnerJoin() || isLeftJoin() || isLeftSemiFilterJoin() ||
+        isLeftSemiProjectJoin() || isAntiJoin();
+  }
+
   bool isPreservingProbeOrder() const {
     return isInnerJoin() || isLeftJoin() || isAntiJoin();
   }
