@@ -14,6 +14,8 @@
  * limitations under the License.
  */
 #pragma once
+#include <cstring>
+
 #include <folly/IPAddressV6.h>
 
 #include "velox/common/memory/ByteStream.h"
@@ -138,7 +140,7 @@ vector_size_t computeSelectedIndices(
   ScratchPtr<uint64_t, 64> usedIndicesHolder(scratch);
   auto* usedIndices = usedIndicesHolder.get(
       bits::nwords(dictionaryVector->valueVector()->size()));
-  simd::memset(usedIndices, 0, usedIndicesHolder.size() * sizeof(uint64_t));
+  std::memset(usedIndices, 0, usedIndicesHolder.size() * sizeof(uint64_t));
 
   auto* indices = dictionaryVector->indices()->template as<vector_size_t>();
   for (const auto& range : ranges) {

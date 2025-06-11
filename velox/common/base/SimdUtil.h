@@ -449,16 +449,6 @@ inline T* addBytes(T* pointer, int32_t bytes) {
   return reinterpret_cast<T*>(reinterpret_cast<uint64_t>(pointer) + bytes);
 }
 
-// 'memcpy' implementation that copies at maximum width and unrolls
-// when 'bytes' is constant.
-template <typename A = xsimd::default_arch>
-inline void memcpy(void* to, const void* from, int64_t bytes, const A& = {});
-
-// memset implementation that writes at maximum width and unrolls for
-// constant values of 'bytes'.
-template <typename A = xsimd::default_arch>
-void memset(void* to, char data, int32_t bytes, const A& = {});
-
 // Calls a different instantiation of a template function according to
 // 'numBytes'.
 #define VELOX_WIDTH_DISPATCH(numBytes, TEMPLATE_FUNC, ...) \

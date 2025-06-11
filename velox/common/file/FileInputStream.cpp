@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+#include <cstring>
 #include "velox/common/file/FileInputStream.h"
 
 namespace facebook::velox::common {
@@ -171,7 +172,7 @@ void FileInputStream::readBytes(uint8_t* bytes, int32_t size) {
   for (;;) {
     const int32_t readBytes =
         std::min<int64_t>(current_->availableBytes(), size);
-    simd::memcpy(
+    std::memcpy(
         bytes + offset, current_->buffer + current_->position, readBytes);
     offset += readBytes;
     size -= readBytes;
