@@ -184,6 +184,12 @@ class GroupingSet {
 
   void populateTempVectors(int32_t aggregateIndex, const RowVectorPtr& input);
 
+  // If the column to be aggregated is a dictionary vector, check if its indices
+  // only contain distinct values. If this function returns false, it means the
+  // indices do not contain duplicated values; otherwise, it means the indices
+  // may or may not contain duplicated values.
+  bool dictIndicesMayHaveDuplicates(const SelectivityVector& rows);
+
   // If the given aggregation has mask, the method returns reference to the
   // selectivity vector from the maskedActiveRows_ (based on the mask channel
   // index for this aggregation), otherwise it returns reference to activeRows_.

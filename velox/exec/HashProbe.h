@@ -32,6 +32,14 @@ class HashProbe : public Operator {
       DriverCtx* driverCtx,
       const std::shared_ptr<const core::HashJoinNode>& hashJoinNode);
 
+  bool isFilter() const override {
+    return joinNode_->onlyHaveResultsFromProbe();
+  }
+
+  bool preservesOrder() const override {
+    return joinNode_->isPreservingProbeOrder();
+  }
+
   void initialize() override;
 
   bool needsInput() const override {
