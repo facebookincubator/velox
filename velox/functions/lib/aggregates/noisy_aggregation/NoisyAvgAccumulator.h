@@ -25,7 +25,7 @@ class NoisyAvgAccumulator {
 
   void checkAndSetNoiseScale(double newNoiseScale) {
     VELOX_USER_CHECK_GE(
-        newNoiseScale, 0, "Noise scale must be a non-negative value");
+        newNoiseScale, 0, "Noise scale must be a non-negative value.");
     noiseScale_ = newNoiseScale;
   }
 

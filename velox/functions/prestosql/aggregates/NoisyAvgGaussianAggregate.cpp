@@ -220,7 +220,9 @@ class NoisyAvgGaussianAggregate : public exec::Aggregate {
     auto otherAccumulator = AccumulatorType::deserialize(serialized.data());
     accumulator->updateSum(otherAccumulator.getSum());
     accumulator->updateCount(otherAccumulator.getCount());
-    accumulator->checkAndSetNoiseScale(otherAccumulator.getNoiseScale());
+    if (otherAccumulator.getNoiseScale() >= 0) {
+      accumulator->checkAndSetNoiseScale(otherAccumulator.getNoiseScale());
+    }
   }
 };
 } // namespace
@@ -253,8 +255,6 @@ void registerNoisyAvgGaussianAggregate(
           const TypePtr& /*resultType*/,
           const core::QueryConfig& /*config*/)
           -> std::unique_ptr<exec::Aggregate> {
-        VELOX_CHECK_EQ(
-            argTypes.size(), 2, "{} takes exactly two arguments", name);
         if (exec::isPartialOutput(step)) {
           return std::make_unique<NoisyAvgGaussianAggregate>(VARBINARY());
         }
