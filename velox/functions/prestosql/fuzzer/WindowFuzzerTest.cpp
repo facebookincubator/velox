@@ -122,6 +122,9 @@ int main(int argc, char** argv) {
       "array_agg",
       // Skip non-deterministic functions.
       "noisy_count_if_gaussian",
+      "noisy_count_gaussian",
+      "noisy_sum_gaussian",
+      "noisy_avg_gaussian",
   };
 
   if (!FLAGS_presto_url.empty()) {
