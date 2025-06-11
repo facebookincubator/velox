@@ -126,6 +126,7 @@ int main(int argc, char** argv) {
       "max_by",
       // Skip non-deterministic functions.
       "noisy_count_if_gaussian",
+      "noisy_count_gaussian",
   };
 
   // Functions whose results verification should be skipped. These can be
