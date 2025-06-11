@@ -133,7 +133,7 @@ TEST_F(NoisyAvgGaussianAggregationTest, numericInputTypeTestNoNoise) {
       smallintRowType_,
       tinyintRowType_};
 
-  for (const auto& rowType : rowTypes) {
+  for (auto rowType : rowTypes) {
     auto vectors = makeVectors(rowType, 3, 3);
     createDuckDbTable(vectors);
 
@@ -143,6 +143,64 @@ TEST_F(NoisyAvgGaussianAggregationTest, numericInputTypeTestNoNoise) {
         {"noisy_avg_gaussian(c2, 0.0)"},
         "SELECT AVG(c2) FROM tmp");
   }
+}
+
+TEST_F(NoisyAvgGaussianAggregationTest, boundsClipTestNoNoise) {
+  auto vectors = {makeRowVector({makeFlatVector<double>({1, 2, 3, 4, 5})})};
+
+  // set the bounds to [4, 4].
+  // The clipped sum should be 20 and the average should be 4.
+  auto result =
+      AssertQueryBuilder(
+          PlanBuilder()
+              .values(vectors)
+              // lower bigint, upper bigint
+              .singleAggregation({}, {"noisy_avg_gaussian(c0, 0.0, 4, 4)"}, {})
+              .planNode(),
+          duckDbQueryRunner_)
+          .copyResults(pool());
+
+  ASSERT_EQ(result->size(), 1);
+  ASSERT_EQ(result->childAt(0)->asFlatVector<double>()->valueAt(0), 4);
+
+  result =
+      AssertQueryBuilder(
+          PlanBuilder()
+              .values(vectors)
+              // lower double, upper bigint
+              .singleAggregation({}, {"noisy_avg_gaussian(c0, 0, 4.0, 4)"}, {})
+              .planNode(),
+          duckDbQueryRunner_)
+          .copyResults(pool());
+
+  ASSERT_EQ(result->size(), 1);
+  ASSERT_EQ(result->childAt(0)->asFlatVector<double>()->valueAt(0), 4);
+
+  result =
+      AssertQueryBuilder(
+          PlanBuilder()
+              .values(vectors)
+              // lower bigint, upper double
+              .singleAggregation({}, {"noisy_avg_gaussian(c0, 0, 4, 4.0)"}, {})
+              .planNode(),
+          duckDbQueryRunner_)
+          .copyResults(pool());
+
+  ASSERT_EQ(result->size(), 1);
+  ASSERT_EQ(result->childAt(0)->asFlatVector<double>()->valueAt(0), 4);
+
+  result = AssertQueryBuilder(
+               PlanBuilder()
+                   .values(vectors)
+                   // lower double, upper double
+                   .singleAggregation(
+                       {}, {"noisy_avg_gaussian(c0, 0, 4.0, 4.0)"}, {})
+                   .planNode(),
+               duckDbQueryRunner_)
+               .copyResults(pool());
+
+  ASSERT_EQ(result->size(), 1);
+  ASSERT_EQ(result->childAt(0)->asFlatVector<double>()->valueAt(0), 4);
 }
 
 } // namespace facebook::velox::aggregate::test
