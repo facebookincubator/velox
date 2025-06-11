@@ -13,33 +13,15 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#include <functions/sparksql/tests/SparkFunctionBaseTest.h>
 #include "velox/common/base/tests/GTestUtils.h"
+#include "velox/functions/sparksql/tests/JsonTest.h"
 
 using namespace facebook::velox::test;
 
 namespace facebook::velox::functions::sparksql::test {
 namespace {
-constexpr float kNaNFloat = std::numeric_limits<float>::quiet_NaN();
-constexpr float kInfFloat = std::numeric_limits<float>::infinity();
-constexpr double kNaNDouble = std::numeric_limits<double>::quiet_NaN();
-constexpr double kInfDouble = std::numeric_limits<double>::infinity();
-
 class ToJsonTest : public SparkFunctionBaseTest {
  protected:
-  core::CallTypedExprPtr createToJson(
-      const TypePtr& inputType,
-      const std::optional<std::string>& timezone = std::nullopt) {
-    auto input = std::make_shared<core::FieldAccessTypedExpr>(inputType, "c0");
-    std::vector<core::TypedExprPtr> inputs = {input};
-    if (timezone) {
-      auto tz = std::make_shared<core::ConstantTypedExpr>(VARCHAR(), *timezone);
-      inputs.emplace_back(tz);
-    }
-    return std::make_shared<const core::CallTypedExpr>(
-        VARCHAR(), std::move(inputs), "to_json");
-  }
-
   void testToJson(const VectorPtr& input, const VectorPtr& expected) {
     testToJson(input, std::nullopt, expected);
   }
