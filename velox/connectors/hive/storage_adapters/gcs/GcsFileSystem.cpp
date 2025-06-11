@@ -436,18 +436,118 @@ std::string GcsFileSystem::name() const {
   return "GCS";
 }
 
-void GcsFileSystem::rename(std::string_view, std::string_view, bool) {
-  VELOX_UNSUPPORTED("rename for GCS not implemented");
+void GcsFileSystem::rename(
+    std::string_view originPath,
+    std::string_view newPath,
+    bool overwrite) {
+  if (!isGcsFile(originPath)) {
+    VELOX_FAIL(kGcsInvalidPath, originPath);
+  }
+
+  if (!isGcsFile(newPath)) {
+    VELOX_FAIL(kGcsInvalidPath, newPath);
+  }
+
+  std::string originBucket;
+  std::string originObject;
+  const auto originFile = gcsPath(originPath);
+  setBucketAndKeyFromGcsPath(originFile, originBucket, originObject);
+
+  std::string newBucket;
+  std::string newObject;
+  const auto newFile = gcsPath(newPath);
+  setBucketAndKeyFromGcsPath(newFile, newBucket, newObject);
+
+  if (!overwrite) {
+    auto objects = list(newPath);
+    if (std::find(objects.begin(), objects.end(), newObject) != objects.end()) {
+      VELOX_USER_FAIL(
+          "Failed to rename object {} to {} with as {} exists.",
+          originObject,
+          newObject,
+          newObject);
+      return;
+    }
+  }
+
+  // Copy the object to the new name.
+  auto copyStats = impl_->getClient()->CopyObject(
+      originBucket, originObject, newBucket, newObject);
+  if (!copyStats.ok()) {
+    checkGcsStatus(
+        copyStats.status(),
+        fmt::format(
+            "Failed to rename for GCS object {}/{}",
+            originBucket,
+            originObject),
+        originBucket,
+        originObject);
+  }
+
+  // Delete the original object.
+  auto delStatus = impl_->getClient()->DeleteObject(originBucket, originObject);
+  if (!delStatus.ok()) {
+    checkGcsStatus(
+        delStatus,
+        fmt::format(
+            "Failed to delete for GCS object {}/{} after copy when renaming. And the copied object is at {}/{}",
+            originBucket,
+            originObject,
+            newBucket,
+            newObject),
+        originBucket,
+        originObject);
+  }
 }
 
 void GcsFileSystem::mkdir(
     std::string_view path,
     const DirectoryOptions& options) {
-  VELOX_UNSUPPORTED("mkdir for GCS not implemented");
+  if (!isGcsFile(path)) {
+    VELOX_FAIL(kGcsInvalidPath, path);
+  }
+
+  std::string bucket;
+  std::string object;
+  const auto file = gcsPath(path);
+  setBucketAndKeyFromGcsPath(file, bucket, object);
+
+  // Create an empty object to represent the directory.
+  auto status = impl_->getClient()->InsertObject(bucket, object, "");
+
+  checkGcsStatus(
+      status.status(),
+      fmt::format("Failed to mkdir for GCS object {}/{}", bucket, object),
+      bucket,
+      object);
 }
 
 void GcsFileSystem::rmdir(std::string_view path) {
-  VELOX_UNSUPPORTED("rmdir for GCS not implemented");
+  if (!isGcsFile(path)) {
+    VELOX_FAIL(kGcsInvalidPath, path);
+  }
+
+  const auto file = gcsPath(path);
+  std::string bucket;
+  std::string object;
+  setBucketAndKeyFromGcsPath(file, bucket, object);
+  for (auto&& metadata : impl_->getClient()->ListObjects(bucket)) {
+    checkGcsStatus(
+        metadata.status(),
+        fmt::format("Failed to rmdir for GCS object {}/{}", bucket, object),
+        bucket,
+        object);
+
+    auto status = impl_->getClient()->DeleteObject(bucket, metadata->name());
+    checkGcsStatus(
+        metadata.status(),
+        fmt::format(
+            "Failed to delete for GCS object {}/{} when rmdir.",
+            bucket,
+            metadata->name()),
+        bucket,
+        metadata->name());
+  }
 }
 
 } // namespace filesystems
