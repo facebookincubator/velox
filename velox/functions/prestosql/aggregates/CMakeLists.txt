@@ -45,8 +45,10 @@ velox_add_library(
   QDigestAggAggregate.cpp
   ReduceAgg.cpp
   RegisterAggregateFunctions.cpp
+  NoisyAvgGaussianAggregate.cpp
   NoisyCountIfGaussianAggregate.cpp
   NoisyCountGaussianAggregate.cpp
+  NoisySumGaussianAggregate.cpp
   SetAggregates.cpp
   SumAggregate.cpp
   SumDataSizeForStatsAggregate.cpp
