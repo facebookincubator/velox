@@ -470,6 +470,10 @@ cudf::ast::expression const& AstContext::pushExprToTree(
       auto const& op1d = tree.push(Operation{Op::CAST_TO_FLOAT64, op1});
       auto const& op2 = pushExprToTree(expr->inputs()[1]);
       return tree.push(Operation{Op::MUL, op1d, op2});
+    } else if (
+        c1 and c1->toString() == "1:INTEGER" and c2 and
+        c2->toString() == "0:INTEGER") {
+      return pushExprToTree(expr->inputs()[0]);
     } else {
       VELOX_NYI("Unsupported switch complex operation " + expr->toString());
     }
