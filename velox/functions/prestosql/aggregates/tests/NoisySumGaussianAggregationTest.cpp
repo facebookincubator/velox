@@ -45,7 +45,6 @@ TEST_F(NoisySumGaussianAggregationTest, simpleTestNoNoise) {
   testAggregations(
       {vectors}, {}, {"noisy_sum_gaussian(c2, 0)"}, {expectedResult});
 }
-
 TEST_F(NoisySumGaussianAggregationTest, inputTypeTestNoNoise) {
   // Test that the function supports various input types.
   auto doubleVector = makeVectors(doubleRowType_, 5, 3);
@@ -105,4 +104,125 @@ TEST_F(NoisySumGaussianAggregationTest, inputTypeTestNoNoise) {
       {"noisy_sum_gaussian(c2, 0)"},
       "SELECT sum(c2) FROM tmp");
 }
+TEST_F(NoisySumGaussianAggregationTest, nullTestNoNoise) {
+  // Test non-null and null values mixed.
+  auto vectors = makeRowVector(
+      {makeFlatVector<int64_t>({1, 2, 3, 4, 5}),
+       makeFlatVector<int64_t>({1, 2, 3, 4, 5}),
+       makeNullableFlatVector<int64_t>({std::nullopt, 2, std::nullopt, 4, 5})});
+
+  // Expect the result to be 11.0
+  auto expectedResult = makeRowVector({makeConstant(11.0, 1)});
+  testAggregations(
+      {vectors}, {}, {"noisy_sum_gaussian(c2, 0.0)"}, {expectedResult});
+
+  // Test all null values.
+  auto vectors2 = makeRowVector({makeAllNullFlatVector<int64_t>(10)});
+
+  // Expect the result to be NULL
+  auto expectedResult2 = makeRowVector({makeNullConstant(TypeKind::DOUBLE, 1)});
+  testAggregations(
+      {vectors2}, {}, {"noisy_sum_gaussian(c0, 0.0)"}, {expectedResult2});
+}
+
+TEST_F(NoisySumGaussianAggregationTest, emptyTestNoNoise) {
+  // Test empty input.
+  auto vectors = {makeRowVector(
+      {makeFlatVector<int64_t>({}),
+       makeFlatVector<int64_t>({}),
+       makeFlatVector<double>({})})};
+
+  // Expect the result to be NULL
+  auto expectedResult = makeRowVector({makeNullConstant(TypeKind::DOUBLE, 1)});
+  testAggregations(
+      {vectors}, {}, {"noisy_sum_gaussian(c2, 0.0)"}, {expectedResult});
+}
+
+TEST_F(NoisySumGaussianAggregationTest, randomSeedTest) {
+  // Test that the function support random seed, no noise.
+  auto vectors = makeVectors(integerRowType_, 5, 3);
+  createDuckDbTable(vectors);
+
+  testAggregations(
+      vectors,
+      {},
+      // noisy_sum_gaussian(col, noise_scale, randon_seed)
+      {"noisy_sum_gaussian(c2, 0.0, 12345)"},
+      "SELECT SUM(CASE WHEN c2 IS NOT NULL THEN c2 END) FROM tmp");
+
+  // Test that the noise is deterministic given the same noise_scale,
+  // random_seed. noisy_sum_gaussian(col, noise_scale, randon_seed)
+  auto expectedResult =
+      AssertQueryBuilder(
+          PlanBuilder()
+              .values(vectors)
+              .singleAggregation({}, {"noisy_sum_gaussian(c2, 20, 12345)"}, {})
+              .planNode(),
+          duckDbQueryRunner_)
+          .copyResults(pool());
+
+  int numRuns = 10;
+  for (int i = 0; i < numRuns; i++) {
+    testAggregations(
+        vectors, {}, {"noisy_sum_gaussian(c2, 20, 12345)"}, {expectedResult});
+  }
+}
+
+TEST_F(
+    NoisySumGaussianAggregationTest,
+    multipleGroupMultipleAggregationTestNoNoise) {
+  auto vectors = makeVectors(decimalRowType_, 5, 3);
+  createDuckDbTable(vectors);
+
+  // Single group by key, multiple aggregation functions.
+  testAggregations(
+      vectors,
+      {},
+      {"noisy_sum_gaussian(c1, 0.0)", "noisy_sum_gaussian(c2, 0.0)"},
+      "SELECT SUM(c1), SUM(c2) FROM tmp");
+
+  // Multiple group by keys, single aggregation functions.
+  testAggregations(
+      vectors,
+      {"c0", "c1"},
+      {"noisy_sum_gaussian(c2, 0.0)"},
+      "SELECT c0, c1, SUM(c2) FROM tmp GROUP BY c0, c1");
+
+  // Multiple group by keys, multiple aggregation functions.
+  testAggregations(
+      vectors,
+      {"c0"},
+      {"noisy_sum_gaussian(c1, 0.0)", "noisy_sum_gaussian(c2, 0.0)"},
+      "SELECT c0, SUM(c1), SUM(c2) FROM tmp GROUP BY c0");
+}
+
+TEST_F(NoisySumGaussianAggregationTest, groupByNullTestNoNoise) {
+  // Test group
+  auto vectors = makeRowVector(
+      {makeNullableFlatVector<int64_t>({std::nullopt, 2, std::nullopt, 2, 2}),
+       makeFlatVector<int64_t>({1, 1, 3, 3, 3}),
+       makeNullableFlatVector<int64_t>({std::nullopt, 2, std::nullopt, 2, 2})});
+
+  // Group by c0, aggregate c1, expect the result:
+  // c0   | noisy_sum_gaussian(c1, 0.0)
+  // NULL | 4
+  // 2    | 7
+  auto expectedResult = makeRowVector(
+      {makeNullableFlatVector<int64_t>({std::nullopt, 2}),
+       makeNullableFlatVector<double>({4, 7})});
+  testAggregations(
+      {vectors}, {"c0"}, {"noisy_sum_gaussian(c1, 0.0)"}, {expectedResult});
+
+  // Group by c0, aggregate c2, expect the result:
+  // c0   | noisy_sum_gaussian(c2, 0.0)
+  // NULL | NULL
+  // 2    | 6
+  auto expectedResult2 = makeRowVector(
+      {makeNullableFlatVector<int64_t>({std::nullopt, 2}),
+       makeNullableFlatVector<double>({std::nullopt, 6})});
+
+  testAggregations(
+      {vectors}, {"c0"}, {"noisy_sum_gaussian(c2, 0.0)"}, {expectedResult2});
+}
+
 } // namespace facebook::velox::aggregate::test
