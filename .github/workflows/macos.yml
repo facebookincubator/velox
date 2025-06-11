@@ -54,7 +54,7 @@ jobs:
     env:
       CCACHE_DIR: ${{ github.workspace }}/ccache
       # The arm runners have only 7GB RAM
-      BUILD_TYPE: ${{ (matrix.os == 'macos-14' || matrix.os == 'macos-15') && 'Release' || 'Debug' }}
+      BUILD_TYPE: ${{ matrix.os == 'macos-15' && 'Release' || 'Debug' }}
       INSTALL_PREFIX: /tmp/deps-install
     steps:
       - name: Checkout
@@ -76,7 +76,7 @@ jobs:
 
           echo "NJOBS=`sysctl -n hw.ncpu`" >> $GITHUB_ENV
           majorVersion=$(sw_vers -productVersion | awk -F '.' '{print $1}')
-          if (( majorVersion == 13 || majorVersion == 14 )); then
+          if (( majorVersion == 13 )); then
             brew uninstall cmake
             pipx install --force cmake==3.31
           fi
