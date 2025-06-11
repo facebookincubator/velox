@@ -48,7 +48,7 @@ class NoisyCountGaussianAggregate : public exec::Aggregate {
       const SelectivityVector& rows,
       const std::vector<VectorPtr>& args,
       [[maybe_unused]] bool mayPushdown) override {
-    decodeInputData(rows, args);
+    bool hasRandomSeed = decodeInputData(rows, args);
 
     // Process the args data and update the accumulator for each group.
     rows.applyToSelected([&](vector_size_t i) {
@@ -70,6 +70,11 @@ class NoisyCountGaussianAggregate : public exec::Aggregate {
             static_cast<double>(decodedNoiseScale_.valueAt<uint64_t>(i));
       }
       accumulator->checkAndSetNoiseScale(noiseScale);
+
+      // If intput has random seed, set it.
+      if (hasRandomSeed) {
+        accumulator->setRandomSeed(decodedRandomSeed_.valueAt<int32_t>(i));
+      }
     });
   }
 
@@ -130,6 +135,10 @@ class NoisyCountGaussianAggregate : public exec::Aggregate {
           otherAccumulator.noiseScale >= 0) {
         accumulator->checkAndSetNoiseScale(otherAccumulator.noiseScale);
       }
+
+      if (otherAccumulator.randomSeed.has_value()) {
+        accumulator->setRandomSeed(*otherAccumulator.randomSeed);
+      }
     });
   }
 
@@ -166,6 +175,23 @@ class NoisyCountGaussianAggregate : public exec::Aggregate {
     }
 
     folly::Random::DefaultGenerator rng;
+
+    // If intput has random seed, set it.
+    bool hasRandomSeed = false;
+    for (auto i = 0; i < numGroups && !hasRandomSeed; i++) {
+      auto group = groups[i];
+      if (!isNull(group)) {
+        auto* accumulator = value<AccumulatorType>(group);
+        if (accumulator->randomSeed.has_value()) {
+          rng.seed(*accumulator->randomSeed);
+          hasRandomSeed = true;
+        }
+      }
+    }
+
+    if (!hasRandomSeed) {
+      rng.seed(folly::Random::secureRand32());
+    }
 
     // Create a normal distribution with mean 0 and standard deviation noise.
     std::normal_distribution<double> distribution{0.0, 1.0};
@@ -223,6 +249,10 @@ class NoisyCountGaussianAggregate : public exec::Aggregate {
           otherAccumulator.noiseScale >= 0) {
         accumulator->checkAndSetNoiseScale(otherAccumulator.noiseScale);
       }
+
+      if (otherAccumulator.randomSeed.has_value()) {
+        accumulator->setRandomSeed(*otherAccumulator.randomSeed);
+      }
     });
   }
 
@@ -231,7 +261,7 @@ class NoisyCountGaussianAggregate : public exec::Aggregate {
       const SelectivityVector& rows,
       const std::vector<VectorPtr>& args,
       [[maybe_unused]] bool mayPushdown) override {
-    decodeInputData(rows, args);
+    bool hasRandomSeed = decodeInputData(rows, args);
     auto accumulator = exec::Aggregate::value<AccumulatorType>(group);
 
     rows.applyToSelected([&](vector_size_t i) {
@@ -249,6 +279,10 @@ class NoisyCountGaussianAggregate : public exec::Aggregate {
             static_cast<double>(decodedNoiseScale_.valueAt<uint64_t>(i));
       }
       accumulator->checkAndSetNoiseScale(noiseScale);
+
+      if (hasRandomSeed) {
+        accumulator->setRandomSeed(decodedRandomSeed_.valueAt<int32_t>(i));
+      }
     });
   }
 
@@ -262,17 +296,26 @@ class NoisyCountGaussianAggregate : public exec::Aggregate {
     }
   }
 
-  // Helper function to decode the input data.
-  void decodeInputData(
+  // Helper function to decode the input data. And return a has_random_seed
+  // flag.
+  bool decodeInputData(
       const SelectivityVector& rows,
       const std::vector<VectorPtr>& args) {
     decodedValue_.decode(*args[0], rows);
     decodedNoiseScale_.decode(*args[1], rows);
+
+    // If intput has random seed, decode it.
+    if (args.size() == 3 && args[2]->isConstantEncoding()) {
+      decodedRandomSeed_.decode(*args[2], rows);
+      return true;
+    }
+    return false;
   }
 
  private:
   DecodedVector decodedValue_;
   DecodedVector decodedNoiseScale_;
+  DecodedVector decodedRandomSeed_;
 };
 } // namespace
 
@@ -295,6 +338,22 @@ void registerNoisyCountGaussianAggregate(
           .argumentType("T")
           .argumentType("bigint") // support BIGINT noise scale
           .build(),
+      exec::AggregateFunctionSignatureBuilder()
+          .typeVariable("T")
+          .returnType("bigint")
+          .intermediateType("varbinary")
+          .argumentType("T")
+          .argumentType("double") // support DOUBLE noise scale
+          .argumentType("bigint") // support BIGINT random seed
+          .build(),
+      exec::AggregateFunctionSignatureBuilder()
+          .typeVariable("T")
+          .returnType("bigint")
+          .intermediateType("varbinary")
+          .argumentType("T")
+          .argumentType("bigint") // support BIGINT noise scale
+          .argumentType("bigint") // support BIGINT random seed
+          .build(),
   };
 
   auto name = prefix + kNoisyCountGaussian;
@@ -308,8 +367,10 @@ void registerNoisyCountGaussianAggregate(
           [[maybe_unused]] const TypePtr& resultType,
           [[maybe_unused]] const core::QueryConfig& config)
           -> std::unique_ptr<exec::Aggregate> {
-        VELOX_USER_CHECK_EQ(
-            argTypes.size(), 2, "{} takes exactly 2 arguments", name);
+        VELOX_CHECK_LE(
+            argTypes.size(), 3, "{} takes at most 3 arguments", name);
+        VELOX_CHECK_GE(
+            argTypes.size(), 2, "{} takes at least 2 arguments", name);
 
         if (exec::isPartialOutput(step)) {
           return std::make_unique<NoisyCountGaussianAggregate>(VARBINARY());
