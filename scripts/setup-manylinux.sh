@@ -12,6 +12,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+# shellcheck source-path=SCRIPTDIR
 
 # This script documents setting up a Centos9 host for Velox
 # development.  Running it should make you ready to compile.
@@ -29,11 +30,11 @@ set -efx -o pipefail
 # Some of the packages must be build with the same compiler flags
 # so that some low level types are the same size. Also, disable warnings.
 SCRIPTDIR=$(dirname "${BASH_SOURCE[0]}")
-source $SCRIPTDIR/setup-helper-functions.sh
+source "$SCRIPTDIR"/setup-helper-functions.sh
 NPROC=${BUILD_THREADS:-$(getconf _NPROCESSORS_ONLN)}
-export CXXFLAGS=$(get_cxx_flags) # Used by boost.
+CXXFLAGS=$(get_cxx_flags) # Used by boost.
+export CXXFLAGS
 export CFLAGS=${CXXFLAGS//"-std=c++17"/} # Used by LZO.
-CMAKE_BUILD_TYPE="${BUILD_TYPE:-Release}"
 VELOX_BUILD_SHARED=${VELOX_BUILD_SHARED:-"OFF"} #Build folly and gflags shared for use in libvelox.so.
 BUILD_DUCKDB="${BUILD_DUCKDB:-true}"
 USE_CLANG="${USE_CLANG:-false}"
@@ -103,16 +104,16 @@ function install_glog {
 function install_boost {
   wget_and_untar https://github.com/boostorg/boost/releases/download/${BOOST_VERSION}/${BOOST_VERSION}.tar.gz boost
   (
-    cd ${DEPENDENCY_DIR}/boost
+    cd "${DEPENDENCY_DIR}"/boost
     if [[ ${USE_CLANG} != "false" ]]; then
-      ./bootstrap.sh --prefix=${INSTALL_PREFIX} --with-toolset="clang-15"
+      ./bootstrap.sh --prefix="${INSTALL_PREFIX}" --with-toolset="clang-15"
       # Switch the compiler from the clang-15 toolset which doesn't exist (clang-15.jam) to
       # clang of version 15 when toolset clang-15 is used.
       # This reconciles the project-config.jam generation with what the b2 build system allows for customization.
       sed -i 's/using clang-15/using clang : 15/g' project-config.jam
       ${SUDO} ./b2 "-j${NPROC}" -d0 install threading=multi toolset=clang-15 --without-python
     else
-      ./bootstrap.sh --prefix=${INSTALL_PREFIX}
+      ./bootstrap.sh --prefix="${INSTALL_PREFIX}"
       ${SUDO} ./b2 "-j${NPROC}" -d0 install threading=multi --without-python
     fi
   )
@@ -131,8 +132,8 @@ function install_fmt {
 function install_protobuf {
   wget_and_untar https://github.com/protocolbuffers/protobuf/releases/download/v21.8/protobuf-all-21.8.tar.gz protobuf
   (
-    cd ${DEPENDENCY_DIR}/protobuf
-    ./configure CXXFLAGS="-fPIC" --prefix=${INSTALL_PREFIX}
+    cd "${DEPENDENCY_DIR}"/protobuf
+    ./configure CXXFLAGS="-fPIC" --prefix="${INSTALL_PREFIX}"
     make "-j${NPROC}"
     make install
     ldconfig
@@ -142,6 +143,7 @@ function install_protobuf {
 function install_fizz {
   # Folly Portability.h being used to decide whether or not support coroutines
   # causes issues (build, lin) if the selection is not consistent across users of folly.
+  # shellcheck disable=SC2034
   EXTRA_PKG_CXXFLAGS=" -DFOLLY_CFG_NO_COROUTINES"
   wget_and_untar https://github.com/facebookincubator/fizz/archive/refs/tags/${FB_OS_VERSION}.tar.gz fizz
   cmake_install_dir fizz/fizz -DBUILD_TESTS=OFF
@@ -155,6 +157,7 @@ function install_fast_float {
 function install_folly {
   # Folly Portability.h being used to decide whether or not support coroutines
   # causes issues (build, lin) if the selection is not consistent across users of folly.
+  # shellcheck disable=SC2034
   EXTRA_PKG_CXXFLAGS=" -DFOLLY_CFG_NO_COROUTINES"
   wget_and_untar https://github.com/facebook/folly/archive/refs/tags/${FB_OS_VERSION}.tar.gz folly
   cmake_install_dir folly -DBUILD_SHARED_LIBS="$VELOX_BUILD_SHARED" -DBUILD_TESTS=OFF -DFOLLY_HAVE_INT128_T=ON
@@ -163,6 +166,7 @@ function install_folly {
 function install_wangle {
   # Folly Portability.h being used to decide whether or not support coroutines
   # causes issues (build, lin) if the selection is not consistent across users of folly.
+  # shellcheck disable=SC2034
   EXTRA_PKG_CXXFLAGS=" -DFOLLY_CFG_NO_COROUTINES"
   wget_and_untar https://github.com/facebook/wangle/archive/refs/tags/${FB_OS_VERSION}.tar.gz wangle
   cmake_install_dir wangle/wangle -DBUILD_TESTS=OFF
@@ -171,6 +175,7 @@ function install_wangle {
 function install_fbthrift {
   # Folly Portability.h being used to decide whether or not support coroutines
   # causes issues (build, lin) if the selection is not consistent across users of folly.
+  # shellcheck disable=SC2034
   EXTRA_PKG_CXXFLAGS=" -DFOLLY_CFG_NO_COROUTINES"
   wget_and_untar https://github.com/facebook/fbthrift/archive/refs/tags/${FB_OS_VERSION}.tar.gz fbthrift
   cmake_install_dir fbthrift -Denable_tests=OFF -DBUILD_TESTS=OFF -DBUILD_SHARED_LIBS=OFF
@@ -179,6 +184,7 @@ function install_fbthrift {
 function install_mvfst {
   # Folly Portability.h being used to decide whether or not support coroutines
   # causes issues (build, lin) if the selection is not consistent across users of folly.
+  # shellcheck disable=SC2034
   EXTRA_PKG_CXXFLAGS=" -DFOLLY_CFG_NO_COROUTINES"
   wget_and_untar https://github.com/facebook/mvfst/archive/refs/tags/${FB_OS_VERSION}.tar.gz mvfst
   cmake_install_dir mvfst -DBUILD_TESTS=OFF
@@ -195,11 +201,11 @@ function install_duckdb {
 function install_stemmer {
   wget_and_untar https://snowballstem.org/dist/libstemmer_c-${STEMMER_VERSION}.tar.gz stemmer
   (
-    cd ${DEPENDENCY_DIR}/stemmer
+    cd "${DEPENDENCY_DIR}"/stemmer
     sed -i '/CPPFLAGS=-Iinclude/ s/$/ -fPIC/' Makefile
     make clean && make "-j${NPROC}"
-    ${SUDO} cp libstemmer.a ${INSTALL_PREFIX}/lib/
-    ${SUDO} cp include/libstemmer.h ${INSTALL_PREFIX}/include/
+    ${SUDO} cp libstemmer.a "${INSTALL_PREFIX}"/lib/
+    ${SUDO} cp include/libstemmer.h "${INSTALL_PREFIX}"/include/
   )
 }
 
@@ -244,15 +250,16 @@ function install_arrow {
     -DARROW_RUNTIME_SIMD_LEVEL=NONE \
     -DARROW_WITH_UTF8PROC=OFF \
     -DARROW_TESTING=ON \
-    -DCMAKE_INSTALL_PREFIX=${INSTALL_PREFIX} \
+    -DCMAKE_INSTALL_PREFIX="${INSTALL_PREFIX}" \
     -DCMAKE_BUILD_TYPE=Release \
     -DARROW_BUILD_STATIC=ON \
-    -DBOOST_ROOT=${INSTALL_PREFIX}
+    -DBOOST_ROOT="${INSTALL_PREFIX}"
 }
 
 function install_cuda {
   # See https://developer.nvidia.com/cuda-downloads
-  local arch=$(uname -m)
+  local arch
+  arch=$(uname -m)
   local repo_url
 
   if [[ "$arch" == "x86_64" ]]; then
@@ -266,8 +273,9 @@ function install_cuda {
   fi
 
   dnf config-manager --add-repo "$repo_url"
-  local dashed="$(echo $1 | tr '.' '-')"
-  dnf install -y cuda-nvcc-$dashed cuda-cudart-devel-$dashed cuda-nvrtc-devel-$dashed cuda-driver-devel-$dashed
+  local dashed
+  dashed="$(echo "$1" | tr '.' '-')"
+  dnf install -y cuda-nvcc-"$dashed" cuda-cudart-devel-"$dashed" cuda-nvrtc-devel-"$dashed" cuda-driver-devel-"$dashed"
 }
 
 function install_velox_deps {
