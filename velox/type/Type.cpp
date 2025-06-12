@@ -1130,6 +1130,10 @@ void toTypeSql(const TypePtr& type, std::ostream& out) {
       out << ")";
       break;
     case TypeKind::ROW: {
+      if (strcmp(type->name(), "IPPREFIX") == 0) {
+        out << "ipprefix";
+        break;
+      }
       // Append struct(name1 type1, name2 type2,..), e.g.
       // struct(a bigint, b real);
       const auto& rowType = type->asRow();
