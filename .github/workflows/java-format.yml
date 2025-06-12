@@ -16,7 +16,7 @@ name: Java Bindings - Code Format
 on:
   workflow_dispatch:
   pull_request:
-    types: [ opened, reopened, synchronize ]
+    types: [opened, reopened, synchronize]
     paths:
       - "velox/**"
       - "!velox/docs/**"
