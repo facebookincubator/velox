@@ -133,9 +133,9 @@ void CudfFilterProject::filter(
   auto filterColumns = filterEvaluator_.compute(
       inputTableColumns, stream, cudf::get_current_device_resource_ref());
   auto filterColumn = filterColumns[0]->view();
-  auto apply_filter = filterColumn.has_nulls();
-  if (!apply_filter) {
-    // is all true in filter_column
+  auto shouldApplyFilter = filterColumn.has_nulls();
+  if (!shouldApplyFilter) {
+    // is all true in filterColumn
     auto isAllTrue = cudf::reduce(
         filterColumn,
         *cudf::make_all_aggregation<cudf::reduce_aggregation>(),
@@ -144,10 +144,10 @@ void CudfFilterProject::filter(
         cudf::get_current_device_resource_ref());
     using ScalarType = cudf::scalar_type_t<bool>;
     auto result = static_cast<ScalarType*>(isAllTrue.get());
-    apply_filter = !(result->is_valid(stream) && result->value(stream));
+    // If filter is not all true, apply the filter
+    shouldApplyFilter = !(result->is_valid(stream) && result->value(stream));
   }
-  // If filter is not all true, apply the filter
-  if (apply_filter) {
+  if (shouldApplyFilter) {
     auto filterTable =
         std::make_unique<cudf::table>(std::move(inputTableColumns));
     auto filteredTable =
