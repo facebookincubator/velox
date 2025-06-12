@@ -27,6 +27,7 @@
 #include "velox4j/memory/MemoryManager.h"
 
 namespace facebook::velox4j {
+
 /// Evaluator is a JNI API that accepts calls from Java to evaluate
 /// an expression on a set of input row vectors.
 class Evaluator {

@@ -21,6 +21,7 @@
 #include "velox4j/memory/AllocationListener.h"
 
 namespace facebook::velox4j {
+
 // The JNI wrapper used by JavaAllocationListener.
 class JavaAllocationListenerJniWrapper final : public spotify::jni::JavaClass {
  public:
