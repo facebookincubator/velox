@@ -15,9 +15,11 @@
  */
 
 #include "velox/exec/fuzzer/PrestoQueryRunnerIntermediateTypeTransforms.h"
+#include "velox/exec/fuzzer/PrestoQueryRunnerJsonTransform.h"
 #include "velox/exec/fuzzer/PrestoQueryRunnerTimestampWithTimeZoneTransform.h"
 #include "velox/expression/Expr.h"
 #include "velox/functions/prestosql/types/HyperLogLogType.h"
+#include "velox/functions/prestosql/types/JsonType.h"
 #include "velox/functions/prestosql/types/TDigestType.h"
 #include "velox/functions/prestosql/types/TimestampWithTimeZoneType.h"
 #include "velox/parse/Expressions.h"
@@ -36,7 +38,8 @@ intermediateTypeTransforms() {
                HYPERLOGLOG(), VARBINARY())},
           {TDIGEST(DOUBLE()),
            std::make_shared<IntermediateTypeTransformUsingCast>(
-               TDIGEST(DOUBLE()), VARBINARY())}};
+               TDIGEST(DOUBLE()), VARBINARY())},
+          {JSON(), std::make_shared<JsonTransform>()}};
   return intermediateTypeTransforms;
 }
 
