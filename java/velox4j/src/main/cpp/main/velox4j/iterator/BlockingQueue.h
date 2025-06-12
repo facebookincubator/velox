@@ -54,19 +54,26 @@ class BlockingQueue : public ExternalStream {
   // Add a row-vector to the blocking queue.
   void put(facebook::velox::RowVectorPtr rowVector);
 
+  /// Signals there will be no more inputs for this blocking queue.
+  /// The queue state will be changed to State::FINISHED after the
+  /// operation.
   void noMoreInput();
 
   bool empty() const;
 
  private:
+  // Ensures the current state is exactly State::OPEN.
   void ensureOpen() const;
 
+  // Ensures the current state is State::OPEN or State::FINISHED.
   void ensureNotClosed() const;
 
+  // Close this blocking queue. The queue state will be set to State:CLOSED
+  // then.
   void close();
 
   mutable std::mutex mutex_;
-  mutable std::condition_variable condVar_;
+  mutable std::condition_variable notEmptyCv_;
   std::queue<facebook::velox::RowVectorPtr> queue_;
   std::unique_ptr<folly::IOThreadPoolExecutor> waitExecutor_;
   std::vector<facebook::velox::ContinuePromise> promises_{};

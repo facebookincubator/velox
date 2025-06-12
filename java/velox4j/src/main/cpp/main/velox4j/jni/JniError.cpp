@@ -18,6 +18,7 @@
 #include <velox/common/base/Exceptions.h>
 
 namespace facebook::velox4j {
+
 void JniErrorState::ensureInitialized(JNIEnv* env) {
   std::lock_guard<std::mutex> lockGuard(mtx_);
   if (initialized_) {

@@ -25,6 +25,7 @@
 #include "AllocationListener.h"
 
 namespace facebook::velox4j {
+
 /// The allocator abstraction for constructing an ArrowMemoryPool. The pool
 /// created with invoke this allocator for underlying allocations.
 class MemoryAllocator {

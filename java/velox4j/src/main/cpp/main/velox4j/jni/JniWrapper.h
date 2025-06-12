@@ -20,6 +20,7 @@
 #include <jni.h>
 
 namespace facebook::velox4j {
+
 /// A dynamic JniWrapper that includes the JNI methods that are session-aware.
 /// Which means, the sanity of these methods usually rely on certain objects
 /// that were stored in the current session. For example, an API that turns

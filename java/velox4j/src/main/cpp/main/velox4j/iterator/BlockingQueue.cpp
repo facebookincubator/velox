@@ -76,20 +76,20 @@ std::optional<RowVectorPtr> BlockingQueue::read(ContinueFuture& future) {
   waitExecutor_->add([this]() -> void {
     std::unique_lock lock(mutex_);
     // Async wait for a new element.
-    condVar_.wait(lock, [this]() { return state_ != OPEN || !queue_.empty(); });
+    notEmptyCv_.wait(
+        lock, [this]() { return state_ != OPEN || !queue_.empty(); });
     switch (state_) {
       case OPEN: {
         VELOX_CHECK(!queue_.empty());
-        // Fall through.
       }
+      [[fallthrough]]
       case FINISHED: {
         VELOX_CHECK(promises_.size() == 1);
         for (auto& p : promises_) {
           p.setValue();
         }
         promises_.clear();
-        break;
-      }
+      } break;
       case CLOSED: {
         try {
           VELOX_FAIL("BlockingQueue was just closed");
@@ -103,8 +103,7 @@ std::optional<RowVectorPtr> BlockingQueue::read(ContinueFuture& future) {
             return;
           }
         }
-        break;
-      }
+      } break;
     }
   });
 
@@ -117,7 +116,7 @@ void BlockingQueue::put(RowVectorPtr rowVector) {
     ensureOpen();
     queue_.push(std::move(rowVector));
   }
-  condVar_.notify_one();
+  notEmptyCv_.notify_one();
 }
 
 void BlockingQueue::noMoreInput() {
@@ -126,7 +125,7 @@ void BlockingQueue::noMoreInput() {
     ensureOpen();
     state_ = FINISHED;
   }
-  condVar_.notify_one();
+  notEmptyCv_.notify_one();
 }
 
 bool BlockingQueue::empty() const {
@@ -153,7 +152,7 @@ void BlockingQueue::close() {
     ensureNotClosed();
     state_ = CLOSED;
   }
-  condVar_.notify_one();
+  notEmptyCv_.notify_one();
   waitExecutor_->join();
 }
 } // namespace facebook::velox4j

@@ -22,6 +22,7 @@
 #include <unordered_map>
 
 namespace facebook::velox4j {
+
 using ResourceHandle = uint32_t;
 static_assert(std::numeric_limits<ResourceHandle>::min() == 0);
 

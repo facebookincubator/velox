@@ -15,6 +15,8 @@
  */
 #include "velox4j/iterator/DownIterator.h"
 
+#include <ClassRegistry.h>
+#include <JniTypes.h>
 #include <fmt/core.h>
 #include <folly/Unit.h>
 #include <folly/executors/IOThreadPoolExecutor.h>
@@ -28,8 +30,6 @@
 #include <string>
 #include <utility>
 
-#include "ClassRegistry.h"
-#include "JniTypes.h"
 #include "velox4j/jni/JniCommon.h"
 #include "velox4j/lifecycle/ObjectStore.h"
 
