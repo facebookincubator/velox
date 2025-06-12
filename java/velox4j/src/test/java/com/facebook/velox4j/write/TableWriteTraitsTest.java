@@ -56,7 +56,7 @@ public class TableWriteTraitsTest {
   public void testOutputType() {
     final RowType type = TableWriteTraits.outputType();
     Assert.assertEquals(
-        ResourceTests.readResourceAsString("table-write-traits/output-type-1.json"),
+        ResourceTests.readResourceAsString("table-write-traits/output-type-1.json").stripTrailing(),
         Serde.toPrettyJson(type));
   }
 
@@ -68,7 +68,8 @@ public class TableWriteTraitsTest {
             .outputType(SerdeTests.newSampleAggregationNode("id-2", "id-1"));
     Assert.assertEquals(
         ResourceTests.readResourceAsString(
-            "table-write-traits/output-type-with-aggregation-node-1.json"),
+                "table-write-traits/output-type-with-aggregation-node-1.json")
+            .stripTrailing(),
         Serde.toPrettyJson(type));
   }
 }
