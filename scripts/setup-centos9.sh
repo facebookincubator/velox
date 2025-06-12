@@ -33,7 +33,6 @@ SCRIPTDIR=$(dirname "${BASH_SOURCE[0]}")
 source "$SCRIPTDIR"/setup-common.sh
 CXXFLAGS=$(get_cxx_flags) # Used by boost.
 export CXXFLAGS
-export CFLAGS=${CXXFLAGS//"-std=c++17"/} # Used by LZO.
 export COMPILER_FLAGS=${CXXFLAGS}
 SUDO="${SUDO:-""}"
 USE_CLANG="${USE_CLANG:-false}"
