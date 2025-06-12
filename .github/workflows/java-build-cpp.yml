@@ -32,6 +32,8 @@ jobs:
       HOST_CCACHE_DIR: "${{ github.workspace }}/.ccache"
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - name: Restore Ccache
         uses: apache/infrastructure-actions/stash/restore@3354c1565d4b0e335b78a76aedd82153a9e144d4
         with:
