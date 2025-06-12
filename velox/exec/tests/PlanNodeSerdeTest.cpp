@@ -571,25 +571,40 @@ TEST_F(PlanNodeSerdeTest, scan) {
   testSerde(plan);
 }
 
+#define TOPN_SERDE_TEST(_nodeName)                         \
+  do {                                                     \
+    auto plan = PlanBuilder()                              \
+                    .values({data_})                       \
+                    ._nodeName({}, {"c0", "c2"}, 10, false)\
+                    .planNode();                           \
+    testSerde(plan);                                       \
+                                                           \
+    plan = PlanBuilder()                                   \
+               .values({data_})                            \
+               ._nodeName({}, {"c0", "c2"}, 10, true)      \
+               .planNode();                                \
+    testSerde(plan);                                       \
+                                                           \
+    plan = PlanBuilder()                                   \
+               .values({data_})                            \
+               ._nodeName({"c0"}, {"c1", "c2"}, 10, false) \
+               .planNode();                                \
+    testSerde(plan);                                       \
+  } while (0)
+
 TEST_F(PlanNodeSerdeTest, topNRowNumber) {
-  auto plan = PlanBuilder()
-                  .values({data_})
-                  .topNRowNumber({}, {"c0", "c2"}, 10, false)
-                  .planNode();
-  testSerde(plan);
-
-  plan = PlanBuilder()
-             .values({data_})
-             .topNRowNumber({}, {"c0", "c2"}, 10, true)
-             .planNode();
-  testSerde(plan);
-
-  plan = PlanBuilder()
-             .values({data_})
-             .topNRowNumber({"c0"}, {"c1", "c2"}, 10, false)
-             .planNode();
-  testSerde(plan);
+  TOPN_SERDE_TEST(topNRowNumber);
 }
+
+TEST_F(PlanNodeSerdeTest, topNRank) {
+  TOPN_SERDE_TEST(topNRank);
+}
+
+TEST_F(PlanNodeSerdeTest, topNDemseRank) {
+  TOPN_SERDE_TEST(topNDenseRank);
+}
+
+#undef TOPN_SERDE_TEST
 
 TEST_F(PlanNodeSerdeTest, write) {
   auto rowTypePtr = ROW({"c0", "c1", "c2"}, {BIGINT(), BOOLEAN(), VARBINARY()});
