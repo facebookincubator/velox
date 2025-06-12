@@ -18,6 +18,7 @@
 #include <glog/logging.h>
 
 namespace facebook::velox4j {
+
 ObjectStore* ObjectStore::global() {
   static std::unique_ptr<ObjectStore> globalStore = create();
   return globalStore.get();

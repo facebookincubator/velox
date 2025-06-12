@@ -35,10 +35,12 @@ std::string jStringToCString(JNIEnv* env, jstring string) {
   int32_t jlen, clen;
   clen = env->GetStringUTFLength(string);
   jlen = env->GetStringLength(string);
-  char buffer[clen];
-  env->GetStringUTFRegion(string, 0, jlen, buffer);
-  return {buffer, static_cast<uint64_t>(clen)};
+  std::string buffer;
+  buffer.resize(clen);
+  env->GetStringUTFRegion(string, 0, jlen, &buffer[0]);
+  return buffer;
 }
+
 void checkException(JNIEnv* env) {
   if (env->ExceptionCheck()) {
     jthrowable t = env->ExceptionOccurred();

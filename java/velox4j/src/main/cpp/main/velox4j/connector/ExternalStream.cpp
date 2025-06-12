@@ -51,18 +51,18 @@ SuspendedSection::~SuspendedSection() {
 
 ExternalStreamConnectorSplit::ExternalStreamConnectorSplit(
     const std::string& connectorId,
-    ObjectHandle esId)
-    : ConnectorSplit(connectorId), esId_(esId) {}
+    ObjectHandle externalStreamId)
+    : ConnectorSplit(connectorId), externalStreamId_(externalStreamId) {}
 
-const ObjectHandle ExternalStreamConnectorSplit::esId() const {
-  return esId_;
+const ObjectHandle ExternalStreamConnectorSplit::externalStreamId() const {
+  return externalStreamId_;
 }
 
 folly::dynamic ExternalStreamConnectorSplit::serialize() const {
   folly::dynamic obj = folly::dynamic::object;
   obj["name"] = "ExternalStreamConnectorSplit";
   obj["connectorId"] = connectorId;
-  obj["esId"] = esId_;
+  obj["externalStreamId"] = externalStreamId_;
   return obj;
 }
 
@@ -74,8 +74,9 @@ void ExternalStreamConnectorSplit::registerSerDe() {
 std::shared_ptr<ExternalStreamConnectorSplit>
 ExternalStreamConnectorSplit::create(const folly::dynamic& obj, void* context) {
   const auto connectorId = obj["connectorId"].asString();
-  const auto esId = obj["esId"].asInt();
-  return std::make_shared<ExternalStreamConnectorSplit>(connectorId, esId);
+  const auto externalStreamId = obj["externalStreamId"].asInt();
+  return std::make_shared<ExternalStreamConnectorSplit>(
+      connectorId, externalStreamId);
 }
 
 ExternalStreamTableHandle::ExternalStreamTableHandle(
@@ -109,18 +110,21 @@ ExternalStreamDataSource::ExternalStreamDataSource(
 
 void ExternalStreamDataSource::addSplit(
     std::shared_ptr<connector::ConnectorSplit> split) {
-  VELOX_CHECK(
-      split->connectorId == tableHandle_->connectorId(),
+  VELOX_CHECK_EQ(
+      split->connectorId,
+      tableHandle_->connectorId(),
       "Split's connector ID doesn't match table handle's connector ID");
-  auto esSplit = std::dynamic_pointer_cast<ExternalStreamConnectorSplit>(split);
-  auto es = ObjectStore::retrieve<ExternalStream>(esSplit->esId());
-  streams_.push(es);
+  auto externalStreamSplit =
+      std::dynamic_pointer_cast<ExternalStreamConnectorSplit>(split);
+  auto externalStream = ObjectStore::retrieve<ExternalStream>(
+      externalStreamSplit->externalStreamId());
+  streams_.push(externalStream);
 }
 
 std::optional<RowVectorPtr> ExternalStreamDataSource::next(
     uint64_t size,
     ContinueFuture& future) {
-  // TODO obey batch size.
+  // TODO: Sizing the output row vectors with the size argument.
   while (true) {
     if (current_ == nullptr) {
       if (streams_.empty()) {

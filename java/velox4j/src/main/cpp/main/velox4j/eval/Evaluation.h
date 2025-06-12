@@ -37,7 +37,9 @@ class Evaluation : public facebook::velox::ISerializable {
       const std::shared_ptr<const ConnectorConfigArray>& connectorConfig);
 
   const facebook::velox::core::TypedExprPtr& expr() const;
+
   const std::shared_ptr<const ConfigArray>& queryConfig() const;
+
   const std::shared_ptr<const ConnectorConfigArray>& connectorConfig() const;
 
   folly::dynamic serialize() const override;

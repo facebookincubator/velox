@@ -25,7 +25,7 @@ using namespace facebook::velox;
 
 namespace {
 
-void slice(VectorPtr& in) {
+void sliceChildren(VectorPtr& in) {
   auto* rowBase = in->as<RowVector>();
   if (!rowBase) {
     return;
@@ -42,7 +42,7 @@ void slice(VectorPtr& in) {
 }
 
 void flatten(VectorPtr& in) {
-  facebook::velox::BaseVector::flattenVector(in);
+  BaseVector::flattenVector(in);
 }
 
 ArrowOptions makeOptions() {
@@ -57,7 +57,7 @@ void fromBaseVectorToArrow(
     ArrowSchema* cSchema,
     ArrowArray* cArray) {
   flatten(vector);
-  slice(vector);
+  sliceChildren(vector);
   auto options = makeOptions();
   exportToArrow(vector, *cSchema, options);
   exportToArrow(vector, *cArray, vector->pool(), options);

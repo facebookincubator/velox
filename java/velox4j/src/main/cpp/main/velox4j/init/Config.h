@@ -18,6 +18,9 @@
 #include <velox/common/config/Config.h>
 
 namespace facebook::velox4j {
+
+/// Enumeration including the supported presets used for initializing Velox4J.
+/// Spark is the only preset we support at this moment.
 enum Preset { SPARK = 0 };
 
 extern facebook::velox::config::ConfigBase::Entry<Preset> VELOX4J_INIT_PRESET;

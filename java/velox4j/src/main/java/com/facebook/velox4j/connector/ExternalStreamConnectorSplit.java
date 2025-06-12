@@ -20,17 +20,18 @@ import com.fasterxml.jackson.annotation.JsonGetter;
 import com.fasterxml.jackson.annotation.JsonProperty;
 
 public class ExternalStreamConnectorSplit extends ConnectorSplit {
-  private final long esId;
+  private final long externalStreamId;
 
   @JsonCreator
   public ExternalStreamConnectorSplit(
-      @JsonProperty("connectorId") String connectorId, @JsonProperty("esId") long esId) {
+      @JsonProperty("connectorId") String connectorId,
+      @JsonProperty("externalStreamId") long externalStreamId) {
     super(connectorId, 0, false);
-    this.esId = esId;
+    this.externalStreamId = externalStreamId;
   }
 
-  @JsonGetter("esId")
-  public long getEsId() {
-    return esId;
+  @JsonGetter("externalStreamId")
+  public long getExternalStreamId() {
+    return externalStreamId;
   }
 }
