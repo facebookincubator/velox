@@ -34,7 +34,7 @@ source "$SCRIPTDIR"/setup-helper-functions.sh
 NPROC=${BUILD_THREADS:-$(getconf _NPROCESSORS_ONLN)}
 CXXFLAGS=$(get_cxx_flags) # Used by boost.
 export CXXFLAGS
-export CFLAGS=${CXXFLAGS//"-std=c++17"/} # Used by LZO.
+export CFLAGS=${CXXFLAGS//"-std=c++17"/}        # Used by LZO.
 VELOX_BUILD_SHARED=${VELOX_BUILD_SHARED:-"OFF"} #Build folly and gflags shared for use in libvelox.so.
 BUILD_DUCKDB="${BUILD_DUCKDB:-true}"
 USE_CLANG="${USE_CLANG:-false}"
@@ -70,7 +70,6 @@ function install_build_prerequisites {
   dnf update -y
   dnf_install ninja-build cmake ccache gcc-toolset-12 git wget which
   dnf_install autoconf automake python3-devel pip libtool
-
 
   if [[ ${USE_CLANG} != "false" ]]; then
     install_clang15
@@ -191,7 +190,7 @@ function install_mvfst {
 }
 
 function install_duckdb {
-  if $BUILD_DUCKDB ; then
+  if $BUILD_DUCKDB; then
     echo 'Building DuckDB'
     wget_and_untar https://github.com/duckdb/duckdb/archive/refs/tags/${DUCKDB_VERSION}.tar.gz duckdb
     cmake_install_dir duckdb -DBUILD_UNITTESTS=OFF -DENABLE_SANITIZER=OFF -DENABLE_UBSAN=OFF -DBUILD_SHELL=OFF -DEXPORT_DLL_SYMBOLS=OFF -DCMAKE_BUILD_TYPE=Release
@@ -262,9 +261,9 @@ function install_cuda {
   arch=$(uname -m)
   local repo_url
 
-  if [[ "$arch" == "x86_64" ]]; then
+  if [[ $arch == "x86_64" ]]; then
     repo_url="https://developer.download.nvidia.com/compute/cuda/repos/rhel8/x86_64/cuda-rhel8.repo"
-  elif [[ "$arch" == "aarch64" ]]; then
+  elif [[ $arch == "aarch64" ]]; then
     # Using SBSA (Server Base System Architecture) repository for ARM64 servers
     repo_url="https://developer.download.nvidia.com/compute/cuda/repos/rhel8/sbsa/cuda-rhel8.repo"
   else
@@ -298,7 +297,7 @@ function install_velox_deps {
   run_and_time install_arrow
 }
 
-(return 2> /dev/null) && return # If script was sourced, don't run commands.
+(return 2>/dev/null) && return # If script was sourced, don't run commands.
 
 (
   if [[ $# -ne 0 ]]; then
