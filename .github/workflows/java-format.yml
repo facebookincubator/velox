@@ -14,7 +14,7 @@
 name: Java Bindings - Code Format
 
 on:
-  workflow_dispatch:
+  workflow_dispatch: {}
   pull_request:
     types: [opened, reopened, synchronize]
     paths:
@@ -32,7 +32,7 @@ on:
       - .github/workflows/java-format.yml
   push:
     branches:
-      - 'main'
+      - main
     paths:
       - velox/**
       - '!velox/docs/**'
