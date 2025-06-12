@@ -30,12 +30,12 @@ class NoisyAvgGaussianAggregate : public exec::Aggregate {
       const SelectivityVector& rows,
       const std::vector<VectorPtr>& args,
       [[maybe_unused]] bool mayPushdown) override {
-    decodeInputData(rows, args);
+    bool hasBounds = decodeInputData(rows, args);
 
     // Process the args data and update the accumulator for each group.
     rows.applyToSelected([&](vector_size_t i) {
       auto* accumulator = value<AccumulatorType>(groups[i]);
-      updateAccumulatorFromInput(args, accumulator, i);
+      updateAccumulatorFromInput(args, accumulator, i, hasBounds);
     });
   }
 
@@ -44,11 +44,11 @@ class NoisyAvgGaussianAggregate : public exec::Aggregate {
       const SelectivityVector& rows,
       const std::vector<VectorPtr>& args,
       [[maybe_unused]] bool mayPushdown) override {
-    decodeInputData(rows, args);
+    bool hasBounds = decodeInputData(rows, args);
     auto accumulator = exec::Aggregate::value<AccumulatorType>(group);
 
     rows.applyToSelected([&](vector_size_t i) {
-      updateAccumulatorFromInput(args, accumulator, i);
+      updateAccumulatorFromInput(args, accumulator, i, hasBounds);
     });
   }
 
@@ -181,18 +181,30 @@ class NoisyAvgGaussianAggregate : public exec::Aggregate {
  private:
   DecodedVector decodedValue_;
   DecodedVector decodedNoiseScale_;
+  DecodedVector decodedLowerBound_;
+  DecodedVector decodedUpperBound_;
 
-  void decodeInputData(
+  bool decodeInputData(
       const SelectivityVector& rows,
       const std::vector<VectorPtr>& args) {
     decodedValue_.decode(*args[0], rows);
     decodedNoiseScale_.decode(*args[1], rows);
+
+    // Decode lower and upper bounds if provided.
+    if (args.size() > 3 && args[2]->isConstantEncoding() &&
+        args[3]->isConstantEncoding()) {
+      decodedLowerBound_.decode(*args[2], rows);
+      decodedUpperBound_.decode(*args[3], rows);
+      return true;
+    }
+    return false;
   }
 
   void updateAccumulatorFromInput(
       const std::vector<VectorPtr>& args,
       AccumulatorType* accumulator,
-      vector_size_t i) {
+      vector_size_t i,
+      bool hasBounds) {
     if (decodedValue_.isNullAt(i) || decodedNoiseScale_.isNullAt(i)) {
       return;
     }
@@ -204,6 +216,28 @@ class NoisyAvgGaussianAggregate : public exec::Aggregate {
       noiseScale = static_cast<double>(decodedNoiseScale_.valueAt<uint64_t>(i));
     }
     accumulator->checkAndSetNoiseScale(noiseScale);
+
+    // Update the lower and upper bounds if provided.
+    if (hasBounds) {
+      double lowerBound = 0;
+      double upperBound = 0;
+      auto lowerBoundType = args[2]->typeKind();
+      auto upperBoundType = args[3]->typeKind();
+      if (lowerBoundType == TypeKind::DOUBLE) {
+        lowerBound = decodedLowerBound_.valueAt<double>(i);
+      } else if (lowerBoundType == TypeKind::BIGINT) {
+        lowerBound =
+            static_cast<double>(decodedLowerBound_.valueAt<int64_t>(i));
+      }
+
+      if (upperBoundType == TypeKind::DOUBLE) {
+        upperBound = decodedUpperBound_.valueAt<double>(i);
+      } else if (upperBoundType == TypeKind::BIGINT) {
+        upperBound =
+            static_cast<double>(decodedUpperBound_.valueAt<int64_t>(i));
+      }
+      accumulator->checkAndSetBounds(lowerBound, upperBound);
+    }
 
     // Update sum and count. check input value and dispatch to corresponding
     // type.
@@ -227,6 +261,11 @@ class NoisyAvgGaussianAggregate : public exec::Aggregate {
     if (otherAccumulator.getNoiseScale() >= 0) {
       accumulator->checkAndSetNoiseScale(otherAccumulator.getNoiseScale());
     }
+    if (otherAccumulator.getLowerBound().has_value() &&
+        otherAccumulator.getUpperBound().has_value()) {
+      accumulator->checkAndSetBounds(
+          *otherAccumulator.getLowerBound(), *otherAccumulator.getUpperBound());
+    }
   }
 
   // Template helper function to update accumulator, can support all numeric
@@ -246,7 +285,7 @@ class NoisyAvgGaussianAggregate : public exec::Aggregate {
                                             : type->asLongDecimal().scale();
         double doubleValue = static_cast<double>(value) / pow(10, scale);
 
-        accumulator->updateSum(doubleValue);
+        accumulator->clipUpdateSum(doubleValue);
         accumulator->updateCount(1);
         return;
       }
@@ -260,7 +299,8 @@ class NoisyAvgGaussianAggregate : public exec::Aggregate {
         std::is_same_v<T, facebook::velox::Timestamp>) {
       VELOX_FAIL("NoisySumGaussianAggregate does not support this data type.");
     } else {
-      accumulator->updateSum(static_cast<double>(decodedValue.valueAt<T>(i)));
+      accumulator->clipUpdateSum(
+          static_cast<double>(decodedValue.valueAt<T>(i)));
       accumulator->updateCount(1);
     }
   }
@@ -283,6 +323,7 @@ void registerNoisyAvgGaussianAggregate(
   const std::vector<std::string> simpleDataTypes = {
       "tinyint", "smallint", "integer", "bigint", "real", "double"};
   const std::vector<std::string> noiseScaleTypes = {"double", "bigint"};
+  const std::vector<std::string> boundTypes = {"double", "bigint"};
 
   std::vector<std::shared_ptr<exec::AggregateFunctionSignature>> signatures;
 
@@ -290,13 +331,27 @@ void registerNoisyAvgGaussianAggregate(
   for (const auto& noiseScaleType : noiseScaleTypes) {
     // Handle simple types.
     for (const auto& dataType : simpleDataTypes) {
+      // Signature 1: (col, noise_scale)
       signatures.push_back(createBuilder()
                                .argumentType(dataType)
                                .argumentType(noiseScaleType)
                                .build());
+
+      // Signature 2: (col, noise_scale, lower_bound, upper_bound)
+      for (const auto& lowerBoundType : boundTypes) {
+        for (const auto& upperBoundType : boundTypes) {
+          signatures.push_back(createBuilder()
+                                   .argumentType(dataType)
+                                   .argumentType(noiseScaleType)
+                                   .argumentType(lowerBoundType)
+                                   .argumentType(upperBoundType)
+                                   .build());
+        }
+      }
     }
 
     // Handle decimal types separately.
+    // Signature 1: (col, noise_scale)
     signatures.push_back(exec::AggregateFunctionSignatureBuilder()
                              .integerVariable("a_precision")
                              .integerVariable("a_scale")
@@ -305,6 +360,22 @@ void registerNoisyAvgGaussianAggregate(
                              .argumentType("DECIMAL(a_precision, a_scale)")
                              .argumentType(noiseScaleType)
                              .build());
+
+    // Signature 2: (col, noise_scale, lower_bound, upper_bound)
+    for (const auto& lowerBoundType : boundTypes) {
+      for (const auto& upperBoundType : boundTypes) {
+        signatures.push_back(exec::AggregateFunctionSignatureBuilder()
+                                 .integerVariable("a_precision")
+                                 .integerVariable("a_scale")
+                                 .returnType("double")
+                                 .intermediateType("varbinary")
+                                 .argumentType("DECIMAL(a_precision, a_scale)")
+                                 .argumentType(noiseScaleType)
+                                 .argumentType(lowerBoundType)
+                                 .argumentType(upperBoundType)
+                                 .build());
+      }
+    }
   }
 
   auto name = prefix + kNoisyAvgGaussian;
