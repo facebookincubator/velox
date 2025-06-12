@@ -772,7 +772,9 @@ public class QueryTest {
     UpIteratorTests.assertIterator(task)
         .assertNumRowVectors(1)
         .assertRowVectorTypeJson(
-            0, ResourceTests.readResourceAsString("query-output-type/tpch-table-write-1.json"))
+            0,
+            ResourceTests.readResourceAsString("query-output-type/tpch-table-write-1.json")
+                .stripTrailing())
         .run();
   }
 
@@ -795,7 +797,9 @@ public class QueryTest {
     UpIteratorTests.assertIterator(task1)
         .assertNumRowVectors(1)
         .assertRowVectorTypeJson(
-            0, ResourceTests.readResourceAsString("query-output-type/tpch-table-write-1.json"))
+            0,
+            ResourceTests.readResourceAsString("query-output-type/tpch-table-write-1.json")
+                .stripTrailing())
         .run();
 
     // Read the file we just wrote.
