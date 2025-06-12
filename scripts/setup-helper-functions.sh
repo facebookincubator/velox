@@ -48,7 +48,7 @@ function github_checkout {
   shift
   local VERSION=$1
   shift
-  local GIT_CLONE_PARAMS=$*
+  local GIT_CLONE_PARAMS=( "$@" )
   local DIRNAME
   DIRNAME=$(basename "$REPO")
   SUDO="${SUDO:-""}"
@@ -61,7 +61,7 @@ function github_checkout {
     ${SUDO} rm -rf "${DIRNAME}"
   fi
   if [ ! -d "${DIRNAME}" ]; then
-    git clone -q -b "$VERSION" "$GIT_CLONE_PARAMS" "https://github.com/${REPO}.git"
+    git clone -q -b "$VERSION" "${GIT_CLONE_PARAMS[@]}" "https://github.com/${REPO}.git"
   fi
   cd "${DIRNAME}" || exit
 }
