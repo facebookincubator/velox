@@ -19,6 +19,7 @@
 #include <algorithm>
 #include <limits>
 #include <stdexcept>
+#include <utility>
 
 #include "velox/expression/EvalCtx.h"
 #include "velox/expression/SpecialForm.h"
@@ -56,17 +57,12 @@ struct JsonRowSchemaInfo {
   // lookup.
   folly::F14FastMap<std::string, column_index_t> nodeIndices;
 
-  // Equality operator based on the unique key.
-  bool operator==(const JsonRowSchemaInfo& other) {
-    return key == other.key;
-  }
-
   JsonRowSchemaInfo(
       uint64_t key,
       bool allFieldsAreAscii,
-      const std::shared_ptr<std::vector<bool>> isFieldMissing,
-      const folly::F14FastMap<std::string, column_index_t>& fieldIndices,
-      const folly::F14FastMap<std::string, column_index_t>& nodeIndices)
+      std::shared_ptr<std::vector<bool>>&& isFieldMissing,
+      folly::F14FastMap<std::string, column_index_t>&& fieldIndices,
+      folly::F14FastMap<std::string, column_index_t>&& nodeIndices)
       : key(key),
         allFieldsAreAscii(allFieldsAreAscii),
         isFieldMissing(std::move(isFieldMissing)),
@@ -277,7 +273,7 @@ struct ExtractJsonTypeImpl {
     static simdjson::error_code apply(
         Input value,
         exec::GenericWriter& writer,
-        bool isRoot,
+        bool /*isRoot*/,
         const folly::F14FastMap<int64_t, JsonRowSchemaInfo>& jsonRowSchemaInfo,
         column_index_t nodeIndex) {
       auto& writerTyped = writer.castTo<Map<Any, Any>>();
