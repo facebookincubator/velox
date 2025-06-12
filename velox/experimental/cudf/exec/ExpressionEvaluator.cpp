@@ -373,6 +373,7 @@ cudf::ast::expression const& AstContext::pushExprToTree(
   const auto name =
       stripPrefix(expr->name(), CudfOptions::getInstance().prefix());
   auto len = expr->inputs().size();
+  auto& type = expr->type();
 
   if (name == "literal") {
     auto c = dynamic_cast<ConstantExpr*>(expr.get());
@@ -480,8 +481,15 @@ cudf::ast::expression const& AstContext::pushExprToTree(
     VELOX_CHECK_NOT_NULL(fieldExpr, "Expression is not a field");
 
     auto const& colRef = addPrecomputeInstruction(fieldExpr->name(), "year");
+    if (type->kind() == TypeKind::BIGINT) {
+      // Presto returns int64.
+      return tree.push(Operation{Op::CAST_TO_INT64, colRef});
+    } else {
+      // Cudf returns smallint while spark returns int, cast the output column
+      // in execution.
+      return colRef;
+    }
 
-    return tree.push(Operation{Op::CAST_TO_INT64, colRef});
   } else if (name == "length") {
     VELOX_CHECK_EQ(len, 1);
 
