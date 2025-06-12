@@ -74,7 +74,8 @@ public class EvaluationTest {
     final BaseVector out = evaluator.eval(sv, input);
     final String outString = out.toString();
     Assert.assertEquals(
-        ResourceTests.readResourceAsString("eval-output/field-access-1.arrow"), outString);
+        ResourceTests.readResourceAsString("eval-output/field-access-1.arrow").stripTrailing(),
+        outString);
   }
 
   @Test
@@ -92,7 +93,7 @@ public class EvaluationTest {
     for (int i = 0; i < 10; i++) {
       final BaseVector out = evaluator.eval(sv, input);
       final String outString = out.toString();
-      Assert.assertEquals(expected, outString);
+      Assert.assertEquals(expected.stripTrailing(), outString);
     }
   }
 
@@ -115,6 +116,7 @@ public class EvaluationTest {
     final BaseVector out = evaluator.eval(sv, input);
     final String outString = out.toString();
     Assert.assertEquals(
-        ResourceTests.readResourceAsString("eval-output/multiply-1.arrow"), outString);
+        ResourceTests.readResourceAsString("eval-output/multiply-1.arrow").stripTrailing(),
+        outString);
   }
 }
