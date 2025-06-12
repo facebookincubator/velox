@@ -22,7 +22,6 @@ add_library(
   velox4j/jni/JniLoader.cpp
   velox4j/jni/JniWrapper.cpp
   velox4j/jni/StaticJniWrapper.cpp
-  velox4j/iterator/UpIterator.cpp
   velox4j/iterator/DownIterator.cpp
   velox4j/lifecycle/ObjectStore.cpp
   velox4j/arrow/Arrow.cpp
