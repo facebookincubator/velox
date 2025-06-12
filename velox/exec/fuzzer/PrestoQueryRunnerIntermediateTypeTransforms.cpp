@@ -18,6 +18,8 @@
 #include "velox/exec/fuzzer/PrestoQueryRunnerTimestampWithTimeZoneTransform.h"
 #include "velox/expression/Expr.h"
 #include "velox/functions/prestosql/types/HyperLogLogType.h"
+#include "velox/functions/prestosql/types/IPAddressType.h"
+#include "velox/functions/prestosql/types/IPPrefixType.h"
 #include "velox/functions/prestosql/types/TDigestType.h"
 #include "velox/functions/prestosql/types/TimestampWithTimeZoneType.h"
 #include "velox/parse/Expressions.h"
@@ -36,7 +38,14 @@ intermediateTypeTransforms() {
                HYPERLOGLOG(), VARBINARY())},
           {TDIGEST(DOUBLE()),
            std::make_shared<IntermediateTypeTransformUsingCast>(
-               TDIGEST(DOUBLE()), VARBINARY())}};
+               TDIGEST(DOUBLE()), VARBINARY())},
+          {IPADDRESS(),
+           std::make_shared<IntermediateTypeTransformUsingCast>(
+               IPADDRESS(), VARCHAR())},
+          {IPPREFIX(),
+           std::make_shared<IntermediateTypeTransformUsingCast>(
+               IPPREFIX(), VARCHAR())},
+      };
   return intermediateTypeTransforms;
 }
 
@@ -163,7 +172,7 @@ TypePtr replaceIntermediateWithTargetType(TypePtr type) {
     return MAP(
         replaceIntermediateWithTargetType(mapType.keyType()),
         replaceIntermediateWithTargetType(mapType.valueType()));
-  } else if (type->isRow()) {
+  } else if (type->isRow() && !isIPPrefixType(type)) {
     const auto& rowType = type->asRow();
     std::vector<std::string> names;
     std::vector<TypePtr> children;
@@ -244,7 +253,7 @@ core::ExprPtr getProjection(
   } else if (originaltype->isMap()) {
     return getProjectionForMap(
         originaltype, inputExpr, columnAlias, transformDirection);
-  } else if (originaltype->isRow()) {
+  } else if (originaltype->isRow() && !isIPPrefixType(originaltype)) {
     return getProjectionForRow(
         originaltype, inputExpr, columnAlias, transformDirection);
   }
