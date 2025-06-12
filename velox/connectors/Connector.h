@@ -710,6 +710,10 @@ bool unregisterConnector(const std::string& connectorId);
 /// exist.
 std::shared_ptr<Connector> getConnector(const std::string& connectorId);
 
+/// Returns true if a connector with the specified ID has been registered,
+/// false otherwise.
+bool hasConnector(const std::string& connectorId);
+
 /// Returns a map of all (connectorId -> connector) pairs currently
 /// registered.
 const std::unordered_map<std::string, std::shared_ptr<Connector>>&
