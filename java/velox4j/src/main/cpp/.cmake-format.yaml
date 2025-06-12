@@ -32,31 +32,31 @@ format:
     - target_link_libraries
 
 parse:
-  # We define these for our custom 
+  # We define these for our custom
   # functions so they get formatted correctly
   additional_commands:
     velox_add_library:
       pargs:
         nargs: 1+
         flags:
-        - OBJECT
-        - STATIC
-        - SHARED
-        - INTERFACE
+          - OBJECT
+          - STATIC
+          - SHARED
+          - INTERFACE
       kwargs: {}
 
     velox_base_add_library:
       pargs:
         nargs: 1+
         flags:
-        - OBJECT
-        - STATIC
-        - SHARED
-        - INTERFACE
+          - OBJECT
+          - STATIC
+          - SHARED
+          - INTERFACE
       kwargs: {}
 
     velox_compile_definitions:
-      pargs: 1 
+      pargs: 1
       kwargs:
         PRIVATE: '*'
         PUBLIC: '*'
@@ -79,6 +79,6 @@ parse:
         PRIVATE: '*'
         PUBLIC: '*'
         INTERFACE: '*'
-        
+
 markup:
   first_comment_is_literal: true
