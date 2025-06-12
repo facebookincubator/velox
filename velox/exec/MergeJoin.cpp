@@ -92,7 +92,9 @@ void MergeJoin::initialize() {
     initializeFilter(joinNode_->filter(), leftType, rightType);
 
     if (joinNode_->isLeftJoin() || joinNode_->isAntiJoin() ||
-        joinNode_->isRightJoin() || joinNode_->isFullJoin()) {
+        joinNode_->isRightJoin() || joinNode_->isFullJoin() ||
+        joinNode_->isLeftSemiFilterJoin() ||
+        joinNode_->isRightSemiFilterJoin()) {
       joinTracker_ = JoinTracker(outputBatchSize_, pool());
     }
   } else if (joinNode_->isAntiJoin() || joinNode_->isFullJoin()) {
@@ -425,7 +427,8 @@ bool MergeJoin::tryAddOutputRow(
 
     if (joinTracker_) {
       if (isRightJoin(joinType_) ||
-          (isFullJoin(joinType_) && isRightJoinForFullOuter)) {
+          (isFullJoin(joinType_) && isRightJoinForFullOuter) ||
+          isRightSemiFilterJoin(joinType_)) {
         // Record right-side row with a match on the left-side.
         joinTracker_->addMatch(
             rightBatch, rightRow, outputSize_, isRightJoinForFullOuter);
@@ -652,8 +655,9 @@ bool MergeJoin::addToOutputForLeftJoin() {
       // one match on the other side, we could explore specialized algorithms
       // or data structures that short-circuit the join process once a match
       // is found.
-      for (size_t r = isLeftSemiFilterJoin(joinType_) ? numRightBatches - 1
-                                                      : firstRightBatch;
+      for (size_t r = (isLeftSemiFilterJoin(joinType_) && !filter_)
+               ? numRightBatches - 1
+               : firstRightBatch;
            r < numRightBatches;
            ++r) {
         const auto rightBatch = rightMatch_->inputs[r];
@@ -661,7 +665,7 @@ bool MergeJoin::addToOutputForLeftJoin() {
         const auto rightEndRow = r == numRightBatches - 1
             ? rightMatch_->endRowIndex
             : rightBatch->size();
-        if (isLeftSemiFilterJoin(joinType_)) {
+        if (isLeftSemiFilterJoin(joinType_) && !filter_) {
           rightStartRow = rightEndRow - 1;
         }
         if (prepareOutput(leftBatch, rightBatch)) {
@@ -732,8 +736,9 @@ bool MergeJoin::addToOutputForRightJoin() {
       // one match on the other side, we could explore specialized algorithms
       // or data structures that short-circuit the join process once a match
       // is found.
-      for (size_t l = isRightSemiFilterJoin(joinType_) ? numLeftBatches - 1
-                                                       : firstLeftBatch;
+      for (size_t l = (isRightSemiFilterJoin(joinType_) && !filter_)
+               ? numLeftBatches - 1
+               : firstLeftBatch;
            l < numLeftBatches;
            ++l) {
         const auto leftBatch = leftMatch_->inputs[l];
@@ -741,7 +746,7 @@ bool MergeJoin::addToOutputForRightJoin() {
         const auto leftEndRow = l == numLeftBatches - 1
             ? leftMatch_->endRowIndex
             : leftBatch->size();
-        if (isRightSemiFilterJoin(joinType_)) {
+        if (isRightSemiFilterJoin(joinType_) && !filter_) {
           // RightSemiFilter produce each row from the right at most once.
           leftStartRow = leftEndRow - 1;
         }
@@ -1350,14 +1355,21 @@ RowVectorPtr MergeJoin::applyFilter(const RowVectorPtr& output) {
       }
     };
 
+    auto onMatch = [&](auto row) {
+      if (isLeftSemiFilterJoin(joinType_) || isRightSemiFilterJoin(joinType_)) {
+        rawIndices[numPassed++] = row;
+      }
+    };
+
     for (auto i = 0; i < numRows; ++i) {
       if (filterRows.isValid(i)) {
         const bool passed = !decodedFilterResult_.isNullAt(i) &&
             decodedFilterResult_.valueAt<bool>(i);
 
-        joinTracker_->processFilterResult(i, passed, onMiss);
+        joinTracker_->processFilterResult(i, passed, onMiss, onMatch);
 
-        if (!isAntiJoin(joinType_)) {
+        if (!isAntiJoin(joinType_) && !isLeftSemiFilterJoin(joinType_) &&
+            !isRightSemiFilterJoin(joinType_)) {
           if (passed && !joinTracker_->isRightJoinForFullOuter(i)) {
             rawIndices[numPassed++] = i;
           }
