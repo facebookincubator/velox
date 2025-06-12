@@ -14,7 +14,7 @@
 name: Java Bindings - Build
 
 on:
-  workflow_dispatch:
+  workflow_dispatch: {}
   pull_request:
     types: [opened, reopened, synchronize]
     paths:
@@ -32,7 +32,7 @@ on:
       - .github/workflows/java-build.yml
   push:
     branches:
-      - 'main'
+      - main
     paths:
       - velox/**
       - '!velox/docs/**'
@@ -58,9 +58,9 @@ jobs:
   ut-ubuntu24:
     strategy:
       matrix:
-        runner: ["ubuntu-latest", "ubuntu-24.04-arm"]
+        runner: [ubuntu-latest, ubuntu-24.04-arm]
         exclude:
-          - runner: "ubuntu-24.04-arm"
+          - runner: ubuntu-24.04-arm # TODO: Enable the CI on arm64 runners and remove this exclusion.
     runs-on: ${{ matrix.runner }}
     env:
       HOST_CCACHE_DIR: "${{ github.workspace }}/.ccache"

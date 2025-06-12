@@ -24,8 +24,8 @@ format:
   separate_ctrl_name_with_space: false
   separate_fn_name_with_space: false
   dangle_parens: false
-  command_case: "canonical"
-  keyword_case: "unchanged"
+  command_case: canonical
+  keyword_case: unchanged
   always_wrap:
     - set_target_properties
     - target_sources
@@ -63,7 +63,7 @@ parse:
         INTERFACE: '*'
 
     velox_include_directories:
-      pargs: '1+'
+      pargs: 1+
       flags:
         - SYSTEM
         - BEFORE
@@ -74,11 +74,10 @@ parse:
         INTERFACE: '*'
 
     velox_link_libraries:
-      pargs: '1+'
+      pargs: 1+
       kwargs:
         PRIVATE: '*'
         PUBLIC: '*'
         INTERFACE: '*'
-
 markup:
   first_comment_is_literal: true
