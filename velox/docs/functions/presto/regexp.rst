@@ -114,3 +114,8 @@ limited to 20 different expressions per instance and thread of execution.
     array. Trailing empty strings are preserved::
 
         SELECT regexp_split('1a 2b 14m', '\s*[a-z]+\s*'); -- [1, 2, 14, ]
+
+    Note: Similar with Presto's implementation, When the pattern matches an empty string,
+    the function advances by one character and includes the skipped character in the result::
+
+        SELECT regexp_split('1a 2b 14m', ''); -- [, 1, 'a', ' ', 2, 'b', ' ', 1, 4, 'm', ]
