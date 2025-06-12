@@ -85,7 +85,7 @@ class QueryBenchmarkBase {
  public:
   virtual ~QueryBenchmarkBase() = default;
   virtual void initialize();
-  void shutdown();
+  virtual void shutdown();
   std::pair<std::unique_ptr<exec::TaskCursor>, std::vector<RowVectorPtr>> run(
       const exec::test::TpchPlan& tpchPlan);
 
@@ -93,13 +93,6 @@ class QueryBenchmarkBase {
       const std::string& path,
       int32_t numSplitsPerFile,
       const exec::test::TpchPlan& plan);
-
-#ifdef VELOX_ENABLE_CUDF
-  std::vector<std::shared_ptr<connector::ConnectorSplit>> listCudfSplits(
-      const std::string& path,
-      int32_t numSplitsPerFile,
-      const exec::test::TpchPlan& plan);
-#endif
 
   static void ensureTaskCompletion(exec::Task* task);
 
