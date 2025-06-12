@@ -30,6 +30,7 @@
 #include "velox4j/connector/ExternalStream.h"
 
 namespace facebook::velox4j {
+
 // JNI wrapper that exposes a down-iterator to Java.
 class DownIteratorJniWrapper final : public spotify::jni::JavaClass {
  public:
@@ -71,14 +72,17 @@ class DownIterator : public ExternalStream {
  private:
   // Gets the next state.
   State advance();
+
   /// Called once `advance` returns `BLOCKED` state to wait until
   /// the state gets refreshed, either by the next row-vector
   /// is ready for reading or by end of stream.
   void wait();
+
   /// Called once `advance` returns `AVAILABLE` state to get
   /// the next row-vector from the stream.
   facebook::velox::RowVectorPtr get();
-  /// Called to close the iterator.
+
+  // Called to close the iterator.
   void close();
 
   jobject ref_;

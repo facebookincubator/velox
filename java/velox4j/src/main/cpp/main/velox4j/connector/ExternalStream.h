@@ -34,6 +34,7 @@
 #include "velox4j/lifecycle/ObjectStore.h"
 
 namespace facebook::velox4j {
+
 class SuspendedSection {
  public:
   explicit SuspendedSection(facebook::velox::exec::Driver* driver);
@@ -75,9 +76,9 @@ class ExternalStreamConnectorSplit
  public:
   ExternalStreamConnectorSplit(
       const std::string& connectorId,
-      ObjectHandle esId);
+      ObjectHandle externalStreamId);
 
-  const ObjectHandle esId() const;
+  const ObjectHandle externalStreamId() const;
 
   folly::dynamic serialize() const override;
 
@@ -88,7 +89,11 @@ class ExternalStreamConnectorSplit
       void* context);
 
  private:
-  const ObjectHandle esId_;
+  // The pointer of the wrapped external stream.
+  // The pointer is supposed to be converted back to a ExternalStream
+  // by code:
+  // ObjectStore::retrieve<ExternalStream>(esSplit->externalStreamId());
+  const ObjectHandle externalStreamId_;
 };
 
 // The table handle implementation that is used by ExternalStreamConnector.

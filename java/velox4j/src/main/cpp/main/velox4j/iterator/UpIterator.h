@@ -39,10 +39,12 @@ class UpIterator {
 
   // Gets the next state.
   virtual State advance() = 0;
+
   /// Called once `advance` returns `BLOCKED` state to wait until
   /// the state gets refreshed, either by the next row-vector
   /// is ready for reading or by end of stream.
   virtual void wait() = 0;
+
   /// Called to close the iterator.
   virtual facebook::velox::RowVectorPtr get() = 0;
 };
