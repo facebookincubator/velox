@@ -126,6 +126,7 @@ int main(int argc, char** argv) {
       "merge",
       "noisy_count_gaussian",
       "noisy_sum_gaussian",
+      "noisy_avg_gaussian",
   };
 
   if (!FLAGS_presto_url.empty()) {
