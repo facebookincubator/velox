@@ -93,7 +93,7 @@ class MapFromEntriesFunction : public exec::VectorFunction {
     exec::LocalDecodedVector decodedRowVector(context);
     decodedRowVector.get()->decode(*inputValueVector);
     if (inputValueVector->typeKind() == TypeKind::UNKNOWN) {
-      // For presto, if the input array(unknown) then all rows should have
+      // For Presto, if the input is array(unknown), all rows should have
       // errors.
       if (throwOnNull_) {
         try {
@@ -102,6 +102,7 @@ class MapFromEntriesFunction : public exec::VectorFunction {
           context.setErrors(rows, std::current_exception());
         }
       }
+
       auto sizes = allocateSizes(rows.end(), context.pool());
       auto offsets = allocateSizes(rows.end(), context.pool());
 
@@ -231,8 +232,8 @@ class MapFromEntriesFunction : public exec::VectorFunction {
     return mapVector;
   }
 
-  // If true, throws exception for null input or null entry (Presto behavior).
-  // Otherwise, returns null for these cases (Spark behavior).
+  // If true, throws exception when input is NULL or contains NULL entry
+  // (Presto's behavior). Otherwise, returns NULL (Spark's behavior).
   const bool throwOnNull_;
 };
 } // namespace
