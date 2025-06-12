@@ -133,9 +133,9 @@ void CudfFilterProject::filter(
   auto filterColumns = filterEvaluator_.compute(
       inputTableColumns, stream, cudf::get_current_device_resource_ref());
   auto filterColumn = filterColumns[0]->view();
-  auto shouldApplyFilter = filterColumn.has_nulls();
+  bool shouldApplyFilter = filterColumn.has_nulls();
   if (!shouldApplyFilter) {
-    // is all true in filterColumn
+    // check if all values in filterColumn are true
     auto isAllTrue = cudf::reduce(
         filterColumn,
         *cudf::make_all_aggregation<cudf::reduce_aggregation>(),
