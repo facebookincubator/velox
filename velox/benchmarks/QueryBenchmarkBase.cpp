@@ -235,13 +235,16 @@ void QueryBenchmarkBase::shutdown() {
 }
 
 std::pair<std::unique_ptr<TaskCursor>, std::vector<RowVectorPtr>>
-QueryBenchmarkBase::run(const TpchPlan& tpchPlan) {
+QueryBenchmarkBase::run(
+    const TpchPlan& tpchPlan,
+    const std::unordered_map<std::string, std::string>& queryConfigs) {
   int32_t repeat = 0;
   try {
     for (;;) {
       CursorParameters params;
       params.maxDrivers = FLAGS_num_drivers;
       params.planNode = tpchPlan.plan;
+      params.queryConfigs = queryConfigs;
       params.queryConfigs[core::QueryConfig::kMaxSplitPreloadPerDriver] =
           std::to_string(FLAGS_split_preload_per_driver);
       params.queryConfigs[core::QueryConfig::kPreferredOutputBatchBytes] =
@@ -250,11 +253,6 @@ QueryBenchmarkBase::run(const TpchPlan& tpchPlan) {
           std::to_string(FLAGS_preferred_output_batch_rows);
       params.queryConfigs[core::QueryConfig::kMaxOutputBatchRows] =
           std::to_string(FLAGS_max_output_batch_rows);
-      // #ifdef VELOX_ENABLE_CUDF
-      //       params.queryConfigs[cudf_velox::CudfFromVelox::kGpuBatchSizeRows]
-      //       =
-      //           std::to_string(FLAGS_cudf_gpu_batch_size_rows);
-      // #endif
       params.queryConfigs[core::QueryConfig::kMaxPartialAggregationMemory] =
           std::to_string(FLAGS_max_partial_aggregation_memory);
       const int numSplitsPerFile = FLAGS_num_splits_per_file;

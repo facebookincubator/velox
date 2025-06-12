@@ -42,7 +42,7 @@ class TpchBenchmark : public facebook::velox::QueryBenchmarkBase {
       const auto queryPlan = FLAGS_io_meter_column_pct > 0
           ? queryBuilder->getIoMeterPlan(FLAGS_io_meter_column_pct)
           : queryBuilder->getQueryPlan(FLAGS_run_query_verbose);
-      auto [cursor, actualResults] = run(queryPlan);
+      auto [cursor, actualResults] = run(queryPlan, queryConfigs);
       if (!cursor) {
         LOG(ERROR) << "Query terminated with error. Exiting";
         exit(1);
@@ -80,13 +80,16 @@ class TpchBenchmark : public facebook::velox::QueryBenchmarkBase {
 
   void runQuery(int32_t queryId) {
     const auto planContext = queryBuilder->getQueryPlan(queryId);
-    run(planContext);
+    run(planContext, queryConfigs);
   }
 
   void initQueryBuilder();
 
  private:
   std::shared_ptr<facebook::velox::exec::test::TpchQueryBuilder> queryBuilder;
+
+ protected:
+  std::unordered_map<std::string, std::string> queryConfigs;
 };
 
 extern std::unique_ptr<TpchBenchmark> benchmark;

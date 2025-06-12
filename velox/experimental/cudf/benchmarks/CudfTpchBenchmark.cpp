@@ -78,6 +78,10 @@ class CudfTpchBenchmark : public TpchBenchmark {
 
     // Enable cuDF operators
     cudf_velox::registerCudf();
+
+    queryConfigs
+        [facebook::velox::cudf_velox::CudfFromVelox::kGpuBatchSizeRows] =
+            std::to_string(FLAGS_cudf_gpu_batch_size_rows);
   }
 
   std::vector<std::shared_ptr<connector::ConnectorSplit>> listSplits(
