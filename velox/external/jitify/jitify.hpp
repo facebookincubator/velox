@@ -2004,7 +2004,7 @@ static const char* jitsafe_header_stdint_h =
     " #include <cuda/std/cstdint>\n"
     " #define __jitify_using_libcudacxx\n"
     "#endif\n"
-    "#include <climits>\n"
+    "#include <limits.h>\n"
     "namespace __jitify_stdint_ns {\n"
     "typedef signed char      int8_t;\n"
     "typedef signed short     int16_t;\n"
@@ -2076,7 +2076,7 @@ static const char* jitsafe_header_stdint_h =
 // TODO: offsetof
 static const char* jitsafe_header_stddef_h =
     "#pragma once\n"
-    "#include <climits>\n"
+    "#include <limits.h>\n"
     "namespace __jitify_stddef_ns {\n"
     "#if __cplusplus >= 201103L\n"
     "typedef decltype(nullptr) nullptr_t;\n"
