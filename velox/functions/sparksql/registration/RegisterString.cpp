@@ -170,6 +170,8 @@ void registerStringFunctions(const std::string& prefix) {
       int32_t>({prefix + "varchar_type_write_side_check"});
 
   registerFunction<UnBase64Function, Varbinary, Varchar>({prefix + "unbase64"});
+
+  registerFunction<InitCapFunction, Varchar, Varchar>({prefix + "initcap"});
 }
 } // namespace sparksql
 } // namespace facebook::velox::functions
