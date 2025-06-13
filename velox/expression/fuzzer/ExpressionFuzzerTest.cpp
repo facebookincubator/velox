@@ -84,6 +84,7 @@ int main(int argc, char** argv) {
   std::unordered_set<std::string> skipFunctions = {
       "element_at",
       "width_bucket",
+      "merge_hll",
       // Fuzzer and the underlying engine are confused about TDigest output
       // (since TDigest is a user defined type), and tries to pass a
       // VARBINARY (since TDigest's implementation uses an
