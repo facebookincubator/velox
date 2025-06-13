@@ -40,13 +40,19 @@ gcsFileSystemGenerator() {
   static auto filesystemGenerator =
       [](std::shared_ptr<const config::ConfigBase> properties,
          std::string_view filePath) {
-        auto endpoint =
-            properties->get<std::string>("hive.gcs.endpoint").value();
+        const auto file = gcsPath(filePath);
+        std::string bucket;
+        std::string object;
+        setBucketAndKeyFromGcsPath(file, bucket, object);
+        auto cacheKey = fmt::format(
+            "{}-{}",
+            properties->get<std::string>("hive.gcs.endpoint").value(),
+            bucket);
 
         // Check if an instance exists with a read lock (shared).
         auto fs = gcsFileSystems().withRLock(
             [&](auto& instanceMap) -> std::shared_ptr<FileSystem> {
-              auto iterator = instanceMap.find(endpoint);
+              auto iterator = instanceMap.find(cacheKey);
               if (iterator != instanceMap.end()) {
                 return iterator->second;
               }
@@ -59,7 +65,7 @@ gcsFileSystemGenerator() {
         return gcsFileSystems().withWLock(
             [&](auto& instanceMap) -> std::shared_ptr<FileSystem> {
               // Repeat the checks with a write lock.
-              auto iterator = instanceMap.find(endpoint);
+              auto iterator = instanceMap.find(cacheKey);
               if (iterator != instanceMap.end()) {
                 return iterator->second;
               }
@@ -74,7 +80,7 @@ gcsFileSystemGenerator() {
               }
               fs->initializeClient();
 
-              instanceMap.insert({endpoint, fs});
+              instanceMap.insert({cacheKey, fs});
               return fs;
             });
       };
