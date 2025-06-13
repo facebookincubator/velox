@@ -244,12 +244,19 @@ ExchangeClient::pickSourcesToRequestLocked() {
   while (availableSpace > 0 && !producingSources_.empty()) {
     auto& source = producingSources_.front().source;
     int64_t requestBytes = 0;
-    for (auto bytes : producingSources_.front().remainingBytes) {
-      availableSpace -= bytes;
-      if (availableSpace < 0) {
-        break;
+    if (producingSources_.front().remainingBytes.empty()) {
+      // Remote partitioned output has spilled and should have plenty of data
+      // ready to be transferred.
+      requestBytes = availableSpace;
+      availableSpace = 0;
+    } else {
+      for (auto bytes : producingSources_.front().remainingBytes) {
+        availableSpace -= bytes;
+        if (availableSpace < 0) {
+          break;
+        }
+        requestBytes += bytes;
       }
-      requestBytes += bytes;
     }
     if (requestBytes == 0) {
       VELOX_CHECK_LT(availableSpace, 0);
