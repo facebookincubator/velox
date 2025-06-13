@@ -35,6 +35,8 @@
 #include "velox/functions/prestosql/fuzzer/MinMaxInputGenerator.h"
 #include "velox/functions/prestosql/fuzzer/QDigestAggInputGenerator.h"
 #include "velox/functions/prestosql/fuzzer/QDigestAggResultVerifier.h"
+#include "velox/functions/prestosql/fuzzer/TDigestAggregateInputGenerator.h"
+#include "velox/functions/prestosql/fuzzer/TDigestAggregateResultVerifier.h"
 #include "velox/functions/prestosql/registration/RegistrationFunctions.h"
 #include "velox/functions/prestosql/window/WindowFunctionsRegistration.h"
 #include "velox/vector/fuzzer/VectorFuzzer.h"
@@ -82,7 +84,7 @@ getCustomInputGenerators() {
       {"approx_percentile", std::make_shared<ApproxPercentileInputGenerator>()},
       {"qdigest_agg", std::make_shared<QDigestAggInputGenerator>()},
       {"map_union_sum", std::make_shared<MapUnionSumInputGenerator>()},
-  };
+      {"tdigest_agg", std::make_shared<TDigestAggregateInputGenerator>()}};
 }
 
 } // namespace
@@ -137,7 +139,6 @@ int main(int argc, char** argv) {
       // https://github.com/facebookincubator/velox/issues/13547
       "merge",
   };
-
   static const std::unordered_set<std::string> functionsRequireSortedInput = {
       "tdigest_agg",
       "qdigest_agg",
@@ -150,6 +151,7 @@ int main(int argc, char** argv) {
   using facebook::velox::exec::test::MinMaxByResultVerifier;
   using facebook::velox::exec::test::QDigestAggResultVerifier;
   using facebook::velox::exec::test::setupReferenceQueryRunner;
+  using facebook::velox::exec::test::TDigestAggregateResultVerifier;
   using facebook::velox::exec::test::TransformResultVerifier;
 
   auto makeArrayVerifier = []() {
@@ -194,6 +196,7 @@ int main(int argc, char** argv) {
                "transform_values({}, (k, v) -> \"$internal$canonicalize\"(v))")},
           // Semantically inconsistent functions
           {"skewness", nullptr},
+          {"tdigest_agg", std::make_shared<TDigestAggregateResultVerifier>()},
           {"kurtosis", nullptr},
           {"entropy", nullptr},
           // https://github.com/facebookincubator/velox/issues/6330
