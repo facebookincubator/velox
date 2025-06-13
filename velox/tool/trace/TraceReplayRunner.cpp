@@ -18,6 +18,8 @@
 
 #include <gflags/gflags.h>
 
+#include "datainfra/sequence/velox/SequenceStorageConnector.h"
+#include "datainfra/sequence/velox/SequenceStorageTableHandle.h"
 #include "velox/common/file/FileSystems.h"
 #include "velox/common/memory/Memory.h"
 #include "velox/common/memory/SharedArbitrator.h"
@@ -246,7 +248,6 @@ TraceReplayRunner::TraceReplayRunner()
 
 void TraceReplayRunner::init() {
   VELOX_USER_CHECK(!FLAGS_root_dir.empty(), "--root_dir must be provided");
-  VELOX_USER_CHECK(!FLAGS_query_id.empty(), "--query_id must be provided");
   VELOX_USER_CHECK(!FLAGS_node_id.empty(), "--node_id must be provided");
 
   if (!memory::MemoryManager::testInstance()) {
@@ -299,6 +300,7 @@ void TraceReplayRunner::init() {
   connector::hive::HiveConnectorSplit::registerSerDe();
   connector::hive::registerHivePartitionFunctionSerDe();
   connector::hive::HiveBucketProperty::registerSerDe();
+  datainfra::sequence::velox_integration::sequenceStorageTableRegisterSerDe();
 
   functions::prestosql::registerAllScalarFunctions(FLAGS_function_prefix);
   aggregate::prestosql::registerAllAggregateFunctions(FLAGS_function_prefix);
@@ -307,6 +309,12 @@ void TraceReplayRunner::init() {
   if (!facebook::velox::connector::hasConnectorFactory("hive")) {
     connector::registerConnectorFactory(
         std::make_shared<connector::hive::HiveConnectorFactory>());
+  }
+
+  if (!facebook::velox::connector::hasConnectorFactory("sequence")) {
+    connector::registerConnectorFactory(
+        std::make_shared<datainfra::sequence::velox_integration::
+                             SequenceStorageConnectorFactory>("ss"));
   }
 
   fs_ = filesystems::getFileSystem(FLAGS_root_dir, nullptr);
@@ -402,6 +410,26 @@ TraceReplayRunner::createReplayer() const {
         queryCapacityBytes,
         cpuExecutor_.get());
   } else if (traceNodeName == "IndexLookupJoin") {
+    const auto connectorId =
+        taskTraceMetadataReader_->connectorId(FLAGS_node_id);
+    if (const auto& collectors = connector::getAllConnectors();
+        collectors.find(connectorId) == collectors.end()) {
+      auto sequenceStorageConnectorFactory =
+          connector::getConnectorFactory("ss");
+      VELOX_USER_CHECK_NOT_NULL(
+          sequenceStorageConnectorFactory,
+          "sequenceStorageConnectorFactory cannot be NULL");
+
+      const auto ssConnector = sequenceStorageConnectorFactory->newConnector(
+          connectorId,
+          std::make_shared<config::ConfigBase>(
+              std::unordered_map<std::string, std::string>()),
+          ioExecutor_.get(),
+          cpuExecutor_.get());
+
+      VELOX_USER_CHECK_NOT_NULL(ssConnector, "ssConnector cannot be NULL");
+      connector::registerConnector(ssConnector);
+    }
     replayer = std::make_unique<tool::trace::IndexLookupJoinReplayer>(
         FLAGS_root_dir,
         FLAGS_query_id,
