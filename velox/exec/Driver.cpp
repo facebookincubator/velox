@@ -965,7 +965,7 @@ bool Driver::mayPushdownAggregation(Operator* aggregation) const {
     if (aggregation == op) {
       return true;
     }
-    if (!op->isFilter() || !op->preservesOrder()) {
+    if (!op->canHaveLazyOutputVectors() || !op->preservesOrder()) {
       return false;
     }
   }
