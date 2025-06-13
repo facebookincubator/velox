@@ -110,13 +110,11 @@ String Functions
 
 .. spark:function:: initcap(string) -> varchar
 
-   Capitalizes the first letter of each word in a specified string.
-
    The ``initcap`` function converts the first character of each word to uppercase
    and all other characters in the word to lowercase. It supports UTF-8 multibyte
    characters, up to four bytes per character.
 
-   A *word* is defined as a sequence of characters separated by whitespace.
+   A *word* is defined as a sequence of characters separated by whitespace. ::
 
         SELECT initcap('spark sql'); -- Spark Sql
         SELECT initcap('spARK sQL'); -- Spark Sql
