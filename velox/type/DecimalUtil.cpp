@@ -109,7 +109,7 @@ void DecimalUtil::computeAverage(
     remSum = DecimalUtil::divideWithRoundUp<__int128_t, __int128_t, int64_t>(
         quotSum, sum, count, true, 0, 0);
     DecimalUtil::divideWithRoundUp<__int128_t, __int128_t, int64_t>(
-        remTotal, remMul + remSum, count, true, 0, 0);
+        remTotal, remMul + remSum, count, false, 0, 0);
     avg = quotMul + quotSum + remTotal;
   }
 }
