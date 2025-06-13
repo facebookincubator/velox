@@ -142,6 +142,8 @@ class SortedAggregations {
     }
   };
 
+  memory::MemoryPool* pool_;
+
   // Aggregates grouped by sorting keys and orders.
   folly::
       F14FastMap<SortingSpec, std::vector<const AggregateInfo*>, Hash, EqualTo>

@@ -49,7 +49,10 @@ class RawVectorTest : public testing::WithParamInterface<TestParam>,
 };
 
 TEST_P(RawVectorTest, basic) {
-  raw_vector<int32_t> ints(pool_.get());
+  raw_vector<int32_t> ints;
+  if (GetParam().useMemoryPool) {
+    ints = raw_vector<int32_t>(pool_.get());
+  }
   EXPECT_TRUE(ints.empty());
   EXPECT_EQ(0, ints.capacity());
   EXPECT_EQ(0, ints.size());
@@ -60,7 +63,12 @@ TEST_P(RawVectorTest, basic) {
 }
 
 TEST_P(RawVectorTest, padding) {
-  raw_vector<int32_t> ints(1000, pool_.get());
+  raw_vector<int32_t> ints;
+  if (GetParam().useMemoryPool) {
+    ints = raw_vector<int32_t>(1000, pool_.get());
+  } else {
+    ints = raw_vector<int32_t>(1000);
+  }
   EXPECT_EQ(1000, ints.size());
   // Check padding. Write a vector right below start and right after
   // capacity. These should fit and give no error with asan.
@@ -71,7 +79,12 @@ TEST_P(RawVectorTest, padding) {
 }
 
 TEST_P(RawVectorTest, resize) {
-  raw_vector<int32_t> ints(1000, pool_.get());
+  raw_vector<int32_t> ints;
+  if (GetParam().useMemoryPool) {
+    ints = raw_vector<int32_t>(1000, pool_.get());
+  } else {
+    ints = raw_vector<int32_t>(1000);
+  }
   ints.resize(ints.capacity());
   auto size = ints.size();
   ints[size - 1] = 12345;
@@ -105,16 +118,27 @@ TEST_P(RawVectorTest, copyAndMove) {
       {leaf0.get(), nullptr},
       {nullptr, leaf0.get()}};
   for (auto& data : testData) {
-    raw_vector<int32_t> ints(1000, data.sourcePool);
+    raw_vector<int32_t> ints;
+    if (data.sourcePool) {
+      ints = raw_vector<int32_t>(1000, data.sourcePool);
+    } else {
+      ints = raw_vector<int32_t>(1000);
+    }
     // a raw_vector is intentionally not initialized.
     memset(ints.data(), 11, ints.size() * sizeof(int32_t));
     ints[ints.size() - 1] = 12345;
-    raw_vector<int32_t> intsCopy(data.destPool);
+    raw_vector<int32_t> intsCopy;
+    if (data.destPool) {
+      intsCopy = raw_vector<int32_t>(data.destPool);
+    }
     intsCopy = ints;
     EXPECT_EQ(
         0, memcmp(ints.data(), intsCopy.data(), ints.size() * sizeof(int32_t)));
 
-    raw_vector<int32_t> intsMoved(data.destPool);
+    raw_vector<int32_t> intsMoved;
+    if (data.destPool) {
+      intsMoved = raw_vector<int32_t>(data.destPool);
+    }
     intsMoved = std::move(ints);
     EXPECT_TRUE(ints.empty());
 
@@ -128,7 +152,10 @@ TEST_P(RawVectorTest, copyAndMove) {
 }
 
 TEST_P(RawVectorTest, iota) {
-  raw_vector<int32_t> storage(pool_.get());
+  raw_vector<int32_t> storage;
+  if (GetParam().useMemoryPool) {
+    storage = raw_vector<int32_t>(pool_.get());
+  }
   // Small sizes are preallocated.
   EXPECT_EQ(11, iota(12, storage)[11]);
   EXPECT_TRUE(storage.empty());
@@ -138,7 +165,10 @@ TEST_P(RawVectorTest, iota) {
 }
 
 TEST_P(RawVectorTest, iterator) {
-  raw_vector<int> data(pool_.get());
+  raw_vector<int> data;
+  if (GetParam().useMemoryPool) {
+    data = raw_vector<int>(pool_.get());
+  }
   data.push_back(11);
   data.push_back(22);
   data.push_back(33);
@@ -150,7 +180,10 @@ TEST_P(RawVectorTest, iterator) {
 }
 
 TEST_P(RawVectorTest, toStdVector) {
-  raw_vector<int> data(pool_.get());
+  raw_vector<int> data;
+  if (GetParam().useMemoryPool) {
+    data = raw_vector<int>(pool_.get());
+  }
   data.push_back(11);
   data.push_back(22);
   data.push_back(33);
