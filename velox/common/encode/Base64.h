@@ -117,6 +117,8 @@ class Base64 {
 
   /// Encodes the input buffer into Base64 MIME format.
   /// Inserts a CRLF every kMaxLineLength output characters.
+  /// The output buffer must have at least calculateMimeEncodedSize(inputSize)
+  /// bytes available.
   static void
   encodeMime(const char* input, size_t inputSize, char* outputBuffer);
 

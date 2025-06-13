@@ -17,6 +17,7 @@
 
 #include "velox/common/encode/Base64.h"
 #include "velox/functions/Macros.h"
+
 namespace facebook::velox::functions::sparksql {
 
 // Encodes the input binary data into a Base64-encoded string using MIME

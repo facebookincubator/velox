@@ -661,7 +661,6 @@ void Base64::encodeMime(const char* input, size_t inputSize, char* output) {
   }
 
   const char* readPtr = input;
-  const char* endPtr = input + inputSize;
   char* writePtr = output;
   // Bytes per 76-char line.
   const size_t bytesPerLine = (kMaxLineLength / 4) * 3;
