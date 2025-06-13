@@ -526,6 +526,11 @@ class ReaderOptions : public io::ReaderOptions {
     return *this;
   }
 
+  ReaderOptions& setUseNestedColumnNamesForColumnMapping(bool flag) {
+    useNestedColumnNamesForColumnMapping_ = flag;
+    return *this;
+  }
+
   ReaderOptions& setIOExecutor(std::shared_ptr<folly::Executor> executor) {
     ioExecutor_ = std::move(executor);
     return *this;
@@ -596,6 +601,13 @@ class ReaderOptions : public io::ReaderOptions {
     return useColumnNamesForColumnMapping_;
   }
 
+  bool useNestedColumnNamesForColumnMapping() const {
+    if (useNestedColumnNamesForColumnMapping_) {
+      VELOX_CHECK(!useColumnNamesForColumnMapping_);
+    }
+    return useNestedColumnNamesForColumnMapping_;
+  }
+
   const std::shared_ptr<random::RandomSkipTracker>& randomSkip() const {
     return randomSkip_;
   }
@@ -646,6 +658,7 @@ class ReaderOptions : public io::ReaderOptions {
   uint64_t filePreloadThreshold_{kDefaultFilePreloadThreshold};
   bool fileColumnNamesReadAsLowerCase_{false};
   bool useColumnNamesForColumnMapping_{false};
+  bool useNestedColumnNamesForColumnMapping_{false};
   std::shared_ptr<folly::Executor> ioExecutor_;
   std::shared_ptr<random::RandomSkipTracker> randomSkip_;
   std::shared_ptr<velox::common::ScanSpec> scanSpec_;
