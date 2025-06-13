@@ -373,7 +373,9 @@ bool NestedLoopJoinProbe::addToOutput() {
         continue;
       }
 
-      addOutputRow(i);
+      vector_size_t probeRow = i / currentBuild->size() + probeRow_;
+      vector_size_t buildRow = i % currentBuild->size();
+      addOutputRow(probeRow, buildRow);
       ++numOutputRows_;
       probeRowHasMatch_ = true;
 
@@ -502,13 +504,11 @@ RowVectorPtr NestedLoopJoinProbe::getNextCrossProductBatch(
     const std::vector<IdentityProjection>& buildProjections) {
   VELOX_CHECK_GT(buildVector->size(), 0);
 
-  // TODO: For now we only enable the build optimizations in cross-joins, but we
-  // should allow it for other join types as well.
-  if (isCrossJoin() && isSingleBuildRow()) {
+  if (supportSingleBuild() && isSingleBuildRow()) {
     return genCrossProductSingleBuildRow(
         buildVector, outputType, probeProjections, buildProjections);
   }
-  if (isCrossJoin() && isSingleBuildVector()) {
+  if (supportSingleBuild() && isSingleBuildVector()) {
     return genCrossProductSingleBuildVector(
         buildVector, outputType, probeProjections, buildProjections);
   }
@@ -619,9 +619,11 @@ RowVectorPtr NestedLoopJoinProbe::genCrossProductMultipleBuildVectors(
       pool(), outputType, nullptr, numOutputRows, std::move(projectedChildren));
 }
 
-void NestedLoopJoinProbe::addOutputRow(vector_size_t buildRow) {
+void NestedLoopJoinProbe::addOutputRow(
+    vector_size_t probeRow,
+    vector_size_t buildRow) {
   // Probe side is always a dictionary; just populate the index.
-  rawProbeOutputIndices_[numOutputRows_] = probeRow_;
+  rawProbeOutputIndices_[numOutputRows_] = probeRow;
 
   // For the build side, we accumulate the ranges to copy, then copy all of them
   // at once. If records are consecutive and can have a single copy range run.

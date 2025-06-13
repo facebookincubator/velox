@@ -195,7 +195,7 @@ class NestedLoopJoinProbe : public Operator {
   // zero-copy (dictionary indices), and build side projections are marked to be
   // copied using `buildCopyRanges_`; they will be copied later on by
   // `copyBuildValues()`.
-  void addOutputRow(vector_size_t buildRow);
+  void addOutputRow(vector_size_t probeRow, vector_size_t buildRow);
 
   // Checks if it is required to add a probe mismatch row, and does it if
   // needed. The caller needs to ensure there is available space in `output_`
@@ -239,6 +239,12 @@ class NestedLoopJoinProbe : public Operator {
   // Cross joins are translated into NLJ's without a join conditition.
   bool isCrossJoin() const {
     return joinCondition_ == nullptr && !isLeftSemiProjectJoin(joinType_);
+  }
+
+  // TODO: For now we only enable the build optimizations in cross-joins and
+  // inner-joins, but we should allow it for other join types as well.
+  bool supportSingleBuild() const {
+    return isCrossJoin() || isInnerJoin(joinType_);
   }
 
   // If build has a single vector, we can wrap probe and build batches into
