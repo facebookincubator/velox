@@ -23,30 +23,23 @@ namespace facebook::velox::connector::hive::iceberg {
 enum TransformType { IDENTITY, YEAR, MONTH, DAY, HOUR, BUCKET, TRUNCATE };
 
 struct IcebergPartitionField {
-  // The ID of the source column in the table schema.
-  int32_t sourceId_;
-
-  // Optional parameter for transforms that require configuration
-  // (e.g., bucket count or truncate width).
-  std::optional<int32_t> parameter_;
+  // The column name of this partition field as it appears in the partition
+  // spec.
+  std::string name_;
 
   // The transform type applied to the source field (e.g., IDENTITY, BUCKET,
   // TRUNCATE, etc.).
   TransformType transform_;
 
-  // The column name of this partition field as it appears in the partition
-  // spec.
-  std::string name_;
+  // Optional parameter for transforms that require configuration
+  // (e.g., bucket count or truncate width).
+  std::optional<int32_t> parameter_;
 
   IcebergPartitionField(
-      const int32_t sourceId,
-      const std::optional<int32_t> parameter,
+      const std::string& name,
       const TransformType transform,
-      const std::string& name)
-      : sourceId_(sourceId),
-        parameter_(parameter),
-        transform_(transform),
-        name_(name) {}
+      const std::optional<int32_t> parameter)
+      : name_(name), transform_(transform), parameter_(parameter) {}
 };
 
 struct IcebergPartitionSpec {

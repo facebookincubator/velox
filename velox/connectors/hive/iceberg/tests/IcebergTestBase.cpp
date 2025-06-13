@@ -149,8 +149,7 @@ std::shared_ptr<IcebergPartitionSpec> IcebergTestBase::createPartitionSpec(
     }
 
     auto sourceId = columnNameToIdMapping.at(name);
-    fields.push_back(
-        IcebergPartitionField(sourceId, parameter, transformType, name));
+    fields.push_back(IcebergPartitionField(name, transformType, parameter));
   }
 
   return std::make_shared<IcebergPartitionSpec>(1, fields);
