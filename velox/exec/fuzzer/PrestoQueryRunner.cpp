@@ -33,9 +33,12 @@
 #include "velox/exec/fuzzer/PrestoSql.h"
 #include "velox/exec/tests/utils/QueryAssertions.h"
 #include "velox/functions/prestosql/types/GeometryType.h"
+#include "velox/functions/prestosql/types/HyperLogLogType.h"
 #include "velox/functions/prestosql/types/IPAddressType.h"
 #include "velox/functions/prestosql/types/IPPrefixType.h"
 #include "velox/functions/prestosql/types/JsonType.h"
+#include "velox/functions/prestosql/types/QDigestType.h"
+#include "velox/functions/prestosql/types/TDigestType.h"
 #include "velox/functions/prestosql/types/TimestampWithTimeZoneType.h"
 #include "velox/functions/prestosql/types/UuidType.h"
 #include "velox/serializers/PrestoSerializer.h"
@@ -303,7 +306,9 @@ bool PrestoQueryRunner::isConstantExprSupported(
     return type->isPrimitiveType() && !type->isTimestamp() &&
         !isJsonType(type) && !type->isIntervalDayTime() &&
         !isIPAddressType(type) && !isIPPrefixType(type) && !isUuidType(type) &&
-        !isTimestampWithTimeZoneType(type);
+        !isTimestampWithTimeZoneType(type) && !isHyperLogLogType(type) &&
+        !isTDigestType(type) && !isQDigestType(type);
+    ;
   }
   return true;
 }
@@ -321,8 +326,6 @@ bool PrestoQueryRunner::isSupported(const exec::FunctionSignature& signature) {
       usesTypeName(signature, "bingtile") ||
       usesTypeName(signature, "interval year to month") ||
       usesTypeName(signature, "hugeint") ||
-      usesTypeName(signature, "hyperloglog") ||
-      usesTypeName(signature, "tdigest") ||
       usesInputTypeName(signature, "json") ||
       usesInputTypeName(signature, "ipaddress") ||
       usesInputTypeName(signature, "ipprefix") ||
