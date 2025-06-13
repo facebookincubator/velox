@@ -13,14 +13,26 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-
 #pragma once
+#include <chrono>
+#include <thread>
 
 namespace facebook::velox::parquet {
 
-void registerParquetReaderFactory();
-void registerParquetReaderFactory(bool clacEnabled);
-
-void unregisterParquetReaderFactory();
+template <typename Func>
+void retry(int attempts, std::chrono::milliseconds delay, Func func) {
+  for (int i = 0; i < attempts; ++i) {
+    try {
+      func();
+      return; // Success
+    } catch (const std::exception& e) {
+      if (i < attempts - 1) {
+        std::this_thread::sleep_for(delay); // Wait before retrying
+      } else {
+        throw e;
+      }
+    }
+  }
+}
 
 } // namespace facebook::velox::parquet

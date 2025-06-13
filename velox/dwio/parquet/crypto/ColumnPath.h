@@ -13,14 +13,30 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-
 #pragma once
+#include <memory>
+#include <string>
+#include <vector>
 
 namespace facebook::velox::parquet {
 
-void registerParquetReaderFactory();
-void registerParquetReaderFactory(bool clacEnabled);
+class ColumnPath {
+ public:
+  ColumnPath() : path_() {}
+  explicit ColumnPath(const std::vector<std::string>& path) : path_(path) {}
+  explicit ColumnPath(std::vector<std::string>&& path)
+      : path_(std::move(path)) {}
 
-void unregisterParquetReaderFactory();
+  static std::shared_ptr<ColumnPath> fromDotString(
+      const std::string& dotString);
+
+  std::shared_ptr<ColumnPath> extend(const std::string& nodeName) const;
+  std::string toDotString() const;
+
+  const std::vector<std::string>& toDotVector() const;
+
+ protected:
+  std::vector<std::string> path_;
+};
 
 } // namespace facebook::velox::parquet
