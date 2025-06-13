@@ -15,6 +15,7 @@
  */
 
 #include "velox/exec/fuzzer/PrestoQueryRunnerIntermediateTypeTransforms.h"
+#include "velox/exec/fuzzer/PrestoQueryRunnerIntervalTransform.h"
 #include "velox/exec/fuzzer/PrestoQueryRunnerTimestampWithTimeZoneTransform.h"
 #include "velox/expression/Expr.h"
 #include "velox/functions/prestosql/types/HyperLogLogType.h"
@@ -47,7 +48,9 @@ intermediateTypeTransforms() {
                QDIGEST(BIGINT()), VARBINARY())},
           {QDIGEST(REAL()),
            std::make_shared<IntermediateTypeTransformUsingCast>(
-               QDIGEST(REAL()), VARBINARY())}};
+               QDIGEST(REAL()), VARBINARY())},
+          {INTERVAL_DAY_TIME(), std::make_shared<IntervalDayTimeTransform>()},
+      };
   return intermediateTypeTransforms;
 }
 

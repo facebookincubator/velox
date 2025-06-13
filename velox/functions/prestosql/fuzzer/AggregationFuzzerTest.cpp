@@ -139,6 +139,7 @@ int main(int argc, char** argv) {
       // Skip non-deterministic functions.
       // https://github.com/facebookincubator/velox/issues/13547
       "merge",
+      "to_milliseconds", // https://github.com/prestodb/presto/issues/25275
   };
 
   static const std::unordered_set<std::string> functionsRequireSortedInput = {
