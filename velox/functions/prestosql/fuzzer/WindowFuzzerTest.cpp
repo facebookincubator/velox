@@ -124,6 +124,7 @@ int main(int argc, char** argv) {
       "noisy_count_if_gaussian",
       // https://github.com/facebookincubator/velox/issues/13547
       "merge",
+      "to_milliseconds", // https://github.com/prestodb/presto/issues/25275
   };
 
   if (!FLAGS_presto_url.empty()) {
