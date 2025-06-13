@@ -8,6 +8,32 @@ More details about window functions can be found at :doc:`/develop/window`.
 Value functions
 ---------------
 
+.. function:: lag(x[, offset[, default_value]]) -> [same as input]
+
+Returns the value at ``offset`` rows before the current row in the window partition.
+The input ``x`` can be a constant value or a column reference. Offsets start at ``0``,
+which is the current row. The default ``offset`` is ``1``.  The offset can be a constant
+value or a column reference. If the offset is ``null``, ``null`` is returned. If the
+offset refers to a row that is not within the partition, the ``default_value`` is returned,
+or if ``default_value`` is not specified ``null`` is returned.
+
+If ``IGNORE NULLS`` is specified, ``null`` values are ignored during offset counting.
+If not enough non-null values are found during offset counting, ``default_value``
+is returned.
+
+.. function:: lead(x[, offset[, default_value]]) -> [same as input]
+
+Returns the value at ``offset`` rows after the current row in the window partition.
+The input ``x`` can be a constant value or a column reference. Offsets start at ``0``,
+which is the current row. The default ``offset`` is ``1``. The offset can be a constant
+value or a column reference. If the offset is ``null``, ``null`` is returned. If the
+offset refers to a row that is not within the partition, the ``default_value`` is returned,
+or if ``default_value`` is not specified ``null`` is returned.
+
+If ``IGNORE NULLS`` is specified, ``null`` values are ignored during offset counting.
+If not enough non-null values are found during offset counting, ``default_value``
+is returned.
+
 .. function:: nth_value(x, offset) -> [same as input]
    :noindex:
 
