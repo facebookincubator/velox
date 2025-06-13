@@ -27,7 +27,7 @@ void IcebergTestBase::SetUp() {
   parquet::registerParquetWriterFactory();
   Type::registerSerDe();
 
-  // Initialize session properties and config
+  // Initialize session properties and config.
   connectorSessionProperties_ = std::make_shared<config::ConfigBase>(
       std::unordered_map<std::string, std::string>(), /*mutable=*/true);
 
@@ -37,12 +37,12 @@ void IcebergTestBase::SetUp() {
 
   setupMemoryPools("IcebergTestBase");
 
-  // Initialize vector fuzzer for test data generation
+  // Initialize vector fuzzer for test data generation.
   fuzzerOptions_.vectorSize = 100;
   fuzzerOptions_.nullRatio = 0.1;
   fuzzer_ = std::make_unique<VectorFuzzer>(fuzzerOptions_, opPool_.get());
 
-  // Default file format is PARQUET
+  // Default file format is PARQUET.
   fileFormat_ = dwio::common::FileFormat::PARQUET;
   vectorMaker_ =
       std::make_unique<facebook::velox::test::VectorMaker>(opPool_.get());
@@ -86,9 +86,9 @@ void IcebergTestBase::setupMemoryPools(const std::string& name) {
 }
 
 std::vector<RowVectorPtr> IcebergTestBase::createTestData(
-    const int32_t numBatches,
-    const int32_t rowsPerBatch,
-    const double nullRatio) {
+    int32_t numBatches,
+    vector_size_t rowsPerBatch,
+    double nullRatio) {
   std::vector<RowVectorPtr> vectors;
   vectors.reserve(numBatches);
 
@@ -160,40 +160,17 @@ std::shared_ptr<IcebergInsertTableHandle>
 IcebergTestBase::createIcebergInsertTableHandle(
     const RowTypePtr& rowType,
     const std::string& outputDirectoryPath,
-    const std::vector<std::string>& partitionTransforms,
-    const std::vector<std::string>& sortedBy) {
-  std::unordered_set<std::string> partitionColumns;
-  for (const auto& transform : partitionTransforms) {
-    std::string columnName;
-    if (transform.find('(') != std::string::npos) {
-      const size_t openParen = transform.find('(');
-      auto comma = 0;
-      // For transforms like "truncate(c_int, 10)" or "bucket(c_varchar, 4)"
-      if (transform.find(',') != std::string::npos) {
-        comma = transform.find(',');
-      }
-      // year, month, day
-      else {
-        comma = transform.find(')');
-      }
-      columnName = transform.substr(openParen + 1, comma - openParen - 1);
-    } else {
-      // identity
-      columnName = transform;
-    }
-
-    columnName.erase(0, columnName.find_first_not_of(" \t"));
-    columnName.erase(columnName.find_last_not_of(" \t") + 1);
-    partitionColumns.insert(columnName);
-  }
-
+    const std::vector<std::string>& partitionTransforms) {
   std::vector<std::shared_ptr<const HiveColumnHandle>> columnHandles;
   for (auto i = 0; i < rowType->size(); ++i) {
     auto columnName = rowType->nameOf(i);
-    auto columnType = partitionColumns.count(columnName) > 0
-        ? HiveColumnHandle::ColumnType::kPartitionKey
-        : HiveColumnHandle::ColumnType::kRegular;
-
+    auto columnType = HiveColumnHandle::ColumnType::kRegular;
+    for (auto transform : partitionTransforms) {
+      if (columnName == transform) {
+        columnType = HiveColumnHandle::ColumnType::kPartitionKey;
+        break;
+      }
+    }
     columnHandles.push_back(
         std::make_shared<HiveColumnHandle>(
             columnName, columnType, rowType->childAt(i), rowType->childAt(i)));
@@ -224,8 +201,7 @@ IcebergTestBase::createIcebergInsertTableHandle(
 std::shared_ptr<IcebergDataSink> IcebergTestBase::createIcebergDataSink(
     const RowTypePtr& rowType,
     const std::string& outputDirectoryPath,
-    const std::vector<std::string>& partitionTransforms,
-    const std::vector<std::string>& sortedBy) {
+    const std::vector<std::string>& partitionTransforms) {
   // Create writer options with a flush policy
   auto writerOptions = std::make_shared<parquet::WriterOptions>();
   writerOptions->flushPolicyFactory = []() {
@@ -234,7 +210,7 @@ std::shared_ptr<IcebergDataSink> IcebergTestBase::createIcebergDataSink(
   };
 
   auto tableHandle = createIcebergInsertTableHandle(
-      rowType, outputDirectoryPath, partitionTransforms, sortedBy);
+      rowType, outputDirectoryPath, partitionTransforms);
   return std::make_shared<IcebergDataSink>(
       rowType,
       tableHandle,

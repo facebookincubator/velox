@@ -34,12 +34,11 @@ class IcebergInsertTest
              DECIMAL(18, 5),
              BOOLEAN(),
              VARCHAR()});
+    fileFormat_ = GetParam();
   }
 };
 
 TEST_P(IcebergInsertTest, testIcebergTableWrite) {
-  const auto& format = GetParam();
-  fileFormat_ = format;
   const auto outputDirectory = exec::test::TempDirectoryPath::create();
   const auto dataPath = fmt::format("{}/data", outputDirectory->getPath());
   constexpr int32_t numBatches = 10;
@@ -62,9 +61,6 @@ TEST_P(IcebergInsertTest, testIcebergTableWrite) {
 }
 
 TEST_P(IcebergInsertTest, testSingleColumnAsPartition) {
-  const auto& format = GetParam();
-  fileFormat_ = format;
-
   for (int32_t colIndex = 0; colIndex < rowType_->size() - 1; colIndex++) {
     const auto& colName = rowType_->nameOf(colIndex);
     const auto outputDirectory = exec::test::TempDirectoryPath::create();
@@ -128,8 +124,6 @@ TEST_P(IcebergInsertTest, testSingleColumnAsPartition) {
 }
 
 TEST_P(IcebergInsertTest, testColumnCombinationsAsPartition) {
-  const auto& format = GetParam();
-  fileFormat_ = format;
   std::vector<std::vector<int32_t>> columnCombinations = {
       {0, 1}, // BIGINT, INTEGER
       {2, 1}, // SMALLINT, INTEGER
@@ -201,12 +195,3 @@ INSTANTIATE_TEST_SUITE_P(
         ));
 
 } // namespace facebook::velox::connector::hive::iceberg::test
-
-// This main is needed for some tests on linux.
-int main(int argc, char** argv) {
-  testing::InitGoogleTest(&argc, argv);
-  // Signal handler required for ThreadDebugInfoTest
-  facebook::velox::process::addDefaultFatalSignalHandler();
-  folly::Init init{&argc, &argv, false};
-  return RUN_ALL_TESTS();
-}

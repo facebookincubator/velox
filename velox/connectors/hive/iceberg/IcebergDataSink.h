@@ -60,7 +60,7 @@ struct IcebergPartitionSpec {
 };
 
 /// Represents a request for Iceberg write.
-class IcebergInsertTableHandle : public HiveInsertTableHandle {
+class IcebergInsertTableHandle final : public HiveInsertTableHandle {
  public:
   IcebergInsertTableHandle(
       std::vector<std::shared_ptr<const HiveColumnHandle>> inputColumns,
@@ -80,7 +80,7 @@ class IcebergInsertTableHandle : public HiveInsertTableHandle {
             serdeParameters),
         partitionSpec_(std::move(partitionSpec)) {}
 
-  virtual ~IcebergInsertTableHandle() = default;
+  ~IcebergInsertTableHandle() = default;
 
   std::shared_ptr<const IcebergPartitionSpec> partitionSpec() const {
     return partitionSpec_;
@@ -101,7 +101,7 @@ class IcebergDataSink : public HiveDataSink {
 
   std::vector<std::string> close() override;
 
- protected:
+ private:
   IcebergDataSink(
       RowTypePtr inputType,
       std::shared_ptr<const HiveInsertTableHandle> insertTableHandle,
@@ -111,7 +111,6 @@ class IcebergDataSink : public HiveDataSink {
       const std::vector<column_index_t>& partitionChannels,
       const std::vector<column_index_t>& dataChannels);
 
- private:
   void splitInputRowsAndEnsureWriters(RowVectorPtr input) override;
 
   void extendBuffersForPartitionedTables() override;

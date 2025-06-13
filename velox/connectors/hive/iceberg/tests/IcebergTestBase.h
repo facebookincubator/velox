@@ -19,7 +19,6 @@
 #include <gtest/gtest.h>
 
 #include "velox/connectors/hive/iceberg/IcebergDataSink.h"
-#include "velox/connectors/hive/iceberg/IcebergDeleteFile.h"
 #include "velox/connectors/hive/iceberg/IcebergSplit.h"
 #include "velox/exec/tests/utils/HiveConnectorTestBase.h"
 #include "velox/exec/tests/utils/TempDirectoryPath.h"
@@ -37,9 +36,9 @@ class IcebergTestBase : public exec::test::HiveConnectorTestBase {
   void TearDown() override;
 
   std::vector<RowVectorPtr> createTestData(
-      const int32_t numBatches,
-      const int32_t rowsPerBatch,
-      const double nullRatio = 0.0);
+      int32_t numBatches,
+      vector_size_t rowsPerBatch,
+      double nullRatio = 0.0);
 
   std::shared_ptr<IcebergPartitionSpec> createPartitionSpec(
       const std::unordered_map<std::string, std::int32_t>&
@@ -50,14 +49,12 @@ class IcebergTestBase : public exec::test::HiveConnectorTestBase {
   std::shared_ptr<IcebergInsertTableHandle> createIcebergInsertTableHandle(
       const RowTypePtr& rowType,
       const std::string& outputDirectoryPath,
-      const std::vector<std::string>& partitionTransforms = {},
-      const std::vector<std::string>& sortedBy = {});
+      const std::vector<std::string>& partitionTransforms = {});
 
   std::shared_ptr<IcebergDataSink> createIcebergDataSink(
       const RowTypePtr& rowType,
       const std::string& outputDirectoryPath,
-      const std::vector<std::string>& partitionTransforms = {},
-      const std::vector<std::string>& sortedBy = {});
+      const std::vector<std::string>& partitionTransforms = {});
 
   std::vector<std::string> listFiles(const std::string& dirPath);
 
@@ -69,15 +66,17 @@ class IcebergTestBase : public exec::test::HiveConnectorTestBase {
 
   void setupMemoryPools(const std::string& name);
 
+  dwio::common::FileFormat fileFormat_;
+  RowTypePtr rowType_;
+
+ private:
   static constexpr const char* kHiveConnectorId = "test-hive";
   std::shared_ptr<memory::MemoryPool> root_;
   std::shared_ptr<memory::MemoryPool> opPool_;
   std::shared_ptr<memory::MemoryPool> connectorPool_;
-  RowTypePtr rowType_;
   std::shared_ptr<config::ConfigBase> connectorSessionProperties_;
   std::shared_ptr<HiveConfig> connectorConfig_;
   std::unique_ptr<ConnectorQueryCtx> connectorQueryCtx_;
-  dwio::common::FileFormat fileFormat_;
   VectorFuzzer::Options fuzzerOptions_;
   std::unique_ptr<VectorFuzzer> fuzzer_;
   std::unique_ptr<velox::test::VectorMaker> vectorMaker_;
