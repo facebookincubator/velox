@@ -8139,4 +8139,128 @@ DEBUG_ONLY_TEST_F(HashJoinTest, hashTableCleanupAfterProbeFinish) {
       .run();
   ASSERT_TRUE(tableEmpty);
 }
+
+TEST_F(HashJoinTest, aggregatePushdownThroughProbe) {
+  // Test the capability of aggregation pushdown through the hash probe. The
+  // test evaluates cases where the pushdown should or should not happen.
+  // Besides the join type, several other configurations/runtime situtation
+  // could also affect if the pushdown can happen: (1) injectSpill must be
+  // false; (2) the kPreferredOutputBatchRows must be large enough so that the
+  // the output will not be split into several batches, resulting in
+  // materialization; (3) the probe row cannot have more than one matches,
+  // otherwise the output must be fully materialized.
+  const vector_size_t probeSize = 2'400;
+  const vector_size_t buildSize = 2'000;
+
+  auto probeVectors = makeBatches(1, [&](int32_t /*unused*/) {
+    return makeRowVector(
+        {"t0", "t1"},
+        {
+            makeFlatVector<int64_t>(probeSize, [](auto row) { return row; }),
+            makeFlatVector<int64_t>(
+                probeSize, [](auto row) { return row * 2 + 1; }),
+        });
+  });
+  std::vector<RowVectorPtr> buildVectors;
+
+  auto checkPushDown = [&](const core::JoinType& joinType,
+                           bool moreThanOneMatch,
+                           const std::string& referenceSQL) {
+    std::shared_ptr<TempFilePath> probeFile = TempFilePath::create();
+    writeToFile(probeFile->getPath(), probeVectors);
+
+    std::shared_ptr<TempFilePath> buildFile = TempFilePath::create();
+    writeToFile(buildFile->getPath(), buildVectors);
+
+    createDuckDbTable("t", probeVectors);
+    createDuckDbTable("u", buildVectors);
+
+    core::PlanNodeId probeScanId;
+    core::PlanNodeId buildScanId;
+    auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+    auto plan = PlanBuilder(planNodeIdGenerator)
+                    .tableScan(asRowType(probeVectors[0]->type()))
+                    .capturePlanNodeId(probeScanId)
+                    .hashJoin(
+                        {"t0"},
+                        {"u0"},
+                        PlanBuilder(planNodeIdGenerator)
+                            .tableScan(asRowType(buildVectors[0]->type()))
+                            .capturePlanNodeId(buildScanId)
+                            .planNode(),
+                        "",
+                        {"t0", "t1", "u1"},
+                        joinType)
+                    .singleAggregation({"t0"}, {"max(t1)", "max(u1)"})
+                    .planNode();
+
+    SplitInput splitInput = {
+        {probeScanId,
+         {exec::Split(makeHiveConnectorSplit(probeFile->getPath()))}},
+        {buildScanId,
+         {exec::Split(makeHiveConnectorSplit(buildFile->getPath()))}},
+    };
+
+    HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
+        .planNode(plan)
+        .inputSplits(splitInput)
+        .checkSpillStats(false)
+        .referenceQuery(referenceSQL)
+        .injectSpill(false)
+        .config(
+            core::QueryConfig::kPreferredOutputBatchRows,
+            std::to_string(probeSize))
+        .verifier([&](const std::shared_ptr<Task>& task, bool /*unused*/) {
+          auto opStats = toOperatorStats(task->taskStats());
+          auto stats = opStats.at("Aggregation").runtimeStats;
+          auto it = stats.find("loadedToValueHook");
+          const auto loadedToValueHook = it != stats.end() ? it->second.sum : 0;
+
+          const bool shouldPushDown = !moreThanOneMatch &&
+              (joinType == core::JoinType::kInner ||
+               joinType == core::JoinType::kLeft);
+
+          if (shouldPushDown) {
+            EXPECT_GT(loadedToValueHook, 0);
+          } else {
+            EXPECT_EQ(loadedToValueHook, 0);
+          }
+        })
+        .run();
+  };
+
+  std::vector<std::pair<core::JoinType, std::string>> joins = {
+      {core::JoinType::kInner,
+       "SELECT t0, max(t1), max(u1) FROM t JOIN u ON t0 = u0 GROUP BY t0"},
+      {core::JoinType::kLeft,
+       "SELECT t0, max(t1), max(u1) FROM t LEFT JOIN u ON t0 = u0 GROUP BY t0"},
+      {core::JoinType::kRight,
+       "SELECT t0, max(t1), max(u1) FROM t RIGHT JOIN u ON t0 = u0 GROUP BY t0 "},
+      {core::JoinType::kFull,
+       "SELECT t0, max(t1), max(u1) FROM t FULL OUTER JOIN u ON t0 = u0 GROUP BY t0 "}};
+
+  std::vector<bool> matchSettings = {true, false};
+  for (const bool moreThanOneMatch : matchSettings) {
+    buildVectors = makeBatches(1, [&](int32_t /*unused*/) {
+      return makeRowVector(
+          {"u0", "u1"},
+          {
+              makeFlatVector<int64_t>(
+                  buildSize,
+                  [&](auto row) {
+                    return row + (moreThanOneMatch ? row % 2 : 0);
+                  }),
+              makeFlatVector<int64_t>(
+                  buildSize, [](auto row) { return row * 2 + 1; }),
+          });
+    });
+    for (const auto& [joinType, joinTypeSql] : joins) {
+      SCOPED_TRACE(fmt::format(
+          "moreThanOneMatch: {}, joinTypeSql: {}",
+          moreThanOneMatch,
+          joinTypeSql));
+      checkPushDown(joinType, moreThanOneMatch, joinTypeSql);
+    }
+  }
+}
 } // namespace
