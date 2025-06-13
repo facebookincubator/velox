@@ -855,8 +855,8 @@ HiveWriterId HiveDataSink::getWriterId(size_t row) const {
 
 void HiveDataSink::updatePartitionRows(
     uint32_t index,
-    size_t numRows,
-    size_t row) {
+    vector_size_t numRows,
+    vector_size_t row) {
   VELOX_DCHECK_LT(index, partitionSizes_.size());
   VELOX_DCHECK_EQ(partitionSizes_.size(), partitionRows_.size());
   VELOX_DCHECK_EQ(partitionRows_.size(), rawPartitionRows_.size());

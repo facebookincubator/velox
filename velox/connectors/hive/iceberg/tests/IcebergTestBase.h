@@ -36,20 +36,14 @@ class IcebergTestBase : public exec::test::HiveConnectorTestBase {
   void SetUp() override;
   void TearDown() override;
 
-  int32_t getColumnMetaData(
-      const std::string& columnName,
-      const std::shared_ptr<const IcebergSchema>& schema) {
-    const auto idIter = schema->columnNameToIdMapping.find(columnName);
-    return idIter->second;
-  }
-
   std::vector<RowVectorPtr> createTestData(
       const int32_t numBatches,
       const int32_t rowsPerBatch,
       const double nullRatio = 0.0);
 
   std::shared_ptr<IcebergPartitionSpec> createPartitionSpec(
-      const std::shared_ptr<IcebergSchema>& schema,
+      const std::unordered_map<std::string, std::int32_t>&
+          columnNameToIdMapping,
       const std::vector<std::string>& transformSpecs,
       memory::MemoryPool* memoryPool);
 

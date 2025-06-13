@@ -19,14 +19,6 @@
 #include "velox/connectors/hive/HiveDataSink.h"
 
 namespace facebook::velox::connector::hive::iceberg {
-struct IcebergSchema {
-  const std::unordered_map<std::string, std::int32_t> columnNameToIdMapping;
-
-  IcebergSchema(
-      const std::unordered_map<std::string, std::int32_t>&
-          _columnNameToIdMapping)
-      : columnNameToIdMapping(_columnNameToIdMapping) {}
-};
 
 enum TransformType { IDENTITY, YEAR, MONTH, DAY, HOUR, BUCKET, TRUNCATE };
 
@@ -59,14 +51,12 @@ struct IcebergPartitionField {
 
 struct IcebergPartitionSpec {
   const int32_t specId;
-  const std::shared_ptr<const IcebergSchema> schema;
   const std::vector<IcebergPartitionField> fields;
 
   IcebergPartitionSpec(
       const int32_t _specId,
-      std::shared_ptr<const IcebergSchema> _schema,
-      std::vector<IcebergPartitionField> _fields)
-      : specId(_specId), schema(_schema), fields(_fields) {}
+      const std::vector<IcebergPartitionField>& _fields)
+      : specId(_specId), fields(_fields) {}
 };
 
 /// Represents a request for Iceberg write.
@@ -75,7 +65,6 @@ class IcebergInsertTableHandle : public HiveInsertTableHandle {
   IcebergInsertTableHandle(
       std::vector<std::shared_ptr<const HiveColumnHandle>> inputColumns,
       std::shared_ptr<const LocationHandle> locationHandle,
-      std::shared_ptr<const IcebergSchema> schema,
       std::shared_ptr<const IcebergPartitionSpec> partitionSpec,
       dwio::common::FileFormat tableStorageFormat =
           dwio::common::FileFormat::PARQUET,
@@ -89,7 +78,6 @@ class IcebergInsertTableHandle : public HiveInsertTableHandle {
             std::move(bucketProperty),
             compressionKind,
             serdeParameters),
-        schema_(std::move(schema)),
         partitionSpec_(std::move(partitionSpec)) {}
 
   virtual ~IcebergInsertTableHandle() = default;
@@ -99,7 +87,6 @@ class IcebergInsertTableHandle : public HiveInsertTableHandle {
   }
 
  private:
-  std::shared_ptr<const IcebergSchema> schema_;
   std::shared_ptr<const IcebergPartitionSpec> partitionSpec_;
 };
 

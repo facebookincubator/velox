@@ -516,6 +516,11 @@ class HiveDataSink : public DataSink {
       CommitStrategy commitStrategy,
       const std::shared_ptr<const HiveConfig>& hiveConfig);
 
+  static uint32_t maxBucketCount() {
+    static const uint32_t kMaxBucketCount = 100'000;
+    return kMaxBucketCount;
+  }
+
   void appendData(RowVectorPtr input) override;
 
   bool finish() override;
@@ -541,7 +546,9 @@ class HiveDataSink : public DataSink {
       const std::vector<column_index_t>& dataChannels);
 
   void setState(State newState);
+
   void closeInternal();
+
   // Returns true if the table is partitioned.
   FOLLY_ALWAYS_INLINE bool isPartitioned() const {
     return partitionIdGenerator_ != nullptr;
@@ -555,7 +562,8 @@ class HiveDataSink : public DataSink {
   // returns the corresponding index in 'writers_'.
   uint32_t ensureWriter(const HiveWriterId& id);
 
-  void updatePartitionRows(uint32_t index, size_t numRows, size_t row);
+  void
+  updatePartitionRows(uint32_t index, vector_size_t numRows, vector_size_t row);
 
   virtual void extendBuffersForPartitionedTables();
 

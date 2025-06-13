@@ -104,7 +104,7 @@ std::vector<RowVectorPtr> IcebergTestBase::createTestData(
 }
 
 std::shared_ptr<IcebergPartitionSpec> IcebergTestBase::createPartitionSpec(
-    const std::shared_ptr<IcebergSchema>& schema,
+    const std::unordered_map<std::string, std::int32_t>& columnNameToIdMapping,
     const std::vector<std::string>& transformSpecs,
     memory::MemoryPool* memoryPool) {
   std::vector<IcebergPartitionField> fields;
@@ -148,12 +148,12 @@ std::shared_ptr<IcebergPartitionSpec> IcebergTestBase::createPartitionSpec(
       VELOX_FAIL("Unsupported transform specification: {}", spec);
     }
 
-    auto sourceId = getColumnMetaData(name, schema);
+    auto sourceId = columnNameToIdMapping.at(name);
     fields.push_back(
         IcebergPartitionField(sourceId, parameter, transformType, name));
   }
 
-  return std::make_shared<IcebergPartitionSpec>(1, schema, fields);
+  return std::make_shared<IcebergPartitionSpec>(1, fields);
 }
 
 std::shared_ptr<IcebergInsertTableHandle>
@@ -209,15 +209,12 @@ IcebergTestBase::createIcebergInsertTableHandle(
     columnNameToIdMapping[rowType->nameOf(i)] = i + 1;
   }
 
-  auto schema = std::make_shared<IcebergSchema>(columnNameToIdMapping);
-
-  auto partitionSpec =
-      createPartitionSpec(schema, partitionTransforms, opPool_.get());
+  auto partitionSpec = createPartitionSpec(
+      columnNameToIdMapping, partitionTransforms, opPool_.get());
 
   return std::make_shared<IcebergInsertTableHandle>(
       columnHandles,
       locationHandle,
-      schema,
       partitionSpec,
       fileFormat_,
       nullptr,
