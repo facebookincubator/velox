@@ -264,6 +264,15 @@ void IntegerStatisticsBuilder::merge(
 }
 
 void IntegerStatisticsBuilder::toProto(proto::ColumnStatistics& stats) const {
+  // When we have both valid min and max stats, sanity check that stats builder
+  // didn't produce corrupted values. Downstream readers can fail in that
+  // scenario.
+  VELOX_CHECK(
+      !(min_.has_value() && max_.has_value()) || min_ <= max_,
+      fmt::format(
+          "Invalid min/max integer stats. Min: {}, Max: {}",
+          min_.value(),
+          max_.value()));
   StatisticsBuilder::toProto(stats);
   // Serialize type specific stats only if there is non-null values
   if (!isEmpty(*this) &&
@@ -362,6 +371,15 @@ void StringStatisticsBuilder::merge(
 }
 
 void StringStatisticsBuilder::toProto(proto::ColumnStatistics& stats) const {
+  // When we have both valid min and max stats, sanity check that stats builder
+  // didn't produce corrupted values. Downstream readers can fail in that
+  // scenario.
+  VELOX_CHECK(
+      !(min_.has_value() && max_.has_value()) || min_ <= max_,
+      fmt::format(
+          "Invalid min/max string stats. Min: {}, Max: {}",
+          min_.value(),
+          max_.value()));
   StatisticsBuilder::toProto(stats);
   // If string value is too long, drop it and fall back to basic stats
   if (!isEmpty(*this) &&
