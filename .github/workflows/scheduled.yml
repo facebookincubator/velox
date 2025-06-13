@@ -270,75 +270,75 @@ jobs:
           path: /tmp/signatures
           key: function-signatures-${{ github.sha }}
 
-      - name: Upload presto fuzzer
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
-        with:
-          name: presto
-          path: velox/_build/debug/velox/expression/fuzzer/velox_expression_fuzzer_test
-          retention-days: ${{ env.RETENTION }}
+      # - name: Upload presto fuzzer
+      #   uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+      #   with:
+      #     name: presto
+      #     path: velox/_build/debug/velox/expression/fuzzer/velox_expression_fuzzer_test
+      #     retention-days: ${{ env.RETENTION }}
 
-      - name: Upload spark expression fuzzer
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
-        with:
-          name: spark_expression_fuzzer
-          path: velox/_build/debug/velox/expression/fuzzer/spark_expression_fuzzer_test
-          retention-days: ${{ env.RETENTION }}
+      # - name: Upload spark expression fuzzer
+      #   uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+      #   with:
+      #     name: spark_expression_fuzzer
+      #     path: velox/_build/debug/velox/expression/fuzzer/spark_expression_fuzzer_test
+      #     retention-days: ${{ env.RETENTION }}
 
-      - name: Upload spark aggregation fuzzer
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
-        with:
-          name: spark_aggregation_fuzzer
-          path: velox/_build/debug/velox/functions/sparksql/fuzzer/spark_aggregation_fuzzer_test
-          retention-days: ${{ env.RETENTION }}
+      # - name: Upload spark aggregation fuzzer
+      #   uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+      #   with:
+      #     name: spark_aggregation_fuzzer
+      #     path: velox/_build/debug/velox/functions/sparksql/fuzzer/spark_aggregation_fuzzer_test
+      #     retention-days: ${{ env.RETENTION }}
 
-      - name: Upload aggregation fuzzer
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
-        with:
-          name: aggregation
-          path: velox/_build/debug/velox/functions/prestosql/fuzzer/velox_aggregation_fuzzer_test
-          retention-days: ${{ env.RETENTION }}
+      # - name: Upload aggregation fuzzer
+      #   uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+      #   with:
+      #     name: aggregation
+      #     path: velox/_build/debug/velox/functions/prestosql/fuzzer/velox_aggregation_fuzzer_test
+      #     retention-days: ${{ env.RETENTION }}
 
-      - name: Upload join fuzzer
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
-        with:
-          name: join
-          path: velox/_build/debug/velox/exec/fuzzer/velox_join_fuzzer
-          retention-days: ${{ env.RETENTION }}
+      # - name: Upload join fuzzer
+      #   uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+      #   with:
+      #     name: join
+      #     path: velox/_build/debug/velox/exec/fuzzer/velox_join_fuzzer
+      #     retention-days: ${{ env.RETENTION }}
 
-      - name: Upload exchange fuzzer
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
-        with:
-          name: exchange
-          path: velox/_build/debug//velox/exec/fuzzer/velox_exchange_fuzzer
-          retention-days: ${{ env.RETENTION }}
+      # - name: Upload exchange fuzzer
+      #   uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+      #   with:
+      #     name: exchange
+      #     path: velox/_build/debug//velox/exec/fuzzer/velox_exchange_fuzzer
+      #     retention-days: ${{ env.RETENTION }}
 
-      - name: Upload window fuzzer
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
-        with:
-          name: window
-          path: velox/_build/debug/velox/functions/prestosql/fuzzer/velox_window_fuzzer_test
-          retention-days: ${{ env.RETENTION }}
+      # - name: Upload window fuzzer
+      #   uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+      #   with:
+      #     name: window
+      #     path: velox/_build/debug/velox/functions/prestosql/fuzzer/velox_window_fuzzer_test
+      #     retention-days: ${{ env.RETENTION }}
 
-      - name: Upload cache fuzzer
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
-        with:
-          name: cache_fuzzer
-          path: velox/_build/debug/velox/exec/fuzzer/velox_cache_fuzzer
-          retention-days: ${{ env.RETENTION }}
+      # - name: Upload cache fuzzer
+      #   uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+      #   with:
+      #     name: cache_fuzzer
+      #     path: velox/_build/debug/velox/exec/fuzzer/velox_cache_fuzzer
+      #     retention-days: ${{ env.RETENTION }}
 
-      - name: Upload table evolution fuzzer
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
-        with:
-          name: table_evolution_fuzzer
-          path: velox/_build/debug/velox/exec/tests/velox_table_evolution_fuzzer_test
-          retention-days: ${{ env.RETENTION }}
+      # - name: Upload table evolution fuzzer
+      #   uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+      #   with:
+      #     name: table_evolution_fuzzer
+      #     path: velox/_build/debug/velox/exec/tests/velox_table_evolution_fuzzer_test
+      #     retention-days: ${{ env.RETENTION }}
 
-      - name: Upload memory arbitration fuzzer
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
-        with:
-          name: memory_arbitration_fuzzer
-          path: velox/_build/debug/velox/exec/fuzzer/velox_memory_arbitration_fuzzer
-          retention-days: ${{ env.RETENTION }}
+      # - name: Upload memory arbitration fuzzer
+      #   uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+      #   with:
+      #     name: memory_arbitration_fuzzer
+      #     path: velox/_build/debug/velox/exec/fuzzer/velox_memory_arbitration_fuzzer
+      #     retention-days: ${{ env.RETENTION }}
 
       - name: Upload row number fuzzer
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
@@ -765,7 +765,7 @@ jobs:
           echo "Random seed: ${random_seed}"
           ./velox_row_number_fuzzer \
                 --seed ${random_seed} \
-                --duration_sec $DURATION \
+                --duration_sec 86400 \
                 --minloglevel=0 \
                 --stderrthreshold=2 \
                 --log_dir=/tmp/row_fuzzer_repro/logs \
