@@ -465,6 +465,11 @@ class ReaderOptions : public io::ReaderOptions {
   static constexpr uint64_t kDefaultFilePreloadThreshold =
       1024 * 1024 * 8; // 8MB
 
+  static constexpr uint64_t kDefaultParquetFooterTrackThriftMemoryThreshold =
+      20 * 1024 * 1024; // 20MB
+
+  static constexpr bool kDefaultParquetFooterTrackThriftMemoryEnabled = true;
+
   explicit ReaderOptions(velox::memory::MemoryPool* pool)
       : io::ReaderOptions(pool),
         tailLocation_(std::numeric_limits<uint64_t>::max()),
@@ -508,6 +513,15 @@ class ReaderOptions : public io::ReaderOptions {
 
   ReaderOptions& setFooterEstimatedSize(uint64_t size) {
     footerEstimatedSize_ = size;
+    return *this;
+  }
+  ReaderOptions& setParquetFooterTrackThriftMemoryThreshold(uint64_t size) {
+    parquetFooterTrackThriftMemoryThreshold_ = size;
+    return *this;
+  }
+
+  ReaderOptions& setParquetFooterTrackThriftMemoryEnabled(bool enabled) {
+    parquetFooterTrackThriftMemoryEnabled_ = enabled;
     return *this;
   }
 
@@ -570,6 +584,14 @@ class ReaderOptions : public io::ReaderOptions {
 
   uint64_t footerEstimatedSize() const {
     return footerEstimatedSize_;
+  }
+
+  uint64_t parquetFooterTrackThriftMemoryThreshold() const {
+    return parquetFooterTrackThriftMemoryThreshold_;
+  }
+
+  bool parquetFooterTrackThriftMemoryEnabled() const {
+    return parquetFooterTrackThriftMemoryEnabled_;
   }
 
   uint64_t filePreloadThreshold() const {
@@ -653,6 +675,10 @@ class ReaderOptions : public io::ReaderOptions {
   bool adjustTimestampToTimezone_{false};
   bool selectiveNimbleReaderEnabled_{false};
   bool allowEmptyFile_{false};
+  uint64_t parquetFooterTrackThriftMemoryThreshold_{
+      kDefaultParquetFooterTrackThriftMemoryThreshold};
+  bool parquetFooterTrackThriftMemoryEnabled_{
+      kDefaultParquetFooterTrackThriftMemoryEnabled};
 };
 
 struct WriterOptions {
