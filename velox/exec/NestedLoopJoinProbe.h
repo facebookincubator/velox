@@ -195,7 +195,7 @@ class NestedLoopJoinProbe : public Operator {
   // zero-copy (dictionary indices), and build side projections are marked to be
   // copied using `buildCopyRanges_`; they will be copied later on by
   // `copyBuildValues()`.
-  void addOutputRow(vector_size_t probeRow, vector_size_t buildRow);
+  void addOutputRow();
 
   // Checks if it is required to add a probe mismatch row, and does it if
   // needed. The caller needs to ensure there is available space in `output_`
@@ -364,7 +364,10 @@ class NestedLoopJoinProbe : public Operator {
   // Index into `buildVectors_` for the build vector being currently processed.
   size_t buildIndex_{0};
 
-  // Row being currently processed from `buildVectors_[buildIndex_]`.
+  // Row being currently processed from `decodedFilterResult_`.
+  vector_size_t filterResultRow_{0};
+
+  // Row being currently processed from `buildVector`.
   vector_size_t buildRow_{0};
 
   // Keep track of the build rows that had matches (only used for right or full

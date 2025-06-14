@@ -527,7 +527,14 @@ TEST_F(NestedLoopJoinTest, outputOrder) {
           makeFlatVector<StringView>({"z", "p", "u"}),
       });
 
-  const auto createPlan = [&](core::JoinType joinType) {
+  auto buildVector3 = makeRowVector(
+      {"r1", "r2"},
+      {
+          makeNullableFlatVector<int64_t>({8}),
+          makeFlatVector<StringView>({"c"}),
+      });
+
+  const auto createPlan1 = [&](core::JoinType joinType) {
     auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
     return PlanBuilder(planNodeIdGenerator)
         .values({probeVectors})
@@ -542,8 +549,23 @@ TEST_F(NestedLoopJoinTest, outputOrder) {
         .planNode();
   };
 
-  // Inner.
-  auto results = AssertQueryBuilder(createPlan(core::JoinType::kInner))
+  const auto createPlan2 = [&](core::JoinType joinType) {
+    auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+    return PlanBuilder(planNodeIdGenerator)
+        .values({probeVectors})
+        .nestedLoopJoin(
+            PlanBuilder(planNodeIdGenerator)
+                .values({buildVector3})
+                .project({"r1", "r2"})
+                .planNode(),
+            "l1 < r1",
+            {"l1", "l2", "r1", "r2"},
+            joinType)
+        .planNode();
+  };
+
+  // Inner with single batch.
+  auto results = AssertQueryBuilder(createPlan1(core::JoinType::kInner))
                      .copyResults(pool());
   auto expectedInner = makeRowVector({
       makeNullableFlatVector<int64_t>({1, 1, 1, 1, 8, 6, 7, 4, 4, 4}),
@@ -555,9 +577,20 @@ TEST_F(NestedLoopJoinTest, outputOrder) {
   });
   assertEqualVectors(expectedInner, results);
 
+  // Inner with single row.
+  results = AssertQueryBuilder(createPlan2(core::JoinType::kInner))
+                .copyResults(pool());
+  expectedInner = makeRowVector({
+      makeNullableFlatVector<int64_t>({1, 6, 7, 4}),
+      makeFlatVector<StringView>({"a", "c", "e", "f"}),
+      makeNullableFlatVector<int64_t>({8, 8, 8, 8}),
+      makeFlatVector<StringView>({"c", "c", "c", "c"}),
+  });
+  assertEqualVectors(expectedInner, results);
+
   // Left.
-  results =
-      AssertQueryBuilder(createPlan(core::JoinType::kLeft)).copyResults(pool());
+  results = AssertQueryBuilder(createPlan1(core::JoinType::kLeft))
+                .copyResults(pool());
   auto expectedLeft = makeRowVector({
       makeNullableFlatVector<int64_t>(
           {1, 1, 1, 1, 8, 6, std::nullopt, 7, 4, 4, 4}),
