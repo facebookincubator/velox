@@ -482,3 +482,20 @@ TEST_F(FilterProjectTest, barrier) {
         numSplits);
   }
 }
+
+TEST_F(FilterProjectTest, lambda) {
+  auto data =
+      makeRowVector({makeFlatVector<int64_t>(1, [](auto row) { return row; })});
+
+  auto expected = makeRowVector({
+      makeNestedArrayVectorFromJson<std::string>({"[[\"h\"]]"}),
+  });
+
+  auto plan =
+      PlanBuilder(pool_.get())
+          .values({data})
+          .project(
+              {"reduce(regexp_split('a,b,c,d,e,f,g,h',','), array[array['']], (acc, x) -> array[array[x]], (id) -> id) as a"})
+          .planNode();
+  AssertQueryBuilder(plan).assertResults(expected);
+}
