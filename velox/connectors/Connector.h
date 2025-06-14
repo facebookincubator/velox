@@ -96,6 +96,10 @@ class ColumnHandle : public ISerializable {
     VELOX_UNSUPPORTED();
   }
 
+  virtual std::string toString() const {
+    VELOX_NYI();
+  }
+
   folly::dynamic serialize() const override;
 
  protected:
