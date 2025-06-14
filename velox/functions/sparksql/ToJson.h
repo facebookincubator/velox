@@ -20,11 +20,12 @@
 #include "velox/type/DecimalUtil.h"
 
 namespace facebook::velox::functions::sparksql {
+namespace detail {
 
 struct JsonOptions {
   const tz::TimeZone* timeZone;
 
-  /// Whether to ignore null fields during json generating.
+  // Whether to ignore null fields during json generating.
   const bool ignoreNullFields{true};
 };
 
@@ -83,20 +84,20 @@ template <>
 void toJson<TypeKind::BOOLEAN>(
     const exec::GenericView& input,
     std::string& result,
-    const JsonOptions& options,
-    bool isMapKey) {
+    const JsonOptions& /*options*/,
+    bool /*isMapKey*/) {
   auto value = input.castTo<bool>();
-  static const char TRUE[] = "true";
-  static const char FALSE[] = "false";
-  result.append(value ? TRUE : FALSE);
+  constexpr std::string_view kTrue = "true";
+  constexpr std::string_view kFalse = "false";
+  result.append(value ? kTrue : kFalse);
 }
 
 template <>
 void toJson<TypeKind::TINYINT>(
     const exec::GenericView& input,
     std::string& result,
-    const JsonOptions& options,
-    bool isMapKey) {
+    const JsonOptions& /*options*/,
+    bool /*isMapKey*/) {
   auto value = input.castTo<int8_t>();
   folly::toAppend<std::string, int8_t>(value, &result);
 }
@@ -105,8 +106,8 @@ template <>
 void toJson<TypeKind::SMALLINT>(
     const exec::GenericView& input,
     std::string& result,
-    const JsonOptions& options,
-    bool isMapKey) {
+    const JsonOptions& /*options*/,
+    bool /*isMapKey*/) {
   auto value = input.castTo<int16_t>();
   folly::toAppend<std::string, int16_t>(value, &result);
 }
@@ -115,7 +116,7 @@ template <>
 void toJson<TypeKind::INTEGER>(
     const exec::GenericView& input,
     std::string& result,
-    const JsonOptions& options,
+    const JsonOptions& /*options*/,
     bool isMapKey) {
   auto value = input.castTo<int32_t>();
   if (!isMapKey && input.type()->isDate()) {
@@ -129,8 +130,8 @@ template <>
 void toJson<TypeKind::BIGINT>(
     const exec::GenericView& input,
     std::string& result,
-    const JsonOptions& options,
-    bool isMapKey) {
+    const JsonOptions& /*options*/,
+    bool /*isMapKey*/) {
   auto value = input.castTo<int64_t>();
   if (input.type()->isDecimal()) {
     auto [precision, scale] = getDecimalPrecisionScale(*input.type());
@@ -147,8 +148,9 @@ template <>
 void toJson<TypeKind::HUGEINT>(
     const exec::GenericView& input,
     std::string& result,
-    const JsonOptions& options,
-    bool isMapKey) {
+    const JsonOptions& /*options*/,
+    bool /*isMapKey*/) {
+  VELOX_CHECK(input.type()->isDecimal(), "HUGEINT must be a decimal type.");
   auto value = input.castTo<int128_t>();
   const size_t maxSize = folly::detail::digitsEnough<uint128_t>() + 1;
   char buffer[maxSize];
@@ -160,7 +162,7 @@ template <>
 void toJson<TypeKind::REAL>(
     const exec::GenericView& input,
     std::string& result,
-    const JsonOptions& options,
+    const JsonOptions& /*options*/,
     bool isMapKey) {
   auto value = input.castTo<float>();
   append(value, result, isMapKey);
@@ -170,7 +172,7 @@ template <>
 void toJson<TypeKind::DOUBLE>(
     const exec::GenericView& input,
     std::string& result,
-    const JsonOptions& options,
+    const JsonOptions& /*options*/,
     bool isMapKey) {
   auto value = input.castTo<double>();
   append(value, result, isMapKey);
@@ -180,7 +182,7 @@ template <>
 void toJson<TypeKind::VARCHAR>(
     const exec::GenericView& input,
     std::string& result,
-    const JsonOptions& options,
+    const JsonOptions& /*options*/,
     bool isMapKey) {
   auto value = input.castTo<Varchar>();
   if (!isMapKey) {
@@ -237,7 +239,12 @@ void toJson<TypeKind::ROW>(
         result.append("\":");
       }
       VELOX_DYNAMIC_TYPE_DISPATCH_ALL(
-          toJson, data->kind(), data.value(), result, options, isMapKey);
+          detail::toJson,
+          data->kind(),
+          data.value(),
+          result,
+          options,
+          isMapKey);
       commaBefore = true;
     } else if (isMapKey) {
       if (commaBefore) {
@@ -273,7 +280,7 @@ void toJson<TypeKind::ARRAY>(
     if (arrayView[i].has_value()) {
       auto element = arrayView[i].value();
       VELOX_DYNAMIC_TYPE_DISPATCH_ALL(
-          toJson, element.kind(), element, result, options, isMapKey);
+          detail::toJson, element.kind(), element, result, options, isMapKey);
     } else {
       result.append("null");
     }
@@ -298,11 +305,11 @@ void toJson<TypeKind::MAP>(
     auto value = element.second;
     result.append("\"");
     VELOX_DYNAMIC_TYPE_DISPATCH_ALL(
-        toJson, key.kind(), key, result, options, true);
+        detail::toJson, key.kind(), key, result, options, true);
     result.append("\":");
     if (value.has_value()) {
       VELOX_DYNAMIC_TYPE_DISPATCH_ALL(
-          toJson,
+          detail::toJson,
           value.value().kind(),
           value.value(),
           result,
@@ -314,7 +321,9 @@ void toJson<TypeKind::MAP>(
   }
   result.append("}");
 }
+} // namespace detail
 
+// ToJsonFunction converts a Json object(ROW, ARRAY, or MAP) to a Json string.
 template <typename T>
 struct ToJsonFunction {
   VELOX_DEFINE_FUNCTION_TYPES(T);
@@ -322,8 +331,15 @@ struct ToJsonFunction {
   FOLLY_ALWAYS_INLINE void initialize(
       const std::vector<TypePtr>& inputTypes,
       const core::QueryConfig& config,
+      const void* input) {
+    initialize(inputTypes, config, input, nullptr);
+  }
+
+  FOLLY_ALWAYS_INLINE void initialize(
+      const std::vector<TypePtr>& inputTypes,
+      const core::QueryConfig& config,
       const void* /*input*/,
-      const void* /*timeZone*/ = nullptr) {
+      const void* /*timeZone*/) {
     VELOX_CHECK(
         isSupportedType(inputTypes[0], true),
         "to_json function does not support type {}.",
@@ -380,11 +396,11 @@ struct ToJsonFunction {
       const tz::TimeZone* timeZone) {
     std::string res;
     VELOX_DYNAMIC_TYPE_DISPATCH_ALL(
-        toJson,
+        detail::toJson,
         input.kind(),
         input,
         res,
-        JsonOptions{
+        detail::JsonOptions{
             .timeZone = timeZone, .ignoreNullFields = ignoreNullFields_});
     result.resize(res.size());
     std::memcpy(result.data(), res.c_str(), res.size());

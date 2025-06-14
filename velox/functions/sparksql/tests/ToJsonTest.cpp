@@ -151,23 +151,6 @@ TEST_F(ToJsonTest, basicBigInt) {
   testToJson(input, expected);
 }
 
-TEST_F(ToJsonTest, basicHugeInt) {
-  auto data = makeNullableFlatVector<int128_t>(
-      {std::nullopt,
-       0,
-       1,
-       static_cast<int128_t>(INT64_MAX) + 1,
-       static_cast<int128_t>(INT64_MIN) - 1});
-  auto input = makeRowVector({"a"}, {data});
-  auto expected = makeFlatVector<std::string>(
-      {R"({})",
-       R"({"a":0})",
-       R"({"a":1})",
-       R"({"a":9223372036854775808})",
-       R"({"a":-9223372036854775809})"});
-  testToJson(input, expected);
-}
-
 TEST_F(ToJsonTest, basicFloat) {
   auto data = makeNullableFlatVector<float>(
       {1.0, kNaNFloat, kInfFloat, -kInfFloat, std::nullopt});
@@ -301,8 +284,13 @@ TEST_F(ToJsonTest, unsupportedType) {
 
   VectorFuzzer fuzzer(opts, pool_.get());
 
+  // ROW(HUGEINT)
+  auto input = fuzzer.fuzzDictionary(fuzzer.fuzzFlat(ROW({"a"}, {HUGEINT()})));
+  VELOX_ASSERT_THROW(
+      testToJson(input, nullptr), "HUGEINT must be a decimal type.");
+
   // MAP(MAP)
-  auto input = fuzzer.fuzzDictionary(
+  input = fuzzer.fuzzDictionary(
       fuzzer.fuzzFlat(MAP(MAP(BIGINT(), BIGINT()), INTEGER())));
   VELOX_ASSERT_THROW(
       testToJson(input, nullptr),

@@ -391,6 +391,7 @@ class QueryConfig {
       "spark.legacy_statistical_aggregate";
 
   /// If true, ignore null fields when generating JSON string.
+  /// If false, null fields are included with a null value.
   static constexpr const char* kSparkJsonIgnoreNullFields =
       "spark.json_ignore_null_fields";
 

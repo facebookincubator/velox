@@ -990,7 +990,7 @@ Spark-specific Configuration
    * - spark.json_ignore_null_fields
      - bool
      - true
-     - If true, ignore null fields when generating JSON string.
+     - If true, ignore null fields when generating JSON string. If false, null fields are included with a null value.
 
 Tracing
 --------
