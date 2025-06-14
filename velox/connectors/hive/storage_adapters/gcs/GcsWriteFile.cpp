@@ -19,6 +19,8 @@
 
 namespace facebook::velox::filesystems {
 
+namespace gcs = ::google::cloud::storage;
+
 class GcsWriteFile::Impl {
  public:
   Impl(const std::string& path, std::shared_ptr<gcs::Client> client)

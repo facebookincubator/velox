@@ -21,14 +21,14 @@
 
 namespace facebook::velox::filesystems {
 
-namespace gcs = ::google::cloud::storage;
-
 /**
  * Implementation of gcs write file.
  */
 class GcsWriteFile : public WriteFile {
  public:
-  GcsWriteFile(const std::string& path, std::shared_ptr<gcs::Client> client);
+  GcsWriteFile(
+      const std::string& path,
+      std::shared_ptr<::google::cloud::storage::Client> client);
 
   ~GcsWriteFile() override;
 

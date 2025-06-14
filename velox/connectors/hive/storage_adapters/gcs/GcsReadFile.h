@@ -21,14 +21,14 @@
 
 namespace facebook::velox::filesystems {
 
-namespace gcs = ::google::cloud::storage;
-
 /**
  * Implementation of gcs read file.
  */
 class GcsReadFile : public ReadFile {
  public:
-  GcsReadFile(const std::string& path, std::shared_ptr<gcs::Client> client);
+  GcsReadFile(
+      const std::string& path,
+      std::shared_ptr<::google::cloud::storage::Client> client);
 
   ~GcsReadFile() override;
 
