@@ -315,7 +315,7 @@ void NestedLoopJoinProbe::handleLeftSemiProjectNoCondition() {
       ->asFlatVector<bool>()
       ->set(numOutputRows_ - 1, true);
   buildIndex_ = buildVectors_.value().size();
-  buildRow_ = 0;
+  filterResultRow_ = 0;
 }
 
 // Main join loop.
@@ -338,7 +338,7 @@ bool NestedLoopJoinProbe::addToOutput() {
     // Empty build vector; move to the next.
     if (currentBuild->size() == 0) {
       ++buildIndex_;
-      buildRow_ = 0;
+      filterResultRow_ = 0;
       continue;
     }
 
@@ -351,7 +351,7 @@ bool NestedLoopJoinProbe::addToOutput() {
       numOutputRows_ = output_->size();
       probeRowHasMatch_ = true;
       ++buildIndex_;
-      buildRow_ = 0;
+      filterResultRow_ = 0;
       return false;
     }
 
@@ -363,19 +363,26 @@ bool NestedLoopJoinProbe::addToOutput() {
     }
 
     // Only re-calculate the filter if we have a new build vector.
-    if (buildRow_ == 0) {
+    if (filterResultRow_ == 0) {
+      buildRow_ = 0;
       evaluateJoinFilter(currentBuild);
     }
 
     // Iterate over the filter results. For each match, add an output record.
-    for (size_t i = buildRow_; i < decodedFilterResult_.size(); ++i) {
+    for (size_t i = filterResultRow_; i < decodedFilterResult_.size(); ++i) {
+      // Reset probeRow_ and buildRow_ when reaching currentBuild->size().
+      if (buildRow_ == currentBuild->size()) {
+        buildRow_ = 0;
+        ++probeRow_;
+      }
+
       if (!isJoinConditionMatch(i)) {
+        ++buildRow_;
         continue;
       }
 
-      vector_size_t probeRow = i / currentBuild->size() + probeRow_;
-      vector_size_t buildRow = i % currentBuild->size();
-      addOutputRow(probeRow, buildRow);
+      addOutputRow();
+      ++buildRow_;
       ++numOutputRows_;
       probeRowHasMatch_ = true;
 
@@ -404,7 +411,7 @@ bool NestedLoopJoinProbe::addToOutput() {
             ->asFlatVector<bool>()
             ->set(numOutputRows_ - 1, true);
         buildIndex_ = buildVectors_.value().size();
-        buildRow_ = 0;
+        filterResultRow_ = 0;
         return true;
       }
 
@@ -417,16 +424,18 @@ bool NestedLoopJoinProbe::addToOutput() {
 
       // If the buffer is full, save state and produce it as output.
       if (numOutputRows_ == outputBatchSize_) {
-        buildRow_ = i + 1;
+        filterResultRow_ = i + 1;
         copyBuildValues(currentBuild);
         return false;
       }
     }
 
-    // Before moving to the next build vector, copy the needed ranges.
+    // Before moving to the next build vector, copy the needed ranges, reset
+    // filterResultRow_ and probeRow_.
     copyBuildValues(currentBuild);
     ++buildIndex_;
-    buildRow_ = 0;
+    filterResultRow_ = 0;
+    probeRow_ -= probeRowCount_ - 1;
   }
 
   // Check if the current probed row needs to be added as a mismatch (for left
@@ -619,20 +628,18 @@ RowVectorPtr NestedLoopJoinProbe::genCrossProductMultipleBuildVectors(
       pool(), outputType, nullptr, numOutputRows, std::move(projectedChildren));
 }
 
-void NestedLoopJoinProbe::addOutputRow(
-    vector_size_t probeRow,
-    vector_size_t buildRow) {
+void NestedLoopJoinProbe::addOutputRow() {
   // Probe side is always a dictionary; just populate the index.
-  rawProbeOutputIndices_[numOutputRows_] = probeRow;
+  rawProbeOutputIndices_[numOutputRows_] = probeRow_;
 
   // For the build side, we accumulate the ranges to copy, then copy all of them
   // at once. If records are consecutive and can have a single copy range run.
   if (!buildCopyRanges_.empty() &&
       (buildCopyRanges_.back().sourceIndex + buildCopyRanges_.back().count) ==
-          buildRow) {
+          buildRow_) {
     ++buildCopyRanges_.back().count;
   } else {
-    buildCopyRanges_.push_back({buildRow, numOutputRows_, 1});
+    buildCopyRanges_.push_back({buildRow_, numOutputRows_, 1});
   }
 }
 
