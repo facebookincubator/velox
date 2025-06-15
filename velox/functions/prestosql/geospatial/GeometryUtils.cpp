@@ -17,6 +17,7 @@
 #include "velox/functions/prestosql/geospatial/GeometryUtils.h"
 #include <geos/operation/valid/IsSimpleOp.h>
 #include <geos/operation/valid/IsValidOp.h>
+#include "velox/functions/prestosql/geospatial/GeometrySerde.h"
 
 using geos::operation::valid::IsSimpleOp;
 using geos::operation::valid::IsValidOp;
@@ -27,6 +28,41 @@ geos::geom::GeometryFactory* getGeometryFactory() {
   thread_local static geos::geom::GeometryFactory::Ptr geometryFactory =
       geos::geom::GeometryFactory::create();
   return geometryFactory.get();
+}
+
+bool checkEnvelopePredicate(
+    const StringView& leftGeometry,
+    const StringView& rightGeometry,
+    EnvelopeOp op) {
+  auto leftEnvelope = GeometryDeserializer::deserializeEnvelope(leftGeometry);
+  auto rightEnvelope = GeometryDeserializer::deserializeEnvelope(rightGeometry);
+
+  if (!leftEnvelope || !rightEnvelope) {
+    return false;
+  }
+
+  bool leftEmpty = leftEnvelope->isNull();
+  bool rightEmpty = rightEnvelope->isNull();
+
+  if (leftEmpty || rightEmpty) {
+    if (leftEmpty && rightEmpty) {
+      return op == EnvelopeOp::Equals;
+    }
+    // One empty, one not — always false
+    return false;
+  }
+
+  // Normal predicate evaluation
+  switch (op) {
+    case EnvelopeOp::Contains:
+      return leftEnvelope->contains(rightEnvelope.get());
+    case EnvelopeOp::Equals:
+      return leftEnvelope->equals(rightEnvelope.get());
+    case EnvelopeOp::Intersects:
+      return leftEnvelope->intersects(rightEnvelope.get());
+    default:
+      VELOX_FAIL("Unsupported EnvelopeOp value: {}", static_cast<int>(op));
+  }
 }
 
 std::optional<std::string> geometryInvalidReason(

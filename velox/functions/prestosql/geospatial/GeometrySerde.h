@@ -114,12 +114,21 @@ class GeometrySerializer {
     }
   }
 
+  template <typename StringWriter>
+  static void serialize(
+      const geos::geom::Envelope& envelope,
+      StringWriter& stringWriter) {
+    VarbinaryWriter writer(stringWriter);
+    writer.write(static_cast<uint8_t>(GeometrySerializationType::ENVELOPE));
+    writeEnvelope(envelope, writer);
+  }
+
  private:
   template <typename T>
   static void writeEnvelope(
-      const geos::geom::Geometry& geometry,
+      const geos::geom::Envelope& envelope,
       VarbinaryWriter<T>& writer) {
-    if (geometry.isEmpty()) {
+    if (envelope.isNull()) {
       writer.write(std::numeric_limits<double>::quiet_NaN());
       writer.write(std::numeric_limits<double>::quiet_NaN());
       writer.write(std::numeric_limits<double>::quiet_NaN());
@@ -127,11 +136,22 @@ class GeometrySerializer {
       return;
     }
 
-    auto envelope = geometry.getEnvelopeInternal();
-    writer.write(envelope->getMinX());
-    writer.write(envelope->getMinY());
-    writer.write(envelope->getMaxX());
-    writer.write(envelope->getMaxY());
+    writer.write(envelope.getMinX());
+    writer.write(envelope.getMinY());
+    writer.write(envelope.getMaxX());
+    writer.write(envelope.getMaxY());
+  }
+
+  template <typename T>
+  static void writeEnvelope(
+      const geos::geom::Geometry& geometry,
+      VarbinaryWriter<T>& writer) {
+    if (geometry.isEmpty()) {
+      writeEnvelope(geos::geom::Envelope(), writer);
+      return;
+    }
+
+    writeEnvelope(*geometry.getEnvelopeInternal(), writer);
   }
 
   template <typename T>
@@ -312,6 +332,9 @@ class GeometryDeserializer {
   }
 
   static const std::unique_ptr<geos::geom::Envelope> deserializeEnvelope(
+      const StringView& geometry);
+
+  static const GeometrySerializationType deserializeType(
       const StringView& geometry);
 
  private:

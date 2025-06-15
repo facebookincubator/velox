@@ -17,6 +17,7 @@
 #pragma once
 
 #include <geos/geom/Coordinate.h>
+#include <geos/geom/CoordinateArraySequence.h>
 #include <geos/geom/Envelope.h>
 #include <geos/io/WKBReader.h>
 #include <geos/io/WKBWriter.h>
@@ -25,6 +26,7 @@
 #include <geos/simplify/TopologyPreservingSimplifier.h>
 #include <geos/util/AssertionFailedException.h>
 #include <geos/util/UnsupportedOperationException.h>
+
 #include <cmath>
 
 #include <velox/type/StringView.h>
@@ -173,7 +175,12 @@ struct StContainsFunction {
       out_type<bool>& result,
       const arg_type<Geometry>& leftGeometry,
       const arg_type<Geometry>& rightGeometry) {
-    // TODO: When #12771 is merged, check envelopes and short-circuit
+    if (!geospatial::checkEnvelopePredicate(
+            leftGeometry, rightGeometry, geospatial::EnvelopeOp::Contains)) {
+      result = false;
+      return Status::OK();
+    }
+
     std::unique_ptr<geos::geom::Geometry> leftGeosGeometry =
         geospatial::GeometryDeserializer::deserialize(leftGeometry);
     std::unique_ptr<geos::geom::Geometry> rightGeosGeometry =
@@ -193,7 +200,12 @@ struct StCrossesFunction {
       out_type<bool>& result,
       const arg_type<Geometry>& leftGeometry,
       const arg_type<Geometry>& rightGeometry) {
-    // TODO: When #12771 is merged, check envelopes and short-circuit
+    if (!geospatial::checkEnvelopePredicate(
+            leftGeometry, rightGeometry, geospatial::EnvelopeOp::Intersects)) {
+      result = false;
+      return Status::OK();
+    }
+
     std::unique_ptr<geos::geom::Geometry> leftGeosGeometry =
         geospatial::GeometryDeserializer::deserialize(leftGeometry);
     std::unique_ptr<geos::geom::Geometry> rightGeosGeometry =
@@ -213,7 +225,12 @@ struct StDisjointFunction {
       out_type<bool>& result,
       const arg_type<Geometry>& leftGeometry,
       const arg_type<Geometry>& rightGeometry) {
-    // TODO: When #12771 is merged, check envelopes and short-circuit
+    if (!geospatial::checkEnvelopePredicate(
+            leftGeometry, rightGeometry, geospatial::EnvelopeOp::Intersects)) {
+      result = true;
+      return Status::OK();
+    }
+
     std::unique_ptr<geos::geom::Geometry> leftGeosGeometry =
         geospatial::GeometryDeserializer::deserialize(leftGeometry);
     std::unique_ptr<geos::geom::Geometry> rightGeosGeometry =
@@ -233,7 +250,12 @@ struct StEqualsFunction {
       out_type<bool>& result,
       const arg_type<Geometry>& leftGeometry,
       const arg_type<Geometry>& rightGeometry) {
-    // TODO: When #12771 is merged, check envelopes and short-circuit
+    if (!geospatial::checkEnvelopePredicate(
+            leftGeometry, rightGeometry, geospatial::EnvelopeOp::Equals)) {
+      result = false;
+      return Status::OK();
+    }
+
     std::unique_ptr<geos::geom::Geometry> leftGeosGeometry =
         geospatial::GeometryDeserializer::deserialize(leftGeometry);
     std::unique_ptr<geos::geom::Geometry> rightGeosGeometry =
@@ -253,7 +275,12 @@ struct StIntersectsFunction {
       out_type<bool>& result,
       const arg_type<Geometry>& leftGeometry,
       const arg_type<Geometry>& rightGeometry) {
-    // TODO: When #12771 is merged, check envelopes and short-circuit
+    if (!geospatial::checkEnvelopePredicate(
+            leftGeometry, rightGeometry, geospatial::EnvelopeOp::Intersects)) {
+      result = false;
+      return Status::OK();
+    }
+
     std::unique_ptr<geos::geom::Geometry> leftGeosGeometry =
         geospatial::GeometryDeserializer::deserialize(leftGeometry);
     std::unique_ptr<geos::geom::Geometry> rightGeosGeometry =
@@ -273,7 +300,12 @@ struct StOverlapsFunction {
       out_type<bool>& result,
       const arg_type<Geometry>& leftGeometry,
       const arg_type<Geometry>& rightGeometry) {
-    // TODO: When #12771 is merged, check envelopes and short-circuit
+    if (!geospatial::checkEnvelopePredicate(
+            leftGeometry, rightGeometry, geospatial::EnvelopeOp::Intersects)) {
+      result = false;
+      return Status::OK();
+    }
+
     std::unique_ptr<geos::geom::Geometry> leftGeosGeometry =
         geospatial::GeometryDeserializer::deserialize(leftGeometry);
     std::unique_ptr<geos::geom::Geometry> rightGeosGeometry =
@@ -293,7 +325,12 @@ struct StTouchesFunction {
       out_type<bool>& result,
       const arg_type<Geometry>& leftGeometry,
       const arg_type<Geometry>& rightGeometry) {
-    // TODO: When #12771 is merged, check envelopes and short-circuit
+    if (!geospatial::checkEnvelopePredicate(
+            leftGeometry, rightGeometry, geospatial::EnvelopeOp::Intersects)) {
+      result = false;
+      return Status::OK();
+    }
+
     std::unique_ptr<geos::geom::Geometry> leftGeosGeometry =
         geospatial::GeometryDeserializer::deserialize(leftGeometry);
     std::unique_ptr<geos::geom::Geometry> rightGeosGeometry =
@@ -313,7 +350,12 @@ struct StWithinFunction {
       out_type<bool>& result,
       const arg_type<Geometry>& leftGeometry,
       const arg_type<Geometry>& rightGeometry) {
-    // TODO: When #12771 is merged, check envelopes and short-circuit
+    if (!geospatial::checkEnvelopePredicate(
+            rightGeometry, leftGeometry, geospatial::EnvelopeOp::Contains)) {
+      result = false;
+      return Status::OK();
+    }
+
     std::unique_ptr<geos::geom::Geometry> leftGeosGeometry =
         geospatial::GeometryDeserializer::deserialize(leftGeometry);
     std::unique_ptr<geos::geom::Geometry> rightGeosGeometry =
@@ -335,8 +377,12 @@ struct StDifferenceFunction {
       out_type<Geometry>& result,
       const arg_type<Geometry>& leftGeometry,
       const arg_type<Geometry>& rightGeometry) {
-    // TODO: When #12771 is merged, check envelopes and short-circuit
-    // if envelopes are disjoint
+    if (!geospatial::checkEnvelopePredicate(
+            leftGeometry, rightGeometry, geospatial::EnvelopeOp::Intersects)) {
+      result = leftGeometry;
+      return Status::OK();
+    }
+
     std::unique_ptr<geos::geom::Geometry> leftGeosGeometry =
         geospatial::GeometryDeserializer::deserialize(leftGeometry);
     std::unique_ptr<geos::geom::Geometry> rightGeosGeometry =
@@ -378,8 +424,18 @@ struct StIntersectionFunction {
       out_type<Geometry>& result,
       const arg_type<Geometry>& leftGeometry,
       const arg_type<Geometry>& rightGeometry) {
-    // TODO: When #12771 is merged, check envelopes and short-circuit
-    // if envelopes are disjoint
+    auto leftType =
+        geospatial::GeometryDeserializer::deserializeType(leftGeometry);
+    auto rightType =
+        geospatial::GeometryDeserializer::deserializeType(rightGeometry);
+
+    if (!geospatial::checkEnvelopePredicate(
+            leftGeometry, rightGeometry, geospatial::EnvelopeOp::Intersects)) {
+      geospatial::GeometrySerializer::serialize(
+          *geospatial::getGeometryFactory()->createPolygon(), result);
+      return Status::OK();
+    }
+
     std::unique_ptr<geos::geom::Geometry> leftGeosGeometry =
         geospatial::GeometryDeserializer::deserialize(leftGeometry);
     std::unique_ptr<geos::geom::Geometry> rightGeosGeometry =
@@ -403,8 +459,23 @@ struct StSymDifferenceFunction {
       out_type<Geometry>& result,
       const arg_type<Geometry>& leftGeometry,
       const arg_type<Geometry>& rightGeometry) {
-    // TODO: When #12771 is merged, check envelopes and short-circuit
-    // if envelopes are disjoint
+    // If envelopes are disjoint, return union of envelopes directly.
+    if (!geospatial::checkEnvelopePredicate(
+            leftGeometry, rightGeometry, geospatial::EnvelopeOp::Intersects)) {
+      // No intersection — symDifference is simply the union.
+      std::unique_ptr<geos::geom::Geometry> leftGeosGeometry =
+          geospatial::GeometryDeserializer::deserialize(leftGeometry);
+      std::unique_ptr<geos::geom::Geometry> rightGeosGeometry =
+          geospatial::GeometryDeserializer::deserialize(rightGeometry);
+
+      std::unique_ptr<geos::geom::Geometry> outputGeometry;
+      GEOS_TRY(outputGeometry = leftGeosGeometry->Union(&*rightGeosGeometry);
+               , "Failed to compute geometry union for disjoint symDifference");
+
+      geospatial::GeometrySerializer::serialize(*outputGeometry, result);
+      return Status::OK();
+    }
+
     std::unique_ptr<geos::geom::Geometry> leftGeosGeometry =
         geospatial::GeometryDeserializer::deserialize(leftGeometry);
     std::unique_ptr<geos::geom::Geometry> rightGeosGeometry =
@@ -428,8 +499,30 @@ struct StUnionFunction {
       out_type<Geometry>& result,
       const arg_type<Geometry>& leftGeometry,
       const arg_type<Geometry>& rightGeometry) {
-    // TODO: When #12771 is merged, check envelopes and short-circuit if
-    // one/both are empty
+    auto leftEnvelope =
+        geospatial::GeometryDeserializer::deserializeEnvelope(leftGeometry);
+    auto rightEnvelope =
+        geospatial::GeometryDeserializer::deserializeEnvelope(rightGeometry);
+
+    // If both are empty, return empty polygon.
+    if (!leftEnvelope || leftEnvelope->isNull()) {
+      if (!rightEnvelope || rightEnvelope->isNull()) {
+        // Both are empty -> return empty polygon.
+        auto empty = geospatial::getGeometryFactory()->createPolygon();
+        geospatial::GeometrySerializer::serialize(*empty, result);
+        return Status::OK();
+      }
+      // Left is empty, return right.
+      result = rightGeometry;
+      return Status::OK();
+    }
+
+    if (!rightEnvelope || rightEnvelope->isNull()) {
+      // Right is empty, return left.
+      result = leftGeometry;
+      return Status::OK();
+    }
+
     std::unique_ptr<geos::geom::Geometry> leftGeosGeometry =
         geospatial::GeometryDeserializer::deserialize(leftGeometry);
     std::unique_ptr<geos::geom::Geometry> rightGeosGeometry =

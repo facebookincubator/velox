@@ -82,6 +82,12 @@ GeometryDeserializer::deserializeEnvelope(const StringView& geometry) {
   }
 }
 
+const GeometrySerializationType GeometryDeserializer::deserializeType(
+    const StringView& geometry) {
+  return static_cast<GeometrySerializationType>(
+      static_cast<uint8_t>(geometry.data()[0]));
+}
+
 std::unique_ptr<geos::geom::Envelope> GeometryDeserializer::deserializeEnvelope(
     velox::common::InputByteStream& input) {
   auto xMin = input.read<double>();
