@@ -39,6 +39,7 @@ add_executable(
   ElementAtTest.cpp
   FactorialTest.cpp
   FromJsonTest.cpp
+  FromToJsonRoundTripTest.cpp
   GetJsonObjectTest.cpp
   GetStructFieldTest.cpp
   HashTest.cpp
@@ -65,6 +66,7 @@ add_executable(
   SplitTest.cpp
   StringTest.cpp
   StringToMapTest.cpp
+  ToJsonTest.cpp
   UnBase64Test.cpp
   UnscaledValueFunctionTest.cpp
   UpperLowerTest.cpp
