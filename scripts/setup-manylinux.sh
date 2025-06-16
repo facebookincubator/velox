@@ -38,7 +38,7 @@ USE_CLANG="${USE_CLANG:-false}"
 export INSTALL_PREFIX=${INSTALL_PREFIX:-"/usr/local"}
 DEPENDENCY_DIR=${DEPENDENCY_DIR:-$(pwd)/deps-download}
 
-THRIFT_VERSION="v0.21.0"
+export THRIFT_VERSION="v0.21.0"
 
 # CMake 4.0 removed support for cmake minimums of <=3.5 and will fail builds, this overrides it
 export CMAKE_POLICY_VERSION_MINIMUM="3.5"
