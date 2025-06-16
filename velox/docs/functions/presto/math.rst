@@ -51,6 +51,19 @@ Mathematical Functions
 
         SELECT cosine_similarity(ARRAY[], ARRAY[]); -- NaN
 
+.. function:: l2_squared(array(double), array(double)) -> double
+
+    Returns the `Squared Euclidean distance <https://en.wikipedia.org/wiki/Euclidean_distance>`_ between the vectors represented as array(double).
+    If any input array is empty, the function returns NaN. If the input arrays have different sizes, the function throws VeloxUserError.
+
+        SELECT l2_squared(ARRAY[1], ARRAY[2]); -- 1.0
+
+        SELECT l2_squared(ARRAY[1.0, 2.0], ARRAY[NULL, 3.0]); -- NULL
+
+        SELECT l2_squared(ARRAY[], ARRAY[2, 3]); -- Throws VeloxUserError
+
+        SELECT l2_squared(ARRAY[], ARRAY[]); -- NaN
+
 .. function:: degrees(x) -> double
 
     Converts angle x in radians to degrees.
