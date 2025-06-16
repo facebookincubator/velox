@@ -32,7 +32,8 @@ namespace facebook {
 namespace velox {
 namespace dwio::common {
 class ColumnStatistics;
-}
+enum class FileFormat;
+} // namespace dwio::common
 namespace common {
 
 // Describes the filtering and value extraction for a
@@ -499,7 +500,8 @@ bool testFilter(
     common::Filter* filter,
     dwio::common::ColumnStatistics* stats,
     uint64_t totalRows,
-    const TypePtr& type);
+    const TypePtr& type,
+    dwio::common::FileFormat fileFormat);
 
 } // namespace common
 } // namespace velox
