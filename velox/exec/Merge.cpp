@@ -164,13 +164,14 @@ void Merge::setupSpillMerger() {
     spillReadFilesGroups.push_back(std::move(spillReadFiles));
   }
   spillFileGroups_.clear();
-  spillMerger_ = std::make_unique<SpillMerger>(
+  spillMerger_ = std::make_shared<SpillMerger>(
       sortingKeys_,
       outputType_,
       outputBatchSize_,
       std::move(spillReadFilesGroups),
       &spillConfig_.value(),
       pool());
+  spillMerger_->start();
 }
 
 void Merge::maybeStartNextMergeSourceGroup() {
@@ -454,13 +455,20 @@ SpillMerger::SpillMerger(
           sources_,
           pool)),
       executor_(spillConfig->executor),
-      pool_(pool) {
-  createFileStreamProducers(batchStreams_, sources_);
+      pool_(pool) {}
+
+void SpillMerger::start() {
+  VELOX_CHECK_NOT_NULL(
+      executor_,
+      "SpillMerge require configure executor to run async spill file stream producer");
+  scheduleAsyncSpillFileStreamReads();
 }
 
 RowVectorPtr SpillMerger::getOutput(
     std::vector<ContinueFuture>& sourceBlockingFutures,
     bool& atEnd) const {
+  TestValue::adjust(
+      "facebook::velox::exec::SpillMerger::getOutput", &sourceBlockingFutures);
   sourceMerger_->isBlocked(sourceBlockingFutures);
   if (!sourceBlockingFutures.empty()) {
     return nullptr;
@@ -469,10 +477,10 @@ RowVectorPtr SpillMerger::getOutput(
 }
 
 std::vector<std::shared_ptr<MergeSource>> SpillMerger::createMergeSources(
-    size_t num) {
+    size_t numSpillSources) {
   std::vector<std::shared_ptr<MergeSource>> sources;
-  sources.reserve(num);
-  for (auto i = 0; i < num; ++i) {
+  sources.reserve(numSpillSources);
+  for (auto i = 0; i < numSpillSources; ++i) {
     sources.push_back(MergeSource::createLocalMergeSource());
   }
   for (const auto& source : sources) {
@@ -510,38 +518,43 @@ std::unique_ptr<SourceMerger> SpillMerger::createSourceMerger(
       type, outputBatchSize, std::move(streams), pool);
 }
 
-void SpillMerger::fileStreamProducer(
-    BatchStream* batchStream,
-    MergeSource* source) const {
+void SpillMerger::readFromSpillFileStream(size_t streamIdx) {
   RowVectorPtr vector;
   ContinueFuture future;
-  if (!batchStream->nextBatch(vector)) {
-    source->enqueue(nullptr, &future);
+  if (!batchStreams_[streamIdx]->nextBatch(vector)) {
+    VELOX_CHECK_NULL(vector);
+    sources_[streamIdx]->enqueue(nullptr, &future);
     return;
   }
 
-  source->enqueue(std::move(vector), &future);
+  sources_[streamIdx]->enqueue(std::move(vector), &future);
   std::move(future)
       .via(executor_)
-      .thenValue([this, batchStream, source](folly::Unit) {
-        fileStreamProducer(batchStream, source);
+      .thenValue([mergeHolder = std::weak_ptr(shared_from_this()),
+                  streamIdx](folly::Unit) {
+        TestValue::adjust(
+            "facebook::velox::exec::SpillMerger::readFromSpillFileStream",
+            static_cast<void*>(0));
+        const auto self = mergeHolder.lock();
+        if (self == nullptr) {
+          LOG(ERROR)
+              << "SpillMerger is destroyed, abandon reading from batch stream";
+          return;
+        }
+        self->readFromSpillFileStream(streamIdx);
       })
       .thenError(
-          folly::tag_t<std::exception>{}, [source](const std::exception& e) {
-            LOG(ERROR) << "Stop this batch stream producer for " << e.what();
-            ContinueFuture future;
-            source->enqueue(nullptr, &future);
+          folly::tag_t<std::exception>{}, [streamIdx](const std::exception& e) {
+            LOG(ERROR) << "Stop the " << streamIdx
+                       << "th batch stream producer on error: " << e.what();
           });
 }
 
-void SpillMerger::createFileStreamProducers(
-    const std::vector<std::unique_ptr<BatchStream>>& batchStreams,
-    const std::vector<std::shared_ptr<MergeSource>>& sources) const {
-  VELOX_CHECK_EQ(batchStreams.size(), sources.size());
-  for (auto i = 0; i < batchStreams.size(); ++i) {
-    executor_->add([&, i]() {
-      fileStreamProducer(batchStreams[i].get(), sources[i].get());
-    });
+void SpillMerger::scheduleAsyncSpillFileStreamReads() {
+  VELOX_CHECK_EQ(batchStreams_.size(), sources_.size());
+  for (auto i = 0; i < batchStreams_.size(); ++i) {
+    executor_->add(
+        [&, streamIdx = i]() { readFromSpillFileStream(streamIdx); });
   }
 }
 
@@ -564,8 +577,8 @@ LocalMerge::LocalMerge(
       operatorCtx_->driverCtx()->driverId,
       0,
       "LocalMerge needs to run single-threaded");
-  // Ensure spill config and executor when to config and constraint the
-  // maxNumMergeSources_.
+  // Enable local merge spill iff spill is enabled and the spill executor is
+  // provided.
   if (spillConfig_.has_value() && spillConfig_->executor != nullptr) {
     maxNumMergeSources_ = operatorCtx_->task()
                               ->queryCtx()

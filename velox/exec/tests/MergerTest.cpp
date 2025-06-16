@@ -219,11 +219,11 @@ class MergerTest : public OperatorTestBase {
     return results;
   }
 
-  std::unique_ptr<SpillMerger> createSpillMerger(
+  std::shared_ptr<SpillMerger> createSpillMerger(
       std::vector<std::vector<std::unique_ptr<SpillReadFile>>>
           spillReadFilesGroups,
       vector_size_t outputBatchSize) const {
-    return std::make_unique<SpillMerger>(
+    return std::make_shared<SpillMerger>(
         sortingKeys_,
         inputType_,
         outputBatchSize,
@@ -388,6 +388,7 @@ TEST_F(MergerTest, spillMerger) {
     ASSERT_EQ(filesGroup.size(), testData.numSources);
     const auto spillMerger =
         createSpillMerger(std::move(filesGroup), testData.maxOutputRows);
+    spillMerger->start();
     const auto results = getOutputFromSpillMerger(spillMerger.get());
     const auto expectedResults = makeExpectedResults(inputs, 16);
     checkResults(expectedResults, results);

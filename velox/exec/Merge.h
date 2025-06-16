@@ -104,7 +104,7 @@ class Merge : public SourceOperator {
   std::vector<ContinueFuture> sourceBlockingFutures_;
 
   std::unique_ptr<SourceMerger> sourceMerger_;
-  std::unique_ptr<SpillMerger> spillMerger_;
+  std::shared_ptr<SpillMerger> spillMerger_;
   std::unique_ptr<MergeSpiller> mergeOutputSpiller_;
   // Number of total spilled rows, it must be equal to the input rows.
   uint64_t numSpilledRows_{0};
@@ -229,7 +229,7 @@ class SourceStream final : public MergeStream {
 
 /// A utility class for sort-merging data from data spilled by the `LocalMerge`
 /// operator.
-class SpillMerger {
+class SpillMerger : public std::enable_shared_from_this<SpillMerger> {
  public:
   SpillMerger(
       const std::vector<SpillSortKey>& sortingKeys,
@@ -240,13 +240,15 @@ class SpillMerger {
       const common::SpillConfig* spillConfig,
       velox::memory::MemoryPool* pool);
 
+  void start();
+
   RowVectorPtr getOutput(
       std::vector<ContinueFuture>& sourceBlockingFutures,
       bool& atEnd) const;
 
  private:
   static std::vector<std::shared_ptr<MergeSource>> createMergeSources(
-      size_t num);
+      size_t numSpillSources);
 
   static std::vector<std::unique_ptr<BatchStream>> createBatchStreams(
       std::vector<std::vector<std::unique_ptr<SpillReadFile>>>
@@ -259,11 +261,9 @@ class SpillMerger {
       const std::vector<std::shared_ptr<MergeSource>>& sources,
       velox::memory::MemoryPool* pool);
 
-  void fileStreamProducer(BatchStream* batchStream, MergeSource* source) const;
+  void readFromSpillFileStream(size_t streamIdx);
 
-  void createFileStreamProducers(
-      const std::vector<std::unique_ptr<BatchStream>>& batchStreams,
-      const std::vector<std::shared_ptr<MergeSource>>& sources) const;
+  void scheduleAsyncSpillFileStreamReads();
 
   const std::vector<std::shared_ptr<MergeSource>> sources_;
   const std::vector<std::unique_ptr<BatchStream>> batchStreams_;

@@ -14,7 +14,9 @@
  * limitations under the License.
  */
 
+#include "velox/exec/Merge.h"
 #include "folly/experimental/EventCount.h"
+#include "utils/AssertQueryBuilder.h"
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/common/testutil/TestValue.h"
 #include "velox/exec/PlanNodeStats.h"
@@ -252,10 +254,10 @@ class MergeTest : public OperatorTestBase {
     std::vector<std::vector<RowVectorPtr>> inputVectors;
     for (int32_t i = 0; i < 9; ++i) {
       std::vector<RowVectorPtr> vectors;
-      for (int32_t i = 0; i < 3; ++i) {
+      for (int32_t j = 0; j < 3; ++j) {
         auto c0 = makeFlatVector<int64_t>(
             batchSize,
-            [&](auto row) { return batchSize * i + row; },
+            [&](auto row) { return batchSize * j + row; },
             nullEvery(5));
         auto c1 = makeFlatVector<int64_t>(
             batchSize, [&](auto row) { return row; }, nullEvery(5));
@@ -335,14 +337,9 @@ class MergeTest : public OperatorTestBase {
         core::QueryConfig{std::move(queryConfigs)},
         {},
         nullptr,
-        rootPool_,
+        nullptr,
         hasSpillExecutor ? spillExecutor_.get() : nullptr);
   }
-
- private:
-  std::shared_ptr<folly::Executor> spillExecutor_{
-      std::make_shared<folly::CPUThreadPoolExecutor>(
-          std::thread::hardware_concurrency())};
 };
 
 TEST_F(MergeTest, localMergeSpillBasic) {
@@ -394,7 +391,10 @@ TEST_F(MergeTest, localMergeSpill) {
       {std::numeric_limits<uint32_t>::max(), 30, true}};
   for (const auto& testData : testSettings) {
     SCOPED_TRACE(testData.debugString());
-    testLocalMergeSpill(testData.batchSize, testData.maxNumMergeSources, true);
+    testLocalMergeSpill(
+        testData.batchSize,
+        testData.maxNumMergeSources,
+        testData.hasSpillExecutor);
   }
 }
 
@@ -530,6 +530,89 @@ DEBUG_ONLY_TEST_F(MergeTest, localMergeSmallBatch) {
   ASSERT_EQ(taskStats[nodeId].outputRows, 30);
   ASSERT_EQ(taskStats[nodeId].outputVectors, 1);
   promiseThread.join();
+}
+
+DEBUG_ONLY_TEST_F(MergeTest, localMergeAbort) {
+  std::vector<std::vector<RowVectorPtr>> inputVectors;
+  for (int32_t i = 0; i < 4; ++i) {
+    std::vector<RowVectorPtr> vectors;
+    for (int32_t j = 0; j < 13; ++j) {
+      constexpr auto batchSize = 5000;
+      auto c0 = makeFlatVector<int64_t>(
+          batchSize,
+          [&](auto row) { return batchSize * j + row; },
+          nullEvery(5));
+      auto c1 = makeFlatVector<int64_t>(
+          batchSize, [&](auto row) { return row; }, nullEvery(5));
+      auto c2 = makeFlatVector<double>(
+          batchSize, [](auto row) { return row * 0.1; }, nullEvery(11));
+      auto c3 = makeFlatVector<StringView>(batchSize, [](auto row) {
+        return StringView::makeInline(std::to_string(row));
+      });
+      vectors.push_back(makeRowVector({c0, c1, c2, c3}));
+    }
+    inputVectors.push_back(std::move(vectors));
+  }
+
+  const auto orderByClause = fmt::format("{}", "c0");
+  const auto planNodeIdGenerator =
+      std::make_shared<core::PlanNodeIdGenerator>();
+  const std::shared_ptr<TempDirectoryPath> spillDirectory =
+      TempDirectoryPath::create();
+  std::vector<std::shared_ptr<const core::PlanNode>> sources;
+  sources.reserve(inputVectors.size());
+  for (const auto& vectors : inputVectors) {
+    sources.push_back(PlanBuilder(planNodeIdGenerator)
+                          .values(vectors)
+                          .orderBy({orderByClause}, true)
+                          .planNode());
+  }
+  core::PlanNodeId nodeId;
+  const auto plan = PlanBuilder(planNodeIdGenerator)
+                        .localMerge({orderByClause}, std::move(sources))
+                        .capturePlanNodeId(nodeId)
+                        .planNode();
+  std::atomic_int cnt{0};
+  std::atomic_bool blocked{false};
+  folly::EventCount callWait;
+  std::atomic_bool callWaitFlag{true};
+  SCOPED_TESTVALUE_SET(
+      "facebook::velox::exec::SpillMerger::getOutput",
+      std::function<void(std::vector<ContinueFuture>*)>(
+          [&](std::vector<ContinueFuture>* /*unused*/) {
+            if (blocked) {
+              std::this_thread::sleep_for(
+                  std::chrono::milliseconds(1'000)); // NOLINT
+              blocked = false;
+              callWaitFlag = false;
+              callWait.notifyAll();
+              throw std::runtime_error("Abort merge");
+            }
+          }));
+
+  SCOPED_TESTVALUE_SET(
+      "facebook::velox::exec::SpillMerger::readFromSpillFileStream",
+      std::function<void(void*)>([&](void* /*unused*/) {
+        if (cnt++ == 2) {
+          blocked = true;
+          callWait.await([&]() { return callWaitFlag.load(); });
+          std::this_thread::sleep_for(
+              std::chrono::milliseconds(1'000)); // NOLINT
+        }
+      }));
+
+  auto queryCtx = createQueryCtx();
+  VELOX_ASSERT_THROW(
+      AssertQueryBuilder(plan)
+          .spillDirectory(spillDirectory->getPath())
+          .queryCtx(queryCtx)
+          .config(core::QueryConfig::kSpillEnabled, true)
+          .config(core::QueryConfig::kLocalMergeSpillEnabled, true)
+          .config(core::QueryConfig::kLocalMergeMaxNumMergeSources, 2)
+          .config(core::QueryConfig::kMaxOutputBatchRows, 10)
+          .config(core::QueryConfig::kPreferredOutputBatchRows, 10)
+          .copyResults(pool()),
+      "Abort merge");
 }
 
 TEST_F(MergeTest, localMerge) {
