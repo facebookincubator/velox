@@ -25,8 +25,9 @@
 
 namespace facebook::velox::simd {
 
-template<typename T, typename A=xsimd::default_arch>
-using xbatch = xsimd::batch<std::conditional_t<std::is_same_v<T, bool>, uint8_t, T>, A>;
+template <typename T, typename A = xsimd::default_arch>
+using xbatch =
+    xsimd::batch<std::conditional_t<std::is_same_v<T, bool>, uint8_t, T>, A>;
 
 // Return width of the widest store.
 template <typename A = xsimd::default_arch>
