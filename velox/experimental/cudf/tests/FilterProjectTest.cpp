@@ -776,7 +776,9 @@ TEST_F(CudfFilterProjectTest, filterWithEmptyResult) {
 }
 
 TEST_F(CudfFilterProjectTest, dereference) {
-  auto vectors = makeVectors(rowType_, 10, 100);
+  auto rowType = ROW({"c0", "c1", "c2", "c3"},
+          {BIGINT(), INTEGER(), SMALLINT(), DOUBLE()});
+  auto vectors = makeVectors(rowType, 10, 100);
   createDuckDbTable(vectors);
 
   auto plan = PlanBuilder()
@@ -788,11 +790,10 @@ TEST_F(CudfFilterProjectTest, dereference) {
 
   plan = PlanBuilder()
              .values(vectors)
-             .project({"row_constructor(c0, c1, c2) AS c1_c2"})
-             // why child names are c1, c2, c3?
+             .project({"row_constructor(c1, c2) AS c1_c2"})
              .filter("c1_c2.c1 % 10 = 5")
-             .project({"c1_c2.c2", "c1_c2.c3"})
+             .project({"c1_c2.c1", "c1_c2.c2"})
              .planNode();
-  assertQuery(plan, "SELECT c1, c2 FROM tmp WHERE c0 % 10 = 5");
+  assertQuery(plan, "SELECT c1, c2 FROM tmp WHERE c1 % 10 = 5");
 }
 } // namespace
