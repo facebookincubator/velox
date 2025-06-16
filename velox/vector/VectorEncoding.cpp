@@ -33,12 +33,16 @@ Simple mapNameToSimple(const std::string& name) {
       {"ROW", Simple::ROW},
       {"MAP", Simple::MAP},
       {"FLAT_MAP", Simple::FLAT_MAP},
-      {"ARRAY", Simple::ARRAY}};
+      {"ARRAY", Simple::ARRAY},
+      {"LAZY", Simple::LAZY},
+      {"FUNCTION", Simple::FUNCTION}};
 
   if (vecNameMap.find(name) == vecNameMap.end()) {
     throw std::invalid_argument(
         fmt::format("Specified vector encoding is not found : {}", name));
   }
+
   return vecNameMap[name];
 }
+
 } // namespace facebook::velox::VectorEncoding
