@@ -567,9 +567,9 @@ class HiveDataSink : public DataSink {
 
   virtual void extendBuffersForPartitionedTables();
 
+ private:
   RowVectorPtr makeDataInput(const RowVectorPtr& input);
 
- private:
   // Validates the state transition from 'oldState' to 'newState'.
   void checkStateTransition(State oldState, State newState);
 

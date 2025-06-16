@@ -38,8 +38,12 @@ endif()
 
 if(NOT VELOX_DISABLE_GOOGLETEST)
 
-  add_executable(velox_hive_iceberg_test IcebergTestBase.cpp
-                                         IcebergInsertTest.cpp)
+  add_executable(
+    velox_hive_iceberg_test
+    IcebergReadTest.cpp
+    IcebergSplitReaderBenchmarkTest.cpp
+    IcebergTestBase.cpp
+    IcebergInsertTest.cpp)
   add_test(velox_hive_iceberg_test velox_hive_iceberg_test)
 
   target_link_libraries(
